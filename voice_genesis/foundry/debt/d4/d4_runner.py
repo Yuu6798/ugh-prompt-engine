@@ -55,6 +55,22 @@ lambda ...` のような差し替え）で、pin 検証をすり抜けて任意�
 窓値を含む全フィールドの整合は自動的に保証されるので、equal-shift のような
 「窓値だけを個別に整合させた改竄」への対策を都度追加することはしない。
 
+**manifest 自体の信頼アンカー**（PR #306 第5巡 P1）: 上記の doc 束縛は
+「`--render-doc` のバイトが `--render-manifest` の記載と一致する」ことしか
+保証しない — `render_manifest.json` 自体が render 完了後に差し替えられていたら
+doc・manifest を**揃って**改竄する経路をすり抜ける。これを閉じるため、
+`measure` は `--render-manifest-sha256`（`--render-manifest` と 1 対 1・同順で
+対応する operator 供給の期待 sha256）を必須引数として要求し、doc 照合より
+**前**に manifest ファイルの実バイト sha256 と照合する（不一致は即 abort）。
+これにより **render 成果物の provenance 連鎖は、operator が render 完了時に
+控えた manifest sha256 を信頼の根として終端する**（`--spec-sha256` と同型の
+構造 — spec 自体も「operator が意図した版」を operator 供給値で束縛しており、
+それより上流は問わない）。**operator 供給値自体の真正性**（控えの改竄・
+operator のなりすまし・控えを渡す経路の汚染）は本 runner の脅威モデル**外**
+とする（`--spec-sha256` と同じ前提 — この runner は「渡された期待値と実ファイル
+の一致」だけを機械的に保証し、期待値をどう決めた・誰が渡したかは呼び出し側の
+運用に委ねる）。
+
 サブコマンド 2 つ:
 
 - `render` — `s7_0b_probe.run_group` を直接呼び、1 群（話者 x 世代）ぶんの
@@ -134,10 +150,10 @@ if str(_RUN8_DIR) not in sys.path:
 # 束縛する。束縛前に参照すると None のままの属性エラーで気づける）。
 b1 = v12 = xm = s7_io = trf = probe0b = None
 
-#: 束縛対象の import 名（`sys.modules` のキーと一致する）。
-_PINNED_MODULE_NAMES: Tuple[str, ...] = (
-    "s7_b1_calibration", "s7_b1_v12", "s7_export_manifest", "s7_io", "s7_trf", "s7_0b_probe",
-)
+#: 束縛対象 = preload 検査対象の import 名（`sys.modules` のキーと一致する）。
+#: `enumerate_repo_import_closure()` の定義後（本ファイル下方）で機械導出する
+#: （PR #306 レビュー第5巡 P2）。ここでは前方宣言のみ — 実体は下記参照。
+_PINNED_MODULE_NAMES: Tuple[str, ...]
 
 #: このプロセスで `_bind_pinned_modules()` が一度でも成功したか（PR #306
 #: レビュー第3巡 P2）。初回だけ「sys.modules がまだ pinned module 名で
@@ -356,6 +372,30 @@ def enumerate_repo_import_closure(
             if resolved is not None and resolved not in visited:
                 queue.append(resolved)
     return frozenset(p.relative_to(repo_root) for p in visited)
+
+
+#: `_PINNED_MODULE_NAMES` の実体（PR #306 レビュー第5巡 P2・hand-list 廃止）。
+#: 以前は 6 モジュールの hand-list だった。`_bind_pinned_modules()` が実際に
+#: `importlib.import_module()` するのはこの 6 個の**直接**依存だけだが、preload
+#: 検査（`sys.modules` に既に別バイトのものが居ないか）が同じ 6 個しか見ていない
+#: と、それらが transitively import する `s7_b1_v11`（`s7_b1_v12` 経由）や
+#: `s7_spec`（`s7_io`/`s7_0b_probe` 経由）が preload 汚染されていても見逃す ——
+#: Python の import キャッシュは `import s7_b1_v11` を「`sys.modules["s7_b1_v11"]`
+#: に何かあればそれを返す」だけなので、直接 import する側が検証済みでも
+#: 推移依存側が汚染されていれば素通りする。
+#:
+#: `enumerate_repo_import_closure()`（機械列挙・PR #216 の前例と同型。すでに
+#: `_verify_closure_matches_declared_pins` が pin 突合に使っている）は
+#: d4_runner.py 自身を起点とする**完全な**推移閉包を返すため、これを再利用して
+#: 「d4_runner.py 自身を除いた閉包内の全モジュール名」を preload 検査対象にする
+#: — 直接 import する 6 個も含む上位集合になるので、取りこぼしが構造的に無くなる
+#: （閉包は d4_runner.py および依存先のバイト列が変わらない限り不変なので、
+#: モジュール import 時に一度だけ計算すれば足りる）。
+_PINNED_MODULE_NAMES = tuple(sorted(
+    p.stem
+    for p in enumerate_repo_import_closure([Path(__file__)], [_HERE, _RUN8_DIR], _REPO_ROOT)
+    if p != Path(__file__).resolve().relative_to(_REPO_ROOT)
+))
 
 
 def _verify_pins_key_shape(pins: Dict[str, Any]) -> None:
@@ -911,6 +951,12 @@ def cmd_measure(args: argparse.Namespace) -> int:
     out_path = Path(args.out)
     render_docs = [Path(p) for p in args.render_doc]
     manifest_paths = [Path(p) for p in args.render_manifest]
+    manifest_expected_shas = list(args.render_manifest_sha256)
+    if len(manifest_paths) != len(manifest_expected_shas):
+        raise D4SpecMismatch(
+            f"--render-manifest {len(manifest_paths)} 件と --render-manifest-sha256 "
+            f"{len(manifest_expected_shas)} 件の数が違う（1 対 1・同順で対応させる）"
+        )
     # 出力衝突検査は analysis stack 検証より**前**に行う（PR #306 レビュー指摘:
     # 衝突だけを検査したい呼び出しが、無関係な ANALYSIS_STACK_PIN 不一致
     # （実行環境のパッケージ版）で先に落ちていた。凍結物破壊の防止は最優先の
@@ -918,12 +964,23 @@ def cmd_measure(args: argparse.Namespace) -> int:
     # 順序 — analysis stack 検証自体は緩めない・そのまま維持する）。
     s7_io.reject_output_collision([out_path], [SPEC_PATH, *render_docs, *manifest_paths])
 
-    # render_manifest 読み込み（PR #306 第4巡 P1・方式 a）: `--render-manifest`
-    # は必須・複数指定可（render は 1 群 = 1 呼び出しのため、通常は群の数だけ
-    # 渡す）。group_id 単位で digest を集約する — 重複 group_id は abort。
+    # render_manifest 読み込み（PR #306 第4巡 P1・方式 a、第5巡 P1・信頼アンカー
+    # 化）: `--render-manifest` は必須・複数指定可（render は 1 群 = 1 呼び出しの
+    # ため、通常は群の数だけ渡す）。まず manifest ファイル自体の実バイト sha256 を
+    # `--render-manifest-sha256`（operator 供給の期待値・同順対応）と照合する —
+    # これが doc-vs-manifest 照合（`_measure_group` 内）より**前**に行う信頼の根
+    # （`--spec-sha256` と同型）。通過後に group_id 単位で digest を集約する
+    # （重複 group_id は abort）。
     manifest_shas: Dict[str, str] = {}
-    for manifest_path in manifest_paths:
-        manifest_doc, _, _ = s7_io.read_json_with_pin(manifest_path)
+    for manifest_path, expected_manifest_sha in zip(manifest_paths, manifest_expected_shas):
+        manifest_doc, manifest_sha, _ = s7_io.read_json_with_pin(manifest_path)
+        if manifest_sha != expected_manifest_sha:
+            raise D4SpecMismatch(
+                f"{manifest_path}: 実 sha256 {manifest_sha} が --render-manifest-sha256 "
+                f"の指定値 {expected_manifest_sha!r} と違う（manifest 自体の信頼の根は "
+                "operator 供給 sha — render 完了後の manifest 差し替えを検出する。"
+                "doc-vs-manifest 照合より前に abort する）"
+            )
         if manifest_doc.get("schema") != RENDER_MANIFEST_SCHEMA:
             raise D4SpecMismatch(
                 f"{manifest_path}: schema {manifest_doc.get('schema')!r} != "
@@ -1042,6 +1099,14 @@ def _add_measure_parser(sub: "argparse._SubParsersAction") -> None:
              "sha256 台帳）。複数指定可・必須。各 --render-doc の実バイト sha256 を "
              "ここに記載された値と group_id 単位で照合し、不一致・未記載は abort する"
              "（PR #306 第4巡 P1・doc 全体の digest 束縛が主防御）",
+    )
+    ap.add_argument(
+        "--render-manifest-sha256", action="append", required=True,
+        dest="render_manifest_sha256",
+        help="operator が束縛する各 --render-manifest の期待 sha256（同順で1対1に"
+             "対応）。実ファイルの sha256 と一致しなければ abort する — manifest 自体"
+             "が render 完了後に差し替えられていないかを doc 照合より前に検査する"
+             "信頼の根（--spec-sha256 と同型。PR #306 第5巡 P1）",
     )
     ap.add_argument("--out", required=True, help="d4_results.json の出力先")
     ap.add_argument(

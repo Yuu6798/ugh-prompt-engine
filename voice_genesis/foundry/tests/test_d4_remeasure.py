@@ -343,6 +343,24 @@ def test_bind_pinned_modules_rejects_preloaded_module(monkeypatch) -> None:
         d4._bind_pinned_modules()
 
 
+def test_bind_pinned_modules_rejects_preloaded_transitive_closure_module(monkeypatch) -> None:
+    """PR #306 レビュー第5巡 P2 の回帰: preload 検査対象は `_bind_pinned_modules()`
+    が直接 `importlib.import_module()` する 6 モジュールの hand-list ではなく、
+    `enumerate_repo_import_closure()` が機械列挙した完全な推移閉包（`s7_b1_v11`
+    や `s7_spec` のような、直接 import する側の import 文の中に隠れた推移依存を
+    含む）から導出する。ここでは閉包メンバーだが直接 import 対象ではない
+    `s7_b1_v11` を偽パスで preload し、それでも abort することを確認する
+    （hand-list のままなら見逃していたはずの経路）。"""
+    assert "s7_b1_v11" in d4._PINNED_MODULE_NAMES
+    monkeypatch.setattr(d4, "_pinned_modules_bound", False)
+    fake_module = types.ModuleType("s7_b1_v11")
+    fake_module.__file__ = "/tmp/not-the-real-s7_b1_v11.py"
+    monkeypatch.setitem(sys.modules, "s7_b1_v11", fake_module)
+
+    with pytest.raises(d4.D4SpecMismatch, match="preloaded_pinned_module"):
+        d4._bind_pinned_modules()
+
+
 def test_load_and_verify_rejects_tampered_pin(tmp_path: Path, raw_spec: Dict[str, Any]) -> None:
     """pin 対象ファイルの sha256 を書き換えると abort する（実ファイルと不一致）。"""
     tampered = copy.deepcopy(raw_spec)
@@ -445,6 +463,7 @@ def test_measure_out_collision_with_spec_is_rejected(spec_and_sha) -> None:
     spec, sha = spec_and_sha
     ns = argparse.Namespace(
         render_doc=[], out=str(d4.SPEC_PATH), spec_sha256=sha, render_manifest=[],
+        render_manifest_sha256=[],
     )
     with pytest.raises(s7_io.OutputCollisionError):
         d4.cmd_measure(ns)
@@ -949,6 +968,76 @@ def test_verify_cell_window_matches_all_360_real_cells() -> None:
     assert n_mismatch == 0, f"{n_mismatch} 件不一致: {mismatches[:5]}"
 
 
+# --- 4b. render_manifest 自体の信頼アンカー（PR #306 レビュー第5巡 P1） --------
+
+
+def test_cmd_measure_rejects_render_manifest_sha256_mismatch(
+    tmp_path: Path, spec_and_sha, all_cell_ids, probe_spec_doc,
+) -> None:
+    """`--render-manifest` の実バイト sha256 が `--render-manifest-sha256`
+    （operator 供給の期待値）と食い違えば、doc-vs-manifest 照合よりも前に abort
+    する — manifest ファイル自体が render 完了後に差し替えられた経路の検出
+    （render 成果物 provenance 連鎖の信頼の根 = operator 供給 sha）。"""
+    spec, spec_sha = spec_and_sha
+    out_dir = tmp_path / "out"
+    wav = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
+    rendered = {
+        cid: {**wav, "input_meta": _real_boundaries_for(cid, probe_spec_doc)}
+        for cid in all_cell_ids
+    }
+    render_doc = _full_render_doc(out_dir, all_cell_ids, rendered)
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_path = tmp_path / "run5_pjs_render_manifest.json"
+    _write_render_manifest(
+        manifest_path,
+        {"run5_pjs": {"render_doc_sha256": _sha256_of(render_doc_path), "path": render_doc_path.name}},
+    )
+
+    out_path = tmp_path / "d4_results.json"
+    ns = argparse.Namespace(
+        render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
+        render_manifest=[str(manifest_path)], render_manifest_sha256=["0" * 64],
+    )
+
+    with pytest.raises(d4.D4SpecMismatch, match="render-manifest-sha256"):
+        d4.cmd_measure(ns)
+    assert not out_path.exists()
+
+
+def test_cmd_measure_rejects_render_manifest_sha256_count_mismatch(
+    tmp_path: Path, spec_and_sha, all_cell_ids, probe_spec_doc,
+) -> None:
+    """`--render-manifest` と `--render-manifest-sha256` の件数が食い違えば
+    abort する（1 対 1・同順対応の契約違反。数が合わなければどれとどれが
+    対応するか決められないため）。"""
+    spec, spec_sha = spec_and_sha
+    out_dir = tmp_path / "out"
+    wav = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
+    rendered = {
+        cid: {**wav, "input_meta": _real_boundaries_for(cid, probe_spec_doc)}
+        for cid in all_cell_ids
+    }
+    render_doc = _full_render_doc(out_dir, all_cell_ids, rendered)
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_path = tmp_path / "run5_pjs_render_manifest.json"
+    _write_render_manifest(
+        manifest_path,
+        {"run5_pjs": {"render_doc_sha256": _sha256_of(render_doc_path), "path": render_doc_path.name}},
+    )
+
+    out_path = tmp_path / "d4_results.json"
+    ns = argparse.Namespace(
+        render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
+        render_manifest=[str(manifest_path)], render_manifest_sha256=[],
+    )
+
+    with pytest.raises(d4.D4SpecMismatch, match="数が違う"):
+        d4.cmd_measure(ns)
+    assert not out_path.exists()
+
+
 # --- 5. セル毎例外の隔離 + exit 非ゼロ（cmd_measure 経由の end-to-end） -------
 
 
@@ -1010,7 +1099,7 @@ def test_cmd_measure_isolates_broken_cell_and_exits_nonzero_stack_independent(
     out_path = tmp_path / "d4_results.json"
     ns = argparse.Namespace(
         render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
-        render_manifest=[str(manifest_path)],
+        render_manifest=[str(manifest_path)], render_manifest_sha256=[_sha256_of(manifest_path)],
     )
     rc = d4.cmd_measure(ns)
 
@@ -1063,7 +1152,7 @@ def test_cmd_measure_isolates_broken_cell_and_exits_nonzero(
     out_path = tmp_path / "d4_results.json"
     ns = argparse.Namespace(
         render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
-        render_manifest=[str(manifest_path)],
+        render_manifest=[str(manifest_path)], render_manifest_sha256=[_sha256_of(manifest_path)],
     )
     rc = d4.cmd_measure(ns)
 
@@ -1120,7 +1209,7 @@ def test_cmd_measure_marks_incomplete_for_single_group_input(
     out_path = tmp_path / "d4_results.json"
     ns = argparse.Namespace(
         render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
-        render_manifest=[str(manifest_path)],
+        render_manifest=[str(manifest_path)], render_manifest_sha256=[_sha256_of(manifest_path)],
     )
     rc = d4.cmd_measure(ns)
 
@@ -1166,6 +1255,7 @@ def test_cmd_measure_allow_partial_records_partial_flag(
     ns = argparse.Namespace(
         render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
         allow_partial=True, render_manifest=[str(manifest_path)],
+        render_manifest_sha256=[_sha256_of(manifest_path)],
     )
     rc = d4.cmd_measure(ns)
 
@@ -1214,7 +1304,7 @@ def test_cmd_measure_marks_complete_for_all_ten_groups(
     out_path = tmp_path / "d4_results.json"
     ns = argparse.Namespace(
         render_doc=render_doc_paths, out=str(out_path), spec_sha256=spec_sha,
-        render_manifest=[str(manifest_path)],
+        render_manifest=[str(manifest_path)], render_manifest_sha256=[_sha256_of(manifest_path)],
     )
     rc = d4.cmd_measure(ns)
 

@@ -24,7 +24,7 @@
     "order_discipline": "本 spec はいかなる D4 測定よりも前にコミットされる。runner (d4_runner.py) は起動時に本 spec 自身の sha256 と pins の全 sha256 を実ファイルと照合し、不一致は即 abort する。結果 JSON (d4_results.json) には本 spec の sha256 を束縛する。本番値を見て仕様を変える経路を構造的に閉じるための規律であり、事後に spec を測定結果へ合わせて書き換えることは禁止する。",
     "render_stack": "CPU onnxruntime（gate_synth.py の既定経路。GPU は使わない）。",
     "wav_pin_policy": "全 WAV に wav_sha256（容器バイト列）と samples_sha256（標本列）の両方を記帳する（s7_io.read_wav_with_pins と同型の 2 段照合。片方でも欠けたら fail-closed）。",
-    "render_manifest_binding": "render_manifest.json による doc 全体の digest 束縛（--render-manifest 必須）はコミット 3b6bf48 以降の実行に適用する（PR #306 第4巡 P1）。2026-08-22 実測分は render_manifest.json を生成していないが、各 doc の digest は d4_results_2026-08-22.json 内の記録（groups.*.render_doc_sha256）が正である。"
+    "render_manifest_binding": "render_manifest.json による doc 全体の digest 束縛（--render-manifest 必須）はコミット 3b6bf48 以降の実行に適用する（PR #306 第4巡 P1）。コミット (第5巡 head 以降) からは --render-manifest-sha256（operator 供給の manifest 期待 sha256・--render-manifest と同順対応）も必須とし、manifest 自体の信頼の根を operator 供給値へ固定する（PR #306 第5巡 P1・doc-vs-manifest 照合より前に検査）。2026-08-22 実測分は render_manifest.json を生成していないが、各 doc の digest は d4_results_2026-08-22.json 内の記録（groups.*.render_doc_sha256）が正である。"
   },
   "groups": [
     {
@@ -101,7 +101,7 @@
       "path": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json",
       "sha256": "c4856fde84c8e46edfbfc1232fef288559595207ea4f088016375c9c39404639"
     },
-    "d4_runner_sha256": "9023cdf5ec85682a7dfa056f2ee13a7c93a043acc9996d3ca398cdd067abbfd9",
+    "d4_runner_sha256": "8b9d82e34a4789df77f3ae710c62f37b804987b36b2a0a51d2db261003154864",
     "instrument_sha256": "f5d136744b24ad6562668b0f604a737d23798e8744e0c23fc19b2afca8418eb4",
     "render_harness_sha256": "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894",
     "s7_0b_probe_sha256": "1b32ed729097337744b4a4f22df40ab34c9eed3b71633c81e250af3f7bc22aac",
