@@ -129,9 +129,14 @@ def prepare_output_tree(out_dir: Path) -> Dict[str, Any]:
     """
     out_dir = Path(out_dir)
     detail: Dict[str, Any] = {"cleared": False, "preserved_voicebank": False,
-                              "snapshot": None}
+                              "snapshot": None, "first_run": False}
     if not out_dir.exists():
+        # 初回 run。戻す先が無いので、落ちたときは **partial なツリーを消す**
+        # （`restore_or_clear_output_tree`）。staging へ作って最後に rename する
+        # 案は採らない: provenance へ書くパス（`repo_relative`）が canonical 位置
+        # を指さなくなり、第 2/3 巡で入れた checkout 非依存の記録が壊れるため。
         out_dir.mkdir(parents=True, exist_ok=True)
+        detail["first_run"] = True
         return detail
     snapshot = output_snapshot_path(out_dir)
     if snapshot.exists():
@@ -158,6 +163,27 @@ def restore_output_tree(out_dir: Path, snapshot: Optional[str | Path]) -> bool:
         shutil.rmtree(out_dir)
     shutil.move(str(snap), str(out_dir))
     return True
+
+
+def restore_or_clear_output_tree(out_dir: Path,
+                                 snapshot: Optional[str | Path]) -> Dict[str, Any]:
+    """落ちた run の後始末。**canonical 位置を常に既知の状態にする**。
+
+    退避があれば戻す。初回 run のように戻す先が無い場合は、途中まで書かれた
+    ツリーを削除する（§28「partial generation を canonical 成果物として残さない」）。
+    `withdraw_publication` と同じ「restore-or-remove」の形。
+    """
+    if restore_output_tree(out_dir, snapshot):
+        return {"restored": True, "removed_partial": False,
+                "disposition": "previous result tree restored"}
+    out_dir = Path(out_dir)
+    removed = False
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+        removed = True
+    return {"restored": False, "removed_partial": removed,
+            "disposition": ("partial result tree removed (no previous generation)"
+                            if removed else "nothing to clean up")}
 
 
 def discard_output_snapshot(snapshot: Optional[str | Path]) -> bool:
@@ -380,8 +406,8 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
         code = _run_phases(spec_path, criteria_path, controls_path, probes_path, out_dir,
                            tree)
     except BaseException:
-        if restore_output_tree(out_dir, tree.get("snapshot")):
-            _log("abort", "run aborted; previous result tree restored")
+        outcome = restore_or_clear_output_tree(out_dir, tree.get("snapshot"))
+        _log("abort", f"run aborted; {outcome['disposition']}")
         raise
     discard_output_snapshot(tree.get("snapshot"))
     return code
@@ -588,12 +614,25 @@ def _run_phases(spec_path: Path, criteria_path: Path, controls_path: Path,
 
     # ---------------- Phase 9: Publish verdict ----------------------------
     _log("phase9", "publish + verdict")
+    # 閉包 pin は Phase 0 で **import 後** に取っている。長寿命プロセスで run 中に
+    # AF モジュールが書き換わると、実行されたコードと記録された閉包がずれたまま
+    # G2 / G14 が PASS しうる。公開の直前に取り直して一致を要求し、run の全区間に
+    # わたって「記録された閉包 = 実際に走ったコード」を成立させる。
+    closure_recheck, _ = af_gates.code_closure_digest(HERE)
+    pins["code_closure_verified"] = closure_recheck == closure_digest
+    if not pins["code_closure_verified"]:
+        pins["code_closure_sha256_at_publish"] = closure_recheck
+        notes.append("code closure changed during the run: "
+                     f"{closure_digest} -> {closure_recheck}")
+        _log("phase9", "code closure changed mid-run; publication will be withheld")
     pins["body_identity_digest"] = first["digest"]
     published_root = out_dir / "voicebank" / "AF0"
     publication: Dict[str, Any] = {"published": None, "bundle_verified": False,
                                    "partial_artifacts": []}
     prereq = {g.gate_id: g.verdict for g in (gate_g0, gate_g1, gate_g2, gate_g3)}
     blocking = [gid for gid in PUBLICATION_PREREQUISITES if prereq.get(gid) != "PASS"]
+    if not pins["code_closure_verified"]:
+        blocking = blocking + ["CODE_CLOSURE"]
     if blocking:
         # §28「失敗時は旧 valid bundle を保持」。Source-Free / 決定論 / Body 構造の
         # いずれかが落ちた候補で canonical 公開場所を上書きしない。

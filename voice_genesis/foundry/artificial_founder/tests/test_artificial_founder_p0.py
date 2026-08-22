@@ -516,8 +516,10 @@ def _gates(body: Dict[str, Any], reexp: Dict[str, Any], **overrides: str):
                                       {"all_finite": True}, {"verdict": "PASS"}),
         "G5": af_gates.gate_meter_control(_passing_controls()),
         "G14": af_gates.gate_provenance(
-            {k: "x" for k in ("spec_sha256", "criteria_sha256", "controls_sha256",
-                              "probes_sha256", "code_closure_sha256", "body_identity_digest")},
+            {**{k: "x" for k in ("spec_sha256", "criteria_sha256", "controls_sha256",
+                                 "probes_sha256", "code_closure_sha256",
+                                 "body_identity_digest")},
+             "code_closure_verified": True},
             {"published": "p", "bundle_verified": True, "partial_artifacts": []}),
     }
     for gid, verdict in overrides.items():
@@ -1306,3 +1308,80 @@ def test_pinned_input_contract_failure_blocks_the_run(tmp_path):
     assert g1["verdict"] == "FAIL"
     assert any("pinned input rejected" in e for e in g1["detail"]["errors"])
     assert not (out / "voicebank").exists()
+
+
+# ---------------------------------------------------------------------------
+# PR #301 Codex レビュー第 7 巡（P1 x3）で塞いだ穴の回帰テスト
+# ---------------------------------------------------------------------------
+def test_metric_definitions_are_frozen():
+    """`metric_definitions` も凍結契約に含む（control が全 metric を覆わないため）。"""
+    base = json.loads(CRITERIA_PATH.read_text(encoding="utf-8"))
+    assert af_schema.validate_criteria(base) == []
+    assert af_schema.metric_definitions_digest(base["metric_definitions"]) == \
+        af_schema.FROZEN_METRIC_DEFINITIONS_SHA256
+
+    # meter control が覆っていない `spectral_identity` を書き換えても弾く
+    tampered = json.loads(json.dumps(base))
+    tampered["metric_definitions"]["spectral_identity"]["n_log_bands"] = 4
+    errs = af_schema.validate_criteria(tampered)
+    assert any("frozen AF-P0 measurement contract" in e for e in errs)
+
+    # control が覆っている側の書き換えも同様に弾く
+    tampered = json.loads(json.dumps(base))
+    tampered["metric_definitions"]["release"]["fit_range_fraction"] = [0.0, 1.0]
+    assert any("frozen AF-P0 measurement contract" in e
+               for e in af_schema.validate_criteria(tampered))
+
+
+def test_meter_controls_do_not_cover_every_metric_definition():
+    """凍結が必要な理由（control の被覆が完全でないこと）を明示的に固定する。"""
+    md = json.loads(CRITERIA_PATH.read_text(encoding="utf-8"))["metric_definitions"]
+    covered = {c["metric"] for c in af_gates.REQUIRED_CONTROL_CONTRACT.values()}
+    assert "spectral_identity" in md
+    assert not any("spectral_identity" in m for m in covered), (
+        "spectral_identity has no meter control; metric_definitions must stay frozen")
+
+
+def test_first_run_failure_leaves_no_partial_tree(tmp_path, monkeypatch):
+    """初回 run が落ちたら partial なツリーを canonical 位置に残さない。"""
+    import p0_run
+
+    out = tmp_path / "AF0"
+    assert not out.exists()
+
+    def _explode(*args, **kwargs):
+        raise RuntimeError("simulated mid-run failure")
+
+    monkeypatch.setattr(p0_run.af_controls, "run_controls", _explode)
+    with pytest.raises(RuntimeError):
+        p0_run.run(SPEC_PATH, CRITERIA_PATH, CONTROLS_PATH, PROBES_PATH, out)
+    assert not out.exists(), "partial first-run tree must be removed"
+
+
+def test_restore_or_clear_prefers_restoring(tmp_path):
+    import p0_run
+
+    out = tmp_path / "AF0"
+    out.mkdir()
+    (out / "old.txt").write_text("v1", encoding="utf-8")
+    detail = p0_run.prepare_output_tree(out)
+    (out / "partial.txt").write_text("half written", encoding="utf-8")
+    outcome = p0_run.restore_or_clear_output_tree(out, detail["snapshot"])
+    assert outcome["restored"] is True and outcome["removed_partial"] is False
+    assert (out / "old.txt").exists() and not (out / "partial.txt").exists()
+
+
+def test_provenance_gate_requires_the_closure_recheck():
+    """公開直前の閉包再確認が通っていない run は G14 を PASS にしない。"""
+    pins = {k: "x" for k in ("spec_sha256", "criteria_sha256", "controls_sha256",
+                             "probes_sha256", "code_closure_sha256",
+                             "body_identity_digest")}
+    publication = {"published": "p", "bundle_verified": True, "partial_artifacts": []}
+    assert af_gates.gate_provenance({**pins, "code_closure_verified": True},
+                                    publication).verdict == "PASS"
+    drifted = af_gates.gate_provenance({**pins, "code_closure_verified": False},
+                                       publication)
+    assert drifted.verdict == "FAIL"
+    assert drifted.detail["code_closure_verified"] is False
+    # pin そのものが無い場合も PASS にしない
+    assert af_gates.gate_provenance(pins, publication).verdict == "FAIL"

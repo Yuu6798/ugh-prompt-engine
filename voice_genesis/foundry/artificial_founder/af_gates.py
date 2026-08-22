@@ -476,10 +476,14 @@ def gate_provenance(pins: Mapping[str, Any], publication: Mapping[str, Any]) -> 
     required_pins = ("spec_sha256", "criteria_sha256", "controls_sha256", "probes_sha256",
                      "code_closure_sha256", "body_identity_digest")
     missing = [k for k in required_pins if not pins.get(k)]
-    ok = (not missing and publication.get("published")
+    # 閉包 pin は「公開直前に取り直して一致した」ことまで確認する（run 中に
+    # コードが書き換わっていないこと）。
+    closure_verified = pins.get("code_closure_verified") is True
+    ok = (not missing and closure_verified and publication.get("published")
           and publication.get("bundle_verified") is True
           and publication.get("partial_artifacts") == [])
-    detail = {"missing_pins": missing, "publication": dict(publication)}
+    detail = {"missing_pins": missing, "code_closure_verified": closure_verified,
+              "publication": dict(publication)}
     if not ok:
         detail["reason_code"] = "PROVENANCE_OR_PUBLICATION_FAILED"
     return GateResult("G14", "PROVENANCE_AND_PUBLICATION", "PASS" if ok else "FAIL", detail)

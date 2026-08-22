@@ -17,6 +17,8 @@ fail-closed の原則:
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
@@ -166,6 +168,23 @@ FROZEN_REEXPRESSION_GATES: Dict[str, Any] = {
     "afterglow_extra_delta_ms_max": 20.0,
 }
 
+#: §A-7 で事前登録した `metric_definitions`（どう測るか）の凍結ダイジェスト。
+#:
+#: 第 6 巡では「測定方法の妥当性は §17 の meter control が担保する」として
+#: この部分木を凍結しなかったが、**それは誤りだった**。control は 8 family の
+#: metric しか実測しておらず、`spectral_identity`（G6 の再表現 cosine が使う
+#: band / bands 数 / 平均除去）には対応する control が無い。したがって custom
+#: criteria が `spectral_identity` を書き換えれば、G5 は PASS のまま G6 の判定
+#: だけを緩められた。§15.3「結果を見て peak finder を変更しない」・§A-8 とも
+#: 矛盾する。
+#:
+#: 値そのものではなくダイジェストで縛るのは、(a) 事前登録値の正本は
+#: `criteria/AF_P0_CRITERIA.json`（リポジトリ内・provenance で hash pin 済み）
+#: であり二重管理を避けたい、(b) 計器を変えるときは **この定数も意図的に
+#: 更新する** という 2 箇所編集を強制したい（§15.3 の規律をコードで表す）、
+#: の 2 点による。同梱 criteria から再計算して一致することはテストが固定する。
+FROZEN_METRIC_DEFINITIONS_SHA256 = "da96ef853dbf63cb2173168eb54db4037c95e3a450ac58698409118592d0c2f9"
+
 FROZEN_INGESTION: Dict[str, Any] = {
     "required_onsets": ["k", "s", "n", "r"],
     "required_vowels": ["a", "i", "u", "e", "o"],
@@ -181,6 +200,13 @@ def is_safe_name(name: Any) -> bool:
     if "/" in name or "\\" in name or "\x00" in name:
         return False
     return Path(name).name == name and not Path(name).is_absolute()
+
+
+def metric_definitions_digest(metric_definitions: Any) -> str:
+    """`metric_definitions` 部分木の正準ダイジェスト（キー順非依存）。"""
+    canon = json.dumps(metric_definitions, sort_keys=True, ensure_ascii=False,
+                       separators=(",", ":"))
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
 def validate_criteria(criteria: Any) -> List[str]:
@@ -206,8 +232,17 @@ def validate_criteria(criteria: Any) -> List[str]:
             elif got[key] != frozen[key]:
                 errors.append(
                     f"criteria.{section}.{key}: expected {frozen[key]!r}, got {got[key]!r}")
-    if "metric_definitions" not in criteria:
+    md = criteria.get("metric_definitions")
+    if md is None:
         errors.append("criteria.metric_definitions: missing section")
+    else:
+        got = metric_definitions_digest(md)
+        if got != FROZEN_METRIC_DEFINITIONS_SHA256:
+            errors.append(
+                "criteria.metric_definitions: does not match the frozen AF-P0 measurement "
+                f"contract (expected sha256 {FROZEN_METRIC_DEFINITIONS_SHA256}, got {got}); "
+                "changing the meter requires deliberately updating "
+                "af_schema.FROZEN_METRIC_DEFINITIONS_SHA256 as well (§15.3 / §A-8)")
     return errors
 
 
