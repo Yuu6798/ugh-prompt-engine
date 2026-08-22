@@ -1,0 +1,72 @@
+{
+  "schema": "s7-b1-candidate-space/0.1",
+  "series": "TRF measurement spec / 1.1",
+  "frozen_at": "2026-08-21",
+  "authority": "User 裁定 2026-08-21（NEXT ACTION = Option C。1.0 は差し替えず新系列として開始する）",
+  "goal": "「F0 が存在するか」ではなく、意味のある終端有声 vs SP 上に残る低エネルギー NSF excitation を弁別できる voiced detector を作る",
+  "relation_to_1_0": {
+    "spec_1_0_sha256": "e1ed1a89fffe059a70bfd367fc797e51aadaafcc7694f62ef38662d1b6565a68",
+    "rule": "1.0 は frozen のまま保存する。1.1 が freeze されるまで、唯一の凍結仕様は 1.0 である",
+    "why_new_series": "1.0 の production applicability が NOT_ESTABLISHED / DEGENERATE だったため（s7_trf_spec_1_0_applicability.json）"
+  },
+  "analysis_stack_pin": {
+    "numba": "0.66.0",
+    "librosa": "0.11.0",
+    "numpy": "2.4.6",
+    "note": "1.0 と同一 pin。numba 0.67.0 × numpy 2.4.6 は librosa.pyin が SIGSEGV する実測記録がある"
+  },
+  "design_rule": {
+    "periodicity_plus_energy_evidence": "voicing 候補は periodicity 証拠と energy 証拠の**両方**を要求する（どちらか一方では SP 上の低エネルギー励振を落とせない）",
+    "no_absolute_rms_threshold": "旧 candidate B の固定 absolute RMS threshold は復活させない。実レンダで gain invariance を失うことが実証済み（1.0 の実レンダ校正で候補族 B が全滅）",
+    "energy_gate_is_a_same_render_ratio": "energy gate は frame RMS / **同一 render の voiced-core RMS** の比で定義する。分子分母が同じ線形 gain で伸縮するので比は gain 不変",
+    "voiced_core_window": "[note_onset + 0.10 s, commanded_note_end - 0.05 s]（1.0 の terminal_mel_persistence が core として使う窓と同一。新しい窓を導入しない）",
+    "fail_closed": "core 窓が空 / core RMS == 0 のとき energy gate は不成立（voiced = False）とする"
+  },
+  "voicing": [
+    {
+      "id": "A_pyin_prob_relenergy",
+      "periodicity_evidence": "librosa.pyin の voiced_probability",
+      "energy_evidence": "frame_rms / voiced_core_rms",
+      "voiced_rule": "voiced_prob >= p_thr AND rel_energy >= tau",
+      "f0": "librosa.pyin の f0",
+      "p_thr": [0.5, 0.8]
+    },
+    {
+      "id": "B_autocorr_relenergy",
+      "periodicity_evidence": "自己相関のピーク（正規化）r_max（探索帯 60–800 Hz）",
+      "energy_evidence": "frame_rms / voiced_core_rms",
+      "voiced_rule": "r_max >= r_thr AND rel_energy >= tau",
+      "f0": "sr / argmax lag",
+      "r_thr": [0.5, 0.7]
+    },
+    {
+      "id": "C_harmonicity_relenergy",
+      "periodicity_evidence": "harmonicity = 10*log10(r/(1-r))（周期成分 / 非周期成分の対数比。dB）",
+      "energy_evidence": "frame_rms / voiced_core_rms",
+      "voiced_rule": "hnr_db >= h_thr AND rel_energy >= tau",
+      "f0": "sr / argmax lag",
+      "h_thr_db": [0.0, 6.0]
+    }
+  ],
+  "energy_gate_tau": [0.05, 0.15, 0.3, 0.5],
+  "tau_rationale": "先験的に広い帯を置き、どれが残るかは事前登録済みの hard requirement に決めさせる。刺激の実測値を見てから選ばない",
+  "window_ms": [100.0, 200.0],
+  "hop_ms": [5.0, 10.0],
+  "window_hop_rationale": "1.0 と同じ格子。1.0 で monotone_response を落とした win300 は候補から外れたままにする（新しく足しも減らしもしない）",
+  "mel": [
+    {"id": "M1_1024_256_80", "n_fft": 1024, "hop_length": 256, "n_mels": 80},
+    {"id": "M2_2048_512_80", "n_fft": 2048, "hop_length": 512, "n_mels": 80},
+    {"id": "M3_1024_128_128", "n_fft": 1024, "hop_length": 128, "n_mels": 128}
+  ],
+  "mel_note": "1.0 と同一。terminal_mel_persistence は本番セルで縮退していないので候補を変える理由が無い",
+  "n_voicing_candidates": 96,
+  "n_mel_candidates": 3,
+  "prohibitions": [
+    "本番 360 セルを候補選定の入力にしない（B-1 は本番セルへの入力口を持たない）",
+    "聴取ラベル / P-ANCHOR 結果を選定に使わない",
+    "現 360 セルに合うよう閾値を後付けしない",
+    "MAD = 0 だった軸を primary へ戻さない",
+    "ε を縮めない",
+    "1.0 の reference_output を書き換えない"
+  ]
+}

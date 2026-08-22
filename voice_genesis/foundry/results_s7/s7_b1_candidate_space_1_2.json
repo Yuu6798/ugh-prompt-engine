@@ -1,0 +1,105 @@
+{
+  "schema": "s7-b1-candidate-space/0.1",
+  "series": "TRF measurement spec / 1.2",
+  "frozen_at": "2026-08-22",
+  "authority": "User 裁定 2026-08-22（次系列は (A)+(B) 併用。新軸は事前に固定してから測定する）",
+  "goal": "分離軸を**相対エネルギー 1 次元から変える**。経路床（SP のみのレンダ）は命令音高ちょうどの純粋な調波ブザーであり、**相対エネルギーでは本物の終端より大きい**（実測: 床 0.319 > 本番中央値 0.207）。したがって振幅ではなく**スペクトル形状（その音がまだ「その母音」に見えるか）**で分離する",
+  "measured_basis": {
+    "source": "s7_relative_energy_finding.md / s7_b1_pipeline_silence_diagnostic.json",
+    "floor_is": "命令音高ちょうどの調波ブザー（終端窓の主周波数 256.7 Hz / 命令 C4 261.6 Hz）",
+    "floor_relative_energy": 0.319,
+    "production_final_median_relative_energy": 0.207,
+    "why_energy_fails": "順序が逆転しているため、1 次元の閾値では床を落とすと本物の 84% も落ちる"
+  },
+  "axis_freeze_rule": "**本文書を pin した後に軸を足さない**（User 裁定）。結果を見てからの候補追加は禁止。1.2 で不成立なら 1.3 を作らず、別の観測設計として再事前登録する",
+  "analysis_stack_pin": {
+    "numba": "0.66.0",
+    "librosa": "0.11.0",
+    "numpy": "2.4.6",
+    "note": "1.0 / 1.1 と同一 pin"
+  },
+  "common_periodicity_gate": {
+    "rule": "全 voicing 候補は `librosa.pyin` の voiced_probability >= 0.5 を共通の前段に置く",
+    "why": "周期性の有無は 1.0/1.1 で問題になっていない。1.2 で選ぶのは**その先の分離軸**であり、前段を動かすと何が効いたか分からなくなる",
+    "fixed_value": 0.5
+  },
+  "zero_input_handling": {
+    "rule": "フレームのエネルギーが厳密に 0 のときは形状が未定義なので **fail-closed で unvoiced**",
+    "why": "zero_input_false_positive をエネルギー閾値ではなく未定義扱いで満たす（1.1 で問題になった相対エネルギー閾値を再導入しないため）"
+  },
+  "voicing": [
+    {
+      "id": "S_melshape_core_distance",
+      "separation_axis": "エネルギー正規化した log-mel 形状と**ノート核の平均形状**とのコサイン距離",
+      "voiced_rule": "pyin_prob >= 0.5 AND cos_dist(shape_frame, shape_core) <= d_thr",
+      "semantics": "終端がまだ「歌っていた母音」に見えるか。床は formant を持たないので核形状から遠い",
+      "gain_invariance": "形状を L2 正規化してから距離を取るので線形 gain に不変",
+      "d_thr": [
+        0.05,
+        0.1,
+        0.2,
+        0.35
+      ],
+      "core_window": "[note_onset + 0.10 s, commanded_note_end - 0.05 s]（1.0 の mel 核窓と同一）",
+      "mel_config": "選定された mel 候補と同じ n_fft / hop_length / n_mels を使う（新しい格子を導入しない）"
+    },
+    {
+      "id": "P_mel_peakiness",
+      "separation_axis": "mel 帯域方向の尖り = max(band) / median(band)（フォルマント峰の有無）",
+      "voiced_rule": "pyin_prob >= 0.5 AND peakiness >= p_thr",
+      "semantics": "母音はフォルマント峰を持ち、純粋な調波ブザーは帯域方向に平坦に近い",
+      "gain_invariance": "帯域内の比なので線形 gain に不変",
+      "p_thr": [
+        2.0,
+        4.0,
+        8.0,
+        16.0
+      ]
+    }
+  ],
+  "window_ms": [
+    100.0,
+    200.0
+  ],
+  "hop_ms": [
+    5.0,
+    10.0
+  ],
+  "window_hop_rationale": "1.0 / 1.1 と同一格子。新しく足しも減らしもしない",
+  "mel": [
+    {
+      "id": "M1_1024_256_80",
+      "n_fft": 1024,
+      "hop_length": 256,
+      "n_mels": 80
+    },
+    {
+      "id": "M2_2048_512_80",
+      "n_fft": 2048,
+      "hop_length": 512,
+      "n_mels": 80
+    },
+    {
+      "id": "M3_1024_128_128",
+      "n_fft": 1024,
+      "hop_length": 128,
+      "n_mels": 128
+    }
+  ],
+  "mel_note": "1.0 / 1.1 と同一。terminal_mel_persistence は本番セルで縮退していない",
+  "n_voicing_candidates": 32,
+  "n_mel_candidates": 3,
+  "not_included_and_why": {
+    "relative_energy_gate": "1.1 で原理的に分離不能と実測済み（順序逆転）。再導入しない",
+    "absolute_rms_threshold": "1.0 の実レンダ校正で gain invariance を失うと実証済み",
+    "f0_deviation_from_commanded": "床の主周波数は命令音高とほぼ一致（256.7 vs 261.6 Hz）だが、**正しく伸ばした本物の終端も命令音高に一致する**ため分離軸にならない。除外理由を明記して入れない",
+    "hnr_standalone": "床は合成音源なので HNR が高い。『HNR が低いほど voiced』という反転規則になり、通常の有声判定の意味と衝突する。意味論を壊す軸は入れない"
+  },
+  "prohibitions": [
+    "本文書 pin 後に軸を追加しない（結果を見てからの追加は禁止）",
+    "本番 360 セルを候補選定の入力にしない",
+    "聴取ラベル / P-ANCHOR 結果を選定に使わない",
+    "ε を 1.0 / 1.1 より縮めない",
+    "1.0 / 1.1 の凍結値を書き換えない"
+  ]
+}

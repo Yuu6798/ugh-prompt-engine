@@ -140,6 +140,12 @@ import yaml  # noqa: E402
 # スクリプト自身の位置から相対導出する（`--singer-dir` で明示上書きも可能）。
 DEFAULT_SINGER_DIR = Path(__file__).resolve().parents[2] / "singer"
 
+#: run 8-0b 診断 probe の song id 接頭辞（`--song diag:<cell_id>`）。
+#: 既存の sakura / umi 経路には一切触れない（`load_song_module` の分岐は
+#: この接頭辞を持つ song だけを拾う）。
+DIAGNOSTIC_SONG_PREFIX = "diag:"
+DIAGNOSTIC_SCORE_MODULE = "score_diag_pf.py"
+
 SEED = 42
 HEAD_FRAMES = 8
 TAIL_FRAMES = 8
@@ -249,7 +255,7 @@ def load_song_module(
     という 4 段の別読み込みも、本関数 1 回の呼び出しへ統合する（`synth_song`
     は本関数が返す `build_fn` 等をそのまま使い、内部で再ロードしない）。
     """
-    if song not in ("sakura", "umi"):
+    if song not in ("sakura", "umi") and not song.startswith(DIAGNOSTIC_SONG_PREFIX):
         raise ValueError(f"unknown song: {song}")
 
     module_shas: Dict[str, Tuple[Path, str]] = {}
@@ -260,6 +266,28 @@ def load_song_module(
 
     score_path = (singer_dir / "score.py").resolve()
     sc_score, score_sha = _read_and_exec_module("score", score_path)
+
+    if song.startswith(DIAGNOSTIC_SONG_PREFIX):
+        # run 8-0b の診断 probe（`DESIGN_S7_run8.md` §4-1）。1 セル = 1 譜面 = 1 レンダ。
+        # sakura/umi と**同じ single-read + compile/exec 経路**で読み、同じ命名規約で
+        # provenance sha を返す（診断だけ pin が緩む経路を作らない）。
+        cell_id = song[len(DIAGNOSTIC_SONG_PREFIX):]
+        if not cell_id:
+            raise ValueError(f"diagnostic song id is empty: {song!r}")
+        module_shas[f"score_module_{song}_dep_score"] = (score_path, score_sha)
+        diag_path = (singer_dir / DIAGNOSTIC_SCORE_MODULE).resolve()
+        sc_diag, diag_sha = _read_and_exec_module("score_diag_pf", diag_path)
+        module_shas[f"score_module_{song}"] = (diag_path, diag_sha)
+        known = {c["cell_id"] for c in sc_diag.enumerate_cells()}
+        if cell_id not in known:
+            raise ValueError(f"unknown diagnostic cell: {cell_id!r}")
+        return (
+            lambda: sc_diag.build_score_for_cell_id(cell_id),
+            sc_diag.beats_to_seconds,
+            sc_diag.TEMPO_BPM,
+            diag_path,
+            module_shas,
+        )
 
     if song == "sakura":
         module_shas[f"score_module_{song}"] = (score_path, score_sha)
@@ -317,6 +345,96 @@ def padded_word_div_dur(ph_dur: List[int], is_vowel_flags: List[bool]) -> Tuple[
         offset += length
     assert sum(word_dur) == sum(ph_dur)
     return word_div, word_dur
+
+
+def compute_final_phone_dur(
+    ph_dur_pred: np.ndarray,
+    note_phone_counts: List[int],
+    note_target_frames: List[int],
+) -> List[int]:
+    """Stage 1 の `ph_dur_pred`（先頭の lead SP を含む）をノート単位で
+    `note_target_frames` に合わせて再スケールし、フレーム整数列にする。
+
+    `run_pipeline` の Stage 1 内にインラインで書かれていた算術をそのまま
+    関数として括り出したもの（挙動不変。run 8 の校正レンダで override を
+    差し込む口を作るための抽出であって、丸め方・残差の寄せ先は 1 文字も
+    変えていない — `tests/test_s7_calib_render.py` の golden ベクタと、
+    `gate_sakura_n4.wav` の sha256 一致で拘束する）。
+    """
+    final_phone_dur: List[int] = []
+    offset = 1
+    for count, target in zip(note_phone_counts, note_target_frames):
+        pred_slice = ph_dur_pred[offset: offset + count]
+        pred_sum = float(pred_slice.sum())
+        if pred_sum <= 0:
+            rescaled = [target / count] * count
+        else:
+            ratio = target / pred_sum
+            rescaled = [float(x) * ratio for x in pred_slice]
+        rounded = [int(round(x)) for x in rescaled]
+        resid = target - sum(rounded)
+        rounded[-1] += resid
+        final_phone_dur.extend(rounded)
+        offset += count
+    return final_phone_dur
+
+
+def resolve_final_phone_dur(
+    ph_dur_pred: np.ndarray,
+    note_phone_counts: List[int],
+    note_target_frames: List[int],
+    real_phones: List[str],
+    frame_ms: float,
+    record: dict,
+    override: Optional[Callable[[List[int], dict], List[int]]] = None,
+) -> List[int]:
+    """Stage 1 の命令フレーム配分を確定する唯一の関数。
+
+    `override is None`（**本番の既定**）のときの戻り値は
+    `compute_final_phone_dur()` の出力そのもので、`record` にも 1 キーも
+    書かない。すなわち **既定経路は介入を受けない**（`run_pipeline` 内で
+    `final_phone_dur` を束縛するのは本関数の呼び出し 1 箇所だけであることを
+    `tests/test_s7_gate_synth_dur_hook.py` が AST で拘束する。User 裁定
+    2026-08-21 STEP 6「default-off path が intervention を受けないことを
+    コードレベルでも assert する」）。
+
+    `override` を渡すのは run 8 B-1 の**校正専用**レンダだけで、その場合は
+    介入があった事実（`stage1_calibration_only_intervention`）と、予測値・
+    適用値の双方を `record` へ残す。
+    """
+    final_phone_dur = compute_final_phone_dur(
+        ph_dur_pred, note_phone_counts, note_target_frames
+    )
+    n_real = len(real_phones)
+    assert len(final_phone_dur) == n_real
+    if override is None:
+        # 本番経路（run5/6/7 と同一）。命令フレーム総和はノート命令と一致する。
+        assert sum(final_phone_dur) == sum(note_target_frames)
+        return final_phone_dur
+
+    predicted = list(final_phone_dur)
+    overridden = override(
+        list(final_phone_dur),
+        {
+            "real_phones": list(real_phones),
+            "note_phone_counts": list(note_phone_counts),
+            "note_target_frames": list(note_target_frames),
+            "frame_ms": frame_ms,
+        },
+    )
+    overridden = [int(v) for v in overridden]
+    if len(overridden) != n_real:
+        raise ValueError(
+            f"final_phone_dur_override returned {len(overridden)} frames != {n_real} phones"
+        )
+    if any(v < 1 for v in overridden):
+        raise ValueError(f"final_phone_dur_override returned non-positive frames: {overridden}")
+    record["stage1_calibration_only_intervention"] = True
+    record["stage1_final_phone_dur_override_applied"] = True
+    record["stage1_final_phone_dur_predicted"] = predicted
+    record["stage1_final_phone_dur"] = list(overridden)
+    record["stage1_note_target_frames"] = list(note_target_frames)
+    return overridden
 
 
 def fit_duration_sum(durations: List[int], total: int) -> List[int]:
@@ -1062,6 +1180,8 @@ def run_pipeline(
     record: dict,
     speaker_name: Optional[str] = None,
     speaker_embed_vector: Optional[np.ndarray] = None,
+    final_phone_dur_override: Optional[Callable[[List[int], dict], List[int]]] = None,
+    measurement_out: Optional[dict] = None,
 ) -> np.ndarray:
     """`model_bytes` は `load_model_bundle_bytes` が 1 回だけ read したモデル束
     + dsconfig.yaml のバッファ（`canon_linguistic_onnx`/`canon_variance_dur_onnx`/
@@ -1078,6 +1198,17 @@ def run_pipeline(
     そのまま `InferenceSession`/`yaml.safe_load` へ渡すことで、hash と
     load が同一バッファ由来であることを構造的に保証する
     （`_read_and_exec_module` と同型パターン）。
+
+    `final_phone_dur_override`（run 8 追加・**既定 None**）は Stage 1 が
+    予測した音素フレーム配分を差し替えるフックで、run 8 B-1 の「校正専用
+    real-render セット」が事前登録した `rr_long_tail_*`（終端フレームの
+    延長）/ `rr_dur_perturb_*`（終端 /ri/ の r:i 配分固定）を、譜面では
+    命令できない粒度で実現するためだけに使う。None のとき本関数は
+    run5/6/7 と 1 命令も変わらない（`assert sum(final_phone_dur) ==
+    sum(note_target_frames)` も含めて同一経路）。override 使用時のみ
+    総和がノート命令と一致しなくなり得るため、その assert に代えて
+    「音素数一致・全フレーム 1 以上」を検査し、予測値と適用値の双方を
+    `record` へ記帳する（どちらの命令で鳴らしたかを後から復元できる）。
     """
     ort.set_seed(SEED)
     record["seed"] = SEED
@@ -1148,23 +1279,15 @@ def run_pipeline(
     dur_names = [o.name for o in sess_dur.get_outputs()]
     ph_dur_pred1 = dur_out[dur_names.index("ph_dur_pred")][0]
 
-    final_phone_dur = []
-    offset = 1
-    for count, target in zip(note_phone_counts, note_target_frames):
-        pred_slice = ph_dur_pred1[offset: offset + count]
-        pred_sum = float(pred_slice.sum())
-        if pred_sum <= 0:
-            rescaled = [target / count] * count
-        else:
-            ratio = target / pred_sum
-            rescaled = [float(x) * ratio for x in pred_slice]
-        rounded = [int(round(x)) for x in rescaled]
-        resid = target - sum(rounded)
-        rounded[-1] += resid
-        final_phone_dur.extend(rounded)
-        offset += count
-    assert len(final_phone_dur) == n_real
-    assert sum(final_phone_dur) == sum(note_target_frames)
+    final_phone_dur = resolve_final_phone_dur(
+        ph_dur_pred1,
+        note_phone_counts,
+        note_target_frames,
+        real_phones,
+        frame_ms,
+        record,
+        final_phone_dur_override,
+    )
     record["stage1_elapsed_sec"] = time.time() - t0
 
     # --- Stage 2: pitch predictor (variance 系、canon 符号化) ---
@@ -1278,6 +1401,29 @@ def run_pipeline(
     waveform = vocoder_out[vocoder_names.index("waveform")]
     y = np.asarray(waveform, dtype=np.float64).reshape(-1)
     record["stage4_elapsed_sec"] = time.time() - t0
+    if measurement_out is not None:
+        # [run 8-0b] 測定経路（`DESIGN_S7_run8.md` §5-2）。**既定 None = 現行と同一**で、
+        # 渡されたときだけ「命令区間」と「正規化前の生波形・f0」を呼び出し側へ渡す。
+        # `synth_song` のピーク正規化を通さずに窓を切れることが要件なので、値を
+        # 作るだけで本関数の出力（返り値 y）には一切触れない。
+        measurement_out.update(
+            {
+                "real_phones": list(real_phones),
+                "note_phone_counts": list(note_phone_counts),
+                "note_target_frames": list(note_target_frames),
+                "final_phone_dur": list(final_phone_dur),
+                "head_frames": HEAD_FRAMES,
+                "tail_frames": TAIL_FRAMES,
+                "total_frames": int(total_frames),
+                "frame_ms": frame_ms,
+                "hop_size": hop_size,
+                "sample_rate": sample_rate,
+                "f0_hz": f0_hz.reshape(-1).copy(),
+                "mel": np.asarray(mel).copy(),
+                "raw_waveform": y,
+                "normalized": False,
+            }
+        )
     return y
 
 

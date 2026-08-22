@@ -24,4 +24,36 @@ if ! python -m pip install -q -e ".[dev]" >"$log" 2>&1; then
   cat "$log" >&2
   exit 1
 fi
+# ANALYSIS_STACK_PIN の復元（2026-08-22 の実測で追加）。
+# `pip install -e ".[dev]"` は librosa 経由で numba を最新へ引き上げる。ところが
+# このリポジトリには「numba 0.67.0 × numpy 2.4.6 は `librosa.pyin` が SIGSEGV・
+# 0.66.0 で解消」という実測記録があり（scripts/run5_bootstrap.py の
+# ANALYSIS_STACK_PIN / run8 の B-1 校正）、コンテナ再構築のたびに宣言 pin から
+# 静かにずれる。**pin を実装に合わせて書き換えるのではなく、実装を pin へ戻す。**
+# 復元できなかったときは **exit 1**（PR #303 第 3 巡 P2）。上の
+# `pip install -e ".[dev]"` 失敗と同じ扱いにする — 片方だけ warn で通すと
+# 「dev dependencies ready」と言いながら SIGSEGV する版で走る、という
+# 偽成功になる。復元の成否は install コマンドの終了コードではなく
+# **入れ終わった後の版**で判定する（既に pin 済みなら何も走らない）。
+if ! python - <<'PIN' >>"$log" 2>&1
+import importlib.metadata as md, subprocess, sys
+PIN = {"numba": "0.66.0"}
+bad = {p: md.version(p) for p in PIN if md.version(p) != PIN[p]}
+for p in bad:
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", f"{p}=={PIN[p]}"])
+still = {p: md.version(p) for p in PIN if md.version(p) != PIN[p]}
+if still:
+    print(f"ANALYSIS_STACK_PIN restore failed: {still}", file=sys.stderr)
+    raise SystemExit(1)
+if bad:
+    print("restored", bad, "->", {p: md.version(p) for p in PIN})
+PIN
+then
+  echo "session-start: ANALYSIS_STACK_PIN の復元に失敗しました。" >&2
+  echo "  宣言 pin は numba 0.66.0（0.67.0 × numpy 2.4.6 は librosa.pyin が SIGSEGV）。" >&2
+  echo "  pin を実装に合わせて書き換えず、実装を pin へ戻すこと。" >&2
+  cat "$log" >&2
+  exit 1
+fi
+
 echo "session-start: dev dependencies ready"

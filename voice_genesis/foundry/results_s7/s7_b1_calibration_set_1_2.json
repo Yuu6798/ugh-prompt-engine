@@ -1,0 +1,114 @@
+{
+  "schema": "s7-b1-calibration-set/0.1",
+  "series": "TRF measurement spec / 1.2",
+  "frozen_at": "2026-08-22",
+  "authority": "User 裁定 2026-08-22（(B) 本番 p05–p95 を張る calibration set に作り直す）",
+  "why_rebuilt": "1.0 / 1.1 の校正セットは**振幅の次元で本番を代表していなかった**。梯子 080/160 の 終端/核 比は 0.536 / 0.689 で本番 p75–p95 相当の大振幅であり、本番の終端破綻（減衰しながら残る。中央値 0.207）とは振幅の質が違う。そのため『校正では 7 要件を通るのに本番で飽和する』が 2 系列続けて起きた",
+  "inherits": {
+    "calibration_set_1_0": {
+      "path": "s7_b1_calibration_set.json",
+      "sha256": "79b209b52ed3994f8abe2634bf7f7484cc770fcc0dc22b70ebdf25484fcb6d8b",
+      "section": "real_render_set",
+      "note": "既存 11 レンダ + 派生 2 + zero buffer 1 はそのまま使う"
+    },
+    "real_render_manifest": {
+      "path": "s7_b1_real_render_manifest.json",
+      "sha256": "bde66f3f8599ea48d6e8ff8fdc63a362c6aed5f846655189bf3b52c5628d3343"
+    }
+  },
+  "amplitude_ladder": {
+    "purpose": "本番の終端振幅分布（終端窓 RMS / ノート核 RMS）を張る",
+    "production_distribution_source": "s7_relative_energy_finding.md §1（final セル n=320 の実測）",
+    "base": "rr_long_tail_160",
+    "base_measured_ratio": 0.689,
+    "construction": "base レンダの**譜面境界より後の区間**に定数ゲインを掛ける。比はゲインに線形なので 目標比 r には g = r / base_ratio で厳密に到達する。時間構造は変えない",
+    "is_not_a_model_render": "**これはモデルの出力ではなく、宣言済みの後処理を施した probe である**。測るのは**検出器**の性質であって、モデルが実際にその振幅を出すかではない。モデルの振幅分布は本番セル側の実測（上記 §1）が正本",
+    "rungs": [
+      {
+        "id": "rr_amp_p05",
+        "derived_from": "rr_long_tail_160",
+        "kind": "post_boundary_gain_scaled",
+        "target_tail_core_ratio": 0.016,
+        "gain_applied_to_post_boundary_region": 0.023222,
+        "note": "本番 final セル（n=320）の p05 相当"
+      },
+      {
+        "id": "rr_amp_p25",
+        "derived_from": "rr_long_tail_160",
+        "kind": "post_boundary_gain_scaled",
+        "target_tail_core_ratio": 0.111,
+        "gain_applied_to_post_boundary_region": 0.161103,
+        "note": "本番 final セル（n=320）の p25 相当"
+      },
+      {
+        "id": "rr_amp_p50",
+        "derived_from": "rr_long_tail_160",
+        "kind": "post_boundary_gain_scaled",
+        "target_tail_core_ratio": 0.207,
+        "gain_applied_to_post_boundary_region": 0.300435,
+        "note": "本番 final セル（n=320）の p50 相当"
+      },
+      {
+        "id": "rr_amp_p75",
+        "derived_from": "rr_long_tail_160",
+        "kind": "post_boundary_gain_scaled",
+        "target_tail_core_ratio": 0.386,
+        "gain_applied_to_post_boundary_region": 0.560232,
+        "note": "本番 final セル（n=320）の p75 相当"
+      },
+      {
+        "id": "rr_amp_p95",
+        "derived_from": "rr_long_tail_160",
+        "kind": "post_boundary_gain_scaled",
+        "target_tail_core_ratio": 0.628,
+        "gain_applied_to_post_boundary_region": 0.911466,
+        "note": "本番 final セル（n=320）の p95 相当"
+      }
+    ]
+  },
+  "roles": {
+    "reproducibility": [
+      "rr_clean_terminal_ri",
+      "rr_clean_i",
+      "rr_clean_N",
+      "rr_long_tail_080",
+      "rr_amp_p50"
+    ],
+    "gain_invariance": [
+      [
+        "rr_gain_x100",
+        "rr_gain_x050"
+      ]
+    ],
+    "zero_input_false_positive": [
+      "rr_zero_buffer"
+    ],
+    "monotone_ladder": {
+      "axis_expectation": "increasing",
+      "order": [
+        "rr_long_tail_000",
+        "rr_long_tail_040",
+        "rr_long_tail_080",
+        "rr_long_tail_160"
+      ],
+      "note": "**尺**への応答を見る梯子。1.0 / 1.1 と同一（変えない）"
+    },
+    "cross_process_reproducibility": [
+      "rr_clean_terminal_ri",
+      "rr_long_tail_080",
+      "rr_amp_p50"
+    ],
+    "numerical_stability": "all conditions",
+    "production_range_resolution": {
+      "production_floor": "rr_silence",
+      "terminal_tail_response": "rr_amp_p50",
+      "changed_from_1_1": "1.1 は terminal_tail_response に rr_long_tail_160（比 0.689 = 本番 p95 相当）を使っていた。**本番中央値 0.207 相当の rr_amp_p50 に変える**。『大きい終端には応答する』ではなく『**本番並みの終端に応答する**』を要求する"
+    }
+  },
+  "prohibitions": [
+    "生成してから rung を足さない（追加は別 amendment）",
+    "本番 360 セルを 1 セルも通さない（振幅の**分布統計**のみ参照。セルの値は選定に入らない）",
+    "run5/6/7 の good/bad ラベル・P-ANCHOR 結果を選定に使わない"
+  ],
+  "note_on_using_production_statistics": "本番セルの**分位数**（p05–p95）を rung の目標値に使っている。これは『どの振幅帯を校正でカバーすべきか』の設計情報であって、**個々のセルの値も良し悪しラベルも選定に入っていない**。B-1 の禁止事項（ラベル・本番セルを選定入力にしない）には抵触しないが、参照した事実自体をここに明記する"
+}

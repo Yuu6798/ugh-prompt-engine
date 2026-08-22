@@ -1,0 +1,55 @@
+{
+  "schema": "s7-speaker-classification/0.1",
+  "frozen_at": "2026-08-21",
+  "authority": "DESIGN_S7_run8.md 3（判定分岐 3/4 の順序入力）/ User 裁定 2（2026-08-21）",
+  "rule": "分類は canonical ear record の明示判定のみを根拠にする。設計書の期待・モデル系列・別音素（す）の所見・「うみでは正常」からの推定で埋めない。埋まらない話者は unclassified のままにし、その話者を含む H-TTD 比較は undetermined でよい。",
+  "speakers": {
+    "ritsu": {
+      "class": "breaking",
+      "modality": "VCV",
+      "evidence": [
+        "results_s6/s6_record_2026-08-20.md §4-2 表: ritsu = り→ん破綻 run5→7 で未解決",
+        "results_s6/s6_record_2026-08-20.md §5-3: ritsu は run5〜7 を通じて破綻",
+        "DESIGN_S7_run8.md §7-0-(5): P-ANCHOR「かぎり」(ritsu・run7) が陽性対照"
+      ]
+    },
+    "pjs": {
+      "class": "non_breaking",
+      "modality": "real_song",
+      "evidence": [
+        "results_s6/s6_record_2026-08-20.md §4-2 表: pjs = り→ん破綻 なし（起こさない唯一の系統）",
+        "results_s6/s6_record_2026-08-20.md §5-3: 破綻を起こさないのは pjs 系のみ"
+      ]
+    },
+    "user": {
+      "class": "unclassified",
+      "modality": "real_song",
+      "reason": "canonical record に終端 /ri/ の break/ok 明示判定が無い。s6_record §4-2 表の り→ん欄は「—」で、同表にある「みわたす語尾の連続発声」は別音素 /su/ の所見（推定に使わない = User 裁定 2）",
+      "resolution_path": "事前登録 blind classification（run7 P-ANCHOR 同条件・break/ok/unsure）。UNSURE は unclassified のまま"
+    },
+    "amitaro": {
+      "class": "unclassified",
+      "modality": "speech",
+      "reason": "canonical record に終端 /ri/ の break/ok 明示判定が無い（s6_record §4-2 表の り→ん欄は「—」）。単体レンダのさくら破綻は §5-5 のとおり教師適格性の所見であって終端 /ri/ の判定ではない",
+      "resolution_path": "同上"
+    }
+  },
+  "consequence_for_h_ttd": {
+    "modality_rule": "§3 の modality 交絡規則により比較は同一 modality 内でのみ成立する",
+    "current_state": "分類済みは ritsu(VCV, breaking) と pjs(real_song, non_breaking) の 2 名だが modality をまたぐため比較不能",
+    "pivotal": "user（real_song）が分類されない限り、主層 6 層すべてが no_same_modality_comparison で undetermined になり overall も undetermined になる",
+    "implication": "台帳の実集計そのものは user 未分類でも実行できる（count / density / 生値は出る）。H-TTD の裁定だけが undetermined になる"
+  },
+  "blind_classification_spec": {
+    "status": "not_run",
+    "asked": 0,
+    "max_questions": 3,
+    "targets": ["user", "amitaro"],
+    "when": "canonical record で埋まらない話者が残った場合のみ、台帳実行前に 1 回だけ",
+    "stimulus": "run7 P-ANCHOR 同条件（フル譜面レンダの該当区間）",
+    "question": "terminal release が break / ok / unsure のどれか",
+    "answer_freeze": "回答凍結後に breaking / non_breaking / unclassified を確定して pin する",
+    "unsure_handling": "無理にどちらかへ入れず unclassified",
+    "blocked_by": "run7 checkpoint での CPU レンダが必要（machine-dependent）。本セッションの実行環境に checkpoint が無い"
+  }
+}

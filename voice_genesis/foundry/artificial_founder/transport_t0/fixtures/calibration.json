@@ -1,0 +1,41 @@
+{
+  "schema": "voicegenesis-af-t0-fixtures/1.0",
+  "role": "calibration",
+  "_note": "§12。AF0 target（r_share 0.20 / -12 dBFS / 35 ms）はcandidate fitting に使わない。ここに現れたら t0_schema が拒否する。",
+  "fixtures": {
+    "duration": [
+      {
+        "id": "dur_lo",
+        "r_onset_share": 0.1,
+        "r_onset_ms": 20.0,
+        "i_vowel_ms": 180.0
+      },
+      {
+        "id": "dur_hi",
+        "r_onset_share": 0.4,
+        "r_onset_ms": 80.0,
+        "i_vowel_ms": 120.0
+      }
+    ],
+    "energy": [
+      {
+        "id": "en_lo",
+        "sustain_dbfs": -18.0
+      },
+      {
+        "id": "en_hi",
+        "sustain_dbfs": -6.0
+      }
+    ],
+    "afterglow": [
+      {
+        "id": "ag_lo",
+        "ar_alpha_afterglow_extra_ms": 0.0
+      },
+      {
+        "id": "ag_hi",
+        "ar_alpha_afterglow_extra_ms": 80.0
+      }
+    ]
+  }
+}

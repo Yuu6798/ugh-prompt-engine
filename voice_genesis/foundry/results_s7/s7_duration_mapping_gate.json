@@ -1,0 +1,57 @@
+{
+  "schema": "s7-duration-mapping-gate/0.1",
+  "frozen_at": "2026-08-21",
+  "authority": "User 裁定 2026-08-21 §6-§7（STEP 4 所見への裁定）",
+  "status": "armed_but_not_triggered",
+  "trigger": "8-0G（§7G）で **Duration が primary lever** になった場合にのみ発火する。SP / F0 / R-rescue / none の場合は本ゲートを通らない",
+  "why": "8-0G は推論経路に介入して TRF を動かせるかを見る。動いたことは『推論で効いた』であって『データで教育できる』ではない。F0 について §7G-8 / OQ4 が既に同じ分離を要求しており、Duration も同型に扱う（『inference で効いた』と『data で教育できる』を混同しない）",
+  "background_measurement": {
+    "source": "results_s7/target_exposure_ledger_partial3.json（2026-08-21 実測）",
+    "r_ratio_by_speaker": {
+      "pjs": {"values": [0.040, 0.075], "source": "alignment_derived"},
+      "ritsu": {"values": [0.263, 0.270], "source": "oto_ini_consonant"},
+      "user": {"values": [0.300, 0.300], "source": "imputed_fixed_allocation"}
+    },
+    "finding": "user の baseline_r_ratio 0.300 は convert_user の CONSONANT_FRACTION による定率配分であり、**User が実際に歌った Duration 形質ではない**"
+  },
+  "requirements": [
+    {
+      "id": "A",
+      "requirement": "intervention 側で成功した target /r/:/i/ ratio を明示する",
+      "check": "8-0G の Duration アームで有効だった ladder 水準と、その水準が意味する r:i 比を実数で記帳する"
+    },
+    {
+      "id": "B",
+      "requirement": "User 新規 capture の実音から、score-derived boundary + spot check で /r/ と /i/ の実配分を測る",
+      "check": "収録後の target row について、譜面由来境界と実音のスポットチェックで実 r_ratio を出す（定率値で代用しない）"
+    },
+    {
+      "id": "C",
+      "requirement": "fixed 0.300 heuristic を実測値として扱わない",
+      "check": "台帳の r_ratio_provenance が imputed_fixed_allocation の値を baseline として使っていないことを機械照合する（constant_r_ratio_detected と併用）"
+    },
+    {
+      "id": "D",
+      "requirement": "target transcription の ph_dur が実音と対応していることを検査する",
+      "check": "行ごとに ph_dur 合計と wav 実尺の一致（既存の check_ph_dur_duration と同型）+ 終端モーラ境界のスポットチェック"
+    },
+    {
+      "id": "E",
+      "requirement": "15 rows / ±1% dosage 固定を維持する",
+      "check": "8-B の dosage pin（voiced 171.88 s / total ph_dur 233.395 s / row_count 15）を変更しない"
+    }
+  ],
+  "on_failure": {
+    "verdict": "causal_but_not_trainable_yet",
+    "action": "8-B を BLOCK する（Duration 教育 pack へ進まない）",
+    "note": "F0 の既定（§7G-8 の T1 が空 → causal_but_not_trainable_yet）と同じ扱い"
+  },
+  "not_changed_by_this_gate": {
+    "capture_pool": "300–480 s / 16 cards",
+    "target": "9 cards / 27 explicit /ri/→SP events",
+    "held_out_target": "3 cards / 24 events",
+    "controls": ["medial /ri/", "final /i/", "final /N/", "final /su/"],
+    "train_dose": {"voiced_seconds": 171.88, "total_ph_dur_s": 233.395, "row_count": 15},
+    "rule": "台帳で baseline の語尾 /ri/ が各話者 2 件程度しか無かったことを理由に、capture_pool を増やす / target を oversampling する / train dose を増やす / row weighting を変える、はいずれも行わない（User 裁定 §4）"
+  }
+}

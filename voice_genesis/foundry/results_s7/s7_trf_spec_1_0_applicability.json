@@ -1,0 +1,30 @@
+{
+  "schema": "s7-trf-spec-applicability/0.1",
+  "authority": "User 裁定 2026-08-21（TRF measurement spec / 1.0 の追加記録）",
+  "applies_to": {
+    "path": "voice_genesis/foundry/results_s7/trf_measurement_spec.json",
+    "sha256": "e1ed1a89fffe059a70bfd367fc797e51aadaafcc7694f62ef38662d1b6565a68",
+    "spec_version": "1.0",
+    "freeze_status": "frozen"
+  },
+  "why_a_sidecar": "裁定は「変更しない・削除しない・結果を書き換えない」と定めている。したがって追加記録は frozen 成果物の**外側**に置き、その sha256 で結びつける。1.0 の reference_output・選定・ε・candidate_records は 1 バイトも触っていない。",
+  "calibration_applicability": "ESTABLISHED（校正専用 real-render セットで 4 軸とも 6 要件 PASS）",
+  "production_applicability": "NOT_ESTABLISHED / DEGENERATE",
+  "production_evidence": {
+    "probe_results_sha256": "a4be9c885748902b8042025143c44e4c29e8693c9ff9ad1ffa4b09923e11d3c3",
+    "gate_eligible_groups": "0/10",
+    "degenerate_axis_groups": {
+      "tail_f0_persistence": 8,
+      "excess_tail_voiced_ms": 3,
+      "release_after_score_boundary_ms": 0,
+      "terminal_mel_persistence": 0
+    },
+    "mad_le_epsilon_groups": {
+      "release_after_score_boundary_ms": 10,
+      "terminal_mel_persistence": 8
+    },
+    "note": "校正で候補を弁別できたことと、本番で分解能があることは別である（実測で分かれた）"
+  },
+  "status": "frozen（歴史的成果物として保存。1.1 系列に差し替えられない）",
+  "superseded_by": "TRF measurement spec / 1.1（作成中。freeze されるまで 1.0 が唯一の凍結仕様）"
+}

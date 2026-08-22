@@ -1,0 +1,569 @@
+{
+  "schema": "s7-listening-set/0.1",
+  "frozen_at": "2026-08-22",
+  "authority": "DESIGN_S7_run8.md §6-1（割付はそのまま。発明していない）",
+  "protocol": {
+    "blind": "モデル名・話者・世代を伏せる。伏せないのは expected_terminal と position",
+    "order": "ランダム順で提示する",
+    "axes": {
+      "nasalization": "0=なし … 3=明確に「ん」",
+      "continuous_voicing": "0=正常解放 … 3=語尾が止まらない",
+      "intelligibility": "0=明瞭 … 3=語として不成立"
+    },
+    "duplicates": "20% を重複提示し自己一致率を記録する。被験者に重複と知らせない",
+    "order_discipline": "本文書を pin してから聴取を始める。聴取後に集合を変えない"
+  },
+  "n_unique": 40,
+  "n_duplicate": 8,
+  "blocks": {
+    "A": 24,
+    "B": 12,
+    "C": 2,
+    "D": 2
+  },
+  "feasibility_check_from_design": {
+    "calibration_scored_ge_12": 19,
+    "holdout_scored_ge_12": 21,
+    "gate3_user_pairs": 5,
+    "positive_control_present": true
+  },
+  "gate_eligibility_1_2": {
+    "source": {
+      "path": "s7_0b_remeasure_1_2.json",
+      "sha256": "4a2a5f24167219ad4f893b697cc1d6ef6ebdcd836d7954193e5f7a04081c059d"
+    },
+    "eligible_groups": [
+      "run5/pjs",
+      "run5/user",
+      "run6/pjs",
+      "run6/user",
+      "run7/amitaro",
+      "run7/pjs",
+      "run7/user"
+    ],
+    "n_cells_in_excluded_groups": 13,
+    "note": "§5-0 の群規則で Gate から外れる群のセルにも耳ラベルは付ける。落とすかどうかは裁定事項であり、本文書は事実を並べるだけ"
+  },
+  "cells": [
+    {
+      "cell_id": "run5/user/P-RI-FINAL/b4/p57",
+      "generation": "run5",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b4",
+      "block": "A",
+      "group": "run5/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run5/user/P-RI-FINAL/b2/p57",
+      "generation": "run5",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "beats": "b2",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b2",
+      "block": "A",
+      "group": "run5/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run5/user/P-RI-FINAL/b4/p62",
+      "generation": "run5",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-RI-FINAL|mid|b4",
+      "block": "A",
+      "group": "run5/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run5/user/P-I-FINAL/b4/p57",
+      "generation": "run5",
+      "speaker": "user",
+      "probe": "P-I-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-I-FINAL|low|b4",
+      "block": "A",
+      "group": "run5/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run5/user/P-N-FINAL/b4/p57",
+      "generation": "run5",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-N-FINAL|low|b4",
+      "block": "A",
+      "group": "run5/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/user/P-RI-FINAL/b4/p57",
+      "generation": "run7",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b4",
+      "block": "A",
+      "group": "run7/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/user/P-RI-FINAL/b2/p57",
+      "generation": "run7",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "beats": "b2",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b2",
+      "block": "A",
+      "group": "run7/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/user/P-RI-FINAL/b4/p62",
+      "generation": "run7",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-RI-FINAL|mid|b4",
+      "block": "A",
+      "group": "run7/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/user/P-I-FINAL/b4/p57",
+      "generation": "run7",
+      "speaker": "user",
+      "probe": "P-I-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-I-FINAL|low|b4",
+      "block": "A",
+      "group": "run7/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/user/P-N-FINAL/b4/p57",
+      "generation": "run7",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-N-FINAL|low|b4",
+      "block": "A",
+      "group": "run7/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run5/ritsu/P-RI-FINAL/b4/p57",
+      "generation": "run5",
+      "speaker": "ritsu",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b4",
+      "block": "A",
+      "group": "run5/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run5/ritsu/P-RI-FINAL/b2/p57",
+      "generation": "run5",
+      "speaker": "ritsu",
+      "probe": "P-RI-FINAL",
+      "beats": "b2",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b2",
+      "block": "A",
+      "group": "run5/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run5/ritsu/P-N-FINAL/b4/p57",
+      "generation": "run5",
+      "speaker": "ritsu",
+      "probe": "P-N-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-N-FINAL|low|b4",
+      "block": "A",
+      "group": "run5/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run6/ritsu/P-RI-FINAL/b4/p57",
+      "generation": "run6",
+      "speaker": "ritsu",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b4",
+      "block": "A",
+      "group": "run6/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run6/ritsu/P-RI-FINAL/b2/p57",
+      "generation": "run6",
+      "speaker": "ritsu",
+      "probe": "P-RI-FINAL",
+      "beats": "b2",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b2",
+      "block": "A",
+      "group": "run6/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run6/ritsu/P-N-FINAL/b4/p57",
+      "generation": "run6",
+      "speaker": "ritsu",
+      "probe": "P-N-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-N-FINAL|low|b4",
+      "block": "A",
+      "group": "run6/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run5/pjs/P-RI-FINAL/b4/p57",
+      "generation": "run5",
+      "speaker": "pjs",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b4",
+      "block": "A",
+      "group": "run5/pjs",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run5/pjs/P-I-FINAL/b4/p57",
+      "generation": "run5",
+      "speaker": "pjs",
+      "probe": "P-I-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-I-FINAL|low|b4",
+      "block": "A",
+      "group": "run5/pjs",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run5/pjs/P-RI-MEDIAL/b4/p57",
+      "generation": "run5",
+      "speaker": "pjs",
+      "probe": "P-RI-MEDIAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-MEDIAL|low|b4",
+      "block": "A",
+      "group": "run5/pjs",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run6/pjs/P-RI-FINAL/b4/p57",
+      "generation": "run6",
+      "speaker": "pjs",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b4",
+      "block": "A",
+      "group": "run6/pjs",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run6/pjs/P-I-FINAL/b4/p57",
+      "generation": "run6",
+      "speaker": "pjs",
+      "probe": "P-I-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-I-FINAL|low|b4",
+      "block": "A",
+      "group": "run6/pjs",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run6/pjs/P-RI-MEDIAL/b4/p57",
+      "generation": "run6",
+      "speaker": "pjs",
+      "probe": "P-RI-MEDIAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-MEDIAL|low|b4",
+      "block": "A",
+      "group": "run6/pjs",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run6/user/P-RI-FINAL/b4/p57",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b4",
+      "block": "A",
+      "group": "run6/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run6/user/P-N-FINAL/b4/p57",
+      "generation": "run6",
+      "speaker": "user",
+      "probe": "P-N-FINAL",
+      "beats": "b4",
+      "pitch": "p57",
+      "probe_cell_id": "P-N-FINAL|low|b4",
+      "block": "A",
+      "group": "run6/user",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/ritsu/P-RI-FINAL/b4/p62",
+      "generation": "run7",
+      "speaker": "ritsu",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-RI-FINAL|mid|b4",
+      "block": "B",
+      "group": "run7/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run7/ritsu/P-RI-MEDIAL/b4/p62",
+      "generation": "run7",
+      "speaker": "ritsu",
+      "probe": "P-RI-MEDIAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-RI-MEDIAL|mid|b4",
+      "block": "B",
+      "group": "run7/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run7/ritsu/P-N-FINAL/b4/p62",
+      "generation": "run7",
+      "speaker": "ritsu",
+      "probe": "P-N-FINAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-N-FINAL|mid|b4",
+      "block": "B",
+      "group": "run7/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run7/ritsu/P-SU-FINAL/b4/p62",
+      "generation": "run7",
+      "speaker": "ritsu",
+      "probe": "P-SU-FINAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-SU-FINAL|mid|b4",
+      "block": "B",
+      "group": "run7/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run7/pjs/P-RI-FINAL/b4/p62",
+      "generation": "run7",
+      "speaker": "pjs",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-RI-FINAL|mid|b4",
+      "block": "B",
+      "group": "run7/pjs",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/pjs/P-RI-MEDIAL/b4/p62",
+      "generation": "run7",
+      "speaker": "pjs",
+      "probe": "P-RI-MEDIAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-RI-MEDIAL|mid|b4",
+      "block": "B",
+      "group": "run7/pjs",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/pjs/P-N-FINAL/b4/p62",
+      "generation": "run7",
+      "speaker": "pjs",
+      "probe": "P-N-FINAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-N-FINAL|mid|b4",
+      "block": "B",
+      "group": "run7/pjs",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/pjs/P-SU-FINAL/b4/p62",
+      "generation": "run7",
+      "speaker": "pjs",
+      "probe": "P-SU-FINAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-SU-FINAL|mid|b4",
+      "block": "B",
+      "group": "run7/pjs",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/amitaro/P-RI-FINAL/b4/p62",
+      "generation": "run7",
+      "speaker": "amitaro",
+      "probe": "P-RI-FINAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-RI-FINAL|mid|b4",
+      "block": "B",
+      "group": "run7/amitaro",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/amitaro/P-RI-MEDIAL/b4/p62",
+      "generation": "run7",
+      "speaker": "amitaro",
+      "probe": "P-RI-MEDIAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-RI-MEDIAL|mid|b4",
+      "block": "B",
+      "group": "run7/amitaro",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/amitaro/P-N-FINAL/b4/p62",
+      "generation": "run7",
+      "speaker": "amitaro",
+      "probe": "P-N-FINAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-N-FINAL|mid|b4",
+      "block": "B",
+      "group": "run7/amitaro",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/amitaro/P-SU-FINAL/b4/p62",
+      "generation": "run7",
+      "speaker": "amitaro",
+      "probe": "P-SU-FINAL",
+      "beats": "b4",
+      "pitch": "p62",
+      "probe_cell_id": "P-SU-FINAL|mid|b4",
+      "block": "B",
+      "group": "run7/amitaro",
+      "gate_eligible_group_1_2": true
+    },
+    {
+      "cell_id": "run7/ritsu/P-RI-FINAL/b1/p57",
+      "generation": "run7",
+      "speaker": "ritsu",
+      "probe": "P-RI-FINAL",
+      "beats": "b1",
+      "pitch": "p57",
+      "probe_cell_id": "P-RI-FINAL|low|b1",
+      "block": "C",
+      "group": "run7/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run7/ritsu/P-RI-FINAL/b1/p65",
+      "generation": "run7",
+      "speaker": "ritsu",
+      "probe": "P-RI-FINAL",
+      "beats": "b1",
+      "pitch": "p65",
+      "probe_cell_id": "P-RI-FINAL|high|b1",
+      "block": "C",
+      "group": "run7/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run7/ritsu/P-ANCHOR/sakura-kagiri",
+      "generation": "run7",
+      "speaker": "ritsu",
+      "probe": "P-ANCHOR",
+      "region": "sakura-kagiri",
+      "probe_cell_id": "P-ANCHOR|sakura|kagiri",
+      "block": "D",
+      "group": "run7/ritsu",
+      "gate_eligible_group_1_2": false
+    },
+    {
+      "cell_id": "run7/pjs/P-ANCHOR/sakura-kagiri",
+      "generation": "run7",
+      "speaker": "pjs",
+      "probe": "P-ANCHOR",
+      "region": "sakura-kagiri",
+      "probe_cell_id": "P-ANCHOR|sakura|kagiri",
+      "block": "D",
+      "group": "run7/pjs",
+      "gate_eligible_group_1_2": true
+    }
+  ],
+  "duplicates": [
+    {
+      "cell_id": "run5/pjs/P-I-FINAL/b4/p57",
+      "block": "A",
+      "note": "重複提示（被験者には重複と知らせない）"
+    },
+    {
+      "cell_id": "run5/pjs/P-RI-FINAL/b4/p57",
+      "block": "A",
+      "note": "重複提示（被験者には重複と知らせない）"
+    },
+    {
+      "cell_id": "run7/amitaro/P-N-FINAL/b4/p62",
+      "block": "B",
+      "note": "重複提示（被験者には重複と知らせない）"
+    },
+    {
+      "cell_id": "run7/amitaro/P-RI-FINAL/b4/p62",
+      "block": "B",
+      "note": "重複提示（被験者には重複と知らせない）"
+    },
+    {
+      "cell_id": "run7/ritsu/P-RI-FINAL/b1/p57",
+      "block": "C",
+      "note": "重複提示（被験者には重複と知らせない）"
+    },
+    {
+      "cell_id": "run7/ritsu/P-RI-FINAL/b1/p65",
+      "block": "C",
+      "note": "重複提示（被験者には重複と知らせない）"
+    },
+    {
+      "cell_id": "run7/pjs/P-ANCHOR/sakura-kagiri",
+      "block": "D",
+      "note": "重複提示（被験者には重複と知らせない）"
+    },
+    {
+      "cell_id": "run7/ritsu/P-ANCHOR/sakura-kagiri",
+      "block": "D",
+      "note": "重複提示（被験者には重複と知らせない）"
+    }
+  ]
+}

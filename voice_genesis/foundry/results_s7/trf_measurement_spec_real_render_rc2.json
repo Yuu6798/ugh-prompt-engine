@@ -1,0 +1,1211 @@
+{
+  "analysis_stack": {
+    "declared": {
+      "librosa": "0.11.0",
+      "numba": "0.66.0",
+      "numpy": "2.4.6"
+    },
+    "observed": {
+      "librosa": "0.11.0",
+      "numba": "0.66.0",
+      "numpy": "2.4.6"
+    },
+    "rule": "測定前に fail-closed で照合する（verify_analysis_stack）。不一致なら測らない。",
+    "verified": true
+  },
+  "authority": "DESIGN_S7_run8.md 12-0-B",
+  "auxiliary_axes_not_in_gate": [
+    "N_similarity_delta",
+    "i_reference_distance",
+    "hnr_median_db_p1",
+    "hnr_median_db_p2",
+    "hnr_delta_db",
+    "vowel_drift_l1",
+    "energy_decay_slope"
+  ],
+  "axes": {
+    "excess_tail_voiced_ms": {
+      "candidate_records": {
+        "A_pyin_voiced_flag|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 30.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              130.0,
+              160.0,
+              220.0,
+              290.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 130.0
+          }
+        },
+        "A_pyin_voiced_flag|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 25.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              135.0,
+              160.0,
+              215.0,
+              295.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 130.0
+          }
+        },
+        "A_pyin_voiced_flag|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 30.0,
+            "monotone_span": 120.0,
+            "monotone_values": [
+              180.0,
+              210.0,
+              270.0,
+              300.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 180.0
+          }
+        },
+        "A_pyin_voiced_flag|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 25.0,
+            "monotone_span": 120.0,
+            "monotone_values": [
+              185.0,
+              210.0,
+              265.0,
+              305.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 185.0
+          }
+        },
+        "A_pyin_voiced_flag|win300|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.0,
+            "monotone_span": 70.0,
+            "monotone_values": [
+              230.0,
+              260.0,
+              300.0,
+              300.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 230.0
+          }
+        },
+        "A_pyin_voiced_flag|win300|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.0,
+            "monotone_span": 70.0,
+            "monotone_values": [
+              235.0,
+              260.0,
+              305.0,
+              305.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 235.0
+          }
+        },
+        "B_rms_autocorr_gate|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 20.0,
+            "monotone_min_step": 30.0,
+            "monotone_span": 160.0,
+            "monotone_values": [
+              90.0,
+              120.0,
+              170.0,
+              250.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 30.0
+          }
+        },
+        "B_rms_autocorr_gate|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 15.0,
+            "monotone_min_step": 30.0,
+            "monotone_span": 165.0,
+            "monotone_values": [
+              90.0,
+              120.0,
+              165.0,
+              255.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 25.0
+          }
+        },
+        "B_rms_autocorr_gate|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 30.0,
+            "monotone_min_step": 40.0,
+            "monotone_span": 170.0,
+            "monotone_values": [
+              130.0,
+              170.0,
+              210.0,
+              300.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 20.0
+          }
+        },
+        "B_rms_autocorr_gate|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 25.0,
+            "monotone_min_step": 35.0,
+            "monotone_span": 170.0,
+            "monotone_values": [
+              130.0,
+              165.0,
+              210.0,
+              300.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 20.0
+          }
+        },
+        "B_rms_autocorr_gate|win300|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 30.0,
+            "monotone_min_step": 30.0,
+            "monotone_span": 120.0,
+            "monotone_values": [
+              180.0,
+              210.0,
+              250.0,
+              300.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 10.0
+          }
+        },
+        "B_rms_autocorr_gate|win300|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 30.0,
+            "monotone_min_step": 35.0,
+            "monotone_span": 125.0,
+            "monotone_values": [
+              180.0,
+              215.0,
+              255.0,
+              305.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 10.0
+          }
+        }
+      },
+      "candidate_survival": {
+        "A_pyin_voiced_flag|win100|hop10": false,
+        "A_pyin_voiced_flag|win100|hop5": false,
+        "A_pyin_voiced_flag|win200|hop10": false,
+        "A_pyin_voiced_flag|win200|hop5": false,
+        "A_pyin_voiced_flag|win300|hop10": false,
+        "A_pyin_voiced_flag|win300|hop5": false,
+        "B_rms_autocorr_gate|win100|hop10": false,
+        "B_rms_autocorr_gate|win100|hop5": false,
+        "B_rms_autocorr_gate|win200|hop10": false,
+        "B_rms_autocorr_gate|win200|hop5": false,
+        "B_rms_autocorr_gate|win300|hop10": false,
+        "B_rms_autocorr_gate|win300|hop5": false
+      },
+      "epsilon": null,
+      "epsilon_derivation": {
+        "reason": "axis_unavailable"
+      },
+      "failing_requirements": [
+        "gain_invariance",
+        "monotone_response",
+        "silence_zero"
+      ],
+      "formula": "hop_ms * |{ i : commanded_note_end < t_i <= commanded_note_end + tail_window and voiced_i }|",
+      "hard_requirement_checks": null,
+      "note": "命令終端を越えて有声と判定されたフレーム数 × hop 長。終端窓で打ち切る。",
+      "rank_order": [],
+      "selected_candidate": null,
+      "selection_metrics": null,
+      "status": "unavailable",
+      "unit": "ms"
+    },
+    "release_after_score_boundary_ms": {
+      "candidate_records": {
+        "A_pyin_voiced_flag|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 30.000000000000014,
+            "monotone_span": 159.9999999999999,
+            "monotone_values": [
+              127.12018140589576,
+              157.12018140589578,
+              217.12018140589583,
+              287.12018140589566
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 127.12018140589576
+          }
+        },
+        "A_pyin_voiced_flag|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 24.94331065759647,
+            "monotone_span": 159.63718820861692,
+            "monotone_values": [
+              133.7641723356009,
+              158.70748299319737,
+              213.58276643990948,
+              293.4013605442178
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 128.77551020408174
+          }
+        },
+        "A_pyin_voiced_flag|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 29.999999999999773,
+            "monotone_span": 119.99999999999986,
+            "monotone_values": [
+              177.1201814058958,
+              207.12018140589583,
+              267.1201814058959,
+              297.12018140589566
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 177.1201814058958
+          }
+        },
+        "A_pyin_voiced_flag|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 24.943310657596243,
+            "monotone_span": 114.73922902494314,
+            "monotone_values": [
+              183.65079365079384,
+              208.5941043083901,
+              263.4693877551022,
+              298.390022675737
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 183.65079365079384
+          }
+        },
+        "A_pyin_voiced_flag|win300|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.0,
+            "monotone_span": 69.99999999999983,
+            "monotone_values": [
+              227.12018140589583,
+              257.1201814058959,
+              297.12018140589566,
+              297.12018140589566
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 227.12018140589583
+          }
+        },
+        "A_pyin_voiced_flag|win300|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": false,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.0,
+            "monotone_span": 64.85260770975043,
+            "monotone_values": [
+              233.53741496598656,
+              258.4807256235828,
+              298.390022675737,
+              298.390022675737
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 233.53741496598656
+          }
+        },
+        "B_rms_autocorr_gate|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 20.00000000000003,
+            "monotone_min_step": 30.00000000000003,
+            "monotone_span": 160.00000000000014,
+            "monotone_values": [
+              87.12018140589572,
+              117.12018140589575,
+              167.1201814058958,
+              247.12018140589586
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 27.12018140589589
+          }
+        },
+        "B_rms_autocorr_gate|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 14.965986394557945,
+            "monotone_min_step": 29.931972789115633,
+            "monotone_span": 164.6258503401361,
+            "monotone_values": [
+              88.86621315192755,
+              118.79818594104319,
+              163.69614512471676,
+              253.49206349206366
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 24.0136054421769
+          }
+        },
+        "B_rms_autocorr_gate|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 30.00000000000003,
+            "monotone_min_step": 40.00000000000003,
+            "monotone_span": 169.9999999999999,
+            "monotone_values": [
+              127.12018140589576,
+              167.1201814058958,
+              207.12018140589583,
+              297.12018140589566
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 17.120181405895885
+          }
+        },
+        "B_rms_autocorr_gate|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 24.943310657596243,
+            "monotone_min_step": 34.920634920635024,
+            "monotone_span": 169.61451247165525,
+            "monotone_values": [
+              128.77551020408174,
+              163.69614512471676,
+              208.5941043083901,
+              298.390022675737
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 19.02494331065774
+          }
+        },
+        "B_rms_autocorr_gate|win300|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 30.00000000000003,
+            "monotone_min_step": 30.00000000000003,
+            "monotone_span": 119.99999999999986,
+            "monotone_values": [
+              177.1201814058958,
+              207.12018140589583,
+              247.12018140589586,
+              297.12018140589566
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 7.120181405895876
+          }
+        },
+        "B_rms_autocorr_gate|win300|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 29.931972789115633,
+            "monotone_min_step": 34.920634920635024,
+            "monotone_span": 119.72789115646253,
+            "monotone_values": [
+              178.66213151927445,
+              213.58276643990948,
+              253.49206349206366,
+              298.390022675737
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 9.047619047619193
+          }
+        }
+      },
+      "candidate_survival": {
+        "A_pyin_voiced_flag|win100|hop10": false,
+        "A_pyin_voiced_flag|win100|hop5": false,
+        "A_pyin_voiced_flag|win200|hop10": false,
+        "A_pyin_voiced_flag|win200|hop5": false,
+        "A_pyin_voiced_flag|win300|hop10": false,
+        "A_pyin_voiced_flag|win300|hop5": false,
+        "B_rms_autocorr_gate|win100|hop10": false,
+        "B_rms_autocorr_gate|win100|hop5": false,
+        "B_rms_autocorr_gate|win200|hop10": false,
+        "B_rms_autocorr_gate|win200|hop5": false,
+        "B_rms_autocorr_gate|win300|hop10": false,
+        "B_rms_autocorr_gate|win300|hop5": false
+      },
+      "epsilon": null,
+      "epsilon_derivation": {
+        "reason": "axis_unavailable"
+      },
+      "failing_requirements": [
+        "gain_invariance",
+        "monotone_response",
+        "silence_zero"
+      ],
+      "formula": "max(0, 1000 * (max{ t_i : voiced_i and score_boundary < t_i <= score_boundary + tail_window } - score_boundary))",
+      "hard_requirement_checks": null,
+      "note": "譜面境界を越えた最後の有声フレームまでの時間。有声が無ければ 0。",
+      "rank_order": [],
+      "selected_candidate": null,
+      "selection_metrics": null,
+      "status": "unavailable",
+      "unit": "ms"
+    },
+    "tail_f0_persistence": {
+      "candidate_records": {
+        "A_pyin_voiced_flag|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.09999999999999998,
+            "monotone_span": 0.5333333333333333,
+            "monotone_values": [
+              0.43333333333333335,
+              0.5333333333333333,
+              0.7333333333333333,
+              0.9666666666666667
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.43333333333333335
+          }
+        },
+        "A_pyin_voiced_flag|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.08333333333333331,
+            "monotone_span": 0.5333333333333332,
+            "monotone_values": [
+              0.45,
+              0.5333333333333333,
+              0.7166666666666667,
+              0.9833333333333333
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.43333333333333335
+          }
+        },
+        "A_pyin_voiced_flag|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.09999999999999998,
+            "monotone_span": 0.4,
+            "monotone_values": [
+              0.6,
+              0.7,
+              0.9,
+              1.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.6
+          }
+        },
+        "A_pyin_voiced_flag|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.08333333333333326,
+            "monotone_span": 0.3833333333333333,
+            "monotone_values": [
+              0.6166666666666667,
+              0.7,
+              0.8833333333333333,
+              1.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.6166666666666667
+          }
+        },
+        "A_pyin_voiced_flag|win300|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.0,
+            "monotone_span": 0.23333333333333328,
+            "monotone_values": [
+              0.7666666666666667,
+              0.8666666666666667,
+              1.0,
+              1.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.7666666666666667
+          }
+        },
+        "A_pyin_voiced_flag|win300|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.0,
+            "monotone_span": 0.21666666666666667,
+            "monotone_values": [
+              0.7833333333333333,
+              0.8666666666666667,
+              1.0,
+              1.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.7833333333333333
+          }
+        },
+        "B_rms_autocorr_gate|win100|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.06666666666666665,
+            "monotone_min_step": 0.10000000000000003,
+            "monotone_span": 0.5333333333333334,
+            "monotone_values": [
+              0.3,
+              0.4,
+              0.5666666666666667,
+              0.8333333333333334
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.1
+          }
+        },
+        "B_rms_autocorr_gate|win100|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.050000000000000044,
+            "monotone_min_step": 0.10000000000000003,
+            "monotone_span": 0.55,
+            "monotone_values": [
+              0.3,
+              0.4,
+              0.55,
+              0.85
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.08333333333333333
+          }
+        },
+        "B_rms_autocorr_gate|win200|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.09999999999999998,
+            "monotone_min_step": 0.1333333333333333,
+            "monotone_span": 0.5666666666666667,
+            "monotone_values": [
+              0.43333333333333335,
+              0.5666666666666667,
+              0.7,
+              1.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.06666666666666667
+          }
+        },
+        "B_rms_autocorr_gate|win200|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.08333333333333326,
+            "monotone_min_step": 0.1166666666666667,
+            "monotone_span": 0.5666666666666667,
+            "monotone_values": [
+              0.43333333333333335,
+              0.55,
+              0.7,
+              1.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.06666666666666667
+          }
+        },
+        "B_rms_autocorr_gate|win300|hop10": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.10000000000000009,
+            "monotone_min_step": 0.09999999999999998,
+            "monotone_span": 0.4,
+            "monotone_values": [
+              0.6,
+              0.7,
+              0.8333333333333334,
+              1.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.03333333333333333
+          }
+        },
+        "B_rms_autocorr_gate|win300|hop5": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": false,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.09999999999999998,
+            "monotone_min_step": 0.1166666666666667,
+            "monotone_span": 0.4,
+            "monotone_values": [
+              0.6,
+              0.7166666666666667,
+              0.85,
+              1.0
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.03333333333333333
+          }
+        }
+      },
+      "candidate_survival": {
+        "A_pyin_voiced_flag|win100|hop10": false,
+        "A_pyin_voiced_flag|win100|hop5": false,
+        "A_pyin_voiced_flag|win200|hop10": false,
+        "A_pyin_voiced_flag|win200|hop5": false,
+        "A_pyin_voiced_flag|win300|hop10": false,
+        "A_pyin_voiced_flag|win300|hop5": false,
+        "B_rms_autocorr_gate|win100|hop10": false,
+        "B_rms_autocorr_gate|win100|hop5": false,
+        "B_rms_autocorr_gate|win200|hop10": false,
+        "B_rms_autocorr_gate|win200|hop5": false,
+        "B_rms_autocorr_gate|win300|hop10": false,
+        "B_rms_autocorr_gate|win300|hop5": false
+      },
+      "epsilon": null,
+      "epsilon_derivation": {
+        "reason": "axis_unavailable"
+      },
+      "failing_requirements": [
+        "gain_invariance",
+        "silence_zero"
+      ],
+      "formula": "|{ i in tail : voiced_i and isfinite(f0_i) }| / |{ i in tail }|,  tail = (score_boundary, score_boundary + tail_window]",
+      "hard_requirement_checks": null,
+      "note": "終端窓のうち f0 が取れている割合。窓にフレームが無ければ 0。",
+      "rank_order": [],
+      "selected_candidate": null,
+      "selection_metrics": null,
+      "status": "unavailable",
+      "unit": "ratio (0..1)"
+    },
+    "terminal_mel_persistence": {
+      "candidate_records": {
+        "M1_1024_256_80": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.06926911462553732,
+            "monotone_span": 0.43655368780488163,
+            "monotone_values": [
+              0.03698051519130484,
+              0.10624962981684216,
+              0.28452622335820266,
+              0.4735342029961865
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.08075929555465022
+          }
+        },
+        "M2_2048_512_80": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.074014618368889,
+            "monotone_span": 0.44266200298515335,
+            "monotone_values": [
+              0.04129881163324759,
+              0.11531343000213659,
+              0.29783215960579557,
+              0.48396081461840096
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.08577498063732662
+          }
+        },
+        "M3_1024_128_128": {
+          "checks": {
+            "cross_process_reproducibility": true,
+            "gain_invariance": true,
+            "monotone_response": true,
+            "numerical_stability": true,
+            "reproducibility": true,
+            "silence_zero": false
+          },
+          "metrics": {
+            "cross_process_error": 0.0,
+            "gain_invariance_error": 0.0,
+            "monotone_min_step": 0.07148276975602946,
+            "monotone_span": 0.4397575994861077,
+            "monotone_values": [
+              0.03905341491633342,
+              0.11053618467236288,
+              0.2910841272229604,
+              0.4788110144024411
+            ],
+            "reproducibility_bound": 0.0,
+            "reproducibility_error": 0.0,
+            "silence_residual": 0.08558642312026217
+          }
+        }
+      },
+      "candidate_survival": {
+        "M1_1024_256_80": false,
+        "M2_2048_512_80": false,
+        "M3_1024_128_128": false
+      },
+      "epsilon": null,
+      "epsilon_derivation": {
+        "reason": "axis_unavailable"
+      },
+      "failing_requirements": [
+        "silence_zero"
+      ],
+      "formula": "mean_mel_power(tail) / mean_mel_power(core),  core = [note_onset + 0.10 s, commanded_note_end - 0.05 s]",
+      "hard_requirement_checks": null,
+      "note": "核が 1e-12 以下（= 無音）なら 0。比なので線形ゲインに不変。",
+      "rank_order": [],
+      "selected_candidate": null,
+      "selection_metrics": null,
+      "status": "unavailable",
+      "unit": "ratio (>= 0)"
+    }
+  },
+  "boundaries": {
+    "commanded_note_end_s": 1.3467573696145123,
+    "note": "レンダ命令から算出（波形から推定していない）。全条件で同一。",
+    "note_onset_s": 0.09287981859410431,
+    "score_boundary_s": 1.3428798185941042,
+    "tail_window_ms": 300.0
+  },
+  "calibration_source": {
+    "manifest": "/home/user/s7work/out/b1_real_render/s7_b1_real_render_manifest.json",
+    "name": "real_render_v1",
+    "note": "実レンダ校正は本番 360 セルを 1 セルも通さない（音高 C4 / 0.75・1.5・3.0 拍 は本番の帯と交わらない）。ラベル・P-ANCHOR 結果は入力していない。",
+    "roles": {
+      "cross_process_reproducibility": [
+        "rr_clean_terminal_ri",
+        "rr_long_tail_080",
+        "rr_dur_perturb_r050"
+      ],
+      "gain_invariance": [
+        [
+          "rr_gain_x100",
+          "rr_gain_x050"
+        ]
+      ],
+      "monotone_ladder": {
+        "axis_expectation": "increasing",
+        "order": [
+          "rr_long_tail_000",
+          "rr_long_tail_040",
+          "rr_long_tail_080",
+          "rr_long_tail_160"
+        ]
+      },
+      "numerical_stability": "all conditions",
+      "reproducibility": [
+        "rr_clean_terminal_ri",
+        "rr_clean_i",
+        "rr_clean_N",
+        "rr_long_tail_080",
+        "rr_dur_perturb_r035"
+      ],
+      "silence_zero": [
+        "rr_silence"
+      ]
+    },
+    "stimulus_ids": [
+      "rr_clean_N",
+      "rr_clean_i",
+      "rr_clean_terminal_ri",
+      "rr_dur_perturb_r020",
+      "rr_dur_perturb_r035",
+      "rr_dur_perturb_r050",
+      "rr_gain_x050",
+      "rr_gain_x100",
+      "rr_long_tail_000",
+      "rr_long_tail_040",
+      "rr_long_tail_080",
+      "rr_long_tail_160",
+      "rr_silence"
+    ]
+  },
+  "freeze_status": "blocked",
+  "freeze_status_note": "実レンダ校正で 6 要件を通過しない軸がある。事前登録 acceptance.on_failure のとおり 1.0 へ昇格させず、PR-2 は BLOCKED を維持する（刺激の追加は**別 amendment**でのみ検討する）。",
+  "generated_by": "voice_genesis/foundry/run8/s7_b1_calibration.py",
+  "measured_on": "raw pre-normalisation waveform (DESIGN_S7_run8.md 5-2)",
+  "prereg_pins": {
+    "s7_b1_calibration_set.json": "c001f6e69e7b46152d254069e82c2605829021fd15e895f5d47d56b57b733d8c",
+    "s7_b1_candidate_space.json": "47e2f77155058a45aff2d76e44aa08803abea53c39bd5d19fc08316ce1cf6a5b",
+    "s7_b1_real_render_manifest.json": "7dbe7c6031635003f9b13e0553e037a5feb85ae5a28b2e644361660752dad383",
+    "s7_b1_selection_rule.json": "72aaa2853e2473ca1a368f2e925cca3569d2ac6155faa1d97ca276f978de8850"
+  },
+  "prohibitions": {
+    "no_auc": "順位付けキーに分離性能は 1 つも入っていない（rank_key を参照）。",
+    "no_label_input": "B-1 は聴取ラベル・本番 360 セルへの入力口を持たない。",
+    "no_new_axes": "Gate の primary 候補は本 spec が凍結した軸のみ（§7-0-(2b)）。"
+  },
+  "reference_output": {},
+  "sample_rate_hz": 44100,
+  "schema": "s7-trf-measurement-spec/1.0",
+  "spec_version": "1.0-rc2",
+  "worked_example": {}
+}
