@@ -115,7 +115,12 @@ debts:
       method: claim 単位で causal_evidence_strength を付与。既存 verdict は source_verdict として原文保存
       evidence_required:
         - claim ごとの causal_evidence_strength 値と根拠
-    status: open
+      evidence_delivered:
+        - "voice_genesis/foundry/debt/d5_claim_strength.yaml（schema: vg-d5-claim-strength/0.1。83 claims = run5:26 / run6:27 / run7:30。causal_evidence_strength 内訳 = strong 9 / moderate 13 / suggestive 13 / descriptive 48）"
+        - "voice_genesis/foundry/tests/test_d5_claim_strength.py（schema/件数/語彙/strong⇒mechanical_verification/参照整合の機械検査。pyproject testpaths 収録済み）"
+      note: "本台帳が claim 単位の併記（v1.1 裁定1の実現形態）。正本 record（s4_record_2026-08-19.md / s5_record_2026-08-20.md / s6_record_2026-08-20.md）は無改変のまま、claim 単位の強度・rationale・superseded_by/corrects を別ファイルへ記帳した。s4_record §5.4 の④「未生成」残骸行（第3版の残骸で同一文書§6.2の4/4 viability PASSと矛盾）は R5-C10 として erratum 記録した（record 自体は無改変）。"
+    status: repaid
+    adjudication_ref: "voice_genesis/foundry/debt/d5_claim_strength.yaml"
     close_condition:
       - run5-7 の全既存 claim に causal_evidence_strength と source_verdict が併記されている
 

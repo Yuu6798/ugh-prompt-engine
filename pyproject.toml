@@ -166,6 +166,9 @@ testpaths = [
     # soundfile（すべて本体の必須依存）のみで onnxruntime は要らない（レンダ実行時
     # にしか s7_0b_probe.load_gate_synth() を呼ばないため import 時点では触れない）。
     "voice_genesis/foundry/tests/test_d4_remeasure.py",
+    # VG-DEBT-005 (D5) run5-7 の 83 claims へ causal_evidence_strength を付与した
+    # claim 単位台帳の形状テスト。依存は PyYAML のみ（本体の必須依存）。
+    "voice_genesis/foundry/tests/test_d5_claim_strength.py",
 ]
 pythonpath = ["src", "."]
 markers = [
