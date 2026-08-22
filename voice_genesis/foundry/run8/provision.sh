@@ -113,6 +113,26 @@ else:
     print("  analysis stack " + ("RESTORED" if not still else f"STILL BAD {still}"))
 PY
 
+echo "| 5. export 用の隔離 venv（DiffSinger は numpy<2 を要求する）"
+# 測定側インタプリタ（numpy 2.4.6 / librosa 0.11.0）とは **別** に保つ。
+# 2026-08-22 実測: 再構築後に requirements を入れ直すと numpy が 2.x へ引き上げられて
+# export が壊れる。requirements.txt を入れた **後で** numpy を pin へ戻す順序が要る。
+VENV="$ROOT/venv_export"
+if [ ! -x "$VENV/bin/python" ]; then
+  python -m venv "$VENV"
+  "$VENV/bin/pip" -q install --upgrade pip >/dev/null 2>&1
+  "$VENV/bin/pip" -q install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu >/dev/null 2>&1
+fi
+"$VENV/bin/pip" -q install -r "$M/DiffSinger/requirements.txt" >/dev/null 2>&1
+"$VENV/bin/pip" -q install "numpy==1.26.4" >/dev/null 2>&1
+VENV_CHECK="$("$VENV/bin/python" -c 'import numpy,torch,lightning;assert numpy.__version__.startswith("1.26"),numpy.__version__;print(f"numpy {numpy.__version__} / torch {torch.__version__} / lightning {lightning.__version__}")' 2>/dev/null)"
+if [ -n "$VENV_CHECK" ]; then
+  echo "  export venv    OK   $VENV_CHECK"
+else
+  echo "  export venv    FAIL（numpy<2 で torch/lightning/onnx が揃っていない）" >&2
+  FAIL=$((FAIL+1))
+fi
+
 echo "| result: OK=$OK SKIP=$SKIP FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || { echo "| fail-closed: pin 不一致があるので止める" >&2; exit 1; }
 echo "| 次: export（venv_export）→ 校正レンダ再生成 → samples_sha256 照合"
