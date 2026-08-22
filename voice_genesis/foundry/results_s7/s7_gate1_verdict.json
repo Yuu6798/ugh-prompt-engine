@@ -1,7 +1,7 @@
 {
   "schema": "s7-gate1-verdict/0.1",
-  "decided_at": "2026-08-21",
-  "authority": "User 裁定 2026-08-21（Run8 User Adjudication / CURRENT GATE 1）",
+  "decided_at": "2026-08-22",
+  "authority": "User 裁定 2026-08-21（Gate 1 = UNDETERMINED）/ 2026-08-22（(α) 採用）/ 2026-08-22（(I) 採用 = Run 8 CLOSED）",
   "verdict": "UNDETERMINED",
   "downstream": {
     "run_8B": "BLOCKED",
@@ -11,12 +11,15 @@
     "ringing_reference_unobtainable",
     "primary_axis_degeneracy",
     "production_resolution_insufficient",
-    "control_contrast_below_epsilon"
+    "control_contrast_below_epsilon",
+    "INSUFFICIENT_GATE_ADJUDICATION_EVIDENCE"
   ],
   "what_this_is_not": [
     "TRF hypothesis = refuted ではない",
     "TRF = not present ではない",
-    "モデルが破綻していない、でもない（計器が飽和しているとき破綻の有無は測れない）"
+    "モデルが破綻していない、でもない（計器が飽和しているとき破綻の有無は測れない）",
+    "「TRF が存在しない / 観測できない」ではない — 計器は 1.2 で成立し、閉じたのは Gate 判定の材料である",
+    "「1.2 が失敗した」ではない — production-range resolution は eligible 群で成立している"
   ],
   "what_this_is": "TRF measurement spec / 1.0 が、本番 360-cell 分布において Gate 判定に必要な分解能を提供できなかった、という結果である。",
   "evidence": {
@@ -44,18 +47,81 @@
     }
   },
   "next_action": {
-    "adopted_option": "C",
-    "series": "TRF measurement spec / 1.1-rc1（新系列。1.0 は差し替えない）",
-    "sequence": [
-      "Gate1 / spec1.0 = UNDETERMINED",
-      "B-1 / spec1.1-rc1",
-      "calibration",
-      "freeze",
-      "fresh confirmation set（新規事前登録セル）",
-      "Gate1 再評価",
-      "PASS した場合のみ 8-0G",
-      "8-B"
-    ],
-    "existing_360_cells": "1.1 設計の failure discovery に使用されたため untouched confirmation set とは呼ばない。development / diagnostic evidence として保存する"
+    "run_8": "CLOSED。継続版は作らない",
+    "future_work": "HNR / vowel drift / mel persistence 等が必要になった場合は、Run 8 の継続ではなく**別の観測研究**として再事前登録する（User 裁定 2026-08-22）"
+  },
+  "run_8": "CLOSED",
+  "reason": "INSUFFICIENT_GATE_ADJUDICATION_EVIDENCE",
+  "reason_statement_en": "The preregistered listening set is not aligned with the seven production-eligible groups selected by §5-0. Human labels from the current set cannot produce a valid Gate 1 verdict.",
+  "closure": {
+    "listening_not_performed": "耳ラベルは取得しない。pre-flight で 3 軸とも evaluable = False が確定しており、判定に使えないと分かっている聴取へ人手を払わない",
+    "preflight": {
+      "path": "s7_gate1_human_verification_prereg.json",
+      "sha256": "37983d242eb0a9e6bc02cc163c47231b1e9cd92c0a73c040ebc59271bdd6ec3e",
+      "per_axis_evaluable": false,
+      "blockers": [
+        "calibration_scored = 10 < 12（§7-0 (4b)）— 7 群制限で ritsu 6 セル、run6/pjs の degenerate_axis で 3 セルが落ち 19 → 10",
+        "positive_control_absent（§7-0b 条件 1）— 陽性対照 run7/ritsu/P-ANCHOR/sakura-kagiri が Gate 対象外の群にある"
+      ],
+      "why_not_fixable_by_listening": "§7-0 (4b):「不足が起きても耳ラベルの対象セルを事後に足して埋めない」"
+    },
+    "not_pursued": {
+      "spec_1_3": "作らない",
+      "restratification": "層化設計の再実装には進まない",
+      "spec_1_2_values": "凍結値は変更しない（BLOCKED のまま）"
+    }
+  },
+  "outcome_preserved_as": {
+    "trf_measurement_spec_1_2_voicing_detector": {
+      "production_range_resolution": "ESTABLISHED for the eligible groups",
+      "axes": [
+        "excess_tail_voiced_ms",
+        "release_after_score_boundary_ms",
+        "tail_f0_persistence"
+      ],
+      "frozen_parameters": {
+        "threshold": 0.2,
+        "window_ms": 100
+      },
+      "spec": {
+        "path": "trf_measurement_spec_1_2.json",
+        "sha256": "1f7ff569b4ae27043a822e688c8e5fe621f2ebd666e54cd99e53599c4f38ea5b",
+        "freeze_status": "blocked（overall。voicing 3 軸のみ成立）"
+      },
+      "evidence": "縮退群 1–2/10（1.0 は 3–8/10、1.1 は 8/10）。校正では振幅 40 倍に対し不変"
+    },
+    "terminal_mel_persistence": {
+      "status": "unavailable under the current observation design",
+      "reason": "終端/核のパワー比 = 相対エネルギー量。床 0.319 > 本番中央値 0.207 の逆転を相続する"
+    },
+    "gate_1": "UNDETERMINED",
+    "run_8": "CLOSED",
+    "research_assets": [
+      {
+        "what": "360 セルの全数記録",
+        "path": "s7_0b_results.json / probe_0b_groups/",
+        "note": "rendered 360 / dropped 0 / GPU $0。voicing 3 軸は再レンダで max|Δ| = 0 再現"
+      },
+      {
+        "what": "SP パディング由来の F0 経路",
+        "path": "s7_finding_sp_padding_f0.md",
+        "note": "境界後の voicing を acoustic の release 失敗と直結させない解釈規律"
+      },
+      {
+        "what": "相対エネルギーの逆転",
+        "path": "s7_relative_energy_finding.md",
+        "note": "経路床 0.319 > 本番中央値 0.207。1 次元の相対エネルギーでは分離不能"
+      },
+      {
+        "what": "1.2 計器（形状ベース voicing detector）",
+        "path": "run8/s7_b1_v12.py",
+        "note": "振幅不変。別の観測研究へそのまま持ち込める"
+      },
+      {
+        "what": "台帳と H-TTD closeout",
+        "path": "target_exposure_ledger.json / s7_ledger.py",
+        "note": "4 話者・NOT_EVALUABLE_INSUFFICIENT_SUPPORT を証拠つきで閉じた"
+      }
+    ]
   }
 }
