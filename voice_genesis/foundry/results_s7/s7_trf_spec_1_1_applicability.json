@@ -1,6 +1,6 @@
 {
   "schema": "s7-trf-spec-applicability/0.1",
-  "authority": "User 裁定 2026-08-21（Option C）に基づく 1.1 の追加記録",
+  "authority": "User 裁定 2026-08-22（(A)+(B) 併用 / 1.2 で打ち切り）",
   "applies_to": {
     "path": "voice_genesis/foundry/results_s7/trf_measurement_spec_1_1.json",
     "sha256": "68e0a21dab734d0170af1f40798e2e2cc90441462f482308667de0c86b7f832a",
@@ -55,5 +55,12 @@
     "fresh confirmation set をこのまま作らない（同じ理由で Gate 1 が裁定不能になるだけ）",
     "production_range_resolution 要件自体は妥当。妥当でなかったのは相対エネルギー 1 次元の候補空間"
   ],
-  "record": "voice_genesis/foundry/results_s7/s7_relative_energy_finding.md"
+  "record": "voice_genesis/foundry/results_s7/s7_relative_energy_finding.md",
+  "status_ruling": {
+    "frozen": "frozen のまま保存する。凍結値は変更しない",
+    "production_voicing_detector": "NOT_ESTABLISHED",
+    "sanctioned_operational_use": "**ringing 基準の判定専用**として利用可（§5-0 の無声検査）。本番 10 群すべてで基準セルが 2 件以上取得でき、leave-one-out が成立する",
+    "achievement_recorded": "ringing 判定 10/10 群成立（1.0 は 0/10）",
+    "not_sanctioned": "production voicing detector としての使用（Gate の primary 軸を駆動しない）"
+  }
 }
