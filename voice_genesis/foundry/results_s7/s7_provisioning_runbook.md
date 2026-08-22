@@ -24,6 +24,34 @@ GPU（run7 実績）           NVIDIA GeForce RTX 3090（**run 8-0 の CPU レ�
 B-1 校正は `ANALYSIS_STACK_PIN` を **fail-closed で検査**する
 （`s7_b1_calibration.verify_analysis_stack`）。宣言と違う版では測らない。
 
+## 0b. 消えたときの復旧（1 コマンド・2026-08-22 新設）
+
+```bash
+bash voice_genesis/foundry/run8/provision.sh          # 冪等・sha 照合つき・fail-closed
+```
+
+**なぜ要るか（実測）**: 2026-08-22 にコンテナが再構築され `/home/user/s7work`（7.5 GB）が
+丸ごと消えた。git 側の成果物と pin は無傷だったが、**取得元の Drive file ID の一部が
+会話文脈にしか無く**、リポジトリからは復元できなかった。失って痛いのはバイト列ではなく
+**「どこから取って、何と照合すれば同一と言えるか」**の情報である。
+
+`provision.sh` はその情報を実行可能な形で固定した:
+
+- 17 資産（canon zip / vocoder oudep / 3 世代の 40K ckpt / 3 世代の config bundle）を
+  **URL または Drive file ID + 期待 sha256** で表に持つ
+- **冪等**: 既に在って sha が一致すれば再取得しない（照合だけ）
+- **fail-closed**: 1 件でも sha が食い違えば停止する（差し替えない・続行しない）
+- 展開後の実体（`nsf_hifigan.onnx`）も照合し、DiffSinger を `e2307b1` に固定し、
+  **`ANALYSIS_STACK_PIN` のずれを検出して pin 側へ戻す**
+
+**消えても困らないもの / 困るもの**の切り分け:
+
+| | 扱い |
+|---|---|
+| checkpoint / ONNX / WAV（数 GB） | **git に入れない**。pin から再生成できる。消失コストは計算時間だけ |
+| pin・事前登録・測定結果 JSON・記録 | **git に入れる**。これが消えると再現不能になる |
+| 群単位の結果 JSON | **git に入れる**（2026-08-22 追加。前回これだけ作業ディスク上にしか無く失った） |
+
 ## 1. 資産表（取得元と pin）
 
 | 資産 | 取得元 | pin (sha256) | 用途 |
@@ -38,6 +66,9 @@ B-1 校正は `ANALYSIS_STACK_PIN` を **fail-closed で検査**する
 | assembly_manifest.json | Drive file id `1vs1UDdSlOCGLsQEblkDJ1NLXpbEFeKe6` | `4e5614d5218657a8f5f6ca2827c52c929581416021f56c054dee754cef1ad99c` | CSV pin の正本 |
 | run4_config_datasets.yaml.normalized.yaml | Drive file id `16Q4car7o2qISwXgQp_wJMSgZMjY8ug5y` | `d9d8a9cf4e1400ac2200caf313855beb0f717a238128ff6e212945cb5e31b526` | assemble 設定 |
 | ffmpeg static | BtbN/FFmpeg-Builds autobuild-2024-09-30 | archive `16ab3dbb56495f17428e5404959e7127f10a561293d867cba0393b2d33bb08c3` / bin `1aabfcf5351c09f23de483052ccd804c8a0f4a4d0409667b400202edac3ce65d` | 44.1kHz 変換 |
+
+**資産表は `provision.sh` の ASSETS 表が正本**（本表は読み物用の要約で、実行可能な
+正本はスクリプト側にある。両者がずれたらスクリプトが勝つ）。
 
 **取得経路の制約**: Drive 資産は MCP 経由だと base64 が context を超えるため、
 **Drive を直接マウント / `rclone` / ブラウザ取得できる machine で行う**。
