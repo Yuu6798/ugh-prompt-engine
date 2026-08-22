@@ -1276,10 +1276,12 @@ def test_r6_provenance_requires_scipy_and_pyworld_pins():
             "python": "3.11", "t0_code_closure_verified": True}
     pub = {"published": "p", "bundle_verified": True, "partial_artifacts": []}
     binding = {"verdict": "PASS"}
-    assert t0_gates.gate_provenance(full, pub, binding).verdict == "PASS"
+    sf = {"enforced": True, "verdict": "PASS", "n_violations": 0,
+          "n_network_attempts": 0, "audit": {"violations": []}}
+    assert t0_gates.gate_provenance(full, pub, binding, sf).verdict == "PASS"
     for missing in ("scipy", "pyworld"):
         pins = {k: v for k, v in full.items() if k != missing}
-        out = t0_gates.gate_provenance(pins, pub, binding)
+        out = t0_gates.gate_provenance(pins, pub, binding, sf)
         assert out.verdict == "FAIL", missing
         assert missing in out.detail["missing_pins"]
 
@@ -1378,3 +1380,108 @@ def test_r6_af0_spec_is_read_once():
     assert "spec_raw" in sig.parameters, "呼び出し側が読んだ buffer を受け取る"
     src = inspect.getsource(t0_run.verify_frozen_p0)
     assert "P0_SPEC.read_text" not in src, "内部で読み直さない"
+
+
+# ---------------------------------------------------------------------------
+# レビュー第 8 巡の回帰
+# ---------------------------------------------------------------------------
+def test_r8_calibration_failure_is_blocked_not_not_established(monkeypatch):
+    """`EnergyCalibrationError` を BLOCKED/3 へ翻訳する（§36-5）。
+
+    捕まえないと traceback + exit 1 になり、CLI が NOT_ESTABLISHED に
+    予約している終了コードと衝突する（計器不能を形質不成立と取り違える）。
+    """
+    import t0_run
+    from t0_energy import EnergyCalibrationError
+
+    def _boom(*a, **k):
+        raise EnergyCalibrationError("energy calibration produced no usable rows")
+
+    monkeypatch.setattr(t0_run, "run", _boom)
+    code = t0_run.main(["--p0-root", str(_AF / "results" / "AF0"),
+                        "--criteria", str(T0_CRITERIA), "--out", "/tmp/af_t0_cal"])
+    assert code == t0_schema.EXIT_CODES["BLOCKED"] == 3
+
+
+def test_r8_body_drift_during_the_run_is_detected():
+    """G0 の後で voicebank が差し替わったら FAILED にする。
+
+    G0 は 1 度しか hash しないが、Phase 1 と freeze 後の fresh confirmation は
+    WAV を独立に開き直す。その窓で差し替えられると、汚染された測定が凍結
+    identity の provenance を保ったまま公開されうる。
+    """
+    import inspect
+
+    import t0_run
+    src = inspect.getsource(t0_run._run_phases)
+    assert "AF0_BODY_DRIFT_DURING_RUN" in src
+    assert "body_digest_after" in src
+    # 最終読み取りの後に測り直し、pins へも残す
+    assert "af0_body_identity_digest_after_run" in src
+
+
+def test_r8_source_free_is_measured_not_declared():
+    """§29。attestation は tripwire の測定結果から作る。"""
+    import t0_run
+
+    # 監査結果が無ければ enforced=False / verdict=FAIL
+    bare = t0_run._source_free_attestation({"af0_spec_sha256": "x"}, None)
+    assert bare["enforced"] is False and bare["verdict"] == "FAIL"
+
+    class _Audit:
+        def __init__(self, violations, network):
+            self._v, self._n = violations, network
+
+        def as_dict(self):
+            return {"n_reads": 10, "violations": self._v,
+                    "network_attempts": self._n}
+
+    clean = t0_run._source_free_attestation({}, _Audit([], []))
+    assert clean["enforced"] is True and clean["verdict"] == "PASS"
+    assert clean["n_violations"] == 0 and clean["n_network_attempts"] == 0
+
+    dirty = t0_run._source_free_attestation(
+        {}, _Audit([{"path": "/tmp/speaker.npy", "reason": "outside allowlist"}], []))
+    assert dirty["verdict"] == "FAIL" and dirty["n_violations"] == 1
+
+    netted = t0_run._source_free_attestation({}, _Audit([], ["socket()"]))
+    assert netted["verdict"] == "FAIL" and netted["n_network_attempts"] == 1
+
+
+def test_r8_provenance_gate_requires_the_source_free_audit():
+    """G9 は source-free の **測定結果** を要求する（宣言では PASS にしない）。"""
+    pins = {k: "x" for k in
+            ("af0_spec_sha256", "p0_code_closure_sha256", "p0_criteria_sha256",
+             "af0_body_identity_digest", "t0_code_closure_sha256",
+             "t0_criteria_sha256", "calibration_sha256", "holdout_sha256",
+             "sidecar_digest", "scipy", "pyworld", "soundfile", "libsndfile",
+             "numpy", "python")}
+    pins["t0_code_closure_verified"] = True
+    pub = {"published": "p", "bundle_verified": True, "partial_artifacts": []}
+    binding = {"verdict": "PASS"}
+    ok = {"enforced": True, "verdict": "PASS", "n_violations": 0,
+          "n_network_attempts": 0, "audit": {"violations": []}}
+    assert t0_gates.gate_provenance(pins, pub, binding, ok).verdict == "PASS"
+    # 監査を渡さない = 宣言だけ -> PASS にしない
+    assert t0_gates.gate_provenance(pins, pub, binding).verdict == "FAIL"
+    assert t0_gates.gate_provenance(pins, pub, binding, {}).verdict == "FAIL"
+    # violation / network があれば落ちる
+    for bad in ({**ok, "verdict": "FAIL", "n_violations": 1},
+                {**ok, "verdict": "FAIL", "n_network_attempts": 1}):
+        assert t0_gates.gate_provenance(pins, pub, binding, bad).verdict == "FAIL"
+
+
+def test_r8_source_free_allowlist_covers_the_section29_extras():
+    """§29 の追加許可 4 種類が allowlist に載っている。"""
+    import t0_run
+    audit = t0_run._build_source_free_audit(
+        _AF / "results" / "AF0", T0_CRITERIA, Path("/tmp/stg"), Path("/tmp/tmp"))
+    # AF-P0 の Body（.wav）は staging_roots 側で許可される（suffix 検査より先）
+    wav = _AF / "results" / "AF0" / "voicebank" / "AF0" / "C4" / "a.wav"
+    assert audit.classify(str(wav)) is None, "AF-P0 generated body は §29 で許可"
+    # 宣言外の外部音源は拒否
+    assert audit.classify("/tmp/speaker.wav") is not None
+    assert audit.classify("/tmp/speaker.npy") is not None
+    # pinned inputs は許可
+    assert audit.classify(str(SPEC_PATH)) is None
+    assert audit.classify(str(T0_CRITERIA)) is None

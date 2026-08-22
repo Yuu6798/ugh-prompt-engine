@@ -49,7 +49,8 @@ from af_spec import (ALIAS_BY_STEM, AFStop, OutputCollisionError,  # noqa: E402
                      apply_patch, canonical_json, genome_from_dict, load_criteria,
                      reject_output_collision, sha256_file, sha256_tree,
                      sha256sums_text, write_json)
-from t0_energy import assert_no_af0_in_calibration, fit_global_gain_db  # noqa: E402
+from t0_energy import (EnergyCalibrationError,  # noqa: E402
+                       assert_no_af0_in_calibration, fit_global_gain_db)
 from t0_schema import (EXIT_CODES, STAGE_IDS, T0_REVISION,  # noqa: E402
                        FROZEN_BASE_COMMIT,
                        FROZEN_CALIBRATION_SHA256, FROZEN_HOLDOUT_SHA256,
@@ -254,7 +255,13 @@ def run(p0_root: Path, criteria_path: Path, out_dir: Path) -> int:
     staging.mkdir(parents=True, exist_ok=True)
     tmp_root = Path(tempfile.mkdtemp(prefix="af_t0_"))
     try:
-        code = _run_phases(p0_root, criteria_path, staging, tmp_root)
+        # §29 Source-Free は **宣言ではなく測定**。AF-P0 と同じ tripwire で
+        # 実際に開いたパスと network 使用を採取し、G9 で violation ゼロを
+        # 要求する。宣言だけだと、依存が socket を開いても provenance が
+        # PASS になり、attestation が「そんなアクセスは無かった」と嘘をつく。
+        audit = _build_source_free_audit(p0_root, criteria_path, staging, tmp_root)
+        with af_gates.source_free_tripwire(audit):
+            code = _run_phases(p0_root, criteria_path, staging, tmp_root, audit)
         _publish(staging, out_dir)
         return code
     finally:
@@ -324,7 +331,33 @@ def _verify_tree(root: Path) -> Dict[str, Any]:
     return {"missing": missing, "mismatched": mismatched, "n": len(want)}
 
 
-def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int:
+def _build_source_free_audit(p0_root: Path, criteria_path: Path, staging: Path,
+                             tmp: Path) -> Any:
+    """§29 の read allowlist を組む。
+
+    P0 の境界に、§29 が **追加許可** する 4 種類を足す:
+    AF-P0 generated Body / AF-P0 result JSON / T0 fixtures / T0 sidecar。
+
+    AF-P0 の Body は `.wav`（`FORBIDDEN_READ_SUFFIXES`）なので、suffix 検査より
+    先に効く `staging_roots` として渡す。「自分の系が生成した成果物」という
+    位置づけであり、かつ identity digest を凍結値と照合しているので、
+    差し替えられた WAV は G0 と最終再照合の両方で落ちる。
+    """
+    foundry = _AF.parent
+    body_root = Path(p0_root) / "voicebank"
+    body_files = [q for q in body_root.rglob("*") if q.is_file()] \
+        if body_root.is_dir() else []
+    return t0_gates.T0SourceFreeAudit(
+        allowed_roots=[_HERE, _AF, foundry / "adapter", foundry.parent / "singer"],
+        staging_roots=[Path(staging), Path(tmp), Path(p0_root)],
+        pinned_inputs=[P0_SPEC, P0_CRITERIA, Path(criteria_path),
+                       _HERE / "fixtures" / "calibration.json",
+                       _HERE / "fixtures" / "holdout.json"],
+        af_p0_body_files=body_files)
+
+
+def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path,
+                audit: Any = None) -> int:
     notes: List[str] = []
     meas_dir = out / "measurements"
     meas_dir.mkdir(parents=True, exist_ok=True)
@@ -461,6 +494,17 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
                                      criteria_path)
 
     # ---------------- Phase 13: provenance --------------------------------
+    # §4 / T0-G0 と同じ digest を **最終読み取りの後に** 測り直す。
+    # G0 は 1 度しか hash しないが、Phase 1 と freeze 後の fresh confirmation は
+    # WAV を独立に開き直す。その間に差し替えられると、汚染された測定が
+    # 凍結 identity の provenance を保ったまま公開されうる。
+    body_digest_after = _body_identity_digest(voicebank, genome)
+    if body_digest_after != pins_base["af0_body_identity_digest"]:
+        raise T0Stop("FAILED", "AF0_BODY_DRIFT_DURING_RUN",
+                     f"AF0 voicebank changed during the run: G0 saw "
+                     f"{pins_base['af0_body_identity_digest']}, final read sees "
+                     f"{body_digest_after}")
+
     closure_digest, closure_rows = t0_gates.code_closure_digest(_HERE)
     write_json(out / "code_closure.json",
                {"digest": closure_digest,
@@ -477,6 +521,7 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
         "calibration_sha256": FROZEN_CALIBRATION_SHA256,
         "holdout_sha256": FROZEN_HOLDOUT_SHA256,
         "sidecar_digest": sc_digest,
+        "af0_body_identity_digest_after_run": body_digest_after,
         "transport_config_digest": config_digest,
         "python": sys.version.split()[0],
         "numpy": np.__version__,
@@ -490,7 +535,8 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
     pins["t0_code_closure_verified"] = (
         t0_gates.code_closure_digest(_HERE)[0] == closure_digest)
     write_json(out / "input_pins.json", pins)
-    write_json(out / "source_free_attestation.json", _source_free_attestation(pins))
+    attestation = _source_free_attestation(pins, audit)
+    write_json(out / "source_free_attestation.json", attestation)
 
     publication = _write_probes(out, fresh_art, config)
     sidecar_binding = {"verdict": "PASS", "n_sidecars": len(sidecars),
@@ -511,7 +557,8 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
         t0_gates.gate_combined_transport(combined),
         t0_gates.gate_determinism(determinism["same_process"],
                                   determinism["cross_process"]),
-        t0_gates.gate_provenance(pins, publication, sidecar_binding),
+        t0_gates.gate_provenance(pins, publication, sidecar_binding,
+                                 attestation),
         t0_gates.gate_fresh_confirmation(fresh),
     ]
     overall = t0_gates.overall_verdict(gates)
@@ -897,10 +944,21 @@ def _cross_process(p0_root: Path, criteria_path: Path) -> Dict[str, Any]:
     return payload
 
 
-def _source_free_attestation(pins: Mapping[str, Any]) -> Dict[str, Any]:
-    """§29。P0 の境界を維持し、T0 で追加許可される読み取りを明示する。"""
+def _source_free_attestation(pins: Mapping[str, Any],
+                             audit: Any = None) -> Dict[str, Any]:
+    """§29。**測定した read-set** から attestation を作る。
+
+    以前は全フラグを無条件に `false` と宣言していた。それは「主張」であって
+    「証拠」ではない（依存が socket を開いても attestation は無害を主張する）。
+    ここでは tripwire が採取した実 read-set と network 使用を載せ、
+    G9 が violation ゼロを要求する。
+    """
+    detail = audit.as_dict() if audit is not None else None
+    violations = (detail or {}).get("violations") or []
+    network = (detail or {}).get("network_attempts") or []
     return {
-        "schema": "voicegenesis-af-t0-source-free/1.0",
+        "schema": "voicegenesis-af-t0-source-free/1.1",
+        "enforced": detail is not None,
         "declared": {
             "human_audio_used": False,
             "external_voicebank_used": False,
@@ -910,6 +968,11 @@ def _source_free_attestation(pins: Mapping[str, Any]) -> Dict[str, Any]:
         },
         "additional_allowed_reads": [
             "af_p0_generated_body", "af_p0_result_json", "t0_fixture", "t0_sidecar"],
+        "audit": detail,
+        "n_violations": len(violations),
+        "n_network_attempts": len(network),
+        "verdict": "PASS" if (detail is not None and not violations and not network)
+                   else "FAIL",
         "pins": {k: pins.get(k) for k in ("af0_spec_sha256", "t0_code_closure_sha256",
                                           "sidecar_digest")},
     }
@@ -1019,6 +1082,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except T0Stop as stop:
         _log("stop", f"{stop.status} ({stop.reason_code}): {stop}")
         return EXIT_CODES[stop.status]
+    except EnergyCalibrationError as exc:
+        # §36-5「calibration cannot discriminate」は BLOCKED。捕まえないと
+        # traceback + exit 1 になり、CLI が NOT_ESTABLISHED に予約している
+        # 終了コードと衝突する（計器不能を「形質不成立」と取り違える）。
+        _log("stop", f"BLOCKED (METER_NOT_CALIBRATED): {exc}")
+        return EXIT_CODES["BLOCKED"]
     except AFStop as stop:
         # 共有経路（`af_ingest.require_pyworld` など）は `AFStop` を投げる。
         # 捕まえないと traceback + exit 1 になり、CLI が NOT_ESTABLISHED に

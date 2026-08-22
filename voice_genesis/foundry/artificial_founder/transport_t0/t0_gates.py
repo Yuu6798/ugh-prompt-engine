@@ -19,6 +19,7 @@ for _p in (str(_AF), str(_HERE)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import af_gates  # noqa: E402
 from af_spec import aggregate_digest, sha256_file  # noqa: E402
 
 from t0_schema import (ALL_GATE_IDS,  # noqa: E402
@@ -109,6 +110,41 @@ def code_closure_digest(t0_dir: str | Path) -> Tuple[str, List[Tuple[str, str]]]
                     break
     rows = [(label, sha256_file(seen[label])) for label in sorted(seen)]
     return aggregate_digest(rows), rows
+
+
+class T0SourceFreeAudit(af_gates.SourceFreeAudit):
+    """§29 の T0 版 read allowlist。
+
+    AF-P0 の `SourceFreeAudit` は `FORBIDDEN_PATH_FRAGMENTS` に `voicebank` を
+    含み、それを **denylist 最優先** で拒否する（外部 voicebank の持ち込み防止）。
+    一方 §29 は **AF-P0 が生成した Body** を追加許可している。両立させるため、
+    「凍結 identity で束縛済みの AF-P0 Body ファイルそのもの」だけを先に許可し、
+    それ以外は P0 の判定へ委譲する。
+
+    `af_gates` を書き換えないのは §26（共有経路の無断変更禁止）と、
+    P0 の `code_closure_sha256` を動かさないため。
+    """
+
+    def __init__(self, *args: Any, af_p0_body_files: Sequence[Path] = (),
+                 **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.af_p0_body_files = {Path(p).resolve() for p in af_p0_body_files}
+
+    def classify(self, raw: str) -> Optional[str]:
+        try:
+            resolved = Path(raw).resolve()
+        except OSError:  # pragma: no cover
+            resolved = None
+        if resolved is not None and resolved in self.af_p0_body_files:
+            return None                     # §29 追加許可: AF-P0 generated Body
+        return super().classify(raw)
+
+    def as_dict(self) -> Dict[str, Any]:
+        out = super().as_dict()
+        out["af_p0_body_files"] = len(self.af_p0_body_files)
+        out["additional_allowed_reads"] = [
+            "af_p0_generated_body", "af_p0_result_json", "t0_fixture", "t0_sidecar"]
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +328,8 @@ def gate_determinism(same_process: Mapping[str, Any],
 
 
 def gate_provenance(pins: Mapping[str, Any], publication: Mapping[str, Any],
-                    sidecar_binding: Mapping[str, Any]) -> GateResult:
+                    sidecar_binding: Mapping[str, Any],
+                    source_free: Optional[Mapping[str, Any]] = None) -> GateResult:
     """T0-G9 PROVENANCE（§21 / §27 / §30）。"""
     # 輸送出力は scipy のフィルタと pyworld の分析・合成に直接依存する。
     # 版が違えば別実装になりうるので、provenance に無ければ PASS にしない。
@@ -308,12 +345,25 @@ def gate_provenance(pins: Mapping[str, Any], publication: Mapping[str, Any],
         "sidecar_binding": dict(sidecar_binding),
         "code_closure_verified": bool(pins.get("t0_code_closure_verified")),
     }
+    # §29 Source-Free は宣言ではなく測定。tripwire の結果が無い、あるいは
+    # violation / network 使用があれば provenance を PASS にしない。
+    sf = dict(source_free or {})
+    detail["source_free"] = {
+        "enforced": bool(sf.get("enforced")),
+        "verdict": sf.get("verdict"),
+        "n_violations": sf.get("n_violations"),
+        "n_network_attempts": sf.get("n_network_attempts"),
+        "violations": ((sf.get("audit") or {}).get("violations") or [])[:20],
+    }
+    sf_ok = (bool(sf.get("enforced")) and sf.get("verdict") == "PASS"
+             and not sf.get("n_violations") and not sf.get("n_network_attempts"))
     ok = (not missing
           and bool(publication.get("published"))
           and bool(publication.get("bundle_verified"))
           and not publication.get("partial_artifacts")
           and sidecar_binding.get("verdict") == "PASS"
-          and detail["code_closure_verified"])
+          and detail["code_closure_verified"]
+          and sf_ok)
     if not ok:
         detail["reason_code"] = "PROVENANCE_FAILURE"
     return GateResult("T0-G9", "PROVENANCE", _verdict(ok), detail)
