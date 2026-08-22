@@ -397,13 +397,11 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
 
     # ---------------- Phase 10-11: fresh confirmation ---------------------
     _log("phase10", "fresh holdout + AF0 confirmation (after freeze) (§20)")
-    fresh = _fresh_confirmation(spec_raw, genome, p0_criteria, md, hol_doc, config,
-                                energy_cal, voicebank, af0_wavs, tmp, config_digest)
-    # `af0_artifacts` は numpy 波形を含む（公開物の複製にだけ使う）。記録へは
-    # 出さない。JSON 化できないものを記録に混ぜると、実行の最後で落ちて
-    # 高価な run 全体を捨てることになる（rev2 の初回実行で実際に踏んだ）。
-    write_json(out / "fresh_confirmation.json",
-               {k: v for k, v in fresh.items() if k != "af0_artifacts"})
+    fresh, fresh_art = _fresh_confirmation(
+        spec_raw, genome, p0_criteria, md, hol_doc, config, energy_cal, voicebank,
+        af0_wavs, tmp, config_digest)
+    require_json_safe(fresh, "fresh_confirmation")
+    write_json(out / "fresh_confirmation.json", fresh)
     _log("phase11", f"fresh confirmation = {fresh['verdict']}")
 
     # ---------------- Phase 12: determinism -------------------------------
@@ -441,7 +439,7 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
     write_json(out / "input_pins.json", pins)
     write_json(out / "source_free_attestation.json", _source_free_attestation(pins))
 
-    publication = _write_probes(out, fresh["af0_artifacts"], config)
+    publication = _write_probes(out, fresh_art, config)
     sidecar_binding = {"verdict": "PASS", "n_sidecars": len(sidecars),
                        "digest": sc_digest,
                        "bound_to_body": True}
@@ -472,6 +470,7 @@ def _run_phases(p0_root: Path, criteria_path: Path, out: Path, tmp: Path) -> int
         combined=_strip_rows(combined), fresh=fresh, gates=gates, overall=overall,
         baseline=replay, determinism=determinism)
     results["notes"] = notes
+    require_json_safe(results, "t0_results")
     write_json(out / "t0_results.json", results)
     (out / "AF_T0_RECORD.md").write_text(
         t0_report.build_record_md(results, localization, registry,
@@ -554,6 +553,26 @@ def _ledger_for_json(ledger: Mapping[str, Any]) -> Dict[str, Any]:
             "stage_ids": list(STAGE_IDS),
             "note": "S2 は diagnostic 専用（波形 verdict を作らない = §5）",
             "units": ledger["units"]}
+
+
+def require_json_safe(obj: Any, label: str) -> None:
+    """記録へ書く構造に JSON 化できない値が無いことを **書く直前に** 確かめる。
+
+    rev2 で 2 度、numpy 波形が記録用の辞書へ紛れ込み、40 分規模の run を
+    最後の 1 行で失った。混入場所を path 付きで即座に指すようにする。
+    """
+    def _walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                _walk(v, f"{path}.{k}")
+        elif isinstance(node, (list, tuple)):
+            for i, v in enumerate(node):
+                _walk(v, f"{path}[{i}]")
+        elif node is not None and not isinstance(node, (str, int, float, bool)):
+            raise T0Stop("FAILED", "RECORD_NOT_SERIALIZABLE",
+                         f"{label}{path}: {type(node).__name__} is not JSON "
+                         "serializable (記録用の辞書へ生データを混ぜている)")
+    _walk(obj, "")
 
 
 def _strip_rows(obj: Any) -> Any:
@@ -666,7 +685,8 @@ def _fresh_confirmation(spec_raw: Mapping[str, Any], genome: Any, p0_criteria: A
                         config: transport.TransportConfig,
                         energy_cal: Mapping[str, Any], voicebank: Path,
                         af0_wavs: Mapping[str, Path], tmp: Path,
-                        frozen_config_digest: str) -> Dict[str, Any]:
+                        frozen_config_digest: str
+                        ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """§20 Stage E。**freeze 後に、fixture を作り直してから**確認する。
 
     以前は候補選択の前に作った holdout capture を使い回し、AF0 も Phase 9 の
@@ -718,13 +738,17 @@ def _fresh_confirmation(spec_raw: Mapping[str, Any], genome: Any, p0_criteria: A
     per_trait = {t: _strip_rows(t0_compare.trait_verdict(af0_cmp, t))
                  for t in transport.COMPOSITION_ORDER}
     ok = ok and af0_combined["verdict"] == "PASS"
-    return {"after_freeze": True, "config": config.as_dict(),
-            "frozen_config_digest": frozen_config_digest,
-            "holdout": holdout_rows, "af0": _strip_rows(af0_combined),
-            "af0_per_trait": per_trait,
-            "af0_comparison": t0_compare.summarize(af0_cmp),
-            "af0_artifacts": af0_art,
-            "verdict": "PASS" if ok else "FAIL"}
+    # **artifacts は戻り値を分ける。** 記録用の辞書に numpy 波形を混ぜると、
+    # 書き出し側で除外しても Gate の detail などが `dict(fresh)` で拾い直し、
+    # 別の場所で同じ TypeError が出る（rev2 で 2 度踏んだ）。混ぜないのが
+    # 唯一の恒久策。
+    fresh = {"after_freeze": True, "config": config.as_dict(),
+             "frozen_config_digest": frozen_config_digest,
+             "holdout": holdout_rows, "af0": _strip_rows(af0_combined),
+             "af0_per_trait": per_trait,
+             "af0_comparison": t0_compare.summarize(af0_cmp),
+             "verdict": "PASS" if ok else "FAIL"}
+    return fresh, af0_art
 
 
 def _determinism_check(genome: Any, p0_criteria: Any, md: Mapping[str, Any],

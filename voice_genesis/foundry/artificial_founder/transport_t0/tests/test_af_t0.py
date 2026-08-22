@@ -1039,23 +1039,33 @@ def test_rev2_revision_is_recorded():
 
 
 def test_rev2_written_records_are_json_serializable():
-    """記録へ書く辞書は必ず JSON 化できること。
+    """記録へ書く構造に生データを混ぜない（発生源で塞ぐ）。
 
-    rev2 の初回実行は、`fresh_confirmation.json` に numpy 波形を含む
-    `af0_artifacts` を混ぜていたため **Phase 10 まで走ってから** 落ちた。
-    高価な run を最後で捨てないよう、書き出し対象の形を固定する。
+    rev2 では同じ TypeError を **2 度** 踏んだ。1 度目は
+    `fresh_confirmation.json`、2 度目は `t0_results.json`（Gate detail が
+    `dict(fresh)` で artifacts を拾い直した）。1 度目の修正が書き出し側だけの
+    対症療法だったのが原因なので、(a) artifacts を記録用辞書に入れない、
+    (b) 書く直前に構造検査する、の両方を固定する。
     """
     import inspect
 
     import t0_run
-    src = inspect.getsource(t0_run._run_phases)
-    # fresh_confirmation.json へは af0_artifacts を出さない
-    assert 'k != "af0_artifacts"' in src
-    # 代表的な記録が JSON 化できることを実際に確認する
+
+    # (a) `_fresh_confirmation` は記録用 dict と artifacts を **分けて** 返す
+    src = inspect.getsource(t0_run._fresh_confirmation)
+    assert "return fresh, af0_art" in src
+    assert '"af0_artifacts"' not in src, "記録用 dict に artifacts を入れない"
+
+    # (b) 書き出し直前の構造検査が効く
+    t0_run.require_json_safe({"a": [1, 2.0, "x", None, True]}, "ok")
+    with pytest.raises(t0_run.T0Stop) as ei:
+        t0_run.require_json_safe({"a": {"b": [np.zeros(3)]}}, "rec")
+    assert ei.value.reason_code == "RECORD_NOT_SERIALIZABLE"
+    assert "rec.a.b[0]" in str(ei.value), str(ei.value)
+
+    # 実際に書かれる記録が検査を通ることを、代表構造で確認する
     fresh = {"after_freeze": True, "verdict": "PASS",
-             "af0_artifacts": {"transported": {"a": {"signal": np.zeros(4)}}},
-             "holdout": [{"trait": "duration", "verdict": "PASS"}]}
-    safe = {k: v for k, v in fresh.items() if k != "af0_artifacts"}
-    json.dumps(safe)          # 例外が出ないこと
-    with pytest.raises(TypeError):
-        json.dumps(fresh)
+             "holdout": [{"trait": "duration", "verdict": "PASS"}],
+             "config": transport.TransportConfig("D1", "E0", "A0").as_dict()}
+    t0_run.require_json_safe(fresh, "fresh")
+    json.dumps(fresh)
