@@ -46,6 +46,39 @@ FORBIDDEN_PATH_FRAGMENTS: Tuple[str, ...] = (
     "musdb", "voicebank", "checkpoints", "pretrained",
 )
 
+#: §17 の metric family 完全集合。controls ファイルが部分集合でも G5 が PASS に
+#: なると、難しい family を落とすだけで overall PASS を作れてしまう。
+REQUIRED_CONTROL_FAMILIES: Tuple[str, ...] = (
+    "hl_even_odd_ratio", "ar_alpha_center", "beta_alpha_ratio", "terminal_f0_delta",
+    "duration_r_share", "energy_sustain", "release", "afterglow",
+)
+
+
+def repo_root() -> Path:
+    """このパッケージを含むリポジトリのルート。"""
+    return Path(__file__).resolve().parents[3]
+
+
+def repo_relative(path: str | Path) -> str:
+    """provenance へ書くパスを **checkout 非依存** の表記へ正規化する。
+
+    絶対パスをそのまま記録すると、同一入力・同一コードの run でも checkout の
+    場所が違うだけで `source_free_attestation.json` / `p0_results.json` の
+    バイト列と checksum が変わり、provenance 記録を機械的に再現できない。
+    """
+    p = Path(path)
+    try:
+        resolved = p.resolve()
+    except OSError:  # pragma: no cover
+        return p.as_posix()
+    root = repo_root()
+    if resolved == root or root in resolved.parents:
+        return resolved.relative_to(root).as_posix() or "."
+    # リポジトリ外（Python ランタイム・一時ディレクトリ）は最後の 2 階層だけ残す。
+    parts = resolved.parts
+    return "<external>/" + "/".join(parts[-2:]) if len(parts) >= 2 else "<external>"
+
+
 TRAIT_GATE_REASONS: Dict[str, str] = {
     "G6": "STANDARD_IDENTITY_NOT_ESTABLISHED",
     "G7": "FOUNDER_SOURCE_NOT_ESTABLISHED",
@@ -180,11 +213,12 @@ class SourceFreeAudit:
         return {
             "n_reads": len(self.reads),
             "n_unique_reads": len(set(self.reads)),
-            "allowed_roots": [p.as_posix() for p in self.allowed_roots],
-            "staging_roots": [p.as_posix() for p in self.staging_roots],
+            "allowed_roots": [repo_relative(p) for p in self.allowed_roots],
+            "staging_roots": [repo_relative(p) for p in self.staging_roots],
             "n_runtime_roots": len(self.runtime_roots),
-            "pinned_inputs": sorted(p.as_posix() for p in self.pinned_inputs),
-            "violations": self.violations(),
+            "pinned_inputs": sorted(repo_relative(p) for p in self.pinned_inputs),
+            "violations": [{"path": repo_relative(v["path"]), "reason": v["reason"]}
+                           for v in self.violations()],
             "network_attempts": self.network_attempts,
         }
 
@@ -277,9 +311,24 @@ def gate_ingestion(health: Mapping[str, Any], join: Mapping[str, Any],
 
 
 def gate_meter_control(controls: Mapping[str, Any]) -> GateResult:
-    failed = [c["family"] for c in controls.get("families", []) if c["verdict"] != "PASS"]
-    ok = bool(controls.get("families")) and not failed
-    detail = {"families": controls.get("families", []), "failed_families": failed}
+    """§17: **8 family すべて**が規定方向を弁別して初めて PASS。
+
+    供給された行の中だけで失敗を数えると、難しい family を controls ファイルから
+    落とすだけで G5 PASS を作れる（部分集合の偽 PASS）。集合そのものを検査する。
+    """
+    families = list(controls.get("families", []))
+    names = [c.get("family") for c in families]
+    missing = [f for f in REQUIRED_CONTROL_FAMILIES if f not in set(names)]
+    unknown = sorted({n for n in names if n not in set(REQUIRED_CONTROL_FAMILIES)})
+    duplicated = sorted({n for n in names if names.count(n) > 1})
+    failed = [c["family"] for c in families if c.get("verdict") != "PASS"]
+    ok = not (missing or unknown or duplicated or failed)
+    detail: Dict[str, Any] = {
+        "families": families, "failed_families": failed,
+        "required_families": list(REQUIRED_CONTROL_FAMILIES),
+        "missing_families": missing, "unknown_families": unknown,
+        "duplicated_families": duplicated,
+    }
     if not ok:
         detail["reason_code"] = "METER_NOT_CALIBRATED"
     return GateResult("G5", "METER_CONTROL", "PASS" if ok else "FAIL", detail)
@@ -289,10 +338,18 @@ def gate_meter_control(controls: Mapping[str, Any]) -> GateResult:
 # G6..G13 trait gates（Body と re-expression の両方が通って初めて PASS）
 # ---------------------------------------------------------------------------
 def _trait_gate(gate_id: str, name: str, body: Mapping[str, Any],
-                reexp: Optional[Mapping[str, Any]], keys: Sequence[str]) -> GateResult:
+                reexp: Optional[Mapping[str, Any]], keys: Sequence[str],
+                body_only_keys: Sequence[str] = ()) -> GateResult:
+    """1 形質 Gate。`keys` は §18.1 と §18.2 の両方に行がある比較。
+
+    `body_only_keys` は **Body にしか行が無い**比較（`energy_attack` /
+    `terminal_zero`）。§18.2 に対応行が無いからといって Gate から外すと、
+    §18.1 の必須契約が落ちても G11 / G13 が PASS し、全 Gate 通過の overall PASS
+    まで通ってしまう。Body 側だけ必須にして Gate へ配線する。
+    """
     detail: Dict[str, Any] = {"body": {}, "reexpression": {}}
     ok = True
-    for key in keys:
+    for key in list(keys) + list(body_only_keys):
         b = body.get(key, {})
         detail["body"][key] = b.get("verdict", "MISSING")
         ok = ok and b.get("verdict") == "PASS"
@@ -331,9 +388,11 @@ def trait_gates(body: Mapping[str, Any],
         _trait_gate("G8", "FOUNDER_IDENTITY_AR", body, reexp, ("ar_alpha", "ar_beta")),
         _trait_gate("G9", "F0", body, reexp, ("f0_core", "terminal_f0")),
         _trait_gate("G10", "DURATION", body, reexp, ("duration_onset", "duration_share")),
-        _trait_gate("G11", "ENERGY", body, reexp, ("energy_sustain",)),
+        _trait_gate("G11", "ENERGY", body, reexp, ("energy_sustain",),
+                    body_only_keys=("energy_attack",)),
         _trait_gate("G12", "RELEASE", body, reexp, ("release",)),
-        _trait_gate("G13", "FOUNDER_EXPRESSION_AG", body, reexp, ("afterglow",)),
+        _trait_gate("G13", "FOUNDER_EXPRESSION_AG", body, reexp, ("afterglow",),
+                    body_only_keys=("terminal_zero",)),
     ]
 
 

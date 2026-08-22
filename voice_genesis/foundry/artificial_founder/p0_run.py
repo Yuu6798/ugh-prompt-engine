@@ -64,6 +64,37 @@ def _log(phase: str, message: str) -> None:
 PUBLICATION_PREREQUISITES: Tuple[str, ...] = ("G0", "G1", "G2", "G3")
 
 
+class OutputCollisionError(ValueError):
+    """`--out` が保護対象（入力・パッケージ・リポジトリ）と重なっている。"""
+
+
+def reject_output_collision(out_dir: Path, protected: Sequence[Path]) -> None:
+    """`prepare_output_tree` が保護対象を消す構成を **削除前に** 拒否する。
+
+    `prepare_output_tree` はツリーを `rmtree` するので、`--out` に
+    `founder_specs/` やパッケージ/リポジトリのルートを渡すと、spec 本体や
+    リポジトリ内容を消してから失敗する。出力ディレクトリが保護対象と同一、
+    あるいは保護対象を **内包** する場合は着手前に止める（既定の
+    `results/AF0` はパッケージ配下だが何も内包しないので通る）。
+
+    `prepare_output_tree` が使う派生パス（`.<name>.voicebank-hold`）も同じ
+    規則で検査する。
+    """
+    out = Path(out_dir).resolve()
+    candidates = [out, out.parent / f".{out.name}.voicebank-hold"]
+    for prot in protected:
+        try:
+            target = Path(prot).resolve()
+        except OSError:  # pragma: no cover
+            continue
+        for cand in candidates:
+            if cand == target or cand in target.parents:
+                raise OutputCollisionError(
+                    f"--out {out} would delete a protected path ({target}); "
+                    "choose an output directory that neither is nor contains an input, "
+                    "the package directory, or the repository root")
+
+
 def prepare_output_tree(out_dir: Path) -> Dict[str, Any]:
     """成果物ツリーを **run ごとに丸ごと作り直す**（§28 partial artifacts 禁止）。
 
@@ -151,15 +182,29 @@ def _finalize(out_dir: Path, genome: Optional[FounderGenome],
 # ---------------------------------------------------------------------------
 # Phase 2 / 3: compile
 # ---------------------------------------------------------------------------
-def compile_body(genome: FounderGenome, staging: Path) -> Dict[str, Any]:
-    """Body を staging へ生成し、集約ダイジェストを返す。"""
+def compile_artifacts(genome: FounderGenome, staging: Path) -> Dict[str, Any]:
+    """G2 が対象とする生成物一式（Body + oto + truth + manifest + dataset）を作る。
+
+    §19 G2 は `WAV / oto.ini / truth / manifest / dataset` の SHA 一致を要求する。
+    Body だけを再計算していたときは、dataset 生成がプロセス間で食い違っても
+    G2 が PASS を返し、その生成物が「再現可能」として扱われていた。
+    """
     build = af_utau.write_body(genome, staging)
+    dataset_dir = staging.parent / "dataset"
+    convert_founder.convert_from_genome(genome, staging, dataset_dir)
+    dataset_rows = sha256_tree(dataset_dir)
     return {"digest": build.identity_digest, "rows": build.sha_rows,
-            "n_files": len(build.sha_rows), "units": build.units}
+            "n_files": len(build.sha_rows), "units": build.units,
+            "dataset_digest": aggregate_digest(dataset_rows),
+            "dataset_n_files": len(dataset_rows), "dataset_dir": dataset_dir}
+
+
+#: 後方互換の別名（テスト・外部からの参照用）。
+compile_body = compile_artifacts
 
 
 def cross_process_digest(spec_path: Path, staging: Path) -> Dict[str, Any]:
-    """別プロセスで同じ Body を作り直し、ダイジェストを比較する（§19 G2）。"""
+    """別プロセスで **G2 対象の生成物一式** を作り直し、ダイジェストを返す（§19 G2）。"""
     cmd = [sys.executable, str(HERE / "p0_run.py"), "--compile-only",
            "--spec", str(Path(spec_path).resolve()), "--out", str(Path(staging).resolve())]
     env = dict(os.environ)
@@ -172,7 +217,12 @@ def cross_process_digest(spec_path: Path, staging: Path) -> Dict[str, Any]:
     except (ValueError, IndexError):
         return {"match": False, "error": f"unparsable child output: {proc.stdout[-500:]}",
                 "digest": None}
-    return {"digest": payload.get("digest"), "n_files": payload.get("n_files")}
+    if not isinstance(payload, dict):
+        return {"match": False, "error": f"unexpected child payload: {payload!r}",
+                "digest": None}
+    # 子プロセスの payload をそのまま返す（キーを列挙して詰め替えると、G2 の
+    # 対象を増やしたときに新しいダイジェストが黙って落ちる）。
+    return dict(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +311,9 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
         out_dir: Path) -> int:
     notes: List[str] = []
     out_dir = Path(out_dir)
+    reject_output_collision(out_dir, [Path(spec_path), Path(criteria_path),
+                                      Path(controls_path), Path(probes_path),
+                                      HERE, HERE.parents[2]])
     tree = prepare_output_tree(out_dir)
     meas_dir = out_dir / "measurements"
     meas_dir.mkdir(parents=True, exist_ok=True)
@@ -338,10 +391,15 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
         pinned_inputs=[Path(spec_path), Path(criteria_path), Path(controls_path),
                        Path(probes_path)])
     with af_gates.source_free_tripwire(audit):
-        first = compile_body(genome, staging)
-        second = compile_body(genome, second_dir)
-    same_process = {"match": first["digest"] == second["digest"],
-                    "digest_a": first["digest"], "digest_b": second["digest"]}
+        first = compile_artifacts(genome, staging)
+        second = compile_artifacts(genome, second_dir)
+    same_process = {
+        "match": (first["digest"] == second["digest"]
+                  and first["dataset_digest"] == second["dataset_digest"]),
+        "digest_a": first["digest"], "digest_b": second["digest"],
+        "dataset_digest_a": first["dataset_digest"],
+        "dataset_digest_b": second["dataset_digest"],
+    }
     shutil.rmtree(second_dir.parent, ignore_errors=True)
     gate_g0 = af_gates.gate_source_free(spec_raw["origin"], audit.as_dict())
     write_json(out_dir / "source_free_attestation.json",
@@ -354,8 +412,13 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
     _log("phase3", "independent-process recompute")
     with tempfile.TemporaryDirectory() as tmp:
         child = cross_process_digest(Path(spec_path), Path(tmp) / "AF0")
-    cross_process = {"match": child.get("digest") == first["digest"],
-                     "digest_child": child.get("digest"), "digest_parent": first["digest"]}
+    cross_process = {
+        "match": (child.get("digest") == first["digest"]
+                  and child.get("dataset_digest") == first["dataset_digest"]),
+        "digest_child": child.get("digest"), "digest_parent": first["digest"],
+        "dataset_digest_child": child.get("dataset_digest"),
+        "dataset_digest_parent": first["dataset_digest"],
+    }
     if child.get("error"):
         cross_process["error"] = child["error"]
     gate_g2 = af_gates.gate_determinism(same_process, cross_process)
@@ -399,10 +462,15 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
         ingestion_block = stop.as_dict()
         notes.append(f"ingestion BLOCKED: {stop.cause}")
         _log("phase6", f"BLOCKED: {stop.cause}")
-    gate_g4 = af_gates.gate_ingestion(health, join, reexpression, dataset)
+    # 正規化した記録を **Gate へも** 渡す（Gate detail は p0_results.json へ
+    # そのまま載るので、ここで絶対パスを残すと provenance が checkout 依存になる）。
+    dataset_record = dict(dataset)
+    if dataset_record.get("out_dir"):
+        dataset_record["out_dir"] = af_gates.repo_relative(dataset_record["out_dir"])
+    gate_g4 = af_gates.gate_ingestion(health, join, reexpression, dataset_record)
     write_json(meas_dir / "ingestion.json",
                round_floats({"donor_bank": health, "join_smoke": join,
-                             "reexpression": reexpression, "dataset": dataset,
+                             "reexpression": reexpression, "dataset": dataset_record,
                              "blocked": ingestion_block}, 6))
     _log("phase6", f"G4 VOICEGENESIS_INGESTION = {gate_g4.verdict}")
 
@@ -463,7 +531,7 @@ def run(spec_path: Path, criteria_path: Path, controls_path: Path, probes_path: 
         verify = af_utau.check_sha256sums(published_root)
         rows = sha256_tree(published_root, exclude_names=("SHA256SUMS.txt",))
         publication = {
-            "published": pub["published"],
+            "published": af_gates.repo_relative(pub["published"]),
             "rolled_over_previous": pub["rolled_over_previous"],
             "bundle_verified": verify["verdict"] == "PASS",
             "published_identity_digest": aggregate_digest(rows),
@@ -507,8 +575,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.compile_only:
         spec_raw = json.loads(Path(args.spec).read_text(encoding="utf-8"))
         genome = genome_from_dict(spec_raw)
-        build = compile_body(genome, Path(args.out))
-        print(canonical_json({"digest": build["digest"], "n_files": build["n_files"]}))
+        build = compile_artifacts(genome, Path(args.out))
+        print(canonical_json({"digest": build["digest"], "n_files": build["n_files"],
+                              "dataset_digest": build["dataset_digest"],
+                              "dataset_n_files": build["dataset_n_files"]}))
         return 0
 
     return run(Path(args.spec).resolve(), Path(args.criteria).resolve(),

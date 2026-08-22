@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import soundfile as sf
 
+from af_schema import FROZEN_ALIASES
 from af_spec import (MANIFEST_SCHEMA, UNIT_TRUTH_SCHEMA, AFStop, FounderGenome,
                      aggregate_digest, sha256_tree, sha256sums_text, write_json)
 from af_synth import SynthesizedUnit, synthesize_body
@@ -241,10 +242,13 @@ def validate_body(genome: FounderGenome, root: str | Path) -> Dict[str, Any]:
         "duplicate_alias": sorted({a for a in aliases if aliases.count(a) > 1}),
         "aliases": aliases,
     })
-    expected = len(genome.units)
+    # 期待数は **凍結インベントリ** から取る（`len(genome.units)` だと、縮小した
+    # genome が期待数まで一緒に縮んで 25 unit の Body 契約を検査できない）。
+    expected = len(FROZEN_ALIASES)
+    detail["expected_units"] = expected
     ok = (len(entries) == expected and len(wavs) == expected and malformed == 0
           and not missing and not orphan and not nested
-          and sorted(aliases) == sorted(u.alias for u in genome.units)
+          and sorted(aliases) == sorted(FROZEN_ALIASES)
           and not detail["duplicate_alias"])
     detail["verdict"] = "PASS" if ok else "FAIL"
     return detail

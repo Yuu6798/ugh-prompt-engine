@@ -100,6 +100,21 @@ _ALLOWED: Dict[str, Any] = {
 }
 
 _ALLOWED_VOWELS: Tuple[str, ...] = ("a", "i", "u", "e", "o")
+
+#: §8 `inventory.aliases` の凍結値。**順序込みで完全一致**を要求する。
+#:
+#: 部分集合を通すと、G1 を抜けた縮小 genome が `validate_body` の期待数
+#: （`len(genome.units)` 由来）まで一緒に縮め、25 unit の Body 契約を検査せずに
+#: G3 まで PASS してしまう。そのまま G0–G3 の公開前提が揃うと、**不完全な
+#: voicebank が完全な旧 bundle を置き換える**。さらに小さい部分集合では
+#: `af_compare.compare_body` が `next(...)` で落ちる。
+FROZEN_ALIASES: Tuple[str, ...] = (
+    "あ", "い", "う", "え", "お",
+    "か", "き", "く", "け", "こ",
+    "さ", "し", "す", "せ", "そ",
+    "な", "に", "ぬ", "ね", "の",
+    "ら", "り", "る", "れ", "ろ",
+)
 _RELEASE_CURVES: Tuple[str, ...] = ("half_cosine",)
 _PHASE_SCHEMES: Tuple[str, ...] = ("schroeder", "zero")
 
@@ -383,11 +398,16 @@ def validate_founder_spec(spec: Dict[str, Any]) -> List[str]:
     aliases = spec["inventory"]["aliases"]
     if not isinstance(aliases, list) or not aliases:
         errors.append("root.inventory.aliases: expected non-empty list")
-    else:
-        if any(not isinstance(a, str) or not a for a in aliases):
-            errors.append("root.inventory.aliases: all aliases must be non-empty strings")
-        elif len(set(aliases)) != len(aliases):
-            errors.append("root.inventory.aliases: duplicate alias")
+    elif any(not isinstance(a, str) or not a for a in aliases):
+        errors.append("root.inventory.aliases: all aliases must be non-empty strings")
+    elif len(set(aliases)) != len(aliases):
+        errors.append("root.inventory.aliases: duplicate alias")
+    elif tuple(aliases) != FROZEN_ALIASES:
+        missing = [a for a in FROZEN_ALIASES if a not in set(aliases)]
+        extra = [a for a in aliases if a not in set(FROZEN_ALIASES)]
+        errors.append(
+            "root.inventory.aliases: must equal the frozen AF-P0 inventory in order "
+            f"(missing={missing}, unexpected={extra}, n={len(aliases)}/{len(FROZEN_ALIASES)})")
 
     return errors
 

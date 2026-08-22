@@ -497,7 +497,9 @@ def _gates(body: Dict[str, Any], reexp: Dict[str, Any], **overrides: str):
         "G3": af_gates.gate_utau_body({"verdict": "PASS"}, {"verdict": "PASS"}),
         "G4": af_gates.gate_ingestion({"verdict": "PASS"}, {"verdict": "PASS"},
                                       {"all_finite": True}, {"verdict": "PASS"}),
-        "G5": af_gates.gate_meter_control({"families": [{"family": "x", "verdict": "PASS"}]}),
+        "G5": af_gates.gate_meter_control(
+            {"families": [{"family": f, "verdict": "PASS"}
+                          for f in af_gates.REQUIRED_CONTROL_FAMILIES]}),
         "G14": af_gates.gate_provenance(
             {k: "x" for k in ("spec_sha256", "criteria_sha256", "controls_sha256",
                               "probes_sha256", "code_closure_sha256", "body_identity_digest")},
@@ -834,3 +836,150 @@ def test_oto_parser_matches_adapter(genome, body):
             assert repr(a.blank_ms) == repr(b.blank_ms)
             assert repr(a.preutterance_ms) == repr(b.preutterance_ms)
             assert repr(a.overlap_ms) == repr(b.overlap_ms)
+
+
+# ---------------------------------------------------------------------------
+# PR #301 Codex レビュー第 2/3 巡（P1 x6 + P2 x1）で塞いだ穴の回帰テスト
+# ---------------------------------------------------------------------------
+def test_alias_inventory_must_match_the_frozen_set():
+    """部分集合の inventory を G1 で弾く（縮小 Body が旧 bundle を置換しうる）。"""
+    spec = _spec()
+    spec["inventory"]["aliases"] = spec["inventory"]["aliases"][:10]
+    errs = af_schema.validate_founder_spec(spec)
+    assert any("frozen AF-P0 inventory" in e for e in errs)
+
+    spec = _spec()
+    spec["inventory"]["aliases"] = list(reversed(spec["inventory"]["aliases"]))
+    assert any("frozen AF-P0 inventory" in e for e in af_schema.validate_founder_spec(spec))
+
+    spec = _spec()
+    spec["inventory"]["aliases"][0] = "ん"
+    assert any("frozen AF-P0 inventory" in e for e in af_schema.validate_founder_spec(spec))
+
+
+def test_validate_body_expects_the_frozen_unit_count(genome, body, tmp_path):
+    """期待数は凍結インベントリ由来（縮小 genome に合わせて緩まない）。"""
+    detail = af_utau.validate_body(genome, body)
+    assert detail["expected_units"] == len(af_schema.FROZEN_ALIASES) == 25
+    assert detail["verdict"] == "PASS"
+
+    root = tmp_path / "AF0"
+    shutil.copytree(body, root)
+    oto = root / genome.pitch_dir / "oto.ini"
+    text = oto.read_bytes().decode(af_utau.OTO_ENCODING)
+    kept = [ln for ln in text.splitlines() if not ln.startswith("ro.wav=")]
+    oto.write_bytes(("\r\n".join(kept) + "\r\n").encode(af_utau.OTO_ENCODING))
+    (root / genome.pitch_dir / "ro.wav").unlink()
+    trimmed = af_utau.validate_body(genome, root)
+    assert trimmed["n_entries"] == 24 and trimmed["verdict"] == "FAIL"
+
+
+def test_meter_control_requires_every_family():
+    """部分集合の controls で G5 PASS を作れない。"""
+    full = [{"family": f, "verdict": "PASS"} for f in af_gates.REQUIRED_CONTROL_FAMILIES]
+    assert af_gates.gate_meter_control({"families": full}).verdict == "PASS"
+
+    partial = af_gates.gate_meter_control({"families": full[:1]})
+    assert partial.verdict == "FAIL"
+    assert partial.detail["missing_families"] == list(af_gates.REQUIRED_CONTROL_FAMILIES[1:])
+    assert partial.detail["reason_code"] == "METER_NOT_CALIBRATED"
+
+    unknown = af_gates.gate_meter_control(
+        {"families": full + [{"family": "made_up", "verdict": "PASS"}]})
+    assert unknown.verdict == "FAIL" and unknown.detail["unknown_families"] == ["made_up"]
+
+    dup = af_gates.gate_meter_control({"families": full + [full[0]]})
+    assert dup.verdict == "FAIL" and dup.detail["duplicated_families"] == [full[0]["family"]]
+
+
+@pytest.mark.parametrize(("key", "gate_id"),
+                         [("energy_attack", "G11"), ("terminal_zero", "G13")])
+def test_body_only_comparisons_are_gated(key, gate_id):
+    """§18.1 にしか行が無い比較も Gate へ配線されている。"""
+    body = _all_pass_body()
+    body[key] = {"verdict": "FAIL"}
+    gates = {g.gate_id: g for g in af_gates.trait_gates(body, _all_pass_reexp())}
+    assert gates[gate_id].verdict == "FAIL"
+    assert gates[gate_id].detail["body"][key] == "FAIL"
+    v = af_gates.overall_verdict(_gates(body, _all_pass_reexp()))
+    assert v["verdict"] == "NOT_ESTABLISHED"
+
+
+def test_provenance_paths_are_checkout_relative(tmp_path):
+    """絶対パスを provenance へ書かない（checkout ごとにバイト列が変わる）。"""
+    assert af_gates.repo_relative(_PKG / "af_gates.py") == \
+        "voice_genesis/foundry/artificial_founder/af_gates.py"
+    external = af_gates.repo_relative(tmp_path / "x" / "y.txt")
+    assert external.startswith("<external>/") and str(tmp_path) not in external
+
+    audit = af_gates.SourceFreeAudit(allowed_roots=[_PKG], staging_roots=[tmp_path],
+                                     pinned_inputs=[SPEC_PATH], runtime_roots=[])
+    audit.record(tmp_path / "speaker.npy")
+    payload = json.dumps(audit.as_dict(), ensure_ascii=False)
+    assert str(_PKG) not in payload
+    assert str(tmp_path) not in payload
+    assert "voice_genesis/foundry/artificial_founder" in payload
+
+
+def test_reject_output_collision_guards_destructive_out(tmp_path):
+    """`--out` が入力・パッケージ・リポジトリを消す構成を削除前に拒否する。"""
+    import p0_run
+
+    protected = [SPEC_PATH, CRITERIA_PATH, CONTROLS_PATH, PROBES_PATH, _PKG, _PKG.parents[2]]
+    # 既定の出力先（パッケージ配下だが何も内包しない）は通る
+    p0_run.reject_output_collision(_PKG / "results" / "AF0", protected)
+    p0_run.reject_output_collision(tmp_path / "anywhere", protected)
+    for bad in (SPEC_PATH.parent, _PKG, _PKG.parents[2], _PKG / "criteria"):
+        with pytest.raises(p0_run.OutputCollisionError):
+            p0_run.reject_output_collision(bad, protected)
+
+
+@pytest.mark.slow
+def test_t32b_cross_process_covers_dataset(genome, tmp_path):
+    """§19 G2 の対象は Body だけでなく dataset も含む。"""
+    import p0_run
+
+    parent = p0_run.compile_artifacts(genome, tmp_path / "parent" / "AF0")
+    assert parent["dataset_digest"] and parent["dataset_n_files"] > 0
+    proc = subprocess.run(
+        [sys.executable, str(_PKG / "p0_run.py"), "--compile-only", "--spec", str(SPEC_PATH),
+         "--out", str(tmp_path / "child" / "AF0")],
+        capture_output=True, text=True, cwd=str(_PKG))
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert payload["digest"] == parent["digest"]
+    assert payload["dataset_digest"] == parent["dataset_digest"]
+
+    # 親側の配管（`cross_process_digest`）も通す。ここでキーを詰め替えていると
+    # dataset のダイジェストが黙って落ちて G2 が判定できなくなる。
+    relayed = p0_run.cross_process_digest(SPEC_PATH, tmp_path / "relayed" / "AF0")
+    assert relayed["digest"] == parent["digest"]
+    assert relayed["dataset_digest"] == parent["dataset_digest"]
+
+
+def test_committed_results_pin_the_current_code_closure():
+    """コミット済み結果の `code_closure_sha256` が作業ツリーと一致する。
+
+    コードを直してから canonical run を回し直さないと、結果が「レビュー中の実装
+    とは別のコード」に帰属したまま G14 PASS として残る。ここで固定して、
+    再実行漏れを CI の赤で検出する。
+    """
+    results_dir = _PKG / "results" / "AF0"
+    closure = results_dir / "code_closure.json"
+    if not closure.exists():
+        pytest.skip("no committed canonical run in this checkout")
+    recorded = json.loads(closure.read_text(encoding="utf-8"))
+    current, rows = af_gates.code_closure_digest(_PKG)
+    assert recorded["digest"] == current, (
+        "results/AF0 was produced by a different code closure; re-run p0_run.py "
+        "after changing any pinned module")
+    pins = json.loads((results_dir / "input_pins.json").read_text(encoding="utf-8"))
+    assert pins["code_closure_sha256"] == current
+    assert pins["spec_sha256"] == af_spec.load_genome(SPEC_PATH).sha256
+    assert len(rows) == len(recorded["files"])
+    # provenance へ絶対パスを残さない（checkout ごとにバイト列が変わる）。
+    root = str(af_gates.repo_root())
+    for name in ("p0_results.json", "source_free_attestation.json", "comparison.json",
+                 "measurements/ingestion.json"):
+        text = (results_dir / name).read_text(encoding="utf-8")
+        assert root not in text, f"{name} pins an absolute checkout path"
