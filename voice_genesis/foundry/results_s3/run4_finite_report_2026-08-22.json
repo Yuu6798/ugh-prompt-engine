@@ -1,0 +1,81 @@
+{
+  "schema": "voicegenesis-checkpoint-finite-report/0.1",
+  "torch_version": "2.13.0+cpu",
+  "pin_verification": "requested",
+  "pins_path": "/home/user/ugh-prompt-engine/voice_genesis/foundry/results_s3/run4_anchor_provenance.json",
+  "pins_sha256": "bfde34b3cf3d87898820f21b082efadaa96534b60cdf99698ca938b15fc2f188",
+  "expected_set": [
+    "model_ckpt_steps_10000.ckpt",
+    "model_ckpt_steps_20000.ckpt",
+    "model_ckpt_steps_40000.ckpt",
+    "model_ckpt_steps_5000.ckpt"
+  ],
+  "checked_set": [
+    "model_ckpt_steps_10000.ckpt",
+    "model_ckpt_steps_20000.ckpt",
+    "model_ckpt_steps_40000.ckpt",
+    "model_ckpt_steps_5000.ckpt"
+  ],
+  "missing": [],
+  "extra": [],
+  "duplicates": [],
+  "checkpoints": [
+    {
+      "path": "model_ckpt_steps_5000.ckpt",
+      "sha256": "0778cf2d0046ffe7f50dd068264ccc562b422252d39c70c99caafce151b9e72d",
+      "checked_at_utc": "2026-08-22T19:45:58+00:00",
+      "torch_version": "2.13.0+cpu",
+      "n_tensors_checked": 186,
+      "n_tensors_skipped_non_float": 0,
+      "total_elements_checked": 69117952,
+      "total_non_finite": 0,
+      "non_finite_by_tensor": {},
+      "all_finite": true,
+      "status": "ok",
+      "pin_sha256_match": true
+    },
+    {
+      "path": "model_ckpt_steps_10000.ckpt",
+      "sha256": "afbc3d3d4605e3c6715f37dbfd3dcdddd32422017e49b5d4d45dd2215a336cfd",
+      "checked_at_utc": "2026-08-22T19:46:03+00:00",
+      "torch_version": "2.13.0+cpu",
+      "n_tensors_checked": 186,
+      "n_tensors_skipped_non_float": 0,
+      "total_elements_checked": 69117952,
+      "total_non_finite": 0,
+      "non_finite_by_tensor": {},
+      "all_finite": true,
+      "status": "ok",
+      "pin_sha256_match": true
+    },
+    {
+      "path": "model_ckpt_steps_20000.ckpt",
+      "sha256": "5e0137b6c2cdeab29417654e4a1901d16895b1da03d8ba28b5b4a13d2bac0ca5",
+      "checked_at_utc": "2026-08-22T19:46:07+00:00",
+      "torch_version": "2.13.0+cpu",
+      "n_tensors_checked": 186,
+      "n_tensors_skipped_non_float": 0,
+      "total_elements_checked": 69117952,
+      "total_non_finite": 0,
+      "non_finite_by_tensor": {},
+      "all_finite": true,
+      "status": "ok",
+      "pin_sha256_match": true
+    },
+    {
+      "path": "model_ckpt_steps_40000.ckpt",
+      "sha256": "3921f96ac19a9cf5bc8ab246a147cf778044cf5949dd24cd87246f24e52c76ec",
+      "checked_at_utc": "2026-08-22T19:46:11+00:00",
+      "torch_version": "2.13.0+cpu",
+      "n_tensors_checked": 186,
+      "n_tensors_skipped_non_float": 0,
+      "total_elements_checked": 69117952,
+      "total_non_finite": 0,
+      "non_finite_by_tensor": {},
+      "all_finite": true,
+      "status": "ok",
+      "pin_sha256_match": true
+    }
+  ],
+  "all_ok": true
+}

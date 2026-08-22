@@ -158,8 +158,10 @@ debts:
         - "4 checkpoint（5K/10K/20K/40K）それぞれの all_finite 判定 JSON"
         - "4 checkpoint 全てで pin_sha256_match: true（run4_anchor_provenance.json の正準 pin と一致）"
         - "報告（scripts/check_checkpoint_finite.py の JSON 出力）の pins_sha256 が正準 voice_genesis/foundry/results_s3/run4_anchor_provenance.json の sha256（bfde34b3cf3d87898820f21b082efadaa96534b60cdf99698ca938b15fc2f188。本ファイルの実測値。改訂されたら再計算して更新する）と一致していること（自作 pin ファイルによる照合の排除。Codex 第9巡 9-2）"
-      note: "checkpoint 実体は repo 非同梱のため実行環境は machine-dependent"
-    status: open
+      evidence_delivered:
+        - "voice_genesis/foundry/results_s3/run4_finite_report_2026-08-22.json（sha256 d0c1748a6e99903e0776740b726f27a75f6468763f2323ec6a7e0d0748c30876）: scripts/check_checkpoint_finite.py 実測。4/4 checkpoint とも all_finite: true・n_tensors_checked: 186・total_elements_checked: 69,117,952・total_non_finite: 0・pin_sha256_match: true。pins_sha256 は正準 run4_anchor_provenance.json の実測 sha256 と一致（自作 pin 不使用）。torch 2.13.0+cpu、実行日 2026-08-22、report all_ok: true"
+      note: "checkpoint 実体は repo 非同梱のため実行環境は machine-dependent。checkpoint 実体は AI-Drive 残置分を User が 2026-08-22 に Drive『run4未転記_2026-08-21』へ 12 part で転記、連結後 sha256 が正準 pin と 4/4 一致"
+    status: repaid
     adjudication_ref: "DEBT_ADJUDICATION_v1.1.md §5 裁定5"
     close_condition:
       - "4 checkpoint（5K/10K/20K/40K）すべてで all_finite: true かつ pin_sha256_match: true が記帳されている"
