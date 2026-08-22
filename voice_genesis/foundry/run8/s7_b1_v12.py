@@ -195,6 +195,65 @@ def _expected_condition_ids_12(cal: Dict[str, Any], cal_1_0: Dict[str, Any]) -> 
     return ids
 
 
+#: 測定窓を決めるフィールド。1 つでも動くと測る区間が変わる。
+BOUNDARY_KEYS = ("note_onset_s", "commanded_note_end_s", "score_boundary_s", "tail_window_ms")
+#: 命令そのもの（尺と速度）。rung は base のゲイン倍なので時間構造は変わらない。
+COMMAND_KEYS = ("beats", "tempo_bpm")
+
+
+def _verify_boundaries(
+    man: Dict[str, Any], cal: Dict[str, Any], cal_1_0: Dict[str, Any]
+) -> None:
+    """全条件の測定窓が**単一の命令から出ている**ことを課す。
+
+    `note_onset_s` / `commanded_note_end_s` はレンダ命令（dur モデル出力）から取る
+    設計なので事前登録に直接 pin できない（`real_render_set.boundaries` の note）。
+    代わりに次を課す:
+
+    1. `tail_window_ms` == 事前登録が pin する値（唯一 pin されている境界）
+    2. 全条件が**同一の**測定窓・命令を持つ（同じ譜面を 1 回レンダし、派生は
+       ゲイン倍・振幅 rung は後処理なので、時間構造は条件間で動かない）
+    3. 振幅 rung の窓 == その `derived_from` 条件の窓
+
+    2 が破れているということは、誰かが個別条件のメタデータに手を入れたということで、
+    そのとき B-1 は条件ごとに別の区間を測る。
+    """
+    by_id = {str(c["condition_id"]): c for c in man["conditions"]}
+    want_tail = float(cal_1_0["real_render_set"]["boundaries"]["tail_window_ms"])
+
+    windows = {}
+    for cid, entry in sorted(by_id.items()):
+        missing = [k for k in BOUNDARY_KEYS if entry.get(k) is None]
+        if missing:
+            raise Manifest12Error(f"{cid}: 測定窓のフィールドが欠けている: {missing}")
+        if float(entry["tail_window_ms"]) != want_tail:
+            raise Manifest12Error(
+                f"{cid}: tail_window_ms {entry['tail_window_ms']} != 事前登録 {want_tail}"
+            )
+        windows[cid] = tuple(
+            float(entry[k]) for k in BOUNDARY_KEYS
+        ) + tuple(entry.get(k) for k in COMMAND_KEYS)
+
+    distinct = sorted(set(windows.values()))
+    if len(distinct) != 1:
+        by_window: Dict[Any, list] = {}
+        for cid, w in windows.items():
+            by_window.setdefault(w, []).append(cid)
+        raise Manifest12Error(
+            "条件ごとに測定窓が違う（同一譜面の 1 レンダとその派生なので揃うはず）: "
+            + "; ".join(f"{sorted(v)} -> {k}" for k, v in sorted(by_window.items()))
+        )
+
+    for rung in cal["amplitude_ladder"]["rungs"]:
+        rid, base = str(rung["id"]), str(rung["derived_from"])
+        if base not in windows:
+            raise Manifest12Error(f"{rid}: derived_from {base!r} が manifest に無い")
+        if windows[rid] != windows[base]:
+            raise Manifest12Error(
+                f"{rid}: 測定窓が base {base} と違う（rung はゲイン倍で時間構造を変えない）"
+            )
+
+
 def source_12(manifest_path: Path, cal: Dict[str, Any]) -> Any:
     """1.2 manifest を読み、刺激辞書と境界を作る（1.0 の照合規律を踏襲）。
 
@@ -239,7 +298,13 @@ def source_12(manifest_path: Path, cal: Dict[str, Any]) -> Any:
             f"条件集合が事前登録と違う: {sorted(got_ids)} != {sorted(expected_ids)}"
         )
 
-    # (4) 各 WAV の pin（容器 sha + 標本 sha）は s7_io で照合する
+    # (4) 測定窓のメタデータ（PR #303 第 9 巡 P1）
+    # 条件 ID と系譜が合っていても、各条件の `score_boundary_s` / onset / end /
+    # `tail_window_ms` を手で書き換えれば **B-1 は別の窓を測る**のに、spec は凍結校正を
+    # 名乗る。ID を見るだけでは足りない。
+    _verify_boundaries(man, cal, cal_1_0)
+
+    # (5) 各 WAV の pin（容器 sha + 標本 sha）は s7_io で照合する
     out_dir = Path(str(man["out_dir"]))
     zero_ids = {str(z["id"]) for z in cal_1_0["real_render_set"].get("zero_buffers", [])}
     stimuli: Dict[str, b1.Stimulus] = {}

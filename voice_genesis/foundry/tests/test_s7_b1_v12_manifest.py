@@ -69,7 +69,7 @@ def _build_manifest(tmp_path: Path, cal: Dict[str, Any], cal_1_0_doc) -> Path:
             "note_onset_s": 0.0,
             "commanded_note_end_s": 0.05,
             "score_boundary_s": 0.05,
-            "tail_window_ms": 40.0,
+            "tail_window_ms": 300.0,
         })
 
     doc = {
@@ -164,5 +164,57 @@ def test_a_swapped_wav_is_rejected(tmp_path, prereg, cal_1_0):
 
     sf.write(str(Path(doc["out_dir"]) / target["wav"]),
              np.zeros(4410, dtype=np.float32), 44100, subtype="FLOAT")
+    with pytest.raises(v12.Manifest12Error):
+        v12.source_12(path, prereg)
+
+
+# --- 第 9 巡 P1: 測定窓のメタデータ -------------------------------------------
+
+
+def test_a_hand_edited_score_boundary_is_rejected(tmp_path, prereg, cal_1_0):
+    """条件 ID と系譜が合っていても、`score_boundary_s` を書き換えれば
+    **B-1 は別の窓を測る**。ID を見るだけでは足りない。"""
+    path = _build_manifest(tmp_path, prereg, cal_1_0[0])
+    _rewrite(path, lambda d: d["conditions"][0].update(score_boundary_s=0.9))
+    with pytest.raises(v12.Manifest12Error):
+        v12.source_12(path, prereg)
+
+
+@pytest.mark.parametrize("key", ["note_onset_s", "commanded_note_end_s"])
+def test_a_hand_edited_command_window_is_rejected(tmp_path, prereg, cal_1_0, key):
+    path = _build_manifest(tmp_path, prereg, cal_1_0[0])
+    _rewrite(path, lambda d: d["conditions"][1].update({key: 0.123}))
+    with pytest.raises(v12.Manifest12Error):
+        v12.source_12(path, prereg)
+
+
+def test_a_tail_window_that_differs_from_the_preregistration_is_rejected(
+    tmp_path, prereg, cal_1_0
+):
+    """`tail_window_ms` は事前登録が pin している唯一の境界。全条件で照合する。"""
+    path = _build_manifest(tmp_path, prereg, cal_1_0[0])
+    _rewrite(path, lambda d: [c.update(tail_window_ms=999.0) for c in d["conditions"]])
+    with pytest.raises(v12.Manifest12Error):
+        v12.source_12(path, prereg)
+
+
+def test_a_rung_whose_window_drifts_from_its_base_is_rejected(tmp_path, prereg, cal_1_0):
+    """振幅 rung は base のゲイン倍なので、時間構造は base と一致していなければならない。"""
+    path = _build_manifest(tmp_path, prereg, cal_1_0[0])
+    rung = str(prereg["amplitude_ladder"]["rungs"][0]["id"])
+
+    def _drift(d):
+        for c in d["conditions"]:
+            if c["condition_id"] == rung:
+                c["score_boundary_s"] = float(c["score_boundary_s"]) + 0.05
+
+    _rewrite(path, _drift)
+    with pytest.raises(v12.Manifest12Error):
+        v12.source_12(path, prereg)
+
+
+def test_a_missing_boundary_field_is_rejected(tmp_path, prereg, cal_1_0):
+    path = _build_manifest(tmp_path, prereg, cal_1_0[0])
+    _rewrite(path, lambda d: d["conditions"][0].pop("score_boundary_s"))
     with pytest.raises(v12.Manifest12Error):
         v12.source_12(path, prereg)

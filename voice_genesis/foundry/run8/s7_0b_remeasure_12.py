@@ -32,6 +32,7 @@ if str(_HERE) not in sys.path:
 
 import s7_b1_calibration as b1  # noqa: E402
 import s7_b1_v12 as v12  # noqa: E402
+import s7_0b_aggregate as agg  # noqa: E402
 import s7_io  # noqa: E402
 import s7_spec as sp  # noqa: E402
 
@@ -137,6 +138,41 @@ def remeasure_group(path: Path, winners) -> Dict[str, Any]:
     }
 
 
+def enumerate_validated_groups(group_dir: Path):
+    """事前登録が定める **(世代 × 話者) を数え上げ**、各群 JSON を検査してから返す。
+
+    従来はディレクトリを glob して名前で群を決めていた（PR #303 第 9 巡 P1）。
+    WAV pin は音を守るが、`input_meta` の命令区間や**群の同一性**は守らない。
+    したがって 1 つの正当な群を 10 個複製すれば全音声検査を通り、
+    `groups_with_obtainable_ringing_reference` が誤った数を出して、聴取セットと
+    Gate 1 の closeout へ流れ込む。検査は集計器と同一実装（`validate_group_document`）
+    を使う（同型を 2 つ持たない）。
+    """
+    spec, spec_sha, _ = s7_io.read_json_with_pin(agg.SPEC_PATH)
+    cell_ids = [str(c["cell_id"]) for c in spec["cells"]]
+    out = []
+    for gen, info in spec["expansion"]["generations"].items():
+        for speaker in info["speakers"]:
+            path = Path(group_dir) / f"{gen}_{speaker}.json"
+            if not path.exists():
+                continue
+            doc, _, _ = s7_io.read_json_with_pin(path)
+            agg.validate_group_document(
+                doc, path, gen, speaker, cell_ids, spec_sha, spec["measurement"]
+            )
+            out.append(path)
+    stray = sorted(
+        p.name for p in Path(group_dir).glob("*.json")
+        if p not in out and not p.name.startswith(("s7_", "trf_"))
+    )
+    if stray:
+        raise agg.GroupFileError(
+            f"事前登録に無い群ファイルがある: {stray}"
+            "（複製や改名は ringing 集計を黙って動かす）"
+        )
+    return out
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--group-dir", required=True)
@@ -145,9 +181,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     spec, spec_sha, winners, unavailable = load_winners()
     groups = []
-    for path in sorted(Path(args.group_dir).glob("*.json")):
-        if path.name.startswith("s7_") or path.name.startswith("trf_"):
-            continue
+    for path in enumerate_validated_groups(Path(args.group_dir)):
         groups.append(remeasure_group(path, winners))
         g = groups[-1]
         print(
