@@ -10,10 +10,25 @@
 本テストの対象外。
 
 `debt/RUN_CONTRACT_SCHEMA_v1.json` が定義する projection 形状に対し、
-`debt/DESIGN_S7_run8.contract_projection.json` が実際に fail-closed で
-振る舞うことを検査する。検査ロジックは schema の意味論を Python で
-再実装したもの（外部 jsonschema ライブラリは前提にしない = schema 自身の
-コメント方針）。
+`debt/*.contract_projection.json`（glob 発見・pytest parametrize。Codex
+第10巡 10-2 — Run 8 固定パスから一般化。将来 run の projection ファイルにも
+本ファイルの全検査が自動的に適用される）が実際に fail-closed で振る舞う
+ことを検査する。検査ロジックは schema の意味論を Python で再実装した
+もの（外部 jsonschema ライブラリは前提にしない = schema 自身のコメント
+方針）。
+
+CLOSED 状態への改竄を前提とする negative test 群（closeout_ref 系）は、
+汎用 parametrize された `projection` フィクスチャ（将来 gate=OPEN/BLOCKED
+の projection も含みうる）とは独立して、実際に CLOSED を宣言している
+Run 8 の projection に固定する専用 `run8_projection` フィクスチャを使う
+（Codex 第10巡 10-2: Run 8 固有テストとして明示的に分離する方式を選択 —
+「そのプロジェクションが CLOSED を宣言している場合の条件付き検査」への
+一般化と二択だったが、tampering 系は「CLOSED を騙る」ことが検査の前提
+そのものであり、非 CLOSED の future projection に対して意味のある negative
+test にならないため分離を選んだ。CLOSED 宣言時の正常系検証
+`test_closeout_ref_exists_when_gate_is_closed` は逆に全 projection へ
+一般化している — `_check_closeout_ref` 自身が CLOSED でなければ no-op する
+ため、条件付き検査として素直に成立する）。
 
 検査内容:
 (a) projection の design_doc_sha256 が実ファイルの sha256 と一致
@@ -69,10 +84,34 @@ import pytest
 
 DEBT_DIR = Path(__file__).resolve().parent.parent / "debt"
 SCHEMA_PATH = DEBT_DIR / "RUN_CONTRACT_SCHEMA_v1.json"
-PROJECTION_PATH = DEBT_DIR / "DESIGN_S7_run8.contract_projection.json"
+RUN8_PROJECTION_PATH = DEBT_DIR / "DESIGN_S7_run8.contract_projection.json"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 SHA256_HEX_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _discover_projection_paths() -> List[Path]:
+    """`debt/` 配下の `*.contract_projection.json` 全件を発見する
+    （Codex 第10巡 10-2: Run 8 固定パスから一般化）。"""
+    return sorted(DEBT_DIR.glob("*.contract_projection.json"))
+
+
+# collection 時点で1回だけ発見する（pytest.fixture の params は collection
+# 時点で確定している必要があるため、モジュールレベルで評価する）。
+PROJECTION_PATHS: List[Path] = _discover_projection_paths()
+
+
+def test_discovers_at_least_one_contract_projection_file() -> None:
+    """(a) Codex 第10巡 10-2: 発見 0 件は fail する（suite の空洞化防止）。
+    `projection` フィクスチャは `PROJECTION_PATHS` へ parametrize される
+    ため、discovery が 0 件だと依存する全テストが「fail」でも「skip」でも
+    ない「黙って 0 個収集される」状態になる。この canary は parametrize に
+    依存せず discovery 件数を直接検査することで、そのサイレントな空洞化を
+    確実に検出する。"""
+    assert PROJECTION_PATHS, (
+        "voice_genesis/foundry/debt/*.contract_projection.json が1件も"
+        f"見つかりません: {DEBT_DIR}"
+    )
 
 
 @pytest.fixture(scope="module")
@@ -81,10 +120,30 @@ def schema() -> Dict[str, Any]:
     return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
+@pytest.fixture(scope="module", params=PROJECTION_PATHS, ids=lambda p: p.name)
+def projection_path(request: pytest.FixtureRequest) -> Path:
+    return request.param
+
+
 @pytest.fixture(scope="module")
-def projection() -> Dict[str, Any]:
-    assert PROJECTION_PATH.exists(), f"projection not found: {PROJECTION_PATH}"
-    return json.loads(PROJECTION_PATH.read_text(encoding="utf-8"))
+def projection(projection_path: Path) -> Dict[str, Any]:
+    """発見された `*.contract_projection.json` 全件へ parametrize される
+    （Codex 第10巡 10-2）。このフィクスチャに依存するテストは各 projection
+    ファイルごとに1回ずつ実行される。"""
+    assert projection_path.exists(), f"projection not found: {projection_path}"
+    return json.loads(projection_path.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def run8_projection() -> Dict[str, Any]:
+    """Run 8 固有テスト専用（Codex 第10巡 10-2）。CLOSED 状態への改竄を
+    前提とする negative test（closeout_ref 系）は、実際に CLOSED を宣言
+    している Run 8 の projection に固定して実行する（汎用 parametrize
+    された `projection` は将来 gate=OPEN/BLOCKED の projection も含み
+    うるため、それらに対しては「CLOSED を騙る」検査自体が意味を持たない）。
+    """
+    assert RUN8_PROJECTION_PATH.exists(), f"projection not found: {RUN8_PROJECTION_PATH}"
+    return json.loads(RUN8_PROJECTION_PATH.read_text(encoding="utf-8"))
 
 
 def _sha256_of_file(path: Path) -> str:
@@ -414,9 +473,10 @@ def test_runbook_may_not_override_design(projection: Dict[str, Any]) -> None:
 
 
 def test_main_training_gate_is_closed_via_closeout_sticky_override(
-    schema: Dict[str, Any], projection: Dict[str, Any]
+    schema: Dict[str, Any], run8_projection: Dict[str, Any]
 ) -> None:
-    """Codex 第6巡 6-2: 現状データ（run8-B 準備状態）は
+    """Codex 第6巡 6-2（第10巡 10-2 で run8_projection 専用へ分離 — Run 8
+    固有のデータ状態を前提とする検査のため）: 現状データ（run8-B 準備状態）は
     main_training_gate == "CLOSED"（`results_s7/s7_run8_closeout.md` の
     User 裁定による終端宣言）。pre_run/post_run の一部フィールド
     （dataset_manifest_sha256 / config_sha256 / fixed_probe_set 等）は
@@ -426,15 +486,15 @@ def test_main_training_gate_is_closed_via_closeout_sticky_override(
     test_main_training_gate_is_blocked_when_pre_run_or_post_run_unsatisfied
     の後継 — main_training_gate が BLOCKED から CLOSED へ変わったため
     改名・改訂）。"""
-    unsatisfied_pre = _unsatisfied_pre_run_fields(schema, projection)
-    blocked_post = _blocked_post_run_fields(schema, projection)
+    unsatisfied_pre = _unsatisfied_pre_run_fields(schema, run8_projection)
+    blocked_post = _blocked_post_run_fields(schema, run8_projection)
     assert unsatisfied_pre or blocked_post, (
         "この検査は『CLOSED でなければ BLOCKED 側を通っていたはず』ことを"
         "実証する目的のため、少なくとも1つの未充足 pre_run または BLOCKED な"
         "post_run フィールドが存在するはずです"
     )
-    assert projection["main_training_gate"] == "CLOSED", (
-        f"main_training_gate が {projection['main_training_gate']!r} です。"
+    assert run8_projection["main_training_gate"] == "CLOSED", (
+        f"main_training_gate が {run8_projection['main_training_gate']!r} です。"
         "closeout 記録による終端宣言のため CLOSED であるべきです。"
     )
 
@@ -826,37 +886,14 @@ def _check_closeout_ref(projection: Dict[str, Any], repo_root: Path) -> None:
 
 
 def test_closeout_ref_exists_when_gate_is_closed(projection: Dict[str, Any]) -> None:
-    """(i) 現状データ（main_training_gate == CLOSED）で closeout_ref が
-    実在の repo 内ファイルを指すこと。"""
-    assert projection["main_training_gate"] == "CLOSED"
+    """(i) Codex 第10巡 10-2 で全 projection への条件付き検査に一般化
+    （旧: 現状データが CLOSED であることを前提に決め打ちしていた）。
+    `_check_closeout_ref` 自身が main_training_gate != "CLOSED" のとき
+    no-op するため、この呼び出しは「CLOSED を宣言している projection では
+    closeout_ref が実在の repo 内ファイルを指すこと」を、CLOSED でない
+    projection に対しては何もしない形で、discovered された全 projection に
+    対して一括で適用する。"""
     _check_closeout_ref(projection, REPO_ROOT)
-
-
-def test_check_closeout_ref_rejects_missing_ref_when_gate_closed(
-    projection: Dict[str, Any],
-) -> None:
-    """(i) 負例: CLOSED なのに closeout_ref が欠落していれば検出される。"""
-    tampered = dict(projection)
-    del tampered["closeout_ref"]
-    with pytest.raises(AssertionError):
-        _check_closeout_ref(tampered, REPO_ROOT)
-
-
-def test_check_closeout_ref_rejects_nonexistent_path(projection: Dict[str, Any]) -> None:
-    """(i) 負例: closeout_ref が存在しないファイルを指せば検出される。"""
-    tampered = dict(projection)
-    tampered["closeout_ref"] = "voice_genesis/foundry/results_s7/does_not_exist.md"
-    with pytest.raises(AssertionError):
-        _check_closeout_ref(tampered, REPO_ROOT)
-
-
-def test_check_closeout_ref_rejects_absolute_path(projection: Dict[str, Any]) -> None:
-    """(i) 負例: closeout_ref が絶対パスなら検出される（design_doc と同型の
-    repo外束縛拒否）。"""
-    tampered = dict(projection)
-    tampered["closeout_ref"] = "/etc/passwd"
-    with pytest.raises(AssertionError):
-        _check_closeout_ref(tampered, REPO_ROOT)
 
 
 def test_check_closeout_ref_is_noop_when_gate_not_closed() -> None:
@@ -866,32 +903,70 @@ def test_check_closeout_ref_is_noop_when_gate_not_closed() -> None:
     _check_closeout_ref(non_closed_projection, REPO_ROOT)  # 例外を投げないことの確認
 
 
-def test_check_closeout_ref_rejects_sha256_mismatch(projection: Dict[str, Any]) -> None:
+# --- Run 8 固有の closeout_ref negative test 群 -----------------------------
+#
+# 以下は「main_training_gate を CLOSED に据えたまま特定フィールドを改竄する」
+# ことが検査の前提であり、汎用 parametrize された `projection`（将来
+# gate=OPEN/BLOCKED の projection も含みうる）に対しては意味を持たない
+# （非 CLOSED の projection では改竄しても `_check_closeout_ref` が
+# no-op するだけで、pytest.raises(AssertionError) が失敗してしまう）。
+# そのため Codex 第10巡 10-2 で `run8_projection`（実際に CLOSED を宣言
+# している Run 8 固定）へ明示的に分離した。
+
+
+def test_check_closeout_ref_rejects_missing_ref_when_gate_closed(
+    run8_projection: Dict[str, Any],
+) -> None:
+    """(i) 負例: CLOSED なのに closeout_ref が欠落していれば検出される。"""
+    tampered = dict(run8_projection)
+    del tampered["closeout_ref"]
+    with pytest.raises(AssertionError):
+        _check_closeout_ref(tampered, REPO_ROOT)
+
+
+def test_check_closeout_ref_rejects_nonexistent_path(run8_projection: Dict[str, Any]) -> None:
+    """(i) 負例: closeout_ref が存在しないファイルを指せば検出される。"""
+    tampered = dict(run8_projection)
+    tampered["closeout_ref"] = "voice_genesis/foundry/results_s7/does_not_exist.md"
+    with pytest.raises(AssertionError):
+        _check_closeout_ref(tampered, REPO_ROOT)
+
+
+def test_check_closeout_ref_rejects_absolute_path(run8_projection: Dict[str, Any]) -> None:
+    """(i) 負例: closeout_ref が絶対パスなら検出される（design_doc と同型の
+    repo外束縛拒否）。"""
+    tampered = dict(run8_projection)
+    tampered["closeout_ref"] = "/etc/passwd"
+    with pytest.raises(AssertionError):
+        _check_closeout_ref(tampered, REPO_ROOT)
+
+
+def test_check_closeout_ref_rejects_sha256_mismatch(run8_projection: Dict[str, Any]) -> None:
     """(i)(a) Codex 第7巡 7-2 負例: closeout_ref_sha256 が実ファイルと
     不一致なら検出される。"""
-    tampered = dict(projection)
+    tampered = dict(run8_projection)
     tampered["closeout_ref_sha256"] = "0" * 64
     with pytest.raises(AssertionError):
         _check_closeout_ref(tampered, REPO_ROOT)
 
 
 def test_check_closeout_ref_rejects_ref_swapped_to_different_file(
-    projection: Dict[str, Any],
+    run8_projection: Dict[str, Any],
 ) -> None:
     """(i)(a) Codex 第7巡 7-2 負例: closeout_ref を別の実在ファイルへ
     差し替えると、そのファイルの実 sha256 が pin と一致しないため検出
     される（バイト束縛の実効性 — パス存在検査だけでは通ってしまう）。"""
-    tampered = dict(projection)
+    tampered = dict(run8_projection)
     tampered["closeout_ref"] = "voice_genesis/foundry/results_s7/s7_reproducibility_finding.md"
     with pytest.raises(AssertionError):
         _check_closeout_ref(tampered, REPO_ROOT)
 
 
-def test_check_closeout_ref_rejects_fabricated_reason(projection: Dict[str, Any]) -> None:
+def test_check_closeout_ref_rejects_fabricated_reason(run8_projection: Dict[str, Any]) -> None:
     """(i)(b) Codex 第7巡 7-2 負例: reason を closeout 本文に存在しない
     文字列へ差し替えると内容照合で検出される（sha256 一致だけでは
     reason の捏造を検出できないため、内容照合が必要な理由の実証）。"""
-    tampered = dict(projection)
+    tampered = dict(run8_projection)
     tampered["reason"] = "FABRICATED_REASON_NOT_IN_CLOSEOUT_BODY"
     with pytest.raises(AssertionError):
         _check_closeout_ref(tampered, REPO_ROOT)

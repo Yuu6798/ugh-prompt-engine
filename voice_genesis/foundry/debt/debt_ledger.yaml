@@ -229,13 +229,14 @@ debts:
       affected_claims:
         - Track C PoC 成立条件2（PJS由来Performance要素の交換で明瞭な変化）の複数gene同時運用時の挙動
     repayment:
-      method: 新しい experiment ID での事前登録のみ（旧S4上書き禁止）。R0-R4の新規実行は禁止
+      method: "新しい experiment ID での事前登録のみ（旧S4上書き禁止）。R0-R4の新規実行は禁止（事前登録は着手条件であり close 条件ではない）"
       evidence_required:
         - 新experiment IDの事前登録記録（着手する場合のみ）
+        - "完了した追実験の裁定記録（知覚的共発現の成立/不成立いずれかを evidence つきで記帳したもの。着手しない限り不要）"
     status: open
     adjudication_ref: "DEBT_ADJUDICATION_v1.1.md §3 裁定3"
     close_condition:
-      - "該当なし（新規追実験が必要になった場合のみ、新experiment IDでの事前登録を close_condition とする）"
+      - "新 experiment ID で事前登録された追実験が完了し、知覚的共発現の裁定（成立 / 不成立のいずれか）が evidence つきで記帳されている（事前登録のみでは close しない。Codex 第10巡 10-1: 事前登録止まりで close される偽返済経路の閉塞）"
 
   - debt_id: VG-DEBT-012
     scope: run5
