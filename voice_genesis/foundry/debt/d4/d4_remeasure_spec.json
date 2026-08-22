@@ -100,7 +100,7 @@
       "path": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json",
       "sha256": "c4856fde84c8e46edfbfc1232fef288559595207ea4f088016375c9c39404639"
     },
-    "d4_runner_sha256": "8025c52f26a239f9c74e1fe12d8c8b0a0a35ae610512f3eb7e4896e327fd5ae2",
+    "d4_runner_sha256": "46237b70e8c6e911b7a3c3768bbd2d2904065a086f7e930791347b3be11eff3f",
     "instrument_sha256": "f5d136744b24ad6562668b0f604a737d23798e8744e0c23fc19b2afca8418eb4",
     "render_harness_sha256": "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894",
     "s7_0b_probe_sha256": "1b32ed729097337744b4a4f22df40ab34c9eed3b71633c81e250af3f7bc22aac",

@@ -34,6 +34,7 @@ import dataclasses
 import importlib.metadata as _md
 import json
 import sys
+import types
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -48,19 +49,26 @@ for _p in (_RUN8, _D4):
         sys.path.insert(0, str(_p))
 
 import d4_runner as d4  # noqa: E402
+
+# `d4_runner` は pre-bind 原則（PR #306 レビュー第2巡 P2・第3巡 P2）により、
+# pinned module（`d4.b1` 等 = `s7_b1_calibration`/`s7_b1_v12`/
+# `s7_export_manifest`/`s7_io`/`s7_trf`/`s7_0b_probe`）を import 時点では
+# 束縛しない — pin 検証を通過した後に `load_and_verify_d4_spec()` の内部で
+# だけ束縛する。しかも第3巡 P2 で「束縛前に既に sys.modules にある」と
+# fail-closed で abort するようになった。本テストモジュールは下で
+# `s7_0b_probe` / `s7_b1_v12` / `s7_io` を直接 import する（`_write_wav` 等の
+# テストヘルパーとして使うため）が、**その import より前**に正規経路
+# （`load_and_verify_d4_spec()`）を 1 回明示的に走らせて束縛させる —
+# 束縛が先に済んでいれば、下の `import s7_io` 等は sys.modules のキャッシュを
+# 再利用するだけで新たな import にならず、preloaded 判定に触れない。
+# 収集時点でこれを行うことは、多数のテストが `d4.b1` / `d4.v12` を直接参照
+# する前提を満たすこと（委譲先の fixture 順序に依存しない）に加え、collection
+# 自体が実 spec の健全性の最初のスモークテストにもなる。
+d4.load_and_verify_d4_spec()
+
 import s7_0b_probe as probe0b  # noqa: E402
 import s7_b1_v12 as v12  # noqa: E402
 import s7_io  # noqa: E402
-
-# `d4_runner` は pre-bind 原則（PR #306 レビュー第2巡 P2）により、pinned
-# module（`d4.b1` 等）を import 時点では束縛しない — pin 検証を通過した後に
-# `load_and_verify_d4_spec()` の内部でだけ束縛する。本テストモジュールは
-# 収集時点（下の `_STACK_MISMATCH_DETAIL` 計算・多数のテストが `d4.b1` /
-# `d4.v12` を直接参照する）で束縛済みであることを前提とするため、ここで
-# 正規経路（`load_and_verify_d4_spec()`）を 1 回明示的に走らせて束縛させる
-# （委譲先の fixture 順序に依存しない・collection 自体が実 spec の健全性の
-# 最初のスモークテストにもなる）。
-d4.load_and_verify_d4_spec()
 
 GROUPS_DIR = _FOUNDRY / "results_s7" / "probe_0b_groups"
 REPO_ROOT = _FOUNDRY.parents[1]
@@ -69,6 +77,32 @@ BOUNDARIES = {
     "note_onset_s": 0.1, "commanded_note_end_s": 1.0,
     "score_boundary_s": 1.0, "tail_window_ms": 300.0,
 }
+#: `BOUNDARIES` の `score_boundary_s - note_onset_s`（= 0.9s）と厳密に一致する
+#: (duration_beats, tempo_bpm) の組（PR #306 レビュー第3巡 P1: `_measure_group`
+#: が測定窓を pinned 定義と照合するようになったため、既存の合成テストが使う
+#: `BOUNDARIES` はどの実セルの pinned duration_beats/tempo_bpm とも一致しない
+#: — ここでは「テストの合成入力と整合する見せかけの期待値」を作り、window
+#: 検証そのものを直接検査する新規テストとは切り離す）。0.9 * 60 / 60 = 0.9。
+_PERMISSIVE_DURATION_BEATS = 0.9
+_PERMISSIVE_TEMPO_BPM = 60.0
+
+
+def _real_boundaries_for(cid: str, probe_spec_doc: Dict[str, Any]) -> Dict[str, float]:
+    """cell_id の pinned duration_beats/tempo_bpm（`s7_0b_probe_spec.json`）から、
+    `_measure_group` の測定窓照合（PR #306 レビュー第3巡 P1）を実際に通す
+    input_meta を組み立てる。`cmd_measure` 経由のテスト（`_load_window_
+    expectations` が実 spec から window_expectations を計算する）は固定値の
+    `BOUNDARIES` では通らないため、cell_id ごとに正しい値が要る。"""
+    cell_defs = {c["cell_id"]: c for c in probe_spec_doc["cells"]}
+    cdef = cell_defs[cid]
+    duration_beats = float(cdef["duration_beats"])
+    tempo_bpm = float(cdef["tempo_bpm"])
+    onset = 0.1
+    span = duration_beats * 60.0 / tempo_bpm
+    return {
+        "note_onset_s": onset, "commanded_note_end_s": onset + span,
+        "score_boundary_s": onset + span, "tail_window_ms": 300.0,
+    }
 
 
 # --- PR #306 CI 指摘: ANALYSIS_STACK_PIN 不一致環境（例: CI の numba 0.67.0
@@ -139,6 +173,16 @@ def valid_group_ids(raw_spec: Dict[str, Any]):
 @pytest.fixture(scope="module")
 def expected_cell_ids(all_cell_ids: List[str]):
     return frozenset(all_cell_ids)
+
+
+@pytest.fixture(scope="module")
+def permissive_window_expectations(all_cell_ids: List[str]):
+    """`_measure_group` の測定窓照合（PR #306 レビュー第3巡 P1）を、`BOUNDARIES`
+    を使う既存の合成テストで常に通過させるための window_expectations。
+    実 pinned 値での不一致検出そのものは `test_verify_cell_window_*` 系が直接
+    検査する。"""
+    expectations = {cid: (_PERMISSIVE_DURATION_BEATS, _PERMISSIVE_TEMPO_BPM) for cid in all_cell_ids}
+    return expectations, BOUNDARIES["tail_window_ms"]
 
 
 # --- 1. spec 形状 ------------------------------------------------------
@@ -255,6 +299,24 @@ def test_load_and_verify_does_not_import_pinned_modules_before_verification_pass
     d4.load_and_verify_d4_spec()
     now_missing = [name for name in d4._PINNED_MODULE_NAMES if name not in sys.modules]
     assert not now_missing, f"検証通過後も import されていないモジュールがある: {now_missing}"
+
+
+def test_bind_pinned_modules_rejects_preloaded_module(monkeypatch) -> None:
+    """PR #306 レビュー第3巡 P2: pinned module が `_bind_pinned_modules()` の
+    import 実行**前**に（本 runner の束縛経路以外から）既に `sys.modules` に
+    存在すると fail-closed で abort する（`reason=preloaded_pinned_module`）。
+
+    このプロセスでは既に正規の束縛が完了しているはずなので、`_pinned_modules_
+    bound` フラグを「未束縛」へ一時的に巻き戻し（= プロセス内で初めて束縛を
+    試みる状況を再現）、その状態で 1 つの pinned module 名を模擬的に
+    preload（本来の束縛経路を経ていない `types.ModuleType` のスタブへ差し替え）
+    してから `_bind_pinned_modules()` を直接呼ぶ。"""
+    monkeypatch.setattr(d4, "_pinned_modules_bound", False)
+    fake_module = types.ModuleType("s7_io")
+    monkeypatch.setitem(sys.modules, "s7_io", fake_module)
+
+    with pytest.raises(d4.D4SpecMismatch, match="preloaded_pinned_module"):
+        d4._bind_pinned_modules()
 
 
 def test_load_and_verify_rejects_tampered_pin(tmp_path: Path, raw_spec: Dict[str, Any]) -> None:
@@ -456,6 +518,7 @@ def _full_render_doc(
 
 def test_measure_group_computes_voicing_axes_on_synthetic_wav(
     tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, expected_cell_ids,
+    permissive_window_expectations,
 ) -> None:
     spec, spec_sha = spec_and_sha
     axis_candidates = d4._resolve_axis_candidates(spec)
@@ -467,7 +530,8 @@ def test_measure_group_computes_voicing_axes_on_synthetic_wav(
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
 
     group_doc = d4._measure_group(
-        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids
+        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+        *permissive_window_expectations,
     )
 
     assert group_doc["generation"] == "run5"
@@ -497,6 +561,7 @@ def test_measure_group_computes_voicing_axes_on_synthetic_wav(
 
 def test_measure_group_transcribes_render_runtime_stack_verbatim(
     tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, expected_cell_ids,
+    permissive_window_expectations,
 ) -> None:
     """render doc に `runtime_stack` があれば、群結果へ `render_runtime_stack`
     として逐語転記される（PR #306 レビュー第2巡 P2）。"""
@@ -516,7 +581,8 @@ def test_measure_group_transcribes_render_runtime_stack_verbatim(
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
 
     group_doc = d4._measure_group(
-        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids
+        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+        *permissive_window_expectations,
     )
 
     assert group_doc["render_runtime_stack"] == fake_render_stack
@@ -525,6 +591,7 @@ def test_measure_group_transcribes_render_runtime_stack_verbatim(
 
 def test_measure_cell_axes_differ_between_distinct_wavs(
     tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, expected_cell_ids,
+    permissive_window_expectations,
 ) -> None:
     """セルフレビュー #1（致命）の回帰テスト: キャッシュがセルをまたいで使い
     回されると、2 セル目以降が 1 セル目の軸値をそのまま再利用してしまう
@@ -547,7 +614,8 @@ def test_measure_cell_axes_differ_between_distinct_wavs(
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
 
     group_doc = d4._measure_group(
-        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids
+        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+        *permissive_window_expectations,
     )
 
     axes_a = group_doc["cells"][cell_a]["axes"]
@@ -563,6 +631,7 @@ def test_measure_cell_axes_differ_between_distinct_wavs(
 
 def test_measure_group_rejects_wav_pin_mismatch(
     tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, expected_cell_ids,
+    permissive_window_expectations,
 ) -> None:
     spec, spec_sha = spec_and_sha
     axis_candidates = d4._resolve_axis_candidates(spec)
@@ -575,7 +644,8 @@ def test_measure_group_rejects_wav_pin_mismatch(
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
 
     group_doc = d4._measure_group(
-        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids
+        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+        *permissive_window_expectations,
     )
     entry = group_doc["cells"][target]
     assert entry["outcome"] == "error"
@@ -600,7 +670,8 @@ def test_measure_group_rejects_stale_spec_binding(
 
     with pytest.raises(d4.D4SpecMismatch):
         d4._measure_group(
-            render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids
+            render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+            {}, 300.0,  # 早期 abort 経路のため window 引数は未使用（プレースホルダ）
         )
 
 
@@ -624,7 +695,8 @@ def test_measure_group_registration_check_applies_even_without_spec_binding(
 
     with pytest.raises(d4.D4SpecMismatch, match="groups"):
         d4._measure_group(
-            render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids
+            render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+            {}, 300.0,  # 早期 abort 経路のため window 引数は未使用（プレースホルダ）
         )
 
 
@@ -641,7 +713,8 @@ def test_measure_group_rejects_wrong_cell_count(
 
     with pytest.raises(d4.D4SpecMismatch, match="セル数"):
         d4._measure_group(
-            render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids
+            render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+            {}, 300.0,  # 早期 abort 経路のため window 引数は未使用（プレースホルダ）
         )
 
 
@@ -659,8 +732,132 @@ def test_measure_group_rejects_duplicate_cell_id(
 
     with pytest.raises(d4.D4SpecMismatch, match="重複"):
         d4._measure_group(
-            render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids
+            render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+            {}, 300.0,  # 早期 abort 経路のため window 引数は未使用（プレースホルダ）
         )
+
+
+# --- 2b. 測定窓の pinned 定義束縛（PR #306 レビュー第3巡 P1・「方式 b」） -----
+
+
+def test_measure_group_accepts_window_matching_pinned_cell_definition(
+    tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, expected_cell_ids,
+    probe_spec_doc,
+) -> None:
+    """render doc の input_meta が pinned cell 定義（duration_beats/tempo_bpm）
+    から導出した期待値と一致すれば通常どおり測定される（正規 doc の対照）。"""
+    spec, spec_sha = spec_and_sha
+    axis_candidates = d4._resolve_axis_candidates(spec)
+    window_expectations, expected_tail_window_ms = d4._load_window_expectations(spec)
+    out_dir = tmp_path / "out"
+    target = all_cell_ids[0]
+    wav_meta = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
+    wav_meta["input_meta"] = _real_boundaries_for(target, probe_spec_doc)
+    render_doc = _full_render_doc(out_dir, all_cell_ids, {target: wav_meta})
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+
+    group_doc = d4._measure_group(
+        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+        window_expectations, expected_tail_window_ms,
+    )
+
+    entry = group_doc["cells"][target]
+    assert entry["outcome"] == "measured"
+    assert group_doc["n_error"] == 0
+
+
+def test_measure_group_rejects_tampered_window(
+    tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, expected_cell_ids,
+    probe_spec_doc,
+) -> None:
+    """render doc の input_meta（score_boundary_s）を直接書き換えて測定窓を
+    差し替えると、pinned cell 定義から導出した期待値と食い違い
+    `window_mismatch` として隔離される（PR #306 レビュー第3巡 P1: 「doc 編集
+    による窓差し替えの偽測定経路」の回帰テスト）。"""
+    spec, spec_sha = spec_and_sha
+    axis_candidates = d4._resolve_axis_candidates(spec)
+    window_expectations, expected_tail_window_ms = d4._load_window_expectations(spec)
+    out_dir = tmp_path / "out"
+    target = all_cell_ids[0]
+    wav_meta = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
+    tampered_meta = dict(_real_boundaries_for(target, probe_spec_doc))
+    tampered_meta["score_boundary_s"] += 5.0  # 窓を 5 秒後ろへ差し替える
+    wav_meta["input_meta"] = tampered_meta
+    render_doc = _full_render_doc(out_dir, all_cell_ids, {target: wav_meta})
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+
+    group_doc = d4._measure_group(
+        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+        window_expectations, expected_tail_window_ms,
+    )
+
+    entry = group_doc["cells"][target]
+    assert entry["outcome"] == "error"
+    assert entry["status"] == "window_mismatch"
+    assert entry["reason"] == "window_mismatch"
+    assert group_doc["n_error"] == 1
+
+
+def test_measure_group_rejects_tampered_tail_window_ms(
+    tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, expected_cell_ids,
+    probe_spec_doc,
+) -> None:
+    """`tail_window_ms` の改竄も window_mismatch として検出する（測定窓は
+    score_boundary_s だけでなく tail_window_ms も pinned 定義に束縛する）。"""
+    spec, spec_sha = spec_and_sha
+    axis_candidates = d4._resolve_axis_candidates(spec)
+    window_expectations, expected_tail_window_ms = d4._load_window_expectations(spec)
+    out_dir = tmp_path / "out"
+    target = all_cell_ids[0]
+    wav_meta = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
+    tampered_meta = dict(_real_boundaries_for(target, probe_spec_doc))
+    tampered_meta["tail_window_ms"] = 900.0  # 3 倍に差し替える
+    wav_meta["input_meta"] = tampered_meta
+    render_doc = _full_render_doc(out_dir, all_cell_ids, {target: wav_meta})
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+
+    group_doc = d4._measure_group(
+        render_doc_path, spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+        window_expectations, expected_tail_window_ms,
+    )
+
+    entry = group_doc["cells"][target]
+    assert entry["outcome"] == "error"
+    assert entry["status"] == "window_mismatch"
+
+
+def test_verify_cell_window_matches_all_360_real_cells() -> None:
+    """2026-08-22 実測の render doc 360 セル全数で、pinned 定義から導出した
+    window 期待値と実測 input_meta が一致することを検査する（`_load_window_
+    expectations` の設計根拠（「方式 b」採用）そのものの回帰）。実 render doc
+    （数 GB）は repo に同梱されないため、存在するときだけ実行する（無ければ
+    machine-dependent として skip）。"""
+    render_dir = Path("/home/user/d4work/render")
+    if not render_dir.is_dir():
+        pytest.skip(f"{render_dir} が無い（実 render doc は repo 非同梱・machine-dependent）")
+    spec = json.loads(d4.SPEC_PATH.read_text(encoding="utf-8"))
+    window_expectations, expected_tail_window_ms = d4._load_window_expectations(spec)
+    n_checked = n_mismatch = 0
+    mismatches = []
+    for path in sorted(render_dir.glob("*.json")):
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        for cell in doc["cells"]:
+            if cell.get("outcome") != "rendered":
+                continue
+            cid = str(cell["cell_id"])
+            n_checked += 1
+            try:
+                d4._verify_cell_window(
+                    cid, cell["input_meta"], window_expectations.get(cid), expected_tail_window_ms
+                )
+            except d4.D4WindowMismatch as exc:
+                n_mismatch += 1
+                mismatches.append((path.name, cid, str(exc)))
+    assert n_checked == 360, f"実測セル数 {n_checked} != 360"
+    assert n_mismatch == 0, f"{n_mismatch} 件不一致: {mismatches[:5]}"
 
 
 # --- 5. セル毎例外の隔離 + exit 非ゼロ（cmd_measure 経由の end-to-end） -------
@@ -687,7 +884,7 @@ def test_analysis_stack_mismatch_detail_detects_tampered_pin() -> None:
 
 
 def test_cmd_measure_isolates_broken_cell_and_exits_nonzero_stack_independent(
-    tmp_path: Path, spec_and_sha, all_cell_ids, monkeypatch,
+    tmp_path: Path, spec_and_sha, all_cell_ids, probe_spec_doc, monkeypatch,
 ) -> None:
     """セルフレビュー #6 の回帰検査を ANALYSIS_STACK_PIN の版に依存せず常時
     実行する変種（PR #306 対応）: `verify_analysis_stack` と実測定候補
@@ -698,6 +895,7 @@ def test_cmd_measure_isolates_broken_cell_and_exits_nonzero_stack_independent(
     out_dir = tmp_path / "out"
     ok_id, broken_id = all_cell_ids[0], all_cell_ids[1]
     ok_wav = dict(_write_wav(out_dir, "ok.wav", _sustained_tail_wave()))
+    ok_wav["input_meta"] = _real_boundaries_for(ok_id, probe_spec_doc)
     broken_wav = dict(_write_wav(out_dir, "broken.wav", _hard_cut_wave()))
     (out_dir / "broken.wav").unlink()
     render_doc = _full_render_doc(
@@ -738,7 +936,7 @@ def test_cmd_measure_isolates_broken_cell_and_exits_nonzero_stack_independent(
 
 @requires_pinned_analysis_stack
 def test_cmd_measure_isolates_broken_cell_and_exits_nonzero(
-    tmp_path: Path, spec_and_sha, all_cell_ids,
+    tmp_path: Path, spec_and_sha, all_cell_ids, probe_spec_doc,
 ) -> None:
     """セルフレビュー #6: 1 セルの入力破壊（wav 実体の欠落）が他セルの測定を
     止めず、結果に error セルとして記帳されたうえで `cmd_measure` が非ゼロを
@@ -748,6 +946,7 @@ def test_cmd_measure_isolates_broken_cell_and_exits_nonzero(
     out_dir = tmp_path / "out"
     ok_id, broken_id = all_cell_ids[0], all_cell_ids[1]
     ok_wav = dict(_write_wav(out_dir, "ok.wav", _sustained_tail_wave()))
+    ok_wav["input_meta"] = _real_boundaries_for(ok_id, probe_spec_doc)
     broken_wav = dict(_write_wav(out_dir, "broken.wav", _hard_cut_wave()))
     # レンダ済みと記帳しつつ、実体の wav ファイルを消して読み込み時に例外を
     # 起こす（旧実装は WavPinMismatch/PathEscapeError/KeyError/ValueError の
@@ -787,14 +986,17 @@ def test_cmd_measure_isolates_broken_cell_and_exits_nonzero(
 
 
 def test_cmd_measure_marks_incomplete_for_single_group_input(
-    tmp_path: Path, spec_and_sha, all_cell_ids, monkeypatch,
+    tmp_path: Path, spec_and_sha, all_cell_ids, probe_spec_doc, monkeypatch,
 ) -> None:
     """事前登録10群のうち1群だけを渡すと、その1群が規定セル数ぶんエラー無く
     測定できても `complete: false` + exit 非ゼロになる（群が事前登録に満たない）。"""
     spec, spec_sha = spec_and_sha
     out_dir = tmp_path / "out"
     wav = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
-    rendered = {cid: dict(wav) for cid in all_cell_ids}
+    rendered = {
+        cid: {**wav, "input_meta": _real_boundaries_for(cid, probe_spec_doc)}
+        for cid in all_cell_ids
+    }
     render_doc = _full_render_doc(out_dir, all_cell_ids, rendered)
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
@@ -822,14 +1024,17 @@ def test_cmd_measure_marks_incomplete_for_single_group_input(
 
 
 def test_cmd_measure_allow_partial_records_partial_flag(
-    tmp_path: Path, spec_and_sha, all_cell_ids, monkeypatch,
+    tmp_path: Path, spec_and_sha, all_cell_ids, probe_spec_doc, monkeypatch,
 ) -> None:
     """`--allow-partial` を渡すと、不完全な結果に `partial: true` が記帳される
     （exit の非ゼロ化自体は変わらない — 既定でも部分実行は abort せず書き切る）。"""
     spec, spec_sha = spec_and_sha
     out_dir = tmp_path / "out"
     wav = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
-    rendered = {cid: dict(wav) for cid in all_cell_ids}
+    rendered = {
+        cid: {**wav, "input_meta": _real_boundaries_for(cid, probe_spec_doc)}
+        for cid in all_cell_ids
+    }
     render_doc = _full_render_doc(out_dir, all_cell_ids, rendered)
     render_doc_path = tmp_path / "run5_pjs.json"
     render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
@@ -855,14 +1060,17 @@ def test_cmd_measure_allow_partial_records_partial_flag(
 
 
 def test_cmd_measure_marks_complete_for_all_ten_groups(
-    tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, monkeypatch,
+    tmp_path: Path, spec_and_sha, all_cell_ids, valid_group_ids, probe_spec_doc, monkeypatch,
 ) -> None:
     """事前登録の10群すべてを規定セル数（36）ぶん揃えて渡すと `complete: true` +
     exit 0 になる。"""
     spec, spec_sha = spec_and_sha
     out_dir = tmp_path / "out"
     wav = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
-    rendered = {cid: dict(wav) for cid in all_cell_ids}
+    rendered = {
+        cid: {**wav, "input_meta": _real_boundaries_for(cid, probe_spec_doc)}
+        for cid in all_cell_ids
+    }
 
     fake_axes = {
         "excess_tail_voiced_ms": 1.0, "release_after_score_boundary_ms": 2.0,

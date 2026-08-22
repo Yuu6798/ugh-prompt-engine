@@ -28,6 +28,23 @@
 は起動のたびに `pins.sources`（特別枠を除く）と実際の import 閉包の完全一致も
 検査する（`_verify_closure_matches_declared_pins`。取りこぼしの構造的防止）。
 
+**脅威モデルと境界**（PR #306 レビュー第3巡 P2・`docs/DESIGN_M2_extraction_
+accuracy.md` §6「Scorer pin の脅威モデルと境界」と同型の切り分け）: pin 検証
++ pre-bind（`_bind_pinned_modules`）が**守る**のは、受動的な取り違え・pin
+陳腐化・「検証と import の間に古い/別バージョンが割り込む」事故——凍結物が
+pin 後に書き換わった・spec が陳腐化した・pin 検証より前に何かが pinned
+module を import 済みだった、など。これらは sha256 照合 + import 遅延 +
+preloaded module 拒否（`sys.modules` 検査）で fail-closed 検出される。
+**守らない（境界）**: プロセスの `sys.modules` / ファイルシステム / インタ
+プリタ自体を能動的に書き換えられる攻撃者。この能力があれば `.pyc` の差し替え、
+インタプリタの改竄、import **後**のモジュール属性の書き換え（`s7_io.foo =
+lambda ...` のような差し替え）で、pin 検証をすり抜けて任意の実装を実行させ
+られる——しかもこの経路は sha256 pin をどれだけ強化しても防げない（読んだ
+ファイルと実行されるコードオブジェクトの同一性は、CPython の言語機能だけ
+では証明できない）。したがって in-memory 系の防御は「preloaded module の
+拒否」までで**終端**する。それ以上の防御（メモリ改竄検知・プロセス隔離等）
+は本 runner のスコープ外とし、際限ない実装細部の追跡はしない。
+
 サブコマンド 2 つ:
 
 - `render` — `s7_0b_probe.run_group` を直接呼び、1 群（話者 x 世代）ぶんの
@@ -112,17 +129,67 @@ _PINNED_MODULE_NAMES: Tuple[str, ...] = (
     "s7_b1_calibration", "s7_b1_v12", "s7_export_manifest", "s7_io", "s7_trf", "s7_0b_probe",
 )
 
+#: このプロセスで `_bind_pinned_modules()` が一度でも成功したか（PR #306
+#: レビュー第3巡 P2）。初回だけ「sys.modules がまだ pinned module 名で
+#: 汚染されていないこと」を検査する — 2 回目以降の呼び出し（同一プロセス内で
+#: `load_and_verify_d4_spec()` を複数回呼ぶ再入経路。テストスイートや、複数
+#: 群を 1 プロセスでまとめて扱う将来の呼び出し側を含む）は、sys.modules に
+#: 残っているのが**自分自身が前回束縛した**ものだと分かっているため誤検出
+#: しない。Python の import キャッシュはプロセス内で同一モジュール名に常に
+#: 同一オブジェクトを返す契約なので、初回に汚染が無かったことさえ確認できれば
+#: 以降の再入は安全（in-memory 改変そのものは別途「脅威モデル境界」として
+#: 本モジュール docstring で明文化し、ここでは検出しない）。
+_pinned_modules_bound = False
+
 
 def _bind_pinned_modules() -> None:
     """pin 検証を通過した**後にのみ**呼ぶ: pinned module 群を import して
-    module globals（`b1`/`v12`/`xm`/`s7_io`/`trf`/`probe0b`）へ束縛する。"""
-    global b1, v12, xm, s7_io, trf, probe0b
+    module globals（`b1`/`v12`/`xm`/`s7_io`/`trf`/`probe0b`）へ束縛する。
+
+    **preloaded module の fail-closed 拒否**（PR #306 レビュー第3巡 P2）:
+    このプロセスで初めて呼ばれるときに限り、束縛対象の名前が import 実行
+    **前**の時点で既に `sys.modules` に存在し、かつその `__file__` が
+    `run8/<name>.py` の期待パスと**違う**なら abort する
+    （`reason=preloaded_pinned_module`）。検証は「ディスク上の現在のバイト列」
+    に対して行っており、`sys.modules` に既にある得体の知れないモジュール
+    オブジェクトがその検証済みバイト列から作られた保証は無い——検証より前の
+    別経路（本 runner の制御が及ばない import・注入されたスタブ等）が先に
+    持ち込んだ実装かもしれない。ただし `__file__` が期待パスと**一致**する
+    場合は拒否しない: それは単に同一プロセス内の別のコード（同じ repo の
+    他テスト等）が同じ正規ファイルを先に import していただけであり、
+    Python の import キャッシュ機構がその**同一オブジェクト**を返すだけで
+    脅威ではない（`d4_runner.py` 自身を複数回・複数経路から呼ぶ用途——
+    pytest が全テストファイルを 1 プロセスへ集めて収集する等——を壊さない
+    ための区別）。
+    """
+    global b1, v12, xm, s7_io, trf, probe0b, _pinned_modules_bound
+    if not _pinned_modules_bound:
+        suspicious = []
+        for name in _PINNED_MODULE_NAMES:
+            existing = sys.modules.get(name)
+            if existing is None:
+                continue
+            expected_path = (_RUN8_DIR / f"{name}.py").resolve()
+            existing_file = getattr(existing, "__file__", None)
+            if existing_file is None or Path(existing_file).resolve() != expected_path:
+                suspicious.append((name, existing_file))
+        if suspicious:
+            detail = ", ".join(f"{n}: __file__={f!r}" for n, f in suspicious)
+            raise D4SpecMismatch(
+                f"reason=preloaded_pinned_module: {detail} — 期待パス配下"
+                f"（{_RUN8_DIR}）以外から既に sys.modules に存在していた。検証した "
+                "bytes が実際に実行されるモジュールと同一である保証が無いため "
+                "fail-closed で abort する（in-memory 系の防御はここまで — .pyc "
+                "差し替え・インタプリタ改竄・import 後のモジュール属性改変は本"
+                "モジュール docstring の脅威モデル節に記載のとおり対象外）"
+            )
     b1 = importlib.import_module("s7_b1_calibration")
     v12 = importlib.import_module("s7_b1_v12")
     xm = importlib.import_module("s7_export_manifest")
     s7_io = importlib.import_module("s7_io")
     trf = importlib.import_module("s7_trf")
     probe0b = importlib.import_module("s7_0b_probe")
+    _pinned_modules_bound = True
 
 
 SPEC_SCHEMA = "vg-d4-remeasure-spec/0.3"
@@ -144,6 +211,14 @@ D4_AXES: Tuple[str, ...] = (
 class D4SpecMismatch(RuntimeError):
     """D4 事前登録 spec 自身、または pin 対象ファイルが期待 sha256 と食い違った
     （fail-closed）。"""
+
+
+class D4WindowMismatch(RuntimeError):
+    """render 済み群 JSON の `input_meta`（測定窓）が、pinned cell 定義
+    （`cell_definition_source`）/ pinned `trf_measurement_spec_1_2.json` から
+    導出した期待値と食い違った（PR #306 レビュー第3巡 P1。doc 編集による
+    窓差し替えの偽測定経路を閉塞する）。セル単位で隔離し、他セルの測定は継続
+    する（fail-closed の failure_policy と同じ扱い）。"""
 
 
 #: `pins.sources` が持つべきキー集合（厳密一致。欠落・余剰とも abort）。
@@ -409,6 +484,70 @@ def _load_cell_definition(spec: Dict[str, Any]) -> Dict[str, Any]:
     return doc
 
 
+#: `score_boundary_s - note_onset_s` の許容誤差（秒）。float 丸め誤差のみを
+#: 吸収する（`windows_from_command` の演算は frame_ms 由来の乗除算のみで、
+#: 2026-08-22 実測 360 セル全数で 1e-9 未満の誤差だった。тamper 検出の感度を
+#: 落とさないため十分小さく取る）。
+_WINDOW_SPAN_EPS_S = 1e-6
+
+
+def _load_window_expectations(spec: Dict[str, Any]) -> Tuple[Dict[str, Tuple[float, float]], float]:
+    """pinned cell 定義 + pinned `trf_measurement_spec_1_2.json` から、セル毎の
+    測定窓の期待値を導出する（PR #306 レビュー第3巡 P1・「方式 b」）。
+
+    **導出できる範囲**: `score_boundary_s - note_onset_s == duration_beats *
+    60 / tempo_bpm`（拍長由来の時間窓幅）と `tail_window_ms`（グローバル定数）
+    の 2 点のみ。`note_onset_s` / `commanded_note_end_s` の絶対値は render 時の
+    duration predictor 出力（`final_phone_dur`）に依存し、onnxruntime での
+    モデル推論なしに独立再導出できない（P-ANCHOR セルは対象ノートより前の
+    全フレーズ分のフレームを含むため、`target_note_index` の再導出も要る —
+    調査の結果、`P-RI-MEDIAL` 系の診断セルも対象ノートが先頭でないことが
+    実測で判明し、`diagnostic_score` 一律の単純な「先頭ノート」仮定は棄却
+    した）。measure は CPU 音声解析のみに留める設計（render 側の
+    onnxruntime 依存を持ち込まない）ため、この 2 点への限定は意図的な範囲
+    選択である。2026-08-22 実測の render doc 360 セル全数で実測検証済み
+    （両方とも 0 件不一致）。
+    """
+    cell_def = _load_cell_definition(spec)
+    expectations = {
+        str(c["cell_id"]): (float(c["duration_beats"]), float(c["tempo_bpm"]))
+        for c in cell_def["cells"]
+    }
+    trf12_path = _REPO_ROOT / spec["pins"]["sources"]["trf_measurement_spec_1_2_sha256"]
+    trf12, _, _ = _read_json_pure(trf12_path)
+    expected_tail_window_ms = float(trf12["boundaries"]["tail_window_ms"])
+    return expectations, expected_tail_window_ms
+
+
+def _verify_cell_window(
+    cid: str, meta: Dict[str, Any],
+    expect: Optional[Tuple[float, float]], expected_tail_window_ms: float,
+) -> None:
+    """1 セルの `input_meta` を pinned 期待値と照合する。不一致は
+    `D4WindowMismatch`（呼び出し側が捕まえて `status: window_mismatch` で
+    隔離する）。`expect` が None（cell_id が pinned 定義に無い）は、
+    `_verify_group_doc_registration` が既に cell_id 集合の厳密一致を検査
+    済みのため通常到達しない — 到達したら素通しさせず明示的に abort する。
+    """
+    if expect is None:
+        raise D4WindowMismatch(f"{cid}: pinned cell 定義に窓期待値が無い")
+    exp_beats, exp_tempo = expect
+    exp_span = exp_beats * 60.0 / exp_tempo
+    got_span = float(meta["score_boundary_s"]) - float(meta["note_onset_s"])
+    if abs(got_span - exp_span) > _WINDOW_SPAN_EPS_S:
+        raise D4WindowMismatch(
+            f"{cid}: score_boundary_s-note_onset_s={got_span:.9f} が pinned cell "
+            f"定義（duration_beats={exp_beats}/tempo_bpm={exp_tempo}）から導出した"
+            f"期待値 {exp_span:.9f} と食い違う（doc 編集による窓差し替えの疑い）"
+        )
+    got_tail = float(meta["tail_window_ms"])
+    if abs(got_tail - expected_tail_window_ms) > 1e-9:
+        raise D4WindowMismatch(
+            f"{cid}: tail_window_ms={got_tail} が pinned trf_measurement_spec_1_2."
+            f"json の boundaries.tail_window_ms={expected_tail_window_ms} と違う"
+        )
+
+
 def _resolve_axis_candidates(spec: Dict[str, Any]) -> Dict[str, "v12.Cand12"]:
     """D4 spec の `axes[].selected_candidate`（文字列）を、`s7_b1_v12` が実際に
     列挙する候補（`enumerate_candidates_12`）から candidate_id 一致で解決する
@@ -608,6 +747,7 @@ def _verify_group_doc_registration(
 def _measure_group(
     render_doc_path: Path, d4_spec_sha: str, axis_candidates: Dict[str, "v12.Cand12"],
     valid_group_ids: FrozenSet[str], expected_cell_ids: FrozenSet[str],
+    window_expectations: Dict[str, Tuple[float, float]], expected_tail_window_ms: float,
 ) -> Dict[str, Any]:
     doc, doc_sha, _ = s7_io.read_json_with_pin(render_doc_path)
     _verify_group_doc_registration(doc, render_doc_path, valid_group_ids, expected_cell_ids)
@@ -638,6 +778,9 @@ def _measure_group(
                 wav_path, cell.get("wav_sha256"), cell.get("samples_sha256")
             )
             meta = cell["input_meta"]
+            # 測定窓の pinned 定義束縛（PR #306 レビュー第3巡 P1）: doc 編集で
+            # input_meta の窓値だけを差し替える偽測定経路を閉塞する。
+            _verify_cell_window(cid, meta, window_expectations.get(cid), expected_tail_window_ms)
             stim = b1.Stimulus(
                 stim_id=cid, family=str(cell.get("probe", "")), samples=y, sr=sr,
                 note_onset_s=float(meta["note_onset_s"]),
@@ -646,6 +789,14 @@ def _measure_group(
                 tail_window_ms=float(meta["tail_window_ms"]),
             )
             axes = _measure_cell_axes(stim, axis_candidates)
+        except D4WindowMismatch as exc:
+            cells_out[cid] = {
+                "outcome": "error", "status": "window_mismatch",
+                "reason": "window_mismatch",
+                "error": str(exc),
+            }
+            n_error += 1
+            continue
         except Exception as exc:  # noqa: BLE001 — fail-closed: 隔離して全セル記帳を続ける
             # KeyboardInterrupt / SystemExit は Exception のサブクラスではない
             # ため、ここでは捕まらず素通りする（意図どおり）。
@@ -703,6 +854,7 @@ def cmd_measure(args: argparse.Namespace) -> int:
     valid_group_ids = frozenset(g["group_id"] for g in d4_spec["groups"])
     cell_def = _load_cell_definition(d4_spec)
     expected_cell_ids = frozenset(str(c["cell_id"]) for c in cell_def["cells"])
+    window_expectations, expected_tail_window_ms = _load_window_expectations(d4_spec)
 
     out_path = Path(args.out)
     render_docs = [Path(p) for p in args.render_doc]
@@ -718,7 +870,8 @@ def cmd_measure(args: argparse.Namespace) -> int:
     groups: Dict[str, Any] = {}
     for render_doc_path in render_docs:
         group_doc = _measure_group(
-            render_doc_path, d4_spec_sha, axis_candidates, valid_group_ids, expected_cell_ids
+            render_doc_path, d4_spec_sha, axis_candidates, valid_group_ids, expected_cell_ids,
+            window_expectations, expected_tail_window_ms,
         )
         group_id = f"{group_doc['generation']}_{group_doc['speaker']}"
         if group_id in groups:
