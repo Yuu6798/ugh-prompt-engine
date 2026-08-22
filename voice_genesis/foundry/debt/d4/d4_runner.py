@@ -40,7 +40,17 @@
 照合する（`_verify_data_inputs`）。コード閉包は AST で機械列挙できるが、
 データ入力は「どの関数がどのパス定数を読むか」を辿る必要があり機械列挙は
 していない（手動の全数確認。将来の呼び出し経路追加で同種の漏れが再発しうる
-点は残存する既知の限界として明記する）。
+点は残存する既知の限界として明記する）。**検証→消費 TOCTOU の閉塞（第8巡
+P2・本系統終端）**: `load_and_verify_d4_spec` の起動時検証と、`v12.
+load_prereg_12()` / `b1.load_prereg()` / `trf.load_frozen_measurement()` /
+`xm.verify_export_manifest()` が実測時に行う別読みの間には時間窓があった
+（起動時検証を通過した直後にファイルが差し替わっても、loader 側の再読込は
+新しいバイトを黙って通す）。消費のたびに loader が返す digest
+（`_verify_consumed_digests`）または消費直後の再 hash（`_reverify_data_
+inputs_after_consumption`）で pin と再照合し、この窓は data-input の消費時
+digest 照合まで防御する（同一プロセス内でのファイルシステム外の改変 =
+メモリ改竄は、上記「脅威モデルと境界」節と同じ理由で境界外——この系統も
+これで終端する）。
 
 **脅威モデルと境界**（PR #306 レビュー第3巡 P2・`docs/DESIGN_M2_extraction_
 accuracy.md` §6「Scorer pin の脅威モデルと境界」と同型の切り分け）: pin 検証
@@ -498,6 +508,74 @@ def _verify_data_inputs(data_inputs: Dict[str, Any]) -> None:
             )
 
 
+#: `pins.data_inputs` の各エントリの `path` を basename で引けるようにした逆引き。
+#: 消費時 digest 照合（下記 2 関数）で、loader が返す `{filename: sha256}` /
+#: モジュール属性のパスから対応する data_inputs key を引くのに使う。
+def _data_input_keys_by_filename(data_inputs: Dict[str, Any]) -> Dict[str, str]:
+    return {Path(entry["path"]).name: key for key, entry in data_inputs.items()}
+
+
+def _verify_consumed_digests(
+    data_inputs: Dict[str, Any], consumed: Dict[str, str], *, source: str,
+) -> None:
+    """**検証→消費 TOCTOU の閉塞・方式 (a)**（PR #306 レビュー第8巡 P2）:
+    `load_and_verify_d4_spec` が起動時に照合した `pins.data_inputs` と、
+    実際に測定へ使われる loader（`v12.load_prereg_12` / `b1.load_prereg`）が
+    その場で読んだバイト列から作った digest を**消費直後に**再照合する。
+
+    起動時検証と実消費（loader の `s7_io.read_json_with_pin`）は**別読み**
+    であり、両者の間に時間窓が空く——起動時検証を通過した直後にファイルが
+    差し替えられても、loader 側は新しいバイトを黙って読んでしまう
+    （TOCTOU）。ここでは loader が返り値として**既に**運んでくる digest
+    （`v12.load_prereg_12()` の `pins` / `b1.load_prereg()` の `Prereg.pins`）
+    を再利用するので、追加の読み込みは発生しない（PR #217 の「memo 迂回
+    再検証」と同型 — 検証は消費した実体そのものに対して行う）。
+
+    `consumed` は `{basename: sha256}`。`data_inputs` に対応が無いファイル名
+    は対象外として黙って無視する（loader が pin 対象外の周辺ファイルの
+    digest も一緒に返す可能性を考慮し、無関係な不一致を誤検出しないため）。
+    """
+    by_filename = _data_input_keys_by_filename(data_inputs)
+    for filename, got in consumed.items():
+        key = by_filename.get(filename)
+        if key is None:
+            continue
+        want = data_inputs[key]["sha256"]
+        if got != want:
+            raise D4SpecMismatch(
+                f"{source}: 消費時に読んだ {filename} の sha256 {got} が "
+                f"pins.data_inputs.{key}={want} と違う（起動時検証と実消費の間に "
+                "差し替えられた疑い = 検証→消費 TOCTOU）"
+            )
+
+
+def _reverify_data_inputs_after_consumption(
+    data_inputs: Dict[str, Any], keys: Sequence[str], *, source: str,
+) -> None:
+    """**検証→消費 TOCTOU の閉塞・方式 (b)**（PR #306 レビュー第8巡 P2）:
+    loader（`trf.load_frozen_measurement` 内部の `b1.load_prereg()` 呼び出し・
+    `xm.verify_export_manifest` 内部の `load_input_pins()` 呼び出し）が返り値
+    として digest を運んでこない場合のフォールバック。対象の loader 呼び出し
+    が**戻った直後**に該当ファイルを再度 hash し、`pins.data_inputs` と照合する。
+
+    厳密には「loader がその場で読んだバイト列そのもの」との同一性ではなく
+    「loader 呼び出しの前後どこかで実ファイルが変わっていないか」の近似（消費
+    時点との厳密同一ではない）だが、窓は実用上ほぼ閉じる——TOCTOU 攻撃者が
+    loader 呼び出しの実行時間内という極めて狭い区間だけを狙って差し替えて
+    元に戻す、という経路のみが残る（後述のプロセス内改変の脅威モデル境界と
+    同種の残余）。"""
+    for key in keys:
+        entry = data_inputs[key]
+        got = _sha_file(_REPO_ROOT / entry["path"])
+        want = entry["sha256"]
+        if got != want:
+            raise D4SpecMismatch(
+                f"{source}: 消費直後に再 hash した {entry['path']} の sha256 {got} が "
+                f"pins.data_inputs.{key}={want} と違う（起動時検証と実消費の間に "
+                "差し替えられた疑い = 検証→消費 TOCTOU）"
+            )
+
+
 def _verify_closure_matches_declared_pins(sources: Dict[str, str]) -> None:
     """`pins.sources`（`NON_IMPORT_PIN_SOURCE_KEYS` を除く）の相対パス集合が、
     `d4_runner.py` を起点に AST で機械列挙した実際の import 閉包と**完全一致**
@@ -694,8 +772,15 @@ def _resolve_axis_candidates(spec: Dict[str, Any]) -> Dict[str, "v12.Cand12"]:
     """D4 spec の `axes[].selected_candidate`（文字列）を、`s7_b1_v12` が実際に
     列挙する候補（`enumerate_candidates_12`）から candidate_id 一致で解決する
     （`s7_0b_remeasure_12.load_winners` と同じ方式。文字列から `Cand12` を
-    独自に再構成しない — 候補空間の定義は常に `s7_b1_v12` 側が正）。"""
-    cs, _cal, _rule, _pins = v12.load_prereg_12()
+    独自に再構成しない — 候補空間の定義は常に `s7_b1_v12` 側が正）。
+
+    **検証→消費 TOCTOU 閉塞・方式 (a)**（PR #306 レビュー第8巡 P2）: `v12.
+    load_prereg_12()` が返す `pins`（実際に読んだ 1.2 事前登録 3 点の digest）
+    を、起動時に検証済みの `pins.data_inputs` と再照合する。"""
+    cs, _cal, _rule, consumed_pins = v12.load_prereg_12()
+    _verify_consumed_digests(
+        spec["pins"]["data_inputs"], consumed_pins, source="v12.load_prereg_12",
+    )
     by_id = {c.candidate_id: c for c in v12.enumerate_candidates_12(cs)}
     out: Dict[str, "v12.Cand12"] = {}
     for axis, cfg in spec["axes"].items():
@@ -793,11 +878,33 @@ def cmd_render(args: argparse.Namespace) -> int:
         f"| export binding verified: {args.generation} <- ckpt "
         f"{export_binding['source_checkpoint_sha256'][:16]}"
     )
+    # 検証→消費 TOCTOU 閉塞・方式 (b)（PR #306 レビュー第8巡 P2）: `xm.
+    # verify_export_manifest()` は内部で `load_input_pins()` 経由 `s7_exporter_
+    # input_pins.json` を読むが、その digest を返り値に運んでこない（option (a)
+    # 不可）。呼び出し直後に再 hash して起動時検証済みの pin と照合する。
+    _reverify_data_inputs_after_consumption(
+        d4_spec["pins"]["data_inputs"], ["s7_exporter_input_pins"],
+        source="xm.verify_export_manifest",
+    )
 
     # `run_group` の測定は凍結済み 1.0 spec のまま呼ぶ（render の契約を 8-0b
     # probe と完全に一致させるため）。D4 が消費するのは WAV / `input_meta` の
     # みで、ここで出た 1.0 測定値は `measure` サブコマンドでは使わない。
     frozen = trf.load_frozen_measurement()
+    # 検証→消費 TOCTOU 閉塞（PR #306 レビュー第8巡 P2）: `trf.load_frozen_
+    # measurement()` の返り値 `spec_sha256` は実際に読んだ `trf_measurement_
+    # spec.json`[1.0] の digest なので方式 (a) で直接照合できる。一方、その
+    # 内部で呼ばれる `b1.load_prereg()`（1.0 の B-1 事前登録 3 点）の digest は
+    # 返り値に運ばれてこないため、方式 (b)（消費直後の再 hash）で補う。
+    _verify_consumed_digests(
+        d4_spec["pins"]["data_inputs"], {trf.TRF_SPEC_PATH.name: frozen.spec_sha256},
+        source="trf.load_frozen_measurement",
+    )
+    _reverify_data_inputs_after_consumption(
+        d4_spec["pins"]["data_inputs"],
+        ["s7_b1_candidate_space_1_0", "s7_b1_calibration_set_1_0", "s7_b1_selection_rule_1_0"],
+        source="trf.load_frozen_measurement (内部の b1.load_prereg())",
+    )
     gate_synth = probe0b.load_gate_synth()
 
     out_path = Path(args.result_out)
@@ -1077,7 +1184,14 @@ def cmd_measure(args: argparse.Namespace) -> int:
                 )
             manifest_shas[str(gid)] = str(entry["render_doc_sha256"])
 
-    analysis_stack = b1.verify_analysis_stack(b1.load_prereg())
+    # 検証→消費 TOCTOU 閉塞・方式 (a)（PR #306 レビュー第8巡 P2）: `b1.load_prereg()`
+    # が返す `Prereg.pins`（実際に読んだ 1.0 事前登録 3 点の digest）を、起動時に
+    # 検証済みの `pins.data_inputs` と再照合する。
+    _prereg = b1.load_prereg()
+    _verify_consumed_digests(
+        d4_spec["pins"]["data_inputs"], _prereg.pins, source="b1.load_prereg",
+    )
+    analysis_stack = b1.verify_analysis_stack(_prereg)
 
     groups: Dict[str, Any] = {}
     for render_doc_path in render_docs:

@@ -427,6 +427,140 @@ def test_load_and_verify_rejects_missing_data_input_key(
         d4.load_and_verify_d4_spec(path)
 
 
+# --- 2b. データ入力の検証→消費 TOCTOU 閉塞（PR #306 レビュー第8巡 P2） ----------
+
+
+def test_verify_consumed_digests_passes_when_matching() -> None:
+    """方式 (a) 単体テスト: loader が返す digest が pin と一致すれば通過する。"""
+    data_inputs = {"my_key": {"path": "some/path.json", "sha256": "a" * 64}}
+    d4._verify_consumed_digests({"my_key": data_inputs["my_key"]}, {"path.json": "a" * 64}, source="test")
+
+
+def test_verify_consumed_digests_ignores_unrelated_filenames() -> None:
+    """`consumed` に data_inputs 対象外のファイル名が混ざっていても無視する
+    （loader が周辺ファイルの digest も一緒に返す場合の誤検出防止）。"""
+    data_inputs = {"my_key": {"path": "some/path.json", "sha256": "a" * 64}}
+    d4._verify_consumed_digests(data_inputs, {"unrelated.json": "b" * 64}, source="test")
+
+
+def test_verify_consumed_digests_detects_mismatch() -> None:
+    """方式 (a) 単体テスト: loader が返す digest が pin と食い違えば abort する
+    （検証時点と消費時点で読んだバイトが違う = TOCTOU）。"""
+    data_inputs = {"my_key": {"path": "some/path.json", "sha256": "a" * 64}}
+    with pytest.raises(d4.D4SpecMismatch, match="TOCTOU"):
+        d4._verify_consumed_digests(data_inputs, {"path.json": "b" * 64}, source="test")
+
+
+def test_reverify_data_inputs_after_consumption_detects_file_swapped_after_verification(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """方式 (b) 単体テスト・コーディネータ指定シナリオ: 検証時点で計算した
+    sha256 を pin として与えた**後**にファイルを差し替え、消費直後の再検査が
+    それを検出して abort することを確認する（検証→消費 TOCTOU の実演）。"""
+    rel_path = "fake_data_inputs/probe.json"
+    real_path = tmp_path / rel_path
+    real_path.parent.mkdir(parents=True)
+    real_path.write_text('{"v": 1}', encoding="utf-8")
+    verified_sha256 = d4._sha_file(real_path)  # 検証時点（差し替え前）の digest。
+    data_inputs = {"fake_key": {"path": rel_path, "sha256": verified_sha256}}
+    monkeypatch.setattr(d4, "_REPO_ROOT", tmp_path)
+
+    # 検証通過後・消費前にファイルが差し替わる（TOCTOU のシミュレーション）。
+    real_path.write_text('{"v": 2}', encoding="utf-8")
+
+    with pytest.raises(d4.D4SpecMismatch, match="TOCTOU"):
+        d4._reverify_data_inputs_after_consumption(data_inputs, ["fake_key"], source="test")
+
+
+def test_reverify_data_inputs_after_consumption_passes_when_unchanged(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """対照: 消費までファイルが変わらなければ再検査は通過する。"""
+    rel_path = "fake_data_inputs/probe.json"
+    real_path = tmp_path / rel_path
+    real_path.parent.mkdir(parents=True)
+    real_path.write_text('{"v": 1}', encoding="utf-8")
+    data_inputs = {"fake_key": {"path": rel_path, "sha256": d4._sha_file(real_path)}}
+    monkeypatch.setattr(d4, "_REPO_ROOT", tmp_path)
+
+    d4._reverify_data_inputs_after_consumption(data_inputs, ["fake_key"], source="test")
+
+
+def test_resolve_axis_candidates_rejects_consumed_digest_mismatch(
+    spec_and_sha, monkeypatch,
+) -> None:
+    """検証→消費 TOCTOU 閉塞・方式 (a) の end-to-end 回帰: `v12.load_prereg_12()`
+    が返す digest が起動時検証済みの `pins.data_inputs` と食い違えば
+    `_resolve_axis_candidates` が abort する（消費時点でファイルが差し替わって
+    いたことに相当する状況を monkeypatch で再現する）。"""
+    spec, _sha = spec_and_sha
+    real_cs, real_cal, real_rule, real_pins = d4.v12.load_prereg_12()
+    tampered_pins = dict(real_pins)
+    a_key = next(iter(tampered_pins))
+    tampered_pins[a_key] = "0" * 64
+    monkeypatch.setattr(
+        d4.v12, "load_prereg_12", lambda: (real_cs, real_cal, real_rule, tampered_pins),
+    )
+    with pytest.raises(d4.D4SpecMismatch, match="TOCTOU"):
+        d4._resolve_axis_candidates(spec)
+
+
+@pytest.mark.skipif(
+    _STACK_MISMATCH_DETAIL is not None,
+    reason=(
+        "ANALYSIS_STACK_PIN 不一致環境のため実測定を伴うテストを skip する"
+        f"（fail-closed は正当な挙動・緩めない）: {_STACK_MISMATCH_DETAIL}"
+    ),
+)
+def test_cmd_measure_rejects_consumed_prereg_digest_mismatch(
+    tmp_path: Path, spec_and_sha, all_cell_ids, probe_spec_doc, monkeypatch,
+) -> None:
+    """検証→消費 TOCTOU 閉塞・方式 (a) の end-to-end 回帰（`cmd_measure` 経由）:
+    `b1.load_prereg()` が返す digest が起動時検証済みの `pins.data_inputs` と
+    食い違えば `cmd_measure` が abort する。"""
+    spec, spec_sha = spec_and_sha
+    out_dir = tmp_path / "out"
+    wav = dict(_write_wav(out_dir, "cell.wav", _sustained_tail_wave()))
+    rendered = {
+        cid: {**wav, "input_meta": _real_boundaries_for(cid, probe_spec_doc)}
+        for cid in all_cell_ids
+    }
+    render_doc = _full_render_doc(out_dir, all_cell_ids, rendered)
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_path = tmp_path / "run5_pjs_render_manifest.json"
+    _write_render_manifest(
+        manifest_path,
+        {"run5_pjs": {"render_doc_sha256": _sha256_of(render_doc_path), "path": render_doc_path.name}},
+    )
+
+    # `cmd_measure` の内部で `load_and_verify_d4_spec` が `_bind_pinned_modules()`
+    # を再度呼び、`b1 = importlib.import_module("s7_b1_calibration")` で
+    # `sys.modules` から都度再取得する。したがって `d4.b1` オブジェクト自身では
+    # なく、`sys.modules["s7_b1_calibration"]`（実際に再取得される canonical な
+    # オブジェクト）に対して patch する（`d4.b1` は他テストの sys.modules
+    # 操作の影響で一時的に別オブジェクトを指しうるため、`sys.modules` 経由の
+    # 方が消費経路と確実に一致する）。
+    b1_module = sys.modules["s7_b1_calibration"]
+    real_prereg = b1_module.load_prereg()
+    tampered_pins = dict(real_prereg.pins)
+    a_key = next(iter(tampered_pins))
+    tampered_pins[a_key] = "0" * 64
+    monkeypatch.setattr(
+        b1_module, "load_prereg",
+        lambda: dataclasses.replace(real_prereg, pins=tampered_pins),
+    )
+
+    out_path = tmp_path / "d4_results.json"
+    ns = argparse.Namespace(
+        render_doc=[str(render_doc_path)], out=str(out_path), spec_sha256=spec_sha,
+        render_manifest=[str(manifest_path)], render_manifest_sha256=[_sha256_of(manifest_path)],
+    )
+    with pytest.raises(d4.D4SpecMismatch, match="TOCTOU"):
+        d4.cmd_measure(ns)
+    assert not out_path.exists()
+
+
 def test_load_and_verify_rejects_axes_not_exactly_three(
     tmp_path: Path, raw_spec: Dict[str, Any]
 ) -> None:
