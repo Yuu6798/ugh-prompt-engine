@@ -51,8 +51,11 @@ def run_controls(spec: Mapping[str, Any], controls: Mapping[str, Any],
         extract = METRIC_EXTRACTORS.get(metric)
         if extract is None:
             families.append({
-                "family": family, "metric": metric,
+                "family": family, "metric": metric, "unit_alias": ctrl.get("unit_alias"),
                 "patch_paths": sorted(set(ctrl["low"]["patch"]) | set(ctrl["high"]["patch"])),
+                "low_patch": dict(ctrl["low"]["patch"]),
+                "high_patch": dict(ctrl["high"]["patch"]),
+                "min_separation": float(ctrl["min_separation"]),
                 "verdict": "FAIL",
                 "error": f"no extractor registered for metric {metric!r}"})
             continue
@@ -66,10 +69,12 @@ def run_controls(spec: Mapping[str, Any], controls: Mapping[str, Any],
         families.append({
             "family": family, "metric": metric, "unit_alias": stem,
             "patch_paths": patch_paths,
+            "low_patch": dict(ctrl["low"]["patch"]),
+            "high_patch": dict(ctrl["high"]["patch"]),
+            "min_separation": float(ctrl["min_separation"]),
             "low_label": ctrl["low"]["label"], "high_label": ctrl["high"]["label"],
             "low": lo, "high": hi, "separation": (hi - lo) if (lo is not None
                                                                and hi is not None) else None,
-            "min_separation": sep,
             "verdict": "PASS" if ok else "FAIL",
         })
     return {"families": families,

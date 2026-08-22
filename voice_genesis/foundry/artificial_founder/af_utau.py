@@ -342,6 +342,28 @@ def rollback_publication(published: str | Path,
     return True
 
 
+def withdraw_publication(published: str | Path,
+                         rollback_path: Optional[str | Path]) -> Dict[str, Any]:
+    """検証に落ちた公開を取り下げ、canonical 位置を既知の状態へ戻す。
+
+    退避世代があれば戻す。**初回公開のように戻す先が無い場合は、未検証の
+    bundle を削除する**。`rollback_publication` だけだと初回は no-op になり、
+    記録上は `published: null` なのに未検証 bundle が canonical 位置に残る、
+    という食い違いが生じる（§28 partial / 未検証 artifact の残置禁止）。
+    """
+    published = Path(published)
+    if rollback_publication(published, rollback_path):
+        return {"rolled_back": True, "removed_unverified": False,
+                "disposition": "previous valid bundle restored"}
+    removed = False
+    if published.exists():
+        shutil.rmtree(published)
+        removed = True
+    return {"rolled_back": False, "removed_unverified": removed,
+            "disposition": ("unverified bundle removed (no previous generation)"
+                            if removed else "nothing published to withdraw")}
+
+
 def rollback_marker(published: str | Path) -> Optional[Path]:
     p = Path(published).with_name(Path(published).name + ".old")
     return p if p.exists() else None

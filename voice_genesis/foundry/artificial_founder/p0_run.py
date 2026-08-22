@@ -64,6 +64,16 @@ def _log(phase: str, message: str) -> None:
 PUBLICATION_PREREQUISITES: Tuple[str, ...] = ("G0", "G1", "G2", "G3")
 
 
+def output_snapshot_path(out_dir: Path) -> Path:
+    """`prepare_output_tree` が直前ツリーを退避する先。**唯一の定義**。
+
+    削除ガード（`reject_output_collision`）と実装が別々にこの名前を綴ると、
+    片方だけ変えた瞬間に保護が外れる。両者はこの関数を通す。
+    """
+    out = Path(out_dir)
+    return out.parent / f".{out.name}.previous"
+
+
 class OutputCollisionError(ValueError):
     """`--out` が保護対象（入力・パッケージ・リポジトリ）と重なっている。"""
 
@@ -77,11 +87,14 @@ def reject_output_collision(out_dir: Path, protected: Sequence[Path]) -> None:
     あるいは保護対象を **内包** する場合は着手前に止める（既定の
     `results/AF0` はパッケージ配下だが何も内包しないので通る）。
 
-    `prepare_output_tree` が使う派生パス（`.<name>.voicebank-hold`）も同じ
-    規則で検査する。
+    `prepare_output_tree` が実際に触る派生パス（スナップショット）も同じ規則で
+    検査する。派生パス名は `output_snapshot_path` **1 箇所** から取る。以前は
+    ガード側が旧名 `.voicebank-hold` を、実装側が `.previous` を使っており、
+    `--out /tmp/AF0` と `--spec /tmp/.AF0.previous` の組み合わせで preflight を
+    素通りして spec を消していた（名前がずれた瞬間に穴が開く形だった）。
     """
     out = Path(out_dir).resolve()
-    candidates = [out, out.parent / f".{out.name}.voicebank-hold"]
+    candidates = [out, output_snapshot_path(out)]
     for prot in protected:
         try:
             target = Path(prot).resolve()
@@ -119,7 +132,7 @@ def prepare_output_tree(out_dir: Path) -> Dict[str, Any]:
     if not out_dir.exists():
         out_dir.mkdir(parents=True, exist_ok=True)
         return detail
-    snapshot = out_dir.parent / f".{out_dir.name}.previous"
+    snapshot = output_snapshot_path(out_dir)
     if snapshot.exists():
         shutil.rmtree(snapshot)
     shutil.move(str(out_dir), str(snapshot))
@@ -593,19 +606,18 @@ def _run_phases(spec_path: Path, criteria_path: Path, controls_path: Path,
         if publication["bundle_verified"]:
             af_utau.commit_publication(pub.get("rollback_path"))
         else:
-            restored = af_utau.rollback_publication(published_root,
-                                                    pub.get("rollback_path"))
-            publication["rolled_back"] = restored
+            outcome = af_utau.withdraw_publication(published_root,
+                                                   pub.get("rollback_path"))
+            publication.update(outcome)
             publication["published"] = None
-            notes.append("post-publish verification failed; "
-                         + ("previous valid bundle restored" if restored
-                            else "no previous bundle to restore"))
+            notes.append(f"post-publish verification failed; {outcome['disposition']}")
     except BaseException as exc:  # noqa: BLE001 - 公開失敗は provenance 違反として記録する
-        restored = af_utau.rollback_publication(published_root, pub.get("rollback_path"))
+        outcome = af_utau.withdraw_publication(published_root, pub.get("rollback_path"))
+        publication.update(outcome)
         publication["error"] = f"{type(exc).__name__}: {exc}"
-        publication["rolled_back"] = restored
-        notes.append(f"publication failed: {publication['error']}"
-                     + ("; previous valid bundle restored" if restored else ""))
+        publication["published"] = None
+        notes.append(f"publication failed: {publication['error']}; "
+                     f"{outcome['disposition']}")
         if not isinstance(exc, Exception):
             raise
 

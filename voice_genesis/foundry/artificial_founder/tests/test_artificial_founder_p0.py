@@ -490,7 +490,10 @@ def _control_row(family: str, **over: Any) -> Dict[str, Any]:
     """凍結契約どおりの control 行（family / metric / patch_paths / verdict）。"""
     want = af_gates.REQUIRED_CONTROL_CONTRACT[family]
     row = {"family": family, "metric": want["metric"],
-           "patch_paths": list(want["patch_paths"]), "verdict": "PASS"}
+           "unit_alias": want["unit_alias"], "min_separation": want["min_separation"],
+           "low_patch": dict(want["low"]), "high_patch": dict(want["high"]),
+           "patch_paths": sorted(set(want["low"]) | set(want["high"])),
+           "verdict": "PASS"}
     row.update(over)
     return row
 
@@ -1009,28 +1012,33 @@ def test_meter_control_binds_family_to_its_metric_contract():
     # afterglow と名乗りながら energy を測る行（8 行そろっても PASS にしない）
     mislabelled = [_row(f) for f in af_gates.REQUIRED_CONTROL_FAMILIES]
     mislabelled[-1] = _row("afterglow", metric="sustain_dbfs",
-                           patch_paths=["performance_genes.energy.sustain_dbfs"])
+                           low_patch={"performance_genes.energy.sustain_dbfs": -18.0},
+                           high_patch={"performance_genes.energy.sustain_dbfs": -6.0})
     result = af_gates.gate_meter_control({"families": mislabelled})
     assert result.verdict == "FAIL"
-    assert result.detail["contract_violations"][0]["family"] == "afterglow"
-    assert result.detail["contract_violations"][0]["measured_metric"] == "sustain_dbfs"
+    violation = result.detail["contract_violations"][0]
+    assert violation["family"] == "afterglow"
+    assert violation["observed"]["metric"] == "sustain_dbfs"
+    assert {"metric", "low", "high"} <= set(violation["mismatched_fields"])
 
     # metric は正しいが patch する genome パスが違う行も拒否する
     wrong_patch = [_row(f) for f in af_gates.REQUIRED_CONTROL_FAMILIES]
     wrong_patch[0] = _row("hl_even_odd_ratio",
-                          patch_paths=["performance_genes.energy.sustain_dbfs"])
+                          low_patch={"performance_genes.energy.sustain_dbfs": -18.0},
+                          high_patch={"performance_genes.energy.sustain_dbfs": -6.0})
     assert af_gates.gate_meter_control({"families": wrong_patch}).verdict == "FAIL"
 
 
 def test_shipped_controls_satisfy_the_frozen_contract():
-    """同梱 controls が凍結契約どおりの family / metric / patch を持つ。"""
+    """同梱 controls が凍結契約どおりの family / metric / patch パスを持つ。"""
     controls, _ = af_spec.load_controls(CONTROLS_PATH)
     got = {c["family"]: (c["metric"],
                          tuple(sorted(set(c["low"]["patch"]) | set(c["high"]["patch"]))))
            for c in controls["controls"]}
     assert set(got) == set(af_gates.REQUIRED_CONTROL_FAMILIES)
     for family, want in af_gates.REQUIRED_CONTROL_CONTRACT.items():
-        assert got[family] == (want["metric"], tuple(sorted(want["patch_paths"])))
+        want_paths = tuple(sorted(set(want["low"]) | set(want["high"])))
+        assert got[family] == (want["metric"], want_paths)
 
 
 def test_g13_covers_terminal_fall():
@@ -1107,3 +1115,95 @@ def test_failed_run_restores_the_previous_result_tree(tmp_path, monkeypatch):
     assert (out / "measurements" / "body.json").exists()
     assert (out / "voicebank" / "AF0" / "marker.txt").read_text(encoding="utf-8") == "v1"
     assert not (out.parent / f".{out.name}.previous").exists()
+
+
+# ---------------------------------------------------------------------------
+# PR #301 Codex レビュー第 5 巡（P1 x3）で塞いだ穴の回帰テスト
+# ---------------------------------------------------------------------------
+def test_output_guard_and_snapshot_share_one_path_definition(tmp_path):
+    """削除ガードと実装が同じ派生パス定義を使う（名前がずれると保護が外れる）。"""
+    import p0_run
+
+    out = tmp_path / "AF0"
+    snapshot = p0_run.output_snapshot_path(out)
+    assert snapshot == tmp_path / ".AF0.previous"
+
+    # `--spec` がスナップショット位置にある構成は削除前に拒否される。
+    with pytest.raises(p0_run.OutputCollisionError):
+        p0_run.reject_output_collision(out, [snapshot])
+
+    # 実装が実際に作るスナップショットもこの位置。
+    out.mkdir(parents=True)
+    (out / "marker.txt").write_text("v1", encoding="utf-8")
+    detail = p0_run.prepare_output_tree(out)
+    assert detail["snapshot"] == str(snapshot)
+    assert snapshot.exists()
+    p0_run.discard_output_snapshot(detail["snapshot"])
+
+
+def test_withdraw_publication_removes_unverified_first_generation(tmp_path):
+    """初回公開で検証が落ちたら、戻す先が無くても未検証 bundle を残さない。"""
+    published = tmp_path / "published"
+    staging = tmp_path / "stage" / "AF0"
+    staging.mkdir(parents=True)
+    (staging / "marker.txt").write_text("v1", encoding="utf-8")
+    pub = af_utau.publish_atomically(staging, published, keep_rollback=True)
+    assert pub["rollback_path"] is None  # 初回なので退避世代は無い
+    assert published.exists()
+
+    outcome = af_utau.withdraw_publication(published, pub.get("rollback_path"))
+    assert outcome["rolled_back"] is False
+    assert outcome["removed_unverified"] is True
+    assert not published.exists(), "unverified bundle must not stay at the canonical path"
+
+    # 何も公開されていない状態での取り下げは no-op（例外にしない）。
+    again = af_utau.withdraw_publication(published, None)
+    assert again["removed_unverified"] is False
+
+
+def test_withdraw_publication_prefers_restoring_the_previous_generation(tmp_path):
+    published = tmp_path / "published"
+    first = tmp_path / "s1" / "AF0"
+    first.mkdir(parents=True)
+    (first / "m.txt").write_text("v1", encoding="utf-8")
+    af_utau.publish_atomically(first, published)
+    second = tmp_path / "s2" / "AF0"
+    second.mkdir(parents=True)
+    (second / "m.txt").write_text("v2", encoding="utf-8")
+    pub = af_utau.publish_atomically(second, published, keep_rollback=True)
+    outcome = af_utau.withdraw_publication(published, pub["rollback_path"])
+    assert outcome["rolled_back"] is True and outcome["removed_unverified"] is False
+    assert (published / "m.txt").read_text(encoding="utf-8") == "v1"
+
+
+def test_meter_control_freezes_values_and_separation():
+    """low = high や min_separation = 0 の controls で G5 PASS を作れない。"""
+    full = [_control_row(f) for f in af_gates.REQUIRED_CONTROL_FAMILIES]
+    assert af_gates.gate_meter_control({"families": full}).verdict == "PASS"
+
+    degenerate = [_control_row(f) for f in af_gates.REQUIRED_CONTROL_FAMILIES]
+    want = af_gates.REQUIRED_CONTROL_CONTRACT["afterglow"]
+    degenerate[-1] = _control_row("afterglow", low_patch=dict(want["high"]),
+                                  min_separation=0.0)
+    result = af_gates.gate_meter_control({"families": degenerate})
+    assert result.verdict == "FAIL"
+    violation = result.detail["contract_violations"][0]
+    assert violation["family"] == "afterglow"
+    assert set(violation["mismatched_fields"]) == {"low", "min_separation"}
+
+    # 別 unit で測った行も拒否する
+    wrong_unit = [_control_row(f) for f in af_gates.REQUIRED_CONTROL_FAMILIES]
+    wrong_unit[0] = _control_row("hl_even_odd_ratio", unit_alias="ro")
+    assert af_gates.gate_meter_control({"families": wrong_unit}).verdict == "FAIL"
+
+
+def test_shipped_controls_match_the_frozen_values():
+    """同梱 controls の unit / 値 / 分離幅が §17 の凍結契約と一致する。"""
+    controls, _ = af_spec.load_controls(CONTROLS_PATH)
+    for c in controls["controls"]:
+        want = af_gates.REQUIRED_CONTROL_CONTRACT[c["family"]]
+        assert c["unit_alias"] == want["unit_alias"]
+        assert c["metric"] == want["metric"]
+        assert float(c["min_separation"]) == want["min_separation"]
+        assert c["low"]["patch"] == want["low"]
+        assert c["high"]["patch"] == want["high"]

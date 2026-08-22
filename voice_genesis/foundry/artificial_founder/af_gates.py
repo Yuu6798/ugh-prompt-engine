@@ -53,35 +53,53 @@ FORBIDDEN_PATH_FRAGMENTS: Tuple[str, ...] = (
 #: と名乗る行が energy の patch を当てて `sustain_dbfs` を測っても、8 行そろえば
 #: G5 PASS になり、実際の afterglow は一度も校正されない。ラベルではなく契約
 #: （何を動かして何を測るか）を検査する。
+#: **§17 の control 契約を丸ごと凍結する**（family / unit / metric / patch パスと値 /
+#: 最小分離幅）。
+#:
+#: ラベルだけ、あるいは metric 名と patch キーだけを見ると、controls JSON は
+#: 「必要なキーを使いつつ low = high の同値を入れ、`min_separation: 0` にする」
+#: ことができる。すると `hi - lo >= sep` が全行で成立し、8 family そろって
+#: G5 PASS になるのに、§17 の低/高が一度も弁別されていない。値と分離幅まで
+#: 契約に含めることで、controls ファイルが判定を弱められる余地を塞ぐ。
 REQUIRED_CONTROL_CONTRACT: Dict[str, Dict[str, Any]] = {
     "hl_even_odd_ratio": {
-        "metric": "hl_even_odd_ratio",
-        "patch_paths": ("founder_source_traits.HL-alpha.even_multiplier",)},
+        "metric": "hl_even_odd_ratio", "unit_alias": "a", "min_separation": 0.15,
+        "low": {"founder_source_traits.HL-alpha.even_multiplier": 0.45},
+        "high": {"founder_source_traits.HL-alpha.even_multiplier": 1.0}},
     "ar_alpha_center": {
-        "metric": "ar_alpha_center_hz",
-        "patch_paths": ("identity_signature.founder_resonances.AR-alpha.center_hz",)},
+        "metric": "ar_alpha_center_hz", "unit_alias": "a", "min_separation": 400.0,
+        "low": {"identity_signature.founder_resonances.AR-alpha.center_hz": 3000.0},
+        "high": {"identity_signature.founder_resonances.AR-alpha.center_hz": 3900.0}},
     "beta_alpha_ratio": {
-        "metric": "beta_alpha_ratio",
-        "patch_paths": (
-            "identity_signature.founder_resonances.AR-beta.beta_alpha_energy_ratio",)},
+        "metric": "beta_alpha_ratio", "unit_alias": "a", "min_separation": 0.2,
+        "low": {
+            "identity_signature.founder_resonances.AR-beta.beta_alpha_energy_ratio": 0.1},
+        "high": {
+            "identity_signature.founder_resonances.AR-beta.beta_alpha_energy_ratio": 0.7}},
     "terminal_f0_delta": {
-        "metric": "terminal_f0_delta_cents_abs",
-        "patch_paths": ("founder_expression_traits.AG-alpha.terminal_f0_delta_cents",)},
+        "metric": "terminal_f0_delta_cents_abs", "unit_alias": "a", "min_separation": 100.0,
+        "low": {"founder_expression_traits.AG-alpha.terminal_f0_delta_cents": 0.0},
+        "high": {"founder_expression_traits.AG-alpha.terminal_f0_delta_cents": -200.0}},
     "duration_r_share": {
-        "metric": "r_onset_share",
-        "patch_paths": ("performance_genes.duration.i_vowel_ms",
-                        "performance_genes.duration.r_onset_ms",
-                        "performance_genes.duration.r_onset_share")},
+        "metric": "r_onset_share", "unit_alias": "ra", "min_separation": 0.2,
+        "low": {"performance_genes.duration.r_onset_share": 0.1,
+                "performance_genes.duration.r_onset_ms": 20.0,
+                "performance_genes.duration.i_vowel_ms": 180.0},
+        "high": {"performance_genes.duration.r_onset_share": 0.4,
+                 "performance_genes.duration.r_onset_ms": 80.0,
+                 "performance_genes.duration.i_vowel_ms": 120.0}},
     "energy_sustain": {
-        "metric": "sustain_dbfs",
-        "patch_paths": ("performance_genes.energy.sustain_dbfs",)},
+        "metric": "sustain_dbfs", "unit_alias": "a", "min_separation": 8.0,
+        "low": {"performance_genes.energy.sustain_dbfs": -18.0},
+        "high": {"performance_genes.energy.sustain_dbfs": -6.0}},
     "release": {
-        "metric": "main_release_ms",
-        "patch_paths": ("performance_genes.release.main_taper_ms",)},
+        "metric": "main_release_ms", "unit_alias": "a", "min_separation": 100.0,
+        "low": {"performance_genes.release.main_taper_ms": 40.0},
+        "high": {"performance_genes.release.main_taper_ms": 200.0}},
     "afterglow": {
-        "metric": "afterglow_extra_ms",
-        "patch_paths": (
-            "founder_expression_traits.AG-alpha.ar_alpha_afterglow_extra_ms",)},
+        "metric": "afterglow_extra_ms", "unit_alias": "a", "min_separation": 40.0,
+        "low": {"founder_expression_traits.AG-alpha.ar_alpha_afterglow_extra_ms": 0.0},
+        "high": {"founder_expression_traits.AG-alpha.ar_alpha_afterglow_extra_ms": 80.0}},
 }
 
 #: §17 の metric family 完全集合。controls ファイルが部分集合でも G5 が PASS に
@@ -357,19 +375,24 @@ def gate_meter_control(controls: Mapping[str, Any]) -> GateResult:
     unknown = sorted({n for n in names if n not in set(REQUIRED_CONTROL_FAMILIES)})
     duplicated = sorted({n for n in names if names.count(n) > 1})
     failed = [c["family"] for c in families if c.get("verdict") != "PASS"]
-    # ラベルだけでなく「何を動かして何を測ったか」を凍結契約と照合する。
+    # ラベルだけでなく「どの unit で、何を、どの値へ動かして、何を測り、
+    # どれだけ離れていることを要求したか」を凍結契約と丸ごと照合する。
     contract_violations: List[Dict[str, Any]] = []
     for c in families:
         want = REQUIRED_CONTROL_CONTRACT.get(c.get("family"))
         if want is None:
             continue
-        got_metric = c.get("metric")
-        got_paths = tuple(sorted(c.get("patch_paths") or ()))
-        if got_metric != want["metric"] or got_paths != tuple(sorted(want["patch_paths"])):
+        got = {"metric": c.get("metric"), "unit_alias": c.get("unit_alias"),
+               "min_separation": c.get("min_separation"),
+               "low": c.get("low_patch"), "high": c.get("high_patch")}
+        expected = {"metric": want["metric"], "unit_alias": want["unit_alias"],
+                    "min_separation": want["min_separation"],
+                    "low": want["low"], "high": want["high"]}
+        mismatched = sorted(k for k in expected if got.get(k) != expected[k])
+        if mismatched:
             contract_violations.append({
-                "family": c.get("family"), "measured_metric": got_metric,
-                "required_metric": want["metric"], "patched_paths": list(got_paths),
-                "required_patch_paths": list(want["patch_paths"])})
+                "family": c.get("family"), "mismatched_fields": mismatched,
+                "observed": got, "required": expected})
     ok = not (missing or unknown or duplicated or failed or contract_violations)
     detail: Dict[str, Any] = {
         "families": families, "failed_families": failed,
