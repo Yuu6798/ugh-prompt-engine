@@ -119,6 +119,12 @@
           "used_for": "/r/-like onset の band-limited noise 生成のみ"
         }
       },
+      "synthetic_output_pins": {
+        "path": "voice_genesis/foundry/debt/d6/s7_synthetic_calibration_output_pins.json",
+        "sha256": "9fb3fe94dae622fc54041f7b994396a792b01d27bea5decf0d8bcca24f2198d0",
+        "role": "合成13条件それぞれの決定論的 WAV 容器、float32 PCM、B-1 harness が測る float64 標本列の sha256。d6_regenerate.py が再生成して全条件を照合する。",
+        "n_synthetic_conditions": 13
+      },
       "real_render_manifest": {
         "path": "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json",
         "sha256": "bde66f3f8599ea48d6e8ff8fdc63a362c6aed5f846655189bf3b52c5628d3343",
@@ -160,30 +166,48 @@
       }
     },
     "material_acquisition_command": {
-      "command": "bash voice_genesis/foundry/run8/provision.sh --root <ROOT>",
-      "source": "voice_genesis/foundry/run8/provision.sh:11-12（使い方コメント）",
-      "sha256_of_script": "87dac1801966e3addefd849ae4ed6b5302313a044b8feb62ebd4a54b0326b9cd",
-      "note": "既定 ROOT は /home/user/s7work（provision.sh 内 既定値）。2026-08-22 D4 実測では前セッション残置物の再利用のため --root /home/user/d4work を明示指定した（d4_exec_report_2026-08-22.md §(8) 判断1）。17資産を sha256 照合つきで取得し NamineRitsu_DiffSinger.zip / nsf_hifigan.oudep を全メンバ照合で展開、DiffSinger を e2307b1 へ checkout する。"
+      "command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work",
+      "source": "voice_genesis/foundry/debt/d6/d6_regenerate.py（単一の実行入口。内部で provision.sh を起動する）",
+      "provisioner": {
+        "path": "voice_genesis/foundry/run8/provision.sh",
+        "sha256": "87dac1801966e3addefd849ae4ed6b5302313a044b8feb62ebd4a54b0326b9cd"
+      },
+      "note": "例の /home/user/d6work は実在不要の予約済み作業先ではなく、operator が作成可能な絶対パスとしてそのまま shell 実行できる。ランナーは13校正出力の再生成照合、17資産の provision、10 witnessed exports、10 renders、manifest 実 digest 計算、360セル measure を fail-closed で連続実行する。"
     },
     "regeneration_commands": {
-      "derivation": "以下は d4_runner.py の argparse 定義（本ファイルの d4_runner_sha256 参照）+ 2026-08-22実測で実際に記帳された経路値（export dir 命名 export_{generation}_{speaker}・acoustic-stem 命名 s6_{generation}_acoustic・canon/vocoder 抽出先）を組み合わせて 再構成したコマンドテンプレートであり、2026-08-22 実行時に逐語ログ 取得されたコマンド文字列ではない（当時のログにコマンド行自体は 残っていない — d4_exec_report_2026-08-22.md は所要時間・結果表・sha256の記帳のみで、起動コマンドの逐語転記は無い）。run4_anchor_provenance.json の generation_command 欄は『過去に実行されたログの逐語転記』だが、本欄は『これから再生成するための実行可能テンプレート』という違いがある。--spec-sha256 は現行コミット済み spec（v0.4）の実 sha256を用いる — 2026-08-22実測が束縛したのは v0.1 の sha 702f1a2231a1b53e71afe7ab6332d42a637546802d960bdd569f4d200de2eeca（d4_results_2026-08-22.json に 凍結済み・test_committed_artifacts_immutable.py が保護。この値は 変更しない）。今後の再生成は現行 spec バイトに対して行うため 異なる値になるのが正しい。",
+      "derivation": "d6_regenerate.py が GROUPS の10要素から export/render の argv を構築する。render 完了後に10個の render manifest を実ファイルから sha256 計算し、その値を d4_runner.py measure の --render-manifest-sha256 へ渡す。operator が埋める placeholder は存在しない。--spec-sha256 は実行時の現行コミット済み spec（v0.4）を実測する。2026-08-22実測が束縛した v0.1 sha は凍結記録として別フィールドに維持する。",
       "spec_sha256_current_v0_4": "c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
       "spec_sha256_execution_time_v0_1_frozen": "702f1a2231a1b53e71afe7ab6332d42a637546802d960bdd569f4d200de2eeca",
-      "root_placeholder": "<ROOT>（provision.sh --root と同一ディレクトリを指す）",
-      "render_commands_10_groups": [
-        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run5 --speaker ritsu --acoustic-dir <ROOT>/out/export_run5_ritsu --acoustic-stem s6_run5_acoustic --export-manifest <ROOT>/out/export_run5_ritsu/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run5_ritsu --result-out <ROOT>/render/run5_ritsu.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
-        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run5 --speaker pjs --acoustic-dir <ROOT>/out/export_run5_pjs --acoustic-stem s6_run5_acoustic --export-manifest <ROOT>/out/export_run5_pjs/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run5_pjs --result-out <ROOT>/render/run5_pjs.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
-        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run5 --speaker user --acoustic-dir <ROOT>/out/export_run5_user --acoustic-stem s6_run5_acoustic --export-manifest <ROOT>/out/export_run5_user/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run5_user --result-out <ROOT>/render/run5_user.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
-        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run6 --speaker ritsu --acoustic-dir <ROOT>/out/export_run6_ritsu --acoustic-stem s6_run6_acoustic --export-manifest <ROOT>/out/export_run6_ritsu/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run6_ritsu --result-out <ROOT>/render/run6_ritsu.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
-        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run6 --speaker pjs --acoustic-dir <ROOT>/out/export_run6_pjs --acoustic-stem s6_run6_acoustic --export-manifest <ROOT>/out/export_run6_pjs/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run6_pjs --result-out <ROOT>/render/run6_pjs.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
-        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run6 --speaker user --acoustic-dir <ROOT>/out/export_run6_user --acoustic-stem s6_run6_acoustic --export-manifest <ROOT>/out/export_run6_user/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run6_user --result-out <ROOT>/render/run6_user.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
-        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run7 --speaker ritsu --acoustic-dir <ROOT>/out/export_run7_ritsu --acoustic-stem s6_run7_acoustic --export-manifest <ROOT>/out/export_run7_ritsu/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run7_ritsu --result-out <ROOT>/render/run7_ritsu.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
-        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run7 --speaker pjs --acoustic-dir <ROOT>/out/export_run7_pjs --acoustic-stem s6_run7_acoustic --export-manifest <ROOT>/out/export_run7_pjs/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run7_pjs --result-out <ROOT>/render/run7_pjs.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
-        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run7 --speaker user --acoustic-dir <ROOT>/out/export_run7_user --acoustic-stem s6_run7_acoustic --export-manifest <ROOT>/out/export_run7_user/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run7_user --result-out <ROOT>/render/run7_user.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
-        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run7 --speaker amitaro --acoustic-dir <ROOT>/out/export_run7_amitaro --acoustic-stem s6_run7_acoustic --export-manifest <ROOT>/out/export_run7_amitaro/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run7_amitaro --result-out <ROOT>/render/run7_amitaro.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447"
-      ],
-      "measure_command": "python3 voice_genesis/foundry/debt/d4/d4_runner.py measure --render-doc <ROOT>/render/run5_ritsu.json --render-doc <ROOT>/render/run5_pjs.json --render-doc <ROOT>/render/run5_user.json --render-doc <ROOT>/render/run6_ritsu.json --render-doc <ROOT>/render/run6_pjs.json --render-doc <ROOT>/render/run6_user.json --render-doc <ROOT>/render/run7_ritsu.json --render-doc <ROOT>/render/run7_pjs.json --render-doc <ROOT>/render/run7_user.json --render-doc <ROOT>/render/run7_amitaro.json --render-manifest <ROOT>/render/run5_ritsu_render_manifest.json --render-manifest <ROOT>/render/run5_pjs_render_manifest.json --render-manifest <ROOT>/render/run5_user_render_manifest.json --render-manifest <ROOT>/render/run6_ritsu_render_manifest.json --render-manifest <ROOT>/render/run6_pjs_render_manifest.json --render-manifest <ROOT>/render/run6_user_render_manifest.json --render-manifest <ROOT>/render/run7_ritsu_render_manifest.json --render-manifest <ROOT>/render/run7_pjs_render_manifest.json --render-manifest <ROOT>/render/run7_user_render_manifest.json --render-manifest <ROOT>/render/run7_amitaro_render_manifest.json --render-manifest-sha256 <この session の render 実行が書いた run5_ritsu_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run5_pjs_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run5_user_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run6_ritsu_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run6_pjs_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run6_user_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run7_ritsu_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run7_pjs_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run7_user_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run7_amitaro_render_manifest.json の実 sha256> --out <ROOT>/d4_regen_results.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
-      "measure_command_note": "--render-manifest-sha256 は各 render 呼び出しが書いた {gen}_{spk}_render_manifest.json の実 sha256（render 完了後にしか 決まらない値のため placeholder のまま）。measure は --allow-partial を付けない既定実行で 10群/360セル全数一致を要求する。"
+      "entrypoint": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work",
+      "plan_command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --plan",
+      "orchestrator": {
+        "path": "voice_genesis/foundry/debt/d6/d6_regenerate.py",
+        "sha256": "c9143915a7fc8d6b76b7f97df7cb1cacd762c32fa1a830d7456ed277f2fc002f"
+      },
+      "d4_runner": {
+        "path": "voice_genesis/foundry/debt/d4/d4_runner.py",
+        "sha256": "4d84616a0c129eb1aea142c4460844d798700d648178e4b163c82a92ae830900"
+      },
+      "export_manifest_runner": {
+        "path": "voice_genesis/foundry/run8/s7_export_manifest.py",
+        "sha256": "47eacb63da306fc5a0d4df00209075090846f34d01e97f116e1fd708879c0b53"
+      },
+      "synthetic_calibration_generator": {
+        "path": "voice_genesis/foundry/run8/s7_b1_calibration.py",
+        "sha256": "580a821e054041cfadd9096a9ed1b4c86650032d13b2b522dfac4eb96c7d1857"
+      },
+      "d4_spec": {
+        "path": "voice_genesis/foundry/debt/d4/d4_remeasure_spec.json",
+        "sha256": "c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447"
+      },
+      "coverage": {
+        "witnessed_exports": 10,
+        "render_groups": 10,
+        "production_cells": 360,
+        "synthetic_calibration_conditions": 13
+      },
+      "measure_manifest_digest_policy": "10個の render manifest が全て存在することを確認し、各ファイルの実 sha256 を render 後に計算して同順の --render-manifest-sha256 へ渡す。欠落時は measure を起動しない。",
+      "measure_completion_policy": "--allow-partial は付けない。d4_runner.py が10群・360セル全数一致と error=0 を要求し、不完全なら非0終了する。"
     }
   },
   "reproducibility_reconciliation": {

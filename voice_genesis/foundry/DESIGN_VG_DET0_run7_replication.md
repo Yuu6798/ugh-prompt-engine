@@ -53,17 +53,21 @@ Run 8 は 2026-08-22 User 裁定で **CLOSED**（`results_s7/s7_run8_closeout.md
 （環境差が原因でありうる。Codex 2026-08-23 P1 指摘の採用）。次を凍結する:
 
 - **run 7 側の記帳値**: GPU 型 = RTX 3090（COMMUNITY・`results_s6/s6_record_2026-08-20.md`
-  §1）、repo HEAD pin = `8ef874b`、学習側 numeric stack = run 7 実行 manifest の
+  §1）、成功した run 7 実行 manifest の repo HEAD pin =
+  `7df3a5fe5e34129218d5f3f0cc33ce332eebfff3`（`results_s7/s7_provisioning_runbook.md`
+  冒頭の正本）、学習側 numeric stack = run 7 実行 manifest の
   `environment_versions`（Drive 保全分。bootstrap が記帳する）
 - **ゲート（環境項目）**: VG-DET0 の実行 manifest と run 7 記帳値を項目ごとに照合し、
   **全一致が確認できた場合のみ** L1 不一致を「学習の非決定論」候補として扱える。
   1 項目でも不一致・または run 7 側が未記帳の項目が学習に影響しうる場合、
   L1 不一致の判定は **`confounded`**（§3）とする
 - **repo HEAD の扱い（宣言済みコード差分ゲート）**: §1-2 が vgdet0 プロファイルの
-  追加コミットを要求する以上、VG-DET0 の HEAD は `8ef874b` と**一致しないのが正常**
+  追加コミットを要求する以上、VG-DET0 の HEAD は
+  `7df3a5fe5e34129218d5f3f0cc33ce332eebfff3` と**一致しないのが正常**
   であり、HEAD の単純一致を環境項目に含めると `confounded` 以外へ到達できなくなる
   （Codex 2026-08-23 第 2 巡 P1 指摘の採用）。代わりに
-  `git diff 8ef874b..<VG-DET0 HEAD>` が次のみで構成されることを実行前に機械確認する:
+  `git diff 7df3a5fe5e34129218d5f3f0cc33ce332eebfff3..<VG-DET0 HEAD>` が次のみで
+  構成されることを実行前に機械確認する:
   (a) `RUN_PROFILES` への `vgdet0` エントリ追加（値の拘束は §1-2 表が正）、
   (b) 学習経路外のファイル（docs / VG-DET0 用 remeasure spec・runner 拡張 /
   results 系）の追加・変更。
