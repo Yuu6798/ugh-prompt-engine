@@ -69,7 +69,13 @@ export-device probe・4 起動 計 ≈ $0.38。動く実例 =
   併設し、**trap → watchdog の順で、いずれも最初の exit 経路（env 検査・
   pin guard 含む）より前に確立する**（trap 設置前に exit し得る経路が
   1 つでもあると self-stop 契約が破れる。実装実例 = pod.sh は trap 直後に
-  watchdog を起動し、その後に guard 群を置く）。**既知の残余**: on_exit は
+  watchdog を起動し、その後に guard 群を置く。**ただし既知の残余**: trap の
+  on_exit が `$RESULTS` を要求するため `mkdir -p` が trap **より前**にあり、
+  mount/権限起因の mkdir 失敗は無ガードで exit する — さらに起動ラッパの
+  `bash … | tee` は pipefail なしのため、この失敗を wrapper 側 fallback stop も
+  拾わない。正しいパターンは「`$RESULTS` に依存しない最小 trap（runpodctl
+  stop のみ）を最初に張る → 可失敗なセットアップ（mkdir 等）→ 完全版 on_exit
+  へ差し替え」で、次回改修の処方とする）。**既知の残余**: on_exit は
   回収窓を 3h 境界から守るため watchdog を kill してから serve するので、
   回収 hold 中〜stop リトライ全滅の間は backstop が無い（実装は明示警告
   止まり）。次回改修では kill でなく**期限延長**（hold + 余裕分の新 deadline で
