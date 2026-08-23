@@ -13,9 +13,11 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-# test-m2-harness + test-l0b-reeval + test-rest の和が全件（test-m2-harness
+# test-m2-harness + test-l0b-reeval + test-foundry-core + test-rest の和が全件
+# （test-m2-harness
 # は tests/test_m2_accuracy_harness.py のみ、test-l0b-reeval は下記 3 テスト
-# のみ、test-rest はその両方を --ignore/--deselect で除いた残り全部）=
+# のみ、test-foundry-core は通常依存で動く Foundry 15 ファイル、test-rest は
+# それらを --ignore/--deselect で除いた残り全部）=
 # カバレッジ不変・CI が slow を skip しない原則を維持したまま、壁時計を各
 # ジョブの timeout 枠に収めるためのシャーディングのみ（slow を skip せず、
 # 実行するジョブを分けるだけ）。timeout-minutes: 35 = テスト予算 30 分 + checkout/pip
@@ -49,6 +51,9 @@ concurrency:
 #
 # ruff は lint ジョブに一本化する（Python 3.11 単一・matrix 非依存の静的解析のため
 # 各 test-* ジョブ側でマトリクス分だけ重複実行する意味がない）。
+env:
+  FOUNDRY_CORE_MANIFEST: .github/test-paths/foundry-core.txt
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -149,6 +154,48 @@ jobs:
           tests/test_l0b_scripts.py::test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevaluation
           tests/test_l0b_scripts.py::test_ledger_l0br_v2_series_runs_reports_reproduce_frozen_judge_reevaluation
 
+  test-foundry-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Test Foundry core
+        shell: bash
+        run: |
+          if [[ ! -f "$FOUNDRY_CORE_MANIFEST" ]]; then
+            echo "Missing Foundry core manifest: $FOUNDRY_CORE_MANIFEST" >&2
+            exit 1
+          fi
+          mapfile -t foundry_tests < <(
+            sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$FOUNDRY_CORE_MANIFEST"
+          )
+          if (( ${#foundry_tests[@]} == 0 )); then
+            echo "Foundry core manifest is empty" >&2
+            exit 1
+          fi
+          for path in "${foundry_tests[@]}"; do
+            if [[ ! -f "$path" ]]; then
+              echo "Foundry core test does not exist: $path" >&2
+              exit 1
+            fi
+          done
+          pytest -q --tb=short --durations=25 "${foundry_tests[@]}"
+
   test-rest:
     runs-on: ubuntu-latest
     timeout-minutes: 35
@@ -169,8 +216,33 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Test
-        run: >-
-          pytest -q --tb=short --durations=25 --ignore=tests/test_m2_accuracy_harness.py
-          --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation
-          --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevaluation
-          --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_v2_series_runs_reports_reproduce_frozen_judge_reevaluation
+        shell: bash
+        run: |
+          if [[ ! -f "$FOUNDRY_CORE_MANIFEST" ]]; then
+            echo "Missing Foundry core manifest: $FOUNDRY_CORE_MANIFEST" >&2
+            exit 1
+          fi
+          mapfile -t foundry_tests < <(
+            sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' "$FOUNDRY_CORE_MANIFEST"
+          )
+          if (( ${#foundry_tests[@]} == 0 )); then
+            echo "Foundry core manifest is empty" >&2
+            exit 1
+          fi
+          # testpaths にファイルを明示した場合、--ignore はその start path を
+          # 除外しない。ファイル node-id prefix の --deselect で専用 job との
+          # 二重実行を防ぐ。
+          deselect_args=()
+          for path in "${foundry_tests[@]}"; do
+            if [[ ! -f "$path" ]]; then
+              echo "Foundry core test does not exist: $path" >&2
+              exit 1
+            fi
+            deselect_args+=("--deselect=$path")
+          done
+          pytest -q --tb=short --durations=25 \
+            --ignore=tests/test_m2_accuracy_harness.py \
+            "${deselect_args[@]}" \
+            --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_reports_reproduce_frozen_judge_reevaluation \
+            --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_new_search_positive_controls_reproduce_frozen_judge_reevaluation \
+            --deselect=tests/test_l0b_scripts.py::test_ledger_l0br_v2_series_runs_reports_reproduce_frozen_judge_reevaluation

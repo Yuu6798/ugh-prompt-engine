@@ -1,0 +1,19 @@
+# Foundry tests whose module collection currently needs an optional runtime.
+# Moving a file into or out of this ledger requires an explicit reviewed diff.
+voice_genesis/foundry/genome_s3/tests/test_genome_s3.py  # pyworld
+voice_genesis/foundry/planb/tests/test_planb.py  # pyworld
+voice_genesis/foundry/planb_real/tests/test_planb_real.py  # pyworld
+voice_genesis/foundry/tests/test_adapter_consonants.py  # pyworld
+voice_genesis/foundry/tests/test_adapter_donor_bank.py  # pyworld
+voice_genesis/foundry/tests/test_adapter_donor_bank_lab.py  # pyworld
+voice_genesis/foundry/tests/test_adapter_donor_bank_utau.py  # pyworld
+voice_genesis/foundry/tests/test_adapter_render_donor_wiring.py  # pyworld
+voice_genesis/foundry/tests/test_adapter_units.py  # pyworld
+voice_genesis/foundry/tests/test_adapter_vowel_class.py  # pyworld
+voice_genesis/foundry/tests/test_gate_synth_diffsinger_repo_pin.py  # onnxruntime
+voice_genesis/foundry/tests/test_gate_synth_export_provenance.py  # onnxruntime
+voice_genesis/foundry/tests/test_gate_synth_onnx_publish_rollback.py  # onnxruntime
+voice_genesis/foundry/tests/test_gate_synth_score_module_cache.py  # onnxruntime
+voice_genesis/foundry/tests/test_gate_synth_swap_backup.py  # onnxruntime
+voice_genesis/foundry/tests/test_glue_template.py  # pyworld
+voice_genesis/foundry/tests/test_s7_gate_synth_dur_hook.py  # onnxruntime
