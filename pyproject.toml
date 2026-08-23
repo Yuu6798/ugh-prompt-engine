@@ -212,6 +212,16 @@ testpaths = [
     # 実測結果ファイルの形状テスト（人手編集ファイル・値の実体照合はしない）。
     # 依存は標準ライブラリのみ。
     "voice_genesis/foundry/tests/test_run4_provenance_closure.py",
+    # VG-DEBT-008 (a-2) export-device probe: runner の payload 組み立て純粋
+    # 関数 / HTML パーサ + pod script の静的ガード（trap 設置順序・pin
+    # well-formed 性）。依存は標準ライブラリのみ（RunPod API・GPU 呼び出し
+    # なし）。
+    "voice_genesis/foundry/tests/test_run4_export_device_probe.py",
+    # VG-DEBT-008 (a-2) export-device probe results（2026-08-23 実測記録
+    # ペア）の形状/整合性テスト（freeze-bound ではない — 凍結 sha256 検査は
+    # test_committed_artifacts_immutable.py 側）。依存は PyYAML + 標準
+    # ライブラリのみ（本体の必須依存）。
+    "voice_genesis/foundry/tests/test_run4_export_device_probe_results.py",
 ]
 pythonpath = ["src", "."]
 markers = [
