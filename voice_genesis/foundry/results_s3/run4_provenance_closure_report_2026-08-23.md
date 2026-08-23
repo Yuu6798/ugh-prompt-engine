@@ -56,11 +56,22 @@
   dspitch/pitch.onnx / phonemes.txt。`gate_synth.py:647-650, 1891`）の sha256 を
   個別記録し、そのマニフェストハッシュを closure の主値とした（第 8 巡 P2。
   詳細と算法は「判断に迷った点」1 節を参照）。
-  `dsconfig.yaml` は **canon 側からは読まれない** — export 経路（run4 anchor
-  合成・本実測 Phase 2 の両方が該当）では export 出力側（`gate_synth.py:2007`）
-  から読まれ、canon 側（`gate_synth.py:1981`）が読まれるのは `--skip-export` の
-  S0 互換経路のみである（＜第 8 巡 P2 で判明。当初は消費 5 ファイルとして
-  `dsconfig.yaml` を含めていたが撤回。第 10 巡 P2 により本節へも反映＞）。
+  `dsconfig.yaml` は **本件では canon 側から読まれていない** — `acoustic_dsconfig_path`
+  は export 出力側（`gate_synth.py:2007`）を指し、canon 側が読まれるのは
+  (a) `--skip-export` の S0 互換経路（`gate_synth.py:1981`）、または
+  (b) **export 出力側に `dsconfig.yaml` が無い場合のフォールバック**
+  （`gate_synth.py:2007-2009`）の 2 経路である（＜(b) の存在は第 12 巡 P2 で判明。
+  それまで「export 経路では canon 側を読まない」と**断定**していたのは誤り＞）。
+  本件が (a)(b) いずれにも該当しないことは実測で確認した:
+  **run4 当時** = `gate40k.log` に `| export configs => .../dsconfig.yaml` とあり
+  exporter が自前の dsconfig.yaml を出力している。**本実測** = 全 8 run の
+  `gate_synth_summary.json` が `acoustic_dsconfig_yaml = e00aadb2...`
+  （export 出力側の実体）を記録しており、canon top-level の `8af86d46...` とは
+  一致しない。**したがってマニフェストの完全性は分岐依存であり**、exporter が
+  dsconfig.yaml を出力しない run ではフォールバックが成立して canon 側
+  `dsconfig.yaml` が消費入力に加わる — その場合は消費集合とマニフェストに
+  加えること（＜第 8 巡 P2 で消費 5→4 へ訂正、第 10 巡 P2 で本節へ反映、
+  第 12 巡 P2 で分岐条件を明示＞）。
   canon top-level `dsconfig.yaml` と zip 同梱の `acoustic.onnx`（canon 側の
   自前 acoustic）はいずれもこのレシピでは未消費で、記録上は「参考値」として
   残した。
@@ -175,7 +186,10 @@ python -m pytest --collect-only -q                     # collection error なし
    `acoustic_dsconfig_path` であり、**export 経路**（run4 anchor 合成・本実測
    Phase 2 の両方が該当）ではこれは export 出力側（`gate_synth.py:2007`）で、
    canon 側（`gate_synth.py:1981`）が読まれるのは `--skip-export` の S0 互換経路
-   のみである。さらに zip 内には `dsconfig.yaml` が 3 個（top-level / dsdur /
+   のみ**ではない** — export 出力側に `dsconfig.yaml` が無い場合は canon 側へ
+   フォールバックする分岐が `gate_synth.py:2007-2009` に実在する（＜第 12 巡 P2＞。
+   本件では run4 当時・本実測とも不成立を実測確認済み。Phase 1 節を参照）。
+   さらに zip 内には `dsconfig.yaml` が 3 個（top-level / dsdur /
    dspitch）あり、ラベル自体が曖昧だった。消費集合は
    **linguistic.onnx / dsdur/dur.onnx / dspitch/pitch.onnx / phonemes.txt の 4 件**
    （`gate_synth.py:647-650, 1891`）へ訂正し、canon top-level `dsconfig.yaml` は
@@ -411,7 +425,7 @@ VG-DEBT-010 と同型の扱いである。
 | 7 | 見出し「Phase 3: run3系5件」が本文・JSON・台帳の 6 件と不一致 | 「run3系6件」へ修正 |
 | 8 | acceptance が Phase 0–3 を「無改変・追記のみ」と主張するが `wav_regeneration.results` が再シリアライズされていた | acceptance の文言を実態（値は同一・整形は変化しうる）へ訂正 |
 
-### Codex レビュー第 2–11 巡（PR #307）も全採用
+### Codex レビュー第 2–12 巡（PR #307）も全採用
 
 | 巡 | 指摘 | 対応 |
 |---|---|---|
@@ -430,6 +444,7 @@ VG-DEBT-010 と同型の扱いである。
 | 10 | closure JSON の `acceptance`（スキーマ水準の判定契約）に旧「WAV 一致で reproduced」規則が残存 | 判定規則を (a-1) 相当へ書き換え、**台帳が正本**と明記。掃討語彙を `昇格` から **`reproduced`** 全件へ拡大して再掃討 |
 | 10 | Phase 1 が canon 消費を 5 ファイル（`dsconfig.yaml` 含む）と記述したままで、同一 report 内に 2 つの定義が併存 | Phase 1 を **4 ファイル**へ訂正し、`dsconfig.yaml` が canon 側から読まれない条件も明記（掃討: `5 ファイル`/`dsconfig` 全数）|
 | 11 | (a-1) の `producer chain 全体` が 4 因子の閉じた列挙で、未 pin の実行時ラッパー（`gate_synth_run4.py` = `high_but_unproven`）を含まず、4 因子の回収だけで `reproduced` を許す | 列挙を**全消費入力**（実行時ラッパーの実バイトを明示）へ拡張し、**閉じた集合ではない**ことを明記。上限 10 巡到達後だが「新しい具体経路を示す指摘」として 3 分類基準で採用（CLAUDE.md）|
+| 12 | 「export 経路では canon 側 dsconfig を読まない」は断定として誤り（`gate_synth.py:2007-2009` に canon 側フォールバックが実在）。分岐次第で 4 メンバー manifest は消費入力を取りこぼす | 断定を撤回し**分岐条件**を明記。併せて**分岐を通っていないことを実測**（run4 当時 = `gate40k.log` の `export configs` 行 / 本実測 = 全 8 run が `acoustic_dsconfig_yaml = e00aadb2...` を記録、canon `8af86d46...` と不一致）し、完全性が分岐依存であることを JSON/report 双方に記録。3 分類基準で採用 |
 
 検証（Phase 5 時点）:
 

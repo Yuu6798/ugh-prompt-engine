@@ -71,7 +71,7 @@ FROZEN_SHA256 = {
         "d0c1748a6e99903e0776740b726f27a75f6468763f2323ec6a7e0d0748c30876"
     ),
     "run4_provenance_closure_2026-08-23.json": (
-        "cd59788b5fbe6d7bc6066dc1b39ef0513310f442db1f972cdc2d0840dcf5f0fe"
+        "40d32d33e4f81b99452cf183a831836285079dc784cf63c0681f44b97f4b0308"
     ),
 }
 
