@@ -6,13 +6,17 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
 import numpy as np
 import pytest
 
-import donor_bank as db
-import units as un
+from _optional_runtime_stubs import stub_pyworld_if_missing
+
+with stub_pyworld_if_missing():
+    import donor_bank as db
+    import units as un
 
 
 def _make_unit(index: int, start: int, end: int, median_f0: float, head=None, tail=None) -> db.DonorUnit:

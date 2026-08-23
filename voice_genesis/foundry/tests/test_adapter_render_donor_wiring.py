@@ -10,28 +10,23 @@ import sys
 from pathlib import Path
 from typing import Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
 import numpy as np
 import pytest
 import soundfile as sf
 
-import donor_bank_lab as dbl
-import donor_bank_utau as dbu
-import render as rd  # sys.path へ singer/ を追加する副作用に依存（下の performance import 前に必要）
-import performance as perf
-import units as un
-import voice_spec as vs
+from _optional_runtime_stubs import stub_pyworld_if_missing
 
-
-def test_render_synthesis_fails_explicitly_when_pyworld_is_missing(monkeypatch) -> None:
-    monkeypatch.setattr(rd, "pw", None)
-    with pytest.raises(ModuleNotFoundError) as exc_info:
-        rd._require_pyworld()
-    assert exc_info.value.name == "pyworld"
-    runtime = object()
-    monkeypatch.setattr(rd, "pw", runtime)
-    assert rd._require_pyworld() is runtime
+with stub_pyworld_if_missing():
+    import donor_bank_lab as dbl
+    import donor_bank_utau as dbu
+    # sys.path へ singer/ を追加する副作用に依存（下の performance import 前に必要）
+    import render as rd
+    import performance as perf
+    import units as un
+    import voice_spec as vs
 
 
 def _resolved(n_frames: int, n_bins: int = 8, fill: float = 1.0) -> un.ResolvedSegment:

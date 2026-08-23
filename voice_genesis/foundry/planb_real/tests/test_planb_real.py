@@ -19,20 +19,23 @@ import numpy as np
 import pytest
 
 _HERE = Path(__file__).resolve().parent.parent
-for _p in (_HERE, _HERE.parent / "planb"):
+for _p in (_HERE, _HERE.parent / "planb", _HERE.parent / "tests"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
 import soundfile as sf  # noqa: E402
 
-import pr_census  # noqa: E402
-import pr_gates  # noqa: E402
-import pr_identity  # noqa: E402
-import pr_lab  # noqa: E402
-import pr_ladder  # noqa: E402
-import pr_manifest as prm  # noqa: E402
-import pr_performance as prp  # noqa: E402
-import pr_status as prs  # noqa: E402
+from _optional_runtime_stubs import stub_pyworld_if_missing  # noqa: E402
+
+with stub_pyworld_if_missing():
+    import pr_census  # noqa: E402
+    import pr_gates  # noqa: E402
+    import pr_identity  # noqa: E402
+    import pr_lab  # noqa: E402
+    import pr_ladder  # noqa: E402
+    import pr_manifest as prm  # noqa: E402
+    import pr_performance as prp  # noqa: E402
+    import pr_status as prs  # noqa: E402
 
 SR = 22050
 

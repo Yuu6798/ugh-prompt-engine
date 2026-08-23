@@ -15,18 +15,28 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+_TESTS_DIR = Path(__file__).resolve().parents[2] / "tests"
+sys.path.insert(0, str(_TESTS_DIR))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pb_compose as pc  # noqa: E402
-import pb_extract as px  # noqa: E402
-import pb_gates as pg  # noqa: E402
-import pb_metrics as pm  # noqa: E402
-import pb_tracks as pt  # noqa: E402
-import pb_world as pbw  # noqa: E402
+from _optional_runtime_stubs import (  # noqa: E402
+    optional_runtime_available,
+    stub_pyworld_if_missing,
+)
+
+with stub_pyworld_if_missing():
+    import pb_compose as pc  # noqa: E402
+    import pb_extract as px  # noqa: E402
+    import pb_gates as pg  # noqa: E402
+    import pb_metrics as pm  # noqa: E402
+    import pb_tracks as pt  # noqa: E402
+    import pb_world as pbw  # noqa: E402
 
 SR = 16000
 FP = 5.0
-requires_pyworld = pytest.mark.skipif(pbw.pw is None, reason="pyworld is not installed")
+requires_pyworld = pytest.mark.skipif(
+    not optional_runtime_available("pyworld"), reason="pyworld is not installed"
+)
 
 
 def _fft_bins(sr: int) -> int:
@@ -34,16 +44,6 @@ def _fft_bins(sr: int) -> int:
     # payload の形状契約だけを使う。16 kHz の従来値を固定する。
     assert sr == SR
     return 513
-
-
-def test_world_calls_fail_explicitly_when_pyworld_is_missing(monkeypatch):
-    monkeypatch.setattr(pbw, "pw", None)
-    with pytest.raises(ModuleNotFoundError) as exc_info:
-        pbw._require_pyworld()
-    assert exc_info.value.name == "pyworld"
-    runtime = object()
-    monkeypatch.setattr(pbw, "pw", runtime)
-    assert pbw._require_pyworld() is runtime
 
 
 def _mini_bank(*, n_units: int = 3, frames: int = 40) -> pt.IdentityBank:

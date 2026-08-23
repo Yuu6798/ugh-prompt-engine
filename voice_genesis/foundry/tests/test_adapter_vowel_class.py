@@ -7,16 +7,20 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "singer"))
 
 import numpy as np
 import pytest
 
-import donor_bank as db
-import phoneme_jp as pj
-import units as un
-import vowel_class as vc
+from _optional_runtime_stubs import stub_pyworld_if_missing
+
+with stub_pyworld_if_missing():
+    import donor_bank as db
+    import phoneme_jp as pj
+    import units as un
+    import vowel_class as vc
 
 SR = 24000
 N_BINS = 513  # cheaptrick 相当のビン数感覚（テストでは値自体は任意）

@@ -7,6 +7,7 @@ smoke + 衝突拒否で検証する。残り 10 本は同型実装（`_reject_ou
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,18 +17,12 @@ import pytest
 GLUE_TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "results_f1b"
 GLUE_TEMPLATE_PATH = GLUE_TEMPLATE_DIR / "glue_template.py"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(GLUE_TEMPLATE_DIR))
-import glue_template as gt  # noqa: E402
+from _optional_runtime_stubs import stub_pyworld_if_missing  # noqa: E402
 
-
-def test_world_pipeline_fails_explicitly_when_pyworld_is_missing(monkeypatch) -> None:
-    monkeypatch.setattr(gt, "pw", None)
-    with pytest.raises(ModuleNotFoundError) as exc_info:
-        gt._require_pyworld()
-    assert exc_info.value.name == "pyworld"
-    runtime = object()
-    monkeypatch.setattr(gt, "pw", runtime)
-    assert gt._require_pyworld() is runtime
+with stub_pyworld_if_missing():
+    import glue_template as gt  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -35,12 +30,19 @@ def test_world_pipeline_fails_explicitly_when_pyworld_is_missing(monkeypatch) ->
 # ---------------------------------------------------------------------------
 
 
-def test_help_smoke() -> None:
+def test_help_smoke(tmp_path: Path) -> None:
+    # `--help` はWORLDを実行しない。子プロセスのimportだけtest-only stubで満たす。
+    (tmp_path / "pyworld.py").write_text("# import-only test stub\n", encoding="utf-8")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(tmp_path), env.get("PYTHONPATH")) if part
+    )
     result = subprocess.run(
         [sys.executable, str(GLUE_TEMPLATE_PATH), "--help"],
         capture_output=True,
         text=True,
         timeout=30,
+        env=env,
     )
     assert result.returncode == 0
     assert "--donor-wav" in result.stdout

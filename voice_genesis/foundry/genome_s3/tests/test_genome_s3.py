@@ -20,19 +20,22 @@ import pytest
 
 _HERE = Path(__file__).resolve().parent.parent
 _FOUNDRY = _HERE.parent
-for _p in (_HERE, _FOUNDRY / "planb", _FOUNDRY / "planb_real"):
+for _p in (_HERE, _FOUNDRY / "planb", _FOUNDRY / "planb_real", _FOUNDRY / "tests"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import s3_gates as sg  # noqa: E402
-import s3_spec as sp  # noqa: E402
-from s3_spec import Gene, GeneVerdict, PairVerdict  # noqa: E402
+from _optional_runtime_stubs import stub_pyworld_if_missing  # noqa: E402
+
+with stub_pyworld_if_missing():
+    import s3_gates as sg  # noqa: E402
+    import s3_runner as sr  # noqa: E402
+    import s3_spec as sp  # noqa: E402
+    from s3_spec import Gene, GeneVerdict, PairVerdict  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
 def _reset_frozen_cache():
     """`s3_runner` の凍結キャッシュをテスト間で持ち越さない。"""
-    import s3_runner as sr
     sr._FROZEN = None
     yield
     sr._FROZEN = None

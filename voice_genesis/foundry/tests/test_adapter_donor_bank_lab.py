@@ -7,16 +7,22 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
 import numpy as np
 import pytest
 import soundfile as sf
 
-import donor_bank as db
-import donor_bank_lab as dbl
+from _optional_runtime_stubs import optional_runtime_available, stub_pyworld_if_missing
 
-requires_pyworld = pytest.mark.skipif(db.pw is None, reason="pyworld is not installed")
+with stub_pyworld_if_missing():
+    import donor_bank as db
+    import donor_bank_lab as dbl
+
+requires_pyworld = pytest.mark.skipif(
+    not optional_runtime_available("pyworld"), reason="pyworld is not installed"
+)
 
 
 # --- 純関数（音声非依存） ---

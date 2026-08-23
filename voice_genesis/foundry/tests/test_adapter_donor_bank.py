@@ -6,24 +6,20 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
 import numpy as np
 import pytest
 
-import donor_bank as db
+from _optional_runtime_stubs import optional_runtime_available, stub_pyworld_if_missing
 
-requires_pyworld = pytest.mark.skipif(db.pw is None, reason="pyworld is not installed")
+with stub_pyworld_if_missing():
+    import donor_bank as db
 
-
-def test_world_analysis_fails_explicitly_when_pyworld_is_missing(monkeypatch) -> None:
-    monkeypatch.setattr(db, "pw", None)
-    with pytest.raises(ModuleNotFoundError) as exc_info:
-        db._require_pyworld()
-    assert exc_info.value.name == "pyworld"
-    runtime = object()
-    monkeypatch.setattr(db, "pw", runtime)
-    assert db._require_pyworld() is runtime
+requires_pyworld = pytest.mark.skipif(
+    not optional_runtime_available("pyworld"), reason="pyworld is not installed"
+)
 
 
 def test_load_notes_csv_sorted(tmp_path: Path) -> None:

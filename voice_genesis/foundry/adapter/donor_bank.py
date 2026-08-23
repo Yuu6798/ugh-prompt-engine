@@ -26,15 +26,9 @@ from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
 
 import numpy as np
+import pyworld as pw
 import soundfile as sf
 from scipy.signal import resample_poly
-
-try:
-    import pyworld as pw
-except ModuleNotFoundError as exc:
-    if exc.name != "pyworld":
-        raise
-    pw = None
 
 SR = 24000
 FRAME_PERIOD_MS = 5.0
@@ -49,16 +43,6 @@ MIN_UNIT_FRAMES_ABS = 3
 
 # vocadito データセット zip の既知 md5（Zenodo 再取得時の照合用）。
 DONOR_ZIP_MD5 = "dea40fd18f14d899643c4ba221b33a46"
-
-
-def _require_pyworld():
-    """Return pyworld when WORLD analysis is requested, otherwise fail explicitly."""
-    if pw is None:
-        raise ModuleNotFoundError(
-            "pyworld is required for WORLD donor analysis",
-            name="pyworld",
-        )
-    return pw
 
 
 def sha256_of(path: str | Path) -> str:
@@ -205,10 +189,9 @@ def load_donor_24k_bytes(data: bytes, source: str = "<bytes>") -> Tuple[np.ndarr
 
 def analyze_donor_world(x: np.ndarray, sr: int, frame_period_ms: float = FRAME_PERIOD_MS) -> dict:
     """WORLD (harvest/cheaptrick/d4c) でドナー全体を分析する（プーリングなし）。"""
-    world = _require_pyworld()
-    f0, t = world.harvest(x, sr, frame_period=frame_period_ms)
-    sp = world.cheaptrick(x, f0, t, sr)
-    ap = world.d4c(x, f0, t, sr)
+    f0, t = pw.harvest(x, sr, frame_period=frame_period_ms)
+    sp = pw.cheaptrick(x, f0, t, sr)
+    ap = pw.d4c(x, f0, t, sr)
     voiced_mask = f0 > 0
     return dict(f0=f0, t=t, sp=sp, ap=ap, voiced_mask=voiced_mask)
 
