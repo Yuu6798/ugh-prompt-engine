@@ -202,8 +202,9 @@
         "reproduced_dur_s": 11.111
       }
     ],
-    "characterization": "0/6 sha256 一致。ただし全 6 本とも rms（4桁）・dur（3桁）は記録値と完全一致し、ファイルサイズも全て記録済みサイズ帯（sakura=2079788 bytes・umi=980012 bytes、gate_run3_anchor_v2.log 実測値から推定される固定サイズ）と一致した。これは『同じ演奏内容だが波形バイトレベルで非同一』というパターンで、構造的な破損や別内容の生成ではなく、環境差（本実測は openvpi/DiffSinger e2307b1・torch 2.13.0+cpu・onnxruntime 1.29.0・numpy 1.26.4 の組み合わせ。run4 実行時の Pod の正確なパッケージ版は記録が無く不明）由来の数値レベルの非決定性である可能性が高い。s3_record_2026-08-17.md §2 が記録する『numpy SIMD dispatch が1 LSB差でバイトを分岐させた』事例と同型の脆弱性クラス。本実測のローカル再現性は確認済み（同一手順を2回実行し acoustic.onnx・wav とも sha256 完全一致）——したがって不一致は本実測プロセス内のランダム性ではなく、本実測環境と run4 実行環境の差に起因する。",
-    "conclusion": "producer chain の機能的証明は成立しなかった（全 6 本不一致）。1番の acoustic ONNX sha を reproduced に昇格させる根拠は無く measured_only に留める。"
+    "characterization": "0/6 sha256 一致。記録済み WAV の波形実体が存在しない（残るのは sha256 と rms/dur の記録のみ）ため、【内容の類似性・不一致の規模・不一致の原因はいずれも未測定】である。一致しているのは rms（4桁）・dur（3桁）・ファイルサイズという要約統計のみで、無関係な波形でもこれらは一致しうるため『同じ演奏内容』『別内容ではない』とは言えず、『環境差由来の数値非決定性』という原因帰属も本実測では確立していない（PR #307 Codex 第5-6巡 P2 指摘により当初の characterization を撤回）。確立しているのは (a) 0/6 でバイト非同一、(b) 本実測プロセスは 2 回実行で acoustic.onnx・wav とも sha256 完全一致＝ローカル再現性あり、の 2 点のみである。",
+    "conclusion": "producer chain の機能的証明は成立しなかった（全 6 本不一致）。1番の acoustic ONNX sha を reproduced に昇格させる根拠は無く measured_only に留める。",
+    "characterization_withdrawn_2026-08-23": "【撤回済み】当初は『同じ演奏内容だが波形バイトレベルで非同一』『別内容の生成ではない』『環境差由来の数値非決定性である可能性が高い』と記述していたが、いずれも記録済み波形実体が無い以上は確立できない主張であり撤回した。現行の正しい記述は characterization を参照。"
   },
   "materials": {
     "canon_model_namine_ritsu_diffsinger_zip_sha256": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
