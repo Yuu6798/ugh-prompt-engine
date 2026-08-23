@@ -49,6 +49,11 @@ mkdir -p "$WORK" "$RESULTS"
 STAGE="init"
 DETAIL=""
 STAGE_FILE="$RESULTS/.current_stage"
+# PRIMARY_GPU_STACK 決定（stage 2e）を heartbeat.json からも見えるようにする
+# ためのファイル経由受け渡し（STAGE_FILE と同じ理由 — heartbeat writer loop は
+# 別プロセスなのでファイル経由でしか最新値を渡せない）。決定前は空文字。
+PRIMARY_STACK_FILE="$RESULTS/.primary_gpu_stack"
+: > "$PRIMARY_STACK_FILE" 2>/dev/null || true
 
 # heartbeat writer loop（背景プロセス）が $STAGE を読めるように、stage() 遷移の
 # たびにファイルへも書き出す（背景プロセスは fork 時点のシェル変数しか見えない
@@ -179,9 +184,11 @@ _heartbeat_body() {
     date -u +%FT%TZ > "$RESULTS/heartbeat.txt.tmp" && mv -f "$RESULTS/heartbeat.txt.tmp" "$RESULTS/heartbeat.txt"
 
     stg="$(cat "$STAGE_FILE" 2>/dev/null || echo init)"
-    printf '{"utc": "%s", "stage": "%s"}\n' "$now" "$stg" > "$RESULTS/heartbeat.json.tmp" \
+    pgs="$(cat "$PRIMARY_STACK_FILE" 2>/dev/null || echo "")"
+    printf '{"utc": "%s", "stage": "%s", "primary_gpu_stack": "%s"}\n' "$now" "$stg" "$pgs" \
+      > "$RESULTS/heartbeat.json.tmp" \
       && mv -f "$RESULTS/heartbeat.json.tmp" "$RESULTS/heartbeat.json"
-    echo "| probe: heartbeat utc=$now stage=$stg"
+    echo "| probe: heartbeat utc=$now stage=$stg primary_gpu_stack=$pgs"
 
     tick=$((tick + 1))
     # probe_console.log は /workspace の外（tee 先が dockerStartCmd 起動時点の
@@ -196,6 +203,7 @@ _heartbeat_body() {
 export -f _heartbeat_body
 export RESULTS
 export STAGE_FILE
+export PRIMARY_STACK_FILE
 if command -v setsid >/dev/null 2>&1; then
   setsid bash -c _heartbeat_body &
 else
@@ -427,6 +435,51 @@ gate_run_skip_export() {
     --song sakura,umi --speaker "$speaker"
 }
 
+# venv/system の torch+numpy+onnxruntime スナップショットを JSON へ書き出す
+# 共通ヘルパー（venv A / venv B のどちらでも同じ形で使う — FIX 3 で venv B
+# 追加のため関数化）。$1=python bin $2=出力 JSON パス。
+write_torch_env_json() {
+  local py="$1" out="$2"
+  "$py" - "$out" <<'PY'
+import json, sys
+out = sys.argv[1]
+info = {}
+try:
+    import torch
+    info["torch_version"] = torch.__version__
+    info["torch_cuda_version"] = torch.version.cuda
+    info["torch_cuda_available"] = torch.cuda.is_available()
+    info["torch_cuda_device_name"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+except Exception as e:
+    info["torch_error"] = str(e)
+try:
+    import numpy as np
+    info["numpy_version"] = np.__version__
+    try:
+        info["numpy_cpu_features"] = dict(np.core._multiarray_umath.__cpu_features__)
+    except Exception as e:
+        info["numpy_cpu_features_error"] = str(e)
+    try:
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            np.show_config()
+        info["numpy_show_config_text"] = buf.getvalue()
+    except Exception as e:
+        info["numpy_show_config_error"] = str(e)
+except Exception as e:
+    info["numpy_error"] = str(e)
+try:
+    import onnxruntime as ort
+    info["onnxruntime_version"] = ort.__version__
+    info["onnxruntime_providers"] = ort.get_available_providers()
+except Exception as e:
+    info["onnxruntime_error"] = str(e)
+json.dump(info, open(out, "w"), indent=2, ensure_ascii=False)
+print(json.dumps(info, indent=2, ensure_ascii=False))
+PY
+}
+
 # ============================================================================
 # Stage 0: env snapshot
 # ============================================================================
@@ -540,52 +593,218 @@ PY_A="$VENV_A/bin/python3"
 "$VENV_A/bin/pip" install \
   numpy==1.26.4 onnx==1.22.0 onnxruntime==1.29.0 lightning==2.3.3 pyyaml==6.0.3
 
-echo "| probe: venv A CUDA gate check"
-if ! "$PY_A" -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)"; then
-  die "venv A gate failed: torch.cuda.is_available() is False (fail-closed — will not fall through to CPU export for G1/G2)"
-fi
+write_torch_env_json "$PY_A" "$RESULTS/venv_a_env.json"
 
-"$PY_A" - "$RESULTS/venv_a_env.json" <<'PY'
-import json, sys
-out = sys.argv[1]
+# ============================================================================
+# Stage 2d: CUDA diagnostics（FIX 3 新設）。real pod で観測された
+# 「nvidia-smi は通るのに venv A の torch.cuda.is_available()==False」
+# （"CUDA initialization: CUDA unknown error"）の切り分け材料を、判定を下す
+# 前に必ず採取しておく。診断採取そのものが失敗しても probe 全体は落とさない
+# （best-effort — `if ! ( ... ); then` で包む）。
+# ============================================================================
+stage "2d-cuda-diagnostics"
+
+CUDA_DIAG_DIR="$RESULTS/.cuda_diag_tmp"
+mkdir -p "$CUDA_DIAG_DIR"
+
+collect_cuda_diagnostics() {
+  local sys_py="python3"
+
+  ls -la /dev/nvidia* > "$CUDA_DIAG_DIR/dev_nvidia_ls.txt" 2>&1 \
+    || echo "no /dev/nvidia* entries (or ls failed)" > "$CUDA_DIAG_DIR/dev_nvidia_ls.txt"
+  env | grep -E 'CUDA|NVIDIA' > "$CUDA_DIAG_DIR/env_cuda_nvidia.txt" \
+    || echo "no CUDA/NVIDIA env vars set" > "$CUDA_DIAG_DIR/env_cuda_nvidia.txt"
+  ldconfig -p 2>&1 | grep -E 'libcuda|libnvidia-ml' > "$CUDA_DIAG_DIR/ldconfig_cuda.txt" \
+    || echo "no libcuda/libnvidia-ml entries in ldconfig -p" > "$CUDA_DIAG_DIR/ldconfig_cuda.txt"
+
+  # torch バージョン/CUDA 可視性の basic info（system python3 / venv A 双方）。
+  "$sys_py" -c '
+import json
 info = {}
 try:
     import torch
-    info["torch_version"] = torch.__version__
-    info["torch_cuda_version"] = torch.version.cuda
-    info["torch_cuda_available"] = torch.cuda.is_available()
-    info["torch_cuda_device_name"] = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+    info["torch_version"] = getattr(torch, "__version__", None)
+    info["torch_cuda_version"] = getattr(getattr(torch, "version", None), "cuda", None)
+    info["torch_cuda_is_available"] = torch.cuda.is_available()
 except Exception as e:
-    info["torch_error"] = str(e)
+    info["torch_import_error"] = f"{type(e).__name__}: {e}"
+print(json.dumps(info))
+' > "$CUDA_DIAG_DIR/sys_torch_info.json" 2>"$CUDA_DIAG_DIR/sys_torch_info.err" \
+    || echo '{}' > "$CUDA_DIAG_DIR/sys_torch_info.json"
+
+  "$PY_A" -c '
+import json
+info = {}
 try:
-    import numpy as np
-    info["numpy_version"] = np.__version__
-    try:
-        info["numpy_cpu_features"] = dict(np.core._multiarray_umath.__cpu_features__)
-    except Exception as e:
-        info["numpy_cpu_features_error"] = str(e)
-    try:
-        import io, contextlib
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            np.show_config()
-        info["numpy_show_config_text"] = buf.getvalue()
-    except Exception as e:
-        info["numpy_show_config_error"] = str(e)
+    import torch
+    info["torch_version"] = getattr(torch, "__version__", None)
+    info["torch_cuda_version"] = getattr(getattr(torch, "version", None), "cuda", None)
+    info["torch_cuda_is_available"] = torch.cuda.is_available()
 except Exception as e:
-    info["numpy_error"] = str(e)
+    info["torch_import_error"] = f"{type(e).__name__}: {e}"
+print(json.dumps(info))
+' > "$CUDA_DIAG_DIR/venv_a_torch_info.json" 2>"$CUDA_DIAG_DIR/venv_a_torch_info.err" \
+    || echo '{}' > "$CUDA_DIAG_DIR/venv_a_torch_info.json"
+
+  # `torch.zeros(1, device="cuda")` 試行の stderr/warning を verbatim で採取する。
+  # -W always で warnings のデデュープを無効化し、Python 例外だけでなく
+  # ドライバ/NVML が直接 stderr へ書く native メッセージも 2>&1 で拾う。
+  "$sys_py" -W always -c '
+import torch, traceback
 try:
-    import onnxruntime as ort
-    info["onnxruntime_version"] = ort.__version__
-    info["onnxruntime_providers"] = ort.get_available_providers()
-except Exception as e:
-    info["onnxruntime_error"] = str(e)
-json.dump(info, open(out, "w"), indent=2, ensure_ascii=False)
-print(json.dumps(info, indent=2, ensure_ascii=False))
+    t = torch.zeros(1, device="cuda")
+    print("OK:", repr(t))
+except Exception:
+    traceback.print_exc()
+' > "$CUDA_DIAG_DIR/sys_zeros_attempt.txt" 2>&1 || true
+
+  "$PY_A" -W always -c '
+import torch, traceback
+try:
+    t = torch.zeros(1, device="cuda")
+    print("OK:", repr(t))
+except Exception:
+    traceback.print_exc()
+' > "$CUDA_DIAG_DIR/venv_a_zeros_attempt.txt" 2>&1 || true
+
+  "$VENV_A/bin/pip" freeze 2>/dev/null \
+    | grep -E '^(torch|nvidia-|lightning|onnx)' > "$CUDA_DIAG_DIR/venv_a_pip_freeze.txt" || true
+
+  python3 - "$CUDA_DIAG_DIR" "$RESULTS/cuda_diagnostics.json" <<'PY'
+import json, os, sys
+
+diag_dir, out_path = sys.argv[1], sys.argv[2]
+
+
+def read_text(name):
+    path = os.path.join(diag_dir, name)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except Exception as e:
+        return f"<read failed: {e}>"
+
+
+def read_json(name):
+    path = os.path.join(diag_dir, name)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return json.load(f)
+    except Exception as e:
+        return {"error": f"<read/parse failed: {e}>"}
+
+
+def read_lines(name):
+    return [line for line in read_text(name).splitlines() if line.strip()]
+
+
+result = {
+    "dev_nvidia_ls": read_text("dev_nvidia_ls.txt"),
+    "env_cuda_nvidia": read_text("env_cuda_nvidia.txt"),
+    "ldconfig_cuda": read_text("ldconfig_cuda.txt"),
+    "system_python": {
+        **read_json("sys_torch_info.json"),
+        "cuda_zeros_attempt_text": read_text("sys_zeros_attempt.txt"),
+    },
+    "venv_a": {
+        **read_json("venv_a_torch_info.json"),
+        "cuda_zeros_attempt_text": read_text("venv_a_zeros_attempt.txt"),
+        "pip_freeze_torch_nvidia_lightning_onnx": read_lines("venv_a_pip_freeze.txt"),
+    },
+}
+json.dump(result, open(out_path, "w"), indent=2, ensure_ascii=False)
+print(json.dumps(result, indent=2, ensure_ascii=False))
 PY
+}
+
+if ! collect_cuda_diagnostics; then
+  echo "| probe: cuda diagnostics collection failed (best-effort, non-fatal — continuing)" >&2
+fi
+rm -rf "$CUDA_DIAG_DIR"
 
 # ============================================================================
-# Stage 3: Arm G1（CUDA visible, venv A）— 3 launches 通し
+# Stage 2e: CUDA gate — 3 択分岐（FIX 3 新設。旧実装は venv A 不可= 即 die の
+# 一択だったが、今回の実インシデント（nvidia-smi は通るのに venv A の
+# torch.cuda.is_available()==False = "CUDA unknown error"）は host 固有
+# 破損か cu126 ビルド×driver の相性かが切り分けられないため、1 回の
+# relaunch で両仮説をカバーする 3 択にする:
+#   (1) venv A CUDA available            -> 従来通り venv A で全アーム続行
+#   (2) venv A unavailable / system OK   -> system torch へ fallback（venv B）
+#   (3) 両方 unavailable                 -> host 側破損とみなし fail-closed
+# ============================================================================
+stage "2e-cuda-gate"
+
+VENV_A_CUDA_AVAILABLE="false"
+"$PY_A" -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null \
+  && VENV_A_CUDA_AVAILABLE="true"
+
+SYS_TORCH_VERSION="$(python3 -c 'import torch; print(torch.__version__)' 2>/dev/null || echo unknown)"
+SYS_CUDA_AVAILABLE="false"
+python3 -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null \
+  && SYS_CUDA_AVAILABLE="true"
+
+echo "| probe: cuda gate: venv_a_cuda_available=$VENV_A_CUDA_AVAILABLE system_cuda_available=$SYS_CUDA_AVAILABLE system_torch_version=$SYS_TORCH_VERSION"
+
+PRIMARY_GPU_STACK=""
+PY_PRIMARY=""
+VENV_B=""
+PY_B=""
+
+if [ "$VENV_A_CUDA_AVAILABLE" = "true" ]; then
+  PRIMARY_GPU_STACK="venv_a_torch_2.13.0+cu126"
+  PY_PRIMARY="$PY_A"
+  printf '%s' "$PRIMARY_GPU_STACK" > "$PRIMARY_STACK_FILE" 2>/dev/null || true
+  stage "2e-cuda-gate-decided-venv-a"
+elif [ "$SYS_CUDA_AVAILABLE" = "true" ]; then
+  PRIMARY_GPU_STACK="system_torch"
+  printf '%s' "$PRIMARY_GPU_STACK" > "$PRIMARY_STACK_FILE" 2>/dev/null || true
+
+  # --------------------------------------------------------------------
+  # Stage 2f: venv B fallback（system-site-packages 経由で image 既定の
+  # torch 2.4.0+cu124 をそのまま可視化する。torch 自体は install/upgrade
+  # せず、DiffSinger 依存の不足分のみ --no-deps で補う — Arm B が使ってきた
+  # のと同じ依存セットの流用）。
+  # --------------------------------------------------------------------
+  stage "2f-venv-b-fallback"
+
+  VENV_B="$WORK/venv_sys"
+  python3 -m venv --system-site-packages "$VENV_B"
+  PY_B="$VENV_B/bin/python3"
+
+  "$VENV_B/bin/pip" install --no-cache-dir --no-deps \
+    onnx==1.22.0 onnxruntime==1.29.0 lightning==2.3.3 pyyaml==6.0.3 numpy==1.26.4 \
+    click einops h5py "librosa<0.10.0" matplotlib MonkeyType \
+    praat-parselmouth==0.4.3 pyworld==0.3.4 resampy \
+    "scipy>=1.10.0" tensorboard tensorboardX torchmetrics tqdm
+  "$VENV_B/bin/pip" install --no-cache-dir "onnxsim>=0.6.5"
+
+  VENV_B_VERIFY_OK="true"
+  VENV_B_TORCH_VERSION="$("$PY_B" -c 'import torch; print(torch.__version__)' 2>&1)" \
+    || VENV_B_VERIFY_OK="false"
+  if [ "$VENV_B_VERIFY_OK" = "true" ] && [ "$VENV_B_TORCH_VERSION" != "$SYS_TORCH_VERSION" ]; then
+    VENV_B_VERIFY_OK="false"
+  fi
+  if [ "$VENV_B_VERIFY_OK" = "true" ]; then
+    "$PY_B" -c "import torch, sys; sys.exit(0 if torch.cuda.is_available() else 1)" \
+      || VENV_B_VERIFY_OK="false"
+  fi
+  if [ "$VENV_B_VERIFY_OK" != "true" ]; then
+    die "venv_b (system-site fallback) verification failed: system torch_version=$SYS_TORCH_VERSION venv_b torch_version=${VENV_B_TORCH_VERSION:-ERROR} — either --system-site-packages did not surface the image torch, or a --no-deps install pulled in a replacement torch"
+  fi
+  echo "| probe: venv_b verified — torch_version=$VENV_B_TORCH_VERSION (unchanged from system) cuda_available=true"
+
+  write_torch_env_json "$PY_B" "$RESULTS/venv_b_env.json"
+  PY_PRIMARY="$PY_B"
+else
+  printf 'unavailable' > "$PRIMARY_STACK_FILE" 2>/dev/null || true
+  stage "2-cuda-unavailable-host"
+  SYS_CUDA_ERR="$(python3 -c 'import torch; torch.zeros(1, device="cuda")' 2>&1 | tail -c 800 || true)"
+  VENV_A_CUDA_ERR="$("$PY_A" -c 'import torch; torch.zeros(1, device="cuda")' 2>&1 | tail -c 800 || true)"
+  die "both CUDA stacks unavailable on this host (system torch and venv A torch 2.13.0+cu126) — see cuda_diagnostics.json. system_error_tail=[$SYS_CUDA_ERR] venv_a_error_tail=[$VENV_A_CUDA_ERR]"
+fi
+
+# ============================================================================
+# Stage 3: Arm G1（CUDA visible, PRIMARY_GPU_STACK 側 venv）— 3 launches 通し
 # ============================================================================
 stage "3-arm-g1"
 
@@ -593,12 +812,12 @@ G1_RITSU_DIR="$WORK/gate40k_run4"
 G1_PJS_DIR="$WORK/gate40k_run4_pjs"
 G1_USER_DIR="$WORK/gate40k_run4_user"
 
-gate_run_launch1 "$PY_A" "$DS" "$CKPT_DIR" "$CANON_DIR" "$WORK/vocoder_onnx" "$G1_RITSU_DIR" gpu
+gate_run_launch1 "$PY_PRIMARY" "$DS" "$CKPT_DIR" "$CANON_DIR" "$WORK/vocoder_onnx" "$G1_RITSU_DIR" gpu
 G1_ONNX="$G1_RITSU_DIR/onnx_gate_40000/acoustic.onnx"
 [ -f "$G1_ONNX" ] || die "G1: acoustic.onnx not produced at $G1_ONNX"
 
-gate_run_skip_export "$PY_A" "$DS" "$CKPT_DIR" "$G1_RITSU_DIR/onnx_gate_40000" "$CANON_DIR" "$WORK/vocoder_onnx" "$G1_PJS_DIR" pjs
-gate_run_skip_export "$PY_A" "$DS" "$CKPT_DIR" "$G1_RITSU_DIR/onnx_gate_40000" "$CANON_DIR" "$WORK/vocoder_onnx" "$G1_USER_DIR" user
+gate_run_skip_export "$PY_PRIMARY" "$DS" "$CKPT_DIR" "$G1_RITSU_DIR/onnx_gate_40000" "$CANON_DIR" "$WORK/vocoder_onnx" "$G1_PJS_DIR" pjs
+gate_run_skip_export "$PY_PRIMARY" "$DS" "$CKPT_DIR" "$G1_RITSU_DIR/onnx_gate_40000" "$CANON_DIR" "$WORK/vocoder_onnx" "$G1_USER_DIR" user
 
 mapfile -t G1_RITSU_WAVS < <(list_wavs "$G1_RITSU_DIR/step_40000")
 require_two_wavs G1_RITSU_WAVS "g1-ritsu"
@@ -633,7 +852,7 @@ cp -f "$G1_USER_DIR/step_40000/gate_synth_summary.json" "$RESULTS/g1/gate_synth_
 stage "4-arm-g2"
 
 G2_DIR="$WORK/gate40k_run4_rep"
-gate_run_launch1 "$PY_A" "$DS" "$CKPT_DIR" "$CANON_DIR" "$WORK/vocoder_onnx" "$G2_DIR" gpu
+gate_run_launch1 "$PY_PRIMARY" "$DS" "$CKPT_DIR" "$CANON_DIR" "$WORK/vocoder_onnx" "$G2_DIR" gpu
 G2_ONNX="$G2_DIR/onnx_gate_40000/acoustic.onnx"
 [ -f "$G2_ONNX" ] || die "G2: acoustic.onnx not produced at $G2_ONNX"
 mapfile -t G2_WAVS < <(list_wavs "$G2_DIR/step_40000")
@@ -693,8 +912,40 @@ else
 fi
 
 # ============================================================================
+# Stage 5c: Arm C1S（FIX 3 新設。system_torch fallback 時のみ — venv B の中で
+# CUDA_VISIBLE_DEVICES="" にした単一要因の within-stack device 比較。C1 が
+# venv A/session baseline との tie-in なのに対し、C1S は「今回実際に使った
+# stack（venv B）自身の GPU 版 vs CPU 版」を揃えるための対照）。
+# ============================================================================
+stage "5c-arm-c1s"
+
+C1S_TRIGGERED="false"
+C1S_ONNX_SHA=""
+C1S_SAKURA_SHA=""
+C1S_UMI_SHA=""
+if [ "$PRIMARY_GPU_STACK" = "system_torch" ]; then
+  C1S_TRIGGERED="true"
+  C1S_DIR="$WORK/gate40k_run4_c1s"
+  gate_run_launch1 "$PY_B" "$DS" "$CKPT_DIR" "$CANON_DIR" "$WORK/vocoder_onnx" "$C1S_DIR" cpu
+  C1S_ONNX="$C1S_DIR/onnx_gate_40000/acoustic.onnx"
+  [ -f "$C1S_ONNX" ] || die "C1S: acoustic.onnx not produced at $C1S_ONNX"
+  mapfile -t C1S_WAVS < <(list_wavs "$C1S_DIR/step_40000")
+  require_two_wavs C1S_WAVS "c1s"
+  C1S_ONNX_SHA="$(sha256_of "$C1S_ONNX")"
+  C1S_SAKURA_SHA="$(sha256_of "${C1S_WAVS[0]}")"
+  C1S_UMI_SHA="$(sha256_of "${C1S_WAVS[1]}")"
+  echo "| probe: C1S onnx=$C1S_ONNX_SHA wavs=($C1S_SAKURA_SHA,$C1S_UMI_SHA)"
+else
+  echo "| probe: C1S skipped — primary stack is venv A, no venv B to run a within-stack device comparison against"
+fi
+
+# ============================================================================
 # Stage 6: Arm B（best-effort — 失敗しても probe 全体は失敗させない）。
 # system python3（image 既定 torch 2.4.0+cu124）で export できるかを見る。
+# PRIMARY_GPU_STACK="system_torch"（stage 2f fallback）の回では、venv B が
+# まさにこの system torch 2.4.0+cu124 を system-site-packages 経由で既に
+# G1/G2/C1S として本走行済みのため、Arm B は完全に重複する — skip する
+# （reason="promoted_to_primary"）。
 # ============================================================================
 stage "6-arm-b"
 
@@ -704,6 +955,12 @@ ARM_B_ONNX_SHA=""
 ARM_B_SAKURA_SHA=""
 ARM_B_UMI_SHA=""
 ARM_B_VERSIONS=""
+
+if [ "$PRIMARY_GPU_STACK" = "system_torch" ]; then
+  ARM_B_SKIPPED="true"
+  ARM_B_REASON="promoted_to_primary"
+  echo "| probe: arm_b skipped — reason=promoted_to_primary (system torch already exercised as the primary/venv_b stack this run — see arm_stacks.g1 in probe_results.json)"
+else
 
 # `arm_b_out="$(arm_b_run ...)"` はコマンド置換 = サブシェルで走る。サブシェル内での
 # 通常のグローバル変数代入は `$(...)` 完了後に消える（bash のサブシェル分離）ため、
@@ -767,6 +1024,8 @@ else
   echo "| probe: arm_b reason (tail 4000 bytes): $ARM_B_REASON" >&2
 fi
 
+fi  # PRIMARY_GPU_STACK != system_torch
+
 # ============================================================================
 # Stage 7: probe_results.json 組み立て
 # ============================================================================
@@ -776,11 +1035,13 @@ export PROBE_PIN_COMMIT DIFFSINGER_COMMIT SESSION_CPU_ONNX_SHA \
   RECORDED_WAV_RITSU_SAKURA RECORDED_WAV_RITSU_UMI \
   RECORDED_WAV_PJS_SAKURA RECORDED_WAV_PJS_UMI \
   RECORDED_WAV_USER_SAKURA RECORDED_WAV_USER_UMI \
+  PRIMARY_GPU_STACK VENV_A VENV_B \
   G1_ONNX_SHA G1_RITSU_SAKURA_SHA G1_RITSU_UMI_SHA \
   G1_PJS_SAKURA_SHA G1_PJS_UMI_SHA G1_USER_SAKURA_SHA G1_USER_UMI_SHA \
   G2_ONNX_SHA G2_SAKURA_SHA G2_UMI_SHA \
   C1_ONNX_SHA C1_SAKURA_SHA C1_UMI_SHA \
   C1B_TRIGGERED C1B_ONNX_SHA C1B_SAKURA_SHA C1B_UMI_SHA \
+  C1S_TRIGGERED C1S_ONNX_SHA C1S_SAKURA_SHA C1S_UMI_SHA \
   ARM_B_SKIPPED ARM_B_REASON ARM_B_ONNX_SHA ARM_B_SAKURA_SHA ARM_B_UMI_SHA ARM_B_VERSIONS
 
 python3 - "$RESULTS/probe_results.json" "$RESULTS/g1" <<'PY'
@@ -826,6 +1087,67 @@ g1_wavs = {
 g1_wav_match_detail = {k: eq(g1_wavs[k]["sha256"], expected_wavs[k]) for k in expected_wavs}
 
 arm_b_skipped = env("ARM_B_SKIPPED") == "true"
+c1b_triggered = env("C1B_TRIGGERED") == "true"
+c1s_triggered = env("C1S_TRIGGERED") == "true"
+primary_gpu_stack = env("PRIMARY_GPU_STACK")
+VENV_A_TORCH_2_13_0_CU126 = "venv_a_torch_2.13.0+cu126"
+
+results_dir = os.path.dirname(out_path)
+
+
+def stack_info(env_json_name, venv_path):
+    """venv_a_env.json / venv_b_env.json (write_torch_env_json 出力) から
+    arm_stacks 用の 4 フィールドを取り出す。ファイル不在/壊れは None 群で
+    best-effort に倒す（FIX 3: probe_results.json 組み立て自体は落とさない）。"""
+    path = os.path.join(results_dir, env_json_name)
+    try:
+        d = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        d = {}
+    return {
+        "torch_version": d.get("torch_version"),
+        "torch_cuda": d.get("torch_cuda_version"),
+        "device_name": d.get("torch_cuda_device_name"),
+        "venv_path": venv_path or None,
+    }
+
+
+venv_a_stack = stack_info("venv_a_env.json", env("VENV_A"))
+venv_b_json_path = os.path.join(results_dir, "venv_b_env.json")
+venv_b_present = os.path.isfile(venv_b_json_path)
+venv_b_stack = stack_info("venv_b_env.json", env("VENV_B")) if venv_b_present else None
+
+# G1/G2 は PRIMARY_GPU_STACK 側の venv（venv A が primary ならそのまま venv A、
+# system_torch fallback なら venv B）で走っている — arm_stacks はどちらで
+# 走ったかを機械的に指す。
+primary_arm_stack = venv_b_stack if (primary_gpu_stack == "system_torch" and venv_b_stack) else venv_a_stack
+
+
+def arm_b_stack_info():
+    if arm_b_skipped:
+        return None
+    versions_raw = env("ARM_B_VERSIONS") or ""
+    torch_version = None
+    for part in versions_raw.split(";"):
+        if part.lower().startswith("torch=="):
+            torch_version = part.split("==", 1)[1]
+            break
+    return {
+        "torch_version": torch_version,
+        "torch_cuda": None,
+        "device_name": None,
+        "venv_path": "system_python (--user, no venv)",
+    }
+
+
+arm_stacks = {
+    "g1": primary_arm_stack,
+    "g2": primary_arm_stack,
+    "c1": venv_a_stack,
+    "c1b": venv_a_stack if c1b_triggered else None,
+    "c1s": venv_b_stack if c1s_triggered else None,
+    "arm_b": arm_b_stack_info(),
+}
 
 result = {
     "probe": "run4_export_device_probe",
@@ -834,6 +1156,10 @@ result = {
     "diffsinger_commit": env("DIFFSINGER_COMMIT"),
     "env_snapshot_ref": "env_snapshot.json",
     "venv_a_ref": "venv_a_env.json",
+    "venv_b_ref": "venv_b_env.json" if venv_b_present else None,
+    "cuda_diagnostics_ref": "cuda_diagnostics.json",
+    "primary_gpu_stack": primary_gpu_stack,
+    "arm_stacks": arm_stacks,
     "expected": {
         "session_cpu_onnx_sha256": env("SESSION_CPU_ONNX_SHA"),
         "recorded_run4_wav_sha256": expected_wavs,
@@ -849,11 +1175,19 @@ result = {
             "wavs": {"sakura": env("C1_SAKURA_SHA"), "umi": env("C1_UMI_SHA")},
         },
         "c1b": {
-            "triggered": env("C1B_TRIGGERED") == "true",
+            "triggered": c1b_triggered,
             "onnx_sha256": env("C1B_ONNX_SHA") or None,
             "wavs": (
                 {"sakura": env("C1B_SAKURA_SHA"), "umi": env("C1B_UMI_SHA")}
-                if env("C1B_TRIGGERED") == "true" else None
+                if c1b_triggered else None
+            ),
+        },
+        "c1s": {
+            "triggered": c1s_triggered,
+            "onnx_sha256": env("C1S_ONNX_SHA") or None,
+            "wavs": (
+                {"sakura": env("C1S_SAKURA_SHA"), "umi": env("C1S_UMI_SHA")}
+                if c1s_triggered else None
             ),
         },
         "arm_b": (
@@ -877,6 +1211,19 @@ result = {
         "arm_b_onnx_eq_g1_onnx": (
             None if arm_b_skipped else eq(env("ARM_B_ONNX_SHA"), env("G1_ONNX_SHA"))
         ),
+        # C1S = 今回実際に走った primary stack（venv A/B いずれか）自身の中での
+        # GPU 版(G1) vs CPU 版(C1S) — within-stack の単一要因デバイス比較。
+        # C1 は常に venv A 固定（session baseline とのタイイン）なので、
+        # venv B が primary の回では G1 と torch バージョンが揃わず比較にならない
+        # ため、その揃った比較は g1_onnx_eq_c1s_onnx が担う。
+        "g1_onnx_eq_c1s_onnx": (
+            eq(env("G1_ONNX_SHA"), env("C1S_ONNX_SHA")) if c1s_triggered else None
+        ),
+        # PRIMARY_GPU_STACK が venv A 以外（= system_torch fallback）のとき、
+        # g1 系（torch 2.4.0+cu124 由来）と c1/c1b/session baseline
+        # （torch 2.13.0+cu126 由来）の比較は torch バージョンの交絡を帯びる
+        # ことを示すフラグ（解釈・文言はここでは行わない — 旗を立てるだけ）。
+        "cross_stack_note_applies": primary_gpu_stack != VENV_A_TORCH_2_13_0_CU126,
     },
 }
 json.dump(result, open(out_path, "w"), indent=2, ensure_ascii=False)
