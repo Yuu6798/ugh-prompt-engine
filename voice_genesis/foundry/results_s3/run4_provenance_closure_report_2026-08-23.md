@@ -51,11 +51,19 @@
 
 - **canon**: provision.sh の URL から `NamineRitsu_DiffSinger.zip`
   （421,940,274 bytes）を取得 → sha256 が provision.sh の pin
-  `5c7b8c32...` と完全一致。展開後、`gate_synth.py` が実際に読む 5 ファイル
-  （linguistic.onnx / dsdur/dur.onnx / dspitch/pitch.onnx / phonemes.txt /
-  dsconfig.yaml）の sha256 を個別記録。zip 同梱の `acoustic.onnx`
-  （canon 側の自前 acoustic）はこのレシピでは未消費と判断（コード読解で
-  確認）— 記録上は「参考値」として残した。
+  `5c7b8c32...` と完全一致。展開後、`gate_synth.py` が canon ディレクトリから
+  実際に読む **4 ファイル**（linguistic.onnx / dsdur/dur.onnx /
+  dspitch/pitch.onnx / phonemes.txt。`gate_synth.py:647-650, 1891`）の sha256 を
+  個別記録し、そのマニフェストハッシュを closure の主値とした（第 8 巡 P2。
+  詳細と算法は「判断に迷った点」1 節を参照）。
+  `dsconfig.yaml` は **canon 側からは読まれない** — export 経路（run4 anchor
+  合成・本実測 Phase 2 の両方が該当）では export 出力側（`gate_synth.py:2007`）
+  から読まれ、canon 側（`gate_synth.py:1981`）が読まれるのは `--skip-export` の
+  S0 互換経路のみである（＜第 8 巡 P2 で判明。当初は消費 5 ファイルとして
+  `dsconfig.yaml` を含めていたが撤回。第 10 巡 P2 により本節へも反映＞）。
+  canon top-level `dsconfig.yaml` と zip 同梱の `acoustic.onnx`（canon 側の
+  自前 acoustic）はいずれもこのレシピでは未消費で、記録上は「参考値」として
+  残した。
 - **vocoder**: `nsf_hifigan.oudep`（52,847,838 bytes）を取得 → sha256 が
   provision.sh の pin `e22f8400...` と完全一致。展開後の
   `nsf_hifigan.onnx` の sha256（`a3e26672...`）も provision.sh の
@@ -398,7 +406,7 @@ VG-DEBT-010 と同型の扱いである。
 | 7 | 見出し「Phase 3: run3系5件」が本文・JSON・台帳の 6 件と不一致 | 「run3系6件」へ修正 |
 | 8 | acceptance が Phase 0–3 を「無改変・追記のみ」と主張するが `wav_regeneration.results` が再シリアライズされていた | acceptance の文言を実態（値は同一・整形は変化しうる）へ訂正 |
 
-### Codex レビュー第 2–9 巡（PR #307）も全採用
+### Codex レビュー第 2–10 巡（PR #307）も全採用
 
 | 巡 | 指摘 | 対応 |
 |---|---|---|
@@ -414,6 +422,8 @@ VG-DEBT-010 と同型の扱いである。
 | 8 | canon の closure 値が配布 zip のアーカイブハッシュで、合成が消費するランタイム入力を同定していない | **消費メンバーの決定論的マニフェストハッシュ**へ変更（`value_kind` を全 item に新設）。併せて消費集合の誤り（`dsconfig.yaml` は export 経路では canon 側を読まない）を訂正し 5→4 件へ |
 | 8 | `reentry_condition` (a) が WAV 一致だけで item 1 を `reproduced` へ昇格させ得る | 昇格条件を**上流バイト証拠**（当時実体の回収 / 当時 sha の発見 / producer chain 全証拠）に限定し、WAV 一致は (a-2) の**機能的裏付け**として closure を動かさない扱いへ分離 |
 | 9 | 台帳の (a-1)/(a-2) 分離を report 本文の要約段落へ反映し損ねており、旧「WAV 一致で昇格可」規則が残存 | 該当段落を (a-1)/(a-2)/(b) の 3 分割へ書き換え、**台帳が正本**であることを明記（掃討: `昇格`/`reproduced へ` 全数）|
+| 10 | closure JSON の `acceptance`（スキーマ水準の判定契約）に旧「WAV 一致で reproduced」規則が残存 | 判定規則を (a-1) 相当へ書き換え、**台帳が正本**と明記。掃討語彙を `昇格` から **`reproduced`** 全件へ拡大して再掃討 |
+| 10 | Phase 1 が canon 消費を 5 ファイル（`dsconfig.yaml` 含む）と記述したままで、同一 report 内に 2 つの定義が併存 | Phase 1 を **4 ファイル**へ訂正し、`dsconfig.yaml` が canon 側から読まれない条件も明記（掃討: `5 ファイル`/`dsconfig` 全数）|
 
 検証（Phase 5 時点）:
 
@@ -484,6 +494,30 @@ Codex 第 7 巡を受け、成果物 3 ファイルを `最有力` `有力` `可
 (iii)「SIMD 主因仮説」という**仮説の呼称**および上記の**撤回の記録**。
 本系統もこれをもって終端とする。
 
+### 終端宣言（追補 3）: 訂正の他成果物への追随（2026-08-23）
+
+第 8–10 巡で 3 回続けて「台帳では直したが他の成果物に旧記述が残る」型を突かれた
+（第 9 巡 = report 要約段落、第 10 巡 = closure JSON の `acceptance` と Phase 1）。
+掃討語彙が狭かったことが原因である: `昇格` で掃討したが `acceptance` は
+`reproduced` としか書いておらず、`消費 5 ファイル` の訂正も「判断に迷った点」節
+だけに入れて Phase 1 本文を見ていなかった。
+
+第 10 巡でこの 2 系統を成果物 3 ファイル全数で再掃討した:
+
+1. **`reproduced` 昇格規則** — `reproduced` を**全件**（`昇格` ではなく）grep。
+   残るヒットは新規則本体・訂正の記録・台帳 `close_condition`
+   （「全リンクが reproduced/measured_only で閉じた場合のみ repaid」= 別の規則）・
+   `wav_regeneration.results` の `reproduced_sha256`/`reproduced_rms`
+   （**再生成物の値**を指すフィールド名であって closure 語彙ではない）のみ。
+2. **canon 消費集合** — `5 ファイル` / `dsconfig` を全件 grep。残るヒットは
+   訂正後の 4 ファイル記述と、撤回の記録のみ。
+
+**規律**: 判定規則・数え上げを直すときは、`debt_ledger.yaml` /
+`*_closure_*.json`（`acceptance` を含む）/ 本 report の**3 面すべて**を、
+訂正後の語ではなく**訂正前の語彙**で grep してから終端宣言すること。
+正本は台帳の `reentry_condition` であり、乖離時は台帳が勝つ。
+本系統もこれをもって終端とする。
+
 以上により、本 PR で指摘された「実測は正しいが記録の言葉が実測より強い」
 という類型（契約充足 / 測定値の適用範囲 / 反証の広さ / 内容同等性 /
-残余候補の順位付け）は 5 系統すべて掃討・終端した。
+残余候補の順位付け / 訂正の追随漏れ）は 6 系統すべて掃討・終端した。
