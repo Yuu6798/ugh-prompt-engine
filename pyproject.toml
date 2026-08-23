@@ -195,6 +195,10 @@ testpaths = [
     # 実測結果ファイルの形状テスト（人手編集ファイル・値の実体照合はしない）。
     # 依存は標準ライブラリのみ。
     "voice_genesis/foundry/tests/test_run4_provenance_closure.py",
+    # VG-DEBT-006 (D6) fixed probe の pinned_regenerable 凍結 Phase A（machine-
+    # independent 部分）: {path, sha256} 参照の実ファイル照合 + PENDING_PHASE_B
+    # プレースホルダの構造検査。依存は標準ライブラリのみ。
+    "voice_genesis/foundry/tests/test_d6_fixed_probe_pins.py",
 ]
 pythonpath = ["src", "."]
 markers = [

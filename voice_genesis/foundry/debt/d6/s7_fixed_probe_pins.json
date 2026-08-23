@@ -1,0 +1,231 @@
+{
+  "schema": "vg-d6-fixed-probe-pins/0.1",
+  "debt_ref": "VG-DEBT-006",
+  "phase": "A",
+  "authority": [
+    "voice_genesis/foundry/debt/DEBT_ADJUDICATION_v1.1.md §2 裁定2（fixed probe = pinned_regenerable。固定対象: WAV sha256 / PCM sha256 / checkpoint sha256 / ONNX・config・input の sha256 / code commit / seed / execution profile / 再生成コマンド / 再生成後の hash 一致）",
+    "voice_genesis/foundry/debt/debt_ledger.yaml VG-DEBT-006 close_condition （run8-0 の校正セット・本番セルの双方で記帳されていること）"
+  ],
+  "purpose": "run8-0 の本番360セル・校正セットについて、WAV本体をGit保存せずに pinned_regenerable として固定するための pin 一式。値の全複製はせず、既存の正本ファイルへ {path, sha256} で束縛する参照型を採る（voice_genesis/foundry/debt/d4/d4_remeasure_spec.json の pins 節と同型）。",
+  "wav_not_committed_policy": "voice_genesis/README.md「WAV は非同梱（決定論再生成可能）」を維持する。本 pin ファイル自体も WAV バイト列を持たない — 全 WAV 実体は参照先の *.json（probe_0b_groups/*.json・d4_results_2026-08-22.json・s7_b1_real_render_manifest.json）が cell/condition 単位で wav_sha256 （容器バイト列）+ samples_sha256（PCM 標本バイト列）の2段で pin する。",
+  "phase_a_scope_note": "本ファイルは Phase A（machine-independent な部分の起草）の成果物。実測値に依存するフィールド（再生成後の hash 一致・再生成検証を実走した commit）は別セッション（Phase B）が実測を実行中のため {\"status\": \"PENDING_PHASE_B\", ...} のプレースホルダで明示する （voice_genesis/foundry/debt/DESIGN_S7_run8.contract_projection.json の pinned_field 型 {value, source, status, reason} に倣う）。",
+  "production_cells": {
+    "scope": "run5/6/7 × {ritsu, pjs, user[, amitaro]} = 10 群 × 36 セル = 360 セル。1.0 測定（probe_0b_groups/*.json）+ 1.2 再測定（d4_results_2026-08-22.json、VG-DEBT-004 の正本）の二重記帳を束ねる。",
+    "n_groups": 10,
+    "n_cells_per_group": 36,
+    "n_total_cells": 360,
+    "refs": {
+      "cell_definition_and_checkpoints": {
+        "path": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json",
+        "sha256": "c4856fde84c8e46edfbfc1232fef288559595207ea4f088016375c9c39404639",
+        "role": "セル定義（診断33セル+フル譜面アンカー3セル×10群）・checkpoint_sha256（世代ごと。expansion.generations.{run5,run6,run7}.checkpoint_sha256）・測定仕様1.0参照の正本。d4_remeasure_spec.json の pins.cell_definition_source と同一 sha256（機械照合済み）。"
+      },
+      "probe_0b_groups_1_0": [
+        {
+          "path": "voice_genesis/foundry/results_s7/probe_0b_groups/run5_ritsu.json",
+          "sha256": "cf043205340eeab8b39ae8aa99cb92f6a2ece9d2bdd9fb165f5edd7998469bf6",
+          "role": "1.0測定の群別正本。セル単位の wav_sha256 / samples_sha256 （PCM）/ model_sha256（canon linguistic・dur・pitch・acoustic・vocoder onnx・acoustic_dsconfig_yaml）/ aux_sha256（canon_phonemes_txt・acoustic_phonemes_json・speaker_embed・gate_synth_py・s7_trf_py・s7_0b_probe_py）を cell 単位で記帳。",
+          "generation": "run5",
+          "speaker": "ritsu"
+        },
+        {
+          "path": "voice_genesis/foundry/results_s7/probe_0b_groups/run5_pjs.json",
+          "sha256": "486eb973a60c54de23376b48c0a22c3b220bbddcb862650fbf10d049ce51abe7",
+          "role": "1.0測定の群別正本。セル単位の wav_sha256 / samples_sha256 （PCM）/ model_sha256（canon linguistic・dur・pitch・acoustic・vocoder onnx・acoustic_dsconfig_yaml）/ aux_sha256（canon_phonemes_txt・acoustic_phonemes_json・speaker_embed・gate_synth_py・s7_trf_py・s7_0b_probe_py）を cell 単位で記帳。",
+          "generation": "run5",
+          "speaker": "pjs"
+        },
+        {
+          "path": "voice_genesis/foundry/results_s7/probe_0b_groups/run5_user.json",
+          "sha256": "6f6f8c1c02210a9e58108ee9bec5e6739c8efe7a32b7c1e55c58aa7d7824a8c3",
+          "role": "1.0測定の群別正本。セル単位の wav_sha256 / samples_sha256 （PCM）/ model_sha256（canon linguistic・dur・pitch・acoustic・vocoder onnx・acoustic_dsconfig_yaml）/ aux_sha256（canon_phonemes_txt・acoustic_phonemes_json・speaker_embed・gate_synth_py・s7_trf_py・s7_0b_probe_py）を cell 単位で記帳。",
+          "generation": "run5",
+          "speaker": "user"
+        },
+        {
+          "path": "voice_genesis/foundry/results_s7/probe_0b_groups/run6_ritsu.json",
+          "sha256": "7846f603be7a21832c47e57072d41160e11fbe26694088fb537301bfbd9818b8",
+          "role": "1.0測定の群別正本。セル単位の wav_sha256 / samples_sha256 （PCM）/ model_sha256（canon linguistic・dur・pitch・acoustic・vocoder onnx・acoustic_dsconfig_yaml）/ aux_sha256（canon_phonemes_txt・acoustic_phonemes_json・speaker_embed・gate_synth_py・s7_trf_py・s7_0b_probe_py）を cell 単位で記帳。",
+          "generation": "run6",
+          "speaker": "ritsu"
+        },
+        {
+          "path": "voice_genesis/foundry/results_s7/probe_0b_groups/run6_pjs.json",
+          "sha256": "3d7e116d3b96690739ce1e7a7f3e7bf3e5d34a0a8f8de538712c7c859c62fdfa",
+          "role": "1.0測定の群別正本。セル単位の wav_sha256 / samples_sha256 （PCM）/ model_sha256（canon linguistic・dur・pitch・acoustic・vocoder onnx・acoustic_dsconfig_yaml）/ aux_sha256（canon_phonemes_txt・acoustic_phonemes_json・speaker_embed・gate_synth_py・s7_trf_py・s7_0b_probe_py）を cell 単位で記帳。",
+          "generation": "run6",
+          "speaker": "pjs"
+        },
+        {
+          "path": "voice_genesis/foundry/results_s7/probe_0b_groups/run6_user.json",
+          "sha256": "5250586e2f03540b1ea268256070362a0b050977109b3fde0cf9de8332ee8b87",
+          "role": "1.0測定の群別正本。セル単位の wav_sha256 / samples_sha256 （PCM）/ model_sha256（canon linguistic・dur・pitch・acoustic・vocoder onnx・acoustic_dsconfig_yaml）/ aux_sha256（canon_phonemes_txt・acoustic_phonemes_json・speaker_embed・gate_synth_py・s7_trf_py・s7_0b_probe_py）を cell 単位で記帳。",
+          "generation": "run6",
+          "speaker": "user"
+        },
+        {
+          "path": "voice_genesis/foundry/results_s7/probe_0b_groups/run7_ritsu.json",
+          "sha256": "c1e8eb28e8415e984531712aedbc139341fd352687d35c5f2e5fc603475d2e5b",
+          "role": "1.0測定の群別正本。セル単位の wav_sha256 / samples_sha256 （PCM）/ model_sha256（canon linguistic・dur・pitch・acoustic・vocoder onnx・acoustic_dsconfig_yaml）/ aux_sha256（canon_phonemes_txt・acoustic_phonemes_json・speaker_embed・gate_synth_py・s7_trf_py・s7_0b_probe_py）を cell 単位で記帳。",
+          "generation": "run7",
+          "speaker": "ritsu"
+        },
+        {
+          "path": "voice_genesis/foundry/results_s7/probe_0b_groups/run7_pjs.json",
+          "sha256": "0a380af20b7fb9d6424eed76faee4e750b7dbacdbd17ef24c60a38a5cbe57199",
+          "role": "1.0測定の群別正本。セル単位の wav_sha256 / samples_sha256 （PCM）/ model_sha256（canon linguistic・dur・pitch・acoustic・vocoder onnx・acoustic_dsconfig_yaml）/ aux_sha256（canon_phonemes_txt・acoustic_phonemes_json・speaker_embed・gate_synth_py・s7_trf_py・s7_0b_probe_py）を cell 単位で記帳。",
+          "generation": "run7",
+          "speaker": "pjs"
+        },
+        {
+          "path": "voice_genesis/foundry/results_s7/probe_0b_groups/run7_user.json",
+          "sha256": "0b9d49f86e1b7d495c0f37d8e4edbefe1893eef8f1d57130da36bbe1839839a6",
+          "role": "1.0測定の群別正本。セル単位の wav_sha256 / samples_sha256 （PCM）/ model_sha256（canon linguistic・dur・pitch・acoustic・vocoder onnx・acoustic_dsconfig_yaml）/ aux_sha256（canon_phonemes_txt・acoustic_phonemes_json・speaker_embed・gate_synth_py・s7_trf_py・s7_0b_probe_py）を cell 単位で記帳。",
+          "generation": "run7",
+          "speaker": "user"
+        },
+        {
+          "path": "voice_genesis/foundry/results_s7/probe_0b_groups/run7_amitaro.json",
+          "sha256": "821911072b8d989e5f2dc866986f52319f94dc1961561563c17934163f158494",
+          "role": "1.0測定の群別正本。セル単位の wav_sha256 / samples_sha256 （PCM）/ model_sha256（canon linguistic・dur・pitch・acoustic・vocoder onnx・acoustic_dsconfig_yaml）/ aux_sha256（canon_phonemes_txt・acoustic_phonemes_json・speaker_embed・gate_synth_py・s7_trf_py・s7_0b_probe_py）を cell 単位で記帳。",
+          "generation": "run7",
+          "speaker": "amitaro"
+        }
+      ],
+      "d4_1_2_remeasurement": {
+        "path": "voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json",
+        "sha256": "6b820a2a27744b9ed4f6e873231aa103b57dd622f993982a112063e5b4bacfa7",
+        "role": "1.2再測定（VG-DEBT-004 正本）。同一360セルを voicing 3軸で 再測定し wav_sha256 / samples_sha256 を再記帳。test_committed_artifacts_immutable.py で凍結・独立アンカー 二重照合済み（バイト単位で改変禁止）。"
+      }
+    },
+    "pin_field_map": {
+      "wav_sha256": "probe_0b_groups/*.json と d4_results_2026-08-22.json の cells[cell_id].wav_sha256（容器バイト列。libsndfile の PEAK チャンクに書き出し時刻が入るため同一セッション内再書き出しでも 不一致になり得る = s7_reproducibility_finding.md §4 の弱い pin）",
+      "pcm_sha256": "probe_0b_groups/*.json と d4_results_2026-08-22.json の cells[cell_id].samples_sha256（標本列のみ。s7_io.read_wav_with_pins と同型の2段照合の片方。s7_reproducibility_finding.md §4 の 中位の強さの pin — 同一プロビジョニング内の完全性検査）",
+      "checkpoint_sha256": "s7_0b_probe_spec.json の expansion.generations.{run5,run6,run7}.checkpoint_sha256",
+      "onnx_config_input_sha256": "probe_0b_groups/*.json の model_sha256（canon_linguistic_onnx / canon_variance_dur_onnx / canon_variance_pitch_onnx / acoustic_onnx / vocoder_onnx / acoustic_dsconfig_yaml）+ aux_sha256（canon_phonemes_txt / acoustic_phonemes_json / speaker_embed）。d4_results_2026-08-22.json は groups[group_id].materials_sha256.aux_sha256 + materials_sha256.export_binding.{source_checkpoint_sha256,source_config_sha256,manifest_sha256} に相当値を記帳。"
+    }
+  },
+  "calibration_set": {
+    "scope": "B-1 校正セット（本番360セルとは完全分離。DESIGN_S7_run8.md 12-0-A-1）。",
+    "refs": {
+      "synthetic_stimuli": {
+        "path": "voice_genesis/foundry/results_s7/s7_b1_calibration_set.json",
+        "sha256": "79b209b52ed3994f8abe2634bf7f7484cc770fcc0dc22b70ebdf25484fcb6d8b",
+        "role": "合成刺激13条件（clean/forced_long_tail/gain対 等）+ 埋め込み real_render_set 節（11条件の命令パラメータ。WAV実体は s7_b1_real_render_manifest.json 側）。",
+        "n_synthetic_conditions": 13,
+        "rng": {
+          "bit_generator": "PCG64",
+          "seed": 20260821,
+          "used_for": "/r/-like onset の band-limited noise 生成のみ"
+        }
+      },
+      "real_render_manifest": {
+        "path": "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json",
+        "sha256": "bde66f3f8599ea48d6e8ff8fdc63a362c6aed5f846655189bf3b52c5628d3343",
+        "role": "real-render 11条件（rr_*）+ derived 2条件のWAV実体 pin。prereg.sha256 で s7_b1_calibration_set.json の real_render_set 節へ hash-bound。render_stack 節に numpy/onnxruntime/soundfile/PyYAML/python の版を pin。",
+        "n_real_render_conditions": 11
+      }
+    }
+  },
+  "common_fixed": {
+    "seed": {
+      "value": 42,
+      "source": "voice_genesis/foundry/s1_gate/gate_synth.py:149 `SEED = 42`。適用: L1213 `ort.set_seed(SEED)` → L1214 `record[\"seed\"] = SEED`（cell/run単位で記帳）。sampling_params 節にも L2405 `\"seed\": SEED` として再記帳される。",
+      "sha256_of_defining_file": "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894"
+    },
+    "onnxruntime_session_settings": {
+      "intra_op_num_threads": 1,
+      "inter_op_num_threads": 1,
+      "providers": [
+        "CPUExecutionProvider"
+      ],
+      "source": "voice_genesis/foundry/s1_gate/gate_synth.py:1216-1218 (`so.intra_op_num_threads = 1` / `so.inter_op_num_threads = 1` / `providers = [\"CPUExecutionProvider\"]`)。GPU は使わない （d4_remeasure_spec.json execution.render_stack と同じ規律）。"
+    },
+    "execution_profile": {
+      "value": {
+        "numpy": "2.4.6",
+        "onnxruntime": "1.29.0",
+        "soundfile": "0.14.0",
+        "PyYAML": "6.0.1",
+        "python": "3.11.15"
+      },
+      "source": "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json render_stack 節（render 実行環境の正本 pin）。voice_genesis/foundry/debt/d4/d4_exec_report_2026-08-22.md §5で 2026-08-22 D4 実測が本 pin と完全一致することを実測確認済み（onnxruntime のみ未導入だったため同版を追加導入）。",
+      "analysis_stack": {
+        "value": {
+          "librosa": "0.11.0",
+          "numba": "0.66.0",
+          "numpy": "2.4.6"
+        },
+        "source": "voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json analysis_stack 節（測定側インタプリタ。render 側 execution_profile とは別プロセス）。ANALYSIS_STACK_PIN として provision.sh が 起動時に自動照合・復元する。"
+      }
+    },
+    "material_acquisition_command": {
+      "command": "bash voice_genesis/foundry/run8/provision.sh --root <ROOT>",
+      "source": "voice_genesis/foundry/run8/provision.sh:11-12（使い方コメント）",
+      "sha256_of_script": "87dac1801966e3addefd849ae4ed6b5302313a044b8feb62ebd4a54b0326b9cd",
+      "note": "既定 ROOT は /home/user/s7work（provision.sh 内 既定値）。2026-08-22 D4 実測では前セッション残置物の再利用のため --root /home/user/d4work を明示指定した（d4_exec_report_2026-08-22.md §(8) 判断1）。17資産を sha256 照合つきで取得し NamineRitsu_DiffSinger.zip / nsf_hifigan.oudep を全メンバ照合で展開、DiffSinger を e2307b1 へ checkout する。"
+    },
+    "regeneration_commands": {
+      "derivation": "以下は d4_runner.py の argparse 定義（本ファイルの d4_runner_sha256 参照）+ 2026-08-22実測で実際に記帳された経路値（export dir 命名 export_{generation}_{speaker}・acoustic-stem 命名 s6_{generation}_acoustic・canon/vocoder 抽出先）を組み合わせて 再構成したコマンドテンプレートであり、2026-08-22 実行時に逐語ログ 取得されたコマンド文字列ではない（当時のログにコマンド行自体は 残っていない — d4_exec_report_2026-08-22.md は所要時間・結果表・sha256の記帳のみで、起動コマンドの逐語転記は無い）。run4_anchor_provenance.json の generation_command 欄は『過去に実行されたログの逐語転記』だが、本欄は『これから再生成するための実行可能テンプレート』という違いがある。--spec-sha256 は現行コミット済み spec（v0.4）の実 sha256を用いる — 2026-08-22実測が束縛したのは v0.1 の sha 702f1a2231a1b53e71afe7ab6332d42a637546802d960bdd569f4d200de2eeca（d4_results_2026-08-22.json に 凍結済み・test_committed_artifacts_immutable.py が保護。この値は 変更しない）。今後の再生成は現行 spec バイトに対して行うため 異なる値になるのが正しい。",
+      "spec_sha256_current_v0_4": "c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
+      "spec_sha256_execution_time_v0_1_frozen": "702f1a2231a1b53e71afe7ab6332d42a637546802d960bdd569f4d200de2eeca",
+      "root_placeholder": "<ROOT>（provision.sh --root と同一ディレクトリを指す）",
+      "render_commands_10_groups": [
+        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run5 --speaker ritsu --acoustic-dir <ROOT>/out/export_run5_ritsu --acoustic-stem s6_run5_acoustic --export-manifest <ROOT>/out/export_run5_ritsu/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run5_ritsu --result-out <ROOT>/render/run5_ritsu.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
+        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run5 --speaker pjs --acoustic-dir <ROOT>/out/export_run5_pjs --acoustic-stem s6_run5_acoustic --export-manifest <ROOT>/out/export_run5_pjs/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run5_pjs --result-out <ROOT>/render/run5_pjs.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
+        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run5 --speaker user --acoustic-dir <ROOT>/out/export_run5_user --acoustic-stem s6_run5_acoustic --export-manifest <ROOT>/out/export_run5_user/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run5_user --result-out <ROOT>/render/run5_user.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
+        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run6 --speaker ritsu --acoustic-dir <ROOT>/out/export_run6_ritsu --acoustic-stem s6_run6_acoustic --export-manifest <ROOT>/out/export_run6_ritsu/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run6_ritsu --result-out <ROOT>/render/run6_ritsu.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
+        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run6 --speaker pjs --acoustic-dir <ROOT>/out/export_run6_pjs --acoustic-stem s6_run6_acoustic --export-manifest <ROOT>/out/export_run6_pjs/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run6_pjs --result-out <ROOT>/render/run6_pjs.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
+        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run6 --speaker user --acoustic-dir <ROOT>/out/export_run6_user --acoustic-stem s6_run6_acoustic --export-manifest <ROOT>/out/export_run6_user/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run6_user --result-out <ROOT>/render/run6_user.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
+        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run7 --speaker ritsu --acoustic-dir <ROOT>/out/export_run7_ritsu --acoustic-stem s6_run7_acoustic --export-manifest <ROOT>/out/export_run7_ritsu/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run7_ritsu --result-out <ROOT>/render/run7_ritsu.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
+        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run7 --speaker pjs --acoustic-dir <ROOT>/out/export_run7_pjs --acoustic-stem s6_run7_acoustic --export-manifest <ROOT>/out/export_run7_pjs/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run7_pjs --result-out <ROOT>/render/run7_pjs.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
+        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run7 --speaker user --acoustic-dir <ROOT>/out/export_run7_user --acoustic-stem s6_run7_acoustic --export-manifest <ROOT>/out/export_run7_user/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run7_user --result-out <ROOT>/render/run7_user.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
+        "python3 voice_genesis/foundry/debt/d4/d4_runner.py render --generation run7 --speaker amitaro --acoustic-dir <ROOT>/out/export_run7_amitaro --acoustic-stem s6_run7_acoustic --export-manifest <ROOT>/out/export_run7_amitaro/export_manifest.json --canon-model-dir <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger --vocoder-dir <ROOT>/materials/vocoder_onnx --canon-phonemes-txt <ROOT>/materials/extracted/ds/NamineRitsu_DiffSinger/phonemes.txt --out-dir <ROOT>/render/run7_amitaro --result-out <ROOT>/render/run7_amitaro.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447"
+      ],
+      "measure_command": "python3 voice_genesis/foundry/debt/d4/d4_runner.py measure --render-doc <ROOT>/render/run5_ritsu.json --render-doc <ROOT>/render/run5_pjs.json --render-doc <ROOT>/render/run5_user.json --render-doc <ROOT>/render/run6_ritsu.json --render-doc <ROOT>/render/run6_pjs.json --render-doc <ROOT>/render/run6_user.json --render-doc <ROOT>/render/run7_ritsu.json --render-doc <ROOT>/render/run7_pjs.json --render-doc <ROOT>/render/run7_user.json --render-doc <ROOT>/render/run7_amitaro.json --render-manifest <ROOT>/render/run5_ritsu_render_manifest.json --render-manifest <ROOT>/render/run5_pjs_render_manifest.json --render-manifest <ROOT>/render/run5_user_render_manifest.json --render-manifest <ROOT>/render/run6_ritsu_render_manifest.json --render-manifest <ROOT>/render/run6_pjs_render_manifest.json --render-manifest <ROOT>/render/run6_user_render_manifest.json --render-manifest <ROOT>/render/run7_ritsu_render_manifest.json --render-manifest <ROOT>/render/run7_pjs_render_manifest.json --render-manifest <ROOT>/render/run7_user_render_manifest.json --render-manifest <ROOT>/render/run7_amitaro_render_manifest.json --render-manifest-sha256 <この session の render 実行が書いた run5_ritsu_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run5_pjs_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run5_user_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run6_ritsu_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run6_pjs_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run6_user_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run7_ritsu_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run7_pjs_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run7_user_render_manifest.json の実 sha256> --render-manifest-sha256 <この session の render 実行が書いた run7_amitaro_render_manifest.json の実 sha256> --out <ROOT>/d4_regen_results.json --spec-sha256 c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
+      "measure_command_note": "--render-manifest-sha256 は各 render 呼び出しが書いた {gen}_{spk}_render_manifest.json の実 sha256（render 完了後にしか 決まらない値のため placeholder のまま）。measure は --allow-partial を付けない既定実行で 10群/360セル全数一致を要求する。"
+    }
+  },
+  "reproducibility_reconciliation": {
+    "status": "PENDING_PHASE_B",
+    "reason": "Phase B（別セッション）が再生成実測を実行中。本節は実測値そのものを 持たず、記帳予定のレベル別意味論の宣言のみを Phase A で確定する。",
+    "semantics_authority": "voice_genesis/foundry/results_s7/s7_reproducibility_finding.md §4 「pin 意味論の訂正」が正本。強さの順は `reference_output 再測定 > samples_sha256 > wav_sha256`。",
+    "levels": [
+      {
+        "level": 1,
+        "name": "reference_output_remeasurement",
+        "guarantees": "結論の再現性（|Δ| <= epsilon）",
+        "crosses_reexport": true,
+        "to_be_recorded_by_phase_b": "TRF measurement spec 1.2（voicing 3軸）で再測定した軸値と、d4_results_2026-08-22.json 記帳値との |Δ| <= epsilon 判定（epsilon は trf_measurement_spec_1_2.json の凍結値）。"
+      },
+      {
+        "level": 2,
+        "name": "samples_sha256",
+        "guarantees": "同一プロビジョニング内の完全性（改竄・破損検出）",
+        "crosses_reexport": false,
+        "to_be_recorded_by_phase_b": "再生成 WAV の samples_sha256 と probe_0b_groups/*.json・d4_results_2026-08-22.json 記帳値との一致/不一致（ONNX 再exportを跨ぐと不一致が想定内である旨を s7_reproducibility_finding.md §2 に基づき明記する）。"
+      },
+      {
+        "level": 3,
+        "name": "wav_sha256",
+        "guarantees": "容器バイト列同一性（最弱。libsndfile の書き出し時刻埋め込みにより同一セッション内再書き出しでも不一致になり得る）",
+        "crosses_reexport": false,
+        "to_be_recorded_by_phase_b": "参考記録のみ（判定基準には用いない = s7_reproducibility_finding.md §4）。"
+      }
+    ],
+    "value": null
+  },
+  "honest_accounting": {
+    "unrecorded_execution_commits": {
+      "statement": "2026-08-21 初回本番レンダ（360セル・1.0測定。s7_0b_record.md が 記述する実測そのもの）および 2026-08-22 probe_0b_groups 再レンダ （コンテナ再構築で初回レンダの作業ディスク実体が失われた後、s7_reproducibility_finding.md の検証過程で再実行し、以後 git に 収載した現行 probe_0b_groups/*.json の実体を生んだ実行）の**いずれも実行時 git commit は記録されておらず、遡及して特定できない**。",
+      "why_unrecoverable": "gate_synth.py の record は diffsinger_repo の commit（学習側 リポジトリ）は記帳するが、ugh-prompt-engine 自身（本 repo）の 実行時 HEAD を記帳するフィールドを持たない。当時のセッション ログ・scratchpad 経由でも repo HEAD の言及は見つからない （s7_0b_record.md / s7_reproducibility_finding.md いずれも commit sha への言及なし）。",
+      "contrast_with_d4": "対照的に、VG-DEBT-004 の 1.2 再測定（d4_results_2026-08-22.json）は 実行報告（d4_exec_report_2026-08-22.md 冒頭）に `repo: /home/user/ugh-prompt-engine, branch claude/technical-debt-plan-2fv79j, head db1ea35` と明記されており記録されている。この非対称（1.0測定は未記録・1.2再測定は記録済み）自体が本節の記帳対象。",
+      "impact": "closure できるのは「commit を除く」固定対象一式のみ。commit 欄は この2つの過去実行については恒久的に missing のまま残し、推測で 埋めない（裁定2「それも不可能な場合は BLOCKED として記帳する」の 運用として、値なし+理由つきで明示する）。"
+    },
+    "commit": {
+      "value": null,
+      "status": "PENDING_PHASE_B",
+      "reason": "本フィールドは『本 pin ファイルの再生成検証（reproducibility_reconciliation）を実走した commit』を指す設計とする——過去2実行（2026-08-21初回・2026-08-22再レンダ）の commit は unrecorded_execution_commits の通り恒久的に missing であり、本フィールドがそれを代替することはない。Phase B が再生成検証を 実走した時点の HEAD をここへ記帳する。"
+    }
+  }
+}
