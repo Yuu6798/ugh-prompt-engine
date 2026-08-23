@@ -77,7 +77,13 @@ export-device probe・4 起動 計 ≈ $0.38。動く実例 =
   （二重保証を回収 hold 中にも成立させる）
 - **起動コマンドの curl は `--retry 5 --retry-all-errors` + ファイル落とし実行 +
   取得失敗時 self-stop**（`curl | bash` 単発は取得失敗で空実行 exit 0 =
-  課金だけ発生する silent no-op になる）
+  課金だけ発生する silent no-op になる）。**既知の残余**: この pre-script
+  失敗経路の fallback stop は**単発**で、script 内の 5 回リトライも watchdog も
+  （script が走っていないため）存在しない — curl 全滅 + stop 一過性失敗の
+  複合時は pod が課金を続け得る。次回改修では注入コマンド内の fallback stop
+  自体をリトライループにするのが正。当面の防波堤は操作側の起動後 10 分
+  heartbeat 確認（§2.1 — この経路では heartbeat が一度も立たないため必ず
+  検出される）
 
 ## 4. fail-closed 測定規律
 
