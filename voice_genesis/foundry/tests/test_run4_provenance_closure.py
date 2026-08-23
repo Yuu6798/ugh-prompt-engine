@@ -16,6 +16,8 @@ Fable の職務）。
 - closure が {reproduced, measured_only, not_closable} のいずれか
 - closure == reproduced のとき value が 64-hex の sha256 で非 null
 - closure == not_closable のとき value は null
+- closure == measured_only のとき value が 64-hex の sha256 で非 null
+- acceptance が宣言する run4_anchor_provenance.json の sha256 が実ファイルと一致
 """
 from __future__ import annotations
 
@@ -154,6 +156,38 @@ def test_not_closable_items_have_null_value(closure: Dict[str, Any]) -> None:
             )
 
 
+def test_measured_only_items_have_sha256_value(closure: Dict[str, Any]) -> None:
+    """`measured_only` は「実測はしたが当時バイトとの同一性は未確立」の意であり、
+    実測値そのものは必ず持つ。value が null のまま measured_only を名乗ると
+    台帳の「4 件は実測値つきで記録」という記帳と矛盾する
+    （PR #307 セルフレビュー指摘 5）。"""
+    for item in closure["items"]:
+        if item["closure"] == "measured_only":
+            assert isinstance(item["value"], str) and SHA256_RE.match(item["value"]), (
+                f"item {item['ref']} is closure=measured_only but value is not a "
+                f"64-hex sha256: {item['value']!r}"
+            )
+
+
+def test_acceptance_declared_provenance_sha256_matches_actual_file(
+    closure: Dict[str, Any],
+) -> None:
+    """acceptance 節は run4_anchor_provenance.json の sha256 を宣言している。
+    宣言だけして照合しないと、確定記録が変わっても本記録が気付けない
+    （PR #307 セルフレビュー指摘 3）。"""
+    import hashlib
+
+    acceptance = closure["acceptance"]
+    m = re.search(r"sha256=([0-9a-f]{64})", acceptance)
+    assert m, "acceptance 節に run4_anchor_provenance.json の sha256 宣言が無い"
+    declared = m.group(1)
+    actual = hashlib.sha256(PROVENANCE_PATH.read_bytes()).hexdigest()
+    assert actual == declared, (
+        f"run4_anchor_provenance.json の実 sha256 {actual} が acceptance 節の宣言 "
+        f"{declared} と違う（確定記録が変更されたか、本記録の宣言が古い）"
+    )
+
+
 def test_wav_regeneration_section_shape(closure: Dict[str, Any]) -> None:
     wav = closure.get("wav_regeneration")
     assert isinstance(wav, dict)
@@ -190,7 +224,16 @@ def test_phase4_env_contract_retest_section_shape(closure: Dict[str, Any]) -> No
     results2 = wav2.get("results")
     assert isinstance(results2, list)
     assert wav2["total"] == len(results2)
-    matches2 = sum(1 for r in results2 if r.get("match_recorded") is True)
+    for r in results2:
+        # phase2 は "match" / phase4 は "match_recorded" とキー名が異なる。
+        # 綴り違い・キー欠落を「0 件一致」として黙って通す vacuous pass を
+        # 防ぐため、全 result に bool 型で存在することを明示検査する
+        # （PR #307 セルフレビュー指摘 4）。
+        assert isinstance(r.get("match_recorded"), bool), (
+            f"phase4 result {r.get('speaker')}/{r.get('song')} に bool の "
+            f"match_recorded が無い: {sorted(r)}"
+        )
+    matches2 = sum(1 for r in results2 if r["match_recorded"] is True)
     assert matches2 == wav2["match_count"]
 
     factors = p4.get("other_uncontrolled_factors_enumerated_not_swept")

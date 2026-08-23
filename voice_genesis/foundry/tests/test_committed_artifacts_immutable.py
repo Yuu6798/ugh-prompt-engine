@@ -1,9 +1,11 @@
 """test_committed_artifacts_immutable.py — 確定 artifact の機械保護（PR #306
 レビュー第2巡 P2）。
 
-`voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json`（VG-DEBT-004）と
+`voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json`（VG-DEBT-004）、
 `voice_genesis/foundry/results_s3/run4_finite_report_2026-08-22.json`
-（VG-DEBT-007）は「実測を生んだ版」の**バイト同一の凍結物**であり、以後の
+（VG-DEBT-007）、`voice_genesis/foundry/results_s3/run4_provenance_closure_2026-08-23.json`
+（VG-DEBT-008。PR #307 セルフレビュー指摘 2 で追加）は
+「実測を生んだ版」の**バイト同一の凍結物**であり、以後の
 コミットで（lint 由来の自動整形も含めて）1 バイトも変更してはならない
 （`voice_genesis/evolution/probes/snapshots/README.md` と同じ規律）。
 
@@ -35,6 +37,9 @@ _FOUNDRY = Path(__file__).resolve().parent.parent
 LEDGER_PATH = _FOUNDRY / "debt" / "debt_ledger.yaml"
 D4_RESULTS_PATH = _FOUNDRY / "debt" / "d4" / "d4_results_2026-08-22.json"
 RUN4_FINITE_REPORT_PATH = _FOUNDRY / "results_s3" / "run4_finite_report_2026-08-22.json"
+RUN4_PROVENANCE_CLOSURE_PATH = (
+    _FOUNDRY / "results_s3" / "run4_provenance_closure_2026-08-23.json"
+)
 
 #: 2026-08-22 の D4 実測は v0.1 spec（本 sha256）に束縛して実行された。
 #: spec 自体は PR #306 のレビュー対応で v0.2 → v0.3 へ改訂され続けているが、
@@ -161,3 +166,45 @@ def test_run4_finite_report_structural_invariants() -> None:
         assert ck["status"] == "ok", ck.get("path")
         assert ck["pin_sha256_match"] is True, ck.get("path")
         assert ck["total_non_finite"] == 0, ck.get("path")
+
+
+# --- VG-DEBT-008: run4_provenance_closure_2026-08-23.json -----------------
+
+
+def test_run4_provenance_closure_sha256_matches_ledger_evidence(
+    ledger: Dict[str, Any],
+) -> None:
+    """VG-DEBT-008 の証拠ファイルも台帳記帳 sha256 と一致させる
+    （PR #307 セルフレビュー指摘 2: 台帳が pin を持つのに機械強制が無く、
+    実際に本 PR 内で pin 後にファイルが変わった事故が起きていた）。"""
+    assert RUN4_PROVENANCE_CLOSURE_PATH.is_file(), (
+        f"{RUN4_PROVENANCE_CLOSURE_PATH} が無い（確定 artifact が消えている）"
+    )
+    expected = _evidence_sha256(
+        ledger,
+        "VG-DEBT-008",
+        "voice_genesis/foundry/results_s3/run4_provenance_closure_2026-08-23.json",
+    )
+    got = _sha256_file(RUN4_PROVENANCE_CLOSURE_PATH)
+    assert got == expected, (
+        f"run4_provenance_closure_2026-08-23.json の実 sha256 {got} が "
+        f"debt_ledger.yaml VG-DEBT-008 の記帳 {expected} と違う"
+        "（証拠ファイルが変更されたか、台帳の記帳が古い）"
+    )
+
+
+def test_run4_provenance_closure_structural_invariants() -> None:
+    """10 件・closure 語彙・acceptance/phase4 節の存在を機械強制する
+    （closure の内訳自体は test_run4_provenance_closure.py が担当）。"""
+    doc = json.loads(RUN4_PROVENANCE_CLOSURE_PATH.read_text(encoding="utf-8"))
+
+    assert doc["schema"] == "voicegenesis-run4-provenance-closure/0.1"
+    assert isinstance(doc.get("acceptance"), str) and doc["acceptance"].strip()
+    items = doc["items"]
+    assert len(items) == 10
+    assert {i["closure"] for i in items} <= {
+        "reproduced",
+        "measured_only",
+        "not_closable",
+    }
+    assert isinstance(doc.get("phase4_env_contract_retest"), dict)

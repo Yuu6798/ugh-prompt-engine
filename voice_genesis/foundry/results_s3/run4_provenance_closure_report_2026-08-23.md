@@ -102,7 +102,7 @@
   とし、「2026-08-23 再 export 値であり当時バイトとの同一性は未確立」と
   明記した。
 
-## Phase 3: run3系5件
+## Phase 3: run3系6件
 
 - Drive 検索を複数パターンで実施（`run3` 全般・`onnx_export41`・
   `s3_run3`・`run3_acoustic`・`export41`）。run3 の 40K checkpoint も
@@ -116,19 +116,21 @@
 
 - `voice_genesis/foundry/results_s3/run4_provenance_closure_2026-08-23.json`
   （新規・schema `voicegenesis-run4-provenance-closure/0.1`）
-- `voice_genesis/foundry/tests/test_run4_provenance_closure.py`（新規・13 test）
+- `voice_genesis/foundry/tests/test_run4_provenance_closure.py`（新規。件数は最終節「Phase 5」を参照）
 - `pyproject.toml` testpaths へ追加
 - `voice_genesis/foundry/debt/debt_ledger.yaml` VG-DEBT-008 更新
-  （evidence_delivered + note 追記。status は `in_progress` を維持——
-  6 件が not_closable のまま残るため、依頼文の「10 件すべて
-  reproduced/measured_only で閉じた場合のみ repaid」の条件を満たさない）
+  （evidence_delivered + note 追記。**本実測時点では** status を
+  `in_progress` に据え置いた——6 件が not_closable のまま残るため、
+  「10 件すべて reproduced/measured_only で閉じた場合のみ repaid」の
+  条件を満たさない。**最終的な status は Phase 5（Fable 裁定）で
+  `accepted_residual` に確定した**）
 
 検証コマンドと結果:
 
 ```
 ruff check .                                          # clean
 python -m pytest voice_genesis/foundry/tests/test_run4_provenance_closure.py -q
-                                                        # 13 passed
+                                                        # pass（件数は Phase 5 参照）
 python -m pytest voice_genesis/foundry/tests/test_debt_ledger_shape.py -q
                                                         # 全 pass
 python -m pytest tests/discipline/ -q                  # 全 pass
@@ -282,4 +284,51 @@ item 1（acoustic ONNX sha）は `measured_only` に据え置く。
   参照を追記）
 - `test_run4_provenance_closure.py` に Phase 4 節の形状テストを追加
 - `debt_ledger.yaml` VG-DEBT-008 の `note` を最新結果に合わせて更新
-  （status は `in_progress` 据え置き——run3 系 6 件が残るため）
+  （この時点では status を `in_progress` 据え置き——run3 系 6 件が残るため。
+  **確定は Phase 5 を参照**）
+
+## Phase 5: Fable 裁定と PR #307 セルフレビュー対応（2026-08-23）
+
+### 裁定: VG-DEBT-008 = `accepted_residual`
+
+実測 2 巡（Phase 0–4）を判読した結果、以下を理由に **`accepted_residual`
+（証拠境界の明示）で確定**した。元の `close_condition`（全リンクが missing
+無しで閉じている）は満たさないまま、条件不充足を明示して閉じる形であり、
+VG-DEBT-010 と同型の扱いである。
+
+1. 閉じられる範囲は閉じた — canon zip / vocoder onnx / gate_synth_run4.py
+   pin-commit / run4 acoustic ONNX 再 export の 4 件を実測値つきで記録
+   （`closure: measured_only`）
+2. run3 系 6 件は run3 checkpoint・onnx_export41 が Drive 含め所在不明で
+   構造的に閉鎖不能（`closure: not_closable`）
+3. run4 側の「当時バイトとの同一性」は本環境で未達。**Fable 自身の
+   SIMD 主因仮説は Phase 4 の実測で反証された**。最有力の残余候補は
+   GPU（run4 = RunPod GPU pod）vs CPU（本実測 = torch cpu）の export
+   device 差だが、検証は GPU 課金を要するため逓減領域として掃引しない
+
+`reentry_condition` を台帳へ記録した: (a) GPU 環境での export → anchor WAV
+再生成が記録済み sha と一致すれば item 1 は `reproduced` へ昇格可能、
+(b) run3 checkpoint が発見されれば run3 系 6 件は再開可能。
+
+### セルフレビュー（PR #307・high）指摘 8 件を全採用
+
+| # | 指摘 | 対応 |
+|---|---|---|
+| 1 | 本報告が `in_progress` と書いており台帳の `accepted_residual` と矛盾 | 本節を正本として追加し、Phase 3/4 の該当記述に「確定は Phase 5」を明記 |
+| 2 | closure JSON の sha256 pin が immutability テストに未登録（機械強制なし） | `test_committed_artifacts_immutable.py` に VG-DEBT-008 分を追加（台帳から動的に読む既存方式） |
+| 3 | `run4_anchor_provenance.json` の sha256 を acceptance が宣言しているのに未検証 | closure テストで実ファイルと照合 |
+| 4 | Phase 4 の `match_count` 相互検査に bool 型検査が無く、キー名取り違えで vacuous pass | `isinstance(..., bool)` を追加（phase2=`match` / phase4=`match_recorded` のキー名差も明示検査） |
+| 5 | `measured_only` に value 制約が無く `value: null` が通る | `measured_only` は 64-hex の value 必須を強制 |
+| 6 | 「13 test」が stale（Phase 4 で 14 に） | 実数への追随をやめ、件数は本節参照へ変更 |
+| 7 | 見出し「Phase 3: run3系5件」が本文・JSON・台帳の 6 件と不一致 | 「run3系6件」へ修正 |
+| 8 | acceptance が Phase 0–3 を「無改変・追記のみ」と主張するが `wav_regeneration.results` が再シリアライズされていた | acceptance の文言を実態（値は同一・整形は変化しうる）へ訂正 |
+
+検証（Phase 5 時点）:
+
+```
+ruff check .                                                   # clean
+python -m pytest voice_genesis/foundry/tests/test_run4_provenance_closure.py \
+    voice_genesis/foundry/tests/test_committed_artifacts_immutable.py \
+    voice_genesis/foundry/tests/test_debt_ledger_shape.py tests/discipline -q
+python -m pytest --collect-only -q                             # collection error 0
+```
