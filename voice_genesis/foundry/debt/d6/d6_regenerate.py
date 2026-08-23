@@ -19,10 +19,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import importlib.metadata
 import json
 import os
-import platform
 import shlex
 import shutil
 import struct
@@ -133,6 +131,10 @@ def _checkpoint_dir(root: Path, generation: str) -> Path:
     return root / "materials" / "run7_ckpt"
 
 
+def _render_python(root: Path) -> str:
+    return str(root / "venv_render" / "bin" / "python")
+
+
 def build_provision_command(root: Path) -> list[str]:
     return ["bash", str(PROVISION), "--root", str(root)]
 
@@ -169,12 +171,12 @@ def build_export_command(root: Path, group: GroupPaths) -> list[str]:
 
 
 def build_render_command(
-    root: Path, group: GroupPaths, *, python_executable: str = sys.executable
+    root: Path, group: GroupPaths, *, python_executable: str | None = None
 ) -> list[str]:
     stem = f"s6_{group.generation}_acoustic"
     canon = root / "materials" / "extracted" / "ds" / "NamineRitsu_DiffSinger"
     return [
-        python_executable,
+        python_executable or _render_python(root),
         str(D4_RUNNER),
         "render",
         "--generation",
@@ -210,7 +212,7 @@ def build_real_render_command(
     root: Path,
     acoustic_onnx: Path,
     *,
-    python_executable: str = sys.executable,
+    python_executable: str | None = None,
 ) -> list[str]:
     """成功したB-1 real-renderを生んだ履歴実装で14条件を再生成する。"""
     source = _real_render_source_root(root)
@@ -219,7 +221,7 @@ def build_real_render_command(
     stem = "s6_run7_acoustic"
     canon = root / "materials" / "extracted" / "ds" / "NamineRitsu_DiffSinger"
     return [
-        python_executable,
+        python_executable or _render_python(root),
         str(foundry / "run8" / "s7_calib_render.py"),
         "--canon-model-dir",
         str(canon),
@@ -278,7 +280,7 @@ def build_measure_command(root: Path, *, python_executable: str = sys.executable
 
 
 def static_plan(
-    root: Path, *, python_executable: str = sys.executable
+    root: Path, *, python_executable: str | None = None
 ) -> tuple[list[str], tuple[list[str], ...], tuple[list[str], ...]]:
     groups = group_paths(root)
     return (
@@ -319,17 +321,33 @@ def verify_real_render_inputs(root: Path, acoustic_onnx: Path) -> None:
         _verify_file_pin(path, expected, label=label)
 
 
-def verify_real_render_stack() -> None:
+def verify_real_render_stack(python_executable: str | Path) -> None:
     """B-1 manifest が束縛した数値実行環境以外で履歴renderを走らせない。"""
     baseline = json.loads(REAL_RENDER_BASELINE.read_text(encoding="utf-8"))
     expected = baseline["render_stack"]
-    observed = {
-        "numpy": importlib.metadata.version("numpy"),
-        "onnxruntime": importlib.metadata.version("onnxruntime"),
-        "soundfile": importlib.metadata.version("soundfile"),
-        "PyYAML": importlib.metadata.version("PyYAML"),
-        "python": platform.python_version(),
-    }
+    check = subprocess.run(
+        [
+            str(python_executable),
+            "-c",
+            (
+                "import importlib.metadata as m,json,platform;"
+                "print(json.dumps({"
+                "'numpy':m.version('numpy'),"
+                "'onnxruntime':m.version('onnxruntime'),"
+                "'soundfile':m.version('soundfile'),"
+                "'PyYAML':m.version('PyYAML'),"
+                "'python':platform.python_version()}))"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if check.returncode != 0:
+        raise RegenerationError(
+            f"render runtime を検査できない: {python_executable}: {check.stderr.strip()}"
+        )
+    observed = json.loads(check.stdout)
     if observed != expected:
         raise RegenerationError(
             f"real-render execution profile mismatch: {observed} != pin {expected}"
@@ -633,11 +651,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if not args.skip_provision:
         _run(provision)
+    verify_real_render_stack(_render_python(root))
     verify_calibration_outputs(root / "calibration_synthetic")
     for export in exports:
         _run(export)
     verify_real_render_inputs(root, real_render_acoustic)
-    verify_real_render_stack()
     materialize_historical_real_render_source(root)
     _run(build_real_render_command(root, real_render_acoustic))
     reconcile_real_render_manifest(

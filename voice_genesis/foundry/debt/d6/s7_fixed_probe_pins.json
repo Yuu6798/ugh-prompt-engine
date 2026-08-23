@@ -188,7 +188,7 @@
       "source": "voice_genesis/foundry/debt/d6/d6_regenerate.py（単一の実行入口。内部で provision.sh を起動する）",
       "provisioner": {
         "path": "voice_genesis/foundry/run8/provision.sh",
-        "sha256": "87dac1801966e3addefd849ae4ed6b5302313a044b8feb62ebd4a54b0326b9cd"
+        "sha256": "acb49b9acb985f7701a4cb86f1e93a0bcfd8973d245ef69de88431becae7185b"
       },
       "note": "作業先は operator が作成可能な絶対パス。real-render acoustic ONNX は現在未回収のため、完全一致する外部資産を指定できるまでコマンドは開始前に BLOCKED で停止する。回収後は13 synthetic校正、17資産の provision、10 witnessed exports、履歴実装による14 real-render校正、10 production renders、manifest実digest計算、360セルmeasureを fail-closed で連続実行する。"
     },
@@ -200,7 +200,7 @@
       "plan_command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --real-render-acoustic-onnx /home/user/d6-real-render-input/s6_run7_acoustic.onnx --plan",
       "orchestrator": {
         "path": "voice_genesis/foundry/debt/d6/d6_regenerate.py",
-        "sha256": "eab7b3ff7cf06aeff9620316d2f1515347370116efcc6177573bd0b9c1444de4"
+        "sha256": "7c3993cccb5bf79413c047fa0cc18801b8cedddf856b17ed8de65254711d8d1a"
       },
       "d4_runner": {
         "path": "voice_genesis/foundry/debt/d4/d4_runner.py",
@@ -227,6 +227,7 @@
         "real_render_calibration_total_conditions": 14
       },
       "measure_manifest_digest_policy": "10個の render manifest が全て存在することを確認し、各ファイルの実 sha256 を render 後に計算して同順の --render-manifest-sha256 へ渡す。欠落時は measure を起動しない。",
+      "render_runtime_policy": "provision.shがpython3.11.15からvenv_renderを構築し、numpy 2.4.6 / onnxruntime 1.29.0 / soundfile 0.14.0 / PyYAML 6.0.1を復元・import照合する。d6_regenerate.pyはsynthetic/real-render/production出力の生成前に同venvを再照合し、全render commandをそのinterpreterへ固定する。",
       "measure_completion_policy": "--allow-partial は付けない。d4_runner.py が10群・360セル全数一致と error=0 を要求し、不完全なら非0終了する。"
     }
   },

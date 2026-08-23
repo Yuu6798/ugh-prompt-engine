@@ -274,6 +274,47 @@ def test_material_acquisition_command_reaches_pinned_provision_sh(pins: Dict[str
     assert provision[1].endswith("voice_genesis/foundry/run8/provision.sh")
 
 
+def test_provision_builds_and_checks_complete_pinned_render_runtime() -> None:
+    text = d6_regenerate.PROVISION.read_text(encoding="utf-8")
+    assert "venv_render" in text
+    for pin in (
+        "3.11.15",
+        "numpy==2.4.6",
+        "onnxruntime==1.29.0",
+        "soundfile==0.14.0",
+        "PyYAML==6.0.1",
+    ):
+        assert pin in text
+
+
+def test_render_runtime_verification_is_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    baseline = json.loads(d6_regenerate.REAL_RENDER_BASELINE.read_text(encoding="utf-8"))
+
+    def completed(observed: Dict[str, str]) -> Any:
+        return d6_regenerate.subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=json.dumps(observed), stderr=""
+        )
+
+    monkeypatch.setattr(
+        d6_regenerate.subprocess,
+        "run",
+        lambda *_args, **_kwargs: completed(baseline["render_stack"]),
+    )
+    d6_regenerate.verify_real_render_stack("/pinned/render/python")
+
+    wrong = dict(baseline["render_stack"])
+    wrong["onnxruntime"] = "0.0.0"
+    monkeypatch.setattr(
+        d6_regenerate.subprocess,
+        "run",
+        lambda *_args, **_kwargs: completed(wrong),
+    )
+    with pytest.raises(d6_regenerate.RegenerationError, match="execution profile mismatch"):
+        d6_regenerate.verify_real_render_stack("/pinned/render/python")
+
+
 def test_regeneration_runner_covers_10_exports_and_render_groups(
     pins: Dict[str, Any], tmp_path: Path
 ) -> None:
@@ -298,6 +339,11 @@ def test_regeneration_runner_covers_10_exports_and_render_groups(
     for command in (*exports, *renders):
         assert all("<" not in arg and ">" not in arg for arg in command)
 
+    _provision, _exports, default_renders = d6_regenerate.static_plan(root)
+    assert all(
+        command[0] == str(root / "venv_render" / "bin" / "python") for command in default_renders
+    )
+
     recovered = tmp_path / "recovered" / "s6_run7_acoustic.onnx"
     real_command = d6_regenerate.build_real_render_command(
         root, recovered, python_executable="/pinned/analysis/python"
@@ -306,6 +352,9 @@ def test_regeneration_runner_covers_10_exports_and_render_groups(
     assert str(d6_regenerate.REAL_RENDER_HISTORICAL_COMMIT) in real_command[1]
     assert real_command[real_command.index("--manifest-out") + 1] == str(
         root / "calibration_real_render_manifest.json"
+    )
+    assert d6_regenerate.build_real_render_command(root, recovered)[0] == str(
+        root / "venv_render" / "bin" / "python"
     )
 
 

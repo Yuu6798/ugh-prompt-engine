@@ -239,7 +239,61 @@ else:
 PY
 [ "$?" -eq 0 ] || { echo "  analysis stack FAIL 復元できなかった" >&2; FAIL=$((FAIL+1)); }
 
-echo "| 5. export 用の隔離 venv（DiffSinger は numpy<2 を要求する）"
+echo "| 5. RENDER_STACK_PIN（render 専用の隔離 venv）"
+# B-1 manifest が束縛した Python micro version と4 packageを、analysis/export
+# 環境から分離して復元する。`python` の偶然のsite-packagesへ依存させない。
+RENDER_VENV="$ROOT/venv_render"
+RENDER_BASE="$(command -v python3.11 2>/dev/null || true)"
+RENDER_FAIL=0
+if [ -z "$RENDER_BASE" ]; then
+  echo "  render venv    FAIL python3.11 が無い（pin は 3.11.15）" >&2
+  RENDER_FAIL=1
+else
+  RENDER_BASE_VERSION="$($RENDER_BASE -c 'import platform; print(platform.python_version())' 2>/dev/null || true)"
+  if [ "$RENDER_BASE_VERSION" != "3.11.15" ]; then
+    echo "  render venv    FAIL python $RENDER_BASE_VERSION != pin 3.11.15" >&2
+    RENDER_FAIL=1
+  else
+    if [ ! -x "$RENDER_VENV/bin/python" ] || \
+       [ "$("$RENDER_VENV/bin/python" -c 'import platform; print(platform.python_version())' 2>/dev/null || true)" != "3.11.15" ]; then
+      "$RENDER_BASE" -m venv --clear "$RENDER_VENV" || RENDER_FAIL=1
+    fi
+    if [ "$RENDER_FAIL" -eq 0 ]; then
+      "$RENDER_VENV/bin/python" -m pip -q install \
+        "numpy==2.4.6" "onnxruntime==1.29.0" "soundfile==0.14.0" "PyYAML==6.0.1" \
+        >/dev/null 2>&1 || RENDER_FAIL=1
+    fi
+  fi
+fi
+if [ "$RENDER_FAIL" -eq 0 ]; then
+  RENDER_CHECK="$("$RENDER_VENV/bin/python" - <<'RPY' 2>/dev/null
+import importlib.metadata as md
+import platform
+
+pin = {
+    "numpy": "2.4.6",
+    "onnxruntime": "1.29.0",
+    "soundfile": "0.14.0",
+    "PyYAML": "6.0.1",
+    "python": "3.11.15",
+}
+observed = {name: md.version(name) for name in pin if name != "python"}
+observed["python"] = platform.python_version()
+assert observed == pin, (observed, pin)
+import numpy, onnxruntime, soundfile, yaml  # noqa: F401
+print(" / ".join(f"{name} {version}" for name, version in observed.items()))
+RPY
+)"
+  if [ -n "$RENDER_CHECK" ]; then
+    echo "  render venv    OK   $RENDER_CHECK"
+  else
+    echo "  render venv    FAIL import/version照合に失敗" >&2
+    RENDER_FAIL=1
+  fi
+fi
+[ "$RENDER_FAIL" -eq 0 ] || FAIL=$((FAIL+1))
+
+echo "| 6. export 用の隔離 venv（DiffSinger は numpy<2 を要求する）"
 # 測定側インタプリタ（numpy 2.4.6 / librosa 0.11.0）とは **別** に保つ。
 # 2026-08-22 実測: 再構築後に requirements を入れ直すと numpy が 2.x へ引き上げられて
 # export が壊れる。requirements.txt を入れた **後で** numpy を pin へ戻す順序が要る。
