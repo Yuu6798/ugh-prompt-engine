@@ -649,9 +649,12 @@ def test_regenerated_results_are_bound_to_current_render_manifests_and_materials
 
 def _copy_phase_b_checkout_authorities(report_root: Path) -> None:
     for source in (
+        Path(d6_regenerate.__file__).resolve(),
         d6_regenerate.D4_RUNNER,
         d6_regenerate.D4_SPEC,
         d6_regenerate.D4_BASELINE,
+        d6_regenerate.TRF_SPEC,
+        d6_regenerate.CALIBRATION_PINS,
         d6_regenerate.REAL_RENDER_BASELINE,
     ):
         relative = source.relative_to(d6_regenerate.REPO_ROOT)
@@ -667,6 +670,16 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
     regenerated_path, rendered_groups = _bind_regenerated_to_current_render_evidence(
         tmp_path, baseline
     )
+    execution_commit = d6_regenerate.subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=d6_regenerate.REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    synthetic_observed = json.loads(
+        d6_regenerate.CALIBRATION_PINS.read_text(encoding="utf-8")
+    )
     synthetic_path = tmp_path / "calibration_synthetic_reconciliation.json"
     synthetic_path.write_text(
         json.dumps(
@@ -674,14 +687,34 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
                 "schema": "vg-d6-synthetic-calibration-reconciliation/0.1",
                 "verdict": "PASS",
                 "value": {"matched_conditions": 13, "mismatches": []},
-                "execution_commit": "a" * 40,
+                "execution_commit": execution_commit,
                 "output_pins": {
+                    "path": str(
+                        d6_regenerate.CALIBRATION_PINS.relative_to(
+                            d6_regenerate.REPO_ROOT
+                        )
+                    ),
                     "sha256": d6_regenerate.sha256_file(d6_regenerate.CALIBRATION_PINS)
                 },
-                "runner": {"sha256": d6_regenerate.sha256_file(Path(d6_regenerate.__file__))},
+                "runner": {
+                    "path": str(
+                        Path(d6_regenerate.__file__)
+                        .resolve()
+                        .relative_to(d6_regenerate.REPO_ROOT)
+                    ),
+                    "sha256": d6_regenerate.sha256_file(Path(d6_regenerate.__file__)),
+                },
+                "observed": synthetic_observed,
             }
         ),
         encoding="utf-8",
+    )
+    real_manifest_path = tmp_path / "calibration_real_render_manifest.json"
+    real_manifest_path.write_bytes(d6_regenerate.REAL_RENDER_BASELINE.read_bytes())
+    real_manifest_sha = hashlib.sha256(real_manifest_path.read_bytes()).hexdigest()
+    real_value = d6_regenerate._reconcile_real_render_data(
+        json.loads(d6_regenerate.REAL_RENDER_BASELINE.read_text(encoding="utf-8")),
+        json.loads(real_manifest_path.read_text(encoding="utf-8")),
     )
     real_path = tmp_path / "calibration_real_render_reconciliation.json"
     real_path.write_text(
@@ -689,19 +722,12 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
             {
                 "schema": "vg-d6-real-render-calibration-reconciliation/0.1",
                 "verdict": "PASS",
-                "value": {
-                    "n_rendered": 11,
-                    "n_compared": 14,
-                    "samples_matches": 14,
-                    "samples_mismatches": [],
-                    "wav_container_matches": 0,
-                    "wav_container_mismatches": 14,
-                },
+                "value": real_value,
                 "baseline_manifest_sha256": REAL_RENDER_MANIFEST_SHA256,
-                "regenerated_manifest_sha256": "b" * 64,
+                "regenerated_manifest_sha256": real_manifest_sha,
                 "recovered_acoustic_sha256": d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256,
                 "historical_source_commit": d6_regenerate.REAL_RENDER_HISTORICAL_COMMIT,
-                "execution_commit": "a" * 40,
+                "execution_commit": execution_commit,
             }
         ),
         encoding="utf-8",
@@ -712,6 +738,7 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         regenerated_path,
         synthetic_path,
         real_path,
+        real_manifest_path,
         d6_regenerate.D4_BASELINE,
         d6_regenerate.FIXED_PROBE_PINS,
         d6_regenerate.D4_SPEC,
@@ -736,13 +763,21 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         regenerated_path,
         synthetic_path,
         real_path,
+        real_manifest_path,
         recovered_acoustic,
         report_path,
         rendered_groups,
     )
     assert input_reads == {path: 1 for path in evidence_inputs}
     provenance = report["regenerated_provenance"]
-    assert set(provenance) == {"results", "d4_runner", "d4_remeasure_spec", "groups"}
+    assert set(provenance) == {
+        "results",
+        "d4_runner",
+        "d4_remeasure_spec",
+        "synthetic_reconciliation",
+        "real_render_manifest",
+        "groups",
+    }
     assert provenance["results"]["path"] == str(d6_regenerate.PHASE_B_RESULTS_PATH)
     assert len(provenance["groups"]) == 10
     assert all(
@@ -752,6 +787,8 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
     )
     for ref in (
         provenance["results"],
+        provenance["synthetic_reconciliation"],
+        provenance["real_render_manifest"],
         *(
             bound
             for group in provenance["groups"].values()
@@ -805,6 +842,90 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         )
     packaged_results_path.write_bytes(packaged_results_bytes)
 
+    def assert_rebound_report_rejected(tampered_report: dict[str, Any]) -> None:
+        tampered_report_bytes = (json.dumps(tampered_report) + "\n").encode()
+        report_path.write_bytes(tampered_report_bytes)
+        tampered_node = json.loads(
+            json.dumps(tampered_report["reproducibility_reconciliation"])
+        )
+        tampered_node["report_binding"] = {
+            "path": str(d6_regenerate.PHASE_B_REPORT_PATH),
+            "sha256": hashlib.sha256(tampered_report_bytes).hexdigest(),
+        }
+        with pytest.raises(AssertionError):
+            _assert_pending_or_resolved(
+                tampered_node,
+                context="reproducibility_reconciliation",
+                report_root=tmp_path,
+            )
+
+    # report/node/digestを一緒に書き換えても、360実測からの再計算で拒否する。
+    drifted_results = json.loads(packaged_results_bytes)
+    drifted_group = next(iter(drifted_results["groups"].values()))
+    drifted_cell = next(iter(drifted_group["cells"].values()))
+    drifted_cell["axes"]["excess_tail_voiced_ms"] += 100.0
+    drifted_results_bytes = (json.dumps(drifted_results) + "\n").encode()
+    packaged_results_path.write_bytes(drifted_results_bytes)
+    drifted_results_sha = hashlib.sha256(drifted_results_bytes).hexdigest()
+    drifted_report = json.loads(report_bytes)
+    drifted_report["regenerated_provenance"]["results"]["sha256"] = (
+        drifted_results_sha
+    )
+    drifted_value = drifted_report["reproducibility_reconciliation"]["value"]
+    drifted_value["reference_output_remeasurement"][
+        "regenerated_results_sha256"
+    ] = drifted_results_sha
+    drifted_value["samples_sha256"]["regenerated_inventory_sha256"] = (
+        drifted_results_sha
+    )
+    drifted_value["wav_sha256"]["regenerated_inventory_sha256"] = drifted_results_sha
+    assert_rebound_report_rejected(drifted_report)
+    packaged_results_path.write_bytes(packaged_results_bytes)
+    report_path.write_bytes(report_bytes)
+
+    # synthetic summaryだけでなく、packaged observed 13条件を正本へ再比較する。
+    synthetic_ref = provenance["synthetic_reconciliation"]
+    packaged_synthetic_path = tmp_path / synthetic_ref["path"]
+    synthetic_bytes = packaged_synthetic_path.read_bytes()
+    tampered_synthetic = json.loads(synthetic_bytes)
+    tampered_synthetic["observed"]["n_conditions"] = 12
+    tampered_synthetic_bytes = (json.dumps(tampered_synthetic) + "\n").encode()
+    packaged_synthetic_path.write_bytes(tampered_synthetic_bytes)
+    tampered_synthetic_sha = hashlib.sha256(tampered_synthetic_bytes).hexdigest()
+    synthetic_report = json.loads(report_bytes)
+    synthetic_report["regenerated_provenance"]["synthetic_reconciliation"][
+        "sha256"
+    ] = tampered_synthetic_sha
+    synthetic_report["reproducibility_reconciliation"]["value"]["calibration"][
+        "synthetic"
+    ]["reconciliation_sha256"] = tampered_synthetic_sha
+    assert_rebound_report_rejected(synthetic_report)
+    packaged_synthetic_path.write_bytes(synthetic_bytes)
+    report_path.write_bytes(report_bytes)
+
+    # real-render summaryとdigestを同時改変しても、14条件manifestの再比較で拒否する。
+    real_ref = provenance["real_render_manifest"]
+    packaged_real_path = tmp_path / real_ref["path"]
+    real_bytes = packaged_real_path.read_bytes()
+    tampered_real = json.loads(real_bytes)
+    tampered_real["conditions"][0]["samples_sha256"] = "0" * 64
+    tampered_real_bytes = (json.dumps(tampered_real) + "\n").encode()
+    packaged_real_path.write_bytes(tampered_real_bytes)
+    tampered_real_sha = hashlib.sha256(tampered_real_bytes).hexdigest()
+    real_report = json.loads(report_bytes)
+    real_report["regenerated_provenance"]["real_render_manifest"]["sha256"] = (
+        tampered_real_sha
+    )
+    real_report["reproducibility_reconciliation"]["value"]["calibration"][
+        "real_render"
+    ]["regenerated_manifest_sha256"] = tampered_real_sha
+    real_report["real_render_recovery"]["value"][
+        "regenerated_manifest_sha256"
+    ] = tampered_real_sha
+    assert_rebound_report_rejected(real_report)
+    packaged_real_path.write_bytes(real_bytes)
+    report_path.write_bytes(report_bytes)
+
     absolute_ref_report = json.loads(report_bytes)
     first_group_id = sorted(absolute_ref_report["regenerated_provenance"]["groups"])[0]
     absolute_ref_report["regenerated_provenance"]["groups"][first_group_id]["render_doc"][
@@ -856,6 +977,7 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
             regenerated_path,
             synthetic_path,
             real_path,
+            real_manifest_path,
             recovered_acoustic,
             tmp_path / "failed_phase_b.json",
             rendered_groups,
@@ -869,6 +991,7 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
             regenerated_path,
             synthetic_path,
             real_path,
+            real_manifest_path,
             recovered_acoustic,
             tmp_path / "must-not-use-tampered-baseline.json",
             rendered_groups,
@@ -1194,7 +1317,7 @@ def test_reproducibility_reconciliation_is_pending_phase_b_or_resolved(
         "required_keys": ["path", "sha256"],
         "verification": (
             "report の実 bytes sha256・裁定値の逐語一致・checkout-stableな"
-            "21証拠成果物からの全provenance再構成"
+            "23証拠成果物からのproduction/calibration全裁定再構成"
         ),
     }
     assert schema["reference_output_remeasurement"]["baseline_results_sha256"] == (
