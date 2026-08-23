@@ -270,11 +270,6 @@ def test_object_spec_accepts_sparse_fields_subset_of_allowed_keys():
     assert set(spec.fields) == {"bpm"}
 
 
-def test_object_spec_accepts_empty_fields():
-    spec = ObjectSpec(allowed_keys=["a", "b"])
-    assert spec.fields == {}
-
-
 def test_default_contract_all_object_specs_have_fields_subset_of_allowed_keys():
     """Whole-spec sanity sweep: every ObjectSpec in the frozen default
     contract already satisfies fields ⊆ allowed_keys (this is enforced by

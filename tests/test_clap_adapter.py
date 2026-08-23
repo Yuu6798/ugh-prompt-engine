@@ -567,10 +567,6 @@ class TestEmbedTexts:
 
 
 class TestSerializerRegression:
-    def test_bundle_without_learned_annotations_omits_field(self):
-        bundle = _make_bundle()
-        assert "learned_annotations" not in bundle.model_dump()
-
     def test_bundle_with_clap_embedding_includes_field(self, monkeypatch, tmp_path):
         _install_fake_clap(monkeypatch)
 

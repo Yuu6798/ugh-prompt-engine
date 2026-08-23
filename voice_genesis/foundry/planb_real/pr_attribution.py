@@ -261,11 +261,3 @@ if __name__ == "__main__":
             print(f"        {v['deltas']}")
     print("\n判定:", rep["verdict"])
     print("注:", rep["duration_note"])
-    if False:
-      for pk, rows in rep["pairs"].items():
-        for name, v in rows.items():
-            nc = f" 比較不可={v['not_comparable']}" if v["not_comparable"] else ""
-            print(f"   {name}: moved={v['moved']} expected={v['expected']} "
-                  f"leak={v['leak']} missing={v['missing']}{nc}")
-            print(f"        {v['deltas']}")
-    print("\n判定:", rep["verdict"])

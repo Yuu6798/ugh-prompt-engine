@@ -36,6 +36,26 @@ examples/real_audio_validation/consensus/per_track/*.json
 examples/roundtrip/cache/
 !examples/**/.gitkeep
 
+# Local analysis / test caches
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Regenerable local workspaces.  Committed research evidence stays in the
+# explicit examples/, docs/measurements/, and voice_genesis/**/results* trees.
+/.artifacts/
+/.cache/
+/.tmp/
+/scratch/
+/scratchpad/
+*.tmp
+*.bak
+*.orig
+
 # Claude Code local settings
 .claude/settings.local.json
 

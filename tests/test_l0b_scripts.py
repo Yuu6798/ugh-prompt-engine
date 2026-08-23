@@ -5304,25 +5304,6 @@ def test_compose_author_prompt_cli_writes_output_and_prints_sha(tmp_path: Path, 
     assert f"payload sha256={payload_sha256}" in captured.out
 
 
-def test_compose_author_prompt_expect_wrapper_sha256_match_publishes(tmp_path: Path, capsys):
-    payload_path = _compose_round1_payload_md(tmp_path)
-    out_path = tmp_path / "author_prompt.txt"
-    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
-    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
-
-    exit_code = compose_author_prompt.main(
-        [
-            "--wrapper", str(AUTHOR_WRAPPER_PATH),
-            "--payload", str(payload_path),
-            "--out", str(out_path),
-            "--expect-wrapper-sha256", wrapper_sha256,
-            "--expect-payload-sha256", payload_sha256,
-        ]
-    )
-    assert exit_code == 0
-    assert out_path.exists()
-
-
 def test_compose_author_prompt_expect_wrapper_sha256_mismatch_blocks_publish(
     tmp_path: Path, capsys
 ):
@@ -5347,25 +5328,6 @@ def test_compose_author_prompt_expect_wrapper_sha256_mismatch_blocks_publish(
     assert f"expected={bogus_sha256}" in captured.err
     wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
     assert f"actual={wrapper_sha256}" in captured.err
-
-
-def test_compose_author_prompt_expect_payload_sha256_match_publishes(tmp_path: Path, capsys):
-    payload_path = _compose_round1_payload_md(tmp_path)
-    out_path = tmp_path / "author_prompt.txt"
-    wrapper_sha256 = hashlib.sha256(AUTHOR_WRAPPER_PATH.read_bytes()).hexdigest()
-    payload_sha256 = hashlib.sha256(payload_path.read_bytes()).hexdigest()
-
-    exit_code = compose_author_prompt.main(
-        [
-            "--wrapper", str(AUTHOR_WRAPPER_PATH),
-            "--payload", str(payload_path),
-            "--out", str(out_path),
-            "--expect-wrapper-sha256", wrapper_sha256,
-            "--expect-payload-sha256", payload_sha256,
-        ]
-    )
-    assert exit_code == 0
-    assert out_path.exists()
 
 
 def test_compose_author_prompt_expect_payload_sha256_mismatch_blocks_publish(

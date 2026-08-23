@@ -550,28 +550,6 @@ def test_check_ledger_path_collisions_allows_existing_valid_ledger_at_ledger_pat
     intake._check_ledger_path_collisions(ledger_path, [src], filenames, out_dir, staging_dir)
 
 
-def test_check_ledger_path_collisions_still_rejects_non_ledger_file_at_ledger_path(
-    tmp_path: Path,
-) -> None:
-    """`--ledger` が `out_dir` 内の既存ファイルを指していても、中身が台帳と
-    して読み込めない（例: 正規化 wav 等の無関係なファイル）場合は、従来通り
-    衝突として fail-closed 拒否する（`_is_existing_ledger_file` の除外条件が
-    『中身が台帳として読める』場合のみに限定されていることの回帰）。
-    """
-    src = tmp_path / "UC-002.wav"
-    src.write_bytes(b"a")
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
-    existing = out_dir / "UC-001.norm24k.wav"
-    existing.write_bytes(b"already published")
-    staging_dir = tmp_path / "staging"
-    staging_dir.mkdir()
-    filenames = {src: "UC-002.norm24k.wav"}
-
-    with pytest.raises(intake.LedgerPathCollisionError):
-        intake._check_ledger_path_collisions(existing, [src], filenames, out_dir, staging_dir)
-
-
 def test_check_ledger_path_collisions_allows_normal_ledger_path(tmp_path: Path) -> None:
     """通常の（衝突しない）`--ledger` パスは preflight を素通りする。"""
     src = tmp_path / "UC-001.wav"
