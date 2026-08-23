@@ -148,7 +148,26 @@
         "s7_calib_score_sha256": "d44fce5235076aeec7b27209120c90eb3afd3b5631eed84fb4d3cc827e8747f1"
       },
       "recovery_condition": "required_asset の完全一致を確認後、履歴sourceと固定execution profileで11 render + 2 derived + 1 zeroを再生成し、全14条件の samples_sha256 が基準manifestと一致すること。",
-      "closure_guard": "status が RECOVERED_AND_RECONCILED になるまで reproducibility_reconciliation を RESOLVED にしてはならない。"
+      "closure_guard": "status が RECOVERED_AND_RECONCILED になるまで reproducibility_reconciliation を RESOLVED にしてはならない。",
+      "recovered_value_schema": {
+        "required_keys": [
+          "execution_commit",
+          "recovered_asset_sha256",
+          "baseline_manifest_sha256",
+          "regenerated_manifest_sha256",
+          "n_compared",
+          "n_matches",
+          "n_mismatches"
+        ],
+        "fixed_values": {
+          "recovered_asset_sha256": "f0e71f06b16e448622f3e0d9b977a26fbaa306bb608a08ed26efeb871332a7d1",
+          "baseline_manifest_sha256": "bde66f3f8599ea48d6e8ff8fdc63a362c6aed5f846655189bf3b52c5628d3343",
+          "n_compared": 14,
+          "n_matches": 14,
+          "n_mismatches": 0
+        }
+      },
+      "value": null
     }
   },
   "common_fixed": {
@@ -259,12 +278,34 @@
       }
     ],
     "resolved_value_schema": {
-      "reference_output_remeasurement": "360件のn_compared/n_within_epsilon/n_mismatches、3軸max_abs_delta、baseline/regenerated result digest",
-      "samples_sha256": "360件のn_compared/n_matches/n_mismatches、baseline/regenerated inventory digest",
-      "wav_sha256": "360件のn_compared/n_matches/n_mismatches、baseline/regenerated inventory digest（参考値）",
+      "reference_output_remeasurement": {
+        "required_keys": ["n_compared", "n_within_epsilon", "n_mismatches", "baseline_results_sha256", "regenerated_results_sha256", "max_abs_delta_by_axis"],
+        "n_compared": 360,
+        "baseline_results_sha256": "6b820a2a27744b9ed4f6e873231aa103b57dd622f993982a112063e5b4bacfa7"
+      },
+      "samples_sha256": {
+        "required_keys": ["n_compared", "n_matches", "n_mismatches", "baseline_inventory_sha256", "regenerated_inventory_sha256"],
+        "n_compared": 360,
+        "baseline_inventory_sha256": "6b820a2a27744b9ed4f6e873231aa103b57dd622f993982a112063e5b4bacfa7"
+      },
+      "wav_sha256": {
+        "required_keys": ["n_compared", "n_matches", "n_mismatches", "baseline_inventory_sha256", "regenerated_inventory_sha256"],
+        "n_compared": 360,
+        "baseline_inventory_sha256": "6b820a2a27744b9ed4f6e873231aa103b57dd622f993982a112063e5b4bacfa7",
+        "note": "参考値。裁定基準には使わない。"
+      },
       "calibration": {
-        "synthetic": "13件のn_compared/n_matches/n_mismatchesとbaseline/reconciliation digest",
-        "real_render": "14件のn_compared/n_matches/n_mismatchesとbaseline/regenerated manifest digestおよび回収ONNX digest"
+        "synthetic": {
+          "required_keys": ["n_compared", "n_matches", "n_mismatches", "baseline_pins_sha256", "reconciliation_sha256"],
+          "n_compared": 13,
+          "baseline_pins_sha256": "9fb3fe94dae622fc54041f7b994396a792b01d27bea5decf0d8bcca24f2198d0"
+        },
+        "real_render": {
+          "required_keys": ["n_compared", "n_matches", "n_mismatches", "baseline_manifest_sha256", "regenerated_manifest_sha256", "recovery_acoustic_sha256"],
+          "n_compared": 14,
+          "baseline_manifest_sha256": "bde66f3f8599ea48d6e8ff8fdc63a362c6aed5f846655189bf3b52c5628d3343",
+          "recovery_acoustic_sha256": "f0e71f06b16e448622f3e0d9b977a26fbaa306bb608a08ed26efeb871332a7d1"
+        }
       },
       "execution_commit": "40桁の本repo git commit"
     },

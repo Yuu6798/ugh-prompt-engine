@@ -57,6 +57,15 @@ def _sha256_file(rel_path: str) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+D4_RESULTS_SHA256 = _sha256_file("voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json")
+SYNTHETIC_PINS_SHA256 = _sha256_file(
+    "voice_genesis/foundry/debt/d6/s7_synthetic_calibration_output_pins.json"
+)
+REAL_RENDER_MANIFEST_SHA256 = _sha256_file(
+    "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json"
+)
+
+
 def _iter_path_sha_refs(node: Any) -> List[Dict[str, Any]]:
     """`node` 以下を再帰的に走査し、`{"path": ..., "sha256": ...}` 形の
     dict をすべて収集する（構造上どこに現れても網羅的に拾う。手で列挙すると
@@ -192,16 +201,76 @@ def test_calibration_set_has_synthetic_and_real_render_refs(pins: Dict[str, Any]
     assert real["n_total_conditions"] == 14
 
 
-def test_real_render_recovery_is_honestly_blocked_on_exact_historical_asset(
-    pins: Dict[str, Any],
-) -> None:
-    recovery = pins["calibration_set"]["real_render_recovery"]
-    assert recovery["status"] == "BLOCKED_MISSING_PINNED_ACOUSTIC"
+def _assert_real_render_recovery(recovery: Dict[str, Any]) -> None:
     assert recovery["required_asset"]["sha256"] == (d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256)
     assert recovery["historical_source"]["git_commit"] == (
         d6_regenerate.REAL_RENDER_HISTORICAL_COMMIT
     )
     assert "再export" in recovery["required_asset"]["substitution_policy"]
+    schema = recovery["recovered_value_schema"]
+    assert set(schema["required_keys"]) == {
+        "execution_commit",
+        "recovered_asset_sha256",
+        "baseline_manifest_sha256",
+        "regenerated_manifest_sha256",
+        "n_compared",
+        "n_matches",
+        "n_mismatches",
+    }
+    assert schema["fixed_values"] == {
+        "recovered_asset_sha256": d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256,
+        "baseline_manifest_sha256": REAL_RENDER_MANIFEST_SHA256,
+        "n_compared": 14,
+        "n_matches": 14,
+        "n_mismatches": 0,
+    }
+    status = recovery["status"]
+    if status == "BLOCKED_MISSING_PINNED_ACOUSTIC":
+        assert recovery["required_asset"]["source"] == "UNRECORDED"
+        assert recovery.get("value") is None
+        return
+    assert status == "RECOVERED_AND_RECONCILED"
+    assert recovery["required_asset"]["source"] != "UNRECORDED"
+    value = recovery["value"]
+    assert set(value) == {
+        "execution_commit",
+        "recovered_asset_sha256",
+        "baseline_manifest_sha256",
+        "regenerated_manifest_sha256",
+        "n_compared",
+        "n_matches",
+        "n_mismatches",
+    }
+    assert re.fullmatch(r"[0-9a-f]{40}", value["execution_commit"])
+    assert value["recovered_asset_sha256"] == d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256
+    assert value["baseline_manifest_sha256"] == REAL_RENDER_MANIFEST_SHA256
+    assert SHA256_RE.fullmatch(value["regenerated_manifest_sha256"])
+    _assert_count_reconciliation(value, expected=14, matches_key="n_matches")
+
+
+def test_real_render_recovery_accepts_blocked_and_complete_recovered_states(
+    pins: Dict[str, Any],
+) -> None:
+    recovery = pins["calibration_set"]["real_render_recovery"]
+    _assert_real_render_recovery(recovery)
+
+    recovered = json.loads(json.dumps(recovery))
+    recovered["status"] = "RECOVERED_AND_RECONCILED"
+    recovered["required_asset"]["source"] = "operator-recovered archival copy"
+    recovered["value"] = {
+        "execution_commit": "a" * 40,
+        "recovered_asset_sha256": d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256,
+        "baseline_manifest_sha256": REAL_RENDER_MANIFEST_SHA256,
+        "regenerated_manifest_sha256": "b" * 64,
+        "n_compared": 14,
+        "n_matches": 14,
+        "n_mismatches": 0,
+    }
+    _assert_real_render_recovery(recovered)
+
+    recovered["value"]["recovered_asset_sha256"] = "0" * 64
+    with pytest.raises(AssertionError):
+        _assert_real_render_recovery(recovered)
 
 
 def test_synthetic_calibration_output_pins_cover_and_reproduce_all_13(
@@ -544,7 +613,17 @@ def _assert_complete_reconciliation_value(value: Any) -> None:
         "calibration",
     }
     reference = value["reference_output_remeasurement"]
+    assert set(reference) == {
+        "n_compared",
+        "n_within_epsilon",
+        "n_mismatches",
+        "baseline_results_sha256",
+        "regenerated_results_sha256",
+        "max_abs_delta_by_axis",
+    }
     _assert_count_reconciliation(reference, expected=360, matches_key="n_within_epsilon")
+    assert reference["baseline_results_sha256"] == D4_RESULTS_SHA256
+    assert SHA256_RE.fullmatch(reference["regenerated_results_sha256"])
     assert set(reference["max_abs_delta_by_axis"]) == {
         "excess_tail_voiced_ms",
         "release_after_score_boundary_ms",
@@ -554,21 +633,46 @@ def _assert_complete_reconciliation_value(value: Any) -> None:
         isinstance(axis_value, (int, float)) and axis_value >= 0
         for axis_value in reference["max_abs_delta_by_axis"].values()
     )
-    for section in (reference, value["samples_sha256"], value["wav_sha256"]):
-        digest_fields = [key for key in section if key.endswith("_sha256")]
-        assert len(digest_fields) >= 2
-        assert all(SHA256_RE.fullmatch(str(section[key])) for key in digest_fields)
-    _assert_count_reconciliation(value["samples_sha256"], expected=360, matches_key="n_matches")
-    _assert_count_reconciliation(value["wav_sha256"], expected=360, matches_key="n_matches")
+    for name in ("samples_sha256", "wav_sha256"):
+        section = value[name]
+        assert set(section) == {
+            "n_compared",
+            "n_matches",
+            "n_mismatches",
+            "baseline_inventory_sha256",
+            "regenerated_inventory_sha256",
+        }
+        _assert_count_reconciliation(section, expected=360, matches_key="n_matches")
+        assert section["baseline_inventory_sha256"] == D4_RESULTS_SHA256
+        assert SHA256_RE.fullmatch(section["regenerated_inventory_sha256"])
 
     calibration = value["calibration"]
     assert set(calibration) == {"synthetic", "real_render"}
-    _assert_count_reconciliation(calibration["synthetic"], expected=13, matches_key="n_matches")
-    _assert_count_reconciliation(calibration["real_render"], expected=14, matches_key="n_matches")
-    for section in calibration.values():
-        digest_fields = [key for key in section if key.endswith("_sha256")]
-        assert len(digest_fields) >= 2
-        assert all(SHA256_RE.fullmatch(str(section[key])) for key in digest_fields)
+    synthetic = calibration["synthetic"]
+    assert set(synthetic) == {
+        "n_compared",
+        "n_matches",
+        "n_mismatches",
+        "baseline_pins_sha256",
+        "reconciliation_sha256",
+    }
+    _assert_count_reconciliation(synthetic, expected=13, matches_key="n_matches")
+    assert synthetic["baseline_pins_sha256"] == SYNTHETIC_PINS_SHA256
+    assert SHA256_RE.fullmatch(synthetic["reconciliation_sha256"])
+
+    real_render = calibration["real_render"]
+    assert set(real_render) == {
+        "n_compared",
+        "n_matches",
+        "n_mismatches",
+        "baseline_manifest_sha256",
+        "regenerated_manifest_sha256",
+        "recovery_acoustic_sha256",
+    }
+    _assert_count_reconciliation(real_render, expected=14, matches_key="n_matches")
+    assert real_render["baseline_manifest_sha256"] == REAL_RENDER_MANIFEST_SHA256
+    assert SHA256_RE.fullmatch(real_render["regenerated_manifest_sha256"])
+    assert real_render["recovery_acoustic_sha256"] == (d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256)
 
 
 def _assert_pending_or_resolved(node: Dict[str, Any], *, context: str) -> None:
@@ -608,7 +712,7 @@ def _assert_pending_or_resolved(node: Dict[str, Any], *, context: str) -> None:
                         "n_compared": 360,
                         "n_within_epsilon": 360,
                         "n_mismatches": 0,
-                        "baseline_results_sha256": "1" * 64,
+                        "baseline_results_sha256": D4_RESULTS_SHA256,
                         "regenerated_results_sha256": "2" * 64,
                         "max_abs_delta_by_axis": {
                             "excess_tail_voiced_ms": 0.0,
@@ -620,14 +724,14 @@ def _assert_pending_or_resolved(node: Dict[str, Any], *, context: str) -> None:
                         "n_compared": 360,
                         "n_matches": 360,
                         "n_mismatches": 0,
-                        "baseline_inventory_sha256": "3" * 64,
+                        "baseline_inventory_sha256": D4_RESULTS_SHA256,
                         "regenerated_inventory_sha256": "4" * 64,
                     },
                     "wav_sha256": {
                         "n_compared": 360,
                         "n_matches": 0,
                         "n_mismatches": 360,
-                        "baseline_inventory_sha256": "5" * 64,
+                        "baseline_inventory_sha256": D4_RESULTS_SHA256,
                         "regenerated_inventory_sha256": "6" * 64,
                     },
                     "calibration": {
@@ -635,16 +739,16 @@ def _assert_pending_or_resolved(node: Dict[str, Any], *, context: str) -> None:
                             "n_compared": 13,
                             "n_matches": 13,
                             "n_mismatches": 0,
-                            "baseline_pins_sha256": "7" * 64,
+                            "baseline_pins_sha256": SYNTHETIC_PINS_SHA256,
                             "reconciliation_sha256": "8" * 64,
                         },
                         "real_render": {
                             "n_compared": 14,
                             "n_matches": 14,
                             "n_mismatches": 0,
-                            "baseline_manifest_sha256": "9" * 64,
+                            "baseline_manifest_sha256": REAL_RENDER_MANIFEST_SHA256,
                             "regenerated_manifest_sha256": "a" * 64,
-                            "recovery_acoustic_sha256": "b" * 64,
+                            "recovery_acoustic_sha256": (d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256),
                         },
                     },
                 },
@@ -703,8 +807,23 @@ def test_reproducibility_reconciliation_is_pending_phase_b_or_resolved(
         "calibration",
         "execution_commit",
     }
+    assert schema["reference_output_remeasurement"]["baseline_results_sha256"] == (
+        D4_RESULTS_SHA256
+    )
+    assert schema["samples_sha256"]["baseline_inventory_sha256"] == D4_RESULTS_SHA256
+    assert schema["wav_sha256"]["baseline_inventory_sha256"] == D4_RESULTS_SHA256
+    assert schema["calibration"]["synthetic"]["baseline_pins_sha256"] == (SYNTHETIC_PINS_SHA256)
+    assert schema["calibration"]["real_render"]["baseline_manifest_sha256"] == (
+        REAL_RENDER_MANIFEST_SHA256
+    )
+    assert schema["calibration"]["real_render"]["recovery_acoustic_sha256"] == (
+        d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256
+    )
     recovery = pins["calibration_set"]["real_render_recovery"]
-    if recovery["status"] != "RECOVERED_AND_RECONCILED":
+    _assert_real_render_recovery(recovery)
+    if recovery["status"] == "RECOVERED_AND_RECONCILED":
+        assert node["status"] == "RESOLVED"
+    else:
         assert node["status"] == "PENDING_PHASE_B"
         assert node["value"] is None
 
