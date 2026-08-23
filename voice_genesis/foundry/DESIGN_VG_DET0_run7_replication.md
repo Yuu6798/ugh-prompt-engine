@@ -47,6 +47,22 @@ Run 8 は 2026-08-22 User 裁定で **CLOSED**（`results_s7/s7_run8_closeout.md
 上記 3 点以外のコード差分は禁止。bootstrap は実行時の repo HEAD commit を記帳する。
 予算 cap $4 / 24h 自己停止 / NaN・pin 不一致 fail-closed は run 7 から全継承。
 
+### 1-3. 環境同等性ゲート（L1 帰属の前提・fail-closed）
+
+学習環境が run 7 と同等でない場合、L1 の bit 不一致は**学習の非決定論に帰属できない**
+（環境差が原因でありうる。Codex 2026-08-23 P1 指摘の採用）。次を凍結する:
+
+- **run 7 側の記帳値**: GPU 型 = RTX 3090（COMMUNITY・`results_s6/s6_record_2026-08-20.md`
+  §1）、repo HEAD pin = `8ef874b`、学習側 numeric stack = run 7 実行 manifest の
+  `environment_versions`（Drive 保全分。bootstrap が記帳する）
+- **ゲート**: VG-DET0 の実行 manifest と run 7 記帳値を項目ごとに照合し、
+  **全一致が確認できた場合のみ** L1 不一致を「学習の非決定論」候補として扱える。
+  1 項目でも不一致・または run 7 側が未記帳の項目が学習に影響しうる場合、
+  L1 不一致の判定は **`confounded`**（§3）とする
+- **正直会計**: run 7 側で未記帳の環境項目（コンテナイメージ digest 等、実行
+  manifest に無いもの）は「未制御」として列挙し、その存在自体が
+  `bit_identical` 以外の裁定に限定を付す（未記帳項目は事後に同等と宣言しない）
+
 ## 2. 比較プロトコル（レベル別 — pin 意味論は `s7_reproducibility_finding.md` が正本）
 
 `samples_sha256` は再 export を跨ぐと成立せず、`wav_sha256` は libsndfile PEAK
@@ -59,18 +75,29 @@ Run 8 は 2026-08-22 User 裁定で **CLOSED**（`results_s7/s7_run8_closeout.md
 | L1b（参考） | 中間 checkpoint（5K/10K/20K）sha256 | Drive 保全分の pin があれば照合 | 分岐点の局在化（判定には使わない） |
 | L2（記帳のみ） | acoustic ONNX sha256 | `results_s7/probe_0b_groups/run7_*.json` の `model_sha256.acoustic_onnx` | 非裁定 — ONNX シリアライズ差は既知（finding §1） |
 | L3（記帳のみ） | fixed probe の samples_sha256 / wav_sha256 | 同上 `cells[].samples_sha256` / `wav_sha256` | 非裁定 — 完全性検査。wav は容器レベルで参考のみ |
-| **L4（裁定・機能）** | TRF spec 1.2 voicing 3 軸の再測定 | `probe_0b_groups/run7_{ritsu,pjs,user,amitaro}.json` の 144 セル記帳値 | **\|Δ\| ≤ ε の機能再現判定**。spec は `results_s7/trf_measurement_spec_1_2.json` 凍結値・再チューニング禁止 |
+| **L4（裁定・機能）** | TRF spec 1.2 voicing 3 軸の再測定 | **`debt/d4/d4_results_2026-08-22.json` の run7 4 群 144 セル記帳値（spec 1.2 で測定済みの正本）** | **\|Δ\| ≤ ε の機能再現判定**。spec は `results_s7/trf_measurement_spec_1_2.json` 凍結値・再チューニング禁止 |
 
-L4 のレンダ・測定経路は 8-0b probe と同一（`debt/d4/d4_runner.py` render/measure。
-`d4_remeasure_spec.json` の pin 束縛 = fail-closed 起動ガードを継承）。
+L4 の基準値に `probe_0b_groups/run7_*.json` の軸値を**使わない**: 同ファイル群の
+`measurement_spec.spec_version` は 1.0 であり、1.2 は voicing 検出器を変更している。
+1.0 記帳値との比較は検出器版差を「ドリフト」として偽報告する経路になる
+（Codex 2026-08-23 P1 指摘の採用）。probe_0b_groups は L2/L3 の sha 参照にのみ使う。
+
+L4 のレンダ・測定経路は 8-0b probe と同一系。ただし `debt/d4/d4_runner.py` は
+`--generation` を run5/6/7 に、群集合を `d4_remeasure_spec.json` の 10 群に
+fail-closed で束縛しているため、**現行のままでは VG-DET0 の群を実行できない**
+（Codex 2026-08-23 P1 指摘の採用）。実行前に **VG-DET0 専用 remeasure spec**
+（`d4_remeasure_spec.json` と同型・vgdet0 4 群 144 セル・spec 1.2 と計器 pin を
+逐語継承）を事前登録し、runner の generation / 群検証を**その spec へ束縛する
+拡張**（検証の緩和ではなく束縛先の追加）を同一 PR で凍結する。
 
 ## 3. 裁定語彙（事前固定）
 
 | 判定 | 条件 | 帰結 |
 |---|---|---|
-| `bit_identical` | L1 一致 | run-level determinism 成立。走行間 sigma_between = 0 が実証される。**k = 1 で打ち止め**（§9-0 の経済順序） |
-| `functionally_reproducible` | L1 不一致 かつ L4 全軸・全セル \|Δ\| ≤ ε | 学習は非決定論だが結論レベルでは再現。**この単独では VG-DEBT-001 は close しない**（close_condition は bit 一致 or sigma_between 推定つき k ≥ 2）。k = 2 の要否を User 裁定へ |
-| `drifted` | L4 に \|Δ\| > ε の軸/セルあり | ドリフト幅の実測値を記帳。k = 2 の要否を User 裁定へ |
+| `bit_identical` | L1 一致 | run-level determinism 成立。走行間 sigma_between = 0 が実証される。**k = 1 で打ち止め**（§9-0 の経済順序）。環境非同等でも一致は一致（ただし「この環境対でも一致した」以上に一般化しない） |
+| `functionally_reproducible` | L1 不一致 かつ §1-3 ゲート全一致 かつ L4 全軸・全セル \|Δ\| ≤ ε | 学習は非決定論だが結論レベルでは再現。**この単独では VG-DEBT-001 は close しない**（close_condition は bit 一致 or sigma_between 推定つき k ≥ 2）。k = 2 の要否を User 裁定へ |
+| `drifted` | L1 不一致 かつ §1-3 ゲート全一致 かつ L4 に \|Δ\| > ε の軸/セルあり | ドリフト幅の実測値を記帳。k = 2 の要否を User 裁定へ |
+| `confounded` | L1 不一致 かつ §1-3 ゲート不一致（または学習に影響しうる未記帳項目あり） | **学習の非決定論に帰属しない**。環境差と学習非決定論を分離できないため、L4 の実測値のみ記帳し裁定は保留。環境を揃えた再走行の要否を User 裁定へ |
 
 いずれの判定でも因果の断定語（「効いた」「転移した」）は使わない。
 k = 2 実施時は `sigma_between` を推定し、close_condition の後段を充足させる。
