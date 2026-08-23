@@ -279,6 +279,21 @@ def test_regeneration_runner_verifies_its_own_pinned_dependencies(
         d6_regenerate.verify_runner_pins()
 
 
+def test_regeneration_runner_rejects_tampered_calibration_output_pins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = d6_regenerate.sha256_file
+
+    def tampered_calibration_only(path: Path) -> str:
+        if path.resolve() == d6_regenerate.CALIBRATION_PINS.resolve():
+            return "0" * 64
+        return original(path)
+
+    monkeypatch.setattr(d6_regenerate, "sha256_file", tampered_calibration_only)
+    with pytest.raises(d6_regenerate.RegenerationError, match="output_pins"):
+        d6_regenerate.verify_runner_pins()
+
+
 def test_measure_command_hashes_all_generated_manifests(
     tmp_path: Path,
 ) -> None:

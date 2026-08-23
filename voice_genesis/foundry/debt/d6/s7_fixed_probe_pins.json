@@ -182,7 +182,7 @@
       "plan_command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --plan",
       "orchestrator": {
         "path": "voice_genesis/foundry/debt/d6/d6_regenerate.py",
-        "sha256": "c9143915a7fc8d6b76b7f97df7cb1cacd762c32fa1a830d7456ed277f2fc002f"
+        "sha256": "b4730c988dd85f0d48228f3974580a9ca6c64a29e0d308aceb9a99fdb8e93253"
       },
       "d4_runner": {
         "path": "voice_genesis/foundry/debt/d4/d4_runner.py",

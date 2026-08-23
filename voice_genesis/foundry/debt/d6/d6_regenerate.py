@@ -77,6 +77,9 @@ def verify_runner_pins() -> None:
     pins = json.loads(FIXED_PROBE_PINS.read_text(encoding="utf-8"))
     common = pins["common_fixed"]
     refs = [
+        pins["calibration_set"]["refs"]["synthetic_stimuli"],
+        pins["calibration_set"]["refs"]["synthetic_output_pins"],
+        pins["calibration_set"]["refs"]["real_render_manifest"],
         common["material_acquisition_command"]["provisioner"],
         common["regeneration_commands"]["orchestrator"],
         common["regeneration_commands"]["d4_runner"],
