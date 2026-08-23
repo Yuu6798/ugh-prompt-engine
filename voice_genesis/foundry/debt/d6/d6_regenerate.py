@@ -446,8 +446,10 @@ def materialize_historical_real_render_source(root: Path) -> Path:
 
 def reconcile_real_render_manifest(observed_path: Path, report_path: Path) -> dict[str, Any]:
     """履歴real-render全14条件の標本pinを基準manifestへ突き合わせる。"""
-    baseline = json.loads(REAL_RENDER_BASELINE.read_text(encoding="utf-8"))
-    observed = json.loads(Path(observed_path).read_text(encoding="utf-8"))
+    baseline_bytes = REAL_RENDER_BASELINE.read_bytes()
+    observed_bytes = Path(observed_path).read_bytes()
+    baseline = json.loads(baseline_bytes)
+    observed = json.loads(observed_bytes)
     if observed.get("schema") != baseline.get("schema"):
         raise RegenerationError("real-render manifest schema mismatch")
     expected_conditions = {entry["condition_id"]: entry for entry in baseline["conditions"]}
@@ -501,8 +503,8 @@ def reconcile_real_render_manifest(observed_path: Path, report_path: Path) -> di
             "wav_container_matches": wav_matches,
             "wav_container_mismatches": len(expected_conditions) - wav_matches,
         },
-        "baseline_manifest_sha256": sha256_file(REAL_RENDER_BASELINE),
-        "regenerated_manifest_sha256": sha256_file(Path(observed_path)),
+        "baseline_manifest_sha256": hashlib.sha256(baseline_bytes).hexdigest(),
+        "regenerated_manifest_sha256": hashlib.sha256(observed_bytes).hexdigest(),
         "recovered_acoustic_sha256": REAL_RENDER_ACOUSTIC_SHA256,
         "historical_source_commit": REAL_RENDER_HISTORICAL_COMMIT,
         "execution_commit": commit,
@@ -766,7 +768,8 @@ def generate_calibration_outputs(out_dir: Path) -> dict[str, Any]:
 
 
 def verify_calibration_outputs(out_dir: Path) -> dict[str, Any]:
-    expected = json.loads(CALIBRATION_PINS.read_text(encoding="utf-8"))
+    expected_bytes = CALIBRATION_PINS.read_bytes()
+    expected = json.loads(expected_bytes)
     observed = generate_calibration_outputs(out_dir)
     comparable = {key: expected[key] for key in observed}
     if observed != comparable:
@@ -787,7 +790,7 @@ def verify_calibration_outputs(out_dir: Path) -> dict[str, Any]:
         "execution_commit": commit,
         "output_pins": {
             "path": str(CALIBRATION_PINS.relative_to(REPO_ROOT)),
-            "sha256": sha256_file(CALIBRATION_PINS),
+            "sha256": hashlib.sha256(expected_bytes).hexdigest(),
         },
         "runner": {
             "path": str(Path(__file__).resolve().relative_to(REPO_ROOT)),

@@ -281,7 +281,7 @@ def test_real_render_recovery_accepts_blocked_and_complete_recovered_states(
 
 
 def test_synthetic_calibration_output_pins_cover_and_reproduce_all_13(
-    pins: Dict[str, Any], tmp_path: Path
+    pins: Dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ref = pins["calibration_set"]["refs"]["synthetic_output_pins"]
     expected = json.loads((_REPO_ROOT / ref["path"]).read_text(encoding="utf-8"))
@@ -305,10 +305,24 @@ def test_synthetic_calibration_output_pins_cover_and_reproduce_all_13(
             hashlib.sha256(np.ascontiguousarray(decoded, dtype="<f4").tobytes()).hexdigest()
             == (stimulus["pcm_f32le_sha256"])
         )
+    original_read_bytes = Path.read_bytes
+    calibration_pin_reads = 0
+
+    def counted_calibration_pin_read(path: Path) -> bytes:
+        nonlocal calibration_pin_reads
+        if path == d6_regenerate.CALIBRATION_PINS:
+            calibration_pin_reads += 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_calibration_pin_read)
     report = d6_regenerate.verify_calibration_outputs(tmp_path / "verified_calibration")
+    assert calibration_pin_reads == 1
     assert report["verdict"] == "PASS"
     assert report["value"] == {"matched_conditions": 13, "mismatches": []}
     assert re.fullmatch(r"[0-9a-f]{40}", report["execution_commit"])
+    assert report["output_pins"]["sha256"] == hashlib.sha256(
+        original_read_bytes(d6_regenerate.CALIBRATION_PINS)
+    ).hexdigest()
     assert report["runner"]["sha256"] == _sha256_file(report["runner"]["path"])
 
 
@@ -434,7 +448,9 @@ def test_regeneration_runner_covers_10_exports_and_render_groups(
     )
 
 
-def test_real_render_reconciliation_compares_all_14_sample_pins(tmp_path: Path) -> None:
+def test_real_render_reconciliation_compares_all_14_sample_pins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     baseline = json.loads(d6_regenerate.REAL_RENDER_BASELINE.read_text(encoding="utf-8"))
     observed = json.loads(json.dumps(baseline))
     observed["out_dir"] = str(tmp_path / "regenerated")
@@ -442,14 +458,31 @@ def test_real_render_reconciliation_compares_all_14_sample_pins(tmp_path: Path) 
         condition["wav_sha256"] = "0" * 64
     observed_path = tmp_path / "observed.json"
     observed_path.write_text(json.dumps(observed), encoding="utf-8")
+    manifest_inputs = {d6_regenerate.REAL_RENDER_BASELINE, observed_path}
+    manifest_reads = {path: 0 for path in manifest_inputs}
+    original_read_bytes = Path.read_bytes
+
+    def counted_manifest_read(path: Path) -> bytes:
+        if path in manifest_reads:
+            manifest_reads[path] += 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_manifest_read)
     report = d6_regenerate.reconcile_real_render_manifest(
         observed_path, tmp_path / "reconciliation.json"
     )
+    assert manifest_reads == {path: 1 for path in manifest_inputs}
     assert report["verdict"] == "PASS"
     assert report["value"]["n_rendered"] == 11
     assert report["value"]["n_compared"] == 14
     assert report["value"]["samples_matches"] == 14
     assert report["value"]["wav_container_mismatches"] == 14
+    assert report["baseline_manifest_sha256"] == hashlib.sha256(
+        original_read_bytes(d6_regenerate.REAL_RENDER_BASELINE)
+    ).hexdigest()
+    assert report["regenerated_manifest_sha256"] == hashlib.sha256(
+        original_read_bytes(observed_path)
+    ).hexdigest()
 
     observed["conditions"][0]["samples_sha256"] = "f" * 64
     observed_path.write_text(json.dumps(observed), encoding="utf-8")
