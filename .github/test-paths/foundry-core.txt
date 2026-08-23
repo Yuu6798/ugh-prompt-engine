@@ -1,0 +1,17 @@
+# Foundry tests that run with the repository's normal dev dependencies.
+# Keep this list in sync with pyproject.toml; discipline tests enforce the link.
+voice_genesis/foundry/genome_s35/tests/test_genome_s35.py
+voice_genesis/foundry/tests/test_adapter_joins.py
+voice_genesis/foundry/tests/test_adapter_perf_genes.py
+voice_genesis/foundry/tests/test_adapter_voice_spec.py
+voice_genesis/foundry/tests/test_assemble_run4.py
+voice_genesis/foundry/tests/test_convert_amitaro.py
+voice_genesis/foundry/tests/test_convert_d3.py
+voice_genesis/foundry/tests/test_convert_user.py
+voice_genesis/foundry/tests/test_forge_triangle.py
+voice_genesis/foundry/tests/test_gate_synth_run4.py
+voice_genesis/foundry/tests/test_measure_bands.py
+voice_genesis/foundry/tests/test_recording_kit_intake.py
+voice_genesis/foundry/tests/test_run5_bootstrap.py
+voice_genesis/foundry/tests/test_run_d3_cells.py
+voice_genesis/foundry/tests/test_s1_dataprep_ph_dur_duration.py

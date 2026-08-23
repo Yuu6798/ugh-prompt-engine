@@ -14,6 +14,10 @@ AGENTS.md §8）を CI 失敗に変換する実行可能チェック群。semant
   policy のため。reference detail は docs/ / skill にポインタ化）。
 - `test_readme_line_cap.py`: `README.md` は 350 行以内（hard limit。入口情報に
   限定し、詳細は docs/README.md 索引経由の docs/*.md へ）。
+- `test_ci_m2_shards.py`: M2 の shard matrix と shell 側の分割数を一致させ、
+  末尾 shard の静かな未実行を防ぐ。
+- `test_ci_foundry_coverage.py`: Foundry の全 `test_*.py` を通常 CI 対象か
+  任意依存台帳のどちらかへ分類し、専用 job と test-rest の重複を防ぐ。
 
 各テストは実ファイル検査に加えて `fixtures/` の違反サンプルに対する
 self-test を持ち、パーサ自体の劣化（違反を検出できなくなる drift）を防ぐ。
