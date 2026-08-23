@@ -32,6 +32,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -74,6 +75,32 @@ RETRY_SLEEP_SEC = 5
 # 捕まえる全 call site（`cmd_terminate` / `_check_pod_not_dead` /
 # `_download` 等）でこのタプルを使い回す。
 NETWORK_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError)
+
+# FIX 9 (closed-world requirement contract — family termination): the probe's
+# measurement contract is FIXED — 3 speakers (ritsu/pjs/user) x 2 songs
+# (sakura/umi), plus acoustic.onnx. Round-3 FIX 8 derived the "required" set
+# from whatever probe_results.json happened to record (`_extract_g1_expected_
+# sha256` output), which meant an unknown schema or a partially-populated
+# record silently shrank the requirement set to "whatever was found" instead
+# of failing — a closed-world contract violation (a G1 hash record that is
+# missing a digest, or has a malformed one, is a probe defect, not grounds
+# to stop requiring that artifact). This constant is the single source of
+# truth for what a complete G1 hash record and a complete g1/ download MUST
+# contain; it is never derived from runtime extraction.
+REQUIRED_G1_WAV_KEYS = (
+    "ritsu_sakura", "ritsu_umi",
+    "pjs_sakura", "pjs_umi",
+    "user_sakura", "user_umi",
+)
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _is_well_formed_sha256(value: Any) -> bool:
+    """`value` が 64 桁小文字 16 進の sha256 として well-formed かどうか
+    （FIX 9）。probe_results.json 記録値の完全性判定はすべてこれを経由する
+    ——文字列以外・桁数違い・大文字混入・非 hex 文字はすべて malformed 扱い。"""
+    return isinstance(value, str) and bool(_SHA256_HEX_RE.fullmatch(value))
 
 
 def _build_request(
@@ -229,6 +256,14 @@ def _check_raw_url_reachable(url: str) -> None:
     raise SystemExit(2)
 
 
+def _extract_pod_id(result: Dict[str, Any]) -> Optional[str]:
+    """POST /pods レスポンスから pod id を抽出する（FIX 9 (2): id 抽出ロジック
+    を cmd_launch から分離してユニットテスト可能にする）。RunPod REST v1 の
+    フィールド名揺れに備え `.id` / `.podId` の両方を見る。"""
+    pod_id = result.get("id") or result.get("podId")
+    return pod_id if isinstance(pod_id, str) and pod_id else None
+
+
 def cmd_launch(args: argparse.Namespace) -> None:
     script_commit = args.script_commit
     pin_commit = args.pin_commit
@@ -260,11 +295,34 @@ def cmd_launch(args: argparse.Namespace) -> None:
 
     print("| runner: launch result:")
     print(json.dumps(result, indent=2, ensure_ascii=False))
-    pod_id = result.get("id") or result.get("podId")
+    pod_id = _extract_pod_id(result)
     if pod_id:
         print(f"| runner: pod id = {pod_id}")
-    else:
-        print("| runner: WARNING — could not find pod id in response (see full JSON above)", file=sys.stderr)
+        return
+
+    # FIX 9 (2): launch must fail without a pod id. A 2xx from POST /pods
+    # with no id extractable from the body used to only print a WARNING and
+    # exit 0 — the caller had no signal that a pod might have been created
+    # (and might be billing) with no id on record to stop/terminate it by.
+    # Print the full response verbatim (again, on stderr, so it survives even
+    # if stdout is discarded/redirected) plus a loud reconciliation
+    # instruction, then hard-fail so the caller cannot miss this.
+    print("| runner: full response body (verbatim, repeated on stderr):", file=sys.stderr)
+    print(json.dumps(result, indent=2, ensure_ascii=False), file=sys.stderr)
+    print(
+        "| runner: *** LAUNCH RECONCILIATION REQUIRED ***\n"
+        "| runner: POST /pods returned an HTTP success status but no pod id "
+        "could be extracted from the response body (checked .id and .podId — "
+        "see the full response above). A BILLABLE POD MAY HAVE BEEN CREATED "
+        "even though this script cannot name it.\n"
+        "| runner: MANUAL ACTION REQUIRED — list pods via `python3 "
+        f"{sys.argv[0]} status --pod <id>` (once you have found a candidate "
+        "id) or the RunPod web console, identify any pod matching this "
+        f"launch (name={payload.get('name')!r}), and stop/terminate it "
+        "manually if one exists. Do not assume no pod was created.",
+        file=sys.stderr,
+    )
+    raise SystemExit(3)
 
 
 def cmd_status(args: argparse.Namespace) -> None:
@@ -419,32 +477,45 @@ def _g1_wav_filename_from_key(key: str) -> Optional[str]:
     return f"gate_{song}_{speaker}.wav"
 
 
-def _required_g1_filenames(g1_expected: Dict[str, Any]) -> List[str]:
-    """probe_results.json の記録（`_extract_g1_expected_sha256` の戻り値）
-    から、このダウンロードが必ず取得できていなければならない g1/ ファイル名
-    集合を導出する（FIX 8: round-3 gate の穴 — 旧実装は required set を
-    directory listing から導出しており、pod が best-effort cp で publish
-    し損ねたファイルは listing に現れないため required にすらならず、
-    ダウンロードもされず、sha256 チェックがサイレントに skip されて fetch が
-    exit 0 していた。ここでは required set を record 側から導出し、transport
-    が実際に何を届けたかとは独立に決める）。onnx_sha256 が非空文字列で記録
-    されていれば "acoustic.onnx" を、wav_sha256 の各キーは
-    `_g1_wav_filename_from_key` で復元したファイル名を required に含める。"""
-    required: List[str] = []
+def _required_g1_filenames() -> List[str]:
+    """FIX 9 (closed-world requirement contract): 必ず取得できていなければ
+    ならない g1/ ファイル名集合を `REQUIRED_G1_WAV_KEYS` + "acoustic.onnx"
+    という固定契約から導出する。round-3 FIX 8 の "record（probe_results.json）
+    から required を導出する" 方式はここで廃止した——記録側の完全性は
+    `_g1_hash_record_problems` が別途ゲートするため、required 自体は record
+    の中身に依存させず常に同じ 7 ファイルを返す（未知スキーマ・欠落 digest
+    は required を縮小する理由にはならない、というのが本 FIX の核）。"""
+    names = ["acoustic.onnx"]
+    for key in REQUIRED_G1_WAV_KEYS:
+        name = _g1_wav_filename_from_key(key)
+        assert name is not None, f"REQUIRED_G1_WAV_KEYS entry not well-formed: {key!r}"
+        names.append(name)
+    return sorted(names)
+
+
+def _g1_hash_record_problems(g1_expected: Dict[str, Any]) -> List[str]:
+    """FIX 9: probe_results.json の G1 ハッシュ記録が closed-world 契約
+    （acoustic.onnx + `REQUIRED_G1_WAV_KEYS` の 6 キー、全て well-formed な
+    64 桁 sha256）を満たしているかを検査する。欠落/malformed な digest ごと
+    に人間可読な問題説明を返す（空リスト = 記録は完全）。旧 FIX 8 は未知
+    スキーマ／欠落 digest を「required から静かに除外する」ことで吸収して
+    いたが、closed-world 契約下ではそれらは probe 側の欠陥であり fetch の
+    失敗として検出しなければならない。"""
+    problems: List[str] = []
+
     onnx_sha256 = g1_expected.get("onnx_sha256")
-    if isinstance(onnx_sha256, str) and onnx_sha256:
-        required.append("acoustic.onnx")
+    if not _is_well_formed_sha256(onnx_sha256):
+        problems.append(f"acoustic.onnx: malformed/missing sha256 (got {onnx_sha256!r})")
 
     wav_sha256 = g1_expected.get("wav_sha256")
-    if isinstance(wav_sha256, dict):
-        for key, value in wav_sha256.items():
-            if not (isinstance(value, str) and value):
-                continue  # 記録側に sha256 が無いキーは要求しない
-            name = _g1_wav_filename_from_key(key)
-            if name is not None:
-                required.append(name)
+    if not isinstance(wav_sha256, dict):
+        wav_sha256 = {}
+    for key in REQUIRED_G1_WAV_KEYS:
+        value = wav_sha256.get(key)
+        if not _is_well_formed_sha256(value):
+            problems.append(f"{key}: malformed/missing sha256 (got {value!r})")
 
-    return sorted(set(required))
+    return problems
 
 
 def _g1_missing_required(required: List[str], g1_download_ok: Dict[str, bool]) -> List[str]:
@@ -791,10 +862,28 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
     g1_expected = _extract_g1_expected_sha256(probe_results_payload)
 
-    # FIX 8: required set は record（probe_results.json）由来 — listing に
-    # 一度も現れなかった required artifact（pod が best-effort cp で publish
-    # し損ねたケース）を、listing だけを見ていた旧ゲートでは検出できなかった。
-    g1_required = _required_g1_filenames(g1_expected)
+    # FIX 9 (closed-world requirement contract, gate (a)): probe_results.json
+    # must supply a well-formed 64-hex sha256 for acoustic.onnx AND for every
+    # one of REQUIRED_G1_WAV_KEYS — judged against the fixed contract, never
+    # against what _extract_g1_expected_sha256 happened to find. Unknown
+    # schema / missing / malformed digests are FAILURES here, not an
+    # emptied requirement set (that was FIX 8's now-obsolete behavior).
+    hash_record_problems = _g1_hash_record_problems(g1_expected)
+    if hash_record_problems:
+        print(
+            "| runner: *** PROBE FETCH FAILED *** incomplete G1 hash record — "
+            "probe_results.json does not supply a well-formed sha256 for every "
+            f"required artifact: {hash_record_problems}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    # FIX 8 (gate (b), now driven by the FIX 9 constant): required set is the
+    # fixed closed-world contract, not the record — listing must supply every
+    # required filename (pod best-effort cp failures that never reach the g1/
+    # listing are detected here, independent of what transport happened to
+    # deliver).
+    g1_required = _required_g1_filenames()
     g1_missing_from_listing = _g1_missing_required(g1_required, g1_download_ok)
     if g1_missing_from_listing:
         print(

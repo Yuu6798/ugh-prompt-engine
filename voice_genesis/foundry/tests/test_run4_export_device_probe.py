@@ -718,26 +718,11 @@ def test_runner_g1_wav_filename_from_key_inverts_parse_g1_wav_key() -> None:
 
 
 def test_runner_required_g1_filenames_covers_onnx_and_all_six_wav_keys() -> None:
-    """FIX 8 の中核回帰固定: 6 speaker×song の wav キー + onnx を持つ
-    probe_results.json から、required filename 集合が過不足なく導出される
-    こと（実運用の run4 記録は ritsu/pjs/user × sakura/umi の 6 キー）。"""
-    probe_results = {
-        "arms": {
-            "g1_gpu_export_full": {
-                "onnx_sha256": "onnx" + "0" * 60,
-                "wav_sha256": {
-                    "ritsu_sakura": "a" * 64,
-                    "ritsu_umi": "b" * 64,
-                    "pjs_sakura": "c" * 64,
-                    "pjs_umi": "d" * 64,
-                    "user_sakura": "e" * 64,
-                    "user_umi": "f" * 64,
-                },
-            }
-        }
-    }
-    g1_expected = runner._extract_g1_expected_sha256(probe_results)
-    required = runner._required_g1_filenames(g1_expected)
+    """FIX 9 の回帰固定: required filename 集合は closed-world 契約
+    （`REQUIRED_G1_WAV_KEYS` の 6 キー = ritsu/pjs/user × sakura/umi + onnx）
+    から導出され、record（probe_results.json）の中身とは無関係に常に同じ
+    7 ファイルであること（FIX 8 の record-derived 方式はここで廃止）。"""
+    required = runner._required_g1_filenames()
     assert required == sorted(
         [
             "acoustic.onnx",
@@ -749,29 +734,117 @@ def test_runner_required_g1_filenames_covers_onnx_and_all_six_wav_keys() -> None
             "gate_umi_user.wav",
         ]
     )
+    # record（probe_results.json）の中身をどう変えても required は不変
+    # ——required is a fixed contract, not a record-derived quantity.
+    assert runner._required_g1_filenames() == required
 
 
-def test_runner_required_g1_filenames_omits_keys_without_recorded_sha() -> None:
-    """記録側に sha256 が無い（None / 空文字列）キー・onnx はそもそも required
-    に含めない（record に無い要求は作らない）。"""
-    probe_results = {
-        "arms": {
-            "g1_gpu_export_full": {
-                "onnx_sha256": None,
-                "wav_sha256": {"ritsu_sakura": "a" * 64, "pjs_umi": ""},
-            }
-        }
+def test_runner_required_g1_wav_keys_constant_has_exactly_six_keys() -> None:
+    """FIX 9: closed-world 契約の 6 キー（3 speaker × 2 song）が過不足なく
+    定義されていること。"""
+    assert runner.REQUIRED_G1_WAV_KEYS == (
+        "ritsu_sakura", "ritsu_umi",
+        "pjs_sakura", "pjs_umi",
+        "user_sakura", "user_umi",
+    )
+
+
+# --- (g2) FIX 9: closed-world 契約下では欠落/malformed digest は required の
+# 縮小ではなく検出対象の失敗である（round-3 FIX 8 期の
+# "unknown schema / 欠落 digest → required が縮む" 挙動はここで廃止）。---
+
+
+def test_runner_g1_hash_record_problems_empty_when_all_six_plus_onnx_complete() -> None:
+    """FIX 9 の中核回帰固定: acoustic.onnx + 6 キー全てに well-formed な
+    64 桁 sha256 が揃っていれば、問題リストは空（記録は完全と判定される）。"""
+    g1_expected = {
+        "onnx_sha256": "a" * 64,
+        "wav_sha256": {
+            "ritsu_sakura": "b" * 64,
+            "ritsu_umi": "c" * 64,
+            "pjs_sakura": "d" * 64,
+            "pjs_umi": "e" * 64,
+            "user_sakura": "f" * 64,
+            "user_umi": "0" * 64,
+        },
     }
-    g1_expected = runner._extract_g1_expected_sha256(probe_results)
-    required = runner._required_g1_filenames(g1_expected)
-    assert required == ["gate_sakura_ritsu.wav"]
+    assert runner._g1_hash_record_problems(g1_expected) == []
 
 
-def test_runner_required_g1_filenames_unknown_schema_yields_empty() -> None:
-    """未知スキーマ（`_extract_g1_expected_sha256` が empty を返すケース）では
-    required も空 — 比較不能な記録から要求をでっち上げない。"""
+def test_runner_g1_hash_record_problems_detects_one_missing_digest() -> None:
+    """FIX 9: 6 キーのうち 1 つでも sha256 が欠落していれば検出されること
+    （closed-world 契約下では required が静かに縮むのではなく、失敗として
+    報告される）。"""
+    g1_expected = {
+        "onnx_sha256": "a" * 64,
+        "wav_sha256": {
+            "ritsu_sakura": "b" * 64,
+            "ritsu_umi": "c" * 64,
+            "pjs_sakura": "d" * 64,
+            "pjs_umi": "e" * 64,
+            "user_sakura": "f" * 64,
+            # user_umi 欠落
+        },
+    }
+    problems = runner._g1_hash_record_problems(g1_expected)
+    assert any("user_umi" in p for p in problems)
+    assert len(problems) == 1
+
+
+def test_runner_g1_hash_record_problems_detects_malformed_hex() -> None:
+    """FIX 9: digest が存在していても well-formed でない（桁数違い・大文字
+    混入・非 hex 文字）場合は malformed として検出されること。"""
+    g1_expected = {
+        "onnx_sha256": "NOT-HEX-" + "a" * 56,  # 64 桁だが非 hex 文字混入
+        "wav_sha256": {
+            "ritsu_sakura": "b" * 64,
+            "ritsu_umi": "c" * 63,  # 桁数不足
+            "pjs_sakura": "D" * 64,  # 大文字（本実装は小文字のみ許可）
+            "pjs_umi": "e" * 64,
+            "user_sakura": "f" * 64,
+            "user_umi": "0" * 64,
+        },
+    }
+    problems = runner._g1_hash_record_problems(g1_expected)
+    problem_text = " ".join(problems)
+    assert "acoustic.onnx" in problem_text
+    assert "ritsu_umi" in problem_text
+    assert "pjs_sakura" in problem_text
+    assert len(problems) == 3
+
+
+def test_runner_g1_hash_record_problems_detects_unknown_schema_as_all_missing() -> None:
+    """FIX 9 の回帰固定: 未知スキーマ（`_extract_g1_expected_sha256` が empty
+    を返すケース）は「required が空になって skip される」のではなく、
+    onnx + 6 キー全てが missing として検出される（closed-world 契約の核）。"""
     g1_expected = runner._extract_g1_expected_sha256({"arms": {"something_else": {}}})
-    assert runner._required_g1_filenames(g1_expected) == []
+    problems = runner._g1_hash_record_problems(g1_expected)
+    assert len(problems) == 1 + len(runner.REQUIRED_G1_WAV_KEYS)
+
+
+def test_runner_is_well_formed_sha256() -> None:
+    """FIX 9: sha256 well-formed 判定は「文字列かつ 64 桁小文字 16 進のみ」
+    に限定されること。"""
+    assert runner._is_well_formed_sha256("a" * 64) is True
+    assert runner._is_well_formed_sha256("A" * 64) is False  # 大文字は不可
+    assert runner._is_well_formed_sha256("a" * 63) is False  # 桁数不足
+    assert runner._is_well_formed_sha256("g" * 64) is False  # 非 hex 文字
+    assert runner._is_well_formed_sha256(None) is False
+    assert runner._is_well_formed_sha256(12345) is False
+
+
+def test_runner_cmd_fetch_gates_on_hash_record_before_required_derivation() -> None:
+    """FIX 9 の配線固定（ソーススキャン）: cmd_fetch は
+    `_g1_hash_record_problems` によるゲート (a) を、required set 導出/listing
+    ゲート (b) より前に置くこと。"""
+    import inspect
+
+    fetch_source = inspect.getsource(runner.cmd_fetch)
+    assert "hash_record_problems = _g1_hash_record_problems(g1_expected)" in fetch_source
+    assert "incomplete G1 hash record" in fetch_source
+    hash_gate_idx = fetch_source.index("if hash_record_problems:")
+    required_idx = fetch_source.index("g1_required = _required_g1_filenames()")
+    assert hash_gate_idx < required_idx
 
 
 def test_runner_g1_missing_required_detects_artifact_absent_from_listing() -> None:
@@ -797,24 +870,90 @@ def test_runner_g1_missing_required_empty_when_all_required_listed() -> None:
     assert runner._g1_missing_required(required, g1_download_ok) == []
 
 
-def test_runner_cmd_fetch_wires_required_set_from_record_not_listing() -> None:
-    """cmd_fetch のソースが required set を record（probe_results.json /
-    `_extract_g1_expected_sha256`）由来で導出し、listing 不在を明示的な失敗
-    にしていること（ソーススキャンによる配線固定 — シミュレーションは
-    ネットワーク依存のため行わない）。"""
+def test_runner_cmd_fetch_wires_required_set_from_closed_world_constant() -> None:
+    """FIX 9 の配線固定（ソーススキャン）: cmd_fetch は required set を
+    closed-world 契約定数（`_required_g1_filenames()`、record には依存しない）
+    から導出し、listing 不在を明示的な失敗にしていること。"""
     import inspect
 
     fetch_source = inspect.getsource(runner.cmd_fetch)
-    assert "g1_required = _required_g1_filenames(g1_expected)" in fetch_source
+    assert "g1_required = _required_g1_filenames()" in fetch_source
     assert "g1_missing_from_listing = _g1_missing_required(g1_required, g1_download_ok)" in fetch_source
     assert "recorded artifact not published" in fetch_source
     gate_idx = fetch_source.index("if g1_missing_from_listing:")
     raise_idx = fetch_source.index("raise SystemExit(2)", gate_idx)
     assert gate_idx < raise_idx
-    # required set の導出は probe_results.json（g1_expected）のパース後 —
-    # transport のダウンロード結果に required 自体は依存しない。
+    # g1_expected（probe_results.json のパース結果）は hash-record ゲート
+    # (a) にのみ使われ、required set 自体（closed-world 契約）の導出には
+    # 使われない ——`_required_g1_filenames()` は引数を取らない。
     expected_extract_idx = fetch_source.index(
         "g1_expected = _extract_g1_expected_sha256(probe_results_payload)"
     )
-    required_idx = fetch_source.index("g1_required = _required_g1_filenames(g1_expected)")
+    required_idx = fetch_source.index("g1_required = _required_g1_filenames()")
     assert expected_extract_idx < required_idx
+
+
+# --- (h) FIX 9 (2): cmd_launch must fail without a pod id — a 2xx from
+# POST /pods with no extractable id used to only warn and exit 0, leaving a
+# possibly-billable pod unaccounted for. ---
+
+
+def test_runner_extract_pod_id_prefers_id_field() -> None:
+    assert runner._extract_pod_id({"id": "pod-abc123"}) == "pod-abc123"
+
+
+def test_runner_extract_pod_id_falls_back_to_pod_id_field() -> None:
+    assert runner._extract_pod_id({"podId": "pod-xyz789"}) == "pod-xyz789"
+
+
+def test_runner_extract_pod_id_prefers_id_over_pod_id_when_both_present() -> None:
+    assert runner._extract_pod_id({"id": "pod-a", "podId": "pod-b"}) == "pod-a"
+
+
+def test_runner_extract_pod_id_returns_none_when_absent() -> None:
+    assert runner._extract_pod_id({}) is None
+    assert runner._extract_pod_id({"name": "run4-export-device-probe"}) is None
+
+
+def test_runner_extract_pod_id_returns_none_for_falsy_or_non_string_values() -> None:
+    """空文字列・None・非文字列は「id が取れた」扱いにしない（cmd_launch の
+    `if pod_id:` ゲートを id 抽出側でも一貫させる）。"""
+    assert runner._extract_pod_id({"id": ""}) is None
+    assert runner._extract_pod_id({"id": None}) is None
+    assert runner._extract_pod_id({"id": 12345}) is None
+
+
+def test_runner_cmd_launch_exits_3_when_no_pod_id_extracted() -> None:
+    """FIX 9 (2) の中核回帰固定（ソーススキャン tripwire）: cmd_launch は
+    id 抽出失敗時に `raise SystemExit(3)` へ到達すること（旧実装は WARNING
+    を印字するだけで exit 0 していた）。実ネットワークコールを避け、
+    ソーススキャンで配線を固定する（`_extract_pod_id` の純粋関数テストは
+    上記で別途カバー済み）。"""
+    import inspect
+
+    launch_source = inspect.getsource(runner.cmd_launch)
+    assert "pod_id = _extract_pod_id(result)" in launch_source
+    assert "raise SystemExit(3)" in launch_source
+    assert "LAUNCH RECONCILIATION REQUIRED" in launch_source
+
+    if_idx = launch_source.index("if pod_id:")
+    return_idx = launch_source.index("return", if_idx)
+    exit_idx = launch_source.index("raise SystemExit(3)")
+    # 成功パス（pod_id あり → print + return）が先、id 抽出失敗パス
+    # （full response 印字 + reconciliation instruction + exit 3）が後、
+    # という file-order を固定する。
+    assert if_idx < return_idx < exit_idx
+
+
+def test_runner_cmd_launch_no_pod_id_path_prints_full_response_and_reconciliation() -> None:
+    """FIX 9 (2): id 抽出に失敗した経路が、(a) レスポンス本文を verbatim で
+    印字し、(b) 手動 reconciliation（list pods / console 確認 → 手動 stop/
+    terminate）を促す文言を含むこと。"""
+    import inspect
+
+    launch_source = inspect.getsource(runner.cmd_launch)
+    no_id_section = launch_source[launch_source.index("if pod_id:") :]
+    assert "json.dumps(result, indent=2, ensure_ascii=False)" in no_id_section
+    assert "MANUAL ACTION REQUIRED" in no_id_section
+    assert "stop/terminate" in no_id_section
+    assert "BILLABLE POD" in no_id_section
