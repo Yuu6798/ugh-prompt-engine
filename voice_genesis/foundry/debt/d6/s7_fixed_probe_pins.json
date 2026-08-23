@@ -209,17 +209,17 @@
         "path": "voice_genesis/foundry/run8/provision.sh",
         "sha256": "acb49b9acb985f7701a4cb86f1e93a0bcfd8973d245ef69de88431becae7185b"
       },
-      "note": "作業先は operator が作成可能な絶対パス。real-render acoustic ONNX は現在未回収のため、完全一致する外部資産を指定できるまでコマンドは開始前に BLOCKED で停止する。回収後は13 synthetic校正、17資産の provision、10 witnessed exports、履歴実装による14 real-render校正、10 production renders、manifest実digest計算、360セルmeasureを fail-closed で連続実行する。"
+      "note": "作業先は operator が作成可能な絶対パス。real-render acoustic ONNX は生成root外の完全一致する外部資産を指定し、生成rootとの重なりは最初の書込み前に拒否する。未回収時はコマンドは開始前に BLOCKED で停止する。回収後は17資産の provision、13 synthetic校正、10 witnessed exports、履歴実装による14 real-render校正、10 production renders、manifest実digest計算、360セルmeasureを fail-closed で連続実行する。"
     },
     "regeneration_commands": {
-      "derivation": "d6_regenerate.py が GROUPS の10要素から export/render の argv を構築する。B-1 real-renderは実行時commit 8a14ca9 のsourceをgit objectから展開し、回収した完全一致ONNXと固定stackで再生成する。再exportは代替に使わない。production render完了後に10個のmanifestを実ファイルからsha256計算し、d4_runner.py measureの --render-manifest-sha256 へ渡す。operatorが埋めるdigest placeholderは存在しない。--spec-sha256は実行時の現行コミット済みspec（v0.4）を実測する。2026-08-22実測が束縛したv0.1 shaは凍結記録として別フィールドに維持する。",
+      "derivation": "d6_regenerate.py が GROUPS の10要素から export/render の argv を構築する。B-1 real-renderは実行時commit 8a14ca9 のsourceをgit objectから展開し、回収した完全一致ONNXと固定stackで再生成する。再exportは代替に使わない。synthetic校正とmeasureもsys.executableではなく、provision後に絶対パスで照合したvenv_render interpreterの子プロセスへ固定する。production render完了後に10個のmanifestを実ファイルからsha256計算し、d4_runner.py measureの --render-manifest-sha256 へ渡す。operatorが埋めるdigest placeholderは存在しない。--spec-sha256は実行時の現行コミット済みspec（v0.4）を実測する。2026-08-22実測が束縛したv0.1 shaは凍結記録として別フィールドに維持する。",
       "spec_sha256_current_v0_4": "c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
       "spec_sha256_execution_time_v0_1_frozen": "702f1a2231a1b53e71afe7ab6332d42a637546802d960bdd569f4d200de2eeca",
       "entrypoint": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --real-render-acoustic-onnx /home/user/d6-real-render-input/s6_run7_acoustic.onnx",
       "plan_command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --real-render-acoustic-onnx /home/user/d6-real-render-input/s6_run7_acoustic.onnx --plan",
       "orchestrator": {
         "path": "voice_genesis/foundry/debt/d6/d6_regenerate.py",
-        "sha256": "b0dee94c7b3afb5c32baf0c181c9e7b7d0a41a781d44fa6fb28cecb3ee8c1835"
+        "sha256": "1d08f7bcdd8e81eef2b95d30ffaf5aadfd4884a98c3e71759be6fbae5e9ee56a"
       },
       "d4_runner": {
         "path": "voice_genesis/foundry/debt/d4/d4_runner.py",
@@ -246,8 +246,8 @@
         "real_render_calibration_total_conditions": 14
       },
       "measure_manifest_digest_policy": "10個の render manifest が全て存在することを確認し、各ファイルの実 sha256 を render 後に計算して同順の --render-manifest-sha256 へ渡す。欠落時は measure を起動しない。",
-      "render_runtime_policy": "provision.shがpython3.11.15からvenv_renderを構築し、numpy 2.4.6 / onnxruntime 1.29.0 / soundfile 0.14.0 / PyYAML 6.0.1を復元・import照合する。d6_regenerate.pyはsynthetic/real-render/production出力の生成前に同venvを再照合し、全render commandをそのinterpreterへ固定する。",
-      "phase_b_composer_policy": "measure成功後、d6_regenerate.pyが再測定結果のspec・instrument・runtime provenanceを検査し、直前に生成した10個のrender manifest実bytesからrender docとmaterials digestを再結合した上で、d4 baselineと再測定360セルを同一group/cell集合で比較する。再測定結果・10 render docs・10 manifests・synthetic 13条件observedを含むreconciliation・real-render 14条件manifestの23成果物は、全path/sha256から算出したcontent-addressed bundle id配下へ全量stageし、ディレクトリ単位で公開した後にreportだけをatomic switchする。途中失敗時は既存report/bundleを変更せずstagingを破棄する。reportにはcheckout-stableな世代別repo相対pathと実sha256だけを記録する。RESOLVED検証はcommit済みreport・23証拠成果物・bundle id・D4 runner/spec/baseline・TRF epsilon・校正正本をfresh checkoutから再読込し、top-level/10群の厳密形状、全digest、manifest→doc→materials/runtime、360セルの件数/最大差/hash裁定、synthetic 13条件、real-render 14条件を再計算できなければ拒否する。reference_outputが1件でもepsilon外ならreportを残して非0終了する。",
+      "render_runtime_policy": "provision.shがpython3.11.15からvenv_renderを構築し、numpy 2.4.6 / onnxruntime 1.29.0 / soundfile 0.14.0 / PyYAML 6.0.1を復元・import照合する。d6_regenerate.pyはsynthetic/real-render/production-render/measure出力の生成前に同venvを再照合し、この4経路をその絶対interpreterへ固定する。witnessed exportはprovision済みvenv_exportへ固定する。",
+      "phase_b_composer_policy": "measure成功後、d6_regenerate.pyが再測定結果のspec・instrument・runtime provenanceを検査し、直前に生成した10個のrender manifest実bytesからrender docとmaterials digestを再結合した上で、d4 baselineと再測定360セルを同一group/cell集合で比較する。生成rootと回収済みONNXの重なりは書込み前に拒否し、publisherもreport/bundleと保護入力の重なりを再検査する。再測定結果・10 render docs・10 manifests・synthetic 13条件observedを含むreconciliation・real-render 14条件manifestの23成果物は、全path/sha256から算出したcontent-addressed bundle id配下へ全量stageし、生成root配下のrepository-relative正本パス `voice_genesis/foundry/debt/d6/` へディレクトリ単位で公開した後にreportだけをatomic switchする。途中失敗時は既存report/bundleを変更せずstagingを破棄する。reportにはcheckout-stableな世代別repo相対pathと実sha256だけを記録する。RESOLVED検証はcommit済みreport・23証拠成果物・bundle id・D4 runner/spec/baseline・TRF epsilon・校正正本をfresh checkoutから再読込し、top-level/10群の厳密形状、全digest、manifest→doc→materials/runtime、360セルの件数/最大差/hash裁定、synthetic 13条件、real-render 14条件を再計算できなければ拒否する。reference_outputが1件でもepsilon外ならreportを残して非0終了する。",
       "measure_completion_policy": "--allow-partial は付けない。d4_runner.py が10群・360セル全数一致と error=0 を要求し、不完全なら非0終了する。"
     }
   },

@@ -73,6 +73,13 @@ Run 8 は 2026-08-22 User 裁定で **CLOSED**（`results_s7/s7_run8_closeout.md
   results 系）の追加・変更。
   **学習経路のコード**（bootstrap の profile 表以外の本体・binarize・assemble・
   DiffSinger pin・学習設定）に差分がある場合はゲート不一致 = `confounded` とする
+- **training commit と export-admission commit の分離**: 上記環境同等性ゲートが照合する
+  HEAD は、40K checkpoint を生んだ **training commit** とする。学習完了後に §2 の
+  checkpoint admission を正本化する commit は L4 実行用であり、L1 の環境同等性へ
+  混ぜない。その commit の第一親は training commit でなければならず、差分は
+  checkpoint admission 生成物、exporter input pins、cell-definition/probe spec、
+  VG-DET0 専用 D4 spec・runner 配線、テスト、docs/results に限定する。学習経路本体を
+  同時変更した commit からの L4 は拒否する
 - **正直会計**: run 7 側で未記帳の環境項目（コンテナイメージ digest 等、実行
   manifest に無いもの）は「未制御」として列挙し、その存在自体が
   `bit_identical` 以外の裁定に限定を付す（未記帳項目は事後に同等と宣言しない）
@@ -102,7 +109,39 @@ fail-closed で束縛しているため、**現行のままでは VG-DET0 の群
 （Codex 2026-08-23 P1 指摘の採用）。実行前に **VG-DET0 専用 remeasure spec**
 （`d4_remeasure_spec.json` と同型・vgdet0 4 群 144 セル・spec 1.2 と計器 pin を
 逐語継承）を事前登録し、runner の generation / 群検証を**その spec へ束縛する
-拡張**（検証の緩和ではなく束縛先の追加）を同一 PR で凍結する。
+拡張**（検証の緩和ではなく束縛先の追加）を凍結する。
+
+ただし D4 runner だけを拡張しても実行可能にはならない。現行
+`run8/s7_export_manifest.py::load_input_pins()` は generation が
+`results_s7/s7_exporter_input_pins.json` と `results_s7/s7_0b_probe_spec.json` の
+**両方**に存在し、両者の `checkpoint_sha256` が一致することを要求する。さらに
+`d4_runner.py::cmd_render()` は同じ probe spec の generation / speakers / cell 定義を
+消費する。VG-DET0 の 40K digest は L1 の未知な観測値なので、run7 digest の流用や
+placeholder の事前記入は偽の provenance になる。よって L4 は次の二段階 admission を
+必須とする（Codex 2026-08-23 P1 指摘の採用）:
+
+1. **学習前に admission 手順を凍結**: 実行 PR は、40K checkpoint の実ファイルと
+   `run_execution_manifest.json` だけを入力に取る決定論的 admission tool を追加する。
+   tool は `run_id = vgdet0`、step = 40000、dataset digest = run7、manifest の
+   training commit = §1-3 の照合対象を検証し、checkpoint bytes を一度読んで sha256 と
+   size を算出する。digest の CLI 手入力・環境変数注入・run7 値の既定化は禁止する
+2. **学習後、export 前に観測値を三重束縛**: admission tool の原子的出力だけから
+   (a) machine-readable checkpoint admission record、
+   (b) `s7_exporter_input_pins.json` の `vgdet0` entry、
+   (c) `s7_0b_probe_spec.json` の `expansion.generations.vgdet0`
+   を生成する。3 箇所の checkpoint digest は実checkpoint bytesの観測値と同一、
+   config / exporter inputs は run7 entry と同一、speakers は
+   `ritsu / pjs / user / amitaro` の固定4群、cell集合は各36・合計144とする。
+   欠落・不一致・重複 generation は原子的公開前に拒否する
+3. **全ゲートを同じ admission commit で接続**: 上記3成果物、VG-DET0 専用 D4 spec、
+   `s7_export_manifest.py` / `d4_runner.py` の generation 配線、正負テストを同じ
+   post-training admission commit へ収載する。テストは actual checkpoint→admission→
+   exporter pin照合→probe spec generation/speakers/cell集合→D4 144セル収集の往復を
+   固定する。export/render/measure はこの commit と admission record の sha256 を
+   manifest に記帳し、いずれかが一致しなければ開始しない
+
+これにより、paid training 前には未知digestを捏造せず、paid training 後には観測した
+checkpointを既存の exporter / probe / D4 全ゲートへ接続してから L4 を実行できる。
 
 ## 3. 裁定語彙（事前固定）
 

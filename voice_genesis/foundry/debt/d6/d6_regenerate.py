@@ -65,6 +65,7 @@ PHASE_B_REAL_RENDER_MANIFEST_PATH = (
     PHASE_B_EVIDENCE_PATH / "calibration_real_render_manifest.json"
 )
 _D4_RUNTIME_STACK_KEYS = {"python", "numpy", "onnxruntime", "soundfile", "PyYAML"}
+_INTERNAL_SYNTHETIC_CALIBRATION_FLAG = "--internal-synthetic-calibration-out"
 
 GROUPS = (
     ("run5", "ritsu"),
@@ -165,8 +166,43 @@ def _render_python(root: Path) -> str:
     return str(root / "venv_render" / "bin" / "python")
 
 
+def _phase_b_report_path(root: Path) -> Path:
+    """作業 root 内に checkout と同じ repository-relative 配置を返す。"""
+    return Path(root).resolve() / PHASE_B_REPORT_PATH
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    left = Path(left).resolve()
+    right = Path(right).resolve()
+    return left == right or left in right.parents or right in left.parents
+
+
+def _preflight_protected_inputs(root: Path, protected_inputs: Iterable[Path]) -> None:
+    """生成 root と回収資産が重なる実行を、最初の書込みより前に拒否する。"""
+    resolved_root = Path(root).resolve()
+    for protected in protected_inputs:
+        resolved = Path(protected).resolve()
+        if _paths_overlap(resolved_root, resolved):
+            raise RegenerationError(
+                "生成 root が保護入力と重なる: "
+                f"root={resolved_root}, protected={resolved}"
+            )
+
+
 def build_provision_command(root: Path) -> list[str]:
     return ["bash", str(PROVISION), "--root", str(root)]
+
+
+def build_synthetic_calibration_command(
+    root: Path, *, python_executable: str | None = None
+) -> list[str]:
+    """合成校正を、provision 後に照合する絶対パスの interpreter で実行する。"""
+    return [
+        python_executable or _render_python(root),
+        str(Path(__file__).resolve()),
+        _INTERNAL_SYNTHETIC_CALIBRATION_FLAG,
+        str(Path(root).resolve() / "calibration_synthetic"),
+    ]
 
 
 def build_export_command(root: Path, group: GroupPaths) -> list[str]:
@@ -282,8 +318,10 @@ def build_real_render_command(
     ]
 
 
-def build_measure_command(root: Path, *, python_executable: str = sys.executable) -> list[str]:
-    command = [python_executable, str(D4_RUNNER), "measure"]
+def build_measure_command(
+    root: Path, *, python_executable: str | None = None
+) -> list[str]:
+    command = [python_executable or _render_python(root), str(D4_RUNNER), "measure"]
     groups = group_paths(root)
     missing = [
         str(group.render_manifest) for group in groups if not group.render_manifest.is_file()
@@ -866,6 +904,7 @@ def _publish_phase_b_bundle(
     report_payload: bytes,
     *,
     bundle_id: str,
+    protected_inputs: Iterable[Path] = (),
 ) -> None:
     """完全なcontent-addressed bundleを先に公開し、reportを最後に切り替える。"""
     output_parent = Path(out_path).resolve().parent
@@ -887,8 +926,15 @@ def _publish_phase_b_bundle(
     except ValueError as exc:
         raise RegenerationError("Phase B bundle path がreport正本配下でない") from exc
     target = output_parent / bundle_suffix
+    report_path = Path(out_path).resolve()
+    for protected in protected_inputs:
+        resolved = Path(protected).resolve()
+        if _paths_overlap(report_path, resolved) or _paths_overlap(target, resolved):
+            raise RegenerationError(
+                "Phase B 出力が保護入力と重なる: "
+                f"report={report_path}, bundle={target}, protected={resolved}"
+            )
     target.parent.mkdir(parents=True, exist_ok=True)
-    report_path = Path(out_path)
     previous_report = report_path.read_bytes() if report_path.is_file() else None
     staging = Path(
         tempfile.mkdtemp(prefix=f".{bundle_id}.staging-", dir=target.parent)
@@ -1524,6 +1570,7 @@ def compose_phase_b_reconciliation(
         versioned_artifacts,
         report_payload,
         bundle_id=bundle_id,
+        protected_inputs=(Path(recovered_acoustic_path),),
     )
     if reference_mismatches:
         raise RegenerationError(
@@ -1652,6 +1699,16 @@ def _validated_root(value: str) -> Path:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv[:1] == [_INTERNAL_SYNTHETIC_CALIBRATION_FLAG]:
+        if len(raw_argv) != 2:
+            raise RegenerationError(
+                f"{_INTERNAL_SYNTHETIC_CALIBRATION_FLAG} は出力先1個だけを取る"
+            )
+        verify_runner_pins()
+        verify_calibration_outputs(Path(raw_argv[1]).expanduser().resolve())
+        return 0
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=_validated_root)
     parser.add_argument(
@@ -1669,14 +1726,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="既に同じ provision.sh で照合済みの root に限り取得段を省略",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
     root: Path = args.root
     real_render_acoustic = args.real_render_acoustic_onnx.expanduser().resolve()
+    _preflight_protected_inputs(root, (real_render_acoustic,))
     verify_runner_pins()
     provision, exports, renders = static_plan(root)
     if args.plan:
         if not args.skip_provision:
             _print_commands([provision])
+        _print_commands([build_synthetic_calibration_command(root)])
         _print_commands(exports)
         _print_commands([build_real_render_command(root, real_render_acoustic)])
         _print_commands(renders)
@@ -1694,7 +1753,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.skip_provision:
         _run(provision)
     verify_real_render_stack(_render_python(root))
-    verify_calibration_outputs(root / "calibration_synthetic")
+    _run(build_synthetic_calibration_command(root))
     for export in exports:
         _run(export)
     verify_real_render_inputs(root, real_render_acoustic)
@@ -1713,7 +1772,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         root / "calibration_real_render_reconciliation.json",
         root / "calibration_real_render_manifest.json",
         real_render_acoustic,
-        root / "d6_phase_b_reconciliation.json",
+        _phase_b_report_path(root),
         group_paths(root),
     )
     return 0

@@ -121,6 +121,22 @@ def test_vg_det0_uses_successful_run7_manifest_commit_as_baseline() -> None:
     assert "8ef874b" not in text
 
 
+def test_vg_det0_preregisters_all_post_training_export_gates() -> None:
+    text = VG_DET0_DESIGN_PATH.read_text(encoding="utf-8")
+    for required in (
+        "s7_export_manifest.py::load_input_pins()",
+        "s7_exporter_input_pins.json",
+        "s7_0b_probe_spec.json",
+        "d4_runner.py::cmd_render()",
+        "run_execution_manifest.json",
+        "post-training admission commit",
+        "actual checkpoint→admission→",
+    ):
+        assert required in text
+    assert "digest の CLI 手入力・環境変数注入・run7 値の既定化は禁止" in text
+    assert "3 箇所の checkpoint digest は実checkpoint bytesの観測値と同一" in text
+
+
 REQUIRED_TOP_LEVEL_KEYS = {
     "schema",
     "debt_ref",
@@ -438,6 +454,13 @@ def test_regeneration_runner_covers_10_exports_and_render_groups(
     assert all(
         command[0] == str(root / "venv_render" / "bin" / "python") for command in default_renders
     )
+    synthetic_command = d6_regenerate.build_synthetic_calibration_command(root)
+    assert synthetic_command == [
+        str(root / "venv_render" / "bin" / "python"),
+        str(Path(d6_regenerate.__file__).resolve()),
+        d6_regenerate._INTERNAL_SYNTHETIC_CALIBRATION_FLAG,
+        str(root / "calibration_synthetic"),
+    ]
 
     recovered = tmp_path / "recovered" / "s6_run7_acoustic.onnx"
     real_command = d6_regenerate.build_real_render_command(
@@ -1124,6 +1147,44 @@ def test_phase_b_bundle_publish_failure_preserves_previous_generation(
     assert not list((report_path.parent / "d6_phase_b_evidence").glob(".*.staging-*"))
 
 
+def test_phase_b_outputs_reject_overlap_with_recovered_input(tmp_path: Path) -> None:
+    root = tmp_path / "d6work"
+    recovered_inside_root = root / d6_regenerate.PHASE_B_REPORT_PATH
+    with pytest.raises(d6_regenerate.RegenerationError, match="保護入力"):
+        d6_regenerate._preflight_protected_inputs(root, (recovered_inside_root,))
+    assert not root.exists()
+
+    recovered = tmp_path / "operator-recovered.onnx"
+    recovered.write_bytes(b"only recovered copy")
+    report_path = recovered
+    leaf = {d6_regenerate.PHASE_B_EVIDENCE_PATH / "a.json": b"evidence"}
+    bundle_id = d6_regenerate._phase_b_evidence_bundle_id(leaf)
+    versioned = {
+        d6_regenerate._phase_b_bundle_path(bundle_id, path): payload
+        for path, payload in leaf.items()
+    }
+    with pytest.raises(d6_regenerate.RegenerationError, match="保護入力"):
+        d6_regenerate._publish_phase_b_bundle(
+            report_path,
+            versioned,
+            b'{"verdict":"PASS"}\n',
+            bundle_id=bundle_id,
+            protected_inputs=(recovered,),
+        )
+    assert recovered.read_bytes() == b"only recovered copy"
+    assert not (tmp_path / "d6_phase_b_evidence").exists()
+
+
+def test_phase_b_cli_report_uses_repository_relative_layout(tmp_path: Path) -> None:
+    root = (tmp_path / "d6work").resolve()
+    assert d6_regenerate._phase_b_report_path(root) == (
+        root / d6_regenerate.PHASE_B_REPORT_PATH
+    )
+    assert d6_regenerate._phase_b_report_path(root).relative_to(root) == (
+        d6_regenerate.PHASE_B_REPORT_PATH
+    )
+
+
 def test_regeneration_runner_verifies_its_own_pinned_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1164,6 +1225,9 @@ def test_measure_command_hashes_all_generated_manifests(
         command[index + 1] for index, arg in enumerate(command) if arg == "--render-manifest-sha256"
     ]
     assert digests == [d6_regenerate.sha256_file(group.render_manifest) for group in groups]
+    assert d6_regenerate.build_measure_command(root)[0] == str(
+        root / "venv_render" / "bin" / "python"
+    )
 
 
 def test_measure_command_fails_closed_when_a_manifest_is_missing(tmp_path: Path) -> None:
