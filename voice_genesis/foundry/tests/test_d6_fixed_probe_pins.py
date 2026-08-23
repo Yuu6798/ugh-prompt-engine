@@ -394,8 +394,16 @@ def test_provision_builds_and_checks_complete_pinned_render_runtime() -> None:
         "onnxruntime==1.29.0",
         "soundfile==0.14.0",
         "PyYAML==6.0.1",
+        "numba==0.66.0",
+        "librosa==0.11.0",
+        "pyloudnorm==0.2.0",
     ):
         assert pin in text
+    # import-only の環境検査ではなく、D4 が通常測定で呼ぶ librosa/numba 経路を
+    # provision 自身が実行してから成功を宣言する。
+    assert '"$RENDER_VENV/bin/python" - "$RUN8_DIR"' in text
+    assert "b1.verify_analysis_stack(prereg)" in text
+    assert "v12.measure_candidate_12(candidate, stimulus)" in text
 
 
 def test_render_runtime_verification_is_fail_closed(

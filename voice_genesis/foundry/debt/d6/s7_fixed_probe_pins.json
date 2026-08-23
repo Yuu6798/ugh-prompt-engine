@@ -207,7 +207,7 @@
       "source": "voice_genesis/foundry/debt/d6/d6_regenerate.py（単一の実行入口。内部で provision.sh を起動する）",
       "provisioner": {
         "path": "voice_genesis/foundry/run8/provision.sh",
-        "sha256": "acb49b9acb985f7701a4cb86f1e93a0bcfd8973d245ef69de88431becae7185b"
+        "sha256": "63b467a1208fd9a50611896991b05925efd1c3f03e11c94b9c946b8db4b85221"
       },
       "note": "作業先は operator が作成可能な絶対パス。real-render acoustic ONNX は生成root外の完全一致する外部資産を指定し、生成rootとの重なりは最初の書込み前に拒否する。未回収時はコマンドは開始前に BLOCKED で停止する。回収後は17資産の provision、13 synthetic校正、10 witnessed exports、履歴実装による14 real-render校正、10 production renders、manifest実digest計算、360セルmeasureを fail-closed で連続実行する。"
     },
