@@ -633,15 +633,45 @@ def _canonical_json_sha256(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _phase_b_group_refs(group_id: str) -> tuple[Path, Path]:
-    return (
+def _phase_b_bundle_path(bundle_id: str, path: Path) -> Path:
+    if not _is_lower_hex(bundle_id, 64):
+        raise RegenerationError("Phase B evidence bundle id が不正")
+    try:
+        suffix = path.relative_to(PHASE_B_EVIDENCE_PATH)
+    except ValueError as exc:
+        raise RegenerationError(f"Phase B evidence path が正本配下でない: {path}") from exc
+    return PHASE_B_EVIDENCE_PATH / bundle_id / suffix
+
+
+def _phase_b_group_refs(
+    group_id: str, *, bundle_id: str | None = None
+) -> tuple[Path, Path]:
+    refs = (
         PHASE_B_EVIDENCE_PATH / f"{group_id}.json",
         PHASE_B_EVIDENCE_PATH / f"{group_id}_render_manifest.json",
     )
+    if bundle_id is None:
+        return refs
+    return tuple(_phase_b_bundle_path(bundle_id, path) for path in refs)
 
 
 def _bound_ref(path: Path, digest: str) -> dict[str, str]:
     return {"path": str(path), "sha256": digest}
+
+
+def _phase_b_evidence_bundle_id(artifacts: dict[Path, bytes]) -> str:
+    entries = []
+    for path, payload in artifacts.items():
+        try:
+            suffix = path.relative_to(PHASE_B_EVIDENCE_PATH)
+        except ValueError as exc:
+            raise RegenerationError(
+                f"Phase B evidence path が正本配下でない: {path}"
+            ) from exc
+        entries.append(
+            {"path": str(suffix), "sha256": hashlib.sha256(payload).hexdigest()}
+        )
+    return _canonical_json_sha256(sorted(entries, key=lambda entry: entry["path"]))
 
 
 def _validate_regenerated_provenance(
@@ -652,6 +682,7 @@ def _validate_regenerated_provenance(
     d4_spec_sha: str,
     rendered_groups: Sequence[GroupPaths],
     require_result_path_match: bool = True,
+    bundle_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[Path, bytes]]:
     """再測定結果を、この Phase B 実行が直前に作った10群へ結合する。
 
@@ -792,7 +823,7 @@ def _validate_regenerated_provenance(
             raise RegenerationError(
                 f"Phase B: {group_id} regenerated result が current render/materials と不一致"
             )
-        doc_ref, manifest_ref = _phase_b_group_refs(group_id)
+        doc_ref, manifest_ref = _phase_b_group_refs(group_id, bundle_id=bundle_id)
         evidence[group_id] = {
             "render_manifest": _bound_ref(manifest_ref, manifest_sha),
             "render_doc": _bound_ref(doc_ref, doc_sha),
@@ -821,19 +852,88 @@ def _atomic_write_verified(path: Path, payload: bytes) -> None:
             tmp_path.unlink()
 
 
-def _materialize_phase_b_evidence(
-    out_path: Path, artifacts: dict[Path, bytes]
+def _fsync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _publish_phase_b_bundle(
+    out_path: Path,
+    artifacts: dict[Path, bytes],
+    report_payload: bytes,
+    *,
+    bundle_id: str,
 ) -> None:
-    """repoへそのままコピーできるcheckout-stable evidence bundleを作る。"""
+    """完全なcontent-addressed bundleを先に公開し、reportを最後に切り替える。"""
     output_parent = Path(out_path).resolve().parent
-    for canonical_path, payload in artifacts.items():
+    bundle_path = PHASE_B_EVIDENCE_PATH / bundle_id
+    unversioned_artifacts: dict[Path, bytes] = {}
+    for path, payload in artifacts.items():
         try:
-            suffix = canonical_path.relative_to(PHASE_B_REPORT_PATH.parent)
+            suffix = path.relative_to(bundle_path)
         except ValueError as exc:
-            raise RegenerationError(
-                f"Phase B evidence path が正本配下でない: {canonical_path}"
-            ) from exc
-        _atomic_write_verified(output_parent / suffix, payload)
+            raise RegenerationError(f"Phase B artifact がbundle配下でない: {path}") from exc
+        unversioned_artifacts[PHASE_B_EVIDENCE_PATH / suffix] = payload
+    if (
+        len(unversioned_artifacts) != len(artifacts)
+        or _phase_b_evidence_bundle_id(unversioned_artifacts) != bundle_id
+    ):
+        raise RegenerationError("Phase B content-addressed bundle id が成果物と不一致")
+    try:
+        bundle_suffix = bundle_path.relative_to(PHASE_B_REPORT_PATH.parent)
+    except ValueError as exc:
+        raise RegenerationError("Phase B bundle path がreport正本配下でない") from exc
+    target = output_parent / bundle_suffix
+    target.parent.mkdir(parents=True, exist_ok=True)
+    report_path = Path(out_path)
+    previous_report = report_path.read_bytes() if report_path.is_file() else None
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{bundle_id}.staging-", dir=target.parent)
+    )
+    expected: dict[Path, bytes] = {}
+    try:
+        for canonical_path, payload in artifacts.items():
+            try:
+                suffix = canonical_path.relative_to(bundle_path)
+            except ValueError as exc:
+                raise RegenerationError(
+                    f"Phase B artifact がbundle配下でない: {canonical_path}"
+                ) from exc
+            expected[suffix] = payload
+            _atomic_write_verified(staging / suffix, payload)
+        _fsync_directory(staging)
+
+        if target.exists():
+            actual_files = {
+                path.relative_to(target)
+                for path in target.rglob("*")
+                if path.is_file()
+            }
+            if actual_files != set(expected) or any(
+                (target / suffix).read_bytes() != payload
+                for suffix, payload in expected.items()
+            ):
+                raise RegenerationError(
+                    f"Phase B content-addressed bundle が既存bytesと不一致: {bundle_id}"
+                )
+        else:
+            os.replace(staging, target)
+            _fsync_directory(target.parent)
+        try:
+            _atomic_write_verified(report_path, report_payload)
+        except BaseException:
+            if previous_report is None:
+                report_path.unlink(missing_ok=True)
+            else:
+                _atomic_write_verified(report_path, previous_report)
+            raise
+        _fsync_directory(output_parent)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
 
 
 def _read_bound_bytes(
@@ -865,7 +965,7 @@ def _read_bound_json(
 
 
 def _committed_group_paths(
-    report_root: Path, groups: dict[str, Any]
+    report_root: Path, groups: dict[str, Any], *, bundle_id: str
 ) -> tuple[GroupPaths, ...]:
     expected_ids = {f"{generation}_{speaker}" for generation, speaker in GROUPS}
     if set(groups) != expected_ids:
@@ -881,7 +981,7 @@ def _committed_group_paths(
             "render_runtime_stack",
         }:
             raise RegenerationError(f"Phase B report: {group_id} evidence shape が不正")
-        doc_ref, manifest_ref = _phase_b_group_refs(group_id)
+        doc_ref, manifest_ref = _phase_b_group_refs(group_id, bundle_id=bundle_id)
         doc_binding = node["render_doc"]
         manifest_binding = node["render_manifest"]
         if (
@@ -1078,6 +1178,7 @@ def validate_resolved_reconciliation(
 
     provenance = report.get("regenerated_provenance")
     if not isinstance(provenance, dict) or set(provenance) != {
+        "bundle_id",
         "results",
         "d4_runner",
         "d4_remeasure_spec",
@@ -1086,10 +1187,13 @@ def validate_resolved_reconciliation(
         "groups",
     }:
         raise RegenerationError("RESOLVED reconciliation report のprovenance shapeが不正")
-    regenerated, _ = _read_bound_json(
+    bundle_id = provenance["bundle_id"]
+    if not _is_lower_hex(bundle_id, 64):
+        raise RegenerationError("RESOLVED reconciliation report のbundle idが不正")
+    regenerated, regenerated_bytes = _read_bound_json(
         report_root,
         provenance["results"],
-        expected_path=PHASE_B_RESULTS_PATH,
+        expected_path=_phase_b_bundle_path(bundle_id, PHASE_B_RESULTS_PATH),
         label="Phase B packaged results",
     )
     d4_runner_path = Path("voice_genesis/foundry/debt/d4/d4_runner.py")
@@ -1113,14 +1217,17 @@ def validate_resolved_reconciliation(
     if hashlib.sha256(baseline_bytes).hexdigest() != D4_BASELINE_SHA256:
         raise RegenerationError("Phase B canonical baseline がpinと不一致")
     baseline = json.loads(baseline_bytes)
-    committed_groups = _committed_group_paths(report_root, provenance["groups"])
-    observed_groups, _ = _validate_regenerated_provenance(
+    committed_groups = _committed_group_paths(
+        report_root, provenance["groups"], bundle_id=bundle_id
+    )
+    observed_groups, observed_artifacts = _validate_regenerated_provenance(
         regenerated,
         baseline=baseline,
         d4_spec=d4_spec,
         d4_spec_sha=hashlib.sha256(d4_spec_bytes).hexdigest(),
         rendered_groups=committed_groups,
         require_result_path_match=False,
+        bundle_id=bundle_id,
     )
     if observed_groups != provenance["groups"]:
         raise RegenerationError("Phase B report provenance がcommitted evidenceと不一致")
@@ -1150,10 +1257,10 @@ def validate_resolved_reconciliation(
     if committed_production != recomputed_production:
         raise RegenerationError("Phase B production裁定値が360測定値の再計算と不一致")
 
-    synthetic, _ = _read_bound_json(
+    synthetic, synthetic_bytes = _read_bound_json(
         report_root,
         provenance["synthetic_reconciliation"],
-        expected_path=PHASE_B_SYNTHETIC_PATH,
+        expected_path=_phase_b_bundle_path(bundle_id, PHASE_B_SYNTHETIC_PATH),
         label="Phase B synthetic reconciliation",
     )
     calibration_pins_bytes = (
@@ -1174,7 +1281,9 @@ def validate_resolved_reconciliation(
     real_manifest, real_manifest_bytes = _read_bound_json(
         report_root,
         provenance["real_render_manifest"],
-        expected_path=PHASE_B_REAL_RENDER_MANIFEST_PATH,
+        expected_path=_phase_b_bundle_path(
+            bundle_id, PHASE_B_REAL_RENDER_MANIFEST_PATH
+        ),
         label="Phase B real-render manifest",
     )
     real_baseline_path = Path(
@@ -1205,6 +1314,22 @@ def validate_resolved_reconciliation(
     }
     if value.get("calibration") != expected_calibration:
         raise RegenerationError("Phase B calibration裁定値がpackaged evidenceの再計算と不一致")
+    bundle_prefix = PHASE_B_EVIDENCE_PATH / bundle_id
+    normalized_artifacts = {
+        PHASE_B_EVIDENCE_PATH / path.relative_to(bundle_prefix): payload
+        for path, payload in observed_artifacts.items()
+    }
+    normalized_artifacts.update(
+        {
+            PHASE_B_RESULTS_PATH: regenerated_bytes,
+            PHASE_B_SYNTHETIC_PATH: synthetic_bytes,
+            PHASE_B_REAL_RENDER_MANIFEST_PATH: real_manifest_bytes,
+        }
+    )
+    if len(normalized_artifacts) != 23 or _phase_b_evidence_bundle_id(
+        normalized_artifacts
+    ) != bundle_id:
+        raise RegenerationError("Phase B evidence bundle id が23成果物と不一致")
     return report
 
 
@@ -1312,6 +1437,18 @@ def compose_phase_b_reconciliation(
         raise RegenerationError("Phase B: real-render calibration 14条件の照合がPASSでない")
     evidence_artifacts[PHASE_B_SYNTHETIC_PATH] = synthetic_bytes
     evidence_artifacts[PHASE_B_REAL_RENDER_MANIFEST_PATH] = real_render_manifest_bytes
+    if len(evidence_artifacts) != 23:
+        raise RegenerationError("Phase B evidence bundle が固定23成果物でない")
+    bundle_id = _phase_b_evidence_bundle_id(evidence_artifacts)
+    for group in regenerated_provenance.values():
+        for ref_name in ("render_doc", "render_manifest"):
+            group[ref_name]["path"] = str(
+                _phase_b_bundle_path(bundle_id, Path(group[ref_name]["path"]))
+            )
+    versioned_artifacts = {
+        _phase_b_bundle_path(bundle_id, path): payload
+        for path, payload in evidence_artifacts.items()
+    }
     reference_mismatches = production_value["reference_output_remeasurement"][
         "n_mismatches"
     ]
@@ -1350,7 +1487,11 @@ def compose_phase_b_reconciliation(
     report = {
         "schema": "vg-d6-phase-b-reconciliation/0.1",
         "regenerated_provenance": {
-            "results": _bound_ref(PHASE_B_RESULTS_PATH, regenerated_sha),
+            "bundle_id": bundle_id,
+            "results": _bound_ref(
+                _phase_b_bundle_path(bundle_id, PHASE_B_RESULTS_PATH),
+                regenerated_sha,
+            ),
             "d4_runner": _bound_ref(
                 Path("voice_genesis/foundry/debt/d4/d4_runner.py"), d4_runner_sha
             ),
@@ -1359,10 +1500,12 @@ def compose_phase_b_reconciliation(
                 d4_spec_sha,
             ),
             "synthetic_reconciliation": _bound_ref(
-                PHASE_B_SYNTHETIC_PATH, synthetic_sha
+                _phase_b_bundle_path(bundle_id, PHASE_B_SYNTHETIC_PATH),
+                synthetic_sha,
             ),
             "real_render_manifest": _bound_ref(
-                PHASE_B_REAL_RENDER_MANIFEST_PATH, real_render_manifest_sha
+                _phase_b_bundle_path(bundle_id, PHASE_B_REAL_RENDER_MANIFEST_PATH),
+                real_render_manifest_sha,
             ),
             "groups": regenerated_provenance,
         },
@@ -1373,10 +1516,14 @@ def compose_phase_b_reconciliation(
             "value": value,
         },
     }
-    _materialize_phase_b_evidence(Path(out_path), evidence_artifacts)
-    _atomic_write_verified(
+    report_payload = (
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
+    _publish_phase_b_bundle(
         Path(out_path),
-        (json.dumps(report, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+        versioned_artifacts,
+        report_payload,
+        bundle_id=bundle_id,
     )
     if reference_mismatches:
         raise RegenerationError(

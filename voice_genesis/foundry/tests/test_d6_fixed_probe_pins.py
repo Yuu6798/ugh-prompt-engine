@@ -771,6 +771,7 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
     assert input_reads == {path: 1 for path in evidence_inputs}
     provenance = report["regenerated_provenance"]
     assert set(provenance) == {
+        "bundle_id",
         "results",
         "d4_runner",
         "d4_remeasure_spec",
@@ -778,7 +779,12 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         "real_render_manifest",
         "groups",
     }
-    assert provenance["results"]["path"] == str(d6_regenerate.PHASE_B_RESULTS_PATH)
+    assert SHA256_RE.fullmatch(provenance["bundle_id"])
+    assert provenance["results"]["path"] == str(
+        d6_regenerate._phase_b_bundle_path(
+            provenance["bundle_id"], d6_regenerate.PHASE_B_RESULTS_PATH
+        )
+    )
     assert len(provenance["groups"]) == 10
     assert all(
         not Path(ref["path"]).is_absolute()
@@ -1014,6 +1020,108 @@ def test_missing_or_reexported_real_render_acoustic_is_rejected(tmp_path: Path) 
             d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256,
             label="historical acoustic ONNX",
         )
+
+
+def test_phase_b_bundle_publish_failure_preserves_previous_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report_path = tmp_path / d6_regenerate.PHASE_B_REPORT_PATH
+    first_leaf = {
+        d6_regenerate.PHASE_B_EVIDENCE_PATH / "a.json": b"first-a",
+        d6_regenerate.PHASE_B_EVIDENCE_PATH / "b.json": b"first-b",
+    }
+    first_id = d6_regenerate._phase_b_evidence_bundle_id(first_leaf)
+    first_versioned = {
+        d6_regenerate._phase_b_bundle_path(first_id, path): payload
+        for path, payload in first_leaf.items()
+    }
+    first_report = b'{"generation":"first"}\n'
+    d6_regenerate._publish_phase_b_bundle(
+        report_path,
+        first_versioned,
+        first_report,
+        bundle_id=first_id,
+    )
+    first_dir = report_path.parent / "d6_phase_b_evidence" / first_id
+    first_snapshot = {
+        path.relative_to(first_dir): path.read_bytes()
+        for path in first_dir.rglob("*")
+        if path.is_file()
+    }
+
+    second_leaf = {
+        d6_regenerate.PHASE_B_EVIDENCE_PATH / "a.json": b"second-a",
+        d6_regenerate.PHASE_B_EVIDENCE_PATH / "b.json": b"second-b",
+    }
+    second_id = d6_regenerate._phase_b_evidence_bundle_id(second_leaf)
+    second_versioned = {
+        d6_regenerate._phase_b_bundle_path(second_id, path): payload
+        for path, payload in second_leaf.items()
+    }
+    original_atomic_write = d6_regenerate._atomic_write_verified
+    staging_writes = 0
+
+    def fail_during_staging(path: Path, payload: bytes) -> None:
+        nonlocal staging_writes
+        if ".staging-" in str(path):
+            staging_writes += 1
+            if staging_writes == 2:
+                raise OSError("injected evidence staging failure")
+        original_atomic_write(path, payload)
+
+    monkeypatch.setattr(d6_regenerate, "_atomic_write_verified", fail_during_staging)
+    with pytest.raises(OSError, match="injected evidence staging failure"):
+        d6_regenerate._publish_phase_b_bundle(
+            report_path,
+            second_versioned,
+            b'{"generation":"second"}\n',
+            bundle_id=second_id,
+        )
+
+    assert report_path.read_bytes() == first_report
+    assert {
+        path.relative_to(first_dir): path.read_bytes()
+        for path in first_dir.rglob("*")
+        if path.is_file()
+    } == first_snapshot
+    assert not (report_path.parent / "d6_phase_b_evidence" / second_id).exists()
+    assert not list((report_path.parent / "d6_phase_b_evidence").glob(".*.staging-*"))
+
+    report_switch_attempts = 0
+
+    def fail_first_report_switch(path: Path, payload: bytes) -> None:
+        nonlocal report_switch_attempts
+        if path == report_path and report_switch_attempts == 0:
+            report_switch_attempts += 1
+            raise OSError("injected report switch failure")
+        original_atomic_write(path, payload)
+
+    monkeypatch.setattr(
+        d6_regenerate, "_atomic_write_verified", fail_first_report_switch
+    )
+    with pytest.raises(OSError, match="injected report switch failure"):
+        d6_regenerate._publish_phase_b_bundle(
+            report_path,
+            second_versioned,
+            b'{"generation":"second"}\n',
+            bundle_id=second_id,
+        )
+    assert report_path.read_bytes() == first_report
+    assert {
+        path.relative_to(first_dir): path.read_bytes()
+        for path in first_dir.rglob("*")
+        if path.is_file()
+    } == first_snapshot
+    second_dir = report_path.parent / "d6_phase_b_evidence" / second_id
+    assert {
+        path.relative_to(second_dir): path.read_bytes()
+        for path in second_dir.rglob("*")
+        if path.is_file()
+    } == {
+        path.relative_to(d6_regenerate.PHASE_B_EVIDENCE_PATH): payload
+        for path, payload in second_leaf.items()
+    }
+    assert not list((report_path.parent / "d6_phase_b_evidence").glob(".*.staging-*"))
 
 
 def test_regeneration_runner_verifies_its_own_pinned_dependencies(
