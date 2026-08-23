@@ -44,6 +44,22 @@ CALIBRATION_PINS = HERE / "s7_synthetic_calibration_output_pins.json"
 FIXED_PROBE_PINS = HERE / "s7_fixed_probe_pins.json"
 REAL_RENDER_BASELINE = FOUNDRY / "results_s7" / "s7_b1_real_render_manifest.json"
 REAL_RENDER_HISTORICAL_COMMIT = "8a14ca97eda1a6bf96f956a8173f512f0cdb50ae"
+_HISTORICAL_REAL_RENDER_IMPORT_CLOSURE = (
+    ("gate_synth_sha256", Path("voice_genesis/foundry/s1_gate/gate_synth.py")),
+    (
+        "s7_calib_render_sha256",
+        Path("voice_genesis/foundry/run8/s7_calib_render.py"),
+    ),
+    (
+        "s7_calib_score_sha256",
+        Path("voice_genesis/foundry/run8/s7_calib_score.py"),
+    ),
+    ("s7_io_sha256", Path("voice_genesis/foundry/run8/s7_io.py")),
+    ("s7_spec_sha256", Path("voice_genesis/foundry/run8/s7_spec.py")),
+)
+_HISTORICAL_REAL_RENDER_PREREG = Path(
+    "voice_genesis/foundry/results_s7/s7_b1_calibration_set.json"
+)
 REAL_RENDER_ACOUSTIC_SHA256 = "f0e71f06b16e448622f3e0d9b977a26fbaa306bb608a08ed26efeb871332a7d1"
 D4_BASELINE = FOUNDRY / "debt" / "d4" / "d4_results_2026-08-22.json"
 D4_BASELINE_SHA256 = "6b820a2a27744b9ed4f6e873231aa103b57dd622f993982a112063e5b4bacfa7"
@@ -400,6 +416,26 @@ def _verify_file_pin(path: Path, expected: str, *, label: str) -> None:
         raise RegenerationError(f"{label}: sha256 {observed} != pin {expected}")
 
 
+def _historical_git_object_sha256(relative_path: Path) -> str:
+    """固定commitが持つ履歴source bytesのsha256をGit objectから得る。"""
+    observed = subprocess.run(
+        [
+            "git",
+            "show",
+            f"{REAL_RENDER_HISTORICAL_COMMIT}:{relative_path.as_posix()}",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+    )
+    if observed.returncode != 0:
+        raise RegenerationError(
+            "historical source Git objectを読めない: "
+            f"{relative_path}: {observed.stderr.decode(errors='replace').strip()}"
+        )
+    return hashlib.sha256(observed.stdout).hexdigest()
+
+
 def verify_real_render_inputs(root: Path, acoustic_onnx: Path) -> None:
     """履歴real-renderが消費する再配布外の4資産をレンダ前に照合する。"""
     baseline = json.loads(REAL_RENDER_BASELINE.read_text(encoding="utf-8"))
@@ -456,36 +492,41 @@ def verify_real_render_stack(python_executable: str | Path) -> None:
 def _verify_historical_source(source: Path) -> None:
     baseline = json.loads(REAL_RENDER_BASELINE.read_text(encoding="utf-8"))
     aux = baseline["render_path"]["aux_sha256"]
-    foundry = source / "voice_genesis" / "foundry"
-    for path, expected, label in (
-        (foundry / "s1_gate" / "gate_synth.py", aux["gate_synth_py"], "gate_synth_py"),
-        (
-            foundry / "run8" / "s7_calib_score.py",
-            aux["s7_calib_score_py"],
-            "s7_calib_score_py",
-        ),
-        (
-            foundry / "run8" / "s7_calib_render.py",
-            aux["s7_calib_render_py"],
-            "s7_calib_render_py",
-        ),
-        (
-            foundry / "results_s7" / "s7_b1_calibration_set.json",
-            baseline["prereg"]["sha256"],
-            "real-render prereg",
-        ),
-    ):
-        _verify_file_pin(path, expected, label=f"historical source {label}")
+    baseline_keys = {
+        "gate_synth_sha256": "gate_synth_py",
+        "s7_calib_render_sha256": "s7_calib_render_py",
+        "s7_calib_score_sha256": "s7_calib_score_py",
+    }
+    for label, relative_path in _HISTORICAL_REAL_RENDER_IMPORT_CLOSURE:
+        expected = _historical_git_object_sha256(relative_path)
+        baseline_key = baseline_keys.get(label)
+        if baseline_key is not None and aux.get(baseline_key) != expected:
+            raise RegenerationError(
+                f"historical source {label}: baseline digest が固定commitと不一致"
+            )
+        _verify_file_pin(
+            source / relative_path,
+            expected,
+            label=f"historical source {label}",
+        )
+    prereg_expected = _historical_git_object_sha256(_HISTORICAL_REAL_RENDER_PREREG)
+    if baseline["prereg"].get("sha256") != prereg_expected:
+        raise RegenerationError(
+            "historical source real-render prereg: baseline digest が固定commitと不一致"
+        )
+    _verify_file_pin(
+        source / _HISTORICAL_REAL_RENDER_PREREG,
+        prereg_expected,
+        label="historical source real-render prereg",
+    )
 
 
 def materialize_historical_real_render_source(root: Path) -> Path:
-    """Git objectからreal-render実行時のsource treeを展開してpin照合する。"""
+    """Git objectからreal-render実行時のsource treeを毎回fresh展開する。"""
     target = _real_render_source_root(root)
-    if target.is_dir():
-        _verify_historical_source(target)
-        return target
     target.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".real-render-source-", dir=target.parent))
+    backup_root: Path | None = None
     archive_fd, archive_name = tempfile.mkstemp(prefix=".real-render-", suffix=".tar", dir=root)
     os.close(archive_fd)
     archive = Path(archive_name)
@@ -515,13 +556,30 @@ def materialize_historical_real_render_source(root: Path) -> Path:
                     raise RegenerationError(
                         f"historical archive に通常ファイル以外が含まれる: {member.name}"
                     )
-                tar.extract(member, staging)
+                tar.extract(member, staging, filter="fully_trusted")
         _verify_historical_source(staging)
-        staging.rename(target)
+        if target.exists():
+            backup_root = Path(
+                tempfile.mkdtemp(prefix=".real-render-source-backup-", dir=target.parent)
+            )
+            target.rename(backup_root / "previous")
+        try:
+            staging.rename(target)
+        except BaseException:
+            if backup_root is not None and not target.exists():
+                (backup_root / "previous").rename(target)
+            raise
+        if backup_root is not None:
+            shutil.rmtree(backup_root)
+            backup_root = None
     finally:
         archive.unlink(missing_ok=True)
         if staging.exists():
             shutil.rmtree(staging)
+        if backup_root is not None and backup_root.exists():
+            if not target.exists() and (backup_root / "previous").exists():
+                (backup_root / "previous").rename(target)
+            shutil.rmtree(backup_root)
     return target
 
 
@@ -1184,6 +1242,12 @@ def _historical_source_from_real_render_baseline(baseline: Any) -> dict[str, str
         "gate_synth_sha256": aux.get("gate_synth_py"),
         "s7_calib_render_sha256": aux.get("s7_calib_render_py"),
         "s7_calib_score_sha256": aux.get("s7_calib_score_py"),
+        "s7_io_sha256": _historical_git_object_sha256(
+            Path("voice_genesis/foundry/run8/s7_io.py")
+        ),
+        "s7_spec_sha256": _historical_git_object_sha256(
+            Path("voice_genesis/foundry/run8/s7_spec.py")
+        ),
     }
     if any(
         not _is_lower_hex(expected[key], 64)
@@ -1191,6 +1255,8 @@ def _historical_source_from_real_render_baseline(baseline: Any) -> dict[str, str
             "gate_synth_sha256",
             "s7_calib_render_sha256",
             "s7_calib_score_sha256",
+            "s7_io_sha256",
+            "s7_spec_sha256",
         )
     ):
         raise RegenerationError("Phase B report: real-render baseline historical digest が不正")

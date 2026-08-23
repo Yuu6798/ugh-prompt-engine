@@ -242,9 +242,12 @@ def test_calibration_set_has_synthetic_and_real_render_refs(pins: Dict[str, Any]
 
 def _assert_real_render_recovery(recovery: Dict[str, Any]) -> None:
     assert recovery["required_asset"]["sha256"] == (d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256)
-    assert recovery["historical_source"]["git_commit"] == (
-        d6_regenerate.REAL_RENDER_HISTORICAL_COMMIT
-    )
+    historical_source = recovery["historical_source"]
+    assert historical_source["git_commit"] == d6_regenerate.REAL_RENDER_HISTORICAL_COMMIT
+    assert set(historical_source) == {
+        "git_commit",
+        *(label for label, _path in d6_regenerate._HISTORICAL_REAL_RENDER_IMPORT_CLOSURE),
+    }
     assert "再export" in recovery["required_asset"]["substitution_policy"]
     schema = recovery["recovered_value_schema"]
     assert set(schema["required_keys"]) == {
@@ -498,6 +501,41 @@ def test_regeneration_runner_covers_10_exports_and_render_groups(
     assert d6_regenerate.build_real_render_command(root, recovered)[0] == str(
         root / "venv_render" / "bin" / "python"
     )
+
+
+def test_historical_source_is_fresh_and_complete_on_reused_root(tmp_path: Path) -> None:
+    root = tmp_path / "d6work"
+    stale = d6_regenerate._real_render_source_root(root)
+    poisoned_helper = stale / "voice_genesis/foundry/run8/s7_io.py"
+    poisoned_helper.parent.mkdir(parents=True, exist_ok=True)
+    poisoned_helper.write_text("raise RuntimeError('poisoned')\n", encoding="utf-8")
+    poisoned_cache = stale / "voice_genesis/foundry/run8/__pycache__/s7_io.pyc"
+    poisoned_cache.parent.mkdir(parents=True, exist_ok=True)
+    poisoned_cache.write_bytes(b"poisoned bytecode")
+
+    source = d6_regenerate.materialize_historical_real_render_source(root)
+
+    assert source == stale
+    assert not poisoned_cache.exists()
+    for _label, relative_path in d6_regenerate._HISTORICAL_REAL_RENDER_IMPORT_CLOSURE:
+        expected = d6_regenerate._historical_git_object_sha256(relative_path)
+        assert d6_regenerate.sha256_file(source / relative_path) == expected
+
+    for relative_path in (
+        Path("voice_genesis/foundry/run8/s7_io.py"),
+        Path("voice_genesis/foundry/run8/s7_spec.py"),
+    ):
+        helper = source / relative_path
+        original = helper.read_bytes()
+        helper.write_bytes(original + b"\n# tampered\n")
+        with pytest.raises(
+            d6_regenerate.RegenerationError,
+            match=f"historical source .*{relative_path.stem}",
+        ):
+            d6_regenerate._verify_historical_source(source)
+        helper.write_bytes(original)
+
+    d6_regenerate._verify_historical_source(source)
 
 
 def test_real_render_reconciliation_compares_all_14_sample_pins(
