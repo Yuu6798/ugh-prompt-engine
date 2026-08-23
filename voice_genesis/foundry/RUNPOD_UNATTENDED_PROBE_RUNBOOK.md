@@ -31,9 +31,11 @@ export-device probe・4 起動 計 ≈ $0.38。動く実例 =
    と console log の live コピーを同じディレクトリで配信する。runner は
    600s 無応答で明示警告を出す（**自動 terminate はしない** — 実装は
    operator abort の提案まで）。無人運用では**操作側**（実行エージェント /
-   オペレータ）が「起動後 10 分で heartbeat 不通なら terminate」を運用規約と
-   して課す — PR #312 の実行ではこの規約で早期打ち切り時の損失を ~$0.05 級に
-   束縛した
+   オペレータ）が「起動後 10 分で heartbeat 不通なら **stop**（terminate では
+   ない — terminate = stop + DELETE は volume ごと消すため、proxy 障害で
+   結果だけ見えていない場合に回収可能な証拠を破壊する）」を運用規約として
+   課す。stop 後に状況を確認し、回収不能と確定してから delete する。
+   PR #312 の実行ではこの早期打ち切り規約で損失を ~$0.05 級に束縛した
 2. **volume を保険に張る**（`volumeInGb` ≥ 10 + `volumeMountPath: /workspace`）。
    container disk のみだと pod 停止と同時に結果が消滅する。回収失敗時は
    **delete でなく stop で保持** → 再起動サルベージ → 回収確認後に delete
@@ -49,22 +51,30 @@ export-device probe・4 起動 計 ≈ $0.38。動く実例 =
 5. 回収したバイナリは **sha256 を手元で再計算して記録値と照合**してから
    pod を delete する（terminate 後は検証可能な証拠が恒久喪失する）
 
-## 3. 課金制御（構造で保証する）
+## 3. 課金制御（構造保証と運用手順を区別する）
 
-- **同時 1 pod 厳守**・pod id は作成応答から即ファイル記録。id を抽出できない
-  201 応答は成功扱いにせず exit（課金 pod が存在するのに自動化が id なし成功を
-  記録する経路の閉塞）。作成 POST の曖昧な失敗（timeout/5xx）後は必ず
-  GET /pods で既存 pod を確認してから再試行
+- **同時 1 pod 厳守は運用手順**（構造強制ではない — runner は launch 前の
+  既存 pod 照合を行わない）: 操作側が launch 前に GET /pods で同名 pod の
+  不在を確認し、作成応答の pod id を即ファイル記録する。作成 POST の曖昧な
+  失敗（timeout/5xx）後は必ず GET /pods で既存 pod を確認してから再試行。
+  **構造保証されているのは** id を抽出できない 201 応答を成功扱いにせず
+  exit する点のみ（課金 pod が存在するのに自動化が id なし成功を記録する
+  経路の閉塞）
 - **POST /pods は自動リトライしない**（タイムアウト後の再送で二重課金 pod が
   生まれる）。GET/DELETE はリトライ可。ネットワーク例外の捕捉は
   `(URLError, TimeoutError, ConnectionError)` のタプルで統一（`URLError` 単独では
   素の `TimeoutError` を取り逃がし stop→DELETE fallback が届かない）
-- **self-stop は全 exit 経路 + 二重化**: trap の `runpodctl stop` は 5 回
-  リトライ・失敗時は明示警告。独立の wall-clock watchdog（例 10800s）を併設し、
-  **trap → watchdog の順で、いずれも最初の exit 経路（env 検査・pin guard 含む）
-  より前に確立する**（trap 設置前に exit し得る経路が 1 つでもあると self-stop
-  契約が破れる。実装実例 = pod.sh は trap 直後に watchdog を起動し、その後に
-  guard 群を置く）。on_exit は回収窓を守るため watchdog を kill してから serve する
+- **self-stop は全 exit 経路で発火 + 平常時は二重化**: trap の `runpodctl stop`
+  は 5 回リトライ・失敗時は明示警告。独立の wall-clock watchdog（例 10800s）を
+  併設し、**trap → watchdog の順で、いずれも最初の exit 経路（env 検査・
+  pin guard 含む）より前に確立する**（trap 設置前に exit し得る経路が
+  1 つでもあると self-stop 契約が破れる。実装実例 = pod.sh は trap 直後に
+  watchdog を起動し、その後に guard 群を置く）。**既知の残余**: on_exit は
+  回収窓を 3h 境界から守るため watchdog を kill してから serve するので、
+  回収 hold 中〜stop リトライ全滅の間は backstop が無い（実装は明示警告
+  止まり）。次回改修では kill でなく**期限延長**（hold + 余裕分の新 deadline で
+  watchdog を再アーム）にして stop 成功まで backstop を維持するのが正
+  （二重保証を回収 hold 中にも成立させる）
 - **起動コマンドの curl は `--retry 5 --retry-all-errors` + ファイル落とし実行 +
   取得失敗時 self-stop**（`curl | bash` 単発は取得失敗で空実行 exit 0 =
   課金だけ発生する silent no-op になる）
