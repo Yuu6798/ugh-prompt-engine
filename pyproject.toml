@@ -195,6 +195,11 @@ testpaths = [
     # 実測結果ファイルの形状テスト（人手編集ファイル・値の実体照合はしない）。
     # 依存は標準ライブラリのみ。
     "voice_genesis/foundry/tests/test_run4_provenance_closure.py",
+    # VG-DEBT-008 (a-2) export-device probe: runner の payload 組み立て純粋
+    # 関数 / HTML パーサ + pod script の静的ガード（trap 設置順序・pin
+    # well-formed 性）。依存は標準ライブラリのみ（RunPod API・GPU 呼び出し
+    # なし）。
+    "voice_genesis/foundry/tests/test_run4_export_device_probe.py",
 ]
 pythonpath = ["src", "."]
 markers = [

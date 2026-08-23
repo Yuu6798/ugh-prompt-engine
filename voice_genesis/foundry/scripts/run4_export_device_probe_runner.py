@@ -9,10 +9,18 @@ stdlib のみ（urllib.request / json / time / os / argparse）。プロキシ�
 urllib のデフォルト挙動（`HTTPS_PROXY` 環境変数を尊重）に任せる。
 
 サブコマンド:
-    launch    --commit <sha> [--payload-override <json-file>]
+    launch    --script-commit <sha> [--pin-commit <sha>] [--payload-override <json-file>]
     status    --pod <id>
     fetch     --pod <id> [--out DIR]
     terminate --pod <id>
+
+`--script-commit` と `--pin-commit` は独立している: 前者は pod entry script
+（`run4_export_device_probe_pod.sh`）を origin から取得する raw.githubusercontent.com
+URL に埋め込むコミット（このブランチにしか無いことが多く、起動前に origin へ
+push 済みでなければならない）、後者は pod script 内の固定 pin
+（`EXPECTED_PIN_COMMIT`）と一致必須の `PROBE_PIN_COMMIT` env 値。混同すると
+pod 内で `PROBE_PIN_COMMIT != EXPECTED_PIN_COMMIT` として fail-closed するか、
+script URL が 404 して課金だけが発生する。
 
 RunPod REST v1 のフィールド名（`dockerStartCmd` 等）は API 版で揺れうる —
 4xx を受けたら本文をそのまま印字するので、運用者がその場でペイロードを
@@ -54,21 +62,30 @@ def _api_key() -> str:
 
 def _request(
     method: str, path: str, body: Optional[Dict[str, Any]] = None,
-    full_url: Optional[str] = None,
+    retry: bool = True,
 ) -> Dict[str, Any]:
     """RunPod REST API v1 を呼ぶ。失敗時は本文を印字してから例外送出する
     （4xx でも運用者がペイロードを調整できるよう、隠さず全文出す）。
     最大 3 回リトライするのはネットワークエラー（接続不可・タイムアウト）
     のみ — HTTP 応答が返った場合はリトライしない（4xx/5xx をそのまま返す）。
+
+    `retry=False` は non-idempotent なリクエスト（POST /pods でのプール作成
+    ＝ pod launch）専用。ネットワークエラー時のリトライは「応答が届かな
+    かった」場合しか安全に想定できず、POST /pods は応答未達でもサーバ側で
+    pod 作成が実際には成功している可能性があるため、再送すると pod が
+    二重生成され二重課金になりうる（fail-closed: 1 回だけ試して例外を
+    そのまま呼び出し元へ渡す）。GET/DELETE のような冪等な操作は既定の
+    `retry=True` のままでよい。
     """
-    url = full_url if full_url is not None else f"{API_BASE}{path}"
+    url = f"{API_BASE}{path}"
     data = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {
         "Authorization": f"Bearer {_api_key()}",
         "Content-Type": "application/json",
     }
+    attempts = RETRY_COUNT if retry else 1
     last_exc: Optional[BaseException] = None
-    for attempt in range(1, RETRY_COUNT + 1):
+    for attempt in range(1, attempts + 1):
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC) as resp:
@@ -88,20 +105,24 @@ def _request(
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             last_exc = exc
             print(f"| runner: {method} {url} attempt={attempt} network error: {exc}", file=sys.stderr)
-            if attempt < RETRY_COUNT:
+            if attempt < attempts:
                 time.sleep(RETRY_SLEEP_SEC)
     assert last_exc is not None
     raise last_exc
 
 
-def cmd_launch(args: argparse.Namespace) -> None:
-    commit = args.commit
-    entry_url = POD_ENTRY_RAW_URL_TMPL.format(sha=commit)
+def build_launch_payload(script_commit: str, pin_commit: str) -> Dict[str, Any]:
+    """POST /v1/pods 用ペイロードの純粋関数（テスト容易性のため cmd_launch
+    から分離）。`script_commit` は raw.githubusercontent.com URL 側にのみ、
+    `pin_commit` は env PROBE_PIN_COMMIT 側にのみ使う（両者を混同しないこと
+    が FIX 1 の要— dockerStartCmd の raw URL には pin_commit を絶対に
+    埋め込まない）。"""
+    entry_url = POD_ENTRY_RAW_URL_TMPL.format(sha=script_commit)
     start_cmd = (
         f"curl -fsSL {entry_url} | "
-        f"PROBE_PIN_COMMIT={commit} bash 2>&1 | tee /workspace/probe_console.log"
+        f"PROBE_PIN_COMMIT={pin_commit} bash 2>&1 | tee /workspace/probe_console.log"
     )
-    payload: Dict[str, Any] = {
+    return {
         "name": "run4-export-device-probe",
         "imageName": IMAGE_NAME,
         "gpuTypeIds": [GPU_TYPE_ID],
@@ -111,9 +132,51 @@ def cmd_launch(args: argparse.Namespace) -> None:
         "containerDiskInGb": 60,
         "volumeInGb": 0,
         "ports": ["8000/http"],
-        "env": {"PROBE_PIN_COMMIT": commit},
+        "env": {"PROBE_PIN_COMMIT": pin_commit},
         "dockerStartCmd": ["bash", "-lc", start_cmd],
     }
+
+
+def _check_raw_url_reachable(url: str) -> None:
+    """`url` が HTTP 200 を返すことを起動前に確定させる。raw.githubusercontent.com
+    が 404 を返すケース（`--script-commit` が origin へ未 push）は、pod 内では
+    `curl -fsSL ... | bash` が「空 stdin へ bash」= サイレントに何もせず即終了
+    する形で現れ、症状が課金開始後にしか分からない。ここで先に落とすことで
+    pre-billing error に変える。"""
+    last_status: Optional[int] = None
+    for method in ("HEAD", "GET"):
+        req = urllib.request.Request(url, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC) as resp:
+                last_status = resp.status
+                if resp.status == 200:
+                    print(f"| runner: pre-flight check OK: {method} {url} -> 200")
+                    return
+                print(f"| runner: pre-flight check: {method} {url} -> {resp.status}", file=sys.stderr)
+        except urllib.error.HTTPError as exc:
+            last_status = exc.code
+            print(f"| runner: pre-flight check: {method} {url} -> HTTP {exc.code}", file=sys.stderr)
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+            print(f"| runner: pre-flight check: {method} {url} network error: {exc}", file=sys.stderr)
+    print(
+        f"| runner: ABORT — pod entry script URL did not return HTTP 200 "
+        f"(last status={last_status}): {url}\n"
+        "| runner: this means --script-commit was not pushed to origin, or the "
+        "path/branch is wrong. Launching now would silently no-op inside the pod "
+        "(curl 404 into bash) AFTER billing starts. Push the commit to origin "
+        "and retry.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+
+def cmd_launch(args: argparse.Namespace) -> None:
+    script_commit = args.script_commit
+    pin_commit = args.pin_commit
+    entry_url = POD_ENTRY_RAW_URL_TMPL.format(sha=script_commit)
+    _check_raw_url_reachable(entry_url)
+
+    payload = build_launch_payload(script_commit, pin_commit)
 
     if args.payload_override:
         with open(args.payload_override, encoding="utf-8") as fh:
@@ -125,7 +188,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
     print(json.dumps(payload, indent=2, ensure_ascii=False))
 
     try:
-        result = _request("POST", "/pods", body=payload)
+        result = _request("POST", "/pods", body=payload, retry=False)
     except urllib.error.HTTPError:
         print(
             "| runner: launch failed with 4xx/5xx — RunPod REST v1 field names "
@@ -206,6 +269,60 @@ def _download(url: str, dest: str) -> bool:
     return False
 
 
+_DEAD_STATUS_VALUES = {"exited", "terminated", "stopped", "dead", "failed"}
+
+
+def pod_dead_status_value(pod_json: Dict[str, Any]) -> Optional[str]:
+    """`pod_json` を防御的に走査し、pod がもう走っていないことを示す値が
+    あればそれを返す（RunPod REST v1 のスキーマは版によって揺れうるため、
+    "desiredStatus"/"status"/"runtime" のよくあるフィールド名を大文字小文字
+    無視で見る。1 段だけネストした {"status": ...} 形も見る）。"""
+    for key in ("desiredStatus", "status", "runtime"):
+        value = pod_json.get(key)
+        if isinstance(value, dict):
+            value = value.get("status") or value.get("desiredStatus")
+        if isinstance(value, str) and value.strip().lower() in _DEAD_STATUS_VALUES:
+            return value
+    return None
+
+
+def _check_pod_not_dead(pod_id: str) -> None:
+    """cmd_fetch のポーリング中、5 周に 1 回（約 5 分毎）呼ぶ健全性チェック。
+    結果 HTTP エンドポイントが一度も応答していない状態で pod が
+    EXITED/TERMINATED/STOPPED 相当、または 404（もう存在しない）なら、
+    タイムアウトまで無駄にポーリングを続けず即座に中断する。"""
+    try:
+        pod_json = _request("GET", f"/pods/{pod_id}")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            print(
+                f"| runner: ABORT — pod {pod_id} lookup 404s (no longer exists) while "
+                "the HTTP result endpoint has never answered. It died before serving "
+                "results.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        print(
+            f"| runner: pod health check got HTTP {exc.code} (non-fatal — continuing to poll)",
+            file=sys.stderr,
+        )
+        return
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        print(f"| runner: pod health check network error (non-fatal — continuing to poll): {exc}", file=sys.stderr)
+        return
+
+    dead_value = pod_dead_status_value(pod_json)
+    if dead_value is not None:
+        print(
+            f"| runner: ABORT — pod {pod_id} status indicates it already exited "
+            f"(matched value={dead_value!r}) while the HTTP result endpoint has "
+            "never answered. Pod died before serving results. Pod JSON:",
+            file=sys.stderr,
+        )
+        print(json.dumps(pod_json, indent=2, ensure_ascii=False), file=sys.stderr)
+        raise SystemExit(1)
+
+
 def cmd_fetch(args: argparse.Namespace) -> None:
     base = f"https://{args.pod}-8000.proxy.runpod.net"
     out_dir = args.out or os.environ.get("CLAUDE_SCRATCHPAD_DIR") or "./probe_out"
@@ -214,7 +331,9 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     print(f"| runner: polling {base}/status.json every 60s (up to {args.timeout}s)")
     deadline = time.time() + args.timeout
     status_ok = False
+    poll_iteration = 0
     while time.time() < deadline:
+        poll_iteration += 1
         req = urllib.request.Request(f"{base}/status.json", method="GET")
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
@@ -225,6 +344,10 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             print(f"| runner: status.json not ready yet (HTTP {exc.code})")
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             print(f"| runner: status.json not reachable yet: {exc}")
+
+        if poll_iteration % 5 == 0:
+            _check_pod_not_dead(args.pod)
+
         time.sleep(60)
 
     if not status_ok:
@@ -265,7 +388,23 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_launch = sub.add_parser("launch", help="RunPod pod を起動する")
-    p_launch.add_argument("--commit", default=PIN_COMMIT_DEFAULT, help="PROBE_PIN_COMMIT (pin commit SHA)")
+    p_launch.add_argument(
+        "--script-commit", required=True,
+        help=(
+            "pod entry script (run4_export_device_probe_pod.sh) を取得する raw."
+            "githubusercontent.com URL に埋め込むコミット SHA。origin へ push 済みで、"
+            "voice_genesis/foundry/scripts/run4_export_device_probe_pod.sh を含んで"
+            "いなければならない（--pin-commit とは独立 — 混同しないこと）"
+        ),
+    )
+    p_launch.add_argument(
+        "--pin-commit", default=PIN_COMMIT_DEFAULT,
+        help=(
+            "env PROBE_PIN_COMMIT の値。pod script 内の固定 pin "
+            f"(既定 {PIN_COMMIT_DEFAULT}) と一致しなければ pod 側で fail-closed する"
+            "（--script-commit とは独立 — 混同しないこと）"
+        ),
+    )
     p_launch.add_argument("--payload-override", default=None, help="POST /v1/pods payload へ merge する JSON ファイル")
     p_launch.set_defaults(func=cmd_launch)
 

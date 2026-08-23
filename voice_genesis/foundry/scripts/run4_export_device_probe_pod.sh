@@ -9,12 +9,16 @@
 # torch 2.13.0 同版）のもとで ONNX バイト（sha256）を変えるかを測る。
 #
 # 起動方法（RunPod Pod 作成 API の dockerStartCmd に注入する。
-# `run4_export_device_probe_runner.py launch` が組み立てる）:
+# `run4_export_device_probe_runner.py launch --script-commit <SHA> [--pin-commit <SHA>]`
+# が組み立てる。両者は独立: --script-commit は本ファイルを取得する raw URL 側
+# （origin へ push 済みの任意コミットでよい）、--pin-commit は下記
+# PROBE_PIN_COMMIT env 側で、本ファイルが要求する固定コミット
+# cda36b9f... と一致しなければならない）:
 #
-#   curl -fsSL https://raw.githubusercontent.com/Yuu6798/ugh-prompt-engine/<PIN>/voice_genesis/foundry/scripts/run4_export_device_probe_pod.sh \
-#     | PROBE_PIN_COMMIT=<PIN> bash 2>&1 | tee /workspace/probe_console.log
+#   curl -fsSL https://raw.githubusercontent.com/Yuu6798/ugh-prompt-engine/<SCRIPT_COMMIT>/voice_genesis/foundry/scripts/run4_export_device_probe_pod.sh \
+#     | PROBE_PIN_COMMIT=<PIN_COMMIT> bash 2>&1 | tee /workspace/probe_console.log
 #
-# <PIN> は本ファイルが要求する固定コミット cda36b9f... と一致しなければ
+# <PIN_COMMIT> は本ファイルが要求する固定コミット cda36b9f... と一致しなければ
 # ならない（起動前に確定させる — プレースホルダのまま起動しない。
 # S1_GPU_RUNBOOK §3 の「未解決プレースホルダ禁止」規律を踏襲）。
 #
@@ -26,10 +30,120 @@
 #     wav/onnx 実体）を置き、python http.server で回収窓を開く
 set -euo pipefail
 
-: "${PROBE_PIN_COMMIT:?PROBE_PIN_COMMIT (pin commit SHA) を注入すること}"
+# ============================================================================
+# 0. self-stop 保証の骨組み（trap + watchdog）を、他のどの exit パス
+# （pin 未設定・pin 不一致・素材 sha 不一致等）よりも先に確立する。
+# ここから下で die()/exit する経路はすべてこの trap を通る。
+# 参照するのは静的パスのみ（WORK/RESULTS 等）— PROBE_PIN_COMMIT の検証は
+# この後（§1）で行う。
+# ============================================================================
+
+readonly WORK="/root/s1work"
+readonly REPO="$WORK/ugh-prompt-engine"
+readonly DS="$WORK/DiffSinger"
+readonly RESULTS="/workspace/probe_results"
+readonly GATE_RUN4="$REPO/voice_genesis/foundry/s1_gate/gate_synth_run4.py"
+
+mkdir -p "$WORK" "$RESULTS"
+
+STAGE="init"
+DETAIL=""
+
+stage() { STAGE="$1"; echo "| probe: === stage: $1 ==="; }
+
+die() {
+  DETAIL="$*"
+  echo "| probe: FATAL stage=$STAGE detail=$DETAIL" >&2
+  exit 1
+}
+
+on_exit() {
+  local ec=$?
+  set +e
+  local status="ok"
+  [ "$ec" -ne 0 ] && status="failed"
+  echo "| probe: on_exit ec=$ec status=$status stage=$STAGE"
+
+  # watchdog を真っ先に止める（自分自身が self-stop を保証したので、もう
+  # 独立した安全弁は要らない — 結果配信用の長い sleep を挟む前に確実に
+  # 止める。setsid 経由で新規プロセスグループに入れているため、そのグルー
+  # プごと落とせば sleep 10800 の子プロセスも道連れにできる。setsid が
+  # 使えない環境（fallback subshell 経路）向けに、素の kill と直接の子への
+  # pkill -P も併用する（どちらか一方が効けば十分）。
+  if [ -n "${WATCHDOG_PID:-}" ]; then
+    kill -- "-$WATCHDOG_PID" 2>/dev/null || true
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+    pkill -P "$WATCHDOG_PID" 2>/dev/null || true
+  fi
+
+  python3 - "$status" "$STAGE" "$DETAIL" "$RESULTS/status.json" <<'PY'
+import json, sys
+status, stage, detail, out = sys.argv[1:5]
+json.dump(
+    {"status": status, "stage": stage, "detail_tail": detail},
+    open(out, "w"), indent=2, ensure_ascii=False,
+)
+PY
+
+  if [ -f /workspace/probe_console.log ]; then
+    cp -f /workspace/probe_console.log "$RESULTS/probe_console.log" 2>/dev/null || true
+  fi
+
+  echo "| probe: starting result HTTP server on :8000 (dir=$RESULTS)"
+  python3 -m http.server 8000 --directory "$RESULTS" &
+  local srv_pid=$!
+
+  local hold=2700
+  [ "$status" != "ok" ] && hold=900
+  echo "| probe: holding ${hold}s so the runner can fetch $RESULTS over :8000"
+  sleep "$hold"
+
+  kill "$srv_pid" 2>/dev/null || true
+
+  if [ -n "${RUNPOD_POD_ID:-}" ]; then
+    echo "| probe: self-stop via runpodctl (pod=$RUNPOD_POD_ID)"
+    runpodctl stop pod "$RUNPOD_POD_ID" || echo "| probe: runpodctl stop failed (non-fatal)" >&2
+  else
+    echo "| probe: RUNPOD_POD_ID unset — self-stop skipped (local run?)"
+  fi
+}
+trap on_exit EXIT
+
+# 10800s (3h) wall-clock watchdog: 主フローが trap まで到達できずハング
+# した場合でも、独立したバックグラウンド process が課金を止める。
+# setsid で新規セッション/プロセスグループを起こせる環境では、on_exit が
+# そのグループごと kill できるようにする（sleep 10800 の子プロセスの
+# 生き残りを防ぐ）。setsid が無い環境では素の subshell にフォールバックし、
+# on_exit 側の pkill -P で直接の子（sleep）を狙い撃ちする。
+_watchdog_body() {
+  sleep 10800
+  {
+    echo "| probe: watchdog: 10800s wall-clock reached — forcing self-stop"
+    if [ -n "${RUNPOD_POD_ID:-}" ]; then
+      runpodctl stop pod "$RUNPOD_POD_ID" || true
+    fi
+  } >>"$RESULTS/watchdog.log" 2>&1
+}
+export -f _watchdog_body
+export RESULTS
+export RUNPOD_POD_ID
+if command -v setsid >/dev/null 2>&1; then
+  setsid bash -c _watchdog_body &
+else
+  ( _watchdog_body ) &
+fi
+WATCHDOG_PID=$!
+disown || true
 
 # ============================================================================
-# 0. 定数（pin 群。すべて facts note / design memo から埋め込み）
+# 1. PROBE_PIN_COMMIT の検証（trap/watchdog 確立後 — ここより下の die() は
+# すべて self-stop 保証の傘の中）
+# ============================================================================
+
+[ -n "${PROBE_PIN_COMMIT:-}" ] || die "PROBE_PIN_COMMIT (pin commit SHA) を注入すること"
+
+# ============================================================================
+# 2. 定数（pin 群。すべて facts note / design memo から埋め込み）
 # ============================================================================
 
 readonly EXPECTED_PIN_COMMIT="cda36b9f2308128797c48976a9c90b28a4f1661a"
@@ -86,87 +200,8 @@ readonly RECORDED_WAV_USER_SAKURA="e2f7b270c2840012178e50147491a7db1f38f47aee9d4
 readonly RECORDED_WAV_USER_UMI="ac8b3455b4204a6e55d34b7db2e81709f1e6f8bc6f20d6d7462767a4dcf28979"
 
 if [ "$PROBE_PIN_COMMIT" != "$EXPECTED_PIN_COMMIT" ]; then
-  echo "| probe: FATAL PROBE_PIN_COMMIT=$PROBE_PIN_COMMIT != expected $EXPECTED_PIN_COMMIT" >&2
-  exit 1
+  die "PROBE_PIN_COMMIT=$PROBE_PIN_COMMIT != expected $EXPECTED_PIN_COMMIT"
 fi
-
-readonly WORK="/root/s1work"
-readonly REPO="$WORK/ugh-prompt-engine"
-readonly DS="$WORK/DiffSinger"
-readonly RESULTS="/workspace/probe_results"
-readonly GATE_RUN4="$REPO/voice_genesis/foundry/s1_gate/gate_synth_run4.py"
-
-mkdir -p "$WORK" "$RESULTS"
-
-# ============================================================================
-# グローバル trap + watchdog（run5_bootstrap.py の self_stop 方針を踏襲。
-# ここでは「どの exit パスでも status.json を書き、結果を HTTP で開放してから
-# 停止する」まで一段厚くする — 無人 pod で結果を取り逃さないため）
-# ============================================================================
-
-STAGE="init"
-DETAIL=""
-
-stage() { STAGE="$1"; echo "| probe: === stage: $1 ==="; }
-
-die() {
-  DETAIL="$*"
-  echo "| probe: FATAL stage=$STAGE detail=$DETAIL" >&2
-  exit 1
-}
-
-on_exit() {
-  local ec=$?
-  set +e
-  local status="ok"
-  [ "$ec" -ne 0 ] && status="failed"
-  echo "| probe: on_exit ec=$ec status=$status stage=$STAGE"
-
-  python3 - "$status" "$STAGE" "$DETAIL" "$RESULTS/status.json" <<'PY'
-import json, sys
-status, stage, detail, out = sys.argv[1:5]
-json.dump(
-    {"status": status, "stage": stage, "detail_tail": detail},
-    open(out, "w"), indent=2, ensure_ascii=False,
-)
-PY
-
-  if [ -f /workspace/probe_console.log ]; then
-    cp -f /workspace/probe_console.log "$RESULTS/probe_console.log" 2>/dev/null || true
-  fi
-
-  echo "| probe: starting result HTTP server on :8000 (dir=$RESULTS)"
-  python3 -m http.server 8000 --directory "$RESULTS" &
-  local srv_pid=$!
-
-  local hold=2700
-  [ "$status" != "ok" ] && hold=900
-  echo "| probe: holding ${hold}s so the runner can fetch $RESULTS over :8000"
-  sleep "$hold"
-
-  kill "$srv_pid" 2>/dev/null || true
-
-  if [ -n "${RUNPOD_POD_ID:-}" ]; then
-    echo "| probe: self-stop via runpodctl (pod=$RUNPOD_POD_ID)"
-    runpodctl stop pod "$RUNPOD_POD_ID" || echo "| probe: runpodctl stop failed (non-fatal)" >&2
-  else
-    echo "| probe: RUNPOD_POD_ID unset — self-stop skipped (local run?)"
-  fi
-}
-trap on_exit EXIT
-
-# 10800s (3h) wall-clock watchdog: 主フローが trap まで到達できずハング
-# した場合でも、独立したバックグラウンド subshell が課金を止める。
-(
-  sleep 10800
-  {
-    echo "| probe: watchdog: 10800s wall-clock reached — forcing self-stop"
-    if [ -n "${RUNPOD_POD_ID:-}" ]; then
-      runpodctl stop pod "$RUNPOD_POD_ID" || true
-    fi
-  } >>"$RESULTS/watchdog.log" 2>&1
-) &
-disown || true
 
 # ============================================================================
 # ユーティリティ
@@ -176,7 +211,13 @@ sha256_of() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
 
 require_sha() {
   local path="$1" want="$2" label="$3" got
-  got="$(sha256_of "$path")"
+  # sha256_of の内側パイプは pipefail 下で「右端の非ゼロ終了」= sha256sum の
+  # 失敗（対象ファイル不在）をそのまま拾って非ゼロを返す。単純代入
+  # `got="$(...)"` はコマンド置換の終了ステータスをそのまま自分の終了ス
+  # テータスとするため、-e 下ではここで MISSING 診断（次行の die）に届く
+  # 前にスクリプトごと落ちる。`|| echo MISSING` で必ず 0 終了させ、die の
+  # 診断メッセージへ到達させる。
+  got="$(sha256_of "$path" 2>/dev/null || echo MISSING)"
   if [ "$got" != "$want" ]; then
     die "sha256 mismatch: $label ($path) got=${got:-MISSING} want=$want"
   fi
@@ -632,15 +673,24 @@ arm_b_run() {
   return 0
 }
 
+# arm_b_out は pip install / DiffSinger export の全出力を含み得るため
+# （観測上 KB〜MB 級になりうる）、いかなる場合も export はしない — env は
+# execve のたびに全プロセスへコピーされ、E2BIG で以降のコマンド起動が
+# 丸ごと落ちる（このスクリプト自体が execve E2BIG で死ぬと self-stop trap
+# も動けなくなる）。全文は常にファイルへ書き、以後の使用・JSON 埋め込みは
+# 末尾 4000 バイトへ truncate した ARM_B_REASON のみを通す。
 if arm_b_out="$(arm_b_run 2>&1)"; then
   echo "$arm_b_out"
+  printf '%s\n' "$arm_b_out" > "$RESULTS/arm_b_output.log"
   # shellcheck disable=SC1090
   source "$ARM_B_VARS_FILE"
   rm -f "$ARM_B_VARS_FILE"
 else
   ARM_B_SKIPPED="true"
-  ARM_B_REASON="$arm_b_out"
-  echo "| probe: arm_b SKIPPED (best-effort, non-fatal): $ARM_B_REASON" >&2
+  printf '%s\n' "$arm_b_out" > "$RESULTS/arm_b_output.log"
+  ARM_B_REASON="$(printf '%s' "$arm_b_out" | tail -c 4000)"
+  echo "| probe: arm_b SKIPPED (best-effort, non-fatal). full output: $RESULTS/arm_b_output.log" >&2
+  echo "| probe: arm_b reason (tail 4000 bytes): $ARM_B_REASON" >&2
 fi
 
 # ============================================================================
