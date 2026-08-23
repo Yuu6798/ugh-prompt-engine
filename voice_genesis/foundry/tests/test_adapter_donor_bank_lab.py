@@ -7,14 +7,22 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
 import numpy as np
 import pytest
 import soundfile as sf
 
-import donor_bank as db
-import donor_bank_lab as dbl
+from _optional_runtime_stubs import optional_runtime_available, stub_pyworld_if_missing
+
+with stub_pyworld_if_missing():
+    import donor_bank as db
+    import donor_bank_lab as dbl
+
+requires_pyworld = pytest.mark.skipif(
+    not optional_runtime_available("pyworld"), reason="pyworld is not installed"
+)
 
 
 # --- 純関数（音声非依存） ---
@@ -206,6 +214,7 @@ def _write_sine_wav(path: Path, duration_s: float, freq_hz: float = 130.0, sr: i
     sf.write(str(path), y.astype(np.float64), sr, subtype="PCM_24")
 
 
+@requires_pyworld
 def test_build_donor_bank_lab_end_to_end(tmp_path: Path) -> None:
     root = tmp_path / "pjs_corpus"
     d = root / "pjs001"
@@ -273,6 +282,7 @@ def test_build_donor_bank_lab_missing_paired_wav_fails_closed(tmp_path: Path) ->
 # （パスが違っても）digest の集合自体は不変で検知できなかった。
 
 
+@requires_pyworld
 def test_build_donor_bank_lab_wav_sha256_changes_when_wav_contents_swap(tmp_path: Path) -> None:
     root = tmp_path / "pjs_corpus"
     d1 = root / "pjs001"
@@ -303,6 +313,7 @@ def test_build_donor_bank_lab_wav_sha256_changes_when_wav_contents_swap(tmp_path
     assert bank_before.wav_sha256 != bank_after.wav_sha256
 
 
+@requires_pyworld
 def test_build_donor_bank_lab_cache_roundtrip(tmp_path: Path) -> None:
     root = tmp_path / "pjs_corpus"
     d = root / "pjs001"
@@ -327,6 +338,7 @@ def test_build_donor_bank_lab_cache_roundtrip(tmp_path: Path) -> None:
     assert bank2.stats["cache_hit"] is True
 
 
+@requires_pyworld
 def test_build_donor_bank_lab_reads_each_file_exactly_once(tmp_path: Path, monkeypatch) -> None:
     """P2 修正 (review #262 R3・R5): 選択された .lab / _song.wav は、
     「選択（`_select_lab_files`）」「ハッシュ」「decode/parse」の全段で同一
@@ -373,6 +385,7 @@ def test_build_donor_bank_lab_reads_each_file_exactly_once(tmp_path: Path, monke
     assert str(lab_path.resolve()) not in read_text_calls
 
 
+@requires_pyworld
 def test_build_donor_bank_lab_cache_stale_after_lab_edit(tmp_path: Path) -> None:
     """P1 修正 (review #262): `--cache-dir` 再利用中に .lab を編集（母音境界を
     ずらす）すると、古い pickle を返さず再計算されることを確認する（旧実装は
@@ -402,6 +415,7 @@ def test_build_donor_bank_lab_cache_stale_after_lab_edit(tmp_path: Path) -> None
     assert len(list(cache_dir.glob("lab_bank_*.pkl"))) == 2
 
 
+@requires_pyworld
 def test_build_donor_bank_lab_cache_write_failure_leaves_no_corrupt_pickle(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -475,6 +489,7 @@ def test_select_lab_files_truncated_wav_does_not_mask_later_valid_recording(tmp_
     assert "o" in stats["covered_vowels"]
 
 
+@requires_pyworld
 def test_build_donor_bank_lab_truncated_wav_fails_closed_with_missing_enumerated(
     tmp_path: Path,
 ) -> None:
@@ -496,6 +511,7 @@ def test_build_donor_bank_lab_truncated_wav_fails_closed_with_missing_enumerated
     assert "missing_vowels=['o']" in msg
 
 
+@requires_pyworld
 def test_build_donor_bank_lab_realized_coverage_matches_selection_when_valid(tmp_path: Path) -> None:
     """正常系: 全要件が有効に構築できる場合、必須要件と realized coverage が
     一致する（分母を隠さない・乖離が無いことの直接確認）。"""
@@ -517,6 +533,7 @@ def test_build_donor_bank_lab_realized_coverage_matches_selection_when_valid(tmp
     assert set(unit_vowels.values()) == {"a"}
 
 
+@requires_pyworld
 def test_build_donor_bank_lab_deterministic_repeat_with_required_coverage(tmp_path: Path) -> None:
     """必須要件 enforcement 込みの経路でも決定論（再構築で bit 一致）。"""
     root = tmp_path / "pjs_corpus"

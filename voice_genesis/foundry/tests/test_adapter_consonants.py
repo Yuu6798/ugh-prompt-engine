@@ -7,13 +7,17 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "adapter"))
 
 import numpy as np
 import pytest
 
-import consonants as cons
-import vowel_class as vc
+from _optional_runtime_stubs import stub_pyworld_if_missing
+
+with stub_pyworld_if_missing():
+    import consonants as cons
+    import vowel_class as vc
 
 SR = 24000
 FRAME_PERIOD_MS = 5.0

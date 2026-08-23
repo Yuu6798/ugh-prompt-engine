@@ -4,7 +4,9 @@
 `voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json`（VG-DEBT-004）、
 `voice_genesis/foundry/results_s3/run4_finite_report_2026-08-22.json`
 （VG-DEBT-007）、`voice_genesis/foundry/results_s3/run4_provenance_closure_2026-08-23.json`
-（VG-DEBT-008。PR #307 セルフレビュー指摘 2 で追加）は
+（VG-DEBT-008。PR #307 セルフレビュー指摘 2 で追加）、
+`voice_genesis/foundry/results_s3/run4_export_device_probe_2026-08-23.json`
+（VG-DEBT-008 (a-2) export-device probe。2026-08-23 追加）は
 「実測を生んだ版」の**バイト同一の凍結物**であり、以後の
 コミットで（lint 由来の自動整形も含めて）1 バイトも変更してはならない
 （`voice_genesis/evolution/probes/snapshots/README.md` と同じ規律）。
@@ -46,6 +48,9 @@ RUN4_FINITE_REPORT_PATH = _FOUNDRY / "results_s3" / "run4_finite_report_2026-08-
 RUN4_PROVENANCE_CLOSURE_PATH = (
     _FOUNDRY / "results_s3" / "run4_provenance_closure_2026-08-23.json"
 )
+RUN4_EXPORT_DEVICE_PROBE_PATH = (
+    _FOUNDRY / "results_s3" / "run4_export_device_probe_2026-08-23.json"
+)
 
 #: 2026-08-22 の D4 実測は v0.1 spec（本 sha256）に束縛して実行された。
 #: spec 自体は PR #306 のレビュー対応で v0.2 → v0.3 へ改訂され続けているが、
@@ -72,6 +77,9 @@ FROZEN_SHA256 = {
     ),
     "run4_provenance_closure_2026-08-23.json": (
         "40d32d33e4f81b99452cf183a831836285079dc784cf63c0681f44b97f4b0308"
+    ),
+    "run4_export_device_probe_2026-08-23.json": (
+        "47879666ea17ba923628119c306b99674c6a5fb0fd478e2bd00de6315c097ef6"
     ),
 }
 
@@ -236,12 +244,94 @@ def test_run4_provenance_closure_structural_invariants() -> None:
     assert isinstance(doc.get("phase4_env_contract_retest"), dict)
 
 
+# --- VG-DEBT-008 (a-2): run4_export_device_probe_2026-08-23.json ----------
+
+
+def test_run4_export_device_probe_sha256_matches_ledger_evidence(
+    ledger: Dict[str, Any],
+) -> None:
+    """VG-DEBT-008 の (a-2) export-device probe 証拠ファイルも台帳記帳 sha256
+    と一致させる（他 3 ファイルと同じ二重アンカー規律）。"""
+    assert RUN4_EXPORT_DEVICE_PROBE_PATH.is_file(), (
+        f"{RUN4_EXPORT_DEVICE_PROBE_PATH} が無い（確定 artifact が消えている）"
+    )
+    expected = _evidence_sha256(
+        ledger,
+        "VG-DEBT-008",
+        "voice_genesis/foundry/results_s3/run4_export_device_probe_2026-08-23.json",
+    )
+    got = _sha256_file(RUN4_EXPORT_DEVICE_PROBE_PATH)
+    assert got == expected, (
+        f"run4_export_device_probe_2026-08-23.json の実 sha256 {got} が "
+        f"debt_ledger.yaml VG-DEBT-008 の記帳 {expected} と違う"
+        "（証拠ファイルが変更されたか、台帳の記帳が古い）"
+    )
+
+
+def test_run4_export_device_probe_structural_invariants() -> None:
+    """export-device 単一要因掃引の主張の骨格を機械強制する: schema・
+    G1 anchor WAV 6/6 一致・(a-2) 機能的裏付けの記帳・G1 の wav_sha256 が
+    expected_values の記録済み sha256 と実際に一致すること（recompute。
+    格納済み boolean/文字列を信用しない）・ONNX sha256 の等式/不等式の
+    骨格（G1≠C1・G2=G1・C1b=C1）。"""
+    doc = json.loads(RUN4_EXPORT_DEVICE_PROBE_PATH.read_text(encoding="utf-8"))
+
+    assert doc["schema"] == "voicegenesis-run4-export-device-probe/0.1"
+    assert doc["comparisons"]["g1_wav_matches_recorded_count"] == "6/6"
+
+    a2 = doc["a2_functional_corroboration"]
+    assert a2["applies"] is True
+    closure_impact = a2["closure_impact"]
+    assert "measured_only" in closure_impact
+    assert "accepted_residual" in closure_impact
+
+    arms = doc["arms"]
+    expected_wavs = doc["expected_values"]["recorded_run4_wav_sha256"]
+    g1_wavs = arms["g1_gpu_export_full"]["wav_sha256"]
+    assert set(g1_wavs) == set(expected_wavs) == {
+        "ritsu_sakura",
+        "ritsu_umi",
+        "pjs_sakura",
+        "pjs_umi",
+        "user_sakura",
+        "user_umi",
+    }
+    for voice, sha in expected_wavs.items():
+        assert g1_wavs[voice] == sha, (
+            f"g1_gpu_export_full.wav_sha256[{voice}] が expected_values."
+            f"recorded_run4_wav_sha256[{voice}] と食い違う（6/6 一致の主張の根拠）"
+        )
+
+    g1_onnx = arms["g1_gpu_export_full"]["onnx_sha256"]
+    g2_onnx = arms["g2_gpu_export_determinism"]["onnx_sha256"]
+    c1_onnx = arms["c1_cpu_export_same_pod"]["onnx_sha256"]
+    c1b_onnx = arms["c1b_cpu_export_alt_path_root"]["onnx_sha256"]
+
+    assert g1_onnx != c1_onnx, (
+        "F1（export device が ONNX バイトを変える）の根拠: G1（GPU）と "
+        "C1（CPU 強制・同一 pod・同一 venv）の onnx_sha256 は異なるはず"
+    )
+    assert g2_onnx == g1_onnx, (
+        "F4（GPU export+合成の決定論）の根拠: G2 再実行の onnx_sha256 は G1 と "
+        "bit 一致するはず"
+    )
+    assert c1b_onnx == c1_onnx, (
+        "F5（CPU export のパス root 非依存）の根拠: C1b（別パス root）の "
+        "onnx_sha256 は C1 と bit 一致するはず"
+    )
+
+
 # --- 台帳の外の独立アンカー（PR #307 Codex 第 2 巡 P2） -------------------
 
 
 @pytest.mark.parametrize(
     "path",
-    [D4_RESULTS_PATH, RUN4_FINITE_REPORT_PATH, RUN4_PROVENANCE_CLOSURE_PATH],
+    [
+        D4_RESULTS_PATH,
+        RUN4_FINITE_REPORT_PATH,
+        RUN4_PROVENANCE_CLOSURE_PATH,
+        RUN4_EXPORT_DEVICE_PROBE_PATH,
+    ],
     ids=lambda p: p.name,
 )
 def test_frozen_artifact_matches_independent_anchor(path: Path) -> None:
@@ -270,6 +360,10 @@ def test_independent_anchor_agrees_with_ledger(ledger: Dict[str, Any]) -> None:
         (
             "VG-DEBT-008",
             "voice_genesis/foundry/results_s3/run4_provenance_closure_2026-08-23.json",
+        ),
+        (
+            "VG-DEBT-008",
+            "voice_genesis/foundry/results_s3/run4_export_device_probe_2026-08-23.json",
         ),
     ]
     for debt_id, rel_path in pairs:

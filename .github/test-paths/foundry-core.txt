@@ -1,17 +1,35 @@
-# Foundry tests that run with the repository's normal dev dependencies.
+# Foundry tests that collect with the repository's normal dev dependencies.
+# Tests that execute optional runtimes skip at test granularity inside these files.
 # Keep this list in sync with pyproject.toml; discipline tests enforce the link.
+voice_genesis/foundry/genome_s3/tests/test_genome_s3.py
 voice_genesis/foundry/genome_s35/tests/test_genome_s35.py
+voice_genesis/foundry/planb/tests/test_planb.py
+voice_genesis/foundry/planb_real/tests/test_planb_real.py
+voice_genesis/foundry/tests/test_adapter_consonants.py
+voice_genesis/foundry/tests/test_adapter_donor_bank.py
+voice_genesis/foundry/tests/test_adapter_donor_bank_lab.py
+voice_genesis/foundry/tests/test_adapter_donor_bank_utau.py
 voice_genesis/foundry/tests/test_adapter_joins.py
 voice_genesis/foundry/tests/test_adapter_perf_genes.py
+voice_genesis/foundry/tests/test_adapter_render_donor_wiring.py
+voice_genesis/foundry/tests/test_adapter_units.py
 voice_genesis/foundry/tests/test_adapter_voice_spec.py
+voice_genesis/foundry/tests/test_adapter_vowel_class.py
 voice_genesis/foundry/tests/test_assemble_run4.py
 voice_genesis/foundry/tests/test_convert_amitaro.py
 voice_genesis/foundry/tests/test_convert_d3.py
 voice_genesis/foundry/tests/test_convert_user.py
 voice_genesis/foundry/tests/test_forge_triangle.py
+voice_genesis/foundry/tests/test_gate_synth_diffsinger_repo_pin.py
+voice_genesis/foundry/tests/test_gate_synth_export_provenance.py
+voice_genesis/foundry/tests/test_gate_synth_onnx_publish_rollback.py
 voice_genesis/foundry/tests/test_gate_synth_run4.py
+voice_genesis/foundry/tests/test_gate_synth_score_module_cache.py
+voice_genesis/foundry/tests/test_gate_synth_swap_backup.py
+voice_genesis/foundry/tests/test_glue_template.py
 voice_genesis/foundry/tests/test_measure_bands.py
 voice_genesis/foundry/tests/test_recording_kit_intake.py
 voice_genesis/foundry/tests/test_run5_bootstrap.py
 voice_genesis/foundry/tests/test_run_d3_cells.py
 voice_genesis/foundry/tests/test_s1_dataprep_ph_dur_duration.py
+voice_genesis/foundry/tests/test_s7_gate_synth_dur_hook.py

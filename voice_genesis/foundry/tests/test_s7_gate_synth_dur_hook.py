@@ -2,8 +2,7 @@
 
 run 8 の校正レンダのために `run_pipeline` へ足した `final_phone_dur_override`
 （既定 None）が、**off のとき本番経路を 1 命令も変えない**ことと、on のときの
-不変量だけを見る。`onnxruntime` を import するため既定 testpaths には入れない
-（`voice_genesis/foundry/tests/` の既存 gate_synth テストと同じ扱い）。
+不変量だけを見る。推論を呼ばないため `onnxruntime` 非依存で実行できる。
 
 実行: `python -m pytest voice_genesis/foundry/tests/test_s7_gate_synth_dur_hook.py -q`
 """
@@ -20,17 +19,22 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-pytest.importorskip("onnxruntime")
-
 _FOUNDRY = Path(__file__).resolve().parent.parent
 GATE_SYNTH_PATH = _FOUNDRY / "s1_gate" / "gate_synth.py"
+_TESTS_DIR = Path(__file__).resolve().parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
+
+from _optional_runtime_stubs import stub_onnxruntime_if_missing  # noqa: E402
 
 
 def _load_gate_synth():
     spec = importlib.util.spec_from_file_location("gate_synth", GATE_SYNTH_PATH)
     module = importlib.util.module_from_spec(spec)
     sys.modules["gate_synth"] = module
-    spec.loader.exec_module(module)
+    with stub_onnxruntime_if_missing():
+        spec.loader.exec_module(module)
+    sys.modules.pop("gate_synth", None)
     return module
 
 

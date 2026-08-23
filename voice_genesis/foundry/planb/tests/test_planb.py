@@ -5,8 +5,7 @@
 
 実行:
     python -m pytest voice_genesis/foundry/planb/tests -q
-（既定の `testpaths` には入れていない。pyworld はリポジトリの dev 依存では
-なく、foundry/tests と同じ扱いで明示実行する）
+（WORLD 解析を呼ぶテストだけは pyworld 未導入時に skip する）
 """
 from __future__ import annotations
 
@@ -16,23 +15,35 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+_TESTS_DIR = Path(__file__).resolve().parents[2] / "tests"
+sys.path.insert(0, str(_TESTS_DIR))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-pw = pytest.importorskip("pyworld")
+from _optional_runtime_stubs import (  # noqa: E402
+    optional_runtime_available,
+    stub_pyworld_if_missing,
+)
 
-import pb_compose as pc  # noqa: E402
-import pb_extract as px  # noqa: E402
-import pb_gates as pg  # noqa: E402
-import pb_metrics as pm  # noqa: E402
-import pb_tracks as pt  # noqa: E402
-import pb_world as pbw  # noqa: E402
+with stub_pyworld_if_missing():
+    import pb_compose as pc  # noqa: E402
+    import pb_extract as px  # noqa: E402
+    import pb_gates as pg  # noqa: E402
+    import pb_metrics as pm  # noqa: E402
+    import pb_tracks as pt  # noqa: E402
+    import pb_world as pbw  # noqa: E402
 
 SR = 16000
 FP = 5.0
+requires_pyworld = pytest.mark.skipif(
+    not optional_runtime_available("pyworld"), reason="pyworld is not installed"
+)
 
 
 def _fft_bins(sr: int) -> int:
-    return pw.get_cheaptrick_fft_size(sr) // 2 + 1
+    # 合成 bank テストは WORLD の FFT 選択ではなく、2-D spectral
+    # payload の形状契約だけを使う。16 kHz の従来値を固定する。
+    assert sr == SR
+    return 513
 
 
 def _mini_bank(*, n_units: int = 3, frames: int = 40) -> pt.IdentityBank:
@@ -126,6 +137,7 @@ def test_structural_gate_rejects_two_dimensional_payload():
     assert pg.gate_structural(bad).status == "fail"
 
 
+@requires_pyworld
 def test_tripwire_records_only_declared_fields():
     bank = _mini_bank()
     perf = _mini_performance(bank)
@@ -158,6 +170,7 @@ def test_tripwire_fails_when_two_dimensional_value_is_reachable():
 # ---------------------------------------------------------------------------
 # criterion 5: 決定論
 # ---------------------------------------------------------------------------
+@requires_pyworld
 def test_compose_is_deterministic():
     bank = _mini_bank()
     perf = _mini_performance(bank)
@@ -167,6 +180,7 @@ def test_compose_is_deterministic():
     assert a.sha256() == b.sha256()
 
 
+@requires_pyworld
 def test_ladder_rungs_are_distinct():
     bank = _mini_bank()
     perf = _mini_performance(bank)
@@ -174,6 +188,7 @@ def test_ladder_rungs_are_distinct():
     assert len(set(shas.values())) == len(shas)
 
 
+@requires_pyworld
 def test_duration_toggle_changes_length_and_others_do_not():
     bank = _mini_bank()
     perf = _mini_performance(bank)
@@ -271,6 +286,7 @@ def test_identity_gate_uses_margin_not_absolute_distance():
 # extract: Performance は 1 次元のみ / identity は 2 次元を持つ
 # ---------------------------------------------------------------------------
 def test_extract_round_trip_shapes():
+    pytest.importorskip("pyworld")
     sr = SR
     t = np.arange(int(sr * 1.2)) / sr
     x = 0.2 * sum(np.sin(2 * np.pi * 180 * k * t) / k for k in (1, 2, 3, 4, 5))
@@ -287,6 +303,7 @@ def test_extract_round_trip_shapes():
 
 
 def test_f0_deviation_is_clamped():
+    pytest.importorskip("pyworld")
     sr = SR
     t = np.arange(int(sr * 0.8)) / sr
     x = 0.2 * sum(np.sin(2 * np.pi * 150 * k * t) / k for k in (1, 2, 3))
@@ -301,6 +318,7 @@ def test_f0_deviation_is_clamped():
 # ---------------------------------------------------------------------------
 @pytest.mark.slow
 def test_substitute_ladder_end_to_end(tmp_path):
+    pytest.importorskip("pyworld")
     import pb_ladder as pl
     rec = pl.run(pl.RunConfig(write_wav=False), tmp_path)
     status = {g["gate"]: g["status"] for g in rec["gates"]}
@@ -313,6 +331,7 @@ def test_substitute_ladder_end_to_end(tmp_path):
 
 @pytest.mark.slow
 def test_negative_control_is_not_evaluable(tmp_path):
+    pytest.importorskip("pyworld")
     import pb_ladder as pl
     rec = pl.run(pl.RunConfig(fault=False, write_wav=False), tmp_path)
     status = {g["gate"]: g["status"] for g in rec["gates"]}
