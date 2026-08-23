@@ -16,7 +16,7 @@ concurrency:
 # test-m2-harness + test-l0b-reeval + test-foundry-core + test-rest の和が全件
 # （test-m2-harness
 # は tests/test_m2_accuracy_harness.py のみ、test-l0b-reeval は下記 3 テスト
-# のみ、test-foundry-core は通常依存で動く Foundry 15 ファイル、test-rest は
+# のみ、test-foundry-core は通常依存で収集できる Foundry 32 ファイル、test-rest は
 # それらを --ignore/--deselect で除いた残り全部）=
 # カバレッジ不変・CI が slow を skip しない原則を維持したまま、壁時計を各
 # ジョブの timeout 枠に収めるためのシャーディングのみ（slow を skip せず、

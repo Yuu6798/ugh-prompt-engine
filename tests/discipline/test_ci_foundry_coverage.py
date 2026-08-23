@@ -18,7 +18,7 @@ CORE_MANIFEST = REPO_ROOT / ".github" / "test-paths" / "foundry-core.txt"
 OPTIONAL_MANIFEST = REPO_ROOT / ".github" / "test-paths" / "foundry-optional.txt"
 
 
-def _manifest_entries(path: Path) -> list[PurePosixPath]:
+def _manifest_entries(path: Path, *, allow_empty: bool = False) -> list[PurePosixPath]:
     entries: list[PurePosixPath] = []
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.split("#", 1)[0].strip()
@@ -29,7 +29,8 @@ def _manifest_entries(path: Path) -> list[PurePosixPath]:
         assert ".." not in entry.parts, f"manifest path must stay in the repo: {line}"
         assert entry.as_posix() == line, f"manifest path must be normalized: {line}"
         entries.append(entry)
-    assert entries, f"manifest must not be empty: {path.relative_to(REPO_ROOT)}"
+    if not allow_empty:
+        assert entries, f"manifest must not be empty: {path.relative_to(REPO_ROOT)}"
     assert len(entries) == len(set(entries)), f"manifest has duplicate entries: {path}"
     return entries
 
@@ -76,7 +77,7 @@ def test_every_foundry_test_is_configured_or_explicitly_optional() -> None:
     _assert_foundry_inventory(
         _all_foundry_tests(),
         _configured_foundry_tests(),
-        set(_manifest_entries(OPTIONAL_MANIFEST)),
+        set(_manifest_entries(OPTIONAL_MANIFEST, allow_empty=True)),
     )
 
 
@@ -91,7 +92,7 @@ def test_foundry_core_manifest_is_in_pytest_testpaths() -> None:
     """Foundry 専用 job の全ファイルを通常 pytest の対象にも含める。"""
     core = set(_manifest_entries(CORE_MANIFEST))
     configured = _configured_foundry_tests()
-    optional = set(_manifest_entries(OPTIONAL_MANIFEST))
+    optional = set(_manifest_entries(OPTIONAL_MANIFEST, allow_empty=True))
 
     assert core <= configured, f"Foundry core tests missing from testpaths: {core - configured}"
     assert core.isdisjoint(optional), f"core and optional manifests overlap: {core & optional}"
@@ -114,6 +115,6 @@ def test_ci_runs_and_excludes_the_same_foundry_core_manifest() -> None:
     assert len(rest_runs) == 1
     assert "$FOUNDRY_CORE_MANIFEST" in rest_runs[0]
     # Explicit pytest testpaths are not removed by --ignore.  File node-id
-    # prefixes must be deselected or the dedicated 884 tests run twice.
+    # prefixes must be deselected or the dedicated 1,349 tests run twice.
     assert 'deselect_args+=("--deselect=$path")' in rest_runs[0]
     assert '"${deselect_args[@]}"' in rest_runs[0]

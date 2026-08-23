@@ -19,21 +19,23 @@ import numpy as np
 import pytest
 
 _HERE = Path(__file__).resolve().parent.parent
-for _p in (_HERE, _HERE.parent / "planb"):
+for _p in (_HERE, _HERE.parent / "planb", _HERE.parent / "tests"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-pytest.importorskip("pyworld")
 import soundfile as sf  # noqa: E402
 
-import pr_census  # noqa: E402
-import pr_gates  # noqa: E402
-import pr_identity  # noqa: E402
-import pr_lab  # noqa: E402
-import pr_ladder  # noqa: E402
-import pr_manifest as prm  # noqa: E402
-import pr_performance as prp  # noqa: E402
-import pr_status as prs  # noqa: E402
+from _optional_runtime_stubs import stub_pyworld_if_missing  # noqa: E402
+
+with stub_pyworld_if_missing():
+    import pr_census  # noqa: E402
+    import pr_gates  # noqa: E402
+    import pr_identity  # noqa: E402
+    import pr_lab  # noqa: E402
+    import pr_ladder  # noqa: E402
+    import pr_manifest as prm  # noqa: E402
+    import pr_performance as prp  # noqa: E402
+    import pr_status as prs  # noqa: E402
 
 SR = 22050
 
@@ -296,6 +298,7 @@ def test_moraic_nasal_is_not_confused_with_onset_n():
 # §4 Performance 表現
 # ---------------------------------------------------------------------------
 def _build_pair(ritsu: Path, pjs: Path, name: str = "kagiri"):
+    pytest.importorskip("pyworld")
     r_lab = pr_lab.read_lab(ritsu / f"{name}.lab")
     p_lab = pr_lab.read_lab(pjs / f"{name}.lab")
     r_idx = pr_lab.phrase_final_indices(r_lab.phones)[-1]

@@ -21,9 +21,15 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "s1_gate"))
+_TESTS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_TESTS_DIR))
+sys.path.insert(0, str(_TESTS_DIR.parent / "s1_gate"))
 
-import gate_synth as gs  # noqa: E402
+from _optional_runtime_stubs import stub_onnxruntime_if_missing  # noqa: E402
+
+with stub_onnxruntime_if_missing():
+    import gate_synth as gs  # noqa: E402
+sys.modules.pop("gate_synth", None)
 
 
 def test_swap_step_dir_into_place_rejects_unrelated_old_dir(tmp_path: Path) -> None:
