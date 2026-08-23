@@ -182,14 +182,18 @@ debts:
       affected_claims:
         - "run4 anchor wav 10本のうち run3由来4本の checkpoint provenance"
     repayment:
-      method: results_s3/run4_anchor_provenance.json へ既存記録から逐語転記し、閉じないリンクは missing のまま明示
+      method: results_s3/run4_anchor_provenance.json へ既存記録から逐語転記し、閉じないリンクは missing のまま明示。2026-08-23 に転記記録の missing/not_established 10件へ実測での閉鎖を試行（results_s3/run4_provenance_closure_2026-08-23.json）
       evidence_required:
         - run4_anchor_provenance.json（本転記で作成）
+      evidence_delivered:
+        - "voice_genesis/foundry/results_s3/run4_provenance_closure_2026-08-23.json（sha256 d968a412b49cda026f5e610f35676a4b4bc320cf521f2078e81178a219261cc9。schema voicegenesis-run4-provenance-closure/0.1）。10件の内訳: measured_only 4件（acoustic_onnx.run4_onnx_gate_40000.sha256 / canon_model.namine_ritsu_diffsinger.sha256 / vocoder.vocoder_onnx.sha256 / generation_script.gate_synth_run4_py.sha256 — いずれも実測はしたが当時バイトとの同一性は未確立）・not_closable 6件（run3 checkpoint / onnx_export41 が Drive 上に所在確認できず、acoustic_onnx.run3_onnx_export41.* 2件 + anchor_wavs.run3_gate_*.checkpoint_provenance 4件）・reproduced 0件。run4 側 anchor wav 6本の再生成を試行したが記録済み sha256 と 0/6 一致（rms/durは記録値と完全一致・サイズも一致——環境差由来の数値非決定性と推定、s3_record §2 のnumpy SIMD事例と同型）。canon zip（5c7b8c32...）・vocoder onnx（a3e26672...）は provision.sh 既存 pin と完全一致、run4 config.yaml/dictionary-ja.txtはDriveから再取得した実体が run4_anchor_provenance.json 既存pinと完全一致（独立クロスチェック）。gate_synth_run4.pyの実行時pinコミットはgit履歴のみから推定（cda36b9f、high_but_unproven——run4生成活動の時間帯を挟む前後のコミットで本ファイルへの変更が無いことを根拠とする状況証拠であり証明ではない）"
+        - "voice_genesis/foundry/results_s3/run4_provenance_closure_report_2026-08-23.md: 実行報告（各Phaseのログ要点・判断根拠・失敗事象）"
     status: in_progress
     adjudication_ref: "DEBT_ADJUDICATION_v1.1.md §5 裁定5"
     close_condition:
       - results_s3/run4_anchor_provenance.json の全リンクが missing 無しで閉じている
         （閉じ切らない場合は accepted_residual として明示的に確定させる）
+    note: "2026-08-23実測で10件中4件をmeasured_onlyへ前進させたが、残る6件（run3側）はrun3 checkpoint / onnx_export41 実体がDrive上で所在確認できず not_closable のまま。全10件がreproduced/measured_onlyで揃わない限りrepaidへ昇格させない方針のため status は in_progress を維持する。残6件の accepted_residual 化はFableの裁定待ち。"
 
   - debt_id: VG-DEBT-009
     scope: run4

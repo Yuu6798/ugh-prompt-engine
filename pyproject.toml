@@ -173,6 +173,10 @@ testpaths = [
     # run4_finite_report_2026-08-22.json）の機械保護。台帳記帳 sha256 との一致 +
     # 構造 invariant。依存は PyYAML のみ（本体の必須依存）。
     "voice_genesis/foundry/tests/test_committed_artifacts_immutable.py",
+    # VG-DEBT-008 run4 provenance closure（2026-08-23 実測）: 未閉鎖10件への
+    # 実測結果ファイルの形状テスト（人手編集ファイル・値の実体照合はしない）。
+    # 依存は標準ライブラリのみ。
+    "voice_genesis/foundry/tests/test_run4_provenance_closure.py",
 ]
 pythonpath = ["src", "."]
 markers = [

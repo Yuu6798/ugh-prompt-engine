@@ -1,0 +1,183 @@
+{
+  "schema": "voicegenesis-run4-provenance-closure/0.1",
+  "acceptance": "本記録は run4_anchor_provenance.json（転記のみ・無改変。本ファイルは1バイトも変更していない。sha256=bfde34b3cf3d87898820f21b082efadaa96534b60cdf99698ca938b15fc2f188）の missing/not_established 10 件に対する 2026-08-23 実測の結果。一致・不一致・実行不能のいずれも正直に記録する。再 export 値は当時バイトとの同一性が WAV 再生成一致で裏付けられた場合のみ closure: reproduced とし、それ以外は closure: measured_only（実測はしたが当時バイトとの同一性は未確立）/ closure: not_closable（実測材料そのものが入手不能）とする。",
+  "executed_at_utc": "2026-08-23",
+  "executed_by": "Claude Sonnet 5 sub-agent（実測・実行・検証。設計判断は Fable 側）",
+  "source_repo": {
+    "branch": "claude/technical-debt-plan-2fv79j",
+    "head_at_start": "df38507d",
+    "note": "本実測は repo を変更せず /home/user/run4_provwork, /home/user/d4work（D4 実測の再利用）配下で実行した。checkout はセッション冒頭で git fetch --unshallow 済み（gate_synth_run4.py の pin コミット同定に history が必要だったため。破壊的操作なし・作業ツリー変更なし）。"
+  },
+  "phase0_findings": {
+    "pin_commit_gate_synth_run4_py": {
+      "commit": "cda36b9f2308128797c48976a9c90b28a4f1661a",
+      "commit_message": "fix(voice_genesis): セルグリッド完全一致 + schema 版検証 + drift ロールバック + 台帳 artifact 重複拒否（Codex R13 4 件）",
+      "commit_author_date_utc": "2026-08-17T07:55:30+00:00",
+      "confidence": "high_but_unproven",
+      "basis": "gate_synth_run4.py の全 git 履歴を洗い、run4 の生成活動時間帯（学習開始 12:22・40K完走 16:40・run3アンカー再合成 19:45、いずれも s3_record_2026-08-17.md §1 のタイムライン）の直前に位置する最後の変更コミットが cda36b9f（07:55:30）、直後に位置する次の変更コミットが 07ecc620（22:55:58、s3_record への未転記項目転記コミットで生成活動より後）であることを確認した。cda36b9f〜07ecc620 間に本ファイルへの他の変更コミットは無い（git log で確認）。これは『run4 生成活動全体を通じてこのバイトが作業ツリーにあった』ことの状況証拠であり、Pod 上の未コミット編集を排除する証拠ではない（証明ではなく推定）。同じ時間帯で gate_synth.py（gate_synth_run4.py が read-only import する被委譲先）も dec017333341c8c0e859d77cd330dbb223faf07b（2026-08-16T21:46:32Z、run4開始より前）以降 08-17 中は無変更であることを確認した。",
+      "verification_command": "git show cda36b9f2308128797c48976a9c90b28a4f1661a:voice_genesis/foundry/s1_gate/gate_synth_run4.py | sha256sum"
+    },
+    "diffsinger_revision_used_at_run4": {
+      "status": "確認できない",
+      "note": "gate40k.log / gate_run3_anchor_v2.log のいずれにも DiffSinger checkout の git revision 記録が無い（s3_record_2026-08-17.md §7.4-3 の既存の指摘どおり）。本実測では D4（VG-DEBT-004、run5-7）で使われた openvpi/DiffSinger HEAD e2307b1080b00f3999702ce9017cfd75c7f862fe を代用した（run4 のみ別 revision だったという証拠は無いが、同一という証拠もない）。"
+    },
+    "run4_input_bundle_drive_folder": {
+      "folder_id": "1mMahUQXDy_TZzYIXlkNRM-9T2bBjFeqw",
+      "found": [
+        "config.yaml（sha256 が run4_anchor_provenance.json の run4_config_yaml pin と完全一致 = 419baf782ea8a3b4b5e9ab37d94f738883a98bfff25ead4e5ae671f18b954ef7）",
+        "dictionary-ja.txt（sha256 が run4_dictionary_ja_txt pin と完全一致 = b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef）",
+        "spk_map.json（新規取得。{\"ritsu\":0,\"pjs\":1,\"user\":2}。sha256=0908f079e397fad4fc63be46da7852dc25545a3ad667444ff4d5d27cd5c4a13c）",
+        "lang_map.json（新規取得。{\"ja\":1}。sha256=2a6a227ee65a49f5c30e848a4b62c5cc1817926bbdab373228e6302d2c794953。run5/6/7 の lang_map.json と同一ファイル）",
+        "gate40k.log（run4 正本ログ・59725 bytes・sha256=ca0f416a56f3fefc95d2a79c81e047a4f1302e23ae159442e7d636778519891b。export cmd / wav sha256 を含む。acoustic ONNX 自体の sha256 は記録されていない = 既存記録どおり）",
+        "gate_run3_anchor_v2.log（run3 正本ログ・2955 bytes。wav sha256 は run4_anchor_provenance.json と完全一致。export 記録は射程外 = 既存記録どおり）",
+        "model_ckpt_steps_{5000,10000,20000,40000}.ckpt の分割 part ファイル（12本）と sha256sum_check_output.txt / actual_sha256.txt（/home/user/run4work の実体と同一 sha を確認済みのため未使用）",
+        "run4_untranscribed_audit_2026-08-21.md（2026-08-21付の先行監査メモ。本実測が新規追加する内容とほぼ重複するが checkpoint sha は『サイドカー記載値であり未照合』と明記——本実測は /home/user/run4work の実体照合済み値を使用）"
+      ],
+      "not_found": "run3 checkpoint / onnx_export41 に相当するファイルは、このフォルダにも run3/run4 受け渡しフォルダ（1_Hbi46PQ-fi1wxc6fZWglBjzTecfr0z_、汎用音源フォルダで無関係ファイルが大半）にも見つからなかった（title 検索 'run3' / 'onnx_export41' / 's3_run3' / 'run3_acoustic' / 'export41' すべて空または無関係）。"
+    }
+  },
+  "items": [
+    {
+      "ref": "acoustic_onnx.run4_onnx_gate_40000.sha256",
+      "prior_state": "missing",
+      "closure": "measured_only",
+      "value": "a6da561a66ece62d64d4a0635a5ef525c2b6143eb311c1a7e1d595d9abd3a676",
+      "method": "run4 の 40K checkpoint（sha256=3921f96ac19a9cf5bc8ab246a147cf778044cf5949dd24cd87246f24e52c76ec、run4_anchor_provenance.json 既存 pin と一致・/home/user/run4work で sha256sum -c 実測済み）+ config.yaml/spk_map.json/lang_map.json/dictionary-ja.txt（Phase 0 で取得・sha256 記載）を入力に、gate_synth_run4.py（pin commit cda36b9f）run --diffsinger-repo .../DiffSinger(e2307b1) --ckpt-dir <bundle> --exp-name s3_run4_acoustic --step 40000 --canon-model-dir ... --vocoder-dir ... --out-dir ... --song sakura,umi --speaker ritsu を実行して acoustic.onnx を再 export した。同一手順をローカルで2回実行し sha256 が完全一致（a6da561a...）することを確認済み = 本セッション内では決定論的。",
+      "source": "本セッション実測（2026-08-23）。/home/user/run4_provwork/gate40k_run4/onnx_gate_40000/acoustic.onnx",
+      "note": "当時バイトとの同一性は未確立（WAV 再生成が run4 側 6/6 とも記録済み sha256 と不一致だったため — 詳細は wav_regeneration 節）。すなわちこの値は『2026-08-23 にこの環境で再現した export 手順の出力』であり、run4 実行当時に生成された acoustic.onnx と同一バイトである保証はない。"
+    },
+    {
+      "ref": "acoustic_onnx.run3_onnx_export41.sha256",
+      "prior_state": "missing",
+      "closure": "not_closable",
+      "value": null,
+      "method": "n/a",
+      "source": "Google Drive 検索（title contains 'run3' 全般 + 'onnx_export41' / 's3_run3' / 'run3_acoustic' / 'export41' 個別）",
+      "note": "run3 の 40K checkpoint も onnx_export41 の実体もこのセッションで到達可能な Drive 領域には見つからなかった。取得元不明のため export 自体を実行できない。"
+    },
+    {
+      "ref": "acoustic_onnx.run3_onnx_export41.checkpoint_provenance",
+      "prior_state": "not_established",
+      "closure": "not_closable",
+      "value": null,
+      "method": "n/a",
+      "source": "同上",
+      "note": "run3 checkpoint 実体が無いため export 記録との紐付けを実測で埋める材料が無い。gate_run3_anchor_v2.log の full text も Phase 0 で取得したが（既存記録の逐語と完全一致を確認）、export 工程はこのログの射程外という既存記録の指摘は本実測でも覆らなかった。"
+    },
+    {
+      "ref": "canon_model.namine_ritsu_diffsinger.sha256",
+      "prior_state": "missing",
+      "closure": "measured_only",
+      "value": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
+      "method": "provision.sh（voice_genesis/foundry/run8/provision.sh）の ASSETS 表 canon_zip の URL（https://www.canon-voice.com/voice/NamineRitsu_DiffSinger.zip）から取得し sha256sum で算出。provision.sh 記載の pin 値と完全一致（この pin 自体は既存資産・本実測が新規に作った値ではない）。",
+      "source": "voice_genesis/foundry/run8/provision.sh ASSETS 表 canon_zip 行。取得実体は /home/user/run4_provwork/materials/NamineRitsu_DiffSinger.zip",
+      "note": "判断根拠（zip全体 vs 内部ファイル）: run4_anchor_provenance.json の canon_model.namine_ritsu_diffsinger.artifact は『NamineRitsu_DiffSinger（--canon-model-dir）』というディレクトリ全体を指す。gate_synth.py を読解すると --canon-model-dir から実際に消費されるのは 5 ファイル（linguistic.onnx / dsdur/dur.onnx / dspitch/pitch.onnx / phonemes.txt / dsconfig.yaml）で、zip 同梱の acoustic.onnx はこのレシピでは未使用（acoustic はチェックポイントから別途 export される run4 独自のモデルであり、canon 側 acoustic.onnx とは無関係）。したがって sha256 フィールドの最も自然な対応先は『配布 zip 全体』（provision.sh が pin 済みの単位でもある）と判断し、これを主値として記録した。5 消費ファイル個別の sha256 は materials 節に別途記載し、両方を追跡可能にした（本文書 acceptance 節の指示どおり両方記録）。"
+    },
+    {
+      "ref": "vocoder.vocoder_onnx.sha256",
+      "prior_state": "missing",
+      "closure": "measured_only",
+      "value": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
+      "method": "provision.sh ASSETS 表 vocoder_oudep の URL（https://github.com/xunmengshe/OpenUtau/releases/download/0.0.0.0/nsf_hifigan.oudep）から取得・展開し、gate_synth.py が --vocoder-dir から直接読む nsf_hifigan.onnx（曖昧性なし・単一ファイル）の sha256 を算出。provision.sh 内の VOC_WANT pin と完全一致。",
+      "source": "voice_genesis/foundry/run8/provision.sh ASSETS 表 vocoder_oudep 行 + 展開後照合ブロック（VOC_WANT）。取得実体は /home/user/run4_provwork/materials/vocoder_onnx/nsf_hifigan.onnx",
+      "note": "canon と異なり --vocoder-dir の消費先はファイル1本のみなので曖昧性は無い。"
+    },
+    {
+      "ref": "generation_script.gate_synth_run4_py.sha256",
+      "prior_state": "missing",
+      "closure": "measured_only",
+      "value": "006cd867042d8f976822f2d74dc6bf184c5687a6a125e41914fba0c5c0faf87f",
+      "method": "phase0_findings.pin_commit_gate_synth_run4_py で同定したコミット cda36b9f から `git show <commit>:voice_genesis/foundry/s1_gate/gate_synth_run4.py | sha256sum` で算出。",
+      "source": "git blob at commit cda36b9f2308128797c48976a9c90b28a4f1661a",
+      "note": "コミットの同定は high_but_unproven（phase0_findings 参照）。当時バイトである保証はない。参考値として現行 HEAD（df38507d 時点）のバイトの sha256 も記録する: 579f7f0b5397e900ea6fe56abaa48fd0f6d2b298753b8fb2ae025e8b93a08ce9（これは当時バイトの代用として使ってはならない——依頼文の禁止事項どおり）。cda36b9f と HEAD の差分は 3df1e37 で d3synth 話者の追加（SPEAKER_TO_SPK_ID に d3synth=3 を追加 + ログ文言変更のみ）で、ritsu/pjs/user の挙動には影響しない差分だったことをコード読解で確認した。"
+    },
+    {
+      "ref": "anchor_wavs.run3_gate_sakura_ritsu.wav.checkpoint_provenance",
+      "prior_state": "not_established",
+      "closure": "not_closable",
+      "value": null,
+      "method": "n/a",
+      "source": "Drive 検索（run3 checkpoint 未発見）",
+      "note": "run3 checkpoint 不在のため閉鎖不能。"
+    },
+    {
+      "ref": "anchor_wavs.run3_gate_umi_ritsu.wav.checkpoint_provenance",
+      "prior_state": "not_established",
+      "closure": "not_closable",
+      "value": null,
+      "method": "n/a",
+      "source": "同上",
+      "note": "同上"
+    },
+    {
+      "ref": "anchor_wavs.run3_gate_sakura_pjs.wav.checkpoint_provenance",
+      "prior_state": "not_established",
+      "closure": "not_closable",
+      "value": null,
+      "method": "n/a",
+      "source": "同上",
+      "note": "同上"
+    },
+    {
+      "ref": "anchor_wavs.run3_gate_umi_pjs.wav.checkpoint_provenance",
+      "prior_state": "not_established",
+      "closure": "not_closable",
+      "value": null,
+      "method": "n/a",
+      "source": "同上",
+      "note": "同上"
+    }
+  ],
+  "wav_regeneration": {
+    "attempted": true,
+    "target": "run4 側 anchor wav 6 本（run3 側は checkpoint 不在のため未実行）",
+    "recipe_source": "run4_anchor_provenance.json の anchor_wavs.*.generation_command を、パスのみ本実測の作業ディレクトリへ読み替えて逐語再現（フラグ構成は変更していない）",
+    "match_count": 0,
+    "total": 6,
+    "results": [
+      {"speaker": "ritsu", "song": "sakura", "recorded_sha256": "55bd14c28437dbfcf06b564343f4bcff02b9bea6c9c1f752a72dbf78f3ec9ef9", "reproduced_sha256": "2a07c12d2f3b08dfb89ee242c2784a4113c4cfa1bd9a557cd33be9ad52a9db52", "match": false, "recorded_rms": 0.0540, "reproduced_rms": 0.0540, "recorded_dur_s": 23.580, "reproduced_dur_s": 23.580},
+      {"speaker": "ritsu", "song": "umi", "recorded_sha256": "a12ef548d9649f86854804f9676e88aa8ed76528ea0592859f752fed9064bb9e", "reproduced_sha256": "80cdb09207c4c3080fde30e0c50385e37f193e3cbe594eb9e30398b3bc783382", "match": false, "recorded_rms": 0.0906, "reproduced_rms": 0.0906, "recorded_dur_s": 11.111, "reproduced_dur_s": 11.111},
+      {"speaker": "pjs", "song": "sakura", "recorded_sha256": "b9ce3454854e870075ee001fa5cdf937dc11891f047c497a1e40fcf44aabf279", "reproduced_sha256": "92ee7ba48a7df0dcabac01b63169923d2761a1d8b948ba773ba5d4bf69c1d889", "match": false, "recorded_rms": 0.0517, "reproduced_rms": 0.0517, "recorded_dur_s": 23.580, "reproduced_dur_s": 23.580},
+      {"speaker": "pjs", "song": "umi", "recorded_sha256": "43d6bff14b1eebdd6e8f9e8aa58bde6bae21e2c23df21e29205974f2d491150f", "reproduced_sha256": "a23f82a1232df29b19e5108a6eb5bb7f0ae52582ba3660408638c9952e5af00c", "match": false, "recorded_rms": 0.0748, "reproduced_rms": 0.0748, "recorded_dur_s": 11.111, "reproduced_dur_s": 11.111},
+      {"speaker": "user", "song": "sakura", "recorded_sha256": "e2f7b270c2840012178e50147491a7db1f38f47aee9d4ff487ace60e12c94ea0", "reproduced_sha256": "d7a67c8708d313b4cbe868270baf97111ef13f932469d563a270943ece8b485a", "match": false, "recorded_rms": 0.0976, "reproduced_rms": 0.0976, "recorded_dur_s": 23.580, "reproduced_dur_s": 23.580},
+      {"speaker": "user", "song": "umi", "recorded_sha256": "ac8b3455b4204a6e55d34b7db2e81709f1e6f8bc6f20d6d7462767a4dcf28979", "reproduced_sha256": "ef1d021fc3aeb86dc437148b8b912866f5c32819372936c70797fa795a1ba9d0", "match": false, "recorded_rms": 0.0797, "reproduced_rms": 0.0797, "recorded_dur_s": 11.111, "reproduced_dur_s": 11.111}
+    ],
+    "characterization": "0/6 sha256 一致。ただし全 6 本とも rms（4桁）・dur（3桁）は記録値と完全一致し、ファイルサイズも全て記録済みサイズ帯（sakura=2079788 bytes・umi=980012 bytes、gate_run3_anchor_v2.log 実測値から推定される固定サイズ）と一致した。これは『同じ演奏内容だが波形バイトレベルで非同一』というパターンで、構造的な破損や別内容の生成ではなく、環境差（本実測は openvpi/DiffSinger e2307b1・torch 2.13.0+cpu・onnxruntime 1.29.0・numpy 1.26.4 の組み合わせ。run4 実行時の Pod の正確なパッケージ版は記録が無く不明）由来の数値レベルの非決定性である可能性が高い。s3_record_2026-08-17.md §2 が記録する『numpy SIMD dispatch が1 LSB差でバイトを分岐させた』事例と同型の脆弱性クラス。本実測のローカル再現性は確認済み（同一手順を2回実行し acoustic.onnx・wav とも sha256 完全一致）——したがって不一致は本実測プロセス内のランダム性ではなく、本実測環境と run4 実行環境の差に起因する。",
+    "conclusion": "producer chain の機能的証明は成立しなかった（全 6 本不一致）。1番の acoustic ONNX sha を reproduced に昇格させる根拠は無く measured_only に留める。"
+  },
+  "materials": {
+    "canon_model_namine_ritsu_diffsinger_zip_sha256": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
+    "canon_consumed_members": {
+      "linguistic.onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+      "dsdur/dur.onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+      "dspitch/pitch.onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+      "phonemes.txt": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb",
+      "dsconfig.yaml": "8af86d460c9094676078ac30601dcf5d23c18835ef51064c7d8e7005b2edd3b6"
+    },
+    "canon_unused_member_acoustic_onnx_sha256": "bdab7da1979634d65b5dd2cc29c87cae9a27d06a1caf791670fdab59326803cf",
+    "vocoder_oudep_sha256": "e22f84009804da2e5916e7a2000f4c30278148796376e49368ec5ff8f9f58830",
+    "vocoder_nsf_hifigan_onnx_sha256": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
+    "run4_checkpoint_40000_sha256": "3921f96ac19a9cf5bc8ab246a147cf778044cf5949dd24cd87246f24e52c76ec",
+    "run4_config_yaml_sha256": "419baf782ea8a3b4b5e9ab37d94f738883a98bfff25ead4e5ae671f18b954ef7",
+    "run4_dictionary_ja_txt_sha256": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
+    "run4_spk_map_json_sha256": "0908f079e397fad4fc63be46da7852dc25545a3ad667444ff4d5d27cd5c4a13c",
+    "run4_lang_map_json_sha256": "2a6a227ee65a49f5c30e848a4b62c5cc1817926bbdab373228e6302d2c794953",
+    "gate40k_log_sha256": "ca0f416a56f3fefc95d2a79c81e047a4f1302e23ae159442e7d636778519891b",
+    "gate_run3_anchor_v2_log_sha256": "a48ab91f53339d4279a5fcd53f57496a4db7d9a8ef481ad22ef3af2d48174856",
+    "gate_synth_run4_py_pin_commit_sha256": "006cd867042d8f976822f2d74dc6bf184c5687a6a125e41914fba0c5c0faf87f",
+    "gate_synth_run4_py_current_head_sha256_reference_only": "579f7f0b5397e900ea6fe56abaa48fd0f6d2b298753b8fb2ae025e8b93a08ce9",
+    "reexported_acoustic_onnx_sha256_2026_08_23": "a6da561a66ece62d64d4a0635a5ef525c2b6143eb311c1a7e1d595d9abd3a676",
+    "diffsinger_exporter_revision": "e2307b1080b00f3999702ce9017cfd75c7f862fe"
+  },
+  "environment": {
+    "python": "3.11.15",
+    "numpy": "1.26.4",
+    "torch": "2.13.0+cpu",
+    "onnx": "1.22.0",
+    "onnxruntime": "1.29.0",
+    "lightning": "2.3.3",
+    "pyyaml": "6.0.3",
+    "os": "Linux 6.18.44-fc-v21 x86_64",
+    "note": "export（torch 由来）と synth（onnxruntime 由来）を単一 venv・単一プロセスで実行（gate_synth_run4.py の実装がそうなっているため。D4 は export と render を別プロセス/別スタックに分離していたが、gate_synth_run4.py 自体は一体型）。venv は D4（VG-DEBT-004）実測の /home/user/d4work/venv_export を再利用し onnxruntime==1.29.0 を追加導入したのみ（numpy/torch は変更していない）。"
+  }
+}
