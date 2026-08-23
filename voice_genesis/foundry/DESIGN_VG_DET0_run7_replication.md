@@ -55,10 +55,20 @@ Run 8 は 2026-08-22 User 裁定で **CLOSED**（`results_s7/s7_run8_closeout.md
 - **run 7 側の記帳値**: GPU 型 = RTX 3090（COMMUNITY・`results_s6/s6_record_2026-08-20.md`
   §1）、repo HEAD pin = `8ef874b`、学習側 numeric stack = run 7 実行 manifest の
   `environment_versions`（Drive 保全分。bootstrap が記帳する）
-- **ゲート**: VG-DET0 の実行 manifest と run 7 記帳値を項目ごとに照合し、
+- **ゲート（環境項目）**: VG-DET0 の実行 manifest と run 7 記帳値を項目ごとに照合し、
   **全一致が確認できた場合のみ** L1 不一致を「学習の非決定論」候補として扱える。
   1 項目でも不一致・または run 7 側が未記帳の項目が学習に影響しうる場合、
   L1 不一致の判定は **`confounded`**（§3）とする
+- **repo HEAD の扱い（宣言済みコード差分ゲート）**: §1-2 が vgdet0 プロファイルの
+  追加コミットを要求する以上、VG-DET0 の HEAD は `8ef874b` と**一致しないのが正常**
+  であり、HEAD の単純一致を環境項目に含めると `confounded` 以外へ到達できなくなる
+  （Codex 2026-08-23 第 2 巡 P1 指摘の採用）。代わりに
+  `git diff 8ef874b..<VG-DET0 HEAD>` が次のみで構成されることを実行前に機械確認する:
+  (a) `RUN_PROFILES` への `vgdet0` エントリ追加（値の拘束は §1-2 表が正）、
+  (b) 学習経路外のファイル（docs / VG-DET0 用 remeasure spec・runner 拡張 /
+  results 系）の追加・変更。
+  **学習経路のコード**（bootstrap の profile 表以外の本体・binarize・assemble・
+  DiffSinger pin・学習設定）に差分がある場合はゲート不一致 = `confounded` とする
 - **正直会計**: run 7 側で未記帳の環境項目（コンテナイメージ digest 等、実行
   manifest に無いもの）は「未制御」として列挙し、その存在自体が
   `bit_identical` 以外の裁定に限定を付す（未記帳項目は事後に同等と宣言しない）
