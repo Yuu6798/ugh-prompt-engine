@@ -249,7 +249,8 @@ rms/dur が両状態で完全一致するのは、これらが波形全体の集
 SIMD dispatch 状態（AVX512 有効/無効）は `gate_synth.py` の WAV 出力バイトに
 **実測で影響することを確認した**（新規知見——s3_record §2 の「実行環境が
 バイト一致に効く」という一般則を、D3 とは別の経路で追試・再確認した形）。
-しかし run4 環境契約を満たした状態（AVX512 無効化）でも**記録済み
+しかし**契約の SIMD 条項に相当する AVX512 無効化を近似適用した状態**
+（＝契約の充足ではない。上記「契約充足の主張範囲」を参照）でも**記録済み
 sha256 とは一致しなかった**（0/6 のまま）。したがって「環境契約の
 未充足だけが原因」という仮説は**本実測では反証**された——SIMD 状態は一因
 （かつ実測でサンプルの最大約 11% に影響する非小さい要因）ではあるが、
@@ -348,6 +349,7 @@ VG-DEBT-010 と同型の扱いである。
 | 2 | 凍結 hash が可変な台帳の中にしかなく、artifact と台帳の協調書き換えで素通り | 台帳外の独立アンカー `FROZEN_SHA256` を追加し二重照合化（3 凍結物すべて） |
 | 3 | 11%/±6LSB は再実行同士の比較値なのに歴史的不一致の規模として使っていた | 「記録済みとの差分は**未測定**」へ訂正し、測定値の適用範囲を JSON/report 双方に明記 |
 | 3 | 台帳が「環境契約を充足」と書くが実際は numpy 2.4.6 pin を欠く近似 | 「SIMD 条項の近似適用」へ訂正し `contract_compliance_scope` を新設 |
+| 4 | 「契約充足」の訂正が `note` 止まりで `evidence_delivered`・JSON item notes・report 本文に残存 | **ファミリー全数掃討**（下記「終端宣言」）|
 
 検証（Phase 5 時点）:
 
@@ -358,3 +360,18 @@ python -m pytest voice_genesis/foundry/tests/test_run4_provenance_closure.py \
     voice_genesis/foundry/tests/test_debt_ledger_shape.py tests/discipline -q
 python -m pytest --collect-only -q                             # collection error 0
 ```
+
+### 終端宣言: 「環境契約を充足」系の表現（2026-08-23）
+
+Codex 第 3–4 巡の指摘を受け、本 PR の成果物 3 ファイル
+（`debt_ledger.yaml` / `run4_provenance_closure_2026-08-23.json` /
+本 report）を `充足した状態` `を満たした状態` `契約充足後` `契約を満たし`
+で全数 grep し、**該当箇所をすべて「SIMD 条項の近似適用」へ訂正した**
+（台帳の `evidence_delivered` と `note`、JSON の item notes 2 件・
+`conclusion`・`verdict`、report 本文 2 箇所）。
+
+掃討後に残る唯一のヒットは `contract_compliance_scope` の
+「run4 環境契約の【充足】ではなく」という**否定文脈**であり、正しい記述である。
+
+以後この系統の表現を追加する場合は `contract_compliance_scope` と整合させること。
+本系統はこれをもって終端とする。
