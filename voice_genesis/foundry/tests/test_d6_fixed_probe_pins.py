@@ -64,6 +64,15 @@ def _expected_render_runtime() -> Dict[str, str]:
     return dict(pins["common_fixed"]["execution_profile"]["value"])
 
 
+def _expected_measurement_dependencies() -> Dict[str, str]:
+    pins = json.loads(d6_regenerate.FIXED_PROBE_PINS.read_text(encoding="utf-8"))
+    return dict(
+        pins["common_fixed"]["execution_profile"]["measurement_dependencies"][
+            "value"
+        ]
+    )
+
+
 D4_RESULTS_SHA256 = _sha256_file("voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json")
 SYNTHETIC_PINS_SHA256 = _sha256_file(
     "voice_genesis/foundry/debt/d6/s7_synthetic_calibration_output_pins.json"
@@ -403,6 +412,7 @@ def test_provision_builds_and_checks_complete_pinned_render_runtime() -> None:
         "numba==0.66.0",
         "librosa==0.11.0",
         "pyloudnorm==0.2.0",
+        "scipy==1.17.1",
     ):
         assert pin in text
     # import-only の環境検査ではなく、D4 が通常測定で呼ぶ librosa/numba 経路を
@@ -559,6 +569,7 @@ def _bind_regenerated_to_current_render_evidence(
             "candidate_ids": baseline["candidate_ids"],
             "analysis_stack": baseline["analysis_stack"],
             "runtime_stack": _expected_render_runtime(),
+            "measurement_dependency_stack": _expected_measurement_dependencies(),
             "n_groups": 10,
             "n_total_cells": 360,
             "n_total_measured": 360,
@@ -642,6 +653,7 @@ def test_regenerated_results_are_bound_to_current_render_manifests_and_materials
         d4_spec_sha=d4_spec_sha,
         rendered_groups=rendered_groups,
         expected_render_runtime=_expected_render_runtime(),
+        expected_measurement_dependencies=_expected_measurement_dependencies(),
     )
     assert set(evidence) == {
         f"{generation}_{speaker}" for generation, speaker in d6_regenerate.GROUPS
@@ -664,6 +676,7 @@ def test_regenerated_results_are_bound_to_current_render_manifests_and_materials
             d4_spec_sha=d4_spec_sha,
             rendered_groups=rendered_groups,
             expected_render_runtime=_expected_render_runtime(),
+            expected_measurement_dependencies=_expected_measurement_dependencies(),
         )
 
     tampered = json.loads(json.dumps(current))
@@ -678,6 +691,7 @@ def test_regenerated_results_are_bound_to_current_render_manifests_and_materials
             d4_spec_sha=d4_spec_sha,
             rendered_groups=rendered_groups,
             expected_render_runtime=_expected_render_runtime(),
+            expected_measurement_dependencies=_expected_measurement_dependencies(),
         )
 
 
@@ -707,6 +721,7 @@ def test_render_docs_must_match_the_pinned_execution_profile(tmp_path: Path) -> 
             d4_spec_sha=hashlib.sha256(d4_spec_bytes).hexdigest(),
             rendered_groups=rendered_groups,
             expected_render_runtime=_expected_render_runtime(),
+            expected_measurement_dependencies=_expected_measurement_dependencies(),
         )
 
 
@@ -728,6 +743,31 @@ def test_measurement_runtime_must_match_the_pinned_execution_profile(
             d4_spec_sha=hashlib.sha256(d4_spec_bytes).hexdigest(),
             rendered_groups=rendered_groups,
             expected_render_runtime=_expected_render_runtime(),
+            expected_measurement_dependencies=_expected_measurement_dependencies(),
+        )
+
+
+def test_measurement_dependencies_must_match_the_pinned_versions(
+    tmp_path: Path,
+) -> None:
+    baseline = json.loads(d6_regenerate.D4_BASELINE.read_text(encoding="utf-8"))
+    current = json.loads(json.dumps(baseline))
+    _current_path, rendered_groups = _bind_regenerated_to_current_render_evidence(
+        tmp_path, current
+    )
+    current["measurement_dependency_stack"]["scipy"] = "0.0.0"
+    d4_spec_bytes = d6_regenerate.D4_SPEC.read_bytes()
+    with pytest.raises(
+        d6_regenerate.RegenerationError, match="measurement dependency stack"
+    ):
+        d6_regenerate._validate_regenerated_provenance(
+            current,
+            baseline=baseline,
+            d4_spec=json.loads(d4_spec_bytes),
+            d4_spec_sha=hashlib.sha256(d4_spec_bytes).hexdigest(),
+            rendered_groups=rendered_groups,
+            expected_render_runtime=_expected_render_runtime(),
+            expected_measurement_dependencies=_expected_measurement_dependencies(),
         )
 
 
@@ -1071,6 +1111,12 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
     first_cell = next(iter(first_group["cells"].values()))
     first_cell["axes"]["excess_tail_voiced_ms"] += 100.0
     regenerated_path.write_text(json.dumps(baseline), encoding="utf-8")
+    prior_report = report_path.read_bytes()
+    prior_bundles = {
+        path.relative_to(report_path.parent): path.read_bytes()
+        for path in (report_path.parent / "d6_phase_b_evidence").rglob("*")
+        if path.is_file()
+    }
     with pytest.raises(d6_regenerate.RegenerationError, match="epsilon外"):
         d6_regenerate.compose_phase_b_reconciliation(
             regenerated_path,
@@ -1078,9 +1124,15 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
             real_path,
             real_manifest_path,
             recovered_acoustic,
-            tmp_path / "failed_phase_b.json",
+            report_path,
             rendered_groups,
         )
+    assert report_path.read_bytes() == prior_report
+    assert {
+        path.relative_to(report_path.parent): path.read_bytes()
+        for path in (report_path.parent / "d6_phase_b_evidence").rglob("*")
+        if path.is_file()
+    } == prior_bundles
 
     tampered_baseline = tmp_path / "tampered_d4_baseline.json"
     tampered_baseline.write_text(json.dumps(baseline), encoding="utf-8")

@@ -65,6 +65,7 @@ PHASE_B_REAL_RENDER_MANIFEST_PATH = (
     PHASE_B_EVIDENCE_PATH / "calibration_real_render_manifest.json"
 )
 _D4_RUNTIME_STACK_KEYS = {"python", "numpy", "onnxruntime", "soundfile", "PyYAML"}
+_D4_MEASUREMENT_DEPENDENCY_KEYS = {"pyloudnorm", "scipy"}
 _INTERNAL_SYNTHETIC_CALIBRATION_FLAG = "--internal-synthetic-calibration-out"
 
 GROUPS = (
@@ -758,6 +759,25 @@ def _execution_profile_from_pins(fixed_probe_pins: dict[str, Any]) -> dict[str, 
     return dict(profile)
 
 
+def _measurement_dependency_profile_from_pins(
+    fixed_probe_pins: dict[str, Any],
+) -> dict[str, str]:
+    """D4測定の数値経路へ入る追加依存を固定pinから取り出す。"""
+    profile = (
+        fixed_probe_pins.get("common_fixed", {})
+        .get("execution_profile", {})
+        .get("measurement_dependencies", {})
+        .get("value")
+    )
+    if (
+        not isinstance(profile, dict)
+        or set(profile) != _D4_MEASUREMENT_DEPENDENCY_KEYS
+        or any(not isinstance(value, str) or not value for value in profile.values())
+    ):
+        raise RegenerationError("Phase B: measurement dependency pin が固定形状でない")
+    return dict(profile)
+
+
 def _validate_regenerated_provenance(
     regenerated: dict[str, Any],
     *,
@@ -766,6 +786,7 @@ def _validate_regenerated_provenance(
     d4_spec_sha: str,
     rendered_groups: Sequence[GroupPaths],
     expected_render_runtime: dict[str, str],
+    expected_measurement_dependencies: dict[str, str],
     require_result_path_match: bool = True,
     bundle_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[Path, bytes]]:
@@ -806,6 +827,10 @@ def _validate_regenerated_provenance(
         raise RegenerationError(
             "Phase B: regenerated D4 measurement runtime_stack が"
             "common_fixed.execution_profile.value と不一致"
+        )
+    if regenerated.get("measurement_dependency_stack") != expected_measurement_dependencies:
+        raise RegenerationError(
+            "Phase B: regenerated D4 measurement dependency stack が固定pinと不一致"
         )
 
     expected_group_ids = {f"{generation}_{speaker}" for generation, speaker in GROUPS}
@@ -1329,6 +1354,9 @@ def validate_resolved_reconciliation(
         (Path(report_root).resolve() / fixed_probe_path).read_bytes()
     )
     expected_render_runtime = _execution_profile_from_pins(fixed_probe_pins)
+    expected_measurement_dependencies = _measurement_dependency_profile_from_pins(
+        fixed_probe_pins
+    )
     committed_groups = _committed_group_paths(
         report_root, provenance["groups"], bundle_id=bundle_id
     )
@@ -1339,6 +1367,7 @@ def validate_resolved_reconciliation(
         d4_spec_sha=hashlib.sha256(d4_spec_bytes).hexdigest(),
         rendered_groups=committed_groups,
         expected_render_runtime=expected_render_runtime,
+        expected_measurement_dependencies=expected_measurement_dependencies,
         require_result_path_match=False,
         bundle_id=bundle_id,
     )
@@ -1465,6 +1494,9 @@ def compose_phase_b_reconciliation(
     baseline_sha = hashlib.sha256(baseline_bytes).hexdigest()
     fixed_probe_pins = json.loads(FIXED_PROBE_PINS.read_bytes())
     expected_render_runtime = _execution_profile_from_pins(fixed_probe_pins)
+    expected_measurement_dependencies = _measurement_dependency_profile_from_pins(
+        fixed_probe_pins
+    )
     baseline_ref = fixed_probe_pins["production_cells"]["refs"]["d4_1_2_remeasurement"]
     if (
         baseline_ref.get("path") != "voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json"
@@ -1496,6 +1528,7 @@ def compose_phase_b_reconciliation(
         d4_spec_sha=d4_spec_sha,
         rendered_groups=rendered_groups,
         expected_render_runtime=expected_render_runtime,
+        expected_measurement_dependencies=expected_measurement_dependencies,
     )
     evidence_artifacts[PHASE_B_RESULTS_PATH] = regenerated_bytes
     expected_trf_sha = d4_spec["pins"]["trf_measurement_spec_1_2_sha256"]
@@ -1642,6 +1675,11 @@ def compose_phase_b_reconciliation(
     report_payload = (
         json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     ).encode("utf-8")
+    if reference_mismatches:
+        raise RegenerationError(
+            "Phase B: reference_output がepsilon外 "
+            f"{reference_mismatches}/360。既存の正典report/bundleは変更しない"
+        )
     _publish_phase_b_bundle(
         Path(out_path),
         versioned_artifacts,
@@ -1656,10 +1694,6 @@ def compose_phase_b_reconciliation(
             rendered_groups,
         ),
     )
-    if reference_mismatches:
-        raise RegenerationError(
-            f"Phase B: reference_output がepsilon外 {reference_mismatches}/360。詳細は {out_path}"
-        )
     return report
 
 

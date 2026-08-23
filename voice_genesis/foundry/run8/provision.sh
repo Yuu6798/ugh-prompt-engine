@@ -221,7 +221,7 @@ done <<< "$STAGE"
 echo "| 4. ANALYSIS_STACK_PIN（測定側インタプリタ）"
 python - <<'PY'
 import importlib.metadata as md, subprocess, sys
-PIN = {"numba": "0.66.0", "librosa": "0.11.0", "numpy": "2.4.6", "pyloudnorm": "0.2.0"}
+PIN = {"numba": "0.66.0", "librosa": "0.11.0", "numpy": "2.4.6", "pyloudnorm": "0.2.0", "scipy": "1.17.1"}
 bad = {p: md.version(p) for p in PIN if md.version(p) != PIN[p]}
 if not bad:
     print("  analysis stack OK   " + " / ".join(f"{k} {v}" for k, v in PIN.items()))
@@ -265,7 +265,7 @@ else
     if [ "$RENDER_FAIL" -eq 0 ]; then
       "$RENDER_VENV/bin/python" -m pip -q install \
         "numpy==2.4.6" "onnxruntime==1.29.0" "soundfile==0.14.0" "PyYAML==6.0.1" \
-        "numba==0.66.0" "librosa==0.11.0" "pyloudnorm==0.2.0" \
+        "numba==0.66.0" "librosa==0.11.0" "pyloudnorm==0.2.0" "scipy==1.17.1" \
         >/dev/null 2>&1 || RENDER_FAIL=1
     fi
   fi
@@ -284,6 +284,7 @@ pin = {
     "numpy": "2.4.6",
     "onnxruntime": "1.29.0",
     "pyloudnorm": "0.2.0",
+    "scipy": "1.17.1",
     "soundfile": "0.14.0",
     "PyYAML": "6.0.1",
     "python": "3.11.15",
@@ -291,7 +292,7 @@ pin = {
 observed = {name: md.version(name) for name in pin if name != "python"}
 observed["python"] = platform.python_version()
 assert observed == pin, (observed, pin)
-import librosa, numba, numpy, onnxruntime, pyloudnorm, soundfile, yaml  # noqa: F401
+import librosa, numba, numpy, onnxruntime, pyloudnorm, scipy, soundfile, yaml  # noqa: F401
 
 # `d4_runner.py measure` が実際に通る依存経路を provision 時に 1 セル踏む。
 # import の成功だけでは、librosa.pyin が使う numba stack の破損を検出できない。
