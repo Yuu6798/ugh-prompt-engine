@@ -373,10 +373,11 @@
         "pct_differing_samples": 10.9,
         "max_abs_diff_lsb": 6,
         "diff_distribution_note": "非ゼロ差分の約93%（107037/113358）は ±1 LSB。残りは ±2〜±6 の小さいテール。",
-        "interpretation": "AVX512 dispatch の有無だけで 1039872 サンプル中 約11% が ±1〜6 LSB 級で変化する——D3 の『1/1,524,000 サンプル・1 LSB』（WORLD ボコーダ単発合成での境界条件依存の希少な分岐）より遥かに広範囲に影響する。これは DiffSinger の reflow/diffusion サンプリングが多段の反復推論であり、各ステップの微小な浮動小数点差が後続ステップへ伝播・蓄積するため（1回の合成で発生する分岐点の数が WORLD 単発合成より遥かに多い）と考えられる。rms/dur が両状態で完全一致するのは、これらが波形全体の集約統計量であり ±数LSB のサンプル単位ノイズには鈍感なため。"
+        "interpretation": "AVX512 dispatch の有無だけで 1039872 サンプル中 約11% が ±1〜6 LSB 級で変化する——D3 の『1/1,524,000 サンプル・1 LSB』（WORLD ボコーダ単発合成での境界条件依存の希少な分岐）より遥かに広範囲に影響する。これは DiffSinger の reflow/diffusion サンプリングが多段の反復推論であり、各ステップの微小な浮動小数点差が後続ステップへ伝播・蓄積するため（1回の合成で発生する分岐点の数が WORLD 単発合成より遥かに多い）と考えられる。rms/dur が両状態で完全一致するのは、これらが波形全体の集約統計量であり ±数LSB のサンプル単位ノイズには鈍感なため。",
+        "scope_warning": "本測定は【再実行同士】（Phase2 AVX512有効 vs Phase4 AVX512無効）の比較である。記録済み run4 WAV との差分ではない（波形実体が無く測定不能）。歴史的不一致の規模の根拠として引用してはならない。"
       }
     },
-    "conclusion": "SIMD dispatch 状態（AVX512有効/無効）は gate_synth.py の WAV 出力バイトに実測で影響することを確認した（新規知見——s3_record §2 の『実行環境がバイト一致に効く』という一般則を、D3 とは別の経路（DiffSinger reflow acoustic 合成）で追試・再確認した形）。しかし run4環境契約（X86_V4無効化=AVX512無効化）を満たした状態でも run4 当時の記録済み sha256 とは一致しなかった（0/6のまま）。したがって『環境契約の未充足だけが原因』という仮説は本実測では反証された——SIMD状態は一因（かつ実測で最大11%のサンプルに影響する非小さい要因）ではあるが、単独では run4 当時バイトの再現を説明・達成するには不十分で、他の未特定要因が残っている。",
+    "conclusion": "SIMD dispatch 状態（AVX512有効/無効）は gate_synth.py の WAV 出力バイトに実測で影響することを確認した（新規知見——s3_record §2 の『実行環境がバイト一致に効く』という一般則を、D3 とは別の経路（DiffSinger reflow acoustic 合成）で追試・再確認した形）。しかし契約の SIMD 条項に相当する AVX512 無効化を近似適用した状態でも（契約そのものの充足ではない——contract_compliance_scope 参照） run4 当時の記録済み sha256 とは一致しなかった（0/6のまま）。したがって『環境契約の未充足だけが原因』という仮説は本実測では反証された——SIMD状態は一因（かつ実測で最大11%のサンプルに影響する非小さい要因）ではあるが、単独では run4 当時バイトの再現を説明・達成するには不十分で、他の未特定要因が残っている。",
     "other_uncontrolled_factors_enumerated_not_swept": [
       "onnxruntime バージョン: 本実測は D4（run5-7測定）のrender_stack pinに合わせ1.29.0を使用。run4実行当時のPodが同一版だったという記録・証拠は無い。",
       "DiffSinger (openvpi) revision: 本実測はD4と同じe2307b1を使用。run4実行当時のgit revisionはgate40k.log/gate_run3_anchor_v2.logのいずれにも記録が無く不明（既存記録の指摘どおり）。",
@@ -384,6 +385,7 @@
       "acoustic ONNX export 時のデバイス（GPU vs CPU）: run4実行環境はRunPod GPU Pod（s3-run4-v2）であり、config.yamlのpl_trainer_accelerator: auto や学習自体がGPU実行だったことから、export.py実行時もCUDA上でcheckpointをロードしtorch.onnx.exportをトレースした可能性が高い（gate40k.logにdevice指定の明記は無いため断定はできない）。本実測はtorch 2.13.0+cpuというCPU専用ビルドでexportを行っており、CUDA vs CPUのトレース経路差（cuDNN kernel由来の定数畳み込み値の丸め差等）がONNXグラフの定数値レベルで生じ得る——これは1番目のacoustic.onnx sha自体が当時バイトと異なる可能性の有力候補であり、SIMD要因より上流（export段）に位置する。宣言のみに留め、GPU環境での再exportは本実測のスコープ外（GPU環境が本セッションに無いため実行不能）。",
       "OS/libm/コンテナベースイメージの差: 本実測環境（Linux 6.18.44-fc-v21 x86_64、このセッションのコンテナ）と run4実行時のRunPod Podのベースイメージは別物であり、libmの浮動小数点関数実装差も候補として残る。"
     ],
-    "verdict": "run4当時バイトの再現は本環境では未達（0/6）。差分はサンプルの約11%・最大±6LSBという小さいが非ゼロの規模であり、構造的破損や別内容の生成ではない。境界宣言としてこれ以上の掃引（onnxruntime版/DiffSinger revision/GPU export環境の用意）は本実測のスコープ外とし、item 1（acoustic ONNX sha）は measured_only に据え置く。"
+    "verdict": "run4 当時バイトの再現は本環境では未達（0/6）。【記録済み WAV との差分の規模は未測定】——記録済み run4 anchor WAV の波形実体は repo にも本セッションにも存在せず（残っているのは sha256 と rms/dur の記録のみ）、サンプルレベルの比較ができないためである。記録済みとの関係で言えるのは rms（4桁）・dur（3桁）・ファイルサイズが一致することまでで、これは『全く別内容の生成ではない』という限定的な所見に留まる。なお sample_level_divergence_measurement の 約11%・最大±6LSB は 【2026-08-23 の再実行同士（AVX512 有効 vs 無効）】の比較値であり、歴史的不一致の規模を特徴づけるものではない（PR #307 Codex 第3巡 P2 指摘により訂正）。境界宣言としてこれ以上の掃引（onnxruntime版/DiffSinger revision/GPU export環境の用意）は本実測のスコープ外とし、item 1（acoustic ONNX sha）は measured_only に据え置く。",
+    "contract_compliance_scope": "本追試は run4 環境契約の【充足】ではなく、契約の SIMD 条項に相当する AVX512 無効化の【近似適用】である（PR #307 Codex 第3巡 P2 指摘により明記）。理由: (a) S3_RUN4_RUNBOOK.md §2.2 の 4 ゲートは D3 再生成パイプラインにスコープされており、本経路（gate_synth_run4.py による anchor 合成）には一切配線されていない（gate_synth_simd_gate_check で grep 実測済み）。(b) 契約は numpy 2.4.6 の stack pin を含む 4 ゲート全体を要求するが、本実測の venv は DiffSinger 互換のため numpy<2（1.26.4）に固定されており stack pin を満たさない。(c) numpy 1.26.4 は X86_V3/X86_V4 というトークン語彙自体を持たないため、個別 AVX512 トークン列で dispatch を AVX2 止まりに落とす代替手段を用いた（simd_verification に実測記録）。したがって『環境契約を満たした上での再試行』と読んではならない。"
   }
 }
