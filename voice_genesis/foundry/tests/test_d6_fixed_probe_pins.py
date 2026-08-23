@@ -450,6 +450,80 @@ def test_real_render_reconciliation_compares_all_14_sample_pins(tmp_path: Path) 
         d6_regenerate.reconcile_real_render_manifest(observed_path, tmp_path / "must-not-pass.json")
 
 
+def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    regenerated_path = tmp_path / "d6_regenerated_results.json"
+    baseline = json.loads(d6_regenerate.D4_BASELINE.read_text(encoding="utf-8"))
+    regenerated_path.write_text(json.dumps(baseline), encoding="utf-8")
+    synthetic_path = tmp_path / "calibration_synthetic_reconciliation.json"
+    synthetic_path.write_text(
+        json.dumps(
+            {
+                "schema": "vg-d6-synthetic-calibration-reconciliation/0.1",
+                "verdict": "PASS",
+                "value": {"matched_conditions": 13, "mismatches": []},
+                "execution_commit": "a" * 40,
+                "output_pins": {
+                    "sha256": d6_regenerate.sha256_file(d6_regenerate.CALIBRATION_PINS)
+                },
+                "runner": {"sha256": d6_regenerate.sha256_file(Path(d6_regenerate.__file__))},
+            }
+        ),
+        encoding="utf-8",
+    )
+    real_path = tmp_path / "calibration_real_render_reconciliation.json"
+    real_path.write_text(
+        json.dumps(
+            {
+                "schema": "vg-d6-real-render-calibration-reconciliation/0.1",
+                "verdict": "PASS",
+                "value": {
+                    "n_rendered": 11,
+                    "n_compared": 14,
+                    "samples_matches": 14,
+                    "samples_mismatches": [],
+                    "wav_container_matches": 0,
+                    "wav_container_mismatches": 14,
+                },
+                "baseline_manifest_sha256": REAL_RENDER_MANIFEST_SHA256,
+                "regenerated_manifest_sha256": "b" * 64,
+                "recovered_acoustic_sha256": d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256,
+                "historical_source_commit": d6_regenerate.REAL_RENDER_HISTORICAL_COMMIT,
+                "execution_commit": "a" * 40,
+            }
+        ),
+        encoding="utf-8",
+    )
+    recovered_acoustic = tmp_path / "operator-recovered.onnx"
+    monkeypatch.setattr(d6_regenerate, "_verify_file_pin", lambda *_args, **_kwargs: None)
+    report = d6_regenerate.compose_phase_b_reconciliation(
+        regenerated_path,
+        synthetic_path,
+        real_path,
+        recovered_acoustic,
+        tmp_path / "phase_b.json",
+    )
+    _assert_real_render_recovery(report["real_render_recovery"])
+    _assert_pending_or_resolved(
+        report["reproducibility_reconciliation"],
+        context="reproducibility_reconciliation",
+    )
+
+    first_group = next(iter(baseline["groups"].values()))
+    first_cell = next(iter(first_group["cells"].values()))
+    first_cell["axes"]["excess_tail_voiced_ms"] += 100.0
+    regenerated_path.write_text(json.dumps(baseline), encoding="utf-8")
+    with pytest.raises(d6_regenerate.RegenerationError, match="epsilon外"):
+        d6_regenerate.compose_phase_b_reconciliation(
+            regenerated_path,
+            synthetic_path,
+            real_path,
+            recovered_acoustic,
+            tmp_path / "failed_phase_b.json",
+        )
+
+
 def test_missing_or_reexported_real_render_acoustic_is_rejected(tmp_path: Path) -> None:
     missing = tmp_path / "missing.onnx"
     with pytest.raises(d6_regenerate.RegenerationError, match="必須の固定資産が無い"):
@@ -622,6 +696,8 @@ def _assert_complete_reconciliation_value(value: Any) -> None:
         "max_abs_delta_by_axis",
     }
     _assert_count_reconciliation(reference, expected=360, matches_key="n_within_epsilon")
+    assert reference["n_within_epsilon"] == 360
+    assert reference["n_mismatches"] == 0
     assert reference["baseline_results_sha256"] == D4_RESULTS_SHA256
     assert SHA256_RE.fullmatch(reference["regenerated_results_sha256"])
     assert set(reference["max_abs_delta_by_axis"]) == {
@@ -657,6 +733,7 @@ def _assert_complete_reconciliation_value(value: Any) -> None:
         "reconciliation_sha256",
     }
     _assert_count_reconciliation(synthetic, expected=13, matches_key="n_matches")
+    assert synthetic["n_matches"] == 13 and synthetic["n_mismatches"] == 0
     assert synthetic["baseline_pins_sha256"] == SYNTHETIC_PINS_SHA256
     assert SHA256_RE.fullmatch(synthetic["reconciliation_sha256"])
 
@@ -670,6 +747,7 @@ def _assert_complete_reconciliation_value(value: Any) -> None:
         "recovery_acoustic_sha256",
     }
     _assert_count_reconciliation(real_render, expected=14, matches_key="n_matches")
+    assert real_render["n_matches"] == 14 and real_render["n_mismatches"] == 0
     assert real_render["baseline_manifest_sha256"] == REAL_RENDER_MANIFEST_SHA256
     assert SHA256_RE.fullmatch(real_render["regenerated_manifest_sha256"])
     assert real_render["recovery_acoustic_sha256"] == (d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256)

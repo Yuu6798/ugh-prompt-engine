@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import shlex
 import shutil
@@ -44,6 +45,13 @@ FIXED_PROBE_PINS = HERE / "s7_fixed_probe_pins.json"
 REAL_RENDER_BASELINE = FOUNDRY / "results_s7" / "s7_b1_real_render_manifest.json"
 REAL_RENDER_HISTORICAL_COMMIT = "8a14ca97eda1a6bf96f956a8173f512f0cdb50ae"
 REAL_RENDER_ACOUSTIC_SHA256 = "f0e71f06b16e448622f3e0d9b977a26fbaa306bb608a08ed26efeb871332a7d1"
+D4_BASELINE = FOUNDRY / "debt" / "d4" / "d4_results_2026-08-22.json"
+TRF_SPEC = FOUNDRY / "results_s7" / "trf_measurement_spec_1_2.json"
+RECONCILIATION_AXES = (
+    "excess_tail_voiced_ms",
+    "release_after_score_boundary_ms",
+    "tail_f0_persistence",
+)
 
 GROUPS = (
     ("run5", "ritsu"),
@@ -80,6 +88,14 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _is_lower_hex(value: Any, length: int) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == length
+        and all(char in "0123456789abcdef" for char in value)
+    )
 
 
 def verify_runner_pins() -> None:
@@ -495,6 +511,183 @@ def reconcile_real_render_manifest(observed_path: Path, report_path: Path) -> di
     return report
 
 
+def _measured_cells(
+    results: dict[str, Any], *, label: str
+) -> dict[tuple[str, str], dict[str, Any]]:
+    expected_groups = {f"{generation}_{speaker}" for generation, speaker in GROUPS}
+    groups = results.get("groups")
+    if not isinstance(groups, dict) or set(groups) != expected_groups:
+        raise RegenerationError(f"{label}: D4 group集合が固定10群と一致しない")
+    cells: dict[tuple[str, str], dict[str, Any]] = {}
+    for group_id, group in groups.items():
+        group_cells = group.get("cells")
+        if not isinstance(group_cells, dict) or len(group_cells) != 36:
+            raise RegenerationError(f"{label}: {group_id} が固定36セルでない")
+        for cell_id, cell in group_cells.items():
+            if cell.get("outcome") != "measured":
+                raise RegenerationError(f"{label}: {group_id}/{cell_id} がmeasuredでない")
+            if set(cell.get("axes", {})) != set(RECONCILIATION_AXES):
+                raise RegenerationError(f"{label}: {group_id}/{cell_id} の3軸が不完全")
+            cells[(group_id, cell_id)] = cell
+    if len(cells) != 360:
+        raise RegenerationError(f"{label}: measured cell数 {len(cells)} != 360")
+    return cells
+
+
+def compose_phase_b_reconciliation(
+    regenerated_results_path: Path,
+    synthetic_report_path: Path,
+    real_render_report_path: Path,
+    recovered_acoustic_path: Path,
+    out_path: Path,
+) -> dict[str, Any]:
+    """各段の実測をD6の唯一のPhase B正規形へ合成し、false closureを拒否する。"""
+    _verify_file_pin(
+        recovered_acoustic_path,
+        REAL_RENDER_ACOUSTIC_SHA256,
+        label="historical acoustic ONNX at reconciliation",
+    )
+    baseline = json.loads(D4_BASELINE.read_text(encoding="utf-8"))
+    regenerated = json.loads(Path(regenerated_results_path).read_text(encoding="utf-8"))
+    expected_cells = _measured_cells(baseline, label="baseline")
+    actual_cells = _measured_cells(regenerated, label="regenerated")
+    if expected_cells.keys() != actual_cells.keys():
+        raise RegenerationError("Phase B: baseline/regenerated cell集合が一致しない")
+
+    d4_spec = json.loads(D4_SPEC.read_text(encoding="utf-8"))
+    expected_trf_sha = d4_spec["pins"]["trf_measurement_spec_1_2_sha256"]
+    if sha256_file(TRF_SPEC) != expected_trf_sha:
+        raise RegenerationError("Phase B: TRF measurement spec 1.2 がD4 pinと一致しない")
+    trf_spec = json.loads(TRF_SPEC.read_text(encoding="utf-8"))
+    epsilons = {axis: float(trf_spec["axes"][axis]["epsilon"]) for axis in RECONCILIATION_AXES}
+    max_deltas = {axis: 0.0 for axis in RECONCILIATION_AXES}
+    n_within_epsilon = samples_matches = wav_matches = 0
+    for key, expected in expected_cells.items():
+        actual = actual_cells[key]
+        within = True
+        for axis in RECONCILIATION_AXES:
+            expected_value = float(expected["axes"][axis])
+            actual_value = float(actual["axes"][axis])
+            if not (math.isfinite(expected_value) and math.isfinite(actual_value)):
+                raise RegenerationError(f"Phase B: {key} {axis} が有限値でない")
+            delta = abs(actual_value - expected_value)
+            max_deltas[axis] = max(max_deltas[axis], delta)
+            within = within and delta <= epsilons[axis]
+        n_within_epsilon += int(within)
+        samples_matches += int(actual.get("samples_sha256") == expected.get("samples_sha256"))
+        wav_matches += int(actual.get("wav_sha256") == expected.get("wav_sha256"))
+
+    synthetic = json.loads(Path(synthetic_report_path).read_text(encoding="utf-8"))
+    if (
+        synthetic.get("schema") != "vg-d6-synthetic-calibration-reconciliation/0.1"
+        or synthetic.get("verdict") != "PASS"
+        or synthetic.get("value", {}).get("matched_conditions") != 13
+        or synthetic.get("value", {}).get("mismatches") != []
+        or synthetic.get("output_pins", {}).get("sha256") != sha256_file(CALIBRATION_PINS)
+        or synthetic.get("runner", {}).get("sha256") != sha256_file(Path(__file__).resolve())
+        or not _is_lower_hex(synthetic.get("execution_commit"), 40)
+    ):
+        raise RegenerationError("Phase B: synthetic calibration 13条件の照合がPASSでない")
+    real_render = json.loads(Path(real_render_report_path).read_text(encoding="utf-8"))
+    real_value = real_render.get("value", {})
+    if (
+        real_render.get("schema") != "vg-d6-real-render-calibration-reconciliation/0.1"
+        or real_render.get("verdict") != "PASS"
+        or real_value.get("n_compared") != 14
+        or real_value.get("samples_matches") != 14
+        or real_value.get("samples_mismatches") != []
+        or real_render.get("recovered_acoustic_sha256") != REAL_RENDER_ACOUSTIC_SHA256
+        or real_render.get("baseline_manifest_sha256") != sha256_file(REAL_RENDER_BASELINE)
+        or real_render.get("historical_source_commit") != REAL_RENDER_HISTORICAL_COMMIT
+        or not _is_lower_hex(real_render.get("regenerated_manifest_sha256"), 64)
+        or not _is_lower_hex(real_render.get("execution_commit"), 40)
+    ):
+        raise RegenerationError("Phase B: real-render calibration 14条件の照合がPASSでない")
+
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    baseline_sha = sha256_file(D4_BASELINE)
+    regenerated_sha = sha256_file(Path(regenerated_results_path))
+    reference_mismatches = 360 - n_within_epsilon
+    value = {
+        "reference_output_remeasurement": {
+            "n_compared": 360,
+            "n_within_epsilon": n_within_epsilon,
+            "n_mismatches": reference_mismatches,
+            "baseline_results_sha256": baseline_sha,
+            "regenerated_results_sha256": regenerated_sha,
+            "max_abs_delta_by_axis": max_deltas,
+        },
+        "samples_sha256": {
+            "n_compared": 360,
+            "n_matches": samples_matches,
+            "n_mismatches": 360 - samples_matches,
+            "baseline_inventory_sha256": baseline_sha,
+            "regenerated_inventory_sha256": regenerated_sha,
+        },
+        "wav_sha256": {
+            "n_compared": 360,
+            "n_matches": wav_matches,
+            "n_mismatches": 360 - wav_matches,
+            "baseline_inventory_sha256": baseline_sha,
+            "regenerated_inventory_sha256": regenerated_sha,
+        },
+        "calibration": {
+            "synthetic": {
+                "n_compared": 13,
+                "n_matches": 13,
+                "n_mismatches": 0,
+                "baseline_pins_sha256": sha256_file(CALIBRATION_PINS),
+                "reconciliation_sha256": sha256_file(Path(synthetic_report_path)),
+            },
+            "real_render": {
+                "n_compared": 14,
+                "n_matches": 14,
+                "n_mismatches": 0,
+                "baseline_manifest_sha256": sha256_file(REAL_RENDER_BASELINE),
+                "regenerated_manifest_sha256": real_render["regenerated_manifest_sha256"],
+                "recovery_acoustic_sha256": REAL_RENDER_ACOUSTIC_SHA256,
+            },
+        },
+    }
+    recovery = json.loads(FIXED_PROBE_PINS.read_text(encoding="utf-8"))["calibration_set"][
+        "real_render_recovery"
+    ]
+    recovery["status"] = "RECOVERED_AND_RECONCILED"
+    recovery["required_asset"]["source"] = str(Path(recovered_acoustic_path).resolve())
+    recovery["value"] = {
+        "execution_commit": commit,
+        "recovered_asset_sha256": REAL_RENDER_ACOUSTIC_SHA256,
+        "baseline_manifest_sha256": sha256_file(REAL_RENDER_BASELINE),
+        "regenerated_manifest_sha256": real_render["regenerated_manifest_sha256"],
+        "n_compared": 14,
+        "n_matches": 14,
+        "n_mismatches": 0,
+    }
+    report = {
+        "schema": "vg-d6-phase-b-reconciliation/0.1",
+        "real_render_recovery": recovery,
+        "reproducibility_reconciliation": {
+            "status": "RESOLVED" if reference_mismatches == 0 else "FAILED_RECONCILIATION",
+            "execution_commit": commit,
+            "value": value,
+        },
+    }
+    Path(out_path).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    if reference_mismatches:
+        raise RegenerationError(
+            f"Phase B: reference_output がepsilon外 {reference_mismatches}/360。詳細は {out_path}"
+        )
+    return report
+
+
 def _float32_wav_bytes(samples: Any, sample_rate: int) -> tuple[bytes, bytes, bytes]:
     """IEEE float32 mono WAV を PEAK/時刻 chunk なしで決定論的に作る。
 
@@ -665,6 +858,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     for render in renders:
         _run(render)
     _run(build_measure_command(root))
+    compose_phase_b_reconciliation(
+        root / "d6_regenerated_results.json",
+        root / "calibration_synthetic_reconciliation.json",
+        root / "calibration_real_render_reconciliation.json",
+        real_render_acoustic,
+        root / "d6_phase_b_reconciliation.json",
+    )
     return 0
 
 
