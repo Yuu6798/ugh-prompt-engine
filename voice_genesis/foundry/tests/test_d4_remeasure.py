@@ -1571,14 +1571,15 @@ def test_cmd_measure_marks_complete_for_all_ten_groups(
     assert set(doc["runtime_stack"]) == {"python", *d4._RUNTIME_STACK_PACKAGES}
 
 
-# --- 5c. render の atomic 公開（PR #306 レビュー第9巡 P1） ---------------------
+# --- 5c. render の atomic 公開（PR #306 レビュー第9巡 P1・第10巡 P1 で単一
+#         トランザクションへ拡張） ---------------------------------------------
 #
-# `_new_staging_dir` / `_atomic_publish_dir` は単体で、staging → 最終位置の
-# `cmd_render` 経由の一括公開は monkeypatch で `xm.verify_export_manifest` /
-# `probe0b.load_gate_synth` / `probe0b.run_group` を差し替えて確認する
-# （ファイル冒頭の docstring どおり、本ファイルは onnxruntime 非依存を維持する
-# —`load_gate_synth` を mock するのはこの理由もある。実 checkpoint 実体は
-# 一切要らない）。
+# `_new_staging_dir` / `_atomic_publish_render_set` は単体で、staging → 最終
+# 位置の `cmd_render` 経由の一括公開は monkeypatch で `xm.verify_export_
+# manifest` / `probe0b.load_gate_synth` / `probe0b.run_group` を差し替えて
+# 確認する（ファイル冒頭の docstring どおり、本ファイルは onnxruntime 非依存を
+# 維持する —`load_gate_synth` を mock するのはこの理由もある。実 checkpoint
+# 実体は一切要らない）。
 
 
 def test_new_staging_dir_creates_unique_sibling_directory(tmp_path: Path) -> None:
@@ -1590,66 +1591,118 @@ def test_new_staging_dir_creates_unique_sibling_directory(tmp_path: Path) -> Non
     assert staging != final_dir
 
 
-def test_atomic_publish_dir_moves_staging_into_place_when_final_absent(tmp_path: Path) -> None:
-    final_dir = tmp_path / "out"
-    staging = d4._new_staging_dir(final_dir)
-    (staging / "cell.wav").write_bytes(b"NEW")
-
-    d4._atomic_publish_dir(staging, final_dir)
-
-    assert final_dir.is_dir()
-    assert (final_dir / "cell.wav").read_bytes() == b"NEW"
-    assert not staging.exists()
-
-
-def test_atomic_publish_dir_replaces_existing_final_dir_and_removes_backup(
+def test_atomic_publish_render_set_places_all_points_when_finals_absent(
     tmp_path: Path,
 ) -> None:
-    """既存セットがある場合: 退避 → 置換 → 退避削除の3段で公開する。"""
-    final_dir = tmp_path / "out"
-    final_dir.mkdir()
-    (final_dir / "old.wav").write_bytes(b"OLD")
+    """3点（WAV dir・群 doc・manifest）とも最終物が無ければ、staging 側の
+    内容がそのまま3点とも最終位置へ配置される。"""
+    wav_dir = tmp_path / "out"
+    staging_wav = d4._new_staging_dir(wav_dir)
+    (staging_wav / "cell.wav").write_bytes(b"NEW-WAV")
+    staging_doc = tmp_path / f"{staging_wav.name}.doc.json"
+    staging_doc.write_text('{"v": "new-doc"}', encoding="utf-8")
+    staging_manifest = tmp_path / f"{staging_wav.name}.manifest.json"
+    staging_manifest.write_text('{"v": "new-manifest"}', encoding="utf-8")
+    doc_path = tmp_path / "run5_pjs.json"
+    manifest_path = tmp_path / "run5_pjs_render_manifest.json"
 
-    staging = d4._new_staging_dir(final_dir)
-    (staging / "new.wav").write_bytes(b"NEW")
+    d4._atomic_publish_render_set([
+        (staging_wav, wav_dir, "dir"),
+        (staging_doc, doc_path, "file"),
+        (staging_manifest, manifest_path, "file"),
+    ])
 
-    d4._atomic_publish_dir(staging, final_dir)
+    assert (wav_dir / "cell.wav").read_bytes() == b"NEW-WAV"
+    assert doc_path.read_text(encoding="utf-8") == '{"v": "new-doc"}'
+    assert manifest_path.read_text(encoding="utf-8") == '{"v": "new-manifest"}'
+    assert not staging_wav.exists()
+    assert not staging_doc.exists()
+    assert not staging_manifest.exists()
 
-    assert final_dir.is_dir()
-    assert (final_dir / "new.wav").read_bytes() == b"NEW"
-    assert not (final_dir / "old.wav").exists()
-    leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(".out.pre-publish-")]
+
+def test_atomic_publish_render_set_replaces_existing_set_and_removes_backups(
+    tmp_path: Path,
+) -> None:
+    """既存の3点セットがある場合: 各点を退避 → 置換 → 退避削除の3段で公開する。"""
+    wav_dir = tmp_path / "out"
+    wav_dir.mkdir()
+    (wav_dir / "old.wav").write_bytes(b"OLD-WAV")
+    doc_path = tmp_path / "run5_pjs.json"
+    doc_path.write_text('{"v": "old-doc"}', encoding="utf-8")
+    manifest_path = tmp_path / "run5_pjs_render_manifest.json"
+    manifest_path.write_text('{"v": "old-manifest"}', encoding="utf-8")
+
+    staging_wav = d4._new_staging_dir(wav_dir)
+    (staging_wav / "new.wav").write_bytes(b"NEW-WAV")
+    staging_doc = tmp_path / f"{staging_wav.name}.doc.json"
+    staging_doc.write_text('{"v": "new-doc"}', encoding="utf-8")
+    staging_manifest = tmp_path / f"{staging_wav.name}.manifest.json"
+    staging_manifest.write_text('{"v": "new-manifest"}', encoding="utf-8")
+
+    d4._atomic_publish_render_set([
+        (staging_wav, wav_dir, "dir"),
+        (staging_doc, doc_path, "file"),
+        (staging_manifest, manifest_path, "file"),
+    ])
+
+    assert (wav_dir / "new.wav").read_bytes() == b"NEW-WAV"
+    assert not (wav_dir / "old.wav").exists()
+    assert doc_path.read_text(encoding="utf-8") == '{"v": "new-doc"}'
+    assert manifest_path.read_text(encoding="utf-8") == '{"v": "new-manifest"}'
+    leftovers = [p for p in tmp_path.iterdir() if ".pre-publish-" in p.name]
     assert leftovers == []
 
 
-def test_atomic_publish_dir_rolls_back_old_set_when_replace_fails(
+def test_atomic_publish_render_set_rolls_back_all_points_when_one_placement_fails(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """本番置換段（退避済みの空いた最終位置への rename）が失敗したら、退避して
-    おいた旧セットを最終位置へ戻すロールバックを試みる。"""
-    final_dir = tmp_path / "out"
-    final_dir.mkdir()
-    (final_dir / "old.wav").write_bytes(b"OLD")
+    """単一トランザクション公開の回帰（PR #306 レビュー第10巡 P1）:
+    3点のうち 1 点（ここでは群 doc）の最終配置が失敗したら、既に配置できて
+    しまった点（WAV dir）も staging 側へ戻し、退避しておいた旧3点セットを
+    全点ぶん最終位置へ戻す——「全部公開されるか、1 つも公開されないか」の
+    2状態しか許さず、部分公開（WAV だけ新しく doc/manifest は古いまま等）を
+    起こさない。"""
+    wav_dir = tmp_path / "out"
+    wav_dir.mkdir()
+    (wav_dir / "old.wav").write_bytes(b"OLD-WAV")
+    doc_path = tmp_path / "run5_pjs.json"
+    doc_path.write_text('{"v": "old-doc"}', encoding="utf-8")
+    manifest_path = tmp_path / "run5_pjs_render_manifest.json"
+    manifest_path.write_text('{"v": "old-manifest"}', encoding="utf-8")
 
-    staging = d4._new_staging_dir(final_dir)
-    (staging / "new.wav").write_bytes(b"NEW")
+    staging_wav = d4._new_staging_dir(wav_dir)
+    (staging_wav / "new.wav").write_bytes(b"NEW-WAV")
+    staging_doc = tmp_path / f"{staging_wav.name}.doc.json"
+    staging_doc.write_text('{"v": "new-doc"}', encoding="utf-8")
+    staging_manifest = tmp_path / f"{staging_wav.name}.manifest.json"
+    staging_manifest.write_text('{"v": "new-manifest"}', encoding="utf-8")
 
     real_replace = d4.os.replace
     call_count = {"n": 0}
 
     def _flaky_replace(src, dst):
         call_count["n"] += 1
-        if call_count["n"] == 2:  # 1 回目 = 旧セット退避（成功させる）。
-            raise OSError("synthetic replace failure")  # 2 回目 = 本番置換を失敗させる。
+        # 呼び出し順: 1-3 回目 = 3点の退避（成功させる）。4 回目 = WAV dir の
+        # 本番配置（成功させる）。5 回目 = 群 doc の本番配置（ここで失敗させる
+        # — コーディネータ指定シナリオ「doc 書込を失敗させる」）。
+        if call_count["n"] == 5:
+            raise OSError("synthetic doc placement failure")
         return real_replace(src, dst)
 
     monkeypatch.setattr(d4.os, "replace", _flaky_replace)
 
-    with pytest.raises(OSError, match="synthetic replace failure"):
-        d4._atomic_publish_dir(staging, final_dir)
+    with pytest.raises(OSError, match="synthetic doc placement failure"):
+        d4._atomic_publish_render_set([
+            (staging_wav, wav_dir, "dir"),
+            (staging_doc, doc_path, "file"),
+            (staging_manifest, manifest_path, "file"),
+        ])
 
-    assert final_dir.is_dir()
-    assert (final_dir / "old.wav").read_bytes() == b"OLD"
+    # 旧3点セットが無傷（部分公開なし）。
+    assert (wav_dir / "old.wav").read_bytes() == b"OLD-WAV"
+    assert not (wav_dir / "new.wav").exists()
+    assert doc_path.read_text(encoding="utf-8") == '{"v": "old-doc"}'
+    assert manifest_path.read_text(encoding="utf-8") == '{"v": "old-manifest"}'
 
 
 def test_cmd_render_leaves_old_out_dir_untouched_when_run_group_raises(

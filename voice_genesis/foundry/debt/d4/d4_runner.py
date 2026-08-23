@@ -157,17 +157,28 @@ probe 群 JSON）でも必ず通す。セル単位の測定失敗は `outcome: "
 指定されると、測定どころか読み込みの前に元データを上書きする経路が空いて
 いたため。
 
-**render の staging → atomic 公開**（PR #306 レビュー第9巡 P1）: `render` は
-WAV を `--out-dir`（最終位置）へ直接ではなく、同階層の一意な staging
+**render の staging → 単一トランザクション公開**（PR #306 レビュー第9巡 P1・
+第10巡 P1 で拡張）: `render` は WAV・群 doc・manifest の3点すべてを、まず
+`--out-dir` と同階層の staging 領域で完成させる——WAV は一意な staging
 ディレクトリ（`_new_staging_dir`。`tempfile.mkdtemp` による排他的新規作成）
-へ書く。群 doc（メモリ上）・manifest（同）・全 WAV（staging 内）が揃って
-初めて、`_atomic_publish_dir` が WAV ディレクトリ → 群 doc → manifest の順で
-最終位置へ一括公開する。既存セット（前回実行の成果物）がある場合は
-退避 → 置換 → 退避削除の3段（置換失敗時はロールバック）で公開する——
-`os.replace` はディレクトリに対しては置換先が空でなければ使えないため。
-`run_group` が測定途中で例外を送出しても、この時点ではまだ最終位置に
-一切触れていないため、旧セットは無傷のまま残る（中断時は staging が
-孤児として残るだけ）。
+へ、群 doc / manifest はその staging ディレクトリ名に紐づく一時ファイル
+（`_write_staging_json`）として、同じ親ディレクトリに「同居」させる。3点が
+staging 側で完成して初めて、`_atomic_publish_render_set` が単一トランザク
+ションとして最終位置へ公開する: (1) 3点それぞれの既存最終物（前回実行の
+成果物。あれば）を同階層の一時名へ退避、(2) staging 側の3点を順に最終位置へ
+`os.replace`、(3) 全点成功したら退避を削除・**1 点でも失敗したら**既に配置
+できた点を staging 側へ戻し退避を全点ぶん最終位置へ戻すロールバックを試みて
+から再送出する——「全部公開されるか、1 つも公開されない（旧セットのまま）
+か」の2状態しか許さず、部分公開（例: WAV だけ新しく doc は古いまま）を構造
+的に防ぐ。`run_group` が測定途中で例外を送出しても、この時点ではまだ最終
+位置に一切触れていないため、旧 3 点セットは無傷のまま残る（中断時は
+staging 側の断片が孤児として残るだけ）。
+
+**出力同士の衝突拒否**（PR #306 レビュー第10巡 P2）: `render` は staging を
+作る**前**に `s7_io.reject_duplicate_outputs()` を `--out-dir` / 群 doc /
+manifest の3点へ適用し、互いに同じパスを指していないか（例えば `--out-dir`
+に群 doc と同じパスを指定する等の誤設定）を検査する。3点のうち2つ以上が
+同じ最終位置を奪い合う構成を、staging 作成前——何も書き込む前——に拒否する。
 """
 from __future__ import annotations
 
@@ -906,47 +917,77 @@ def _new_staging_dir(final_dir: Path) -> Path:
     return Path(tempfile.mkdtemp(dir=str(final_dir.parent), prefix=f".{final_dir.name}.staging-"))
 
 
-def _atomic_publish_dir(staging_dir: Path, final_dir: Path) -> None:
-    """完成済みの `staging_dir` を `final_dir` へ一括公開する（PR #306 レビュー
-    第9巡 P1・render の atomic 公開）。
+def _write_staging_json(path: Path, doc: Dict[str, Any]) -> None:
+    """staging 側の完成物として JSON を書く（PR #306 レビュー第10巡 P1）。
+    最終位置への配置は `_atomic_publish_render_set` が `os.replace` で行うため、
+    ここでの書き込み自体に atomic 性は要らない——staging パスは公開されるまで
+    他コード（`measure` 等）から見えない一時領域である。"""
+    s7_io.assert_json_finite(doc)
+    content = json.dumps(doc, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    Path(path).write_text(content, encoding="utf-8")
 
-    `os.replace` はディレクトリに対しては「置換先が存在しないか、存在しても
-    **空**」の場合にしか使えない（POSIX `rename(2)` の制約 — 非空ディレクトリを
-    置換先にすると `OSError: Directory not empty` になる）。したがって
-    `final_dir` に前回実行の既存セットが残っている場合は次の3段で公開する
-    （実装しやすく安全な方式として、既存の有無で分岐せず常にこの3段を通る —
-    既存が無ければ (1) が単純に空振りするだけでコードパスが一本化される）:
 
-    1. 既存の `final_dir`（あれば）を同階層の一時名へ退避する（`os.replace`。
-       退避先はまだ存在しないので必ず成功する）
-    2. `staging_dir` を `final_dir` へ `os.replace`（置換先は退避により
-       存在しないので必ず成功する）
-    3. 2 が成功したら退避先を削除する（`shutil.rmtree`）。2 が失敗したら
-       退避しておいた既存セットを `final_dir` へ戻すロールバックを試み、
-       例外は再送出する（呼び出し側 = `cmd_render` を非ゼロ終了させる）。
+def _atomic_publish_render_set(items: Sequence[Tuple[Path, Path, str]]) -> None:
+    """完成済みの staging 側成果物**複数点**を、1 つのトランザクションとして
+    最終位置へ公開する（PR #306 レビュー第10巡 P1・単一トランザクション公開。
+    第9巡の `_atomic_publish_dir` を WAV ディレクトリ単体から WAV + 群 doc +
+    manifest の3点へ拡張し、置き換える）。
 
-    中断（`run_group` 等が例外を送出）は本関数へ到達する**前**に起きるため、
-    その場合は `staging_dir` が孤児として残るだけで `final_dir`（旧セット）は
-    一切触れられない（呼び出し順序で保証する。本関数自体は cleanup しない
-    ——「中断時は staging が残るだけ」という要求を満たすための意図的な選択）。
+    `items` は `(staging_path, final_path, kind)` の並び（`kind` は `"dir"` /
+    `"file"`。`cmd_render` は WAV ディレクトリ・群 doc・manifest の3点を渡す）。
+
+    「全部公開されるか、1 つも公開されない（旧セットのまま）か」の2状態しか
+    許さない——部分公開（例: WAV だけ新しく doc は古いまま）を構造的に防ぐ。
+
+    手順:
+
+    1. 各点の既存最終物（あれば）を同階層の一時名へ退避する（`os.replace`。
+       退避先はまだ存在しないので必ず成功する）。
+    2. 各点の staging 側完成物を最終位置へ順に `os.replace` する
+       （`os.replace` はディレクトリに対しては置換先が存在しないか空の場合
+       にしか使えない — POSIX `rename(2)` の制約。1 の退避により置換先は
+       常に存在しない状態から始まる）。
+    3. 全点成功したら退避を削除する（`kind` に応じ `shutil.rmtree` /
+       `os.unlink`）。**1 点でも失敗したら**、既に配置できてしまった点を
+       `os.replace` で staging 側へ戻し、退避しておいた旧内容を全点ぶん
+       最終位置へ戻すロールバックを試みたうえで、元の例外を再送出する
+       （呼び出し側 = `cmd_render` を非ゼロ終了させる）。
+
+    中断（`run_group` や staging 側の JSON 書き込みが例外を送出）は本関数へ
+    到達する**前**に起きるため、その場合は staging 側の断片が孤児として残る
+    だけで、旧 3 点セット（最終位置）は一切触れられない（呼び出し順序で
+    保証する）。
     """
-    staging_dir = Path(staging_dir)
-    final_dir = Path(final_dir)
-    backup_dir: Optional[Path] = None
-    if final_dir.exists():
-        backup_dir = final_dir.parent / f".{final_dir.name}.pre-publish-{uuid.uuid4().hex[:12]}"
-        os.replace(final_dir, backup_dir)
+    backups: List[Tuple[Path, Path, str]] = []
+    for _staging, final, kind in items:
+        final = Path(final)
+        if final.exists():
+            backup = final.parent / f".{final.name}.pre-publish-{uuid.uuid4().hex[:12]}"
+            os.replace(final, backup)
+            backups.append((backup, final, kind))
+
+    committed: List[Tuple[Path, Path]] = []
     try:
-        os.replace(staging_dir, final_dir)
+        for staging, final, _kind in items:
+            os.replace(staging, final)
+            committed.append((staging, final))
     except BaseException:
-        if backup_dir is not None and not final_dir.exists():
-            # ロールバック: 退避しておいた旧セットを最終位置へ戻す（置換が
-            # 部分的に進んでいた形跡があれば、それ以上状態を変えない）。
-            os.replace(backup_dir, final_dir)
+        # ロールバック (a): 配置できてしまった点を staging 側へ戻す
+        # （逆順 — 後に配置した点から戻す）。
+        for staging, final in reversed(committed):
+            if Path(final).exists():
+                os.replace(final, staging)
+        # ロールバック (b): 退避しておいた旧内容を全点ぶん最終位置へ戻す。
+        for backup, final, _kind in backups:
+            if not Path(final).exists():
+                os.replace(backup, final)
         raise
     else:
-        if backup_dir is not None:
-            shutil.rmtree(backup_dir)
+        for backup, _final, kind in backups:
+            if kind == "dir":
+                shutil.rmtree(backup)
+            else:
+                os.unlink(backup)
 
 
 # --- render: s7_0b_probe と同じ契約でセルをレンダ ---------------------------
@@ -1021,6 +1062,11 @@ def cmd_render(args: argparse.Namespace) -> int:
     # render_manifest は out_path と同階層・stem 由来の名前（PR #306 第4巡 P1）。
     manifest_path = out_path.parent / f"{out_path.stem}_render_manifest.json"
     final_out_dir = Path(args.out_dir)
+    # 出力同士の衝突拒否（PR #306 レビュー第10巡 P2）: --out-dir / --result-out
+    # （群 doc）/ manifest 派生パスの 3 点が互いに同じパスを指していないかを
+    # staging 作成より前に検査する（例えば `--out-dir` に群 doc と同じパスを
+    # 指定されると、WAV ディレクトリと群 doc が同じ最終位置を奪い合う）。
+    s7_io.reject_duplicate_outputs([out_path, manifest_path, final_out_dir])
     s7_io.reject_output_collision(
         [out_path, manifest_path, final_out_dir],
         [
@@ -1031,49 +1077,65 @@ def cmd_render(args: argparse.Namespace) -> int:
             Path(args.canon_model_dir), Path(args.vocoder_dir), Path(args.canon_phonemes_txt),
         ],
     )
-    # render の atomic 公開・staging（PR #306 レビュー第9巡 P1）: WAV は
-    # 最終位置（--out-dir）へ直接ではなく、まず同階層の一意な staging
-    # ディレクトリへ書く。`run_group` が（セル 1 つの合成失敗等で）例外を
-    # 送出しても、この時点ではまだ最終位置に一切触れていないため、旧セット
-    # （前回実行の --out-dir）は無傷のまま残る——中断時は staging が孤児として
-    # 残るだけ（`_atomic_publish_dir` docstring 参照）。
-    staging_dir = _new_staging_dir(final_out_dir)
+    # render の atomic 公開・staging（PR #306 レビュー第9巡 P1・第10巡 P1 で
+    # 単一トランザクションへ拡張）: WAV・群 doc・manifest の3点すべてを、まず
+    # `--out-dir` の親ディレクトリに作る staging 領域で完成させる——群 doc /
+    # manifest も（最終的な別ディレクトリではなく）ここで staging 側の一時
+    # ファイルとして書く（WAV dir と「同居」させることで、3点をあとで 1 つの
+    # 公開トランザクションにまとめられる）。`run_group` が例外を送出しても、
+    # この時点ではまだ最終位置に一切触れていないため、旧 3 点セットは無傷の
+    # まま残る——中断時は staging 側の断片が孤児として残るだけ
+    # （`_atomic_publish_render_set` docstring 参照）。
+    staging_wav_dir = _new_staging_dir(final_out_dir)
+    staging_token = staging_wav_dir.name
+    staging_doc_path = final_out_dir.parent / f"{staging_token}.doc.json"
+    staging_manifest_path = final_out_dir.parent / f"{staging_token}.manifest.json"
+
     doc = probe0b.run_group(
         gate_synth, probe_spec, frozen, probe_spec_sha, args.generation, args.speaker,
         acoustic_dir, stem, Path(args.canon_model_dir), Path(args.vocoder_dir),
-        Path(args.canon_phonemes_txt), staging_dir,
+        Path(args.canon_phonemes_txt), staging_wav_dir,
     )
     # `run_group` は `doc["out_dir"]` に**渡したディレクトリの絶対パス**
-    # （= staging_dir）を記録する。`measure`（`_measure_group`）はこのフィールド
-    # を見て WAV を探すため、公開後は最終位置を指していなければならない——
-    # ここで書き換える（各セル自身の `wav` フィールドはファイル名のみで
-    # ディレクトリを含まないため書き換え不要。`s7_0b_probe._write_wav` の契約）。
+    # （= staging_wav_dir）を記録する。`measure`（`_measure_group`）はこの
+    # フィールドを見て WAV を探すため、公開後は最終位置を指していなければ
+    # ならない——書き換えは staging 側で完了させる（PR #306 第10巡 P1。各セル
+    # 自身の `wav` フィールドはファイル名のみでディレクトリを含まないため
+    # 書き換え不要。`s7_0b_probe._write_wav` の契約）。
     doc["out_dir"] = str(final_out_dir.resolve())
     doc["export_binding"] = export_binding
     doc["d4_schema"] = RENDER_SCHEMA
     doc["d4_remeasure_spec_sha256"] = d4_spec_sha
     doc["d4_remeasure_spec_path"] = str(SPEC_PATH.relative_to(_REPO_ROOT))
     doc["runtime_stack"] = _runtime_stack()
-    # ここまでで群 doc（メモリ上）・WAV（staging_dir 内）が両方完成している。
-    # 最終位置への一括移動は WAV ディレクトリ → 群 doc → manifest の順で行う
-    # （measure 側は doc["out_dir"] を見て WAV を探すため、doc だけ先に見えて
-    # WAV ディレクトリが未整合な状態を避ける）。
-    _atomic_publish_dir(staging_dir, final_out_dir)
-    _atomic_write_json(out_path, doc)
+    _write_staging_json(staging_doc_path, doc)
+
     # render_manifest.json（PR #306 第4巡 P1・方式 a）: 群 doc の実バイト
     # sha256 を group_id 単位で記録する。measure 側はこれを --render-manifest
     # で読み、--render-doc の実バイトと照合する（doc 全体の digest 束縛 =
     # 窓値だけを個別に整合させた改竄を含む doc 全体の改変を一括検出する）。
+    # sha256 は staging 側の doc（= 公開後に out_path へ置かれる、byte 単位で
+    # 同一の内容）から計算する。
     manifest_doc = {
         "schema": RENDER_MANIFEST_SCHEMA,
         "groups": {
             group_id: {
-                "render_doc_sha256": _sha_file(out_path),
+                "render_doc_sha256": _sha_file(staging_doc_path),
                 "path": out_path.name,
             },
         },
     }
-    _atomic_write_json(manifest_path, manifest_doc)
+    _write_staging_json(staging_manifest_path, manifest_doc)
+
+    # ここまでで WAV（staging_wav_dir）・群 doc（staging_doc_path）・manifest
+    # （staging_manifest_path）の3点すべてが完成している。単一トランザクション
+    # として最終位置へ公開する（全成功か、1 つも公開しないロールバックかの
+    # 2 状態のみ許す。部分公開・旧セットの部分喪失を構造的に防ぐ）。
+    _atomic_publish_render_set([
+        (staging_wav_dir, final_out_dir, "dir"),
+        (staging_doc_path, out_path, "file"),
+        (staging_manifest_path, manifest_path, "file"),
+    ])
     print(
         f"| {args.generation}/{args.speaker}: {doc['n_rendered']} rendered / "
         f"{doc['n_dropped']} dropped -> {out_path} (manifest: {manifest_path})"
