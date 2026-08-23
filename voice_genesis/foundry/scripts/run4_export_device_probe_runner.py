@@ -39,6 +39,14 @@ from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
 
 API_BASE = "https://rest.runpod.io/v1"
+# 実インシデント再発防止 (FIX A): Cloudflare エッジが *.proxy.runpod.net の前段で
+# User-Agent が "Python-urllib/" で始まるリクエストを 403 "error code: 1010" で
+# 一律拒否する。urllib の既定 UA のまま pod 向けリクエストを送ると、retrieval が
+# 構造的に不可能になる（実際に本番でこれが起きた）。本モジュール内の urllib
+# リクエストは必ず `_build_request()` 経由で組み立て、この UA を注入すること
+# （pod-facing poll / _download / dir-listing scrape / REST call / raw.
+# githubusercontent.com pre-flight — 一つの例外もなく全て）。
+USER_AGENT = "svprpe-run4-probe-runner/1.0"
 PIN_COMMIT_DEFAULT = "cda36b9f2308128797c48976a9c90b28a4f1661a"
 IMAGE_NAME = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 GPU_TYPE_ID = "NVIDIA GeForce RTX 3090"
@@ -50,6 +58,23 @@ POD_ENTRY_RAW_URL_TMPL = (
 REQUEST_TIMEOUT_SEC = 120
 RETRY_COUNT = 3
 RETRY_SLEEP_SEC = 5
+
+
+def _build_request(
+    url: str,
+    method: str = "GET",
+    data: Optional[bytes] = None,
+    headers: Optional[Dict[str, str]] = None,
+) -> urllib.request.Request:
+    """本モジュール内で urllib.request.Request を作る唯一のビルダー。
+    User-Agent（`USER_AGENT`）を必ず注入する — 呼び出し側はこれを経由せずに
+    urllib のリクエストオブジェクトを直接構築してはならない（FIX A: UA-less
+    リクエストの一律禁止。呼び出し元固有のヘッダ（Authorization 等）は
+    `headers` で渡せば UA の上に merge される）。"""
+    merged_headers: Dict[str, str] = {"User-Agent": USER_AGENT}
+    if headers:
+        merged_headers.update(headers)
+    return urllib.request.Request(url, data=data, method=method, headers=merged_headers)
 
 
 def _api_key() -> str:
@@ -86,7 +111,7 @@ def _request(
     attempts = RETRY_COUNT if retry else 1
     last_exc: Optional[BaseException] = None
     for attempt in range(1, attempts + 1):
-        req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        req = _build_request(url, method=method, data=data, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC) as resp:
                 raw = resp.read()
@@ -130,7 +155,8 @@ def build_launch_payload(script_commit: str, pin_commit: str) -> Dict[str, Any]:
         "cloudType": "COMMUNITY",
         "interruptible": False,
         "containerDiskInGb": 60,
-        "volumeInGb": 0,
+        "volumeInGb": 10,
+        "volumeMountPath": "/workspace",
         "ports": ["8000/http"],
         "env": {"PROBE_PIN_COMMIT": pin_commit},
         "dockerStartCmd": ["bash", "-lc", start_cmd],
@@ -145,7 +171,7 @@ def _check_raw_url_reachable(url: str) -> None:
     pre-billing error に変える。"""
     last_status: Optional[int] = None
     for method in ("HEAD", "GET"):
-        req = urllib.request.Request(url, method=method)
+        req = _build_request(url, method=method)
         try:
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC) as resp:
                 last_status = resp.status
@@ -213,6 +239,16 @@ def cmd_status(args: argparse.Namespace) -> None:
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
+def cmd_stop(args: argparse.Namespace) -> None:
+    """pod を停止するが削除しない（FIX D）。`terminate`（stop→失敗時 DELETE の
+    stop+delete）と違い、/workspace ボリューム（volumeInGb=10 で永続化される —
+    FIX C）を温存したまま止める。fetch がタイムアウト/失敗したときの salvage
+    手段: pod を消さずに stop しておけば、後から volume を検分・再開できる。"""
+    result = _request("POST", f"/pods/{args.pod}/stop")
+    print("| runner: stop result:")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 def cmd_terminate(args: argparse.Namespace) -> None:
     try:
         result = _request("POST", f"/pods/{args.pod}/stop")
@@ -248,7 +284,7 @@ def _download(url: str, dest: str) -> bool:
     last_exc: Optional[BaseException] = None
     for attempt in range(1, RETRY_COUNT + 1):
         try:
-            req = urllib.request.Request(url, method="GET")
+            req = _build_request(url, method="GET")
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC) as resp:
                 data = resp.read()
             os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
@@ -323,18 +359,60 @@ def _check_pod_not_dead(pod_id: str) -> None:
         raise SystemExit(1)
 
 
+_HEARTBEAT_STALL_WARN_SEC = 600
+
+
+def _poll_once(url: str) -> Optional[str]:
+    """`url` を 1 回だけ GET する。200 なら本文（デコード済み）を返し、それ以外
+    （4xx/5xx・ネットワークエラー）は None を返す（cmd_fetch のポーリングは
+    「まだ来ていない」を例外にしない設計 — FIX D）。"""
+    req = _build_request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            if resp.status == 200:
+                return resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError:
+        pass
+    except (urllib.error.URLError, TimeoutError, ConnectionError):
+        pass
+    return None
+
+
 def cmd_fetch(args: argparse.Namespace) -> None:
     base = f"https://{args.pod}-8000.proxy.runpod.net"
     out_dir = args.out or os.environ.get("CLAUDE_SCRATCHPAD_DIR") or "./probe_out"
     os.makedirs(out_dir, exist_ok=True)
 
-    print(f"| runner: polling {base}/status.json every 60s (up to {args.timeout}s)")
-    deadline = time.time() + args.timeout
+    print(
+        f"| runner: polling {base}/heartbeat.txt (channel-up probe, printed once) "
+        f"and {base}/status.json (completion signal) every 60s (up to {args.timeout}s)"
+    )
+    poll_started_at = time.time()
+    deadline = poll_started_at + args.timeout
     status_ok = False
+    heartbeat_ever_seen = False
+    heartbeat_printed = False
+    heartbeat_stall_warned = False
     poll_iteration = 0
     while time.time() < deadline:
         poll_iteration += 1
-        req = urllib.request.Request(f"{base}/status.json", method="GET")
+
+        # --- reachability probe: heartbeat is written from t=0 in pod.sh (FIX B),
+        # so it is a much earlier "is the channel up" signal than status.json
+        # (which only appears once the whole probe has finished/died). ---
+        for hb_name in ("heartbeat.txt", "heartbeat.json"):
+            hb_body = _poll_once(f"{base}/{hb_name}")
+            if hb_body is not None:
+                heartbeat_ever_seen = True
+                if not heartbeat_printed:
+                    print(f"| runner: heartbeat channel up — {hb_name}: {hb_body.strip()}")
+                    heartbeat_printed = True
+                break
+
+        # --- completion signal: status.json is written once by pod.sh's exit
+        # trap — reaching it means the whole probe (ok or failed) has finished
+        # and the full result set is ready to download. ---
+        req = _build_request(f"{base}/status.json", method="GET")
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 if resp.status == 200:
@@ -345,13 +423,40 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
             print(f"| runner: status.json not reachable yet: {exc}")
 
+        elapsed = time.time() - poll_started_at
+        if not heartbeat_ever_seen and not heartbeat_stall_warned and elapsed > _HEARTBEAT_STALL_WARN_SEC:
+            heartbeat_stall_warned = True
+            print(
+                f"| runner: *** WARNING *** pod has been polled for {int(elapsed)}s "
+                "and the heartbeat channel has NEVER responded (no heartbeat.txt/"
+                "heartbeat.json seen at any point). This usually means the result "
+                "channel is unreachable (network/proxy/User-Agent issue) or the pod "
+                "is stuck before it reaches stage 0. This script will NOT "
+                "auto-terminate the pod — consider operator abort "
+                f"(pod={args.pod}).",
+                file=sys.stderr,
+            )
+
         if poll_iteration % 5 == 0:
-            _check_pod_not_dead(args.pod)
+            try:
+                _check_pod_not_dead(args.pod)
+            except SystemExit:
+                print(
+                    "| runner: pod NOT deleted; use `stop` to preserve the /workspace "
+                    f"volume (python3 {sys.argv[0]} stop --pod {args.pod})",
+                    file=sys.stderr,
+                )
+                raise
 
         time.sleep(60)
 
     if not status_ok:
         print(f"| runner: TIMEOUT after {args.timeout}s waiting for {base}/status.json", file=sys.stderr)
+        print(
+            "| runner: pod NOT deleted; use `stop` to preserve the /workspace volume "
+            f"(python3 {sys.argv[0]} stop --pod {args.pod})",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
 
     print("| runner: status.json reachable — downloading result set")
@@ -367,7 +472,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     # g1/ 配下は index listing を href scrape して列挙する（内容は run 依存で
     # 固定できないため）。
     g1_index_url = f"{base}/g1/"
-    req = urllib.request.Request(g1_index_url, method="GET")
+    req = _build_request(g1_index_url, method="GET")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             html = resp.read().decode("utf-8", errors="replace")
@@ -411,6 +516,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="pod の状態を取得する")
     p_status.add_argument("--pod", required=True)
     p_status.set_defaults(func=cmd_status)
+
+    p_stop = sub.add_parser(
+        "stop", help="pod を停止する（削除しない — terminate と違い /workspace ボリュームを温存する salvage 手段）"
+    )
+    p_stop.add_argument("--pod", required=True)
+    p_stop.set_defaults(func=cmd_stop)
 
     p_fetch = sub.add_parser("fetch", help="結果一式をポーリングして回収する")
     p_fetch.add_argument("--pod", required=True)

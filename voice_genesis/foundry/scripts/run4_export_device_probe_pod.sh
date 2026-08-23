@@ -48,8 +48,16 @@ mkdir -p "$WORK" "$RESULTS"
 
 STAGE="init"
 DETAIL=""
+STAGE_FILE="$RESULTS/.current_stage"
 
-stage() { STAGE="$1"; echo "| probe: === stage: $1 ==="; }
+# heartbeat writer loop（背景プロセス）が $STAGE を読めるように、stage() 遷移の
+# たびにファイルへも書き出す（背景プロセスは fork 時点のシェル変数しか見えない
+# ため、プロセス間で最新値を渡すにはファイル経由しかない — FIX B）。
+stage() {
+  STAGE="$1"
+  echo "| probe: === stage: $1 ==="
+  printf '%s' "$STAGE" > "$STAGE_FILE" 2>/dev/null || true
+}
 
 die() {
   DETAIL="$*"
@@ -76,6 +84,15 @@ on_exit() {
     pkill -P "$WATCHDOG_PID" 2>/dev/null || true
   fi
 
+  # heartbeat writer loop も同様に止める（結果 HTTP サーバーはこの後も使うため
+  # 生かしたまま — 止めるのは heartbeat の定期書き込みだけ。t=0 起動分は
+  # §0b 参照）。
+  if [ -n "${HEARTBEAT_PID:-}" ]; then
+    kill -- "-$HEARTBEAT_PID" 2>/dev/null || true
+    kill "$HEARTBEAT_PID" 2>/dev/null || true
+    pkill -P "$HEARTBEAT_PID" 2>/dev/null || true
+  fi
+
   python3 - "$status" "$STAGE" "$DETAIL" "$RESULTS/status.json" <<'PY'
 import json, sys
 status, stage, detail, out = sys.argv[1:5]
@@ -89,16 +106,25 @@ PY
     cp -f /workspace/probe_console.log "$RESULTS/probe_console.log" 2>/dev/null || true
   fi
 
-  echo "| probe: starting result HTTP server on :8000 (dir=$RESULTS)"
-  python3 -m http.server 8000 --directory "$RESULTS" &
-  local srv_pid=$!
+  # 結果 HTTP サーバーは §0b で t=0 からすでに起動している想定 — ここでは
+  # SERVER_PID が生きているかを確認し、生きていれば二重起動しない（同じ
+  # ポート 8000 への 2 プロセス目は bind に失敗するだけなので実害は薄いが、
+  # プロセス管理を単純に保つため確認する）。SERVER_PID 未設定/死んでいる
+  # 場合（§0b が何らかの理由でスキップされた等）のみここで起動する。
+  if [ -n "${SERVER_PID:-}" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "| probe: result HTTP server already running on :8000 (pid=$SERVER_PID, started at t=0) — not starting a second one"
+  else
+    echo "| probe: starting result HTTP server on :8000 (dir=$RESULTS)"
+    python3 -m http.server 8000 --directory "$RESULTS" &
+    SERVER_PID=$!
+  fi
 
   local hold=2700
   [ "$status" != "ok" ] && hold=900
   echo "| probe: holding ${hold}s so the runner can fetch $RESULTS over :8000"
   sleep "$hold"
 
-  kill "$srv_pid" 2>/dev/null || true
+  kill "$SERVER_PID" 2>/dev/null || true
 
   if [ -n "${RUNPOD_POD_ID:-}" ]; then
     echo "| probe: self-stop via runpodctl (pod=$RUNPOD_POD_ID)"
@@ -136,8 +162,56 @@ WATCHDOG_PID=$!
 disown || true
 
 # ============================================================================
-# 1. PROBE_PIN_COMMIT の検証（trap/watchdog 確立後 — ここより下の die() は
-# すべて self-stop 保証の傘の中）
+# 0b. heartbeat writer + 結果 HTTP サーバーを t=0 で起動する。
+# 旧実装は結果サーバーを exit trap の中でしか起動していなかったため、
+# コンテナディスク（volumeInGb=0 だった時代の /workspace 相当）が pod
+# 停止とともに消えると、中間経過を外から一切観測できなかった
+# （実インシデントの一因）。ここで早期に開けば、runner 側は heartbeat.txt /
+# heartbeat.json をポーリングするだけで「channel is up」を確認でき、
+# probe_console.partial.log で進捗ログも追える。
+# ============================================================================
+
+_heartbeat_body() {
+  local tick=0
+  local now stg
+  while :; do
+    now="$(date -u +%FT%TZ)"
+    date -u +%FT%TZ > "$RESULTS/heartbeat.txt.tmp" && mv -f "$RESULTS/heartbeat.txt.tmp" "$RESULTS/heartbeat.txt"
+
+    stg="$(cat "$STAGE_FILE" 2>/dev/null || echo init)"
+    printf '{"utc": "%s", "stage": "%s"}\n' "$now" "$stg" > "$RESULTS/heartbeat.json.tmp" \
+      && mv -f "$RESULTS/heartbeat.json.tmp" "$RESULTS/heartbeat.json"
+    echo "| probe: heartbeat utc=$now stage=$stg"
+
+    tick=$((tick + 1))
+    # probe_console.log は /workspace の外（tee 先が dockerStartCmd 起動時点の
+    # /workspace/probe_console.log 自体なので実は $RESULTS 配下ではない —
+    # 60s ごと（3 tick * 20s）に $RESULTS 側へコピーして回収対象にする。
+    if [ "$((tick % 3))" -eq 0 ] && [ -f /workspace/probe_console.log ]; then
+      cp -f /workspace/probe_console.log "$RESULTS/probe_console.partial.log" 2>/dev/null || true
+    fi
+    sleep 20
+  done
+}
+export -f _heartbeat_body
+export RESULTS
+export STAGE_FILE
+if command -v setsid >/dev/null 2>&1; then
+  setsid bash -c _heartbeat_body &
+else
+  ( _heartbeat_body ) &
+fi
+HEARTBEAT_PID=$!
+disown || true
+
+echo "| probe: starting result HTTP server on :8000 (dir=$RESULTS) at t=0"
+python3 -m http.server 8000 --directory "$RESULTS" &
+SERVER_PID=$!
+disown || true
+
+# ============================================================================
+# 1. PROBE_PIN_COMMIT の検証（trap/watchdog/heartbeat/server 確立後 — ここより
+# 下の die() はすべて self-stop 保証の傘の中）
 # ============================================================================
 
 [ -n "${PROBE_PIN_COMMIT:-}" ] || die "PROBE_PIN_COMMIT (pin commit SHA) を注入すること"

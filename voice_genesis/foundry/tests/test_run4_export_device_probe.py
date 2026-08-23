@@ -42,6 +42,21 @@ def test_build_launch_payload_shape() -> None:
     assert "8000/http" in payload["ports"]
 
 
+def test_build_launch_payload_volume_survives_pod_stop() -> None:
+    """FIX C の回帰固定: /workspace（結果 + console log）が pod stop を跨いで
+    残るよう、volumeInGb と volumeMountPath が付与されていること
+    （volumeInGb=0 だった旧実装は、コンテナディスクごと結果が消えていた —
+    実インシデントの一因）。"""
+    payload = runner.build_launch_payload(
+        script_commit="1111111111111111111111111111111111abcd",
+        pin_commit=runner.PIN_COMMIT_DEFAULT,
+    )
+    assert payload["volumeInGb"] == 10
+    assert payload["volumeMountPath"] == "/workspace"
+    # containerDiskInGb は FIX C の対象外 — 60 のまま変わらないこと。
+    assert payload["containerDiskInGb"] == 60
+
+
 def test_build_launch_payload_pin_commit_wiring() -> None:
     """env PROBE_PIN_COMMIT は pin_commit（既定 = 固定 pin 定数）を使う。"""
     payload = runner.build_launch_payload(
@@ -71,6 +86,64 @@ def test_build_launch_payload_keeps_script_commit_and_pin_commit_independent() -
     assert raw_url in start_cmd
     assert script_commit in raw_url
     assert pin_commit not in raw_url
+
+
+# --- (a2) USER_AGENT / _build_request（FIX A の回帰: Cloudflare エッジが
+# "Python-urllib/" prefix の UA を 403 "error code: 1010" で一律拒否した実
+# インシデントの再発防止。ネットワークなし — Request オブジェクトの検査のみ）---
+
+
+def test_user_agent_constant_does_not_start_with_python_urllib() -> None:
+    """urllib の既定 UA（"Python-urllib/<version>"）は Cloudflare エッジに
+    403 1010 で一律拒否されるため、本モジュールは必ず独自 UA を名乗ること。"""
+    assert runner.USER_AGENT
+    assert not runner.USER_AGENT.startswith("Python-urllib")
+
+
+def test_build_request_injects_user_agent_with_no_extra_headers() -> None:
+    req = runner._build_request("https://example.invalid/status.json", method="GET")
+    assert req.get_header("User-agent") == runner.USER_AGENT
+    assert req.get_method() == "GET"
+
+
+def test_build_request_merges_caller_headers_without_dropping_user_agent() -> None:
+    """`_request()` のような呼び出し元固有ヘッダ（Authorization 等）を渡しても
+    User-Agent が上書きされて消えないこと（呼び出し元ヘッダは追加で乗る）。"""
+    req = runner._build_request(
+        "https://example.invalid/pods/abc",
+        method="POST",
+        data=b'{"x": 1}',
+        headers={"Authorization": "Bearer secret", "Content-Type": "application/json"},
+    )
+    assert req.get_header("User-agent") == runner.USER_AGENT
+    assert req.get_header("Authorization") == "Bearer secret"
+    assert req.get_header("Content-type") == "application/json"
+    assert req.get_method() == "POST"
+
+
+def test_build_request_caller_headers_cannot_override_user_agent() -> None:
+    """呼び出し元が誤って User-Agent を渡しても、`_build_request` の既定 merge
+    順序（既定 UA を先に置き、呼び出し元 headers で update）では上書き可能だが、
+    どの呼び出し元も本モジュール内では User-Agent を明示的に渡していない
+    （= 常に USER_AGENT が最終的に使われる）ことを別途固定する。"""
+    req = runner._build_request("https://example.invalid/x", method="GET", headers={})
+    assert req.get_header("User-agent") == runner.USER_AGENT
+
+
+def test_no_call_site_constructs_ualess_request() -> None:
+    """本モジュールのソースを走査し、`urllib.request.Request(` の直接呼び出しが
+    `_build_request` の定義自身（内部で唯一 1 回呼ぶ箇所）以外に無いこと。
+    新しい call site が `_build_request` を経由せず追加される回帰を機械的に
+    検出する。"""
+    import inspect
+
+    source = inspect.getsource(runner)
+    call_count = source.count("urllib.request.Request(")
+    assert call_count == 1, (
+        f"expected exactly 1 raw urllib.request.Request( call (inside "
+        f"_build_request itself), found {call_count} — every other call site "
+        "must go through _build_request() to inject USER_AGENT"
+    )
 
 
 # --- (b) _DirListingParser: http.server index HTML の href scrape ---
@@ -143,6 +216,50 @@ def test_pod_script_watchdog_started_before_pin_guard() -> None:
         'PROBE_PIN_COMMIT (pin commit SHA) を注入すること'
     )
     assert watchdog_pid_assign_idx < pin_presence_guard_idx
+
+
+def test_pod_script_result_server_starts_at_t0_before_first_stage() -> None:
+    """FIX B の回帰固定: 結果 HTTP サーバー（`http.server 8000`）は exit trap
+    の中だけでなく t=0（trap/watchdog 確立直後）でも起動されていること —
+    旧実装は on_exit 内の 1 箇所でしか起動しておらず、コンテナディスクと
+    ともに結果が消える前に外から進捗を観測する手段が無かった。'http.server
+    8000' の最初の出現が、最初の実測ステージ（materials 取得）マーカーより
+    前にあることを固定する。"""
+    text = _pod_script_text()
+    server_idx = text.index("http.server 8000")
+    first_stage_idx = text.index('stage "1-materials-repo"')
+    assert server_idx < first_stage_idx, (
+        "'http.server 8000' must appear before the first stage-1 marker in "
+        "file order — the result server must start at t=0, not only in the "
+        "exit trap"
+    )
+
+
+def test_pod_script_heartbeat_writer_present() -> None:
+    """FIX B の回帰固定: heartbeat writer loop が存在すること（runner の
+    cmd_fetch は heartbeat.txt/heartbeat.json を「channel is up」の早期
+    reachability probe として使う — FIX D）。"""
+    text = _pod_script_text()
+    assert "heartbeat" in text
+    assert "heartbeat.txt" in text
+    assert "heartbeat.json" in text
+
+
+def test_pod_script_heartbeat_writer_starts_before_first_stage() -> None:
+    """heartbeat writer（HEARTBEAT_PID 起動）も結果サーバーと同様、最初の
+    実測ステージより前に起動されていること。"""
+    text = _pod_script_text()
+    heartbeat_pid_assign_idx = text.index("HEARTBEAT_PID=$!")
+    first_stage_idx = text.index('stage "1-materials-repo"')
+    assert heartbeat_pid_assign_idx < first_stage_idx
+
+
+def test_pod_script_on_exit_does_not_double_start_server() -> None:
+    """FIX B の回帰固定: on_exit は SERVER_PID の生存確認をしてから起動する
+    （t=0 起動分が生きていれば二重起動しない）。"""
+    text = _pod_script_text()
+    assert 'kill -0 "$SERVER_PID"' in text
+    assert "not starting a second one" in text
 
 
 def test_pod_script_pin_guards_use_die_not_bare_exit() -> None:
