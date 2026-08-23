@@ -149,6 +149,25 @@ spec sha256」の期待値。実ファイルから計算した sha256 と一致�
 probe 群 JSON）でも必ず通す。セル単位の測定失敗は `outcome: "error"` として
 隔離し、他セルの測定は継続する（fail-closed = 全滅させない代わりに、1 件でも
 エラーがあれば `d4_results.json` を書き切った上で非ゼロ終了する）。
+
+**`--out` 保護集合の拡張**（PR #306 レビュー第9巡 P1）: `measure` は
+`--render-doc` を全数読み、そこが参照する全 WAV パス（resolve 済み）も
+`--out` 衝突拒否の保護集合へ加える（spec / render doc / manifest に加えて）。
+実測定ループが始まる**前**にまとめて検査する——`--out` に参照 WAV そのものを
+指定されると、測定どころか読み込みの前に元データを上書きする経路が空いて
+いたため。
+
+**render の staging → atomic 公開**（PR #306 レビュー第9巡 P1）: `render` は
+WAV を `--out-dir`（最終位置）へ直接ではなく、同階層の一意な staging
+ディレクトリ（`_new_staging_dir`。`tempfile.mkdtemp` による排他的新規作成）
+へ書く。群 doc（メモリ上）・manifest（同）・全 WAV（staging 内）が揃って
+初めて、`_atomic_publish_dir` が WAV ディレクトリ → 群 doc → manifest の順で
+最終位置へ一括公開する。既存セット（前回実行の成果物）がある場合は
+退避 → 置換 → 退避削除の3段（置換失敗時はロールバック）で公開する——
+`os.replace` はディレクトリに対しては置換先が空でなければ使えないため。
+`run_group` が測定途中で例外を送出しても、この時点ではまだ最終位置に
+一切触れていないため、旧セットは無傷のまま残る（中断時は staging が
+孤児として残るだけ）。
 """
 from __future__ import annotations
 
@@ -160,10 +179,12 @@ import importlib.metadata as _md
 import json
 import os
 import platform
+import shutil
 import sys
 import tempfile
+import uuid
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 _HERE = Path(__file__).resolve().parent                 # .../debt/d4
 _DEBT_DIR = _HERE.parent                                 # .../debt
@@ -873,6 +894,61 @@ def _atomic_write_json(path: Path, doc: Dict[str, Any]) -> None:
         raise
 
 
+def _new_staging_dir(final_dir: Path) -> Path:
+    """`final_dir` と**同一の親ディレクトリ**（同一ファイルシステム。`os.replace`
+    が atomic である前提）に、まだ存在しない一意な名前の staging ディレクトリを
+    作って返す（PR #306 レビュー第9巡 P1・render の atomic 公開）。
+
+    `tempfile.mkdtemp` は内部で `os.mkdir` を**排他的に**（既存なら別名で再試行）
+    使うため、O_EXCL 相当の新規作成保証をディレクトリ単位で得られる。"""
+    final_dir = Path(final_dir)
+    final_dir.parent.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(dir=str(final_dir.parent), prefix=f".{final_dir.name}.staging-"))
+
+
+def _atomic_publish_dir(staging_dir: Path, final_dir: Path) -> None:
+    """完成済みの `staging_dir` を `final_dir` へ一括公開する（PR #306 レビュー
+    第9巡 P1・render の atomic 公開）。
+
+    `os.replace` はディレクトリに対しては「置換先が存在しないか、存在しても
+    **空**」の場合にしか使えない（POSIX `rename(2)` の制約 — 非空ディレクトリを
+    置換先にすると `OSError: Directory not empty` になる）。したがって
+    `final_dir` に前回実行の既存セットが残っている場合は次の3段で公開する
+    （実装しやすく安全な方式として、既存の有無で分岐せず常にこの3段を通る —
+    既存が無ければ (1) が単純に空振りするだけでコードパスが一本化される）:
+
+    1. 既存の `final_dir`（あれば）を同階層の一時名へ退避する（`os.replace`。
+       退避先はまだ存在しないので必ず成功する）
+    2. `staging_dir` を `final_dir` へ `os.replace`（置換先は退避により
+       存在しないので必ず成功する）
+    3. 2 が成功したら退避先を削除する（`shutil.rmtree`）。2 が失敗したら
+       退避しておいた既存セットを `final_dir` へ戻すロールバックを試み、
+       例外は再送出する（呼び出し側 = `cmd_render` を非ゼロ終了させる）。
+
+    中断（`run_group` 等が例外を送出）は本関数へ到達する**前**に起きるため、
+    その場合は `staging_dir` が孤児として残るだけで `final_dir`（旧セット）は
+    一切触れられない（呼び出し順序で保証する。本関数自体は cleanup しない
+    ——「中断時は staging が残るだけ」という要求を満たすための意図的な選択）。
+    """
+    staging_dir = Path(staging_dir)
+    final_dir = Path(final_dir)
+    backup_dir: Optional[Path] = None
+    if final_dir.exists():
+        backup_dir = final_dir.parent / f".{final_dir.name}.pre-publish-{uuid.uuid4().hex[:12]}"
+        os.replace(final_dir, backup_dir)
+    try:
+        os.replace(staging_dir, final_dir)
+    except BaseException:
+        if backup_dir is not None and not final_dir.exists():
+            # ロールバック: 退避しておいた旧セットを最終位置へ戻す（置換が
+            # 部分的に進んでいた形跡があれば、それ以上状態を変えない）。
+            os.replace(backup_dir, final_dir)
+        raise
+    else:
+        if backup_dir is not None:
+            shutil.rmtree(backup_dir)
+
+
 # --- render: s7_0b_probe と同じ契約でセルをレンダ ---------------------------
 
 
@@ -944,8 +1020,9 @@ def cmd_render(args: argparse.Namespace) -> int:
     out_path = Path(args.result_out)
     # render_manifest は out_path と同階層・stem 由来の名前（PR #306 第4巡 P1）。
     manifest_path = out_path.parent / f"{out_path.stem}_render_manifest.json"
+    final_out_dir = Path(args.out_dir)
     s7_io.reject_output_collision(
-        [out_path, manifest_path, Path(args.out_dir)],
+        [out_path, manifest_path, final_out_dir],
         [
             SPEC_PATH, probe0b.SPEC_PATH, trf.TRF_SPEC_PATH, Path(args.export_manifest),
             xm.INPUT_PINS_PATH, probe0b.GATE_SYNTH_PATH,
@@ -954,16 +1031,34 @@ def cmd_render(args: argparse.Namespace) -> int:
             Path(args.canon_model_dir), Path(args.vocoder_dir), Path(args.canon_phonemes_txt),
         ],
     )
+    # render の atomic 公開・staging（PR #306 レビュー第9巡 P1）: WAV は
+    # 最終位置（--out-dir）へ直接ではなく、まず同階層の一意な staging
+    # ディレクトリへ書く。`run_group` が（セル 1 つの合成失敗等で）例外を
+    # 送出しても、この時点ではまだ最終位置に一切触れていないため、旧セット
+    # （前回実行の --out-dir）は無傷のまま残る——中断時は staging が孤児として
+    # 残るだけ（`_atomic_publish_dir` docstring 参照）。
+    staging_dir = _new_staging_dir(final_out_dir)
     doc = probe0b.run_group(
         gate_synth, probe_spec, frozen, probe_spec_sha, args.generation, args.speaker,
         acoustic_dir, stem, Path(args.canon_model_dir), Path(args.vocoder_dir),
-        Path(args.canon_phonemes_txt), Path(args.out_dir),
+        Path(args.canon_phonemes_txt), staging_dir,
     )
+    # `run_group` は `doc["out_dir"]` に**渡したディレクトリの絶対パス**
+    # （= staging_dir）を記録する。`measure`（`_measure_group`）はこのフィールド
+    # を見て WAV を探すため、公開後は最終位置を指していなければならない——
+    # ここで書き換える（各セル自身の `wav` フィールドはファイル名のみで
+    # ディレクトリを含まないため書き換え不要。`s7_0b_probe._write_wav` の契約）。
+    doc["out_dir"] = str(final_out_dir.resolve())
     doc["export_binding"] = export_binding
     doc["d4_schema"] = RENDER_SCHEMA
     doc["d4_remeasure_spec_sha256"] = d4_spec_sha
     doc["d4_remeasure_spec_path"] = str(SPEC_PATH.relative_to(_REPO_ROOT))
     doc["runtime_stack"] = _runtime_stack()
+    # ここまでで群 doc（メモリ上）・WAV（staging_dir 内）が両方完成している。
+    # 最終位置への一括移動は WAV ディレクトリ → 群 doc → manifest の順で行う
+    # （measure 側は doc["out_dir"] を見て WAV を探すため、doc だけ先に見えて
+    # WAV ディレクトリが未整合な状態を避ける）。
+    _atomic_publish_dir(staging_dir, final_out_dir)
     _atomic_write_json(out_path, doc)
     # render_manifest.json（PR #306 第4巡 P1・方式 a）: 群 doc の実バイト
     # sha256 を group_id 単位で記録する。measure 側はこれを --render-manifest
@@ -1182,12 +1277,37 @@ def cmd_measure(args: argparse.Namespace) -> int:
             f"--render-manifest {len(manifest_paths)} 件と --render-manifest-sha256 "
             f"{len(manifest_expected_shas)} 件の数が違う（1 対 1・同順で対応させる）"
         )
+    # --out の保護集合拡張（PR #306 レビュー第9巡 P1）: 各 --render-doc が参照
+    # する全 WAV パス（resolve 済み）も --out 衝突拒否の対象に加える。従来は
+    # spec / render doc / manifest しか保護しておらず、`--out` に「render doc
+    # が参照する WAV そのもの」を指定されると、測定どころか読み込みの**前**に
+    # 元データを上書きする経路が空いていた。全 --render-doc をここで読み、
+    # 実測定（`_measure_group` のループ）が始まる**前**にまとめて検査する
+    # （doc の形状異常でこの列挙自体が失敗しても、個別セルの隔離は
+    # `_measure_group` 側の責務のままなので、ここでは黙って読み飛ばす —
+    # `child_path` が拒否する doc-外参照は、どのみち `_measure_group` が
+    # 後段で改めて拒否するため、保護集合に含めても含めなくても安全性は
+    # 変わらない）。
+    referenced_wav_paths: List[Path] = []
+    for render_doc_path in render_docs:
+        precheck_doc, _, _ = s7_io.read_json_with_pin(render_doc_path)
+        precheck_out_dir = Path(str(precheck_doc.get("out_dir", "")))
+        for cell in precheck_doc.get("cells", []):
+            wav_name = cell.get("wav")
+            if not wav_name:
+                continue
+            try:
+                referenced_wav_paths.append(s7_io.child_path(precheck_out_dir, str(wav_name)))
+            except s7_io.PathEscapeError:
+                continue
     # 出力衝突検査は analysis stack 検証より**前**に行う（PR #306 レビュー指摘:
     # 衝突だけを検査したい呼び出しが、無関係な ANALYSIS_STACK_PIN 不一致
     # （実行環境のパッケージ版）で先に落ちていた。凍結物破壊の防止は最優先の
     # fail-closed であり、環境のパッケージ版検査より先に評価するのが正しい
     # 順序 — analysis stack 検証自体は緩めない・そのまま維持する）。
-    s7_io.reject_output_collision([out_path], [SPEC_PATH, *render_docs, *manifest_paths])
+    s7_io.reject_output_collision(
+        [out_path], [SPEC_PATH, *render_docs, *manifest_paths, *referenced_wav_paths],
+    )
 
     # render_manifest 読み込み（PR #306 第4巡 P1・方式 a、第5巡 P1・信頼アンカー
     # 化）: `--render-manifest` は必須・複数指定可（render は 1 群 = 1 呼び出しの

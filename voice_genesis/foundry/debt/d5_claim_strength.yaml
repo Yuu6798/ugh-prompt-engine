@@ -16,6 +16,7 @@ algebra:
   - process
   rule: strong は sha256/API 実測などの機械検証のみ（claim_class == mechanical_verification を必須とする）。moderate はインフラ根治の非再発実測・対照群つき裁定・バイト同一性による帰属訂正など、部分的機械裏付けを持つ主張。suggestive は単一介入 + baseline 対比の耳判定や、ブラインド反復の存在主張など、方向性は示すが反復走行を経ていない主張。descriptive はそれ以外の全て（生耳判定の逐語記録・相関観測・process/運用記録・record 自身が帰属を保留した裁定を含む）。
   non_upgrade_principle: 'record が「言えない」「帰属できない」「undetermined」「意図的に置かない」と明記した内容は、本台帳がそれより強い strength へ格上げしない（該当 claim はいずれも descriptive のまま — 例: R6-C12/C17/C20, R7-C14/C15/C16/C20/C24/C30）。'
+  superseded_by_semantics: '本台帳の superseded_by は claim 全体の廃止マーカーではなく部分訂正マーカーである。訂正が claim のどの句に係るかは当該エントリの notes が特定する。notes に範囲特定が無い場合のみ全体訂正と読む（PR #306 レビュー第9巡 P1）。'
   rationale_codes:
     MB: バイト/hash/API 実測の機械検証
     INFRA: 根治 + 後続 run 非再発
@@ -771,6 +772,7 @@ claims:
   baseline: run 6（d3synth 合成教師を使用した学習）
   causal_evidence_strength: descriptive
   rationale: 'OBS: User 逐語判定'
+  notes: 'superseded_by（R7-C9/R7-C18）が訂正するのは user の音量交絡解消の帰属と「最も改善」句のみ。あみたろ単体レンダ観測・user の連続発声退行・第三の声確認は一次 record 上いまも有効な観測'
   superseded_by:
   - R7-C9
   - R7-C18

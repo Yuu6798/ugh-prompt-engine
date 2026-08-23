@@ -17,12 +17,18 @@
    していた致命バグの再発防止）。
 4. セル単位の測定失敗が隔離され、他セルの測定が完走したうえで `d4_results.json`
    が全セル分書き切られ、exit が非ゼロになること（セルフレビュー #6）。
+5. `cmd_render` の staging → atomic 公開（PR #306 レビュー第9巡 P1）。
+   `probe0b.run_group` / `xm.verify_export_manifest` / `probe0b.load_gate_synth`
+   を monkeypatch で差し替え、`cmd_render` 自体の制御フロー（衝突検査 →
+   staging 作成 → run_group → doc 補正 → 一括公開）だけを実 checkpoint 実体
+   なしに検査する（下記 onnxruntime 非依存の原則は維持する）。
 
 （`s7_b1_v12.py` / `s1_gate/gate_synth.py` はレンダ以外では改変しない。）
 
 依存は numpy + librosa + soundfile（すべて本体の必須依存）のみで、onnxruntime は
 要らない（`d4_runner` はレンダ実行時にしか `s7_0b_probe.load_gate_synth()` を
-呼ばないため import 時点では触れない）。
+呼ばないため import 時点では触れない。上記 5 の `cmd_render` テストも
+`load_gate_synth` 自体を monkeypatch するため、この原則を破らない）。
 
 実行: `python -m pytest voice_genesis/foundry/tests/test_d4_remeasure.py -q`
 """
@@ -679,6 +685,40 @@ def test_measure_out_collision_with_spec_is_rejected(spec_and_sha) -> None:
         d4.cmd_measure(ns)
     # 何も書き込まれていない（spec が壊れていない）ことも確認する。
     d4.load_and_verify_d4_spec()
+
+
+def test_measure_out_collision_with_referenced_wav_is_rejected(
+    tmp_path: Path, spec_and_sha, all_cell_ids,
+) -> None:
+    """`--out` の保護集合拡張（PR #306 レビュー第9巡 P1）: `--render-doc` が
+    参照する WAV そのものを `--out` に指定すると、測定どころか読み込みの前に
+    abort する（元データを上書きする経路を閉じる）。全 `--render-doc` を読み、
+    参照される全 WAV パスを保護集合へ加えたうえで、実測定ループが始まる前に
+    まとめて検査する。"""
+    spec, spec_sha = spec_and_sha
+    out_dir = tmp_path / "out"
+    target = all_cell_ids[0]
+    wav_meta = _write_wav(out_dir, "cell.wav", _sustained_tail_wave())
+    wav_path = out_dir / "cell.wav"
+    original_bytes = wav_path.read_bytes()
+    render_doc = _full_render_doc(out_dir, all_cell_ids, {target: dict(wav_meta)})
+    render_doc_path = tmp_path / "run5_pjs.json"
+    render_doc_path.write_text(json.dumps(render_doc), encoding="utf-8")
+    manifest_path = tmp_path / "run5_pjs_render_manifest.json"
+    _write_render_manifest(
+        manifest_path,
+        {"run5_pjs": {"render_doc_sha256": _sha256_of(render_doc_path), "path": render_doc_path.name}},
+    )
+
+    ns = argparse.Namespace(
+        render_doc=[str(render_doc_path)], out=str(wav_path), spec_sha256=spec_sha,
+        render_manifest=[str(manifest_path)], render_manifest_sha256=[_sha256_of(manifest_path)],
+    )
+
+    with pytest.raises(s7_io.OutputCollisionError):
+        d4.cmd_measure(ns)
+
+    assert wav_path.read_bytes() == original_bytes, "WAV が上書きされてはいけない"
 
 
 # --- 3. 候補解決（enumerate_candidates_12 経由） -----------------------------
@@ -1529,6 +1569,139 @@ def test_cmd_measure_marks_complete_for_all_ten_groups(
     # runtime_stack（PR #306 対応 #1）: measure が実行時のパッケージ版を記帳する。
     assert doc["runtime_stack"]["python"]
     assert set(doc["runtime_stack"]) == {"python", *d4._RUNTIME_STACK_PACKAGES}
+
+
+# --- 5c. render の atomic 公開（PR #306 レビュー第9巡 P1） ---------------------
+#
+# `_new_staging_dir` / `_atomic_publish_dir` は単体で、staging → 最終位置の
+# `cmd_render` 経由の一括公開は monkeypatch で `xm.verify_export_manifest` /
+# `probe0b.load_gate_synth` / `probe0b.run_group` を差し替えて確認する
+# （ファイル冒頭の docstring どおり、本ファイルは onnxruntime 非依存を維持する
+# —`load_gate_synth` を mock するのはこの理由もある。実 checkpoint 実体は
+# 一切要らない）。
+
+
+def test_new_staging_dir_creates_unique_sibling_directory(tmp_path: Path) -> None:
+    final_dir = tmp_path / "out"
+    staging = d4._new_staging_dir(final_dir)
+    assert staging.is_dir()
+    assert staging.parent == tmp_path
+    assert staging.name.startswith(".out.staging-")
+    assert staging != final_dir
+
+
+def test_atomic_publish_dir_moves_staging_into_place_when_final_absent(tmp_path: Path) -> None:
+    final_dir = tmp_path / "out"
+    staging = d4._new_staging_dir(final_dir)
+    (staging / "cell.wav").write_bytes(b"NEW")
+
+    d4._atomic_publish_dir(staging, final_dir)
+
+    assert final_dir.is_dir()
+    assert (final_dir / "cell.wav").read_bytes() == b"NEW"
+    assert not staging.exists()
+
+
+def test_atomic_publish_dir_replaces_existing_final_dir_and_removes_backup(
+    tmp_path: Path,
+) -> None:
+    """既存セットがある場合: 退避 → 置換 → 退避削除の3段で公開する。"""
+    final_dir = tmp_path / "out"
+    final_dir.mkdir()
+    (final_dir / "old.wav").write_bytes(b"OLD")
+
+    staging = d4._new_staging_dir(final_dir)
+    (staging / "new.wav").write_bytes(b"NEW")
+
+    d4._atomic_publish_dir(staging, final_dir)
+
+    assert final_dir.is_dir()
+    assert (final_dir / "new.wav").read_bytes() == b"NEW"
+    assert not (final_dir / "old.wav").exists()
+    leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(".out.pre-publish-")]
+    assert leftovers == []
+
+
+def test_atomic_publish_dir_rolls_back_old_set_when_replace_fails(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """本番置換段（退避済みの空いた最終位置への rename）が失敗したら、退避して
+    おいた旧セットを最終位置へ戻すロールバックを試みる。"""
+    final_dir = tmp_path / "out"
+    final_dir.mkdir()
+    (final_dir / "old.wav").write_bytes(b"OLD")
+
+    staging = d4._new_staging_dir(final_dir)
+    (staging / "new.wav").write_bytes(b"NEW")
+
+    real_replace = d4.os.replace
+    call_count = {"n": 0}
+
+    def _flaky_replace(src, dst):
+        call_count["n"] += 1
+        if call_count["n"] == 2:  # 1 回目 = 旧セット退避（成功させる）。
+            raise OSError("synthetic replace failure")  # 2 回目 = 本番置換を失敗させる。
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(d4.os, "replace", _flaky_replace)
+
+    with pytest.raises(OSError, match="synthetic replace failure"):
+        d4._atomic_publish_dir(staging, final_dir)
+
+    assert final_dir.is_dir()
+    assert (final_dir / "old.wav").read_bytes() == b"OLD"
+
+
+def test_cmd_render_leaves_old_out_dir_untouched_when_run_group_raises(
+    tmp_path: Path, spec_and_sha, monkeypatch,
+) -> None:
+    """render の atomic 公開の end-to-end 回帰（PR #306 レビュー第9巡 P1）:
+    `probe0b.run_group` が途中で例外を送出しても、staging へ書いているだけ
+    なので `--out-dir` の既存セット（前回実行の成果物）は無傷のまま残り、
+    群 doc / manifest も一切書かれない（中断時は staging が孤児として残る
+    だけ、という設計を実際の `cmd_render` 呼び出し経路で確認する）。"""
+    spec, spec_sha = spec_and_sha
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    old_wav = out_dir / "old_cell.wav"
+    old_wav.write_bytes(b"OLD-WAV-BYTES")
+
+    export_manifest_path = tmp_path / "export.json"
+    export_manifest_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        d4.xm, "verify_export_manifest",
+        lambda *a, **kw: {"source_checkpoint_sha256": "0" * 64},
+    )
+    # onnxruntime 非依存を維持する（ファイル冒頭 docstring）ため、実 gate_synth
+    # モジュールは import しない — `run_group` 自体を即座に raise させるので、
+    # 渡した値が何であるかは関係ない。
+    monkeypatch.setattr(d4.probe0b, "load_gate_synth", lambda: object())
+
+    def _boom(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("synthetic mid-render failure")
+
+    monkeypatch.setattr(d4.probe0b, "run_group", _boom)
+
+    result_out = tmp_path / "run5_pjs.json"
+    ns = argparse.Namespace(
+        generation="run5", speaker="pjs",
+        acoustic_dir=str(tmp_path / "acoustic"), acoustic_stem="stem",
+        export_manifest=str(export_manifest_path),
+        canon_model_dir=str(tmp_path / "canon"), vocoder_dir=str(tmp_path / "vocoder"),
+        canon_phonemes_txt=str(tmp_path / "canon.txt"),
+        out_dir=str(out_dir), result_out=str(result_out),
+        spec_sha256=spec_sha,
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic mid-render failure"):
+        d4.cmd_render(ns)
+
+    assert old_wav.read_bytes() == b"OLD-WAV-BYTES"
+    assert not result_out.exists()
+    staging_dirs = [
+        p for p in out_dir.parent.iterdir() if p.name.startswith(f".{out_dir.name}.staging-")
+    ]
+    assert len(staging_dirs) == 1, "中断時は staging が孤児として残るはず"
 
 
 # --- 6. 実際にコミットされている render 群 JSON との形状整合 -----------------
