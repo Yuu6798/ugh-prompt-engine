@@ -156,6 +156,36 @@ def group_paths(root: Path) -> tuple[GroupPaths, ...]:
     return tuple(_group_paths(root, generation, speaker) for generation, speaker in GROUPS)
 
 
+def _phase_b_composer_inputs(
+    regenerated_results_path: Path,
+    synthetic_report_path: Path,
+    real_render_report_path: Path,
+    real_render_manifest_path: Path,
+    recovered_acoustic_path: Path,
+    rendered_groups: Sequence[GroupPaths],
+) -> tuple[Path, ...]:
+    """Phase B composerが読む全ファイルをpublication保護集合へ閉じる。"""
+    inputs = {
+        Path(regenerated_results_path).resolve(),
+        Path(synthetic_report_path).resolve(),
+        Path(real_render_report_path).resolve(),
+        Path(real_render_manifest_path).resolve(),
+        Path(recovered_acoustic_path).resolve(),
+        D4_BASELINE.resolve(),
+        FIXED_PROBE_PINS.resolve(),
+        D4_SPEC.resolve(),
+        D4_RUNNER.resolve(),
+        TRF_SPEC.resolve(),
+        CALIBRATION_PINS.resolve(),
+        REAL_RENDER_BASELINE.resolve(),
+        Path(__file__).resolve(),
+    }
+    for group in rendered_groups:
+        inputs.add(group.render_doc.resolve())
+        inputs.add(group.render_manifest.resolve())
+    return tuple(sorted(inputs, key=str))
+
+
 def _checkpoint_dir(root: Path, generation: str) -> Path:
     if generation in {"run5", "run6"}:
         return root / "materials" / "ckpts" / f"{generation}_bundle"
@@ -712,6 +742,22 @@ def _phase_b_evidence_bundle_id(artifacts: dict[Path, bytes]) -> str:
     return _canonical_json_sha256(sorted(entries, key=lambda entry: entry["path"]))
 
 
+def _execution_profile_from_pins(fixed_probe_pins: dict[str, Any]) -> dict[str, str]:
+    """D6が許すrender runtimeを固定pinから厳密に取り出す。"""
+    profile = (
+        fixed_probe_pins.get("common_fixed", {})
+        .get("execution_profile", {})
+        .get("value")
+    )
+    if (
+        not isinstance(profile, dict)
+        or set(profile) != _D4_RUNTIME_STACK_KEYS
+        or any(not isinstance(value, str) or not value for value in profile.values())
+    ):
+        raise RegenerationError("Phase B: execution_profile pin が固定runtime形状でない")
+    return dict(profile)
+
+
 def _validate_regenerated_provenance(
     regenerated: dict[str, Any],
     *,
@@ -719,6 +765,7 @@ def _validate_regenerated_provenance(
     d4_spec: dict[str, Any],
     d4_spec_sha: str,
     rendered_groups: Sequence[GroupPaths],
+    expected_render_runtime: dict[str, str],
     require_result_path_match: bool = True,
     bundle_id: str | None = None,
 ) -> tuple[dict[str, Any], dict[Path, bytes]]:
@@ -813,11 +860,11 @@ def _validate_regenerated_provenance(
             or doc.get("d4_remeasure_spec_sha256") != d4_spec_sha
             or doc.get("d4_remeasure_spec_path")
             != "voice_genesis/foundry/debt/d4/d4_remeasure_spec.json"
-            or not isinstance(render_runtime, dict)
-            or set(render_runtime) != _D4_RUNTIME_STACK_KEYS
-            or any(not isinstance(value, str) or not value for value in render_runtime.values())
+            or render_runtime != expected_render_runtime
         ):
-            raise RegenerationError(f"Phase B: {group_id} render provenance が不完全")
+            raise RegenerationError(
+                f"Phase B: {group_id} render runtime がexecution_profile pinと不一致"
+            )
 
         materials = {
             "model_sha256": doc.get("model_sha256"),
@@ -904,7 +951,7 @@ def _publish_phase_b_bundle(
     report_payload: bytes,
     *,
     bundle_id: str,
-    protected_inputs: Iterable[Path] = (),
+    protected_inputs: Iterable[Path],
 ) -> None:
     """完全なcontent-addressed bundleを先に公開し、reportを最後に切り替える。"""
     output_parent = Path(out_path).resolve().parent
@@ -1263,6 +1310,11 @@ def validate_resolved_reconciliation(
     if hashlib.sha256(baseline_bytes).hexdigest() != D4_BASELINE_SHA256:
         raise RegenerationError("Phase B canonical baseline がpinと不一致")
     baseline = json.loads(baseline_bytes)
+    fixed_probe_path = Path("voice_genesis/foundry/debt/d6/s7_fixed_probe_pins.json")
+    fixed_probe_pins = json.loads(
+        (Path(report_root).resolve() / fixed_probe_path).read_bytes()
+    )
+    expected_render_runtime = _execution_profile_from_pins(fixed_probe_pins)
     committed_groups = _committed_group_paths(
         report_root, provenance["groups"], bundle_id=bundle_id
     )
@@ -1272,6 +1324,7 @@ def validate_resolved_reconciliation(
         d4_spec=d4_spec,
         d4_spec_sha=hashlib.sha256(d4_spec_bytes).hexdigest(),
         rendered_groups=committed_groups,
+        expected_render_runtime=expected_render_runtime,
         require_result_path_match=False,
         bundle_id=bundle_id,
     )
@@ -1397,6 +1450,7 @@ def compose_phase_b_reconciliation(
     baseline_bytes = D4_BASELINE.read_bytes()
     baseline_sha = hashlib.sha256(baseline_bytes).hexdigest()
     fixed_probe_pins = json.loads(FIXED_PROBE_PINS.read_bytes())
+    expected_render_runtime = _execution_profile_from_pins(fixed_probe_pins)
     baseline_ref = fixed_probe_pins["production_cells"]["refs"]["d4_1_2_remeasurement"]
     if (
         baseline_ref.get("path") != "voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json"
@@ -1427,6 +1481,7 @@ def compose_phase_b_reconciliation(
         d4_spec=d4_spec,
         d4_spec_sha=d4_spec_sha,
         rendered_groups=rendered_groups,
+        expected_render_runtime=expected_render_runtime,
     )
     evidence_artifacts[PHASE_B_RESULTS_PATH] = regenerated_bytes
     expected_trf_sha = d4_spec["pins"]["trf_measurement_spec_1_2_sha256"]
@@ -1570,7 +1625,14 @@ def compose_phase_b_reconciliation(
         versioned_artifacts,
         report_payload,
         bundle_id=bundle_id,
-        protected_inputs=(Path(recovered_acoustic_path),),
+        protected_inputs=_phase_b_composer_inputs(
+            regenerated_results_path,
+            synthetic_report_path,
+            real_render_report_path,
+            real_render_manifest_path,
+            recovered_acoustic_path,
+            rendered_groups,
+        ),
     )
     if reference_mismatches:
         raise RegenerationError(

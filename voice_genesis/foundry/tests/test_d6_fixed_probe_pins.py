@@ -28,6 +28,7 @@ sha256 と report 内裁定値への結合を検証し、手書き RESOLVED を�
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import re
 from pathlib import Path
@@ -56,6 +57,11 @@ def _sha256_file(rel_path: str) -> str:
     path = _REPO_ROOT / rel_path
     assert path.is_file(), f"referenced file does not exist: {rel_path}"
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _expected_render_runtime() -> Dict[str, str]:
+    pins = json.loads(d6_regenerate.FIXED_PROBE_PINS.read_text(encoding="utf-8"))
+    return dict(pins["common_fixed"]["execution_profile"]["value"])
 
 
 D4_RESULTS_SHA256 = _sha256_file("voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json")
@@ -641,6 +647,7 @@ def test_regenerated_results_are_bound_to_current_render_manifests_and_materials
         d4_spec=d4_spec,
         d4_spec_sha=d4_spec_sha,
         rendered_groups=rendered_groups,
+        expected_render_runtime=_expected_render_runtime(),
     )
     assert set(evidence) == {
         f"{generation}_{speaker}" for generation, speaker in d6_regenerate.GROUPS
@@ -662,6 +669,7 @@ def test_regenerated_results_are_bound_to_current_render_manifests_and_materials
             d4_spec=d4_spec,
             d4_spec_sha=d4_spec_sha,
             rendered_groups=rendered_groups,
+            expected_render_runtime=_expected_render_runtime(),
         )
 
     tampered = json.loads(json.dumps(current))
@@ -675,6 +683,36 @@ def test_regenerated_results_are_bound_to_current_render_manifests_and_materials
             d4_spec=d4_spec,
             d4_spec_sha=d4_spec_sha,
             rendered_groups=rendered_groups,
+            expected_render_runtime=_expected_render_runtime(),
+        )
+
+
+def test_render_docs_must_match_the_pinned_execution_profile(tmp_path: Path) -> None:
+    baseline = json.loads(d6_regenerate.D4_BASELINE.read_text(encoding="utf-8"))
+    current = json.loads(json.dumps(baseline))
+    _current_path, rendered_groups = _bind_regenerated_to_current_render_evidence(
+        tmp_path, current
+    )
+    group = rendered_groups[0]
+    group_id = f"{group.generation}_{group.speaker}"
+    doc = json.loads(group.render_doc.read_text(encoding="utf-8"))
+    doc["runtime_stack"]["numpy"] = "9.9.9"
+    group.render_doc.write_text(json.dumps(doc), encoding="utf-8")
+    doc_sha = hashlib.sha256(group.render_doc.read_bytes()).hexdigest()
+    manifest = json.loads(group.render_manifest.read_text(encoding="utf-8"))
+    manifest["groups"][group_id]["render_doc_sha256"] = doc_sha
+    group.render_manifest.write_text(json.dumps(manifest), encoding="utf-8")
+    current["groups"][group_id]["render_doc_sha256"] = doc_sha
+    current["groups"][group_id]["render_runtime_stack"] = doc["runtime_stack"]
+    d4_spec_bytes = d6_regenerate.D4_SPEC.read_bytes()
+    with pytest.raises(d6_regenerate.RegenerationError, match="execution_profile"):
+        d6_regenerate._validate_regenerated_provenance(
+            current,
+            baseline=baseline,
+            d4_spec=json.loads(d4_spec_bytes),
+            d4_spec_sha=hashlib.sha256(d4_spec_bytes).hexdigest(),
+            rendered_groups=rendered_groups,
+            expected_render_runtime=_expected_render_runtime(),
         )
 
 
@@ -684,6 +722,7 @@ def _copy_phase_b_checkout_authorities(report_root: Path) -> None:
         d6_regenerate.D4_RUNNER,
         d6_regenerate.D4_SPEC,
         d6_regenerate.D4_BASELINE,
+        d6_regenerate.FIXED_PROBE_PINS,
         d6_regenerate.TRF_SPEC,
         d6_regenerate.CALIBRATION_PINS,
         d6_regenerate.REAL_RENDER_BASELINE,
@@ -1072,6 +1111,7 @@ def test_phase_b_bundle_publish_failure_preserves_previous_generation(
         first_versioned,
         first_report,
         bundle_id=first_id,
+        protected_inputs=(),
     )
     first_dir = report_path.parent / "d6_phase_b_evidence" / first_id
     first_snapshot = {
@@ -1107,6 +1147,7 @@ def test_phase_b_bundle_publish_failure_preserves_previous_generation(
             second_versioned,
             b'{"generation":"second"}\n',
             bundle_id=second_id,
+            protected_inputs=(),
         )
 
     assert report_path.read_bytes() == first_report
@@ -1136,6 +1177,7 @@ def test_phase_b_bundle_publish_failure_preserves_previous_generation(
             second_versioned,
             b'{"generation":"second"}\n',
             bundle_id=second_id,
+            protected_inputs=(),
         )
     assert report_path.read_bytes() == first_report
     assert {
@@ -1153,6 +1195,38 @@ def test_phase_b_bundle_publish_failure_preserves_previous_generation(
         for path, payload in second_leaf.items()
     }
     assert not list((report_path.parent / "d6_phase_b_evidence").glob(".*.staging-*"))
+
+
+def test_phase_b_publication_requires_and_protects_every_composer_input(
+    tmp_path: Path,
+) -> None:
+    groups = d6_regenerate.group_paths(tmp_path / "work")
+    arguments = tuple(tmp_path / name for name in (
+        "regenerated.json",
+        "synthetic.json",
+        "real-report.json",
+        "real-manifest.json",
+        "recovered.onnx",
+    ))
+    protected = set(d6_regenerate._phase_b_composer_inputs(*arguments, groups))
+    expected = {
+        *(path.resolve() for path in arguments),
+        d6_regenerate.D4_BASELINE.resolve(),
+        d6_regenerate.FIXED_PROBE_PINS.resolve(),
+        d6_regenerate.D4_SPEC.resolve(),
+        d6_regenerate.D4_RUNNER.resolve(),
+        d6_regenerate.TRF_SPEC.resolve(),
+        d6_regenerate.CALIBRATION_PINS.resolve(),
+        d6_regenerate.REAL_RENDER_BASELINE.resolve(),
+        Path(d6_regenerate.__file__).resolve(),
+        *(group.render_doc.resolve() for group in groups),
+        *(group.render_manifest.resolve() for group in groups),
+    }
+    assert protected == expected
+    parameter = inspect.signature(
+        d6_regenerate._publish_phase_b_bundle
+    ).parameters["protected_inputs"]
+    assert parameter.default is inspect.Parameter.empty
 
 
 def test_phase_b_outputs_reject_overlap_with_recovered_input(tmp_path: Path) -> None:
