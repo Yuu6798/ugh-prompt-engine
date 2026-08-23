@@ -115,29 +115,46 @@ where = ["src"]
 testpaths = [
     "tests",
     "voice_genesis/evolution/tests",
-    # foundry/tests 全体は onnxruntime 等の環境依存で collection error になるため、
-    # 通常依存で動くテストのみファイル単位で常時収集する。
+    # Foundry は CI shard と同じファイル単位で常時収集する。
+    # pyworld / onnxruntime を実行するケースだけはテスト単位で skip する。
     # (2026-08-19 セルフレビュー: 台帳の番人が CI 未収集だった)
     "voice_genesis/foundry/tests/test_genome_ledger_shape.py",
     "voice_genesis/foundry/tests/test_genome_ledger_s4_shape.py",
-    # Foundry core: 通常の dev 依存で収集・実行できるが、従来 testpaths から
-    # 漏れていた 15 ファイル。CI では専用 job へ分離し、一覧の正本は
+    # Foundry core: 通常の dev 依存で収集できる 32 ファイル。
+    # CI では専用 job へ分離し、一覧の正本は
     # .github/test-paths/foundry-core.txt と discipline test で同期する。
+    "voice_genesis/foundry/genome_s3/tests/test_genome_s3.py",
     "voice_genesis/foundry/genome_s35/tests/test_genome_s35.py",
+    "voice_genesis/foundry/planb/tests/test_planb.py",
+    "voice_genesis/foundry/planb_real/tests/test_planb_real.py",
+    "voice_genesis/foundry/tests/test_adapter_consonants.py",
+    "voice_genesis/foundry/tests/test_adapter_donor_bank.py",
+    "voice_genesis/foundry/tests/test_adapter_donor_bank_lab.py",
+    "voice_genesis/foundry/tests/test_adapter_donor_bank_utau.py",
     "voice_genesis/foundry/tests/test_adapter_joins.py",
     "voice_genesis/foundry/tests/test_adapter_perf_genes.py",
+    "voice_genesis/foundry/tests/test_adapter_render_donor_wiring.py",
+    "voice_genesis/foundry/tests/test_adapter_units.py",
     "voice_genesis/foundry/tests/test_adapter_voice_spec.py",
+    "voice_genesis/foundry/tests/test_adapter_vowel_class.py",
     "voice_genesis/foundry/tests/test_assemble_run4.py",
     "voice_genesis/foundry/tests/test_convert_amitaro.py",
     "voice_genesis/foundry/tests/test_convert_d3.py",
     "voice_genesis/foundry/tests/test_convert_user.py",
     "voice_genesis/foundry/tests/test_forge_triangle.py",
+    "voice_genesis/foundry/tests/test_gate_synth_diffsinger_repo_pin.py",
+    "voice_genesis/foundry/tests/test_gate_synth_export_provenance.py",
+    "voice_genesis/foundry/tests/test_gate_synth_onnx_publish_rollback.py",
     "voice_genesis/foundry/tests/test_gate_synth_run4.py",
+    "voice_genesis/foundry/tests/test_gate_synth_score_module_cache.py",
+    "voice_genesis/foundry/tests/test_gate_synth_swap_backup.py",
+    "voice_genesis/foundry/tests/test_glue_template.py",
     "voice_genesis/foundry/tests/test_measure_bands.py",
     "voice_genesis/foundry/tests/test_recording_kit_intake.py",
     "voice_genesis/foundry/tests/test_run5_bootstrap.py",
     "voice_genesis/foundry/tests/test_run_d3_cells.py",
     "voice_genesis/foundry/tests/test_s1_dataprep_ph_dur_duration.py",
+    "voice_genesis/foundry/tests/test_s7_gate_synth_dur_hook.py",
     # run 8 (S7) PR-1: 台帳 / B-1 校正 / B-2 裁定代数。import 閉包は numpy + librosa
     # （どちらも本体の必須依存）だけなので onnxruntime 等の環境依存に触れない
     "voice_genesis/foundry/tests/test_s7_ledger.py",

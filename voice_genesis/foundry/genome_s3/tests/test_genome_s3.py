@@ -24,8 +24,6 @@ for _p in (_HERE, _FOUNDRY / "planb", _FOUNDRY / "planb_real"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-pytest.importorskip("pyworld")   # 判定ロジックは純粋だが import 閉包が WORLD に触れる
-
 import s3_gates as sg  # noqa: E402
 import s3_spec as sp  # noqa: E402
 from s3_spec import Gene, GeneVerdict, PairVerdict  # noqa: E402
@@ -366,6 +364,7 @@ def _material_ready() -> bool:
 @pytest.mark.slow
 @pytest.mark.skipif(not _material_ready(), reason="raw corpus / frozen manifest が無い")
 def test_integration_single_pair_five_conditions(tmp_path: Path) -> None:
+    pytest.importorskip("pyworld")
     import s3_report as srep
     import s3_runner as sr
 

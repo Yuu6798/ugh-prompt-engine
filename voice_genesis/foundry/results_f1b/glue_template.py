@@ -21,14 +21,30 @@ import hashlib
 from pathlib import Path
 
 import numpy as np
-import pyworld as pw
 import soundfile as sf
 from scipy.signal import resample_poly
 from scipy.ndimage import uniform_filter1d
 
+try:
+    import pyworld as pw
+except ModuleNotFoundError as exc:
+    if exc.name != "pyworld":
+        raise
+    pw = None
+
 SR = 24000
 FRAME_PERIOD_MS = 5.0
 SPARSE_THRESHOLD = 3  # このフレーム数未満のビンは疎とみなし隣接ビンへ拡張検索
+
+
+def _require_pyworld():
+    """Return pyworld only for template analysis or waveform synthesis."""
+    if pw is None:
+        raise ModuleNotFoundError(
+            "pyworld is required for the F1b WORLD template pipeline",
+            name="pyworld",
+        )
+    return pw
 
 # 本スクリプトが --out 配下へ書く固定出力名（衝突検査対象）
 OUTPUT_NAMES = (
@@ -88,9 +104,10 @@ def load_donor_24k(donor_wav: str) -> tuple[np.ndarray, int]:
 
 def build_template_bank(x: np.ndarray, sr: int):
     """donor 波形を pyworld で分析し、semitone ビン毎の median sp/ap テンプレートを構築する。"""
-    f0, t = pw.harvest(x, sr, frame_period=FRAME_PERIOD_MS)
-    sp = pw.cheaptrick(x, f0, t, sr)
-    ap = pw.d4c(x, f0, t, sr)
+    world = _require_pyworld()
+    f0, t = world.harvest(x, sr, frame_period=FRAME_PERIOD_MS)
+    sp = world.cheaptrick(x, f0, t, sr)
+    ap = world.d4c(x, f0, t, sr)
 
     bins = hz_to_bin(f0)
     voiced_mask = f0 > 0
@@ -196,8 +213,9 @@ def spectral_tilt(sp: np.ndarray, sr: int, db_per_octave: float, ref_hz: float =
 
 def synth_and_shape(f0_seq: np.ndarray, sp_seq: np.ndarray, ap_seq: np.ndarray,
                      amp_full: np.ndarray, sr: int) -> np.ndarray:
-    y = pw.synthesize(np.ascontiguousarray(f0_seq), np.ascontiguousarray(sp_seq),
-                       np.ascontiguousarray(ap_seq), sr, FRAME_PERIOD_MS)
+    world = _require_pyworld()
+    y = world.synthesize(np.ascontiguousarray(f0_seq), np.ascontiguousarray(sp_seq),
+                          np.ascontiguousarray(ap_seq), sr, FRAME_PERIOD_MS)
     y = np.asarray(y, dtype=np.float64)
     # amp envelope (共通振幅包絡, per-sample @sr) を y の長さへ線形補間で合わせる
     n_amp = len(amp_full)
@@ -309,7 +327,8 @@ def main() -> None:
                f"({len(y_bright)/ctrl_sr:.3f}s), formant_scale=1.06 + ap+0.15(clip), peak-norm 0.6")
 
     # ドナー転写距離 (score f0 median vs donor 実測 f0 median, semitone)
-    donor_f0, _ = pw.harvest(donor, sr, frame_period=FRAME_PERIOD_MS)
+    world = _require_pyworld()
+    donor_f0, _ = world.harvest(donor, sr, frame_period=FRAME_PERIOD_MS)
     donor_f0_median = float(np.median(donor_f0[donor_f0 > 0]))
     semitone_dist = 12 * np.log2(donor_f0_median / ctrl_f0_median)
     log.append(f"donor transcription distance: donor f0 median={donor_f0_median:.2f}Hz vs "

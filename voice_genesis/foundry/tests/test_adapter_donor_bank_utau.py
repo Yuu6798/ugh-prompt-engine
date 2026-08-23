@@ -16,6 +16,8 @@ import soundfile as sf
 import donor_bank as db
 import donor_bank_utau as dbu
 
+requires_pyworld = pytest.mark.skipif(db.pw is None, reason="pyworld is not installed")
+
 
 # --- 純関数（音声非依存） ---
 
@@ -231,6 +233,7 @@ def _write_sine_wav(path: Path, duration_s: float, freq_hz: float = 220.0, sr: i
     sf.write(str(path), y.astype(np.float64), sr, subtype="PCM_16")
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_end_to_end(tmp_path: Path) -> None:
     root = tmp_path / "voicebank"
     pdir = root / "A3"
@@ -266,6 +269,7 @@ def test_build_donor_bank_utau_end_to_end(tmp_path: Path) -> None:
     assert unit_vowels == unit_vowels2
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_cache_roundtrip(tmp_path: Path) -> None:
     root = tmp_path / "voicebank"
     pdir = root / "A3"
@@ -286,6 +290,7 @@ def test_build_donor_bank_utau_cache_roundtrip(tmp_path: Path) -> None:
     assert bank2.stats["cache_hit"] is True
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_cache_write_failure_leaves_no_corrupt_pickle(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -318,6 +323,7 @@ def test_build_donor_bank_utau_cache_write_failure_leaves_no_corrupt_pickle(
     assert len(list(cache_dir.glob("utau_bank_*.pkl"))) == 1
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_cache_write_failure_leaves_no_corrupt_pickle(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -347,6 +353,7 @@ def test_build_donor_bank_utau_vcv_cache_write_failure_leaves_no_corrupt_pickle(
 # --- 追補 F1.3-A item1: unit スキーマ拡張（oto overlap / preutterance） ---
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_units_carry_overlap_and_preutterance(tmp_path: Path) -> None:
     root = tmp_path / "voicebank"
     pdir = root / "A3"
@@ -368,6 +375,7 @@ def test_build_donor_bank_utau_units_carry_overlap_and_preutterance(tmp_path: Pa
     assert bank.units[1].preutterance_frames == 16
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_negative_overlap_clamped_to_zero(tmp_path: Path) -> None:
     root = tmp_path / "voicebank"
     pdir = root / "A3"
@@ -381,6 +389,7 @@ def test_build_donor_bank_utau_negative_overlap_clamped_to_zero(tmp_path: Path) 
     assert stats["n_negative_overlap_clamped"] == 1
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_cache_key_changed_by_schema_version(tmp_path: Path) -> None:
     """[実装決定・record] 追補 F1.3-A のスキーマ拡張でキー材料へバージョンマーカーを
     足したため、旧スキーマ（overlap/preutterance フィールド無し）のキャッシュファイル名
@@ -408,6 +417,7 @@ def test_build_donor_bank_utau_cache_key_changed_by_schema_version(tmp_path: Pat
 # --- P1 修正 (review #262): キャッシュキーの内容ハッシュ（oto.ini 編集検知） ---
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_cache_stale_after_oto_edit(tmp_path: Path) -> None:
     """v1 builder: `--cache-dir` 再利用中に oto.ini を 1 バイト編集（overlap
     値を変更）すると、古い pickle を返さず再計算されることを確認する
@@ -438,6 +448,7 @@ def test_build_donor_bank_utau_cache_stale_after_oto_edit(tmp_path: Path) -> Non
     assert len(list(cache_dir.glob("utau_bank_*.pkl"))) == 2
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_cache_stale_after_oto_edit(tmp_path: Path) -> None:
     """v2 (VCV) builder: 同じく oto.ini 編集がキャッシュキーへ反映される。"""
     root = tmp_path / "voicebank"
@@ -499,6 +510,7 @@ def test_select_wav_subset_for_contexts_none_uses_generic_fallback() -> None:
     assert stats["mode"] == "generic"
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_unit_spans_full_offset_to_cutoff(tmp_path: Path) -> None:
     root = tmp_path / "voicebank"
     pdir = root / "A3"
@@ -534,6 +546,7 @@ def test_build_donor_bank_utau_vcv_unit_spans_full_offset_to_cutoff(tmp_path: Pa
     assert stats["n_units_kept"] == 2
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_deterministic_repeat(tmp_path: Path) -> None:
     root = tmp_path / "voicebank"
     pdir = root / "A3"
@@ -552,6 +565,7 @@ def test_build_donor_bank_utau_vcv_deterministic_repeat(tmp_path: Path) -> None:
     assert ctx1 == ctx2
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_cache_roundtrip(tmp_path: Path) -> None:
     root = tmp_path / "voicebank"
     pdir = root / "A3"
@@ -587,6 +601,7 @@ def _count_read_bytes_per_path(monkeypatch) -> Dict[str, int]:
     return counts
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_reads_each_file_exactly_once(tmp_path: Path, monkeypatch) -> None:
     """P2 修正 (review #262 R3): oto.ini と選択された各 wav は、ハッシュと
     decode/parse の両方に同一 read 結果を使う（split-read を直接 enforce）。
@@ -606,6 +621,7 @@ def test_build_donor_bank_utau_vcv_reads_each_file_exactly_once(tmp_path: Path, 
     assert counts.get(str(wav_path.resolve())) == 1
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_reads_each_file_exactly_once(tmp_path: Path, monkeypatch) -> None:
     """P2 修正 (review #262 R3): v1 builder（`build_donor_bank_utau`）も
     同じ single-read 契約を満たす。"""
@@ -653,6 +669,7 @@ def test_build_donor_bank_utau_missing_selected_wav_raises(tmp_path: Path) -> No
         dbu.build_donor_bank_utau(root, min_units_per_vowel=1, max_wav_files=5)
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_required_contexts_change_cache_key(tmp_path: Path) -> None:
     """[実装決定・record] required_contexts が異なれば選択される wav 部分集合が
     変わりうるため、キャッシュキーへ含める（衝突すると別スコア向けの部分
@@ -861,6 +878,7 @@ def _two_pitch_dir_root(tmp_path: Path) -> Path:
     return root
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_wav_sha256_changes_when_same_named_wavs_swap_content(
     tmp_path: Path,
 ) -> None:
@@ -878,6 +896,7 @@ def test_build_donor_bank_utau_vcv_wav_sha256_changes_when_same_named_wavs_swap_
     assert bank_before.wav_sha256 != bank_after.wav_sha256
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_wav_sha256_changes_when_same_named_wavs_swap_content(
     tmp_path: Path,
 ) -> None:
@@ -899,6 +918,7 @@ def test_build_donor_bank_utau_wav_sha256_changes_when_same_named_wavs_swap_cont
 # 対で読む。
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_frontload_skips_invalid_entry_selects_later_valid_wav(
     tmp_path: Path,
 ) -> None:
@@ -938,6 +958,7 @@ def test_build_donor_bank_utau_vcv_frontload_skips_invalid_entry_selects_later_v
     assert stats["realized_coverage"]["covered_contexts"] == [("a", "か")]
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_frontload_deterministic_repeat(tmp_path: Path) -> None:
     """§ 上記テストと同一 fixture の決定論再現（前倒し検証込みの経路）。"""
     root = tmp_path / "voicebank"
@@ -958,6 +979,7 @@ def test_build_donor_bank_utau_vcv_frontload_deterministic_repeat(tmp_path: Path
     assert ctx1 == ctx2
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_realized_coverage_matches_selection_when_valid(
     tmp_path: Path,
 ) -> None:
@@ -983,6 +1005,7 @@ def test_build_donor_bank_utau_vcv_realized_coverage_matches_selection_when_vali
     assert len(bank.units) == 2
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_vcv_fails_closed_when_required_context_unreachable(
     tmp_path: Path,
 ) -> None:
@@ -1001,6 +1024,7 @@ def test_build_donor_bank_utau_vcv_fails_closed_when_required_context_unreachabl
         )
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_required_onsets_vowels_pass_when_satisfied(tmp_path: Path) -> None:
     """v1 builder（`build_donor_bank_utau`）でも realized coverage の必須要件
     enforcement が使える（§ VCV 版と対称。3 銀行統一の終端修正）。"""
@@ -1024,6 +1048,7 @@ def test_build_donor_bank_utau_required_onsets_vowels_pass_when_satisfied(tmp_pa
     assert set(unit_vowels.values()) == {"a"}
 
 
+@requires_pyworld
 def test_build_donor_bank_utau_required_onsets_fails_closed_when_missing(tmp_path: Path) -> None:
     """v1 builder: 必須 onset がどこにも構築できない場合は fail-closed する。"""
     root = tmp_path / "voicebank"

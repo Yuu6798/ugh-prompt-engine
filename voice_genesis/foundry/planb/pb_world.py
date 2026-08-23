@@ -18,11 +18,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-import pyworld as pw
+
+try:
+    import pyworld as pw
+except ModuleNotFoundError as exc:
+    if exc.name != "pyworld":
+        raise
+    pw = None
 
 FRAME_PERIOD_MS = 5.0
 F0_FLOOR_HZ = 60.0
 F0_CEIL_HZ = 900.0
+
+
+def _require_pyworld():
+    """Return pyworld for WORLD calls while keeping pure helpers importable."""
+    if pw is None:
+        raise ModuleNotFoundError(
+            "pyworld is required for Plan B WORLD analysis and synthesis",
+            name="pyworld",
+        )
+    return pw
 
 
 @dataclass(frozen=True)
@@ -53,11 +69,14 @@ def analyze(
     f0_ceil: float = F0_CEIL_HZ,
 ) -> WorldAnalysis:
     """wav -> WORLD 解析（harvest + stonemask + cheaptrick + d4c）。"""
+    world = _require_pyworld()
     x = np.ascontiguousarray(np.asarray(wav, dtype=np.float64))
-    f0_raw, t = pw.harvest(x, sr, f0_floor=f0_floor, f0_ceil=f0_ceil, frame_period=frame_period_ms)
-    f0 = pw.stonemask(x, f0_raw, t, sr)
-    sp = pw.cheaptrick(x, f0, t, sr)
-    ap = pw.d4c(x, f0, t, sr)
+    f0_raw, t = world.harvest(
+        x, sr, f0_floor=f0_floor, f0_ceil=f0_ceil, frame_period=frame_period_ms
+    )
+    f0 = world.stonemask(x, f0_raw, t, sr)
+    sp = world.cheaptrick(x, f0, t, sr)
+    ap = world.d4c(x, f0, t, sr)
     return WorldAnalysis(
         sr=sr, frame_period_ms=frame_period_ms,
         f0=np.asarray(f0, dtype=np.float64),
@@ -69,7 +88,8 @@ def analyze(
 def synthesize(f0: np.ndarray, sp: np.ndarray, ap: np.ndarray, sr: int,
                frame_period_ms: float = FRAME_PERIOD_MS) -> np.ndarray:
     """f0/sp/ap -> 波形（WORLD synthesis）。"""
-    y = pw.synthesize(
+    world = _require_pyworld()
+    y = world.synthesize(
         np.ascontiguousarray(np.asarray(f0, dtype=np.float64)),
         np.ascontiguousarray(np.asarray(sp, dtype=np.float64)),
         np.ascontiguousarray(np.asarray(ap, dtype=np.float64)),

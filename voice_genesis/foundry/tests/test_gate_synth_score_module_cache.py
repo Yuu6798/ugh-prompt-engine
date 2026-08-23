@@ -25,9 +25,15 @@ from typing import Iterator
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "s1_gate"))
+_TESTS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_TESTS_DIR))
+sys.path.insert(0, str(_TESTS_DIR.parent / "s1_gate"))
 
-import gate_synth as gs  # noqa: E402
+from _optional_runtime_stubs import stub_onnxruntime_if_missing  # noqa: E402
+
+with stub_onnxruntime_if_missing():
+    import gate_synth as gs  # noqa: E402
+sys.modules.pop("gate_synth", None)
 
 _PHONEME_JP_SRC = '"""fake phoneme_jp.py for cache eviction test."""\n'
 

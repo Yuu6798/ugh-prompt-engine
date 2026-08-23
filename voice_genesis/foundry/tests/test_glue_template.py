@@ -20,6 +20,16 @@ sys.path.insert(0, str(GLUE_TEMPLATE_DIR))
 import glue_template as gt  # noqa: E402
 
 
+def test_world_pipeline_fails_explicitly_when_pyworld_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(gt, "pw", None)
+    with pytest.raises(ModuleNotFoundError) as exc_info:
+        gt._require_pyworld()
+    assert exc_info.value.name == "pyworld"
+    runtime = object()
+    monkeypatch.setattr(gt, "pw", runtime)
+    assert gt._require_pyworld() is runtime
+
+
 # ---------------------------------------------------------------------------
 # --help smoke (R11: 実行可能な argparse CLI であることの確認)
 # ---------------------------------------------------------------------------

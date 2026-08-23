@@ -24,6 +24,16 @@ import units as un
 import voice_spec as vs
 
 
+def test_render_synthesis_fails_explicitly_when_pyworld_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(rd, "pw", None)
+    with pytest.raises(ModuleNotFoundError) as exc_info:
+        rd._require_pyworld()
+    assert exc_info.value.name == "pyworld"
+    runtime = object()
+    monkeypatch.setattr(rd, "pw", runtime)
+    assert rd._require_pyworld() is runtime
+
+
 def _resolved(n_frames: int, n_bins: int = 8, fill: float = 1.0) -> un.ResolvedSegment:
     sp = np.full((n_frames, n_bins), fill, dtype=np.float64)
     ap = np.full((n_frames, n_bins), 0.1, dtype=np.float64)

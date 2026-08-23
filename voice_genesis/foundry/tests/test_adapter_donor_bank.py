@@ -13,6 +13,18 @@ import pytest
 
 import donor_bank as db
 
+requires_pyworld = pytest.mark.skipif(db.pw is None, reason="pyworld is not installed")
+
+
+def test_world_analysis_fails_explicitly_when_pyworld_is_missing(monkeypatch) -> None:
+    monkeypatch.setattr(db, "pw", None)
+    with pytest.raises(ModuleNotFoundError) as exc_info:
+        db._require_pyworld()
+    assert exc_info.value.name == "pyworld"
+    runtime = object()
+    monkeypatch.setattr(db, "pw", runtime)
+    assert db._require_pyworld() is runtime
+
 
 def test_load_notes_csv_sorted(tmp_path: Path) -> None:
     p = tmp_path / "notes.csv"
@@ -108,6 +120,7 @@ def test_build_units_median_f0_and_log_bands() -> None:
     assert np.all(np.isfinite(u.head_log_bands))
 
 
+@requires_pyworld
 def test_build_donor_bank_end_to_end_with_synthetic_wav(tmp_path: Path) -> None:
     """load_donor_24k (sr=44100 前提) から build_donor_bank までの結合動作確認。
 
@@ -136,6 +149,7 @@ def test_build_donor_bank_end_to_end_with_synthetic_wav(tmp_path: Path) -> None:
     ]
 
 
+@requires_pyworld
 def test_build_donor_bank_reads_wav_and_notes_csv_exactly_once(tmp_path: Path, monkeypatch) -> None:
     """P2 修正 (review #262 R3): wav / notes CSV とも、ハッシュと decode/parse の
     両方に同一 read 結果を使う（split-read を直接 enforce。measure_bands.py の
@@ -172,6 +186,7 @@ def test_build_donor_bank_missing_wav_raises(tmp_path: Path) -> None:
         db.build_donor_bank(tmp_path / "nope.wav")
 
 
+@requires_pyworld
 def test_build_donor_bank_cache_roundtrip(tmp_path: Path) -> None:
     import soundfile as sf
 
@@ -196,6 +211,7 @@ def test_build_donor_bank_cache_roundtrip(tmp_path: Path) -> None:
     ]
 
 
+@requires_pyworld
 def test_build_donor_bank_cache_hit_preserves_stats(tmp_path: Path) -> None:
     """review #262 R9 (`r3789495247`): npz キャッシュヒット時に `bank.stats` の
     `n_units_kept`/`n_dropped_short`/`n_clipped_to_donor_range` 等が初回ビルドと
@@ -371,6 +387,7 @@ def test_cache_key_changes_when_notes_csv_content_edited(tmp_path: Path) -> None
     assert key_before != key_after
 
 
+@requires_pyworld
 def test_build_donor_bank_cache_stale_after_notes_csv_edit(tmp_path: Path) -> None:
     """build_donor_bank を通した end-to-end 確認: notes CSV 編集後は
     cache_hit=False で再計算される（編集前の古い npz を誤って再利用しない）。"""

@@ -23,7 +23,6 @@ for _p in (_HERE, _HERE.parent / "planb"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-pytest.importorskip("pyworld")
 import soundfile as sf  # noqa: E402
 
 import pr_census  # noqa: E402
@@ -296,6 +295,7 @@ def test_moraic_nasal_is_not_confused_with_onset_n():
 # §4 Performance 表現
 # ---------------------------------------------------------------------------
 def _build_pair(ritsu: Path, pjs: Path, name: str = "kagiri"):
+    pytest.importorskip("pyworld")
     r_lab = pr_lab.read_lab(ritsu / f"{name}.lab")
     p_lab = pr_lab.read_lab(pjs / f"{name}.lab")
     r_idx = pr_lab.phrase_final_indices(r_lab.phones)[-1]

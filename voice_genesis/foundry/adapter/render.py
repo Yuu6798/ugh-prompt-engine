@@ -25,8 +25,14 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
-import pyworld as pw
 import soundfile as sf
+
+try:
+    import pyworld as pw
+except ModuleNotFoundError as exc:
+    if exc.name != "pyworld":
+        raise
+    pw = None
 
 _HERE = Path(__file__).resolve().parent
 _SINGER_DIR = _HERE.parent.parent / "singer"
@@ -56,6 +62,16 @@ PEAK_NORM = 0.6
 
 DONOR_CHOICES = ("vocadito", "ritsu", "pjs")
 CONSONANT_SOURCE_CHOICES = ("recorded", "synthetic", "none")
+
+
+def _require_pyworld():
+    """Return pyworld only when waveform synthesis is requested."""
+    if pw is None:
+        raise ModuleNotFoundError(
+            "pyworld is required for adapter waveform synthesis",
+            name="pyworld",
+        )
+    return pw
 
 
 class DonorProvenanceError(ValueError):
@@ -1321,7 +1337,8 @@ def render(
         segments, resolved_list, note_dur_frames_list, consonant_events, is_vcv, SR, FRAME_PERIOD_MS,
     )
 
-    y = pw.synthesize(
+    world = _require_pyworld()
+    y = world.synthesize(
         np.ascontiguousarray(f0_seq), np.ascontiguousarray(sp_seq), np.ascontiguousarray(ap_seq),
         SR, FRAME_PERIOD_MS,
     )

@@ -7,9 +7,8 @@ import で呼び出して**本台帳へ適用する（キー集合だけの再�
 値そのもの（判定 note 等）の正本は `results_s4/s4_record_2026-08-19.md` §6。
 
 本ファイルと S2 側の shape テストは pyproject の testpaths にファイル単位で
-登録されており CI で常時収集される（foundry/tests 全体は onnxruntime 等の
-環境依存で collection error になるため、依存フリーな台帳テストのみを
-個別登録 — セルフレビュー #2）。
+登録されており CI で常時収集される。Foundry の任意依存は個別テスト
+単位で分離され、本台帳テストには影響しない。
 """
 from __future__ import annotations
 
