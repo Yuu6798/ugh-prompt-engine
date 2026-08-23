@@ -121,8 +121,8 @@
       },
       "synthetic_output_pins": {
         "path": "voice_genesis/foundry/debt/d6/s7_synthetic_calibration_output_pins.json",
-        "sha256": "9fb3fe94dae622fc54041f7b994396a792b01d27bea5decf0d8bcca24f2198d0",
-        "role": "合成13条件それぞれの決定論的 WAV 容器、float32 PCM、B-1 harness が測る float64 標本列の sha256。d6_regenerate.py が再生成して全条件を照合する。",
+        "sha256": "d26bbe1346179683082d3fc514a9fda6c94afbcb3e49df108de171ffe2ee37d1",
+        "role": "合成13条件それぞれの決定論的 WAV 容器、float32 PCM、WAV復号相当（float32から厳密拡大）のfloat64標本列の sha256。合成直後のfloat64列はlibm/CPU差を含むためpin対象外。d6_regenerate.py が再生成して全条件を照合する。",
         "n_synthetic_conditions": 13
       },
       "real_render_manifest": {
@@ -219,7 +219,7 @@
       "plan_command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --real-render-acoustic-onnx /home/user/d6-real-render-input/s6_run7_acoustic.onnx --plan",
       "orchestrator": {
         "path": "voice_genesis/foundry/debt/d6/d6_regenerate.py",
-        "sha256": "8bb716cac33b16abcc2480eb23d5ddfff37fab3eb3ffc6e20c06d3c45c6fa1d8"
+        "sha256": "ed6952f0b2860e1e735413dda70af0eb7940838a93d121ca35265a01c3cd2852"
       },
       "d4_runner": {
         "path": "voice_genesis/foundry/debt/d4/d4_runner.py",
@@ -304,7 +304,7 @@
         "synthetic": {
           "required_keys": ["n_compared", "n_matches", "n_mismatches", "baseline_pins_sha256", "reconciliation_sha256"],
           "n_compared": 13,
-          "baseline_pins_sha256": "9fb3fe94dae622fc54041f7b994396a792b01d27bea5decf0d8bcca24f2198d0"
+          "baseline_pins_sha256": "d26bbe1346179683082d3fc514a9fda6c94afbcb3e49df108de171ffe2ee37d1"
         },
         "real_render": {
           "required_keys": ["n_compared", "n_matches", "n_mismatches", "baseline_manifest_sha256", "regenerated_manifest_sha256", "recovery_acoustic_sha256"],

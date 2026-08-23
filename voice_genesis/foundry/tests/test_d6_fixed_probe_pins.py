@@ -305,6 +305,10 @@ def test_synthetic_calibration_output_pins_cover_and_reproduce_all_13(
             hashlib.sha256(np.ascontiguousarray(decoded, dtype="<f4").tobytes()).hexdigest()
             == (stimulus["pcm_f32le_sha256"])
         )
+        assert (
+            hashlib.sha256(np.ascontiguousarray(decoded, dtype="<f8").tobytes()).hexdigest()
+            == stimulus["analysis_samples_f64le_sha256"]
+        )
     original_read_bytes = Path.read_bytes
     calibration_pin_reads = 0
 

@@ -711,13 +711,15 @@ def compose_phase_b_reconciliation(
 def _float32_wav_bytes(samples: Any, sample_rate: int) -> tuple[bytes, bytes, bytes]:
     """IEEE float32 mono WAV を PEAK/時刻 chunk なしで決定論的に作る。
 
-    戻り値は ``(wav, pcm_f32le, analysis_f64le)``。最後の値は B-1 harness が
-    実際に測る float64 標本列なので、WAV 容器だけでなく測定入力も束縛できる。
+    戻り値は ``(wav, pcm_f32le, decoded_f64le)``。最後の値は float32 PCMを
+    float64へ厳密拡大した列で、WAVをB-1の実レンダー経路と同じ方式で復号した
+    測定入力を表す。合成直後のfloat64列はlibm/CPU差を含み得るためpinしない。
     """
     import numpy as np
 
-    analysis = np.ascontiguousarray(samples, dtype="<f8").tobytes()
-    pcm = np.ascontiguousarray(samples, dtype="<f4").tobytes()
+    pcm_samples = np.ascontiguousarray(samples, dtype="<f4")
+    pcm = pcm_samples.tobytes()
+    analysis = np.ascontiguousarray(pcm_samples, dtype="<f8").tobytes()
     byte_rate = int(sample_rate) * 4
     fmt = struct.pack("<HHIIHH", 3, 1, int(sample_rate), byte_rate, 4, 32)
     riff_size = 4 + (8 + len(fmt)) + (8 + len(pcm))
@@ -762,6 +764,7 @@ def generate_calibration_outputs(out_dir: Path) -> dict[str, Any]:
             "sha256": prereg.pins["s7_b1_calibration_set.json"],
         },
         "format": "mono IEEE-float32 little-endian WAV; deterministic RIFF without PEAK chunk",
+        "analysis_format": "float32 PCM widened exactly to little-endian float64",
         "n_conditions": len(entries),
         "stimuli": entries,
     }

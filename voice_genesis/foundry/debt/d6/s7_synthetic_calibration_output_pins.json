@@ -5,6 +5,7 @@
     "sha256": "79b209b52ed3994f8abe2634bf7f7484cc770fcc0dc22b70ebdf25484fcb6d8b"
   },
   "format": "mono IEEE-float32 little-endian WAV; deterministic RIFF without PEAK chunk",
+  "analysis_format": "float32 PCM widened exactly to little-endian float64",
   "n_conditions": 13,
   "stimuli": {
     "clean_N": {
@@ -12,84 +13,84 @@
       "n_samples": 70560,
       "wav_sha256": "9fa19e525a88056e9bf4d3628d1550393d4637c703988b8568fe0f6734f907ea",
       "pcm_f32le_sha256": "c06f033a25f007b6255fc8853c8b51e78ba673ebd1fbc9b254d726b5f9d6271d",
-      "analysis_samples_f64le_sha256": "a90d43f0f2cb341738193dc621d760858a88ec6b9a0cdb3a1661dc48d736f453"
+      "analysis_samples_f64le_sha256": "7c6a63d31a59324e94c37eb935d2fbf8758458b7ca3dd134ca53544e023b889f"
     },
     "clean_i": {
       "sample_rate_hz": 44100,
       "n_samples": 70560,
       "wav_sha256": "3d9e066c0029eb0940aad42b415bf341a7377b7080fb1fd332864654d9d27b14",
       "pcm_f32le_sha256": "4eb1169d332f080f48c20a7e7ccb0da8668753aac29eac79baa4dce441748c7a",
-      "analysis_samples_f64le_sha256": "73d9dd8d2e5d7c106f8f4ea25a0a6fa4873b1e50f54ac53475c3084923cb7e90"
+      "analysis_samples_f64le_sha256": "9b139661238f3e06daabd821cd8fed41904a6b83e1038b3bebf6a56d463bd9f7"
     },
     "clean_terminal_ri": {
       "sample_rate_hz": 44100,
       "n_samples": 70560,
       "wav_sha256": "fa89827d68cf6e2be207c0733a280cb39c075cbfdf4dd4d98678ef9583e2f9c2",
       "pcm_f32le_sha256": "e7afbd6fff903b57c30fffc6abefcf85bba6d0adf4f809077474e4d28591b550",
-      "analysis_samples_f64le_sha256": "399acdb2ea5ff0eafa0952d6fea4b9c83e0621959fe8b245d003d9e50845ab0c"
+      "analysis_samples_f64le_sha256": "3993e6c8fe2af30fddfae734ca311b623f1b7522c9d54325c7b487d55a1439b1"
     },
     "dur_perturb_r020": {
       "sample_rate_hz": 44100,
       "n_samples": 70560,
       "wav_sha256": "4540de5411f132ce68755bb69142e7a90a497f216987de4ea7be6f24f3bd2455",
       "pcm_f32le_sha256": "bd3c858031d52720ca15c945010160de874f5376388cbb2a6c10661c9319b72e",
-      "analysis_samples_f64le_sha256": "3878f5eb6c19b468c43c22bd5347ef9b6cc9e9f8729428f9a7975af770ee18a1"
+      "analysis_samples_f64le_sha256": "9662db759e447a9d0159a5857652707fcf287b3a2e18823becc5075de4816a76"
     },
     "dur_perturb_r035": {
       "sample_rate_hz": 44100,
       "n_samples": 70560,
       "wav_sha256": "15a2410c392a008975e36d86c55a200820248bcddc77217517f8caba74413d21",
       "pcm_f32le_sha256": "87dc9a14e2d58f5427da8ccfcc67bbe1f65486b6e6de2ea66ae65959a6df1c7d",
-      "analysis_samples_f64le_sha256": "6d09b3fc2fb51379cbb376efb17add77ab6bab7c4a39fb601811622ec74f52d1"
+      "analysis_samples_f64le_sha256": "a777c301851afc3f320fda28595076b45be8a8689c4a125b44825032bf13aa85"
     },
     "dur_perturb_r050": {
       "sample_rate_hz": 44100,
       "n_samples": 70560,
       "wav_sha256": "e1dda298eb0cda8e33d2974b4900300a19273fc7b04a6780625670e2d4bcf734",
       "pcm_f32le_sha256": "31b35bc0d7744a785ec95c7e43278428760a4c60b52332a8994d1a390c9af597",
-      "analysis_samples_f64le_sha256": "0cf4aacc3965d2bad2deed8c46c36e499f5fbfb3d0448a8b413bbcb9bb624f3b"
+      "analysis_samples_f64le_sha256": "cede2dc4784826ff8704bf64c20ee0e8f92fc7f24a5d8757997fced9d7487eb2"
     },
     "gain_x050": {
       "sample_rate_hz": 44100,
       "n_samples": 70560,
       "wav_sha256": "74b3971aa78d579d3196221fe819a5635ef2b1c73819d17858d179db6f0300be",
       "pcm_f32le_sha256": "bc10aabf4addcd81588f37de5eb288de948a62404f409441030adc477f6e6e67",
-      "analysis_samples_f64le_sha256": "99e5537eb122cefe0ab5502749bf3568a71858e6186339d975baa4b1702d968d"
+      "analysis_samples_f64le_sha256": "44321582412ac27dbe4011030566a4b6b2a97f459c2fdb085bc346c66c287fdf"
     },
     "gain_x100": {
       "sample_rate_hz": 44100,
       "n_samples": 70560,
       "wav_sha256": "cfa17dae8b9b2bcc22cde069602daf4bd810860d2cde404b1275a302540227af",
       "pcm_f32le_sha256": "7a7f4e1c5c85d5d6af92980cc42f95cf842fe75a65af8a2540c9714eb1e09173",
-      "analysis_samples_f64le_sha256": "1c17ce971678de533e24da522b598539487c1260fbc6da0c9d50ae35ac801de2"
+      "analysis_samples_f64le_sha256": "1ca1d4345d8cb4a494d95bf77b417c05005e5373df85bfc39bae08a0998b54ba"
     },
     "long_tail_000": {
       "sample_rate_hz": 44100,
       "n_samples": 70560,
       "wav_sha256": "3d9e066c0029eb0940aad42b415bf341a7377b7080fb1fd332864654d9d27b14",
       "pcm_f32le_sha256": "4eb1169d332f080f48c20a7e7ccb0da8668753aac29eac79baa4dce441748c7a",
-      "analysis_samples_f64le_sha256": "73d9dd8d2e5d7c106f8f4ea25a0a6fa4873b1e50f54ac53475c3084923cb7e90"
+      "analysis_samples_f64le_sha256": "9b139661238f3e06daabd821cd8fed41904a6b83e1038b3bebf6a56d463bd9f7"
     },
     "long_tail_040": {
       "sample_rate_hz": 44100,
       "n_samples": 70560,
       "wav_sha256": "01d4607666ba0a69451d0e7f8e4bc8a30eea1cff688c9fe50cb26ea35b6773c2",
       "pcm_f32le_sha256": "6d41af11cb31e28b93dfe71e8e186c2fe543addeabf58ff6ed01628330fd15c1",
-      "analysis_samples_f64le_sha256": "1160c1f2ebf4604c0a9cc1235fd890a9640c297ebe7735db4997819a543ae8bd"
+      "analysis_samples_f64le_sha256": "3c0e93b340a497eff27d9f18780db4c6b27657277b614b28ac6b006542c43240"
     },
     "long_tail_080": {
       "sample_rate_hz": 44100,
       "n_samples": 70560,
       "wav_sha256": "cfa17dae8b9b2bcc22cde069602daf4bd810860d2cde404b1275a302540227af",
       "pcm_f32le_sha256": "7a7f4e1c5c85d5d6af92980cc42f95cf842fe75a65af8a2540c9714eb1e09173",
-      "analysis_samples_f64le_sha256": "1c17ce971678de533e24da522b598539487c1260fbc6da0c9d50ae35ac801de2"
+      "analysis_samples_f64le_sha256": "1ca1d4345d8cb4a494d95bf77b417c05005e5373df85bfc39bae08a0998b54ba"
     },
     "long_tail_160": {
       "sample_rate_hz": 44100,
       "n_samples": 70560,
       "wav_sha256": "5b7596250ed0b22e993fcf03ec9cc9f836804fbba943b92a2f8af594b2c5113f",
       "pcm_f32le_sha256": "dacd69ded3c470c11284c5f631177ec02a3ca20d6609b81afb43461f3b1fb1d5",
-      "analysis_samples_f64le_sha256": "f90502d13556db96dbfb98e4a5c68e8774ff3dd95ff1a737f662e7546864c84f"
+      "analysis_samples_f64le_sha256": "35beb5d5a13ffe6649e1c5627e93d4b8bfb8d805bf0288e11bbabaea1b55cb68"
     },
     "silence": {
       "sample_rate_hz": 44100,
