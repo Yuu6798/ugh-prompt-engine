@@ -1,0 +1,171 @@
+{
+  "schema": "voicegenesis-run4-export-device-probe/0.1",
+  "title": "run4 export-device probe: acoustic ONNX export の実行時デバイス（CUDA/CPU）単一要因掃引",
+  "executed_at_utc": "2026-08-23",
+  "executed_by": "RunPod pod 上の自動 probe（設計・判読 = Fable / 実装・実行・回収 = サブエージェント委譲）",
+  "authorization": "User 指示 2026-08-23「このセッションではこの残余候補を実行してほしい」（PR #307 で GPU 課金律速により掃引を見送った候補の実行承認）",
+  "reentry_condition_basis": "debt_ledger.yaml VG-DEBT-008 reentry_condition (a-2)（正本）: 未制御要因のいずれかを制御した環境で anchor WAV 再生成が記録済み sha と一致した場合、producer chain の機能的裏付けとして別途記録する。item 1 の closure は動かさない",
+  "probe_script": {
+    "pod_entry": "voice_genesis/foundry/scripts/run4_export_device_probe_pod.sh",
+    "runner": "voice_genesis/foundry/scripts/run4_export_device_probe_runner.py",
+    "script_commit_executed": "26373e38cc7591d72bc2dcbc63c0267f83f8b66e",
+    "repo_checkout_pin_commit": "cda36b9f2308128797c48976a9c90b28a4f1661a",
+    "diffsinger_commit": "e2307b1080b00f3999702ce9017cfd75c7f862fe"
+  },
+  "execution_provenance": {
+    "attempts": [
+      {
+        "run": 1,
+        "pod_id": "ihlx25tiqiwfec",
+        "script_commit": "971241fdf6b5edb81bab6a7fcd135f5fd1a13169",
+        "outcome": "測定データ回収失敗（測定自体の成否は不明のまま実体消失）",
+        "cause_measured": "*.proxy.runpod.net 前段の Cloudflare が User-Agent 'Python-urllib/*' を UA 文字列のみで一律 403 (error code: 1010) にする。runner の pod 向け全リクエストが urllib 既定 UA だったため pod の状態に依らず回収不能だった（最安 CPU pod でのチャネル単体実験で UA 分離により実測確定）",
+        "duration_min": 67,
+        "approx_cost_usd": 0.25
+      },
+      {
+        "run": "channel-test",
+        "pod_id": "4c0ffzi1dsc4j1",
+        "outcome": "UA ban を実測確定（listener は起動 3 秒で bind・valid UA は即 200・5MB を約 1 秒で転送可）",
+        "approx_cost_usd": 0.01
+      },
+      {
+        "run": 2,
+        "pod_id": "fb4g2z50g6ai8y",
+        "script_commit": "02143adc0d7103cc2d04ab055b8a8fc5566acd7e",
+        "outcome": "CUDA ゲートで fail-closed（設計どおり）。nvidia-smi は成功（RTX 3090 / driver 580.95.05）するが venv A torch 2.13.0+cu126 の CUDA init が『CUDA unknown error』で is_available()=False",
+        "cause_note": "原因は未診断のまま（診断ステージは本 run の後に追加）。run 3 の別ホストでは同一手順で CUDA 可用だったため、ホスト依存要因の存在は示唆されるが機構は未特定",
+        "duration_min": 8,
+        "approx_cost_usd": 0.03
+      },
+      {
+        "run": 3,
+        "pod_id": "9vqeutstuut6lj",
+        "machine_id": "9n6f9d711k6h",
+        "script_commit": "26373e38cc7591d72bc2dcbc63c0267f83f8b66e",
+        "outcome": "完走（status=ok, stage=7-results）。全成果物を HTTP 200 で回収、バイナリは手元再計算 sha256 と probe_results.json 記録値の一致を確認",
+        "gate_branch": "venv A CUDA 可用（primary_gpu_stack=venv_a_torch_2.13.0+cu126。system torch フォールバック・C1S は不使用）",
+        "duration_min": 24,
+        "approx_cost_usd": 0.09
+      }
+    ],
+    "total_approx_cost_usd": 0.38,
+    "single_pod_at_a_time": true,
+    "all_pods_terminated_confirmed": true
+  },
+  "environment_run3": {
+    "image": "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04",
+    "gpu": "NVIDIA GeForce RTX 3090",
+    "driver": "580.65.06",
+    "venv_a": {
+      "torch": "2.13.0+cu126",
+      "torch_cuda": "12.6",
+      "numpy": "1.26.4",
+      "onnx": "1.22.0",
+      "onnxruntime": "1.29.0",
+      "onnxruntime_providers_used": "CPUExecutionProvider（synth は export device に依らず常に CPU EP。gate_synth.py:1215-1225）",
+      "lightning": "2.3.3",
+      "pyyaml": "6.0.3"
+    },
+    "host_cpu_simd": "AVX512 系 feature 全て False（numpy __cpu_features__ 実測）＝合成側の numpy dispatch はネイティブに AVX2 天井。S3_RUN4_RUNBOOK.md ゲート 2 が意図する『X86_V3=AVX2 相当』状態が本ホストでは自然に成立していた（契約の充足を主張するものではない）",
+    "paths": "run4 同一パス root /root/s1work（gate40k.log の記録と同一の絶対パス構成）",
+    "materials_pins": "ckpt（3921f96a…）・config 4 点・canon 消費 4 メンバー・vocoder・gate_synth_run4.py（006cd867…）/ gate_synth.py / singer 3 点の blob sha・DiffSinger revision すべて fail-closed 照合で通過（probe script 埋め込み pin。1 つでも不一致なら測定せず停止する設計）"
+  },
+  "expected_values": {
+    "session_cpu_onnx_sha256": "a6da561a66ece62d64d4a0635a5ef525c2b6143eb311c1a7e1d595d9abd3a676",
+    "session_cpu_onnx_source": "run4_provenance_closure_2026-08-23.json Phase 2（torch 2.13.0+cpu・AVX512 有効/無効で不変）",
+    "recorded_run4_wav_sha256": {
+      "ritsu_sakura": "55bd14c28437dbfcf06b564343f4bcff02b9bea6c9c1f752a72dbf78f3ec9ef9",
+      "ritsu_umi": "a12ef548d9649f86854804f9676e88aa8ed76528ea0592859f752fed9064bb9e",
+      "pjs_sakura": "b9ce3454854e870075ee001fa5cdf937dc11891f047c497a1e40fcf44aabf279",
+      "pjs_umi": "43d6bff14b1eebdd6e8f9e8aa58bde6bae21e2c23df21e29205974f2d491150f",
+      "user_sakura": "e2f7b270c2840012178e50147491a7db1f38f47aee9d4ff487ace60e12c94ea0",
+      "user_umi": "ac8b3455b4204a6e55d34b7db2e81709f1e6f8bc6f20d6d7462767a4dcf28979"
+    }
+  },
+  "arms": {
+    "g1_gpu_export_full": {
+      "description": "CUDA 可視・venv A。原記録どおりの 3 起動（export+ritsu / --skip-export pjs / --skip-export user）",
+      "onnx_sha256": "3e6c3a3a8d2ee89466033d1edee10644b4d680c36cdcc614a2a3888e055a975c",
+      "wav_sha256": {
+        "ritsu_sakura": "55bd14c28437dbfcf06b564343f4bcff02b9bea6c9c1f752a72dbf78f3ec9ef9",
+        "ritsu_umi": "a12ef548d9649f86854804f9676e88aa8ed76528ea0592859f752fed9064bb9e",
+        "pjs_sakura": "b9ce3454854e870075ee001fa5cdf937dc11891f047c497a1e40fcf44aabf279",
+        "pjs_umi": "43d6bff14b1eebdd6e8f9e8aa58bde6bae21e2c23df21e29205974f2d491150f",
+        "user_sakura": "e2f7b270c2840012178e50147491a7db1f38f47aee9d4ff487ace60e12c94ea0",
+        "user_umi": "ac8b3455b4204a6e55d34b7db2e81709f1e6f8bc6f20d6d7462767a4dcf28979"
+      },
+      "wav_rms_dur_match_recorded": "6/6 とも rms（記録 4 桁）・dur（記録 3 桁）が記録値と一致"
+    },
+    "g2_gpu_export_determinism": {
+      "description": "起動 1（export + ritsu 合成）を新規 out-dir で再実行",
+      "onnx_sha256": "3e6c3a3a8d2ee89466033d1edee10644b4d680c36cdcc614a2a3888e055a975c",
+      "wav_sha256": {
+        "ritsu_sakura": "55bd14c28437dbfcf06b564343f4bcff02b9bea6c9c1f752a72dbf78f3ec9ef9",
+        "ritsu_umi": "a12ef548d9649f86854804f9676e88aa8ed76528ea0592859f752fed9064bb9e"
+      }
+    },
+    "c1_cpu_export_same_pod": {
+      "description": "同一 pod・同一 venv A で CUDA_VISIBLE_DEVICES=\"\" により export のみ CPU 強制（起動 1 相当）",
+      "onnx_sha256": "53ad8c436b0951857f3ac20825d2da0f6b8758f011f4c27ea165aed39336a040",
+      "wav_sha256": {
+        "ritsu_sakura": "a42db76d0207573834580330b9694fbd2d683c98eb3eb73664998646895cf6a5",
+        "ritsu_umi": "301e1e3772fecfa2ac3647fda5d5f11e4135441a1857e88f2e450054c3438d49"
+      }
+    },
+    "c1b_cpu_export_alt_path_root": {
+      "description": "C1 の ONNX が session 値と不一致だったため発火。全入力を /root/s1work_alt 配下へ複製して CPU export",
+      "onnx_sha256": "53ad8c436b0951857f3ac20825d2da0f6b8758f011f4c27ea165aed39336a040",
+      "wav_sha256": {
+        "ritsu_sakura": "a42db76d0207573834580330b9694fbd2d683c98eb3eb73664998646895cf6a5",
+        "ritsu_umi": "301e1e3772fecfa2ac3647fda5d5f11e4135441a1857e88f2e450054c3438d49"
+      }
+    },
+    "c1s": {
+      "triggered": false,
+      "reason": "system torch フォールバック時のみのアーム（本 run は venv A CUDA 可用）"
+    },
+    "arm_b_image_default_stack": {
+      "skipped": true,
+      "reason": "system 環境に soundfile 不在で gate_synth.py の import が失敗（ModuleNotFoundError: No module named 'soundfile'）。best-effort アームのため probe は継続。venv A が CUDA 可用だったため本アームの測定目的（GPU 実行の確保）は G1 で充足済み"
+    }
+  },
+  "comparisons": {
+    "g1_onnx_eq_session_cpu": false,
+    "g2_onnx_eq_g1_onnx": true,
+    "g2_wavs_eq_g1_wavs": true,
+    "c1_onnx_eq_session_cpu": false,
+    "c1_onnx_eq_g1_onnx": false,
+    "c1b_eq_c1": true,
+    "c1_wavs_eq_recorded": "0/2",
+    "g1_wav_matches_recorded_count": "6/6"
+  },
+  "findings_measured": [
+    "F1: acoustic ONNX export の実行時デバイスは ONNX バイトを変える——同一 pod・同一 venv（torch 2.13.0+cu126）・同一入力で、CUDA export（3e6c3a3a…）と CPU 強制 export（53ad8c43…）の sha256 が不一致",
+    "F2: GPU export 経路の anchor WAV 6 本は記録済み run4 sha256 と 6/6 バイト一致（rms・dur も記録値と一致）。reentry_condition (a-2) の『未制御要因の 1 つ（export device）を制御した環境での記録済み sha 一致』が成立",
+    "F3: 合成環境を固定した pod 内比較で、WAV の一致/不一致は export device のみで反転した——同一 pod・同一 synth 環境（onnxruntime 1.29.0 CPU EP・numpy 1.26.4・AVX2 天井）で、CPU-export ONNX からの WAV は 0/2 不一致、GPU-export ONNX からの WAV は 6/6 一致",
+    "F4: GPU export + 合成は本 pod 上で決定論的（G2 再実行で ONNX・WAV とも bit 一致）",
+    "F5: CPU export はパス root（/root/s1work vs /root/s1work_alt）に不感（C1b = C1 で ONNX・WAV とも bit 一致）",
+    "F6: CPU export 経路は 2 環境・2 通りの ONNX バイト（session a6da561a… / pod 53ad8c43…）でいずれも記録 WAV に不一致（session 0/6・pod 0/2）"
+  ],
+  "unresolved_enumerated_not_swept": [
+    "pod CPU export（53ad8c43…・torch 2.13.0+cu126 wheel を CUDA 不可視で実行）と session CPU export（a6da561a…・torch 2.13.0+cpu wheel）の不一致の原因: wheel ビルド種別 / OS・コンテナ / ホスト CPU の交絡として列挙に留め掃引しない（session 実測では export は AVX512 有効/無効に不変だったため numpy SIMD 状態単独では説明されないことまでは既測。run4_provenance_closure_2026-08-23.json Phase 4）",
+    "run 2 のホスト（driver 580.95.05）で venv A の CUDA init が失敗した機構: 未診断（診断ステージは run 2 後に追加。run 3 の別ホスト・driver 580.65.06 では可用）"
+  ],
+  "a2_functional_corroboration": {
+    "applies": true,
+    "statement": "GPU export を含む producer chain 構成（本 JSON の environment_run3 に枚挙）が、pin 済み入力から記録済み anchor WAV 6 本をバイト再現した。reentry_condition (a-2) の定めどおり、これは producer chain の機能的裏付け（6 入力に対する振る舞い一致）として本記録に記帳する",
+    "closure_impact": "なし——item 1（acoustic_onnx.run4_onnx_gate_40000.sha256）は measured_only に据え置き（(a-1): WAV 一致では昇格しない）。VG-DEBT-008 の status は accepted_residual のまま不変"
+  },
+  "non_claims": [
+    "run4 実行当時の export プロセスで CUDA が可視だったという歴史的述語は主張しない——当時の device・torch ビルド・onnxruntime 版はいずれも未記録のままである。本結果は『この環境で GPU export が記録バイトを再現する』という機能的事実であり、当時の実行条件の証明ではない",
+    "GPU export で得た ONNX（3e6c3a3a…）が run4 当時の ONNX バイトと同一であるとは主張しない——当時 sha の記録が存在せず同一性は判定不能（item 1 が measured_only である理由そのもの）",
+    "『GPU export ならば常に記録バイトを再現する』とは主張しない——再現は本 pod 環境 1 点での実測である",
+    "残余候補への順位付けは行わない（PR #307 終端宣言（追補 2）継承）。本記録は候補間の順位ではなく、単一要因を操作した実測の記載である"
+  ],
+  "artifact_byte_policy": "freeze_mode: pinned_regenerable（v1.1 裁定）。WAV / ONNX 実体は git に入れず sha256 のみ記帳。実体は本 JSON の pin 群と probe script により決定論的に再生成可能（GPU export の決定論は F4 で本 pod 上のみ実測）",
+  "acceptance": {
+    "recomputable": "comparisons の全 boolean は arms / expected_values の sha256 値のみから再計算可能（形状テストで機械検証）",
+    "authority": "closure・status の判定規則は debt_ledger.yaml の reentry_condition (a-1)/(a-2) が正本。本 JSON はそれに従属する"
+  }
+}
