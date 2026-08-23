@@ -383,10 +383,22 @@
       "onnxruntime バージョン: 本実測は D4（run5-7測定）のrender_stack pinに合わせ1.29.0を使用。run4実行当時のPodが同一版だったという記録・証拠は無い。",
       "DiffSinger (openvpi) revision: 本実測はD4と同じe2307b1を使用。run4実行当時のgit revisionはgate40k.log/gate_run3_anchor_v2.logのいずれにも記録が無く不明（既存記録の指摘どおり）。",
       "torch バージョン・ビルド種別: 本実測はtorch 2.13.0+cpu（CPU専用ビルド）を使用。",
-      "acoustic ONNX export 時のデバイス（GPU vs CPU）: run4実行環境はRunPod GPU Pod（s3-run4-v2）であり、config.yamlのpl_trainer_accelerator: auto や学習自体がGPU実行だったことから、export.py実行時もCUDA上でcheckpointをロードしtorch.onnx.exportをトレースした可能性が高い（gate40k.logにdevice指定の明記は無いため断定はできない）。本実測はtorch 2.13.0+cpuというCPU専用ビルドでexportを行っており、CUDA vs CPUのトレース経路差（cuDNN kernel由来の定数畳み込み値の丸め差等）がONNXグラフの定数値レベルで生じ得る——これは1番目のacoustic.onnx sha自体が当時バイトと異なる可能性の有力候補であり、SIMD要因より上流（export段）に位置する。宣言のみに留め、GPU環境での再exportは本実測のスコープ外（GPU環境が本セッションに無いため実行不能）。",
+      "acoustic ONNX export 時のデバイス（GPU vs CPU）: 第7巡P2を受けpin済みexporterのdevice選択経路を実査した。DiffSinger e2307b1080b00f3999702ce9017cfd75c7f862fe の scripts/export.py はdeviceを選ぶCLIオプションを持たず、acoustic サブコマンドは device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')（L138、variance/nsf_hifiganのL217/L282も同型）で実行時に自動選択する。deployment/exporters/acoustic_exporter.py:21 の既定 'cpu' は呼び出し側のこの引数で上書きされる。呼び出し元 gate_synth.py:1084-1091 も device フラグを渡さず CUDA_VISIBLE_DEVICES の scoping もせず親環境を継承した subprocess として起動する。したがってこの経路にCPUを強制する機構は存在せず、export プロセスで torch.cuda.is_available() が真ならCUDAでトレースされる。S1_GPU_RUNBOOK.md §5.2 の『CPU で足りる』は十分性の記述であって実行記録ではなく、強制もしない。未記録なのは述語そのもの——run4のexportプロセスにおけるtorchビルド（CUDA版かCPU専用版か）とGPUの可視性は gate40k.log / gate_run3_anchor_v2.log のいずれにも記録が無い。本実測は torch 2.13.0+cpu（CPU専用ビルド）でexportしており、CUDA vs CPU のトレース経路差（cuDNN kernel由来の定数畳み込み値の丸め差等）がONNXグラフの定数値レベルで生じ得るため、acoustic ONNX の sha256 が当時バイトと異なる機構としては成立しうる（かつSIMD要因より上流＝export段に位置する）。ただし順位は付けない——実行時デバイスが未記録である以上、他の未制御要因より確からしいと言う根拠が無い（PR #307 Codex 第7巡P2 により『有力候補』『可能性が高い』の順位付けを撤回し、列挙候補の1つとして残す）。GPU環境が本セッションに無いため検証は実行不能。",
       "OS/libm/コンテナベースイメージの差: 本実測環境（Linux 6.18.44-fc-v21 x86_64、このセッションのコンテナ）と run4実行時のRunPod Podのベースイメージは別物であり、libmの浮動小数点関数実装差も候補として残る。"
     ],
     "verdict": "run4 当時バイトの再現は本環境では未達（0/6）。【記録済み WAV との差分の規模は未測定】——記録済み run4 anchor WAV の波形実体は repo にも本セッションにも存在せず（残っているのは sha256 と rms/dur の記録のみ）、サンプルレベルの比較ができないためである。記録済みとの関係で言えるのは rms（4桁）・dur（3桁）・ファイルサイズという【要約統計の一致】までであり、内容の類似性は【未測定】である——無関係な波形でもこれら 3 統計は一致しうるため、『全く別内容ではない』とは言えない（PR #307 Codex 第5巡 P2 指摘により当初の主張を撤回）。なお sample_level_divergence_measurement の 約11%・最大±6LSB は 【2026-08-23 の再実行同士（AVX512 有効 vs 無効）】の比較値であり、歴史的不一致の規模を特徴づけるものではない（PR #307 Codex 第3巡 P2 指摘により訂正）。境界宣言としてこれ以上の掃引（onnxruntime版/DiffSinger revision/GPU export環境の用意）は本実測のスコープ外とし、item 1（acoustic ONNX sha）は measured_only に据え置く。",
-    "contract_compliance_scope": "本追試は run4 環境契約の【充足】ではなく、契約の SIMD 条項に相当する AVX512 無効化の【近似適用】である（PR #307 Codex 第3巡 P2 指摘により明記）。理由: (a) S3_RUN4_RUNBOOK.md §2.2 の 4 ゲートは D3 再生成パイプラインにスコープされており、本経路（gate_synth_run4.py による anchor 合成）には一切配線されていない（gate_synth_simd_gate_check で grep 実測済み）。(b) 契約は numpy 2.4.6 の stack pin を含む 4 ゲート全体を要求するが、本実測の venv は DiffSinger 互換のため numpy<2（1.26.4）に固定されており stack pin を満たさない。(c) numpy 1.26.4 は X86_V3/X86_V4 というトークン語彙自体を持たないため、個別 AVX512 トークン列で dispatch を AVX2 止まりに落とす代替手段を用いた（simd_verification に実測記録）。したがって『環境契約を満たした上での再試行』と読んではならない。"
+    "contract_compliance_scope": "本追試は run4 環境契約の【充足】ではなく、契約の SIMD 条項に相当する AVX512 無効化の【近似適用】である（PR #307 Codex 第3巡 P2 指摘により明記）。理由: (a) S3_RUN4_RUNBOOK.md §2.2 の 4 ゲートは D3 再生成パイプラインにスコープされており、本経路（gate_synth_run4.py による anchor 合成）には一切配線されていない（gate_synth_simd_gate_check で grep 実測済み）。(b) 契約は numpy 2.4.6 の stack pin を含む 4 ゲート全体を要求するが、本実測の venv は DiffSinger 互換のため numpy<2（1.26.4）に固定されており stack pin を満たさない。(c) numpy 1.26.4 は X86_V3/X86_V4 というトークン語彙自体を持たないため、個別 AVX512 トークン列で dispatch を AVX2 止まりに落とす代替手段を用いた（simd_verification に実測記録）。したがって『環境契約を満たした上での再試行』と読んではならない。",
+    "exporter_device_path_inspection_2026-08-23": {
+      "trigger": "PR #307 Codex 第7巡 P2: 実行時デバイスが未記録のまま GPU/CPU 差を最有力と順位付けているとの指摘",
+      "inspected": [
+        "scripts/export.py L138 (acoustic) / L217 (variance) / L282 (nsf_hifigan) @ DiffSinger e2307b1080b00f3999702ce9017cfd75c7f862fe",
+        "deployment/exporters/acoustic_exporter.py:21",
+        "voice_genesis/foundry/s1_gate/gate_synth.py:1084-1091",
+        "voice_genesis/foundry/S1_GPU_RUNBOOK.md §5.2"
+      ],
+      "finding": "exporter の device は torch.device('cuda' if torch.cuda.is_available() else 'cpu') による実行時自動選択。device 選択の CLI オプションは無く、gate_synth.py 側も device フラグ・CUDA_VISIBLE_DEVICES の scoping を行わない。この経路に CPU を強制する機構は存在しない。",
+      "still_unrecorded": "run4 の export プロセスにおける torch ビルド種別と GPU 可視性（= torch.cuda.is_available() の真偽）。ログに記録が無い。",
+      "verdict": "機構としては成立しうるが、実行時デバイスが未記録のため順位付けは不能。GPU/CPU 差は順位なしの列挙候補として残す（ranking withdrawn, mechanism recorded）。"
+    }
   }
 }
