@@ -61,11 +61,15 @@
   `nsf_hifigan.onnx` の sha256（`a3e26672...`）も provision.sh の
   `VOC_WANT` と完全一致（これは --vocoder-dir から実際に読まれる唯一の
   ファイルであり曖昧性なし）。
-- **gate_synth_run4.py**: Phase 0 で同定した pin コミット `cda36b9f` から
-  `git show <commit>:...gate_synth_run4.py | sha256sum` で当時バイトを算出
-  （`006cd867...`）。現行 HEAD のバイト（`579f7f0b...`）も参考値として
-  別途記録し、両者を明確に区別した（現行 HEAD を当時バイトとして扱うことは
-  していない）。
+- **gate_synth_run4.py**: Phase 0 で同定した pin コミット候補 `cda36b9f` から
+  `git show <commit>:...gate_synth_run4.py | sha256sum` で
+  **リポジトリ側バイト（＝当時バイトの推定候補）** を算出（`006cd867...`）。
+  **これを「当時バイト」と呼んではならない** — run4 の Pod に未コミット編集が
+  あった可能性を排除できず、`git show` はリポジトリ候補しかハッシュできない
+  ため、コミット同定の確度は `high_but_unproven` に留まる（JSON 側 item の
+  `note` も同旨）。現行 HEAD のバイト（`579f7f0b...`）も参考値として別途記録し、
+  両者を明確に区別した（現行 HEAD を当時バイトの代用として扱うことはしない）。
+  ＜PR #307 Codex 第 2 巡 P2 指摘により表現を訂正＞
 
 ## Phase 2: 本命実測（1番 + 機能的証明）
 
