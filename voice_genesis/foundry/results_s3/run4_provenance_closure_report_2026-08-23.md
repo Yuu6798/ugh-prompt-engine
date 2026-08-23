@@ -370,11 +370,20 @@ VG-DEBT-010 と同型の扱いである。
    device 差だが、**順位は付けない**（run4 の export 実行時デバイスは未記録。
    ＜第 7 巡 P2＞）。検証は GPU 課金を要するため逓減領域として掃引しない
 
-`reentry_condition` を台帳へ記録した: (a) 未制御要因のいずれかを制御した環境で
-anchor WAV 再生成が記録済み sha と一致すれば item 1 は `reproduced` へ昇格可能
-（export device 差はその候補の 1 つであって確定した昇格経路ではない。
-＜第 7 巡 P2 により GPU 前提の記述を撤回＞）、
-(b) run3 checkpoint が発見されれば run3 系 6 件は再開可能。
+`reentry_condition` を台帳へ記録した（**正本は `debt_ledger.yaml` の
+`reentry_condition`**。本段落はその要約であり、乖離した場合は台帳が勝つ）:
+
+- **(a-1)** item 1 が `reproduced` へ昇格できるのは、**当時の ONNX 実体の回収** /
+  **当時 sha の記録としての発見** / **producer chain 全体（ckpt・exporter
+  revision・実行時 device・数値スタック）が証拠づけられての再 export バイト
+  同一性の提示** のいずれかが成立した場合のみ。**anchor WAV 6 本の一致では
+  昇格しない** — WAV 一致は 6 入力に対する振る舞いの一致であって、当時 sha が
+  未記録の上流 ONNX バイトとの同一性の証拠ではない（＜第 8 巡 P2＞）
+- **(a-2)** 未制御要因のいずれかを制御した環境で WAV が記録済み sha と一致した
+  場合は、producer chain の**機能的裏付け**として別途記録する。**item 1 の
+  closure は動かさない**。export device 差はその候補の 1 つであって確定した
+  昇格経路ではない（＜第 7 巡 P2 により GPU 前提の記述を撤回＞）
+- **(b)** run3 checkpoint が発見されれば run3 系 6 件は再開可能
 
 ### セルフレビュー（PR #307・high）指摘 8 件を全採用
 
@@ -389,7 +398,7 @@ anchor WAV 再生成が記録済み sha と一致すれば item 1 は `reproduce
 | 7 | 見出し「Phase 3: run3系5件」が本文・JSON・台帳の 6 件と不一致 | 「run3系6件」へ修正 |
 | 8 | acceptance が Phase 0–3 を「無改変・追記のみ」と主張するが `wav_regeneration.results` が再シリアライズされていた | acceptance の文言を実態（値は同一・整形は変化しうる）へ訂正 |
 
-### Codex レビュー第 2–8 巡（PR #307）も全採用
+### Codex レビュー第 2–9 巡（PR #307）も全採用
 
 | 巡 | 指摘 | 対応 |
 |---|---|---|
@@ -404,6 +413,7 @@ anchor WAV 再生成が記録済み sha と一致すれば item 1 は `reproduce
 | 7 | GPU/CPU の export device 差を「最有力」と順位付けているが実行時デバイスは未記録 | pin 済み exporter の device 選択経路を**実査**して機構を記録し、**順位付けは撤回**（下記「終端宣言（追補 2）」）|
 | 8 | canon の closure 値が配布 zip のアーカイブハッシュで、合成が消費するランタイム入力を同定していない | **消費メンバーの決定論的マニフェストハッシュ**へ変更（`value_kind` を全 item に新設）。併せて消費集合の誤り（`dsconfig.yaml` は export 経路では canon 側を読まない）を訂正し 5→4 件へ |
 | 8 | `reentry_condition` (a) が WAV 一致だけで item 1 を `reproduced` へ昇格させ得る | 昇格条件を**上流バイト証拠**（当時実体の回収 / 当時 sha の発見 / producer chain 全証拠）に限定し、WAV 一致は (a-2) の**機能的裏付け**として closure を動かさない扱いへ分離 |
+| 9 | 台帳の (a-1)/(a-2) 分離を report 本文の要約段落へ反映し損ねており、旧「WAV 一致で昇格可」規則が残存 | 該当段落を (a-1)/(a-2)/(b) の 3 分割へ書き換え、**台帳が正本**であることを明記（掃討: `昇格`/`reproduced へ` 全数）|
 
 検証（Phase 5 時点）:
 
