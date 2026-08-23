@@ -28,9 +28,12 @@ export-device probe・4 起動 計 ≈ $0.38。動く実例 =
 1. **結果サーバは t=0 から常時 serve する**（exit trap でのみ開く設計は
    「課金を全額消費した後にしか疎通検証できない」構造欠陥。初回 run で
    $0.25 の測定データを喪失した実測起源）。heartbeat ファイル（UTC + stage）
-   と console log の live コピーを同じディレクトリで配信し、runner は起動後
-   10 分以内に heartbeat 200 を確認できなければ即 terminate（損失 ~$0.05 で
-   打ち切り）
+   と console log の live コピーを同じディレクトリで配信する。runner は
+   600s 無応答で明示警告を出す（**自動 terminate はしない** — 実装は
+   operator abort の提案まで）。無人運用では**操作側**（実行エージェント /
+   オペレータ）が「起動後 10 分で heartbeat 不通なら terminate」を運用規約と
+   して課す — PR #312 の実行ではこの規約で早期打ち切り時の損失を ~$0.05 級に
+   束縛した
 2. **volume を保険に張る**（`volumeInGb` ≥ 10 + `volumeMountPath: /workspace`）。
    container disk のみだと pod 停止と同時に結果が消滅する。回収失敗時は
    **delete でなく stop で保持** → 再起動サルベージ → 回収確認後に delete
@@ -57,9 +60,11 @@ export-device probe・4 起動 計 ≈ $0.38。動く実例 =
   `(URLError, TimeoutError, ConnectionError)` のタプルで統一（`URLError` 単独では
   素の `TimeoutError` を取り逃がし stop→DELETE fallback が届かない）
 - **self-stop は全 exit 経路 + 二重化**: trap の `runpodctl stop` は 5 回
-  リトライ・失敗時は明示警告。独立の wall-clock watchdog（例 10800s）を
-  trap より前に確立（trap 設置前の exit 経路が 1 つでもあると self-stop 契約が
-  破れる）。on_exit は回収窓を守るため watchdog を kill してから serve する
+  リトライ・失敗時は明示警告。独立の wall-clock watchdog（例 10800s）を併設し、
+  **trap → watchdog の順で、いずれも最初の exit 経路（env 検査・pin guard 含む）
+  より前に確立する**（trap 設置前に exit し得る経路が 1 つでもあると self-stop
+  契約が破れる。実装実例 = pod.sh は trap 直後に watchdog を起動し、その後に
+  guard 群を置く）。on_exit は回収窓を守るため watchdog を kill してから serve する
 - **起動コマンドの curl は `--retry 5 --retry-all-errors` + ファイル落とし実行 +
   取得失敗時 self-stop**（`curl | bash` 単発は取得失敗で空実行 exit 0 =
   課金だけ発生する silent no-op になる）
