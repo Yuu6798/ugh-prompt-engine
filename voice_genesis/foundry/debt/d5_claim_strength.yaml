@@ -1,0 +1,1069 @@
+schema: vg-d5-claim-strength/0.1
+debt_ref: VG-DEBT-005
+purpose: run5-7 の claim（因果・効果・比較・裁定・撤回の主張文）へ claim 単位で causal_evidence_strength を付与する（debt_adjudication_v1.1.yaml 裁定1の実現形態）。既存 verdict は source_verdict として原文保存し、正本 record （s4/s5/s6_record）は一切改変しない。
+algebra:
+  authority: Fable 設計判定・2026-08-22・PR レビューで User 確認
+  vocabulary:
+  - strong
+  - moderate
+  - suggestive
+  - descriptive
+  class_vocabulary:
+  - intervention_effect
+  - mechanical_verification
+  - observation
+  - adjudication
+  - process
+  rule: strong は sha256/API 実測などの機械検証のみ（claim_class == mechanical_verification を必須とする）。moderate はインフラ根治の非再発実測・対照群つき裁定・バイト同一性による帰属訂正など、部分的機械裏付けを持つ主張。suggestive は単一介入 + baseline 対比の耳判定や、ブラインド反復の存在主張など、方向性は示すが反復走行を経ていない主張。descriptive はそれ以外の全て（生耳判定の逐語記録・相関観測・process/運用記録・record 自身が帰属を保留した裁定を含む）。
+  non_upgrade_principle: 'record が「言えない」「帰属できない」「undetermined」「意図的に置かない」と明記した内容は、本台帳がそれより強い strength へ格上げしない（該当 claim はいずれも descriptive のまま — 例: R6-C12/C17/C20, R7-C14/C15/C16/C20/C24/C30）。'
+  superseded_by_semantics: '本台帳の superseded_by は claim 全体の廃止マーカーではなく部分訂正マーカーである。訂正が claim のどの句に係るかは当該エントリの notes が特定する。notes に範囲特定が無い場合のみ全体訂正と読む（PR #306 レビュー第9巡 P1）。'
+  rationale_codes:
+    MB: バイト/hash/API 実測の機械検証
+    INFRA: 根治 + 後続 run 非再発
+    CTRL: 対照群つき負結果（Q11 系・ritsu 対照 + pin 済み計測）
+    BYTE-ATTR: バイト同一性による帰属訂正
+    SI-E: 単一介入 + baseline の耳判定
+    BLIND: ブラインド反復の存在主張
+    CORR: 相関観測・交絡未分離
+    OBS: 観測/process/裁定・record 自身が帰属保留
+counts:
+  total: 83
+  run5: 26
+  run6: 27
+  run7: 30
+  strong: 9
+  moderate: 13
+  suggestive: 13
+  descriptive: 48
+claims:
+- claim_id: R5-C1
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §1 タイムライン
+    approx_line: 27
+  claim_text: 'fail-closed: ffmpeg 版検査が `%2d.%3d.%3d` 桁揃え出力（`libavformat    60. 16.100`）への部分文字列照合で構造的 FAIL → regex パース + 数値タプル比較へ（PR #271）'
+  source_verdict: none
+  claim_class: process
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: moderate
+  rationale: 'INFRA: 根治 PR。後続 run6/7 は同型 fail-closed 非再発（R6-C1）'
+- claim_id: R5-C2
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §1 タイムライン
+    approx_line: 28
+  claim_text: 'fail-closed: PJS の匿名 DL（gdown）が Google の per-file 上限 "Quota exceeded" で停止（1 回目の起動では成功しており再現性の無い停止として発現）→ 認証済み `rclone backend copyid` へ置換・gdown 撤去（PR #272）'
+  source_verdict: none
+  claim_class: process
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: moderate
+  rationale: 'INFRA: 根治 PR。後続 run で非再発'
+- claim_id: R5-C3
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §1 タイムライン
+    approx_line: 29
+  claim_text: 'fail-closed: user 宅録原本が 17 本中 10 本しか届かず sha256 照合 FAIL。原因 = Drive の同名重複ファイルを名前ベース `rclone copy` が黙って skip → file ID 指定 fetch へ（PR #274）'
+  source_verdict: none
+  claim_class: process
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: moderate
+  rationale: 'INFRA: 根治 PR。後続 run で非再発'
+- claim_id: R5-C4
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §2 環境・ゲート
+    approx_line: 56
+  claim_text: 'D3 render 決定論が無人 Pod で成立: D2 voicebank からその場 render した 40 セグメントが run 4 の D3 pin と 40/40 バイト一致（datasets ok は pin 不一致で fail-closed する設計なので、ok 自体が照合成立の証跡）。convert_d3 実測: n_segments=40・総音素長 1200.50s（20.01 分）'
+  source_verdict: none
+  claim_class: mechanical_verification
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: strong
+  rationale: 'MB: バイト sha 照合 + fail-closed ゲート通過の実測'
+- claim_id: R5-C5
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §2 環境・ゲート
+    approx_line: 60
+  claim_text: X86_V3 + ffmpeg 6.1.2 static + 数値スタック pin という run 4 で確立した環境契約（runbook §2.2）が、人手ゼロの新規 Pod でも再現された初回実測
+  source_verdict: none
+  claim_class: mechanical_verification
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: strong
+  rationale: 'MB: gate ログ実測（gates ok・pin 一致）'
+- claim_id: R5-C6
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §2 環境・ゲート
+    approx_line: 62
+  claim_text: 'binarize 側 numpy ドリフト（2.4.6 → 1.26.4）: DiffSinger の requirements 導入で学習側 venv の numpy が下がる事象。render は pin 環境で完了済みのため 決定論への影響は無く、設計どおり非致命 info として heartbeat 記帳のみ'
+  source_verdict: none
+  claim_class: observation
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: moderate
+  rationale: 'MB: heartbeat の `binarize_numeric_stack.status.json` 実測 + 非致命の設計判断'
+- claim_id: R5-C7
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §3 データ
+    approx_line: 76
+  claim_text: 'binarize 実測: train 778 サンプル/5385.82s + valid 20 サンプル/285.94s。run 4（783 train + 15 valid）と総数 798 で一致 — データ実体は run 4 と同一のまま、d3synth 独立化で test_prefixes 5 本が valid 側へ移っただけ。「変わったのは帰属ラベルと num_spk のみ」という単一介入契約（DESIGN_S4 §1.1）のデータ面の傍証'
+  source_verdict: none
+  claim_class: mechanical_verification
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: strong
+  rationale: 'MB: binarize ログの sample 数/秒数集計一致'
+  notes: 'scope note: record 自身が『傍証』と明記 — 総数一致は byte-level pin ではなく sample count / duration の集計一致であり、単一介入契約の直接証明ではない（byte pin 照合は run6 以降と同様 d3 のみが対象）'
+- claim_id: R5-C8
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §4 学習
+    approx_line: 93
+  claim_text: runbook §4 が正直会計していた「キー名の実 YAML 一次照合未達」の限界は本実走で解消 — train.py の config スナップショット（Drive `config.yaml`）に同キー・同値が採録されており、キー名が学習系に実際に消費されたことを確認した
+  source_verdict: none
+  claim_class: mechanical_verification
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: strong
+  rationale: 'MB: config.yaml 実体照合'
+- claim_id: R5-C9
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §5.4 判定材料
+    approx_line: 217
+  claim_text: 'raw の統合ラウドネス実測: user が -17.68 / -18.18 LUFS で 8 本中最大。話者間の開きは最大 ≈4.8 dB（vs d3synth さくら -22.50）、対 pjs では +1.1〜1.6 dB — run 4 の音量交絡傾向は raw に残存（試聴コピー側で統制）'
+  source_verdict: none
+  claim_class: observation
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: descriptive
+  rationale: 'MB: loudness_report.json 実測値の転記'
+- claim_id: R5-C10
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §5.4 判定材料
+    approx_line: 221
+  claim_text: ④（三角形補間 = VG-E1 第 0 世代）は未生成 — 本表へ追記予定
+  source_verdict: none
+  claim_class: process
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: record 自身の第 2 版時点の残存記述'
+  notes: s4_record 第 3 版の残骸で同一文書 §6.2（4/4 viability PASS）と矛盾。正本は §6.2。record は無改変のまま本台帳で erratum 記録
+  superseded_by:
+  - R5-C21
+  - R5-C22
+  - R5-C25
+- claim_id: R5-C11
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §5.5 費用
+    approx_line: 234
+  claim_text: run 5 合計 ≈ $1.35（cap $8 の 17% — run 4 実績 ≈$2.95 の半分以下）
+  source_verdict: none
+  claim_class: process
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: RunPod API 実測起動/停止時刻からの算定'
+- claim_id: R5-C12
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §5.6 checkpoint 同名衝突
+    approx_line: 242
+  claim_text: '発見（02:08 監視時）: milestone push・salvage とも checkpoint を「ファイル名のみ」で Drive ルートへ push するため、phase A の 5K と phase B の 5K が同名 `model_ckpt_steps_5000.ckpt` で衝突する（rclone は同名を同一オブジェクトとして上書き更新する）'
+  source_verdict: none
+  claim_class: process
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: moderate
+  rationale: 'INFRA: run6 で phase namespace 分離により非再発を確認（R6-C… namespace 分離実証）'
+- claim_id: R5-C13
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §6.1 耳判定（判定1 = Q6 材料）
+    approx_line: 282
+  claim_text: 'User 耳判定（判定1）: 合成教師役のさくら さくら→あくらー に破綻傾向。PJS さくら リツさくら みわたすの語尾のすが破綻あり。他は合格判定'
+  source_verdict: 「合成教師役のさくら さくら→あくらー に破綻傾向」「PJS さくら リツさくら みわたすの語尾のすが破綻あり」「他は合格判定」
+  claim_class: observation
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: User 逐語判定'
+- claim_id: R5-C14
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §6.1 耳判定（判定2 = Q7 材料）
+    approx_line: 284
+  claim_text: 'User 耳判定（判定2）: ノイズ解消 特に user サンプルで顕著。音量交絡はまだあるが改善アリ。識別難易度が低下してなんとか聴き分けられるレベルに改善'
+  source_verdict: 「ノイズ解消 特に user サンプルで顕著」「音量交絡はまだあるが改善アリ」「識別難易度が低下してなんとか聴き分けられるレベルに改善」
+  claim_class: observation
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: User 逐語判定'
+- claim_id: R5-C15
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §6.1 耳判定（判定3 = 参考聴取）
+    approx_line: 287
+  claim_text: 'User 耳判定（判定3・参考聴取）: user サンプル「第3の声の特徴アリ run4より明瞭になった（若干）」/ 合成教師の声「なんとなく聞こえるかな？ぐらい 明確にはわからない」'
+  source_verdict: 「第3の声の特徴アリ run4より明瞭になった（若干）」/「なんとなく聞こえるかな？ぐらい 明確にはわからない」
+  claim_class: observation
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: User 逐語判定（参考聴取・裁定材料ではない）'
+- claim_id: R5-C16
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §6.2 Q6 裁定
+    approx_line: 295
+  claim_text: Q6（D3 分離で①は保存されるか）= 大部分保存・部分退行。日本語破綻の全面改善（run4）は D3 を spk_id=3 へ分離しても大勢は保たれた（うみ系は全話者合格・さくら系も大部分成立）が、局所退行 2 点（ritsu/pjs さくらの「みわたす」語尾「す」の破綻／d3synth さくらの語頭「さ→あ」傾向）が新たに聴取された。退行原因は単走行では帰属しない
+  source_verdict: 「大部分保存・部分退行」
+  claim_class: intervention_effect
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: suggestive
+  rationale: 'SI-E: 単一介入 + baseline 対比の耳判定裁定'
+- claim_id: R5-C17
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §6.2 Q7 裁定
+    approx_line: 302
+  claim_text: Q7（run4 のノイズ・音量交絡の発生源）= ノイズは D3 混入起因の強い方向性示唆。D3 分離のみでノイズが解消（特に user で顕著）したため、run4 のノイズ劣化の主因は D3 の spk_id=0 併合側と示唆される。音量交絡は改善したが残存
+  source_verdict: 「ノイズは D3 混入起因の強い方向性示唆」
+  claim_class: intervention_effect
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: suggestive
+  rationale: 'SI-E: 単一介入 + baseline 対比の耳判定裁定'
+- claim_id: R5-C18
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §6.2 ②裁定
+    approx_line: 311
+  claim_text: ②（user 第三の声）= A/B/C 確定判定を同日実施 → 3/3「別人」（留保付き成立）。run4 から持ち越した「方向性陽性・確定保留」を「第三の声の成立（留保付き）」へ昇格する。留保の実体 = 区間内・区間間のダイナミクスの揺れ
+  source_verdict: 「全て別人 ただ音量交絡の関係で明確に違うとは言い切れないが感覚的には違うように聞こえる」
+  claim_class: adjudication
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: suggestive
+  rationale: 'SI-E: ブラインド不要のクリップ聴き分け（非ブラインド）+ 留保付き'
+  superseded_by:
+  - R6-C10
+  - R6-C11
+- claim_id: R5-C19
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §6.2 ②裁定 参考
+    approx_line: 338
+  claim_text: '参考: 組成材料の所在整理は当初「run3/run4 アンカー受領待ち」と誤っており、②は run5 素材のみで足りると訂正済み（run3/run4 アンカーは③専用・User 手元コピーで実施済み）'
+  source_verdict: none
+  claim_class: process
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: record 自身の訂正'
+- claim_id: R5-C20
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §6.2 d3synth 単独聴取
+    approx_line: 341
+  claim_text: 'd3synth 単独聴取 = 観測記録のみ: 合成教師らしさは「なんとなく」レベルで明確な判別不可。アーティファクトの可聴な隔離は確認できず（ノイズ解消は③で観測済みのため、隔離の実効は③側の事実が担う）'
+  source_verdict: 「なんとなく」
+  claim_class: observation
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 観測記録のみ・裁定に使わない旨を record 自身が明記'
+- claim_id: R5-C21
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §6.2 ④ User 判定
+    approx_line: 355
+  claim_text: 'User 判定（逐語・うみ4本の -22.5 LUFS 統一試聴コピー・封印のままブラインド判定）: 「全て発声として成立 Aが不安定だが破綻レベルではない」'
+  source_verdict: 「全て発声として成立 Aが不安定だが破綻レベルではない」
+  claim_class: observation
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: descriptive
+  rationale: 'BLIND: ブラインド判定の存在主張'
+- claim_id: R5-C22
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §6.2 ④ 開封裁定
+    approx_line: 358
+  claim_text: '開封（verify_sealed_correspondence = True・改変なし）と裁定: VG-S3-001（重心 .34/.33/.33）/ VG-S3-002（user 寄り .15/.15/.70）/ VG-S3-003（既存話者寄り .45/.45/.10）= 3/3 出生 PASS。hidden control D = VG-S3-004 = ritsu アンカー素通し → 発声成立 = コントロール整合 PASS'
+  source_verdict: 「3/3 出生 PASS」
+  claim_class: adjudication
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: suggestive
+  rationale: 'BLIND: 封印対応表つきブラインド判定バッチの開封裁定'
+- claim_id: R5-C23
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §6.2 ④ 副産物
+    approx_line: 367
+  claim_text: candidate_D の wav sha256 が①の run5_gate_umi_ritsu.wav と完全一致 = 同一入力からの byte-identical 再合成（Render Reproducibility の実測 PASS — VG-TR0 §11 の Replay 層と同型の証跡）
+  source_verdict: none
+  claim_class: mechanical_verification
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: strong
+  rationale: 'MB: wav sha256 完全一致'
+- claim_id: R5-C24
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §7 Open Questions
+    approx_line: 380
+  claim_text: 'Q8（無人停止保証）: 初回実走の範囲では成立 — 完走1+fail-closed3 の全4起動でself-stop が API 実測 EXITED として確認された。「スクリプト自体が死ぬと効かない」構造的露出は残存（設計上の受容のまま）'
+  source_verdict: 「成立」（初回実走の範囲では成立 — 完走1+fail-closed3の全4起動でself-stopがAPI実測EXITEDとして確認された）
+  claim_class: mechanical_verification
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: strong
+  rationale: 'MB: RunPod API 実測 EXITED を全4起動で確認'
+- claim_id: R5-C25
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §7 Open Questions
+    approx_line: 389
+  claim_text: run5 の DESIGN_S4 §5 AC は全充足（④まで完了）。VG-E1 への引き渡し = founding 個体は interior 3 体のみ（VG-S3-001/002/003・出生 PASS。VG-S3-004は hidden control のため個体として台帳接続しない）
+  source_verdict: 「全充足」（run5のDESIGN_S4 §5 ACは全充足）
+  claim_class: process
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: AC 充足の closeout 宣言'
+- claim_id: R5-C26
+  source:
+    file: voice_genesis/foundry/results_s4/s4_record_2026-08-19.md
+    section: §7 Open Questions
+    approx_line: 399
+  claim_text: 'run6 への送り（Q7 裁定を反映した再裁定入力）: user 宅録の投入前ラウドネス正規化 + T3 追加収録は維持 — ただし目的は「ノイズ対策」から「音量交絡の根治 + ②確定判定の阻害除去」へ絞られた。DX（run7）の Q7 分岐は「D3 有罪」側が有力になった'
+  source_verdict: 「維持」（投入前ラウドネス正規化+T3追加収録）／「D3有罪」側が有力になった
+  claim_class: adjudication
+  intervention: D3 話者分離（spk_id=3 への独立化）+ finetune 機構再適用（スクラッチ 0→5K → finetune 0→40K の 2 フェーズ）
+  baseline: run 4（D3 を spk_id=0 へ併合していた学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 裁定は User（次 run への引き継ぎ方針）'
+- claim_id: R6-C1
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §1 タイムライン
+    approx_line: 19
+  claim_text: '起動1回・fail-closed ゼロで完走（run5 は4回起動 = fail-closed 3 + 完走1。素材搬入層の根治3件〔PR #271/#272/#274〕が効いた初の走行）'
+  source_verdict: none
+  claim_class: process
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: suggestive
+  rationale: 'INFRA: n=1 なので根治の効力は示唆どまり（strength=suggestive）'
+- claim_id: R6-C2
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §1 タイムライン
+    approx_line: 46
+  claim_text: 'phase Bのペース: 5K→20Kが96分（32分/5K）、20K→40Kが147分（36.7分/5K）。run5（約33分/5Kで安定）と同水準で、後半のわずかな鈍化は同一ホストの負荷変動の範囲（NaN・再試行の記録は無い）'
+  source_verdict: none
+  claim_class: observation
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'MB: heartbeat 時刻差分からのペース算出'
+- claim_id: R6-C3
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §2 環境・ゲート
+    approx_line: 55
+  claim_text: '`ANALYSIS_STACK_PIN` の初実走（numba==0.66.0/librosa==0.11.0/pyloudnorm==0.2.0 を gates 段が強制インストール）— これは run6 の pin 生成時にローカルで踏んだ依存ドリフト事故（numba 0.67.0×numpy 2.4.6 で `librosa.pyin` が SIGSEGV）の根治措置であり、Pod 側でも同じ版で解決されることを初めて実測した'
+  source_verdict: none
+  claim_class: mechanical_verification
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: strong
+  rationale: 'MB: gates 段の版強制インストールの実測ログ'
+- claim_id: R6-C4
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §3 データ
+    approx_line: 88
+  claim_text: run5とのデータ差分は user の wav バイトのみ（user 15本すべてが変化・行数・ph_dur・transcriptions は不変）。これは「正規化が時間配分に触れていない」ことの機械的証明だが、pin照合が及ぶのは d3/user のみなので、ritsu/pjs 側に差分が無いことは「同一 pin コミットの同一変換を同一環境で実行した」という手順同一性からの帰結であって、バイト照合による証明ではない
+  source_verdict: none
+  claim_class: mechanical_verification
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: strong
+  rationale: 'MB: assembly manifest 実測 + BYTE-ATTR: バイト同一性からの限定的帰属'
+  notes: 'scope note: pin 照合範囲は d3 / user の2話者に限られる（`results_s3/run6_dataset_pins.json` がこの2セクションしか持たない）。ritsu/pjs はバイト pin を持たず、素材 pin + 変換の決定論 + assembly manifest の実測記帳で担保する現行方式（行数ベースで全798行中743行=93%・ph_dur では約75%が『pin照合ではなく再現手順の同一性』に依存 — run4から不変の既知の限界）'
+- claim_id: R6-C5
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §5.4 判定材料
+    approx_line: 195
+  claim_text: user の区間間ばらつきは依然として他2話者より大きい（7.36 LU）が、run5比では縮んでいる（8.99→7.36）。ただしデータを一切変えていない ritsu も 4.43→1.86 と縮んでおり、この縮小幅は走行間変動と分離できない
+  source_verdict: none
+  claim_class: observation
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'CTRL: 対照群（ritsu・データ不変）つきの縮小幅比較'
+- claim_id: R6-C6
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §5.4 判定材料
+    approx_line: 210
+  claim_text: 'この表の読み方は否定的: user の縮小 −2.67 LU に対し、データを一切変えていない ritsu が −2.88 LU と同等以上に縮んでいる。つまり user の縮小幅は走行間変動の幅に埋もれており、介入効果として取り出せない。「正規化で1ファイル内の揺れが縮んだ」とは本 run のデータからは言えない'
+  source_verdict: 「この表の読み方は否定的」
+  claim_class: adjudication
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'CTRL: 対照群（ritsu）つき負結果 — 介入効果を取り出せないとの裁定'
+- claim_id: R6-C7
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §5.6 正直会計の訂正
+    approx_line: 234
+  claim_text: '正直会計の訂正（2026-08-20・セルフレビュー2巡目）: run5/run6 の判定材料はいずれも `gate_synth_run4.py` 経由で生成しており、同スクリプトは run5 の pin `9899f3c` 時点で既に4話者 choices を持っていた。run7 実装 PR のコミットメッセージに「run5 は場当たり改変に依存」と書いたのは誤りで、本 record で訂正する'
+  source_verdict: 「誤りで、本recordで訂正する」
+  claim_class: process
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: record 自身の erratum'
+- claim_id: R6-C8
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.1 耳判定
+    approx_line: 248
+  claim_text: 'User 耳判定（逐語）: 1 dssynthは改善　ほかは改善無し / 2 別人判定　前回より明瞭 / 3 ノイズは無し　相変わらず音量交絡が区間ごとにバラバラで安定せず　ここは変わり無し'
+  source_verdict: 「1 dssynthは改善　ほかは改善無し」「2 別人判定　前回より明瞭」「3 ノイズは無し　相変わらず音量交絡が区間ごとにバラバラで安定せず　ここは変わり無し」
+  claim_class: observation
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: User 逐語判定'
+- claim_id: R6-C9
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.1 留保の扱い
+    approx_line: 254
+  claim_text: '留保の扱いについての追加確認（User・逐語）: 留保に関しては前回より良くなってたので無留保とした'
+  source_verdict: 「留保に関しては前回より良くなってたので無留保とした。」
+  claim_class: adjudication
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: User による留保撤回の明示的裁定'
+- claim_id: R6-C10
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.2 Q10 裁定
+    approx_line: 260
+  claim_text: Q10（②の留保は解消するか）= 達成（無留保の「第三の声」確定）
+  source_verdict: 「達成」
+  claim_class: adjudication
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: suggestive
+  rationale: 'SI-E: 単一介入 + baseline 対比の耳判定裁定'
+  corrects:
+  - R5-C18
+- claim_id: R6-C11
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.2 Q10 裁定
+    approx_line: 262
+  claim_text: 'run5: 3/3「別人」だが留保付き（「音量交絡の関係で明確に違うとは言い切れないが感覚的には違うように聞こえる」）。run6: 3/3「別人」+「前回より明瞭」+ User 裁定により留保を撤回'
+  source_verdict: 「別人判定　前回より明瞭」
+  claim_class: intervention_effect
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: suggestive
+  rationale: 'SI-E: run5→run6 の耳判定変化を intervention 効果として記帳'
+  corrects:
+  - R5-C18
+- claim_id: R6-C12
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.2 Q10 裁定 帰属限界
+    approx_line: 265
+  claim_text: '帰属の限界（s3_record §5 / s4_record §6.2 の規律を対称適用）: 判定プロトコルが run5 と完全同一であることは実測で確認できるが、素材そのものは別物なので測定側の交絡が完全に消えるわけではない。本裁定が主張できるのは「正規化を含む run6 の条件下で無留保に到達した」までであり、「正規化のみが識別性を上げた」ではない。この帰属の確定には同一契約の反復走行（未実施）が要る'
+  source_verdict: none
+  claim_class: adjudication
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: record 自身が帰属を『到達した事実まで』に限定'
+- claim_id: R6-C13
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.2 Q10 裁定 材料説明
+    approx_line: 278
+  claim_text: '留保の実体との関係: ②のプロトコルが揃えるのは各クリップの統合ラウドネスであって、s4_record が留保の実体として記録した区間内の時間変動は線形ゲインでは消えない。「材料側で音量手がかりが消えたから留保が外れた」という説明は成立しない — 材料の作り方は2回とも同じである。本 record が記帳できるのは「User の聴取判断として run6 では留保が外れた」という事実までであり、その理由を材料側の測定量で説明する記述は意図的に置かない'
+  source_verdict: 「成立しない」／「意図的に置かない」
+  claim_class: adjudication
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: moderate
+  rationale: 'OBS: record 自身が帰属説明を意図的に保留'
+- claim_id: R6-C14
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.3 Q11 裁定
+    approx_line: 297
+  claim_text: Q11（④セル不安定の消長）= 直接判定は未了（④を run6 では生成しないため — DESIGN_S5 §4-4）。ただし③の実測から「入口の水準正規化では消えない」方向で決着
+  source_verdict: 「直接判定は未了」／「入口の水準正規化では消えない」方向で決着
+  claim_class: adjudication
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: moderate
+  rationale: 'CTRL: ③実測 + ritsu 対照からの方向性裁定'
+- claim_id: R6-C15
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.3 Q11 裁定
+    approx_line: 300
+  claim_text: ③の逐語「音量交絡が区間ごとにバラバラで安定せず・ここは変わり無し」は聴感の報告。実測は (i) 縮小幅が小さく聴感で拾える水準に達していない、(ii) 同時に ritsu も縮んでおり走行間変動と分離できない、の2点から「聴感・実測とも『交絡が解消した』とは言えない」が正確な記述になる
+  source_verdict: 「聴感・実測とも『交絡が解消した』とは言えない」
+  claim_class: adjudication
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: moderate
+  rationale: 'CTRL: 対照群（ritsu）つき負結果'
+- claim_id: R6-C16
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.3 Q11 裁定
+    approx_line: 306
+  claim_text: run6 の正規化はカード単位の統合ラウドネスを揃える設計で、カード内の時間変動（T1の3段強弱など意図されたダイナミクス）は保存する仕様（DESIGN_S5 §1.1）。残存する区間間の揺れは設計上の想定内であり、発生源は (a) user 収録のカード内ダイナミクス、(b) モデル/曲側の合成時変動、のいずれか — 入口の水準正規化の射程外と確定した
+  source_verdict: 「入口の水準正規化の射程外」（と確定した）
+  claim_class: adjudication
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: moderate
+  rationale: 'OBS: 設計仕様（DESIGN_S5 §1.1）に基づく射程確定'
+- claim_id: R6-C17
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.3 Q11 裁定
+    approx_line: 311
+  claim_text: ④の原因仮説については、本 run は判定材料を提供していない（④を run6 では生成していない・仮説の実体である「カード内の音量ムラ」は §1.1 の仕様上そのまま保存される）。よって「音量ムラ説の可能性が低下した」とは言えない— 仮説は run6 前と同じ未検証のまま VG-E1 の founding 再評価へ持ち越す
+  source_verdict: 「音量ムラ説の可能性が低下した」とは言えない
+  claim_class: adjudication
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: record 自身が未検証のまま持ち越すと明記'
+- claim_id: R6-C18
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.4 ①③の裁定
+    approx_line: 321
+  claim_text: '①（日本語破綻の回帰）: 劣化なし = 合格。新たな破綻は出ていない'
+  source_verdict: 「劣化なし = 合格」
+  claim_class: intervention_effect
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: suggestive
+  rationale: 'SI-E: 単一介入 + baseline 対比の耳判定裁定'
+- claim_id: R6-C19
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.4 ①③の裁定
+    approx_line: 322
+  claim_text: '局所退行2点の消長は一様ではないので逐語どおりに分けて記帳する: d3synth の「さ→あ」= 改善（User が d3synth を「ほか」から明示的に切り出して「改善」と述べている）/ みわたす語尾「す」（ritsu/pjs さくら）= 維持（「ほかは改善無し」に含まれる）'
+  source_verdict: 「ほかは改善無し」
+  claim_class: observation
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'SI-E: 局所所見の内訳（耳判定逐語の分解）'
+  superseded_by:
+  - R7-C13
+- claim_id: R6-C20
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.4 ①③の裁定 帰属未確定
+    approx_line: 327
+  claim_text: 'd3synth 改善の帰属は未確定（2説が交絡）: (i) 走行間変動（run6 で d3synth のデータ・spk_id・学習レシピは一切変えていない）、(ii) 共有デコーダ経由の間接効果（user wav は 15/15 変化しており、同一デコーダを共有する以上他話者の出力が動きうる）。単走行では (i)(ii) を分離できない'
+  source_verdict: 「d3synth 改善の帰属は未確定（2説が交絡）」
+  claim_class: adjudication
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: record 自身が2説の交絡を明記し裁定を保留'
+- claim_id: R6-C21
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §6.4 ①③の裁定
+    approx_line: 338
+  claim_text: '③（ノイズ不在）: 維持。run5 で D3 分離により解消したノイズは再発していない。ただしこれは同一条件（D3分離済み）の反復観測であって、Q7の帰属（ノイズ= D3混入起因）を新たに補強する情報量は持たない'
+  source_verdict: 「維持」
+  claim_class: observation
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 反復観測であり補強情報量を持たないと record 自身が明記'
+- claim_id: R6-C22
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §5.6 export 前提の解消
+    approx_line: 225
+  claim_text: 'export前提の解消（salvage(c)の効果実測）: run5では spk_map.json 等が salvage 対象外で一次記録からの再作成を要した。run6では phase_b/config/ に退避済みで、回収→配置→exportが手戻りなしで通った。実地障害の資産化ループ（runbook §7）が1周して回収された初の実例'
+  source_verdict: none
+  claim_class: process
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'INFRA: run5 起票の salvage 追加候補が run6 で実装・実走確認'
+- claim_id: R6-C23
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §8 引き継ぎ
+    approx_line: 364
+  claim_text: 'VG-E1へ: Q11 が「入口正規化の射程外」で決着したため、④ の user 寄りセル不安定は VG-E1 の founding 再評価で扱う。②が無留保確定したことで、「第三の声」の存在は観測記録として確度が上がった（ただし SPR 行1の合否には引き続き不使用）'
+  source_verdict: none
+  claim_class: adjudication
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 観測記録としての確度上昇を record 自身が宣言'
+- claim_id: R6-C24
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §2 環境・ゲート
+    approx_line: 60
+  claim_text: 実測 freeze の捕獲（gates / binarize の2段）= §5.5 の lock 完全化材料
+  source_verdict: none
+  claim_class: process
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 実測 freeze の記帳'
+- claim_id: R6-C25
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §3 データ
+    approx_line: 78
+  claim_text: 'd3: run4 pin と 40/40 一致（D3 その場 render の再現性は run5 に続き2回目）'
+  source_verdict: none
+  claim_class: mechanical_verification
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'MB: pin 照合による再現性 2 回目の実測'
+- claim_id: R6-C26
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §3 データ
+    approx_line: 73
+  claim_text: 'user: 正規化つき convert_user（--normalize-loudness-lufs -26.1・目標値の単一ソース = pins の normalization_target_lufs）の Pod 出力が、ローカル pinned 環境で生成した pin と wav 15本ぶんバイト一致（transcriptions.csv / exclusions.json / loudness_normalization.json も一致）= 正規化を含む変換系の決定論と、pin生成環境と Pod環境の同一性の再実証'
+  source_verdict: none
+  claim_class: mechanical_verification
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'MB: wav / メタデータのバイト一致照合'
+- claim_id: R6-C27
+  source:
+    file: voice_genesis/foundry/results_s5/s5_record_2026-08-20.md
+    section: §8 引き継ぎ
+    approx_line: 368
+  claim_text: '運用: Pod `55ikyr01yjr5iu` は checkpoint 全数回収済み・EXITED。s3_record 未転記残3項目（run4分）は依然未回収（run6 では実行 manifest が同種の情報を自動記帳するようになったため、run4 分のみ手作業回収が残る）'
+  source_verdict: none
+  claim_class: process
+  intervention: user 宅録の投入前ラウドネス正規化（--normalize-loudness-lufs -26.1）
+  baseline: run 5（user 宅録を正規化せずに投入した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 運用引き継ぎ事項の記帳'
+- claim_id: R7-C1
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §1-1 初回起動（fail-closed）
+    approx_line: 16
+  claim_text: '`amitaro_sources` で fail-closed = `file set mismatch`（期待する `recitationNNN.wav` に対し実際は `{i:03d}_{name}` 形式で到着）。原因は素材取得を名前ベース `rclone copy` から ID指定取得へ替えた際、`plan_drive_id_fetch` の採番規則を考慮していなかったこと'
+  source_verdict: none
+  claim_class: process
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: moderate
+  rationale: 'INFRA: PR #288 で根治（sha256 索引経由の解決へ）'
+- claim_id: R7-C2
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §1-2 正直会計（訂正）
+    approx_line: 44
+  claim_text: '正直会計（訂正）: 本記録は当初「起動1回・fail-closedゼロ・≈$1.22」と書いていたが誤りで、レビュー指摘を受けて RunPod API の実測（createdAt/lastStatusChange）で訂正した。初回起動の fail-closed を数えず、その49分の課金も計上していなかった'
+  source_verdict: none
+  claim_class: process
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: record 自身の erratum（起動回数・費用の訂正）'
+- claim_id: R7-C3
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §1-2 fail-closed 機能
+    approx_line: 50
+  claim_text: fail-closed は設計どおり機能したという点は変わらない — 素材の取り違えを学習前に検出して停止し、49分の課金で済んでいる。ただし「無事故で通った」のではなく「事故を検出して止めた」のであって、両者は別の事実である
+  source_verdict: none
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: moderate
+  rationale: 'OBS: record 自身が『無事故』と『検出して止めた』を区別'
+- claim_id: R7-C4
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §2 学習（namespace 分離）
+    approx_line: 69
+  claim_text: 'namespace分離の2回目の実証: `run7/phase_a/checkpoints/` と `run7/phase_b/checkpoints/` に同名の `model_ckpt_steps_5000.ckpt` が衝突せず共存した。run5で phase A/B の同名 push が後勝ち上書きした障害（s4_record §5.6）の根治が効いている'
+  source_verdict: none
+  claim_class: mechanical_verification
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: strong
+  rationale: 'MB: Drive 上のファイル共存を実測確認（2回目）'
+- claim_id: R7-C5
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §4-0 ②の扱い
+    approx_line: 121
+  claim_text: ②（第三の声A/B/C ブラインド判定セット）は run6 と同一区間・同一 -22.5 LUFS で生成したが、User裁定により不要と判断し、生成物は破棄した（①の時点で「第三の声も確認」が得られたため）。使わないと決めた時点で捨てる
+  source_verdict: none
+  claim_class: process
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: User 裁定による材料破棄の記帳'
+- claim_id: R7-C6
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §4-1 耳判定（リツ副作用）
+    approx_line: 133
+  claim_text: 'User耳判定（逐語）: リツで語尾すが改善されたがかぎり→かぁんんと語尾破綻する副作用確認。pJSは改善のみ確認'
+  source_verdict: 「リツで語尾すが改善されたがかぎり→かぁんんと語尾破綻する副作用確認」「pJSは改善のみ確認。」
+  claim_class: observation
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: User 逐語判定'
+- claim_id: R7-C7
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §4-1 耳判定（あみたろ・user）
+    approx_line: 137
+  claim_text: 'User耳判定（逐語）: あみたろはうみは成立　さくらは日本語破綻。userはうみで成立　さくらはみわたすの語尾が連続発声の副作用発生。userサンプルの品質問題の中心であった音量交絡は解消。第3の声も確認'
+  source_verdict: 「あみたろはうみは成立　さくらは日本語破綻...」「userはうみで成立　さくらはみわたすの語尾が連続発声の副作用発生...userサンプルの品質問題の中心であった音量交絡は解消。第3の声も確認」
+  claim_class: observation
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: User 逐語判定'
+  notes: 'superseded_by（R7-C9/R7-C18）が訂正するのは user の音量交絡解消の帰属と「最も改善」句のみ。あみたろ単体レンダ観測・user の連続発声退行・第三の声確認は一次 record 上いまも有効な観測'
+  superseded_by:
+  - R7-C9
+  - R7-C18
+- claim_id: R7-C8
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §4-1 耳判定（三世代比較）
+    approx_line: 146
+  claim_text: 'User耳判定（③三世代比較・逐語）: PJS 3世代　みわたすの語尾の連続発声が残存　ただrun5より改善してることを確認。user　先ほど述べたので省略　一番改善が顕著なサンプル。リツ　run5から7でり→んは根本解決にならず。り→んの破綻をしてないのはpJS系のみ'
+  source_verdict: 「PJS 3世代　みわたすの語尾の連続発声が残存...」「リツ　run5から7でり→んは根本解決にならず」「り→んの破綻をしてないのはpJS系のみ」
+  claim_class: observation
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: User 逐語判定（run5→6→7 三世代比較）'
+- claim_id: R7-C9
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §4-2 整理表 取り消し線訂正
+    approx_line: 160
+  claim_text: 'user行「総合」欄の ~~最も改善が顕著~~ ← §5-1 で訂正: 聴取上の印象は記録どおりだが、その主要因（音量交絡解消）は run6 の介入効果であり run7 の教師交代に帰属できない（user 入力は run6→run7 で 15/15 バイト同一）'
+  source_verdict: 「~~最も改善が顕著~~ ← §5-1 で訂正」
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: moderate
+  rationale: 'BYTE-ATTR: バイト同一性による帰属の取り消し線訂正'
+  corrects:
+  - R7-C7
+- claim_id: R7-C10
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1 Q12 二段階撤回（1）
+    approx_line: 171
+  claim_text: 初版は「達成」+「実録音教師は合成教師の代替として機能する」と書いた。→ 後段を撤回（代替性の主張には反復走行が要る）
+  source_verdict: 「達成」+「実録音教師は合成教師の代替として機能する」→ 撤回
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: record 自身の第1段階の撤回'
+  superseded_by:
+  - R7-C11
+- claim_id: R7-C11
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1 Q12 二段階撤回（2）
+    approx_line: 173
+  claim_text: 第1訂正は「articulation側に限り達成」とした。→ これも撤回する。下に挙げる実測はいずれも語尾（終端）の局所所見であって、DESIGN_S6 §1.2 が事前登録した articulation 測度（さ行onset明瞭性）は §5-1b のとおり判定されていない
+  source_verdict: 「articulation側に限り達成」→ これも撤回する
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: record 自身の第2段階の撤回'
+  corrects:
+  - R7-C10
+- claim_id: R7-C12
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1 Q12 裁定の射程
+    approx_line: 180
+  claim_text: 本節は run9 以降の設計根拠として参照されるため、射程を実測に合わせる
+  source_verdict: none
+  claim_class: process
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 裁定文書としての射程限定宣言'
+- claim_id: R7-C13
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1 観測された局所所見
+    approx_line: 184
+  claim_text: '観測された局所所見（これ自体は確か）: ritsuの「みわたす」語尾「す」は run7 で改善（run6は「維持」）。pjs は改善のみ（副作用なし）。この範囲で、合成教師（d3synth）を外しても①の破綻矯正は失われなかった'
+  source_verdict: 「改善」（ritsu、run6は「維持」）／「改善のみ」（pjs、副作用なし）
+  claim_class: intervention_effect
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: suggestive
+  rationale: 'SI-E: 単一介入 + baseline 対比の耳判定裁定'
+  corrects:
+  - R6-C19
+- claim_id: R7-C14
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1 最終裁定表
+    approx_line: 188
+  claim_text: '裁定: 語尾「す」の局所退行（事前登録1/2）= 改善（観測）/ さ行onset明瞭性 = articulation測度（事前登録2/2）= undetermined（未判定）/ sustain・終端解放の保存 = 非改善 / 「実録音教師は合成教師の代替として機能する」= 撤回。したがって「articulationが保存された」とは書かない'
+  source_verdict: 「改善（観測）」「`undetermined`（未判定・§5-1b）」「非改善（下記 2）」「撤回」
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 4項目を undetermined/撤回込みで整理した最終裁定表'
+- claim_id: R7-C15
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1 言える範囲
+    approx_line: 197
+  claim_text: 言えるのは「事前登録した局所退行2点のうち『す』は改善した」までである
+  source_verdict: 「事前登録した局所退行2点のうち『す』は改善した」
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 主張範囲の明示的限定'
+- claim_id: R7-C16
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1 言えない範囲1
+    approx_line: 202
+  claim_text: 「代替として機能する」は言い過ぎ。正確には「run7でritsuの語尾「す」とpjsに改善が観測された」までである。観測されたのは終端の所見だけで、事前登録のarticulation測度（さ行onset）は未判定だからである。さらに代替性の主張には同一契約の反復走行が要る
+  source_verdict: 「代替として機能する」は言い過ぎ／「run7でritsuの語尾「す」とpjsに改善が観測された」まで
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: record 自身が主張の言い過ぎを訂正'
+- claim_id: R7-C17
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1 言えない範囲2
+    approx_line: 211
+  claim_text: sustain側は1つも動いていない。り→んはrun5→7一貫して未解決・pjsの連続発声は残存・userでは「みわたす」語尾に連続発声が新規発生した。これは「あみたろ = recitationのみで持続音ゼロ・曲素材ゼロ」から予測される向きと整合する
+  source_verdict: 「sustain側は1つも動いていない」
+  claim_class: intervention_effect
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: suggestive
+  rationale: 'SI-E: 単一介入下で観測された sustain 側の非改善（新規退行含む）'
+- claim_id: R7-C18
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1 言えない範囲3
+    approx_line: 216
+  claim_text: userの改善の主要部分はamitaroに帰属できない。Userが挙げた「音量交絡は解消」はrun6の介入（投入前ラウドネス正規化）の効果であり、userの入力はrun6とrun7で15/15バイト同一である（wav_sha256等が全て一致）。いずれにせよ「達成」ではなく「改善と退行の併存」が正しい記述になる
+  source_verdict: 「達成」ではなく「改善と退行の併存」
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: moderate
+  rationale: 'BYTE-ATTR: dataset pins のバイト同一性による帰属限定'
+  corrects:
+  - R7-C7
+- claim_id: R7-C19
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1 帰属強度の対称的な注記
+    approx_line: 226
+  claim_text: '帰属強度の対称的な注記（弱める側にだけ書かない）: 判定は非ブラインド・単一聴取者・n=1だが、run5→run6では耳判定が「dssynthは改善・ほかは改善無し」で動かなかった実績がある。粗い2値の耳判定は走行間変動に対して比較的ロバストだったと言えるため、run6→run7で動いたこと自体は教師交代に帰属できる可能性を残す'
+  source_verdict: 「教師交代に帰属できる可能性を残す」
+  claim_class: intervention_effect
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: suggestive
+  rationale: 'SI-E: 走行間の耳判定安定性を対照とした帰属可能性の記帳'
+- claim_id: R7-C20
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1b 事前登録項目の充足
+    approx_line: 233
+  claim_text: 'DESIGN_S6 §1.2 は主判定として局所退行2点を事前登録していた: みわたす語尾「す」= 裁定済み（改善）/ 教師由来のさ→あ傾向（さ行onset明瞭性）= 未裁定。したがって事前登録2点の充足は1/2である'
+  source_verdict: '「裁定済み」（§5-1: 改善）／「未裁定」'
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 事前登録充足率の機械的な集計'
+- claim_id: R7-C21
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-1b 方法論指摘
+    approx_line: 246
+  claim_text: §5-2で裁定したり→んはrun7の事前登録項目ではない（③の三世代比較から浮上した項目）。事前登録項目を落として事後の項目で埋めた形になっているため、run8以降は事前登録項目の裁定を出口条件に明示的に含める
+  source_verdict: 「事前登録項目を落として事後の項目で埋めた」
+  claim_class: process
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 方法論上の欠陥指摘と run8 への申し送り'
+- claim_id: R7-C22
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-2 り→ん副作用説の撤回
+    approx_line: 253
+  claim_text: 当初この記録は「り→ん破綻はrun7の副作用」と書きかけたが、撤回した。③の三世代判定で「run5から7で根本解決にならず」が確認され、d3synthを投入していたrun5/run6の時点で既に未解決だったことが判明したため
+  source_verdict: 「り→ん破綻はrun7の副作用」と書きかけたが、撤回した
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: record 自身の帰属仮説の撤回'
+- claim_id: R7-C23
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-2 投入≠効果
+    approx_line: 262
+  claim_text: すなわち DESIGN_S3_backfill の対策は「投入した」だけで「効いた」ことが検証されないまま対策済みとして扱われていた
+  source_verdict: 「DESIGN_S3_backfillの対策は「投入した」だけで「効いた」ことが検証されないまま対策済みとして扱われていた」
+  claim_class: process
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 対策データの検証未了を record 自身が指摘'
+- claim_id: R7-C24
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-2 d3_sustain 帰属限定
+    approx_line: 265
+  claim_text: '帰属の限定（正直会計）: 上記は「d3_sustainが無効だった」ことまでは示さない。示せるのは「d3_sustainを投入したrun5でもり→ん破綻はUserの聴取で残っていた」までである。投入しなかった場合にもっと悪化していた可能性は排除できない（対照が無い）'
+  source_verdict: 「d3_sustainを投入したrun5でもり→ん破綻はUserの聴取で残っていた」
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 対照が無いことを明示した帰属限定'
+- claim_id: R7-C25
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-3 話者依存
+    approx_line: 272
+  claim_text: り→ん破綻は話者依存。破綻を起こさないのはpjs系のみ。ritsuはrun5〜7を通じて破綻し、userも「みわたす」語尾で連続発声を起こす。話者をまたいで一様でない以上、共有デコーダ側の一般的欠陥だけでは説明できず、話者データ側の特性が効いている可能性が高い（本記録では未判定）
+  source_verdict: 「話者依存」
+  claim_class: observation
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: suggestive
+  rationale: 'CORR: 話者間の相関観測・交絡未分離（次段の実測課題）'
+- claim_id: R7-C26
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-4 さくら/うみの非対称
+    approx_line: 279
+  claim_text: 全話者でうみは成立・さくらで破綻が出る。さくらは2拍・4拍の長い音符を持ち、うみは短い。持続音長との相関が疑われるが、曲は2曲しかなく交絡要因（音域・音素構成・フレーズ数）を分離できていないため未判定
+  source_verdict: 「未判定」
+  claim_class: observation
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: suggestive
+  rationale: 'CORR: 持続音長との相関観測・交絡未分離'
+- claim_id: R7-C27
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §5-5 教師適格性
+    approx_line: 283
+  claim_text: あみたろは教師話者であってIdentity頂点ではない（DESIGN_DONOR_EXPANSION §0裁定）。その単体レンダの破綻は「教師が歌えない」ことを示すに過ぎず、教師としての適格性を否定しない。教師の役割は音素明瞭性の供給であり、実際他話者の①改善は達成されている
+  source_verdict: 「教師としての適格性を否定しない」
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 教師適格性についての設計裁定の適用'
+  superseded_by:
+  - R7-C14
+  - R7-C15
+  - R7-C30
+  notes: '本 claim 中の「他話者の①改善は達成されている」は §5-1 最終裁定により限定済み（改善は語尾「す」の局所所見まで・事前登録 articulation 測度は undetermined）。教師適格性の主張部分（あみたろは Identity 頂点でなく教師話者・単体レンダ破綻は適格性を否定しない）は有効なまま'
+- claim_id: R7-C28
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §6 設計への申し送り(1)
+    approx_line: 292
+  claim_text: 教師交代の等価性はdosageだけでは足りない。DESIGN_S6は投入時間を1200.5s→1124.5sと厳密に合わせたが、素材種別の被覆は合わせていない（あみたろ=recitationのみで持続音ゼロ・曲素材ゼロ）。次の教師交代では「時間」と「素材種別の被覆」を両方宣言する
+  source_verdict: 「教師交代の等価性はdosageだけでは足りない」
+  claim_class: process
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 設計への申し送り（dosage と coverage の峻別）'
+- claim_id: R7-C29
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §6 設計への申し送り(2)
+    approx_line: 299
+  claim_text: 対策データは「投入」ではなく「効果」で終端を宣言する（5-2の教訓）。DESIGN_S3_backfillのり→ん対策は投入のみで検証されないまま対策済み扱いになっていた
+  source_verdict: 「対策データは「投入」ではなく「効果」で終端を宣言する」
+  claim_class: process
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: 設計への申し送り（投入=効果ではない一般原則。R7-C23 の教訓の一般化）'
+- claim_id: R7-C30
+  source:
+    file: voice_genesis/foundry/results_s6/s6_record_2026-08-20.md
+    section: §7 DESIGN_S6 §6 AC の充足
+    approx_line: 315
+  claim_text: 'Q12の裁定記帳（DESIGN_S6 §6 AC）— 部分充足（2026-08-20訂正）: ①矯正保存は§5-1のとおり局所所見（語尾「す」の改善）までの部分裁定で、事前登録のarticulation測度（さ行onset）はundetermined。局所退行は2点中1点（「す」）のみ裁定でさ→あは未裁定'
+  source_verdict: 「部分充足」
+  claim_class: adjudication
+  intervention: 教師交代（d3synth 合成教師の引退 → あみたろ実録音教師）
+  baseline: run 6（d3synth 合成教師を使用した学習）
+  causal_evidence_strength: descriptive
+  rationale: 'OBS: AC 充足状態の部分裁定宣言'
