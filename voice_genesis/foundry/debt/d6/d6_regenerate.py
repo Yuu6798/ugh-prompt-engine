@@ -551,9 +551,8 @@ def compose_phase_b_reconciliation(
     )
     baseline_bytes = D4_BASELINE.read_bytes()
     baseline_sha = hashlib.sha256(baseline_bytes).hexdigest()
-    baseline_ref = json.loads(FIXED_PROBE_PINS.read_text(encoding="utf-8"))["production_cells"][
-        "refs"
-    ]["d4_1_2_remeasurement"]
+    fixed_probe_pins = json.loads(FIXED_PROBE_PINS.read_bytes())
+    baseline_ref = fixed_probe_pins["production_cells"]["refs"]["d4_1_2_remeasurement"]
     if (
         baseline_ref.get("path") != "voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json"
         or baseline_ref.get("sha256") != D4_BASELINE_SHA256
@@ -563,17 +562,20 @@ def compose_phase_b_reconciliation(
             f"Phase B: canonical D4 baseline sha256 {baseline_sha} != {D4_BASELINE_SHA256}"
         )
     baseline = json.loads(baseline_bytes)
-    regenerated = json.loads(Path(regenerated_results_path).read_text(encoding="utf-8"))
+    regenerated_bytes = Path(regenerated_results_path).read_bytes()
+    regenerated_sha = hashlib.sha256(regenerated_bytes).hexdigest()
+    regenerated = json.loads(regenerated_bytes)
     expected_cells = _measured_cells(baseline, label="baseline")
     actual_cells = _measured_cells(regenerated, label="regenerated")
     if expected_cells.keys() != actual_cells.keys():
         raise RegenerationError("Phase B: baseline/regenerated cell集合が一致しない")
 
-    d4_spec = json.loads(D4_SPEC.read_text(encoding="utf-8"))
+    d4_spec = json.loads(D4_SPEC.read_bytes())
     expected_trf_sha = d4_spec["pins"]["trf_measurement_spec_1_2_sha256"]
-    if sha256_file(TRF_SPEC) != expected_trf_sha:
+    trf_spec_bytes = TRF_SPEC.read_bytes()
+    if hashlib.sha256(trf_spec_bytes).hexdigest() != expected_trf_sha:
         raise RegenerationError("Phase B: TRF measurement spec 1.2 がD4 pinと一致しない")
-    trf_spec = json.loads(TRF_SPEC.read_text(encoding="utf-8"))
+    trf_spec = json.loads(trf_spec_bytes)
     epsilons = {axis: float(trf_spec["axes"][axis]["epsilon"]) for axis in RECONCILIATION_AXES}
     max_deltas = {axis: 0.0 for axis in RECONCILIATION_AXES}
     n_within_epsilon = samples_matches = wav_matches = 0
@@ -592,18 +594,23 @@ def compose_phase_b_reconciliation(
         samples_matches += int(actual.get("samples_sha256") == expected.get("samples_sha256"))
         wav_matches += int(actual.get("wav_sha256") == expected.get("wav_sha256"))
 
-    synthetic = json.loads(Path(synthetic_report_path).read_text(encoding="utf-8"))
+    calibration_pins_sha = hashlib.sha256(CALIBRATION_PINS.read_bytes()).hexdigest()
+    real_render_baseline_sha = hashlib.sha256(REAL_RENDER_BASELINE.read_bytes()).hexdigest()
+    synthetic_bytes = Path(synthetic_report_path).read_bytes()
+    synthetic_sha = hashlib.sha256(synthetic_bytes).hexdigest()
+    synthetic = json.loads(synthetic_bytes)
     if (
         synthetic.get("schema") != "vg-d6-synthetic-calibration-reconciliation/0.1"
         or synthetic.get("verdict") != "PASS"
         or synthetic.get("value", {}).get("matched_conditions") != 13
         or synthetic.get("value", {}).get("mismatches") != []
-        or synthetic.get("output_pins", {}).get("sha256") != sha256_file(CALIBRATION_PINS)
+        or synthetic.get("output_pins", {}).get("sha256") != calibration_pins_sha
         or synthetic.get("runner", {}).get("sha256") != sha256_file(Path(__file__).resolve())
         or not _is_lower_hex(synthetic.get("execution_commit"), 40)
     ):
         raise RegenerationError("Phase B: synthetic calibration 13条件の照合がPASSでない")
-    real_render = json.loads(Path(real_render_report_path).read_text(encoding="utf-8"))
+    real_render_bytes = Path(real_render_report_path).read_bytes()
+    real_render = json.loads(real_render_bytes)
     real_value = real_render.get("value", {})
     if (
         real_render.get("schema") != "vg-d6-real-render-calibration-reconciliation/0.1"
@@ -612,7 +619,7 @@ def compose_phase_b_reconciliation(
         or real_value.get("samples_matches") != 14
         or real_value.get("samples_mismatches") != []
         or real_render.get("recovered_acoustic_sha256") != REAL_RENDER_ACOUSTIC_SHA256
-        or real_render.get("baseline_manifest_sha256") != sha256_file(REAL_RENDER_BASELINE)
+        or real_render.get("baseline_manifest_sha256") != real_render_baseline_sha
         or real_render.get("historical_source_commit") != REAL_RENDER_HISTORICAL_COMMIT
         or not _is_lower_hex(real_render.get("regenerated_manifest_sha256"), 64)
         or not _is_lower_hex(real_render.get("execution_commit"), 40)
@@ -626,7 +633,6 @@ def compose_phase_b_reconciliation(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    regenerated_sha = sha256_file(Path(regenerated_results_path))
     reference_mismatches = 360 - n_within_epsilon
     value = {
         "reference_output_remeasurement": {
@@ -656,28 +662,26 @@ def compose_phase_b_reconciliation(
                 "n_compared": 13,
                 "n_matches": 13,
                 "n_mismatches": 0,
-                "baseline_pins_sha256": sha256_file(CALIBRATION_PINS),
-                "reconciliation_sha256": sha256_file(Path(synthetic_report_path)),
+                "baseline_pins_sha256": calibration_pins_sha,
+                "reconciliation_sha256": synthetic_sha,
             },
             "real_render": {
                 "n_compared": 14,
                 "n_matches": 14,
                 "n_mismatches": 0,
-                "baseline_manifest_sha256": sha256_file(REAL_RENDER_BASELINE),
+                "baseline_manifest_sha256": real_render_baseline_sha,
                 "regenerated_manifest_sha256": real_render["regenerated_manifest_sha256"],
                 "recovery_acoustic_sha256": REAL_RENDER_ACOUSTIC_SHA256,
             },
         },
     }
-    recovery = json.loads(FIXED_PROBE_PINS.read_text(encoding="utf-8"))["calibration_set"][
-        "real_render_recovery"
-    ]
+    recovery = fixed_probe_pins["calibration_set"]["real_render_recovery"]
     recovery["status"] = "RECOVERED_AND_RECONCILED"
     recovery["required_asset"]["source"] = str(Path(recovered_acoustic_path).resolve())
     recovery["value"] = {
         "execution_commit": commit,
         "recovered_asset_sha256": REAL_RENDER_ACOUSTIC_SHA256,
-        "baseline_manifest_sha256": sha256_file(REAL_RENDER_BASELINE),
+        "baseline_manifest_sha256": real_render_baseline_sha,
         "regenerated_manifest_sha256": real_render["regenerated_manifest_sha256"],
         "n_compared": 14,
         "n_matches": 14,

@@ -504,6 +504,26 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
     )
     recovered_acoustic = tmp_path / "operator-recovered.onnx"
     monkeypatch.setattr(d6_regenerate, "_verify_file_pin", lambda *_args, **_kwargs: None)
+    evidence_inputs = {
+        regenerated_path,
+        synthetic_path,
+        real_path,
+        d6_regenerate.D4_BASELINE,
+        d6_regenerate.FIXED_PROBE_PINS,
+        d6_regenerate.D4_SPEC,
+        d6_regenerate.TRF_SPEC,
+        d6_regenerate.CALIBRATION_PINS,
+        d6_regenerate.REAL_RENDER_BASELINE,
+    }
+    input_reads = {path: 0 for path in evidence_inputs}
+    original_read_bytes = Path.read_bytes
+
+    def counted_read_bytes(path: Path) -> bytes:
+        if path in input_reads:
+            input_reads[path] += 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
     report = d6_regenerate.compose_phase_b_reconciliation(
         regenerated_path,
         synthetic_path,
@@ -511,6 +531,13 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         recovered_acoustic,
         tmp_path / "phase_b.json",
     )
+    assert input_reads == {path: 1 for path in evidence_inputs}
+    assert report["reproducibility_reconciliation"]["value"]["reference_output_remeasurement"][
+        "regenerated_results_sha256"
+    ] == hashlib.sha256(original_read_bytes(regenerated_path)).hexdigest()
+    assert report["reproducibility_reconciliation"]["value"]["calibration"]["synthetic"][
+        "reconciliation_sha256"
+    ] == hashlib.sha256(original_read_bytes(synthetic_path)).hexdigest()
     _assert_real_render_recovery(report["real_render_recovery"])
     _assert_pending_or_resolved(
         report["reproducibility_reconciliation"],

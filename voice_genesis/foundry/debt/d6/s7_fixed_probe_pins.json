@@ -219,7 +219,7 @@
       "plan_command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --real-render-acoustic-onnx /home/user/d6-real-render-input/s6_run7_acoustic.onnx --plan",
       "orchestrator": {
         "path": "voice_genesis/foundry/debt/d6/d6_regenerate.py",
-        "sha256": "b9bfb87da8310285794682cd979780eaa037b14c11a28f0760b7770fc1c992a8"
+        "sha256": "897f635fd4ea7864ae827b1fb5300e9d9d085ed53af21d43c69e6e4c91f7c723"
       },
       "d4_runner": {
         "path": "voice_genesis/foundry/debt/d4/d4_runner.py",
