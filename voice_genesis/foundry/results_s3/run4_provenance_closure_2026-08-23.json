@@ -44,7 +44,8 @@
       "value": "a6da561a66ece62d64d4a0635a5ef525c2b6143eb311c1a7e1d595d9abd3a676",
       "method": "run4 の 40K checkpoint（sha256=3921f96ac19a9cf5bc8ab246a147cf778044cf5949dd24cd87246f24e52c76ec、run4_anchor_provenance.json 既存 pin と一致・/home/user/run4work で sha256sum -c 実測済み）+ config.yaml/spk_map.json/lang_map.json/dictionary-ja.txt（Phase 0 で取得・sha256 記載）を入力に、gate_synth_run4.py（pin commit cda36b9f）run --diffsinger-repo .../DiffSinger(e2307b1) --ckpt-dir <bundle> --exp-name s3_run4_acoustic --step 40000 --canon-model-dir ... --vocoder-dir ... --out-dir ... --song sakura,umi --speaker ritsu を実行して acoustic.onnx を再 export した。同一手順をローカルで2回実行し sha256 が完全一致（a6da561a...）することを確認済み = 本セッション内では決定論的。",
       "source": "本セッション実測（2026-08-23）。/home/user/run4_provwork/gate40k_run4/onnx_gate_40000/acoustic.onnx",
-      "note": "当時バイトとの同一性は未確立（WAV 再生成が run4 側 6/6 とも記録済み sha256 と不一致だったため — 詳細は wav_regeneration 節）。すなわちこの値は『2026-08-23 にこの環境で再現した export 手順の出力』であり、run4 実行当時に生成された acoustic.onnx と同一バイトである保証はない。 2026-08-23 Phase4 追試: 契約の SIMD 条項に相当する AVX512 無効化を近似適用した状態でも（契約の【充足】ではない——contract_compliance_scope 参照）6/6ともrecorded sha256と不一致（詳細はphase4_env_contract_retest節）。SIMD状態はWAVバイトに実測で影響する（サンプル約11%・±1-6LSB）ことを確認したが、run4当時バイトの再現には至らなかった。value（a6da561a...）は変わらず——export自体はSIMD状態に非依存であることも本追試で判明。closureはmeasured_onlyのまま据え置く。"
+      "note": "当時バイトとの同一性は未確立（WAV 再生成が run4 側 6/6 とも記録済み sha256 と不一致だったため — 詳細は wav_regeneration 節）。すなわちこの値は『2026-08-23 にこの環境で再現した export 手順の出力』であり、run4 実行当時に生成された acoustic.onnx と同一バイトである保証はない。 2026-08-23 Phase4 追試: 契約の SIMD 条項に相当する AVX512 無効化を近似適用した状態でも（契約の【充足】ではない——contract_compliance_scope 参照）6/6ともrecorded sha256と不一致（詳細はphase4_env_contract_retest節）。SIMD状態はWAVバイトに実測で影響する（サンプル約11%・±1-6LSB）ことを確認したが、run4当時バイトの再現には至らなかった。value（a6da561a...）は変わらず——export自体はSIMD状態に非依存であることも本追試で判明。closureはmeasured_onlyのまま据え置く。",
+      "value_kind": "file_sha256"
     },
     {
       "ref": "acoustic_onnx.run3_onnx_export41.sha256",
@@ -53,7 +54,8 @@
       "value": null,
       "method": "n/a",
       "source": "Google Drive 検索（title contains 'run3' 全般 + 'onnx_export41' / 's3_run3' / 'run3_acoustic' / 'export41' 個別）",
-      "note": "run3 の 40K checkpoint も onnx_export41 の実体もこのセッションで到達可能な Drive 領域には見つからなかった。取得元不明のため export 自体を実行できない。"
+      "note": "run3 の 40K checkpoint も onnx_export41 の実体もこのセッションで到達可能な Drive 領域には見つからなかった。取得元不明のため export 自体を実行できない。",
+      "value_kind": null
     },
     {
       "ref": "acoustic_onnx.run3_onnx_export41.checkpoint_provenance",
@@ -62,16 +64,18 @@
       "value": null,
       "method": "n/a",
       "source": "同上",
-      "note": "run3 checkpoint 実体が無いため export 記録との紐付けを実測で埋める材料が無い。gate_run3_anchor_v2.log の full text も Phase 0 で取得したが（既存記録の逐語と完全一致を確認）、export 工程はこのログの射程外という既存記録の指摘は本実測でも覆らなかった。"
+      "note": "run3 checkpoint 実体が無いため export 記録との紐付けを実測で埋める材料が無い。gate_run3_anchor_v2.log の full text も Phase 0 で取得したが（既存記録の逐語と完全一致を確認）、export 工程はこのログの射程外という既存記録の指摘は本実測でも覆らなかった。",
+      "value_kind": null
     },
     {
       "ref": "canon_model.namine_ritsu_diffsinger.sha256",
       "prior_state": "missing",
       "closure": "measured_only",
-      "value": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
-      "method": "provision.sh（voice_genesis/foundry/run8/provision.sh）の ASSETS 表 canon_zip の URL（https://www.canon-voice.com/voice/NamineRitsu_DiffSinger.zip）から取得し sha256sum で算出。provision.sh 記載の pin 値と完全一致（この pin 自体は既存資産・本実測が新規に作った値ではない）。",
-      "source": "voice_genesis/foundry/run8/provision.sh ASSETS 表 canon_zip 行。取得実体は /home/user/run4_provwork/materials/NamineRitsu_DiffSinger.zip",
-      "note": "判断根拠（zip全体 vs 内部ファイル）: run4_anchor_provenance.json の canon_model.namine_ritsu_diffsinger.artifact は『NamineRitsu_DiffSinger（--canon-model-dir）』というディレクトリ全体を指す。gate_synth.py を読解すると --canon-model-dir から実際に消費されるのは 5 ファイル（linguistic.onnx / dsdur/dur.onnx / dspitch/pitch.onnx / phonemes.txt / dsconfig.yaml）で、zip 同梱の acoustic.onnx はこのレシピでは未使用（acoustic はチェックポイントから別途 export される run4 独自のモデルであり、canon 側 acoustic.onnx とは無関係）。したがって sha256 フィールドの最も自然な対応先は『配布 zip 全体』（provision.sh が pin 済みの単位でもある）と判断し、これを主値として記録した。5 消費ファイル個別の sha256 は materials 節に別途記載し、両方を追跡可能にした（本文書 acceptance 節の指示どおり両方記録）。 2026-08-23 Phase4: WAV再生成が AVX512 無効化の近似適用後も0/6のままだったため（契約充足ではない——contract_compliance_scope 参照）、本値は producer chain 全体の『機能的裏付け』を得られていない。canon zip自体の取得元一致（provision.sh pinとの一致）という意味でのmeasured_onlyは変わらず維持する。"
+      "value": "b524ac5202e07fd5283428ac164d041c46bfac078766e733368feb22e61f37a2",
+      "method": "合成が実際に消費する canon メンバー 4 ファイルの決定論的マニフェストハッシュ。算法: 各消費メンバーについて「メンバーの sha256」+「半角スペース 2 個」+「canon ディレクトリ内相対パス」+「改行」の行を作り、相対パス昇順で連結した UTF-8 テキスト全体の sha256（materials.canon_consumed_member_manifest.algorithm が正）。実測は run4 再現で --canon-model-dir に渡した展開実体 /home/user/run4_provwork/materials/extracted/ds/NamineRitsu_DiffSinger から直接算出し、配布 zip（sha256 5c7b8c32...、provision.sh ASSETS 表 canon_zip の pin と完全一致）の同名メンバーと 4/4 バイト一致することを独立に照合した。配布 zip 全体の sha256 は materials.canon_model_namine_ritsu_diffsinger_zip_sha256 に別途保持する（再パックでアーカイブハッシュだけが変わり得るため、ランタイム入力の同定には使わない — PR #307 Codex 第8巡P2 により value を zip ハッシュからマニフェストハッシュへ変更）。",
+      "source": "消費メンバーの特定は gate_synth.py の実読解による: canon_model_dir から読むのは linguistic.onnx (L647)・dsdur/dur.onnx (L648)・dspitch/pitch.onnx (L649)・phonemes.txt (L650, L1891) の 4 ファイル。取得実体は /home/user/run4_provwork/materials/extracted/ds/NamineRitsu_DiffSinger、照合元は /home/user/d4work/materials/NamineRitsu_DiffSinger.zip。",
+      "note": "run4_anchor_provenance.json の canon_model.namine_ritsu_diffsinger.artifact は『NamineRitsu_DiffSinger（--canon-model-dir）』というディレクトリを指す。したがって閉じるべきは『合成が読んだバイト』であり、配布 zip のアーカイブハッシュではない（再パックすれば同一メンバーでもアーカイブハッシュは変わり、別アーカイブなら消費メンバーも変わり得る = PR #307 Codex 第8巡P2）。よって value は消費 4 メンバーの決定論的マニフェストハッシュとする。 【第8巡で判明した訂正】従来 materials.canon_consumed_members は消費 5 ファイルとして dsconfig.yaml を含めていたが、gate_synth.py で dsconfig.yaml が読まれるのは acoustic_dsconfig_path であり、export 経路（run4 anchor 合成および本実測 Phase 2 が該当）ではこれは export 出力ディレクトリ側 (L2007) で、canon ディレクトリ側 (L1981) が読まれるのは --skip-export の S0 互換経路のみである。さらに zip 内には dsconfig.yaml が 3 個（top-level / dsdur / dspitch）あり『dsconfig.yaml』というラベル自体が曖昧だった。消費集合を 4 ファイルへ訂正し、canon top-level dsconfig.yaml は非消費参照値として materials に残した。 zip 同梱の acoustic.onnx もこのレシピでは未使用（acoustic は run4 チェックポイントから別途 export される）。 2026-08-23 Phase4: WAV 再生成が AVX512 無効化の近似適用後も 0/6 のままだったため（契約充足ではない——contract_compliance_scope 参照）、本値は producer chain 全体の『機能的裏付け』を得られていない。消費バイトを同定できたという意味での measured_only は維持する。",
+      "value_kind": "consumed_member_manifest_sha256"
     },
     {
       "ref": "vocoder.vocoder_onnx.sha256",
@@ -80,7 +84,8 @@
       "value": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
       "method": "provision.sh ASSETS 表 vocoder_oudep の URL（https://github.com/xunmengshe/OpenUtau/releases/download/0.0.0.0/nsf_hifigan.oudep）から取得・展開し、gate_synth.py が --vocoder-dir から直接読む nsf_hifigan.onnx（曖昧性なし・単一ファイル）の sha256 を算出。provision.sh 内の VOC_WANT pin と完全一致。",
       "source": "voice_genesis/foundry/run8/provision.sh ASSETS 表 vocoder_oudep 行 + 展開後照合ブロック（VOC_WANT）。取得実体は /home/user/run4_provwork/materials/vocoder_onnx/nsf_hifigan.onnx",
-      "note": "canon と異なり --vocoder-dir の消費先はファイル1本のみなので曖昧性は無い。 2026-08-23 Phase4: 同上（WAV再生成が0/6のため producer chain としての裏付けなし。vocoder onnx自体の取得元一致によるmeasured_onlyは維持）。"
+      "note": "canon と異なり --vocoder-dir の消費先はファイル1本のみなので曖昧性は無い。 2026-08-23 Phase4: 同上（WAV再生成が0/6のため producer chain としての裏付けなし。vocoder onnx自体の取得元一致によるmeasured_onlyは維持）。",
+      "value_kind": "file_sha256"
     },
     {
       "ref": "generation_script.gate_synth_run4_py.sha256",
@@ -89,7 +94,8 @@
       "value": "006cd867042d8f976822f2d74dc6bf184c5687a6a125e41914fba0c5c0faf87f",
       "method": "phase0_findings.pin_commit_gate_synth_run4_py で同定したコミット cda36b9f から `git show <commit>:voice_genesis/foundry/s1_gate/gate_synth_run4.py | sha256sum` で算出。",
       "source": "git blob at commit cda36b9f2308128797c48976a9c90b28a4f1661a",
-      "note": "コミットの同定は high_but_unproven（phase0_findings 参照）。当時バイトである保証はない。参考値として現行 HEAD（df38507d 時点）のバイトの sha256 も記録する: 579f7f0b5397e900ea6fe56abaa48fd0f6d2b298753b8fb2ae025e8b93a08ce9（これは当時バイトの代用として使ってはならない——依頼文の禁止事項どおり）。cda36b9f と HEAD の差分は 3df1e37 で d3synth 話者の追加（SPEAKER_TO_SPK_ID に d3synth=3 を追加 + ログ文言変更のみ）で、ritsu/pjs/user の挙動には影響しない差分だったことをコード読解で確認した。 2026-08-23 Phase4: gate_synth_run4.py/gate_synth.pyにはs3_record記載の4ゲート（NPY_DISABLE_CPU_FEATURES等）の参照が一切無いことを確認した（grep実測）——4ゲートはD3 renderパイプライン専用でこの経路には配線されていない。pinコミットの当時バイトの正しさとWAV再生成の成否は別問題であり、本追試はcommit同定の確度を変えない（high_but_unprovenのまま）。"
+      "note": "コミットの同定は high_but_unproven（phase0_findings 参照）。当時バイトである保証はない。参考値として現行 HEAD（df38507d 時点）のバイトの sha256 も記録する: 579f7f0b5397e900ea6fe56abaa48fd0f6d2b298753b8fb2ae025e8b93a08ce9（これは当時バイトの代用として使ってはならない——依頼文の禁止事項どおり）。cda36b9f と HEAD の差分は 3df1e37 で d3synth 話者の追加（SPEAKER_TO_SPK_ID に d3synth=3 を追加 + ログ文言変更のみ）で、ritsu/pjs/user の挙動には影響しない差分だったことをコード読解で確認した。 2026-08-23 Phase4: gate_synth_run4.py/gate_synth.pyにはs3_record記載の4ゲート（NPY_DISABLE_CPU_FEATURES等）の参照が一切無いことを確認した（grep実測）——4ゲートはD3 renderパイプライン専用でこの経路には配線されていない。pinコミットの当時バイトの正しさとWAV再生成の成否は別問題であり、本追試はcommit同定の確度を変えない（high_but_unprovenのまま）。",
+      "value_kind": "file_sha256"
     },
     {
       "ref": "anchor_wavs.run3_gate_sakura_ritsu.wav.checkpoint_provenance",
@@ -98,7 +104,8 @@
       "value": null,
       "method": "n/a",
       "source": "Drive 検索（run3 checkpoint 未発見）",
-      "note": "run3 checkpoint 不在のため閉鎖不能。"
+      "note": "run3 checkpoint 不在のため閉鎖不能。",
+      "value_kind": null
     },
     {
       "ref": "anchor_wavs.run3_gate_umi_ritsu.wav.checkpoint_provenance",
@@ -107,7 +114,8 @@
       "value": null,
       "method": "n/a",
       "source": "同上",
-      "note": "同上"
+      "note": "同上",
+      "value_kind": null
     },
     {
       "ref": "anchor_wavs.run3_gate_sakura_pjs.wav.checkpoint_provenance",
@@ -116,7 +124,8 @@
       "value": null,
       "method": "n/a",
       "source": "同上",
-      "note": "同上"
+      "note": "同上",
+      "value_kind": null
     },
     {
       "ref": "anchor_wavs.run3_gate_umi_pjs.wav.checkpoint_provenance",
@@ -125,7 +134,8 @@
       "value": null,
       "method": "n/a",
       "source": "同上",
-      "note": "同上"
+      "note": "同上",
+      "value_kind": null
     }
   ],
   "wav_regeneration": {
@@ -212,8 +222,7 @@
       "linguistic.onnx": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
       "dsdur/dur.onnx": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
       "dspitch/pitch.onnx": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
-      "phonemes.txt": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb",
-      "dsconfig.yaml": "8af86d460c9094676078ac30601dcf5d23c18835ef51064c7d8e7005b2edd3b6"
+      "phonemes.txt": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb"
     },
     "canon_unused_member_acoustic_onnx_sha256": "bdab7da1979634d65b5dd2cc29c87cae9a27d06a1caf791670fdab59326803cf",
     "vocoder_oudep_sha256": "e22f84009804da2e5916e7a2000f4c30278148796376e49368ec5ff8f9f58830",
@@ -228,7 +237,21 @@
     "gate_synth_run4_py_pin_commit_sha256": "006cd867042d8f976822f2d74dc6bf184c5687a6a125e41914fba0c5c0faf87f",
     "gate_synth_run4_py_current_head_sha256_reference_only": "579f7f0b5397e900ea6fe56abaa48fd0f6d2b298753b8fb2ae025e8b93a08ce9",
     "reexported_acoustic_onnx_sha256_2026_08_23": "a6da561a66ece62d64d4a0635a5ef525c2b6143eb311c1a7e1d595d9abd3a676",
-    "diffsinger_exporter_revision": "e2307b1080b00f3999702ce9017cfd75c7f862fe"
+    "diffsinger_exporter_revision": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+    "canon_consumed_member_manifest": {
+      "algorithm": "sha256( concat_sorted_by_path( f'{sha256(member_bytes)}  {member_relpath}\\n' ) ) over UTF-8",
+      "members_in_order": [
+        "dsdur/dur.onnx",
+        "dspitch/pitch.onnx",
+        "linguistic.onnx",
+        "phonemes.txt"
+      ],
+      "value": "b524ac5202e07fd5283428ac164d041c46bfac078766e733368feb22e61f37a2",
+      "measured_from": "/home/user/run4_provwork/materials/extracted/ds/NamineRitsu_DiffSinger（Phase 2 で --canon-model-dir に渡した展開実体）",
+      "cross_checked_against_zip": "4/4 メンバーが配布 zip 5c7b8c32... の同名メンバーとバイト一致",
+      "consumption_evidence": "gate_synth.py L647-L650 / L1891（canon_model_dir から読むのはこの 4 ファイルのみ）"
+    },
+    "canon_top_level_dsconfig_yaml_sha256_not_consumed_in_export_path": "8af86d460c9094676078ac30601dcf5d23c18835ef51064c7d8e7005b2edd3b6（export 経路では acoustic_dsconfig_path = export 出力側 (gate_synth.py:2007) が読まれるため canon 側は非消費。canon 側が読まれるのは --skip-export の S0 互換経路 (gate_synth.py:1981) のみ。zip 内には dsconfig.yaml が 3 個あり dsdur/dsconfig.yaml = d2ea7b62bbc0a0eaca864cccf34392c38af7a04ba9fa17d1e7421b3dbfebaf10 / dspitch/dsconfig.yaml = 58ab734d487499508a2e2e60ca39dcb6597a5342b61dc530e9ee4e43829564aa）"
   },
   "environment": {
     "python": "3.11.15",

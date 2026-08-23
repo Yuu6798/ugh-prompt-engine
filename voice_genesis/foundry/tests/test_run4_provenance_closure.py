@@ -33,6 +33,7 @@ CLOSURE_PATH = _FOUNDRY / "results_s3" / "run4_provenance_closure_2026-08-23.jso
 PROVENANCE_PATH = _FOUNDRY / "results_s3" / "run4_anchor_provenance.json"
 
 VALID_CLOSURE = {"reproduced", "measured_only", "not_closable"}
+VALID_VALUE_KIND = {"file_sha256", "consumed_member_manifest_sha256"}
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -92,7 +93,7 @@ def test_items_is_exactly_ten(closure: Dict[str, Any]) -> None:
 
 
 def test_every_item_has_required_keys(closure: Dict[str, Any]) -> None:
-    required = {"ref", "prior_state", "closure", "value", "method", "source", "note"}
+    required = {"ref", "prior_state", "closure", "value", "value_kind", "method", "source", "note"}
     for item in closure["items"]:
         missing = required - item.keys()
         assert not missing, f"item {item.get('ref', '<unknown>')} missing keys: {sorted(missing)}"
@@ -167,6 +168,52 @@ def test_measured_only_items_have_sha256_value(closure: Dict[str, Any]) -> None:
                 f"item {item['ref']} is closure=measured_only but value is not a "
                 f"64-hex sha256: {item['value']!r}"
             )
+
+
+def test_value_kind_matches_closure(closure: Dict[str, Any]) -> None:
+    """`value` が何のハッシュなのかを item 自身が自己記述する（PR #307 Codex
+    第 8 巡 P2）。canon のように「配布 zip 全体」と「合成が実際に消費する
+    メンバー群のマニフェスト」が別物になる ref があるため、値だけを渡すと
+    下流はランタイム入力を同定できない。not_closable は value が null なので
+    value_kind も null。"""
+    for item in closure["items"]:
+        if item["closure"] == "not_closable":
+            assert item["value_kind"] is None, (
+                f"item {item['ref']} is not_closable but value_kind is not null: "
+                f"{item['value_kind']!r}"
+            )
+        else:
+            assert item["value_kind"] in VALID_VALUE_KIND, (
+                f"item {item['ref']} has invalid value_kind {item['value_kind']!r}; "
+                f"must be one of {sorted(VALID_VALUE_KIND)}"
+            )
+
+
+def test_canon_manifest_value_is_recomputable_from_recorded_members(
+    closure: Dict[str, Any],
+) -> None:
+    """canon item の value は materials に記録された消費メンバーの sha256 から
+    宣言された算法で再計算できなければならない。宣言だけして再計算不能だと、
+    マニフェストハッシュが「由来不明の 64-hex」に退化する（PR #307 Codex
+    第 8 巡 P2）。"""
+    import hashlib
+
+    canon = next(
+        i for i in closure["items"]
+        if i["ref"] == "canon_model.namine_ritsu_diffsinger.sha256"
+    )
+    assert canon["value_kind"] == "consumed_member_manifest_sha256"
+    members = closure["materials"]["canon_consumed_members"]
+    manifest = closure["materials"]["canon_consumed_member_manifest"]
+    assert sorted(members) == sorted(manifest["members_in_order"]), (
+        "materials.canon_consumed_members と manifest.members_in_order が不一致"
+    )
+    text = "".join(f"{members[m]}  {m}\n" for m in sorted(members))
+    recomputed = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert recomputed == manifest["value"] == canon["value"], (
+        f"manifest 再計算値 {recomputed} が記録値 "
+        f"{manifest['value']}/{canon['value']} と一致しない"
+    )
 
 
 def test_acceptance_declared_provenance_sha256_matches_actual_file(

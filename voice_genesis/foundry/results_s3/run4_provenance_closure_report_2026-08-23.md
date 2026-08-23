@@ -151,15 +151,29 @@ python -m pytest --collect-only -q                     # collection error なし
 
 ## 判断に迷った点
 
-1. **canon_model.namine_ritsu_diffsinger.sha256 の対応先（zip vs 内部
-   acoustic.onnx）**: --canon-model-dir はディレクトリ全体を渡す引数であり、
-   gate_synth.py が実際に読むのは linguistic/dur/pitch/phonemes/dsconfig の
-   5 ファイルで、zip 同梱の acoustic.onnx は本レシピでは不使用と判断した。
-   フィールド名が zip 名（`namine_ritsu_diffsinger`）と一致すること、
-   provision.sh がこの単位（zip 全体）で pin していることから、zip の
-   sha256 を主値とし、5 消費ファイルの sha256 は materials へ副次記録した。
-   この判断は Fable の設計裁定を仰ぐべき余地がある（対応先を honest に
-   両論記録する形にした）。
+1. **canon_model.namine_ritsu_diffsinger.sha256 の対応先（zip vs 消費
+   メンバー）**: 当初は zip 全体の sha256 を主値とし、消費ファイルの sha256 は
+   materials へ副次記録していた（フィールド名が zip 名と一致し、provision.sh も
+   zip 単位で pin しているため）。**第 8 巡 P2 でこれを改めた** — 閉じるべき ref は
+   `--canon-model-dir` という**ランタイム入力**であり、zip のアーカイブハッシュは
+   それを同定しない（再パックすれば同一メンバーでもアーカイブハッシュは変わり、
+   別アーカイブなら消費メンバーも変わり得る）。現在の主値は**消費メンバーの
+   決定論的マニフェストハッシュ** `b524ac52...`（`value_kind:
+   consumed_member_manifest_sha256`）で、zip 全体の sha256 は materials に
+   残す。マニフェスト算法は
+   `materials.canon_consumed_member_manifest.algorithm` が正。
+   併せて**消費集合そのものの誤りも 1 件訂正した**: 従来 5 ファイルとして
+   `dsconfig.yaml` を含めていたが、gate_synth.py で `dsconfig.yaml` が読まれるのは
+   `acoustic_dsconfig_path` であり、**export 経路**（run4 anchor 合成・本実測
+   Phase 2 の両方が該当）ではこれは export 出力側（`gate_synth.py:2007`）で、
+   canon 側（`gate_synth.py:1981`）が読まれるのは `--skip-export` の S0 互換経路
+   のみである。さらに zip 内には `dsconfig.yaml` が 3 個（top-level / dsdur /
+   dspitch）あり、ラベル自体が曖昧だった。消費集合は
+   **linguistic.onnx / dsdur/dur.onnx / dspitch/pitch.onnx / phonemes.txt の 4 件**
+   （`gate_synth.py:647-650, 1891`）へ訂正し、canon top-level `dsconfig.yaml` は
+   非消費参照値として materials に残した。実測は Phase 2 で `--canon-model-dir`
+   に渡した展開実体から直接算出し、配布 zip の同名メンバーと **4/4 バイト一致**
+   することを独立照合している。
 2. **gate_synth_run4.py の pin コミット同定を「証拠」としてよいか**:
    git history からの状況証拠（前後のコミットタイムスタンプの挟み込み）
    のみで、Pod 上の実行時バイトと完全に同一という直接証拠は無い。
@@ -343,7 +357,7 @@ item 1（acoustic ONNX sha）は `measured_only` に据え置く。
 無しで閉じている）は満たさないまま、条件不充足を明示して閉じる形であり、
 VG-DEBT-010 と同型の扱いである。
 
-1. 閉じられる範囲は閉じた — canon zip / vocoder onnx / gate_synth_run4.py
+1. 閉じられる範囲は閉じた — canon 消費メンバー manifest / vocoder onnx / gate_synth_run4.py
    pin-commit / run4 acoustic ONNX 再 export の 4 件を実測値つきで記録
    （`closure: measured_only`）
 2. run3 系 6 件は run3 checkpoint・onnx_export41 が Drive 含め所在不明で
@@ -375,7 +389,7 @@ anchor WAV 再生成が記録済み sha と一致すれば item 1 は `reproduce
 | 7 | 見出し「Phase 3: run3系5件」が本文・JSON・台帳の 6 件と不一致 | 「run3系6件」へ修正 |
 | 8 | acceptance が Phase 0–3 を「無改変・追記のみ」と主張するが `wav_regeneration.results` が再シリアライズされていた | acceptance の文言を実態（値は同一・整形は変化しうる）へ訂正 |
 
-### Codex レビュー第 2–7 巡（PR #307）も全採用
+### Codex レビュー第 2–8 巡（PR #307）も全採用
 
 | 巡 | 指摘 | 対応 |
 |---|---|---|
@@ -388,6 +402,8 @@ anchor WAV 再生成が記録済み sha と一致すれば item 1 は `reproduce
 | 5 | rms/dur/サイズ一致から「全く別内容ではない」は根拠不足 | **主張を撤回**し「要約統計の一致に過ぎず内容の類似性は未測定」へ（無関係な波形でも 3 統計は一致しうる）|
 | 6 | Phase 2 の `characterization` が「同じ演奏内容」と書き、不一致を環境差に帰属していた | 内容同等性と原因帰属の両方を**撤回**し `characterization_withdrawn_2026-08-23` を新設（掃討語彙を拡張して再掃討）|
 | 7 | GPU/CPU の export device 差を「最有力」と順位付けているが実行時デバイスは未記録 | pin 済み exporter の device 選択経路を**実査**して機構を記録し、**順位付けは撤回**（下記「終端宣言（追補 2）」）|
+| 8 | canon の closure 値が配布 zip のアーカイブハッシュで、合成が消費するランタイム入力を同定していない | **消費メンバーの決定論的マニフェストハッシュ**へ変更（`value_kind` を全 item に新設）。併せて消費集合の誤り（`dsconfig.yaml` は export 経路では canon 側を読まない）を訂正し 5→4 件へ |
+| 8 | `reentry_condition` (a) が WAV 一致だけで item 1 を `reproduced` へ昇格させ得る | 昇格条件を**上流バイト証拠**（当時実体の回収 / 当時 sha の発見 / producer chain 全証拠）に限定し、WAV 一致は (a-2) の**機能的裏付け**として closure を動かさない扱いへ分離 |
 
 検証（Phase 5 時点）:
 
