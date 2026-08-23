@@ -604,7 +604,7 @@ def test_regenerated_results_are_bound_to_current_render_manifests_and_materials
     d4_spec_bytes = d6_regenerate.D4_SPEC.read_bytes()
     d4_spec = json.loads(d4_spec_bytes)
     d4_spec_sha = hashlib.sha256(d4_spec_bytes).hexdigest()
-    evidence = d6_regenerate._validate_regenerated_provenance(
+    evidence, artifact_bytes = d6_regenerate._validate_regenerated_provenance(
         current,
         baseline=copied_baseline,
         d4_spec=d4_spec,
@@ -614,6 +614,14 @@ def test_regenerated_results_are_bound_to_current_render_manifests_and_materials
     assert set(evidence) == {
         f"{generation}_{speaker}" for generation, speaker in d6_regenerate.GROUPS
     }
+    assert set(artifact_bytes) == {
+        path
+        for generation, speaker in d6_regenerate.GROUPS
+        for path in d6_regenerate._phase_b_group_refs(f"{generation}_{speaker}")
+    }
+    assert all(not Path(ref["path"]).is_absolute() for group in evidence.values() for ref in (
+        group["render_doc"], group["render_manifest"]
+    ))
 
     # 旧結果の単純コピーは、360セルが完全でも current manifest への結合が無い。
     with pytest.raises(d6_regenerate.RegenerationError, match="provenance mismatch"):
@@ -637,6 +645,19 @@ def test_regenerated_results_are_bound_to_current_render_manifests_and_materials
             d4_spec_sha=d4_spec_sha,
             rendered_groups=rendered_groups,
         )
+
+
+def _copy_phase_b_checkout_authorities(report_root: Path) -> None:
+    for source in (
+        d6_regenerate.D4_RUNNER,
+        d6_regenerate.D4_SPEC,
+        d6_regenerate.D4_BASELINE,
+        d6_regenerate.REAL_RENDER_BASELINE,
+    ):
+        relative = source.relative_to(d6_regenerate.REPO_ROOT)
+        destination = report_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
 
 
 def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drift(
@@ -720,6 +741,26 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         rendered_groups,
     )
     assert input_reads == {path: 1 for path in evidence_inputs}
+    provenance = report["regenerated_provenance"]
+    assert set(provenance) == {"results", "d4_runner", "d4_remeasure_spec", "groups"}
+    assert provenance["results"]["path"] == str(d6_regenerate.PHASE_B_RESULTS_PATH)
+    assert len(provenance["groups"]) == 10
+    assert all(
+        not Path(ref["path"]).is_absolute()
+        for group in provenance["groups"].values()
+        for ref in (group["render_doc"], group["render_manifest"])
+    )
+    for ref in (
+        provenance["results"],
+        *(
+            bound
+            for group in provenance["groups"].values()
+            for bound in (group["render_doc"], group["render_manifest"])
+        ),
+    ):
+        committed = tmp_path / ref["path"]
+        assert committed.is_file()
+        assert hashlib.sha256(committed.read_bytes()).hexdigest() == ref["sha256"]
     assert report["reproducibility_reconciliation"]["value"]["reference_output_remeasurement"][
         "regenerated_results_sha256"
     ] == hashlib.sha256(original_read_bytes(regenerated_path)).hexdigest()
@@ -738,6 +779,7 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         "path": str(d6_regenerate.PHASE_B_REPORT_PATH),
         "sha256": hashlib.sha256(original_read_bytes(report_path)).hexdigest(),
     }
+    _copy_phase_b_checkout_authorities(tmp_path)
     _assert_pending_or_resolved(
         resolved_node,
         context="reproducibility_reconciliation",
@@ -748,6 +790,49 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
     with pytest.raises(AssertionError):
         _assert_pending_or_resolved(
             resolved_node,
+            context="reproducibility_reconciliation",
+            report_root=tmp_path,
+        )
+    report_path.write_bytes(report_bytes)
+    packaged_results_path = tmp_path / provenance["results"]["path"]
+    packaged_results_bytes = packaged_results_path.read_bytes()
+    packaged_results_path.write_bytes(packaged_results_bytes + b" ")
+    with pytest.raises(AssertionError):
+        _assert_pending_or_resolved(
+            resolved_node,
+            context="reproducibility_reconciliation",
+            report_root=tmp_path,
+        )
+    packaged_results_path.write_bytes(packaged_results_bytes)
+
+    absolute_ref_report = json.loads(report_bytes)
+    first_group_id = sorted(absolute_ref_report["regenerated_provenance"]["groups"])[0]
+    absolute_ref_report["regenerated_provenance"]["groups"][first_group_id]["render_doc"][
+        "path"
+    ] = "/operator/workspace/render.json"
+    absolute_ref_bytes = (json.dumps(absolute_ref_report) + "\n").encode()
+    report_path.write_bytes(absolute_ref_bytes)
+    absolute_ref_node = json.loads(json.dumps(resolved_node))
+    absolute_ref_node["report_binding"]["sha256"] = hashlib.sha256(
+        absolute_ref_bytes
+    ).hexdigest()
+    with pytest.raises(AssertionError):
+        _assert_pending_or_resolved(
+            absolute_ref_node,
+            context="reproducibility_reconciliation",
+            report_root=tmp_path,
+        )
+    report_path.write_bytes(report_bytes)
+
+    truncated = json.loads(report_bytes)
+    truncated["regenerated_provenance"] = {}
+    truncated_bytes = (json.dumps(truncated) + "\n").encode()
+    report_path.write_bytes(truncated_bytes)
+    truncated_node = json.loads(json.dumps(resolved_node))
+    truncated_node["report_binding"]["sha256"] = hashlib.sha256(truncated_bytes).hexdigest()
+    with pytest.raises(AssertionError):
+        _assert_pending_or_resolved(
+            truncated_node,
             context="reproducibility_reconciliation",
             report_root=tmp_path,
         )
@@ -1107,7 +1192,10 @@ def test_reproducibility_reconciliation_is_pending_phase_b_or_resolved(
     assert schema["report_binding"] == {
         "path": str(d6_regenerate.PHASE_B_REPORT_PATH),
         "required_keys": ["path", "sha256"],
-        "verification": "report の実 bytes sha256 と裁定値の逐語一致",
+        "verification": (
+            "report の実 bytes sha256・裁定値の逐語一致・checkout-stableな"
+            "21証拠成果物からの全provenance再構成"
+        ),
     }
     assert schema["reference_output_remeasurement"]["baseline_results_sha256"] == (
         D4_RESULTS_SHA256

@@ -219,7 +219,7 @@
       "plan_command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --real-render-acoustic-onnx /home/user/d6-real-render-input/s6_run7_acoustic.onnx --plan",
       "orchestrator": {
         "path": "voice_genesis/foundry/debt/d6/d6_regenerate.py",
-        "sha256": "8238f4573d4bf62b3320a685705053686ea781b16f96e31fe729272f08c09e67"
+        "sha256": "c471c449eb608a06ba49844f6f64e99c3b82f74f71c1c7256e65d2782c2a278d"
       },
       "d4_runner": {
         "path": "voice_genesis/foundry/debt/d4/d4_runner.py",
@@ -247,7 +247,7 @@
       },
       "measure_manifest_digest_policy": "10個の render manifest が全て存在することを確認し、各ファイルの実 sha256 を render 後に計算して同順の --render-manifest-sha256 へ渡す。欠落時は measure を起動しない。",
       "render_runtime_policy": "provision.shがpython3.11.15からvenv_renderを構築し、numpy 2.4.6 / onnxruntime 1.29.0 / soundfile 0.14.0 / PyYAML 6.0.1を復元・import照合する。d6_regenerate.pyはsynthetic/real-render/production出力の生成前に同venvを再照合し、全render commandをそのinterpreterへ固定する。",
-      "phase_b_composer_policy": "measure成功後、d6_regenerate.pyが再測定結果のspec・instrument・runtime provenanceを検査し、直前に生成した10個のrender manifest実bytesからrender docとmaterials digestを再結合した上で、d4 baselineと再測定360セルを同一group/cell集合で比較する。凍結epsilon内件数・3軸max delta・samples/wav一致数・13 synthetic・14 real-render・10群のmanifest/material結合を d6_phase_b_reconciliation.json へ自動合成する。reference_outputが1件でもepsilon外ならreportを残して非0終了し、RESOLVEDはcommit済みreportの実sha256と裁定値の逐語一致が無ければ受理しない。",
+      "phase_b_composer_policy": "measure成功後、d6_regenerate.pyが再測定結果のspec・instrument・runtime provenanceを検査し、直前に生成した10個のrender manifest実bytesからrender docとmaterials digestを再結合した上で、d4 baselineと再測定360セルを同一group/cell集合で比較する。再測定結果・10 render docs・10 manifestsは d6_phase_b_evidence/ へ同一bytesで保存し、reportにはcheckout-stableなrepo相対pathと実sha256だけを記録する。RESOLVED検証はcommit済みreport・21証拠成果物・D4 runner/spec/baselineをfresh checkoutから再読込し、top-level/10群の厳密形状、全digest、manifest→doc→materials/runtime、裁定値へのresult digest結合を再構成できなければ拒否する。reference_outputが1件でもepsilon外ならreportを残して非0終了する。",
       "measure_completion_policy": "--allow-partial は付けない。d4_runner.py が10群・360セル全数一致と error=0 を要求し、不完全なら非0終了する。"
     }
   },
@@ -317,7 +317,7 @@
       "report_binding": {
         "path": "voice_genesis/foundry/debt/d6/d6_phase_b_reconciliation.json",
         "required_keys": ["path", "sha256"],
-        "verification": "report の実 bytes sha256 と裁定値の逐語一致"
+        "verification": "report の実 bytes sha256・裁定値の逐語一致・checkout-stableな21証拠成果物からの全provenance再構成"
       }
     },
     "value": null
