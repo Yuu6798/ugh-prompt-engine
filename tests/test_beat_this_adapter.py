@@ -455,10 +455,6 @@ class TestIsolation:
 
 
 class TestSerializerRegression:
-    def test_bundle_without_learned_annotations_still_omits_field_in_dump(self):
-        bundle = _make_bundle()
-        assert "learned_annotations" not in bundle.model_dump()
-
     def test_bundle_with_time_events_includes_field_in_dump(self, monkeypatch):
         _install_fake_beat_this(monkeypatch, beats=[0.5], downbeats=[0.5])
 

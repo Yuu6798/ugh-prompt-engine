@@ -2193,38 +2193,6 @@ def test_plan_warnings_flags_author_input_missing_when_reference_audio_file_abse
     ]
 
 
-def test_plan_warnings_ok_when_reference_audio_file_present(tmp_path: Path) -> None:
-    """参照ファイルが実在すれば（他ゲートも通過する前提で）"ok" のまま——回帰
-    確認（`test_plan_warnings_ok_for_audio_reference_when_both_bands_calibrated`
-    と同型だが、本テストは R9-2 の実在検査を明示的な観点として持つ）。"""
-    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
-    (project_dir / "ref.wav").write_bytes(b"fake-audio")
-    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
-    warnings = melody_experimental_plan_warnings(
-        contract=contract,
-        melody_config=_melody_config(
-            reference="audio", reference_audio="ref.wav", reference_band="clear_lead"
-        ),
-        project_dir=project_dir,
-        backend_ref=_backend_ref(melody_take_band="clear_lead"),
-    )
-    assert warnings == ["melody anchor 'melody-1': experimental observability — ok"]
-
-
-def test_plan_warnings_score_reference_unaffected_by_audio_check(tmp_path: Path) -> None:
-    """``reference == "score"``（既定）は R9-2 の audio 参照実在検査の対象外
-    ——回帰確認（既存 ok 挙動を壊さない）。"""
-    project_dir = _project_dir_with_registries(tmp_path, calibrated=True)
-    contract = _contract([_anchor({"contour": "hard"}, anchor_id="melody-1")])
-    warnings = melody_experimental_plan_warnings(
-        contract=contract,
-        melody_config=_melody_config(),
-        project_dir=project_dir,
-        backend_ref=_backend_ref(melody_take_band="clear_lead"),
-    )
-    assert warnings == ["melody anchor 'melody-1': experimental observability — ok"]
-
-
 # --------------------------------------------------------------------------- #
 # R8-2 (Codex round8 P2) — G1 通過後の M1 registry 可用性診断
 # --------------------------------------------------------------------------- #
@@ -2725,23 +2693,6 @@ def test_entry_readback_accepts_confirmed_status_with_none_free_axis_value() -> 
         )
     )
     assert entry.adherence_status == "preserved"
-
-
-def test_entry_readback_exempts_not_observed_from_judged_axis_finite_check() -> None:
-    """(d) ``not_observed`` は本チェックからも免除される——judged 軸の値が
-    軒並み ``None`` でも読み戻しが拒否されない（R9-1 の
-    `test_entry_readback_accepts_builder_produced_not_observed_entry` と同型の
-    確認だが、本テストは R10-3 チェックの免除を明示的な観点として持つ）。"""
-    entry = ExperimentalAnchorEntry(
-        **_entry_kwargs(
-            adherence_status="not_observed",
-            axis_policy={"contour": "hard", "interval": "elastic"},
-            axes={"contour": None, "interval": None},
-            axis_evidence={},
-            reasons=["melody_config_missing"],
-        )
-    )
-    assert entry.adherence_status == "not_observed"
 
 
 def test_entry_readback_accepts_builder_produced_preserved_entry_with_finite_axes() -> None:

@@ -6,15 +6,26 @@ on:
   pull_request:
     branches: [main]
 
+# Review loops can push many revisions while a 30-minute shard is still
+# running.  Keep only the newest run for a branch/PR instead of burning runner
+# time on results that can no longer be merged.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 # test-m2-harness + test-l0b-reeval + test-rest の和が全件（test-m2-harness
-# は tests/test_m2_accuracy_harness.py のみ、test-l0b-reeval は下記 2 テスト
+# は tests/test_m2_accuracy_harness.py のみ、test-l0b-reeval は下記 3 テスト
 # のみ、test-rest はその両方を --ignore/--deselect で除いた残り全部）=
 # カバレッジ不変・CI が slow を skip しない原則を維持したまま、壁時計を各
-# ジョブの timeout 枠に収めるためのシャーディングのみ（3 ジョブとも全 slow
-# テストを実行する——slow はどのジョブでも skip しない。単に実行するジョブを
-# 分けるだけ）。timeout-minutes: 35 = テスト予算 30 分 + checkout/pip
+# ジョブの timeout 枠に収めるためのシャーディングのみ（slow を skip せず、
+# 実行するジョブを分けるだけ）。timeout-minutes: 35 = テスト予算 30 分 + checkout/pip
 # セットアップ許容 5 分。テスト実測が 30 分を超えたらこの backstop の枠を
 # 広げるのではなく、シャードを再分割して対処する。
+#
+# test-m2-harness は 851 tests / 29–35 分まで増え、単一ファイル shard のまま
+# 35 分 timeout に常態的に接触した（2026-08-22）。依存追加なしで現在の pytest
+# 収集順を 3 つの連続区間へ分ける。node id の固定リストを持たないため、テストの
+# 追加・削除後も 3 shard の和は常にその時点の同ファイル全件になる。
 #
 # test-l0b-reeval（PR #249 Codex レビュー第 20 巡, P1 新設）: 第 13/19 巡で
 # 追加した l0b 台帳の凍結判定器フル再評価 2 テスト（
@@ -62,8 +73,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
+        shard-index: [0, 1, 2]
 
     steps:
       - uses: actions/checkout@v4
@@ -77,8 +90,38 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
-      - name: Test
-        run: pytest -q --tb=short --durations=25 tests/test_m2_accuracy_harness.py
+      - name: Test M2 shard ${{ matrix.shard-index }}
+        shell: bash
+        run: |
+          if ! collection=$(pytest --collect-only -q tests/test_m2_accuracy_harness.py); then
+            echo "$collection" >&2
+            exit 1
+          fi
+          mapfile -t nodeids < <(
+            printf '%s\n' "$collection" \
+              | sed -n '\|^tests/test_m2_accuracy_harness.py::|p'
+          )
+          total=${#nodeids[@]}
+          if (( total == 0 )); then
+            echo "No M2 harness tests were collected" >&2
+            exit 1
+          fi
+
+          shard_total=3
+          shard_index=${{ matrix.shard-index }}
+          chunk=$(( (total + shard_total - 1) / shard_total ))
+          start=$(( shard_index * chunk ))
+          if (( start >= total )); then
+            echo "Shard ${shard_index} is empty (total=${total}, chunk=${chunk})" >&2
+            exit 1
+          fi
+          length=$(( total - start ))
+          if (( length > chunk )); then
+            length=$chunk
+          fi
+
+          echo "Running M2 harness shard ${shard_index}: ${length}/${total} tests"
+          pytest -q --tb=short --durations=25 "${nodeids[@]:start:length}"
 
   test-l0b-reeval:
     runs-on: ubuntu-latest

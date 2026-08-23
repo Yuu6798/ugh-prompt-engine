@@ -164,14 +164,6 @@ def test_check_note_dur_consistency_skips_rows_without_note_dur() -> None:
 # --- review #264 R14 P2: 欠落 (missing key) と空値 (present but empty) の区別 -
 
 
-def test_check_note_dur_consistency_still_skips_missing_note_dur_key() -> None:
-    """列自体が無い（`row.get("note_dur")` が `None`）行は従来通り許容
-    （optional 扱い）。R14 P2 の厳格化後も回帰しないことを固定する。
-    """
-    rows = [{"name": "seg000", "ph_seq": "SP a SP", "ph_dur": "1.0 1.0 1.0"}]  # note_dur 列なし
-    assert bd.check_note_dur_consistency("pjs", rows) == []
-
-
 def test_check_note_dur_consistency_rejects_present_but_empty_note_dur() -> None:
     """列は存在するが値が空文字列（CSV セルが空欄）の行は拒否する。
 

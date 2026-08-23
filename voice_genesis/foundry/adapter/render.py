@@ -437,15 +437,6 @@ def _atomic_write_wav_and_timing(
                 pass
     return output_sha256
 
-    # 公開成功: 退避しておいた旧世代はもう不要。
-    for backup, had_previous in ((wav_backup, wav_had_previous), (csv_backup, csv_had_previous)):
-        if had_previous:
-            try:
-                os.unlink(backup)
-            except OSError:
-                pass
-    return output_sha256
-
 
 def _vowel_distribution_from_labels(labels: dict) -> dict:
     """unit.index -> ラベル(str) の辞書から母音別件数分布を作る（3 ドナー共通）。"""

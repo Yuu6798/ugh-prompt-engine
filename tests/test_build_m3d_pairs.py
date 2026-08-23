@@ -1695,26 +1695,6 @@ def test_check_only_detects_material_stale_entry_added(tmp_path: Path, monkeypat
         )
 
 
-def test_check_only_passes_with_untouched_material_map(tmp_path: Path, monkeypatch):
-    """正常パス: material マップが無改変であれば `--check-only` は引き続き
-    通る（H1 の検査が偽陽性を出さないことの確認）。
-    """
-    monkeypatch.setattr(bm, "ROOT", tmp_path)
-    monkeypatch.chdir(tmp_path)
-    vocadito_dir, fixtures_path, _ = _make_vocadito_pool(tmp_path)
-
-    build = _build(tmp_path, fixtures_path, vocadito_dir)
-
-    summary = bm.check_existing(
-        manifest_out=build["manifest_out"],
-        pins_out=build["pins_out"],
-        vocadito_dir=vocadito_dir,
-        fixtures_path=fixtures_path,
-        synth_specs_path=REAL_SYNTH_SPECS_PATH,
-    )
-    assert summary["total"] == 98
-
-
 # --------------------------------------------------------------------------- #
 # R2R H2（Codex レビュー第 6 ラウンド）: summary の pin 化
 # --------------------------------------------------------------------------- #

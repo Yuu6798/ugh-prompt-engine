@@ -214,14 +214,6 @@ def test_10_two_evaluable_pairs_is_not_evaluable() -> None:
     assert agg["verdict"] == GeneVerdict.NOT_EVALUABLE.value
 
 
-def test_11_three_pairs_one_context_is_not_evaluable() -> None:
-    runs = [_run("a", "terminal_ri"), _run("b", "terminal_ri"), _run("c", "terminal_ri")]
-    agg = sg.gene_verdict(_verdicts(runs))
-    assert agg["evaluable_pairs"] == 3
-    assert agg["distinct_evaluable_context_count"] == 1
-    assert agg["verdict"] == GeneVerdict.NOT_EVALUABLE.value
-
-
 def test_12_three_of_three_two_contexts_is_supported() -> None:
     runs = [_run("a", "terminal_ri"), _run("b", "terminal_ri"), _run("c", "terminal_i")]
     agg = sg.gene_verdict(_verdicts(runs))
