@@ -47,7 +47,7 @@ CUDA 可視性のみ。
 |---|---|
 | G1 (GPU) onnx vs C1 (CPU) onnx（同一 pod・同一 venv） | **不一致**（`3e6c3a3a…` vs `53ad8c43…`） |
 | G1 WAV 6 本 vs 記録済み run4 sha256 | **6/6 バイト一致**（rms・dur も記録値と一致） |
-| C1 WAV vs 記録済み | 0/2 不一致 |
+| CPU export 経路の WAV（同一合成環境・対照は ritsu 2 曲） | 0/2 不一致（対照ペア内では一致/不一致が device のみで反転） |
 | G2（GPU 再実行） | ONNX・WAV とも G1 と bit 一致（決定論） |
 | C1b（別パス root） | C1 と bit 一致（パス埋め込み感度なし） |
 | C1 onnx vs session CPU export (`a6da561a…`) | 不一致（未解決・列挙のみ、下記） |
@@ -57,8 +57,9 @@ CUDA 可視性のみ。
 - **F1**: export の実行時デバイスは acoustic ONNX のバイトを変える
 - **F2**: GPU export 経路の anchor WAV 6 本が記録済み sha256 と **6/6 一致** =
   `reentry_condition` **(a-2) の機能的裏付けが成立**
-- **F3**: 合成環境を固定した pod 内比較で、WAV の一致/不一致は **export device
-  のみで反転**した（CPU-export ONNX → 0/2、GPU-export ONNX → 6/6）
+- **F3**: 対照が取れている ritsu 2 曲では、合成環境を固定した pod 内比較で
+  一致/不一致が **export device のみで反転**（CPU-export ONNX → 0/2、
+  GPU-export ONNX → 2/2。pjs/user は GPU アームのみで対照未取得）
 - **F6**: CPU export 経路は 2 環境・2 通りの ONNX バイトでいずれも記録 WAV に
   不一致（session 0/6・pod 0/2）
 

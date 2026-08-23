@@ -532,6 +532,42 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
     print(f"| runner: fetch complete ({ok_count}/{len(top_level_files)} top-level files). out_dir={out_dir}")
 
+    # FIX 1 (P1 偽成功経路): ここまでは診断のため常に全ダウンロードを試みるが、
+    # status.json の中身を見ずに exit 0 していた旧実装は probe 失敗（status!=ok）
+    # や probe_results.json 欠落でも「fetch complete」と成功終了していた。
+    # exit 0 は「status=ok AND probe_results.json 回収済み」の場合のみに限定する。
+    status_path = os.path.join(out_dir, "status.json")
+    try:
+        with open(status_path, encoding="utf-8") as fh:
+            status_payload = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"| runner: *** PROBE FETCH FAILED *** could not parse downloaded "
+            f"status.json ({exc}) — treating as failure.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    status_value = status_payload.get("status")
+    probe_results_downloaded = os.path.isfile(os.path.join(out_dir, "probe_results.json"))
+
+    if status_value != "ok":
+        detail_tail = status_payload.get("detail_tail", "")
+        print(
+            f"| runner: *** PROBE FAILED *** status.json status={status_value!r} "
+            f"(expected 'ok'). detail_tail:\n{detail_tail}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    if not probe_results_downloaded:
+        print(
+            "| runner: *** PROBE FETCH FAILED *** status=ok but probe_results.json "
+            "was not downloaded — result set incomplete.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

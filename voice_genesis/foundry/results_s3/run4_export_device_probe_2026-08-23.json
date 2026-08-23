@@ -143,7 +143,7 @@
   "findings_measured": [
     "F1: acoustic ONNX export の実行時デバイスは ONNX バイトを変える——同一 pod・同一 venv（torch 2.13.0+cu126）・同一入力で、CUDA export（3e6c3a3a…）と CPU 強制 export（53ad8c43…）の sha256 が不一致",
     "F2: GPU export 経路の anchor WAV 6 本は記録済み run4 sha256 と 6/6 バイト一致（rms・dur も記録値と一致）。reentry_condition (a-2) の『未制御要因の 1 つ（export device）を制御した環境での記録済み sha 一致』が成立",
-    "F3: 合成環境を固定した pod 内比較で、WAV の一致/不一致は export device のみで反転した——同一 pod・同一 synth 環境（onnxruntime 1.29.0 CPU EP・numpy 1.26.4・AVX2 天井）で、CPU-export ONNX からの WAV は 0/2 不一致、GPU-export ONNX からの WAV は 6/6 一致",
+    "F3: 合成環境を固定した pod 内比較で、対照が取れている同一 2 曲（ritsu sakura/umi）では WAV の一致/不一致が export device のみで反転した——CPU-export ONNX から 0/2、GPU-export ONNX から 2/2。pjs/user の 4 本は GPU アームのみで CPU 対照は未取得のため、device-only 反転の主張は ritsu ペアに限定する（6/6 一致そのものは F2 の (a-2) 記載が正）",
     "F4: GPU export + 合成は本 pod 上で決定論的（G2 再実行で ONNX・WAV とも bit 一致）",
     "F5: CPU export はパス root（/root/s1work vs /root/s1work_alt）に不感（C1b = C1 で ONNX・WAV とも bit 一致）",
     "F6: CPU export 経路は 2 環境・2 通りの ONNX バイト（session a6da561a… / pod 53ad8c43…）でいずれも記録 WAV に不一致（session 0/6・pod 0/2）"
@@ -163,7 +163,7 @@
     "『GPU export ならば常に記録バイトを再現する』とは主張しない——再現は本 pod 環境 1 点での実測である",
     "残余候補への順位付けは行わない（PR #307 終端宣言（追補 2）継承）。本記録は候補間の順位ではなく、単一要因を操作した実測の記載である"
   ],
-  "artifact_byte_policy": "freeze_mode: pinned_regenerable（v1.1 裁定）。WAV / ONNX 実体は git に入れず sha256 のみ記帳。実体は本 JSON の pin 群と probe script により決定論的に再生成可能（GPU export の決定論は F4 で本 pod 上のみ実測）",
+  "artifact_byte_policy": "freeze_mode: pinned_regenerable（v1.1 裁定）。WAV / ONNX 実体は git に入れず sha256 のみ記帳。再現性の実測境界は同一 pod 内の再実行 bit 一致（F4）まで。pin 群（素材・repo checkout・DiffSinger revision）は入力実体の同一性を保証するが、venv の従属依存解決（DiffSinger requirements.txt のレンジ指定）と base image の tag 参照は将来の解決で変わり得るため、本 JSON から環境完全同一の決定論的再生成が保証されるとは主張しない（Codex PR #312 第 1 巡 P2 により当初の『決定論的に再生成可能』を縮小）",
   "acceptance": {
     "recomputable": "comparisons の全 boolean は arms / expected_values の sha256 値のみから再計算可能（形状テストで機械検証）",
     "authority": "closure・status の判定規則は debt_ledger.yaml の reentry_condition (a-1)/(a-2) が正本。本 JSON はそれに従属する"

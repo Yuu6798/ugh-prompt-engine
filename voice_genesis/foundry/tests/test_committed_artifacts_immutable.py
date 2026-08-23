@@ -79,7 +79,7 @@ FROZEN_SHA256 = {
         "40d32d33e4f81b99452cf183a831836285079dc784cf63c0681f44b97f4b0308"
     ),
     "run4_export_device_probe_2026-08-23.json": (
-        "dc959541517bda01e2e19f2659065ef974397acfeb8627df7dd3e5c1825da01d"
+        "47879666ea17ba923628119c306b99674c6a5fb0fd478e2bd00de6315c097ef6"
     ),
 }
 
