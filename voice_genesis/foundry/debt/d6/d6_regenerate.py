@@ -3,24 +3,33 @@
 例（取得から 360 セル再測定まで）::
 
     python3 voice_genesis/foundry/debt/d6/d6_regenerate.py \
-        --root /home/user/d6work
+        --root /home/user/d6work \
+        --real-render-acoustic-onnx \
+        /home/user/d6-real-render-input/s6_run7_acoustic.onnx
 
 ``--plan`` は副作用なしで、同じ絶対パスを使う全コマンドを表示する。通常実行は
 pin 照合つき provision、合成校正13条件の再生成照合、10群の witnessed export、
+履歴実装と回収済み acoustic ONNX によるreal-render校正14条件の再生成照合、
 10群 render、生成された render manifest の実 sha256 を束縛した measure の順に
-fail-closed で進む。動的 digest を人手の placeholder に戻さないため、measure
-コマンドは render 完了後に本実行体が組み立てる。
+fail-closed で進む。real-render acoustic ONNX は再exportで代替できないため、未回収
+なら開始前に停止する。動的 digest は本実行体が実ファイルから計算する。
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
+import os
+import platform
 import shlex
+import shutil
 import struct
 import subprocess
 import sys
+import tarfile
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -34,6 +43,9 @@ D4_RUNNER = FOUNDRY / "debt" / "d4" / "d4_runner.py"
 D4_SPEC = FOUNDRY / "debt" / "d4" / "d4_remeasure_spec.json"
 CALIBRATION_PINS = HERE / "s7_synthetic_calibration_output_pins.json"
 FIXED_PROBE_PINS = HERE / "s7_fixed_probe_pins.json"
+REAL_RENDER_BASELINE = FOUNDRY / "results_s7" / "s7_b1_real_render_manifest.json"
+REAL_RENDER_HISTORICAL_COMMIT = "8a14ca97eda1a6bf96f956a8173f512f0cdb50ae"
+REAL_RENDER_ACOUSTIC_SHA256 = "f0e71f06b16e448622f3e0d9b977a26fbaa306bb608a08ed26efeb871332a7d1"
 
 GROUPS = (
     ("run5", "ritsu"),
@@ -190,6 +202,54 @@ def build_render_command(
     ]
 
 
+def _real_render_source_root(root: Path) -> Path:
+    return root / "historical_source" / REAL_RENDER_HISTORICAL_COMMIT
+
+
+def build_real_render_command(
+    root: Path,
+    acoustic_onnx: Path,
+    *,
+    python_executable: str = sys.executable,
+) -> list[str]:
+    """成功したB-1 real-renderを生んだ履歴実装で14条件を再生成する。"""
+    source = _real_render_source_root(root)
+    foundry = source / "voice_genesis" / "foundry"
+    export = _group_paths(root, "run7", "ritsu").export_dir
+    stem = "s6_run7_acoustic"
+    canon = root / "materials" / "extracted" / "ds" / "NamineRitsu_DiffSinger"
+    return [
+        python_executable,
+        str(foundry / "run8" / "s7_calib_render.py"),
+        "--canon-model-dir",
+        str(canon),
+        "--vocoder-dir",
+        str(root / "materials" / "vocoder_onnx"),
+        "--acoustic-onnx",
+        str(acoustic_onnx),
+        "--acoustic-dsconfig",
+        str(export / "dsconfig.yaml"),
+        "--acoustic-phonemes-json",
+        str(export / f"{stem}.phonemes.json"),
+        "--canon-phonemes-txt",
+        str(canon / "phonemes.txt"),
+        "--speaker",
+        "ritsu",
+        "--speaker-emb",
+        str(export / f"{stem}.ritsu.emb"),
+        "--ckpt",
+        str(root / "materials" / "run7_ckpt" / "model_ckpt_steps_40000.ckpt"),
+        "--canon-zip",
+        str(root / "materials" / "NamineRitsu_DiffSinger.zip"),
+        "--vocoder-container",
+        str(root / "materials" / "nsf_hifigan.oudep"),
+        "--out-dir",
+        str(root / "calibration_real_render"),
+        "--manifest-out",
+        str(root / "calibration_real_render_manifest.json"),
+    ]
+
+
 def build_measure_command(root: Path, *, python_executable: str = sys.executable) -> list[str]:
     command = [python_executable, str(D4_RUNNER), "measure"]
     groups = group_paths(root)
@@ -229,6 +289,192 @@ def static_plan(
             for group in groups
         ),
     )
+
+
+def _verify_file_pin(path: Path, expected: str, *, label: str) -> None:
+    if not path.is_file():
+        raise RegenerationError(f"{label}: 必須の固定資産が無い: {path}")
+    observed = sha256_file(path)
+    if observed != expected:
+        raise RegenerationError(f"{label}: sha256 {observed} != pin {expected}")
+
+
+def verify_real_render_inputs(root: Path, acoustic_onnx: Path) -> None:
+    """履歴real-renderが消費する再配布外の4資産をレンダ前に照合する。"""
+    baseline = json.loads(REAL_RENDER_BASELINE.read_text(encoding="utf-8"))
+    model = baseline["render_path"]["model_sha256"]
+    aux = baseline["render_path"]["aux_sha256"]
+    export = _group_paths(root, "run7", "ritsu").export_dir
+    stem = "s6_run7_acoustic"
+    for path, expected, label in (
+        (Path(acoustic_onnx), REAL_RENDER_ACOUSTIC_SHA256, "historical acoustic ONNX"),
+        (export / "dsconfig.yaml", model["acoustic_dsconfig_yaml"], "acoustic dsconfig"),
+        (
+            export / f"{stem}.phonemes.json",
+            aux["acoustic_phonemes_json"],
+            "acoustic phonemes",
+        ),
+        (export / f"{stem}.ritsu.emb", aux["speaker_embed"], "Ritsu embedding"),
+    ):
+        _verify_file_pin(path, expected, label=label)
+
+
+def verify_real_render_stack() -> None:
+    """B-1 manifest が束縛した数値実行環境以外で履歴renderを走らせない。"""
+    baseline = json.loads(REAL_RENDER_BASELINE.read_text(encoding="utf-8"))
+    expected = baseline["render_stack"]
+    observed = {
+        "numpy": importlib.metadata.version("numpy"),
+        "onnxruntime": importlib.metadata.version("onnxruntime"),
+        "soundfile": importlib.metadata.version("soundfile"),
+        "PyYAML": importlib.metadata.version("PyYAML"),
+        "python": platform.python_version(),
+    }
+    if observed != expected:
+        raise RegenerationError(
+            f"real-render execution profile mismatch: {observed} != pin {expected}"
+        )
+
+
+def _verify_historical_source(source: Path) -> None:
+    baseline = json.loads(REAL_RENDER_BASELINE.read_text(encoding="utf-8"))
+    aux = baseline["render_path"]["aux_sha256"]
+    foundry = source / "voice_genesis" / "foundry"
+    for path, expected, label in (
+        (foundry / "s1_gate" / "gate_synth.py", aux["gate_synth_py"], "gate_synth_py"),
+        (
+            foundry / "run8" / "s7_calib_score.py",
+            aux["s7_calib_score_py"],
+            "s7_calib_score_py",
+        ),
+        (
+            foundry / "run8" / "s7_calib_render.py",
+            aux["s7_calib_render_py"],
+            "s7_calib_render_py",
+        ),
+        (
+            foundry / "results_s7" / "s7_b1_calibration_set.json",
+            baseline["prereg"]["sha256"],
+            "real-render prereg",
+        ),
+    ):
+        _verify_file_pin(path, expected, label=f"historical source {label}")
+
+
+def materialize_historical_real_render_source(root: Path) -> Path:
+    """Git objectからreal-render実行時のsource treeを展開してpin照合する。"""
+    target = _real_render_source_root(root)
+    if target.is_dir():
+        _verify_historical_source(target)
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".real-render-source-", dir=target.parent))
+    archive_fd, archive_name = tempfile.mkstemp(prefix=".real-render-", suffix=".tar", dir=root)
+    os.close(archive_fd)
+    archive = Path(archive_name)
+    try:
+        subprocess.run(
+            [
+                "git",
+                "archive",
+                "--format=tar",
+                f"--output={archive}",
+                REAL_RENDER_HISTORICAL_COMMIT,
+                "voice_genesis",
+                "pyproject.toml",
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+        )
+        with tarfile.open(archive) as tar:
+            for member in tar.getmembers():
+                destination = (staging / member.name).resolve()
+                if (
+                    staging.resolve() not in destination.parents
+                    and destination != staging.resolve()
+                ):
+                    raise RegenerationError(f"historical archive path escape: {member.name}")
+                if not (member.isfile() or member.isdir()):
+                    raise RegenerationError(
+                        f"historical archive に通常ファイル以外が含まれる: {member.name}"
+                    )
+                tar.extract(member, staging)
+        _verify_historical_source(staging)
+        staging.rename(target)
+    finally:
+        archive.unlink(missing_ok=True)
+        if staging.exists():
+            shutil.rmtree(staging)
+    return target
+
+
+def reconcile_real_render_manifest(observed_path: Path, report_path: Path) -> dict[str, Any]:
+    """履歴real-render全14条件の標本pinを基準manifestへ突き合わせる。"""
+    baseline = json.loads(REAL_RENDER_BASELINE.read_text(encoding="utf-8"))
+    observed = json.loads(Path(observed_path).read_text(encoding="utf-8"))
+    if observed.get("schema") != baseline.get("schema"):
+        raise RegenerationError("real-render manifest schema mismatch")
+    expected_conditions = {entry["condition_id"]: entry for entry in baseline["conditions"]}
+    observed_conditions = {entry["condition_id"]: entry for entry in observed["conditions"]}
+    if (
+        len(expected_conditions) != len(baseline["conditions"])
+        or len(observed_conditions) != len(observed["conditions"])
+        or expected_conditions.keys() != observed_conditions.keys()
+    ):
+        raise RegenerationError("real-render condition集合が基準14条件と一致しない")
+    for counter in ("n_rendered", "n_derived", "n_zero_buffers"):
+        if observed.get(counter) != baseline.get(counter):
+            raise RegenerationError(
+                f"real-render {counter} mismatch: {observed.get(counter)} != {baseline.get(counter)}"
+            )
+    sample_mismatches = []
+    wav_matches = 0
+    for condition_id, expected in expected_conditions.items():
+        actual = observed_conditions[condition_id]
+        if actual.get("samples_sha256") != expected.get("samples_sha256"):
+            sample_mismatches.append(condition_id)
+        if actual.get("wav_sha256") == expected.get("wav_sha256"):
+            wav_matches += 1
+    path_mismatches = {}
+    for section in ("model_sha256", "aux_sha256"):
+        expected_pins = baseline["render_path"][section]
+        actual_pins = observed["render_path"].get(section, {})
+        for key, expected in expected_pins.items():
+            if actual_pins.get(key) != expected:
+                path_mismatches[f"{section}.{key}"] = (expected, actual_pins.get(key))
+    if sample_mismatches or path_mismatches:
+        raise RegenerationError(
+            "real-render reconciliation mismatch: "
+            f"samples={sample_mismatches}, render_path={path_mismatches}"
+        )
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    report = {
+        "schema": "vg-d6-real-render-calibration-reconciliation/0.1",
+        "verdict": "PASS",
+        "value": {
+            "n_rendered": int(observed["n_rendered"]),
+            "n_compared": len(expected_conditions),
+            "samples_matches": len(expected_conditions),
+            "samples_mismatches": [],
+            "wav_container_matches": wav_matches,
+            "wav_container_mismatches": len(expected_conditions) - wav_matches,
+        },
+        "baseline_manifest_sha256": sha256_file(REAL_RENDER_BASELINE),
+        "regenerated_manifest_sha256": sha256_file(Path(observed_path)),
+        "recovered_acoustic_sha256": REAL_RENDER_ACOUSTIC_SHA256,
+        "historical_source_commit": REAL_RENDER_HISTORICAL_COMMIT,
+        "execution_commit": commit,
+    }
+    Path(report_path).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return report
 
 
 def _float32_wav_bytes(samples: Any, sample_rate: int) -> tuple[bytes, bytes, bytes]:
@@ -348,6 +594,15 @@ def _validated_root(value: str) -> Path:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=_validated_root)
+    parser.add_argument(
+        "--real-render-acoustic-onnx",
+        required=True,
+        type=Path,
+        help=(
+            "2026-08-21 B-1 real-renderで実際に使った acoustic ONNX。"
+            f"sha256 {REAL_RENDER_ACOUSTIC_SHA256} 以外は再exportを含め拒否する"
+        ),
+    )
     parser.add_argument("--plan", action="store_true", help="副作用なしで静的コマンドを表示")
     parser.add_argument(
         "--skip-provision",
@@ -356,12 +611,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     root: Path = args.root
+    real_render_acoustic = args.real_render_acoustic_onnx.expanduser().resolve()
     verify_runner_pins()
     provision, exports, renders = static_plan(root)
     if args.plan:
         if not args.skip_provision:
             _print_commands([provision])
         _print_commands(exports)
+        _print_commands([build_real_render_command(root, real_render_acoustic)])
         _print_commands(renders)
         print(
             "# measure は render 後、上記10 manifestの実 sha256を計算して"
@@ -369,11 +626,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
+    _verify_file_pin(
+        real_render_acoustic,
+        REAL_RENDER_ACOUSTIC_SHA256,
+        label="historical acoustic ONNX",
+    )
     if not args.skip_provision:
         _run(provision)
     verify_calibration_outputs(root / "calibration_synthetic")
     for export in exports:
         _run(export)
+    verify_real_render_inputs(root, real_render_acoustic)
+    verify_real_render_stack()
+    materialize_historical_real_render_source(root)
+    _run(build_real_render_command(root, real_render_acoustic))
+    reconcile_real_render_manifest(
+        root / "calibration_real_render_manifest.json",
+        root / "calibration_real_render_reconciliation.json",
+    )
     for render in renders:
         _run(render)
     _run(build_measure_command(root))

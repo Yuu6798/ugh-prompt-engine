@@ -128,9 +128,27 @@
       "real_render_manifest": {
         "path": "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json",
         "sha256": "bde66f3f8599ea48d6e8ff8fdc63a362c6aed5f846655189bf3b52c5628d3343",
-        "role": "real-render 11条件（rr_*）+ derived 2条件のWAV実体 pin。prereg.sha256 で s7_b1_calibration_set.json の real_render_set 節へ hash-bound。render_stack 節に numpy/onnxruntime/soundfile/PyYAML/python の版を pin。",
-        "n_real_render_conditions": 11
+        "role": "real-render 11条件（rr_*）+ derived 2条件 + zero buffer 1条件の全14標本 pin。prereg.sha256 で s7_b1_calibration_set.json の real_render_set 節へ hash-bound。render_stack 節に numpy/onnxruntime/soundfile/PyYAML/python の版を pin。",
+        "n_real_render_conditions": 11,
+        "n_total_conditions": 14
       }
+    },
+    "real_render_recovery": {
+      "status": "BLOCKED_MISSING_PINNED_ACOUSTIC",
+      "required_asset": {
+        "expected_path": "/home/user/d6-real-render-input/s6_run7_acoustic.onnx",
+        "sha256": "f0e71f06b16e448622f3e0d9b977a26fbaa306bb608a08ed26efeb871332a7d1",
+        "source": "UNRECORDED",
+        "substitution_policy": "同じcheckpointからの再exportを含む別ONNXでの代替は禁止。B-1実行が消費したこのバイト列そのものだけを受理する。"
+      },
+      "historical_source": {
+        "git_commit": "8a14ca97eda1a6bf96f956a8173f512f0cdb50ae",
+        "gate_synth_sha256": "d844e89e7f10f4004a2a36e4e89c93b302371348f8b3125213706a1292aebd8a",
+        "s7_calib_render_sha256": "5018b751592df4770de68f00e2bc2e7d138cf88f542b68b6034e1c146040b38b",
+        "s7_calib_score_sha256": "d44fce5235076aeec7b27209120c90eb3afd3b5631eed84fb4d3cc827e8747f1"
+      },
+      "recovery_condition": "required_asset の完全一致を確認後、履歴sourceと固定execution profileで11 render + 2 derived + 1 zeroを再生成し、全14条件の samples_sha256 が基準manifestと一致すること。",
+      "closure_guard": "status が RECOVERED_AND_RECONCILED になるまで reproducibility_reconciliation を RESOLVED にしてはならない。"
     }
   },
   "common_fixed": {
@@ -166,23 +184,23 @@
       }
     },
     "material_acquisition_command": {
-      "command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work",
+      "command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --real-render-acoustic-onnx /home/user/d6-real-render-input/s6_run7_acoustic.onnx",
       "source": "voice_genesis/foundry/debt/d6/d6_regenerate.py（単一の実行入口。内部で provision.sh を起動する）",
       "provisioner": {
         "path": "voice_genesis/foundry/run8/provision.sh",
         "sha256": "87dac1801966e3addefd849ae4ed6b5302313a044b8feb62ebd4a54b0326b9cd"
       },
-      "note": "例の /home/user/d6work は実在不要の予約済み作業先ではなく、operator が作成可能な絶対パスとしてそのまま shell 実行できる。ランナーは13校正出力の再生成照合、17資産の provision、10 witnessed exports、10 renders、manifest 実 digest 計算、360セル measure を fail-closed で連続実行する。"
+      "note": "作業先は operator が作成可能な絶対パス。real-render acoustic ONNX は現在未回収のため、完全一致する外部資産を指定できるまでコマンドは開始前に BLOCKED で停止する。回収後は13 synthetic校正、17資産の provision、10 witnessed exports、履歴実装による14 real-render校正、10 production renders、manifest実digest計算、360セルmeasureを fail-closed で連続実行する。"
     },
     "regeneration_commands": {
-      "derivation": "d6_regenerate.py が GROUPS の10要素から export/render の argv を構築する。render 完了後に10個の render manifest を実ファイルから sha256 計算し、その値を d4_runner.py measure の --render-manifest-sha256 へ渡す。operator が埋める placeholder は存在しない。--spec-sha256 は実行時の現行コミット済み spec（v0.4）を実測する。2026-08-22実測が束縛した v0.1 sha は凍結記録として別フィールドに維持する。",
+      "derivation": "d6_regenerate.py が GROUPS の10要素から export/render の argv を構築する。B-1 real-renderは実行時commit 8a14ca9 のsourceをgit objectから展開し、回収した完全一致ONNXと固定stackで再生成する。再exportは代替に使わない。production render完了後に10個のmanifestを実ファイルからsha256計算し、d4_runner.py measureの --render-manifest-sha256 へ渡す。operatorが埋めるdigest placeholderは存在しない。--spec-sha256は実行時の現行コミット済みspec（v0.4）を実測する。2026-08-22実測が束縛したv0.1 shaは凍結記録として別フィールドに維持する。",
       "spec_sha256_current_v0_4": "c5eab9f2fa613ed996ebcc872db111a7a4cf7eb60bd645999babc5e9cfacb447",
       "spec_sha256_execution_time_v0_1_frozen": "702f1a2231a1b53e71afe7ab6332d42a637546802d960bdd569f4d200de2eeca",
-      "entrypoint": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work",
-      "plan_command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --plan",
+      "entrypoint": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --real-render-acoustic-onnx /home/user/d6-real-render-input/s6_run7_acoustic.onnx",
+      "plan_command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --real-render-acoustic-onnx /home/user/d6-real-render-input/s6_run7_acoustic.onnx --plan",
       "orchestrator": {
         "path": "voice_genesis/foundry/debt/d6/d6_regenerate.py",
-        "sha256": "b4730c988dd85f0d48228f3974580a9ca6c64a29e0d308aceb9a99fdb8e93253"
+        "sha256": "eab7b3ff7cf06aeff9620316d2f1515347370116efcc6177573bd0b9c1444de4"
       },
       "d4_runner": {
         "path": "voice_genesis/foundry/debt/d4/d4_runner.py",
@@ -204,7 +222,9 @@
         "witnessed_exports": 10,
         "render_groups": 10,
         "production_cells": 360,
-        "synthetic_calibration_conditions": 13
+        "synthetic_calibration_conditions": 13,
+        "real_render_calibration_renders": 11,
+        "real_render_calibration_total_conditions": 14
       },
       "measure_manifest_digest_policy": "10個の render manifest が全て存在することを確認し、各ファイルの実 sha256 を render 後に計算して同順の --render-manifest-sha256 へ渡す。欠落時は measure を起動しない。",
       "measure_completion_policy": "--allow-partial は付けない。d4_runner.py が10群・360セル全数一致と error=0 を要求し、不完全なら非0終了する。"
@@ -212,7 +232,7 @@
   },
   "reproducibility_reconciliation": {
     "status": "PENDING_PHASE_B",
-    "reason": "Phase B（別セッション）が再生成実測を実行中。本節は実測値そのものを 持たず、記帳予定のレベル別意味論の宣言のみを Phase A で確定する。",
+    "reason": "Phase BはB-1実行で使用したsha256=f0e71f...のacoustic ONNXが未回収のため BLOCKED。本節は完全な実測値を持たず、回収・全14校正照合・360セル再測定が完了するまでPENDINGを維持する。",
     "semantics_authority": "voice_genesis/foundry/results_s7/s7_reproducibility_finding.md §4 「pin 意味論の訂正」が正本。強さの順は `reference_output 再測定 > samples_sha256 > wav_sha256`。",
     "levels": [
       {
@@ -237,6 +257,16 @@
         "to_be_recorded_by_phase_b": "参考記録のみ（判定基準には用いない = s7_reproducibility_finding.md §4）。"
       }
     ],
+    "resolved_value_schema": {
+      "reference_output_remeasurement": "360件のn_compared/n_within_epsilon/n_mismatches、3軸max_abs_delta、baseline/regenerated result digest",
+      "samples_sha256": "360件のn_compared/n_matches/n_mismatches、baseline/regenerated inventory digest",
+      "wav_sha256": "360件のn_compared/n_matches/n_mismatches、baseline/regenerated inventory digest（参考値）",
+      "calibration": {
+        "synthetic": "13件のn_compared/n_matches/n_mismatchesとbaseline/reconciliation digest",
+        "real_render": "14件のn_compared/n_matches/n_mismatchesとbaseline/regenerated manifest digestおよび回収ONNX digest"
+      },
+      "execution_commit": "40桁の本repo git commit"
+    },
     "value": null
   },
   "honest_accounting": {

@@ -23,6 +23,7 @@ Phase A の時点では実測値に依存するフィールド（`reproducibilit
 の実測値・`honest_accounting.commit`）は未確定のプレースホルダであることを
 確認するに留め、Phase B 完了後の値そのもの（判読・裁定）は検証しない。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -104,9 +105,17 @@ def test_vg_det0_uses_successful_run7_manifest_commit_as_baseline() -> None:
 
 
 REQUIRED_TOP_LEVEL_KEYS = {
-    "schema", "debt_ref", "phase", "authority", "purpose",
-    "wav_not_committed_policy", "production_cells", "calibration_set",
-    "common_fixed", "reproducibility_reconciliation", "honest_accounting",
+    "schema",
+    "debt_ref",
+    "phase",
+    "authority",
+    "purpose",
+    "wav_not_committed_policy",
+    "production_cells",
+    "calibration_set",
+    "common_fixed",
+    "reproducibility_reconciliation",
+    "honest_accounting",
 }
 
 
@@ -131,9 +140,16 @@ def test_production_cells_has_probe_0b_groups_for_all_10_groups(pins: Dict[str, 
     assert len(refs) == 10
     pairs = {(r["generation"], r["speaker"]) for r in refs}
     expected = {
-        ("run5", "ritsu"), ("run5", "pjs"), ("run5", "user"),
-        ("run6", "ritsu"), ("run6", "pjs"), ("run6", "user"),
-        ("run7", "ritsu"), ("run7", "pjs"), ("run7", "user"), ("run7", "amitaro"),
+        ("run5", "ritsu"),
+        ("run5", "pjs"),
+        ("run5", "user"),
+        ("run6", "ritsu"),
+        ("run6", "pjs"),
+        ("run6", "user"),
+        ("run7", "ritsu"),
+        ("run7", "pjs"),
+        ("run7", "user"),
+        ("run7", "amitaro"),
     }
     assert pairs == expected, f"group coverage mismatch: {pairs.symmetric_difference(expected)}"
 
@@ -173,6 +189,19 @@ def test_calibration_set_has_synthetic_and_real_render_refs(pins: Dict[str, Any]
     assert synth["rng"]["bit_generator"] == "PCG64"
     assert real["path"] == "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json"
     assert real["n_real_render_conditions"] == 11
+    assert real["n_total_conditions"] == 14
+
+
+def test_real_render_recovery_is_honestly_blocked_on_exact_historical_asset(
+    pins: Dict[str, Any],
+) -> None:
+    recovery = pins["calibration_set"]["real_render_recovery"]
+    assert recovery["status"] == "BLOCKED_MISSING_PINNED_ACOUSTIC"
+    assert recovery["required_asset"]["sha256"] == (d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256)
+    assert recovery["historical_source"]["git_commit"] == (
+        d6_regenerate.REAL_RENDER_HISTORICAL_COMMIT
+    )
+    assert "再export" in recovery["required_asset"]["substitution_policy"]
 
 
 def test_synthetic_calibration_output_pins_cover_and_reproduce_all_13(
@@ -194,12 +223,11 @@ def test_synthetic_calibration_output_pins_cover_and_reproduce_all_13(
         import numpy as np
         import soundfile as sf
 
-        decoded, sample_rate = sf.read(
-            tmp_path / "calibration" / f"{stim_id}.wav", dtype="float32"
-        )
+        decoded, sample_rate = sf.read(tmp_path / "calibration" / f"{stim_id}.wav", dtype="float32")
         assert sample_rate == stimulus["sample_rate_hz"]
-        assert hashlib.sha256(np.ascontiguousarray(decoded, dtype="<f4").tobytes()).hexdigest() == (
-            stimulus["pcm_f32le_sha256"]
+        assert (
+            hashlib.sha256(np.ascontiguousarray(decoded, dtype="<f4").tobytes()).hexdigest()
+            == (stimulus["pcm_f32le_sha256"])
         )
     report = d6_regenerate.verify_calibration_outputs(tmp_path / "verified_calibration")
     assert report["verdict"] == "PASS"
@@ -240,6 +268,7 @@ def test_execution_profile_matches_real_render_manifest_render_stack(
 def test_material_acquisition_command_reaches_pinned_provision_sh(pins: Dict[str, Any]) -> None:
     cmd = pins["common_fixed"]["material_acquisition_command"]["command"]
     assert "--root" in cmd
+    assert "--real-render-acoustic-onnx" in cmd
     provision = d6_regenerate.build_provision_command(Path("/tmp/d6-provision-check"))
     assert provision[0] == "bash"
     assert provision[1].endswith("voice_genesis/foundry/run8/provision.sh")
@@ -256,18 +285,69 @@ def test_regeneration_runner_covers_10_exports_and_render_groups(
     assert len(exports) == regen["coverage"]["witnessed_exports"] == 10
     assert len(renders) == regen["coverage"]["render_groups"] == 10
     assert provision[-2:] == ["--root", str(root)]
-    assert {(cmd[cmd.index("--generation") + 1], cmd[cmd.index("--artifact") + 1])
-            for cmd in exports} == {
+    assert {
+        (cmd[cmd.index("--generation") + 1], cmd[cmd.index("--artifact") + 1]) for cmd in exports
+    } == {
         (generation, f"acoustic_onnx=s6_{generation}_acoustic.onnx")
         for generation, _speaker in d6_regenerate.GROUPS
     }
     pairs = {
-        (cmd[cmd.index("--generation") + 1], cmd[cmd.index("--speaker") + 1])
-        for cmd in renders
+        (cmd[cmd.index("--generation") + 1], cmd[cmd.index("--speaker") + 1]) for cmd in renders
     }
     assert pairs == set(d6_regenerate.GROUPS)
     for command in (*exports, *renders):
         assert all("<" not in arg and ">" not in arg for arg in command)
+
+    recovered = tmp_path / "recovered" / "s6_run7_acoustic.onnx"
+    real_command = d6_regenerate.build_real_render_command(
+        root, recovered, python_executable="/pinned/analysis/python"
+    )
+    assert str(recovered) in real_command
+    assert str(d6_regenerate.REAL_RENDER_HISTORICAL_COMMIT) in real_command[1]
+    assert real_command[real_command.index("--manifest-out") + 1] == str(
+        root / "calibration_real_render_manifest.json"
+    )
+
+
+def test_real_render_reconciliation_compares_all_14_sample_pins(tmp_path: Path) -> None:
+    baseline = json.loads(d6_regenerate.REAL_RENDER_BASELINE.read_text(encoding="utf-8"))
+    observed = json.loads(json.dumps(baseline))
+    observed["out_dir"] = str(tmp_path / "regenerated")
+    for condition in observed["conditions"]:
+        condition["wav_sha256"] = "0" * 64
+    observed_path = tmp_path / "observed.json"
+    observed_path.write_text(json.dumps(observed), encoding="utf-8")
+    report = d6_regenerate.reconcile_real_render_manifest(
+        observed_path, tmp_path / "reconciliation.json"
+    )
+    assert report["verdict"] == "PASS"
+    assert report["value"]["n_rendered"] == 11
+    assert report["value"]["n_compared"] == 14
+    assert report["value"]["samples_matches"] == 14
+    assert report["value"]["wav_container_mismatches"] == 14
+
+    observed["conditions"][0]["samples_sha256"] = "f" * 64
+    observed_path.write_text(json.dumps(observed), encoding="utf-8")
+    with pytest.raises(d6_regenerate.RegenerationError, match="samples"):
+        d6_regenerate.reconcile_real_render_manifest(observed_path, tmp_path / "must-not-pass.json")
+
+
+def test_missing_or_reexported_real_render_acoustic_is_rejected(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.onnx"
+    with pytest.raises(d6_regenerate.RegenerationError, match="必須の固定資産が無い"):
+        d6_regenerate._verify_file_pin(
+            missing,
+            d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256,
+            label="historical acoustic ONNX",
+        )
+    reexport = tmp_path / "reexport.onnx"
+    reexport.write_bytes(b"not the historical ONNX")
+    with pytest.raises(d6_regenerate.RegenerationError, match="sha256"):
+        d6_regenerate._verify_file_pin(
+            reexport,
+            d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256,
+            label="historical acoustic ONNX",
+        )
 
 
 def test_regeneration_runner_verifies_its_own_pinned_dependencies(
@@ -302,16 +382,12 @@ def test_measure_command_hashes_all_generated_manifests(
     for index, group in enumerate(groups):
         group.render_manifest.parent.mkdir(parents=True, exist_ok=True)
         group.render_manifest.write_bytes(f"manifest-{index}".encode())
-    command = d6_regenerate.build_measure_command(
-        root, python_executable="/pinned/analysis/python"
-    )
+    command = d6_regenerate.build_measure_command(root, python_executable="/pinned/analysis/python")
     assert command.count("--render-doc") == 10
     assert command.count("--render-manifest") == 10
     assert command.count("--render-manifest-sha256") == 10
     digests = [
-        command[index + 1]
-        for index, arg in enumerate(command)
-        if arg == "--render-manifest-sha256"
+        command[index + 1] for index, arg in enumerate(command) if arg == "--render-manifest-sha256"
     ]
     assert digests == [d6_regenerate.sha256_file(group.render_manifest) for group in groups]
 
@@ -403,6 +479,49 @@ def test_at_least_14_distinct_refs_are_pinned(pins: Dict[str, Any]) -> None:
 # --- PENDING_PHASE_B プレースホルダの構造妥当性 ------------------------------
 
 
+def _assert_count_reconciliation(node: Dict[str, Any], *, expected: int, matches_key: str) -> None:
+    assert node["n_compared"] == expected
+    assert isinstance(node[matches_key], int) and node[matches_key] >= 0
+    assert isinstance(node["n_mismatches"], int) and node["n_mismatches"] >= 0
+    assert node[matches_key] + node["n_mismatches"] == expected
+
+
+def _assert_complete_reconciliation_value(value: Any) -> None:
+    assert isinstance(value, dict)
+    assert set(value) == {
+        "reference_output_remeasurement",
+        "samples_sha256",
+        "wav_sha256",
+        "calibration",
+    }
+    reference = value["reference_output_remeasurement"]
+    _assert_count_reconciliation(reference, expected=360, matches_key="n_within_epsilon")
+    assert set(reference["max_abs_delta_by_axis"]) == {
+        "excess_tail_voiced_ms",
+        "release_after_score_boundary_ms",
+        "tail_f0_persistence",
+    }
+    assert all(
+        isinstance(axis_value, (int, float)) and axis_value >= 0
+        for axis_value in reference["max_abs_delta_by_axis"].values()
+    )
+    for section in (reference, value["samples_sha256"], value["wav_sha256"]):
+        digest_fields = [key for key in section if key.endswith("_sha256")]
+        assert len(digest_fields) >= 2
+        assert all(SHA256_RE.fullmatch(str(section[key])) for key in digest_fields)
+    _assert_count_reconciliation(value["samples_sha256"], expected=360, matches_key="n_matches")
+    _assert_count_reconciliation(value["wav_sha256"], expected=360, matches_key="n_matches")
+
+    calibration = value["calibration"]
+    assert set(calibration) == {"synthetic", "real_render"}
+    _assert_count_reconciliation(calibration["synthetic"], expected=13, matches_key="n_matches")
+    _assert_count_reconciliation(calibration["real_render"], expected=14, matches_key="n_matches")
+    for section in calibration.values():
+        digest_fields = [key for key in section if key.endswith("_sha256")]
+        assert len(digest_fields) >= 2
+        assert all(SHA256_RE.fullmatch(str(section[key])) for key in digest_fields)
+
+
 def _assert_pending_or_resolved(node: Dict[str, Any], *, context: str) -> None:
     """`status` キーを持つノードは `PENDING_PHASE_B`（未確定）か、確定後の
     実測値（`status` キーが無い、または他の確定語彙）のどちらかでなければ
@@ -417,7 +536,7 @@ def _assert_pending_or_resolved(node: Dict[str, Any], *, context: str) -> None:
     assert status == "RESOLVED", f"{context}: 未知の status {status!r}"
     value = node.get("value")
     if context == "reproducibility_reconciliation":
-        assert isinstance(value, dict) and value, f"{context}: RESOLVED の実測値が空"
+        _assert_complete_reconciliation_value(value)
         assert re.fullmatch(r"[0-9a-f]{40}", str(node.get("execution_commit", ""))), (
             f"{context}: RESOLVED の execution_commit が完全な git SHA でない"
         )
@@ -432,7 +551,55 @@ def _assert_pending_or_resolved(node: Dict[str, Any], *, context: str) -> None:
     [
         (
             "reproducibility_reconciliation",
-            {"status": "RESOLVED", "value": {"verdict": "PASS"}, "execution_commit": "a" * 40},
+            {
+                "status": "RESOLVED",
+                "execution_commit": "a" * 40,
+                "value": {
+                    "reference_output_remeasurement": {
+                        "n_compared": 360,
+                        "n_within_epsilon": 360,
+                        "n_mismatches": 0,
+                        "baseline_results_sha256": "1" * 64,
+                        "regenerated_results_sha256": "2" * 64,
+                        "max_abs_delta_by_axis": {
+                            "excess_tail_voiced_ms": 0.0,
+                            "release_after_score_boundary_ms": 0.0,
+                            "tail_f0_persistence": 0.0,
+                        },
+                    },
+                    "samples_sha256": {
+                        "n_compared": 360,
+                        "n_matches": 360,
+                        "n_mismatches": 0,
+                        "baseline_inventory_sha256": "3" * 64,
+                        "regenerated_inventory_sha256": "4" * 64,
+                    },
+                    "wav_sha256": {
+                        "n_compared": 360,
+                        "n_matches": 0,
+                        "n_mismatches": 360,
+                        "baseline_inventory_sha256": "5" * 64,
+                        "regenerated_inventory_sha256": "6" * 64,
+                    },
+                    "calibration": {
+                        "synthetic": {
+                            "n_compared": 13,
+                            "n_matches": 13,
+                            "n_mismatches": 0,
+                            "baseline_pins_sha256": "7" * 64,
+                            "reconciliation_sha256": "8" * 64,
+                        },
+                        "real_render": {
+                            "n_compared": 14,
+                            "n_matches": 14,
+                            "n_mismatches": 0,
+                            "baseline_manifest_sha256": "9" * 64,
+                            "regenerated_manifest_sha256": "a" * 64,
+                            "recovery_acoustic_sha256": "b" * 64,
+                        },
+                    },
+                },
+            },
         ),
         ("honest_accounting.commit", {"status": "RESOLVED", "value": "b" * 40}),
     ],
@@ -445,6 +612,10 @@ def test_resolved_phase_b_shapes_are_accepted(context: str, node: Dict[str, Any]
     ("context", "node"),
     [
         ("reproducibility_reconciliation", {"status": "RESOLVED", "value": None}),
+        (
+            "reproducibility_reconciliation",
+            {"status": "RESOLVED", "value": {"verdict": "PASS"}, "execution_commit": "a" * 40},
+        ),
         ("reproducibility_reconciliation", {"status": "DONE", "value": {"x": 1}}),
         ("honest_accounting.commit", {"status": "RESOLVED", "value": None}),
         ("honest_accounting.commit", {"status": "resolved", "value": "a" * 40}),
@@ -463,7 +634,9 @@ def test_reproducibility_reconciliation_is_pending_phase_b_or_resolved(
     assert isinstance(node.get("levels"), list) and len(node["levels"]) == 3
     level_names = {level["name"] for level in node["levels"]}
     assert level_names == {
-        "reference_output_remeasurement", "samples_sha256", "wav_sha256",
+        "reference_output_remeasurement",
+        "samples_sha256",
+        "wav_sha256",
     }
     # 強さの順（s7_reproducibility_finding.md §4 が正本）を level 番号が
     # reference_output > samples_sha256 > wav_sha256 の順に反映していること。
@@ -473,6 +646,18 @@ def test_reproducibility_reconciliation_is_pending_phase_b_or_resolved(
         < by_name["samples_sha256"]
         < by_name["wav_sha256"]
     )
+    schema = node["resolved_value_schema"]
+    assert set(schema) == {
+        "reference_output_remeasurement",
+        "samples_sha256",
+        "wav_sha256",
+        "calibration",
+        "execution_commit",
+    }
+    recovery = pins["calibration_set"]["real_render_recovery"]
+    if recovery["status"] != "RECOVERED_AND_RECONCILED":
+        assert node["status"] == "PENDING_PHASE_B"
+        assert node["value"] is None
 
 
 def test_honest_accounting_commit_is_pending_phase_b_or_resolved(pins: Dict[str, Any]) -> None:
@@ -484,8 +669,12 @@ def test_honest_accounting_documents_unrecorded_execution_commits(pins: Dict[str
     section = pins["honest_accounting"]["unrecorded_execution_commits"]
     assert isinstance(section.get("statement"), str) and section["statement"].strip()
     for date in ("2026-08-21", "2026-08-22"):
-        assert date in section["statement"], f"{date} が unrecorded_execution_commits.statement に無い"
-    assert isinstance(section.get("why_unrecoverable"), str) and section["why_unrecoverable"].strip()
+        assert date in section["statement"], (
+            f"{date} が unrecorded_execution_commits.statement に無い"
+        )
+    assert (
+        isinstance(section.get("why_unrecoverable"), str) and section["why_unrecoverable"].strip()
+    )
 
 
 # --- CI 収集ガード ----------------------------------------------------------
