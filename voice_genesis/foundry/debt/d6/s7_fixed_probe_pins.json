@@ -219,7 +219,7 @@
       "plan_command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --real-render-acoustic-onnx /home/user/d6-real-render-input/s6_run7_acoustic.onnx --plan",
       "orchestrator": {
         "path": "voice_genesis/foundry/debt/d6/d6_regenerate.py",
-        "sha256": "ed6952f0b2860e1e735413dda70af0eb7940838a93d121ca35265a01c3cd2852"
+        "sha256": "8238f4573d4bf62b3320a685705053686ea781b16f96e31fe729272f08c09e67"
       },
       "d4_runner": {
         "path": "voice_genesis/foundry/debt/d4/d4_runner.py",
@@ -247,7 +247,7 @@
       },
       "measure_manifest_digest_policy": "10個の render manifest が全て存在することを確認し、各ファイルの実 sha256 を render 後に計算して同順の --render-manifest-sha256 へ渡す。欠落時は measure を起動しない。",
       "render_runtime_policy": "provision.shがpython3.11.15からvenv_renderを構築し、numpy 2.4.6 / onnxruntime 1.29.0 / soundfile 0.14.0 / PyYAML 6.0.1を復元・import照合する。d6_regenerate.pyはsynthetic/real-render/production出力の生成前に同venvを再照合し、全render commandをそのinterpreterへ固定する。",
-      "phase_b_composer_policy": "measure成功後、d6_regenerate.pyがd4 baselineと再測定360セルを同一group/cell集合で比較し、凍結epsilon内件数・3軸max delta・samples/wav一致数・13 synthetic・14 real-renderの照合reportを自動合成して d6_phase_b_reconciliation.json を出力する。reference_outputが1件でもepsilon外ならreportを残して非0終了し、手動転記だけでRESOLVEDにはできない。",
+      "phase_b_composer_policy": "measure成功後、d6_regenerate.pyが再測定結果のspec・instrument・runtime provenanceを検査し、直前に生成した10個のrender manifest実bytesからrender docとmaterials digestを再結合した上で、d4 baselineと再測定360セルを同一group/cell集合で比較する。凍結epsilon内件数・3軸max delta・samples/wav一致数・13 synthetic・14 real-render・10群のmanifest/material結合を d6_phase_b_reconciliation.json へ自動合成する。reference_outputが1件でもepsilon外ならreportを残して非0終了し、RESOLVEDはcommit済みreportの実sha256と裁定値の逐語一致が無ければ受理しない。",
       "measure_completion_policy": "--allow-partial は付けない。d4_runner.py が10群・360セル全数一致と error=0 を要求し、不完全なら非0終了する。"
     }
   },
@@ -313,7 +313,12 @@
           "recovery_acoustic_sha256": "f0e71f06b16e448622f3e0d9b977a26fbaa306bb608a08ed26efeb871332a7d1"
         }
       },
-      "execution_commit": "40桁の本repo git commit"
+      "execution_commit": "40桁の本repo git commit",
+      "report_binding": {
+        "path": "voice_genesis/foundry/debt/d6/d6_phase_b_reconciliation.json",
+        "required_keys": ["path", "sha256"],
+        "verification": "report の実 bytes sha256 と裁定値の逐語一致"
+      }
     },
     "value": null
   },

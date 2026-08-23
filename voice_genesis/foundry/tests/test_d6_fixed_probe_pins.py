@@ -21,7 +21,8 @@ execution profile / 再生成コマンド / 再生成後の hash 一致）を、
 
 Phase A の時点では実測値に依存するフィールド（`reproducibility_reconciliation`
 の実測値・`honest_accounting.commit`）は未確定のプレースホルダであることを
-確認するに留め、Phase B 完了後の値そのもの（判読・裁定）は検証しない。
+確認する。Phase B 完了後は、完全な裁定形に加えて commit 済み report の実
+sha256 と report 内裁定値への結合を検証し、手書き RESOLVED を受理しない。
 """
 
 from __future__ import annotations
@@ -494,12 +495,157 @@ def test_real_render_reconciliation_compares_all_14_sample_pins(
         d6_regenerate.reconcile_real_render_manifest(observed_path, tmp_path / "must-not-pass.json")
 
 
+def _bind_regenerated_to_current_render_evidence(
+    tmp_path: Path, regenerated: Dict[str, Any]
+) -> tuple[Path, tuple[d6_regenerate.GroupPaths, ...]]:
+    """current runner が出す provenance 形へ fixture を組み立てる。
+
+    baseline JSON の単純コピーを正例にしないことが、この helper の目的。
+    """
+    d4_spec_bytes = d6_regenerate.D4_SPEC.read_bytes()
+    d4_spec = json.loads(d4_spec_bytes)
+    d4_spec_sha = hashlib.sha256(d4_spec_bytes).hexdigest()
+    baseline = json.loads(d6_regenerate.D4_BASELINE.read_text(encoding="utf-8"))
+    regenerated.update(
+        {
+            "schema": "vg-d4-remeasure-results/0.1",
+            "debt_ref": "VG-DEBT-004",
+            "generated_by": "voice_genesis/foundry/debt/d4/d4_runner.py",
+            "d4_remeasure_spec_sha256": d4_spec_sha,
+            "d4_remeasure_spec_path": (
+                "voice_genesis/foundry/debt/d4/d4_remeasure_spec.json"
+            ),
+            "trf_measurement_spec_1_2_sha256": d4_spec["pins"][
+                "trf_measurement_spec_1_2_sha256"
+            ],
+            "instrument_sha256": d4_spec["pins"]["instrument_sha256"],
+            "candidate_ids": baseline["candidate_ids"],
+            "analysis_stack": baseline["analysis_stack"],
+            "runtime_stack": {
+                "python": "3.11.15",
+                "numpy": "2.4.6",
+                "onnxruntime": None,
+                "soundfile": "0.14.0",
+                "PyYAML": "6.0.1",
+            },
+            "n_groups": 10,
+            "n_total_cells": 360,
+            "n_total_measured": 360,
+            "n_total_error": 0,
+            "complete": True,
+        }
+    )
+    render_runtime = {
+        "python": "3.11.15",
+        "numpy": "2.4.6",
+        "onnxruntime": "1.29.0",
+        "soundfile": "0.14.0",
+        "PyYAML": "6.0.1",
+    }
+    paths = d6_regenerate.group_paths(tmp_path / "current-run")
+    for group in paths:
+        group_id = f"{group.generation}_{group.speaker}"
+        result_group = regenerated["groups"][group_id]
+        materials = result_group["materials_sha256"]
+        render_doc = {
+            "generation": group.generation,
+            "speaker": group.speaker,
+            "d4_schema": "vg-d4-render-group-result/0.1",
+            "d4_remeasure_spec_sha256": d4_spec_sha,
+            "d4_remeasure_spec_path": (
+                "voice_genesis/foundry/debt/d4/d4_remeasure_spec.json"
+            ),
+            "runtime_stack": render_runtime,
+            "model_sha256": materials["model_sha256"],
+            "aux_sha256": materials["aux_sha256"],
+            "export_binding": materials["export_binding"],
+        }
+        group.render_doc.parent.mkdir(parents=True, exist_ok=True)
+        group.render_doc.write_text(json.dumps(render_doc), encoding="utf-8")
+        render_doc_sha = hashlib.sha256(group.render_doc.read_bytes()).hexdigest()
+        group.render_manifest.write_text(
+            json.dumps(
+                {
+                    "schema": "vg-d4-render-manifest/0.1",
+                    "groups": {
+                        group_id: {
+                            "render_doc_sha256": render_doc_sha,
+                            "path": group.render_doc.name,
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        result_group.update(
+            {
+                "generation": group.generation,
+                "speaker": group.speaker,
+                "render_doc_path": str(group.render_doc.resolve()),
+                "render_doc_sha256": render_doc_sha,
+                "materials_sha256": materials,
+                "render_runtime_stack": render_runtime,
+                "render_runtime_stack_note": None,
+            }
+        )
+    regenerated_path = tmp_path / "d6_regenerated_results.json"
+    regenerated_path.write_text(json.dumps(regenerated), encoding="utf-8")
+    return regenerated_path, paths
+
+
+def test_regenerated_results_are_bound_to_current_render_manifests_and_materials(
+    tmp_path: Path,
+) -> None:
+    copied_baseline = json.loads(d6_regenerate.D4_BASELINE.read_text(encoding="utf-8"))
+    current = json.loads(json.dumps(copied_baseline))
+    _current_path, rendered_groups = _bind_regenerated_to_current_render_evidence(
+        tmp_path, current
+    )
+    d4_spec_bytes = d6_regenerate.D4_SPEC.read_bytes()
+    d4_spec = json.loads(d4_spec_bytes)
+    d4_spec_sha = hashlib.sha256(d4_spec_bytes).hexdigest()
+    evidence = d6_regenerate._validate_regenerated_provenance(
+        current,
+        baseline=copied_baseline,
+        d4_spec=d4_spec,
+        d4_spec_sha=d4_spec_sha,
+        rendered_groups=rendered_groups,
+    )
+    assert set(evidence) == {
+        f"{generation}_{speaker}" for generation, speaker in d6_regenerate.GROUPS
+    }
+
+    # 旧結果の単純コピーは、360セルが完全でも current manifest への結合が無い。
+    with pytest.raises(d6_regenerate.RegenerationError, match="provenance mismatch"):
+        d6_regenerate._validate_regenerated_provenance(
+            copied_baseline,
+            baseline=copied_baseline,
+            d4_spec=d4_spec,
+            d4_spec_sha=d4_spec_sha,
+            rendered_groups=rendered_groups,
+        )
+
+    tampered = json.loads(json.dumps(current))
+    tampered["groups"]["run5_ritsu"]["materials_sha256"]["model_sha256"][
+        "acoustic_onnx"
+    ] = "0" * 64
+    with pytest.raises(d6_regenerate.RegenerationError, match="current render/materials"):
+        d6_regenerate._validate_regenerated_provenance(
+            tampered,
+            baseline=copied_baseline,
+            d4_spec=d4_spec,
+            d4_spec_sha=d4_spec_sha,
+            rendered_groups=rendered_groups,
+        )
+
+
 def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drift(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    regenerated_path = tmp_path / "d6_regenerated_results.json"
     baseline = json.loads(d6_regenerate.D4_BASELINE.read_text(encoding="utf-8"))
-    regenerated_path.write_text(json.dumps(baseline), encoding="utf-8")
+    regenerated_path, rendered_groups = _bind_regenerated_to_current_render_evidence(
+        tmp_path, baseline
+    )
     synthetic_path = tmp_path / "calibration_synthetic_reconciliation.json"
     synthetic_path.write_text(
         json.dumps(
@@ -551,6 +697,8 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         d6_regenerate.TRF_SPEC,
         d6_regenerate.CALIBRATION_PINS,
         d6_regenerate.REAL_RENDER_BASELINE,
+        *(group.render_doc for group in rendered_groups),
+        *(group.render_manifest for group in rendered_groups),
     }
     input_reads = {path: 0 for path in evidence_inputs}
     original_read_bytes = Path.read_bytes
@@ -561,12 +709,15 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         return original_read_bytes(path)
 
     monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
+    report_path = tmp_path / d6_regenerate.PHASE_B_REPORT_PATH
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     report = d6_regenerate.compose_phase_b_reconciliation(
         regenerated_path,
         synthetic_path,
         real_path,
         recovered_acoustic,
-        tmp_path / "phase_b.json",
+        report_path,
+        rendered_groups,
     )
     assert input_reads == {path: 1 for path in evidence_inputs}
     assert report["reproducibility_reconciliation"]["value"]["reference_output_remeasurement"][
@@ -576,17 +727,39 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         "reconciliation_sha256"
     ] == hashlib.sha256(original_read_bytes(synthetic_path)).hexdigest()
     _assert_real_render_recovery(report["real_render_recovery"])
+    resolved_node = json.loads(json.dumps(report["reproducibility_reconciliation"]))
+    with pytest.raises(AssertionError):
+        _assert_pending_or_resolved(
+            resolved_node,
+            context="reproducibility_reconciliation",
+            report_root=tmp_path,
+        )
+    resolved_node["report_binding"] = {
+        "path": str(d6_regenerate.PHASE_B_REPORT_PATH),
+        "sha256": hashlib.sha256(original_read_bytes(report_path)).hexdigest(),
+    }
     _assert_pending_or_resolved(
-        report["reproducibility_reconciliation"],
+        resolved_node,
         context="reproducibility_reconciliation",
+        report_root=tmp_path,
     )
-    report["reproducibility_reconciliation"]["value"]["reference_output_remeasurement"][
+    report_bytes = original_read_bytes(report_path)
+    report_path.write_bytes(report_bytes + b" ")
+    with pytest.raises(AssertionError):
+        _assert_pending_or_resolved(
+            resolved_node,
+            context="reproducibility_reconciliation",
+            report_root=tmp_path,
+        )
+    report_path.write_bytes(report_bytes)
+    resolved_node["value"]["reference_output_remeasurement"][
         "max_abs_delta_by_axis"
     ]["excess_tail_voiced_ms"] = 100.0
     with pytest.raises(AssertionError):
         _assert_pending_or_resolved(
-            report["reproducibility_reconciliation"],
+            resolved_node,
             context="reproducibility_reconciliation",
+            report_root=tmp_path,
         )
 
     first_group = next(iter(baseline["groups"].values()))
@@ -600,6 +773,7 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
             real_path,
             recovered_acoustic,
             tmp_path / "failed_phase_b.json",
+            rendered_groups,
         )
 
     tampered_baseline = tmp_path / "tampered_d4_baseline.json"
@@ -612,6 +786,7 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
             real_path,
             recovered_acoustic,
             tmp_path / "must-not-use-tampered-baseline.json",
+            rendered_groups,
         )
 
 
@@ -842,7 +1017,9 @@ def _assert_complete_reconciliation_value(value: Any) -> None:
     assert real_render["recovery_acoustic_sha256"] == (d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256)
 
 
-def _assert_pending_or_resolved(node: Dict[str, Any], *, context: str) -> None:
+def _assert_pending_or_resolved(
+    node: Dict[str, Any], *, context: str, report_root: Path = _REPO_ROOT
+) -> None:
     """`status` キーを持つノードは `PENDING_PHASE_B`（未確定）か、確定後の
     実測値（`status` キーが無い、または他の確定語彙）のどちらかでなければ
     ならない。`PENDING_PHASE_B` のときは `reason` が必須・`value` は null。"""
@@ -860,6 +1037,10 @@ def _assert_pending_or_resolved(node: Dict[str, Any], *, context: str) -> None:
         assert re.fullmatch(r"[0-9a-f]{40}", str(node.get("execution_commit", ""))), (
             f"{context}: RESOLVED の execution_commit が完全な git SHA でない"
         )
+        try:
+            d6_regenerate.validate_resolved_reconciliation(node, report_root=report_root)
+        except (d6_regenerate.RegenerationError, OSError) as exc:
+            raise AssertionError(f"{context}: Phase B report binding が不正: {exc}") from exc
     else:
         assert re.fullmatch(r"[0-9a-f]{40}", str(value or "")), (
             f"{context}: RESOLVED の value が完全な git SHA でない"
@@ -869,58 +1050,6 @@ def _assert_pending_or_resolved(node: Dict[str, Any], *, context: str) -> None:
 @pytest.mark.parametrize(
     ("context", "node"),
     [
-        (
-            "reproducibility_reconciliation",
-            {
-                "status": "RESOLVED",
-                "execution_commit": "a" * 40,
-                "value": {
-                    "reference_output_remeasurement": {
-                        "n_compared": 360,
-                        "n_within_epsilon": 360,
-                        "n_mismatches": 0,
-                        "baseline_results_sha256": D4_RESULTS_SHA256,
-                        "regenerated_results_sha256": "2" * 64,
-                        "max_abs_delta_by_axis": {
-                            "excess_tail_voiced_ms": 0.0,
-                            "release_after_score_boundary_ms": 0.0,
-                            "tail_f0_persistence": 0.0,
-                        },
-                    },
-                    "samples_sha256": {
-                        "n_compared": 360,
-                        "n_matches": 360,
-                        "n_mismatches": 0,
-                        "baseline_inventory_sha256": D4_RESULTS_SHA256,
-                        "regenerated_inventory_sha256": "4" * 64,
-                    },
-                    "wav_sha256": {
-                        "n_compared": 360,
-                        "n_matches": 0,
-                        "n_mismatches": 360,
-                        "baseline_inventory_sha256": D4_RESULTS_SHA256,
-                        "regenerated_inventory_sha256": "6" * 64,
-                    },
-                    "calibration": {
-                        "synthetic": {
-                            "n_compared": 13,
-                            "n_matches": 13,
-                            "n_mismatches": 0,
-                            "baseline_pins_sha256": SYNTHETIC_PINS_SHA256,
-                            "reconciliation_sha256": "8" * 64,
-                        },
-                        "real_render": {
-                            "n_compared": 14,
-                            "n_matches": 14,
-                            "n_mismatches": 0,
-                            "baseline_manifest_sha256": REAL_RENDER_MANIFEST_SHA256,
-                            "regenerated_manifest_sha256": "a" * 64,
-                            "recovery_acoustic_sha256": (d6_regenerate.REAL_RENDER_ACOUSTIC_SHA256),
-                        },
-                    },
-                },
-            },
-        ),
         ("honest_accounting.commit", {"status": "RESOLVED", "value": "b" * 40}),
     ],
 )
@@ -973,6 +1102,12 @@ def test_reproducibility_reconciliation_is_pending_phase_b_or_resolved(
         "wav_sha256",
         "calibration",
         "execution_commit",
+        "report_binding",
+    }
+    assert schema["report_binding"] == {
+        "path": str(d6_regenerate.PHASE_B_REPORT_PATH),
+        "required_keys": ["path", "sha256"],
+        "verification": "report の実 bytes sha256 と裁定値の逐語一致",
     }
     assert schema["reference_output_remeasurement"]["baseline_results_sha256"] == (
         D4_RESULTS_SHA256

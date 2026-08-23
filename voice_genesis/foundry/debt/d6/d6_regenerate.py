@@ -53,6 +53,10 @@ RECONCILIATION_AXES = (
     "release_after_score_boundary_ms",
     "tail_f0_persistence",
 )
+PHASE_B_REPORT_PATH = Path(
+    "voice_genesis/foundry/debt/d6/d6_phase_b_reconciliation.json"
+)
+_D4_RUNTIME_STACK_KEYS = {"python", "numpy", "onnxruntime", "soundfile", "PyYAML"}
 
 GROUPS = (
     ("run5", "ritsu"),
@@ -538,12 +542,210 @@ def _measured_cells(
     return cells
 
 
+def _canonical_json_sha256(value: Any) -> str:
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_regenerated_provenance(
+    regenerated: dict[str, Any],
+    *,
+    baseline: dict[str, Any],
+    d4_spec: dict[str, Any],
+    d4_spec_sha: str,
+    rendered_groups: Sequence[GroupPaths],
+) -> dict[str, Any]:
+    """再測定結果を、この Phase B 実行が直前に作った10群へ結合する。
+
+    D4 measure 自身も manifest を検証するが、最終合成器は従来その結合を
+    再確認せず、過去結果 JSON のコピーでも360セルさえ整えば受理していた。
+    ここでは manifest と render doc を各1回だけ読み、同じ bytes の digest と
+    parse 結果から、群結果・材料 pin・runtime provenance を再結合する。
+    """
+    expected_top = {
+        "schema": "vg-d4-remeasure-results/0.1",
+        "debt_ref": "VG-DEBT-004",
+        "generated_by": "voice_genesis/foundry/debt/d4/d4_runner.py",
+        "d4_remeasure_spec_sha256": d4_spec_sha,
+        "d4_remeasure_spec_path": "voice_genesis/foundry/debt/d4/d4_remeasure_spec.json",
+        "trf_measurement_spec_1_2_sha256": d4_spec["pins"][
+            "trf_measurement_spec_1_2_sha256"
+        ],
+        "instrument_sha256": d4_spec["pins"]["instrument_sha256"],
+        "candidate_ids": baseline["candidate_ids"],
+        "analysis_stack": baseline["analysis_stack"],
+        "n_groups": 10,
+        "n_total_cells": 360,
+        "n_total_measured": 360,
+        "n_total_error": 0,
+        "complete": True,
+    }
+    mismatches = {
+        key: {"expected": expected, "actual": regenerated.get(key)}
+        for key, expected in expected_top.items()
+        if regenerated.get(key) != expected
+    }
+    if mismatches:
+        raise RegenerationError(f"Phase B: regenerated D4 provenance mismatch: {mismatches}")
+    runtime_stack = regenerated.get("runtime_stack")
+    if not isinstance(runtime_stack, dict) or set(runtime_stack) != _D4_RUNTIME_STACK_KEYS:
+        raise RegenerationError("Phase B: regenerated D4 runtime_stack が固定語彙でない")
+    for package, version in runtime_stack.items():
+        if package == "onnxruntime" and version is None:
+            continue
+        if not isinstance(version, str) or not version:
+            raise RegenerationError(
+                f"Phase B: regenerated D4 runtime_stack.{package} が未記帳"
+            )
+
+    expected_group_ids = {f"{generation}_{speaker}" for generation, speaker in GROUPS}
+    supplied = {
+        f"{group.generation}_{group.speaker}": group for group in rendered_groups
+    }
+    if set(supplied) != expected_group_ids or len(rendered_groups) != len(expected_group_ids):
+        raise RegenerationError("Phase B: current render evidence が固定10群と一致しない")
+
+    evidence: dict[str, Any] = {}
+    for group_id in sorted(expected_group_ids):
+        paths = supplied[group_id]
+        manifest_bytes = paths.render_manifest.read_bytes()
+        manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+        try:
+            manifest = json.loads(manifest_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RegenerationError(
+                f"Phase B: {group_id} render manifest がJSONでない"
+            ) from exc
+        doc_bytes = paths.render_doc.read_bytes()
+        doc_sha = hashlib.sha256(doc_bytes).hexdigest()
+        try:
+            doc = json.loads(doc_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RegenerationError(f"Phase B: {group_id} render doc がJSONでない") from exc
+        manifest_groups = manifest.get("groups")
+        if (
+            manifest.get("schema") != "vg-d4-render-manifest/0.1"
+            or not isinstance(manifest_groups, dict)
+            or set(manifest_groups) != {group_id}
+            or manifest_groups[group_id].get("render_doc_sha256") != doc_sha
+            or manifest_groups[group_id].get("path") != paths.render_doc.name
+        ):
+            raise RegenerationError(
+                f"Phase B: {group_id} manifest が current render doc を束縛しない"
+            )
+        render_runtime = doc.get("runtime_stack")
+        if (
+            doc.get("generation") != paths.generation
+            or doc.get("speaker") != paths.speaker
+            or doc.get("d4_schema") != "vg-d4-render-group-result/0.1"
+            or doc.get("d4_remeasure_spec_sha256") != d4_spec_sha
+            or doc.get("d4_remeasure_spec_path")
+            != "voice_genesis/foundry/debt/d4/d4_remeasure_spec.json"
+            or not isinstance(render_runtime, dict)
+            or set(render_runtime) != _D4_RUNTIME_STACK_KEYS
+            or any(not isinstance(value, str) or not value for value in render_runtime.values())
+        ):
+            raise RegenerationError(f"Phase B: {group_id} render provenance が不完全")
+
+        materials = {
+            "model_sha256": doc.get("model_sha256"),
+            "aux_sha256": doc.get("aux_sha256"),
+            "export_binding": doc.get("export_binding"),
+        }
+        model_pins = materials["model_sha256"]
+        aux_pins = materials["aux_sha256"]
+        export_binding = materials["export_binding"]
+        if (
+            not isinstance(model_pins, dict)
+            or not model_pins
+            or any(not _is_lower_hex(value, 64) for value in model_pins.values())
+            or not isinstance(aux_pins, dict)
+            or not aux_pins
+            or any(not _is_lower_hex(value, 64) for value in aux_pins.values())
+            or not isinstance(export_binding, dict)
+            or export_binding.get("binding_evidence") != "witnessed_export"
+            or export_binding.get("generation") != paths.generation
+            or any(
+                not _is_lower_hex(export_binding.get(key), 64)
+                for key in (
+                    "manifest_sha256",
+                    "source_checkpoint_sha256",
+                    "source_config_sha256",
+                )
+            )
+        ):
+            raise RegenerationError(f"Phase B: {group_id} material pins が不完全")
+        result_group = regenerated["groups"][group_id]
+        result_path = Path(str(result_group.get("render_doc_path", ""))).resolve()
+        if (
+            result_group.get("generation") != paths.generation
+            or result_group.get("speaker") != paths.speaker
+            or result_path != paths.render_doc.resolve()
+            or result_group.get("render_doc_sha256") != doc_sha
+            or result_group.get("materials_sha256") != materials
+            or result_group.get("render_runtime_stack") != render_runtime
+            or result_group.get("render_runtime_stack_note") is not None
+        ):
+            raise RegenerationError(
+                f"Phase B: {group_id} regenerated result が current render/materials と不一致"
+            )
+        evidence[group_id] = {
+            "render_manifest_path": str(paths.render_manifest.resolve()),
+            "render_manifest_sha256": manifest_sha,
+            "render_doc_path": str(paths.render_doc.resolve()),
+            "render_doc_sha256": doc_sha,
+            "materials_sha256_digest": _canonical_json_sha256(materials),
+            "render_runtime_stack": render_runtime,
+        }
+    return evidence
+
+
+def validate_resolved_reconciliation(
+    node: dict[str, Any], *, report_root: Path = REPO_ROOT
+) -> dict[str, Any]:
+    """RESOLVED pin を、commit 済み Phase B report の実 bytes へ結合する。"""
+    if node.get("status") != "RESOLVED":
+        raise RegenerationError("reproducibility reconciliation は RESOLVED でない")
+    binding = node.get("report_binding")
+    if not isinstance(binding, dict) or set(binding) != {"path", "sha256"}:
+        raise RegenerationError("RESOLVED reconciliation に report_binding が無い")
+    if binding.get("path") != str(PHASE_B_REPORT_PATH):
+        raise RegenerationError("RESOLVED reconciliation の report path が正本でない")
+    if not _is_lower_hex(binding.get("sha256"), 64):
+        raise RegenerationError("RESOLVED reconciliation の report sha256 が不正")
+    report_path = Path(report_root).resolve() / PHASE_B_REPORT_PATH
+    report_bytes = report_path.read_bytes()
+    report_sha = hashlib.sha256(report_bytes).hexdigest()
+    if report_sha != binding["sha256"]:
+        raise RegenerationError("RESOLVED reconciliation の report sha256 が実体と不一致")
+    try:
+        report = json.loads(report_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RegenerationError("RESOLVED reconciliation report がJSONでない") from exc
+    report_node = report.get("reproducibility_reconciliation")
+    committed_state = {
+        "status": node.get("status"),
+        "execution_commit": node.get("execution_commit"),
+        "value": node.get("value"),
+    }
+    if (
+        report.get("schema") != "vg-d6-phase-b-reconciliation/0.1"
+        or not isinstance(report.get("regenerated_provenance"), dict)
+        or report_node != committed_state
+    ):
+        raise RegenerationError("RESOLVED reconciliation が report の裁定値と不一致")
+    return report
+
+
 def compose_phase_b_reconciliation(
     regenerated_results_path: Path,
     synthetic_report_path: Path,
     real_render_report_path: Path,
     recovered_acoustic_path: Path,
     out_path: Path,
+    rendered_groups: Sequence[GroupPaths],
 ) -> dict[str, Any]:
     """各段の実測をD6の唯一のPhase B正規形へ合成し、false closureを拒否する。"""
     _verify_file_pin(
@@ -563,6 +765,13 @@ def compose_phase_b_reconciliation(
         raise RegenerationError(
             f"Phase B: canonical D4 baseline sha256 {baseline_sha} != {D4_BASELINE_SHA256}"
         )
+    runner_ref = fixed_probe_pins["common_fixed"]["regeneration_commands"]["d4_runner"]
+    d4_runner_sha = sha256_file(D4_RUNNER)
+    if (
+        runner_ref.get("path") != "voice_genesis/foundry/debt/d4/d4_runner.py"
+        or runner_ref.get("sha256") != d4_runner_sha
+    ):
+        raise RegenerationError("Phase B: regenerated producer d4_runner.py がpinと不一致")
     baseline = json.loads(baseline_bytes)
     regenerated_bytes = Path(regenerated_results_path).read_bytes()
     regenerated_sha = hashlib.sha256(regenerated_bytes).hexdigest()
@@ -572,7 +781,16 @@ def compose_phase_b_reconciliation(
     if expected_cells.keys() != actual_cells.keys():
         raise RegenerationError("Phase B: baseline/regenerated cell集合が一致しない")
 
-    d4_spec = json.loads(D4_SPEC.read_bytes())
+    d4_spec_bytes = D4_SPEC.read_bytes()
+    d4_spec_sha = hashlib.sha256(d4_spec_bytes).hexdigest()
+    d4_spec = json.loads(d4_spec_bytes)
+    regenerated_provenance = _validate_regenerated_provenance(
+        regenerated,
+        baseline=baseline,
+        d4_spec=d4_spec,
+        d4_spec_sha=d4_spec_sha,
+        rendered_groups=rendered_groups,
+    )
     expected_trf_sha = d4_spec["pins"]["trf_measurement_spec_1_2_sha256"]
     trf_spec_bytes = TRF_SPEC.read_bytes()
     if hashlib.sha256(trf_spec_bytes).hexdigest() != expected_trf_sha:
@@ -691,6 +909,12 @@ def compose_phase_b_reconciliation(
     }
     report = {
         "schema": "vg-d6-phase-b-reconciliation/0.1",
+        "regenerated_provenance": {
+            "results_sha256": regenerated_sha,
+            "d4_runner_sha256": d4_runner_sha,
+            "d4_remeasure_spec_sha256": d4_spec_sha,
+            "groups": regenerated_provenance,
+        },
         "real_render_recovery": recovery,
         "reproducibility_reconciliation": {
             "status": "RESOLVED" if reference_mismatches == 0 else "FAILED_RECONCILIATION",
@@ -888,6 +1112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         root / "calibration_real_render_reconciliation.json",
         real_render_acoustic,
         root / "d6_phase_b_reconciliation.json",
+        group_paths(root),
     )
     return 0
 
