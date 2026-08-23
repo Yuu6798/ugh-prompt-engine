@@ -43,6 +43,9 @@ D4_SPEC = FOUNDRY / "debt" / "d4" / "d4_remeasure_spec.json"
 CALIBRATION_PINS = HERE / "s7_synthetic_calibration_output_pins.json"
 FIXED_PROBE_PINS = HERE / "s7_fixed_probe_pins.json"
 REAL_RENDER_BASELINE = FOUNDRY / "results_s7" / "s7_b1_real_render_manifest.json"
+REAL_RENDER_BASELINE_SHA256 = (
+    "bde66f3f8599ea48d6e8ff8fdc63a362c6aed5f846655189bf3b52c5628d3343"
+)
 REAL_RENDER_HISTORICAL_COMMIT = "8a14ca97eda1a6bf96f956a8173f512f0cdb50ae"
 _HISTORICAL_REAL_RENDER_IMPORT_CLOSURE = (
     ("gate_synth_sha256", Path("voice_genesis/foundry/s1_gate/gate_synth.py")),
@@ -1263,8 +1266,54 @@ def _historical_source_from_real_render_baseline(baseline: Any) -> dict[str, str
     return expected
 
 
+def _read_canonical_real_render_baseline(
+    report_root: Path, fixed_probe_pins: Any
+) -> tuple[dict[str, Any], bytes]:
+    """real-render正本を単一readし、固定pin照合後にだけparseする。"""
+    try:
+        ref = fixed_probe_pins["calibration_set"]["refs"]["real_render_manifest"]
+    except (KeyError, TypeError) as exc:
+        raise RegenerationError(
+            "Phase B: canonical real-render baseline ref が不正"
+        ) from exc
+    expected_path = Path(
+        "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json"
+    )
+    if (
+        not isinstance(ref, dict)
+        or ref.get("path") != str(expected_path)
+        or ref.get("sha256") != REAL_RENDER_BASELINE_SHA256
+    ):
+        raise RegenerationError(
+            "Phase B: canonical real-render baseline ref が固定pinと不一致"
+        )
+    baseline_bytes = (Path(report_root).resolve() / expected_path).read_bytes()
+    observed_sha = hashlib.sha256(baseline_bytes).hexdigest()
+    if observed_sha != REAL_RENDER_BASELINE_SHA256:
+        raise RegenerationError(
+            "Phase B: canonical real-render baseline sha256 "
+            f"{observed_sha} != {REAL_RENDER_BASELINE_SHA256}"
+        )
+    try:
+        baseline = json.loads(baseline_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RegenerationError(
+            "Phase B: canonical real-render baseline がJSONでない"
+        ) from exc
+    if not isinstance(baseline, dict):
+        raise RegenerationError(
+            "Phase B: canonical real-render baseline shape が不正"
+        )
+    return baseline, baseline_bytes
+
+
 def _validate_committed_real_render_recovery(
-    recovery: Any, *, report_root: Path, execution_commit: Any, reconciliation_value: Any
+    recovery: Any,
+    *,
+    baseline: dict[str, Any],
+    baseline_sha: str,
+    execution_commit: Any,
+    reconciliation_value: Any,
 ) -> None:
     expected_keys = {
         "status",
@@ -1286,15 +1335,6 @@ def _validate_committed_real_render_recovery(
         != "external operator-supplied artifact; path intentionally not persisted"
     ):
         raise RegenerationError("Phase B report: real-render recovered asset が不正")
-    baseline_path = Path(
-        "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json"
-    )
-    baseline_bytes = (Path(report_root).resolve() / baseline_path).read_bytes()
-    baseline_sha = hashlib.sha256(baseline_bytes).hexdigest()
-    try:
-        baseline = json.loads(baseline_bytes)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RegenerationError("Phase B report: real-render baseline がJSONでない") from exc
     expected_historical = _historical_source_from_real_render_baseline(baseline)
     if recovery.get("historical_source") != expected_historical:
         raise RegenerationError(
@@ -1367,13 +1407,6 @@ def validate_resolved_reconciliation(
         or report_node != committed_state
     ):
         raise RegenerationError("RESOLVED reconciliation が report の裁定値と不一致")
-    _validate_committed_real_render_recovery(
-        report["real_render_recovery"],
-        report_root=report_root,
-        execution_commit=committed_state["execution_commit"],
-        reconciliation_value=committed_state["value"],
-    )
-
     provenance = report.get("regenerated_provenance")
     if not isinstance(provenance, dict) or set(provenance) != {
         "bundle_id",
@@ -1418,6 +1451,17 @@ def validate_resolved_reconciliation(
     fixed_probe_path = Path("voice_genesis/foundry/debt/d6/s7_fixed_probe_pins.json")
     fixed_probe_pins = json.loads(
         (Path(report_root).resolve() / fixed_probe_path).read_bytes()
+    )
+    real_baseline, real_baseline_bytes = _read_canonical_real_render_baseline(
+        report_root, fixed_probe_pins
+    )
+    real_baseline_sha = hashlib.sha256(real_baseline_bytes).hexdigest()
+    _validate_committed_real_render_recovery(
+        report["real_render_recovery"],
+        baseline=real_baseline,
+        baseline_sha=real_baseline_sha,
+        execution_commit=committed_state["execution_commit"],
+        reconciliation_value=committed_state["value"],
     )
     expected_render_runtime = _execution_profile_from_pins(fixed_probe_pins)
     expected_measurement_dependencies = _measurement_dependency_profile_from_pins(
@@ -1494,14 +1538,8 @@ def validate_resolved_reconciliation(
         ),
         label="Phase B real-render manifest",
     )
-    real_baseline_path = Path(
-        "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json"
-    )
-    real_baseline_bytes = (
-        Path(report_root).resolve() / real_baseline_path
-    ).read_bytes()
     real_summary = _reconcile_real_render_data(
-        json.loads(real_baseline_bytes), real_manifest
+        real_baseline, real_manifest
     )
     expected_calibration = {
         "synthetic": {
@@ -1513,7 +1551,7 @@ def validate_resolved_reconciliation(
             "n_compared": real_summary["n_compared"],
             "n_matches": real_summary["samples_matches"],
             "n_mismatches": len(real_summary["samples_mismatches"]),
-            "baseline_manifest_sha256": hashlib.sha256(real_baseline_bytes).hexdigest(),
+            "baseline_manifest_sha256": real_baseline_sha,
             "regenerated_manifest_sha256": hashlib.sha256(
                 real_manifest_bytes
             ).hexdigest(),
@@ -1620,8 +1658,9 @@ def compose_phase_b_reconciliation(
 
     calibration_pins_bytes = CALIBRATION_PINS.read_bytes()
     calibration_pins_sha = hashlib.sha256(calibration_pins_bytes).hexdigest()
-    real_render_baseline_bytes = REAL_RENDER_BASELINE.read_bytes()
-    real_render_baseline = json.loads(real_render_baseline_bytes)
+    real_render_baseline, real_render_baseline_bytes = (
+        _read_canonical_real_render_baseline(REPO_ROOT, fixed_probe_pins)
+    )
     real_render_baseline_sha = hashlib.sha256(real_render_baseline_bytes).hexdigest()
     synthetic_bytes = Path(synthetic_report_path).read_bytes()
     synthetic_sha = hashlib.sha256(synthetic_bytes).hexdigest()

@@ -236,6 +236,7 @@ def test_calibration_set_has_synthetic_and_real_render_refs(pins: Dict[str, Any]
     assert synth["rng"]["seed"] == 20260821
     assert synth["rng"]["bit_generator"] == "PCG64"
     assert real["path"] == "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json"
+    assert real["sha256"] == d6_regenerate.REAL_RENDER_BASELINE_SHA256
     assert real["n_real_render_conditions"] == 11
     assert real["n_total_conditions"] == 14
 
@@ -991,6 +992,23 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         context="reproducibility_reconciliation",
         report_root=tmp_path,
     )
+    committed_real_baseline = tmp_path / d6_regenerate.REAL_RENDER_BASELINE.relative_to(
+        d6_regenerate.REPO_ROOT
+    )
+    validator_baseline_reads = 0
+
+    def counted_validator_read(path: Path) -> bytes:
+        nonlocal validator_baseline_reads
+        if path.resolve() == committed_real_baseline.resolve():
+            validator_baseline_reads += 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", counted_validator_read)
+    d6_regenerate.validate_resolved_reconciliation(
+        resolved_node, report_root=tmp_path
+    )
+    assert validator_baseline_reads == 1
+    monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
     report_bytes = original_read_bytes(report_path)
     report_path.write_bytes(report_bytes + b" ")
     with pytest.raises(AssertionError):
@@ -1027,6 +1045,53 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
                 context="reproducibility_reconciliation",
                 report_root=tmp_path,
             )
+
+    # real-render正本・packaged manifest・reportを同時に再束縛しても、固定pinで拒否する。
+    canonical_real_bytes = original_read_bytes(committed_real_baseline)
+    replaced_real = json.loads(canonical_real_bytes)
+    replaced_real["conditions"][0]["samples_sha256"] = "0" * 64
+    replaced_real_bytes = (json.dumps(replaced_real) + "\n").encode()
+    replaced_real_sha = hashlib.sha256(replaced_real_bytes).hexdigest()
+    real_ref = provenance["real_render_manifest"]
+    packaged_real_path = tmp_path / real_ref["path"]
+    packaged_real_bytes = packaged_real_path.read_bytes()
+    committed_real_baseline.write_bytes(replaced_real_bytes)
+    packaged_real_path.write_bytes(replaced_real_bytes)
+    replaced_report = json.loads(report_bytes)
+    replaced_report["regenerated_provenance"]["real_render_manifest"]["sha256"] = (
+        replaced_real_sha
+    )
+    replaced_calibration = replaced_report["reproducibility_reconciliation"]["value"][
+        "calibration"
+    ]["real_render"]
+    replaced_calibration["baseline_manifest_sha256"] = replaced_real_sha
+    replaced_calibration["regenerated_manifest_sha256"] = replaced_real_sha
+    replaced_recovery = replaced_report["real_render_recovery"]["value"]
+    replaced_recovery["baseline_manifest_sha256"] = replaced_real_sha
+    replaced_recovery["regenerated_manifest_sha256"] = replaced_real_sha
+    replaced_report_bytes = (json.dumps(replaced_report) + "\n").encode()
+    report_path.write_bytes(replaced_report_bytes)
+    replaced_node = json.loads(
+        json.dumps(replaced_report["reproducibility_reconciliation"])
+    )
+    replaced_node["report_binding"] = {
+        "path": str(d6_regenerate.PHASE_B_REPORT_PATH),
+        "sha256": hashlib.sha256(replaced_report_bytes).hexdigest(),
+    }
+    validator_baseline_reads = 0
+    monkeypatch.setattr(Path, "read_bytes", counted_validator_read)
+    with pytest.raises(
+        d6_regenerate.RegenerationError,
+        match="canonical real-render baseline sha256",
+    ):
+        d6_regenerate.validate_resolved_reconciliation(
+            replaced_node, report_root=tmp_path
+        )
+    assert validator_baseline_reads == 1
+    monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
+    committed_real_baseline.write_bytes(canonical_real_bytes)
+    packaged_real_path.write_bytes(packaged_real_bytes)
+    report_path.write_bytes(report_bytes)
 
     # report/node/digestを一緒に書き換えても、360実測からの再計算で拒否する。
     drifted_results = json.loads(packaged_results_bytes)
