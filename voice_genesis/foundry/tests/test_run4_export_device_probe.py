@@ -18,6 +18,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 import run4_export_device_probe_runner as runner  # noqa: E402
 
@@ -274,16 +276,48 @@ def test_pod_script_pin_guards_use_die_not_bare_exit() -> None:
     assert '  exit 1\nfi\n\nreadonly WORK=' not in text
 
 
-def test_pod_script_embedded_sha256_pins_are_well_formed() -> None:
-    """埋め込み sha256 pin がすべて厳密に 64 桁の小文字 16 進であること。
-    60〜70 桁の hex 風文字列を広めに拾って長さ検査することで、桁落ち・
-    誤 truncate のような『regex にすら引っかからない』欠損も検出できる。"""
+# FIX 5: pod script が埋め込む唯一の 40 桁 hex pin は commit SHA
+# （PROBE_PIN_COMMIT の期待値と DiffSinger の pin commit）のみ。他はすべて
+# sha256（64 桁）のはず。
+_KNOWN_40_CHAR_HEX_PINS = {
+    runner.PIN_COMMIT_DEFAULT,  # == EXPECTED_PIN_COMMIT ("cda36b9f...")
+    "e2307b1080b00f3999702ce9017cfd75c7f862fe",  # DIFFSINGER_COMMIT
+}
+
+# 実測してハードコードした 64 桁 sha256 pin の期待件数。pin を追加/削除したら
+# この数値も同じ PR で更新すること（このテストはズレを検出するために意図的に
+# 固定値で比較する）。
+_EXPECTED_64_CHAR_HEX_PIN_COUNT = 24
+
+
+def test_pod_script_embedded_hex_pins_are_well_formed() -> None:
+    """埋め込み hex pin（40 桁 commit SHA / 64 桁 sha256）がすべて正しい桁数の
+    どちらかであること。旧実装は 60〜70 桁の範囲でしか拾っておらず、60 桁
+    未満に桁落ち・誤 truncate された pin は regex にすら引っかからず素通り
+    していた——40〜80 桁まで広く拾ってから桁数で分類することでそれも検出する。
+    40 桁は既知の commit pin 定数のみ許可し、64 桁以外の桁数は問答無用で fail、
+    64 桁の件数は実測値にハードコードして意図しない増減を検出する。"""
     text = _pod_script_text()
-    hexish = re.findall(r'"([0-9a-f]{60,70})"', text)
-    assert len(hexish) >= 15, f"expected many sha256-like pins, found {len(hexish)}"
+    hexish = re.findall(r'"([0-9a-f]{40,80})"', text)
+    assert len(hexish) >= 15, f"expected many hex pins, found {len(hexish)}"
+
+    count_64 = 0
     for value in hexish:
-        assert len(value) == 64, f"malformed pin length {len(value)}: {value!r}"
-        assert re.fullmatch(r"[0-9a-f]{64}", value), f"non-hex pin: {value!r}"
+        length = len(value)
+        if length == 40:
+            assert value in _KNOWN_40_CHAR_HEX_PINS, (
+                f"unexpected 40-char hex value (not a known commit pin): {value!r}"
+            )
+        elif length == 64:
+            assert re.fullmatch(r"[0-9a-f]{64}", value), f"non-hex pin: {value!r}"
+            count_64 += 1
+        else:
+            pytest.fail(f"malformed pin length {length}: {value!r}")
+
+    assert count_64 == _EXPECTED_64_CHAR_HEX_PIN_COUNT, (
+        f"expected exactly {_EXPECTED_64_CHAR_HEX_PIN_COUNT} 64-hex sha256 pins in "
+        f"the pod script, found {count_64}"
+    )
 
 
 def test_pod_script_expected_pin_commit_matches_runner_constant() -> None:

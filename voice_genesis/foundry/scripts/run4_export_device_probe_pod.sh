@@ -133,7 +133,23 @@ PY
 
   if [ -n "${RUNPOD_POD_ID:-}" ]; then
     echo "| probe: self-stop via runpodctl (pod=$RUNPOD_POD_ID)"
-    runpodctl stop pod "$RUNPOD_POD_ID" || echo "| probe: runpodctl stop failed (non-fatal)" >&2
+    # FIX 2: a single attempt with the failure merely logged (non-fatal) means
+    # a transient runpodctl/API hiccup right here — after the watchdog has
+    # already been killed above — leaves nothing else guarding against the
+    # pod idling (and billing) forever. Retry up to 5 times with a 30s pause
+    # between attempts before giving up loudly.
+    _self_stop_ok="false"
+    for _self_stop_attempt in 1 2 3 4 5; do
+      if runpodctl stop pod "$RUNPOD_POD_ID"; then
+        _self_stop_ok="true"
+        break
+      fi
+      echo "| probe: runpodctl stop attempt=$_self_stop_attempt failed" >&2
+      [ "$_self_stop_attempt" -lt 5 ] && sleep 30
+    done
+    if [ "$_self_stop_ok" != "true" ]; then
+      echo "| probe: *** SELF-STOP FAILED *** after 5 attempts — pod may still be billing (pod=$RUNPOD_POD_ID)" >&2
+    fi
   else
     echo "| probe: RUNPOD_POD_ID unset — self-stop skipped (local run?)"
   fi
@@ -151,7 +167,21 @@ _watchdog_body() {
   {
     echo "| probe: watchdog: 10800s wall-clock reached — forcing self-stop"
     if [ -n "${RUNPOD_POD_ID:-}" ]; then
-      runpodctl stop pod "$RUNPOD_POD_ID" || true
+      # FIX 2: same retry treatment as on_exit's self-stop — the watchdog is
+      # the last-resort safety net when the main flow never reaches the trap,
+      # so a single-attempt best-effort stop here is the weakest link.
+      _wd_self_stop_ok="false"
+      for _wd_self_stop_attempt in 1 2 3 4 5; do
+        if runpodctl stop pod "$RUNPOD_POD_ID"; then
+          _wd_self_stop_ok="true"
+          break
+        fi
+        echo "| probe: watchdog: runpodctl stop attempt=$_wd_self_stop_attempt failed"
+        [ "$_wd_self_stop_attempt" -lt 5 ] && sleep 30
+      done
+      if [ "$_wd_self_stop_ok" != "true" ]; then
+        echo "| probe: watchdog: *** SELF-STOP FAILED *** after 5 attempts — pod may still be billing (pod=$RUNPOD_POD_ID)"
+      fi
     fi
   } >>"$RESULTS/watchdog.log" 2>&1
 }

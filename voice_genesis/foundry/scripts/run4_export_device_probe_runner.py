@@ -143,10 +143,27 @@ def build_launch_payload(script_commit: str, pin_commit: str) -> Dict[str, Any]:
     が FIX 1 の要— dockerStartCmd の raw URL には pin_commit を絶対に
     埋め込まない）。"""
     entry_url = POD_ENTRY_RAW_URL_TMPL.format(sha=script_commit)
-    start_cmd = (
-        f"curl -fsSL {entry_url} | "
-        f"PROBE_PIN_COMMIT={pin_commit} bash 2>&1 | tee /workspace/probe_console.log"
+    # FIX 4: 旧実装の `curl -fsSL <url> | ... bash` は curl が失敗すると
+    # 空 stdin へ bash を渡すだけになり、bash は何もせず exit 0 する
+    # （pod がサイレントに idle billing し続ける — pod 起動直後は pod.sh 自身の
+    # self-stop trap もまだ設置されていないため助からない）。まず一時ファイルへ
+    # download し（--retry でネットワーク瞬断を吸収）、成功したときだけ実行する。
+    # download 自体が失敗した場合のみ、pod.sh の trap を待たずに直接
+    # runpodctl stop pod を呼んで self-stop する（$RUNPOD_POD_ID 未設定はガード）。
+    download_cmd = (
+        "curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 "
+        "-o /tmp/probe_entry.sh " + entry_url
     )
+    run_cmd = (
+        "PROBE_PIN_COMMIT=" + pin_commit +
+        " bash /tmp/probe_entry.sh 2>&1 | tee /workspace/probe_console.log"
+    )
+    fallback_cmd = (
+        "{ echo 'probe entry script download failed — self-stopping to avoid "
+        "idle billing' >&2; "
+        '[ -n "${RUNPOD_POD_ID:-}" ] && runpodctl stop pod "$RUNPOD_POD_ID"; }'
+    )
+    start_cmd = f"{download_cmd} && {run_cmd} || {fallback_cmd}"
     return {
         "name": "run4-export-device-probe",
         "imageName": IMAGE_NAME,
@@ -254,13 +271,18 @@ def cmd_terminate(args: argparse.Namespace) -> None:
         result = _request("POST", f"/pods/{args.pod}/stop")
         print("| runner: stop result:")
         print(json.dumps(result, indent=2, ensure_ascii=False))
-    except urllib.error.HTTPError as exc:
-        print(f"| runner: POST /stop failed ({exc.code}), trying DELETE /pods/{args.pod}", file=sys.stderr)
+    except urllib.error.URLError as exc:
+        # FIX 3: urllib.error.URLError is the parent class of HTTPError, so this
+        # also catches network-level failures (connection refused, DNS, timeout)
+        # that the previous `except HTTPError` missed — those used to propagate
+        # straight out of cmd_terminate, skipping the DELETE fallback below.
+        detail = f"HTTP {exc.code}" if isinstance(exc, urllib.error.HTTPError) else str(exc)
+        print(f"| runner: POST /stop failed ({detail}), trying DELETE /pods/{args.pod}", file=sys.stderr)
     try:
         result = _request("DELETE", f"/pods/{args.pod}")
         print("| runner: delete result:")
         print(json.dumps(result, indent=2, ensure_ascii=False))
-    except urllib.error.HTTPError:
+    except urllib.error.URLError:
         print("| runner: DELETE also failed — see body above. Pod may need manual termination.", file=sys.stderr)
         raise
 
@@ -412,16 +434,14 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         # --- completion signal: status.json is written once by pod.sh's exit
         # trap — reaching it means the whole probe (ok or failed) has finished
         # and the full result set is ready to download. ---
-        req = _build_request(f"{base}/status.json", method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                if resp.status == 200:
-                    status_ok = True
-                    break
-        except urllib.error.HTTPError as exc:
-            print(f"| runner: status.json not ready yet (HTTP {exc.code})")
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
-            print(f"| runner: status.json not reachable yet: {exc}")
+        # FIX 6: reuse _poll_once instead of re-implementing the same GET/200
+        # check inline (this loop and _poll_once had drifted into two separate
+        # implementations of "poll a URL, treat non-200/network-error as not
+        # ready yet").
+        if _poll_once(f"{base}/status.json") is not None:
+            status_ok = True
+            break
+        print("| runner: status.json not ready yet")
 
         elapsed = time.time() - poll_started_at
         if not heartbeat_ever_seen and not heartbeat_stall_warned and elapsed > _HEARTBEAT_STALL_WARN_SEC:
@@ -460,10 +480,35 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
     print("| runner: status.json reachable — downloading result set")
+    # FIX 1: the previous hardcoded list silently dropped any top-level file
+    # added later to pod.sh's $RESULTS output (e.g. cuda_diagnostics.json,
+    # venv_b_env.json, arm_b_output.log were all missing here). Scrape the
+    # served ROOT directory index the same way g1/ is scraped below, and
+    # union it with the hardcoded baseline — the union keeps known files even
+    # if the root listing scrape itself fails, while any future addition to
+    # $RESULTS is discovered automatically instead of requiring this list to
+    # be kept in sync by hand.
     top_level_files = [
         "status.json", "probe_results.json", "env_snapshot.json",
         "venv_a_env.json", "probe_console.log", "watchdog.log",
     ]
+    root_index_url = f"{base}/"
+    req = _build_request(root_index_url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        parser = _DirListingParser()
+        parser.feed(html)
+        root_names = [h for h in parser.hrefs if h not in ("../", "./") and not h.endswith("/")]
+        print(f"| runner: root listing: {root_names}")
+        top_level_files = sorted(set(top_level_files) | set(root_names))
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        print(
+            f"| runner: could not list {root_index_url} (falling back to hardcoded "
+            f"top-level file list): {exc}",
+            file=sys.stderr,
+        )
+
     ok_count = 0
     for name in top_level_files:
         if _download(f"{base}/{name}", os.path.join(out_dir, name)):
