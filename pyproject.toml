@@ -200,6 +200,11 @@ testpaths = [
     # well-formed 性）。依存は標準ライブラリのみ（RunPod API・GPU 呼び出し
     # なし）。
     "voice_genesis/foundry/tests/test_run4_export_device_probe.py",
+    # VG-DEBT-008 (a-2) export-device probe results（2026-08-23 実測記録
+    # ペア）の形状/整合性テスト（freeze-bound ではない — 凍結 sha256 検査は
+    # test_committed_artifacts_immutable.py 側）。依存は PyYAML + 標準
+    # ライブラリのみ（本体の必須依存）。
+    "voice_genesis/foundry/tests/test_run4_export_device_probe_results.py",
 ]
 pythonpath = ["src", "."]
 markers = [
