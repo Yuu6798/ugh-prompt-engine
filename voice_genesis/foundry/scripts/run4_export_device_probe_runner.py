@@ -406,6 +406,55 @@ def _extract_g1_expected_sha256(probe_results: Dict[str, Any]) -> Dict[str, Any]
     return empty
 
 
+def _g1_wav_filename_from_key(key: str) -> Optional[str]:
+    """`_parse_g1_wav_key` の逆写像（FIX 8）。probe_results.json 側の wav
+    sha256 キー `<speaker>_<song>` から g1/ 配下のファイル名
+    `gate_<song>_<speaker>.wav` を組み立てる。キーが `<speaker>_<song>` の
+    2 パーツ split に一致しない場合は None を返す（防御的 — 現行スキーマでは
+    起きない想定）。"""
+    parts = key.split("_")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    speaker, song = parts
+    return f"gate_{song}_{speaker}.wav"
+
+
+def _required_g1_filenames(g1_expected: Dict[str, Any]) -> List[str]:
+    """probe_results.json の記録（`_extract_g1_expected_sha256` の戻り値）
+    から、このダウンロードが必ず取得できていなければならない g1/ ファイル名
+    集合を導出する（FIX 8: round-3 gate の穴 — 旧実装は required set を
+    directory listing から導出しており、pod が best-effort cp で publish
+    し損ねたファイルは listing に現れないため required にすらならず、
+    ダウンロードもされず、sha256 チェックがサイレントに skip されて fetch が
+    exit 0 していた。ここでは required set を record 側から導出し、transport
+    が実際に何を届けたかとは独立に決める）。onnx_sha256 が非空文字列で記録
+    されていれば "acoustic.onnx" を、wav_sha256 の各キーは
+    `_g1_wav_filename_from_key` で復元したファイル名を required に含める。"""
+    required: List[str] = []
+    onnx_sha256 = g1_expected.get("onnx_sha256")
+    if isinstance(onnx_sha256, str) and onnx_sha256:
+        required.append("acoustic.onnx")
+
+    wav_sha256 = g1_expected.get("wav_sha256")
+    if isinstance(wav_sha256, dict):
+        for key, value in wav_sha256.items():
+            if not (isinstance(value, str) and value):
+                continue  # 記録側に sha256 が無いキーは要求しない
+            name = _g1_wav_filename_from_key(key)
+            if name is not None:
+                required.append(name)
+
+    return sorted(set(required))
+
+
+def _g1_missing_required(required: List[str], g1_download_ok: Dict[str, bool]) -> List[str]:
+    """`required`（record 由来）のうち、g1/ の directory listing に一度も
+    現れなかった（= pod が publish し損ねた）ものを返す（FIX 8）。listing に
+    現れたが download 自体が失敗したものはここでは対象外 — そちらは既存の
+    `g1_failed` ゲート（`g1_download_ok[name] is False`）が捕捉する。"""
+    return sorted(name for name in required if name not in g1_download_ok)
+
+
 _DEAD_STATUS_VALUES = {"exited", "terminated", "stopped", "dead", "failed"}
 
 
@@ -741,6 +790,21 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         raise SystemExit(2)
 
     g1_expected = _extract_g1_expected_sha256(probe_results_payload)
+
+    # FIX 8: required set は record（probe_results.json）由来 — listing に
+    # 一度も現れなかった required artifact（pod が best-effort cp で publish
+    # し損ねたケース）を、listing だけを見ていた旧ゲートでは検出できなかった。
+    g1_required = _required_g1_filenames(g1_expected)
+    g1_missing_from_listing = _g1_missing_required(g1_required, g1_download_ok)
+    if g1_missing_from_listing:
+        print(
+            "| runner: *** PROBE FETCH FAILED *** recorded artifact not published "
+            f"by pod — absent from {g1_index_url} listing entirely (never "
+            f"downloaded, sha256 unverifiable): {g1_missing_from_listing}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
     sha_mismatches: List[str] = []
 
     expected_onnx_sha = g1_expected["onnx_sha256"]

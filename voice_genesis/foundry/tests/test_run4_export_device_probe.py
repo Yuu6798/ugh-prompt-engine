@@ -695,3 +695,126 @@ def test_runner_extract_g1_expected_sha256_handles_both_schemas() -> None:
         "onnx_sha256": None,
         "wav_sha256": {},
     }
+
+
+# --- (g) FIX 8: required g1/ artifact set must come from the record
+# (probe_results.json), not from the directory listing the pod happened to
+# publish — a file the pod failed to `cp` (best-effort) never appears in the
+# listing, is never downloaded, and the old gate silently skipped its sha256
+# check while exiting 0. ---
+
+
+def test_runner_g1_wav_filename_from_key_inverts_parse_g1_wav_key() -> None:
+    """`_g1_wav_filename_from_key` は `_parse_g1_wav_key` の逆写像であること
+    （round-trip）。"""
+    for name in ("gate_sakura_ritsu.wav", "gate_umi_pjs.wav", "gate_sakura_user.wav"):
+        key = runner._parse_g1_wav_key(name)
+        assert key is not None
+        assert runner._g1_wav_filename_from_key(key) == name
+
+    # 2 パーツに split できないキーは None（防御的）。
+    assert runner._g1_wav_filename_from_key("onlyoneword") is None
+    assert runner._g1_wav_filename_from_key("a_b_c") is None
+
+
+def test_runner_required_g1_filenames_covers_onnx_and_all_six_wav_keys() -> None:
+    """FIX 8 の中核回帰固定: 6 speaker×song の wav キー + onnx を持つ
+    probe_results.json から、required filename 集合が過不足なく導出される
+    こと（実運用の run4 記録は ritsu/pjs/user × sakura/umi の 6 キー）。"""
+    probe_results = {
+        "arms": {
+            "g1_gpu_export_full": {
+                "onnx_sha256": "onnx" + "0" * 60,
+                "wav_sha256": {
+                    "ritsu_sakura": "a" * 64,
+                    "ritsu_umi": "b" * 64,
+                    "pjs_sakura": "c" * 64,
+                    "pjs_umi": "d" * 64,
+                    "user_sakura": "e" * 64,
+                    "user_umi": "f" * 64,
+                },
+            }
+        }
+    }
+    g1_expected = runner._extract_g1_expected_sha256(probe_results)
+    required = runner._required_g1_filenames(g1_expected)
+    assert required == sorted(
+        [
+            "acoustic.onnx",
+            "gate_sakura_ritsu.wav",
+            "gate_umi_ritsu.wav",
+            "gate_sakura_pjs.wav",
+            "gate_umi_pjs.wav",
+            "gate_sakura_user.wav",
+            "gate_umi_user.wav",
+        ]
+    )
+
+
+def test_runner_required_g1_filenames_omits_keys_without_recorded_sha() -> None:
+    """記録側に sha256 が無い（None / 空文字列）キー・onnx はそもそも required
+    に含めない（record に無い要求は作らない）。"""
+    probe_results = {
+        "arms": {
+            "g1_gpu_export_full": {
+                "onnx_sha256": None,
+                "wav_sha256": {"ritsu_sakura": "a" * 64, "pjs_umi": ""},
+            }
+        }
+    }
+    g1_expected = runner._extract_g1_expected_sha256(probe_results)
+    required = runner._required_g1_filenames(g1_expected)
+    assert required == ["gate_sakura_ritsu.wav"]
+
+
+def test_runner_required_g1_filenames_unknown_schema_yields_empty() -> None:
+    """未知スキーマ（`_extract_g1_expected_sha256` が empty を返すケース）では
+    required も空 — 比較不能な記録から要求をでっち上げない。"""
+    g1_expected = runner._extract_g1_expected_sha256({"arms": {"something_else": {}}})
+    assert runner._required_g1_filenames(g1_expected) == []
+
+
+def test_runner_g1_missing_required_detects_artifact_absent_from_listing() -> None:
+    """FIX 8 の中核回帰固定: pod が best-effort cp で publish し損ねた required
+    artifact（listing に一度も現れず、`g1_download_ok` に一切キーが無い）を
+    検出できること。listing に現れたが download 自体は失敗したもの
+    （`g1_download_ok[name] is False`）は既存の g1_failed ゲートの担当なので、
+    ここでは missing 扱いにしない（重複報告を避ける）。"""
+    required = ["acoustic.onnx", "gate_sakura_ritsu.wav", "gate_umi_pjs.wav"]
+    g1_download_ok = {
+        "acoustic.onnx": True,
+        "gate_sakura_ritsu.wav": False,  # listed, download failed — not "missing"
+        # "gate_umi_pjs.wav" 不在 = pod が publish しなかった (best-effort cp 失敗)
+        "gate_synth_summary_ritsu.json": True,  # required 外の listing extra
+    }
+    missing = runner._g1_missing_required(required, g1_download_ok)
+    assert missing == ["gate_umi_pjs.wav"]
+
+
+def test_runner_g1_missing_required_empty_when_all_required_listed() -> None:
+    required = ["acoustic.onnx", "gate_sakura_ritsu.wav"]
+    g1_download_ok = {"acoustic.onnx": True, "gate_sakura_ritsu.wav": True}
+    assert runner._g1_missing_required(required, g1_download_ok) == []
+
+
+def test_runner_cmd_fetch_wires_required_set_from_record_not_listing() -> None:
+    """cmd_fetch のソースが required set を record（probe_results.json /
+    `_extract_g1_expected_sha256`）由来で導出し、listing 不在を明示的な失敗
+    にしていること（ソーススキャンによる配線固定 — シミュレーションは
+    ネットワーク依存のため行わない）。"""
+    import inspect
+
+    fetch_source = inspect.getsource(runner.cmd_fetch)
+    assert "g1_required = _required_g1_filenames(g1_expected)" in fetch_source
+    assert "g1_missing_from_listing = _g1_missing_required(g1_required, g1_download_ok)" in fetch_source
+    assert "recorded artifact not published" in fetch_source
+    gate_idx = fetch_source.index("if g1_missing_from_listing:")
+    raise_idx = fetch_source.index("raise SystemExit(2)", gate_idx)
+    assert gate_idx < raise_idx
+    # required set の導出は probe_results.json（g1_expected）のパース後 —
+    # transport のダウンロード結果に required 自体は依存しない。
+    expected_extract_idx = fetch_source.index(
+        "g1_expected = _extract_g1_expected_sha256(probe_results_payload)"
+    )
+    required_idx = fetch_source.index("g1_required = _required_g1_filenames(g1_expected)")
+    assert expected_extract_idx < required_idx
