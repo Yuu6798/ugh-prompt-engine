@@ -1569,6 +1569,10 @@ def test_cmd_measure_marks_complete_for_all_ten_groups(
     # runtime_stack（PR #306 対応 #1）: measure が実行時のパッケージ版を記帳する。
     assert doc["runtime_stack"]["python"]
     assert set(doc["runtime_stack"]) == {"python", *d4._RUNTIME_STACK_PACKAGES}
+    assert set(doc["measurement_dependency_stack"]) == set(
+        d4._MEASUREMENT_DEPENDENCY_PACKAGES
+    )
+    assert all(doc["measurement_dependency_stack"].values())
 
 
 # --- 5c. render の atomic 公開（PR #306 レビュー第9巡 P1・第10巡 P1 で単一

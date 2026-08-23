@@ -864,6 +864,7 @@ def _resolve_axis_candidates(spec: Dict[str, Any]) -> Dict[str, "v12.Cand12"]:
 #: （2026-08-22 の D4 実測はこの記録先が無く、`d4_exec_report_2026-08-22.md`
 #: 側にしか残せなかった。以後の実行分は結果 JSON 自身に機械可読で残す）。
 _RUNTIME_STACK_PACKAGES: Tuple[str, ...] = ("numpy", "onnxruntime", "soundfile", "PyYAML")
+_MEASUREMENT_DEPENDENCY_PACKAGES: Tuple[str, ...] = ("pyloudnorm", "scipy")
 
 
 def _runtime_stack() -> Dict[str, Optional[str]]:
@@ -873,6 +874,17 @@ def _runtime_stack() -> Dict[str, Optional[str]]:
     `PyYAML` はディストリビューション名（import 名は `yaml`）。"""
     out: Dict[str, Optional[str]] = {"python": platform.python_version()}
     for pkg in _RUNTIME_STACK_PACKAGES:
+        try:
+            out[pkg] = _md.version(pkg)
+        except _md.PackageNotFoundError:
+            out[pkg] = None
+    return out
+
+
+def _measurement_dependency_stack() -> Dict[str, Optional[str]]:
+    """解析pin外だが測定数値へ入る依存の実行時版を結果へ記帳する。"""
+    out: Dict[str, Optional[str]] = {}
+    for pkg in _MEASUREMENT_DEPENDENCY_PACKAGES:
         try:
             out[pkg] = _md.version(pkg)
         except _md.PackageNotFoundError:
@@ -1451,6 +1463,7 @@ def cmd_measure(args: argparse.Namespace) -> int:
         "candidate_ids": {axis: cand.candidate_id for axis, cand in axis_candidates.items()},
         "analysis_stack": analysis_stack,
         "runtime_stack": _runtime_stack(),
+        "measurement_dependency_stack": _measurement_dependency_stack(),
         "n_groups": len(groups),
         "n_total_cells": n_total_cells,
         "n_total_measured": n_total_measured,

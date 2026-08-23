@@ -51,6 +51,19 @@ def _configured_foundry_tests() -> set[PurePosixPath]:
     return result
 
 
+def _assert_checkout_history_contract(workflow: dict) -> None:
+    """D6を収集するtest-restで固定commitまでの完全履歴を取得する。"""
+    checkout_steps = [
+        step
+        for step in workflow["jobs"]["test-rest"]["steps"]
+        if step.get("uses") == "actions/checkout@v4"
+    ]
+    assert len(checkout_steps) == 1, "test-rest must contain one actions/checkout@v4 step"
+    assert checkout_steps[0].get("with", {}).get("fetch-depth") == 0, (
+        "test-rest: pinned historical Git objects require fetch-depth: 0"
+    )
+
+
 def _all_foundry_tests() -> set[PurePosixPath]:
     return {
         PurePosixPath(path.relative_to(REPO_ROOT).as_posix())
@@ -118,3 +131,18 @@ def test_ci_runs_and_excludes_the_same_foundry_core_manifest() -> None:
     # prefixes must be deselected or the dedicated 1,349 tests run twice.
     assert 'deselect_args+=("--deselect=$path")' in rest_runs[0]
     assert '"${deselect_args[@]}"' in rest_runs[0]
+
+
+def test_ci_fetches_full_history_for_pinned_historical_sources() -> None:
+    """D6を実行するtest-restで固定履歴sourceを欠落させない。"""
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    _assert_checkout_history_contract(workflow)
+
+
+def test_ci_history_guard_rejects_a_shallow_checkout() -> None:
+    """1 jobだけdepth-1へ戻す退行もguard自身が検出する。"""
+    workflow = yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+    workflow["jobs"]["test-rest"]["steps"][0]["with"]["fetch-depth"] = 1
+
+    with pytest.raises(AssertionError, match="test-rest.*fetch-depth: 0"):
+        _assert_checkout_history_contract(workflow)

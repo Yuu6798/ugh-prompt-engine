@@ -27,6 +27,7 @@ set -uo pipefail
 
 ROOT="/home/user/s7work"
 [ "${1:-}" = "--root" ] && ROOT="${2:?}"
+RUN8_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 M="$ROOT/materials"
 FAIL=0
 OK=0
@@ -220,7 +221,7 @@ done <<< "$STAGE"
 echo "| 4. ANALYSIS_STACK_PIN（測定側インタプリタ）"
 python - <<'PY'
 import importlib.metadata as md, subprocess, sys
-PIN = {"numba": "0.66.0", "librosa": "0.11.0", "numpy": "2.4.6", "pyloudnorm": "0.2.0"}
+PIN = {"numba": "0.66.0", "librosa": "0.11.0", "numpy": "2.4.6", "pyloudnorm": "0.2.0", "scipy": "1.17.1"}
 bad = {p: md.version(p) for p in PIN if md.version(p) != PIN[p]}
 if not bad:
     print("  analysis stack OK   " + " / ".join(f"{k} {v}" for k, v in PIN.items()))
@@ -239,7 +240,94 @@ else:
 PY
 [ "$?" -eq 0 ] || { echo "  analysis stack FAIL 復元できなかった" >&2; FAIL=$((FAIL+1)); }
 
-echo "| 5. export 用の隔離 venv（DiffSinger は numpy<2 を要求する）"
+echo "| 5. RENDER_STACK_PIN（render 専用の隔離 venv）"
+# B-1 manifest が束縛した Python micro version と、render + D4 measurement の
+# 完全な package 集合を analysis/export 環境から分離して復元する。D6 はこの
+# interpreter で d4_runner.py measure まで実行するため、ONNX render 依存だけで
+# なく ANALYSIS_STACK_PIN（numpy/librosa/numba）も同じ venv に必要。
+# `python` の偶然のsite-packagesへ依存させない。
+RENDER_VENV="$ROOT/venv_render"
+RENDER_BASE="$(command -v python3.11 2>/dev/null || true)"
+RENDER_FAIL=0
+if [ -z "$RENDER_BASE" ]; then
+  echo "  render venv    FAIL python3.11 が無い（pin は 3.11.15）" >&2
+  RENDER_FAIL=1
+else
+  RENDER_BASE_VERSION="$($RENDER_BASE -c 'import platform; print(platform.python_version())' 2>/dev/null || true)"
+  if [ "$RENDER_BASE_VERSION" != "3.11.15" ]; then
+    echo "  render venv    FAIL python $RENDER_BASE_VERSION != pin 3.11.15" >&2
+    RENDER_FAIL=1
+  else
+    if [ ! -x "$RENDER_VENV/bin/python" ] || \
+       [ "$("$RENDER_VENV/bin/python" -c 'import platform; print(platform.python_version())' 2>/dev/null || true)" != "3.11.15" ]; then
+      "$RENDER_BASE" -m venv --clear "$RENDER_VENV" || RENDER_FAIL=1
+    fi
+    if [ "$RENDER_FAIL" -eq 0 ]; then
+      "$RENDER_VENV/bin/python" -m pip -q install \
+        "numpy==2.4.6" "onnxruntime==1.29.0" "soundfile==0.14.0" "PyYAML==6.0.1" \
+        "numba==0.66.0" "librosa==0.11.0" "pyloudnorm==0.2.0" "scipy==1.17.1" \
+        >/dev/null 2>&1 || RENDER_FAIL=1
+    fi
+  fi
+fi
+if [ "$RENDER_FAIL" -eq 0 ]; then
+  RENDER_CHECK="$("$RENDER_VENV/bin/python" - "$RUN8_DIR" <<'RPY' 2>/dev/null
+import importlib.metadata as md
+import math
+import platform
+from pathlib import Path
+import sys
+
+pin = {
+    "librosa": "0.11.0",
+    "numba": "0.66.0",
+    "numpy": "2.4.6",
+    "onnxruntime": "1.29.0",
+    "pyloudnorm": "0.2.0",
+    "scipy": "1.17.1",
+    "soundfile": "0.14.0",
+    "PyYAML": "6.0.1",
+    "python": "3.11.15",
+}
+observed = {name: md.version(name) for name in pin if name != "python"}
+observed["python"] = platform.python_version()
+assert observed == pin, (observed, pin)
+import librosa, numba, numpy, onnxruntime, pyloudnorm, scipy, soundfile, yaml  # noqa: F401
+
+# `d4_runner.py measure` が実際に通る依存経路を provision 時に 1 セル踏む。
+# import の成功だけでは、librosa.pyin が使う numba stack の破損を検出できない。
+run8_dir = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(run8_dir))
+import s7_b1_calibration as b1
+import s7_b1_v12 as v12
+
+prereg = b1.load_prereg()
+assert b1.verify_analysis_stack(prereg) == {
+    "librosa": pin["librosa"], "numba": pin["numba"], "numpy": pin["numpy"]
+}
+stimulus = b1.build_calibration_set(prereg)["long_tail_080"]
+candidate_space, _calibration, _rule, _pins = v12.load_prereg_12()
+candidate = next(c for c in v12.enumerate_candidates_12(candidate_space) if c.kind == "voicing")
+axes = v12.measure_candidate_12(candidate, stimulus)
+assert set(axes) == {
+    "excess_tail_voiced_ms",
+    "release_after_score_boundary_ms",
+    "tail_f0_persistence",
+}
+assert all(math.isfinite(float(value)) for value in axes.values()), axes
+print(" / ".join(f"{name} {version}" for name, version in observed.items()))
+RPY
+)"
+  if [ -n "$RENDER_CHECK" ]; then
+    echo "  render venv    OK   $RENDER_CHECK"
+  else
+    echo "  render venv    FAIL import/version照合またはD4測定smokeに失敗" >&2
+    RENDER_FAIL=1
+  fi
+fi
+[ "$RENDER_FAIL" -eq 0 ] || FAIL=$((FAIL+1))
+
+echo "| 6. export 用の隔離 venv（DiffSinger は numpy<2 を要求する）"
 # 測定側インタプリタ（numpy 2.4.6 / librosa 0.11.0）とは **別** に保つ。
 # 2026-08-22 実測: 再構築後に requirements を入れ直すと numpy が 2.x へ引き上げられて
 # export が壊れる。requirements.txt を入れた **後で** numpy を pin へ戻す順序が要る。

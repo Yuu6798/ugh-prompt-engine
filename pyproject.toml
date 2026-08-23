@@ -222,6 +222,10 @@ testpaths = [
     # test_committed_artifacts_immutable.py 側）。依存は PyYAML + 標準
     # ライブラリのみ（本体の必須依存）。
     "voice_genesis/foundry/tests/test_run4_export_device_probe_results.py",
+    # VG-DEBT-006 (D6) fixed probe の pinned_regenerable 凍結 Phase A（machine-
+    # independent 部分）: {path, sha256} 参照の実ファイル照合 + PENDING_PHASE_B
+    # プレースホルダの構造検査。依存は標準ライブラリのみ。
+    "voice_genesis/foundry/tests/test_d6_fixed_probe_pins.py",
 ]
 pythonpath = ["src", "."]
 markers = [
