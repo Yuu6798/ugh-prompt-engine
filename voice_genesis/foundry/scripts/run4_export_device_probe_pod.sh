@@ -197,6 +197,58 @@ WATCHDOG_PID=$!
 disown || true
 
 # ============================================================================
+# 0a. FIX 6 (round-2 レビュー対応): /workspace（= $RESULTS の親）は
+# volumeInGb=10 で pod stop/restart を跨いで永続化されるが、本エントリ
+# スクリプト自体は restart のたびに最初から再実行される。$RESULTS はここまで
+# mkdir -p されるだけだったため、restart 直後の t=0 時点で前回 run の
+# status.json / probe_results.json / cuda_diagnostics.json / g1 がそのまま
+# 見えてしまい、これから起動する t=0 HTTP サーバー越しに runner や人間が
+# 「今回の run が既に完了している」と誤認しうる（stale success/failure の
+# 取り違え）。t=0 HTTP サーバー / heartbeat を起動する前に、これらの完了
+# マーカーが 1 つでも残っていれば $RESULTS の中身ごと
+# "prev_run_<UTC timestamp>/" へ退避する。マーカー自体を先に mv すること
+# で、たとえサーバーが先に生きていたとしても stale status.json 等が配信され
+# うる窓を作らない（その後の残り物の退避は best-effort）。
+# ============================================================================
+
+_PREV_RUN_MARKERS=(status.json probe_results.json cuda_diagnostics.json g1)
+_prev_run_found="false"
+for _m in "${_PREV_RUN_MARKERS[@]}"; do
+  if [ -e "$RESULTS/$_m" ]; then
+    _prev_run_found="true"
+    break
+  fi
+done
+
+if [ "$_prev_run_found" = "true" ]; then
+  PREV_RUN_ARCHIVE="$RESULTS/prev_run_$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$PREV_RUN_ARCHIVE"
+  echo "| probe: stale completion marker(s) found in \$RESULTS at t=0 (pod restart on persisted /workspace) — archiving into $PREV_RUN_ARCHIVE"
+
+  # 完了マーカーを最優先で退避する（stale status.json 等が配信される窓を
+  # 作らない）。
+  for _m in "${_PREV_RUN_MARKERS[@]}"; do
+    if [ -e "$RESULTS/$_m" ]; then
+      mv -f "$RESULTS/$_m" "$PREV_RUN_ARCHIVE/" 2>/dev/null \
+        && echo "| probe: archived stale marker $_m -> $PREV_RUN_ARCHIVE/$_m" \
+        || echo "| probe: WARNING: failed to archive stale marker $_m" >&2
+    fi
+  done
+
+  # 残り（env_snapshot.json / heartbeat.* / probe_console.log / watchdog.log /
+  # .current_stage 等、前回 run の副産物一式）も best-effort で退避する。
+  # 退避先ディレクトリ自身はスキップする。
+  for _f in "$RESULTS"/* "$RESULTS"/.[!.]*; do
+    [ -e "$_f" ] || continue
+    _base="$(basename "$_f")"
+    [ "$_base" = "$(basename "$PREV_RUN_ARCHIVE")" ] && continue
+    mv -f "$_f" "$PREV_RUN_ARCHIVE/" 2>/dev/null \
+      && echo "| probe: archived leftover $_base -> $PREV_RUN_ARCHIVE/$_base" \
+      || echo "| probe: WARNING: failed to archive leftover $_base" >&2
+  done
+fi
+
+# ============================================================================
 # 0b. heartbeat writer + 結果 HTTP サーバーを t=0 で起動する。
 # 旧実装は結果サーバーを exit trap の中でしか起動していなかったため、
 # コンテナディスク（volumeInGb=0 だった時代の /workspace 相当）が pod

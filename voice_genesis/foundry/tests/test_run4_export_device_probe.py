@@ -481,3 +481,132 @@ def test_pod_script_probe_results_extended_fields_present() -> None:
     assert '"cross_stack_note_applies"' in text
     assert '"g1_onnx_eq_c1s_onnx"' in text
     assert '"venv_b_ref"' in text
+
+
+# --- (e) FIX 6 (round-2 レビュー対応): pod.sh の restart 時 stale marker 退避 /
+# runner の NETWORK_ERRORS 統一 / cmd_fetch の download-succeeded-now ゲート ---
+
+
+def test_pod_script_prev_run_archive_present_before_t0_server_start() -> None:
+    """FIX 6-1 の回帰固定: /workspace は pod stop/restart を跨いで永続化
+    される（volumeInGb=10）ため、restart 直後の t=0 時点で前回 run の完了
+    マーカーが $RESULTS に残っていれば、これから起動する t=0 HTTP サーバー
+    より前に "prev_run_<timestamp>/" へ退避されていること（既存の
+    order-guard 群と同じ「テキスト順序を index() で比較する」スタイル）。"""
+    text = _pod_script_text()
+
+    archive_var_idx = text.index('PREV_RUN_ARCHIVE="$RESULTS/prev_run_$(date -u +%Y%m%dT%H%M%SZ)"')
+    # ピンポイントで t=0 起動分の http.server 呼び出しを指す（on_exit() 内の
+    # フォールバック起動と同じ文字列 "http.server 8000" が定義順で先に本文中に
+    # 現れるため、素の text.index("http.server 8000") は使えない — 既存の
+    # test_pod_script_result_server_starts_at_t0_before_first_stage も同じ
+    # 理由でこれを上限としてしか使っていない）。
+    server_idx = text.index("starting result HTTP server on :8000 (dir=$RESULTS) at t=0")
+    heartbeat_pid_assign_idx = text.index("HEARTBEAT_PID=$!")
+    watchdog_pid_assign_idx = text.index("WATCHDOG_PID=$!")
+    first_stage_idx = text.index('stage "1-materials-repo"')
+
+    # watchdog 設置（trap/watchdog installation）の後、t=0 HTTP サーバー /
+    # heartbeat writer の起動より前、かつ最初の実測ステージより前。
+    assert watchdog_pid_assign_idx < archive_var_idx < server_idx
+    assert archive_var_idx < heartbeat_pid_assign_idx
+    assert archive_var_idx < first_stage_idx
+
+
+def test_pod_script_prev_run_archive_covers_all_named_markers() -> None:
+    """FIX 6-1: 退避判定の対象は status.json / probe_results.json /
+    cuda_diagnostics.json / g1 の 4 つであること（Design Memo が明示的に
+    名指しした完了マーカー一式）。"""
+    text = _pod_script_text()
+    markers_idx = text.index("_PREV_RUN_MARKERS=(")
+    markers_section = text[markers_idx : markers_idx + 120]
+    for marker in ("status.json", "probe_results.json", "cuda_diagnostics.json", "g1"):
+        assert marker in markers_section, f"missing marker in _PREV_RUN_MARKERS: {marker}"
+
+
+def test_pod_script_prev_run_archive_moves_markers_before_rest() -> None:
+    """FIX 6-1: 完了マーカー自体を先に mv してから、残りを best-effort で
+    退避する順序であること（stale status.json 等が配信されうる窓を作らない
+    ための順序保証 — 本文内でのテキスト順序を固定する）。"""
+    text = _pod_script_text()
+    markers_loop_idx = text.index("for _m in \"${_PREV_RUN_MARKERS[@]}\"; do\n    if [ -e \"$RESULTS/$_m\" ]; then\n      mv -f")
+    rest_loop_idx = text.index('for _f in "$RESULTS"/* "$RESULTS"/.[!.]*; do')
+    assert markers_loop_idx < rest_loop_idx
+
+
+def _runner_source() -> str:
+    import inspect
+
+    return inspect.getsource(runner)
+
+
+def test_runner_defines_network_errors_tuple() -> None:
+    """FIX 6-2 の回帰固定: `_request()` が retry-exhaustion 経路で実際に
+    re-raise しうる例外型一式（URLError / TimeoutError / ConnectionError）を
+    集約した module-level `NETWORK_ERRORS` が定義されていること。"""
+    assert isinstance(runner.NETWORK_ERRORS, tuple)
+    assert runner.NETWORK_ERRORS == (
+        runner.urllib.error.URLError,
+        TimeoutError,
+        ConnectionError,
+    )
+
+
+def test_runner_cmd_terminate_uses_network_errors_for_both_attempts() -> None:
+    """FIX 6-2 の回帰固定: cmd_terminate は stop 試行・DELETE 試行の両方で
+    `NETWORK_ERRORS` を参照すること（旧実装は `except urllib.error.URLError`
+    のみで、`_request` が retry 尽き後に re-raise しうる素の TimeoutError /
+    ConnectionError を素通りさせ、DELETE フォールバックに落ちなかった）。"""
+    import inspect
+
+    source = inspect.getsource(runner.cmd_terminate)
+    assert source.count("except NETWORK_ERRORS") == 2
+    # The old round-1 guard (`except urllib.error.URLError`) must no longer be
+    # an actual except clause — a mention inside an explanatory comment is
+    # fine (and present, documenting the round-2 fix), so check the specific
+    # clause form rather than bare substring containment.
+    assert "except urllib.error.URLError as exc:" not in source
+    assert "except urllib.error.URLError:" not in source
+
+
+def test_runner_pod_health_and_download_use_network_errors() -> None:
+    """FIX 6-2: cmd_fetch のポッド健全性インターリーブ（`_check_pod_not_dead`）
+    と `_download` も同じ `NETWORK_ERRORS` タプルを使うこと（フォールバック
+    目的でネットワークエラーを捕まえる call site 群の一貫性）。"""
+    import inspect
+
+    check_source = inspect.getsource(runner._check_pod_not_dead)
+    assert "except NETWORK_ERRORS as exc:" in check_source
+
+    download_source = inspect.getsource(runner._download)
+    assert "except NETWORK_ERRORS as exc:" in download_source
+
+
+def test_runner_cmd_fetch_success_gate_uses_download_result_not_bare_isfile() -> None:
+    """FIX 6-3 の回帰固定: fetch の成功ゲートは「このダウンロードで
+    probe_results.json / status.json を実際に取得できたか」
+    (`marker_downloaded_now[...]`) を見ること。同じ --out ディレクトリに
+    残っていた前回 invocation の stale ファイルが `os.path.isfile(...
+    probe_results.json)` だけで成功扱いされていた回帰の固定（安価な
+    tripwire — シミュレーションではなくソーススキャン）。"""
+    source = _runner_source()
+    assert 'probe_results_downloaded = marker_downloaded_now["probe_results.json"]' in source
+    assert 'os.path.isfile(os.path.join(out_dir, "probe_results.json"))' not in source
+    assert 'if not marker_downloaded_now["status.json"]:' in source
+
+
+def test_runner_cmd_fetch_archives_stale_markers_before_polling() -> None:
+    """FIX 6-3: fetch 開始時、out_dir に前回 invocation の status.json /
+    probe_results.json が残っていれば "<out>/prev_fetch_<timestamp>/" へ
+    退避してからポーリングに入ること（退避処理がポーリングループより前に
+    呼ばれていることをソース順序で固定する）。"""
+    source = _runner_source()
+    archive_call_idx = source.index("_archive_stale_fetch_markers(out_dir)")
+    poll_loop_idx = source.index("while time.time() < deadline:")
+    assert archive_call_idx < poll_loop_idx
+
+    import inspect
+
+    helper_source = inspect.getsource(runner._archive_stale_fetch_markers)
+    assert "prev_fetch_" in helper_source
+    assert "_FETCH_COMPLETION_MARKERS" in helper_source

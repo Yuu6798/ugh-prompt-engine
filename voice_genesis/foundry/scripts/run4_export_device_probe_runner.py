@@ -31,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 import urllib.error
@@ -58,6 +59,20 @@ POD_ENTRY_RAW_URL_TMPL = (
 REQUEST_TIMEOUT_SEC = 120
 RETRY_COUNT = 3
 RETRY_SLEEP_SEC = 5
+
+# FIX 6 (round-2 レビュー対応): `_request()` の retry-exhaustion 経路
+# （下記参照）は `urllib.error.URLError`（`HTTPError` はそのサブクラスなので
+# 包含済み）だけでなく、素の `TimeoutError` / `ConnectionError` もそのまま
+# re-raise しうる（`except (urllib.error.URLError, TimeoutError,
+# ConnectionError) as exc: ... last_exc = exc` → `raise last_exc`）。旧
+# `cmd_terminate` は `except urllib.error.URLError` のみで待ち受けており、
+# 素の `TimeoutError`/`ConnectionError` はここを素通りして DELETE フォール
+# バックへ落ちずに `cmd_terminate` ごと落ちていた（stop 失敗時に pod が
+# 削除もされず放置されうる）。`_request` が実際に re-raise しうる例外型
+# 一式をこの 1 箇所に集約し、フォールバック目的でネットワークエラーを
+# 捕まえる全 call site（`cmd_terminate` / `_check_pod_not_dead` /
+# `_download` 等）でこのタプルを使い回す。
+NETWORK_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionError)
 
 
 def _build_request(
@@ -127,7 +142,7 @@ def _request(
             print(f"| runner: {method} {url} -> HTTP {exc.code}", file=sys.stderr)
             print(f"| runner: response body (verbatim):\n{body_text}", file=sys.stderr)
             raise
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        except NETWORK_ERRORS as exc:
             last_exc = exc
             print(f"| runner: {method} {url} attempt={attempt} network error: {exc}", file=sys.stderr)
             if attempt < attempts:
@@ -199,7 +214,7 @@ def _check_raw_url_reachable(url: str) -> None:
         except urllib.error.HTTPError as exc:
             last_status = exc.code
             print(f"| runner: pre-flight check: {method} {url} -> HTTP {exc.code}", file=sys.stderr)
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        except NETWORK_ERRORS as exc:
             print(f"| runner: pre-flight check: {method} {url} network error: {exc}", file=sys.stderr)
     print(
         f"| runner: ABORT — pod entry script URL did not return HTTP 200 "
@@ -271,18 +286,21 @@ def cmd_terminate(args: argparse.Namespace) -> None:
         result = _request("POST", f"/pods/{args.pod}/stop")
         print("| runner: stop result:")
         print(json.dumps(result, indent=2, ensure_ascii=False))
-    except urllib.error.URLError as exc:
-        # FIX 3: urllib.error.URLError is the parent class of HTTPError, so this
-        # also catches network-level failures (connection refused, DNS, timeout)
-        # that the previous `except HTTPError` missed — those used to propagate
-        # straight out of cmd_terminate, skipping the DELETE fallback below.
+    except NETWORK_ERRORS as exc:
+        # FIX 3 / FIX 6: NETWORK_ERRORS covers everything `_request()` can
+        # re-raise — urllib.error.URLError (parent class of HTTPError, so 4xx/5xx
+        # after the immediate non-retry raise is included too) as well as the
+        # bare TimeoutError/ConnectionError it can re-raise after exhausting
+        # retries. `except urllib.error.URLError` alone (round-1 FIX 3) missed
+        # those bare types — they used to propagate straight out of
+        # cmd_terminate, skipping the DELETE fallback below entirely.
         detail = f"HTTP {exc.code}" if isinstance(exc, urllib.error.HTTPError) else str(exc)
         print(f"| runner: POST /stop failed ({detail}), trying DELETE /pods/{args.pod}", file=sys.stderr)
     try:
         result = _request("DELETE", f"/pods/{args.pod}")
         print("| runner: delete result:")
         print(json.dumps(result, indent=2, ensure_ascii=False))
-    except urllib.error.URLError:
+    except NETWORK_ERRORS:
         print("| runner: DELETE also failed — see body above. Pod may need manual termination.", file=sys.stderr)
         raise
 
@@ -317,7 +335,7 @@ def _download(url: str, dest: str) -> bool:
         except urllib.error.HTTPError as exc:
             print(f"| runner: fetch {url} -> HTTP {exc.code}", file=sys.stderr)
             return False
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        except NETWORK_ERRORS as exc:
             last_exc = exc
             print(f"| runner: fetch {url} attempt={attempt} network error: {exc}", file=sys.stderr)
             if attempt < RETRY_COUNT:
@@ -365,7 +383,7 @@ def _check_pod_not_dead(pod_id: str) -> None:
             file=sys.stderr,
         )
         return
-    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+    except NETWORK_ERRORS as exc:
         print(f"| runner: pod health check network error (non-fatal — continuing to poll): {exc}", file=sys.stderr)
         return
 
@@ -395,15 +413,48 @@ def _poll_once(url: str) -> Optional[str]:
                 return resp.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError:
         pass
-    except (urllib.error.URLError, TimeoutError, ConnectionError):
+    except NETWORK_ERRORS:
         pass
     return None
+
+
+# FIX 6 (round-2 レビュー対応): cmd_fetch の成功判定は「このダウンロードで
+# status.json/probe_results.json を取得できたか」を見る（stale ファイル
+# 混入を許さない）ため、この 2 つを固定リストとして名指しする。
+_FETCH_COMPLETION_MARKERS = ("status.json", "probe_results.json")
+
+
+def _archive_stale_fetch_markers(out_dir: str) -> None:
+    """cmd_fetch のポーリング開始前に呼ぶ。`out_dir`（同一 `--out` を使った
+    前回 invocation の置き土産）に status.json / probe_results.json が既に
+    存在するなら "<out>/prev_fetch_<UTC timestamp>/" へ退避してからログする
+    ——今回 invocation が失敗して診断用に残す status.json/probe_results.json
+    が前回分と紛れないようにする（今回ダウンロードが 1 つも起きなくても
+    out_dir 直下は今回分だけになる）。"""
+    stale = [
+        name for name in _FETCH_COMPLETION_MARKERS
+        if os.path.isfile(os.path.join(out_dir, name))
+    ]
+    if not stale:
+        return
+    ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    archive_dir = os.path.join(out_dir, f"prev_fetch_{ts}")
+    os.makedirs(archive_dir, exist_ok=True)
+    for name in stale:
+        shutil.move(os.path.join(out_dir, name), os.path.join(archive_dir, name))
+    print(
+        f"| runner: found stale marker(s) from a previous fetch invocation in "
+        f"{out_dir} ({stale}) — archived into {archive_dir} so this invocation's "
+        "download-success gate and any failure diagnostics are unambiguously "
+        "from this run"
+    )
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
     base = f"https://{args.pod}-8000.proxy.runpod.net"
     out_dir = args.out or os.environ.get("CLAUDE_SCRATCHPAD_DIR") or "./probe_out"
     os.makedirs(out_dir, exist_ok=True)
+    _archive_stale_fetch_markers(out_dir)
 
     print(
         f"| runner: polling {base}/heartbeat.txt (channel-up probe, printed once) "
@@ -509,10 +560,20 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             file=sys.stderr,
         )
 
+    # FIX 6: track *this invocation's* _download() outcome for the completion
+    # markers specifically — the success gate below must require
+    # download-succeeded-now, not merely file-exists (a stale file left over
+    # from a previous invocation in the same --out dir used to pass the old
+    # `os.path.isfile(...)` gate even though nothing was downloaded this run).
+    marker_downloaded_now: Dict[str, bool] = {name: False for name in _FETCH_COMPLETION_MARKERS}
+
     ok_count = 0
     for name in top_level_files:
-        if _download(f"{base}/{name}", os.path.join(out_dir, name)):
+        downloaded = _download(f"{base}/{name}", os.path.join(out_dir, name))
+        if downloaded:
             ok_count += 1
+        if name in marker_downloaded_now:
+            marker_downloaded_now[name] = downloaded
 
     # g1/ 配下は index listing を href scrape して列挙する（内容は run 依存で
     # 固定できないため）。
@@ -536,6 +597,22 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     # status.json の中身を見ずに exit 0 していた旧実装は probe 失敗（status!=ok）
     # や probe_results.json 欠落でも「fetch complete」と成功終了していた。
     # exit 0 は「status=ok AND probe_results.json 回収済み」の場合のみに限定する。
+    #
+    # FIX 6 (round-2 レビュー対応): 旧ゲートは `os.path.isfile(...
+    # probe_results.json)` — 同じ --out ディレクトリに残っていた前回
+    # invocation の stale ファイルでも true になってしまっていた
+    # （`_archive_stale_fetch_markers` で入口では退避済みだが、二重の保険と
+    # して）。ゲートは必ず「このダウンロードで実際に成功したか」
+    # （`marker_downloaded_now`）を見る。
+    if not marker_downloaded_now["status.json"]:
+        print(
+            "| runner: *** PROBE FETCH FAILED *** status.json was not "
+            "downloaded by this invocation (missing/stale) — treating as "
+            "failure.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
     status_path = os.path.join(out_dir, "status.json")
     try:
         with open(status_path, encoding="utf-8") as fh:
@@ -549,7 +626,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         raise SystemExit(2)
 
     status_value = status_payload.get("status")
-    probe_results_downloaded = os.path.isfile(os.path.join(out_dir, "probe_results.json"))
+    probe_results_downloaded = marker_downloaded_now["probe_results.json"]
 
     if status_value != "ok":
         detail_tail = status_payload.get("detail_tail", "")
