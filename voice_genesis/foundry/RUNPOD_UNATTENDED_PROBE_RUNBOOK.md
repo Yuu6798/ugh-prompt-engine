@@ -87,8 +87,16 @@ export-device probe・4 起動 計 ≈ $0.38。動く実例 =
 
 ## 4. fail-closed 測定規律
 
-- 全素材（ckpt・config・canon・vocoder・スクリプト blob・repo revision）を
-  埋め込み pin と sha256 照合し、1 件でも不一致なら**測定せず** self-stop
+- 全素材（ckpt・config・canon・vocoder・repo checkout 側の消費スクリプト
+  blob・DiffSinger revision）を埋め込み pin と sha256 照合し、1 件でも
+  不一致なら**測定せず** self-stop。**被覆の境界**: entry script 自体は
+  この pin 照合の対象外で、バイト検証なしに実行される — その不変性は
+  raw.githubusercontent.com を**不変な full 40-hex commit sha** で fetch する
+  運用にのみ依存する。したがって `--script-commit` に branch/tag を渡すことは
+  禁止（可変 ref だと preflight と pod 側で異なるバイトが走り得る）。
+  runner は現状この形式を機械検証しない（残余）— 次回改修で
+  `^[0-9a-f]{40}$` 検証、あわせて entry script の sha256 を起動側で照合する
+  方式への強化が正
 - GPU 前提の測定は `torch.cuda.is_available()` を明示ゲートし、偽なら
   **CPU へ黙ってフォールバックせず停止**（測定条件の静かな変質の防止）
 - runner の fetch は status.json の `status` を解析し、`failed` なら診断を
