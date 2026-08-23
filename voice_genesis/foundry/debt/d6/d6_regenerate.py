@@ -802,15 +802,11 @@ def _validate_regenerated_provenance(
     if mismatches:
         raise RegenerationError(f"Phase B: regenerated D4 provenance mismatch: {mismatches}")
     runtime_stack = regenerated.get("runtime_stack")
-    if not isinstance(runtime_stack, dict) or set(runtime_stack) != _D4_RUNTIME_STACK_KEYS:
-        raise RegenerationError("Phase B: regenerated D4 runtime_stack が固定語彙でない")
-    for package, version in runtime_stack.items():
-        if package == "onnxruntime" and version is None:
-            continue
-        if not isinstance(version, str) or not version:
-            raise RegenerationError(
-                f"Phase B: regenerated D4 runtime_stack.{package} が未記帳"
-            )
+    if runtime_stack != expected_render_runtime:
+        raise RegenerationError(
+            "Phase B: regenerated D4 measurement runtime_stack が"
+            "common_fixed.execution_profile.value と不一致"
+        )
 
     expected_group_ids = {f"{generation}_{speaker}" for generation, speaker in GROUPS}
     supplied = {
@@ -1152,6 +1148,30 @@ def _validate_synthetic_reconciliation(
     return {"n_compared": 13, "n_matches": 13, "n_mismatches": 0}
 
 
+def _historical_source_from_real_render_baseline(baseline: Any) -> dict[str, str]:
+    """real-render正本が実際に消費した履歴実装digestを取り出す。"""
+    render_path = baseline.get("render_path") if isinstance(baseline, dict) else None
+    aux = render_path.get("aux_sha256") if isinstance(render_path, dict) else None
+    if not isinstance(aux, dict):
+        raise RegenerationError("Phase B report: real-render baseline aux_sha256 が不正")
+    expected = {
+        "git_commit": REAL_RENDER_HISTORICAL_COMMIT,
+        "gate_synth_sha256": aux.get("gate_synth_py"),
+        "s7_calib_render_sha256": aux.get("s7_calib_render_py"),
+        "s7_calib_score_sha256": aux.get("s7_calib_score_py"),
+    }
+    if any(
+        not _is_lower_hex(expected[key], 64)
+        for key in (
+            "gate_synth_sha256",
+            "s7_calib_render_sha256",
+            "s7_calib_score_sha256",
+        )
+    ):
+        raise RegenerationError("Phase B report: real-render baseline historical digest が不正")
+    return expected
+
+
 def _validate_committed_real_render_recovery(
     recovery: Any, *, report_root: Path, execution_commit: Any, reconciliation_value: Any
 ) -> None:
@@ -1175,26 +1195,20 @@ def _validate_committed_real_render_recovery(
         != "external operator-supplied artifact; path intentionally not persisted"
     ):
         raise RegenerationError("Phase B report: real-render recovered asset が不正")
-    historical = recovery.get("historical_source")
-    if (
-        not isinstance(historical, dict)
-        or historical.get("git_commit") != REAL_RENDER_HISTORICAL_COMMIT
-        or any(
-            not _is_lower_hex(historical.get(key), 64)
-            for key in (
-                "gate_synth_sha256",
-                "s7_calib_render_sha256",
-                "s7_calib_score_sha256",
-            )
-        )
-    ):
-        raise RegenerationError("Phase B report: real-render historical source が不正")
     baseline_path = Path(
         "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json"
     )
-    baseline_sha = hashlib.sha256(
-        (Path(report_root).resolve() / baseline_path).read_bytes()
-    ).hexdigest()
+    baseline_bytes = (Path(report_root).resolve() / baseline_path).read_bytes()
+    baseline_sha = hashlib.sha256(baseline_bytes).hexdigest()
+    try:
+        baseline = json.loads(baseline_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RegenerationError("Phase B report: real-render baseline がJSONでない") from exc
+    expected_historical = _historical_source_from_real_render_baseline(baseline)
+    if recovery.get("historical_source") != expected_historical:
+        raise RegenerationError(
+            "Phase B report: real-render historical source がbaseline aux_sha256と不一致"
+        )
     value = recovery.get("value")
     calibration = (reconciliation_value or {}).get("calibration", {}).get(
         "real_render", {}
@@ -1508,6 +1522,7 @@ def compose_phase_b_reconciliation(
     calibration_pins_bytes = CALIBRATION_PINS.read_bytes()
     calibration_pins_sha = hashlib.sha256(calibration_pins_bytes).hexdigest()
     real_render_baseline_bytes = REAL_RENDER_BASELINE.read_bytes()
+    real_render_baseline = json.loads(real_render_baseline_bytes)
     real_render_baseline_sha = hashlib.sha256(real_render_baseline_bytes).hexdigest()
     synthetic_bytes = Path(synthetic_report_path).read_bytes()
     synthetic_sha = hashlib.sha256(synthetic_bytes).hexdigest()
@@ -1523,7 +1538,7 @@ def compose_phase_b_reconciliation(
     real_render_manifest_bytes = Path(real_render_manifest_path).read_bytes()
     real_render_manifest_sha = hashlib.sha256(real_render_manifest_bytes).hexdigest()
     real_value = _reconcile_real_render_data(
-        json.loads(real_render_baseline_bytes), json.loads(real_render_manifest_bytes)
+        real_render_baseline, json.loads(real_render_manifest_bytes)
     )
     if (
         real_render.get("schema") != "vg-d6-real-render-calibration-reconciliation/0.1"
@@ -1572,6 +1587,13 @@ def compose_phase_b_reconciliation(
         },
     }
     recovery = fixed_probe_pins["calibration_set"]["real_render_recovery"]
+    expected_historical = _historical_source_from_real_render_baseline(
+        real_render_baseline
+    )
+    if recovery.get("historical_source") != expected_historical:
+        raise RegenerationError(
+            "Phase B: fixed probe historical source がreal-render baselineと不一致"
+        )
     recovery["status"] = "RECOVERED_AND_RECONCILED"
     recovery["required_asset"]["source"] = (
         "external operator-supplied artifact; path intentionally not persisted"

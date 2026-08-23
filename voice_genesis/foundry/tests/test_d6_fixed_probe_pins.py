@@ -558,13 +558,7 @@ def _bind_regenerated_to_current_render_evidence(
             "instrument_sha256": d4_spec["pins"]["instrument_sha256"],
             "candidate_ids": baseline["candidate_ids"],
             "analysis_stack": baseline["analysis_stack"],
-            "runtime_stack": {
-                "python": "3.11.15",
-                "numpy": "2.4.6",
-                "onnxruntime": None,
-                "soundfile": "0.14.0",
-                "PyYAML": "6.0.1",
-            },
+            "runtime_stack": _expected_render_runtime(),
             "n_groups": 10,
             "n_total_cells": 360,
             "n_total_measured": 360,
@@ -706,6 +700,27 @@ def test_render_docs_must_match_the_pinned_execution_profile(tmp_path: Path) -> 
     current["groups"][group_id]["render_runtime_stack"] = doc["runtime_stack"]
     d4_spec_bytes = d6_regenerate.D4_SPEC.read_bytes()
     with pytest.raises(d6_regenerate.RegenerationError, match="execution_profile"):
+        d6_regenerate._validate_regenerated_provenance(
+            current,
+            baseline=baseline,
+            d4_spec=json.loads(d4_spec_bytes),
+            d4_spec_sha=hashlib.sha256(d4_spec_bytes).hexdigest(),
+            rendered_groups=rendered_groups,
+            expected_render_runtime=_expected_render_runtime(),
+        )
+
+
+def test_measurement_runtime_must_match_the_pinned_execution_profile(
+    tmp_path: Path,
+) -> None:
+    baseline = json.loads(d6_regenerate.D4_BASELINE.read_text(encoding="utf-8"))
+    current = json.loads(json.dumps(baseline))
+    _current_path, rendered_groups = _bind_regenerated_to_current_render_evidence(
+        tmp_path, current
+    )
+    current["runtime_stack"]["onnxruntime"] = None
+    d4_spec_bytes = d6_regenerate.D4_SPEC.read_bytes()
+    with pytest.raises(d6_regenerate.RegenerationError, match="measurement runtime_stack"):
         d6_regenerate._validate_regenerated_provenance(
             current,
             baseline=baseline,
@@ -1000,6 +1015,14 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
     ] = tampered_real_sha
     assert_rebound_report_rejected(real_report)
     packaged_real_path.write_bytes(real_bytes)
+    report_path.write_bytes(report_bytes)
+
+    # 64桁のdigestでも、real-render正本が記帳した履歴実装と違えば拒否する。
+    historical_report = json.loads(report_bytes)
+    historical_report["real_render_recovery"]["historical_source"][
+        "gate_synth_sha256"
+    ] = "0" * 64
+    assert_rebound_report_rejected(historical_report)
     report_path.write_bytes(report_bytes)
 
     absolute_ref_report = json.loads(report_bytes)
