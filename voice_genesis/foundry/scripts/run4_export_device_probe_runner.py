@@ -29,6 +29,7 @@ RunPod REST v1 のフィールド名（`dockerStartCmd` 等）は API 版で揺�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -345,6 +346,66 @@ def _download(url: str, dest: str) -> bool:
     return False
 
 
+def _sha256_file(path: str) -> str:
+    """ダウンロード済みファイルの sha256 をチャンク読みで計算する（FIX 7:
+    probe_results.json 記録値との照合用 — 巨大な acoustic.onnx を一括
+    read せず 1MiB チャンクでストリーム計算する）。"""
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _parse_g1_wav_key(name: str) -> Optional[str]:
+    """`gate_<song>_<speaker>.wav`（gate_synth.py の out_name 規約
+    `gate_{song}{_speaker}.wav`）から probe_results.json 側の wav sha256
+    キー形式 `<speaker>_<song>`（song/speaker の順序が入れ替わる）を組み立て
+    る（FIX 7）。命名規約に一致しない名前（`gate_synth_summary_*.json` 等、
+    sha ゲート対象外のファイル）は None を返す。"""
+    if not (name.startswith("gate_") and name.endswith(".wav")):
+        return None
+    stem = name[len("gate_"):-len(".wav")]
+    parts = stem.split("_")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    song, speaker = parts
+    return f"{speaker}_{song}"
+
+
+def _extract_g1_expected_sha256(probe_results: Dict[str, Any]) -> Dict[str, Any]:
+    """probe_results.json の g1 アーム記録から acoustic.onnx / gate wav の
+    期待 sha256 を防御的に取り出す（FIX 7）。スキーマは 2 系統ありうる:
+    生の pod 出力 = `arms.g1.{onnx_sha256, wavs.<speaker>_<song>.sha256}`、
+    アーカイブされた要約 = `arms.g1_gpu_export_full.{onnx_sha256,
+    wav_sha256.<speaker>_<song>}`。どちらでも拾えるよう両方を試し、layout が
+    どちらとも異なる場合は空/None を返す（呼び出し側は比較を skip する）。"""
+    empty: Dict[str, Any] = {"onnx_sha256": None, "wav_sha256": {}}
+    arms = probe_results.get("arms")
+    if not isinstance(arms, dict):
+        return empty
+
+    g1_summary = arms.get("g1_gpu_export_full")
+    if isinstance(g1_summary, dict):
+        wav_sha256 = g1_summary.get("wav_sha256")
+        return {
+            "onnx_sha256": g1_summary.get("onnx_sha256"),
+            "wav_sha256": wav_sha256 if isinstance(wav_sha256, dict) else {},
+        }
+
+    g1_raw = arms.get("g1")
+    if isinstance(g1_raw, dict):
+        wavs = g1_raw.get("wavs")
+        wav_sha256 = {}
+        if isinstance(wavs, dict):
+            for key, value in wavs.items():
+                if isinstance(value, dict) and isinstance(value.get("sha256"), str):
+                    wav_sha256[key] = value["sha256"]
+        return {"onnx_sha256": g1_raw.get("onnx_sha256"), "wav_sha256": wav_sha256}
+
+    return empty
+
+
 _DEAD_STATUS_VALUES = {"exited", "terminated", "stopped", "dead", "failed"}
 
 
@@ -577,6 +638,14 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
     # g1/ 配下は index listing を href scrape して列挙する（内容は run 依存で
     # 固定できないため）。
+    # FIX 7: 旧実装は _download() の戻り値を破棄していた — listing 自体は
+    # 成功しても、列挙された個々のバイナリ（acoustic.onnx / gate_*.wav 等）が
+    # リトライを使い切って失敗しても fetch は気づかず、2 つの JSON マーカー
+    # さえ届けば exit 0 していた（列挙された G1 成果物の欠落を偽成功にする
+    # 経路）。列挙した各ファイル名と `_download()` の結果を
+    # `g1_download_ok` に記録し、末尾のゲートで「今回 invocation で列挙され
+    # た g1 ファイルが 1 つでも取得できなかったら失敗」として扱う。
+    g1_download_ok: Dict[str, bool] = {}
     g1_index_url = f"{base}/g1/"
     req = _build_request(g1_index_url, method="GET")
     try:
@@ -587,7 +656,9 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         g1_names = [h for h in parser.hrefs if h not in ("../", "./") and not h.endswith("/")]
         print(f"| runner: g1/ listing: {g1_names}")
         for name in g1_names:
-            _download(f"{g1_index_url}{name}", os.path.join(out_dir, "g1", name))
+            g1_download_ok[name] = _download(
+                f"{g1_index_url}{name}", os.path.join(out_dir, "g1", name)
+            )
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ConnectionError) as exc:
         print(f"| runner: could not list {g1_index_url}: {exc}", file=sys.stderr)
 
@@ -641,6 +712,75 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         print(
             "| runner: *** PROBE FETCH FAILED *** status=ok but probe_results.json "
             "was not downloaded — result set incomplete.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    # FIX 7: g1/ ゲート（download-succeeded-now + sha256 一致）。best-effort の
+    # 診断・回収は上ですべて終わらせた後、既存の status/marker ゲートに続けて
+    # 末尾でまとめて判定する。
+    g1_failed = sorted(name for name, ok in g1_download_ok.items() if not ok)
+    if g1_failed:
+        print(
+            "| runner: *** PROBE FETCH FAILED *** g1/ artifact(s) listed by "
+            f"{g1_index_url} failed to download in this invocation: {g1_failed}",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    probe_results_path = os.path.join(out_dir, "probe_results.json")
+    try:
+        with open(probe_results_path, encoding="utf-8") as fh:
+            probe_results_payload = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"| runner: *** PROBE FETCH FAILED *** could not parse downloaded "
+            f"probe_results.json ({exc}) — cannot verify g1/ sha256.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    g1_expected = _extract_g1_expected_sha256(probe_results_payload)
+    sha_mismatches: List[str] = []
+
+    expected_onnx_sha = g1_expected["onnx_sha256"]
+    onnx_path = os.path.join(out_dir, "g1", "acoustic.onnx")
+    if isinstance(expected_onnx_sha, str) and expected_onnx_sha and os.path.isfile(onnx_path):
+        actual_onnx_sha = _sha256_file(onnx_path)
+        if actual_onnx_sha != expected_onnx_sha:
+            sha_mismatches.append(
+                f"g1/acoustic.onnx: downloaded={actual_onnx_sha} recorded={expected_onnx_sha}"
+            )
+            print(
+                f"| runner: *** SHA256 MISMATCH *** g1/acoustic.onnx downloaded="
+                f"{actual_onnx_sha} recorded(probe_results.json)={expected_onnx_sha}",
+                file=sys.stderr,
+            )
+
+    expected_wav_sha256 = g1_expected["wav_sha256"]
+    for name in sorted(g1_download_ok):
+        key = _parse_g1_wav_key(name)
+        if key is None:
+            continue  # gate_synth_summary_*.json 等 — マップされていないので sha ゲート対象外
+        expected_wav_sha = expected_wav_sha256.get(key)
+        if not isinstance(expected_wav_sha, str) or not expected_wav_sha:
+            continue  # probe_results.json 側に対応する記録値が無い
+        wav_path = os.path.join(out_dir, "g1", name)
+        if not os.path.isfile(wav_path):
+            continue  # 既に g1_failed ゲートで捕捉済みのはず — 二重報告しない
+        actual_wav_sha = _sha256_file(wav_path)
+        if actual_wav_sha != expected_wav_sha:
+            sha_mismatches.append(f"g1/{name}: downloaded={actual_wav_sha} recorded={expected_wav_sha}")
+            print(
+                f"| runner: *** SHA256 MISMATCH *** g1/{name} downloaded={actual_wav_sha} "
+                f"recorded(probe_results.json)={expected_wav_sha}",
+                file=sys.stderr,
+            )
+
+    if sha_mismatches:
+        print(
+            "| runner: *** PROBE FETCH FAILED *** g1/ artifact sha256 mismatch against "
+            f"probe_results.json: {sha_mismatches}",
             file=sys.stderr,
         )
         raise SystemExit(2)

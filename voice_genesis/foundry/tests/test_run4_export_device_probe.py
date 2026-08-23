@@ -610,3 +610,88 @@ def test_runner_cmd_fetch_archives_stale_markers_before_polling() -> None:
     helper_source = inspect.getsource(runner._archive_stale_fetch_markers)
     assert "prev_fetch_" in helper_source
     assert "_FETCH_COMPLETION_MARKERS" in helper_source
+
+
+# --- (f) FIX 7: g1/ ダウンロード結果が success gate に配線されていること ---
+
+
+def test_runner_cmd_fetch_captures_g1_download_result() -> None:
+    """FIX 7 の回帰固定: 旧実装は g1/ ループ内の `_download()` 戻り値を破棄
+    していた — listing 自体が成功しても、列挙された個々のバイナリ
+    （acoustic.onnx / gate_*.wav）がリトライを使い切って失敗すると、fetch は
+    それに気づかず 2 つの JSON マーカーが届くだけで exit 0 していた
+    （安価な tripwire — シミュレーションではなくソーススキャン）。"""
+    import inspect
+
+    source = _runner_source()
+    fetch_source = inspect.getsource(runner.cmd_fetch)
+
+    # 列挙した g1 ファイルごとに _download() の戻り値を捨てずに記録している。
+    assert "g1_download_ok[name] = _download(" in fetch_source
+    assert "for name, ok in g1_download_ok.items()" in fetch_source
+
+    # success gate（末尾）は g1_download_ok を参照して失敗させる。
+    assert "g1_failed = sorted(name for name, ok in g1_download_ok.items() if not ok)" in source
+    assert "if g1_failed:" in source
+    gate_idx = source.index("if g1_failed:")
+    raise_idx = source.index("raise SystemExit(2)", gate_idx)
+    assert gate_idx < raise_idx
+
+    # sha256 の再計算・照合も success gate に配線されていること（listing は
+    # 成功してダウンロードも成功したが中身が破損/差し替わっているケースを
+    # 「今回ダウンロード成功」だけでは検出できないため）。
+    assert "_sha256_file(onnx_path)" in source
+    assert "_sha256_file(wav_path)" in source
+    assert "_extract_g1_expected_sha256(probe_results_payload)" in source
+    assert "sha_mismatches" in source
+
+
+def test_runner_g1_wav_key_mapping_swaps_song_and_speaker() -> None:
+    """FIX 7: g1/ の wav ファイル名は `gate_<song>_<speaker>.wav`
+    （gate_synth.py の out_name 規約）だが、probe_results.json 側の
+    wav sha256 キーは `<speaker>_<song>`（順序が入れ替わる）。この対応が
+    ずれると sha ゲートが常に不一致扱いになる（誤検知）か、常に
+    比較対象なしでスキップされる（サイレントに無検査化する）ため、
+    代表的な組み合わせで固定する。"""
+    assert runner._parse_g1_wav_key("gate_sakura_ritsu.wav") == "ritsu_sakura"
+    assert runner._parse_g1_wav_key("gate_umi_pjs.wav") == "pjs_umi"
+    # マップ対象外のファイル（summary JSON 等）は None — sha ゲート対象外。
+    assert runner._parse_g1_wav_key("gate_synth_summary_ritsu.json") is None
+    assert runner._parse_g1_wav_key("acoustic.onnx") is None
+
+
+def test_runner_extract_g1_expected_sha256_handles_both_schemas() -> None:
+    """FIX 7: probe_results.json の g1 アーム記録は生の pod 出力
+    (`arms.g1.{onnx_sha256, wavs.<key>.sha256}`) とアーカイブされた要約
+    (`arms.g1_gpu_export_full.{onnx_sha256, wav_sha256.<key>}`) の 2 系統が
+    ありうる（`docs/` 実例参照）。どちらの layout でも防御的に拾えること。"""
+    raw_schema = {
+        "arms": {
+            "g1": {
+                "onnx_sha256": "aaa",
+                "wavs": {"ritsu_sakura": {"sha256": "bbb"}},
+            }
+        }
+    }
+    archived_schema = {
+        "arms": {
+            "g1_gpu_export_full": {
+                "onnx_sha256": "ccc",
+                "wav_sha256": {"ritsu_sakura": "ddd"},
+            }
+        }
+    }
+    unknown_schema = {"arms": {"something_else": {}}}
+
+    assert runner._extract_g1_expected_sha256(raw_schema) == {
+        "onnx_sha256": "aaa",
+        "wav_sha256": {"ritsu_sakura": "bbb"},
+    }
+    assert runner._extract_g1_expected_sha256(archived_schema) == {
+        "onnx_sha256": "ccc",
+        "wav_sha256": {"ritsu_sakura": "ddd"},
+    }
+    assert runner._extract_g1_expected_sha256(unknown_schema) == {
+        "onnx_sha256": None,
+        "wav_sha256": {},
+    }
