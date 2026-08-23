@@ -1,6 +1,6 @@
 {
   "schema": "voicegenesis-run4-provenance-closure/0.1",
-  "acceptance": "本記録は run4_anchor_provenance.json（転記のみ・無改変。本ファイルは1バイトも変更していない。sha256=bfde34b3cf3d87898820f21b082efadaa96534b60cdf99698ca938b15fc2f188）の missing/not_established 10 件に対する 2026-08-23 実測の結果。一致・不一致・実行不能のいずれも正直に記録する。再 export 値は当時バイトとの同一性が WAV 再生成一致で裏付けられた場合のみ closure: reproduced とし、それ以外は closure: measured_only（実測はしたが当時バイトとの同一性は未確立）/ closure: not_closable（実測材料そのものが入手不能）とする。",
+  "acceptance": "本記録は run4_anchor_provenance.json（転記のみ・無改変。本ファイルは1バイトも変更していない。sha256=bfde34b3cf3d87898820f21b082efadaa96534b60cdf99698ca938b15fc2f188）の missing/not_established 10 件に対する 2026-08-23 実測の結果。一致・不一致・実行不能のいずれも正直に記録する。再 export 値は当時バイトとの同一性が WAV 再生成一致で裏付けられた場合のみ closure: reproduced とし、それ以外は closure: measured_only（実測はしたが当時バイトとの同一性は未確立）/ closure: not_closable（実測材料そのものが入手不能）とする。 2026-08-23 内に Fable の判読指摘を受け Phase 4（環境契約再試行）を追加実測し、phase4_env_contract_retest 節へ追記した（既存の Phase 0-3 の記録は無改変・追記のみ）。",
   "executed_at_utc": "2026-08-23",
   "executed_by": "Claude Sonnet 5 sub-agent（実測・実行・検証。設計判断は Fable 側）",
   "source_repo": {
@@ -44,7 +44,7 @@
       "value": "a6da561a66ece62d64d4a0635a5ef525c2b6143eb311c1a7e1d595d9abd3a676",
       "method": "run4 の 40K checkpoint（sha256=3921f96ac19a9cf5bc8ab246a147cf778044cf5949dd24cd87246f24e52c76ec、run4_anchor_provenance.json 既存 pin と一致・/home/user/run4work で sha256sum -c 実測済み）+ config.yaml/spk_map.json/lang_map.json/dictionary-ja.txt（Phase 0 で取得・sha256 記載）を入力に、gate_synth_run4.py（pin commit cda36b9f）run --diffsinger-repo .../DiffSinger(e2307b1) --ckpt-dir <bundle> --exp-name s3_run4_acoustic --step 40000 --canon-model-dir ... --vocoder-dir ... --out-dir ... --song sakura,umi --speaker ritsu を実行して acoustic.onnx を再 export した。同一手順をローカルで2回実行し sha256 が完全一致（a6da561a...）することを確認済み = 本セッション内では決定論的。",
       "source": "本セッション実測（2026-08-23）。/home/user/run4_provwork/gate40k_run4/onnx_gate_40000/acoustic.onnx",
-      "note": "当時バイトとの同一性は未確立（WAV 再生成が run4 側 6/6 とも記録済み sha256 と不一致だったため — 詳細は wav_regeneration 節）。すなわちこの値は『2026-08-23 にこの環境で再現した export 手順の出力』であり、run4 実行当時に生成された acoustic.onnx と同一バイトである保証はない。"
+      "note": "当時バイトとの同一性は未確立（WAV 再生成が run4 側 6/6 とも記録済み sha256 と不一致だったため — 詳細は wav_regeneration 節）。すなわちこの値は『2026-08-23 にこの環境で再現した export 手順の出力』であり、run4 実行当時に生成された acoustic.onnx と同一バイトである保証はない。 2026-08-23 Phase4 追試: run4環境契約（NPY_DISABLE_CPU_FEATURES相当=AVX512無効化）を満たした状態でも6/6ともrecorded sha256と不一致（詳細はphase4_env_contract_retest節）。SIMD状態はWAVバイトに実測で影響する（サンプル約11%・±1-6LSB）ことを確認したが、run4当時バイトの再現には至らなかった。value（a6da561a...）は変わらず——export自体はSIMD状態に非依存であることも本追試で判明。closureはmeasured_onlyのまま据え置く。"
     },
     {
       "ref": "acoustic_onnx.run3_onnx_export41.sha256",
@@ -71,7 +71,7 @@
       "value": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
       "method": "provision.sh（voice_genesis/foundry/run8/provision.sh）の ASSETS 表 canon_zip の URL（https://www.canon-voice.com/voice/NamineRitsu_DiffSinger.zip）から取得し sha256sum で算出。provision.sh 記載の pin 値と完全一致（この pin 自体は既存資産・本実測が新規に作った値ではない）。",
       "source": "voice_genesis/foundry/run8/provision.sh ASSETS 表 canon_zip 行。取得実体は /home/user/run4_provwork/materials/NamineRitsu_DiffSinger.zip",
-      "note": "判断根拠（zip全体 vs 内部ファイル）: run4_anchor_provenance.json の canon_model.namine_ritsu_diffsinger.artifact は『NamineRitsu_DiffSinger（--canon-model-dir）』というディレクトリ全体を指す。gate_synth.py を読解すると --canon-model-dir から実際に消費されるのは 5 ファイル（linguistic.onnx / dsdur/dur.onnx / dspitch/pitch.onnx / phonemes.txt / dsconfig.yaml）で、zip 同梱の acoustic.onnx はこのレシピでは未使用（acoustic はチェックポイントから別途 export される run4 独自のモデルであり、canon 側 acoustic.onnx とは無関係）。したがって sha256 フィールドの最も自然な対応先は『配布 zip 全体』（provision.sh が pin 済みの単位でもある）と判断し、これを主値として記録した。5 消費ファイル個別の sha256 は materials 節に別途記載し、両方を追跡可能にした（本文書 acceptance 節の指示どおり両方記録）。"
+      "note": "判断根拠（zip全体 vs 内部ファイル）: run4_anchor_provenance.json の canon_model.namine_ritsu_diffsinger.artifact は『NamineRitsu_DiffSinger（--canon-model-dir）』というディレクトリ全体を指す。gate_synth.py を読解すると --canon-model-dir から実際に消費されるのは 5 ファイル（linguistic.onnx / dsdur/dur.onnx / dspitch/pitch.onnx / phonemes.txt / dsconfig.yaml）で、zip 同梱の acoustic.onnx はこのレシピでは未使用（acoustic はチェックポイントから別途 export される run4 独自のモデルであり、canon 側 acoustic.onnx とは無関係）。したがって sha256 フィールドの最も自然な対応先は『配布 zip 全体』（provision.sh が pin 済みの単位でもある）と判断し、これを主値として記録した。5 消費ファイル個別の sha256 は materials 節に別途記載し、両方を追跡可能にした（本文書 acceptance 節の指示どおり両方記録）。 2026-08-23 Phase4: WAV再生成がSIMD契約充足後も0/6のままだったため、本値は producer chain 全体の『機能的裏付け』を得られていない。canon zip自体の取得元一致（provision.sh pinとの一致）という意味でのmeasured_onlyは変わらず維持する。"
     },
     {
       "ref": "vocoder.vocoder_onnx.sha256",
@@ -80,7 +80,7 @@
       "value": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
       "method": "provision.sh ASSETS 表 vocoder_oudep の URL（https://github.com/xunmengshe/OpenUtau/releases/download/0.0.0.0/nsf_hifigan.oudep）から取得・展開し、gate_synth.py が --vocoder-dir から直接読む nsf_hifigan.onnx（曖昧性なし・単一ファイル）の sha256 を算出。provision.sh 内の VOC_WANT pin と完全一致。",
       "source": "voice_genesis/foundry/run8/provision.sh ASSETS 表 vocoder_oudep 行 + 展開後照合ブロック（VOC_WANT）。取得実体は /home/user/run4_provwork/materials/vocoder_onnx/nsf_hifigan.onnx",
-      "note": "canon と異なり --vocoder-dir の消費先はファイル1本のみなので曖昧性は無い。"
+      "note": "canon と異なり --vocoder-dir の消費先はファイル1本のみなので曖昧性は無い。 2026-08-23 Phase4: 同上（WAV再生成が0/6のため producer chain としての裏付けなし。vocoder onnx自体の取得元一致によるmeasured_onlyは維持）。"
     },
     {
       "ref": "generation_script.gate_synth_run4_py.sha256",
@@ -89,7 +89,7 @@
       "value": "006cd867042d8f976822f2d74dc6bf184c5687a6a125e41914fba0c5c0faf87f",
       "method": "phase0_findings.pin_commit_gate_synth_run4_py で同定したコミット cda36b9f から `git show <commit>:voice_genesis/foundry/s1_gate/gate_synth_run4.py | sha256sum` で算出。",
       "source": "git blob at commit cda36b9f2308128797c48976a9c90b28a4f1661a",
-      "note": "コミットの同定は high_but_unproven（phase0_findings 参照）。当時バイトである保証はない。参考値として現行 HEAD（df38507d 時点）のバイトの sha256 も記録する: 579f7f0b5397e900ea6fe56abaa48fd0f6d2b298753b8fb2ae025e8b93a08ce9（これは当時バイトの代用として使ってはならない——依頼文の禁止事項どおり）。cda36b9f と HEAD の差分は 3df1e37 で d3synth 話者の追加（SPEAKER_TO_SPK_ID に d3synth=3 を追加 + ログ文言変更のみ）で、ritsu/pjs/user の挙動には影響しない差分だったことをコード読解で確認した。"
+      "note": "コミットの同定は high_but_unproven（phase0_findings 参照）。当時バイトである保証はない。参考値として現行 HEAD（df38507d 時点）のバイトの sha256 も記録する: 579f7f0b5397e900ea6fe56abaa48fd0f6d2b298753b8fb2ae025e8b93a08ce9（これは当時バイトの代用として使ってはならない——依頼文の禁止事項どおり）。cda36b9f と HEAD の差分は 3df1e37 で d3synth 話者の追加（SPEAKER_TO_SPK_ID に d3synth=3 を追加 + ログ文言変更のみ）で、ritsu/pjs/user の挙動には影響しない差分だったことをコード読解で確認した。 2026-08-23 Phase4: gate_synth_run4.py/gate_synth.pyにはs3_record記載の4ゲート（NPY_DISABLE_CPU_FEATURES等）の参照が一切無いことを確認した（grep実測）——4ゲートはD3 renderパイプライン専用でこの経路には配線されていない。pinコミットの当時バイトの正しさとWAV再生成の成否は別問題であり、本追試はcommit同定の確度を変えない（high_but_unprovenのまま）。"
     },
     {
       "ref": "anchor_wavs.run3_gate_sakura_ritsu.wav.checkpoint_provenance",
@@ -135,12 +135,72 @@
     "match_count": 0,
     "total": 6,
     "results": [
-      {"speaker": "ritsu", "song": "sakura", "recorded_sha256": "55bd14c28437dbfcf06b564343f4bcff02b9bea6c9c1f752a72dbf78f3ec9ef9", "reproduced_sha256": "2a07c12d2f3b08dfb89ee242c2784a4113c4cfa1bd9a557cd33be9ad52a9db52", "match": false, "recorded_rms": 0.0540, "reproduced_rms": 0.0540, "recorded_dur_s": 23.580, "reproduced_dur_s": 23.580},
-      {"speaker": "ritsu", "song": "umi", "recorded_sha256": "a12ef548d9649f86854804f9676e88aa8ed76528ea0592859f752fed9064bb9e", "reproduced_sha256": "80cdb09207c4c3080fde30e0c50385e37f193e3cbe594eb9e30398b3bc783382", "match": false, "recorded_rms": 0.0906, "reproduced_rms": 0.0906, "recorded_dur_s": 11.111, "reproduced_dur_s": 11.111},
-      {"speaker": "pjs", "song": "sakura", "recorded_sha256": "b9ce3454854e870075ee001fa5cdf937dc11891f047c497a1e40fcf44aabf279", "reproduced_sha256": "92ee7ba48a7df0dcabac01b63169923d2761a1d8b948ba773ba5d4bf69c1d889", "match": false, "recorded_rms": 0.0517, "reproduced_rms": 0.0517, "recorded_dur_s": 23.580, "reproduced_dur_s": 23.580},
-      {"speaker": "pjs", "song": "umi", "recorded_sha256": "43d6bff14b1eebdd6e8f9e8aa58bde6bae21e2c23df21e29205974f2d491150f", "reproduced_sha256": "a23f82a1232df29b19e5108a6eb5bb7f0ae52582ba3660408638c9952e5af00c", "match": false, "recorded_rms": 0.0748, "reproduced_rms": 0.0748, "recorded_dur_s": 11.111, "reproduced_dur_s": 11.111},
-      {"speaker": "user", "song": "sakura", "recorded_sha256": "e2f7b270c2840012178e50147491a7db1f38f47aee9d4ff487ace60e12c94ea0", "reproduced_sha256": "d7a67c8708d313b4cbe868270baf97111ef13f932469d563a270943ece8b485a", "match": false, "recorded_rms": 0.0976, "reproduced_rms": 0.0976, "recorded_dur_s": 23.580, "reproduced_dur_s": 23.580},
-      {"speaker": "user", "song": "umi", "recorded_sha256": "ac8b3455b4204a6e55d34b7db2e81709f1e6f8bc6f20d6d7462767a4dcf28979", "reproduced_sha256": "ef1d021fc3aeb86dc437148b8b912866f5c32819372936c70797fa795a1ba9d0", "match": false, "recorded_rms": 0.0797, "reproduced_rms": 0.0797, "recorded_dur_s": 11.111, "reproduced_dur_s": 11.111}
+      {
+        "speaker": "ritsu",
+        "song": "sakura",
+        "recorded_sha256": "55bd14c28437dbfcf06b564343f4bcff02b9bea6c9c1f752a72dbf78f3ec9ef9",
+        "reproduced_sha256": "2a07c12d2f3b08dfb89ee242c2784a4113c4cfa1bd9a557cd33be9ad52a9db52",
+        "match": false,
+        "recorded_rms": 0.054,
+        "reproduced_rms": 0.054,
+        "recorded_dur_s": 23.58,
+        "reproduced_dur_s": 23.58
+      },
+      {
+        "speaker": "ritsu",
+        "song": "umi",
+        "recorded_sha256": "a12ef548d9649f86854804f9676e88aa8ed76528ea0592859f752fed9064bb9e",
+        "reproduced_sha256": "80cdb09207c4c3080fde30e0c50385e37f193e3cbe594eb9e30398b3bc783382",
+        "match": false,
+        "recorded_rms": 0.0906,
+        "reproduced_rms": 0.0906,
+        "recorded_dur_s": 11.111,
+        "reproduced_dur_s": 11.111
+      },
+      {
+        "speaker": "pjs",
+        "song": "sakura",
+        "recorded_sha256": "b9ce3454854e870075ee001fa5cdf937dc11891f047c497a1e40fcf44aabf279",
+        "reproduced_sha256": "92ee7ba48a7df0dcabac01b63169923d2761a1d8b948ba773ba5d4bf69c1d889",
+        "match": false,
+        "recorded_rms": 0.0517,
+        "reproduced_rms": 0.0517,
+        "recorded_dur_s": 23.58,
+        "reproduced_dur_s": 23.58
+      },
+      {
+        "speaker": "pjs",
+        "song": "umi",
+        "recorded_sha256": "43d6bff14b1eebdd6e8f9e8aa58bde6bae21e2c23df21e29205974f2d491150f",
+        "reproduced_sha256": "a23f82a1232df29b19e5108a6eb5bb7f0ae52582ba3660408638c9952e5af00c",
+        "match": false,
+        "recorded_rms": 0.0748,
+        "reproduced_rms": 0.0748,
+        "recorded_dur_s": 11.111,
+        "reproduced_dur_s": 11.111
+      },
+      {
+        "speaker": "user",
+        "song": "sakura",
+        "recorded_sha256": "e2f7b270c2840012178e50147491a7db1f38f47aee9d4ff487ace60e12c94ea0",
+        "reproduced_sha256": "d7a67c8708d313b4cbe868270baf97111ef13f932469d563a270943ece8b485a",
+        "match": false,
+        "recorded_rms": 0.0976,
+        "reproduced_rms": 0.0976,
+        "recorded_dur_s": 23.58,
+        "reproduced_dur_s": 23.58
+      },
+      {
+        "speaker": "user",
+        "song": "umi",
+        "recorded_sha256": "ac8b3455b4204a6e55d34b7db2e81709f1e6f8bc6f20d6d7462767a4dcf28979",
+        "reproduced_sha256": "ef1d021fc3aeb86dc437148b8b912866f5c32819372936c70797fa795a1ba9d0",
+        "match": false,
+        "recorded_rms": 0.0797,
+        "reproduced_rms": 0.0797,
+        "recorded_dur_s": 11.111,
+        "reproduced_dur_s": 11.111
+      }
     ],
     "characterization": "0/6 sha256 一致。ただし全 6 本とも rms（4桁）・dur（3桁）は記録値と完全一致し、ファイルサイズも全て記録済みサイズ帯（sakura=2079788 bytes・umi=980012 bytes、gate_run3_anchor_v2.log 実測値から推定される固定サイズ）と一致した。これは『同じ演奏内容だが波形バイトレベルで非同一』というパターンで、構造的な破損や別内容の生成ではなく、環境差（本実測は openvpi/DiffSinger e2307b1・torch 2.13.0+cpu・onnxruntime 1.29.0・numpy 1.26.4 の組み合わせ。run4 実行時の Pod の正確なパッケージ版は記録が無く不明）由来の数値レベルの非決定性である可能性が高い。s3_record_2026-08-17.md §2 が記録する『numpy SIMD dispatch が1 LSB差でバイトを分岐させた』事例と同型の脆弱性クラス。本実測のローカル再現性は確認済み（同一手順を2回実行し acoustic.onnx・wav とも sha256 完全一致）——したがって不一致は本実測プロセス内のランダム性ではなく、本実測環境と run4 実行環境の差に起因する。",
     "conclusion": "producer chain の機能的証明は成立しなかった（全 6 本不一致）。1番の acoustic ONNX sha を reproduced に昇格させる根拠は無く measured_only に留める。"
@@ -179,5 +239,151 @@
     "pyyaml": "6.0.3",
     "os": "Linux 6.18.44-fc-v21 x86_64",
     "note": "export（torch 由来）と synth（onnxruntime 由来）を単一 venv・単一プロセスで実行（gate_synth_run4.py の実装がそうなっているため。D4 は export と render を別プロセス/別スタックに分離していたが、gate_synth_run4.py 自体は一体型）。venv は D4（VG-DEBT-004）実測の /home/user/d4work/venv_export を再利用し onnxruntime==1.29.0 を追加導入したのみ（numpy/torch は変更していない）。"
+  },
+  "phase4_env_contract_retest": {
+    "trigger": "Fable 判読: 前回 0/6 不一致は run4 環境契約（NPY_DISABLE_CPU_FEATURES=X86_V4・PR #266 正本・S3_RUN4_RUNBOOK.md §2.2）の未充足が原因の可能性が高いとの指摘を受け再実測（2026-08-23、head 106c3398 の上に追加）。",
+    "gate_synth_simd_gate_check": {
+      "question": "gate_synth_run4.py（または pin commit cda36b9f 版）に s3_record が言う4ゲート（数値スタック版pin/SIMD受け入れ/罠確認/cache来歴）が実装されているか",
+      "finding": "実装されていない。voice_genesis/foundry/s1_gate/ 配下（gate_synth.py・gate_synth_run4.py）を grep しても NPY_DISABLE_CPU_FEATURES・SIMD・cpu_dispatch・X86_V の参照は一切無い。4ゲートは S3_RUN4_RUNBOOK.md §2.2 に明記されているとおり D3 render パイプライン（run_d3_cells.py・convert_d3.py・run5_bootstrap.py が呼ぶ経路）専用のオペレータ規律として実装されており、gate_synth_run4.py が担う『40K checkpoint からの acoustic ONNX export + anchor wav 合成』の経路には一度も配線されていない。",
+      "why_it_did_not_fire_previously": "『アサートが無い経路を通った』のではなく、そもそもこの経路にアサート/ゲート自体が存在しない。numpy の SIMD dispatch は環境変数を python 起動前に設定しさえすれば（gate_synth.py 側のコード変更なしに）numpy 自身の C 実装が読むため、理論上は前回実行時に環境変数を設定していれば効果自体は発生し得た——が、前回はそもそも設定していなかった（Phase 2 では未設定のまま実行）。",
+      "additional_finding_numpy_1_26_4_does_not_recognize_x86_v4_token": "S3_RUN4_RUNBOOK.md ゲート1は本契約が『numpy 2.4.6 の挙動』を前提とすると明記している。本セッションの export/synth 用 venv（/home/user/d4work/venv_export）は DiffSinger の numpy<2 要求により numpy==1.26.4 を使用しており、この版では文字列 'X86_V4' はディスパッチ済み最適化グループとして認識されず（`numpy._core._multiarray_umath.__cpu_dispatch__` に一致するトークンが無い）、`NPY_DISABLE_CPU_FEATURES=X86_V4` を設定しても ImportWarning を出すのみで完全な no-op になることを実測で確認した（下記 simd_verification 参照）。ゲート3が想定する『numpy 2.4.6 では黙って無視される』という silent-no-op とは違う失敗モード（1.26.4 では warning 付き no-op）だが、結論（設定が効かない）は同じ。"
+    },
+    "simd_verification": {
+      "method": "np.show_config('dicts')['SIMD Extensions'] と numpy.core._multiarray_umath.__cpu_features__ / __cpu_dispatch__ を実測。",
+      "baseline_no_env_var": {
+        "found": [
+          "SSSE3",
+          "SSE41",
+          "POPCNT",
+          "SSE42",
+          "AVX",
+          "F16C",
+          "FMA3",
+          "AVX2",
+          "AVX512F",
+          "AVX512CD",
+          "AVX512_SKX",
+          "AVX512_CLX",
+          "AVX512_CNL",
+          "AVX512_ICL"
+        ],
+        "avx512f_enabled": true
+      },
+      "literal_NPY_DISABLE_CPU_FEATURES_X86_V4": {
+        "warning": "ImportWarning: You cannot disable CPU features (X86_V4), since they are not part of the dispatched optimizations (SSSE3 SSE41 POPCNT SSE42 AVX F16C FMA3 AVX2 AVX512F AVX512CD AVX512_KNL AVX512_KNM AVX512_SKX AVX512_CLX AVX512_CNL AVX512_ICL).",
+        "found_after": [
+          "SSSE3",
+          "SSE41",
+          "POPCNT",
+          "SSE42",
+          "AVX",
+          "F16C",
+          "FMA3",
+          "AVX2",
+          "AVX512F",
+          "AVX512CD",
+          "AVX512_SKX",
+          "AVX512_CLX",
+          "AVX512_CNL",
+          "AVX512_ICL"
+        ],
+        "effective": false,
+        "conclusion": "numpy 1.26.4 のこのビルドでは 'X86_V4' という語彙自体が定義されておらず、指示された値をそのまま設定しても完全に無効（no-op）。runbook のゲート2実測手順（'X86_V3' in found and 'X86_V4' not in found）はこの状態では PASS 判定される（'X86_V4' はそもそも found リストに現れる語彙ではないため）—— つまりゲート2の判定式は numpy 2.4.6 の語彙を前提にしており、1.26.4 環境では『X86_V4 が消えたから成功』ではなく『X86_V4 は最初から found の要素になり得ない語彙だから何もせず通る』という別の意味になる。本実測ではこの限界を踏まえ、機能的に同値な個別特徴名リストで置き換えた。"
+      },
+      "functionally_equivalent_disable_avx512_family": {
+        "env_value": "AVX512F,AVX512CD,AVX512_KNL,AVX512_KNM,AVX512_SKX,AVX512_CLX,AVX512_CNL,AVX512_ICL",
+        "rationale": "numpy.core._multiarray_umath.__cpu_dispatch__ に列挙される AVX512 系トークン全てを個別指定。X86_V4 グループが指す実体（AVX-512 ディスパッチ層全体）をこのビルドで有効な語彙により再現する。",
+        "found_after": [
+          "SSSE3",
+          "SSE41",
+          "POPCNT",
+          "SSE42",
+          "AVX",
+          "F16C",
+          "FMA3",
+          "AVX2"
+        ],
+        "avx512f_reported_by_cpu_features_after": false,
+        "effective": true,
+        "conclusion": "found が AVX2 止まりになることを実測確認済み。S3_RUN4_RUNBOOK.md ゲート2の意図（X86_V3=AVX2相当への固定）は本設定で genuinely 達成される。"
+      }
+    },
+    "wav_regeneration_v2_avx512_disabled": {
+      "recipe": "Phase 2 と全く同じ入力（同じ再export ONNX——onnx sha は export段では変化なし・同じ canon/vocoder/config/spk_map/lang_map/dict・同じ generation_command）を、NPY_DISABLE_CPU_FEATURES=AVX512F,AVX512CD,AVX512_KNL,AVX512_KNM,AVX512_SKX,AVX512_CLX,AVX512_CNL,AVX512_ICL を設定したプロセスで再生成。",
+      "acoustic_onnx_sha256_after_reexport_under_disabled_state": "a6da561a66ece62d64d4a0635a5ef525c2b6143eb311c1a7e1d595d9abd3a676",
+      "acoustic_onnx_sha256_unchanged_from_phase2": true,
+      "note_on_onnx": "acoustic.onnx の sha256 は AVX512 有効/無効で不変（= ONNX export 過程自体は numpy SIMD dispatch に依存しない。torch のグラフトレース/シンプル化が numpy の AVX512 パスを経由していないことを裏付ける）。",
+      "match_count": 0,
+      "total": 6,
+      "results": [
+        {
+          "speaker": "ritsu",
+          "song": "sakura",
+          "recorded_sha256": "55bd14c28437dbfcf06b564343f4bcff02b9bea6c9c1f752a72dbf78f3ec9ef9",
+          "phase2_avx512_enabled_sha256": "2a07c12d2f3b08dfb89ee242c2784a4113c4cfa1bd9a557cd33be9ad52a9db52",
+          "phase4_avx512_disabled_sha256": "cc3b1d8376eb18dfca16600c014d5b1d7c4db0ba0368578e96cc49375211a94a",
+          "match_recorded": false
+        },
+        {
+          "speaker": "ritsu",
+          "song": "umi",
+          "recorded_sha256": "a12ef548d9649f86854804f9676e88aa8ed76528ea0592859f752fed9064bb9e",
+          "phase2_avx512_enabled_sha256": "80cdb09207c4c3080fde30e0c50385e37f193e3cbe594eb9e30398b3bc783382",
+          "phase4_avx512_disabled_sha256": "c7f8439d311de2163c38e269d8e61c8e8fa8244e5ab063e12b739f4f0e0e6c5c",
+          "match_recorded": false
+        },
+        {
+          "speaker": "pjs",
+          "song": "sakura",
+          "recorded_sha256": "b9ce3454854e870075ee001fa5cdf937dc11891f047c497a1e40fcf44aabf279",
+          "phase2_avx512_enabled_sha256": "92ee7ba48a7df0dcabac01b63169923d2761a1d8b948ba773ba5d4bf69c1d889",
+          "phase4_avx512_disabled_sha256": "536d86cf0d1ed3f534b5c8e3cd6b92613738c23e0a58160e3a72b5022f29a3d3",
+          "match_recorded": false
+        },
+        {
+          "speaker": "pjs",
+          "song": "umi",
+          "recorded_sha256": "43d6bff14b1eebdd6e8f9e8aa58bde6bae21e2c23df21e29205974f2d491150f",
+          "phase2_avx512_enabled_sha256": "a23f82a1232df29b19e5108a6eb5bb7f0ae52582ba3660408638c9952e5af00c",
+          "phase4_avx512_disabled_sha256": "30d27aad43edcaf8b59e329cc55747f6e89e91b90832e87f20c8766fe1a77fc7",
+          "match_recorded": false
+        },
+        {
+          "speaker": "user",
+          "song": "sakura",
+          "recorded_sha256": "e2f7b270c2840012178e50147491a7db1f38f47aee9d4ff487ace60e12c94ea0",
+          "phase2_avx512_enabled_sha256": "d7a67c8708d313b4cbe868270baf97111ef13f932469d563a270943ece8b485a",
+          "phase4_avx512_disabled_sha256": "dc960d04dedc9309b14fbd2add8afc6e528846acd51f8c97a4d3674a391adcac",
+          "match_recorded": false
+        },
+        {
+          "speaker": "user",
+          "song": "umi",
+          "recorded_sha256": "ac8b3455b4204a6e55d34b7db2e81709f1e6f8bc6f20d6d7462767a4dcf28979",
+          "phase2_avx512_enabled_sha256": "ef1d021fc3aeb86dc437148b8b912866f5c32819372936c70797fa795a1ba9d0",
+          "phase4_avx512_disabled_sha256": "078b085a2728f4286012932ff47b76f7725763506926e6ec8feae620bd5fb72f",
+          "match_recorded": false
+        }
+      ],
+      "local_determinism_check": "phase4_avx512_disabled 状態を ritsu で再度独立実行し sha256 が完全一致することを確認済み（cc3b1d83.../c7f8439d... が2回とも一致）。",
+      "sample_level_divergence_measurement": {
+        "method": "gate_sakura_ritsu.wav を Phase2（AVX512有効）と Phase4（AVX512無効）で int16 サンプル列に読み込み差分を実測（soundfile+numpy）。",
+        "n_samples": 1039872,
+        "n_differing_samples": 113358,
+        "pct_differing_samples": 10.9,
+        "max_abs_diff_lsb": 6,
+        "diff_distribution_note": "非ゼロ差分の約93%（107037/113358）は ±1 LSB。残りは ±2〜±6 の小さいテール。",
+        "interpretation": "AVX512 dispatch の有無だけで 1039872 サンプル中 約11% が ±1〜6 LSB 級で変化する——D3 の『1/1,524,000 サンプル・1 LSB』（WORLD ボコーダ単発合成での境界条件依存の希少な分岐）より遥かに広範囲に影響する。これは DiffSinger の reflow/diffusion サンプリングが多段の反復推論であり、各ステップの微小な浮動小数点差が後続ステップへ伝播・蓄積するため（1回の合成で発生する分岐点の数が WORLD 単発合成より遥かに多い）と考えられる。rms/dur が両状態で完全一致するのは、これらが波形全体の集約統計量であり ±数LSB のサンプル単位ノイズには鈍感なため。"
+      }
+    },
+    "conclusion": "SIMD dispatch 状態（AVX512有効/無効）は gate_synth.py の WAV 出力バイトに実測で影響することを確認した（新規知見——s3_record §2 の『実行環境がバイト一致に効く』という一般則を、D3 とは別の経路（DiffSinger reflow acoustic 合成）で追試・再確認した形）。しかし run4環境契約（X86_V4無効化=AVX512無効化）を満たした状態でも run4 当時の記録済み sha256 とは一致しなかった（0/6のまま）。したがって『環境契約の未充足だけが原因』という仮説は本実測では反証された——SIMD状態は一因（かつ実測で最大11%のサンプルに影響する非小さい要因）ではあるが、単独では run4 当時バイトの再現を説明・達成するには不十分で、他の未特定要因が残っている。",
+    "other_uncontrolled_factors_enumerated_not_swept": [
+      "onnxruntime バージョン: 本実測は D4（run5-7測定）のrender_stack pinに合わせ1.29.0を使用。run4実行当時のPodが同一版だったという記録・証拠は無い。",
+      "DiffSinger (openvpi) revision: 本実測はD4と同じe2307b1を使用。run4実行当時のgit revisionはgate40k.log/gate_run3_anchor_v2.logのいずれにも記録が無く不明（既存記録の指摘どおり）。",
+      "torch バージョン・ビルド種別: 本実測はtorch 2.13.0+cpu（CPU専用ビルド）を使用。",
+      "acoustic ONNX export 時のデバイス（GPU vs CPU）: run4実行環境はRunPod GPU Pod（s3-run4-v2）であり、config.yamlのpl_trainer_accelerator: auto や学習自体がGPU実行だったことから、export.py実行時もCUDA上でcheckpointをロードしtorch.onnx.exportをトレースした可能性が高い（gate40k.logにdevice指定の明記は無いため断定はできない）。本実測はtorch 2.13.0+cpuというCPU専用ビルドでexportを行っており、CUDA vs CPUのトレース経路差（cuDNN kernel由来の定数畳み込み値の丸め差等）がONNXグラフの定数値レベルで生じ得る——これは1番目のacoustic.onnx sha自体が当時バイトと異なる可能性の有力候補であり、SIMD要因より上流（export段）に位置する。宣言のみに留め、GPU環境での再exportは本実測のスコープ外（GPU環境が本セッションに無いため実行不能）。",
+      "OS/libm/コンテナベースイメージの差: 本実測環境（Linux 6.18.44-fc-v21 x86_64、このセッションのコンテナ）と run4実行時のRunPod Podのベースイメージは別物であり、libmの浮動小数点関数実装差も候補として残る。"
+    ],
+    "verdict": "run4当時バイトの再現は本環境では未達（0/6）。差分はサンプルの約11%・最大±6LSBという小さいが非ゼロの規模であり、構造的破損や別内容の生成ではない。境界宣言としてこれ以上の掃引（onnxruntime版/DiffSinger revision/GPU export環境の用意）は本実測のスコープ外とし、item 1（acoustic ONNX sha）は measured_only に据え置く。"
   }
 }

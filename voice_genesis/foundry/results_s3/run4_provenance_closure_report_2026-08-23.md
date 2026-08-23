@@ -158,3 +158,128 @@ python -m pytest --collect-only -q                     # collection error なし
    数値非決定性の可能性が高い、というレベル）で止めた。ONNX バイト単位の
    diff や複数 onnxruntime バージョンでの掃引は行っていない
    （追加実測が必要ならFableの設計判断で追加委譲を検討されたい）。
+
+## Phase 4: 環境契約（X86_V4 無効化）下での再試行（2026-08-23 追加・Fable 指摘対応）
+
+Fable が Phase 2/3 の結果を判読し、「run4 の環境契約（PR #266 正本・
+`S3_RUN4_RUNBOOK.md` §2.2・`NPY_DISABLE_CPU_FEATURES=X86_V4` + 4 ゲート）を
+満たしていなかった可能性が高い」と指摘。head `106c3398` の上に追加実測した。
+
+### gate_synth の SIMD ゲート実装確認
+
+`voice_genesis/foundry/s1_gate/`（`gate_synth.py` / `gate_synth_run4.py`）を
+grep したが `NPY_DISABLE_CPU_FEATURES` / `SIMD` / `cpu_dispatch` / `X86_V` の
+参照は**一切無い**。4 ゲートは `S3_RUN4_RUNBOOK.md` §2.2 が明記するとおり
+**D3 render パイプライン**（`run_d3_cells.py` / `convert_d3.py`。
+`run5_bootstrap.py` がプログラム的に `os.environ["NPY_DISABLE_CPU_FEATURES"]
+= "X86_V4"` を設定する経路）専用のオペレータ規律であり、`gate_synth_run4.py`
+が担う「40K checkpoint からの acoustic ONNX export + anchor wav 合成」経路
+には一度も配線されていない。「アサートが無い経路を通った」のではなく、
+そもそもこの経路にアサート/ゲート自体が存在しない。
+
+### SIMD 実測（重要な追加発見）
+
+`S3_RUN4_RUNBOOK.md` ゲート 1 は本契約が **numpy 2.4.6 の挙動**を前提とする
+と明記している。本セッションの export/synth 用 venv は DiffSinger の
+numpy<2 要求により **numpy==1.26.4** を使っており、この版では文字列
+`'X86_V4'` はディスパッチ済み最適化グループとして認識されない
+（`__cpu_dispatch__` に一致するトークンが無い）ことを実測で確認した:
+
+```
+$ NPY_DISABLE_CPU_FEATURES=X86_V4 python -W always -c "import numpy"
+ImportWarning: You cannot disable CPU features (X86_V4), since they are not
+part of the dispatched optimizations (SSSE3 SSE41 POPCNT SSE42 AVX F16C FMA3
+AVX2 AVX512F AVX512CD AVX512_KNL AVX512_KNM AVX512_SKX AVX512_CLX AVX512_CNL
+AVX512_ICL).
+```
+
+つまり指示された値をそのまま設定しても numpy 1.26.4 環境では**完全な
+no-op**（ゲート 3 が numpy 2.4.6 について記す「黙って無視」とは違う失敗
+モード＝warning 付き no-op だが、結論は同じ「効かない」）。そこで
+`__cpu_dispatch__` に実在する AVX512 系トークンを個別列挙した機能的等価値
+`AVX512F,AVX512CD,AVX512_KNL,AVX512_KNM,AVX512_SKX,AVX512_CLX,AVX512_CNL,
+AVX512_ICL` へ置き換えたところ、`found` が `AVX2` 止まりになる（AVX512 系が
+全て消える）ことを実測で確認した——runbook ゲート 2 が意図する
+「X86_V3=AVX2 相当への固定」を genuinely 達成できた状態である。
+
+### WAV 再生成（AVX512 無効化状態）
+
+Phase 2 と同一の入力（同一 export ONNX・canon・vocoder・config・
+generation command）で、上記の genuinely-AVX2-only な numpy 環境の下
+6 本を再生成:
+
+| 話者 | 曲 | 記録済み sha256 | Phase2（AVX512有効） | Phase4（AVX512無効） | 一致 |
+|---|---|---|---|---|---|
+| ritsu | sakura | 55bd14c2... | 2a07c12d... | cc3b1d83... | ✗ |
+| ritsu | umi | a12ef548... | 80cdb092... | c7f84... | ✗ |
+| pjs | sakura | b9ce3454... | 92ee7ba4... | 536d86cf... | ✗ |
+| pjs | umi | 43d6bff1... | a23f82a1... | 30d27aad... | ✗ |
+| user | sakura | e2f7b270... | d7a67c87... | dc960d04... | ✗ |
+| user | umi | ac8b3455... | ef1d021f... | 078b085a... | ✗ |
+
+**0/6 一致**（AVX512 有効時と同じ）。acoustic ONNX の sha256 自体は
+AVX512 有効/無効で不変（`a6da561a...`）——export（torch グラフトレース+
+simplify）は numpy SIMD dispatch に依存しないことも判明した。
+
+ローカル決定論は AVX512 無効化状態でも確認済み（ritsu を独立に 2 回実行し
+sha256 完全一致）。
+
+### サンプル単位の乖離を定量測定
+
+AVX512 有効時と無効時の `gate_sakura_ritsu.wav` を int16 サンプル列で diff:
+
+- 総サンプル数 1,039,872 中 **113,358 サンプル（約 10.9%）が異なる**
+- 最大絶対差 **±6 LSB**、非ゼロ差分の約 93%（107,037/113,358）は **±1 LSB**
+
+D3 の事例（1,524,000 サンプル中 1 サンプルのみ・1 LSB）よりも遥かに広範囲
+に影響している。これは DiffSinger の reflow/diffusion サンプリングが多段の
+反復推論であり、各ステップの微小な浮動小数点差が後続ステップへ伝播・蓄積
+するため（WORLD ボコーダの単発合成より分岐点が遥かに多い）と考えられる。
+rms/dur が両状態で完全一致するのは、これらが波形全体の集約統計量であり
+±数 LSB のサンプル単位ノイズには鈍感なため。
+
+### 結論（境界宣言）
+
+SIMD dispatch 状態（AVX512 有効/無効）は `gate_synth.py` の WAV 出力バイトに
+**実測で影響することを確認した**（新規知見——s3_record §2 の「実行環境が
+バイト一致に効く」という一般則を、D3 とは別の経路で追試・再確認した形）。
+しかし run4 環境契約を満たした状態（AVX512 無効化）でも**記録済み
+sha256 とは一致しなかった**（0/6 のまま）。したがって「環境契約の
+未充足だけが原因」という仮説は**本実測では反証**された——SIMD 状態は一因
+（かつ実測でサンプルの最大約 11% に影響する非小さい要因）ではあるが、
+単独では run4 当時バイトの再現を説明・達成するには不十分である。
+
+列挙するに留めた未制御要因（掃引はしない）:
+
+1. **acoustic ONNX export 時のデバイス（GPU vs CPU）**: run4 実行環境は
+   RunPod GPU Pod（s3-run4-v2）であり、`config.yaml` の
+   `pl_trainer_accelerator: auto` や学習自体が GPU 実行だったことから、
+   `export.py` 実行時も CUDA 上で checkpoint をロードし
+   `torch.onnx.export` をトレースした可能性が高い（`gate40k.log` に
+   device 指定の明記は無いため断定はできない）。本実測は
+   `torch==2.13.0+cpu`（CPU 専用ビルド）で export しており、CUDA vs CPU
+   のトレース経路差（cuDNN kernel 由来の定数畳み込み値の丸め差等）が
+   ONNX グラフの定数値レベルで生じ得る——**これは acoustic ONNX の sha256
+   自体が当時バイトと異なる可能性の最有力候補であり、SIMD 要因より上流
+   （export 段）に位置する**。GPU 環境が本セッションに無いため実行不能。
+2. onnxruntime バージョン（本実測 1.29.0。当時版の記録・証拠は無い）
+3. DiffSinger (openvpi) revision（本実測 e2307b1。当時の git revision は
+   `gate40k.log`/`gate_run3_anchor_v2.log` のいずれにも記録が無く不明）
+4. OS/libm/コンテナベースイメージの差（本セッションのコンテナと
+   RunPod Pod は別物）
+
+**境界宣言**: run4 当時バイトの再現は本環境では未達（0/6）。差分は
+サンプルの約 11%・最大 ±6 LSB という小さいが非ゼロの規模であり、構造的
+破損や別内容の生成ではない。これ以上の掃引（onnxruntime 版 / DiffSinger
+revision / GPU export 環境の用意）は本実測のスコープ外とし、
+item 1（acoustic ONNX sha）は `measured_only` に据え置く。
+
+### 台帳・記録更新
+
+- `run4_provenance_closure_2026-08-23.json` に `phase4_env_contract_retest`
+  節を追記（既存の Phase 0-3 記録・`items`/`wav_regeneration` は無改変。
+  item 1・canon・vocoder・generation_script の `note` フィールドのみ本追試の
+  参照を追記）
+- `test_run4_provenance_closure.py` に Phase 4 節の形状テストを追加
+- `debt_ledger.yaml` VG-DEBT-008 の `note` を最新結果に合わせて更新
+  （status は `in_progress` 据え置き——run3 系 6 件が残るため）

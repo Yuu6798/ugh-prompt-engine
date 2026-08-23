@@ -174,6 +174,32 @@ def test_materials_and_environment_sections_present(closure: Dict[str, Any]) -> 
     assert isinstance(closure.get("environment"), dict) and closure["environment"]
 
 
+def test_phase4_env_contract_retest_section_shape(closure: Dict[str, Any]) -> None:
+    """2026-08-23 追試（run4 環境契約 = NPY_DISABLE_CPU_FEATURES=X86_V4 の再検証）
+    の形状。SIMD 実測値・WAV 再照合結果・列挙した未制御要因が揃っていること。"""
+    p4 = closure.get("phase4_env_contract_retest")
+    assert isinstance(p4, dict) and p4
+    assert isinstance(p4.get("trigger"), str) and p4["trigger"].strip()
+    assert isinstance(p4.get("gate_synth_simd_gate_check"), dict)
+    assert isinstance(p4.get("simd_verification"), dict)
+
+    wav2 = p4.get("wav_regeneration_v2_avx512_disabled")
+    assert isinstance(wav2, dict)
+    assert isinstance(wav2.get("match_count"), int)
+    assert isinstance(wav2.get("total"), int)
+    results2 = wav2.get("results")
+    assert isinstance(results2, list)
+    assert wav2["total"] == len(results2)
+    matches2 = sum(1 for r in results2 if r.get("match_recorded") is True)
+    assert matches2 == wav2["match_count"]
+
+    factors = p4.get("other_uncontrolled_factors_enumerated_not_swept")
+    assert isinstance(factors, list) and len(factors) > 0
+    assert all(isinstance(f, str) and f.strip() for f in factors)
+
+    assert isinstance(p4.get("verdict"), str) and p4["verdict"].strip()
+
+
 def test_pyproject_lists_this_test_module() -> None:
     """PR #299 セルフレビュー教訓（このファイルの流儀）: 収集しないと
     『緑なのに何も検査していない』状態になる。"""
