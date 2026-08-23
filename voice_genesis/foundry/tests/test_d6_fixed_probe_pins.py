@@ -64,6 +64,13 @@ SYNTHETIC_PINS_SHA256 = _sha256_file(
 REAL_RENDER_MANIFEST_SHA256 = _sha256_file(
     "voice_genesis/foundry/results_s7/s7_b1_real_render_manifest.json"
 )
+TRF_EPSILONS = {
+    axis: float(value["epsilon"])
+    for axis, value in json.loads(d6_regenerate.TRF_SPEC.read_text(encoding="utf-8"))[
+        "axes"
+    ].items()
+    if axis in d6_regenerate.RECONCILIATION_AXES
+}
 
 
 def _iter_path_sha_refs(node: Any) -> List[Dict[str, Any]]:
@@ -509,6 +516,14 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
         report["reproducibility_reconciliation"],
         context="reproducibility_reconciliation",
     )
+    report["reproducibility_reconciliation"]["value"]["reference_output_remeasurement"][
+        "max_abs_delta_by_axis"
+    ]["excess_tail_voiced_ms"] = 100.0
+    with pytest.raises(AssertionError):
+        _assert_pending_or_resolved(
+            report["reproducibility_reconciliation"],
+            context="reproducibility_reconciliation",
+        )
 
     first_group = next(iter(baseline["groups"].values()))
     first_cell = next(iter(first_group["cells"].values()))
@@ -521,6 +536,18 @@ def test_phase_b_composer_emits_the_exact_validator_shape_and_fails_on_axis_drif
             real_path,
             recovered_acoustic,
             tmp_path / "failed_phase_b.json",
+        )
+
+    tampered_baseline = tmp_path / "tampered_d4_baseline.json"
+    tampered_baseline.write_text(json.dumps(baseline), encoding="utf-8")
+    monkeypatch.setattr(d6_regenerate, "D4_BASELINE", tampered_baseline)
+    with pytest.raises(d6_regenerate.RegenerationError, match="canonical D4 baseline"):
+        d6_regenerate.compose_phase_b_reconciliation(
+            regenerated_path,
+            synthetic_path,
+            real_path,
+            recovered_acoustic,
+            tmp_path / "must-not-use-tampered-baseline.json",
         )
 
 
@@ -705,10 +732,8 @@ def _assert_complete_reconciliation_value(value: Any) -> None:
         "release_after_score_boundary_ms",
         "tail_f0_persistence",
     }
-    assert all(
-        isinstance(axis_value, (int, float)) and axis_value >= 0
-        for axis_value in reference["max_abs_delta_by_axis"].values()
-    )
+    for axis, axis_value in reference["max_abs_delta_by_axis"].items():
+        assert isinstance(axis_value, (int, float)) and 0 <= axis_value <= TRF_EPSILONS[axis]
     for name in ("samples_sha256", "wav_sha256"):
         section = value[name]
         assert set(section) == {
@@ -887,6 +912,9 @@ def test_reproducibility_reconciliation_is_pending_phase_b_or_resolved(
     }
     assert schema["reference_output_remeasurement"]["baseline_results_sha256"] == (
         D4_RESULTS_SHA256
+    )
+    assert schema["reference_output_remeasurement"]["max_abs_delta_upper_bound_by_axis"] == (
+        TRF_EPSILONS
     )
     assert schema["samples_sha256"]["baseline_inventory_sha256"] == D4_RESULTS_SHA256
     assert schema["wav_sha256"]["baseline_inventory_sha256"] == D4_RESULTS_SHA256

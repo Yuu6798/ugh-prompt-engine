@@ -46,6 +46,7 @@ REAL_RENDER_BASELINE = FOUNDRY / "results_s7" / "s7_b1_real_render_manifest.json
 REAL_RENDER_HISTORICAL_COMMIT = "8a14ca97eda1a6bf96f956a8173f512f0cdb50ae"
 REAL_RENDER_ACOUSTIC_SHA256 = "f0e71f06b16e448622f3e0d9b977a26fbaa306bb608a08ed26efeb871332a7d1"
 D4_BASELINE = FOUNDRY / "debt" / "d4" / "d4_results_2026-08-22.json"
+D4_BASELINE_SHA256 = "6b820a2a27744b9ed4f6e873231aa103b57dd622f993982a112063e5b4bacfa7"
 TRF_SPEC = FOUNDRY / "results_s7" / "trf_measurement_spec_1_2.json"
 RECONCILIATION_AXES = (
     "excess_tail_voiced_ms",
@@ -103,6 +104,7 @@ def verify_runner_pins() -> None:
     pins = json.loads(FIXED_PROBE_PINS.read_text(encoding="utf-8"))
     common = pins["common_fixed"]
     refs = [
+        pins["production_cells"]["refs"]["d4_1_2_remeasurement"],
         pins["calibration_set"]["refs"]["synthetic_stimuli"],
         pins["calibration_set"]["refs"]["synthetic_output_pins"],
         pins["calibration_set"]["refs"]["real_render_manifest"],
@@ -547,7 +549,20 @@ def compose_phase_b_reconciliation(
         REAL_RENDER_ACOUSTIC_SHA256,
         label="historical acoustic ONNX at reconciliation",
     )
-    baseline = json.loads(D4_BASELINE.read_text(encoding="utf-8"))
+    baseline_bytes = D4_BASELINE.read_bytes()
+    baseline_sha = hashlib.sha256(baseline_bytes).hexdigest()
+    baseline_ref = json.loads(FIXED_PROBE_PINS.read_text(encoding="utf-8"))["production_cells"][
+        "refs"
+    ]["d4_1_2_remeasurement"]
+    if (
+        baseline_ref.get("path") != "voice_genesis/foundry/debt/d4/d4_results_2026-08-22.json"
+        or baseline_ref.get("sha256") != D4_BASELINE_SHA256
+        or baseline_sha != D4_BASELINE_SHA256
+    ):
+        raise RegenerationError(
+            f"Phase B: canonical D4 baseline sha256 {baseline_sha} != {D4_BASELINE_SHA256}"
+        )
+    baseline = json.loads(baseline_bytes)
     regenerated = json.loads(Path(regenerated_results_path).read_text(encoding="utf-8"))
     expected_cells = _measured_cells(baseline, label="baseline")
     actual_cells = _measured_cells(regenerated, label="regenerated")
@@ -611,7 +626,6 @@ def compose_phase_b_reconciliation(
         capture_output=True,
         text=True,
     ).stdout.strip()
-    baseline_sha = sha256_file(D4_BASELINE)
     regenerated_sha = sha256_file(Path(regenerated_results_path))
     reference_mismatches = 360 - n_within_epsilon
     value = {

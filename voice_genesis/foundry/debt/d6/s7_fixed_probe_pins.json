@@ -219,7 +219,7 @@
       "plan_command": "python3 voice_genesis/foundry/debt/d6/d6_regenerate.py --root /home/user/d6work --real-render-acoustic-onnx /home/user/d6-real-render-input/s6_run7_acoustic.onnx --plan",
       "orchestrator": {
         "path": "voice_genesis/foundry/debt/d6/d6_regenerate.py",
-        "sha256": "8195081bf28fe3252ae068c980142c2fee9e7c35212609b9cd2854c744eca05f"
+        "sha256": "b9bfb87da8310285794682cd979780eaa037b14c11a28f0760b7770fc1c992a8"
       },
       "d4_runner": {
         "path": "voice_genesis/foundry/debt/d4/d4_runner.py",
@@ -282,7 +282,12 @@
       "reference_output_remeasurement": {
         "required_keys": ["n_compared", "n_within_epsilon", "n_mismatches", "baseline_results_sha256", "regenerated_results_sha256", "max_abs_delta_by_axis"],
         "n_compared": 360,
-        "baseline_results_sha256": "6b820a2a27744b9ed4f6e873231aa103b57dd622f993982a112063e5b4bacfa7"
+        "baseline_results_sha256": "6b820a2a27744b9ed4f6e873231aa103b57dd622f993982a112063e5b4bacfa7",
+        "max_abs_delta_upper_bound_by_axis": {
+          "excess_tail_voiced_ms": 10.0,
+          "release_after_score_boundary_ms": 5.0,
+          "tail_f0_persistence": 0.03333333333333333
+        }
       },
       "samples_sha256": {
         "required_keys": ["n_compared", "n_matches", "n_mismatches", "baseline_inventory_sha256", "regenerated_inventory_sha256"],
