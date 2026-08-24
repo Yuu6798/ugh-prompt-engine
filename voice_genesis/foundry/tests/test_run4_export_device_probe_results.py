@@ -4,8 +4,10 @@ probe の実測記録ペア（`run4_export_device_probe_2026-08-23.json` /
 
 `test_committed_artifacts_immutable.py` の凍結テスト（sha256 二重アンカー）
 とは役割を分ける: 本ファイルのテストは **freeze-bound ではない**——値を
-ハードコードせずファイル内容から再導出するので、凍結値が 3 者協調更新
-（artifact・台帳・FROZEN_SHA256 定数）で正当に改訂された後も、再導出した
+ハードコードせずファイル内容から再導出するので、凍結値がマージ前の
+3 者協調更新（artifact・台帳・FROZEN_SHA256 定数。マージ前の記録に限る——
+マージ後はバイト無改変で、再分類は裁定記録の参照方式 =
+DEBT_ADJUDICATION_v1.1.md §8）で正当に改訂された後も、再導出した
 内容が自己整合していれば pass し続ける。
 
 依存は標準ライブラリ（json / hashlib / pathlib / re）+ PyYAML + pytest のみ
