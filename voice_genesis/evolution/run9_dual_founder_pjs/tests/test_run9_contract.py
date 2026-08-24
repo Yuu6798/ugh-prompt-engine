@@ -27,6 +27,13 @@ import run9_schema as m  # noqa: E402
 CONTRACT_PATH = _RUN_DIR / "RUN9_CONTRACT.yaml"
 DOMAIN_DRAFT_PATH = _RUN_DIR / "domains" / "identity_domain_run9_v1.json"
 DESIGN_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md"
+REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
+AF0_ANCHOR_MANIFEST_PATH = _RUN_DIR / "inputs" / "af0_anchor_manifest.json"
+RIGHTS_MANIFEST_PATH = _RUN_DIR / "inputs" / "rights_manifest.json"
+BACKBONE_BUNDLE_PATH = _RUN_DIR / "inputs" / "backbone_runtime_bundle.json"
+_FOUNDRY_DIR = _RUN_DIR.parent.parent / "foundry"
+AF0_SPEC_PATH = _FOUNDRY_DIR / "artificial_founder" / "founder_specs" / "AF0.json"
+AF0_FOUNDER_MANIFEST_PATH = _FOUNDRY_DIR / "artificial_founder" / "results" / "AF0" / "founder_manifest.json"
 
 
 # ---------------------------------------------------------------------------
@@ -1351,3 +1358,930 @@ def test_fix17_yaml_loader_comment_declares_models_loads_strict_parity() -> None
     宣言がソース中に存在することの直接確認。"""
     source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
     assert "loads_strict" in source
+
+
+# ---------------------------------------------------------------------------
+# User 裁定 2026-08-24（design_revision 0.1 -> 0.2）対応
+# ---------------------------------------------------------------------------
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _sha256_canonical_json(obj: Any) -> str:
+    """run9_schema._canonical_json と同じ規約（sort_keys / 区切り固定）で
+    dict を正規化した sha256（af0_anchor_manifest.json の
+    canonicalization_method フィールドが宣言する規約と同一 — ensure_ascii
+    のみ True/False の違いだが本ファイルの内容は非ASCII文字を含まないため
+    結果は同じになる）。"""
+    import hashlib
+
+    canonical = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+# --- item 1: design_revision 0.2 での contract load 成功 / "0.1" 拒否 -------
+
+
+def test_revision02_design_revision_constant_is_0_2() -> None:
+    assert m.DESIGN_REVISION == "0.2"
+
+
+def test_revision02_current_contract_declares_0_2(contract_raw: Dict[str, Any]) -> None:
+    assert contract_raw["design_revision"] == "0.2"
+    m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
+
+
+def test_revision02_old_0_1_contract_rejected(contract_raw: Dict[str, Any]) -> None:
+    """User 裁定 2026-08-24: design_revision "0.1" を宣言する contract は
+    意図どおり拒否される（実装バグではない — DESIGN_RUN9_REVISION_0.2.md
+    冒頭に明記）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["design_revision"] = "0.1"
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_revision02_doc_sha256_pin_matches_actual_file(contract_raw: Dict[str, Any]) -> None:
+    field = contract_raw["design_revision_doc_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(REVISION_DOC_PATH)
+
+
+def test_revision02_v0_1_design_doc_is_byte_unchanged(contract_raw: Dict[str, Any]) -> None:
+    """v0.1 本文は無改変のまま — design_doc_sha256 pin は据え置きで、実
+    ファイルの sha256 と引き続き一致する。"""
+    field = contract_raw["design_doc_sha256"]
+    assert field["value"] == _sha256_file(DESIGN_DOC_PATH)
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第7巡対応 — Adapter → ControlProfile §対応マップ
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_adapter_to_controlprofile_correspondence_map_present() -> None:
+    """Codex bot レビュー PR #316 第7巡指摘（37b6193）+ 第8巡指摘B
+    （38c0e0f, 掃討完結、採用）: REVISION_0.2 が v0.1 の Adapter 固有条項
+    11項目それぞれについて ControlProfile 等価物への明示的置換表を持つ
+    ことのキーワード存在検査（過剰な文言テストは避け、各項目を機械的に
+    識別できる語彙が本文に存在することだけを確認する）。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "本表（rev 0.2）が勝つ" in doc  # 前文: v0.1 と矛盾する場合の優先規則
+    required_keywords = [
+        "BLOCKED_CONTROLPROFILE_ENTRY",  # item 1: Adapter Entry Gate -> ControlProfile Entry Gate
+        "Zero ControlProfile",  # item 2: C1
+        "CONTROLPROFILE_ENTRY_AND_EQUAL_BUDGET",  # item 3: R9-G8
+        "ControlProfile version SHA",  # item 4: R9-G12
+        "freeze both ControlProfile versions (r1)",  # item 5: step 12
+        "ControlProfile Entry Gate not satisfied",  # item 6: Stop rule 9
+        "ControlProfile-01:r0",  # item 7: §13.1 図式
+        "ControlProfile 導出手続き",  # item 8: learning_recipe
+        "control_profiles/",  # item 9: §25 results バンドルディレクトリ
+        "ControlProfiles are independent per Founder",  # item 10: §27 item 30
+        "ControlProfile version freeze",  # item 11: §31 実装者役割
+    ]
+    for keyword in required_keywords:
+        assert keyword in doc, f"REVISION_0.2.md に必須キーワードが見つかりません: {keyword!r}"
+
+
+def test_revision02_adapter_sweep_completeness_declared() -> None:
+    """Codex bot レビュー PR #316 第8巡指摘B: v0.1 全文の `grep -in adapter`
+    掃討の網羅性宣言がソース中に明文化されていること。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "grep -in adapter" in doc
+    assert "未マップの実行要件は残っていない" in doc
+
+
+def test_revision02_v0_1_adapter_line_count_matches_swept_total() -> None:
+    """`grep -in adapter` で v0.1 全文を機械的に再走査し、ヒット行数が
+    掃討時の実測（22行）と一致することを確認する — v0.1 は byte-pin
+    不変のため、この行数はテストとして安定して再現可能（Codex bot
+    レビュー PR #316 第8巡指摘B）。行数が変われば v0.1 自体が改変された
+    ことの検出にもなる（design_doc_sha256 の pin 検証と相補的）。"""
+    v01_doc = DESIGN_DOC_PATH.read_text(encoding="utf-8")
+    adapter_lines = [line for line in v01_doc.splitlines() if "adapter" in line.lower()]
+    assert len(adapter_lines) == 22, (
+        f"v0.1 の 'adapter' 出現行数が掃討時の実測（22）と異なる: {len(adapter_lines)} 行 "
+        f"— v0.1 の改変、または本テストの前提が古い可能性がある: {adapter_lines!r}"
+    )
+
+
+def test_revision02_new_pin_fields_get_64hex_format_enforced(contract_raw: Dict[str, Any]) -> None:
+    """新欄2つ（design_revision_doc_sha256 / backbone_runtime_bundle_sha）は
+    欄名が `_sha256`/`_sha` で終わるため、`_validate_pin_field_value_shape`
+    の汎用64hexブランチが自動適用される（特別扱いの分岐を追加していない
+    ことの確認）。"""
+    for field_name in ("design_revision_doc_sha256", "backbone_runtime_bundle_sha"):
+        assert field_name in m.CONTRACT_PIN_FIELDS
+        tampered = copy.deepcopy(contract_raw)
+        tampered[field_name] = {"value": "not-a-valid-hex-value", "status": "PINNED", "source": "x"}
+        with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+            m.load_run9_contract(tampered)
+
+
+# --- item 2: af0_anchor_manifest の実在ファイル整合 -------------------------
+
+
+def test_revision02_af0_anchor_manifest_spec_sha256_matches_canonical_af0_json() -> None:
+    """af0_anchor_manifest.json の spec_sha256 は
+    founder_specs/AF0.json の**正規形**（af_spec.py canonical_json 規約:
+    sort_keys / ensure_ascii=False / 区切り固定 / 末尾改行なし）の sha256 と
+    一致する。**これは founder_specs/AF0.json の生バイト列の sha256sum とは
+    異なる**（後者は pretty-printed のため） — 両者の関係は manifest 自身の
+    `spec_sha256.verification` フィールドが明記する。"""
+    manifest = json.loads(AF0_ANCHOR_MANIFEST_PATH.read_text(encoding="utf-8"))
+    spec = json.loads(AF0_SPEC_PATH.read_text(encoding="utf-8"))
+    canonical_af0 = json.dumps(spec, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    import hashlib
+
+    canonical_sha256 = hashlib.sha256(canonical_af0.encode("utf-8")).hexdigest()
+    assert manifest["spec_sha256"]["value"] == canonical_sha256
+
+    # 対照実験: 生バイト列の sha256sum は意図的に異なることを直接確認する
+    # （pretty-printed file vs canonical serialization）。
+    raw_sha256 = _sha256_file(AF0_SPEC_PATH)
+    assert raw_sha256 != canonical_sha256, (
+        "founder_specs/AF0.json が canonical と偶然バイト同一になった場合、"
+        "spec_sha256.verification の記述（『pretty-printed のため異なる』）"
+        "を更新する必要がある"
+    )
+
+
+def test_revision02_af0_anchor_manifest_spec_sha256_matches_founder_manifest_record() -> None:
+    """af0_anchor_manifest.json の spec_sha256 は
+    results/AF0/founder_manifest.json#spec_sha256 の転記値と一致する。"""
+    manifest = json.loads(AF0_ANCHOR_MANIFEST_PATH.read_text(encoding="utf-8"))
+    founder_manifest = json.loads(AF0_FOUNDER_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert manifest["spec_sha256"]["value"] == founder_manifest["spec_sha256"]
+
+
+def test_revision02_af0_anchor_manifest_component_hashes_match_actual_files() -> None:
+    """founder_manifest_sha256 / ingestion_sha256 / sha256sums_sha256 は、
+    それぞれ対応する実ファイルの生バイト sha256sum と一致する。"""
+    manifest = json.loads(AF0_ANCHOR_MANIFEST_PATH.read_text(encoding="utf-8"))
+    af0_results_dir = _FOUNDRY_DIR / "artificial_founder" / "results" / "AF0"
+    assert manifest["founder_manifest_sha256"]["value"] == _sha256_file(
+        af0_results_dir / "founder_manifest.json"
+    )
+    assert manifest["ingestion_sha256"]["value"] == _sha256_file(
+        af0_results_dir / "measurements" / "ingestion.json"
+    )
+    assert manifest["sha256sums_sha256"]["value"] == _sha256_file(af0_results_dir / "SHA256SUMS.txt")
+
+
+def test_revision02_af0_anchor_manifest_pins_p0_not_established_verdict() -> None:
+    """AF-P0 の NOT_ESTABLISHED 判定を manifest が正しく継承していること
+    （Duration/Energy/AG-alpha 非保持は不変 — DESIGN_RUN9_REVISION_0.2.md
+    改訂2）。"""
+    manifest = json.loads(AF0_ANCHOR_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert manifest["p0_verdict"]["overall_verdict"] == "NOT_ESTABLISHED"
+    assert set(manifest["p0_verdict"]["failed_gates"]) == {"G10", "G11", "G13"}
+
+
+def test_revision02_af0_anchor_manifest_sha_matches_domain_af0_pin() -> None:
+    """af0_anchor_manifest.json の正規形 sha256（
+    canonicalization_method フィールドが宣言する規約で再計算）が、
+    domains/identity_domain_run9_v1.json の anchor_hashes.af0 と一致する。"""
+    manifest = json.loads(AF0_ANCHOR_MANIFEST_PATH.read_text(encoding="utf-8"))
+    recomputed = _sha256_canonical_json(manifest)
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["anchor_hashes"]["af0"] == recomputed
+
+
+def test_revision02_domain_af0_and_ritsu_are_now_pinned_hex64() -> None:
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert m._SHA256_HEX_RE.match(domain.anchor_hashes["af0"])
+    assert domain.anchor_hashes["ritsu"] == "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76"
+
+
+# --- item 3: backbone_checkpoint_sha PINNED かつ裁定値と一致 ----------------
+
+
+def test_revision02_backbone_checkpoint_sha_pinned_and_matches_ruling(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["backbone_checkpoint_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a"
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第8巡対応 — Fix A: bundle sha のハッシュ規約統一
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_compute_file_sha256_matches_actual_bundle_file_bytes() -> None:
+    """`run9_schema.compute_file_sha256()` が inputs/backbone_runtime_bundle.json
+    の実バイト sha256（`sha256sum` 相当）を正しく計算できること — 現状
+    backbone_runtime_bundle_sha は PENDING のままだが、将来 PINNED 化する
+    際の照合手順（このヘルパを呼ぶだけ）が実行可能であることを確認する
+    （Codex bot レビュー PR #316 第8巡指摘A採用）。"""
+    import hashlib
+
+    computed = m.compute_file_sha256(BACKBONE_BUNDLE_PATH)
+    expected = hashlib.sha256(BACKBONE_BUNDLE_PATH.read_bytes()).hexdigest()
+    assert computed == expected
+    assert m._SHA256_HEX_RE.match(computed)
+
+
+def test_revision02_compute_file_sha256_matches_design_doc_sha256_pin() -> None:
+    """対照実験: 既に PINNED 済みの design_doc_sha256 も
+    `compute_file_sha256()` で再現できること（design_doc_sha256 と同一
+    規約であることの直接確認）。"""
+    contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    assert m.compute_file_sha256(DESIGN_DOC_PATH) == contract_raw["design_doc_sha256"]["value"]
+    assert (
+        m.compute_file_sha256(REVISION_DOC_PATH)
+        == contract_raw["design_revision_doc_sha256"]["value"]
+    )
+
+
+def test_revision02_backbone_runtime_bundle_sha_wording_uses_raw_byte_convention() -> None:
+    """Codex bot レビュー PR #316 第8巡指摘A: RUN9_CONTRACT.yaml の
+    backbone_runtime_bundle_sha 関連コメント/reason に「正規形 sha256」の
+    文言が残っていない（design_doc_sha256 と同一の実バイト規約へ統一
+    済み）こと。af0_anchor_manifest.json（意図的な正規形規約の例外）の
+    言及自体は許容する。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    lines = contract_text.splitlines()
+    for i, line in enumerate(lines):
+        if "backbone_runtime_bundle_sha" in line or "backbone" in line.lower():
+            # backbone 関連の行/直後の reason 行に「正規形」が単独で出て
+            # いないこと（af0 との対比説明の一部として「正規形」の語自体は
+            # コメント中に許容するが、"bundle 正規形" のような直結表現は
+            # 禁止する）。
+            assert "bundle 正規形" not in line, f"line {i}: {line!r}"
+    assert "bundle 正規形" not in contract_text
+
+
+def test_revision02_af0_vs_bundle_hash_convention_difference_documented() -> None:
+    """af0（正規形規約）と bundle（実バイト規約）の差異理由が、
+    compute_file_sha256() の docstring または contract コメントに
+    明記されていることの直接確認。"""
+    schema_source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    combined = schema_source + contract_text
+    assert "af0" in combined.lower()
+    assert "canonicalization_method" in schema_source or "正規形" in contract_text
+    assert "compute_file_sha256" in schema_source
+
+
+def test_revision02_backbone_runtime_bundle_sha_pending_while_render_commit_unconfirmed(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """Codex bot レビュー PR #316 第1巡指摘（P2, 866fcc8, 採用）:
+    bundle 内 `render_code_commit` は直接記録ではなく推論値（RUN6 export
+    記録 s5_record 自体には commit が明記されていない）のため
+    `status: "INFERRED_UNCONFIRMED"` へ降格した。連動して
+    `backbone_runtime_bundle_sha` も PINNED から PENDING へ降格している
+    （`backbone_checkpoint_sha` は直接記録4件一致のため対象外・PINNED の
+    まま — 下の `test_revision02_backbone_checkpoint_sha_pinned_and_matches_ruling`
+    が別途確認する）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+
+    field = contract_raw["backbone_runtime_bundle_sha"]
+    assert field["status"] == "PENDING"
+    assert field["value"] is None
+    assert "INFERRED_UNCONFIRMED" in field["reason"] or "render_code_commit" in field["reason"]
+
+
+def test_revision02_render_code_commit_status_and_bundle_sha_status_are_consistent(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """負例的整合検査: bundle json の `render_code_commit.status` が
+    `INFERRED_UNCONFIRMED` である間は、contract の
+    `backbone_runtime_bundle_sha.status` が `PINNED` になっていないこと
+    （両者の食い違いを機械的に検出する）。将来 render_code_commit が
+    確定（direct record または User attestation）して status が変わったら、
+    このテストも合わせて更新が必要になる — その追随漏れ自体を検出する
+    ためのテストでもある。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    bundle_field_status = contract_raw["backbone_runtime_bundle_sha"]["status"]
+    if bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED":
+        assert bundle_field_status != "PINNED", (
+            "backbone_runtime_bundle_sha は PINNED だが、bundle 内 render_code_commit は "
+            "依然 INFERRED_UNCONFIRMED — 未確定の推論値を含む bundle を PINNED として "
+            "契約に取り込んでしまっている"
+        )
+
+
+def test_revision02_backbone_runtime_bundle_sha_matches_actual_file_once_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """`backbone_runtime_bundle_sha` の実ファイル照合を、design_doc_sha256
+    / design_revision_doc_sha256 の既存テスト（`test_revision02_doc_sha256_pin_matches_actual_file`
+    / `test_revision02_compute_file_sha256_matches_design_doc_sha256_pin`）
+    と同型で事前配線する（Codex bot レビュー PR #316 第9巡指摘, e490985,
+    部分採用）。現状 status は PENDING のため value は None のままである
+    ことだけを確認するが、将来 render_code_commit が確定して本欄が
+    PINNED へ昇格した瞬間、この同じテストが
+    `compute_file_sha256(inputs/backbone_runtime_bundle.json)` との一致を
+    自動的に強制するようになる（テストコードの変更を要さない）。
+
+    **層分離の境界宣言（変更しない）**: この照合はテスト層にのみ配線し、
+    `load_run9_contract()`/`gate_state()` 側（loader/runtime 層）へは
+    配線しない — PR #315 第4巡の境界宣言どおり、contract loader は
+    事前登録契約の構造述語（型・整形式・状態の整合）を検査する層であり、
+    pin 値と実体ファイルの突合は R9-G1（INPUT_FREEZE_AND_RIGHTS）検証
+    ツーリングの職務として分離する。テスト層の事前配線はこの分離を
+    崩さない — pin 前は「PENDING であること」だけを検査し、実体突合の
+    強制はテストが検出するだけで loader の受理・拒否には影響しない。
+    """
+    field = contract_raw["backbone_runtime_bundle_sha"]
+    if field["status"] == "PINNED":
+        assert field["value"] == m.compute_file_sha256(BACKBONE_BUNDLE_PATH), (
+            "backbone_runtime_bundle_sha が PINNED を宣言しているが、"
+            "inputs/backbone_runtime_bundle.json の実バイト sha256 と一致しない"
+        )
+    else:
+        assert field["status"] == "PENDING"
+        assert field["value"] is None
+
+
+def test_revision02_render_code_commit_value_and_confirmation_metadata_present() -> None:
+    """降格後も値自体（推論結果）と根拠・確定条件は保持されていること。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    rcc = bundle["render_code_commit"]
+    assert rcc["commit_full"] == "e2307b1080b00f3999702ce9017cfd75c7f862fe"
+    assert rcc["commit_short"] == "e2307b1"
+    assert rcc["status"] == "INFERRED_UNCONFIRMED"
+    assert rcc["confirmation_required"]
+    assert rcc["inference_basis"]
+    # RUN6 export 記録自体には commit が明記されていない事実が明文化されていること。
+    assert "s5_record" in rcc["note"]
+    assert "does not" in rcc["note"].lower() or "does NOT" in rcc["note"]
+
+
+def test_revision02_backbone_bundle_acoustic_onnx_matches_ruling() -> None:
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert (
+        bundle["acoustic_onnx_sha256"]["value"]
+        == "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706"
+    )
+
+
+def test_revision02_backbone_bundle_checkpoint_matches_contract() -> None:
+    """backbone_runtime_bundle.json と RUN9_CONTRACT.yaml の
+    backbone_checkpoint_sha が同一値を pin していること（二重管理の不整合
+    が無いことの確認）。checkpoint_sha256 自体は render_code_commit の
+    降格とは独立に、両ファイルとも引き続き PINNED 相当の値を持つ。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    assert bundle["checkpoint_sha256"]["value"] == contract_raw["backbone_checkpoint_sha"]["value"]
+
+
+def test_revision02_backbone_bundle_run7_not_used_records_teacher_swap_reason() -> None:
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert "教師交代" in bundle["run7_not_used"]["reason"] or "teacher swap" in bundle["run7_not_used"]["reason"].lower()
+
+
+# --- item 4: rights_manifest が PENDING_USER_ATTESTATION の間、domain user
+#     anchor は未 pin のまま（gate BLOCKED 継続） -----------------------------
+
+
+def test_revision02_rights_manifest_is_pending_user_attestation() -> None:
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert rights["rights_class"] == "PENDING_USER_ATTESTATION"
+    assert rights["consent_status"] == "PENDING_USER_ATTESTATION"
+    assert rights["attestation"]["attested"] is False
+    assert rights["usage_grants"]["raw_audio_publication"] == "not_granted"
+    assert rights["usage_grants"]["model_general_distribution"] == "not_granted"
+
+
+def _load_rights_manifest_and_ledger() -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """rights_manifest / donor_ledger を、`verify_rights_manifest_against_ledger()`
+    が規定する重複キー拒否読込経路（`run9_schema.load_rights_manifest_json()`
+    / `load_user_donor_ledger_json()`）経由で読み込む — 生の `json.loads()`
+    は使わない（Codex bot レビュー PR #316 第10巡指摘採用, c34bdff: 生
+    `json.loads()` は同一 entry 内の重複キーを last-key-wins で黙って
+    解決してしまうため、rights 検証テスト群全体をこの2関数経由へ統一する）。
+    """
+    rights = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    ledger = m.load_user_donor_ledger_json(
+        (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
+    )
+    return rights, ledger
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第10巡対応（本 PR 最終レビュー対応巡）—
+# rights manifest / ledger 読込への重複キー拒否の適用
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_load_rights_manifest_json_rejects_duplicate_entry_key() -> None:
+    """負例: rights_manifest の1エントリ内で同一キー（`sha256`）が2回
+    異なる値で宣言された生 JSON テキストが、`load_rights_manifest_json()`
+    の読込段で拒否されること（生の `json.loads()` なら
+    last-key-wins で後勝ちの値だけが黙って通り、手編集で「たまたま期待値
+    に潰れた」曖昧な入力がそのまま検証器へ届いてしまっていた —
+    Codex bot レビュー PR #316 第10巡指摘採用）。"""
+    duplicate_key_text = """
+    {
+      "schema": "run9-user-donor-rights/1.0",
+      "entries": [
+        {
+          "card_id": "UC-001",
+          "source_sha256": "%s",
+          "sha256": "%s",
+          "duration_sec": 1.0,
+          "sha256": "%s"
+        }
+      ]
+    }
+    """ % ("a" * 64, "b" * 64, "c" * 64)
+    with pytest.raises(m.Run9ValidationError, match="duplicate key"):
+        m.load_rights_manifest_json(duplicate_key_text)
+
+
+def test_revision02_load_user_donor_ledger_json_rejects_duplicate_entry_key() -> None:
+    """負例: donor_ledger 側でも同様に、1エントリ内の重複キー
+    （`card_id`、値相違）を持つ生 JSON テキストが読込段で拒否されること。"""
+    duplicate_key_text = """
+    {
+      "schema": "user-donor-ledger/0.1",
+      "entries": [
+        {
+          "card_id": "UC-001",
+          "source_sha256": "%s",
+          "sha256": "%s",
+          "duration_sec": 1.0,
+          "card_id": "UC-002"
+        }
+      ]
+    }
+    """ % ("a" * 64, "b" * 64)
+    with pytest.raises(m.Run9ValidationError, match="duplicate key"):
+        m.load_user_donor_ledger_json(duplicate_key_text)
+
+
+def test_revision02_load_rights_manifest_json_and_ledger_accept_well_formed_text() -> None:
+    """対照実験: 重複キーの無い実ファイルは引き続き読み込める（正常系まで
+    壊していないことの確認）。"""
+    rights = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    ledger = m.load_user_donor_ledger_json(
+        (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
+    )
+    assert isinstance(rights, dict) and isinstance(ledger, dict)
+    m.verify_rights_manifest_against_ledger(rights, ledger)  # 例外を投げないことの確認
+
+
+def test_revision02_load_rights_manifest_json_rejects_non_object_top_level() -> None:
+    """負例: トップレベルがオブジェクトでない JSON は拒否されること。"""
+    with pytest.raises(m.Run9ValidationError, match="must be an object"):
+        m.load_rights_manifest_json("[]")
+
+
+def test_revision02_verify_rights_manifest_docstring_specifies_strict_loader_input() -> None:
+    """`verify_rights_manifest_against_ledger()` の docstring が、入力は
+    `load_rights_manifest_json()`/`load_user_donor_ledger_json()` 経由で
+    読み込むことを規定していることの直接確認。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert "load_rights_manifest_json" in source
+    assert "load_user_donor_ledger_json" in source
+
+
+def test_revision02_rights_manifest_entries_match_donor_ledger() -> None:
+    """rights_manifest.json の17件が user_donor_ledger.json の実測値と
+    過不足なく一致すること（card_id/source_sha256/sha256/duration_sec）。
+    実際の検査ロジックは `run9_schema.verify_rights_manifest_against_ledger()`
+    （loader 側ヘルパ、Codex bot レビュー PR #316 第3巡指摘 0a4d0cf 採用）を
+    呼ぶだけにする — attest 後の実運用でも同じ検査が効くようにするため。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    assert len(rights["entries"]) == len(ledger["entries"]) == 17
+    m.verify_rights_manifest_against_ledger(rights, ledger)  # 例外を投げないことの確認
+
+
+def test_revision02_rights_manifest_card_id_set_matches_ledger_exactly() -> None:
+    """card_id 集合そのものが ledger と完全一致すること（過不足双方の検出）
+    を直接確認する。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    rights_ids = {e["card_id"] for e in rights["entries"]}
+    ledger_ids = {e["card_id"] for e in ledger["entries"]}
+    assert rights_ids == ledger_ids
+    assert len(rights_ids) == len(rights["entries"]), "rights_manifest 内に重複 card_id がある"
+
+
+def test_revision02_verify_rights_manifest_rejects_duplicate_card_id() -> None:
+    """負例: rights_manifest 側で card_id を重複させた（= 1本欠落 + 1本二重）
+    合成 fixture が拒否されること。UC-017 を UC-016 の複製に差し替える —
+    件数は17件のまま・両方とも ledger 側に実在する card_id のため、件数
+    一致 + ledger からの引き当てだけの旧検査は素通りしていた欠陥の再現。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    uc016 = next(e for e in tampered["entries"] if e["card_id"] == "UC-016")
+    for entry in tampered["entries"]:
+        if entry["card_id"] == "UC-017":
+            entry["card_id"] = "UC-016"
+            entry["source_sha256"] = uc016["source_sha256"]
+            entry["sha256"] = uc016["sha256"]
+            entry["duration_sec"] = uc016["duration_sec"]
+    assert len(tampered["entries"]) == 17  # 件数は変わらない（旧検査が見逃す条件を再現）
+    with pytest.raises(m.Run9ValidationError, match="duplicate card_id"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_missing_card_id() -> None:
+    """負例: rights_manifest から1件（UC-017）を欠落させた合成 fixture が
+    拒否されること。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    tampered["entries"] = [e for e in tampered["entries"] if e["card_id"] != "UC-017"]
+    with pytest.raises(m.Run9ValidationError, match="does not exactly match"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_extra_card_id() -> None:
+    """負例: ledger に存在しない card_id を rights_manifest 側に追加した
+    合成 fixture が拒否されること。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    forged_entry = dict(tampered["entries"][0])
+    forged_entry["card_id"] = "UC-999"
+    tampered["entries"].append(forged_entry)
+    with pytest.raises(m.Run9ValidationError, match="does not exactly match"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_value_mismatch() -> None:
+    """負例: card_id 集合は正しく、整形式（64hex）でもあるが、値そのものが
+    ledger と食い違う fixture が拒否されること。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    tampered["entries"][0]["sha256"] = "f" * 64  # 整形式は正しいが ledger の実値とは不一致
+    with pytest.raises(m.Run9ValidationError, match="does not match"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第4巡対応 — 両側欠落穴（None == None すり抜け）
+# の閉塞
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_verify_rights_manifest_rejects_both_sides_missing_field() -> None:
+    """負例: rights_manifest 側と donor_ledger 側の両方から同じ必須
+    フィールド（source_sha256）が欠落した合成ペアが拒否されること。
+    旧実装は `entry.get(field)` 同士の等値比較のみのため、両側欠落だと
+    `None == None` で素通りしていた（Codex bot レビュー PR #316 第4巡
+    指摘, 4b1c872, 採用）。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_rights = copy.deepcopy(rights)
+    tampered_ledger = copy.deepcopy(ledger)
+    for entry in tampered_rights["entries"]:
+        if entry["card_id"] == "UC-001":
+            del entry["source_sha256"]
+    for entry in tampered_ledger["entries"]:
+        if entry["card_id"] == "UC-001":
+            del entry["source_sha256"]
+    with pytest.raises(m.Run9ValidationError, match="missing required field"):
+        m.verify_rights_manifest_against_ledger(tampered_rights, tampered_ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_one_side_missing_field() -> None:
+    """負例: rights_manifest 側のみ必須フィールド（duration_sec）が欠落した
+    場合も拒否されること（donor_ledger 側は無傷）。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_rights = copy.deepcopy(rights)
+    for entry in tampered_rights["entries"]:
+        if entry["card_id"] == "UC-001":
+            del entry["duration_sec"]
+    with pytest.raises(m.Run9ValidationError, match="missing required field"):
+        m.verify_rights_manifest_against_ledger(tampered_rights, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_non_64hex_sha() -> None:
+    """負例: sha256 フィールドが64hex形式でない値（短い/大文字/非hex文字）
+    はいずれも拒否されること。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    for bad_value in ("not-hex", "A" * 64, "f" * 63, ""):
+        tampered = copy.deepcopy(rights)
+        for entry in tampered["entries"]:
+            if entry["card_id"] == "UC-001":
+                entry["source_sha256"] = bad_value
+        with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+            m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_non_positive_or_bool_duration() -> None:
+    """負例: duration_sec が bool・0・負値・非有限（NaN/inf）のいずれも
+    拒否されること。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    for bad_value in (True, False, 0, -1.5, float("nan"), float("inf")):
+        tampered = copy.deepcopy(rights)
+        for entry in tampered["entries"]:
+            if entry["card_id"] == "UC-001":
+                entry["duration_sec"] = bad_value
+        with pytest.raises(m.Run9ValidationError):
+            m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_require_rights_ledger_helpers_accept_well_formed_values() -> None:
+    """対照実験: 正しい形の値はヘルパ単体でも通過する（正常系まで壊して
+    いないことの確認）。"""
+    assert (
+        m._require_rights_ledger_sha256_hex("a" * 64, side="rights_manifest", card_id="UC-001", field="sha256")
+        == "a" * 64
+    )
+    assert m._require_rights_ledger_positive_duration(
+        12.5, side="donor_ledger", card_id="UC-001"
+    ) == 12.5
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第5巡対応 — rights 検証器ファミリー終端
+# (Fix A: schema 版の厳密検証 / Fix B: ledger 側の重複 card_id 拒否)
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_verify_rights_manifest_rejects_wrong_rights_schema() -> None:
+    """負例（Fix A）: rights_manifest.schema が別値だと拒否される。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    tampered["schema"] = "run9-user-donor-rights/0.9"
+    with pytest.raises(m.Run9ValidationError, match="rights_manifest.schema"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_missing_rights_schema() -> None:
+    """負例（Fix A）: rights_manifest.schema が欠落していると拒否される。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    del tampered["schema"]
+    with pytest.raises(m.Run9ValidationError, match="rights_manifest.schema"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_wrong_ledger_schema() -> None:
+    """負例（Fix A）: donor_ledger.schema が別値だと拒否される。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_ledger = copy.deepcopy(ledger)
+    tampered_ledger["schema"] = "user-donor-ledger/0.2"
+    with pytest.raises(m.Run9ValidationError, match="donor_ledger.schema"):
+        m.verify_rights_manifest_against_ledger(rights, tampered_ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_missing_ledger_schema() -> None:
+    """負例（Fix A）: donor_ledger.schema が欠落していると拒否される。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_ledger = copy.deepcopy(ledger)
+    del tampered_ledger["schema"]
+    with pytest.raises(m.Run9ValidationError, match="donor_ledger.schema"):
+        m.verify_rights_manifest_against_ledger(rights, tampered_ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_duplicate_ledger_card_id() -> None:
+    """負例（Fix B）: donor_ledger 側で同一 card_id が2回（hash 相違）
+    出現する合成 ledger が拒否されること — 第3巡は rights 側のみ重複拒否
+    しており、ledger 側は last-entry-wins で黙って解決していた非対称の
+    解消。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_ledger = copy.deepcopy(ledger)
+    duplicate_entry = copy.deepcopy(tampered_ledger["entries"][0])
+    duplicate_entry["source_sha256"] = "f" * 64
+    duplicate_entry["sha256"] = "e" * 64
+    tampered_ledger["entries"].append(duplicate_entry)
+    with pytest.raises(m.Run9ValidationError, match="duplicate card_id"):
+        m.verify_rights_manifest_against_ledger(rights, tampered_ledger)
+
+
+def test_revision02_verify_rights_manifest_correct_schemas_and_ledger_still_pass() -> None:
+    """対照実験: schema・ledger の重複無しの正常系は引き続き通る（Fix A/B
+    が正常系まで壊していないことの確認）。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    assert rights["schema"] == "run9-user-donor-rights/1.0"
+    assert ledger["schema"] == "user-donor-ledger/0.1"
+    m.verify_rights_manifest_against_ledger(rights, ledger)  # 例外を投げないことの確認
+
+
+def test_revision02_verify_rights_manifest_docstring_declares_family_termination() -> None:
+    """rights 検証器ファミリーの終端宣言（PR #316 第3〜6巡・期待集合の
+    凍結を含め完結）がソース中に明文化されていることの直接確認。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert "全数掃討・" in source and "終端" in source
+    assert "境界宣言" in source
+    assert "USER_DONOR_CARD_IDS" in source
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第6巡対応 — RUN9 期待 donor 集合の凍結
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_user_donor_card_ids_constant_is_uc001_to_uc017() -> None:
+    """USER_DONOR_CARD_IDS は User 裁定4の逐語「UC-001〜017」の機械化 —
+    17件・重複無し・UC-001〜UC-017 の完全形。"""
+    assert m.USER_DONOR_CARD_IDS == tuple(f"UC-{i:03d}" for i in range(1, 18))
+    assert len(m.USER_DONOR_CARD_IDS) == len(set(m.USER_DONOR_CARD_IDS)) == 17
+
+
+def test_revision02_verify_rights_manifest_rejects_both_sides_swapped_card_id() -> None:
+    """負例: rights_manifest と donor_ledger の**両側同時**に UC-017 を
+    UC-999 へ差し替えた合成ペアが拒否されること。item 2（相互一致）だけ
+    では両側が同じ ID へ揃って差し替わる攻撃を検出できず、外部の凍結
+    参照点 USER_DONOR_CARD_IDS との突き合わせ（item 6）が必要な理由の
+    再現（Codex bot レビュー PR #316 第6巡指摘, be8f448, 採用）。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_rights = copy.deepcopy(rights)
+    tampered_ledger = copy.deepcopy(ledger)
+    for entry in tampered_rights["entries"]:
+        if entry["card_id"] == "UC-017":
+            entry["card_id"] = "UC-999"
+    for entry in tampered_ledger["entries"]:
+        if entry["card_id"] == "UC-017":
+            entry["card_id"] = "UC-999"
+    # 前提確認: 相互一致（item 2 相当）はこの改変では壊れていない。
+    assert {e["card_id"] for e in tampered_rights["entries"]} == {
+        e["card_id"] for e in tampered_ledger["entries"]
+    }
+    with pytest.raises(m.Run9ValidationError, match="USER_DONOR_CARD_IDS"):
+        m.verify_rights_manifest_against_ledger(tampered_rights, tampered_ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_rights_only_swapped_card_id() -> None:
+    """負例（対照）: rights 側のみ UC-017→UC-999 に差し替えた場合も拒否
+    されること（item 2 の相互不一致経由でも、item 6 の凍結集合経由でも
+    どちらでも検出できる状態であることの確認）。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_rights = copy.deepcopy(rights)
+    for entry in tampered_rights["entries"]:
+        if entry["card_id"] == "UC-017":
+            entry["card_id"] = "UC-999"
+    with pytest.raises(m.Run9ValidationError):
+        m.verify_rights_manifest_against_ledger(tampered_rights, ledger)
+
+
+def test_revision02_verify_rights_manifest_current_files_match_frozen_donor_set() -> None:
+    """対照実験: 現行 rights_manifest.json / user_donor_ledger.json は
+    USER_DONOR_CARD_IDS と完全一致し、正常系まで壊していないこと。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    expected = set(m.USER_DONOR_CARD_IDS)
+    assert {e["card_id"] for e in rights["entries"]} == expected
+    assert {e["card_id"] for e in ledger["entries"]} == expected
+    m.verify_rights_manifest_against_ledger(rights, ledger)  # 例外を投げないことの確認
+
+
+def test_revision02_domain_user_anchor_still_unpinned_while_rights_pending() -> None:
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert domain.anchor_hashes["user"] == "<PIN_BEFORE_RUN>"
+    assert domain.is_pinned() is False
+
+
+def test_revision02_gate_remains_blocked_after_af0_ritsu_backbone_pins(
+    contract: m.Run9RunContract,
+) -> None:
+    """af0/ritsu anchor と backbone (checkpoint + runtime bundle) が新たに
+    PINNED になっても、user anchor / lesson / VG-L0 ハーネス関連欄が
+    PENDING のままである限り gate_state() は "BLOCKED" のまま
+    （部分的な pin 進展だけでは READY へ到達しないことの機械証明）。"""
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_revision02_build_founder_still_rejects_current_domain_draft() -> None:
+    """user anchor 未 pin のため、現行 domain draft からは
+    build_founder() が依然として拒否されること（Phase 0.2 でも段階3→4の
+    機械強制が有効なままであることの確認）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    with pytest.raises(m.Run9ValidationError):
+        m.build_founder(domain, "R9F-01")
+
+
+# --- README 更新の整合確認 --------------------------------------------------
+
+
+def test_revision02_readme_mentions_revision_0_2() -> None:
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "0.2" in readme
+    assert "2026-08-24" in readme
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第2巡対応 — runtime bundle に RUN6 render フロー
+# の全消費物（canon model assets）を追加
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_bundle_has_canon_model_assets_section() -> None:
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert "canon_model_assets" in bundle
+    assert "assets" in bundle["canon_model_assets"]
+    assert set(bundle["canon_model_assets"]["assets"].keys()) == {
+        "linguistic_onnx",
+        "variance_duration_onnx",
+        "variance_pitch_onnx",
+        "phonemes_txt",
+    }
+
+
+def test_revision02_bundle_canon_model_assets_entries_have_64hex_and_source() -> None:
+    """canon_model_assets.assets / acoustic_export_companions の各リーフ
+    エントリは、value が64hex sha256 なら source を持ち、value が確定して
+    いない（PENDING 相当）なら reason を持つこと（Codex bot レビュー
+    PR #316 第2巡指摘）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    checked = 0
+    for section_name in ("assets", "acoustic_export_companions"):
+        section = bundle["canon_model_assets"][section_name]
+        for entry_name, entry in section.items():
+            if not isinstance(entry, dict) or "value" not in entry:
+                continue  # "note" のような非エントリ・メタキーはスキップ
+            checked += 1
+            value = entry["value"]
+            if value is None or (isinstance(value, str) and value.strip() in ("", "<PENDING>")):
+                assert "reason" in entry, (
+                    f"canon_model_assets.{section_name}.{entry_name} は未確定値だが reason が無い"
+                )
+            else:
+                assert isinstance(value, str) and m._SHA256_HEX_RE.match(value), (
+                    f"canon_model_assets.{section_name}.{entry_name}.value は64hex sha256 で"
+                    f"なければならない: {value!r}"
+                )
+                assert "source" in entry, (
+                    f"canon_model_assets.{section_name}.{entry_name} は確定値だが source が無い"
+                )
+    assert checked >= 7, "canon_model_assets 配下のエントリ検査が発火していない（空洞化防止）"
+
+
+def test_revision02_bundle_canon_model_assets_values_match_probe_records() -> None:
+    """canon_model_assets の各値が、一次ソースの probe result JSON の
+    実測値と一致すること（転記誤りの検出）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    probe = json.loads(
+        (_RUN_DIR.parent / "records" / "vgl0_control_axis_probe_result_n6.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    pins = probe["pins"]
+    assets = bundle["canon_model_assets"]["assets"]
+    assert assets["linguistic_onnx"]["value"] == pins["canon_linguistic_onnx"]["sha256"]
+    assert assets["variance_duration_onnx"]["value"] == pins["canon_dur_onnx"]["sha256"]
+    assert assets["variance_pitch_onnx"]["value"] == pins["canon_pitch_onnx"]["sha256"]
+    assert assets["phonemes_txt"]["value"] == pins["canon_phonemes"]["sha256"]
+
+    companions = bundle["canon_model_assets"]["acoustic_export_companions"]
+    assert companions["dsconfig_yaml"]["value"] == pins["acoustic_dsconfig"]["sha256"]
+    assert companions["acoustic_phonemes_json"]["value"] == pins["acoustic_phonemes_json"]["sha256"]
+    assert companions["speaker_embed"]["value"] == pins["speaker_embed"]["sha256"]
+
+    # acoustic_onnx / vocoder_onnx の両方が、bundle 側の既存 top-level pin
+    # とも probe record 側とも一致すること（run6 backbone の同一性の
+    # 追加の交差確認）。
+    assert bundle["acoustic_onnx_sha256"]["value"] == pins["acoustic_onnx"]["sha256"]
+    assert bundle["vocoder"]["runtime_onnx_sha256"]["value"] == pins["vocoder_onnx"]["sha256"]
+
+
+def test_revision02_bundle_canon_model_assets_cross_checked_across_4_probe_records() -> None:
+    """canon_model_assets の各値が、独立した4件の probe result（n6 / 無印 /
+    n10 / render_reproducibility）すべてで同一であることを確認する
+    （n6 以外の3件は補助的な相互一致確認）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assets = bundle["canon_model_assets"]["assets"]
+    records_dir = _RUN_DIR.parent / "records"
+    for filename in (
+        "vgl0_control_axis_probe_result.json",
+        "vgl0_control_axis_probe_result_n10.json",
+        "vgl0_render_reproducibility_result.json",
+    ):
+        probe = json.loads((records_dir / filename).read_text(encoding="utf-8"))
+        pins = probe["pins"]
+        assert assets["linguistic_onnx"]["value"] == pins["canon_linguistic_onnx"]["sha256"], filename
+        assert assets["variance_duration_onnx"]["value"] == pins["canon_dur_onnx"]["sha256"], filename
+        assert assets["variance_pitch_onnx"]["value"] == pins["canon_pitch_onnx"]["sha256"], filename
+
+
+def test_revision02_bundle_canon_model_source_distribution_is_distinct_from_ritsu_anchor() -> None:
+    """canon model distribution（NamineRitsu_DiffSinger.zip）の sha256 が、
+    RUN9 identity anchor として pin されている波音リツ配布 zip（別ファイル）
+    の sha256 と異なることを直接確認する（両者を混同していないことの
+    構造的検査）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    canon_zip_sha = bundle["canon_model_assets"]["source_distribution"]["sha256"]
+    ritsu_anchor_sha = domain_raw["anchor_hashes"]["ritsu"]
+    assert canon_zip_sha != ritsu_anchor_sha
+    assert canon_zip_sha == "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530"
+    assert ritsu_anchor_sha == "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76"
+
+
+def test_revision02_bundle_completeness_note_explains_canon_assets_are_required() -> None:
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert "completeness_note" in bundle
+    note = bundle["completeness_note"]
+    assert "canon" in note.lower()
+    assert "acoustic" in note.lower()
+
+
+def test_revision02_backbone_runtime_bundle_sha_still_pending_after_canon_assets_added(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """canon_model_assets 追加は render_code_commit の確定状態を変えない
+    ため、`backbone_runtime_bundle_sha` は引き続き PENDING のまま
+    （変更なし — この巡の追加が既存の降格判断へ副作用しないことの確認）。"""
+    field = contract_raw["backbone_runtime_bundle_sha"]
+    assert field["status"] == "PENDING"
+    assert field["value"] is None

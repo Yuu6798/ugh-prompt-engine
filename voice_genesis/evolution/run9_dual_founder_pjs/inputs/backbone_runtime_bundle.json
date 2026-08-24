@@ -1,0 +1,181 @@
+{
+  "schema": "run9-backbone-runtime-bundle/1.0",
+  "backbone_generation": "run6",
+  "backbone_label": "RUN6 phase B 40K checkpoint (User ruling 2026-08-24, DESIGN_RUN9_REVISION_0.2.md 改訂5)",
+  "checkpoint_sha256": {
+    "value": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+    "file": "phase_b/checkpoints/model_ckpt_steps_40000.ckpt",
+    "source": [
+      "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.2 (\"判定の正本\")",
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.checkpoint_sha256",
+      "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json#expansion.generations[run6].checkpoint_sha256",
+      "voice_genesis/foundry/run8/provision.sh#run6_ckpt"
+    ],
+    "note": "Cross-checked identical across all 4 sources."
+  },
+  "acoustic_onnx_sha256": {
+    "value": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+    "file": "acoustic.onnx (exported from the run6 checkpoint above)",
+    "source": "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.4"
+  },
+  "config_sha256": {
+    "value": "3722072045060e316ec9fee3f307412eceacf617d3b3ece7adfcbefa0f9df9d9",
+    "file": "phase_b/config/config.yaml (== run6_bundle/config.yaml)",
+    "source": [
+      "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.2",
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.config_sha256",
+      "voice_genesis/foundry/run8/provision.sh#run6_config"
+    ]
+  },
+  "speaker_map_sha256": {
+    "value": "da9748fabfa721a4a789224b50fd52743628fd2396602852f2dc25c54f2e3803",
+    "file": "run6_bundle/spk_map.json",
+    "source": [
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs.spk_map.json",
+      "voice_genesis/foundry/run8/provision.sh#run6_spk_map"
+    ],
+    "note": "Byte-identical to run5_bundle/spk_map.json (same value pinned for run5 and run6)."
+  },
+  "phoneme_map_sha256": {
+    "value": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
+    "file": "run6_bundle/dictionary-ja.txt",
+    "source": [
+      "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.3 (dict_txt)",
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs[\"dictionary-ja.txt\"]",
+      "voice_genesis/foundry/run8/provision.sh#run6_dict"
+    ],
+    "note": "Grapheme-to-phoneme pronunciation dictionary consumed by the DiffSinger binarizer/renderer. Byte-identical to run5_bundle/dictionary-ja.txt; run7 uses a different dictionary (633ee966...) — not applicable to the RUN6 backbone."
+  },
+  "language_map_sha256": {
+    "value": "2a6a227ee65a49f5c30e848a4b62c5cc1817926bbdab373228e6302d2c794953",
+    "file": "run6_bundle/lang_map.json",
+    "source": [
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs.lang_map.json",
+      "voice_genesis/foundry/run8/provision.sh#run6_lang_map"
+    ],
+    "note": "Supplementary field beyond the 5 named fields — included because it is a required exporter input (base_exporter.build_spk_map co-dependency, s7_exporter_input_pins.json#why_all_inputs) and its sha256 is equally well-sourced. Identical value across run5/run6/run7."
+  },
+  "vocoder": {
+    "runtime_onnx_sha256": {
+      "value": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
+      "file": "vocoder_onnx/nsf_hifigan.onnx (extracted)",
+      "source": "voice_genesis/foundry/run8/provision.sh#VOC_WANT (extraction verification target)"
+    },
+    "source_archive_sha256": {
+      "value": "e22f84009804da2e5916e7a2000f4c30278148796376e49368ec5ff8f9f58830",
+      "file": "nsf_hifigan.oudep",
+      "source": [
+        "voice_genesis/foundry/run8/provision.sh#vocoder_oudep",
+        "url:https://github.com/xunmengshe/OpenUtau/releases/download/0.0.0.0/nsf_hifigan.oudep"
+      ],
+      "note": "Distribution archive that nsf_hifigan.onnx (runtime_onnx_sha256 above) is extracted from."
+    }
+  },
+  "render_code_commit": {
+    "repo": "openvpi/DiffSinger",
+    "commit_short": "e2307b1",
+    "commit_full": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+    "status": "INFERRED_UNCONFIRMED",
+    "confirmation_required": "RUN6 export の直接記録の発掘、または User attestation",
+    "inference_basis": "This exact revision is the single, repository-wide invariant DiffSinger pin used across run4 through run8 gate_synth/export tooling (dozens of cross-references). The original 2026-08-20 run6 export record (s5_record) does not itself restate the git revision inline, but no evidence anywhere in the repository suggests a different revision was ever used for run5/6/7 rendering or export — the run4 provenance closure record explicitly notes the same absence-of-contrary-evidence reasoning when substituting this pin for an unlogged run4 export (results_s3/run4_provenance_closure_2026-08-23.json).",
+    "source": [
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#exporter (repo+revision)",
+      "voice_genesis/foundry/results_s7/s7_b1_calibration_set.json#diffsinger_repo_pin",
+      "voice_genesis/foundry/run8/provision.sh (git checkout e2307b1, HEAD verified)",
+      "voice_genesis/foundry/s1_gate/README.md / gate_synth.py / gate_synth_run4.py (--diffsinger-repo pin: e2307b1)",
+      "voice_genesis/foundry/tests/test_run4_export_device_probe.py (DIFFSINGER_COMMIT full hash)"
+    ],
+    "note": "The value above is an inference, not a directly-logged fact for the 2026-08-20 run6 export specifically. The original run6 export record (results_s5/s5_record_2026-08-20.md) does NOT itself restate the DiffSinger git revision inline anywhere in that record. The inference_basis field records why this pin was proposed (single repository-wide invariant revision, no contrary evidence) — it is evidentiary support, not confirmation. Codex bot review PR #316 第1巡指摘 (P2, 866fcc8) requires this be held as INFERRED_UNCONFIRMED, not PINNED, until either a direct record or explicit User attestation confirms it."
+  },
+  "run7_not_used": {
+    "reason": "Teacher swap contamination avoidance (User ruling, DESIGN_RUN9_REVISION_0.2.md 改訂5)",
+    "detail": "The single intervention between run6 and run7 was a teacher swap (d3synth synthetic teacher retired -> amitaro real-recording teacher). Using the run7 checkpoint as RUN9's Shared Backbone would leave residual effects of that teacher swap baked into the weights, confounding RUN9's own teacher variable (the PJS Performance Lesson introduced by LEARN_PERFORMANCE).",
+    "source": [
+      "voice_genesis/foundry/DESIGN_S6_run7.md (\"教師交代: D3 引退 -> あみたろ実録音発音教師・単一介入\")",
+      "voice_genesis/foundry/results_s6/s6_record_2026-08-20.md#3 (\"単一介入 = 教師交代\")"
+    ]
+  },
+  "canon_model_assets": {
+    "source_distribution": {
+      "name": "NamineRitsu_DiffSinger.zip (リツ公式 DiffSinger 配布)",
+      "sha256": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
+      "source": "voice_genesis/foundry/s1_dataprep/README.md (素材3)",
+      "note": "NOT the same zip as the ritsu identity anchor pin (r73_strong_ren0151.zip, 波音リツ強連続音Ver1.5.1, sha256 88c7b3ef... — domains/identity_domain_run9_v1.json anchor_hashes.ritsu). That zip is the raw UTAU voicebank used as the RUN9 Identity anchor; THIS zip is the separate DiffSinger-format canon model distribution consumed at render time via --canon-model-dir. Both are \"Ritsu\"-branded but serve different roles."
+    },
+    "canon_model_dir_role": "gate_synth.py --canon-model-dir points at this zip's extraction directory. gate_synth.py reads linguistic.onnx / dsdur/dur.onnx / dspitch/pitch.onnx / phonemes.txt from it (gate_synth.py lines ~524-526, 647-650, 2292-2294) — the linguistic front-end, duration predictor, and pitch (variance) predictor that DiffSinger's acoustic model depends on, plus the phoneme vocabulary. These are NOT trained/produced by the run5/6/7 acoustic-model finetuning — they are fixed components bundled with the Ritsu voicebank distribution and are reused unchanged across run5/6/7 renders (confirmed identical across 4 independent probe records below).",
+    "assets": {
+      "linguistic_onnx": {
+        "value": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "file": "NamineRitsu_DiffSinger/linguistic.onnx",
+        "source": [
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_linguistic_onnx",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_linguistic_onnx",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_linguistic_onnx",
+          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_linguistic_onnx",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_2026-08-20.md#1 (canon 系 onnx)"
+        ],
+        "note": "Byte-identical across all 4 independent probe result files (cross-checked 2026-08-24)."
+      },
+      "variance_duration_onnx": {
+        "value": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "file": "NamineRitsu_DiffSinger/dsdur/dur.onnx",
+        "source": [
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_dur_onnx (== consumed_model_bytes_check covered_keys canon_variance_dur_onnx)",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_dur_onnx",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_dur_onnx",
+          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_dur_onnx"
+        ],
+        "note": "Byte-identical across all 4 independent probe result files."
+      },
+      "variance_pitch_onnx": {
+        "value": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "file": "NamineRitsu_DiffSinger/dspitch/pitch.onnx",
+        "source": [
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_pitch_onnx (== consumed_model_bytes_check covered_keys canon_variance_pitch_onnx)",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_pitch_onnx",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_pitch_onnx",
+          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_pitch_onnx"
+        ],
+        "note": "Byte-identical across all 4 independent probe result files."
+      },
+      "phonemes_txt": {
+        "value": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb",
+        "file": "NamineRitsu_DiffSinger/phonemes.txt",
+        "source": [
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_phonemes",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_2026-08-20.md#1 (canon phonemes)"
+        ],
+        "note": "Phoneme vocabulary consumed by gate_synth.py canon_phonemes_txt (distinct from run6_bundle/dictionary-ja.txt, which is the grapheme-to-phoneme dictionary pinned separately as phoneme_map_sha256 above)."
+      }
+    },
+    "acoustic_export_companions": {
+      "note": "Co-located in the SAME export output directory as acoustic_onnx_sha256 above (.../out_ritsu/onnx_gate_40000/) — produced by the run6 checkpoint export, not sourced from the canon dir. Included here (rather than as bare top-level fields) because closing the render-flow input set requires them alongside canon_model_assets (Codex bot review PR #316 第2巡指摘, 1e84892).",
+      "dsconfig_yaml": {
+        "value": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "file": "onnx_gate_40000/dsconfig.yaml",
+        "source": [
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.acoustic_dsconfig (== consumed_model_bytes_check covered_keys acoustic_dsconfig_yaml)",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.acoustic_dsconfig",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.acoustic_dsconfig",
+          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.acoustic_dsconfig"
+        ]
+      },
+      "acoustic_phonemes_json": {
+        "value": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
+        "file": "onnx_gate_40000/s5_run6_acoustic_v1.phonemes.json",
+        "source": "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.acoustic_phonemes_json",
+        "note": "consumed_model_bytes_check lists this key under not_covered (not part of that probe's specific invariance check) but the pin value itself is present and recorded — transcribed as-is, not fabricated."
+      },
+      "speaker_embed": {
+        "value": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
+        "file": "onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb",
+        "source": "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.speaker_embed",
+        "note": "Also listed under consumed_model_bytes_check not_covered for the same reason as acoustic_phonemes_json above."
+      }
+    },
+    "not_included_by_design": {
+      "score_module_code": "voice_genesis/singer/score.py (sha256 24a6004d...) and phoneme_jp.py (sha256 9cbc7e1d...) are also consumed by the render flow per the same probe records (pins.score_module_sakura / score_module_sakura_dep_phoneme_jp), but these are THIS repository's own source files, not external model assets. Their provenance is properly covered by repository_commit_sha (RUN9_CONTRACT.yaml) once that is pinned, not duplicated here as a separate byte pin."
+    }
+  },
+  "completeness_note": "Codex bot review PR #316 第2巡指摘 (1e84892, 採用): a runtime bundle that pins only the acoustic checkpoint/ONNX (checkpoint_sha256 / acoustic_onnx_sha256) does NOT close the reproduction input set on its own. The render flow (gate_synth.py) also reads canon model assets via --canon-model-dir (linguistic/duration/pitch predictor ONNX + phoneme vocabulary, from the separate NamineRitsu_DiffSinger.zip canon distribution) and acoustic-export companions co-located with acoustic.onnx (dsconfig.yaml / phonemes.json / speaker embedding). Only with canon_model_assets and acoustic_export_companions included does the consumed-input set close. This bundle intentionally still leaves render_code_commit as INFERRED_UNCONFIRMED (see that field) and backbone_runtime_bundle_sha in RUN9_CONTRACT.yaml PENDING as a result — unchanged by this addition."
+}

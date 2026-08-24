@@ -52,6 +52,12 @@ RUN9_NORMALIZATION = "largest-component-residual"
 RUN_ID = "RUN9"
 EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
 
+# 現行 design_revision（凍結値。User 裁定 2026-08-24 =
+# DESIGN_RUN9_REVISION_0.2.md）。旧 revision "0.1" を宣言する contract は
+# 意図どおり拒否される — 修正が必要なら design_revision を上げ、旧
+# attempt を append-only 履歴として残す規約（DESIGN_RUN9 ヘッダ注記）。
+DESIGN_REVISION = "0.2"
+
 # DESIGN_RUN9 §23: 単一介入エッジは凍結値。他のエッジへの差し替えは新しい
 # design_revision を持つ別 attempt として扱う（§20 禁止事項「結果を見た後の
 # 座標・Lesson・閾値追加」と同種の凍結規律）。
@@ -538,6 +544,36 @@ def load_run9_identity_domain(path: Path) -> Run9IdentityDomain:
     return run9_identity_domain_from_json(Path(path).read_text(encoding="utf-8"))
 
 
+def compute_file_sha256(path: Path) -> str:
+    """ファイルの**実バイト列**の sha256（`sha256sum` 出力と同一値）を返す。
+
+    RUN9 の contract pin 欄には2つの異なる sha256 規約が混在する
+    （Codex bot レビュー PR #316 第8巡指摘A採用: `backbone_runtime_bundle_sha`
+    の規約文言が「正規形 sha256」と「実 sha256」で混在していたため、
+    `design_doc_sha256` と同一の「ファイル実バイト」規約に統一する）:
+
+    - **ファイル実バイト規約**（本関数、`design_doc_sha256` /
+      `design_revision_doc_sha256` / `backbone_runtime_bundle_sha` 等の
+      大多数の pin 欄）: 対象ファイルをそのまま `sha256sum` した値。
+      ファイルは人間可読な pretty-printed JSON/Markdown として保存され、
+      「このファイルが手元にあるかどうか」を bit-for-bit で照合するのが
+      目的。
+    - **正規形（canonical）規約**（`domains/identity_domain_run9_v1.json`
+      `anchor_hashes.af0` のみ — `inputs/af0_anchor_manifest.json` 参照）:
+      `json.dumps(obj, sort_keys=True, ensure_ascii=False,
+      separators=(",",":"))` で正規化してから sha256 する値。AF-P0 の
+      `spec_sha256` 系譜（`af_spec.py canonical_json()`）と意味論を揃える
+      ため、こちらだけ意図的に例外としている（af0 側の規約を本関数へ
+      合わせる変更は行わない — 詳細は af0_anchor_manifest.json の
+      `canonicalization_method` フィールド参照）。
+    """
+    h = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # TRI_CROSSOVER + Run9FounderGenome（DESIGN_RUN9 §9）
 # ---------------------------------------------------------------------------
@@ -871,6 +907,9 @@ _PIN_FIELD_REQUIRED_KEYS: FrozenSet[str] = frozenset({"value", "status"})
 # 実 sha256 を PINNED で記録する）。
 CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     "design_doc_sha256",
+    # design_revision 0.2 で追加（User 裁定 2026-08-24）: DESIGN_RUN9_REVISION_0.2.md
+    # 自体の実 sha256（design_doc_sha256 と同じ前例方式）。
+    "design_revision_doc_sha256",
     "attempt_id",
     "repository_commit_sha",
     "dataset_manifest_sha",
@@ -881,6 +920,11 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     "seed_policy_sha",
     "expected_speaker_map_sha",
     "backbone_checkpoint_sha",
+    # design_revision 0.2 で追加: inputs/backbone_runtime_bundle.json 自体の
+    # 実 sha256。bundle 内に PENDING 欄が残る場合はこの欄も PENDING とする
+    # （bundle 内 PENDING 解消後に pin — CONTRACT_PIN_FIELDS のコメント規約
+    # どおり loader 自体は bundle の中身までは検査しない。整合は手動運用）。
+    "backbone_runtime_bundle_sha",
     "lesson_sha",
     "learning_recipe_sha",
     "probe_manifest_sha",
@@ -1071,8 +1115,14 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
     if not isinstance(experiment_id, str) or experiment_id != EXPERIMENT_ID:
         raise Run9ValidationError(f"experiment_id must be {EXPERIMENT_ID!r}, got {experiment_id!r}")
 
-    if not isinstance(data["design_revision"], str) or not data["design_revision"]:
-        raise Run9ValidationError(f"design_revision must be a non-empty string, got {data['design_revision']!r}")
+    design_revision = data["design_revision"]
+    if not isinstance(design_revision, str) or design_revision != DESIGN_REVISION:
+        raise Run9ValidationError(
+            f"design_revision must be exactly {DESIGN_REVISION!r} (current revision — "
+            "DESIGN_RUN9_REVISION_0.2.md, User ruling 2026-08-24). A contract declaring an older "
+            "revision (e.g. '0.1') is rejected by design: revising the design requires bumping "
+            f"design_revision and keeping the old attempt as append-only history, got {design_revision!r}"
+        )
 
     if not isinstance(data["design_doc"], str) or not data["design_doc"]:
         raise Run9ValidationError(f"design_doc must be a non-empty string, got {data['design_doc']!r}")
@@ -1210,3 +1260,321 @@ def gate_state(contract: Run9RunContract) -> str:
         if not _is_field_pinned(revalidated.founder_genome_sha(founder_id)):
             return "BLOCKED"
     return "READY"
+
+
+# ---------------------------------------------------------------------------
+# User donor rights manifest 検証（DESIGN_RUN9_REVISION_0.2.md 改訂4）。
+# `inputs/rights_manifest.json` が `voice_genesis/foundry/recording_kit/
+# user_donor_ledger.json` の転記として過不足なく正しいことを検証する
+# loader 側ヘルパ（Codex bot レビュー PR #316 第3巡指摘, 0a4d0cf, 採用: 従来
+# テストは件数一致 + ledger 側からの引き当てのみで、manifest 側の重複
+# card_id や、ledger に無い card_id の混入を検出できなかった — UC-017 を
+# UC-016 の複製に差し替えても、件数17・両方とも ledger 側に実在する
+# card_id のため素通りしていた）。attest 後の実運用でも同じ検査が効くよう
+# loader 側の関数として実装する（テストはこれを呼ぶだけにする）。
+# ---------------------------------------------------------------------------
+
+# RUN9 が対象とする User donor カードの凍結集合（Codex bot レビュー PR #316
+# 第6巡指摘採用, be8f448: 変種追撃ではなく User 裁定4（2026-08-24,
+# DESIGN_RUN9_REVISION_0.2.md 改訂4）の逐語「UC-001〜017」の機械化漏れの
+# 是正）。旧実装は rights_manifest と donor_ledger の card_id 集合が
+# **互いに** 一致することしか検証しておらず、両文書が共同で期待集合を
+# 定義していたため、両側同時に UC-017 を UC-999 へ差し替えても
+# （相互一致は保たれたまま）通過してしまっていた。本定数を外部の凍結
+# 参照点として両側と突き合わせることでこの穴を閉じる。将来 intake が
+# 増えても RUN9 の donor 集合はこの17枚で凍結する — 変更は
+# design_revision を上げる別事案として扱う（本定数のハードコード改変では
+# ない）。
+USER_DONOR_CARD_IDS: Tuple[str, ...] = (
+    "UC-001", "UC-002", "UC-003", "UC-004", "UC-005", "UC-006", "UC-007",
+    "UC-008", "UC-009", "UC-010", "UC-011", "UC-012", "UC-013", "UC-014",
+    "UC-015", "UC-016", "UC-017",
+)
+
+
+def load_rights_manifest_json(text: str) -> Dict[str, Any]:
+    """`rights_manifest.json` のテキストを重複キー拒否（`_loads_strict_json()`
+    — VG-E0 `models.loads_strict()` と同型の fail-closed 規約）で読み込む。
+
+    `verify_rights_manifest_against_ledger()` への rights_manifest 入力は、
+    生の `json.loads()` ではなく本関数（`load_user_donor_ledger_json()` と
+    対で donor_ledger 側も同様）を経由することを規定する（Codex bot
+    レビュー PR #316 第10巡指摘採用, c34bdff, 本 PR 最終レビュー対応巡）:
+    手編集した rights_manifest.json の同一 entry 内に `card_id`/`sha256`
+    等のキーを2回書いても、標準 `json.loads()` の last-key-wins だと
+    後勝ちの値だけが黙って検証器へ届き、「たまたま期待値に潰れた」
+    曖昧な生 JSON が attest によってそのまま束縛され得る — 生 JSON の
+    曖昧性そのものを読込段で拒否する。
+    """
+    data = _loads_strict_json(text)
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"rights manifest document must be an object, got {type(data).__name__}"
+        )
+    return data
+
+
+def load_user_donor_ledger_json(text: str) -> Dict[str, Any]:
+    """`user_donor_ledger.json` のテキストを重複キー拒否で読み込む。
+    `load_rights_manifest_json()` と同一規約・同一理由（Codex bot
+    レビュー PR #316 第10巡指摘採用）。
+    """
+    data = _loads_strict_json(text)
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"donor ledger document must be an object, got {type(data).__name__}"
+        )
+    return data
+
+
+def _require_rights_ledger_field(
+    entry: Mapping[str, Any], field: str, *, side: str, card_id: str
+) -> Any:
+    """`entry[field]` の存在（キー自体の有無）を検証してから値を返す。
+    `side` はエラーメッセージへ明記する「どちら側の entry か」のラベル
+    （`"rights_manifest"` / `"donor_ledger"`）。値の型・書式は呼び出し元の
+    `_require_*` ヘルパが別途検証する — 本関数は「フィールドが存在するか」
+    だけを見る（Codex bot レビュー PR #316 第4巡指摘採用: `.get(field)` の
+    黙った `None` フォールバックだと、両側から同じ必須フィールドが欠けた
+    場合に `None == None` で照合が素通りしてしまっていた）。
+    """
+    if field not in entry:
+        raise Run9ValidationError(
+            f"{side}.entries[card_id={card_id!r}] is missing required field {field!r}"
+        )
+    return entry[field]
+
+
+def _require_rights_ledger_sha256_hex(value: Any, *, side: str, card_id: str, field: str) -> str:
+    if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
+        raise Run9ValidationError(
+            f"{side}.entries[card_id={card_id!r}].{field} must be exactly 64 lowercase hex "
+            f"characters (sha256 format), got {value!r}"
+        )
+    return value
+
+
+def _require_rights_ledger_positive_duration(value: Any, *, side: str, card_id: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise Run9ValidationError(
+            f"{side}.entries[card_id={card_id!r}].duration_sec must be a number (bool rejected), "
+            f"got {value!r}"
+        )
+    out = float(value)
+    if not math.isfinite(out) or out <= 0.0:
+        raise Run9ValidationError(
+            f"{side}.entries[card_id={card_id!r}].duration_sec must be a positive finite number, "
+            f"got {value!r}"
+        )
+    return out
+
+
+def verify_rights_manifest_against_ledger(
+    rights_manifest: Mapping[str, Any], donor_ledger: Mapping[str, Any]
+) -> None:
+    """`rights_manifest` の `entries` が `donor_ledger` の `entries` の
+    忠実な転記（card_id/source_sha256/sha256/duration_sec）であることを
+    検証する。違反は `Run9ValidationError`。
+
+    **入力は `load_rights_manifest_json()` / `load_user_donor_ledger_json()`
+    経由で読み込んだ dict を渡すこと**（生の `json.loads()` を経由しない
+    — Codex bot レビュー PR #316 第10巡指摘採用, c34bdff）: 本関数自体は
+    パース済み dict のみを受け取るため、呼び出し元が重複キーを黙って
+    last-key-wins で解決する経路（生 `json.loads()`）で読み込んだ入力を
+    渡すと、手編集 JSON 内の重複キーが「たまたま期待値に潰れた」曖昧な
+    状態のまま本関数の検証を通過し得る。上記2関数は重複キーを読込段で
+    拒否するため、この経路を通す限り曖昧な入力は本関数に到達しない。
+
+    検証項目:
+
+    1. `rights_manifest.entries` の `card_id` に重複が無いこと。
+    2. `rights_manifest.entries` の card_id 集合が `donor_ledger.entries`
+       の card_id 集合と**完全一致**すること（過不足を両方向とも検出 —
+       manifest 側に無い ledger の card_id・manifest 側にしか無い
+       card_id のいずれも拒否）。
+    3. 一致する各 card_id について `source_sha256`/`sha256`/
+       `duration_sec` が、**両側で存在 + 整形式であることを照合前に
+       強制した上で**、ledger 側の実測値とバイト/値レベルで一致する
+       こと（sha 系は64hex str、duration_sec は bool でない正の有限
+       数値）。存在・整形式のいずれかが欠けた側は、比較を試みる前に
+       `Run9ValidationError` で拒否する（Codex bot レビュー PR #316
+       第4巡指摘採用: 従来は `entry.get(field)` 同士の等値比較だけの
+       ため、rights entry と ledger entry の両方から同じ必須
+       フィールドが欠落すると `None == None` が真になり、両側欠落を
+       検出できなかった）。
+    4. `rights_manifest.schema == "run9-user-donor-rights/1.0"` /
+       `donor_ledger.schema == "user-donor-ledger/0.1"`（欠落・別値・
+       非 str はいずれも拒否 — Codex bot レビュー PR #316 第5巡指摘A
+       採用: 意味論を理解しない版の文書を attest 経由で
+       `anchor_hashes.user` へ正典束縛し得るため、版の取り違えは
+       card_id/値の一致以前に拒否する）。
+    5. `donor_ledger.entries` の `card_id` にも重複が無いこと（Codex bot
+       レビュー PR #316 第5巡指摘B採用: 第3巡は rights 側のみ重複拒否
+       しており、ledger 側は `ledger_by_id[card_id] = entry` の
+       last-entry-wins で曖昧な ledger を黙って解決していた非対称が
+       残っていた）。
+    6. rights_manifest・donor_ledger **双方**の card_id 集合が、外部の
+       凍結参照点 `USER_DONOR_CARD_IDS`（UC-001〜UC-017 の17枚、User 裁定
+       4・2026-08-24 の逐語固定）と完全一致すること（Codex bot レビュー
+       PR #316 第6巡指摘採用, be8f448: 変種追撃ではなく User 裁定4の
+       機械化漏れの是正 — 従来は rights/ledger の**相互**一致しか
+       検証しておらず、両文書が期待集合を共同定義していたため、両側
+       同時に UC-017 を UC-999 のような別 ID へ差し替えても相互一致は
+       保たれたまま通過してしまっていた）。将来 intake が増えても RUN9
+       の donor 集合はこの17枚で凍結する — 変更は design_revision を
+       上げる別事案として扱う。
+
+    rights 検証器の堅牢化ファミリー（PR #316 第3〜6巡: card_id 完全一致・
+    両側存在+整形式・schema 版・ledger 側重複拒否・期待集合の凍結）は
+    本巡で全数掃討・終端する。以降に見つかる同型変種（本ファミリーが
+    扱う対称性の範囲外の新しい欠陥クラス）は、都度追撃せず境界宣言で
+    扱う。
+    """
+    rights_schema = rights_manifest.get("schema")
+    if not isinstance(rights_schema, str) or rights_schema != "run9-user-donor-rights/1.0":
+        raise Run9ValidationError(
+            "rights_manifest.schema must be exactly 'run9-user-donor-rights/1.0', got "
+            f"{rights_schema!r} (a document declaring a different or missing schema version "
+            "must not be treated as this contract's rights manifest, since anchor_hashes.user "
+            "binding depends on this schema's exact semantics)"
+        )
+    ledger_schema = donor_ledger.get("schema")
+    if not isinstance(ledger_schema, str) or ledger_schema != "user-donor-ledger/0.1":
+        raise Run9ValidationError(
+            "donor_ledger.schema must be exactly 'user-donor-ledger/0.1', got "
+            f"{ledger_schema!r}"
+        )
+
+    rights_entries_raw = rights_manifest.get("entries")
+    if not isinstance(rights_entries_raw, list):
+        raise Run9ValidationError(
+            f"rights_manifest.entries must be a list, got {type(rights_entries_raw).__name__}"
+        )
+    ledger_entries_raw = donor_ledger.get("entries")
+    if not isinstance(ledger_entries_raw, list):
+        raise Run9ValidationError(
+            f"donor_ledger.entries must be a list, got {type(ledger_entries_raw).__name__}"
+        )
+
+    rights_card_ids: List[str] = []
+    rights_by_id: Dict[str, Mapping[str, Any]] = {}
+    for i, entry in enumerate(rights_entries_raw):
+        if not isinstance(entry, dict):
+            raise Run9ValidationError(f"rights_manifest.entries[{i}] must be an object")
+        card_id = entry.get("card_id")
+        if not isinstance(card_id, str) or not card_id:
+            raise Run9ValidationError(
+                f"rights_manifest.entries[{i}].card_id must be a non-empty string, got {card_id!r}"
+            )
+        rights_card_ids.append(card_id)
+        rights_by_id[card_id] = entry
+
+    # item 1: rights_manifest 側の card_id 重複拒否（len(ids) == len(set(ids))）。
+    if len(rights_card_ids) != len(set(rights_card_ids)):
+        seen: set = set()
+        duplicates = sorted({c for c in rights_card_ids if c in seen or seen.add(c)})
+        raise Run9ValidationError(
+            f"rights_manifest.entries has duplicate card_id value(s): {duplicates} "
+            "(each donor card must appear exactly once)"
+        )
+
+    ledger_card_ids: List[str] = []
+    ledger_by_id: Dict[str, Mapping[str, Any]] = {}
+    for i, entry in enumerate(ledger_entries_raw):
+        if not isinstance(entry, dict):
+            raise Run9ValidationError(f"donor_ledger.entries[{i}] must be an object")
+        card_id = entry.get("card_id")
+        if not isinstance(card_id, str) or not card_id:
+            raise Run9ValidationError(
+                f"donor_ledger.entries[{i}].card_id must be a non-empty string, got {card_id!r}"
+            )
+        ledger_card_ids.append(card_id)
+        ledger_by_id[card_id] = entry
+
+    # item 5: donor_ledger 側の card_id 重複拒否（rights 側と対称。旧実装は
+    # `ledger_by_id[card_id] = entry` の last-entry-wins で曖昧 ledger を
+    # 黙って解決していた — Codex bot レビュー PR #316 第5巡指摘B）。
+    if len(ledger_card_ids) != len(set(ledger_card_ids)):
+        seen_ledger: set = set()
+        ledger_duplicates = sorted(
+            {c for c in ledger_card_ids if c in seen_ledger or seen_ledger.add(c)}
+        )
+        raise Run9ValidationError(
+            f"donor_ledger.entries has duplicate card_id value(s): {ledger_duplicates} "
+            "(an ambiguous ledger must not be silently resolved via last-entry-wins)"
+        )
+
+    # item 2: card_id 集合の完全一致（過不足を両方向とも検出）。
+    rights_id_set = set(rights_by_id.keys())
+    ledger_id_set = set(ledger_by_id.keys())
+    missing_from_rights = sorted(ledger_id_set - rights_id_set)
+    extra_in_rights = sorted(rights_id_set - ledger_id_set)
+    if missing_from_rights or extra_in_rights:
+        raise Run9ValidationError(
+            "rights_manifest.entries card_id set does not exactly match donor_ledger.entries "
+            f"card_id set — missing_from_rights={missing_from_rights!r} "
+            f"extra_in_rights={extra_in_rights!r}"
+        )
+
+    # item 6: 両側とも外部の凍結参照点 USER_DONOR_CARD_IDS と完全一致する
+    # こと（item 2 の相互一致だけでは、両側が同時に同じ ID へ差し替わる
+    # 攻撃を検出できない — Codex bot レビュー PR #316 第6巡指摘）。
+    expected_id_set = set(USER_DONOR_CARD_IDS)
+    rights_unexpected = sorted(rights_id_set - expected_id_set)
+    rights_absent = sorted(expected_id_set - rights_id_set)
+    if rights_unexpected or rights_absent:
+        raise Run9ValidationError(
+            "rights_manifest.entries card_id set does not exactly match the frozen "
+            f"USER_DONOR_CARD_IDS set (UC-001..UC-017) — unexpected={rights_unexpected!r} "
+            f"absent={rights_absent!r}"
+        )
+    ledger_unexpected = sorted(ledger_id_set - expected_id_set)
+    ledger_absent = sorted(expected_id_set - ledger_id_set)
+    if ledger_unexpected or ledger_absent:
+        raise Run9ValidationError(
+            "donor_ledger.entries card_id set does not exactly match the frozen "
+            f"USER_DONOR_CARD_IDS set (UC-001..UC-017) — unexpected={ledger_unexpected!r} "
+            f"absent={ledger_absent!r}"
+        )
+
+    # item 3: 一致する card_id ごとの値照合。存在 + 整形式を両側で強制して
+    # から比較する（`None == None` すり抜けの防止）。
+    for card_id, rights_entry in rights_by_id.items():
+        ledger_entry = ledger_by_id[card_id]
+
+        for field in ("source_sha256", "sha256"):
+            rights_raw = _require_rights_ledger_field(
+                rights_entry, field, side="rights_manifest", card_id=card_id
+            )
+            ledger_raw = _require_rights_ledger_field(
+                ledger_entry, field, side="donor_ledger", card_id=card_id
+            )
+            rights_value = _require_rights_ledger_sha256_hex(
+                rights_raw, side="rights_manifest", card_id=card_id, field=field
+            )
+            ledger_value = _require_rights_ledger_sha256_hex(
+                ledger_raw, side="donor_ledger", card_id=card_id, field=field
+            )
+            if rights_value != ledger_value:
+                raise Run9ValidationError(
+                    f"rights_manifest.entries[card_id={card_id!r}].{field} does not match "
+                    f"donor_ledger: rights={rights_value!r} ledger={ledger_value!r}"
+                )
+
+        rights_duration_raw = _require_rights_ledger_field(
+            rights_entry, "duration_sec", side="rights_manifest", card_id=card_id
+        )
+        ledger_duration_raw = _require_rights_ledger_field(
+            ledger_entry, "duration_sec", side="donor_ledger", card_id=card_id
+        )
+        rights_duration = _require_rights_ledger_positive_duration(
+            rights_duration_raw, side="rights_manifest", card_id=card_id
+        )
+        ledger_duration = _require_rights_ledger_positive_duration(
+            ledger_duration_raw, side="donor_ledger", card_id=card_id
+        )
+        if rights_duration != ledger_duration:
+            raise Run9ValidationError(
+                f"rights_manifest.entries[card_id={card_id!r}].duration_sec does not match "
+                f"donor_ledger: rights={rights_duration!r} ledger={ledger_duration!r}"
+            )

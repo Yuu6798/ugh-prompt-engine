@@ -1,0 +1,126 @@
+{
+  "schema": "run9-user-donor-rights/1.0",
+  "donor_ledger_source": "voice_genesis/foundry/recording_kit/user_donor_ledger.json",
+  "donor_ledger_schema": "user-donor-ledger/0.1",
+  "transcribed_at": "2026-08-24",
+  "note": "card_id / source_sha256 / sha256 (normalized) / duration_sec transcribed verbatim from the donor ledger above (17 entries, UC-001..UC-017). Other ledger fields (sample_rate, rms_dbfs, peak_dbfs, alignment_status, received_at) are not duplicated here — refer to the ledger itself for those.",
+  "entries": [
+    {
+      "card_id": "UC-001",
+      "source_sha256": "0b46ce5ce1a62e3dcddb195818d4c8f498ddfc42f3d1d18d7b9c69bdec038bfe",
+      "sha256": "ec18befc9d9f9f37590332c98a0d299137b9f973a4b0bc0a3b457bf1aae87ae0",
+      "duration_sec": 26.74
+    },
+    {
+      "card_id": "UC-002",
+      "source_sha256": "4609617a420798f746e80d90aa43839107316abec15e5348dd61868afdfbd2e4",
+      "sha256": "47c0eff08567e05894c2882370435b9a68e46c1d74ac87a74dee037a4c01de34",
+      "duration_sec": 26.9
+    },
+    {
+      "card_id": "UC-003",
+      "source_sha256": "fbe70b3fa246ea601da01c6e4ebfd81690672d57f4b875f12f99655a3713de43",
+      "sha256": "d56a6696e4f0fa1f4a65fe0b8a399187e3d0c89ee20dd73d85a01512349d3658",
+      "duration_sec": 14.933
+    },
+    {
+      "card_id": "UC-004",
+      "source_sha256": "10ce2c03afc3dfff4918485bf16448cbf4af8e899c65ede94c3b1c395fff085e",
+      "sha256": "80dd55e53d15942fb417203daf7f1a68efc0a7a8eec0695b755866cf742dc7be",
+      "duration_sec": 15.915
+    },
+    {
+      "card_id": "UC-005",
+      "source_sha256": "e5b4ea15dc6b3e8301ec04fb5f8d6a57961be762d4ceeacb248e05e53a79fa97",
+      "sha256": "eaa16b7064b197af86519ec81acae8df74d1559f7cf2b4287fb62e72df6411ce",
+      "duration_sec": 15.317
+    },
+    {
+      "card_id": "UC-006",
+      "source_sha256": "bfe1429e5085f49682f4567bc4dfcbb99bce833d27067790d219eeb2af806c73",
+      "sha256": "b1f3fa96ca12d6624ea756415b48c68b8a15e16e477d77c7919bc12f32a9f142",
+      "duration_sec": 15.445
+    },
+    {
+      "card_id": "UC-007",
+      "source_sha256": "506e8b40bd04bf08204f647721c9feb4804d5a5aa1a66e5ac1b642d7f600a070",
+      "sha256": "3b6e33cbfe0f94467ce8d6f3778aa948b2c6b69948d93d7a8829644391ab1bca",
+      "duration_sec": 15.36
+    },
+    {
+      "card_id": "UC-008",
+      "source_sha256": "831403f5dde854eb4f21ef3a0befe3e5914211262aafaf5dfc7e5ab44bcdf79c",
+      "sha256": "0c924456e7eab60792cd6596efdf9a11e6453d7ba001bbfb5373646abc63967f",
+      "duration_sec": 12.373
+    },
+    {
+      "card_id": "UC-009",
+      "source_sha256": "efcff1980270b8e8ed03364144e9ea65d92bc383499b26d33c6eb01482413fe9",
+      "sha256": "dac991c194aafaeb80033d7f1eb3d11b6df41c79a02d312f9e90c8ecead2eb2e",
+      "duration_sec": 12.117
+    },
+    {
+      "card_id": "UC-010",
+      "source_sha256": "b80043469a868e80f91d11832049ff7d2c07df03c2626858d249d111c38ab9c0",
+      "sha256": "287836df3735fd87dc136d6b214130108f30b0d1c763d27c477115236b75e720",
+      "duration_sec": 11.392
+    },
+    {
+      "card_id": "UC-011",
+      "source_sha256": "7368852936caf530505c316e558262d51a9ce1e129b7bd717d3f618a3eda036e",
+      "sha256": "20d66ca9c255fa1330fc8c90209041775c92697223383c36e6e39dcb821ff077",
+      "duration_sec": 11.52
+    },
+    {
+      "card_id": "UC-012",
+      "source_sha256": "7a0d8ee3d4614a5dd718e08e422a8ca62f43eef2b3bef2816541d44bb6a5bdec",
+      "sha256": "9d8034984a013708e006b2516c3595c6479ac0b1db2d81d4db757ceb3b29c226",
+      "duration_sec": 12.843
+    },
+    {
+      "card_id": "UC-013",
+      "source_sha256": "d4f648ed1c6a530b6d7e5a35a11b72687ea51a8d4e8799d83b9f5a84e77a4d13",
+      "sha256": "e46569408c10e6bf30ffe8424ab71ed1d99eb38f5c0858b2e36f65bf3bfde3e9",
+      "duration_sec": 12.587
+    },
+    {
+      "card_id": "UC-014",
+      "source_sha256": "9a4e913086f09e38451445dabcd4bee3fe0877d40d14fd1ca622cd0781296820",
+      "sha256": "2b2556e8c7caaac16ab3ab9fb61eed01c22ee83749ce528903c722ea113ad380",
+      "duration_sec": 11.733
+    },
+    {
+      "card_id": "UC-015",
+      "source_sha256": "34d54ffe27f635f56b9b029bf631d1ec057514031a265d8194d0fe09fc833563",
+      "sha256": "01d71cbc0543aa4d6c361dac3451e0b88cbebffdb6eda8e4bed7a7d2e6026d1f",
+      "duration_sec": 12.971
+    },
+    {
+      "card_id": "UC-016",
+      "source_sha256": "ed1fb5ac8b1f8f993b957811dbf3cdd91e0e905217bff7c6f166ac2800a5b531",
+      "sha256": "a4cece56a37631d9d86a905bbf6e001f670c66ebe759685a4e9d8cbb8fb44052",
+      "duration_sec": 12.117
+    },
+    {
+      "card_id": "UC-017",
+      "source_sha256": "b2aa14257fec5c513fa00e5f1f9a2bd173527651377b7f34e81bb8a38254f80e",
+      "sha256": "9b864babfb5ed7c3a7730d62eb671b92ae74eef529bda1665ffa25c5d447f73a",
+      "duration_sec": 16.64
+    }
+  ],
+  "rights_class": "PENDING_USER_ATTESTATION",
+  "consent_status": "PENDING_USER_ATTESTATION",
+  "attestation": {
+    "attested": false,
+    "attested_by": null,
+    "attested_at": null,
+    "statement": null
+  },
+  "usage_grants": {
+    "run9_identity_anchor": "pending",
+    "raw_audio_publication": "not_granted",
+    "model_general_distribution": "not_granted"
+  },
+  "usage_grants_note": "raw_audio_publication and model_general_distribution require separate approval from run9_identity_anchor (User ruling, DESIGN_RUN9_REVISION_0.2.md 改訂4) — granting the identity-anchor usage does not imply either publication grant. Both default to not_granted and are never auto-escalated.",
+  "binding_note": "After User attestation completes, the sha256 of this file (as it stands post-attestation) is bound into the input set for domains/identity_domain_run9_v1.json anchor_hashes.user (exact binding mechanism — e.g. direct pin vs composite manifest — to be finalized at attestation time). Until then anchor_hashes.user remains the <PIN_BEFORE_RUN> placeholder."
+}
