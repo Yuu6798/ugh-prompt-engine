@@ -44,6 +44,69 @@ Adapter` を更新する `LEARN_PERFORMANCE` とする」を、次のとおり�
 そのものであり、v0.1 の規律を破っていない — 逆に、v0.1 が「後で天井を
 確認したら記録して変える」ことを想定していた分岐そのものが発動した形。
 
+### §対応マップ（v0.1 Adapter 固有条項 → ControlProfile 等価物）
+
+**v0.1 の Adapter 記述と本表が矛盾する場合は本表（rev 0.2）が勝つ。
+v0.1 本文は byte-pin 不変のまま**（design_doc_sha256 が実バイトの sha256
+を PINNED で保持し続ける — 以下は「読み替え」であり v0.1 本文の書き換え
+ではない）。
+
+1. **v0.1 §13.2 Adapter Entry Gate → ControlProfile Entry Gate**:
+   `control-layer ceiling evidence or explicit User waiver` は**削除**
+   （制御層実行で初めて得られる証拠を、制御層実行そのものの前提条件に
+   する循環要求だった — 本改訂の趣旨（Entry Gate の重い前提の解消）
+   そのものに反するため）。**残す要件**（書き込み先が Adapter か
+   ControlProfile かに依らず必要な条件）:
+   - calibrated Identity audit route
+   - learning replay harness
+   - rights-clean PJS curriculum
+   - fixed compute budget
+   - frozen learning recipe
+   - rollback path
+
+   不足時の状態名は `BLOCKED_ADAPTER_ENTRY` → `BLOCKED_CONTROLPROFILE_ENTRY`
+   へ改名する。
+
+2. **v0.1 §14 C1（Zero Adapter / Sham Transition）→ C1 Zero ControlProfile
+   / Sham Transition**: 学習 step を実行せず、中立（default/neutral）
+   ControlProfile 構造だけを付与し、profile 付与そのものの副作用を測る
+   （対照の意味論は不変 — 「導入そのものの副作用を切り分ける」という
+   C1 の目的は書き込み先の実装形態に依存しない）。
+
+3. **v0.1 §19 R9-G8（ADAPTER_ENTRY_AND_EQUAL_BUDGET）→ R9-G8
+   CONTROLPROFILE_ENTRY_AND_EQUAL_BUDGET**: gate ID は `R9-G8` のまま、
+   名称と内容のみ読み替える。equal budget 意味論（v0.1 §13.4「二体で
+   必ず一致させる」の列挙）は不変。
+
+4. **v0.1 §19 R9-G12 の照合対象 `Adapter checkpoint SHA` →
+   `ControlProfile version SHA`**: versioned ControlProfile 文書
+   （Founder ごとの r1）の正規形 sha256 を、same-process/cross-process
+   replay 照合の対象とする。R9-G12 が要求する他の照合対象
+   （Genome bytes / Lesson bytes / recipe・config bytes / 実 WAV SHA /
+   measurement record / verdict）は不変。
+
+5. **v0.1 §22 step 12 `freeze both Adapter checkpoints` →
+   `freeze both ControlProfile versions (r1)`**: 実行順の他ステップ
+   （0–11, 13–20）の番号・内容は不変。
+
+6. **v0.1 §30 Stop rule 9 `Adapter Entry Gate not satisfied` →
+   `ControlProfile Entry Gate not satisfied`**: Stop rule の番号（9）・
+   他の19項目は不変。
+
+7. **v0.1 §13.1 の図式**: `Adapter-01:init → trained`（および `-02`）を
+   `ControlProfile-01:r0 → r1`（および `-02`）へ読み替える。**二体で
+   ControlProfile を共有しない**規定（v0.1「二体でAdapter重みを共有
+   しない」の等価物）は不変。
+
+8. **v0.1 §13.3 learning_recipe の欄**: `optimizer` / `learning_rate` 等の
+   ニューラル学習固有欄は、ControlProfile 導出手続き（決定論的探索/
+   導出の手順を記述する等価欄）へ置換する。`seed: 909002`
+   （`LEARNING_SEED`）は維持。`checkpoint_interval` は
+   ControlProfile version 記録規約（各版をどの間隔・条件で確定させるか）
+   の等価欄へ置換する。**具体スキーマは VG-L0 ハーネス実装時に確定**
+   するが、「recipe を学習前に凍結する」規律（v0.1 §11.4/§13.3）自体は
+   不変。
+
 ---
 
 ## 改訂 2 — AF0 anchor 規約

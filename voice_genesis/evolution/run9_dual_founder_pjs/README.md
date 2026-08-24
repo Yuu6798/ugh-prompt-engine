@@ -85,10 +85,13 @@ Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生さ�
    未着手。
 3. **VG-L0 学習ハーネス未実装**: `LEARN_PERFORMANCE` エッジ（改訂1で
    書き込み先を Performance ControlProfile へ変更済みだが、ハーネス自体
-   の実装は未着手）。設計書 §13 の Adapter Entry Gate 相当（control-layer
-   ceiling evidence / calibrated Identity audit route / learning replay
-   harness / rights-clean curriculum / fixed compute budget / frozen
-   recipe / rollback path）はどれも準備段階にすら入っていない。
+   の実装は未着手）。**ControlProfile Entry Gate**（旧 Adapter Entry
+   Gate。改訂1 §対応マップ項目1 — `control-layer ceiling evidence or
+   explicit User waiver` は循環要求のため削除済み・不足時の状態名は
+   `BLOCKED_CONTROLPROFILE_ENTRY`）の残る要件（calibrated Identity audit
+   route / learning replay harness / rights-clean curriculum / fixed
+   compute budget / frozen recipe / rollback path）はどれも準備段階に
+   すら入っていない。
 4. **PJS Performance Lesson build 未実施**: 改訂3で pin 方針
    （source archive pin / expanded corpus pin とは別の Lesson manifest を
    生成し `lesson_sha` として pin）は確定したが、Lesson build 自体は

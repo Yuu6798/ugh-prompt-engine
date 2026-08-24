@@ -67,7 +67,7 @@ design_doc_sha256:
 # design_doc_sha256 と同じ前例方式（design_doc_sha256 は v0.1 本文、本欄は
 # v0.2 差分メモを pin する）。
 design_revision_doc_sha256:
-  value: "0ca1e264d75532e3d9bd384015a84c6cf98c0556e514e3f411a9b21eb5909567"
+  value: "5b4613d281adcafce913586f7eeddde491b6ef360471f8118d321c1bcb92f6b1"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.2.md
 

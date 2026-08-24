@@ -1418,6 +1418,32 @@ def test_revision02_v0_1_design_doc_is_byte_unchanged(contract_raw: Dict[str, An
     assert field["value"] == _sha256_file(DESIGN_DOC_PATH)
 
 
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第7巡対応 — Adapter → ControlProfile §対応マップ
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_adapter_to_controlprofile_correspondence_map_present() -> None:
+    """Codex bot レビュー PR #316 第7巡指摘（37b6193, 採用）: REVISION_0.2 が
+    v0.1 の Adapter 固有条項8項目それぞれについて ControlProfile 等価物への
+    明示的置換表を持つことのキーワード存在検査（過剰な文言テストは避け、
+    各項目を機械的に識別できる語彙が本文に存在することだけを確認する）。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "本表（rev 0.2）が勝つ" in doc  # 前文: v0.1 と矛盾する場合の優先規則
+    required_keywords = [
+        "BLOCKED_CONTROLPROFILE_ENTRY",  # item 1: Adapter Entry Gate -> ControlProfile Entry Gate
+        "Zero ControlProfile",  # item 2: C1
+        "CONTROLPROFILE_ENTRY_AND_EQUAL_BUDGET",  # item 3: R9-G8
+        "ControlProfile version SHA",  # item 4: R9-G12
+        "freeze both ControlProfile versions (r1)",  # item 5: step 12
+        "ControlProfile Entry Gate not satisfied",  # item 6: Stop rule 9
+        "ControlProfile-01:r0",  # item 7: §13.1 図式
+        "ControlProfile 導出手続き",  # item 8: learning_recipe
+    ]
+    for keyword in required_keywords:
+        assert keyword in doc, f"REVISION_0.2.md に必須キーワードが見つかりません: {keyword!r}"
+
+
 def test_revision02_new_pin_fields_get_64hex_format_enforced(contract_raw: Dict[str, Any]) -> None:
     """新欄2つ（design_revision_doc_sha256 / backbone_runtime_bundle_sha）は
     欄名が `_sha256`/`_sha` で終わるため、`_validate_pin_field_value_shape`
