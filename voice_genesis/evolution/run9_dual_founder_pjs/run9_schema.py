@@ -181,6 +181,11 @@ PRACTICE_FORBIDDEN_INPUTS: Tuple[str, ...] = (
 PRACTICE_ALLOWED_INPUTS: Tuple[str, ...] = (
     "pjs_audio_direct_listen",
     "founder_autonomous_feature_extraction",
+    # PoR §3.2「Founder 自身が何を模倣すべきか決める」— PR #317 Codex bot
+    # レビュー第1巡 Fix 3 採用: PoR §3.2 が列挙する5項目のうち本項目
+    # （自律的模倣対象選択）が第1巡実装時に転記漏れしていた（4要素のまま
+    # だった）。rev 0.3 文書側の対応記述と id を一致させ5要素へ是正する。
+    "autonomous_imitation_target_selection",
     "founder_autonomous_diff_estimation",
     "founder_autonomous_search_within_allowed_range",
 )
@@ -1058,6 +1063,17 @@ CONTRACT_FOUNDER_IDS: Tuple[str, str] = ("R9F-01", "R9F-02")
 # の pre-run 側判定 — artifact/cost は run record closure 側の要件）。
 CONTRACT_POST_RUN_PIN_FIELDS: FrozenSet[str] = frozenset({"artifact_manifest_sha", "cost_record_sha"})
 
+# optional pin（post-run とは別の第3分類、PR #317 Codex bot レビュー第1巡
+# Fix 1 採用）: rev 0.3 改訂F により人間知覚 Gate は必須ではなくなった
+# （DESIGN_RUN9_REVISION_0.3.md 改訂F — 機械評価 + claim ceiling 明記へ
+# 変更し、人間知覚評価は後続 Run へ送る。v0.1 §28 Human Audit も optional
+# 化）。`human_evaluation_protocol_sha` は advisory な blind human audit を
+# 実施する場合にのみ pin する欄であり、PENDING のままでも gate_state() の
+# READY 判定を妨げない — post-run 欄（実行後にしか実測できない）とは理由が
+# 異なるため別の frozenset として区別する（post-run は「まだ実測できない」、
+# optional は「実施しないなら永久に PENDING のままで構わない」）。
+CONTRACT_OPTIONAL_PIN_FIELDS: FrozenSet[str] = frozenset({"human_evaluation_protocol_sha"})
+
 _CONTRACT_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset(
     {
         "schema", "run_id", "experiment_id", "design_revision", "design_doc",
@@ -1230,11 +1246,18 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
 
     design_revision = data["design_revision"]
     if not isinstance(design_revision, str) or design_revision != DESIGN_REVISION:
+        # PR #317 Codex bot レビュー第1巡 Fix 2 採用: 診断メッセージに
+        # 固定ファイル名（例: "DESIGN_RUN9_REVISION_0.2.md"）をハード
+        # コードしていると、design_revision を上げるたびにメッセージ内の
+        # ファイル名だけが陳腐化する（実際に 0.2 -> 0.3 進行時に発生した）。
+        # `DESIGN_REVISION` 定数から f-string でファイル名を導出すること
+        # で、以後の revision bump でこの診断が再び古びない構造にする。
         raise Run9ValidationError(
             f"design_revision must be exactly {DESIGN_REVISION!r} (current revision — "
-            "DESIGN_RUN9_REVISION_0.2.md, User ruling 2026-08-24). A contract declaring an older "
-            "revision (e.g. '0.1') is rejected by design: revising the design requires bumping "
-            f"design_revision and keeping the old attempt as append-only history, got {design_revision!r}"
+            f"DESIGN_RUN9_REVISION_{DESIGN_REVISION}.md). A contract declaring an older "
+            "revision (e.g. '0.1', '0.2') is rejected by design: revising the design requires "
+            "bumping design_revision and keeping the old attempt as append-only history, got "
+            f"{design_revision!r}"
         )
 
     if not isinstance(data["design_doc"], str) or not data["design_doc"]:
@@ -1365,12 +1388,18 @@ def load_run9_contract_from_yaml_path(path: Path) -> Run9RunContract:
 def gate_state(contract: Run9RunContract) -> str:
     """DESIGN_RUN9 §27 item 49「incomplete Hard Gate set -> BLOCKED」の
     pre-run 機械判定: pre-run 必須欄（`CONTRACT_PIN_FIELDS` から
-    `CONTRACT_POST_RUN_PIN_FIELDS` を除いた全欄 + 両 founder の
-    founder_genome_shas）が全て PINNED のときのみ "READY"。1つでも
-    PENDING/BLOCKED なら "BLOCKED"。post-run 専用欄
+    `CONTRACT_POST_RUN_PIN_FIELDS` と `CONTRACT_OPTIONAL_PIN_FIELDS` を
+    除いた全欄 + 両 founder の founder_genome_shas）が全て PINNED のときの
+    み "READY"。1つでも PENDING/BLOCKED なら "BLOCKED"。post-run 専用欄
     （artifact_manifest_sha / cost_record_sha）は判定対象外
     （実行後にのみ実測できる証拠欄のため — RUN_CONTRACT_SCHEMA_v1.json の
-    x-gate-class post_run 分類と同じ考え方）。
+    x-gate-class post_run 分類と同じ考え方）。optional 欄
+    （human_evaluation_protocol_sha）も同様に判定対象外だが理由が異なる
+    （PR #317 Codex bot レビュー第1巡 Fix 1 採用）: rev 0.3 改訂F により
+    人間知覚 Gate は必須ではなくなった — advisory な blind human audit を
+    実施する場合にのみ pin する欄であり、PENDING のままでも READY を
+    妨げない。post-run（「まだ実測できない」）とは異なり、optional は
+    「実施しないなら永久に PENDING のままで構わない」欄。
 
     毎回 `contract.raw` のスナップショットを `load_run9_contract()` で
     再検証してから判定する（Codex bot レビュー PR #315 第2巡指摘1採用）:
@@ -1382,7 +1411,8 @@ def gate_state(contract: Run9RunContract) -> str:
     では、load 後の直接改変で READY を騙る経路が残っていた。
     """
     revalidated = load_run9_contract(contract.raw)
-    pre_run_fields = [n for n in CONTRACT_PIN_FIELDS if n not in CONTRACT_POST_RUN_PIN_FIELDS]
+    _excluded_from_pre_run = CONTRACT_POST_RUN_PIN_FIELDS | CONTRACT_OPTIONAL_PIN_FIELDS
+    pre_run_fields = [n for n in CONTRACT_PIN_FIELDS if n not in _excluded_from_pre_run]
     for name in pre_run_fields:
         if not _is_field_pinned(revalidated.pin_field(name)):
             return "BLOCKED"

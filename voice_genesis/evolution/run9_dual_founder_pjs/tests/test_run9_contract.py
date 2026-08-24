@@ -443,6 +443,68 @@ def test_item49_single_pending_pre_run_field_blocks_gate(contract_raw: Dict[str,
 
 
 # ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第1巡対応 — Fix 1:
+# human_evaluation_protocol_sha の optional 化
+# ---------------------------------------------------------------------------
+
+
+def test_fix1_human_evaluation_protocol_sha_is_declared_optional() -> None:
+    assert m.CONTRACT_OPTIONAL_PIN_FIELDS == frozenset({"human_evaluation_protocol_sha"})
+
+
+def test_fix1_optional_field_pending_does_not_block_ready(contract_raw: Dict[str, Any]) -> None:
+    """rev 0.3 改訂F（人間知覚 Gate 非必須化）: `human_evaluation_protocol_sha`
+    だけが PENDING でも、他の pre-run 欄が全て PINNED なら gate_state() は
+    READY になる（optional 欄は必須判定から除外される — post-run 欄とは
+    別の第3分類として扱われることの直接確認）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    fully_pinned["human_evaluation_protocol_sha"] = {
+        "value": None,
+        "status": "PENDING",
+        "reason": "advisory audit not planned for this attempt",
+    }
+    contract = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract) == "READY"
+
+
+def test_fix1_optional_field_pinned_still_allows_ready(contract_raw: Dict[str, Any]) -> None:
+    """対照実験: optional 欄を PINNED にしても（advisory 監査を実施した
+    場合）READY を妨げない — optional は「pin してはいけない」欄ではなく
+    「pin しなくても良い」欄であることの確認。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    contract = m.load_run9_contract(fully_pinned)
+    assert fully_pinned["human_evaluation_protocol_sha"]["status"] == "PINNED"
+    assert m.gate_state(contract) == "READY"
+
+
+def test_fix1_current_contract_still_blocked_by_other_pending_fields(
+    contract: m.Run9RunContract,
+) -> None:
+    """現行 RUN9_CONTRACT.yaml は human_evaluation_protocol_sha の optional
+    化だけでは READY にならない（他の多数の pre-run 欄が依然 PENDING —
+    User rights attest 待ち・VG-L0 ハーネス未実装のため）。"""
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_fix1_current_contract_human_evaluation_protocol_sha_reason_documents_optional(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["human_evaluation_protocol_sha"]
+    assert field["status"] == "PENDING"
+    assert "optional" in field["reason"].lower()
+
+
+def test_fix1_optional_field_excluded_from_pre_run_required_set() -> None:
+    excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
+    pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
+    assert "human_evaluation_protocol_sha" not in pre_run_fields
+    assert "artifact_manifest_sha" not in pre_run_fields
+    assert "cost_record_sha" not in pre_run_fields
+    # optional と post-run は互いに素であること（同一欄が両分類に属さない）。
+    assert not (m.CONTRACT_POST_RUN_PIN_FIELDS & m.CONTRACT_OPTIONAL_PIN_FIELDS)
+
+
+# ---------------------------------------------------------------------------
 # item 54: no RUN9A/RUN9B/RUN9C IDs
 # ---------------------------------------------------------------------------
 
@@ -1473,6 +1535,22 @@ def test_revision03_old_0_2_contract_rejected(contract_raw: Dict[str, Any]) -> N
     tampered = copy.deepcopy(contract_raw)
     tampered["design_revision"] = "0.2"
     with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_revision03_old_0_2_contract_rejection_message_names_current_revision(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """PR #317 Codex bot レビュー第1巡 Fix 2 採用: 拒否メッセージが固定
+    ファイル名（例: "DESIGN_RUN9_REVISION_0.2.md"）をハードコードして
+    いると、design_revision を上げるたびにメッセージ内のファイル名だけが
+    陳腐化する（実際に 0.2 -> 0.3 進行時に発生した不備）。メッセージが
+    `DESIGN_REVISION` 定数（現在は "0.3"）から動的に導出されていること
+    を、"0.2" 拒否時のメッセージに現行の "0.3" が含まれることで確認する
+    — メッセージが旧値のまま固定化されていれば失敗する。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["design_revision"] = "0.2"
+    with pytest.raises(m.Run9ValidationError, match="0.3"):
         m.load_run9_contract(tampered)
 
 
@@ -2552,10 +2630,16 @@ def test_por_revision_practice_forbidden_inputs_includes_spk_embedding_and_corre
 
 
 def test_por_revision_practice_allowed_inputs_covers_por_3_2_permissions() -> None:
+    """PoR §3.2 は許可を5項目列挙する。PR #317 Codex bot レビュー第1巡
+    Fix 3 採用: 「Founder 自身が何を模倣すべきか決める」
+    （`autonomous_imitation_target_selection`）が初回実装で転記漏れして
+    いた（4要素のままだった）— 5要素全件を明示的に検証する。"""
     assert "pjs_audio_direct_listen" in m.PRACTICE_ALLOWED_INPUTS
     assert "founder_autonomous_feature_extraction" in m.PRACTICE_ALLOWED_INPUTS
+    assert "autonomous_imitation_target_selection" in m.PRACTICE_ALLOWED_INPUTS
     assert "founder_autonomous_diff_estimation" in m.PRACTICE_ALLOWED_INPUTS
     assert "founder_autonomous_search_within_allowed_range" in m.PRACTICE_ALLOWED_INPUTS
+    assert len(m.PRACTICE_ALLOWED_INPUTS) == 5
 
 
 def test_por_revision_education_forbidden_inputs_includes_spk_embedding_and_raw_audio() -> None:

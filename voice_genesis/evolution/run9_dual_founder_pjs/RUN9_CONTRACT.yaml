@@ -288,10 +288,18 @@ hypothesis_algebra_sha:
   status: PENDING
   reason: H1-H6 の閾値（δtarget / εk）校正が未実施（positive / negative control 未実施）。
 
+# optional 欄（PR #317 Codex bot レビュー第1巡 Fix 1 採用、
+# run9_schema.CONTRACT_OPTIONAL_PIN_FIELDS）: rev 0.3 改訂F により人間
+# 知覚 Gate は必須ではない。PENDING のままでも gate_state() の READY 判定
+# を妨げない（post-run 欄とは別の第3分類 — post-run は「まだ実測できない」
+# が本欄は「実施しないなら永久に PENDING のままで構わない」）。
 human_evaluation_protocol_sha:
   value: null
   status: PENDING
-  reason: blind human audit プロトコル文書（8-12 pair 上限の運用手順）が未作成。
+  reason: >-
+    optional（rev 0.3 改訂F）・advisory 監査実施時のみ pin。blind human
+    audit プロトコル文書（8-12 pair 上限の運用手順）は未作成だが、
+    gate_state() の READY 判定には必須ではない。
 
 # --- post-run evidence（gate_state() の pre-run 判定対象外）-----------------
 artifact_manifest_sha:
