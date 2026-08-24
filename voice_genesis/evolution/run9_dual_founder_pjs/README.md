@@ -50,6 +50,14 @@ Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生さ�
 5. **backbone checkpoint 選定未**: `backbone_checkpoint_sha` を埋めるための
    run5 系 checkpoint の選定・sha 転記が未実施。
 
+**erratum（設計書内部の記述不一致、Codex bot レビュー PR #315 第6巡指摘1）**:
+DESIGN_RUN9 §6 は `parent_designs` を5件宣言するが、同じ設計書 §23 の Run
+Contract 雛形は3件しか列挙しておらず、依存2件（VoiceGenesis Singing
+Baseline v0.1 / VoiceGenesis Supplement A・Selection Pressure Routing）が
+欠落していた。設計書は byte-pin 済みのため一切編集せず、完全側の §6 を正
+として `RUN9_CONTRACT.yaml` の `parent_designs` を5件へ是正した
+（v0.2 改訂時に §23 を §6 へ同期すべき）。
+
 ## 設計判断の記録
 
 **`TRI_CROSSOVER` を `voice_genesis/evolution/operators.py`（VG-E0）へ

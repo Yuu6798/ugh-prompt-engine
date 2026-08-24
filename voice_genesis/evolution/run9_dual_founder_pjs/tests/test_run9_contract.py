@@ -1081,3 +1081,121 @@ def test_fix12_require_valid_coord_scalar_rejects_string_and_bool() -> None:
         m._require_valid_coord_scalar(False, "coords.af0")
     assert m._require_valid_coord_scalar(0.6, "coords.af0") == 0.6
     assert m._require_valid_coord_scalar(1, "coords.user") == 1.0
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第6巡対応 — Fix 13: parent_designs の系譜整合
+# ---------------------------------------------------------------------------
+
+_DESIGN_DOC_SECTION_6_PARENT_DESIGNS = [
+    "voice_genesis/evolution/DESIGN_VG_E0.md",
+    "voice_genesis/evolution/DESIGN_VG_L0.md",
+    "VoiceGenesis Evolution Theory v0.3",
+    "VoiceGenesis Singing Baseline v0.1",
+    "VoiceGenesis Supplement A / Selection Pressure Routing",
+]
+
+
+def test_fix13_contract_parent_designs_matches_design_doc_section_6(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """Codex bot レビュー PR #315 第6巡指摘1: DESIGN_RUN9 §6 は
+    parent_designs を5件宣言する（DESIGN_VG_E0 / DESIGN_VG_L0 /
+    VoiceGenesis Evolution Theory v0.3 / VoiceGenesis Singing Baseline
+    v0.1 / VoiceGenesis Supplement A・Selection Pressure Routing）。
+    旧 §23/旧 contract は3件のみで依存2件が provenance から欠落していた
+    — RUN9_CONTRACT.yaml を §6 準拠の5件へ拡張したことを確認する
+    （設計書自体は byte-pin 済みのため一切編集しない — erratum は
+    contract 側でのみ是正する）。"""
+    assert contract_raw["parent_designs"] == _DESIGN_DOC_SECTION_6_PARENT_DESIGNS
+
+
+def test_fix13_parent_designs_element_type_strictly_validated(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 第6巡指摘1 補足: loader の parent_designs
+    検証は「全要素が非空 str の非空 list」へ厳密化されている。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["parent_designs"] = ["DESIGN_VG_E0", 123]
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+    tampered_blank = copy.deepcopy(contract_raw)
+    tampered_blank["parent_designs"] = ["DESIGN_VG_E0", "   "]
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered_blank)
+
+    tampered_dict = copy.deepcopy(contract_raw)
+    tampered_dict["parent_designs"] = {"DESIGN_VG_E0": 1}
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered_dict)
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第6巡対応 — Fix 14: 型強制/等価比較サイトの
+# ファミリー全数掃討
+# ---------------------------------------------------------------------------
+
+
+def test_fix14_excluded_teacher_identities_dict_masquerading_as_list_rejected() -> None:
+    """Codex bot レビュー PR #315 第6巡指摘2: `excluded_teacher_identities`
+    に `{"pjs": 1}` のような dict を渡すと、旧実装の
+    `list(excluded_raw) != list(RUN9_EXCLUDED_TEACHER_IDENTITIES)` は
+    `list(dict)` がキー列挙で `["pjs"]` を返すため一致してしまい素通り
+    していた。`isinstance(list)` を先行させたことで拒否される。"""
+    doc = _domain_document(6)
+    doc["excluded_teacher_identities"] = {"pjs": 1}
+    with pytest.raises(m.Run9ValidationError):
+        m.run9_identity_domain_from_dict(doc)
+
+
+def test_fix14_parents_dict_masquerading_as_list_rejected() -> None:
+    """Codex bot レビュー PR #315 第6巡指摘2: `parents` に
+    `{"AF0": 1, "RITSU": 1, "USER_DONOR": 1}` のような dict を渡すと、旧
+    実装の `list(parents_raw) != [...]` はキー列挙で一致してしまい素通り
+    していた。`isinstance(list)` を先行させたことで拒否される。"""
+    domain = _pinned_fixture_domain()
+    genuine = m.build_founder(domain, "R9F-01")
+    forged = genuine.to_dict()
+    forged["parents"] = {"AF0": 1, "RITSU": 1, "USER_DONOR": 1}
+    with pytest.raises(m.Run9ValidationError):
+        m.founder_genome_from_dict(forged, domain=domain)
+
+
+def test_fix14_performance_seed_float_variant_rejected() -> None:
+    """Codex bot レビュー PR #315 第6巡指摘2: `performance_seed` に
+    `909001.0`（float）を渡すと拒否される（`909001.0 == 909001` は真だが
+    `_is_strict_int()` が float を先に排除する）。"""
+    domain = _pinned_fixture_domain()
+    genuine = m.build_founder(domain, "R9F-01")
+    forged = genuine.to_dict()
+    forged["performance_seed"] = 909001.0
+    with pytest.raises(m.Run9ValidationError):
+        m.founder_genome_from_dict(forged, domain=domain)
+
+
+def test_fix14_genetic_generation_bool_variant_rejected() -> None:
+    """Codex bot レビュー PR #315 第6巡指摘2: `genetic_generation` に
+    `True` を渡すと拒否される（`True == 1` は真だが `_is_strict_int()` が
+    bool を先に排除する）。"""
+    domain = _pinned_fixture_domain()
+    genuine = m.build_founder(domain, "R9F-01")
+    forged = genuine.to_dict()
+    forged["genetic_generation"] = True
+    with pytest.raises(m.Run9ValidationError):
+        m.founder_genome_from_dict(forged, domain=domain)
+
+
+def test_fix14_run_id_and_experiment_id_and_claim_strength_require_str(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """対照実験: `run_id`/`experiment_id`/`claim_strength_target` の
+    isinstance(str) 明示が正常系まで壊していないこと。"""
+    m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
+
+
+def test_fix14_anchor_order_non_string_element_rejected() -> None:
+    """Codex bot レビュー PR #315 第6巡指摘2: `anchor_order` の要素に非
+    文字列が混入すると拒否される（全要素 str の明示検査）。"""
+    doc = _domain_document(6)
+    doc["anchor_order"] = ["af0", "ritsu", 123]
+    with pytest.raises(m.Run9ValidationError):
+        m.run9_identity_domain_from_dict(doc)

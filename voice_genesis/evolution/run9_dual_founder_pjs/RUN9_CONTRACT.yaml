@@ -27,10 +27,23 @@ single_intervention:
 
 baseline_run: null
 
+# erratum (Codex bot review PR #315 第6巡指摘1採用): DESIGN_RUN9 §6 は
+# parent_designs を5件宣言する（DESIGN_VG_E0 / DESIGN_VG_L0 / VoiceGenesis
+# Evolution Theory v0.3 / VoiceGenesis Singing Baseline v0.1 / VoiceGenesis
+# Supplement A・Selection Pressure Routing）が、同じ設計書の §23 Run
+# Contract 雛形は3件しか列挙しておらず（旧 RUN9_CONTRACT.yaml もこれを
+# そのまま踏襲していた）、依存2件（Singing Baseline / Supplement A）が
+# provenance から欠落していた。これは設計書内部の erratum（§6 と §23 の
+# 件数不一致）であり、設計書は byte-pin 済みのため一切編集しない
+# （design_doc_sha256 が実バイトの sha256 を PINNED で保持）。完全側の §6
+# を正とし、是正は contract 側（本ファイルの parent_designs）でのみ行う。
+# v0.2 改訂時に §23 を §6 へ同期すべき。
 parent_designs:
-  - DESIGN_VG_E0
-  - DESIGN_VG_L0
-  - VoiceGenesis_v0.3
+  - voice_genesis/evolution/DESIGN_VG_E0.md
+  - voice_genesis/evolution/DESIGN_VG_L0.md
+  - VoiceGenesis Evolution Theory v0.3
+  - VoiceGenesis Singing Baseline v0.1
+  - VoiceGenesis Supplement A / Selection Pressure Routing
 
 # --- design_doc_sha256: 編入した設計書ファイルの実 sha256（PINNED）--------
 # sha256sum で実測し、DESIGN_RUN9 コピーが uploads 原本とバイト同一であることを

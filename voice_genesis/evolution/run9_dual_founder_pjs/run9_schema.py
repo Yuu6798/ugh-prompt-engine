@@ -121,6 +121,18 @@ def _require_finite_triple(af0: float, ritsu: float, user: float) -> None:
             raise Run9ValidationError(f"non-finite coordinate rejected: {name}={v!r}")
 
 
+# 型強制/等価比較サイトのファミリー終端宣言（Codex bot レビュー PR #315
+# 第5巡（coordinate_precision/coords）→ 第6巡（run_id/experiment_id/
+# claim_strength_target/ecosystem_generation/genetic_generation/
+# performance_seed/parents/excluded_teacher_identities/anchor_order/
+# voice_id/profile_label/skill_state/operator_id/ecosystem_role/
+# identity_domain/schema/domain_id/normalization/parent_designs）で全数
+# 掃討: JSON 由来の生値は `_is_strict_int()`（bool 除外 int）/
+# `isinstance(x, list)`（dict のキー列挙で `list(...)` 比較をすり抜ける
+# 経路を拒否）/ `isinstance(x, str)` のいずれかの厳密型検査を通ってから
+# のみ等価比較・型変換に進む。本ファミリーはこの巡で終端する。
+
+
 def _is_strict_int(value: Any) -> bool:
     """bool を明示的に除外した厳密 int 判定（Codex bot レビュー PR #315
     第5巡指摘1採用）: Python は `True == 1` / `6.0 == 6` が真になるため、
@@ -367,16 +379,18 @@ def run9_identity_domain_from_dict(data: Any) -> Run9IdentityDomain:
         raise Run9ValidationError(f"identity domain document missing required key(s): {sorted(missing)}")
 
     schema = data["schema"]
-    if schema != SCHEMA_IDENTITY_DOMAIN:
+    if not isinstance(schema, str) or schema != SCHEMA_IDENTITY_DOMAIN:
         raise Run9ValidationError(f"schema must be {SCHEMA_IDENTITY_DOMAIN!r}, got {schema!r}")
 
     domain_id = data["domain_id"]
-    if domain_id != RUN9_DOMAIN_ID:
+    if not isinstance(domain_id, str) or domain_id != RUN9_DOMAIN_ID:
         raise Run9ValidationError(f"domain_id must be {RUN9_DOMAIN_ID!r}, got {domain_id!r}")
 
     anchor_order_raw = data["anchor_order"]
     if not isinstance(anchor_order_raw, list):
         raise Run9ValidationError(f"anchor_order must be a list, got {type(anchor_order_raw).__name__}")
+    if not all(isinstance(item, str) for item in anchor_order_raw):
+        raise Run9ValidationError(f"anchor_order elements must all be strings, got {anchor_order_raw!r}")
     _reject_pjs_key(context="anchor_order", keys=anchor_order_raw)
     if tuple(anchor_order_raw) != RUN9_ANCHOR_ORDER:
         raise Run9ValidationError(
@@ -402,6 +416,15 @@ def run9_identity_domain_from_dict(data: Any) -> Run9IdentityDomain:
         anchor_hashes[name] = v
 
     excluded_raw = data["excluded_teacher_identities"]
+    # isinstance(list) + 全要素 str を先行させる（Codex bot レビュー PR #315
+    # 第6巡指摘2採用）: 旧実装の `list(excluded_raw) != list(...)` は、
+    # `excluded_raw` が `{"pjs": 1}` のような dict でも `list(dict)` が
+    # キー列挙で `["pjs"]` を返し `list(RUN9_EXCLUDED_TEACHER_IDENTITIES)`
+    # （`["pjs"]`）と一致してしまう穴だった。
+    if not isinstance(excluded_raw, list) or not all(isinstance(item, str) for item in excluded_raw):
+        raise Run9ValidationError(
+            f"excluded_teacher_identities must be a list of strings, got {excluded_raw!r}"
+        )
     if list(excluded_raw) != list(RUN9_EXCLUDED_TEACHER_IDENTITIES):
         raise Run9ValidationError(
             f"excluded_teacher_identities must be exactly {list(RUN9_EXCLUDED_TEACHER_IDENTITIES)}, "
@@ -418,7 +441,7 @@ def run9_identity_domain_from_dict(data: Any) -> Run9IdentityDomain:
         )
 
     normalization = data["normalization"]
-    if normalization != RUN9_NORMALIZATION:
+    if not isinstance(normalization, str) or normalization != RUN9_NORMALIZATION:
         raise Run9ValidationError(f"normalization must be {RUN9_NORMALIZATION!r}, got {normalization!r}")
 
     metric_space_sha = data["metric_space_sha"]
@@ -681,19 +704,29 @@ def founder_genome_from_dict(data: Any, *, domain: Run9IdentityDomain) -> Run9Fo
         raise Run9ValidationError(f"genome document missing required key(s): {sorted(missing)}")
 
     voice_id = data["voice_id"]
+    if not isinstance(voice_id, str):
+        raise Run9ValidationError(f"voice_id must be a string, got {voice_id!r}")
     if not _FOUNDER_ID_RE.match(voice_id):
         raise Run9ValidationError(f"voice_id must match {_FOUNDER_ID_RE.pattern}, got {voice_id!r}")
 
-    if data["ecosystem_role"] != "FOUNDER_CANDIDATE":
-        raise Run9ValidationError(
-            f"ecosystem_role must be 'FOUNDER_CANDIDATE', got {data['ecosystem_role']!r}"
-        )
-    if data["ecosystem_generation"] != 0:
-        raise Run9ValidationError(f"ecosystem_generation must be 0, got {data['ecosystem_generation']!r}")
-    if data["genetic_generation"] != 1:
-        raise Run9ValidationError(f"genetic_generation must be 1, got {data['genetic_generation']!r}")
-    if data["identity_domain"] != RUN9_DOMAIN_ID:
-        raise Run9ValidationError(f"identity_domain must be {RUN9_DOMAIN_ID!r}, got {data['identity_domain']!r}")
+    ecosystem_role = data["ecosystem_role"]
+    if not isinstance(ecosystem_role, str) or ecosystem_role != "FOUNDER_CANDIDATE":
+        raise Run9ValidationError(f"ecosystem_role must be 'FOUNDER_CANDIDATE', got {ecosystem_role!r}")
+    # ecosystem_generation/genetic_generation/performance_seed: 厳密int等値
+    # （Codex bot レビュー PR #315 第6巡指摘2採用）。`!= 0`/`!= 1` のような
+    # 素の等価比較は bool（`False == 0`/`True == 1`）や float
+    # （`0.0 == 0`/`909001.0 == 909001`）を黙って通してしまう — 通過を
+    # 許すと `_canonicalize_for_hash()` の genome_id 直列化で非正準値が
+    # 混入しうる。`_is_strict_int()` で bool/float を先に排除する。
+    ecosystem_generation = data["ecosystem_generation"]
+    if not _is_strict_int(ecosystem_generation) or ecosystem_generation != 0:
+        raise Run9ValidationError(f"ecosystem_generation must be the exact int 0, got {ecosystem_generation!r}")
+    genetic_generation = data["genetic_generation"]
+    if not _is_strict_int(genetic_generation) or genetic_generation != 1:
+        raise Run9ValidationError(f"genetic_generation must be the exact int 1, got {genetic_generation!r}")
+    identity_domain = data["identity_domain"]
+    if not isinstance(identity_domain, str) or identity_domain != RUN9_DOMAIN_ID:
+        raise Run9ValidationError(f"identity_domain must be {RUN9_DOMAIN_ID!r}, got {identity_domain!r}")
 
     coords_raw = data["coords"]
     _reject_pjs_key(context="coords", keys=coords_raw if isinstance(coords_raw, dict) else {})
@@ -710,19 +743,28 @@ def founder_genome_from_dict(data: Any, *, domain: Run9IdentityDomain) -> Run9Fo
     })
     _validate_run9_coords_value(coords)
 
-    if data["profile_label"] not in ("AF0_DOMINANT", "USER_DOMINANT"):
-        raise Run9ValidationError(f"profile_label invalid: {data['profile_label']!r}")
-    if data["performance_seed"] != SHARED_PERFORMANCE_SEED:
+    profile_label = data["profile_label"]
+    if not isinstance(profile_label, str) or profile_label not in ("AF0_DOMINANT", "USER_DOMINANT"):
+        raise Run9ValidationError(f"profile_label invalid: {profile_label!r}")
+    performance_seed = data["performance_seed"]
+    if not _is_strict_int(performance_seed) or performance_seed != SHARED_PERFORMANCE_SEED:
         raise Run9ValidationError(
-            f"performance_seed must be {SHARED_PERFORMANCE_SEED!r}, got {data['performance_seed']!r}"
+            f"performance_seed must be the exact int {SHARED_PERFORMANCE_SEED!r}, got {performance_seed!r}"
         )
     parents_raw = data["parents"]
-    if list(parents_raw) != ["AF0", "RITSU", "USER_DONOR"]:
+    # isinstance(list) を先行させる（Codex bot レビュー PR #315 第6巡指摘2
+    # 採用）: `list(parents_raw) != [...]` は `parents_raw` が
+    # `{"AF0": 1, "RITSU": 1, "USER_DONOR": 1}` のような dict でも
+    # `list(dict)` がキー列挙で `["AF0","RITSU","USER_DONOR"]` を返し
+    # 一致してしまう（`excluded_teacher_identities` の同型欠陥と同じ穴）。
+    if not isinstance(parents_raw, list) or parents_raw != ["AF0", "RITSU", "USER_DONOR"]:
         raise Run9ValidationError(f"parents must be exactly ['AF0','RITSU','USER_DONOR'], got {parents_raw!r}")
-    if data["skill_state"] != "DEFAULT_NEUTRAL":
-        raise Run9ValidationError(f"skill_state must be 'DEFAULT_NEUTRAL', got {data['skill_state']!r}")
-    if data["operator_id"] != OPERATOR_ID:
-        raise Run9ValidationError(f"operator_id must be {OPERATOR_ID!r}, got {data['operator_id']!r}")
+    skill_state = data["skill_state"]
+    if not isinstance(skill_state, str) or skill_state != "DEFAULT_NEUTRAL":
+        raise Run9ValidationError(f"skill_state must be 'DEFAULT_NEUTRAL', got {skill_state!r}")
+    operator_id = data["operator_id"]
+    if not isinstance(operator_id, str) or operator_id != OPERATOR_ID:
+        raise Run9ValidationError(f"operator_id must be {OPERATOR_ID!r}, got {operator_id!r}")
 
     genome_id = data["genome_id"]
     if not isinstance(genome_id, str) or not _GENOME_ID_RE.match(genome_id):
@@ -943,7 +985,7 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
         raise Run9ValidationError(f"schema must be {SCHEMA_RUN_CONTRACT!r}, got {schema!r}")
 
     run_id = data["run_id"]
-    if run_id != RUN_ID:
+    if not isinstance(run_id, str) or run_id != RUN_ID:
         raise Run9ValidationError(
             f"run_id must be exactly {RUN_ID!r} — branch numbers (e.g. 'RUN9A'/'RUN9B'/'RUN9C') are "
             f"forbidden (DESIGN_RUN9 §27 item 54 / header note: design changes are tracked via "
@@ -951,7 +993,7 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
         )
 
     experiment_id = data["experiment_id"]
-    if experiment_id != EXPERIMENT_ID:
+    if not isinstance(experiment_id, str) or experiment_id != EXPERIMENT_ID:
         raise Run9ValidationError(f"experiment_id must be {EXPERIMENT_ID!r}, got {experiment_id!r}")
 
     if not isinstance(data["design_revision"], str) or not data["design_revision"]:
@@ -987,8 +1029,15 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
         raise Run9ValidationError(f"baseline_run must be null (RUN9 has no baseline_run), got {data['baseline_run']!r}")
 
     parent_designs = data["parent_designs"]
+    # 全要素が非空 str の非空 list であることを厳密化する（Codex bot レビュー
+    # PR #315 第6巡指摘1採用: RUN9_CONTRACT.yaml 側の erratum 是正 — 設計書
+    # §6 は5件の parent_designs を宣言するが §23/旧 contract は3件だった。
+    # 完全側の §6 へ拡張したため、要素の型・非空も併せて厳密化する）。
     if not isinstance(parent_designs, list) or not parent_designs:
         raise Run9ValidationError("parent_designs must be a non-empty list")
+    for i, item in enumerate(parent_designs):
+        if not isinstance(item, str) or not item.strip():
+            raise Run9ValidationError(f"parent_designs[{i}] must be a non-empty string, got {item!r}")
 
     for name in CONTRACT_PIN_FIELDS:
         _validate_pin_field(name, data[name])
@@ -1021,7 +1070,7 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
             )
 
     claim_strength = data["claim_strength_target"]
-    if claim_strength != "C2":
+    if not isinstance(claim_strength, str) or claim_strength != "C2":
         raise Run9ValidationError(f"claim_strength_target must be 'C2', got {claim_strength!r}")
 
     # deepcopy（Codex bot レビュー PR #315 第2巡指摘1採用）: `dict(data)` は
