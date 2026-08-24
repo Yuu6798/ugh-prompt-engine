@@ -1343,11 +1343,22 @@ _DISTANCE_SECTION_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 _DISTANCE_SECTION_STR_KEYS: Tuple[str, ...] = ("method", "definition", "note")
 
 _REFERENCE_EXAMPLE_REQUIRED_KEYS: FrozenSet[str] = frozenset({"status", "procedure", "value"})
-# reference_example.value は「未実測」を正直に表す null を許容する唯一の
-# status（DESIGN_RUN9 の捏造禁止規律 — 実測前に値をでっち上げない）。
-# 他の status（実測固定後）は value が null のままでは実測値の記録が
-# digest 更新だけで静かに失われた状態と区別できないため拒否する。
-_REFERENCE_EXAMPLE_PENDING_STATUS = "PENDING_BIRTH_PROBE"
+# Codex bot レビュー PR #318 第12巡 Fix 29 採用（P1）: 実測 reference の
+# 循環 provenance 解消。旧 status PENDING_BIRTH_PROBE は「実測前は null、
+# 実測後は書き戻して非 null にする」非対称ルールだったが、その書き戻し
+# 手順自体が循環 provenance を生む欠陥だった（metric_space_sha →
+# Run9IdentityDomain.content_digest() → founder の genome_id という連鎖の
+# ため、実測後に本 manifest を repin すると repin 後の domain は別の
+# founder を記述することになり、記録した probe の identity と manifest の
+# identity が循環参照する）。本 status は手続きのみを恒久的に固定する唯一の
+# 値であり、value は恒久に null（実測待ちの一時的な null ではない — この
+# manifest には決して書き込まない）。実測値は出生後アーティファクト
+# （RUN9_CONTRACT.yaml の post-run pin `artifact_manifest_sha` 配下の
+# per-founder reference measurement record）へ記録する。非対称ルールの
+# 向きは Fix 21 から反転する: 旧ルールは「PENDING 中のみ value null 許容」
+# だったが、新ルールは「value は常に null が正、null 以外は拒否」
+# （書き戻し企図の拒否）。
+_REFERENCE_EXAMPLE_PROCEDURE_ONLY_STATUS = "PROCEDURE_ONLY_VALUE_RECORDED_IN_POST_BIRTH_ARTIFACT"
 
 _EXTRACTION_PROCEDURE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "f0_estimation", "frame_period_ms", "frame_period_source", "spectral_envelope",
@@ -1439,6 +1450,32 @@ _NEGATIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER = "birth probe"
 # 重複記載ではなく参照で束縛されていること）の2点を機械強制する。
 _DISTANCE_UNIT_FORMULA_FEATURE_CALL_MARKER = "feature("
 _DISTANCE_UNIT_FORMULA_LEVEL_NORMALIZATION_REF_MARKER = "level_normalization"
+
+# Codex bot レビュー PR #318 第12巡 Fix 30 採用（P1）: negative reference の
+# 単一ソース化。旧 negative_reference_definition は「他方 founder の
+# reference_render のみ」と定めつつ、同文中に「PJS は... negative reference
+# としてのみ利用する」という矛盾節が残存していた（PJS は構造的に Identity
+# anchor 空間から排除済みのはずなのに、直後で negative reference としての
+# 利用を肯定する自己矛盾）。旧 validator は
+# `_NEGATIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER`（"birth probe"）しか見て
+# おらず、この内容矛盾を素通りさせていた。本節は PJS 不使用の明文マーカーを
+# 要求し、旧矛盾文言への逆行を負例で拒否する。
+_NEGATIVE_REFERENCE_PJS_NAME_MARKER = "PJS"
+_NEGATIVE_REFERENCE_PJS_NON_USE_MARKER = "negative reference としても使用しない"
+# 旧矛盾文言（削除対象）— 逆行検出用。
+_NEGATIVE_REFERENCE_PJS_CONTRADICTORY_MARKER = "negative reference としてのみ利用する"
+
+# Codex bot レビュー PR #318 第12巡 Fix 31 採用（P1）: identity_feature の
+# 定義域（scope）を全 identity 評価対象レンダーへ拡張する。旧 scope は
+# neutral P0/C0 レンダー限定だったが、calibration.decision_rule は
+# post-practice/post-education レンダーの d(r) を要求しており、厳密実装は
+# feature を計算できず、寛容実装は pinned scope を無視するしかない契約矛盾
+# を抱えていた。「feature の計算可能域（全評価対象レンダー）」と「校正・
+# 参照に使える母集団（neutral な r0 限定）」を区別して明文化することを
+# validator が機械強制する。
+_IDENTITY_FEATURE_SCOPE_EVALUATED_RENDERS_MARKER = "全ての identity 評価対象レンダー"
+_IDENTITY_FEATURE_SCOPE_NEUTRAL_POPULATION_MARKER = "neutral"
+_IDENTITY_FEATURE_SCOPE_DISTINCTION_MARKER = "計算可能域"
 
 _CALIBRATION_WORKED_EXAMPLE_STR_KEYS: Tuple[str, ...] = (
     "disclaimer", "theta_cal_derivation", "c1_gate_result", "positive_reference_gate_result",
@@ -1661,6 +1698,28 @@ def _validate_calibration_section(data: Any) -> None:
             f"{_NEGATIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER!r} to appear), got "
             f"{negative_reference_definition!r} (Codex bot レビュー PR #318 第10巡 Fix 27)"
         )
+    # Fix 30: negative reference の単一ソース化 — PJS への言及がある場合は
+    # 必ず「negative reference としても使用しない」旨でなければならず、
+    # 旧矛盾文言（「negative reference としてのみ利用する」）への逆行を
+    # 拒否する。
+    if _NEGATIVE_REFERENCE_PJS_NAME_MARKER in negative_reference_definition:
+        if _NEGATIVE_REFERENCE_PJS_NON_USE_MARKER not in negative_reference_definition:
+            raise Run9ValidationError(
+                "calibration.validity_gates.negative_reference_gate.negative_reference_definition "
+                f"mentions PJS but does not state the non-use marker (expected "
+                f"{_NEGATIVE_REFERENCE_PJS_NON_USE_MARKER!r} to appear), got "
+                f"{negative_reference_definition!r} (Codex bot レビュー PR #318 第12巡 Fix 30 — PJS "
+                "is structurally excluded from the Identity anchor space and must not be used as a "
+                "negative reference either)"
+            )
+    if _NEGATIVE_REFERENCE_PJS_CONTRADICTORY_MARKER in negative_reference_definition:
+        raise Run9ValidationError(
+            "calibration.validity_gates.negative_reference_gate.negative_reference_definition must "
+            f"not contain the old contradictory phrase {_NEGATIVE_REFERENCE_PJS_CONTRADICTORY_MARKER!r} "
+            f"(PJS being 'structurally excluded' and then 'used only as a negative reference' in the "
+            f"same definition is self-contradictory), got {negative_reference_definition!r} (Codex bot "
+            "レビュー PR #318 第12巡 Fix 30)"
+        )
 
     decision_rule = _require_dict(calibration["decision_rule"], field="calibration.decision_rule")
     _validate_nested_str_keys(
@@ -1824,6 +1883,26 @@ def _validate_identity_feature(data: Any) -> None:
     for key in _IDENTITY_FEATURE_STR_KEYS:
         _require_non_empty_str(identity_feature[key], field=f"identity_feature.{key}")
 
+    # Fix 31: scope はここで「feature の計算可能域（全 identity 評価対象
+    # レンダー）」と「校正・参照に使える母集団（neutral な r0 限定）」の
+    # 両方を明文で区別していなければならない — 旧 P0/C0 限定 scope への
+    # 無断退行（calibration.decision_rule が要求する post-practice/
+    # post-education レンダーの d(r) が再び計算不能になる）を防ぐ。
+    scope = identity_feature["scope"]
+    for marker in (
+        _IDENTITY_FEATURE_SCOPE_EVALUATED_RENDERS_MARKER,
+        _IDENTITY_FEATURE_SCOPE_NEUTRAL_POPULATION_MARKER,
+        _IDENTITY_FEATURE_SCOPE_DISTINCTION_MARKER,
+    ):
+        if marker not in scope:
+            raise Run9ValidationError(
+                f"identity_feature.scope must state {marker!r} (Codex bot レビュー PR #318 第12巡 "
+                "Fix 31 — the feature's computable domain must cover every identity-evaluation "
+                "render that calibration.decision_rule requires d(r) for, while the calibration "
+                "population and reference renders remain neutral-only; both must be stated and kept "
+                f"distinct), got {scope!r}"
+            )
+
     f0_exclusion = _require_dict(identity_feature["f0_exclusion"], field="identity_feature.f0_exclusion")
     unknown_f0 = set(f0_exclusion.keys()) - _F0_EXCLUSION_REQUIRED_KEYS
     if unknown_f0:
@@ -1898,6 +1977,18 @@ def _validate_distance_section(data: Any) -> None:
 
 
 def _validate_reference_example(data: Any) -> None:
+    """Codex bot レビュー PR #318 第12巡 Fix 29 採用（P1）: 実測 reference の
+    循環 provenance を解消するため、reference_example は procedure-only の
+    恒久 pin として検証する。status は凍結した唯一の値
+    （`_REFERENCE_EXAMPLE_PROCEDURE_ONLY_STATUS`）と厳密一致し、value は
+    常に null でなければならない（非対称ルールを Fix 21 から反転: 旧ルールは
+    「PENDING 中のみ null 許容・それ以外は非 null 必須」だったが、新ルールは
+    「常に null が正・null 以外は拒否」——実測値をこの founder-defining pin
+    へ書き戻す企図そのものを拒否する）。実測値は
+    RUN9_CONTRACT.yaml の post-run pin `artifact_manifest_sha` 配下の
+    post-birth artifact（測定記録側）に記録し、本 manifest（founder 定義側）
+    は手続きのみを保持する片方向の provenance を維持する。
+    """
     ref = _require_dict(data, field="identity metric space manifest.reference_example")
     unknown = set(ref.keys()) - _REFERENCE_EXAMPLE_REQUIRED_KEYS
     if unknown:
@@ -1908,28 +1999,45 @@ def _validate_reference_example(data: Any) -> None:
     _require_non_empty_str(ref["status"], field="reference_example.status")
     _require_non_empty_str(ref["procedure"], field="reference_example.procedure")
 
+    status = ref["status"]
+    if status != _REFERENCE_EXAMPLE_PROCEDURE_ONLY_STATUS:
+        raise Run9ValidationError(
+            f"reference_example.status must be exactly {_REFERENCE_EXAMPLE_PROCEDURE_ONLY_STATUS!r} "
+            "(Codex bot レビュー PR #318 第12巡 Fix 29 — this manifest is a procedure-only pin that "
+            f"never records the measured birth-probe reference value), got {status!r}"
+        )
+
     value = ref["value"]
-    if ref["status"] == _REFERENCE_EXAMPLE_PENDING_STATUS:
-        if value is not None:
-            raise Run9ValidationError(
-                f"reference_example.value must be null while status is "
-                f"{_REFERENCE_EXAMPLE_PENDING_STATUS!r} (no birth probe has been measured yet — "
-                f"fabricating a value is forbidden by this repo's discipline), got {value!r}"
-            )
-    else:
-        if value is None:
-            raise Run9ValidationError(
-                "reference_example.value must not be null once status has moved past "
-                f"{_REFERENCE_EXAMPLE_PENDING_STATUS!r} (a non-pending status with a null value would "
-                "silently drop the first birth-probe measurement — the exact failure mode this "
-                "validator closes)"
-            )
+    if value is not None:
+        raise Run9ValidationError(
+            "reference_example.value must remain permanently null — writing the measured "
+            "birth-probe reference value back into this manifest would repin metric_space_sha and, "
+            "via Run9IdentityDomain.content_digest(), change the founder's genome_id, creating a "
+            "circular provenance between the recorded probe's identity and the manifest that defines "
+            "that identity (Codex bot レビュー PR #318 第12巡 Fix 29). Record the measured value in "
+            "the post-birth artifact bound under RUN9_CONTRACT.yaml's artifact_manifest_sha instead, "
+            f"got {value!r}"
+        )
 
 
 def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
     """`inputs/identity_metric_space.json`（`run9-identity-metric-space/1.1`）
     の閉じた形状を検証する（Codex bot レビュー PR #318 第6巡 Fix 19、
-    第7巡 Fix 20/Fix 21、第9巡 Fix 23/Fix 24、第11巡 Fix 28 で拡張）。
+    第7巡 Fix 20/Fix 21、第9巡 Fix 23/Fix 24、第11巡 Fix 28、
+    第12巡 Fix 29/Fix 30/Fix 31 で拡張）。
+
+    第12巡 Fix 29（P1）: reference_example を procedure-only の恒久 pin と
+    して検証する。status は凍結した唯一の値と厳密一致し、value は常に null
+    でなければならない（Fix 21 の非対称ルールを反転 — 実測値の書き戻しは
+    metric_space_sha → content_digest() → genome_id の連鎖により循環
+    provenance を生むため、書き戻し自体を拒否する）。第12巡 Fix 30（P1）:
+    negative_reference_definition が PJS へ言及する場合、必ず「negative
+    reference としても使用しない」旨でなければならず、旧矛盾文言（「PJS は
+    構造的に排除済み」と述べつつ「negative reference としてのみ利用する」）
+    への逆行を拒否する。第12巡 Fix 31（P1）: identity_feature.scope が
+    「feature の計算可能域（全 identity 評価対象レンダー）」と「校正・参照に
+    使える母集団（neutral な r0 限定）」を区別して明文化していることを
+    機械強制する。
 
     第11巡 Fix 28（P1）: calibration.distance_unit.formula が
     identity_feature.level_normalization の定義する正規化 feature(x) 基準で

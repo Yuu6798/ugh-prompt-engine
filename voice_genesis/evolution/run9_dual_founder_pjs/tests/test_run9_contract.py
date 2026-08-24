@@ -4720,19 +4720,27 @@ def test_fix21_validator_rejects_reference_example_unknown_nested_key() -> None:
 
 
 def test_fix21_validator_rejects_reference_example_value_present_while_pending() -> None:
-    """捏造禁止の裏側: PENDING_BIRTH_PROBE のまま value を非 null にする
-    （実測前の値のでっち上げ）ことも拒否する。"""
+    """捏造禁止の裏側: 手続きのみの status のまま value を非 null にする
+    （実測前の値のでっち上げ）ことも拒否する。第12巡 Fix 29 で
+    reference_example.value は「常に null が正」の恒久ルールへ書き換わった
+    （旧 PENDING_BIRTH_PROBE の非対称ルールを反転 — 詳細は Fix 29 の
+    テスト群を参照）ため、本テストのエラー文言もそれに追随する。"""
     doc = _valid_metric_space_doc()
     doc["reference_example"]["value"] = {"fabricated": True}
-    with pytest.raises(m.Run9ValidationError, match="value must be null while status is"):
+    with pytest.raises(m.Run9ValidationError, match="value must remain permanently null"):
         m.validate_identity_metric_space_manifest(doc)
 
 
-def test_fix21_validator_rejects_reference_example_null_value_once_status_moves_past_pending() -> None:
+def test_fix21_validator_rejects_reference_example_status_not_procedure_only() -> None:
+    """第12巡 Fix 29 による置換: 旧テストは「status が PENDING_BIRTH_PROBE
+    を過ぎたら value は null であってはならない」という非対称ルールの片側を
+    確認していたが、Fix 29 でこの非対称ルールは反転し（value は常に null が
+    正）、status 自体も凍結した唯一の値と厳密一致するよう強化された。
+    status を別の値（例: 旧 "MEASURED"）へ変えると、value の状態に関わらず
+    status 不一致として拒否されることを確認する。"""
     doc = _valid_metric_space_doc()
     doc["reference_example"]["status"] = "MEASURED"
-    doc["reference_example"]["value"] = None
-    with pytest.raises(m.Run9ValidationError, match="value must not be null once status"):
+    with pytest.raises(m.Run9ValidationError, match="status must be exactly"):
         m.validate_identity_metric_space_manifest(doc)
 
 
@@ -5315,3 +5323,263 @@ def test_fix28_domain_metric_space_sha_differs_from_pre_fix28_value() -> None:
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
     old_pre_fix28_sha = "196de131cbe50ed71e93254ae89175be7c92f878e720dfc3a28b916b2ff2ef62"
     assert domain_raw["metric_space_sha"] != old_pre_fix28_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第12巡 Fix 29（P1）: 実測 reference の循環
+# provenance 解消。reference_example は procedure-only の恒久 pin へ改訂し、
+# 実測値の記録先を出生後アーティファクト（RUN9_CONTRACT.yaml の post-run
+# pin `artifact_manifest_sha` 配下）へ切り出す。旧 status
+# PENDING_BIRTH_PROBE の非対称ルール（PENDING 中のみ value null 許容）は
+# 反転し、新 status では value は常に null が正・null 以外は拒否する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix29_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix29_reference_example_status_is_procedure_only_literal() -> None:
+    data = _valid_metric_space_doc()
+    assert (
+        data["reference_example"]["status"]
+        == "PROCEDURE_ONLY_VALUE_RECORDED_IN_POST_BIRTH_ARTIFACT"
+    )
+    assert data["reference_example"]["status"] != "PENDING_BIRTH_PROBE"
+
+
+def test_fix29_reference_example_value_is_permanently_null() -> None:
+    data = _valid_metric_space_doc()
+    assert data["reference_example"]["value"] is None
+
+
+def test_fix29_reference_example_procedure_states_circular_provenance_mechanism() -> None:
+    """循環 provenance の機序（metric_space_sha → content_digest() →
+    genome_id）が procedure 文言に明記されていることを確認する。"""
+    data = _valid_metric_space_doc()
+    procedure = data["reference_example"]["procedure"]
+    assert "metric_space_sha" in procedure
+    assert "content_digest" in procedure
+    assert "genome_id" in procedure
+    assert "循環" in procedure
+
+
+def test_fix29_reference_example_procedure_states_post_birth_artifact_destination() -> None:
+    """実測値の記録先が出生後アーティファクト（RUN9_CONTRACT.yaml の
+    post-run pin artifact_manifest_sha 配下）であることが明記されている
+    ことを確認する。"""
+    data = _valid_metric_space_doc()
+    procedure = data["reference_example"]["procedure"]
+    assert "artifact_manifest_sha" in procedure
+    assert "post-birth artifact" in procedure or "出生後アーティファクト" in procedure
+
+
+def test_fix29_reference_example_procedure_states_never_written_back() -> None:
+    data = _valid_metric_space_doc()
+    procedure = data["reference_example"]["procedure"]
+    assert "書き込まない" in procedure or "一切書き込まない" in procedure
+
+
+def test_fix29_distance_unit_reference_render_definition_no_longer_promises_write_back() -> None:
+    """calibration.distance_unit.reference_render_definition も、実測値を
+    この manifest へ記録する旨の旧文言（書き戻しを前提とした表現）を残して
+    いないことを確認する。"""
+    data = _valid_metric_space_doc()
+    reference_render_definition = data["calibration"]["distance_unit"][
+        "reference_render_definition"
+    ]
+    assert "procedure-only" in reference_render_definition or (
+        "書き込まない" in reference_render_definition
+    )
+
+
+def test_fix29_validator_rejects_reference_example_status_old_pending_literal() -> None:
+    """指摘の直接再現例: 旧 status PENDING_BIRTH_PROBE への逆行を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["reference_example"]["status"] = "PENDING_BIRTH_PROBE"
+    with pytest.raises(m.Run9ValidationError, match="status must be exactly"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix29_validator_rejects_reference_example_value_non_null() -> None:
+    doc = _valid_metric_space_doc()
+    doc["reference_example"]["value"] = {"mean_bin_0": 0.021}
+    with pytest.raises(m.Run9ValidationError, match="value must remain permanently null"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix29_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 29/30/31 の文言改訂後、`metric_space_sha` は
+    `identity_metric_space.json` の正規形 sha256 を再計算した値と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第12巡 Fix 30（P1）: negative reference の
+# 単一ソース化。negative_reference_definition は「他方 founder の
+# reference_render のみ」と定めつつ、同節内で PJS を negative reference と
+# して使う旨の矛盾節が残存していた（PJS は構造的に Identity anchor 空間から
+# 排除済みのはずなのに、直後で negative reference としての利用を肯定する
+# 自己矛盾）。旧 validator は birth probe マーカーしか見ておらず、この
+# 内容矛盾を素通りさせていた。
+# ---------------------------------------------------------------------------
+
+
+def test_fix30_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix30_negative_reference_definition_states_pjs_non_use() -> None:
+    data = _valid_metric_space_doc()
+    negative_reference_definition = data["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    assert "PJS" in negative_reference_definition
+    assert "negative reference としても使用しない" in negative_reference_definition
+
+
+def test_fix30_negative_reference_definition_no_longer_contains_contradictory_phrase() -> None:
+    data = _valid_metric_space_doc()
+    negative_reference_definition = data["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    assert "negative reference としてのみ利用する" not in negative_reference_definition
+
+
+def test_fix30_negative_reference_definition_single_sources_from_other_founder_reference_render() -> None:
+    data = _valid_metric_space_doc()
+    negative_reference_definition = data["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    assert "他方 founder" in negative_reference_definition
+    assert "reference_render" in negative_reference_definition
+
+
+def test_fix30_validator_rejects_negative_reference_definition_reintroducing_contradictory_phrase() -> (
+    None
+):
+    """指摘の直接再現例: 「構造的に排除済み」と述べつつ直後で「negative
+    reference としてのみ利用する」と矛盾させる旧文言への逆行を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ] = (
+        "negative_reference(F) = 他方 founder F' の reference_render(F')（birth probe 時に生成）。"
+        "PJS は teacher であり RUN9 Identity anchor 空間から構造的に排除済み — negative reference "
+        "としても使用しない。ただし旧文言は negative reference としてのみ利用する、とも読めた。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="old contradictory phrase"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix30_validator_rejects_negative_reference_definition_pjs_mention_without_non_use_marker() -> (
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ] = (
+        "negative_reference(F) = 他方 founder F' の reference_render(F')（birth probe 時に生成）。"
+        "PJS is the teacher and is excluded from the anchor space."
+    )
+    with pytest.raises(m.Run9ValidationError, match="mentions PJS but does not state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix30_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認（Fix 29/31 と共通の repin — 同ラウンドで3件改訂）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第12巡 Fix 31（P1）: identity_feature の
+# 定義域（scope）を評価レンダー全体へ拡張する。旧 scope は neutral P0/C0
+# レンダー限定だったが、calibration.decision_rule は post-practice/
+# post-education レンダーの d(r) を要求しており、厳密実装は feature を
+# 計算できず、寛容実装は pinned scope を無視するしかない契約矛盾を抱えて
+# いた。「feature の計算可能域」と「校正・参照に使える母集団（neutral 限定）」
+# を区別して明文化する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix31_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix31_identity_feature_scope_states_evaluated_renders_extension() -> None:
+    data = _valid_metric_space_doc()
+    scope = data["identity_feature"]["scope"]
+    assert "全ての identity 評価対象レンダー" in scope
+    assert "r0" in scope
+    assert "r_practice" in scope
+    assert "r_taught" in scope
+
+
+def test_fix31_identity_feature_scope_distinguishes_computable_domain_from_neutral_population() -> None:
+    data = _valid_metric_space_doc()
+    scope = data["identity_feature"]["scope"]
+    assert "計算可能域" in scope
+    assert "neutral" in scope
+    assert "校正母集団" in scope or "reference" in scope
+
+
+def test_fix31_identity_feature_definition_no_longer_restricted_to_p0_probe() -> None:
+    """指摘の直接事例: definition の冒頭が「P0 中立 identity probe の」に
+    固定されたままだと、C0/C1/r_practice/r_taught レンダーへの feature(x)
+    適用（calibration.distance_unit.formula が要求する）と矛盾する。"""
+    data = _valid_metric_space_doc()
+    definition = data["identity_feature"]["definition"]
+    assert "P0 中立 identity probe の voiced フレームにおける" not in definition
+    assert "mean(v(x))" in definition  # Fix 25 のゲイン不変式は維持される
+
+
+def test_fix31_validator_rejects_scope_missing_evaluated_renders_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["scope"] = (
+        "identity_feature の計算可能域は neutral な r0 校正母集団に限定する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="identity_feature.scope must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix31_validator_rejects_scope_missing_neutral_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["scope"] = (
+        "identity_feature の計算可能域は全ての identity 評価対象レンダー（r0/r_practice/"
+        "r_taught）へ拡張する。校正母集団は限定的なレンダーのみに絞る。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="identity_feature.scope must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix31_validator_rejects_scope_missing_distinction_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["scope"] = (
+        "全ての identity 評価対象レンダー（r0/r_practice/r_taught）の voiced フレームを対象と"
+        "する。校正母集団は neutral なレンダーのみに絞る。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="identity_feature.scope must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix31_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認（Fix 29/30 と共通の repin — 同ラウンドで3件改訂）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix31_domain_metric_space_sha_differs_from_pre_fix29_round_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 29/30/31（第12巡）の3件改訂に
+    より metric_space_sha が Fix 28 時点（第11巡）の旧値から更新されている
+    ことを確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round12_sha = "b135ca1434c89fc981e994b52794c50675b44a074cdb7e14b68d4de148be93df"
+    assert domain_raw["metric_space_sha"] != old_pre_round12_sha

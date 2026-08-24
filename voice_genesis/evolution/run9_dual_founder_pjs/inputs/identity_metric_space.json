@@ -45,8 +45,8 @@
     }
   },
   "identity_feature": {
-    "definition": "P0 中立 identity probe の voiced フレームにおける log スペクトル包絡 (sp) の時間平均ベクトル v(x) から、そのスカラー平均 mean(v(x)) を全 bin から差し引いた、レンダーゲインに不変な level 正規化形状ベクトル（level_normalization 参照）",
-    "scope": "P0 中立 identity probe（Founder 出生直後の無介入 render、CONTROL/C0 = NO_LEARNING_REPLAY の産物）の voiced フレームのみを対象とする。unvoiced フレームは平均から除外する。",
+    "definition": "identity_feature.scope が定める評価対象レンダー x の voiced フレームにおける log スペクトル包絡 (sp) の時間平均ベクトル v(x) から、そのスカラー平均 mean(v(x)) を全 bin から差し引いた、レンダーゲインに不変な level 正規化形状ベクトル（level_normalization 参照）",
+    "scope": "identity_feature の**計算可能域**は、calibration.decision_rule が距離を要求する全ての identity 評価対象レンダー（r0 birth probe・C0/C1 校正テイク・r_practice/r_taught/CONTROL 枝の r_sham 等、BRANCH_REVISIONS が定義する全 revision）の voiced フレームへ拡張する（Codex bot レビュー PR #318 第12巡 Fix 31 — 旧 scope は P0 中立 identity probe（CONTROL/C0 = NO_LEARNING_REPLAY の産物）限定であり、calibration.decision_rule が要求する post-practice/post-education レンダーの d(r) を feature 自体が計算不能という契約矛盾を抱えていた。厳密実装は feature を計算できず、寛容実装は pinned scope を無視するしかない状態だった）。ただし**校正母集団（D_C0(F)/D_C1(F)）と reference（positive_reference/negative_reference/reference_render）は引き続き neutral（r0 条件）レンダーに限定する** — feature の計算可能域（全評価対象レンダー）と、校正・参照に使える母集団（neutral な r0 限定）は別の概念であり、混同しない（校正・参照側の neutral 限定は calibration.freeze_threshold.d_c0_population 等の既存 pooling 禁止規約を変更しない）。unvoiced フレームはいずれのレンダーでも平均から除外する。",
     "vector_source": "WORLD 分析の sp（スペクトル包絡）出力を extraction_procedure.log_transform で対数化した後、extraction_procedure.voiced_mask が定義する voiced フレーム軸で時間平均を取ったベクトル v(x)（voiced_mask の算出に使う基本周波数の推定値そのものは、このベクトルには含まれない — 除外の根拠は本オブジェクト直下の除外節を参照）に、level_normalization が定義するスカラー平均減算を適用した正規化形状ベクトルを identity_feature の実体とする。",
     "f0_exclusion": {
       "excluded": true,
@@ -74,7 +74,7 @@
     "distance_unit": {
       "formula": "d_i(F) = euclidean(feature(reference_render(F)), feature(take_i(F))) — feature(x) は identity_feature.level_normalization が定義する feature(x) = v(x) - mean(v(x))・1 を参照する（本節では再定義しない。level 正規化前の raw ベクトルへの直接 Euclidean は不採用 — ゲイン変化がそのまま距離へ漏れ込むため）。",
       "aggregation_unit": "1 テイク = 1 距離標本",
-      "reference_render_definition": "当該 founder F 自身の first birth-probe measurement に固定する（founder ごとに1つ — R9F-01/R9F-02 それぞれの reference_render を個別に持ち、他方 founder の reference と混同・共用しない）。reference_render(F) は当該 founder の C0/C1 テイクの一員ではなく、birth probe の独立レンダーである（D_C0(F)/D_C1(F) の距離標本対象からは除外し、比較の基準点としてのみ用いる）。実測値は reference_example 節が固定する手続きに従う。捏造禁止 — reference_example.procedure と同一の事前登録手続きに従う。"
+      "reference_render_definition": "当該 founder F 自身の first birth-probe measurement に固定する（founder ごとに1つ — R9F-01/R9F-02 それぞれの reference_render を個別に持ち、他方 founder の reference と混同・共用しない）。reference_render(F) は当該 founder の C0/C1 テイクの一員ではなく、birth probe の独立レンダーである（D_C0(F)/D_C1(F) の距離標本対象からは除外し、比較の基準点としてのみ用いる）。実測値の選定手続き（最初の実測をそのまま固定し、結果を見て選び直さない）は reference_example 節が固定する。ただし実測値そのものはこの metric manifest には一切書き込まない — reference_example 節の procedure-only pin（Codex bot レビュー PR #318 第12巡 Fix 29）が定める出生後アーティファクトへ記録する。捏造禁止 — 同一の事前登録手続きに従う。"
     },
     "freeze_threshold": {
       "formula": "theta_cal(F) = P95(D_C0(F)) — founder F ごとに独立算出する。",
@@ -96,7 +96,7 @@
       "negative_reference_gate": {
         "id": "validity_gate_negative_reference",
         "condition": "d(negative_reference(F)) > theta_cal(F)",
-        "negative_reference_definition": "negative_reference(F) = 他方 founder F' の reference_render(F')（F' 自身の birth probe 時に生成された、学習介入前の独立レンダー — distance_unit.reference_render_definition と同一手続きで固定する）。PJS は teacher であり RUN9 Identity anchor 空間から構造的に排除済み — negative reference としてのみ利用する。"
+        "negative_reference_definition": "negative_reference(F) = 他方 founder F' の reference_render(F')（F' 自身の birth probe 時に生成された、学習介入前の独立レンダー — distance_unit.reference_render_definition と同一手続きで固定する）。negative reference のソースはこの1系統のみ（他方 founder の reference_render）に単一化する。PJS は teacher であり RUN9 Identity anchor 空間から構造的に排除済み — negative reference としても使用しない（Codex bot レビュー PR #318 第12巡 Fix 30 — 旧文言は同節内で PJS の構造的排除を述べつつ、直後で PJS 自体を negative reference の利用対象として肯定する節が残存し矛盾していた。validator は birth probe マーカーのみを見て内容の矛盾を検出できなかった）。"
       },
       "on_failure": "founder F の3ゲートのいずれかが不成立なら calibration_status(F) = INVALID → 当該 founder F の identity 判定は一律 NOT_ESTABLISHED（STABLE_BY_MACHINE_METRIC/SHIFTED を主張しない）。"
     },
@@ -126,8 +126,8 @@
     }
   },
   "reference_example": {
-    "status": "PENDING_BIRTH_PROBE",
-    "procedure": "本 spec 策定時点では実音声（birth probe render）が存在しないため、identity_feature の数値例は捏造しない。birth probe（P0 中立 identity probe）を初めて実測した時点で、その実測値の1件を reference example として本欄へ事前登録の手続きに従い固定する（結果を見た後に選び直さない — 最初の実測をそのまま固定する）。固定後は本ファイルを更新し、正規形 sha256 を再計算して metric_space_sha を repin する。",
+    "status": "PROCEDURE_ONLY_VALUE_RECORDED_IN_POST_BIRTH_ARTIFACT",
+    "procedure": "本節は手続きのみを恒久的に凍結する（Codex bot レビュー PR #318 第12巡 Fix 29 — 旧 status PENDING_BIRTH_PROBE からの置換）。実測 reference 値はこの manifest へ一切書き戻さない — value フィールドは恒久に null（「この manifest には決して書き込まない」の意味であり、実測待ちの一時的な null ではない）。循環 provenance の機序: 本ファイルの正規形 sha256 は domains/identity_domain_run9_v1.json の metric_space_sha として pin され、Run9IdentityDomain.content_digest() の入力を経て founder の genome_id を決定する。もし birth probe 実測後にこの manifest へ実測値を書き込んで repin すると、metric_space_sha → content_digest() → genome_id という連鎖により、repin 後の domain は元の founder とは別の genome_id を持つ「別の founder」を記述することになる — 記録した probe が属する identity（旧 genome_id）と、その probe を記録した本 manifest が定義する identity（repin 後の新 genome_id）が循環参照してしまう。したがって実測値の記録先はこの founder-defining pin（本ファイル）ではなく、出生後アーティファクト（post-birth artifact: founder ごとの reference measurement record）に限定する。この記録は RUN9_CONTRACT.yaml の post-run 専用 pin 欄 artifact_manifest_sha（`interventions` 等の pre-run 欄とは独立し、`run9_schema.CONTRACT_POST_RUN_PIN_FIELDS` が pre-run READY 判定から除外する欄）配下でハッシュされ、当該 founder の genome_id と本 domain の content_digest() へ束縛される。provenance は一方向のみ: metric manifest（本ファイル、founder 定義側）→ 手続きのみ（procedure-only）を post-birth artifact（測定記録側）が参照する、という向きだけを許容し、逆方向（実測値→本ファイルへの書き戻し）は構造的に禁止する。捏造禁止規律は不変 — 実測前に値をでっち上げない。",
     "value": null
   },
   "feasibility_note": "本 spec は事前登録（preregistration）であり、birth probe 実測で退化（分離不能・分散ゼロ等）が判明した場合は PoR §9 [C] DESIGN FAILURE / UNOBSERVABLE として正直に閉じる。結果を見た後の metric 定義変更・閾値の事後調整による救済は行わない（DESIGN_RUN9_REVISION_0.3.md 改訂E の holdout 開封後の救済禁止規律と同型）。"
