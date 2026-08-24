@@ -1027,6 +1027,96 @@ SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST = "run9-education-technique-lesson-ma
 PRACTICE_MANIFEST_PATH = _THIS_DIR / "inputs" / "practice_audio_split_manifest.json"
 EDUCATION_MANIFEST_PATH = _THIS_DIR / "inputs" / "education_technique_lesson_manifest.json"
 
+# ---------------------------------------------------------------------------
+# learning recipe manifest（RUN9 Phase 3 item 3）: rev 0.3 の枝別原則
+# （DESIGN_RUN9_REVISION_0.3.md 改訂A・Codex bot レビュー第6巡 Fix B 是正
+# 後の learning_recipe_sha reason）を機械可読な構造として凍結する。
+# `learning_recipe_sha` は本 PR でも PENDING のまま — ここで凍結するのは
+# 構造（枝別 recipe を束ねた単一 manifest・共通 seed・各枝内の二体等予算
+# 宣言）のみで、停止規則/試行回数/render 予算の具体値は VG-L0 ハーネス
+# 実装時の build 対象。
+# ---------------------------------------------------------------------------
+
+SCHEMA_LEARNING_RECIPE_MANIFEST = "run9-learning-recipe/1.0"
+
+# rev 0.3 の枝別原則（PoR §8）: recipe は PRACTICE_FROM_AUDIO と
+# TRANSFER_TECHNIQUE で別節に分ける（両者は情報量が本質的に異なる非対称
+# フローであり、非対称性そのものが実験変数 — 単一 recipe で括らない）。
+LEARNING_RECIPE_MANIFEST_PATH = _THIS_DIR / "inputs" / "learning_recipe_manifest.json"
+
+_LEARNING_RECIPE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "seed", "practice_recipe", "education_recipe",
+})
+
+# 各枝 recipe 節の必須キー（値は build 時に確定する欄を含むため、
+# `equal_budget_within_arm` 以外は「キーが存在すること」だけを要求し、
+# 値の内容までは本 PR では検証しない — 構造のみ凍結する）。
+_LEARNING_RECIPE_ARM_KEYS: FrozenSet[str] = frozenset({
+    "equal_budget_within_arm",  # PoR §8: 各枝『内』の二体間の等予算宣言。bool True 必須
+    "stopping_rule",  # 停止規則（値は build 時）
+    "trial_count",  # 試行回数（値は build 時）
+    "render_budget",  # render 予算（値は build 時）
+})
+
+_LEARNING_RECIPE_ARMS: Tuple[str, str] = ("practice_recipe", "education_recipe")
+
+
+def _validate_learning_recipe_arm(arm: Any, *, arm_name: str) -> None:
+    if not isinstance(arm, dict):
+        raise Run9ValidationError(f"learning recipe manifest.{arm_name} must be an object, got {type(arm).__name__}")
+    unknown = set(arm.keys()) - _LEARNING_RECIPE_ARM_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"learning recipe manifest.{arm_name} has unknown key(s): {sorted(unknown)}"
+        )
+    missing = _LEARNING_RECIPE_ARM_KEYS - set(arm.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"learning recipe manifest.{arm_name} missing required key(s): {sorted(missing)}"
+        )
+    if arm["equal_budget_within_arm"] is not True:
+        raise Run9ValidationError(
+            f"learning recipe manifest.{arm_name}.equal_budget_within_arm must be exactly True "
+            f"(PoR §8: equal budget is required within each arm, across the two founders), got "
+            f"{arm['equal_budget_within_arm']!r}"
+        )
+
+
+def validate_learning_recipe_manifest(data: Mapping[str, Any]) -> None:
+    """learning recipe manifest（`run9-learning-recipe/1.0`）の構造を検証
+    する。枝別 recipe（`practice_recipe`/`education_recipe` の2節。
+    CONTROL は学習 step を実行しないため recipe を持たない — PoR §4 の
+    CONTROL 定義と整合）+ 共通 `seed`（`LEARNING_SEED` = 909002 固定）+
+    各枝内の二体等予算宣言（`equal_budget_within_arm: true` 必須）を検証
+    する。停止規則・試行回数・render 予算の具体値は本関数では検証しない
+    （構造のみを凍結する段階のため — キーの存在だけを要求する）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"learning recipe manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _LEARNING_RECIPE_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"learning recipe manifest has unknown key(s): {sorted(unknown)}")
+    missing = _LEARNING_RECIPE_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"learning recipe manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_LEARNING_RECIPE_MANIFEST:
+        raise Run9ValidationError(
+            f"learning recipe manifest schema must be exactly {SCHEMA_LEARNING_RECIPE_MANIFEST!r}, "
+            f"got {schema!r}"
+        )
+
+    seed = data["seed"]
+    if not _is_strict_int(seed) or seed != LEARNING_SEED:
+        raise Run9ValidationError(
+            f"learning recipe manifest.seed must be the exact int {LEARNING_SEED!r} (bool/float "
+            f"variants rejected), got {seed!r} ({type(seed).__name__})"
+        )
+
+    for arm_name in _LEARNING_RECIPE_ARMS:
+        _validate_learning_recipe_arm(data[arm_name], arm_name=arm_name)
+
 # PoR §12 + User 外部レビュー PR #317 P1-2 修正指示4の逐語項目を機械可読
 # キー名へ写した最低要件（practice split manifest）。
 PRACTICE_MANIFEST_REQUIRED_KEYS: Tuple[str, ...] = (

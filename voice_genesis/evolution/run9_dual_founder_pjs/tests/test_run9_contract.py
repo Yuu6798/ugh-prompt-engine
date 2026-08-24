@@ -3954,3 +3954,252 @@ def test_fix6b_design_revision_doc_unchanged_this_round() -> None:
     contract_raw_local = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
     field = contract_raw_local["design_revision_doc_sha256"]
     assert field["value"] == _sha256_file(REVISION_DOC_PATH)
+
+
+# ---------------------------------------------------------------------------
+# RUN9 Phase 3 対応 — item 1: identity metric space の定義と pin
+# ---------------------------------------------------------------------------
+
+IDENTITY_METRIC_SPACE_PATH = _RUN_DIR / "inputs" / "identity_metric_space.json"
+
+
+def test_phase3_identity_metric_space_file_exists_and_is_valid_json() -> None:
+    assert IDENTITY_METRIC_SPACE_PATH.exists()
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert data["schema"] == "run9-identity-metric-space/1.0"
+    assert data["metric_version"] == "run9-identity-metric/0.1"
+
+
+def test_phase3_domain_metric_space_sha_matches_canonical_form_of_identity_metric_space() -> None:
+    """`domains/identity_domain_run9_v1.json` の `metric_space_sha` が、
+    `inputs/identity_metric_space.json` の正規形 sha256（af0_anchor_manifest
+    と同一規約）と一致することを実測で確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    recomputed = _sha256_canonical_json(metric_space_obj)
+    assert domain_raw["metric_space_sha"] == recomputed
+    assert m._SHA256_HEX_RE.match(domain_raw["metric_space_sha"])
+    assert domain_raw["metric_space_sha"] != "<PIN_BEFORE_RUN>"
+
+
+def test_phase3_identity_metric_space_excludes_f0() -> None:
+    """f0 が identity metric から明示除外されていることの内容検証
+    （PoR §2 の層分離整合 — pitch は Trait/Technique 層の観測軸）。"""
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    f0_exclusion = data["identity_feature"]["f0_exclusion"]
+    assert f0_exclusion["excluded"] is True
+    # distance 節に f0 が混入していないこと（ensure_ascii=False で
+    # ダンプする — True だと日本語の unicode エスケープ列に偶然 "f0" と
+    # いう16進数の並びが現れ得るため、素の文字列として照合する）。
+    assert "f0" not in json.dumps(data["distance"], ensure_ascii=False).lower()
+    # identity_feature の vector_source は sp（スペクトル包絡）由来であり、
+    # f0 という語を独立トークンとして含まない。
+    vector_source = data["identity_feature"]["vector_source"].lower()
+    assert "f0" not in vector_source
+
+
+def test_phase3_identity_metric_space_aperiodicity_is_advisory_only() -> None:
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert data["identity_feature"]["aperiodicity"]["status"] == "advisory"
+
+
+def test_phase3_identity_metric_space_distance_is_euclidean_symmetric_deterministic() -> None:
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert data["distance"]["method"] == "Euclidean distance"
+    assert "symmetric" in data["distance"]["properties"]
+    assert "deterministic" in data["distance"]["properties"]
+
+
+def test_phase3_identity_metric_space_calibration_references_c0_c1_and_holdout_freeze() -> None:
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    calibration = data["calibration_procedure"]
+    assert "C0" in calibration and "C1" in calibration
+    assert "95th percentile" in calibration
+    assert "R9-G5" in calibration
+    assert "holdout 開封前に freeze" in calibration
+    assert "positive reference" in calibration
+    assert "negative" in calibration or "confuser" in calibration
+
+
+def test_phase3_identity_metric_space_feasibility_note_references_design_failure() -> None:
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    note = data["feasibility_note"]
+    assert "DESIGN FAILURE" in note or "DESIGN_FAILURE" in note
+    assert "UNOBSERVABLE" in note
+    assert "事後" in note  # 事後調整で救済しないことの明記
+
+
+def test_phase3_domain_is_pinned_still_false_after_metric_space_pin() -> None:
+    """metric_space_sha が pin されても、user anchor が残るため
+    `is_pinned()` は依然 False（意図どおり）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    domain = m.run9_identity_domain_from_dict({
+        **domain_raw,
+        "anchor_hashes": {
+            "af0": domain_raw["anchor_hashes"]["af0"],
+            "ritsu": domain_raw["anchor_hashes"]["ritsu"],
+            "user": "c" * 64,  # user はまだ pin されないため合成値で domain 構築だけ確認
+        },
+    })
+    # user anchor はまだ本物ではないため is_pinned() は本テストの主張対象
+    # ではない（別途 anchor_hashes.user 自体が "<PIN_BEFORE_RUN>" のままで
+    # あることを直接確認する）。
+    assert domain_raw["anchor_hashes"]["user"] == "<PIN_BEFORE_RUN>"
+    assert domain.metric_space_sha == domain_raw["metric_space_sha"]
+
+
+def test_phase3_readme_documents_metric_space_fable_pin_with_veto() -> None:
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "metric space" in readme.lower() or "metric_space" in readme
+    assert "Fable" in readme
+    assert "veto" in readme.lower()
+
+
+# ---------------------------------------------------------------------------
+# RUN9 Phase 3 対応 — item 3: learning recipe manifest
+# ---------------------------------------------------------------------------
+
+
+def _valid_learning_recipe_arm() -> Dict[str, Any]:
+    return {
+        "equal_budget_within_arm": True,
+        "stopping_rule": None,
+        "trial_count": None,
+        "render_budget": None,
+    }
+
+
+def _valid_learning_recipe_manifest() -> Dict[str, Any]:
+    return {
+        "schema": m.SCHEMA_LEARNING_RECIPE_MANIFEST,
+        "seed": m.LEARNING_SEED,
+        "practice_recipe": _valid_learning_recipe_arm(),
+        "education_recipe": _valid_learning_recipe_arm(),
+    }
+
+
+def test_phase3_learning_recipe_manifest_valid_passes() -> None:
+    m.validate_learning_recipe_manifest(_valid_learning_recipe_manifest())
+
+
+def test_phase3_learning_recipe_manifest_wrong_seed_rejected() -> None:
+    manifest = _valid_learning_recipe_manifest()
+    manifest["seed"] = 1
+    with pytest.raises(m.Run9ValidationError, match="seed must be the exact int"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+def test_phase3_learning_recipe_manifest_seed_bool_rejected() -> None:
+    """`seed` は bool を拒否する（`True == 1` だが 909002 とは一致しない
+    ため実害は小さいが、`_is_strict_int` の家風どおり bool を明示的に
+    排除することの確認）。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest["seed"] = True
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_phase3_learning_recipe_manifest_equal_budget_false_rejected(arm_name: str) -> None:
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["equal_budget_within_arm"] = False
+    with pytest.raises(m.Run9ValidationError, match="equal_budget_within_arm must be exactly True"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_phase3_learning_recipe_manifest_arm_missing_rejected(arm_name: str) -> None:
+    manifest = _valid_learning_recipe_manifest()
+    del manifest[arm_name]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+def test_phase3_learning_recipe_manifest_no_control_recipe_section() -> None:
+    """CONTROL は学習 step を実行しないため recipe を持たない（PoR §4）—
+    manifest の許容トップレベルキーに control_recipe 相当が存在しない
+    ことの確認。"""
+    assert "control_recipe" not in m._LEARNING_RECIPE_TOP_LEVEL_KEYS
+    assert m._LEARNING_RECIPE_TOP_LEVEL_KEYS == {"schema", "seed", "practice_recipe", "education_recipe"}
+
+
+def test_phase3_learning_recipe_manifest_sha_still_pending(contract_raw: Dict[str, Any]) -> None:
+    field = contract_raw["learning_recipe_sha"]
+    assert field["status"] == "PENDING"
+    assert field["value"] is None
+
+
+def test_phase3_learning_recipe_manifest_pin_prewired_once_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """`learning_recipe_sha` の実ファイル照合を、practice/education
+    manifest と同型でテスト層へ事前配線する（PENDING の間は待機。
+    PINNED へ昇格した瞬間、この同じテストが (a) 実ファイル sha256 一致、
+    (b) `validate_learning_recipe_manifest()` の通過、を自動的に強制
+    するようになる）。"""
+    field = contract_raw["learning_recipe_sha"]
+    if field["status"] == "PINNED":
+        assert field["value"] == m.compute_file_sha256(m.LEARNING_RECIPE_MANIFEST_PATH), (
+            "learning_recipe_sha が PINNED を宣言しているが、"
+            f"{m.LEARNING_RECIPE_MANIFEST_PATH} の実バイト sha256 と一致しない"
+        )
+        manifest_data = m._loads_strict_json(
+            m.LEARNING_RECIPE_MANIFEST_PATH.read_text(encoding="utf-8")
+        )
+        m.validate_learning_recipe_manifest(manifest_data)  # 例外を投げないことの確認
+    else:
+        assert field["status"] == "PENDING"
+        assert field["value"] is None
+
+
+def test_phase3_learning_recipe_manifest_path_constant_conventional_location() -> None:
+    assert m.LEARNING_RECIPE_MANIFEST_PATH.name == "learning_recipe_manifest.json"
+    assert m.LEARNING_RECIPE_MANIFEST_PATH.parent == _RUN_DIR / "inputs"
+
+
+def test_phase3_learning_recipe_manifest_prewired_check_fails_for_invalid_manifest_simulation(
+    tmp_path: Path,
+) -> None:
+    """事前配線が偽陽性でないことのシミュレーション確認: 不正 manifest
+    （seed 不一致）を一時ファイルへ書き、validator が実際に拒否すること
+    を確認する。"""
+    bad_manifest = _valid_learning_recipe_manifest()
+    bad_manifest["seed"] = 1
+    bad_path = tmp_path / "learning_recipe_manifest.json"
+    bad_path.write_text(json.dumps(bad_manifest), encoding="utf-8")
+    data = m._loads_strict_json(bad_path.read_text(encoding="utf-8"))
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_learning_recipe_manifest(data)
+
+
+# ---------------------------------------------------------------------------
+# RUN9 Phase 3 対応 — 既存不変制約の回帰確認
+# ---------------------------------------------------------------------------
+
+
+def test_phase3_existing_pin_values_unchanged() -> None:
+    """既存 pin 値・設計書3本・PoR は無変更（byte-pin テスト維持）の
+    直接確認 — Phase 3 は metric_space_sha 以外の pin を一切変更しない。"""
+    assert _sha256_file(DESIGN_DOC_PATH) == (
+        "b1f6901c0ba8bcfcbd61170aa672c95e96a37d082fce5e3f12f245bc4faaae1e"
+    )
+    assert _sha256_file(REVISION_0_2_DOC_PATH) == (
+        "406098e2ac62065855b7e4086fce769a2956b64606594ad83b63b527a23ad4fb"
+    )
+    assert _sha256_file(POR_ADJUDICATION_PATH) == (
+        "56b66fd8df943fbfa98767f2ea481c0ba2a68c26916832e08517379408d97007"
+    )
+
+
+def test_phase3_domain_af0_and_ritsu_anchors_unchanged() -> None:
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["anchor_hashes"]["af0"] == (
+        "183bf32561589ddad69daa0faf5838c3e9601d17b24b62ee32aa629123a87f1e"
+    )
+    assert domain_raw["anchor_hashes"]["ritsu"] == (
+        "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76"
+    )
+
+
+def test_phase3_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
+    assert m.gate_state(contract) == "BLOCKED"

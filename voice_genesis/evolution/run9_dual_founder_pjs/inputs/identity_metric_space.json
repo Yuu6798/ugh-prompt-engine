@@ -1,0 +1,36 @@
+{
+  "schema": "run9-identity-metric-space/1.0",
+  "metric_version": "run9-identity-metric/0.1",
+  "canonicalization_method": "json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(\",\", \":\")) — no trailing newline; identical convention to inputs/af0_anchor_manifest.json canonicalization_method (which itself matches voice_genesis/foundry/artificial_founder/af_spec.py canonical_json()). The sha256 of this manifest computed via this method is what domains/identity_domain_run9_v1.json metric_space_sha pins — it is NOT embedded as a field inside this file (self-reference avoided the same way af0_anchor_manifest.json avoids embedding its own hash).",
+  "feature_extractor": {
+    "name": "WORLD",
+    "library": "pyworld",
+    "role": "repo 標準特徴抽出器 — foundry S1〜S3（S3_RUN4_RUNBOOK.md / genome_s3 / results_s3 / results_s4 / results_f1a 等）と同系の WORLD ベース分析を踏襲する。RUN9 が独自の別実装（例: librosa 系スペクトル抽出）を新規導入することはしない。",
+    "version_source": {
+      "value": "0.3.5",
+      "source": "voice_genesis/foundry/results_s7/s7_ledger_inputs.json#environment.pyworld",
+      "note": "backbone_runtime_bundle.json が参照する RUN6/RUN7 系 provenance chain（results_s7）内に記録された実測 env pin を source として参照する（backbone_runtime_bundle.json 自体には env セクションが無いため、その provenance chain 内の実測記録を辿って引用する — バージョン番号を新規に主張しない）。requirements_run5_pod.lock の pyworld==0.3.5 とも一致（相互確認済み）。"
+    }
+  },
+  "identity_feature": {
+    "definition": "P0 中立 identity probe の voiced フレームにおける log スペクトル包絡 (sp) の時間平均ベクトル",
+    "scope": "P0 中立 identity probe（Founder 出生直後の無介入 render、CONTROL/C0 = NO_LEARNING_REPLAY の産物）の voiced フレームのみを対象とする。unvoiced フレームは平均から除外する。",
+    "vector_source": "WORLD 分析の sp（スペクトル包絡）出力を対数化した後、voiced フレーム軸で時間平均を取ったベクトル。",
+    "f0_exclusion": {
+      "excluded": true,
+      "rationale": "f0（基本周波数）は identity metric から明示的に除外する。pitch は Trait/Technique 層（DESIGN_RUN9_REVISION_0.3.md 改訂B の三層観測: Phenotype/Trait と Technique/Form）の観測軸であり、identity 距離へ混入させると層間の交絡（例: 稽古による pitch trajectory の変化が誤って Identity drift として計上される）を招く。PoR §2 の層分離（Identity・Trait・Technique を機械的に分離可能な観測軸として扱う）に整合する設計判断。"
+    },
+    "aperiodicity": {
+      "status": "advisory",
+      "note": "WORLD の aperiodicity (ap) 出力は identity 距離の計算には含めない。参考記録（advisory）としてのみ収集し得るが、distance 計算の入力ではない — sp 由来ベクトルのみが identity_feature の正本。"
+    }
+  },
+  "distance": {
+    "method": "Euclidean distance",
+    "definition": "二つの identity_feature 平均ベクトル間のユークリッド距離。",
+    "properties": ["symmetric", "deterministic"],
+    "note": "対称性（distance(a,b) == distance(b,a)）と決定論性（同一入力から常に同一距離）を要件とする。学習可能パラメータや乱数を含まない。"
+  },
+  "calibration_procedure": "閾値は手入力せず、C0 replay 分布（within-founder 95th percentile = R9-G5 機械基準、DESIGN_RUN9_REVISION_0.3.md 矛盾解決表の R9-G5 supersession 行を参照）と C1 sham 副作用（ZERO_CONTROLPROFILE_SHAM、profile 適用機構の副作用校正）から生成する。positive reference = 3 anchor（af0/ritsu/user）、negative/confuser = PJS（teacher — RUN9 Identity anchor 空間から構造的に排除されている対象を negative reference として利用する）。threshold は sealed holdout 開封前に freeze する（rev 0.3 改訂G「機械的校正の定義」— 人間知覚との一致証明ではなく、C0/C1/reference/metric version/threshold generation rule に対する機械的校正）。",
+  "feasibility_note": "本 spec は事前登録（preregistration）であり、birth probe 実測で退化（分離不能・分散ゼロ等）が判明した場合は PoR §9 [C] DESIGN FAILURE / UNOBSERVABLE として正直に閉じる。結果を見た後の metric 定義変更・閾値の事後調整による救済は行わない（DESIGN_RUN9_REVISION_0.3.md 改訂E の holdout 開封後の救済禁止規律と同型）。"
+}

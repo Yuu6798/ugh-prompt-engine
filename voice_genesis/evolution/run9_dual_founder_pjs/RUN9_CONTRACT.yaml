@@ -327,6 +327,15 @@ learning_recipe_sha:
     各枝「内」の二体間（同一探索空間・同一試行回数・同一render予算・
     同一評価器・同一停止規則、PoR §8）のみ。CONTROL は学習 step を
     実行しないため recipe 自体を持たない（PoR §4 CONTROL の定義）。
+    Phase 3: 上記の構造を schema `run9-learning-recipe/1.0`
+    （`run9_schema.validate_learning_recipe_manifest()`）として凍結した
+    — `practice_recipe`/`education_recipe` の2節・共通 `seed`
+    （`LEARNING_SEED`=909002 固定）・各枝 `equal_budget_within_arm: true`
+    必須。規約パスは `run9_schema.LEARNING_RECIPE_MANIFEST_PATH`
+    （`inputs/learning_recipe_manifest.json`）に凍結済み・PINNED 時照合
+    はテスト層へ事前配線済み（`tests/test_run9_contract.py`）。停止規則・
+    試行回数・render 予算の具体値と manifest 実体の生成は VG-L0 ハーネス
+    実装時の build 対象のため、本欄は引き続き PENDING。
 
 probe_manifest_sha:
   value: null
