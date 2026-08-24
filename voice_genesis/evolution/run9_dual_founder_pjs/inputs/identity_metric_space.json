@@ -65,43 +65,43 @@
   },
   "calibration": {
     "status": "PREREGISTERED_FORMULA_NOT_YET_MEASURED",
-    "note": "Codex bot レビュー PR #318 第6巡 Fix 18 採用: 旧 calibration_procedure（散文）は C0 95 パーセンタイル・C1 副作用・正/負参照例の結合規則・サンプリング/集約単位・凍結閾値の生成規則を未指定のまま残しており、C1 を無視する実装も max/中点を取る実装も同じ pin に適合してしまう欠陥があった。本節がそれらを機械可読な式として凍結し、旧キーを置換する。",
+    "note": "Codex bot レビュー PR #318 第6巡 Fix 18 採用: 旧 calibration_procedure（散文）は C0 95 パーセンタイル・C1 副作用・正/負参照例の結合規則・サンプリング/集約単位・凍結閾値の生成規則を未指定のまま残しており、C1 を無視する実装も max/中点を取る実装も同じ pin に適合してしまう欠陥があった。本節がそれらを機械可読な式として凍結し、旧キーを置換する。Codex bot レビュー PR #318 第7巡 Fix 20 採用: reference_render・D_C0(F)/D_C1(F)・theta_cal(F) はいずれも founder ごとに独立に扱うことを本節全体で明文化した（founder 横断の pooling は不採用 — pooling は founder 間 identity 距離を replay noise 分布へ混入させ、校正有効性判定と STABLE_BY_MACHINE_METRIC/SHIFTED 判定を歪めるため）。あわせて C0/C1 のテイク数を RUN9_CONTRACT.yaml の interventions.c0_replay_takes_per_founder / interventions.c1_sham_takes_per_founder（いずれも PINNED）へフィールド名で実参照させた（旧記述は本契約に実体の無い欄への委譲だった欠陥の是正）。",
     "distance_unit": {
-      "formula": "d_i = euclidean(mean_voiced_log_sp(reference_render), mean_voiced_log_sp(take_i))",
+      "formula": "d_i(F) = euclidean(mean_voiced_log_sp(reference_render(F)), mean_voiced_log_sp(take_i(F)))",
       "aggregation_unit": "1 テイク = 1 距離標本",
-      "reference_render_definition": "reference_example 節が固定する first birth-probe measurement の実測値。捏造禁止 — reference_example.procedure と同一の事前登録手続きに従う。"
+      "reference_render_definition": "当該 founder F 自身の first birth-probe measurement に固定する（founder ごとに1つ — R9F-01/R9F-02 それぞれの reference_render を個別に持ち、他方 founder の reference と混同・共用しない）。実測値は reference_example 節が固定する手続きに従う。捏造禁止 — reference_example.procedure と同一の事前登録手続きに従う。"
     },
     "freeze_threshold": {
-      "formula": "theta_cal = P95(D_C0)",
-      "d_c0_population": "C0 (NO_LEARNING_REPLAY) 枝の全テイク距離標本。テイク数は RUN9_CONTRACT.yaml の interventions 規定に従って束縛し、本ファイルへ数を重複記載しない。",
+      "formula": "theta_cal(F) = P95(D_C0(F)) — founder F ごとに独立算出する。",
+      "d_c0_population": "D_C0(F) = founder F 自身の C0 (NO_LEARNING_REPLAY) 枝テイクと founder F 自身の reference_render(F) との距離標本のみで構成する。founder 横断の pooling は不採用 — pooling は founder 間 identity 距離を replay noise 分布へ混入させ、校正有効性判定と STABLE_BY_MACHINE_METRIC/SHIFTED 判定を歪めるため採用しない。テイク数（founder 1体あたり）は RUN9_CONTRACT.yaml の interventions.c0_replay_takes_per_founder（PINNED 値）を束縛元として参照し、本ファイルへ数を重複記載しない。",
       "percentile_method": "線形補間分位（numpy.percentile(..., method=\"linear\") 相当）。"
     },
     "validity_gates": {
-      "policy": "C1 と positive/negative reference は theta_cal を動かさない、校正有効性ゲート専用の判定である（max/中点/混合を凍結閾値の生成規則へ採用することは不可）。",
+      "policy": "C1 と positive/negative reference は theta_cal(F) を動かさない、founder F ごとの校正有効性ゲート専用の判定である（max/中点/混合を凍結閾値の生成規則へ採用することは不可）。",
       "c1_gate": {
         "id": "validity_gate_c1",
-        "condition": "P95(D_C1) <= theta_cal",
-        "d_c1_population": "C1 (ZERO_CONTROLPROFILE_SHAM) 枝の全テイク距離標本。"
+        "condition": "P95(D_C1(F)) <= theta_cal(F)",
+        "d_c1_population": "D_C1(F) = founder F 自身の C1 (ZERO_CONTROLPROFILE_SHAM) 枝テイクと founder F 自身の reference_render(F) との距離標本のみで構成する（D_C0(F) と同一の pooling 禁止規約 — founder 横断の pooling は不採用）。テイク数（founder 1体あたり）は RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder（PINNED 値）を束縛元として参照する。"
       },
       "positive_reference_gate": {
         "id": "validity_gate_positive_reference",
-        "condition": "d(positive_reference) <= theta_cal",
-        "positive_reference_definition": "同一 founder の再レンダー。"
+        "condition": "d(positive_reference(F)) <= theta_cal(F)",
+        "positive_reference_definition": "同一 founder F 自身の再レンダー。"
       },
       "negative_reference_gate": {
         "id": "validity_gate_negative_reference",
-        "condition": "d(negative_reference) > theta_cal",
+        "condition": "d(negative_reference(F)) > theta_cal(F)",
         "negative_reference_definition": "他方 founder のレンダー（PJS は teacher であり RUN9 Identity anchor 空間から構造的に排除済み — negative reference としてのみ利用する）。"
       },
-      "on_failure": "3ゲートのいずれかが不成立なら calibration_status = INVALID → 当該 RUN の identity 判定は一律 NOT_ESTABLISHED（STABLE_BY_MACHINE_METRIC/SHIFTED を主張しない）。"
+      "on_failure": "founder F の3ゲートのいずれかが不成立なら calibration_status(F) = INVALID → 当該 founder F の identity 判定は一律 NOT_ESTABLISHED（STABLE_BY_MACHINE_METRIC/SHIFTED を主張しない）。"
     },
     "decision_rule": {
-      "applies_when": "calibration_status == VALID のときにのみ適用する。",
-      "formula": "d(r) <= theta_cal ならば STABLE_BY_MACHINE_METRIC、d(r) > theta_cal ならば SHIFTED。",
+      "applies_when": "founder F の calibration_status(F) == VALID のときにのみ、当該 founder F の theta_cal(F) を用いて適用する。",
+      "formula": "d(r) <= theta_cal(F) ならば STABLE_BY_MACHINE_METRIC、d(r) > theta_cal(F) ならば SHIFTED（r は評価対象 founder F 自身の render）。",
       "boundary": "境界は closed-below（<= は STABLE_BY_MACHINE_METRIC 側）。"
     },
     "worked_example": {
-      "disclaimer": "synthetic illustration — 実測ではない。以下は数式の読み方を示す合成数値例であり、birth probe の実測値ではない。",
+      "disclaimer": "synthetic illustration — 実測ではない。以下は特定の1 founder F について theta_cal(F) の読み方を示す合成数値例（founder 横断の pooling はしない per-founder 校正の例示）であり、birth probe の実測値ではない。",
       "d_c0_samples": [0.021, 0.024, 0.026, 0.027, 0.03],
       "theta_cal": 0.0294,
       "theta_cal_derivation": "P95(d_c0_samples) の線形補間 = 0.027 + 0.8*(0.030-0.027) = 0.0294。",

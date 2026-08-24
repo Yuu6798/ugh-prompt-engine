@@ -74,6 +74,21 @@ INTERVENTION_EDGES: Tuple[str, str] = ("PRACTICE_FROM_AUDIO", "TRANSFER_TECHNIQU
 # PoR §4 の3分岐のうち、学習介入を伴わない無介入 replay 枝（対照条件）。
 CONTROL_BRANCH = "CONTROL"
 
+# Codex bot レビュー PR #318 第7巡 Fix 20 採用（P1）: C0/C1 校正標本の
+# per-founder テイク数を契約 pin する `interventions` 配下の pin 欄名
+# （§ RUN9_CONTRACT.yaml `interventions.c0_replay_takes_per_founder` /
+# `interventions.c1_sham_takes_per_founder`）。旧 identity_metric_space.json
+# は「テイク数は本ファイルの `interventions` 規定に従う」と書きながら
+# 実体が存在しない欠陥（存在しない参照）を持っていた — 本タプルが宣言する
+# 2欄がその実体であり、`load_run9_contract()` が pin 欄と同型の
+# {value, status, reason?, source?} 形（`_validate_pin_field()`）+ PINNED
+# 時の正の int 型検証（`_require_positive_int()` — bool/float/0/負値を
+# 拒否）で検証する。
+INTERVENTION_TAKE_COUNT_FIELDS: Tuple[str, str] = (
+    "c0_replay_takes_per_founder",
+    "c1_sham_takes_per_founder",
+)
+
 # PoR §3.1「交配 — INHERIT_TRAIT」: 出生エッジの正式名。operator 自体は
 # 引き続き `TRI_CROSSOVER/1.0`（genome_id 決定論を壊さない — エッジ名の
 # 導入は TRI_CROSSOVER の計算規約を変更しない、あくまで結果分類・設計文書
@@ -1275,6 +1290,47 @@ _IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
     "reference_example", "feasibility_note",
 })
 
+# Codex bot レビュー PR #318 第7巡 Fix 21 採用（P2）: `feature_extractor`/
+# `identity_feature`/`distance`/`reference_example` は旧 validator がトップ
+# レベルキー集合にのみ含め、内容は既存の内容照合テスト（test_phase3_*）に
+# 委ねていた。しかし内容照合テストは「そこにある形」の一部だけを部分的に
+# assert するに過ぎず、例えば `feature_extractor` 全体を null 化したり
+# `reference_example.procedure`（参照レンダー手続きの一次記述）を削除・
+# null 化する repin は、正規形 sha256 さえ pin 値と再一致すれば digest
+# テストも内容照合テストの assert しない部分も素通りしてしまう。本節は
+# これらの object 型トップレベルフィールド全件へ、`extraction_procedure`/
+# `calibration` と同型の閉じた必須ネストキー集合 + 型検証（未知キー拒否・
+# null 拒否・非空 str 強制）を追加する。純メタデータ的な str フィールド
+# （`feasibility_note`）は非空 str 検証のみ追加する。
+_FEATURE_EXTRACTOR_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "name", "library", "role", "version_source", "reference_implementation",
+})
+_FEATURE_EXTRACTOR_STR_KEYS: Tuple[str, ...] = (
+    "name", "library", "role", "reference_implementation",
+)
+_FEATURE_EXTRACTOR_VERSION_SOURCE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "value", "source", "note",
+})
+
+_IDENTITY_FEATURE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "definition", "scope", "vector_source", "f0_exclusion", "aperiodicity",
+})
+_IDENTITY_FEATURE_STR_KEYS: Tuple[str, ...] = ("definition", "scope", "vector_source")
+_F0_EXCLUSION_REQUIRED_KEYS: FrozenSet[str] = frozenset({"excluded", "rationale"})
+_APERIODICITY_REQUIRED_KEYS: FrozenSet[str] = frozenset({"status", "note"})
+
+_DISTANCE_SECTION_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "method", "definition", "properties", "note",
+})
+_DISTANCE_SECTION_STR_KEYS: Tuple[str, ...] = ("method", "definition", "note")
+
+_REFERENCE_EXAMPLE_REQUIRED_KEYS: FrozenSet[str] = frozenset({"status", "procedure", "value"})
+# reference_example.value は「未実測」を正直に表す null を許容する唯一の
+# status（DESIGN_RUN9 の捏造禁止規律 — 実測前に値をでっち上げない）。
+# 他の status（実測固定後）は value が null のままでは実測値の記録が
+# digest 更新だけで静かに失われた状態と区別できないため拒否する。
+_REFERENCE_EXAMPLE_PENDING_STATUS = "PENDING_BIRTH_PROBE"
+
 _EXTRACTION_PROCEDURE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "f0_estimation", "frame_period_ms", "frame_period_source", "spectral_envelope",
     "fft_size_rule", "voiced_mask", "sample_rate", "log_transform",
@@ -1303,6 +1359,20 @@ _CALIBRATION_VALIDITY_GATES_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 _CALIBRATION_GATE_STR_KEYS: Tuple[str, ...] = ("id", "condition")
 _CALIBRATION_DECISION_RULE_STR_KEYS: Tuple[str, ...] = ("applies_when", "formula", "boundary")
 _CALIBRATION_SOURCE_REFERENCES_STR_KEYS: Tuple[str, ...] = ("r9_g5", "holdout_freeze")
+
+# Codex bot レビュー PR #318 第7巡 Fix 20 採用（P1）: founder 横断
+# pooling 禁止の明文化と、RUN9_CONTRACT.yaml 側の実欄（Fix 20 で新設した
+# `interventions.c0_replay_takes_per_founder`/`c1_sham_takes_per_founder`）
+# への実参照を、フィールド名の文字列一致で機械強制する（「存在しない
+# 参照」欠陥の再発防止 — 数だけ repin されて参照文言が欠落する事態を
+# fail-closed で拒否する）。
+_D_C0_POPULATION_POOLING_PROHIBITION_MARKER = "pooling"
+_D_C0_POPULATION_FIELD_REF_MARKER = "c0_replay_takes_per_founder"
+_D_C1_POPULATION_FIELD_REF_MARKER = "c1_sham_takes_per_founder"
+# reference_render は founder ごとに1つに固定する（founder 横断の
+# pooling/共用を禁止）— reference_render_definition 文言に "founder" が
+# 独立トークンとして現れることを最低限の per-founder 明記の証拠とする。
+_REFERENCE_RENDER_DEFINITION_PER_FOUNDER_MARKER = "founder"
 
 _CALIBRATION_WORKED_EXAMPLE_STR_KEYS: Tuple[str, ...] = (
     "disclaimer", "theta_cal_derivation", "c1_gate_result", "positive_reference_gate_result",
@@ -1359,6 +1429,16 @@ def _validate_calibration_section(data: Any) -> None:
     _validate_nested_str_keys(
         distance_unit, field="calibration.distance_unit", keys=_CALIBRATION_DISTANCE_UNIT_STR_KEYS
     )
+    # Fix 20: reference_render は founder ごとに1つに固定する（他方
+    # founder の reference と混同・共用しない）ことを文言レベルで強制する。
+    reference_render_definition = distance_unit["reference_render_definition"].lower()
+    if _REFERENCE_RENDER_DEFINITION_PER_FOUNDER_MARKER not in reference_render_definition:
+        raise Run9ValidationError(
+            "calibration.distance_unit.reference_render_definition must state that the reference "
+            f"render is fixed per founder (expected {_REFERENCE_RENDER_DEFINITION_PER_FOUNDER_MARKER!r} "
+            f"to appear), got {distance_unit['reference_render_definition']!r} (Codex bot レビュー "
+            "PR #318 第7巡 Fix 20 — pooling across founders is forbidden)"
+        )
 
     freeze_threshold = _require_dict(calibration["freeze_threshold"], field="calibration.freeze_threshold")
     _validate_nested_str_keys(
@@ -1366,6 +1446,23 @@ def _validate_calibration_section(data: Any) -> None:
         field="calibration.freeze_threshold",
         keys=_CALIBRATION_FREEZE_THRESHOLD_STR_KEYS,
     )
+    # Fix 20: D_C0 の pooling 禁止文言と、RUN9_CONTRACT.yaml
+    # `interventions.c0_replay_takes_per_founder` へのフィールド名参照を
+    # 両方強制する（数だけ repin されて禁止文言/参照が欠落する事態の防止）。
+    d_c0_population = freeze_threshold["d_c0_population"]
+    if _D_C0_POPULATION_POOLING_PROHIBITION_MARKER not in d_c0_population.lower():
+        raise Run9ValidationError(
+            "calibration.freeze_threshold.d_c0_population must state the founder-pooling "
+            f"prohibition (expected {_D_C0_POPULATION_POOLING_PROHIBITION_MARKER!r} to appear — "
+            "pooling would mix cross-founder identity distance into the replay noise "
+            f"distribution), got {d_c0_population!r}"
+        )
+    if _D_C0_POPULATION_FIELD_REF_MARKER not in d_c0_population:
+        raise Run9ValidationError(
+            "calibration.freeze_threshold.d_c0_population must reference RUN9_CONTRACT.yaml's "
+            f"{_D_C0_POPULATION_FIELD_REF_MARKER!r} field by name (dangling delegation to a "
+            f"nonexistent contract field is forbidden), got {d_c0_population!r}"
+        )
 
     validity_gates = _require_dict(calibration["validity_gates"], field="calibration.validity_gates")
     unknown_gates = set(validity_gates.keys()) - _CALIBRATION_VALIDITY_GATES_REQUIRED_KEYS
@@ -1383,6 +1480,15 @@ def _validate_calibration_section(data: Any) -> None:
         field="calibration.validity_gates.c1_gate",
         definition_key="d_c1_population",
     )
+    # Fix 20: D_C1 も RUN9_CONTRACT.yaml `interventions.c1_sham_takes_per_founder`
+    # へのフィールド名参照を強制する（D_C0 と対になる欠陥の同時是正）。
+    d_c1_population = validity_gates["c1_gate"]["d_c1_population"]
+    if _D_C1_POPULATION_FIELD_REF_MARKER not in d_c1_population:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.d_c1_population must reference RUN9_CONTRACT.yaml's "
+            f"{_D_C1_POPULATION_FIELD_REF_MARKER!r} field by name (dangling delegation to a "
+            f"nonexistent contract field is forbidden), got {d_c1_population!r}"
+        )
     _validate_calibration_gate(
         validity_gates["positive_reference_gate"],
         field="calibration.validity_gates.positive_reference_gate",
@@ -1515,9 +1621,121 @@ def _validate_extraction_procedure(data: Any) -> None:
     )
 
 
+def _validate_feature_extractor(data: Any) -> None:
+    fe = _require_dict(data, field="identity metric space manifest.feature_extractor")
+    unknown = set(fe.keys()) - _FEATURE_EXTRACTOR_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"feature_extractor has unknown key(s): {sorted(unknown)}")
+    missing = _FEATURE_EXTRACTOR_REQUIRED_KEYS - set(fe.keys())
+    if missing:
+        raise Run9ValidationError(f"feature_extractor missing required key(s): {sorted(missing)}")
+    for key in _FEATURE_EXTRACTOR_STR_KEYS:
+        _require_non_empty_str(fe[key], field=f"feature_extractor.{key}")
+
+    version_source = _require_dict(fe["version_source"], field="feature_extractor.version_source")
+    unknown_vs = set(version_source.keys()) - _FEATURE_EXTRACTOR_VERSION_SOURCE_REQUIRED_KEYS
+    if unknown_vs:
+        raise Run9ValidationError(f"feature_extractor.version_source has unknown key(s): {sorted(unknown_vs)}")
+    missing_vs = _FEATURE_EXTRACTOR_VERSION_SOURCE_REQUIRED_KEYS - set(version_source.keys())
+    if missing_vs:
+        raise Run9ValidationError(
+            f"feature_extractor.version_source missing required key(s): {sorted(missing_vs)}"
+        )
+    for key in _FEATURE_EXTRACTOR_VERSION_SOURCE_REQUIRED_KEYS:
+        _require_non_empty_str(version_source[key], field=f"feature_extractor.version_source.{key}")
+
+
+def _validate_identity_feature(data: Any) -> None:
+    identity_feature = _require_dict(data, field="identity metric space manifest.identity_feature")
+    unknown = set(identity_feature.keys()) - _IDENTITY_FEATURE_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"identity_feature has unknown key(s): {sorted(unknown)}")
+    missing = _IDENTITY_FEATURE_REQUIRED_KEYS - set(identity_feature.keys())
+    if missing:
+        raise Run9ValidationError(f"identity_feature missing required key(s): {sorted(missing)}")
+    for key in _IDENTITY_FEATURE_STR_KEYS:
+        _require_non_empty_str(identity_feature[key], field=f"identity_feature.{key}")
+
+    f0_exclusion = _require_dict(identity_feature["f0_exclusion"], field="identity_feature.f0_exclusion")
+    unknown_f0 = set(f0_exclusion.keys()) - _F0_EXCLUSION_REQUIRED_KEYS
+    if unknown_f0:
+        raise Run9ValidationError(f"identity_feature.f0_exclusion has unknown key(s): {sorted(unknown_f0)}")
+    missing_f0 = _F0_EXCLUSION_REQUIRED_KEYS - set(f0_exclusion.keys())
+    if missing_f0:
+        raise Run9ValidationError(
+            f"identity_feature.f0_exclusion missing required key(s): {sorted(missing_f0)}"
+        )
+    if not isinstance(f0_exclusion["excluded"], bool):
+        raise Run9ValidationError(
+            f"identity_feature.f0_exclusion.excluded must be a bool, got {f0_exclusion['excluded']!r} "
+            f"({type(f0_exclusion['excluded']).__name__})"
+        )
+    _require_non_empty_str(f0_exclusion["rationale"], field="identity_feature.f0_exclusion.rationale")
+
+    aperiodicity = _require_dict(identity_feature["aperiodicity"], field="identity_feature.aperiodicity")
+    unknown_ap = set(aperiodicity.keys()) - _APERIODICITY_REQUIRED_KEYS
+    if unknown_ap:
+        raise Run9ValidationError(f"identity_feature.aperiodicity has unknown key(s): {sorted(unknown_ap)}")
+    missing_ap = _APERIODICITY_REQUIRED_KEYS - set(aperiodicity.keys())
+    if missing_ap:
+        raise Run9ValidationError(
+            f"identity_feature.aperiodicity missing required key(s): {sorted(missing_ap)}"
+        )
+    _require_non_empty_str(aperiodicity["status"], field="identity_feature.aperiodicity.status")
+    _require_non_empty_str(aperiodicity["note"], field="identity_feature.aperiodicity.note")
+
+
+def _validate_distance_section(data: Any) -> None:
+    distance = _require_dict(data, field="identity metric space manifest.distance")
+    unknown = set(distance.keys()) - _DISTANCE_SECTION_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"distance has unknown key(s): {sorted(unknown)}")
+    missing = _DISTANCE_SECTION_REQUIRED_KEYS - set(distance.keys())
+    if missing:
+        raise Run9ValidationError(f"distance missing required key(s): {sorted(missing)}")
+    for key in _DISTANCE_SECTION_STR_KEYS:
+        _require_non_empty_str(distance[key], field=f"distance.{key}")
+
+    properties = distance["properties"]
+    if not isinstance(properties, list) or not properties:
+        raise Run9ValidationError(f"distance.properties must be a non-empty list, got {properties!r}")
+    for i, prop in enumerate(properties):
+        _require_non_empty_str(prop, field=f"distance.properties[{i}]")
+
+
+def _validate_reference_example(data: Any) -> None:
+    ref = _require_dict(data, field="identity metric space manifest.reference_example")
+    unknown = set(ref.keys()) - _REFERENCE_EXAMPLE_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"reference_example has unknown key(s): {sorted(unknown)}")
+    missing = _REFERENCE_EXAMPLE_REQUIRED_KEYS - set(ref.keys())
+    if missing:
+        raise Run9ValidationError(f"reference_example missing required key(s): {sorted(missing)}")
+    _require_non_empty_str(ref["status"], field="reference_example.status")
+    _require_non_empty_str(ref["procedure"], field="reference_example.procedure")
+
+    value = ref["value"]
+    if ref["status"] == _REFERENCE_EXAMPLE_PENDING_STATUS:
+        if value is not None:
+            raise Run9ValidationError(
+                f"reference_example.value must be null while status is "
+                f"{_REFERENCE_EXAMPLE_PENDING_STATUS!r} (no birth probe has been measured yet — "
+                f"fabricating a value is forbidden by this repo's discipline), got {value!r}"
+            )
+    else:
+        if value is None:
+            raise Run9ValidationError(
+                "reference_example.value must not be null once status has moved past "
+                f"{_REFERENCE_EXAMPLE_PENDING_STATUS!r} (a non-pending status with a null value would "
+                "silently drop the first birth-probe measurement — the exact failure mode this "
+                "validator closes)"
+            )
+
+
 def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
     """`inputs/identity_metric_space.json`（`run9-identity-metric-space/1.1`）
-    の閉じた形状を検証する（Codex bot レビュー PR #318 第6巡 Fix 19）。
+    の閉じた形状を検証する（Codex bot レビュー PR #318 第6巡 Fix 19、
+    第7巡 Fix 20/Fix 21 で拡張）。
 
     旧実装はトップレベルの `schema`/`metric_version` 2ラベルしか検証して
     おらず、digest テスト（正規形 sha256 が pin 値と一致すること）は
@@ -1529,14 +1747,21 @@ def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
 
     本関数はトップレベル必須キー閉集合・`extraction_procedure` の必須
     ネストキー閉集合と型（harvest/cheaptrick/voiced_mask=f0>0/sample_rate/
-    fft/log floor の各キー）・Fix 18 で導入した `calibration` 節の必須
-    キー閉集合と型（distance_unit/freeze_threshold/validity_gates の3
-    ゲート/decision_rule/worked_example の synthetic disclaimer 必須/
-    source_references）を検証する。`feature_extractor`/`identity_feature`/
-    `distance`/`reference_example`/`feasibility_note` はトップレベル
-    キー集合にのみ含め、内容検証は既存の `test_phase3_identity_metric_
-    space_*` 群（内容照合テスト）に委ねる（本 validator は形状のみを
-    対象とする — 内容照合との責務分離）。
+    fft/log floor の各キー）・`calibration` 節の必須キー閉集合と型
+    （distance_unit/freeze_threshold/validity_gates の3ゲート/
+    decision_rule/worked_example の synthetic disclaimer 必須/
+    source_references、Fix 20 で pooling 禁止文言 + per-founder 参照の
+    欠落も拒否）を検証する。Fix 21（PR #318 第7巡 Fix 21）採用: 旧実装は
+    `feature_extractor`/`identity_feature`/`distance`/`reference_example`
+    をトップレベルキー集合にのみ含め、内容は既存の `test_phase3_
+    identity_metric_space_*` 群（部分的な内容照合テスト）に委ねていた
+    ため、これら object 型フィールド全体の null 化やネストキーの欠落・
+    追加が repin だけで素通りする穴があった。本関数はこれら4フィールド
+    （+ 純メタデータ str の `feasibility_note`）にも `extraction_
+    procedure`/`calibration` と同型の閉じた必須ネストキー集合 + 型検証
+    を適用する（内容の意味論そのもの — 例えば具体的な文言 — は引き続き
+    `test_phase3_*` 群の責務のまま。本 validator は形状 + 最低限の型を
+    対象とする）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(
@@ -1562,8 +1787,15 @@ def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
         data["canonicalization_method"], field="identity metric space manifest.canonicalization_method"
     )
 
+    _validate_feature_extractor(data["feature_extractor"])
     _validate_extraction_procedure(data["extraction_procedure"])
+    _validate_identity_feature(data["identity_feature"])
+    _validate_distance_section(data["distance"])
     _validate_calibration_section(data["calibration"])
+    _validate_reference_example(data["reference_example"])
+    _require_non_empty_str(
+        data["feasibility_note"], field="identity metric space manifest.feasibility_note"
+    )
 
 
 # PoR §12 + User 外部レビュー PR #317 P1-2 修正指示4の逐語項目を機械可読
@@ -2496,7 +2728,9 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
     interventions = data["interventions"]
     if not isinstance(interventions, dict):
         raise Run9ValidationError("interventions must be an object")
-    allowed_interv_keys = {"description", "edges", "control_branch"}
+    allowed_interv_keys = {"description", "edges", "control_branch"} | set(
+        INTERVENTION_TAKE_COUNT_FIELDS
+    )
     unknown_interv = set(interventions.keys()) - allowed_interv_keys
     if unknown_interv:
         raise Run9ValidationError(f"interventions has unknown key(s): {sorted(unknown_interv)}")
@@ -2525,6 +2759,24 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
             f"interventions.control_branch must be exactly {CONTROL_BRANCH!r} — PoR §4 の無介入"
             f"replay 枝は固定名, got {interv_control_branch!r}"
         )
+
+    # Codex bot レビュー PR #318 第7巡 Fix 20 採用（P1）: C0/C1 校正標本の
+    # per-founder テイク数 pin 欄。他の pin 欄と同型の {value, status,
+    # reason?, source?} 形（`_validate_pin_field()`）で包絡を検証し、
+    # PINNED 昇格時は `_require_positive_int()`（bool/float/0/負値を拒否
+    # する厳密正 int 判定）で値自体の型を検証する。`_validate_pin_field()`
+    # は欄名が `_sha`/`_sha256` サフィックスでも `attempt_id`/
+    # `founder_genome_shas.*` でもない場合は値の形式まで検査しないため
+    # （PIN_FIELD_ALLOWED_KEYS の envelope 検査のみ）、テイク数の型検証は
+    # ここで明示的に追加する。
+    for take_field_name in INTERVENTION_TAKE_COUNT_FIELDS:
+        take_field = _validate_pin_field(
+            f"interventions.{take_field_name}", interventions[take_field_name]
+        )
+        if _is_field_pinned(take_field):
+            _require_positive_int(
+                take_field["value"], field=f"interventions.{take_field_name}.value"
+            )
 
     if data["baseline_run"] is not None:
         raise Run9ValidationError(f"baseline_run must be null (RUN9 has no baseline_run), got {data['baseline_run']!r}")

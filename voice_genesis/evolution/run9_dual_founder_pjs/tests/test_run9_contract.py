@@ -4487,3 +4487,257 @@ def test_phase3_domain_af0_and_ritsu_anchors_unchanged() -> None:
 
 def test_phase3_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
     assert m.gate_state(contract) == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第7巡 Fix 20（P1）: C0/C1 校正標本の
+# per-founder テイク数を RUN9_CONTRACT.yaml の `interventions` 配下へ
+# 契約 pin する。旧 identity_metric_space.json は「テイク数は本ファイルの
+# interventions 規定に従う」と書きながら実体の無い欄への委譲だった欠陥を
+# 是正する。正例/負例は他の pin 欄（Fix 15 の trial_count 等）と同型の
+# fail-closed 流儀で検証する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix20_intervention_take_count_fields_constant() -> None:
+    assert m.INTERVENTION_TAKE_COUNT_FIELDS == (
+        "c0_replay_takes_per_founder",
+        "c1_sham_takes_per_founder",
+    )
+
+
+def test_fix20_current_contract_take_count_fields_are_pinned_twenty(
+    contract_raw: Dict[str, Any],
+) -> None:
+    for name in m.INTERVENTION_TAKE_COUNT_FIELDS:
+        field = contract_raw["interventions"][name]
+        assert field["status"] == "PINNED"
+        assert field["value"] == 20
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix20_take_count_field_missing_rejected(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """欠落: `interventions` の必須キー閉集合検査（allowed/missing）で
+    fail-closed 拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    del tampered["interventions"][field_name]
+    with pytest.raises(m.Run9ValidationError, match="interventions missing key"):
+        m.load_run9_contract(tampered)
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+@pytest.mark.parametrize("bad_value", [0, -1, -20, 1.5, 20.0, True, False])
+def test_fix20_take_count_field_pinned_bad_value_rejected(
+    contract_raw: Dict[str, Any], field_name: str, bad_value: Any
+) -> None:
+    """負例（0・負値・float・bool）: `_require_positive_int()` は
+    `_is_strict_int()`（bool 除外）+ 正値要求のため、いずれも拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"][field_name] = {"value": bad_value, "status": "PINNED"}
+    with pytest.raises(m.Run9ValidationError, match=f"interventions.{field_name}.value"):
+        m.load_run9_contract(tampered)
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix20_take_count_field_pinned_null_value_rejected(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """欠落級の負例: PINNED を名乗りながら value が null な欄は、他の pin
+    欄と同型の `_validate_pin_field()` null チェックで拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"][field_name] = {"value": None, "status": "PINNED"}
+    with pytest.raises(m.Run9ValidationError, match="status is PINNED but value is null"):
+        m.load_run9_contract(tampered)
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix20_take_count_field_pinned_positive_int_accepted(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """正例: 正の厳密 int（bool でない）は PINNED として受理される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"][field_name] = {"value": 42, "status": "PINNED"}
+    m.load_run9_contract(tampered)  # raises on failure
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix20_take_count_field_pending_with_null_value_accepted(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """正例: PENDING/BLOCKED は他の pin 欄と同様、value=null のままでも
+    正直な未 pin 表現として許容される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"][field_name] = {
+        "value": None,
+        "status": "PENDING",
+        "reason": "not yet decided",
+    }
+    m.load_run9_contract(tampered)  # raises on failure
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第7巡 Fix 20（P1, つづき）: identity_metric_
+# space.json validator 側 — pooling 禁止文言・per-founder フィールド名
+# 参照の欠落を fail-closed で拒否する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix20_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix20_validator_rejects_d_c0_population_missing_pooling_prohibition() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["freeze_threshold"]["d_c0_population"] = (
+        "founder F 自身の C0 テイクと reference_render(F) の距離標本。テイク数は "
+        "RUN9_CONTRACT.yaml の interventions.c0_replay_takes_per_founder を参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="founder-pooling prohibition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix20_validator_rejects_d_c0_population_missing_field_ref() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["freeze_threshold"]["d_c0_population"] = (
+        "founder F 自身の C0 テイクと reference_render(F) の距離標本のみ（founder 横断の "
+        "pooling は不採用）。テイク数は RUN9_CONTRACT.yaml の interventions 規定に従う。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="reference RUN9_CONTRACT.yaml"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix20_validator_rejects_d_c1_population_missing_field_ref() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"] = (
+        "founder F 自身の C1 テイクと reference_render(F) の距離標本のみ（pooling 禁止）。"
+        "テイク数は RUN9_CONTRACT.yaml の interventions 規定に従う。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="reference RUN9_CONTRACT.yaml"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix20_validator_rejects_reference_render_definition_missing_per_founder_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["distance_unit"]["reference_render_definition"] = (
+        "reference_example 節が固定する first birth-probe measurement の実測値。捏造禁止。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="fixed per founder"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第7巡 Fix 21（P2）:
+# `validate_identity_metric_space_manifest()` を全トップレベル実行関連
+# フィールド（`feature_extractor`/`identity_feature`/`distance`/
+# `reference_example`/`feasibility_note`）へ拡張する。旧実装はこれらを
+# トップレベルキー集合にのみ含め、null 化・ネストキー欠落・追加がいずれも
+# 素通りしていた。
+# ---------------------------------------------------------------------------
+
+
+def test_fix21_validator_rejects_feature_extractor_null() -> None:
+    doc = _valid_metric_space_doc()
+    doc["feature_extractor"] = None
+    with pytest.raises(m.Run9ValidationError, match="feature_extractor must be an object"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_feature_extractor_missing_key() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["feature_extractor"]["reference_implementation"]
+    with pytest.raises(m.Run9ValidationError, match="feature_extractor missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_feature_extractor_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["feature_extractor"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(m.Run9ValidationError, match="feature_extractor has unknown key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_feature_extractor_version_source_missing_key() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["feature_extractor"]["version_source"]["note"]
+    with pytest.raises(
+        m.Run9ValidationError, match="feature_extractor.version_source missing required key"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_identity_feature_null() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"] = None
+    with pytest.raises(m.Run9ValidationError, match="identity_feature must be an object"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_identity_feature_f0_exclusion_excluded_non_bool() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["f0_exclusion"]["excluded"] = "true"
+    with pytest.raises(m.Run9ValidationError, match="f0_exclusion.excluded must be a bool"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_distance_null() -> None:
+    doc = _valid_metric_space_doc()
+    doc["distance"] = None
+    with pytest.raises(m.Run9ValidationError, match="distance must be an object"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_distance_properties_not_a_list() -> None:
+    doc = _valid_metric_space_doc()
+    doc["distance"]["properties"] = "symmetric,deterministic"
+    with pytest.raises(m.Run9ValidationError, match="distance.properties must be a non-empty list"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_reference_example_null() -> None:
+    """指摘の中心事例: `feature_extractor`/`reference_example` 等は存在
+    チェックのみで null 置換が通っていた欠陥の直接リグレッションガード。"""
+    doc = _valid_metric_space_doc()
+    doc["reference_example"] = None
+    with pytest.raises(m.Run9ValidationError, match="reference_example must be an object"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_reference_example_missing_nested_key() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["reference_example"]["procedure"]
+    with pytest.raises(m.Run9ValidationError, match="reference_example missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_reference_example_unknown_nested_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["reference_example"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(m.Run9ValidationError, match="reference_example has unknown key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_reference_example_value_present_while_pending() -> None:
+    """捏造禁止の裏側: PENDING_BIRTH_PROBE のまま value を非 null にする
+    （実測前の値のでっち上げ）ことも拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["reference_example"]["value"] = {"fabricated": True}
+    with pytest.raises(m.Run9ValidationError, match="value must be null while status is"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_reference_example_null_value_once_status_moves_past_pending() -> None:
+    doc = _valid_metric_space_doc()
+    doc["reference_example"]["status"] = "MEASURED"
+    doc["reference_example"]["value"] = None
+    with pytest.raises(m.Run9ValidationError, match="value must not be null once status"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_feasibility_note_empty() -> None:
+    doc = _valid_metric_space_doc()
+    doc["feasibility_note"] = "   "
+    with pytest.raises(m.Run9ValidationError, match="feasibility_note must be a non-empty string"):
+        m.validate_identity_metric_space_manifest(doc)
