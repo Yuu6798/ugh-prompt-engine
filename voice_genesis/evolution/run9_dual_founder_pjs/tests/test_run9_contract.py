@@ -1286,3 +1286,68 @@ def test_fix16_parent_designs_missing_one_element_rejected(contract_raw: Dict[st
 def test_fix16_parent_designs_exact_canonical_list_accepted(contract_raw: Dict[str, Any]) -> None:
     """対照実験: 正典と順序込みで完全一致する現行 contract は通る。"""
     m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第8巡対応 — Fix 17: 重複キーの fail-closed 拒否
+# ---------------------------------------------------------------------------
+
+
+def test_fix17_yaml_duplicate_top_level_key_rejected() -> None:
+    """Codex bot レビュー PR #315 第8巡指摘1: PENDING の `lesson_sha` の後に
+    PINNED の `lesson_sha` を書き足した手編集 yaml（last-key-wins だと
+    後者だけが検証対象になり READY へ到達し得た）は、`_StrictYAMLLoader`
+    が重複キー段階で拒否する（構造検証まで到達しない）。"""
+    tampered_yaml_text = """
+lesson_sha:
+  value: null
+  status: PENDING
+lesson_sha:
+  value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  status: PINNED
+"""
+    with pytest.raises(m.Run9ValidationError, match="duplicate key"):
+        m.load_run9_contract_from_yaml_text(tampered_yaml_text)
+
+
+def test_fix17_yaml_duplicate_nested_key_rejected() -> None:
+    """Codex bot レビュー PR #315 第8巡指摘1 補足: pin 欄 dict 内部
+    （ネストした mapping ノード）の `status` 重複も検出される —
+    `construct_mapping` は全 mapping ノードへ再帰的に呼ばれるため。"""
+    tampered_yaml_text = """
+lesson_sha:
+  value: null
+  status: PENDING
+  status: PINNED
+"""
+    with pytest.raises(m.Run9ValidationError, match="duplicate key"):
+        m.load_run9_contract_from_yaml_text(tampered_yaml_text)
+
+
+def test_fix17_json_duplicate_key_in_anchor_hashes_rejected() -> None:
+    """Codex bot レビュー PR #315 第8巡指摘1: domain JSON の
+    `anchor_hashes` 内で `af0` を2回宣言すると拒否される（trailing 値の
+    last-key-wins 採用を許さない）。"""
+    tampered_json_text = '{"anchor_hashes": {"af0": "' + "a" * 64 + '", "af0": "' + "f" * 64 + '"}}'
+    with pytest.raises(m.Run9ValidationError, match="duplicate key"):
+        m.run9_identity_domain_from_json(tampered_json_text)
+
+
+def test_fix17_existing_contract_yaml_still_loads() -> None:
+    """正例: 重複キーの無い既存 RUN9_CONTRACT.yaml は引き続き load できる
+    （strict loader が正常系まで壊していないことの確認）。"""
+    contract = m.load_run9_contract_from_yaml_path(CONTRACT_PATH)
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_fix17_existing_domain_draft_json_still_loads() -> None:
+    """正例: 重複キーの無い既存 domain draft JSON は引き続き load できる。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert domain.is_pinned() is False
+
+
+def test_fix17_yaml_loader_comment_declares_models_loads_strict_parity() -> None:
+    """VG-E0 `models.loads_strict()` と同型の fail-closed 規約であることの
+    宣言がソース中に存在することの直接確認。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert "loads_strict" in source

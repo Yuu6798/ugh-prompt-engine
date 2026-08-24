@@ -28,7 +28,9 @@ import sys
 import types
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, Mapping, Tuple
+from typing import Any, Dict, FrozenSet, List, Mapping, Tuple
+
+import yaml  # PyYAML は本体必須依存（pyproject.toml [project].dependencies）
 
 _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
@@ -100,6 +102,26 @@ _GENOME_ID_RE = re.compile(rf"^[0-9a-f]{{{_GENOME_ID_LEN}}}$")
 class Run9ValidationError(ValueError):
     """Run9IdentityDomain / Run9Coords / Run9FounderGenome / RUN9 Contract の
     構築・デシリアライズ時の型・構造不正。"""
+
+
+class _StrictYAMLLoader(yaml.SafeLoader):
+    """`yaml.SafeLoader` を継承し、mapping ノードの重複キーを fail-closed
+    拒否する（VG-E0 `models.py` `loads_strict()` と同型の fail-closed
+    規約を YAML 読込にも適用する — Codex bot レビュー PR #315 第8巡指摘1
+    採用）。`construct_mapping` は文書内の全ての mapping ノードへ
+    （トップレベル・ネストした pin 欄 dict を含め）再帰的に呼ばれるため、
+    この一箇所のオーバーライドだけで任意の深さの重複キーを検出できる。
+    重複キーが無い場合の挙動は `yaml.safe_load()` と完全に同一。
+    """
+
+    def construct_mapping(self, node: Any, deep: bool = False) -> Dict[Any, Any]:
+        seen: set = set()
+        for key_node, _value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if key in seen:
+                raise Run9ValidationError(f"duplicate key in YAML mapping: {key!r}")
+            seen.add(key)
+        return super().construct_mapping(node, deep=deep)
 
 
 def normalize_signed_zero(x: float) -> float:
@@ -476,9 +498,37 @@ def run9_identity_domain_from_dict(data: Any) -> Run9IdentityDomain:
     )
 
 
+def _reject_duplicate_json_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    """`json.loads(..., object_pairs_hook=...)` 用フック。VG-E0
+    `voice_genesis/evolution/models.py` の `loads_strict()`（重複キー拒否の
+    既存先例）と同型の fail-closed 規約を run-local に実装する（Codex bot
+    レビュー PR #315 第8巡指摘1採用）: 標準の `json.loads` は同一 JSON
+    オブジェクト内に同じキーが複数回出現しても黙って後勝ちで採用するため、
+    手編集した domain document で `anchor_hashes` 内に `af0` を2回書く
+    ような改ざんが検証をすり抜け得た。`object_pairs_hook` は文書内の全ての
+    `{...}` ノードへボトムアップで（最も深い入れ子から順に）呼ばれるため、
+    本フックをトップレベルの構築に使うだけで、任意の深さの入れ子オブジェ
+    クトの重複キーも自動的に検出できる。
+    """
+    seen: set = set()
+    result: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise Run9ValidationError(f"duplicate key in JSON object: {key!r}")
+        seen.add(key)
+        result[key] = value
+    return result
+
+
+def _loads_strict_json(text: str) -> Any:
+    """`json.loads()` 相当だが、全階層の JSON オブジェクトで重複キーを
+    fail-closed 拒否する（models.py `loads_strict()` と同型の規約）。"""
+    return json.loads(text, object_pairs_hook=_reject_duplicate_json_keys)
+
+
 def run9_identity_domain_from_json(text: str) -> Run9IdentityDomain:
     try:
-        data = json.loads(text)
+        data = _loads_strict_json(text)
     except json.JSONDecodeError as exc:
         raise Run9ValidationError(f"invalid JSON: {exc}") from exc
     return run9_identity_domain_from_dict(data)
@@ -1119,9 +1169,12 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
 
 
 def load_run9_contract_from_yaml_text(text: str) -> Run9RunContract:
-    import yaml  # PyYAML は本体必須依存（pyproject.toml [project].dependencies）
-
-    data = yaml.safe_load(text)
+    # `yaml.safe_load()` ではなく `_StrictYAMLLoader`（重複キー fail-closed
+    # 拒否）を使う — 例えば PENDING の `lesson_sha` の後に PINNED の
+    # `lesson_sha` を書き足した手編集 contract が、標準 YAML の
+    # last-key-wins 解決で検証をすり抜けて READY へ到達し得た
+    # （Codex bot レビュー PR #315 第8巡指摘1採用）。
+    data = yaml.load(text, Loader=_StrictYAMLLoader)
     return load_run9_contract(data)
 
 
