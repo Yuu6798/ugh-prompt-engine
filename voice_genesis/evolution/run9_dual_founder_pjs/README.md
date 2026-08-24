@@ -49,9 +49,14 @@ CTRL PRACT EDU             CTRL PRACT EDU
 各枝を機械評価: Identity / Trait / Technique / Gain / Replay /
 Generalization（単一 Total Score への集約は恒久禁止）。書き込み先は
 両介入枝とも Founder 別 versioned Performance ControlProfile
-（rev 0.2 改訂1を踏襲）、Revision 系列は CONTROL→`replay` /
-PRACTICE_FROM_AUDIO→`r_practice` / TRANSFER_TECHNIQUE→`r_taught`
-（`run9_schema.BRANCH_REVISIONS`）。
+（rev 0.2 改訂1を踏襲）だが、**書き込める state partition は枝ごとに
+異なる**（`run9_schema.BRANCH_WRITABLE_PARTITIONS`: CONTROL=`[]` /
+PRACTICE_FROM_AUDIO=`[TRAIT_CONTROL, TECHNIQUE_CONTROL]` /
+TRANSFER_TECHNIQUE=`[TECHNIQUE_CONTROL]`。`IDENTITY_STATE` は全枝で
+書込不可）。CONTROL 枝は内部に C0（`NO_LEARNING_REPLAY`）/ C1
+（`ZERO_CONTROLPROFILE_SHAM`）の2条件を持つ。Revision 系列は
+CONTROL/C0→`replay` / CONTROL/C1→`r_sham` / PRACTICE_FROM_AUDIO→
+`r_practice` / TRANSFER_TECHNIQUE→`r_taught`（`run9_schema.BRANCH_REVISIONS`）。
 
 ## 2026-08-24 User 裁定5件（Revision 0.2）— 要約
 
@@ -96,35 +101,116 @@ PoR メモは自称 "v0.2 design revision input" だが、rev 0.2（上記5裁�
 （ControlProfile 方式・§対応マップ・AF0/PJS/User rights/Backbone の pin
 規約）はそのまま有効。
 
-1. **改訂A（三経路分離）**: 単一 `LEARN_PERFORMANCE` エッジを廃し、
-   Founder r0 から **CONTROL**（無介入 replay）/ **PRACTICE_FROM_AUDIO**
-   （稽古）/ **TRANSFER_TECHNIQUE**（教育）の三枝へ分岐。両介入枝の
-   書き込み先は Founder 別 versioned Performance ControlProfile
-   （rev 0.2 改訂1を踏襲）。r0 は in-place 更新せず、各枝は独立 Revision
-   （`replay`/`r_practice`/`r_taught`）として保存。交配の正式 Edge 名は
+1. **改訂A（三経路分離 + 書き込み境界 + C0/C1 分離）**: 単一
+   `LEARN_PERFORMANCE` エッジを廃し、Founder r0 から **CONTROL**（無介入
+   replay。内部に C0=`NO_LEARNING_REPLAY`/C1=`ZERO_CONTROLPROFILE_SHAM`
+   の2条件）/ **PRACTICE_FROM_AUDIO**（稽古）/ **TRANSFER_TECHNIQUE**
+   （教育）の三枝へ分岐。両介入枝の書き込み先は Founder 別 versioned
+   Performance ControlProfile（rev 0.2 改訂1を踏襲）だが、書き込める
+   state partition は枝ごとに固定（`STATE_PARTITIONS` =
+   IDENTITY_STATE/TRAIT_CONTROL/TECHNIQUE_CONTROL、
+   `BRANCH_WRITABLE_PARTITIONS` — 詳細は下記「User 外部レビュー対応」
+   節）。r0 は in-place 更新せず、各枝は独立 Revision（C0=`replay`/
+   C1=`r_sham`/`r_practice`/`r_taught`）として保存。交配の正式 Edge 名は
    **INHERIT_TRAIT**（operator は `TRI_CROSSOVER/1.0` のまま — genome_id
    決定論を壊さない）。
 2. **改訂B（三層観測）**: Identity / Trait / Technique の三層を機械評価の
    観測軸として採用。「PJS へ近づいた」を単一 Total Score で判断せず、
    どの層が近づいたかで解釈を分ける（Technique だけ=技術獲得の証拠、
    Trait も=稽古による形質学習候補、Identity まで=drift として別記録）。
-3. **改訂C（情報境界）**: PRACTICE は PJS 音声そのものを許可・正解
-   parameter/speaker embedding を禁止。EDUCATION は timing/pitch
-   trajectory 等の Technique channel を許可・speaker embedding/Identity
-   coordinate/**learner の PJS raw audio 直接参照**を禁止。この非対称性
-   自体が実験変数（PoR §11）。
-4. **改訂D（比較構造と結果分類）**: PoR §4 の5比較（出生差/稽古効果/教育
-   効果/稽古教育差/個体差）+ §13 の6分類（BIRTH/PRACTICE/EDUCATION/
-   SEPARATION/FOUNDER_RESPONSE/IDENTITY）を結果 schema 語彙として凍結。
-   v0.1 §20 の `transfer_status` 語彙は superseded。
+3. **改訂C（情報境界、3分割語彙）**: PRACTICE は PJS 音声そのものを許可・
+   正解 parameter/Technique label/speaker embedding を禁止。「データ入力」
+   「必須の Founder-local 処理」「明示的に禁止する外部支援」を3分割語彙
+   （`PRACTICE_ALLOWED_DATA_INPUTS`/`PRACTICE_REQUIRED_AUTONOMOUS_
+   OPERATIONS`/`PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE`）で固定。
+   EDUCATION は timing/pitch trajectory 等の Technique channel を許可・
+   speaker embedding/Identity coordinate/**learner の PJS raw audio 直接
+   参照**を禁止。この非対称性自体が実験変数（PoR §11）。
+4. **改訂D（比較構造・結果分類・科学結果と運用状態の分離）**: PoR §4 の
+   5比較（出生差/稽古効果/教育効果/稽古教育差/個体差）+ §13 の6分類
+   （BIRTH/PRACTICE/EDUCATION/SEPARATION/FOUNDER_RESPONSE/IDENTITY）を
+   結果 schema 語彙として凍結。v0.1 §20 の `transfer_status` 語彙は
+   superseded。**scientific_outcomes（6分類）/ run_status / archive_status
+   / promotion_status を完全分離**し、RUN9 単体からは昇格値へ到達
+   できない（`PROMOTION_STATUSES` = 単一値）。held-out gain 4欄
+   （`REQUIRED_GAIN_FIELDS`）は必須。
 5. **改訂E（公平性・失敗分類・holdout）**: PRACTICE と EDUCATION は情報量
    が異なるため「同じ入力」としない（枝内二体等予算）。失敗は
    IMPLEMENTATION_FAILURE（修正可）/ SCIENTIFIC_NULL（凍結）/
    DESIGN_FAILURE（新 revision）の3分類。train-only gain と held-out
    gain は別結果として記録。
-6. **改訂F（人間知覚 Gate の非必須化）**: v0.1 §17 の Mandatory with Audit
-   Fallback を、機械評価 + claim ceiling 明記へ変更。人間知覚評価は後続
-   Run へ送る（v0.1 §28 Human Audit は optional 化）。
+6. **改訂F（人間知覚 Gate の非必須化 + human_audit_mode）**: v0.1 §17 の
+   Mandatory with Audit Fallback を、機械評価 + claim ceiling 明記へ変更。
+   人間知覚評価は後続 Run へ送る（v0.1 §28 Human Audit は optional 化）。
+   `human_audit_mode`（既定 `DISABLED`、`ADVISORY_PREDECLARED` で
+   protocol sha を pre-run PINNED 必須化）で監査意図を事前固定。
+7. **改訂G（機械的校正の定義）**: RUN9 が要求する「校正」は人間知覚との
+   一致証明ではなく、C0 replay 分布/C1 sham 副作用/positive・negative
+   reference/metric version/threshold generation rule に対する機械的
+   校正。未校正なら `UNCALIBRATED` とし Identity 保持を主張しない。
+8. **改訂H（Non-Claim / Rights Boundary）**: 技術的分離が成立しても
+   法的・契約上の許諾は自動成立しない。AQUEST 由来素材は明示許諾まで
+   input へ追加しない、等 PoR §15 の権利境界を継承。
+
+## User 外部レビュー対応（2026-08-24, CHANGES_REQUESTED → 全項目採用）
+
+PR #317 head `71eeccadf3f1f7ee49d9cc90763ced8a506abc67` に対する User 本人
+レビュー（P1×4 + P2×5、全件採用・逐語準拠）の要約。詳細・逐語は
+[`DESIGN_RUN9_REVISION_0.3.md`](./DESIGN_RUN9_REVISION_0.3.md) 各節を正とする。
+
+**P1（必須修正、4件）**:
+
+1. **P1-1 書き込み境界**: 新規 [`inputs/branch_write_policy.json`](./inputs/branch_write_policy.json)
+   （schema `run9-branch-write-policy/1.0`）が state partition
+   （IDENTITY_STATE/TRAIT_CONTROL/TECHNIQUE_CONTROL）・枝別 writable 集合
+   ・全枝不変 artifact リストを機械可読で保持。`run9_schema.py` の
+   `STATE_PARTITIONS`/`IMMUTABLE_STATE_PARTITIONS`/
+   `BRANCH_WRITABLE_PARTITIONS`/`BRANCH_IMMUTABLE_ARTIFACTS` が正本、
+   `validate_branch_write(branch, partition)` が fail-closed 検証、
+   `validate_branch_write_policy_manifest()` が manifest と定数の完全
+   一致を強制（改変 manifest は load 失敗）。`branch_write_policy_sha`
+   を pre-run pin として新設し **PINNED 済み**。
+2. **P1-2 split pin の明示化**: `lesson_sha` →
+   `education_technique_lesson_manifest_sha`、`practice_split_sha` →
+   `practice_audio_split_manifest_sha` へ改名（両方 PENDING のまま）。
+   manifest 最低要件は `PRACTICE_MANIFEST_REQUIRED_KEYS`/
+   `EDUCATION_MANIFEST_REQUIRED_KEYS` + `validate_practice_split_
+   manifest()`/`validate_education_lesson_manifest()`（schema 欄の
+   自己宣言で種別を区別・取り違えは拒否・holdout∩training 混入拒否・
+   Founder 別分岐構造拒否）。
+3. **P1-3 C0/C1 分離**: `CONTROL_CONDITIONS` =
+   (`NO_LEARNING_REPLAY`, `ZERO_CONTROLPROFILE_SHAM`)。
+   `BRANCH_REVISIONS["CONTROL"]` を条件別2値
+   （`NO_LEARNING_REPLAY`→`replay`、`ZERO_CONTROLPROFILE_SHAM`→
+   `r_sham`）へ再構成。`control_conditions_satisfied()` が両条件の
+   存在を評価 readiness の前提として判定。
+4. **P1-4 結果と昇格の分離**: `RUN_STATUSES`/`ARCHIVE_STATUSES`/
+   `PROMOTION_STATUSES` を凍結し scientific_outcomes（6分類）から完全
+   分離。v0.1 §20 overall PASS 系・§21 昇格・freeze-only-on-PASS 規則・
+   test item 52・verdict template の読み替えを矛盾解決表へ追加。
+   6分類から単一 PASS/TotalScore を導出する関数は実装しない
+   （RUN9 単体では promotion_status が昇格値を取り得ない）。
+
+**P2（設計・契約への反映、5件）**:
+
+- **P2-1**: `PRACTICE_ALLOWED_INPUTS`（旧・削除済み）を
+  `PRACTICE_ALLOWED_DATA_INPUTS`/`PRACTICE_REQUIRED_AUTONOMOUS_
+  OPERATIONS`/`PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE` へ3分割し、
+  actor 境界（データ vs 動作 vs 禁止支援）を機械可読に固定。practice
+  trace 保存要件を明記。
+- **P2-2**: `human_audit_mode`（pin 欄でなく通常欄、既定 `DISABLED`）を
+  contract へ追加。`ADVISORY_PREDECLARED` 時は
+  `human_evaluation_protocol_sha` PINNED を `gate_state()` が要求。
+- **P2-3**: 「機械的校正の定義」節を新設（人間知覚一致証明ではなく
+  C0/C1/reference/metric version/threshold 生成規則に対する校正）。
+- **P2-4**: `REQUIRED_GAIN_FIELDS`（4欄、必須）+
+  `OPTIONAL_GENERALIZATION_FIELDS`（3欄、任意）を凍結。
+- **P2-5**: 「Non-Claim / Rights Boundary（AQUEST 接続）」節を新設
+  （PoR §15 の5項目を逐語継承）。
+
+**不変制約（遵守確認済み）**: PoR txt / v0.1 / rev 0.2 / 既存
+AF0・Ritsu・rights・backbone pin 値・`TRI_CROSSOVER/1.0`・genome_id 計算
+は無変更。既存 Codex bot レビュー3件（第1〜3巡）の修正も退行なし。
 
 ## 実行順 §22 に対する現在地マップ
 
@@ -176,15 +262,19 @@ PoR メモは自称 "v0.2 design revision input" だが、rev 0.2（上記5裁�
    すら入っていない。
 4. **PJS Performance Lesson / Practice split build 未実施**: 改訂3で
    pin 方針（source archive pin / expanded corpus pin とは別の Lesson
-   manifest を生成し `lesson_sha` として pin）は確定したが、Lesson build
-   自体は VG-L0 ハーネス実装待ち。rev 0.3 でこの pin は EDUCATION 用
-   Technique lesson を指すと明確化され、PRACTICE 用の教師音声
+   manifest を生成し pin）は確定したが、Lesson build 自体は VG-L0
+   ハーネス実装待ち。rev 0.3 でこの pin は EDUCATION 用 Technique lesson
+   を指すと明確化され `education_technique_lesson_manifest_sha` へ改名
+   （User 外部レビュー PR #317 P1-2 採用）。PRACTICE 用の教師音声
    train/validation/sealed-holdout split manifest（正解 parameter を
-   含まない生素材の分割、PoR §12）は `practice_split_sha`
-   （`RUN9_CONTRACT.yaml`、PR #317 Codex bot レビュー第2巡 Fix 6 採用）と
-   して既に pin 欄が新設済み — ただし split manifest 自体の**生成**は
-   lesson build と同じく VG-L0 ハーネス実装待ちのため、両欄とも PENDING
-   のまま。
+   含まない生素材の分割、PoR §12）も同様に `practice_audio_split_
+   manifest_sha`（`RUN9_CONTRACT.yaml`、PR #317 Codex bot レビュー第2巡
+   Fix 6 で新設 → P1-2 で改名）として既に pin 欄が新設済み — ただし
+   split manifest 自体の**生成**は lesson build と同じく VG-L0 ハーネス
+   実装待ちのため、両欄とも PENDING のまま。manifest 自体の最低要件は
+   `run9_schema.PRACTICE_MANIFEST_REQUIRED_KEYS`/
+   `EDUCATION_MANIFEST_REQUIRED_KEYS` + `validate_practice_split_
+   manifest()`/`validate_education_lesson_manifest()` が凍結済み。
 5. **`render_code_commit` の確定待ち**（Codex bot レビュー PR #316 第1巡
    指摘採用）: `inputs/backbone_runtime_bundle.json` の
    `render_code_commit`（`openvpi/DiffSinger @ e2307b1...`）は
@@ -196,10 +286,14 @@ PoR メモは自称 "v0.2 design revision input" だが、rev 0.2（上記5裁�
    単体は直接記録4件一致のため PINNED 継続 — 対象を混同しない）。
 6. **practice/education builder 未実装**（rev 0.3 新設）: 情報境界
    （`run9_schema.PRACTICE_FORBIDDEN_INPUTS` /
-   `PRACTICE_ALLOWED_INPUTS` / `EDUCATION_ALLOWED_CHANNELS` /
-   `EDUCATION_FORBIDDEN_INPUTS`）と結果分類（`BIRTH_OUTCOMES` 等6分類）の
-   語彙は凍結済みだが、これらを import して実際に PRACTICE_FROM_AUDIO /
-   TRANSFER_TECHNIQUE を実行する builder・評価器は本 Phase 0.3 では未着手
+   `PRACTICE_ALLOWED_DATA_INPUTS` / `PRACTICE_REQUIRED_AUTONOMOUS_
+   OPERATIONS` / `PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE` /
+   `EDUCATION_ALLOWED_CHANNELS` / `EDUCATION_FORBIDDEN_INPUTS`）・
+   書込境界（`BRANCH_WRITABLE_PARTITIONS`）・manifest 最低要件
+   （`PRACTICE_MANIFEST_REQUIRED_KEYS`/`EDUCATION_MANIFEST_REQUIRED_KEYS`）
+   と結果分類（`BIRTH_OUTCOMES` 等6分類）の語彙は凍結済みだが、これらを
+   import して実際に PRACTICE_FROM_AUDIO / TRANSFER_TECHNIQUE を実行する
+   builder・評価器は本 Phase 0.3 では未着手
    （語彙の凍結のみが完了した段階）。
 
 ## 次フェーズ（machine-dependent）
@@ -213,8 +307,18 @@ PoR メモは自称 "v0.2 design revision input" だが、rev 0.2（上記5裁�
   現れない設計）が要件。
 - **6分類の実測パイプライン**: `BIRTH_OUTCOMES`〜`IDENTITY_OUTCOMES` を
   実際の render/measurement 結果から機械判定するロジックの実装（現状は
-  語彙の凍結のみ）。
-- **Practice split manifest の新設**: 上記ブロッカー(4)参照。
+  語彙の凍結のみ）。`REQUIRED_GAIN_FIELDS`（held-out gain 必須4欄）の
+  実測パイプラインも同様。
+- **practice_audio_split_manifest.json / education_technique_lesson_
+  manifest.json の実体生成**: `PRACTICE_MANIFEST_REQUIRED_KEYS`/
+  `EDUCATION_MANIFEST_REQUIRED_KEYS` の最低要件を満たす実 manifest の
+  生成（上記ブロッカー(4)参照）。
+- **branch write policy の実行時強制**: `validate_branch_write()` を
+  practice/education builder の書込経路へ実際に配線する（現状は
+  builder 自体が未実装のため関数の存在のみ）。
+- **C0/C1 の実 render**: `CONTROL_CONDITIONS` の両条件を実際に render し
+  `control_conditions_satisfied()` で評価 readiness を確認するパイプ
+  ライン。
 - これらは全て実音源・実 render・実学習を要する machine-dependent 作業
   であり、Claude 側での設計・語彙凍結の範囲を超える
   （CLAUDE.md の「マシン依存 = Codex / User」区分に該当）。
@@ -269,17 +373,18 @@ run9_dual_founder_pjs/
 ├── DESIGN_RUN9_REVISION_0.2.md                                 # v0.1 差分メモ（2026-08-24 User 裁定5件、無改変・存続）
 ├── DESIGN_RUN9_REVISION_0.3.md                                 # rev 0.2 差分メモ（同日、PoR メモ編入。三経路分離・三層観測等）
 ├── POR_CONCEPT_ADJUDICATION_20260824.txt                       # PoR 裁定ソース（uploads 原本とバイト同一・不変）
-├── RUN9_CONTRACT.yaml                                          # §23 Run Contract（部分 pin。af0/ritsu/backbone/por_adjudication は PINNED。interventions 構造）
+├── RUN9_CONTRACT.yaml                                          # §23 Run Contract（部分 pin。af0/ritsu/backbone/por_adjudication/branch_write_policy は PINNED。interventions・human_audit_mode 欄）
 ├── README.md                                                   # 本ファイル
-├── run9_schema.py                                              # domain / TRI_CROSSOVER / contract 他の run-local 正本
+├── run9_schema.py                                              # domain / TRI_CROSSOVER / contract / 書込境界 / manifest validator 他の run-local 正本
 ├── domains/
 │   └── identity_domain_run9_v1.json                            # af0/ritsu PINNED・user/metric_space_sha はプレースホルダ
 ├── inputs/
 │   ├── af0_anchor_manifest.json                                # AF-P0 正典証拠の複合参照 manifest（anchor_hashes.af0 の入力）
 │   ├── rights_manifest.json                                    # User donor rights（PENDING_USER_ATTESTATION）
-│   └── backbone_runtime_bundle.json                            # RUN6 backbone の checkpoint/config/vocoder/render commit + canon model assets 一式
+│   ├── backbone_runtime_bundle.json                            # RUN6 backbone の checkpoint/config/vocoder/render commit + canon model assets 一式
+│   └── branch_write_policy.json                                # 枝別書込境界 manifest（State partition・writable集合・不変artifact一覧。PINNED）
 ├── tests/
-│   └── test_run9_contract.py                                   # §27 最低テストの静的検証可能サブセット + Revision 0.2/0.3 対応テスト
+│   └── test_run9_contract.py                                   # §27 最低テストの静的検証可能サブセット + Revision 0.2/0.3 対応テスト + User 外部レビュー P1/P2 対応テスト
 └── results/
     └── .gitignore                                              # 実測結果は非同梱（§25 Atomic Results Bundle 用の空ディレクトリ）
 ```

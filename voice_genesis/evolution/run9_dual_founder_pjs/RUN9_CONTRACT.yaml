@@ -88,14 +88,16 @@ design_doc_sha256:
 # まま存続し、その系譜は DESIGN_RUN9_REVISION_0.3.md 末尾「design_revision
 # 系譜」表に記録する（欄としては最新 revision の1件のみを pin する規約は
 # design_doc_sha256/design_revision_doc_sha256 の前例どおり）。
-# PR #317 Codex bot レビュー第2巡 Fix 5 採用により本 PR（未マージ）内で
-# DESIGN_RUN9_REVISION_0.3.md へ R9-G5 supersession 行を追記し
-# （58fb378e...）、第3巡 Fix 7 採用によりさらに改訂C の PRACTICE 禁止
-# 散文列挙へ「教師付与の Technique label」を追記したため、値を再計算して
-# 更新（runbook §8 のマージ前限定編集規約に整合 — マージ後の byte-pin
-# 不変原則とは矛盾しない）。
+# PR #317 Codex bot レビュー第2巡 Fix 5（R9-G5 supersession 追記、
+# 58fb378e...）・第3巡 Fix 7（PRACTICE 禁止散文へ Technique label 同期、
+# 1409d448...）を経て、User 外部レビュー（2026-08-24, CHANGES_REQUESTED）
+# P1-1〜P1-4・P2-1〜P2-5 の全項目を本文へ反映（書き込み境界・C0/C1 分離・
+# 科学結果/運用状態/保存/昇格の分離・held-out gain 必須化・3分割
+# PRACTICE 語彙・human_audit_mode・機械的校正の定義・Non-Claim/Rights
+# Boundary）したため、値を再計算して更新（本 PR は未マージのため
+# runbook §8 のマージ前限定編集規約に整合）。
 design_revision_doc_sha256:
-  value: "1409d448fe7a8ac12221d32c881680796c5c644e04bda9b3577fcfd4a473680c"
+  value: "b4f05cfbccb484a16a39b736086e989e1c953f295bda66970d491e4db5b94b04"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.3.md
 
@@ -241,37 +243,32 @@ founder_genome_shas:
       founders/R9F-02_genome.json のバイト sha256（64hex）を pin する。
 
 # --- lesson / learning ------------------------------------------------------
-# rev 0.3 改訂A/C（DESIGN_RUN9_REVISION_0.3.md）: LEARN_PERFORMANCE 単一
-# エッジが PRACTICE_FROM_AUDIO（稽古）/ TRANSFER_TECHNIQUE（教育）へ分離
-# されたため、本欄が指す「PJS 由来の何か」も経路により性質が異なる —
-# EDUCATION は Technique lesson manifest（明示的な型の教材、PoR §3.3）を
-# pin し、PRACTICE は教師音声そのものの train/validation/sealed-holdout
-# split manifest（正解 parameter を含まない生素材の分割、PoR §12）を pin
-# する。両者は別対象であり本欄1つに統合しない — 実装は
-# lesson_sha（EDUCATION 用）と practice_split_sha（PRACTICE 用の稽古素材
-# split pin。下記ブロック参照）へ既に分割済み（PR #317 Codex bot レビュー
-# 第2巡 Fix 6 採用。第3巡 Fix 8: 本コメントが分割「予定」のまま陳腐化して
-# いたため実在欄への参照へ是正 — 旧繰延べ表現と実在欄の二重管理による
-# 競合欄導入・偽 BLOCKED の芽を除去）。
-lesson_sha:
+# rev 0.3 改訂A/C（DESIGN_RUN9_REVISION_0.3.md）+ User 外部レビュー PR #317
+# P1-2 採用（改名方式）: `lesson_sha` → `education_technique_lesson_manifest_sha`
+# / `practice_split_sha` → `practice_audio_split_manifest_sha` へ改名し、
+# 各欄が EDUCATION 専用 / PRACTICE 専用であることを欄名自体で固定した
+# （schema レベルの取り違え防止は
+# `run9_schema.validate_education_lesson_manifest()` /
+# `validate_practice_split_manifest()` が manifest 本体の `schema` 欄
+# 自己宣言で担う）。両者は別対象であり本欄1つに統合しない。
+education_technique_lesson_manifest_sha:
   value: null
   status: PENDING
   reason: >-
-    [EDUCATION/TRANSFER_TECHNIQUE 専用] PJS 由来 Technique lesson 抽出
-    （Technique extractor / Lesson builder、PoR §3.3。VG-L0 学習ハーネス
-    相当の feature extractor）が未実装。改訂3（DESIGN_RUN9_REVISION_0.2.md）
-    で Lesson manifest の生成・pin 方針は明確化済み（PJS の
-    source_archive_sha256 / expanded_corpus_identity_sha256 とは別の、
-    RUN9 が実消費する Lesson manifest を Lesson build 時に生成しその
-    sha256 を本欄へ pin する）が、Lesson build 自体はまだ実行されていない。
-    [PRACTICE_FROM_AUDIO 用の欄は別途 practice_split_sha を参照]
+    PJS 由来 Technique lesson 抽出（Technique extractor / Lesson builder、
+    PoR §3.3。VG-L0 学習ハーネス相当の feature extractor）が未実装。
+    改訂3（DESIGN_RUN9_REVISION_0.2.md）で Lesson manifest の生成・pin
+    方針は明確化済み（PJS の source_archive_sha256 /
+    expanded_corpus_identity_sha256 とは別の、RUN9 が実消費する Lesson
+    manifest を Lesson build 時に生成しその sha256 を本欄へ pin する）が、
+    Lesson build 自体はまだ実行されていない。manifest 本体は
+    `run9_schema.SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST`
+    （`run9-education-technique-lesson-manifest/1.0`）を自己宣言し、
+    `EDUCATION_MANIFEST_REQUIRED_KEYS` の最低要件（training/validation/
+    sealed-holdout lesson・donor 情報排除証拠・二体同一 bytes 証拠）を
+    満たさなければならない。
 
-# rev 0.3 追加（PR #317 Codex bot レビュー第2巡 Fix 6 採用）:
-# PRACTICE_FROM_AUDIO 枝の train/validation/sealed-holdout split manifest
-# の sha256（lesson_sha の PRACTICE 版対概念 — pre-run 必須欄。
-# 64hex 規則は欄名が `_sha` で終わるため
-# `_validate_pin_field_value_shape` の汎用ブランチが自動適用される）。
-practice_split_sha:
+practice_audio_split_manifest_sha:
   value: null
   status: PENDING
   reason: >-
@@ -279,7 +276,29 @@ practice_split_sha:
     train/holdout 分離必須・sealed holdout は学習中使用禁止）。稽古で
     Founder へ提示する PJS 教師音声の train/validation/sealed-holdout
     split manifest（正解 Technique parameter を含まない生素材の分割）の
-    生成自体が VG-L0 ハーネス実装待ちのため未着手。
+    生成自体が VG-L0 ハーネス実装待ちのため未着手。manifest 本体は
+    `run9_schema.SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST`
+    （`run9-practice-audio-split-manifest/1.0`）を自己宣言し、
+    `PRACTICE_MANIFEST_REQUIRED_KEYS` の最低要件（PJS source archive
+    pin・expanded corpus identity pin・training/validation/sealed-holdout
+    hash・row order hash・sample inventory・rights/source class・raw
+    音声証拠・正解 parameter 非含有証拠・二体同一 bytes/順序証拠）を
+    満たさなければならない。
+
+# --- branch_write_policy_sha: inputs/branch_write_policy.json の実バイト
+# sha256（PINNED — 本 PR で内容確定。User 外部レビュー PR #317 P1-1
+# 採用）。design_doc_sha256 と同一のファイル実バイト規約
+# （run9_schema.compute_file_sha256()）。ファイル内容は
+# run9_schema.STATE_PARTITIONS/IMMUTABLE_STATE_PARTITIONS/
+# BRANCH_WRITABLE_PARTITIONS/BRANCH_IMMUTABLE_ARTIFACTS と完全一致する
+# ことを validate_branch_write_policy_manifest() が強制する（policy
+# ファイル改変は load 失敗 = 必須テスト5「policy改変でcontract loadまたは
+# pre-run Gateが失敗する」を、本欄が PINNED である以上 pre-run Gate 側で
+# 満たす）。
+branch_write_policy_sha:
+  value: "458c45686b0938aa0794646af5b0cffe2fe0f2ebb867e1f0fb129e01384c8bef"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/branch_write_policy.json
 
 learning_recipe_sha:
   value: null
@@ -338,3 +357,13 @@ failure_abort_criteria_sha:
   reason: DESIGN_RUN9 §30 Stop Rules の20項目を機械可読な閾値/条件文書へ未変換。
 
 claim_strength_target: C2
+
+# --- human_audit_mode: pin 欄ではなく通常欄（User 外部レビュー PR #317
+# P2-2 採用）。DISABLED（既定・今回の User 裁定）は「監査を実施しない」、
+# ADVISORY_PREDECLARED は「監査を予定した」の明示宣言 — 結果を見た後に
+# advisory audit を追加する余地を塞ぐ。ADVISORY_PREDECLARED を宣言した
+# 場合は human_evaluation_protocol_sha が PINNED でなければ
+# gate_state() が READY を返さない（run9_schema.gate_state() 参照）。
+# holdout 開封後のモード変更は禁止し、SCIENTIFIC_NULL/Identity SHIFTED
+# の救済に人間監査を使わない規律は DESIGN_RUN9_REVISION_0.3.md に明記する。
+human_audit_mode: DISABLED
