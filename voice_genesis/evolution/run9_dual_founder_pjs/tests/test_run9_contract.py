@@ -366,21 +366,44 @@ def test_item49_current_contract_gate_state_is_blocked(contract: m.Run9RunContra
     assert m.gate_state(contract) == "BLOCKED"
 
 
-def test_item49_fully_pinned_synthetic_contract_is_ready(contract_raw: Dict[str, Any]) -> None:
-    """item 49 対照実験: pre-run 欄を全て PINNED にした合成 contract は
-    gate_state() == "READY" になる（BLOCKED が「常に BLOCKED を返す壊れた
-    実装」でないことの実証）。"""
+def _synthetic_pin_value(name: str) -> str:
+    """CONTRACT_PIN_FIELDS の各欄名に応じた valid-shape なダミー PINNED
+    value を返す（Fix 7: `repository_commit_sha` だけ40hex SHA-1形式）。"""
+    if name == "repository_commit_sha":
+        return "a" * 40
+    return "a" * 64
+
+
+def _fully_pinned_synthetic_contract(contract_raw: Dict[str, Any]) -> Dict[str, Any]:
     fully_pinned = copy.deepcopy(contract_raw)
     for name in m.CONTRACT_PIN_FIELDS:
         if name in m.CONTRACT_POST_RUN_PIN_FIELDS:
             continue
-        fully_pinned[name] = {"value": "a" * 64, "status": "PINNED", "source": "synthetic-fixture"}
-    for founder_id in m.CONTRACT_FOUNDER_IDS:
-        fully_pinned["founder_genome_shas"][founder_id] = {
-            "value": "a" * 16,
+        fully_pinned[name] = {
+            "value": _synthetic_pin_value(name),
             "status": "PINNED",
             "source": "synthetic-fixture",
         }
+    # Fix 8: 両 founder が PINNED のとき value（genome_id）は相異が必須の
+    # ため、R9F-01/R9F-02 で異なる16hex値を使う。
+    fully_pinned["founder_genome_shas"]["R9F-01"] = {
+        "value": "a" * 16,
+        "status": "PINNED",
+        "source": "synthetic-fixture",
+    }
+    fully_pinned["founder_genome_shas"]["R9F-02"] = {
+        "value": "b" * 16,
+        "status": "PINNED",
+        "source": "synthetic-fixture",
+    }
+    return fully_pinned
+
+
+def test_item49_fully_pinned_synthetic_contract_is_ready(contract_raw: Dict[str, Any]) -> None:
+    """item 49 対照実験: pre-run 欄を全て PINNED にした合成 contract は
+    gate_state() == "READY" になる（BLOCKED が「常に BLOCKED を返す壊れた
+    実装」でないことの実証）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
     contract = m.load_run9_contract(fully_pinned)
     assert m.gate_state(contract) == "READY"
 
@@ -389,17 +412,7 @@ def test_item49_single_pending_pre_run_field_blocks_gate(contract_raw: Dict[str,
     """item 49 補足: pre-run 欄が1つでも PENDING/BLOCKED なら gate は
     BLOCKED のまま（post-run 欄 artifact_manifest_sha/cost_record_sha は
     PENDING のままでも gate に影響しないことの対照確認）。"""
-    fully_pinned = copy.deepcopy(contract_raw)
-    for name in m.CONTRACT_PIN_FIELDS:
-        if name in m.CONTRACT_POST_RUN_PIN_FIELDS:
-            continue
-        fully_pinned[name] = {"value": "a" * 64, "status": "PINNED", "source": "synthetic-fixture"}
-    for founder_id in m.CONTRACT_FOUNDER_IDS:
-        fully_pinned["founder_genome_shas"][founder_id] = {
-            "value": "a" * 16,
-            "status": "PINNED",
-            "source": "synthetic-fixture",
-        }
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
     # post-run 欄は PENDING のままでも READY を妨げないはず。
     contract_ready = m.load_run9_contract(fully_pinned)
     assert m.gate_state(contract_ready) == "READY"
@@ -754,3 +767,139 @@ def test_fix6_validate_domain_invariants_accepts_genuine_domain(
     m._validate_domain_invariants(pinned_domain)  # 例外を投げないことの確認
     g = m.build_founder(pinned_domain, "R9F-01")
     assert g.genome_id
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第3巡対応 — Fix 7: repository_commit_sha の
+# 40hex（git SHA-1）特例
+# ---------------------------------------------------------------------------
+
+
+def test_fix7_repository_commit_sha_accepts_40hex(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 第3巡指摘1: `repository_commit_sha` は
+    git commit object ID（40桁小文字hex、SHA-1）を PINNED として受理する
+    （64hex 規則の対象から外す — 正直な git sha を PINNED にしても
+    contract が構造的に READY へ到達できなくなっていた第1巡修正の不備）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["repository_commit_sha"] = {
+        "value": "a" * 40,
+        "status": "PINNED",
+        "source": "git rev-parse HEAD",
+    }
+    m.load_run9_contract(tampered)  # 例外を投げないことの確認
+
+
+@pytest.mark.parametrize("bad_value", ["a" * 64, "a" * 39, "A" * 40, "g" * 40])
+def test_fix7_repository_commit_sha_rejects_non_40hex(
+    contract_raw: Dict[str, Any], bad_value: str
+) -> None:
+    """Codex bot レビュー PR #315 第3巡指摘1 負例: 64hex（sha256 と誤って
+    揃えた値）・39hex（桁数不足）・大文字・非hex文字はいずれも拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["repository_commit_sha"] = {"value": bad_value, "status": "PINNED", "source": "x"}
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第3巡対応 — Fix 8: founder_genome_shas の相異強制
+# ---------------------------------------------------------------------------
+
+
+def test_fix8_identical_founder_genome_shas_when_both_pinned_rejected(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """Codex bot レビュー PR #315 第3巡指摘2: R9F-01 と R9F-02 の両方が
+    PINNED のとき、同一 genome_id value は拒否される（二体の dual-founder
+    比較の前提 — 別々の Genome であること — が崩れるため）。"""
+    tampered = copy.deepcopy(contract_raw)
+    same_value = "a" * 16
+    tampered["founder_genome_shas"]["R9F-01"] = {"value": same_value, "status": "PINNED", "source": "x"}
+    tampered["founder_genome_shas"]["R9F-02"] = {"value": same_value, "status": "PINNED", "source": "y"}
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix8_distinct_founder_genome_shas_when_both_pinned_accepted(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """対照実験: 相異する value なら両方 PINNED でも通る。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["founder_genome_shas"]["R9F-01"] = {"value": "a" * 16, "status": "PINNED", "source": "x"}
+    tampered["founder_genome_shas"]["R9F-02"] = {"value": "b" * 16, "status": "PINNED", "source": "y"}
+    m.load_run9_contract(tampered)  # 例外を投げないことの確認
+
+
+def test_fix8_one_pending_one_pinned_does_not_trigger_distinctness_check(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """対照実験: 片方だけ PINNED（もう片方 PENDING）の場合は相異判定その
+    ものが発火しない — 正直な未 pin 表現を妨げない。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["founder_genome_shas"]["R9F-01"] = {"value": "a" * 16, "status": "PINNED", "source": "x"}
+    tampered["founder_genome_shas"]["R9F-02"] = {"value": None, "status": "PENDING", "reason": "y"}
+    m.load_run9_contract(tampered)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第3巡対応 — Fix 9: domain ネスト dict の凍結
+# ---------------------------------------------------------------------------
+
+
+def test_fix9_anchor_hashes_is_read_only_mapping(pinned_domain: m.Run9IdentityDomain) -> None:
+    """Codex bot レビュー PR #315 第3巡指摘3: 構築済み domain の
+    `anchor_hashes` は `types.MappingProxyType` で凍結され、
+    `domain.anchor_hashes["af0"] = ...` は TypeError になる（frozen
+    dataclass のトップレベル属性再代入禁止だけでは、ネスト dict の
+    in-place 書き換えを防げていなかった）。"""
+    with pytest.raises(TypeError):
+        pinned_domain.anchor_hashes["af0"] = "f" * 64  # type: ignore[index]
+
+
+def test_fix9_pin_source_candidates_is_read_only_mapping() -> None:
+    domain = m.run9_identity_domain_from_dict(
+        json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    )
+    with pytest.raises(TypeError):
+        domain.pin_source_candidates["af0"] = "tampered"  # type: ignore[index]
+
+
+def test_fix9_directly_instantiated_domain_is_also_frozen() -> None:
+    """Fix 9 は `__post_init__` 経由のため、`run9_identity_domain_from_dict()`
+    /`build_run9_identity_domain()` を経由しない直接インスタンス化経路
+    （Fix 6 のテストが使う手口）でも同様に効く。"""
+    domain = m.Run9IdentityDomain(
+        schema=m.SCHEMA_IDENTITY_DOMAIN,
+        domain_id=m.RUN9_DOMAIN_ID,
+        anchor_order=m.RUN9_ANCHOR_ORDER,
+        anchor_hashes={"af0": "a" * 64, "ritsu": "b" * 64, "user": "c" * 64},
+        excluded_teacher_identities=m.RUN9_EXCLUDED_TEACHER_IDENTITIES,
+        coordinate_precision=m.RUN9_COORDINATE_PRECISION,
+        normalization=m.RUN9_NORMALIZATION,
+        metric_space_sha="d" * 64,
+        pin_source_candidates={},
+    )
+    with pytest.raises(TypeError):
+        domain.anchor_hashes["af0"] = "f" * 64  # type: ignore[index]
+
+
+def test_fix9_build_founder_twice_yields_stable_genome_id_and_is_unaffected_by_mutation_attempt(
+    pinned_domain: m.Run9IdentityDomain,
+) -> None:
+    """Fix 9 の実効性確認: 同一 domain から2回 `build_founder()` を呼んでも
+    genome_id は不変（anchor set を差し替える経路が閉じているため）。"""
+    g1 = m.build_founder(pinned_domain, "R9F-01")
+    with pytest.raises(TypeError):
+        pinned_domain.anchor_hashes["af0"] = "f" * 64  # type: ignore[index]  # 差し替えを試みても失敗する
+    g2 = m.build_founder(pinned_domain, "R9F-01")
+    assert g1.genome_id == g2.genome_id
+
+
+def test_fix9_content_digest_and_validators_still_work_with_mapping_proxy(
+    pinned_domain: m.Run9IdentityDomain,
+) -> None:
+    """対照実験: `content_digest()` / `_validate_domain_invariants()` は
+    `MappingProxyType` に対しても従来どおり動作する（`.items()`/`.keys()`
+    経由のため互換）。"""
+    assert isinstance(pinned_domain.content_digest(), str) and len(pinned_domain.content_digest()) == 64
+    m._validate_domain_invariants(pinned_domain)  # 例外を投げないことの確認

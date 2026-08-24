@@ -25,6 +25,7 @@ import json
 import math
 import re
 import sys
+import types
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Mapping, Tuple
@@ -66,6 +67,11 @@ OPERATOR_ID = "TRI_CROSSOVER/1.0"
 
 _FOUNDER_ID_RE = re.compile(r"^R9F-0[12]$")
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+# git commit object ID は SHA-1（40桁小文字hex）— repository_commit_sha は
+# 他の *_sha 欄（sha256）と同じ64hex規則を課すと、正直な git sha を PINNED
+# にしても構造的に READY へ到達できなくなる不備だった（第1巡修正時の
+# 見落とし。Codex bot レビュー PR #315 第3巡指摘1採用）。
+_SHA1_HEX_RE = re.compile(r"^[0-9a-f]{40}$")
 _PLACEHOLDER_RE = re.compile(r"^<[A-Z_]+>$")
 
 _GENOME_ID_LEN = 16
@@ -188,17 +194,34 @@ class Run9IdentityDomain:
     初めて `is_pinned()` が True になる — プレースホルダ（`<PIN_BEFORE_RUN>`
     等）は未 pin 扱い。`pin_source_candidates` は任意の補助情報
     （§ domains/identity_domain_run9_v1.json 参照）で検証対象外。
+
+    `anchor_hashes` / `pin_source_candidates` は `__post_init__` で
+    `types.MappingProxyType` に凍結される（読み取り専用 `Mapping`）—
+    `dataclass(frozen=True)` はトップレベル属性の再代入だけを禁止し、
+    属性が指すネスト dict 自体は素の mutable dict のままだったため、
+    構築後に `domain.anchor_hashes["af0"] = ...` のような in-place 書き換え
+    で anchor set を差し替えても型レベルでは防げていなかった（Codex bot
+    レビュー PR #315 第3巡指摘3採用）。
     """
 
     schema: str
     domain_id: str
     anchor_order: Tuple[str, str, str]
-    anchor_hashes: Dict[str, str]
+    anchor_hashes: Mapping[str, str]
     excluded_teacher_identities: Tuple[str, ...]
     coordinate_precision: int
     normalization: str
     metric_space_sha: str
-    pin_source_candidates: Dict[str, Any]
+    pin_source_candidates: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        # frozen dataclass では `self.x = ...` が使えないため
+        # `object.__setattr__` で直接代入する（dataclass 自身の凍結機構と
+        # 同じ回避手段）。
+        object.__setattr__(self, "anchor_hashes", types.MappingProxyType(dict(self.anchor_hashes)))
+        object.__setattr__(
+            self, "pin_source_candidates", types.MappingProxyType(dict(self.pin_source_candidates))
+        )
 
     def is_pinned(self) -> bool:
         """3 anchor 全てに加え `metric_space_sha` も 64hex sha256
@@ -758,6 +781,9 @@ def _validate_pin_field_value_shape(name: str, value: Any) -> None:
     """PINNED 状態の pin 欄 value の欄名別整形式検証（Codex bot レビュー
     PR #315 指摘1採用）: `founder_genome_shas.R9F-0x` は 16hex genome_id
     形式、`attempt_id` は非空文字列かつプレースホルダ（`<...>`）不可、
+    `repository_commit_sha` は git commit object ID の 40hex（SHA-1）形式
+    （PR #315 第3巡指摘1: 64hex を要求すると正直な git sha を PINNED にして
+    も contract が構造的に READY へ到達不能だった — 第1巡修正の不備）、
     それ以外の `_sha`/`_sha256` で終わるトップレベル欄
     （`design_doc_sha256` を含む）は 64hex sha256 形式を要求する。
     """
@@ -777,6 +803,14 @@ def _validate_pin_field_value_shape(name: str, value: Any) -> None:
             raise Run9ValidationError(
                 f"{name}.value must not be a placeholder (e.g. '<PIN_BEFORE_RUN>') when status is "
                 f"PINNED, got {value!r}"
+            )
+        return
+    if name == "repository_commit_sha":
+        if not isinstance(value, str) or not _SHA1_HEX_RE.match(value):
+            raise Run9ValidationError(
+                f"{name}.value must be exactly 40 lowercase hex characters (git SHA-1 object ID "
+                f"format — this repository uses SHA-1 commit ids, not sha256) when status is PINNED, "
+                f"got {value!r}"
             )
         return
     if name.endswith("_sha") or name.endswith("_sha256"):
@@ -916,6 +950,25 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
         )
     for founder_id in CONTRACT_FOUNDER_IDS:
         _validate_pin_field(f"founder_genome_shas.{founder_id}", founder_shas[founder_id])
+
+    # 両 founder が PINNED のとき、value（genome_id）の相異を強制する
+    # （Codex bot レビュー PR #315 第3巡指摘2採用）: 同一 genome_id は二体の
+    # dual-founder 比較の前提そのものが崩れる（R9F-01/R9F-02 は異なる座標
+    # から生成される別 Genome のはずで、genome_id が一致するのは改ざんか
+    # コピペ誤りしかあり得ない）。片方以下が PINNED の場合は判定しない
+    # （PENDING 同士・片方だけ PINNED の状態は正直な未 pin 表現として許容）。
+    # 正典 founder 記録との整合（宣言 genome_id が実際に
+    # build_founder(domain, founder_id) の再計算値と一致するか）は、domain
+    # が必要なため contract load の責務にせず `founder_genome_from_dict()`
+    # の builder 照合が担う（役割分担）。
+    if all(_is_field_pinned(founder_shas[fid]) for fid in CONTRACT_FOUNDER_IDS):
+        values = {fid: founder_shas[fid]["value"] for fid in CONTRACT_FOUNDER_IDS}
+        if len(set(values.values())) != len(values):
+            raise Run9ValidationError(
+                f"founder_genome_shas values must be distinct across founders when both are PINNED, "
+                f"got identical value across {list(values.keys())} — the dual-founder comparison "
+                f"premise (two distinct Genomes) would be broken: {values!r}"
+            )
 
     claim_strength = data["claim_strength_target"]
     if claim_strength != "C2":
