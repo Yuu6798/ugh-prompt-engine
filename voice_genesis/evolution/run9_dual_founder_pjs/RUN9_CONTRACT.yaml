@@ -44,10 +44,20 @@ design_doc: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_
 # r0 から3枝（CONTROL 無介入 / PRACTICE_FROM_AUDIO 稽古 /
 # TRANSFER_TECHNIQUE 教育）へ分岐する interventions 構造へ改める。
 interventions:
+  # Codex bot レビュー第6巡 Fix B 採用（c5f4205, P2）: 「両枝が同一のrecipeを共有する」という旧記述は
+  # PoR §8 の等価性規定と矛盾する誤記だった是正済み文言。recipeは枝別
+  # （PRACTICE_FROM_AUDIOとTRANSFER_TECHNIQUEは情報量が本質的に異なる
+  # 非対称フローであり、この非対称性そのものが実験変数 — 改訂C参照）。
+  # 等条件・等予算が要求されるのは各枝「内」の二体間（同一split・同一
+  # 探索空間・同一試行回数・同一render予算・同一評価器・同一停止規則、
+  # PoR §8）のみで、PRACTICEとEDUCATIONを「同じ入力」として扱わない。
   description: >
     固定された二つのFounder r0へ、同一PJS教師（音声そのもの=稽古、
-    抽出Technique lesson=教育）を同一recipe・同一budgetで適用し、
-    無介入replay（CONTROL）を対照として三枝を比較する。
+    抽出Technique lesson=教育）を枝別recipeで適用する（稽古と教育は
+    情報量が異なる非対称フローであり、recipeを共有しない）。各枝の内部
+    では二体（R9F-01/R9F-02）へ同一探索空間・同一試行回数・同一budget・
+    同一評価器・同一停止規則を適用し、無介入replay（CONTROL）を対照
+    として三枝を比較する。
   edges:
     - PRACTICE_FROM_AUDIO
     - TRANSFER_TECHNIQUE
@@ -307,10 +317,16 @@ learning_recipe_sha:
     learning_recipe.yaml 未作成。VG-L0 学習ハーネス未実装（書き込み先は
     改訂1で Performance ControlProfile へ変更済み）。rev 0.3 改訂Aにより
     PRACTICE_FROM_AUDIO（自律差分抽出・自律探索の recipe）と
-    TRANSFER_TECHNIQUE（lesson 提示・再現評価の recipe）で recipe の中身
-    自体が分岐する見込みだが、両者を束ねて1つの learning_recipe_sha として
-    pin する方針は不変（CONTROL は学習 step を実行しないため recipe 自体
-    を持たない — PoR §4 CONTROL の定義）。
+    TRANSFER_TECHNIQUE（lesson 提示・再現評価の recipe）は recipe の中身
+    自体が本質的に異なる非対称フロー（PoR §8: 情報量が異なるため
+    「同じ入力」とはしない — Codex bot レビュー第6巡 Fix B 是正: 旧
+    reason は「両枝が同一のrecipeを共有する」という誤記だった）。本欄は**枝別 recipe を
+    束ねた単一 manifest ファイル**の sha256 を pin する（欄自体は分割
+    せず、manifest 内で PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE それぞれの
+    recipe をキー別に保持する構造を想定）。等条件・等予算が要求されるのは
+    各枝「内」の二体間（同一探索空間・同一試行回数・同一render予算・
+    同一評価器・同一停止規則、PoR §8）のみ。CONTROL は学習 step を
+    実行しないため recipe 自体を持たない（PoR §4 CONTROL の定義）。
 
 probe_manifest_sha:
   value: null

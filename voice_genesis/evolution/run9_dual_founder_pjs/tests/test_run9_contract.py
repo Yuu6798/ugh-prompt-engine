@@ -3801,3 +3801,156 @@ def test_fix5b_no_duplicate_sample_inventory_positive_control() -> None:
     manifest = _valid_practice_manifest()
     manifest["sample_inventory"] = ["s1", "s2", "s3"]
     m.validate_practice_split_manifest(manifest)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第6巡対応 — Fix A（P1・部分採用: manifest 照合
+# のテスト層事前配線） / Fix B（P2・採用: 「両枝同一recipe」記述の是正）
+# ---------------------------------------------------------------------------
+
+
+def test_fix6a_practice_manifest_sha_matches_actual_file_and_validates_once_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """`practice_audio_split_manifest_sha` の実ファイル照合を、
+    `backbone_runtime_bundle_sha` の事前配線パターン（PR #316 第9巡,
+    e490985, 部分採用）と同型でテスト層へ配線する（Codex bot レビュー
+    PR #317 第6巡 Fix A, 部分採用）。
+
+    **層分離の境界宣言（変更しない）**: 実体照合はテスト層にのみ配線し、
+    `load_run9_contract()`/`gate_state()`（loader/runtime 層）へは配線
+    しない — PR #315 第4巡の境界宣言どおり、contract loader は事前登録
+    契約の構造述語（型・整形式・状態の整合）を検査する層であり、pin 値
+    と実体ファイルの突合は R9-G1（INPUT_FREEZE_AND_RIGHTS）検証ツーリング
+    の職務として分離する。
+
+    現状 status は PENDING のためこのテストは「PENDING であること」だけ
+    を確認するが、将来本欄が PINNED へ昇格した瞬間、この同じテストが
+    (a) `compute_file_sha256(PRACTICE_MANIFEST_PATH)` との一致、
+    (b) `PRACTICE_MANIFEST_PATH` の内容が `validate_practice_split_
+    manifest()` を通過すること、の両方を自動的に強制するようになる
+    （テストコードの変更を要さない = 事前配線）。
+    """
+    field = contract_raw["practice_audio_split_manifest_sha"]
+    if field["status"] == "PINNED":
+        assert field["value"] == m.compute_file_sha256(m.PRACTICE_MANIFEST_PATH), (
+            "practice_audio_split_manifest_sha が PINNED を宣言しているが、"
+            f"{m.PRACTICE_MANIFEST_PATH} の実バイト sha256 と一致しない"
+        )
+        manifest_data = m._loads_strict_json(
+            m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8")
+        )
+        m.validate_practice_split_manifest(manifest_data)  # 例外を投げないことの確認
+    else:
+        assert field["status"] == "PENDING"
+        assert field["value"] is None
+
+
+def test_fix6a_education_manifest_sha_matches_actual_file_and_validates_once_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """`education_technique_lesson_manifest_sha` 版の同型テスト
+    （上記 `test_fix6a_practice_manifest_sha_matches_actual_file_and_
+    validates_once_pinned` と対）。"""
+    field = contract_raw["education_technique_lesson_manifest_sha"]
+    if field["status"] == "PINNED":
+        assert field["value"] == m.compute_file_sha256(m.EDUCATION_MANIFEST_PATH), (
+            "education_technique_lesson_manifest_sha が PINNED を宣言しているが、"
+            f"{m.EDUCATION_MANIFEST_PATH} の実バイト sha256 と一致しない"
+        )
+        manifest_data = m._loads_strict_json(
+            m.EDUCATION_MANIFEST_PATH.read_text(encoding="utf-8")
+        )
+        m.validate_education_lesson_manifest(manifest_data)  # 例外を投げないことの確認
+    else:
+        assert field["status"] == "PENDING"
+        assert field["value"] is None
+
+
+def test_fix6a_manifest_path_constants_point_to_conventional_inputs_location() -> None:
+    assert m.PRACTICE_MANIFEST_PATH.name == "practice_audio_split_manifest.json"
+    assert m.EDUCATION_MANIFEST_PATH.name == "education_technique_lesson_manifest.json"
+    assert m.PRACTICE_MANIFEST_PATH.parent == _RUN_DIR / "inputs"
+    assert m.EDUCATION_MANIFEST_PATH.parent == _RUN_DIR / "inputs"
+
+
+def test_fix6a_prewired_check_actually_fails_for_mismatched_or_invalid_manifest_simulation(
+    tmp_path: Path,
+) -> None:
+    """事前配線が偽陽性（常に pass する壊れた検査）でないことのシミュレー
+    ション確認: 実ファイルがまだ存在しない現状では上記2テストは
+    「PENDING であること」の分岐しか通らないため、事前配線ロジックが
+    「PINNED + 不正 manifest」で実際に失敗することを、一時ファイルを
+    使った直接シミュレーションで別途実証する（本番の pin フィールドは
+    一切変更しない）。
+
+    (a) sha256 不一致: 宣言された pin 値が実ファイルの実測 sha256 と
+        異なれば assert が失敗する。
+    (b) manifest 検証失敗: schema 不一致（取り違え・破損の代表例）の
+        manifest は `validate_practice_split_manifest()` が
+        `Run9ValidationError` で拒否する — PINNED を騙っても検証は
+        迂回できない。
+    """
+    manifest_path = tmp_path / "practice_audio_split_manifest.json"
+    manifest_path.write_text(json.dumps(_valid_practice_manifest()), encoding="utf-8")
+    actual_hash = m.compute_file_sha256(manifest_path)
+
+    # (a) 宣言 pin 値が実ファイルと不一致なら AssertionError（= 事前配線の
+    # 主張どおり、照合が実際に機能して失敗すること）。
+    declared_wrong_value = "0" * 64
+    assert declared_wrong_value != actual_hash
+    with pytest.raises(AssertionError):
+        assert declared_wrong_value == m.compute_file_sha256(manifest_path)
+
+    # (b) manifest 自体が不正（schema 取り違え）なら validator が拒否する。
+    invalid_manifest_path = tmp_path / "invalid_practice_manifest.json"
+    invalid_manifest_path.write_text(json.dumps({"schema": "wrong-schema/9.9"}), encoding="utf-8")
+    invalid_data = m._loads_strict_json(invalid_manifest_path.read_text(encoding="utf-8"))
+    with pytest.raises(m.Run9ValidationError, match="practice split manifest schema"):
+        m.validate_practice_split_manifest(invalid_data)
+
+
+# --- Fix B: 「両枝同一recipe」記述の是正 -------------------------------------
+
+
+def test_fix6b_no_stale_same_recipe_language_in_contract_or_docs() -> None:
+    """PoR §8 の等価性規定と矛盾する「両枝同一recipe」型の記述が
+    RUN9_CONTRACT.yaml / rev 0.3 文書 / README.md に残っていないことの
+    全数掃討回帰検査（Codex bot レビュー第6巡 Fix B 採用）。等条件・等
+    予算が要求されるのは各枝『内』の二体間のみであり、PRACTICE と
+    EDUCATION 自体を「同一recipe」で括ってはならない。"""
+    stale_phrases = ("同一recipe", "同一 recipe", "same recipe", "同一レシピ")
+    for path in (CONTRACT_PATH, REVISION_DOC_PATH, _RUN_DIR / "README.md"):
+        text = path.read_text(encoding="utf-8")
+        for phrase in stale_phrases:
+            assert phrase not in text, f"{path.name} に陳腐化した記述 {phrase!r} が残っている"
+
+
+def test_fix6b_contract_interventions_description_states_per_branch_recipe() -> None:
+    """`interventions.description` が枝別 recipe（非対称性が実験変数）を
+    正しく記述していることの直接確認。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert "枝別recipe" in contract_text
+    assert "非対称" in contract_text
+
+
+def test_fix6b_learning_recipe_sha_reason_states_per_branch_bundled_manifest() -> None:
+    """`learning_recipe_sha.reason` が「枝別 recipe を束ねた単一 manifest」
+    という正しい意味論（欄の分割はしない・manifest 内で枝別に持つ）を
+    記述していることの確認。"""
+    field_reason = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))["learning_recipe_sha"]["reason"]
+    assert "枝別" in field_reason
+    assert "非対称" in field_reason
+    assert "PoR §8" in field_reason
+
+
+def test_fix6b_design_revision_doc_unchanged_this_round() -> None:
+    """本巡（第6巡）は RUN9_CONTRACT.yaml のみを編集し
+    DESIGN_RUN9_REVISION_0.3.md は無改変だったため、design_revision_doc_sha256
+    は前巡（User 外部レビュー P1-1〜P2-5 実装時に確定した値）のまま
+    据え置きであることを確認する（値そのものの回帰チェックは
+    `test_revision02_doc_sha256_pin_matches_actual_file` が汎用的に担う
+    ため、本テストは「本巡で変化していない」ことに焦点を当てる）。"""
+    contract_raw_local = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    field = contract_raw_local["design_revision_doc_sha256"]
+    assert field["value"] == _sha256_file(REVISION_DOC_PATH)

@@ -1015,6 +1015,18 @@ def validate_branch_write_policy_manifest(data: Mapping[str, Any]) -> None:
 SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST = "run9-practice-audio-split-manifest/1.0"
 SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST = "run9-education-technique-lesson-manifest/1.0"
 
+# rev 0.3（Codex bot レビュー第6巡 Fix A 部分採用）: manifest 実ファイルの
+# 規約パス。`practice_audio_split_manifest_sha` /
+# `education_technique_lesson_manifest_sha` が PINNED へ昇格した際、この
+# パスに置かれた実ファイルの sha256 が pin 値と一致し、かつ
+# `validate_practice_split_manifest()`/`validate_education_lesson_manifest()`
+# を通過することをテスト層が強制する（下記「層分離の境界宣言」参照）。
+# `branch_write_policy.json`（`inputs/branch_write_policy.json`）と同じ
+# 命名規約 — schema 識別子から機械的に導出せず、リポジトリ内の固定配置と
+# して凍結する。
+PRACTICE_MANIFEST_PATH = _THIS_DIR / "inputs" / "practice_audio_split_manifest.json"
+EDUCATION_MANIFEST_PATH = _THIS_DIR / "inputs" / "education_technique_lesson_manifest.json"
+
 # PoR §12 + User 外部レビュー PR #317 P1-2 修正指示4の逐語項目を機械可読
 # キー名へ写した最低要件（practice split manifest）。
 PRACTICE_MANIFEST_REQUIRED_KEYS: Tuple[str, ...] = (
