@@ -3974,7 +3974,7 @@ def test_phase3_identity_metric_space_file_exists_and_is_valid_json() -> None:
     assert IDENTITY_METRIC_SPACE_PATH.exists()
     data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
     assert data["schema"] == "run9-identity-metric-space/1.2"
-    assert data["metric_version"] == "run9-identity-metric/0.4"
+    assert data["metric_version"] == "run9-identity-metric/0.5"
     m.validate_identity_metric_space_manifest(data)  # raises on any shape defect
 
 
@@ -5620,10 +5620,12 @@ def test_fix32_worked_example_uses_d_c1_p50_key_not_d_c1_p95() -> None:
 
 def test_fix32_metric_version_bumped_to_0_4() -> None:
     """C1 ゲートの校正規則変更（式は不変だが判定意味論が変わる）に伴い
-    metric_version が run9-identity-metric/0.4 へ bump されていることを
-    確認する（Fix 25/28 と同型の「校正規則変更 = metric の意味変更」判断）。"""
+    metric_version が run9-identity-metric/0.3 から 0.4 へ bump された歴史的
+    事実を確認する（現行値は第15巡 Fix 35 の入力正規化導入でさらに 0.5 へ
+    進んでいるため、ここでは 0.3 への逆行がないことのみを confirm し、現行の
+    正確な値は `test_fix35_metric_version_bumped_to_0_5` が担う）。"""
     data = _valid_metric_space_doc()
-    assert data["metric_version"] == "run9-identity-metric/0.4"
+    assert data["metric_version"] != "run9-identity-metric/0.3"
 
 
 def test_fix32_d_c1_population_binds_p50_to_percentile_method_by_reference() -> None:
@@ -6023,3 +6025,178 @@ def test_fix34_domain_metric_space_sha_differs_from_pre_round14_value() -> None:
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
     old_pre_round14_sha = "747113488043b944587eb7de1cf7f175193178e9ba6fbe034c90646b54a1e7d1"
     assert domain_raw["metric_space_sha"] != old_pre_round14_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第15巡 Fix 35（P1）: PJS コーパスの metric
+# sample rate への決定論的正規化。corpus_inventory_pjs.json によれば PJS の
+# 203 WAV は全て 48000 Hz である一方、旧 extraction_procedure.sample_rate は
+# 44100 Hz を pin するのみで再サンプル手続きが存在せず、WORLD をネイティブ
+# 適用すればスペクトル bin の対応周波数が食い違い、未凍結の再サンプルなら
+# 実装者間で結果が再現不能になる（いずれの経路でも confuser_control の
+# d_pjs(r) が壊れる）。着手前調査で引用一次ソース donor_bank.py:190-196
+# analyze_donor_world() が内部リサンプルを行わないことを確認したうえで、
+# extraction_procedure.sample_rate_normalization（scipy.signal.resample_poly
+# による 44100/48000 の既約有理比変換）を新規に決定論的 pin した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix35_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix35_metric_version_bumped_to_0_5() -> None:
+    """入力正規化ステップの導入（feature 値を変え得る抽出手続きの意味追加）
+    に伴い metric_version が run9-identity-metric/0.5 へ bump されている
+    ことを確認する（Fix 25/28/32 と同型の「抽出手続き変更 = metric の意味
+    変更」判断）。"""
+    data = _valid_metric_space_doc()
+    assert data["metric_version"] == "run9-identity-metric/0.5"
+
+
+def test_fix35_schema_unchanged_at_1_2() -> None:
+    """sample_rate_normalization の追加は extraction_procedure 配下に収まる
+    キー追加のため schema は run9-identity-metric-space/1.2 のまま据え置き
+    であることを確認する。"""
+    data = _valid_metric_space_doc()
+    assert data["schema"] == "run9-identity-metric-space/1.2"
+
+
+def test_fix35_extraction_procedure_sample_rate_normalization_present_with_required_keys() -> None:
+    data = _valid_metric_space_doc()
+    sample_rate_normalization = data["extraction_procedure"]["sample_rate_normalization"]
+    assert set(sample_rate_normalization.keys()) == {
+        "role", "investigation_finding", "rule", "applies_to", "procedure_only",
+    }
+
+
+def test_fix35_sample_rate_normalization_rule_states_deterministic_ratio() -> None:
+    data = _valid_metric_space_doc()
+    rule = data["extraction_procedure"]["sample_rate_normalization"]["rule"]
+    assert "resample_poly(x, up=147, down=160)" in rule
+    assert "147/160" in rule
+
+
+def test_fix35_sample_rate_normalization_applies_to_states_general_rule_not_pjs_specific() -> None:
+    data = _valid_metric_space_doc()
+    applies_to = data["extraction_procedure"]["sample_rate_normalization"]["applies_to"]
+    assert "あらゆる入力" in applies_to
+    assert "PJS corpus に限定しない" in applies_to
+
+
+def test_fix35_sample_rate_normalization_investigation_finding_states_no_fixed_sr_load() -> None:
+    """着手前調査の実測結果（参照実装に固定 sr ロードが無い）が記録されて
+    いることの直接確認。"""
+    data = _valid_metric_space_doc()
+    finding = data["extraction_procedure"]["sample_rate_normalization"]["investigation_finding"]
+    assert "donor_bank.py" in finding
+    assert "analyze_donor_world" in finding
+
+
+def test_fix35_pjs_reference_definition_cross_references_sample_rate_normalization() -> None:
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "sample_rate_normalization" in pjs_reference_definition
+
+
+def test_fix35_validator_rejects_sample_rate_normalization_deletion() -> None:
+    """旧「変換規則なし」状態への逆行拒否の直接確認。"""
+    doc = _valid_metric_space_doc()
+    del doc["extraction_procedure"]["sample_rate_normalization"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_sample_rate_normalization_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"sample_rate_normalization has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_sample_rate_normalization_missing_key() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["extraction_procedure"]["sample_rate_normalization"]["procedure_only"]
+    with pytest.raises(
+        m.Run9ValidationError, match=r"sample_rate_normalization missing required key.*procedure_only"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_rule_missing_ratio_call_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
+        "native sr が 44100 Hz と異なる入力は、適切にリサンプルして 44100 Hz へ変換する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="must state the deterministic rational-ratio resample call"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_rule_missing_ratio_fraction_marker() -> None:
+    """有理比呼び出しの up/down 数値は書かれているが 147/160 表記が欠落する
+    repin を拒否する（部分一致だけでは決定論性の主張として不十分）。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
+        "native sr が 44100 Hz と異なる入力は scipy.signal.resample_poly(x, up=147, down=160) "
+        "で 44100 Hz へ変換する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="must state the deterministic rational-ratio resample call"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_applies_to_missing_general_rule_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["applies_to"] = (
+        "PJS corpus に限定しない一般規則。native 44.1kHz の入力は変換不要。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="sample_rate_normalization.applies_to must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_applies_to_missing_not_pjs_specific_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["applies_to"] = (
+        "native sr ≠ 44100 Hz のあらゆる入力に適用する一般規則。native 44.1kHz の入力は変換不要。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="sample_rate_normalization.applies_to must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_pjs_reference_definition_missing_sample_rate_normalization_marker() -> (
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は expanded_corpus_identity_sha256 が pin する PJS expanded corpus 内の"
+        "全ファイルを相対パスの辞書順で列挙し、extraction_procedure と identity_feature"
+        "（voiced_mask 除外込み）を適用し、feature ベクトルを要素ごとの算術平均で集約する。"
+        "事後選択は構造的に不可能。事前登録手続きとして artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="pjs_reference_definition must cross-reference"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 35 の sample_rate_normalization 追加後、
+    `metric_space_sha` は正規形 sha256 と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix35_domain_metric_space_sha_differs_from_pre_round15_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 35（第15巡）の改訂により
+    metric_space_sha が Fix 34 時点（第14巡）の旧値から更新されていることを
+    確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round15_sha = "7eef67beab1028f205c292a89f84aeab5d042862152284362a0a189d69722283"
+    assert domain_raw["metric_space_sha"] != old_pre_round15_sha

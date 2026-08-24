@@ -1366,7 +1366,7 @@ _REFERENCE_EXAMPLE_PROCEDURE_ONLY_STATUS = "PROCEDURE_ONLY_VALUE_RECORDED_IN_POS
 
 _EXTRACTION_PROCEDURE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "f0_estimation", "frame_period_ms", "frame_period_source", "spectral_envelope",
-    "fft_size_rule", "voiced_mask", "sample_rate", "log_transform",
+    "fft_size_rule", "voiced_mask", "sample_rate", "sample_rate_normalization", "log_transform",
 })
 
 _F0_ESTIMATION_REQUIRED_STR_KEYS: Tuple[str, ...] = ("algorithm", "call", "note")
@@ -1374,6 +1374,35 @@ _SPECTRAL_ENVELOPE_REQUIRED_STR_KEYS: Tuple[str, ...] = ("algorithm", "call", "p
 _VOICED_MASK_REQUIRED_STR_KEYS: Tuple[str, ...] = ("definition", "source")
 _SAMPLE_RATE_REQUIRED_STR_KEYS: Tuple[str, ...] = ("policy", "source", "distinct_from_donor_bank_sr")
 _LOG_TRANSFORM_REQUIRED_STR_KEYS: Tuple[str, ...] = ("formula", "source")
+
+# Codex bot レビュー PR #318 第15巡 Fix 35 採用（P1）: PJS コーパスの metric
+# sample rate への決定論的正規化。corpus_inventory_pjs.json によれば PJS の
+# 203 WAV は全て 48000 Hz である一方、旧 extraction_procedure.sample_rate は
+# 44100 Hz を pin するのみで再サンプル手続きが無く、WORLD をネイティブ適用
+# すればスペクトル bin の対応周波数が食い違い、未凍結の再サンプルなら実装者
+# 間で結果が再現不能になる、いずれの経路でも confuser_control の d_pjs(r)
+# が壊れていた（identity_metric_space.json 旧136行付近）。着手前調査:
+# feature_extractor.reference_implementation が引用する donor_bank.py:190-196
+# analyze_donor_world(x, sr, ...) は x/sr を引数で受け取るだけで内部リサンプル
+# を一切行わない（固定 44100Hz ロード経路は存在しない）。唯一の実装済みロード
+# 経路 load_donor_24k_bytes() は soundfile 直読み + scipy.signal.resample_poly
+# による有理比変換（44100→24000、up=80/down=147）だが対象は vocadito ドナー・
+# 目標レートも 24000Hz で RUN9 の対象（目標 44100Hz）とは別物。よって本節が
+# 新規に scipy.signal.resample_poly(x, up=147, down=160)（44100/48000 の
+# 既約有理比、window は scipy 既定 Kaiser を明示採用）を決定論的変換規則
+# として manifest 側に pin する（donor_bank.py 自体の変更はこの PR の範囲外）。
+_SAMPLE_RATE_NORMALIZATION_REQUIRED_STR_KEYS: Tuple[str, ...] = (
+    "role", "investigation_finding", "rule", "applies_to", "procedure_only",
+)
+# rule の決定論性マーカー: 明示的な有理比（resample_poly の up/down 呼び出し
+# 形式）が現れていることを要求する — 暗黙のライブラリ既定 sr 変換への逆行
+# （ratio 未指定のまま「適切にリサンプルする」等の曖昧な記述）を拒否する。
+_SAMPLE_RATE_NORMALIZATION_RATIO_CALL_MARKER = "resample_poly(x, up=147, down=160)"
+_SAMPLE_RATE_NORMALIZATION_RATIO_FRACTION_MARKER = "147/160"
+# applies_to の一般規則性マーカー: 変換規則が PJS 特例ではなく「native sr ≠
+# 44100 のあらゆる入力」に適用される一般規則であることの明文を要求する。
+_SAMPLE_RATE_NORMALIZATION_GENERAL_RULE_MARKER = "あらゆる入力"
+_SAMPLE_RATE_NORMALIZATION_NOT_PJS_SPECIFIC_MARKER = "PJS corpus に限定しない"
 
 _CALIBRATION_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "status", "note", "distance_unit", "freeze_threshold", "validity_gates",
@@ -1553,6 +1582,13 @@ _PJS_REFERENCE_DEFINITION_POST_HOC_SELECTION_IMPOSSIBLE_MARKER = "事後選択"
 # 旧フレーズ自体）が再出現しないことを機械強制する（Fix 30 の旧矛盾文言
 # 逆行拒否と同型の規律）。
 _PJS_REFERENCE_DEFINITION_OLD_SINGLE_TAKE_REGRESSION_MARKER = "単一の参照レンダー"
+
+# Codex bot レビュー PR #318 第15巡 Fix 35 採用（P1）: pjs_reference_definition
+# の③特徴計算クローズが、extraction_procedure.sample_rate_normalization が
+# 定める入力正規化ステップ（native 48000Hz の PJS 全203 WAV を 44100Hz へ
+# 決定論的変換してから特徴計算する）を参照していることを要求する — この
+# 相互参照が欠けると PJS 特徴計算が sample rate 不一致のまま行われ得る。
+_PJS_REFERENCE_DEFINITION_SAMPLE_RATE_NORMALIZATION_REF_MARKER = "sample_rate_normalization"
 
 _CALIBRATION_WORKED_EXAMPLE_STR_KEYS: Tuple[str, ...] = (
     "disclaimer", "theta_cal_derivation", "c1_gate_result", "positive_reference_gate_result",
@@ -1939,6 +1975,43 @@ def _validate_extraction_procedure(data: Any) -> None:
         allowed_keys=frozenset(required_sample_rate_keys),
     )
 
+    # Fix 35: sample_rate_normalization — native sr ≠ 44100 Hz の入力（PJS
+    # corpus 等）への決定論的変換規則の存在・決定論性・一般規則性を機械
+    # 強制する。旧「変換規則なし」状態（本キー欠落）は
+    # _EXTRACTION_PROCEDURE_REQUIRED_KEYS の必須キー化により既に拒否される。
+    sample_rate_normalization = _require_dict(
+        extraction["sample_rate_normalization"], field="extraction_procedure.sample_rate_normalization"
+    )
+    _validate_nested_str_keys(
+        sample_rate_normalization,
+        field="extraction_procedure.sample_rate_normalization",
+        keys=_SAMPLE_RATE_NORMALIZATION_REQUIRED_STR_KEYS,
+    )
+    sr_norm_rule = sample_rate_normalization["rule"]
+    if (
+        _SAMPLE_RATE_NORMALIZATION_RATIO_CALL_MARKER not in sr_norm_rule
+        or _SAMPLE_RATE_NORMALIZATION_RATIO_FRACTION_MARKER not in sr_norm_rule
+    ):
+        raise Run9ValidationError(
+            "extraction_procedure.sample_rate_normalization.rule must state the deterministic "
+            f"rational-ratio resample call (expected both {_SAMPLE_RATE_NORMALIZATION_RATIO_CALL_MARKER!r} "
+            f"and {_SAMPLE_RATE_NORMALIZATION_RATIO_FRACTION_MARKER!r} to appear — an implicit or "
+            "unspecified resample procedure would make results reproducible only by accident), "
+            f"got {sr_norm_rule!r} (Codex bot レビュー PR #318 第15巡 Fix 35)"
+        )
+    sr_norm_applies_to = sample_rate_normalization["applies_to"]
+    for marker in (
+        _SAMPLE_RATE_NORMALIZATION_GENERAL_RULE_MARKER,
+        _SAMPLE_RATE_NORMALIZATION_NOT_PJS_SPECIFIC_MARKER,
+    ):
+        if marker not in sr_norm_applies_to:
+            raise Run9ValidationError(
+                f"extraction_procedure.sample_rate_normalization.applies_to must state {marker!r} "
+                "(Codex bot レビュー PR #318 第15巡 Fix 35 — the conversion rule must be a general "
+                "rule for any input whose native sr differs from 44100 Hz, not a PJS-only special "
+                f"case), got {sr_norm_applies_to!r}"
+            )
+
     log_transform = _require_dict(extraction["log_transform"], field="extraction_procedure.log_transform")
     required_log_keys = set(_LOG_TRANSFORM_REQUIRED_STR_KEYS) | {"floor_value"}
     unknown_log = set(log_transform.keys()) - required_log_keys
@@ -2230,6 +2303,18 @@ def _validate_confuser_control_section(data: Any) -> None:
                 "statement that post-hoc PJS-take selection is structurally impossible), "
                 f"got {pjs_reference_definition!r}"
             )
+    # Fix 35: ③特徴計算クローズが extraction_procedure.sample_rate_normalization
+    # を参照していることを要求する（PJS の native 48000Hz を 44100Hz へ変換
+    # してから特徴計算する手続きとの相互参照の欠落を拒否する）。
+    if _PJS_REFERENCE_DEFINITION_SAMPLE_RATE_NORMALIZATION_REF_MARKER not in pjs_reference_definition:
+        raise Run9ValidationError(
+            "confuser_control.pjs_reference_definition must cross-reference "
+            f"{_PJS_REFERENCE_DEFINITION_SAMPLE_RATE_NORMALIZATION_REF_MARKER!r} (Codex bot レビュー "
+            "PR #318 第15巡 Fix 35 — feature computation over the PJS corpus must apply the "
+            "extraction_procedure.sample_rate_normalization input-normalization step first, since "
+            "PJS's native sample rate (48000 Hz) differs from the pinned metric sample rate "
+            f"(44100 Hz)), got {pjs_reference_definition!r}"
+        )
 
     evaluation = confuser["evaluation"]
     if _CONFUSER_CONTROL_EVALUATION_NO_AGGREGATE_SCORE_MARKER not in evaluation:
@@ -2251,8 +2336,25 @@ def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
     """`inputs/identity_metric_space.json`（`run9-identity-metric-space/1.2`）
     の閉じた形状を検証する（Codex bot レビュー PR #318 第6巡 Fix 19、
     第7巡 Fix 20/Fix 21、第9巡 Fix 23/Fix 24、第11巡 Fix 28、
-    第12巡 Fix 29/Fix 30/Fix 31、第13巡 Fix 32/Fix 33、第14巡 Fix 34 で
-    拡張）。
+    第12巡 Fix 29/Fix 30/Fix 31、第13巡 Fix 32/Fix 33、第14巡 Fix 34、
+    第15巡 Fix 35 で拡張）。
+
+    第15巡 Fix 35（P1）: PJS コーパスの metric sample rate への決定論的
+    正規化。corpus_inventory_pjs.json によれば PJS の203 WAVは全て48000Hzで
+    あり、旧 extraction_procedure.sample_rate は44100Hzを pin するのみで
+    再サンプル手続きが存在しなかった（WORLDネイティブ適用ならbin対応周波数
+    が食い違い、未凍結の再サンプルなら実装者間で再現不能になる、いずれの
+    経路でも confuser_control の d_pjs(r) が壊れる）。着手前調査の結果、
+    引用一次ソース donor_bank.py:190-196 analyze_donor_world() は内部で
+    固定 sr ロードを行わないことを確認し、新規に
+    extraction_procedure.sample_rate_normalization
+    （scipy.signal.resample_poly(x, up=147, down=160) — 44100/48000 の
+    既約有理比、window は scipy 既定 Kaiser を明示採用）を decisive な
+    決定論的変換規則として pin した。native sr が既に44100Hzの入力
+    （P0 identity probe founder render 等）は恒等（無変換）。PJS 特例では
+    なく「native sr ≠ 44100Hz のあらゆる入力」に適用する一般規則である旨も
+    明文化した。confuser_control.pjs_reference_definition の③特徴計算
+    クローズにもこの入力正規化ステップへの相互参照を追記した。
 
     第14巡 Fix 34（P1）: pjs_reference の学習前決定論的凍結。旧
     `confuser_control.pjs_reference_definition` は「事前登録手続きで単一の
