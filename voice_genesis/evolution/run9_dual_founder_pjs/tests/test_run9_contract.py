@@ -5227,3 +5227,91 @@ def test_fix27_domain_metric_space_sha_matches_recomputed_canonical_form() -> No
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
     metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
     assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第11巡 Fix 28（P1）: 校正距離を
+# identity_feature.level_normalization が定義する正規化 feature 基準へ統一
+# する。旧 calibration.distance_unit.formula は feature 定義がゲイン不変
+# （Fix 25）になった後も raw な mean_voiced_log_sp ベクトルへ直接 Euclidean
+# を適用しており、ハーネスが pin どおりに計算すると dynamics のみのゲイン
+# 変化が再び STABLE/SHIFTED を反転させ得た（metric_version 0.3 のゲイン
+# 不変の主張と矛盾）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix28_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix28_distance_unit_formula_uses_normalized_feature_call() -> None:
+    data = _valid_metric_space_doc()
+    formula = data["calibration"]["distance_unit"]["formula"]
+    assert "feature(reference_render(F))" in formula
+    assert "feature(take_i(F))" in formula
+    assert "mean_voiced_log_sp" not in formula
+
+
+def test_fix28_distance_unit_formula_references_level_normalization_definition() -> None:
+    """定義の重複記載ではなく参照で束縛されていることを確認する。"""
+    data = _valid_metric_space_doc()
+    formula = data["calibration"]["distance_unit"]["formula"]
+    assert "level_normalization" in formula
+
+
+def test_fix28_calibration_section_has_no_remaining_raw_vector_reference() -> None:
+    """calibration 節全体を通じて raw な mean_voiced_log_sp への直接参照が
+    残っていないことを確認する（指摘②: 他箇所への残存確認）。"""
+    data = _valid_metric_space_doc()
+    calibration_text = json.dumps(data["calibration"], ensure_ascii=False)
+    assert "mean_voiced_log_sp" not in calibration_text
+
+
+def test_fix28_worked_example_disclaimer_already_notes_normalized_distances() -> None:
+    """worked_example は Fix 25 時点で既に『距離はすべて正規化 feature 間の
+    Euclidean』相当の注記を保持しているため、Fix 28 では追加改訂不要
+    （指摘②の worked_example 免除条件を満たすことの確認）。"""
+    data = _valid_metric_space_doc()
+    disclaimer = data["calibration"]["worked_example"]["disclaimer"]
+    assert "level_normalization" in disclaimer
+    assert "raw ベクトル距離ではない" in disclaimer
+
+
+def test_fix28_validator_rejects_formula_regression_to_raw_vector_distance() -> None:
+    """指摘の再現例そのもの: raw mean_voiced_log_sp ベクトルへの直接
+    Euclidean への逆行を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["distance_unit"]["formula"] = (
+        "d_i(F) = euclidean(mean_voiced_log_sp(reference_render(F)), "
+        "mean_voiced_log_sp(take_i(F)))"
+    )
+    with pytest.raises(m.Run9ValidationError, match="normalized feature"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix28_validator_rejects_formula_missing_level_normalization_reference() -> None:
+    """feature(...) 呼び出し形式であっても、level_normalization への参照が
+    欠落した文言（定義を暗黙のうちに別のものへすり替え得る）は拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["distance_unit"]["formula"] = (
+        "d_i(F) = euclidean(feature(reference_render(F)), feature(take_i(F)))"
+    )
+    with pytest.raises(m.Run9ValidationError, match="level_normalization"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix28_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 28 の formula 改訂後、`metric_space_sha` は
+    `identity_metric_space.json` の正規形 sha256 を再計算した値と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix28_domain_metric_space_sha_differs_from_pre_fix28_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 28 の formula 改訂により
+    metric_space_sha が Fix 27 時点の旧値から更新されていることを確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_fix28_sha = "196de131cbe50ed71e93254ae89175be7c92f878e720dfc3a28b916b2ff2ef62"
+    assert domain_raw["metric_space_sha"] != old_pre_fix28_sha

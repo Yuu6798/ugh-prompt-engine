@@ -1428,6 +1428,18 @@ _POSITIVE_REFERENCE_DEFINITION_MARKERS: Tuple[str, ...] = (
 # どの時点のレンダーかが未指定のまま残るため）。
 _NEGATIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER = "birth probe"
 
+# Codex bot レビュー PR #318 第11巡 Fix 28 採用（P1）: 校正距離を
+# identity_feature.level_normalization が定義する正規化 feature 基準へ
+# 統一する。旧 distance_unit.formula は raw な mean_voiced_log_sp ベクトルへ
+# 直接 Euclidean を適用しており、ハーネスが pin どおりに計算すると
+# dynamics のみのゲイン変化が再び STABLE/SHIFTED を反転させ得た
+# （metric_version 0.3 のゲイン不変の主張と矛盾）。formula が feature(...)
+# 呼び出し形式であること（raw ベクトルへの直接適用への逆行を拒否）と、
+# level_normalization の定義を参照する旨の明文が存在すること（定義の
+# 重複記載ではなく参照で束縛されていること）の2点を機械強制する。
+_DISTANCE_UNIT_FORMULA_FEATURE_CALL_MARKER = "feature("
+_DISTANCE_UNIT_FORMULA_LEVEL_NORMALIZATION_REF_MARKER = "level_normalization"
+
 _CALIBRATION_WORKED_EXAMPLE_STR_KEYS: Tuple[str, ...] = (
     "disclaimer", "theta_cal_derivation", "c1_gate_result", "positive_reference_gate_result",
     "negative_reference_gate_result", "calibration_status_example", "evaluated_render_outcome",
@@ -1523,6 +1535,28 @@ def _validate_calibration_section(data: Any) -> None:
             f"render is not a member of the C0/C1 takes (expected {_REFERENCE_RENDER_NOT_A_TAKE_MARKER!r} "
             f"to appear), got {reference_render_definition_raw!r} (Codex bot レビュー PR #318 第9巡 "
             "Fix 23 — self-comparison zero-distance contamination is forbidden)"
+        )
+    # Fix 28: distance_unit.formula は identity_feature.level_normalization が
+    # 定義する正規化 feature 基準（feature(x)）でなければならない。raw な
+    # mean_voiced_log_sp ベクトルへの直接 Euclidean へ逆行すると、level 正規化
+    # 前のゲイン変化が再び距離へ漏れ込み、metric_version 0.3 のゲイン不変の
+    # 主張と矛盾する。
+    distance_unit_formula = distance_unit["formula"]
+    if _DISTANCE_UNIT_FORMULA_FEATURE_CALL_MARKER not in distance_unit_formula:
+        raise Run9ValidationError(
+            "calibration.distance_unit.formula must be expressed in terms of the normalized "
+            f"feature(...) call (expected {_DISTANCE_UNIT_FORMULA_FEATURE_CALL_MARKER!r} to appear), "
+            f"got {distance_unit_formula!r} (Codex bot レビュー PR #318 第11巡 Fix 28 — regressing to "
+            "a raw mean_voiced_log_sp vector distance lets dynamics-only gain changes flip "
+            "STABLE/SHIFTED again)"
+        )
+    if _DISTANCE_UNIT_FORMULA_LEVEL_NORMALIZATION_REF_MARKER not in distance_unit_formula:
+        raise Run9ValidationError(
+            "calibration.distance_unit.formula must reference identity_feature.level_normalization's "
+            f"definition of feature(x) (expected "
+            f"{_DISTANCE_UNIT_FORMULA_LEVEL_NORMALIZATION_REF_MARKER!r} to appear), got "
+            f"{distance_unit_formula!r} (Codex bot レビュー PR #318 第11巡 Fix 28 — bind by reference "
+            "rather than redefining feature(x) here)"
         )
 
     freeze_threshold = _require_dict(calibration["freeze_threshold"], field="calibration.freeze_threshold")
@@ -1895,7 +1929,14 @@ def _validate_reference_example(data: Any) -> None:
 def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
     """`inputs/identity_metric_space.json`（`run9-identity-metric-space/1.1`）
     の閉じた形状を検証する（Codex bot レビュー PR #318 第6巡 Fix 19、
-    第7巡 Fix 20/Fix 21、第9巡 Fix 23/Fix 24 で拡張）。
+    第7巡 Fix 20/Fix 21、第9巡 Fix 23/Fix 24、第11巡 Fix 28 で拡張）。
+
+    第11巡 Fix 28（P1）: calibration.distance_unit.formula が
+    identity_feature.level_normalization の定義する正規化 feature(x) 基準で
+    あることを機械強制する。raw な mean_voiced_log_sp ベクトルへの直接
+    Euclidean へ逆行すると、level 正規化前のゲイン変化が dynamics のみの
+    変化でも再び距離へ漏れ込み、metric_version 0.3 のゲイン不変の主張と
+    矛盾する。
 
     第9巡 Fix 23（P1）: reference_render(F) が C0/C1 母集団に属するか
     （自己比較ゼロ距離混入）が未凍結だった指摘を、`d_c0_population`/
