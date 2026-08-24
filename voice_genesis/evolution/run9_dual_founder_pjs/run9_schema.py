@@ -1049,6 +1049,66 @@ _MANIFEST_REQUIRED_TRUE_KEYS: FrozenSet[str] = frozenset({
     "identical_lesson_bytes_across_founders",
 })
 
+# rev 0.3（User 外部レビュー PR #317 P1-2 → Codex bot レビュー第4巡 Fix A
+# 採用）: manifest 必須欄のうち `_sha256` 終端キーは値整形式（64hex）まで
+# 強制する。第1〜3巡実装は presence-only（キーが存在するかどうか）しか
+# 検証しておらず、「builder が不完全 artifact を出しても byte-hash だけで
+# PINNED contract が作れ、使用可能な素材ゼロで READY に至る」偽成功経路が
+# validator 層で閉じていなかった。
+_PRACTICE_MANIFEST_SHA256_KEYS: FrozenSet[str] = frozenset({
+    "pjs_source_archive_sha256", "expanded_corpus_identity_sha256",
+    "training_split_sha256", "validation_split_sha256",
+    "sealed_holdout_sha256", "row_order_sha256",
+})
+_EDUCATION_MANIFEST_SHA256_KEYS: FrozenSet[str] = frozenset({
+    "training_technique_lesson_sha256", "validation_technique_lesson_sha256",
+})
+
+# `sealed_holdout_technique_release_policy` の閉じた語彙（Codex bot レビュー
+# 第4巡 Fix A 採用）: PoR §12「sealed holdout Technique は学習終了後に
+# 開封」— 正当な release policy は「training 完了後にのみ開封する」の
+# 1値のみであり、他の値（例: 学習中の早期開封を許すもの）は PoR の holdout
+# 規律に反するため存在させない。将来別の正当な policy が追加される場合は
+# 本タプルを拡張する（新しい design_revision を要する設計判断）。
+EDUCATION_SEALED_HOLDOUT_RELEASE_POLICIES: Tuple[str] = ("RELEASE_AFTER_TRAINING_COMPLETE",)
+
+
+def _require_nonempty_str(value: Any, *, manifest_kind: str, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise Run9ValidationError(
+            f"{manifest_kind}.{field} must be a non-empty string, got {value!r}"
+        )
+    return value
+
+
+def _require_manifest_sha256_hex(value: Any, *, manifest_kind: str, field: str) -> str:
+    if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
+        raise Run9ValidationError(
+            f"{manifest_kind}.{field} must be exactly 64 lowercase hex characters (sha256 format), "
+            f"got {value!r}"
+        )
+    return value
+
+
+def _require_nonempty_str_list(value: Any, *, manifest_kind: str, field: str) -> List[str]:
+    if not isinstance(value, list) or not value:
+        raise Run9ValidationError(
+            f"{manifest_kind}.{field} must be a non-empty list, got {value!r}"
+        )
+    for i, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise Run9ValidationError(
+                f"{manifest_kind}.{field}[{i}] must be a non-empty string, got {item!r}"
+            )
+    return value
+
+
+def _require_manifest_hash_fields(
+    data: Mapping[str, Any], *, hash_keys: FrozenSet[str], manifest_kind: str
+) -> None:
+    for key in hash_keys:
+        _require_manifest_sha256_hex(data[key], manifest_kind=manifest_kind, field=key)
+
 
 def _require_disjoint_row_id_sets(
     *, training: Any, validation: Any, sealed_holdout: Any, manifest_kind: str
@@ -1056,11 +1116,27 @@ def _require_disjoint_row_id_sets(
     """training/validation/sealed_holdout の row id 集合が互いに素で
     あることを検証する（User 外部レビュー PR #317 P1-2 必須テスト
     「holdout が training 集合へ混入した manifest を拒否」の実装）。
-    3集合いずれも list であることを先に強制する。"""
-    for name, value in (("training", training), ("validation", validation), ("sealed_holdout", sealed_holdout)):
-        if not isinstance(value, list):
+    3集合いずれも**非空** list であることを先に強制する（Codex bot レビュー
+    第4巡 Fix A 採用: 3 split 全空の manifest — 使用可能な素材ゼロ — が
+    disjoint 検査自体は素通しで通過してしまっていた）。
+
+    disjoint 検査の前に、各 split 内で重複 row ID が無いことを強制する
+    （Codex bot レビュー第4巡 Fix B 採用）: `set(training)` への変換は
+    重複を黙って握り潰すため、`["r1","r1","r2"]` のような list を
+    そのまま消費するハーネスが同一 row を複数回学習/評価し、gain 推定を
+    汚す経路が閉じていなかった。
+    """
+    splits: Dict[str, List[Any]] = {"training": training, "validation": validation, "sealed_holdout": sealed_holdout}
+    for name, value in splits.items():
+        _require_nonempty_str_list(value, manifest_kind=manifest_kind, field=f"row_ids.{name}")
+    for name, value in splits.items():
+        if len(value) != len(set(value)):
+            seen: set = set()
+            duplicates = sorted({v for v in value if v in seen or seen.add(v)})
             raise Run9ValidationError(
-                f"{manifest_kind}.row_ids.{name} must be a list, got {type(value).__name__}"
+                f"{manifest_kind}.row_ids.{name} contains duplicate row id(s): {duplicates} — "
+                "duplicate entries would be silently collapsed by set-based dedup while an "
+                "order-preserving harness would still consume the row multiple times"
             )
     training_set, validation_set, holdout_set = set(training), set(validation), set(sealed_holdout)
     overlap_th = training_set & holdout_set
@@ -1137,6 +1213,18 @@ def validate_practice_split_manifest(data: Mapping[str, Any]) -> None:
             raise Run9ValidationError(
                 f"practice split manifest.{key} must be exactly True, got {data[key]!r}"
             )
+    # Codex bot レビュー第4巡 Fix A 採用: hash 系欄の値整形式（64hex）・
+    # sample_inventory / rights_source_class の非空検査を presence-only
+    # 検査に追加する。
+    _require_manifest_hash_fields(
+        data, hash_keys=_PRACTICE_MANIFEST_SHA256_KEYS, manifest_kind="practice split manifest"
+    )
+    _require_nonempty_str_list(
+        data["sample_inventory"], manifest_kind="practice split manifest", field="sample_inventory"
+    )
+    _require_nonempty_str(
+        data["rights_source_class"], manifest_kind="practice split manifest", field="rights_source_class"
+    )
     # Founder 分岐構造の検査を disjoint 検査より先に行う（Founder ごとに
     # 異なる split を与える構造そのものが最上位の欠陥であり、その場合
     # row_ids.training 等が期待形でないのは当然の帰結に過ぎない — エラー
@@ -1178,6 +1266,18 @@ def validate_education_lesson_manifest(data: Mapping[str, Any]) -> None:
             raise Run9ValidationError(
                 f"education lesson manifest.{key} must be exactly True, got {data[key]!r}"
             )
+    # Codex bot レビュー第4巡 Fix A 採用: lesson hash 群の値整形式（64hex）
+    # + sealed_holdout_technique_release_policy の閉じた語彙検証を
+    # presence-only 検査に追加する。
+    _require_manifest_hash_fields(
+        data, hash_keys=_EDUCATION_MANIFEST_SHA256_KEYS, manifest_kind="education lesson manifest"
+    )
+    release_policy = data["sealed_holdout_technique_release_policy"]
+    if release_policy not in EDUCATION_SEALED_HOLDOUT_RELEASE_POLICIES:
+        raise Run9ValidationError(
+            "education lesson manifest.sealed_holdout_technique_release_policy must be one of "
+            f"{list(EDUCATION_SEALED_HOLDOUT_RELEASE_POLICIES)}, got {release_policy!r}"
+        )
     _reject_per_founder_split_structure(data, manifest_kind="education lesson manifest")
 
 

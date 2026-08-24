@@ -3136,7 +3136,7 @@ def _valid_education_manifest() -> Dict[str, Any]:
         "schema": m.SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST,
         "training_technique_lesson_sha256": "a" * 64,
         "validation_technique_lesson_sha256": "b" * 64,
-        "sealed_holdout_technique_release_policy": "release_after_training_complete",
+        "sealed_holdout_technique_release_policy": m.EDUCATION_SEALED_HOLDOUT_RELEASE_POLICIES[0],
         "excludes_identity_and_trait_donor_info": True,
         "identical_lesson_bytes_across_founders": True,
     }
@@ -3557,3 +3557,158 @@ def test_invariant_existing_codex_fixes_not_regressed(contract_raw: Dict[str, An
     contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
     for stale_phrase in ("新設予定", "新設する想定"):
         assert stale_phrase not in contract_text
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第4巡対応 — Fix A（P1: manifest validator の値
+# 整形式強制） / Fix B（P2: split 内重複 row ID の拒否）
+# ---------------------------------------------------------------------------
+
+
+def test_fix4a_positive_control_manifests_still_pass() -> None:
+    """正常系対照: 整形式を満たす manifest は引き続き通過する。"""
+    m.validate_practice_split_manifest(_valid_practice_manifest())
+    m.validate_education_lesson_manifest(_valid_education_manifest())
+
+
+@pytest.mark.parametrize("key", sorted(m._PRACTICE_MANIFEST_SHA256_KEYS))
+def test_fix4a_practice_manifest_null_hash_rejected(key: str) -> None:
+    manifest = _valid_practice_manifest()
+    manifest[key] = None
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_practice_split_manifest(manifest)
+
+
+@pytest.mark.parametrize("key", sorted(m._PRACTICE_MANIFEST_SHA256_KEYS))
+def test_fix4a_practice_manifest_non_64hex_rejected(key: str) -> None:
+    manifest = _valid_practice_manifest()
+    manifest[key] = "not-a-valid-hex-value"
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_practice_split_manifest(manifest)
+    # 大文字hex（形式は近いが規約外）も拒否される。
+    manifest2 = _valid_practice_manifest()
+    manifest2[key] = "A" * 64
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_practice_split_manifest(manifest2)
+    # 63桁（1桁不足）も拒否される。
+    manifest3 = _valid_practice_manifest()
+    manifest3[key] = "a" * 63
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_practice_split_manifest(manifest3)
+
+
+@pytest.mark.parametrize("key", sorted(m._EDUCATION_MANIFEST_SHA256_KEYS))
+def test_fix4a_education_manifest_null_and_non_64hex_hash_rejected(key: str) -> None:
+    manifest_null = _valid_education_manifest()
+    manifest_null[key] = None
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_education_lesson_manifest(manifest_null)
+
+    manifest_bad = _valid_education_manifest()
+    manifest_bad[key] = "z" * 64
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_education_lesson_manifest(manifest_bad)
+
+
+def test_fix4a_practice_manifest_empty_sample_inventory_rejected() -> None:
+    manifest = _valid_practice_manifest()
+    manifest["sample_inventory"] = []
+    with pytest.raises(m.Run9ValidationError, match="sample_inventory must be a non-empty list"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4a_practice_manifest_sample_inventory_with_blank_entry_rejected() -> None:
+    manifest = _valid_practice_manifest()
+    manifest["sample_inventory"] = ["s1", "   "]
+    with pytest.raises(m.Run9ValidationError, match="sample_inventory"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4a_practice_manifest_empty_rights_source_class_rejected() -> None:
+    manifest = _valid_practice_manifest()
+    manifest["rights_source_class"] = ""
+    with pytest.raises(m.Run9ValidationError, match="rights_source_class must be a non-empty string"):
+        m.validate_practice_split_manifest(manifest)
+    manifest2 = _valid_practice_manifest()
+    manifest2["rights_source_class"] = "   "
+    with pytest.raises(m.Run9ValidationError, match="rights_source_class must be a non-empty string"):
+        m.validate_practice_split_manifest(manifest2)
+
+
+@pytest.mark.parametrize("split_name", ["training", "validation", "sealed_holdout"])
+def test_fix4a_practice_manifest_single_empty_split_rejected(split_name: str) -> None:
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"][split_name] = []
+    with pytest.raises(m.Run9ValidationError, match=f"row_ids.{split_name} must be a non-empty list"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4a_practice_manifest_all_three_splits_empty_rejected() -> None:
+    """必須負例テスト「3 split 全空」: 使用可能な素材ゼロの manifest が
+    disjoint 検査（空集合同士は自明に素）だけでは検出できず素通り
+    していた欠陥の是正確認。"""
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"] = {"training": [], "validation": [], "sealed_holdout": []}
+    with pytest.raises(m.Run9ValidationError, match="must be a non-empty list"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4a_education_manifest_invalid_release_policy_rejected() -> None:
+    manifest = _valid_education_manifest()
+    manifest["sealed_holdout_technique_release_policy"] = "RELEASE_IMMEDIATELY"
+    with pytest.raises(
+        m.Run9ValidationError, match="sealed_holdout_technique_release_policy must be one of"
+    ):
+        m.validate_education_lesson_manifest(manifest)
+
+
+def test_fix4a_education_manifest_release_policy_wrong_case_rejected() -> None:
+    """閉じた語彙は大文字小文字も含めて厳密一致（旧実装のテストフィクスチャ
+    が使っていた小文字 `"release_after_training_complete"` は本巡で凍結
+    した正典値 `RELEASE_AFTER_TRAINING_COMPLETE` とは別値として拒否される
+    ことの確認 — 値の同一性判定に曖昧さを残さない）。"""
+    manifest = _valid_education_manifest()
+    manifest["sealed_holdout_technique_release_policy"] = "release_after_training_complete"
+    with pytest.raises(
+        m.Run9ValidationError, match="sealed_holdout_technique_release_policy must be one of"
+    ):
+        m.validate_education_lesson_manifest(manifest)
+
+
+def test_fix4a_release_policy_vocabulary_frozen() -> None:
+    assert m.EDUCATION_SEALED_HOLDOUT_RELEASE_POLICIES == ("RELEASE_AFTER_TRAINING_COMPLETE",)
+
+
+# --- Fix B: split 内重複 row ID の拒否 --------------------------------------
+
+
+@pytest.mark.parametrize("split_name", ["training", "validation", "sealed_holdout"])
+def test_fix4b_duplicate_row_id_within_single_split_rejected(split_name: str) -> None:
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"][split_name] = manifest["row_ids"][split_name] + manifest["row_ids"][split_name][:1]
+    with pytest.raises(m.Run9ValidationError, match="contains duplicate row id"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4b_duplicate_row_id_checked_before_overlap_when_both_present() -> None:
+    """重複行 ID と split 間 overlap が同時に存在する manifest でも、
+    重複検査（Fix B）が overlap 検査より先に走り、より根本的な欠陥
+    （同一 split 内の重複）を先に報告する。"""
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"]["training"] = ["r1", "r1"]
+    manifest["row_ids"]["sealed_holdout"] = ["r1"]  # training と overlap もしている
+    with pytest.raises(m.Run9ValidationError, match="contains duplicate row id"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4b_three_duplicate_occurrences_reported_once() -> None:
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"]["training"] = ["r1", "r1", "r1", "r2"]
+    with pytest.raises(m.Run9ValidationError, match=r"\['r1'\]"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4b_no_duplicates_positive_control() -> None:
+    """対照実験: 重複の無い manifest は Fix B の新設検査を素通りする。"""
+    manifest = _valid_practice_manifest()
+    m.validate_practice_split_manifest(manifest)  # 例外を投げないことの確認
