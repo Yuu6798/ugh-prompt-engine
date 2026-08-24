@@ -1110,6 +1110,23 @@ def _require_manifest_hash_fields(
         _require_manifest_sha256_hex(data[key], manifest_kind=manifest_kind, field=key)
 
 
+def _require_no_duplicate_list_items(value: List[Any], *, manifest_kind: str, field: str) -> None:
+    """`value` 内に重複要素が無いことを検証する（Codex bot レビュー第4巡
+    Fix B 採用の row_ids 版を、第5巡 Fix B 採用で `sample_inventory` へも
+    適用できる共有ヘルパへ抽出）。`set(value)` への変換は重複を黙って
+    握り潰すため、`len(value) != len(set(value))` を先行させて重複自体を
+    検出してから、実際に重複した値を報告する。
+    """
+    if len(value) != len(set(value)):
+        seen: set = set()
+        duplicates = sorted({v for v in value if v in seen or seen.add(v)})
+        raise Run9ValidationError(
+            f"{manifest_kind}.{field} contains duplicate value(s): {duplicates} — "
+            "duplicate entries would be silently collapsed by set-based dedup while an "
+            "order-preserving harness would still consume the entry multiple times"
+        )
+
+
 def _require_disjoint_row_id_sets(
     *, training: Any, validation: Any, sealed_holdout: Any, manifest_kind: str
 ) -> None:
@@ -1121,23 +1138,16 @@ def _require_disjoint_row_id_sets(
     disjoint 検査自体は素通しで通過してしまっていた）。
 
     disjoint 検査の前に、各 split 内で重複 row ID が無いことを強制する
-    （Codex bot レビュー第4巡 Fix B 採用）: `set(training)` への変換は
-    重複を黙って握り潰すため、`["r1","r1","r2"]` のような list を
-    そのまま消費するハーネスが同一 row を複数回学習/評価し、gain 推定を
-    汚す経路が閉じていなかった。
+    （Codex bot レビュー第4巡 Fix B 採用、第5巡 Fix B で共有ヘルパへ
+    抽出）: `set(training)` への変換は重複を黙って握り潰すため、
+    `["r1","r1","r2"]` のような list をそのまま消費するハーネスが同一
+    row を複数回学習/評価し、gain 推定を汚す経路が閉じていなかった。
     """
     splits: Dict[str, List[Any]] = {"training": training, "validation": validation, "sealed_holdout": sealed_holdout}
     for name, value in splits.items():
         _require_nonempty_str_list(value, manifest_kind=manifest_kind, field=f"row_ids.{name}")
     for name, value in splits.items():
-        if len(value) != len(set(value)):
-            seen: set = set()
-            duplicates = sorted({v for v in value if v in seen or seen.add(v)})
-            raise Run9ValidationError(
-                f"{manifest_kind}.row_ids.{name} contains duplicate row id(s): {duplicates} — "
-                "duplicate entries would be silently collapsed by set-based dedup while an "
-                "order-preserving harness would still consume the row multiple times"
-            )
+        _require_no_duplicate_list_items(value, manifest_kind=manifest_kind, field=f"row_ids.{name}")
     training_set, validation_set, holdout_set = set(training), set(validation), set(sealed_holdout)
     overlap_th = training_set & holdout_set
     if overlap_th:
@@ -1159,28 +1169,68 @@ def _require_disjoint_row_id_sets(
         )
 
 
+_FOUNDER_ID_KEY_NAME = "founder_id"
+
+
 def _reject_per_founder_split_structure(data: Mapping[str, Any], *, manifest_kind: str) -> None:
-    """manifest が Founder ごとに異なる split/lesson を与える構造
-    （トップレベルまたは row_ids 内に `R9F-01`/`R9F-02` のような
-    founder_id キーを持つ）を拒否する（User 外部レビュー PR #317 P1-2
-    必須テスト「Founder ごとに異なる practice split を与える構造を拒否」
-    の実装）。PoR §12/修正指示は「二体へ同一 bytes・同一順序で提示する」
-    ことを要求しており、manifest 自体が Founder 分岐を持つ時点でこの
-    要求と矛盾する。
+    """manifest が Founder ごとに異なる split/lesson を与える構造を拒否
+    する（User 外部レビュー PR #317 P1-2 必須テスト「Founder ごとに異なる
+    practice split を与える構造を拒否」の実装。Codex bot レビュー第5巡
+    Fix A 採用で検出範囲を拡張）。「manifest は二体共通・単一系列であり
+    founder 分岐構造を持たない」という原則の機械的裏付け — PoR §12/修正
+    指示は「二体へ同一 bytes・同一順序で提示する」ことを要求しており、
+    manifest 自体が Founder 分岐を持つ時点でこの要求と矛盾する。
+
+    2つの独立した規則に分けて実装する（第5巡 Fix A 採用: 従来は
+    `R9F-0[12]` 形式のキーのみを走査しており、`{"founder_id": "R9F-01",
+    ...}` のような**値フィールド**での founder 分岐が素通りしていた）:
+
+    1. **`founder_id` キー自体の禁止**（任意の深さ）: キー名が正確に
+       `"founder_id"` であれば、値の中身に関わらず拒否する。
+       "founder_identity_note" のような接頭辞一致の誤爆を避けるため
+       完全一致のみを対象とする。
+    2. **`R9F-01`/`R9F-02` の完全一致文字列がキーまたは値として現れた
+       場合の禁止**（任意の深さ、dict のキー・値・list の要素いずれも
+       走査）: sample id 等の正当な文字列に founder ID が部分文字列と
+       して含まれる場合の誤爆を避けるため、`_FOUNDER_ID_RE`
+       （`^R9F-0[12]$`）による**完全一致のみ**を対象とし、部分一致
+       （例: `"clip-R9F-01-take3"`）は対象外とする。
     """
+
+    def _is_founder_id_value(value: Any) -> bool:
+        return isinstance(value, str) and bool(_FOUNDER_ID_RE.match(value))
 
     def _scan(node: Any) -> None:
         if isinstance(node, dict):
             for key, value in node.items():
-                if _FOUNDER_ID_RE.match(str(key)):
+                key_str = str(key)
+                if key_str == _FOUNDER_ID_KEY_NAME:
                     raise Run9ValidationError(
-                        f"{manifest_kind} must not branch by founder_id (found {key!r}) — PoR §12 "
-                        "requires identical bytes/order presented to both founders; a manifest "
-                        "with per-founder structure cannot satisfy that"
+                        f"{manifest_kind} must not contain a {_FOUNDER_ID_KEY_NAME!r} key "
+                        f"(found value {value!r}) — manifest は二体共通・単一系列であり founder "
+                        "分岐構造を持たない（PoR §12: 二体へ同一 bytes・同一順序で提示する）"
+                    )
+                if _FOUNDER_ID_RE.match(key_str):
+                    raise Run9ValidationError(
+                        f"{manifest_kind} must not branch by founder_id (found key {key!r}) — "
+                        "manifest は二体共通・単一系列であり founder 分岐構造を持たない（PoR §12: "
+                        "二体へ同一 bytes・同一順序で提示する）"
+                    )
+                if _is_founder_id_value(value):
+                    raise Run9ValidationError(
+                        f"{manifest_kind} must not contain a founder ID as a value (key={key!r}, "
+                        f"value={value!r}) — manifest は二体共通・単一系列であり founder 分岐構造を"
+                        "持たない（PoR §12: 二体へ同一 bytes・同一順序で提示する）"
                     )
                 _scan(value)
         elif isinstance(node, list):
             for item in node:
+                if _is_founder_id_value(item):
+                    raise Run9ValidationError(
+                        f"{manifest_kind} must not contain a founder ID as a list element "
+                        f"(found {item!r}) — manifest は二体共通・単一系列であり founder 分岐構造を"
+                        "持たない（PoR §12: 二体へ同一 bytes・同一順序で提示する）"
+                    )
                 _scan(item)
 
     _scan(data)
@@ -1220,6 +1270,12 @@ def validate_practice_split_manifest(data: Mapping[str, Any]) -> None:
         data, hash_keys=_PRACTICE_MANIFEST_SHA256_KEYS, manifest_kind="practice split manifest"
     )
     _require_nonempty_str_list(
+        data["sample_inventory"], manifest_kind="practice split manifest", field="sample_inventory"
+    )
+    # Codex bot レビュー第5巡 Fix B 採用: row_ids と同じ重複拒否を
+    # sample_inventory にも適用する（重複 sample id は、同一素材が複数回
+    # 数えられた見かけ上のカバレッジ水増しを招く）。
+    _require_no_duplicate_list_items(
         data["sample_inventory"], manifest_kind="practice split manifest", field="sample_inventory"
     )
     _require_nonempty_str(

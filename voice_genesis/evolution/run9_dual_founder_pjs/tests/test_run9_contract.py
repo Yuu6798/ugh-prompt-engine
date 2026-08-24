@@ -3686,7 +3686,7 @@ def test_fix4a_release_policy_vocabulary_frozen() -> None:
 def test_fix4b_duplicate_row_id_within_single_split_rejected(split_name: str) -> None:
     manifest = _valid_practice_manifest()
     manifest["row_ids"][split_name] = manifest["row_ids"][split_name] + manifest["row_ids"][split_name][:1]
-    with pytest.raises(m.Run9ValidationError, match="contains duplicate row id"):
+    with pytest.raises(m.Run9ValidationError, match="contains duplicate value"):
         m.validate_practice_split_manifest(manifest)
 
 
@@ -3697,7 +3697,7 @@ def test_fix4b_duplicate_row_id_checked_before_overlap_when_both_present() -> No
     manifest = _valid_practice_manifest()
     manifest["row_ids"]["training"] = ["r1", "r1"]
     manifest["row_ids"]["sealed_holdout"] = ["r1"]  # training と overlap もしている
-    with pytest.raises(m.Run9ValidationError, match="contains duplicate row id"):
+    with pytest.raises(m.Run9ValidationError, match="contains duplicate value"):
         m.validate_practice_split_manifest(manifest)
 
 
@@ -3711,4 +3711,93 @@ def test_fix4b_three_duplicate_occurrences_reported_once() -> None:
 def test_fix4b_no_duplicates_positive_control() -> None:
     """対照実験: 重複の無い manifest は Fix B の新設検査を素通りする。"""
     manifest = _valid_practice_manifest()
+    m.validate_practice_split_manifest(manifest)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第5巡対応 — Fix A（P2: founder 別構造検出の値
+# 走査） / Fix B（P2: sample_inventory の重複 ID 拒否）
+# ---------------------------------------------------------------------------
+
+
+def test_fix5a_founder_id_key_with_value_record_rejected() -> None:
+    """負例: `{"founder_id": "R9F-01", ...}` のような**値フィールドでの
+    founder 分岐**（第4巡実装ではキー走査のみだったため素通りしていた）。
+    manifest 内の任意の深さに `founder_id` というキー自体が現れたら拒否
+    する。"""
+    manifest = _valid_practice_manifest()
+    manifest["provenance_records"] = [
+        {"founder_id": "R9F-01", "note": "collected for R9F-01"},
+    ]
+    with pytest.raises(m.Run9ValidationError, match="must not contain a 'founder_id' key"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix5a_nested_founder_key_rejected() -> None:
+    """負例: ネスト構造の奥深くに `R9F-01`/`R9F-02` が**キー**として現れた
+    場合の拒否（row_ids 直下だけでなく任意の深さで検出されること）。"""
+    manifest = _valid_practice_manifest()
+    manifest["extra"] = {"nested": {"R9F-02": {"detail": "per-founder override"}}}
+    with pytest.raises(m.Run9ValidationError, match="must not branch by founder_id"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix5a_nested_founder_exact_match_value_rejected() -> None:
+    """負例: ネスト構造の奥深くに `R9F-01`/`R9F-02` が**値**として（dict
+    の value としても list の要素としても）現れた場合の拒否。"""
+    manifest_dict_value = _valid_practice_manifest()
+    manifest_dict_value["extra"] = {"nested": {"target_founder": "R9F-02"}}
+    with pytest.raises(m.Run9ValidationError, match="must not contain a founder ID as a value"):
+        m.validate_practice_split_manifest(manifest_dict_value)
+
+    manifest_list_element = _valid_practice_manifest()
+    manifest_list_element["extra"] = {"applies_to": ["R9F-01"]}
+    with pytest.raises(m.Run9ValidationError, match="must not contain a founder ID as a list element"):
+        m.validate_practice_split_manifest(manifest_list_element)
+
+
+def test_fix5a_education_manifest_founder_value_record_rejected() -> None:
+    """education 側でも同じ拡張検出が効くことの確認。"""
+    manifest = _valid_education_manifest()
+    manifest["provenance"] = {"founder_id": "R9F-02"}
+    with pytest.raises(m.Run9ValidationError, match="must not contain a 'founder_id' key"):
+        m.validate_education_lesson_manifest(manifest)
+
+
+def test_fix5a_substring_containing_founder_id_not_falsely_rejected() -> None:
+    """対照実験（誤爆防止）: sample id 等、founder ID を**部分文字列として
+    含むが完全一致ではない**正当な文字列は拒否されない
+    （完全一致のみを対象とする設計の確認）。"""
+    manifest = _valid_practice_manifest()
+    manifest["sample_inventory"] = ["clip-R9F-01-take3", "s2"]
+    m.validate_practice_split_manifest(manifest)  # 例外を投げないことの確認
+
+    manifest_key = _valid_practice_manifest()
+    manifest_key["extra"] = {"R9F-01_summary": "aggregate note, not a per-founder branch"}
+    m.validate_practice_split_manifest(manifest_key)  # 例外を投げないことの確認
+
+
+def test_fix5a_founder_id_key_prefix_not_falsely_rejected() -> None:
+    """対照実験（誤爆防止）: `founder_id` という完全一致キー名でなければ
+    （例: `founder_identity_note`）拒否されない — 接頭辞一致ではなく
+    キー名の完全一致のみを対象とする設計の確認。"""
+    manifest = _valid_practice_manifest()
+    manifest["founder_identity_note"] = "shared note, not a per-founder branch"
+    m.validate_practice_split_manifest(manifest)  # 例外を投げないことの確認
+
+
+# --- Fix B: sample_inventory の重複 ID 拒否 ----------------------------------
+
+
+def test_fix5b_duplicate_sample_inventory_id_rejected() -> None:
+    manifest = _valid_practice_manifest()
+    manifest["sample_inventory"] = ["s1", "s2", "s1"]
+    with pytest.raises(m.Run9ValidationError, match="sample_inventory contains duplicate value"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix5b_no_duplicate_sample_inventory_positive_control() -> None:
+    """対照実験: 重複の無い sample_inventory は通過する。"""
+    manifest = _valid_practice_manifest()
+    manifest["sample_inventory"] = ["s1", "s2", "s3"]
     m.validate_practice_split_manifest(manifest)  # 例外を投げないことの確認
