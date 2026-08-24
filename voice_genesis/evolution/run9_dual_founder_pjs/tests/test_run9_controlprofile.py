@@ -214,6 +214,34 @@ def test_derive_profile_matches_branch_write_policy_json() -> None:
                     cp.derive_profile(r0, branch, updates)
 
 
+def test_derive_profile_rejects_non_r0_parent_cross_arm_contamination() -> None:
+    """必須テスト（Codex bot レビュー PR #318 第1巡 Fix 1）: r_practice を
+    親に TRANSFER_TECHNIQUE を導出しようとする枝汚染（cross-arm
+    contamination）は拒否される。PoR §4 の all-arms-from-r0 フローの
+    機械強制。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    practiced = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    with pytest.raises(cp.Run9ControlProfileError, match="全枝は r0 から独立分岐する"):
+        cp.derive_profile(practiced, "TRANSFER_TECHNIQUE", {"technique_control": {"y": 2}})
+
+
+def test_derive_profile_rejects_non_r0_parent_for_control_branch_too() -> None:
+    """CONTROL 枝への導出も同じ r0-only 制約を受ける（practiced 済み
+    profile を親に replay/r_sham を導出しようとする経路の拒否）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    practiced = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    with pytest.raises(cp.Run9ControlProfileError, match="全枝は r0 から独立分岐する"):
+        cp.derive_profile(practiced, "CONTROL", {}, control_condition="NO_LEARNING_REPLAY")
+
+
+def test_derive_profile_from_r0_still_succeeds_after_fix1() -> None:
+    """回帰確認: r0 を親とする正規の導出経路は Fix 1 後も引き続き成功する。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(r0, "TRANSFER_TECHNIQUE", {"technique_control": {"phrasing": "legato"}})
+    assert child.revision == "r_taught"
+    assert child.parent_revision == "r0"
+
+
 # ---------------------------------------------------------------------------
 # control_profile_from_dict: 改ざん検出・revision 語彙
 # ---------------------------------------------------------------------------
@@ -271,6 +299,65 @@ def test_control_profile_from_dict_rejects_derived_with_null_parent() -> None:
 
 def test_valid_revisions_matches_branch_revisions_vocabulary() -> None:
     assert set(cp.VALID_REVISIONS) == {"r0", "replay", "r_sham", "r_practice", "r_taught"}
+
+
+# ---------------------------------------------------------------------------
+# control_profile_from_dict: branch↔revision 厳密対応（Codex bot レビュー
+# PR #318 第1巡 Fix 3）
+# ---------------------------------------------------------------------------
+
+
+def test_from_dict_rejects_transfer_technique_branch_with_r_practice_revision() -> None:
+    """必須テスト（Fix 3）: TRANSFER_TECHNIQUE + r_practice の取り違えは
+    拒否される（各フィールド単体では正当でも、組合せとして矛盾する
+    ケース）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    data = child.to_dict()
+    assert data["branch"] == "PRACTICE_FROM_AUDIO" and data["revision"] == "r_practice"
+    data["branch"] = "TRANSFER_TECHNIQUE"  # revision は r_practice のまま取り違える
+    with pytest.raises(cp.Run9ControlProfileError, match="mismatched"):
+        cp.control_profile_from_dict(data)
+
+
+def test_from_dict_rejects_control_branch_with_r_taught_revision() -> None:
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(r0, "TRANSFER_TECHNIQUE", {"technique_control": {"phrasing": "legato"}})
+    data = child.to_dict()
+    data["branch"] = "CONTROL"  # revision は r_taught のまま取り違える
+    with pytest.raises(cp.Run9ControlProfileError, match="mismatched"):
+        cp.control_profile_from_dict(data)
+
+
+def test_from_dict_accepts_all_valid_branch_revision_pairs() -> None:
+    """正例側の網羅回帰: branch↔revision の正当な全組合せは引き続き
+    受理される。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    valid_pairs = [
+        ("PRACTICE_FROM_AUDIO", "r_practice", {"trait_control": {"x": 1}}),
+        ("TRANSFER_TECHNIQUE", "r_taught", {"technique_control": {"y": 2}}),
+    ]
+    for branch, expected_revision, updates in valid_pairs:
+        child = cp.derive_profile(r0, branch, updates)
+        assert child.revision == expected_revision
+        reconstructed = cp.control_profile_from_dict(child.to_dict())
+        assert reconstructed.branch == branch
+    for control_condition, expected_revision in [
+        ("NO_LEARNING_REPLAY", "replay"),
+        ("ZERO_CONTROLPROFILE_SHAM", "r_sham"),
+    ]:
+        c = cp.derive_profile(r0, "CONTROL", {}, control_condition=control_condition)
+        assert c.revision == expected_revision
+        reconstructed = cp.control_profile_from_dict(c.to_dict())
+        assert reconstructed.branch == "CONTROL"
+
+
+def test_valid_revisions_for_branch_r0_is_dedicated_neutral_sentinel() -> None:
+    """`branch=None`（r0 = 出生中立・枝分岐前）は `CONTROL` 枝の一部では
+    なく、r0 専用の扱いとして schema 上明確化されている（Fix 3）。"""
+    assert cp._valid_revisions_for_branch(None) == {"r0"}
+    assert cp._valid_revisions_for_branch("CONTROL") == {"replay", "r_sham"}
+    assert "r0" not in cp._valid_revisions_for_branch("CONTROL")
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +526,54 @@ def test_ledger_c0_and_c1_can_both_be_published_from_same_r0(ledger: cp.Run9Prof
     assert result_c0.created is True
     assert result_c1.created is True
     assert set(ledger.list_profile_ids()) == {r0.profile_id, c0.profile_id, c1.profile_id}
+
+
+# ---------------------------------------------------------------------------
+# Run9ProfileLedger: (voice_id, revision) 一意性（Codex bot レビュー PR #318
+# 第1巡 Fix 4）
+# ---------------------------------------------------------------------------
+
+
+def test_ledger_rejects_second_publish_with_same_tuple_but_different_content(
+    ledger: cp.Run9ProfileLedger,
+) -> None:
+    """必須テスト（Fix 4, a）: 同一 (voice_id, revision) で内容が異なる
+    （= 異なる profile_id を持つ）2 件目の publish は conflict として
+    拒否される。1 件目はファイル名（profile_id）が異なるため既存の
+    `os.link()` 衝突検出には引っかからない — この一意性検証が無ければ
+    静かに両方 publish できてしまっていたはずの経路。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0)
+    first = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    second = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 2}})
+    assert first.voice_id == second.voice_id == "R9F-01"
+    assert first.revision == second.revision == "r_practice"
+    assert first.profile_id != second.profile_id  # 内容が違うので profile_id も違う
+
+    result_first = ledger.write(first)
+    assert result_first.created is True
+
+    with pytest.raises(cp.Run9ProfileLedgerConflictError, match="already has a different profile_id"):
+        ledger.write(second)
+
+    # 拒否された2件目はディスク上に残っていないこと（部分書込み無し）。
+    assert set(ledger.list_profile_ids()) == {r0.profile_id, first.profile_id}
+
+
+def test_ledger_republish_of_same_tuple_same_content_remains_idempotent(
+    ledger: cp.Run9ProfileLedger,
+) -> None:
+    """必須テスト（Fix 4, b）: 同一 (voice_id, revision)・同一内容
+    （= 同一 profile_id）を再 publish しても、Fix 4 の一意性検証は
+    冪等 no-op の経路を壊さない。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0)
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    first = ledger.write(child)
+    second = ledger.write(child)
+    assert first.created is True
+    assert second.created is False
+    assert first.path == second.path
 
 
 # ---------------------------------------------------------------------------

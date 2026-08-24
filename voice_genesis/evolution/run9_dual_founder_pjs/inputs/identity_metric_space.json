@@ -10,12 +10,44 @@
       "value": "0.3.5",
       "source": "voice_genesis/foundry/results_s7/s7_ledger_inputs.json#environment.pyworld",
       "note": "backbone_runtime_bundle.json が参照する RUN6/RUN7 系 provenance chain（results_s7）内に記録された実測 env pin を source として参照する（backbone_runtime_bundle.json 自体には env セクションが無いため、その provenance chain 内の実測記録を辿って引用する — バージョン番号を新規に主張しない）。requirements_run5_pod.lock の pyworld==0.3.5 とも一致（相互確認済み）。"
+    },
+    "reference_implementation": "voice_genesis/foundry/adapter/donor_bank.py:190-196 analyze_donor_world(x, sr, frame_period_ms=FRAME_PERIOD_MS) — 本 repo 内で WORLD (harvest/cheaptrick/d4c) を実際に呼び出す一次ソース実装。RUN9 の抽出手続きはこの関数の呼び出し規約に整合させる（下記 extraction_procedure 参照）。"
+  },
+  "extraction_procedure": {
+    "f0_estimation": {
+      "algorithm": "harvest",
+      "call": "pyworld.harvest(x, sr, frame_period=frame_period_ms)",
+      "note": "f0_floor/f0_ceil は明示指定せず pyworld.harvest() の既定値を使用する（donor_bank.py analyze_donor_world() と同一呼び出し規約 — 独自のパラメータ調整を行わない）。f0 出力自体は identity_feature からは除外するが（f0_exclusion 参照）、voiced_mask の算出には使う。"
+    },
+    "frame_period_ms": 5.0,
+    "frame_period_source": "voice_genesis/foundry/adapter/donor_bank.py#FRAME_PERIOD_MS（= 5.0、analyze_donor_world() の既定引数）と同値を採用。",
+    "spectral_envelope": {
+      "algorithm": "cheaptrick",
+      "call": "pyworld.cheaptrick(x, f0, t, sr)",
+      "parameters": "default",
+      "note": "q1（スペクトル平滑化パラメータ）・f0_floor・fft_size のいずれも明示指定せず、pyworld.cheaptrick() の既定値をそのまま使用する（donor_bank.py analyze_donor_world() と同一呼び出し規約）。RUN9 側で独自にこれらを調整・上書きしない。"
+    },
+    "fft_size_rule": "fft_size は明示指定しない。pyworld.cheaptrick() は fft_size 未指定時、sr（と既定 f0_floor）に依存する内部既定値を自動導出する（WORLD C++ 実装の CheapTrick 既定 FFT サイズ決定規則相当）。RUN9 はこの導出規則を独自に再実装・上書きしない — donor_bank.py の呼び出し（fft_size 引数省略）をそのまま踏襲する。",
+    "voiced_mask": {
+      "definition": "f0 > 0",
+      "source": "voice_genesis/foundry/adapter/donor_bank.py:195 voiced_mask = f0 > 0 と同一定義。"
+    },
+    "sample_rate": {
+      "value_hz": 44100,
+      "policy": "P0 identity probe（Founder render 出力）は 44100 Hz のまま WORLD 分析する — RUN9 側で独自のリサンプルは追加しない。",
+      "source": "voice_genesis/foundry/results_s7/trf_measurement_spec_real_render_rc2.json#sample_rate_hz（および同ディレクトリの s7_b1_calibration_set.json / s7_b1_real_render_manifest.json 等、複数の s7 render record で一貫して 44100 Hz）。backbone_runtime_bundle.json が参照する RUN6/RUN7 render provenance chain（results_s7）の実測値。",
+      "distinct_from_donor_bank_sr": "donor_bank.py の SR=24000 は vocadito ドナー WAV コーパス（44.1kHz → 24kHz、比80/147）の前処理専用レートであり、RUN9 の P0 identity probe（backbone render 出力）とは別の対象。RUN9 側で 24kHz へのリサンプルは行わない — 対象を混同しないこと。"
+    },
+    "log_transform": {
+      "formula": "log(max(sp, 1e-12))",
+      "floor_value": 1e-12,
+      "source": "voice_genesis/foundry/adapter/donor_bank.py の log-floor 規約（_log_band_vector() の np.log(s + 1e-12) / energy 計算の np.log(np.sum(sp, axis=1) + 1e-12) / vowel_class.py の np.log(median_sp + 1e-12)）と同一の 1e-12 フロア値を採用する。sp は理論上非負だが数値誤差で厳密に0になり得るため、log(0)=-inf を避けるフロアを明示する。"
     }
   },
   "identity_feature": {
     "definition": "P0 中立 identity probe の voiced フレームにおける log スペクトル包絡 (sp) の時間平均ベクトル",
     "scope": "P0 中立 identity probe（Founder 出生直後の無介入 render、CONTROL/C0 = NO_LEARNING_REPLAY の産物）の voiced フレームのみを対象とする。unvoiced フレームは平均から除外する。",
-    "vector_source": "WORLD 分析の sp（スペクトル包絡）出力を対数化した後、voiced フレーム軸で時間平均を取ったベクトル。",
+    "vector_source": "WORLD 分析の sp（スペクトル包絡）出力を extraction_procedure.log_transform で対数化した後、extraction_procedure.voiced_mask が定義する voiced フレーム軸で時間平均を取ったベクトル（voiced_mask の算出に使う基本周波数の推定値そのものは、このベクトルには含まれない — 除外の根拠は本オブジェクト直下の除外節を参照）。",
     "f0_exclusion": {
       "excluded": true,
       "rationale": "f0（基本周波数）は identity metric から明示的に除外する。pitch は Trait/Technique 層（DESIGN_RUN9_REVISION_0.3.md 改訂B の三層観測: Phenotype/Trait と Technique/Form）の観測軸であり、identity 距離へ混入させると層間の交絡（例: 稽古による pitch trajectory の変化が誤って Identity drift として計上される）を招く。PoR §2 の層分離（Identity・Trait・Technique を機械的に分離可能な観測軸として扱う）に整合する設計判断。"
@@ -32,5 +64,11 @@
     "note": "対称性（distance(a,b) == distance(b,a)）と決定論性（同一入力から常に同一距離）を要件とする。学習可能パラメータや乱数を含まない。"
   },
   "calibration_procedure": "閾値は手入力せず、C0 replay 分布（within-founder 95th percentile = R9-G5 機械基準、DESIGN_RUN9_REVISION_0.3.md 矛盾解決表の R9-G5 supersession 行を参照）と C1 sham 副作用（ZERO_CONTROLPROFILE_SHAM、profile 適用機構の副作用校正）から生成する。positive reference = 3 anchor（af0/ritsu/user）、negative/confuser = PJS（teacher — RUN9 Identity anchor 空間から構造的に排除されている対象を negative reference として利用する）。threshold は sealed holdout 開封前に freeze する（rev 0.3 改訂G「機械的校正の定義」— 人間知覚との一致証明ではなく、C0/C1/reference/metric version/threshold generation rule に対する機械的校正）。",
+  "reference_example": {
+    "status": "PENDING_BIRTH_PROBE",
+    "procedure": "本 spec 策定時点では実音声（birth probe render）が存在しないため、identity_feature の数値例は捏造しない。birth probe（P0 中立 identity probe）を初めて実測した時点で、その実測値の1件を reference example として本欄へ事前登録の手続きに従い固定する（結果を見た後に選び直さない — 最初の実測をそのまま固定する）。固定後は本ファイルを更新し、正規形 sha256 を再計算して metric_space_sha を repin する。",
+    "value": null
+  },
   "feasibility_note": "本 spec は事前登録（preregistration）であり、birth probe 実測で退化（分離不能・分散ゼロ等）が判明した場合は PoR §9 [C] DESIGN FAILURE / UNOBSERVABLE として正直に閉じる。結果を見た後の metric 定義変更・閾値の事後調整による救済は行わない（DESIGN_RUN9_REVISION_0.3.md 改訂E の holdout 開封後の救済禁止規律と同型）。"
 }
+

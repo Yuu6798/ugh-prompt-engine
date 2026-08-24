@@ -84,6 +84,28 @@ VALID_REVISIONS: Tuple[str, ...] = (NEUTRAL_REVISION,) + tuple(
     for vv in ([v] if isinstance(v, str) else v.values())
 )
 
+
+def _valid_revisions_for_branch(branch: Optional[str]) -> FrozenSet[str]:
+    """`branch` が正当に名乗れる `revision` 値の集合を
+    `run9_schema.BRANCH_REVISIONS`（単一の正本）から導出する（Codex bot
+    レビュー PR #318 第1巡 Fix 3 採用）。`branch is None` は r0（出生
+    中立・枝分岐前）専用の扱い — CONTROL の一部としてではなく、r0 自身の
+    ための専用センチネルとして schema 上明確化する（r0 は「無介入枝」
+    ではなく「まだどの枝にも分岐していない起点」であり、`CONTROL` 枝の
+    revision 集合 `{"replay", "r_sham"}` とは意味論が異なる）。
+    """
+    if branch is None:
+        return frozenset({NEUTRAL_REVISION})
+    if branch not in _rs.BRANCH_REVISIONS:
+        raise Run9ControlProfileError(
+            f"branch must be null or one of {sorted(_rs.BRANCH_REVISIONS)}, got {branch!r}"
+        )
+    mapped = _rs.BRANCH_REVISIONS[branch]
+    if isinstance(mapped, str):
+        return frozenset({mapped})
+    return frozenset(mapped.values())
+
+
 _PROFILE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
     "schema", "voice_id", "branch", "revision", "parent_revision", "partitions", "profile_id",
 })
@@ -267,11 +289,37 @@ def derive_profile(
     書込許可が無い以上、何かを書こうとする呼び出し自体を構造的に拒否する。
     `validate_branch_write()` 単体でも各キーは拒否されるが、CONTROL は
     そもそも1件も書けないことを呼び出し時点で明示的に伝える）。
+
+    **親は必ず r0（出生中立の正典）でなければならない**（Codex bot レビュー
+    PR #318 第1巡 Fix 1 採用）: PoR §4 の「二体の Founder は出生後、同一の
+    r0 から三経路（CONTROL / PRACTICE / EDUCATION）へ分岐する」という
+    all-arms-from-r0 フローを機械強制する。`parent.revision != "r0"` の
+    呼び出し（例: `r_practice` を親に `TRANSFER_TECHNIQUE` を導出する —
+    稽古の結果を教育の出発点にする、または `r_taught`/`r_sham`/`replay`
+    同士をさらに繋ぐ等）は枝汚染（cross-arm contamination）として
+    fail-closed で拒否する。
+
+    **境界宣言（本 schema の対象外）**: 将来「同一枝内での profile
+    版重ね」（例: PRACTICE_FROM_AUDIO の反復学習で `r_practice` からさらに
+    次の `r_practice` 版を導出する）が必要になった場合、その対応は本
+    schema・本関数の対象外とする。r0-only 制約はあくまで「異なる枝の間」
+    の汚染を防ぐものであり、「同一枝内の反復」を予め設計していない —
+    必要になった時点で VG-L0 ハーネス実装時に別途設計する（例えば
+    revision 語彙の拡張、または枝内の世代番号を別フィールドとして持たせる
+    等、複数の設計選択肢があり、ここで先取りして決め打ちしない）。
     """
     if not isinstance(parent, Run9ControlProfile):
         raise Run9ControlProfileError(f"parent must be a Run9ControlProfile, got {type(parent).__name__}")
     if not isinstance(updates, dict):
         raise Run9ControlProfileError(f"updates must be an object, got {type(updates).__name__}")
+    if parent.revision != NEUTRAL_REVISION:
+        raise Run9ControlProfileError(
+            f"derive_profile() requires parent.revision == {NEUTRAL_REVISION!r} (birth-neutral "
+            f"canonical origin), got parent.revision={parent.revision!r} (parent.branch="
+            f"{parent.branch!r}) — 全枝は r0 から独立分岐する（PoR §4）。r_practice/r_taught/"
+            "replay/r_sham のいずれかを親として別の枝を導出する cross-arm contamination は "
+            "拒否する（同一枝内の版重ねは本 schema の対象外 — docstring の境界宣言を参照）"
+        )
 
     revision = _resolve_derived_revision(branch, control_condition)
 
@@ -306,6 +354,19 @@ def derive_profile(
     }
     for partition_key, value in updates.items():
         new_partitions[partition_key] = dict(value)
+
+    # builder 側の防御的二重検証（Codex bot レビュー PR #318 第1巡 Fix 3
+    # 採用、「builder 側も」）: `_resolve_derived_revision()` は
+    # `run9_schema.BRANCH_REVISIONS` から revision を導出するため、この
+    # assertion は理論上常に真になる（矛盾組合せを作る経路が無い）。
+    # それでも `_valid_revisions_for_branch()` を再度通し、将来の実装変更
+    # が誤って矛盾する組合せを生成しないことを builder 自身にも保証させる
+    # — `control_profile_from_dict()` 側の検証だけに頼らない。
+    if revision not in _valid_revisions_for_branch(branch):
+        raise Run9ControlProfileError(  # pragma: no cover - 到達不能（防御的二重検証）
+            f"internal invariant violated: derive_profile() resolved revision={revision!r} for "
+            f"branch={branch!r}, which is not in {sorted(_valid_revisions_for_branch(branch))}"
+        )
 
     profile_id = _compute_profile_id(
         voice_id=parent.voice_id, branch=branch, revision=revision,
@@ -370,6 +431,22 @@ def control_profile_from_dict(data: Any) -> Run9ControlProfile:
             raise Run9ControlProfileError(
                 f"revision {revision!r} (branch-derived) must declare a non-null branch and "
                 f"parent_revision, got branch={branch!r} parent_revision={parent_revision!r}"
+            )
+        # 全ての矛盾する (branch, revision) 組合せを網羅的に拒否する
+        # （Codex bot レビュー PR #318 第1巡 Fix 3 採用）: r0 以外は
+        # PRACTICE_FROM_AUDIO→r_practice / TRANSFER_TECHNIQUE→r_taught /
+        # CONTROL→{replay, r_sham} のいずれかへ厳密対応しなければならない
+        # — 例えば TRANSFER_TECHNIQUE + r_practice のような取り違えは
+        # 個々のフィールド検証（branch は既知の枝・revision は既知の
+        # revision 語彙）だけでは検出できず、この交差検証で初めて拒否
+        # される。
+        allowed_revisions = _valid_revisions_for_branch(branch)
+        if revision not in allowed_revisions:
+            raise Run9ControlProfileError(
+                f"branch {branch!r} may only declare revision in {sorted(allowed_revisions)} "
+                f"(run9_schema.BRANCH_REVISIONS is the source of truth), got revision={revision!r} "
+                "— mismatched (branch, revision) pair (e.g. TRANSFER_TECHNIQUE declaring "
+                "r_practice) is rejected"
             )
 
     partitions = _validate_partitions_shape(data["partitions"])
@@ -454,6 +531,21 @@ class Run9ProfileLedger:
         （`ledger.py` の parents 実在検証 — `self.exists()` ではなく
         `self.read()` 相当を使う設計を踏襲）。未 publish・typo の親は
         fail-closed で拒否する。
+
+        `(voice_id, revision)` 一意性検証（Codex bot レビュー PR #318 第1巡
+        Fix 4 採用）: 台帳中に同一 `(voice_id, revision)` の組を持つ既存
+        entry があり、かつその `profile_id` が今回 publish しようとしている
+        `profile.profile_id` と異なる場合（= 内容が異なる — profile_id は
+        内容由来のハッシュなので、内容が同一なら profile_id も同一になる）、
+        `Run9ProfileLedgerConflictError` で拒否する。これは下流の
+        `os.link()` 衝突検出（同一 profile_id ファイルへの書き込み衝突）
+        とは別の検証軸 — こちらは「同じ (voice_id, revision) に対して
+        *異なる* profile_id が二重に存在する」という、ファイル名の衝突を
+        伴わない静かなデータ不整合（1つの voice の同一 revision に複数の
+        矛盾する profile が並立する）を防ぐ。バイト同一の内容を同一
+        profile_id で再 publish する経路（真の冪等 no-op）は既存の
+        `os.link()`/バイト比較ロジックでカバーされているため、ここでは
+        「profile_id が異なる」場合のみを衝突として扱う。
         """
         path = self.path_for(profile.profile_id)
         payload = (json.dumps(profile.to_dict(), sort_keys=True, indent=2) + "\n").encode("utf-8")
@@ -466,6 +558,17 @@ class Run9ProfileLedger:
                 f"refusing to publish profile_id {profile.profile_id!r}: serialized payload failed "
                 f"round-trip validation via control_profile_from_dict() ({exc})"
             ) from exc
+
+        existing_at_tuple = self._find_by_voice_and_revision(profile.voice_id, profile.revision)
+        if existing_at_tuple is not None and existing_at_tuple.profile_id != profile.profile_id:
+            raise Run9ProfileLedgerConflictError(
+                f"refusing to publish profile_id {profile.profile_id!r}: ledger already has a "
+                f"different profile_id {existing_at_tuple.profile_id!r} published for the same "
+                f"(voice_id={profile.voice_id!r}, revision={profile.revision!r}) — a given "
+                "(voice_id, revision) tuple must resolve to exactly one profile content "
+                "(byte-identical republish under the same profile_id remains an idempotent no-op; "
+                "this rejects a *different* profile_id silently claiming the same tuple)"
+            )
 
         if profile.parent_revision is not None:
             parent_found = self._find_by_voice_and_revision(profile.voice_id, profile.parent_revision)
