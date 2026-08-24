@@ -300,6 +300,7 @@ TRI_CROSSOVER operator、genome_id 決定論など）は rev 0.2 と同様に不
 | §23 単一介入エッジ（`single_intervention.changed_edge` = `LEARN_PERFORMANCE`） | 改訂A: `interventions`（`edges` = [`PRACTICE_FROM_AUDIO`, `TRANSFER_TECHNIQUE`] + `control_branch` = `CONTROL`）構造へ改訂。旧形式は contract loader が fail-closed で拒否する |
 | §17 Mandatory with Audit Fallback（perceptual identity / PJS leakage の人間監査） | 改訂F: 機械評価 + claim ceiling 明記へ変更。人間知覚 Gate は必須ではない |
 | §28 Human Audit | 改訂F: optional 化（実施手順の枠組み自体は不変） |
+| §19 R9-G5（BIRTH_IDENTITY_SEPARATION） | 改訂F（PR #317 Codex bot レビュー第2巡 Fix 5 採用）: R9-G5 は**機械計測の出生分離ゲートとして存続**する — 判定基準は v0.1 §10.3 の第一基準（between-founder distance > within-founder replay distance の 95th percentile）そのもので、これは replay-noise 対照の機械計測であり人間聴取を要さない。rev 0.3 改訂 F により **blind human audit への fallback routing は除去**し、機械計測で分離が成立しない場合は PoR §13 の BIRTH: NOT_ESTABLISHED（または計測不能時 DESIGN FAILURE / UNOBSERVABLE）として正直に閉じる（人間聴取による救済はしない）。Birth Promotion の G0–G5 要件は機械判定版 G5 で読み替え |
 
 rev 0.2（`DESIGN_RUN9_REVISION_0.2.md`）の改訂1〜5は、上記の矛盾しない
 範囲でそのまま有効:

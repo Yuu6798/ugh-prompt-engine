@@ -2622,11 +2622,16 @@ def test_por_revision_practice_forbidden_inputs_includes_spk_embedding_and_corre
     None
 ):
     """PRACTICE 禁止に spk embedding と正解 Technique parameter が含まれる
-    こと（コーディネータ指示の設計必須項目）。"""
+    こと（コーディネータ指示の設計必須項目）。PR #317 Codex bot レビュー
+    第2巡 Fix 4 採用: PoR §3.2 冒頭「教師の正解パラメータやTechnique
+    labelは与えず」の後半（Technique label）が第1巡実装時に転記漏れして
+    いたため `teacher_technique_label` を追加し5要素へ是正。"""
     assert "pjs_speaker_embedding" in m.PRACTICE_FORBIDDEN_INPUTS
     assert "correct_technique_parameter" in m.PRACTICE_FORBIDDEN_INPUTS
+    assert "teacher_technique_label" in m.PRACTICE_FORBIDDEN_INPUTS
     assert "pjs_identity_coordinate" in m.PRACTICE_FORBIDDEN_INPUTS
     assert "teacher_internal_parameter_dump" in m.PRACTICE_FORBIDDEN_INPUTS
+    assert len(m.PRACTICE_FORBIDDEN_INPUTS) == 5
 
 
 def test_por_revision_practice_allowed_inputs_covers_por_3_2_permissions() -> None:
@@ -2738,3 +2743,93 @@ def test_por_revision_full_contract_gate_state_still_blocked(
     化されても、他の多くの pre-run 欄が依然 PENDING のため READY へは
     到達しない）。"""
     assert m.gate_state(contract) == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第2巡対応 — Fix 5: R9-G5 supersession 登録
+# ---------------------------------------------------------------------------
+
+
+def test_fix5_r9_g5_supersession_row_present_in_contradiction_table() -> None:
+    """DESIGN_RUN9_REVISION_0.3.md の矛盾解決表に v0.1 §19 R9-G5
+    （BIRTH_IDENTITY_SEPARATION）の読み替え行が追加されていること。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "R9-G5" in doc
+    assert "BIRTH_IDENTITY_SEPARATION" in doc
+    assert "機械計測の出生分離ゲートとして存続" in doc
+    assert "blind human audit への fallback routing は除去" in doc
+
+
+def test_fix5_design_revision_doc_sha256_pin_matches_recomputed_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """Fix 5 の文書編集（R9-G5 行追加）後、design_revision_doc_sha256 pin
+    が実ファイルの再計算 sha256 と一致していること（マージ前限定編集後の
+    再 pin 漏れが無いことの直接確認 — 値そのものは
+    test_revision02_doc_sha256_pin_matches_actual_file が汎用的に検証
+    しているが、本テストは Fix 5 の変更に紐づけて明示する）。"""
+    field = contract_raw["design_revision_doc_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(REVISION_DOC_PATH)
+    assert field["value"] == m.compute_file_sha256(REVISION_DOC_PATH)
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第2巡対応 — Fix 6: practice_split_sha 新設
+# ---------------------------------------------------------------------------
+
+
+def test_fix6_practice_split_sha_is_a_pin_field() -> None:
+    assert "practice_split_sha" in m.CONTRACT_PIN_FIELDS
+    # post-run/optional のどちらにも属さない（pre-run 必須欄）ことを確認。
+    assert "practice_split_sha" not in m.CONTRACT_POST_RUN_PIN_FIELDS
+    assert "practice_split_sha" not in m.CONTRACT_OPTIONAL_PIN_FIELDS
+
+
+def test_fix6_current_contract_practice_split_sha_is_pending(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["practice_split_sha"]
+    assert field["status"] == "PENDING"
+    assert field["value"] is None
+
+
+def test_fix6_current_contract_still_blocked(contract: m.Run9RunContract) -> None:
+    """practice_split_sha 新設後も現行 RUN9_CONTRACT.yaml は正直に
+    BLOCKED のまま。"""
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_fix6_practice_split_sha_gets_64hex_format_enforced(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """欄名が `_sha` で終わるため `_validate_pin_field_value_shape` の
+    汎用64hexブランチが自動適用される（特別扱いの分岐を追加していない
+    ことの確認 — design_revision_doc_sha256/backbone_runtime_bundle_sha/
+    por_adjudication_sha256 と同型のテスト）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["practice_split_sha"] = {
+        "value": "not-a-valid-hex-value", "status": "PINNED", "source": "x",
+    }
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.load_run9_contract(tampered)
+
+
+def test_fix6_practice_split_sha_missing_pin_blocks_ready_even_if_others_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """負例: practice_split_sha 以外の pre-run 欄を全て PINNED にしても、
+    practice_split_sha 自身が PENDING のままなら gate_state() は BLOCKED
+    のまま（lesson_sha の PRACTICE 版対概念として、他欄の充足だけでは
+    READY へ迂回できないことの確認）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    assert fully_pinned["practice_split_sha"]["status"] == "PINNED"
+    contract_ready = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract_ready) == "READY"
+
+    regressed = copy.deepcopy(fully_pinned)
+    regressed["practice_split_sha"] = {
+        "value": None, "status": "PENDING", "reason": "regressed",
+    }
+    contract_blocked = m.load_run9_contract(regressed)
+    assert m.gate_state(contract_blocked) == "BLOCKED"

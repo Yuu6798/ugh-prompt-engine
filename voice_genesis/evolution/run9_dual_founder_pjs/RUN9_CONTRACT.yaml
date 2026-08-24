@@ -88,8 +88,12 @@ design_doc_sha256:
 # まま存続し、その系譜は DESIGN_RUN9_REVISION_0.3.md 末尾「design_revision
 # 系譜」表に記録する（欄としては最新 revision の1件のみを pin する規約は
 # design_doc_sha256/design_revision_doc_sha256 の前例どおり）。
+# PR #317 Codex bot レビュー第2巡 Fix 5 採用により本 PR（未マージ）内で
+# DESIGN_RUN9_REVISION_0.3.md へ R9-G5 supersession 行を追記したため、
+# 値を再計算して更新（runbook §8 のマージ前限定編集規約に整合 — マージ後
+# の byte-pin 不変原則とは矛盾しない）。
 design_revision_doc_sha256:
-  value: "a5f71ec71d4aeb290645bd41e0a42411a30e3b064c742124f9f8af259208fa4b"
+  value: "58fb378e91cc3f5af9a4e2fecc776b68cc20d1915704b24fd780b5c9cc0a4b8a"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.3.md
 
@@ -248,18 +252,29 @@ lesson_sha:
   value: null
   status: PENDING
   reason: >-
-    [EDUCATION/TRANSFER_TECHNIQUE 用] PJS 由来 Technique lesson 抽出
+    [EDUCATION/TRANSFER_TECHNIQUE 専用] PJS 由来 Technique lesson 抽出
     （Technique extractor / Lesson builder、PoR §3.3。VG-L0 学習ハーネス
     相当の feature extractor）が未実装。改訂3（DESIGN_RUN9_REVISION_0.2.md）
     で Lesson manifest の生成・pin 方針は明確化済み（PJS の
     source_archive_sha256 / expanded_corpus_identity_sha256 とは別の、
     RUN9 が実消費する Lesson manifest を Lesson build 時に生成しその
     sha256 を本欄へ pin する）が、Lesson build 自体はまだ実行されていない。
-    [PRACTICE_FROM_AUDIO 用] 稽古で Founder へ提示する PJS 教師音声の
-    train/validation/sealed-holdout split manifest（正解 Technique
-    parameter を含まない生素材の分割、PoR §12）は、本欄とは別の pin 欄
-    として VG-L0 ハーネス実装時に新設する想定（現時点では未設計のため
-    dataset_manifest_sha の PENDING 理由にも同一律速が及ぶ）。
+    [PRACTICE_FROM_AUDIO 用の欄は別途 practice_split_sha を参照]
+
+# rev 0.3 追加（PR #317 Codex bot レビュー第2巡 Fix 6 採用）:
+# PRACTICE_FROM_AUDIO 枝の train/validation/sealed-holdout split manifest
+# の sha256（lesson_sha の PRACTICE 版対概念 — pre-run 必須欄。
+# 64hex 規則は欄名が `_sha` で終わるため
+# `_validate_pin_field_value_shape` の汎用ブランチが自動適用される）。
+practice_split_sha:
+  value: null
+  status: PENDING
+  reason: >-
+    PRACTICE 素材 split manifest の生成・封印後に pin（PoR §12: 稽古でも
+    train/holdout 分離必須・sealed holdout は学習中使用禁止）。稽古で
+    Founder へ提示する PJS 教師音声の train/validation/sealed-holdout
+    split manifest（正解 Technique parameter を含まない生素材の分割）の
+    生成自体が VG-L0 ハーネス実装待ちのため未着手。
 
 learning_recipe_sha:
   value: null

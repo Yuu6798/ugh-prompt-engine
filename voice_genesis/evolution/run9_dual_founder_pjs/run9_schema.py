@@ -174,6 +174,13 @@ PRACTICE_FORBIDDEN_INPUTS: Tuple[str, ...] = (
     "pjs_speaker_embedding",
     "pjs_identity_coordinate",
     "correct_technique_parameter",  # 例:「vibrato=この値」等の正解 Technique parameter
+    # PoR §3.2 冒頭「教師の正解パラメータやTechnique labelは与えず」の
+    # 後半（Technique label チャネル）— PR #317 Codex bot レビュー第2巡
+    # Fix 4 採用: 第1巡実装時に転記漏れしていた（正解 parameter の禁止は
+    # 上の correct_technique_parameter でカバー済みだったが、教師付与の
+    # ラベルそのもの — 「これは vibrato の見本」といった名前付けの供与 —
+    # は別の禁止項目として明示されていなかった）。
+    "teacher_technique_label",
     "teacher_internal_parameter_dump",
 )
 
@@ -1044,6 +1051,14 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     # どおり loader 自体は bundle の中身までは検査しない。整合は手動運用）。
     "backbone_runtime_bundle_sha",
     "lesson_sha",
+    # rev 0.3 追加（PR #317 Codex bot レビュー第2巡 Fix 6 採用）:
+    # PRACTICE_FROM_AUDIO 枝の train/validation/sealed-holdout split
+    # manifest の sha256。`lesson_sha`（EDUCATION 枝の Technique lesson
+    # manifest）と対になる pre-run 必須欄 — 稽古でも train/holdout 分離が
+    # 必須（PoR §12: sealed holdout は学習中使用禁止）であり、この分離が
+    # 学習開始前に凍結・封印されていることを他の pre-run 欄と同列に
+    # PINNED で証拠づける。
+    "practice_split_sha",
     "learning_recipe_sha",
     "probe_manifest_sha",
     "measurement_spec_sha",
