@@ -6072,10 +6072,23 @@ def test_fix35_extraction_procedure_sample_rate_normalization_present_with_requi
 
 
 def test_fix35_sample_rate_normalization_rule_states_deterministic_ratio() -> None:
+    """48kHz 導出例マーカー（Fix 36 で「固定比の rule」から「一般導出式の
+    適用例」へ意味づけを更新済み — 具体文字列自体は不変）。"""
     data = _valid_metric_space_doc()
     rule = data["extraction_procedure"]["sample_rate_normalization"]["rule"]
     assert "resample_poly(x, up=147, down=160)" in rule
     assert "147/160" in rule
+
+
+def test_fix36_sample_rate_normalization_rule_states_general_derivation_formula() -> None:
+    """Fix 36: rule が固定比ではなく native rate ごとの一般導出式
+    （g = gcd(44100, native_sr) → up=44100//g, down=native_sr//g）を
+    述べていることの直接確認。"""
+    data = _valid_metric_space_doc()
+    rule = data["extraction_procedure"]["sample_rate_normalization"]["rule"]
+    assert "gcd(44100, native_sr)" in rule
+    assert "up=44100//g" in rule
+    assert "down=native_sr//g" in rule
 
 
 def test_fix35_sample_rate_normalization_applies_to_states_general_rule_not_pjs_specific() -> None:
@@ -6127,12 +6140,17 @@ def test_fix35_validator_rejects_sample_rate_normalization_missing_key() -> None
 
 
 def test_fix35_validator_rejects_rule_missing_ratio_call_marker() -> None:
+    """一般導出式は述べているが 48kHz 導出例の呼び出し形が欠落する repin を
+    拒否する（Fix 36: 導出例チェックは一般式チェックとは独立の第2段
+    チェックであることの確認）。"""
     doc = _valid_metric_space_doc()
     doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
-        "native sr が 44100 Hz と異なる入力は、適切にリサンプルして 44100 Hz へ変換する。"
+        "native sr が 44100 Hz と異なる入力は、g = gcd(44100, native_sr) として "
+        "scipy.signal.resample_poly(x, up=44100//g, down=native_sr//g) を適用し 44100 Hz へ"
+        "決定論的に変換する。導出例: native 48000 Hz は既約有理比 147/160 となる。"
     )
     with pytest.raises(
-        m.Run9ValidationError, match="must state the deterministic rational-ratio resample call"
+        m.Run9ValidationError, match="must state the worked 48000 Hz derivation example"
     ):
         m.validate_identity_metric_space_manifest(doc)
 
@@ -6142,11 +6160,65 @@ def test_fix35_validator_rejects_rule_missing_ratio_fraction_marker() -> None:
     repin を拒否する（部分一致だけでは決定論性の主張として不十分）。"""
     doc = _valid_metric_space_doc()
     doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
-        "native sr が 44100 Hz と異なる入力は scipy.signal.resample_poly(x, up=147, down=160) "
-        "で 44100 Hz へ変換する。"
+        "native sr が 44100 Hz と異なる入力は、g = gcd(44100, native_sr) として "
+        "scipy.signal.resample_poly(x, up=44100//g, down=native_sr//g) を適用し 44100 Hz へ"
+        "決定論的に変換する。導出例: native 48000 Hz は scipy.signal.resample_poly(x, up=147, "
+        "down=160) となる。"
     )
     with pytest.raises(
-        m.Run9ValidationError, match="must state the deterministic rational-ratio resample call"
+        m.Run9ValidationError, match="must state the worked 48000 Hz derivation example"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix36_validator_rejects_general_formula_missing_gcd_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
+        "native sr が 44100 Hz と異なる入力は scipy.signal.resample_poly(x, up=44100//g, "
+        "down=native_sr//g)（g は既約化に使う共通因数）を適用し 44100 Hz へ決定論的に変換する。"
+        "導出例: native 48000 Hz は既約有理比 147/160、すなわち "
+        "scipy.signal.resample_poly(x, up=147, down=160) となる。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="must state the general per-native-rate ratio derivation formula",
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix36_validator_rejects_general_formula_missing_up_down_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
+        "native sr が 44100 Hz と異なる入力は g = gcd(44100, native_sr) から導かれる既約有理比で"
+        "scipy.signal.resample_poly を適用し 44100 Hz へ決定論的に変換する。導出例: native "
+        "48000 Hz は既約有理比 147/160、すなわち scipy.signal.resample_poly(x, up=147, "
+        "down=160) となる。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="must state the general per-native-rate ratio derivation formula",
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix36_validator_rejects_regression_to_pre_fix36_fixed_ratio_only_rule() -> None:
+    """負例（Fix 36 の核心要求）: 一般導出式を欠き固定 147/160 比のみを pin
+    していた第15巡 Fix 35 時点の rule 文言そのものへの逆行を拒否する —
+    47/160 という導出例の値自体は残っていても、native rate ごとの導出式
+    （gcd(44100, native_sr) / up=44100//g / down=native_sr//g）が無ければ、
+    このルールは『あらゆる native sr ≠ 44100 Hz の入力に適用する一般規則』
+    という applies_to の主張と矛盾したまま repin されてしまう。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
+        "native sr が 44100 Hz と異なる入力は、extraction_procedure（f0_estimation 以降）を"
+        "適用する前の入力正規化ステップとして、soundfile 直読みで得た native サンプル列 x に "
+        "scipy.signal.resample_poly(x, up=147, down=160) を適用し 44100 Hz へ決定論的に変換する"
+        "（44100 Hz / 48000 Hz の既約有理比 = gcd(44100,48000)=300 → 147/160。"
+        "load_donor_24k_bytes() の up/down 明示指定パターンと同型 — RUN9 側で独自に再実装しない）。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="must state the general per-native-rate ratio derivation formula",
     ):
         m.validate_identity_metric_space_manifest(doc)
 
@@ -6200,3 +6272,61 @@ def test_fix35_domain_metric_space_sha_differs_from_pre_round15_value() -> None:
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
     old_pre_round15_sha = "7eef67beab1028f205c292a89f84aeab5d042862152284362a0a189d69722283"
     assert domain_raw["metric_space_sha"] != old_pre_round15_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第16巡 Fix 36（P1）: リサンプル比の native rate
+# からの一般導出。第15巡 Fix 35 の rule は固定 147/160 比を pin していたが、
+# 直後の applies_to が宣言する「native sr ≠ 44100 Hz のあらゆる入力に適用
+# する一般規則」と矛盾していた（例: native 24000 Hz の入力に 147/160 を
+# 適用すると 22050 Hz へ変換され、WORLD には 44100 Hz として扱われて時間軸・
+# 周波数軸と identity 距離が壊れる）。rule を g = gcd(44100, native_sr) から
+# up/down を native rate ごとに機械的に導出する一般導出式へ改訂し、147/160
+# は native 48000 Hz（PJS の全203 WAV）に対する導出例として位置づけ直した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix36_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix36_metric_version_still_0_5() -> None:
+    """内部矛盾（一般規則の宣言と固定比のみの rule）の是正であり feature 値
+    の意味を変えないため、metric_version は Fix 35 時点の run9-identity-
+    metric/0.5 のまま据え置きであることを確認する。"""
+    data = _valid_metric_space_doc()
+    assert data["metric_version"] == "run9-identity-metric/0.5"
+
+
+def test_fix36_schema_still_1_2() -> None:
+    """rule 文言の改訂のみで extraction_procedure 配下のキー集合は不変の
+    ため schema は run9-identity-metric-space/1.2 のまま据え置き。"""
+    data = _valid_metric_space_doc()
+    assert data["schema"] == "run9-identity-metric-space/1.2"
+
+
+def test_fix36_applies_to_still_general_and_not_pjs_specific() -> None:
+    """applies_to（Fix 35 で凍結済みの一般規則宣言）は Fix 36 で無改訂の
+    まま、rule 側がその宣言に整合する内容へ追いついたことを確認する。"""
+    data = _valid_metric_space_doc()
+    applies_to = data["extraction_procedure"]["sample_rate_normalization"]["applies_to"]
+    assert "あらゆる入力" in applies_to
+    assert "PJS corpus に限定しない" in applies_to
+
+
+def test_fix36_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 36 の rule 一般導出式化後、`metric_space_sha`
+    は正規形 sha256 と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix36_domain_metric_space_sha_differs_from_pre_round16_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 36（第16巡）の改訂により
+    metric_space_sha が Fix 35 時点（第15巡）の旧値から更新されていることを
+    確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round16_sha = "7ff07e874a95bbd6224161566068fdf57526218a7f6a6d193b66e6ebedc7b115"
+    assert domain_raw["metric_space_sha"] != old_pre_round16_sha

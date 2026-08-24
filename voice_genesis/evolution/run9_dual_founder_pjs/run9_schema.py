@@ -1387,18 +1387,34 @@ _LOG_TRANSFORM_REQUIRED_STR_KEYS: Tuple[str, ...] = ("formula", "source")
 # を一切行わない（固定 44100Hz ロード経路は存在しない）。唯一の実装済みロード
 # 経路 load_donor_24k_bytes() は soundfile 直読み + scipy.signal.resample_poly
 # による有理比変換（44100→24000、up=80/down=147）だが対象は vocadito ドナー・
-# 目標レートも 24000Hz で RUN9 の対象（目標 44100Hz）とは別物。よって本節が
-# 新規に scipy.signal.resample_poly(x, up=147, down=160)（44100/48000 の
-# 既約有理比、window は scipy 既定 Kaiser を明示採用）を決定論的変換規則
-# として manifest 側に pin する（donor_bank.py 自体の変更はこの PR の範囲外）。
+# 目標レートも 24000Hz で RUN9 の対象（目標 44100Hz）とは別物。
+#
+# Codex bot レビュー PR #318 第16巡 Fix 36 採用（P1）: 第15巡時点の rule は
+# 固定 147/160 比を pin していたが、直後の applies_to が宣言する「native sr
+# ≠ 44100 Hz のあらゆる入力に適用する一般規則」と矛盾していた（例: native
+# 24000 Hz の入力に 147/160 を適用すると 22050 Hz へ変換され、WORLD には
+# 44100 Hz として扱われて時間軸・周波数軸と identity 距離が壊れる）。本節が
+# g = gcd(44100, native_sr) から up/down を native rate ごとに機械的に導出
+# する一般導出式を manifest 側に pin し、147/160 は native 48000 Hz（PJS の
+# 全203 WAV）に対する導出例として位置づけ直す（donor_bank.py 自体の変更は
+# この PR の範囲外）。
 _SAMPLE_RATE_NORMALIZATION_REQUIRED_STR_KEYS: Tuple[str, ...] = (
     "role", "investigation_finding", "rule", "applies_to", "procedure_only",
 )
-# rule の決定論性マーカー: 明示的な有理比（resample_poly の up/down 呼び出し
-# 形式）が現れていることを要求する — 暗黙のライブラリ既定 sr 変換への逆行
-# （ratio 未指定のまま「適切にリサンプルする」等の曖昧な記述）を拒否する。
-_SAMPLE_RATE_NORMALIZATION_RATIO_CALL_MARKER = "resample_poly(x, up=147, down=160)"
-_SAMPLE_RATE_NORMALIZATION_RATIO_FRACTION_MARKER = "147/160"
+# rule の一般導出式マーカー（Fix 36）: native rate ごとに up/down を機械的に
+# 導出する式そのもの（gcd 計算 + up/down の導出形）が現れていることを要求
+# する — 固定比のみを pin して一般式を欠く旧 Fix 35 状態（あらゆる入力への
+# 適用を宣言しつつ 44100/48000 専用の固定比しか書かない矛盾）への逆行を
+# 拒否する。
+_SAMPLE_RATE_NORMALIZATION_GENERAL_GCD_MARKER = "gcd(44100, native_sr)"
+_SAMPLE_RATE_NORMALIZATION_GENERAL_UP_MARKER = "up=44100//g"
+_SAMPLE_RATE_NORMALIZATION_GENERAL_DOWN_MARKER = "down=native_sr//g"
+# rule の 48kHz 導出例マーカー: 一般導出式を native 48000 Hz（PJS 全203 WAV）
+# へ適用した具体例として 147/160 が現れていることを要求する — 暗黙のライブ
+# ラリ既定 sr 変換への逆行（ratio 未指定のまま「適切にリサンプルする」等の
+# 曖昧な記述）や、導出例そのものの欠落を拒否する。
+_SAMPLE_RATE_NORMALIZATION_DERIVATION_EXAMPLE_CALL_MARKER = "resample_poly(x, up=147, down=160)"
+_SAMPLE_RATE_NORMALIZATION_DERIVATION_EXAMPLE_FRACTION_MARKER = "147/160"
 # applies_to の一般規則性マーカー: 変換規則が PJS 特例ではなく「native sr ≠
 # 44100 のあらゆる入力」に適用される一般規則であることの明文を要求する。
 _SAMPLE_RATE_NORMALIZATION_GENERAL_RULE_MARKER = "あらゆる入力"
@@ -1988,17 +2004,32 @@ def _validate_extraction_procedure(data: Any) -> None:
         keys=_SAMPLE_RATE_NORMALIZATION_REQUIRED_STR_KEYS,
     )
     sr_norm_rule = sample_rate_normalization["rule"]
-    if (
-        _SAMPLE_RATE_NORMALIZATION_RATIO_CALL_MARKER not in sr_norm_rule
-        or _SAMPLE_RATE_NORMALIZATION_RATIO_FRACTION_MARKER not in sr_norm_rule
+    for marker in (
+        _SAMPLE_RATE_NORMALIZATION_GENERAL_GCD_MARKER,
+        _SAMPLE_RATE_NORMALIZATION_GENERAL_UP_MARKER,
+        _SAMPLE_RATE_NORMALIZATION_GENERAL_DOWN_MARKER,
     ):
-        raise Run9ValidationError(
-            "extraction_procedure.sample_rate_normalization.rule must state the deterministic "
-            f"rational-ratio resample call (expected both {_SAMPLE_RATE_NORMALIZATION_RATIO_CALL_MARKER!r} "
-            f"and {_SAMPLE_RATE_NORMALIZATION_RATIO_FRACTION_MARKER!r} to appear — an implicit or "
-            "unspecified resample procedure would make results reproducible only by accident), "
-            f"got {sr_norm_rule!r} (Codex bot レビュー PR #318 第15巡 Fix 35)"
-        )
+        if marker not in sr_norm_rule:
+            raise Run9ValidationError(
+                "extraction_procedure.sample_rate_normalization.rule must state the general "
+                f"per-native-rate ratio derivation formula (expected {marker!r} to appear — a rule "
+                "that pins a single fixed ratio (e.g. 147/160) without the derivation formula would "
+                "silently misconvert any native rate other than the one the fixed ratio was derived "
+                "for, contradicting the adjacent applies_to claim that this rule applies to every "
+                f"native sr != 44100 Hz input), got {sr_norm_rule!r} (Codex bot レビュー PR #318 "
+                "第16巡 Fix 36)"
+            )
+    for marker in (
+        _SAMPLE_RATE_NORMALIZATION_DERIVATION_EXAMPLE_CALL_MARKER,
+        _SAMPLE_RATE_NORMALIZATION_DERIVATION_EXAMPLE_FRACTION_MARKER,
+    ):
+        if marker not in sr_norm_rule:
+            raise Run9ValidationError(
+                "extraction_procedure.sample_rate_normalization.rule must state the worked 48000 Hz "
+                f"derivation example (expected {marker!r} to appear — an implicit or unspecified "
+                "resample procedure would make results reproducible only by accident), "
+                f"got {sr_norm_rule!r} (Codex bot レビュー PR #318 第15巡 Fix 35 / 第16巡 Fix 36)"
+            )
     sr_norm_applies_to = sample_rate_normalization["applies_to"]
     for marker in (
         _SAMPLE_RATE_NORMALIZATION_GENERAL_RULE_MARKER,
@@ -2337,7 +2368,23 @@ def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
     の閉じた形状を検証する（Codex bot レビュー PR #318 第6巡 Fix 19、
     第7巡 Fix 20/Fix 21、第9巡 Fix 23/Fix 24、第11巡 Fix 28、
     第12巡 Fix 29/Fix 30/Fix 31、第13巡 Fix 32/Fix 33、第14巡 Fix 34、
-    第15巡 Fix 35 で拡張）。
+    第15巡 Fix 35、第16巡 Fix 36 で拡張）。
+
+    第16巡 Fix 36（P1）: リサンプル比の native rate からの一般導出。第15巡
+    Fix 35 時点の rule は固定 147/160 比を pin していたが、直後の
+    applies_to が宣言する「native sr ≠ 44100 Hz のあらゆる入力に適用する
+    一般規則」と矛盾していた（例: native 24000 Hz の入力に 147/160 を適用
+    すると 22050 Hz へ変換され、WORLD には 44100 Hz として扱われて時間軸・
+    周波数軸と identity 距離が壊れる）。rule を g = gcd(44100, native_sr) と
+    して scipy.signal.resample_poly(x, up=44100//g, down=native_sr//g) を
+    適用する一般導出式へ改訂し、147/160 は native 48000 Hz（PJS の全203
+    WAV）に対する導出例として位置づけ直した。他の native rate も同一の
+    一般導出式が機械的に up/down を定め、固定比の他 rate への流用は不可と
+    明記した。native 44100 Hz の入力は引き続き恒等（変換不要）。validator
+    は旧固定比マーカーを一般導出式マーカー（`gcd(44100, native_sr)` /
+    `up=44100//g` / `down=native_sr//g`）+ 48kHz 導出例マーカー
+    （`resample_poly(x, up=147, down=160)` / `147/160`）へ更新し、固定比
+    のみで一般式を欠く旧状態への逆行を拒否する。
 
     第15巡 Fix 35（P1）: PJS コーパスの metric sample rate への決定論的
     正規化。corpus_inventory_pjs.json によれば PJS の203 WAVは全て48000Hzで
