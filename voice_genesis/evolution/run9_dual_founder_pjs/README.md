@@ -219,7 +219,7 @@ machine-independent（実音源・実 render・実学習を要さない）次段
 
 1. **identity metric space の定義と pin**（Fable 設計判定 — **User は
    マージ前に veto 可能**）: 新規 [`inputs/identity_metric_space.json`](./inputs/identity_metric_space.json)
-   （schema `run9-identity-metric-space/1.1`）— feature_extractor = WORLD
+   （schema `run9-identity-metric-space/1.2`）— feature_extractor = WORLD
    (pyworld、foundry S1〜S3 と同系)・identity_feature = P0 中立 identity
    probe voiced フレームの log spectral envelope (sp) 時間平均ベクトル
    （**f0 は明示除外** — pitch は Trait/Technique 層の観測軸のため
@@ -291,7 +291,7 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   `backbone_checkpoint_sha` を PINNED（`backbone_runtime_bundle_sha` は
   ブロッカー(4)参照 — 未解消）。
 - ~~`metric_space_sha` 未 pin~~ → Phase 3: `inputs/identity_metric_space.json`
-  （schema `run9-identity-metric-space/1.1`。feature_extractor = WORLD
+  （schema `run9-identity-metric-space/1.2`。feature_extractor = WORLD
   (pyworld)・identity_feature = P0 中立 identity probe voiced フレームの
   log spectral envelope (sp) 時間平均ベクトル・**f0 は明示除外**・
   distance = Euclidean・calibration = C0/C1 機械校正を実行可能な式へ

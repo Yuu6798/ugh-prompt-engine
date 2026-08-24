@@ -1,6 +1,6 @@
 {
-  "schema": "run9-identity-metric-space/1.1",
-  "metric_version": "run9-identity-metric/0.3",
+  "schema": "run9-identity-metric-space/1.2",
+  "metric_version": "run9-identity-metric/0.4",
   "canonicalization_method": "json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(\",\", \":\")) — no trailing newline; identical convention to inputs/af0_anchor_manifest.json canonicalization_method (which itself matches voice_genesis/foundry/artificial_founder/af_spec.py canonical_json()). The sha256 of this manifest computed via this method is what domains/identity_domain_run9_v1.json metric_space_sha pins — it is NOT embedded as a field inside this file (self-reference avoided the same way af0_anchor_manifest.json avoids embedding its own hash).",
   "feature_extractor": {
     "name": "WORLD",
@@ -46,7 +46,7 @@
   },
   "identity_feature": {
     "definition": "identity_feature.scope が定める評価対象レンダー x の voiced フレームにおける log スペクトル包絡 (sp) の時間平均ベクトル v(x) から、そのスカラー平均 mean(v(x)) を全 bin から差し引いた、レンダーゲインに不変な level 正規化形状ベクトル（level_normalization 参照）",
-    "scope": "identity_feature の**計算可能域**は、calibration.decision_rule が距離を要求する全ての identity 評価対象レンダー（r0 birth probe・C0/C1 校正テイク・r_practice/r_taught/CONTROL 枝の r_sham 等、BRANCH_REVISIONS が定義する全 revision）の voiced フレームへ拡張する（Codex bot レビュー PR #318 第12巡 Fix 31 — 旧 scope は P0 中立 identity probe（CONTROL/C0 = NO_LEARNING_REPLAY の産物）限定であり、calibration.decision_rule が要求する post-practice/post-education レンダーの d(r) を feature 自体が計算不能という契約矛盾を抱えていた。厳密実装は feature を計算できず、寛容実装は pinned scope を無視するしかない状態だった）。ただし**校正母集団（D_C0(F)/D_C1(F)）と reference（positive_reference/negative_reference/reference_render）は引き続き neutral（r0 条件）レンダーに限定する** — feature の計算可能域（全評価対象レンダー）と、校正・参照に使える母集団（neutral な r0 限定）は別の概念であり、混同しない（校正・参照側の neutral 限定は calibration.freeze_threshold.d_c0_population 等の既存 pooling 禁止規約を変更しない）。unvoiced フレームはいずれのレンダーでも平均から除外する。",
+    "scope": "identity_feature の**計算可能域**は、calibration.decision_rule が距離を要求する全ての identity 評価対象レンダー（r0 birth probe・C0/C1 校正テイク・r_practice/r_taught/CONTROL 枝の r_sham 等、BRANCH_REVISIONS が定義する全 revision）の voiced フレームへ拡張する（Codex bot レビュー PR #318 第12巡 Fix 31 — 旧 scope は P0 中立 identity probe（CONTROL/C0 = NO_LEARNING_REPLAY の産物）限定であり、calibration.decision_rule が要求する post-practice/post-education レンダーの d(r) を feature 自体が計算不能という契約矛盾を抱えていた。厳密実装は feature を計算できず、寛容実装は pinned scope を無視するしかない状態だった）。ただし**校正母集団（D_C0(F)/D_C1(F)）と reference（positive_reference/negative_reference/reference_render）は引き続き neutral（r0 条件）レンダーに限定する** — feature の計算可能域（全評価対象レンダー）と、校正・参照に使える母集団（neutral な r0 限定）は別の概念であり、混同しない（校正・参照側の neutral 限定は calibration.freeze_threshold.d_c0_population 等の既存 pooling 禁止規約を変更しない）。unvoiced フレームはいずれのレンダーでも平均から除外する。Codex bot レビュー PR #318 第13巡 Fix 33 採用（P1）: feature の計算可能域に、confuser_control 節が定義する pjs_reference（PJS reference レンダー）も追加する — pjs_reference は confuser_control の d_pjs(r) 距離計算にのみ使用し、校正母集団・校正 reference（neutral な r0 限定、上記規約は不変）へは混入しない。DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §14 C3「PJS Confuser」が要求する評価経路の feature 計算対象を確保するための拡張であり、Identity anchor 空間・校正母集団からの PJS 構造的排除（RUN9_EXCLUDED_TEACHER_IDENTITIES・Fix 30 の non-use 宣言）は不変。",
     "vector_source": "WORLD 分析の sp（スペクトル包絡）出力を extraction_procedure.log_transform で対数化した後、extraction_procedure.voiced_mask が定義する voiced フレーム軸で時間平均を取ったベクトル v(x)（voiced_mask の算出に使う基本周波数の推定値そのものは、このベクトルには含まれない — 除外の根拠は本オブジェクト直下の除外節を参照）に、level_normalization が定義するスカラー平均減算を適用した正規化形状ベクトルを identity_feature の実体とする。",
     "f0_exclusion": {
       "excluded": true,
@@ -85,8 +85,8 @@
       "policy": "C1 と positive/negative reference は theta_cal(F) を動かさない、founder F ごとの校正有効性ゲート専用の判定である（max/中点/混合を凍結閾値の生成規則へ採用することは不可）。",
       "c1_gate": {
         "id": "validity_gate_c1",
-        "condition": "P95(D_C1(F)) <= theta_cal(F)",
-        "d_c1_population": "D_C1(F) = founder F 自身の C1 (ZERO_CONTROLPROFILE_SHAM) 枝テイクと founder F 自身の reference_render(F) との距離標本のみで構成する（D_C0(F) と同一の pooling 禁止規約 — founder 横断の pooling は不採用）。reference_render(F) は C1 母集団にも属さない — D_C1(F) も reference_render(F) と独立な、RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder（PINNED 値、1 founder あたり n=20）どおりのテイクのみで構成し、自己比較（reference と reference 自身の距離=恒等ゼロ標本）の混入を D_C0(F) と同一の理由（P95 を下方へ歪め STABLE 側へ偏らせるため）で禁止する。テイク数（founder 1体あたり）は RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder（PINNED 値）を束縛元として参照する。"
+        "condition": "P50(D_C1(F)) <= theta_cal(F)",
+        "d_c1_population": "D_C1(F) = founder F 自身の C1 (ZERO_CONTROLPROFILE_SHAM) 枝テイクと founder F 自身の reference_render(F) との距離標本のみで構成する（D_C0(F) と同一の pooling 禁止規約 — founder 横断の pooling は不採用）。reference_render(F) は C1 母集団にも属さない — D_C1(F) も reference_render(F) と独立な、RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder（PINNED 値、1 founder あたり n=20）どおりのテイクのみで構成し、自己比較（reference と reference 自身の距離=恒等ゼロ標本）の混入を D_C0(F) と同一の理由（P95 を下方へ歪め STABLE 側へ偏らせるため）で禁止する。テイク数（founder 1体あたり）は RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder（PINNED 値）を束縛元として参照する。P50(D_C1(F)) は calibration.freeze_threshold.percentile_method が定める線形補間分位（P95(D_C0(F)) の算出と同一の計算法）を中央値（50パーセンタイル）へ適用して算出する — 分位計算法そのものは P95/P50 いずれの分位点にも共通して適用される単一の規約である。Codex bot レビュー PR #318 第13巡 Fix 32 採用（P1）: ゲート条件を P95(D_C1(F)) <= theta_cal(F) から P50(D_C1(F)) <= theta_cal(F) へ改訂する。理由: ①C1 のアダプター効果が完全にゼロのとき、D_C0(F) と D_C1(F) は同一 replay-noise 分布からの独立標本であり、経験 P95 同士（尾側 vs 尾側の比較）は交換可能であるため、旧ゲート P95(D_C1(F)) <= theta_cal(F) はゼロ効果下でも約1/2の確率で偽って不成立となり、on_failure の founder INVALID 化を通じて全 identity 結果を不当に抑制する統計的欠陥を持っていた。②新ゲート（分布中心 P50(D_C1(F)) と尾側 theta_cal(F) = P95(D_C0(F)) の比較 — 分布中心 vs 尾側の比較）はゼロ効果下で P50(D_C1(F)) が noise の P95 を超える確率が十分小さく、かつ sham による分布中心の移動という実効果への感度は保たれる。③許容係数 k の導入・分布仮定の明示・有意性検定手続きの導入は、いずれも自由パラメータ・複雑性を増やすため検討のうえ不採用とした（事前登録の凍結性を損なう代替案として却下）。"
       },
       "positive_reference_gate": {
         "id": "validity_gate_positive_reference",
@@ -96,7 +96,7 @@
       "negative_reference_gate": {
         "id": "validity_gate_negative_reference",
         "condition": "d(negative_reference(F)) > theta_cal(F)",
-        "negative_reference_definition": "negative_reference(F) = 他方 founder F' の reference_render(F')（F' 自身の birth probe 時に生成された、学習介入前の独立レンダー — distance_unit.reference_render_definition と同一手続きで固定する）。negative reference のソースはこの1系統のみ（他方 founder の reference_render）に単一化する。PJS は teacher であり RUN9 Identity anchor 空間から構造的に排除済み — negative reference としても使用しない（Codex bot レビュー PR #318 第12巡 Fix 30 — 旧文言は同節内で PJS の構造的排除を述べつつ、直後で PJS 自体を negative reference の利用対象として肯定する節が残存し矛盾していた。validator は birth probe マーカーのみを見て内容の矛盾を検出できなかった）。"
+        "negative_reference_definition": "negative_reference(F) = 他方 founder F' の reference_render(F')（F' 自身の birth probe 時に生成された、学習介入前の独立レンダー — distance_unit.reference_render_definition と同一手続きで固定する）。negative reference のソースはこの1系統のみ（他方 founder の reference_render）に単一化する。PJS は teacher であり RUN9 Identity anchor 空間から構造的に排除済み — negative reference としても使用しない（Codex bot レビュー PR #318 第12巡 Fix 30 — 旧文言は同節内で PJS の構造的排除を述べつつ、直後で PJS 自体を negative reference の利用対象として肯定する節が残存し矛盾していた。validator は birth probe マーカーのみを見て内容の矛盾を検出できなかった）。この non-use 宣言は本ゲート（validity_gates 配下の校正有効性判定）専用のスコープであり、DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §14 C3「PJS Confuser」の要求に応える confuser_control 節（Codex bot レビュー PR #318 第13巡 Fix 33 — negative reference としては使用しない/confuser control としてのみ使用する、の区別）とは別立てであり、confuser_control 節を参照。"
       },
       "on_failure": "founder F の3ゲートのいずれかが不成立なら calibration_status(F) = INVALID → 当該 founder F の identity 判定は一律 NOT_ESTABLISHED（STABLE_BY_MACHINE_METRIC/SHIFTED を主張しない）。"
     },
@@ -110,8 +110,8 @@
       "d_c0_samples": [0.021, 0.024, 0.026, 0.027, 0.03],
       "theta_cal": 0.0294,
       "theta_cal_derivation": "P95(d_c0_samples) の線形補間 = 0.027 + 0.8*(0.030-0.027) = 0.0294。",
-      "d_c1_p95": 0.028,
-      "c1_gate_result": "PASS (0.028 <= 0.0294)",
+      "d_c1_p50": 0.028,
+      "c1_gate_result": "PASS (P50 0.028 <= theta_cal 0.0294)",
       "positive_reference_distance": 0.022,
       "positive_reference_gate_result": "PASS (0.022 <= 0.0294)",
       "negative_reference_distance": 0.145,
@@ -129,6 +129,12 @@
     "status": "PROCEDURE_ONLY_VALUE_RECORDED_IN_POST_BIRTH_ARTIFACT",
     "procedure": "本節は手続きのみを恒久的に凍結する（Codex bot レビュー PR #318 第12巡 Fix 29 — 旧 status PENDING_BIRTH_PROBE からの置換）。実測 reference 値はこの manifest へ一切書き戻さない — value フィールドは恒久に null（「この manifest には決して書き込まない」の意味であり、実測待ちの一時的な null ではない）。循環 provenance の機序: 本ファイルの正規形 sha256 は domains/identity_domain_run9_v1.json の metric_space_sha として pin され、Run9IdentityDomain.content_digest() の入力を経て founder の genome_id を決定する。もし birth probe 実測後にこの manifest へ実測値を書き込んで repin すると、metric_space_sha → content_digest() → genome_id という連鎖により、repin 後の domain は元の founder とは別の genome_id を持つ「別の founder」を記述することになる — 記録した probe が属する identity（旧 genome_id）と、その probe を記録した本 manifest が定義する identity（repin 後の新 genome_id）が循環参照してしまう。したがって実測値の記録先はこの founder-defining pin（本ファイル）ではなく、出生後アーティファクト（post-birth artifact: founder ごとの reference measurement record）に限定する。この記録は RUN9_CONTRACT.yaml の post-run 専用 pin 欄 artifact_manifest_sha（`interventions` 等の pre-run 欄とは独立し、`run9_schema.CONTRACT_POST_RUN_PIN_FIELDS` が pre-run READY 判定から除外する欄）配下でハッシュされ、当該 founder の genome_id と本 domain の content_digest() へ束縛される。provenance は一方向のみ: metric manifest（本ファイル、founder 定義側）→ 手続きのみ（procedure-only）を post-birth artifact（測定記録側）が参照する、という向きだけを許容し、逆方向（実測値→本ファイルへの書き戻し）は構造的に禁止する。捏造禁止規律は不変 — 実測前に値をでっち上げない。",
     "value": null
+  },
+  "confuser_control": {
+    "role": "Codex bot レビュー PR #318 第13巡 Fix 33 採用（P1）: DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §14 C3「PJS Confuser」— 『PJSをIdentity confuserとしてのみ評価へ入れる。FounderがPJSへ接近していないことを確認する。』— の要求を実装として復元する節。PJS は Identity anchor 空間・校正 population（D_C0(F)/D_C1(F)）・校正 reference（positive_reference/negative_reference/reference_render）からは引き続き構造的に排除されたまま（RUN9_EXCLUDED_TEACHER_IDENTITIES・Fix 30 の non-use 宣言は不変）だが、本節が定義する C3 confuser control としてのみ距離計算の対象になる。関係を精密化する: PJS は negative reference としては使用しない（校正ゲートの母集団・reference には一切登場しない）が、confuser control としてのみ使用する（本節の d_pjs(r) 距離計算にのみ登場する）。この2つの役割は排他ではなく別スコープであり、Fix 30 の非使用宣言は validity_gates 配下（校正有効性判定）専用の宣言、本節（confuser_control）は distance_unit/validity_gates のいずれとも独立した別立ての評価経路であることを明記する。",
+    "metric": "d_pjs(r) = euclidean(feature(r), feature(pjs_reference))。feature(x) は identity_feature.level_normalization が定義する同一の level 正規化形状ベクトル（feature(x) = v(x) - mean(v(x))・1）を、pjs_reference と評価対象 founder レンダー r の双方へ同一に適用する（calibration.distance_unit と同一の Euclidean・同一 feature 定義を再利用し、本節では独自の距離式を新設しない）。",
+    "pjs_reference_definition": "pjs_reference = PJS 教材コーパスから事前登録手続きで固定する単一の参照レンダー/特徴（DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §14 C3 の要求に従う）。固定手続きは reference_example 節と同型の procedure-only pin（Codex bot レビュー PR #318 第12巡 Fix 29 の非対称ルールを踏襲）に従い、実測値そのものはこの metric manifest には一切書き込まない — 実測値は出生後アーティファクト側（RUN9_CONTRACT.yaml の post-run pin artifact_manifest_sha 配下）に記録する一方向 provenance を、reference_example と同一の circular-provenance 回避理由で維持する。捏造禁止規律は不変 — 実測前に値をでっち上げない。",
+    "evaluation": "per-founder で、学習後の各枝レンダー（PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE の各最終 revision — BRANCH_REVISIONS の r_practice/r_taught）における d_pjs(r_learned) と、学習前の基準レンダー d_pjs(r0) を比較する。d_pjs の系統的な減少（founder が PJS へ接近している証拠）を no-PJS-leakage 仮説（H5）への反証 evidence として per-founder・per-branch に報告する。総合スコア化・閾値による PASS/FAIL 化はしない（本 repo の軸別 evidence のみ規律 — 単一 Total Score へ潰さない PoR §13/§27 item 40 の禁則と同型）。本評価は calibration.validity_gates（C1/positive/negative reference の3ゲート）とは独立であり、confuser 評価の結果は calibration_status(F) を変えない。"
   },
   "feasibility_note": "本 spec は事前登録（preregistration）であり、birth probe 実測で退化（分離不能・分散ゼロ等）が判明した場合は PoR §9 [C] DESIGN FAILURE / UNOBSERVABLE として正直に閉じる。結果を見た後の metric 定義変更・閾値の事後調整による救済は行わない（DESIGN_RUN9_REVISION_0.3.md 改訂E の holdout 開封後の救済禁止規律と同型）。"
 }

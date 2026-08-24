@@ -3973,8 +3973,8 @@ def test_phase3_identity_metric_space_file_exists_and_is_valid_json() -> None:
     `calibration` の必須ネストキーと型）を機械強制する。"""
     assert IDENTITY_METRIC_SPACE_PATH.exists()
     data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
-    assert data["schema"] == "run9-identity-metric-space/1.1"
-    assert data["metric_version"] == "run9-identity-metric/0.3"
+    assert data["schema"] == "run9-identity-metric-space/1.2"
+    assert data["metric_version"] == "run9-identity-metric/0.4"
     m.validate_identity_metric_space_manifest(data)  # raises on any shape defect
 
 
@@ -5052,9 +5052,12 @@ def test_fix25_validator_accepts_current_identity_metric_space_file() -> None:
 
 def test_fix25_metric_version_bumped_to_0_3() -> None:
     """feature 定義の意味変更（level 正規化の導入）に伴い metric_version が
-    bump されていることを確認する。"""
+    0.2 から 0.3 へ bump されたことの歴史的事実を確認する（現行値は第13巡
+    Fix 32 の校正規則変更でさらに 0.4 へ進んでいるため、ここでは 0.2 への
+    逆行がないことのみを confirm し、現行の正確な値は
+    `test_fix32_metric_version_bumped_to_0_4` が担う）。"""
     data = _valid_metric_space_doc()
-    assert data["metric_version"] == "run9-identity-metric/0.3"
+    assert data["metric_version"] != "run9-identity-metric/0.2"
 
 
 def test_fix25_identity_feature_definition_states_gain_invariance() -> None:
@@ -5583,3 +5586,295 @@ def test_fix31_domain_metric_space_sha_differs_from_pre_fix29_round_value() -> N
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
     old_pre_round12_sha = "b135ca1434c89fc981e994b52794c50675b44a074cdb7e14b68d4de148be93df"
     assert domain_raw["metric_space_sha"] != old_pre_round12_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第13巡 Fix 32（P1）: C1 ゲートの統計的欠陥の
+# 是正。C1 のアダプター効果が完全にゼロのとき D_C0(F)/D_C1(F) は同一
+# replay-noise 分布からの独立標本であり、経験 P95 同士（尾側 vs 尾側）は
+# 交換可能なため、旧ゲート `P95(D_C1(F)) <= theta_cal(F)` はゼロ効果下でも
+# 約1/2の確率で偽って不成立となり founder を不当に INVALID 化していた。
+# ゲート条件を分布中心（P50）vs 尾側（theta_cal(F)）の比較へ改訂する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix32_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix32_c1_gate_condition_is_median_vs_tail_comparison() -> None:
+    data = _valid_metric_space_doc()
+    condition = data["calibration"]["validity_gates"]["c1_gate"]["condition"]
+    assert condition == "P50(D_C1(F)) <= theta_cal(F)"
+    assert "P95(D_C1(F))" not in condition
+
+
+def test_fix32_worked_example_uses_d_c1_p50_key_not_d_c1_p95() -> None:
+    data = _valid_metric_space_doc()
+    worked_example = data["calibration"]["worked_example"]
+    assert "d_c1_p50" in worked_example
+    assert "d_c1_p95" not in worked_example
+    assert isinstance(worked_example["d_c1_p50"], (int, float))
+
+
+def test_fix32_metric_version_bumped_to_0_4() -> None:
+    """C1 ゲートの校正規則変更（式は不変だが判定意味論が変わる）に伴い
+    metric_version が run9-identity-metric/0.4 へ bump されていることを
+    確認する（Fix 25/28 と同型の「校正規則変更 = metric の意味変更」判断）。"""
+    data = _valid_metric_space_doc()
+    assert data["metric_version"] == "run9-identity-metric/0.4"
+
+
+def test_fix32_d_c1_population_binds_p50_to_percentile_method_by_reference() -> None:
+    data = _valid_metric_space_doc()
+    d_c1_population = data["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"]
+    assert "percentile_method" in d_c1_population
+
+
+def test_fix32_d_c1_population_states_zero_effect_exchangeability_rationale() -> None:
+    data = _valid_metric_space_doc()
+    d_c1_population = data["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"]
+    assert "交換可能" in d_c1_population
+
+
+def test_fix32_validator_rejects_c1_gate_condition_regression_to_old_p95() -> None:
+    """指摘の直接再現例: 新条件マーカーは満たしつつ、旧尾側 vs 尾側条件
+    （統計的欠陥のあった式）の文言が併存する repin を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["condition"] = (
+        "P50(D_C1(F)) <= theta_cal(F)（旧 P95(D_C1(F)) <= theta_cal(F) から改訂）"
+    )
+    with pytest.raises(m.Run9ValidationError, match="must not regress to the old tail-vs-tail"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix32_validator_rejects_c1_gate_condition_missing_p50_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["condition"] = "D_C1(F) <= theta_cal(F)"
+    with pytest.raises(m.Run9ValidationError, match="must be the median-vs-tail comparison"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix32_validator_rejects_d_c1_population_missing_percentile_method_reference() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"] = (
+        "D_C1(F) = founder F 自身の C1 枝テイクと founder F 自身の reference_render(F) との距離"
+        "標本のみで構成する（pooling は不採用、自己比較は禁止する）。P50 は交換可能な旧 P95 の"
+        "欠陥を是正する。テイク数は RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder "
+        "を参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="must bind P50's quantile method"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix32_validator_rejects_d_c1_population_missing_exchangeability_rationale() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"] = (
+        "D_C1(F) = founder F 自身の C1 枝テイクと founder F 自身の reference_render(F) との距離"
+        "標本のみで構成する（pooling は不採用、自己比較は禁止する）。P50 は "
+        "calibration.freeze_threshold.percentile_method が定める線形補間分位で算出する。テイク数は "
+        "RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder を参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="must state the zero-effect"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix32_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認（Fix 33 と共通の repin — 同ラウンドで2件改訂）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第13巡 Fix 33（P1）: PJS confuser（C3）評価
+# 経路の復元。DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §14
+# C3「PJS Confuser」は PJS を Identity confuser としてのみ評価へ入れ、
+# Founder が PJS へ接近していないことを確認することを要求していたが、第12巡
+# Fix 30 の PJS 全面不使用宣言 + founder revision 限定 scope により、この
+# 評価経路が消えていた。新設 `confuser_control` 節（role/metric/
+# pjs_reference_definition/evaluation）としてこの評価経路を復元する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix33_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix33_schema_bumped_to_1_2() -> None:
+    """confuser_control キー追加に伴い schema が run9-identity-metric-space/1.2
+    へ minor bump されていることを確認する。"""
+    data = _valid_metric_space_doc()
+    assert data["schema"] == "run9-identity-metric-space/1.2"
+    assert m.SCHEMA_IDENTITY_METRIC_SPACE == "run9-identity-metric-space/1.2"
+
+
+def test_fix33_confuser_control_section_present_with_required_keys() -> None:
+    data = _valid_metric_space_doc()
+    assert "confuser_control" in data
+    confuser = data["confuser_control"]
+    assert set(confuser.keys()) == {"role", "metric", "pjs_reference_definition", "evaluation"}
+
+
+def test_fix33_confuser_control_role_states_non_use_and_confuser_only_distinction() -> None:
+    data = _valid_metric_space_doc()
+    role = data["confuser_control"]["role"]
+    assert "negative reference としては使用しない" in role
+    assert "confuser control としてのみ使用する" in role
+    assert "PJS" in role
+
+
+def test_fix33_confuser_control_metric_binds_to_level_normalization_feature() -> None:
+    """独自の距離式を新設せず identity_feature.level_normalization の
+    feature(x) を参照していることを確認する（distance_unit の Fix 28 と同型
+    の規律）。"""
+    data = _valid_metric_space_doc()
+    metric = data["confuser_control"]["metric"]
+    assert "feature(" in metric
+    assert "level_normalization" in metric
+    assert "euclidean" in metric.lower()
+
+
+def test_fix33_confuser_control_pjs_reference_definition_is_procedure_only() -> None:
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "事前登録手続き" in pjs_reference_definition
+    assert "artifact_manifest_sha" in pjs_reference_definition
+
+
+def test_fix33_confuser_control_evaluation_states_no_aggregate_score_and_calibration_independence() -> (
+    None
+):
+    data = _valid_metric_space_doc()
+    evaluation = data["confuser_control"]["evaluation"]
+    assert "PASS/FAIL" in evaluation
+    assert "calibration_status" in evaluation
+    assert "独立" in evaluation
+
+
+def test_fix33_identity_feature_scope_extended_to_confuser_control_pjs_reference() -> None:
+    data = _valid_metric_space_doc()
+    scope = data["identity_feature"]["scope"]
+    assert "confuser_control" in scope
+    assert "pjs_reference" in scope
+
+
+def test_fix33_negative_reference_definition_cross_references_confuser_control() -> None:
+    """Fix 30 の non-use 宣言（校正ゲート専用スコープ）と Fix 33 の
+    confuser_control（別スコープ）が矛盾しないよう、negative_reference_
+    definition 側にも相互参照が追記されていることを確認する。"""
+    data = _valid_metric_space_doc()
+    negative_reference_definition = data["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    assert "confuser_control" in negative_reference_definition
+    # Fix 30 のマーカーは引き続き健在（Fix 33 が上書きしていないこと）。
+    assert "negative reference としても使用しない" in negative_reference_definition
+    assert "negative reference としてのみ利用する" not in negative_reference_definition
+
+
+def test_fix33_validator_rejects_confuser_control_deletion() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["confuser_control"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_confuser_control_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(m.Run9ValidationError, match="confuser_control has unknown key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_confuser_control_missing_key() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["confuser_control"]["evaluation"]
+    with pytest.raises(m.Run9ValidationError, match="confuser_control missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_role_missing_non_use_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["role"] = (
+        "PJS は confuser control としてのみ使用する（本節の距離計算にのみ登場する）。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="confuser_control.role must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_role_missing_confuser_only_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["role"] = (
+        "PJS は negative reference としては使用しない（校正ゲートには登場しない）。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="confuser_control.role must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_metric_missing_feature_call_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["metric"] = (
+        "d_pjs(r) = euclidean(mean_voiced_log_sp(r), mean_voiced_log_sp(pjs_reference))。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="confuser_control.metric must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_metric_missing_level_normalization_reference() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["metric"] = "d_pjs(r) = euclidean(feature(r), feature(pjs_reference))。"
+    with pytest.raises(m.Run9ValidationError, match="confuser_control.metric must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_evaluation_missing_no_aggregate_score_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["evaluation"] = (
+        "per-founder で d_pjs(r_learned) と d_pjs(r0) を比較し、系統的減少を evidence として報告"
+        "する。本評価は calibration_status(F) から独立である。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="must state that no aggregate score"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_evaluation_missing_calibration_independence_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["evaluation"] = (
+        "per-founder で d_pjs(r_learned) と d_pjs(r0) を比較し、系統的減少を evidence として報告"
+        "する。総合スコア化・PASS/FAIL 化はしない。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="must state its independence from calibration_status"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_identity_feature_scope_missing_confuser_control_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["scope"] = (
+        "identity_feature の計算可能域は全ての identity 評価対象レンダー（r0/r_practice/"
+        "r_taught）へ拡張する。校正母集団・reference は neutral な r0 限定のまま。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="identity_feature.scope must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認（Fix 32 と共通の repin — 同ラウンドで2件改訂）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix33_domain_metric_space_sha_differs_from_pre_round13_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 32/33（第13巡）の2件改訂により
+    metric_space_sha が Fix 31 時点（第12巡）の旧値から更新されていることを
+    確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round13_sha = "3c79a742627530b80a43cd6d70e601cd91cc7013c588780bc3f6a0bee8dc0fb3"
+    assert domain_raw["metric_space_sha"] != old_pre_round13_sha

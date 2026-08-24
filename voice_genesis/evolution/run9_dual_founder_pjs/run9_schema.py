@@ -1280,14 +1280,18 @@ def validate_learning_recipe_manifest(data: Mapping[str, Any]) -> None:
 # Fix 18 で導入した `calibration` 節の必須キーを検証する。
 # ---------------------------------------------------------------------------
 
-SCHEMA_IDENTITY_METRIC_SPACE = "run9-identity-metric-space/1.1"
+SCHEMA_IDENTITY_METRIC_SPACE = "run9-identity-metric-space/1.2"
 
 IDENTITY_METRIC_SPACE_PATH = _THIS_DIR / "inputs" / "identity_metric_space.json"
 
+# Codex bot レビュー PR #318 第13巡 Fix 33 採用（P1）: `confuser_control` を
+# トップレベルキーへ追加（schema を 1.1 → 1.2 へ minor bump — 既存キーの
+# 意味変更ではなくキー追加のため minor）。DESIGN_RUN9 §14 C3「PJS
+# Confuser」の評価経路を復元する新設節。
 _IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
     "schema", "metric_version", "canonicalization_method", "feature_extractor",
     "extraction_procedure", "identity_feature", "distance", "calibration",
-    "reference_example", "feasibility_note",
+    "reference_example", "confuser_control", "feasibility_note",
 })
 
 # Codex bot レビュー PR #318 第7巡 Fix 21 採用（P2）: `feature_extractor`/
@@ -1477,12 +1481,65 @@ _IDENTITY_FEATURE_SCOPE_EVALUATED_RENDERS_MARKER = "全ての identity 評価対
 _IDENTITY_FEATURE_SCOPE_NEUTRAL_POPULATION_MARKER = "neutral"
 _IDENTITY_FEATURE_SCOPE_DISTINCTION_MARKER = "計算可能域"
 
+# Codex bot レビュー PR #318 第13巡 Fix 32 採用（P1）: C1 ゲートの統計的
+# 欠陥の是正。C1 のアダプター効果が完全にゼロのとき D_C0(F)/D_C1(F) は
+# 同一 replay-noise 分布からの独立標本であり、経験 P95 同士（尾側 vs 尾側）
+# は交換可能なため、旧ゲート `P95(D_C1(F)) <= theta_cal(F)` はゼロ効果下でも
+# 約1/2の確率で偽って不成立となり、on_failure の founder INVALID 化を通じて
+# 全 identity 結果を不当に抑制していた。ゲート条件を分布中心（P50）vs 尾側
+# （theta_cal(F) = P95(D_C0(F))）の比較へ改訂する。
+_C1_GATE_CONDITION_P50_MARKER = "P50(D_C1(F)) <= theta_cal(F)"
+# 旧条件文言（逆行拒否対象）。
+_C1_GATE_CONDITION_OLD_P95_MARKER = "P95(D_C1(F))"
+# d_c1_population が P50 の分位計算法を freeze_threshold.percentile_method
+# （P95(D_C0(F)) と同一の線形補間分位）へ束縛（参照であり再定義ではない）
+# していることを要求する。
+_D_C1_POPULATION_PERCENTILE_METHOD_REF_MARKER = "percentile_method"
+# d_c1_population が旧ゲートの統計的欠陥（ゼロ効果下での交換可能性）の
+# 理由を明文していることを要求する。
+_C1_GATE_EXCHANGEABLE_RATIONALE_MARKER = "交換可能"
+
+# Codex bot レビュー PR #318 第13巡 Fix 33 採用（P1）: PJS confuser（C3）
+# 評価経路の復元。DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
+# §14 C3「PJS Confuser」が要求する no-PJS-leakage 検出経路が、第12巡 Fix 30
+# の PJS 全面不使用宣言により消えていた（Fix 30 は校正ゲート専用の宣言
+# だったが、C3 confuser control としての限定利用まで一律に塞いでいた）。
+# `identity_feature.scope` が confuser_control 節の pjs_reference を feature
+# 計算可能域へ含める旨を明文していることを要求する。
+_IDENTITY_FEATURE_SCOPE_CONFUSER_CONTROL_MARKER = "confuser_control"
+_IDENTITY_FEATURE_SCOPE_PJS_REFERENCE_MARKER = "pjs_reference"
+
+# confuser_control 節の閉じた必須キー集合 + 型検証（`calibration` 等と同型の
+# fail-closed 流儀）。
+_CONFUSER_CONTROL_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "role", "metric", "pjs_reference_definition", "evaluation",
+})
+_CONFUSER_CONTROL_STR_KEYS: Tuple[str, ...] = (
+    "role", "metric", "pjs_reference_definition", "evaluation",
+)
+# role は、PJS が negative reference としては使用しない（校正ゲートの
+# 母集団・reference には登場しない）が confuser control としてのみ使用する
+# （本節の距離計算にのみ登場する）ことを、Fix 30 の non-use 宣言と矛盾しない
+# 精密な文言で区別していることを要求する。
+_CONFUSER_CONTROL_ROLE_NON_USE_AS_NEGATIVE_REFERENCE_MARKER = "negative reference としては使用しない"
+_CONFUSER_CONTROL_ROLE_CONFUSER_ONLY_USE_MARKER = "confuser control としてのみ使用する"
+# metric は独自の距離式を新設せず、identity_feature.level_normalization の
+# 定義する正規化 feature(x) を参照（束縛）していることを要求する
+# （distance_unit.formula の Fix 28 と同型の規律）。
+_CONFUSER_CONTROL_METRIC_LEVEL_NORMALIZATION_REF_MARKER = "level_normalization"
+_CONFUSER_CONTROL_METRIC_FEATURE_CALL_MARKER = "feature("
+# evaluation は、総合スコア化・PASS/FAIL 化をしないこと（軸別 evidence のみ
+# 規律）と、calibration_status(F) から独立であることの両方を明文している
+# ことを要求する。
+_CONFUSER_CONTROL_EVALUATION_NO_AGGREGATE_SCORE_MARKER = "PASS/FAIL"
+_CONFUSER_CONTROL_EVALUATION_CALIBRATION_INDEPENDENCE_MARKER = "calibration_status"
+
 _CALIBRATION_WORKED_EXAMPLE_STR_KEYS: Tuple[str, ...] = (
     "disclaimer", "theta_cal_derivation", "c1_gate_result", "positive_reference_gate_result",
     "negative_reference_gate_result", "calibration_status_example", "evaluated_render_outcome",
 )
 _CALIBRATION_WORKED_EXAMPLE_NUMBER_KEYS: Tuple[str, ...] = (
-    "theta_cal", "d_c1_p95", "positive_reference_distance", "negative_reference_distance",
+    "theta_cal", "d_c1_p50", "positive_reference_distance", "negative_reference_distance",
     "evaluated_render_distance",
 )
 # 実測偽装の禁止（本 repo の規律）: worked_example は合成数値例であり
@@ -1662,6 +1719,41 @@ def _validate_calibration_section(data: Any) -> None:
             f"contamination prohibition (expected {_SELF_COMPARISON_PROHIBITION_MARKER!r} to appear "
             "— reference_render(F) does not belong to the C1 population), got "
             f"{d_c1_population!r} (Codex bot レビュー PR #318 第9巡 Fix 23)"
+        )
+    # Fix 32: C1 ゲート条件が分布中心（P50）vs 尾側（theta_cal(F)）の比較で
+    # あることを機械強制し、統計的欠陥のあった旧尾側 vs 尾側比較
+    # （P95(D_C1(F))）への逆行を拒否する。
+    c1_condition = validity_gates["c1_gate"]["condition"]
+    if _C1_GATE_CONDITION_P50_MARKER not in c1_condition:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.condition must be the median-vs-tail comparison "
+            f"(expected {_C1_GATE_CONDITION_P50_MARKER!r} to appear), got {c1_condition!r} (Codex bot "
+            "レビュー PR #318 第13巡 Fix 32 — the old tail-vs-tail comparison P95(D_C1(F)) is "
+            "exchangeable with P95(D_C0(F)) under a zero adapter effect and spuriously fails ~50% of "
+            "the time)"
+        )
+    if _C1_GATE_CONDITION_OLD_P95_MARKER in c1_condition:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.condition must not regress to the old tail-vs-tail "
+            f"phrase {_C1_GATE_CONDITION_OLD_P95_MARKER!r} (Codex bot レビュー PR #318 第13巡 Fix 32), "
+            f"got {c1_condition!r}"
+        )
+    # Fix 32: d_c1_population が P50 の分位計算法を percentile_method へ
+    # 参照束縛していること、および旧ゲートの統計的欠陥（交換可能性）の理由を
+    # 明文していることを要求する。
+    if _D_C1_POPULATION_PERCENTILE_METHOD_REF_MARKER not in d_c1_population:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.d_c1_population must bind P50's quantile method to "
+            f"freeze_threshold.percentile_method by reference (expected "
+            f"{_D_C1_POPULATION_PERCENTILE_METHOD_REF_MARKER!r} to appear), got {d_c1_population!r} "
+            "(Codex bot レビュー PR #318 第13巡 Fix 32)"
+        )
+    if _C1_GATE_EXCHANGEABLE_RATIONALE_MARKER not in d_c1_population:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.d_c1_population must state the zero-effect "
+            f"exchangeability rationale for the P50 revision (expected "
+            f"{_C1_GATE_EXCHANGEABLE_RATIONALE_MARKER!r} to appear), got {d_c1_population!r} "
+            "(Codex bot レビュー PR #318 第13巡 Fix 32)"
         )
     _validate_calibration_gate(
         validity_gates["positive_reference_gate"],
@@ -1902,6 +1994,20 @@ def _validate_identity_feature(data: Any) -> None:
                 "population and reference renders remain neutral-only; both must be stated and kept "
                 f"distinct), got {scope!r}"
             )
+    # Fix 33: scope は confuser_control 節の pjs_reference も feature の計算
+    # 可能域へ含める旨を明文していなければならない（DESIGN_RUN9 §14 C3 の
+    # 評価経路が feature を計算できる対象を確保するため）。
+    for marker in (
+        _IDENTITY_FEATURE_SCOPE_CONFUSER_CONTROL_MARKER,
+        _IDENTITY_FEATURE_SCOPE_PJS_REFERENCE_MARKER,
+    ):
+        if marker not in scope:
+            raise Run9ValidationError(
+                f"identity_feature.scope must state {marker!r} (Codex bot レビュー PR #318 第13巡 "
+                "Fix 33 — the feature's computable domain must also cover the confuser_control "
+                "section's pjs_reference render, without folding it into the neutral calibration "
+                f"population/reference), got {scope!r}"
+            )
 
     f0_exclusion = _require_dict(identity_feature["f0_exclusion"], field="identity_feature.f0_exclusion")
     unknown_f0 = set(f0_exclusion.keys()) - _F0_EXCLUSION_REQUIRED_KEYS
@@ -2020,11 +2126,90 @@ def _validate_reference_example(data: Any) -> None:
         )
 
 
+def _validate_confuser_control_section(data: Any) -> None:
+    """Codex bot レビュー PR #318 第13巡 Fix 33 採用（P1）: `confuser_control`
+    節（DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §14 C3「PJS
+    Confuser」の実装復元）の閉じた形状を検証する。role/metric/
+    pjs_reference_definition/evaluation の4キー閉集合 + 非空 str 型検証に
+    加え、以下の意味論マーカーを機械強制する: ①role は「negative reference
+    としては使用しない」と「confuser control としてのみ使用する」の両方を
+    区別して明文（Fix 30 の校正ゲート専用 non-use 宣言と矛盾しない精密化）
+    ②metric は identity_feature.level_normalization の定義する feature(x)
+    を参照（独自距離式を新設しない）③evaluation は総合スコア化・PASS/FAIL
+    化をしないこと（軸別 evidence のみ規律）と calibration_status(F) から
+    独立であることの両方を明文。
+    """
+    confuser = _require_dict(data, field="identity metric space manifest.confuser_control")
+    unknown = set(confuser.keys()) - _CONFUSER_CONTROL_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"confuser_control has unknown key(s): {sorted(unknown)}")
+    missing = _CONFUSER_CONTROL_REQUIRED_KEYS - set(confuser.keys())
+    if missing:
+        raise Run9ValidationError(f"confuser_control missing required key(s): {sorted(missing)}")
+    for key in _CONFUSER_CONTROL_STR_KEYS:
+        _require_non_empty_str(confuser[key], field=f"confuser_control.{key}")
+
+    role = confuser["role"]
+    for marker in (
+        _CONFUSER_CONTROL_ROLE_NON_USE_AS_NEGATIVE_REFERENCE_MARKER,
+        _CONFUSER_CONTROL_ROLE_CONFUSER_ONLY_USE_MARKER,
+    ):
+        if marker not in role:
+            raise Run9ValidationError(
+                f"confuser_control.role must state {marker!r} (Codex bot レビュー PR #318 第13巡 "
+                "Fix 33 — PJS's role must be precisely distinguished as 'not used as a negative "
+                "reference' vs 'used only as a confuser control', without contradicting Fix 30's "
+                f"calibration-gate-scoped non-use declaration), got {role!r}"
+            )
+
+    metric = confuser["metric"]
+    for marker in (
+        _CONFUSER_CONTROL_METRIC_FEATURE_CALL_MARKER,
+        _CONFUSER_CONTROL_METRIC_LEVEL_NORMALIZATION_REF_MARKER,
+    ):
+        if marker not in metric:
+            raise Run9ValidationError(
+                f"confuser_control.metric must state {marker!r} (Codex bot レビュー PR #318 第13巡 "
+                "Fix 33 — the confuser distance must bind by reference to "
+                "identity_feature.level_normalization's feature(x) rather than defining a new "
+                f"distance formula), got {metric!r}"
+            )
+
+    evaluation = confuser["evaluation"]
+    if _CONFUSER_CONTROL_EVALUATION_NO_AGGREGATE_SCORE_MARKER not in evaluation:
+        raise Run9ValidationError(
+            "confuser_control.evaluation must state that no aggregate score / PASS-FAIL threshold "
+            f"is produced (expected {_CONFUSER_CONTROL_EVALUATION_NO_AGGREGATE_SCORE_MARKER!r} to "
+            f"appear), got {evaluation!r} (Codex bot レビュー PR #318 第13巡 Fix 33 — axis-specific "
+            "evidence only, no single Total Score)"
+        )
+    if _CONFUSER_CONTROL_EVALUATION_CALIBRATION_INDEPENDENCE_MARKER not in evaluation:
+        raise Run9ValidationError(
+            "confuser_control.evaluation must state its independence from calibration_status(F) "
+            f"(expected {_CONFUSER_CONTROL_EVALUATION_CALIBRATION_INDEPENDENCE_MARKER!r} to appear), "
+            f"got {evaluation!r} (Codex bot レビュー PR #318 第13巡 Fix 33)"
+        )
+
+
 def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
-    """`inputs/identity_metric_space.json`（`run9-identity-metric-space/1.1`）
+    """`inputs/identity_metric_space.json`（`run9-identity-metric-space/1.2`）
     の閉じた形状を検証する（Codex bot レビュー PR #318 第6巡 Fix 19、
     第7巡 Fix 20/Fix 21、第9巡 Fix 23/Fix 24、第11巡 Fix 28、
-    第12巡 Fix 29/Fix 30/Fix 31 で拡張）。
+    第12巡 Fix 29/Fix 30/Fix 31、第13巡 Fix 32/Fix 33 で拡張）。
+
+    第13巡 Fix 32（P1）: C1 ゲートの統計的欠陥の是正。C1 のアダプター効果が
+    完全にゼロのとき D_C0(F)/D_C1(F) は同一 replay-noise 分布からの独立標本
+    であり経験 P95 同士（尾側 vs 尾側）は交換可能なため、旧ゲート
+    `P95(D_C1(F)) <= theta_cal(F)` はゼロ効果下でも約1/2の確率で偽って
+    不成立となり founder を不当に INVALID 化していた。ゲート条件を
+    `P50(D_C1(F)) <= theta_cal(F)`（分布中心 vs 尾側の比較）へ改訂する。
+
+    第13巡 Fix 33（P1）: PJS confuser（C3）評価経路の復元。DESIGN_RUN9
+    §14 C3「PJS Confuser」が要求する no-PJS-leakage 検出経路を、第12巡
+    Fix 30 の校正ゲート専用 non-use 宣言と区別した新設 `confuser_control`
+    節（role/metric/pjs_reference_definition/evaluation）として復元する。
+    総合スコア化・PASS/FAIL 化はせず、校正 validity gates とも独立
+    （calibration_status(F) を変えない）。
 
     第12巡 Fix 29（P1）: reference_example を procedure-only の恒久 pin と
     して検証する。status は凍結した唯一の値と厳密一致し、value は常に null
@@ -2111,6 +2296,7 @@ def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
     _validate_distance_section(data["distance"])
     _validate_calibration_section(data["calibration"])
     _validate_reference_example(data["reference_example"])
+    _validate_confuser_control_section(data["confuser_control"])
     _require_non_empty_str(
         data["feasibility_note"], field="identity metric space manifest.feasibility_note"
     )
