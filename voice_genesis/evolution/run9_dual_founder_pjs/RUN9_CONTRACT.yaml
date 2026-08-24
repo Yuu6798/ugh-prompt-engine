@@ -114,20 +114,28 @@ backbone_checkpoint_sha:
   reason: run5 系 checkpoint の選定と sha 転記が未。
 
 # --- founder genome shas -----------------------------------------------------
+# value は genome_id（16hex 内容ID）ではなく、永続 genome 文書ファイル
+# （founders/R9F-0x_genome.json）のバイト列の sha256（64hex）を pin する
+# （Codex bot レビュー PR #315 第7巡指摘1採用: R9-G12 が要求する Genome
+# bytes replay 照合の対象は文書ファイルそのもののバイト凍結であり、
+# genome_id は文書内部の1フィールドに過ぎない）。
 founder_genome_shas:
   R9F-01:
     value: null
     status: PENDING
     reason: >-
-      identity_domain_run9_v1.json の anchor_hashes が未 pin のため genome_id を
-      正式発行できない（run9_schema.build_founder() は未 pin domain を ValueError
-      で拒否する構造 — DESIGN_RUN9 §22 実行順 step 3→4 の機械強制）。
+      identity_domain_run9_v1.json の anchor_hashes が未 pin のため genome を
+      正式発行できず、founders/R9F-01_genome.json 自体がまだ存在しない
+      （run9_schema.build_founder() は未 pin domain を ValueError で拒否する
+      構造 — DESIGN_RUN9 §22 実行順 step 3→4 の機械強制）。発行後は
+      founders/R9F-01_genome.json のバイト sha256（64hex）を pin する。
   R9F-02:
     value: null
     status: PENDING
     reason: >-
-      identity_domain_run9_v1.json の anchor_hashes が未 pin のため genome_id を
-      正式発行できない（R9F-01 と同一律速）。
+      identity_domain_run9_v1.json の anchor_hashes が未 pin のため genome を
+      正式発行できない（R9F-01 と同一律速）。発行後は
+      founders/R9F-02_genome.json のバイト sha256（64hex）を pin する。
 
 # --- lesson / learning ------------------------------------------------------
 lesson_sha:

@@ -55,6 +55,20 @@ EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
 # 座標・Lesson・閾値追加」と同種の凍結規律）。
 CHANGED_EDGE = "LEARN_PERFORMANCE"
 
+# DESIGN_RUN9 §6 の parent_designs 正典（凍結値。順序も含めて完全一致を
+# 要求する — Codex bot レビュー PR #315 第7巡指摘2採用）。§6 は5件を宣言
+# するが §23 の Run Contract 雛形は3件しか列挙していない設計書内部の
+# erratum（第6巡指摘1で判明・contract 側で是正済み）があるため、完全側の
+# §6 を正典として run-local に固定する（設計書自体は byte-pin 済みのため
+# 一切編集しない）。
+PARENT_DESIGNS: Tuple[str, ...] = (
+    "voice_genesis/evolution/DESIGN_VG_E0.md",
+    "voice_genesis/evolution/DESIGN_VG_L0.md",
+    "VoiceGenesis Evolution Theory v0.3",
+    "VoiceGenesis Singing Baseline v0.1",
+    "VoiceGenesis Supplement A / Selection Pressure Routing",
+)
+
 # DESIGN_RUN9 §9.2/§9.3: 事前固定重み。genome 発行時の唯一の重みソース
 # （公開 API から任意 weights を注入する経路は作らない — §27 item 22）。
 R9F01_WEIGHTS: Tuple[float, float, float] = (0.6, 0.3, 0.1)
@@ -866,26 +880,37 @@ def _reject_total_score_vocabulary(*, context: str, names: Any) -> None:
 
 def _validate_pin_field_value_shape(name: str, value: Any) -> None:
     """PINNED 状態の pin 欄 value の欄名別整形式検証（Codex bot レビュー
-    PR #315 指摘1採用）: `founder_genome_shas.R9F-0x` は 16hex genome_id
-    形式、`attempt_id` は正の文法 `_ATTEMPT_ID_RE` に完全一致（PR #315
-    第4巡指摘採用: 旧実装は「非空 + プレースホルダ正規表現不一致」という
-    ブラックリスト式で、`" <PIN_BEFORE_RUN> "`（前後空白で `strip()` 後だけ
-    比較していたため素通り）や `<PIN_1>`（大文字+アンダースコア限定の
-    ブラックリスト正規表現の想定外）のようなプレースホルダ変種を追撃し
-    きれなかった — 個別変種のブラックリスト追撃ではなく、先頭英数字・
-    以降英数字/`.`/`_`/`-` のみという正の文法で「`<`/`>`/空白を構造的に
-    許容しない」形に終端する）、`repository_commit_sha` は git commit
-    object ID の 40hex（SHA-1）形式（PR #315 第3巡指摘1: 64hex を要求する
-    と正直な git sha を PINNED にしても contract が構造的に READY へ到達
-    不能だった — 第1巡修正の不備）、それ以外の `_sha`/`_sha256` で終わる
-    トップレベル欄（`design_doc_sha256` を含む）は 64hex sha256 形式を
-    要求する。
+    PR #315 指摘1採用）: `founder_genome_shas.R9F-0x` は **64hex sha256**
+    形式（PR #315 第7巡指摘1採用 — 意味論の是正: §23 は本欄を `_sha`
+    ではなく `founder_genome_shas` と命名しているが値の性質は他の `_sha`
+    欄と同じ「永続 artifact のバイト sha256」であり、R9-G12
+    「Genome bytes の replay 照合」が要求するのは `founders/R9F-0x_genome.json`
+    という**永続 genome 文書ファイルのバイト列**の sha256 である。第1巡
+    修正が採用した16hex `genome_id`（`compute_genome_id()` が返す正規形
+    JSON 由来の**内容 ID**）は、genome 文書内部の1フィールドとして保持
+    される値であって、文書ファイル自体のバイト凍結ではない — 同じ
+    genome_id を宣言したまま notes 欄や整形（インデント等）だけ変えた
+    再直列化ファイルを検出できない意味論の誤りだった）、`attempt_id` は
+    正の文法 `_ATTEMPT_ID_RE` に完全一致（PR #315 第4巡指摘採用: 旧実装は
+    「非空 + プレースホルダ正規表現不一致」というブラックリスト式で、
+    `" <PIN_BEFORE_RUN> "`（前後空白で `strip()` 後だけ比較していたため
+    素通り）や `<PIN_1>`（大文字+アンダースコア限定のブラックリスト
+    正規表現の想定外）のようなプレースホルダ変種を追撃しきれなかった —
+    個別変種のブラックリスト追撃ではなく、先頭英数字・以降英数字/`.`/
+    `_`/`-` のみという正の文法で「`<`/`>`/空白を構造的に許容しない」形に
+    終端する）、`repository_commit_sha` は git commit object ID の 40hex
+    （SHA-1）形式（PR #315 第3巡指摘1: 64hex を要求すると正直な git sha
+    を PINNED にしても contract が構造的に READY へ到達不能だった — 第1巡
+    修正の不備）、それ以外の `_sha`/`_sha256` で終わるトップレベル欄
+    （`design_doc_sha256` を含む）は 64hex sha256 形式を要求する。
     """
     if name.startswith("founder_genome_shas."):
-        if not isinstance(value, str) or not _GENOME_ID_RE.match(value):
+        if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
             raise Run9ValidationError(
-                f"{name}.value must be exactly {_GENOME_ID_LEN} lowercase hex characters "
-                f"(genome_id format) when status is PINNED, got {value!r}"
+                f"{name}.value must be exactly 64 lowercase hex characters (sha256 of the persisted "
+                "genome document file, e.g. founders/R9F-0x_genome.json — NOT the 16hex genome_id "
+                "content-id, which is a field inside that document rather than a byte-freeze of the "
+                f"document itself) when status is PINNED, got {value!r}"
             )
         return
     if name == "attempt_id":
@@ -1038,6 +1063,17 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
     for i, item in enumerate(parent_designs):
         if not isinstance(item, str) or not item.strip():
             raise Run9ValidationError(f"parent_designs[{i}] must be a non-empty string, got {item!r}")
+    # 正典（`PARENT_DESIGNS`）との順序込み厳密一致を強制する（Codex bot
+    # レビュー PR #315 第7巡指摘2採用）: 第6巡修正は型・非空のみを検査して
+    # おり、`['unrelated']` のような無関係な5件や、正しい5件の順序入れ替え・
+    # 一部欠落は素通りしていた。DESIGN_RUN9 §6 を正とする凍結リストへの
+    # 完全一致（要素・順序とも）で終端する。
+    if tuple(parent_designs) != PARENT_DESIGNS:
+        raise Run9ValidationError(
+            f"parent_designs must be exactly {list(PARENT_DESIGNS)} (order included) — DESIGN_RUN9 "
+            "§6 is the canonical dependency declaration (§23's 3-item Run Contract template is a "
+            f"documented erratum; §6 governs), got {parent_designs!r}"
+        )
 
     for name in CONTRACT_PIN_FIELDS:
         _validate_pin_field(name, data[name])

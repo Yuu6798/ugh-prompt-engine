@@ -384,15 +384,17 @@ def _fully_pinned_synthetic_contract(contract_raw: Dict[str, Any]) -> Dict[str, 
             "status": "PINNED",
             "source": "synthetic-fixture",
         }
-    # Fix 8: 両 founder が PINNED のとき value（genome_id）は相異が必須の
-    # ため、R9F-01/R9F-02 で異なる16hex値を使う。
+    # Fix 8: 両 founder が PINNED のとき value（genome 文書ファイルの
+    # sha256）は相異が必須のため、R9F-01/R9F-02 で異なる値を使う。
+    # Fix 15: founder_genome_shas.value は永続 genome 文書ファイルの64hex
+    # sha256（16hex genome_id ではない）。
     fully_pinned["founder_genome_shas"]["R9F-01"] = {
-        "value": "a" * 16,
+        "value": "a" * 64,
         "status": "PINNED",
         "source": "synthetic-fixture",
     }
     fully_pinned["founder_genome_shas"]["R9F-02"] = {
-        "value": "b" * 16,
+        "value": "b" * 64,
         "status": "PINNED",
         "source": "synthetic-fixture",
     }
@@ -568,12 +570,47 @@ def test_fix1_pinned_attempt_id_placeholder_rejected(contract_raw: Dict[str, Any
 
 
 def test_fix1_pinned_founder_genome_sha_wrong_length_rejected(contract_raw: Dict[str, Any]) -> None:
-    """Codex bot レビュー PR #315 指摘1: `founder_genome_shas.R9F-0x` は
-    16hex genome_id 形式を要求する — 64hex sha256 値を入れると拒否される。"""
+    """Codex bot レビュー PR #315 指摘1（第7巡指摘1で64hex sha256形式へ意味論
+    是正済み — Fix 15 参照）: `founder_genome_shas.R9F-0x` は64hex sha256
+    形式（永続 genome 文書ファイルのバイト sha256）を要求する — 桁数不足
+    （63hex）を入れると拒否される。"""
     tampered = copy.deepcopy(contract_raw)
-    tampered["founder_genome_shas"]["R9F-01"] = {"value": "a" * 64, "status": "PINNED", "source": "x"}
+    tampered["founder_genome_shas"]["R9F-01"] = {"value": "a" * 63, "status": "PINNED", "source": "x"}
     with pytest.raises(m.Run9ValidationError):
         m.load_run9_contract(tampered)
+
+
+def test_fix15_founder_genome_sha_requires_64hex_not_16hex_genome_id(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """Codex bot レビュー PR #315 第7巡指摘1: `founder_genome_shas.R9F-0x`
+    が PINNED を名乗るとき、旧形式の16hex `genome_id` 値はもはや拒否される
+    — 値は永続 genome 文書ファイル（founders/R9F-0x_genome.json）のバイト
+    sha256（64hex）でなければならない。genome_id は文書内部のフィールドに
+    過ぎず、文書自体のバイト凍結ではないため（R9-G12 replay 照合の対象は
+    文書バイトそのもの）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["founder_genome_shas"]["R9F-01"] = {"value": "a" * 16, "status": "PINNED", "source": "x"}
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix15_founder_genome_sha_accepts_64hex(contract_raw: Dict[str, Any]) -> None:
+    """対照実験: 64hex sha256 値は PINNED として正しく受理される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["founder_genome_shas"]["R9F-01"] = {"value": "a" * 64, "status": "PINNED", "source": "x"}
+    m.load_run9_contract(tampered)  # 例外を投げないことの確認
+
+
+def test_fix15_current_contract_founder_genome_shas_reason_mentions_genome_document_bytes(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """Codex bot レビュー PR #315 第7巡指摘1: RUN9_CONTRACT.yaml の
+    founder_genome_shas.reason が「genome 文書ファイルのバイト sha256」を
+    pin する旨へ同期されていることを確認する。"""
+    for founder_id in ("R9F-01", "R9F-02"):
+        reason = contract_raw["founder_genome_shas"][founder_id]["reason"]
+        assert "genome.json" in reason or "sha256" in reason
 
 
 def test_fix1_pending_field_may_still_have_null_value(contract_raw: Dict[str, Any]) -> None:
@@ -813,7 +850,7 @@ def test_fix8_identical_founder_genome_shas_when_both_pinned_rejected(
     PINNED のとき、同一 genome_id value は拒否される（二体の dual-founder
     比較の前提 — 別々の Genome であること — が崩れるため）。"""
     tampered = copy.deepcopy(contract_raw)
-    same_value = "a" * 16
+    same_value = "a" * 64  # Fix 15: 64hex sha256 形式（valid shape）で相異判定そのものを検査する
     tampered["founder_genome_shas"]["R9F-01"] = {"value": same_value, "status": "PINNED", "source": "x"}
     tampered["founder_genome_shas"]["R9F-02"] = {"value": same_value, "status": "PINNED", "source": "y"}
     with pytest.raises(m.Run9ValidationError):
@@ -825,8 +862,8 @@ def test_fix8_distinct_founder_genome_shas_when_both_pinned_accepted(
 ) -> None:
     """対照実験: 相異する value なら両方 PINNED でも通る。"""
     tampered = copy.deepcopy(contract_raw)
-    tampered["founder_genome_shas"]["R9F-01"] = {"value": "a" * 16, "status": "PINNED", "source": "x"}
-    tampered["founder_genome_shas"]["R9F-02"] = {"value": "b" * 16, "status": "PINNED", "source": "y"}
+    tampered["founder_genome_shas"]["R9F-01"] = {"value": "a" * 64, "status": "PINNED", "source": "x"}
+    tampered["founder_genome_shas"]["R9F-02"] = {"value": "b" * 64, "status": "PINNED", "source": "y"}
     m.load_run9_contract(tampered)  # 例外を投げないことの確認
 
 
@@ -836,7 +873,7 @@ def test_fix8_one_pending_one_pinned_does_not_trigger_distinctness_check(
     """対照実験: 片方だけ PINNED（もう片方 PENDING）の場合は相異判定その
     ものが発火しない — 正直な未 pin 表現を妨げない。"""
     tampered = copy.deepcopy(contract_raw)
-    tampered["founder_genome_shas"]["R9F-01"] = {"value": "a" * 16, "status": "PINNED", "source": "x"}
+    tampered["founder_genome_shas"]["R9F-01"] = {"value": "a" * 64, "status": "PINNED", "source": "x"}
     tampered["founder_genome_shas"]["R9F-02"] = {"value": None, "status": "PENDING", "reason": "y"}
     m.load_run9_contract(tampered)  # 例外を投げないことの確認
 
@@ -1199,3 +1236,53 @@ def test_fix14_anchor_order_non_string_element_rejected() -> None:
     doc["anchor_order"] = ["af0", "ritsu", 123]
     with pytest.raises(m.Run9ValidationError):
         m.run9_identity_domain_from_dict(doc)
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第7巡対応 — Fix 15: founder_genome_shas を
+# 永続 artifact の64hex sha256に変更（テストは §Fix 15 セクション上部に
+# すでに追加済み — test_fix15_* / test_fix1_pinned_founder_genome_sha_*）
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第7巡対応 — Fix 16: parent_designs の正典厳密一致
+# ---------------------------------------------------------------------------
+
+
+def test_fix16_parent_designs_constant_matches_current_contract() -> None:
+    assert m.PARENT_DESIGNS == tuple(_DESIGN_DOC_SECTION_6_PARENT_DESIGNS)
+
+
+def test_fix16_parent_designs_unrelated_list_rejected(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 第7巡指摘2: `parent_designs` を無関係な
+    5件へ差し替えると拒否される（第6巡修正は型・非空・件数のみを検査して
+    おり、内容が正典と無関係でも通過し得た）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["parent_designs"] = ["unrelated"] * 5
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix16_parent_designs_reordered_rejected(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 第7巡指摘2: 正しい5件でも順序を入れ替える
+    と拒否される（順序込みの完全一致を要求する）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["parent_designs"] = list(reversed(_DESIGN_DOC_SECTION_6_PARENT_DESIGNS))
+    assert tampered["parent_designs"] != _DESIGN_DOC_SECTION_6_PARENT_DESIGNS  # 反転していることの前提確認
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix16_parent_designs_missing_one_element_rejected(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 第7巡指摘2: 5件のうち1件が欠落した4件
+    リストは拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["parent_designs"] = _DESIGN_DOC_SECTION_6_PARENT_DESIGNS[:-1]
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix16_parent_designs_exact_canonical_list_accepted(contract_raw: Dict[str, Any]) -> None:
+    """対照実験: 正典と順序込みで完全一致する現行 contract は通る。"""
+    m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
