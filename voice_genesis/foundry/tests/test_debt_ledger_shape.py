@@ -199,6 +199,20 @@ def test_adjudication_fixed_probe_does_not_require_git_wav(adjudication: Dict[st
     assert adjudication["fixed_probe"]["git_wav_required"] is False
 
 
+def test_adjudication_freeze_mode_vocabulary_is_pinned(adjudication: Dict[str, Any]) -> None:
+    """追補裁定 2026-08-24 (§8): freeze_mode 語彙の 2 値 enum を機械強制する
+
+    (PR #314 Codex 第 1 巡: hand-edit YAML のみだと typo/削除/ネスト崩れが
+    CI を素通りするため、既定値と語彙の完全一致を shape test で pin する)。
+    """
+    fixed_probe = adjudication["fixed_probe"]
+    assert fixed_probe["default_freeze_mode"] == "pinned_regenerable"
+    assert fixed_probe["freeze_mode_vocabulary"] == [
+        "pinned_regenerable",
+        "pinned_environment_bounded",
+    ]
+
+
 def test_adjudication_track_c_prohibits_duplicate_r0_r4_execution(
     adjudication: Dict[str, Any],
 ) -> None:
