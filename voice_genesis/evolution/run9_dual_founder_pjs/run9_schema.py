@@ -1251,6 +1251,321 @@ def validate_learning_recipe_manifest(data: Mapping[str, Any]) -> None:
     for arm_name in _LEARNING_RECIPE_ARMS:
         _validate_learning_recipe_arm(data[arm_name], arm_name=arm_name)
 
+
+# ---------------------------------------------------------------------------
+# identity metric space manifest（RUN9 Phase 3 item 1 / Codex bot レビュー
+# PR #318 第6巡 Fix 19）: `inputs/identity_metric_space.json` の閉じた形状
+# 検証。旧テストはトップレベルの `schema`/`metric_version` 2ラベルしか
+# 検証しておらず、repin 時に `extraction_procedure` 削除・`voiced_mask`
+# 省略・ネスト型変更が素通りしていた（digest テストは「そこにある形」を
+# 祝福するだけで、形そのものは検証しない）。本 validator は
+# `validate_branch_write_policy_manifest()`/`validate_learning_recipe_
+# manifest()` と同型の fail-closed 流儀（未知キー拒否・必須キー閉集合・
+# 型検証）で、トップレベル・`extraction_procedure` の必須ネストキー・
+# Fix 18 で導入した `calibration` 節の必須キーを検証する。
+# ---------------------------------------------------------------------------
+
+SCHEMA_IDENTITY_METRIC_SPACE = "run9-identity-metric-space/1.1"
+
+IDENTITY_METRIC_SPACE_PATH = _THIS_DIR / "inputs" / "identity_metric_space.json"
+
+_IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "metric_version", "canonicalization_method", "feature_extractor",
+    "extraction_procedure", "identity_feature", "distance", "calibration",
+    "reference_example", "feasibility_note",
+})
+
+_EXTRACTION_PROCEDURE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "f0_estimation", "frame_period_ms", "frame_period_source", "spectral_envelope",
+    "fft_size_rule", "voiced_mask", "sample_rate", "log_transform",
+})
+
+_F0_ESTIMATION_REQUIRED_STR_KEYS: Tuple[str, ...] = ("algorithm", "call", "note")
+_SPECTRAL_ENVELOPE_REQUIRED_STR_KEYS: Tuple[str, ...] = ("algorithm", "call", "parameters", "note")
+_VOICED_MASK_REQUIRED_STR_KEYS: Tuple[str, ...] = ("definition", "source")
+_SAMPLE_RATE_REQUIRED_STR_KEYS: Tuple[str, ...] = ("policy", "source", "distinct_from_donor_bank_sr")
+_LOG_TRANSFORM_REQUIRED_STR_KEYS: Tuple[str, ...] = ("formula", "source")
+
+_CALIBRATION_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "status", "note", "distance_unit", "freeze_threshold", "validity_gates",
+    "decision_rule", "worked_example", "source_references",
+})
+
+_CALIBRATION_DISTANCE_UNIT_STR_KEYS: Tuple[str, ...] = (
+    "formula", "aggregation_unit", "reference_render_definition",
+)
+_CALIBRATION_FREEZE_THRESHOLD_STR_KEYS: Tuple[str, ...] = (
+    "formula", "d_c0_population", "percentile_method",
+)
+_CALIBRATION_VALIDITY_GATES_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "policy", "c1_gate", "positive_reference_gate", "negative_reference_gate", "on_failure",
+})
+_CALIBRATION_GATE_STR_KEYS: Tuple[str, ...] = ("id", "condition")
+_CALIBRATION_DECISION_RULE_STR_KEYS: Tuple[str, ...] = ("applies_when", "formula", "boundary")
+_CALIBRATION_SOURCE_REFERENCES_STR_KEYS: Tuple[str, ...] = ("r9_g5", "holdout_freeze")
+
+_CALIBRATION_WORKED_EXAMPLE_STR_KEYS: Tuple[str, ...] = (
+    "disclaimer", "theta_cal_derivation", "c1_gate_result", "positive_reference_gate_result",
+    "negative_reference_gate_result", "calibration_status_example", "evaluated_render_outcome",
+)
+_CALIBRATION_WORKED_EXAMPLE_NUMBER_KEYS: Tuple[str, ...] = (
+    "theta_cal", "d_c1_p95", "positive_reference_distance", "negative_reference_distance",
+    "evaluated_render_distance",
+)
+# 実測偽装の禁止（本 repo の規律）: worked_example は合成数値例であり
+# 実測ではないことを disclaimer 文言そのもので機械強制する。
+_WORKED_EXAMPLE_DISCLAIMER_MARKERS: Tuple[str, ...] = ("synthetic", "実測ではない")
+
+
+def _require_dict(value: Any, *, field: str) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
+    return value
+
+
+def _validate_nested_str_keys(data: Mapping[str, Any], *, field: str, keys: Tuple[str, ...]) -> None:
+    for key in keys:
+        if key not in data:
+            raise Run9ValidationError(f"{field} missing required key: {key!r}")
+        _require_non_empty_str(data[key], field=f"{field}.{key}")
+
+
+def _validate_calibration_gate(data: Any, *, field: str, definition_key: str) -> None:
+    gate = _require_dict(data, field=field)
+    required = set(_CALIBRATION_GATE_STR_KEYS) | {definition_key}
+    unknown = set(gate.keys()) - required
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = required - set(gate.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    for key in required:
+        _require_non_empty_str(gate[key], field=f"{field}.{key}")
+
+
+def _validate_calibration_section(data: Any) -> None:
+    calibration = _require_dict(data, field="identity metric space manifest.calibration")
+    unknown = set(calibration.keys()) - _CALIBRATION_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"calibration has unknown key(s): {sorted(unknown)}")
+    missing = _CALIBRATION_REQUIRED_KEYS - set(calibration.keys())
+    if missing:
+        raise Run9ValidationError(f"calibration missing required key(s): {sorted(missing)}")
+
+    _require_non_empty_str(calibration["status"], field="calibration.status")
+    _require_non_empty_str(calibration["note"], field="calibration.note")
+
+    distance_unit = _require_dict(calibration["distance_unit"], field="calibration.distance_unit")
+    _validate_nested_str_keys(
+        distance_unit, field="calibration.distance_unit", keys=_CALIBRATION_DISTANCE_UNIT_STR_KEYS
+    )
+
+    freeze_threshold = _require_dict(calibration["freeze_threshold"], field="calibration.freeze_threshold")
+    _validate_nested_str_keys(
+        freeze_threshold,
+        field="calibration.freeze_threshold",
+        keys=_CALIBRATION_FREEZE_THRESHOLD_STR_KEYS,
+    )
+
+    validity_gates = _require_dict(calibration["validity_gates"], field="calibration.validity_gates")
+    unknown_gates = set(validity_gates.keys()) - _CALIBRATION_VALIDITY_GATES_REQUIRED_KEYS
+    if unknown_gates:
+        raise Run9ValidationError(f"calibration.validity_gates has unknown key(s): {sorted(unknown_gates)}")
+    missing_gates = _CALIBRATION_VALIDITY_GATES_REQUIRED_KEYS - set(validity_gates.keys())
+    if missing_gates:
+        raise Run9ValidationError(
+            f"calibration.validity_gates missing required key(s): {sorted(missing_gates)}"
+        )
+    _require_non_empty_str(validity_gates["policy"], field="calibration.validity_gates.policy")
+    _require_non_empty_str(validity_gates["on_failure"], field="calibration.validity_gates.on_failure")
+    _validate_calibration_gate(
+        validity_gates["c1_gate"],
+        field="calibration.validity_gates.c1_gate",
+        definition_key="d_c1_population",
+    )
+    _validate_calibration_gate(
+        validity_gates["positive_reference_gate"],
+        field="calibration.validity_gates.positive_reference_gate",
+        definition_key="positive_reference_definition",
+    )
+    _validate_calibration_gate(
+        validity_gates["negative_reference_gate"],
+        field="calibration.validity_gates.negative_reference_gate",
+        definition_key="negative_reference_definition",
+    )
+
+    decision_rule = _require_dict(calibration["decision_rule"], field="calibration.decision_rule")
+    _validate_nested_str_keys(
+        decision_rule, field="calibration.decision_rule", keys=_CALIBRATION_DECISION_RULE_STR_KEYS
+    )
+
+    source_references = _require_dict(
+        calibration["source_references"], field="calibration.source_references"
+    )
+    _validate_nested_str_keys(
+        source_references,
+        field="calibration.source_references",
+        keys=_CALIBRATION_SOURCE_REFERENCES_STR_KEYS,
+    )
+
+    worked_example = _require_dict(calibration["worked_example"], field="calibration.worked_example")
+    required_worked_keys = set(_CALIBRATION_WORKED_EXAMPLE_STR_KEYS) | set(
+        _CALIBRATION_WORKED_EXAMPLE_NUMBER_KEYS
+    ) | {"d_c0_samples"}
+    unknown_worked = set(worked_example.keys()) - required_worked_keys
+    if unknown_worked:
+        raise Run9ValidationError(f"calibration.worked_example has unknown key(s): {sorted(unknown_worked)}")
+    missing_worked = required_worked_keys - set(worked_example.keys())
+    if missing_worked:
+        raise Run9ValidationError(
+            f"calibration.worked_example missing required key(s): {sorted(missing_worked)}"
+        )
+    for key in _CALIBRATION_WORKED_EXAMPLE_STR_KEYS:
+        _require_non_empty_str(worked_example[key], field=f"calibration.worked_example.{key}")
+    disclaimer = worked_example["disclaimer"].lower()
+    if not any(marker.lower() in disclaimer for marker in _WORKED_EXAMPLE_DISCLAIMER_MARKERS):
+        raise Run9ValidationError(
+            "calibration.worked_example.disclaimer must mark the example as a synthetic "
+            f"illustration (expected one of {_WORKED_EXAMPLE_DISCLAIMER_MARKERS!r} to appear), "
+            f"got {worked_example['disclaimer']!r} (実測偽装の禁止 — 本 repo の規律)"
+        )
+    for key in _CALIBRATION_WORKED_EXAMPLE_NUMBER_KEYS:
+        _require_positive_finite_number(worked_example[key], field=f"calibration.worked_example.{key}")
+    d_c0_samples = worked_example["d_c0_samples"]
+    if not isinstance(d_c0_samples, list) or not d_c0_samples:
+        raise Run9ValidationError(
+            f"calibration.worked_example.d_c0_samples must be a non-empty list, got {d_c0_samples!r}"
+        )
+    for i, sample in enumerate(d_c0_samples):
+        _require_positive_finite_number(sample, field=f"calibration.worked_example.d_c0_samples[{i}]")
+
+
+def _validate_extraction_procedure(data: Any) -> None:
+    extraction = _require_dict(data, field="identity metric space manifest.extraction_procedure")
+    unknown = set(extraction.keys()) - _EXTRACTION_PROCEDURE_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"extraction_procedure has unknown key(s): {sorted(unknown)}")
+    missing = _EXTRACTION_PROCEDURE_REQUIRED_KEYS - set(extraction.keys())
+    if missing:
+        raise Run9ValidationError(f"extraction_procedure missing required key(s): {sorted(missing)}")
+
+    f0_estimation = _require_dict(extraction["f0_estimation"], field="extraction_procedure.f0_estimation")
+    _validate_nested_str_keys(
+        f0_estimation, field="extraction_procedure.f0_estimation", keys=_F0_ESTIMATION_REQUIRED_STR_KEYS
+    )
+
+    _require_positive_finite_number(
+        extraction["frame_period_ms"], field="extraction_procedure.frame_period_ms"
+    )
+    _require_non_empty_str(
+        extraction["frame_period_source"], field="extraction_procedure.frame_period_source"
+    )
+
+    spectral_envelope = _require_dict(
+        extraction["spectral_envelope"], field="extraction_procedure.spectral_envelope"
+    )
+    _validate_nested_str_keys(
+        spectral_envelope,
+        field="extraction_procedure.spectral_envelope",
+        keys=_SPECTRAL_ENVELOPE_REQUIRED_STR_KEYS,
+    )
+
+    _require_non_empty_str(extraction["fft_size_rule"], field="extraction_procedure.fft_size_rule")
+
+    voiced_mask = _require_dict(extraction["voiced_mask"], field="extraction_procedure.voiced_mask")
+    _validate_nested_str_keys(
+        voiced_mask, field="extraction_procedure.voiced_mask", keys=_VOICED_MASK_REQUIRED_STR_KEYS
+    )
+
+    sample_rate = _require_dict(extraction["sample_rate"], field="extraction_procedure.sample_rate")
+    required_sample_rate_keys = set(_SAMPLE_RATE_REQUIRED_STR_KEYS) | {"value_hz"}
+    unknown_sr = set(sample_rate.keys()) - required_sample_rate_keys
+    if unknown_sr:
+        raise Run9ValidationError(f"extraction_procedure.sample_rate has unknown key(s): {sorted(unknown_sr)}")
+    missing_sr = required_sample_rate_keys - set(sample_rate.keys())
+    if missing_sr:
+        raise Run9ValidationError(
+            f"extraction_procedure.sample_rate missing required key(s): {sorted(missing_sr)}"
+        )
+    value_hz = sample_rate["value_hz"]
+    if not _is_strict_int(value_hz) or value_hz <= 0:
+        raise Run9ValidationError(
+            f"extraction_procedure.sample_rate.value_hz must be a positive exact int (bool/float "
+            f"rejected), got {value_hz!r} ({type(value_hz).__name__})"
+        )
+    _validate_nested_str_keys(
+        sample_rate, field="extraction_procedure.sample_rate", keys=_SAMPLE_RATE_REQUIRED_STR_KEYS
+    )
+
+    log_transform = _require_dict(extraction["log_transform"], field="extraction_procedure.log_transform")
+    required_log_keys = set(_LOG_TRANSFORM_REQUIRED_STR_KEYS) | {"floor_value"}
+    unknown_log = set(log_transform.keys()) - required_log_keys
+    if unknown_log:
+        raise Run9ValidationError(f"extraction_procedure.log_transform has unknown key(s): {sorted(unknown_log)}")
+    missing_log = required_log_keys - set(log_transform.keys())
+    if missing_log:
+        raise Run9ValidationError(
+            f"extraction_procedure.log_transform missing required key(s): {sorted(missing_log)}"
+        )
+    _require_positive_finite_number(
+        log_transform["floor_value"], field="extraction_procedure.log_transform.floor_value"
+    )
+    _validate_nested_str_keys(
+        log_transform, field="extraction_procedure.log_transform", keys=_LOG_TRANSFORM_REQUIRED_STR_KEYS
+    )
+
+
+def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
+    """`inputs/identity_metric_space.json`（`run9-identity-metric-space/1.1`）
+    の閉じた形状を検証する（Codex bot レビュー PR #318 第6巡 Fix 19）。
+
+    旧実装はトップレベルの `schema`/`metric_version` 2ラベルしか検証して
+    おらず、digest テスト（正規形 sha256 が pin 値と一致すること）は
+    「そこにある形」を祝福するだけだった。repin 時に `extraction_
+    procedure` の丸ごと削除・`voiced_mask` の省略・ネスト型変更（例:
+    `frame_period_ms` が文字列化される）が起きても、digest テストは
+    改変後の内容から再計算した sha が pin 値と一致しさえすれば素通り
+    してしまう構造的な穴があった。
+
+    本関数はトップレベル必須キー閉集合・`extraction_procedure` の必須
+    ネストキー閉集合と型（harvest/cheaptrick/voiced_mask=f0>0/sample_rate/
+    fft/log floor の各キー）・Fix 18 で導入した `calibration` 節の必須
+    キー閉集合と型（distance_unit/freeze_threshold/validity_gates の3
+    ゲート/decision_rule/worked_example の synthetic disclaimer 必須/
+    source_references）を検証する。`feature_extractor`/`identity_feature`/
+    `distance`/`reference_example`/`feasibility_note` はトップレベル
+    キー集合にのみ含め、内容検証は既存の `test_phase3_identity_metric_
+    space_*` 群（内容照合テスト）に委ねる（本 validator は形状のみを
+    対象とする — 内容照合との責務分離）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"identity metric space manifest must be an object, got {type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"identity metric space manifest has unknown key(s): {sorted(unknown)}")
+    missing = _IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"identity metric space manifest missing required key(s): {sorted(missing)}"
+        )
+
+    schema = data["schema"]
+    if schema != SCHEMA_IDENTITY_METRIC_SPACE:
+        raise Run9ValidationError(
+            f"identity metric space manifest schema must be exactly {SCHEMA_IDENTITY_METRIC_SPACE!r}, "
+            f"got {schema!r}"
+        )
+    _require_non_empty_str(data["metric_version"], field="identity metric space manifest.metric_version")
+    _require_non_empty_str(
+        data["canonicalization_method"], field="identity metric space manifest.canonicalization_method"
+    )
+
+    _validate_extraction_procedure(data["extraction_procedure"])
+    _validate_calibration_section(data["calibration"])
+
+
 # PoR §12 + User 外部レビュー PR #317 P1-2 修正指示4の逐語項目を機械可読
 # キー名へ写した最低要件（practice split manifest）。
 PRACTICE_MANIFEST_REQUIRED_KEYS: Tuple[str, ...] = (

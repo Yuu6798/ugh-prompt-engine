@@ -3964,10 +3964,18 @@ IDENTITY_METRIC_SPACE_PATH = _RUN_DIR / "inputs" / "identity_metric_space.json"
 
 
 def test_phase3_identity_metric_space_file_exists_and_is_valid_json() -> None:
+    """Codex bot レビュー PR #318 第6巡 Fix 19 で validator 呼び出しへ強化
+    （削除ではなく置換）: 旧実装はトップレベルの `schema`/`metric_version`
+    2ラベルしか検証しておらず、`extraction_procedure` の削除や
+    `voiced_mask` の省略・ネスト型変更が素通りしていた。
+    `validate_identity_metric_space_manifest()` を通すことで、閉じた
+    形状（トップレベル必須キー閉集合・`extraction_procedure`/
+    `calibration` の必須ネストキーと型）を機械強制する。"""
     assert IDENTITY_METRIC_SPACE_PATH.exists()
     data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
-    assert data["schema"] == "run9-identity-metric-space/1.0"
-    assert data["metric_version"] == "run9-identity-metric/0.1"
+    assert data["schema"] == "run9-identity-metric-space/1.1"
+    assert data["metric_version"] == "run9-identity-metric/0.2"
+    m.validate_identity_metric_space_manifest(data)  # raises on any shape defect
 
 
 def test_phase3_domain_metric_space_sha_matches_canonical_form_of_identity_metric_space() -> None:
@@ -4011,14 +4019,20 @@ def test_phase3_identity_metric_space_distance_is_euclidean_symmetric_determinis
 
 
 def test_phase3_identity_metric_space_calibration_references_c0_c1_and_holdout_freeze() -> None:
+    """Codex bot レビュー PR #318 第6巡 Fix 18 で `calibration_procedure`
+    （散文）は機械可読な `calibration` 節へ置換された。旧テストが確認して
+    いた内容（C0/C1・95th percentile・R9-G5・holdout freeze・positive/
+    negative reference への言及）を新構造で同値に確認する。"""
     data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
-    calibration = data["calibration_procedure"]
-    assert "C0" in calibration and "C1" in calibration
-    assert "95th percentile" in calibration
-    assert "R9-G5" in calibration
-    assert "holdout 開封前に freeze" in calibration
-    assert "positive reference" in calibration
-    assert "negative" in calibration or "confuser" in calibration
+    calibration = data["calibration"]
+    assert "calibration_procedure" not in data
+    dumped = json.dumps(calibration, ensure_ascii=False)
+    assert "C0" in dumped and "C1" in dumped
+    assert "P95" in calibration["freeze_threshold"]["formula"]
+    assert "R9-G5" in calibration["source_references"]["r9_g5"]
+    assert "holdout 開封前に freeze" in calibration["source_references"]["holdout_freeze"]
+    assert "positive_reference" in calibration["validity_gates"]["positive_reference_gate"]["id"]
+    assert "negative_reference" in calibration["validity_gates"]["negative_reference_gate"]["id"]
 
 
 def test_phase3_identity_metric_space_feasibility_note_references_design_failure() -> None:
@@ -4053,6 +4067,94 @@ def test_phase3_readme_documents_metric_space_fable_pin_with_veto() -> None:
     assert "metric space" in readme.lower() or "metric_space" in readme
     assert "Fable" in readme
     assert "veto" in readme.lower()
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第6巡 Fix 19: identity metric space manifest
+# validator の閉じた形状検証（正例 + 負例）。旧テストはトップレベル
+# ラベル2個しか見ておらず、`extraction_procedure` 削除・`voiced_mask`
+# 省略・ネスト型変更・calibration ゲート欠落のいずれも素通りしていた。
+# ---------------------------------------------------------------------------
+
+
+def _valid_metric_space_doc() -> Dict[str, Any]:
+    return json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+
+
+def test_fix19_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: 現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix19_validator_rejects_extraction_procedure_deletion() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["extraction_procedure"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_voiced_mask_omission() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["extraction_procedure"]["voiced_mask"]
+    with pytest.raises(m.Run9ValidationError, match="voiced_mask"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_voiced_mask_definition_missing() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["extraction_procedure"]["voiced_mask"]["definition"]
+    with pytest.raises(m.Run9ValidationError, match="voiced_mask missing required key.*definition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_frame_period_ms_nested_type_change() -> None:
+    """`frame_period_ms` が数値でなく文字列化された repin を拒否する
+    （ネスト型変更が素通りする穴のリグレッションガード）。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["frame_period_ms"] = "5.0"
+    with pytest.raises(m.Run9ValidationError, match="frame_period_ms"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_sample_rate_value_hz_as_float() -> None:
+    """`_is_strict_int()` 系の型厳密化を sample_rate.value_hz にも適用する
+    （6.0/True のような非正準値が genome_id 決定論を壊す穴と同型）。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate"]["value_hz"] = 44100.0
+    with pytest.raises(m.Run9ValidationError, match="value_hz"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_calibration_c1_gate_deletion() -> None:
+    """calibration ゲート欠落（C1 を無視する実装が同じ pin に適合してし
+    まっていた Fix 18 指摘の再発防止）を拒否する。"""
+    doc = _valid_metric_space_doc()
+    del doc["calibration"]["validity_gates"]["c1_gate"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_calibration_worked_example_without_synthetic_disclaimer() -> None:
+    """worked_example の disclaimer が synthetic/実測ではない旨を含まない
+    場合を拒否する（実測偽装の禁止 — 本 repo の規律）。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["worked_example"]["disclaimer"] = "この例は正しい"
+    with pytest.raises(m.Run9ValidationError, match="synthetic"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_unknown_top_level_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_schema_version_mismatch() -> None:
+    doc = _valid_metric_space_doc()
+    doc["schema"] = "run9-identity-metric-space/1.0"
+    with pytest.raises(m.Run9ValidationError, match="schema"):
+        m.validate_identity_metric_space_manifest(doc)
 
 
 # ---------------------------------------------------------------------------

@@ -219,13 +219,16 @@ machine-independent（実音源・実 render・実学習を要さない）次段
 
 1. **identity metric space の定義と pin**（Fable 設計判定 — **User は
    マージ前に veto 可能**）: 新規 [`inputs/identity_metric_space.json`](./inputs/identity_metric_space.json)
-   （schema `run9-identity-metric-space/1.0`）— feature_extractor = WORLD
+   （schema `run9-identity-metric-space/1.1`）— feature_extractor = WORLD
    (pyworld、foundry S1〜S3 と同系)・identity_feature = P0 中立 identity
    probe voiced フレームの log spectral envelope (sp) 時間平均ベクトル
    （**f0 は明示除外** — pitch は Trait/Technique 層の観測軸のため
    identity 距離への交絡を避ける、PoR §2 層分離）・aperiodicity は
-   advisory・distance = Euclidean（対称・決定論）・calibration_procedure
-   = C0 replay 分布/C1 sham 副作用からの閾値生成（rev 0.3 改訂G）・
+   advisory・distance = Euclidean（対称・決定論）・calibration
+   = C0 95 パーセンタイル閾値（`theta_cal = P95(D_C0)`）+ C1/正負参照の
+   3 校正有効性ゲート + STABLE/SHIFTED 判定式を機械可読に凍結
+   （Codex bot レビュー PR #318 第6巡 Fix 18。`run9_schema.
+   validate_identity_metric_space_manifest()` が閉じた形状を検証）・
    feasibility_note = 退化時は PoR §9 [C] DESIGN FAILURE/UNOBSERVABLE で
    正直に閉じ事後調整はしない。このファイルの**正規形 sha256** を
    `domains/identity_domain_run9_v1.json` `metric_space_sha` へ **pin
@@ -288,10 +291,11 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   `backbone_checkpoint_sha` を PINNED（`backbone_runtime_bundle_sha` は
   ブロッカー(4)参照 — 未解消）。
 - ~~`metric_space_sha` 未 pin~~ → Phase 3: `inputs/identity_metric_space.json`
-  （schema `run9-identity-metric-space/1.0`。feature_extractor = WORLD
+  （schema `run9-identity-metric-space/1.1`。feature_extractor = WORLD
   (pyworld)・identity_feature = P0 中立 identity probe voiced フレームの
   log spectral envelope (sp) 時間平均ベクトル・**f0 は明示除外**・
-  distance = Euclidean・calibration_procedure = C0/C1 機械校正）を新設し、
+  distance = Euclidean・calibration = C0/C1 機械校正を実行可能な式へ
+  凍結（Fix 18））を新設し、
   その正規形 sha256 を `domains/identity_domain_run9_v1.json`
   `metric_space_sha` へ **PINNED**（**Fable 設計判定 — User はマージ前に
   veto 可能**）。domain は user anchor が残るため `is_pinned()` は依然
@@ -380,9 +384,11 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   MANIFEST_PATH` が規約パスを凍結済み・`validate_learning_recipe_
   manifest()` が構造を検証）の実体生成（残存ブロッカー(3)）。
 - **identity metric space の実測校正**: `inputs/identity_metric_space.json`
-  の `calibration_procedure` が定める閾値生成（C0 replay 分布・C1 sham
-  副作用・positive/negative reference からの実測 threshold freeze）は
-  spec の事前登録のみで、実測は birth probe 実行後（Founder 生成待ち）。
+  の `calibration`（`freeze_threshold`/`validity_gates`/`decision_rule`）が
+  定める閾値生成（C0 95 パーセンタイル・C1 sham 副作用・positive/negative
+  reference からの実測 threshold freeze）は spec の事前登録のみで、実測は
+  birth probe 実行後（Founder 生成待ち）。`worked_example` は synthetic
+  illustration であり実測ではない。
 
 上記の残 pin を除く machine-dependent な実装作業:
 

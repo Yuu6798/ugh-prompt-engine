@@ -10,7 +10,7 @@
   "excluded_teacher_identities": ["pjs"],
   "coordinate_precision": 6,
   "normalization": "largest-component-residual",
-  "metric_space_sha": "e3859acafc5e0320b84f935e0e3474c513e3fc269778eaf7bbb481fb8779ab60",
+  "metric_space_sha": "69b4878876da21056e1eaaf50d3bd46f54e331565caf55e75995de6225f2eb19",
   "pin_source_candidates": {
     "af0": [
       "PINNED (2026-08-24, User ruling / DESIGN_RUN9_REVISION_0.2.md 改訂2): sha256 of inputs/af0_anchor_manifest.json canonical form — see that file's canonicalization_method field for the exact recomputation recipe.",
@@ -25,7 +25,8 @@
     "metric_space_sha": [
       "PINNED (Phase 3, Fable 設計判定 — User はマージ前に veto 可能): sha256 of inputs/identity_metric_space.json canonical form（af0_anchor_manifest.json と同一の正規形規約 — canonicalization_method フィールド参照）。identity_feature は P0 中立 identity probe voiced フレームの log spectral envelope (sp) 時間平均ベクトル。f0 は明示除外（Trait/Technique 層との交絡回避、PoR §2 層分離に整合）。calibration_procedure は C0/C1 machine calibration（rev 0.3 改訂G）に従う事前登録 spec — 実測退化時は PoR §9 [C] DESIGN FAILURE/UNOBSERVABLE として閉じ、事後調整はしない。",
       "REPINNED (Codex bot レビュー PR #318 第1巡 Fix 2 採用): WORLD 抽出パラメータを voice_genesis/foundry/adapter/donor_bank.py:190-196 analyze_donor_world() を一次ソースとして全 pin（f0推定=harvest / frame_period=5.0ms / spectral envelope=cheaptrick default params / voiced_mask=f0>0 / sample_rate=44100Hz（backbone render 出力の実測値、donor_bank の24kHzドナーコーパスレートとは別対象）/ fft_size は明示指定せず pyworld既定導出規則に委ねる / log-zero floor=log(max(sp,1e-12))）。reference_example は実音声未取得のため値を捏造せず、birth probe 初回実測時に固定する事前登録手続きとして記録。この改訂に伴い正規形 sha256 を再計算・repin（旧値 c24bc2ae... から更新）。",
-      "REPINNED (自己回帰修正): 上記 Fix 2 の repin で identity_feature.vector_source に voiced_mask の定義を『voiced_mask = f0 > 0』と直書きした結果、既存テスト test_phase3_identity_metric_space_excludes_f0（identity_feature.vector_source が f0 という語を独立トークンとして含まないことを検証 — f0 は基本周波数そのものであり、ベクトルへの直接混入が無いことを保証する目的）が red化した。vector_source の記述を extraction_procedure.voiced_mask への参照に書き換え、f0 という語を含めない形へ修正（意味内容は変更なし — voiced マスクの定義そのものは extraction_procedure.voiced_mask 側に一次情報として残る）。この文言修正に伴い正規形 sha256 を再度計算し直し repin（旧値 8644fd2a... から e3859aca... へ更新）。"
+      "REPINNED (自己回帰修正): 上記 Fix 2 の repin で identity_feature.vector_source に voiced_mask の定義を『voiced_mask = f0 > 0』と直書きした結果、既存テスト test_phase3_identity_metric_space_excludes_f0（identity_feature.vector_source が f0 という語を独立トークンとして含まないことを検証 — f0 は基本周波数そのものであり、ベクトルへの直接混入が無いことを保証する目的）が red化した。vector_source の記述を extraction_procedure.voiced_mask への参照に書き換え、f0 という語を含めない形へ修正（意味内容は変更なし — voiced マスクの定義そのものは extraction_procedure.voiced_mask 側に一次情報として残る）。この文言修正に伴い正規形 sha256 を再度計算し直し repin（旧値 8644fd2a... から e3859aca... へ更新）。",
+      "REPINNED (Codex bot レビュー PR #318 第6巡 Fix 18 採用): 旧 calibration_procedure（散文）が C0 95 パーセンタイル・C1 副作用・正/負参照例の結合規則・サンプリング/集約単位・凍結閾値の生成規則を未指定のまま残し、C1 を無視する実装や max/中点を取る実装も同じ pin に適合してしまう欠陥を是正。identity_metric_space.json の calibration_procedure キーを、機械可読な calibration 節（distance_unit: d_i = euclidean(mean_voiced_log_sp(reference_render), mean_voiced_log_sp(take_i))・freeze_threshold: theta_cal = P95(D_C0)（線形補間分位）・validity_gates: C1/positive/negative reference の3ゲート（いずれも theta_cal を動かさない校正有効性判定専用、不成立なら calibration_status=INVALID→NOT_ESTABLISHED 一律）・decision_rule: d(r) <= theta_cal は STABLE_BY_MACHINE_METRIC、超過は SHIFTED（境界は closed-below）・worked_example: synthetic illustration 明記の合成数値例）へ置換。schema を run9-identity-metric-space/1.1、metric_version を run9-identity-metric/0.2 へ minor bump。この構造変更に伴い正規形 sha256 を再計算し repin（旧値 e3859aca... から 69b48788... へ更新）。"
     ]
   }
 }
