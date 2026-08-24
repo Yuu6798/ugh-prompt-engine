@@ -1,17 +1,57 @@
 # RUN9 — Tri-Donor Dual-Founder Common-Teacher Learning
 
-**状態: Preregistered / Phase 0.2（design_revision 0.2）。本学習未開始。**
+**状態: Preregistered / Phase 0.3（design_revision 0.3）。本学習未開始。**
 
 正本設計書: [`DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md`](./DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md)
 （uploads 原本とバイト同一・**byte-pin 不変**。sha256 は `RUN9_CONTRACT.yaml` の
 `design_doc_sha256` が PINNED で保持する）。v0.1 に対する差分は
 [`DESIGN_RUN9_REVISION_0.2.md`](./DESIGN_RUN9_REVISION_0.2.md)（2026-08-24
-User 裁定5件、`design_revision_doc_sha256` が PINNED で保持する）が規定する。
+User 裁定5件、無改変のまま存続）→
+[`DESIGN_RUN9_REVISION_0.3.md`](./DESIGN_RUN9_REVISION_0.3.md)（同日、PoR メモ
+[`POR_CONCEPT_ADJUDICATION_20260824.txt`](./POR_CONCEPT_ADJUDICATION_20260824.txt)
+の編入。`design_revision_doc_sha256`/`por_adjudication_sha256` が PINNED で
+保持する）の順で規定する。
 
 AF0・Ritsu・User Donor の三点 Identity から `TRI_CROSSOVER` で二体の
-Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生させ、
-同一の PJS 由来 Performance Lesson を同一予算で個体学習させる実験。
-詳細は設計書 §0/§1 を参照。
+Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生
+（**INHERIT_TRAIT**）させ、以後 r0 から **CONTROL**（無介入 replay）/
+**PRACTICE_FROM_AUDIO**（稽古 — PJS 教師音声そのものから自律的に差分を
+学習）/ **TRANSFER_TECHNIQUE**（教育 — 抽出済み Technique lesson を明示的
+に受け取り再現）の三経路へ分岐させ、声（Identity）・発声形質（Trait）・
+歌唱技術（Technique）がどの経路でどこまで移動・獲得されるかを分離観測する
+実験（rev 0.3、PoR §1）。詳細は設計書 §0/§1、および
+[`DESIGN_RUN9_REVISION_0.3.md`](./DESIGN_RUN9_REVISION_0.3.md) を参照。
+
+## RUN9 v0.3 の最小実験図（PoR §16）
+
+```
+Identity donors
+ AF0 / Ritsu / User
+        |
+        | INHERIT_TRAIT
+        v
+  +-------------+          +-------------+
+  |  R9F-01:r0  |          |  R9F-02:r0  |
+  +------+------+          +------+------+
+         |                        |
+   +-----+-----+            +-----+-----+
+   |     |     |            |     |     |
+   v     v     v            v     v     v
+CTRL PRACT EDU             CTRL PRACT EDU
+      |     |                    |     |
+      |     +-- Technique ------+     |
+      |         supplied               |
+      |
+      +-- PJS audio observed directly
+          learner extracts differences autonomously
+```
+
+各枝を機械評価: Identity / Trait / Technique / Gain / Replay /
+Generalization（単一 Total Score への集約は恒久禁止）。書き込み先は
+両介入枝とも Founder 別 versioned Performance ControlProfile
+（rev 0.2 改訂1を踏襲）、Revision 系列は CONTROL→`replay` /
+PRACTICE_FROM_AUDIO→`r_practice` / TRANSFER_TECHNIQUE→`r_taught`
+（`run9_schema.BRANCH_REVISIONS`）。
 
 ## 2026-08-24 User 裁定5件（Revision 0.2）— 要約
 
@@ -47,18 +87,59 @@ Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生さ�
    `render_code_commit` が `INFERRED_UNCONFIRMED` —
    Codex bot レビュー PR #316 第1巡指摘採用。ブロッカー(5)参照）。
 
+## 2026-08-24 PoR メモ編入（Revision 0.3）— 要約
+
+詳細・逐語は [`DESIGN_RUN9_REVISION_0.3.md`](./DESIGN_RUN9_REVISION_0.3.md) を正とする。
+PoR メモは自称 "v0.2 design revision input" だが、rev 0.2（上記5裁定）が
+既にマージ済みのため本編入は rev 0.3 として発行する（意味上は User の言う
+「v0.2」に相当）。rev 0.2 文書は無改変のまま存続し、矛盾しない内容
+（ControlProfile 方式・§対応マップ・AF0/PJS/User rights/Backbone の pin
+規約）はそのまま有効。
+
+1. **改訂A（三経路分離）**: 単一 `LEARN_PERFORMANCE` エッジを廃し、
+   Founder r0 から **CONTROL**（無介入 replay）/ **PRACTICE_FROM_AUDIO**
+   （稽古）/ **TRANSFER_TECHNIQUE**（教育）の三枝へ分岐。両介入枝の
+   書き込み先は Founder 別 versioned Performance ControlProfile
+   （rev 0.2 改訂1を踏襲）。r0 は in-place 更新せず、各枝は独立 Revision
+   （`replay`/`r_practice`/`r_taught`）として保存。交配の正式 Edge 名は
+   **INHERIT_TRAIT**（operator は `TRI_CROSSOVER/1.0` のまま — genome_id
+   決定論を壊さない）。
+2. **改訂B（三層観測）**: Identity / Trait / Technique の三層を機械評価の
+   観測軸として採用。「PJS へ近づいた」を単一 Total Score で判断せず、
+   どの層が近づいたかで解釈を分ける（Technique だけ=技術獲得の証拠、
+   Trait も=稽古による形質学習候補、Identity まで=drift として別記録）。
+3. **改訂C（情報境界）**: PRACTICE は PJS 音声そのものを許可・正解
+   parameter/speaker embedding を禁止。EDUCATION は timing/pitch
+   trajectory 等の Technique channel を許可・speaker embedding/Identity
+   coordinate/**learner の PJS raw audio 直接参照**を禁止。この非対称性
+   自体が実験変数（PoR §11）。
+4. **改訂D（比較構造と結果分類）**: PoR §4 の5比較（出生差/稽古効果/教育
+   効果/稽古教育差/個体差）+ §13 の6分類（BIRTH/PRACTICE/EDUCATION/
+   SEPARATION/FOUNDER_RESPONSE/IDENTITY）を結果 schema 語彙として凍結。
+   v0.1 §20 の `transfer_status` 語彙は superseded。
+5. **改訂E（公平性・失敗分類・holdout）**: PRACTICE と EDUCATION は情報量
+   が異なるため「同じ入力」としない（枝内二体等予算）。失敗は
+   IMPLEMENTATION_FAILURE（修正可）/ SCIENTIFIC_NULL（凍結）/
+   DESIGN_FAILURE（新 revision）の3分類。train-only gain と held-out
+   gain は別結果として記録。
+6. **改訂F（人間知覚 Gate の非必須化）**: v0.1 §17 の Mandatory with Audit
+   Fallback を、機械評価 + claim ceiling 明記へ変更。人間知覚評価は後続
+   Run へ送る（v0.1 §28 Human Audit は optional 化）。
+
 ## 実行順 §22 に対する現在地マップ
 
-設計書 §22 は 0–20 の実行順を規定する。Phase 0.2 時点の現在地:
+設計書 §22 は 0–20 の実行順を規定する（v0.1 本文の番号は不変。rev 0.3
+以降、step 5–20 が三経路化の影響を受ける — 詳細は
+`DESIGN_RUN9_REVISION_0.3.md` 改訂A/C）。Phase 0.3 時点の現在地:
 
 | step | 内容 | 状態 |
 |---|---|---|
-| 0 | freeze Run Contract | **部分 pin が拡大**（`design_doc_sha256` / `design_revision_doc_sha256` / `backbone_checkpoint_sha` が新たに PINNED。`backbone_runtime_bundle_sha` は bundle 内 `render_code_commit` が INFERRED_UNCONFIRMED のため PENDING のまま。他も正直に PENDING。`gate_state()` は依然 `BLOCKED`） |
+| 0 | freeze Run Contract | **部分 pin が拡大**（`design_doc_sha256` / `design_revision_doc_sha256` / `por_adjudication_sha256` / `backbone_checkpoint_sha` が新たに PINNED。`backbone_runtime_bundle_sha` は bundle 内 `render_code_commit` が INFERRED_UNCONFIRMED のため PENDING のまま。`interventions` 構造（旧 `single_intervention`）へ改訂済み。他も正直に PENDING。`gate_state()` は依然 `BLOCKED`） |
 | 1 | verify repository / dependency pins | 未着手（backbone 側は pin 済み。VG-L0 ハーネス自体の依存 pin は未着手） |
 | 2 | verify donor and teacher rights / manifests | **AF0/Ritsu は pin 済み・PJS は役割別2値を整理して解消**。**User donor のみ rights attest 待ち**（ブロッカー(1)参照） |
 | 3 | build run9 Identity Domain | **af0/ritsu が PINNED、user/metric_space_sha はプレースホルダのまま**（`domains/identity_domain_run9_v1.json`、`is_pinned() == False`） |
-| 4 | generate R9F-01:r0 and R9F-02:r0 | **未着手**（`run9_schema.build_founder()` は未 pin domain を構造的に ValueError で拒否する — step 3→4 の機械強制。user anchor 未 pin のため依然ブロック） |
-| 5–20 | render / freeze / lesson / learning / evaluation / verdict | 未着手（VG-L0 学習ハーネス自体が未実装 — ブロッカー(3)参照） |
+| 4 | generate R9F-01:r0 and R9F-02:r0（INHERIT_TRAIT） | **未着手**（`run9_schema.build_founder()` は未 pin domain を構造的に ValueError で拒否する — step 3→4 の機械強制。user anchor 未 pin のため依然ブロック） |
+| 5–20 | render / freeze / lesson / learning / evaluation / verdict | **未着手・rev 0.3 で三枝化**（VG-L0 学習ハーネス自体が未実装 — ブロッカー(3)参照。ハーネス実装時に CONTROL/PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE の3経路分の render/lesson/learning/evaluation を実装する必要がある — ブロッカー(6)参照） |
 
 ## ブロッカー一覧（正直な現状）
 
@@ -83,19 +164,23 @@ Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生さ�
 2. **`metric_space_sha` 未 pin**: identity domain の3つ目の必須 pin
    （anchor_hashes 3件とは別欄）。校正/採用する metric space の選定が
    未着手。
-3. **VG-L0 学習ハーネス未実装**: `LEARN_PERFORMANCE` エッジ（改訂1で
-   書き込み先を Performance ControlProfile へ変更済みだが、ハーネス自体
-   の実装は未着手）。**ControlProfile Entry Gate**（旧 Adapter Entry
+3. **VG-L0 学習ハーネス未実装**: rev 0.3 で三枝化された
+   PRACTICE_FROM_AUDIO / TRANSFER_TECHNIQUE エッジ（書き込み先は改訂1・
+   rev 0.3 改訂A で Performance ControlProfile と規定済み）ともにハーネス
+   自体の実装は未着手。**ControlProfile Entry Gate**（旧 Adapter Entry
    Gate。改訂1 §対応マップ項目1 — `control-layer ceiling evidence or
    explicit User waiver` は循環要求のため削除済み・不足時の状態名は
    `BLOCKED_CONTROLPROFILE_ENTRY`）の残る要件（calibrated Identity audit
    route / learning replay harness / rights-clean curriculum / fixed
    compute budget / frozen recipe / rollback path）はどれも準備段階に
    すら入っていない。
-4. **PJS Performance Lesson build 未実施**: 改訂3で pin 方針
-   （source archive pin / expanded corpus pin とは別の Lesson manifest を
-   生成し `lesson_sha` として pin）は確定したが、Lesson build 自体は
-   VG-L0 ハーネス実装待ち。
+4. **PJS Performance Lesson / Practice split build 未実施**: 改訂3で
+   pin 方針（source archive pin / expanded corpus pin とは別の Lesson
+   manifest を生成し `lesson_sha` として pin）は確定したが、Lesson build
+   自体は VG-L0 ハーネス実装待ち。rev 0.3 でこの pin は EDUCATION 用
+   Technique lesson を指すと明確化され、PRACTICE 用の教師音声
+   train/validation/sealed-holdout split manifest（正解 parameter を
+   含まない生素材の分割、PoR §12）は別欄として新設予定（未設計）。
 5. **`render_code_commit` の確定待ち**（Codex bot レビュー PR #316 第1巡
    指摘採用）: `inputs/backbone_runtime_bundle.json` の
    `render_code_commit`（`openvpi/DiffSinger @ e2307b1...`）は
@@ -105,6 +190,30 @@ Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生さ�
    ていない。**直接記録の発掘、または User attestation で確定するまで
    `backbone_runtime_bundle_sha` は PENDING のまま**（`backbone_checkpoint_sha`
    単体は直接記録4件一致のため PINNED 継続 — 対象を混同しない）。
+6. **practice/education builder 未実装**（rev 0.3 新設）: 情報境界
+   （`run9_schema.PRACTICE_FORBIDDEN_INPUTS` /
+   `PRACTICE_ALLOWED_INPUTS` / `EDUCATION_ALLOWED_CHANNELS` /
+   `EDUCATION_FORBIDDEN_INPUTS`）と結果分類（`BIRTH_OUTCOMES` 等6分類）の
+   語彙は凍結済みだが、これらを import して実際に PRACTICE_FROM_AUDIO /
+   TRANSFER_TECHNIQUE を実行する builder・評価器は本 Phase 0.3 では未着手
+   （語彙の凍結のみが完了した段階）。
+
+## 次フェーズ（machine-dependent）
+
+- **practice/education harness 実装**: VG-L0 学習ハーネスの一部として、
+  PRACTICE_FROM_AUDIO（Founder 自身の自律特徴抽出・差分推定・制御探索
+  ループ、PoR §3.2 の基本ループ）と TRANSFER_TECHNIQUE（Technique
+  extractor / Lesson builder → Founder 提示 → 自声再現、PoR §3.3 の基本
+  ループ）を実装する。`PRACTICE_FORBIDDEN_INPUTS`/`EDUCATION_FORBIDDEN_INPUTS`
+  を実行時検証で強制する構造（禁止入力が builder の入力経路に構造的に
+  現れない設計）が要件。
+- **6分類の実測パイプライン**: `BIRTH_OUTCOMES`〜`IDENTITY_OUTCOMES` を
+  実際の render/measurement 結果から機械判定するロジックの実装（現状は
+  語彙の凍結のみ）。
+- **Practice split manifest の新設**: 上記ブロッカー(4)参照。
+- これらは全て実音源・実 render・実学習を要する machine-dependent 作業
+  であり、Claude 側での設計・語彙凍結の範囲を超える
+  （CLAUDE.md の「マシン依存 = Codex / User」区分に該当）。
 
 **erratum（設計書内部の記述不一致、Codex bot レビュー PR #315 第6巡指摘1
 — 上記5裁定とは別件）**: DESIGN_RUN9 §6 は `parent_designs` を5件宣言する
@@ -148,15 +257,17 @@ Selection Pressure Routing）が欠落していた。設計書は byte-pin 済�
 側は VoiceGenesis Founder の Performance 制御パラメータの版付き集合。
 `DESIGN_RUN9_REVISION_0.2.md` 改訂1に明記済み。
 
-## ディレクトリ構成（Phase 0.2 時点）
+## ディレクトリ構成（Phase 0.3 時点）
 
 ```
 run9_dual_founder_pjs/
 ├── DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md   # 正本（バイト同一コピー・不変）
-├── DESIGN_RUN9_REVISION_0.2.md                                 # v0.1 差分メモ（2026-08-24 User 裁定5件）
-├── RUN9_CONTRACT.yaml                                          # §23 Run Contract（部分 pin。af0/ritsu/backbone は PINNED）
+├── DESIGN_RUN9_REVISION_0.2.md                                 # v0.1 差分メモ（2026-08-24 User 裁定5件、無改変・存続）
+├── DESIGN_RUN9_REVISION_0.3.md                                 # rev 0.2 差分メモ（同日、PoR メモ編入。三経路分離・三層観測等）
+├── POR_CONCEPT_ADJUDICATION_20260824.txt                       # PoR 裁定ソース（uploads 原本とバイト同一・不変）
+├── RUN9_CONTRACT.yaml                                          # §23 Run Contract（部分 pin。af0/ritsu/backbone/por_adjudication は PINNED。interventions 構造）
 ├── README.md                                                   # 本ファイル
-├── run9_schema.py                                              # domain / TRI_CROSSOVER / contract の run-local 正本
+├── run9_schema.py                                              # domain / TRI_CROSSOVER / contract 他の run-local 正本
 ├── domains/
 │   └── identity_domain_run9_v1.json                            # af0/ritsu PINNED・user/metric_space_sha はプレースホルダ
 ├── inputs/
@@ -164,7 +275,7 @@ run9_dual_founder_pjs/
 │   ├── rights_manifest.json                                    # User donor rights（PENDING_USER_ATTESTATION）
 │   └── backbone_runtime_bundle.json                            # RUN6 backbone の checkpoint/config/vocoder/render commit + canon model assets 一式
 ├── tests/
-│   └── test_run9_contract.py                                   # §27 最低テストの静的検証可能サブセット + Revision 0.2 対応テスト
+│   └── test_run9_contract.py                                   # §27 最低テストの静的検証可能サブセット + Revision 0.2/0.3 対応テスト
 └── results/
     └── .gitignore                                              # 実測結果は非同梱（§25 Atomic Results Bundle 用の空ディレクトリ）
 ```

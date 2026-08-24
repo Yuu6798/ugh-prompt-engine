@@ -53,15 +53,32 @@ RUN_ID = "RUN9"
 EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
 
 # 現行 design_revision（凍結値。User 裁定 2026-08-24 =
-# DESIGN_RUN9_REVISION_0.2.md）。旧 revision "0.1" を宣言する contract は
-# 意図どおり拒否される — 修正が必要なら design_revision を上げ、旧
-# attempt を append-only 履歴として残す規約（DESIGN_RUN9 ヘッダ注記）。
-DESIGN_REVISION = "0.2"
+# DESIGN_RUN9_REVISION_0.3.md — PoR メモ
+# `POR_CONCEPT_ADJUDICATION_20260824.txt` の編入）。旧 revision "0.1"/"0.2"
+# を宣言する contract は意図どおり拒否される — 修正が必要なら
+# design_revision を上げ、旧 attempt を append-only 履歴として残す規約
+# （DESIGN_RUN9 ヘッダ注記）。
+DESIGN_REVISION = "0.3"
 
-# DESIGN_RUN9 §23: 単一介入エッジは凍結値。他のエッジへの差し替えは新しい
-# design_revision を持つ別 attempt として扱う（§20 禁止事項「結果を見た後の
-# 座標・Lesson・閾値追加」と同種の凍結規律）。
-CHANGED_EDGE = "LEARN_PERFORMANCE"
+# rev 0.3（改訂A、PoR §1/§3/§4/§16）: 単一 LEARN_PERFORMANCE エッジを
+# CONTROL 無介入枝 + 二つの介入エッジ（PRACTICE_FROM_AUDIO / 稽古,
+# TRANSFER_TECHNIQUE / 教育）へ分離する。r0 は交配（INHERIT_TRAIT）で
+# 出生した後、両介入エッジとも独立 Revision（r_practice / r_taught）へ
+# 分岐する — r0 自体は in-place 更新されない（PoR §10 最優先の不変条件）。
+# 旧 CHANGED_EDGE 単一定数（= "LEARN_PERFORMANCE"）は rev 0.3 で廃止する
+# （run_id/design_revision と同様に contract loader が fail-closed で
+# 旧形式 `single_intervention.changed_edge` を拒否する — 下記
+# `interventions` 構造を参照）。
+INTERVENTION_EDGES: Tuple[str, str] = ("PRACTICE_FROM_AUDIO", "TRANSFER_TECHNIQUE")
+
+# PoR §4 の3分岐のうち、学習介入を伴わない無介入 replay 枝（対照条件）。
+CONTROL_BRANCH = "CONTROL"
+
+# PoR §3.1「交配 — INHERIT_TRAIT」: 出生エッジの正式名。operator 自体は
+# 引き続き `TRI_CROSSOVER/1.0`（genome_id 決定論を壊さない — エッジ名の
+# 導入は TRI_CROSSOVER の計算規約を変更しない、あくまで結果分類・設計文書
+# 上のラベル）。
+BIRTH_EDGE = "INHERIT_TRAIT"
 
 # DESIGN_RUN9 §6 の parent_designs 正典（凍結値。順序も含めて完全一致を
 # 要求する — Codex bot レビュー PR #315 第7巡指摘2採用）。§6 は5件を宣言
@@ -103,6 +120,97 @@ _ATTEMPT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _GENOME_ID_LEN = 16
 _GENOME_ID_RE = re.compile(rf"^[0-9a-f]{{{_GENOME_ID_LEN}}}$")
+
+# ---------------------------------------------------------------------------
+# rev 0.3（改訂D、PoR §13）: 結果分類語彙の凍結。単一 Total Score へ潰さず
+# （§27 item 40 の禁則を rev 0.3 でも継承）、6分類をそれぞれ独立判定する。
+# v0.1 §20 の transfer_status 語彙は本ファミリーにより superseded
+# （DESIGN_RUN9_REVISION_0.3.md 改訂D参照）。値は PoR §13 の逐語。
+# ---------------------------------------------------------------------------
+
+BIRTH_OUTCOMES: Tuple[str, str] = ("ESTABLISHED", "NOT_ESTABLISHED")
+PRACTICE_OUTCOMES: Tuple[str, str, str] = ("GAIN_ESTABLISHED", "NO_GAIN", "UNOBSERVABLE")
+EDUCATION_OUTCOMES: Tuple[str, str, str] = ("TRANSFER_ESTABLISHED", "NO_TRANSFER", "UNOBSERVABLE")
+SEPARATION_OUTCOMES: Tuple[str, str, str] = (
+    "MACHINE_EVIDENCE_SUPPORTED", "MIXED", "NOT_ESTABLISHED",
+)
+FOUNDER_RESPONSE_OUTCOMES: Tuple[str, str, str] = (
+    "DIFFERENTIAL_RESPONSE", "COMMON_RESPONSE", "UNDETERMINED",
+)
+IDENTITY_OUTCOMES: Tuple[str, str, str] = (
+    "STABLE_BY_MACHINE_METRIC", "SHIFTED", "UNCALIBRATED",
+)
+
+# rev 0.3（改訂E、PoR §9）: 失敗の三分類。IMPLEMENTATION_FAILURE は修正可・
+# 同一 design_revision で再 attempt。SCIENTIFIC_NULL は結果として凍結
+# （閾値・lesson・探索範囲を緩めて同 attempt を救済しない）。DESIGN_FAILURE
+# は現 revision を凍結し新 design_revision で再構築する。
+FAILURE_CLASSES: Tuple[str, str, str] = (
+    "IMPLEMENTATION_FAILURE", "SCIENTIFIC_NULL", "DESIGN_FAILURE",
+)
+
+# rev 0.3（改訂A、PoR §4/§10）: 各枝が書き込む Founder 別 versioned
+# Performance ControlProfile（改訂1で導入済みの ControlProfile 方式を
+# 三枝へ拡張）のバージョン系列命名。CONTROL は学習 step を実行しない
+# replay（対照条件）、PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE は各々独立の
+# revision 系列（r_practice / r_taught）として保存する — r0 を in-place
+# 更新しないことと対で、両枝の変化を後から比較可能にする。
+BRANCH_REVISIONS: Mapping[str, str] = types.MappingProxyType({
+    CONTROL_BRANCH: "replay",
+    "PRACTICE_FROM_AUDIO": "r_practice",
+    "TRANSFER_TECHNIQUE": "r_taught",
+})
+
+# ---------------------------------------------------------------------------
+# rev 0.3（改訂C、PoR §3.2/§3.3/§11）: PRACTICE / EDUCATION の情報境界の
+# 凍結定数。機械可読 id で列挙し、将来の practice/education builder が
+# これを import して「渡してよいもの」「渡してはいけないもの」の実装時
+# 検証の正本として使う（本モジュール自体はまだ builder を持たない —
+# ハーネス実装は VG-L0 待ち。ここでは語彙の凍結のみ行う）。
+# ---------------------------------------------------------------------------
+
+# PoR §3.2「稽古で Founder へ明示的に渡してはいけないもの」。
+PRACTICE_FORBIDDEN_INPUTS: Tuple[str, ...] = (
+    "pjs_speaker_embedding",
+    "pjs_identity_coordinate",
+    "correct_technique_parameter",  # 例:「vibrato=この値」等の正解 Technique parameter
+    "teacher_internal_parameter_dump",
+)
+
+# PoR §3.2「稽古で許すこと」。
+PRACTICE_ALLOWED_INPUTS: Tuple[str, ...] = (
+    "pjs_audio_direct_listen",
+    "founder_autonomous_feature_extraction",
+    "founder_autonomous_diff_estimation",
+    "founder_autonomous_search_within_allowed_range",
+)
+
+# PoR §3.3「教育で渡してよい候補」（= §11 TRANSFER_TECHNIQUE の許可
+# channel）。
+EDUCATION_ALLOWED_CHANNELS: Tuple[str, ...] = (
+    "timing",
+    "phoneme_note_duration_relation",
+    "pitch_trajectory",
+    "dynamics_energy_trajectory",
+    "onset_release_pattern",
+    "vibrato_pattern",
+    "phrasing",
+    "phrase_end_control",
+    "breath_placement",
+)
+
+# PoR §3.3「教育で渡してはいけないもの」+ §11「原則として learner 自身は
+# PJS raw audio を直接参照しない」（lesson 生成器だけが PJS audio から
+# Technique を抽出する非対称性そのものが実験変数 — PoR §11 末尾）。
+EDUCATION_FORBIDDEN_INPUTS: Tuple[str, ...] = (
+    "pjs_speaker_embedding",
+    "pjs_identity_coordinate",
+    "pjs_voice_quality_latent",
+    "formant_inheritance_target",
+    "spectral_envelope_identity_replication",
+    "founder_identity_replacement_parameter",
+    "learner_pjs_raw_audio_direct_reference",
+)
 
 
 class Run9ValidationError(ValueError):
@@ -907,9 +1015,14 @@ _PIN_FIELD_REQUIRED_KEYS: FrozenSet[str] = frozenset({"value", "status"})
 # 実 sha256 を PINNED で記録する）。
 CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     "design_doc_sha256",
-    # design_revision 0.2 で追加（User 裁定 2026-08-24）: DESIGN_RUN9_REVISION_0.2.md
-    # 自体の実 sha256（design_doc_sha256 と同じ前例方式）。
+    # design_revision 0.2 で追加（User 裁定 2026-08-24）: 現行 design_revision
+    # の差分メモ自体の実 sha256（design_doc_sha256 と同じ前例方式）。0.2 →
+    # 0.3 進行時は値のみ更新し欄自体は再利用する（DESIGN_RUN9_REVISION_0.3.md
+    # 「design_revision 系譜」参照）。
     "design_revision_doc_sha256",
+    # design_revision 0.3 で追加（User 裁定 2026-08-24, PoR メモ編入）:
+    # POR_CONCEPT_ADJUDICATION_20260824.txt 自体の実 sha256（同じ前例方式）。
+    "por_adjudication_sha256",
     "attempt_id",
     "repository_commit_sha",
     "dataset_manifest_sha",
@@ -948,7 +1061,7 @@ CONTRACT_POST_RUN_PIN_FIELDS: FrozenSet[str] = frozenset({"artifact_manifest_sha
 _CONTRACT_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset(
     {
         "schema", "run_id", "experiment_id", "design_revision", "design_doc",
-        "single_intervention", "baseline_run", "parent_designs",
+        "interventions", "baseline_run", "parent_designs",
         "founder_genome_shas", "claim_strength_target",
     }
     | set(CONTRACT_PIN_FIELDS)
@@ -1127,27 +1240,44 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
     if not isinstance(data["design_doc"], str) or not data["design_doc"]:
         raise Run9ValidationError(f"design_doc must be a non-empty string, got {data['design_doc']!r}")
 
-    single_intervention = data["single_intervention"]
-    if not isinstance(single_intervention, dict):
-        raise Run9ValidationError("single_intervention must be an object")
-    allowed_si_keys = {"description", "changed_edge"}
-    unknown_si = set(single_intervention.keys()) - allowed_si_keys
-    if unknown_si:
-        raise Run9ValidationError(f"single_intervention has unknown key(s): {sorted(unknown_si)}")
-    missing_si = allowed_si_keys - set(single_intervention.keys())
-    if missing_si:
-        raise Run9ValidationError(f"single_intervention missing key(s): {sorted(missing_si)}")
-    si_description = single_intervention["description"]
-    if not isinstance(si_description, str) or not si_description.strip():
+    # rev 0.3（改訂A、PoR §1/§3/§4）: 旧 `single_intervention`
+    # （description + 単一 `changed_edge`）は `interventions`
+    # （description + `edges`[2] + `control_branch`）へ改訂された。
+    # `_CONTRACT_TOP_LEVEL_KEYS` が `single_intervention` を許容しないため、
+    # 旧形式の contract は「未知キー(single_intervention) + 欠落キー
+    # (interventions)」の時点で fail-closed 拒否される（この関数の冒頭、
+    # unknown/missing チェックで既に落ちている）。
+    interventions = data["interventions"]
+    if not isinstance(interventions, dict):
+        raise Run9ValidationError("interventions must be an object")
+    allowed_interv_keys = {"description", "edges", "control_branch"}
+    unknown_interv = set(interventions.keys()) - allowed_interv_keys
+    if unknown_interv:
+        raise Run9ValidationError(f"interventions has unknown key(s): {sorted(unknown_interv)}")
+    missing_interv = allowed_interv_keys - set(interventions.keys())
+    if missing_interv:
+        raise Run9ValidationError(f"interventions missing key(s): {sorted(missing_interv)}")
+    interv_description = interventions["description"]
+    if not isinstance(interv_description, str) or not interv_description.strip():
         raise Run9ValidationError(
-            f"single_intervention.description must be a non-empty string, got {si_description!r}"
+            f"interventions.description must be a non-empty string, got {interv_description!r}"
         )
-    si_changed_edge = single_intervention["changed_edge"]
-    if si_changed_edge != CHANGED_EDGE:
+    interv_edges = interventions["edges"]
+    # parent_designs と同型の正典（`INTERVENTION_EDGES`）への順序込み厳密
+    # 一致（Codex bot レビュー PR #315 第7巡指摘2 と同種の終端規律を
+    # 新設フィールドへ最初から適用する）。
+    if not isinstance(interv_edges, list) or tuple(interv_edges) != INTERVENTION_EDGES:
         raise Run9ValidationError(
-            f"single_intervention.changed_edge must be exactly {CHANGED_EDGE!r} — RUN9 の単一介入"
-            "エッジは DESIGN_RUN9 §23 で凍結されている（他のエッジへの差し替えは design_revision を"
-            f"上げた別 attempt として扱う）, got {si_changed_edge!r}"
+            f"interventions.edges must be exactly {list(INTERVENTION_EDGES)} (order included) — "
+            "PoR §3/§4 は稽古(PRACTICE_FROM_AUDIO)と教育(TRANSFER_TECHNIQUE)を別 Edge として固定する"
+            f"（他のエッジへの差し替えは design_revision を上げた別 attempt として扱う）, got "
+            f"{interv_edges!r}"
+        )
+    interv_control_branch = interventions["control_branch"]
+    if interv_control_branch != CONTROL_BRANCH:
+        raise Run9ValidationError(
+            f"interventions.control_branch must be exactly {CONTROL_BRANCH!r} — PoR §4 の無介入"
+            f"replay 枝は固定名, got {interv_control_branch!r}"
         )
 
     if data["baseline_run"] is not None:

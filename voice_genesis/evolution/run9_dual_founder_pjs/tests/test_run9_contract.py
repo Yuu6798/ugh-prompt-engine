@@ -27,7 +27,16 @@ import run9_schema as m  # noqa: E402
 CONTRACT_PATH = _RUN_DIR / "RUN9_CONTRACT.yaml"
 DOMAIN_DRAFT_PATH = _RUN_DIR / "domains" / "identity_domain_run9_v1.json"
 DESIGN_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md"
-REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
+# 現行 design_revision (0.3) の差分メモ。design_revision_doc_sha256 が
+# pin する対象。
+REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.3.md"
+# rev 0.2 文書は無改変のまま存続する（design_revision 系譜の1件）。
+REVISION_0_2_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
+POR_ADJUDICATION_PATH = _RUN_DIR / "POR_CONCEPT_ADJUDICATION_20260824.txt"
+POR_UPLOAD_SOURCE_PATH = Path(
+    "/root/.claude/uploads/e505c1c2-c4ad-588b-a1b2-258051a522de/"
+    "4cdd727c-RUN9_v0.2_PoR_Concept_Adjudication_20260824.txt"
+)
 AF0_ANCHOR_MANIFEST_PATH = _RUN_DIR / "inputs" / "af0_anchor_manifest.json"
 RIGHTS_MANIFEST_PATH = _RUN_DIR / "inputs" / "rights_manifest.json"
 BACKBONE_BUNDLE_PATH = _RUN_DIR / "inputs" / "backbone_runtime_bundle.json"
@@ -742,35 +751,84 @@ def test_fix4_gate_state_still_works_on_untampered_contract(contract_raw: Dict[s
 
 
 # ---------------------------------------------------------------------------
-# PR #315 Codex bot レビュー第2巡対応 — Fix 5: changed_edge の凍結値強制
+# PR #315 Codex bot レビュー第2巡対応 — Fix 5: 単一介入エッジの凍結値強制
+# （rev 0.3 改訂A、PoR §1/§3/§4 により `single_intervention.changed_edge`
+# 単数から `interventions.edges`[2] + `control_branch` へ改訂 — 定数名も
+# `CHANGED_EDGE` から `INTERVENTION_EDGES`/`CONTROL_BRANCH` へ移行）
 # ---------------------------------------------------------------------------
 
 
-def test_fix5_changed_edge_constant_matches_contract() -> None:
-    assert m.CHANGED_EDGE == "LEARN_PERFORMANCE"
+def test_fix5_intervention_edges_constant_matches_contract() -> None:
+    assert m.INTERVENTION_EDGES == ("PRACTICE_FROM_AUDIO", "TRANSFER_TECHNIQUE")
 
 
-def test_fix5_current_contract_changed_edge_is_frozen_value(contract_raw: Dict[str, Any]) -> None:
-    assert contract_raw["single_intervention"]["changed_edge"] == m.CHANGED_EDGE
+def test_fix5_control_branch_constant_matches_contract() -> None:
+    assert m.CONTROL_BRANCH == "CONTROL"
 
 
-def test_fix5_changed_edge_tampering_rejected(contract_raw: Dict[str, Any]) -> None:
-    """Codex bot レビュー PR #315 第2巡指摘2: `changed_edge` を
-    `"REPLACE_IDENTITY"` 等の別エッジへ差し替えた fixture は拒否される
-    （DESIGN_RUN9 §23 で凍結された単一介入エッジの改変防止）。"""
+def test_fix5_birth_edge_constant_is_inherit_trait() -> None:
+    assert m.BIRTH_EDGE == "INHERIT_TRAIT"
+
+
+def test_fix5_current_contract_intervention_edges_is_frozen_value(
+    contract_raw: Dict[str, Any],
+) -> None:
+    assert tuple(contract_raw["interventions"]["edges"]) == m.INTERVENTION_EDGES
+
+
+def test_fix5_current_contract_control_branch_is_frozen_value(
+    contract_raw: Dict[str, Any],
+) -> None:
+    assert contract_raw["interventions"]["control_branch"] == m.CONTROL_BRANCH
+
+
+def test_fix5_intervention_edges_tampering_rejected(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 第2巡指摘2 の rev 0.3 版: `edges` を
+    別のエッジ集合へ差し替えた fixture は拒否される（PoR §3/§4 で凍結
+    された二介入エッジの改変防止）。"""
     tampered = copy.deepcopy(contract_raw)
-    tampered["single_intervention"]["changed_edge"] = "REPLACE_IDENTITY"
+    tampered["interventions"]["edges"] = ["REPLACE_IDENTITY", "TRANSFER_TECHNIQUE"]
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix5_intervention_edges_order_swap_rejected(contract_raw: Dict[str, Any]) -> None:
+    """`edges` は要素だけでなく順序も INTERVENTION_EDGES と厳密一致を
+    要求する（parent_designs と同型の順序込み終端規律）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"]["edges"] = ["TRANSFER_TECHNIQUE", "PRACTICE_FROM_AUDIO"]
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix5_control_branch_tampering_rejected(contract_raw: Dict[str, Any]) -> None:
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"]["control_branch"] = "NO_INTERVENTION"
     with pytest.raises(m.Run9ValidationError):
         m.load_run9_contract(tampered)
 
 
 def test_fix5_blank_description_rejected(contract_raw: Dict[str, Any]) -> None:
     """Codex bot レビュー PR #315 第2巡指摘2 補足: `description` も
-    非空文字列を強制する。"""
+    非空文字列を強制する（rev 0.3 の `interventions.description`）。"""
     tampered = copy.deepcopy(contract_raw)
-    tampered["single_intervention"]["description"] = "   "
+    tampered["interventions"]["description"] = "   "
     with pytest.raises(m.Run9ValidationError):
         m.load_run9_contract(tampered)
+
+
+def test_fix5_old_single_intervention_format_rejected(contract_raw: Dict[str, Any]) -> None:
+    """rev 0.3: 旧形式（`single_intervention.changed_edge`）を宣言する
+    contract は fail-closed で拒否される。`interventions` キーの欠落
+    （未知キー `single_intervention` の混入と対）で拒否される想定。"""
+    legacy = copy.deepcopy(contract_raw)
+    del legacy["interventions"]
+    legacy["single_intervention"] = {
+        "description": "legacy single-edge format",
+        "changed_edge": "LEARN_PERFORMANCE",
+    }
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(legacy)
 
 
 # ---------------------------------------------------------------------------
@@ -1383,15 +1441,19 @@ def _sha256_canonical_json(obj: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-# --- item 1: design_revision 0.2 での contract load 成功 / "0.1" 拒否 -------
+# --- item 1: design_revision 0.3 での contract load 成功 / "0.1"/"0.2" 拒否 -
 
 
 def test_revision02_design_revision_constant_is_0_2() -> None:
-    assert m.DESIGN_REVISION == "0.2"
+    """rev 0.3 では `run9_schema.DESIGN_REVISION` 自体が "0.3" を凍結する
+    （テスト名は歴史的に revision02_ prefix のまま — Fix 15 の
+    founder_genome_shas 改名前例と同様、rename ではなく assertion のみ
+    更新する）。"""
+    assert m.DESIGN_REVISION == "0.3"
 
 
 def test_revision02_current_contract_declares_0_2(contract_raw: Dict[str, Any]) -> None:
-    assert contract_raw["design_revision"] == "0.2"
+    assert contract_raw["design_revision"] == "0.3"
     m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
 
 
@@ -1405,10 +1467,60 @@ def test_revision02_old_0_1_contract_rejected(contract_raw: Dict[str, Any]) -> N
         m.load_run9_contract(tampered)
 
 
+def test_revision03_old_0_2_contract_rejected(contract_raw: Dict[str, Any]) -> None:
+    """design_revision 0.2 → 0.3（PoR メモ編入）: 旧 "0.2" を宣言する
+    contract も同様に意図どおり拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["design_revision"] = "0.2"
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
 def test_revision02_doc_sha256_pin_matches_actual_file(contract_raw: Dict[str, Any]) -> None:
     field = contract_raw["design_revision_doc_sha256"]
     assert field["status"] == "PINNED"
     assert field["value"] == _sha256_file(REVISION_DOC_PATH)
+
+
+def test_revision03_por_adjudication_sha256_pin_matches_actual_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["por_adjudication_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(POR_ADJUDICATION_PATH)
+
+
+def test_revision03_rev02_doc_is_byte_unchanged() -> None:
+    """rev 0.2 文書（DESIGN_RUN9_REVISION_0.2.md）は rev 0.3 発行後も
+    無改変・存続する — DESIGN_RUN9_REVISION_0.3.md「design_revision 系譜」
+    表に記録した固定 sha256 と一致することを確認する。"""
+    assert _sha256_file(REVISION_0_2_DOC_PATH) == (
+        "406098e2ac62065855b7e4086fce769a2956b64606594ad83b63b527a23ad4fb"
+    )
+
+
+def test_revision03_por_adjudication_byte_identical_to_upload_source() -> None:
+    """PoR メモの repo コピーが uploads 原本とバイト同一であること。
+    uploads パスはセッション固有・一時的なものであり CI/他環境には存在
+    しないため、原本が実在するときだけ検証する（原本非存在時はこの
+    テスト自体は無条件 pass — 恒久的な回帰保護は
+    `por_adjudication_sha256` の固定 pin 値と本テストファイル中の
+    frozen literal（下記 test_revision03_por_adjudication_sha256_is_frozen_value）
+    が担う）。"""
+    if not POR_UPLOAD_SOURCE_PATH.exists():
+        pytest.skip(
+            f"upload source not present in this environment: {POR_UPLOAD_SOURCE_PATH}"
+        )
+    assert _sha256_file(POR_ADJUDICATION_PATH) == _sha256_file(POR_UPLOAD_SOURCE_PATH)
+
+
+def test_revision03_por_adjudication_sha256_is_frozen_value() -> None:
+    """uploads パスに依存しない恒久的な回帰保護: repo コピーの実測 sha256
+    が、編入時に確認した固定値（RUN9_CONTRACT.yaml の
+    por_adjudication_sha256 pin と同一）と一致すること。"""
+    assert _sha256_file(POR_ADJUDICATION_PATH) == (
+        "56b66fd8df943fbfa98767f2ea481c0ba2a68c26916832e08517379408d97007"
+    )
 
 
 def test_revision02_v0_1_design_doc_is_byte_unchanged(contract_raw: Dict[str, Any]) -> None:
@@ -1428,8 +1540,13 @@ def test_revision02_adapter_to_controlprofile_correspondence_map_present() -> No
     （38c0e0f, 掃討完結、採用）: REVISION_0.2 が v0.1 の Adapter 固有条項
     11項目それぞれについて ControlProfile 等価物への明示的置換表を持つ
     ことのキーワード存在検査（過剰な文言テストは避け、各項目を機械的に
-    識別できる語彙が本文に存在することだけを確認する）。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    識別できる語彙が本文に存在することだけを確認する）。rev 0.2 文書自体は
+    rev 0.3 発行後も無改変で存続するため、`REVISION_0_2_DOC_PATH`
+    （固定 sha256 = `test_revision03_rev02_doc_is_byte_unchanged` が別途
+    検証）を対象にする — `REVISION_DOC_PATH` は現行 design_revision
+    （rev 0.3）を指すよう rev 0.3 編入時に更新済みのため、本テストの対象を
+    誤って rev 0.3 文書へ切り替えない。"""
+    doc = REVISION_0_2_DOC_PATH.read_text(encoding="utf-8")
     assert "本表（rev 0.2）が勝つ" in doc  # 前文: v0.1 と矛盾する場合の優先規則
     required_keywords = [
         "BLOCKED_CONTROLPROFILE_ENTRY",  # item 1: Adapter Entry Gate -> ControlProfile Entry Gate
@@ -1450,8 +1567,9 @@ def test_revision02_adapter_to_controlprofile_correspondence_map_present() -> No
 
 def test_revision02_adapter_sweep_completeness_declared() -> None:
     """Codex bot レビュー PR #316 第8巡指摘B: v0.1 全文の `grep -in adapter`
-    掃討の網羅性宣言がソース中に明文化されていること。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    掃討の網羅性宣言がソース中に明文化されていること（rev 0.2 文書対象。
+    上のテストと同じ理由で REVISION_0_2_DOC_PATH を使う）。"""
+    doc = REVISION_0_2_DOC_PATH.read_text(encoding="utf-8")
     assert "grep -in adapter" in doc
     assert "未マップの実行要件は残っていない" in doc
 
@@ -1471,11 +1589,15 @@ def test_revision02_v0_1_adapter_line_count_matches_swept_total() -> None:
 
 
 def test_revision02_new_pin_fields_get_64hex_format_enforced(contract_raw: Dict[str, Any]) -> None:
-    """新欄2つ（design_revision_doc_sha256 / backbone_runtime_bundle_sha）は
-    欄名が `_sha256`/`_sha` で終わるため、`_validate_pin_field_value_shape`
-    の汎用64hexブランチが自動適用される（特別扱いの分岐を追加していない
-    ことの確認）。"""
-    for field_name in ("design_revision_doc_sha256", "backbone_runtime_bundle_sha"):
+    """新欄（design_revision_doc_sha256 / backbone_runtime_bundle_sha /
+    por_adjudication_sha256）は欄名が `_sha256`/`_sha` で終わるため、
+    `_validate_pin_field_value_shape` の汎用64hexブランチが自動適用される
+    （特別扱いの分岐を追加していないことの確認）。"""
+    for field_name in (
+        "design_revision_doc_sha256",
+        "backbone_runtime_bundle_sha",
+        "por_adjudication_sha256",
+    ):
         assert field_name in m.CONTRACT_PIN_FIELDS
         tampered = copy.deepcopy(contract_raw)
         tampered[field_name] = {"value": "not-a-valid-hex-value", "status": "PINNED", "source": "x"}
@@ -2285,3 +2407,250 @@ def test_revision02_backbone_runtime_bundle_sha_still_pending_after_canon_assets
     field = contract_raw["backbone_runtime_bundle_sha"]
     assert field["status"] == "PENDING"
     assert field["value"] is None
+
+
+# ---------------------------------------------------------------------------
+# User 裁定 2026-08-24（PoR メモ編入、design_revision 0.2 -> 0.3）対応
+# ---------------------------------------------------------------------------
+
+
+def test_por_revision_design_revision_doc_path_exists() -> None:
+    assert REVISION_DOC_PATH.exists()
+    assert REVISION_DOC_PATH.name == "DESIGN_RUN9_REVISION_0.3.md"
+
+
+def test_por_revision_por_adjudication_path_exists() -> None:
+    assert POR_ADJUDICATION_PATH.exists()
+    assert POR_ADJUDICATION_PATH.name == "POR_CONCEPT_ADJUDICATION_20260824.txt"
+
+
+# --- 改訂A: interventions 構造 / BRANCH_REVISIONS / BIRTH_EDGE -------------
+
+
+def test_por_revision_intervention_edges_frozen_values() -> None:
+    """PoR §3.2/§3.3: 稽古=PRACTICE_FROM_AUDIO, 教育=TRANSFER_TECHNIQUE の
+    順で凍結される（PoR §16 最小実験図の左→右の記載順とも整合）。"""
+    assert m.INTERVENTION_EDGES == ("PRACTICE_FROM_AUDIO", "TRANSFER_TECHNIQUE")
+
+
+def test_por_revision_branch_revisions_frozen_mapping() -> None:
+    """PoR §4 比較構造: CONTROL->replay, PRACTICE_FROM_AUDIO->r_practice,
+    TRANSFER_TECHNIQUE->r_taught の対応が凍結されている。"""
+    assert dict(m.BRANCH_REVISIONS) == {
+        "CONTROL": "replay",
+        "PRACTICE_FROM_AUDIO": "r_practice",
+        "TRANSFER_TECHNIQUE": "r_taught",
+    }
+
+
+def test_por_revision_branch_revisions_is_immutable_mapping() -> None:
+    """BRANCH_REVISIONS は他の凍結 dict（Run9IdentityDomain の
+    anchor_hashes 等）と同様に types.MappingProxyType で直接改変を防ぐ。"""
+    import types as _types
+
+    assert isinstance(m.BRANCH_REVISIONS, _types.MappingProxyType)
+    with pytest.raises(TypeError):
+        m.BRANCH_REVISIONS["CONTROL"] = "tampered"  # type: ignore[index]
+
+
+def test_por_revision_birth_edge_does_not_change_operator_id() -> None:
+    """PoR §3.1 / DESIGN_RUN9_REVISION_0.3.md 改訂A: INHERIT_TRAIT の導入は
+    TRI_CROSSOVER operator の計算規約（genome_id 決定論）を変更しない —
+    OPERATOR_ID 定数がそのまま TRI_CROSSOVER/1.0 であることを確認する。"""
+    assert m.BIRTH_EDGE == "INHERIT_TRAIT"
+    assert m.OPERATOR_ID == "TRI_CROSSOVER/1.0"
+
+
+# --- 改訂D: 結果分類語彙（PoR §13 逐語） -----------------------------------
+
+
+def test_por_revision_birth_outcomes_verbatim() -> None:
+    assert m.BIRTH_OUTCOMES == ("ESTABLISHED", "NOT_ESTABLISHED")
+
+
+def test_por_revision_practice_outcomes_verbatim() -> None:
+    assert m.PRACTICE_OUTCOMES == ("GAIN_ESTABLISHED", "NO_GAIN", "UNOBSERVABLE")
+
+
+def test_por_revision_education_outcomes_verbatim() -> None:
+    assert m.EDUCATION_OUTCOMES == ("TRANSFER_ESTABLISHED", "NO_TRANSFER", "UNOBSERVABLE")
+
+
+def test_por_revision_separation_outcomes_verbatim() -> None:
+    assert m.SEPARATION_OUTCOMES == (
+        "MACHINE_EVIDENCE_SUPPORTED", "MIXED", "NOT_ESTABLISHED",
+    )
+
+
+def test_por_revision_founder_response_outcomes_verbatim() -> None:
+    assert m.FOUNDER_RESPONSE_OUTCOMES == (
+        "DIFFERENTIAL_RESPONSE", "COMMON_RESPONSE", "UNDETERMINED",
+    )
+
+
+def test_por_revision_identity_outcomes_verbatim() -> None:
+    assert m.IDENTITY_OUTCOMES == (
+        "STABLE_BY_MACHINE_METRIC", "SHIFTED", "UNCALIBRATED",
+    )
+
+
+def test_por_revision_outcome_vocabularies_have_no_internal_duplicates() -> None:
+    """6分類それぞれの内部に重複値が無いこと（各分類自身の定義ミスの検出）。
+    分類**間**での語彙の再利用（例: `"NOT_ESTABLISHED"` は BIRTH と
+    SEPARATION の両方で、`"UNOBSERVABLE"` は PRACTICE と EDUCATION の
+    両方で使われる）は PoR §13 の逐語どおりであり、意図的な共有 — これは
+    禁止しない（「一つの PASS だけで全現象を代表させない」という PoR の
+    趣旨は、6つの分類を**独立に判定する**ことであり、各分類の語彙が互いに
+    素であることまでは要求していない）。"""
+    all_vocabs = [
+        m.BIRTH_OUTCOMES, m.PRACTICE_OUTCOMES, m.EDUCATION_OUTCOMES,
+        m.SEPARATION_OUTCOMES, m.FOUNDER_RESPONSE_OUTCOMES, m.IDENTITY_OUTCOMES,
+    ]
+    for vocab in all_vocabs:
+        assert len(vocab) == len(set(vocab)), f"duplicate value within {vocab!r}"
+
+
+def test_por_revision_outcome_vocabulary_sizes_match_por_13() -> None:
+    """PoR §13 逐語の各分類の要素数（BIRTH=2, 他5分類は各3）と一致する。"""
+    assert len(m.BIRTH_OUTCOMES) == 2
+    for vocab in (
+        m.PRACTICE_OUTCOMES, m.EDUCATION_OUTCOMES, m.SEPARATION_OUTCOMES,
+        m.FOUNDER_RESPONSE_OUTCOMES, m.IDENTITY_OUTCOMES,
+    ):
+        assert len(vocab) == 3
+
+
+def test_por_revision_v01_transfer_status_superseded_note_present() -> None:
+    """v0.1 §20 の transfer_status 語彙が rev 0.3 で superseded と明記
+    されていること（DESIGN_RUN9_REVISION_0.3.md 改訂D）。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "transfer_status" in doc
+    assert "superseded" in doc
+
+
+# --- 改訂E: 失敗分類語彙（PoR §9） ------------------------------------------
+
+
+def test_por_revision_failure_classes_verbatim() -> None:
+    assert m.FAILURE_CLASSES == (
+        "IMPLEMENTATION_FAILURE", "SCIENTIFIC_NULL", "DESIGN_FAILURE",
+    )
+
+
+# --- 改訂C: 情報境界の凍結定数（PoR §3.2/§3.3/§11） -------------------------
+
+
+def test_por_revision_practice_forbidden_inputs_includes_spk_embedding_and_correct_parameter() -> (
+    None
+):
+    """PRACTICE 禁止に spk embedding と正解 Technique parameter が含まれる
+    こと（コーディネータ指示の設計必須項目）。"""
+    assert "pjs_speaker_embedding" in m.PRACTICE_FORBIDDEN_INPUTS
+    assert "correct_technique_parameter" in m.PRACTICE_FORBIDDEN_INPUTS
+    assert "pjs_identity_coordinate" in m.PRACTICE_FORBIDDEN_INPUTS
+    assert "teacher_internal_parameter_dump" in m.PRACTICE_FORBIDDEN_INPUTS
+
+
+def test_por_revision_practice_allowed_inputs_covers_por_3_2_permissions() -> None:
+    assert "pjs_audio_direct_listen" in m.PRACTICE_ALLOWED_INPUTS
+    assert "founder_autonomous_feature_extraction" in m.PRACTICE_ALLOWED_INPUTS
+    assert "founder_autonomous_diff_estimation" in m.PRACTICE_ALLOWED_INPUTS
+    assert "founder_autonomous_search_within_allowed_range" in m.PRACTICE_ALLOWED_INPUTS
+
+
+def test_por_revision_education_forbidden_inputs_includes_spk_embedding_and_raw_audio() -> None:
+    """EDUCATION 禁止に spk embedding と raw audio 直接参照が含まれること
+    （コーディネータ指示の設計必須項目 — PoR §11 の非対称性の核心）。"""
+    assert "pjs_speaker_embedding" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "learner_pjs_raw_audio_direct_reference" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "pjs_identity_coordinate" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "pjs_voice_quality_latent" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "formant_inheritance_target" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "spectral_envelope_identity_replication" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "founder_identity_replacement_parameter" in m.EDUCATION_FORBIDDEN_INPUTS
+
+
+def test_por_revision_education_allowed_channels_covers_por_3_3_candidates() -> None:
+    """EDUCATION 許可に timing/pitch trajectory 等が含まれること
+    （コーディネータ指示の設計必須項目 — PoR §3.3 の許可候補列挙）。"""
+    expected = {
+        "timing", "phoneme_note_duration_relation", "pitch_trajectory",
+        "dynamics_energy_trajectory", "onset_release_pattern", "vibrato_pattern",
+        "phrasing", "phrase_end_control", "breath_placement",
+    }
+    assert expected == set(m.EDUCATION_ALLOWED_CHANNELS)
+
+
+def test_por_revision_practice_and_education_forbidden_sets_do_not_overlap_allowed() -> None:
+    """禁止 id が同じ経路の許可 id 集合と重複していないこと（矛盾する語彙
+    定義の検出）。"""
+    assert not (set(m.PRACTICE_FORBIDDEN_INPUTS) & set(m.PRACTICE_ALLOWED_INPUTS))
+    assert not (set(m.EDUCATION_FORBIDDEN_INPUTS) & set(m.EDUCATION_ALLOWED_CHANNELS))
+
+
+def test_por_revision_all_info_boundary_constants_are_nonempty_str_tuples() -> None:
+    for vocab in (
+        m.PRACTICE_FORBIDDEN_INPUTS, m.PRACTICE_ALLOWED_INPUTS,
+        m.EDUCATION_ALLOWED_CHANNELS, m.EDUCATION_FORBIDDEN_INPUTS,
+    ):
+        assert isinstance(vocab, tuple) and len(vocab) > 0
+        for item in vocab:
+            assert isinstance(item, str) and item
+
+
+# --- RUN9_CONTRACT.yaml の interventions 構造との整合 -----------------------
+
+
+def test_por_revision_contract_interventions_edges_match_constant(
+    contract_raw: Dict[str, Any],
+) -> None:
+    assert tuple(contract_raw["interventions"]["edges"]) == m.INTERVENTION_EDGES
+
+
+def test_por_revision_contract_interventions_control_branch_matches_constant(
+    contract_raw: Dict[str, Any],
+) -> None:
+    assert contract_raw["interventions"]["control_branch"] == m.CONTROL_BRANCH
+
+
+def test_por_revision_contract_no_longer_has_single_intervention_key(
+    contract_raw: Dict[str, Any],
+) -> None:
+    assert "single_intervention" not in contract_raw
+    assert "interventions" in contract_raw
+
+
+# --- design_revision 0.3 loader 検証: 既存 genome/domain/rights 系は無変更 --
+
+
+def test_por_revision_genome_domain_rights_helpers_still_importable() -> None:
+    """genome/domain/rights 系 API は rev 0.3 でシグネチャ変更していない
+    ことの直接確認（TRI_CROSSOVER/genome_id 決定論を壊さないという
+    コーディネータ指示の遵守）。"""
+    assert hasattr(m, "build_run9_identity_domain")
+    assert hasattr(m, "build_founder")
+    assert hasattr(m, "founder_genome_from_dict")
+    assert hasattr(m, "verify_rights_manifest_against_ledger")
+    assert m.OPERATOR_ID == "TRI_CROSSOVER/1.0"
+
+
+def test_por_revision_pinned_domain_and_founder_still_work_under_0_3(
+    pinned_domain: m.Run9IdentityDomain,
+) -> None:
+    """pinned_domain フィクスチャ経由の build_founder が rev 0.3 でも
+    従来どおり動作し、genome_id が決定論的であること（同じ入力なら同じ
+    genome_id — この巡の変更が genome 計算に一切触れていないことの実証）。"""
+    genome_a = m.build_founder(pinned_domain, "R9F-01")
+    genome_b = m.build_founder(pinned_domain, "R9F-01")
+    assert genome_a.genome_id == genome_b.genome_id
+    assert genome_a.to_dict() == genome_b.to_dict()
+
+
+def test_por_revision_full_contract_gate_state_still_blocked(
+    contract: m.Run9RunContract,
+) -> None:
+    """rev 0.3 編入後も現行 RUN9_CONTRACT.yaml は正直に BLOCKED のまま
+    （por_adjudication_sha256/design_revision_doc_sha256 が新たに PINNED
+    化されても、他の多くの pre-run 欄が依然 PENDING のため READY へは
+    到達しない）。"""
+    assert m.gate_state(contract) == "BLOCKED"

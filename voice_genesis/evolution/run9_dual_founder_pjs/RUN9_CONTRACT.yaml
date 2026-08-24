@@ -7,13 +7,23 @@
 # PINNED にしていない。
 #
 # 2026-08-24 User 裁定 5件により design_revision 0.1 → 0.2
-# （DESIGN_RUN9_REVISION_0.2.md）。旧 "0.1" を宣言する contract は
-# run9_schema.DESIGN_REVISION の凍結値照合で意図どおり拒否される。本改訂で
-# af0/ritsu anchor・backbone checkpoint が新たに PINNED になった
-# （詳細は各欄の reason/source、および DESIGN_RUN9_REVISION_0.2.md を参照）。
-# backbone_runtime_bundle_sha は PR #316 第1巡レビュー（P2, 866fcc8）採用に
-# より PENDING（bundle 内 render_code_commit が INFERRED_UNCONFIRMED のため
-# — backbone_checkpoint_sha 単体は直接記録4件一致で PINNED のまま）。
+# （DESIGN_RUN9_REVISION_0.2.md）。本改訂で af0/ritsu anchor・backbone
+# checkpoint が新たに PINNED になった（詳細は各欄の reason/source、および
+# DESIGN_RUN9_REVISION_0.2.md を参照）。backbone_runtime_bundle_sha は
+# PR #316 第1巡レビュー（P2, 866fcc8）採用により PENDING（bundle 内
+# render_code_commit が INFERRED_UNCONFIRMED のため — backbone_checkpoint_sha
+# 単体は直接記録4件一致で PINNED のまま）。
+#
+# 同日、PoR メモ「RUN9 v0.2 PoR整理・設計裁定メモ」の編入により
+# design_revision 0.2 → 0.3（DESIGN_RUN9_REVISION_0.3.md）。PoR メモは
+# 自称 "v0.2 design revision input" だが、rev 0.2 が既にマージ済みのため
+# 本編入は rev 0.3 として発行する（詳細は同ファイル冒頭「番号注記」）。
+# 核心は `LEARN_PERFORMANCE` 単一エッジを CONTROL / PRACTICE_FROM_AUDIO /
+# TRANSFER_TECHNIQUE の三枝へ分離する改訂A — `single_intervention` を
+# `interventions` 構造へ改める（旧 "0.1"/"0.2" 形式の contract は
+# run9_schema.DESIGN_REVISION の凍結値照合、および
+# `interventions`/`single_intervention` キー不一致の双方で意図どおり
+# fail-closed 拒否される）。
 #
 # 各欄の pin 状況は {value, status, reason, source?} 形（VG_FOUNDRY の
 # debt/RUN_CONTRACT_SCHEMA_v1.json pinned_field 慣習に倣うが独立実装 —
@@ -26,14 +36,22 @@
 schema: voicegenesis-run-contract/1.0
 run_id: RUN9
 experiment_id: VG-R9-DUAL-FOUNDER-PJS
-design_revision: "0.2"
+design_revision: "0.3"
 design_doc: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
 
-single_intervention:
+# rev 0.3 改訂A（DESIGN_RUN9_REVISION_0.3.md、PoR §1/§3/§4）: 旧
+# single_intervention（単一 changed_edge = LEARN_PERFORMANCE）を廃し、
+# r0 から3枝（CONTROL 無介入 / PRACTICE_FROM_AUDIO 稽古 /
+# TRANSFER_TECHNIQUE 教育）へ分岐する interventions 構造へ改める。
+interventions:
   description: >
-    固定された二つのFounder Genomeへ、同一PJS Performance Lessonを
-    同一recipe・同一budgetで適用する。
-  changed_edge: LEARN_PERFORMANCE
+    固定された二つのFounder r0へ、同一PJS教師（音声そのもの=稽古、
+    抽出Technique lesson=教育）を同一recipe・同一budgetで適用し、
+    無介入replay（CONTROL）を対照として三枝を比較する。
+  edges:
+    - PRACTICE_FROM_AUDIO
+    - TRANSFER_TECHNIQUE
+  control_branch: CONTROL
 
 baseline_run: null
 
@@ -63,13 +81,26 @@ design_doc_sha256:
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
 
-# --- design_revision_doc_sha256: DESIGN_RUN9_REVISION_0.2.md の実 sha256（PINNED）
-# design_doc_sha256 と同じ前例方式（design_doc_sha256 は v0.1 本文、本欄は
-# v0.2 差分メモを pin する）。
+# --- design_revision_doc_sha256: 現行 design_revision の差分メモ
+# （DESIGN_RUN9_REVISION_0.3.md）の実 sha256（PINNED）。design_doc_sha256
+# と同じ前例方式。design_revision が 0.2 → 0.3 へ進んだため本欄も rev 0.3
+# 文書の sha256 へ更新する — rev 0.2 文書（406098e2...）自体は無改変の
+# まま存続し、その系譜は DESIGN_RUN9_REVISION_0.3.md 末尾「design_revision
+# 系譜」表に記録する（欄としては最新 revision の1件のみを pin する規約は
+# design_doc_sha256/design_revision_doc_sha256 の前例どおり）。
 design_revision_doc_sha256:
-  value: "406098e2ac62065855b7e4086fce769a2956b64606594ad83b63b527a23ad4fb"
+  value: "a5f71ec71d4aeb290645bd41e0a42411a30e3b064c742124f9f8af259208fa4b"
   status: PINNED
-  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.2.md
+  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.3.md
+
+# --- por_adjudication_sha256: PoR メモ（POR_CONCEPT_ADJUDICATION_20260824.txt）
+# の実バイト sha256（PINNED）。design_doc_sha256 と同一規約（ファイル実
+# バイトの sha256sum）。uploads 原本とのバイト同一性は
+# tests/test_run9_contract.py が検証する。
+por_adjudication_sha256:
+  value: "56b66fd8df943fbfa98767f2ea481c0ba2a68c26916832e08517379408d97007"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/POR_CONCEPT_ADJUDICATION_20260824.txt
 
 # --- attempt_id -------------------------------------------------------------
 attempt_id:
@@ -204,23 +235,43 @@ founder_genome_shas:
       founders/R9F-02_genome.json のバイト sha256（64hex）を pin する。
 
 # --- lesson / learning ------------------------------------------------------
+# rev 0.3 改訂A/C（DESIGN_RUN9_REVISION_0.3.md）: LEARN_PERFORMANCE 単一
+# エッジが PRACTICE_FROM_AUDIO（稽古）/ TRANSFER_TECHNIQUE（教育）へ分離
+# されたため、本欄が指す「PJS 由来の何か」も経路により性質が異なる —
+# EDUCATION は Technique lesson manifest（明示的な型の教材、PoR §3.3）を
+# pin し、PRACTICE は教師音声そのものの train/validation/sealed-holdout
+# split manifest（正解 parameter を含まない生素材の分割、PoR §12）を pin
+# する。両者は別対象であり本欄1つに統合しない — 実装時に
+# lesson_sha（EDUCATION 用）と別欄（PRACTICE 用の稽古素材 split pin。
+# 欄名は VG-L0 ハーネス実装時に確定）へ分割する想定。
 lesson_sha:
   value: null
   status: PENDING
   reason: >-
-    PJS 由来 Performance Lesson 抽出（VG-L0 学習ハーネス相当の feature
-    extractor）が未実装。改訂3（DESIGN_RUN9_REVISION_0.2.md）で Lesson
-    manifest の生成・pin 方針は明確化済み（PJS の source_archive_sha256 /
-    expanded_corpus_identity_sha256 とは別の、RUN9 が実消費する Lesson
-    manifest を Lesson build 時に生成しその sha256 を本欄へ pin する）が、
-    Lesson build 自体はまだ実行されていない。
+    [EDUCATION/TRANSFER_TECHNIQUE 用] PJS 由来 Technique lesson 抽出
+    （Technique extractor / Lesson builder、PoR §3.3。VG-L0 学習ハーネス
+    相当の feature extractor）が未実装。改訂3（DESIGN_RUN9_REVISION_0.2.md）
+    で Lesson manifest の生成・pin 方針は明確化済み（PJS の
+    source_archive_sha256 / expanded_corpus_identity_sha256 とは別の、
+    RUN9 が実消費する Lesson manifest を Lesson build 時に生成しその
+    sha256 を本欄へ pin する）が、Lesson build 自体はまだ実行されていない。
+    [PRACTICE_FROM_AUDIO 用] 稽古で Founder へ提示する PJS 教師音声の
+    train/validation/sealed-holdout split manifest（正解 Technique
+    parameter を含まない生素材の分割、PoR §12）は、本欄とは別の pin 欄
+    として VG-L0 ハーネス実装時に新設する想定（現時点では未設計のため
+    dataset_manifest_sha の PENDING 理由にも同一律速が及ぶ）。
 
 learning_recipe_sha:
   value: null
   status: PENDING
   reason: >-
     learning_recipe.yaml 未作成。VG-L0 学習ハーネス未実装（書き込み先は
-    改訂1で Performance ControlProfile へ変更済み）。
+    改訂1で Performance ControlProfile へ変更済み）。rev 0.3 改訂Aにより
+    PRACTICE_FROM_AUDIO（自律差分抽出・自律探索の recipe）と
+    TRANSFER_TECHNIQUE（lesson 提示・再現評価の recipe）で recipe の中身
+    自体が分岐する見込みだが、両者を束ねて1つの learning_recipe_sha として
+    pin する方針は不変（CONTROL は学習 step を実行しないため recipe 自体
+    を持たない — PoR §4 CONTROL の定義）。
 
 probe_manifest_sha:
   value: null
