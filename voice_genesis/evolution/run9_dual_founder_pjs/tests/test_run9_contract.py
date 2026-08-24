@@ -638,3 +638,119 @@ def test_fix3_correctly_signed_genome_document_still_roundtrips() -> None:
     genuine = m.build_founder(domain, "R9F-02")
     reconstructed = m.founder_genome_from_dict(genuine.to_dict(), domain=domain)
     assert reconstructed.to_dict() == genuine.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第2巡対応 — Fix 4: load 後の raw 直接改変で
+# READY を騙る経路の閉塞
+# ---------------------------------------------------------------------------
+
+
+def test_fix4_load_run9_contract_deepcopies_input(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 第2巡指摘1(a): `load_run9_contract()` は
+    入力 dict を deepcopy する。load 後に呼び出し元が渡した元 dict の
+    ネストした pin 欄を書き換えても `Run9RunContract.raw` は影響を受けない
+    （浅いコピーだとネスト dict が共有されたままになる）。"""
+    fresh_raw = copy.deepcopy(contract_raw)
+    contract = m.load_run9_contract(fresh_raw)
+    fresh_raw["lesson_sha"]["status"] = "PINNED"
+    fresh_raw["lesson_sha"]["value"] = "z" * 64  # 非hexだが元dict側だけの改変
+    assert contract.raw["lesson_sha"]["status"] == "PENDING"
+    assert contract.raw["lesson_sha"] is not fresh_raw["lesson_sha"]
+
+
+def test_fix4_gate_state_revalidates_and_rejects_direct_raw_tampering(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """Codex bot レビュー PR #315 第2巡指摘1(b): 正常 load 後に
+    `contract.raw["lesson_sha"]["status"]` を直接 "PINNED" へ書き換えても
+    （value は null のまま）、`gate_state()` は毎回 `contract.raw` を
+    `load_run9_contract()` で再検証するため Run9ValidationError を送出する
+    （load 済みオブジェクトの raw を直接書き換えて READY を騙る経路の閉塞。
+    共有 module fixture の汚染を避けるため、ここではローカルにコピーした
+    contract を使う）。"""
+    fresh_raw = copy.deepcopy(contract_raw)
+    contract = m.load_run9_contract(fresh_raw)
+    contract.raw["lesson_sha"]["status"] = "PINNED"  # value は null のまま
+    with pytest.raises(m.Run9ValidationError):
+        m.gate_state(contract)
+
+
+def test_fix4_gate_state_still_works_on_untampered_contract(contract_raw: Dict[str, Any]) -> None:
+    """対照実験: 改変していない contract では `gate_state()` の再検証が
+    正常系まで壊していないことの確認（現行 RUN9_CONTRACT.yaml は BLOCKED）。"""
+    fresh_raw = copy.deepcopy(contract_raw)
+    contract = m.load_run9_contract(fresh_raw)
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第2巡対応 — Fix 5: changed_edge の凍結値強制
+# ---------------------------------------------------------------------------
+
+
+def test_fix5_changed_edge_constant_matches_contract() -> None:
+    assert m.CHANGED_EDGE == "LEARN_PERFORMANCE"
+
+
+def test_fix5_current_contract_changed_edge_is_frozen_value(contract_raw: Dict[str, Any]) -> None:
+    assert contract_raw["single_intervention"]["changed_edge"] == m.CHANGED_EDGE
+
+
+def test_fix5_changed_edge_tampering_rejected(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 第2巡指摘2: `changed_edge` を
+    `"REPLACE_IDENTITY"` 等の別エッジへ差し替えた fixture は拒否される
+    （DESIGN_RUN9 §23 で凍結された単一介入エッジの改変防止）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["single_intervention"]["changed_edge"] = "REPLACE_IDENTITY"
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix5_blank_description_rejected(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 第2巡指摘2 補足: `description` も
+    非空文字列を強制する。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["single_intervention"]["description"] = "   "
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第2巡対応 — Fix 6: build_founder の domain
+# 不変条件全検証
+# ---------------------------------------------------------------------------
+
+
+def test_fix6_forged_domain_id_rejected_by_build_founder() -> None:
+    """Codex bot レビュー PR #315 第2巡指摘3: `run9_identity_domain_from_dict()`
+    /`build_run9_identity_domain()` を経由せず `Run9IdentityDomain(...)` を
+    直接インスタンス化した偽 domain（dataclass はコンストラクタレベルの
+    検証を持たない）は、`anchor_hashes`/`metric_space_sha` が64hex揃いで
+    `is_pinned() == True` になっても、`domain_id` 偽装は
+    `_validate_domain_invariants()` で検出され `build_founder()` が拒否する。"""
+    forged_domain = m.Run9IdentityDomain(
+        schema=m.SCHEMA_IDENTITY_DOMAIN,
+        domain_id="not-the-real-domain-id/1.0",
+        anchor_order=m.RUN9_ANCHOR_ORDER,
+        anchor_hashes={"af0": "a" * 64, "ritsu": "b" * 64, "user": "c" * 64},
+        excluded_teacher_identities=m.RUN9_EXCLUDED_TEACHER_IDENTITIES,
+        coordinate_precision=m.RUN9_COORDINATE_PRECISION,
+        normalization=m.RUN9_NORMALIZATION,
+        metric_space_sha="d" * 64,
+        pin_source_candidates={},
+    )
+    assert forged_domain.is_pinned() is True  # is_pinned() 単体は形式しか見ないため通る
+    with pytest.raises(m.Run9ValidationError):
+        m.build_founder(forged_domain, "R9F-01")
+
+
+def test_fix6_validate_domain_invariants_accepts_genuine_domain(
+    pinned_domain: m.Run9IdentityDomain,
+) -> None:
+    """対照実験: `build_run9_identity_domain()` が返す正規 domain は
+    `_validate_domain_invariants()` を素通りする（正常系まで壊していない
+    ことの確認）。"""
+    m._validate_domain_invariants(pinned_domain)  # 例外を投げないことの確認
+    g = m.build_founder(pinned_domain, "R9F-01")
+    assert g.genome_id

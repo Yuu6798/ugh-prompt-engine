@@ -19,6 +19,7 @@ fail-closed 方針（models.py と同型）: 未知キー拒否、欠落キー�
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -47,6 +48,11 @@ RUN9_NORMALIZATION = "largest-component-residual"
 
 RUN_ID = "RUN9"
 EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
+
+# DESIGN_RUN9 §23: 単一介入エッジは凍結値。他のエッジへの差し替えは新しい
+# design_revision を持つ別 attempt として扱う（§20 禁止事項「結果を見た後の
+# 座標・Lesson・閾値追加」と同種の凍結規律）。
+CHANGED_EDGE = "LEARN_PERFORMANCE"
 
 # DESIGN_RUN9 §9.2/§9.3: 事前固定重み。genome 発行時の唯一の重みソース
 # （公開 API から任意 weights を注入する経路は作らない — §27 item 22）。
@@ -503,6 +509,43 @@ def _compute_founder_genome_id(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:_GENOME_ID_LEN]
 
 
+def _validate_domain_invariants(domain: Run9IdentityDomain) -> None:
+    """`Run9IdentityDomain` の不変条件を全数検証する（Codex bot レビュー
+    PR #315 第2巡指摘3採用）: `run9_identity_domain_from_dict()` を経由
+    せず `Run9IdentityDomain(...)` を直接インスタンス化した偽 domain
+    （dataclass はコンストラクタレベルの検証を持たない）が `is_pinned()`
+    だけを満たして `build_founder()` へ渡された場合に、domain_id 偽装等を
+    ここで検出する。違反は Run9ValidationError。
+    """
+    if domain.schema != SCHEMA_IDENTITY_DOMAIN:
+        raise Run9ValidationError(f"domain.schema must be {SCHEMA_IDENTITY_DOMAIN!r}, got {domain.schema!r}")
+    if domain.domain_id != RUN9_DOMAIN_ID:
+        raise Run9ValidationError(f"domain.domain_id must be {RUN9_DOMAIN_ID!r}, got {domain.domain_id!r}")
+    if domain.anchor_order != RUN9_ANCHOR_ORDER:
+        raise Run9ValidationError(
+            f"domain.anchor_order must be exactly {RUN9_ANCHOR_ORDER!r}, got {domain.anchor_order!r}"
+        )
+    if domain.excluded_teacher_identities != RUN9_EXCLUDED_TEACHER_IDENTITIES:
+        raise Run9ValidationError(
+            f"domain.excluded_teacher_identities must be exactly "
+            f"{RUN9_EXCLUDED_TEACHER_IDENTITIES!r}, got {domain.excluded_teacher_identities!r}"
+        )
+    if domain.coordinate_precision != RUN9_COORDINATE_PRECISION:
+        raise Run9ValidationError(
+            f"domain.coordinate_precision must be {RUN9_COORDINATE_PRECISION!r}, "
+            f"got {domain.coordinate_precision!r}"
+        )
+    if domain.normalization != RUN9_NORMALIZATION:
+        raise Run9ValidationError(
+            f"domain.normalization must be {RUN9_NORMALIZATION!r}, got {domain.normalization!r}"
+        )
+    if set(domain.anchor_hashes.keys()) != set(RUN9_ANCHOR_ORDER):
+        raise Run9ValidationError(
+            f"domain.anchor_hashes must have exactly keys {set(RUN9_ANCHOR_ORDER)}, "
+            f"got {set(domain.anchor_hashes.keys())!r} (this also rejects a smuggled 'pjs' key)"
+        )
+
+
 def _tri_crossover(
     *,
     domain: Run9IdentityDomain,
@@ -517,11 +560,13 @@ def _tri_crossover(
     スコアで非公開 — 外部から任意 weights を注入できる公開経路は
     `build_founder(domain, founder_id)` のみ（§27 item 22）。
     """
+    _validate_domain_invariants(domain)
     if not domain.is_pinned():
         raise Run9ValidationError(
-            "TRI_CROSSOVER requires a pinned Run9IdentityDomain (all 3 anchor_hashes must be real "
-            "64hex sha256, not placeholders) — DESIGN_RUN9 §22 execution order requires the domain "
-            "(step 3) to be frozen before founder generation (step 4)"
+            "TRI_CROSSOVER requires a pinned Run9IdentityDomain (all 3 anchor_hashes and "
+            "metric_space_sha must be real 64hex sha256, not placeholders) — DESIGN_RUN9 §22 "
+            "execution order requires the domain (step 3) to be frozen before founder generation "
+            "(step 4)"
         )
     w_af0, w_ritsu, w_user = weights
     coords = normalize_run9_coords(w_af0, w_ritsu, w_user)
@@ -841,6 +886,18 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
     missing_si = allowed_si_keys - set(single_intervention.keys())
     if missing_si:
         raise Run9ValidationError(f"single_intervention missing key(s): {sorted(missing_si)}")
+    si_description = single_intervention["description"]
+    if not isinstance(si_description, str) or not si_description.strip():
+        raise Run9ValidationError(
+            f"single_intervention.description must be a non-empty string, got {si_description!r}"
+        )
+    si_changed_edge = single_intervention["changed_edge"]
+    if si_changed_edge != CHANGED_EDGE:
+        raise Run9ValidationError(
+            f"single_intervention.changed_edge must be exactly {CHANGED_EDGE!r} — RUN9 の単一介入"
+            "エッジは DESIGN_RUN9 §23 で凍結されている（他のエッジへの差し替えは design_revision を"
+            f"上げた別 attempt として扱う）, got {si_changed_edge!r}"
+        )
 
     if data["baseline_run"] is not None:
         raise Run9ValidationError(f"baseline_run must be null (RUN9 has no baseline_run), got {data['baseline_run']!r}")
@@ -864,7 +921,13 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
     if claim_strength != "C2":
         raise Run9ValidationError(f"claim_strength_target must be 'C2', got {claim_strength!r}")
 
-    return Run9RunContract(raw=dict(data))
+    # deepcopy（Codex bot レビュー PR #315 第2巡指摘1採用）: `dict(data)` は
+    # 浅いコピーのため、ネストした pin 欄 dict（`data["lesson_sha"]` 等）は
+    # 呼び出し元の入力オブジェクトとまだ共有されたままだった — 呼び出し元が
+    # load 後にそのネスト dict を書き換えると `Run9RunContract.raw` も
+    # 一緒に変化してしまう（validate 済みスナップショットのはずが実は
+    # 可変共有だった）。deepcopy でこの共有を断つ。
+    return Run9RunContract(raw=copy.deepcopy(dict(data)))
 
 
 def load_run9_contract_from_yaml_text(text: str) -> Run9RunContract:
@@ -887,12 +950,22 @@ def gate_state(contract: Run9RunContract) -> str:
     （artifact_manifest_sha / cost_record_sha）は判定対象外
     （実行後にのみ実測できる証拠欄のため — RUN_CONTRACT_SCHEMA_v1.json の
     x-gate-class post_run 分類と同じ考え方）。
+
+    毎回 `contract.raw` のスナップショットを `load_run9_contract()` で
+    再検証してから判定する（Codex bot レビュー PR #315 第2巡指摘1採用）:
+    呼び出し元が load 済みの `Run9RunContract.raw`（`Run9RunContract` は
+    dataclass だが `raw: Dict` 自体はミュータブル）を直接書き換えて
+    `status: "PINNED"` を騙っても、その改変内容は load 時と同じ
+    fail-closed 検証（`_validate_pin_field` の PINNED 値整形式強制を含む）
+    を再び通過しなければならない — 素通しの pin 判定だけを見ていた旧実装
+    では、load 後の直接改変で READY を騙る経路が残っていた。
     """
+    revalidated = load_run9_contract(contract.raw)
     pre_run_fields = [n for n in CONTRACT_PIN_FIELDS if n not in CONTRACT_POST_RUN_PIN_FIELDS]
     for name in pre_run_fields:
-        if not _is_field_pinned(contract.pin_field(name)):
+        if not _is_field_pinned(revalidated.pin_field(name)):
             return "BLOCKED"
     for founder_id in CONTRACT_FOUNDER_IDS:
-        if not _is_field_pinned(contract.founder_genome_sha(founder_id)):
+        if not _is_field_pinned(revalidated.founder_genome_sha(founder_id)):
             return "BLOCKED"
     return "READY"
