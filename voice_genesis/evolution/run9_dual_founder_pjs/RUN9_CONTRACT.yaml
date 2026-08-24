@@ -89,11 +89,13 @@ design_doc_sha256:
 # 系譜」表に記録する（欄としては最新 revision の1件のみを pin する規約は
 # design_doc_sha256/design_revision_doc_sha256 の前例どおり）。
 # PR #317 Codex bot レビュー第2巡 Fix 5 採用により本 PR（未マージ）内で
-# DESIGN_RUN9_REVISION_0.3.md へ R9-G5 supersession 行を追記したため、
-# 値を再計算して更新（runbook §8 のマージ前限定編集規約に整合 — マージ後
-# の byte-pin 不変原則とは矛盾しない）。
+# DESIGN_RUN9_REVISION_0.3.md へ R9-G5 supersession 行を追記し
+# （58fb378e...）、第3巡 Fix 7 採用によりさらに改訂C の PRACTICE 禁止
+# 散文列挙へ「教師付与の Technique label」を追記したため、値を再計算して
+# 更新（runbook §8 のマージ前限定編集規約に整合 — マージ後の byte-pin
+# 不変原則とは矛盾しない）。
 design_revision_doc_sha256:
-  value: "58fb378e91cc3f5af9a4e2fecc776b68cc20d1915704b24fd780b5c9cc0a4b8a"
+  value: "1409d448fe7a8ac12221d32c881680796c5c644e04bda9b3577fcfd4a473680c"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.3.md
 
@@ -245,9 +247,12 @@ founder_genome_shas:
 # EDUCATION は Technique lesson manifest（明示的な型の教材、PoR §3.3）を
 # pin し、PRACTICE は教師音声そのものの train/validation/sealed-holdout
 # split manifest（正解 parameter を含まない生素材の分割、PoR §12）を pin
-# する。両者は別対象であり本欄1つに統合しない — 実装時に
-# lesson_sha（EDUCATION 用）と別欄（PRACTICE 用の稽古素材 split pin。
-# 欄名は VG-L0 ハーネス実装時に確定）へ分割する想定。
+# する。両者は別対象であり本欄1つに統合しない — 実装は
+# lesson_sha（EDUCATION 用）と practice_split_sha（PRACTICE 用の稽古素材
+# split pin。下記ブロック参照）へ既に分割済み（PR #317 Codex bot レビュー
+# 第2巡 Fix 6 採用。第3巡 Fix 8: 本コメントが分割「予定」のまま陳腐化して
+# いたため実在欄への参照へ是正 — 旧繰延べ表現と実在欄の二重管理による
+# 競合欄導入・偽 BLOCKED の芽を除去）。
 lesson_sha:
   value: null
   status: PENDING

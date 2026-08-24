@@ -2833,3 +2833,84 @@ def test_fix6_practice_split_sha_missing_pin_blocks_ready_even_if_others_pinned(
     }
     contract_blocked = m.load_run9_contract(regressed)
     assert m.gate_state(contract_blocked) == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第3巡対応 — Fix 7: rev 0.3 文書の PRACTICE
+# 禁止列挙へ Technique label を同期 / Fix 8: 陳腐化した繰延記述の掃討
+# ---------------------------------------------------------------------------
+
+
+def test_fix7_rev03_doc_practice_forbidden_prose_mentions_technique_label() -> None:
+    """DESIGN_RUN9_REVISION_0.3.md 改訂C の PRACTICE 禁止入力の散文列挙に
+    「教師付与の Technique label」が存在すること — 第2巡 Fix 4 で
+    `PRACTICE_FORBIDDEN_INPUTS` へ追加した `teacher_technique_label` と
+    文書側が同期していなかった漏れ（第3巡 Fix 7）の是正確認。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "教師付与の Technique label" in doc
+    assert "teacher_technique_label" in doc
+
+
+def test_fix7_rev03_doc_practice_forbidden_prose_item_count_matches_tuple() -> None:
+    """改訂C の PRACTICE 禁止列挙（散文の箇条書き）のトップレベル項目数が、
+    `PRACTICE_FORBIDDEN_INPUTS`（5要素）と一致すること。禁止列挙の節
+    （'**禁止**（Founder へ明示的に渡してはいけないもの、PoR §3.2）:' から
+    次の '**許可**' 見出しまで）に含まれる、行頭が `- `（インデントなし
+    = 継続行ではなくトップレベル箇条書き）の行数を数える。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    marker = "**禁止**（Founder へ明示的に渡してはいけないもの、PoR §3.2）:"
+    next_heading = "**許可**（PoR §3.2）:"
+    start = doc.index(marker) + len(marker)
+    section = doc[start:doc.index(next_heading, start)]
+    bullet_lines = [line for line in section.splitlines() if line.startswith("- ")]
+    assert len(bullet_lines) == len(m.PRACTICE_FORBIDDEN_INPUTS) == 5, (
+        f"rev 0.3 文書の PRACTICE 禁止列挙が{len(bullet_lines)}項目だが "
+        f"PRACTICE_FORBIDDEN_INPUTS は{len(m.PRACTICE_FORBIDDEN_INPUTS)}要素 — "
+        "文書とタプルの同期が崩れている可能性がある"
+    )
+
+
+def test_fix7_design_revision_doc_sha256_pin_matches_recomputed_file_again(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """Fix 7 の文書編集（Technique label 同期）後、design_revision_doc_sha256
+    pin が実ファイルの再計算 sha256 と一致していること。"""
+    field = contract_raw["design_revision_doc_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(REVISION_DOC_PATH)
+    assert field["value"] == m.compute_file_sha256(REVISION_DOC_PATH)
+
+
+def test_fix8_no_stale_deferred_practice_pin_field_language_remains() -> None:
+    """PR #317 Codex bot レビュー第3巡 Fix 8: 「PRACTICE 側 pin 欄は後日
+    命名/新設予定」型の陳腐化した記述が RUN9_CONTRACT.yaml / README.md に
+    残っていないこと（`practice_split_sha` が第2巡 Fix 6 で既に実在する
+    ため、二重管理による競合欄導入・偽 BLOCKED の芽を除去する）。"""
+    stale_phrases = ("新設予定", "新設する想定", "欄名は VG-L0 ハーネス実装時に確定")
+    for path in (CONTRACT_PATH, _RUN_DIR / "README.md"):
+        text = path.read_text(encoding="utf-8")
+        for phrase in stale_phrases:
+            assert phrase not in text, (
+                f"{path.name} に陳腐化した繰延記述 {phrase!r} が残っている"
+            )
+
+
+def test_fix8_readme_blocker_4_references_existing_practice_split_sha_field() -> None:
+    """README.md のブロッカー(4)が、実在する `practice_split_sha` 欄を
+    現在形で参照していること（「別欄として新設予定」という将来形のまま
+    ではないこと）。"""
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "practice_split_sha" in readme
+    assert "新設済み" in readme or "既に" in readme
+
+
+def test_fix8_contract_lesson_sha_comment_references_practice_split_sha() -> None:
+    """RUN9_CONTRACT.yaml の lesson_sha 直前コメントが、`practice_split_sha`
+    を実在欄として参照していること（分割「する想定」のまま陳腐化して
+    いないこと）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert "practice_split_sha" in contract_text
+    lesson_comment_start = contract_text.index("# --- lesson / learning")
+    lesson_field_start = contract_text.index("lesson_sha:")
+    comment_block = contract_text[lesson_comment_start:lesson_field_start]
+    assert "practice_split_sha" in comment_block

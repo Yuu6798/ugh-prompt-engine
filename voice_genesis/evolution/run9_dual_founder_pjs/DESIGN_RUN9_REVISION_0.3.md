@@ -139,6 +139,11 @@ PoR §3.2/§3.3/§11 の非対称な情報境界を、rev 0.3 の実験核心的
 - PJS speaker embedding
 - PJS Identity coordinate
 - 「vibrato=この値」等の正解 Technique parameter
+- 教師付与の Technique label（例:「これは vibrato の見本」等のラベル付け
+  そのものの供与 — 正解 parameter 本体とは別に、ラベルという形での
+  Technique 情報供与も禁止する。PR #317 Codex bot レビュー第2巡 Fix 4/
+  第3巡 Fix 7 採用: `run9_schema.PRACTICE_FORBIDDEN_INPUTS` の
+  `teacher_technique_label` と同期）
 - 教師内部モデルの parameter dump
 
 **許可**（PoR §3.2）:

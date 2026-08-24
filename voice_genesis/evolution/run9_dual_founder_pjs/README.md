@@ -180,7 +180,11 @@ PoR メモは自称 "v0.2 design revision input" だが、rev 0.2（上記5裁�
    自体は VG-L0 ハーネス実装待ち。rev 0.3 でこの pin は EDUCATION 用
    Technique lesson を指すと明確化され、PRACTICE 用の教師音声
    train/validation/sealed-holdout split manifest（正解 parameter を
-   含まない生素材の分割、PoR §12）は別欄として新設予定（未設計）。
+   含まない生素材の分割、PoR §12）は `practice_split_sha`
+   （`RUN9_CONTRACT.yaml`、PR #317 Codex bot レビュー第2巡 Fix 6 採用）と
+   して既に pin 欄が新設済み — ただし split manifest 自体の**生成**は
+   lesson build と同じく VG-L0 ハーネス実装待ちのため、両欄とも PENDING
+   のまま。
 5. **`render_code_commit` の確定待ち**（Codex bot レビュー PR #316 第1巡
    指摘採用）: `inputs/backbone_runtime_bundle.json` の
    `render_code_commit`（`openvpi/DiffSinger @ e2307b1...`）は
