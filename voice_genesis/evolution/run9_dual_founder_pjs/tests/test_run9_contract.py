@@ -1678,13 +1678,88 @@ def test_revision02_verify_rights_manifest_rejects_extra_card_id() -> None:
 
 
 def test_revision02_verify_rights_manifest_rejects_value_mismatch() -> None:
-    """負例: card_id 集合は正しいが、sha256 等の値が ledger と食い違う
-    fixture が拒否されること。"""
+    """負例: card_id 集合は正しく、整形式（64hex）でもあるが、値そのものが
+    ledger と食い違う fixture が拒否されること。"""
     rights, ledger = _load_rights_manifest_and_ledger()
     tampered = copy.deepcopy(rights)
-    tampered["entries"][0]["sha256"] = "f" * 65  # ledger の実値と不一致
+    tampered["entries"][0]["sha256"] = "f" * 64  # 整形式は正しいが ledger の実値とは不一致
     with pytest.raises(m.Run9ValidationError, match="does not match"):
         m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第4巡対応 — 両側欠落穴（None == None すり抜け）
+# の閉塞
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_verify_rights_manifest_rejects_both_sides_missing_field() -> None:
+    """負例: rights_manifest 側と donor_ledger 側の両方から同じ必須
+    フィールド（source_sha256）が欠落した合成ペアが拒否されること。
+    旧実装は `entry.get(field)` 同士の等値比較のみのため、両側欠落だと
+    `None == None` で素通りしていた（Codex bot レビュー PR #316 第4巡
+    指摘, 4b1c872, 採用）。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_rights = copy.deepcopy(rights)
+    tampered_ledger = copy.deepcopy(ledger)
+    for entry in tampered_rights["entries"]:
+        if entry["card_id"] == "UC-001":
+            del entry["source_sha256"]
+    for entry in tampered_ledger["entries"]:
+        if entry["card_id"] == "UC-001":
+            del entry["source_sha256"]
+    with pytest.raises(m.Run9ValidationError, match="missing required field"):
+        m.verify_rights_manifest_against_ledger(tampered_rights, tampered_ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_one_side_missing_field() -> None:
+    """負例: rights_manifest 側のみ必須フィールド（duration_sec）が欠落した
+    場合も拒否されること（donor_ledger 側は無傷）。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_rights = copy.deepcopy(rights)
+    for entry in tampered_rights["entries"]:
+        if entry["card_id"] == "UC-001":
+            del entry["duration_sec"]
+    with pytest.raises(m.Run9ValidationError, match="missing required field"):
+        m.verify_rights_manifest_against_ledger(tampered_rights, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_non_64hex_sha() -> None:
+    """負例: sha256 フィールドが64hex形式でない値（短い/大文字/非hex文字）
+    はいずれも拒否されること。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    for bad_value in ("not-hex", "A" * 64, "f" * 63, ""):
+        tampered = copy.deepcopy(rights)
+        for entry in tampered["entries"]:
+            if entry["card_id"] == "UC-001":
+                entry["source_sha256"] = bad_value
+        with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+            m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_non_positive_or_bool_duration() -> None:
+    """負例: duration_sec が bool・0・負値・非有限（NaN/inf）のいずれも
+    拒否されること。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    for bad_value in (True, False, 0, -1.5, float("nan"), float("inf")):
+        tampered = copy.deepcopy(rights)
+        for entry in tampered["entries"]:
+            if entry["card_id"] == "UC-001":
+                entry["duration_sec"] = bad_value
+        with pytest.raises(m.Run9ValidationError):
+            m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_require_rights_ledger_helpers_accept_well_formed_values() -> None:
+    """対照実験: 正しい形の値はヘルパ単体でも通過する（正常系まで壊して
+    いないことの確認）。"""
+    assert (
+        m._require_rights_ledger_sha256_hex("a" * 64, side="rights_manifest", card_id="UC-001", field="sha256")
+        == "a" * 64
+    )
+    assert m._require_rights_ledger_positive_duration(
+        12.5, side="donor_ledger", card_id="UC-001"
+    ) == 12.5
 
 
 def test_revision02_domain_user_anchor_still_unpinned_while_rights_pending() -> None:

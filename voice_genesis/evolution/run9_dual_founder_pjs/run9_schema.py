@@ -1244,6 +1244,48 @@ def gate_state(contract: Run9RunContract) -> str:
 # loader 側の関数として実装する（テストはこれを呼ぶだけにする）。
 # ---------------------------------------------------------------------------
 
+def _require_rights_ledger_field(
+    entry: Mapping[str, Any], field: str, *, side: str, card_id: str
+) -> Any:
+    """`entry[field]` の存在（キー自体の有無）を検証してから値を返す。
+    `side` はエラーメッセージへ明記する「どちら側の entry か」のラベル
+    （`"rights_manifest"` / `"donor_ledger"`）。値の型・書式は呼び出し元の
+    `_require_*` ヘルパが別途検証する — 本関数は「フィールドが存在するか」
+    だけを見る（Codex bot レビュー PR #316 第4巡指摘採用: `.get(field)` の
+    黙った `None` フォールバックだと、両側から同じ必須フィールドが欠けた
+    場合に `None == None` で照合が素通りしてしまっていた）。
+    """
+    if field not in entry:
+        raise Run9ValidationError(
+            f"{side}.entries[card_id={card_id!r}] is missing required field {field!r}"
+        )
+    return entry[field]
+
+
+def _require_rights_ledger_sha256_hex(value: Any, *, side: str, card_id: str, field: str) -> str:
+    if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
+        raise Run9ValidationError(
+            f"{side}.entries[card_id={card_id!r}].{field} must be exactly 64 lowercase hex "
+            f"characters (sha256 format), got {value!r}"
+        )
+    return value
+
+
+def _require_rights_ledger_positive_duration(value: Any, *, side: str, card_id: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise Run9ValidationError(
+            f"{side}.entries[card_id={card_id!r}].duration_sec must be a number (bool rejected), "
+            f"got {value!r}"
+        )
+    out = float(value)
+    if not math.isfinite(out) or out <= 0.0:
+        raise Run9ValidationError(
+            f"{side}.entries[card_id={card_id!r}].duration_sec must be a positive finite number, "
+            f"got {value!r}"
+        )
+    return out
+
+
 def verify_rights_manifest_against_ledger(
     rights_manifest: Mapping[str, Any], donor_ledger: Mapping[str, Any]
 ) -> None:
@@ -1257,8 +1299,15 @@ def verify_rights_manifest_against_ledger(
        manifest 側に無い ledger の card_id・manifest 側にしか無い
        card_id のいずれも拒否）。
     3. 一致する各 card_id について `source_sha256`/`sha256`/
-       `duration_sec` が ledger 側の実測値とバイト/値レベルで一致する
-       こと。
+       `duration_sec` が、**両側で存在 + 整形式であることを照合前に
+       強制した上で**、ledger 側の実測値とバイト/値レベルで一致する
+       こと（sha 系は64hex str、duration_sec は bool でない正の有限
+       数値）。存在・整形式のいずれかが欠けた側は、比較を試みる前に
+       `Run9ValidationError` で拒否する（Codex bot レビュー PR #316
+       第4巡指摘採用: 従来は `entry.get(field)` 同士の等値比較だけの
+       ため、rights entry と ledger entry の両方から同じ必須
+       フィールドが欠落すると `None == None` が真になり、両側欠落を
+       検出できなかった）。
     """
     rights_entries_raw = rights_manifest.get("entries")
     if not isinstance(rights_entries_raw, list):
@@ -1316,14 +1365,44 @@ def verify_rights_manifest_against_ledger(
             f"extra_in_rights={extra_in_rights!r}"
         )
 
-    # item 3: 一致する card_id ごとの値照合。
+    # item 3: 一致する card_id ごとの値照合。存在 + 整形式を両側で強制して
+    # から比較する（`None == None` すり抜けの防止）。
     for card_id, rights_entry in rights_by_id.items():
         ledger_entry = ledger_by_id[card_id]
-        for field in ("source_sha256", "sha256", "duration_sec"):
-            rights_value = rights_entry.get(field)
-            ledger_value = ledger_entry.get(field)
+
+        for field in ("source_sha256", "sha256"):
+            rights_raw = _require_rights_ledger_field(
+                rights_entry, field, side="rights_manifest", card_id=card_id
+            )
+            ledger_raw = _require_rights_ledger_field(
+                ledger_entry, field, side="donor_ledger", card_id=card_id
+            )
+            rights_value = _require_rights_ledger_sha256_hex(
+                rights_raw, side="rights_manifest", card_id=card_id, field=field
+            )
+            ledger_value = _require_rights_ledger_sha256_hex(
+                ledger_raw, side="donor_ledger", card_id=card_id, field=field
+            )
             if rights_value != ledger_value:
                 raise Run9ValidationError(
                     f"rights_manifest.entries[card_id={card_id!r}].{field} does not match "
                     f"donor_ledger: rights={rights_value!r} ledger={ledger_value!r}"
                 )
+
+        rights_duration_raw = _require_rights_ledger_field(
+            rights_entry, "duration_sec", side="rights_manifest", card_id=card_id
+        )
+        ledger_duration_raw = _require_rights_ledger_field(
+            ledger_entry, "duration_sec", side="donor_ledger", card_id=card_id
+        )
+        rights_duration = _require_rights_ledger_positive_duration(
+            rights_duration_raw, side="rights_manifest", card_id=card_id
+        )
+        ledger_duration = _require_rights_ledger_positive_duration(
+            ledger_duration_raw, side="donor_ledger", card_id=card_id
+        )
+        if rights_duration != ledger_duration:
+            raise Run9ValidationError(
+                f"rights_manifest.entries[card_id={card_id!r}].duration_sec does not match "
+                f"donor_ledger: rights={rights_duration!r} ledger={ledger_duration!r}"
+            )
