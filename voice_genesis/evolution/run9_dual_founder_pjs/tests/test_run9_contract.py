@@ -1670,6 +1670,39 @@ def test_revision02_render_code_commit_status_and_bundle_sha_status_are_consiste
         )
 
 
+def test_revision02_backbone_runtime_bundle_sha_matches_actual_file_once_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """`backbone_runtime_bundle_sha` の実ファイル照合を、design_doc_sha256
+    / design_revision_doc_sha256 の既存テスト（`test_revision02_doc_sha256_pin_matches_actual_file`
+    / `test_revision02_compute_file_sha256_matches_design_doc_sha256_pin`）
+    と同型で事前配線する（Codex bot レビュー PR #316 第9巡指摘, e490985,
+    部分採用）。現状 status は PENDING のため value は None のままである
+    ことだけを確認するが、将来 render_code_commit が確定して本欄が
+    PINNED へ昇格した瞬間、この同じテストが
+    `compute_file_sha256(inputs/backbone_runtime_bundle.json)` との一致を
+    自動的に強制するようになる（テストコードの変更を要さない）。
+
+    **層分離の境界宣言（変更しない）**: この照合はテスト層にのみ配線し、
+    `load_run9_contract()`/`gate_state()` 側（loader/runtime 層）へは
+    配線しない — PR #315 第4巡の境界宣言どおり、contract loader は
+    事前登録契約の構造述語（型・整形式・状態の整合）を検査する層であり、
+    pin 値と実体ファイルの突合は R9-G1（INPUT_FREEZE_AND_RIGHTS）検証
+    ツーリングの職務として分離する。テスト層の事前配線はこの分離を
+    崩さない — pin 前は「PENDING であること」だけを検査し、実体突合の
+    強制はテストが検出するだけで loader の受理・拒否には影響しない。
+    """
+    field = contract_raw["backbone_runtime_bundle_sha"]
+    if field["status"] == "PINNED":
+        assert field["value"] == m.compute_file_sha256(BACKBONE_BUNDLE_PATH), (
+            "backbone_runtime_bundle_sha が PINNED を宣言しているが、"
+            "inputs/backbone_runtime_bundle.json の実バイト sha256 と一致しない"
+        )
+    else:
+        assert field["status"] == "PENDING"
+        assert field["value"] is None
+
+
 def test_revision02_render_code_commit_value_and_confirmation_metadata_present() -> None:
     """降格後も値自体（推論結果）と根拠・確定条件は保持されていること。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
