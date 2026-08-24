@@ -903,3 +903,52 @@ def test_fix9_content_digest_and_validators_still_work_with_mapping_proxy(
     経由のため互換）。"""
     assert isinstance(pinned_domain.content_digest(), str) and len(pinned_domain.content_digest()) == 64
     m._validate_domain_invariants(pinned_domain)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第4巡対応 — Fix 10: attempt_id の正の文法強制
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "sneaky_value",
+    [
+        " <PIN_BEFORE_RUN> ",  # 前後空白付きプレースホルダ（旧実装は strip() 後だけ比較していたためすり抜けた）
+        "<PIN_1>",  # 数字入りプレースホルダ（旧実装のブラックリスト正規表現は大文字+アンダースコアのみ想定）
+        "a b",  # 内部に空白を含む値
+    ],
+)
+def test_fix10_attempt_id_rejects_placeholder_variants_via_positive_grammar(
+    contract_raw: Dict[str, Any], sneaky_value: str
+) -> None:
+    """Codex bot レビュー PR #315 第4巡指摘: `attempt_id` の PINNED 値検証を
+    ブラックリスト式（非空 + プレースホルダ正規表現不一致）から正の文法
+    （`_ATTEMPT_ID_RE`）へ置換した結果、旧実装をすり抜けていたプレース
+    ホルダ変種（前後空白付き・数字入り）と、空白を含む一般の不正値の
+    いずれも拒否されることを確認する。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["attempt_id"] = {"value": sneaky_value, "status": "PINNED", "source": "x"}
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix10_attempt_id_accepts_well_formed_value(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 第4巡指摘 正例: 先頭英数字・以降
+    英数字/`.`/`_`/`-` のみの値は PINNED として受理される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["attempt_id"] = {"value": "attempt-2026-08-24.1", "status": "PINNED", "source": "x"}
+    m.load_run9_contract(tampered)  # 例外を投げないことの確認
+
+
+def test_fix10_attempt_id_regex_is_positive_grammar_not_blacklist() -> None:
+    """`_ATTEMPT_ID_RE` 自体が「先頭英数字・残りは英数字/./_/- のみ」という
+    正の文法であり、`<`/`>`/空白を機械的に排除することの直接確認
+    （個別プレースホルダ文字列のブラックリスト列挙ではないことの実証）。"""
+    assert m._ATTEMPT_ID_RE.match("attempt-2026-08-24.1")
+    assert m._ATTEMPT_ID_RE.match("a")
+    assert not m._ATTEMPT_ID_RE.match("<PIN_BEFORE_RUN>")
+    assert not m._ATTEMPT_ID_RE.match(" <PIN_BEFORE_RUN> ")
+    assert not m._ATTEMPT_ID_RE.match("<PIN_1>")
+    assert not m._ATTEMPT_ID_RE.match("a b")
+    assert not m._ATTEMPT_ID_RE.match("")
+    assert not m._ATTEMPT_ID_RE.match("-leading-dash")  # 先頭は英数字必須

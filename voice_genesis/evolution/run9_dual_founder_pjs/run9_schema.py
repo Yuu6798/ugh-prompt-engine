@@ -72,7 +72,12 @@ _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 # にしても構造的に READY へ到達できなくなる不備だった（第1巡修正時の
 # 見落とし。Codex bot レビュー PR #315 第3巡指摘1採用）。
 _SHA1_HEX_RE = re.compile(r"^[0-9a-f]{40}$")
-_PLACEHOLDER_RE = re.compile(r"^<[A-Z_]+>$")
+# attempt_id の正の文法（Codex bot レビュー PR #315 第4巡指摘採用）: 先頭は
+# 英数字、以降は英数字/`.`/`_`/`-` のみ。プレースホルダ変種
+# （`" <PIN_BEFORE_RUN> "` のような前後空白、`<PIN_1>` のような数字入り等）を
+# 個別にブラックリスト追撃するのではなく、`<`/`>`/空白を構造的に許容しない
+# 正の文法で終端する。
+_ATTEMPT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _GENOME_ID_LEN = 16
 _GENOME_ID_RE = re.compile(rf"^[0-9a-f]{{{_GENOME_ID_LEN}}}$")
@@ -780,12 +785,19 @@ def _reject_total_score_vocabulary(*, context: str, names: Any) -> None:
 def _validate_pin_field_value_shape(name: str, value: Any) -> None:
     """PINNED 状態の pin 欄 value の欄名別整形式検証（Codex bot レビュー
     PR #315 指摘1採用）: `founder_genome_shas.R9F-0x` は 16hex genome_id
-    形式、`attempt_id` は非空文字列かつプレースホルダ（`<...>`）不可、
-    `repository_commit_sha` は git commit object ID の 40hex（SHA-1）形式
-    （PR #315 第3巡指摘1: 64hex を要求すると正直な git sha を PINNED にして
-    も contract が構造的に READY へ到達不能だった — 第1巡修正の不備）、
-    それ以外の `_sha`/`_sha256` で終わるトップレベル欄
-    （`design_doc_sha256` を含む）は 64hex sha256 形式を要求する。
+    形式、`attempt_id` は正の文法 `_ATTEMPT_ID_RE` に完全一致（PR #315
+    第4巡指摘採用: 旧実装は「非空 + プレースホルダ正規表現不一致」という
+    ブラックリスト式で、`" <PIN_BEFORE_RUN> "`（前後空白で `strip()` 後だけ
+    比較していたため素通り）や `<PIN_1>`（大文字+アンダースコア限定の
+    ブラックリスト正規表現の想定外）のようなプレースホルダ変種を追撃し
+    きれなかった — 個別変種のブラックリスト追撃ではなく、先頭英数字・
+    以降英数字/`.`/`_`/`-` のみという正の文法で「`<`/`>`/空白を構造的に
+    許容しない」形に終端する）、`repository_commit_sha` は git commit
+    object ID の 40hex（SHA-1）形式（PR #315 第3巡指摘1: 64hex を要求する
+    と正直な git sha を PINNED にしても contract が構造的に READY へ到達
+    不能だった — 第1巡修正の不備）、それ以外の `_sha`/`_sha256` で終わる
+    トップレベル欄（`design_doc_sha256` を含む）は 64hex sha256 形式を
+    要求する。
     """
     if name.startswith("founder_genome_shas."):
         if not isinstance(value, str) or not _GENOME_ID_RE.match(value):
@@ -795,14 +807,12 @@ def _validate_pin_field_value_shape(name: str, value: Any) -> None:
             )
         return
     if name == "attempt_id":
-        if not isinstance(value, str) or not value.strip():
+        if not isinstance(value, str) or not _ATTEMPT_ID_RE.match(value):
             raise Run9ValidationError(
-                f"{name}.value must be a non-empty string when status is PINNED, got {value!r}"
-            )
-        if _PLACEHOLDER_RE.match(value):
-            raise Run9ValidationError(
-                f"{name}.value must not be a placeholder (e.g. '<PIN_BEFORE_RUN>') when status is "
-                f"PINNED, got {value!r}"
+                f"{name}.value must match {_ATTEMPT_ID_RE.pattern!r} when status is PINNED (leading "
+                "alphanumeric, then alphanumeric/'.'/'_'/'-' only — this structurally excludes "
+                "whitespace and '<'/'>' placeholder markers rather than blacklisting individual "
+                f"placeholder variants), got {value!r}"
             )
         return
     if name == "repository_commit_sha":
