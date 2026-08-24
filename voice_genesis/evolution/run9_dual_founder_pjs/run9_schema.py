@@ -544,6 +544,36 @@ def load_run9_identity_domain(path: Path) -> Run9IdentityDomain:
     return run9_identity_domain_from_json(Path(path).read_text(encoding="utf-8"))
 
 
+def compute_file_sha256(path: Path) -> str:
+    """ファイルの**実バイト列**の sha256（`sha256sum` 出力と同一値）を返す。
+
+    RUN9 の contract pin 欄には2つの異なる sha256 規約が混在する
+    （Codex bot レビュー PR #316 第8巡指摘A採用: `backbone_runtime_bundle_sha`
+    の規約文言が「正規形 sha256」と「実 sha256」で混在していたため、
+    `design_doc_sha256` と同一の「ファイル実バイト」規約に統一する）:
+
+    - **ファイル実バイト規約**（本関数、`design_doc_sha256` /
+      `design_revision_doc_sha256` / `backbone_runtime_bundle_sha` 等の
+      大多数の pin 欄）: 対象ファイルをそのまま `sha256sum` した値。
+      ファイルは人間可読な pretty-printed JSON/Markdown として保存され、
+      「このファイルが手元にあるかどうか」を bit-for-bit で照合するのが
+      目的。
+    - **正規形（canonical）規約**（`domains/identity_domain_run9_v1.json`
+      `anchor_hashes.af0` のみ — `inputs/af0_anchor_manifest.json` 参照）:
+      `json.dumps(obj, sort_keys=True, ensure_ascii=False,
+      separators=(",",":"))` で正規化してから sha256 する値。AF-P0 の
+      `spec_sha256` 系譜（`af_spec.py canonical_json()`）と意味論を揃える
+      ため、こちらだけ意図的に例外としている（af0 側の規約を本関数へ
+      合わせる変更は行わない — 詳細は af0_anchor_manifest.json の
+      `canonicalization_method` フィールド参照）。
+    """
+    h = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # TRI_CROSSOVER + Run9FounderGenome（DESIGN_RUN9 §9）
 # ---------------------------------------------------------------------------

@@ -107,6 +107,34 @@ v0.1 本文は byte-pin 不変のまま**（design_doc_sha256 が実バイトの
    するが、「recipe を学習前に凍結する」規律（v0.1 §11.4/§13.3）自体は
    不変。
 
+9. **v0.1 §25 results バンドルの `adapters/` ディレクトリ →
+   `control_profiles/`**: Atomic Results Bundle
+   （`results/RUN9/`）配下の格納先ディレクトリ名を読み替える。r1
+   ControlProfile 版文書（Founder ごと）をここへ格納する。他の
+   Atomic Results Bundle 構成要素（`RUN9_RECORD.md` / `run9_results.json`
+   / `probes/` / `freeze/` 等）は不変。
+
+10. **v0.1 §27 item 30 `adapters are independent per Founder` →
+    `ControlProfiles are independent per Founder`**: 最低テスト項目30の
+    名称のみ読み替える。「二体で書き込み先を共有しない」不変条件
+    そのもの（項目7と同一の規律）は不変 — 名称変更であって規律の緩和
+    ではない。
+
+11. **v0.1 §31 実装者役割（Codex / Implementation Agent）の
+    `adapter freeze` → `ControlProfile version freeze`**: 役割分担リスト
+    内の1項目のみ読み替える。他の役割項目（schema and validators /
+    run-local Identity Domain / TRI_CROSSOVER operator / Founder state
+    generation / Lesson extraction / learning harness / probe render /
+    metric execution / replay / atomic publication）は不変。
+
+**掃討の網羅性宣言（Codex bot レビュー PR #316 第8巡指摘B採用）**: v0.1
+全文（`DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md`）中の
+`Adapter`/`adapter` の全出現を `grep -in adapter` で機械的に走査した
+（22行がヒット）。全出現を本表 ①〜⑪ の該当項目でマップ済み、または
+「Adapter Entry 条件を満たし」（§19 R9-G8 本文・項目3でマップ済みの
+Entry Gate の言い換え）のような既マップ項目内の同義反復として分類した。
+**未マップの実行要件は残っていない。**
+
 ---
 
 ## 改訂 2 — AF0 anchor 規約

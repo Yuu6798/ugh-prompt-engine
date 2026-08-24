@@ -1424,10 +1424,11 @@ def test_revision02_v0_1_design_doc_is_byte_unchanged(contract_raw: Dict[str, An
 
 
 def test_revision02_adapter_to_controlprofile_correspondence_map_present() -> None:
-    """Codex bot レビュー PR #316 第7巡指摘（37b6193, 採用）: REVISION_0.2 が
-    v0.1 の Adapter 固有条項8項目それぞれについて ControlProfile 等価物への
-    明示的置換表を持つことのキーワード存在検査（過剰な文言テストは避け、
-    各項目を機械的に識別できる語彙が本文に存在することだけを確認する）。"""
+    """Codex bot レビュー PR #316 第7巡指摘（37b6193）+ 第8巡指摘B
+    （38c0e0f, 掃討完結、採用）: REVISION_0.2 が v0.1 の Adapter 固有条項
+    11項目それぞれについて ControlProfile 等価物への明示的置換表を持つ
+    ことのキーワード存在検査（過剰な文言テストは避け、各項目を機械的に
+    識別できる語彙が本文に存在することだけを確認する）。"""
     doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
     assert "本表（rev 0.2）が勝つ" in doc  # 前文: v0.1 と矛盾する場合の優先規則
     required_keywords = [
@@ -1439,9 +1440,34 @@ def test_revision02_adapter_to_controlprofile_correspondence_map_present() -> No
         "ControlProfile Entry Gate not satisfied",  # item 6: Stop rule 9
         "ControlProfile-01:r0",  # item 7: §13.1 図式
         "ControlProfile 導出手続き",  # item 8: learning_recipe
+        "control_profiles/",  # item 9: §25 results バンドルディレクトリ
+        "ControlProfiles are independent per Founder",  # item 10: §27 item 30
+        "ControlProfile version freeze",  # item 11: §31 実装者役割
     ]
     for keyword in required_keywords:
         assert keyword in doc, f"REVISION_0.2.md に必須キーワードが見つかりません: {keyword!r}"
+
+
+def test_revision02_adapter_sweep_completeness_declared() -> None:
+    """Codex bot レビュー PR #316 第8巡指摘B: v0.1 全文の `grep -in adapter`
+    掃討の網羅性宣言がソース中に明文化されていること。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "grep -in adapter" in doc
+    assert "未マップの実行要件は残っていない" in doc
+
+
+def test_revision02_v0_1_adapter_line_count_matches_swept_total() -> None:
+    """`grep -in adapter` で v0.1 全文を機械的に再走査し、ヒット行数が
+    掃討時の実測（22行）と一致することを確認する — v0.1 は byte-pin
+    不変のため、この行数はテストとして安定して再現可能（Codex bot
+    レビュー PR #316 第8巡指摘B）。行数が変われば v0.1 自体が改変された
+    ことの検出にもなる（design_doc_sha256 の pin 検証と相補的）。"""
+    v01_doc = DESIGN_DOC_PATH.read_text(encoding="utf-8")
+    adapter_lines = [line for line in v01_doc.splitlines() if "adapter" in line.lower()]
+    assert len(adapter_lines) == 22, (
+        f"v0.1 の 'adapter' 出現行数が掃討時の実測（22）と異なる: {len(adapter_lines)} 行 "
+        f"— v0.1 の改変、または本テストの前提が古い可能性がある: {adapter_lines!r}"
+    )
 
 
 def test_revision02_new_pin_fields_get_64hex_format_enforced(contract_raw: Dict[str, Any]) -> None:
@@ -1541,6 +1567,67 @@ def test_revision02_backbone_checkpoint_sha_pinned_and_matches_ruling(
     field = contract_raw["backbone_checkpoint_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a"
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第8巡対応 — Fix A: bundle sha のハッシュ規約統一
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_compute_file_sha256_matches_actual_bundle_file_bytes() -> None:
+    """`run9_schema.compute_file_sha256()` が inputs/backbone_runtime_bundle.json
+    の実バイト sha256（`sha256sum` 相当）を正しく計算できること — 現状
+    backbone_runtime_bundle_sha は PENDING のままだが、将来 PINNED 化する
+    際の照合手順（このヘルパを呼ぶだけ）が実行可能であることを確認する
+    （Codex bot レビュー PR #316 第8巡指摘A採用）。"""
+    import hashlib
+
+    computed = m.compute_file_sha256(BACKBONE_BUNDLE_PATH)
+    expected = hashlib.sha256(BACKBONE_BUNDLE_PATH.read_bytes()).hexdigest()
+    assert computed == expected
+    assert m._SHA256_HEX_RE.match(computed)
+
+
+def test_revision02_compute_file_sha256_matches_design_doc_sha256_pin() -> None:
+    """対照実験: 既に PINNED 済みの design_doc_sha256 も
+    `compute_file_sha256()` で再現できること（design_doc_sha256 と同一
+    規約であることの直接確認）。"""
+    contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    assert m.compute_file_sha256(DESIGN_DOC_PATH) == contract_raw["design_doc_sha256"]["value"]
+    assert (
+        m.compute_file_sha256(REVISION_DOC_PATH)
+        == contract_raw["design_revision_doc_sha256"]["value"]
+    )
+
+
+def test_revision02_backbone_runtime_bundle_sha_wording_uses_raw_byte_convention() -> None:
+    """Codex bot レビュー PR #316 第8巡指摘A: RUN9_CONTRACT.yaml の
+    backbone_runtime_bundle_sha 関連コメント/reason に「正規形 sha256」の
+    文言が残っていない（design_doc_sha256 と同一の実バイト規約へ統一
+    済み）こと。af0_anchor_manifest.json（意図的な正規形規約の例外）の
+    言及自体は許容する。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    lines = contract_text.splitlines()
+    for i, line in enumerate(lines):
+        if "backbone_runtime_bundle_sha" in line or "backbone" in line.lower():
+            # backbone 関連の行/直後の reason 行に「正規形」が単独で出て
+            # いないこと（af0 との対比説明の一部として「正規形」の語自体は
+            # コメント中に許容するが、"bundle 正規形" のような直結表現は
+            # 禁止する）。
+            assert "bundle 正規形" not in line, f"line {i}: {line!r}"
+    assert "bundle 正規形" not in contract_text
+
+
+def test_revision02_af0_vs_bundle_hash_convention_difference_documented() -> None:
+    """af0（正規形規約）と bundle（実バイト規約）の差異理由が、
+    compute_file_sha256() の docstring または contract コメントに
+    明記されていることの直接確認。"""
+    schema_source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    combined = schema_source + contract_text
+    assert "af0" in combined.lower()
+    assert "canonicalization_method" in schema_source or "正規形" in contract_text
+    assert "compute_file_sha256" in schema_source
 
 
 def test_revision02_backbone_runtime_bundle_sha_pending_while_render_commit_unconfirmed(

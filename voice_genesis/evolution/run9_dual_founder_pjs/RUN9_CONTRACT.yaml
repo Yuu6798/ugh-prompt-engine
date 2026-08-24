@@ -67,7 +67,7 @@ design_doc_sha256:
 # design_doc_sha256 と同じ前例方式（design_doc_sha256 は v0.1 本文、本欄は
 # v0.2 差分メモを pin する）。
 design_revision_doc_sha256:
-  value: "5b4613d281adcafce913586f7eeddde491b6ef360471f8118d321c1bcb92f6b1"
+  value: "406098e2ac62065855b7e4086fce769a2956b64606594ad83b63b527a23ad4fb"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.2.md
 
@@ -150,7 +150,13 @@ backbone_checkpoint_sha:
     results_s7/s7_0b_probe_spec.json / run8/provision.sh の4件で相互一致確認済み）
 
 # --- backbone_runtime_bundle_sha: inputs/backbone_runtime_bundle.json の
-# 実 sha256。bundle 内に PENDING 相当の欄が残る場合はこの欄も PENDING と
+# **ファイル実バイトの sha256**（design_doc_sha256 と同一規約 —
+# run9_schema.compute_file_sha256() 参照。Codex bot レビュー PR #316
+# 第8巡指摘A採用: 旧 reason 文言が「正規形 sha256」と混在していたため
+# 統一した）。af0_anchor_manifest.json の anchor_hashes.af0 pin だけは
+# 意図的な例外で正規形（canonical）規約を使う — 両者を混同しないこと
+# （compute_file_sha256() の docstring に規約差の理由を記載）。
+# bundle 内に PENDING 相当の欄が残る場合はこの欄も PENDING と
 # し理由に「bundle 内 PENDING 解消後に pin」と記す規約。
 # Codex bot レビュー PR #316 第1巡指摘（P2, 866fcc8, 採用）: bundle 内
 # render_code_commit は status: INFERRED_UNCONFIRMED（直接記録ではなく
@@ -169,7 +175,7 @@ backbone_runtime_bundle_sha:
   status: PENDING
   reason: >-
     bundle 内 render_code_commit が INFERRED_UNCONFIRMED（直接記録の発掘、
-    または User attestation で確定後に bundle 正規形 sha を pin）。
+    または User attestation で確定後に bundle の実 sha256 を pin）。
 
 # --- founder genome shas -----------------------------------------------------
 # value は genome_id（16hex 内容ID）ではなく、永続 genome 文書ファイル
