@@ -226,6 +226,11 @@ testpaths = [
     # independent 部分）: {path, sha256} 参照の実ファイル照合 + PENDING_PHASE_B
     # プレースホルダの構造検査。依存は標準ライブラリのみ。
     "voice_genesis/foundry/tests/test_d6_fixed_probe_pins.py",
+    # RUN9 Phase 0 スキャフォールド（DESIGN_RUN9 §27 最低テストの静的検証可能
+    # サブセット）。voice_genesis/evolution/run9_dual_founder_pjs/ は
+    # voice_genesis/evolution/tests/ 配下ではない専用ディレクトリのため個別
+    # 収集が必要。依存は標準ライブラリ + PyYAML（本体必須依存）のみ。
+    "voice_genesis/evolution/run9_dual_founder_pjs/tests",
 ]
 pythonpath = ["src", "."]
 markers = [
