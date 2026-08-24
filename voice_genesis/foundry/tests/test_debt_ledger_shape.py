@@ -229,6 +229,23 @@ def test_adjudication_freeze_mode_assignment_is_pinned(adjudication: Dict[str, A
     assert assignments[_PROBE_JSON_REPO_PATH] in fixed_probe["freeze_mode_vocabulary"]
 
 
+def test_adjudication_amendment_provenance_is_scoped(adjudication: Dict[str, Any]) -> None:
+    """§8 追補キーの provenance がトップレベル date/adjudicator（原裁定
+    2026-08-22・User）を継承しないことを pin する（PR #314 第 10 巡:
+    機械可読正本の帰属・日付誤りは将来汚染）。"""
+    amendments = adjudication["amendments"]
+    assert len(amendments) == 1
+    amendment = amendments[0]
+    assert amendment["date"] == "2026-08-24"
+    assert "Fable" in amendment["adjudicator"]
+    assert "委任" in amendment["adjudicator"]
+    assert amendment["reference"] == "DEBT_ADJUDICATION_v1.1.md §8"
+    assert amendment["adds"] == [
+        "fixed_probe.freeze_mode_vocabulary",
+        "fixed_probe.freeze_mode_assignments",
+    ]
+
+
 def test_ledger_probe_evidence_references_freeze_mode_reassignment(
     ledger: Dict[str, Any],
 ) -> None:

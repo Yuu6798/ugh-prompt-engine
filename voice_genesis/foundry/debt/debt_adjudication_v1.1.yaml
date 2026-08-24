@@ -3,6 +3,16 @@ date: "2026-08-22"
 adjudicator: User
 supersedes: DEBT_REPAYMENT_PLAN_v1.0.md  # 乖離時は本記録が勝つ
 
+# 上の date/adjudicator は原裁定 (2026-08-22・User) のもの。追補で加わった
+# キーの provenance は下の amendments が正 (継承させない。PR #314 第 10 巡)
+amendments:
+  - date: "2026-08-24"
+    adjudicator: "Fable (User 実行委任 2026-08-24)"
+    reference: "DEBT_ADJUDICATION_v1.1.md §8"
+    adds:
+      - fixed_probe.freeze_mode_vocabulary
+      - fixed_probe.freeze_mode_assignments
+
 vocabulary:
   c0_c3_symbols: prohibited
   canonical_field: causal_evidence_strength
