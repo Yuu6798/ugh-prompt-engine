@@ -2662,6 +2662,13 @@ class Run9RunContract:
     def founder_genome_sha(self, founder_id: str) -> Dict[str, Any]:
         return self.raw["founder_genome_shas"][founder_id]
 
+    def intervention_take_count_field(self, name: str) -> Dict[str, Any]:
+        """`interventions` 配下の入れ子 pin 欄（`INTERVENTION_TAKE_COUNT_FIELDS`
+        の各要素）を返す。`pin_field()`/`founder_genome_sha()` と同じ
+        アクセサ規約（Codex bot レビュー PR #318 第8巡 Fix 22 で新設 —
+        `gate_state()` がこの入れ子 pin も pre-run 判定に含めるための足場）。"""
+        return self.raw["interventions"][name]
+
 
 def _is_field_pinned(field: Mapping[str, Any]) -> bool:
     return field.get("status") == "PINNED"
@@ -2899,6 +2906,20 @@ def gate_state(contract: Run9RunContract) -> str:
     （= この場合に限り optional 除外から差し戻す）。`human_audit_mode ==
     "DISABLED"`（既定値）のときは従来どおり除外されたまま。
 
+    `interventions.{c0_replay_takes_per_founder,c1_sham_takes_per_founder}`
+    （`INTERVENTION_TAKE_COUNT_FIELDS`、Codex bot レビュー PR #318 第7巡
+    Fix 20 で新設）も pre-run 必須の pin 欄として判定に含める（同 PR 第8巡
+    Fix 22 採用）: これらはトップレベルではなく `interventions` 配下の
+    入れ子 dict のため、`CONTRACT_PIN_FIELDS` からの `pre_run_fields`
+    導出には現れない — 何もしなければ両欄が PENDING のままでも他の
+    トップレベル欄が全 PINNED なら READY を返してしまい、C0/C1 校正母集団
+    サイズが未凍結のまま学習が開始できてしまう（事前登録 P95 閾値が
+    無効化される）。gate は構造述語（PINNED/PENDING の snapshot 判定）に
+    留め、pin 値の実物照合は引き続き R9-G1 tooling の職務のまま変更しない
+    — `_require_positive_int()` による値の型検証は `load_run9_contract()`
+    が pin 時点で既に行っており（`intervention_take_count_field()` 経由の
+    再検証がその検証済み snapshot を読むだけなので）ここで重複させない。
+
     毎回 `contract.raw` のスナップショットを `load_run9_contract()` で
     再検証してから判定する（Codex bot レビュー PR #315 第2巡指摘1採用）:
     呼び出し元が load 済みの `Run9RunContract.raw`（`Run9RunContract` は
@@ -2920,6 +2941,9 @@ def gate_state(contract: Run9RunContract) -> str:
             return "BLOCKED"
     for founder_id in CONTRACT_FOUNDER_IDS:
         if not _is_field_pinned(revalidated.founder_genome_sha(founder_id)):
+            return "BLOCKED"
+    for take_field_name in INTERVENTION_TAKE_COUNT_FIELDS:
+        if not _is_field_pinned(revalidated.intervention_take_count_field(take_field_name)):
             return "BLOCKED"
     return "READY"
 

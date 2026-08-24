@@ -4741,3 +4741,102 @@ def test_fix21_validator_rejects_feasibility_note_empty() -> None:
     doc["feasibility_note"] = "   "
     with pytest.raises(m.Run9ValidationError, match="feasibility_note must be a non-empty string"):
         m.validate_identity_metric_space_manifest(doc)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第8巡 Fix 22（P1）: gate_state() の READY 判定へ
+# calibration take pin（`interventions.{c0_replay,c1_sham}_takes_per_founder`、
+# Fix 20 新設）を組み込む。旧実装は `pre_run_fields` を `CONTRACT_PIN_FIELDS`
+# （トップレベル欄のみ）からしか導出しておらず、両ネスト欄が PENDING でも
+# 他のトップレベル欄が全 PINNED なら READY を返してしまっていた ——
+# C0/C1 校正母集団サイズが未凍結のまま学習が開始でき、事前登録 P95 閾値が
+# 無効化される穴だった。
+# ---------------------------------------------------------------------------
+
+
+def test_fix22_fully_pinned_synthetic_contract_with_take_counts_pinned_is_ready(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """回帰①: 現行 RUN9_CONTRACT.yaml の interventions 配下は既に両欄
+    PINNED=20（Fix 20）。他のトップレベル pre-run 欄も合成 PINNED にした
+    fully-pinned fixture は Fix 22 適用後も従来どおり READY を返す
+    （新チェックが既存の正常系まで巻き込んで壊していないことの確認）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    for name in m.INTERVENTION_TAKE_COUNT_FIELDS:
+        assert fully_pinned["interventions"][name]["status"] == "PINNED"
+    contract = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract) == "READY"
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix22_pending_take_count_field_blocks_gate(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """負例②: `interventions.{c0_replay,c1_sham}_takes_per_founder` の
+    どちらか一方だけを PENDING 化すると、他の全欄が PINNED でも
+    gate_state() は READY にならず BLOCKED を返す（校正母集団サイズが
+    未凍結のまま学習開始できてしまう穴の直接リグレッションガード）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    fully_pinned["interventions"][field_name] = {
+        "value": None,
+        "status": "PENDING",
+        "reason": "regressed for fix22 test",
+    }
+    contract = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_fix22_both_take_count_fields_pending_blocks_gate(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """負例②補足: 両欄同時 PENDING でも同様に BLOCKED。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    for name in m.INTERVENTION_TAKE_COUNT_FIELDS:
+        fully_pinned["interventions"][name] = {
+            "value": None,
+            "status": "PENDING",
+            "reason": "regressed for fix22 test",
+        }
+    contract = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix22_take_count_field_missing_status_key_fails_closed_via_gate(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """負例③: gate_state() の再検証時（Fix 4 と同じ「load 後に
+    contract.raw を直接改変する」パターン）に status キーが欠落した入れ子
+    pin を混入させても、READY を騙れず Run9ValidationError で
+    fail-closed する。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    contract = m.load_run9_contract(fully_pinned)
+    del contract.raw["interventions"][field_name]["status"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.gate_state(contract)
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix22_take_count_field_invalid_status_fails_closed_via_gate(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """負例③補足: status に語彙外の値（"READY" という偽装値）を直接
+    混入させても、gate_state() の再検証で Run9ValidationError が飛ぶ
+    （PINNED を騙る経路が status 語彙検査でも閉じていることの確認）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    contract = m.load_run9_contract(fully_pinned)
+    contract.raw["interventions"][field_name]["status"] = "READY"
+    with pytest.raises(m.Run9ValidationError, match="status must be one of"):
+        m.gate_state(contract)
+
+
+def test_fix22_intervention_take_count_field_accessor() -> None:
+    """`Run9RunContract.intervention_take_count_field()` が
+    `pin_field()`/`founder_genome_sha()` と同じアクセサ規約で
+    `interventions` 配下の入れ子 pin 欄を返すことの直接確認。"""
+    contract = m.load_run9_contract_from_yaml_path(CONTRACT_PATH)
+    for name in m.INTERVENTION_TAKE_COUNT_FIELDS:
+        assert (
+            contract.intervention_take_count_field(name)
+            == contract.raw["interventions"][name]
+        )
