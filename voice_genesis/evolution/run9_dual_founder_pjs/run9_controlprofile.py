@@ -36,6 +36,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -129,6 +130,36 @@ class Run9ProfileLedgerConflictError(Run9ControlProfileError):
 # ---------------------------------------------------------------------------
 
 
+def _reject_non_finite(value: Any, *, path: str) -> None:
+    """`value`（JSON 互換の任意構造 — dict/list/str/int/float/bool/None）
+    の中に NaN/inf を含む float が無いことを再帰的に検証する（Codex bot
+    レビュー PR #318 第2巡 Fix 8 採用）: partition 値は自由形の
+    trait/technique パラメータ（例 `{"breathiness": 0.1}`）を許容するが、
+    Python の `json` モジュールは既定で NaN/Infinity/-Infinity を寛容に
+    受け付けてしまう（`allow_nan=True` が既定）。これらが profile_id の
+    正規形入力や距離計算へ紛れ込むと、決定論性は保たれても値そのものが
+    JSON 標準の外側にある汚染源になる。bool は int のサブクラスだが
+    NaN/inf になり得ないため素通しする。
+    """
+    if isinstance(value, bool):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise Run9ControlProfileError(f"{path}: non-finite float value rejected (NaN/inf), got {value!r}")
+        return
+    if isinstance(value, dict):
+        for key, sub in value.items():
+            _reject_non_finite(sub, path=f"{path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, sub in enumerate(value):
+            _reject_non_finite(sub, path=f"{path}[{index}]")
+        return
+    # int/str/None はそのまま許容する（int は常に有限。json.loads() が
+    # NaN/inf を生成するのは float リテラルとしてのみなので int 経路には
+    # 現れない）。
+
+
 def _validate_partitions_shape(partitions: Any) -> Dict[str, Dict[str, Any]]:
     """`partitions` が `{"trait_control": {...}, "technique_control": {...}}`
     という完全な2キー構造であることを検証する。`IDENTITY_STATE`/
@@ -155,6 +186,7 @@ def _validate_partitions_shape(partitions: Any) -> Dict[str, Dict[str, Any]]:
             raise Run9ControlProfileError(
                 f"partitions.{key} must be an object, got {type(value).__name__}"
             )
+        _reject_non_finite(value, path=f"partitions.{key}")
         validated[key] = dict(value)
     return validated
 
@@ -348,6 +380,11 @@ def derive_profile(
                 f"updates[{partition_key!r}] must be an object, got "
                 f"{type(updates[partition_key]).__name__}"
             )
+        # 非有限値の拒否（Codex bot レビュー PR #318 第2巡 Fix 8 採用）:
+        # updates はここでしか検証されない自由形の値であり、
+        # `_validate_partitions_shape()`（from_dict 側の関門）を経由しない
+        # ため、builder 側にも同じ関門を独立に配線する。
+        _reject_non_finite(updates[partition_key], path=f"updates.{partition_key}")
 
     new_partitions: Dict[str, Dict[str, Any]] = {
         k: copy.deepcopy(dict(parent.partitions[k])) for k in PROFILE_PARTITION_KEYS
@@ -431,6 +468,24 @@ def control_profile_from_dict(data: Any) -> Run9ControlProfile:
             raise Run9ControlProfileError(
                 f"revision {revision!r} (branch-derived) must declare a non-null branch and "
                 f"parent_revision, got branch={branch!r} parent_revision={parent_revision!r}"
+            )
+        # loader 側の親 r0 限定（Codex bot レビュー PR #318 第2巡 Fix 6
+        # 採用）: `derive_profile()` 側の Fix 1（builder が親 revision を
+        # r0 に強制）と対称の防御を、文書を直接読み込む loader 側にも配線
+        # する。Fix 1 が防ぐのは「これから derive する」経路の枝汚染だが、
+        # 手で組み立てた（または改ざんされた）文書が直接
+        # `control_profile_from_dict()` に渡された場合、builder を経由
+        # しないため Fix 1 だけでは防げない — 例えば
+        # parent_revision="r_practice" を宣言する r_taught 文書は、
+        # 個々のフィールド検証（revision は既知語彙・parent_revision も
+        # 既知語彙）だけでは検出できず、ここで初めて拒否される。
+        if parent_revision != NEUTRAL_REVISION:
+            raise Run9ControlProfileError(
+                f"revision {revision!r} (branch-derived) must declare parent_revision == "
+                f"{NEUTRAL_REVISION!r} (birth-neutral canonical origin) — 全枝は r0 から独立分岐する"
+                f"（PoR §4）。got parent_revision={parent_revision!r} (branch={branch!r}) — a "
+                "document claiming a non-r0 parent is cross-arm contamination, whether produced by "
+                "derive_profile() or hand-assembled"
             )
         # 全ての矛盾する (branch, revision) 組合せを網羅的に拒否する
         # （Codex bot レビュー PR #318 第1巡 Fix 3 採用）: r0 以外は
@@ -518,6 +573,16 @@ class Run9ProfileLedger:
                 f"{directory_resolved}"
             ) from None
 
+    def _alias_path_for(self, voice_id: str, revision: str) -> Path:
+        """`(voice_id, revision)` の一意性主張を排他 hard link で担持する
+        tuple-alias ファイルのパス（`byrev_<voice_id>_<revision>.link`）。
+        `voice_id`/`revision` は共に固定の閉じた語彙
+        （`run9_schema.CONTRACT_FOUNDER_IDS` / `VALID_REVISIONS`）に限定
+        され、`_require_founder_voice_id()`/`control_profile_from_dict()`
+        側で常に検証済みの値しかここへは渡らないため、任意文字列由来の
+        path traversal の懸念は無い。"""
+        return self.directory / f"byrev_{voice_id}_{revision}.link"
+
     def write(self, profile: Run9ControlProfile) -> Run9ProfileWriteResult:
         """`profile` を `<profile_id>.json` として排他 create で公開する。
         同一 profile_id に既に同一内容が書かれていれば冪等 no-op。
@@ -532,23 +597,57 @@ class Run9ProfileLedger:
         `self.read()` 相当を使う設計を踏襲）。未 publish・typo の親は
         fail-closed で拒否する。
 
-        `(voice_id, revision)` 一意性検証（Codex bot レビュー PR #318 第1巡
-        Fix 4 採用）: 台帳中に同一 `(voice_id, revision)` の組を持つ既存
-        entry があり、かつその `profile_id` が今回 publish しようとしている
-        `profile.profile_id` と異なる場合（= 内容が異なる — profile_id は
-        内容由来のハッシュなので、内容が同一なら profile_id も同一になる）、
-        `Run9ProfileLedgerConflictError` で拒否する。これは下流の
-        `os.link()` 衝突検出（同一 profile_id ファイルへの書き込み衝突）
-        とは別の検証軸 — こちらは「同じ (voice_id, revision) に対して
-        *異なる* profile_id が二重に存在する」という、ファイル名の衝突を
-        伴わない静かなデータ不整合（1つの voice の同一 revision に複数の
-        矛盾する profile が並立する）を防ぐ。バイト同一の内容を同一
-        profile_id で再 publish する経路（真の冪等 no-op）は既存の
-        `os.link()`/バイト比較ロジックでカバーされているため、ここでは
-        「profile_id が異なる」場合のみを衝突として扱う。
+        `(voice_id, revision)` 一意性の原子化（Codex bot レビュー PR #318
+        第2巡 Fix 5 採用、第1巡 Fix 4 の是正）: **tuple-alias hard link
+        方式**。第1巡時点の実装は「publish 前に台帳を走査して既存 entry を
+        探す」という preflight 検査であり、実際のファイル書込みとは
+        分離していたため、2つの並行 publish が両方とも preflight を通過
+        してしまう窓が原理的に残っていた（TOCTOU）。本巡では、
+        `(voice_id, revision)` の一意性主張そのものを
+        `byrev_<voice_id>_<revision>.link` という専用ファイルへ集約し、
+        その内容（claim している `profile_id`）を `os.link()` の排他
+        create で確定させる — `os.link()` は OS レベルで atomic な
+        操作であるため、同一 tuple を主張する複数の書込みが競合しても、
+        どちらか一方だけが確実に claim に成功する。
+
+        方式選択（lockfile 方式との比較）: VG-E0 系には filelock による
+        直列化の先例がある（PR #261）。lockfile 方式でも一意性は守れるが、
+        「lock 取得後・release 前にプロセスが crash すると stale lock が
+        残り、以降の publish が人手復旧待ちで止まる」という crash-safety
+        上の弱点がある。tuple-alias hard link 方式は、claim 自体が
+        単一の `os.link()` 呼び出しで完結する（lock の取得/解放という
+        二段階の状態を持たない）ため、途中で crash してもロック待ちで
+        後続処理が詰まることが無い — 最悪ケースでも「本体ファイルは
+        存在するが、どの alias からも参照されない孤児」が残るだけで、
+        これは以降の publish を一切ブロックしない（同じ内容の
+        再 publish は当該 profile_id ファイルへの `os.link()` が
+        既存バイト列と一致するため冪等に成功し、異なる内容の publish は
+        新しい profile_id を持つため無関係のファイルとして扱われる）。
+        crash-safety を優先し、tuple-alias hard link 方式を採用する。
+
+        書込シーケンス: ①本体ファイル（`<profile_id>.json`）を
+        profile_id 単位の排他 create で書く（既存ロジック、同一
+        profile_id 衝突の冪等/conflict 判定はここで完結）→ ②
+        tuple-alias ファイルを排他 create で claim する。②が
+        「既存 alias が別の profile_id を指す」ために失敗した場合、
+        ①でこの呼び出しが新規作成した本体ファイルを削除して後始末する
+        （部分生成物を残さない — 既存ファイルへの republish だった場合は
+        削除しない。他の publish が正当に所有するファイルを壊さないため）。
         """
         path = self.path_for(profile.profile_id)
-        payload = (json.dumps(profile.to_dict(), sort_keys=True, indent=2) + "\n").encode("utf-8")
+        alias_path = self._alias_path_for(profile.voice_id, profile.revision)
+        # allow_nan=False（Codex bot レビュー PR #318 第2巡 Fix 8 採用、
+        # `_reject_non_finite()` との二重防御）: profile はここへ来るまでに
+        # 構築経路（`build_neutral_profile()`/`derive_profile()`）または
+        # 読込経路（`control_profile_from_dict()`）のいずれかで非有限値
+        # 拒否を通過済みのはずだが、`Run9ControlProfile` を dataclass
+        # コンストラクタ経由で直接構築する経路（テストや将来の呼び出し）は
+        # それらの関門を経由しない。publish 直前のこの直列化で
+        # allow_nan=False にしておけば、そうした経路が万一 NaN/inf を
+        # 台帳へ書き込もうとしても TypeError で即座に失敗する。
+        payload = (
+            json.dumps(profile.to_dict(), sort_keys=True, indent=2, allow_nan=False) + "\n"
+        ).encode("utf-8")
 
         # publish 直前の round-trip 検証。
         try:
@@ -558,17 +657,6 @@ class Run9ProfileLedger:
                 f"refusing to publish profile_id {profile.profile_id!r}: serialized payload failed "
                 f"round-trip validation via control_profile_from_dict() ({exc})"
             ) from exc
-
-        existing_at_tuple = self._find_by_voice_and_revision(profile.voice_id, profile.revision)
-        if existing_at_tuple is not None and existing_at_tuple.profile_id != profile.profile_id:
-            raise Run9ProfileLedgerConflictError(
-                f"refusing to publish profile_id {profile.profile_id!r}: ledger already has a "
-                f"different profile_id {existing_at_tuple.profile_id!r} published for the same "
-                f"(voice_id={profile.voice_id!r}, revision={profile.revision!r}) — a given "
-                "(voice_id, revision) tuple must resolve to exactly one profile content "
-                "(byte-identical republish under the same profile_id remains an idempotent no-op; "
-                "this rejects a *different* profile_id silently claiming the same tuple)"
-            )
 
         if profile.parent_revision is not None:
             parent_found = self._find_by_voice_and_revision(profile.voice_id, profile.parent_revision)
@@ -582,6 +670,9 @@ class Run9ProfileLedger:
 
         self.directory.mkdir(parents=True, exist_ok=True)
 
+        # ① 本体ファイルの書込み（profile_id 単位の排他 create — 既存
+        # ロジックそのまま）。
+        main_freshly_created = False
         fd, tmp_name = tempfile.mkstemp(dir=self.directory, prefix=f"{path.name}.", suffix=".tmp")
         try:
             with os.fdopen(fd, "wb") as handle:
@@ -590,21 +681,67 @@ class Run9ProfileLedger:
                 os.fsync(handle.fileno())
             try:
                 os.link(tmp_name, path)
+                main_freshly_created = True
             except FileExistsError:
                 self._reject_symlink_escape(path)
                 existing = path.read_bytes()
-                if existing == payload:
-                    return Run9ProfileWriteResult(path=path, created=False)
-                raise Run9ProfileLedgerConflictError(
-                    f"profile_id {profile.profile_id!r} already exists in the ledger with different "
-                    "content (append-only ledger — changes must go through a PR, not an overwrite)"
-                ) from None
+                if existing != payload:
+                    raise Run9ProfileLedgerConflictError(
+                        f"profile_id {profile.profile_id!r} already exists in the ledger with "
+                        "different content (append-only ledger — changes must go through a PR, not "
+                        "an overwrite)"
+                    ) from None
+                # existing == payload: 同一 profile_id への冪等 republish。
         finally:
             try:
                 os.unlink(tmp_name)
             except OSError:
                 pass
-        return Run9ProfileWriteResult(path=path, created=True)
+
+        # ② tuple-alias hard link による (voice_id, revision) 一意性の
+        # 原子化 claim（Fix 5 — docstring 参照）。
+        alias_claim = profile.profile_id.encode("ascii")
+        fd2, tmp_alias_name = tempfile.mkstemp(
+            dir=self.directory, prefix=f"{alias_path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd2, "wb") as handle:
+                handle.write(alias_claim)
+                handle.flush()
+                os.fsync(handle.fileno())
+            try:
+                os.link(tmp_alias_name, alias_path)
+            except FileExistsError:
+                self._reject_symlink_escape(alias_path)
+                existing_claim = alias_path.read_bytes()
+                if existing_claim != alias_claim:
+                    # 別の profile_id が既にこの tuple を claim 済み —
+                    # 本体ファイルをこの呼び出しで新規作成していた場合のみ
+                    # 後始末する（部分生成物を残さない。既存ファイルへの
+                    # republish だった場合は他の publish の正当な所有物
+                    # なので削除しない）。
+                    if main_freshly_created:
+                        try:
+                            os.unlink(path)
+                        except OSError:
+                            pass
+                    raise Run9ProfileLedgerConflictError(
+                        f"refusing to publish profile_id {profile.profile_id!r}: ledger already has a "
+                        f"different profile_id {existing_claim.decode('ascii', 'replace')!r} claiming "
+                        f"(voice_id={profile.voice_id!r}, revision={profile.revision!r}) via the "
+                        "tuple-alias hard link — a given (voice_id, revision) tuple must resolve to "
+                        "exactly one profile content (byte-identical republish under the same "
+                        "profile_id remains an idempotent no-op)"
+                    ) from None
+                # existing_claim == alias_claim: 同一 profile_id が既に
+                # このタプルを claim 済み（冪等）。
+        finally:
+            try:
+                os.unlink(tmp_alias_name)
+            except OSError:
+                pass
+
+        return Run9ProfileWriteResult(path=path, created=main_freshly_created)
 
     def read(self, profile_id: str) -> Run9ControlProfile:
         path = self.path_for(profile_id)

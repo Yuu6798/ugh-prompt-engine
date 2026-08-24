@@ -4061,11 +4061,16 @@ def test_phase3_readme_documents_metric_space_fable_pin_with_veto() -> None:
 
 
 def _valid_learning_recipe_arm() -> Dict[str, Any]:
+    """Codex bot レビュー PR #318 第2巡 Fix 7 採用: draft/runnable の
+    二段 schema は作らず単一の厳密 schema とするため、stopping_rule/
+    trial_count/render_budget はもはや None を許容しない（実行可能な
+    プレースホルダ値へ更新 — 具体的な語彙・数値そのものは VG-L0 ハーネス
+    実装時の build 対象のまま、ここでは「型として実行可能」な最小例）。"""
     return {
         "equal_budget_within_arm": True,
-        "stopping_rule": None,
-        "trial_count": None,
-        "render_budget": None,
+        "stopping_rule": "fixed_trial_count",
+        "trial_count": 100,
+        "render_budget": 100,
     }
 
 
@@ -4113,6 +4118,52 @@ def test_phase3_learning_recipe_manifest_arm_missing_rejected(arm_name: str) -> 
     del manifest[arm_name]
     with pytest.raises(m.Run9ValidationError, match="missing required key"):
         m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("bad_value", [None, "", "   ", 123, 1.5, True])
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix7_stopping_rule_non_empty_str_required(arm_name: str, bad_value: Any) -> None:
+    """必須テスト（Codex bot レビュー PR #318 第2巡 Fix 7, 負例1/3）:
+    `stopping_rule` は非空文字列以外（None/空文字/空白のみ/数値/bool）を
+    すべて拒否する — draft 段階の None プレースホルダはもはや通らない。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["stopping_rule"] = bad_value
+    with pytest.raises(m.Run9ValidationError, match="stopping_rule must be a non-empty string"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("bad_value", [None, 0, -1, -0.5, "10", True, float("nan"), float("inf")])
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix7_trial_count_positive_finite_number_required(arm_name: str, bad_value: Any) -> None:
+    """必須テスト（Fix 7, 負例2/3）: `trial_count` は None/0/負値/文字列/
+    bool/NaN/inf をすべて拒否し、正の有限数値のみを許可する — READY
+    昇格時点で実行不能な予算（0件・負の試行回数等）が凍結される事故を
+    防ぐ。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["trial_count"] = bad_value
+    with pytest.raises(m.Run9ValidationError, match="trial_count must be"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("bad_value", [None, 0, -1, -0.5, "10", True, float("nan"), float("inf")])
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix7_render_budget_positive_finite_number_required(arm_name: str, bad_value: Any) -> None:
+    """必須テスト（Fix 7, 負例3/3）: `render_budget` も trial_count と
+    同じ実行可能性要件（正の有限数値）を課される。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["render_budget"] = bad_value
+    with pytest.raises(m.Run9ValidationError, match="render_budget must be"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+def test_fix7_valid_arm_with_float_trial_count_and_render_budget_accepted() -> None:
+    """正例回帰: int だけでなく正の有限 float も trial_count/render_budget
+    として受理される（bool のみを明示的に除外し、それ以外の数値型は
+    許容する設計であることの確認）。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest["practice_recipe"]["trial_count"] = 100.0
+    manifest["practice_recipe"]["render_budget"] = 50.5
+    m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認
 
 
 def test_phase3_learning_recipe_manifest_no_control_recipe_section() -> None:

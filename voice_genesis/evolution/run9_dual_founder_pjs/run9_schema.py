@@ -654,7 +654,14 @@ class Run9IdentityDomain:
 
 
 def _canonical_json(obj: Any) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    # allow_nan=False（Codex bot レビュー PR #318 第2巡 Fix 8 採用）:
+    # 標準 json.dumps() の既定は allow_nan=True で NaN/Infinity/-Infinity を
+    # 非標準の JSON リテラル（NaN/Infinity 等）として黙って出力してしまう。
+    # 正規形ハッシュ（genome_id/profile_id 等）の入力に非有限値が紛れ込むと、
+    # 決定論性は保たれても値そのものが JSON 標準外・下流の再パースで壊れ得る
+    # 汚染源になるため、ここで fail-closed にする（呼び出し側の再帰検証との
+    # 二重防御 — 詳細は run9_controlprofile.py の `_reject_non_finite()`）。
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
 
 
 def _reject_pjs_key(*, context: str, keys: Any) -> None:
@@ -1033,8 +1040,11 @@ EDUCATION_MANIFEST_PATH = _THIS_DIR / "inputs" / "education_technique_lesson_man
 # 後の learning_recipe_sha reason）を機械可読な構造として凍結する。
 # `learning_recipe_sha` は本 PR でも PENDING のまま — ここで凍結するのは
 # 構造（枝別 recipe を束ねた単一 manifest・共通 seed・各枝内の二体等予算
-# 宣言）のみで、停止規則/試行回数/render 予算の具体値は VG-L0 ハーネス
-# 実装時の build 対象。
+# 宣言）+ 停止規則/試行回数/render 予算が「実行可能な形」であることの
+# 型的保証（Codex bot レビュー PR #318 第2巡 Fix 7 採用 — 非空文字列 /
+# 正の有限数値）。具体的な語彙・数値そのものの build（例えば
+# stopping_rule を閉じた語彙へ絞る等）は VG-L0 ハーネス実装時の課題として
+# 据え置く。
 # ---------------------------------------------------------------------------
 
 SCHEMA_LEARNING_RECIPE_MANIFEST = "run9-learning-recipe/1.0"
@@ -1048,17 +1058,43 @@ _LEARNING_RECIPE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
     "schema", "seed", "practice_recipe", "education_recipe",
 })
 
-# 各枝 recipe 節の必須キー（値は build 時に確定する欄を含むため、
-# `equal_budget_within_arm` 以外は「キーが存在すること」だけを要求し、
-# 値の内容までは本 PR では検証しない — 構造のみ凍結する）。
+# 各枝 recipe 節の必須キー。`equal_budget_within_arm` は bool True 必須、
+# `stopping_rule`/`trial_count`/`render_budget` は「実行可能な形」まで
+# 型的に検証する（Codex bot レビュー PR #318 第2巡 Fix 7 採用 — draft/
+# runnable の二段 schema は作らず単一の厳密 schema とする）。具体的な
+# 語彙・数値そのものの決定は VG-L0 ハーネス実装時の build 対象のまま。
 _LEARNING_RECIPE_ARM_KEYS: FrozenSet[str] = frozenset({
     "equal_budget_within_arm",  # PoR §8: 各枝『内』の二体間の等予算宣言。bool True 必須
-    "stopping_rule",  # 停止規則（値は build 時）
-    "trial_count",  # 試行回数（値は build 時）
-    "render_budget",  # render 予算（値は build 時）
+    "stopping_rule",  # 停止規則。非空文字列必須（値そのものは build 時に確定）
+    "trial_count",  # 試行回数。正の有限数値必須（値そのものは build 時に確定）
+    "render_budget",  # render 予算。正の有限数値必須（値そのものは build 時に確定）
 })
 
 _LEARNING_RECIPE_ARMS: Tuple[str, str] = ("practice_recipe", "education_recipe")
+
+
+def _require_non_empty_str(value: Any, *, field: str) -> str:
+    """空文字列・非文字列を拒否する（Codex bot レビュー PR #318 第2巡
+    Fix 7 採用）。閉じた語彙の凍結は VG-L0 ハーネス実装時の課題として
+    据え置き、本 PR では「非空文字列であること」までを機械強制する。"""
+    if not isinstance(value, str) or not value.strip():
+        raise Run9ValidationError(f"{field} must be a non-empty string, got {value!r}")
+    return value
+
+
+def _require_positive_finite_number(value: Any, *, field: str) -> float:
+    """bool を除外した int/float のみを許容し、有限かつ正（>0）であること
+    を要求する（Codex bot レビュー PR #318 第2巡 Fix 7 採用）:
+    `stopping_rule`/`trial_count`/`render_budget` は PINNED 昇格時に
+    「READY 時点で実行可能な予算が凍結されている」ことを保証する必要が
+    あり、None・負値・0・NaN/inf・文字列はいずれも実行不能な予算を
+    静かに通してしまうため fail-closed で拒否する。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise Run9ValidationError(f"{field} must be a number (bool/str/None rejected), got {value!r}")
+    out = float(value)
+    if not math.isfinite(out) or out <= 0.0:
+        raise Run9ValidationError(f"{field} must be a finite positive number, got {value!r}")
+    return out
 
 
 def _validate_learning_recipe_arm(arm: Any, *, arm_name: str) -> None:
@@ -1080,6 +1116,20 @@ def _validate_learning_recipe_arm(arm: Any, *, arm_name: str) -> None:
             f"(PoR §8: equal budget is required within each arm, across the two founders), got "
             f"{arm['equal_budget_within_arm']!r}"
         )
+    # 実行可能厳密化（Codex bot レビュー PR #318 第2巡 Fix 7 採用）: draft
+    # /runnable の二段 schema は作らず、単一の厳密 schema とする。PINNED
+    # 事前配線が本 validator をそのまま呼ぶ以上、READY 昇格時点で
+    # stopping_rule/trial_count/render_budget が実行可能な値まで凍結
+    # されていることをここで機械強制する。
+    _require_non_empty_str(
+        arm["stopping_rule"], field=f"learning recipe manifest.{arm_name}.stopping_rule"
+    )
+    _require_positive_finite_number(
+        arm["trial_count"], field=f"learning recipe manifest.{arm_name}.trial_count"
+    )
+    _require_positive_finite_number(
+        arm["render_budget"], field=f"learning recipe manifest.{arm_name}.render_budget"
+    )
 
 
 def validate_learning_recipe_manifest(data: Mapping[str, Any]) -> None:
@@ -1088,8 +1138,11 @@ def validate_learning_recipe_manifest(data: Mapping[str, Any]) -> None:
     CONTROL は学習 step を実行しないため recipe を持たない — PoR §4 の
     CONTROL 定義と整合）+ 共通 `seed`（`LEARNING_SEED` = 909002 固定）+
     各枝内の二体等予算宣言（`equal_budget_within_arm: true` 必須）を検証
-    する。停止規則・試行回数・render 予算の具体値は本関数では検証しない
-    （構造のみを凍結する段階のため — キーの存在だけを要求する）。
+    する。`stopping_rule`/`trial_count`/`render_budget` は具体的な語彙・
+    数値そのものまでは固定しないが、「実行可能な形」であることは
+    fail-closed で強制する（非空文字列 / 正の有限数値 — Codex bot レビュー
+    PR #318 第2巡 Fix 7 採用。PINNED 事前配線が本 validator をそのまま
+    呼ぶため、READY 昇格時点で実行不能な予算が凍結される事故を防ぐ）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"learning recipe manifest must be an object, got {type(data).__name__}")

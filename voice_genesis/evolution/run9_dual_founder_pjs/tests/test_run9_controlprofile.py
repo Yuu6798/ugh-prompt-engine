@@ -243,6 +243,57 @@ def test_derive_profile_from_r0_still_succeeds_after_fix1() -> None:
 
 
 # ---------------------------------------------------------------------------
+# derive_profile / partitions: 非有限値（NaN/inf）の拒否（Codex bot
+# レビュー PR #318 第2巡 Fix 8）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_derive_profile_rejects_nan_in_updates_top_level(bad_value: float) -> None:
+    """必須テスト（Fix 8, 負例1/2）: updates に直接 NaN/inf が含まれる
+    derive は拒否される。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    with pytest.raises(cp.Run9ControlProfileError, match="non-finite"):
+        cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"breathiness": bad_value}})
+
+
+def test_derive_profile_rejects_nan_nested_inside_updates() -> None:
+    """NaN は partition 値の中の任意の深さ（list/dict のネスト）に紛れ込み
+    得るため、再帰検証であることも確認する。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    with pytest.raises(cp.Run9ControlProfileError, match="non-finite"):
+        cp.derive_profile(
+            r0, "PRACTICE_FROM_AUDIO",
+            {"trait_control": {"nested": {"list": [1, 2, {"deep": float("nan")}]}}},
+        )
+
+
+def test_derive_profile_accepts_ordinary_finite_values() -> None:
+    """正例回帰: 通常の有限値（int/float/str/bool/None/nested list・dict）
+    は Fix 8 後も引き続き受理される。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(
+        r0, "PRACTICE_FROM_AUDIO",
+        {"trait_control": {"x": 1, "y": 0.5, "z": "ok", "w": True, "v": None, "nested": [1, {"a": 2}]}},
+    )
+    assert child.partitions["trait_control"]["x"] == 1
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_from_dict_rejects_nan_in_partitions(bad_value: float) -> None:
+    """必須テスト（Fix 8, 負例2/2）: NaN/inf を partitions に含む文書は
+    `control_profile_from_dict()` でも拒否される（profile_id の再計算
+    チェックより前に検出される — 改ざんされた文書がたまたま profile_id を
+    合わせ直していなくても、その手前で fail-closed）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    data = child.to_dict()
+    data["partitions"]["trait_control"]["x"] = bad_value
+    with pytest.raises(cp.Run9ControlProfileError, match="non-finite"):
+        cp.control_profile_from_dict(data)
+
+
+# ---------------------------------------------------------------------------
 # control_profile_from_dict: 改ざん検出・revision 語彙
 # ---------------------------------------------------------------------------
 
@@ -299,6 +350,43 @@ def test_control_profile_from_dict_rejects_derived_with_null_parent() -> None:
 
 def test_valid_revisions_matches_branch_revisions_vocabulary() -> None:
     assert set(cp.VALID_REVISIONS) == {"r0", "replay", "r_sham", "r_practice", "r_taught"}
+
+
+# ---------------------------------------------------------------------------
+# control_profile_from_dict: parent_revision も r0 限定（Codex bot レビュー
+# PR #318 第2巡 Fix 6 — derive 側 Fix 1 と対称の loader 側防御）
+# ---------------------------------------------------------------------------
+
+
+def test_from_dict_rejects_non_r0_parent_revision_on_derived_document() -> None:
+    """必須テスト（Fix 6）: r_taught 文書が parent_revision=r_practice を
+    宣言する（手で組み立てた/改ざんされた文書が、r0 以外を親と主張する）
+    枝汚染は、`derive_profile()` を経由しなくても loader 側で拒否される。
+    """
+    r0 = cp.build_neutral_profile("R9F-01")
+    taught = cp.derive_profile(r0, "TRANSFER_TECHNIQUE", {"technique_control": {"phrasing": "legato"}})
+    data = taught.to_dict()
+    assert data["parent_revision"] == "r0"
+    data["parent_revision"] = "r_practice"  # r0 以外の親を主張する改ざん
+    with pytest.raises(cp.Run9ControlProfileError, match="全枝は r0 から独立分岐する"):
+        cp.control_profile_from_dict(data)
+
+
+def test_from_dict_rejects_non_r0_parent_revision_for_control_branch_too() -> None:
+    r0 = cp.build_neutral_profile("R9F-01")
+    c0 = cp.derive_profile(r0, "CONTROL", {}, control_condition="NO_LEARNING_REPLAY")
+    data = c0.to_dict()
+    data["parent_revision"] = "r_taught"
+    with pytest.raises(cp.Run9ControlProfileError, match="全枝は r0 から独立分岐する"):
+        cp.control_profile_from_dict(data)
+
+
+def test_from_dict_still_accepts_legitimate_r0_parented_documents_after_fix6() -> None:
+    """正例回帰: 正当な r0-parented 文書は Fix 6 後も引き続き受理される。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    reconstructed = cp.control_profile_from_dict(child.to_dict())
+    assert reconstructed.parent_revision == "r0"
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +662,83 @@ def test_ledger_republish_of_same_tuple_same_content_remains_idempotent(
     assert first.created is True
     assert second.created is False
     assert first.path == second.path
+
+
+# ---------------------------------------------------------------------------
+# Run9ProfileLedger: (voice_id, revision) 一意性の原子化 — tuple-alias
+# hard link 方式（Codex bot レビュー PR #318 第2巡 Fix 5、第1巡 Fix 4 の
+# 是正）。並行 publish の競合は決定論的なユニットテストで直接は書けない
+# ため、「tuple-alias ファイルが既に別 profile_id を claim している」
+# 分岐を直接叩く単体負例で代替する（docstring の設計判断も参照）。
+# ---------------------------------------------------------------------------
+
+
+def test_ledger_alias_path_naming_convention(ledger: cp.Run9ProfileLedger) -> None:
+    path = ledger._alias_path_for("R9F-01", "r_practice")
+    assert path == ledger.directory / "byrev_R9F-01_r_practice.link"
+
+
+def test_ledger_write_creates_tuple_alias_file_claiming_profile_id(
+    ledger: cp.Run9ProfileLedger,
+) -> None:
+    r0 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0)
+    alias_path = ledger._alias_path_for("R9F-01", "r0")
+    assert alias_path.exists()
+    assert alias_path.read_bytes() == r0.profile_id.encode("ascii")
+
+
+def test_ledger_rejects_publish_when_tuple_alias_already_claimed_by_different_profile_id(
+    ledger: cp.Run9ProfileLedger,
+) -> None:
+    """必須テスト（Fix 5）: tuple-alias ファイルが既に別の profile_id を
+    claim している状態で publish しようとすると、`os.link()` 衝突検出には
+    引っかからない本体ファイル（新しい profile_id なので既存ファイルとは
+    無衝突）でも conflict として拒否され、かつこの呼び出しが新規作成した
+    本体ファイルは後始末（削除）される（部分生成物を残さない）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0)
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+
+    # (R9F-01, r_practice) を、child とは無関係な profile_id で先に
+    # fabricate して claim しておく（並行 publish が先着した状況の代替）。
+    alias_path = ledger._alias_path_for("R9F-01", "r_practice")
+    ledger.directory.mkdir(parents=True, exist_ok=True)
+    fabricated_profile_id = "0" * 16
+    assert fabricated_profile_id != child.profile_id
+    alias_path.write_bytes(fabricated_profile_id.encode("ascii"))
+
+    with pytest.raises(cp.Run9ProfileLedgerConflictError, match="already has a different profile_id"):
+        ledger.write(child)
+
+    # 後始末の確認: child 用に新規作成されたはずの本体ファイルが残って
+    # いないこと（部分生成物を残さない）。
+    assert not ledger.path_for(child.profile_id).exists()
+    assert set(ledger.list_profile_ids()) == {r0.profile_id}
+    # fabricate した alias 自体は（他の書込みの所有物ではないため）ここでは
+    # 変更されない — write() は自分が新規作成した本体ファイルのみ後始末する。
+    assert alias_path.read_bytes() == fabricated_profile_id.encode("ascii")
+
+
+def test_ledger_publish_succeeds_after_removing_fabricated_conflicting_alias(
+    ledger: cp.Run9ProfileLedger,
+) -> None:
+    """上記の conflict は恒久的なものではなく、tuple-alias の claim が
+    解消されれば同じ内容の publish が正常に成功することを確認する
+    （fail-closed が過剰に恒久拒否化していないことの確認）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0)
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    alias_path = ledger._alias_path_for("R9F-01", "r_practice")
+    ledger.directory.mkdir(parents=True, exist_ok=True)
+    alias_path.write_bytes(("0" * 16).encode("ascii"))
+    with pytest.raises(cp.Run9ProfileLedgerConflictError):
+        ledger.write(child)
+
+    alias_path.unlink()  # fabricated claim を除去（実運用では起こらない手動復旧の代替）
+    result = ledger.write(child)
+    assert result.created is True
+    assert alias_path.read_bytes() == child.profile_id.encode("ascii")
 
 
 # ---------------------------------------------------------------------------
