@@ -1,0 +1,166 @@
+# RUN9_CONTRACT.yaml — voicegenesis-run-contract/1.0 (DESIGN_RUN9 §23)
+#
+# R9-G0 (RUN_CONTRACT_COMPLETE): この contract が全 pre-run 欄で status ==
+# PINNED になるまで本学習開始禁止。現状の gate_state()（run9_schema.py）は
+# "BLOCKED"（pre-run 欄の大半が PENDING）。これは Phase 0 スキャフォールドの
+# 正直な状態表現であり、捏造して PINNED にしていない。
+#
+# 各欄の pin 状況は {value, status, reason, source?} 形（VG_FOUNDRY の
+# debt/RUN_CONTRACT_SCHEMA_v1.json pinned_field 慣習に倣うが独立実装 —
+# run9_schema.py 参照）。status ∈ {PINNED, PENDING, BLOCKED}。
+#
+# artifact_manifest_sha / cost_record_sha は post-run 専用欄（実行後にのみ
+# 実測できる証拠欄）で、gate_state() の pre-run READY 判定から除外される
+# （run9_schema.CONTRACT_POST_RUN_PIN_FIELDS）。
+
+schema: voicegenesis-run-contract/1.0
+run_id: RUN9
+experiment_id: VG-R9-DUAL-FOUNDER-PJS
+design_revision: "0.1"
+design_doc: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
+
+single_intervention:
+  description: >
+    固定された二つのFounder Genomeへ、同一PJS Performance Lessonを
+    同一recipe・同一budgetで適用する。
+  changed_edge: LEARN_PERFORMANCE
+
+baseline_run: null
+
+parent_designs:
+  - DESIGN_VG_E0
+  - DESIGN_VG_L0
+  - VoiceGenesis_v0.3
+
+# --- design_doc_sha256: 編入した設計書ファイルの実 sha256（PINNED）--------
+# sha256sum で実測し、DESIGN_RUN9 コピーが uploads 原本とバイト同一であることを
+# 確認した値をそのまま転記する（Phase 0 実装時の検証コマンド参照）。
+design_doc_sha256:
+  value: "b1f6901c0ba8bcfcbd61170aa672c95e96a37d082fce5e3f12f245bc4faaae1e"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
+
+# --- attempt_id -------------------------------------------------------------
+attempt_id:
+  value: null
+  status: PENDING
+  reason: 本学習が未実行のため attempt 識別子が未発行。
+
+# --- repository / dataset / config / dependency pins -----------------------
+repository_commit_sha:
+  value: null
+  status: PENDING
+  reason: 本学習開始直前に固定する commit sha が未確定（Phase 0 スキャフォールド段階）。
+
+dataset_manifest_sha:
+  value: null
+  status: PENDING
+  reason: >-
+    TRAIN/VALIDATION/SEALED HOLDOUT/IDENTITY PROBE split の manifest が未確定に加え、
+    User donor の consent/rights manifest が未整備
+    （voice_genesis/foundry/recording_kit/user_donor_ledger.json に consent 欄が無い）
+    のため User 由来データを学習に用いる権利来歴が未確立。
+
+dataset_row_order_sha:
+  value: null
+  status: PENDING
+  reason: dataset_manifest_sha が未確定のため row order も未確定（同一律速）。
+
+config_sha:
+  value: null
+  status: PENDING
+  reason: 学習 config（learning_recipe.yaml 等）未作成。VG-L0 学習ハーネス未実装。
+
+dependency_pins_sha:
+  value: null
+  status: PENDING
+  reason: backbone / VG-L0 学習ハーネスの依存関係 pin が未確定。
+
+execution_profile_sha:
+  value: null
+  status: PENDING
+  reason: 学習実行環境（GPU / hardware profile）が未選定。
+
+seed_policy_sha:
+  value: null
+  status: PENDING
+  reason: >-
+    performance_seed=909001 / learning_seed=909002 は設計書 §9/§13 の凍結値だが、
+    正式な seed_policy 文書化・sha 転記が未実施。
+
+expected_speaker_map_sha:
+  value: null
+  status: PENDING
+  reason: >-
+    AF0 / Ritsu / User の anchor hash が domains/identity_domain_run9_v1.json で
+    未 pin のため speaker map を確定できない（identity domain 未 pin と同一律速）。
+
+backbone_checkpoint_sha:
+  value: null
+  status: PENDING
+  reason: run5 系 checkpoint の選定と sha 転記が未。
+
+# --- founder genome shas -----------------------------------------------------
+founder_genome_shas:
+  R9F-01:
+    value: null
+    status: PENDING
+    reason: >-
+      identity_domain_run9_v1.json の anchor_hashes が未 pin のため genome_id を
+      正式発行できない（run9_schema.build_founder() は未 pin domain を ValueError
+      で拒否する構造 — DESIGN_RUN9 §22 実行順 step 3→4 の機械強制）。
+  R9F-02:
+    value: null
+    status: PENDING
+    reason: >-
+      identity_domain_run9_v1.json の anchor_hashes が未 pin のため genome_id を
+      正式発行できない（R9F-01 と同一律速）。
+
+# --- lesson / learning ------------------------------------------------------
+lesson_sha:
+  value: null
+  status: PENDING
+  reason: PJS 由来 Performance Lesson 抽出（VG-L0 学習ハーネス相当の feature extractor）が未実装。
+
+learning_recipe_sha:
+  value: null
+  status: PENDING
+  reason: learning_recipe.yaml 未作成。VG-L0 学習ハーネス未実装。
+
+probe_manifest_sha:
+  value: null
+  status: PENDING
+  reason: P0-P5 probe set の実ファイル manifest 未作成。
+
+measurement_spec_sha:
+  value: null
+  status: PENDING
+  reason: 測定仕様（feature extractor / normalization / metric version）が未凍結。
+
+hypothesis_algebra_sha:
+  value: null
+  status: PENDING
+  reason: H1-H6 の閾値（δtarget / εk）校正が未実施（positive / negative control 未実施）。
+
+human_evaluation_protocol_sha:
+  value: null
+  status: PENDING
+  reason: blind human audit プロトコル文書（8-12 pair 上限の運用手順）が未作成。
+
+# --- post-run evidence（gate_state() の pre-run 判定対象外）-----------------
+artifact_manifest_sha:
+  value: null
+  status: PENDING
+  reason: PIN_AFTER_RUN
+
+cost_record_sha:
+  value: null
+  status: PENDING
+  reason: PIN_AFTER_RUN
+
+failure_abort_criteria_sha:
+  value: null
+  status: PENDING
+  reason: DESIGN_RUN9 §30 Stop Rules の20項目を機械可読な閾値/条件文書へ未変換。
+
+claim_strength_target: C2

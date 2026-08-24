@@ -1,0 +1,26 @@
+{
+  "schema": "voicegenesis-identity-domain/1.0",
+  "domain_id": "run9-af0-ritsu-user/1.0",
+  "anchor_order": ["af0", "ritsu", "user"],
+  "anchor_hashes": {
+    "af0": "<PIN_BEFORE_RUN>",
+    "ritsu": "<PIN_BEFORE_RUN>",
+    "user": "<PIN_BEFORE_RUN>"
+  },
+  "excluded_teacher_identities": ["pjs"],
+  "coordinate_precision": 6,
+  "normalization": "largest-component-residual",
+  "metric_space_sha": "<PIN_BEFORE_RUN>",
+  "pin_source_candidates": {
+    "af0": [
+      "voice_genesis/foundry/artificial_founder/founder_specs/AF0.json (sha256 of this spec file)",
+      "AF-P0 canonical Body manifest (ローカル results 配下、非同梱 — User 回収要)"
+    ],
+    "ritsu": [
+      "波音リツ配布 zip sha256 (voice_genesis/foundry/s1_dataprep/README.md 記載値: 88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76 — 波音リツ強連続音Ver1.5.1)"
+    ],
+    "user": [
+      "voice_genesis/foundry/recording_kit/user_donor_ledger.json (17件の source_sha256/sha256。consent/rights manifest は未整備 — ledger に consent 欄が無い)"
+    ]
+  }
+}
