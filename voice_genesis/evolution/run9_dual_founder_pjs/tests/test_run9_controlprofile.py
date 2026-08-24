@@ -294,6 +294,71 @@ def test_from_dict_rejects_nan_in_partitions(bad_value: float) -> None:
 
 
 # ---------------------------------------------------------------------------
+# derive_profile / partitions: dict キーの str 限定（Codex bot レビュー
+# PR #318 第5巡 Fix 16）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_key", [1, True, None])
+def test_derive_profile_rejects_non_str_key_in_updates_top_level(bad_key: Any) -> None:
+    """必須テスト（Fix 16, 負例1/4）: updates の partition 値の直下（
+    トップレベル）に整数/bool/None キーが含まれる derive は拒否される。
+    JSON 直列化は暗黙に非 str キーを str へ変換するため（例: 整数キー
+    `1` -> `"1"`）、検証なしでは同じ profile_id を持つ別実体を作れて
+    しまう。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    with pytest.raises(cp.Run9ControlProfileError, match="dict key must be a str"):
+        cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {bad_key: 1}})
+
+
+def test_derive_profile_rejects_non_str_key_nested_inside_updates() -> None:
+    """必須テスト（Fix 16, 負例2/4）: 非 str キーは任意の深さ（list/dict
+    のネスト）に紛れ込み得るため、再帰検証であることも確認する。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    with pytest.raises(cp.Run9ControlProfileError, match="dict key must be a str"):
+        cp.derive_profile(
+            r0, "PRACTICE_FROM_AUDIO",
+            {"trait_control": {"nested": {"list": [1, 2, {3: "deep"}]}}},
+        )
+
+
+@pytest.mark.parametrize("bad_key", [1, True, None])
+def test_from_dict_rejects_non_str_key_in_partitions(bad_key: Any) -> None:
+    """必須テスト（Fix 16, 負例3/4）: 整数/bool/None キーを partitions に
+    含む手組み文書は `control_profile_from_dict()` でも拒否される
+    （from_dict 経路の関門 — `_validate_partitions_shape()` を経由する）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    data = child.to_dict()
+    data["partitions"]["trait_control"] = {bad_key: 1}
+    with pytest.raises(cp.Run9ControlProfileError, match="dict key must be a str"):
+        cp.control_profile_from_dict(data)
+
+
+def test_from_dict_rejects_non_str_key_nested_inside_partitions() -> None:
+    """必須テスト（Fix 16, 負例4/4）: from_dict 経路でもネストした非 str
+    キーを再帰的に検出する。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    data = child.to_dict()
+    data["partitions"]["trait_control"] = {"nested": {"list": [1, {2: "deep"}]}}
+    with pytest.raises(cp.Run9ControlProfileError, match="dict key must be a str"):
+        cp.control_profile_from_dict(data)
+
+
+def test_derive_profile_accepts_deeply_nested_str_only_keys() -> None:
+    """正例回帰（Fix 16）: str キーのみで構成された深いネストは従来どおり
+    受理される（`_reject_non_str_dict_keys()` が正常系を誤検出しないこと
+    の確認）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(
+        r0, "PRACTICE_FROM_AUDIO",
+        {"trait_control": {"a": {"b": {"c": [1, {"d": "ok"}]}}}},
+    )
+    assert child.partitions["trait_control"]["a"]["b"]["c"][1]["d"] == "ok"
+
+
+# ---------------------------------------------------------------------------
 # control_profile_from_dict: 改ざん検出・revision 語彙
 # ---------------------------------------------------------------------------
 

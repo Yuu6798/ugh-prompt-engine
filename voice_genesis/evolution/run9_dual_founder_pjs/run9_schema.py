@@ -1063,12 +1063,43 @@ _LEARNING_RECIPE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
 # 型的に検証する（Codex bot レビュー PR #318 第2巡 Fix 7 採用 — draft/
 # runnable の二段 schema は作らず単一の厳密 schema とする）。具体的な
 # 語彙・数値そのものの決定は VG-L0 ハーネス実装時の build 対象のまま。
+#
+# rev 0.3 改訂E「公平性（PoR §8）」節（DESIGN_RUN9_REVISION_0.3.md
+# line 432-435 付近、Codex bot レビュー PR #318 第5巡 Fix 17 採用）:
+# 「R9F-01 / R9F-02 で条件を変えない。必須共通条件（同じ PJS 素材 / 同じ
+# train・validation・holdout split / 同じ探索空間 / 同じ候補生成規則 /
+# 同じ試行回数 / 同じ render 予算 / 同じ評価器 / 同じ停止規則 / 同じ計算
+# 予算）は各枝内で二体等予算として適用する」の9項目のうち、
+# `stopping_rule`/`trial_count`/`render_budget` は Fix 7/15 で既に機械可読
+# 化済み。残る5項目（探索空間・候補生成規則・評価器・計算予算・PJS素材+
+# train/validation/holdout split 束縛）はこれまで recipe schema の閉じた
+# キー集合に存在せず、未知キーとして拒否されるため後から足せなかった
+# （Fix 17 指摘: `learning_recipe_sha` が PINNED になった後、「true の
+# 等条件宣言 + trial/render 数」だけの manifest が検証を通り、公平性
+# クリティカルな手続きが実装ごとに異なる比較不能実験が READY に到達し
+# 得た）。以下4キーを追加する（型検証は本 PR では非空文字列の識別子/
+# 記述までに留め、下位スキーマの厳密化は VG-L0 ハーネス実装時の build
+# 対象のまま据え置く — Fix 7 と同じ層分離）。
 _LEARNING_RECIPE_ARM_KEYS: FrozenSet[str] = frozenset({
     "equal_budget_within_arm",  # PoR §8: 各枝『内』の二体間の等予算宣言。bool True 必須
     "stopping_rule",  # 停止規則。非空文字列必須（値そのものは build 時に確定）
     "trial_count",  # 試行回数。正の厳密 int 必須（Fix 15。値そのものは build 時に確定）
     "render_budget",  # render 予算。正の有限数値必須（値そのものは build 時に確定）
+    "search_space",  # rev0.3 改訂E: 同じ探索空間。非空文字列必須（Fix 17）
+    "candidate_generation",  # rev0.3 改訂E: 同じ候補生成規則。非空文字列必須（Fix 17）
+    "evaluator",  # rev0.3 改訂E: 同じ評価器。非空文字列必須（Fix 17）
+    "compute_budget",  # rev0.3 改訂E: 同じ計算予算。非空文字列必須（Fix 17）
+    "data_binding",  # rev0.3 改訂E: 同じ PJS 素材 / train・validation・holdout split 束縛。非空文字列必須（Fix 17）
 })
+
+# Fix 17 で追加した5キー（`_validate_learning_recipe_arm()` から一律に
+# 「非空文字列の識別子/記述」として検証する。個々の下位スキーマ
+# （例えば data_binding を sha256 pin に限定する等）は VG-L0 ハーネス
+# 実装時の build 対象のまま据え置く — 本 PR は「条件が宣言されており
+# 空でない」ことの機械検証までを目的とする）。
+_LEARNING_RECIPE_EQUAL_CONDITION_STR_KEYS: Tuple[str, ...] = (
+    "search_space", "candidate_generation", "evaluator", "compute_budget", "data_binding",
+)
 
 _LEARNING_RECIPE_ARMS: Tuple[str, str] = ("practice_recipe", "education_recipe")
 
@@ -1161,6 +1192,14 @@ def _validate_learning_recipe_arm(arm: Any, *, arm_name: str) -> None:
     _require_positive_finite_number(
         arm["render_budget"], field=f"learning recipe manifest.{arm_name}.render_budget"
     )
+    # rev 0.3 改訂E「公平性（PoR §8）」節の残り5共通条件（Codex bot レビュー
+    # PR #318 第5巡 Fix 17 採用 — `_LEARNING_RECIPE_ARM_KEYS` docstring
+    # 参照）。stopping_rule と同じ「非空文字列」までの機械検証（具体的な
+    # 語彙・形式の厳密化は VG-L0 ハーネス実装時の build 対象）。
+    for field_name in _LEARNING_RECIPE_EQUAL_CONDITION_STR_KEYS:
+        _require_non_empty_str(
+            arm[field_name], field=f"learning recipe manifest.{arm_name}.{field_name}"
+        )
 
 
 def validate_learning_recipe_manifest(data: Mapping[str, Any]) -> None:
@@ -1174,6 +1213,17 @@ def validate_learning_recipe_manifest(data: Mapping[str, Any]) -> None:
     fail-closed で強制する（非空文字列 / 正の有限数値 — Codex bot レビュー
     PR #318 第2巡 Fix 7 採用。PINNED 事前配線が本 validator をそのまま
     呼ぶため、READY 昇格時点で実行不能な予算が凍結される事故を防ぐ）。
+
+    `search_space`/`candidate_generation`/`evaluator`/`compute_budget`/
+    `data_binding` の5キーも同様に非空文字列を必須とする（Codex bot
+    レビュー PR #318 第5巡 Fix 17 採用、rev 0.3 改訂E「公平性（PoR §8）」
+    節が定める枝内二体等条件9項目のうち、Fix 7/15 で未カバーだった残り
+    5項目を機械検証可能フィールドとして追加）。各枝 recipe は
+    `practice_recipe`/`education_recipe` それぞれ単一の object として
+    定義され、その1つの object が該当枝の二体 Founder 双方へ共通適用
+    される構造そのものが等条件を保証する（founder 別の値を持つ余地が
+    schema 上そもそも存在しない）ため、既存の枝内二体一致比較は行わない
+    — 個別 founder 向けの比較器を新設する必要はない。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"learning recipe manifest must be an object, got {type(data).__name__}")

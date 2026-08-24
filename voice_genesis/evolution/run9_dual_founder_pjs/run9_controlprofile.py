@@ -160,6 +160,60 @@ def _reject_non_finite(value: Any, *, path: str) -> None:
     # 現れない）。
 
 
+def _reject_non_str_dict_keys(value: Any, *, path: str) -> None:
+    """`value`（JSON 互換の任意構造 — `_reject_non_finite()` と同じ入力
+    形状の前提）の中の dict キーが全て `str` であることを再帰的に検証する
+    （Codex bot レビュー PR #318 第5巡 Fix 16 採用）: `_reject_non_finite()`
+    と対になる、独立した「対の walker」（構造は同じ JSON 互換ツリーを歩くが
+    検証意図が異なるため、既存 walker へ統合せず別関数に分離する — 検証
+    意図が呼び出し側で読めることを優先する）。
+
+    Python の `json.dumps()` は既定で非 str キー（int/float/bool/None）を
+    暗黙に `str()` へ変換して出力する（`skipkeys=False` の既定挙動）。この
+    ため、学習 update（`derive_profile()` の `updates` 引数）や手組みの
+    profile 文書（`control_profile_from_dict()`）に整数キー `1` が
+    紛れ込んだ場合、`_reject_non_finite()`（値のみを見る）はこれを検出
+    できず、`{1: ...}` を含む partitions がそのまま `derive_profile()` の
+    戻り値として通過してしまう。ところが `_compute_profile_id()` /
+    `Run9ProfileLedger.write()` はいずれも `json.dumps(..., sort_keys=
+    True, ...)` を経由するため、この int キーは正規形 JSON 化の時点で
+    暗黙に `"1"`（str キー）へ変換される — つまり `{1: v}` と `{"1": v}`
+    は、Python オブジェクトとしては等しくない（`{1: v} != {"1": v}`）にも
+    関わらず、同一の profile_id・同一の直列化バイト列を持つ。この結果、
+    ①ledger 公開前の in-memory な profile（int キーのまま）と、公開後に
+    `read()` で読み戻される profile（str キーへ暗黙変換済み）とで、同じ
+    profile_id が指す実体の型が食い違う、②`{1: v}` を含む profile と
+    `{"1": v}` を含む別の（本来は別内容の）derive 呼び出しが、append-only
+    台帳上では「バイト同一の冪等 republish」として扱われてしまう
+    （`Run9ProfileLedger.write()` の conflict 検出をすり抜ける）。
+    partitions/updates の全 dict キーを構築前に str 限定することで、この
+    表現の曖昧さを profile_id 計算・ledger 公開より前段で fail-closed に
+    閉じる。`bool` は `str` のサブクラスではないため、`isinstance(key,
+    str)` の単純判定だけで int/float/bool/None キーを一律に拒否できる
+    （`_reject_non_finite()` の bool 特別扱いと異なり、ここでは bool
+    キー専用の分岐は不要）。
+    """
+    if isinstance(value, dict):
+        for key, sub in value.items():
+            if not isinstance(key, str):
+                raise Run9ControlProfileError(
+                    f"{path}: dict key must be a str, got {key!r} ({type(key).__name__}) — JSON "
+                    "serialization silently coerces non-str dict keys to their str form (e.g. int 1 "
+                    "-> \"1\"), so a value keyed by a non-str key would compute the same profile_id "
+                    "and serialized bytes as the str-key equivalent while remaining a distinct "
+                    "in-memory object and colliding under append-only idempotent-republish semantics "
+                    "— rejected before profile_id computation or ledger publish (Fix 16)"
+                )
+            _reject_non_str_dict_keys(sub, path=f"{path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, sub in enumerate(value):
+            _reject_non_str_dict_keys(sub, path=f"{path}[{index}]")
+        return
+    # str/int/float/bool/None はキーではなく値としてここに現れる限り
+    # チェック対象外（本関数はキーの型のみを検証する）。
+
+
 def _deep_freeze(value: Any) -> Any:
     """JSON 互換の任意構造（dict/list/str/int/float/bool/None — `_reject_
     non_finite()` と同じ入力形状の前提）を再帰的に不変化する（Codex bot
@@ -228,6 +282,11 @@ def _validate_partitions_shape(partitions: Any) -> Dict[str, Dict[str, Any]]:
                 f"partitions.{key} must be an object, got {type(value).__name__}"
             )
         _reject_non_finite(value, path=f"partitions.{key}")
+        # dict キーの str 限定（Codex bot レビュー PR #318 第5巡 Fix 16
+        # 採用）: `_reject_non_finite()` は値のみを見るため、整数キー等が
+        # 紛れ込んだ partitions を検出できない — `_reject_non_str_dict_
+        # keys()` docstring 参照。
+        _reject_non_str_dict_keys(value, path=f"partitions.{key}")
         validated[key] = dict(value)
     return validated
 
@@ -516,6 +575,12 @@ def derive_profile(
         # `_validate_partitions_shape()`（from_dict 側の関門）を経由しない
         # ため、builder 側にも同じ関門を独立に配線する。
         _reject_non_finite(updates[partition_key], path=f"updates.{partition_key}")
+        # dict キーの str 限定（Codex bot レビュー PR #318 第5巡 Fix 16
+        # 採用）: `_validate_partitions_shape()`（from_dict 側の関門）を
+        # 経由しない builder 側にも同じ関門を独立に配線する
+        # （`_reject_non_finite()` の Fix 8 配線と対称 — `_reject_non_str_
+        # dict_keys()` docstring 参照）。
+        _reject_non_str_dict_keys(updates[partition_key], path=f"updates.{partition_key}")
 
     # `_deep_thaw()`（Fix 14）で parent の凍結済み partitions
     # （MappingProxyType/tuple の再帰ネスト）を plain な dict/list へ深く

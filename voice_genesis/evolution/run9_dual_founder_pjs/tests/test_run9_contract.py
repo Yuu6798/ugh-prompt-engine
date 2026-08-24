@@ -4065,12 +4065,23 @@ def _valid_learning_recipe_arm() -> Dict[str, Any]:
     二段 schema は作らず単一の厳密 schema とするため、stopping_rule/
     trial_count/render_budget はもはや None を許容しない（実行可能な
     プレースホルダ値へ更新 — 具体的な語彙・数値そのものは VG-L0 ハーネス
-    実装時の build 対象のまま、ここでは「型として実行可能」な最小例）。"""
+    実装時の build 対象のまま、ここでは「型として実行可能」な最小例）。
+
+    第5巡 Fix 17 採用: rev 0.3 改訂E「公平性（PoR §8）」節が定める枝内
+    二体等条件のうち、Fix 7/15 で未カバーだった残り5項目
+    （search_space/candidate_generation/evaluator/compute_budget/
+    data_binding）を追加。値そのものの語彙・形式は VG-L0 ハーネス実装時の
+    build 対象のまま、ここでは「非空文字列」の最小例。"""
     return {
         "equal_budget_within_arm": True,
         "stopping_rule": "fixed_trial_count",
         "trial_count": 100,
         "render_budget": 100,
+        "search_space": "placeholder_search_space_v0",
+        "candidate_generation": "placeholder_candidate_generation_v0",
+        "evaluator": "placeholder_evaluator_v0",
+        "compute_budget": "placeholder_compute_budget_v0",
+        "data_binding": "placeholder_data_binding_v0",
     }
 
 
@@ -4169,6 +4180,85 @@ def test_fix7_valid_arm_with_float_render_budget_accepted() -> None:
     manifest = _valid_learning_recipe_manifest()
     manifest["practice_recipe"]["render_budget"] = 50.5
     m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# RUN9 Phase 3 対応 — Codex bot レビュー PR #318 第5巡 Fix 17: rev 0.3
+# 改訂E「公平性（PoR §8）」節が定める枝内二体等条件のうち、Fix 7/15 で
+# 未カバーだった残り5項目（search_space/candidate_generation/evaluator/
+# compute_budget/data_binding）を機械検証可能フィールドとして追加する。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["search_space", "candidate_generation", "evaluator", "compute_budget", "data_binding"],
+)
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix17_equal_condition_field_missing_rejected(arm_name: str, field_name: str) -> None:
+    """必須テスト（Fix 17, 負例1/3）: 新設5キーはいずれも欠落すると
+    `missing required key` で拒否される（`_LEARNING_RECIPE_ARM_KEYS` の
+    必須集合に組み込まれていることの確認）。"""
+    manifest = _valid_learning_recipe_manifest()
+    del manifest[arm_name][field_name]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("bad_value", [None, "", "   ", 123, 1.5, True, [], {}])
+@pytest.mark.parametrize(
+    "field_name",
+    ["search_space", "candidate_generation", "evaluator", "compute_budget", "data_binding"],
+)
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix17_equal_condition_field_non_empty_str_required(
+    arm_name: str, field_name: str, bad_value: Any
+) -> None:
+    """必須テスト（Fix 17, 負例2/3）: 新設5キーはいずれも非空文字列以外
+    （None/空文字/空白のみ/数値/bool/list/dict）を拒否する — Fix 7 の
+    stopping_rule と同じ機械検証水準を適用する。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name][field_name] = bad_value
+    with pytest.raises(m.Run9ValidationError, match=f"{field_name} must be a non-empty string"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+def test_fix17_equal_condition_fields_shared_object_enforces_equality_by_construction() -> None:
+    """必須テスト（Fix 17, 負例3/3 の代替 — 「founder 間不一致」テスト）:
+    `practice_recipe`/`education_recipe` は各枝ごとに単一の object として
+    定義され、R9F-01/R9F-02 の双方へその1つの object がそのまま共通適用
+    される（`run9_controlprofile.derive_profile()` は `branch` 単位で
+    `updates` を受け取り、founder 別の recipe 値を表現するフィールドは
+    schema 上そもそも存在しない）。したがって「founder 間で新フィールドが
+    不一致」を表現する入力自体が構造的に組み立てられず、既存の founder
+    間一致比較器（`run9_schema.load_run9_contract()` の
+    `founder_genome_shas` 一致検証等）を新フィールドへ配線する対象も
+    存在しない — 本テストはその構造的保証（等条件は比較ではなく共有に
+    よって保証される）そのものを固定する: manifest の practice_recipe と
+    education_recipe が独立した dict オブジェクトであっても、それぞれの
+    中身が単一の値である以上、二体 Founder 間の不一致という状態を
+    manifest 上に作ることはできない。"""
+    manifest = _valid_learning_recipe_manifest()
+    # practice_recipe を書き換えても education_recipe とは独立に検証が通る
+    # （枝間の値は比較対象外 — PoR §8「PRACTICE と EDUCATION は情報量が
+    # 本質的に異なるため、両者を『同じ入力』とはしない」の確認）。
+    manifest["practice_recipe"]["search_space"] = "practice_only_space"
+    manifest["education_recipe"]["search_space"] = "education_only_space"
+    m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認（枝間は非比較）
+
+
+def test_fix17_equal_condition_fields_all_present_accepted() -> None:
+    """正例（Fix 17）: 新設5キーを全て充足した manifest は引き続き
+    受理される（`_valid_learning_recipe_arm()` fixture 更新後の回帰
+    確認）。"""
+    manifest = _valid_learning_recipe_manifest()
+    m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認
+    for arm_name in ("practice_recipe", "education_recipe"):
+        for field_name in (
+            "search_space", "candidate_generation", "evaluator", "compute_budget", "data_binding",
+        ):
+            assert field_name in manifest[arm_name]
+            assert isinstance(manifest[arm_name][field_name], str) and manifest[arm_name][field_name]
 
 
 # ---------------------------------------------------------------------------
