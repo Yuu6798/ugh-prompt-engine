@@ -1,0 +1,95 @@
+{
+  "schema": "run9-backbone-runtime-bundle/1.0",
+  "backbone_generation": "run6",
+  "backbone_label": "RUN6 phase B 40K checkpoint (User ruling 2026-08-24, DESIGN_RUN9_REVISION_0.2.md 改訂5)",
+  "checkpoint_sha256": {
+    "value": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+    "file": "phase_b/checkpoints/model_ckpt_steps_40000.ckpt",
+    "source": [
+      "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.2 (\"判定の正本\")",
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.checkpoint_sha256",
+      "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json#expansion.generations[run6].checkpoint_sha256",
+      "voice_genesis/foundry/run8/provision.sh#run6_ckpt"
+    ],
+    "note": "Cross-checked identical across all 4 sources."
+  },
+  "acoustic_onnx_sha256": {
+    "value": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+    "file": "acoustic.onnx (exported from the run6 checkpoint above)",
+    "source": "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.4"
+  },
+  "config_sha256": {
+    "value": "3722072045060e316ec9fee3f307412eceacf617d3b3ece7adfcbefa0f9df9d9",
+    "file": "phase_b/config/config.yaml (== run6_bundle/config.yaml)",
+    "source": [
+      "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.2",
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.config_sha256",
+      "voice_genesis/foundry/run8/provision.sh#run6_config"
+    ]
+  },
+  "speaker_map_sha256": {
+    "value": "da9748fabfa721a4a789224b50fd52743628fd2396602852f2dc25c54f2e3803",
+    "file": "run6_bundle/spk_map.json",
+    "source": [
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs.spk_map.json",
+      "voice_genesis/foundry/run8/provision.sh#run6_spk_map"
+    ],
+    "note": "Byte-identical to run5_bundle/spk_map.json (same value pinned for run5 and run6)."
+  },
+  "phoneme_map_sha256": {
+    "value": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
+    "file": "run6_bundle/dictionary-ja.txt",
+    "source": [
+      "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.3 (dict_txt)",
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs[\"dictionary-ja.txt\"]",
+      "voice_genesis/foundry/run8/provision.sh#run6_dict"
+    ],
+    "note": "Grapheme-to-phoneme pronunciation dictionary consumed by the DiffSinger binarizer/renderer. Byte-identical to run5_bundle/dictionary-ja.txt; run7 uses a different dictionary (633ee966...) — not applicable to the RUN6 backbone."
+  },
+  "language_map_sha256": {
+    "value": "2a6a227ee65a49f5c30e848a4b62c5cc1817926bbdab373228e6302d2c794953",
+    "file": "run6_bundle/lang_map.json",
+    "source": [
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs.lang_map.json",
+      "voice_genesis/foundry/run8/provision.sh#run6_lang_map"
+    ],
+    "note": "Supplementary field beyond the 5 named fields — included because it is a required exporter input (base_exporter.build_spk_map co-dependency, s7_exporter_input_pins.json#why_all_inputs) and its sha256 is equally well-sourced. Identical value across run5/run6/run7."
+  },
+  "vocoder": {
+    "runtime_onnx_sha256": {
+      "value": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
+      "file": "vocoder_onnx/nsf_hifigan.onnx (extracted)",
+      "source": "voice_genesis/foundry/run8/provision.sh#VOC_WANT (extraction verification target)"
+    },
+    "source_archive_sha256": {
+      "value": "e22f84009804da2e5916e7a2000f4c30278148796376e49368ec5ff8f9f58830",
+      "file": "nsf_hifigan.oudep",
+      "source": [
+        "voice_genesis/foundry/run8/provision.sh#vocoder_oudep",
+        "url:https://github.com/xunmengshe/OpenUtau/releases/download/0.0.0.0/nsf_hifigan.oudep"
+      ],
+      "note": "Distribution archive that nsf_hifigan.onnx (runtime_onnx_sha256 above) is extracted from."
+    }
+  },
+  "render_code_commit": {
+    "repo": "openvpi/DiffSinger",
+    "commit_short": "e2307b1",
+    "commit_full": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+    "source": [
+      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#exporter (repo+revision)",
+      "voice_genesis/foundry/results_s7/s7_b1_calibration_set.json#diffsinger_repo_pin",
+      "voice_genesis/foundry/run8/provision.sh (git checkout e2307b1, HEAD verified)",
+      "voice_genesis/foundry/s1_gate/README.md / gate_synth.py / gate_synth_run4.py (--diffsinger-repo pin: e2307b1)",
+      "voice_genesis/foundry/tests/test_run4_export_device_probe.py (DIFFSINGER_COMMIT full hash)"
+    ],
+    "note": "This exact revision is the single, repository-wide invariant DiffSinger pin used across run4 through run8 gate_synth/export tooling (dozens of cross-references). The original 2026-08-20 run6 export record (s5_record) does not itself restate the git revision inline, but no evidence anywhere in the repository suggests a different revision was ever used for run5/6/7 rendering or export — the run4 provenance closure record explicitly notes the same absence-of-contrary-evidence reasoning when substituting this pin for an unlogged run4 export (results_s3/run4_provenance_closure_2026-08-23.json)."
+  },
+  "run7_not_used": {
+    "reason": "Teacher swap contamination avoidance (User ruling, DESIGN_RUN9_REVISION_0.2.md 改訂5)",
+    "detail": "The single intervention between run6 and run7 was a teacher swap (d3synth synthetic teacher retired -> amitaro real-recording teacher). Using the run7 checkpoint as RUN9's Shared Backbone would leave residual effects of that teacher swap baked into the weights, confounding RUN9's own teacher variable (the PJS Performance Lesson introduced by LEARN_PERFORMANCE).",
+    "source": [
+      "voice_genesis/foundry/DESIGN_S6_run7.md (\"教師交代: D3 引退 -> あみたろ実録音発音教師・単一介入\")",
+      "voice_genesis/foundry/results_s6/s6_record_2026-08-20.md#3 (\"単一介入 = 教師交代\")"
+    ]
+  }
+}

@@ -3,8 +3,8 @@
   "domain_id": "run9-af0-ritsu-user/1.0",
   "anchor_order": ["af0", "ritsu", "user"],
   "anchor_hashes": {
-    "af0": "<PIN_BEFORE_RUN>",
-    "ritsu": "<PIN_BEFORE_RUN>",
+    "af0": "183bf32561589ddad69daa0faf5838c3e9601d17b24b62ee32aa629123a87f1e",
+    "ritsu": "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76",
     "user": "<PIN_BEFORE_RUN>"
   },
   "excluded_teacher_identities": ["pjs"],
@@ -13,14 +13,14 @@
   "metric_space_sha": "<PIN_BEFORE_RUN>",
   "pin_source_candidates": {
     "af0": [
-      "voice_genesis/foundry/artificial_founder/founder_specs/AF0.json (sha256 of this spec file)",
-      "AF-P0 canonical Body manifest (ローカル results 配下、非同梱 — User 回収要)"
+      "PINNED (2026-08-24, User ruling / DESIGN_RUN9_REVISION_0.2.md 改訂2): sha256 of inputs/af0_anchor_manifest.json canonical form — see that file's canonicalization_method field for the exact recomputation recipe.",
+      "AF-P0 canonical Body manifest: voice_genesis/foundry/artificial_founder/results/AF0/founder_manifest.json + p0_results.json (both referenced by af0_anchor_manifest.json)"
     ],
     "ritsu": [
-      "波音リツ配布 zip sha256 (voice_genesis/foundry/s1_dataprep/README.md 記載値: 88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76 — 波音リツ強連続音Ver1.5.1)"
+      "PINNED (2026-08-24): 波音リツ配布 zip sha256 (voice_genesis/foundry/s1_dataprep/README.md 記載値: 88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76 — 波音リツ強連続音Ver1.5.1)"
     ],
     "user": [
-      "voice_genesis/foundry/recording_kit/user_donor_ledger.json (17件の source_sha256/sha256。consent/rights manifest は未整備 — ledger に consent 欄が無い)"
+      "PENDING (rights attest 待ち): voice_genesis/foundry/recording_kit/user_donor_ledger.json (17件の source_sha256/sha256) を転記した inputs/rights_manifest.json（schema run9-user-donor-rights/1.0）が起草済み。rights_class/consent_status = PENDING_USER_ATTESTATION のあいだは anchor_hashes.user を pin しない（DESIGN_RUN9_REVISION_0.2.md 改訂4）。User attest 完了後、rights_manifest.json の sha256 をこの pin の入力へ束ねる。"
     ]
   }
 }

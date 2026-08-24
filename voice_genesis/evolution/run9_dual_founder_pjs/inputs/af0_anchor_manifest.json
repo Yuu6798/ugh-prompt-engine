@@ -1,0 +1,43 @@
+{
+  "schema": "run9-af0-anchor-manifest/1.0",
+  "af0_founder_id": "AF0",
+  "canonicalization_method": "json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(\",\", \":\")) — no trailing newline; identical convention to voice_genesis/foundry/artificial_founder/af_spec.py canonical_json() (used to compute this repository AF-P0 spec_sha256 pins). The sha256 of this manifest computed via this method is what domains/identity_domain_run9_v1.json anchor_hashes.af0 pins — it is NOT embedded as a field inside this file (self-reference is avoided the same way run9_schema.Run9IdentityDomain.content_digest() is computed outside the object it describes).",
+  "spec_sha256": {
+    "value": "c477fd5a9ec2ac3dd97f2c7ea076568acce19b53c28eed5c10175cc807b5e8d4",
+    "source": "voice_genesis/foundry/artificial_founder/results/AF0/founder_manifest.json#spec_sha256",
+    "verification": "Recomputed independently as sha256(canonical_json(founder_specs/AF0.json content)) using af_spec.py canonical_json() convention (sort_keys=True, ensure_ascii=False, separators=(\",\",\":\"), no trailing newline) and confirmed byte-for-byte equal to the transcribed value. NOTE: this is a content-canonicalization match, NOT a literal sha256sum of the pretty-printed founder_specs/AF0.json file on disk — sha256sum(AF0.json) = d0c613e9cfcecd00f5cae5a3126de973533e9da865edbfe8d3fde14ee88bbd98, which differs because the on-disk file is indented/pretty-printed while spec_sha256 hashes the compact canonical serialization (the same relationship as af_spec.py write_json() vs genome.sha256)."
+  },
+  "body_identity_digest": {
+    "value": "5a5702cb453768265c390fc2eeabd3a07dad6194c0a6a426eedc0df239a7d6ec",
+    "source": "voice_genesis/foundry/artificial_founder/results/AF0/p0_results.json#pins.body_identity_digest",
+    "cross_check": "Matches p0_results.json gates[G2].detail.same_process/cross_process.digest_parent/digest_child (all four equal) and gates[G14].detail.publication.published_identity_digest."
+  },
+  "founder_manifest_sha256": {
+    "value": "0feb4731880a7ec5ecf09226f03d865f2be07eb4d7d17d2f23836bdbdb5680ec",
+    "source": "sha256sum voice_genesis/foundry/artificial_founder/results/AF0/founder_manifest.json (raw file bytes, measured 2026-08-24)"
+  },
+  "ingestion_sha256": {
+    "value": "834d2880c1f0951f12aded3f89630539e6d471276b8748976de29ccf930e6099",
+    "source": "sha256sum voice_genesis/foundry/artificial_founder/results/AF0/measurements/ingestion.json (raw file bytes, measured 2026-08-24)"
+  },
+  "sha256sums_sha256": {
+    "value": "3aa3eead972ea8a4b837f45fa9121d9f1be4b5f51dbe7cb9d9ffca692e228133",
+    "source": "sha256sum voice_genesis/foundry/artificial_founder/results/AF0/SHA256SUMS.txt (raw file bytes, measured 2026-08-24)",
+    "purpose": "Basis for the required all-entries match when AF0 WAV bodies are regenerated for RUN9 (DESIGN_RUN9_REVISION_0.2.md 改訂2). A single mismatch against this pinned SHA256SUMS.txt halts — it is not repinned to force a pass."
+  },
+  "p0_verdict": {
+    "overall_verdict": "NOT_ESTABLISHED",
+    "failed_gates": [
+      "G10",
+      "G11",
+      "G13"
+    ],
+    "reason_codes": [
+      "DURATION_NOT_ESTABLISHED",
+      "ENERGY_NOT_ESTABLISHED",
+      "AFTERGLOW_NOT_ESTABLISHED"
+    ],
+    "source": "voice_genesis/foundry/artificial_founder/results/AF0/p0_results.json#overall",
+    "note": "Unchanged/inherited, not re-adjudicated by RUN9 (DESIGN_RUN9 v0.1 §7.1: Duration/Energy/AG-alpha faithful transport is not claimed)."
+  }
+}

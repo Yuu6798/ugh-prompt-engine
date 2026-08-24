@@ -52,6 +52,12 @@ RUN9_NORMALIZATION = "largest-component-residual"
 RUN_ID = "RUN9"
 EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
 
+# 現行 design_revision（凍結値。User 裁定 2026-08-24 =
+# DESIGN_RUN9_REVISION_0.2.md）。旧 revision "0.1" を宣言する contract は
+# 意図どおり拒否される — 修正が必要なら design_revision を上げ、旧
+# attempt を append-only 履歴として残す規約（DESIGN_RUN9 ヘッダ注記）。
+DESIGN_REVISION = "0.2"
+
 # DESIGN_RUN9 §23: 単一介入エッジは凍結値。他のエッジへの差し替えは新しい
 # design_revision を持つ別 attempt として扱う（§20 禁止事項「結果を見た後の
 # 座標・Lesson・閾値追加」と同種の凍結規律）。
@@ -871,6 +877,9 @@ _PIN_FIELD_REQUIRED_KEYS: FrozenSet[str] = frozenset({"value", "status"})
 # 実 sha256 を PINNED で記録する）。
 CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     "design_doc_sha256",
+    # design_revision 0.2 で追加（User 裁定 2026-08-24）: DESIGN_RUN9_REVISION_0.2.md
+    # 自体の実 sha256（design_doc_sha256 と同じ前例方式）。
+    "design_revision_doc_sha256",
     "attempt_id",
     "repository_commit_sha",
     "dataset_manifest_sha",
@@ -881,6 +890,11 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     "seed_policy_sha",
     "expected_speaker_map_sha",
     "backbone_checkpoint_sha",
+    # design_revision 0.2 で追加: inputs/backbone_runtime_bundle.json 自体の
+    # 実 sha256。bundle 内に PENDING 欄が残る場合はこの欄も PENDING とする
+    # （bundle 内 PENDING 解消後に pin — CONTRACT_PIN_FIELDS のコメント規約
+    # どおり loader 自体は bundle の中身までは検査しない。整合は手動運用）。
+    "backbone_runtime_bundle_sha",
     "lesson_sha",
     "learning_recipe_sha",
     "probe_manifest_sha",
@@ -1071,8 +1085,14 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
     if not isinstance(experiment_id, str) or experiment_id != EXPERIMENT_ID:
         raise Run9ValidationError(f"experiment_id must be {EXPERIMENT_ID!r}, got {experiment_id!r}")
 
-    if not isinstance(data["design_revision"], str) or not data["design_revision"]:
-        raise Run9ValidationError(f"design_revision must be a non-empty string, got {data['design_revision']!r}")
+    design_revision = data["design_revision"]
+    if not isinstance(design_revision, str) or design_revision != DESIGN_REVISION:
+        raise Run9ValidationError(
+            f"design_revision must be exactly {DESIGN_REVISION!r} (current revision — "
+            "DESIGN_RUN9_REVISION_0.2.md, User ruling 2026-08-24). A contract declaring an older "
+            "revision (e.g. '0.1') is rejected by design: revising the design requires bumping "
+            f"design_revision and keeping the old attempt as append-only history, got {design_revision!r}"
+        )
 
     if not isinstance(data["design_doc"], str) or not data["design_doc"]:
         raise Run9ValidationError(f"design_doc must be a non-empty string, got {data['design_doc']!r}")

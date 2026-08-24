@@ -27,6 +27,13 @@ import run9_schema as m  # noqa: E402
 CONTRACT_PATH = _RUN_DIR / "RUN9_CONTRACT.yaml"
 DOMAIN_DRAFT_PATH = _RUN_DIR / "domains" / "identity_domain_run9_v1.json"
 DESIGN_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md"
+REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
+AF0_ANCHOR_MANIFEST_PATH = _RUN_DIR / "inputs" / "af0_anchor_manifest.json"
+RIGHTS_MANIFEST_PATH = _RUN_DIR / "inputs" / "rights_manifest.json"
+BACKBONE_BUNDLE_PATH = _RUN_DIR / "inputs" / "backbone_runtime_bundle.json"
+_FOUNDRY_DIR = _RUN_DIR.parent.parent / "foundry"
+AF0_SPEC_PATH = _FOUNDRY_DIR / "artificial_founder" / "founder_specs" / "AF0.json"
+AF0_FOUNDER_MANIFEST_PATH = _FOUNDRY_DIR / "artificial_founder" / "results" / "AF0" / "founder_manifest.json"
 
 
 # ---------------------------------------------------------------------------
@@ -1351,3 +1358,253 @@ def test_fix17_yaml_loader_comment_declares_models_loads_strict_parity() -> None
     宣言がソース中に存在することの直接確認。"""
     source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
     assert "loads_strict" in source
+
+
+# ---------------------------------------------------------------------------
+# User 裁定 2026-08-24（design_revision 0.1 -> 0.2）対応
+# ---------------------------------------------------------------------------
+
+
+def _sha256_file(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _sha256_canonical_json(obj: Any) -> str:
+    """run9_schema._canonical_json と同じ規約（sort_keys / 区切り固定）で
+    dict を正規化した sha256（af0_anchor_manifest.json の
+    canonicalization_method フィールドが宣言する規約と同一 — ensure_ascii
+    のみ True/False の違いだが本ファイルの内容は非ASCII文字を含まないため
+    結果は同じになる）。"""
+    import hashlib
+
+    canonical = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+# --- item 1: design_revision 0.2 での contract load 成功 / "0.1" 拒否 -------
+
+
+def test_revision02_design_revision_constant_is_0_2() -> None:
+    assert m.DESIGN_REVISION == "0.2"
+
+
+def test_revision02_current_contract_declares_0_2(contract_raw: Dict[str, Any]) -> None:
+    assert contract_raw["design_revision"] == "0.2"
+    m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
+
+
+def test_revision02_old_0_1_contract_rejected(contract_raw: Dict[str, Any]) -> None:
+    """User 裁定 2026-08-24: design_revision "0.1" を宣言する contract は
+    意図どおり拒否される（実装バグではない — DESIGN_RUN9_REVISION_0.2.md
+    冒頭に明記）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["design_revision"] = "0.1"
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_revision02_doc_sha256_pin_matches_actual_file(contract_raw: Dict[str, Any]) -> None:
+    field = contract_raw["design_revision_doc_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(REVISION_DOC_PATH)
+
+
+def test_revision02_v0_1_design_doc_is_byte_unchanged(contract_raw: Dict[str, Any]) -> None:
+    """v0.1 本文は無改変のまま — design_doc_sha256 pin は据え置きで、実
+    ファイルの sha256 と引き続き一致する。"""
+    field = contract_raw["design_doc_sha256"]
+    assert field["value"] == _sha256_file(DESIGN_DOC_PATH)
+
+
+def test_revision02_new_pin_fields_get_64hex_format_enforced(contract_raw: Dict[str, Any]) -> None:
+    """新欄2つ（design_revision_doc_sha256 / backbone_runtime_bundle_sha）は
+    欄名が `_sha256`/`_sha` で終わるため、`_validate_pin_field_value_shape`
+    の汎用64hexブランチが自動適用される（特別扱いの分岐を追加していない
+    ことの確認）。"""
+    for field_name in ("design_revision_doc_sha256", "backbone_runtime_bundle_sha"):
+        assert field_name in m.CONTRACT_PIN_FIELDS
+        tampered = copy.deepcopy(contract_raw)
+        tampered[field_name] = {"value": "not-a-valid-hex-value", "status": "PINNED", "source": "x"}
+        with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+            m.load_run9_contract(tampered)
+
+
+# --- item 2: af0_anchor_manifest の実在ファイル整合 -------------------------
+
+
+def test_revision02_af0_anchor_manifest_spec_sha256_matches_canonical_af0_json() -> None:
+    """af0_anchor_manifest.json の spec_sha256 は
+    founder_specs/AF0.json の**正規形**（af_spec.py canonical_json 規約:
+    sort_keys / ensure_ascii=False / 区切り固定 / 末尾改行なし）の sha256 と
+    一致する。**これは founder_specs/AF0.json の生バイト列の sha256sum とは
+    異なる**（後者は pretty-printed のため） — 両者の関係は manifest 自身の
+    `spec_sha256.verification` フィールドが明記する。"""
+    manifest = json.loads(AF0_ANCHOR_MANIFEST_PATH.read_text(encoding="utf-8"))
+    spec = json.loads(AF0_SPEC_PATH.read_text(encoding="utf-8"))
+    canonical_af0 = json.dumps(spec, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    import hashlib
+
+    canonical_sha256 = hashlib.sha256(canonical_af0.encode("utf-8")).hexdigest()
+    assert manifest["spec_sha256"]["value"] == canonical_sha256
+
+    # 対照実験: 生バイト列の sha256sum は意図的に異なることを直接確認する
+    # （pretty-printed file vs canonical serialization）。
+    raw_sha256 = _sha256_file(AF0_SPEC_PATH)
+    assert raw_sha256 != canonical_sha256, (
+        "founder_specs/AF0.json が canonical と偶然バイト同一になった場合、"
+        "spec_sha256.verification の記述（『pretty-printed のため異なる』）"
+        "を更新する必要がある"
+    )
+
+
+def test_revision02_af0_anchor_manifest_spec_sha256_matches_founder_manifest_record() -> None:
+    """af0_anchor_manifest.json の spec_sha256 は
+    results/AF0/founder_manifest.json#spec_sha256 の転記値と一致する。"""
+    manifest = json.loads(AF0_ANCHOR_MANIFEST_PATH.read_text(encoding="utf-8"))
+    founder_manifest = json.loads(AF0_FOUNDER_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert manifest["spec_sha256"]["value"] == founder_manifest["spec_sha256"]
+
+
+def test_revision02_af0_anchor_manifest_component_hashes_match_actual_files() -> None:
+    """founder_manifest_sha256 / ingestion_sha256 / sha256sums_sha256 は、
+    それぞれ対応する実ファイルの生バイト sha256sum と一致する。"""
+    manifest = json.loads(AF0_ANCHOR_MANIFEST_PATH.read_text(encoding="utf-8"))
+    af0_results_dir = _FOUNDRY_DIR / "artificial_founder" / "results" / "AF0"
+    assert manifest["founder_manifest_sha256"]["value"] == _sha256_file(
+        af0_results_dir / "founder_manifest.json"
+    )
+    assert manifest["ingestion_sha256"]["value"] == _sha256_file(
+        af0_results_dir / "measurements" / "ingestion.json"
+    )
+    assert manifest["sha256sums_sha256"]["value"] == _sha256_file(af0_results_dir / "SHA256SUMS.txt")
+
+
+def test_revision02_af0_anchor_manifest_pins_p0_not_established_verdict() -> None:
+    """AF-P0 の NOT_ESTABLISHED 判定を manifest が正しく継承していること
+    （Duration/Energy/AG-alpha 非保持は不変 — DESIGN_RUN9_REVISION_0.2.md
+    改訂2）。"""
+    manifest = json.loads(AF0_ANCHOR_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert manifest["p0_verdict"]["overall_verdict"] == "NOT_ESTABLISHED"
+    assert set(manifest["p0_verdict"]["failed_gates"]) == {"G10", "G11", "G13"}
+
+
+def test_revision02_af0_anchor_manifest_sha_matches_domain_af0_pin() -> None:
+    """af0_anchor_manifest.json の正規形 sha256（
+    canonicalization_method フィールドが宣言する規約で再計算）が、
+    domains/identity_domain_run9_v1.json の anchor_hashes.af0 と一致する。"""
+    manifest = json.loads(AF0_ANCHOR_MANIFEST_PATH.read_text(encoding="utf-8"))
+    recomputed = _sha256_canonical_json(manifest)
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["anchor_hashes"]["af0"] == recomputed
+
+
+def test_revision02_domain_af0_and_ritsu_are_now_pinned_hex64() -> None:
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert m._SHA256_HEX_RE.match(domain.anchor_hashes["af0"])
+    assert domain.anchor_hashes["ritsu"] == "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76"
+
+
+# --- item 3: backbone_checkpoint_sha PINNED かつ裁定値と一致 ----------------
+
+
+def test_revision02_backbone_checkpoint_sha_pinned_and_matches_ruling(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["backbone_checkpoint_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a"
+
+
+def test_revision02_backbone_runtime_bundle_sha_pinned_and_matches_actual_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["backbone_runtime_bundle_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(BACKBONE_BUNDLE_PATH)
+
+
+def test_revision02_backbone_bundle_acoustic_onnx_matches_ruling() -> None:
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert (
+        bundle["acoustic_onnx_sha256"]["value"]
+        == "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706"
+    )
+
+
+def test_revision02_backbone_bundle_checkpoint_matches_contract() -> None:
+    """backbone_runtime_bundle.json と RUN9_CONTRACT.yaml の
+    backbone_checkpoint_sha が同一値を pin していること（二重管理の不整合
+    が無いことの確認）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    assert bundle["checkpoint_sha256"]["value"] == contract_raw["backbone_checkpoint_sha"]["value"]
+
+
+def test_revision02_backbone_bundle_run7_not_used_records_teacher_swap_reason() -> None:
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert "教師交代" in bundle["run7_not_used"]["reason"] or "teacher swap" in bundle["run7_not_used"]["reason"].lower()
+
+
+# --- item 4: rights_manifest が PENDING_USER_ATTESTATION の間、domain user
+#     anchor は未 pin のまま（gate BLOCKED 継続） -----------------------------
+
+
+def test_revision02_rights_manifest_is_pending_user_attestation() -> None:
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert rights["rights_class"] == "PENDING_USER_ATTESTATION"
+    assert rights["consent_status"] == "PENDING_USER_ATTESTATION"
+    assert rights["attestation"]["attested"] is False
+    assert rights["usage_grants"]["raw_audio_publication"] == "not_granted"
+    assert rights["usage_grants"]["model_general_distribution"] == "not_granted"
+
+
+def test_revision02_rights_manifest_entries_match_donor_ledger() -> None:
+    """rights_manifest.json の17件が user_donor_ledger.json の実測値と
+    一致すること（card_id/source_sha256/sha256/duration_sec）。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    ledger = json.loads(
+        (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
+    )
+    assert len(rights["entries"]) == len(ledger["entries"]) == 17
+    ledger_by_id = {e["card_id"]: e for e in ledger["entries"]}
+    for entry in rights["entries"]:
+        source = ledger_by_id[entry["card_id"]]
+        assert entry["source_sha256"] == source["source_sha256"]
+        assert entry["sha256"] == source["sha256"]
+        assert entry["duration_sec"] == source["duration_sec"]
+
+
+def test_revision02_domain_user_anchor_still_unpinned_while_rights_pending() -> None:
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert domain.anchor_hashes["user"] == "<PIN_BEFORE_RUN>"
+    assert domain.is_pinned() is False
+
+
+def test_revision02_gate_remains_blocked_after_af0_ritsu_backbone_pins(
+    contract: m.Run9RunContract,
+) -> None:
+    """af0/ritsu anchor と backbone (checkpoint + runtime bundle) が新たに
+    PINNED になっても、user anchor / lesson / VG-L0 ハーネス関連欄が
+    PENDING のままである限り gate_state() は "BLOCKED" のまま
+    （部分的な pin 進展だけでは READY へ到達しないことの機械証明）。"""
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_revision02_build_founder_still_rejects_current_domain_draft() -> None:
+    """user anchor 未 pin のため、現行 domain draft からは
+    build_founder() が依然として拒否されること（Phase 0.2 でも段階3→4の
+    機械強制が有効なままであることの確認）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    with pytest.raises(m.Run9ValidationError):
+        m.build_founder(domain, "R9F-01")
+
+
+# --- README 更新の整合確認 --------------------------------------------------
+
+
+def test_revision02_readme_mentions_revision_0_2() -> None:
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "0.2" in readme
+    assert "2026-08-24" in readme

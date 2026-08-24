@@ -2,8 +2,16 @@
 #
 # R9-G0 (RUN_CONTRACT_COMPLETE): この contract が全 pre-run 欄で status ==
 # PINNED になるまで本学習開始禁止。現状の gate_state()（run9_schema.py）は
-# "BLOCKED"（pre-run 欄の大半が PENDING）。これは Phase 0 スキャフォールドの
-# 正直な状態表現であり、捏造して PINNED にしていない。
+# "BLOCKED"（pre-run 欄の一部が依然 PENDING — 主因は User rights attest 待ち
+# と VG-L0 学習ハーネス未実装）。これは正直な状態表現であり、捏造して
+# PINNED にしていない。
+#
+# 2026-08-24 User 裁定 5件により design_revision 0.1 → 0.2
+# （DESIGN_RUN9_REVISION_0.2.md）。旧 "0.1" を宣言する contract は
+# run9_schema.DESIGN_REVISION の凍結値照合で意図どおり拒否される。本改訂で
+# af0/ritsu anchor・backbone checkpoint・backbone runtime bundle が新たに
+# PINNED になった（詳細は各欄の reason/source、および
+# DESIGN_RUN9_REVISION_0.2.md を参照）。
 #
 # 各欄の pin 状況は {value, status, reason, source?} 形（VG_FOUNDRY の
 # debt/RUN_CONTRACT_SCHEMA_v1.json pinned_field 慣習に倣うが独立実装 —
@@ -16,7 +24,7 @@
 schema: voicegenesis-run-contract/1.0
 run_id: RUN9
 experiment_id: VG-R9-DUAL-FOUNDER-PJS
-design_revision: "0.1"
+design_revision: "0.2"
 design_doc: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
 
 single_intervention:
@@ -53,6 +61,14 @@ design_doc_sha256:
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
 
+# --- design_revision_doc_sha256: DESIGN_RUN9_REVISION_0.2.md の実 sha256（PINNED）
+# design_doc_sha256 と同じ前例方式（design_doc_sha256 は v0.1 本文、本欄は
+# v0.2 差分メモを pin する）。
+design_revision_doc_sha256:
+  value: "0ca1e264d75532e3d9bd384015a84c6cf98c0556e514e3f411a9b21eb5909567"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.2.md
+
 # --- attempt_id -------------------------------------------------------------
 attempt_id:
   value: null
@@ -69,10 +85,12 @@ dataset_manifest_sha:
   value: null
   status: PENDING
   reason: >-
-    TRAIN/VALIDATION/SEALED HOLDOUT/IDENTITY PROBE split の manifest が未確定に加え、
-    User donor の consent/rights manifest が未整備
-    （voice_genesis/foundry/recording_kit/user_donor_ledger.json に consent 欄が無い）
-    のため User 由来データを学習に用いる権利来歴が未確立。
+    TRAIN/VALIDATION/SEALED HOLDOUT/IDENTITY PROBE split の manifest が未確定。
+    User donor の rights manifest は起草済み
+    （inputs/rights_manifest.json、schema run9-user-donor-rights/1.0）だが
+    rights_class/consent_status = PENDING_USER_ATTESTATION のまま — User attest
+    完了まで User 由来データを学習に用いる権利来歴が確定しない
+    （DESIGN_RUN9_REVISION_0.2.md 改訂4）。
 
 dataset_row_order_sha:
   value: null
@@ -82,12 +100,20 @@ dataset_row_order_sha:
 config_sha:
   value: null
   status: PENDING
-  reason: 学習 config（learning_recipe.yaml 等）未作成。VG-L0 学習ハーネス未実装。
+  reason: >-
+    学習 config（learning_recipe.yaml 等）未作成。VG-L0 学習ハーネス未実装
+    （書き込み先は改訂1で Performance Adapter から Founder 別 versioned
+    Performance ControlProfile へ変更 — DESIGN_RUN9_REVISION_0.2.md 参照。
+    ハーネス未実装であることは変わらない）。
 
 dependency_pins_sha:
   value: null
   status: PENDING
-  reason: backbone / VG-L0 学習ハーネスの依存関係 pin が未確定。
+  reason: >-
+    Backbone 側（checkpoint / runtime bundle）は backbone_checkpoint_sha /
+    backbone_runtime_bundle_sha として PINNED 済み。VG-L0 学習ハーネス自体の
+    依存関係 pin（Python パッケージ・PyTorch 等のバージョン固定）が未確定
+    のため、本欄全体としてはまだ PENDING。
 
 execution_profile_sha:
   value: null
@@ -105,13 +131,31 @@ expected_speaker_map_sha:
   value: null
   status: PENDING
   reason: >-
-    AF0 / Ritsu / User の anchor hash が domains/identity_domain_run9_v1.json で
-    未 pin のため speaker map を確定できない（identity domain 未 pin と同一律速）。
+    af0 / ritsu の anchor hash は domains/identity_domain_run9_v1.json で
+    PINNED 済み。user の anchor hash が rights attest 待ち（PENDING）のため、
+    3 anchor 揃っての speaker map はまだ確定できない（identity domain
+    is_pinned()==False と同一律速。af0/ritsu 側の律速は解消済み）。
 
 backbone_checkpoint_sha:
-  value: null
-  status: PENDING
-  reason: run5 系 checkpoint の選定と sha 転記が未。
+  value: "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a"
+  status: PINNED
+  source: >-
+    inputs/backbone_runtime_bundle.json#checkpoint_sha256（RUN6 phase B 40K
+    checkpoint、User 裁定 2026-08-24 = DESIGN_RUN9_REVISION_0.2.md 改訂5。
+    voice_genesis/foundry/results_s5/s5_record_2026-08-20.md §5.2 /
+    results_s7/s7_exporter_input_pins.json /
+    results_s7/s7_0b_probe_spec.json / run8/provision.sh の4件で相互一致確認済み）
+
+# --- backbone_runtime_bundle_sha: inputs/backbone_runtime_bundle.json の
+# 実 sha256（PINNED。bundle 内に PENDING 欄が残る場合はこの欄も PENDING と
+# し理由に「bundle 内 PENDING 解消後に pin」と記す規約 — 本 bundle は
+# checkpoint/acoustic ONNX/config/speaker map/phoneme dictionary/vocoder/
+# render code commit の全欄をリポジトリ既存記録から確定転記できたため
+# PENDING 欄は残っていない）。
+backbone_runtime_bundle_sha:
+  value: "55c1ef6114828a0223301de6f0d6687f562a9b3afe30cd9eaa1bb78d5bb41a40"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/backbone_runtime_bundle.json
 
 # --- founder genome shas -----------------------------------------------------
 # value は genome_id（16hex 内容ID）ではなく、永続 genome 文書ファイル
@@ -124,16 +168,18 @@ founder_genome_shas:
     value: null
     status: PENDING
     reason: >-
-      identity_domain_run9_v1.json の anchor_hashes が未 pin のため genome を
-      正式発行できず、founders/R9F-01_genome.json 自体がまだ存在しない
-      （run9_schema.build_founder() は未 pin domain を ValueError で拒否する
-      構造 — DESIGN_RUN9 §22 実行順 step 3→4 の機械強制）。発行後は
-      founders/R9F-01_genome.json のバイト sha256（64hex）を pin する。
+      identity_domain_run9_v1.json の anchor_hashes は af0/ritsu が PINNED
+      済みだが user が rights attest 待ちで未 pin（domain.is_pinned()==False）
+      のため genome を正式発行できず、founders/R9F-01_genome.json 自体が
+      まだ存在しない（run9_schema.build_founder() は未 pin domain を
+      ValueError で拒否する構造 — DESIGN_RUN9 §22 実行順 step 3→4 の
+      機械強制）。発行後は founders/R9F-01_genome.json のバイト sha256
+      （64hex）を pin する。
   R9F-02:
     value: null
     status: PENDING
     reason: >-
-      identity_domain_run9_v1.json の anchor_hashes が未 pin のため genome を
+      identity_domain_run9_v1.json の user anchor が未 pin のため genome を
       正式発行できない（R9F-01 と同一律速）。発行後は
       founders/R9F-02_genome.json のバイト sha256（64hex）を pin する。
 
@@ -141,12 +187,20 @@ founder_genome_shas:
 lesson_sha:
   value: null
   status: PENDING
-  reason: PJS 由来 Performance Lesson 抽出（VG-L0 学習ハーネス相当の feature extractor）が未実装。
+  reason: >-
+    PJS 由来 Performance Lesson 抽出（VG-L0 学習ハーネス相当の feature
+    extractor）が未実装。改訂3（DESIGN_RUN9_REVISION_0.2.md）で Lesson
+    manifest の生成・pin 方針は明確化済み（PJS の source_archive_sha256 /
+    expanded_corpus_identity_sha256 とは別の、RUN9 が実消費する Lesson
+    manifest を Lesson build 時に生成しその sha256 を本欄へ pin する）が、
+    Lesson build 自体はまだ実行されていない。
 
 learning_recipe_sha:
   value: null
   status: PENDING
-  reason: learning_recipe.yaml 未作成。VG-L0 学習ハーネス未実装。
+  reason: >-
+    learning_recipe.yaml 未作成。VG-L0 学習ハーネス未実装（書き込み先は
+    改訂1で Performance ControlProfile へ変更済み）。
 
 probe_manifest_sha:
   value: null
