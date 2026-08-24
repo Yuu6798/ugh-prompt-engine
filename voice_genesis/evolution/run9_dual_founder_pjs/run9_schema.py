@@ -1534,6 +1534,26 @@ _CONFUSER_CONTROL_METRIC_FEATURE_CALL_MARKER = "feature("
 _CONFUSER_CONTROL_EVALUATION_NO_AGGREGATE_SCORE_MARKER = "PASS/FAIL"
 _CONFUSER_CONTROL_EVALUATION_CALIBRATION_INDEPENDENCE_MARKER = "calibration_status"
 
+# Codex bot レビュー PR #318 第14巡 Fix 34 採用（P1）: pjs_reference の学習前
+# 決定論的凍結。旧 pjs_reference_definition は「PJS 教材コーパスから事前登録
+# 手続きで固定する単一の参照レンダー/特徴」としか言っておらず、テイク
+# index・digest・生成条件・決定論的集約規則を指定していなかった。選定値は
+# post-run の artifact_manifest_sha 配下にしか記録されないため、評価者が
+# 学習後レンダーを観察したあとで有利な PJS テイクを選定でき、
+# d_pjs(r_learned) の減少有無（no-PJS-leakage evidence）を汚染し得る欠陥
+# だった（identity_metric_space.json 旧136行付近）。単一テイク選択を全廃し、
+# 決定論的コーパス全体集約（辞書順列挙 → 同一抽出手続き適用 → 機械的
+# voiced_mask 除外 → 要素ごとの算術平均）へ置換したことを機械強制する。
+_PJS_REFERENCE_DEFINITION_LEXICOGRAPHIC_ENUMERATION_MARKER = "辞書順"
+_PJS_REFERENCE_DEFINITION_ARITHMETIC_MEAN_MARKER = "算術平均"
+_PJS_REFERENCE_DEFINITION_CORPUS_PIN_FIELD_MARKER = "expanded_corpus_identity_sha256"
+_PJS_REFERENCE_DEFINITION_VOICED_MASK_EXCLUSION_MARKER = "voiced_mask"
+_PJS_REFERENCE_DEFINITION_POST_HOC_SELECTION_IMPOSSIBLE_MARKER = "事後選択"
+# 旧「単一の参照レンダー」選択方式（言い換えでの再導入も含む、この具体的な
+# 旧フレーズ自体）が再出現しないことを機械強制する（Fix 30 の旧矛盾文言
+# 逆行拒否と同型の規律）。
+_PJS_REFERENCE_DEFINITION_OLD_SINGLE_TAKE_REGRESSION_MARKER = "単一の参照レンダー"
+
 _CALIBRATION_WORKED_EXAMPLE_STR_KEYS: Tuple[str, ...] = (
     "disclaimer", "theta_cal_derivation", "c1_gate_result", "positive_reference_gate_result",
     "negative_reference_gate_result", "calibration_status_example", "evaluated_render_outcome",
@@ -2138,6 +2158,13 @@ def _validate_confuser_control_section(data: Any) -> None:
     を参照（独自距離式を新設しない）③evaluation は総合スコア化・PASS/FAIL
     化をしないこと（軸別 evidence のみ規律）と calibration_status(F) から
     独立であることの両方を明文。
+
+    第14巡 Fix 34（P1）: pjs_reference_definition の学習前決定論的凍結を
+    追加検証する。単一テイク選択（旧「単一の参照レンダー/特徴」）への逆行を
+    拒否し、決定論的コーパス集約（辞書順列挙・expanded_corpus_identity_
+    sha256 pin フィールドへの入力束縛・voiced_mask による機械的除外・要素
+    ごとの算術平均・学習後の事後選択が構造的に不可能である旨の明文）の
+    5マーカーを機械強制する。
     """
     confuser = _require_dict(data, field="identity metric space manifest.confuser_control")
     unknown = set(confuser.keys()) - _CONFUSER_CONTROL_REQUIRED_KEYS
@@ -2175,6 +2202,35 @@ def _validate_confuser_control_section(data: Any) -> None:
                 f"distance formula), got {metric!r}"
             )
 
+    pjs_reference_definition = confuser["pjs_reference_definition"]
+    if _PJS_REFERENCE_DEFINITION_OLD_SINGLE_TAKE_REGRESSION_MARKER in pjs_reference_definition:
+        raise Run9ValidationError(
+            "confuser_control.pjs_reference_definition must not regress to single-take PJS "
+            "reference selection (Codex bot レビュー PR #318 第14巡 Fix 34 — single-take selection, "
+            "even with a pinned take index/digest, still leaves residual selection discretion and "
+            "post-run-only recording of the selected value, which structurally permits post-hoc "
+            "cherry-picking of a favorable PJS take after observing post-learning renders; it was "
+            "replaced by deterministic full-corpus aggregation), "
+            f"got {pjs_reference_definition!r}"
+        )
+    for marker in (
+        _PJS_REFERENCE_DEFINITION_LEXICOGRAPHIC_ENUMERATION_MARKER,
+        _PJS_REFERENCE_DEFINITION_ARITHMETIC_MEAN_MARKER,
+        _PJS_REFERENCE_DEFINITION_CORPUS_PIN_FIELD_MARKER,
+        _PJS_REFERENCE_DEFINITION_VOICED_MASK_EXCLUSION_MARKER,
+        _PJS_REFERENCE_DEFINITION_POST_HOC_SELECTION_IMPOSSIBLE_MARKER,
+    ):
+        if marker not in pjs_reference_definition:
+            raise Run9ValidationError(
+                f"confuser_control.pjs_reference_definition must state {marker!r} (Codex bot "
+                "レビュー PR #318 第14巡 Fix 34 — pjs_reference must be frozen pre-learning as a "
+                "deterministic corpus-wide aggregate: lexicographic enumeration of the pinned "
+                "expanded corpus, the same extraction procedure per file, mechanical voiced_mask-"
+                "based exclusion, element-wise arithmetic mean aggregation, and an explicit "
+                "statement that post-hoc PJS-take selection is structurally impossible), "
+                f"got {pjs_reference_definition!r}"
+            )
+
     evaluation = confuser["evaluation"]
     if _CONFUSER_CONTROL_EVALUATION_NO_AGGREGATE_SCORE_MARKER not in evaluation:
         raise Run9ValidationError(
@@ -2195,7 +2251,27 @@ def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
     """`inputs/identity_metric_space.json`（`run9-identity-metric-space/1.2`）
     の閉じた形状を検証する（Codex bot レビュー PR #318 第6巡 Fix 19、
     第7巡 Fix 20/Fix 21、第9巡 Fix 23/Fix 24、第11巡 Fix 28、
-    第12巡 Fix 29/Fix 30/Fix 31、第13巡 Fix 32/Fix 33 で拡張）。
+    第12巡 Fix 29/Fix 30/Fix 31、第13巡 Fix 32/Fix 33、第14巡 Fix 34 で
+    拡張）。
+
+    第14巡 Fix 34（P1）: pjs_reference の学習前決定論的凍結。旧
+    `confuser_control.pjs_reference_definition` は「事前登録手続きで単一の
+    参照レンダー/特徴を選ぶ」としか言っておらず、テイク index・digest・
+    生成条件・決定論的集約規則の指定を欠いていた。選定値は post-run の
+    `artifact_manifest_sha` 配下にしか記録されないため、評価者が学習後
+    レンダーを観察したあとで有利な PJS テイクを選定でき、
+    d_pjs(r_learned) の減少有無（no-PJS-leakage evidence）を汚染し得た。
+    単一テイク選択を全廃し、①`expanded_corpus_identity_sha256` pin
+    フィールドへの入力束縛 ②相対パス辞書順の全件列挙 ③
+    extraction_procedure/identity_feature の同一手続き適用 ④voiced_mask
+    による機械的（裁量ゼロ）除外 + 除外リストの出生後アーティファクト記録
+    ⑤要素ごとの算術平均集約 ⑥計算結果の一方向 provenance 記録（規則・
+    入力束縛自体は本 manifest で学習前に凍結済みで評価者に選択自由度は
+    存在しない）— の6要素からなる決定論的コーパス集約規則へ置換した。
+    `_validate_confuser_control_section()` が pjs_reference_definition の
+    旧単一テイク文言への逆行拒否 + 上記5マーカー（辞書順・算術平均・
+    corpus pin フィールド参照・voiced_mask 除外・事後選択不可能の明文）を
+    機械強制する。
 
     第13巡 Fix 32（P1）: C1 ゲートの統計的欠陥の是正。C1 のアダプター効果が
     完全にゼロのとき D_C0(F)/D_C1(F) は同一 replay-noise 分布からの独立標本

@@ -5878,3 +5878,148 @@ def test_fix33_domain_metric_space_sha_differs_from_pre_round13_value() -> None:
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
     old_pre_round13_sha = "3c79a742627530b80a43cd6d70e601cd91cc7013c588780bc3f6a0bee8dc0fb3"
     assert domain_raw["metric_space_sha"] != old_pre_round13_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第14巡 Fix 34（P1）: pjs_reference の学習前
+# 決定論的凍結。旧 pjs_reference_definition は「事前登録手続きで単一の
+# 参照レンダー/特徴を選ぶ」としか言っておらず、テイク index・digest・生成
+# 条件・決定論的集約規則を指定していなかった。選定値は post-run の
+# artifact_manifest_sha 配下にしか記録されないため、評価者が学習後レンダー
+# を観察したあとで有利な PJS テイクを選定でき、d_pjs(r_learned) の減少
+# 有無 = no-leakage evidence を汚染し得た。単一テイク選択を全廃し、
+# 決定論的コーパス全体集約（辞書順列挙 → 同一抽出手続き適用 → 機械的
+# voiced_mask 除外 → 要素ごとの算術平均）へ置換した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix34_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix34_pjs_reference_definition_states_deterministic_corpus_aggregation_markers() -> None:
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "辞書順" in pjs_reference_definition
+    assert "算術平均" in pjs_reference_definition
+    assert "expanded_corpus_identity_sha256" in pjs_reference_definition
+    assert "voiced_mask" in pjs_reference_definition
+    assert "事後選択" in pjs_reference_definition
+    # procedure-only の恒久 pin であること（Fix 29 と同型の一方向 provenance）
+    # を示す既存マーカーは Fix 34 改訂後も健在。
+    assert "事前登録手続き" in pjs_reference_definition
+    assert "artifact_manifest_sha" in pjs_reference_definition
+
+
+def test_fix34_pjs_reference_definition_does_not_regress_to_single_take_selection() -> None:
+    """現ファイルが旧「単一の参照レンダー」選択方式の文言を含まないこと
+    （言い換えでの再導入がないこと）を確認する。"""
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "単一の参照レンダー" not in pjs_reference_definition
+
+
+def test_fix34_validator_rejects_single_take_selection_regression() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference = PJS 教材コーパスから事前登録手続きで固定する単一の参照レンダー/特徴。"
+        "実測値は出生後アーティファクト側（artifact_manifest_sha 配下）に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="must not regress to single-take PJS reference selection"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_validator_rejects_pjs_reference_definition_missing_lexicographic_enumeration_marker() -> (
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は expanded_corpus_identity_sha256 が pin する PJS expanded corpus 内の"
+        "全ファイルへ extraction_procedure と identity_feature（voiced_mask 除外込み）を適用し、"
+        "feature ベクトルを要素ごとの算術平均で集約する。事後選択は構造的に不可能。事前登録手続き"
+        "として artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_validator_rejects_pjs_reference_definition_missing_arithmetic_mean_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は expanded_corpus_identity_sha256 が pin する PJS expanded corpus 内の"
+        "全ファイルを相対パスの辞書順で列挙し、extraction_procedure と identity_feature"
+        "（voiced_mask 除外込み）を適用したうえで集約する。事後選択は構造的に不可能。事前登録"
+        "手続きとして artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_validator_rejects_pjs_reference_definition_missing_corpus_pin_field_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は PJS expanded corpus 内の全ファイルを相対パスの辞書順で列挙し、"
+        "extraction_procedure と identity_feature（voiced_mask 除外込み）を適用し、feature "
+        "ベクトルを要素ごとの算術平均で集約する。事後選択は構造的に不可能。事前登録手続きとして "
+        "artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_validator_rejects_pjs_reference_definition_missing_voiced_mask_exclusion_marker() -> (
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は expanded_corpus_identity_sha256 が pin する PJS expanded corpus 内の"
+        "全ファイルを相対パスの辞書順で列挙し、extraction_procedure と identity_feature を"
+        "適用したうえで feature ベクトルを要素ごとの算術平均で集約する。事後選択は構造的に"
+        "不可能。事前登録手続きとして artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_validator_rejects_pjs_reference_definition_missing_post_hoc_selection_impossible_marker() -> (  # noqa: E501
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は expanded_corpus_identity_sha256 が pin する PJS expanded corpus 内の"
+        "全ファイルを相対パスの辞書順で列挙し、extraction_procedure と identity_feature"
+        "（voiced_mask 除外込み）を適用し、feature ベクトルを要素ごとの算術平均で集約する。"
+        "事前登録手続きとして artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 34 の pjs_reference_definition 改訂後、
+    `metric_space_sha` は正規形 sha256 と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix34_domain_metric_space_sha_differs_from_pre_round14_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 34（第14巡）の改訂により
+    metric_space_sha が Fix 32/33 時点（第13巡）の旧値から更新されている
+    ことを確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round14_sha = "747113488043b944587eb7de1cf7f175193178e9ba6fbe034c90646b54a1e7d1"
+    assert domain_raw["metric_space_sha"] != old_pre_round14_sha
