@@ -1762,6 +1762,80 @@ def test_revision02_require_rights_ledger_helpers_accept_well_formed_values() ->
     ) == 12.5
 
 
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第5巡対応 — rights 検証器ファミリー終端
+# (Fix A: schema 版の厳密検証 / Fix B: ledger 側の重複 card_id 拒否)
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_verify_rights_manifest_rejects_wrong_rights_schema() -> None:
+    """負例（Fix A）: rights_manifest.schema が別値だと拒否される。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    tampered["schema"] = "run9-user-donor-rights/0.9"
+    with pytest.raises(m.Run9ValidationError, match="rights_manifest.schema"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_missing_rights_schema() -> None:
+    """負例（Fix A）: rights_manifest.schema が欠落していると拒否される。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    del tampered["schema"]
+    with pytest.raises(m.Run9ValidationError, match="rights_manifest.schema"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_wrong_ledger_schema() -> None:
+    """負例（Fix A）: donor_ledger.schema が別値だと拒否される。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_ledger = copy.deepcopy(ledger)
+    tampered_ledger["schema"] = "user-donor-ledger/0.2"
+    with pytest.raises(m.Run9ValidationError, match="donor_ledger.schema"):
+        m.verify_rights_manifest_against_ledger(rights, tampered_ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_missing_ledger_schema() -> None:
+    """負例（Fix A）: donor_ledger.schema が欠落していると拒否される。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_ledger = copy.deepcopy(ledger)
+    del tampered_ledger["schema"]
+    with pytest.raises(m.Run9ValidationError, match="donor_ledger.schema"):
+        m.verify_rights_manifest_against_ledger(rights, tampered_ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_duplicate_ledger_card_id() -> None:
+    """負例（Fix B）: donor_ledger 側で同一 card_id が2回（hash 相違）
+    出現する合成 ledger が拒否されること — 第3巡は rights 側のみ重複拒否
+    しており、ledger 側は last-entry-wins で黙って解決していた非対称の
+    解消。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_ledger = copy.deepcopy(ledger)
+    duplicate_entry = copy.deepcopy(tampered_ledger["entries"][0])
+    duplicate_entry["source_sha256"] = "f" * 64
+    duplicate_entry["sha256"] = "e" * 64
+    tampered_ledger["entries"].append(duplicate_entry)
+    with pytest.raises(m.Run9ValidationError, match="duplicate card_id"):
+        m.verify_rights_manifest_against_ledger(rights, tampered_ledger)
+
+
+def test_revision02_verify_rights_manifest_correct_schemas_and_ledger_still_pass() -> None:
+    """対照実験: schema・ledger の重複無しの正常系は引き続き通る（Fix A/B
+    が正常系まで壊していないことの確認）。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    assert rights["schema"] == "run9-user-donor-rights/1.0"
+    assert ledger["schema"] == "user-donor-ledger/0.1"
+    m.verify_rights_manifest_against_ledger(rights, ledger)  # 例外を投げないことの確認
+
+
+def test_revision02_verify_rights_manifest_docstring_declares_family_termination() -> None:
+    """rights 検証器ファミリーの終端宣言（PR #316 第3〜5巡）がソース中に
+    明文化されていることの直接確認。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert "全数掃討・" in source and "終端" in source
+    assert "境界宣言" in source
+
+
 def test_revision02_domain_user_anchor_still_unpinned_while_rights_pending() -> None:
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
     assert domain.anchor_hashes["user"] == "<PIN_BEFORE_RUN>"

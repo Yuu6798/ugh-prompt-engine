@@ -1308,7 +1308,38 @@ def verify_rights_manifest_against_ledger(
        ため、rights entry と ledger entry の両方から同じ必須
        フィールドが欠落すると `None == None` が真になり、両側欠落を
        検出できなかった）。
+    4. `rights_manifest.schema == "run9-user-donor-rights/1.0"` /
+       `donor_ledger.schema == "user-donor-ledger/0.1"`（欠落・別値・
+       非 str はいずれも拒否 — Codex bot レビュー PR #316 第5巡指摘A
+       採用: 意味論を理解しない版の文書を attest 経由で
+       `anchor_hashes.user` へ正典束縛し得るため、版の取り違えは
+       card_id/値の一致以前に拒否する）。
+    5. `donor_ledger.entries` の `card_id` にも重複が無いこと（Codex bot
+       レビュー PR #316 第5巡指摘B採用: 第3巡は rights 側のみ重複拒否
+       しており、ledger 側は `ledger_by_id[card_id] = entry` の
+       last-entry-wins で曖昧な ledger を黙って解決していた非対称が
+       残っていた）。
+
+    rights 検証器の堅牢化ファミリー（PR #316 第3〜5巡: card_id 完全一致・
+    両側存在+整形式・schema 版・ledger 側重複拒否）は本巡で全数掃討・
+    終端する。以降に見つかる同型変種（本ファミリーが扱う対称性の範囲外の
+    新しい欠陥クラス）は、都度追撃せず境界宣言で扱う。
     """
+    rights_schema = rights_manifest.get("schema")
+    if not isinstance(rights_schema, str) or rights_schema != "run9-user-donor-rights/1.0":
+        raise Run9ValidationError(
+            "rights_manifest.schema must be exactly 'run9-user-donor-rights/1.0', got "
+            f"{rights_schema!r} (a document declaring a different or missing schema version "
+            "must not be treated as this contract's rights manifest, since anchor_hashes.user "
+            "binding depends on this schema's exact semantics)"
+        )
+    ledger_schema = donor_ledger.get("schema")
+    if not isinstance(ledger_schema, str) or ledger_schema != "user-donor-ledger/0.1":
+        raise Run9ValidationError(
+            "donor_ledger.schema must be exactly 'user-donor-ledger/0.1', got "
+            f"{ledger_schema!r}"
+        )
+
     rights_entries_raw = rights_manifest.get("entries")
     if not isinstance(rights_entries_raw, list):
         raise Run9ValidationError(
@@ -1342,6 +1373,7 @@ def verify_rights_manifest_against_ledger(
             "(each donor card must appear exactly once)"
         )
 
+    ledger_card_ids: List[str] = []
     ledger_by_id: Dict[str, Mapping[str, Any]] = {}
     for i, entry in enumerate(ledger_entries_raw):
         if not isinstance(entry, dict):
@@ -1351,7 +1383,21 @@ def verify_rights_manifest_against_ledger(
             raise Run9ValidationError(
                 f"donor_ledger.entries[{i}].card_id must be a non-empty string, got {card_id!r}"
             )
+        ledger_card_ids.append(card_id)
         ledger_by_id[card_id] = entry
+
+    # item 5: donor_ledger 側の card_id 重複拒否（rights 側と対称。旧実装は
+    # `ledger_by_id[card_id] = entry` の last-entry-wins で曖昧 ledger を
+    # 黙って解決していた — Codex bot レビュー PR #316 第5巡指摘B）。
+    if len(ledger_card_ids) != len(set(ledger_card_ids)):
+        seen_ledger: set = set()
+        ledger_duplicates = sorted(
+            {c for c in ledger_card_ids if c in seen_ledger or seen_ledger.add(c)}
+        )
+        raise Run9ValidationError(
+            f"donor_ledger.entries has duplicate card_id value(s): {ledger_duplicates} "
+            "(an ambiguous ledger must not be silently resolved via last-entry-wins)"
+        )
 
     # item 2: card_id 集合の完全一致（過不足を両方向とも検出）。
     rights_id_set = set(rights_by_id.keys())
