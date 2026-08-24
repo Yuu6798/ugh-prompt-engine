@@ -41,6 +41,7 @@ import os
 import re
 import sys
 import tempfile
+import types
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Mapping, NamedTuple, Optional, Tuple
@@ -218,7 +219,28 @@ class Run9ControlProfile:
     """`run9-control-profile/1.0`。`profile_id` は
     `_compute_profile_id()` の再計算値以外を持てない（構築時にのみ導出
     され、公開コンストラクタから直接指定できない — `founder_genome_id`
-    と同じ改ざん耐性の考え方）。"""
+    と同じ改ざん耐性の考え方）。
+
+    `partitions` の構築時凍結（Codex bot レビュー PR #318 第3巡 Fix 11
+    項目2 採用、`Run9IdentityDomain.__post_init__`
+    — run9_schema.py — と同型）: `dataclass(frozen=True)` はトップレベル
+    属性の再代入だけを禁止し、属性が指す nested dict（`partitions["trait_
+    control"]` 等）自体は素の mutable dict のままだったため、
+    `build_neutral_profile()` の返り値を `profile.partitions["trait_
+    control"]["injected"] = ...` のように構築後に書き換えても型レベルでは
+    防げていなかった（`derive_profile()` の parent 検証が `revision ==
+    "r0"` というラベルだけを見ていた旧実装と組み合わさると、汚染された
+    nested dict が有効な r0 として derive へ渡り、汚染内容が子へコピー
+    されてしまう）。`__post_init__` で渡された partitions を
+    `copy.deepcopy()` してから `types.MappingProxyType` で二段階
+    （partitions 自体 + 各 partition の中身）不変ビュー化する — 呼び出し元が
+    保持する元の dict を後から書き換えても profile 自身の内部状態は
+    影響を受けず（deepcopy がエイリアスを切断）、`profile.partitions[...]
+    [...] = ...` のような直接変異も `TypeError` で拒否される。Fix 11
+    項目1（`derive_profile()` の正準全形検証）と対になる防御的二重検証
+    — 項目1は「derive 時点で parent の中身を検査する」経路、本凍結は
+    「そもそも構築後に中身を変えさせない」経路で、どちらか片方が抜けても
+    もう片方が汚染を止める。"""
 
     schema: str
     voice_id: str
@@ -227,6 +249,15 @@ class Run9ControlProfile:
     parent_revision: Optional[str]
     partitions: Mapping[str, Mapping[str, Any]]
     profile_id: str
+
+    def __post_init__(self) -> None:
+        # frozen dataclass では `self.x = ...` が使えないため
+        # `object.__setattr__` で直接代入する（run9_schema.py
+        # `Run9IdentityDomain.__post_init__` と同じ回避手段）。
+        frozen: Dict[str, Mapping[str, Any]] = {}
+        for key in PROFILE_PARTITION_KEYS:
+            frozen[key] = types.MappingProxyType(copy.deepcopy(dict(self.partitions[key])))
+        object.__setattr__(self, "partitions", types.MappingProxyType(frozen))
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -331,6 +362,23 @@ def derive_profile(
     同士をさらに繋ぐ等）は枝汚染（cross-arm contamination）として
     fail-closed で拒否する。
 
+    **parent は revision ラベルだけでなく正準全形で検証する**（Codex bot
+    レビュー PR #318 第3巡 Fix 11 項目1 採用、Fix 1 の是正）: `Run9Control
+    Profile` は浅い frozen dataclass のため、`revision=="r0"` というラベル
+    だけを見る検証は「`build_neutral_profile()` の返り値の nested
+    partitions dict を構築後に書き換えても `revision` フィールド自体は
+    `"r0"` のまま」という抜け道を防げない（稽古様の trait 状態が教育結果へ
+    混入し得る）。本関数は revision ラベルの一致に加え、`parent.partitions`
+    が `build_neutral_profile(parent.voice_id)` の返す正準 neutral 全形と
+    深い一致であること、かつ `parent.profile_id` もその正準値と一致する
+    ことを検証する（`Run9ControlProfile.__post_init__` の partitions 凍結
+    — Fix 11 項目2 — により通常はこの経路自体が構造的に塞がれるが、
+    frozen dataclass を直接構築する経路（テストや将来の呼び出し）は
+    `__post_init__` の凍結を経由しつつも、凍結**前**の入力 dict 自体を
+    汚染して渡すことは可能であるため、本検証は独立した第二関門として残す
+    — 「そもそも書き換えさせない」（Fix 11-2）と「書き換わっていないか
+    derive 時点で確かめる」（Fix 11-1）の二重防御）。
+
     **境界宣言（本 schema の対象外）**: 将来「同一枝内での profile
     版重ね」（例: PRACTICE_FROM_AUDIO の反復学習で `r_practice` からさらに
     次の `r_practice` 版を導出する）が必要になった場合、その対応は本
@@ -351,6 +399,23 @@ def derive_profile(
             f"{parent.branch!r}) — 全枝は r0 から独立分岐する（PoR §4）。r_practice/r_taught/"
             "replay/r_sham のいずれかを親として別の枝を導出する cross-arm contamination は "
             "拒否する（同一枝内の版重ねは本 schema の対象外 — docstring の境界宣言を参照）"
+        )
+
+    # revision ラベルだけでなく正準全形で parent を検証する（Fix 11 項目1
+    # — docstring 参照）。voice_id は Run9ControlProfile 型検査は既に
+    # 通過済みだが値の妥当性は未検証のため、build_neutral_profile() が
+    # _require_founder_voice_id() 経由でここでも改めて検証する
+    # （不正な voice_id の parent は「canonical と一致しない」以前に
+    # ここで Run9ControlProfileError になる）。
+    canonical_r0 = build_neutral_profile(parent.voice_id)
+    if parent.partitions != canonical_r0.partitions or parent.profile_id != canonical_r0.profile_id:
+        raise Run9ControlProfileError(
+            "derive_profile() requires parent to be byte-for-byte the canonical birth-neutral r0 "
+            f"profile for voice_id={parent.voice_id!r} (build_neutral_profile()'s exact output) — "
+            "parent.revision reads 'r0' but parent.partitions and/or parent.profile_id do not "
+            "deep-equal the canonical neutral form (contents were mutated after construction, or a "
+            "hand-assembled/tampered document was passed directly as parent) — 汚染された trait/"
+            "technique 状態を r0 のふりをして子へコピーさせる経路を拒否する（Fix 11 項目1）"
         )
 
     revision = _resolve_derived_revision(branch, control_condition)
@@ -506,6 +571,41 @@ def control_profile_from_dict(data: Any) -> Run9ControlProfile:
 
     partitions = _validate_partitions_shape(data["partitions"])
 
+    # 枝書き込み境界のパーティション「内容」への適用（Codex bot レビュー
+    # PR #318 第3巡 Fix 10 採用）: ここまでの検証は partitions の存在形状
+    # （2キー・dict・非有限値なし）のみで、branch write policy を内容へは
+    # 適用していなかった。手組みの TRANSFER_TECHNIQUE + r_taught 文書に
+    # 非空 trait_control を入れても、あるいは CONTROL 枝文書に非 neutral
+    # な partition を入れても、profile_id さえ再計算に通れば受理されて
+    # しまい、`derive_profile()` の `validate_branch_write()` 関門を丸ごと
+    # 迂回して禁止パーティションへの効果を直接公開できていた。ここでは
+    # 「branch が書き込めないパーティションは neutral 値
+    # （`build_neutral_profile()` の当該パーティション内容）と完全一致
+    # しなければならない」を強制する — r0（revision=="r0"、writable 集合は
+    # 常に空扱い）は全パーティション neutral 一致、枝派生 revision は
+    # `run9_schema.BRANCH_WRITABLE_PARTITIONS[branch]` に無い partition
+    # だけ neutral 一致を強制する（書き込める側は制約しない — その中身の
+    # 正当性は `derive_profile()` 側の検証に委ねる）。
+    neutral_partitions = build_neutral_profile(voice_id).partitions
+    if revision == NEUTRAL_REVISION:
+        writable_state_partitions: FrozenSet[str] = frozenset()
+    else:
+        writable_state_partitions = frozenset(_rs.BRANCH_WRITABLE_PARTITIONS[branch])
+    for partition_key in PROFILE_PARTITION_KEYS:
+        state_partition = _PARTITION_KEY_TO_STATE_PARTITION[partition_key]
+        if state_partition in writable_state_partitions:
+            continue
+        if partitions[partition_key] != neutral_partitions[partition_key]:
+            raise Run9ControlProfileError(
+                f"partitions.{partition_key} is not writable on branch {branch!r} (revision "
+                f"{revision!r}) — this partition must exactly match the birth-neutral value "
+                "(build_neutral_profile()'s content for this partition) because "
+                f"run9_schema.BRANCH_WRITABLE_PARTITIONS[{branch!r}] does not include "
+                f"{state_partition!r} — a hand-assembled or tampered document with non-neutral "
+                "content here would bypass derive_profile()'s validate_branch_write() boundary "
+                "enforcement and publish a forbidden-partition effect directly"
+            )
+
     profile_id = data["profile_id"]
     if not isinstance(profile_id, str) or not _PROFILE_ID_RE.match(profile_id):
         raise Run9ControlProfileError(
@@ -624,6 +724,19 @@ class Run9ProfileLedger:
         既存バイト列と一致するため冪等に成功し、異なる内容の publish は
         新しい profile_id を持つため無関係のファイルとして扱われる）。
         crash-safety を優先し、tuple-alias hard link 方式を採用する。
+
+        **alias の存在をコミットの正とする**（Codex bot レビュー PR #318
+        第3巡 Fix 9 採用）: 上記の「孤児」は書込み側では許容する設計だが、
+        読者側（`list_profile_ids()`/`_find_by_voice_and_revision()`/
+        `read()` 経由の全消費者）が孤児本体を誤って live として扱うと、
+        後から別 profile が同じ `(voice_id, revision)` の alias を
+        claim した際に同じ tuple に可読 profile が2つ並び、parent lookup
+        が sorted ID で孤児を選び得る不整合になる。これを防ぐため、全
+        読者経路は `_resolve_live_profile_id_for_alias()` を介して
+        「対応する alias が存在し、その claim する profile_id の本体が
+        実在してフル検証を通る」場合にのみ live とみなす — 孤児は
+        「以降の publish をブロックしない」だけでなく「読者から恒久的に
+        不可視」になる。
 
         書込シーケンス: ①本体ファイル（`<profile_id>.json`）を
         profile_id 単位の排他 create で書く（既存ロジック、同一
@@ -758,24 +871,71 @@ class Run9ProfileLedger:
     def exists(self, profile_id: str) -> bool:
         return self.path_for(profile_id).exists()
 
+    def _resolve_live_profile_id_for_alias(self, alias_path: Path) -> Optional[str]:
+        """`alias_path`（`byrev_<voice_id>_<revision>.link`）が claim する
+        profile_id を読み、それが実際に生存 (live) しているかを判定する
+        （Codex bot レビュー PR #318 第3巡 Fix 9 採用: **alias の存在を
+        publish のコミットポイントとする**）。
+
+        `Run9ProfileLedger.write()` は①本体ファイル（`<profile_id>.json`）
+        → ②tuple-alias ファイルの順に書く。①後・②前で crash / I/O 失敗が
+        起きると、alias が claim していない「孤児本体」が残り得る
+        （`profile.py` 側の write() docstring 参照）。この孤児は、
+        `read()`/`list_profile_ids()` が単純にディレクトリを走査する旧実装
+        だと live として扱われてしまい、後から別 profile が同じ
+        `(voice_id, revision)` の alias を claim すると同じ tuple に
+        可読 profile が2つ並ぶ・parent lookup が sorted ID で孤児を選び
+        得る、という不整合を招く。
+
+        本メソッドは alias ファイルの側から出発し、①alias が存在し
+        （symlink でなく）②その claim が profile_id 形式として妥当で、
+        ③対応する本体ファイルが実在し、④本体を `read()` でフル検証
+        （schema/型/profile_id 再計算一致・symlink escape guard を含む）
+        して claim と一致する場合にのみ、その profile_id を「live」として
+        返す。いずれかが欠ければ `None`（孤児・破損・改ざんは無条件で
+        不可視 — fail-closed）。"""
+        if not alias_path.is_file() or alias_path.is_symlink():
+            return None
+        try:
+            claimed = alias_path.read_bytes().decode("ascii")
+        except (OSError, UnicodeDecodeError):
+            return None
+        if not _PROFILE_ID_RE.match(claimed):
+            return None
+        try:
+            self.read(claimed)
+        except (Run9ControlProfileError, OSError, json.JSONDecodeError):
+            return None
+        return claimed
+
     def list_profile_ids(self) -> List[str]:
+        """台帳内の live な profile_id を列挙する。alias ファイル
+        （`byrev_*.link`）の側から出発する（Fix 9 — `_resolve_live_
+        profile_id_for_alias()` docstring 参照）: 本体 JSON を直接
+        `glob("*.json")` する旧実装は、alias が claim していない孤児本体も
+        無条件に live として返してしまっていた。"""
         if not self.directory.exists():
             return []
-        return sorted(p.stem for p in self.directory.glob("*.json") if _PROFILE_ID_RE.match(p.stem))
+        live: set = set()
+        for alias_path in self.directory.glob("byrev_*.link"):
+            resolved = self._resolve_live_profile_id_for_alias(alias_path)
+            if resolved is not None:
+                live.add(resolved)
+        return sorted(live)
 
     def _find_by_voice_and_revision(self, voice_id: str, revision: str) -> Optional[Run9ControlProfile]:
-        """台帳内を走査し `(voice_id, revision)` に一致する profile を
-        `read()` 経由（= フル検証込み）で探す。RUN9 の規模（Founder 2体 ×
-        revision 最大5件 = 10 エントリ程度）ではディレクトリ走査で十分
-        — 大規模化した場合はインデックスファイルの追加を検討する。"""
-        for candidate_id in self.list_profile_ids():
-            try:
-                candidate = self.read(candidate_id)
-            except (Run9ControlProfileError, json.JSONDecodeError):
-                continue
-            if candidate.voice_id == voice_id and candidate.revision == revision:
-                return candidate
-        return None
+        """`(voice_id, revision)` の tuple-alias ファイルを直接引き、その
+        claim が live であれば対応する profile を返す（Fix 9 — 台帳全体を
+        走査する旧実装から、alias パス1件の直接解決へ置き換え。alias の
+        naming convention `byrev_<voice_id>_<revision>.link` により
+        `(voice_id, revision)` と alias ファイルは1:1に対応するため、
+        走査は元々不要だった）。孤児本体（alias 未 claim）や、alias が
+        claim する内容と本体が食い違う場合は live 扱いしない。"""
+        alias_path = self._alias_path_for(voice_id, revision)
+        resolved = self._resolve_live_profile_id_for_alias(alias_path)
+        if resolved is None:
+            return None
+        return self.read(resolved)
 
 
 def _loads_strict_json(text: str) -> Any:

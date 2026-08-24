@@ -790,6 +790,229 @@ def test_practice_trace_invalid_voice_id_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Run9ProfileLedger: publish の原子化 — alias をコミットポイント化
+# （Codex bot レビュー PR #318 第3巡 Fix 9）。本体書込み①→alias claim②の
+# 間の crash / I/O 失敗で生じる「alias 無し孤児本体」を、全読者経路
+# （list_profile_ids() / _find_by_voice_and_revision()）から不可視にする
+# ことを failure injection で直接検証する。
+# ---------------------------------------------------------------------------
+
+
+def _induce_alias_claim_crash(
+    monkeypatch: pytest.MonkeyPatch, ledger: cp.Run9ProfileLedger, profile: cp.Run9ControlProfile,
+) -> None:
+    """`profile` の本体書込み①（`os.link(tmp_name, path)`）を正常に完了
+    させたうえで、alias claim②（`os.link(tmp_alias_name, alias_path)`）の
+    直前で `os.link` を crash させる。呼び出し後、本体ファイルは存在するが
+    alias が存在しない「孤児」状態になる（Fix 9 failure injection ヘルパー
+    — monkeypatch で os.link を例外化する、というレビュー指摘の実装）。"""
+    alias_path = ledger._alias_path_for(profile.voice_id, profile.revision)
+    real_link = cp.os.link
+
+    def crashing_link(src: Any, dst: Any, *args: Any, **kwargs: Any) -> None:
+        if Path(dst) == alias_path:
+            raise OSError("simulated crash before alias claim")
+        return real_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(cp.os, "link", crashing_link)
+    with pytest.raises(OSError, match="simulated crash"):
+        ledger.write(profile)
+    monkeypatch.undo()  # 以降の呼び出しは crash させない（実 os.link へ戻す）
+
+    assert ledger.path_for(profile.profile_id).exists()  # ① 本体は書かれている
+    assert not alias_path.exists()  # ② alias は claim されていない（孤児）
+
+
+def test_ledger_orphan_body_invisible_to_readers_after_crash_before_alias_claim(
+    ledger: cp.Run9ProfileLedger, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """必須テスト（Fix 9, ①）: 本体書込み後・alias claim 前の crash で
+    生じた孤児本体は、`list_profile_ids()` / `_find_by_voice_and_revision()`
+    のどちらの読者経路からも不可視である。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0)
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    _induce_alias_claim_crash(monkeypatch, ledger, child)
+
+    assert child.profile_id not in ledger.list_profile_ids()
+    assert ledger._find_by_voice_and_revision(child.voice_id, child.revision) is None
+
+
+def test_ledger_second_profile_claims_tuple_after_orphan_crash(
+    ledger: cp.Run9ProfileLedger, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """必須テスト（Fix 9, ②）: 孤児が存在する状態で同一 (voice_id,
+    revision) tuple の別 profile を publish すると、新 profile が alias を
+    claim でき、それが唯一の live になる（孤児はそのまま不可視のまま残る
+    — 掃除は必須でない）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0)
+    orphan = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    _induce_alias_claim_crash(monkeypatch, ledger, orphan)
+
+    second = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 2}})
+    assert second.profile_id != orphan.profile_id
+    result = ledger.write(second)
+    assert result.created is True
+
+    found = ledger._find_by_voice_and_revision(second.voice_id, second.revision)
+    assert found is not None and found.profile_id == second.profile_id
+    assert orphan.profile_id not in ledger.list_profile_ids()
+    assert second.profile_id in ledger.list_profile_ids()
+
+
+def test_ledger_republish_of_orphaned_profile_recovers_idempotently(
+    ledger: cp.Run9ProfileLedger, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """必須テスト（Fix 9, ③）: 孤児化した profile 自身の republish（crash
+    しなかった経路の再実行に相当）は正常に成功し、alias claim から冪等に
+    回復する。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0)
+    orphan = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    _induce_alias_claim_crash(monkeypatch, ledger, orphan)
+
+    result = ledger.write(orphan)
+    assert result.path == ledger.path_for(orphan.profile_id)
+    assert orphan.profile_id in ledger.list_profile_ids()
+    found = ledger._find_by_voice_and_revision(orphan.voice_id, orphan.revision)
+    assert found is not None and found.profile_id == orphan.profile_id
+
+
+# ---------------------------------------------------------------------------
+# loader (control_profile_from_dict): 枝書き込み境界をパーティション内容へ
+# 適用する（Codex bot レビュー PR #318 第3巡 Fix 10）。derive_profile() を
+# 経由しない手組み/改ざん文書が、profile_id さえ再計算に通せば禁止
+# パーティションへ非 neutral な内容を直接公開できてしまう不備の是正。
+# ---------------------------------------------------------------------------
+
+
+def test_from_dict_rejects_hand_assembled_r_taught_with_nonempty_trait_control() -> None:
+    """必須テスト（Fix 10, 負例1）: `derive_profile()` を経由しない手組みの
+    TRANSFER_TECHNIQUE/r_taught 文書に非空 trait_control を入れ、
+    profile_id もその内容に対して正しく再計算し直した場合でも拒否される
+    （id 再計算の正しさとは独立に、書込境界違反そのもので拒否されることの
+    確認）。"""
+    partitions = {"trait_control": {"breathiness": 0.9}, "technique_control": {"phrasing": "legato"}}
+    profile_id = cp._compute_profile_id(
+        voice_id="R9F-01", branch="TRANSFER_TECHNIQUE", revision="r_taught",
+        parent_revision="r0", partitions=partitions,
+    )
+    data = {
+        "schema": cp.SCHEMA_CONTROL_PROFILE, "voice_id": "R9F-01", "branch": "TRANSFER_TECHNIQUE",
+        "revision": "r_taught", "parent_revision": "r0", "partitions": partitions,
+        "profile_id": profile_id,
+    }
+    with pytest.raises(cp.Run9ControlProfileError, match="not writable"):
+        cp.control_profile_from_dict(data)
+
+
+def test_from_dict_rejects_control_branch_document_with_nonneutral_partition() -> None:
+    """必須テスト（Fix 10, 負例2）: CONTROL 枝（writable partition 集合は
+    空）の revision 文書に非 neutral な partition（trait/technique どちらも
+    書込不可）が入っていれば、profile_id が正しく再計算されていても
+    拒否される。"""
+    partitions = {"trait_control": {}, "technique_control": {"vibrato_depth": 0.3}}
+    profile_id = cp._compute_profile_id(
+        voice_id="R9F-01", branch="CONTROL", revision="replay",
+        parent_revision="r0", partitions=partitions,
+    )
+    data = {
+        "schema": cp.SCHEMA_CONTROL_PROFILE, "voice_id": "R9F-01", "branch": "CONTROL",
+        "revision": "replay", "parent_revision": "r0", "partitions": partitions,
+        "profile_id": profile_id,
+    }
+    with pytest.raises(cp.Run9ControlProfileError, match="not writable"):
+        cp.control_profile_from_dict(data)
+
+
+def test_from_dict_rejects_r0_document_with_nonempty_partition() -> None:
+    """必須テスト（Fix 10 拡張）: r0（出生中立）文書はどちらの partition も
+    neutral（空 dict）でなければならない — writable 集合を持たない起点
+    そのものへの直接汚染も拒否する。"""
+    partitions = {"trait_control": {"breathiness": 0.1}, "technique_control": {}}
+    profile_id = cp._compute_profile_id(
+        voice_id="R9F-01", branch=None, revision="r0", parent_revision=None, partitions=partitions,
+    )
+    data = {
+        "schema": cp.SCHEMA_CONTROL_PROFILE, "voice_id": "R9F-01", "branch": None,
+        "revision": "r0", "parent_revision": None, "partitions": partitions,
+        "profile_id": profile_id,
+    }
+    with pytest.raises(cp.Run9ControlProfileError, match="not writable"):
+        cp.control_profile_from_dict(data)
+
+
+def test_from_dict_accepts_education_document_changing_only_technique_control() -> None:
+    """正例（Fix 10）: EDUCATION（TRANSFER_TECHNIQUE）が writable な
+    technique_control のみを変更した正当な文書は引き続き受理される。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    taught = cp.derive_profile(r0, "TRANSFER_TECHNIQUE", {"technique_control": {"phrasing": "legato"}})
+    reconstructed = cp.control_profile_from_dict(taught.to_dict())
+    assert reconstructed.partitions["technique_control"] == {"phrasing": "legato"}
+    assert reconstructed.partitions["trait_control"] == {}
+
+
+# ---------------------------------------------------------------------------
+# derive_profile: parent 検証を revision ラベルから正準全形照合へ
+# （Codex bot レビュー PR #318 第3巡 Fix 11）。合わせて Run9ControlProfile
+# 構築時の partitions 深いコピー + 不変ビュー化（防御的二重検証）。
+# ---------------------------------------------------------------------------
+
+
+def test_derive_profile_rejects_parent_with_mutated_neutral_partitions() -> None:
+    """必須テスト（Fix 11 項目1, 負例）: `revision=="r0"` というラベルは
+    正しくても、partitions の中身が正準 neutral 全形と一致しない parent
+    （改変コピーを手組みして直接構築した Run9ControlProfile — nested dict
+    の凍結により in-place 変異が不可能な場合の代替）からの derive は拒否
+    される。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    tampered = cp.Run9ControlProfile(
+        schema=r0.schema, voice_id=r0.voice_id, branch=r0.branch, revision=r0.revision,
+        parent_revision=r0.parent_revision,
+        partitions={"trait_control": {"injected": True}, "technique_control": {}},
+        profile_id=r0.profile_id,  # revision ラベル・profile_id は r0 のまま温存
+    )
+    with pytest.raises(cp.Run9ControlProfileError, match="canonical"):
+        cp.derive_profile(tampered, "TRANSFER_TECHNIQUE", {"technique_control": {"phrasing": "legato"}})
+
+
+def test_derive_profile_from_canonical_r0_still_succeeds_after_fix11() -> None:
+    """正例回帰: 正規の（改変されていない）neutral parent からの derive は
+    Fix 11 後も引き続き成功する。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    assert child.revision == "r_practice"
+    assert child.parent_revision == "r0"
+
+
+def test_run9_control_profile_partitions_reject_direct_mutation() -> None:
+    """必須テスト（Fix 11 項目2, 防御的二重検証）: 構築後に
+    `profile.partitions["trait_control"]["injected"] = ...` のような直接
+    変異を試みると、`Run9ControlProfile.__post_init__` の不変ビュー化
+    （`types.MappingProxyType`）により `TypeError` で拒否され、profile
+    自身の内部状態は変化しない。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    original = dict(r0.partitions["trait_control"])
+    with pytest.raises(TypeError):
+        r0.partitions["trait_control"]["injected"] = True
+    assert dict(r0.partitions["trait_control"]) == original
+
+
+def test_run9_control_profile_deep_copies_partitions_at_construction_time() -> None:
+    """必須テスト（Fix 11 項目2）: `Run9ControlProfile` を直接構築する際に
+    渡した dict を、呼び出し元がその後に書き換えても profile 自身の内部
+    状態には影響しない（構築時の deep copy によるエイリアス切断）。"""
+    original = {"trait_control": {"x": 1}, "technique_control": {}}
+    profile = cp.Run9ControlProfile(
+        schema=cp.SCHEMA_CONTROL_PROFILE, voice_id="R9F-01", branch=None, revision="r0",
+        parent_revision=None, partitions=original, profile_id="0" * 16,
+    )
+    original["trait_control"]["x"] = 999  # 呼び出し元がその後 dict を書き換える
+    assert profile.partitions["trait_control"]["x"] == 1  # profile 自身の状態は不変
+
+
+# ---------------------------------------------------------------------------
 # sibling import 流儀 / VG-E0 非依存の確認
 # ---------------------------------------------------------------------------
 
