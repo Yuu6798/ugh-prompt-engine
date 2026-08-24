@@ -1607,20 +1607,84 @@ def test_revision02_rights_manifest_is_pending_user_attestation() -> None:
     assert rights["usage_grants"]["model_general_distribution"] == "not_granted"
 
 
-def test_revision02_rights_manifest_entries_match_donor_ledger() -> None:
-    """rights_manifest.json の17件が user_donor_ledger.json の実測値と
-    一致すること（card_id/source_sha256/sha256/duration_sec）。"""
+def _load_rights_manifest_and_ledger() -> tuple[Dict[str, Any], Dict[str, Any]]:
     rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     ledger = json.loads(
         (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
     )
+    return rights, ledger
+
+
+def test_revision02_rights_manifest_entries_match_donor_ledger() -> None:
+    """rights_manifest.json の17件が user_donor_ledger.json の実測値と
+    過不足なく一致すること（card_id/source_sha256/sha256/duration_sec）。
+    実際の検査ロジックは `run9_schema.verify_rights_manifest_against_ledger()`
+    （loader 側ヘルパ、Codex bot レビュー PR #316 第3巡指摘 0a4d0cf 採用）を
+    呼ぶだけにする — attest 後の実運用でも同じ検査が効くようにするため。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
     assert len(rights["entries"]) == len(ledger["entries"]) == 17
-    ledger_by_id = {e["card_id"]: e for e in ledger["entries"]}
-    for entry in rights["entries"]:
-        source = ledger_by_id[entry["card_id"]]
-        assert entry["source_sha256"] == source["source_sha256"]
-        assert entry["sha256"] == source["sha256"]
-        assert entry["duration_sec"] == source["duration_sec"]
+    m.verify_rights_manifest_against_ledger(rights, ledger)  # 例外を投げないことの確認
+
+
+def test_revision02_rights_manifest_card_id_set_matches_ledger_exactly() -> None:
+    """card_id 集合そのものが ledger と完全一致すること（過不足双方の検出）
+    を直接確認する。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    rights_ids = {e["card_id"] for e in rights["entries"]}
+    ledger_ids = {e["card_id"] for e in ledger["entries"]}
+    assert rights_ids == ledger_ids
+    assert len(rights_ids) == len(rights["entries"]), "rights_manifest 内に重複 card_id がある"
+
+
+def test_revision02_verify_rights_manifest_rejects_duplicate_card_id() -> None:
+    """負例: rights_manifest 側で card_id を重複させた（= 1本欠落 + 1本二重）
+    合成 fixture が拒否されること。UC-017 を UC-016 の複製に差し替える —
+    件数は17件のまま・両方とも ledger 側に実在する card_id のため、件数
+    一致 + ledger からの引き当てだけの旧検査は素通りしていた欠陥の再現。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    uc016 = next(e for e in tampered["entries"] if e["card_id"] == "UC-016")
+    for entry in tampered["entries"]:
+        if entry["card_id"] == "UC-017":
+            entry["card_id"] = "UC-016"
+            entry["source_sha256"] = uc016["source_sha256"]
+            entry["sha256"] = uc016["sha256"]
+            entry["duration_sec"] = uc016["duration_sec"]
+    assert len(tampered["entries"]) == 17  # 件数は変わらない（旧検査が見逃す条件を再現）
+    with pytest.raises(m.Run9ValidationError, match="duplicate card_id"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_missing_card_id() -> None:
+    """負例: rights_manifest から1件（UC-017）を欠落させた合成 fixture が
+    拒否されること。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    tampered["entries"] = [e for e in tampered["entries"] if e["card_id"] != "UC-017"]
+    with pytest.raises(m.Run9ValidationError, match="does not exactly match"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_extra_card_id() -> None:
+    """負例: ledger に存在しない card_id を rights_manifest 側に追加した
+    合成 fixture が拒否されること。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    forged_entry = dict(tampered["entries"][0])
+    forged_entry["card_id"] = "UC-999"
+    tampered["entries"].append(forged_entry)
+    with pytest.raises(m.Run9ValidationError, match="does not exactly match"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_value_mismatch() -> None:
+    """負例: card_id 集合は正しいが、sha256 等の値が ledger と食い違う
+    fixture が拒否されること。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered = copy.deepcopy(rights)
+    tampered["entries"][0]["sha256"] = "f" * 65  # ledger の実値と不一致
+    with pytest.raises(m.Run9ValidationError, match="does not match"):
+        m.verify_rights_manifest_against_ledger(tampered, ledger)
 
 
 def test_revision02_domain_user_anchor_still_unpinned_while_rights_pending() -> None:

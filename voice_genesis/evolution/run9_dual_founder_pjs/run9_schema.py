@@ -1230,3 +1230,100 @@ def gate_state(contract: Run9RunContract) -> str:
         if not _is_field_pinned(revalidated.founder_genome_sha(founder_id)):
             return "BLOCKED"
     return "READY"
+
+
+# ---------------------------------------------------------------------------
+# User donor rights manifest 検証（DESIGN_RUN9_REVISION_0.2.md 改訂4）。
+# `inputs/rights_manifest.json` が `voice_genesis/foundry/recording_kit/
+# user_donor_ledger.json` の転記として過不足なく正しいことを検証する
+# loader 側ヘルパ（Codex bot レビュー PR #316 第3巡指摘, 0a4d0cf, 採用: 従来
+# テストは件数一致 + ledger 側からの引き当てのみで、manifest 側の重複
+# card_id や、ledger に無い card_id の混入を検出できなかった — UC-017 を
+# UC-016 の複製に差し替えても、件数17・両方とも ledger 側に実在する
+# card_id のため素通りしていた）。attest 後の実運用でも同じ検査が効くよう
+# loader 側の関数として実装する（テストはこれを呼ぶだけにする）。
+# ---------------------------------------------------------------------------
+
+def verify_rights_manifest_against_ledger(
+    rights_manifest: Mapping[str, Any], donor_ledger: Mapping[str, Any]
+) -> None:
+    """`rights_manifest` の `entries` が `donor_ledger` の `entries` の
+    忠実な転記（card_id/source_sha256/sha256/duration_sec）であることを
+    検証する。違反は `Run9ValidationError`。検証項目:
+
+    1. `rights_manifest.entries` の `card_id` に重複が無いこと。
+    2. `rights_manifest.entries` の card_id 集合が `donor_ledger.entries`
+       の card_id 集合と**完全一致**すること（過不足を両方向とも検出 —
+       manifest 側に無い ledger の card_id・manifest 側にしか無い
+       card_id のいずれも拒否）。
+    3. 一致する各 card_id について `source_sha256`/`sha256`/
+       `duration_sec` が ledger 側の実測値とバイト/値レベルで一致する
+       こと。
+    """
+    rights_entries_raw = rights_manifest.get("entries")
+    if not isinstance(rights_entries_raw, list):
+        raise Run9ValidationError(
+            f"rights_manifest.entries must be a list, got {type(rights_entries_raw).__name__}"
+        )
+    ledger_entries_raw = donor_ledger.get("entries")
+    if not isinstance(ledger_entries_raw, list):
+        raise Run9ValidationError(
+            f"donor_ledger.entries must be a list, got {type(ledger_entries_raw).__name__}"
+        )
+
+    rights_card_ids: List[str] = []
+    rights_by_id: Dict[str, Mapping[str, Any]] = {}
+    for i, entry in enumerate(rights_entries_raw):
+        if not isinstance(entry, dict):
+            raise Run9ValidationError(f"rights_manifest.entries[{i}] must be an object")
+        card_id = entry.get("card_id")
+        if not isinstance(card_id, str) or not card_id:
+            raise Run9ValidationError(
+                f"rights_manifest.entries[{i}].card_id must be a non-empty string, got {card_id!r}"
+            )
+        rights_card_ids.append(card_id)
+        rights_by_id[card_id] = entry
+
+    # item 1: rights_manifest 側の card_id 重複拒否（len(ids) == len(set(ids))）。
+    if len(rights_card_ids) != len(set(rights_card_ids)):
+        seen: set = set()
+        duplicates = sorted({c for c in rights_card_ids if c in seen or seen.add(c)})
+        raise Run9ValidationError(
+            f"rights_manifest.entries has duplicate card_id value(s): {duplicates} "
+            "(each donor card must appear exactly once)"
+        )
+
+    ledger_by_id: Dict[str, Mapping[str, Any]] = {}
+    for i, entry in enumerate(ledger_entries_raw):
+        if not isinstance(entry, dict):
+            raise Run9ValidationError(f"donor_ledger.entries[{i}] must be an object")
+        card_id = entry.get("card_id")
+        if not isinstance(card_id, str) or not card_id:
+            raise Run9ValidationError(
+                f"donor_ledger.entries[{i}].card_id must be a non-empty string, got {card_id!r}"
+            )
+        ledger_by_id[card_id] = entry
+
+    # item 2: card_id 集合の完全一致（過不足を両方向とも検出）。
+    rights_id_set = set(rights_by_id.keys())
+    ledger_id_set = set(ledger_by_id.keys())
+    missing_from_rights = sorted(ledger_id_set - rights_id_set)
+    extra_in_rights = sorted(rights_id_set - ledger_id_set)
+    if missing_from_rights or extra_in_rights:
+        raise Run9ValidationError(
+            "rights_manifest.entries card_id set does not exactly match donor_ledger.entries "
+            f"card_id set — missing_from_rights={missing_from_rights!r} "
+            f"extra_in_rights={extra_in_rights!r}"
+        )
+
+    # item 3: 一致する card_id ごとの値照合。
+    for card_id, rights_entry in rights_by_id.items():
+        ledger_entry = ledger_by_id[card_id]
+        for field in ("source_sha256", "sha256", "duration_sec"):
+            rights_value = rights_entry.get(field)
+            ledger_value = ledger_entry.get(field)
+            if rights_value != ledger_value:
+                raise Run9ValidationError(
+                    f"rights_manifest.entries[card_id={card_id!r}].{field} does not match "
+                    f"donor_ledger: rights={rights_value!r} ledger={ledger_value!r}"
+                )
