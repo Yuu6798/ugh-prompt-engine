@@ -121,6 +121,34 @@ def _require_finite_triple(af0: float, ritsu: float, user: float) -> None:
             raise Run9ValidationError(f"non-finite coordinate rejected: {name}={v!r}")
 
 
+def _is_strict_int(value: Any) -> bool:
+    """bool を明示的に除外した厳密 int 判定（Codex bot レビュー PR #315
+    第5巡指摘1採用）: Python は `True == 1` / `6.0 == 6` が真になるため、
+    `value == RUN9_COORDINATE_PRECISION` のような等価比較だけでは
+    `coordinate_precision: 6.0`（float）や `coordinate_precision: true`
+    のような非正準値も通過してしまう。通過を許すと、同一のはずの pinned
+    domain から `content_digest()` の JSON 直列化時に異なるバイト列
+    （ひいては異なる genome_id）が出る決定論欠陥になる。
+    """
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _require_valid_coord_scalar(value: Any, field: str) -> float:
+    """coords 生値の型強制排除（Codex bot レビュー PR #315 第5巡指摘2
+    採用）: bool でない int または有限 float のみを許可し、int は明示的に
+    float へ変換する（JSON の `0`/`1` 等を許容するため）。文字列
+    （例 `"0.6"`）や bool の黙った型正規化は、改ざん検出を掲げる
+    `founder_genome_from_dict()` が非正準・改変された genome document を
+    正典として通してしまう契約矛盾になるため拒否する。
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise Run9ValidationError(f"{field} must be a number (bool/str rejected), got {value!r}")
+    out = float(value)
+    if not math.isfinite(out):
+        raise Run9ValidationError(f"{field} must be finite (NaN/inf rejected): {value!r}")
+    return out
+
+
 def normalize_run9_coords(af0: float, ritsu: float, user: float) -> Run9Coords:
     """(af0, ritsu, user) を Δ²（af0/ritsu/user、成分非負・合計1）上へ射影し、
     小数6桁へ丸め、合計が厳密に1.000000になるよう最大成分（クランプ前の生値
@@ -381,9 +409,12 @@ def run9_identity_domain_from_dict(data: Any) -> Run9IdentityDomain:
         )
 
     precision = data["coordinate_precision"]
-    if precision != RUN9_COORDINATE_PRECISION:
+    if not _is_strict_int(precision) or precision != RUN9_COORDINATE_PRECISION:
         raise Run9ValidationError(
-            f"coordinate_precision must be {RUN9_COORDINATE_PRECISION!r}, got {precision!r}"
+            f"coordinate_precision must be the exact int {RUN9_COORDINATE_PRECISION!r} — bool and "
+            "float variants are rejected (Python's == would otherwise accept 6.0/True as equal to "
+            f"6, which breaks content_digest() determinism), got {precision!r} "
+            f"({type(precision).__name__})"
         )
 
     normalization = data["normalization"]
@@ -558,10 +589,11 @@ def _validate_domain_invariants(domain: Run9IdentityDomain) -> None:
             f"domain.excluded_teacher_identities must be exactly "
             f"{RUN9_EXCLUDED_TEACHER_IDENTITIES!r}, got {domain.excluded_teacher_identities!r}"
         )
-    if domain.coordinate_precision != RUN9_COORDINATE_PRECISION:
+    if not _is_strict_int(domain.coordinate_precision) or domain.coordinate_precision != RUN9_COORDINATE_PRECISION:
         raise Run9ValidationError(
-            f"domain.coordinate_precision must be {RUN9_COORDINATE_PRECISION!r}, "
-            f"got {domain.coordinate_precision!r}"
+            f"domain.coordinate_precision must be the exact int {RUN9_COORDINATE_PRECISION!r} — bool "
+            "and float variants are rejected (Codex bot review PR #315 第5巡指摘1), got "
+            f"{domain.coordinate_precision!r} ({type(domain.coordinate_precision).__name__})"
         )
     if domain.normalization != RUN9_NORMALIZATION:
         raise Run9ValidationError(
@@ -667,7 +699,15 @@ def founder_genome_from_dict(data: Any, *, domain: Run9IdentityDomain) -> Run9Fo
     _reject_pjs_key(context="coords", keys=coords_raw if isinstance(coords_raw, dict) else {})
     if not isinstance(coords_raw, dict) or set(coords_raw.keys()) != set(RUN9_ANCHOR_ORDER):
         raise Run9ValidationError(f"coords must have exactly keys {list(RUN9_ANCHOR_ORDER)}, got {coords_raw!r}")
-    coords = Run9Coords(**{k: float(coords_raw[k]) for k in RUN9_ANCHOR_ORDER})
+    # Codex bot レビュー PR #315 第5巡指摘2採用: 生値を `float(...)` へ黙って
+    # 型強制するのではなく `_require_valid_coord_scalar()` で「bool でない
+    # int/有限float」であることを検証してから変換する。改ざん検出を掲げる
+    # 本関数が文字列（例 "0.6"）等の非正準値まで黙って正規化して受理すると、
+    # 非正準・改変された genome document が builder 照合を通過して正典
+    # として返る契約矛盾になる。
+    coords = Run9Coords(**{
+        k: _require_valid_coord_scalar(coords_raw[k], f"coords.{k}") for k in RUN9_ANCHOR_ORDER
+    })
     _validate_run9_coords_value(coords)
 
     if data["profile_label"] not in ("AF0_DOMINANT", "USER_DOMINANT"):

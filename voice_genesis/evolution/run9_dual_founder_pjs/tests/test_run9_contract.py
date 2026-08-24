@@ -952,3 +952,132 @@ def test_fix10_attempt_id_regex_is_positive_grammar_not_blacklist() -> None:
     assert not m._ATTEMPT_ID_RE.match("a b")
     assert not m._ATTEMPT_ID_RE.match("")
     assert not m._ATTEMPT_ID_RE.match("-leading-dash")  # 先頭は英数字必須
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第5巡対応 — Fix 11: coordinate_precision の
+# 厳密 int 型検査
+# ---------------------------------------------------------------------------
+
+
+def _domain_document(coordinate_precision: Any) -> Dict[str, Any]:
+    return {
+        "schema": m.SCHEMA_IDENTITY_DOMAIN,
+        "domain_id": m.RUN9_DOMAIN_ID,
+        "anchor_order": list(m.RUN9_ANCHOR_ORDER),
+        "anchor_hashes": {"af0": "a" * 64, "ritsu": "b" * 64, "user": "c" * 64},
+        "excluded_teacher_identities": list(m.RUN9_EXCLUDED_TEACHER_IDENTITIES),
+        "coordinate_precision": coordinate_precision,
+        "normalization": m.RUN9_NORMALIZATION,
+        "metric_space_sha": "d" * 64,
+    }
+
+
+def test_fix11_coordinate_precision_float_variant_rejected_by_from_dict() -> None:
+    """Codex bot レビュー PR #315 第5巡指摘1: `run9_identity_domain_from_dict()`
+    は `coordinate_precision: 6.0`（float）を拒否する。Python の `6.0 == 6`
+    は真だが、float のまま通過すると `content_digest()` の JSON 直列化で
+    正準 int 6 と異なるバイト列になり、同一のはずの pinned domain から
+    異なる domain digest / genome_id が出る決定論欠陥になる。"""
+    with pytest.raises(m.Run9ValidationError):
+        m.run9_identity_domain_from_dict(_domain_document(6.0))
+
+
+def test_fix11_coordinate_precision_bool_variant_rejected_by_from_dict() -> None:
+    """item 補足: bool も int のサブクラスとして `== 6` へ黙って通り得るため
+    明示的に拒否する（`True == 1` であって `True == 6` は偽だが、bool 全般
+    が strict int 判定から除外されることを別途確認する）。"""
+    with pytest.raises(m.Run9ValidationError):
+        m.run9_identity_domain_from_dict(_domain_document(True))
+
+
+def test_fix11_coordinate_precision_correct_int_accepted_by_from_dict() -> None:
+    """対照実験: 正準 int 6 は通過する。"""
+    domain = m.run9_identity_domain_from_dict(_domain_document(6))
+    assert domain.coordinate_precision == 6
+    assert type(domain.coordinate_precision) is int
+
+
+def test_fix11_directly_instantiated_domain_with_float_precision_rejected_by_build_founder() -> None:
+    """Codex bot レビュー PR #315 第5巡指摘1: `run9_identity_domain_from_dict()`
+    /`build_run9_identity_domain()` を経由せず `Run9IdentityDomain(...)` を
+    直接インスタンス化し `coordinate_precision=6.0`（float）を持つ偽 domain
+    は、`anchor_hashes`/`metric_space_sha` が64hex揃いで `is_pinned()==True`
+    になっても、`_validate_domain_invariants()` の厳密 int 検査で
+    `build_founder()` が拒否する。"""
+    forged_domain = m.Run9IdentityDomain(
+        schema=m.SCHEMA_IDENTITY_DOMAIN,
+        domain_id=m.RUN9_DOMAIN_ID,
+        anchor_order=m.RUN9_ANCHOR_ORDER,
+        anchor_hashes={"af0": "a" * 64, "ritsu": "b" * 64, "user": "c" * 64},
+        excluded_teacher_identities=m.RUN9_EXCLUDED_TEACHER_IDENTITIES,
+        coordinate_precision=6.0,  # type: ignore[arg-type]
+        normalization=m.RUN9_NORMALIZATION,
+        metric_space_sha="d" * 64,
+        pin_source_candidates={},
+    )
+    assert forged_domain.is_pinned() is True
+    with pytest.raises(m.Run9ValidationError):
+        m.build_founder(forged_domain, "R9F-01")
+
+
+def test_fix11_is_strict_int_helper_excludes_bool_and_float() -> None:
+    assert m._is_strict_int(6) is True
+    assert m._is_strict_int(6.0) is False
+    assert m._is_strict_int(True) is False
+    assert m._is_strict_int(False) is False
+    assert m._is_strict_int("6") is False
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー第5巡対応 — Fix 12: coords の型強制排除
+# ---------------------------------------------------------------------------
+
+
+def test_fix12_coords_string_value_rejected() -> None:
+    """Codex bot レビュー PR #315 第5巡指摘2: coords 値が文字列
+    （例 `"0.6"`）の genome document は拒否される。従来の `float(coords_raw[k])`
+    は文字列を黙って型正規化して受理してしまい、改ざん検出を掲げる
+    `founder_genome_from_dict()` が非正準文書を正典として返す契約矛盾に
+    なっていた。"""
+    domain = _pinned_fixture_domain()
+    genuine = m.build_founder(domain, "R9F-01")
+    forged = genuine.to_dict()
+    forged["coords"] = {"af0": "0.6", "ritsu": "0.3", "user": "0.1"}
+    with pytest.raises(m.Run9ValidationError):
+        m.founder_genome_from_dict(forged, domain=domain)
+
+
+def test_fix12_coords_bool_value_rejected() -> None:
+    """Codex bot レビュー PR #315 第5巡指摘2 補足: coords 値が bool の
+    genome document も拒否される（bool は int のサブクラスのため、
+    `isinstance(value, (int, float))` だけの判定だと素通りしてしまう）。"""
+    domain = _pinned_fixture_domain()
+    genuine = m.build_founder(domain, "R9F-01")
+    forged = genuine.to_dict()
+    forged["coords"] = {"af0": True, "ritsu": 0.3, "user": 0.1}
+    with pytest.raises(m.Run9ValidationError):
+        m.founder_genome_from_dict(forged, domain=domain)
+
+
+def test_fix12_coords_int_value_is_accepted_and_converted_to_float() -> None:
+    """対照実験: JSON の整数値（例 `0`/`1`）は許容し float へ明示変換する
+    （coords の成分は多くが 0.1/0.3/0.6 のような非整数だが、`0`/`1` 自体は
+    実際に barycentric coordinate の頂点値として現れうる — 例えば
+    af0=1.0/ritsu=0.0/user=0.0 の domain では JSON 上 `0`/`1` の整数
+    リテラルとして表現され得る。ここでは `_require_valid_coord_scalar()`
+    自体の単体挙動として int 受理を直接確認する）。"""
+    assert m._require_valid_coord_scalar(0, "coords.af0") == 0.0
+    assert m._require_valid_coord_scalar(1, "coords.user") == 1.0
+    assert isinstance(m._require_valid_coord_scalar(1, "coords.user"), float)
+
+
+def test_fix12_require_valid_coord_scalar_rejects_string_and_bool() -> None:
+    with pytest.raises(m.Run9ValidationError):
+        m._require_valid_coord_scalar("0.6", "coords.af0")
+    with pytest.raises(m.Run9ValidationError):
+        m._require_valid_coord_scalar(True, "coords.af0")
+    with pytest.raises(m.Run9ValidationError):
+        m._require_valid_coord_scalar(False, "coords.af0")
+    assert m._require_valid_coord_scalar(0.6, "coords.af0") == 0.6
+    assert m._require_valid_coord_scalar(1, "coords.user") == 1.0
