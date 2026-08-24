@@ -359,6 +359,76 @@ def test_derive_profile_accepts_deeply_nested_str_only_keys() -> None:
 
 
 # ---------------------------------------------------------------------------
+# derive_profile / partitions: 非 JSON コンテナ（tuple/set/frozenset/bytes
+# 等）の拒否（Codex bot レビュー PR #318 第10巡 Fix 26）
+# ---------------------------------------------------------------------------
+
+
+def test_derive_profile_rejects_tuple_in_updates_top_level() -> None:
+    """必須テスト（Fix 26, 負例1/5）: updates のトップレベル値そのものが
+    tuple の derive は拒否される。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    with pytest.raises(cp.Run9ControlProfileError, match="non-JSON container"):
+        cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": (1, 2)}})
+
+
+def test_derive_profile_rejects_tuple_wrapping_nested_dict_reproduction_case() -> None:
+    """必須テスト（Fix 26, 負例2/5）: 指摘の再現例そのもの
+    （`{"trait_control": {"nested": ({"x": 1},)}}`）を拒否する — tuple 内の
+    ネスト dict が `_deep_freeze()` をすり抜けて凍結を回避し、公開後に
+    `profile.partitions["trait_control"]["nested"][0]["x"] = ...` の直接
+    変異を許してしまう経路そのもの。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    with pytest.raises(cp.Run9ControlProfileError, match="non-JSON container"):
+        cp.derive_profile(
+            r0, "PRACTICE_FROM_AUDIO",
+            {"trait_control": {"nested": ({"x": 1},)}},
+        )
+
+
+def test_derive_profile_rejects_set_in_updates() -> None:
+    """必須テスト（Fix 26, 負例3/5）: set は JSON 表現を持たないため拒否
+    される。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    with pytest.raises(cp.Run9ControlProfileError, match="non-JSON container"):
+        cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": {1, 2, 3}}})
+
+
+def test_derive_profile_rejects_bytes_in_updates() -> None:
+    """必須テスト（Fix 26, 負例4/5）: bytes は JSON 表現を持たないため
+    拒否される。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    with pytest.raises(cp.Run9ControlProfileError, match="non-JSON container"):
+        cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": b"raw"}})
+
+
+def test_from_dict_rejects_tuple_reproduction_case_in_partitions() -> None:
+    """必須テスト（Fix 26, 負例5/5）: from_dict 経路（`_validate_partitions_
+    shape()`）でも指摘の再現例（tuple 内ネスト dict）を拒否する。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    data = child.to_dict()
+    data["partitions"]["trait_control"] = {"nested": [{"x": 1}]}  # to_dict() 経由は list 化されるため
+    # JSON 経由では tuple は表現できないため、直接 Python dict を細工して
+    # `control_profile_from_dict()` へ渡す（改ざん・手組み文書の再現）。
+    data["partitions"]["trait_control"]["nested"] = ({"x": 1},)
+    with pytest.raises(cp.Run9ControlProfileError, match="non-JSON container"):
+        cp.control_profile_from_dict(data)
+
+
+def test_derive_profile_accepts_json_only_deep_nesting_after_fix26() -> None:
+    """正例回帰（Fix 26）: JSON 型（dict/list/str/int/float/bool/None）
+    のみで構成された深いネストは、非 JSON コンテナ検証の追加後も従来どおり
+    受理される。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(
+        r0, "PRACTICE_FROM_AUDIO",
+        {"trait_control": {"a": [1, {"b": [True, None, {"c": 0.5}]}]}},
+    )
+    assert child.partitions["trait_control"]["a"][1]["b"][2]["c"] == 0.5
+
+
+# ---------------------------------------------------------------------------
 # control_profile_from_dict: 改ざん検出・revision 語彙
 # ---------------------------------------------------------------------------
 

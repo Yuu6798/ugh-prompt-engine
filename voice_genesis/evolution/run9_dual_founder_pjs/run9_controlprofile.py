@@ -214,6 +214,58 @@ def _reject_non_str_dict_keys(value: Any, *, path: str) -> None:
     # チェック対象外（本関数はキーの型のみを検証する）。
 
 
+_JSON_SCALAR_TYPES: Tuple[type, ...] = (str, int, float, bool, type(None))
+
+
+def _reject_non_json_container(value: Any, *, path: str) -> None:
+    """`value` の中に dict/list 以外のコンテナ・オブジェクト型（tuple/set/
+    frozenset/bytes 等、JSON が表現できない任意の Python 型）が紛れ込んで
+    いないことを再帰的に検証する（Codex bot レビュー PR #318 第10巡 Fix 26
+    採用）。
+
+    `_reject_non_finite()`/`_reject_non_str_dict_keys()` はいずれも dict/list
+    でのみ再帰し、それ以外の値は「JSON 互換の任意構造」という入力前提を
+    信頼してそのまま素通りする。しかし `{"trait_control": {"nested": ({"x":
+    1},)}}` のような tuple は、`json.dumps()` 経由では array として直列化
+    され hash（`_compute_profile_id()`）には反映される一方、`_deep_freeze()`
+    は dict/list 以外の値をそのまま返す（tuple 自身は再帰的に要素を凍結
+    しない）ため、tuple の中の dict 要素は凍結されずに mutable なまま
+    `Run9ControlProfile.partitions` 内部へ残ってしまう —
+    `profile.partitions["trait_control"]["nested"][0]["x"] = ...` という
+    直接変異が profile_id 不変のまま可能になる（レビュー指摘の再現例その
+    もの）。
+
+    JSON が表現できる型は dict/list/str/int/float/bool/None のみである
+    ため、それ以外の型はホワイトリスト方式で fail-closed に拒否する
+    （`bool` は `int` のサブクラスだが `_JSON_SCALAR_TYPES` 双方に該当する
+    許容型のため、`_reject_non_finite()` と異なりここで bool 専用の分岐は
+    不要）。この検証は `_reject_non_finite()`/`_reject_non_str_dict_keys()`
+    と同じ配線点（`_validate_partitions_shape()` の from_dict 経路、
+    `derive_profile()` の updates 経路）へ独立に追加する第三の walker
+    — `_deep_freeze()` 到達前に必ず通過させることで、非 JSON コンテナが
+    凍結をすり抜ける経路そのものを断つ。
+    """
+    if isinstance(value, dict):
+        for key, sub in value.items():
+            _reject_non_json_container(sub, path=f"{path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, sub in enumerate(value):
+            _reject_non_json_container(sub, path=f"{path}[{index}]")
+        return
+    if isinstance(value, _JSON_SCALAR_TYPES):
+        return
+    raise Run9ControlProfileError(
+        f"{path}: non-JSON container or object type rejected, got {value!r} "
+        f"({type(value).__name__}) — only dict/list/str/int/float/bool/None are representable in a "
+        "ControlProfile partition; tuple/set/frozenset/bytes/other objects would tunnel unfrozen "
+        "mutable state through _deep_freeze() (which passes non-dict/non-list values through "
+        "unchanged) while still serializing into the profile_id hash via json.dumps(), letting "
+        "post-construction mutation of nested containers change partition contents without changing "
+        "profile_id (Fix 26)"
+    )
+
+
 def _deep_freeze(value: Any) -> Any:
     """JSON 互換の任意構造（dict/list/str/int/float/bool/None — `_reject_
     non_finite()` と同じ入力形状の前提）を再帰的に不変化する（Codex bot
@@ -281,6 +333,11 @@ def _validate_partitions_shape(partitions: Any) -> Dict[str, Dict[str, Any]]:
             raise Run9ControlProfileError(
                 f"partitions.{key} must be an object, got {type(value).__name__}"
             )
+        # 非 JSON コンテナの拒否（Codex bot レビュー PR #318 第10巡 Fix 26
+        # 採用）: tuple/set/frozenset/bytes 等が `_deep_freeze()` 到達前に
+        # 紛れ込むのを、値・キーの他の関門より先に断つ —
+        # `_reject_non_json_container()` docstring 参照。
+        _reject_non_json_container(value, path=f"partitions.{key}")
         _reject_non_finite(value, path=f"partitions.{key}")
         # dict キーの str 限定（Codex bot レビュー PR #318 第5巡 Fix 16
         # 採用）: `_reject_non_finite()` は値のみを見るため、整数キー等が
@@ -570,6 +627,13 @@ def derive_profile(
                 f"updates[{partition_key!r}] must be an object, got "
                 f"{type(updates[partition_key]).__name__}"
             )
+        # 非 JSON コンテナの拒否（Codex bot レビュー PR #318 第10巡 Fix 26
+        # 採用）: `_validate_partitions_shape()`（from_dict 側の関門）を
+        # 経由しない builder 側にも同じ関門を独立に配線する
+        # （`_reject_non_finite()`/`_reject_non_str_dict_keys()` の Fix 8/
+        # Fix 16 配線と対称 — `_reject_non_json_container()` docstring
+        # 参照）。
+        _reject_non_json_container(updates[partition_key], path=f"updates.{partition_key}")
         # 非有限値の拒否（Codex bot レビュー PR #318 第2巡 Fix 8 採用）:
         # updates はここでしか検証されない自由形の値であり、
         # `_validate_partitions_shape()`（from_dict 側の関門）を経由しない

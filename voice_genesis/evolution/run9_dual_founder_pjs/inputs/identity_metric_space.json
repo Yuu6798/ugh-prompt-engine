@@ -1,6 +1,6 @@
 {
   "schema": "run9-identity-metric-space/1.1",
-  "metric_version": "run9-identity-metric/0.2",
+  "metric_version": "run9-identity-metric/0.3",
   "canonicalization_method": "json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(\",\", \":\")) — no trailing newline; identical convention to inputs/af0_anchor_manifest.json canonicalization_method (which itself matches voice_genesis/foundry/artificial_founder/af_spec.py canonical_json()). The sha256 of this manifest computed via this method is what domains/identity_domain_run9_v1.json metric_space_sha pins — it is NOT embedded as a field inside this file (self-reference avoided the same way af0_anchor_manifest.json avoids embedding its own hash).",
   "feature_extractor": {
     "name": "WORLD",
@@ -45,9 +45,9 @@
     }
   },
   "identity_feature": {
-    "definition": "P0 中立 identity probe の voiced フレームにおける log スペクトル包絡 (sp) の時間平均ベクトル",
+    "definition": "P0 中立 identity probe の voiced フレームにおける log スペクトル包絡 (sp) の時間平均ベクトル v(x) から、そのスカラー平均 mean(v(x)) を全 bin から差し引いた、レンダーゲインに不変な level 正規化形状ベクトル（level_normalization 参照）",
     "scope": "P0 中立 identity probe（Founder 出生直後の無介入 render、CONTROL/C0 = NO_LEARNING_REPLAY の産物）の voiced フレームのみを対象とする。unvoiced フレームは平均から除外する。",
-    "vector_source": "WORLD 分析の sp（スペクトル包絡）出力を extraction_procedure.log_transform で対数化した後、extraction_procedure.voiced_mask が定義する voiced フレーム軸で時間平均を取ったベクトル（voiced_mask の算出に使う基本周波数の推定値そのものは、このベクトルには含まれない — 除外の根拠は本オブジェクト直下の除外節を参照）。",
+    "vector_source": "WORLD 分析の sp（スペクトル包絡）出力を extraction_procedure.log_transform で対数化した後、extraction_procedure.voiced_mask が定義する voiced フレーム軸で時間平均を取ったベクトル v(x)（voiced_mask の算出に使う基本周波数の推定値そのものは、このベクトルには含まれない — 除外の根拠は本オブジェクト直下の除外節を参照）に、level_normalization が定義するスカラー平均減算を適用した正規化形状ベクトルを identity_feature の実体とする。",
     "f0_exclusion": {
       "excluded": true,
       "rationale": "f0（基本周波数）は identity metric から明示的に除外する。pitch は Trait/Technique 層（DESIGN_RUN9_REVISION_0.3.md 改訂B の三層観測: Phenotype/Trait と Technique/Form）の観測軸であり、identity 距離へ混入させると層間の交絡（例: 稽古による pitch trajectory の変化が誤って Identity drift として計上される）を招く。PoR §2 の層分離（Identity・Trait・Technique を機械的に分離可能な観測軸として扱う）に整合する設計判断。"
@@ -55,6 +55,11 @@
     "aperiodicity": {
       "status": "advisory",
       "note": "WORLD の aperiodicity (ap) 出力は identity 距離の計算には含めない。参考記録（advisory）としてのみ収集し得るが、distance 計算の入力ではない — sp 由来ベクトルのみが identity_feature の正本。"
+    },
+    "level_normalization": {
+      "method": "集約後の時間平均ベクトル v(x) に対する1回のスカラー平均減算（per-frame 正規化ではなく、集約 (voiced フレーム時間平均) の後に1回だけ適用する）。選択理由: 集約後1回の減算は決定論的かつ実装が単純で、ゲイン不変性の達成に必要十分である。per-frame 正規化も同じゲイン不変性を得られるが、フレームごとの瞬時エネルギー変動という別の交絡要因を追加で持ち込み、決定論性の検証コストも増すため、単純さと決定論の両面で集約後1回の方式を採用する。",
+      "formula": "feature(x) = v(x) - mean(v(x))・1",
+      "rationale": "WORLD の sp（スペクトル包絡）出力はパワー領域でレンダーゲインに比例スケールするため、乗法的なレンダーゲイン g は対数変換後の log スペクトル包絡において全 bin へ一様に加算される定数オフセット log(g) として現れる。集約後ベクトル v(x) からそのスカラー平均 mean(v(x)) を全 bin にわたって差し引くことで、この定数オフセットは項として相殺され（ゲイン不変 = gain invariance）、稽古/教育が意図する dynamics・全体ゲインの変化が Euclidean 距離へ漏れ込むことを防ぐ。これにより Technique の dynamics 軸（意図的な音量・強弱変化）が Identity 距離へ混入する交絡を回避する（PoR §2 の層分離に整合）。"
     }
   },
   "distance": {
@@ -86,12 +91,12 @@
       "positive_reference_gate": {
         "id": "validity_gate_positive_reference",
         "condition": "d(positive_reference(F)) <= theta_cal(F)",
-        "positive_reference_definition": "同一 founder F 自身の再レンダー。"
+        "positive_reference_definition": "positive_reference(F) = 当該 founder F 自身の birth probe 時に生成する専用の追加レンダー1テイク。条件: r0（neutral ControlProfile・無学習）、reference_render(F) と同一の生成条件・performance_seed 方針。reference_render(F) 自身ではなく、C0 母集団の20テイク（RUN9_CONTRACT.yaml interventions.c0_replay_takes_per_founder）のいずれでもない、専用に生成・記録される独立テイクである（take label \"positive_reference\" 等で run artifacts に記録し、事後の選び直しを不可能にする）。生成タイミングは birth probe 時（学習介入前）に固定する — 学習後レンダーの使用は明示禁止（学習効果が gate へ混入し校正有効性判定が識別不能になるため）。"
       },
       "negative_reference_gate": {
         "id": "validity_gate_negative_reference",
         "condition": "d(negative_reference(F)) > theta_cal(F)",
-        "negative_reference_definition": "他方 founder のレンダー（PJS は teacher であり RUN9 Identity anchor 空間から構造的に排除済み — negative reference としてのみ利用する）。"
+        "negative_reference_definition": "negative_reference(F) = 他方 founder F' の reference_render(F')（F' 自身の birth probe 時に生成された、学習介入前の独立レンダー — distance_unit.reference_render_definition と同一手続きで固定する）。PJS は teacher であり RUN9 Identity anchor 空間から構造的に排除済み — negative reference としてのみ利用する。"
       },
       "on_failure": "founder F の3ゲートのいずれかが不成立なら calibration_status(F) = INVALID → 当該 founder F の identity 判定は一律 NOT_ESTABLISHED（STABLE_BY_MACHINE_METRIC/SHIFTED を主張しない）。"
     },
@@ -101,7 +106,7 @@
       "boundary": "境界は closed-below（<= は STABLE_BY_MACHINE_METRIC 側）。"
     },
     "worked_example": {
-      "disclaimer": "synthetic illustration — 実測ではない。以下は特定の1 founder F について theta_cal(F) の読み方を示す合成数値例（founder 横断の pooling はしない per-founder 校正の例示）であり、birth probe の実測値ではない。d_c0_samples（n=5 例示）はいずれも reference_render(F) と独立なテイクであり、reference との自己比較（恒等ゼロ距離）の混入を含まない。",
+      "disclaimer": "synthetic illustration — 実測ではない。以下は特定の1 founder F について theta_cal(F) の読み方を示す合成数値例（founder 横断の pooling はしない per-founder 校正の例示）であり、birth probe の実測値ではない。d_c0_samples（n=5 例示）はいずれも reference_render(F) と独立なテイクであり、reference との自己比較（恒等ゼロ距離）の混入を含まない。以下の distance 値は identity_feature.level_normalization 適用後（gain-invariant な level 正規化済み）の距離として読む合成値であり、正規化前の raw ベクトル距離ではない。",
       "d_c0_samples": [0.021, 0.024, 0.026, 0.027, 0.03],
       "theta_cal": 0.0294,
       "theta_cal_derivation": "P95(d_c0_samples) の線形補間 = 0.027 + 0.8*(0.030-0.027) = 0.0294。",

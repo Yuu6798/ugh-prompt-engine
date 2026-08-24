@@ -1313,11 +1313,29 @@ _FEATURE_EXTRACTOR_VERSION_SOURCE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 })
 
 _IDENTITY_FEATURE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
-    "definition", "scope", "vector_source", "f0_exclusion", "aperiodicity",
+    "definition", "scope", "vector_source", "f0_exclusion", "aperiodicity", "level_normalization",
 })
 _IDENTITY_FEATURE_STR_KEYS: Tuple[str, ...] = ("definition", "scope", "vector_source")
 _F0_EXCLUSION_REQUIRED_KEYS: FrozenSet[str] = frozenset({"excluded", "rationale"})
 _APERIODICITY_REQUIRED_KEYS: FrozenSet[str] = frozenset({"status", "note"})
+
+# Codex bot レビュー PR #318 第10巡 Fix 25 採用（P1）: identity feature の
+# レンダーゲイン不変化を凍結する。WORLD の sp はパワー領域でレンダーゲイン
+# に比例スケールするため、raw log 包絡は全 bin に約定数のオフセットが乗り、
+# 稽古/教育が dynamics・全体ゲインだけ変えても Euclidean 距離が閾値超過し
+# 得た（C0 はこの介入起因のエネルギー変化を校正せず、Technique の dynamics
+# 軸と Identity を混同する未凍結の穴）。`level_normalization` 節へ、集約後
+# ベクトルからのスカラー平均減算（gain invariance）を機械可読な形で凍結
+# する。
+_LEVEL_NORMALIZATION_REQUIRED_KEYS: FrozenSet[str] = frozenset({"method", "formula", "rationale"})
+_LEVEL_NORMALIZATION_STR_KEYS: Tuple[str, ...] = ("method", "formula", "rationale")
+# rationale がレンダーゲイン不変化（gain invariance）の理由を明文化して
+# いることを最低限の証拠として要求する。
+_LEVEL_NORMALIZATION_GAIN_MARKER = "ゲイン"
+# formula が「集約後ベクトルからのスカラー平均減算」という凍結した式
+# （feature(x) = v(x) - mean(v(x))・1）であることを要求する — per-frame
+# 正規化のような別方式へこっそり repin されるのを防ぐ。
+_LEVEL_NORMALIZATION_MEAN_SUBTRACTION_MARKER = "mean(v(x))"
 
 _DISTANCE_SECTION_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "method", "definition", "properties", "note",
@@ -1384,6 +1402,31 @@ _SELF_COMPARISON_PROHIBITION_MARKER = "自己比較"
 # reference_render_definition にも、reference が C0/C1 テイクの一員では
 # ないこと（独立レンダーであること）の明文を要求する。
 _REFERENCE_RENDER_NOT_A_TAKE_MARKER = "の一員ではな"
+
+# Codex bot レビュー PR #318 第10巡 Fix 27 採用（P1）: positive/negative
+# reference の生成・選定手続きの凍結。「同一 founder の再レンダー」では
+# 枝・revision・制御条件・テイク・生成タイミングが未指定で、neutral C0
+# レンダーを使う評価者と学習後レンダーを使う評価者で gate が反転し得た。
+# positive_reference_definition が、①専用の追加テイクであること
+# ②reference_render(F) 自身ではないこと ③C0 母集団のいずれのテイクでも
+# ないこと ④生成タイミングが birth probe であること ⑤学習後レンダーの
+# 使用が明示禁止であることを、文言マーカーとして機械強制する。
+_POSITIVE_REFERENCE_DEDICATED_TAKE_MARKER = "専用"
+_POSITIVE_REFERENCE_NOT_REFERENCE_RENDER_ITSELF_MARKER = "reference_render(F) 自身ではなく"
+_POSITIVE_REFERENCE_NOT_C0_MEMBER_MARKER = "いずれでもない"
+_POSITIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER = "birth probe"
+_POSITIVE_REFERENCE_POST_LEARNING_PROHIBITION_MARKER = "学習後レンダーの使用は明示禁止"
+_POSITIVE_REFERENCE_DEFINITION_MARKERS: Tuple[str, ...] = (
+    _POSITIVE_REFERENCE_DEDICATED_TAKE_MARKER,
+    _POSITIVE_REFERENCE_NOT_REFERENCE_RENDER_ITSELF_MARKER,
+    _POSITIVE_REFERENCE_NOT_C0_MEMBER_MARKER,
+    _POSITIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER,
+    _POSITIVE_REFERENCE_POST_LEARNING_PROHIBITION_MARKER,
+)
+# negative_reference_definition も同様に、生成タイミング（birth probe）が
+# 明示されていることを要求する（曖昧な「他方 founder のレンダー」だけでは
+# どの時点のレンダーかが未指定のまま残るため）。
+_NEGATIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER = "birth probe"
 
 _CALIBRATION_WORKED_EXAMPLE_STR_KEYS: Tuple[str, ...] = (
     "disclaimer", "theta_cal_derivation", "c1_gate_result", "positive_reference_gate_result",
@@ -1554,11 +1597,36 @@ def _validate_calibration_section(data: Any) -> None:
         field="calibration.validity_gates.positive_reference_gate",
         definition_key="positive_reference_definition",
     )
+    # Fix 27: positive reference の生成・選定手続きの凍結を文言マーカーで
+    # 機械強制する（docstring 参照）。
+    positive_reference_definition = validity_gates["positive_reference_gate"][
+        "positive_reference_definition"
+    ]
+    for marker in _POSITIVE_REFERENCE_DEFINITION_MARKERS:
+        if marker not in positive_reference_definition:
+            raise Run9ValidationError(
+                "calibration.validity_gates.positive_reference_gate.positive_reference_definition "
+                f"must state {marker!r} (Codex bot レビュー PR #318 第10巡 Fix 27 — pin the "
+                f"positive-reference render selection procedure), got "
+                f"{positive_reference_definition!r}"
+            )
     _validate_calibration_gate(
         validity_gates["negative_reference_gate"],
         field="calibration.validity_gates.negative_reference_gate",
         definition_key="negative_reference_definition",
     )
+    # Fix 27: negative reference にも生成タイミング（birth probe）の明示を
+    # 要求する（同型の曖昧さ再発防止）。
+    negative_reference_definition = validity_gates["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    if _NEGATIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER not in negative_reference_definition:
+        raise Run9ValidationError(
+            "calibration.validity_gates.negative_reference_gate.negative_reference_definition must "
+            f"state its generation timing (expected "
+            f"{_NEGATIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER!r} to appear), got "
+            f"{negative_reference_definition!r} (Codex bot レビュー PR #318 第10巡 Fix 27)"
+        )
 
     decision_rule = _require_dict(calibration["decision_rule"], field="calibration.decision_rule")
     _validate_nested_str_keys(
@@ -1749,6 +1817,32 @@ def _validate_identity_feature(data: Any) -> None:
         )
     _require_non_empty_str(aperiodicity["status"], field="identity_feature.aperiodicity.status")
     _require_non_empty_str(aperiodicity["note"], field="identity_feature.aperiodicity.note")
+
+    # Fix 25: level_normalization 節（gain invariance の凍結）を検証する。
+    level_normalization = _require_dict(
+        identity_feature["level_normalization"], field="identity_feature.level_normalization"
+    )
+    _validate_nested_str_keys(
+        level_normalization,
+        field="identity_feature.level_normalization",
+        keys=_LEVEL_NORMALIZATION_STR_KEYS,
+    )
+    rationale = level_normalization["rationale"]
+    if _LEVEL_NORMALIZATION_GAIN_MARKER not in rationale:
+        raise Run9ValidationError(
+            "identity_feature.level_normalization.rationale must state the render-gain invariance "
+            f"reasoning (expected {_LEVEL_NORMALIZATION_GAIN_MARKER!r} to appear), got {rationale!r} "
+            "(Codex bot レビュー PR #318 第10巡 Fix 25 — WORLD の sp はパワー領域でレンダーゲインに "
+            "比例スケールするため、raw log 包絡は全 bin に約定数のオフセットが乗る)"
+        )
+    formula = level_normalization["formula"]
+    if _LEVEL_NORMALIZATION_MEAN_SUBTRACTION_MARKER not in formula:
+        raise Run9ValidationError(
+            "identity_feature.level_normalization.formula must be the frozen scalar-mean-subtraction "
+            f"form (expected {_LEVEL_NORMALIZATION_MEAN_SUBTRACTION_MARKER!r} to appear), got "
+            f"{formula!r} (Codex bot レビュー PR #318 第10巡 Fix 25 — per-frame 正規化等への無断置換 "
+            "を防ぐ)"
+        )
 
 
 def _validate_distance_section(data: Any) -> None:

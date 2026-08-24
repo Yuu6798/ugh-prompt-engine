@@ -3974,7 +3974,7 @@ def test_phase3_identity_metric_space_file_exists_and_is_valid_json() -> None:
     assert IDENTITY_METRIC_SPACE_PATH.exists()
     data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
     assert data["schema"] == "run9-identity-metric-space/1.1"
-    assert data["metric_version"] == "run9-identity-metric/0.2"
+    assert data["metric_version"] == "run9-identity-metric/0.3"
     m.validate_identity_metric_space_manifest(data)  # raises on any shape defect
 
 
@@ -5024,3 +5024,206 @@ def test_fix24_validator_still_rejects_log_transform_unknown_key_after_allowed_k
         m.Run9ValidationError, match=r"log_transform has unknown key.*extra_unexpected_field"
     ):
         m.validate_identity_metric_space_manifest(doc)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第10巡 Fix 25（P1）: identity feature のゲイン
+# 不変化を凍結する。WORLD の sp はパワー領域でレンダーゲインに比例スケール
+# するため、raw log 包絡は全 bin に約定数のオフセットが乗り、稽古/教育が
+# dynamics/全体ゲインだけ変えても Euclidean 距離が閾値超過し得た
+# （Technique の dynamics 軸と Identity の混同）。identity_feature に
+# level_normalization 節（集約後ベクトルへの1回のスカラー平均減算）を新設
+# し、validator が gain invariance の理由 + 凍結した式を機械強制する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix25_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix25_metric_version_bumped_to_0_3() -> None:
+    """feature 定義の意味変更（level 正規化の導入）に伴い metric_version が
+    bump されていることを確認する。"""
+    data = _valid_metric_space_doc()
+    assert data["metric_version"] == "run9-identity-metric/0.3"
+
+
+def test_fix25_identity_feature_definition_states_gain_invariance() -> None:
+    data = _valid_metric_space_doc()
+    definition = data["identity_feature"]["definition"]
+    assert "mean(v(x))" in definition
+    assert "レンダーゲイン" in definition or "ゲイン" in definition
+
+
+def test_fix25_level_normalization_formula_is_scalar_mean_subtraction() -> None:
+    data = _valid_metric_space_doc()
+    level_normalization = data["identity_feature"]["level_normalization"]
+    assert level_normalization["formula"] == "feature(x) = v(x) - mean(v(x))・1"
+
+
+def test_fix25_level_normalization_rationale_explains_gain_invariance_mechanism() -> None:
+    data = _valid_metric_space_doc()
+    rationale = data["identity_feature"]["level_normalization"]["rationale"]
+    assert "ゲイン" in rationale
+    assert "log" in rationale.lower()
+
+
+def test_fix25_level_normalization_method_justifies_aggregate_once_choice() -> None:
+    """per-frame 正規化ではなく集約後1回の減算を選んだ理由が明記されている
+    ことを確認する（凍結裁定の一部）。"""
+    data = _valid_metric_space_doc()
+    method = data["identity_feature"]["level_normalization"]["method"]
+    assert "per-frame" in method
+    assert "集約後" in method
+
+
+def test_fix25_worked_example_disclaimer_notes_normalized_distances() -> None:
+    data = _valid_metric_space_doc()
+    disclaimer = data["calibration"]["worked_example"]["disclaimer"]
+    assert "level_normalization" in disclaimer
+    assert "gain-invariant" in disclaimer
+
+
+def test_fix25_validator_rejects_identity_feature_missing_level_normalization() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["identity_feature"]["level_normalization"]
+    with pytest.raises(m.Run9ValidationError, match="identity_feature missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix25_validator_rejects_level_normalization_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["level_normalization"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"level_normalization has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix25_validator_rejects_rationale_missing_gain_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["level_normalization"]["rationale"] = (
+        "log スペクトル包絡の平均を差し引くことで一定のオフセットを除去する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="render-gain invariance"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix25_validator_rejects_formula_replaced_by_per_frame_normalization() -> None:
+    """凍結した式（集約後1回のスカラー平均減算）以外への無断置換
+    （例: per-frame 正規化への repin）を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["level_normalization"]["formula"] = (
+        "feature(x, t) = v(x, t) - mean_bin(v(x, t))・1  # per-frame"
+    )
+    with pytest.raises(m.Run9ValidationError, match="frozen scalar-mean-subtraction"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix25_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 25/Fix 27 の文言改訂後、`metric_space_sha` は
+    `identity_metric_space.json` の正規形 sha256 を再計算した値と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第10巡 Fix 27（P1）: positive/negative reference
+# の生成・選定手続きを凍結する。「同一 founder の再レンダー」では枝・
+# revision・制御条件・テイク・生成タイミングが未指定で、neutral C0 レンダー
+# を使う評価者と学習後レンダーを使う評価者で gate が反転し得た。
+# ---------------------------------------------------------------------------
+
+
+def test_fix27_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix27_positive_reference_definition_is_dedicated_independent_take() -> None:
+    data = _valid_metric_space_doc()
+    positive_reference_definition = data["calibration"]["validity_gates"]["positive_reference_gate"][
+        "positive_reference_definition"
+    ]
+    assert "専用" in positive_reference_definition
+    assert "reference_render(F) 自身ではなく" in positive_reference_definition
+    assert "いずれでもない" in positive_reference_definition
+
+
+def test_fix27_positive_reference_definition_pins_birth_probe_timing_and_forbids_post_learning() -> None:
+    data = _valid_metric_space_doc()
+    positive_reference_definition = data["calibration"]["validity_gates"]["positive_reference_gate"][
+        "positive_reference_definition"
+    ]
+    assert "birth probe" in positive_reference_definition
+    assert "学習後レンダーの使用は明示禁止" in positive_reference_definition
+
+
+def test_fix27_negative_reference_definition_pins_birth_probe_timing() -> None:
+    data = _valid_metric_space_doc()
+    negative_reference_definition = data["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    assert "birth probe" in negative_reference_definition
+
+
+def test_fix27_validator_rejects_positive_reference_definition_reproduction_case() -> None:
+    """指摘の再現例そのもの: 旧文言「同一 founder F 自身の再レンダー。」は
+    5マーカーのいずれも含まない。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["positive_reference_gate"][
+        "positive_reference_definition"
+    ] = "同一 founder F 自身の再レンダー。"
+    with pytest.raises(m.Run9ValidationError, match="positive_reference_definition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+_POSITIVE_REFERENCE_MARKER_PHRASES: Dict[str, str] = {
+    "専用": "専用の追加レンダー",
+    "reference_render(F) 自身ではなく": "reference_render(F) 自身ではなく",
+    "いずれでもない": "C0 母集団のいずれでもない",
+    "birth probe": "birth probe 時に生成する",
+    "学習後レンダーの使用は明示禁止": "学習後レンダーの使用は明示禁止",
+}
+
+
+@pytest.mark.parametrize("missing_marker", list(_POSITIVE_REFERENCE_MARKER_PHRASES))
+def test_fix27_validator_rejects_positive_reference_definition_missing_one_marker(
+    missing_marker: str,
+) -> None:
+    """5マーカーのうち1つだけを個別に欠落させ、他4件は残した文言でも拒否
+    されることを確認する（各マーカーが独立に enforce されていることの
+    確認 — 全マーカー一括欠落だけでは他マーカーのチェックがショート
+    サーキットで通過していないかを見分けられない）。"""
+    doc = _valid_metric_space_doc()
+    included = [
+        phrase
+        for marker, phrase in _POSITIVE_REFERENCE_MARKER_PHRASES.items()
+        if marker != missing_marker
+    ]
+    doc["calibration"]["validity_gates"]["positive_reference_gate"]["positive_reference_definition"] = (
+        "positive_reference(F) = " + "。".join(included) + "。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="positive_reference_definition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix27_validator_rejects_negative_reference_definition_missing_timing() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ] = (
+        "他方 founder のレンダー（PJS は teacher であり RUN9 Identity anchor 空間から構造的に"
+        "排除済み — negative reference としてのみ利用する）。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="generation timing"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix27_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認（Fix 25 と共通の repin — 同ラウンドで両方改訂）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
