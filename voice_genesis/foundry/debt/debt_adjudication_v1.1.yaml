@@ -3,6 +3,16 @@ date: "2026-08-22"
 adjudicator: User
 supersedes: DEBT_REPAYMENT_PLAN_v1.0.md  # 乖離時は本記録が勝つ
 
+# 上の date/adjudicator は原裁定 (2026-08-22・User) のもの。追補で加わった
+# キーの provenance は下の amendments が正 (継承させない。PR #314 第 10 巡)
+amendments:
+  - date: "2026-08-24"
+    adjudicator: "Fable (User 実行委任 2026-08-24)"
+    reference: "DEBT_ADJUDICATION_v1.1.md §8"
+    adds:
+      - fixed_probe.freeze_mode_vocabulary
+      - fixed_probe.freeze_mode_assignments
+
 vocabulary:
   c0_c3_symbols: prohibited
   canonical_field: causal_evidence_strength
@@ -12,6 +22,11 @@ vocabulary:
 
 fixed_probe:
   default_freeze_mode: pinned_regenerable
+  freeze_mode_vocabulary:  # 追補裁定 2026-08-24 (§8): 環境境界が実測済みの artifact 用に拡張
+    - pinned_regenerable
+    - pinned_environment_bounded
+  freeze_mode_assignments:  # §8 参照方式適用の機械可読正本 (artifact バイトは凍結のまま。PR #314 第 9 巡)
+    voice_genesis/foundry/results_s3/run4_export_device_probe_2026-08-23.json: pinned_environment_bounded
   git_wav_required: false
   exact_hash_verification_required: true
 
