@@ -1,0 +1,40 @@
+{
+  "schema": "run9-branch-write-policy/1.0",
+  "description": "RUN9 rev 0.3 改訂A（User 外部レビュー PR #317 P1-1 採用）の枝別書込境界。ControlProfile の可変領域を型付き state partition へ分割し、枝ごとの書込許可を機械可読に固定する。本ファイルの内容は run9_schema.py の STATE_PARTITIONS / IMMUTABLE_STATE_PARTITIONS / BRANCH_WRITABLE_PARTITIONS / BRANCH_IMMUTABLE_ARTIFACTS 定数と完全一致することを validate_branch_write_policy_manifest() が強制する（改変時は load 失敗）。",
+  "state_partitions": [
+    "IDENTITY_STATE",
+    "TRAIT_CONTROL",
+    "TECHNIQUE_CONTROL"
+  ],
+  "state_partition_meaning": {
+    "IDENTITY_STATE": "誰の声として出生したか（Genome/anchor構成・出生時の声質方向）。全枝で書込不可。",
+    "TRAIT_CONTROL": "明示的に許可された発声制御領域の後天的変化（speaker embedding や Genome の変更ではない）。",
+    "TECHNIQUE_CONTROL": "歌唱の型・技術を表す制御パラメータ領域（timing/pitch trajectory/dynamics等）。"
+  },
+  "immutable_state_partitions": [
+    "IDENTITY_STATE"
+  ],
+  "branch_writable_partitions": {
+    "CONTROL": [],
+    "PRACTICE_FROM_AUDIO": [
+      "TRAIT_CONTROL",
+      "TECHNIQUE_CONTROL"
+    ],
+    "TRANSFER_TECHNIQUE": [
+      "TECHNIQUE_CONTROL"
+    ]
+  },
+  "immutable_artifacts": [
+    "shared_backbone",
+    "founder_genome",
+    "identity_coordinate",
+    "speaker_embedding",
+    "model_weights",
+    "r0_bytes"
+  ],
+  "immutable_artifacts_rationale": "全枝で不変。稽古(PRACTICE_FROM_AUDIO)で許すTrait変化は、これらのいずれでもない — TRAIT_CONTROL partition内の明示的に許可された発声制御領域の後天的変化に限定される。教育(TRANSFER_TECHNIQUE)はTECHNIQUE_CONTROLのみ書込可能であり、型だけの伝達でありTraitは書き換えない。",
+  "enforcement": {
+    "loader": "run9_schema.validate_branch_write_policy_manifest(data) — 定数との完全一致を強制。不一致は Run9ValidationError。",
+    "write_check": "run9_schema.validate_branch_write(branch, partition) — 枝が許可外partitionへ書込もうとした場合にRun9ValidationErrorでfail-closed拒否。将来のpractice/education builderが呼ぶ正本API。"
+  }
+}

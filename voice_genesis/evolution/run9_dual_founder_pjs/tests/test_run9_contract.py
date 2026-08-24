@@ -27,7 +27,16 @@ import run9_schema as m  # noqa: E402
 CONTRACT_PATH = _RUN_DIR / "RUN9_CONTRACT.yaml"
 DOMAIN_DRAFT_PATH = _RUN_DIR / "domains" / "identity_domain_run9_v1.json"
 DESIGN_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md"
-REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
+# 現行 design_revision (0.3) の差分メモ。design_revision_doc_sha256 が
+# pin する対象。
+REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.3.md"
+# rev 0.2 文書は無改変のまま存続する（design_revision 系譜の1件）。
+REVISION_0_2_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
+POR_ADJUDICATION_PATH = _RUN_DIR / "POR_CONCEPT_ADJUDICATION_20260824.txt"
+POR_UPLOAD_SOURCE_PATH = Path(
+    "/root/.claude/uploads/e505c1c2-c4ad-588b-a1b2-258051a522de/"
+    "4cdd727c-RUN9_v0.2_PoR_Concept_Adjudication_20260824.txt"
+)
 AF0_ANCHOR_MANIFEST_PATH = _RUN_DIR / "inputs" / "af0_anchor_manifest.json"
 RIGHTS_MANIFEST_PATH = _RUN_DIR / "inputs" / "rights_manifest.json"
 BACKBONE_BUNDLE_PATH = _RUN_DIR / "inputs" / "backbone_runtime_bundle.json"
@@ -102,7 +111,7 @@ def test_item02_unknown_pin_field_subkeys_fail_closed(contract_raw: Dict[str, An
 def test_item02_missing_required_contract_field_fail_closed(contract_raw: Dict[str, Any]) -> None:
     """item 2 補足: 必須欄の欠落も fail-closed で拒否される（デフォルト補完なし）。"""
     tampered = copy.deepcopy(contract_raw)
-    del tampered["lesson_sha"]
+    del tampered["education_technique_lesson_manifest_sha"]
     with pytest.raises(m.Run9ValidationError):
         m.load_run9_contract(tampered)
 
@@ -428,9 +437,71 @@ def test_item49_single_pending_pre_run_field_blocks_gate(contract_raw: Dict[str,
 
     # 1つの pre-run 欄を PENDING へ戻すと BLOCKED になる。
     regressed = copy.deepcopy(fully_pinned)
-    regressed["lesson_sha"] = {"value": None, "status": "PENDING", "reason": "regressed"}
+    regressed["education_technique_lesson_manifest_sha"] = {"value": None, "status": "PENDING", "reason": "regressed"}
     contract_blocked = m.load_run9_contract(regressed)
     assert m.gate_state(contract_blocked) == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第1巡対応 — Fix 1:
+# human_evaluation_protocol_sha の optional 化
+# ---------------------------------------------------------------------------
+
+
+def test_fix1_human_evaluation_protocol_sha_is_declared_optional() -> None:
+    assert m.CONTRACT_OPTIONAL_PIN_FIELDS == frozenset({"human_evaluation_protocol_sha"})
+
+
+def test_fix1_optional_field_pending_does_not_block_ready(contract_raw: Dict[str, Any]) -> None:
+    """rev 0.3 改訂F（人間知覚 Gate 非必須化）: `human_evaluation_protocol_sha`
+    だけが PENDING でも、他の pre-run 欄が全て PINNED なら gate_state() は
+    READY になる（optional 欄は必須判定から除外される — post-run 欄とは
+    別の第3分類として扱われることの直接確認）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    fully_pinned["human_evaluation_protocol_sha"] = {
+        "value": None,
+        "status": "PENDING",
+        "reason": "advisory audit not planned for this attempt",
+    }
+    contract = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract) == "READY"
+
+
+def test_fix1_optional_field_pinned_still_allows_ready(contract_raw: Dict[str, Any]) -> None:
+    """対照実験: optional 欄を PINNED にしても（advisory 監査を実施した
+    場合）READY を妨げない — optional は「pin してはいけない」欄ではなく
+    「pin しなくても良い」欄であることの確認。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    contract = m.load_run9_contract(fully_pinned)
+    assert fully_pinned["human_evaluation_protocol_sha"]["status"] == "PINNED"
+    assert m.gate_state(contract) == "READY"
+
+
+def test_fix1_current_contract_still_blocked_by_other_pending_fields(
+    contract: m.Run9RunContract,
+) -> None:
+    """現行 RUN9_CONTRACT.yaml は human_evaluation_protocol_sha の optional
+    化だけでは READY にならない（他の多数の pre-run 欄が依然 PENDING —
+    User rights attest 待ち・VG-L0 ハーネス未実装のため）。"""
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_fix1_current_contract_human_evaluation_protocol_sha_reason_documents_optional(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["human_evaluation_protocol_sha"]
+    assert field["status"] == "PENDING"
+    assert "optional" in field["reason"].lower()
+
+
+def test_fix1_optional_field_excluded_from_pre_run_required_set() -> None:
+    excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
+    pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
+    assert "human_evaluation_protocol_sha" not in pre_run_fields
+    assert "artifact_manifest_sha" not in pre_run_fields
+    assert "cost_record_sha" not in pre_run_fields
+    # optional と post-run は互いに素であること（同一欄が両分類に属さない）。
+    assert not (m.CONTRACT_POST_RUN_PIN_FIELDS & m.CONTRACT_OPTIONAL_PIN_FIELDS)
 
 
 # ---------------------------------------------------------------------------
@@ -710,17 +781,17 @@ def test_fix4_load_run9_contract_deepcopies_input(contract_raw: Dict[str, Any]) 
     （浅いコピーだとネスト dict が共有されたままになる）。"""
     fresh_raw = copy.deepcopy(contract_raw)
     contract = m.load_run9_contract(fresh_raw)
-    fresh_raw["lesson_sha"]["status"] = "PINNED"
-    fresh_raw["lesson_sha"]["value"] = "z" * 64  # 非hexだが元dict側だけの改変
-    assert contract.raw["lesson_sha"]["status"] == "PENDING"
-    assert contract.raw["lesson_sha"] is not fresh_raw["lesson_sha"]
+    fresh_raw["education_technique_lesson_manifest_sha"]["status"] = "PINNED"
+    fresh_raw["education_technique_lesson_manifest_sha"]["value"] = "z" * 64  # 非hexだが元dict側だけの改変
+    assert contract.raw["education_technique_lesson_manifest_sha"]["status"] == "PENDING"
+    assert contract.raw["education_technique_lesson_manifest_sha"] is not fresh_raw["education_technique_lesson_manifest_sha"]
 
 
 def test_fix4_gate_state_revalidates_and_rejects_direct_raw_tampering(
     contract_raw: Dict[str, Any],
 ) -> None:
     """Codex bot レビュー PR #315 第2巡指摘1(b): 正常 load 後に
-    `contract.raw["lesson_sha"]["status"]` を直接 "PINNED" へ書き換えても
+    `contract.raw["education_technique_lesson_manifest_sha"]["status"]` を直接 "PINNED" へ書き換えても
     （value は null のまま）、`gate_state()` は毎回 `contract.raw` を
     `load_run9_contract()` で再検証するため Run9ValidationError を送出する
     （load 済みオブジェクトの raw を直接書き換えて READY を騙る経路の閉塞。
@@ -728,7 +799,7 @@ def test_fix4_gate_state_revalidates_and_rejects_direct_raw_tampering(
     contract を使う）。"""
     fresh_raw = copy.deepcopy(contract_raw)
     contract = m.load_run9_contract(fresh_raw)
-    contract.raw["lesson_sha"]["status"] = "PINNED"  # value は null のまま
+    contract.raw["education_technique_lesson_manifest_sha"]["status"] = "PINNED"  # value は null のまま
     with pytest.raises(m.Run9ValidationError):
         m.gate_state(contract)
 
@@ -742,35 +813,84 @@ def test_fix4_gate_state_still_works_on_untampered_contract(contract_raw: Dict[s
 
 
 # ---------------------------------------------------------------------------
-# PR #315 Codex bot レビュー第2巡対応 — Fix 5: changed_edge の凍結値強制
+# PR #315 Codex bot レビュー第2巡対応 — Fix 5: 単一介入エッジの凍結値強制
+# （rev 0.3 改訂A、PoR §1/§3/§4 により `single_intervention.changed_edge`
+# 単数から `interventions.edges`[2] + `control_branch` へ改訂 — 定数名も
+# `CHANGED_EDGE` から `INTERVENTION_EDGES`/`CONTROL_BRANCH` へ移行）
 # ---------------------------------------------------------------------------
 
 
-def test_fix5_changed_edge_constant_matches_contract() -> None:
-    assert m.CHANGED_EDGE == "LEARN_PERFORMANCE"
+def test_fix5_intervention_edges_constant_matches_contract() -> None:
+    assert m.INTERVENTION_EDGES == ("PRACTICE_FROM_AUDIO", "TRANSFER_TECHNIQUE")
 
 
-def test_fix5_current_contract_changed_edge_is_frozen_value(contract_raw: Dict[str, Any]) -> None:
-    assert contract_raw["single_intervention"]["changed_edge"] == m.CHANGED_EDGE
+def test_fix5_control_branch_constant_matches_contract() -> None:
+    assert m.CONTROL_BRANCH == "CONTROL"
 
 
-def test_fix5_changed_edge_tampering_rejected(contract_raw: Dict[str, Any]) -> None:
-    """Codex bot レビュー PR #315 第2巡指摘2: `changed_edge` を
-    `"REPLACE_IDENTITY"` 等の別エッジへ差し替えた fixture は拒否される
-    （DESIGN_RUN9 §23 で凍結された単一介入エッジの改変防止）。"""
+def test_fix5_birth_edge_constant_is_inherit_trait() -> None:
+    assert m.BIRTH_EDGE == "INHERIT_TRAIT"
+
+
+def test_fix5_current_contract_intervention_edges_is_frozen_value(
+    contract_raw: Dict[str, Any],
+) -> None:
+    assert tuple(contract_raw["interventions"]["edges"]) == m.INTERVENTION_EDGES
+
+
+def test_fix5_current_contract_control_branch_is_frozen_value(
+    contract_raw: Dict[str, Any],
+) -> None:
+    assert contract_raw["interventions"]["control_branch"] == m.CONTROL_BRANCH
+
+
+def test_fix5_intervention_edges_tampering_rejected(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 第2巡指摘2 の rev 0.3 版: `edges` を
+    別のエッジ集合へ差し替えた fixture は拒否される（PoR §3/§4 で凍結
+    された二介入エッジの改変防止）。"""
     tampered = copy.deepcopy(contract_raw)
-    tampered["single_intervention"]["changed_edge"] = "REPLACE_IDENTITY"
+    tampered["interventions"]["edges"] = ["REPLACE_IDENTITY", "TRANSFER_TECHNIQUE"]
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix5_intervention_edges_order_swap_rejected(contract_raw: Dict[str, Any]) -> None:
+    """`edges` は要素だけでなく順序も INTERVENTION_EDGES と厳密一致を
+    要求する（parent_designs と同型の順序込み終端規律）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"]["edges"] = ["TRANSFER_TECHNIQUE", "PRACTICE_FROM_AUDIO"]
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix5_control_branch_tampering_rejected(contract_raw: Dict[str, Any]) -> None:
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"]["control_branch"] = "NO_INTERVENTION"
     with pytest.raises(m.Run9ValidationError):
         m.load_run9_contract(tampered)
 
 
 def test_fix5_blank_description_rejected(contract_raw: Dict[str, Any]) -> None:
     """Codex bot レビュー PR #315 第2巡指摘2 補足: `description` も
-    非空文字列を強制する。"""
+    非空文字列を強制する（rev 0.3 の `interventions.description`）。"""
     tampered = copy.deepcopy(contract_raw)
-    tampered["single_intervention"]["description"] = "   "
+    tampered["interventions"]["description"] = "   "
     with pytest.raises(m.Run9ValidationError):
         m.load_run9_contract(tampered)
+
+
+def test_fix5_old_single_intervention_format_rejected(contract_raw: Dict[str, Any]) -> None:
+    """rev 0.3: 旧形式（`single_intervention.changed_edge`）を宣言する
+    contract は fail-closed で拒否される。`interventions` キーの欠落
+    （未知キー `single_intervention` の混入と対）で拒否される想定。"""
+    legacy = copy.deepcopy(contract_raw)
+    del legacy["interventions"]
+    legacy["single_intervention"] = {
+        "description": "legacy single-edge format",
+        "changed_edge": "LEARN_PERFORMANCE",
+    }
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(legacy)
 
 
 # ---------------------------------------------------------------------------
@@ -1301,15 +1421,15 @@ def test_fix16_parent_designs_exact_canonical_list_accepted(contract_raw: Dict[s
 
 
 def test_fix17_yaml_duplicate_top_level_key_rejected() -> None:
-    """Codex bot レビュー PR #315 第8巡指摘1: PENDING の `lesson_sha` の後に
-    PINNED の `lesson_sha` を書き足した手編集 yaml（last-key-wins だと
+    """Codex bot レビュー PR #315 第8巡指摘1: PENDING の `education_technique_lesson_manifest_sha` の後に
+    PINNED の `education_technique_lesson_manifest_sha` を書き足した手編集 yaml（last-key-wins だと
     後者だけが検証対象になり READY へ到達し得た）は、`_StrictYAMLLoader`
     が重複キー段階で拒否する（構造検証まで到達しない）。"""
     tampered_yaml_text = """
-lesson_sha:
+education_technique_lesson_manifest_sha:
   value: null
   status: PENDING
-lesson_sha:
+education_technique_lesson_manifest_sha:
   value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   status: PINNED
 """
@@ -1322,7 +1442,7 @@ def test_fix17_yaml_duplicate_nested_key_rejected() -> None:
     （ネストした mapping ノード）の `status` 重複も検出される —
     `construct_mapping` は全 mapping ノードへ再帰的に呼ばれるため。"""
     tampered_yaml_text = """
-lesson_sha:
+education_technique_lesson_manifest_sha:
   value: null
   status: PENDING
   status: PINNED
@@ -1383,15 +1503,19 @@ def _sha256_canonical_json(obj: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-# --- item 1: design_revision 0.2 での contract load 成功 / "0.1" 拒否 -------
+# --- item 1: design_revision 0.3 での contract load 成功 / "0.1"/"0.2" 拒否 -
 
 
 def test_revision02_design_revision_constant_is_0_2() -> None:
-    assert m.DESIGN_REVISION == "0.2"
+    """rev 0.3 では `run9_schema.DESIGN_REVISION` 自体が "0.3" を凍結する
+    （テスト名は歴史的に revision02_ prefix のまま — Fix 15 の
+    founder_genome_shas 改名前例と同様、rename ではなく assertion のみ
+    更新する）。"""
+    assert m.DESIGN_REVISION == "0.3"
 
 
 def test_revision02_current_contract_declares_0_2(contract_raw: Dict[str, Any]) -> None:
-    assert contract_raw["design_revision"] == "0.2"
+    assert contract_raw["design_revision"] == "0.3"
     m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
 
 
@@ -1405,10 +1529,89 @@ def test_revision02_old_0_1_contract_rejected(contract_raw: Dict[str, Any]) -> N
         m.load_run9_contract(tampered)
 
 
+def test_revision03_old_0_2_contract_rejected(contract_raw: Dict[str, Any]) -> None:
+    """design_revision 0.2 → 0.3（PoR メモ編入）: 旧 "0.2" を宣言する
+    contract も同様に意図どおり拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["design_revision"] = "0.2"
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_revision03_old_0_2_contract_rejection_message_names_current_revision(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """PR #317 Codex bot レビュー第1巡 Fix 2 採用: 拒否メッセージが固定
+    ファイル名（例: "DESIGN_RUN9_REVISION_0.2.md"）をハードコードして
+    いると、design_revision を上げるたびにメッセージ内のファイル名だけが
+    陳腐化する（実際に 0.2 -> 0.3 進行時に発生した不備）。メッセージが
+    `DESIGN_REVISION` 定数（現在は "0.3"）から動的に導出されていること
+    を、"0.2" 拒否時のメッセージに現行の "0.3" が含まれることで確認する
+    — メッセージが旧値のまま固定化されていれば失敗する。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["design_revision"] = "0.2"
+    with pytest.raises(m.Run9ValidationError, match="0.3"):
+        m.load_run9_contract(tampered)
+
+
 def test_revision02_doc_sha256_pin_matches_actual_file(contract_raw: Dict[str, Any]) -> None:
     field = contract_raw["design_revision_doc_sha256"]
     assert field["status"] == "PINNED"
     assert field["value"] == _sha256_file(REVISION_DOC_PATH)
+
+
+def test_revision03_por_adjudication_sha256_pin_matches_actual_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["por_adjudication_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(POR_ADJUDICATION_PATH)
+
+
+def test_revision03_rev02_doc_is_byte_unchanged() -> None:
+    """rev 0.2 文書（DESIGN_RUN9_REVISION_0.2.md）は rev 0.3 発行後も
+    無改変・存続する — DESIGN_RUN9_REVISION_0.3.md「design_revision 系譜」
+    表に記録した固定 sha256 と一致することを確認する。"""
+    assert _sha256_file(REVISION_0_2_DOC_PATH) == (
+        "406098e2ac62065855b7e4086fce769a2956b64606594ad83b63b527a23ad4fb"
+    )
+
+
+def test_revision03_por_adjudication_byte_identical_to_upload_source() -> None:
+    """PoR メモの repo コピーが uploads 原本とバイト同一であること。
+    uploads パスはセッション固有・一時的なものであり CI/他環境には存在
+    しないため、原本が実在するときだけ検証する（原本非存在時はこの
+    テスト自体は無条件 pass — 恒久的な回帰保護は
+    `por_adjudication_sha256` の固定 pin 値と本テストファイル中の
+    frozen literal（下記 test_revision03_por_adjudication_sha256_is_frozen_value）
+    が担う）。
+
+    存在確認は `Path.exists()` の戻り値だけで判定しない（CI runner 実測
+    2026-08-24: GitHub Actions 上の `/root/.claude/uploads/...` への
+    stat が `PermissionError` を送出し、`exists()` が False を返す経路を
+    経由せず素通しで例外が伝播していた — `Path.exists()` は権限拒否時に
+    OSError を上げる場合がある。`OSError` を捕捉して「存在しない」扱いに
+    正規化してから skip する）。
+    """
+    try:
+        source_available = POR_UPLOAD_SOURCE_PATH.exists()
+    except OSError:
+        source_available = False
+    if not source_available:
+        pytest.skip(
+            f"upload source not present or not accessible in this environment: "
+            f"{POR_UPLOAD_SOURCE_PATH}"
+        )
+    assert _sha256_file(POR_ADJUDICATION_PATH) == _sha256_file(POR_UPLOAD_SOURCE_PATH)
+
+
+def test_revision03_por_adjudication_sha256_is_frozen_value() -> None:
+    """uploads パスに依存しない恒久的な回帰保護: repo コピーの実測 sha256
+    が、編入時に確認した固定値（RUN9_CONTRACT.yaml の
+    por_adjudication_sha256 pin と同一）と一致すること。"""
+    assert _sha256_file(POR_ADJUDICATION_PATH) == (
+        "56b66fd8df943fbfa98767f2ea481c0ba2a68c26916832e08517379408d97007"
+    )
 
 
 def test_revision02_v0_1_design_doc_is_byte_unchanged(contract_raw: Dict[str, Any]) -> None:
@@ -1428,8 +1631,13 @@ def test_revision02_adapter_to_controlprofile_correspondence_map_present() -> No
     （38c0e0f, 掃討完結、採用）: REVISION_0.2 が v0.1 の Adapter 固有条項
     11項目それぞれについて ControlProfile 等価物への明示的置換表を持つ
     ことのキーワード存在検査（過剰な文言テストは避け、各項目を機械的に
-    識別できる語彙が本文に存在することだけを確認する）。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    識別できる語彙が本文に存在することだけを確認する）。rev 0.2 文書自体は
+    rev 0.3 発行後も無改変で存続するため、`REVISION_0_2_DOC_PATH`
+    （固定 sha256 = `test_revision03_rev02_doc_is_byte_unchanged` が別途
+    検証）を対象にする — `REVISION_DOC_PATH` は現行 design_revision
+    （rev 0.3）を指すよう rev 0.3 編入時に更新済みのため、本テストの対象を
+    誤って rev 0.3 文書へ切り替えない。"""
+    doc = REVISION_0_2_DOC_PATH.read_text(encoding="utf-8")
     assert "本表（rev 0.2）が勝つ" in doc  # 前文: v0.1 と矛盾する場合の優先規則
     required_keywords = [
         "BLOCKED_CONTROLPROFILE_ENTRY",  # item 1: Adapter Entry Gate -> ControlProfile Entry Gate
@@ -1450,8 +1658,9 @@ def test_revision02_adapter_to_controlprofile_correspondence_map_present() -> No
 
 def test_revision02_adapter_sweep_completeness_declared() -> None:
     """Codex bot レビュー PR #316 第8巡指摘B: v0.1 全文の `grep -in adapter`
-    掃討の網羅性宣言がソース中に明文化されていること。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    掃討の網羅性宣言がソース中に明文化されていること（rev 0.2 文書対象。
+    上のテストと同じ理由で REVISION_0_2_DOC_PATH を使う）。"""
+    doc = REVISION_0_2_DOC_PATH.read_text(encoding="utf-8")
     assert "grep -in adapter" in doc
     assert "未マップの実行要件は残っていない" in doc
 
@@ -1471,11 +1680,15 @@ def test_revision02_v0_1_adapter_line_count_matches_swept_total() -> None:
 
 
 def test_revision02_new_pin_fields_get_64hex_format_enforced(contract_raw: Dict[str, Any]) -> None:
-    """新欄2つ（design_revision_doc_sha256 / backbone_runtime_bundle_sha）は
-    欄名が `_sha256`/`_sha` で終わるため、`_validate_pin_field_value_shape`
-    の汎用64hexブランチが自動適用される（特別扱いの分岐を追加していない
-    ことの確認）。"""
-    for field_name in ("design_revision_doc_sha256", "backbone_runtime_bundle_sha"):
+    """新欄（design_revision_doc_sha256 / backbone_runtime_bundle_sha /
+    por_adjudication_sha256）は欄名が `_sha256`/`_sha` で終わるため、
+    `_validate_pin_field_value_shape` の汎用64hexブランチが自動適用される
+    （特別扱いの分岐を追加していないことの確認）。"""
+    for field_name in (
+        "design_revision_doc_sha256",
+        "backbone_runtime_bundle_sha",
+        "por_adjudication_sha256",
+    ):
         assert field_name in m.CONTRACT_PIN_FIELDS
         tampered = copy.deepcopy(contract_raw)
         tampered[field_name] = {"value": "not-a-valid-hex-value", "status": "PINNED", "source": "x"}
@@ -2285,3 +2498,1459 @@ def test_revision02_backbone_runtime_bundle_sha_still_pending_after_canon_assets
     field = contract_raw["backbone_runtime_bundle_sha"]
     assert field["status"] == "PENDING"
     assert field["value"] is None
+
+
+# ---------------------------------------------------------------------------
+# User 裁定 2026-08-24（PoR メモ編入、design_revision 0.2 -> 0.3）対応
+# ---------------------------------------------------------------------------
+
+
+def test_por_revision_design_revision_doc_path_exists() -> None:
+    assert REVISION_DOC_PATH.exists()
+    assert REVISION_DOC_PATH.name == "DESIGN_RUN9_REVISION_0.3.md"
+
+
+def test_por_revision_por_adjudication_path_exists() -> None:
+    assert POR_ADJUDICATION_PATH.exists()
+    assert POR_ADJUDICATION_PATH.name == "POR_CONCEPT_ADJUDICATION_20260824.txt"
+
+
+# --- 改訂A: interventions 構造 / BRANCH_REVISIONS / BIRTH_EDGE -------------
+
+
+def test_por_revision_intervention_edges_frozen_values() -> None:
+    """PoR §3.2/§3.3: 稽古=PRACTICE_FROM_AUDIO, 教育=TRANSFER_TECHNIQUE の
+    順で凍結される（PoR §16 最小実験図の左→右の記載順とも整合）。"""
+    assert m.INTERVENTION_EDGES == ("PRACTICE_FROM_AUDIO", "TRANSFER_TECHNIQUE")
+
+
+def test_por_revision_branch_revisions_frozen_mapping() -> None:
+    """PoR §4 比較構造 + User 外部レビュー PR #317 P1-3 採用（C0/C1 分離）:
+    CONTROL は条件別2値のネスト mapping
+    （NO_LEARNING_REPLAY->replay, ZERO_CONTROLPROFILE_SHAM->r_sham）、
+    PRACTICE_FROM_AUDIO->r_practice, TRANSFER_TECHNIQUE->r_taught の対応が
+    凍結されている。"""
+    assert dict(m.BRANCH_REVISIONS["CONTROL"]) == {
+        "NO_LEARNING_REPLAY": "replay",
+        "ZERO_CONTROLPROFILE_SHAM": "r_sham",
+    }
+    assert m.BRANCH_REVISIONS["PRACTICE_FROM_AUDIO"] == "r_practice"
+    assert m.BRANCH_REVISIONS["TRANSFER_TECHNIQUE"] == "r_taught"
+    assert set(m.BRANCH_REVISIONS.keys()) == {"CONTROL", "PRACTICE_FROM_AUDIO", "TRANSFER_TECHNIQUE"}
+
+
+def test_por_revision_branch_revisions_is_immutable_mapping() -> None:
+    """BRANCH_REVISIONS（および CONTROL の入れ子 mapping）は他の凍結 dict
+    （Run9IdentityDomain の anchor_hashes 等）と同様に
+    types.MappingProxyType で直接改変を防ぐ。"""
+    import types as _types
+
+    assert isinstance(m.BRANCH_REVISIONS, _types.MappingProxyType)
+    assert isinstance(m.BRANCH_REVISIONS["CONTROL"], _types.MappingProxyType)
+    with pytest.raises(TypeError):
+        m.BRANCH_REVISIONS["CONTROL"] = "tampered"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        m.BRANCH_REVISIONS["CONTROL"]["NO_LEARNING_REPLAY"] = "tampered"  # type: ignore[index]
+
+
+def test_por_revision_birth_edge_does_not_change_operator_id() -> None:
+    """PoR §3.1 / DESIGN_RUN9_REVISION_0.3.md 改訂A: INHERIT_TRAIT の導入は
+    TRI_CROSSOVER operator の計算規約（genome_id 決定論）を変更しない —
+    OPERATOR_ID 定数がそのまま TRI_CROSSOVER/1.0 であることを確認する。"""
+    assert m.BIRTH_EDGE == "INHERIT_TRAIT"
+    assert m.OPERATOR_ID == "TRI_CROSSOVER/1.0"
+
+
+# --- 改訂D: 結果分類語彙（PoR §13 逐語） -----------------------------------
+
+
+def test_por_revision_birth_outcomes_verbatim() -> None:
+    assert m.BIRTH_OUTCOMES == ("ESTABLISHED", "NOT_ESTABLISHED")
+
+
+def test_por_revision_practice_outcomes_verbatim() -> None:
+    assert m.PRACTICE_OUTCOMES == ("GAIN_ESTABLISHED", "NO_GAIN", "UNOBSERVABLE")
+
+
+def test_por_revision_education_outcomes_verbatim() -> None:
+    assert m.EDUCATION_OUTCOMES == ("TRANSFER_ESTABLISHED", "NO_TRANSFER", "UNOBSERVABLE")
+
+
+def test_por_revision_separation_outcomes_verbatim() -> None:
+    assert m.SEPARATION_OUTCOMES == (
+        "MACHINE_EVIDENCE_SUPPORTED", "MIXED", "NOT_ESTABLISHED",
+    )
+
+
+def test_por_revision_founder_response_outcomes_verbatim() -> None:
+    assert m.FOUNDER_RESPONSE_OUTCOMES == (
+        "DIFFERENTIAL_RESPONSE", "COMMON_RESPONSE", "UNDETERMINED",
+    )
+
+
+def test_por_revision_identity_outcomes_verbatim() -> None:
+    assert m.IDENTITY_OUTCOMES == (
+        "STABLE_BY_MACHINE_METRIC", "SHIFTED", "UNCALIBRATED",
+    )
+
+
+def test_por_revision_outcome_vocabularies_have_no_internal_duplicates() -> None:
+    """6分類それぞれの内部に重複値が無いこと（各分類自身の定義ミスの検出）。
+    分類**間**での語彙の再利用（例: `"NOT_ESTABLISHED"` は BIRTH と
+    SEPARATION の両方で、`"UNOBSERVABLE"` は PRACTICE と EDUCATION の
+    両方で使われる）は PoR §13 の逐語どおりであり、意図的な共有 — これは
+    禁止しない（「一つの PASS だけで全現象を代表させない」という PoR の
+    趣旨は、6つの分類を**独立に判定する**ことであり、各分類の語彙が互いに
+    素であることまでは要求していない）。"""
+    all_vocabs = [
+        m.BIRTH_OUTCOMES, m.PRACTICE_OUTCOMES, m.EDUCATION_OUTCOMES,
+        m.SEPARATION_OUTCOMES, m.FOUNDER_RESPONSE_OUTCOMES, m.IDENTITY_OUTCOMES,
+    ]
+    for vocab in all_vocabs:
+        assert len(vocab) == len(set(vocab)), f"duplicate value within {vocab!r}"
+
+
+def test_por_revision_outcome_vocabulary_sizes_match_por_13() -> None:
+    """PoR §13 逐語の各分類の要素数（BIRTH=2, 他5分類は各3）と一致する。"""
+    assert len(m.BIRTH_OUTCOMES) == 2
+    for vocab in (
+        m.PRACTICE_OUTCOMES, m.EDUCATION_OUTCOMES, m.SEPARATION_OUTCOMES,
+        m.FOUNDER_RESPONSE_OUTCOMES, m.IDENTITY_OUTCOMES,
+    ):
+        assert len(vocab) == 3
+
+
+def test_por_revision_v01_transfer_status_superseded_note_present() -> None:
+    """v0.1 §20 の transfer_status 語彙が rev 0.3 で superseded と明記
+    されていること（DESIGN_RUN9_REVISION_0.3.md 改訂D）。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "transfer_status" in doc
+    assert "superseded" in doc
+
+
+# --- 改訂E: 失敗分類語彙（PoR §9） ------------------------------------------
+
+
+def test_por_revision_failure_classes_verbatim() -> None:
+    assert m.FAILURE_CLASSES == (
+        "IMPLEMENTATION_FAILURE", "SCIENTIFIC_NULL", "DESIGN_FAILURE",
+    )
+
+
+# --- 改訂C: 情報境界の凍結定数（PoR §3.2/§3.3/§11） -------------------------
+
+
+def test_por_revision_practice_forbidden_inputs_includes_spk_embedding_and_correct_parameter() -> (
+    None
+):
+    """PRACTICE 禁止に spk embedding と正解 Technique parameter が含まれる
+    こと（コーディネータ指示の設計必須項目）。PR #317 Codex bot レビュー
+    第2巡 Fix 4 採用: PoR §3.2 冒頭「教師の正解パラメータやTechnique
+    labelは与えず」の後半（Technique label）が第1巡実装時に転記漏れして
+    いたため `teacher_technique_label` を追加し5要素へ是正。"""
+    assert "pjs_speaker_embedding" in m.PRACTICE_FORBIDDEN_INPUTS
+    assert "correct_technique_parameter" in m.PRACTICE_FORBIDDEN_INPUTS
+    assert "teacher_technique_label" in m.PRACTICE_FORBIDDEN_INPUTS
+    assert "pjs_identity_coordinate" in m.PRACTICE_FORBIDDEN_INPUTS
+    assert "teacher_internal_parameter_dump" in m.PRACTICE_FORBIDDEN_INPUTS
+    assert len(m.PRACTICE_FORBIDDEN_INPUTS) == 5
+
+
+def test_por_revision_practice_allowed_data_inputs_and_operations_cover_por_3_2() -> None:
+    """PoR §3.2 は許可を5項目列挙する。旧 `PRACTICE_ALLOWED_INPUTS`
+    （User 外部レビュー PR #317 P2-1 採用で3分割・廃止）は、data/operation
+    混在のまま5要素（`pjs_audio_direct_listen` + 4つの動作）を保持して
+    いた。3分割後は `PRACTICE_ALLOWED_DATA_INPUTS`（データ）3要素と
+    `PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS`（動作）5要素へ分かれる —
+    「自律的模倣対象選択」（元 Fix 3 の転記漏れ是正対象）は動作側
+    `imitation_target_selection` として保持されていることを確認する。"""
+    assert "pjs_training_audio" in m.PRACTICE_ALLOWED_DATA_INPUTS
+    assert len(m.PRACTICE_ALLOWED_DATA_INPUTS) == 3
+    assert "feature_extraction" in m.PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS
+    assert "imitation_target_selection" in m.PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS
+    assert "self_teacher_difference_estimation" in m.PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS
+    assert "candidate_generation" in m.PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS
+    assert "allowed_range_search" in m.PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS
+    assert len(m.PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS) == 5
+    assert not hasattr(m, "PRACTICE_ALLOWED_INPUTS")
+
+
+def test_por_revision_education_forbidden_inputs_includes_spk_embedding_and_raw_audio() -> None:
+    """EDUCATION 禁止に spk embedding と raw audio 直接参照が含まれること
+    （コーディネータ指示の設計必須項目 — PoR §11 の非対称性の核心）。"""
+    assert "pjs_speaker_embedding" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "learner_pjs_raw_audio_direct_reference" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "pjs_identity_coordinate" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "pjs_voice_quality_latent" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "formant_inheritance_target" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "spectral_envelope_identity_replication" in m.EDUCATION_FORBIDDEN_INPUTS
+    assert "founder_identity_replacement_parameter" in m.EDUCATION_FORBIDDEN_INPUTS
+
+
+def test_por_revision_education_allowed_channels_covers_por_3_3_candidates() -> None:
+    """EDUCATION 許可に timing/pitch trajectory 等が含まれること
+    （コーディネータ指示の設計必須項目 — PoR §3.3 の許可候補列挙）。"""
+    expected = {
+        "timing", "phoneme_note_duration_relation", "pitch_trajectory",
+        "dynamics_energy_trajectory", "onset_release_pattern", "vibrato_pattern",
+        "phrasing", "phrase_end_control", "breath_placement",
+    }
+    assert expected == set(m.EDUCATION_ALLOWED_CHANNELS)
+
+
+def test_por_revision_practice_and_education_forbidden_sets_do_not_overlap_allowed() -> None:
+    """禁止 id が同じ経路の許可/必須 id 集合と重複していないこと（矛盾する
+    語彙定義の検出）。PRACTICE 側は3分割後の3語彙全て相互に、EDUCATION
+    側は従来どおり検査する。"""
+    assert not (set(m.PRACTICE_FORBIDDEN_INPUTS) & set(m.PRACTICE_ALLOWED_DATA_INPUTS))
+    assert not (
+        set(m.PRACTICE_FORBIDDEN_INPUTS) & set(m.PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS)
+    )
+    assert not (
+        set(m.PRACTICE_ALLOWED_DATA_INPUTS) & set(m.PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE)
+    )
+    assert not (
+        set(m.PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS)
+        & set(m.PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE)
+    )
+    assert not (set(m.EDUCATION_FORBIDDEN_INPUTS) & set(m.EDUCATION_ALLOWED_CHANNELS))
+
+
+def test_por_revision_all_info_boundary_constants_are_nonempty_str_tuples() -> None:
+    for vocab in (
+        m.PRACTICE_FORBIDDEN_INPUTS, m.PRACTICE_ALLOWED_DATA_INPUTS,
+        m.PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS, m.PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE,
+        m.EDUCATION_ALLOWED_CHANNELS, m.EDUCATION_FORBIDDEN_INPUTS,
+    ):
+        assert isinstance(vocab, tuple) and len(vocab) > 0
+        for item in vocab:
+            assert isinstance(item, str) and item
+
+
+# --- RUN9_CONTRACT.yaml の interventions 構造との整合 -----------------------
+
+
+def test_por_revision_contract_interventions_edges_match_constant(
+    contract_raw: Dict[str, Any],
+) -> None:
+    assert tuple(contract_raw["interventions"]["edges"]) == m.INTERVENTION_EDGES
+
+
+def test_por_revision_contract_interventions_control_branch_matches_constant(
+    contract_raw: Dict[str, Any],
+) -> None:
+    assert contract_raw["interventions"]["control_branch"] == m.CONTROL_BRANCH
+
+
+def test_por_revision_contract_no_longer_has_single_intervention_key(
+    contract_raw: Dict[str, Any],
+) -> None:
+    assert "single_intervention" not in contract_raw
+    assert "interventions" in contract_raw
+
+
+# --- design_revision 0.3 loader 検証: 既存 genome/domain/rights 系は無変更 --
+
+
+def test_por_revision_genome_domain_rights_helpers_still_importable() -> None:
+    """genome/domain/rights 系 API は rev 0.3 でシグネチャ変更していない
+    ことの直接確認（TRI_CROSSOVER/genome_id 決定論を壊さないという
+    コーディネータ指示の遵守）。"""
+    assert hasattr(m, "build_run9_identity_domain")
+    assert hasattr(m, "build_founder")
+    assert hasattr(m, "founder_genome_from_dict")
+    assert hasattr(m, "verify_rights_manifest_against_ledger")
+    assert m.OPERATOR_ID == "TRI_CROSSOVER/1.0"
+
+
+def test_por_revision_pinned_domain_and_founder_still_work_under_0_3(
+    pinned_domain: m.Run9IdentityDomain,
+) -> None:
+    """pinned_domain フィクスチャ経由の build_founder が rev 0.3 でも
+    従来どおり動作し、genome_id が決定論的であること（同じ入力なら同じ
+    genome_id — この巡の変更が genome 計算に一切触れていないことの実証）。"""
+    genome_a = m.build_founder(pinned_domain, "R9F-01")
+    genome_b = m.build_founder(pinned_domain, "R9F-01")
+    assert genome_a.genome_id == genome_b.genome_id
+    assert genome_a.to_dict() == genome_b.to_dict()
+
+
+def test_por_revision_full_contract_gate_state_still_blocked(
+    contract: m.Run9RunContract,
+) -> None:
+    """rev 0.3 編入後も現行 RUN9_CONTRACT.yaml は正直に BLOCKED のまま
+    （por_adjudication_sha256/design_revision_doc_sha256 が新たに PINNED
+    化されても、他の多くの pre-run 欄が依然 PENDING のため READY へは
+    到達しない）。"""
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第2巡対応 — Fix 5: R9-G5 supersession 登録
+# ---------------------------------------------------------------------------
+
+
+def test_fix5_r9_g5_supersession_row_present_in_contradiction_table() -> None:
+    """DESIGN_RUN9_REVISION_0.3.md の矛盾解決表に v0.1 §19 R9-G5
+    （BIRTH_IDENTITY_SEPARATION）の読み替え行が追加されていること。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "R9-G5" in doc
+    assert "BIRTH_IDENTITY_SEPARATION" in doc
+    assert "機械計測の出生分離ゲートとして存続" in doc
+    assert "blind human audit への fallback routing は除去" in doc
+
+
+def test_fix5_design_revision_doc_sha256_pin_matches_recomputed_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """Fix 5 の文書編集（R9-G5 行追加）後、design_revision_doc_sha256 pin
+    が実ファイルの再計算 sha256 と一致していること（マージ前限定編集後の
+    再 pin 漏れが無いことの直接確認 — 値そのものは
+    test_revision02_doc_sha256_pin_matches_actual_file が汎用的に検証
+    しているが、本テストは Fix 5 の変更に紐づけて明示する）。"""
+    field = contract_raw["design_revision_doc_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(REVISION_DOC_PATH)
+    assert field["value"] == m.compute_file_sha256(REVISION_DOC_PATH)
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第2巡対応 — Fix 6: practice_audio_split_manifest_sha 新設
+# ---------------------------------------------------------------------------
+
+
+def test_fix6_practice_split_sha_is_a_pin_field() -> None:
+    assert "practice_audio_split_manifest_sha" in m.CONTRACT_PIN_FIELDS
+    # post-run/optional のどちらにも属さない（pre-run 必須欄）ことを確認。
+    assert "practice_audio_split_manifest_sha" not in m.CONTRACT_POST_RUN_PIN_FIELDS
+    assert "practice_audio_split_manifest_sha" not in m.CONTRACT_OPTIONAL_PIN_FIELDS
+
+
+def test_fix6_current_contract_practice_split_sha_is_pending(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["practice_audio_split_manifest_sha"]
+    assert field["status"] == "PENDING"
+    assert field["value"] is None
+
+
+def test_fix6_current_contract_still_blocked(contract: m.Run9RunContract) -> None:
+    """practice_audio_split_manifest_sha 新設後も現行 RUN9_CONTRACT.yaml は正直に
+    BLOCKED のまま。"""
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_fix6_practice_split_sha_gets_64hex_format_enforced(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """欄名が `_sha` で終わるため `_validate_pin_field_value_shape` の
+    汎用64hexブランチが自動適用される（特別扱いの分岐を追加していない
+    ことの確認 — design_revision_doc_sha256/backbone_runtime_bundle_sha/
+    por_adjudication_sha256 と同型のテスト）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["practice_audio_split_manifest_sha"] = {
+        "value": "not-a-valid-hex-value", "status": "PINNED", "source": "x",
+    }
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.load_run9_contract(tampered)
+
+
+def test_fix6_practice_split_sha_missing_pin_blocks_ready_even_if_others_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """負例: practice_audio_split_manifest_sha 以外の pre-run 欄を全て PINNED にしても、
+    practice_audio_split_manifest_sha 自身が PENDING のままなら gate_state() は BLOCKED
+    のまま（education_technique_lesson_manifest_sha の PRACTICE 版対概念として、他欄の充足だけでは
+    READY へ迂回できないことの確認）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    assert fully_pinned["practice_audio_split_manifest_sha"]["status"] == "PINNED"
+    contract_ready = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract_ready) == "READY"
+
+    regressed = copy.deepcopy(fully_pinned)
+    regressed["practice_audio_split_manifest_sha"] = {
+        "value": None, "status": "PENDING", "reason": "regressed",
+    }
+    contract_blocked = m.load_run9_contract(regressed)
+    assert m.gate_state(contract_blocked) == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第3巡対応 — Fix 7: rev 0.3 文書の PRACTICE
+# 禁止列挙へ Technique label を同期 / Fix 8: 陳腐化した繰延記述の掃討
+# ---------------------------------------------------------------------------
+
+
+def test_fix7_rev03_doc_practice_forbidden_prose_mentions_technique_label() -> None:
+    """DESIGN_RUN9_REVISION_0.3.md 改訂C の PRACTICE 禁止入力の散文列挙に
+    「教師付与の Technique label」が存在すること — 第2巡 Fix 4 で
+    `PRACTICE_FORBIDDEN_INPUTS` へ追加した `teacher_technique_label` と
+    文書側が同期していなかった漏れ（第3巡 Fix 7）の是正確認。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "教師付与の Technique label" in doc
+    assert "teacher_technique_label" in doc
+
+
+def test_fix7_rev03_doc_practice_forbidden_prose_item_count_matches_tuple() -> None:
+    """改訂C の PRACTICE 禁止列挙（散文の箇条書き）のトップレベル項目数が、
+    `PRACTICE_FORBIDDEN_INPUTS`（5要素）と一致すること。禁止列挙の節
+    （'**禁止（データ入力として渡してはいけないもの）**（PoR §3.2）:' から
+    次の '**3分割の意味論**' 見出しまで — P2-1 の3分割導入で PRACTICE
+    禁止列挙の直後が '**許可**' から '**3分割の意味論**' へ変わった）に
+    含まれる、行頭が `- `（インデントなし = 継続行ではなくトップレベル
+    箇条書き）の行数を数える。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    marker = "**禁止（データ入力として渡してはいけないもの）**（PoR §3.2）:"
+    next_heading = "**3分割の意味論**"
+    start = doc.index(marker) + len(marker)
+    section = doc[start:doc.index(next_heading, start)]
+    bullet_lines = [line for line in section.splitlines() if line.startswith("- ")]
+    assert len(bullet_lines) == len(m.PRACTICE_FORBIDDEN_INPUTS) == 5, (
+        f"rev 0.3 文書の PRACTICE 禁止列挙が{len(bullet_lines)}項目だが "
+        f"PRACTICE_FORBIDDEN_INPUTS は{len(m.PRACTICE_FORBIDDEN_INPUTS)}要素 — "
+        "文書とタプルの同期が崩れている可能性がある"
+    )
+
+
+def test_fix7_design_revision_doc_sha256_pin_matches_recomputed_file_again(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """Fix 7 の文書編集（Technique label 同期）後、design_revision_doc_sha256
+    pin が実ファイルの再計算 sha256 と一致していること。"""
+    field = contract_raw["design_revision_doc_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(REVISION_DOC_PATH)
+    assert field["value"] == m.compute_file_sha256(REVISION_DOC_PATH)
+
+
+def test_fix8_no_stale_deferred_practice_pin_field_language_remains() -> None:
+    """PR #317 Codex bot レビュー第3巡 Fix 8: 「PRACTICE 側 pin 欄は後日
+    命名/新設予定」型の陳腐化した記述が RUN9_CONTRACT.yaml / README.md に
+    残っていないこと（`practice_audio_split_manifest_sha` が第2巡 Fix 6 で既に実在する
+    ため、二重管理による競合欄導入・偽 BLOCKED の芽を除去する）。"""
+    stale_phrases = ("新設予定", "新設する想定", "欄名は VG-L0 ハーネス実装時に確定")
+    for path in (CONTRACT_PATH, _RUN_DIR / "README.md"):
+        text = path.read_text(encoding="utf-8")
+        for phrase in stale_phrases:
+            assert phrase not in text, (
+                f"{path.name} に陳腐化した繰延記述 {phrase!r} が残っている"
+            )
+
+
+def test_fix8_readme_blocker_4_references_existing_practice_split_sha_field() -> None:
+    """README.md のブロッカー(4)が、実在する `practice_audio_split_manifest_sha` 欄を
+    現在形で参照していること（「別欄として新設予定」という将来形のまま
+    ではないこと）。"""
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "practice_audio_split_manifest_sha" in readme
+    assert "新設済み" in readme or "既に" in readme
+
+
+def test_fix8_contract_lesson_sha_comment_references_practice_split_sha() -> None:
+    """RUN9_CONTRACT.yaml の education_technique_lesson_manifest_sha 直前コメントが、`practice_audio_split_manifest_sha`
+    を実在欄として参照していること（分割「する想定」のまま陳腐化して
+    いないこと）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert "practice_audio_split_manifest_sha" in contract_text
+    lesson_comment_start = contract_text.index("# --- lesson / learning")
+    lesson_field_start = contract_text.index("education_technique_lesson_manifest_sha:")
+    comment_block = contract_text[lesson_comment_start:lesson_field_start]
+    assert "practice_audio_split_manifest_sha" in comment_block
+
+
+# ---------------------------------------------------------------------------
+# User 外部レビュー対応（2026-08-24, PR #317 head 71eeccad, CHANGES_REQUESTED
+# → 全項目採用）— P1-1〜P1-4 / P2-1〜P2-5
+# ---------------------------------------------------------------------------
+
+BRANCH_WRITE_POLICY_PATH = _RUN_DIR / "inputs" / "branch_write_policy.json"
+
+
+# --- P1-1: 書き込み境界（5必須テスト） --------------------------------------
+
+
+def test_p1_1_control_writable_set_is_empty() -> None:
+    assert m.BRANCH_WRITABLE_PARTITIONS["CONTROL"] == ()
+
+
+def test_p1_1_practice_writable_trait_and_technique_only() -> None:
+    assert m.BRANCH_WRITABLE_PARTITIONS["PRACTICE_FROM_AUDIO"] == (
+        "TRAIT_CONTROL", "TECHNIQUE_CONTROL",
+    )
+
+
+def test_p1_1_education_writable_technique_only() -> None:
+    assert m.BRANCH_WRITABLE_PARTITIONS["TRANSFER_TECHNIQUE"] == ("TECHNIQUE_CONTROL",)
+
+
+def test_p1_1_no_branch_can_write_identity_or_immutable_artifacts() -> None:
+    """いずれの枝も Identity/Genome/Backbone 等へ書込不可。
+    IDENTITY_STATE は `IMMUTABLE_STATE_PARTITIONS` によりどの枝の writable
+    集合にも現れない。Genome/Backbone 等は state partition ではなく
+    `BRANCH_IMMUTABLE_ARTIFACTS`（ControlProfile の外側にある永続
+    artifact）として別枠で凍結されている。"""
+    for branch, writable in m.BRANCH_WRITABLE_PARTITIONS.items():
+        for partition in m.IMMUTABLE_STATE_PARTITIONS:
+            assert partition not in writable, f"{branch} may not write {partition}"
+        with pytest.raises(m.Run9ValidationError):
+            m.validate_branch_write(branch, "IDENTITY_STATE")
+    # BRANCH_IMMUTABLE_ARTIFACTS はどの branch_writable_partitions 値にも
+    # 含まれない（partition と artifact が別の名前空間であることの直接
+    # 確認 — 万一同名の partition が誤って追加された場合に検出する）。
+    all_writable_values = {p for writable in m.BRANCH_WRITABLE_PARTITIONS.values() for p in writable}
+    assert not (set(m.BRANCH_IMMUTABLE_ARTIFACTS) & all_writable_values)
+
+
+def test_p1_1_education_writing_trait_control_rejected() -> None:
+    """修正指示5: EDUCATION 枝が TRAIT_CONTROL または IDENTITY_STATE へ
+    書き込もうとした場合、fail-closed で拒否する契約。"""
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_branch_write("TRANSFER_TECHNIQUE", "TRAIT_CONTROL")
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_branch_write("TRANSFER_TECHNIQUE", "IDENTITY_STATE")
+    # 対照: TECHNIQUE_CONTROL への書込は許可される。
+    m.validate_branch_write("TRANSFER_TECHNIQUE", "TECHNIQUE_CONTROL")
+
+
+def test_p1_1_control_writing_anything_rejected() -> None:
+    for partition in m.STATE_PARTITIONS:
+        with pytest.raises(m.Run9ValidationError):
+            m.validate_branch_write("CONTROL", partition)
+
+
+def test_p1_1_practice_writing_identity_rejected() -> None:
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_branch_write("PRACTICE_FROM_AUDIO", "IDENTITY_STATE")
+    # 対照: TRAIT_CONTROL/TECHNIQUE_CONTROL への書込は許可される。
+    m.validate_branch_write("PRACTICE_FROM_AUDIO", "TRAIT_CONTROL")
+    m.validate_branch_write("PRACTICE_FROM_AUDIO", "TECHNIQUE_CONTROL")
+
+
+def test_p1_1_branch_write_policy_manifest_matches_constants() -> None:
+    text = BRANCH_WRITE_POLICY_PATH.read_text(encoding="utf-8")
+    data = m.load_branch_write_policy_json(text)
+    m.validate_branch_write_policy_manifest(data)  # 例外を投げないことの確認
+
+
+@pytest.mark.parametrize(
+    ("tamper_path", "tamper_value"),
+    [
+        (("state_partitions",), ["IDENTITY_STATE", "TRAIT_CONTROL"]),
+        (("immutable_state_partitions",), []),
+        (("branch_writable_partitions", "CONTROL"), ["TECHNIQUE_CONTROL"]),
+        (("branch_writable_partitions", "TRANSFER_TECHNIQUE"), ["TRAIT_CONTROL", "TECHNIQUE_CONTROL"]),
+        (("immutable_artifacts",), ["shared_backbone"]),
+    ],
+)
+def test_p1_1_policy_tampering_rejected(tamper_path: tuple, tamper_value: Any) -> None:
+    """必須テスト「policy 改変で contract load または pre-run Gate が失敗
+    する」: manifest の各セクションを個別に改変すると
+    `validate_branch_write_policy_manifest()` が拒否する。"""
+    text = BRANCH_WRITE_POLICY_PATH.read_text(encoding="utf-8")
+    data = m.load_branch_write_policy_json(text)
+    tampered = copy.deepcopy(data)
+    node = tampered
+    for key in tamper_path[:-1]:
+        node = node[key]
+    node[tamper_path[-1]] = tamper_value
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_branch_write_policy_manifest(tampered)
+
+
+def test_p1_1_branch_write_policy_sha_pinned_and_matches_actual_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["branch_write_policy_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(BRANCH_WRITE_POLICY_PATH)
+    assert field["value"] == m.compute_file_sha256(BRANCH_WRITE_POLICY_PATH)
+
+
+def test_p1_1_trait_change_definition_documented() -> None:
+    """修正指示6: PRACTICE で許す Trait 変化は speaker embedding や Genome
+    変更ではなく「明示的に許可された発声制御領域の後天的変化」であること
+    の文書化。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "明示的に許可された発声制御領域の後天的変化" in doc
+
+
+# --- P1-2: split pin の明示化（5必須テスト） --------------------------------
+
+
+def test_p1_2_old_field_names_no_longer_exist_in_contract_pin_fields() -> None:
+    assert "lesson_sha" not in m.CONTRACT_PIN_FIELDS
+    assert "practice_split_sha" not in m.CONTRACT_PIN_FIELDS
+    assert "education_technique_lesson_manifest_sha" in m.CONTRACT_PIN_FIELDS
+    assert "practice_audio_split_manifest_sha" in m.CONTRACT_PIN_FIELDS
+
+
+def test_p1_2_practice_manifest_field_missing_from_contract_rejected(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """必須テスト「practice split 欄欠落で contract 拒否」。"""
+    tampered = copy.deepcopy(contract_raw)
+    del tampered["practice_audio_split_manifest_sha"]
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_p1_2_practice_manifest_field_pending_blocks_gate(contract_raw: Dict[str, Any]) -> None:
+    """必須テスト「practice split が PENDING なら Gate は BLOCKED」。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    assert fully_pinned["practice_audio_split_manifest_sha"]["status"] == "PINNED"
+    contract_ready = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract_ready) == "READY"
+
+    regressed = copy.deepcopy(fully_pinned)
+    regressed["practice_audio_split_manifest_sha"] = {
+        "value": None, "status": "PENDING", "reason": "regressed",
+    }
+    contract_blocked = m.load_run9_contract(regressed)
+    assert m.gate_state(contract_blocked) == "BLOCKED"
+
+
+def _valid_practice_manifest() -> Dict[str, Any]:
+    return {
+        "schema": m.SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST,
+        "pjs_source_archive_sha256": "a" * 64,
+        "expanded_corpus_identity_sha256": "b" * 64,
+        "training_split_sha256": "c" * 64,
+        "validation_split_sha256": "d" * 64,
+        "sealed_holdout_sha256": "e" * 64,
+        "row_order_sha256": "f" * 64,
+        "sample_inventory": ["s1", "s2"],
+        "rights_source_class": "internal",
+        "is_raw_audio": True,
+        "excludes_correct_technique_parameters": True,
+        "identical_bytes_and_order_across_founders": True,
+        "row_ids": {
+            "training": ["r1", "r2"],
+            "validation": ["r3"],
+            "sealed_holdout": ["r4"],
+        },
+    }
+
+
+def _valid_education_manifest() -> Dict[str, Any]:
+    return {
+        "schema": m.SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST,
+        "training_technique_lesson_sha256": "a" * 64,
+        "validation_technique_lesson_sha256": "b" * 64,
+        "sealed_holdout_technique_release_policy": m.EDUCATION_SEALED_HOLDOUT_RELEASE_POLICIES[0],
+        "excludes_identity_and_trait_donor_info": True,
+        "identical_lesson_bytes_across_founders": True,
+    }
+
+
+def test_p1_2_practice_manifest_missing_required_key_rejected() -> None:
+    for key in m.PRACTICE_MANIFEST_REQUIRED_KEYS:
+        manifest = _valid_practice_manifest()
+        del manifest[key]
+        with pytest.raises(m.Run9ValidationError, match="missing required key"):
+            m.validate_practice_split_manifest(manifest)
+
+
+def test_p1_2_education_manifest_missing_required_key_rejected() -> None:
+    for key in m.EDUCATION_MANIFEST_REQUIRED_KEYS:
+        manifest = _valid_education_manifest()
+        del manifest[key]
+        with pytest.raises(m.Run9ValidationError, match="missing required key"):
+            m.validate_education_lesson_manifest(manifest)
+
+
+def test_p1_2_practice_manifest_holdout_overlaps_training_rejected() -> None:
+    """必須テスト「holdout が training 集合へ混入した manifest を拒否」。"""
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"]["sealed_holdout"] = ["r1"]  # r1 は training にも存在
+    with pytest.raises(m.Run9ValidationError, match="overlaps training"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_p1_2_practice_manifest_per_founder_structure_rejected() -> None:
+    """必須テスト「Founder ごとに異なる practice split を与える構造を
+    拒否」。"""
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"]["R9F-01"] = {"training": ["x1"]}
+    with pytest.raises(m.Run9ValidationError, match="must not branch by founder_id"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_p1_2_education_manifest_per_founder_structure_rejected() -> None:
+    manifest = _valid_education_manifest()
+    manifest["R9F-02"] = {"training_technique_lesson_sha256": "c" * 64}
+    with pytest.raises(m.Run9ValidationError, match="must not branch by founder_id"):
+        m.validate_education_lesson_manifest(manifest)
+
+
+def test_p1_2_manifest_kind_swap_rejected() -> None:
+    """必須テスト「practice/education の manifest hash を入れ替えた場合に
+    拒否」— schema 自己宣言による種別取り違え検出（双方向）。"""
+    with pytest.raises(m.Run9ValidationError, match="practice split manifest schema"):
+        m.validate_practice_split_manifest(_valid_education_manifest())
+    with pytest.raises(m.Run9ValidationError, match="education lesson manifest schema"):
+        m.validate_education_lesson_manifest(_valid_practice_manifest())
+
+
+def test_p1_2_valid_manifests_pass_validators() -> None:
+    """対照実験: 正しく構成された manifest は validator を通過する。"""
+    m.validate_practice_split_manifest(_valid_practice_manifest())
+    m.validate_education_lesson_manifest(_valid_education_manifest())
+
+
+def test_p1_2_manifest_required_true_keys_reject_false() -> None:
+    for key in ("is_raw_audio", "excludes_correct_technique_parameters",
+                "identical_bytes_and_order_across_founders"):
+        manifest = _valid_practice_manifest()
+        manifest[key] = False
+        with pytest.raises(m.Run9ValidationError, match="must be exactly True"):
+            m.validate_practice_split_manifest(manifest)
+    for key in ("excludes_identity_and_trait_donor_info", "identical_lesson_bytes_across_founders"):
+        manifest = _valid_education_manifest()
+        manifest[key] = False
+        with pytest.raises(m.Run9ValidationError, match="must be exactly True"):
+            m.validate_education_lesson_manifest(manifest)
+
+
+# --- P1-3: C0/C1 分離（5必須テスト） ----------------------------------------
+
+
+def test_p1_3_c0_condition_maps_to_replay_revision_no_controlprofile_change() -> None:
+    """C0 には ControlProfile 変更が存在しない（C0 の revision 名
+    "replay" 自体が「学習 step を実行しない re-render」であることを表し、
+    r0 からの ControlProfile 差分を持たない — CONTROL 全体の writable
+    集合が空であることと対応する）。"""
+    assert m.BRANCH_REVISIONS["CONTROL"]["NO_LEARNING_REPLAY"] == "replay"
+    assert m.BRANCH_WRITABLE_PARTITIONS["CONTROL"] == ()
+
+
+def test_p1_3_c1_condition_is_neutral_profile_no_learning_step() -> None:
+    """C1 は中立 profile のみで学習 step なし（revision 名 "r_sham" が
+    Sham Transition であることを表す。CONTROL 全体として学習 step を
+    実行しない = writable 集合が空である点は C0/C1 共通）。"""
+    assert m.BRANCH_REVISIONS["CONTROL"]["ZERO_CONTROLPROFILE_SHAM"] == "r_sham"
+    assert m.BRANCH_WRITABLE_PARTITIONS["CONTROL"] == ()
+
+
+def test_p1_3_gain_baseline_noise_from_c0_documented() -> None:
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "Practice/Education gain の\n基準ノイズは C0 由来" in doc or "基準ノイズは C0 由来" in doc
+
+
+def test_p1_3_profile_side_effect_recorded_as_c1_minus_c0_documented() -> None:
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "C1−C0" in doc or "C1-C0" in doc
+
+
+def test_p1_3_control_conditions_satisfied_requires_both() -> None:
+    """必須テスト「C0/C1 の片方が欠けた attempt は評価 READY にならない」。"""
+    assert m.control_conditions_satisfied(set(m.CONTROL_CONDITIONS)) is True
+    assert m.control_conditions_satisfied({"NO_LEARNING_REPLAY"}) is False
+    assert m.control_conditions_satisfied({"ZERO_CONTROLPROFILE_SHAM"}) is False
+    assert m.control_conditions_satisfied(set()) is False
+
+
+def test_p1_3_control_conditions_satisfied_rejects_non_container() -> None:
+    with pytest.raises(m.Run9ValidationError):
+        m.control_conditions_satisfied("NO_LEARNING_REPLAY")  # 文字列は不可（文字ごとに反復される事故の防止）
+
+
+def test_p1_3_control_conditions_frozen_values() -> None:
+    assert m.CONTROL_CONDITIONS == ("NO_LEARNING_REPLAY", "ZERO_CONTROLPROFILE_SHAM")
+
+
+# --- P1-4: 結果と昇格の分離（5必須テスト） ----------------------------------
+
+
+def test_p1_4_no_gain_is_archive_eligible() -> None:
+    """必須テスト「NO_GAIN でも attempt evidence が保存対象」。
+    archive_status の唯一の値が全 terminal outcome に無条件適用される
+    ことを、語彙上「PRACTICE 結果による分岐が存在しない」ことで確認する
+    （archive_status は scientific_outcomes から独立した単一値語彙）。"""
+    assert "NO_GAIN" in m.PRACTICE_OUTCOMES
+    assert m.ARCHIVE_STATUSES == ("IMMUTABLE_ARCHIVED",)
+    # NO_GAIN という結果を宣言しても archive_status の選択肢は変わらない
+    # （分岐が存在しないこと自体が「無条件保存」の語彙的裏付け）。
+
+
+def test_p1_4_design_failure_is_archive_eligible_evidence_not_deletable() -> None:
+    """必須テスト「DESIGN_FAILURE でも証拠削除不可」。archive_status は
+    単一値のみで「削除」に相当する値が存在しない。"""
+    assert "DESIGN_FAILURE" in m.FAILURE_CLASSES
+    assert len(m.ARCHIVE_STATUSES) == 1
+    forbidden_tokens = ("DELETE", "DELETED", "PURGE", "DISCARD")
+    for value in m.ARCHIVE_STATUSES:
+        assert not any(tok in value for tok in forbidden_tokens)
+
+
+def test_p1_4_no_function_derives_single_pass_from_six_outcomes() -> None:
+    """必須テスト「6分類から単一 TotalScore/PASS を自動生成しない」。
+    モジュール内にそのような変換関数が存在しないことを、禁止する関数名の
+    非存在で確認する（新設のたびにこの禁止リストへ追加していく想定）。"""
+    forbidden_function_names = (
+        "overall_verdict", "combined_outcome", "aggregate_outcome",
+        "compute_total_score", "compute_pass", "derive_pass",
+        "scientific_outcomes_to_pass", "outcomes_to_verdict",
+    )
+    for name in forbidden_function_names:
+        assert not hasattr(m, name), f"{name} must not exist (single-PASS aggregation is forbidden)"
+
+
+def test_p1_4_promotion_statuses_never_a_promoted_value() -> None:
+    """必須テスト「RUN9 結果だけでは promotion_status が昇格値にならない」。
+    PROMOTION_STATUSES は単一値のみであり、その値自体が非昇格を明示する
+    （"ARCHIVE_ONLY" プレフィックスと "PENDING_USER_RULING" サフィックス）。
+    昇格を意味する語彙（CANONICAL/PARENT_POOL 等）は含まれない。"""
+    assert m.PROMOTION_STATUSES == ("ARCHIVE_ONLY_PENDING_USER_RULING",)
+    forbidden_tokens = ("CANONICAL", "PARENT_POOL", "APPROVED", "PROMOTED")
+    for value in m.PROMOTION_STATUSES:
+        assert not any(tok in value for tok in forbidden_tokens)
+
+
+def test_p1_4_parent_pool_registration_requires_separate_user_ruling_documented() -> None:
+    """必須テスト「Parent Pool 登録には別 User ruling pin が必要」の文書化
+    確認（機械強制は本 PR の範囲外 — PROMOTION_STATUSES の拡張自体が新しい
+    design_revision を要する設計になっていることの語彙的裏付けは上記
+    test_p1_4_promotion_statuses_never_a_promoted_value が担う）。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "別の User ruling pin" in doc or "別の\nUser 裁定" in doc or "新しい design_revision（= 別の" in doc
+
+
+def test_p1_4_run_statuses_do_not_encode_scientific_verdict() -> None:
+    """run_status の値は実行完了状態のみを表し、PASS/FAIL 語彙を含まない。"""
+    forbidden_tokens = ("PASS", "FAIL_", "SUCCESS")
+    for value in m.RUN_STATUSES:
+        for tok in forbidden_tokens:
+            assert tok not in value, f"{value!r} unexpectedly contains scientific-verdict token {tok!r}"
+    assert m.RUN_STATUSES == ("COMPLETE", "BLOCKED", "IMPLEMENTATION_FAILED", "DESIGN_FAILED")
+
+
+def test_p1_4_four_vocabularies_are_pairwise_disjoint() -> None:
+    """scientific_outcomes（6分類統合集合）・run_status・archive_status・
+    promotion_status の4語彙が互いに素であること（値の再利用による
+    意味論の混同を防ぐ）。"""
+    scientific_outcomes_union = (
+        set(m.BIRTH_OUTCOMES) | set(m.PRACTICE_OUTCOMES) | set(m.EDUCATION_OUTCOMES)
+        | set(m.SEPARATION_OUTCOMES) | set(m.FOUNDER_RESPONSE_OUTCOMES) | set(m.IDENTITY_OUTCOMES)
+    )
+    groups = [
+        ("scientific_outcomes", scientific_outcomes_union),
+        ("run_status", set(m.RUN_STATUSES)),
+        ("archive_status", set(m.ARCHIVE_STATUSES)),
+        ("promotion_status", set(m.PROMOTION_STATUSES)),
+    ]
+    for i in range(len(groups)):
+        for j in range(i + 1, len(groups)):
+            name_a, set_a = groups[i]
+            name_b, set_b = groups[j]
+            overlap = set_a & set_b
+            assert not overlap, f"{name_a} and {name_b} share value(s): {overlap}"
+
+
+# --- P2-4: held-out gain 必須欄 ----------------------------------------------
+
+
+def test_p2_4_required_gain_fields_frozen() -> None:
+    assert m.REQUIRED_GAIN_FIELDS == (
+        "practice_train_gain", "practice_heldout_gain",
+        "education_train_gain", "education_heldout_gain",
+    )
+
+
+def test_p2_4_optional_generalization_fields_frozen() -> None:
+    assert m.OPTIONAL_GENERALIZATION_FIELDS == (
+        "broad_generalization_gain", "cross_song_generalization", "cross_register_generalization",
+    )
+
+
+def test_p2_4_required_and_optional_gain_fields_disjoint() -> None:
+    assert not (set(m.REQUIRED_GAIN_FIELDS) & set(m.OPTIONAL_GENERALIZATION_FIELDS))
+
+
+def test_p2_4_heldout_gain_documented_as_mandatory_not_best_effort() -> None:
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "実装可能なら」ではなく" in doc
+
+
+# --- P2-2: human_audit_mode ---------------------------------------------------
+
+
+def test_p2_2_human_audit_modes_frozen() -> None:
+    assert m.HUMAN_AUDIT_MODES == ("DISABLED", "ADVISORY_PREDECLARED")
+    assert m.DEFAULT_HUMAN_AUDIT_MODE == "DISABLED"
+
+
+def test_p2_2_current_contract_human_audit_mode_is_disabled(contract_raw: Dict[str, Any]) -> None:
+    assert contract_raw["human_audit_mode"] == "DISABLED"
+
+
+def test_p2_2_invalid_human_audit_mode_rejected(contract_raw: Dict[str, Any]) -> None:
+    tampered = copy.deepcopy(contract_raw)
+    tampered["human_audit_mode"] = "SOMETHING_ELSE"
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_p2_2_missing_human_audit_mode_rejected(contract_raw: Dict[str, Any]) -> None:
+    tampered = copy.deepcopy(contract_raw)
+    del tampered["human_audit_mode"]
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_p2_2_disabled_mode_leaves_protocol_sha_optional(contract_raw: Dict[str, Any]) -> None:
+    """DISABLED（既定）のときは human_evaluation_protocol_sha が PENDING
+    のままでも READY を妨げない（従来どおりの optional 挙動）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    fully_pinned["human_audit_mode"] = "DISABLED"
+    fully_pinned["human_evaluation_protocol_sha"] = {
+        "value": None, "status": "PENDING", "reason": "not planned",
+    }
+    contract = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract) == "READY"
+
+
+def test_p2_2_advisory_predeclared_requires_protocol_sha_pinned_for_ready(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """ADVISORY_PREDECLARED のとき human_evaluation_protocol_sha が
+    PINNED でなければ gate READY 不可。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    fully_pinned["human_audit_mode"] = "ADVISORY_PREDECLARED"
+    fully_pinned["human_evaluation_protocol_sha"] = {
+        "value": None, "status": "PENDING", "reason": "advisory audit planned but not ready",
+    }
+    contract_blocked = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract_blocked) == "BLOCKED"
+
+    ready_variant = copy.deepcopy(fully_pinned)
+    ready_variant["human_evaluation_protocol_sha"] = {
+        "value": "a" * 64, "status": "PINNED", "source": "synthetic-fixture",
+    }
+    contract_ready = m.load_run9_contract(ready_variant)
+    assert m.gate_state(contract_ready) == "READY"
+
+
+def test_p2_2_holdout_and_null_shift_rescue_discipline_documented() -> None:
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "holdout 開封後の" in doc
+    assert "human_audit_mode` 変更は禁止" in doc
+    assert "人間監査を" in doc
+    assert "の救済に使わない" in doc
+    assert "SCIENTIFIC_NULL" in doc and "Identity SHIFTED" in doc
+
+
+# --- P2-3: 機械的校正の定義 ----------------------------------------------------
+
+
+def test_p2_3_calibration_definition_section_present() -> None:
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "## 改訂 G — 機械的校正の定義" in doc
+    assert "人間知覚との一致証明ではない" in doc
+
+
+def test_p2_3_calibration_result_rules_present() -> None:
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "UNCALIBRATED" in doc
+    assert "holdout 開封前に freeze" in doc
+
+
+# --- P2-5: Non-Claim / Rights Boundary ---------------------------------------
+
+
+def test_p2_5_non_claim_rights_boundary_section_present() -> None:
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "## 改訂 H — Non-Claim / Rights Boundary" in doc
+
+
+def test_p2_5_non_claim_five_items_present() -> None:
+    """本文は Markdown の折り返しで改行+インデント空白を含むため、
+    照合前に空白（改行含む）を単一スペースへ正規化してから部分文字列
+    一致を見る。"""
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    normalized = " ".join(doc.split())
+    required_phrases = [
+        "法的・契約上の 許諾が自動成立するわけではない",
+        "元音声の利用権確認",
+        "入力音声の許諾範囲に拘束される",
+        "AQUEST 由来素材は明示許諾が得られるまで",
+        "許諾の代替ではない",
+    ]
+    for phrase in required_phrases:
+        normalized_phrase = " ".join(phrase.split())
+        assert normalized_phrase in normalized, f"Non-Claim item missing from doc: {phrase!r}"
+
+
+# --- 不変制約の回帰確認 -------------------------------------------------------
+
+
+def test_invariant_por_and_v01_and_rev02_byte_pins_unchanged(contract_raw: Dict[str, Any]) -> None:
+    """不変制約: POR txt / v0.1 / rev 0.2 / 既存 AF0・Ritsu・rights・
+    backbone pin 値は無変更。"""
+    assert contract_raw["por_adjudication_sha256"]["value"] == (
+        "56b66fd8df943fbfa98767f2ea481c0ba2a68c26916832e08517379408d97007"
+    )
+    assert contract_raw["design_doc_sha256"]["value"] == (
+        "b1f6901c0ba8bcfcbd61170aa672c95e96a37d082fce5e3f12f245bc4faaae1e"
+    )
+    assert _sha256_file(REVISION_0_2_DOC_PATH) == (
+        "406098e2ac62065855b7e4086fce769a2956b64606594ad83b63b527a23ad4fb"
+    )
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["anchor_hashes"]["af0"] == (
+        "183bf32561589ddad69daa0faf5838c3e9601d17b24b62ee32aa629123a87f1e"
+    )
+    assert domain_raw["anchor_hashes"]["ritsu"] == (
+        "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76"
+    )
+    assert contract_raw["backbone_checkpoint_sha"]["value"] == (
+        "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a"
+    )
+
+
+def test_invariant_tri_crossover_and_genome_id_unchanged(
+    pinned_domain: m.Run9IdentityDomain,
+) -> None:
+    """不変制約: TRI_CROSSOVER/1.0 および genome_id 計算は無変更 —
+    既知の pinned_domain 入力から従来と同じ genome_id が出ることを確認
+    する（回帰検出のための固定値照合ではなく、決定論の実証）。"""
+    assert m.OPERATOR_ID == "TRI_CROSSOVER/1.0"
+    genome_a = m.build_founder(pinned_domain, "R9F-01")
+    genome_b = m.build_founder(pinned_domain, "R9F-02")
+    assert genome_a.genome_id != genome_b.genome_id
+    # 決定論: 同じ入力から再度呼び出しても同じ genome_id。
+    assert m.build_founder(pinned_domain, "R9F-01").genome_id == genome_a.genome_id
+
+
+def test_invariant_design_revision_doc_sha256_updated_and_matches_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """rev 0.3 編集後は design_revision_doc_sha256 を再計算して contract
+    反映済みであること（本巡の全編集を含む最終状態との一致）。"""
+    field = contract_raw["design_revision_doc_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(REVISION_DOC_PATH)
+
+
+def test_invariant_existing_codex_fixes_not_regressed(contract_raw: Dict[str, Any]) -> None:
+    """既存 Codex bot レビュー3件（PR #317 第1〜3巡）の修正が退行していない
+    ことの直接確認。"""
+    # 第1巡 Fix 1: human_evaluation_protocol_sha は optional 分類のまま。
+    assert "human_evaluation_protocol_sha" in m.CONTRACT_OPTIONAL_PIN_FIELDS
+    # 第1巡 Fix 2: 旧 revision 拒否メッセージは DESIGN_REVISION から動的生成。
+    tampered = copy.deepcopy(contract_raw)
+    tampered["design_revision"] = "0.2"
+    with pytest.raises(m.Run9ValidationError, match=m.DESIGN_REVISION):
+        m.load_run9_contract(tampered)
+    # 第1巡 Fix 3: autonomous_imitation_target_selection は
+    # PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS 側に保持されている
+    # （P2-1 の3分割後も転記漏れが再発していないこと）。
+    assert "imitation_target_selection" in m.PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS
+    # 第2巡 Fix 4: teacher_technique_label は引き続き禁止語彙。
+    assert "teacher_technique_label" in m.PRACTICE_FORBIDDEN_INPUTS
+    # 第2巡 Fix 6 → P1-2 改名: practice_audio_split_manifest_sha が
+    # pre-run 必須欄として存在。
+    assert "practice_audio_split_manifest_sha" in m.CONTRACT_PIN_FIELDS
+    # 第3巡 Fix 7/8: rev 0.3 文書の PRACTICE 禁止列挙に Technique label が
+    # 存在し、陳腐化した繰延記述が残っていない。
+    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    assert "教師付与の Technique label" in doc
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    for stale_phrase in ("新設予定", "新設する想定"):
+        assert stale_phrase not in contract_text
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第4巡対応 — Fix A（P1: manifest validator の値
+# 整形式強制） / Fix B（P2: split 内重複 row ID の拒否）
+# ---------------------------------------------------------------------------
+
+
+def test_fix4a_positive_control_manifests_still_pass() -> None:
+    """正常系対照: 整形式を満たす manifest は引き続き通過する。"""
+    m.validate_practice_split_manifest(_valid_practice_manifest())
+    m.validate_education_lesson_manifest(_valid_education_manifest())
+
+
+@pytest.mark.parametrize("key", sorted(m._PRACTICE_MANIFEST_SHA256_KEYS))
+def test_fix4a_practice_manifest_null_hash_rejected(key: str) -> None:
+    manifest = _valid_practice_manifest()
+    manifest[key] = None
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_practice_split_manifest(manifest)
+
+
+@pytest.mark.parametrize("key", sorted(m._PRACTICE_MANIFEST_SHA256_KEYS))
+def test_fix4a_practice_manifest_non_64hex_rejected(key: str) -> None:
+    manifest = _valid_practice_manifest()
+    manifest[key] = "not-a-valid-hex-value"
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_practice_split_manifest(manifest)
+    # 大文字hex（形式は近いが規約外）も拒否される。
+    manifest2 = _valid_practice_manifest()
+    manifest2[key] = "A" * 64
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_practice_split_manifest(manifest2)
+    # 63桁（1桁不足）も拒否される。
+    manifest3 = _valid_practice_manifest()
+    manifest3[key] = "a" * 63
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_practice_split_manifest(manifest3)
+
+
+@pytest.mark.parametrize("key", sorted(m._EDUCATION_MANIFEST_SHA256_KEYS))
+def test_fix4a_education_manifest_null_and_non_64hex_hash_rejected(key: str) -> None:
+    manifest_null = _valid_education_manifest()
+    manifest_null[key] = None
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_education_lesson_manifest(manifest_null)
+
+    manifest_bad = _valid_education_manifest()
+    manifest_bad[key] = "z" * 64
+    with pytest.raises(m.Run9ValidationError, match="64 lowercase hex"):
+        m.validate_education_lesson_manifest(manifest_bad)
+
+
+def test_fix4a_practice_manifest_empty_sample_inventory_rejected() -> None:
+    manifest = _valid_practice_manifest()
+    manifest["sample_inventory"] = []
+    with pytest.raises(m.Run9ValidationError, match="sample_inventory must be a non-empty list"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4a_practice_manifest_sample_inventory_with_blank_entry_rejected() -> None:
+    manifest = _valid_practice_manifest()
+    manifest["sample_inventory"] = ["s1", "   "]
+    with pytest.raises(m.Run9ValidationError, match="sample_inventory"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4a_practice_manifest_empty_rights_source_class_rejected() -> None:
+    manifest = _valid_practice_manifest()
+    manifest["rights_source_class"] = ""
+    with pytest.raises(m.Run9ValidationError, match="rights_source_class must be a non-empty string"):
+        m.validate_practice_split_manifest(manifest)
+    manifest2 = _valid_practice_manifest()
+    manifest2["rights_source_class"] = "   "
+    with pytest.raises(m.Run9ValidationError, match="rights_source_class must be a non-empty string"):
+        m.validate_practice_split_manifest(manifest2)
+
+
+@pytest.mark.parametrize("split_name", ["training", "validation", "sealed_holdout"])
+def test_fix4a_practice_manifest_single_empty_split_rejected(split_name: str) -> None:
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"][split_name] = []
+    with pytest.raises(m.Run9ValidationError, match=f"row_ids.{split_name} must be a non-empty list"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4a_practice_manifest_all_three_splits_empty_rejected() -> None:
+    """必須負例テスト「3 split 全空」: 使用可能な素材ゼロの manifest が
+    disjoint 検査（空集合同士は自明に素）だけでは検出できず素通り
+    していた欠陥の是正確認。"""
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"] = {"training": [], "validation": [], "sealed_holdout": []}
+    with pytest.raises(m.Run9ValidationError, match="must be a non-empty list"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4a_education_manifest_invalid_release_policy_rejected() -> None:
+    manifest = _valid_education_manifest()
+    manifest["sealed_holdout_technique_release_policy"] = "RELEASE_IMMEDIATELY"
+    with pytest.raises(
+        m.Run9ValidationError, match="sealed_holdout_technique_release_policy must be one of"
+    ):
+        m.validate_education_lesson_manifest(manifest)
+
+
+def test_fix4a_education_manifest_release_policy_wrong_case_rejected() -> None:
+    """閉じた語彙は大文字小文字も含めて厳密一致（旧実装のテストフィクスチャ
+    が使っていた小文字 `"release_after_training_complete"` は本巡で凍結
+    した正典値 `RELEASE_AFTER_TRAINING_COMPLETE` とは別値として拒否される
+    ことの確認 — 値の同一性判定に曖昧さを残さない）。"""
+    manifest = _valid_education_manifest()
+    manifest["sealed_holdout_technique_release_policy"] = "release_after_training_complete"
+    with pytest.raises(
+        m.Run9ValidationError, match="sealed_holdout_technique_release_policy must be one of"
+    ):
+        m.validate_education_lesson_manifest(manifest)
+
+
+def test_fix4a_release_policy_vocabulary_frozen() -> None:
+    assert m.EDUCATION_SEALED_HOLDOUT_RELEASE_POLICIES == ("RELEASE_AFTER_TRAINING_COMPLETE",)
+
+
+# --- Fix B: split 内重複 row ID の拒否 --------------------------------------
+
+
+@pytest.mark.parametrize("split_name", ["training", "validation", "sealed_holdout"])
+def test_fix4b_duplicate_row_id_within_single_split_rejected(split_name: str) -> None:
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"][split_name] = manifest["row_ids"][split_name] + manifest["row_ids"][split_name][:1]
+    with pytest.raises(m.Run9ValidationError, match="contains duplicate value"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4b_duplicate_row_id_checked_before_overlap_when_both_present() -> None:
+    """重複行 ID と split 間 overlap が同時に存在する manifest でも、
+    重複検査（Fix B）が overlap 検査より先に走り、より根本的な欠陥
+    （同一 split 内の重複）を先に報告する。"""
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"]["training"] = ["r1", "r1"]
+    manifest["row_ids"]["sealed_holdout"] = ["r1"]  # training と overlap もしている
+    with pytest.raises(m.Run9ValidationError, match="contains duplicate value"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4b_three_duplicate_occurrences_reported_once() -> None:
+    manifest = _valid_practice_manifest()
+    manifest["row_ids"]["training"] = ["r1", "r1", "r1", "r2"]
+    with pytest.raises(m.Run9ValidationError, match=r"\['r1'\]"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix4b_no_duplicates_positive_control() -> None:
+    """対照実験: 重複の無い manifest は Fix B の新設検査を素通りする。"""
+    manifest = _valid_practice_manifest()
+    m.validate_practice_split_manifest(manifest)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第5巡対応 — Fix A（P2: founder 別構造検出の値
+# 走査） / Fix B（P2: sample_inventory の重複 ID 拒否）
+# ---------------------------------------------------------------------------
+
+
+def test_fix5a_founder_id_key_with_value_record_rejected() -> None:
+    """負例: `{"founder_id": "R9F-01", ...}` のような**値フィールドでの
+    founder 分岐**（第4巡実装ではキー走査のみだったため素通りしていた）。
+    manifest 内の任意の深さに `founder_id` というキー自体が現れたら拒否
+    する。"""
+    manifest = _valid_practice_manifest()
+    manifest["provenance_records"] = [
+        {"founder_id": "R9F-01", "note": "collected for R9F-01"},
+    ]
+    with pytest.raises(m.Run9ValidationError, match="must not contain a 'founder_id' key"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix5a_nested_founder_key_rejected() -> None:
+    """負例: ネスト構造の奥深くに `R9F-01`/`R9F-02` が**キー**として現れた
+    場合の拒否（row_ids 直下だけでなく任意の深さで検出されること）。"""
+    manifest = _valid_practice_manifest()
+    manifest["extra"] = {"nested": {"R9F-02": {"detail": "per-founder override"}}}
+    with pytest.raises(m.Run9ValidationError, match="must not branch by founder_id"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix5a_nested_founder_exact_match_value_rejected() -> None:
+    """負例: ネスト構造の奥深くに `R9F-01`/`R9F-02` が**値**として（dict
+    の value としても list の要素としても）現れた場合の拒否。"""
+    manifest_dict_value = _valid_practice_manifest()
+    manifest_dict_value["extra"] = {"nested": {"target_founder": "R9F-02"}}
+    with pytest.raises(m.Run9ValidationError, match="must not contain a founder ID as a value"):
+        m.validate_practice_split_manifest(manifest_dict_value)
+
+    manifest_list_element = _valid_practice_manifest()
+    manifest_list_element["extra"] = {"applies_to": ["R9F-01"]}
+    with pytest.raises(m.Run9ValidationError, match="must not contain a founder ID as a list element"):
+        m.validate_practice_split_manifest(manifest_list_element)
+
+
+def test_fix5a_education_manifest_founder_value_record_rejected() -> None:
+    """education 側でも同じ拡張検出が効くことの確認。"""
+    manifest = _valid_education_manifest()
+    manifest["provenance"] = {"founder_id": "R9F-02"}
+    with pytest.raises(m.Run9ValidationError, match="must not contain a 'founder_id' key"):
+        m.validate_education_lesson_manifest(manifest)
+
+
+def test_fix5a_substring_containing_founder_id_not_falsely_rejected() -> None:
+    """対照実験（誤爆防止）: sample id 等、founder ID を**部分文字列として
+    含むが完全一致ではない**正当な文字列は拒否されない
+    （完全一致のみを対象とする設計の確認）。"""
+    manifest = _valid_practice_manifest()
+    manifest["sample_inventory"] = ["clip-R9F-01-take3", "s2"]
+    m.validate_practice_split_manifest(manifest)  # 例外を投げないことの確認
+
+    manifest_key = _valid_practice_manifest()
+    manifest_key["extra"] = {"R9F-01_summary": "aggregate note, not a per-founder branch"}
+    m.validate_practice_split_manifest(manifest_key)  # 例外を投げないことの確認
+
+
+def test_fix5a_founder_id_key_prefix_not_falsely_rejected() -> None:
+    """対照実験（誤爆防止）: `founder_id` という完全一致キー名でなければ
+    （例: `founder_identity_note`）拒否されない — 接頭辞一致ではなく
+    キー名の完全一致のみを対象とする設計の確認。"""
+    manifest = _valid_practice_manifest()
+    manifest["founder_identity_note"] = "shared note, not a per-founder branch"
+    m.validate_practice_split_manifest(manifest)  # 例外を投げないことの確認
+
+
+# --- Fix B: sample_inventory の重複 ID 拒否 ----------------------------------
+
+
+def test_fix5b_duplicate_sample_inventory_id_rejected() -> None:
+    manifest = _valid_practice_manifest()
+    manifest["sample_inventory"] = ["s1", "s2", "s1"]
+    with pytest.raises(m.Run9ValidationError, match="sample_inventory contains duplicate value"):
+        m.validate_practice_split_manifest(manifest)
+
+
+def test_fix5b_no_duplicate_sample_inventory_positive_control() -> None:
+    """対照実験: 重複の無い sample_inventory は通過する。"""
+    manifest = _valid_practice_manifest()
+    manifest["sample_inventory"] = ["s1", "s2", "s3"]
+    m.validate_practice_split_manifest(manifest)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #317 Codex bot レビュー第6巡対応 — Fix A（P1・部分採用: manifest 照合
+# のテスト層事前配線） / Fix B（P2・採用: 「両枝同一recipe」記述の是正）
+# ---------------------------------------------------------------------------
+
+
+def test_fix6a_practice_manifest_sha_matches_actual_file_and_validates_once_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """`practice_audio_split_manifest_sha` の実ファイル照合を、
+    `backbone_runtime_bundle_sha` の事前配線パターン（PR #316 第9巡,
+    e490985, 部分採用）と同型でテスト層へ配線する（Codex bot レビュー
+    PR #317 第6巡 Fix A, 部分採用）。
+
+    **層分離の境界宣言（変更しない）**: 実体照合はテスト層にのみ配線し、
+    `load_run9_contract()`/`gate_state()`（loader/runtime 層）へは配線
+    しない — PR #315 第4巡の境界宣言どおり、contract loader は事前登録
+    契約の構造述語（型・整形式・状態の整合）を検査する層であり、pin 値
+    と実体ファイルの突合は R9-G1（INPUT_FREEZE_AND_RIGHTS）検証ツーリング
+    の職務として分離する。
+
+    現状 status は PENDING のためこのテストは「PENDING であること」だけ
+    を確認するが、将来本欄が PINNED へ昇格した瞬間、この同じテストが
+    (a) `compute_file_sha256(PRACTICE_MANIFEST_PATH)` との一致、
+    (b) `PRACTICE_MANIFEST_PATH` の内容が `validate_practice_split_
+    manifest()` を通過すること、の両方を自動的に強制するようになる
+    （テストコードの変更を要さない = 事前配線）。
+    """
+    field = contract_raw["practice_audio_split_manifest_sha"]
+    if field["status"] == "PINNED":
+        assert field["value"] == m.compute_file_sha256(m.PRACTICE_MANIFEST_PATH), (
+            "practice_audio_split_manifest_sha が PINNED を宣言しているが、"
+            f"{m.PRACTICE_MANIFEST_PATH} の実バイト sha256 と一致しない"
+        )
+        manifest_data = m._loads_strict_json(
+            m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8")
+        )
+        m.validate_practice_split_manifest(manifest_data)  # 例外を投げないことの確認
+    else:
+        assert field["status"] == "PENDING"
+        assert field["value"] is None
+
+
+def test_fix6a_education_manifest_sha_matches_actual_file_and_validates_once_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """`education_technique_lesson_manifest_sha` 版の同型テスト
+    （上記 `test_fix6a_practice_manifest_sha_matches_actual_file_and_
+    validates_once_pinned` と対）。"""
+    field = contract_raw["education_technique_lesson_manifest_sha"]
+    if field["status"] == "PINNED":
+        assert field["value"] == m.compute_file_sha256(m.EDUCATION_MANIFEST_PATH), (
+            "education_technique_lesson_manifest_sha が PINNED を宣言しているが、"
+            f"{m.EDUCATION_MANIFEST_PATH} の実バイト sha256 と一致しない"
+        )
+        manifest_data = m._loads_strict_json(
+            m.EDUCATION_MANIFEST_PATH.read_text(encoding="utf-8")
+        )
+        m.validate_education_lesson_manifest(manifest_data)  # 例外を投げないことの確認
+    else:
+        assert field["status"] == "PENDING"
+        assert field["value"] is None
+
+
+def test_fix6a_manifest_path_constants_point_to_conventional_inputs_location() -> None:
+    assert m.PRACTICE_MANIFEST_PATH.name == "practice_audio_split_manifest.json"
+    assert m.EDUCATION_MANIFEST_PATH.name == "education_technique_lesson_manifest.json"
+    assert m.PRACTICE_MANIFEST_PATH.parent == _RUN_DIR / "inputs"
+    assert m.EDUCATION_MANIFEST_PATH.parent == _RUN_DIR / "inputs"
+
+
+def test_fix6a_prewired_check_actually_fails_for_mismatched_or_invalid_manifest_simulation(
+    tmp_path: Path,
+) -> None:
+    """事前配線が偽陽性（常に pass する壊れた検査）でないことのシミュレー
+    ション確認: 実ファイルがまだ存在しない現状では上記2テストは
+    「PENDING であること」の分岐しか通らないため、事前配線ロジックが
+    「PINNED + 不正 manifest」で実際に失敗することを、一時ファイルを
+    使った直接シミュレーションで別途実証する（本番の pin フィールドは
+    一切変更しない）。
+
+    (a) sha256 不一致: 宣言された pin 値が実ファイルの実測 sha256 と
+        異なれば assert が失敗する。
+    (b) manifest 検証失敗: schema 不一致（取り違え・破損の代表例）の
+        manifest は `validate_practice_split_manifest()` が
+        `Run9ValidationError` で拒否する — PINNED を騙っても検証は
+        迂回できない。
+    """
+    manifest_path = tmp_path / "practice_audio_split_manifest.json"
+    manifest_path.write_text(json.dumps(_valid_practice_manifest()), encoding="utf-8")
+    actual_hash = m.compute_file_sha256(manifest_path)
+
+    # (a) 宣言 pin 値が実ファイルと不一致なら AssertionError（= 事前配線の
+    # 主張どおり、照合が実際に機能して失敗すること）。
+    declared_wrong_value = "0" * 64
+    assert declared_wrong_value != actual_hash
+    with pytest.raises(AssertionError):
+        assert declared_wrong_value == m.compute_file_sha256(manifest_path)
+
+    # (b) manifest 自体が不正（schema 取り違え）なら validator が拒否する。
+    invalid_manifest_path = tmp_path / "invalid_practice_manifest.json"
+    invalid_manifest_path.write_text(json.dumps({"schema": "wrong-schema/9.9"}), encoding="utf-8")
+    invalid_data = m._loads_strict_json(invalid_manifest_path.read_text(encoding="utf-8"))
+    with pytest.raises(m.Run9ValidationError, match="practice split manifest schema"):
+        m.validate_practice_split_manifest(invalid_data)
+
+
+# --- Fix B: 「両枝同一recipe」記述の是正 -------------------------------------
+
+
+def test_fix6b_no_stale_same_recipe_language_in_contract_or_docs() -> None:
+    """PoR §8 の等価性規定と矛盾する「両枝同一recipe」型の記述が
+    RUN9_CONTRACT.yaml / rev 0.3 文書 / README.md に残っていないことの
+    全数掃討回帰検査（Codex bot レビュー第6巡 Fix B 採用）。等条件・等
+    予算が要求されるのは各枝『内』の二体間のみであり、PRACTICE と
+    EDUCATION 自体を「同一recipe」で括ってはならない。"""
+    stale_phrases = ("同一recipe", "同一 recipe", "same recipe", "同一レシピ")
+    for path in (CONTRACT_PATH, REVISION_DOC_PATH, _RUN_DIR / "README.md"):
+        text = path.read_text(encoding="utf-8")
+        for phrase in stale_phrases:
+            assert phrase not in text, f"{path.name} に陳腐化した記述 {phrase!r} が残っている"
+
+
+def test_fix6b_contract_interventions_description_states_per_branch_recipe() -> None:
+    """`interventions.description` が枝別 recipe（非対称性が実験変数）を
+    正しく記述していることの直接確認。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert "枝別recipe" in contract_text
+    assert "非対称" in contract_text
+
+
+def test_fix6b_learning_recipe_sha_reason_states_per_branch_bundled_manifest() -> None:
+    """`learning_recipe_sha.reason` が「枝別 recipe を束ねた単一 manifest」
+    という正しい意味論（欄の分割はしない・manifest 内で枝別に持つ）を
+    記述していることの確認。"""
+    field_reason = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))["learning_recipe_sha"]["reason"]
+    assert "枝別" in field_reason
+    assert "非対称" in field_reason
+    assert "PoR §8" in field_reason
+
+
+def test_fix6b_design_revision_doc_unchanged_this_round() -> None:
+    """本巡（第6巡）は RUN9_CONTRACT.yaml のみを編集し
+    DESIGN_RUN9_REVISION_0.3.md は無改変だったため、design_revision_doc_sha256
+    は前巡（User 外部レビュー P1-1〜P2-5 実装時に確定した値）のまま
+    据え置きであることを確認する（値そのものの回帰チェックは
+    `test_revision02_doc_sha256_pin_matches_actual_file` が汎用的に担う
+    ため、本テストは「本巡で変化していない」ことに焦点を当てる）。"""
+    contract_raw_local = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    field = contract_raw_local["design_revision_doc_sha256"]
+    assert field["value"] == _sha256_file(REVISION_DOC_PATH)

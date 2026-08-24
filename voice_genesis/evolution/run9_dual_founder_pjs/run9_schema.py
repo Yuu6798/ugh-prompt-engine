@@ -53,15 +53,32 @@ RUN_ID = "RUN9"
 EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
 
 # 現行 design_revision（凍結値。User 裁定 2026-08-24 =
-# DESIGN_RUN9_REVISION_0.2.md）。旧 revision "0.1" を宣言する contract は
-# 意図どおり拒否される — 修正が必要なら design_revision を上げ、旧
-# attempt を append-only 履歴として残す規約（DESIGN_RUN9 ヘッダ注記）。
-DESIGN_REVISION = "0.2"
+# DESIGN_RUN9_REVISION_0.3.md — PoR メモ
+# `POR_CONCEPT_ADJUDICATION_20260824.txt` の編入）。旧 revision "0.1"/"0.2"
+# を宣言する contract は意図どおり拒否される — 修正が必要なら
+# design_revision を上げ、旧 attempt を append-only 履歴として残す規約
+# （DESIGN_RUN9 ヘッダ注記）。
+DESIGN_REVISION = "0.3"
 
-# DESIGN_RUN9 §23: 単一介入エッジは凍結値。他のエッジへの差し替えは新しい
-# design_revision を持つ別 attempt として扱う（§20 禁止事項「結果を見た後の
-# 座標・Lesson・閾値追加」と同種の凍結規律）。
-CHANGED_EDGE = "LEARN_PERFORMANCE"
+# rev 0.3（改訂A、PoR §1/§3/§4/§16）: 単一 LEARN_PERFORMANCE エッジを
+# CONTROL 無介入枝 + 二つの介入エッジ（PRACTICE_FROM_AUDIO / 稽古,
+# TRANSFER_TECHNIQUE / 教育）へ分離する。r0 は交配（INHERIT_TRAIT）で
+# 出生した後、両介入エッジとも独立 Revision（r_practice / r_taught）へ
+# 分岐する — r0 自体は in-place 更新されない（PoR §10 最優先の不変条件）。
+# 旧 CHANGED_EDGE 単一定数（= "LEARN_PERFORMANCE"）は rev 0.3 で廃止する
+# （run_id/design_revision と同様に contract loader が fail-closed で
+# 旧形式 `single_intervention.changed_edge` を拒否する — 下記
+# `interventions` 構造を参照）。
+INTERVENTION_EDGES: Tuple[str, str] = ("PRACTICE_FROM_AUDIO", "TRANSFER_TECHNIQUE")
+
+# PoR §4 の3分岐のうち、学習介入を伴わない無介入 replay 枝（対照条件）。
+CONTROL_BRANCH = "CONTROL"
+
+# PoR §3.1「交配 — INHERIT_TRAIT」: 出生エッジの正式名。operator 自体は
+# 引き続き `TRI_CROSSOVER/1.0`（genome_id 決定論を壊さない — エッジ名の
+# 導入は TRI_CROSSOVER の計算規約を変更しない、あくまで結果分類・設計文書
+# 上のラベル）。
+BIRTH_EDGE = "INHERIT_TRAIT"
 
 # DESIGN_RUN9 §6 の parent_designs 正典（凍結値。順序も含めて完全一致を
 # 要求する — Codex bot レビュー PR #315 第7巡指摘2採用）。§6 は5件を宣言
@@ -103,6 +120,297 @@ _ATTEMPT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _GENOME_ID_LEN = 16
 _GENOME_ID_RE = re.compile(rf"^[0-9a-f]{{{_GENOME_ID_LEN}}}$")
+
+# ---------------------------------------------------------------------------
+# rev 0.3（改訂D、PoR §13）: 結果分類語彙の凍結。単一 Total Score へ潰さず
+# （§27 item 40 の禁則を rev 0.3 でも継承）、6分類をそれぞれ独立判定する。
+# v0.1 §20 の transfer_status 語彙は本ファミリーにより superseded
+# （DESIGN_RUN9_REVISION_0.3.md 改訂D参照）。値は PoR §13 の逐語。
+# ---------------------------------------------------------------------------
+
+BIRTH_OUTCOMES: Tuple[str, str] = ("ESTABLISHED", "NOT_ESTABLISHED")
+PRACTICE_OUTCOMES: Tuple[str, str, str] = ("GAIN_ESTABLISHED", "NO_GAIN", "UNOBSERVABLE")
+EDUCATION_OUTCOMES: Tuple[str, str, str] = ("TRANSFER_ESTABLISHED", "NO_TRANSFER", "UNOBSERVABLE")
+SEPARATION_OUTCOMES: Tuple[str, str, str] = (
+    "MACHINE_EVIDENCE_SUPPORTED", "MIXED", "NOT_ESTABLISHED",
+)
+FOUNDER_RESPONSE_OUTCOMES: Tuple[str, str, str] = (
+    "DIFFERENTIAL_RESPONSE", "COMMON_RESPONSE", "UNDETERMINED",
+)
+IDENTITY_OUTCOMES: Tuple[str, str, str] = (
+    "STABLE_BY_MACHINE_METRIC", "SHIFTED", "UNCALIBRATED",
+)
+
+# rev 0.3（User 外部レビュー PR #317 P2-4 採用、PoR §12）: held-out gain は
+# 「実装可能なら」ではなく RUN9 の最低限の評価漏洩防止として必須。
+# train-only gain と held-out gain を必ず別記録する4欄を凍結する
+# （2枝 × 2区分 = 4）。「Generalization gain（実装可能な範囲）」という
+# 旧い努力目標的な扱いと、この4欄の必須性を混同しない — 任意・後続精密化
+# 欄は別途 `OPTIONAL_GENERALIZATION_FIELDS` として区別する。
+REQUIRED_GAIN_FIELDS: Tuple[str, str, str, str] = (
+    "practice_train_gain",
+    "practice_heldout_gain",
+    "education_train_gain",
+    "education_heldout_gain",
+)
+
+# 任意・後続精密化欄（PoR §7 item 7「Generalization gain（実装可能な
+# 範囲）」に相当 — RUN9 単体では一般化の精密証明を要求しないため、この
+# 3欄は実装できる範囲でのみ記録すればよい）。
+OPTIONAL_GENERALIZATION_FIELDS: Tuple[str, str, str] = (
+    "broad_generalization_gain",
+    "cross_song_generalization",
+    "cross_register_generalization",
+)
+
+# rev 0.3（改訂E、PoR §9）: 失敗の三分類。IMPLEMENTATION_FAILURE は修正可・
+# 同一 design_revision で再 attempt。SCIENTIFIC_NULL は結果として凍結
+# （閾値・lesson・探索範囲を緩めて同 attempt を救済しない）。DESIGN_FAILURE
+# は現 revision を凍結し新 design_revision で再構築する。
+FAILURE_CLASSES: Tuple[str, str, str] = (
+    "IMPLEMENTATION_FAILURE", "SCIENTIFIC_NULL", "DESIGN_FAILURE",
+)
+
+# ---------------------------------------------------------------------------
+# rev 0.3 改訂D（User 外部レビュー PR #317 P1-4 採用）: 科学結果
+# （scientific_outcomes = 上記6分類）と運用状態（run_status）と
+# 保存/昇格（archive_status/promotion_status）を完全に分離する。
+#
+# 未来の実装者が6分類を記録した後に旧 v0.1 §20 の overall PASS /
+# PASS_WITH_RESIDUAL へ再集約し、そのPASSから §21 CANONICAL_LEARNED_REVISION
+# / Parent Pool 昇格を導出できてしまう抜け道を、語彙レベルで塞ぐ
+# （3つの語彙は互いに素であり、いずれの語彙からも他方を機械的に導出する
+# 関数は本モジュールに存在しない — 「6分類→単一PASS/TotalScore」を
+# 生成する関数は意図的に実装しない）。
+# ---------------------------------------------------------------------------
+
+# run_status: 実行完了状態だけを示し、科学的優劣・PASS/FAIL を表さない
+# （PoR §9 の三失敗分類 = FAILURE_CLASSES とは別軸 — run_status は
+# 「実行がどう終わったか」、FAILURE_CLASSES は「終わり方が失敗だった場合
+# その失敗をどう分類するか」）。
+RUN_STATUSES: Tuple[str, str, str, str] = (
+    "COMPLETE", "BLOCKED", "IMPLEMENTATION_FAILED", "DESIGN_FAILED",
+)
+
+# archive_status: 全 terminal attempt（gain 成立・NO_GAIN/NO_TRANSFER・
+# SCIENTIFIC_NULL・DESIGN_FAILURE/UNOBSERVABLE・Identity SHIFTED・
+# incomplete/failed attempt の証拠を含む）が対象。値は単一
+# （IMMUTABLE_ARCHIVED）のみ — 「保存するかどうか」の分岐自体を存在させない
+# （全 terminal outcome で無条件に作成する規律を語彙レベルで強制する）。
+ARCHIVE_STATUSES: Tuple[str] = ("IMMUTABLE_ARCHIVED",)
+
+# promotion_status: RUN9 単体の結果からは絶対に昇格値へ到達できない
+# ことを語彙レベルで保証する — 値はただ1つ（ARCHIVE_ONLY_PENDING_USER_RULING）
+# のみで、"CANONICAL_LEARNED_REVISION" のような昇格を意味する値は
+# PROMOTION_STATUSES に一切含まれない。Parent Pool 登録・
+# CANONICAL_LEARNED_REVISION への自動昇格・片方だけの優良 Founder 選抜・
+# PASS からの自動繁殖適格判定は rev 0.3 で禁止する（PoR §14「繁殖、淘汰、
+# Parent Pool 昇格、優良 Founder 選抜は後続裁定へ送る」）。昇格が必要に
+# なった場合は、本 frozenset を拡張する新しい design_revision（= 別の
+# User 裁定）を要する。
+PROMOTION_STATUSES: Tuple[str] = ("ARCHIVE_ONLY_PENDING_USER_RULING",)
+
+# rev 0.3 改訂A/D（User 外部レビュー PR #317 P1-3 採用）: CONTROL 枝は
+# 内部に二つの必須 control condition を持つ — C0（無学習 replay。
+# renderer/backend/PCM の自然変動＝noise floor を測る）と C1（中立
+# ControlProfile を付与するだけで学習 step は実行しない Sham Transition。
+# ControlProfile 機構を通すこと自体の副作用を測る）。旧実装はこの二つを
+# 「CONTROL = 無介入 replay」の単一概念へ混同しており、render/replay
+# noise と profile 適用機構の副作用を分離できなかった（rev 0.2 の C1
+# Zero ControlProfile / Sham Transition の意味論と rev 0.3 当初の CONTROL
+# 定義が矛盾していた）。
+CONTROL_CONDITIONS: Tuple[str, str] = ("NO_LEARNING_REPLAY", "ZERO_CONTROLPROFILE_SHAM")
+
+# rev 0.3（改訂A、PoR §4/§10）: 各枝・各 control condition が書き込む
+# Founder 別 versioned Performance ControlProfile（改訂1で導入済みの
+# ControlProfile 方式を三枝へ拡張）のバージョン系列命名。CONTROL 枝は
+# condition 別に2値（C0=NO_LEARNING_REPLAY→"replay" / C1=
+# ZERO_CONTROLPROFILE_SHAM→"r_sham"）を持つネスト mapping、
+# PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE は各々独立の単一 revision 系列
+# （r_practice / r_taught）として保存する — r0 を in-place 更新しないこと
+# と対で、両枝の変化を後から比較可能にする。
+BRANCH_REVISIONS: Mapping[str, Any] = types.MappingProxyType({
+    CONTROL_BRANCH: types.MappingProxyType({
+        "NO_LEARNING_REPLAY": "replay",
+        "ZERO_CONTROLPROFILE_SHAM": "r_sham",
+    }),
+    "PRACTICE_FROM_AUDIO": "r_practice",
+    "TRANSFER_TECHNIQUE": "r_taught",
+})
+
+
+def control_conditions_satisfied(observed_conditions: Any) -> bool:
+    """評価 readiness 判定（rev 0.3 改訂A/D、User 外部レビュー PR #317
+    P1-3 必須テスト「C0/C1 の片方が欠けた attempt は評価 READY にならない」
+    の機械実装）。`observed_conditions` は attempt が実際に生成した
+    control condition の名前集合（例: `{"NO_LEARNING_REPLAY"}`）。
+    `CONTROL_CONDITIONS` の全件が揃って初めて True — Practice/Education
+    gain の基準ノイズ算出（C0 由来）と profile 機構の副作用記録
+    （C1−C0）はどちらも両条件の存在を前提とするため、片方だけでは
+    評価 READY と判定しない。"""
+    if not isinstance(observed_conditions, (set, frozenset, list, tuple)):
+        raise Run9ValidationError(
+            f"observed_conditions must be a set/list/tuple, got {type(observed_conditions).__name__}"
+        )
+    return set(CONTROL_CONDITIONS).issubset(set(observed_conditions))
+
+# ---------------------------------------------------------------------------
+# rev 0.3（改訂C、PoR §3.2/§3.3/§11）: PRACTICE / EDUCATION の情報境界の
+# 凍結定数。機械可読 id で列挙し、将来の practice/education builder が
+# これを import して「渡してよいもの」「渡してはいけないもの」の実装時
+# 検証の正本として使う（本モジュール自体はまだ builder を持たない —
+# ハーネス実装は VG-L0 待ち。ここでは語彙の凍結のみ行う）。
+# ---------------------------------------------------------------------------
+
+# PoR §3.2「稽古で Founder へ明示的に渡してはいけないもの」。
+PRACTICE_FORBIDDEN_INPUTS: Tuple[str, ...] = (
+    "pjs_speaker_embedding",
+    "pjs_identity_coordinate",
+    "correct_technique_parameter",  # 例:「vibrato=この値」等の正解 Technique parameter
+    # PoR §3.2 冒頭「教師の正解パラメータやTechnique labelは与えず」の
+    # 後半（Technique label チャネル）— PR #317 Codex bot レビュー第2巡
+    # Fix 4 採用: 第1巡実装時に転記漏れしていた（正解 parameter の禁止は
+    # 上の correct_technique_parameter でカバー済みだったが、教師付与の
+    # ラベルそのもの — 「これは vibrato の見本」といった名前付けの供与 —
+    # は別の禁止項目として明示されていなかった）。
+    "teacher_technique_label",
+    "teacher_internal_parameter_dump",
+)
+
+# rev 0.3（User 外部レビュー PR #317 P2-1 採用）: 旧 `PRACTICE_ALLOWED_INPUTS`
+# は「データ入力」（pjs_audio_direct_listen）と「Founder 自身が行う動作」
+# （feature extraction / target selection / diff estimation / search）を
+# 一つのタプルに混在させていた。将来の practice builder がこれを単純な
+# 入力 allowlist として扱うと、「Founder 自身が差分抽出する」という actor
+# 境界（誰が/何を渡され/何を自分でするか）を正確に強制できない
+# （外部から動作結果だけを渡して「入力として許可されている」と偽装できて
+# しまう）。3分割し、旧定数は削除する（本 PR 内でのみ使われていた語彙の
+# ため後方互換エイリアスは不要）。
+
+# 許可データ入力: Founder へ実際に渡してよい「情報」そのもの。
+PRACTICE_ALLOWED_DATA_INPUTS: Tuple[str, str, str] = (
+    "pjs_training_audio",
+    "founder_self_render",
+    # 全枝共通の score/lyrics/task context — 教師 Performance から導出した
+    # 正解情報ではない場合のみ許可（歌詞・楽曲構造そのものは教師の歌唱表現
+    # の答えではないため）。
+    "shared_score_lyrics_task_context_non_teacher_derived",
+)
+
+# 必須の Founder-local 処理: 外部から代行させてはならない、Founder 自身が
+# 行うべき動作（「同じ feature extractor コードを利用する」こと自体は
+# 禁止しないが、抽出という行為自体は Founder 側で実行されなければ
+# ならない — PoR §3.2「Founder 自身が...」の主語を機械可読にした語彙）。
+PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS: Tuple[str, str, str, str, str] = (
+    "feature_extraction",
+    "imitation_target_selection",
+    "self_teacher_difference_estimation",
+    "candidate_generation",
+    "allowed_range_search",
+)
+
+# 明示的に禁止する外部支援: 教師側で既に計算済みの「答え」を
+# PRACTICE learner へ入力として渡す経路（Founder 自身の自律処理を代行・
+# 迂回してしまう）。
+PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE: Tuple[str, ...] = (
+    "precomputed_teacher_technique_features",
+    "externally_selected_imitation_target",
+    "teacher_derived_diff_vector",
+    "correct_target_trajectory",
+    "teacher_loss_gradient",
+    "education_lesson_reference",
+    "speaker_identity_embedding",
+    "teacher_internal_parameter_dump",
+)
+
+# PoR §3.3「教育で渡してよい候補」（= §11 TRANSFER_TECHNIQUE の許可
+# channel）。
+EDUCATION_ALLOWED_CHANNELS: Tuple[str, ...] = (
+    "timing",
+    "phoneme_note_duration_relation",
+    "pitch_trajectory",
+    "dynamics_energy_trajectory",
+    "onset_release_pattern",
+    "vibrato_pattern",
+    "phrasing",
+    "phrase_end_control",
+    "breath_placement",
+)
+
+# PoR §3.3「教育で渡してはいけないもの」+ §11「原則として learner 自身は
+# PJS raw audio を直接参照しない」（lesson 生成器だけが PJS audio から
+# Technique を抽出する非対称性そのものが実験変数 — PoR §11 末尾）。
+EDUCATION_FORBIDDEN_INPUTS: Tuple[str, ...] = (
+    "pjs_speaker_embedding",
+    "pjs_identity_coordinate",
+    "pjs_voice_quality_latent",
+    "formant_inheritance_target",
+    "spectral_envelope_identity_replication",
+    "founder_identity_replacement_parameter",
+    "learner_pjs_raw_audio_direct_reference",
+)
+
+# ---------------------------------------------------------------------------
+# rev 0.3 改訂A（User 外部レビュー PR #317 P1-1 採用）: 稽古と教育の
+# 書き込み境界が同一だった不備の是正。ControlProfile の可変領域を型付きで
+# 分割し、枝ごとの書込許可を機械可読に固定する。`inputs/branch_write_policy.json`
+# （schema 下記 `SCHEMA_BRANCH_WRITE_POLICY`）が同じ内容を人間可読な
+# manifest として保持し、本モジュールの定数と一致することを load 時に
+# 強制する（改変 manifest は load 失敗 — `validate_branch_write_policy_manifest()`
+# 参照）。
+# ---------------------------------------------------------------------------
+
+SCHEMA_BRANCH_WRITE_POLICY = "run9-branch-write-policy/1.0"
+
+# ControlProfile の可変領域を最低限、型付きで分割した state partition。
+# IDENTITY_STATE はどの枝からも書き込み不可（`IMMUTABLE_STATE_PARTITIONS`
+# 参照）。TRAIT_CONTROL は「明示的に許可された発声制御領域の後天的
+# 変化」（PoR §3.2 の Trait 学習 — speaker embedding や Genome の変更では
+# ない）を表す制御パラメータ領域、TECHNIQUE_CONTROL は歌唱の型・技術を
+# 表す制御パラメータ領域。
+STATE_PARTITIONS: Tuple[str, str, str] = (
+    "IDENTITY_STATE", "TRAIT_CONTROL", "TECHNIQUE_CONTROL",
+)
+
+# 全枝で書込不可の state partition（`BRANCH_WRITABLE_PARTITIONS` のどの
+# 枝の writable 集合にも現れない）。
+IMMUTABLE_STATE_PARTITIONS: Tuple[str] = ("IDENTITY_STATE",)
+
+# 枝ごとの書込許可 partition 集合（凍結・機械可読）。CONTROL は学習 step を
+# 実行しないため writable = 空。PRACTICE_FROM_AUDIO は稽古で Trait +
+# Technique の両方が自律的に動き得る（PoR §3.2「Trait/Techniqueの両方が
+# 変化し得ることを観測する」）。TRANSFER_TECHNIQUE は Technique のみ —
+# 型だけの伝達であり Trait は書き換えない（教育枝まで Trait を書き換え
+# られると「型だけの伝達」でなくなるという User レビュー指摘そのものの
+# 是正）。
+BRANCH_WRITABLE_PARTITIONS: Mapping[str, Tuple[str, ...]] = types.MappingProxyType({
+    "CONTROL": (),
+    "PRACTICE_FROM_AUDIO": ("TRAIT_CONTROL", "TECHNIQUE_CONTROL"),
+    "TRANSFER_TECHNIQUE": ("TECHNIQUE_CONTROL",),
+})
+
+# 全枝で不変の artifact（state partition ではなく、そもそも
+# ControlProfile の外側にある永続 artifact）。PRACTICE で許す Trait 変化は
+# これらのいずれでもない — speaker embedding や Genome 変更そのものでは
+# なく、TRAIT_CONTROL partition 内の「明示的に許可された発声制御領域の
+# 後天的変化」に限定される（User 外部レビュー PR #317 P1-1 指摘6）。
+BRANCH_IMMUTABLE_ARTIFACTS: Tuple[str, ...] = (
+    "shared_backbone",
+    "founder_genome",
+    "identity_coordinate",
+    "speaker_embedding",
+    "model_weights",
+    "r0_bytes",
+)
+
+# rev 0.3 改訂F 拡張（User 外部レビュー PR #317 P2-2 採用）: human_audit_mode
+# の語彙。既定は DISABLED（今回の User 裁定に従う既定値）。
+# ADVISORY_PREDECLARED は「監査を予定したが準備できていない」を
+# DISABLED（監査を実施しない）と区別するための宣言 — holdout 開封後の
+# モード変更は禁止し、SCIENTIFIC_NULL/Identity SHIFTED の救済に人間監査を
+# 使わない規律と対になる（DESIGN_RUN9_REVISION_0.3.md 参照）。
+HUMAN_AUDIT_MODES: Tuple[str, str] = ("DISABLED", "ADVISORY_PREDECLARED")
+DEFAULT_HUMAN_AUDIT_MODE = "DISABLED"
 
 
 class Run9ValidationError(ValueError):
@@ -575,6 +883,473 @@ def compute_file_sha256(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 枝別書込境界の検証（rev 0.3 改訂A、User 外部レビュー PR #317 P1-1）
+# ---------------------------------------------------------------------------
+
+
+def validate_branch_write(branch: str, partition: str) -> None:
+    """`branch` が `partition` へ書き込もうとする操作が
+    `BRANCH_WRITABLE_PARTITIONS` の許可集合内かを検証する。範囲外
+    （例: EDUCATION=TRANSFER_TECHNIQUE が TRAIT_CONTROL や IDENTITY_STATE
+    へ書き込もうとする）は fail-closed で `Run9ValidationError`。将来の
+    practice/education builder がこの関数を import して呼ぶことを想定する
+    正本 API（builder 自体は本 PR の範囲外 — VG-L0 ハーネス実装待ち）。
+    """
+    if branch not in BRANCH_WRITABLE_PARTITIONS:
+        raise Run9ValidationError(
+            f"branch must be one of {sorted(BRANCH_WRITABLE_PARTITIONS)}, got {branch!r}"
+        )
+    if partition not in STATE_PARTITIONS:
+        raise Run9ValidationError(
+            f"partition must be one of {list(STATE_PARTITIONS)}, got {partition!r}"
+        )
+    writable = BRANCH_WRITABLE_PARTITIONS[branch]
+    if partition not in writable:
+        raise Run9ValidationError(
+            f"branch {branch!r} may not write to partition {partition!r} — writable set for "
+            f"{branch!r} is {list(writable)} (DESIGN_RUN9_REVISION_0.3.md 改訂A: 稽古と教育の書込"
+            "境界は非対称であり、CONTROL は無介入のため書込集合は空)"
+        )
+
+
+_BRANCH_WRITE_POLICY_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "schema", "state_partitions", "immutable_state_partitions",
+    "branch_writable_partitions", "immutable_artifacts",
+})
+# 機械検証対象外の人間可読な補助欄（値の内容は検証しない — pin_source_
+# candidates と同様の「任意の補助情報」枠）。
+_BRANCH_WRITE_POLICY_OPTIONAL_KEYS: FrozenSet[str] = frozenset({
+    "description", "state_partition_meaning", "immutable_artifacts_rationale",
+    "enforcement",
+})
+_BRANCH_WRITE_POLICY_ALLOWED_KEYS: FrozenSet[str] = (
+    _BRANCH_WRITE_POLICY_REQUIRED_KEYS | _BRANCH_WRITE_POLICY_OPTIONAL_KEYS
+)
+
+
+def load_branch_write_policy_json(text: str) -> Dict[str, Any]:
+    """`inputs/branch_write_policy.json` のテキストを重複キー拒否で読み込む
+    （`load_rights_manifest_json()` と同一規約）。"""
+    data = _loads_strict_json(text)
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"branch write policy document must be an object, got {type(data).__name__}"
+        )
+    return data
+
+
+def validate_branch_write_policy_manifest(data: Mapping[str, Any]) -> None:
+    """`inputs/branch_write_policy.json` の内容が、本モジュールの
+    `STATE_PARTITIONS`/`IMMUTABLE_STATE_PARTITIONS`/
+    `BRANCH_WRITABLE_PARTITIONS`/`BRANCH_IMMUTABLE_ARTIFACTS` 定数と
+    **完全一致**することを強制する（User 外部レビュー PR #317 P1-1
+    必須テスト「policy 改変で contract load または pre-run Gate が失敗
+    する」の実装）。manifest は定数の「二重管理された複製」ではなく、
+    定数を人間可読な形で照合可能にする従属文書という位置づけ — 一致しない
+    manifest は改変（または実装とのドリフト）とみなし fail-closed で拒否
+    する。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"branch write policy document must be an object, got {type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _BRANCH_WRITE_POLICY_ALLOWED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"branch write policy has unknown key(s): {sorted(unknown)}")
+    missing = _BRANCH_WRITE_POLICY_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"branch write policy missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_BRANCH_WRITE_POLICY:
+        raise Run9ValidationError(
+            f"branch write policy schema must be {SCHEMA_BRANCH_WRITE_POLICY!r}, got {schema!r}"
+        )
+
+    state_partitions = data["state_partitions"]
+    if not isinstance(state_partitions, list) or tuple(state_partitions) != STATE_PARTITIONS:
+        raise Run9ValidationError(
+            f"state_partitions must be exactly {list(STATE_PARTITIONS)} (order included), "
+            f"got {state_partitions!r}"
+        )
+
+    immutable_partitions = data["immutable_state_partitions"]
+    if (
+        not isinstance(immutable_partitions, list)
+        or tuple(immutable_partitions) != IMMUTABLE_STATE_PARTITIONS
+    ):
+        raise Run9ValidationError(
+            f"immutable_state_partitions must be exactly {list(IMMUTABLE_STATE_PARTITIONS)}, "
+            f"got {immutable_partitions!r}"
+        )
+
+    writable = data["branch_writable_partitions"]
+    if not isinstance(writable, dict) or set(writable.keys()) != set(BRANCH_WRITABLE_PARTITIONS.keys()):
+        raise Run9ValidationError(
+            f"branch_writable_partitions must have exactly keys "
+            f"{sorted(BRANCH_WRITABLE_PARTITIONS.keys())}, got {writable!r}"
+        )
+    for branch, expected in BRANCH_WRITABLE_PARTITIONS.items():
+        actual = writable[branch]
+        if not isinstance(actual, list) or tuple(actual) != expected:
+            raise Run9ValidationError(
+                f"branch_writable_partitions[{branch!r}] must be exactly {list(expected)} "
+                f"(order included), got {actual!r}"
+            )
+
+    immutable_artifacts = data["immutable_artifacts"]
+    if not isinstance(immutable_artifacts, list) or tuple(immutable_artifacts) != BRANCH_IMMUTABLE_ARTIFACTS:
+        raise Run9ValidationError(
+            f"immutable_artifacts must be exactly {list(BRANCH_IMMUTABLE_ARTIFACTS)} (order "
+            f"included), got {immutable_artifacts!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# PRACTICE / EDUCATION manifest 最低要件検証（rev 0.3、User 外部レビュー
+# PR #317 P1-2）: split/lesson manifest の schema 欄で種別を自己宣言させ、
+# 取り違え（practice manifest を education として、あるいはその逆に読ま
+# せる）は schema 不一致で拒否する。
+# ---------------------------------------------------------------------------
+
+SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST = "run9-practice-audio-split-manifest/1.0"
+SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST = "run9-education-technique-lesson-manifest/1.0"
+
+# rev 0.3（Codex bot レビュー第6巡 Fix A 部分採用）: manifest 実ファイルの
+# 規約パス。`practice_audio_split_manifest_sha` /
+# `education_technique_lesson_manifest_sha` が PINNED へ昇格した際、この
+# パスに置かれた実ファイルの sha256 が pin 値と一致し、かつ
+# `validate_practice_split_manifest()`/`validate_education_lesson_manifest()`
+# を通過することをテスト層が強制する（下記「層分離の境界宣言」参照）。
+# `branch_write_policy.json`（`inputs/branch_write_policy.json`）と同じ
+# 命名規約 — schema 識別子から機械的に導出せず、リポジトリ内の固定配置と
+# して凍結する。
+PRACTICE_MANIFEST_PATH = _THIS_DIR / "inputs" / "practice_audio_split_manifest.json"
+EDUCATION_MANIFEST_PATH = _THIS_DIR / "inputs" / "education_technique_lesson_manifest.json"
+
+# PoR §12 + User 外部レビュー PR #317 P1-2 修正指示4の逐語項目を機械可読
+# キー名へ写した最低要件（practice split manifest）。
+PRACTICE_MANIFEST_REQUIRED_KEYS: Tuple[str, ...] = (
+    "pjs_source_archive_sha256",  # PJS source archive pin
+    "expanded_corpus_identity_sha256",  # expanded corpus identity pin
+    "training_split_sha256",  # training split hash
+    "validation_split_sha256",  # validation split hash
+    "sealed_holdout_sha256",  # sealed holdout root/hash
+    "row_order_sha256",  # row order hash
+    "sample_inventory",  # sample inventory
+    "rights_source_class",  # rights/source class
+    "is_raw_audio",  # raw音声であること（bool True 必須）
+    "excludes_correct_technique_parameters",  # 正解 Technique parameter を含まないこと（bool True 必須）
+    "identical_bytes_and_order_across_founders",  # 二体へ同一bytes・同一順序で提示すること（bool True 必須）
+)
+
+# PoR §12 + 修正指示5の逐語項目を機械可読キー名へ写した最低要件
+# （education technique lesson manifest）。
+EDUCATION_MANIFEST_REQUIRED_KEYS: Tuple[str, ...] = (
+    "training_technique_lesson_sha256",  # training音声から生成したTechnique lesson
+    "validation_technique_lesson_sha256",  # validation lesson
+    "sealed_holdout_technique_release_policy",  # sealed holdout Techniqueは学習後にのみ生成/開封
+    "excludes_identity_and_trait_donor_info",  # PJS Identity/speaker embedding/voice-trait donor情報の排除証拠（bool True 必須）
+    "identical_lesson_bytes_across_founders",  # 二体へ同一lesson bytesを提示すること（bool True 必須）
+)
+
+_MANIFEST_REQUIRED_TRUE_KEYS: FrozenSet[str] = frozenset({
+    "is_raw_audio",
+    "excludes_correct_technique_parameters",
+    "identical_bytes_and_order_across_founders",
+    "excludes_identity_and_trait_donor_info",
+    "identical_lesson_bytes_across_founders",
+})
+
+# rev 0.3（User 外部レビュー PR #317 P1-2 → Codex bot レビュー第4巡 Fix A
+# 採用）: manifest 必須欄のうち `_sha256` 終端キーは値整形式（64hex）まで
+# 強制する。第1〜3巡実装は presence-only（キーが存在するかどうか）しか
+# 検証しておらず、「builder が不完全 artifact を出しても byte-hash だけで
+# PINNED contract が作れ、使用可能な素材ゼロで READY に至る」偽成功経路が
+# validator 層で閉じていなかった。
+_PRACTICE_MANIFEST_SHA256_KEYS: FrozenSet[str] = frozenset({
+    "pjs_source_archive_sha256", "expanded_corpus_identity_sha256",
+    "training_split_sha256", "validation_split_sha256",
+    "sealed_holdout_sha256", "row_order_sha256",
+})
+_EDUCATION_MANIFEST_SHA256_KEYS: FrozenSet[str] = frozenset({
+    "training_technique_lesson_sha256", "validation_technique_lesson_sha256",
+})
+
+# `sealed_holdout_technique_release_policy` の閉じた語彙（Codex bot レビュー
+# 第4巡 Fix A 採用）: PoR §12「sealed holdout Technique は学習終了後に
+# 開封」— 正当な release policy は「training 完了後にのみ開封する」の
+# 1値のみであり、他の値（例: 学習中の早期開封を許すもの）は PoR の holdout
+# 規律に反するため存在させない。将来別の正当な policy が追加される場合は
+# 本タプルを拡張する（新しい design_revision を要する設計判断）。
+EDUCATION_SEALED_HOLDOUT_RELEASE_POLICIES: Tuple[str] = ("RELEASE_AFTER_TRAINING_COMPLETE",)
+
+
+def _require_nonempty_str(value: Any, *, manifest_kind: str, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise Run9ValidationError(
+            f"{manifest_kind}.{field} must be a non-empty string, got {value!r}"
+        )
+    return value
+
+
+def _require_manifest_sha256_hex(value: Any, *, manifest_kind: str, field: str) -> str:
+    if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
+        raise Run9ValidationError(
+            f"{manifest_kind}.{field} must be exactly 64 lowercase hex characters (sha256 format), "
+            f"got {value!r}"
+        )
+    return value
+
+
+def _require_nonempty_str_list(value: Any, *, manifest_kind: str, field: str) -> List[str]:
+    if not isinstance(value, list) or not value:
+        raise Run9ValidationError(
+            f"{manifest_kind}.{field} must be a non-empty list, got {value!r}"
+        )
+    for i, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise Run9ValidationError(
+                f"{manifest_kind}.{field}[{i}] must be a non-empty string, got {item!r}"
+            )
+    return value
+
+
+def _require_manifest_hash_fields(
+    data: Mapping[str, Any], *, hash_keys: FrozenSet[str], manifest_kind: str
+) -> None:
+    for key in hash_keys:
+        _require_manifest_sha256_hex(data[key], manifest_kind=manifest_kind, field=key)
+
+
+def _require_no_duplicate_list_items(value: List[Any], *, manifest_kind: str, field: str) -> None:
+    """`value` 内に重複要素が無いことを検証する（Codex bot レビュー第4巡
+    Fix B 採用の row_ids 版を、第5巡 Fix B 採用で `sample_inventory` へも
+    適用できる共有ヘルパへ抽出）。`set(value)` への変換は重複を黙って
+    握り潰すため、`len(value) != len(set(value))` を先行させて重複自体を
+    検出してから、実際に重複した値を報告する。
+    """
+    if len(value) != len(set(value)):
+        seen: set = set()
+        duplicates = sorted({v for v in value if v in seen or seen.add(v)})
+        raise Run9ValidationError(
+            f"{manifest_kind}.{field} contains duplicate value(s): {duplicates} — "
+            "duplicate entries would be silently collapsed by set-based dedup while an "
+            "order-preserving harness would still consume the entry multiple times"
+        )
+
+
+def _require_disjoint_row_id_sets(
+    *, training: Any, validation: Any, sealed_holdout: Any, manifest_kind: str
+) -> None:
+    """training/validation/sealed_holdout の row id 集合が互いに素で
+    あることを検証する（User 外部レビュー PR #317 P1-2 必須テスト
+    「holdout が training 集合へ混入した manifest を拒否」の実装）。
+    3集合いずれも**非空** list であることを先に強制する（Codex bot レビュー
+    第4巡 Fix A 採用: 3 split 全空の manifest — 使用可能な素材ゼロ — が
+    disjoint 検査自体は素通しで通過してしまっていた）。
+
+    disjoint 検査の前に、各 split 内で重複 row ID が無いことを強制する
+    （Codex bot レビュー第4巡 Fix B 採用、第5巡 Fix B で共有ヘルパへ
+    抽出）: `set(training)` への変換は重複を黙って握り潰すため、
+    `["r1","r1","r2"]` のような list をそのまま消費するハーネスが同一
+    row を複数回学習/評価し、gain 推定を汚す経路が閉じていなかった。
+    """
+    splits: Dict[str, List[Any]] = {"training": training, "validation": validation, "sealed_holdout": sealed_holdout}
+    for name, value in splits.items():
+        _require_nonempty_str_list(value, manifest_kind=manifest_kind, field=f"row_ids.{name}")
+    for name, value in splits.items():
+        _require_no_duplicate_list_items(value, manifest_kind=manifest_kind, field=f"row_ids.{name}")
+    training_set, validation_set, holdout_set = set(training), set(validation), set(sealed_holdout)
+    overlap_th = training_set & holdout_set
+    if overlap_th:
+        raise Run9ValidationError(
+            f"{manifest_kind}.row_ids: sealed_holdout overlaps training — leaked row id(s): "
+            f"{sorted(overlap_th)}"
+        )
+    overlap_vh = validation_set & holdout_set
+    if overlap_vh:
+        raise Run9ValidationError(
+            f"{manifest_kind}.row_ids: sealed_holdout overlaps validation — leaked row id(s): "
+            f"{sorted(overlap_vh)}"
+        )
+    overlap_tv = training_set & validation_set
+    if overlap_tv:
+        raise Run9ValidationError(
+            f"{manifest_kind}.row_ids: training overlaps validation — leaked row id(s): "
+            f"{sorted(overlap_tv)}"
+        )
+
+
+_FOUNDER_ID_KEY_NAME = "founder_id"
+
+
+def _reject_per_founder_split_structure(data: Mapping[str, Any], *, manifest_kind: str) -> None:
+    """manifest が Founder ごとに異なる split/lesson を与える構造を拒否
+    する（User 外部レビュー PR #317 P1-2 必須テスト「Founder ごとに異なる
+    practice split を与える構造を拒否」の実装。Codex bot レビュー第5巡
+    Fix A 採用で検出範囲を拡張）。「manifest は二体共通・単一系列であり
+    founder 分岐構造を持たない」という原則の機械的裏付け — PoR §12/修正
+    指示は「二体へ同一 bytes・同一順序で提示する」ことを要求しており、
+    manifest 自体が Founder 分岐を持つ時点でこの要求と矛盾する。
+
+    2つの独立した規則に分けて実装する（第5巡 Fix A 採用: 従来は
+    `R9F-0[12]` 形式のキーのみを走査しており、`{"founder_id": "R9F-01",
+    ...}` のような**値フィールド**での founder 分岐が素通りしていた）:
+
+    1. **`founder_id` キー自体の禁止**（任意の深さ）: キー名が正確に
+       `"founder_id"` であれば、値の中身に関わらず拒否する。
+       "founder_identity_note" のような接頭辞一致の誤爆を避けるため
+       完全一致のみを対象とする。
+    2. **`R9F-01`/`R9F-02` の完全一致文字列がキーまたは値として現れた
+       場合の禁止**（任意の深さ、dict のキー・値・list の要素いずれも
+       走査）: sample id 等の正当な文字列に founder ID が部分文字列と
+       して含まれる場合の誤爆を避けるため、`_FOUNDER_ID_RE`
+       （`^R9F-0[12]$`）による**完全一致のみ**を対象とし、部分一致
+       （例: `"clip-R9F-01-take3"`）は対象外とする。
+    """
+
+    def _is_founder_id_value(value: Any) -> bool:
+        return isinstance(value, str) and bool(_FOUNDER_ID_RE.match(value))
+
+    def _scan(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                key_str = str(key)
+                if key_str == _FOUNDER_ID_KEY_NAME:
+                    raise Run9ValidationError(
+                        f"{manifest_kind} must not contain a {_FOUNDER_ID_KEY_NAME!r} key "
+                        f"(found value {value!r}) — manifest は二体共通・単一系列であり founder "
+                        "分岐構造を持たない（PoR §12: 二体へ同一 bytes・同一順序で提示する）"
+                    )
+                if _FOUNDER_ID_RE.match(key_str):
+                    raise Run9ValidationError(
+                        f"{manifest_kind} must not branch by founder_id (found key {key!r}) — "
+                        "manifest は二体共通・単一系列であり founder 分岐構造を持たない（PoR §12: "
+                        "二体へ同一 bytes・同一順序で提示する）"
+                    )
+                if _is_founder_id_value(value):
+                    raise Run9ValidationError(
+                        f"{manifest_kind} must not contain a founder ID as a value (key={key!r}, "
+                        f"value={value!r}) — manifest は二体共通・単一系列であり founder 分岐構造を"
+                        "持たない（PoR §12: 二体へ同一 bytes・同一順序で提示する）"
+                    )
+                _scan(value)
+        elif isinstance(node, list):
+            for item in node:
+                if _is_founder_id_value(item):
+                    raise Run9ValidationError(
+                        f"{manifest_kind} must not contain a founder ID as a list element "
+                        f"(found {item!r}) — manifest は二体共通・単一系列であり founder 分岐構造を"
+                        "持たない（PoR §12: 二体へ同一 bytes・同一順序で提示する）"
+                    )
+                _scan(item)
+
+    _scan(data)
+
+
+def validate_practice_split_manifest(data: Mapping[str, Any]) -> None:
+    """PRACTICE_FROM_AUDIO 用 train/validation/sealed-holdout split
+    manifest の最低要件を検証する。`schema` が
+    `SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST` と厳密一致しない入力（例:
+    education manifest を取り違えて渡した場合）は schema 不一致で拒否する
+    （User 外部レビュー PR #317 P1-2 必須テスト「manifest hash を入れ替え
+    た場合に拒否」の schema 側の実装 — 実ファイルのバイト取り違えは
+    RUN9_CONTRACT.yaml 側の pin 値照合が担うため、本関数はパース済み dict
+    の内容が practice manifest として自己整合的であることのみを見る）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"practice split manifest must be an object, got {type(data).__name__}")
+    schema = data.get("schema")
+    if schema != SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST:
+        raise Run9ValidationError(
+            f"practice split manifest schema must be exactly {SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST!r}, "
+            f"got {schema!r} (a manifest declaring a different or missing schema — e.g. an education "
+            "lesson manifest passed by mistake — must not be treated as the practice split manifest)"
+        )
+    missing = [k for k in PRACTICE_MANIFEST_REQUIRED_KEYS if k not in data]
+    if missing:
+        raise Run9ValidationError(f"practice split manifest missing required key(s): {sorted(missing)}")
+    for key in _MANIFEST_REQUIRED_TRUE_KEYS & set(PRACTICE_MANIFEST_REQUIRED_KEYS):
+        if data[key] is not True:
+            raise Run9ValidationError(
+                f"practice split manifest.{key} must be exactly True, got {data[key]!r}"
+            )
+    # Codex bot レビュー第4巡 Fix A 採用: hash 系欄の値整形式（64hex）・
+    # sample_inventory / rights_source_class の非空検査を presence-only
+    # 検査に追加する。
+    _require_manifest_hash_fields(
+        data, hash_keys=_PRACTICE_MANIFEST_SHA256_KEYS, manifest_kind="practice split manifest"
+    )
+    _require_nonempty_str_list(
+        data["sample_inventory"], manifest_kind="practice split manifest", field="sample_inventory"
+    )
+    # Codex bot レビュー第5巡 Fix B 採用: row_ids と同じ重複拒否を
+    # sample_inventory にも適用する（重複 sample id は、同一素材が複数回
+    # 数えられた見かけ上のカバレッジ水増しを招く）。
+    _require_no_duplicate_list_items(
+        data["sample_inventory"], manifest_kind="practice split manifest", field="sample_inventory"
+    )
+    _require_nonempty_str(
+        data["rights_source_class"], manifest_kind="practice split manifest", field="rights_source_class"
+    )
+    # Founder 分岐構造の検査を disjoint 検査より先に行う（Founder ごとに
+    # 異なる split を与える構造そのものが最上位の欠陥であり、その場合
+    # row_ids.training 等が期待形でないのは当然の帰結に過ぎない — エラー
+    # メッセージが「Founder 分岐」という根本原因を正確に指すようにする）。
+    _reject_per_founder_split_structure(data, manifest_kind="practice split manifest")
+    row_ids = data.get("row_ids")
+    if not isinstance(row_ids, dict):
+        raise Run9ValidationError(
+            f"practice split manifest.row_ids must be an object, got {type(row_ids).__name__}"
+        )
+    _require_disjoint_row_id_sets(
+        training=row_ids.get("training"),
+        validation=row_ids.get("validation"),
+        sealed_holdout=row_ids.get("sealed_holdout"),
+        manifest_kind="practice split manifest",
+    )
+
+
+def validate_education_lesson_manifest(data: Mapping[str, Any]) -> None:
+    """TRANSFER_TECHNIQUE 用 Technique lesson manifest の最低要件を検証
+    する。`validate_practice_split_manifest()` と対の構造 —
+    `schema` が `SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST` と厳密一致
+    しない入力は拒否する。"""
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"education lesson manifest must be an object, got {type(data).__name__}")
+    schema = data.get("schema")
+    if schema != SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST:
+        raise Run9ValidationError(
+            f"education lesson manifest schema must be exactly "
+            f"{SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST!r}, got {schema!r} (a manifest declaring a "
+            "different or missing schema — e.g. a practice split manifest passed by mistake — must "
+            "not be treated as the education lesson manifest)"
+        )
+    missing = [k for k in EDUCATION_MANIFEST_REQUIRED_KEYS if k not in data]
+    if missing:
+        raise Run9ValidationError(f"education lesson manifest missing required key(s): {sorted(missing)}")
+    for key in _MANIFEST_REQUIRED_TRUE_KEYS & set(EDUCATION_MANIFEST_REQUIRED_KEYS):
+        if data[key] is not True:
+            raise Run9ValidationError(
+                f"education lesson manifest.{key} must be exactly True, got {data[key]!r}"
+            )
+    # Codex bot レビュー第4巡 Fix A 採用: lesson hash 群の値整形式（64hex）
+    # + sealed_holdout_technique_release_policy の閉じた語彙検証を
+    # presence-only 検査に追加する。
+    _require_manifest_hash_fields(
+        data, hash_keys=_EDUCATION_MANIFEST_SHA256_KEYS, manifest_kind="education lesson manifest"
+    )
+    release_policy = data["sealed_holdout_technique_release_policy"]
+    if release_policy not in EDUCATION_SEALED_HOLDOUT_RELEASE_POLICIES:
+        raise Run9ValidationError(
+            "education lesson manifest.sealed_holdout_technique_release_policy must be one of "
+            f"{list(EDUCATION_SEALED_HOLDOUT_RELEASE_POLICIES)}, got {release_policy!r}"
+        )
+    _reject_per_founder_split_structure(data, manifest_kind="education lesson manifest")
+
+
+# ---------------------------------------------------------------------------
 # TRI_CROSSOVER + Run9FounderGenome（DESIGN_RUN9 §9）
 # ---------------------------------------------------------------------------
 
@@ -907,9 +1682,14 @@ _PIN_FIELD_REQUIRED_KEYS: FrozenSet[str] = frozenset({"value", "status"})
 # 実 sha256 を PINNED で記録する）。
 CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     "design_doc_sha256",
-    # design_revision 0.2 で追加（User 裁定 2026-08-24）: DESIGN_RUN9_REVISION_0.2.md
-    # 自体の実 sha256（design_doc_sha256 と同じ前例方式）。
+    # design_revision 0.2 で追加（User 裁定 2026-08-24）: 現行 design_revision
+    # の差分メモ自体の実 sha256（design_doc_sha256 と同じ前例方式）。0.2 →
+    # 0.3 進行時は値のみ更新し欄自体は再利用する（DESIGN_RUN9_REVISION_0.3.md
+    # 「design_revision 系譜」参照）。
     "design_revision_doc_sha256",
+    # design_revision 0.3 で追加（User 裁定 2026-08-24, PoR メモ編入）:
+    # POR_CONCEPT_ADJUDICATION_20260824.txt 自体の実 sha256（同じ前例方式）。
+    "por_adjudication_sha256",
     "attempt_id",
     "repository_commit_sha",
     "dataset_manifest_sha",
@@ -925,7 +1705,26 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     # （bundle 内 PENDING 解消後に pin — CONTRACT_PIN_FIELDS のコメント規約
     # どおり loader 自体は bundle の中身までは検査しない。整合は手動運用）。
     "backbone_runtime_bundle_sha",
-    "lesson_sha",
+    # rev 0.3 で `lesson_sha` から改名（User 外部レビュー PR #317 P1-2
+    # 採用）: 「lesson」という曖昧な名称のまま EDUCATION 専用欄であることを
+    # schema レベルでも固定する。値の性質・PENDING 理由は不変
+    # （`validate_education_lesson_manifest()` が中身の最低要件を検証する）。
+    "education_technique_lesson_manifest_sha",
+    # rev 0.3 で `practice_split_sha` から改名（User 外部レビュー PR #317
+    # P1-2 採用）: PRACTICE_FROM_AUDIO 枝の train/validation/sealed-holdout
+    # split manifest の sha256。`education_technique_lesson_manifest_sha`
+    # と対になる pre-run 必須欄 — 稽古でも train/holdout 分離が必須
+    # （PoR §12: sealed holdout は学習中使用禁止）であり、この分離が
+    # 学習開始前に凍結・封印されていることを他の pre-run 欄と同列に
+    # PINNED で証拠づける（`validate_practice_split_manifest()` が中身の
+    # 最低要件を検証する）。
+    "practice_audio_split_manifest_sha",
+    # rev 0.3 新設（User 外部レビュー PR #317 P1-1 採用）: 枝別書込境界
+    # policy manifest（`inputs/branch_write_policy.json`）自体の実
+    # sha256。本 PR でファイル内容を確定するため PINNED（本欄自体は
+    # design_doc_sha256 と同じファイル実バイト規約 — `compute_file_sha256`
+    # 参照）。
+    "branch_write_policy_sha",
     "learning_recipe_sha",
     "probe_manifest_sha",
     "measurement_spec_sha",
@@ -945,11 +1744,25 @@ CONTRACT_FOUNDER_IDS: Tuple[str, str] = ("R9F-01", "R9F-02")
 # の pre-run 側判定 — artifact/cost は run record closure 側の要件）。
 CONTRACT_POST_RUN_PIN_FIELDS: FrozenSet[str] = frozenset({"artifact_manifest_sha", "cost_record_sha"})
 
+# optional pin（post-run とは別の第3分類、PR #317 Codex bot レビュー第1巡
+# Fix 1 採用）: rev 0.3 改訂F により人間知覚 Gate は必須ではなくなった
+# （DESIGN_RUN9_REVISION_0.3.md 改訂F — 機械評価 + claim ceiling 明記へ
+# 変更し、人間知覚評価は後続 Run へ送る。v0.1 §28 Human Audit も optional
+# 化）。`human_evaluation_protocol_sha` は advisory な blind human audit を
+# 実施する場合にのみ pin する欄であり、PENDING のままでも gate_state() の
+# READY 判定を妨げない — post-run 欄（実行後にしか実測できない）とは理由が
+# 異なるため別の frozenset として区別する（post-run は「まだ実測できない」、
+# optional は「実施しないなら永久に PENDING のままで構わない」）。
+CONTRACT_OPTIONAL_PIN_FIELDS: FrozenSet[str] = frozenset({"human_evaluation_protocol_sha"})
+
 _CONTRACT_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset(
     {
         "schema", "run_id", "experiment_id", "design_revision", "design_doc",
-        "single_intervention", "baseline_run", "parent_designs",
+        "interventions", "baseline_run", "parent_designs",
         "founder_genome_shas", "claim_strength_target",
+        # rev 0.3 新設（User 外部レビュー PR #317 P2-2 採用）: pin 欄では
+        # なく通常欄。`HUMAN_AUDIT_MODES` のいずれかの文字列値のみ許容。
+        "human_audit_mode",
     }
     | set(CONTRACT_PIN_FIELDS)
 )
@@ -1117,37 +1930,61 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
 
     design_revision = data["design_revision"]
     if not isinstance(design_revision, str) or design_revision != DESIGN_REVISION:
+        # PR #317 Codex bot レビュー第1巡 Fix 2 採用: 診断メッセージに
+        # 固定ファイル名（例: "DESIGN_RUN9_REVISION_0.2.md"）をハード
+        # コードしていると、design_revision を上げるたびにメッセージ内の
+        # ファイル名だけが陳腐化する（実際に 0.2 -> 0.3 進行時に発生した）。
+        # `DESIGN_REVISION` 定数から f-string でファイル名を導出すること
+        # で、以後の revision bump でこの診断が再び古びない構造にする。
         raise Run9ValidationError(
             f"design_revision must be exactly {DESIGN_REVISION!r} (current revision — "
-            "DESIGN_RUN9_REVISION_0.2.md, User ruling 2026-08-24). A contract declaring an older "
-            "revision (e.g. '0.1') is rejected by design: revising the design requires bumping "
-            f"design_revision and keeping the old attempt as append-only history, got {design_revision!r}"
+            f"DESIGN_RUN9_REVISION_{DESIGN_REVISION}.md). A contract declaring an older "
+            "revision (e.g. '0.1', '0.2') is rejected by design: revising the design requires "
+            "bumping design_revision and keeping the old attempt as append-only history, got "
+            f"{design_revision!r}"
         )
 
     if not isinstance(data["design_doc"], str) or not data["design_doc"]:
         raise Run9ValidationError(f"design_doc must be a non-empty string, got {data['design_doc']!r}")
 
-    single_intervention = data["single_intervention"]
-    if not isinstance(single_intervention, dict):
-        raise Run9ValidationError("single_intervention must be an object")
-    allowed_si_keys = {"description", "changed_edge"}
-    unknown_si = set(single_intervention.keys()) - allowed_si_keys
-    if unknown_si:
-        raise Run9ValidationError(f"single_intervention has unknown key(s): {sorted(unknown_si)}")
-    missing_si = allowed_si_keys - set(single_intervention.keys())
-    if missing_si:
-        raise Run9ValidationError(f"single_intervention missing key(s): {sorted(missing_si)}")
-    si_description = single_intervention["description"]
-    if not isinstance(si_description, str) or not si_description.strip():
+    # rev 0.3（改訂A、PoR §1/§3/§4）: 旧 `single_intervention`
+    # （description + 単一 `changed_edge`）は `interventions`
+    # （description + `edges`[2] + `control_branch`）へ改訂された。
+    # `_CONTRACT_TOP_LEVEL_KEYS` が `single_intervention` を許容しないため、
+    # 旧形式の contract は「未知キー(single_intervention) + 欠落キー
+    # (interventions)」の時点で fail-closed 拒否される（この関数の冒頭、
+    # unknown/missing チェックで既に落ちている）。
+    interventions = data["interventions"]
+    if not isinstance(interventions, dict):
+        raise Run9ValidationError("interventions must be an object")
+    allowed_interv_keys = {"description", "edges", "control_branch"}
+    unknown_interv = set(interventions.keys()) - allowed_interv_keys
+    if unknown_interv:
+        raise Run9ValidationError(f"interventions has unknown key(s): {sorted(unknown_interv)}")
+    missing_interv = allowed_interv_keys - set(interventions.keys())
+    if missing_interv:
+        raise Run9ValidationError(f"interventions missing key(s): {sorted(missing_interv)}")
+    interv_description = interventions["description"]
+    if not isinstance(interv_description, str) or not interv_description.strip():
         raise Run9ValidationError(
-            f"single_intervention.description must be a non-empty string, got {si_description!r}"
+            f"interventions.description must be a non-empty string, got {interv_description!r}"
         )
-    si_changed_edge = single_intervention["changed_edge"]
-    if si_changed_edge != CHANGED_EDGE:
+    interv_edges = interventions["edges"]
+    # parent_designs と同型の正典（`INTERVENTION_EDGES`）への順序込み厳密
+    # 一致（Codex bot レビュー PR #315 第7巡指摘2 と同種の終端規律を
+    # 新設フィールドへ最初から適用する）。
+    if not isinstance(interv_edges, list) or tuple(interv_edges) != INTERVENTION_EDGES:
         raise Run9ValidationError(
-            f"single_intervention.changed_edge must be exactly {CHANGED_EDGE!r} — RUN9 の単一介入"
-            "エッジは DESIGN_RUN9 §23 で凍結されている（他のエッジへの差し替えは design_revision を"
-            f"上げた別 attempt として扱う）, got {si_changed_edge!r}"
+            f"interventions.edges must be exactly {list(INTERVENTION_EDGES)} (order included) — "
+            "PoR §3/§4 は稽古(PRACTICE_FROM_AUDIO)と教育(TRANSFER_TECHNIQUE)を別 Edge として固定する"
+            f"（他のエッジへの差し替えは design_revision を上げた別 attempt として扱う）, got "
+            f"{interv_edges!r}"
+        )
+    interv_control_branch = interventions["control_branch"]
+    if interv_control_branch != CONTROL_BRANCH:
+        raise Run9ValidationError(
+            f"interventions.control_branch must be exactly {CONTROL_BRANCH!r} — PoR §4 の無介入"
+            f"replay 枝は固定名, got {interv_control_branch!r}"
         )
 
     if data["baseline_run"] is not None:
@@ -1209,9 +2046,24 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
     if not isinstance(claim_strength, str) or claim_strength != "C2":
         raise Run9ValidationError(f"claim_strength_target must be 'C2', got {claim_strength!r}")
 
+    # rev 0.3 新設（User 外部レビュー PR #317 P2-2 採用）: human_audit_mode
+    # は pin 欄ではなく通常欄だが、語彙は `HUMAN_AUDIT_MODES` に厳密一致を
+    # 要求する（fail-closed — 未知値は構造検証の対象）。
+    # ADVISORY_PREDECLARED のとき human_evaluation_protocol_sha が PINNED
+    # 必須という**クロスフィールドの readiness 判定**は、ここ（構造検証層）
+    # ではなく `gate_state()` が担う — PR #316 第4巡の層分離の境界宣言
+    # （loader は事前登録契約の構造述語を検査する層、実測値との突合・
+    # 派生的な readiness 判定は上位層の職務）をそのまま踏襲する。
+    human_audit_mode = data["human_audit_mode"]
+    if not isinstance(human_audit_mode, str) or human_audit_mode not in HUMAN_AUDIT_MODES:
+        raise Run9ValidationError(
+            f"human_audit_mode must be one of {list(HUMAN_AUDIT_MODES)}, got {human_audit_mode!r}"
+        )
+
     # deepcopy（Codex bot レビュー PR #315 第2巡指摘1採用）: `dict(data)` は
-    # 浅いコピーのため、ネストした pin 欄 dict（`data["lesson_sha"]` 等）は
-    # 呼び出し元の入力オブジェクトとまだ共有されたままだった — 呼び出し元が
+    # 浅いコピーのため、ネストした pin 欄 dict（`data["education_technique_
+    # lesson_manifest_sha"]` 等）は呼び出し元の入力オブジェクトとまだ共有
+    # されたままだった — 呼び出し元が
     # load 後にそのネスト dict を書き換えると `Run9RunContract.raw` も
     # 一緒に変化してしまう（validate 済みスナップショットのはずが実は
     # 可変共有だった）。deepcopy でこの共有を断つ。
@@ -1220,10 +2072,11 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
 
 def load_run9_contract_from_yaml_text(text: str) -> Run9RunContract:
     # `yaml.safe_load()` ではなく `_StrictYAMLLoader`（重複キー fail-closed
-    # 拒否）を使う — 例えば PENDING の `lesson_sha` の後に PINNED の
-    # `lesson_sha` を書き足した手編集 contract が、標準 YAML の
-    # last-key-wins 解決で検証をすり抜けて READY へ到達し得た
-    # （Codex bot レビュー PR #315 第8巡指摘1採用）。
+    # 拒否）を使う — 例えば PENDING の `education_technique_lesson_
+    # manifest_sha`（rev 0.3 で `lesson_sha` から改名）の後に PINNED の
+    # 同名欄を書き足した手編集 contract が、標準 YAML の last-key-wins
+    # 解決で検証をすり抜けて READY へ到達し得た（Codex bot レビュー
+    # PR #315 第8巡指摘1採用）。
     data = yaml.load(text, Loader=_StrictYAMLLoader)
     return load_run9_contract(data)
 
@@ -1235,12 +2088,25 @@ def load_run9_contract_from_yaml_path(path: Path) -> Run9RunContract:
 def gate_state(contract: Run9RunContract) -> str:
     """DESIGN_RUN9 §27 item 49「incomplete Hard Gate set -> BLOCKED」の
     pre-run 機械判定: pre-run 必須欄（`CONTRACT_PIN_FIELDS` から
-    `CONTRACT_POST_RUN_PIN_FIELDS` を除いた全欄 + 両 founder の
-    founder_genome_shas）が全て PINNED のときのみ "READY"。1つでも
-    PENDING/BLOCKED なら "BLOCKED"。post-run 専用欄
+    `CONTRACT_POST_RUN_PIN_FIELDS` と `CONTRACT_OPTIONAL_PIN_FIELDS` を
+    除いた全欄 + 両 founder の founder_genome_shas）が全て PINNED のときの
+    み "READY"。1つでも PENDING/BLOCKED なら "BLOCKED"。post-run 専用欄
     （artifact_manifest_sha / cost_record_sha）は判定対象外
     （実行後にのみ実測できる証拠欄のため — RUN_CONTRACT_SCHEMA_v1.json の
-    x-gate-class post_run 分類と同じ考え方）。
+    x-gate-class post_run 分類と同じ考え方）。optional 欄
+    （human_evaluation_protocol_sha）も同様に判定対象外だが理由が異なる
+    （PR #317 Codex bot レビュー第1巡 Fix 1 採用）: rev 0.3 改訂F により
+    人間知覚 Gate は必須ではなくなった — advisory な blind human audit を
+    実施する場合にのみ pin する欄であり、PENDING のままでも READY を
+    妨げない。post-run（「まだ実測できない」）とは異なり、optional は
+    「実施しないなら永久に PENDING のままで構わない」欄。
+
+    **例外**（rev 0.3 新設、User 外部レビュー PR #317 P2-2 採用）:
+    `human_audit_mode == "ADVISORY_PREDECLARED"` を宣言した contract は、
+    「監査を予定した」という意思表示そのものが実測要件になるため、
+    `human_evaluation_protocol_sha` が PINNED でなければ READY にならない
+    （= この場合に限り optional 除外から差し戻す）。`human_audit_mode ==
+    "DISABLED"`（既定値）のときは従来どおり除外されたまま。
 
     毎回 `contract.raw` のスナップショットを `load_run9_contract()` で
     再検証してから判定する（Codex bot レビュー PR #315 第2巡指摘1採用）:
@@ -1252,7 +2118,12 @@ def gate_state(contract: Run9RunContract) -> str:
     では、load 後の直接改変で READY を騙る経路が残っていた。
     """
     revalidated = load_run9_contract(contract.raw)
-    pre_run_fields = [n for n in CONTRACT_PIN_FIELDS if n not in CONTRACT_POST_RUN_PIN_FIELDS]
+    _excluded_from_pre_run = CONTRACT_POST_RUN_PIN_FIELDS | CONTRACT_OPTIONAL_PIN_FIELDS
+    if revalidated.raw.get("human_audit_mode") == "ADVISORY_PREDECLARED":
+        # advisory 監査を予定宣言した場合のみ、optional 除外を
+        # human_evaluation_protocol_sha に限って差し戻す。
+        _excluded_from_pre_run = _excluded_from_pre_run - {"human_evaluation_protocol_sha"}
+    pre_run_fields = [n for n in CONTRACT_PIN_FIELDS if n not in _excluded_from_pre_run]
     for name in pre_run_fields:
         if not _is_field_pinned(revalidated.pin_field(name)):
             return "BLOCKED"
