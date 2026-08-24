@@ -1606,6 +1606,31 @@ _PJS_REFERENCE_DEFINITION_OLD_SINGLE_TAKE_REGRESSION_MARKER = "単一の参照�
 # 相互参照が欠けると PJS 特徴計算が sample rate 不一致のまま行われ得る。
 _PJS_REFERENCE_DEFINITION_SAMPLE_RATE_NORMALIZATION_REF_MARKER = "sample_rate_normalization"
 
+# Codex bot レビュー PR #318 第17巡 Fix 37 採用（P1）: pjs_reference_definition
+# ②列挙規則の集約対象を、既 pin（PRACTICE_MANIFEST_REQUIRED_KEYS.
+# expanded_corpus_identity_sha256 → pjs_neutral.json corpus_sha256）が実際に
+# 被覆するファイル集合へ限定する。着手前調査（donor_bank_lab.py
+# corpus_identity_hash() line 192-227 付近）の実測により、同関数は各
+# `pjsNNN/pjsNNN.lab`（音素セグメンテーション）とその対応 `pjsNNN/
+# pjsNNN_song.wav` のみを対象に集約しており、speech 100 WAV・background
+# 3 WAV は被覆外と判明した。旧規則（束縛したコーパス内の全音声ファイルを
+# 列挙）はこの被覆外ファイルを pjs_reference の集約対象へ混入させており、
+# 未 pin ファイルが corpus_identity_hash() を変えずに pjs_reference・
+# no-leakage evidence を汚染し得る欠陥だった（identity_metric_space.json
+# 旧143行付近）。集約対象を pin 被覆ファイル集合（`_song.wav`）へ厳密に
+# 限定したことを機械強制する: ①`_song.wav` 限定への言及 ②pin 被覆の一次
+# ソース（corpus_identity_hash）への参照 ③speech/background 混入禁止の
+# 明文、の3マーカー必須化 + 旧「全音声ファイル列挙」規則文言への逆行拒否。
+_PJS_REFERENCE_DEFINITION_SONG_WAV_SCOPE_MARKER = "_song.wav"
+_PJS_REFERENCE_DEFINITION_CORPUS_IDENTITY_HASH_REF_MARKER = "corpus_identity_hash"
+_PJS_REFERENCE_DEFINITION_SPEECH_BACKGROUND_EXCLUSION_MARKER = "混入禁止"
+# 旧②（pin 被覆に関係なくコーパス内の音声ファイル全件を対象とする列挙規則）
+# の具体的な旧フレーズ自体が再出現しないことを機械強制する（Fix 34 の
+# OLD_SINGLE_TAKE_REGRESSION_MARKER と同型の逆行拒否規律）。
+_PJS_REFERENCE_DEFINITION_OLD_FULL_CORPUS_ENUMERATION_REGRESSION_MARKER = (
+    "束縛したコーパス内の音声ファイルを相対パスの辞書順"
+)
+
 _CALIBRATION_WORKED_EXAMPLE_STR_KEYS: Tuple[str, ...] = (
     "disclaimer", "theta_cal_derivation", "c1_gate_result", "positive_reference_gate_result",
     "negative_reference_gate_result", "calibration_status_example", "evaluated_render_outcome",
@@ -2269,6 +2294,13 @@ def _validate_confuser_control_section(data: Any) -> None:
     sha256 pin フィールドへの入力束縛・voiced_mask による機械的除外・要素
     ごとの算術平均・学習後の事後選択が構造的に不可能である旨の明文）の
     5マーカーを機械強制する。
+
+    第17巡 Fix 37（P1）: ②列挙規則の集約対象を、既 pin（corpus_identity_
+    hash()）が実際に被覆するファイル集合（`_song.wav`）へ限定したことを
+    追加検証する。旧「コーパス内の全音声ファイル列挙」（speech 100 WAV・
+    background 3 WAV を含む pin 被覆外ファイルの混入を許した規則）への
+    逆行を拒否し、`_song.wav` 限定・corpus_identity_hash() への被覆一次
+    ソース参照・speech/background 混入禁止の明文の3マーカーを機械強制する。
     """
     confuser = _require_dict(data, field="identity metric space manifest.confuser_control")
     unknown = set(confuser.keys()) - _CONFUSER_CONTROL_REQUIRED_KEYS
@@ -2346,6 +2378,38 @@ def _validate_confuser_control_section(data: Any) -> None:
             "PJS's native sample rate (48000 Hz) differs from the pinned metric sample rate "
             f"(44100 Hz)), got {pjs_reference_definition!r}"
         )
+
+    # Fix 37: ②列挙規則が pin 被覆ファイル集合（`_song.wav`）へ限定されて
+    # いることを機械強制する。旧「コーパス内の全音声ファイル列挙」規則
+    # （speech/background を含む全203 WAV を対象化し、corpus_identity_hash()
+    # の被覆外ファイルが pjs_reference・no-leakage evidence を pin を変えず
+    # に汚染し得た欠陥）への逆行を拒否する。
+    if (
+        _PJS_REFERENCE_DEFINITION_OLD_FULL_CORPUS_ENUMERATION_REGRESSION_MARKER
+        in pjs_reference_definition
+    ):
+        raise Run9ValidationError(
+            "confuser_control.pjs_reference_definition must not regress to enumerating every "
+            "audio file in the bound corpus regardless of pin coverage (Codex bot レビュー PR #318 "
+            "第17巡 Fix 37 — the referenced corpus_sha256 (pjs_neutral.json, via "
+            "corpus_identity_hash()) covers only .lab + paired _song.wav files; speech/background "
+            "WAV outside that coverage can be swapped without changing the pin, contaminating "
+            f"pjs_reference and no-leakage evidence), got {pjs_reference_definition!r}"
+        )
+    for marker in (
+        _PJS_REFERENCE_DEFINITION_SONG_WAV_SCOPE_MARKER,
+        _PJS_REFERENCE_DEFINITION_CORPUS_IDENTITY_HASH_REF_MARKER,
+        _PJS_REFERENCE_DEFINITION_SPEECH_BACKGROUND_EXCLUSION_MARKER,
+    ):
+        if marker not in pjs_reference_definition:
+            raise Run9ValidationError(
+                f"confuser_control.pjs_reference_definition must state {marker!r} (Codex bot "
+                "レビュー PR #318 第17巡 Fix 37 — the enumeration scope (②) must be limited to the "
+                "`_song.wav` files that donor_bank_lab.py's corpus_identity_hash() actually pins "
+                "(.lab + paired _song.wav only), with speech/background WAV explicitly excluded "
+                "from aggregation because they fall outside pin coverage), "
+                f"got {pjs_reference_definition!r}"
+            )
 
     evaluation = confuser["evaluation"]
     if _CONFUSER_CONTROL_EVALUATION_NO_AGGREGATE_SCORE_MARKER not in evaluation:

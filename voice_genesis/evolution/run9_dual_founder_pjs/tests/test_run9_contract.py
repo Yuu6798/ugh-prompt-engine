@@ -6330,3 +6330,158 @@ def test_fix36_domain_metric_space_sha_differs_from_pre_round16_value() -> None:
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
     old_pre_round16_sha = "7ff07e874a95bbd6224161566068fdf57526218a7f6a6d193b66e6ebedc7b115"
     assert domain_raw["metric_space_sha"] != old_pre_round16_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第17巡 Fix 37（P1）: PJS reference 集約対象を
+# pin 被覆ファイルへ限定。着手前調査（donor_bank_lab.py corpus_identity_
+# hash() line 192-227 付近）の実測により、①が引用する corpus_sha256 は
+# 各 .lab とその対応 _song.wav のみから決定論的集約された値であり、speech
+# 100 WAV・background 3 WAV は被覆外と判明した。旧②列挙規則（コーパス内の
+# 音声ファイル全件 = 全203 WAV を対象化）はこの被覆外ファイルを pjs_
+# reference の集約対象へ混入させており、未 pin ファイルは corpus_identity_
+# hash() を変えずに pjs_reference・no-leakage evidence を汚染し得る欠陥
+# だった（identity_metric_space.json 旧143行付近）。集約対象を pin 被覆
+# ファイル集合（`_song.wav`）へ限定したことを機械強制する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix37_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix37_pjs_reference_definition_states_song_wav_scope_marker() -> None:
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "_song.wav" in pjs_reference_definition
+
+
+def test_fix37_pjs_reference_definition_references_corpus_identity_hash() -> None:
+    """被覆定義の一次ソース（donor_bank_lab.py corpus_identity_hash()）が
+    フィールド参照で明記されていることの直接確認。"""
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "corpus_identity_hash" in pjs_reference_definition
+    assert "donor_bank_lab.py" in pjs_reference_definition
+
+
+def test_fix37_pjs_reference_definition_states_speech_background_exclusion() -> None:
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "混入禁止" in pjs_reference_definition
+    assert "speech" in pjs_reference_definition
+    assert "background" in pjs_reference_definition
+
+
+def test_fix37_pjs_reference_definition_does_not_regress_to_full_corpus_enumeration() -> None:
+    """負例（Fix 37 の核心要求）: 旧②「束縛したコーパス内の音声ファイルを
+    相対パスの辞書順で全件列挙する」（pin 被覆に関係なく全203 WAV を対象化
+    する規則）文言そのものへの逆行を拒否する。"""
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "束縛したコーパス内の音声ファイルを相対パスの辞書順" not in pjs_reference_definition
+
+
+def test_fix37_validator_rejects_regression_to_pre_fix37_full_corpus_enumeration_rule() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference = 単一テイク選択を全廃し、決定論的コーパス集約で学習前に凍結する。①入力"
+        "束縛 — expanded_corpus_identity_sha256 が pin する PJS expanded corpus に束縛する。②"
+        "列挙規則 — 束縛したコーパス内の音声ファイルを相対パスの辞書順（bytewise lexicographic）"
+        "で全件列挙する（乱数・手動選定・任意順は不採用）。③特徴計算 — extraction_procedure."
+        "sample_rate_normalization を適用してから extraction_procedure と identity_feature を"
+        "適用する。④除外規則 — voiced_mask に従い除外する。⑤集約 — 要素ごとの算術平均で集約する。"
+        "⑥記録 — artifact_manifest_sha 配下へ記録する。事後選択は構造的に不可能。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="must not regress to enumerating every audio file in the bound corpus",
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix37_validator_rejects_pjs_reference_definition_missing_song_wav_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference = 単一テイク選択を全廃し、決定論的コーパス集約で学習前に凍結する。①入力"
+        "束縛 — expanded_corpus_identity_sha256 が pin する PJS expanded corpus に束縛する。②"
+        "列挙規則 — corpus_identity_hash() が被覆するファイルのみを相対パスの辞書順で列挙する。"
+        "speech/background は混入禁止。③特徴計算 — sample_rate_normalization を適用してから"
+        "extraction_procedure と identity_feature を適用する。④除外規則 — voiced_mask に従い"
+        "除外する。⑤集約 — 要素ごとの算術平均で集約する。⑥記録 — artifact_manifest_sha 配下へ"
+        "記録する。事後選択は構造的に不可能。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix37_validator_rejects_pjs_reference_definition_missing_corpus_identity_hash_marker() -> (
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference = 単一テイク選択を全廃し、決定論的コーパス集約で学習前に凍結する。①入力"
+        "束縛 — expanded_corpus_identity_sha256 が pin する PJS expanded corpus に束縛する。②"
+        "列挙規則 — 既 pin が被覆する `_song.wav` ファイルのみを相対パスの辞書順で列挙する。"
+        "speech/background は混入禁止。③特徴計算 — sample_rate_normalization を適用してから"
+        "extraction_procedure と identity_feature を適用する。④除外規則 — voiced_mask に従い"
+        "除外する。⑤集約 — 要素ごとの算術平均で集約する。⑥記録 — artifact_manifest_sha 配下へ"
+        "記録する。事後選択は構造的に不可能。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix37_validator_rejects_pjs_reference_definition_missing_speech_background_exclusion_marker() -> (  # noqa: E501
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference = 単一テイク選択を全廃し、決定論的コーパス集約で学習前に凍結する。①入力"
+        "束縛 — expanded_corpus_identity_sha256 が pin する PJS expanded corpus に束縛する。②"
+        "列挙規則 — corpus_identity_hash() が被覆する `_song.wav` ファイルのみを相対パスの辞書順"
+        "で列挙する。③特徴計算 — sample_rate_normalization を適用してから extraction_procedure"
+        "と identity_feature を適用する。④除外規則 — voiced_mask に従い除外する。⑤集約 — 要素"
+        "ごとの算術平均で集約する。⑥記録 — artifact_manifest_sha 配下へ記録する。事後選択は構造"
+        "的に不可能。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix37_metric_version_still_0_5() -> None:
+    """入力集合の是正（pin 整合化）であり feature 式・校正規則は不変のため
+    metric_version は Fix 35 時点の run9-identity-metric/0.5 のまま据え置き。"""
+    data = _valid_metric_space_doc()
+    assert data["metric_version"] == "run9-identity-metric/0.5"
+
+
+def test_fix37_schema_still_1_2() -> None:
+    """キー集合不変（definition 文言の限定のみ）のため schema は
+    run9-identity-metric-space/1.2 のまま据え置き。"""
+    data = _valid_metric_space_doc()
+    assert data["schema"] == "run9-identity-metric-space/1.2"
+
+
+def test_fix37_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 37 の集約対象限定後、`metric_space_sha` は
+    正規形 sha256 と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix37_domain_metric_space_sha_differs_from_pre_round17_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 37（第17巡）の改訂により
+    metric_space_sha が Fix 36 時点（第16巡）の旧値から更新されていることを
+    確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round17_sha = "00264b5641e1b3b3112a9ef06912e2f96a2c449d25ae78adba36fab6613020e9"
+    assert domain_raw["metric_space_sha"] != old_pre_round17_sha
