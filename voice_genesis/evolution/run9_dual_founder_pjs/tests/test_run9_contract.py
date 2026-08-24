@@ -1655,3 +1655,130 @@ def test_revision02_readme_mentions_revision_0_2() -> None:
     readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
     assert "0.2" in readme
     assert "2026-08-24" in readme
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第2巡対応 — runtime bundle に RUN6 render フロー
+# の全消費物（canon model assets）を追加
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_bundle_has_canon_model_assets_section() -> None:
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert "canon_model_assets" in bundle
+    assert "assets" in bundle["canon_model_assets"]
+    assert set(bundle["canon_model_assets"]["assets"].keys()) == {
+        "linguistic_onnx",
+        "variance_duration_onnx",
+        "variance_pitch_onnx",
+        "phonemes_txt",
+    }
+
+
+def test_revision02_bundle_canon_model_assets_entries_have_64hex_and_source() -> None:
+    """canon_model_assets.assets / acoustic_export_companions の各リーフ
+    エントリは、value が64hex sha256 なら source を持ち、value が確定して
+    いない（PENDING 相当）なら reason を持つこと（Codex bot レビュー
+    PR #316 第2巡指摘）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    checked = 0
+    for section_name in ("assets", "acoustic_export_companions"):
+        section = bundle["canon_model_assets"][section_name]
+        for entry_name, entry in section.items():
+            if not isinstance(entry, dict) or "value" not in entry:
+                continue  # "note" のような非エントリ・メタキーはスキップ
+            checked += 1
+            value = entry["value"]
+            if value is None or (isinstance(value, str) and value.strip() in ("", "<PENDING>")):
+                assert "reason" in entry, (
+                    f"canon_model_assets.{section_name}.{entry_name} は未確定値だが reason が無い"
+                )
+            else:
+                assert isinstance(value, str) and m._SHA256_HEX_RE.match(value), (
+                    f"canon_model_assets.{section_name}.{entry_name}.value は64hex sha256 で"
+                    f"なければならない: {value!r}"
+                )
+                assert "source" in entry, (
+                    f"canon_model_assets.{section_name}.{entry_name} は確定値だが source が無い"
+                )
+    assert checked >= 7, "canon_model_assets 配下のエントリ検査が発火していない（空洞化防止）"
+
+
+def test_revision02_bundle_canon_model_assets_values_match_probe_records() -> None:
+    """canon_model_assets の各値が、一次ソースの probe result JSON の
+    実測値と一致すること（転記誤りの検出）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    probe = json.loads(
+        (_RUN_DIR.parent / "records" / "vgl0_control_axis_probe_result_n6.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    pins = probe["pins"]
+    assets = bundle["canon_model_assets"]["assets"]
+    assert assets["linguistic_onnx"]["value"] == pins["canon_linguistic_onnx"]["sha256"]
+    assert assets["variance_duration_onnx"]["value"] == pins["canon_dur_onnx"]["sha256"]
+    assert assets["variance_pitch_onnx"]["value"] == pins["canon_pitch_onnx"]["sha256"]
+    assert assets["phonemes_txt"]["value"] == pins["canon_phonemes"]["sha256"]
+
+    companions = bundle["canon_model_assets"]["acoustic_export_companions"]
+    assert companions["dsconfig_yaml"]["value"] == pins["acoustic_dsconfig"]["sha256"]
+    assert companions["acoustic_phonemes_json"]["value"] == pins["acoustic_phonemes_json"]["sha256"]
+    assert companions["speaker_embed"]["value"] == pins["speaker_embed"]["sha256"]
+
+    # acoustic_onnx / vocoder_onnx の両方が、bundle 側の既存 top-level pin
+    # とも probe record 側とも一致すること（run6 backbone の同一性の
+    # 追加の交差確認）。
+    assert bundle["acoustic_onnx_sha256"]["value"] == pins["acoustic_onnx"]["sha256"]
+    assert bundle["vocoder"]["runtime_onnx_sha256"]["value"] == pins["vocoder_onnx"]["sha256"]
+
+
+def test_revision02_bundle_canon_model_assets_cross_checked_across_4_probe_records() -> None:
+    """canon_model_assets の各値が、独立した4件の probe result（n6 / 無印 /
+    n10 / render_reproducibility）すべてで同一であることを確認する
+    （n6 以外の3件は補助的な相互一致確認）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assets = bundle["canon_model_assets"]["assets"]
+    records_dir = _RUN_DIR.parent / "records"
+    for filename in (
+        "vgl0_control_axis_probe_result.json",
+        "vgl0_control_axis_probe_result_n10.json",
+        "vgl0_render_reproducibility_result.json",
+    ):
+        probe = json.loads((records_dir / filename).read_text(encoding="utf-8"))
+        pins = probe["pins"]
+        assert assets["linguistic_onnx"]["value"] == pins["canon_linguistic_onnx"]["sha256"], filename
+        assert assets["variance_duration_onnx"]["value"] == pins["canon_dur_onnx"]["sha256"], filename
+        assert assets["variance_pitch_onnx"]["value"] == pins["canon_pitch_onnx"]["sha256"], filename
+
+
+def test_revision02_bundle_canon_model_source_distribution_is_distinct_from_ritsu_anchor() -> None:
+    """canon model distribution（NamineRitsu_DiffSinger.zip）の sha256 が、
+    RUN9 identity anchor として pin されている波音リツ配布 zip（別ファイル）
+    の sha256 と異なることを直接確認する（両者を混同していないことの
+    構造的検査）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    canon_zip_sha = bundle["canon_model_assets"]["source_distribution"]["sha256"]
+    ritsu_anchor_sha = domain_raw["anchor_hashes"]["ritsu"]
+    assert canon_zip_sha != ritsu_anchor_sha
+    assert canon_zip_sha == "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530"
+    assert ritsu_anchor_sha == "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76"
+
+
+def test_revision02_bundle_completeness_note_explains_canon_assets_are_required() -> None:
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert "completeness_note" in bundle
+    note = bundle["completeness_note"]
+    assert "canon" in note.lower()
+    assert "acoustic" in note.lower()
+
+
+def test_revision02_backbone_runtime_bundle_sha_still_pending_after_canon_assets_added(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """canon_model_assets 追加は render_code_commit の確定状態を変えない
+    ため、`backbone_runtime_bundle_sha` は引き続き PENDING のまま
+    （変更なし — この巡の追加が既存の降格判断へ副作用しないことの確認）。"""
+    field = contract_raw["backbone_runtime_bundle_sha"]
+    assert field["status"] == "PENDING"
+    assert field["value"] is None

@@ -94,5 +94,88 @@
       "voice_genesis/foundry/DESIGN_S6_run7.md (\"教師交代: D3 引退 -> あみたろ実録音発音教師・単一介入\")",
       "voice_genesis/foundry/results_s6/s6_record_2026-08-20.md#3 (\"単一介入 = 教師交代\")"
     ]
-  }
+  },
+  "canon_model_assets": {
+    "source_distribution": {
+      "name": "NamineRitsu_DiffSinger.zip (リツ公式 DiffSinger 配布)",
+      "sha256": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
+      "source": "voice_genesis/foundry/s1_dataprep/README.md (素材3)",
+      "note": "NOT the same zip as the ritsu identity anchor pin (r73_strong_ren0151.zip, 波音リツ強連続音Ver1.5.1, sha256 88c7b3ef... — domains/identity_domain_run9_v1.json anchor_hashes.ritsu). That zip is the raw UTAU voicebank used as the RUN9 Identity anchor; THIS zip is the separate DiffSinger-format canon model distribution consumed at render time via --canon-model-dir. Both are \"Ritsu\"-branded but serve different roles."
+    },
+    "canon_model_dir_role": "gate_synth.py --canon-model-dir points at this zip's extraction directory. gate_synth.py reads linguistic.onnx / dsdur/dur.onnx / dspitch/pitch.onnx / phonemes.txt from it (gate_synth.py lines ~524-526, 647-650, 2292-2294) — the linguistic front-end, duration predictor, and pitch (variance) predictor that DiffSinger's acoustic model depends on, plus the phoneme vocabulary. These are NOT trained/produced by the run5/6/7 acoustic-model finetuning — they are fixed components bundled with the Ritsu voicebank distribution and are reused unchanged across run5/6/7 renders (confirmed identical across 4 independent probe records below).",
+    "assets": {
+      "linguistic_onnx": {
+        "value": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+        "file": "NamineRitsu_DiffSinger/linguistic.onnx",
+        "source": [
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_linguistic_onnx",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_linguistic_onnx",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_linguistic_onnx",
+          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_linguistic_onnx",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_2026-08-20.md#1 (canon 系 onnx)"
+        ],
+        "note": "Byte-identical across all 4 independent probe result files (cross-checked 2026-08-24)."
+      },
+      "variance_duration_onnx": {
+        "value": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+        "file": "NamineRitsu_DiffSinger/dsdur/dur.onnx",
+        "source": [
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_dur_onnx (== consumed_model_bytes_check covered_keys canon_variance_dur_onnx)",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_dur_onnx",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_dur_onnx",
+          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_dur_onnx"
+        ],
+        "note": "Byte-identical across all 4 independent probe result files."
+      },
+      "variance_pitch_onnx": {
+        "value": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+        "file": "NamineRitsu_DiffSinger/dspitch/pitch.onnx",
+        "source": [
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_pitch_onnx (== consumed_model_bytes_check covered_keys canon_variance_pitch_onnx)",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_pitch_onnx",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_pitch_onnx",
+          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_pitch_onnx"
+        ],
+        "note": "Byte-identical across all 4 independent probe result files."
+      },
+      "phonemes_txt": {
+        "value": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb",
+        "file": "NamineRitsu_DiffSinger/phonemes.txt",
+        "source": [
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_phonemes",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_2026-08-20.md#1 (canon phonemes)"
+        ],
+        "note": "Phoneme vocabulary consumed by gate_synth.py canon_phonemes_txt (distinct from run6_bundle/dictionary-ja.txt, which is the grapheme-to-phoneme dictionary pinned separately as phoneme_map_sha256 above)."
+      }
+    },
+    "acoustic_export_companions": {
+      "note": "Co-located in the SAME export output directory as acoustic_onnx_sha256 above (.../out_ritsu/onnx_gate_40000/) — produced by the run6 checkpoint export, not sourced from the canon dir. Included here (rather than as bare top-level fields) because closing the render-flow input set requires them alongside canon_model_assets (Codex bot review PR #316 第2巡指摘, 1e84892).",
+      "dsconfig_yaml": {
+        "value": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "file": "onnx_gate_40000/dsconfig.yaml",
+        "source": [
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.acoustic_dsconfig (== consumed_model_bytes_check covered_keys acoustic_dsconfig_yaml)",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.acoustic_dsconfig",
+          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.acoustic_dsconfig",
+          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.acoustic_dsconfig"
+        ]
+      },
+      "acoustic_phonemes_json": {
+        "value": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
+        "file": "onnx_gate_40000/s5_run6_acoustic_v1.phonemes.json",
+        "source": "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.acoustic_phonemes_json",
+        "note": "consumed_model_bytes_check lists this key under not_covered (not part of that probe's specific invariance check) but the pin value itself is present and recorded — transcribed as-is, not fabricated."
+      },
+      "speaker_embed": {
+        "value": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
+        "file": "onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb",
+        "source": "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.speaker_embed",
+        "note": "Also listed under consumed_model_bytes_check not_covered for the same reason as acoustic_phonemes_json above."
+      }
+    },
+    "not_included_by_design": {
+      "score_module_code": "voice_genesis/singer/score.py (sha256 24a6004d...) and phoneme_jp.py (sha256 9cbc7e1d...) are also consumed by the render flow per the same probe records (pins.score_module_sakura / score_module_sakura_dep_phoneme_jp), but these are THIS repository's own source files, not external model assets. Their provenance is properly covered by repository_commit_sha (RUN9_CONTRACT.yaml) once that is pinned, not duplicated here as a separate byte pin."
+    }
+  },
+  "completeness_note": "Codex bot review PR #316 第2巡指摘 (1e84892, 採用): a runtime bundle that pins only the acoustic checkpoint/ONNX (checkpoint_sha256 / acoustic_onnx_sha256) does NOT close the reproduction input set on its own. The render flow (gate_synth.py) also reads canon model assets via --canon-model-dir (linguistic/duration/pitch predictor ONNX + phoneme vocabulary, from the separate NamineRitsu_DiffSinger.zip canon distribution) and acoustic-export companions co-located with acoustic.onnx (dsconfig.yaml / phonemes.json / speaker embedding). Only with canon_model_assets and acoustic_export_companions included does the consumed-input set close. This bundle intentionally still leaves render_code_commit as INFERRED_UNCONFIRMED (see that field) and backbone_runtime_bundle_sha in RUN9_CONTRACT.yaml PENDING as a result — unchanged by this addition."
 }

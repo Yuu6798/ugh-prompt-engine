@@ -157,6 +157,13 @@ backbone_checkpoint_sha:
 # run4-8 一貫性からの推論値。RUN6 export 記録 s5_record 自体には commit
 # 明記なし）— 本欄も PINNED から PENDING へ降格する
 # （backbone_checkpoint_sha は直接記録4件一致のため対象外・PINNED のまま）。
+# 完全性の宣言（PR #316 第2巡指摘、1e84892、採用）: acoustic checkpoint/
+# ONNX のみでは再現入力集合は閉じない。render フロー（gate_synth.py
+# --canon-model-dir）が消費する canon model assets（linguistic/duration/
+# pitch predictor ONNX + phoneme vocabulary、NamineRitsu_DiffSinger.zip
+# 由来）と acoustic export companions（dsconfig.yaml / phonemes.json /
+# speaker embedding）を含めて初めて閉じる — bundle の
+# `canon_model_assets` 節（詳細は同ファイル `completeness_note` 参照）。
 backbone_runtime_bundle_sha:
   value: null
   status: PENDING

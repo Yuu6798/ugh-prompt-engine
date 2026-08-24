@@ -37,8 +37,14 @@ Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生さ�
    （`backbone_checkpoint_sha` **PINNED 済み**、直接記録4件一致。RUN7 は
    教師交代混入回避のため不使用）。`inputs/backbone_runtime_bundle.json`
    に config/speaker map/phoneme dictionary/vocoder/render 用 DiffSinger
-   commit まで含めて記録するが、**`backbone_runtime_bundle_sha` 自体は
-   PENDING**（bundle 内 `render_code_commit` が `INFERRED_UNCONFIRMED` —
+   commit に加え、**render フロー（`gate_synth.py --canon-model-dir`）が
+   消費する canon model assets**（linguistic/duration/pitch predictor
+   ONNX + phoneme vocabulary、`NamineRitsu_DiffSinger.zip` 由来）と
+   acoustic export companions（dsconfig.yaml/phonemes.json/speaker
+   embedding）まで含めて記録する — acoustic checkpoint/ONNX だけでは
+   再現入力集合は閉じない（PR #316 第2巡指摘採用）。ただし
+   `backbone_runtime_bundle_sha` 自体は **PENDING**（bundle 内
+   `render_code_commit` が `INFERRED_UNCONFIRMED` —
    Codex bot レビュー PR #316 第1巡指摘採用。ブロッカー(5)参照）。
 
 ## 実行順 §22 に対する現在地マップ
@@ -153,7 +159,7 @@ run9_dual_founder_pjs/
 ├── inputs/
 │   ├── af0_anchor_manifest.json                                # AF-P0 正典証拠の複合参照 manifest（anchor_hashes.af0 の入力）
 │   ├── rights_manifest.json                                    # User donor rights（PENDING_USER_ATTESTATION）
-│   └── backbone_runtime_bundle.json                            # RUN6 backbone の checkpoint/config/vocoder/render commit 一式
+│   └── backbone_runtime_bundle.json                            # RUN6 backbone の checkpoint/config/vocoder/render commit + canon model assets 一式
 ├── tests/
 │   └── test_run9_contract.py                                   # §27 最低テストの静的検証可能サブセット + Revision 0.2 対応テスト
 └── results/
