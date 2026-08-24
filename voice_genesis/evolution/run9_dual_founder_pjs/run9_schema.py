@@ -1292,6 +1292,41 @@ USER_DONOR_CARD_IDS: Tuple[str, ...] = (
 )
 
 
+def load_rights_manifest_json(text: str) -> Dict[str, Any]:
+    """`rights_manifest.json` のテキストを重複キー拒否（`_loads_strict_json()`
+    — VG-E0 `models.loads_strict()` と同型の fail-closed 規約）で読み込む。
+
+    `verify_rights_manifest_against_ledger()` への rights_manifest 入力は、
+    生の `json.loads()` ではなく本関数（`load_user_donor_ledger_json()` と
+    対で donor_ledger 側も同様）を経由することを規定する（Codex bot
+    レビュー PR #316 第10巡指摘採用, c34bdff, 本 PR 最終レビュー対応巡）:
+    手編集した rights_manifest.json の同一 entry 内に `card_id`/`sha256`
+    等のキーを2回書いても、標準 `json.loads()` の last-key-wins だと
+    後勝ちの値だけが黙って検証器へ届き、「たまたま期待値に潰れた」
+    曖昧な生 JSON が attest によってそのまま束縛され得る — 生 JSON の
+    曖昧性そのものを読込段で拒否する。
+    """
+    data = _loads_strict_json(text)
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"rights manifest document must be an object, got {type(data).__name__}"
+        )
+    return data
+
+
+def load_user_donor_ledger_json(text: str) -> Dict[str, Any]:
+    """`user_donor_ledger.json` のテキストを重複キー拒否で読み込む。
+    `load_rights_manifest_json()` と同一規約・同一理由（Codex bot
+    レビュー PR #316 第10巡指摘採用）。
+    """
+    data = _loads_strict_json(text)
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"donor ledger document must be an object, got {type(data).__name__}"
+        )
+    return data
+
+
 def _require_rights_ledger_field(
     entry: Mapping[str, Any], field: str, *, side: str, card_id: str
 ) -> Any:
@@ -1339,7 +1374,18 @@ def verify_rights_manifest_against_ledger(
 ) -> None:
     """`rights_manifest` の `entries` が `donor_ledger` の `entries` の
     忠実な転記（card_id/source_sha256/sha256/duration_sec）であることを
-    検証する。違反は `Run9ValidationError`。検証項目:
+    検証する。違反は `Run9ValidationError`。
+
+    **入力は `load_rights_manifest_json()` / `load_user_donor_ledger_json()`
+    経由で読み込んだ dict を渡すこと**（生の `json.loads()` を経由しない
+    — Codex bot レビュー PR #316 第10巡指摘採用, c34bdff）: 本関数自体は
+    パース済み dict のみを受け取るため、呼び出し元が重複キーを黙って
+    last-key-wins で解決する経路（生 `json.loads()`）で読み込んだ入力を
+    渡すと、手編集 JSON 内の重複キーが「たまたま期待値に潰れた」曖昧な
+    状態のまま本関数の検証を通過し得る。上記2関数は重複キーを読込段で
+    拒否するため、この経路を通す限り曖昧な入力は本関数に到達しない。
+
+    検証項目:
 
     1. `rights_manifest.entries` の `card_id` に重複が無いこと。
     2. `rights_manifest.entries` の card_id 集合が `donor_ledger.entries`

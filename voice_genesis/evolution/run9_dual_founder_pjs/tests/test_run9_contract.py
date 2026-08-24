@@ -1754,11 +1754,96 @@ def test_revision02_rights_manifest_is_pending_user_attestation() -> None:
 
 
 def _load_rights_manifest_and_ledger() -> tuple[Dict[str, Any], Dict[str, Any]]:
-    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
-    ledger = json.loads(
+    """rights_manifest / donor_ledger を、`verify_rights_manifest_against_ledger()`
+    が規定する重複キー拒否読込経路（`run9_schema.load_rights_manifest_json()`
+    / `load_user_donor_ledger_json()`）経由で読み込む — 生の `json.loads()`
+    は使わない（Codex bot レビュー PR #316 第10巡指摘採用, c34bdff: 生
+    `json.loads()` は同一 entry 内の重複キーを last-key-wins で黙って
+    解決してしまうため、rights 検証テスト群全体をこの2関数経由へ統一する）。
+    """
+    rights = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    ledger = m.load_user_donor_ledger_json(
         (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
     )
     return rights, ledger
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第10巡対応（本 PR 最終レビュー対応巡）—
+# rights manifest / ledger 読込への重複キー拒否の適用
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_load_rights_manifest_json_rejects_duplicate_entry_key() -> None:
+    """負例: rights_manifest の1エントリ内で同一キー（`sha256`）が2回
+    異なる値で宣言された生 JSON テキストが、`load_rights_manifest_json()`
+    の読込段で拒否されること（生の `json.loads()` なら
+    last-key-wins で後勝ちの値だけが黙って通り、手編集で「たまたま期待値
+    に潰れた」曖昧な入力がそのまま検証器へ届いてしまっていた —
+    Codex bot レビュー PR #316 第10巡指摘採用）。"""
+    duplicate_key_text = """
+    {
+      "schema": "run9-user-donor-rights/1.0",
+      "entries": [
+        {
+          "card_id": "UC-001",
+          "source_sha256": "%s",
+          "sha256": "%s",
+          "duration_sec": 1.0,
+          "sha256": "%s"
+        }
+      ]
+    }
+    """ % ("a" * 64, "b" * 64, "c" * 64)
+    with pytest.raises(m.Run9ValidationError, match="duplicate key"):
+        m.load_rights_manifest_json(duplicate_key_text)
+
+
+def test_revision02_load_user_donor_ledger_json_rejects_duplicate_entry_key() -> None:
+    """負例: donor_ledger 側でも同様に、1エントリ内の重複キー
+    （`card_id`、値相違）を持つ生 JSON テキストが読込段で拒否されること。"""
+    duplicate_key_text = """
+    {
+      "schema": "user-donor-ledger/0.1",
+      "entries": [
+        {
+          "card_id": "UC-001",
+          "source_sha256": "%s",
+          "sha256": "%s",
+          "duration_sec": 1.0,
+          "card_id": "UC-002"
+        }
+      ]
+    }
+    """ % ("a" * 64, "b" * 64)
+    with pytest.raises(m.Run9ValidationError, match="duplicate key"):
+        m.load_user_donor_ledger_json(duplicate_key_text)
+
+
+def test_revision02_load_rights_manifest_json_and_ledger_accept_well_formed_text() -> None:
+    """対照実験: 重複キーの無い実ファイルは引き続き読み込める（正常系まで
+    壊していないことの確認）。"""
+    rights = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    ledger = m.load_user_donor_ledger_json(
+        (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
+    )
+    assert isinstance(rights, dict) and isinstance(ledger, dict)
+    m.verify_rights_manifest_against_ledger(rights, ledger)  # 例外を投げないことの確認
+
+
+def test_revision02_load_rights_manifest_json_rejects_non_object_top_level() -> None:
+    """負例: トップレベルがオブジェクトでない JSON は拒否されること。"""
+    with pytest.raises(m.Run9ValidationError, match="must be an object"):
+        m.load_rights_manifest_json("[]")
+
+
+def test_revision02_verify_rights_manifest_docstring_specifies_strict_loader_input() -> None:
+    """`verify_rights_manifest_against_ledger()` の docstring が、入力は
+    `load_rights_manifest_json()`/`load_user_donor_ledger_json()` 経由で
+    読み込むことを規定していることの直接確認。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert "load_rights_manifest_json" in source
+    assert "load_user_donor_ledger_json" in source
 
 
 def test_revision02_rights_manifest_entries_match_donor_ledger() -> None:
