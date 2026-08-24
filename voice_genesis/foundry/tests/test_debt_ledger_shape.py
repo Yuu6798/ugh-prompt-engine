@@ -213,6 +213,37 @@ def test_adjudication_freeze_mode_vocabulary_is_pinned(adjudication: Dict[str, A
     ]
 
 
+_PROBE_JSON_REPO_PATH = "voice_genesis/foundry/results_s3/run4_export_device_probe_2026-08-23.json"
+
+
+def test_adjudication_freeze_mode_assignment_is_pinned(adjudication: Dict[str, Any]) -> None:
+    """追補裁定 2026-08-24 (§8) 参照方式適用第 1 号の機械可読正本を pin する
+
+    (PR #314 Codex 第 9 巡: 参照方式の分類が台帳の自由文にしか無いと、
+    参照の削除・typo・旧ラベルへの書き戻しが CI を素通りするため、
+    yaml のマッピングを正本として exact 一致で強制する)。
+    """
+    fixed_probe = adjudication["fixed_probe"]
+    assignments = fixed_probe["freeze_mode_assignments"]
+    assert assignments == {_PROBE_JSON_REPO_PATH: "pinned_environment_bounded"}
+    assert assignments[_PROBE_JSON_REPO_PATH] in fixed_probe["freeze_mode_vocabulary"]
+
+
+def test_ledger_probe_evidence_references_freeze_mode_reassignment(
+    ledger: Dict[str, Any],
+) -> None:
+    """台帳 evidence 行の §8 参照文言を pin する（参照方式の第 2 アンカー。
+    正典分類は yaml の freeze_mode_assignments、台帳は人間可読の参照側）。"""
+    debts = {d["debt_id"]: d for d in ledger["debts"]}
+    entries = (debts["VG-DEBT-008"].get("repayment") or {}).get("evidence_delivered") or []
+    probe_entries = [
+        e for e in entries if isinstance(e, str) and e.startswith(_PROBE_JSON_REPO_PATH)
+    ]
+    assert len(probe_entries) == 1, "probe JSON の evidence 行が一意でない"
+    assert "DEBT_ADJUDICATION_v1.1.md §8" in probe_entries[0]
+    assert "pinned_environment_bounded" in probe_entries[0]
+
+
 def test_adjudication_track_c_prohibits_duplicate_r0_r4_execution(
     adjudication: Dict[str, Any],
 ) -> None:

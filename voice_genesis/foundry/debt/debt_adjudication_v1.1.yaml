@@ -15,6 +15,8 @@ fixed_probe:
   freeze_mode_vocabulary:  # 追補裁定 2026-08-24 (§8): 環境境界が実測済みの artifact 用に拡張
     - pinned_regenerable
     - pinned_environment_bounded
+  freeze_mode_assignments:  # §8 参照方式適用の機械可読正本 (artifact バイトは凍結のまま。PR #314 第 9 巡)
+    voice_genesis/foundry/results_s3/run4_export_device_probe_2026-08-23.json: pinned_environment_bounded
   git_wav_required: false
   exact_hash_verification_required: true
 
