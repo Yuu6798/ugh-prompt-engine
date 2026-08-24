@@ -163,7 +163,7 @@
     "『GPU export ならば常に記録バイトを再現する』とは主張しない——再現は本 pod 環境 1 点での実測である",
     "残余候補への順位付けは行わない（PR #307 終端宣言（追補 2）継承）。本記録は候補間の順位ではなく、単一要因を操作した実測の記載である"
   ],
-  "artifact_byte_policy": "freeze_mode: pinned_regenerable（v1.1 裁定）。WAV / ONNX 実体は git に入れず sha256 のみ記帳。再現性の実測境界は同一 pod 内の再実行 bit 一致（F4）まで。pin 群（素材・repo checkout・DiffSinger revision）は入力実体の同一性を保証するが、venv の従属依存解決（DiffSinger requirements.txt のレンジ指定）と base image の tag 参照は将来の解決で変わり得るため、本 JSON から環境完全同一の決定論的再生成が保証されるとは主張しない（Codex PR #312 第 1 巡 P2 により当初の『決定論的に再生成可能』を縮小）",
+  "artifact_byte_policy": "freeze_mode: pinned_environment_bounded（v1.1 追補裁定 2026-08-24 §8 の適用第 1 号。当初 pinned_regenerable と記載していたが、本 artifact の実測境界が環境境界までであることと整合する分類へ訂正 — 分類の訂正であって実測の変更ではない）。WAV / ONNX 実体は git に入れず sha256 のみ記帳。再現性の実測境界は同一 pod 内の再実行 bit 一致（F4）まで。pin 群（素材・repo checkout・DiffSinger revision）は入力実体の同一性を保証するが、venv の従属依存解決（DiffSinger requirements.txt のレンジ指定）と base image の tag 参照は将来の解決で変わり得るため、本 JSON から環境完全同一の決定論的再生成が保証されるとは主張しない（Codex PR #312 第 1 巡 P2 により当初の『決定論的に再生成可能』を縮小）",
   "acceptance": {
     "recomputable": "comparisons の全 boolean は arms / expected_values の sha256 値のみから再計算可能（形状テストで機械検証）",
     "authority": "closure・status の判定規則は debt_ledger.yaml の reentry_condition (a-1)/(a-2) が正本。本 JSON はそれに従属する"

@@ -172,3 +172,33 @@ DESIGN_<run>.md（実験契約の正本・人間可読）
 - v1.0 §1–§4・§7–§12 のうち本記録が明示的に触れていない箇所（優先度 P0/P1/P2
   の分類、Track A/B の実行順、Debt Ledger のスキーマ形状、Phase D0–D6 の
   実行順の骨格）はそのまま有効
+
+## 8. 追補裁定（2026-08-24）— freeze_mode 語彙の拡張
+
+**委任の記録**: PR #312 レビューで「`pinned_regenerable` ラベルの意味論
+（決定論的再生成で凍結）と、決定論的再生成が環境完全同一まで保証されない
+artifact への適用との内的緊張」が指摘され、境界宣言のうえ User 照会事項として
+残置していた（unresolved スレッド + Next-Issue Queue）。User は 2026-08-24 に
+「では、それを実行してください。実行できるよね？」と裁定の実行を委任し、
+本追補は当該委任に基づき Fable が選択肢 (b) = 語彙拡張を採択して記録するもの
+である（選択肢 (a) = 現状ラベル + caveat 維持は「記録の言葉が実測より強い」
+状態の恒久化にあたり、正直会計の原則と整合しないため不採択）。
+
+**裁定内容**:
+
+1. `freeze_mode` 語彙に **`pinned_environment_bounded`** を追加する。定義:
+   バイト実体（WAV/ONNX 等）は git に入れず sha256 を記帳する点は
+   `pinned_regenerable` と同一だが、**再生成の実測保証が測定環境の境界まで**
+   （例: 同一 pod 内の再実行 bit 一致）であり、machine-independent な
+   決定論的再生成経路（従属依存の完全 pin・base image digest 等）は
+   **未確立**である artifact に用いる
+2. **既定は引き続き `pinned_regenerable`**（裁定 2 は不変）。
+   `pinned_environment_bounded` は、再生成の環境境界が**実測で明らかになった**
+   artifact にのみ適用する（実測なしの予防的降格はしない）
+3. **適用第 1 号** = `results_s3/run4_export_device_probe_2026-08-23.json`
+   （同 artifact の caveat が記録する実測境界 = 同一 pod 内 bit 一致（F4）・
+   従属依存レンジと image tag の可変性）。その他の既存 `pinned_regenerable`
+   使用箇所（d6 fixed probe pins 等 = machine-independent 再生成を狙う設計）は
+   本追補の適用対象外であり無改変
+4. ラベル変更は**分類の訂正であって実測の変更ではない**。凍結記録の変更は
+   三面協調更新（record + 台帳 sha + `FROZEN_SHA256` 定数）で行う

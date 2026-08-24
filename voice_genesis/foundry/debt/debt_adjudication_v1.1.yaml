@@ -12,6 +12,9 @@ vocabulary:
 
 fixed_probe:
   default_freeze_mode: pinned_regenerable
+  freeze_mode_vocabulary:  # 追補裁定 2026-08-24 (§8): 環境境界が実測済みの artifact 用に拡張
+    - pinned_regenerable
+    - pinned_environment_bounded
   git_wav_required: false
   exact_hash_verification_required: true
 
