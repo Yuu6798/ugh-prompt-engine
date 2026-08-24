@@ -4132,13 +4132,16 @@ def test_fix7_stopping_rule_non_empty_str_required(arm_name: str, bad_value: Any
         m.validate_learning_recipe_manifest(manifest)
 
 
-@pytest.mark.parametrize("bad_value", [None, 0, -1, -0.5, "10", True, float("nan"), float("inf")])
+@pytest.mark.parametrize(
+    "bad_value", [None, 0, -1, -0.5, "10", True, float("nan"), float("inf"), 1.5, 2.0],
+)
 @pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
 def test_fix7_trial_count_positive_finite_number_required(arm_name: str, bad_value: Any) -> None:
-    """必須テスト（Fix 7, 負例2/3）: `trial_count` は None/0/負値/文字列/
-    bool/NaN/inf をすべて拒否し、正の有限数値のみを許可する — READY
-    昇格時点で実行不能な予算（0件・負の試行回数等）が凍結される事故を
-    防ぐ。"""
+    """必須テスト（Fix 7, 負例2/3。Fix 15 で 1.5/2.0 の float 全般拒否へ
+    厳密化）: `trial_count` は None/0/負値/文字列/bool/NaN/inf に加え、
+    `1.5`（分数）・`2.0`（整数値だが型が float）もすべて拒否し、厳密な
+    正の int のみを許可する — READY 昇格時点で実行不能な予算（0件・負の
+    試行回数・分数試行等）が凍結される事故を防ぐ。"""
     manifest = _valid_learning_recipe_manifest()
     manifest[arm_name]["trial_count"] = bad_value
     with pytest.raises(m.Run9ValidationError, match="trial_count must be"):
@@ -4156,13 +4159,51 @@ def test_fix7_render_budget_positive_finite_number_required(arm_name: str, bad_v
         m.validate_learning_recipe_manifest(manifest)
 
 
-def test_fix7_valid_arm_with_float_trial_count_and_render_budget_accepted() -> None:
-    """正例回帰: int だけでなく正の有限 float も trial_count/render_budget
-    として受理される（bool のみを明示的に除外し、それ以外の数値型は
-    許容する設計であることの確認）。"""
+def test_fix7_valid_arm_with_float_render_budget_accepted() -> None:
+    """正例回帰: render_budget は連続予算でありうるため、正の有限 float
+    も引き続き受理される（bool のみを明示的に除外し、それ以外の数値型は
+    許容する設計であることの確認）。trial_count の float 受理は Fix 15 で
+    廃止された — 旧テスト名が主張していた `trial_count = 100.0` の受理は
+    もはや成立しない（下記 Fix 15 セクションの負例で 100.0 相当の
+    `2.0` が拒否されることを確認する）。"""
     manifest = _valid_learning_recipe_manifest()
-    manifest["practice_recipe"]["trial_count"] = 100.0
     manifest["practice_recipe"]["render_budget"] = 50.5
+    m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# RUN9 Phase 3 対応 — Codex bot レビュー PR #318 第4巡 Fix 15: trial_count
+# の整数厳密化。共有の `_require_positive_finite_number()` は
+# `trial_count: 1.5` のような分数試行を通してしまい、PINNED recipe
+# チェックも満たしてしまっていた（分数試行は実行不能であり、PoR §8 の
+# equal_budget_within_arm — 枝内の二体 Founder 間の等予算契約 — を
+# 掘り崩す）。`_require_positive_int()` を trial_count 専用に配線する。
+# render_budget は連続予算でありうるため対象外のまま
+# `_require_positive_finite_number()` を維持する。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", [1.5, 2.0, True, "3"])
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix15_trial_count_rejects_non_strict_int_values(arm_name: str, bad_value: Any) -> None:
+    """必須テスト（Fix 15, 負例）: trial_count は bool を除く厳密 int の
+    みを許可し、`1.5`（分数）・`2.0`（整数値に見える float）・`True`
+    （bool）・`"3"`（文字列表現）のいずれも型として拒否する。render_budget
+    はこの厳密化の対象外であり、これらの値をそのまま許容し続ける
+    （trial_count と render_budget の意味論が異なることの確認）。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["trial_count"] = bad_value
+    with pytest.raises(m.Run9ValidationError, match="trial_count must be an exact int"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+def test_fix15_trial_count_accepts_positive_int() -> None:
+    """正例（Fix 15）: 厳密な正の int である trial_count は引き続き
+    受理される（既存 fixture `_valid_learning_recipe_arm()` も
+    `trial_count: 100`（int）を使用しており、Fix 15 適用後も無変更で
+    通ることを確認する）。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest["practice_recipe"]["trial_count"] = 100
     m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認
 
 

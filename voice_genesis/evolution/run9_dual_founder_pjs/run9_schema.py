@@ -1066,7 +1066,7 @@ _LEARNING_RECIPE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
 _LEARNING_RECIPE_ARM_KEYS: FrozenSet[str] = frozenset({
     "equal_budget_within_arm",  # PoR §8: 各枝『内』の二体間の等予算宣言。bool True 必須
     "stopping_rule",  # 停止規則。非空文字列必須（値そのものは build 時に確定）
-    "trial_count",  # 試行回数。正の有限数値必須（値そのものは build 時に確定）
+    "trial_count",  # 試行回数。正の厳密 int 必須（Fix 15。値そのものは build 時に確定）
     "render_budget",  # render 予算。正の有限数値必須（値そのものは build 時に確定）
 })
 
@@ -1097,6 +1097,34 @@ def _require_positive_finite_number(value: Any, *, field: str) -> float:
     return out
 
 
+def _require_positive_int(value: Any, *, field: str) -> int:
+    """`trial_count` 専用の厳密 int 検証（Codex bot レビュー PR #318 第4巡
+    Fix 15 採用、Fix 7 の是正）: `_require_positive_finite_number()` は
+    bool を除く int/float を等しく許可するため、`trial_count: 1.5` の
+    ような分数試行回数が PINNED recipe チェックを素通りしてしまっていた
+    — 試行は実行可能な単位が整数個の離散イベントであり分数個は実行不能
+    （半端な1回を実行することはできない）、かつ PoR §8 の
+    `equal_budget_within_arm`（枝内の二体 Founder 間の等予算契約）は
+    双方が同じ整数個の試行を消化できることを前提とするため、分数試行は
+    その契約自体を掘り崩す。`_is_strict_int()` を再利用して bool を
+    明示的に除外した厳密 int 判定を行う — `2.0`（値としては整数だが型が
+    float）のような「一見整数に見える」値も型で拒否する（int 型のみ
+    許可。`isinstance(value, int)` を素通しにすると `True`/`False` を
+    誤って正の整数として通してしまうため、`_is_strict_int()` の bool
+    除外が本関数でも必須）。`render_budget` は連続予算でありうるため
+    対象外のまま `_require_positive_finite_number()` を使い続ける
+    （本関数は `trial_count` にのみ配線する）。"""
+    if not _is_strict_int(value):
+        raise Run9ValidationError(
+            f"{field} must be an exact int (bool/float/str/None rejected — fractional trial counts "
+            f"are not executable and would undercut the equal-budget-within-arm contract), got "
+            f"{value!r} ({type(value).__name__})"
+        )
+    if value <= 0:
+        raise Run9ValidationError(f"{field} must be a positive int, got {value!r}")
+    return value
+
+
 def _validate_learning_recipe_arm(arm: Any, *, arm_name: str) -> None:
     if not isinstance(arm, dict):
         raise Run9ValidationError(f"learning recipe manifest.{arm_name} must be an object, got {type(arm).__name__}")
@@ -1124,7 +1152,10 @@ def _validate_learning_recipe_arm(arm: Any, *, arm_name: str) -> None:
     _require_non_empty_str(
         arm["stopping_rule"], field=f"learning recipe manifest.{arm_name}.stopping_rule"
     )
-    _require_positive_finite_number(
+    # trial_count は厳密 int（Fix 15 — docstring は `_require_positive_
+    # int()` 参照）。render_budget は連続予算でありうるため引き続き
+    # `_require_positive_finite_number()`（正の有限 int/float）のまま。
+    _require_positive_int(
         arm["trial_count"], field=f"learning recipe manifest.{arm_name}.trial_count"
     )
     _require_positive_finite_number(

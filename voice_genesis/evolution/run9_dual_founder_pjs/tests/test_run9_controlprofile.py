@@ -880,6 +880,133 @@ def test_ledger_republish_of_orphaned_profile_recovers_idempotently(
 
 
 # ---------------------------------------------------------------------------
+# Run9ProfileLedger: 公開 read()/exists() の alias 照合必須化（Codex bot
+# レビュー PR #318 第4巡 Fix 12）。旧実装は body ファイルが内部的に valid
+# であれば alias の存在・claim を確認せず受理していたため、孤児本体
+# （Fix 9 が list_profile_ids()/_find_by_voice_and_revision() では既に
+# 不可視化していたもの）が公開 read()/exists() からは依然可読なままだった。
+# ---------------------------------------------------------------------------
+
+
+def test_ledger_read_rejects_orphan_body_before_alias_claim(
+    ledger: cp.Run9ProfileLedger, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """必須テスト（Fix 12, 負例1）: 本体書込み①後・alias claim②前の
+    crash で生じた孤児 body は、profile_id を直接知っていても公開
+    read()/exists() からは不可視である（本体ファイル自体はディスク上に
+    存在することも合わせて確認する — read() が「ファイルが無いから読めない」
+    のではなく「alias が claim していないから読ませない」ことを検証する）。
+    """
+    r0 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0)
+    orphan = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    _induce_alias_claim_crash(monkeypatch, ledger, orphan)
+
+    assert ledger.path_for(orphan.profile_id).exists()  # 本体ファイルは存在する
+    with pytest.raises(cp.Run9ControlProfileError, match="no live"):
+        ledger.read(orphan.profile_id)
+    assert ledger.exists(orphan.profile_id) is False
+
+
+def test_ledger_read_rejects_orphan_after_different_profile_claims_tuple(
+    ledger: cp.Run9ProfileLedger, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """必須テスト（Fix 12, 負例2）: 別 body が同じ (voice_id, revision)
+    tuple を claim した後も、孤児 body は公開 read() から恒久的に不可視の
+    まま — claim した側（第2の profile）は read() 可能になる（「唯一の
+    来歴」が公開 read() の層でも維持されることの確認）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0)
+    orphan = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    _induce_alias_claim_crash(monkeypatch, ledger, orphan)
+
+    claimer = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 2}})
+    assert claimer.profile_id != orphan.profile_id
+    ledger.write(claimer)
+
+    with pytest.raises(cp.Run9ControlProfileError, match="no live"):
+        ledger.read(orphan.profile_id)
+    assert ledger.exists(orphan.profile_id) is False
+    assert ledger.read(claimer.profile_id).profile_id == claimer.profile_id
+    assert ledger.exists(claimer.profile_id) is True
+
+
+def test_ledger_exists_true_for_normally_published_profile(ledger: cp.Run9ProfileLedger) -> None:
+    """正例回帰: alias が正しく claim している通常の publish は、Fix 12
+    後も引き続き `read()`/`exists()` 双方から可視のまま。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0)
+    assert ledger.exists(r0.profile_id) is True
+    assert ledger.read(r0.profile_id).profile_id == r0.profile_id
+
+
+# ---------------------------------------------------------------------------
+# Run9ProfileLedger: alias claim の tuple 束縛検証（Codex bot レビュー
+# PR #318 第4巡 Fix 13）。`_resolve_live_profile_id_for_alias()` は旧実装
+# だと claim された body の内部整合（自身の profile_id と一致するか）しか
+# 見ておらず、ロードした profile の voice_id/revision を alias 自体が
+# 表す tuple と比較していなかった。複製・改名・破損した
+# `byrev_R9F-02_r0.link` が R9F-01 の valid な r0 body を指すと、
+# `_find_by_voice_and_revision("R9F-02", "r0")` が誤って別 founder の
+# profile を返し得た。
+# ---------------------------------------------------------------------------
+
+
+def test_ledger_find_by_voice_and_revision_rejects_tuple_binding_mismatch(
+    ledger: cp.Run9ProfileLedger,
+) -> None:
+    """必須テスト（Fix 13, 負例1）: `byrev_R9F-02_r0.link` を fabricate
+    して R9F-01 の valid な r0 body を指させても、
+    `_find_by_voice_and_revision("R9F-02", "r0")` は None を返す（別
+    founder の body を誤って返さない — 本体側の profile_id 検証だけでは
+    検出できない不整合を、alias が表す tuple 自体との比較で検出する）。"""
+    r0_f01 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0_f01)
+
+    mismatched_alias = ledger._alias_path_for("R9F-02", "r0")
+    ledger.directory.mkdir(parents=True, exist_ok=True)
+    mismatched_alias.write_bytes(r0_f01.profile_id.encode("ascii"))
+
+    assert ledger._find_by_voice_and_revision("R9F-02", "r0") is None
+
+
+def test_ledger_child_publish_parent_check_fails_with_tuple_binding_mismatch(
+    ledger: cp.Run9ProfileLedger,
+) -> None:
+    """必須テスト（Fix 13, 負例2）: 上記の tuple 不一致 alias が存在する
+    状態で R9F-02 の子 profile を publish しようとすると、親 (R9F-02, r0)
+    の実在検証は（誤って R9F-01 の r0 を親として認めることなく）失敗する
+    — R9F-02 の子 publish が「親が存在する」という誤った判定を通り抜けて
+    しまう穴を塞ぐ。"""
+    r0_f01 = cp.build_neutral_profile("R9F-01")
+    ledger.write(r0_f01)
+
+    mismatched_alias = ledger._alias_path_for("R9F-02", "r0")
+    ledger.directory.mkdir(parents=True, exist_ok=True)
+    mismatched_alias.write_bytes(r0_f01.profile_id.encode("ascii"))
+
+    r0_f02 = cp.build_neutral_profile("R9F-02")  # R9F-02 の正当な r0 自体は publish しない
+    child_f02 = cp.derive_profile(r0_f02, "PRACTICE_FROM_AUDIO", {"trait_control": {"x": 1}})
+    with pytest.raises(cp.Run9ControlProfileError, match="does not exist in the ledger"):
+        ledger.write(child_f02)
+
+
+def test_ledger_find_by_voice_and_revision_still_works_after_fix13_for_legitimate_tuples(
+    ledger: cp.Run9ProfileLedger,
+) -> None:
+    """正例回帰: alias の claim と本体の (voice_id, revision) が正しく
+    束縛されている通常の publish は、Fix 13 後も引き続き解決できる。"""
+    r0_f01 = cp.build_neutral_profile("R9F-01")
+    r0_f02 = cp.build_neutral_profile("R9F-02")
+    ledger.write(r0_f01)
+    ledger.write(r0_f02)
+    found_f01 = ledger._find_by_voice_and_revision("R9F-01", "r0")
+    found_f02 = ledger._find_by_voice_and_revision("R9F-02", "r0")
+    assert found_f01 is not None and found_f01.profile_id == r0_f01.profile_id
+    assert found_f02 is not None and found_f02.profile_id == r0_f02.profile_id
+
+
+# ---------------------------------------------------------------------------
 # loader (control_profile_from_dict): 枝書き込み境界をパーティション内容へ
 # 適用する（Codex bot レビュー PR #318 第3巡 Fix 10）。derive_profile() を
 # 経由しない手組み/改ざん文書が、profile_id さえ再計算に通せば禁止
@@ -1010,6 +1137,130 @@ def test_run9_control_profile_deep_copies_partitions_at_construction_time() -> N
     )
     original["trait_control"]["x"] = 999  # 呼び出し元がその後 dict を書き換える
     assert profile.partitions["trait_control"]["x"] == 1  # profile 自身の状態は不変
+
+
+# ---------------------------------------------------------------------------
+# Run9ControlProfile: 再帰凍結 + export の深いコピー（Codex bot レビュー
+# PR #318 第4巡 Fix 14）。旧実装は partitions の外側 dict にしか
+# `types.MappingProxyType` を適用しておらず、ネストされた dict/list は
+# mutable なまま残っていた。さらに `to_dict()` が浅いコピーだったため、
+# 呼び出し元が返り値のネストした中身を変異させると profile 本体の内部
+# 状態へ波及し得た。
+# ---------------------------------------------------------------------------
+
+
+def test_run9_control_profile_rejects_nested_dict_mutation() -> None:
+    """必須テスト（Fix 14, 負例1）: partitions 内にネストした dict への
+    直接変異は `TypeError` で拒否される（旧実装は外側 dict しか凍結して
+    おらず、`partitions["trait_control"]["nested"]["x"] = ...` のような
+    深い変異は型レベルで防げていなかった）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"nested": {"x": 1}}})
+    with pytest.raises(TypeError):
+        child.partitions["trait_control"]["nested"]["x"] = 999
+    assert child.partitions["trait_control"]["nested"]["x"] == 1
+
+
+def test_run9_control_profile_rejects_nested_list_mutation() -> None:
+    """必須テスト（Fix 14, 負例2）: partitions 内にネストした list は
+    構築時に tuple へ変換されており、item 代入自体が構造的に不可能
+    （tuple は代入を持たない — `TypeError`）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(
+        r0, "PRACTICE_FROM_AUDIO", {"trait_control": {"nested_list": [1, 2, 3]}}
+    )
+    assert isinstance(child.partitions["trait_control"]["nested_list"], tuple)
+    with pytest.raises(TypeError):
+        child.partitions["trait_control"]["nested_list"][0] = 999
+    assert child.partitions["trait_control"]["nested_list"] == (1, 2, 3)
+
+
+def test_run9_control_profile_deep_freeze_breaks_aliasing_for_nested_containers_at_construction() -> None:
+    """必須テスト（Fix 14, 構築時のネスト版エイリアス切断）: 直接構築時に
+    渡した partitions のネストした dict/list を、呼び出し元がその後書き
+    換えても profile 自身の内部状態には影響しない（既存の `test_run9_
+    control_profile_deep_copies_partitions_at_construction_time` は
+    トップレベルの dict のみを対象としていたため、ネストしたコンテナの
+    エイリアス切断を別途確認する）。"""
+    nested_dict = {"x": 1}
+    nested_list = [1, 2, 3]
+    original = {
+        "trait_control": {"nested": nested_dict, "nested_list": nested_list},
+        "technique_control": {},
+    }
+    profile = cp.Run9ControlProfile(
+        schema=cp.SCHEMA_CONTROL_PROFILE, voice_id="R9F-01", branch=None, revision="r0",
+        parent_revision=None, partitions=original, profile_id="0" * 16,
+    )
+    nested_dict["x"] = 999
+    nested_list.append(999)
+    assert profile.partitions["trait_control"]["nested"]["x"] == 1
+    assert profile.partitions["trait_control"]["nested_list"] == (1, 2, 3)
+
+
+def test_run9_control_profile_to_dict_deep_mutation_does_not_propagate() -> None:
+    """必須テスト（Fix 14, 負例3 — export の深いコピー）: `to_dict()` の
+    返り値のネストした dict/list を呼び出し元が変異させても、profile
+    自身の内部状態（profile_id を含む）へは波及しない（旧実装の
+    `dict(self.partitions[k])` は外側1階層だけの浅いコピーだったため、
+    `profile.to_dict()["partitions"]["trait_control"]["nested"]["x"] = ...`
+    のような深い変異が内部状態へ波及し得た）。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(
+        r0, "PRACTICE_FROM_AUDIO",
+        {"trait_control": {"nested": {"x": 1}, "nested_list": [1, {"y": 2}]}},
+    )
+    original_profile_id = child.profile_id
+
+    data = child.to_dict()
+    data["partitions"]["trait_control"]["nested"]["x"] = 999
+    data["partitions"]["trait_control"]["nested_list"][1]["y"] = 999
+    data["partitions"]["trait_control"]["nested_list"].append("intruder")
+
+    assert child.partitions["trait_control"]["nested"]["x"] == 1
+    assert child.partitions["trait_control"]["nested_list"] == (1, {"y": 2})
+    assert child.profile_id == original_profile_id
+    # 再度 to_dict() すると変異前の内容が返る（波及していないことの再確認）。
+    assert child.to_dict()["partitions"]["trait_control"] == {
+        "nested": {"x": 1}, "nested_list": [1, {"y": 2}],
+    }
+
+
+def test_run9_control_profile_id_and_serialization_unchanged_by_recursive_freeze() -> None:
+    """必須テスト（Fix 14, バイト同一性回帰）: 再帰凍結・export の深い
+    コピー導入後も、`profile_id` の計算・`to_dict()`/JSON 直列化の内容は
+    凍結導入前と不変である。ネストした list を含む partitions を使い、
+    `to_dict()` が内部の tuple 化された表現を正しく plain な list として
+    返す（JSON 直列化可能である）ことも合わせて確認する。"""
+    r0 = cp.build_neutral_profile("R9F-01")
+    child = cp.derive_profile(
+        r0, "PRACTICE_FROM_AUDIO",
+        {"trait_control": {"a": 1, "b": [1, 2, {"c": 3}]}, "technique_control": {}},
+    )
+    # 期待 profile_id を _compute_profile_id() へ plain dict のみで直接
+    # 渡して独立に算出する — 凍結/デコード経路を経由しない計算との一致を
+    # 確認することで「再帰凍結が profile_id 計算へ影響しない」ことを
+    # 検証する。
+    expected_profile_id = cp._compute_profile_id(
+        voice_id="R9F-01", branch="PRACTICE_FROM_AUDIO", revision="r_practice",
+        parent_revision="r0",
+        partitions={"trait_control": {"a": 1, "b": [1, 2, {"c": 3}]}, "technique_control": {}},
+    )
+    assert child.profile_id == expected_profile_id
+
+    data = child.to_dict()
+    assert data["partitions"]["trait_control"]["b"] == [1, 2, {"c": 3}]
+    assert isinstance(data["partitions"]["trait_control"]["b"], list)  # tuple ではなく list
+    serialized = json.dumps(data, sort_keys=True, indent=2, allow_nan=False)
+    reloaded = json.loads(serialized)
+    assert reloaded == data  # round-trip でバイト内容が保たれる
+
+    # golden 回帰: derive_profile() を経由しない control_profile_from_dict()
+    # 側の round-trip でも同一 profile_id・同一 partitions 内容を再構築
+    # できる（Fix 14 が読込経路の挙動を変えていないことの確認）。
+    reconstructed = cp.control_profile_from_dict(data)
+    assert reconstructed.profile_id == child.profile_id
+    assert reconstructed.to_dict() == data
 
 
 # ---------------------------------------------------------------------------

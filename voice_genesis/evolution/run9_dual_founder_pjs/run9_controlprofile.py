@@ -33,7 +33,6 @@ append-only 台帳の意味論（tmp→fsync→`os.link` 排他 create・バイ�
 """
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import math
@@ -161,6 +160,47 @@ def _reject_non_finite(value: Any, *, path: str) -> None:
     # 現れない）。
 
 
+def _deep_freeze(value: Any) -> Any:
+    """JSON 互換の任意構造（dict/list/str/int/float/bool/None — `_reject_
+    non_finite()` と同じ入力形状の前提）を再帰的に不変化する（Codex bot
+    レビュー PR #318 第4巡 Fix 14 採用）: 旧 `__post_init__` は partitions
+    の外側 dict にのみ `types.MappingProxyType` を適用しており、ネストされた
+    dict/list はそのまま mutable な素の構造として残っていた（`profile.
+    partitions["trait_control"]["nested"]["x"] = ...` のような深い直接
+    変異が型レベルで防げていなかった）。dict は再帰的に `MappingProxyType`
+    へ、list は再帰的に `tuple` へ変換する（tuple の要素自体も再帰的に
+    凍結するため、`([{"x": 1}],)` のようにさらに dict/list を含む要素も
+    末端まで不変化される）。str/int/float/bool/None はそもそも immutable
+    なのでそのまま返す — 新しいコンテナを都度生成するため、元の入力
+    コンテナとの参照共有（エイリアス）もこの変換一回で完全に断たれる
+    （`copy.deepcopy()` の事前呼び出しは不要になった）。"""
+    if isinstance(value, dict):
+        return types.MappingProxyType({k: _deep_freeze(v) for k, v in value.items()})
+    if isinstance(value, list):
+        return tuple(_deep_freeze(v) for v in value)
+    return value
+
+
+def _deep_thaw(value: Any) -> Any:
+    """`_deep_freeze()` の逆変換: 凍結済み構造（`MappingProxyType`/`tuple`
+    の再帰ネスト）を再帰的に plain な dict/list へ変換して返す（Codex bot
+    レビュー PR #318 第4巡 Fix 14 採用）。`to_dict()`（および `derive_
+    profile()` が親の partitions を書き換え用に取り込む経路）が呼び出し
+    元へ渡す表現は、呼び出し元がその後 in-place で変異させても profile
+    本体（または凍結済み parent）へは一切波及してはならない — 旧 `to_dict()`
+    の `dict(self.partitions[k])` は外側 1 階層だけをコピーする浅いコピー
+    だったため、`profile.to_dict()["partitions"]["trait_control"]["nested"]
+    ["x"] = ...` のような深い変異が内部の凍結構造（の中のさらにネストされた
+    可変オブジェクト）へ波及し得た。`isinstance(value, MappingProxyType)`
+    は `isinstance(value, dict)` では捕捉できない（`MappingProxyType` は
+    `dict` のサブクラスではない）ため明示的に判定する。"""
+    if isinstance(value, types.MappingProxyType):
+        return {k: _deep_thaw(v) for k, v in value.items()}
+    if isinstance(value, tuple):
+        return [_deep_thaw(v) for v in value]
+    return value
+
+
 def _validate_partitions_shape(partitions: Any) -> Dict[str, Dict[str, Any]]:
     """`partitions` が `{"trait_control": {...}, "technique_control": {...}}`
     という完全な2キー構造であることを検証する。`IDENTITY_STATE`/
@@ -232,15 +272,30 @@ class Run9ControlProfile:
     "r0"` というラベルだけを見ていた旧実装と組み合わさると、汚染された
     nested dict が有効な r0 として derive へ渡り、汚染内容が子へコピー
     されてしまう）。`__post_init__` で渡された partitions を
-    `copy.deepcopy()` してから `types.MappingProxyType` で二段階
-    （partitions 自体 + 各 partition の中身）不変ビュー化する — 呼び出し元が
-    保持する元の dict を後から書き換えても profile 自身の内部状態は
-    影響を受けず（deepcopy がエイリアスを切断）、`profile.partitions[...]
-    [...] = ...` のような直接変異も `TypeError` で拒否される。Fix 11
-    項目1（`derive_profile()` の正準全形検証）と対になる防御的二重検証
-    — 項目1は「derive 時点で parent の中身を検査する」経路、本凍結は
-    「そもそも構築後に中身を変えさせない」経路で、どちらか片方が抜けても
-    もう片方が汚染を止める。"""
+    `types.MappingProxyType` で二段階（partitions 自体 + 各 partition の
+    中身）不変ビュー化する — 呼び出し元が保持する元の dict を後から
+    書き換えても profile 自身の内部状態は影響を受けず、`profile.
+    partitions[...][...] = ...` のような直接変異も `TypeError` で拒否
+    される。Fix 11 項目1（`derive_profile()` の正準全形検証）と対になる
+    防御的二重検証 — 項目1は「derive 時点で parent の中身を検査する」
+    経路、本凍結は「そもそも構築後に中身を変えさせない」経路で、どちらか
+    片方が抜けてももう片方が汚染を止める。
+
+    **再帰凍結**（Codex bot レビュー PR #318 第4巡 Fix 14 採用、上記の
+    是正）: 旧実装は `MappingProxyType` をパーティションの外側 dict にしか
+    適用しておらず、その中にネストされた dict/list（例
+    `partitions["trait_control"]["nested"]`）は依然 mutable な素の構造の
+    ままだったため、`profile.partitions["trait_control"]["nested"]["x"]
+    = ...` のような深い直接変異が型レベルで防げていなかった（`profile_id`
+    はこの変異を検知できず、既に発行済みの digest のまま内容だけが
+    ずれてしまう）。`_deep_freeze()`（本モジュール、`_reject_non_finite()`
+    と同じ「JSON 互換の任意構造」を前提とする再帰関数）を使い、dict は
+    再帰的に `MappingProxyType`、list は再帰的に `tuple` へ変換する —
+    末端の value まで含め、あらゆる深さの変異が `TypeError`（dict の
+    item 代入）または構造的に不可能（tuple は要素代入自体を持たない）に
+    なる。`_deep_freeze()` は再帰の過程で新しいコンテナを都度生成する
+    ため、これ単体で元入力とのエイリアスも完全に断たれる（旧実装が別途
+    行っていた `copy.deepcopy()` の事前呼び出しは不要になった）。"""
 
     schema: str
     voice_id: str
@@ -253,20 +308,31 @@ class Run9ControlProfile:
     def __post_init__(self) -> None:
         # frozen dataclass では `self.x = ...` が使えないため
         # `object.__setattr__` で直接代入する（run9_schema.py
-        # `Run9IdentityDomain.__post_init__` と同じ回避手段）。
+        # `Run9IdentityDomain.__post_init__` と同じ回避手段）。`_deep_
+        # freeze()` が dict(self.partitions[key]) の中身を再帰的に不変化
+        # する（Fix 14 — docstring 参照。`dict(...)` で外側だけ先に plain
+        # dict 化しておくのは、self.partitions[key] 自体が既に凍結済み
+        # object（別 profile から取り出した partitions を再利用する経路）
+        # であっても `_deep_freeze()` の dict 分岐へ確実に載せるため）。
         frozen: Dict[str, Mapping[str, Any]] = {}
         for key in PROFILE_PARTITION_KEYS:
-            frozen[key] = types.MappingProxyType(copy.deepcopy(dict(self.partitions[key])))
+            frozen[key] = _deep_freeze(dict(self.partitions[key]))
         object.__setattr__(self, "partitions", types.MappingProxyType(frozen))
 
     def to_dict(self) -> Dict[str, Any]:
+        # `_deep_thaw()` で内部の凍結構造（MappingProxyType/tuple の再帰
+        # ネスト）を plain な dict/list へ深く変換する（Fix 14 —
+        # docstring 参照）: 旧実装の `dict(self.partitions[k])` は外側
+        # 1階層だけの浅いコピーだったため、返り値のネストした中身を
+        # 呼び出し元が変異させると profile 本体の凍結構造（の中の
+        # さらにネストされた可変オブジェクト）へ波及し得た。
         return {
             "schema": self.schema,
             "voice_id": self.voice_id,
             "branch": self.branch,
             "revision": self.revision,
             "parent_revision": self.parent_revision,
-            "partitions": {k: dict(self.partitions[k]) for k in PROFILE_PARTITION_KEYS},
+            "partitions": {k: _deep_thaw(self.partitions[k]) for k in PROFILE_PARTITION_KEYS},
             "profile_id": self.profile_id,
         }
 
@@ -451,8 +517,15 @@ def derive_profile(
         # ため、builder 側にも同じ関門を独立に配線する。
         _reject_non_finite(updates[partition_key], path=f"updates.{partition_key}")
 
+    # `_deep_thaw()`（Fix 14）で parent の凍結済み partitions
+    # （MappingProxyType/tuple の再帰ネスト）を plain な dict/list へ深く
+    # 変換する — 旧 `copy.deepcopy(dict(parent.partitions[k]))` は
+    # parent.partitions[k] の中身が既に凍結構造（ネストした
+    # MappingProxyType/tuple）になった後は `copy.deepcopy()` が
+    # mappingproxy を pickle 経由で複製できず失敗するため、単純な
+    # deepcopy 呼び出しはもう成立しない。
     new_partitions: Dict[str, Dict[str, Any]] = {
-        k: copy.deepcopy(dict(parent.partitions[k])) for k in PROFILE_PARTITION_KEYS
+        k: _deep_thaw(parent.partitions[k]) for k in PROFILE_PARTITION_KEYS
     }
     for partition_key, value in updates.items():
         new_partitions[partition_key] = dict(value)
@@ -856,7 +929,18 @@ class Run9ProfileLedger:
 
         return Run9ProfileWriteResult(path=path, created=main_freshly_created)
 
-    def read(self, profile_id: str) -> Run9ControlProfile:
+    def _read_raw(self, profile_id: str) -> Run9ControlProfile:
+        """`profile_id` 単位の本体ファイルを、alias 照合なしで読み込む
+        **内部専用** reader（Codex bot レビュー PR #318 第4巡 Fix 12
+        採用）。schema/型・`profile_id` 再計算一致・symlink escape guard
+        を含むフル検証は行うが、`(voice_id, revision)` tuple-alias の
+        存在・claim 一致は検証しない。公開 `read()` はこの raw reader を
+        alias 照合でラップした上位関数であり、`_resolve_live_profile_id_
+        for_alias()` は逆に本メソッドを直接使う（`read()` を使うと
+        「alias 解決の途中でまた alias 解決を呼ぶ」無限再帰になるため）。
+        呼び出し元は本メソッドの結果を「live である」とみなしてはならない
+        — alias 照合込みの生存判定が必要な経路は必ず `read()` または
+        `_resolve_live_profile_id_for_alias()` を経由すること。"""
         path = self.path_for(profile_id)
         self._reject_symlink_escape(path)
         data = _loads_strict_json(path.read_text(encoding="utf-8"))
@@ -868,10 +952,67 @@ class Run9ProfileLedger:
             )
         return profile
 
-    def exists(self, profile_id: str) -> bool:
-        return self.path_for(profile_id).exists()
+    def read(self, profile_id: str) -> Run9ControlProfile:
+        """`profile_id` の本体を読み込む唯一の公開経路。**alias 照合を
+        必須とする**（Codex bot レビュー PR #318 第4巡 Fix 12 採用、
+        第3巡 Fix 9 の是正）: 旧実装は body ファイルが `_read_raw()`
+        相当のフル検証（schema/型・`profile_id` 再計算一致）を通れば、
+        `(voice_id, revision)` tuple-alias の存在・claim を一切確認せず
+        受理していた。Fix 9 は「alias の存在を publish のコミットポイント
+        とする」という原則を `list_profile_ids()`/`_find_by_voice_and_
+        revision()` には適用したが、公開 `read()` 自体はこの原則の外に
+        残っていた — その結果、本体書込み①後・alias claim②前で crash
+        した孤児（Fix 9 参照）を、profile_id さえ知っていれば
+        （例えば crash 前に発行元プロセスが自分の profile_id をログへ
+        出していた等の経路で）直接 `read()` でき、かつ後から別の body が
+        同じ `(voice_id, revision)` tuple を claim した後も、両方の body
+        が並行して可読なまま残ってしまっていた（alias コミットポイントと
+        「一つの tuple には一つの来歴」という不変条件が公開 read() の
+        層で破れる）。
 
-    def _resolve_live_profile_id_for_alias(self, alias_path: Path) -> Optional[str]:
+        ここでは、本体を `_read_raw()` でフル検証してから、`_alias_path_
+        for(profile.voice_id, profile.revision)` が実際に存在し、その
+        claim がこの `profile_id` と一致することを追加で要求する
+        （`_resolve_live_profile_id_for_alias()` へ委譲— Fix 13 の
+        tuple 束縛検証も自動的に効く）。孤児 body、または別 profile が
+        同じ tuple を横取りした後に取り残された旧 body は、公開 read()
+        からも恒久的に不可視になる。"""
+        profile = self._read_raw(profile_id)
+        alias_path = self._alias_path_for(profile.voice_id, profile.revision)
+        resolved = self._resolve_live_profile_id_for_alias(
+            alias_path, expected_voice_id=profile.voice_id, expected_revision=profile.revision,
+        )
+        if resolved != profile_id:
+            raise Run9ControlProfileError(
+                f"refusing to read profile_id {profile_id!r}: no live (voice_id={profile.voice_id!r}, "
+                f"revision={profile.revision!r}) tuple-alias claims this profile_id — the body file "
+                "is structurally valid on its own but is either an unclaimed crash orphan (write() "
+                "wrote the body but crashed before claiming the tuple-alias) or a stale body that a "
+                "different profile_id has since superseded for this tuple; public read() only ever "
+                "exposes a tuple's current live claimant, never an orphan or a superseded body"
+            )
+        return profile
+
+    def exists(self, profile_id: str) -> bool:
+        """`profile_id` が公開 `read()` で読める（= live である）かを
+        判定する（Codex bot レビュー PR #318 第4巡 Fix 12 採用）: 旧実装
+        `self.path_for(profile_id).exists()` はディレクトリ上のファイル
+        存在だけを見ており、alias 未 claim の孤児本体や、別 profile に
+        tuple を奪われた旧 body に対しても `True` を返してしまっていた
+        — `exists()` は `read()` と同じ「live」の定義を共有しなければ、
+        呼び出し元が `if ledger.exists(x): ledger.read(x)` のような
+        ガード付き読み込みを書いた際に矛盾する（`exists()` が True を
+        返した直後に `read()` が拒否する）。`read()` をそのまま呼び、
+        例外を bool へ変換するだけの薄いラッパーとする。"""
+        try:
+            self.read(profile_id)
+        except (Run9ControlProfileError, OSError, json.JSONDecodeError):
+            return False
+        return True
+
+    def _resolve_live_profile_id_for_alias(
+        self, alias_path: Path, *, expected_voice_id: str, expected_revision: str
+    ) -> Optional[str]:
         """`alias_path`（`byrev_<voice_id>_<revision>.link`）が claim する
         profile_id を読み、それが実際に生存 (live) しているかを判定する
         （Codex bot レビュー PR #318 第3巡 Fix 9 採用: **alias の存在を
@@ -889,11 +1030,30 @@ class Run9ProfileLedger:
 
         本メソッドは alias ファイルの側から出発し、①alias が存在し
         （symlink でなく）②その claim が profile_id 形式として妥当で、
-        ③対応する本体ファイルが実在し、④本体を `read()` でフル検証
-        （schema/型/profile_id 再計算一致・symlink escape guard を含む）
-        して claim と一致する場合にのみ、その profile_id を「live」として
-        返す。いずれかが欠ければ `None`（孤児・破損・改ざんは無条件で
-        不可視 — fail-closed）。"""
+        ③対応する本体ファイルが実在し、④本体を `_read_raw()` でフル検証
+        （schema/型/profile_id 再計算一致・symlink escape guard を含む。
+        `read()` ではなく `_read_raw()` を使う — `read()` 自身が本メソッド
+        へ委譲するため `read()` を呼ぶと無限再帰になる）して claim と
+        一致する場合にのみ、その profile_id を「live」候補とする。
+
+        **tuple 束縛検証**（Codex bot レビュー PR #318 第4巡 Fix 13
+        採用）: ③④だけでは、本体の内部整合（自己の profile_id と一致
+        するか）しか見ていない — ロードした profile 自身の `voice_id`/
+        `revision` が、`alias_path` が実際に表す tuple（`expected_voice_
+        id`/`expected_revision` として呼び出し元から渡される）と一致する
+        ことまでは検証していなかった。複製・改名・破損した
+        `byrev_R9F-02_r0.link` が（例えば）R9F-01 の valid な r0 body を
+        誤って指してしまうと、`_find_by_voice_and_revision("R9F-02",
+        "r0")` が R9F-01 の profile を返してしまい、R9F-02 の子 publish
+        が「親が存在する」という誤った判定を通ってしまう。本メソッドは
+        ⑤として、ロードした `profile.voice_id == expected_voice_id` かつ
+        `profile.revision == expected_revision` であることを追加で要求し
+        （fail-closed — 一致しなければ `None` を返し「live ではない」と
+        扱う。例外にはしない — 本メソッドの既存の意味論〈孤児・破損・
+        改ざんは無条件で `None`〉に合わせ、呼び出し元の分岐を変えない）。
+
+        いずれかの条件が欠ければ `None`（孤児・破損・改ざん・tuple 不一致
+        は無条件で不可視 — fail-closed）。"""
         if not alias_path.is_file() or alias_path.is_symlink():
             return None
         try:
@@ -903,39 +1063,78 @@ class Run9ProfileLedger:
         if not _PROFILE_ID_RE.match(claimed):
             return None
         try:
-            self.read(claimed)
+            profile = self._read_raw(claimed)
         except (Run9ControlProfileError, OSError, json.JSONDecodeError):
             return None
+        if profile.voice_id != expected_voice_id or profile.revision != expected_revision:
+            return None
         return claimed
+
+    def _parse_alias_filename(self, name: str) -> Optional[Tuple[str, str]]:
+        """`byrev_<voice_id>_<revision>.link` という alias ファイル名から
+        `(voice_id, revision)` を復元する（Fix 13 の一部: `list_profile_
+        ids()` は `glob("byrev_*.link")` で見つけたファイルの期待
+        `(voice_id, revision)` をあらかじめ知らないため、`_resolve_live_
+        profile_id_for_alias()` の tuple 束縛検証へ渡す `expected_voice_
+        id`/`expected_revision` をファイル名自体から復元する必要がある）。
+        `voice_id`（`run9_schema.CONTRACT_FOUNDER_IDS`）と `revision`
+        （`VALID_REVISIONS`）はどちらも小さな閉じた語彙のため、既知の
+        全組合せで `_alias_path_for()` が生成する名前と突き合わせる全探索
+        で一意に復元できる（`voice_id`/`revision` 自体が任意文字列を含み
+        得ないため、`_`区切りでの単純分割では曖昧になり得る箇所を語彙側の
+        全探索で確実化する）。どの既知組合せにも一致しなければ `None`
+        （未知・改ざんされたファイル名 — 該当 alias は無視する）。"""
+        for voice_id in _rs.CONTRACT_FOUNDER_IDS:
+            for revision in VALID_REVISIONS:
+                if name == self._alias_path_for(voice_id, revision).name:
+                    return voice_id, revision
+        return None
 
     def list_profile_ids(self) -> List[str]:
         """台帳内の live な profile_id を列挙する。alias ファイル
         （`byrev_*.link`）の側から出発する（Fix 9 — `_resolve_live_
         profile_id_for_alias()` docstring 参照）: 本体 JSON を直接
         `glob("*.json")` する旧実装は、alias が claim していない孤児本体も
-        無条件に live として返してしまっていた。"""
+        無条件に live として返してしまっていた。alias ファイル名から
+        `_parse_alias_filename()`（Fix 13）で期待 `(voice_id, revision)`
+        を復元し、`_resolve_live_profile_id_for_alias()` の tuple 束縛
+        検証へ渡す。"""
         if not self.directory.exists():
             return []
         live: set = set()
         for alias_path in self.directory.glob("byrev_*.link"):
-            resolved = self._resolve_live_profile_id_for_alias(alias_path)
+            parsed = self._parse_alias_filename(alias_path.name)
+            if parsed is None:
+                continue
+            voice_id, revision = parsed
+            resolved = self._resolve_live_profile_id_for_alias(
+                alias_path, expected_voice_id=voice_id, expected_revision=revision,
+            )
             if resolved is not None:
                 live.add(resolved)
         return sorted(live)
 
     def _find_by_voice_and_revision(self, voice_id: str, revision: str) -> Optional[Run9ControlProfile]:
         """`(voice_id, revision)` の tuple-alias ファイルを直接引き、その
-        claim が live であれば対応する profile を返す（Fix 9 — 台帳全体を
-        走査する旧実装から、alias パス1件の直接解決へ置き換え。alias の
-        naming convention `byrev_<voice_id>_<revision>.link` により
-        `(voice_id, revision)` と alias ファイルは1:1に対応するため、
-        走査は元々不要だった）。孤児本体（alias 未 claim）や、alias が
-        claim する内容と本体が食い違う場合は live 扱いしない。"""
+        claim が live（Fix 13 の tuple 束縛検証込み）であれば対応する
+        profile を返す（Fix 9 — 台帳全体を走査する旧実装から、alias パス
+        1件の直接解決へ置き換え。alias の naming convention
+        `byrev_<voice_id>_<revision>.link` により `(voice_id, revision)`
+        と alias ファイルは1:1に対応するため、走査は元々不要だった）。
+        孤児本体（alias 未 claim）、alias が claim する内容と本体が
+        食い違う場合、または本体の `(voice_id, revision)` が alias の
+        主張する tuple と一致しない場合（Fix 13）は live 扱いしない。
+        呼び出し時点で `voice_id`/`revision` を既に知っているため、
+        確認済みの `resolved` を改めて alias 経由の `read()` へ通さず
+        `_read_raw()` で直接読む（tuple 束縛は本メソッド内で既に検証
+        済み）。"""
         alias_path = self._alias_path_for(voice_id, revision)
-        resolved = self._resolve_live_profile_id_for_alias(alias_path)
+        resolved = self._resolve_live_profile_id_for_alias(
+            alias_path, expected_voice_id=voice_id, expected_revision=revision,
+        )
         if resolved is None:
             return None
-        return self.read(resolved)
+        return self._read_raw(resolved)
 
 
 def _loads_strict_json(text: str) -> Any:
