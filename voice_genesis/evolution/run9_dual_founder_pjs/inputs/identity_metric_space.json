@@ -69,11 +69,11 @@
     "distance_unit": {
       "formula": "d_i(F) = euclidean(mean_voiced_log_sp(reference_render(F)), mean_voiced_log_sp(take_i(F)))",
       "aggregation_unit": "1 テイク = 1 距離標本",
-      "reference_render_definition": "当該 founder F 自身の first birth-probe measurement に固定する（founder ごとに1つ — R9F-01/R9F-02 それぞれの reference_render を個別に持ち、他方 founder の reference と混同・共用しない）。実測値は reference_example 節が固定する手続きに従う。捏造禁止 — reference_example.procedure と同一の事前登録手続きに従う。"
+      "reference_render_definition": "当該 founder F 自身の first birth-probe measurement に固定する（founder ごとに1つ — R9F-01/R9F-02 それぞれの reference_render を個別に持ち、他方 founder の reference と混同・共用しない）。reference_render(F) は当該 founder の C0/C1 テイクの一員ではなく、birth probe の独立レンダーである（D_C0(F)/D_C1(F) の距離標本対象からは除外し、比較の基準点としてのみ用いる）。実測値は reference_example 節が固定する手続きに従う。捏造禁止 — reference_example.procedure と同一の事前登録手続きに従う。"
     },
     "freeze_threshold": {
       "formula": "theta_cal(F) = P95(D_C0(F)) — founder F ごとに独立算出する。",
-      "d_c0_population": "D_C0(F) = founder F 自身の C0 (NO_LEARNING_REPLAY) 枝テイクと founder F 自身の reference_render(F) との距離標本のみで構成する。founder 横断の pooling は不採用 — pooling は founder 間 identity 距離を replay noise 分布へ混入させ、校正有効性判定と STABLE_BY_MACHINE_METRIC/SHIFTED 判定を歪めるため採用しない。テイク数（founder 1体あたり）は RUN9_CONTRACT.yaml の interventions.c0_replay_takes_per_founder（PINNED 値）を束縛元として参照し、本ファイルへ数を重複記載しない。",
+      "d_c0_population": "D_C0(F) = founder F 自身の C0 (NO_LEARNING_REPLAY) 枝テイクと founder F 自身の reference_render(F) との距離標本のみで構成する。founder 横断の pooling は不採用 — pooling は founder 間 identity 距離を replay noise 分布へ混入させ、校正有効性判定と STABLE_BY_MACHINE_METRIC/SHIFTED 判定を歪めるため採用しない。reference_render(F) は C0 母集団に属さない — D_C0(F) は reference_render(F) と独立な、RUN9_CONTRACT.yaml の interventions.c0_replay_takes_per_founder（PINNED 値、1 founder あたり n=20）どおりのテイクのみで構成し、reference と reference 自身の距離（恒等ゼロ標本）を自己比較として混入させることを禁止する。自己比較混入は P95(D_C0(F)) を恒等ゼロ標本によって下方へ歪め theta_cal(F) を過小推定させ、STABLE_BY_MACHINE_METRIC 側へ判定を偏らせるため不採用とする。テイク数（founder 1体あたり）は RUN9_CONTRACT.yaml の interventions.c0_replay_takes_per_founder（PINNED 値）を束縛元として参照し、本ファイルへ数を重複記載しない。",
       "percentile_method": "線形補間分位（numpy.percentile(..., method=\"linear\") 相当）。"
     },
     "validity_gates": {
@@ -81,7 +81,7 @@
       "c1_gate": {
         "id": "validity_gate_c1",
         "condition": "P95(D_C1(F)) <= theta_cal(F)",
-        "d_c1_population": "D_C1(F) = founder F 自身の C1 (ZERO_CONTROLPROFILE_SHAM) 枝テイクと founder F 自身の reference_render(F) との距離標本のみで構成する（D_C0(F) と同一の pooling 禁止規約 — founder 横断の pooling は不採用）。テイク数（founder 1体あたり）は RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder（PINNED 値）を束縛元として参照する。"
+        "d_c1_population": "D_C1(F) = founder F 自身の C1 (ZERO_CONTROLPROFILE_SHAM) 枝テイクと founder F 自身の reference_render(F) との距離標本のみで構成する（D_C0(F) と同一の pooling 禁止規約 — founder 横断の pooling は不採用）。reference_render(F) は C1 母集団にも属さない — D_C1(F) も reference_render(F) と独立な、RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder（PINNED 値、1 founder あたり n=20）どおりのテイクのみで構成し、自己比較（reference と reference 自身の距離=恒等ゼロ標本）の混入を D_C0(F) と同一の理由（P95 を下方へ歪め STABLE 側へ偏らせるため）で禁止する。テイク数（founder 1体あたり）は RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder（PINNED 値）を束縛元として参照する。"
       },
       "positive_reference_gate": {
         "id": "validity_gate_positive_reference",
@@ -101,7 +101,7 @@
       "boundary": "境界は closed-below（<= は STABLE_BY_MACHINE_METRIC 側）。"
     },
     "worked_example": {
-      "disclaimer": "synthetic illustration — 実測ではない。以下は特定の1 founder F について theta_cal(F) の読み方を示す合成数値例（founder 横断の pooling はしない per-founder 校正の例示）であり、birth probe の実測値ではない。",
+      "disclaimer": "synthetic illustration — 実測ではない。以下は特定の1 founder F について theta_cal(F) の読み方を示す合成数値例（founder 横断の pooling はしない per-founder 校正の例示）であり、birth probe の実測値ではない。d_c0_samples（n=5 例示）はいずれも reference_render(F) と独立なテイクであり、reference との自己比較（恒等ゼロ距離）の混入を含まない。",
       "d_c0_samples": [0.021, 0.024, 0.026, 0.027, 0.03],
       "theta_cal": 0.0294,
       "theta_cal_derivation": "P95(d_c0_samples) の線形補間 = 0.027 + 0.8*(0.030-0.027) = 0.0294。",

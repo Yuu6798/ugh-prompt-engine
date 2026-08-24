@@ -4840,3 +4840,187 @@ def test_fix22_intervention_take_count_field_accessor() -> None:
             contract.intervention_take_count_field(name)
             == contract.raw["interventions"][name]
         )
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第9巡 Fix 23（P1）: reference テイクの C0
+# 母集団からの除外を凍結する。reference_render(F) が C0/C1 replay テイクの
+# 一員なら D_C0(F)/D_C1(F) に自己比較ゼロ距離が保証混入し、P95 閾値と
+# STABLE/SHIFTED 判定が変わり得た未確定点を、d_c0_population/
+# d_c1_population/reference_render_definition の文言凍結 + validator
+# チェックとして機械強制する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix23_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix23_d_c0_population_states_self_comparison_prohibition() -> None:
+    data = _valid_metric_space_doc()
+    d_c0_population = data["calibration"]["freeze_threshold"]["d_c0_population"]
+    assert "自己比較" in d_c0_population
+    assert "C0 母集団に属さない" in d_c0_population
+
+
+def test_fix23_d_c1_population_states_self_comparison_prohibition() -> None:
+    data = _valid_metric_space_doc()
+    d_c1_population = data["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"]
+    assert "自己比較" in d_c1_population
+    assert "C1 母集団にも属さない" in d_c1_population
+
+
+def test_fix23_reference_render_definition_states_not_a_take_member() -> None:
+    data = _valid_metric_space_doc()
+    reference_render_definition = data["calibration"]["distance_unit"]["reference_render_definition"]
+    assert "C0/C1 テイクの一員ではなく" in reference_render_definition
+    assert "独立レンダー" in reference_render_definition
+
+
+def test_fix23_worked_example_disclaimer_states_samples_are_independent_of_reference() -> None:
+    data = _valid_metric_space_doc()
+    disclaimer = data["calibration"]["worked_example"]["disclaimer"]
+    assert "reference_render(F) と独立なテイク" in disclaimer
+    assert "自己比較" in disclaimer
+
+
+def test_fix23_validator_rejects_d_c0_population_missing_self_comparison_prohibition() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["freeze_threshold"]["d_c0_population"] = (
+        "D_C0(F) = founder F 自身の C0 テイクと reference_render(F) との距離標本のみで構成する。"
+        "founder 横断の pooling は不採用。テイク数は RUN9_CONTRACT.yaml の "
+        "interventions.c0_replay_takes_per_founder を参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="self-comparison contamination prohibition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix23_validator_rejects_d_c1_population_missing_self_comparison_prohibition() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"] = (
+        "D_C1(F) = founder F 自身の C1 テイクと reference_render(F) との距離標本のみで構成する"
+        "（pooling 不採用）。テイク数は RUN9_CONTRACT.yaml の "
+        "interventions.c1_sham_takes_per_founder を参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="self-comparison contamination prohibition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix23_validator_rejects_reference_render_definition_missing_not_a_take_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["distance_unit"]["reference_render_definition"] = (
+        "当該 founder F 自身の first birth-probe measurement に固定する（founder ごとに1つ）。"
+        "実測値は reference_example 節が固定する手続きに従う。捏造禁止。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="not a member of the C0/C1 takes"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix23_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 23 の文言追記後、`metric_space_sha` は
+    `identity_metric_space.json` の正規形 sha256 を再計算した値と一致する
+    （= repin 済みであり、追記前の pin 値のまま素通りしていない）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第9巡 Fix 24（P2）: `_validate_nested_str_keys()`
+# を「必須キー存在」から「キー集合完全一致（未知キー拒否）」へ強化する。
+# `f0_estimation.algorithm_override: "dio"` のような契約に無いキーの追加が
+# repin だけで素通りしていた穴の是正 — 本関数を呼ぶ全ネスト object へ
+# 一括適用されることを個別に確認する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix24_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例（回帰確認）: 現行ファイルは追加のキーを一切含まないため、
+    キー集合完全一致チェックを追加してもそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix24_validator_rejects_f0_estimation_algorithm_override() -> None:
+    """指摘の直接事例: `f0_estimation.algorithm_override: "dio"` のような
+    矛盾キーの追加を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["f0_estimation"]["algorithm_override"] = "dio"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=r"f0_estimation has unknown key.*algorithm_override",
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_spectral_envelope_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["spectral_envelope"]["q1"] = 0.5
+    with pytest.raises(m.Run9ValidationError, match=r"spectral_envelope has unknown key.*q1"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_voiced_mask_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["voiced_mask"]["threshold"] = "0.0"
+    with pytest.raises(m.Run9ValidationError, match=r"voiced_mask has unknown key.*threshold"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_distance_unit_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["distance_unit"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"distance_unit has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_freeze_threshold_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["freeze_threshold"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"freeze_threshold has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_decision_rule_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["decision_rule"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"decision_rule has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_source_references_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["source_references"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"source_references has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_still_rejects_sample_rate_unknown_key_after_allowed_keys_refactor() -> None:
+    """回帰ガード: `sample_rate`/`log_transform` は `value_hz`/`floor_value`
+    という非 str 型フィールドを含む部分集合を `_validate_nested_str_keys()`
+    へ渡すため、`allowed_keys` 経由の閉集合検証が壊れていないかを個別に
+    確認する（壊れていると `value_hz` 自体を未知キーと誤検知していた —
+    実装中に一度この regression を踏んだ)。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"sample_rate has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_still_rejects_log_transform_unknown_key_after_allowed_keys_refactor() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["log_transform"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"log_transform has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)

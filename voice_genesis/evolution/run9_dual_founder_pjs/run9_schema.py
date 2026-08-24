@@ -28,7 +28,7 @@ import sys
 import types
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Mapping, Tuple
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 import yaml  # PyYAML は本体必須依存（pyproject.toml [project].dependencies）
 
@@ -1374,6 +1374,17 @@ _D_C1_POPULATION_FIELD_REF_MARKER = "c1_sham_takes_per_founder"
 # 独立トークンとして現れることを最低限の per-founder 明記の証拠とする。
 _REFERENCE_RENDER_DEFINITION_PER_FOUNDER_MARKER = "founder"
 
+# Codex bot レビュー PR #318 第9巡 Fix 23 採用（P1）: reference_render(F)
+# が C0/C1 母集団に属するか（自己比較ゼロ距離混入）が未確定だった指摘の
+# 凍結を、pooling 禁止チェックと同型のマーカー方式で機械強制する。
+# reference_render(F) 自身との距離（恒等ゼロ標本）が D_C0(F)/D_C1(F) へ
+# 混入すると P95 が下方へ歪み STABLE_BY_MACHINE_METRIC 側へ判定が偏る
+# ため、両母集団の定義文に自己比較禁止の明文が存在することを要求する。
+_SELF_COMPARISON_PROHIBITION_MARKER = "自己比較"
+# reference_render_definition にも、reference が C0/C1 テイクの一員では
+# ないこと（独立レンダーであること）の明文を要求する。
+_REFERENCE_RENDER_NOT_A_TAKE_MARKER = "の一員ではな"
+
 _CALIBRATION_WORKED_EXAMPLE_STR_KEYS: Tuple[str, ...] = (
     "disclaimer", "theta_cal_derivation", "c1_gate_result", "positive_reference_gate_result",
     "negative_reference_gate_result", "calibration_status_example", "evaluated_render_outcome",
@@ -1393,7 +1404,28 @@ def _require_dict(value: Any, *, field: str) -> Dict[str, Any]:
     return value
 
 
-def _validate_nested_str_keys(data: Mapping[str, Any], *, field: str, keys: Tuple[str, ...]) -> None:
+def _validate_nested_str_keys(
+    data: Mapping[str, Any],
+    *,
+    field: str,
+    keys: Tuple[str, ...],
+    allowed_keys: Optional[FrozenSet[str]] = None,
+) -> None:
+    # Codex bot レビュー PR #318 第9巡 Fix 24 採用（P2）: 旧実装は `keys` の
+    # 存在のみを検証し、キー集合の一致（未知キー拒否）を見ていなかった
+    # ため、`f0_estimation.algorithm_override: "dio"` のような契約に無い
+    # キーの追加が repin だけで素通りしていた。`sample_rate`/トップレベル
+    # 等で個別に行っていたキー集合比較と同型のクローズド集合検証をここへ
+    # 集約し、本関数を呼ぶ全ネスト object（f0_estimation/spectral_
+    # envelope/voiced_mask/distance_unit/freeze_threshold/decision_rule/
+    # source_references）へ一括適用する。`keys` が非 str 型フィールド
+    # （value_hz/floor_value 等、別途型検証済み）を含まない部分集合に
+    # なる呼び出し元（sample_rate/log_transform）は `allowed_keys` で
+    # 実際の閉集合を明示する（省略時は `keys` 自体が閉集合とみなされる）。
+    permitted = set(allowed_keys) if allowed_keys is not None else set(keys)
+    unknown = set(data.keys()) - permitted
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
     for key in keys:
         if key not in data:
             raise Run9ValidationError(f"{field} missing required key: {key!r}")
@@ -1431,13 +1463,23 @@ def _validate_calibration_section(data: Any) -> None:
     )
     # Fix 20: reference_render は founder ごとに1つに固定する（他方
     # founder の reference と混同・共用しない）ことを文言レベルで強制する。
-    reference_render_definition = distance_unit["reference_render_definition"].lower()
+    reference_render_definition_raw = distance_unit["reference_render_definition"]
+    reference_render_definition = reference_render_definition_raw.lower()
     if _REFERENCE_RENDER_DEFINITION_PER_FOUNDER_MARKER not in reference_render_definition:
         raise Run9ValidationError(
             "calibration.distance_unit.reference_render_definition must state that the reference "
             f"render is fixed per founder (expected {_REFERENCE_RENDER_DEFINITION_PER_FOUNDER_MARKER!r} "
             f"to appear), got {distance_unit['reference_render_definition']!r} (Codex bot レビュー "
             "PR #318 第7巡 Fix 20 — pooling across founders is forbidden)"
+        )
+    # Fix 23: reference_render(F) が C0/C1 テイクの一員ではなく独立レンダー
+    # であることの明文を強制する（自己比較ゼロ距離混入の凍結）。
+    if _REFERENCE_RENDER_NOT_A_TAKE_MARKER not in reference_render_definition_raw:
+        raise Run9ValidationError(
+            "calibration.distance_unit.reference_render_definition must state that the reference "
+            f"render is not a member of the C0/C1 takes (expected {_REFERENCE_RENDER_NOT_A_TAKE_MARKER!r} "
+            f"to appear), got {reference_render_definition_raw!r} (Codex bot レビュー PR #318 第9巡 "
+            "Fix 23 — self-comparison zero-distance contamination is forbidden)"
         )
 
     freeze_threshold = _require_dict(calibration["freeze_threshold"], field="calibration.freeze_threshold")
@@ -1462,6 +1504,16 @@ def _validate_calibration_section(data: Any) -> None:
             "calibration.freeze_threshold.d_c0_population must reference RUN9_CONTRACT.yaml's "
             f"{_D_C0_POPULATION_FIELD_REF_MARKER!r} field by name (dangling delegation to a "
             f"nonexistent contract field is forbidden), got {d_c0_population!r}"
+        )
+    # Fix 23: reference_render(F) 自身との自己比較（恒等ゼロ距離標本）の
+    # D_C0(F) への混入禁止を文言レベルで強制する（未凍結のままだと P95 が
+    # 下方へ歪み STABLE_BY_MACHINE_METRIC 側へ判定が偏る）。
+    if _SELF_COMPARISON_PROHIBITION_MARKER not in d_c0_population:
+        raise Run9ValidationError(
+            "calibration.freeze_threshold.d_c0_population must state the self-comparison "
+            f"contamination prohibition (expected {_SELF_COMPARISON_PROHIBITION_MARKER!r} to appear "
+            "— reference_render(F) does not belong to the C0 population), got "
+            f"{d_c0_population!r} (Codex bot レビュー PR #318 第9巡 Fix 23)"
         )
 
     validity_gates = _require_dict(calibration["validity_gates"], field="calibration.validity_gates")
@@ -1488,6 +1540,14 @@ def _validate_calibration_section(data: Any) -> None:
             "calibration.validity_gates.c1_gate.d_c1_population must reference RUN9_CONTRACT.yaml's "
             f"{_D_C1_POPULATION_FIELD_REF_MARKER!r} field by name (dangling delegation to a "
             f"nonexistent contract field is forbidden), got {d_c1_population!r}"
+        )
+    # Fix 23: D_C0(F) と対になる自己比較禁止チェック。
+    if _SELF_COMPARISON_PROHIBITION_MARKER not in d_c1_population:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.d_c1_population must state the self-comparison "
+            f"contamination prohibition (expected {_SELF_COMPARISON_PROHIBITION_MARKER!r} to appear "
+            "— reference_render(F) does not belong to the C1 population), got "
+            f"{d_c1_population!r} (Codex bot レビュー PR #318 第9巡 Fix 23)"
         )
     _validate_calibration_gate(
         validity_gates["positive_reference_gate"],
@@ -1600,7 +1660,10 @@ def _validate_extraction_procedure(data: Any) -> None:
             f"rejected), got {value_hz!r} ({type(value_hz).__name__})"
         )
     _validate_nested_str_keys(
-        sample_rate, field="extraction_procedure.sample_rate", keys=_SAMPLE_RATE_REQUIRED_STR_KEYS
+        sample_rate,
+        field="extraction_procedure.sample_rate",
+        keys=_SAMPLE_RATE_REQUIRED_STR_KEYS,
+        allowed_keys=frozenset(required_sample_rate_keys),
     )
 
     log_transform = _require_dict(extraction["log_transform"], field="extraction_procedure.log_transform")
@@ -1617,7 +1680,10 @@ def _validate_extraction_procedure(data: Any) -> None:
         log_transform["floor_value"], field="extraction_procedure.log_transform.floor_value"
     )
     _validate_nested_str_keys(
-        log_transform, field="extraction_procedure.log_transform", keys=_LOG_TRANSFORM_REQUIRED_STR_KEYS
+        log_transform,
+        field="extraction_procedure.log_transform",
+        keys=_LOG_TRANSFORM_REQUIRED_STR_KEYS,
+        allowed_keys=frozenset(required_log_keys),
     )
 
 
@@ -1735,7 +1801,16 @@ def _validate_reference_example(data: Any) -> None:
 def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
     """`inputs/identity_metric_space.json`（`run9-identity-metric-space/1.1`）
     の閉じた形状を検証する（Codex bot レビュー PR #318 第6巡 Fix 19、
-    第7巡 Fix 20/Fix 21 で拡張）。
+    第7巡 Fix 20/Fix 21、第9巡 Fix 23/Fix 24 で拡張）。
+
+    第9巡 Fix 23（P1）: reference_render(F) が C0/C1 母集団に属するか
+    （自己比較ゼロ距離混入）が未凍結だった指摘を、`d_c0_population`/
+    `d_c1_population`/`reference_render_definition` の文言検証として
+    機械強制する。第9巡 Fix 24（P2）: `_validate_nested_str_keys()` を
+    必須キー存在チェックからキー集合完全一致（未知キー拒否）へ強化し、
+    本関数が呼ぶ全ネスト object（f0_estimation/spectral_envelope/
+    voiced_mask/distance_unit/freeze_threshold/decision_rule/
+    source_references 等）へ一括適用する。
 
     旧実装はトップレベルの `schema`/`metric_version` 2ラベルしか検証して
     おらず、digest テスト（正規形 sha256 が pin 値と一致すること）は
