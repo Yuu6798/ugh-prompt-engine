@@ -1517,12 +1517,58 @@ def test_revision02_backbone_checkpoint_sha_pinned_and_matches_ruling(
     assert field["value"] == "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a"
 
 
-def test_revision02_backbone_runtime_bundle_sha_pinned_and_matches_actual_file(
+def test_revision02_backbone_runtime_bundle_sha_pending_while_render_commit_unconfirmed(
     contract_raw: Dict[str, Any],
 ) -> None:
+    """Codex bot レビュー PR #316 第1巡指摘（P2, 866fcc8, 採用）:
+    bundle 内 `render_code_commit` は直接記録ではなく推論値（RUN6 export
+    記録 s5_record 自体には commit が明記されていない）のため
+    `status: "INFERRED_UNCONFIRMED"` へ降格した。連動して
+    `backbone_runtime_bundle_sha` も PINNED から PENDING へ降格している
+    （`backbone_checkpoint_sha` は直接記録4件一致のため対象外・PINNED の
+    まま — 下の `test_revision02_backbone_checkpoint_sha_pinned_and_matches_ruling`
+    が別途確認する）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+
     field = contract_raw["backbone_runtime_bundle_sha"]
-    assert field["status"] == "PINNED"
-    assert field["value"] == _sha256_file(BACKBONE_BUNDLE_PATH)
+    assert field["status"] == "PENDING"
+    assert field["value"] is None
+    assert "INFERRED_UNCONFIRMED" in field["reason"] or "render_code_commit" in field["reason"]
+
+
+def test_revision02_render_code_commit_status_and_bundle_sha_status_are_consistent(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """負例的整合検査: bundle json の `render_code_commit.status` が
+    `INFERRED_UNCONFIRMED` である間は、contract の
+    `backbone_runtime_bundle_sha.status` が `PINNED` になっていないこと
+    （両者の食い違いを機械的に検出する）。将来 render_code_commit が
+    確定（direct record または User attestation）して status が変わったら、
+    このテストも合わせて更新が必要になる — その追随漏れ自体を検出する
+    ためのテストでもある。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    bundle_field_status = contract_raw["backbone_runtime_bundle_sha"]["status"]
+    if bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED":
+        assert bundle_field_status != "PINNED", (
+            "backbone_runtime_bundle_sha は PINNED だが、bundle 内 render_code_commit は "
+            "依然 INFERRED_UNCONFIRMED — 未確定の推論値を含む bundle を PINNED として "
+            "契約に取り込んでしまっている"
+        )
+
+
+def test_revision02_render_code_commit_value_and_confirmation_metadata_present() -> None:
+    """降格後も値自体（推論結果）と根拠・確定条件は保持されていること。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    rcc = bundle["render_code_commit"]
+    assert rcc["commit_full"] == "e2307b1080b00f3999702ce9017cfd75c7f862fe"
+    assert rcc["commit_short"] == "e2307b1"
+    assert rcc["status"] == "INFERRED_UNCONFIRMED"
+    assert rcc["confirmation_required"]
+    assert rcc["inference_basis"]
+    # RUN6 export 記録自体には commit が明記されていない事実が明文化されていること。
+    assert "s5_record" in rcc["note"]
+    assert "does not" in rcc["note"].lower() or "does NOT" in rcc["note"]
 
 
 def test_revision02_backbone_bundle_acoustic_onnx_matches_ruling() -> None:
@@ -1536,7 +1582,8 @@ def test_revision02_backbone_bundle_acoustic_onnx_matches_ruling() -> None:
 def test_revision02_backbone_bundle_checkpoint_matches_contract() -> None:
     """backbone_runtime_bundle.json と RUN9_CONTRACT.yaml の
     backbone_checkpoint_sha が同一値を pin していること（二重管理の不整合
-    が無いことの確認）。"""
+    が無いことの確認）。checkpoint_sha256 自体は render_code_commit の
+    降格とは独立に、両ファイルとも引き続き PINNED 相当の値を持つ。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
     assert bundle["checkpoint_sha256"]["value"] == contract_raw["backbone_checkpoint_sha"]["value"]

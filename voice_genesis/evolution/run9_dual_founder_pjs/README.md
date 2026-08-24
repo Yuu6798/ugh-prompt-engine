@@ -33,10 +33,13 @@ Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生さ�
    （Fable 起草・User attest 方式）を追加。`rights_class`/`consent_status`
    = `PENDING_USER_ATTESTATION`。raw 公開・モデル一般配布は別承認
    （初期値 `not_granted`）。
-5. **Shared Backbone**: RUN6 phase B 40K checkpoint を採用（**PINNED 済み**、
-   RUN7 は教師交代混入回避のため不使用）。`inputs/backbone_runtime_bundle.json`
-   （**PINNED 済み**）に config/speaker map/phoneme dictionary/vocoder/
-   render 用 DiffSinger commit まで含めて記録。
+5. **Shared Backbone**: RUN6 phase B 40K checkpoint を採用
+   （`backbone_checkpoint_sha` **PINNED 済み**、直接記録4件一致。RUN7 は
+   教師交代混入回避のため不使用）。`inputs/backbone_runtime_bundle.json`
+   に config/speaker map/phoneme dictionary/vocoder/render 用 DiffSinger
+   commit まで含めて記録するが、**`backbone_runtime_bundle_sha` 自体は
+   PENDING**（bundle 内 `render_code_commit` が `INFERRED_UNCONFIRMED` —
+   Codex bot レビュー PR #316 第1巡指摘採用。ブロッカー(5)参照）。
 
 ## 実行順 §22 に対する現在地マップ
 
@@ -44,7 +47,7 @@ Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生さ�
 
 | step | 内容 | 状態 |
 |---|---|---|
-| 0 | freeze Run Contract | **部分 pin が拡大**（`design_doc_sha256` / `design_revision_doc_sha256` / `backbone_checkpoint_sha` / `backbone_runtime_bundle_sha` が新たに PINNED。他は正直に PENDING。`gate_state()` は依然 `BLOCKED`） |
+| 0 | freeze Run Contract | **部分 pin が拡大**（`design_doc_sha256` / `design_revision_doc_sha256` / `backbone_checkpoint_sha` が新たに PINNED。`backbone_runtime_bundle_sha` は bundle 内 `render_code_commit` が INFERRED_UNCONFIRMED のため PENDING のまま。他も正直に PENDING。`gate_state()` は依然 `BLOCKED`） |
 | 1 | verify repository / dependency pins | 未着手（backbone 側は pin 済み。VG-L0 ハーネス自体の依存 pin は未着手） |
 | 2 | verify donor and teacher rights / manifests | **AF0/Ritsu は pin 済み・PJS は役割別2値を整理して解消**。**User donor のみ rights attest 待ち**（ブロッカー(1)参照） |
 | 3 | build run9 Identity Domain | **af0/ritsu が PINNED、user/metric_space_sha はプレースホルダのまま**（`domains/identity_domain_run9_v1.json`、`is_pinned() == False`） |
@@ -61,7 +64,8 @@ Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生さ�
   （zip 全体）と expanded corpus pin（前処理後コーパス）という**別の対象**
   を指す2つの正しい値であり、矛盾する同一対象への2値ではなかった。
 - ~~backbone checkpoint 選定未~~ → RUN6 phase B 40K checkpoint を採用し
-  `backbone_checkpoint_sha` / `backbone_runtime_bundle_sha` ともに PINNED。
+  `backbone_checkpoint_sha` を PINNED（`backbone_runtime_bundle_sha` は
+  ブロッカー(5)参照 — 未解消）。
 
 **残存**:
 
@@ -83,6 +87,15 @@ Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生さ�
    （source archive pin / expanded corpus pin とは別の Lesson manifest を
    生成し `lesson_sha` として pin）は確定したが、Lesson build 自体は
    VG-L0 ハーネス実装待ち。
+5. **`render_code_commit` の確定待ち**（Codex bot レビュー PR #316 第1巡
+   指摘採用）: `inputs/backbone_runtime_bundle.json` の
+   `render_code_commit`（`openvpi/DiffSinger @ e2307b1...`）は
+   `status: "INFERRED_UNCONFIRMED"` — run4〜8 全体での単一リビジョン一貫
+   使用・反証なしという状況証拠のみで、RUN6 export の直接記録
+   （`results_s5/s5_record_2026-08-20.md`）自体にはこの commit が明記され
+   ていない。**直接記録の発掘、または User attestation で確定するまで
+   `backbone_runtime_bundle_sha` は PENDING のまま**（`backbone_checkpoint_sha`
+   単体は直接記録4件一致のため PINNED 継続 — 対象を混同しない）。
 
 **erratum（設計書内部の記述不一致、Codex bot レビュー PR #315 第6巡指摘1
 — 上記5裁定とは別件）**: DESIGN_RUN9 §6 は `parent_designs` を5件宣言する

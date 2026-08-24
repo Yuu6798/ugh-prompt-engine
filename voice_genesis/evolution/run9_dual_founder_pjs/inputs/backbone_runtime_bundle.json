@@ -75,6 +75,9 @@
     "repo": "openvpi/DiffSinger",
     "commit_short": "e2307b1",
     "commit_full": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+    "status": "INFERRED_UNCONFIRMED",
+    "confirmation_required": "RUN6 export の直接記録の発掘、または User attestation",
+    "inference_basis": "This exact revision is the single, repository-wide invariant DiffSinger pin used across run4 through run8 gate_synth/export tooling (dozens of cross-references). The original 2026-08-20 run6 export record (s5_record) does not itself restate the git revision inline, but no evidence anywhere in the repository suggests a different revision was ever used for run5/6/7 rendering or export — the run4 provenance closure record explicitly notes the same absence-of-contrary-evidence reasoning when substituting this pin for an unlogged run4 export (results_s3/run4_provenance_closure_2026-08-23.json).",
     "source": [
       "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#exporter (repo+revision)",
       "voice_genesis/foundry/results_s7/s7_b1_calibration_set.json#diffsinger_repo_pin",
@@ -82,7 +85,7 @@
       "voice_genesis/foundry/s1_gate/README.md / gate_synth.py / gate_synth_run4.py (--diffsinger-repo pin: e2307b1)",
       "voice_genesis/foundry/tests/test_run4_export_device_probe.py (DIFFSINGER_COMMIT full hash)"
     ],
-    "note": "This exact revision is the single, repository-wide invariant DiffSinger pin used across run4 through run8 gate_synth/export tooling (dozens of cross-references). The original 2026-08-20 run6 export record (s5_record) does not itself restate the git revision inline, but no evidence anywhere in the repository suggests a different revision was ever used for run5/6/7 rendering or export — the run4 provenance closure record explicitly notes the same absence-of-contrary-evidence reasoning when substituting this pin for an unlogged run4 export (results_s3/run4_provenance_closure_2026-08-23.json)."
+    "note": "The value above is an inference, not a directly-logged fact for the 2026-08-20 run6 export specifically. The original run6 export record (results_s5/s5_record_2026-08-20.md) does NOT itself restate the DiffSinger git revision inline anywhere in that record. The inference_basis field records why this pin was proposed (single repository-wide invariant revision, no contrary evidence) — it is evidentiary support, not confirmation. Codex bot review PR #316 第1巡指摘 (P2, 866fcc8) requires this be held as INFERRED_UNCONFIRMED, not PINNED, until either a direct record or explicit User attestation confirms it."
   },
   "run7_not_used": {
     "reason": "Teacher swap contamination avoidance (User ruling, DESIGN_RUN9_REVISION_0.2.md 改訂5)",

@@ -9,9 +9,11 @@
 # 2026-08-24 User 裁定 5件により design_revision 0.1 → 0.2
 # （DESIGN_RUN9_REVISION_0.2.md）。旧 "0.1" を宣言する contract は
 # run9_schema.DESIGN_REVISION の凍結値照合で意図どおり拒否される。本改訂で
-# af0/ritsu anchor・backbone checkpoint・backbone runtime bundle が新たに
-# PINNED になった（詳細は各欄の reason/source、および
-# DESIGN_RUN9_REVISION_0.2.md を参照）。
+# af0/ritsu anchor・backbone checkpoint が新たに PINNED になった
+# （詳細は各欄の reason/source、および DESIGN_RUN9_REVISION_0.2.md を参照）。
+# backbone_runtime_bundle_sha は PR #316 第1巡レビュー（P2, 866fcc8）採用に
+# より PENDING（bundle 内 render_code_commit が INFERRED_UNCONFIRMED のため
+# — backbone_checkpoint_sha 単体は直接記録4件一致で PINNED のまま）。
 #
 # 各欄の pin 状況は {value, status, reason, source?} 形（VG_FOUNDRY の
 # debt/RUN_CONTRACT_SCHEMA_v1.json pinned_field 慣習に倣うが独立実装 —
@@ -110,10 +112,11 @@ dependency_pins_sha:
   value: null
   status: PENDING
   reason: >-
-    Backbone 側（checkpoint / runtime bundle）は backbone_checkpoint_sha /
-    backbone_runtime_bundle_sha として PINNED 済み。VG-L0 学習ハーネス自体の
-    依存関係 pin（Python パッケージ・PyTorch 等のバージョン固定）が未確定
-    のため、本欄全体としてはまだ PENDING。
+    Backbone checkpoint 本体は backbone_checkpoint_sha として PINNED 済み。
+    backbone_runtime_bundle_sha は bundle 内 render_code_commit が
+    INFERRED_UNCONFIRMED のため PENDING（下記参照）。VG-L0 学習ハーネス
+    自体の依存関係 pin（Python パッケージ・PyTorch 等のバージョン固定）も
+    未確定のため、本欄全体としてはまだ PENDING。
 
 execution_profile_sha:
   value: null
@@ -147,15 +150,19 @@ backbone_checkpoint_sha:
     results_s7/s7_0b_probe_spec.json / run8/provision.sh の4件で相互一致確認済み）
 
 # --- backbone_runtime_bundle_sha: inputs/backbone_runtime_bundle.json の
-# 実 sha256（PINNED。bundle 内に PENDING 欄が残る場合はこの欄も PENDING と
-# し理由に「bundle 内 PENDING 解消後に pin」と記す規約 — 本 bundle は
-# checkpoint/acoustic ONNX/config/speaker map/phoneme dictionary/vocoder/
-# render code commit の全欄をリポジトリ既存記録から確定転記できたため
-# PENDING 欄は残っていない）。
+# 実 sha256。bundle 内に PENDING 相当の欄が残る場合はこの欄も PENDING と
+# し理由に「bundle 内 PENDING 解消後に pin」と記す規約。
+# Codex bot レビュー PR #316 第1巡指摘（P2, 866fcc8, 採用）: bundle 内
+# render_code_commit は status: INFERRED_UNCONFIRMED（直接記録ではなく
+# run4-8 一貫性からの推論値。RUN6 export 記録 s5_record 自体には commit
+# 明記なし）— 本欄も PINNED から PENDING へ降格する
+# （backbone_checkpoint_sha は直接記録4件一致のため対象外・PINNED のまま）。
 backbone_runtime_bundle_sha:
-  value: "55c1ef6114828a0223301de6f0d6687f562a9b3afe30cd9eaa1bb78d5bb41a40"
-  status: PINNED
-  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/backbone_runtime_bundle.json
+  value: null
+  status: PENDING
+  reason: >-
+    bundle 内 render_code_commit が INFERRED_UNCONFIRMED（直接記録の発掘、
+    または User attestation で確定後に bundle 正規形 sha を pin）。
 
 # --- founder genome shas -----------------------------------------------------
 # value は genome_id（16hex 内容ID）ではなく、永続 genome 文書ファイル
