@@ -1829,11 +1829,70 @@ def test_revision02_verify_rights_manifest_correct_schemas_and_ledger_still_pass
 
 
 def test_revision02_verify_rights_manifest_docstring_declares_family_termination() -> None:
-    """rights 検証器ファミリーの終端宣言（PR #316 第3〜5巡）がソース中に
-    明文化されていることの直接確認。"""
+    """rights 検証器ファミリーの終端宣言（PR #316 第3〜6巡・期待集合の
+    凍結を含め完結）がソース中に明文化されていることの直接確認。"""
     source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
     assert "全数掃討・" in source and "終端" in source
     assert "境界宣言" in source
+    assert "USER_DONOR_CARD_IDS" in source
+
+
+# ---------------------------------------------------------------------------
+# PR #316 Codex bot レビュー第6巡対応 — RUN9 期待 donor 集合の凍結
+# ---------------------------------------------------------------------------
+
+
+def test_revision02_user_donor_card_ids_constant_is_uc001_to_uc017() -> None:
+    """USER_DONOR_CARD_IDS は User 裁定4の逐語「UC-001〜017」の機械化 —
+    17件・重複無し・UC-001〜UC-017 の完全形。"""
+    assert m.USER_DONOR_CARD_IDS == tuple(f"UC-{i:03d}" for i in range(1, 18))
+    assert len(m.USER_DONOR_CARD_IDS) == len(set(m.USER_DONOR_CARD_IDS)) == 17
+
+
+def test_revision02_verify_rights_manifest_rejects_both_sides_swapped_card_id() -> None:
+    """負例: rights_manifest と donor_ledger の**両側同時**に UC-017 を
+    UC-999 へ差し替えた合成ペアが拒否されること。item 2（相互一致）だけ
+    では両側が同じ ID へ揃って差し替わる攻撃を検出できず、外部の凍結
+    参照点 USER_DONOR_CARD_IDS との突き合わせ（item 6）が必要な理由の
+    再現（Codex bot レビュー PR #316 第6巡指摘, be8f448, 採用）。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_rights = copy.deepcopy(rights)
+    tampered_ledger = copy.deepcopy(ledger)
+    for entry in tampered_rights["entries"]:
+        if entry["card_id"] == "UC-017":
+            entry["card_id"] = "UC-999"
+    for entry in tampered_ledger["entries"]:
+        if entry["card_id"] == "UC-017":
+            entry["card_id"] = "UC-999"
+    # 前提確認: 相互一致（item 2 相当）はこの改変では壊れていない。
+    assert {e["card_id"] for e in tampered_rights["entries"]} == {
+        e["card_id"] for e in tampered_ledger["entries"]
+    }
+    with pytest.raises(m.Run9ValidationError, match="USER_DONOR_CARD_IDS"):
+        m.verify_rights_manifest_against_ledger(tampered_rights, tampered_ledger)
+
+
+def test_revision02_verify_rights_manifest_rejects_rights_only_swapped_card_id() -> None:
+    """負例（対照）: rights 側のみ UC-017→UC-999 に差し替えた場合も拒否
+    されること（item 2 の相互不一致経由でも、item 6 の凍結集合経由でも
+    どちらでも検出できる状態であることの確認）。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    tampered_rights = copy.deepcopy(rights)
+    for entry in tampered_rights["entries"]:
+        if entry["card_id"] == "UC-017":
+            entry["card_id"] = "UC-999"
+    with pytest.raises(m.Run9ValidationError):
+        m.verify_rights_manifest_against_ledger(tampered_rights, ledger)
+
+
+def test_revision02_verify_rights_manifest_current_files_match_frozen_donor_set() -> None:
+    """対照実験: 現行 rights_manifest.json / user_donor_ledger.json は
+    USER_DONOR_CARD_IDS と完全一致し、正常系まで壊していないこと。"""
+    rights, ledger = _load_rights_manifest_and_ledger()
+    expected = set(m.USER_DONOR_CARD_IDS)
+    assert {e["card_id"] for e in rights["entries"]} == expected
+    assert {e["card_id"] for e in ledger["entries"]} == expected
+    m.verify_rights_manifest_against_ledger(rights, ledger)  # 例外を投げないことの確認
 
 
 def test_revision02_domain_user_anchor_still_unpinned_while_rights_pending() -> None:

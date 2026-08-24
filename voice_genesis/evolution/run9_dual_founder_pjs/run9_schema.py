@@ -1244,6 +1244,24 @@ def gate_state(contract: Run9RunContract) -> str:
 # loader 側の関数として実装する（テストはこれを呼ぶだけにする）。
 # ---------------------------------------------------------------------------
 
+# RUN9 が対象とする User donor カードの凍結集合（Codex bot レビュー PR #316
+# 第6巡指摘採用, be8f448: 変種追撃ではなく User 裁定4（2026-08-24,
+# DESIGN_RUN9_REVISION_0.2.md 改訂4）の逐語「UC-001〜017」の機械化漏れの
+# 是正）。旧実装は rights_manifest と donor_ledger の card_id 集合が
+# **互いに** 一致することしか検証しておらず、両文書が共同で期待集合を
+# 定義していたため、両側同時に UC-017 を UC-999 へ差し替えても
+# （相互一致は保たれたまま）通過してしまっていた。本定数を外部の凍結
+# 参照点として両側と突き合わせることでこの穴を閉じる。将来 intake が
+# 増えても RUN9 の donor 集合はこの17枚で凍結する — 変更は
+# design_revision を上げる別事案として扱う（本定数のハードコード改変では
+# ない）。
+USER_DONOR_CARD_IDS: Tuple[str, ...] = (
+    "UC-001", "UC-002", "UC-003", "UC-004", "UC-005", "UC-006", "UC-007",
+    "UC-008", "UC-009", "UC-010", "UC-011", "UC-012", "UC-013", "UC-014",
+    "UC-015", "UC-016", "UC-017",
+)
+
+
 def _require_rights_ledger_field(
     entry: Mapping[str, Any], field: str, *, side: str, card_id: str
 ) -> Any:
@@ -1319,11 +1337,22 @@ def verify_rights_manifest_against_ledger(
        しており、ledger 側は `ledger_by_id[card_id] = entry` の
        last-entry-wins で曖昧な ledger を黙って解決していた非対称が
        残っていた）。
+    6. rights_manifest・donor_ledger **双方**の card_id 集合が、外部の
+       凍結参照点 `USER_DONOR_CARD_IDS`（UC-001〜UC-017 の17枚、User 裁定
+       4・2026-08-24 の逐語固定）と完全一致すること（Codex bot レビュー
+       PR #316 第6巡指摘採用, be8f448: 変種追撃ではなく User 裁定4の
+       機械化漏れの是正 — 従来は rights/ledger の**相互**一致しか
+       検証しておらず、両文書が期待集合を共同定義していたため、両側
+       同時に UC-017 を UC-999 のような別 ID へ差し替えても相互一致は
+       保たれたまま通過してしまっていた）。将来 intake が増えても RUN9
+       の donor 集合はこの17枚で凍結する — 変更は design_revision を
+       上げる別事案として扱う。
 
-    rights 検証器の堅牢化ファミリー（PR #316 第3〜5巡: card_id 完全一致・
-    両側存在+整形式・schema 版・ledger 側重複拒否）は本巡で全数掃討・
-    終端する。以降に見つかる同型変種（本ファミリーが扱う対称性の範囲外の
-    新しい欠陥クラス）は、都度追撃せず境界宣言で扱う。
+    rights 検証器の堅牢化ファミリー（PR #316 第3〜6巡: card_id 完全一致・
+    両側存在+整形式・schema 版・ledger 側重複拒否・期待集合の凍結）は
+    本巡で全数掃討・終端する。以降に見つかる同型変種（本ファミリーが
+    扱う対称性の範囲外の新しい欠陥クラス）は、都度追撃せず境界宣言で
+    扱う。
     """
     rights_schema = rights_manifest.get("schema")
     if not isinstance(rights_schema, str) or rights_schema != "run9-user-donor-rights/1.0":
@@ -1409,6 +1438,27 @@ def verify_rights_manifest_against_ledger(
             "rights_manifest.entries card_id set does not exactly match donor_ledger.entries "
             f"card_id set — missing_from_rights={missing_from_rights!r} "
             f"extra_in_rights={extra_in_rights!r}"
+        )
+
+    # item 6: 両側とも外部の凍結参照点 USER_DONOR_CARD_IDS と完全一致する
+    # こと（item 2 の相互一致だけでは、両側が同時に同じ ID へ差し替わる
+    # 攻撃を検出できない — Codex bot レビュー PR #316 第6巡指摘）。
+    expected_id_set = set(USER_DONOR_CARD_IDS)
+    rights_unexpected = sorted(rights_id_set - expected_id_set)
+    rights_absent = sorted(expected_id_set - rights_id_set)
+    if rights_unexpected or rights_absent:
+        raise Run9ValidationError(
+            "rights_manifest.entries card_id set does not exactly match the frozen "
+            f"USER_DONOR_CARD_IDS set (UC-001..UC-017) — unexpected={rights_unexpected!r} "
+            f"absent={rights_absent!r}"
+        )
+    ledger_unexpected = sorted(ledger_id_set - expected_id_set)
+    ledger_absent = sorted(expected_id_set - ledger_id_set)
+    if ledger_unexpected or ledger_absent:
+        raise Run9ValidationError(
+            "donor_ledger.entries card_id set does not exactly match the frozen "
+            f"USER_DONOR_CARD_IDS set (UC-001..UC-017) — unexpected={ledger_unexpected!r} "
+            f"absent={ledger_absent!r}"
         )
 
     # item 3: 一致する card_id ごとの値照合。存在 + 整形式を両側で強制して
