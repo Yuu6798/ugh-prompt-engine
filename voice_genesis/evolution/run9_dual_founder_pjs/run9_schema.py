@@ -195,12 +195,18 @@ class Run9IdentityDomain:
     pin_source_candidates: Dict[str, Any]
 
     def is_pinned(self) -> bool:
-        """3 anchor 全てが 64hex sha256（プレースホルダでない）で埋まって
-        いるときのみ True。"""
+        """3 anchor 全てに加え `metric_space_sha` も 64hex sha256
+        （プレースホルダでない）で埋まっているときのみ True。
+        `metric_space_sha` を含めるのは `content_digest()` の入力に含まれる
+        ため — これを未 pin のまま genome を発行し、後から pin し直すと
+        `content_digest()` ひいては genome_id が変わり、既発行の成果物が
+        無効化される（将来汚染。Codex bot レビュー PR #315 指摘1採用）。"""
         for name in RUN9_ANCHOR_ORDER:
             value = self.anchor_hashes.get(name)
             if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
                 return False
+        if not isinstance(self.metric_space_sha, str) or not _SHA256_HEX_RE.match(self.metric_space_sha):
+            return False
         return True
 
     def content_digest(self) -> str:
@@ -552,12 +558,14 @@ def build_founder(domain: Run9IdentityDomain, founder_id: str) -> Run9FounderGen
     )
 
 
-def founder_genome_from_dict(data: Any) -> Run9FounderGenome:
+def founder_genome_from_dict(data: Any, *, domain: Run9IdentityDomain) -> Run9FounderGenome:
     """JSON dict から Run9FounderGenome を再構築する。fail-closed（未知
-    キー拒否）+ genome_id 再計算値との一致は呼び出し元の責務（本関数は
-    構造検証のみを行う — genome_id 再計算には元の Run9IdentityDomain が
-    必要なため、比較は `build_founder()` の再実行結果と `to_dict()` を
-    突き合わせるテスト側の責務とする）。"""
+    キー拒否）+ 構造検証の後、`build_founder(domain, voice_id)` で正典を
+    再構築し `to_dict()`（genome_id 含む）が完全一致することを要求する
+    （改ざん検出。Codex bot レビュー PR #315 指摘3採用: 従来は voice_id /
+    coords / genome_id 相互の整合を検証しておらず、「R9F-01 ラベル +
+    R9F-02 座標 + 任意の16hex genome_id」のような偽装 genome document が
+    構造検証だけを通過し得た）。"""
     if not isinstance(data, dict):
         raise Run9ValidationError(f"genome document must be an object, got {type(data).__name__}")
     unknown = set(data.keys()) - _GENOME_TOP_LEVEL_KEYS
@@ -609,13 +617,26 @@ def founder_genome_from_dict(data: Any) -> Run9FounderGenome:
             f"genome_id must be exactly {_GENOME_ID_LEN} lowercase hex characters, got {genome_id!r}"
         )
 
-    return Run9FounderGenome(
+    declared = Run9FounderGenome(
         voice_id=voice_id, ecosystem_role="FOUNDER_CANDIDATE", ecosystem_generation=0,
         genetic_generation=1, identity_domain=RUN9_DOMAIN_ID, coords=coords,
         profile_label=data["profile_label"], performance_seed=data["performance_seed"],
         parents=("AF0", "RITSU", "USER_DONOR"), skill_state="DEFAULT_NEUTRAL",
         operator_id=OPERATOR_ID, genome_id=genome_id,
     )
+
+    # builder 照合（改ざん検出）: voice_id から凍結重みで正典を再構築し、
+    # 宣言値と完全一致することを要求する。voice_id/coords が食い違えば
+    # coords 不一致で、genome_id だけが差し替えられていれば genome_id
+    # 不一致で検出される。
+    canonical = build_founder(domain, voice_id)
+    if declared.to_dict() != canonical.to_dict():
+        raise Run9ValidationError(
+            "genome document does not match the canonical reconstruction from "
+            f"build_founder(domain, {voice_id!r}) — declared={declared.to_dict()!r} "
+            f"canonical={canonical.to_dict()!r} (tampering or corruption)"
+        )
+    return canonical
 
 
 # ---------------------------------------------------------------------------
@@ -688,6 +709,40 @@ def _reject_total_score_vocabulary(*, context: str, names: Any) -> None:
                 )
 
 
+def _validate_pin_field_value_shape(name: str, value: Any) -> None:
+    """PINNED 状態の pin 欄 value の欄名別整形式検証（Codex bot レビュー
+    PR #315 指摘1採用）: `founder_genome_shas.R9F-0x` は 16hex genome_id
+    形式、`attempt_id` は非空文字列かつプレースホルダ（`<...>`）不可、
+    それ以外の `_sha`/`_sha256` で終わるトップレベル欄
+    （`design_doc_sha256` を含む）は 64hex sha256 形式を要求する。
+    """
+    if name.startswith("founder_genome_shas."):
+        if not isinstance(value, str) or not _GENOME_ID_RE.match(value):
+            raise Run9ValidationError(
+                f"{name}.value must be exactly {_GENOME_ID_LEN} lowercase hex characters "
+                f"(genome_id format) when status is PINNED, got {value!r}"
+            )
+        return
+    if name == "attempt_id":
+        if not isinstance(value, str) or not value.strip():
+            raise Run9ValidationError(
+                f"{name}.value must be a non-empty string when status is PINNED, got {value!r}"
+            )
+        if _PLACEHOLDER_RE.match(value):
+            raise Run9ValidationError(
+                f"{name}.value must not be a placeholder (e.g. '<PIN_BEFORE_RUN>') when status is "
+                f"PINNED, got {value!r}"
+            )
+        return
+    if name.endswith("_sha") or name.endswith("_sha256"):
+        if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
+            raise Run9ValidationError(
+                f"{name}.value must be exactly 64 lowercase hex characters (sha256 format) when "
+                f"status is PINNED, got {value!r}"
+            )
+        return
+
+
 def _validate_pin_field(name: str, field: Any) -> Dict[str, Any]:
     if not isinstance(field, dict):
         raise Run9ValidationError(f"{name} must be an object, got {type(field).__name__}")
@@ -704,6 +759,18 @@ def _validate_pin_field(name: str, field: Any) -> Dict[str, Any]:
         raise Run9ValidationError(f"{name}.reason must be a string, got {field['reason']!r}")
     if "source" in field and field["source"] is not None and not isinstance(field["source"], str):
         raise Run9ValidationError(f"{name}.source must be a string or null, got {field['source']!r}")
+    if status == "PINNED":
+        # PENDING/BLOCKED は従来どおり value が null でもよい（正直な未 pin
+        # 表現）。PINNED を名乗る欄だけは value 非 null + 欄名別整形式を
+        # load 時に強制する — 「全欄 status だけ PINNED にして READY を
+        # 騙る」経路を loader 段で閉じる（Codex bot レビュー PR #315 指摘1）。
+        value = field["value"]
+        if value is None:
+            raise Run9ValidationError(
+                f"{name}.status is PINNED but value is null — a PINNED pin field must carry a real "
+                "value (Codex bot review PR #315 指摘1)"
+            )
+        _validate_pin_field_value_shape(name, value)
     return dict(field)
 
 

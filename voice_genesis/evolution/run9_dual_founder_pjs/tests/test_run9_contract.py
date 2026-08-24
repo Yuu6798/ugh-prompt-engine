@@ -197,11 +197,12 @@ def test_item10_pjs_key_in_coords_document_rejected() -> None:
     """coords に pjs キーを持つ genome document は構造的に ValueError
     （Run9Coords 自体が af0/ritsu/user の3フィールドしか持てないため、
     build_founder() 経由では原理的に到達不能 — from_dict 読込経路で検証する）。"""
-    good = m.build_founder(_pinned_fixture_domain(), "R9F-01").to_dict()
+    domain = _pinned_fixture_domain()
+    good = m.build_founder(domain, "R9F-01").to_dict()
     tampered = copy.deepcopy(good)
     tampered["coords"] = {"af0": 0.6, "ritsu": 0.3, "pjs": 0.1}
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(tampered)
+        m.founder_genome_from_dict(tampered, domain=domain)
 
 
 # ---------------------------------------------------------------------------
@@ -252,7 +253,7 @@ def test_item14_genome_id_stable_through_canonical_json_roundtrip(
     json.loads -> founder_genome_from_dict）でも genome_id が一致する。"""
     original = m.build_founder(pinned_domain, "R9F-01")
     text = json.dumps(original.to_dict(), sort_keys=True)
-    reconstructed = m.founder_genome_from_dict(json.loads(text))
+    reconstructed = m.founder_genome_from_dict(json.loads(text), domain=pinned_domain)
     assert reconstructed.genome_id == original.genome_id
 
 
@@ -373,10 +374,10 @@ def test_item49_fully_pinned_synthetic_contract_is_ready(contract_raw: Dict[str,
     for name in m.CONTRACT_PIN_FIELDS:
         if name in m.CONTRACT_POST_RUN_PIN_FIELDS:
             continue
-        fully_pinned[name] = {"value": "x" * 64, "status": "PINNED", "source": "synthetic-fixture"}
+        fully_pinned[name] = {"value": "a" * 64, "status": "PINNED", "source": "synthetic-fixture"}
     for founder_id in m.CONTRACT_FOUNDER_IDS:
         fully_pinned["founder_genome_shas"][founder_id] = {
-            "value": "x" * 16,
+            "value": "a" * 16,
             "status": "PINNED",
             "source": "synthetic-fixture",
         }
@@ -392,10 +393,10 @@ def test_item49_single_pending_pre_run_field_blocks_gate(contract_raw: Dict[str,
     for name in m.CONTRACT_PIN_FIELDS:
         if name in m.CONTRACT_POST_RUN_PIN_FIELDS:
             continue
-        fully_pinned[name] = {"value": "x" * 64, "status": "PINNED", "source": "synthetic-fixture"}
+        fully_pinned[name] = {"value": "a" * 64, "status": "PINNED", "source": "synthetic-fixture"}
     for founder_id in m.CONTRACT_FOUNDER_IDS:
         fully_pinned["founder_genome_shas"][founder_id] = {
-            "value": "x" * 16,
+            "value": "a" * 16,
             "status": "PINNED",
             "source": "synthetic-fixture",
         }
@@ -514,3 +515,126 @@ def test_vg_e0_frozen_anchor_names_are_unchanged() -> None:
     assert vg_e0_models.VALID_OPERATORS == (
         "founder", "drift", "vertex_pull", "reseed", "edge_walk", "novelty_jump",
     )
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー対応 — Fix 1: PINNED 欄の値整形式強制
+# ---------------------------------------------------------------------------
+
+
+def test_fix1_pinned_field_with_null_value_rejected(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 指摘1: status を PINNED に書き換えるだけで
+    value が null のままの fixture は load 時に拒否される（『全欄 status
+    だけ PINNED にして READY を騙る』経路の閉塞）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["backbone_checkpoint_sha"] = {"value": None, "status": "PINNED", "source": "x"}
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix1_pinned_sha_field_with_non_hex_value_rejected(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 指摘1: `_sha`/`_sha256` で終わる欄が
+    PINNED を名乗るのに value が 64hex でなければ拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["backbone_checkpoint_sha"] = {
+        "value": "not-a-valid-sha256-value",
+        "status": "PINNED",
+        "source": "x",
+    }
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix1_pinned_attempt_id_placeholder_rejected(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 指摘1: `attempt_id` が PINNED を名乗るのに
+    プレースホルダ値（`<...>`）のままなら拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["attempt_id"] = {"value": "<PIN_BEFORE_RUN>", "status": "PINNED", "source": "x"}
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix1_pinned_founder_genome_sha_wrong_length_rejected(contract_raw: Dict[str, Any]) -> None:
+    """Codex bot レビュー PR #315 指摘1: `founder_genome_shas.R9F-0x` は
+    16hex genome_id 形式を要求する — 64hex sha256 値を入れると拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["founder_genome_shas"]["R9F-01"] = {"value": "a" * 64, "status": "PINNED", "source": "x"}
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_fix1_pending_field_may_still_have_null_value(contract_raw: Dict[str, Any]) -> None:
+    """対照実験: PENDING/BLOCKED は従来どおり value null が許容される
+    （Fix 1 は PINNED を名乗る欄だけを対象にする — 正直な未 pin 表現を
+    妨げない）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["backbone_checkpoint_sha"] = {"value": None, "status": "PENDING", "reason": "x"}
+    m.load_run9_contract(tampered)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー対応 — Fix 2: is_pinned() に metric_space_sha
+# ---------------------------------------------------------------------------
+
+
+def test_fix2_metric_space_sha_placeholder_blocks_is_pinned_and_build_founder() -> None:
+    """Codex bot レビュー PR #315 指摘2: 3 anchor_hashes が pin 済みでも
+    `metric_space_sha` がプレースホルダのままなら `is_pinned() == False`
+    であり、`build_founder()` も拒否される。`metric_space_sha` は
+    `content_digest()` の入力に含まれるため、後から pin し直すと
+    genome_id が変わり既発行の成果物を無効化する（将来汚染）。"""
+    domain = m.build_run9_identity_domain(
+        anchor_hashes={"af0": "a" * 64, "ritsu": "b" * 64, "user": "c" * 64},
+        metric_space_sha="<PIN_BEFORE_RUN>",
+    )
+    assert domain.is_pinned() is False
+    with pytest.raises(m.Run9ValidationError):
+        m.build_founder(domain, "R9F-01")
+
+
+# ---------------------------------------------------------------------------
+# PR #315 Codex bot レビュー対応 — Fix 3: founder_genome_from_dict の
+# builder 照合必須化
+# ---------------------------------------------------------------------------
+
+
+def test_fix3_founder_genome_from_dict_requires_domain_keyword() -> None:
+    """Codex bot レビュー PR #315 指摘3: `domain` はキーワード専用引数。"""
+    params = inspect.signature(m.founder_genome_from_dict).parameters
+    assert "domain" in params
+    assert params["domain"].kind == inspect.Parameter.KEYWORD_ONLY
+
+
+def test_fix3_voice_id_coords_mismatch_rejected() -> None:
+    """Codex bot レビュー PR #315 指摘3: 『R9F-01 ラベル + R9F-02 座標』の
+    ような偽装 genome document は builder 照合（`build_founder(domain,
+    voice_id)` との `to_dict()` 完全一致要求）で検出される。"""
+    domain = _pinned_fixture_domain()
+    r9f02 = m.build_founder(domain, "R9F-02")
+    forged = r9f02.to_dict()
+    forged["voice_id"] = "R9F-01"  # 座標・profile_label は R9F-02 のまま、ラベルだけ差し替え
+    with pytest.raises(m.Run9ValidationError):
+        m.founder_genome_from_dict(forged, domain=domain)
+
+
+def test_fix3_tampered_genome_id_rejected() -> None:
+    """Codex bot レビュー PR #315 指摘3: genome_id だけを任意の16hex値へ
+    差し替えた genome document は builder 照合で検出される（構造的には
+    正規の16hexだが再計算値と不一致）。"""
+    domain = _pinned_fixture_domain()
+    genuine = m.build_founder(domain, "R9F-01")
+    forged = genuine.to_dict()
+    forged["genome_id"] = "f" * 16
+    assert forged["genome_id"] != genuine.genome_id
+    with pytest.raises(m.Run9ValidationError):
+        m.founder_genome_from_dict(forged, domain=domain)
+
+
+def test_fix3_correctly_signed_genome_document_still_roundtrips() -> None:
+    """対照実験: 改ざんされていない genome document は builder 照合を通過し、
+    正典 Run9FounderGenome と完全一致する（Fix 3 が正常系まで壊していない
+    ことの確認）。"""
+    domain = _pinned_fixture_domain()
+    genuine = m.build_founder(domain, "R9F-02")
+    reconstructed = m.founder_genome_from_dict(genuine.to_dict(), domain=domain)
+    assert reconstructed.to_dict() == genuine.to_dict()
