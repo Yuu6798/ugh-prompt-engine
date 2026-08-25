@@ -1479,34 +1479,54 @@ def test_negative_fix13_byte_altered_manifest_copy(
         m.load_pinned_probe_manifest(contract, manifest_path=tmp_manifest)
 
 
-def test_negative_fix13_pin_value_mismatch(contract_raw: Dict[str, Any]) -> None:
+def _write_synthetic_contract_yaml(raw: Dict[str, Any], tmp_path: Path) -> Path:
+    """PR #322 第17巡指摘（P1, 採用）以降の合成 contract 系テストが共有する
+    ヘルパ: `load_pinned_probe_manifest()` が既定でディスク上の正典
+    `RUN9_CONTRACT_YAML_PATH` を都度再読込するようになったため（ディスク
+    正典アンカー）、合成 raw dict をそのまま渡すだけでは「渡された
+    contract がディスク正典から乖離している」検証で弾かれる——本ヘルパで
+    合成 raw を tmp YAML ファイルへ書き出し、`contract_path` 注入で
+    テスト対象のディスク側を差し替える（既存テストの synthetic contract
+    群を contract_path 注入方式へ追随させる、裁定済み対応 (b)）。"""
+    tmp_yaml = tmp_path / "synthetic_run9_contract.yaml"
+    tmp_yaml.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return tmp_yaml
+
+
+def test_negative_fix13_pin_value_mismatch(contract_raw: Dict[str, Any], tmp_path: Path) -> None:
     """`RUN9_CONTRACT.yaml` 側の pin 値が実ファイルの sha256 と一致しない
     場合の fail-closed 挙動を検証する——実 RUN9_CONTRACT.yaml は一切触れず、
     実 contract の deepcopy を mutate した `Run9RunContract` を渡す（Fix 27
     により `load_pinned_probe_manifest()` は `contract.raw` を
     `load_run9_contract()` で再検証するため、`pin_field()` のみを実装した
     偽オブジェクトでは通らない——schema-valid な別の64hex値へ差し替える
-    ことで再検証自体は通過させ、実バイト sha256 不一致の経路を検証する）。
+    ことで再検証自体は通過させる）。第17巡のディスク正典アンカーにより
+    `contract_path` も同じ mutated 値へ差し替えて渡す（さもないと
+    ディスク正典との乖離検証が先に発火する）ことで、意図どおり実
+    `probe_manifest.json` バイトとの sha256 不一致経路を検証する。
     """
     mutated = copy.deepcopy(contract_raw)
     mutated["probe_manifest_sha"]["value"] = "0" * 64
     fake_contract = m.Run9RunContract(raw=mutated)
+    tmp_contract_path = _write_synthetic_contract_yaml(mutated, tmp_path)
     with pytest.raises(m.Run9ValidationError, match="一致しない"):
-        m.load_pinned_probe_manifest(fake_contract)
+        m.load_pinned_probe_manifest(fake_contract, contract_path=tmp_contract_path)
 
 
-def test_negative_fix13_pin_not_pinned(contract_raw: Dict[str, Any]) -> None:
+def test_negative_fix13_pin_not_pinned(contract_raw: Dict[str, Any], tmp_path: Path) -> None:
     """pin の status が PINNED でない（PENDING 等）場合、実バイト照合の
     前段で fail-closed になることを検証する（Fix 27: 実 contract の
     deepcopy を mutate——`load_run9_contract()` の再検証を通過する形式で
-    status のみ変更する）。"""
+    status のみ変更する）。第17巡のディスク正典アンカーにより
+    `contract_path` も同じ mutated 値へ差し替えて渡す。"""
     mutated = copy.deepcopy(contract_raw)
     mutated["probe_manifest_sha"] = {
         "status": "PENDING", "value": None, "source": mutated["probe_manifest_sha"]["source"],
     }
     fake_contract = m.Run9RunContract(raw=mutated)
+    tmp_contract_path = _write_synthetic_contract_yaml(mutated, tmp_path)
     with pytest.raises(m.Run9ValidationError, match="not PINNED"):
-        m.load_pinned_probe_manifest(fake_contract)
+        m.load_pinned_probe_manifest(fake_contract, contract_path=tmp_contract_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1536,15 +1556,18 @@ def test_negative_fix27_in_process_value_tampering_after_load_still_fail_closed(
     """本指摘の核心シナリオ: 正常 load 後に
     `contract.raw["probe_manifest_sha"]["value"]` を直接（schema-valid な
     別の64hex へ）書き換える——`load_run9_contract()` の再検証はこの
-    書き換えを構造的には受理する（形式的には有効な64hexのため）が、下流の
-    実バイト sha256 照合が新しい pin 値と一致しなくなるため、書き換え後の
-    値ではなく再検証済みの値が一貫して使われたうえで fail-closed になる
-    ことを確認する。"""
+    書き換えを構造的には受理する（形式的には有効な64hexのため）が、
+    第17巡のディスク正典アンカーにより、書き換え後の値はディスク上の
+    正典 `RUN9_CONTRACT.yaml` の pin 値と一致しなくなり、契約乖離
+    （tampering evidence）として fail-closed になることを確認する
+    （旧実装ではこの検出は下流の実バイト sha256 照合に依存していたが、
+    第17巡の変更でより早い層——ディスク正典との一致検証——で捕捉される）。
+    """
     fresh_raw = copy.deepcopy(contract_raw)
     contract = m.load_run9_contract(fresh_raw)
     m.load_pinned_probe_manifest(contract)  # 前提: 改変前は正常に通る
     contract.raw["probe_manifest_sha"]["value"] = "1" * 64  # in-process 改変
-    with pytest.raises(m.Run9ValidationError, match="一致しない"):
+    with pytest.raises(m.Run9ValidationError, match="diverges from the canonical on-disk"):
         m.load_pinned_probe_manifest(contract)
 
 
@@ -1561,6 +1584,74 @@ def test_negative_fix27_in_process_structural_tampering_after_load_rejected(
     contract.raw["run_id"] = "RUN9X"  # in-process 改変（probe_manifest_sha 自体は無傷）
     with pytest.raises(m.Run9ValidationError, match="run_id"):
         m.load_pinned_probe_manifest(contract)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第17巡指摘 Fix 29（P1, 採用 — Fix 27 への正当な追撃）: Fix 27 の
+# `load_run9_contract(contract.raw)` 再検証は「改変後の raw の自己整合性」
+# しか証明せず、ディスク上の正典 `RUN9_CONTRACT.yaml` との一致は証明しない
+# ——in-process で `contract.raw` を丸ごと自己無矛盾な別内容へ差し替える
+# 攻撃者に対しては Fix 27 単体では無力だった。`load_pinned_probe_manifest()`
+# を `contract_path`（既定 `RUN9_CONTRACT_YAML_PATH`）が指すディスク上の
+# 正典へアンカーし、渡された `contract` の pin がディスク再読込 pin と
+# 厳密一致しない場合は改竄証拠として fail-closed にする。
+# ---------------------------------------------------------------------------
+
+
+def test_negative_fix29_self_consistent_raw_diverges_from_disk_is_rejected(
+    contract_raw: Dict[str, Any], tmp_path: Path,
+) -> None:
+    """本指摘の核心シナリオ: manifest のコピーを 1 byte 改変し、その実
+    sha256 を `contract.raw["probe_manifest_sha"]["value"]` へ書き込んで
+    from-scratch で自己無矛盾な（内部的には筋が通った）contract を組み立て、
+    改変済みコピーを `manifest_path` で渡す——`contract_path` は指定せず
+    既定のディスク上の正典 `RUN9_CONTRACT.yaml` を使わせる。Fix 27 単体
+    （`load_run9_contract(contract.raw)` の自己整合性再検証のみ）であれば、
+    この攻撃は「渡された contract の pin と、渡された manifest_path の実
+    バイトが一致する」ため素通りしてしまう——ディスク上の正典 pin 値とは
+    異なるにもかかわらず。本 Fix のディスク正典アンカーにより、渡された
+    contract の pin がディスク正典の pin と乖離しているという理由だけで
+    fail-closed になることを確認する。"""
+    tampered_bytes = bytearray(m.PROBE_MANIFEST_PATH.read_bytes())
+    tampered_bytes[0] = tampered_bytes[0] ^ 0xFF
+    tmp_manifest = tmp_path / "probe_manifest.json"
+    tmp_manifest.write_bytes(bytes(tampered_bytes))
+    tampered_sha = hashlib.sha256(bytes(tampered_bytes)).hexdigest()
+
+    mutated = copy.deepcopy(contract_raw)
+    mutated["probe_manifest_sha"]["value"] = tampered_sha  # 改変済みコピーと自己整合
+    contract = m.Run9RunContract(raw=mutated)
+
+    with pytest.raises(m.Run9ValidationError, match="diverges from the canonical on-disk"):
+        m.load_pinned_probe_manifest(contract, manifest_path=tmp_manifest)
+
+
+def test_fix29_contract_path_injection_with_matching_synthetic_disk_copy_passes(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """裁定済み対応 (b): `contract_path` を実 `RUN9_CONTRACT.yaml` のバイト
+    そのままの一時コピーへ差し替えても（ディスク正典の「場所」だけを変え、
+    「内容」は変えない）、正常系が通ることを確認する——本注入経路自体が
+    壊れていないことの回帰確認（合成 contract 系テストが依拠する土台）。"""
+    contract = m.load_run9_contract_from_yaml_path(CONTRACT_PATH)
+    loaded = m.load_pinned_probe_manifest(contract, contract_path=CONTRACT_PATH)
+    assert loaded == manifest_data
+
+
+def test_fix29_positive_real_contract_and_manifest_pass_without_overrides(
+    contract: m.Run9RunContract, manifest_data: Dict[str, Any],
+) -> None:
+    """対照実験(c): `contract_path`/`manifest_path` を一切指定しない既定
+    経路（実運用の呼び出し形）が、本 Fix 導入後も正常に通ることの回帰
+    確認。"""
+    loaded = m.load_pinned_probe_manifest(contract)
+    assert loaded == manifest_data
+
+
+def test_fix29_run9_contract_yaml_path_constant_points_to_real_file() -> None:
+    assert m.RUN9_CONTRACT_YAML_PATH.name == "RUN9_CONTRACT.yaml"
+    assert m.RUN9_CONTRACT_YAML_PATH == CONTRACT_PATH
+    assert m.RUN9_CONTRACT_YAML_PATH.is_file()
 
 
 # ---------------------------------------------------------------------------

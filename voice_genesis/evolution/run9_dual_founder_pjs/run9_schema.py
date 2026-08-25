@@ -3294,6 +3294,12 @@ SCHEMA_PROBE_MANIFEST = "run9-probe-manifest/1.0"
 # 本 manifest が初出のディレクトリ。
 PROBE_MANIFEST_PATH = _THIS_DIR / "evaluation" / "probe_manifest.json"
 
+# PR #322 第17巡指摘（P1, 採用）: `load_pinned_probe_manifest()` がディスク
+# 上の正典 `RUN9_CONTRACT.yaml` を都度再読込するためのアンカーパス
+# （`PROBE_MANIFEST_PATH` と同じ命名規約 — schema から機械的に導出せず
+# リポジトリ内の固定配置として凍結する）。
+RUN9_CONTRACT_YAML_PATH = _THIS_DIR / "RUN9_CONTRACT.yaml"
+
 # DESIGN_RUN9 §15 が定義する Probe Set の閉語彙（記載順）。
 PROBE_IDS: Tuple[str, str, str, str, str, str] = ("P0", "P1", "P2", "P3", "P4", "P5")
 
@@ -6985,7 +6991,8 @@ def gate_state(contract: Run9RunContract) -> str:
 
 
 def load_pinned_probe_manifest(
-    contract: Run9RunContract, *, manifest_path: Optional[Path] = None
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """PR #322 第6巡指摘 Fix 13（P1, 採用）の実装: `probe_manifest_sha`
     pin の**唯一の正規消費経路**。`gate_state()` の構造述語性は変更しない
@@ -7036,14 +7043,60 @@ def load_pinned_probe_manifest(
     を `load_run9_contract()` で丸ごと再検証し、pin 値は再検証済みの
     `revalidated` 側から読む——素通しの pin 判定だけを見ていた旧実装
     では、load 後の直接改変で fail-closed を騙る経路が残っていた。
-    構造/値検証（`_validate_pin_field_value_shape()` 等）に違反する改変
-    （例: status を非 PINNED へ変える）は再検証そのものが拒否する一方、
-    schema-valid な別の 64hex sha へ差し替えるケースは再検証を通過するが、
-    その場合は下記 (3) の実バイト sha256 照合が pin 値と不一致になり
-    別経路で fail-closed になる——二段構えの防御。
+
+    **ディスク正典アンカー（PR #322 第17巡指摘, P1, 採用 — Fix 27 への
+    正当な追撃）**: Fix 27 の `load_run9_contract(contract.raw)` 再検証は
+    「改変後の raw の自己整合性（構造/値検証を通る形式かどうか）」しか
+    証明せず、ディスク上の正典 `RUN9_CONTRACT.yaml` との一致は証明しない
+    ——in-process で `contract.raw` を丸ごと自己無矛盾な別内容（schema-valid
+    な別の64hex sha を持つ）へ差し替える攻撃者に対しては Fix 27 単体では
+    無力だった。本関数は `contract_path`（省略時は
+    `RUN9_CONTRACT_YAML_PATH`）が指すディスク上の正典 YAML を
+    `load_run9_contract_from_yaml_path()`（`load_run9_contract_from_yaml_
+    text()` 経由——重複キー fail-closed 拒否込み）で**都度再読込**し、
+    `probe_manifest_sha` pin 欄はこのディスク再読込 contract（`disk_field`）
+    から取る——渡された `contract` 引数はもはや権威ではない。渡された
+    `contract` の pin 値（Fix 27 の自己整合性再検証を経た `passed_field`）
+    が `disk_field` と厳密一致しない場合、in-process contract オブジェクト
+    がディスク正典から乖離した改竄証拠として fail-closed で拒否する
+    （黙って無視しない）。
+
+    3層の防御構造（内側から）: (i) ディスク再読込アンカー — pin の権威は
+    常にディスク上の `RUN9_CONTRACT.yaml` (ii) 引数 `contract` との一致
+    検証 — in-process オブジェクトがディスク正典から乖離していないかを
+    fail-closed 確認 (iii) 下記 read-once バイト hash 照合（Fix 15）—
+    `probe_manifest.json` 自体の stale/改変検出。
+
+    **残余境界の正直な宣言**: 本関数が保証するのは「ディスク上の正典
+    `RUN9_CONTRACT.yaml` と `probe_manifest.json` の組に対する fail-closed
+    照合」までである。Python プロセス内で本関数自体・`load_run9_contract`・
+    `RUN9_CONTRACT_YAML_PATH` 定数を書き換えられる敵対者、あるいはディスク
+    上の `RUN9_CONTRACT.yaml`/`probe_manifest.json` 自体を書き換えられる
+    敵対者に対しては、いかなる in-process 検証も強制不能である
+    （強制可能な脅威モデルの外）。本関数の脅威モデルは「呼び出し元が
+    in-process の `Run9RunContract` オブジェクト（またはその `raw`）を
+    ディスク正典から乖離させて渡す」経路の閉塞に限定される。
     """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("probe_manifest_sha")
+
     revalidated = load_run9_contract(contract.raw)
-    field = revalidated.pin_field("probe_manifest_sha")
+    passed_field = revalidated.pin_field("probe_manifest_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_probe_manifest(): the passed-in contract's probe_manifest_sha pin "
+            f"({passed_field!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml pin "
+            f"({disk_field!r}) at {effective_contract_path} — an in-process Run9RunContract that "
+            "disagrees with the canonical on-disk file is treated as tampering evidence and rejected "
+            "fail-closed (PR #322 第17巡: Fix 27's self-consistency revalidation alone proves only "
+            "that a wholesale in-process substitution of contract.raw is internally well-formed, not "
+            "that it matches the canonical file)"
+        )
+
+    field = disk_field
     if not _is_field_pinned(field):
         raise Run9ValidationError(
             "load_pinned_probe_manifest(): probe_manifest_sha is not PINNED "
