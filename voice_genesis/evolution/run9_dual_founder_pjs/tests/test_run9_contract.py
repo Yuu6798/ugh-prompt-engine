@@ -8567,3 +8567,53 @@ def test_fix319_24_valid_closed_vocab_attested_form_with_granted_grant_accepted(
         "approval_statement": "Raw audio publication approved by User.",
     }
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第12巡対応 — Fix 25（P2）: 外部層での User 専用
+# 完了トークンの拒否。Fix 24 が `USER_ATTESTED_OWN_VOICE` を
+# voice_identity_rights 層の User-donor attestation 完了を表す正確な意味と
+# して閉語彙化した以上、performance_rights/composition_rights のような
+# 外部第三者層がこの同じトークンで「User attestation 済み」を手編集で
+# 主張できてしまうのは対称漏れ——未解決 provenance と並存したまま validate
+# を通過させない。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("layer_name", "field_name"),
+    [
+        ("performance_rights", "rights_class"),
+        ("performance_rights", "consent_status"),
+        ("composition_rights", "rights_class"),
+        ("composition_rights", "consent_status"),
+    ],
+)
+def test_fix319_25_rejects_user_attested_own_voice_in_external_layer(
+    layer_name: str, field_name: str
+) -> None:
+    """負例（4ケース）: performance_rights/composition_rights の
+    rights_class/consent_status へ `USER_ATTESTED_OWN_VOICE`（voice_identity_
+    rights 層の User-donor attestation 専用トークン）を手編集で混入させても
+    「外部層で User attestation 済み」を偽装できないことの確認——拒否
+    メッセージは voice_identity_rights 層専用であることと、この外部層での
+    代替語彙（UNRESOLVED_EXTERNAL / 具体的な外部権利状態の記述）を案内する。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data[layer_name][field_name] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=r"voice_identity_rights layer User-donor attestation",
+    ):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_25_unresolved_external_regression_still_accepted() -> None:
+    """正例（回帰）: performance_rights/composition_rights の現行値
+    `UNRESOLVED_EXTERNAL` は Fix 25 適用後も引き続き受理されること
+    （`test_fix319_6_performance_and_composition_rights_use_unresolved_external`
+    と同一 fixture 値での end-to-end 回帰確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    for layer_name in ("performance_rights", "composition_rights"):
+        assert data[layer_name]["rights_class"] == "UNRESOLVED_EXTERNAL"
+        assert data[layer_name]["consent_status"] == "UNRESOLVED_EXTERNAL"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認

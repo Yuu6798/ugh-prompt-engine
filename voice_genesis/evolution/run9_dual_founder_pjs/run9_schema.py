@@ -4971,6 +4971,26 @@ def _validate_rights_manifest_layer_status_value(layer_name: str, field_name: st
             f"{_RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL!r} is reserved for "
             f"external-fact layers — use {_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} instead"
         )
+    # Codex bot レビュー PR #319 第12巡指摘, Fix 25（P2, 採用）: Fix 24 が
+    # `USER_ATTESTED_OWN_VOICE` を voice_identity_rights 層の User-donor
+    # attestation 完了を表す正確な意味として確立した以上、その語彙を
+    # 外部第三者層（performance_rights/composition_rights/
+    # recording_master_rights = kind external）へ手編集で混入させ「User
+    # attestation 済み」を偽装する経路は対称漏れとして塞ぐ——未解決
+    # provenance と並存したまま validate を通過させない。
+    # recording_master_rights を含む自由記述の具体値（このトークンと
+    # 一致しない値）の既存受理には影響しない。
+    if (
+        value == _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE
+        and kind != _RIGHTS_MANIFEST_FIELD_KIND_USER
+    ):
+        raise Run9ValidationError(
+            f"{path} is an external-fact layer; "
+            f"{_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE!r} is reserved for "
+            "voice_identity_rights layer User-donor attestation — for this external layer, use "
+            f"{_RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL!r} for an unresolved state or a concrete "
+            "external rights description for a resolved one"
+        )
 
 
 # 層ごとに必須の provenance ブロック（DESIGN_RUN9_REVISION_0.4.md 「4層構造
