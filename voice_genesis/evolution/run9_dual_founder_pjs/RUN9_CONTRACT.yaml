@@ -25,6 +25,19 @@
 # `interventions`/`single_intervention` キー不一致の双方で意図どおり
 # fail-closed 拒否される）。
 #
+# 2026-08-25 外部レビュー AQUEST 山崎信英氏（EXTERNAL_REVIEW_AQUEST_
+# 20260825.txt、byte-pin 不変）の採用により design_revision 0.3 → 0.4
+# （DESIGN_RUN9_REVISION_0.4.md）。User 裁定「aとbを承認」の b により
+# `backbone_runtime_bundle.json` の `render_code_commit.status` が
+# INFERRED_UNCONFIRMED → USER_ATTESTED へ確定し、連動して本欄
+# `backbone_runtime_bundle_sha` が PENDING → PINNED へ昇格した。新設
+# トップレベル欄 `performance_source`（2026-08-25 User 追加裁定「確認メモ
+# / RUN9 用語整理」指示2）は既存 pin 値・構造を破壊しない追加のみ——
+# teacher_reference 相当の既存欄は元々存在しない（rev 0.3 で
+# `interventions` 構造へ既に移行済み）。旧 "0.1"〜"0.3" 形式の contract は
+# run9_schema.DESIGN_REVISION の凍結値照合、および必須キー
+# `performance_source` の欠落により意図どおり fail-closed 拒否される。
+#
 # 各欄の pin 状況は {value, status, reason, source?} 形（VG_FOUNDRY の
 # debt/RUN_CONTRACT_SCHEMA_v1.json pinned_field 慣習に倣うが独立実装 —
 # run9_schema.py 参照）。status ∈ {PINNED, PENDING, BLOCKED}。
@@ -36,7 +49,7 @@
 schema: voicegenesis-run-contract/1.0
 run_id: RUN9
 experiment_id: VG-R9-DUAL-FOUNDER-PJS
-design_revision: "0.3"
+design_revision: "0.4"
 design_doc: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
 
 # rev 0.3 改訂A（DESIGN_RUN9_REVISION_0.3.md、PoR §1/§3/§4）: 旧
@@ -118,24 +131,21 @@ design_doc_sha256:
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
 
 # --- design_revision_doc_sha256: 現行 design_revision の差分メモ
-# （DESIGN_RUN9_REVISION_0.3.md）の実 sha256（PINNED）。design_doc_sha256
-# と同じ前例方式。design_revision が 0.2 → 0.3 へ進んだため本欄も rev 0.3
-# 文書の sha256 へ更新する — rev 0.2 文書（406098e2...）自体は無改変の
-# まま存続し、その系譜は DESIGN_RUN9_REVISION_0.3.md 末尾「design_revision
+# （DESIGN_RUN9_REVISION_0.4.md）の実 sha256（PINNED）。design_doc_sha256
+# と同じ前例方式。design_revision が 0.3 → 0.4 へ進んだため本欄も rev 0.4
+# 文書の sha256 へ更新する — rev 0.3 文書（b4f05cfb...）自体は無改変の
+# まま存続し、その系譜は DESIGN_RUN9_REVISION_0.4.md 末尾「design_revision
 # 系譜」表に記録する（欄としては最新 revision の1件のみを pin する規約は
 # design_doc_sha256/design_revision_doc_sha256 の前例どおり）。
-# PR #317 Codex bot レビュー第2巡 Fix 5（R9-G5 supersession 追記、
-# 58fb378e...）・第3巡 Fix 7（PRACTICE 禁止散文へ Technique label 同期、
-# 1409d448...）を経て、User 外部レビュー（2026-08-24, CHANGES_REQUESTED）
-# P1-1〜P1-4・P2-1〜P2-5 の全項目を本文へ反映（書き込み境界・C0/C1 分離・
-# 科学結果/運用状態/保存/昇格の分離・held-out gain 必須化・3分割
-# PRACTICE 語彙・human_audit_mode・機械的校正の定義・Non-Claim/Rights
-# Boundary）したため、値を再計算して更新（本 PR は未マージのため
-# runbook §8 のマージ前限定編集規約に整合）。
+# 2026-08-25 外部レビュー AQUEST 山崎信英氏
+# （EXTERNAL_REVIEW_AQUEST_20260825.txt、byte-pin 不変。sha256 =
+# a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091）の
+# 採用 + User 追加裁定「確認メモ / RUN9 用語整理」を反映した rev 0.4 の
+# sha256 を pin する。
 design_revision_doc_sha256:
-  value: "b4f05cfbccb484a16a39b736086e989e1c953f295bda66970d491e4db5b94b04"
+  value: "6b998d1b0e806d0a02262f5b62d0cbc6d4d72f7c6b0293a31b84134637785634"
   status: PINNED
-  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.3.md
+  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.4.md
 
 # --- por_adjudication_sha256: PoR メモ（POR_CONCEPT_ADJUDICATION_20260824.txt）
 # の実バイト sha256（PINNED）。design_doc_sha256 と同一規約（ファイル実
@@ -234,9 +244,9 @@ backbone_checkpoint_sha:
 # bundle 内に PENDING 相当の欄が残る場合はこの欄も PENDING と
 # し理由に「bundle 内 PENDING 解消後に pin」と記す規約。
 # Codex bot レビュー PR #316 第1巡指摘（P2, 866fcc8, 採用）: bundle 内
-# render_code_commit は status: INFERRED_UNCONFIRMED（直接記録ではなく
+# render_code_commit は当時 status: INFERRED_UNCONFIRMED（直接記録ではなく
 # run4-8 一貫性からの推論値。RUN6 export 記録 s5_record 自体には commit
-# 明記なし）— 本欄も PINNED から PENDING へ降格する
+# 明記なし）だったため、本欄も PINNED から PENDING へ降格していた
 # （backbone_checkpoint_sha は直接記録4件一致のため対象外・PINNED のまま）。
 # 完全性の宣言（PR #316 第2巡指摘、1e84892、採用）: acoustic checkpoint/
 # ONNX のみでは再現入力集合は閉じない。render フロー（gate_synth.py
@@ -245,12 +255,18 @@ backbone_checkpoint_sha:
 # 由来）と acoustic export companions（dsconfig.yaml / phonemes.json /
 # speaker embedding）を含めて初めて閉じる — bundle の
 # `canon_model_assets` 節（詳細は同ファイル `completeness_note` 参照）。
+#
+# 2026-08-25 昇格（DESIGN_RUN9_REVISION_0.4.md「User裁定a/bの記録」の b）:
+# bundle 内 render_code_commit の status が User attestation により
+# USER_ATTESTED へ確定した（`inputs/backbone_runtime_bundle.json`
+# `render_code_commit.attestation` 参照）。これにより本欄の PENDING
+# 条件（bundle 内 PENDING 相当欄の解消）が満たされたため PINNED へ昇格
+# する。値は `run9_schema.compute_file_sha256(inputs/backbone_runtime_
+# bundle.json)`（design_doc_sha256 と同一のファイル実バイト規約）の実測値。
 backbone_runtime_bundle_sha:
-  value: null
-  status: PENDING
-  reason: >-
-    bundle 内 render_code_commit が INFERRED_UNCONFIRMED（直接記録の発掘、
-    または User attestation で確定後に bundle の実 sha256 を pin）。
+  value: "b92dac0e9077bf816275292123796396bd41ba33f19d03fa67eeb183fc7fcfbb"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/backbone_runtime_bundle.json
 
 # --- founder genome shas -----------------------------------------------------
 # value は genome_id（16hex 内容ID）ではなく、永続 genome 文書ファイル
@@ -418,3 +434,24 @@ claim_strength_target: C2
 # holdout 開封後のモード変更は禁止し、SCIENTIFIC_NULL/Identity SHIFTED
 # の救済に人間監査を使わない規律は DESIGN_RUN9_REVISION_0.3.md に明記する。
 human_audit_mode: DISABLED
+
+# --- performance_source: pin 欄ではなく通常欄（rev 0.4 新設、
+# DESIGN_RUN9_REVISION_0.4.md、外部レビュー AQUEST 山崎信英氏の変更1 +
+# 2026-08-25 User 追加裁定「確認メモ / RUN9 用語整理」指示2）。
+# `run9_schema.validate_performance_source_block()` が構造を検証する
+# （id/role は凍結値へ厳密一致、teacher_terminology_note は非所有の趣旨
+# 2要件を含む非空文字列）。既存 teacher 表記（v0.1 §7.4/§11/§19
+# R9-G6/R9-G7 等、byte-pin 不変の運用上の呼称）は本欄の新設によって
+# 書き換わらない——置換ではなく追加である。teacher_reference 相当の
+# 既存 contract 欄は元々存在しない（rev 0.3 で `interventions` 構造へ
+# 既に移行済み）。
+performance_source:
+  id: PJS
+  role: EXTERNAL_PERFORMANCE_SOURCE
+  rights_manifest_ref: inputs/rights_manifest.json#performance_rights
+  teacher_terminology_note: >-
+    Teacher は運用上の呼称であり Voice 所有者・Voice Identity Owner を
+    意味しない（Voice Source ≠ Performance Source ≠ Performance Author
+    の分離は rev 0.4 / inputs/rights_manifest.json の provenance を
+    正とする——2026-08-25 User 追加裁定「確認メモ / RUN9 用語整理」
+    指示1、DESIGN_RUN9_REVISION_0.4.md §7 逐語収載）。

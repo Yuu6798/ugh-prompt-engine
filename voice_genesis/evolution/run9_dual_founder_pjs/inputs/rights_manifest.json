@@ -1,126 +1,215 @@
 {
-  "schema": "run9-user-donor-rights/1.0",
-  "donor_ledger_source": "voice_genesis/foundry/recording_kit/user_donor_ledger.json",
-  "donor_ledger_schema": "user-donor-ledger/0.1",
-  "transcribed_at": "2026-08-24",
-  "note": "card_id / source_sha256 / sha256 (normalized) / duration_sec transcribed verbatim from the donor ledger above (17 entries, UC-001..UC-017). Other ledger fields (sample_rate, rms_dbfs, peak_dbfs, alignment_status, received_at) are not duplicated here — refer to the ledger itself for those.",
-  "entries": [
+  "schema": "run9-rights-manifest/2.0",
+  "revision_note": "rev 0.4（DESIGN_RUN9_REVISION_0.4.md 変更1・2、外部レビュー AQUEST 山崎信英氏 2026-08-25 の採用）: schema run9-user-donor-rights/1.0 の単層構造（User donor UC-001..017 のみ）を、voice_identity_rights/performance_rights/composition_rights/recording_master_rights の4層構造へ再編した。旧内容（User donor 17件・usage_grants・rights_class/consent_status/attestation）は voice_identity_rights 層へ内容無改変のまま移設し、performance_rights/composition_rights/recording_master_rights の3層を新設した（PJS Performance Source の provenance を機械検証可能な範囲で充填 — 出典は各層の provenance フィールド参照）。",
+  "principles": {
+    "source": "EXTERNAL_REVIEW_AQUEST_20260825.txt 変更1（逐語）",
+    "statements": [
+      "Teacher ≠ Voice Identity Owner",
+      "Teacher ≠ Performance Author",
+      "Voice Source ≠ Performance Source"
+    ]
+  },
+  "auto_interpretation_prohibited": "VoiceBank利用許諾 → Performance利用許諾も得た、と自動的に解釈することを禁止する（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2、逐語）。4層すべてについて provenance / permission を個別に確定しない限り、いずれかの層の許諾を他層へ流用しない。",
+  "hard_gate": "4層すべてについて provenance / permission を確定する（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2「Hard Gate」、逐語）。本 Gate の機械可読版は run9_schema.R9_G1_PASS_CONDITIONS（R9-G1 RIGHTS_AND_PROVENANCE_GATE、DESIGN_RUN9_REVISION_0.4.md 変更5）を参照。",
+
+  "voice_identity_rights": {
+    "role": "Voice / VoiceBank / speaker identity の権利（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2）。RUN9 の User Identity anchor（domains/identity_domain_run9_v1.json anchor_hashes.user）として使用する User donor の声そのものの権利。旧 schema run9-user-donor-rights/1.0 の全内容をここへ無改変で格納する。",
+    "schema_legacy": "run9-user-donor-rights/1.0",
+    "donor_ledger_source": "voice_genesis/foundry/recording_kit/user_donor_ledger.json",
+    "donor_ledger_schema": "user-donor-ledger/0.1",
+    "transcribed_at": "2026-08-24",
+    "note": "card_id / source_sha256 / sha256 (normalized) / duration_sec transcribed verbatim from the donor ledger above (17 entries, UC-001..UC-017). Other ledger fields (sample_rate, rms_dbfs, peak_dbfs, alignment_status, received_at) are not duplicated here — refer to the ledger itself for those.",
+    "entries": [
+      {
+        "card_id": "UC-001",
+        "source_sha256": "0b46ce5ce1a62e3dcddb195818d4c8f498ddfc42f3d1d18d7b9c69bdec038bfe",
+        "sha256": "ec18befc9d9f9f37590332c98a0d299137b9f973a4b0bc0a3b457bf1aae87ae0",
+        "duration_sec": 26.74
+      },
+      {
+        "card_id": "UC-002",
+        "source_sha256": "4609617a420798f746e80d90aa43839107316abec15e5348dd61868afdfbd2e4",
+        "sha256": "47c0eff08567e05894c2882370435b9a68e46c1d74ac87a74dee037a4c01de34",
+        "duration_sec": 26.9
+      },
+      {
+        "card_id": "UC-003",
+        "source_sha256": "fbe70b3fa246ea601da01c6e4ebfd81690672d57f4b875f12f99655a3713de43",
+        "sha256": "d56a6696e4f0fa1f4a65fe0b8a399187e3d0c89ee20dd73d85a01512349d3658",
+        "duration_sec": 14.933
+      },
+      {
+        "card_id": "UC-004",
+        "source_sha256": "10ce2c03afc3dfff4918485bf16448cbf4af8e899c65ede94c3b1c395fff085e",
+        "sha256": "80dd55e53d15942fb417203daf7f1a68efc0a7a8eec0695b755866cf742dc7be",
+        "duration_sec": 15.915
+      },
+      {
+        "card_id": "UC-005",
+        "source_sha256": "e5b4ea15dc6b3e8301ec04fb5f8d6a57961be762d4ceeacb248e05e53a79fa97",
+        "sha256": "eaa16b7064b197af86519ec81acae8df74d1559f7cf2b4287fb62e72df6411ce",
+        "duration_sec": 15.317
+      },
+      {
+        "card_id": "UC-006",
+        "source_sha256": "bfe1429e5085f49682f4567bc4dfcbb99bce833d27067790d219eeb2af806c73",
+        "sha256": "b1f3fa96ca12d6624ea756415b48c68b8a15e16e477d77c7919bc12f32a9f142",
+        "duration_sec": 15.445
+      },
+      {
+        "card_id": "UC-007",
+        "source_sha256": "506e8b40bd04bf08204f647721c9feb4804d5a5aa1a66e5ac1b642d7f600a070",
+        "sha256": "3b6e33cbfe0f94467ce8d6f3778aa948b2c6b69948d93d7a8829644391ab1bca",
+        "duration_sec": 15.36
+      },
+      {
+        "card_id": "UC-008",
+        "source_sha256": "831403f5dde854eb4f21ef3a0befe3e5914211262aafaf5dfc7e5ab44bcdf79c",
+        "sha256": "0c924456e7eab60792cd6596efdf9a11e6453d7ba001bbfb5373646abc63967f",
+        "duration_sec": 12.373
+      },
+      {
+        "card_id": "UC-009",
+        "source_sha256": "efcff1980270b8e8ed03364144e9ea65d92bc383499b26d33c6eb01482413fe9",
+        "sha256": "dac991c194aafaeb80033d7f1eb3d11b6df41c79a02d312f9e90c8ecead2eb2e",
+        "duration_sec": 12.117
+      },
+      {
+        "card_id": "UC-010",
+        "source_sha256": "b80043469a868e80f91d11832049ff7d2c07df03c2626858d249d111c38ab9c0",
+        "sha256": "287836df3735fd87dc136d6b214130108f30b0d1c763d27c477115236b75e720",
+        "duration_sec": 11.392
+      },
+      {
+        "card_id": "UC-011",
+        "source_sha256": "7368852936caf530505c316e558262d51a9ce1e129b7bd717d3f618a3eda036e",
+        "sha256": "20d66ca9c255fa1330fc8c90209041775c92697223383c36e6e39dcb821ff077",
+        "duration_sec": 11.52
+      },
+      {
+        "card_id": "UC-012",
+        "source_sha256": "7a0d8ee3d4614a5dd718e08e422a8ca62f43eef2b3bef2816541d44bb6a5bdec",
+        "sha256": "9d8034984a013708e006b2516c3595c6479ac0b1db2d81d4db757ceb3b29c226",
+        "duration_sec": 12.843
+      },
+      {
+        "card_id": "UC-013",
+        "source_sha256": "d4f648ed1c6a530b6d7e5a35a11b72687ea51a8d4e8799d83b9f5a84e77a4d13",
+        "sha256": "e46569408c10e6bf30ffe8424ab71ed1d99eb38f5c0858b2e36f65bf3bfde3e9",
+        "duration_sec": 12.587
+      },
+      {
+        "card_id": "UC-014",
+        "source_sha256": "9a4e913086f09e38451445dabcd4bee3fe0877d40d14fd1ca622cd0781296820",
+        "sha256": "2b2556e8c7caaac16ab3ab9fb61eed01c22ee83749ce528903c722ea113ad380",
+        "duration_sec": 11.733
+      },
+      {
+        "card_id": "UC-015",
+        "source_sha256": "34d54ffe27f635f56b9b029bf631d1ec057514031a265d8194d0fe09fc833563",
+        "sha256": "01d71cbc0543aa4d6c361dac3451e0b88cbebffdb6eda8e4bed7a7d2e6026d1f",
+        "duration_sec": 12.971
+      },
+      {
+        "card_id": "UC-016",
+        "source_sha256": "ed1fb5ac8b1f8f993b957811dbf3cdd91e0e905217bff7c6f166ac2800a5b531",
+        "sha256": "a4cece56a37631d9d86a905bbf6e001f670c66ebe759685a4e9d8cbb8fb44052",
+        "duration_sec": 12.117
+      },
+      {
+        "card_id": "UC-017",
+        "source_sha256": "b2aa14257fec5c513fa00e5f1f9a2bd173527651377b7f34e81bb8a38254f80e",
+        "sha256": "9b864babfb5ed7c3a7730d62eb671b92ae74eef529bda1665ffa25c5d447f73a",
+        "duration_sec": 16.64
+      }
+    ],
+    "rights_class": "PENDING_USER_ATTESTATION",
+    "consent_status": "PENDING_USER_ATTESTATION",
+    "attestation": {
+      "attested": false,
+      "attested_by": null,
+      "attested_at": null,
+      "statement": null
+    },
+    "usage_grants": {
+      "run9_identity_anchor": "pending",
+      "raw_audio_publication": "not_granted",
+      "model_general_distribution": "not_granted"
+    },
+    "usage_grants_note": "raw_audio_publication and model_general_distribution require separate approval from run9_identity_anchor (User ruling, DESIGN_RUN9_REVISION_0.2.md 改訂4) — granting the identity-anchor usage does not imply either publication grant. Both default to not_granted and are never auto-escalated.",
+    "binding_note": "After User attestation completes, the sha256 of this file (as it stands post-attestation) is bound into the input set for domains/identity_domain_run9_v1.json anchor_hashes.user (exact binding mechanism — e.g. direct pin vs composite manifest — to be finalized at attestation time). Until then anchor_hashes.user remains the <PIN_BEFORE_RUN> placeholder. rev 0.4 の4層再編は本層の内容・attest 対象を変更しない（DESIGN_RUN9_REVISION_0.4.md 変更1・2「attest対象の更新（a裁定の反映）」参照 — User裁定「aとbを承認」のa）。"
+  },
+
+  "performance_rights": {
+    "role": "歌唱・調声・演奏表現・UST 等の権利/許諾（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2）。RUN9 が PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE 両枝で消費する PJS 由来 Performance の権利来歴。",
+    "performance_source": {
+      "id": "PJS",
+      "role": "EXTERNAL_PERFORMANCE_SOURCE",
+      "note": "外部レビュー変更1（逐語 performance_source 雛形）の実装。v0.1 §7.4「External Curriculum Provider / Performance teacher only」の役割記述を精密化する — PJS は Identity anchor でも RUN9 の親4体目でもない（v0.1 §27 item 10「PJS coordinate is structurally impossible」不変）。"
+    },
+    "provenance": {
+      "performance_author": {
+        "performer": "<PENDING_USER_ATTESTATION>",
+        "performance_editor": "not_applicable",
+        "note": "PJS corpus は自然録音の歌唱コーパスであり、UTAU型の音声合成 + 別途調声者という2レイヤー構造を持たない（出典: voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md 引用の論文 Koguchi & Takamichi, arXiv:2006.02959 が \"singing voice corpus\" と明記）。歌唱者個人の氏名は原典・repo いずれにも記載がないため performer は PENDING のまま — 捏造しない。performance_editor は構造的に存在しない対象のため not_applicable（値未確定の PENDING とは区別する）。"
+      }
+    },
+    "rights_class": "PENDING_USER_ATTESTATION",
+    "consent_status": "PENDING_USER_ATTESTATION",
+    "consent_status_note": "ライセンス自体（CC BY-SA 4.0、研究・商用いずれも利用可 — recording_master_rights.license 参照）は機械検証済みで明確だが、外部レビューが要求する「Performance Author 個人の特定」（R9_G1_PASS_CONDITIONS の PERFORMANCE_AUTHOR_IDENTIFIED）は performer が PENDING のあいだ満たされない。ライセンスが明確であることと、権利主体の個人特定が完了していることは別の条件であり、後者が満たされるまで consent_status は PENDING のまま正直に据え置く。"
+  },
+
+  "composition_rights": {
+    "role": "楽曲・旋律・歌詞等の権利（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2）。",
+    "provenance": {
+      "composition": {
+        "composer": "<PENDING_USER_ATTESTATION>",
+        "lyricist": "<PENDING_USER_ATTESTATION>",
+        "note": "PJS corpus のトラック別 composer/lyricist クレジットは repo 内に記録がない（pjs_terms_snapshot.md はコーパス全体のライセンスのみを引用し、個別楽曲の作曲者・作詞者クレジットには言及しない）。捏造せず PENDING のまま残す。"
+      }
+    },
+    "rights_class": "PENDING_USER_ATTESTATION",
+    "consent_status": "PENDING_USER_ATTESTATION"
+  },
+
+  "recording_master_rights": {
+    "role": "使用する生成音声・録音物自体の権利（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2）。PJS の実配布 WAV（RUN9 が PRACTICE_FROM_AUDIO 枝で observe する raw audio、および Lesson 抽出の入力）の権利。",
+    "provenance": {
+      "voice_source": {
+        "owner": "PJS corpus（\"PJS: phoneme-balanced Japanese singing voice corpus\"、Koguchi & Takamichi, arXiv:2006.02959）",
+        "source_id": "PJS_corpus_ver1.1",
+        "note": "個人/法人としての著作権者名の disclosure は原典（プロジェクトページ・論文）に見当たらない。コーパス単位のライセンス表示（CC BY-SA 4.0）を owner の実務上の根拠として記録する。"
+      }
+    },
+    "license": {
+      "value": "CC BY-SA 4.0",
+      "scope": "コーパス全体（\"All the data in our corpus is licensed with CC BY-SA 4.0\"）。研究・商用いずれも利用可。",
+      "derivative_obligation": "派生物（本タスクの合成音声出力を含む）を頒布・公開する場合は同一ライセンス（CC BY-SA 4.0）での継承 + 原著作者へのクレジット表示（Attribution: Koguchi & Takamichi, arXiv:2006.02959）が必須。RUN9 は現時点で出力を頒布・公開していない（machine-independent 設計層のみ）。",
+      "source": "voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md（プロジェクトページ + 論文 arXiv:2006.02959 の逐語スナップショット、取得日 2026-08-15）"
+    },
+    "corpus_pins": {
+      "source_archive_sha256": {
+        "value": "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca",
+        "source": "voice_genesis/foundry/s1_dataprep/README.md 素材2（DESIGN_RUN9_REVISION_0.2.md 改訂3が pin 名を確定済み — 配布 zip 全体）"
+      },
+      "expanded_corpus_identity_sha256": {
+        "value": "9905cec08fbaf43fa545400498a7908ef28567e8f60a5ba005fb2e00d526f996",
+        "source": "voice_genesis/foundry/adapter/presets/pjs_neutral.json corpus_sha256（DESIGN_RUN9_REVISION_0.2.md 改訂3が pin 名を確定済み — 展開後コーパス identity）"
+      },
+      "note": "この2値は互いに代替ではない（DESIGN_RUN9_REVISION_0.2.md 改訂3 — zip 全体 vs 前処理後コーパスの別対象）。rev 0.4 は値・意味論を変更せず、recording_master_rights 層への配置のみ行う。"
+    },
+    "rights_class": "PJS corpus は CC BY-SA 4.0（機械検証済み）— ただし RUN9 内部使用（PRACTICE_FROM_AUDIO 枝での raw audio observe、EDUCATION 枝での Lesson 抽出入力）が rights-clean curriculum 要件（v0.1 §13.2）を満たすかの最終確認は R9-G1 tooling の職務として別途行う。",
+    "consent_status": "LICENSE_CONFIRMED_USAGE_SCOPE_PENDING_TOOLING_REVIEW"
+  },
+
+  "history": [
     {
-      "card_id": "UC-001",
-      "source_sha256": "0b46ce5ce1a62e3dcddb195818d4c8f498ddfc42f3d1d18d7b9c69bdec038bfe",
-      "sha256": "ec18befc9d9f9f37590332c98a0d299137b9f973a4b0bc0a3b457bf1aae87ae0",
-      "duration_sec": 26.74
+      "date": "2026-08-24",
+      "event": "schema run9-user-donor-rights/1.0 として起草（Fable 起草・User attest 方式、DESIGN_RUN9_REVISION_0.2.md 改訂4）。"
     },
     {
-      "card_id": "UC-002",
-      "source_sha256": "4609617a420798f746e80d90aa43839107316abec15e5348dd61868afdfbd2e4",
-      "sha256": "47c0eff08567e05894c2882370435b9a68e46c1d74ac87a74dee037a4c01de34",
-      "duration_sec": 26.9
-    },
-    {
-      "card_id": "UC-003",
-      "source_sha256": "fbe70b3fa246ea601da01c6e4ebfd81690672d57f4b875f12f99655a3713de43",
-      "sha256": "d56a6696e4f0fa1f4a65fe0b8a399187e3d0c89ee20dd73d85a01512349d3658",
-      "duration_sec": 14.933
-    },
-    {
-      "card_id": "UC-004",
-      "source_sha256": "10ce2c03afc3dfff4918485bf16448cbf4af8e899c65ede94c3b1c395fff085e",
-      "sha256": "80dd55e53d15942fb417203daf7f1a68efc0a7a8eec0695b755866cf742dc7be",
-      "duration_sec": 15.915
-    },
-    {
-      "card_id": "UC-005",
-      "source_sha256": "e5b4ea15dc6b3e8301ec04fb5f8d6a57961be762d4ceeacb248e05e53a79fa97",
-      "sha256": "eaa16b7064b197af86519ec81acae8df74d1559f7cf2b4287fb62e72df6411ce",
-      "duration_sec": 15.317
-    },
-    {
-      "card_id": "UC-006",
-      "source_sha256": "bfe1429e5085f49682f4567bc4dfcbb99bce833d27067790d219eeb2af806c73",
-      "sha256": "b1f3fa96ca12d6624ea756415b48c68b8a15e16e477d77c7919bc12f32a9f142",
-      "duration_sec": 15.445
-    },
-    {
-      "card_id": "UC-007",
-      "source_sha256": "506e8b40bd04bf08204f647721c9feb4804d5a5aa1a66e5ac1b642d7f600a070",
-      "sha256": "3b6e33cbfe0f94467ce8d6f3778aa948b2c6b69948d93d7a8829644391ab1bca",
-      "duration_sec": 15.36
-    },
-    {
-      "card_id": "UC-008",
-      "source_sha256": "831403f5dde854eb4f21ef3a0befe3e5914211262aafaf5dfc7e5ab44bcdf79c",
-      "sha256": "0c924456e7eab60792cd6596efdf9a11e6453d7ba001bbfb5373646abc63967f",
-      "duration_sec": 12.373
-    },
-    {
-      "card_id": "UC-009",
-      "source_sha256": "efcff1980270b8e8ed03364144e9ea65d92bc383499b26d33c6eb01482413fe9",
-      "sha256": "dac991c194aafaeb80033d7f1eb3d11b6df41c79a02d312f9e90c8ecead2eb2e",
-      "duration_sec": 12.117
-    },
-    {
-      "card_id": "UC-010",
-      "source_sha256": "b80043469a868e80f91d11832049ff7d2c07df03c2626858d249d111c38ab9c0",
-      "sha256": "287836df3735fd87dc136d6b214130108f30b0d1c763d27c477115236b75e720",
-      "duration_sec": 11.392
-    },
-    {
-      "card_id": "UC-011",
-      "source_sha256": "7368852936caf530505c316e558262d51a9ce1e129b7bd717d3f618a3eda036e",
-      "sha256": "20d66ca9c255fa1330fc8c90209041775c92697223383c36e6e39dcb821ff077",
-      "duration_sec": 11.52
-    },
-    {
-      "card_id": "UC-012",
-      "source_sha256": "7a0d8ee3d4614a5dd718e08e422a8ca62f43eef2b3bef2816541d44bb6a5bdec",
-      "sha256": "9d8034984a013708e006b2516c3595c6479ac0b1db2d81d4db757ceb3b29c226",
-      "duration_sec": 12.843
-    },
-    {
-      "card_id": "UC-013",
-      "source_sha256": "d4f648ed1c6a530b6d7e5a35a11b72687ea51a8d4e8799d83b9f5a84e77a4d13",
-      "sha256": "e46569408c10e6bf30ffe8424ab71ed1d99eb38f5c0858b2e36f65bf3bfde3e9",
-      "duration_sec": 12.587
-    },
-    {
-      "card_id": "UC-014",
-      "source_sha256": "9a4e913086f09e38451445dabcd4bee3fe0877d40d14fd1ca622cd0781296820",
-      "sha256": "2b2556e8c7caaac16ab3ab9fb61eed01c22ee83749ce528903c722ea113ad380",
-      "duration_sec": 11.733
-    },
-    {
-      "card_id": "UC-015",
-      "source_sha256": "34d54ffe27f635f56b9b029bf631d1ec057514031a265d8194d0fe09fc833563",
-      "sha256": "01d71cbc0543aa4d6c361dac3451e0b88cbebffdb6eda8e4bed7a7d2e6026d1f",
-      "duration_sec": 12.971
-    },
-    {
-      "card_id": "UC-016",
-      "source_sha256": "ed1fb5ac8b1f8f993b957811dbf3cdd91e0e905217bff7c6f166ac2800a5b531",
-      "sha256": "a4cece56a37631d9d86a905bbf6e001f670c66ebe759685a4e9d8cbb8fb44052",
-      "duration_sec": 12.117
-    },
-    {
-      "card_id": "UC-017",
-      "source_sha256": "b2aa14257fec5c513fa00e5f1f9a2bd173527651377b7f34e81bb8a38254f80e",
-      "sha256": "9b864babfb5ed7c3a7730d62eb671b92ae74eef529bda1665ffa25c5d447f73a",
-      "duration_sec": 16.64
+      "date": "2026-08-25",
+      "event": "rev 0.4（DESIGN_RUN9_REVISION_0.4.md 変更1・2、外部レビュー AQUEST 山崎信英氏の採用）: schema を run9-rights-manifest/2.0 へ改版し、単層構造を voice_identity_rights/performance_rights/composition_rights/recording_master_rights の4層構造へ再編。旧内容は voice_identity_rights 層へ無改変で移設。performance_rights/composition_rights/recording_master_rights の3層を新設し、PJS Performance Source の provenance を機械検証可能な範囲で充填（出典: pjs_terms_snapshot.md / s1_dataprep/README.md / pjs_neutral.json）。voice_identity_rights.attestation の値・attest 対象は本改訂で変更しない（User裁定「aとbを承認」のa = 新4層構造に対する attest は次段で確定）。"
     }
-  ],
-  "rights_class": "PENDING_USER_ATTESTATION",
-  "consent_status": "PENDING_USER_ATTESTATION",
-  "attestation": {
-    "attested": false,
-    "attested_by": null,
-    "attested_at": null,
-    "statement": null
-  },
-  "usage_grants": {
-    "run9_identity_anchor": "pending",
-    "raw_audio_publication": "not_granted",
-    "model_general_distribution": "not_granted"
-  },
-  "usage_grants_note": "raw_audio_publication and model_general_distribution require separate approval from run9_identity_anchor (User ruling, DESIGN_RUN9_REVISION_0.2.md 改訂4) — granting the identity-anchor usage does not imply either publication grant. Both default to not_granted and are never auto-escalated.",
-  "binding_note": "After User attestation completes, the sha256 of this file (as it stands post-attestation) is bound into the input set for domains/identity_domain_run9_v1.json anchor_hashes.user (exact binding mechanism — e.g. direct pin vs composite manifest — to be finalized at attestation time). Until then anchor_hashes.user remains the <PIN_BEFORE_RUN> placeholder."
+  ]
 }

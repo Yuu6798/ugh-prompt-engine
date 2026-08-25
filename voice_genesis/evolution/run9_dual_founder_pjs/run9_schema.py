@@ -52,13 +52,13 @@ RUN9_NORMALIZATION = "largest-component-residual"
 RUN_ID = "RUN9"
 EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
 
-# 現行 design_revision（凍結値。User 裁定 2026-08-24 =
-# DESIGN_RUN9_REVISION_0.3.md — PoR メモ
-# `POR_CONCEPT_ADJUDICATION_20260824.txt` の編入）。旧 revision "0.1"/"0.2"
-# を宣言する contract は意図どおり拒否される — 修正が必要なら
-# design_revision を上げ、旧 attempt を append-only 履歴として残す規約
-# （DESIGN_RUN9 ヘッダ注記）。
-DESIGN_REVISION = "0.3"
+# 現行 design_revision（凍結値。User 裁定 2026-08-25 =
+# DESIGN_RUN9_REVISION_0.4.md — 外部レビュー AQUEST 山崎信英氏
+# `EXTERNAL_REVIEW_AQUEST_20260825.txt` の採用）。旧 revision
+# "0.1"/"0.2"/"0.3" を宣言する contract は意図どおり拒否される — 修正が
+# 必要なら design_revision を上げ、旧 attempt を append-only 履歴として
+# 残す規約（DESIGN_RUN9 ヘッダ注記）。
+DESIGN_REVISION = "0.4"
 
 # rev 0.3（改訂A、PoR §1/§3/§4/§16）: 単一 LEARN_PERFORMANCE エッジを
 # CONTROL 無介入枝 + 二つの介入エッジ（PRACTICE_FROM_AUDIO / 稽古,
@@ -426,6 +426,254 @@ BRANCH_IMMUTABLE_ARTIFACTS: Tuple[str, ...] = (
 # 使わない規律と対になる（DESIGN_RUN9_REVISION_0.3.md 参照）。
 HUMAN_AUDIT_MODES: Tuple[str, str] = ("DISABLED", "ADVISORY_PREDECLARED")
 DEFAULT_HUMAN_AUDIT_MODE = "DISABLED"
+
+# ---------------------------------------------------------------------------
+# rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部レビュー AQUEST 山崎信英氏
+# `EXTERNAL_REVIEW_AQUEST_20260825.txt` の採用）: R9-G1 拡張・Performance
+# Trait/Identity 除外語彙・LessonRecord 標準仕様・performance_source
+# ブロックの凍結定数。実体 tooling（R9-G1 の pin 値実物照合・LessonRecord
+# manifest の実 build）は machine-dependent 作業として引き続き VG-L0
+# ハーネス実装待ち — 本節はいずれも語彙・構造・型のみを凍結する
+# （既存 PRACTICE/EDUCATION manifest validator と同じ「骨組み凍結」
+# パターン）。
+# ---------------------------------------------------------------------------
+
+# --- R9-G1 拡張（外部レビュー変更5） -----------------------------------------
+# v0.1 §19「R9-G1 INPUT_FREEZE_AND_RIGHTS」（byte-pin 不変）に対する rev 0.2
+# 方式（Adapter→ControlProfile と同型の「読み替え」— v0.1 本文は書き換え
+# ない）の意味名追加。gate ID（R9-G1）自体は変わらない。
+R9_G1_ID = "R9-G1"
+R9_G1_LEGACY_NAME = "INPUT_FREEZE_AND_RIGHTS"  # v0.1 §19 原文名（不変）
+R9_G1_SEMANTIC_NAME = "RIGHTS_AND_PROVENANCE_GATE"  # rev 0.4 追加読み替え（外部レビュー原文の逐語）
+
+# PASS 条件8項目（外部レビュー原文「変更5」の逐語8項目を機械可読 id へ写した
+# 凍結 tuple）。**gate は構造述語**（PR #316 第4巡の層分離規約を rev 0.4 でも
+# 維持——`gate_state()` の docstring と `verify_rights_manifest_against_ledger()`
+# 直前のコメント参照）: 各条件 id の実体照合（例えば「Voice Source が実際に
+# 特定されているか」の中身の正しさ）は R9-G1 tooling（machine-dependent）の
+# 職務のまま。本 tuple は8条件の名前と順序のみを凍結する。
+R9_G1_PASS_CONDITIONS: Tuple[str, str, str, str, str, str, str, str] = (
+    "VOICE_SOURCE_IDENTIFIED",
+    "VOICE_USAGE_TERMS_CONFIRMED",
+    "PERFORMANCE_AUTHOR_IDENTIFIED",
+    "PERFORMANCE_USAGE_TERMS_CONFIRMED",
+    "COMPOSITION_RIGHTS_CONFIRMED",
+    "RECORDING_MASTER_RIGHTS_CONFIRMED",
+    "TEACHER_SOURCE_VS_VOICE_IDENTITY_SOURCE_DISTINGUISHED",
+    "NO_UNKNOWN_RIGHTS_HOLDER",
+)
+
+# FAIL 語彙（外部レビュー原文の逐語）。既存 `FAILURE_CLASSES`（rev 0.3
+# 改訂E、3分類）とは別軸——`FAILURE_CLASSES` は attempt 全体の失敗の性質
+# （実装ミス/科学的無効/設計不能）を分類し、こちらは R9-G1 という個別
+# gate 1つの FAIL 値である。R9-G1 が不成立の attempt は、原因次第で
+# `FAILURE_CLASSES` のいずれにも分類され得る独立した2層の語彙であり、
+# 本定数は `FAILURE_CLASSES` を置換しない。
+GATE_FAIL_RIGHTS_PROVENANCE_UNRESOLVED = "RIGHTS_PROVENANCE_UNRESOLVED"
+
+
+def r9_g1_pass_conditions_declared(declared_conditions: Any) -> bool:
+    """R9-G1 の8 PASS 条件（`R9_G1_PASS_CONDITIONS`）が `declared_conditions`
+    （attempt が宣言した条件 id の集合）に全件含まれるかどうかの**構造
+    判定のみ**を行う（`control_conditions_satisfied()` と同型のパターン）。
+    各条件の実体照合（宣言が事実として正しいか）はこの関数の範囲外——
+    R9-G1 tooling の職務のまま変更しない（gate=構造述語、実物照合=tooling
+    という PR #316 第4巡の層分離規約を rev 0.4 でも維持する）。"""
+    if not isinstance(declared_conditions, (set, frozenset, list, tuple)):
+        raise Run9ValidationError(
+            "declared_conditions must be a set/list/tuple, got "
+            f"{type(declared_conditions).__name__}"
+        )
+    return set(R9_G1_PASS_CONDITIONS).issubset(set(declared_conditions))
+
+
+# --- performance_source ブロック（外部レビュー変更1 + 2026-08-25 User 追加
+#     裁定「確認メモ / RUN9 用語整理」） -----------------------------------
+# `RUN9_CONTRACT.yaml` 新設トップレベル欄 `performance_source` の凍結値。
+# User 追加裁定の指示2「置換でなく追加」に従い、既存 teacher 表記
+# （v0.1 §7.4/§11/§19 R9-G6/R9-G7 等、byte-pin 不変の運用上の呼称）は
+# 書き換えず、本ブロックが Voice Source ≠ Performance Source ≠
+# Performance Author の分離を明示する非所有注記の置き場所を担う。
+PERFORMANCE_SOURCE_ID = "PJS"
+PERFORMANCE_SOURCE_ROLE = "EXTERNAL_PERFORMANCE_SOURCE"
+
+# 「teacher」語の非所有注記（User 追加裁定 2026-08-25、指示1の逐語）。
+# `RUN9_CONTRACT.yaml` `performance_source.teacher_terminology_note` /
+# `inputs/identity_metric_space.json` confuser_control 節の role 注記が
+# この文言を参照する（一言一句同一である必要はないが、Voice 所有者を
+# 意味しない旨と rights_manifest provenance を正とする旨の2点は必須）。
+TEACHER_TERMINOLOGY_NOTE = (
+    "Teacher は運用上の呼称であり Voice 所有者・Voice Identity Owner を意味"
+    "しない（Voice Source ≠ Performance Source ≠ Performance Author の分離"
+    "は rev 0.4 / inputs/rights_manifest.json の provenance を正とする）。"
+)
+
+
+# --- Performance Trait / Identity 除外語彙（外部レビュー変更3・6） ----------
+
+# 「歌い方」の定義修正（外部レビュー変更3、逐語9項目）: RUN9 が Performance
+# Source から抽出・移送してよい Performance Trait（= Performance Residual）
+# の正準語彙。v0.1 §11「PJS Performance Lesson」の F0_lesson/Duration_lesson/
+# Energy_lesson/End_lesson 等（byte-pin 不変）は、本語彙の RUN9 固有の初期
+# 実装例として引き続き有効——本語彙が旧定義（「PJSの歌い方を移植する」）を
+# 置き換える正典。
+PERFORMANCE_TRAIT_VOCAB: Tuple[str, str, str, str, str, str, str, str, str] = (
+    "relative_F0",
+    "duration_ratio",
+    "onset_offset",
+    "energy_envelope",
+    "vibrato",
+    "phrase_dynamics",
+    "attack_behavior",
+    "release_behavior",
+    "articulation_timing",
+)
+
+# Identity 除外 Trait の正準語彙（外部レビュー変更3の6項目 + 変更6の4項目を
+# 統合。重複概念（speaker/timbre/formant の3組）は統一名 + 別名注記で吸収し
+# 7項目へ収束する — DESIGN_RUN9_REVISION_0.4.md「変更3・6」表参照）。
+#
+# 既存 `EDUCATION_FORBIDDEN_INPUTS`/`PRACTICE_FORBIDDEN_INPUTS`（rev 0.3）
+# との関係: 別の層であり、どちらか片方を変更しても他方は自動的に変わらない
+# （別の凍結対象）。`IDENTITY_EXCLUDED_TRAIT_VOCAB` は「Performance Trait
+# として扱ってはならない特徴クラスの一般的な正準分類」（LessonRecord の
+# `explicitly_excluded_identity_traits` が完全含有すべき対象）であり、
+# `EDUCATION_FORBIDDEN_INPUTS`/`PRACTICE_FORBIDDEN_INPUTS` は「RUN9・PJS
+# 固有の、特定の入力チャネルとして渡してはならない具体的禁止項目の列挙」
+# である。前者は特徴の分類学、後者は運用上の入力境界。
+IDENTITY_EXCLUDED_TRAIT_VOCAB: Tuple[str, str, str, str, str, str, str] = (
+    "speaker_embedding",  # 変更3「speaker embedding」+ 変更6「speaker_embedding」
+    "timbre_identity",  # 変更3「timbre identity」+ 変更6「timbre_embedding」（別名）
+    "formant_identity",  # 変更3「formant identity」+ 変更6「formant_profile」（別名）
+    "spectral_identity",  # 変更3のみ「spectral identity」
+    "voice_genome",  # 変更3のみ「Voice Genome」
+    "source_specific_identity_representation",  # 変更3のみ「source-specific identity representation」
+    "identity_vector",  # 変更6のみ（RUN9 の Identity 座標/genome coordinate 一般を指す汎用項目）
+)
+
+
+# --- LessonRecord 標準仕様（外部レビュー変更6） -----------------------------
+
+SCHEMA_LESSON_RECORD = "run9-lesson-record/1.0"
+
+# 外部レビュー原文の LessonRecord 雛形を機械可読キーへ写した最低要件。
+LESSON_RECORD_REQUIRED_KEYS: Tuple[str, ...] = (
+    "schema",
+    "lesson_id",
+    "performance_source",
+    "voice_source",
+    "performance_author",
+    "composition_source",
+    "recording_source",
+    "extracted_traits",
+    "explicitly_excluded_identity_traits",
+    "rights_manifest",
+    "provenance_manifest",
+)
+
+# 外部レビュー原文の変更6が使う5つの略記名（extracted_traits 節の逐語）を
+# `PERFORMANCE_TRAIT_VOCAB` の正準名へ解決する対応表。`relative_F0` は
+# 恒等（両語彙で綴りが同一）。
+LESSON_RECORD_TRAIT_ALIASES: Mapping[str, str] = types.MappingProxyType({
+    "relative_F0": "relative_F0",
+    "duration": "duration_ratio",
+    "timing": "onset_offset",
+    "dynamics": "energy_envelope",
+    "articulation": "articulation_timing",
+})
+
+
+def resolve_lesson_record_trait_alias(name: Any) -> str:
+    """LessonRecord の `extracted_traits` 要素1件を正準 `PERFORMANCE_TRAIT_VOCAB`
+    名へ解決する。`LESSON_RECORD_TRAIT_ALIASES` の略記名、または
+    `PERFORMANCE_TRAIT_VOCAB` の正準名そのものを受理し、いずれでもない
+    文字列は拒否する（fail-closed — 未知の trait 名を無言で通さない）。"""
+    if not isinstance(name, str):
+        raise Run9ValidationError(f"trait name must be a string, got {name!r}")
+    if name in LESSON_RECORD_TRAIT_ALIASES:
+        return LESSON_RECORD_TRAIT_ALIASES[name]
+    if name in PERFORMANCE_TRAIT_VOCAB:
+        return name
+    raise Run9ValidationError(
+        f"unknown Performance Trait name {name!r} — must be one of "
+        f"{list(LESSON_RECORD_TRAIT_ALIASES.keys())} (aliases) or "
+        f"{list(PERFORMANCE_TRAIT_VOCAB)} (canonical names)"
+    )
+
+
+def validate_lesson_record(data: Mapping[str, Any]) -> None:
+    """LessonRecord（外部レビュー変更6）の最低要件を検証する。
+    `validate_practice_split_manifest()`/`validate_education_lesson_manifest()`
+    と同じ「骨組み凍結」パターン——実体 build（実際の抽出結果）は
+    machine-dependent 作業として VG-L0 ハーネス実装待ちのため、本関数は
+    構造・語彙のみを検証する。fail-closed（未知キー拒否・欠落キーの
+    デフォルト補完なし）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"lesson record must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - set(LESSON_RECORD_REQUIRED_KEYS)
+    if unknown:
+        raise Run9ValidationError(f"lesson record has unknown key(s): {sorted(unknown)}")
+    missing = set(LESSON_RECORD_REQUIRED_KEYS) - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"lesson record missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_LESSON_RECORD:
+        raise Run9ValidationError(
+            f"lesson record schema must be exactly {SCHEMA_LESSON_RECORD!r}, got {schema!r}"
+        )
+
+    lesson_id = data["lesson_id"]
+    if not isinstance(lesson_id, str) or not lesson_id.strip():
+        raise Run9ValidationError(f"lesson record lesson_id must be a non-empty string, got {lesson_id!r}")
+
+    for field in (
+        "performance_source", "voice_source", "performance_author",
+        "composition_source", "recording_source",
+    ):
+        value = data[field]
+        if not isinstance(value, str) or not value.strip():
+            raise Run9ValidationError(
+                f"lesson record.{field} must be a non-empty string, got {value!r}"
+            )
+
+    extracted_traits = data["extracted_traits"]
+    if not isinstance(extracted_traits, list) or not extracted_traits:
+        raise Run9ValidationError(
+            f"lesson record.extracted_traits must be a non-empty list, got {extracted_traits!r}"
+        )
+    resolved_traits = [resolve_lesson_record_trait_alias(t) for t in extracted_traits]
+    unknown_traits = set(resolved_traits) - set(PERFORMANCE_TRAIT_VOCAB)
+    if unknown_traits:
+        raise Run9ValidationError(
+            f"lesson record.extracted_traits resolved to unknown trait(s) not in "
+            f"PERFORMANCE_TRAIT_VOCAB: {sorted(unknown_traits)}"
+        )
+
+    excluded = data["explicitly_excluded_identity_traits"]
+    if not isinstance(excluded, list):
+        raise Run9ValidationError(
+            f"lesson record.explicitly_excluded_identity_traits must be a list, got {excluded!r}"
+        )
+    if not all(isinstance(x, str) for x in excluded):
+        raise Run9ValidationError(
+            "lesson record.explicitly_excluded_identity_traits elements must all be strings, "
+            f"got {excluded!r}"
+        )
+    missing_excluded = set(IDENTITY_EXCLUDED_TRAIT_VOCAB) - set(excluded)
+    if missing_excluded:
+        raise Run9ValidationError(
+            "lesson record.explicitly_excluded_identity_traits must fully contain "
+            f"IDENTITY_EXCLUDED_TRAIT_VOCAB — missing: {sorted(missing_excluded)}"
+        )
+
+    for field in ("rights_manifest", "provenance_manifest"):
+        value = data[field]
+        if not isinstance(value, str) or not value.strip():
+            raise Run9ValidationError(
+                f"lesson record.{field} must be a non-empty string (reference/pin), got {value!r}"
+            )
 
 
 class Run9ValidationError(ValueError):
@@ -3327,6 +3575,10 @@ _CONTRACT_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset(
         # rev 0.3 新設（User 外部レビュー PR #317 P2-2 採用）: pin 欄では
         # なく通常欄。`HUMAN_AUDIT_MODES` のいずれかの文字列値のみ許容。
         "human_audit_mode",
+        # rev 0.4 新設（DESIGN_RUN9_REVISION_0.4.md、2026-08-25 User 追加
+        # 裁定「確認メモ / RUN9 用語整理」指示2）: pin 欄ではなく通常欄。
+        # `validate_performance_source_block()` が構造を検証する。
+        "performance_source",
     }
     | set(CONTRACT_PIN_FIELDS)
 )
@@ -3650,6 +3902,15 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
         raise Run9ValidationError(
             f"human_audit_mode must be one of {list(HUMAN_AUDIT_MODES)}, got {human_audit_mode!r}"
         )
+
+    # rev 0.4 新設（DESIGN_RUN9_REVISION_0.4.md、2026-08-25 User 追加裁定
+    # 「確認メモ / RUN9 用語整理」指示2）: pin 欄ではなく通常欄。
+    # `validate_performance_source_block()`（本モジュール後方定義、
+    # Python は呼び出し時に名前解決するため前方参照で問題ない）が
+    # id/role の凍結値一致 + teacher_terminology_note の非所有注記2要件
+    # （Voice 所有者を意味しない旨 + Voice Source/Performance
+    # Source/Performance Author の3語）を検証する。
+    validate_performance_source_block(data["performance_source"])
 
     # deepcopy（Codex bot レビュー PR #315 第2巡指摘1採用）: `dict(data)` は
     # 浅いコピーのため、ネストした pin 欄 dict（`data["education_technique_
@@ -4056,4 +4317,216 @@ def verify_rights_manifest_against_ledger(
             raise Run9ValidationError(
                 f"rights_manifest.entries[card_id={card_id!r}].duration_sec does not match "
                 f"donor_ledger: rights={rights_duration!r} ledger={ledger_duration!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# rev 0.4（DESIGN_RUN9_REVISION_0.4.md 変更1・2）: rights_manifest.json の
+# 4層構造（voice_identity_rights/performance_rights/composition_rights/
+# recording_master_rights）。`verify_rights_manifest_against_ledger()` 自体
+# は変更しない（既存テストの後方互換を保つ）— 代わりに、4層文書から
+# voice_identity_rights 層を取り出し、`verify_rights_manifest_against_ledger()`
+# が期待する旧 schema `run9-user-donor-rights/1.0` 相当のフラット構造へ
+# 変換するアダプタを新設する。
+# ---------------------------------------------------------------------------
+
+SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER = "run9-rights-manifest/2.0"
+
+# 外部レビュー変更2の4層名（逐語キー、順序は外部レビュー原文の雛形順）。
+RIGHTS_MANIFEST_LAYER_NAMES: Tuple[str, str, str, str] = (
+    "voice_identity_rights",
+    "performance_rights",
+    "composition_rights",
+    "recording_master_rights",
+)
+
+# 外部レビュー変更1「原則」の逐語3式。
+RIGHTS_MANIFEST_PRINCIPLES: Tuple[str, str, str] = (
+    "Teacher ≠ Voice Identity Owner",
+    "Teacher ≠ Performance Author",
+    "Voice Source ≠ Performance Source",
+)
+
+_RIGHTS_MANIFEST_FOUR_LAYER_TOP_KEYS: FrozenSet[str] = frozenset(
+    {"schema", "revision_note", "principles", "auto_interpretation_prohibited", "hard_gate", "history"}
+    | set(RIGHTS_MANIFEST_LAYER_NAMES)
+)
+
+
+def extract_voice_identity_rights_layer(four_layer_rights_manifest: Mapping[str, Any]) -> Dict[str, Any]:
+    """rev 0.4 の4層 rights_manifest（schema `run9-rights-manifest/2.0`）
+    から `voice_identity_rights` 層を取り出し、
+    `verify_rights_manifest_against_ledger()` が受理する旧 schema
+    `run9-user-donor-rights/1.0` 相当のフラット構造へ変換する。
+
+    `verify_rights_manifest_against_ledger()` 自体は書き換えない —
+    本関数はその手前に立つアダプタであり、`.get("schema")`/`.get("entries")`
+    のみを読む同関数の契約に合わせて `schema_legacy` を `schema` へ
+    読み替える。返り値の他のキー（`entries`/`usage_grants`/`attestation`
+    等）は layer の内容をそのまま透過する（コピーであり、呼び出し元が
+    書き換えても入力 `four_layer_rights_manifest` には影響しない）。
+    """
+    if not isinstance(four_layer_rights_manifest, dict):
+        raise Run9ValidationError(
+            "four-layer rights manifest must be an object, got "
+            f"{type(four_layer_rights_manifest).__name__}"
+        )
+    top_schema = four_layer_rights_manifest.get("schema")
+    if top_schema != SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER:
+        raise Run9ValidationError(
+            f"four-layer rights manifest schema must be exactly "
+            f"{SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER!r}, got {top_schema!r}"
+        )
+    layer = four_layer_rights_manifest.get("voice_identity_rights")
+    if not isinstance(layer, dict):
+        raise Run9ValidationError(
+            f"voice_identity_rights layer must be an object, got {type(layer).__name__}"
+        )
+    legacy_schema = layer.get("schema_legacy")
+    if legacy_schema != "run9-user-donor-rights/1.0":
+        raise Run9ValidationError(
+            "voice_identity_rights.schema_legacy must be exactly 'run9-user-donor-rights/1.0', "
+            f"got {legacy_schema!r}"
+        )
+    flat = copy.deepcopy(dict(layer))
+    flat.pop("schema_legacy")
+    flat["schema"] = legacy_schema
+    return flat
+
+
+def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
+    """4層 rights_manifest（schema `run9-rights-manifest/2.0`）の構造を
+    検証する。実体（provenance の個別値が事実として正しいか）は
+    R9-G1 tooling の職務のまま——本関数は構造・閉じたキー集合・原則3式・
+    禁止文言・4層すべての存在と最低限の provenance キー充足のみを検証する
+    （`validate_branch_write_policy_manifest()` 等と同じ「構造のみ」の
+    境界宣言）。fail-closed（未知キー拒否・欠落キーのデフォルト補完なし）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"rights manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _RIGHTS_MANIFEST_FOUR_LAYER_TOP_KEYS
+    if unknown:
+        raise Run9ValidationError(f"rights manifest has unknown top-level key(s): {sorted(unknown)}")
+    missing = _RIGHTS_MANIFEST_FOUR_LAYER_TOP_KEYS - {"history"} - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"rights manifest missing required top-level key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER:
+        raise Run9ValidationError(
+            f"rights manifest schema must be exactly {SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER!r}, "
+            f"got {schema!r}"
+        )
+
+    principles = data["principles"]
+    if not isinstance(principles, dict) or "statements" not in principles:
+        raise Run9ValidationError("rights manifest.principles must be an object with a 'statements' key")
+    statements = principles["statements"]
+    if not isinstance(statements, list) or tuple(statements) != RIGHTS_MANIFEST_PRINCIPLES:
+        raise Run9ValidationError(
+            f"rights manifest.principles.statements must be exactly {list(RIGHTS_MANIFEST_PRINCIPLES)} "
+            f"(order included), got {statements!r}"
+        )
+
+    auto_interp = data["auto_interpretation_prohibited"]
+    if not isinstance(auto_interp, str) or not auto_interp.strip():
+        raise Run9ValidationError(
+            "rights manifest.auto_interpretation_prohibited must be a non-empty string"
+        )
+
+    hard_gate = data["hard_gate"]
+    if not isinstance(hard_gate, str) or not hard_gate.strip():
+        raise Run9ValidationError("rights manifest.hard_gate must be a non-empty string")
+
+    for layer_name in RIGHTS_MANIFEST_LAYER_NAMES:
+        layer = data[layer_name]
+        if not isinstance(layer, dict):
+            raise Run9ValidationError(f"rights manifest.{layer_name} must be an object")
+        if not isinstance(layer.get("role"), str) or not layer["role"].strip():
+            raise Run9ValidationError(f"rights manifest.{layer_name}.role must be a non-empty string")
+        if layer_name != "voice_identity_rights":
+            # performance_rights/composition_rights/recording_master_rights は
+            # いずれも provenance 節を持つ（voice_identity_rights は donor
+            # ledger 転記であり provenance 節を持たない別構造 — 混同しない）。
+            if "provenance" not in layer or not isinstance(layer["provenance"], dict):
+                raise Run9ValidationError(
+                    f"rights manifest.{layer_name}.provenance must be an object"
+                )
+
+    performance_source = data["performance_rights"].get("performance_source")
+    if not isinstance(performance_source, dict):
+        raise Run9ValidationError("rights manifest.performance_rights.performance_source must be an object")
+    if performance_source.get("id") != PERFORMANCE_SOURCE_ID:
+        raise Run9ValidationError(
+            f"rights manifest.performance_rights.performance_source.id must be "
+            f"{PERFORMANCE_SOURCE_ID!r}, got {performance_source.get('id')!r}"
+        )
+    if performance_source.get("role") != PERFORMANCE_SOURCE_ROLE:
+        raise Run9ValidationError(
+            f"rights manifest.performance_rights.performance_source.role must be "
+            f"{PERFORMANCE_SOURCE_ROLE!r}, got {performance_source.get('role')!r}"
+        )
+
+    # voice_identity_rights 層の内容自体（entries/usage_grants 等）は
+    # `extract_voice_identity_rights_layer()` + 既存
+    # `verify_rights_manifest_against_ledger()` が別途検証する
+    # （層越境の実体検証は本関数の責務外）。
+
+
+# ---------------------------------------------------------------------------
+# rev 0.4（DESIGN_RUN9_REVISION_0.4.md、`RUN9_CONTRACT.yaml` 新設トップ
+# レベル欄 `performance_source`）: 2026-08-25 User 追加裁定「確認メモ /
+# RUN9 用語整理」指示2「置換でなく追加」の実装。既存 teacher 表記
+# （v0.1・rev 0.2/0.3、byte-pin 不変の運用上の呼称）は書き換えず、本欄が
+# Voice Source ≠ Performance Source ≠ Performance Author の分離を明示する
+# 非所有注記の置き場所を担う。
+# ---------------------------------------------------------------------------
+
+_PERFORMANCE_SOURCE_BLOCK_KEYS: FrozenSet[str] = frozenset(
+    {"id", "role", "rights_manifest_ref", "teacher_terminology_note"}
+)
+
+
+def validate_performance_source_block(data: Mapping[str, Any]) -> None:
+    """`RUN9_CONTRACT.yaml` `performance_source` ブロックの構造を検証する。
+    `id`/`role` は凍結値（`PERFORMANCE_SOURCE_ID`/`PERFORMANCE_SOURCE_ROLE`）
+    に厳密一致し、`teacher_terminology_note` は非所有の趣旨（Voice 所有者
+    を意味しない旨）を含む非空文字列でなければならない——文言の一言一句を
+    強制せず、`TEACHER_TERMINOLOGY_NOTE` が満たす2要件（「Voice 所有者」
+    という語と「Voice Source」「Performance Source」「Performance Author」
+    の3語）の存在で判定する（2026-08-25 User 追加裁定 指示1）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"performance_source must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _PERFORMANCE_SOURCE_BLOCK_KEYS
+    if unknown:
+        raise Run9ValidationError(f"performance_source has unknown key(s): {sorted(unknown)}")
+    missing = _PERFORMANCE_SOURCE_BLOCK_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"performance_source missing required key(s): {sorted(missing)}")
+    if data["id"] != PERFORMANCE_SOURCE_ID:
+        raise Run9ValidationError(
+            f"performance_source.id must be {PERFORMANCE_SOURCE_ID!r}, got {data['id']!r}"
+        )
+    if data["role"] != PERFORMANCE_SOURCE_ROLE:
+        raise Run9ValidationError(
+            f"performance_source.role must be {PERFORMANCE_SOURCE_ROLE!r}, got {data['role']!r}"
+        )
+    ref = data["rights_manifest_ref"]
+    if not isinstance(ref, str) or not ref.strip():
+        raise Run9ValidationError("performance_source.rights_manifest_ref must be a non-empty string")
+    note = data["teacher_terminology_note"]
+    if not isinstance(note, str) or not note.strip():
+        raise Run9ValidationError("performance_source.teacher_terminology_note must be a non-empty string")
+    if "Voice 所有者" not in note:
+        raise Run9ValidationError(
+            "performance_source.teacher_terminology_note must state that 'Teacher' does not mean "
+            "the Voice owner (2026-08-25 User 追加裁定 指示1)"
+        )
+    for marker in ("Voice Source", "Performance Source", "Performance Author"):
+        if marker not in note:
+            raise Run9ValidationError(
+                f"performance_source.teacher_terminology_note must reference {marker!r} — the "
+                "Voice Source ≠ Performance Source ≠ Performance Author separation "
+                "(2026-08-25 User 追加裁定 指示1)"
             )

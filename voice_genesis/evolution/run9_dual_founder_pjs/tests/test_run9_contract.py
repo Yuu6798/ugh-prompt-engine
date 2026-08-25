@@ -27,12 +27,14 @@ import run9_schema as m  # noqa: E402
 CONTRACT_PATH = _RUN_DIR / "RUN9_CONTRACT.yaml"
 DOMAIN_DRAFT_PATH = _RUN_DIR / "domains" / "identity_domain_run9_v1.json"
 DESIGN_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md"
-# 現行 design_revision (0.3) の差分メモ。design_revision_doc_sha256 が
+# 現行 design_revision (0.4) の差分メモ。design_revision_doc_sha256 が
 # pin する対象。
-REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.3.md"
-# rev 0.2 文書は無改変のまま存続する（design_revision 系譜の1件）。
+REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.4.md"
+# rev 0.2/0.3 文書は無改変のまま存続する（design_revision 系譜の各1件）。
 REVISION_0_2_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
+REVISION_0_3_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.3.md"
 POR_ADJUDICATION_PATH = _RUN_DIR / "POR_CONCEPT_ADJUDICATION_20260824.txt"
+EXTERNAL_REVIEW_AQUEST_PATH = _RUN_DIR / "EXTERNAL_REVIEW_AQUEST_20260825.txt"
 POR_UPLOAD_SOURCE_PATH = Path(
     "/root/.claude/uploads/e505c1c2-c4ad-588b-a1b2-258051a522de/"
     "4cdd727c-RUN9_v0.2_PoR_Concept_Adjudication_20260824.txt"
@@ -1507,15 +1509,15 @@ def _sha256_canonical_json(obj: Any) -> str:
 
 
 def test_revision02_design_revision_constant_is_0_2() -> None:
-    """rev 0.3 では `run9_schema.DESIGN_REVISION` 自体が "0.3" を凍結する
+    """rev 0.4 では `run9_schema.DESIGN_REVISION` 自体が "0.4" を凍結する
     （テスト名は歴史的に revision02_ prefix のまま — Fix 15 の
     founder_genome_shas 改名前例と同様、rename ではなく assertion のみ
     更新する）。"""
-    assert m.DESIGN_REVISION == "0.3"
+    assert m.DESIGN_REVISION == "0.4"
 
 
 def test_revision02_current_contract_declares_0_2(contract_raw: Dict[str, Any]) -> None:
-    assert contract_raw["design_revision"] == "0.3"
+    assert contract_raw["design_revision"] == "0.4"
     m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
 
 
@@ -1530,10 +1532,19 @@ def test_revision02_old_0_1_contract_rejected(contract_raw: Dict[str, Any]) -> N
 
 
 def test_revision03_old_0_2_contract_rejected(contract_raw: Dict[str, Any]) -> None:
-    """design_revision 0.2 → 0.3（PoR メモ編入）: 旧 "0.2" を宣言する
-    contract も同様に意図どおり拒否される。"""
+    """design_revision 0.2 → 0.3 → 0.4: 旧 "0.2" を宣言する contract も
+    引き続き意図どおり拒否される。"""
     tampered = copy.deepcopy(contract_raw)
     tampered["design_revision"] = "0.2"
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_revision04_old_0_3_contract_rejected(contract_raw: Dict[str, Any]) -> None:
+    """rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部レビュー AQUEST 山崎信英氏
+    の採用）: 旧 "0.3" を宣言する contract も意図どおり拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["design_revision"] = "0.3"
     with pytest.raises(m.Run9ValidationError):
         m.load_run9_contract(tampered)
 
@@ -1544,13 +1555,13 @@ def test_revision03_old_0_2_contract_rejection_message_names_current_revision(
     """PR #317 Codex bot レビュー第1巡 Fix 2 採用: 拒否メッセージが固定
     ファイル名（例: "DESIGN_RUN9_REVISION_0.2.md"）をハードコードして
     いると、design_revision を上げるたびにメッセージ内のファイル名だけが
-    陳腐化する（実際に 0.2 -> 0.3 進行時に発生した不備）。メッセージが
-    `DESIGN_REVISION` 定数（現在は "0.3"）から動的に導出されていること
-    を、"0.2" 拒否時のメッセージに現行の "0.3" が含まれることで確認する
-    — メッセージが旧値のまま固定化されていれば失敗する。"""
+    陳腐化する（実際に 0.2 -> 0.3、0.3 -> 0.4 進行時に発生した不備）。
+    メッセージが `DESIGN_REVISION` 定数（現在は "0.4"）から動的に導出
+    されていることを、"0.2" 拒否時のメッセージに現行の "0.4" が含まれる
+    ことで確認する — メッセージが旧値のまま固定化されていれば失敗する。"""
     tampered = copy.deepcopy(contract_raw)
     tampered["design_revision"] = "0.2"
-    with pytest.raises(m.Run9ValidationError, match="0.3"):
+    with pytest.raises(m.Run9ValidationError, match="0.4"):
         m.load_run9_contract(tampered)
 
 
@@ -1846,21 +1857,21 @@ def test_revision02_af0_vs_bundle_hash_convention_difference_documented() -> Non
 def test_revision02_backbone_runtime_bundle_sha_pending_while_render_commit_unconfirmed(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """Codex bot レビュー PR #316 第1巡指摘（P2, 866fcc8, 採用）:
-    bundle 内 `render_code_commit` は直接記録ではなく推論値（RUN6 export
-    記録 s5_record 自体には commit が明記されていない）のため
-    `status: "INFERRED_UNCONFIRMED"` へ降格した。連動して
-    `backbone_runtime_bundle_sha` も PINNED から PENDING へ降格している
-    （`backbone_checkpoint_sha` は直接記録4件一致のため対象外・PINNED の
-    まま — 下の `test_revision02_backbone_checkpoint_sha_pinned_and_matches_ruling`
-    が別途確認する）。"""
+    """rev 0.4（DESIGN_RUN9_REVISION_0.4.md「User裁定a/bの記録」の b）:
+    2026-08-25 の User attestation により bundle 内 `render_code_commit`
+    の status が `INFERRED_UNCONFIRMED` → `USER_ATTESTED` へ確定し、連動
+    して `backbone_runtime_bundle_sha` も PENDING から PINNED へ昇格した
+    （`backbone_checkpoint_sha` は元々直接記録4件一致のため PINNED の
+    まま——対象は別欄）。テスト名は歴史的に revision02_ prefix のまま
+    （rename ではなく assertion のみ更新する既存の repo 慣習）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    assert bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+    assert bundle["render_code_commit"]["status"] == "USER_ATTESTED"
+    assert bundle["render_code_commit"]["attestation"]["attested_by"] == "User"
+    assert bundle["render_code_commit"]["attestation"]["attested_at"] == "2026-08-25"
 
     field = contract_raw["backbone_runtime_bundle_sha"]
-    assert field["status"] == "PENDING"
-    assert field["value"] is None
-    assert "INFERRED_UNCONFIRMED" in field["reason"] or "render_code_commit" in field["reason"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(BACKBONE_BUNDLE_PATH)
 
 
 def test_revision02_render_code_commit_status_and_bundle_sha_status_are_consistent(
@@ -1917,15 +1928,19 @@ def test_revision02_backbone_runtime_bundle_sha_matches_actual_file_once_pinned(
 
 
 def test_revision02_render_code_commit_value_and_confirmation_metadata_present() -> None:
-    """降格後も値自体（推論結果）と根拠・確定条件は保持されていること。"""
+    """昇格後も値自体・根拠（inference_basis、無改変で保持）・attestation
+    記録がいずれも保持されていること（rev 0.4 User attestation）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     rcc = bundle["render_code_commit"]
     assert rcc["commit_full"] == "e2307b1080b00f3999702ce9017cfd75c7f862fe"
     assert rcc["commit_short"] == "e2307b1"
-    assert rcc["status"] == "INFERRED_UNCONFIRMED"
+    assert rcc["status"] == "USER_ATTESTED"
     assert rcc["confirmation_required"]
     assert rcc["inference_basis"]
-    # RUN6 export 記録自体には commit が明記されていない事実が明文化されていること。
+    assert rcc["attestation"]["attested_by"] == "User"
+    assert rcc["attestation"]["statement"]
+    # RUN6 export 記録自体には commit が明記されていない事実が明文化されていること
+    # （note は無改変ではないが、この根拠自体は消えていないことを確認する）。
     assert "s5_record" in rcc["note"]
     assert "does not" in rcc["note"].lower() or "does NOT" in rcc["note"]
 
@@ -1958,12 +1973,16 @@ def test_revision02_backbone_bundle_run7_not_used_records_teacher_swap_reason() 
 
 
 def test_revision02_rights_manifest_is_pending_user_attestation() -> None:
+    """rev 0.4（4層再編）後: voice_identity_rights 層の内容・attest 対象は
+    無改変のまま（DESIGN_RUN9_REVISION_0.4.md 変更1・2「attest対象の更新」
+    — User裁定「aとbを承認」のa = 新4層構造に対する attest は次段で確定）。"""
     rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
-    assert rights["rights_class"] == "PENDING_USER_ATTESTATION"
-    assert rights["consent_status"] == "PENDING_USER_ATTESTATION"
-    assert rights["attestation"]["attested"] is False
-    assert rights["usage_grants"]["raw_audio_publication"] == "not_granted"
-    assert rights["usage_grants"]["model_general_distribution"] == "not_granted"
+    layer = rights["voice_identity_rights"]
+    assert layer["rights_class"] == "PENDING_USER_ATTESTATION"
+    assert layer["consent_status"] == "PENDING_USER_ATTESTATION"
+    assert layer["attestation"]["attested"] is False
+    assert layer["usage_grants"]["raw_audio_publication"] == "not_granted"
+    assert layer["usage_grants"]["model_general_distribution"] == "not_granted"
 
 
 def _load_rights_manifest_and_ledger() -> tuple[Dict[str, Any], Dict[str, Any]]:
@@ -1973,8 +1992,17 @@ def _load_rights_manifest_and_ledger() -> tuple[Dict[str, Any], Dict[str, Any]]:
     は使わない（Codex bot レビュー PR #316 第10巡指摘採用, c34bdff: 生
     `json.loads()` は同一 entry 内の重複キーを last-key-wins で黙って
     解決してしまうため、rights 検証テスト群全体をこの2関数経由へ統一する）。
+
+    rev 0.4（DESIGN_RUN9_REVISION_0.4.md 変更1・2）: 実ファイルは4層構造
+    （schema `run9-rights-manifest/2.0`）へ再編済みのため、
+    `run9_schema.extract_voice_identity_rights_layer()` で
+    voice_identity_rights 層を旧 schema `run9-user-donor-rights/1.0`
+    相当のフラット構造へ変換してから返す——本ヘルパを消費する既存テスト群
+    （card_id 完全一致・値照合・改ざん拒否等）はこの変換により無改訂で
+    そのまま通る。
     """
-    rights = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    raw = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    rights = m.extract_voice_identity_rights_layer(raw)
     ledger = m.load_user_donor_ledger_json(
         (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
     )
@@ -2035,8 +2063,10 @@ def test_revision02_load_user_donor_ledger_json_rejects_duplicate_entry_key() ->
 
 def test_revision02_load_rights_manifest_json_and_ledger_accept_well_formed_text() -> None:
     """対照実験: 重複キーの無い実ファイルは引き続き読み込める（正常系まで
-    壊していないことの確認）。"""
-    rights = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    壊していないことの確認）。rev 0.4 の4層構造は
+    `extract_voice_identity_rights_layer()` でフラット化してから渡す。"""
+    raw = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    rights = m.extract_voice_identity_rights_layer(raw)
     ledger = m.load_user_donor_ledger_json(
         (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
     )
@@ -2492,12 +2522,18 @@ def test_revision02_bundle_completeness_note_explains_canon_assets_are_required(
 def test_revision02_backbone_runtime_bundle_sha_still_pending_after_canon_assets_added(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """canon_model_assets 追加は render_code_commit の確定状態を変えない
-    ため、`backbone_runtime_bundle_sha` は引き続き PENDING のまま
-    （変更なし — この巡の追加が既存の降格判断へ副作用しないことの確認）。"""
+    """canon_model_assets 追加自体は render_code_commit の確定手段を
+    変えない——render_code_commit が確定するのは 2026-08-25 の User
+    attestation（rev 0.4）によってであり、canon_model_assets 追加（別巡の
+    独立した拡張）が副作用として昇格を引き起こしたのではないことを確認
+    する（`backbone_runtime_bundle_sha` は rev 0.4 時点では PINNED —
+    昇格の原因が正しく render_code_commit.status の変化であることの
+    確認であり、PENDING 固定の確認ではない）。"""
     field = contract_raw["backbone_runtime_bundle_sha"]
-    assert field["status"] == "PENDING"
-    assert field["value"] is None
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert "canon_model_assets" in bundle  # 対象拡張が引き続き存在すること
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(BACKBONE_BUNDLE_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -2506,8 +2542,11 @@ def test_revision02_backbone_runtime_bundle_sha_still_pending_after_canon_assets
 
 
 def test_por_revision_design_revision_doc_path_exists() -> None:
+    """テスト名は歴史的に por_revision_ prefix のまま（PoR メモ編入時の
+    命名）——rev 0.4 現在は最新差分メモへ追随して assertion のみ更新する。"""
     assert REVISION_DOC_PATH.exists()
-    assert REVISION_DOC_PATH.name == "DESIGN_RUN9_REVISION_0.3.md"
+    assert REVISION_DOC_PATH.name == "DESIGN_RUN9_REVISION_0.4.md"
+    assert REVISION_0_3_DOC_PATH.exists()
 
 
 def test_por_revision_por_adjudication_path_exists() -> None:
@@ -2623,7 +2662,7 @@ def test_por_revision_outcome_vocabulary_sizes_match_por_13() -> None:
 def test_por_revision_v01_transfer_status_superseded_note_present() -> None:
     """v0.1 §20 の transfer_status 語彙が rev 0.3 で superseded と明記
     されていること（DESIGN_RUN9_REVISION_0.3.md 改訂D）。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "transfer_status" in doc
     assert "superseded" in doc
 
@@ -2793,7 +2832,7 @@ def test_por_revision_full_contract_gate_state_still_blocked(
 def test_fix5_r9_g5_supersession_row_present_in_contradiction_table() -> None:
     """DESIGN_RUN9_REVISION_0.3.md の矛盾解決表に v0.1 §19 R9-G5
     （BIRTH_IDENTITY_SEPARATION）の読み替え行が追加されていること。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "R9-G5" in doc
     assert "BIRTH_IDENTITY_SEPARATION" in doc
     assert "機械計測の出生分離ゲートとして存続" in doc
@@ -2886,7 +2925,7 @@ def test_fix7_rev03_doc_practice_forbidden_prose_mentions_technique_label() -> N
     「教師付与の Technique label」が存在すること — 第2巡 Fix 4 で
     `PRACTICE_FORBIDDEN_INPUTS` へ追加した `teacher_technique_label` と
     文書側が同期していなかった漏れ（第3巡 Fix 7）の是正確認。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "教師付与の Technique label" in doc
     assert "teacher_technique_label" in doc
 
@@ -2899,7 +2938,7 @@ def test_fix7_rev03_doc_practice_forbidden_prose_item_count_matches_tuple() -> N
     禁止列挙の直後が '**許可**' から '**3分割の意味論**' へ変わった）に
     含まれる、行頭が `- `（インデントなし = 継続行ではなくトップレベル
     箇条書き）の行数を数える。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     marker = "**禁止（データ入力として渡してはいけないもの）**（PoR §3.2）:"
     next_heading = "**3分割の意味論**"
     start = doc.index(marker) + len(marker)
@@ -3070,7 +3109,7 @@ def test_p1_1_trait_change_definition_documented() -> None:
     """修正指示6: PRACTICE で許す Trait 変化は speaker embedding や Genome
     変更ではなく「明示的に許可された発声制御領域の後天的変化」であること
     の文書化。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "明示的に許可された発声制御領域の後天的変化" in doc
 
 
@@ -3232,12 +3271,12 @@ def test_p1_3_c1_condition_is_neutral_profile_no_learning_step() -> None:
 
 
 def test_p1_3_gain_baseline_noise_from_c0_documented() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "Practice/Education gain の\n基準ノイズは C0 由来" in doc or "基準ノイズは C0 由来" in doc
 
 
 def test_p1_3_profile_side_effect_recorded_as_c1_minus_c0_documented() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "C1−C0" in doc or "C1-C0" in doc
 
 
@@ -3311,7 +3350,7 @@ def test_p1_4_parent_pool_registration_requires_separate_user_ruling_documented(
     確認（機械強制は本 PR の範囲外 — PROMOTION_STATUSES の拡張自体が新しい
     design_revision を要する設計になっていることの語彙的裏付けは上記
     test_p1_4_promotion_statuses_never_a_promoted_value が担う）。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "別の User ruling pin" in doc or "別の\nUser 裁定" in doc or "新しい design_revision（= 別の" in doc
 
 
@@ -3367,7 +3406,7 @@ def test_p2_4_required_and_optional_gain_fields_disjoint() -> None:
 
 
 def test_p2_4_heldout_gain_documented_as_mandatory_not_best_effort() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "実装可能なら」ではなく" in doc
 
 
@@ -3431,7 +3470,7 @@ def test_p2_2_advisory_predeclared_requires_protocol_sha_pinned_for_ready(
 
 
 def test_p2_2_holdout_and_null_shift_rescue_discipline_documented() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "holdout 開封後の" in doc
     assert "human_audit_mode` 変更は禁止" in doc
     assert "人間監査を" in doc
@@ -3443,13 +3482,13 @@ def test_p2_2_holdout_and_null_shift_rescue_discipline_documented() -> None:
 
 
 def test_p2_3_calibration_definition_section_present() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "## 改訂 G — 機械的校正の定義" in doc
     assert "人間知覚との一致証明ではない" in doc
 
 
 def test_p2_3_calibration_result_rules_present() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "UNCALIBRATED" in doc
     assert "holdout 開封前に freeze" in doc
 
@@ -3458,7 +3497,7 @@ def test_p2_3_calibration_result_rules_present() -> None:
 
 
 def test_p2_5_non_claim_rights_boundary_section_present() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "## 改訂 H — Non-Claim / Rights Boundary" in doc
 
 
@@ -3466,7 +3505,7 @@ def test_p2_5_non_claim_five_items_present() -> None:
     """本文は Markdown の折り返しで改行+インデント空白を含むため、
     照合前に空白（改行含む）を単一スペースへ正規化してから部分文字列
     一致を見る。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     normalized = " ".join(doc.split())
     required_phrases = [
         "法的・契約上の 許諾が自動成立するわけではない",
@@ -3552,7 +3591,7 @@ def test_invariant_existing_codex_fixes_not_regressed(contract_raw: Dict[str, An
     assert "practice_audio_split_manifest_sha" in m.CONTRACT_PIN_FIELDS
     # 第3巡 Fix 7/8: rev 0.3 文書の PRACTICE 禁止列挙に Technique label が
     # 存在し、陳腐化した繰延記述が残っていない。
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "教師付与の Technique label" in doc
     contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
     for stale_phrase in ("新設予定", "新設する想定"):
@@ -6485,3 +6524,423 @@ def test_fix37_domain_metric_space_sha_differs_from_pre_round17_value() -> None:
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
     old_pre_round17_sha = "00264b5641e1b3b3112a9ef06912e2f96a2c449d25ae78adba36fab6613020e9"
     assert domain_raw["metric_space_sha"] != old_pre_round17_sha
+
+
+# ---------------------------------------------------------------------------
+# rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部レビュー AQUEST 山崎信英氏
+# `EXTERNAL_REVIEW_AQUEST_20260825.txt` の採用 + 2026-08-25 User 追加裁定
+# 「確認メモ / RUN9 用語整理」）対応テスト。
+# ---------------------------------------------------------------------------
+
+REVISION_0_4_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.4.md"
+
+
+def test_rev04_external_review_byte_pin() -> None:
+    """外部レビュー原文（EXTERNAL_REVIEW_AQUEST_20260825.txt）の byte-pin
+    テスト——既存 POR pin テスト（`test_revision03_por_adjudication_sha256_pin_matches_actual_file`
+    等）と同型: sha256 一致 + 無改変であることの確認。"""
+    assert EXTERNAL_REVIEW_AQUEST_PATH.exists()
+    assert _sha256_file(EXTERNAL_REVIEW_AQUEST_PATH) == (
+        "a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091"
+    )
+
+
+def test_rev04_external_review_declares_design_revision_0_2() -> None:
+    """外部レビュー原文は自称 'design_revision 0.2' — 番号注記の前提事実の
+    直接確認（本文書は書き換えない）。"""
+    text = EXTERNAL_REVIEW_AQUEST_PATH.read_text(encoding="utf-8")
+    assert "design_revision 0.2" in text
+
+
+def test_rev04_doc_exists_and_declares_lineage() -> None:
+    """rev 0.4 文書の存在 + 系譜（0.3 → 0.4）の宣言確認。"""
+    assert REVISION_0_4_DOC_PATH.exists()
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "0.3 → 0.4" in doc
+    assert "a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091" in doc
+
+
+def test_rev04_doc_sha256_pin_matches_actual_file(contract_raw: Dict[str, Any]) -> None:
+    field = contract_raw["design_revision_doc_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(REVISION_0_4_DOC_PATH)
+    assert field["value"] == m.compute_file_sha256(REVISION_0_4_DOC_PATH)
+
+
+def test_rev04_doc_records_case_a_and_central_problem_redefinition() -> None:
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "CASE A" in doc
+    assert "Identity 非依存の Performance Trait のみを抽出し" in doc
+
+
+def test_rev04_doc_records_user_ruling_a_and_b() -> None:
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "aとbを承認" in doc
+    assert "USER_ATTESTED" in doc
+
+
+def test_rev04_doc_records_user_terminology_memo_verbatim() -> None:
+    """2026-08-25 User 追加裁定「確認メモ / RUN9 用語整理」が rev 0.4 doc
+    へ逐語収載されていることの確認（指示1〜6の要旨語を機械的に検査）。"""
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "確認メモ / RUN9 用語整理" in doc
+    assert "teacher 語の全面置換はしない" in doc
+    assert "Voice 所有者" in doc
+    for i in range(1, 7):
+        assert f"{i}. " in doc or f"{i}." in doc  # 指示1〜6 の番号付き列挙
+
+
+def test_rev04_doc_common_performance_lesson_adopted_with_legacy_note() -> None:
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "Common Performance Lesson" in doc
+    assert "旧称" in doc
+    assert "Common Teacher Transfer" in doc  # 旧名注記として言及される
+
+
+def test_rev04_frozen_docs_unchanged_after_rev04() -> None:
+    """凍結文書（v0.1 / rev 0.2 / rev 0.3 / POR txt / 外部レビュー txt）の
+    無改変を sha256 で確認する（git diff とは独立の直接検証）。"""
+    assert _sha256_file(DESIGN_DOC_PATH) == (
+        "b1f6901c0ba8bcfcbd61170aa672c95e96a37d082fce5e3f12f245bc4faaae1e"
+    )
+    assert _sha256_file(REVISION_0_2_DOC_PATH) == (
+        "406098e2ac62065855b7e4086fce769a2956b64606594ad83b63b527a23ad4fb"
+    )
+    assert _sha256_file(REVISION_0_3_DOC_PATH) == (
+        "b4f05cfbccb484a16a39b736086e989e1c953f295bda66970d491e4db5b94b04"
+    )
+    assert _sha256_file(POR_ADJUDICATION_PATH) == (
+        "56b66fd8df943fbfa98767f2ea481c0ba2a68c26916832e08517379408d97007"
+    )
+    assert _sha256_file(EXTERNAL_REVIEW_AQUEST_PATH) == (
+        "a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091"
+    )
+
+
+# --- R9-G1 拡張（変更5） ------------------------------------------------------
+
+
+def test_rev04_r9_g1_semantic_name_and_legacy_name() -> None:
+    assert m.R9_G1_ID == "R9-G1"
+    assert m.R9_G1_LEGACY_NAME == "INPUT_FREEZE_AND_RIGHTS"
+    assert m.R9_G1_SEMANTIC_NAME == "RIGHTS_AND_PROVENANCE_GATE"
+
+
+def test_rev04_r9_g1_pass_conditions_frozen_8_items() -> None:
+    expected = (
+        "VOICE_SOURCE_IDENTIFIED",
+        "VOICE_USAGE_TERMS_CONFIRMED",
+        "PERFORMANCE_AUTHOR_IDENTIFIED",
+        "PERFORMANCE_USAGE_TERMS_CONFIRMED",
+        "COMPOSITION_RIGHTS_CONFIRMED",
+        "RECORDING_MASTER_RIGHTS_CONFIRMED",
+        "TEACHER_SOURCE_VS_VOICE_IDENTITY_SOURCE_DISTINGUISHED",
+        "NO_UNKNOWN_RIGHTS_HOLDER",
+    )
+    assert m.R9_G1_PASS_CONDITIONS == expected
+    assert len(m.R9_G1_PASS_CONDITIONS) == 8
+
+
+def test_rev04_gate_fail_rights_provenance_unresolved_vocab() -> None:
+    assert m.GATE_FAIL_RIGHTS_PROVENANCE_UNRESOLVED == "RIGHTS_PROVENANCE_UNRESOLVED"
+    # 独立した2層の語彙であることの確認 — FAILURE_CLASSES を置換しない。
+    assert m.GATE_FAIL_RIGHTS_PROVENANCE_UNRESOLVED not in m.FAILURE_CLASSES
+
+
+def test_rev04_r9_g1_pass_conditions_declared_structural_predicate() -> None:
+    assert m.r9_g1_pass_conditions_declared(set(m.R9_G1_PASS_CONDITIONS)) is True
+    assert m.r9_g1_pass_conditions_declared(set(m.R9_G1_PASS_CONDITIONS[:-1])) is False
+    assert m.r9_g1_pass_conditions_declared(list(m.R9_G1_PASS_CONDITIONS)) is True
+    with pytest.raises(m.Run9ValidationError):
+        m.r9_g1_pass_conditions_declared("not-a-collection")
+
+
+# --- Performance Trait / Identity 除外語彙（変更3・6） -----------------------
+
+
+def test_rev04_performance_trait_vocab_frozen_9_items() -> None:
+    expected = (
+        "relative_F0", "duration_ratio", "onset_offset", "energy_envelope",
+        "vibrato", "phrase_dynamics", "attack_behavior", "release_behavior",
+        "articulation_timing",
+    )
+    assert m.PERFORMANCE_TRAIT_VOCAB == expected
+
+
+def test_rev04_identity_excluded_trait_vocab_frozen_7_items() -> None:
+    expected = (
+        "speaker_embedding", "timbre_identity", "formant_identity",
+        "spectral_identity", "voice_genome",
+        "source_specific_identity_representation", "identity_vector",
+    )
+    assert m.IDENTITY_EXCLUDED_TRAIT_VOCAB == expected
+
+
+def test_rev04_lesson_record_trait_alias_resolution() -> None:
+    assert m.resolve_lesson_record_trait_alias("relative_F0") == "relative_F0"
+    assert m.resolve_lesson_record_trait_alias("duration") == "duration_ratio"
+    assert m.resolve_lesson_record_trait_alias("timing") == "onset_offset"
+    assert m.resolve_lesson_record_trait_alias("dynamics") == "energy_envelope"
+    assert m.resolve_lesson_record_trait_alias("articulation") == "articulation_timing"
+    with pytest.raises(m.Run9ValidationError):
+        m.resolve_lesson_record_trait_alias("unknown_trait_xyz")
+
+
+def _valid_lesson_record() -> Dict[str, Any]:
+    return {
+        "schema": m.SCHEMA_LESSON_RECORD,
+        "lesson_id": "LS-R9-PJS-001",
+        "performance_source": "PJS",
+        "voice_source": "PJS_corpus_ver1.1",
+        "performance_author": "<PENDING_USER_ATTESTATION>",
+        "composition_source": "<PENDING_USER_ATTESTATION>",
+        "recording_source": "PJS_corpus_ver1.1",
+        "extracted_traits": ["relative_F0", "duration", "timing", "dynamics", "articulation"],
+        "explicitly_excluded_identity_traits": list(m.IDENTITY_EXCLUDED_TRAIT_VOCAB),
+        "rights_manifest": "inputs/rights_manifest.json",
+        "provenance_manifest": "inputs/rights_manifest.json#performance_rights.provenance",
+    }
+
+
+def test_rev04_lesson_record_valid_example_passes() -> None:
+    m.validate_lesson_record(_valid_lesson_record())  # 例外を投げないことの確認
+
+
+def test_rev04_lesson_record_rejects_unknown_trait() -> None:
+    record = _valid_lesson_record()
+    record["extracted_traits"] = ["not_a_real_trait"]
+    with pytest.raises(m.Run9ValidationError, match="unknown Performance Trait"):
+        m.validate_lesson_record(record)
+
+
+def test_rev04_lesson_record_rejects_incomplete_identity_exclusion() -> None:
+    record = _valid_lesson_record()
+    record["explicitly_excluded_identity_traits"] = ["speaker_embedding"]
+    with pytest.raises(m.Run9ValidationError, match="fully contain"):
+        m.validate_lesson_record(record)
+
+
+def test_rev04_lesson_record_rejects_missing_key() -> None:
+    record = _valid_lesson_record()
+    del record["lesson_id"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_lesson_record(record)
+
+
+def test_rev04_lesson_record_rejects_unknown_key() -> None:
+    record = _valid_lesson_record()
+    record["unexpected_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_lesson_record(record)
+
+
+def test_rev04_lesson_record_rejects_wrong_schema() -> None:
+    record = _valid_lesson_record()
+    record["schema"] = "run9-lesson-record/9.9"
+    with pytest.raises(m.Run9ValidationError, match="schema"):
+        m.validate_lesson_record(record)
+
+
+# --- rights_manifest 4層構造の validator（変更1・2） -------------------------
+
+
+def test_rev04_rights_manifest_four_layer_valid_file_passes() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_rev04_rights_manifest_principles_exact_3_statements() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert tuple(data["principles"]["statements"]) == (
+        "Teacher ≠ Voice Identity Owner",
+        "Teacher ≠ Performance Author",
+        "Voice Source ≠ Performance Source",
+    )
+
+
+def test_rev04_rights_manifest_auto_interpretation_prohibited_present() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert "自動的に解釈" in data["auto_interpretation_prohibited"]
+
+
+def test_rev04_rights_manifest_rejects_missing_layer() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["performance_rights"]
+    with pytest.raises(m.Run9ValidationError, match="missing required top-level key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_unknown_top_level_key() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["unexpected_top_level"] = {}
+    with pytest.raises(m.Run9ValidationError, match="unknown top-level key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_missing_provenance_in_performance_layer() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["performance_rights"]["provenance"]
+    with pytest.raises(m.Run9ValidationError, match="provenance"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_wrong_performance_source_id() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["performance_rights"]["performance_source"]["id"] = "NOT_PJS"
+    with pytest.raises(m.Run9ValidationError, match="performance_source.id"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_voice_identity_layer_extraction_matches_ledger() -> None:
+    """4層再編後も voice_identity_rights 層の実体（17件・attest 状態）は
+    無改変であることを既存 verify 関数経由で再確認する。"""
+    raw = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    flat = m.extract_voice_identity_rights_layer(raw)
+    ledger = m.load_user_donor_ledger_json(
+        (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
+    )
+    m.verify_rights_manifest_against_ledger(flat, ledger)  # 例外を投げないことの確認
+    assert len(flat["entries"]) == 17
+
+
+def test_rev04_rights_manifest_extract_rejects_wrong_top_schema() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["schema"] = "some-other-schema/1.0"
+    with pytest.raises(m.Run9ValidationError, match="schema"):
+        m.extract_voice_identity_rights_layer(data)
+
+
+# --- performance_source ブロック（RUN9_CONTRACT.yaml 新設欄） ----------------
+
+
+def test_rev04_performance_source_block_present_and_valid(contract_raw: Dict[str, Any]) -> None:
+    block = contract_raw["performance_source"]
+    assert block["id"] == "PJS"
+    assert block["role"] == "EXTERNAL_PERFORMANCE_SOURCE"
+    m.validate_performance_source_block(block)  # 例外を投げないことの確認
+
+
+def test_rev04_performance_source_block_rejects_missing_teacher_note() -> None:
+    block = {
+        "id": "PJS",
+        "role": "EXTERNAL_PERFORMANCE_SOURCE",
+        "rights_manifest_ref": "inputs/rights_manifest.json#performance_rights",
+        "teacher_terminology_note": "no owner claim here",
+    }
+    with pytest.raises(m.Run9ValidationError, match="does not mean the Voice owner"):
+        m.validate_performance_source_block(block)
+
+
+def test_rev04_performance_source_block_rejects_missing_separation_markers() -> None:
+    block = {
+        "id": "PJS",
+        "role": "EXTERNAL_PERFORMANCE_SOURCE",
+        "rights_manifest_ref": "inputs/rights_manifest.json#performance_rights",
+        "teacher_terminology_note": "Teacher は Voice 所有者を意味しない。",
+    }
+    with pytest.raises(m.Run9ValidationError, match="Voice Source"):
+        m.validate_performance_source_block(block)
+
+
+def test_rev04_contract_declares_performance_source_top_level_key() -> None:
+    assert "performance_source" in m._CONTRACT_TOP_LEVEL_KEYS
+
+
+# --- b 裁定: backbone_runtime_bundle USER_ATTESTED + bundle sha PINNED ------
+
+
+def test_rev04_render_code_commit_user_attested_with_ruling_reference() -> None:
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    rcc = bundle["render_code_commit"]
+    assert rcc["status"] == "USER_ATTESTED"
+    assert rcc["attestation"]["attested_by"] == "User"
+    assert rcc["attestation"]["attested_at"] == "2026-08-25"
+    assert "aとbを承認" in rcc["attestation"]["statement"]
+
+
+def test_rev04_backbone_runtime_bundle_sha_pinned_matches_real_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["backbone_runtime_bundle_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == (
+        "b92dac0e9077bf816275292123796396bd41ba33f19d03fa67eeb183fc7fcfbb"
+    )
+    assert field["value"] == m.compute_file_sha256(BACKBONE_BUNDLE_PATH)
+
+
+def test_rev04_gate_state_still_blocked_after_bundle_promotion(contract: m.Run9RunContract) -> None:
+    """backbone_runtime_bundle_sha の昇格だけでは他の PENDING 欄
+    （dataset/config/learning_recipe 等）が残るため gate_state() は
+    引き続き BLOCKED——正直な状態表現であることの確認（実装バグではない）。"""
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+# --- metric_space_sha repin 整合 + terminology 非所有注記（変更1・4/§7裁定） -
+
+
+def test_rev04_metric_space_sha_repinned_and_matches_domain() -> None:
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == (
+        "de3a459bdea761850d465caa60a91a16d7a9a39b65652dd409f6e45a20ee1bb4"
+    )
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_rev04_metric_space_manifest_still_validates_after_terminology_note() -> None:
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    m.validate_identity_metric_space_manifest(metric_space_obj)  # 例外を投げないことの確認
+
+
+def test_rev04_teacher_terminology_note_present_where_teacher_word_appears() -> None:
+    """2026-08-25 User 追加裁定「確認メモ / RUN9 用語整理」指示5: 「teacher
+    語の再出現拒否」チェックは実装しない代わりに、teacher という語が
+    出現する identity_metric_space.json が非所有注記も併せ持つことを
+    軽量に確認する（専用の run9_schema.py validator 関数としては実装
+    しない——検証自体を見送る選択肢の部分的採用）。"""
+    text = IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8")
+    assert "teacher" in text
+    assert "Voice 所有者" in text
+    assert "Voice Source ≠ Performance Source ≠ Performance Author" in text
+
+
+def test_rev04_common_teacher_transfer_literal_occurrences_are_old_name_references() -> None:
+    """「Common Teacher Transfer」の literal な出現は、frozen 文書
+    （v0.1 §14 見出しラベル・外部レビュー原文、無改変）か、可変 artifact
+    側では「旧名」として参照される場合に限る（DESIGN_RUN9_REVISION_0.4.md
+    「変更4」の旧名注記付き参照規約 — active な呼称としての置換ではなく、
+    旧称の由来注記としてのみ言及する）。README.md で言及する場合は
+    「旧」または「Common Performance Lesson」という新称が同じ行内に
+    現れていることを確認する。"""
+    assert "Common Teacher Transfer" in DESIGN_DOC_PATH.read_text(encoding="utf-8")
+    assert "Common Teacher Transfer" in EXTERNAL_REVIEW_AQUEST_PATH.read_text(encoding="utf-8")
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    for line in readme_text.splitlines():
+        if "Common Teacher Transfer" in line:
+            assert "旧" in line or "Common Performance Lesson" in line, (
+                f"README references the old name without old-name framing: {line!r}"
+            )
+
+
+def test_rev04_teacher_reference_field_does_not_reappear_in_contract(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """terminology 逆行拒否（可能な範囲で）: `teacher_reference` という
+    旧 v0.1 §11 の欄名が RUN9_CONTRACT.yaml の実際のトップレベルキーとして
+    再出現していないことの確認——rev 0.3 で `interventions` 構造へ移行
+    済みであり、rev 0.4 の `performance_source` 新設もこの欄を再導入
+    しない。コメント中の説明的な言及（「teacher_reference 相当の欄は
+    存在しない」等）まで禁止すると、その説明自体が書けなくなるため、
+    パース済みキー集合を見る（生テキストの文字列検索ではない）。"""
+    assert "teacher_reference" not in contract_raw.keys()
+    assert "teacher_reference" not in contract_raw.get("interventions", {}).keys()
+
+
+# --- design_revision 系譜表の repo artifact 写像確認 -------------------------
+
+
+def test_rev04_doc_mapping_table_covers_all_8_changes() -> None:
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "変更1" in doc and "変更2" in doc and "変更3" in doc and "変更4" in doc
+    assert "変更5" in doc and "変更6" in doc and "変更7" in doc and "変更8" in doc
