@@ -656,8 +656,36 @@ learning_recipe_sha:
 # ようにした。`medial_filler_pitch_midi` の新規追加により manifest バイト
 # が変わるため sha256 を再計算した。旧値（履歴として保持）:
 # "722653475646e169058a1e53584585ae1af42f4bfb5152a59432251d30a421c1"
+#
+# PR #322 Codex bot レビュー第5巡3件（採用）反映による repin:
+# Fix 10（P2）P4 の held-out 分離を機械検証可能にした——validator が P4
+# 各 cell の (kana, pitch_midi, duration_beats) 系列を全非 held-out cell
+# （P0-P3）の系列と比較し、完全一致/連続部分列としての包含を fail-closed
+# で拒否する（`_validate_p4_heldout_separation()` 新設）。manifest 内容
+# 自体は元々分離済みだったため本 Fix 単体はバイト変更を伴わない。
+# Fix 11（P1）宣言 harness（gate_synth.py build_inputs()）に energy/
+# velocity/metrical-accent の制御入力が存在しないため、
+# `P2-PHRASE-BUILD-WEAK-TO-STRONG` を Energy contrast の登録
+# （`phrase_dynamics` 軸）から除外し、`diagnostic_role`（軸システムとは
+# 独立の cell 属性、role_id=`diagnostic_structural_pitch_rise`）へ
+# 再分類した。`phrase_dynamics` 軸は factor_levels.axes から除去（cell 削
+# 除はしない）。P2 probe.role へ計器能力の境界宣言（energy 制御入力の不
+# 在・実操作は onset_consonant_class のみ・energy 直接制御可能な
+# backbone への交換時が再入条件）を追記した——**energy 制御の新規発明は
+# 不採用**（存在しない harness 入力の捏造になるため。計器能力の正直な
+# 境界宣言を採った）。
+# Fix 12（P2）P0 cell の notes/tempo_bpm を、validator が score.py を
+# read-only ロードして `build_sakura_score()` を再構築し逐語比較するよう
+# にした（`_load_score_py_module()`/`_require_p0_matches_build_sakura_
+# score()` 新設。hash 一致 + verbatim:true 宣言だけでは検出できない内容
+# 改変を捕捉する）。manifest 内容自体は元々一致していたため本 Fix 単体は
+# バイト変更を伴わない。
+# 3 Fix 合算で `phrase_dynamics` 軸除去・`diagnostic_role` 追加・P2
+# role 境界宣言追記により manifest バイトが変わるため sha256 を再計算
+# した。旧値（履歴として保持）:
+# "d50266e51acbf83e47ef047dfa91c8bd8e6ede129dd1ba24d5b111581b98a804"
 probe_manifest_sha:
-  value: "d50266e51acbf83e47ef047dfa91c8bd8e6ede129dd1ba24d5b111581b98a804"
+  value: "c09f140c718bbea35301e9a6920083f8c02ae723e3590e07a4c6093e076f0e16"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 

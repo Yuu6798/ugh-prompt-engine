@@ -4,7 +4,7 @@
     "identity_axis_source": "inputs/identity_metric_space.json が正本（domains/identity_domain_run9_v1.json の metric_space_sha としてpin済み）。distance/calibration/confuser_controlの式・閾値は 本manifestで重複定義しない。",
     "scope_statement": "本manifestが定義するのは何を鳴らすか（score cells + render契約 + take台帳）のみ。どう測るかは対象外——identity軸はinputs/identity_metric_space.json（metric_space_sha としてpin済み）が正本、P4/P5のdevelopment/generalization軸の測定仕様はmeasurement_spec_sha（別欄・PENDINGのまま）が別途凍結する。"
   },
-  "note": "RUN9-PROBE-1: DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15 Probe Set (P0-P5) の実体manifest。score cellsはmanifest内にself-contained直書きし、新規score moduleは作らない。JSON→ScoreNote変換ハーネスはmachine-dependentの別フェーズで本manifest の対象外。書式は決定論pretty（ensure_ascii=False, indent=2, sort_keys=True + 末尾改行）——founders/*.jsonと同一規約。PR #322 Codexレビュー第1巡2件（採用）反映済み: Fix 1 = render_contract.harness_runtime_seed_policy新設（宣言harnessが実消費するruntime seed=42を明示、performance_seed=909001はgenome-policy層と精密化。gate_synth.py自体の改変は不採用）。Fix 2 = P1-P3のfactor_levelsを{axes: {...}}構造へ再編し、各cellへlevelsメタデータを付与、factor_levels⇔cellの双方向対応をvalidate_probe_manifest()が機械検証する。",
+  "note": "RUN9-PROBE-1: DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15 Probe Set (P0-P5) の実体manifest。score cellsはmanifest内にself-contained直書きし、新規score moduleは作らない。JSON→ScoreNote変換ハーネスはmachine-dependentの別フェーズで本manifest の対象外。書式は決定論pretty（ensure_ascii=False, indent=2, sort_keys=True + 末尾改行）——founders/*.jsonと同一規約。PR #322 Codexレビュー第1巡2件（採用）反映済み: Fix 1 = render_contract.harness_runtime_seed_policy新設（宣言harnessが実消費するruntime seed=42を明示、performance_seed=909001はgenome-policy層と精密化。gate_synth.py自体の改変は不採用）。Fix 2 = P1-P3のfactor_levelsを{axes: {...}}構造へ再編し、各cellへlevelsメタデータを付与、factor_levels⇔cellの双方向対応をvalidate_probe_manifest()が機械検証する。第2-4巡（validatorロジック中心、manifestバイト変更を伴う分のみ記載）: Fix 7 = P2 filler tuple凍結（medial_filler_pitch_midi追加）。第5巡: Fix 11 = P2のphrase_dynamics軸を操作可能軸表から除去し、対応cellをdiagnostic_role（levelsとは独立のcell属性）へ再分類、P2 roleへEnergy計器能力の境界宣言を追記（energy制御の新規発明は不採用——計器能力の正直な境界宣言を採った）。",
   "probes": [
     {
       "cells": [
@@ -528,8 +528,9 @@
         },
         {
           "cell_id": "P2-PHRASE-BUILD-WEAK-TO-STRONG",
-          "levels": {
-            "phrase_dynamics": "weak_to_strong_build"
+          "diagnostic_role": {
+            "role_id": "diagnostic_structural_pitch_rise",
+            "scope_boundary_note": "PR #322 第5巡指摘 Fix 11（P1, 採用）: 宣言harness（build_inputs()）にはenergy/velocity/metrical-accentの制御入力が存在しないため、本cellが操作しているのは pitch 上行構造のみ である（note列 60→62→65 の非減少pitch系列 + phrase-final noteが末尾）。energy 効果の帰属に使わない——Energy contrastとしては登録しない診断用cellである。"
           },
           "notes": [
             {
@@ -569,19 +570,15 @@
             "stop_g_voiced": "ぎ",
             "stop_k": "く/か",
             "vowel_only": "い"
-          },
-          "phrase_dynamics": {
-            "weak_to_strong_build": "3-note ascending build (weak filler -> mid -> strong final)"
           }
         },
         "medial_filler_beats": 1,
         "medial_filler_kana": "か",
         "medial_filler_note": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json#factor_levels の medial_filler_kana/medial_filler_beats と同一の水準値を踏襲する（read-only 参照）。medial_filler_pitch_midi=60 は現行 cell の実 filler note 値からの転記（PR #322 第3巡指摘 Fix 7 — 全 onset cell の前置 filler note がこの凍結タプルと完全一致することを validate_probe_manifest() が機械検証する）。",
-        "medial_filler_pitch_midi": 60,
-        "phrase_dynamics_shape": "note schema（kana/pitch_midi/duration_beats/phrase_index/is_phrase_final）に velocity/dynamics欄が存在しないため、弱→強はnote位置構造（filler note を弱、target onset note をphrase_final直前〜final付近の強拍として配置）で表現する。"
+        "medial_filler_pitch_midi": 60
       },
       "probe_id": "P2",
-      "role": "phrase内の弱→強・onset class差・consonant/vowel組合せを通じてEnergy/Attack応答をprobeする（v0.1 §15 P2）。factor_levels.axesが定義するonset_consonant_class毎に、共通filler note (弱)→target onset note (強)の2ノートcellで水準を張り、phrase_dynamics軸の3ノートphrase内弱→強build cellを1つ持つ。各cellはlevelsで参照する軸/水準を機械可読に宣言する。",
+      "role": "phrase内の弱→強・onset class差・consonant/vowel組合せを通じてEnergy/Attack応答をprobeする（v0.1 §15 P2）。factor_levels.axesが定義するonset_consonant_class毎に、共通filler note (弱)→target onset note (強)の2ノートcellで水準を張る。各cellはlevelsで参照する軸/水準を機械可読に宣言する。\n\n境界宣言（PR #322 第5巡指摘 Fix 11, P1, 採用）: 宣言harness（gate_synth.py::run_pipelineのbuild_inputs()）には energy/velocity/metrical-accent の制御入力が存在しない。v0.1 §15 P2の『phrase内の弱→強』は本backboneでは操作変数として表現不能である。P2のEnergy/Attack軸で実際に操作されるのは onset consonant class のみ（子音クラスはattack energy特性を音韻経由で実変化させる）であり、energyに関するP2測定はこの操作の観察に限定される。P2-PHRASE-BUILD-WEAK-TO-STRONG cellはEnergy contrastとしては登録せず、diagnostic_role（pitch上行構造のみを操作する診断用cell）として保持する。energy直接制御が可能なbackboneへの交換時が本境界宣言の再入条件である。",
       "title": "Energy / Attack Probe"
     },
     {

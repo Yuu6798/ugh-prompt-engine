@@ -428,6 +428,10 @@ def test_fix2_every_cell_declares_levels_referencing_axes(manifest_data: Dict[st
         (probe,) = [p for p in manifest_data["probes"] if p["probe_id"] == probe_id]
         axes = probe["factor_levels"]["axes"]
         for cell in probe["cells"]:
+            # Fix 11: diagnostic_role cell（levels 非保持）は操作可能軸
+            # システムの対象外——スキップする。
+            if "levels" not in cell:
+                continue
             levels = cell["levels"]
             assert levels, f"{cell['cell_id']} must declare non-empty levels"
             for axis_name, level_name in levels.items():
@@ -445,7 +449,7 @@ def test_fix2_every_declared_level_used_by_at_least_one_cell(
         axes = probe["factor_levels"]["axes"]
         used: Dict[str, set] = {axis_name: set() for axis_name in axes}
         for cell in probe["cells"]:
-            for axis_name, level_name in cell["levels"].items():
+            for axis_name, level_name in cell.get("levels", {}).items():
                 used[axis_name].add(level_name)
         for axis_name, levels in axes.items():
             assert set(levels) == used[axis_name], (
@@ -557,13 +561,12 @@ def test_negative_fix3_onset_kana_mismatch(manifest_data: Dict[str, Any]) -> Non
         m.validate_probe_manifest(bad)
 
 
-def test_negative_fix3_phrase_dynamics_structure_broken(manifest_data: Dict[str, Any]) -> None:
-    bad = _mutate(manifest_data)
-    (p2,) = [p for p in bad["probes"] if p["probe_id"] == "P2"]
-    cell = _cell_by_id(p2, "P2-PHRASE-BUILD-WEAK-TO-STRONG")
-    cell["notes"][-1]["pitch_midi"] = 50  # 非減少 pitch 系列を破壊
-    with pytest.raises(m.Run9ValidationError):
-        m.validate_probe_manifest(bad)
+# test_negative_fix3_phrase_dynamics_structure_broken は PR #322 第5巡
+# 指摘 Fix 11（P1, 採用）により削除した——`phrase_dynamics` 軸自体を
+# 操作可能軸システムから除去したため、この攻撃経路（軸の構造検証破り）
+# はもう存在しない。P2-PHRASE-BUILD-WEAK-TO-STRONG は `diagnostic_role`
+# （levels とは独立の cell 属性）で再分類済み——対応する回帰・負例は
+# 「PR #322 第5巡指摘 Fix 11」節を参照。
 
 
 def test_negative_fix3_release_duration_mismatch(manifest_data: Dict[str, Any]) -> None:
@@ -644,12 +647,16 @@ def test_negative_fix4_missing_source_file_via_full_manifest(
     渡る score_path が存在しなければ拒否される（モジュール定数を直接
     monkeypatch して full-chain の挙動も確認する——`monkeypatch` fixture
     ではなく setattr/finally で明示的に復元し、実ファイルには一切触れ
-    ない）。"""
+    ない）。PR #322 第5巡 Fix 12 導入後は `SCORE_PY_REFERENCE_PATH` を
+    `_load_score_py_module()`（Fix 12、probe 検証より前に1回だけ実行）
+    も共有するため、実際に先に fail-closed する箇所は Fix 12 側のゲート
+    になった——いずれにせよ full-chain が fail-closed であることに変わり
+    はない（具体的な例外メッセージの発生源は問わない）。"""
     original = m.SCORE_PY_REFERENCE_PATH
     fake = tmp_path / "does_not_exist" / "score.py"
     try:
         m.SCORE_PY_REFERENCE_PATH = fake  # type: ignore[misc]
-        with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        with pytest.raises(m.Run9ValidationError):
             m.validate_probe_manifest(_mutate(manifest_data))
     finally:
         m.SCORE_PY_REFERENCE_PATH = original
@@ -792,7 +799,7 @@ def test_fix7_filler_tuple_declared_and_matches_cells(manifest_data: Dict[str, A
     assert fl["medial_filler_beats"] == 1
     assert fl["medial_filler_pitch_midi"] == 60
     for cell in p2["cells"]:
-        if "onset_consonant_class" not in cell["levels"]:
+        if "onset_consonant_class" not in cell.get("levels", {}):
             continue
         prefix = cell["notes"][:-1]
         assert len(prefix) == 1
@@ -1005,3 +1012,170 @@ def test_fix9_factorial_coverage_full_grid_passes() -> None:
     m._validate_probe_factorial_coverage(
         expected_probe_id="P1", factor_levels=factor_levels, cells=cells, field="test"
     )  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第5巡指摘 Fix 10（P2, 採用）: P4 held-out 分離の機械検証
+# ---------------------------------------------------------------------------
+
+
+def _p4_probe(data: Dict[str, Any]) -> Dict[str, Any]:
+    (p4,) = [p for p in data["probes"] if p["probe_id"] == "P4"]
+    return p4
+
+
+def test_fix10_positive_p4_separated_from_p0_p3(manifest_data: Dict[str, Any]) -> None:
+    m.validate_probe_manifest(manifest_data)  # 例外を投げないことの確認（回帰）
+
+
+def test_negative_fix10_p4_full_copy_of_p0_cell(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    p0_notes = copy.deepcopy(_p0_probe(bad)["cells"][0]["notes"])
+    _p4_probe(bad)["cells"][0]["notes"] = p0_notes
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix10_p4_contiguous_subsequence_of_p1_cell(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    p1 = _p1_probe(bad)
+    source_cell = _cell_by_id(p1, "P1-TRANS-LOW-TO-HIGH")
+    _p4_probe(bad)["cells"][0]["notes"] = copy.deepcopy(source_cell["notes"])
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_fix10_helper_contiguous_subsequence_detection() -> None:
+    assert m._is_contiguous_subsequence((1, 2), (0, 1, 2, 3))
+    assert not m._is_contiguous_subsequence((1, 3), (0, 1, 2, 3))
+    assert not m._is_contiguous_subsequence((), (0, 1, 2))
+    assert not m._is_contiguous_subsequence((1, 2, 3, 4), (1, 2, 3))
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第5巡指摘 Fix 11（P1, 採用）: P2 Energy 計器能力の境界宣言
+# ---------------------------------------------------------------------------
+
+
+def test_fix11_phrase_dynamics_axis_removed(manifest_data: Dict[str, Any]) -> None:
+    p2 = _p2_probe(manifest_data)
+    assert "phrase_dynamics" not in p2["factor_levels"]["axes"]
+
+
+def test_fix11_diagnostic_cell_declared(manifest_data: Dict[str, Any]) -> None:
+    p2 = _p2_probe(manifest_data)
+    cell = _cell_by_id(p2, "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    assert "levels" not in cell
+    assert cell["diagnostic_role"]["role_id"] == m._DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID
+    note = cell["diagnostic_role"]["scope_boundary_note"]
+    assert "pitch 上行構造のみ" in note
+    assert "energy 効果の帰属に使わない" in note
+
+
+def test_fix11_p2_role_boundary_declaration_markers(manifest_data: Dict[str, Any]) -> None:
+    role = _p2_probe(manifest_data)["role"]
+    for marker in m._P2_ENERGY_BOUNDARY_MARKERS:
+        assert marker in role
+
+
+def test_negative_fix11_p2_role_missing_boundary_marker(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p2_probe(bad)["role"] = "phrase内の弱→強・onset class差を通じてEnergy/Attack応答をprobeする。"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix11_diagnostic_role_unknown_role_id(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p2_probe(bad), "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    cell["diagnostic_role"]["role_id"] = "not_a_registered_role"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix11_diagnostic_role_scope_note_missing_marker(
+    manifest_data: Dict[str, Any],
+) -> None:
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p2_probe(bad), "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    cell["diagnostic_role"]["scope_boundary_note"] = "no markers here"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix11_cell_has_both_levels_and_diagnostic_role(
+    manifest_data: Dict[str, Any],
+) -> None:
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p2_probe(bad), "P2-ONSET-FRICATIVE-S")
+    cell["diagnostic_role"] = {
+        "role_id": m._DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID,
+        "scope_boundary_note": "pitch 上行構造のみ を操作し、energy 効果の帰属に使わない。",
+    }
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix11_cell_has_neither_levels_nor_diagnostic_role(
+    manifest_data: Dict[str, Any],
+) -> None:
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p2_probe(bad), "P2-ONSET-FRICATIVE-S")
+    del cell["levels"]
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix11_reintroducing_phrase_dynamics_axis_rejected(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """`phrase_dynamics` は操作可能軸システムから完全除去済み——cell の
+    `levels` へ復活させても未知 axis として拒否される。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p2_probe(bad), "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    del cell["diagnostic_role"]
+    cell["levels"] = {"phrase_dynamics": "weak_to_strong_build"}
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第5巡指摘 Fix 12（P2, 採用）: P0 の score.py 逐語照合
+# ---------------------------------------------------------------------------
+
+
+def test_fix12_positive_p0_matches_build_sakura_score(manifest_data: Dict[str, Any]) -> None:
+    m.validate_probe_manifest(manifest_data)  # 例外を投げないことの確認（回帰）
+    score_py_module = m._load_score_py_module()
+    cell = _p0_probe(manifest_data)["cells"][0]
+    m._require_p0_matches_build_sakura_score(cell, score_py_module=score_py_module, field="test")
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda cell: cell["notes"].__setitem__(0, {**cell["notes"][0], "pitch_midi": 65}),
+        lambda cell: cell["notes"].__setitem__(0, {**cell["notes"][0], "kana": "り"}),
+        lambda cell: cell["notes"].__setitem__(0, {**cell["notes"][0], "duration_beats": 99}),
+        lambda cell: cell.__setitem__("tempo_bpm", 999.0),
+    ],
+)
+def test_negative_fix12_p0_content_altered_despite_hash_and_verbatim_claim(
+    manifest_data: Dict[str, Any], mutate,
+) -> None:
+    """hash 一致 + verbatim:true を保ったまま notes/tempo_bpm の値だけを
+    改変しても、score.py との逐語比較で検出される。"""
+    bad = _mutate(manifest_data)
+    cell = _p0_probe(bad)["cells"][0]
+    mutate(cell)
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix12_score_py_missing(tmp_path: Path) -> None:
+    """score.py パスを一時 rename する monkeypatch ではなく、`path` 引数
+    を存在しない tmp パスへ差し替えることで不在時の fail-closed 挙動を
+    検証する（実 score.py は一切触れない）。"""
+    nonexistent = tmp_path / "does_not_exist" / "score.py"
+    with pytest.raises(m.Run9ValidationError, match="実在が"):
+        m._load_score_py_module(path=nonexistent)

@@ -3512,6 +3512,39 @@ _P2_FILLER_TUPLE_KEYS: FrozenSet[str] = frozenset(
 )
 _P2_ONSET_AXIS_NAME = "onset_consonant_class"
 
+# ---------------------------------------------------------------------------
+# PR #322 第5巡指摘 Fix 11（P1, 採用）: 宣言 harness
+# （`gate_synth.py::run_pipeline` の `build_inputs()`）には energy/
+# velocity/metrical-accent の制御入力が存在しない（`_NoteWithMs` は
+# MIDI/mora/duration のみ保持）——P2-PHRASE-BUILD-WEAK-TO-STRONG が変えて
+# いるのは pitch 系列のみであり、これを Energy contrast として登録する
+# と、後続の Energy 測定結果が「実際には適用されていない要因」へ誤帰属
+# され得る。**energy 制御の新規発明は不採用**（存在しない harness 入力の
+# 捏造になるため）——計器能力の正直な境界宣言として、当該 cell を
+# Energy contrast の登録（`onset_consonant_class`/`phrase_dynamics` 等の
+# 操作可能軸システム）から除外し、`diagnostic_role`（軸システムとは独立
+# の cell 属性）で「pitch 上行構造のみを操作する診断用 cell であり、
+# energy 効果の帰属には使わない」ことを機械可読に宣言する。
+# ---------------------------------------------------------------------------
+_CELL_DIAGNOSTIC_ROLE_KEY = "diagnostic_role"
+_CELL_DIAGNOSTIC_ROLE_KEYS: FrozenSet[str] = frozenset({"role_id", "scope_boundary_note"})
+_DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID = "diagnostic_structural_pitch_rise"
+# `scope_boundary_note` が保持しなければならないマーカー（Fix 11 裁定文
+# の核心2点: 何を操作しているか / 何に使わないか）。
+_DIAGNOSTIC_ROLE_SCOPE_BOUNDARY_MARKERS: Tuple[str, ...] = (
+    "pitch 上行構造のみ", "energy 効果の帰属に使わない",
+)
+# P2 probe レベルの境界宣言（`role` フィールドが保持しなければならない
+# マーカー）: 宣言 harness に energy/velocity/metrical-accent 制御入力が
+# 存在しないこと・P2 の Energy/Attack 軸で実際に操作されるのは
+# onset_consonant_class のみであること・再入条件、の3点。
+_P2_ENERGY_BOUNDARY_MARKERS: Tuple[str, ...] = (
+    "build_inputs()",
+    "energy/velocity/metrical-accent",
+    "onset consonant class のみ",
+    "再入条件",
+)
+
 _NOTE_KEYS: FrozenSet[str] = frozenset(
     {"kana", "pitch_midi", "duration_beats", "phrase_index", "is_phrase_final"}
 )
@@ -3595,6 +3628,100 @@ def _require_single_mora_kana(kana: str, *, phoneme_jp_module: Any, field: str) 
             f"{field} = {kana!r} は phoneme_jp.kana_to_morae() でちょうど1モーラに分割されなかった "
             f"（実際は{len(morae)}モーラ）— 1 note は単一 Mora のみ表現できる（メリスマ非対応、"
             "score.py の「1 モーラ = 1 ノート」制約の機械強制）"
+        )
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第5巡指摘 Fix 12（P2, 採用）: hash 一致 + `verbatim: true` 宣言
+# だけでは P0 cell の内容改変（notes/tempo_bpm の値そのもの）を検出でき
+# ない——`score.py`（凍結・改変禁止の read-only 参照）を validator 内で
+# 実際にロードし `build_sakura_score()` を再構築、P0 cell の notes と
+# tempo_bpm を実物と逐語比較する。既存 fixture テスト
+# （`tests/test_run9_probe_manifest.py`）の比較は補助として残すが、正本は
+# 本 validator。Fix 6 の phoneme_jp ローダと同型（sys.modules 登録込み）。
+# ---------------------------------------------------------------------------
+_SCORE_PY_MODULE_NAME = "_run9_probe_manifest_score_py_readonly"
+
+
+def _load_score_py_module(*, path: Optional[Path] = None) -> Any:
+    """`voice_genesis/singer/score.py`（凍結・改変禁止の read-only 参照）
+    を read-only でロードする。`path` 省略時（`None`）はモジュール定数
+    `SCORE_PY_REFERENCE_PATH` を呼び出しのたびに参照する（他の read-only
+    ローダと同じ late-binding 回避パターン）。ファイル不在・import 失敗・
+    `build_sakura_score`/`TEMPO_BPM` 未定義はいずれも fail-closed
+    （Fix 4「照合できない = 検証失敗」と同じ原則。実 score.py の
+    rename/削除は一切行わない）。score.py は `@dataclass` の `ScoreNote`
+    を定義するため phoneme_jp.py と同じ sys.modules 登録が必要。また
+    score.py は `import phoneme_jp as pj`（同ディレクトリの sibling
+    module への素の import 文）を持つため、ロード中だけ一時的に
+    `voice_genesis/singer/` を `sys.path` へ加える（ロード後は復元し、
+    恒久的な sys.path 汚染を避ける）。"""
+    if path is None:
+        path = SCORE_PY_REFERENCE_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"P0 cell の逐語照合には {path} の実在が必須だが見つからない（凍結・改変禁止の "
+            "read-only 参照 — 本 validator は repo checkout 内での実行を前提とする。照合できない = "
+            "検証失敗、PR #322 第2巡 Fix 4 と同じ fail-closed 原則）"
+        )
+    singer_dir = str(path.parent)
+    inserted = singer_dir not in sys.path
+    if inserted:
+        sys.path.insert(0, singer_dir)
+    try:
+        spec = importlib.util.spec_from_file_location(_SCORE_PY_MODULE_NAME, path)
+        if spec is None or spec.loader is None:
+            raise Run9ValidationError(f"{path} の import spec を構築できない")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[_SCORE_PY_MODULE_NAME] = module
+        spec.loader.exec_module(module)
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(f"{path} のロードに失敗した: {exc}") from exc
+    finally:
+        if inserted:
+            try:
+                sys.path.remove(singer_dir)
+            except ValueError:  # pragma: no cover - defensive
+                pass
+    if not hasattr(module, "build_sakura_score") or not hasattr(module, "TEMPO_BPM"):
+        raise Run9ValidationError(f"{path} に build_sakura_score()/TEMPO_BPM が定義されていない")
+    return module
+
+
+def _require_p0_matches_build_sakura_score(
+    cell: Mapping[str, Any], *, score_py_module: Any, field: str
+) -> None:
+    """PR #322 第5巡指摘 Fix 12 の実装: P0 cell の `notes`/`tempo_bpm` が
+    `score_py_module.build_sakura_score()`/`TEMPO_BPM` の実出力と逐語一致
+    することを検証する。"""
+    try:
+        score_notes = score_py_module.build_sakura_score()
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(f"{field}: build_sakura_score() の実行に失敗した: {exc}") from exc
+    expected_notes = [
+        {
+            "kana": n.mora.kana,
+            "pitch_midi": int(n.midi),
+            "duration_beats": n.duration_beats,
+            "phrase_index": n.phrase_index,
+            "is_phrase_final": n.is_phrase_final,
+        }
+        for n in score_notes
+    ]
+    actual_notes = cell["notes"]
+    if actual_notes != expected_notes:
+        raise Run9ValidationError(
+            f"{field}.notes does not verbatim-match voice_genesis/singer/score.py "
+            "build_sakura_score() output — hash equality + verbatim:true alone cannot catch a "
+            f"content edit (Fix 12). expected={expected_notes!r}, got={actual_notes!r}"
+        )
+    tempo_bpm = cell["tempo_bpm"]
+    if not _numeric_equal(tempo_bpm, score_py_module.TEMPO_BPM):
+        raise Run9ValidationError(
+            f"{field}.tempo_bpm ({tempo_bpm!r}) does not match voice_genesis/singer/score.py "
+            f"TEMPO_BPM ({score_py_module.TEMPO_BPM!r}) — Fix 12"
         )
 
 # P0 は「同一 score・同一 lyrics・中央音域・表現指定を最小化」（§15）—
@@ -3875,8 +4002,40 @@ def _validate_cell_levels(value: Any, *, field: str) -> Dict[str, str]:
     return value
 
 
+def _validate_cell_diagnostic_role(value: Any, *, field: str) -> None:
+    """PR #322 第5巡指摘 Fix 11（P1, 採用）の実装: `diagnostic_role` は
+    `levels`（操作可能軸システム）とは独立の cell 属性——Energy contrast
+    等として登録しない診断用 cell（例: pitch 上行構造のみを操作する
+    構造 cell）であることを機械可読に宣言する。"""
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
+    unknown = set(value.keys()) - _CELL_DIAGNOSTIC_ROLE_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _CELL_DIAGNOSTIC_ROLE_KEYS - set(value.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    role_id = value["role_id"]
+    if role_id != _DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID:
+        raise Run9ValidationError(
+            f"{field}.role_id must be exactly {_DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID!r} (未登録の "
+            "diagnostic role は fail-closed — 新しい role_id を追加したのに対応する構造検証を追加し "
+            f"忘れる事故を防ぐ), got {role_id!r}"
+        )
+    scope_note = _require_non_empty_str(
+        value["scope_boundary_note"], field=f"{field}.scope_boundary_note"
+    )
+    for marker in _DIAGNOSTIC_ROLE_SCOPE_BOUNDARY_MARKERS:
+        if marker not in scope_note:
+            raise Run9ValidationError(
+                f"{field}.scope_boundary_note must contain the marker {marker!r} (Fix 11: 何を操作し "
+                "何に使わないかの境界宣言), got a note without that marker"
+            )
+
+
 def _validate_probe_cell(
-    cell: Any, *, probe_id: str, field: str, seen_cell_ids: Dict[str, str], phoneme_jp_module: Any
+    cell: Any, *, probe_id: str, field: str, seen_cell_ids: Dict[str, str], phoneme_jp_module: Any,
+    score_py_module: Any,
 ) -> Optional[Dict[str, str]]:
     if not isinstance(cell, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(cell).__name__}")
@@ -3886,14 +4045,29 @@ def _validate_probe_cell(
         allowed.add(_CELL_SOURCE_KEY)
         required.add(_CELL_SOURCE_KEY)
     if probe_id in _FACTOR_LEVEL_PROBE_IDS:
+        # PR #322 第5巡指摘 Fix 11: factor-level probe の cell は `levels`
+        # （操作可能軸システムへの参加）と `diagnostic_role`（軸システム
+        # から除外された診断用 cell の宣言）のうち**どちらか一方のみ**を
+        # 持つ（両方 unknown-key チェックの対象から外し、後段で排他性を
+        # 個別検証する——一律 required に入れると両立不可能になるため）。
         allowed.add(_CELL_LEVELS_KEY)
-        required.add(_CELL_LEVELS_KEY)
+        allowed.add(_CELL_DIAGNOSTIC_ROLE_KEY)
     unknown = set(cell.keys()) - allowed
     if unknown:
         raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
     missing = required - set(cell.keys())
     if missing:
         raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+
+    if probe_id in _FACTOR_LEVEL_PROBE_IDS:
+        has_levels = _CELL_LEVELS_KEY in cell
+        has_diagnostic = _CELL_DIAGNOSTIC_ROLE_KEY in cell
+        if has_levels == has_diagnostic:  # 両方 or どちらも無し、はいずれも不正
+            raise Run9ValidationError(
+                f"{field} must have exactly one of {_CELL_LEVELS_KEY!r}/"
+                f"{_CELL_DIAGNOSTIC_ROLE_KEY!r} (got levels={has_levels}, diagnostic_role="
+                f"{has_diagnostic})"
+            )
 
     cell_id = _require_non_empty_str(cell["cell_id"], field=f"{field}.cell_id")
     if cell_id in seen_cell_ids:
@@ -3926,9 +4100,19 @@ def _validate_probe_cell(
 
     if probe_id == "P0":
         _validate_probe_cell_source(cell[_CELL_SOURCE_KEY], field=f"{field}.{_CELL_SOURCE_KEY}")
+        # PR #322 第5巡指摘 Fix 12（P2, 採用）: hash 一致 + verbatim:true
+        # だけでは内容改変（notes/tempo_bpm の値そのもの）を検出できない
+        # ——score.py を read-only ロードして build_sakura_score() を再構築
+        # し逐語比較する。
+        _require_p0_matches_build_sakura_score(cell, score_py_module=score_py_module, field=field)
 
     if probe_id in _FACTOR_LEVEL_PROBE_IDS:
-        return _validate_cell_levels(cell[_CELL_LEVELS_KEY], field=f"{field}.{_CELL_LEVELS_KEY}")
+        if _CELL_LEVELS_KEY in cell:
+            return _validate_cell_levels(cell[_CELL_LEVELS_KEY], field=f"{field}.{_CELL_LEVELS_KEY}")
+        _validate_cell_diagnostic_role(
+            cell[_CELL_DIAGNOSTIC_ROLE_KEY], field=f"{field}.{_CELL_DIAGNOSTIC_ROLE_KEY}"
+        )
+        return None
     return None
 
 
@@ -4042,29 +4226,6 @@ def _check_axis_transition_direction(
         )
 
 
-def _check_axis_phrase_dynamics_structure(
-    cell: Mapping[str, Any], *, field: str, axis_name: str, level_name: str,
-) -> None:
-    """phrase_dynamics（弱→強）: note schema に velocity/dynamics 欄が
-    存在しないため、構造（非減少 pitch 系列 + phrase-final note が末尾）
-    の実在を意味照合の代替とする。"""
-    notes = cell["notes"]
-    final = _select_phrase_final_note(cell, field=field)
-    if len(notes) < 2 or notes[-1] is not final:
-        raise Run9ValidationError(
-            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} but "
-            "does not have >= 2 notes ending with the phrase-final note — a weak->strong build "
-            "requires the phrase-final (strong) note to be the last note in the sequence"
-        )
-    pitches = [n["pitch_midi"] for n in notes]
-    if any(pitches[i] > pitches[i + 1] for i in range(len(pitches) - 1)):
-        raise Run9ValidationError(
-            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
-            "which requires a non-decreasing pitch contour across notes (the structural proxy for "
-            f"weak->strong used in the absence of a velocity/dynamics field), got pitches {pitches!r}"
-        )
-
-
 def _validate_axis_semantic_value(
     *, axis_name: str, level_name: str, axis_value: Any, cell: Mapping[str, Any], field: str,
 ) -> None:
@@ -4087,16 +4248,14 @@ def _validate_axis_semantic_value(
         _check_axis_transition_direction(
             cell, expected=axis_value, field=field, axis_name=axis_name, level_name=level_name
         )
-    elif axis_name == "phrase_dynamics":
-        _check_axis_phrase_dynamics_structure(
-            cell, field=field, axis_name=axis_name, level_name=level_name
-        )
     else:
         raise Run9ValidationError(
             f"{field}: no axis-specific semantic checker is registered for axis {axis_name!r} (Fix 3 "
             "requires every declared factor_levels axis to have a checker comparing the declared "
             "level value against the actual rendered stimulus — an unregistered axis would silently "
-            "accept a repin that changes the notes without updating the label)"
+            "accept a repin that changes the notes without updating the label. Fix 11: "
+            "'phrase_dynamics' was removed from the operable-axis system entirely — a P2 cell that "
+            "is not an Energy contrast belongs under 'diagnostic_role', not 'levels')"
         )
 
 
@@ -4123,6 +4282,8 @@ def _validate_probe_factor_levels_cell_mapping(
 
     used: Dict[str, set] = {axis_name: set() for axis_name in axes}
     for i, cell in enumerate(cells):
+        if _CELL_LEVELS_KEY not in cell:
+            continue  # Fix 11: diagnostic_role cell は操作可能軸システムの対象外
         levels = cell[_CELL_LEVELS_KEY]
         for axis_name, level_name in levels.items():
             if axis_name not in axes:
@@ -4170,6 +4331,51 @@ def _validate_probe_heldout_independence(value: Any, *, field: str) -> None:
         value["independent_of"], manifest_kind="probe manifest", field=f"{field}.independent_of"
     )
     _require_non_empty_str(value["note"], field=f"{field}.note")
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第5巡指摘 Fix 10（P2, 採用）: `heldout_independence` はこれまで
+# status literal + 非空散文のみを検証しており、P4 が P0-P3 のいずれかの
+# cell の note 列を丸ごと（または部分列として）コピーしていても機械検証
+# できなかった——宣言される「機械検証可能な分離」を実装する。P4 の各
+# cell の (kana, pitch_midi, duration_beats) 系列を、全非 held-out cell
+# （P0-P3。P5 も held-out のため比較元に含めない）の系列と比較し、完全
+# 一致または連続部分列としての包含があれば fail-closed とする。
+# ---------------------------------------------------------------------------
+_HELDOUT_SEPARATION_SOURCE_PROBE_IDS: Tuple[str, ...] = ("P0", "P1", "P2", "P3")
+
+
+def _note_signature_sequence(cell: Mapping[str, Any]) -> Tuple[Tuple[str, int, float], ...]:
+    return tuple((n["kana"], n["pitch_midi"], n["duration_beats"]) for n in cell["notes"])
+
+
+def _is_contiguous_subsequence(needle: Tuple[Any, ...], haystack: Tuple[Any, ...]) -> bool:
+    n, h = len(needle), len(haystack)
+    if n == 0 or n > h:
+        return False
+    return any(haystack[start:start + n] == needle for start in range(h - n + 1))
+
+
+def _validate_p4_heldout_separation(
+    *, p4_cells: List[Dict[str, Any]], source_cells_by_probe: Mapping[str, List[Dict[str, Any]]],
+    field: str,
+) -> None:
+    for p4_cell in p4_cells:
+        p4_seq = _note_signature_sequence(p4_cell)
+        for source_probe_id in _HELDOUT_SEPARATION_SOURCE_PROBE_IDS:
+            for source_cell in source_cells_by_probe.get(source_probe_id, []):
+                source_seq = _note_signature_sequence(source_cell)
+                shorter, longer = (
+                    (p4_seq, source_seq) if len(p4_seq) <= len(source_seq) else (source_seq, p4_seq)
+                )
+                if shorter == longer or _is_contiguous_subsequence(shorter, longer):
+                    raise Run9ValidationError(
+                        f"{field}: P4 cell {p4_cell.get('cell_id')!r} note sequence duplicates "
+                        f"(fully or as a contiguous subsequence of) probe {source_probe_id} cell "
+                        f"{source_cell.get('cell_id')!r} — violates the declared machine-checkable "
+                        "separation of heldout_independence (Fix 10); GENERALIZED_GAIN would be "
+                        "contaminated by evaluation leakage"
+                    )
 
 
 def _validate_p2_onset_filler_consistency(
@@ -4228,7 +4434,7 @@ def _validate_p2_onset_filler_consistency(
 
 def _validate_probe_object(
     probe: Any, *, expected_probe_id: str, field: str, seen_cell_ids: Dict[str, str],
-    phoneme_jp_module: Any,
+    phoneme_jp_module: Any, score_py_module: Any,
 ) -> None:
     if not isinstance(probe, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(probe).__name__}")
@@ -4261,6 +4467,16 @@ def _validate_probe_object(
             f"{field}.role must contain the marker {_P3_DIAGNOSTIC_ROLE_MARKER!r} (DESIGN_RUN9 §15 "
             "P3: TRF 未校正時は diagnostic/advisory の機械可読化), got role without the marker"
         )
+    if expected_probe_id == "P2":
+        # PR #322 第5巡指摘 Fix 11: 計器能力の境界宣言（energy/velocity/
+        # metrical-accent 制御入力の不在・実操作は onset_consonant_class
+        # のみ・再入条件）を probe.role へ明記する。
+        for marker in _P2_ENERGY_BOUNDARY_MARKERS:
+            if marker not in role:
+                raise Run9ValidationError(
+                    f"{field}.role must contain the marker {marker!r} (Fix 11: P2 の Energy/Attack "
+                    "計器能力の境界宣言), got role without that marker"
+                )
 
     cells = probe["cells"]
     if not isinstance(cells, list) or not cells:
@@ -4268,7 +4484,7 @@ def _validate_probe_object(
     for i, cell in enumerate(cells):
         _validate_probe_cell(
             cell, probe_id=expected_probe_id, field=f"{field}.cells[{i}]", seen_cell_ids=seen_cell_ids,
-            phoneme_jp_module=phoneme_jp_module,
+            phoneme_jp_module=phoneme_jp_module, score_py_module=score_py_module,
         )
 
     # PR #322 第4巡指摘 Fix 9（P2, 採用）: probe 別の期待 cell_id 集合
@@ -4718,9 +4934,14 @@ def validate_probe_manifest(data: Mapping[str, Any]) -> None:
     # read-only 参照）を1回だけロードし、全 probe の全 note の kana
     # 検証で使い回す（probe/cell ごとの重複ロードを避ける）。
     phoneme_jp_module = _load_phoneme_jp_module()
+    # PR #322 第5巡指摘 Fix 12: P0 の逐語照合用に score.py を1回だけ
+    # ロードし使い回す（build_sakura_score() は決定論的だが、複数回呼ぶ
+    # 意味がないため）。
+    score_py_module = _load_score_py_module()
 
     seen_cell_ids: Dict[str, str] = {}
     seen_probe_ids: set = set()
+    cells_by_probe_id: Dict[str, List[Dict[str, Any]]] = {}
     for i, probe in enumerate(probes):
         if not isinstance(probe, dict):
             raise Run9ValidationError(f"probes[{i}] must be an object, got {type(probe).__name__}")
@@ -4737,12 +4958,23 @@ def validate_probe_manifest(data: Mapping[str, Any]) -> None:
         seen_probe_ids.add(probe_id)
         _validate_probe_object(
             probe, expected_probe_id=probe_id, field=f"probes[{i}]", seen_cell_ids=seen_cell_ids,
-            phoneme_jp_module=phoneme_jp_module,
+            phoneme_jp_module=phoneme_jp_module, score_py_module=score_py_module,
         )
+        if isinstance(probe.get("cells"), list):
+            cells_by_probe_id[probe_id] = probe["cells"]
     if seen_probe_ids != set(PROBE_IDS):
         raise Run9ValidationError(
             f"probe manifest.probes is missing required probe_id(s): "
             f"{sorted(set(PROBE_IDS) - seen_probe_ids)}"
+        )
+
+    # PR #322 第5巡指摘 Fix 10: P4 の各 cell の note 系列を、全非
+    # held-out cell（P0-P3）の系列と比較する（cross-probe のため全 probe
+    # 検証後にまとめて行う）。
+    if "P4" in cells_by_probe_id:
+        _validate_p4_heldout_separation(
+            p4_cells=cells_by_probe_id["P4"], source_cells_by_probe=cells_by_probe_id,
+            field="probes[P4]",
         )
 
     valid_cell_ids = frozenset(seen_cell_ids.keys())
