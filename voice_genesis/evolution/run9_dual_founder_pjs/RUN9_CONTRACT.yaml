@@ -380,9 +380,19 @@ backbone_checkpoint_sha:
 # **ファイル実バイトの sha256**（design_doc_sha256 と同一規約 —
 # run9_schema.compute_file_sha256() 参照。Codex bot レビュー PR #316
 # 第8巡指摘A採用: 旧 reason 文言が「正規形 sha256」と混在していたため
-# 統一した）。af0_anchor_manifest.json の anchor_hashes.af0 pin だけは
+# 統一した）。domains/identity_domain_run9_v1.json の
+# anchor_hashes.af0 / metric_space_sha / anchor_hashes.user の3 pin は
 # 意図的な例外で正規形（canonical）規約を使う — 両者を混同しないこと
-# （compute_file_sha256() の docstring に規約差の理由を記載）。
+# （compute_file_sha256() の docstring に規約差の理由を記載。Codex bot
+# レビュー PR #320 第3巡指摘, P2, 採用, Fix 5 — 旧文言は af0 のみを例外
+# としており、PR #320 第1・2巡 Fix 1/Fix 3 で user anchor が canonical
+# 規約へ移行した後も本欄が追随していなかった。なお anchor_hashes.user は
+# af0/metric_space_sha とも異なり、ファイルの hash ですらない——
+# `run9_schema.extract_user_identity_attestation_projection()` が
+# `inputs/rights_manifest.json` から導出するメモリ上の projection dict
+# の正規形 hash であり、一次レシピは
+# `domains/identity_domain_run9_v1.json` `pin_source_candidates.user`
+# 末尾の最新 REPINNED エントリを正とする）。
 # bundle 内に PENDING 相当の欄が残る場合はこの欄も PENDING と
 # し理由に「bundle 内 PENDING 解消後に pin」と記す規約。
 # Codex bot レビュー PR #316 第1巡指摘（P2, 866fcc8, 採用）: bundle 内

@@ -1213,13 +1213,27 @@ def compute_file_sha256(path: Path) -> str:
       「このファイルが手元にあるかどうか」を bit-for-bit で照合するのが
       目的。
     - **正規形（canonical）規約**（`domains/identity_domain_run9_v1.json`
-      `anchor_hashes.af0` のみ — `inputs/af0_anchor_manifest.json` 参照）:
-      `json.dumps(obj, sort_keys=True, ensure_ascii=False,
+      `anchor_hashes.af0` / `metric_space_sha` / `anchor_hashes.user` の
+      3件 — `inputs/af0_anchor_manifest.json` / `identity_metric_space.json`
+      参照）: `json.dumps(obj, sort_keys=True, ensure_ascii=False,
       separators=(",",":"))` で正規化してから sha256 する値。AF-P0 の
       `spec_sha256` 系譜（`af_spec.py canonical_json()`）と意味論を揃える
-      ため、こちらだけ意図的に例外としている（af0 側の規約を本関数へ
-      合わせる変更は行わない — 詳細は af0_anchor_manifest.json の
-      `canonicalization_method` フィールド参照）。
+      ため、これらだけ意図的に例外としている（af0/metric_space_sha 側の
+      規約を本関数へ合わせる変更は行わない — 詳細は
+      af0_anchor_manifest.json の `canonicalization_method` フィールド
+      参照）。`anchor_hashes.user` はこの3件の中でもさらに特殊——af0/
+      metric_space_sha が「ファイル内容を正規化した」hash であるのに
+      対し、user はファイルの hash ですらない。`run9_schema.
+      extract_user_identity_attestation_projection()` の返り値（
+      `inputs/rights_manifest.json` から導出するメモリ上の projection
+      dict）を正規化してから sha256 する値であり、正規化対象がディスク上の
+      どのファイルとも1対1対応しない（Codex bot レビュー PR #320 第3巡
+      指摘, P2, 採用, Fix 5 — 旧文言は af0 のみを例外としており、
+      Fix 1/Fix 3（PR #320 第1・2巡）で user anchor が canonical 規約
+      かつ projection 由来へ移行した後も本 docstring が追随していな
+      かった。再計算手順の一次レシピは
+      `domains/identity_domain_run9_v1.json` `pin_source_candidates.user`
+      末尾の最新 REPINNED エントリを正とする）。
     """
     h = hashlib.sha256()
     with Path(path).open("rb") as f:

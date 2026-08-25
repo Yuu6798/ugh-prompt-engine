@@ -1915,6 +1915,46 @@ def test_revision02_af0_vs_bundle_hash_convention_difference_documented() -> Non
     assert "compute_file_sha256" in schema_source
 
 
+def test_fix320_5_hash_convention_inventory_lists_user_anchor_as_canonical_projection() -> None:
+    """Codex bot レビュー PR #320 第3巡指摘（P2, 採用, Fix 5）の回帰テスト:
+    `compute_file_sha256()` の docstring と `RUN9_CONTRACT.yaml` の規約
+    サマリーコメントが、`anchor_hashes.user` を「af0 のみの例外」から
+    取り残さず canonical 規約側の一員として列挙し、かつ user anchor が
+    ファイル hash ではなく `extract_user_identity_attestation_
+    projection()` 由来のメモリ上 projection dict の hash であることを
+    明記していることを直接確認する——旧文言（af0 だけが例外）のまま
+    再計算した maintainer が user anchor をファイル bytes で誤って
+    再計算し、異なる pin・異なる genome_id を導出する経路を閉じる。"""
+    schema_source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+
+    # 1. docstring/contract コメントのいずれも "anchor_hashes.af0 のみ" /
+    #    "af0 pin だけは" という単独例外の主張を残していないこと
+    #    （両者とも "のみ"/"だけ" は他の許容された文脈で使われ得るため、
+    #    af0 に限定した独占的例外主張の具体的な文字列のみを負例とする）。
+    assert "`anchor_hashes.af0` のみ" not in schema_source
+    assert "anchor_hashes.af0 pin だけは" not in contract_text
+
+    # 2. compute_file_sha256() の docstring が3件（af0/metric_space_sha/
+    #    user）を canonical 規約側として列挙し、user anchor が
+    #    projection 由来（ファイル hash ではない）であることを明記して
+    #    いること。
+    assert "extract_user_identity_attestation_projection" in schema_source
+    doc = m.compute_file_sha256.__doc__ or ""
+    assert "anchor_hashes.user" in doc
+    assert "extract_user_identity_attestation_projection" in doc
+    assert "ファイルの hash ですらない" in doc
+
+    # 3. RUN9_CONTRACT.yaml の規約サマリーコメントも同様に user anchor を
+    #    canonical 規約側として列挙していること。
+    assert "anchor_hashes.user" in contract_text
+    assert "extract_user_identity_attestation_projection" in contract_text
+    idx = contract_text.index("意図的な例外で正規形（canonical）規約を使う")
+    nearby = contract_text[max(0, idx - 400) : idx + 1000]
+    assert "anchor_hashes.user" in nearby, nearby
+    assert "af0" in nearby and "metric_space_sha" in nearby, nearby
+
+
 def test_revision02_backbone_runtime_bundle_sha_pinned_via_run9_render_code_commit(
     contract_raw: Dict[str, Any],
 ) -> None:
