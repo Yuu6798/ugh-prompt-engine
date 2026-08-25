@@ -671,6 +671,20 @@ def validate_lesson_record(data: Mapping[str, Any]) -> None:
                 f"{_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} is reserved for "
                 f"User-attributable fields — use {_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} instead"
             )
+        # Codex bot レビュー PR #319 第13巡指摘, Fix 26（P2, 採用）: 本節5欄も
+        # `_validate_rights_provenance_block()` と同じ「外部事実の具体値を
+        # 自由記述として受理する」経路であり、`USER_ATTESTED_OWN_VOICE`
+        # （voice_identity_rights 層 User-donor attestation 完了専用トークン）
+        # の混入で PJS 側（外部第三者）の事実を「User attestation 済み」に
+        # 偽装できてしまう対称漏れを同型で塞ぐ。
+        if value == _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE:
+            raise Run9ValidationError(
+                f"lesson record.{field} is an external-fact field (PJS 側の事実欄); "
+                f"{_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE!r} is reserved for "
+                "voice_identity_rights layer User-donor attestation — use "
+                f"{_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} for an unresolved state or a concrete "
+                "external description for a resolved one"
+            )
 
     extracted_traits = data["extracted_traits"]
     if not isinstance(extracted_traits, list) or not extracted_traits:
@@ -5096,6 +5110,26 @@ def _validate_rights_provenance_block(layer_name: str, block_name: str, block: A
                 f"{path}.{key} is a User-attributable field; "
                 f"{_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} is reserved for "
                 f"external-fact fields — use {_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} instead"
+            )
+        # Codex bot レビュー PR #319 第13巡指摘, Fix 26（P2, 採用）: Fix 25 は
+        # 層直下の rights_class/consent_status（裸トークン）への
+        # `USER_ATTESTED_OWN_VOICE` 混入は塞いだが、本ブロック（provenance
+        # 内の performance_author.performer / composition.composer /
+        # composition.lyricist / voice_source.owner 等、角括弧なし自由記述
+        # を受理する具体値検証パス）は素通りしていた——第三者 author/権利者
+        # 欄を User-donor 完了トークンで置換したまま validate を通過でき、
+        # R9-G1 が消費する provenance を汚染し得る。Fix 25 と同型の
+        # fail-closed 拒否を対称に適用する。
+        if (
+            value == _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE
+            and kind != _RIGHTS_MANIFEST_FIELD_KIND_USER
+        ):
+            raise Run9ValidationError(
+                f"{path}.{key} is an external-fact field; "
+                f"{_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE!r} is reserved for "
+                "voice_identity_rights layer User-donor attestation — for this external field, use "
+                f"{_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} for an unresolved state or a concrete "
+                "external rights description for a resolved one"
             )
     if uses_not_applicable:
         note = block.get("note")

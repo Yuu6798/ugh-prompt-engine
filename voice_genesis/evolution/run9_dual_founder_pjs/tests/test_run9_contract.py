@@ -8617,3 +8617,84 @@ def test_fix319_25_unresolved_external_regression_still_accepted() -> None:
         assert data[layer_name]["rights_class"] == "UNRESOLVED_EXTERNAL"
         assert data[layer_name]["consent_status"] == "UNRESOLVED_EXTERNAL"
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第13巡対応 — Fix 26（P2）: nested provenance /
+# LessonRecord 外部事実欄での User 完了トークン拒否。Fix 25 は層直下の
+# rights_class/consent_status（角括弧なし裸トークン）への
+# `USER_ATTESTED_OWN_VOICE` 混入は塞いだが、nested provenance ブロック
+# （`_validate_rights_provenance_block()` の値検証 — performance_author.
+# performer / composition.composer / composition.lyricist / voice_source.
+# owner 等、角括弧なし自由記述の具体値を受理する経路）と
+# `validate_lesson_record()` の外部事実5欄は同トークンを通常の具体値として
+# 素通りさせていた。Fix 25 と同型の fail-closed 拒否を両経路へ対称適用する。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("layer_name", "block_name", "field_name"),
+    [
+        ("performance_rights", "performance_author", "performer"),
+        ("recording_master_rights", "voice_source", "owner"),
+        ("composition_rights", "composition", "composer"),
+        ("composition_rights", "composition", "lyricist"),
+    ],
+)
+def test_fix319_26_rejects_user_attested_own_voice_in_nested_provenance(
+    layer_name: str, block_name: str, field_name: str
+) -> None:
+    """負例（4ケース）: nested provenance ブロック内の代表4欄
+    （performance_author.performer / voice_source.owner / composition.
+    composer / composition.lyricist）へ `USER_ATTESTED_OWN_VOICE`
+    （voice_identity_rights 層 User-donor attestation 完了専用トークン）を
+    手編集で混入させても、第三者 author/権利者欄を「User attestation 済み」
+    に偽装できないことの確認——拒否メッセージは voice_identity_rights 層
+    専用であることと、この外部欄での代替語彙（UNRESOLVED_EXTERNAL / 具体的
+    な外部権利状態の記述）を案内する。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data[layer_name]["provenance"][block_name][field_name] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=r"voice_identity_rights layer User-donor attestation",
+    ):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_26_nested_provenance_current_values_regression_accepted() -> None:
+    """正例（回帰）: `inputs/rights_manifest.json` の nested provenance
+    現行値（`Junya Koguchi` の具体的記述値 / `<UNRESOLVED_EXTERNAL>`）は
+    Fix 26 適用後も引き続き受理されること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "performance_source",
+        "voice_source",
+        "performance_author",
+        "composition_source",
+        "recording_source",
+    ],
+)
+def test_fix319_26_rejects_user_attested_own_voice_in_lesson_record_field(field: str) -> None:
+    """負例（5ケース、parametrize）: LessonRecord 外部事実5欄いずれも
+    `USER_ATTESTED_OWN_VOICE`（voice_identity_rights 層 User-donor
+    attestation 完了専用トークン）を拒否し、voice_identity_rights 層専用で
+    あることを案内するメッセージを含むこと（Codex bot レビュー PR #319
+    第13巡指摘, Fix 26, P2, 採用）。"""
+    record = _valid_lesson_record()
+    record[field] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=r"voice_identity_rights layer User-donor attestation",
+    ):
+        m.validate_lesson_record(record)
+
+
+def test_fix319_26_valid_lesson_record_fixture_still_validates() -> None:
+    """正例（回帰）: `_valid_lesson_record()` fixture は Fix 26 適用後も
+    引き続き受理されること。"""
+    m.validate_lesson_record(_valid_lesson_record())  # 例外を投げないことの確認
