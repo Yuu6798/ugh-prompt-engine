@@ -575,7 +575,10 @@
         "medial_filler_beats": 1,
         "medial_filler_kana": "か",
         "medial_filler_note": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json#factor_levels の medial_filler_kana/medial_filler_beats と同一の水準値を踏襲する（read-only 参照）。medial_filler_pitch_midi=60 は現行 cell の実 filler note 値からの転記（PR #322 第3巡指摘 Fix 7 — 全 onset cell の前置 filler note がこの凍結タプルと完全一致することを validate_probe_manifest() が機械検証する）。",
-        "medial_filler_pitch_midi": 60
+        "medial_filler_pitch_midi": 60,
+        "onset_target_duration_beats": 2,
+        "onset_target_note": "Fix 25（PR #322 第14巡指摘、採用）: 全 onset cell の phrase-final 検定 note が共有すべき凍結 target タプル。現行 cell の実値（MIDI 65 / 2拍）から転記。validate_probe_manifest() が全 onset cell（onset_consonant_class 軸を持つ cell）の phrase-final note の pitch_midi/duration_beats をこの凍結タプルと完全一致検証する（Fix 7 の filler 一貫性検証とは独立）。",
+        "onset_target_pitch_midi": 65
       },
       "probe_id": "P2",
       "role": "phrase内の弱→強・onset class差・consonant/vowel組合せを通じてEnergy/Attack応答をprobeする（v0.1 §15 P2）。factor_levels.axesが定義するonset_consonant_class毎に、共通filler note (弱)→target onset note (強)の2ノートcellで水準を張る。各cellはlevelsで参照する軸/水準を機械可読に宣言する。\n\n境界宣言（PR #322 第5巡指摘 Fix 11, P1, 採用）: 宣言harness（gate_synth.py::run_pipelineのbuild_inputs()）には energy/velocity/metrical-accent の制御入力が存在しない。v0.1 §15 P2の『phrase内の弱→強』は本backboneでは操作変数として表現不能である。P2のEnergy/Attack軸で実際に操作されるのは onset consonant class のみ（子音クラスはattack energy特性を音韻経由で実変化させる）であり、energyに関するP2測定はこの操作の観察に限定される。P2-PHRASE-BUILD-WEAK-TO-STRONG cellはEnergy contrastとしては登録せず、diagnostic_role（pitch上行構造のみを操作する診断用cell）として保持する。energy直接制御が可能なbackboneへの交換時が本境界宣言の再入条件である。",

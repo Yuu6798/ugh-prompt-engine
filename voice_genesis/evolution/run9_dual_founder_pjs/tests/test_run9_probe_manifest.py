@@ -912,6 +912,93 @@ def test_negative_fix7_onset_cell_prefix_length_not_one() -> None:
 
 
 # ---------------------------------------------------------------------------
+# PR #322 第14巡指摘 Fix 25（P2, 採用）: P2 onset cell の phrase-final
+# target（pitch/duration）一貫性強制
+# ---------------------------------------------------------------------------
+
+
+def test_fix25_target_tuple_declared_and_matches_cells(manifest_data: Dict[str, Any]) -> None:
+    p2 = _p2_probe(manifest_data)
+    fl = p2["factor_levels"]
+    assert fl["onset_target_pitch_midi"] == 65
+    assert fl["onset_target_duration_beats"] == 2
+    for cell in p2["cells"]:
+        if "onset_consonant_class" not in cell.get("levels", {}):
+            continue
+        final = cell["notes"][-1]
+        assert final["is_phrase_final"] is True
+        assert final["pitch_midi"] == fl["onset_target_pitch_midi"]
+        assert final["duration_beats"] == fl["onset_target_duration_beats"]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda note: note.__setitem__("pitch_midi", 67),
+        lambda note: note.__setitem__("duration_beats", 3),
+    ],
+)
+def test_negative_fix25_target_note_mismatch(manifest_data: Dict[str, Any], mutate) -> None:
+    """指摘の核心シナリオ: onset cell の phrase-final 検定 note の
+    pitch/duration を変えても、Fix 7（前置 filler 一貫性）と
+    `_check_axis_kana_class()`（kana クラスのみ）は共に検出できない
+    ——Fix 25 の target 一貫性検証でのみ検出される。"""
+    bad = _mutate(manifest_data)
+    p2 = _p2_probe(bad)
+    cell = _cell_by_id(p2, "P2-ONSET-STOP-K")
+    mutate(cell["notes"][-1])
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix25_target_mismatch_only_one_cell_diverges(manifest_data: Dict[str, Any]) -> None:
+    """複数 onset cell のうち1つだけ target を変えても、他 cell との
+    ペアワイズ比較ではなく凍結タプルとの直接比較で検出される。"""
+    bad = _mutate(manifest_data)
+    p2 = _p2_probe(bad)
+    cell = _cell_by_id(p2, "P2-ONSET-VOWEL-ONLY")
+    cell["notes"][-1]["pitch_midi"] = 60
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+@pytest.mark.parametrize(
+    "missing_key", ["onset_target_pitch_midi", "onset_target_duration_beats"]
+)
+def test_negative_fix25_target_declaration_key_missing(
+    manifest_data: Dict[str, Any], missing_key: str
+) -> None:
+    bad = _mutate(manifest_data)
+    del _p2_probe(bad)["factor_levels"][missing_key]
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix25_direct_call_target_mismatch() -> None:
+    """`_validate_p2_onset_target_consistency()` への直接単体呼び出しで、
+    target タプル不一致を検出することを確認する（既存テスト流儀と同型）。"""
+    factor_levels = {"onset_target_pitch_midi": 65, "onset_target_duration_beats": 2}
+    cell = {
+        "cell_id": "Z",
+        "notes": [
+            {
+                "kana": "か", "pitch_midi": 60, "duration_beats": 1.0,
+                "phrase_index": 0, "is_phrase_final": False,
+            },
+            {
+                "kana": "さ", "pitch_midi": 67, "duration_beats": 2.0,
+                "phrase_index": 0, "is_phrase_final": True,
+            },
+        ],
+        "levels": {"onset_consonant_class": "fricative_s"},
+    }
+    with pytest.raises(m.Run9ValidationError):
+        m._validate_p2_onset_target_consistency(
+            factor_levels=factor_levels, cells=[cell], field="test"
+        )
+
+
+# ---------------------------------------------------------------------------
 # PR #322 第4巡指摘 Fix 8（P2, 採用）: revision_bridge エントリ→期待 path
 # の厳密対応
 # ---------------------------------------------------------------------------

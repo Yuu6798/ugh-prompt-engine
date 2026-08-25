@@ -810,8 +810,23 @@ learning_recipe_sha:
 # の role 文言訂正）で manifest バイトが変わるため sha256 を再計算した。
 # 旧値（履歴として保持）:
 # "b18e8680991b2f74b1fa1ff710f9ed6e5775e87d8a1f2181784bdfc21bfe71ce"
+# PR #322 Codex bot レビュー第14巡1件（採用）反映による repin:
+# Fix 25（P2）amendment/repin で onset cell の phrase-final 検定 note を
+# MIDI 65 / 2拍から別の pitch/duration へ変えても通過していた——
+# `_check_axis_kana_class()` は検定 note の kana クラスしか見ず、Fix 7 の
+# 一貫性検査は前置 filler note しか比較しないため、P2 比較が onset class
+# と pitch/duration を同時に変え、その交絡が Attack へ帰属され得る欠陥
+# だった。Fix 7/19 と同方式で、P2 の factor_levels へ凍結 target タプル
+# （`onset_target_pitch_midi`=65/`onset_target_duration_beats`=2、現行
+# cell の実値から転記）を追加宣言し、全 onset cell の phrase-final 検定
+# note の pitch_midi/duration_beats がこのタプルと完全一致することを
+# fail-closed 検証する（`_validate_p2_onset_target_consistency()`）新関数
+# を追加した。宣言値自体も `_PROBE_EXPECTED_FACTOR_VALUES["P2"]["extra"]`
+# （Fix 19 の凍結表）へ追加し二重 pin した。manifest バイトが変わったため
+# sha256 を再計算した。旧値（履歴として保持）:
+# "91e26ad51773a88694eb4cecee86d740f23ec5186ed46942e8df3cf5625809c1"
 probe_manifest_sha:
-  value: "91e26ad51773a88694eb4cecee86d740f23ec5186ed46942e8df3cf5625809c1"
+  value: "98d1b2b01abcb79eae82a26a7b0f2af834b58562d0ba3131b41db9cb1c7c5b9e"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 

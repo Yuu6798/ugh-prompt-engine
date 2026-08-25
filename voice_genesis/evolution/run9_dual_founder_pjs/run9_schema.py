@@ -3458,6 +3458,9 @@ _PROBE_EXPECTED_FACTOR_VALUES: Mapping[str, Any] = types.MappingProxyType({
         }),
         "extra": types.MappingProxyType({
             "medial_filler_kana": "か", "medial_filler_beats": 1, "medial_filler_pitch_midi": 60,
+            # Fix 25: 全 onset cell の phrase-final 検定 note が共有すべき
+            # 凍結 target タプル（現行 manifest の実値から転記）。
+            "onset_target_pitch_midi": 65, "onset_target_duration_beats": 2,
         }),
     }),
     "P3": types.MappingProxyType({
@@ -3674,6 +3677,26 @@ _P2_FILLER_TUPLE_KEYS: FrozenSet[str] = frozenset(
     {"medial_filler_kana", "medial_filler_beats", "medial_filler_pitch_midi"}
 )
 _P2_ONSET_AXIS_NAME = "onset_consonant_class"
+
+# ---------------------------------------------------------------------------
+# PR #322 第14巡指摘 Fix 25（P2, 採用）: Fix 7 は前置 filler note の一貫性
+# しか強制していない——`_check_axis_kana_class()` は phrase-final 検定
+# note の kana クラスしか見ず、Fix 7 の一貫性検査は前置 filler note しか
+# 比較しないため、amendment/repin で onset cell の phrase-final 検定 note
+# を MIDI 65 / 2拍から別の pitch/duration へ変えても通過してしまう——P2
+# 比較が onset class と pitch/duration を同時に変え、その交絡が Attack へ
+# 誤帰属され得る欠陥。Fix 7 と同方式で、P2 の `factor_levels` へ凍結
+# target タプル（`onset_target_pitch_midi`/`onset_target_duration_beats`）
+# を宣言し、全 onset cell（`onset_consonant_class` 軸を持つ cell）の
+# phrase-final 検定 note の pitch_midi/duration_beats がこのタプルと
+# 完全一致すること（結果として全 onset cell 間で target context が同一
+# であること）を機械強制する。宣言値自体も Fix 19 の
+# `_PROBE_EXPECTED_FACTOR_VALUES["P2"]["extra"]` により manifest から
+# 独立した凍結表と照合される（二重 pin）。
+# ---------------------------------------------------------------------------
+_P2_TARGET_TUPLE_KEYS: FrozenSet[str] = frozenset(
+    {"onset_target_pitch_midi", "onset_target_duration_beats"}
+)
 
 # ---------------------------------------------------------------------------
 # PR #322 第5巡指摘 Fix 11（P1, 採用）: 宣言 harness
@@ -5118,6 +5141,51 @@ def _validate_p2_onset_filler_consistency(
             )
 
 
+def _validate_p2_onset_target_consistency(
+    *, factor_levels: Mapping[str, Any], cells: List[Dict[str, Any]], field: str
+) -> None:
+    """PR #322 第14巡指摘 Fix 25（P2, 採用）の実装: `factor_levels` が宣言
+    する凍結 target タプル（`onset_target_pitch_midi`/
+    `onset_target_duration_beats`）を検証し、`onset_consonant_class` 軸を
+    持つ全 cell（onset cell）の phrase-final 検定 note の pitch_midi/
+    duration_beats がこのタプルと完全一致すること——結果として全 onset
+    cell 間で target context（pitch/duration）が同一であること——を機械
+    強制する。Fix 7 が前置 filler note の一貫性を強制する一方、本関数は
+    検定対象そのもの（phrase-final note）の一貫性を強制する——両者は独立
+    の欠陥（`_check_axis_kana_class()` は kana クラスしか見ず、Fix 7 は
+    前置 note しか比較しない）であるため別関数として並置する。"""
+    missing = _P2_TARGET_TUPLE_KEYS - set(factor_levels.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"{field} missing required P2 onset target declaration key(s): {sorted(missing)}"
+        )
+    target_pitch = _require_probe_int(
+        factor_levels["onset_target_pitch_midi"], field=f"{field}.onset_target_pitch_midi"
+    )
+    target_beats = _require_positive_finite_number(
+        factor_levels["onset_target_duration_beats"], field=f"{field}.onset_target_duration_beats"
+    )
+
+    for cell in cells:
+        levels = cell.get(_CELL_LEVELS_KEY, {})
+        if not isinstance(levels, dict) or _P2_ONSET_AXIS_NAME not in levels:
+            continue  # onset_consonant_class 軸を参照しない cell（P2-PHRASE-BUILD 等）は対象外
+        cell_id = cell.get("cell_id")
+        final = _select_phrase_final_note(cell, field=f"{field} (cell_id={cell_id!r})")
+        if not _numeric_equal(final["pitch_midi"], target_pitch) or not _numeric_equal(
+            final["duration_beats"], target_beats
+        ):
+            raise Run9ValidationError(
+                f"{field}: onset cell {cell_id!r} phrase-final note "
+                f"(pitch_midi={final['pitch_midi']!r}, duration_beats={final['duration_beats']!r}) "
+                "does not match the frozen P2 onset target tuple "
+                f"(pitch_midi={target_pitch!r}, duration_beats={target_beats!r}) declared in "
+                "factor_levels — all onset cells must share the identical target context so the "
+                "onset-class comparison is not confounded by differing target pitch/duration "
+                "(Fix 25)"
+            )
+
+
 def _validate_probe_object(
     probe: Any, *, expected_probe_id: str, field: str, seen_cell_ids: Dict[str, str],
     phoneme_jp_module: Any, score_py_module: Any,
@@ -5223,6 +5291,11 @@ def _validate_probe_object(
 
     if expected_probe_id == "P2":
         _validate_p2_onset_filler_consistency(
+            factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
+        )
+        # Fix 25: onset cell 間の phrase-final target（pitch/duration）の
+        # 一貫性を Fix 7（prefix filler の一貫性）とは独立に強制する。
+        _validate_p2_onset_target_consistency(
             factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
         )
 
