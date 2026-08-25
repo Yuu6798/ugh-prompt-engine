@@ -5,7 +5,7 @@
   "anchor_hashes": {
     "af0": "183bf32561589ddad69daa0faf5838c3e9601d17b24b62ee32aa629123a87f1e",
     "ritsu": "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76",
-    "user": "<PIN_BEFORE_RUN>"
+    "user": "e2755c3db6283e40e5080c5de75a70bb8b88e275e548848b1e2e5b8f4bb512d1"
   },
   "excluded_teacher_identities": ["pjs"],
   "coordinate_precision": 6,
@@ -20,7 +20,8 @@
       "PINNED (2026-08-24): 波音リツ配布 zip sha256 (voice_genesis/foundry/s1_dataprep/README.md 記載値: 88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76 — 波音リツ強連続音Ver1.5.1)"
     ],
     "user": [
-      "PENDING (rights attest 待ち): voice_genesis/foundry/recording_kit/user_donor_ledger.json (17件の source_sha256/sha256) を転記した inputs/rights_manifest.json（schema run9-rights-manifest/2.0、4層構造。旧 run9-user-donor-rights/1.0 相当の内容は voice_identity_rights 層へ nested 収容 — DESIGN_RUN9_REVISION_0.4.md）が起草済み。voice_identity_rights.rights_class/consent_status = PENDING_USER_ATTESTATION のあいだは anchor_hashes.user を pin しない（DESIGN_RUN9_REVISION_0.2.md 改訂4）。User attest 完了後、rights_manifest.json の sha256 をこの pin の入力へ束ねる。"
+      "PINNED (2026-08-25, User attestation — User 裁定「承認する」、voice_identity_rights.attestation.attested=true 確定): sha256 of inputs/rights_manifest.json canonical form（attest 後の内容。af0_anchor_manifest.json / identity_metric_space.json と同一の正規形規約 — json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(\",\", \":\"))、no trailing newline）— see that file's binding_note field for the exact recomputation recipe.",
+      "PENDING (rights attest 待ち) 当時の履歴として保持: voice_genesis/foundry/recording_kit/user_donor_ledger.json (17件の source_sha256/sha256) を転記した inputs/rights_manifest.json（schema run9-rights-manifest/2.0、4層構造。旧 run9-user-donor-rights/1.0 相当の内容は voice_identity_rights 層へ nested 収容 — DESIGN_RUN9_REVISION_0.4.md）が起草済みだった。voice_identity_rights.rights_class/consent_status = PENDING_USER_ATTESTATION のあいだは anchor_hashes.user を pin しない（DESIGN_RUN9_REVISION_0.2.md 改訂4）という規約どおり、User attest 完了（2026-08-25、上記 PINNED 参照）まで未 pin のまま維持した。"
     ],
     "metric_space_sha": [
       "PINNED (Phase 3, Fable 設計判定 — User はマージ前に veto 可能): sha256 of inputs/identity_metric_space.json canonical form（af0_anchor_manifest.json と同一の正規形規約 — canonicalization_method フィールド参照）。identity_feature は P0 中立 identity probe voiced フレームの log spectral envelope (sp) 時間平均ベクトル。f0 は明示除外（Trait/Technique 層との交絡回避、PoR §2 層分離に整合）。calibration_procedure は C0/C1 machine calibration（rev 0.3 改訂G）に従う事前登録 spec — 実測退化時は PoR §9 [C] DESIGN FAILURE/UNOBSERVABLE として閉じ、事後調整はしない。",

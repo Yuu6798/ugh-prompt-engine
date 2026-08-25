@@ -529,23 +529,52 @@ def test_item54_current_contract_run_id_is_exactly_run9(contract_raw: Dict[str, 
 # ---------------------------------------------------------------------------
 
 
-def test_unpinned_domain_rejects_build_founder(domain_draft_raw: Dict[str, Any]) -> None:
-    """domains/identity_domain_run9_v1.json のドラフト（プレースホルダ
-    `<PIN_BEFORE_RUN>`）は構造 valid だが is_pinned() == False であり、
-    build_founder() は ValueError を送出する
-    （DESIGN_RUN9 §22 実行順 step 3→4 の機械強制）。"""
-    domain = m.run9_identity_domain_from_dict(domain_draft_raw)
+def test_unpinned_domain_rejects_build_founder() -> None:
+    """合成の未 pin domain（anchor_hashes.user がプレースホルダ）は構造
+    valid だが is_pinned() == False であり、build_founder() は
+    ValueError を送出する（DESIGN_RUN9 §22 実行順 step 3→4 の機械強制）。
+    2026-08-25 RUN9 User attestation 実行により実 domain draft
+    （`domains/identity_domain_run9_v1.json`）は PINNED 済みへ遷移した
+    ため、本テストはプレースホルダを直接注入した合成 domain で未 pin
+    経路の拒否を回帰確認する（実 domain 側の pinned 経路は
+    `test_run9_attest20260825_domain_user_anchor_now_pinned` が担う）。"""
+    domain = m.run9_identity_domain_from_dict({
+        "schema": m.SCHEMA_IDENTITY_DOMAIN,
+        "domain_id": m.RUN9_DOMAIN_ID,
+        "anchor_order": list(m.RUN9_ANCHOR_ORDER),
+        "anchor_hashes": {"af0": "a" * 64, "ritsu": "b" * 64, "user": "<PIN_BEFORE_RUN>"},
+        "excluded_teacher_identities": list(m.RUN9_EXCLUDED_TEACHER_IDENTITIES),
+        "coordinate_precision": m.RUN9_COORDINATE_PRECISION,
+        "normalization": m.RUN9_NORMALIZATION,
+        "metric_space_sha": "d" * 64,
+        "pin_source_candidates": {},
+    })
     assert domain.is_pinned() is False
     with pytest.raises(m.Run9ValidationError):
         m.build_founder(domain, "R9F-01")
 
 
 def test_unpinned_domain_placeholder_is_structurally_valid() -> None:
-    """ドラフト domain 自体は構造検証（未知キー・anchor_order 等）は
-    通過する — 未 pin は「構造不正」ではなく「pin 未充足」として区別する。"""
-    domain = m.run9_identity_domain_from_dict(json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8")))
+    """未 pin ドラフト domain 自体は構造検証（未知キー・anchor_order 等）は
+    通過する — 未 pin は「構造不正」ではなく「pin 未充足」として区別する。
+    2026-08-25 RUN9 User attestation 実行後は実 domain draft
+    （`domains/identity_domain_run9_v1.json`）が PINNED 済みのため、
+    合成の未 pin domain（`test_unpinned_domain_rejects_build_founder` と
+    同一 fixture）で構造検証パスを回帰確認する。"""
+    domain = m.run9_identity_domain_from_dict({
+        "schema": m.SCHEMA_IDENTITY_DOMAIN,
+        "domain_id": m.RUN9_DOMAIN_ID,
+        "anchor_order": list(m.RUN9_ANCHOR_ORDER),
+        "anchor_hashes": {"af0": "a" * 64, "ritsu": "b" * 64, "user": "<PIN_BEFORE_RUN>"},
+        "excluded_teacher_identities": list(m.RUN9_EXCLUDED_TEACHER_IDENTITIES),
+        "coordinate_precision": m.RUN9_COORDINATE_PRECISION,
+        "normalization": m.RUN9_NORMALIZATION,
+        "metric_space_sha": "d" * 64,
+        "pin_source_candidates": {},
+    })
     assert domain.domain_id == m.RUN9_DOMAIN_ID
     assert domain.anchor_order == ("af0", "ritsu", "user")
+    assert domain.is_pinned() is False
 
 
 def test_pinned_fixture_domain_succeeds(pinned_domain: m.Run9IdentityDomain) -> None:
@@ -1470,9 +1499,11 @@ def test_fix17_existing_contract_yaml_still_loads() -> None:
 
 
 def test_fix17_existing_domain_draft_json_still_loads() -> None:
-    """正例: 重複キーの無い既存 domain draft JSON は引き続き load できる。"""
+    """正例: 重複キーの無い既存 domain draft JSON は引き続き load できる。
+    2026-08-25 RUN9 User attestation 実行により user anchor も PINNED 済み
+    となったため、is_pinned() は True へ遷移した（旧: False）。"""
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
-    assert domain.is_pinned() is False
+    assert domain.is_pinned() is True
 
 
 def test_fix17_yaml_loader_comment_declares_models_loads_strict_parity() -> None:
@@ -1503,6 +1534,36 @@ def _sha256_canonical_json(obj: Any) -> str:
 
     canonical = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _pending_rights_manifest_fixture() -> Dict[str, Any]:
+    """`inputs/rights_manifest.json`（2026-08-25 RUN9 User attestation 実行
+    後は attested 形態）を読み込み、`voice_identity_rights` 層だけを attest
+    前の pending 形態（`attested=false`・signer/timestamp/statement=`None`・
+    `rights_class`/`consent_status`=`PENDING_USER_ATTESTATION`・
+    `usage_grants` 全3キー `not_granted`）へ差し戻したコピーを返す。
+    entries/donor_ledger_source 等の他フィールド、および他3層
+    （performance_rights/composition_rights/recording_master_rights）は
+    実ファイルのまま——pending 経路の負例テスト群（Fix 16/19/21/27 等）が
+    要求する「現行 fixture の pending baseline」を、実 fixture が attested
+    形態へ遷移した後も保つためのヘルパ（2026-08-25 RUN9 User attestation
+    実行時点で新設。`_attested_voice_identity_rights_layer()` の逆方向）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    layer = data["voice_identity_rights"]
+    layer["attestation"] = {
+        "attested": False,
+        "attested_by": None,
+        "attested_at": None,
+        "statement": None,
+    }
+    layer["rights_class"] = "PENDING_USER_ATTESTATION"
+    layer["consent_status"] = "PENDING_USER_ATTESTATION"
+    layer["usage_grants"] = {
+        "run9_identity_anchor": "not_granted",
+        "raw_audio_publication": "not_granted",
+        "model_general_distribution": "not_granted",
+    }
+    return data
 
 
 # --- item 1: design_revision 0.3 での contract load 成功 / "0.1"/"0.2" 拒否 -
@@ -1990,21 +2051,29 @@ def test_revision02_backbone_bundle_run7_not_used_records_teacher_swap_reason() 
     assert "教師交代" in bundle["run7_not_used"]["reason"] or "teacher swap" in bundle["run7_not_used"]["reason"].lower()
 
 
-# --- item 4: rights_manifest が PENDING_USER_ATTESTATION の間、domain user
-#     anchor は未 pin のまま（gate BLOCKED 継続） -----------------------------
+# --- item 4 (2026-08-25 RUN9 User attestation 実行により attested 形態へ
+#     遷移。旧テスト名 revision02_rights_manifest_is_pending_user_attestation
+#     は「Fix 15 の founder_genome_shas 改名前例」に倣い assertion のみ
+#     更新する) ------------------------------------------------------------
 
 
-def test_revision02_rights_manifest_is_pending_user_attestation() -> None:
-    """rev 0.4（4層再編）後: voice_identity_rights 層の内容・attest 対象は
-    無改変のまま（DESIGN_RUN9_REVISION_0.4.md 変更1・2「attest対象の更新」
-    — User裁定「aとbを承認」のa = 新4層構造に対する attest は次段で確定）。"""
+def test_run9_attest20260825_rights_manifest_is_attested() -> None:
+    """2026-08-25 RUN9 User attestation 実行（User 裁定「承認する」）後:
+    voice_identity_rights 層は pending 形態から attested 形態へ遷移した
+    （旧 test_revision02_rights_manifest_is_pending_user_attestation の
+    assertion を反転——rev 0.4 4層構造自体・他3層・entries は無改変）。"""
     rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     layer = rights["voice_identity_rights"]
-    assert layer["rights_class"] == "PENDING_USER_ATTESTATION"
-    assert layer["consent_status"] == "PENDING_USER_ATTESTATION"
-    assert layer["attestation"]["attested"] is False
+    assert layer["rights_class"] == "USER_ATTESTED_OWN_VOICE"
+    assert layer["consent_status"] == "USER_ATTESTED_OWN_VOICE"
+    assert layer["attestation"]["attested"] is True
+    assert layer["attestation"]["attested_by"] == "Yuu6798"
+    assert layer["attestation"]["attested_at"] == "2026-08-25T06:47:25Z"
+    assert layer["attestation"]["statement"]
+    assert layer["usage_grants"]["run9_identity_anchor"] == "granted"
     assert layer["usage_grants"]["raw_audio_publication"] == "not_granted"
     assert layer["usage_grants"]["model_general_distribution"] == "not_granted"
+    m.validate_rights_manifest_four_layer(rights)  # 例外を投げないことの確認
 
 
 def _load_rights_manifest_and_ledger() -> tuple[Dict[str, Any], Dict[str, Any]]:
@@ -2391,29 +2460,49 @@ def test_revision02_verify_rights_manifest_current_files_match_frozen_donor_set(
     m.verify_rights_manifest_against_ledger(rights, ledger)  # 例外を投げないことの確認
 
 
-def test_revision02_domain_user_anchor_still_unpinned_while_rights_pending() -> None:
+def test_run9_attest20260825_domain_user_anchor_now_pinned() -> None:
+    """2026-08-25 RUN9 User attestation 実行により user anchor が PINNED
+    化された（旧 test_revision02_domain_user_anchor_still_unpinned_while_
+    rights_pending の assertion を反転）。値は attest 後 rights_manifest.json
+    の正規形 sha256（af0/metric_space_sha と同一規約）と一致する。"""
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
-    assert domain.anchor_hashes["user"] == "<PIN_BEFORE_RUN>"
-    assert domain.is_pinned() is False
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert domain.anchor_hashes["user"] == _sha256_canonical_json(rights)
+    assert m._SHA256_HEX_RE.match(domain.anchor_hashes["user"])
+    assert domain.anchor_hashes["user"] != "<PIN_BEFORE_RUN>"
+    assert domain.is_pinned() is True
 
 
 def test_revision02_gate_remains_blocked_after_af0_ritsu_backbone_pins(
     contract: m.Run9RunContract,
 ) -> None:
-    """af0/ritsu anchor と backbone (checkpoint + runtime bundle) が新たに
-    PINNED になっても、user anchor / lesson / VG-L0 ハーネス関連欄が
-    PENDING のままである限り gate_state() は "BLOCKED" のまま
-    （部分的な pin 進展だけでは READY へ到達しないことの機械証明）。"""
+    """af0/ritsu/user anchor（2026-08-25 User attestation 実行により user も
+    PINNED 化済み）と backbone (checkpoint + runtime bundle) が新たに
+    PINNED になっても、dataset/config/lesson/practice/learning-recipe 等
+    VG-L0 ハーネス関連欄が PENDING のままである限り gate_state() は
+    "BLOCKED" のまま（部分的な pin 進展だけでは READY へ到達しないことの
+    機械証明）。"""
     assert m.gate_state(contract) == "BLOCKED"
 
 
-def test_revision02_build_founder_still_rejects_current_domain_draft() -> None:
-    """user anchor 未 pin のため、現行 domain draft からは
-    build_founder() が依然として拒否されること（Phase 0.2 でも段階3→4の
-    機械強制が有効なままであることの確認）。"""
+def test_run9_attest20260825_build_founder_now_succeeds_for_both_founders() -> None:
+    """2026-08-25 RUN9 User attestation 実行により domain が凍結
+    （is_pinned()==True）されたため、現行 domain draft から
+    build_founder() が両 Founder 分成功するようになったこと（旧
+    test_revision02_build_founder_still_rejects_current_domain_draft の
+    assertion を反転）。genome_id は決定論的（再計算しても同じ値）かつ
+    R9F-01/R9F-02 間で相異することを直接確認する（DESIGN_RUN9 §9.4
+    「両 Founder は異なる座標を持つ」の機械証明）。"""
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
-    with pytest.raises(m.Run9ValidationError):
-        m.build_founder(domain, "R9F-01")
+    assert domain.is_pinned() is True
+    g1 = m.build_founder(domain, "R9F-01")
+    g2 = m.build_founder(domain, "R9F-02")
+    assert m._GENOME_ID_RE.match(g1.genome_id)
+    assert m._GENOME_ID_RE.match(g2.genome_id)
+    assert g1.genome_id != g2.genome_id
+    # 決定論: 同一 domain から再構築しても同じ genome_id。
+    assert m.build_founder(domain, "R9F-01").genome_id == g1.genome_id
+    assert m.build_founder(domain, "R9F-02").genome_id == g2.genome_id
 
 
 # --- README 更新の整合確認 --------------------------------------------------
@@ -4284,23 +4373,17 @@ def test_phase3_identity_metric_space_feasibility_note_references_design_failure
     assert "事後" in note  # 事後調整で救済しないことの明記
 
 
-def test_phase3_domain_is_pinned_still_false_after_metric_space_pin() -> None:
-    """metric_space_sha が pin されても、user anchor が残るため
-    `is_pinned()` は依然 False（意図どおり）。"""
+def test_phase3_domain_is_pinned_true_after_metric_space_and_user_pin() -> None:
+    """metric_space_sha の pin（Phase 3）に続き、2026-08-25 RUN9 User
+    attestation 実行で user anchor も PINNED 化されたため、実 domain draft
+    は `is_pinned() == True`（旧 test_phase3_domain_is_pinned_still_false_
+    after_metric_space_pin の assertion を反転 — Fix 15 の
+    founder_genome_shas 改名前例に倣い名称・assertion を更新する）。"""
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
-    domain = m.run9_identity_domain_from_dict({
-        **domain_raw,
-        "anchor_hashes": {
-            "af0": domain_raw["anchor_hashes"]["af0"],
-            "ritsu": domain_raw["anchor_hashes"]["ritsu"],
-            "user": "c" * 64,  # user はまだ pin されないため合成値で domain 構築だけ確認
-        },
-    })
-    # user anchor はまだ本物ではないため is_pinned() は本テストの主張対象
-    # ではない（別途 anchor_hashes.user 自体が "<PIN_BEFORE_RUN>" のままで
-    # あることを直接確認する）。
-    assert domain_raw["anchor_hashes"]["user"] == "<PIN_BEFORE_RUN>"
+    domain = m.run9_identity_domain_from_dict(domain_raw)
+    assert domain_raw["anchor_hashes"]["user"] != "<PIN_BEFORE_RUN>"
     assert domain.metric_space_sha == domain_raw["metric_space_sha"]
+    assert domain.is_pinned() is True
 
 
 def test_phase3_readme_documents_metric_space_fable_pin_with_veto() -> None:
@@ -7354,18 +7437,29 @@ def test_fix319_6_performance_and_composition_rights_use_unresolved_external() -
         assert data[layer_name]["consent_status"] == "UNRESOLVED_EXTERNAL"
 
 
-def test_fix319_6_voice_identity_rights_still_pending_user_attestation() -> None:
-    """User 帰属欄（User donor の同意・usage grants 等）は張り替え対象外
-    ——引き続き `PENDING_USER_ATTESTATION` のまま維持する（voice_identity_
-    rights は User donor 自身の声の権利であり、Fix 6 の対象は PJS 側の
-    3層のみ）。usage_grants.run9_identity_anchor は Fix 19（第9巡, P2,
-    採用）で値語彙が {not_granted, granted} の閉集合へ凍結されたのに伴い、
-    旧値 `pending`（閉集合外の第3値）から `not_granted` へ改めた——
-    「まだ承認されていない」という意味論自体は変わらない。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
-    assert data["voice_identity_rights"]["rights_class"] == "PENDING_USER_ATTESTATION"
-    assert data["voice_identity_rights"]["consent_status"] == "PENDING_USER_ATTESTATION"
-    assert data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] == "not_granted"
+def test_fix319_6_voice_identity_rights_scoped_out_of_vocab_swap() -> None:
+    """User 帰属欄（User donor の同意・usage grants 等）は Fix 6 の張り替え
+    対象外——`PENDING_USER_ATTESTATION`/`UNRESOLVED_EXTERNAL` の仕分けは
+    voice_identity_rights 層（User donor 自身の声の権利）には及ばない
+    （Fix 6 の対象は PJS 側の3層のみ）。pending 形態の baseline
+    （`_pending_rights_manifest_fixture()`）で回帰確認する——現行 fixture
+    自体は 2026-08-25 RUN9 User attestation 実行により attested 形態へ
+    遷移済み（`test_run9_attest20260825_rights_manifest_is_attested` 参照。
+    旧テスト名 fix319_6_voice_identity_rights_still_pending_user_attestation
+    は Fix 15 の founder_genome_shas 改名前例に倣い改名した）。
+    usage_grants.run9_identity_anchor は Fix 19（第9巡, P2, 採用）で値語彙が
+    {not_granted, granted} の閉集合へ凍結されたのに伴い、旧値 `pending`
+    （閉集合外の第3値）から `not_granted` へ改めた——「まだ承認されていない」
+    という pending 時点の意味論自体は変わらない。"""
+    pending = _pending_rights_manifest_fixture()
+    assert pending["voice_identity_rights"]["rights_class"] == "PENDING_USER_ATTESTATION"
+    assert pending["voice_identity_rights"]["consent_status"] == "PENDING_USER_ATTESTATION"
+    assert pending["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] == "not_granted"
+    m.validate_rights_manifest_four_layer(pending)  # 例外を投げないことの確認
+    # 現行 fixture 自体は attested 形態（対照）。
+    current = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert current["voice_identity_rights"]["rights_class"] == "USER_ATTESTED_OWN_VOICE"
+    assert current["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] == "granted"
 
 
 def test_fix319_6_rights_manifest_still_validates_after_vocab_swap() -> None:
@@ -7972,8 +8066,11 @@ def test_fix319_16_attestation_non_bool_attested_rejected() -> None:
 
 def test_fix319_16_pending_form_with_nonnull_signer_rejected() -> None:
     """pending 形態（attested=false）なのに attested_by が非 null な場合の
-    拒否（負例6 — pending/attested 二形態の混在を許さない）。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    拒否（負例6 — pending/attested 二形態の混在を許さない）。現行
+    rights_manifest.json は 2026-08-25 RUN9 User attestation 実行後は
+    attested 形態のため、pending baseline は
+    `_pending_rights_manifest_fixture()` で構築する。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["attestation"]["attested_by"] = "someone"
     with pytest.raises(m.Run9ValidationError, match=r"attested_by must be null"):
         m.validate_rights_manifest_four_layer(data)
@@ -8009,8 +8106,10 @@ def test_fix319_16_attested_form_empty_statement_rejected() -> None:
 def test_fix319_16_attested_form_while_status_still_pending_rejected() -> None:
     """attestation が attested 形態に埋まっているのに、層の rights_class/
     consent_status が依然 `PENDING_USER_ATTESTATION` のままの場合の拒否
-    （負例9 — 二形態の整合違反、順方向）。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    （負例9 — 二形態の整合違反、順方向）。pending baseline から出発する
+    （現行 fixture は既に attested 形態のため
+    `_pending_rights_manifest_fixture()` で構築）。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["attestation"] = {
         "attested": True,
         "attested_by": "user@example.com",
@@ -8024,8 +8123,12 @@ def test_fix319_16_attested_form_while_status_still_pending_rejected() -> None:
 def test_fix319_16_pending_form_while_status_no_longer_pending_rejected() -> None:
     """層の rights_class/consent_status が `PENDING_USER_ATTESTATION` から
     離れているのに、attestation が pending 形態のまま放置されている場合の
-    拒否（負例10 — 二形態の整合違反、逆方向）。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    拒否（負例10 — 二形態の整合違反、逆方向）。pending baseline から出発
+    する（現行 fixture は既に attested 形態のため
+    `_pending_rights_manifest_fixture()` で構築 — 素の pending fixture に
+    対する mutation でなければ「attestation は pending のまま放置」の
+    シナリオを再現できない）。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
     data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
     with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
@@ -8033,11 +8136,14 @@ def test_fix319_16_pending_form_while_status_no_longer_pending_rejected() -> Non
 
 
 def test_fix319_16_valid_pending_fixture_still_validates() -> None:
-    """正例（回帰）: 現行 rights_manifest.json の pending 形態
+    """正例（回帰）: pending 形態の voice_identity_rights 層
     （attested=false + signer/timestamp/statement すべて null +
-    rights_class/consent_status = PENDING_USER_ATTESTATION）が Fix 16 追加後も
-    validator を通ることの end-to-end 確認。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    rights_class/consent_status = PENDING_USER_ATTESTATION）が Fix 16
+    追加後も validator を通ることの end-to-end 確認。2026-08-25 RUN9
+    User attestation 実行により現行 fixture 自体は attested 形態へ遷移
+    済みのため、`_pending_rights_manifest_fixture()` で pending baseline
+    を構築する（旧: 現行 fixture を直接使用）。"""
+    data = _pending_rights_manifest_fixture()
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
 
 
@@ -8110,8 +8216,10 @@ def test_fix319_19_granted_while_attestation_still_pending_rejected(grant_key: s
     false）のまま grant を 'granted' へ書き換えても拒否されること——
     手編集での「承認証拠なしの公開/配布許可」成立を防ぐ核心の負例。
     run9_identity_anchor も他の2キーと同じ前提条件（attested 形態必須）を
-    適用することの確認を兼ねる。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    適用することの確認を兼ねる。現行 rights_manifest.json は 2026-08-25
+    RUN9 User attestation 実行後は attested 形態のため、pending baseline
+    は `_pending_rights_manifest_fixture()` で構築する。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["usage_grants"][grant_key] = "granted"
     with pytest.raises(m.Run9ValidationError, match="attestation is not in attested form"):
         m.validate_rights_manifest_four_layer(data)
@@ -8206,9 +8314,14 @@ def test_fix319_19_approval_record_unknown_key_rejected() -> None:
 
 
 def test_fix319_19_valid_not_granted_fixture_still_validates() -> None:
-    """正例（回帰）: 現行 rights_manifest.json（3キーとも not_granted）が
-    Fix 19 追加後も validator を通ることの end-to-end 確認。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    """正例（回帰）: pending baseline（3キーとも not_granted）が Fix 19
+    追加後も validator を通ることの end-to-end 確認。2026-08-25 RUN9 User
+    attestation 実行により現行 rights_manifest.json 自体は
+    run9_identity_anchor が granted へ遷移済みのため、pending baseline は
+    `_pending_rights_manifest_fixture()` で構築する（現行 fixture 側の
+    granted 経路は `test_fix319_19_granted_with_full_preconditions_accepted`
+    /`test_fix319_27_*` が回帰確認する）。"""
+    data = _pending_rights_manifest_fixture()
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
 
 
@@ -8283,8 +8396,11 @@ def test_fix319_27_identity_anchor_granted_without_attestation_still_rejected() 
     run9_identity_anchor にも引き続き適用される
     （`test_fix319_19_granted_while_attestation_still_pending_rejected` と
     同型だが、Fix 27 のパラメトライズ変更後も run9_identity_anchor 単独で
-    固定しておく）。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    固定しておく）。現行 rights_manifest.json は 2026-08-25 RUN9 User
+    attestation 実行後は attested 形態（run9_identity_anchor も既に
+    granted）のため、pending baseline は
+    `_pending_rights_manifest_fixture()` で構築する。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] = "granted"
     with pytest.raises(m.Run9ValidationError, match="attestation is not in attested form"):
         m.validate_rights_manifest_four_layer(data)
@@ -8344,8 +8460,12 @@ def test_fix319_21_pending_form_with_only_consent_status_confirmed_rejected() ->
     """負例1（方向A）: consent_status のみを PENDING から確定値へ書き換え、
     rights_class は PENDING_USER_ATTESTATION・attestation は pending 形態
     （attested=false）のままの場合の拒否——Fix 21 導入前の `or` 判定では
-    rights_class が pending のままのため通過してしまっていた抜け道。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    rights_class が pending のままのため通過してしまっていた抜け道。
+    pending baseline から出発する（現行 fixture は 2026-08-25 RUN9 User
+    attestation 実行後は既に両方 attested のため
+    `_pending_rights_manifest_fixture()` で構築しないと本負例を再現
+    できない）。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
     with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
         m.validate_rights_manifest_four_layer(data)
@@ -8354,18 +8474,22 @@ def test_fix319_21_pending_form_with_only_consent_status_confirmed_rejected() ->
 def test_fix319_21_pending_form_with_only_rights_class_confirmed_rejected() -> None:
     """負例2（方向B、負例1 の対称ケース）: rights_class のみを PENDING
     から確定値へ書き換え、consent_status は PENDING_USER_ATTESTATION・
-    attestation は pending 形態（attested=false）のままの場合の拒否。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    attestation は pending 形態（attested=false）のままの場合の拒否。
+    pending baseline から出発する（理由は負例1と同じ）。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
     with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
         m.validate_rights_manifest_four_layer(data)
 
 
 def test_fix319_21_valid_both_pending_fixture_still_validates() -> None:
-    """正例（回帰）: 現行 rights_manifest.json（rights_class/consent_status
-    ともに PENDING_USER_ATTESTATION・attested=false）が Fix 21 適用後も
-    validator を通ることの end-to-end 確認。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    """正例（回帰）: pending 形態（rights_class/consent_status ともに
+    PENDING_USER_ATTESTATION・attested=false）が Fix 21 適用後も validator
+    を通ることの end-to-end 確認。2026-08-25 RUN9 User attestation 実行に
+    より現行 rights_manifest.json 自体は attested 形態へ遷移済みのため、
+    `_pending_rights_manifest_fixture()` で pending baseline を構築する
+    （旧: 現行 fixture を直接使用）。"""
+    data = _pending_rights_manifest_fixture()
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
 
 

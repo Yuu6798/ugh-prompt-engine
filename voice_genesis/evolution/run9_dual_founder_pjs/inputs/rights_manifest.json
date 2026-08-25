@@ -122,21 +122,21 @@
         "duration_sec": 16.64
       }
     ],
-    "rights_class": "PENDING_USER_ATTESTATION",
-    "consent_status": "PENDING_USER_ATTESTATION",
+    "rights_class": "USER_ATTESTED_OWN_VOICE",
+    "consent_status": "USER_ATTESTED_OWN_VOICE",
     "attestation": {
-      "attested": false,
-      "attested_by": null,
-      "attested_at": null,
-      "statement": null
+      "attested": true,
+      "attested_by": "Yuu6798",
+      "attested_at": "2026-08-25T06:47:25Z",
+      "statement": "私は、本 manifest の voice_identity_rights 層に記載された 17 音源（UC-001〜UC-017、donor ledger からの逐語転記）が私自身の声の録音であることを確認し、これらを RUN9 の User Donor identity anchor（run9_identity_anchor）として使用することに同意する。raw 音源の公開および学習済みモデルの一般配布は本 attest の対象外であり、別承認まで not_granted を維持する。"
     },
     "usage_grants": {
-      "run9_identity_anchor": "not_granted",
+      "run9_identity_anchor": "granted",
       "raw_audio_publication": "not_granted",
       "model_general_distribution": "not_granted"
     },
     "usage_grants_note": "raw_audio_publication and model_general_distribution require separate approval from run9_identity_anchor (User ruling, DESIGN_RUN9_REVISION_0.2.md 改訂4) — granting the identity-anchor usage does not imply either publication grant. All three default to not_granted and are never auto-escalated. Codex bot レビュー PR #319 第9巡指摘 Fix 19（P2, 採用）: usage_grants の値語彙を {not_granted, granted} の閉集合へ凍結した — run9_identity_anchor の旧値 'pending' は閉集合外のため 'not_granted'（まだ承認されていない、という意味で等価）へ改めた。granted への遷移規則は grant 別（Codex bot レビュー PR #319 第14巡指摘 Fix 27 採用 = 第9巡 Fix 19 の3キー一律適用の訂正）: raw_audio_publication / model_general_distribution は attestation.attested=true + grant ごとの独立した承認記録（<grant>_approval: approved_at + approval_statement）の両方が必須（rev 0.2 改訂4「別承認」）。run9_identity_anchor は attestation.attested=true のみが必須で、追加の承認記録は要求しない（rev 0.2 改訂4は anchor grant を attestation 自体に束縛する — 正典フローが求めない証跡の捏造を誘発しないため。run9_identity_anchor_approval が任意付与された場合は形状検証のみ行い拒否しない）。〔履歴: Fix 19 導入時は3キー一律に承認記録を要求していたが、これは過剰一般化として Fix 27 で superseded〕",
-    "binding_note": "After User attestation completes, the sha256 of this file (as it stands post-attestation) is bound into the input set for domains/identity_domain_run9_v1.json anchor_hashes.user (exact binding mechanism — e.g. direct pin vs composite manifest — to be finalized at attestation time). Until then anchor_hashes.user remains the <PIN_BEFORE_RUN> placeholder. rev 0.4 の4層再編は本層の内容・attest 対象を変更しない（DESIGN_RUN9_REVISION_0.4.md 変更1・2「attest対象の更新（a裁定の反映）」参照 — User裁定「aとbを承認」のa）。"
+    "binding_note": "2026-08-25 User attestation 実行により確定（User 裁定「承認する」、本ファイル history 参照）: binding 方式は直接 pin（composite manifest は不採用）——attest 後（この attestation ブロック充足後）の本ファイル全体の正規形 sha256（domains/identity_domain_run9_v1.json anchor_hashes.af0 / metric_space_sha と同一規約: json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(\",\", \":\")) — inputs/af0_anchor_manifest.json canonicalization_method フィールドが宣言する規約と同一）を domains/identity_domain_run9_v1.json anchor_hashes.user へ直接 pin した。rev 0.4 の4層再編は本層の内容・attest 対象を変更しない（DESIGN_RUN9_REVISION_0.4.md 変更1・2「attest対象の更新（a裁定の反映）」参照 — User裁定「aとbを承認」のa）。"
   },
   "performance_rights": {
     "role": "歌唱・調声・演奏表現・UST 等の権利/許諾（DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt 変更2）。RUN9 が PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE 両枝で消費する PJS 由来 Performance の権利来歴。",
@@ -234,6 +234,10 @@
     {
       "date": "2026-08-25",
       "event": "Codex bot レビュー PR #319 第9巡指摘（P2, 採用, Fix 19）: usage_grants の値語彙形状検証（Fix 8、非空文字列のみ）は「granted への手編集」を検出できず、attestation.attested=false のまま raw_audio_publication/model_general_distribution を granted へ書き換えても validator が受理してしまっていた——rev 0.2 改訂4（DESIGN_RUN9_REVISION_0.2.md 194-199行）の「別承認まで独立に not_granted 維持」規約への違反を構造的に防げていなかった。usage_grants の値語彙を {not_granted, granted} の閉集合へ凍結し、granted への遷移には①attestation の attested 形態（attested=true）②当該 grant 専用の承認記録（<grant>_approval: approved_at の UTC ISO 8601 タイムスタンプ + approval_statement の非空文字列、grant ごとに独立——一つの grant の承認が他へ流用されない）の両方を fail-closed で要求する構造を run9_schema.py へ追加した。付随して run9_identity_anchor の値を旧 'pending'（{not_granted, granted} 閉集合外の第3値）から 'not_granted' へ改めた（意味論上の変更はない——まだ承認されていない、という同一状態を閉集合内の正準値で表現し直しただけ）。raw_audio_publication/model_general_distribution は変更なし（元々 not_granted）。"
+    },
+    {
+      "date": "2026-08-25",
+      "event": "User attestation 実行（User 裁定「承認する」、本セッション記録）: voice_identity_rights.attestation を pending 形態から attested 形態へ遷移した（attested=true / attested_by=\"Yuu6798\" / attested_at=\"2026-08-25T06:47:25Z\" / statement=上記宣誓文の逐語記録——UC-001〜UC-017 が User 自身の声の録音であることの確認 + run9_identity_anchor としての使用同意 + raw 音源公開/モデル一般配布は対象外・別承認まで not_granted 維持、の3要素を含む）。連動して rights_class/consent_status を PENDING_USER_ATTESTATION から USER_ATTESTED_OWN_VOICE（Fix 21/24 が要求する両 status AND + 閉語彙）へ両方更新し、usage_grants.run9_identity_anchor を not_granted から granted へ遷移した（Fix 27: attestation 自体のみが根拠——別途の承認記録は要求しない。run9_identity_anchor_approval は付与していない）。raw_audio_publication/model_general_distribution は rev 0.2 改訂4の「別承認」規定により not_granted のまま不変（本 attest の対象外）。binding_note を「attest 時に確定」という予約文言から、確定したbinding 方式（直接 pin・af0/metric_space_sha と同一の正規形 sha256規約）へ更新した。"
     }
   ]
 }
