@@ -193,6 +193,164 @@ def test_p3_role_carries_diagnostic_marker(manifest_data: Dict[str, Any]) -> Non
 
 
 # ---------------------------------------------------------------------------
+# PR #322 第20巡指摘 Fix 32（P2, 採用）: P5 の域内制約検査は「本 manifest
+# 内の他 probe（P0/P1）の使用域の外周・baseline domain 内であること」しか
+# 証明せず、実際の学習分布（PJS practice/education 素材）との分離は検証
+# していない。Fix 14/18 と同じ「主張を収集済み証拠へ縮小 + 再入条件の
+# 事前登録」規約で `deferred_verification` ブロックを P5 へ機械強制する。
+# ---------------------------------------------------------------------------
+
+
+def _p5_probe_early(data: Dict[str, Any]) -> Dict[str, Any]:
+    (p5,) = [p for p in data["probes"] if p["probe_id"] == "P5"]
+    return p5
+
+
+def test_fix32_positive_real_manifest_passes(manifest_data: Dict[str, Any]) -> None:
+    m.validate_probe_manifest(manifest_data)
+
+
+def test_fix32_deferred_verification_block_declared(manifest_data: Dict[str, Any]) -> None:
+    p5 = _p5_probe_early(manifest_data)
+    dv = p5["deferred_verification"]
+    assert dv["status"] == m.P5_DEFERRED_VERIFICATION_STATUS
+    assert set(dv["blocked_by"]) == {
+        "practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha",
+    }
+    assert dv["verification_procedure"].strip()
+    assert dv["consumption_prohibition"].strip()
+
+
+def test_negative_fix32_deferred_verification_block_missing(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    del _p5_probe_early(bad)["deferred_verification"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix32_status_reverted_to_unconditional_claim(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """裁定済み対応4「旧・無条件 held-out 主張の残存拒否」: status を
+    検証完了済みであるかのような別の literal（例:
+    'TRAINING_DISTRIBUTION_SEPARATED'）へ差し替えても、凍結 status
+    literal との厳密一致検証で拒否される——status literal 自体が「学習
+    分布との分離は未検証」という正直な宣言を固定するメカニズムであり、
+    無条件 held-out 主張への回帰を構造的に防ぐ。"""
+    bad = _mutate(manifest_data)
+    _p5_probe_early(bad)["deferred_verification"]["status"] = "TRAINING_DISTRIBUTION_SEPARATED"
+    with pytest.raises(m.Run9ValidationError, match="must be exactly"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix32_blocked_by_incomplete(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p5_probe_early(bad)["deferred_verification"]["blocked_by"] = [
+        "practice_audio_split_manifest_sha",
+    ]
+    with pytest.raises(m.Run9ValidationError, match="frozen set"):
+        m.validate_probe_manifest(bad)
+
+
+@pytest.mark.parametrize(
+    "key,replacement",
+    [
+        ("verification_procedure", "何もしない"),
+        ("consumption_prohibition", "特に制約はない"),
+    ],
+)
+def test_negative_fix32_prose_field_missing_marker(
+    manifest_data: Dict[str, Any], key: str, replacement: str,
+) -> None:
+    bad = _mutate(manifest_data)
+    _p5_probe_early(bad)["deferred_verification"][key] = replacement
+    with pytest.raises(m.Run9ValidationError, match="must contain the marker"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix32_direct_call_unknown_key_rejected() -> None:
+    value = {
+        "status": m.P5_DEFERRED_VERIFICATION_STATUS,
+        "blocked_by": [
+            "practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha",
+        ],
+        "verification_procedure": "x", "consumption_prohibition": "x",
+        "unexpected_extra_key": "x",
+    }
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m._validate_p5_deferred_verification(value, field="test")
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第20巡指摘 Fix 33（P2, 採用）: Fix 31 の構造述語（非減少 pitch
+# 系列）は「減少しないこと」しか検証しておらず、テンプレートと cell を
+# 協調して 60→60→60（全て同一 pitch）へ amendment すれば「上行が一切
+# ない」まま diagnostic_structural_pitch_rise を名乗れてしまっていた——
+# 述語へ厳密増加（終端 pitch > 先頭 pitch）を追加する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix33_positive_real_manifest_passes(manifest_data: Dict[str, Any]) -> None:
+    m.validate_probe_manifest(manifest_data)
+    p2 = _p2_probe(manifest_data)
+    cell = _cell_by_id(p2, "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    pitches = [n["pitch_midi"] for n in cell["notes"]]
+    assert pitches[-1] > pitches[0]  # 厳密増加であることの回帰確認
+
+
+def test_negative_fix33_all_equal_pitch_manifest_mutation(manifest_data: Dict[str, Any]) -> None:
+    """本指摘の核心シナリオ: notes 全体を 60→60→60（全て同一 pitch）へ
+    書き換える——非減少ではあるが上行が一切ない。テンプレート凍結
+    （Fix 31）にも同時に違反するため、まず構造述語（Fix 33）で fail-closed
+    になることを確認する（`_validate_p2_diagnostic_pitch_rise_cell()`
+    内で構造述語がテンプレート照合より先に走る）。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p2_probe(bad), "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    for note in cell["notes"]:
+        note["pitch_midi"] = 60
+    with pytest.raises(m.Run9ValidationError, match="strictly greater"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix33_flat_pitch_direct_call_independent_of_template() -> None:
+    """裁定済み対応の直接単体呼び出し版: テンプレート未登録の cell_id で
+    全 note 同一 pitch にし、構造述語（厳密増加）がテンプレート凍結から
+    独立に効くことを確認する。"""
+    cell = {
+        "cell_id": "SYNTHETIC-NOT-IN-TEMPLATE",
+        "notes": [
+            {
+                "kana": "た", "pitch_midi": 60, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": False,
+            },
+            {
+                "kana": "み", "pitch_midi": 60, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": True,
+            },
+        ],
+    }
+    with pytest.raises(m.Run9ValidationError, match="strictly greater"):
+        m._validate_p2_diagnostic_pitch_rise_cell(cell, field="test")
+
+
+def test_negative_fix33_distinguished_from_fix31_non_decreasing_violation(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """裁定済み対応「既存の非減少違反と区別」: 65→62→65（先頭=末尾で
+    Fix 33 の厳密増加チェックにも本来違反するが、中間で減少している
+    ため Fix 31 の非減少チェックがより先に発火し、そちらのメッセージで
+    fail-closed になることを確認する——2つの構造述語が独立の検査であり、
+    互いを覆い隠さないことの回帰確認。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p2_probe(bad), "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    cell["notes"][0]["pitch_midi"] = 65
+    cell["notes"][1]["pitch_midi"] = 62
+    cell["notes"][2]["pitch_midi"] = 65
+    with pytest.raises(m.Run9ValidationError, match="non-decreasing"):
+        m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
 # 負例（項目16）: 各 fail-closed
 # ---------------------------------------------------------------------------
 
@@ -1532,9 +1690,16 @@ def test_fix31_direct_call_synthetic_cell_not_in_template_skips_template_check()
 
 
 def test_negative_fix31_direct_call_length_mismatch() -> None:
+    """構造述語（非減少 + 厳密増加）をどちらも満たしつつ note 数だけ
+    テンプレートと異なる合成 cell で、length-mismatch 経路が独立に
+    機能することを確認する（Fix 33 の厳密増加チェックより後段）。"""
     cells_notes = [
         {
             "kana": "さ", "pitch_midi": 60, "duration_beats": 1, "phrase_index": 0,
+            "is_phrase_final": False,
+        },
+        {
+            "kana": "ぎ", "pitch_midi": 65, "duration_beats": 2, "phrase_index": 0,
             "is_phrase_final": True,
         },
     ]

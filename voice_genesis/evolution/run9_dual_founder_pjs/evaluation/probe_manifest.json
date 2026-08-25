@@ -824,9 +824,18 @@
           "tempo_bpm": 72.0
         }
       ],
+      "deferred_verification": {
+        "blocked_by": [
+          "practice_audio_split_manifest_sha",
+          "education_technique_lesson_manifest_sha"
+        ],
+        "consumption_prohibition": "この検証手続きが完了する前に P5 を held-out として消費してはならない——特に GENERALIZED_GAIN 評価等の out-of-distribution evidence として使うことは、検証完了が前提条件であり、未検証のまま行ってはならない。",
+        "status": "TRAINING_DISTRIBUTION_SEPARATION_NOT_YET_VERIFIABLE",
+        "verification_procedure": "RUN9_CONTRACT.yaml の practice_audio_split_manifest_sha と education_technique_lesson_manifest_sha が両方とも PINNED になった時点で、P5 のフレーズ/音域（本 cell の notes 列が使用する kana・pitch_midi の実値）と実学習素材（当該2 manifest が指す PJS practice/education 素材の実体）を照合し、結果を記録する。"
+      },
       "design_source": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15",
       "probe_id": "P5",
-      "role": "学習分布外寄りだがbaseline domain内の音域・フレーズでDevelopmentalVectorの外周応答をprobeする（v0.1 §15 P5）。使用域はMIDI 45-90のbaseline domain内に限定しつつ、P0のMIDI 57-72域より外周のnote（50, 78）を含める。",
+      "role": "baseline domain（MIDI 45-90）内の音域・フレーズでDevelopmentalVectorの外周応答をprobeする（v0.1 §15 P5）。使用域は本 manifest 内の他 probe（P0: MIDI 57-72 / P1: register 軸の実値 57/62/65）の外周・baseline domain（MIDI 45-90）内であることを validate_probe_manifest() が機械検査する——これは現に検査している内容のみの主張である（PR #322 第20巡指摘 Fix 32 採用: 旧「学習分布外寄り」という記述は、実際の学習分布（PJS practice/education 素材）との分離を検証 しないまま主張していたため、検証済み事実へ限定した）。学習分布との分離は deferred_verification ブロックが機械可読に宣言するとおり本 manifest 単独では未検証である。",
       "title": "Held-out Register / Phrase"
     }
   ],

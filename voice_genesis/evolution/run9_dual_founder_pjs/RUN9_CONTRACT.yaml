@@ -825,8 +825,33 @@ learning_recipe_sha:
 # （Fix 19 の凍結表）へ追加し二重 pin した。manifest バイトが変わったため
 # sha256 を再計算した。旧値（履歴として保持）:
 # "91e26ad51773a88694eb4cecee86d740f23ec5186ed46942e8df3cf5625809c1"
+# PR #322 Codex bot レビュー第20巡2件（採用）反映による repin:
+# Fix 32（P2）P5 の域内制約検査（P0 中央域外周・baseline domain 内）は
+# 「本 manifest 内の他 probe（P0/P1）の使用域の外周であること」しか証明
+# せず、実際の学習分布（PJS practice/education 素材）との分離は検証して
+# いなかった——practice_audio_split_manifest_sha/education_technique_
+# lesson_manifest_sha が PENDING の現時点ではこの分離検証は実行不能
+# （Fix 14/18 と同じ「主張を収集済み証拠へ縮小 + 再入条件の事前登録」
+# 規約）。P5 の role 文言を検証済み事実（他 probe の使用域の外周・
+# baseline domain 内であること）へ限定し、P5 probe レベルへ機械可読
+# ブロック `deferred_verification`（status/blocked_by/verification_
+# procedure/consumption_prohibition の4キー——上記2 pin 欄が両方 PINNED
+# になるまで学習分布との分離は未検証であり、held-out としての消費
+# （GENERALIZED_GAIN 評価等）はその検証完了が前提条件であることを明示）
+# を新設し、validator（`_validate_p5_deferred_verification()`）で必須
+# マーカーを fail-closed 検証する。
+# Fix 33（P2）Fix 31 の構造述語（非減少 pitch 系列）は「減少しないこと」
+# しか検証しておらず、テンプレートと cell を協調して 60→60→60（全て同一
+# pitch）へ amendment すれば「上行が一切ない」まま
+# diagnostic_structural_pitch_rise を名乗れてしまっていた——述語へ厳密
+# 増加（終端 pitch > 先頭 pitch）を追加した（`_validate_p2_diagnostic_
+# pitch_rise_cell()`、コード変更のみで本 repin には manifest バイトの
+# 変化を伴わない——Fix 32 の repin に合算）。
+# 2 Fix 合算で manifest バイトが変わったため sha256 を再計算した。旧値
+# （履歴として保持）:
+# "98d1b2b01abcb79eae82a26a7b0f2af834b58562d0ba3131b41db9cb1c7c5b9e"
 probe_manifest_sha:
-  value: "98d1b2b01abcb79eae82a26a7b0f2af834b58562d0ba3131b41db9cb1c7c5b9e"
+  value: "c6c4b862e775ce99e579ba8e4574453ae86048fa801c9b4e1265743021475534"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 

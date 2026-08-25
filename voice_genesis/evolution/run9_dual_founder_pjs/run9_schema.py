@@ -3331,7 +3331,11 @@ _PROBE_REQUIRED_EXTRA_KEYS: Mapping[str, FrozenSet[str]] = types.MappingProxyTyp
     "P2": frozenset({"factor_levels"}),
     "P3": frozenset({"factor_levels"}),
     "P4": frozenset({"heldout_independence"}),
-    "P5": frozenset(),
+    # PR #322 第20巡指摘 Fix 32（P2, 採用）: `deferred_verification`
+    # ブロックを P5 の追加必須キーとして要求する（Fix 14/18 と同じ「主張を
+    # 収集済み証拠へ縮小 + 再入条件の事前登録」規約）。詳細は
+    # `_validate_p5_deferred_verification()` のコメント参照。
+    "P5": frozenset({"deferred_verification"}),
 })
 
 _CELL_KEYS_BASE: FrozenSet[str] = frozenset({"cell_id", "tempo_bpm", "notes"})
@@ -3899,8 +3903,17 @@ _P2_DIAGNOSTIC_PITCH_RISE_NOTES_TEMPLATE: Mapping[str, Tuple[Mapping[str, Any], 
 
 def _validate_p2_diagnostic_pitch_rise_cell(cell: Mapping[str, Any], *, field: str) -> None:
     """Fix 31 の実装: `diagnostic_structural_pitch_rise` role を持つ cell
-    の notes を、構造述語（非減少 pitch 系列・phrase-final マーカーの
-    終端位置）とテンプレート凍結の両方で検証する。"""
+    の notes を、構造述語（非減少 + 少なくとも1箇所の厳密増加を伴う
+    pitch 系列・phrase-final マーカーの終端位置）とテンプレート凍結の
+    両方で検証する。
+
+    PR #322 第20巡指摘 Fix 33（P2, 採用）: Fix 31 の構造述語は「減少しない
+    こと」しか検証しておらず、テンプレートと cell を協調して 60→60→60
+    （全て同一 pitch）へ amendment すれば「上行が一切ない」まま
+    diagnostic_structural_pitch_rise を名乗れてしまっていた——role が
+    主張する「pitch 上行構造」は単調非減少だけでなく実際の上昇を要求する
+    ため、終端 pitch が先頭 pitch より厳密に大きいこと（非減少 + 少なくとも
+    1箇所の厳密増加）を追加で検証する。"""
     cell_id = cell.get("cell_id")
     notes = cell["notes"]
 
@@ -3921,6 +3934,20 @@ def _validate_p2_diagnostic_pitch_rise_cell(cell: Mapping[str, Any], *, field: s
                 "claims (non-decreasing pitch series) does not hold (Fix 31: verified independently "
                 "of the frozen notes template so amending the template cannot silently violate it)"
             )
+
+    # 構造述語3（Fix 33, 採用）: 非減少だけでは「全 note 同一 pitch」
+    # （上行なし）を許してしまう——終端 pitch が先頭 pitch より厳密に
+    # 大きいこと（少なくとも1箇所の厳密増加）を追加で要求する。
+    if pitches[-1] <= pitches[0]:
+        raise Run9ValidationError(
+            f"{field}: diagnostic cell {cell_id!r} (role_id="
+            f"{_DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID!r}) declares a pitch-rise structure but the "
+            f"terminal pitch_midi={pitches[-1]!r} is not strictly greater than the leading "
+            f"pitch_midi={pitches[0]!r} — non-decreasing alone permits a flat (no-rise) sequence such "
+            "as an all-equal pitch series, which does not constitute a 'rise' (Fix 33: verified "
+            "independently of the frozen notes template so a coordinated amendment of both cannot "
+            "silently claim a rise that never occurs)"
+        )
 
     # テンプレート凍結: notes 配列全体（全フィールド）が凍結テンプレート
     # と厳密一致すること。
@@ -4260,6 +4287,43 @@ _P0_MIDI_HIGH = 72
 # 少なくとも1つ含むことを要求する。
 _P5_MIDI_LOW = 45
 _P5_MIDI_HIGH = 90
+
+# ---------------------------------------------------------------------------
+# PR #322 第20巡指摘 Fix 32（P2, 採用）: P5 の検査（上記 `_P5_MIDI_LOW`/
+# `_P5_MIDI_HIGH` 域内制約 + P0 中央域外周制約）は「本 manifest 内の他
+# probe（P0/P1）の使用域の外周・baseline domain 内であること」しか
+# 証明しない——実際の学習分布（PJS practice/education 素材）との分離は
+# 検証していない。`practice_audio_split_manifest_sha`/
+# `education_technique_lesson_manifest_sha` が PENDING の現時点ではこの
+# 分離検証は実行不能（Fix 14/18 と同じ「主張を収集済み証拠へ縮小 + 再入
+# 条件の事前登録」規約 — 検証不能な主張を凍結しない）。P5 probe レベルへ
+# `deferred_verification` ブロック（機械可読）を要求し、(a) 現状の
+# status literal（未検証であることの正直な宣言） (b) 検証を塞いでいる
+# RUN9_CONTRACT.yaml pin 欄の凍結集合（`blocked_by`） (c) 当該 pin が
+# PINNED になった時点で実施すべき検証手続き（`verification_procedure`）
+# (d) 未検証のまま held-out として消費（GENERALIZED_GAIN 評価等）しては
+# ならないという禁止宣言（`consumption_prohibition`）を機械強制する。
+# ---------------------------------------------------------------------------
+_P5_DEFERRED_VERIFICATION_KEY = "deferred_verification"
+_P5_DEFERRED_VERIFICATION_KEYS: FrozenSet[str] = frozenset(
+    {"status", "blocked_by", "verification_procedure", "consumption_prohibition"}
+)
+# status literal: 「学習分布との分離は未検証」の正直な宣言（Fix 14 の
+# HELDOUT_INDEPENDENCE_STATUS と同じ規約 — 検証範囲に正直な固定文字列）。
+P5_DEFERRED_VERIFICATION_STATUS = "TRAINING_DISTRIBUTION_SEPARATION_NOT_YET_VERIFIABLE"
+# 検証を塞いでいる RUN9_CONTRACT.yaml pin 欄の凍結集合。この2欄は共に
+# PENDING（PRACTICE/education 教材ハーネス未実装）——値そのものではなく
+# 欄名の集合を凍結する（値は RUN9_CONTRACT.yaml 側が別途 pin する）。
+_P5_DEFERRED_VERIFICATION_BLOCKED_BY: FrozenSet[str] = frozenset(
+    {"practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha"}
+)
+_P5_DEFERRED_VERIFICATION_PROCEDURE_MARKERS: Tuple[str, ...] = (
+    "practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha", "PINNED",
+    "P5", "フレーズ", "音域", "実学習素材", "照合",
+)
+_P5_DEFERRED_VERIFICATION_PROHIBITION_MARKERS: Tuple[str, ...] = (
+    "held-out", "GENERALIZED_GAIN", "検証", "前提条件",
+)
 
 _P3_DIAGNOSTIC_ROLE_MARKER = "diagnostic_when_trf_uncalibrated"
 
@@ -5235,6 +5299,65 @@ def _validate_probe_heldout_independence(value: Any, *, field: str) -> None:
             )
 
 
+def _validate_p5_deferred_verification(value: Any, *, field: str) -> None:
+    """PR #322 第20巡指摘 Fix 32（P2, 採用）の実装: P5 の域内制約検査
+    （`_P5_MIDI_LOW`/`_P5_MIDI_HIGH`・P0 中央域外周制約）は「本 manifest
+    内の他 probe（P0/P1）の使用域の外周・baseline domain 内であること」
+    しか証明せず、実際の学習分布（PJS practice/education 素材）との分離は
+    証明しない。Fix 14/18 と同じ「主張を収集済み証拠へ縮小 + 再入条件の
+    事前登録」規約で、未検証のまま held-out として消費されないことを
+    機械強制する（`practice_audio_split_manifest_sha`/
+    `education_technique_lesson_manifest_sha` がいずれも PINNED になる
+    まで、この分離検証は実行不能——検証不能な主張を凍結しない）。"""
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
+    unknown = set(value.keys()) - _P5_DEFERRED_VERIFICATION_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _P5_DEFERRED_VERIFICATION_KEYS - set(value.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+
+    status = value["status"]
+    if status != P5_DEFERRED_VERIFICATION_STATUS:
+        raise Run9ValidationError(
+            f"{field}.status must be exactly {P5_DEFERRED_VERIFICATION_STATUS!r} (Fix 32: 学習分布との "
+            f"分離が未検証であることの正直な宣言), got {status!r}"
+        )
+
+    blocked_by = _require_nonempty_str_list(
+        value["blocked_by"], manifest_kind="probe manifest", field=f"{field}.blocked_by"
+    )
+    if set(blocked_by) != _P5_DEFERRED_VERIFICATION_BLOCKED_BY:
+        raise Run9ValidationError(
+            f"{field}.blocked_by must be exactly the frozen set "
+            f"{sorted(_P5_DEFERRED_VERIFICATION_BLOCKED_BY)} (RUN9_CONTRACT.yaml pin field names that "
+            f"gate the deferred verification, Fix 32), got {sorted(set(blocked_by))}"
+        )
+
+    procedure = _require_non_empty_str(
+        value["verification_procedure"], field=f"{field}.verification_procedure"
+    )
+    for marker in _P5_DEFERRED_VERIFICATION_PROCEDURE_MARKERS:
+        if marker not in procedure:
+            raise Run9ValidationError(
+                f"{field}.verification_procedure must contain the marker {marker!r} (Fix 32: 当該 pin "
+                "が PINNED になった時点で実施すべき検証手続き — P5 のフレーズ/音域と実学習素材の照合"
+                "), got a procedure without that marker"
+            )
+
+    prohibition = _require_non_empty_str(
+        value["consumption_prohibition"], field=f"{field}.consumption_prohibition"
+    )
+    for marker in _P5_DEFERRED_VERIFICATION_PROHIBITION_MARKERS:
+        if marker not in prohibition:
+            raise Run9ValidationError(
+                f"{field}.consumption_prohibition must contain the marker {marker!r} (Fix 32: 未検証の "
+                "まま held-out として消費（GENERALIZED_GAIN 評価等）してはならないという禁止宣言), got "
+                "a prohibition without that marker"
+            )
+
+
 # ---------------------------------------------------------------------------
 # PR #322 第5巡指摘 Fix 10（P2, 採用）: `heldout_independence` はこれまで
 # status literal + 非空散文のみを検証しており、P4 が P0-P3 のいずれかの
@@ -5643,6 +5766,12 @@ def _validate_probe_object(
                 f"[{_P0_MIDI_LOW}, {_P0_MIDI_HIGH}] while staying within the P5 baseline domain "
                 f"[{_P5_MIDI_LOW}, {_P5_MIDI_HIGH}] (DESIGN_RUN9 §15 P5: 学習分布外寄り)"
             )
+        # PR #322 第20巡指摘 Fix 32（P2, 採用）: 上記の域内制約検査だけでは
+        # 実際の学習分布との分離を証明しない——deferred_verification
+        # ブロックで未検証のまま消費されないことを機械強制する。
+        _validate_p5_deferred_verification(
+            probe[_P5_DEFERRED_VERIFICATION_KEY], field=f"{field}.{_P5_DEFERRED_VERIFICATION_KEY}"
+        )
 
     if expected_probe_id == "P4":
         _validate_probe_heldout_independence(
