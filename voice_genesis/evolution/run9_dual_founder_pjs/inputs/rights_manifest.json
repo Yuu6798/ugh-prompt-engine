@@ -149,7 +149,7 @@
       "performance_author": {
         "performer": "Junya Koguchi",
         "performance_editor": "not_applicable",
-        "note": "PJS corpus は自然録音の歌唱コーパスであり、UTAU型の音声合成 + 別途調声者という2レイヤー構造を持たない（出典: voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md 引用の論文 Koguchi & Takamichi, arXiv:2006.02959 が \"singing voice corpus\" と明記）。performer = Junya Koguchi は 2026-08-25 User 追加裁定②（外部資料 pjs_terms_snapshot.md 引用の論文 \"Koguchi & Takamichi, arXiv:2006.02959\" の姓 Koguchi と対応する著者個人名の確認）による充填——旧値 `<PENDING_USER_ATTESTATION>` は誤用だった: performer は User 自身が attest できる対象ではなく外部の第三者事実であるため、本来 `<UNRESOLVED_EXTERNAL>` 語彙で表すべき欄だった（この誤用自体は同裁定②で是正）。performance_editor は構造的に存在しない対象のため not_applicable（値未確定とは区別する）。"
+        "note": "PJS corpus は自然録音の歌唱コーパスであり、UTAU型の音声合成 + 別途調声者という2レイヤー構造を持たない（出典: voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md 引用の論文 Koguchi & Takamichi, arXiv:2006.02959 が \"singing voice corpus\" と明記）。performer = Junya Koguchi は 2026-08-25 User 追加裁定②（外部資料 pjs_terms_snapshot.md 引用の論文 \"Koguchi & Takamichi, arXiv:2006.02959\" の姓 Koguchi と対応する著者個人名の確認）による充填——旧値 `<PENDING_USER_ATTESTATION>` は誤用だった: performer は User 自身が attest できる対象ではなく外部の第三者事実であるため、本来 `<UNRESOLVED_EXTERNAL>` 語彙で表すべき欄だった（この誤用自体は同裁定②で是正）。performance_editor は構造的に存在しない対象のため not_applicable（値未確定とは区別する）。Codex bot レビュー PR #319 第5巡指摘（P2, 見送り, Fix 10）: 本欄は未解決化しない——確定根拠は User 裁定 2026-08-25 ②（外部資料により performer/composer = Junya Koguchi を確定可能とする裁定記録。裁定は bot 指摘の上位にあり、bot が参照できる repo 内 snapshot のみが証拠ではない）。repo 内出典 pjs_terms_snapshot.md 自体は license 文言（CC BY-SA 4.0 等）の出典であって、performer という役割クレジットの出典ではない——両者は別の主張であり、performer の確定根拠は snapshot ではなく裁定②である。裁定②の確定範囲はこの欄（performer）と composition.composer の2欄のみで、recording_master_rights.provenance.voice_source.owner は含まれない（owner は論文著者性のみを根拠とした過大推論だったため PR #319 第4巡指摘採用で `<UNRESOLVED_EXTERNAL>` 維持——同欄 note 参照）。"
       }
     },
     "rights_class": "UNRESOLVED_EXTERNAL",
@@ -162,7 +162,7 @@
       "composition": {
         "composer": "Junya Koguchi",
         "lyricist": "<UNRESOLVED_EXTERNAL>",
-        "note": "composer = Junya Koguchi は 2026-08-25 User 追加裁定②（外部資料 pjs_terms_snapshot.md 引用の論文 \"Koguchi & Takamichi, arXiv:2006.02959\" の確認）による充填。lyricist は repo 内・原典いずれにも個別クレジットの記録がなく未解決のまま — `<UNRESOLVED_EXTERNAL>`（外部の第三者事実として未解決、User が attest すべき欄ではないため `<PENDING_USER_ATTESTATION>` は使わない — 同裁定②が導入した語彙区別）。捏造しない。"
+        "note": "composer = Junya Koguchi は 2026-08-25 User 追加裁定②（外部資料 pjs_terms_snapshot.md 引用の論文 \"Koguchi & Takamichi, arXiv:2006.02959\" の確認）による充填。lyricist は repo 内・原典いずれにも個別クレジットの記録がなく未解決のまま — `<UNRESOLVED_EXTERNAL>`（外部の第三者事実として未解決、User が attest すべき欄ではないため `<PENDING_USER_ATTESTATION>` は使わない — 同裁定②が導入した語彙区別）。捏造しない。Codex bot レビュー PR #319 第5巡指摘（P2, 見送り, Fix 10）: 本欄（composer）は未解決化しない——確定根拠は User 裁定 2026-08-25 ②（外部資料により performer/composer = Junya Koguchi を確定可能とする裁定記録。裁定は bot 指摘の上位にあり、bot が参照できる repo 内 snapshot のみが証拠ではない）。repo 内出典 pjs_terms_snapshot.md 自体は license 文言の出典であって、composer という役割クレジットの出典ではない——両者は別の主張であり、composer の確定根拠は snapshot ではなく裁定②である。裁定②の確定範囲はこの欄（composer）と performance_rights.provenance.performance_author.performer の2欄のみで、recording_master_rights.provenance.voice_source.owner は含まれない（owner は論文著者性のみを根拠とした過大推論だったため PR #319 第4巡指摘採用で `<UNRESOLVED_EXTERNAL>` 維持——同欄 note 参照）。"
       }
     },
     "rights_class": "UNRESOLVED_EXTERNAL",
@@ -226,6 +226,10 @@
     {
       "date": "2026-08-25",
       "event": "Codex bot レビュー PR #319 第2巡指摘（P2, 採用, Fix 6）: performance_rights.rights_class/consent_status および composition_rights.rights_class/consent_status を `PENDING_USER_ATTESTATION` から `UNRESOLVED_EXTERNAL` へ張り替えた——両層は PJS という外部第三者（歌唱者・作曲者、上記 provenance 参照）に関する権利であり、User donor 自身の権利ではないため、裁定②の語彙予約（`PENDING_USER_ATTESTATION` = User 帰属欄専用 / `UNRESOLVED_EXTERNAL` = 外部第三者事実欄専用）上、`PENDING_USER_ATTESTATION` のままでは「User がこれを attest できる」という誤った経路を示唆してしまっていた。仕分けの根拠（どの欄がどちらの主体に帰属するか）: voice_identity_rights（User donor 自身の声の権利。attestation 主体 = User）のみ `PENDING_USER_ATTESTATION` を維持する——本層の rights_class/consent_status/attestation/usage_grants はいずれも User 自身が確認・許諾すべき対象であり、変更なし。performance_rights/composition_rights/recording_master_rights（PJS という外部第三者の権利。歌唱者・作曲者・原盤権者の事実確認が主体）は `UNRESOLVED_EXTERNAL` 側に属する——recording_master_rights は既に固有の記述的値（`license.value` = CC BY-SA 4.0 機械検証済み事実 / `consent_status` = `LICENSE_CONFIRMED_USAGE_SCOPE_PENDING_TOOLING_REVIEW`）を持つため今回の張り替え対象には含めない（誤用のパターン——裸トークン `PENDING_USER_ATTESTATION` の使用——がそもそも存在しない）。run9_schema.py の provenance ブロック向け誤用拒否（Fix 2 で導入済み、角括弧付き placeholder 対象）を、本張り替え後の rights_class/consent_status（角括弧なしの層レベル裸トークン）へも同一ロジックで拡張した（Fix 5 の層別必須キー閉集合と合わせて validate_rights_manifest_four_layer() に配線 — 詳細は run9_schema.py 該当コメント参照）。"
+    },
+    {
+      "date": "2026-08-25",
+      "event": "Codex bot レビュー PR #319 第5巡指摘（P2, 見送り, Fix 10）: performance_author.performer / composition.composer を未解決化する指摘は見送った——値は変更しない（User 裁定 2026-08-25 ②を根拠として維持）。指摘の正当な部分（repo 内出典 pjs_terms_snapshot.md には歌唱者・作曲者クレジットが記録されておらず、論文著者性だけでは役割特定にならないため出典の帰属が曖昧、という点）には両欄の note を改訂して対応した: 確定根拠は User 裁定②（裁定は bot 指摘の上位にあり、bot が参照できる repo 内 snapshot のみが証拠ではない）であり、pjs_terms_snapshot.md は license 文言の出典であって役割クレジットの出典ではないことを明記。裁定②の確定範囲はこの2欄（performer/composer）のみで recording_master_rights.provenance.voice_source.owner は含まれない（owner は PR #319 第4巡指摘採用により `<UNRESOLVED_EXTERNAL>` を既に維持中——同欄 note 参照）ことも明示した。値・rights_class/consent_status への影響なし（note 文言のみの改訂）。"
     }
   ]
 }

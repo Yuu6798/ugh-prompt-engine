@@ -179,9 +179,18 @@ design_doc_sha256:
 # していなかった）。全数「派生設計変更メモ」表現へ改訂したことに伴い、
 # 値を再計算した（旧値
 # fc8e91d76bf92837c930963f97556171c3beaf145a4798671bd5b9a79f8ec4be は
+# 履歴として append-only 保持）。Codex bot レビュー PR #319 第5巡指摘（P2,
+# 採用, Fix 11）: rev 0.4 文書の owner 訂正表・関連記述が、manifest 側で
+# 既に第4巡指摘採用により <UNRESOLVED_EXTERNAL> へ差し戻し済みの
+# `recording_master_rights.provenance.voice_source.owner` を依然「Junya
+# Koguchi が是正後の owner」と現在形で記載する stale 状態だった。rev 0.4
+# 文書へ「owner 欄の差し戻し」節（差し戻しの経緯を履歴として明示）を新設
+# し、是正表・§「追加裁定4件」②の現在形記述を訂正したことに伴い、値を
+# 再計算した（旧値
+# acaa8586a93b6c662e427b5f2015e57ca314128ba4cc1dde7ca7ce8841ca6fec は
 # 履歴として append-only 保持）。
 design_revision_doc_sha256:
-  value: "acaa8586a93b6c662e427b5f2015e57ca314128ba4cc1dde7ca7ce8841ca6fec"
+  value: "7bfefcf61886062511c30df92c25e597b7a4a7745037514ed4655a623e38df07"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.4.md
 

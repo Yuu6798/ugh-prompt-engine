@@ -158,7 +158,7 @@ raw audio（PRACTICE 枝、rights-clean curriculum として v0.1 §13.2 が要�
 
 | provenance フィールド | 是正後の値 | 出典 | 状態 |
 |---|---|---|---|
-| `voice_source.owner` | **Junya Koguchi**（旧値「PJS corpus」から訂正——corpus は客体、著者個人が主体） | `pjs_terms_snapshot.md` 引用の論文 "Koguchi & Takamichi, arXiv:2006.02959" の姓 Koguchi に対応する著者個人名。個人名の対応確認は User 追加裁定②による | 2026-08-25 User 追加裁定②で充填 |
+| `voice_source.owner` | **Junya Koguchi**（旧値「PJS corpus」から訂正——corpus は客体、著者個人が主体）※裁定②時点の値。**この値は下記「owner 欄の差し戻し」節により `<UNRESOLVED_EXTERNAL>` へ再度差し戻され、それが現在値である**（本行は履歴として保持） | `pjs_terms_snapshot.md` 引用の論文 "Koguchi & Takamichi, arXiv:2006.02959" の姓 Koguchi に対応する著者個人名。個人名の対応確認は User 追加裁定②による | 2026-08-25 User 追加裁定②で充填（→ 後に差し戻し、下記節参照） |
 | `performance_author.performer` | **Junya Koguchi** | 同上 | 2026-08-25 User 追加裁定②で充填（旧 `<PENDING_USER_ATTESTATION>` は語彙誤用だった） |
 | `composition.composer` | **Junya Koguchi** | 同上 | 2026-08-25 User 追加裁定②で充填（同上） |
 | `composition.lyricist` | 未解決のまま — placeholder のみ `<PENDING_USER_ATTESTATION>` から **`<UNRESOLVED_EXTERNAL>`** へ張り替え | — | 外部の第三者事実として未解決（PJS corpus のトラック別作詞者クレジットは repo 内に記録なし。捏造しない） |
@@ -177,6 +177,39 @@ fail-closed で拒否する（詳細は同関数 docstring）。
 判断ではない。両者を rights_manifest.json 上で分離するため
 `recording_master_rights.interpretations.share_alike_applies_to_synthesis_output`
 を新設した（status: `UNSETTLED_LEGAL_INTERPRETATION`）。
+
+### owner 欄の差し戻し（Codex bot レビュー PR #319 第4巡指摘採用）
+
+上記裁定②が `recording_master_rights.provenance.voice_source.owner` へ
+充填した **Junya Koguchi** は、論文 (Koguchi & Takamichi, arXiv:2006.02959)
+の著者性のみを根拠とする過大推論だった（Codex bot レビュー PR #319 第4巡
+指摘採用）。論文著者であることは録音物（recording master）の権利保有の
+証拠ではなく、原典（`pjs_terms_snapshot.md`）にも著作権者としての明示
+disclosure は見当たらない。裁定②が外部資料により確定可能とした範囲は
+**performer（歌唱者個人）/ composer（作曲者）のみ**であり、
+**recording-master owner はその範囲に含まれない**——歌唱・作曲という
+行為の主体特定と、録音物（原盤）の権利保有主体の特定は別個の役割特定
+であり、前者の確定が後者を自動的に確定させない。
+
+**owner の是正経緯（履歴、抹消しない）**:
+
+1. rev 0.4 初出充填時: `PJS corpus`（客体誤記——corpus という物自体を
+   権利主体として記載する誤り）
+2. 2026-08-25 User 追加裁定②: `Junya Koguchi`（論文著者性による充填。
+   上記「provenance の実値充填の是正」表参照）
+3. Codex bot レビュー PR #319 第4巡指摘採用: `<UNRESOLVED_EXTERNAL>`
+   へ差し戻し（2 の充填が過大推論だったため）——**これが現在値**。
+
+`performance_author.performer` / `composition.composer` はこの差し戻しの
+対象外であり、裁定②の確定範囲内のまま `Junya Koguchi` を維持する
+（Codex bot レビュー PR #319 第5巡指摘 Fix 10: 見送り——値変更なし、
+本節の記述との整合を理由に注記のみ改訂）。
+
+`inputs/rights_manifest.json`
+`recording_master_rights.provenance.voice_source.owner` の現在値は
+`<UNRESOLVED_EXTERNAL>` である（同ファイル該当 note に是正経緯を記録
+済み）。上記「provenance の実値充填の是正」節の是正表 `voice_source.owner`
+行は裁定②時点の値の履歴記録として残し、本節が現状（差し戻し後）を正とする。
 
 ### attest 対象の更新（a 裁定の反映）
 
@@ -456,10 +489,16 @@ inputs/rights_manifest.json / 本ファイル / tests/test_run9_contract.py）�
 詳細は上記「provenance の実値充填の是正（2026-08-25 User 追加裁定②）」
 節を参照。要点: `performance_author.performer`/`composition.composer` に
 外部資料出典付きで Junya Koguchi を充填、`voice_source.owner` の主体
-誤りを訂正、外部不明値の placeholder を `<PENDING_USER_ATTESTATION>`
-（User 帰属欄専用）と `<UNRESOLVED_EXTERNAL>`（外部事実欄専用、新設）に
-語彙分離、CC BY-SA 4.0 の share-alike 義務が合成出力へ及ぶかという法解釈
-論点を事実（ライセンス文言）から分離する `interpretations` 節を新設。
+誤り（corpus という客体を権利主体として記載）を訂正、外部不明値の
+placeholder を `<PENDING_USER_ATTESTATION>`（User 帰属欄専用）と
+`<UNRESOLVED_EXTERNAL>`（外部事実欄専用、新設）に語彙分離、CC BY-SA
+4.0 の share-alike 義務が合成出力へ及ぶかという法解釈論点を事実
+（ライセンス文言）から分離する `interpretations` 節を新設。**その後
+`voice_source.owner` への Junya Koguchi 充填自体が論文著者性のみを
+根拠とする過大推論と判明し、Codex bot レビュー PR #319 第4巡指摘採用で
+`<UNRESOLVED_EXTERNAL>` へ差し戻し済み（現在値）——裁定②の確定範囲は
+performer/composer のみで owner を含まない。詳細は上記「owner 欄の
+差し戻し」節参照。**
 
 ### ③ Performance Trait の正典化撤回 → Performance Residual への統一
 

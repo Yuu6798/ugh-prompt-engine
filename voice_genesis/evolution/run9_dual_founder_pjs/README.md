@@ -238,8 +238,12 @@ CORRECTION）。CASE A（Lesson Freeze / 本学習開始前）適用。
    Author / Voice Source ≠ Performance Source）+ 自動解釈禁止文を明記。
    provenance の実値は
    `voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md` 等
-   から機械検証可能な範囲で充填（performer/composer/owner = Junya
-   Koguchi、2026-08-25 User 追加裁定②で確定 — 下記「追加裁定4件」参照）、
+   から機械検証可能な範囲で充填（performer/composer = Junya Koguchi、
+   2026-08-25 User 追加裁定②で確定 — 下記「追加裁定4件」参照。
+   recording-master owner は裁定②の確定範囲に含まれず、論文著者性を
+   録音物の権利保有の証拠とする過大推論だったため PR #319 第 4 巡指摘
+   採用で `<UNRESOLVED_EXTERNAL>` へ差し戻し済み——現在値はこちら。
+   下記「②」箇条も参照）、
    なお不明な外部事実欄は `<UNRESOLVED_EXTERNAL>` のまま（捏造禁止。
    `<PENDING_USER_ATTESTATION>` は User 自身が attest すべき欄専用へ
    語彙分離済み）。
