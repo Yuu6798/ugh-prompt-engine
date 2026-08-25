@@ -2187,6 +2187,134 @@ def test_negative_fix22_control_marker_missing(
 
 
 # ---------------------------------------------------------------------------
+# PR #322 第15巡指摘 Fix 26（P2, 採用、Fix 25 と同族の新規具体経路）:
+# release checker（`_check_axis_release_override()`）は release ラベルと
+# `final_phone_dur_override` の対応しか見ておらず、short/long cell の
+# notes 配列（pitch/duration/filler/同 ending_voicing クラス内の別 kana）
+# を互いに変えても通過してしまっていた——release は cell の
+# `final_phone_dur_override` pin のみが駆動する設計のため、pair 間の相違
+# はこの override 以外に存在してはならない。
+# ---------------------------------------------------------------------------
+
+
+def test_fix26_positive_real_manifest_passes(manifest_data: Dict[str, Any]) -> None:
+    m.validate_probe_manifest(manifest_data)
+
+
+def test_fix26_short_long_pairs_share_identical_notes(manifest_data: Dict[str, Any]) -> None:
+    p3 = _p3_probe(manifest_data)
+    pairs = {
+        "voiced": ("P3-RELEASE-SHORT-VOICED", "P3-RELEASE-LONG-VOICED"),
+        "unvoiced": ("P3-RELEASE-SHORT-UNVOICED", "P3-RELEASE-LONG-UNVOICED"),
+    }
+    for short_id, long_id in pairs.values():
+        short_notes = _cell_by_id(p3, short_id)["notes"]
+        long_notes = _cell_by_id(p3, long_id)["notes"]
+        assert short_notes == long_notes, (short_id, long_id)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda notes: notes[-1].__setitem__("pitch_midi", 65),
+        lambda notes: notes[0].__setitem__("duration_beats", 2),
+    ],
+)
+def test_negative_fix26_long_cell_pitch_or_duration_diverges(
+    manifest_data: Dict[str, Any], mutate,
+) -> None:
+    """本指摘の核心シナリオ: long cell の note の pitch/duration を short
+    cell から変えても、release checker（override とラベルの対応のみ）は
+    検出できない——Fix 26 の pair context 一致検証でのみ検出される。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p3_probe(bad), "P3-RELEASE-LONG-VOICED")
+    mutate(cell["notes"])
+    with pytest.raises(m.Run9ValidationError, match="diverges"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix26_long_cell_kana_swapped_within_same_voicing_class(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """long cell の phrase-final kana を同じ ending_voicing クラス内の
+    別 kana（'ら'->'り'、共に liquid_r/voiced）へ差し替える——
+    `_check_axis_kana_class()`（ending_voicing クラス照合）は通過するが、
+    short cell との notes 完全一致（Fix 26）には違反する。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p3_probe(bad), "P3-RELEASE-LONG-VOICED")
+    assert cell["notes"][-1]["kana"] == "ら"
+    cell["notes"][-1]["kana"] = "り"
+    with pytest.raises(m.Run9ValidationError, match="diverges"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix26_long_cell_filler_note_kana_changed(manifest_data: Dict[str, Any]) -> None:
+    """long cell の前置（filler）note の kana を short cell から変えても
+    通過しない——release checker は override のみを見るため検出できない。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p3_probe(bad), "P3-RELEASE-LONG-VOICED")
+    assert cell["notes"][0]["kana"] == "か"
+    cell["notes"][0]["kana"] = "の"
+    with pytest.raises(m.Run9ValidationError, match="diverges"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix26_direct_call_length_mismatch() -> None:
+    """`_validate_p3_release_pair_context()` への直接単体呼び出しで、
+    notes 配列の長さ不一致を検出することを確認する（既存テスト流儀と
+    同型）。"""
+    factor_levels: Dict[str, Any] = {}  # 本関数は factor_levels を未使用
+    short_cell = {
+        "cell_id": "S",
+        "notes": [
+            {
+                "kana": "か", "pitch_midi": 62, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": False,
+            },
+            {
+                "kana": "ら", "pitch_midi": 62, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": True,
+            },
+        ],
+        "levels": {"release_duration": "short", "ending_voicing": "voiced"},
+    }
+    long_cell = {
+        "cell_id": "L",
+        "notes": short_cell["notes"] + [
+            {
+                "kana": "り", "pitch_midi": 62, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": False,
+            }
+        ],
+        "levels": {"release_duration": "long", "ending_voicing": "voiced"},
+    }
+    with pytest.raises(m.Run9ValidationError, match="different length"):
+        m._validate_p3_release_pair_context(
+            factor_levels=factor_levels, cells=[short_cell, long_cell], field="test"
+        )
+
+
+def test_negative_fix26_direct_call_missing_pair_partner_is_skipped() -> None:
+    """pair の片方（long）が欠落しているケースは本関数の対象外——
+    `_validate_probe_factorial_coverage()`（Fix 9）が別途検出するため、
+    本関数は例外を投げずに素通りすることを確認する。"""
+    factor_levels: Dict[str, Any] = {}  # 本関数は factor_levels を未使用
+    short_cell = {
+        "cell_id": "S",
+        "notes": [
+            {
+                "kana": "ら", "pitch_midi": 62, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": True,
+            },
+        ],
+        "levels": {"release_duration": "short", "ending_voicing": "voiced"},
+    }
+    m._validate_p3_release_pair_context(
+        factor_levels=factor_levels, cells=[short_cell], field="test"
+    )  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
 # PR #322 第13巡指摘 Fix 23（P2, 採用——第12巡 P3 再設計への新規具体経路）:
 # `_select_phrase_final_note()`（Fix 3 の数値/kana/transition/release
 # override 照合、Fix 7 の P2 filler 一貫性検証が共有する唯一の selector）

@@ -5186,6 +5186,63 @@ def _validate_p2_onset_target_consistency(
             )
 
 
+def _validate_p3_release_pair_context(
+    *, factor_levels: Mapping[str, Any], cells: List[Dict[str, Any]], field: str
+) -> None:
+    """PR #322 第15巡指摘 Fix 26（P2, 採用、Fix 25 と同族の新規具体経路）
+    の実装: `_check_axis_release_override()`（release checker）は
+    release ラベルと cell の `final_phone_dur_override` の対応しか見ておら
+    ず、short/long cell の notes 配列（pitch/duration/filler/同
+    ending_voicing クラス内の別 kana 等）を互いに変えても通過してしまって
+    いた。release の効果は cell レベルの `final_phone_dur_override` pin
+    のみが駆動する設計（Fix 22）であるため、short/long pair 間の相違は
+    この override 欄以外に存在してはならない——そうでなければ short/long
+    比較（release 効果の検定）が score context の差と交絡する。
+    `ending_voicing` の各水準について、同水準を共有する short cell と
+    long cell の notes 配列が `_NOTE_KEYS`
+    （kana/pitch_midi/duration_beats/phrase_index/is_phrase_final）の
+    全フィールドで完全同一であることを機械強制する
+    （release_duration 軸そのもの・`final_phone_dur_override` 欄は意図的
+    な相違点のため対象外）。pair のどちらかが欠落するケースは
+    `_validate_probe_factorial_coverage()`（Fix 9）が別途検出するため、
+    本関数は pair が両方揃っている場合のみを対象とする。"""
+    release_axis, voicing_axis = _PROBE_FACTORIAL_AXES["P3"]
+    by_voicing: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for cell in cells:
+        levels = cell.get(_CELL_LEVELS_KEY, {})
+        if not isinstance(levels, dict) or release_axis not in levels or voicing_axis not in levels:
+            continue
+        by_voicing.setdefault(levels[voicing_axis], {})[levels[release_axis]] = cell
+
+    for voicing_level, pair in by_voicing.items():
+        short_cell = pair.get("short")
+        long_cell = pair.get("long")
+        if short_cell is None or long_cell is None:
+            continue
+        short_notes = short_cell["notes"]
+        long_notes = long_cell["notes"]
+        pair_desc = (
+            f"{voicing_axis}={voicing_level!r} pair "
+            f"({short_cell.get('cell_id')!r} / {long_cell.get('cell_id')!r})"
+        )
+        if len(short_notes) != len(long_notes):
+            raise Run9ValidationError(
+                f"{field}: P3 {pair_desc} has notes arrays of different length "
+                f"({len(short_notes)} vs {len(long_notes)}) — release is designed to be driven "
+                "solely by the cell-level final_phone_dur_override pin, so the notes context must "
+                "be identical across the short/long pair (Fix 26)"
+            )
+        for i, (s_note, l_note) in enumerate(zip(short_notes, long_notes)):
+            for key in _NOTE_KEYS:
+                if s_note.get(key) != l_note.get(key):
+                    raise Run9ValidationError(
+                        f"{field}: P3 {pair_desc} notes[{i}].{key} diverges "
+                        f"({s_note.get(key)!r} vs {l_note.get(key)!r}) — release must be driven "
+                        "solely by final_phone_dur_override; any other divergence between the "
+                        "short/long score context confounds the release comparison (Fix 26)"
+                    )
+
+
 def _validate_probe_object(
     probe: Any, *, expected_probe_id: str, field: str, seen_cell_ids: Dict[str, str],
     phoneme_jp_module: Any, score_py_module: Any,
@@ -5287,6 +5344,15 @@ def _validate_probe_object(
         _validate_probe_factorial_coverage(
             expected_probe_id=expected_probe_id, factor_levels=probe["factor_levels"], cells=cells,
             field=f"{field}.factor_levels",
+        )
+
+    if expected_probe_id == "P3":
+        # PR #322 第15巡指摘 Fix 26（Fix 25 と同族の新規具体経路）:
+        # release checker（override とラベルの対応のみ）とは独立に、
+        # short/long release pair の score context（notes 配列）が
+        # 完全同一であることを強制する。
+        _validate_p3_release_pair_context(
+            factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
         )
 
     if expected_probe_id == "P2":
