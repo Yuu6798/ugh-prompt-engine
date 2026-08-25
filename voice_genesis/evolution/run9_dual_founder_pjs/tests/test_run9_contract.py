@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -9716,6 +9717,35 @@ def test_fix323_1_repo_wide_grep_finds_no_other_stale_practice_manifest_claim() 
         for marker in stale_markers:
             assert marker not in text, f"{path.name} に陳腐化した記述が残っている: {marker!r}"
 
+    # PR #323 第4巡指摘（P2, 採用, Fix 4）: 「両欄名併記 + PENDING の
+    # 現時点」パターン（例: RUN9_CONTRACT.yaml:855-856 の PR #322 第20巡
+    # repin 履歴）は、practice 側 PINNED 化後に読者が「現時点」を執筆時点
+    # ではなく現在と誤読しうる。append-only 規約により原文（履歴記録）は
+    # 書き換えないため単純不在チェックにはできない——このパターンが検出
+    # されたら、その直後に supersede 注記（`〔履歴注記` または `〔履歴:`
+    # + 2026-08-25 の日付）が存在することを要求する条件付き検査とする
+    # （存在しないまま放置されている＝新規/未 supersede の stale 主張と
+    # して拒否）。
+    two_pin_pending_present_tense = re.compile(
+        r"practice_audio_split_manifest_sha.{0,80}education_technique_lesson_manifest_sha"
+        r".{0,40}PENDING.{0,10}現時点",
+        re.DOTALL,
+    )
+    for path in swept_paths:
+        text = path.read_text(encoding="utf-8")
+        for match in two_pin_pending_present_tense.finditer(text):
+            # supersede 注記は原文の直前（quote を開く形）か直後（追記形）
+            # のいずれの配置もあり得るため、前後 400 文字を合わせて検査する
+            # （前方: run9_schema.py の `〔履歴: 当初は「…」と記していたが、
+            # 2026-08-25…` 型／後方: RUN9_CONTRACT.yaml の「原文の後に
+            # `〔履歴注記 2026-08-25…〕` を追記」型）。
+            context = text[max(0, match.start() - 400) : match.end() + 400]
+            has_supersede_marker = "履歴注記" in context or "〔履歴" in context
+            assert has_supersede_marker and "2026-08-25" in context, (
+                f"{path.name} に「両欄名併記 + PENDING の現時点」パターンが supersede "
+                f"注記なしで残っている（match={match.group()!r}）"
+            )
+
 
 # ---------------------------------------------------------------------------
 # PR #323 Codex bot レビュー第2巡指摘（P2, 採用, Fix 2）: 第1巡 sweep
@@ -9805,3 +9835,61 @@ def test_fix323_3_readme_practice_scoped_exception_states_claude_md_classificati
     readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
     assert "CLAUDE.md:71-75 の一般分類は不変" in readme_text
     assert "一般政策の改訂自体は User 権限" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第4巡指摘（P2, 採用, Fix 4）: RUN9_CONTRACT.yaml
+# の PR #322 第20巡 repin 履歴ブロック（855-856行）「practice_audio_split_
+# manifest_sha/education_technique_lesson_manifest_sha が PENDING の
+# 現時点ではこの分離検証は実行不能」——第2巡では「日付明記済み過去記録」
+# として無修正と判定したが、「現時点」という語が記録執筆時点か現在かを
+# 曖昧にし読者が誤読しうるという新しい具体経路の指摘で採用に転じた。
+# append-only 規約（第2巡返信で自ら宣言済み）を守り、原文（855-858行）は
+# 一切書き換えず、直後に supersede 注記コメントを追記のみした。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_4_contract_two_pin_pending_claim_has_supersede_annotation() -> None:
+    """RUN9_CONTRACT.yaml の PR #322 第20巡 repin 履歴ブロック直後に、
+    「現時点」の曖昧性を是正する 2026-08-25 付 supersede 注記が実在する
+    こと（原文は書き換えず追記のみ — append-only 規約の直接確認）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert "PENDING の現時点ではこの分離検証は実行不能" in contract_text  # 原文は不変
+    assert "履歴注記 2026-08-25" in contract_text
+    assert "本 repin 記録の執筆時点（PR #322 第20巡）を指す" in contract_text
+    assert "education_technique_lesson_\n# manifest_sha は引き続き PENDING" in contract_text
+
+
+def test_fix323_4_repo_wide_two_pin_pending_pattern_all_supersede_or_absent() -> None:
+    """`test_fix323_1_repo_wide_grep_finds_no_other_stale_practice_manifest_
+    claim` が実装した条件付き検査（「両欄名併記 + PENDING の現時点」パター
+    ンが見つかった場合、直後に 2026-08-25 supersede 注記が存在すること）
+    を、走査対象全ファイルに対して独立に直接実行し、少なくとも1件
+    （RUN9_CONTRACT.yaml の当該箇所）が実際に検出・supersede 確認されて
+    いること（検査ロジック自体が「一致ゼロで常に pass する」空振りテスト
+    になっていないことの確認）。"""
+    pattern = re.compile(
+        r"practice_audio_split_manifest_sha.{0,80}education_technique_lesson_manifest_sha"
+        r".{0,40}PENDING.{0,10}現時点",
+        re.DOTALL,
+    )
+    swept_paths = (
+        CONTRACT_PATH,
+        _RUN_DIR / "README.md",
+        _RUN_DIR / "run9_schema.py",
+        _RUN_DIR / "practice_split_builder.py",
+    )
+    total_matches = 0
+    for path in swept_paths:
+        text = path.read_text(encoding="utf-8")
+        for match in pattern.finditer(text):
+            total_matches += 1
+            context = text[max(0, match.start() - 400) : match.end() + 400]
+            has_supersede_marker = "履歴注記" in context or "〔履歴" in context
+            assert has_supersede_marker and "2026-08-25" in context, (
+                f"{path.name} に supersede 注記なしのパターンが残っている"
+            )
+    assert total_matches >= 1, (
+        "パターンが一件も検出されなかった — 検査ロジックが実際に機能して"
+        "いることを確認できない（空振りテストの疑い）"
+    )

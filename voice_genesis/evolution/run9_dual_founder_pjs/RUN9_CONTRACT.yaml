@@ -855,7 +855,16 @@ learning_recipe_sha:
 # いなかった——practice_audio_split_manifest_sha/education_technique_
 # lesson_manifest_sha が PENDING の現時点ではこの分離検証は実行不能
 # （Fix 14/18 と同じ「主張を収集済み証拠へ縮小 + 再入条件の事前登録」
-# 規約）。P5 の role 文言を検証済み事実（他 probe の使用域の外周・
+# 規約）。
+# 〔履歴注記 2026-08-25（Codex bot レビュー PR #323 第4巡指摘, P2, 採用）:
+# 上記「現時点」は本 repin 記録の執筆時点（PR #322 第20巡）を指す——
+# append-only 規約により原文（直前段落）は書き換えない。その後
+# practice_audio_split_manifest_sha は実 PJS practice split 実行で
+# PINNED 化された（本ファイルの該当欄参照）。education_technique_lesson_
+# manifest_sha は引き続き PENDING のため、P5 分離検証が実行不能である
+# という結論自体は現在も変わらない（practice 単独の PINNED 化では
+# `_P5_DEFERRED_VERIFICATION_BLOCKED_BY` の2欄要件を満たさない）〕。
+# P5 の role 文言を検証済み事実（他 probe の使用域の外周・
 # baseline domain 内であること）へ限定し、P5 probe レベルへ機械可読
 # ブロック `deferred_verification`（status/blocked_by/verification_
 # procedure/consumption_prohibition の4キー——上記2 pin 欄が両方 PINNED
