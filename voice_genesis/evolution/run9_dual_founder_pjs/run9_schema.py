@@ -7645,8 +7645,13 @@ _FAILURE_ABORT_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
     "schema", "classification_policy", "rules", "post_stop_prohibitions",
 })
 
+# `machine_promotion_condition`（2026-08-25 Codex bot レビュー PR #324 第1巡
+# Fix 1/2/3 + ファミリー全数監査で新設）: PROCEDURAL 項目が将来 MACHINE へ
+# 昇格するために必要な実装/データを宣言する必須キー（PROCEDURAL 専用。
+# MACHINE 項目は既に到達済みのため持たない）。
 _FAILURE_ABORT_RULE_ALLOWED_KEYS: FrozenSet[str] = frozenset({
     "rule_id", "verbatim", "enforcement", "condition", "checkpoint", "deferred_threshold_ref",
+    "machine_promotion_condition",
 })
 _FAILURE_ABORT_RULE_BASE_KEYS: FrozenSet[str] = frozenset({"rule_id", "verbatim", "enforcement"})
 _FAILURE_ABORT_ENFORCEMENT_VOCAB: Tuple[str, str] = ("MACHINE", "PROCEDURAL")
@@ -7729,10 +7734,10 @@ def _validate_failure_abort_rule(rule: Any, *, expected_rule_id: int) -> None:
             f"{_FAILURE_ABORT_ENFORCEMENT_VOCAB}, got {enforcement!r}"
         )
     if enforcement == "MACHINE":
-        if "checkpoint" in rule:
+        if "checkpoint" in rule or "machine_promotion_condition" in rule:
             raise Run9ValidationError(
                 f"failure abort criteria.rules[rule_id={expected_rule_id}]: enforcement=MACHINE の "
-                "項目は checkpoint（PROCEDURAL 専用キー）を持ってはならない"
+                "項目は checkpoint/machine_promotion_condition（PROCEDURAL 専用キー）を持ってはならない"
             )
         _require_non_empty_str(
             rule.get("condition"),
@@ -7757,6 +7762,16 @@ def _validate_failure_abort_rule(rule: Any, *, expected_rule_id: int) -> None:
             rule.get("checkpoint"),
             field=f"failure abort criteria.rules[rule_id={expected_rule_id}].checkpoint",
         )
+        # 2026-08-25 Codex bot レビュー PR #324 第1巡 Fix 1/2/3 + ファミリー
+        # 全数監査で新設: PROCEDURAL 項目は「なぜ今 PROCEDURAL なのか」だけ
+        # でなく「何が揃えば MACHINE へ昇格するか」を機械可読に宣言する
+        # 必須キー（偽 MACHINE 化の再発防止 — 昇格条件を明記しない
+        # PROCEDURAL は「検証を諦めた」のか「意図的に人間判定を維持する」
+        # のか区別がつかない）。
+        _require_non_empty_str(
+            rule.get("machine_promotion_condition"),
+            field=f"failure abort criteria.rules[rule_id={expected_rule_id}].machine_promotion_condition",
+        )
 
 
 def validate_failure_abort_criteria(data: Mapping[str, Any]) -> None:
@@ -7764,13 +7779,26 @@ def validate_failure_abort_criteria(data: Mapping[str, Any]) -> None:
     構造を検証する。DESIGN_RUN9 §30 Stop Rules の20項目全数を逐語一致まで
     強制し（`rule_id` 1..20 の厳密連番 = 全数性・重複/欠番の同時排除）、各
     項目の `enforcement` は閉じた語彙 `MACHINE`/`PROCEDURAL` のいずれか
-    ちょうど一方に分類させる。`MACHINE` は既存 pin 済み機構への `condition`
-    参照を必須とし、未校正の数値閾値を要する項目は `deferred_threshold_ref`
-    で `CONTRACT_PIN_FIELDS` 内の実在欄名を参照させる（裸の数値発明を
-    構造的に拒否 — bare な数値 field はそもそも許可キー集合に存在しない）。
-    `PROCEDURAL` は §22 のどの step で誰が判定するかの `checkpoint` を必須と
-    する。停止後の救済6項目（`post_stop_prohibitions`）も同じ §30 の逐語で
-    固定する。
+    ちょうど一方に分類させる。
+
+    `MACHINE` の要件は2条件の AND（2026-08-25 Codex bot レビュー PR #324
+    第1巡 Fix 1/2/3 + ファミリー全数監査で明文化——当初 MACHINE 10件中8件
+    が本基準を満たさず PROCEDURAL へ再分類された）: (a) `condition` が参照
+    する検証機構が repo に実装済みで、かつ検証対象となる実データも存在する
+    こと（validator コードが存在するだけで対象 manifest が未生成の場合は
+    不可）、(b) その機構が対象の**実内容**を検査すること（宣言フラグの
+    True/False 検査・保存済みハッシュ文字列の形状検査は不可）。未校正の
+    数値閾値のみを欠く項目（検証機構自体は実装済み）に限り
+    `deferred_threshold_ref` で `CONTRACT_PIN_FIELDS` 内の実在欄名を参照
+    させる（裸の数値発明を構造的に拒否 — bare な数値 field はそもそも許可
+    キー集合に存在しない）。
+
+    `PROCEDURAL` は §22 のどの step で誰が判定するかの `checkpoint` に加え、
+    将来 MACHINE へ昇格するために何が必要かを宣言する
+    `machine_promotion_condition` を必須とする（両方とも非空文字列）。
+
+    停止後の救済6項目（`post_stop_prohibitions`）も同じ §30 の逐語で固定
+    する。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(

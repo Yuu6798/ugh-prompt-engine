@@ -954,18 +954,66 @@ cost_record_sha:
 # バイト sha256（design_doc_sha256 と同一のファイル実バイト規約 —
 # run9_schema.compute_file_sha256() 参照）。RUN9-L0-PIN-1（2026-08-25 実装）
 # で PINNED 化: DESIGN_RUN9 §30 Stop Rules の20項目全数を逐語収載し、各項目
-# を enforcement: MACHINE（既存 pin 済み機構への condition 参照。10件）/
-# PROCEDURAL（§22 のどの step で誰が判定するかの checkpoint。10件）へ分類
-# した。校正未実施の数値閾値を要する項目（#14 mandatory metric degeneracy /
-# #16 Identity drift beyond non-inferiority）は deferred_threshold_ref:
-# "hypothesis_algebra_sha" で参照するのみとし、数値そのものは発明していない
-# （hypothesis_algebra_sha は引き続き PENDING、Group D）。§30 末尾の停止後
-# 救済禁止6項目（new weights/new teacher/new Founder/new metric threshold/
+# を enforcement: MACHINE / PROCEDURAL へ分類した。§30 末尾の停止後救済
+# 禁止6項目（new weights/new teacher/new Founder/new metric threshold/
 # new Lesson channel/new optimizer search）も逐語収載した。
 # 〔履歴: 旧 PENDING 理由「DESIGN_RUN9 §30 Stop Rules の20項目を機械可読な
 # 閾値/条件文書へ未変換」→ RUN9-L0-PIN-1 で解消済み〕
+#
+# 【repin 履歴（append-only）】
+# - RUN9-L0-PIN-1（2026-08-25、値 b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110）:
+#   初回 PINNED 化。MACHINE 10件（既存 pin 済み機構への condition 参照）/
+#   PROCEDURAL 10件（§22 step + checkpoint）。#14/#16 は
+#   deferred_threshold_ref: "hypothesis_algebra_sha" で数値未発明のまま
+#   MACHINE 扱い。
+# - PR #324 Codex bot レビュー第1巡 Fix 1/2/3 + ファミリー全数監査
+#   （2026-08-25、値 8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81 へ repin）:
+#   3件の指摘（全て P1、採用）— Fix 1（rule 3 anchor metric/model space
+#   mismatch）: `Run9IdentityDomain.is_pinned()`/`content_digest()`
+#   （run9_schema.py:961-993）は保存済み64hex文字列の形状/再ハッシュのみで
+#   参照先の実アーティファクトを読み直さない（実内容検証は R9-G1 tooling
+#   の職務と run9_schema.py:1260-1263 に明記）→ PROCEDURAL へ再分類。
+#   Fix 2（rule 4 PJS identity channel contamination）:
+#   `excludes_identity_and_trait_donor_info` の bool True 検査
+#   （run9_schema.py:3257-3264）は宣言検査でありlessonバイトの内容検査で
+#   はない（R9-G7 = DESIGN 999-1001 より弱い）→ PROCEDURAL へ再分類。
+#   Fix 3（rule 6 one or both Founders fail viability）:
+#   `calibration.validity_gates` は識別校正の別軸判定であり、R9-G4
+#   DUAL_BIRTH_VIABILITY の一次定義（DESIGN 987-989: 最低発声/artifact/
+#   replay/provenance の4特性）とは異なる→ condition を R9-G4 の4特性へ
+#   再束縛。同4特性を実検査する機構は grep 確認の結果 repo に存在せず
+#   （`BIRTH_OUTCOMES` は結果語彙 enum のみ）→ PROCEDURAL へ再分類。
+#   ファミリー全数掃討（必須、指摘3件と同一基準で残り MACHINE 全7件を
+#   監査）: #2（User donor manifest incomplete）は
+#   `validate_rights_manifest_four_layer()` が実在・attest 済みの
+#   `inputs/rights_manifest.json` 自体の構造完全性を検査しており
+#   （run9_schema.py:9552-、同関数は外部事実の真偽を「R9-G1 tooling の
+#   職務」と自己境界宣言しつつ文書自体の構造は検証する）is_pinned() とは
+#   性質が異なるため MACHINE のまま生存。#12（r0 or frozen Genome
+#   changed）は founders/*.json 実ファイルの raw sha256 全体再照合であり
+#   （design_doc_sha256 と同一規約、外部参照の形状検査ではなく実ファイル
+#   全バイトの再ハッシュ）MACHINE のまま生存。#5（TRI_CROSSOVER
+#   non-deterministic）は R9-G3（DESIGN 983-985）が Genome ID と
+#   SingerState の両方を要求するところ、Genome ID 側のみ
+#   `test_item14_genome_id_deterministic_same_input` で機械検証済みで
+#   SingerState 側（birth probe render 決定論）の機構が存在しないため
+#   部分的検証を全体保証として主張せず PROCEDURAL へ。#8（PJS Lesson
+#   cannot be frozen）/#10（equal budget cannot be guaranteed）は
+#   `validate_education_lesson_manifest()`/`validate_learning_recipe_
+#   manifest()` 自体は実装済みだが対応する manifest 実体
+#   （`education_technique_lesson_manifest_sha`/`learning_recipe_sha`）が
+#   共に PENDING のため検証コードが実データを持たない「空振り」状態 →
+#   PROCEDURAL へ（#4 と同族の欠陥）。#14/#16 は `hypothesis_algebra_sha`
+#   の schema/validator 自体が Group D で未実装（grep 確認: 該当なし）の
+#   ため、#8/#10 と同じ基準を適用すると deferred_threshold_ref による
+#   MACHINE 分類も維持できず PROCEDURAL へ（§18.1/§18.2 の LCB_95 比較式
+#   自体は DESIGN doc に定義されているが実装が存在しない）。結果
+#   MACHINE 2件（#2/#12）/ PROCEDURAL 18件。全 PROCEDURAL 項目へ
+#   `machine_promotion_condition`（将来 MACHINE へ昇格するために必要な
+#   実装/データ）を新設・付与した。分類前文（classification_policy）も
+#   「(a) 実装済み・(b) 実内容検査」の2条件 AND を明文化する形へ強化した。
 failure_abort_criteria_sha:
-  value: "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
+  value: "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 

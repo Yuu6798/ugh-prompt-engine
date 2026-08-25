@@ -660,20 +660,33 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   **PINNED** 化した。
 - ~~`failure_abort_criteria_sha` 未 pin~~ → [`inputs/failure_abort_criteria.json`](./inputs/failure_abort_criteria.json)
   （schema `run9-failure-abort-criteria/1.0`）に DESIGN_RUN9 §30 Stop Rules
-  の20項目を逐語収載し、各項目を `enforcement: MACHINE`（既存 pin 済み
-  機構への `condition` 参照。10件 — 例: #12 は `founder_genome_shas` との
-  raw sha 照合、#5 は同一入力2回実行の byte 一致照合）/
-  `enforcement: PROCEDURAL`（§22 のどの step で誰が判定するかの
-  `checkpoint`。10件）へ分類した。校正未実施の数値閾値を要する項目
-  （#14 mandatory metric degeneracy / #16 Identity drift beyond
-  non-inferiority）は `deferred_threshold_ref: "hypothesis_algebra_sha"`
-  で参照するのみとし、数値は発明していない（`hypothesis_algebra_sha` は
-  引き続き PENDING）。§30 末尾の停止後救済禁止6項目（new weights/new
-  teacher/new Founder/new metric threshold/new Lesson channel/new
-  optimizer search）も逐語収載した。`run9_schema.validate_failure_abort_
-  criteria()`（rule_id 1..20 の厳密連番 + 逐語一致 + enforcement 語彙の
-  fail-closed 検証）+ `load_pinned_failure_abort_criteria()` を新設し、
-  `RUN9_CONTRACT.yaml` `failure_abort_criteria_sha` を **PINNED** 化した。
+  の20項目を逐語収載し、各項目を `enforcement: MACHINE`/`PROCEDURAL`
+  へ分類した（初回 PINNED 時点は MACHINE 10 / PROCEDURAL 10）。§30 末尾の
+  停止後救済禁止6項目（new weights/new teacher/new Founder/new metric
+  threshold/new Lesson channel/new optimizer search）も逐語収載した。
+  `run9_schema.validate_failure_abort_criteria()`（rule_id 1..20 の厳密
+  連番 + 逐語一致 + enforcement 語彙の fail-closed 検証）+
+  `load_pinned_failure_abort_criteria()` を新設し、`RUN9_CONTRACT.yaml`
+  `failure_abort_criteria_sha` を **PINNED** 化した。
+  〔履歴: PR #324 Codex bot レビュー第1巡（2026-08-25, 全3件 P1, 採用）で
+  MACHINE 10件中3件（#3 anchor metric/model space mismatch — `is_pinned()`/
+  `content_digest()` は保存済みハッシュの形状/再ハッシュのみで参照先の実
+  アーティファクトを再検証しない / #4 PJS identity channel contamination —
+  `excludes_identity_and_trait_donor_info` の bool True 検査は宣言検査で
+  lesson バイトの内容検査ではない / #6 one or both Founders fail
+  viability — R9-G4 DUAL_BIRTH_VIABILITY の一次定義4特性
+  《phonation/artifact/replay/provenance》ではなく識別校正ゲートへ誤束縛
+  していた）に偽 MACHINE 化欠陥が判明し PROCEDURAL へ再分類。同一基準での
+  残り MACHINE 全7件（#2/#5/#8/#10/#12/#14/#16）のファミリー全数監査で
+  #5（Genome ID 側のみ機械検証済みで SingerState 側は未検証）/#8・#10
+  （validator コードは実装済みだが対応 manifest 実体が PENDING で実データ
+  なし）/#14・#16（hypothesis_algebra_sha 自体が schema/validator 未実装
+  で deferred_threshold_ref も維持不能）も PROCEDURAL へ移行し、#2（rights
+  manifest 構造完全性検査）と #12（founder_genome_shas raw sha 全体照合）
+  のみ MACHINE で生存。最終 MACHINE 2件 / PROCEDURAL 18件（全 PROCEDURAL
+  項目に `machine_promotion_condition` を新設・付与）。
+  `failure_abort_criteria_sha` を実バイト sha256 で repin
+  （`RUN9_CONTRACT.yaml` に append-only 履歴コメント記録）〕。
 - ~~`measurement_spec_sha` 未 pin~~ → [`inputs/measurement_spec_manifest.json`](./inputs/measurement_spec_manifest.json)
   （schema `run9-measurement-spec/1.0`）を新規起草した。測定仕様は
   identity 軸と development/generalization 軸の2つに分かれる

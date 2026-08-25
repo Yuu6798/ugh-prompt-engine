@@ -10592,21 +10592,87 @@ def test_pin1_failure_abort_criteria_enforcement_vocab_closed() -> None:
         assert rule["enforcement"] in ("MACHINE", "PROCEDURAL")
 
 
-def test_pin1_failure_abort_criteria_ten_machine_ten_procedural() -> None:
+def test_pin1_failure_abort_criteria_two_machine_eighteen_procedural() -> None:
+    """PR #324 Codex bot レビュー第1巡 Fix 1/2/3 + ファミリー全数監査
+    （2026-08-25）後の分類: MACHINE 2件（#2/#12）のみが『(a) 実装済み・
+    (b) 実内容検査』の2条件を満たして生存し、残り18件は PROCEDURAL。"""
     data = _failure_abort_criteria_data()
     machine = [r for r in data["rules"] if r["enforcement"] == "MACHINE"]
     procedural = [r for r in data["rules"] if r["enforcement"] == "PROCEDURAL"]
-    assert len(machine) == 10
-    assert len(procedural) == 10
+    assert {r["rule_id"] for r in machine} == {2, 12}
+    assert len(procedural) == 18
 
 
-def test_pin1_failure_abort_criteria_deferred_threshold_ref_targets_real_pin_field() -> None:
+def test_pin1_failure_abort_criteria_no_current_deferred_threshold_ref_usage() -> None:
+    """#14/#16 は PR #324 監査で PROCEDURAL へ再分類され
+    （hypothesis_algebra_sha 自体が schema/validator 未実装のため
+    deferred_threshold_ref を維持できない）、現時点で本キーを使う rule は
+    ゼロである（メカニズム自体は将来の MACHINE 項目のために validator に
+    残置——次の2テストが正例/負例で機構の健全性を確認する）。"""
     data = _failure_abort_criteria_data()
     deferred = [r for r in data["rules"] if "deferred_threshold_ref" in r]
-    assert {r["rule_id"] for r in deferred} == {14, 16}
-    for r in deferred:
-        assert r["deferred_threshold_ref"] in m.CONTRACT_PIN_FIELDS
-        assert r["deferred_threshold_ref"] == "hypothesis_algebra_sha"
+    assert deferred == []
+
+
+def test_pin1_failure_abort_criteria_deferred_threshold_ref_mechanism_accepts_real_pin_field() -> None:
+    """deferred_threshold_ref 機構自体は生きていること（合成 MACHINE rule
+    で正例確認）。"""
+    data = copy.deepcopy(_failure_abort_criteria_data())
+    machine_rule = next(r for r in data["rules"] if r["rule_id"] == 12)
+    machine_rule["deferred_threshold_ref"] = "hypothesis_algebra_sha"
+    m.validate_failure_abort_criteria(data)  # 例外を投げないことの確認
+
+
+def test_pin1_failure_abort_criteria_procedural_missing_machine_promotion_condition_fail_closed() -> None:
+    data = copy.deepcopy(_failure_abort_criteria_data())
+    procedural_rule = next(r for r in data["rules"] if r["enforcement"] == "PROCEDURAL")
+    del procedural_rule["machine_promotion_condition"]
+    with pytest.raises(m.Run9ValidationError, match="machine_promotion_condition"):
+        m.validate_failure_abort_criteria(data)
+
+
+def test_pin1_failure_abort_criteria_machine_rule_with_machine_promotion_condition_fail_closed() -> None:
+    data = copy.deepcopy(_failure_abort_criteria_data())
+    machine_rule = next(r for r in data["rules"] if r["enforcement"] == "MACHINE")
+    machine_rule["machine_promotion_condition"] = "should not be allowed here"
+    with pytest.raises(m.Run9ValidationError, match="machine_promotion_condition"):
+        m.validate_failure_abort_criteria(data)
+
+
+def test_pin1_failure_abort_criteria_rules_3_4_6_reclassified_procedural_with_grounded_citations() -> None:
+    """PR #324 Codex bot レビュー第1巡 Fix 1/2/3（全3件 P1, 採用）の直接
+    回帰: rule 3/4/6 が PROCEDURAL であり、各 checkpoint が指摘の一次
+    ソース citation（run9_schema.py の行番号 / DESIGN_RUN9 の行番号）を
+    保持していること。"""
+    data = _failure_abort_criteria_data()
+    by_id = {r["rule_id"]: r for r in data["rules"]}
+    assert by_id[3]["enforcement"] == "PROCEDURAL"
+    assert "run9_schema.py:961-993" in by_id[3]["checkpoint"]
+    assert by_id[4]["enforcement"] == "PROCEDURAL"
+    assert "run9_schema.py:3257-3264" in by_id[4]["checkpoint"]
+    assert "999-1001" in by_id[4]["checkpoint"]
+    assert by_id[6]["enforcement"] == "PROCEDURAL"
+    assert "987-989" in by_id[6]["checkpoint"]
+
+
+def test_pin1_failure_abort_criteria_rule6_r9g4_verbatim_matches_design_doc() -> None:
+    """rule 6 の checkpoint が引用する R9-G4 DUAL_BIRTH_VIABILITY の逐語
+    （最低発声/artifact/replay/provenance）が design_doc 実ファイルと
+    一致すること（孫引き防止・一次ソース直読み）。"""
+    design_text = DESIGN_DOC_PATH.read_text(encoding="utf-8")
+    assert "二体とも最低発声、artifact、replay、provenanceを満たす。" in design_text
+    data = _failure_abort_criteria_data()
+    rule6 = next(r for r in data["rules"] if r["rule_id"] == 6)
+    assert "最低発声" in rule6["checkpoint"]
+    assert "provenance" in rule6["checkpoint"]
+
+
+def test_pin1_failure_abort_criteria_no_viability_implementation_in_repo() -> None:
+    """rule 6 の PROCEDURAL 根拠（R9-G4 の4特性を実検査する機構が repo に
+    存在しない）を grep 相当で機械照合する。"""
+    schema_text = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    for token in ("def phonation", "def artifact_viability", "def replay_viability"):
+        assert token not in schema_text
 
 
 def test_pin1_failure_abort_criteria_post_stop_prohibitions_match_design_doc() -> None:
@@ -10948,6 +11014,40 @@ def test_pin1_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> Non
     assert contract_raw["practice_audio_split_manifest_sha"]["status"] == "PINNED"
     assert contract_raw["practice_audio_split_manifest_sha"]["value"] == m.compute_file_sha256(
         m.PRACTICE_MANIFEST_PATH
+    )
+
+
+def test_pin1_r2_seed_policy_and_measurement_spec_manifests_byte_unchanged(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """PR #324 第1巡は failure_abort_criteria.json のみを改訂対象とする
+    （3件の指摘は全て同ファイルのみを対象）。seed_policy_manifest.json /
+    measurement_spec_manifest.json のバイト・pin 値は RUN9-L0-PIN-1 初回
+    実装時点から不変であることをハードコードした sha256 で固定する。"""
+    assert contract_raw["seed_policy_sha"]["value"] == (
+        "1ff25f429e544c1b6c9b10c5a388833fa2506b1ce12162c7b17cc4af32df05f4"
+    )
+    assert contract_raw["seed_policy_sha"]["value"] == m.compute_file_sha256(
+        m.SEED_POLICY_MANIFEST_PATH
+    )
+    assert contract_raw["measurement_spec_sha"]["value"] == (
+        "cb3e3b45973caa3737531b9636454a4542bc75f60d03a80a6a0411a9847bfdd5"
+    )
+    assert contract_raw["measurement_spec_sha"]["value"] == m.compute_file_sha256(
+        m.MEASUREMENT_SPEC_MANIFEST_PATH
+    )
+
+
+def test_pin1_r2_failure_abort_criteria_repinned_to_new_value(contract_raw: Dict[str, Any]) -> None:
+    """failure_abort_criteria_sha は PR #324 第1巡の repin 後の値であること
+    （旧 RUN9-L0-PIN-1 初回値との不一致を明示的に確認 — repin 漏れの回帰
+    防止）。"""
+    old_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
+    new_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
+    assert contract_raw["failure_abort_criteria_sha"]["value"] == new_value
+    assert contract_raw["failure_abort_criteria_sha"]["value"] != old_value
+    assert contract_raw["failure_abort_criteria_sha"]["value"] == m.compute_file_sha256(
+        m.FAILURE_ABORT_MANIFEST_PATH
     )
 
 
