@@ -3350,6 +3350,95 @@ _FACTOR_LEVEL_PROBE_IDS: FrozenSet[str] = frozenset({"P1", "P2", "P3"})
 _FACTOR_LEVELS_AXES_KEY = "axes"
 
 # ---------------------------------------------------------------------------
+# PR #322 第4巡指摘 Fix 9（P2, 採用）: 旧 Fix 2/3 は「各水準がどこかの
+# cell で使われている」ことしか要求しておらず、cell を削除しても他 cell
+# が同じ水準を使っていれば通過してしまっていた（例: P1-REG-LOW-DUR-SHORT
+# を削除しても low/short は他 cell に残る）——凍結された factorial から
+# 1条件が黙って失われる欠陥。probe 別の期待 cell_id 集合（全24個、閉じた
+# 集合・過不足いずれも拒否）を凍結し、加えて P1（register×duration）/
+# P3（release_duration×ending_voicing）の full factorial 直積被覆
+# （宣言水準の全組合せが「同一 cell」の levels として実在すること）を
+# 別途検証する。amendment で cell を増減する場合は、本ファイルの凍結表
+# （`_PROBE_EXPECTED_CELL_IDS`/`_PROBE_FACTORIAL_AXES`）の更新が同時に
+# 必要——意図的な二重 pin（manifest 側の変更だけでは通らない摩擦）。
+# ---------------------------------------------------------------------------
+_PROBE_EXPECTED_CELL_IDS: Mapping[str, FrozenSet[str]] = types.MappingProxyType({
+    "P0": frozenset({"P0-NEUTRAL-SAKURA-FRAGMENT"}),
+    "P1": frozenset({
+        "P1-REG-LOW-DUR-SHORT", "P1-REG-LOW-DUR-LONG",
+        "P1-REG-MID-DUR-SHORT", "P1-REG-MID-DUR-LONG",
+        "P1-REG-HIGH-DUR-SHORT", "P1-REG-HIGH-DUR-LONG",
+        "P1-TRANS-LOW-TO-HIGH", "P1-TRANS-HIGH-TO-LOW",
+    }),
+    "P2": frozenset({
+        "P2-ONSET-FRICATIVE-S", "P2-ONSET-STOP-K", "P2-ONSET-STOP-G", "P2-ONSET-NASAL-N",
+        "P2-ONSET-SEMIVOWEL-Y", "P2-ONSET-SEMIVOWEL-W", "P2-ONSET-LIQUID-R", "P2-ONSET-VOWEL-ONLY",
+        "P2-PHRASE-BUILD-WEAK-TO-STRONG",
+    }),
+    "P3": frozenset({
+        "P3-RELEASE-SHORT-VOICED", "P3-RELEASE-LONG-VOICED",
+        "P3-RELEASE-SHORT-UNVOICED", "P3-RELEASE-LONG-UNVOICED",
+    }),
+    "P4": frozenset({"P4-HELDOUT-ORIGINAL-FRAGMENT"}),
+    "P5": frozenset({"P5-HELDOUT-REGISTER-PHRASE"}),
+})
+# full factorial 直積被覆を要求する probe -> (axis_a, axis_b)。両軸を
+# 同時に参照する cell が、宣言水準の全組合せ分だけ存在することを要求する
+# （P2 の onset_consonant_class は単一軸で直積構造を持たないため対象外）。
+_PROBE_FACTORIAL_AXES: Mapping[str, Tuple[str, str]] = types.MappingProxyType({
+    "P1": ("register", "duration"),
+    "P3": ("release_duration", "ending_voicing"),
+})
+
+
+def _validate_probe_expected_cell_ids(
+    *, expected_probe_id: str, cells: List[Dict[str, Any]], field: str
+) -> None:
+    expected = _PROBE_EXPECTED_CELL_IDS[expected_probe_id]
+    actual = {cell.get("cell_id") for cell in cells}
+    if actual != expected:
+        missing = expected - actual
+        extra = actual - expected
+        detail = []
+        if missing:
+            detail.append(f"missing {sorted(missing)}")
+        if extra:
+            detail.append(f"unexpected {sorted(extra)}")
+        raise Run9ValidationError(
+            f"{field}.cells cell_id set does not match the frozen expected set for "
+            f"{expected_probe_id} ({'; '.join(detail)}) — amendment requires updating both the "
+            "manifest and this validator's frozen expected-cell-id table (Fix 9: intentional double "
+            "pin)"
+        )
+
+
+def _validate_probe_factorial_coverage(
+    *, expected_probe_id: str, factor_levels: Mapping[str, Any], cells: List[Dict[str, Any]],
+    field: str,
+) -> None:
+    axes_pair = _PROBE_FACTORIAL_AXES.get(expected_probe_id)
+    if axes_pair is None:
+        return
+    axis_a, axis_b = axes_pair
+    axes = factor_levels[_FACTOR_LEVELS_AXES_KEY]
+    expected_pairs = {
+        (level_a, level_b) for level_a in axes[axis_a] for level_b in axes[axis_b]
+    }
+    covered_pairs = set()
+    for cell in cells:
+        levels = cell.get(_CELL_LEVELS_KEY, {})
+        if isinstance(levels, dict) and axis_a in levels and axis_b in levels:
+            covered_pairs.add((levels[axis_a], levels[axis_b]))
+    missing_pairs = expected_pairs - covered_pairs
+    if missing_pairs:
+        raise Run9ValidationError(
+            f"{field}: {expected_probe_id} full factorial {axis_a}×{axis_b} is missing combination(s) "
+            f"{sorted(missing_pairs)} — every declared level combination must be realized by a single "
+            "cell that references both axes simultaneously (a frozen factorial silently losing a "
+            "condition is fail-closed, Fix 9)"
+        )
+
+# ---------------------------------------------------------------------------
 # PR #322 第2巡指摘 Fix 3（P2, 採用）: 軸別の意味照合。Fix 2 はラベル
 # （axis_name/level_name）の実在照合のみで、宣言された具体値と cell の実
 # note フィールドとの一致は見ていなかった（例: P1-REG-LOW-DUR-SHORT の
@@ -3608,6 +3697,38 @@ _REVISION_BRIDGE_CONTRACT_FIELD_REF: Mapping[str, str] = types.MappingProxyType(
 })
 _REVISION_BRIDGE_NO_NEW_RENDER_MARKER = "新規render不要"
 _IDENTITY_METRIC_SPACE_REF_PREFIX = "inputs/identity_metric_space.json#"
+
+# PR #322 第4巡指摘 Fix 8（P2, 採用）: 第2巡 Fix 5 の dotted path 走査は
+# 「参照先が実在するか」しか証明せず、「その参照が“この”エントリの
+# 意図する定義を指しているか」までは見ていなかった——2エントリ間で
+# （どちらも実在する）path を入れ替えても通過してしまう欠陥だった。
+# 本 dict が7エントリそれぞれの `identity_metric_space_ref` が指すべき
+# 正確な dotted path を凍結する「エントリ→期待 path」の厳密対応表
+# （実在走査に加えて厳密一致も要求する）。amendment で参照先の path 自体
+# を変更する場合は、本対応表の更新が同時に必要——これは意図的な二重 pin
+# （manifest 側の値変更だけでは通らない摩擦）であり、片方だけの更新で
+# 「新しい path」が黙って別エントリへ流用されることを防ぐ。
+_REVISION_BRIDGE_EXPECTED_METRIC_REF: Mapping[str, str] = types.MappingProxyType({
+    "reference_render": (
+        _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.distance_unit.reference_render_definition"
+    ),
+    "c0_replay_takes": (
+        _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.freeze_threshold.d_c0_population"
+    ),
+    "c1_sham_takes": (
+        _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.validity_gates.c1_gate.d_c1_population"
+    ),
+    "positive_reference": (
+        _IDENTITY_METRIC_SPACE_REF_PREFIX
+        + "calibration.validity_gates.positive_reference_gate.positive_reference_definition"
+    ),
+    "negative_reference": (
+        _IDENTITY_METRIC_SPACE_REF_PREFIX
+        + "calibration.validity_gates.negative_reference_gate.negative_reference_definition"
+    ),
+    "pjs_reference": _IDENTITY_METRIC_SPACE_REF_PREFIX + "confuser_control.pjs_reference_definition",
+    "evaluated_renders": _IDENTITY_METRIC_SPACE_REF_PREFIX + "identity_feature.scope",
+})
 
 _MEASUREMENT_BOUNDARY_KEYS: FrozenSet[str] = frozenset(
     {"scope_statement", "identity_axis_source", "development_generalization_axis_source"}
@@ -4150,9 +4271,22 @@ def _validate_probe_object(
             phoneme_jp_module=phoneme_jp_module,
         )
 
+    # PR #322 第4巡指摘 Fix 9（P2, 採用）: probe 別の期待 cell_id 集合
+    # （閉じた集合）と厳密一致することを要求する——cell 削除/余剰追加の
+    # いずれも fail-closed。
+    _validate_probe_expected_cell_ids(expected_probe_id=expected_probe_id, cells=cells, field=field)
+
     if expected_probe_id in _FACTOR_LEVEL_PROBE_IDS:
         _validate_probe_factor_levels_cell_mapping(
             factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
+        )
+
+    if expected_probe_id in _PROBE_FACTORIAL_AXES:
+        # Fix 9: full factorial 直積被覆（P1: register×duration, P3:
+        # release_duration×ending_voicing）。
+        _validate_probe_factorial_coverage(
+            expected_probe_id=expected_probe_id, factor_levels=probe["factor_levels"], cells=cells,
+            field=f"{field}.factor_levels",
         )
 
     if expected_probe_id == "P2":
@@ -4452,6 +4586,17 @@ def _validate_revision_bridge_entry(
     _resolve_identity_metric_space_ref(
         ref, document=identity_metric_space_document, field=f"{field}.identity_metric_space_ref"
     )
+    # PR #322 第4巡指摘 Fix 8（P2, 採用）: 実在走査だけでは「別エントリの
+    # 正しい path」を取り違えて指しても通過してしまう（例:
+    # reference_render と evaluated_renders の valid path を入れ替え）。
+    # エントリ名ごとの期待 path と厳密一致することを追加で要求する。
+    expected_ref = _REVISION_BRIDGE_EXPECTED_METRIC_REF[entry_name]
+    if ref != expected_ref:
+        raise Run9ValidationError(
+            f"{field}.identity_metric_space_ref must be exactly {expected_ref!r} for entry "
+            f"{entry_name!r} (Fix 8: エントリ→期待 path の厳密対応 — 他エントリの正しい path を "
+            f"取り違えて指すことを防ぐ), got {ref!r}"
+        )
 
     new_render_required = entry["new_render_required"]
     if not isinstance(new_render_required, bool) or new_render_required is not requires_new_render:

@@ -885,3 +885,123 @@ def test_negative_fix7_onset_cell_prefix_length_not_one() -> None:
         m._validate_p2_onset_filler_consistency(
             factor_levels=factor_levels, cells=[cell_two_prefix], field="test"
         )
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第4巡指摘 Fix 8（P2, 採用）: revision_bridge エントリ→期待 path
+# の厳密対応
+# ---------------------------------------------------------------------------
+
+
+def test_fix8_all_entries_match_expected_paths(manifest_data: Dict[str, Any]) -> None:
+    for entry_name, entry in manifest_data["revision_bridge"].items():
+        assert entry["identity_metric_space_ref"] == m._REVISION_BRIDGE_EXPECTED_METRIC_REF[entry_name]
+
+
+def test_negative_fix8_swap_valid_paths_between_entries(manifest_data: Dict[str, Any]) -> None:
+    """reference_render と evaluated_renders は共に実在する path を持つが
+    入れ替えると、実在走査（Fix 5）だけでは検出できず Fix 8 のエントリ別
+    厳密対応でのみ検出される。"""
+    bad = _mutate(manifest_data)
+    rb = bad["revision_bridge"]
+    a = rb["reference_render"]["identity_metric_space_ref"]
+    b = rb["evaluated_renders"]["identity_metric_space_ref"]
+    assert a != b  # 前提: 元々異なる path であることの確認
+    rb["reference_render"]["identity_metric_space_ref"] = b
+    rb["evaluated_renders"]["identity_metric_space_ref"] = a
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix8_entry_points_to_different_but_real_path(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    rb = bad["revision_bridge"]
+    rb["pjs_reference"]["identity_metric_space_ref"] = rb["negative_reference"][
+        "identity_metric_space_ref"
+    ]
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第4巡指摘 Fix 9（P2, 採用）: 凍結 cell_id 集合 + factorial 直積
+# 被覆
+# ---------------------------------------------------------------------------
+
+
+def test_fix9_expected_cell_ids_match_manifest(manifest_data: Dict[str, Any]) -> None:
+    for probe in manifest_data["probes"]:
+        actual = {c["cell_id"] for c in probe["cells"]}
+        assert actual == m._PROBE_EXPECTED_CELL_IDS[probe["probe_id"]]
+
+
+def test_negative_fix9_delete_cell_whose_levels_remain_used_elsewhere(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """P1-REG-LOW-DUR-SHORT を削除しても low/short は他 cell（LOW-DUR-LONG
+    / MID-DUR-SHORT 等）に残るため、旧 Fix 2/3 の水準実在チェックだけでは
+    通過してしまっていた欠陥の回帰確認。"""
+    bad = _mutate(manifest_data)
+    p1 = _p1_probe(bad)
+    p1["cells"] = [c for c in p1["cells"] if c["cell_id"] != "P1-REG-LOW-DUR-SHORT"]
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix9_p3_factorial_cell_deleted(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    (p3,) = [p for p in bad["probes"] if p["probe_id"] == "P3"]
+    p3["cells"] = [c for c in p3["cells"] if c["cell_id"] != "P3-RELEASE-SHORT-UNVOICED"]
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix9_surplus_cell_id(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    (p5,) = [p for p in bad["probes"] if p["probe_id"] == "P5"]
+    extra = copy.deepcopy(p5["cells"][0])
+    extra["cell_id"] = "P5-EXTRA-SURPLUS-CELL"
+    p5["cells"].append(extra)
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix9_factorial_coverage_gap_isolated() -> None:
+    """cell_id 集合の凍結チェックとは独立に、factorial 直積被覆の欠落
+    のみを検証する（private 関数への直接単体呼び出し——既存テスト流儀と
+    同型。P1-REG-HIGH-DUR-LONG に相当する組合せを欠落させる）。"""
+    factor_levels = {
+        "axes": {
+            "register": {"low": 57, "mid": 62, "high": 65},
+            "duration": {"short": 1, "long": 4},
+        }
+    }
+    cells = [
+        {"cell_id": "a", "levels": {"register": "low", "duration": "short"}},
+        {"cell_id": "b", "levels": {"register": "low", "duration": "long"}},
+        {"cell_id": "c", "levels": {"register": "mid", "duration": "short"}},
+        {"cell_id": "d", "levels": {"register": "mid", "duration": "long"}},
+        {"cell_id": "e", "levels": {"register": "high", "duration": "short"}},
+        # ("high", "long") を意図的に欠落させる
+    ]
+    with pytest.raises(m.Run9ValidationError, match="high"):
+        m._validate_probe_factorial_coverage(
+            expected_probe_id="P1", factor_levels=factor_levels, cells=cells, field="test"
+        )
+
+
+def test_fix9_factorial_coverage_full_grid_passes() -> None:
+    factor_levels = {
+        "axes": {
+            "register": {"low": 57, "mid": 62, "high": 65},
+            "duration": {"short": 1, "long": 4},
+        }
+    }
+    cells = [
+        {"cell_id": f"{r}-{d}", "levels": {"register": r, "duration": d}}
+        for r in ("low", "mid", "high")
+        for d in ("short", "long")
+    ]
+    m._validate_probe_factorial_coverage(
+        expected_probe_id="P1", factor_levels=factor_levels, cells=cells, field="test"
+    )  # 例外を投げないことの確認
