@@ -90,8 +90,9 @@
       "verbatim": "training NaN / checkpoint corruption"
     },
     {
-      "condition": "founder_genome_shas.{R9F-01,R9F-02}（PINNED）と founders/*.json の実ファイルの raw sha256 照合を production 消費経路として実装した run9_schema.load_pinned_founder_genome_document(founder_id, *, contract, domain, rights_manifest) が担う（2026-08-25 Codex bot レビュー PR #324 第2巡 Fix 6 採用 — 旧 condition は raw sha 照合が tests/test_run9_contract.py の test module にしか存在せず production 消費経路が無い欠陥を指摘された）。load_pinned_probe_manifest() と同型の3層防御（(i) ディスク正典 RUN9_CONTRACT.yaml 再読込で pin 値の乖離検出 (ii) PINNED 状態確認 (iii) founders/R9F-0x_genome.json の実バイト raw sha256 と pin 値の read-once 照合）に加え、(iv) founder_genome_from_dict()（既存の改ざん検出 ロジック — build_founder() による正典再構築との to_dict() 完全一致を要求）で実内容検証まで 行う。harness の genome 消費はこの関数経由のみ（直接 json.load() 禁止、docstring に明記）。",
-      "enforcement": "MACHINE",
+      "checkpoint": "§22 step 4『generate R9F-01:r0 and R9F-02:r0』/ step 6『freeze Birth Baseline』— rule 12 の verbatim『r0 or frozen Genome changed』は二本柱（genome 文書 / r0 state）の AND で構成される。genome 文書側は run9_schema.load_pinned_founder_genome_document() （既存 pin 済み production 消費経路 — founders/R9F-0x_genome.json の raw sha256 照合 + founder_genome_from_dict() による builder 再構築照合）で機械検証可能（2026-08-25 Codex bot レビュー PR #324 第2巡 Fix 6 で新設済み）。しかし r0 state 側は DESIGN_RUN9 §24 推奨ディレクトリ（1257-1258行）が言及する founders/R9F-0x_r0_state.json が repo に実在しない（grep 確認: 該当ファイルなし、step 4-5 の r0 生成・Birth Baseline freeze が未実行のため）。branch_write_policy.json の immutable_artifacts に `r0_bytes` が列挙されているのは書込境界ポリシー宣言（validate_branch_write() が書込境界を強制する対象カテゴリの宣言）であり、r0 state ファイル実体の sha256 を pin する契約欄ではない（RUN9_CONTRACT.yaml に r0 state 専用の pin 欄は存在しない、grep 確認済み）。r0 state 側を検証する pin/consumption-time verifier が存在しない以上、rule 全体としては MACHINE を名乗れず PROCEDURAL とする（2026-08-25 Codex bot レビュー PR #324 第3巡指摘, P1, 採用 — genome 半分のみの機械検証を rule 全体の MACHINE 根拠として主張しない、rule 5 の Genome ID/SingerState 分割と同型の判断）。Codex/User が §22 step 4/6 で r0 state（生成された場合はその実体）の不変性を確認する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "founders/R9F-0x_r0_state.json（Birth Baseline の r0 state）が実際に生成され、RUN9_CONTRACT.yaml に専用の pin 欄が新設され、load_pinned_founder_r0_state()相当の production 消費時 verifier（raw sha256 照合 + 可能なら内容検証）が実装された時点で、genome 文書側と合わせて rule 全体を MACHINE へ昇格する（VG-L0 ハーネス / birth probe freeze 実装時）。",
       "rule_id": 12,
       "verbatim": "r0 or frozen Genome changed"
     },

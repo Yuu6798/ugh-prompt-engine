@@ -10629,15 +10629,19 @@ def test_pin1_failure_abort_criteria_enforcement_vocab_closed() -> None:
         assert rule["enforcement"] in ("MACHINE", "PROCEDURAL")
 
 
-def test_pin1_failure_abort_criteria_two_machine_eighteen_procedural() -> None:
-    """PR #324 Codex bot レビュー第1巡 Fix 1/2/3 + ファミリー全数監査
-    （2026-08-25）後の分類: MACHINE 2件（#2/#12）のみが『(a) 実装済み・
-    (b) 実内容検査』の2条件を満たして生存し、残り18件は PROCEDURAL。"""
+def test_pin1_failure_abort_criteria_one_machine_nineteen_procedural() -> None:
+    """PR #324 Codex bot レビュー第1-3巡の累積分類（2026-08-25）: MACHINE
+    1件（#2）のみが『(a) 実装済み・(b) 実内容検査』の2条件を満たして
+    生存し、残り19件は PROCEDURAL。#12 は第3巡指摘（genome 文書側は
+    load_pinned_founder_genome_document() で機械検証可能だが r0 state 側
+    の検証機構が存在しない部分保証の過大主張）により第2巡の MACHINE 維持
+    から PROCEDURAL へ再降格した。"""
     data = _failure_abort_criteria_data()
     machine = [r for r in data["rules"] if r["enforcement"] == "MACHINE"]
     procedural = [r for r in data["rules"] if r["enforcement"] == "PROCEDURAL"]
-    assert {r["rule_id"] for r in machine} == {2, 12}
-    assert len(procedural) == 18
+    assert {r["rule_id"] for r in machine} == {2}
+    assert len(procedural) == 19
+    assert 12 in {r["rule_id"] for r in procedural}
 
 
 def test_pin1_failure_abort_criteria_no_current_deferred_threshold_ref_usage() -> None:
@@ -10653,9 +10657,11 @@ def test_pin1_failure_abort_criteria_no_current_deferred_threshold_ref_usage() -
 
 def test_pin1_failure_abort_criteria_deferred_threshold_ref_mechanism_accepts_real_pin_field() -> None:
     """deferred_threshold_ref 機構自体は生きていること（合成 MACHINE rule
-    で正例確認）。"""
+    で正例確認）。rule 12 は PR #324 第3巡で PROCEDURAL へ再降格したため、
+    唯一残る MACHINE 項目である rule 2 を対象に確認する。"""
     data = copy.deepcopy(_failure_abort_criteria_data())
-    machine_rule = next(r for r in data["rules"] if r["rule_id"] == 12)
+    machine_rule = next(r for r in data["rules"] if r["rule_id"] == 2)
+    assert machine_rule["enforcement"] == "MACHINE"
     machine_rule["deferred_threshold_ref"] = "hypothesis_algebra_sha"
     m.validate_failure_abort_criteria(data)  # 例外を投げないことの確認
 
@@ -11139,13 +11145,74 @@ def test_pin1_r3_founders_json_bytes_unchanged() -> None:
 
 
 def test_pin1_r3_rule12_condition_references_new_loader_function() -> None:
-    """failure_abort_criteria.json rule 12 の condition が
-    `load_pinned_founder_genome_document` を参照し、production 消費経路の
-    存在を主張していること（Fix 6 の直接回帰）。"""
+    """PR #324 第2巡 Fix 6 で `load_pinned_founder_genome_document` を
+    新設した事実自体は、第3巡で rule 12 が PROCEDURAL へ再降格した後も
+    checkpoint 内の言及として残ること（genome 文書側は機械検証可能で
+    あるという事実は変わらない——rule 全体としての enforcement 判定が
+    変わっただけ）。"""
     data = _failure_abort_criteria_data()
     rule12 = next(r for r in data["rules"] if r["rule_id"] == 12)
-    assert rule12["enforcement"] == "MACHINE"
-    assert "load_pinned_founder_genome_document" in rule12["condition"]
+    assert rule12["enforcement"] == "PROCEDURAL"
+    assert "load_pinned_founder_genome_document" in rule12["checkpoint"]
+
+
+def test_pin1_r4_rule12_reclassified_procedural_r0_state_absent() -> None:
+    """PR #324 Codex bot レビュー第3巡指摘（P1, 採用）の直接回帰: rule 12
+    は genome 文書 / r0 state の二本柱のうち r0 state 側の検証機構が
+    無いため PROCEDURAL であり、checkpoint/machine_promotion_condition が
+    その理由（r0 state ファイル不在 + pin 欄不在）を明記していること。"""
+    data = _failure_abort_criteria_data()
+    rule12 = next(r for r in data["rules"] if r["rule_id"] == 12)
+    assert rule12["enforcement"] == "PROCEDURAL"
+    assert "condition" not in rule12
+    assert "deferred_threshold_ref" not in rule12
+    assert "r0_state" in rule12["checkpoint"]
+    assert "r0 state" in rule12["machine_promotion_condition"]
+
+
+def test_pin1_r4_r0_state_files_confirmed_absent_from_repo() -> None:
+    """事実確認 (a): founders/R9F-0x_r0_state.json は repo に実在しない
+    （DESIGN_RUN9 §24 推奨ディレクトリ図に記載があるのみ）。grep 相当で
+    機械照合する（一次ソース直読み、孫引き防止）。"""
+    for founder_id in ("R9F-01", "R9F-02"):
+        assert not (m.FOUNDER_GENOME_DIR / f"{founder_id}_r0_state.json").is_file()
+    founders_dir_files = sorted(p.name for p in m.FOUNDER_GENOME_DIR.iterdir())
+    assert founders_dir_files == ["R9F-01_genome.json", "R9F-02_genome.json"]
+
+
+def test_pin1_r4_r0_state_has_no_contract_pin_field() -> None:
+    """事実確認 (b): RUN9_CONTRACT.yaml に r0 state 専用の pin 欄は存在
+    しない（`CONTRACT_PIN_FIELDS` の全欄名を grep 相当で照合）。"""
+    for field_name in m.CONTRACT_PIN_FIELDS:
+        assert "r0_state" not in field_name
+        assert "r0state" not in field_name.replace("_", "").lower()
+
+
+def test_pin1_r4_branch_write_policy_r0_bytes_is_write_boundary_not_pin() -> None:
+    """事実確認 (c): branch_write_policy.json の `r0_bytes` は
+    immutable_artifacts（書込境界ポリシー宣言）の1項目であり、r0 state
+    ファイル実体の sha256 を pin する契約欄ではないこと。"""
+    policy = json.loads(BRANCH_WRITE_POLICY_PATH.read_text(encoding="utf-8"))
+    assert "r0_bytes" in policy["immutable_artifacts"]
+    assert "r0_bytes" not in m.CONTRACT_PIN_FIELDS
+    assert "r0_bytes" in m.BRANCH_IMMUTABLE_ARTIFACTS
+
+
+def test_pin1_r4_failure_abort_criteria_repinned_lineage_four_generations(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """failure_abort_criteria_sha の repin 履歴4世代（RUN9-L0-PIN-1 初回
+    → PR #324 第1巡 Fix 1/2/3 → 第2巡 Fix 6 → 第3巡 rule 12 再降格）が
+    append-only で、現在値が最新（第3巡）のものであることを明示的に
+    確認する（repin 漏れの回帰防止）。"""
+    round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
+    round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
+    round3_value = "6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44"
+    round4_value = "3ef4edf25b93a6c996d50b38f6348b567f2eee44f22540a8aca8593786b3f6d1"
+    current = contract_raw["failure_abort_criteria_sha"]["value"]
+    assert current == round4_value
+    assert current not in (round1_value, round2_value, round3_value)
+    assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
 
 
 # ---------------------------------------------------------------------------
@@ -11236,18 +11303,12 @@ def test_pin1_r3_measurement_spec_manifest_file_byte_unchanged_despite_pending_p
     )
 
 
-def test_pin1_r3_failure_abort_criteria_repinned_lineage(contract_raw: Dict[str, Any]) -> None:
-    """failure_abort_criteria_sha の repin 履歴3世代（RUN9-L0-PIN-1 初回
-    → PR #324 第1巡 Fix 1/2/3 → 第2巡 Fix 6）が append-only で、現在値が
-    最新（第2巡）のものであることを明示的に確認する（repin 漏れの回帰
-    防止）。"""
-    round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
-    round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
-    round3_value = "6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44"
-    current = contract_raw["failure_abort_criteria_sha"]["value"]
-    assert current == round3_value
-    assert current not in (round1_value, round2_value)
-    assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
+# `test_pin1_r3_failure_abort_criteria_repinned_lineage`（3世代版）は PR #324
+# 第3巡の repin により超過し、下記
+# `test_pin1_r4_failure_abort_criteria_repinned_lineage_four_generations`
+# （4世代・全履歴を包含する上位互換）へ置き換えた（重複削除、Codex bot
+# レビュー各巡の教訓「修正からの再修正は早期に打ち切る」に沿い、単に
+# 世代数を書き換えるのではなく1本化した）。
 
 
 @pytest.mark.parametrize(

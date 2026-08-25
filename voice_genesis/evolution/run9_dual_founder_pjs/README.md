@@ -690,7 +690,8 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   で deferred_threshold_ref も維持不能）も PROCEDURAL へ移行し、#2（rights
   manifest 構造完全性検査）と #12（founder_genome_shas raw sha 全体照合）
   のみ MACHINE で生存。最終 MACHINE 2件 / PROCEDURAL 18件（全 PROCEDURAL
-  項目に `machine_promotion_condition` を新設・付与）。
+  項目に `machine_promotion_condition` を新設・付与。#12 はその後 PR #324
+  第3巡でさらに PROCEDURAL へ再降格——下記第3巡履歴参照）。
   `failure_abort_criteria_sha` を実バイト sha256 で repin
   （`RUN9_CONTRACT.yaml` に append-only 履歴コメント記録）〕。
   〔履歴: PR #324 Codex bot レビュー第2巡（2026-08-25, 4件, 全て採用）で
@@ -712,6 +713,28 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   で repin（`RUN9_CONTRACT.yaml` に append-only 履歴コメント記録、3世代
   目）。founders/*.json は byte 不変（実測確認済み）。Fix 5（P2 ×2）は
   下記 `measurement_spec_sha` 箇条の履歴を参照〕。
+  〔履歴: PR #324 Codex bot レビュー第3巡（2026-08-25, 1件 P1, 採用）で
+  rule 12 をさらに PROCEDURAL へ再降格。指摘: rule 12 の verbatim「r0 or
+  frozen Genome changed」は genome 文書 / r0 state の二本柱の AND であり、
+  第2巡 Fix 6 の `load_pinned_founder_genome_document()` は genome 文書側
+  のみを検証する——r0 state 側（DESIGN §24 推奨ディレクトリが言及する
+  `founders/R9F-0x_r0_state.json`）の消費時検証機構が無いまま MACHINE を
+  名乗る部分保証の過大主張だった。事実確認: (a)
+  `founders/R9F-0x_r0_state.json` は repo に実在しない（`founders/` 配下
+  は genome.json 2件のみ）(b) `RUN9_CONTRACT.yaml` に r0 state 専用の pin
+  欄は存在しない (c) `branch_write_policy.json` `immutable_artifacts` の
+  `r0_bytes` は書込境界ポリシー宣言であり pin 契約欄ではない。r0 state
+  ファイル・pin 先のいずれも存在しないため、存在しない pin を発明せず
+  正直に PROCEDURAL へ降格した（genome 半分のみの機械検証を rule 全体の
+  MACHINE 根拠として主張しない、rule 5 の Genome ID/SingerState 分割と
+  同型の判断）。checkpoint に「genome 半分は
+  `load_pinned_founder_genome_document()` で機械検証可能」と明記しつつ、
+  `machine_promotion_condition` に「r0 state の pin + 消費時 verifier 実装
+  時（VG-L0 ハーネス / birth probe freeze 時）に MACHINE へ昇格」を記録
+  した。結果 MACHINE 1件（#2）/ PROCEDURAL 19件。
+  `failure_abort_criteria_sha` を実バイト sha256 で repin（4世代目）。
+  seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json
+  は無改変（sha256 確認済み）〕。
 - `measurement_spec_sha` は **PENDING のまま**（2026-08-25 RUN9-L0-PIN-1 で
   一時 PINNED 化 → 同日 PR #324 第2巡 Codex bot レビュー Fix 5（P2 ×2、
   採用）で PENDING へ復帰）。manifest 実体

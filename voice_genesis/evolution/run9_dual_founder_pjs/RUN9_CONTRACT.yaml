@@ -1033,8 +1033,37 @@ cost_record_sha:
 #   明記）。rule 12 の condition をこの関数参照へ更新し MACHINE を維持
 #   （(a) 実装済み・(b) 実内容検査の両条件を production 経路で満たす）。
 #   founders/*.json は byte 不変（実測確認済み）。
+# - PR #324 Codex bot レビュー第3巡 Fix（2026-08-25、値
+#   3ef4edf25b93a6c996d50b38f6348b567f2eee44f22540a8aca8593786b3f6d1 へ
+#   repin、P1、採用）: rule 12 の verbatim「r0 or frozen Genome changed」は
+#   genome 文書 / r0 state の二本柱の AND であり、第2巡 Fix 6 の
+#   `load_pinned_founder_genome_document()` は genome 文書側のみを検証
+#   する——r0 state 側（DESIGN_RUN9 §24 推奨ディレクトリが言及する
+#   founders/R9F-0x_r0_state.json）の消費時検証機構が無いまま MACHINE を
+#   名乗る部分保証の過大主張、という指摘。事実確認（実ファイル）:
+#   (a) founders/R9F-0x_r0_state.json は repo に実在しない（`founders/`
+#   配下は R9F-01/R9F-02_genome.json の2件のみ、grep 確認）——DESIGN §24
+#   の推奨ディレクトリ図（1257-1258行）に記載があるのみで、step 4-5 の
+#   r0 生成・Birth Baseline freeze が未実行のため生成されていない。
+#   (b) RUN9_CONTRACT.yaml に r0 state 専用の pin 欄は存在しない（grep
+#   確認）。branch_write_policy.json `immutable_artifacts` の `r0_bytes`
+#   は書込境界ポリシー宣言（`validate_branch_write()` が強制する対象
+#   カテゴリの宣言）であり、r0 state ファイル実体の sha256 を pin する
+#   契約欄ではない。(c) `immutable_artifacts_rationale`（同ファイル）
+#   逐語:「全枝で不変。稽古(PRACTICE_FROM_AUDIO)で許すTrait変化は、
+#   これらのいずれでもない...」。r0 state ファイルが未生成かつ pin 先も
+#   存在しないため、存在しない pin を発明せず**正直に PROCEDURAL へ
+#   降格**した（第1巡で確立した (a) 実装済み・(b) 実内容検査の AND
+#   基準に忠実——genome 半分のみの機械検証を rule 全体の MACHINE 根拠
+#   として主張しない。rule 5 の Genome ID/SingerState 分割と同型の判断）。
+#   checkpoint に「genome 半分は load_pinned_founder_genome_document() で
+#   機械検証可能」と明記しつつ、machine_promotion_condition に「r0 state
+#   の pin + 消費時 verifier 実装時（VG-L0 ハーネス / birth probe freeze
+#   時）に MACHINE へ昇格」を記録した。結果 MACHINE 1件（#2）/
+#   PROCEDURAL 19件。seed_policy_manifest.json/measurement_spec_
+#   manifest.json/founders/*.json は無改変（sha256 確認済み）。
 failure_abort_criteria_sha:
-  value: "6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44"
+  value: "3ef4edf25b93a6c996d50b38f6348b567f2eee44f22540a8aca8593786b3f6d1"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 
