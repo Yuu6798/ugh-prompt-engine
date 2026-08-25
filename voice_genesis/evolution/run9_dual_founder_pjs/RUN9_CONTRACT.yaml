@@ -684,8 +684,33 @@ learning_recipe_sha:
 # role 境界宣言追記により manifest バイトが変わるため sha256 を再計算
 # した。旧値（履歴として保持）:
 # "d50266e51acbf83e47ef047dfa91c8bd8e6ede129dd1ba24d5b111581b98a804"
+#
+# PR #322 Codex bot レビュー第6巡2件（採用）反映による repin:
+# Fix 13（P1）pin は 64hex 形状/status しか検証されず実物照合が pytest
+# assert 頼みだった（pod checkout での manifest 欠落/stale/改変でも
+# READY に到達し得る）。`load_pinned_probe_manifest(contract)` を
+# run9_schema.py へ新設——実バイト読込→raw sha256 計算→本 pin 値との
+# 厳密一致検証→json parse→`validate_probe_manifest()` 全検証まで一括で
+# 行う唯一の正規取得経路とし、欠落/stale/改変/schema 違反はすべて
+# Run9ValidationError で fail-closed にした。**gate_state() 自体は不変**
+# （構造述語のまま——PINNED 形状のみを見る）。pod フェーズの render
+# harness は本関数経由でのみ probe manifest を取得しなければならない旨を
+# render_contract.probe_manifest_access_contract として manifest 側にも
+# 事前登録した（消費契約。PR #320 Fix 7 と同型の消費関数方式）。
+# Fix 14（P2）P4 の heldout_independence ステータスが無認証の散文自己
+# 宣言のみだった（著者確認・作成証跡・attestation が無い）。authorship /
+# environment_evidence / machine_checked_separation / residual_risk_
+# declaration の 4 ブロックへ拡張し、検証可能な範囲の証跡（著述環境に
+# PJS 実体ファイルが存在しないことの機械検証可能な主張・Fix 10 分離検証
+# への参照）+ 正直な残余宣言（言語モデルの事前知識経由の影響は機械的に
+# 排除できない旨。推定で補完しない）へ再定義した——**絶対独立の主張は
+# しない**。
+# 2 Fix 合算で render_contract.probe_manifest_access_contract 追加・P4
+# heldout_independence の 4 ブロック追加により manifest バイトが変わる
+# ため sha256 を再計算した。旧値（履歴として保持）:
+# "c09f140c718bbea35301e9a6920083f8c02ae723e3590e07a4c6093e076f0e16"
 probe_manifest_sha:
-  value: "c09f140c718bbea35301e9a6920083f8c02ae723e3590e07a4c6093e076f0e16"
+  value: "0e43616cd25bb9fd66dc6dde566024a4c1b0809d29d6202ed2d8861a16c884ca"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 

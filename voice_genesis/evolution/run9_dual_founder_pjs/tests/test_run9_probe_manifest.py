@@ -55,15 +55,17 @@ def test_probe_manifest_valid_passes(manifest_data: Dict[str, Any]) -> None:
     m.validate_probe_manifest(manifest_data)  # 例外を投げないことの確認
 
 
-def test_probe_manifest_sha_pinned_and_matches_real_file(contract_raw: Dict[str, Any]) -> None:
-    """C.12: `probe_manifest_sha` は PINNED であり、値は
-    `evaluation/probe_manifest.json` の実バイト sha256 と一致する。"""
+def test_probe_manifest_sha_pinned_and_matches_real_file(
+    contract_raw: Dict[str, Any], contract: m.Run9RunContract, manifest_data: Dict[str, Any]
+) -> None:
+    """C.12 / PR #322 第6巡指摘 Fix 13: `probe_manifest_sha` は PINNED で
+    あり、`load_pinned_probe_manifest()`（実バイト sha256 照合 +
+    schema 全検証を一括で行う唯一の正規取得経路）が例外を投げずに
+    manifest を返す——本関数が正本、本テストは回帰確認。"""
     field = contract_raw["probe_manifest_sha"]
     assert field["status"] == "PINNED"
-    assert field["value"] == m.compute_file_sha256(m.PROBE_MANIFEST_PATH), (
-        "probe_manifest_sha が PINNED を宣言しているが、"
-        f"{m.PROBE_MANIFEST_PATH} の実バイト sha256 と一致しない"
-    )
+    loaded = m.load_pinned_probe_manifest(contract)
+    assert loaded == manifest_data
 
 
 def test_probe_manifest_deterministic_pretty_format() -> None:
@@ -159,6 +161,15 @@ def test_p4_heldout_independence_declared(manifest_data: Dict[str, Any]) -> None
     assert independence["status"] == m.HELDOUT_INDEPENDENCE_STATUS
     assert independence["independent_of"]
     assert independence["note"].strip()
+    # PR #322 第6巡指摘 Fix 14: provenance の4ブロックが揃っていること
+    # （個別の内容検証は Fix 14 セクションのテスト群が担う）。
+    for block in (
+        "authorship",
+        "environment_evidence",
+        "machine_checked_separation",
+        "residual_risk_declaration",
+    ):
+        assert block in independence, f"heldout_independence missing {block!r}"
 
 
 def test_p5_notes_within_baseline_domain_and_outside_p0_register(
@@ -1179,3 +1190,191 @@ def test_negative_fix12_score_py_missing(tmp_path: Path) -> None:
     nonexistent = tmp_path / "does_not_exist" / "score.py"
     with pytest.raises(m.Run9ValidationError, match="実在が"):
         m._load_score_py_module(path=nonexistent)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第6巡指摘 Fix 13（P1, 採用）: probe manifest pin の実物照合を
+# `load_pinned_probe_manifest()` へ集約（gate_state() 自体は構造述語の
+# まま不変。実物照合はこの消費関数が消費時点で行う）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix13_render_contract_declares_access_contract_markers(
+    manifest_data: Dict[str, Any],
+) -> None:
+    access_contract = manifest_data["render_contract"]["probe_manifest_access_contract"]
+    for marker in m._PROBE_MANIFEST_ACCESS_CONTRACT_MARKERS:
+        assert marker in access_contract
+
+
+def test_negative_fix13_render_contract_missing_access_contract_marker(
+    manifest_data: Dict[str, Any],
+) -> None:
+    bad = _mutate(manifest_data)
+    bad["render_contract"]["probe_manifest_access_contract"] = "no markers here"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_fix13_load_pinned_probe_manifest_positive(
+    contract: m.Run9RunContract, manifest_data: Dict[str, Any]
+) -> None:
+    loaded = m.load_pinned_probe_manifest(contract)
+    assert loaded == manifest_data
+
+
+def test_negative_fix13_missing_manifest_file(
+    contract: m.Run9RunContract, tmp_path: Path
+) -> None:
+    """`manifest_path` を実在しない tmp パスへ差し替え、pod checkout での
+    manifest 欠落を模した fail-closed 挙動を検証する（実 manifest は
+    一切触れない）。"""
+    missing = tmp_path / "does_not_exist" / "probe_manifest.json"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_probe_manifest(contract, manifest_path=missing)
+
+
+def test_negative_fix13_byte_altered_manifest_copy(
+    contract: m.Run9RunContract, tmp_path: Path
+) -> None:
+    """実 manifest の tmp コピーへ 1 byte 改変を加え、raw sha256 が pin 値
+    と一致しなくなることによる fail-closed 挙動を検証する（実 manifest
+    ファイル自体は一切書き換えない——コピーのみ操作）。"""
+    tmp_manifest = tmp_path / "probe_manifest.json"
+    raw = bytearray(m.PROBE_MANIFEST_PATH.read_bytes())
+    raw[0] = raw[0] ^ 0xFF  # 先頭 1 byte を反転して改変する
+    tmp_manifest.write_bytes(bytes(raw))
+    with pytest.raises(m.Run9ValidationError, match="一致しない"):
+        m.load_pinned_probe_manifest(contract, manifest_path=tmp_manifest)
+
+
+def test_negative_fix13_pin_value_mismatch() -> None:
+    """`RUN9_CONTRACT.yaml` 側の pin 値が実ファイルの sha256 と一致しない
+    場合の fail-closed 挙動を、偽の `contract` オブジェクト（`pin_field`
+    のみを実装）で検証する——実 RUN9_CONTRACT.yaml は一切触れない。"""
+
+    class _FakeContractWrongPin:
+        def pin_field(self, name: str) -> Dict[str, Any]:
+            assert name == "probe_manifest_sha"
+            return {"status": "PINNED", "value": "0" * 64}
+
+    with pytest.raises(m.Run9ValidationError, match="一致しない"):
+        m.load_pinned_probe_manifest(_FakeContractWrongPin())  # type: ignore[arg-type]
+
+
+def test_negative_fix13_pin_not_pinned() -> None:
+    """pin の status が PINNED でない（PENDING 等）場合、実バイト照合の
+    前段で fail-closed になることを検証する。"""
+
+    class _FakeContractUnpinned:
+        def pin_field(self, name: str) -> Dict[str, Any]:
+            return {"status": "PENDING", "value": None}
+
+    with pytest.raises(m.Run9ValidationError, match="not PINNED"):
+        m.load_pinned_probe_manifest(_FakeContractUnpinned())  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第6巡指摘 Fix 14（P2, 採用）: P4 heldout_independence の
+# provenance 拡張（authorship / environment_evidence /
+# machine_checked_separation / residual_risk_declaration の4ブロック）。
+# 絶対独立は主張せず、検証可能な範囲の証跡 + 正直な残余宣言へ縮小する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix14_positive_p4_provenance_blocks_well_formed(manifest_data: Dict[str, Any]) -> None:
+    m.validate_probe_manifest(manifest_data)  # 例外を投げないことの確認（回帰）
+    independence = _p4_probe(manifest_data)["heldout_independence"]
+    assert independence["authorship"]["author"].strip()
+    assert m._HELDOUT_AUTHORED_AT_RE.match(independence["authorship"]["authored_at"])
+    assert independence["authorship"]["provenance_record"].strip()
+    for marker in m._HELDOUT_ENV_EVIDENCE_CLAIM_MARKERS:
+        assert marker in independence["environment_evidence"]["claim"]
+    assert independence["environment_evidence"]["verification_method"].strip()
+    assert (
+        m._HELDOUT_MACHINE_CHECKED_SEPARATION_MARKER
+        in independence["machine_checked_separation"]["reference"]
+    )
+    for marker in m._HELDOUT_RESIDUAL_RISK_MARKERS:
+        assert marker in independence["residual_risk_declaration"]["note"]
+
+
+@pytest.mark.parametrize(
+    "block",
+    ["authorship", "environment_evidence", "machine_checked_separation", "residual_risk_declaration"],
+)
+def test_negative_fix14_provenance_block_missing(
+    manifest_data: Dict[str, Any], block: str
+) -> None:
+    bad = _mutate(manifest_data)
+    del _p4_probe(bad)["heldout_independence"][block]
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix14_authorship_bad_date_format(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p4_probe(bad)["heldout_independence"]["authorship"]["authored_at"] = "2026/08/25"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix14_environment_evidence_missing_marker(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p4_probe(bad)["heldout_independence"]["environment_evidence"]["claim"] = "no markers here"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix14_machine_checked_separation_missing_marker(
+    manifest_data: Dict[str, Any],
+) -> None:
+    bad = _mutate(manifest_data)
+    _p4_probe(bad)["heldout_independence"]["machine_checked_separation"]["reference"] = (
+        "no reference here"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix14_residual_risk_declaration_missing_marker(
+    manifest_data: Dict[str, Any],
+) -> None:
+    bad = _mutate(manifest_data)
+    _p4_probe(bad)["heldout_independence"]["residual_risk_declaration"]["note"] = (
+        "no markers here"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix14_unknown_key_in_provenance_block(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p4_probe(bad)["heldout_independence"]["authorship"]["unexpected_extra_key"] = "x"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_fix14_repo_has_no_pjs_audio_or_label_files() -> None:
+    """`environment_evidence.claim`（著述時点の repo に PJS音源(wav/lab)
+    実体ファイルが一切存在しない）を機械検証する——repo 内を glob して
+    ファイル名に "pjs" を含む .wav / .lab 実体ファイルの不在を確認する。
+    メタデータ *.json 内の "pjs" 文字列参照（pin 値の文字列参照等）は
+    対象外——音源・採譜の実体ファイルのみを検査する。"""
+    repo_root = _RUN_DIR
+    while not (repo_root / ".git").exists():
+        if repo_root.parent == repo_root:
+            pytest.fail("repository root（.git を含むディレクトリ）が見つからなかった")
+        repo_root = repo_root.parent
+
+    hits = [
+        p
+        for p in repo_root.rglob("*")
+        if ".git" not in p.parts
+        and "pjs" in p.name.lower()
+        and p.suffix.lower() in (".wav", ".lab")
+    ]
+    assert hits == [], (
+        "repo 内に PJS 音源/採譜の実体ファイルが見つかった（environment_evidence.claim と矛盾）: "
+        f"{hits}"
+    )

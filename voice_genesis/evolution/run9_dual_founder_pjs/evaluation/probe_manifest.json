@@ -743,11 +743,26 @@
       ],
       "design_source": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15",
       "heldout_independence": {
+        "authorship": {
+          "author": "本PR（PR #322）の実装エージェント（Claude セッション、RUN9-PROBE-1 Design Memo 遂行主体）。P4-HELDOUT-ORIGINAL-FRAGMENT の音高列・duration列・kana列を新規に著述した。",
+          "authored_at": "2026-08-25",
+          "provenance_record": "著述の一次証跡は PR #322 の commit 履歴（本 repo の git 履歴）である——evaluation/probe_manifest.json の P4 cell を追加した commit がそのまま著述時点の作業成果物であり、別途 attestation ファイルを持たない。"
+        },
+        "environment_evidence": {
+          "claim": "著述時点の repo・作業環境に PJS音源（wav/lab）・PJS採譜・PJS歌詞テキストは一切存在しない——repo内 PJS 実体ファイルのゼロ件は機械検証可能である。",
+          "verification_method": "tests/test_run9_probe_manifest.py がリポジトリ全体を対象に *pjs*.wav / *pjs*.lab のファイル実体不在を glob で確認するテストを持つ（*.json 等のメタデータ内の pin 値としての 'pjs' 文字列参照は対象外——音源・採譜の実体ファイルのみを検査する）。"
+        },
         "independent_of": [
           "PJS practice/education material（voice_genesis/foundry PJSコーパス由来の教材・素材）",
           "本manifest P0-P3のscore cell（音高列・duration列・kana列いずれも非共有）"
         ],
+        "machine_checked_separation": {
+          "reference": "Fix 10 の cross-probe 分離検証 _validate_p4_heldout_separation() が、P4 cell の 音高列・duration列（note signature sequence）が P0-P3 いずれの cell の 連続部分列としても出現しないことを machine-checked で保証する。"
+        },
         "note": "original melodic fragment authored specifically for this RUN9 probe manifest; not derived from, transcribed from, or overlapping with any PJS corpus recording, lesson material, or the P0-P3 cells defined above. kana vocabulary is drawn from score.py's proven vocabulary per design instruction (score.py 自体は参照するが、note列はP0とは 別の独自配列であり P0 の転記ではない).",
+        "residual_risk_declaration": {
+          "note": "著者（言語モデル）の事前知識経由での PJS 楽曲への類似・影響は機械的に排除できない——本ステータスが主張するのは『著述環境に PJS 素材が存在しない状態で authored された』ことまでであり、それ以上は主張しない（絶対独立の証明ではない。推定で補完しない）。"
+        },
         "status": "AUTHORED_INDEPENDENTLY_OF_PJS_CORPUS"
       },
       "probe_id": "P4",
@@ -819,6 +834,7 @@
     "pcm_publication_discipline": "すべての最終WAVは float output -> PCM publication -> file readback -> meter -> actual WAV sha256 の順で評価する。メモリ上floatだけで最終Gateを作らない（DESIGN_RUN9 §15 末尾）。",
     "performance_seed": 909001,
     "performance_seed_note": "SHARED_PERFORMANCE_SEED=909001。学習seed LEARNING_SEED=909002 とは別の値であり混同しない——両founderの全render（reference_render/C0/C1/positive_reference/evaluated_renders）でこの1値のみを使用する。PR #322 第1巡指摘Fix 1（P1, 採用）: この909001は genome/ControlProfileレベルのperformance policy seed（v0.1 §9.3・founders/*.jsonのperformance_seed欄・validate_founder_genome()が厳格検証する対象）であり、宣言harness（gate_synth.py::run_pipeline）内部で消費される ONNX runtime の乱数 seed ではない——両者は別の層の値であり、runtime側の実際の消費値はharness_runtime_seed_policy節を参照。",
+    "probe_manifest_access_contract": "PR #322 第6巡指摘 Fix 13: podフェーズのrender harnessは probe manifest を load_pinned_probe_manifest() 経由でのみ取得しなければならない——直接 json.load は契約違反である。load_pinned_probe_manifest() は実ファイルの生バイトを読み、raw sha256 を RUN9_CONTRACT.yaml probe_manifest_sha の pin 値と厳密一致検証したうえで json parse -> validate_probe_manifest() 全検証まで一括で行う唯一の正規取得経路であり、manifest欠落・stale・改変・schema違反はすべて Run9ValidationError で fail-closed になる。gate_state() の READY は probe_manifest_sha が PINNED 形状であることのみを見る構造述語判定（形状判定）であり、実物照合（実バイトhash一致・schema検証）はgate_state()では行わない——実物照合は load_pinned_probe_manifest() が呼び出された消費時点で行う、というのがgate=構造述語 / 消費関数=実物照合 の原則（PR #320 第4-5巡で確立、PR #320 Fix 7と同型）。",
     "same_conditions_note": "同一score・同一seed・同一ExecutionProfileで両founderをrenderする（DESIGN_RUN9 §27 item 13「shared performance seed is identical」/ item 18「birth probes use same score/seed/ExecutionProfile」参照）。PR #322 第1巡指摘 Fix 1: 「same seed」は genome-policy 層(909001)とharness-runtime層(42)の両方について成立する——両founderともgenome-policy seedは909001で共通、harnessが実際に消費・記録するruntime seedも42で共通であり、いずれの層で見てもitem 13/18の same-seed 要求は充足する。"
   },
   "revision_bridge": {

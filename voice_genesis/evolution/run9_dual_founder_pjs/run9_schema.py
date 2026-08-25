@@ -3741,7 +3741,16 @@ _P3_DIAGNOSTIC_ROLE_MARKER = "diagnostic_when_trf_uncalibrated"
 _RENDER_CONTRACT_KEYS: FrozenSet[str] = frozenset({
     "harness", "backbone_ref", "performance_seed", "performance_seed_note",
     "same_conditions_note", "pcm_publication_discipline", "harness_runtime_seed_policy",
+    "probe_manifest_access_contract",
 })
+# PR #322 第6巡指摘 Fix 13（P1, 採用）: 消費契約の事前登録マーカー
+# （`probe_manifest_access_contract` フィールドが保持しなければならない
+# 3点 — 正規取得経路の関数名・直接 json.load の禁止・gate READY は形状
+# 判定に過ぎないこと）。実物照合の消費点は `load_pinned_probe_manifest()`
+# のみ——gate_state() 自体は構造述語のまま変更しない。
+_PROBE_MANIFEST_ACCESS_CONTRACT_MARKERS: Tuple[str, ...] = (
+    "load_pinned_probe_manifest", "契約違反", "形状判定",
+)
 _RENDER_CONTRACT_HARNESS = "voice_genesis/foundry/s1_gate/gate_synth.py::run_pipeline"
 _BACKBONE_REF_KEYS: FrozenSet[str] = frozenset({"contract_path", "contract_field"})
 _BACKBONE_REF_CONTRACT_PATH = "voice_genesis/evolution/run9_dual_founder_pjs/RUN9_CONTRACT.yaml"
@@ -3876,8 +3885,43 @@ _PROHIBITION_MARKERS: Tuple[str, ...] = (
 # ——この区別（carve-out）自体を文言として要求する（項目8）。
 _PROHIBITION_RENDER_INFEASIBLE_CARVEOUT_MARKERS: Tuple[str, ...] = ("水増し", "対象外")
 
-_HELDOUT_INDEPENDENCE_KEYS: FrozenSet[str] = frozenset({"status", "independent_of", "note"})
 HELDOUT_INDEPENDENCE_STATUS = "AUTHORED_INDEPENDENTLY_OF_PJS_CORPUS"
+
+# ---------------------------------------------------------------------------
+# PR #322 第6巡指摘 Fix 14（P2, 採用）: `AUTHORED_INDEPENDENTLY_OF_PJS_
+# CORPUS` は無認証の散文自己宣言のみだった（著者確認・作成証跡・
+# attestation が無い）。検証可能な範囲の証跡 + 正直な残余宣言（AGENTS.md
+# の推定補完禁止規律の適用）へ拡張する——**絶対独立の主張はしない**。
+# status の意味論をこの4ブロックの範囲へ再定義する。
+# ---------------------------------------------------------------------------
+_HELDOUT_INDEPENDENCE_KEYS: FrozenSet[str] = frozenset({
+    "status", "independent_of", "note",
+    "authorship", "environment_evidence", "machine_checked_separation",
+    "residual_risk_declaration",
+})
+_HELDOUT_AUTHORSHIP_KEYS: FrozenSet[str] = frozenset({"author", "authored_at", "provenance_record"})
+_HELDOUT_ENVIRONMENT_EVIDENCE_KEYS: FrozenSet[str] = frozenset({"claim", "verification_method"})
+_HELDOUT_MACHINE_CHECKED_SEPARATION_KEYS: FrozenSet[str] = frozenset({"reference"})
+_HELDOUT_RESIDUAL_RISK_DECLARATION_KEYS: FrozenSet[str] = frozenset({"note"})
+# `authored_at` は ISO 8601 の日付（YYYY-MM-DD）形式を要求する。
+_HELDOUT_AUTHORED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# `environment_evidence.claim` が保持しなければならないマーカー（著述
+# 時点の repo・作業環境に PJS 実体ファイルが存在しないという主張の核心
+# 語彙。「repo 内 PJS wav/lab 実体ファイルの不在」を検証するテストは
+# `tests/test_run9_probe_manifest.py` 側の grep/glob が担う——pin 値の
+# 文字列参照はこのマーカー照合の対象外）。
+_HELDOUT_ENV_EVIDENCE_CLAIM_MARKERS: Tuple[str, ...] = (
+    "PJS音源", "PJS採譜", "PJS歌詞テキスト", "一切存在しない",
+)
+# `machine_checked_separation.reference` が保持しなければならないマーカー
+# （Fix 10 の cross-probe 分離検証への参照）。
+_HELDOUT_MACHINE_CHECKED_SEPARATION_MARKER = "_validate_p4_heldout_separation"
+# `residual_risk_declaration.note` が保持しなければならないマーカー
+# （著者=言語モデルの事前知識経由の類似・影響は機械的に排除できないこと
+# の正直な残余宣言、推定で補完しないことの明示）。
+_HELDOUT_RESIDUAL_RISK_MARKERS: Tuple[str, ...] = (
+    "言語モデル", "機械的に排除できない", "推定で補完しない",
+)
 
 
 def _require_probe_int(value: Any, *, field: str) -> int:
@@ -4332,6 +4376,104 @@ def _validate_probe_heldout_independence(value: Any, *, field: str) -> None:
     )
     _require_non_empty_str(value["note"], field=f"{field}.note")
 
+    # PR #322 第6巡指摘 Fix 14（P2, 採用）: 検証可能な範囲の証跡 + 正直な
+    # 残余宣言。4ブロック必須。
+    authorship = value["authorship"]
+    if not isinstance(authorship, dict):
+        raise Run9ValidationError(f"{field}.authorship must be an object, got {type(authorship).__name__}")
+    unknown_a = set(authorship.keys()) - _HELDOUT_AUTHORSHIP_KEYS
+    if unknown_a:
+        raise Run9ValidationError(f"{field}.authorship has unknown key(s): {sorted(unknown_a)}")
+    missing_a = _HELDOUT_AUTHORSHIP_KEYS - set(authorship.keys())
+    if missing_a:
+        raise Run9ValidationError(f"{field}.authorship missing required key(s): {sorted(missing_a)}")
+    _require_non_empty_str(authorship["author"], field=f"{field}.authorship.author")
+    authored_at = _require_non_empty_str(authorship["authored_at"], field=f"{field}.authorship.authored_at")
+    if not _HELDOUT_AUTHORED_AT_RE.match(authored_at):
+        raise Run9ValidationError(
+            f"{field}.authorship.authored_at must be an ISO 8601 date (YYYY-MM-DD), got "
+            f"{authored_at!r}"
+        )
+    _require_non_empty_str(
+        authorship["provenance_record"], field=f"{field}.authorship.provenance_record"
+    )
+
+    env_evidence = value["environment_evidence"]
+    if not isinstance(env_evidence, dict):
+        raise Run9ValidationError(
+            f"{field}.environment_evidence must be an object, got {type(env_evidence).__name__}"
+        )
+    unknown_e = set(env_evidence.keys()) - _HELDOUT_ENVIRONMENT_EVIDENCE_KEYS
+    if unknown_e:
+        raise Run9ValidationError(f"{field}.environment_evidence has unknown key(s): {sorted(unknown_e)}")
+    missing_e = _HELDOUT_ENVIRONMENT_EVIDENCE_KEYS - set(env_evidence.keys())
+    if missing_e:
+        raise Run9ValidationError(
+            f"{field}.environment_evidence missing required key(s): {sorted(missing_e)}"
+        )
+    claim = _require_non_empty_str(env_evidence["claim"], field=f"{field}.environment_evidence.claim")
+    for marker in _HELDOUT_ENV_EVIDENCE_CLAIM_MARKERS:
+        if marker not in claim:
+            raise Run9ValidationError(
+                f"{field}.environment_evidence.claim must contain the marker {marker!r} (Fix 14: "
+                "著述時点の repo・作業環境に PJS 実体ファイルが存在しないという主張の核心語彙), got a "
+                "claim without that marker"
+            )
+    _require_non_empty_str(
+        env_evidence["verification_method"], field=f"{field}.environment_evidence.verification_method"
+    )
+
+    mcs = value["machine_checked_separation"]
+    if not isinstance(mcs, dict):
+        raise Run9ValidationError(
+            f"{field}.machine_checked_separation must be an object, got {type(mcs).__name__}"
+        )
+    unknown_m = set(mcs.keys()) - _HELDOUT_MACHINE_CHECKED_SEPARATION_KEYS
+    if unknown_m:
+        raise Run9ValidationError(
+            f"{field}.machine_checked_separation has unknown key(s): {sorted(unknown_m)}"
+        )
+    missing_m = _HELDOUT_MACHINE_CHECKED_SEPARATION_KEYS - set(mcs.keys())
+    if missing_m:
+        raise Run9ValidationError(
+            f"{field}.machine_checked_separation missing required key(s): {sorted(missing_m)}"
+        )
+    reference = _require_non_empty_str(
+        mcs["reference"], field=f"{field}.machine_checked_separation.reference"
+    )
+    if _HELDOUT_MACHINE_CHECKED_SEPARATION_MARKER not in reference:
+        raise Run9ValidationError(
+            f"{field}.machine_checked_separation.reference must contain the marker "
+            f"{_HELDOUT_MACHINE_CHECKED_SEPARATION_MARKER!r} (Fix 10 の cross-probe 分離検証への "
+            "参照), got a reference without that marker"
+        )
+
+    residual = value["residual_risk_declaration"]
+    if not isinstance(residual, dict):
+        raise Run9ValidationError(
+            f"{field}.residual_risk_declaration must be an object, got {type(residual).__name__}"
+        )
+    unknown_r = set(residual.keys()) - _HELDOUT_RESIDUAL_RISK_DECLARATION_KEYS
+    if unknown_r:
+        raise Run9ValidationError(
+            f"{field}.residual_risk_declaration has unknown key(s): {sorted(unknown_r)}"
+        )
+    missing_r = _HELDOUT_RESIDUAL_RISK_DECLARATION_KEYS - set(residual.keys())
+    if missing_r:
+        raise Run9ValidationError(
+            f"{field}.residual_risk_declaration missing required key(s): {sorted(missing_r)}"
+        )
+    residual_note = _require_non_empty_str(
+        residual["note"], field=f"{field}.residual_risk_declaration.note"
+    )
+    for marker in _HELDOUT_RESIDUAL_RISK_MARKERS:
+        if marker not in residual_note:
+            raise Run9ValidationError(
+                f"{field}.residual_risk_declaration.note must contain the marker {marker!r} (Fix 14: "
+                "著者=言語モデルの事前知識経由の類似・影響は機械的に排除できないことの正直な残余宣言 "
+                "——絶対独立は主張しない), got a note without that marker"
+            )
+
 
 # ---------------------------------------------------------------------------
 # PR #322 第5巡指摘 Fix 10（P2, 採用）: `heldout_independence` はこれまで
@@ -4713,6 +4855,19 @@ def _validate_render_contract(data: Any) -> None:
                 f"sha256) — {marker!r} appears out of order"
             )
         last_index = idx
+
+    access_contract = _require_non_empty_str(
+        data["probe_manifest_access_contract"], field="render_contract.probe_manifest_access_contract"
+    )
+    for marker in _PROBE_MANIFEST_ACCESS_CONTRACT_MARKERS:
+        if marker not in access_contract:
+            raise Run9ValidationError(
+                f"render_contract.probe_manifest_access_contract must contain the marker {marker!r} "
+                "(PR #322 第6巡指摘 Fix 13: pod フェーズの render harness は probe manifest を "
+                "load_pinned_probe_manifest() 経由でのみ取得しなければならない——直接 json.load は "
+                "契約違反。gate_state() READY は形状判定であり、実物照合は消費時点で行う), got an "
+                "access contract without that marker"
+            )
 
 
 def _load_identity_metric_space_document(*, path: Optional[Path] = None) -> Dict[str, Any]:
@@ -5978,6 +6133,66 @@ def gate_state(contract: Run9RunContract) -> str:
         if not _is_field_pinned(revalidated.intervention_take_count_field(take_field_name)):
             return "BLOCKED"
     return "READY"
+
+
+def load_pinned_probe_manifest(
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None
+) -> Dict[str, Any]:
+    """PR #322 第6巡指摘 Fix 13（P1, 採用）の実装: `probe_manifest_sha`
+    pin の**唯一の正規消費経路**。`gate_state()` の構造述語性は変更しない
+    （PR #320 第4-5巡で確立した「gate=構造述語（PINNED/PENDING の
+    snapshot 判定）・実物照合=消費点」原則、PR #320 Fix 7 と同型の消費
+    関数方式）——`gate_state()` は引き続き pin の shape/status しか見ず、
+    実ファイルの読込・hash 照合・schema 検証は一切行わない。それらは
+    すべて本関数が呼ばれるたびに行う。
+
+    **消費契約（事前登録）**: pod フェーズの render harness は probe
+    manifest を本関数経由でのみ取得しなければならない——直接
+    `json.load(PROBE_MANIFEST_PATH)` は契約違反である。`gate_state()`
+    の READY は「`probe_manifest_sha` が PINNED 状態にある」ことの形状
+    判定に過ぎず、実ファイルが欠落・stale・改変されていないことの証明
+    ではない。同じ契約文言を `RUN9_CONTRACT.yaml` `probe_manifest_sha`
+    の reason と、manifest 自身の `render_contract.probe_manifest_
+    access_contract` にも明記する（3箇所整合）。
+
+    手順（いずれかで fail-closed）: (1) pin 欄が PINNED であること
+    (2) `manifest_path`（省略時は `PROBE_MANIFEST_PATH` を都度参照 —
+    他の read-only ローダと同じ late-binding 回避パターン）の実在
+    (3) 実バイトの raw sha256 が pin 値と厳密一致すること（stale/改変を
+    検出） (4) JSON parse (5) `validate_probe_manifest()` 全検証。
+
+    戻り値は検証済み manifest dict。
+    """
+    field = contract.pin_field("probe_manifest_sha")
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_probe_manifest(): probe_manifest_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned probe manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else PROBE_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_probe_manifest(): pinned probe manifest source {path} does not exist — "
+            "this function is the sole canonical access path for the probe manifest (a pod render "
+            "harness must not call json.load() on it directly); a missing file is fail-closed"
+        )
+    actual_sha = compute_file_sha256(path)
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_probe_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml probe_manifest_sha の pin 値 ({pinned_sha!r}) と一致しない — "
+            "stale または改変された manifest（pod checkout での欠落/改変を含む）は fail-closed で "
+            "拒否する"
+        )
+    try:
+        data = _loads_strict_json(path.read_text(encoding="utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(f"load_pinned_probe_manifest(): JSON parse に失敗した: {exc}") from exc
+    validate_probe_manifest(data)
+    return data
 
 
 # ---------------------------------------------------------------------------
