@@ -362,7 +362,20 @@ def test_sidecar_rejects_song_id_escaping_corpus_root_before_any_read(
     に実在する fixture（本物の .lab/.wav）を置いた上で、計測関数
     （`_measure_phoneme_classes`/`_measure_pitch_range_hz`）が一切呼ばれ
     ないことをスパイで直接検証する——ファイルが実在しても読まれずに
-    拒否されることの直接証拠。"""
+    拒否されることの直接証拠。
+
+    **PR #321 review Fix 4 追記**: `row_ids.training` を単独改変すると
+    `_reject_song_ids_outside_corpus_root()`（Fix 1 の語彙的・包含検査層）
+    より前段の split assignment 層（Fix 4: `row_ids` が corpus 由来の決定論
+    割当と一致するか）が先に検知して拒否するようになった——検証する
+    エラーメッセージも Fix 4 のものへ更新している。「read/existence 判定
+    より前に、計測関数を一切呼ばず fail-closed 拒否される」という外部
+    可観測な契約自体は不変（層が変わっただけで、拒否タイミング・計測
+    未実行の保証は変わらない）。Fix 1 の語彙的判定ロジック自体は
+    `test_song_id_is_lexically_safe_rejects_unsafe_forms()` が単体で直接
+    検査済み（Fix 4 適用後は、単独 song_id 改変で Fix 1 層まで到達する
+    経路が構造的に無くなったため——`row_ids` が corpus 由来の決定論割当と
+    完全一致しない限り Fix 4 で先に拒否される）。"""
     song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
     root = _build_corpus(tmp_path, song_ids)
     _, manifest = _identity_and_manifest(root)
@@ -386,7 +399,7 @@ def test_sidecar_rejects_song_id_escaping_corpus_root_before_any_read(
     monkeypatch.setattr(psb, "_measure_phoneme_classes", _must_not_be_called)
     monkeypatch.setattr(psb, "_measure_pitch_range_hz", _must_not_be_called)
 
-    with pytest.raises(m.Run9ValidationError, match="escape corpus_root"):
+    with pytest.raises(m.Run9ValidationError, match="deterministic split assignment"):
         psb.build_acoustic_inventory_sidecar(root, malicious_manifest)
 
 
@@ -476,3 +489,175 @@ def test_sidecar_generation_does_not_change_manifest_bytes_with_corpus_check(tmp
     after = psb.dump_practice_split_manifest_bytes(manifest)
     assert before == after
     assert "verified_expanded_corpus_identity_sha256" in sidecar
+
+
+# ---------------------------------------------------------------------------
+# build_acoustic_inventory_sidecar(): row_ids を corpus 由来の決定論割当と
+# 照合する（PR #321 review 第3巡指摘・P2 修正 Fix 4: row_ids を改変（例:
+# training と sealed_holdout の ID 入れ替え）しても宣言済み6 hash が形式
+# 検証しか受けないため `validate_practice_split_manifest()` を通過してしま
+# い、sidecar が偽造 split ラベル下で計測を記録して provenance を汚す）
+# ---------------------------------------------------------------------------
+
+
+def _manifest_with_swapped_training_and_sealed_holdout(base_manifest: dict) -> dict:
+    """`row_ids.training[0]` と `row_ids.sealed_holdout[0]` を入れ替えた
+    manifest を返す（宣言済み6 hash は据え置き——PR #321 review 第3巡
+    Fix 4 が再現する脅威モデルそのもの: `validate_practice_split_manifest()`
+    は hash 形式・非空・split 間排他しか見ないため、この入れ替えだけでは
+    validate は通過する）。"""
+    manifest = dict(base_manifest)
+    row_ids = {k: list(v) for k, v in manifest["row_ids"].items()}
+    row_ids["training"][0], row_ids["sealed_holdout"][0] = (
+        row_ids["sealed_holdout"][0],
+        row_ids["training"][0],
+    )
+    manifest["row_ids"] = row_ids
+    return manifest
+
+
+def _manifest_with_swapped_rows_and_reforged_hashes(base_manifest: dict) -> dict:
+    """上記の row 入れ替えに加え、`training_split_sha256`/
+    `validation_split_sha256`/`sealed_holdout_sha256`/`row_order_sha256`
+    を偽造後の `row_ids` に対して**再計算**し、manifest 自身を自己整合
+    させたもの（row_ids と6 hash を両方偽造して自己整合させるケース——
+    真の決定論割当（corpus 由来の `assign_split()` 再計算）とは一致しない
+    ため、hash 単独の再計算・照合では見抜けず、真の割当との比較でのみ
+    検知できる）。"""
+    manifest = _manifest_with_swapped_training_and_sealed_holdout(base_manifest)
+    row_ids = manifest["row_ids"]
+    manifest["training_split_sha256"] = psb._canonical_song_list_sha256(row_ids["training"])  # noqa: SLF001
+    manifest["validation_split_sha256"] = psb._canonical_song_list_sha256(  # noqa: SLF001
+        row_ids["validation"]
+    )
+    manifest["sealed_holdout_sha256"] = psb._canonical_song_list_sha256(  # noqa: SLF001
+        row_ids["sealed_holdout"]
+    )
+    row_order = row_ids["training"] + row_ids["validation"] + row_ids["sealed_holdout"]
+    manifest["row_order_sha256"] = psb._canonical_song_list_sha256(row_order)  # noqa: SLF001
+    return manifest
+
+
+def test_sidecar_rejects_swapped_row_ids_with_hashes_left_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """training↔sealed_holdout の ID 入れ替え（宣言済み6 hash は据え置き）
+    は、計測前に fail-closed 拒否されること。計測関数が一切呼ばれない
+    ことをスパイで直接検証する。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    _, manifest = _identity_and_manifest(root)
+    forged = _manifest_with_swapped_training_and_sealed_holdout(manifest)
+    m.validate_practice_split_manifest(forged)  # 前提: schema は素通りする
+
+    def _must_not_be_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("measurement function must not be called for swapped row_ids")
+
+    monkeypatch.setattr(psb, "_measure_phoneme_classes", _must_not_be_called)
+    monkeypatch.setattr(psb, "_measure_pitch_range_hz", _must_not_be_called)
+
+    with pytest.raises(m.Run9ValidationError, match="deterministic split assignment"):
+        psb.build_acoustic_inventory_sidecar(root, forged)
+
+
+def test_sidecar_rejects_self_consistent_forged_split_and_hashes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """row_ids と宣言済み6 hash の両方を偽造後の値へ揃えて自己整合させた
+    manifest（真の決定論割当とは不一致）も、計測前に fail-closed 拒否
+    されること。計測関数が一切呼ばれないことをスパイで直接検証する——
+    hash 単独の自己整合性では防げず、corpus 由来の真の割当との比較が
+    必須であることの直接証拠。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    _, manifest = _identity_and_manifest(root)
+    forged = _manifest_with_swapped_rows_and_reforged_hashes(manifest)
+    m.validate_practice_split_manifest(forged)  # 前提: schema は素通りする（自己整合済み）
+
+    def _must_not_be_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError(
+            "measurement function must not be called for self-consistent forged manifest"
+        )
+
+    monkeypatch.setattr(psb, "_measure_phoneme_classes", _must_not_be_called)
+    monkeypatch.setattr(psb, "_measure_pitch_range_hz", _must_not_be_called)
+
+    with pytest.raises(m.Run9ValidationError):
+        psb.build_acoustic_inventory_sidecar(root, forged)
+
+
+def test_sidecar_accepts_unmodified_manifest_regression_fix4(tmp_path: Path) -> None:
+    """未改変の正常 manifest は Fix 4 の split assignment / hash pin 検証を
+    通過し、sidecar が通常どおり構築できることの正常系回帰。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    _, manifest = _identity_and_manifest(root)
+    sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
+    assert {entry["song_id"] for entry in sidecar["songs"]} == set(song_ids)
+
+
+# ---------------------------------------------------------------------------
+# build_acoustic_inventory_sidecar(): 最終消費ファイル（`root/song_id/
+# song_id.lab` / `song_id_song.wav`）それぞれを resolve + corpus_root 配下
+# 包含検査する（PR #321 review 第3巡指摘・P2 修正 Fix 5: Fix 1 は
+# `root / song_id`（ディレクトリ）の resolve しかしておらず、最終消費
+# ファイル自体が corpus_root 外を指す symlink である経路が残っていた——
+# symlink 参照先がコーパス内の実体とバイト同一なら corpus identity
+# （Fix 3）・split assignment/hash（Fix 4）はいずれも変化せず通過する）
+# ---------------------------------------------------------------------------
+
+
+def test_sidecar_rejects_final_path_symlink_escape_before_any_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """enumeration 由来の正規 song_id（Fix 1/3/4 の全層を通過する）でも、
+    その最終消費ファイル（`pjs001_song.wav`）自体が corpus_root 外を指す
+    symlink であれば、read/existence 判定より前に resolve + 包含検査で
+    fail-closed 拒否されること。symlink 参照先はコーパス内の実体と
+    バイト同一のコピー——corpus identity・split assignment/hash はいずれも
+    song_id 集合とファイル内容のみを見るため変化せず通過し、本 Fix 5 の
+    最終パス層のみが検知することの直接証拠。計測関数が一切呼ばれないこと
+    をスパイで直接検証する。
+
+    このリポジトリの sandbox では `Path.symlink_to()` が動作することを
+    事前確認済み（symlink 不可の環境では明示的な `OSError`/
+    `NotImplementedError` として素通しで失敗させる方針——`pytest.skip` で
+    黙って握り潰さない。PR #321 review 第3巡 Fix 5 裁定の指示どおり）。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    _, manifest = _identity_and_manifest(root)
+
+    # symlink 対象を corpus_root 外に用意する（pjs001_song.wav とバイト
+    # 同一のコピー——corpus identity に影響を与えないため）。
+    outside_dir = tmp_path / "outside_target"
+    outside_dir.mkdir()
+    original_wav = root / "pjs001" / "pjs001_song.wav"
+    outside_wav = outside_dir / "pjs001_song.wav"
+    outside_wav.write_bytes(original_wav.read_bytes())
+
+    # pjs001_song.wav 自体を、外部実体を指す symlink へ差し替える
+    # （親ディレクトリ root/pjs001 は symlink 化しない — Fix 1/3 が既に
+    # 塞いでいる経路とは別の、最終ファイル単体の symlink 経路を再現する）。
+    original_wav.unlink()
+    original_wav.symlink_to(outside_wav)
+
+    def _must_not_be_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("measurement function must not be called for symlinked final path")
+
+    monkeypatch.setattr(psb, "_measure_phoneme_classes", _must_not_be_called)
+    monkeypatch.setattr(psb, "_measure_pitch_range_hz", _must_not_be_called)
+
+    with pytest.raises(m.Run9ValidationError, match="escape corpus_root"):
+        psb.build_acoustic_inventory_sidecar(root, manifest)
+
+
+def test_sidecar_accepts_non_symlinked_files_regression_fix5(tmp_path: Path) -> None:
+    """symlink を伴わない通常の corpus では、Fix 5 の最終パス検査を通過し
+    sidecar が通常どおり構築できることの正常系回帰。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    _, manifest = _identity_and_manifest(root)
+    sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
+    assert len(sidecar["songs"]) == len(song_ids)
+    for entry in sidecar["songs"]:
+        assert entry["pitch_range_hz"] is not None

@@ -466,32 +466,62 @@ def build_acoustic_inventory_sidecar(
     が、`build_practice_split_manifest()` は本関数（または `librosa`）を
     一切呼ばない一方向のデータフロー。
 
-    `manifest` は外部入力（`validate_practice_split_manifest()` を通過する
-    任意の同形 dict を受理する）であるため、`row_ids` の各 `song_id` は
-    read/existence 判定より前に `_reject_song_ids_outside_corpus_root()`
-    で corpus_root 包含検査を通す（PR #321 review 指摘・P2 修正 Fix 1）。
+    **sidecar の契約**: 本関数が計測を行うのは「本 builder（
+    `build_practice_split_manifest()`/`assign_split()`/
+    `_enumerate_pjs_song_ids()`）が当該 `corpus_root` から実際に生成した
+    manifest」のみである。それ以外（別コーパス由来・手改変・偽造）の
+    manifest は、以下 4 層のいずれかで read/existence 判定より**前**に
+    fail-closed 拒否する（PR #321 review 三巡にわたる指摘の到達点）:
 
-    加えて `corpus_root` 自体が `manifest` の由来コーパスであることも
-    read/existence 判定より**前**に検証する（PR #321 review 指摘・P2 修正
-    Fix 3）: corpus A 用の valid manifest に別内容の corpus_root B（同名
-    song_id を含むが中身が異なる）を渡すと、上記 Fix 1 のガードは
-    song_id の形式のみを見るため素通りし、B を計測して A の inventory
-    として返してしまう——sidecar 自体に検証済み corpus digest も載らない
-    ため provenance が黙って失われる（advisory 計測値でも provenance は
-    必須）。`_enumerate_pjs_song_ids()`（`build_practice_split_manifest()`
-    が使う既存の identity 再計算関数——新規実装しない）で `corpus_root`
-    から `expanded_corpus_identity_sha256` を再計算し、`manifest` 側の値
-    （`build_practice_split_manifest()` の照合と同一規約——明示値必須・
-    照合スキップ不可）と厳密一致しなければ `Run9ValidationError` で
-    fail-closed（部分計測をしない）。一致した検証済み値は
-    `verified_expanded_corpus_identity_sha256` として sidecar 出力へ
-    保持する。
+    1. **corpus identity**（Fix 3）: `corpus_root` 自体が `manifest` の
+       由来コーパスであることを検証する。corpus A 用の valid manifest に
+       別内容の corpus_root B（同名 song_id を含むが中身が異なる）を渡す
+       と、song_id の形式のみを見るガードは素通りし、B を計測して A の
+       inventory として返してしまう——sidecar 自体に検証済み corpus
+       digest も載らないため provenance が黙って失われる（advisory 計測
+       値でも provenance は必須）。`_enumerate_pjs_song_ids()`（
+       `build_practice_split_manifest()` が使う既存の identity 再計算
+       関数——新規実装しない）で `corpus_root` から
+       `expanded_corpus_identity_sha256` を再計算し、`manifest` 側の値
+       （`build_practice_split_manifest()` の照合と同一規約——明示値
+       必須・照合スキップ不可）と厳密一致しなければ拒否する。一致した
+       検証済み値は `verified_expanded_corpus_identity_sha256` として
+       sidecar 出力へ保持する。
+    2. **split assignment**（Fix 4）: `row_ids`（training/validation/
+       sealed_holdout、各 3 split とも順序込み）を、Fix 3 で確定した
+       corpus 由来 song_id 列に対して `assign_split()` を再適用した
+       決定論割当と完全一致させる。training↔sealed_holdout の ID
+       入れ替え等で `row_ids` だけを改変しても（宣言済み 6 hash は
+       据え置きでも）この層で拒否される。
+    3. **hash pin**（Fix 4）: `training_split_sha256`/
+       `validation_split_sha256`/`sealed_holdout_sha256`/
+       `row_order_sha256` を builder 自身の
+       `_canonical_song_list_sha256()` で再計算し、宣言値と厳密一致を
+       照合する。`row_ids` と 6 hash を両方偽造して自己整合させた
+       manifest でも、真の決定論割当（層 2）とは一致しないため拒否
+       される。
+    4. **final path**（Fix 5）: 層 2/3 を通過した song_id から構成する
+       最終消費パス（`root/song_id/song_id.lab` /
+       `root/song_id/song_id_song.wav`）**それぞれ**を `exists()`/
+       `read_text()`/`librosa.load()` より前に resolve し
+       `corpus_root` 配下包含検査を通す（`_reject_paths_outside_corpus_
+       root()` — `_enumerate_pjs_song_ids()` と共有する既存関数）。
+       song_id 自体・その親ディレクトリ（`root/song_id`）が安全でも、
+       最終ファイルだけが corpus_root 外を指す symlink である経路は
+       layer 1-3 では捕捉できない（symlink の中身が corpus 内の実体と
+       バイト同一なら corpus identity も変化しないため）——独立した
+       防御層として必須。
+
+    いずれの層も不一致は `Run9ValidationError` で fail-closed（部分計測・
+    部分出力なし）。
     """
     manifest_dict = dict(manifest)
     m.validate_practice_split_manifest(manifest_dict)
     root = Path(corpus_root)
+
+    # --- layer 1: corpus identity（Fix 3） -----------------------------
     expected_corpus_identity = manifest_dict["expanded_corpus_identity_sha256"]
-    verified_corpus_identity, _ = _enumerate_pjs_song_ids(root)
+    verified_corpus_identity, enumerated_song_ids = _enumerate_pjs_song_ids(root)
     if verified_corpus_identity != expected_corpus_identity:
         raise m.Run9ValidationError(
             "build_acoustic_inventory_sidecar(): corpus identity mismatch — recomputed "
@@ -500,28 +530,70 @@ def build_acoustic_inventory_sidecar(
             f"{expected_corpus_identity!r} (fail-closed rejection; PR #321 review Fix 3 — the "
             "supplied corpus_root is not the corpus this manifest was built from)"
         )
+
+    # --- layer 2/3: split assignment + hash pin（Fix 4） ----------------
     row_ids = manifest_dict["row_ids"]
+    canonical_split = assign_split(enumerated_song_ids)
+    for split_name in ("training", "validation", "sealed_holdout"):
+        if list(row_ids[split_name]) != canonical_split[split_name]:
+            raise m.Run9ValidationError(
+                "build_acoustic_inventory_sidecar(): manifest.row_ids does not match the "
+                "deterministic split assignment recomputed from the verified corpus "
+                f"inventory (split={split_name!r} differs) — forged/reordered/swapped "
+                "row_ids are rejected fail-closed before any measurement (PR #321 review "
+                "Fix 4)"
+            )
+    canonical_song_lists_by_hash_field = {
+        "training_split_sha256": canonical_split["training"],
+        "validation_split_sha256": canonical_split["validation"],
+        "sealed_holdout_sha256": canonical_split["sealed_holdout"],
+        "row_order_sha256": canonical_split["row_order"],
+    }
+    for hash_field, canonical_song_list in canonical_song_lists_by_hash_field.items():
+        expected_hash = _canonical_song_list_sha256(canonical_song_list)
+        if manifest_dict[hash_field] != expected_hash:
+            raise m.Run9ValidationError(
+                f"build_acoustic_inventory_sidecar(): manifest.{hash_field}="
+                f"{manifest_dict[hash_field]!r} does not match the value recomputed from the "
+                f"verified corpus inventory {expected_hash!r} — fail-closed rejection before "
+                "any measurement (PR #321 review Fix 4)"
+            )
+
+    # 層 1-3 をすべて通過した以上、row_ids は canonical_split（corpus 由来の
+    # 決定論割当）と要素・順序ともに同一であることが確定している。以降は
+    # 検証済みの canonical_split をそのまま消費する（manifest 側の生値へ
+    # 戻らない）。
     _reject_song_ids_outside_corpus_root(
         [
             song_id
             for split_name in ("training", "validation", "sealed_holdout")
-            for song_id in row_ids[split_name]
+            for song_id in canonical_split[split_name]
         ],
         root,
     )
-    songs: List[Dict[str, Any]] = []
+
+    # --- layer 4: final path containment（Fix 5） -----------------------
+    entries_meta: List[Tuple[str, str, Path, Path]] = []
+    final_paths: List[Path] = []
     for split_name in ("training", "validation", "sealed_holdout"):
-        for song_id in row_ids[split_name]:
+        for song_id in canonical_split[split_name]:
             wav_path = root / song_id / f"{song_id}_song.wav"
             lab_path = root / song_id / f"{song_id}.lab"
-            entry: Dict[str, Any] = {"song_id": song_id, "split": split_name}
-            if lab_path.exists():
-                entry.update(_measure_phoneme_classes(lab_path))
-            else:
-                entry["phrase_count"] = None
-                entry["phoneme_class_counts"] = None
-            entry["pitch_range_hz"] = _measure_pitch_range_hz(wav_path) if wav_path.exists() else None
-            songs.append(entry)
+            entries_meta.append((split_name, song_id, wav_path, lab_path))
+            final_paths.append(wav_path)
+            final_paths.append(lab_path)
+    _reject_paths_outside_corpus_root(final_paths, root)
+
+    songs: List[Dict[str, Any]] = []
+    for split_name, song_id, wav_path, lab_path in entries_meta:
+        entry: Dict[str, Any] = {"song_id": song_id, "split": split_name}
+        if lab_path.exists():
+            entry.update(_measure_phoneme_classes(lab_path))
+        else:
+            entry["phrase_count"] = None
+            entry["phoneme_class_counts"] = None
+        entry["pitch_range_hz"] = _measure_pitch_range_hz(wav_path) if wav_path.exists() else None
+        songs.append(entry)
     return {
         "schema": SCHEMA_PRACTICE_ACOUSTIC_INVENTORY_SIDECAR,
         "verified_expanded_corpus_identity_sha256": verified_corpus_identity,
@@ -531,6 +603,8 @@ def build_acoustic_inventory_sidecar(
             "advisory な計測値であっても provenance（どの corpus_root を計測したか）は必須の"
             "ため、`verified_expanded_corpus_identity_sha256` に manifest の "
             "`expanded_corpus_identity_sha256` と一致検証済みの再計算値を保持する。"
+            "入力検証は corpus identity・split assignment・hash pin・最終パス解決の4層で"
+            "閉じている（PR #321 review Fix 3/4/5）。"
         ),
         "songs": songs,
     }
