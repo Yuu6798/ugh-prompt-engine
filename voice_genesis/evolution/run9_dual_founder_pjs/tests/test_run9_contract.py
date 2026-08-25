@@ -8794,3 +8794,55 @@ def test_fix319_26_valid_lesson_record_fixture_still_validates() -> None:
     """正例（回帰）: `_valid_lesson_record()` fixture は Fix 26 適用後も
     引き続き受理されること。"""
     m.validate_lesson_record(_valid_lesson_record())  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #319 第16巡指摘, Fix 29（P2, 採用）: 層 status 欄での
+# 角括弧綴り sentinel の拒否（裸トークン検査をすり抜ける別綴り経路の閉鎖）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("layer_name", "field_name"),
+    [
+        ("performance_rights", "rights_class"),
+        ("performance_rights", "consent_status"),
+        ("composition_rights", "rights_class"),
+        ("composition_rights", "consent_status"),
+        ("voice_identity_rights", "rights_class"),
+    ],
+)
+@pytest.mark.parametrize(
+    "bracketed",
+    [
+        "<PENDING_USER_ATTESTATION>",
+        "<UNRESOLVED_EXTERNAL>",
+        "<USER_ATTESTED_OWN_VOICE>",
+    ],
+)
+def test_fix319_29_bracketed_sentinel_rejected_in_layer_status(
+    layer_name: str, field_name: str, bracketed: str
+) -> None:
+    """層 status 欄は裸トークン規約 — 角括弧綴りの予約トークンは、裸トークン
+    等値検査（主体種別の誤用拒否・Fix 5/6/25）をすべてすり抜けて自由記述の
+    具体値として受理されてしまうため、一律拒否する（第16巡指摘採用）。"""
+    with pytest.raises(m.Run9ValidationError, match="bracketed sentinel"):
+        m._validate_rights_manifest_layer_status_value(layer_name, field_name, bracketed)
+
+
+def test_fix319_29_bare_tokens_and_free_form_unchanged() -> None:
+    """裸トークンの既存意味論（主体種別整合の受理/拒否）と自由記述の具体値の
+    受理は不変であることの回帰。"""
+    # 外部層の裸 UNRESOLVED_EXTERNAL は従来どおり受理
+    m._validate_rights_manifest_layer_status_value(
+        "performance_rights", "rights_class", "UNRESOLVED_EXTERNAL"
+    )
+    # 自由記述の具体値も従来どおり受理
+    m._validate_rights_manifest_layer_status_value(
+        "recording_master_rights",
+        "consent_status",
+        "LICENSE_CONFIRMED_USAGE_SCOPE_PENDING_TOOLING_REVIEW",
+    )
+    # 現行 manifest 全体も引き続き valid
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)

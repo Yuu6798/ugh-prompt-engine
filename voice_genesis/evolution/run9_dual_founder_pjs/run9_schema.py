@@ -5023,6 +5023,28 @@ def _validate_rights_manifest_layer_status_value(layer_name: str, field_name: st
     if not isinstance(value, str) or not value.strip():
         raise Run9ValidationError(f"{path} must be a non-empty string, got {value!r}")
     kind = _RIGHTS_MANIFEST_LAYER_FIELD_KIND[layer_name]
+    # Codex bot レビュー PR #319 第16巡指摘, Fix 29（P2, 採用）: 層レベル
+    # status は角括弧なしの裸トークン規約であり、nested provenance の
+    # 角括弧綴り（`<PENDING_USER_ATTESTATION>` / `<UNRESOLVED_EXTERNAL>`）を
+    # status 欄へ持ち込むと上記の裸トークン等値検査をすべてすり抜けて
+    # 「具体的な自由記述値」として受理されてしまう——外部層が User
+    # attestation 経路へ再入する、または未解決なのに解決済みの具体値に
+    # 見える、の両誤導を塞ぐため、角括弧綴りの予約トークンは層 status
+    # 欄では一律拒否する（正しい綴りは裸トークン）。
+    stripped = value.strip()
+    if stripped.startswith("<") and stripped.endswith(">"):
+        inner = stripped[1:-1]
+        if inner in (
+            _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION,
+            _RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL,
+            _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE,
+        ):
+            raise Run9ValidationError(
+                f"{path} uses bracketed sentinel spelling {value!r}; layer-level "
+                "status fields use the bare-token convention — write the token "
+                "without angle brackets (and only where the layer's subject kind "
+                "permits it)"
+            )
     if (
         value == _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION
         and kind != _RIGHTS_MANIFEST_FIELD_KIND_USER
