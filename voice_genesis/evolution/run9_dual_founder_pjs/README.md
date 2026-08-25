@@ -639,6 +639,81 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   および成立条件（公開配布物 + sha 完全一致検証）を下記「次フェーズ」節
   へ明記した〕。詳細・成立条件・権限の出所は下記「次フェーズ」節参照。
 
+**再現レシピ（逐語・実行可能、Codex bot レビュー PR #323 第5巡指摘, P2,
+採用, Fix 5）**: fresh checkout の読者が上記 PINNED バイトを実際に再生成
+できる手順を逐語で示す（2026-08-25 本セッションで実測済み・初回一致）。
+
+1. **取得**（`gdown` 未導入なら `pip install gdown`。ミラー入手でも可
+   ——要件は次段の sha 一致のみ）:
+   ```
+   python3 -c "
+   import gdown
+   gdown.download(
+       'https://drive.google.com/uc?id=1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_',
+       output='PJS_corpus_ver1.1.zip', quiet=False,
+   )
+   "
+   ```
+2. **検証**（不一致なら中止・後続手順は実行しない）:
+   ```
+   sha256sum PJS_corpus_ver1.1.zip
+   # 期待値: 683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca
+   ```
+3. **展開**（plain unzip・オプション無し・リネーム/変換一切なし）:
+   ```
+   unzip -q PJS_corpus_ver1.1.zip -d extracted
+   # corpus_root = extracted/PJS_corpus_ver1.1
+   #   （pjsNNN/pjsNNN.lab + pjsNNN/pjsNNN_song.wav を含む階層）
+   ```
+4. **生成**（`voice_genesis/evolution/run9_dual_founder_pjs/` を
+   カレントディレクトリまたは `sys.path` に含めて実行。
+   `build_practice_split_manifest()` の `expected_corpus_identity` は
+   **必須引数**——省略不可・デフォルト値なしで、渡した値と展開コーパスから
+   再計算した `expanded_corpus_identity_sha256` が厳密一致しない場合
+   `Run9ValidationError` で fail-closed 拒否する）:
+   ```python
+   import sys
+   sys.path.insert(0, "voice_genesis/evolution/run9_dual_founder_pjs")
+   import practice_split_builder as psb
+   import run9_schema as m
+
+   manifest = psb.build_practice_split_manifest(
+       "extracted/PJS_corpus_ver1.1",
+       expected_corpus_identity=psb.EXPANDED_CORPUS_IDENTITY_SHA256,
+   )
+   m.PRACTICE_MANIFEST_PATH.write_bytes(psb.dump_practice_split_manifest_bytes(manifest))
+   ```
+   （`expected_corpus_identity` に渡した `psb.EXPANDED_CORPUS_IDENTITY_
+   SHA256` はモジュール冒頭でハードコード転記された定数——照合対象は
+   このコード自体に焼き込まれており、外部ファイルからの読み込みではない）。
+5. **照合**（生成物のバイト列が pin 値と一致することを確認）:
+   ```
+   sha256sum voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json
+   # 期待値: fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6
+   #  （= RUN9_CONTRACT.yaml practice_audio_split_manifest_sha の pin 値）
+   ```
+   manifest 内 `row_order_sha256` フィールドの値も
+   `6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a`
+   と一致することを確認する（`jq .row_order_sha256 inputs/practice_audio_
+   split_manifest.json` 等）。
+
+**producer pin の意味論**（指摘の「producer script/revision を artifact
+と別途 pin せよ」への回答 = 追加機構は不要と整理）: `practice_split_
+builder.py` は manifest（`inputs/practice_audio_split_manifest.json`）と
+**同一リポジトリ・同一コミットで版管理**されている——別ファイルへの
+producer pin を新設しなくても、manifest を生成したコミットの
+`git rev-parse HEAD`（または PR のマージコミット）自体が producer の
+版を一意に定める。加えて `PJS_SOURCE_ARCHIVE_SHA256`/
+`EXPANDED_CORPUS_IDENTITY_SHA256`（照合対象の期待値）はモジュール冒頭に
+ハードコード定数として直接埋め込まれており、`LEARNING_SEED`
+（`run9_schema.py`、`assign_split()` が消費）を含め producer 側のロジック
+や定数を変更すれば、再生成したバイト列の sha256 が変わり `RUN9_CONTRACT.
+yaml` の pin 値との照合で機械的に検出される——この構造自体が producer
+pin として機能する（fail-closed）。したがって本レシピは「pin と同一
+バイトを再生成する手順」であり、producer 変更後の再生成は新しい repin
+（PR レビュー経由での pin 値更新）として扱う——変更前後のバイトを
+黙って同一 pin の下に混在させることは構造的にできない。
+
 **残存**:
 
 1. **PJS 側の残る未解決欄**（User donor 側は上記の通り 2026-08-25 attest

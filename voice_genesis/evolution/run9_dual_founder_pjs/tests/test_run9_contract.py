@@ -9893,3 +9893,50 @@ def test_fix323_4_repo_wide_two_pin_pending_pattern_all_supersede_or_absent() ->
         "パターンが一件も検出されなかった — 検査ロジックが実際に機能して"
         "いることを確認できない（空振りテストの疑い）"
     )
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第5巡指摘（P2, 採用, Fix 5）: README の
+# practice split 節は再現可能と主張しながら、fresh checkout の読者が
+# 実行できる逐語レシピ（取得コマンド・sha 検証・展開・builder 呼び出し・
+# 直列化・出力 sha 照合）を示していなかった。producer script を別途 pin
+# せよという提案は、producer（practice_split_builder.py）が manifest と
+# 同一リポジトリ・同一コミットで版管理され、identity 定数がモジュール内
+# ハードコードで fail-closed 照合されることを理由に「追加機構不要」と
+# 整理し、README にその論理を明記した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_5_readme_has_verbatim_executable_recipe_commands() -> None:
+    """README.md の practice split 節に、取得（gdown）・sha 検証・展開
+    （unzip）・生成（build_practice_split_manifest 呼び出し）の逐語
+    コマンドが実在すること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "再現レシピ" in readme_text
+    assert "gdown.download(" in readme_text
+    assert "sha256sum PJS_corpus_ver1.1.zip" in readme_text
+    assert "unzip -q PJS_corpus_ver1.1.zip -d extracted" in readme_text
+    assert "psb.build_practice_split_manifest(" in readme_text
+    assert "expected_corpus_identity=psb.EXPANDED_CORPUS_IDENTITY_SHA256" in readme_text
+    assert "psb.dump_practice_split_manifest_bytes(manifest)" in readme_text
+
+
+def test_fix323_5_readme_recipe_pins_both_output_hashes() -> None:
+    """README.md のレシピが、manifest 実バイトの sha256（契約 pin 値）と
+    row_order_sha256 の両方を照合対象として明記していること——契約 pin
+    値との一致は builder 呼び出しだけでは自動確認されないため、レシピ
+    自体に照合手順が要る。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6" in readme_text
+    assert "6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a" in readme_text
+
+
+def test_fix323_5_readme_states_producer_pin_needs_no_extra_mechanism() -> None:
+    """README.md が、producer（practice_split_builder.py）の版管理・
+    identity 定数ハードコード・fail-closed 照合という既存構造が producer
+    pin として機能する旨——別途 producer pin 機構は不要という整理——を
+    明記していること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "producer pin の意味論" in readme_text
+    assert "同一リポジトリ・同一コミットで版管理" in readme_text
+    assert "この構造自体が producer" in readme_text
