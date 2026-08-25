@@ -9940,3 +9940,46 @@ def test_fix323_5_readme_states_producer_pin_needs_no_extra_mechanism() -> None:
     assert "producer pin の意味論" in readme_text
     assert "同一リポジトリ・同一コミットで版管理" in readme_text
     assert "この構造自体が producer" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第6巡指摘（P2, 採用, Fix 6）: 第5巡の整理
+# 「生成コミット自体が producer pin」は、その生成コミットの具体値を
+# README に記録していなかったため、後日 checkout の読者は `git rev-parse
+# HEAD` が現在のコミットを返すだけで、pin 済みバイトを作った実装を
+# 特定・再実行できないという残欠陥だった（第5巡整理の未完部分を突く
+# 新しい具体経路）。生成コミット全 40hex・汎用の特定手順（`git log
+# --follow`）・生成時点の builder sha256 を README に記録した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_6_readme_records_generating_commit_and_git_log_follow_recipe() -> None:
+    """README.md の producer pin 節に、生成コミットの全 40hex sha と、
+    今後 producer が変わっても通用する `git log --follow` による汎用の
+    特定手順が記載されていること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "producer revision の具体記録" in readme_text
+    assert "bf056ae635b2435e6888b85091c65626a9b0e3a3" in readme_text
+    assert (
+        "git log --follow -- voice_genesis/evolution/run9_dual_founder_pjs/"
+        "inputs/practice_audio_split_manifest.json"
+    ) in readme_text
+
+
+def test_fix323_6_readme_builder_sha_matches_actual_file() -> None:
+    """README.md に記載された生成時点の `practice_split_builder.py`
+    sha256 が、現在のリポジトリ実ファイルの実測 sha256 と一致すること
+    ——**fail-closed 配線**: `practice_split_builder.py` が将来変更
+    されると本テストが赤くなり、README の producer 記録（生成コミット
+    sha・builder sha256）を同じ PR で同時更新する repin 手続きを機械
+    強制する（更新を怠って README の記録だけが stale になることを防ぐ
+    ための直接照合であり、単なる存在確認ではない）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    recorded_sha = "894451c953d5eb5b50448687480ede9b7b808c8c2c620a97b63978704e37d479"
+    assert recorded_sha in readme_text
+    actual_sha = m.compute_file_sha256(_RUN_DIR / "practice_split_builder.py")
+    assert actual_sha == recorded_sha, (
+        "practice_split_builder.py が変更されたが README.md の producer 記録"
+        f"（builder sha256）が追随していない: recorded={recorded_sha!r} "
+        f"actual={actual_sha!r} — この PR で README を repin として更新すること"
+    )

@@ -701,9 +701,8 @@ machine-independent（実音源・実 render・実学習を要さない）次段
 と別途 pin せよ」への回答 = 追加機構は不要と整理）: `practice_split_
 builder.py` は manifest（`inputs/practice_audio_split_manifest.json`）と
 **同一リポジトリ・同一コミットで版管理**されている——別ファイルへの
-producer pin を新設しなくても、manifest を生成したコミットの
-`git rev-parse HEAD`（または PR のマージコミット）自体が producer の
-版を一意に定める。加えて `PJS_SOURCE_ARCHIVE_SHA256`/
+producer pin を新設しなくても、manifest を生成したコミット自体が
+producer の版を一意に定める。加えて `PJS_SOURCE_ARCHIVE_SHA256`/
 `EXPANDED_CORPUS_IDENTITY_SHA256`（照合対象の期待値）はモジュール冒頭に
 ハードコード定数として直接埋め込まれており、`LEARNING_SEED`
 （`run9_schema.py`、`assign_split()` が消費）を含め producer 側のロジック
@@ -713,6 +712,39 @@ pin として機能する（fail-closed）。したがって本レシピは「pi
 バイトを再生成する手順」であり、producer 変更後の再生成は新しい repin
 （PR レビュー経由での pin 値更新）として扱う——変更前後のバイトを
 黙って同一 pin の下に混在させることは構造的にできない。
+
+**producer revision の具体記録**（Codex bot レビュー PR #323 第6巡指摘,
+P2, 採用, Fix 6 — 第5巡の整理は「生成コミット自体が producer pin」と
+述べたが、その生成コミットの具体値を記録しておらず、後日 checkout の
+読者にとって `git rev-parse HEAD` は現在のコミットを返すだけで、
+pin 済みバイトを実際に作った実装を特定・再実行できないという残欠陥
+だった）:
+- **生成コミット**（`inputs/practice_audio_split_manifest.json` の初
+  コミット + `RUN9_CONTRACT.yaml` の `practice_audio_split_manifest_sha`
+  PINNED 化を含むコミット）: `bf056ae635b2435e6888b85091c65626a9b0e3a3`
+  （push 済み・不変）。このコミットを checkout すれば、生成時点の
+  `practice_split_builder.py` と依存定数一式がそのまま得られる。
+- **汎用の特定手順**（今後 producer が変わっても通用する一般手順）:
+  ```
+  git log --follow -- voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json
+  ```
+  manifest バイトを最後に変えたコミットが、その時点の producer revision
+  ——git 履歴自体が台帳であり、`bf056ae…` を別途手作業で最新に保つ必要は
+  ない（コマンドを実行するたびに正しい現在値が得られる）。
+- **生成時点の builder 内容 sha256**（`practice_split_builder.py` の
+  ファイル実バイト、`bf056ae…` 時点）:
+  `894451c953d5eb5b50448687480ede9b7b808c8c2c620a97b63978704e37d479`
+  （本 README 執筆時点でも同一——`bf056ae…` 以降 `practice_split_
+  builder.py` は無変更、`git diff bf056ae635b2435e6888b85091c65626a9b0e3a3
+  -- practice_split_builder.py` が空であることで確認済み）。
+- **更新規約**: `practice_split_builder.py` または `LEARNING_SEED` を
+  変更して manifest を再生成する場合は、その変更を repin（PR レビュー
+  経由での `practice_audio_split_manifest_sha` 更新）として扱い、
+  同じ PR で本節の producer 記録（生成コミット sha・builder sha256）も
+  同時に更新する——`tests/test_run9_contract.py` の
+  `test_fix323_6_readme_builder_sha_matches_actual_file` が、記載
+  builder sha256 と実ファイルの実測 sha256 との不一致を fail-closed で
+  検出し、この同時更新を機械強制する。
 
 **残存**:
 
