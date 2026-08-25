@@ -12,7 +12,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import pytest
 import yaml
@@ -1032,6 +1032,61 @@ def test_negative_fix8_entry_points_to_different_but_real_path(manifest_data: Di
     ]
     with pytest.raises(m.Run9ValidationError):
         m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第18巡指摘 Fix 30（P2, 採用、Fix 8 と同族）: revision_bridge の
+# render 系エントリ（reference_render/c0_replay_takes/c1_sham_takes/
+# positive_reference/evaluated_renders）の cell_ref が全て
+# `P0-NEUTRAL-SAKURA-FRAGMENT` と厳密一致することの機械強制。旧検証は
+# 「probes[] に実在する cell_id のいずれかか」しか見ておらず、P0 以外の
+# probe（P1/P4 等）の cell へ差し替えても通過していた。
+# ---------------------------------------------------------------------------
+
+_REVISION_BRIDGE_RENDER_ENTRY_NAMES: Tuple[str, ...] = (
+    "reference_render", "c0_replay_takes", "c1_sham_takes", "positive_reference", "evaluated_renders",
+)
+
+
+def test_fix30_all_render_entries_reference_p0_cell(manifest_data: Dict[str, Any]) -> None:
+    rb = manifest_data["revision_bridge"]
+    for entry_name in _REVISION_BRIDGE_RENDER_ENTRY_NAMES:
+        assert rb[entry_name]["cell_ref"] == "P0-NEUTRAL-SAKURA-FRAGMENT"
+        assert rb[entry_name]["cell_ref"] == m._REVISION_BRIDGE_EXPECTED_CELL_REF[entry_name]
+    # negative_reference/pjs_reference は新規 render 不要のため cell_ref を
+    # 持たない（現行構造の確認 — 変更対象外）。
+    assert "cell_ref" not in rb["negative_reference"]
+    assert "cell_ref" not in rb["pjs_reference"]
+
+
+@pytest.mark.parametrize("entry_name", ["evaluated_renders", "reference_render"])
+def test_negative_fix30_render_entry_cell_ref_swapped_to_non_p0_cell(
+    manifest_data: Dict[str, Any], entry_name: str,
+) -> None:
+    """本指摘の核心シナリオ: render 系エントリの cell_ref を P0 以外の
+    probe の cell（P1/P4）へ振替える——`valid_cell_ids` への所属検査
+    （旧実装）は probes[] 全体からの実在チェックのため通過してしまうが、
+    Fix 30 のエントリ別厳密対応で検出される。"""
+    bad = _mutate(manifest_data)
+    other_cell_id = "P4-HELDOUT-ORIGINAL-FRAGMENT" if entry_name == "evaluated_renders" else (
+        "P1-REG-LOW-DUR-SHORT"
+    )
+    bad["revision_bridge"][entry_name]["cell_ref"] = other_cell_id
+    with pytest.raises(m.Run9ValidationError, match="must be exactly"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix30_expected_cell_ref_table_missing_entry_direct_call() -> None:
+    """`_REVISION_BRIDGE_EXPECTED_CELL_REF` に対応表エントリが存在しない
+    render 系エントリ名で照合しようとすると `KeyError` になる（対応表は
+    render 系5エントリの閉じた集合であり、部分的な欠落を静かに許さない
+    ことの確認 — 既存 `_PROBE_EXPECTED_FACTOR_VALUES`/`_REVISION_BRIDGE_
+    EXPECTED_METRIC_REF` と同じ辞書アクセス規約）。"""
+    assert set(m._REVISION_BRIDGE_EXPECTED_CELL_REF.keys()) == set(
+        _REVISION_BRIDGE_RENDER_ENTRY_NAMES
+    )
+    with pytest.raises(KeyError):
+        _ = m._REVISION_BRIDGE_EXPECTED_CELL_REF["negative_reference"]
 
 
 # ---------------------------------------------------------------------------

@@ -4303,6 +4303,32 @@ _REVISION_BRIDGE_EXPECTED_METRIC_REF: Mapping[str, str] = types.MappingProxyType
     "evaluated_renders": _IDENTITY_METRIC_SPACE_REF_PREFIX + "identity_feature.scope",
 })
 
+# PR #322 第18巡指摘 Fix 30（P2, 採用、Fix 8 と同族 — entry→cell_ref の
+# 対応固定）: `cell_ref` の旧検証（`_validate_revision_bridge_entry()`）は
+# 「probes[] に実在する cell_id のいずれかか」しか見ておらず、render 系
+# エントリ（`reference_render`/`c0_replay_takes`/`c1_sham_takes`/
+# `positive_reference`/`evaluated_renders`）の `cell_ref` を P0 以外の
+# probe（例: P1/P4）の cell へ差し替えても通過してしまっていた。identity
+# 校正・評価（`identity_metric_space.json` の calibration/confuser_control/
+# identity_feature 各節）は**同一 P0 score での比較**が前提の設計であり
+# （r0/neutral 条件 — DESIGN_RUN9 §15 P0「中立フレーズ断片」が render 契約
+# 全体のベースライン score である）、render 系エントリの `cell_ref` が
+# P0 以外を指すと、比較対象の score 自体が意図と異なる——render harness
+# は「同じ音楽的内容を異なる founder/条件で歌わせて identity を比較する」
+# ことを前提とするため、cell_ref の取り違えは校正・評価の意味を静かに
+# 壊す。本 dict は render 系5エントリの `cell_ref` が指すべき唯一の cell_id
+# （`P0-NEUTRAL-SAKURA-FRAGMENT`）を凍結する「エントリ→期待 cell_ref」の
+# 厳密対応表（Fix 8 の `_REVISION_BRIDGE_EXPECTED_METRIC_REF` と同方式・
+# 並置）。amendment で参照先の cell_id 自体を変更する場合は、本対応表の
+# 更新が同時に必要——意図的な二重 pin（Fix 8 と同じ規約）。
+_REVISION_BRIDGE_EXPECTED_CELL_REF: Mapping[str, str] = types.MappingProxyType({
+    "reference_render": "P0-NEUTRAL-SAKURA-FRAGMENT",
+    "c0_replay_takes": "P0-NEUTRAL-SAKURA-FRAGMENT",
+    "c1_sham_takes": "P0-NEUTRAL-SAKURA-FRAGMENT",
+    "positive_reference": "P0-NEUTRAL-SAKURA-FRAGMENT",
+    "evaluated_renders": "P0-NEUTRAL-SAKURA-FRAGMENT",
+})
+
 _MEASUREMENT_BOUNDARY_KEYS: FrozenSet[str] = frozenset(
     {"scope_statement", "identity_axis_source", "development_generalization_axis_source"}
 )
@@ -5836,6 +5862,20 @@ def _validate_revision_bridge_entry(
         if cell_ref not in valid_cell_ids:
             raise Run9ValidationError(
                 f"{field}.cell_ref {cell_ref!r} does not reference a cell_id declared in probes[]"
+            )
+        # PR #322 第18巡指摘 Fix 30（P2, 採用、Fix 8 と同族）: 「probes[]
+        # のどこかに実在するか」だけでは、P0 以外の probe（P1/P4 等）の
+        # cell へ差し替えても通過してしまう。identity 校正・評価は同一 P0
+        # score での比較が前提のため、render 系エントリの cell_ref は
+        # 凍結表 `_REVISION_BRIDGE_EXPECTED_CELL_REF` と厳密一致すること
+        # を追加で要求する。
+        expected_cell_ref = _REVISION_BRIDGE_EXPECTED_CELL_REF[entry_name]
+        if cell_ref != expected_cell_ref:
+            raise Run9ValidationError(
+                f"{field}.cell_ref must be exactly {expected_cell_ref!r} for entry {entry_name!r} "
+                "(Fix 30: identity 校正・評価は同一 P0 score での比較が前提であり、render 系"
+                "エントリの cell_ref を P0 以外の probe の cell へ差し替えることを防ぐ — Fix 8 の "
+                f"identity_metric_space_ref 厳密対応と同方式), got {cell_ref!r}"
             )
 
     if has_contract_field_ref:
