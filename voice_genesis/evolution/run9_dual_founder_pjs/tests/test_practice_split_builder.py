@@ -275,17 +275,27 @@ def test_sidecar_generation_does_not_change_manifest_bytes(tmp_path: Path) -> No
     assert len(sidecar["songs"]) == len(song_ids)
 
 
-def test_sidecar_generation_with_missing_audio_still_leaves_manifest_unchanged(tmp_path: Path) -> None:
-    """sidecar 側の測定失敗（ここでは音声ファイルを事後削除して pyin 対象
-    自体を消す）でも manifest バイトは無変化のまま——sidecar のデータフローが
-    manifest へ逆流しないことの追加確認。"""
+def test_sidecar_generation_with_corrupt_audio_still_leaves_manifest_unchanged(tmp_path: Path) -> None:
+    """sidecar 側の測定失敗（ここでは音声ファイルを壊れたバイト列に差し替えて
+    pyin 対象自体を壊す）でも manifest バイトは無変化のまま——sidecar の
+    データフローが manifest へ逆流しないことの追加確認。
+
+    ファイルは corpus_root に実在し続けたまま**中身だけ**壊す（事後削除では
+    ない）——PR #321 review Fix 3 の corpus identity 検証
+    （`_enumerate_pjs_song_ids()` 再計算 vs `manifest.expanded_corpus_
+    identity_sha256`）は、識別子計算**前**に破損させて manifest 自体を
+    その破損状態から構築することで通す。事後にファイルを削除/改変すると
+    corpus identity が変わり Fix 3 が意図どおり fail-closed 拒否する
+    （`test_sidecar_rejects_song_id_escaping_corpus_root_before_any_read`
+    の脅威モデルと同型——別テストの対象）。"""
     song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
     root = _build_corpus(tmp_path, song_ids)
+    # 1曲分の音声を、識別子計算より前に壊れたバイト列へ差し替える
+    # （ファイルは存在し続けるため corpus identity は以降不変）。
+    (root / "pjs001" / "pjs001_song.wav").write_bytes(b"not a real wav, corrupt on purpose")
+
     _, manifest = _identity_and_manifest(root)
     before = psb.dump_practice_split_manifest_bytes(manifest)
-
-    # 1曲分の音声を消し、sidecar 測定を意図的に失敗させる。
-    (root / "pjs001" / "pjs001_song.wav").unlink()
 
     sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
     after = psb.dump_practice_split_manifest_bytes(manifest)
@@ -395,3 +405,74 @@ def test_song_id_is_lexically_safe_rejects_unsafe_forms() -> None:
     assert psb._song_id_is_lexically_safe("pjs001") is True  # noqa: SLF001
     for unsafe in ("/tmp/evil", "../escape", "nested/song", "nested\\song", "", ".", ".."):
         assert psb._song_id_is_lexically_safe(unsafe) is False  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# build_acoustic_inventory_sidecar(): corpus_root 自体を manifest の
+# expanded_corpus_identity_sha256 pin と照合する（PR #321 review 第2巡
+# 指摘・P2 修正 Fix 3: corpus A 用の valid manifest に、同名 song_id を
+# 含むが中身の異なる別 corpus_root B を渡すと、Fix 1 のガード（song_id の
+# 形式検査のみ）は素通りし、B を計測して A の inventory として返して
+# しまう——sidecar 自体に検証済み corpus digest も載らないため provenance
+# が黙って失われる）
+# ---------------------------------------------------------------------------
+
+
+def test_sidecar_rejects_mismatched_corpus_root_before_any_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """corpus A 用の manifest に、同名 song_id を持つが中身の異なる
+    corpus_root B を渡すと、song を読む前に corpus identity 再計算
+    （`_enumerate_pjs_song_ids()`）で `Run9ValidationError` になること。
+    計測関数（`_measure_phoneme_classes`/`_measure_pitch_range_hz`）が
+    一切呼ばれないことをスパイで直接検証する（既存 Fix 1 テストと同じ
+    流儀——B が実際に計測されて A の inventory として返らないことの
+    直接証拠）。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root_a = _build_corpus(tmp_path, song_ids, name="corpus_a")
+    _, manifest_a = _identity_and_manifest(root_a)
+
+    # 同名 song_id を持つが中身が異なる別コーパス B（周波数を変えて
+    # バイト内容を相違させる——song_id 集合自体は A と同一)。
+    root_b = tmp_path / "corpus_b"
+    root_b.mkdir()
+    for song_id in song_ids:
+        _write_song(root_b, song_id, freq_hz=440.0)
+
+    def _must_not_be_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("measurement function must not be called for mismatched corpus_root")
+
+    monkeypatch.setattr(psb, "_measure_phoneme_classes", _must_not_be_called)
+    monkeypatch.setattr(psb, "_measure_pitch_range_hz", _must_not_be_called)
+
+    with pytest.raises(m.Run9ValidationError, match="corpus identity mismatch"):
+        psb.build_acoustic_inventory_sidecar(root_b, manifest_a)
+
+
+def test_sidecar_records_verified_corpus_identity_on_matching_root(tmp_path: Path) -> None:
+    """`corpus_root` が manifest の由来コーパスと一致する正常系では、
+    sidecar 出力に `verified_expanded_corpus_identity_sha256`
+    （再計算・照合済みの値）が manifest の `expanded_corpus_identity_sha256`
+    と同一値で記録されること。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    identity_hash, manifest = _identity_and_manifest(root)
+    sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
+    assert sidecar["verified_expanded_corpus_identity_sha256"] == identity_hash
+    assert sidecar["verified_expanded_corpus_identity_sha256"] == manifest["expanded_corpus_identity_sha256"]
+
+
+def test_sidecar_generation_does_not_change_manifest_bytes_with_corpus_check(tmp_path: Path) -> None:
+    """Fix 3 の corpus identity 検証を追加した後も、sidecar 生成が manifest
+    バイトへ逆流しないという不干渉契約が維持されていることの直接回帰
+    （既存 `test_sidecar_generation_does_not_change_manifest_bytes` と同じ
+    確認を、`verified_expanded_corpus_identity_sha256` フィールド追加後の
+    sidecar 形状に対しても行う）。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    _, manifest = _identity_and_manifest(root)
+    before = psb.dump_practice_split_manifest_bytes(manifest)
+    sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
+    after = psb.dump_practice_split_manifest_bytes(manifest)
+    assert before == after
+    assert "verified_expanded_corpus_identity_sha256" in sidecar

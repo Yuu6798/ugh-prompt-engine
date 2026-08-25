@@ -469,11 +469,37 @@ def build_acoustic_inventory_sidecar(
     `manifest` は外部入力（`validate_practice_split_manifest()` を通過する
     任意の同形 dict を受理する）であるため、`row_ids` の各 `song_id` は
     read/existence 判定より前に `_reject_song_ids_outside_corpus_root()`
-    で corpus_root 包含検査を通す（PR #321 review 指摘・P2 修正）。
+    で corpus_root 包含検査を通す（PR #321 review 指摘・P2 修正 Fix 1）。
+
+    加えて `corpus_root` 自体が `manifest` の由来コーパスであることも
+    read/existence 判定より**前**に検証する（PR #321 review 指摘・P2 修正
+    Fix 3）: corpus A 用の valid manifest に別内容の corpus_root B（同名
+    song_id を含むが中身が異なる）を渡すと、上記 Fix 1 のガードは
+    song_id の形式のみを見るため素通りし、B を計測して A の inventory
+    として返してしまう——sidecar 自体に検証済み corpus digest も載らない
+    ため provenance が黙って失われる（advisory 計測値でも provenance は
+    必須）。`_enumerate_pjs_song_ids()`（`build_practice_split_manifest()`
+    が使う既存の identity 再計算関数——新規実装しない）で `corpus_root`
+    から `expanded_corpus_identity_sha256` を再計算し、`manifest` 側の値
+    （`build_practice_split_manifest()` の照合と同一規約——明示値必須・
+    照合スキップ不可）と厳密一致しなければ `Run9ValidationError` で
+    fail-closed（部分計測をしない）。一致した検証済み値は
+    `verified_expanded_corpus_identity_sha256` として sidecar 出力へ
+    保持する。
     """
     manifest_dict = dict(manifest)
     m.validate_practice_split_manifest(manifest_dict)
     root = Path(corpus_root)
+    expected_corpus_identity = manifest_dict["expanded_corpus_identity_sha256"]
+    verified_corpus_identity, _ = _enumerate_pjs_song_ids(root)
+    if verified_corpus_identity != expected_corpus_identity:
+        raise m.Run9ValidationError(
+            "build_acoustic_inventory_sidecar(): corpus identity mismatch — recomputed "
+            f"expanded_corpus_identity_sha256={verified_corpus_identity!r} for corpus_root="
+            f"{root!r} does not match manifest.expanded_corpus_identity_sha256="
+            f"{expected_corpus_identity!r} (fail-closed rejection; PR #321 review Fix 3 — the "
+            "supplied corpus_root is not the corpus this manifest was built from)"
+        )
     row_ids = manifest_dict["row_ids"]
     _reject_song_ids_outside_corpus_root(
         [
@@ -498,9 +524,13 @@ def build_acoustic_inventory_sidecar(
             songs.append(entry)
     return {
         "schema": SCHEMA_PRACTICE_ACOUSTIC_INVENTORY_SIDECAR,
+        "verified_expanded_corpus_identity_sha256": verified_corpus_identity,
         "note": (
             "advisory only — RUN9_CONTRACT.yaml の pin 対象外。校正済み計器の主張はしない"
             "（librosa.pyin 実測値・0.1 Hz 丸め、閾値較正・帯域検証は未実施の生の観測値）。"
+            "advisory な計測値であっても provenance（どの corpus_root を計測したか）は必須の"
+            "ため、`verified_expanded_corpus_identity_sha256` に manifest の "
+            "`expanded_corpus_identity_sha256` と一致検証済みの再計算値を保持する。"
         ),
         "songs": songs,
     }
