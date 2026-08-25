@@ -412,7 +412,7 @@ machine-independent（実音源・実 render・実学習を要さない）次段
 | 1 | verify repository / dependency pins | 未着手（backbone 側は pin 済み。VG-L0 ハーネス自体の依存 pin は未着手） |
 | 2 | verify donor and teacher rights / manifests | **AF0/Ritsu は pin 済み・PJS は役割別2値を整理して解消・User donor は 2026-08-25 User attestation 実行により attest 完了**（`voice_identity_rights.attestation.attested=true`）。PJS 側の recording-master owner/lyricist/share-alike 解釈のみ未解決のまま残る（ブロッカー(1)参照） |
 | 3 | build run9 Identity Domain | **af0/ritsu/metric_space_sha/user が全て PINNED**（`domains/identity_domain_run9_v1.json`、2026-08-25 User attestation 実行により `is_pinned() == True` — domain 凍結済み） |
-| 4 | generate R9F-01:r0 and R9F-02:r0（INHERIT_TRAIT） | **genome_id は決定論的に計算可能**（domain 凍結により `run9_schema.build_founder()` が成功。実測: R9F-01 = `66f420672a154283` / R9F-02 = `63f4b8f24b827cd4`——2026-08-25 Codex bot レビュー PR #320 第2巡 Fix 3 の anchor_hashes.user binding scope 再限定 repin 後の値、下記「解消済み」節参照）。ただし永続 genome 文書（`founders/R9F-0x_genome.json`）を書き出して `founder_genome_shas` へ pin する builder・手続きは未配線のため、正式発行はまだ未着手 |
+| 4 | generate R9F-01:r0 and R9F-02:r0（INHERIT_TRAIT） | **正式発行済み**（RUN9-BIRTH-PREP-1, 2026-08-25）: `run9_schema.issue_founder_genome_document()` の出力バイトを `founders/R9F-01_genome.json` / `founders/R9F-02_genome.json` としてそのまま書き出し、`RUN9_CONTRACT.yaml` `founder_genome_shas.R9F-01/R9F-02` を各ファイルの raw sha256 で **PINNED** 化した（genome_id = `66f420672a154283` / `63f4b8f24b827cd4`——2026-08-25 Codex bot レビュー PR #320 第2巡 Fix 3 の anchor_hashes.user binding scope 再限定 repin 後の値、下記「解消済み」節参照。値自体は無変更）。詳細は下記「解消済み（RUN9-BIRTH-PREP-1）」節 |
 | 5–20 | render / freeze / lesson / learning / evaluation / verdict | **未着手・rev 0.3 で三枝化**（VG-L0 学習ハーネス自体が未実装 — ブロッカー(2)参照。ハーネス実装時に CONTROL/PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE の3経路分の render/lesson/learning/evaluation を実装する必要がある — ブロッカー(4)参照） |
 
 ## ブロッカー一覧（正直な現状）
@@ -505,8 +505,54 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   `ad54200af4d42433439702946aa65e4a38848f3d8ec0e52140b351e2a9afae6b` から
   更新）。連動して genome_id も再計算された（現行実測: R9F-01 =
   `66f420672a154283` / R9F-02 = `63f4b8f24b827cd4`）——出生前のため
-  科学的影響はなく、`is_pinned()` は引き続き `True`、
-  `founder_genome_shas` は引き続き `PENDING` のまま不変。
+  科学的影響はなく、`is_pinned()` は引き続き `True`。当時
+  `founder_genome_shas` は引き続き `PENDING` のまま不変だった（正式発行
+  builder が未配線だったため——下記「解消済み（RUN9-BIRTH-PREP-1）」節で
+  解消済み）。
+
+**解消済み（RUN9-BIRTH-PREP-1, 2026-08-25）**:
+- ~~founder genome 文書の正式発行 builder・pin 手続き未配線~~ →
+  `run9_schema.issue_founder_genome_document(founder_id, *, domain,
+  rights_manifest)` を新設。内部は必ず `build_founder()` 経由（Fix 6/7 の
+  fail-closed ガード——attested 前提条件・anchor grant 検証・user anchor
+  実物照合——が発行のたびに毎回実行される）で、直列化を
+  `(json.dumps(genome.to_dict(), ensure_ascii=False, indent=2,
+  sort_keys=True) + "\n").encode("utf-8")` へ凍結する。同関数の出力バイトを
+  そのまま [`founders/R9F-01_genome.json`](./founders/R9F-01_genome.json) /
+  [`founders/R9F-02_genome.json`](./founders/R9F-02_genome.json) として
+  書き出し（genome_id = `66f420672a154283` / `63f4b8f24b827cd4`、無変更）、
+  `RUN9_CONTRACT.yaml` `founder_genome_shas.R9F-01/R9F-02` を各ファイルの
+  raw sha256（`R9F-01` = `6c90f571c671b461c1d2735ffb7f3536c4a2a18c25d1a7f610300d3b1b2ded2d`
+  / `R9F-02` = `6311fdef3c7657384e5366caa9cb5b429b8d7e334a0b2b84fa011d16a086e757`）
+  で **PINNED** 化した。`tests/test_run9_founder_genome_issuance.py`
+  が再生成同一性（repo 内ファイル == 関数出力）・
+  `founder_genome_from_dict()` 通過・契約照合・fail-closed 継承（取消/
+  pending/anchor不一致 manifest 拒否）を検証する。**`gate_state()` は
+  依然 `BLOCKED`**（dataset/config/lesson/practice/learning-recipe 等
+  VG-L0 ハーネス関連欄が PENDING のままのため——回帰テスト
+  `test_gate_state_still_blocked_after_founder_genome_shas_pinned` で
+  機械確認済み。誤 READY 化はしていない）。
+- ~~practice split builder 未実装~~ → 新規モジュール
+  [`practice_split_builder.py`](./practice_split_builder.py) を追加。
+  PJS コーパスから pin 被覆 `_song.wav` 集合のみを列挙（`donor_bank_lab.
+  corpus_identity_hash()` と同一規約の独立再実装——`pyworld` 依存の
+  import 閉包を避けるため）し、corpus identity 照合（fail-closed・
+  `expected_corpus_identity` 明示必須）→ `score(song_id) =
+  sha256(f"{song_id}|{LEARNING_SEED}")` による全順序割当（`assign_split()`
+  純関数、N=100→70/15/15厳密・N<=6でfail-closed）→
+  `validate_practice_split_manifest()` 自己適用、という
+  `run9-practice-audio-split-manifest/1.0` manifest builder
+  （`build_practice_split_manifest()`）を実装した。音響解析（librosa.pyin
+  による pitch range・.lab 由来の phrase 数/音素クラス）は別関数
+  `build_acoustic_inventory_sidecar()`（契約 pin 対象外、advisory）へ
+  型的に分離——manifest builder のデータフローは音響解析結果を一切含まない
+  （`tests/test_practice_split_builder.py` の
+  `test_sidecar_generation_does_not_change_manifest_bytes` が機械強制）。
+  近似重複検出は実装せず manifest 内 note に境界宣言。**実 PJS コーパスに
+  対する実行はまだ行っていない**（fixture は tmp_path の合成ミニコーパス
+  のみ・`practice_audio_split_manifest_sha` は引き続き `PENDING`）——次段は
+  実 PJS コーパスに対する builder 実行と `inputs/practice_audio_split_
+  manifest.json` の実体生成（下記「次フェーズ」節参照）。
 
 **残存**:
 
@@ -561,26 +607,32 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    compute budget / frozen recipe / rollback path）はどれも準備段階に
    すら入っていない。
 3. **PJS Performance Lesson / Practice split / learning recipe の実体
-   build 未実施**: 改訂3で pin 方針（source archive pin / expanded
-   corpus pin とは別の Lesson manifest を生成し pin）は確定したが、
-   Lesson build 自体は VG-L0 ハーネス実装待ち。rev 0.3 でこの pin は
+   build 未実施**（PRACTICE 側は RUN9-BIRTH-PREP-1 で builder 配線済み。
+   実 PJS 実行は未実施のまま残る）: 改訂3で pin 方針（source archive pin /
+   expanded corpus pin とは別の Lesson manifest を生成し pin）は確定した
+   が、Lesson build 自体は VG-L0 ハーネス実装待ち。rev 0.3 でこの pin は
    EDUCATION 用 Technique lesson を指すと明確化され
    `education_technique_lesson_manifest_sha` へ改名（User 外部レビュー
    PR #317 P1-2 採用）。PRACTICE 用の教師音声
    train/validation/sealed-holdout split manifest（正解 parameter を
-   含まない生素材の分割、PoR §12）も同様に `practice_audio_split_
-   manifest_sha`（`RUN9_CONTRACT.yaml`、PR #317 Codex bot レビュー第2巡
-   Fix 6 で新設 → P1-2 で改名）として既に pin 欄が新設済み。Phase 3 で
+   含まない生素材の分割、PoR §12）は
+   [`practice_split_builder.py`](./practice_split_builder.py)
+   （`build_practice_split_manifest()`/`assign_split()`、
+   RUN9-BIRTH-PREP-1 §B）が生成器として配線済みだが、実 PJS コーパスに
+   対する実行はまだ行っていないため `practice_audio_split_manifest_sha`
+   （`RUN9_CONTRACT.yaml`、PR #317 Codex bot レビュー第2巡 Fix 6 で新設
+   → P1-2 で改名）自体は引き続き `PENDING`。Phase 3 で
    `learning_recipe_sha`（schema `run9-learning-recipe/1.0`: 枝別 recipe
    `practice_recipe`/`education_recipe` の2節 + 共通 seed 909002 + 各枝
-   `equal_budget_within_arm: true`）の**構造**も凍結した — ただし3欄
-   いずれも実体 manifest の**生成**は VG-L0 ハーネス実装待ちのため
-   PENDING のまま。manifest 自体の最低要件は
+   `equal_budget_within_arm: true`）の**構造**も凍結した — 3欄いずれも
+   実体 manifest の**生成**（EDUCATION 側の builder 含む）は VG-L0
+   ハーネス実装待ちのため PENDING のまま。manifest 自体の最低要件は
    `run9_schema.PRACTICE_MANIFEST_REQUIRED_KEYS`/
    `EDUCATION_MANIFEST_REQUIRED_KEYS`/`validate_practice_split_
    manifest()`/`validate_education_lesson_manifest()`/
    `validate_learning_recipe_manifest()` が凍結済み。
-4. **practice/education builder 未実装**（Phase 3 更新）: 情報境界
+4. **education builder 未実装 / practice builder は配線済み・実 PJS 実行
+   待ち**（RUN9-BIRTH-PREP-1 で更新）: 情報境界
    （`run9_schema.PRACTICE_FORBIDDEN_INPUTS` /
    `PRACTICE_ALLOWED_DATA_INPUTS` / `PRACTICE_REQUIRED_AUTONOMOUS_
    OPERATIONS` / `PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE` /
@@ -591,9 +643,12 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    `EDUCATION_MANIFEST_REQUIRED_KEYS`）・practice trace schema
    （`run9_controlprofile.SCHEMA_PRACTICE_TRACE`）・ControlProfile
    append-only 台帳（`run9_controlprofile.Run9ProfileLedger`）と結果分類
-   （`BIRTH_OUTCOMES` 等6分類）の**基盤は Phase 3 で実装済み**だが、これら
-   を実際に呼び出して音声処理・特徴抽出・探索を行う builder・評価器
-   本体は未着手（machine-independent な骨組みの凍結が完了した段階）。
+   （`BIRTH_OUTCOMES` 等6分類）の**基盤は Phase 3 で実装済み**。PRACTICE
+   側は `practice_split_builder.py` が split manifest 生成器として配線
+   済み（fixture テスト済み・実 PJS コーパスに対する実行のみ未実施）。
+   EDUCATION 側の builder（Technique extractor / Lesson builder）、および
+   両枝を実際に呼び出して音声処理・特徴抽出・探索を行う学習ループ本体は
+   未着手（machine-independent な骨組みの凍結が完了した段階）。
 
 ## 次フェーズ（machine-dependent）
 
@@ -605,10 +660,13 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   `is_pinned() == True` へ到達（上記「解消済み（2026-08-25 User
   attestation 実行）」参照——現行 pin 値・binding scope は同日 Codex bot
   レビュー PR #320 第2巡 Fix 3 是正後の値（第1巡 Fix 1 からのさらなる
-  再限定）。詳細は同節参照）。**新たに次段の残 pin として浮上**:
-  `founder_genome_shas`（`founders/R9F-0x_genome.json`
-  の正式発行 — genome_id 自体は決定論的に計算済み。R9F-01 =
-  `66f420672a154283` / R9F-02 = `63f4b8f24b827cd4`）。
+  再限定）。詳細は同節参照）。
+- ~~**`founder_genome_shas` の正式発行**~~ → RUN9-BIRTH-PREP-1（2026-08-25）
+  で解消済み。`run9_schema.issue_founder_genome_document()` の出力バイトを
+  `founders/R9F-0x_genome.json` として書き出し、`RUN9_CONTRACT.yaml`
+  `founder_genome_shas.R9F-01/R9F-02` を各ファイルの raw sha256 で
+  **PINNED** 化した（genome_id = `66f420672a154283` / `63f4b8f24b827cd4`、
+  無変更）。詳細は上記「解消済み（RUN9-BIRTH-PREP-1）」節参照。
 - ~~**`backbone_runtime_bundle_sha` PINNED 化待ち**~~ → 2026-08-25 User
   承認 b + 裁定① により解消済み。確定したのは歴史的 `render_code_commit`
   （RUN6 export 推定）自体ではなく、独立の前方宣言欄
@@ -617,10 +675,12 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   `backbone_runtime_bundle_sha` PINNED の根拠はこの前方宣言の確定（上記
   「解消済み（2026-08-25 外部指摘（AQUEST 山崎信英氏）を受けた派生設計
   変更メモの編入）」参照）。
-- **practice / education manifest の実体 build**:
-  `practice_audio_split_manifest.json` /
-  `education_technique_lesson_manifest.json` の実体生成（残存
-  ブロッカー(3)）。
+- **practice / education manifest の実体 build**: PRACTICE 側は
+  builder（`practice_split_builder.build_practice_split_manifest()`）が
+  RUN9-BIRTH-PREP-1 で配線済み——残るのは実 PJS コーパスに対する実行と
+  `inputs/practice_audio_split_manifest.json` の書き出しのみ。EDUCATION 側
+  （`education_technique_lesson_manifest.json`）は builder 自体が未着手
+  （残存ブロッカー(3)(4)）。
 - **learning recipe manifest の実体 build**: `learning_recipe_manifest.json`
   （schema `run9-learning-recipe/1.0`、`run9_schema.LEARNING_RECIPE_
   MANIFEST_PATH` が規約パスを凍結済み・`validate_learning_recipe_
@@ -713,12 +773,16 @@ run9_dual_founder_pjs/
 ├── DESIGN_RUN9_REVISION_0.4.md                                 # rev 0.3 差分メモ（2026-08-25、外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモの編入 + User用語整理裁定編入）
 ├── POR_CONCEPT_ADJUDICATION_20260824.txt                       # PoR 裁定ソース（uploads 原本とバイト同一・不変）
 ├── DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt                         # 派生設計変更メモ（AQUEST 山崎信英氏、byte-pin 不変）
-├── RUN9_CONTRACT.yaml                                          # §23 Run Contract（部分 pin。af0/ritsu/backbone/backbone_runtime_bundle/por_adjudication/branch_write_policy は PINNED。interventions・human_audit_mode・performance_source 欄）
+├── RUN9_CONTRACT.yaml                                          # §23 Run Contract（部分 pin。af0/ritsu/backbone/backbone_runtime_bundle/por_adjudication/branch_write_policy/founder_genome_shas は PINNED。interventions・human_audit_mode・performance_source 欄）
 ├── README.md                                                   # 本ファイル
-├── run9_schema.py                                              # domain / TRI_CROSSOVER / contract / 書込境界 / manifest validator / R9-G1・LessonRecord・rights 4層 他の run-local 正本
+├── run9_schema.py                                              # domain / TRI_CROSSOVER / contract / 書込境界 / manifest validator / R9-G1・LessonRecord・rights 4層・founder genome 文書発行 他の run-local 正本
 ├── run9_controlprofile.py                                      # Phase 3: ControlProfile schema / derive_profile 書込境界機械強制 / Run9ProfileLedger / practice trace schema
+├── practice_split_builder.py                                   # RUN9-BIRTH-PREP-1 §B: PRACTICE_FROM_AUDIO split manifest builder + advisory 音響 inventory sidecar
 ├── domains/
 │   └── identity_domain_run9_v1.json                            # af0/ritsu/metric_space_sha/user が全て PINNED（2026-08-25 User attestation 実行・is_pinned()==True）
+├── founders/                                                    # RUN9-BIRTH-PREP-1: issue_founder_genome_document() の出力バイトそのままの正式発行済み genome 文書
+│   ├── R9F-01_genome.json                                       # genome_id = 66f420672a154283（AF0_DOMINANT）
+│   └── R9F-02_genome.json                                       # genome_id = 63f4b8f24b827cd4（USER_DOMINANT）
 ├── inputs/
 │   ├── af0_anchor_manifest.json                                # AF-P0 正典証拠の複合参照 manifest（anchor_hashes.af0 の入力）
 │   ├── rights_manifest.json                                    # rev 0.4: 4層構造（voice_identity_rights/performance_rights/composition_rights/recording_master_rights）。voice_identity_rights は User donor rights（2026-08-25 attested、USER_ATTESTED_OWN_VOICE。anchor_hashes.user の入力）
@@ -727,7 +791,9 @@ run9_dual_founder_pjs/
 │   └── identity_metric_space.json                              # Phase 3: identity metric space 事前登録 spec（正規形 sha256 が metric_space_sha を pin。rev 0.4: teacher 非所有注記追記・repin）
 ├── tests/
 │   ├── test_run9_contract.py                                   # §27 最低テストの静的検証可能サブセット + Revision 0.2/0.3/0.4 対応テスト + User 外部レビュー P1/P2 対応テスト + Phase 3 item 1/3 テスト
-│   └── test_run9_controlprofile.py                             # Phase 3: run9_controlprofile.py の最低テスト（書込境界・ledger append-only/冪等/conflict・neutral profile 決定論・practice trace）
+│   ├── test_run9_controlprofile.py                             # Phase 3: run9_controlprofile.py の最低テスト（書込境界・ledger append-only/冪等/conflict・neutral profile 決定論・practice trace）
+│   ├── test_run9_founder_genome_issuance.py                    # RUN9-BIRTH-PREP-1 §A: founder genome 文書発行の最低テスト（再生成同一性・契約照合・fail-closed継承）
+│   └── test_practice_split_builder.py                          # RUN9-BIRTH-PREP-1 §B: practice_split_builder.py の最低テスト（決定論・件数境界・sidecar不干渉。合成 fixture のみ・実PJS非同梱）
 └── results/
     └── .gitignore                                              # 実測結果は非同梱（§25 Atomic Results Bundle 用の空ディレクトリ）
 ```
