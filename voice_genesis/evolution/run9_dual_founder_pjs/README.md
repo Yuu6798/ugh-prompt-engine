@@ -730,10 +730,19 @@ export PJS_WORKDIR="$workdir"
       ```
       git worktree add "$workdir/producer_tree" "$producer_rev"
       ```
-      （現在 checkout がすでに producer revision と一致している場合
-      ——`git diff "$producer_rev"..HEAD -- voice_genesis/evolution/
-      run9_dual_founder_pjs` が空——は in-place 実行が等価であり、
-      worktree 手順は省略してよい。）
+      **本手順は現在 checkout が producer revision と一致している場合
+      でも省略せずそのまま実行する**——分岐は不要（Codex bot レビュー
+      PR #323 第12巡指摘, P2, 採用, Fix 12。〔履歴: Fix 8（第8巡）で
+      「現在 checkout が producer revision と一致する場合は in-place
+      実行が等価であり worktree 手順は省略してよい」という近道注記を
+      導入したが、第12巡までの改訂（Fix 9 の heredoc 化・Fix 10b/11 の
+      `$workdir` 集約）で step 4c/4d は無条件に `$workdir/producer_
+      tree/...` を参照するようになり、近道に従うと `git worktree add`
+      を飛ばした読者が `ModuleNotFoundError`（4c）/存在しない worktree
+      への `remove` 失敗（4d）に陥る矛盾が生じた。worktree 手順自体は
+      checkout が producer revision と一致していても問題なく動作する
+      ため in-place 代替の2系統を維持する価値がなく、近道注記を撤去し
+      単一経路（worktree 手順を常に実行）へ一本化した → 第12巡で解消〕。
    c. worktree 内の `run9_dual_founder_pjs` を `sys.path` 先頭にして
       実行し、`$workdir/extracted` のコーパスを入力に、出力を worktree
       外の `$workdir` へ書き出す（現在 checkout の `PRACTICE_MANIFEST_

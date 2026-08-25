@@ -10067,8 +10067,11 @@ def test_fix323_8_readme_recipe_executes_from_producer_tree_via_git_worktree() -
         'sys.path.insert(0, os.path.join(workdir, "producer_tree", '
         '"voice_genesis", "evolution", "run9_dual_founder_pjs"))'
     ) in readme_text
-    # in-place 実行が等価となる条件（現在 checkout == producer revision）の注記
-    assert "in-place 実行が等価" in readme_text
+    # Fix 12（第12巡, P2, 採用）で in-place 近道注記（省略可能扱い）を
+    # 撤去済み——worktree 手順は常に実行する単一経路であることの確認
+    assert "in-place 実行が等価" not in readme_text
+    assert "本手順は現在 checkout が producer revision と一致している場合" in readme_text
+    assert "でも省略せずそのまま実行する" in readme_text
 
 
 def test_fix323_8_readme_clarifies_dependency_closure_is_full_package_not_builder_alone() -> None:
@@ -10285,3 +10288,39 @@ def test_fix323_11_readme_no_bare_cwd_writes_for_zip_or_extraction() -> None:
     # すべてがこの1コマンドに含まれる旨の説明が存在すること
     assert 'rm -rf "$workdir"' in readme_text
     assert "zip・展開コーパス・\n   worktree 出力" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第12巡1件（P2, 上限超過後だが3分類の新しい
+# 具体経路として採用, Fix 12）: Fix 8（第8巡）で導入した「現在 checkout
+# が producer revision と一致する場合は in-place 実行が等価であり
+# worktree 手順は省略してよい」という近道注記が、第9〜11巡の改訂
+# （heredoc 化・`$workdir` 集約）後も残っていたが、step 4c/4d は無条件に
+# `$workdir/producer_tree/...` を参照するため、近道に従った読者は
+# `ModuleNotFoundError`（4c）/存在しない worktree への `remove` 失敗
+# （4d）に陥る——文書化された近道が実行不能という致命的バグ類型の新しい
+# 具体経路。worktree 手順自体は checkout が producer revision と一致
+# していても問題なく動作するため、in-place 代替2系統を維持する価値が
+# なく、近道の撤去（単一経路への一本化）を選んだ。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_12_readme_in_place_shortcut_removed_worktree_step_mandatory() -> None:
+    """README.md から Fix 8 が導入した in-place 近道注記（省略可能扱い）
+    が撤去され、worktree 手順（`git worktree add`）が現在 checkout の
+    状態に関わらず常に実行される単一経路であることを明記した文へ
+    置き換わっていること。撤去理由は `〔履歴:〕` 形式で保持されている
+    こと（AGENTS.md 運用: 純粋に歴史的な記述は削除せず superseded 明示で
+    保持する）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    # 旧・近道注記の決定的フレーズ（改行なし連続文字列）が本文として
+    # 残っていないこと——同フレーズは下記〔履歴:〕引用内にのみ改行を挟んで
+    # 分割再掲されるため、この形での不在確認は歴史的引用と現在の本文を
+    # 正しく区別する。
+    assert "in-place 実行が等価" not in readme_text
+    assert (
+        "**本手順は現在 checkout が producer revision と一致している場合\n"
+        "      でも省略せずそのまま実行する**——分岐は不要"
+    ) in readme_text
+    assert "〔履歴: Fix 8（第8巡）で" in readme_text
+    assert "第12巡で解消〕" in readme_text
