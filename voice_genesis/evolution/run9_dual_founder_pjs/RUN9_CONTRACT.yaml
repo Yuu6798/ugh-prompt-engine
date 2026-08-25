@@ -607,10 +607,25 @@ learning_recipe_sha:
     試行回数・render 予算の具体値と manifest 実体の生成は VG-L0 ハーネス
     実装時の build 対象のため、本欄は引き続き PENDING。
 
+# RUN9-PROBE-1（本改訂）: DESIGN_RUN9 §15 Probe Set (P0-P5) の実体
+# manifest を `evaluation/probe_manifest.json`（`evaluation/` 初出）へ
+# 起草した。schema `run9-probe-manifest/1.0`（`run9_schema.
+# validate_probe_manifest()` が検証）— probes（P0-P5 全6・score cell を
+# self-contained 直書き）/ render_contract（harness・backbone_ref は
+# 本欄へのフィールド名参照のみ・performance_seed=909001・PCM publication
+# 規律）/ revision_bridge（§15 probe 語彙 ↔ inputs/identity_metric_space.json
+# 語彙の橋渡し7エントリ。式・値は同ファイルへの参照のみで重複定義しない）/
+# measurement_boundary（「どう測るか」は対象外の境界宣言）/ prohibitions
+# （render後のcell追加禁止・結果を見た後のprobe変更禁止・測定仕様変更禁止
+# + render不能cellの是正repinはこの禁則の対象外という区別）の閉じた
+# トップレベル構造。値は `evaluation/probe_manifest.json` の実バイト
+# sha256（`design_doc_sha256` と同一のファイル実バイト規約）。〔履歴:
+# 旧 reason は「P0-P5 probe set の実ファイル manifest 未作成。」の1行
+# だった — 本改訂で実体が発行されたため要約保持のみ〕。
 probe_manifest_sha:
-  value: null
-  status: PENDING
-  reason: P0-P5 probe set の実ファイル manifest 未作成。
+  value: "20b5638537881ef2565795ef040d4490202c8b9907c9c0dc750d15d043bb1730"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 
 measurement_spec_sha:
   value: null

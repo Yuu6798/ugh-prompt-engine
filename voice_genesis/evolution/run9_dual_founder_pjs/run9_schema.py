@@ -3277,6 +3277,662 @@ def validate_education_lesson_manifest(data: Mapping[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# probe manifest（RUN9-PROBE-1, DESIGN_RUN9 §15 Probe Set の実体 manifest）:
+# P0-P5 の score cells + render 契約 + revision_bridge（§15 probe 語彙 ↔
+# identity_metric_space 語彙の橋渡し）を単一ファイルへ凍結する。「どう
+# 測るか」は本 manifest の対象外のまま——identity 軸は
+# `inputs/identity_metric_space.json` が正本、development/generalization
+# 軸の測定仕様は `measurement_spec_sha`（別欄、PENDING のまま）が別途
+# 凍結する（`measurement_boundary` 節が明文化）。
+# ---------------------------------------------------------------------------
+
+SCHEMA_PROBE_MANIFEST = "run9-probe-manifest/1.0"
+
+# 規約パス（`PRACTICE_MANIFEST_PATH` 等と同じ命名規約 — schema から機械的
+# に導出せず、リポジトリ内の固定配置として凍結する）。`evaluation/` は
+# 本 manifest が初出のディレクトリ。
+PROBE_MANIFEST_PATH = _THIS_DIR / "evaluation" / "probe_manifest.json"
+
+# DESIGN_RUN9 §15 が定義する Probe Set の閉語彙（記載順）。
+PROBE_IDS: Tuple[str, str, str, str, str, str] = ("P0", "P1", "P2", "P3", "P4", "P5")
+
+# §15 の名称を逐語で固定する（probe.title はこの値と厳密一致でなければ
+# ならない）。design_source はどの probe も同一の §15 参照。
+PROBE_TITLES: Mapping[str, str] = types.MappingProxyType({
+    "P0": "Neutral Identity Probe",
+    "P1": "Pitch / Duration Probe",
+    "P2": "Energy / Attack Probe",
+    "P3": "Phrase-End Probe",
+    "P4": "Held-out Song",
+    "P5": "Held-out Register / Phrase",
+})
+
+PROBE_DESIGN_SOURCE = "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15"
+
+_PROBE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "probes", "render_contract", "revision_bridge",
+    "measurement_boundary", "prohibitions", "note",
+})
+
+# probe object の基本閉集合（全 probe 共通）。P1-P3 は起草要求（項目4）が
+# 明記する `factor_levels`（水準表）、P4 は `heldout_independence`（独立性
+# 宣言）を、汎用の role/cells とは別の追加必須キーとして要求する。
+_PROBE_BASE_KEYS: FrozenSet[str] = frozenset({"probe_id", "title", "design_source", "role", "cells"})
+_PROBE_REQUIRED_EXTRA_KEYS: Mapping[str, FrozenSet[str]] = types.MappingProxyType({
+    "P0": frozenset(),
+    "P1": frozenset({"factor_levels"}),
+    "P2": frozenset({"factor_levels"}),
+    "P3": frozenset({"factor_levels"}),
+    "P4": frozenset({"heldout_independence"}),
+    "P5": frozenset(),
+})
+
+_CELL_KEYS_BASE: FrozenSet[str] = frozenset({"cell_id", "tempo_bpm", "notes"})
+# P0 cell のみ `source`（score.py への転記元メタデータ）を追加で要求する
+# （起草要求 P0: 「cell の source メタデータに転記元…を記録」）。
+_CELL_SOURCE_KEY = "source"
+_CELL_SOURCE_KEYS: FrozenSet[str] = frozenset(
+    {"transcribed_from", "transcribed_from_sha256", "transcription_scope", "verbatim"}
+)
+
+_NOTE_KEYS: FrozenSet[str] = frozenset(
+    {"kana", "pitch_midi", "duration_beats", "phrase_index", "is_phrase_final"}
+)
+
+# P0 の score 転記元（read-only 参照。凍結・改変禁止 — RUN9-PROBE-1
+# Design Memo 冒頭）。`voice_genesis/singer/score.py`。
+SCORE_PY_REFERENCE_PATH = _THIS_DIR.parent.parent / "singer" / "score.py"
+
+# P0 は「同一 score・同一 lyrics・中央音域・表現指定を最小化」（§15）—
+# 中央音域を MIDI 57-72 に固定する（score.py の in 音階 A3=57 を主音と
+# する build_sakura_score() 全音域が MIDI 57-69 でこの帯に収まる）。
+_P0_MIDI_LOW = 57
+_P0_MIDI_HIGH = 72
+
+# P5 は「学習分布外寄りだが baseline domain 内」（§15）— baseline domain
+# を MIDI 45-90 に固定し、P0 域より外周（<57 または >72）の note を
+# 少なくとも1つ含むことを要求する。
+_P5_MIDI_LOW = 45
+_P5_MIDI_HIGH = 90
+
+_P3_DIAGNOSTIC_ROLE_MARKER = "diagnostic_when_trf_uncalibrated"
+
+_RENDER_CONTRACT_KEYS: FrozenSet[str] = frozenset({
+    "harness", "backbone_ref", "performance_seed", "performance_seed_note",
+    "same_conditions_note", "pcm_publication_discipline",
+})
+_RENDER_CONTRACT_HARNESS = "voice_genesis/foundry/s1_gate/gate_synth.py::run_pipeline"
+_BACKBONE_REF_KEYS: FrozenSet[str] = frozenset({"contract_path", "contract_field"})
+_BACKBONE_REF_CONTRACT_PATH = "voice_genesis/evolution/run9_dual_founder_pjs/RUN9_CONTRACT.yaml"
+_BACKBONE_REF_CONTRACT_FIELD = "backbone_runtime_bundle_sha"
+# 学習 seed (909002) と混同しないことのマーカー（performance_seed_note が
+# 保持しなければならない）。
+_LEARNING_SEED_DISAMBIGUATION_MARKER = str(LEARNING_SEED)
+# §27 item 13「shared performance seed is identical」/ item 18「birth
+# probes use same score/seed/ExecutionProfile」の参照マーカー。
+_RENDER_CONTRACT_SECTION27_MARKER = "§27"
+_RENDER_CONTRACT_ITEM13_MARKER = "item 13"
+_RENDER_CONTRACT_ITEM18_MARKER = "item 18"
+# §15 末尾の PCM publication 規律（逐語順序）。
+_PCM_PUBLICATION_DISCIPLINE_MARKERS: Tuple[str, ...] = (
+    "float output", "PCM publication", "file readback", "meter", "actual WAV sha256",
+)
+
+_REVISION_BRIDGE_ENTRY_NAMES: Tuple[str, ...] = (
+    "reference_render", "c0_replay_takes", "c1_sham_takes", "positive_reference",
+    "negative_reference", "pjs_reference", "evaluated_renders",
+)
+# True のエントリは P0 cell を使った新規 render を要求する（`cell_ref`
+# 必須）。False のエントリは新規 render 不要（`cell_ref` を持たない —
+# 他方 founder の既存 reference_render / confuser_control の決定論的
+# コーパス集約を参照するのみ）。
+_REVISION_BRIDGE_NEW_RENDER_REQUIRED: Mapping[str, bool] = types.MappingProxyType({
+    "reference_render": True,
+    "c0_replay_takes": True,
+    "c1_sham_takes": True,
+    "positive_reference": True,
+    "negative_reference": False,
+    "pjs_reference": False,
+    "evaluated_renders": True,
+})
+# c0/c1 のみ RUN9_CONTRACT.yaml interventions 配下のテイク数 pin 欄
+# （INTERVENTION_TAKE_COUNT_FIELDS）へフィールド名参照する
+# `contract_field_ref` を追加で要求する。
+_REVISION_BRIDGE_CONTRACT_FIELD_REF: Mapping[str, str] = types.MappingProxyType({
+    "c0_replay_takes": "RUN9_CONTRACT.yaml#interventions.c0_replay_takes_per_founder",
+    "c1_sham_takes": "RUN9_CONTRACT.yaml#interventions.c1_sham_takes_per_founder",
+})
+_REVISION_BRIDGE_NO_NEW_RENDER_MARKER = "新規render不要"
+_IDENTITY_METRIC_SPACE_REF_PREFIX = "inputs/identity_metric_space.json#"
+
+_MEASUREMENT_BOUNDARY_KEYS: FrozenSet[str] = frozenset(
+    {"scope_statement", "identity_axis_source", "development_generalization_axis_source"}
+)
+_MEASUREMENT_BOUNDARY_SCOPE_MARKERS: Tuple[str, ...] = ("何を鳴らすか", "どう測るかは対象外")
+_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS: Tuple[str, ...] = (
+    "inputs/identity_metric_space.json", "metric_space_sha",
+)
+_MEASUREMENT_BOUNDARY_DEV_GEN_AXIS_MARKERS: Tuple[str, ...] = ("measurement_spec_sha", "PENDING")
+
+_PROHIBITION_MARKERS: Tuple[str, ...] = (
+    "render後のcell",
+    "結果を見た後のprobe変更",
+    "測定仕様の変更を本manifestで行わない",
+    "render不能cellの是正repin",
+)
+# render 不能 cell の是正 repin は「結果を見た後の水増し」禁止の対象外
+# ——この区別（carve-out）自体を文言として要求する（項目8）。
+_PROHIBITION_RENDER_INFEASIBLE_CARVEOUT_MARKERS: Tuple[str, ...] = ("水増し", "対象外")
+
+_HELDOUT_INDEPENDENCE_KEYS: FrozenSet[str] = frozenset({"status", "independent_of", "note"})
+HELDOUT_INDEPENDENCE_STATUS = "AUTHORED_INDEPENDENTLY_OF_PJS_CORPUS"
+
+
+def _require_probe_int(value: Any, *, field: str) -> int:
+    """bool を除外した厳密 int（`pitch_midi`/`phrase_index` 用。
+    `_is_strict_int()` を再利用する — bool は int のサブクラスのため
+    素の `isinstance(value, int)` では `True`/`False` を誤って許可して
+    しまう。"""
+    if not _is_strict_int(value):
+        raise Run9ValidationError(
+            f"{field} must be an exact int (bool/float/str/None rejected), got {value!r} "
+            f"({type(value).__name__})"
+        )
+    return value
+
+
+def _require_probe_bool(value: Any, *, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise Run9ValidationError(f"{field} must be exactly a bool, got {value!r}")
+    return value
+
+
+def _validate_probe_note(note: Any, *, field: str) -> Dict[str, Any]:
+    if not isinstance(note, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(note).__name__}")
+    unknown = set(note.keys()) - _NOTE_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _NOTE_KEYS - set(note.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    _require_non_empty_str(note["kana"], field=f"{field}.kana")
+    _require_probe_int(note["pitch_midi"], field=f"{field}.pitch_midi")
+    _require_positive_finite_number(note["duration_beats"], field=f"{field}.duration_beats")
+    phrase_index = _require_probe_int(note["phrase_index"], field=f"{field}.phrase_index")
+    if phrase_index < 0:
+        raise Run9ValidationError(f"{field}.phrase_index must be >= 0, got {phrase_index!r}")
+    _require_probe_bool(note["is_phrase_final"], field=f"{field}.is_phrase_final")
+    return note
+
+
+def _validate_probe_cell_source(source: Any, *, field: str) -> None:
+    if not isinstance(source, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(source).__name__}")
+    unknown = set(source.keys()) - _CELL_SOURCE_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _CELL_SOURCE_KEYS - set(source.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    transcribed_from = _require_non_empty_str(
+        source["transcribed_from"], field=f"{field}.transcribed_from"
+    )
+    if transcribed_from != "voice_genesis/singer/score.py":
+        raise Run9ValidationError(
+            f"{field}.transcribed_from must be exactly 'voice_genesis/singer/score.py', "
+            f"got {transcribed_from!r}"
+        )
+    declared_sha = source["transcribed_from_sha256"]
+    if not isinstance(declared_sha, str) or not _SHA256_HEX_RE.match(declared_sha):
+        raise Run9ValidationError(
+            f"{field}.transcribed_from_sha256 must be exactly 64 lowercase hex characters, "
+            f"got {declared_sha!r}"
+        )
+    if SCORE_PY_REFERENCE_PATH.is_file():
+        # read-only 参照の実バイトと逐語照合する（Design Memo 冒頭「score.py
+        # は read-only 参照」— 読むだけで改変しない）。ファイルが見つから
+        # ない実行環境（配布物にこのパスを含まない等）では構造検証のみに
+        # 留め fail-open にはしない代わりに fail-closed にもしない —
+        # 純粋な形式検証（64hex）は上で既に強制済み。
+        actual_sha = compute_file_sha256(SCORE_PY_REFERENCE_PATH)
+        if declared_sha != actual_sha:
+            raise Run9ValidationError(
+                f"{field}.transcribed_from_sha256 ({declared_sha!r}) does not match the actual raw "
+                f"sha256 of {SCORE_PY_REFERENCE_PATH} ({actual_sha!r}) — the P0 transcription source "
+                "must stay byte-verified against the frozen read-only reference"
+            )
+    _require_non_empty_str(source["transcription_scope"], field=f"{field}.transcription_scope")
+    if source["verbatim"] is not True:
+        raise Run9ValidationError(f"{field}.verbatim must be exactly True, got {source['verbatim']!r}")
+
+
+def _validate_probe_cell(
+    cell: Any, *, probe_id: str, field: str, seen_cell_ids: Dict[str, str]
+) -> None:
+    if not isinstance(cell, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(cell).__name__}")
+    allowed = set(_CELL_KEYS_BASE)
+    required = set(_CELL_KEYS_BASE)
+    if probe_id == "P0":
+        allowed.add(_CELL_SOURCE_KEY)
+        required.add(_CELL_SOURCE_KEY)
+    unknown = set(cell.keys()) - allowed
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = required - set(cell.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+
+    cell_id = _require_non_empty_str(cell["cell_id"], field=f"{field}.cell_id")
+    if cell_id in seen_cell_ids:
+        raise Run9ValidationError(
+            f"{field}.cell_id {cell_id!r} duplicates the cell_id already used by "
+            f"{seen_cell_ids[cell_id]!r} — cell_id must be unique across the entire manifest"
+        )
+    seen_cell_ids[cell_id] = field
+
+    _require_positive_finite_number(cell["tempo_bpm"], field=f"{field}.tempo_bpm")
+
+    notes = cell["notes"]
+    if not isinstance(notes, list) or not notes:
+        raise Run9ValidationError(f"{field}.notes must be a non-empty list, got {notes!r}")
+    for i, note in enumerate(notes):
+        validated = _validate_probe_note(note, field=f"{field}.notes[{i}]")
+        pitch = validated["pitch_midi"]
+        if probe_id == "P0" and not (_P0_MIDI_LOW <= pitch <= _P0_MIDI_HIGH):
+            raise Run9ValidationError(
+                f"{field}.notes[{i}].pitch_midi = {pitch!r} is outside the P0 central-register "
+                f"domain [{_P0_MIDI_LOW}, {_P0_MIDI_HIGH}] (DESIGN_RUN9 §15 P0: 中央音域)"
+            )
+        if probe_id == "P5" and not (_P5_MIDI_LOW <= pitch <= _P5_MIDI_HIGH):
+            raise Run9ValidationError(
+                f"{field}.notes[{i}].pitch_midi = {pitch!r} is outside the P5 baseline domain "
+                f"[{_P5_MIDI_LOW}, {_P5_MIDI_HIGH}] (DESIGN_RUN9 §15 P5: baseline domain 内)"
+            )
+
+    if probe_id == "P0":
+        _validate_probe_cell_source(cell[_CELL_SOURCE_KEY], field=f"{field}.{_CELL_SOURCE_KEY}")
+
+
+def _validate_probe_heldout_independence(value: Any, *, field: str) -> None:
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
+    unknown = set(value.keys()) - _HELDOUT_INDEPENDENCE_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _HELDOUT_INDEPENDENCE_KEYS - set(value.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    status = value["status"]
+    if status != HELDOUT_INDEPENDENCE_STATUS:
+        raise Run9ValidationError(
+            f"{field}.status must be exactly {HELDOUT_INDEPENDENCE_STATUS!r}, got {status!r}"
+        )
+    _require_nonempty_str_list(
+        value["independent_of"], manifest_kind="probe manifest", field=f"{field}.independent_of"
+    )
+    _require_non_empty_str(value["note"], field=f"{field}.note")
+
+
+def _validate_probe_object(
+    probe: Any, *, expected_probe_id: str, field: str, seen_cell_ids: Dict[str, str]
+) -> None:
+    if not isinstance(probe, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(probe).__name__}")
+    extra = _PROBE_REQUIRED_EXTRA_KEYS[expected_probe_id]
+    allowed = set(_PROBE_BASE_KEYS) | extra
+    unknown = set(probe.keys()) - allowed
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = allowed - set(probe.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+
+    if probe["probe_id"] != expected_probe_id:
+        raise Run9ValidationError(
+            f"{field}.probe_id must be exactly {expected_probe_id!r}, got {probe['probe_id']!r}"
+        )
+    if probe["title"] != PROBE_TITLES[expected_probe_id]:
+        raise Run9ValidationError(
+            f"{field}.title must be exactly {PROBE_TITLES[expected_probe_id]!r} (DESIGN_RUN9 §15 "
+            f"逐語), got {probe['title']!r}"
+        )
+    if probe["design_source"] != PROBE_DESIGN_SOURCE:
+        raise Run9ValidationError(
+            f"{field}.design_source must be exactly {PROBE_DESIGN_SOURCE!r}, got "
+            f"{probe['design_source']!r}"
+        )
+    role = _require_non_empty_str(probe["role"], field=f"{field}.role")
+    if expected_probe_id == "P3" and _P3_DIAGNOSTIC_ROLE_MARKER not in role:
+        raise Run9ValidationError(
+            f"{field}.role must contain the marker {_P3_DIAGNOSTIC_ROLE_MARKER!r} (DESIGN_RUN9 §15 "
+            "P3: TRF 未校正時は diagnostic/advisory の機械可読化), got role without the marker"
+        )
+
+    cells = probe["cells"]
+    if not isinstance(cells, list) or not cells:
+        raise Run9ValidationError(f"{field}.cells must be a non-empty list, got {cells!r}")
+    for i, cell in enumerate(cells):
+        _validate_probe_cell(
+            cell, probe_id=expected_probe_id, field=f"{field}.cells[{i}]", seen_cell_ids=seen_cell_ids
+        )
+
+    if expected_probe_id == "P5":
+        pitches = [note["pitch_midi"] for cell in cells for note in cell["notes"]]
+        if not any(p < _P0_MIDI_LOW or p > _P0_MIDI_HIGH for p in pitches):
+            raise Run9ValidationError(
+                f"{field}: P5 must include at least one note outside the P0 central-register domain "
+                f"[{_P0_MIDI_LOW}, {_P0_MIDI_HIGH}] while staying within the P5 baseline domain "
+                f"[{_P5_MIDI_LOW}, {_P5_MIDI_HIGH}] (DESIGN_RUN9 §15 P5: 学習分布外寄り)"
+            )
+
+    if expected_probe_id == "P4":
+        _validate_probe_heldout_independence(
+            probe["heldout_independence"], field=f"{field}.heldout_independence"
+        )
+
+
+def _validate_render_contract(data: Any) -> None:
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"render_contract must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _RENDER_CONTRACT_KEYS
+    if unknown:
+        raise Run9ValidationError(f"render_contract has unknown key(s): {sorted(unknown)}")
+    missing = _RENDER_CONTRACT_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"render_contract missing required key(s): {sorted(missing)}")
+
+    if data["harness"] != _RENDER_CONTRACT_HARNESS:
+        raise Run9ValidationError(
+            f"render_contract.harness must be exactly {_RENDER_CONTRACT_HARNESS!r}, "
+            f"got {data['harness']!r}"
+        )
+
+    backbone_ref = data["backbone_ref"]
+    if not isinstance(backbone_ref, dict):
+        raise Run9ValidationError(
+            f"render_contract.backbone_ref must be an object, got {type(backbone_ref).__name__}"
+        )
+    unknown_ref = set(backbone_ref.keys()) - _BACKBONE_REF_KEYS
+    if unknown_ref:
+        raise Run9ValidationError(
+            f"render_contract.backbone_ref has unknown key(s): {sorted(unknown_ref)}"
+        )
+    missing_ref = _BACKBONE_REF_KEYS - set(backbone_ref.keys())
+    if missing_ref:
+        raise Run9ValidationError(
+            f"render_contract.backbone_ref missing required key(s): {sorted(missing_ref)}"
+        )
+    if backbone_ref["contract_path"] != _BACKBONE_REF_CONTRACT_PATH:
+        raise Run9ValidationError(
+            f"render_contract.backbone_ref.contract_path must be exactly "
+            f"{_BACKBONE_REF_CONTRACT_PATH!r}, got {backbone_ref['contract_path']!r}"
+        )
+    if backbone_ref["contract_field"] != _BACKBONE_REF_CONTRACT_FIELD:
+        raise Run9ValidationError(
+            f"render_contract.backbone_ref.contract_field must be exactly "
+            f"{_BACKBONE_REF_CONTRACT_FIELD!r} (field-name reference only — the pin value itself "
+            f"must not be duplicated here), got {backbone_ref['contract_field']!r}"
+        )
+
+    seed = data["performance_seed"]
+    if not _is_strict_int(seed) or seed != SHARED_PERFORMANCE_SEED:
+        raise Run9ValidationError(
+            f"render_contract.performance_seed must be the exact int {SHARED_PERFORMANCE_SEED!r} "
+            f"(bool/float variants rejected), got {seed!r} ({type(seed).__name__})"
+        )
+    seed_note = _require_non_empty_str(
+        data["performance_seed_note"], field="render_contract.performance_seed_note"
+    )
+    if _LEARNING_SEED_DISAMBIGUATION_MARKER not in seed_note:
+        raise Run9ValidationError(
+            "render_contract.performance_seed_note must mention the learning seed "
+            f"({_LEARNING_SEED_DISAMBIGUATION_MARKER!r}) to disambiguate it from the shared "
+            "performance seed, got a note without that marker"
+        )
+
+    same_conditions_note = _require_non_empty_str(
+        data["same_conditions_note"], field="render_contract.same_conditions_note"
+    )
+    for marker in (
+        _RENDER_CONTRACT_SECTION27_MARKER, _RENDER_CONTRACT_ITEM13_MARKER, _RENDER_CONTRACT_ITEM18_MARKER,
+    ):
+        if marker not in same_conditions_note:
+            raise Run9ValidationError(
+                f"render_contract.same_conditions_note must contain the marker {marker!r} "
+                "(DESIGN_RUN9 §27 item 13/18 参照マーカー), got a note without that marker"
+            )
+
+    discipline = _require_non_empty_str(
+        data["pcm_publication_discipline"], field="render_contract.pcm_publication_discipline"
+    )
+    last_index = -1
+    for marker in _PCM_PUBLICATION_DISCIPLINE_MARKERS:
+        idx = discipline.find(marker)
+        if idx == -1:
+            raise Run9ValidationError(
+                f"render_contract.pcm_publication_discipline must contain the marker {marker!r} "
+                "(DESIGN_RUN9 §15 末尾 PCM publication 規律の逐語), got a discipline text without it"
+            )
+        if idx <= last_index:
+            raise Run9ValidationError(
+                "render_contract.pcm_publication_discipline markers must appear in the DESIGN_RUN9 "
+                "§15 order (float output -> PCM publication -> file readback -> meter -> actual WAV "
+                f"sha256) — {marker!r} appears out of order"
+            )
+        last_index = idx
+
+
+def _validate_revision_bridge_entry(
+    entry: Any, *, entry_name: str, field: str, valid_cell_ids: FrozenSet[str]
+) -> None:
+    if not isinstance(entry, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(entry).__name__}")
+    requires_new_render = _REVISION_BRIDGE_NEW_RENDER_REQUIRED[entry_name]
+    has_contract_field_ref = entry_name in _REVISION_BRIDGE_CONTRACT_FIELD_REF
+    allowed = {"description", "identity_metric_space_ref", "new_render_required"}
+    if requires_new_render:
+        allowed.add("cell_ref")
+    if has_contract_field_ref:
+        allowed.add("contract_field_ref")
+    unknown = set(entry.keys()) - allowed
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = allowed - set(entry.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+
+    description = _require_non_empty_str(entry["description"], field=f"{field}.description")
+    if not requires_new_render and _REVISION_BRIDGE_NO_NEW_RENDER_MARKER not in description:
+        raise Run9ValidationError(
+            f"{field}.description must contain the marker {_REVISION_BRIDGE_NO_NEW_RENDER_MARKER!r} "
+            "(negative_reference/pjs_reference は新規 render 不要), got a description without that "
+            "marker"
+        )
+
+    ref = entry["identity_metric_space_ref"]
+    if not isinstance(ref, str) or not ref.startswith(_IDENTITY_METRIC_SPACE_REF_PREFIX):
+        raise Run9ValidationError(
+            f"{field}.identity_metric_space_ref must be a string starting with "
+            f"{_IDENTITY_METRIC_SPACE_REF_PREFIX!r} (正本は inputs/identity_metric_space.json への "
+            f"参照のみ — 式・値の重複定義禁止), got {ref!r}"
+        )
+    top_segment = ref[len(_IDENTITY_METRIC_SPACE_REF_PREFIX):].split(".", 1)[0]
+    if top_segment not in _IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS:
+        raise Run9ValidationError(
+            f"{field}.identity_metric_space_ref top-level segment {top_segment!r} is not a known "
+            f"inputs/identity_metric_space.json top-level key "
+            f"({sorted(_IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS)})"
+        )
+
+    new_render_required = entry["new_render_required"]
+    if not isinstance(new_render_required, bool) or new_render_required is not requires_new_render:
+        raise Run9ValidationError(
+            f"{field}.new_render_required must be exactly {requires_new_render!r}, "
+            f"got {new_render_required!r}"
+        )
+
+    if requires_new_render:
+        cell_ref = entry["cell_ref"]
+        if cell_ref not in valid_cell_ids:
+            raise Run9ValidationError(
+                f"{field}.cell_ref {cell_ref!r} does not reference a cell_id declared in probes[]"
+            )
+
+    if has_contract_field_ref:
+        expected = _REVISION_BRIDGE_CONTRACT_FIELD_REF[entry_name]
+        if entry["contract_field_ref"] != expected:
+            raise Run9ValidationError(
+                f"{field}.contract_field_ref must be exactly {expected!r}, got "
+                f"{entry['contract_field_ref']!r}"
+            )
+
+
+def _validate_marker_bearing_str(value: Any, *, field: str, markers: Tuple[str, ...]) -> str:
+    text = _require_non_empty_str(value, field=field)
+    for marker in markers:
+        if marker not in text:
+            raise Run9ValidationError(
+                f"{field} must contain the marker {marker!r}, got text without that marker"
+            )
+    return text
+
+
+def _validate_measurement_boundary(data: Any) -> None:
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"measurement_boundary must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _MEASUREMENT_BOUNDARY_KEYS
+    if unknown:
+        raise Run9ValidationError(f"measurement_boundary has unknown key(s): {sorted(unknown)}")
+    missing = _MEASUREMENT_BOUNDARY_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"measurement_boundary missing required key(s): {sorted(missing)}")
+    _validate_marker_bearing_str(
+        data["scope_statement"], field="measurement_boundary.scope_statement",
+        markers=_MEASUREMENT_BOUNDARY_SCOPE_MARKERS,
+    )
+    _validate_marker_bearing_str(
+        data["identity_axis_source"], field="measurement_boundary.identity_axis_source",
+        markers=_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS,
+    )
+    _validate_marker_bearing_str(
+        data["development_generalization_axis_source"],
+        field="measurement_boundary.development_generalization_axis_source",
+        markers=_MEASUREMENT_BOUNDARY_DEV_GEN_AXIS_MARKERS,
+    )
+
+
+def _validate_prohibitions(data: Any) -> None:
+    if not isinstance(data, list) or not data:
+        raise Run9ValidationError(f"prohibitions must be a non-empty list, got {data!r}")
+    for i, item in enumerate(data):
+        _require_non_empty_str(item, field=f"prohibitions[{i}]")
+    joined = "\n".join(data)
+    for marker in _PROHIBITION_MARKERS:
+        if marker not in joined:
+            raise Run9ValidationError(
+                f"prohibitions must contain a statement with the marker {marker!r}, got a list "
+                "without any such statement"
+            )
+    for marker in _PROHIBITION_RENDER_INFEASIBLE_CARVEOUT_MARKERS:
+        if marker not in joined:
+            raise Run9ValidationError(
+                f"prohibitions must contain the render-infeasible-cell carve-out marker {marker!r} "
+                "(render 不能 cell の是正 repin は水増し禁止の対象外——この区別を明文化する), got a "
+                "list without it"
+            )
+
+
+def validate_probe_manifest(data: Mapping[str, Any]) -> None:
+    """probe manifest（schema `run9-probe-manifest/1.0`、規約パス
+    `PROBE_MANIFEST_PATH` = `evaluation/probe_manifest.json`）の構造を
+    検証する。DESIGN_RUN9 §15 Probe Set（P0-P5）の score cells + render
+    契約 + revision_bridge（§15 probe 語彙 ↔ identity_metric_space 語彙の
+    橋渡し）を凍結した実体 manifest の fail-closed 検証（既存 validator
+    群と同じ流儀 — Run9ValidationError・意味論マーカー方式・閉集合）。
+
+    「どう測るか」は本 manifest の対象外（`measurement_boundary` が明文化
+    ——identity 軸は `inputs/identity_metric_space.json` が正本のまま、
+    P4/P5 の development/generalization 軸の測定仕様は
+    `measurement_spec_sha`（別欄、PENDING のまま）が別途凍結する）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"probe manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _PROBE_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"probe manifest has unknown key(s): {sorted(unknown)}")
+    missing = _PROBE_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"probe manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_PROBE_MANIFEST:
+        raise Run9ValidationError(
+            f"probe manifest schema must be exactly {SCHEMA_PROBE_MANIFEST!r}, got {schema!r}"
+        )
+
+    _require_non_empty_str(data["note"], field="note")
+
+    probes = data["probes"]
+    if not isinstance(probes, list) or len(probes) != len(PROBE_IDS):
+        raise Run9ValidationError(
+            f"probe manifest.probes must be a list containing exactly the {len(PROBE_IDS)} probes "
+            f"{list(PROBE_IDS)} (P0-P5 全6probe必須), got "
+            f"{probes if not isinstance(probes, list) else f'{len(probes)} item(s)'}"
+        )
+
+    seen_cell_ids: Dict[str, str] = {}
+    seen_probe_ids: set = set()
+    for i, probe in enumerate(probes):
+        if not isinstance(probe, dict):
+            raise Run9ValidationError(f"probes[{i}] must be an object, got {type(probe).__name__}")
+        probe_id = probe.get("probe_id")
+        if probe_id not in PROBE_IDS:
+            raise Run9ValidationError(
+                f"probes[{i}].probe_id must be one of {list(PROBE_IDS)}, got {probe_id!r}"
+            )
+        if probe_id in seen_probe_ids:
+            raise Run9ValidationError(
+                f"probes[{i}].probe_id {probe_id!r} is duplicated — each of P0-P5 must appear "
+                "exactly once"
+            )
+        seen_probe_ids.add(probe_id)
+        _validate_probe_object(
+            probe, expected_probe_id=probe_id, field=f"probes[{i}]", seen_cell_ids=seen_cell_ids
+        )
+    if seen_probe_ids != set(PROBE_IDS):
+        raise Run9ValidationError(
+            f"probe manifest.probes is missing required probe_id(s): "
+            f"{sorted(set(PROBE_IDS) - seen_probe_ids)}"
+        )
+
+    valid_cell_ids = frozenset(seen_cell_ids.keys())
+
+    _validate_render_contract(data["render_contract"])
+
+    revision_bridge = data["revision_bridge"]
+    if not isinstance(revision_bridge, dict):
+        raise Run9ValidationError(
+            f"revision_bridge must be an object, got {type(revision_bridge).__name__}"
+        )
+    unknown_rb = set(revision_bridge.keys()) - set(_REVISION_BRIDGE_ENTRY_NAMES)
+    if unknown_rb:
+        raise Run9ValidationError(f"revision_bridge has unknown key(s): {sorted(unknown_rb)}")
+    missing_rb = set(_REVISION_BRIDGE_ENTRY_NAMES) - set(revision_bridge.keys())
+    if missing_rb:
+        raise Run9ValidationError(f"revision_bridge missing required entry(ies): {sorted(missing_rb)}")
+    for entry_name in _REVISION_BRIDGE_ENTRY_NAMES:
+        _validate_revision_bridge_entry(
+            revision_bridge[entry_name], entry_name=entry_name,
+            field=f"revision_bridge.{entry_name}", valid_cell_ids=valid_cell_ids,
+        )
+
+    _validate_measurement_boundary(data["measurement_boundary"])
+    _validate_prohibitions(data["prohibitions"])
+
+
+# ---------------------------------------------------------------------------
 # TRI_CROSSOVER + Run9FounderGenome（DESIGN_RUN9 §9）
 # ---------------------------------------------------------------------------
 
