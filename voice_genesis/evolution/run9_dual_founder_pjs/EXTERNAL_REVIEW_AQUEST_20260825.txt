@@ -1,0 +1,339 @@
+================================================================
+RUN9 外部指摘反映による変更点
+External Review: AQUEST 山崎信英氏
+Revision Proposal: RUN9 design_revision 0.2
+================================================================
+
+【外部指摘の核心】
+
+UTAU等のVoice Bank自体には、基本的に「歌い方」の情報はほとんど含まれない。
+
+実際の歌唱表現は、
+
+- 音程編集
+- タイミング
+- 強弱
+- ビブラート
+- フレージング
+- 語尾処理
+- その他の調声
+
+を行った制作者によって生成される。
+
+したがって、
+
+「Voice Sourceの権利者」
+≠
+「Performance / 歌い方の権利・来歴主体」
+
+として明示的に分離する必要がある。
+
+
+================================================================
+変更1: Teacher概念を分解
+================================================================
+
+旧:
+  teacher_reference: PJS
+
+暗黙的に、
+  Voice Source
+  Performance Source
+  Performance Author
+を同一主体として扱う余地があった。
+
+新:
+
+performance_source:
+  id: PJS
+  role: EXTERNAL_PERFORMANCE_SOURCE
+
+provenance:
+  voice_source:
+    owner: <entity>
+    source_id: <id>
+
+  performance_author:
+    performer: <entity>
+    performance_editor: <entity>
+
+  synthesis:
+    engine: <engine>
+    voicebank: <voicebank>
+
+  composition:
+    composer: <entity>
+    lyricist: <entity>
+
+原則:
+  Teacher ≠ Voice Identity Owner
+  Teacher ≠ Performance Author
+  Voice Source ≠ Performance Source
+
+
+================================================================
+変更2: rights_manifestを4層へ分離
+================================================================
+
+rights_manifest:
+
+  voice_identity_rights:
+    # Voice / VoiceBank / speaker identityの権利
+
+  performance_rights:
+    # 歌唱、調声、演奏表現、UST等の権利・許諾
+
+  composition_rights:
+    # 楽曲・旋律・歌詞等
+
+  recording_master_rights:
+    # 使用する生成音声・録音物自体の権利
+
+
+Hard Gate:
+  4層すべてについて provenance / permission を確定する。
+
+禁止:
+  VoiceBank利用許諾
+  ↓
+  Performance利用許諾も得た
+
+と自動的に解釈すること。
+
+
+================================================================
+変更3: 「歌い方」の定義を修正
+================================================================
+
+旧:
+  「PJSの歌い方を移植する」
+
+新:
+  「PJS由来Performance Sourceから抽出した
+   Performance Residual / Performance Traitを移植する」
+
+Performance Trait例:
+
+  - relative_F0
+  - duration_ratio
+  - onset_offset
+  - energy_envelope
+  - vibrato
+  - phrase_dynamics
+  - attack_behavior
+  - release_behavior
+  - articulation_timing
+
+除外対象:
+
+  - speaker embedding
+  - timbre identity
+  - formant identity
+  - spectral identity
+  - Voice Genome
+  - source-specific identity representation
+
+
+================================================================
+変更4: Common Teacher Transfer名称の見直し
+================================================================
+
+推奨:
+
+旧:
+  Common Teacher Transfer
+
+新候補:
+  Common Performance Lesson
+  Common Performance Transfer
+  Performance Residual Transfer
+
+理由:
+  「Teacher」という語がVoice SourceとPerformance Authorを
+  混同させる可能性があるため。
+
+
+================================================================
+変更5: Source Provenance Gate追加
+================================================================
+
+RUN9-G1 Rights Gateを拡張。
+
+R9-G1:
+  RIGHTS_AND_PROVENANCE_GATE
+
+PASS条件:
+
+  [ ] Voice Sourceが特定されている
+  [ ] Voice利用条件が確認されている
+  [ ] Performance Authorが特定されている
+  [ ] Performance利用条件が確認されている
+  [ ] Composition権利が確認されている
+  [ ] Recording/Master権利が確認されている
+  [ ] Teacher SourceとVoice Identity Sourceを区別して記録
+  [ ] 不明な権利主体が存在しない
+
+FAIL:
+  RIGHTS_PROVENANCE_UNRESOLVED
+
+
+================================================================
+変更6: LessonRecord標準仕様へ追加
+================================================================
+
+LessonRecord:
+
+  lesson_id:
+  performance_source:
+  voice_source:
+  performance_author:
+  composition_source:
+  recording_source:
+
+  extracted_traits:
+    - relative_F0
+    - duration
+    - timing
+    - dynamics
+    - articulation
+
+  explicitly_excluded_identity_traits:
+    - speaker_embedding
+    - timbre_embedding
+    - formant_profile
+    - identity_vector
+
+  rights_manifest:
+  provenance_manifest:
+
+
+================================================================
+変更7: RUN9本体の実験条件は変更しない
+================================================================
+
+今回の外部指摘によって、
+
+- Adapter architecture
+- Backbone freeze
+- Genome freeze
+- Identity freeze
+- Lesson budget
+- 学習回数
+- 評価metric
+- Pareto/Gate条件
+
+は原則変更しない。
+
+変更対象は、
+
+  provenance
+  rights
+  terminology
+  Teacher/Voice/Performanceの概念分離
+
+のみとする。
+
+理由:
+  RUN9開始後に新規metric・Teacher・比較条件を追加すると
+  single intervention契約を破壊するため。
+
+
+================================================================
+変更8: 現RUN9の処理方針
+================================================================
+
+CASE A:
+  まだLesson Freeze / 本学習開始前
+
+→ design_revision 0.2へ更新
+→ provenance schemaを追加
+→ Rights Gate再確認
+→ RUN9続行
+
+
+CASE B:
+  本学習開始済みだが、
+  Performance Sourceの権利来歴が確定している
+
+→ 実験条件を変更せず続行
+→ provenance補記のみ実施
+
+
+CASE C:
+  本学習開始済みで、
+  Performance Author / rightsが未確定
+
+→ 現attemptを
+
+  BLOCKED:
+    RIGHTS_PROVENANCE_UNRESOLVED
+
+として保存。
+
+→ design_revision 0.2
+→ 権利来歴確定
+→ 新attempt開始
+
+
+================================================================
+RUN9への理論的影響
+================================================================
+
+今回の外部指摘はRUN9の中心仮説を否定しない。
+
+むしろ、
+
+Voice Identity
+      ≠
+Performance
+
+だけでなく、
+
+Voice Source
+      ≠
+Performance Source
+      ≠
+Performance Author
+
+であることが明確になった。
+
+したがってRUN9の中心問題は、
+
+「Teacherの声を学習する」
+
+ではなく、
+
+「権利来歴が明確なPerformance Sourceから
+ Identity非依存のPerformance Traitのみを抽出し、
+ Target Voice Identityを保持したまま移送できるか」
+
+と再定義する。
+
+
+================================================================
+推奨正典変更
+================================================================
+
+RUN9 v0.1
+    ↓
+RUN9 v0.2
+
+変更種別:
+  NON-ARCHITECTURAL DESIGN CORRECTION
+
+理由:
+  External expert reviewによる
+  Performance provenance / rights modelの不足修正
+
+中核仮説:
+  維持
+
+実験条件:
+  維持
+
+追加:
+  Source Provenance
+  Rights Separation
+  Performance Authorship
+  Identity/Performance terminology refinement
+================================================================
