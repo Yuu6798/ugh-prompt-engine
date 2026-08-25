@@ -9692,17 +9692,84 @@ def test_fix323_1_prewired_test_docstring_reflects_pinned_branch_not_stale_pendi
 
 
 def test_fix323_1_repo_wide_grep_finds_no_other_stale_practice_manifest_claim() -> None:
-    """RUN9_CONTRACT.yaml + README.md 全体を掃討し、同族の「practice
-    manifest は未生成/PENDING のまま」という現在形の残存がゼロであることを
-    確認する（凍結文書 = DESIGN_*.md・POR/DERIVED txt・inputs/*.json の
-    既存ファイル・domains/・founders/・evaluation/probe_manifest.json は
+    """RUN9_CONTRACT.yaml + README.md + run9_schema.py + practice_split_
+    builder.py を掃討し、同族の「practice manifest は未生成/PENDING の
+    まま」という現在形の残存がゼロであることを確認する（PR #323 第2巡
+    指摘, P2, 採用, Fix 2 — 走査対象を run9_schema.py/practice_split_
+    builder.py へ拡張。読み取り専用参照の gate_synth.py/score.py/
+    phoneme_jp.py、凍結文書 = DESIGN_*.md・POR/DERIVED txt・inputs/*.json
+    の既存ファイル・domains/・founders/・evaluation/probe_manifest.json は
     対象外）。"""
     stale_markers = (
         "practice manifest は未生成",
         "practice manifest は引き続き PENDING",
         "practice split manifest は未生成",
     )
-    for path in (CONTRACT_PATH, _RUN_DIR / "README.md"):
+    swept_paths = (
+        CONTRACT_PATH,
+        _RUN_DIR / "README.md",
+        _RUN_DIR / "run9_schema.py",
+        _RUN_DIR / "practice_split_builder.py",
+    )
+    for path in swept_paths:
         text = path.read_text(encoding="utf-8")
         for marker in stale_markers:
             assert marker not in text, f"{path.name} に陳腐化した記述が残っている: {marker!r}"
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第2巡指摘（P2, 採用, Fix 2）: 第1巡 sweep
+# （test_fix323_1_repo_wide_grep_finds_no_other_stale_practice_manifest_
+# claim、当時は CONTRACT_PATH/README のみ走査）が run9_schema.py:4296-4298
+# / 4314-4316 の同族 stale コメント（「practice_audio_split_manifest_sha/
+# education_technique_lesson_manifest_sha は共に PENDING」現在形）を見逃して
+# いた。第1巡と同じく、コメントのみを是正しロジック・凍結表・定数値は
+# 一切変更しない（`_P5_DEFERRED_VERIFICATION_BLOCKED_BY` の2欄列挙は
+# 「probe manifest 発行時点の凍結宣言」として正当なまま不変）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_2_run9_schema_comment_reflects_practice_pinned_education_pending() -> None:
+    """run9_schema.py の `_P5_DEFERRED_VERIFICATION_BLOCKED_BY` 周辺コメント
+    が、practice 側は 2026-08-25 実 PJS 実行で PINNED 化済み・education 側は
+    引き続き PENDING という現行の非対称状態を正確に記述していること。"""
+    schema_text = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert "2026-08-25 実 PJS practice split" in schema_text
+    assert "practice_audio_split_manifest_sha` は PINNED 化された" in schema_text
+    assert "education_technique_lesson_manifest_sha` が依然 PENDING" in schema_text
+
+
+def test_fix323_2_run9_schema_historical_stale_comment_marked_superseded() -> None:
+    """是正済みの旧コメントが単純削除ではなく「〔履歴: … → 解消済み〕」
+    相当の superseded 明示で保持されていること（AGENTS.md 運用: 純粋に
+    歴史的な記述は削除せず superseded 明示で保持する。第1巡 Fix 1・PR #321
+    Fix 2 と同じ規約）。"""
+    schema_text = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert schema_text.count("〔履歴:") >= 2
+    assert "stale になった" in schema_text
+
+
+def test_fix323_2_frozen_probe_manifest_blocked_by_untouched_after_schema_comment_fix() -> None:
+    """凍結済み `evaluation/probe_manifest.json`（sha pin 済み）は本 Fix で
+    一切改変されていないこと——`blocked_by` が practice/education 両欄を
+    列挙し続けるのは「probe manifest 発行時点の凍結宣言」として正当で
+    あり、practice 側が事後に PINNED 化されたことは凍結済み manifest の
+    改変理由にならない（RUN9_CONTRACT.yaml `probe_manifest_sha` pin 値との
+    一致がこのテストの実体保証——凍結境界の直接確認）。"""
+    probe_manifest_path = _RUN_DIR / "evaluation" / "probe_manifest.json"
+    field = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))["probe_manifest_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(probe_manifest_path)
+    manifest_data = json.loads(probe_manifest_path.read_text(encoding="utf-8"))
+    p5 = next(p for p in manifest_data["probes"] if p["probe_id"] == "P5")
+    assert set(p5["deferred_verification"]["blocked_by"]) == {
+        "practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha",
+    }
+
+
+def test_fix323_2_p5_deferred_verification_blocked_by_constant_unchanged() -> None:
+    """Fix 2 はコメントのみの変更であり、`_P5_DEFERRED_VERIFICATION_
+    BLOCKED_BY`（凍結集合の実体）自体は変更していないことの直接確認。"""
+    assert m._P5_DEFERRED_VERIFICATION_BLOCKED_BY == frozenset(
+        {"practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha"}
+    )

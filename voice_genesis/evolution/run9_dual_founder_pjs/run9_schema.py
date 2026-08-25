@@ -4293,9 +4293,14 @@ _P5_MIDI_HIGH = 90
 # `_P5_MIDI_HIGH` 域内制約 + P0 中央域外周制約）は「本 manifest 内の他
 # probe（P0/P1）の使用域の外周・baseline domain 内であること」しか
 # 証明しない——実際の学習分布（PJS practice/education 素材）との分離は
-# 検証していない。`practice_audio_split_manifest_sha`/
+# 検証していない。〔履歴: 当初は「`practice_audio_split_manifest_sha`/
 # `education_technique_lesson_manifest_sha` が PENDING の現時点ではこの
-# 分離検証は実行不能（Fix 14/18 と同じ「主張を収集済み証拠へ縮小 + 再入
+# 分離検証は実行不能」と記していたが、2026-08-25 実 PJS practice split
+# 実行により `practice_audio_split_manifest_sha` は PINNED 化された
+# （下記 `_P5_DEFERRED_VERIFICATION_BLOCKED_BY` コメント参照）→
+# `education_technique_lesson_manifest_sha` が依然 PENDING のため分離
+# 検証は引き続き実行不能のまま — 解消はしていない〕。この分離検証は
+# 依然実行不能（Fix 14/18 と同じ「主張を収集済み証拠へ縮小 + 再入
 # 条件の事前登録」規約 — 検証不能な主張を凍結しない）。P5 probe レベルへ
 # `deferred_verification` ブロック（機械可読）を要求し、(a) 現状の
 # status literal（未検証であることの正直な宣言） (b) 検証を塞いでいる
@@ -4311,9 +4316,21 @@ _P5_DEFERRED_VERIFICATION_KEYS: FrozenSet[str] = frozenset(
 # status literal: 「学習分布との分離は未検証」の正直な宣言（Fix 14 の
 # HELDOUT_INDEPENDENCE_STATUS と同じ規約 — 検証範囲に正直な固定文字列）。
 P5_DEFERRED_VERIFICATION_STATUS = "TRAINING_DISTRIBUTION_SEPARATION_NOT_YET_VERIFIABLE"
-# 検証を塞いでいる RUN9_CONTRACT.yaml pin 欄の凍結集合。この2欄は共に
-# PENDING（PRACTICE/education 教材ハーネス未実装）——値そのものではなく
-# 欄名の集合を凍結する（値は RUN9_CONTRACT.yaml 側が別途 pin する）。
+# 検証を塞いでいる RUN9_CONTRACT.yaml pin 欄の凍結集合。〔履歴: 当初
+# コメントは「この2欄は共に PENDING（PRACTICE/education 教材ハーネス
+# 未実装）」だったが、2026-08-25 実 PJS practice split 実行により
+# `practice_audio_split_manifest_sha` は PINNED 化され、この記述は
+# stale になった → `education_technique_lesson_manifest_sha` は引き続き
+# PENDING（EDUCATION 側 builder 未着手）〕。凍結集合そのもの（2欄の
+# 欄名）は本 Fix でも変更しない——`blocked_by` は「probe manifest
+# （`evaluation/probe_manifest.json`、sha pin 済み・凍結）発行時点で
+# P5 分離検証を塞いでいた pin 欄の宣言」であり、`practice_audio_split_
+# manifest_sha` が事後に PINNED 化されたからといって凍結済み manifest の
+# `blocked_by` 列挙から外れるわけではない（`evaluation/probe_manifest.json`
+# 自体は改変しない——凍結境界）。実際に分離検証を実行可能にするのは
+# `education_technique_lesson_manifest_sha` の PINNED 化のみ（両欄が
+# 揃わないと検証不能な設計のまま——値そのものではなく欄名の集合を凍結
+# する。値は RUN9_CONTRACT.yaml 側が別途 pin する）。
 _P5_DEFERRED_VERIFICATION_BLOCKED_BY: FrozenSet[str] = frozenset(
     {"practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha"}
 )
