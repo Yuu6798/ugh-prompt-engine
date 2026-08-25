@@ -10010,8 +10010,7 @@ def test_fix323_7a_readme_checksum_steps_use_sha256sum_dash_c_not_bare_print() -
     ) in readme_text
     assert (
         'echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6'
-        "  voice_genesis/evolution/run9_dual_founder_pjs/inputs/"
-        'practice_audio_split_manifest.json" | sha256sum -c -'
+        '  /tmp/pjs_producer_output.json" | sha256sum -c -'
     ) in readme_text
     assert "assert d['row_order_sha256'] ==" in readme_text
     # 旧・非 fail-closed 形式（コメント併記のみ）が残っていないこと
@@ -10032,3 +10031,52 @@ def test_fix323_7b_readme_downgrades_pr_commit_to_attestation_and_prioritizes_gi
     assert "squash merge" in readme_text and "merge commit" in readme_text
     # 「第一の再現ポインタ」節が「生成イベントの attestation」節より先に出現すること
     assert readme_text.index("第一の再現ポインタ") < readme_text.index("attestation（証跡・降格記録）")
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第8巡指摘（P2, 採用, Fix 8）: レシピ step 4 は
+# 現在 checkout の run9_schema.py を import しており、_song_score()/
+# assign_split() が消費する LEARNING_SEED や検証ロジックが producer
+# revision と異なり得る。記録・照合済みの producer sha は
+# practice_split_builder.py 単体のみで、run9_schema.py 側の変更では
+# test_fix323_6_readme_builder_sha_matches_actual_file が green のまま
+# レシピが pin バイトを再現できなくなる欠陥だった。是正方式は指摘の
+# 第1選択肢「producer tree からの実行」（git worktree）を採用——第2選択肢
+# （依存閉包の全ファイル sha pin）は run9_schema.py がコメント編集で頻繁に
+# 変わり（本 PR の Fix 2 が実例）脆いため不採用。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_8_readme_recipe_executes_from_producer_tree_via_git_worktree() -> None:
+    """README.md のレシピ step 4 が、`git log --follow` で特定した
+    producer revision を `git worktree add` で実際に checkout し、その
+    worktree 内の `practice_split_builder.py`/`run9_schema.py`（依存閉包
+    全体）から実行する逐語コマンドを含んでいること——現在 checkout の
+    `run9_schema.py` を import する旧手順（`LEARNING_SEED`/検証ロジック
+    の producer revision との差異を見逃す）ではないことの確認。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "producer tree で実行" in readme_text
+    assert "git worktree add /tmp/pjs_producer" in readme_text
+    assert "git worktree remove /tmp/pjs_producer" in readme_text
+    assert (
+        "sys.path.insert(0, \"/tmp/pjs_producer/voice_genesis/evolution/"
+        "run9_dual_founder_pjs\")"
+    ) in readme_text
+    # in-place 実行が等価となる条件（現在 checkout == producer revision）の注記
+    assert "in-place 実行が等価" in readme_text
+
+
+def test_fix323_8_readme_clarifies_dependency_closure_is_full_package_not_builder_alone() -> None:
+    """README.md の producer pin 意味論節が、依存閉包は
+    `practice_split_builder.py` 単体ではなく producer revision 時点の
+    `run9_dual_founder_pjs/` パッケージ全体であり、builder sha256 記録は
+    「split ロジック本体の同一性の証跡」に過ぎず閉包全体を覆わないことを
+    明記していること。閉包全体を pin する手段として、依存ファイル個別の
+    sha pin 方式ではなく producer tree 実行を選んだ理由（run9_schema.py
+    がコメント編集で頻繁に変わり脆いこと、本 PR の Fix 2 が実例）も
+    明記されていること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "依存閉包の範囲" in readme_text
+    assert "split ロジック\n本体の同一性の証跡" in readme_text
+    assert "この閉包全体を覆わない" in readme_text
+    assert "コメント編集\nだけで頻繁に変わる" in readme_text

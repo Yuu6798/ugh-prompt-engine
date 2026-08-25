@@ -669,41 +669,73 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    # corpus_root = extracted/PJS_corpus_ver1.1
    #   （pjsNNN/pjsNNN.lab + pjsNNN/pjsNNN_song.wav を含む階層）
    ```
-4. **生成**（`voice_genesis/evolution/run9_dual_founder_pjs/` を
-   カレントディレクトリまたは `sys.path` に含めて実行。
-   `build_practice_split_manifest()` の `expected_corpus_identity` は
-   **必須引数**——省略不可・デフォルト値なしで、渡した値と展開コーパスから
-   再計算した `expanded_corpus_identity_sha256` が厳密一致しない場合
-   `Run9ValidationError` で fail-closed 拒否する）:
-   ```python
-   import sys
-   sys.path.insert(0, "voice_genesis/evolution/run9_dual_founder_pjs")
-   import practice_split_builder as psb
-   import run9_schema as m
+4. **生成（producer tree で実行）**（Codex bot レビュー PR #323 第8巡
+   指摘, P2, 採用, Fix 8 — 現在 checkout の `run9_schema.py` を import
+   すると、`assign_split()` が消費する `LEARNING_SEED` や検証ロジックが
+   producer revision と異なる可能性がある。記録・照合済みの producer
+   sha は `practice_split_builder.py` 単体のみで、`run9_schema.py` 側の
+   seed/検証/出力パス変更ではこの sha 照合が green のままレシピが pin
+   バイトを再現できなくなり得る——依存閉包全体（上記「依存閉包の範囲」
+   参照）を実際に checkout してから実行する）:
 
-   manifest = psb.build_practice_split_manifest(
-       "extracted/PJS_corpus_ver1.1",
-       expected_corpus_identity=psb.EXPANDED_CORPUS_IDENTITY_SHA256,
-   )
-   m.PRACTICE_MANIFEST_PATH.write_bytes(psb.dump_practice_split_manifest_bytes(manifest))
+   a. producer revision を特定（既記載の「第一の再現ポインタ」）:
+      ```
+      producer_rev=$(git log --follow --format=%H -1 -- voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json)
+      echo "$producer_rev"
+      ```
+   b. producer tree を worktree として取り出す:
+      ```
+      git worktree add /tmp/pjs_producer "$producer_rev"
+      ```
+      （現在 checkout がすでに producer revision と一致している場合
+      ——`git diff "$producer_rev"..HEAD -- voice_genesis/evolution/
+      run9_dual_founder_pjs` が空——は in-place 実行が等価であり、
+      worktree 手順は省略してよい。）
+   c. worktree 内の `run9_dual_founder_pjs` を `sys.path` 先頭にして
+      実行し、出力を worktree 外の一時パスへ書き出す（現在 checkout の
+      `PRACTICE_MANIFEST_PATH` を直接上書きせず、生成に使ったコードと
+      出力先を分離する）:
+      ```python
+      import sys
+      sys.path.insert(0, "/tmp/pjs_producer/voice_genesis/evolution/run9_dual_founder_pjs")
+      import practice_split_builder as psb
+
+      manifest = psb.build_practice_split_manifest(
+          "extracted/PJS_corpus_ver1.1",
+          expected_corpus_identity=psb.EXPANDED_CORPUS_IDENTITY_SHA256,
+      )
+      with open("/tmp/pjs_producer_output.json", "wb") as f:
+          f.write(psb.dump_practice_split_manifest_bytes(manifest))
+      ```
+      （`expected_corpus_identity` に渡した `psb.EXPANDED_CORPUS_
+      IDENTITY_SHA256` はモジュール冒頭でハードコード転記された定数
+      ——照合対象はこのコード自体に焼き込まれており、外部ファイルからの
+      読み込みではない。**必須引数**——省略不可・デフォルト値なしで、
+      渡した値と展開コーパスから再計算した `expanded_corpus_identity_
+      sha256` が厳密一致しない場合 `Run9ValidationError` で fail-closed
+      拒否する）。
+   d. worktree を片付ける:
+      ```
+      git worktree remove /tmp/pjs_producer
+      ```
+5. **照合**（一時パスの生成物が pin 値と一致することを確認——Fix 7a の
+   `sha256sum -c -`/python `assert` 形式を維持。Fix 8 で照合対象を
+   worktree 出力の一時パスへ変更）:
    ```
-   （`expected_corpus_identity` に渡した `psb.EXPANDED_CORPUS_IDENTITY_
-   SHA256` はモジュール冒頭でハードコード転記された定数——照合対象は
-   このコード自体に焼き込まれており、外部ファイルからの読み込みではない）。
-5. **照合**（生成物のバイト列が pin 値と一致することを確認——Fix 7a:
-   ここも `sha256sum -c -` へ揃え、不一致を非零 exit で検出する）:
-   ```
-   echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6  voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json" | sha256sum -c -
+   echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6  /tmp/pjs_producer_output.json" | sha256sum -c -
    # （= RUN9_CONTRACT.yaml practice_audio_split_manifest_sha の pin 値。
    #    不一致なら "FAILED" + 非零 exit。）
    ```
-   manifest 内 `row_order_sha256` フィールドの値も
-   `6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a`
-   と一致することを、非零 exit で失敗する形で確認する:
+   一致確認後、必要なら現在 checkout の `PRACTICE_MANIFEST_PATH`
+   （`voice_genesis/evolution/run9_dual_founder_pjs/inputs/
+   practice_audio_split_manifest.json`）へ配置する（`cp` 等。producer
+   revision が現在 checkout と一致する通常運用ではこの配置は不要——
+   コミット済みファイルがすでに同一バイトのため）。`row_order_sha256`
+   の照合も一時パスに対して同様に行う:
    ```
    python3 -c "
    import json
-   d = json.load(open('voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json'))
+   d = json.load(open('/tmp/pjs_producer_output.json'))
    assert d['row_order_sha256'] == '6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a', d['row_order_sha256']
    print('row_order_sha256 OK')
    "
@@ -724,6 +756,24 @@ pin として機能する（fail-closed）。したがって本レシピは「pi
 バイトを再生成する手順」であり、producer 変更後の再生成は新しい repin
 （PR レビュー経由での pin 値更新）として扱う——変更前後のバイトを
 黙って同一 pin の下に混在させることは構造的にできない。
+
+**依存閉包の範囲**（Codex bot レビュー PR #323 第8巡指摘, P2, 採用,
+Fix 8 — 明確化）: 生成の依存閉包は `practice_split_builder.py` 単体
+ではなく、**producer revision 時点の `voice_genesis/evolution/
+run9_dual_founder_pjs/` パッケージ全体**である。`build_practice_split_
+manifest()` は同ディレクトリの `run9_schema.py`（`Run9ValidationError`/
+`_require_no_duplicate_list_items`/`_compute_canonical_pin_sha256` 等）
+を import し、`assign_split()` が消費する `LEARNING_SEED` もこのファイル
+定義。記録・照合している builder sha256（下記）は**「split ロジック
+本体の同一性の証跡」に過ぎず、この閉包全体を覆わない**——
+`run9_schema.py` 側の `LEARNING_SEED`/検証ロジック/出力パス定数が変わって
+も builder sha256 の照合は green のままレシピが pin バイトを再現できなく
+なり得る（`practice_split_builder.py` は無変更のため）。閉包全体を pin
+するのは特定ファイルの sha 列挙ではなく、下記「生成」ステップが行う
+**producer tree からの実行**である——`run9_schema.py` はコメント編集
+だけで頻繁に変わるファイルであり（本 PR の Fix 2 が実例——コメントのみの
+是正でもファイル実バイトの sha256 は変わる）、依存閉包の全ファイルを
+個別に sha pin する方式は再 pin の頻度が高く脆いため不採用とした。
 
 **producer revision の具体記録**（Codex bot レビュー PR #323 第6巡指摘,
 P2, 採用, Fix 6 — 第5巡の整理は「生成コミット自体が producer pin」と
