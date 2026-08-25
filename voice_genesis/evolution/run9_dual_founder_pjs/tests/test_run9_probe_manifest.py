@@ -1866,3 +1866,85 @@ def test_fix19_helper_frozen_value_equal_rejects_bool_int_confusion() -> None:
     assert m._frozen_factor_value_equal(True, 1) is False
     assert m._frozen_factor_value_equal(1, True) is False
     assert m._frozen_factor_value_equal("57->65", "57->65") is True
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第10巡指摘 Fix 20（P2, 採用）: `tempo_bpm` は正値検査のみだった
+# ——amendment で cell 別に tempo を変えても水準ラベル検証を保ったまま
+# 通過していた（gate_synth::run_pipeline は各 cell の tempo で beats->ms
+# 換算するため、tempo を変えるだけで duration 比較が黙って交絡する）。
+# Fix 19 と同方式（cell 非依存の外部凍結表）で、全 probe（P0-P5）の全 cell
+# の tempo_bpm を固定する。
+# ---------------------------------------------------------------------------
+
+
+def _p5_probe(data: Dict[str, Any]) -> Dict[str, Any]:
+    (p5,) = [p for p in data["probes"] if p["probe_id"] == "P5"]
+    return p5
+
+
+def test_fix20_positive_real_manifest_passes_frozen_tempo_check(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """回帰確認: 実 manifest（全 cell の tempo は元々凍結表と一致していた）
+    は Fix 20 の外部アンカー検査でも引き続き通過する。"""
+    m.validate_probe_manifest(manifest_data)
+
+
+def test_fix20_frozen_table_covers_all_six_probes() -> None:
+    assert set(m._PROBE_EXPECTED_TEMPO_BPM.keys()) == set(m.PROBE_IDS)
+
+
+def test_fix20_p0_frozen_tempo_matches_score_py(manifest_data: Dict[str, Any]) -> None:
+    """Fix 20 の静的凍結値は Fix 12 の動的照合（score.py TEMPO_BPM）と
+    整合していることを確認する——二重防御が矛盾しない。"""
+    score_py_module = m._load_score_py_module()
+    assert m._PROBE_EXPECTED_TEMPO_BPM["P0"] == score_py_module.TEMPO_BPM
+
+
+def test_negative_fix20_p1_short_cell_tempo_changed_core_scenario(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """本指摘の核心シナリオ: P1 の short cell だけ tempo を 18 BPM に
+    変える——duration の水準ラベル（levels.duration='short'）や note の
+    duration_beats=1 自体は無改変のまま、実時間換算だけが交絡する。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p1_probe(bad), "P1-REG-LOW-DUR-SHORT")
+    cell["tempo_bpm"] = 18.0
+    with pytest.raises(m.Run9ValidationError, match="frozen expected tempo"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix20_p0_tempo_changed(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p0_probe(bad)["cells"][0]["tempo_bpm"] = 100.0
+    with pytest.raises(m.Run9ValidationError, match="frozen expected tempo"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix20_p3_cell_tempo_diverges_from_probe_frozen_value(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """P3 の1 cell だけ tempo を変える——他 cell との相互不一致というより、
+    probe 単位で凍結された単一の期待値からの逸脱として検出される。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p3_probe(bad), "P3-RELEASE-SHORT-VOICED")
+    cell["tempo_bpm"] = 90.0
+    with pytest.raises(m.Run9ValidationError, match="frozen expected tempo"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix20_p4_tempo_changed(manifest_data: Dict[str, Any]) -> None:
+    """P4（held-out、他 probe と異なる 80.0 BPM）も凍結対象であることを
+    確認する。"""
+    bad = _mutate(manifest_data)
+    _p4_probe(bad)["cells"][0]["tempo_bpm"] = 72.0
+    with pytest.raises(m.Run9ValidationError, match="frozen expected tempo"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix20_p5_tempo_changed(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p5_probe(bad)["cells"][0]["tempo_bpm"] = 60.0
+    with pytest.raises(m.Run9ValidationError, match="frozen expected tempo"):
+        m.validate_probe_manifest(bad)

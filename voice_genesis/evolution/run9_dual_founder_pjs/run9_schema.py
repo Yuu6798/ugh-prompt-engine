@@ -3391,6 +3391,31 @@ _PROBE_FACTORIAL_AXES: Mapping[str, Tuple[str, str]] = types.MappingProxyType({
 })
 
 # ---------------------------------------------------------------------------
+# PR #322 第10巡指摘 Fix 20（P2, 採用）: `tempo_bpm` は正値検査のみで、
+# amendment で cell 別に tempo を変えても水準ラベル検証を保ったまま通過
+# していた——`gate_synth::run_pipeline` は各 cell の tempo で beats->ms
+# 換算するため、例えば P1 の short cell だけ 18 BPM に変えると、検証済み
+# 「1 拍 note」が 72 BPM 基準の 4 拍相当の実時間になり、duration 比較が
+# 黙って交絡する。Fix 19 と同方式（validator 内凍結表による外部アンカー
+# 化・cell 非依存）で、probe 別の期待 tempo を全 probe（P1-P3 の factor
+# 比較 probe だけでなく P0/P4/P5 も含む）で固定し、全 cell の tempo_bpm が
+# 凍結値と厳密一致することを要求する。amendment には本凍結表の同時更新が
+# 必要——意図的な二重 pin（Fix 8/9/19 と同じ規約）。P0 の凍結値は
+# `voice_genesis/singer/score.py` の `TEMPO_BPM` と一致すべき値であり、
+# Fix 12 の逐語比較（score_py_module.TEMPO_BPM との動的照合）と独立に
+# 整合する（本表は静的 pin、Fix 12 は動的照合——二重防御）。現行 manifest
+# の実 tempo 値から転記して凍結。
+# ---------------------------------------------------------------------------
+_PROBE_EXPECTED_TEMPO_BPM: Mapping[str, float] = types.MappingProxyType({
+    "P0": 72.0,
+    "P1": 72.0,
+    "P2": 72.0,
+    "P3": 72.0,
+    "P4": 80.0,
+    "P5": 72.0,
+})
+
+# ---------------------------------------------------------------------------
 # PR #322 第9巡指摘 Fix 19（P2, 採用）: Fix 3 の軸別意味照合は
 # factor_levels.axes の宣言値と**対応 cell の note フィールド**の内部
 # 自己整合性しか見ない——協調編集（例: axes.register.low を 57->58 に
@@ -4320,7 +4345,22 @@ def _validate_probe_cell(
         )
     seen_cell_ids[cell_id] = field
 
-    _require_positive_finite_number(cell["tempo_bpm"], field=f"{field}.tempo_bpm")
+    tempo_bpm = _require_positive_finite_number(cell["tempo_bpm"], field=f"{field}.tempo_bpm")
+    # PR #322 第10巡指摘 Fix 20（P2, 採用）: tempo_bpm は正値検査のみで、
+    # amendment で cell 別に tempo を変えても水準ラベル検証を保ったまま
+    # 通過していた——gate_synth::run_pipeline は各 cell の tempo で
+    # beats->ms 換算するため、tempo を変えるだけで duration 比較が黙って
+    # 交絡し得る欠陥だった（Fix 19 と同方式: cell 非依存の外部凍結表で
+    # 全 probe の全 cell の tempo を固定する）。
+    expected_tempo = _PROBE_EXPECTED_TEMPO_BPM.get(probe_id)
+    if expected_tempo is not None and not _numeric_equal(tempo_bpm, expected_tempo):
+        raise Run9ValidationError(
+            f"{field}.tempo_bpm = {tempo_bpm!r} does not match the frozen expected tempo "
+            f"{expected_tempo!r} for probe {probe_id!r} (Fix 20: amendment requires updating both "
+            "the manifest and _PROBE_EXPECTED_TEMPO_BPM — intentional double pin, same convention "
+            "as Fix 8/9/19; P0's frozen value must also match voice_genesis/singer/score.py "
+            "TEMPO_BPM per Fix 12's separate dynamic check)"
+        )
 
     notes = cell["notes"]
     if not isinstance(notes, list) or not notes:
