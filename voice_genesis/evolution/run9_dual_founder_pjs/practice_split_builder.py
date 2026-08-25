@@ -473,6 +473,14 @@ def build_acoustic_inventory_sidecar(
     manifest は、以下 4 層のいずれかで read/existence 判定より**前**に
     fail-closed 拒否する（PR #321 review 三巡にわたる指摘の到達点）:
 
+    **前提条件（境界宣言）**: 本関数は quiescent corpus（実行中に
+    `corpus_root` 配下が変更されないこと）を前提とする単一操作者の
+    オフライン build ステップである。identity 検証（下記 1）と計測 read の
+    間に corpus を並行変更・symlink 差し替えする書き手に対する原子性
+    （read-once 化）は保証しない——4 層検証が閉じる対象は「静止状態の
+    誤入力・偽造入力」であり、build 実行中の並行変更は本 advisory 成果物の
+    脅威モデル外（PR #321 review 第 4 巡指摘への境界宣言）。
+
     1. **corpus identity**（Fix 3）: `corpus_root` 自体が `manifest` の
        由来コーパスであることを検証する。corpus A 用の valid manifest に
        別内容の corpus_root B（同名 song_id を含むが中身が異なる）を渡す
