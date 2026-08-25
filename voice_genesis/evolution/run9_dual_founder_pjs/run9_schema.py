@@ -3335,6 +3335,19 @@ _CELL_SOURCE_KEYS: FrozenSet[str] = frozenset(
     {"transcribed_from", "transcribed_from_sha256", "transcription_scope", "verbatim"}
 )
 
+# PR #322 第1巡指摘 Fix 2（P2, 採用）: P1-P3 は `factor_levels` の形状と
+# cell 対応の双方向検証を要求する。cell 側にどの水準の組かを機械可読に
+# 持たせる `levels` メタデータ（cell_id 文字列のパースに依存しない）。
+_CELL_LEVELS_KEY = "levels"
+# `factor_levels` が形状検証・cell 対応検証の対象とする probe（水準表を
+# 持つ probe と同一集合 — `_PROBE_REQUIRED_EXTRA_KEYS` の "factor_levels"
+# 要求 probe と揃える）。
+_FACTOR_LEVEL_PROBE_IDS: FrozenSet[str] = frozenset({"P1", "P2", "P3"})
+# `factor_levels` 内の「軸」節を保持する必須キー。他の記述的メタデータ
+# キー（`source_precedent`/`medial_filler_kana` 等）は axes とは別に
+# 自由記述のまま許容する（本 Fix の対象は axes の形状・cell 対応のみ）。
+_FACTOR_LEVELS_AXES_KEY = "axes"
+
 _NOTE_KEYS: FrozenSet[str] = frozenset(
     {"kana", "pitch_midi", "duration_beats", "phrase_index", "is_phrase_final"}
 )
@@ -3359,7 +3372,7 @@ _P3_DIAGNOSTIC_ROLE_MARKER = "diagnostic_when_trf_uncalibrated"
 
 _RENDER_CONTRACT_KEYS: FrozenSet[str] = frozenset({
     "harness", "backbone_ref", "performance_seed", "performance_seed_note",
-    "same_conditions_note", "pcm_publication_discipline",
+    "same_conditions_note", "pcm_publication_discipline", "harness_runtime_seed_policy",
 })
 _RENDER_CONTRACT_HARNESS = "voice_genesis/foundry/s1_gate/gate_synth.py::run_pipeline"
 _BACKBONE_REF_KEYS: FrozenSet[str] = frozenset({"contract_path", "contract_field"})
@@ -3368,15 +3381,54 @@ _BACKBONE_REF_CONTRACT_FIELD = "backbone_runtime_bundle_sha"
 # 学習 seed (909002) と混同しないことのマーカー（performance_seed_note が
 # 保持しなければならない）。
 _LEARNING_SEED_DISAMBIGUATION_MARKER = str(LEARNING_SEED)
+# PR #322 第1巡指摘 Fix 1（P1, 採用）: `performance_seed` (909001) は
+# genome/ControlProfile レベルの performance policy seed（v0.1 §9.3・
+# founders/*.json `performance_seed` 欄・`validate_founder_genome()` が
+# 厳格検証する対象）であり、宣言 harness（`gate_synth.py::run_pipeline`）
+# 内部の ONNX runtime 乱数 seed ではない——両者を混同しないことの
+# マーカー（`performance_seed_note` が保持しなければならない）。
+_PERFORMANCE_SEED_GENOME_POLICY_MARKER = "performance policy seed"
+_PERFORMANCE_SEED_NOT_ONNX_RUNTIME_MARKER = "ONNX runtime の乱数 seed ではない"
 # §27 item 13「shared performance seed is identical」/ item 18「birth
 # probes use same score/seed/ExecutionProfile」の参照マーカー。
 _RENDER_CONTRACT_SECTION27_MARKER = "§27"
 _RENDER_CONTRACT_ITEM13_MARKER = "item 13"
 _RENDER_CONTRACT_ITEM18_MARKER = "item 18"
+# PR #322 第1巡指摘 Fix 1: item 13/18 の「same seed」は genome-policy 層
+# (909001) と harness-runtime 層 (42) の両方で、両 founder 間では同一値
+# が使われることを指す——`same_conditions_note` がこの二層整合注記を
+# 保持しなければならないマーカー（両方の値自体を含むことで確認する）。
+_RENDER_CONTRACT_SAME_SEED_BOTH_LAYERS_MARKERS: Tuple[str, ...] = (
+    str(SHARED_PERFORMANCE_SEED), "42",
+)
 # §15 末尾の PCM publication 規律（逐語順序）。
 _PCM_PUBLICATION_DISCIPLINE_MARKERS: Tuple[str, ...] = (
     "float output", "PCM publication", "file readback", "meter", "actual WAV sha256",
 )
+
+# ---------------------------------------------------------------------------
+# harness_runtime_seed_policy（PR #322 第1巡指摘 Fix 1, P1, 採用）:
+# 宣言 harness `gate_synth.py::run_pipeline` は seed 引数を持たず、自身の
+# ハードコード定数 `SEED = 42`（gate_synth.py:149）を `ort.set_seed(SEED)`
+# / `record["seed"] = SEED`（gate_synth.py:1213-1214）で適用・記録する。
+# gate_synth.py は RUN6/7/8 と共用の凍結計器であり、過去 run の provenance
+# を壊さないため**改変は不採用**——本節は「909001 を runtime seed へ配線
+# する」のではなく、実挙動（42）を manifest 側の宣言として真実化する
+# 設計判定を記録する。42 は manifest が独自に選んだ値ではなく harness
+# バイトの一部であり、run 開始時に `repository_commit_sha` が repo バイト
+# 全体を pin することで凍結される（replay 契約 = 同一 harness バイト →
+# 同一 seed）。
+# ---------------------------------------------------------------------------
+_HARNESS_RUNTIME_SEED_POLICY_KEYS: FrozenSet[str] = frozenset({
+    "harness_hardcoded_seed", "harness_hardcoded_seed_source", "freeze_basis",
+    "runtime_verification_condition", "no_wiring_declaration",
+})
+# gate_synth.py 実コードから転記した定数値（`SEED = 42`）。
+_GATE_SYNTH_HARDCODED_SEED = 42
+_HARNESS_HARDCODED_SEED_SOURCE_MARKERS: Tuple[str, ...] = ("gate_synth.py:149", "1213-1214")
+_HARNESS_FREEZE_BASIS_MARKER = "repository_commit_sha"
+_HARNESS_RUNTIME_VERIFICATION_MARKERS: Tuple[str, ...] = ("fail-closed", "42")
+_HARNESS_NO_WIRING_DECLARATION_MARKER = "配線する変更は行わない"
 
 _REVISION_BRIDGE_ENTRY_NAMES: Tuple[str, ...] = (
     "reference_render", "c0_replay_takes", "c1_sham_takes", "positive_reference",
@@ -3507,9 +3559,27 @@ def _validate_probe_cell_source(source: Any, *, field: str) -> None:
         raise Run9ValidationError(f"{field}.verbatim must be exactly True, got {source['verbatim']!r}")
 
 
+def _validate_cell_levels(value: Any, *, field: str) -> Dict[str, str]:
+    """PR #322 第1巡指摘 Fix 2: cell の `levels` メタデータ（axis_name ->
+    level_name の str->str 対応）の構造検証のみを行う。`factor_levels.axes`
+    への実在照合は probe 単位（`_validate_probe_object`）でまとめて行う
+    ——cell 単体では同じ probe の factor_levels にアクセスできないため。
+    """
+    if not isinstance(value, dict) or not value:
+        raise Run9ValidationError(f"{field} must be a non-empty object, got {value!r}")
+    for axis_name, level_name in value.items():
+        if not isinstance(axis_name, str) or not axis_name.strip():
+            raise Run9ValidationError(f"{field} has a non-string/empty axis key: {axis_name!r}")
+        if not isinstance(level_name, str) or not level_name.strip():
+            raise Run9ValidationError(
+                f"{field}.{axis_name} must be a non-empty string level name, got {level_name!r}"
+            )
+    return value
+
+
 def _validate_probe_cell(
     cell: Any, *, probe_id: str, field: str, seen_cell_ids: Dict[str, str]
-) -> None:
+) -> Optional[Dict[str, str]]:
     if not isinstance(cell, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(cell).__name__}")
     allowed = set(_CELL_KEYS_BASE)
@@ -3517,6 +3587,9 @@ def _validate_probe_cell(
     if probe_id == "P0":
         allowed.add(_CELL_SOURCE_KEY)
         required.add(_CELL_SOURCE_KEY)
+    if probe_id in _FACTOR_LEVEL_PROBE_IDS:
+        allowed.add(_CELL_LEVELS_KEY)
+        required.add(_CELL_LEVELS_KEY)
     unknown = set(cell.keys()) - allowed
     if unknown:
         raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
@@ -3553,6 +3626,85 @@ def _validate_probe_cell(
 
     if probe_id == "P0":
         _validate_probe_cell_source(cell[_CELL_SOURCE_KEY], field=f"{field}.{_CELL_SOURCE_KEY}")
+
+    if probe_id in _FACTOR_LEVEL_PROBE_IDS:
+        return _validate_cell_levels(cell[_CELL_LEVELS_KEY], field=f"{field}.{_CELL_LEVELS_KEY}")
+    return None
+
+
+def _validate_factor_levels_axes(data: Any, *, field: str) -> Dict[str, Dict[str, Any]]:
+    """PR #322 第1巡指摘 Fix 2: `factor_levels.axes` の形状・型検証。各軸は
+    非空 dict（水準名 -> 具体値）、水準名は非空 str、値は bool を除く
+    実数（register/duration 等の数値水準）または非空 str（onset
+    consonant class・ending voicing 等の記号水準）のいずれか——空文字列・
+    空 list/dict・None・bool は拒否する。"""
+    if not isinstance(data, dict) or not data:
+        raise Run9ValidationError(f"{field} must be a non-empty object, got {data!r}")
+    for axis_name, levels in data.items():
+        if not isinstance(axis_name, str) or not axis_name.strip():
+            raise Run9ValidationError(f"{field} has a non-string/empty axis key: {axis_name!r}")
+        axis_field = f"{field}.{axis_name}"
+        if not isinstance(levels, dict) or not levels:
+            raise Run9ValidationError(f"{axis_field} must be a non-empty object, got {levels!r}")
+        for level_name, level_value in levels.items():
+            if not isinstance(level_name, str) or not level_name.strip():
+                raise Run9ValidationError(
+                    f"{axis_field} has a non-string/empty level key: {level_name!r}"
+                )
+            level_field = f"{axis_field}.{level_name}"
+            if isinstance(level_value, bool):
+                raise Run9ValidationError(f"{level_field} must not be a bool, got {level_value!r}")
+            is_number = isinstance(level_value, (int, float)) and math.isfinite(level_value)
+            is_nonempty_str = isinstance(level_value, str) and bool(level_value.strip())
+            if not (is_number or is_nonempty_str):
+                raise Run9ValidationError(
+                    f"{level_field} must be a finite non-bool number or a non-empty string "
+                    f"(concrete stimulus value), got {level_value!r}"
+                )
+    return data
+
+
+def _validate_probe_factor_levels_cell_mapping(
+    *, factor_levels: Any, cell_levels: List[Dict[str, str]], field: str
+) -> None:
+    """PR #322 第1巡指摘 Fix 2: `factor_levels.axes` と各 cell の `levels`
+    の双方向対応を検証する。前方（cell -> factor_levels 実在確認）+
+    後方（factor_levels の全水準が最低1 cell で使用されているか——未使用
+    水準は宣言と刺激の乖離として拒否）の両方向を機械強制する。個々の
+    cell は factor_levels の全軸を参照する必要はない（部分参照可 —
+    例: P1 の音程遷移 cell は register/duration 軸を参照しない）。"""
+    if not isinstance(factor_levels, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(factor_levels).__name__}")
+    if _FACTOR_LEVELS_AXES_KEY not in factor_levels:
+        raise Run9ValidationError(f"{field} missing required key(s): ['{_FACTOR_LEVELS_AXES_KEY}']")
+    axes = _validate_factor_levels_axes(
+        factor_levels[_FACTOR_LEVELS_AXES_KEY], field=f"{field}.{_FACTOR_LEVELS_AXES_KEY}"
+    )
+
+    used: Dict[str, set] = {axis_name: set() for axis_name in axes}
+    for i, levels in enumerate(cell_levels):
+        for axis_name, level_name in levels.items():
+            if axis_name not in axes:
+                raise Run9ValidationError(
+                    f"cells[{i}].{_CELL_LEVELS_KEY} references unknown axis {axis_name!r} — not "
+                    f"declared in {field}.{_FACTOR_LEVELS_AXES_KEY} ({sorted(axes)})"
+                )
+            if level_name not in axes[axis_name]:
+                raise Run9ValidationError(
+                    f"cells[{i}].{_CELL_LEVELS_KEY}.{axis_name} references unknown level "
+                    f"{level_name!r} — not declared in {field}.{_FACTOR_LEVELS_AXES_KEY}.{axis_name} "
+                    f"({sorted(axes[axis_name])})"
+                )
+            used[axis_name].add(level_name)
+
+    for axis_name, levels in axes.items():
+        unused = set(levels) - used[axis_name]
+        if unused:
+            raise Run9ValidationError(
+                f"{field}.{_FACTOR_LEVELS_AXES_KEY}.{axis_name} declares level(s) {sorted(unused)} "
+                "that no cell's `levels` references — an unused declared level is a drift between "
+                "the frozen experimental axis table and what is actually rendered"
+            )
 
 
 def _validate_probe_heldout_independence(value: Any, *, field: str) -> None:
@@ -3613,9 +3765,17 @@ def _validate_probe_object(
     cells = probe["cells"]
     if not isinstance(cells, list) or not cells:
         raise Run9ValidationError(f"{field}.cells must be a non-empty list, got {cells!r}")
+    cell_levels: List[Dict[str, str]] = []
     for i, cell in enumerate(cells):
-        _validate_probe_cell(
+        levels = _validate_probe_cell(
             cell, probe_id=expected_probe_id, field=f"{field}.cells[{i}]", seen_cell_ids=seen_cell_ids
+        )
+        if levels is not None:
+            cell_levels.append(levels)
+
+    if expected_probe_id in _FACTOR_LEVEL_PROBE_IDS:
+        _validate_probe_factor_levels_cell_mapping(
+            factor_levels=probe["factor_levels"], cell_levels=cell_levels, field=f"{field}.factor_levels"
         )
 
     if expected_probe_id == "P5":
@@ -3630,6 +3790,87 @@ def _validate_probe_object(
     if expected_probe_id == "P4":
         _validate_probe_heldout_independence(
             probe["heldout_independence"], field=f"{field}.heldout_independence"
+        )
+
+
+def _validate_harness_runtime_seed_policy(data: Any) -> None:
+    """PR #322 第1巡指摘 Fix 1（P1, 採用）の実装: 宣言 harness
+    `gate_synth.py::run_pipeline` が実際に消費する runtime seed（自身の
+    ハードコード定数 `SEED = 42`）を manifest 側に明示し、
+    `performance_seed` (909001, genome/ControlProfile レベル) と混同
+    しないことを機械強制する。gate_synth.py 自体の改変は不採用（RUN6/7/8
+    と共用の凍結計器のため）——本 validator は宣言の真実化のみを検証する。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"render_contract.harness_runtime_seed_policy must be an object, got "
+            f"{type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _HARNESS_RUNTIME_SEED_POLICY_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"render_contract.harness_runtime_seed_policy has unknown key(s): {sorted(unknown)}"
+        )
+    missing = _HARNESS_RUNTIME_SEED_POLICY_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"render_contract.harness_runtime_seed_policy missing required key(s): {sorted(missing)}"
+        )
+
+    seed = data["harness_hardcoded_seed"]
+    if not _is_strict_int(seed) or seed != _GATE_SYNTH_HARDCODED_SEED:
+        raise Run9ValidationError(
+            "render_contract.harness_runtime_seed_policy.harness_hardcoded_seed must be the exact "
+            f"int {_GATE_SYNTH_HARDCODED_SEED!r} (bool/float variants rejected), got {seed!r} "
+            f"({type(seed).__name__})"
+        )
+
+    source = _require_non_empty_str(
+        data["harness_hardcoded_seed_source"],
+        field="render_contract.harness_runtime_seed_policy.harness_hardcoded_seed_source",
+    )
+    for marker in _HARNESS_HARDCODED_SEED_SOURCE_MARKERS:
+        if marker not in source:
+            raise Run9ValidationError(
+                "render_contract.harness_runtime_seed_policy.harness_hardcoded_seed_source must "
+                f"contain the marker {marker!r} (実コードの行番号転記), got a source without that "
+                "marker"
+            )
+
+    freeze_basis = _require_non_empty_str(
+        data["freeze_basis"], field="render_contract.harness_runtime_seed_policy.freeze_basis"
+    )
+    if _HARNESS_FREEZE_BASIS_MARKER not in freeze_basis:
+        raise Run9ValidationError(
+            "render_contract.harness_runtime_seed_policy.freeze_basis must contain the marker "
+            f"{_HARNESS_FREEZE_BASIS_MARKER!r} (42 は harness バイトの一部であり "
+            "repository_commit_sha が repo バイト全体を pin することで凍結される), got a freeze_basis "
+            "without that marker"
+        )
+
+    verification = _require_non_empty_str(
+        data["runtime_verification_condition"],
+        field="render_contract.harness_runtime_seed_policy.runtime_verification_condition",
+    )
+    for marker in _HARNESS_RUNTIME_VERIFICATION_MARKERS:
+        if marker not in verification:
+            raise Run9ValidationError(
+                "render_contract.harness_runtime_seed_policy.runtime_verification_condition must "
+                f"contain the marker {marker!r} (render record の SEED が 42 と不一致なら契約違反 "
+                "として fail-closed とする、pod フェーズの検収条件の事前登録), got a condition "
+                "without that marker"
+            )
+
+    no_wiring = _require_non_empty_str(
+        data["no_wiring_declaration"],
+        field="render_contract.harness_runtime_seed_policy.no_wiring_declaration",
+    )
+    if _HARNESS_NO_WIRING_DECLARATION_MARKER not in no_wiring:
+        raise Run9ValidationError(
+            "render_contract.harness_runtime_seed_policy.no_wiring_declaration must contain the "
+            f"marker {_HARNESS_NO_WIRING_DECLARATION_MARKER!r} (909001 を runtime seed として "
+            "harness へ配線する変更は行わない——宣言と実装の乖離は実挙動側を正とし宣言を真実化する "
+            "設計判定), got a declaration without that marker"
         )
 
 
@@ -3691,6 +3932,14 @@ def _validate_render_contract(data: Any) -> None:
             f"({_LEARNING_SEED_DISAMBIGUATION_MARKER!r}) to disambiguate it from the shared "
             "performance seed, got a note without that marker"
         )
+    for marker in (_PERFORMANCE_SEED_GENOME_POLICY_MARKER, _PERFORMANCE_SEED_NOT_ONNX_RUNTIME_MARKER):
+        if marker not in seed_note:
+            raise Run9ValidationError(
+                f"render_contract.performance_seed_note must contain the marker {marker!r} (PR #322 "
+                "第1巡指摘 Fix 1: 909001 は genome/ControlProfile レベルの performance policy seed "
+                "であり、宣言 harness 内部の ONNX runtime 乱数 seed ではないことを明記する), got a "
+                "note without that marker"
+            )
 
     same_conditions_note = _require_non_empty_str(
         data["same_conditions_note"], field="render_contract.same_conditions_note"
@@ -3703,6 +3952,16 @@ def _validate_render_contract(data: Any) -> None:
                 f"render_contract.same_conditions_note must contain the marker {marker!r} "
                 "(DESIGN_RUN9 §27 item 13/18 参照マーカー), got a note without that marker"
             )
+    for marker in _RENDER_CONTRACT_SAME_SEED_BOTH_LAYERS_MARKERS:
+        if marker not in same_conditions_note:
+            raise Run9ValidationError(
+                f"render_contract.same_conditions_note must contain the marker {marker!r} (PR #322 "
+                "第1巡指摘 Fix 1: item 13/18 の same-seed 要求は genome-policy 層 (909001) と "
+                "harness-runtime 層 (42) の両方で両 founder 間同一であることを一言で確認する), got "
+                "a note without that marker"
+            )
+
+    _validate_harness_runtime_seed_policy(data["harness_runtime_seed_policy"])
 
     discipline = _require_non_empty_str(
         data["pcm_publication_discipline"], field="render_contract.pcm_publication_discipline"

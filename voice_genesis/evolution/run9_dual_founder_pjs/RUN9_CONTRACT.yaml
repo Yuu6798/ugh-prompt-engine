@@ -622,8 +622,25 @@ learning_recipe_sha:
 # sha256（`design_doc_sha256` と同一のファイル実バイト規約）。〔履歴:
 # 旧 reason は「P0-P5 probe set の実ファイル manifest 未作成。」の1行
 # だった — 本改訂で実体が発行されたため要約保持のみ〕。
+#
+# PR #322 Codex bot レビュー第1巡2件（採用）反映による repin:
+# Fix 1（P1）render_contract へ `harness_runtime_seed_policy` 節を新設
+# ——宣言 harness `gate_synth.py::run_pipeline` は seed 引数を持たず自身の
+# ハードコード定数 `SEED = 42`（gate_synth.py:149、`ort.set_seed`/
+# `record["seed"]` は :1213-1214）を実消費・記録する事実を明示し、
+# `performance_seed`=909001 は genome/ControlProfile レベルの performance
+# policy seed であって ONNX runtime の乱数 seed ではないことを
+# `performance_seed_note` で精密化した（gate_synth.py 自体は RUN6/7/8 と
+# 共用の凍結計器のため改変は不採用——宣言側を実挙動へ真実化する設計判定）。
+# Fix 2（P2）P1-P3 の `factor_levels` を `{axes: {...}}` 構造へ再編し、
+# 各 cell へ `levels`（axis_name -> level_name）メタデータを付与、
+# `factor_levels.axes` ⇔ cell `levels` の双方向対応（未知水準参照の拒否 +
+# 未使用水準の拒否）を `validate_probe_manifest()` が機械検証するように
+# なった。両 Fix とも manifest バイトを変更するため sha256 を再計算した。
+# 旧値（履歴として保持）:
+# "20b5638537881ef2565795ef040d4490202c8b9907c9c0dc750d15d043bb1730"
 probe_manifest_sha:
-  value: "20b5638537881ef2565795ef040d4490202c8b9907c9c0dc750d15d043bb1730"
+  value: "722653475646e169058a1e53584585ae1af42f4bfb5152a59432251d30a421c1"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 

@@ -307,3 +307,203 @@ def test_negative_source_sha256_tampered(manifest_data: Dict[str, Any]) -> None:
     bad["probes"][0]["cells"][0]["source"]["transcribed_from_sha256"] = "0" * 64
     with pytest.raises(m.Run9ValidationError):
         m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第1巡指摘 Fix 1（P1, 採用）: harness_runtime_seed_policy
+# ---------------------------------------------------------------------------
+
+
+def test_fix1_harness_runtime_seed_policy_present_and_correct(
+    manifest_data: Dict[str, Any],
+) -> None:
+    policy = manifest_data["render_contract"]["harness_runtime_seed_policy"]
+    assert policy["harness_hardcoded_seed"] == 42
+    assert "gate_synth.py:149" in policy["harness_hardcoded_seed_source"]
+    assert "1213-1214" in policy["harness_hardcoded_seed_source"]
+    assert "repository_commit_sha" in policy["freeze_basis"]
+    assert "fail-closed" in policy["runtime_verification_condition"]
+    assert "42" in policy["runtime_verification_condition"]
+    assert "配線する変更は行わない" in policy["no_wiring_declaration"]
+    assert "909001" in policy["no_wiring_declaration"]
+
+
+def test_fix1_performance_seed_note_disambiguates_genome_policy_from_onnx_runtime(
+    manifest_data: Dict[str, Any],
+) -> None:
+    note = manifest_data["render_contract"]["performance_seed_note"]
+    assert "performance policy seed" in note
+    assert "ONNX runtime の乱数 seed ではない" in note
+    assert str(m.LEARNING_SEED) in note
+
+
+def test_fix1_same_conditions_note_covers_both_seed_layers(
+    manifest_data: Dict[str, Any],
+) -> None:
+    note = manifest_data["render_contract"]["same_conditions_note"]
+    assert "item 13" in note and "item 18" in note and "§27" in note
+    assert str(m.SHARED_PERFORMANCE_SEED) in note
+    assert "42" in note
+
+
+@pytest.mark.parametrize(
+    "mutate,label",
+    [
+        (lambda d: d["render_contract"].pop("harness_runtime_seed_policy"), "missing section"),
+        (
+            lambda d: d["render_contract"]["harness_runtime_seed_policy"].__setitem__(
+                "harness_hardcoded_seed", 909001
+            ),
+            "wrong seed value",
+        ),
+        (
+            lambda d: d["render_contract"]["harness_runtime_seed_policy"].__setitem__(
+                "harness_hardcoded_seed", True
+            ),
+            "bool seed value",
+        ),
+        (
+            lambda d: d["render_contract"]["harness_runtime_seed_policy"].__setitem__(
+                "no_wiring_declaration", "no marker here"
+            ),
+            "no_wiring_declaration missing marker",
+        ),
+        (
+            lambda d: d["render_contract"]["harness_runtime_seed_policy"].__setitem__(
+                "runtime_verification_condition", "no marker here"
+            ),
+            "runtime_verification_condition missing marker",
+        ),
+        (
+            lambda d: d["render_contract"]["harness_runtime_seed_policy"].__setitem__(
+                "freeze_basis", "no marker here"
+            ),
+            "freeze_basis missing marker",
+        ),
+        (
+            lambda d: d["render_contract"].__setitem__("performance_seed_note", "no markers 909002"),
+            "performance_seed_note missing genome-policy markers",
+        ),
+        (
+            lambda d: d["render_contract"].__setitem__(
+                "same_conditions_note", "§27 item 13 item 18 909001 only"
+            ),
+            "same_conditions_note missing runtime-layer (42) marker",
+        ),
+    ],
+)
+def test_negative_fix1_harness_runtime_seed_policy(
+    manifest_data: Dict[str, Any], mutate, label: str
+) -> None:
+    bad = _mutate(manifest_data)
+    mutate(bad)
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第1巡指摘 Fix 2（P2, 採用）: factor_levels の形状 + cell 対応
+# ---------------------------------------------------------------------------
+
+
+def _p1_probe(data: Dict[str, Any]) -> Dict[str, Any]:
+    (p1,) = [p for p in data["probes"] if p["probe_id"] == "P1"]
+    return p1
+
+
+def test_fix2_factor_levels_axes_shape(manifest_data: Dict[str, Any]) -> None:
+    for probe_id in ("P1", "P2", "P3"):
+        (probe,) = [p for p in manifest_data["probes"] if p["probe_id"] == probe_id]
+        axes = probe["factor_levels"]["axes"]
+        assert axes, f"{probe_id} factor_levels.axes must be non-empty"
+        for axis_name, levels in axes.items():
+            assert levels, f"{probe_id}.{axis_name} must be non-empty"
+            for level_name, value in levels.items():
+                assert not isinstance(value, bool), f"{probe_id}.{axis_name}.{level_name} is bool"
+                assert isinstance(value, (int, float, str))
+
+
+def test_fix2_every_cell_declares_levels_referencing_axes(manifest_data: Dict[str, Any]) -> None:
+    for probe_id in ("P1", "P2", "P3"):
+        (probe,) = [p for p in manifest_data["probes"] if p["probe_id"] == probe_id]
+        axes = probe["factor_levels"]["axes"]
+        for cell in probe["cells"]:
+            levels = cell["levels"]
+            assert levels, f"{cell['cell_id']} must declare non-empty levels"
+            for axis_name, level_name in levels.items():
+                assert axis_name in axes, f"{cell['cell_id']} references unknown axis {axis_name!r}"
+                assert level_name in axes[axis_name], (
+                    f"{cell['cell_id']} references unknown level {level_name!r} in {axis_name!r}"
+                )
+
+
+def test_fix2_every_declared_level_used_by_at_least_one_cell(
+    manifest_data: Dict[str, Any],
+) -> None:
+    for probe_id in ("P1", "P2", "P3"):
+        (probe,) = [p for p in manifest_data["probes"] if p["probe_id"] == probe_id]
+        axes = probe["factor_levels"]["axes"]
+        used: Dict[str, set] = {axis_name: set() for axis_name in axes}
+        for cell in probe["cells"]:
+            for axis_name, level_name in cell["levels"].items():
+                used[axis_name].add(level_name)
+        for axis_name, levels in axes.items():
+            assert set(levels) == used[axis_name], (
+                f"{probe_id}.{axis_name}: declared {sorted(levels)} vs used {sorted(used[axis_name])}"
+            )
+
+
+def test_negative_fix2_factor_levels_is_empty_list(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p1_probe(bad)["factor_levels"] = []
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix2_factor_levels_axes_empty_dict(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p1_probe(bad)["factor_levels"]["axes"] = {}
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix2_cell_references_unknown_level(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p1_probe(bad)["cells"][0]["levels"] = {"register": "does-not-exist"}
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix2_cell_references_unknown_axis(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p1_probe(bad)["cells"][0]["levels"] = {"not_a_real_axis": "low"}
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix2_unused_declared_level_rejected(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p1_probe(bad)["factor_levels"]["axes"]["register"]["extreme"] = 100
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix2_axis_value_bool_rejected(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p1_probe(bad)["factor_levels"]["axes"]["register"]["low"] = True
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix2_cell_missing_levels_key(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    del _p1_probe(bad)["cells"][0]["levels"]
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix2_cell_levels_empty_dict(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p1_probe(bad)["cells"][0]["levels"] = {}
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
