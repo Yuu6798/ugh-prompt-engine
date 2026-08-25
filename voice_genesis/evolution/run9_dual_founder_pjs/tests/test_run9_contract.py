@@ -1912,8 +1912,8 @@ def test_revision02_backbone_runtime_bundle_sha_matches_actual_file_once_pinned(
     / `test_revision02_compute_file_sha256_matches_design_doc_sha256_pin`）
     と同型で事前配線する（Codex bot レビュー PR #316 第9巡指摘, e490985,
     部分採用）。現状 status は PENDING のため value は None のままである
-    ことだけを確認するが、将来 render_code_commit が確定して本欄が
-    PINNED へ昇格した瞬間、この同じテストが
+    ことだけを確認するが、将来 `run9_render_code_commit`（前方宣言欄）が
+    確定して本欄が PINNED へ昇格した瞬間、この同じテストが
     `compute_file_sha256(inputs/backbone_runtime_bundle.json)` との一致を
     自動的に強制するようになる（テストコードの変更を要さない）。
 
@@ -2602,13 +2602,16 @@ def test_revision02_bundle_completeness_note_explains_canon_assets_are_required(
 def test_revision02_backbone_runtime_bundle_sha_still_pending_after_canon_assets_added(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """canon_model_assets 追加自体は render_code_commit の確定手段を
-    変えない——render_code_commit が確定するのは 2026-08-25 の User
-    attestation（rev 0.4）によってであり、canon_model_assets 追加（別巡の
-    独立した拡張）が副作用として昇格を引き起こしたのではないことを確認
-    する（`backbone_runtime_bundle_sha` は rev 0.4 時点では PINNED —
-    昇格の原因が正しく render_code_commit.status の変化であることの
-    確認であり、PENDING 固定の確認ではない）。"""
+    """canon_model_assets 追加自体は backbone_runtime_bundle_sha の PINNED
+    化手段を変えない——PINNED 化するのは 2026-08-25 の User 承認 b +
+    裁定①によって前方宣言欄 `run9_render_code_commit`（status:
+    `DECLARED_FOR_RUN9`）が確定したことによってであり（歴史的
+    `render_code_commit` は `INFERRED_UNCONFIRMED` のまま・両欄は独立）、
+    canon_model_assets 追加（別巡の独立した拡張）が副作用として昇格を
+    引き起こしたのではないことを確認する（`backbone_runtime_bundle_sha`
+    は rev 0.4 時点では PINNED — 昇格の原因が正しく
+    run9_render_code_commit.status の変化であることの確認であり、
+    PENDING 固定の確認ではない）。"""
     field = contract_raw["backbone_runtime_bundle_sha"]
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     assert "canon_model_assets" in bundle["run9_runtime_inputs"]  # 対象拡張が引き続き存在すること
@@ -8223,3 +8226,202 @@ def test_fix319_19_grant_approval_is_independent_per_key() -> None:
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
     assert data["voice_identity_rights"]["usage_grants"]["model_general_distribution"] == "not_granted"
     assert "model_general_distribution_approval" not in data["voice_identity_rights"]["usage_grants"]
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第10巡対応 — Fix 21（P2）: pending/attested
+# 二形態判定の両 status 要求化。旧 Fix 16 の判定は
+# `rights_class == PENDING or consent_status == PENDING` という `or` 判定
+# で pending 形態を認定しており、`consent_status` だけを
+# `USER_ATTESTED_OWN_VOICE` 等へ書き換え `rights_class` を
+# `PENDING_USER_ATTESTATION` のまま・attestation も pending 形態
+# （attested=false）のままにしても「どちらかが pending」を満たすため通過
+# してしまっていた——attestation なしに正典 permission フィールドの一部が
+# 完了を主張できる抜け道。pending 形態は rights_class/consent_status の
+# **両方**が `PENDING_USER_ATTESTATION` であることを要求し、attested
+# 形態は**どちらも** PENDING でないことを要求する（片方のみの中間状態は
+# 双方向とも form mismatch として拒否）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_21_pending_form_with_only_consent_status_confirmed_rejected() -> None:
+    """負例1（方向A）: consent_status のみを PENDING から確定値へ書き換え、
+    rights_class は PENDING_USER_ATTESTATION・attestation は pending 形態
+    （attested=false）のままの場合の拒否——Fix 21 導入前の `or` 判定では
+    rights_class が pending のままのため通過してしまっていた抜け道。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_21_pending_form_with_only_rights_class_confirmed_rejected() -> None:
+    """負例2（方向B、負例1 の対称ケース）: rights_class のみを PENDING
+    から確定値へ書き換え、consent_status は PENDING_USER_ATTESTATION・
+    attestation は pending 形態（attested=false）のままの場合の拒否。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_21_valid_both_pending_fixture_still_validates() -> None:
+    """正例（回帰）: 現行 rights_manifest.json（rights_class/consent_status
+    ともに PENDING_USER_ATTESTATION・attested=false）が Fix 21 適用後も
+    validator を通ることの end-to-end 確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_21_valid_both_confirmed_attested_form_accepted() -> None:
+    """正例: rights_class/consent_status を両方 PENDING から離し、
+    attestation も attested 形態へ整合的に遷移した manifest は受理される
+    こと（Fix 16 の正例と同型 — Fix 21 が両方向とも過剰一般化していない
+    ことの確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第10巡対応 — Fix 22（P2）: attestation の
+# timestamp 実在日時検証。`_RIGHTS_MANIFEST_UTC_TIMESTAMP_RE` は桁配置しか
+# 見ておらず、`2026-99-99T99:99:99Z` のような実在しない日時（暦として
+# 成立しない月/日/時/分/秒）を通してしまっていた。正規形チェックの後段で
+# `datetime.fromisoformat`（Python 3.11+ は `Z` サフィックスをそのまま
+# 受理する）による実在日時としてのパース可能性を追加検証する
+# （`_is_real_utc_timestamp()`、`attested_at`/`approved_at` 両方で共有）。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_timestamp",
+    [
+        "2026-99-99T99:99:99Z",  # 指摘本文が名指しする値そのもの
+        "2026-13-01T00:00:00Z",  # 月 13
+        "2026-02-30T00:00:00Z",  # 2 月 30 日（実在しない日）
+        "2026-08-25T25:00:00Z",  # 時 25
+        "2026-08-25T00:60:00Z",  # 分 60
+    ],
+)
+def test_fix319_22_attested_at_impossible_datetime_rejected(bad_timestamp: str) -> None:
+    """負例（5値 parametrize）: attested_at が正規形（桁配置）には一致する
+    が暦として実在しない日時の場合、attested 形態として拒否されること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": bad_timestamp,
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(
+        m.Run9ValidationError, match="attested_at must be a UTC ISO 8601 timestamp denoting a real"
+    ):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_22_approved_at_impossible_datetime_rejected() -> None:
+    """負例: usage_grants の承認記録（approved_at）が同じ実在しない日時
+    （月 99 / 日 99 / 時 99 / 分 99 / 秒 99）の場合の拒否——`attested_at`
+    と共有する `_is_real_utc_timestamp()` が承認記録側にも配線されている
+    ことの確認。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-99-99T99:99:99Z",
+        "approval_statement": "Publication approved by User.",
+    }
+    with pytest.raises(
+        m.Run9ValidationError, match="approved_at must be a UTC ISO 8601 timestamp denoting a real"
+    ):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_22_valid_real_attested_at_accepted() -> None:
+    """正例（回帰）: 実在日時の attested_at（既存 Fix 16 正例と同じ値）は
+    Fix 22 適用後も受理されること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_22_valid_real_approved_at_accepted() -> None:
+    """正例（回帰）: 実在日時の approved_at（既存 Fix 19 正例と同じ値）は
+    Fix 22 適用後も受理されること。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Publication approved by User.",
+    }
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第10巡対応 — Fix 23（P2）: corpus_pins 値の
+# 64hex 強制。Fix 8 は corpus_pins の各 `value` を非空文字列としてしか
+# 検証しておらず、`"x"` のような使用不能な値でも構造的に valid のまま通過
+# していた——実際に利用可能な sha256 pin を失っても検出できなかった。
+# 既存の 64hex 検証ヘルパーと同じ正規表現（`_SHA256_HEX_RE`）を再利用し、
+# `corpus_pins` の両 sha256 サブブロックの `value` に lowercase 64-hex を
+# 追加強制する。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("sub_key", ["source_archive_sha256", "expanded_corpus_identity_sha256"])
+def test_fix319_23_corpus_pin_value_too_short_rejected(sub_key: str) -> None:
+    """負例1（2キー parametrize）: corpus_pins の value を短い hex 文字列
+    （指摘本文が名指しする `"x"` 相当）へ書き換えた場合の拒否。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"][sub_key]["value"] = "x"
+    with pytest.raises(m.Run9ValidationError, match=r"\.value must be exactly 64 lowercase hex"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize("sub_key", ["source_archive_sha256", "expanded_corpus_identity_sha256"])
+def test_fix319_23_corpus_pin_value_uppercase_rejected(sub_key: str) -> None:
+    """負例2（2キー parametrize）: 64桁ではあるが大文字混じりの hex 文字列
+    は拒否されること（lowercase 強制）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"][sub_key]["value"] = "A" * 64
+    with pytest.raises(m.Run9ValidationError, match=r"\.value must be exactly 64 lowercase hex"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize("sub_key", ["source_archive_sha256", "expanded_corpus_identity_sha256"])
+def test_fix319_23_corpus_pin_value_non_hex_rejected(sub_key: str) -> None:
+    """負例3（2キー parametrize）: 64桁だが16進以外の文字を含む文字列は
+    拒否されること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"][sub_key]["value"] = "g" * 64
+    with pytest.raises(m.Run9ValidationError, match=r"\.value must be exactly 64 lowercase hex"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_23_valid_real_corpus_pin_values_accepted() -> None:
+    """正例（回帰）: 現行 rights_manifest.json の corpus_pins 実値
+    （source_archive_sha256/expanded_corpus_identity_sha256 いずれも実在の
+    lowercase 64-hex）が Fix 23 適用後も validator を通ることの
+    end-to-end 確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認

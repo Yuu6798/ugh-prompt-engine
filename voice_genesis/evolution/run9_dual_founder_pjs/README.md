@@ -547,9 +547,14 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
 
 - **User anchor attest**: `anchor_hashes.user` — rights attest 完了待ち
   （残存ブロッカー(1)）。
-- ~~**`render_code_commit` 確定**~~ → 2026-08-25 User attestation により
-  解消済み（`backbone_runtime_bundle_sha` PINNED。上記「解消済み
-  （2026-08-25 外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモの編入）」参照）。
+- ~~**`backbone_runtime_bundle_sha` PINNED 化待ち**~~ → 2026-08-25 User
+  承認 b + 裁定① により解消済み。確定したのは歴史的 `render_code_commit`
+  （RUN6 export 推定）自体ではなく、独立の前方宣言欄
+  `run9_render_code_commit`（status: `DECLARED_FOR_RUN9`）——
+  `render_code_commit` は `INFERRED_UNCONFIRMED` のまま（両欄は独立）。
+  `backbone_runtime_bundle_sha` PINNED の根拠はこの前方宣言の確定（上記
+  「解消済み（2026-08-25 外部指摘（AQUEST 山崎信英氏）を受けた派生設計
+  変更メモの編入）」参照）。
 - **practice / education manifest の実体 build**:
   `practice_audio_split_manifest.json` /
   `education_technique_lesson_manifest.json` の実体生成（残存

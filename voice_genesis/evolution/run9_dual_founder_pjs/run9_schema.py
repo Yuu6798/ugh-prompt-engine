@@ -27,6 +27,7 @@ import re
 import sys
 import types
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
@@ -4597,11 +4598,16 @@ def _validate_rights_manifest_license_block(license_block: Any) -> None:
 
 
 def _validate_rights_manifest_corpus_pins_block(corpus_pins: Any) -> None:
-    """`recording_master_rights.corpus_pins` のネスト形状を検証する（Fix 8）。
+    """`recording_master_rights.corpus_pins` のネスト形状を検証する（Fix 8。
+    64hex 形式検証は Codex bot レビュー PR #319 第10巡指摘, P2, 採用, Fix 23）。
     `source_archive_sha256`/`expanded_corpus_identity_sha256`（各 `value`/
     `source` の2キー object）+ `note` の3キー閉集合。source archive pin
     と expanded corpus pin は互いに代替ではない別対象の2値（rev 0.2 改訂3）
     であり、いずれかが欠落・スカラー化しても validator が受理してはならない。
+    Fix 8 時点では各 `value` は非空 str であることしか検証しておらず、
+    `"x"` のような使用不能な値でも構造的に valid のまま通過していた——
+    `_SHA256_HEX_RE`（既存の 64hex 検証ヘルパー、`_require_manifest_sha256_hex`
+    等と同一正規表現を再利用）で lowercase 64-hex 形式を追加強制する。
     """
     path = "rights manifest.recording_master_rights.corpus_pins"
     if not isinstance(corpus_pins, dict):
@@ -4616,9 +4622,16 @@ def _validate_rights_manifest_corpus_pins_block(corpus_pins: Any) -> None:
     if not isinstance(note, str) or not note.strip():
         raise Run9ValidationError(f"{path}.note must be a non-empty string, got {note!r}")
     for sub_key in sorted(_RIGHTS_MANIFEST_CORPUS_PIN_SUB_KEYS):
+        sub_path = f"{path}.{sub_key}"
         _validate_closed_string_object(
-            f"{path}.{sub_key}", corpus_pins[sub_key], _RIGHTS_MANIFEST_CORPUS_PIN_ENTRY_KEYS
+            sub_path, corpus_pins[sub_key], _RIGHTS_MANIFEST_CORPUS_PIN_ENTRY_KEYS
         )
+        pin_value = corpus_pins[sub_key]["value"]
+        if not isinstance(pin_value, str) or not _SHA256_HEX_RE.match(pin_value):
+            raise Run9ValidationError(
+                f"{sub_path}.value must be exactly 64 lowercase hex characters (sha256 "
+                f"format), got {pin_value!r}"
+            )
 
 
 # Codex bot レビュー PR #319 第8巡指摘（P2, 採用, Fix 16）: `attestation` は
@@ -4651,9 +4664,39 @@ _RIGHTS_MANIFEST_UTC_TIMESTAMP_RE = re.compile(
 )
 
 
+# Codex bot レビュー PR #319 第10巡指摘（P2, 採用, Fix 22）: 上記正規形
+# チェックは桁配置しか見ておらず、`2026-99-99T99:99:99Z` のような実在
+# しない日時（月/日/時/分/秒が暦として成立しない値）を通してしまう。
+# 正規形強制の後段で `datetime.fromisoformat`（Python 3.11+ は `Z`
+# サフィックスをそのまま受理する）により実在日時としてパース可能か
+# どうかを追加検証する。`attested_at`（Fix 16）/ `approved_at`（Fix 19）
+# の両方で共有する。
+def _is_real_utc_timestamp(value: str) -> bool:
+    """`value` が正規形（`_RIGHTS_MANIFEST_UTC_TIMESTAMP_RE`）に一致する
+    前提で、暦として実在する日時かどうかを判定する（例: 月 99 / 日 99 /
+    時 99 / 2 月 30 日はいずれも False）。"""
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
 def _validate_rights_manifest_voice_identity_attestation(layer: Mapping[str, Any]) -> None:
     """`voice_identity_rights.attestation` の形状 + pending/attested 二形態の
-    整合を検証する（Fix 16）。
+    整合を検証する（Fix 16。両 status 要求化は Codex bot レビュー PR #319
+    第10巡指摘, P2, 採用, Fix 21）。
+
+    旧実装は `rights_class == PENDING or consent_status == PENDING` の
+    `or` 判定で pending 形態を認定していた——`consent_status` だけを
+    `USER_ATTESTED_OWN_VOICE` 等へ書き換え `rights_class` は
+    `PENDING_USER_ATTESTATION` のまま・`attested=false` のままでも
+    「どちらかが pending」を満たすため通過してしまい、attestation
+    なしに正典 permission フィールドの一部が完了を主張できていた。
+    pending 形態は**両方**が `PENDING_USER_ATTESTATION` であること、
+    attested 形態は**どちらも** `PENDING_USER_ATTESTATION` でないことを
+    要求し、片方のみが確定化した中間状態はどちらの方向であっても
+    form mismatch として拒否する。
     """
     path = "rights manifest.voice_identity_rights.attestation"
     attestation = layer.get("attestation")
@@ -4672,9 +4715,9 @@ def _validate_rights_manifest_voice_identity_attestation(layer: Mapping[str, Any
 
     rights_class = layer.get("rights_class")
     consent_status = layer.get("consent_status")
-    status_is_pending = (
-        rights_class == _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION
-        or consent_status == _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION
+    rights_class_is_pending = rights_class == _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION
+    consent_status_is_pending = (
+        consent_status == _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION
     )
 
     if not attested:
@@ -4684,12 +4727,13 @@ def _validate_rights_manifest_voice_identity_attestation(layer: Mapping[str, Any
                     f"{path}.{key} must be null while attested is false (pending form), "
                     f"got {attestation[key]!r}"
                 )
-        if not status_is_pending:
+        if not (rights_class_is_pending and consent_status_is_pending):
             raise Run9ValidationError(
                 f"{path} is in pending form (attested=false) but rights manifest."
-                f"voice_identity_rights.rights_class/consent_status is not "
-                f"{_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} — status/attestation "
-                "form mismatch"
+                f"voice_identity_rights.rights_class/consent_status are not BOTH "
+                f"{_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} "
+                f"(rights_class={rights_class!r}, consent_status={consent_status!r}) — "
+                "status/attestation form mismatch"
             )
         return
 
@@ -4700,22 +4744,28 @@ def _validate_rights_manifest_voice_identity_attestation(layer: Mapping[str, Any
             f"got {attested_by!r}"
         )
     attested_at = attestation["attested_at"]
-    if not isinstance(attested_at, str) or not _RIGHTS_MANIFEST_UTC_TIMESTAMP_RE.match(attested_at):
+    if (
+        not isinstance(attested_at, str)
+        or not _RIGHTS_MANIFEST_UTC_TIMESTAMP_RE.match(attested_at)
+        or not _is_real_utc_timestamp(attested_at)
+    ):
         raise Run9ValidationError(
-            f"{path}.attested_at must be a UTC ISO 8601 timestamp (e.g. "
-            f"'2026-08-25T00:00:00Z') when attested is true, got {attested_at!r}"
+            f"{path}.attested_at must be a UTC ISO 8601 timestamp denoting a real "
+            f"calendar date/time (e.g. '2026-08-25T00:00:00Z') when attested is true, "
+            f"got {attested_at!r}"
         )
     statement = attestation["statement"]
     if not isinstance(statement, str) or not statement.strip():
         raise Run9ValidationError(
             f"{path}.statement must be a non-empty string when attested is true, got {statement!r}"
         )
-    if status_is_pending:
+    if rights_class_is_pending or consent_status_is_pending:
         raise Run9ValidationError(
             f"{path} is in attested form (attested=true) but rights manifest."
             f"voice_identity_rights.rights_class/consent_status is still "
-            f"{_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} — status/attestation form "
-            "mismatch"
+            f"{_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} for at least one of the "
+            f"two fields (rights_class={rights_class!r}, consent_status={consent_status!r}) "
+            "— status/attestation form mismatch"
         )
 
 
@@ -4768,10 +4818,14 @@ def _validate_rights_manifest_usage_grant_approval_record(grant_key: str, approv
     if missing:
         raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
     approved_at = approval["approved_at"]
-    if not isinstance(approved_at, str) or not _RIGHTS_MANIFEST_UTC_TIMESTAMP_RE.match(approved_at):
+    if (
+        not isinstance(approved_at, str)
+        or not _RIGHTS_MANIFEST_UTC_TIMESTAMP_RE.match(approved_at)
+        or not _is_real_utc_timestamp(approved_at)
+    ):
         raise Run9ValidationError(
-            f"{path}.approved_at must be a UTC ISO 8601 timestamp (e.g. "
-            f"'2026-08-25T00:00:00Z'), got {approved_at!r}"
+            f"{path}.approved_at must be a UTC ISO 8601 timestamp denoting a real "
+            f"calendar date/time (e.g. '2026-08-25T00:00:00Z'), got {approved_at!r}"
         )
     approval_statement = approval["approval_statement"]
     if not isinstance(approval_statement, str) or not approval_statement.strip():
