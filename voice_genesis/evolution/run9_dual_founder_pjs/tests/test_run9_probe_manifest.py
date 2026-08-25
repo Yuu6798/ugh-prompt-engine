@@ -1744,3 +1744,125 @@ def test_negative_fix18_residual_risk_scope_marker_missing(
     )
     with pytest.raises(m.Run9ValidationError):
         m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第9巡指摘 Fix 19（P2, 採用）: factor_levels.axes の宣言値を cell
+# から独立した凍結表 `_PROBE_EXPECTED_FACTOR_VALUES` と照合する。cell との
+# 内部自己整合性（Fix 3）だけでは、axes 値と対応 cell の note フィールドを
+# 協調して書き換える amendment（例: register.low を 57->58 に変え、
+# low-register の cell も MIDI 58 へ揃える）を検出できない——本 Fix は
+# それを検出する外部アンカーを追加する。
+# ---------------------------------------------------------------------------
+
+
+def _p3_probe(data: Dict[str, Any]) -> Dict[str, Any]:
+    (p3,) = [p for p in data["probes"] if p["probe_id"] == "P3"]
+    return p3
+
+
+def test_fix19_positive_real_manifest_passes_frozen_value_check(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """回帰確認: 実 manifest（P1/P2/P3 の axes・filler タプルは元々凍結表
+    と一致していた）は Fix 19 の外部アンカー検査でも引き続き通過する
+    （factor_levels の書き換えは不要だった）。"""
+    m.validate_probe_manifest(manifest_data)
+
+
+def test_negative_fix19_coordinated_register_edit_core_scenario(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """本指摘の核心シナリオ: P1 register.low を 57->58 に変え、
+    low-register の両 cell（P1-REG-LOW-DUR-SHORT/LONG）の phrase-final
+    pitch も同時に 58 へ揃える——manifest 自己整合性（Fix 3）は満たすが、
+    凍結表（Fix 19）には違反する。"""
+    bad = _mutate(manifest_data)
+    p1 = _p1_probe(bad)
+    p1["factor_levels"]["axes"]["register"]["low"] = 58
+    for cell_id in ("P1-REG-LOW-DUR-SHORT", "P1-REG-LOW-DUR-LONG"):
+        cell = _cell_by_id(p1, cell_id)
+        for note in cell["notes"]:
+            if note.get("is_phrase_final"):
+                note["pitch_midi"] = 58
+    with pytest.raises(m.Run9ValidationError, match="frozen expected value"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix19_p2_filler_tuple_coordinated_edit(manifest_data: Dict[str, Any]) -> None:
+    """P2 filler タプル（medial_filler_pitch_midi）を変更し、全 onset cell
+    の前置 note も追随させる——Fix 7（filler 一貫性）は満たすが Fix 19
+    （外部凍結値）には違反する。"""
+    bad = _mutate(manifest_data)
+    p2 = _p2_probe(bad)
+    p2["factor_levels"]["medial_filler_pitch_midi"] = 61
+    for cell in p2["cells"]:
+        if "onset_consonant_class" in cell.get("levels", {}):
+            cell["notes"][0]["pitch_midi"] = 61
+    with pytest.raises(m.Run9ValidationError, match="frozen expected value"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix19_p3_duration_level_coordinated_edit(manifest_data: Dict[str, Any]) -> None:
+    """P3 release_duration.short の水準値を変更し、対応 cell の
+    phrase-final duration も追随させる——manifest 自己整合性は満たすが
+    Fix 19 の凍結表には違反する。"""
+    bad = _mutate(manifest_data)
+    p3 = _p3_probe(bad)
+    p3["factor_levels"]["axes"]["release_duration"]["short"] = 2
+    for cell in p3["cells"]:
+        if cell.get("levels", {}).get("release_duration") == "short":
+            for note in cell["notes"]:
+                if note.get("is_phrase_final"):
+                    note["duration_beats"] = 2
+    with pytest.raises(m.Run9ValidationError, match="frozen expected value"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix19_p1_duration_axis_value_changed_alone(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """cell 側を変えずに axes 側だけを変更した単体シナリオでは、実際には
+    Fix 3（cell との内部自己整合性）がパイプライン上先に検出する
+    （full-chain の `validate_probe_manifest()` はこちらのメッセージで
+    fail する）——Fix 19 が付加検査するのは Fix 3 が通ってしまう
+    *協調*編集（本ファイル冒頭の core scenario テスト）である。ここでは
+    `_validate_probe_expected_factor_values()` を直接呼び、Fix 19 の
+    凍結値照合そのものが（cell 非依存で）単体でも機能することを確認する。
+    """
+    bad = _mutate(manifest_data)
+    factor_levels = _p1_probe(bad)["factor_levels"]
+    factor_levels["axes"]["duration"]["long"] = 5
+    with pytest.raises(m.Run9ValidationError, match="frozen expected value"):
+        m._validate_probe_expected_factor_values(
+            expected_probe_id="P1", factor_levels=factor_levels, field="test"
+        )
+    # full-chain でも（Fix 3 経由であれ）fail-closed であることの回帰確認。
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix19_p2_onset_class_description_text_changed(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """P2 onset_consonant_class の記述文言（例: 'liquid_r' の 'ら/り'）を
+    書き換えると、cell 側は変えなくても凍結表照合で拒否される。"""
+    bad = _mutate(manifest_data)
+    _p2_probe(bad)["factor_levels"]["axes"]["onset_consonant_class"]["liquid_r"] = "ろ"
+    with pytest.raises(m.Run9ValidationError, match="frozen expected value"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix19_unknown_axis_rejected(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p1_probe(bad)["factor_levels"]["axes"]["not_a_frozen_axis"] = {"x": 1}
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_fix19_helper_frozen_value_equal_rejects_bool_int_confusion() -> None:
+    """`True == 1` の Python の罠を明示的に排除していることを確認する。"""
+    assert m._frozen_factor_value_equal(1, 1) is True
+    assert m._frozen_factor_value_equal(True, 1) is False
+    assert m._frozen_factor_value_equal(1, True) is False
+    assert m._frozen_factor_value_equal("57->65", "57->65") is True

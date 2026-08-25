@@ -3390,6 +3390,131 @@ _PROBE_FACTORIAL_AXES: Mapping[str, Tuple[str, str]] = types.MappingProxyType({
     "P3": ("release_duration", "ending_voicing"),
 })
 
+# ---------------------------------------------------------------------------
+# PR #322 第9巡指摘 Fix 19（P2, 採用）: Fix 3 の軸別意味照合は
+# factor_levels.axes の宣言値と**対応 cell の note フィールド**の内部
+# 自己整合性しか見ない——協調編集（例: axes.register.low を 57->58 に
+# 変え、low-register の cell も同時に MIDI 58 へ揃える）は通過してしまう。
+# `source_precedent`（S7 凍結値等）が主張し続ける値と、実際に registered
+# された刺激が黙って乖離し得る欠陥。Fix 8/9 と同方式（validator 内凍結表
+# による外部アンカー化・manifest から独立）で、`factor_levels.axes` の
+# 全水準の具体値（+ P2 filler タプル3値）を凍結表 と厳密一致検証する。
+# amendment には本凍結表の同時更新が必要——意図的な二重 pin（manifest
+# 側の変更だけでは通らない摩擦、Fix 8/9 と同じ規約）。現行 manifest の
+# 実値から転記して凍結（P1 register/duration/transition_direction、
+# P2 onset_consonant_class 記述文言 + filler タプル、P3
+# release_duration/ending_voicing 記述文言）。
+# ---------------------------------------------------------------------------
+_PROBE_EXPECTED_FACTOR_VALUES: Mapping[str, Any] = types.MappingProxyType({
+    "P1": types.MappingProxyType({
+        "axes": types.MappingProxyType({
+            "register": types.MappingProxyType({"low": 57, "mid": 62, "high": 65}),
+            "duration": types.MappingProxyType({"short": 1, "long": 4}),
+            "transition_direction": types.MappingProxyType({
+                "low_to_high": "57->65", "high_to_low": "65->57",
+            }),
+        }),
+        "extra": types.MappingProxyType({}),
+    }),
+    "P2": types.MappingProxyType({
+        "axes": types.MappingProxyType({
+            "onset_consonant_class": types.MappingProxyType({
+                "fricative_s": "さ/そ/す", "stop_k": "く/か", "stop_g_voiced": "ぎ",
+                "nasal_n": "の", "semivowel_y": "や/よ", "semivowel_w": "わ",
+                "liquid_r": "ら/り", "vowel_only": "い",
+            }),
+        }),
+        "extra": types.MappingProxyType({
+            "medial_filler_kana": "か", "medial_filler_beats": 1, "medial_filler_pitch_midi": 60,
+        }),
+    }),
+    "P3": types.MappingProxyType({
+        "axes": types.MappingProxyType({
+            "release_duration": types.MappingProxyType({"short": 1, "long": 4}),
+            "ending_voicing": types.MappingProxyType({
+                "voiced": "有声終端（子音+母音の通常発声、devoicing対象外のモーラ）",
+                "unvoiced": "無声化しうる終端（無声子音+狭母音 /u/ 等、無声化しやすいモーラ）",
+            }),
+        }),
+        "extra": types.MappingProxyType({}),
+    }),
+})
+
+
+def _frozen_factor_value_equal(actual: Any, expected: Any) -> bool:
+    """Fix 19 の凍結値照合専用の等値判定。bool は int のサブクラスのため
+    `True == 1` のような誤許可を避ける——期待値が数値なら実値も
+    非bool数値でなければならない、期待値が bool なら実値も bool でなければ
+    ならない、それ以外（文字列等）は素の等値。"""
+    if isinstance(expected, bool):
+        return isinstance(actual, bool) and actual == expected
+    if isinstance(expected, (int, float)):
+        return isinstance(actual, (int, float)) and not isinstance(actual, bool) and actual == expected
+    return actual == expected
+
+
+def _validate_probe_expected_factor_values(
+    *, expected_probe_id: str, factor_levels: Mapping[str, Any], field: str
+) -> None:
+    """PR #322 第9巡指摘 Fix 19（P2, 採用）の実装: `factor_levels.axes` の
+    全水準の具体値（+ P2 filler タプル）を、manifest から独立した凍結表
+    `_PROBE_EXPECTED_FACTOR_VALUES` と厳密一致検証する。cell との内部
+    自己整合性（Fix 3）だけでは、axes の値と対応 cell の note フィールドを
+    協調して書き換える amendment を検出できない——本関数は cell を一切
+    参照せず、axes/filler の宣言値のみを外部凍結値と照合する。"""
+    expected = _PROBE_EXPECTED_FACTOR_VALUES.get(expected_probe_id)
+    if expected is None:
+        return
+    actual_axes = factor_levels.get(_FACTOR_LEVELS_AXES_KEY, {})
+    expected_axes = expected["axes"]
+    unknown_axes = set(actual_axes.keys()) - set(expected_axes.keys())
+    if unknown_axes:
+        raise Run9ValidationError(
+            f"{field}.axes has axis name(s) not present in the frozen expected-value table for "
+            f"{expected_probe_id}: {sorted(unknown_axes)} (Fix 19: amendment requires updating both "
+            "the manifest and _PROBE_EXPECTED_FACTOR_VALUES — intentional double pin, same convention "
+            "as Fix 8/9)"
+        )
+    missing_axes = set(expected_axes.keys()) - set(actual_axes.keys())
+    if missing_axes:
+        raise Run9ValidationError(
+            f"{field}.axes is missing axis name(s) required by the frozen expected-value table for "
+            f"{expected_probe_id}: {sorted(missing_axes)} (Fix 19)"
+        )
+    for axis_name, expected_levels in expected_axes.items():
+        actual_levels = actual_axes[axis_name]
+        unknown_levels = set(actual_levels.keys()) - set(expected_levels.keys())
+        if unknown_levels:
+            raise Run9ValidationError(
+                f"{field}.axes.{axis_name} has level name(s) not present in the frozen table: "
+                f"{sorted(unknown_levels)} (Fix 19: intentional double pin)"
+            )
+        missing_levels = set(expected_levels.keys()) - set(actual_levels.keys())
+        if missing_levels:
+            raise Run9ValidationError(
+                f"{field}.axes.{axis_name} is missing level name(s) required by the frozen table: "
+                f"{sorted(missing_levels)} (Fix 19)"
+            )
+        for level_name, expected_value in expected_levels.items():
+            actual_value = actual_levels[level_name]
+            if not _frozen_factor_value_equal(actual_value, expected_value):
+                raise Run9ValidationError(
+                    f"{field}.axes.{axis_name}.{level_name} = {actual_value!r} does not match the "
+                    f"frozen expected value {expected_value!r} for {expected_probe_id} (Fix 19: a "
+                    "coordinated edit that moves both factor_levels.axes and the corresponding cell's "
+                    "note fields together passes Fix 3's cell-consistency check but violates this "
+                    "manifest-independent frozen anchor — amendment requires updating "
+                    "_PROBE_EXPECTED_FACTOR_VALUES too, an intentional double pin)"
+                )
+
+    for extra_key, expected_value in expected["extra"].items():
+        actual_value = factor_levels.get(extra_key)
+        if not _frozen_factor_value_equal(actual_value, expected_value):
+            raise Run9ValidationError(
+                f"{field}.{extra_key} = {actual_value!r} does not match the frozen expected value "
+                f"{expected_value!r} for {expected_probe_id} (Fix 19: intentional double pin)"
+            )
+
 
 def _validate_probe_expected_cell_ids(
     *, expected_probe_id: str, cells: List[Dict[str, Any]], field: str
@@ -4835,6 +4960,13 @@ def _validate_probe_object(
     if expected_probe_id in _FACTOR_LEVEL_PROBE_IDS:
         _validate_probe_factor_levels_cell_mapping(
             factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
+        )
+        # PR #322 第9巡指摘 Fix 19: axes/filler の宣言値そのものを cell から
+        # 独立した凍結表と照合する（cell との内部自己整合性だけでは検出
+        # できない協調編集を捕捉する）。
+        _validate_probe_expected_factor_values(
+            expected_probe_id=expected_probe_id, factor_levels=probe["factor_levels"],
+            field=f"{field}.factor_levels",
         )
 
     if expected_probe_id in _PROBE_FACTORIAL_AXES:
