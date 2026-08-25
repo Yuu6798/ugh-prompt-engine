@@ -6161,6 +6161,19 @@ def load_pinned_probe_manifest(
     (3) 実バイトの raw sha256 が pin 値と厳密一致すること（stale/改変を
     検出） (4) JSON parse (5) `validate_probe_manifest()` 全検証。
 
+    **read-once 契約（PR #322 第7巡指摘 Fix 15, 採用）**: digest と parse
+    は同一バイト列から導出する——`path.read_bytes()` で**1回だけ**読み、
+    そのバッファ `buf` から `hashlib.sha256(buf).hexdigest()`（digest）と
+    `json.loads(buf.decode("utf-8"))`（parse 対象）の両方を導出する。
+    ファイルを2回（hash 用・parse 用）に分けて読むと、可変ボリューム/
+    並行差し替え環境で「hash した版」と「parse した版」が別バイト列に
+    なり得（TOCTOU）、pin 未被覆の内容を返しながら fail-closed pin 検証
+    を主張してしまう——read-once 化によりこの乖離は構造的に不可能になる。
+    （区別: PR #321 で見送った TOCTOU 指摘は advisory sidecar 用の共有
+    列挙関数の再構造化を要し逓減領域と判定したが、本関数は pin 保証を
+    職務とする正規消費関数の単一ファイル・局所修正であり、fail-closed の
+    主張自体の整合性に関わるため採用とした。）
+
     戻り値は検証済み manifest dict。
     """
     field = contract.pin_field("probe_manifest_sha")
@@ -6177,7 +6190,9 @@ def load_pinned_probe_manifest(
             "this function is the sole canonical access path for the probe manifest (a pod render "
             "harness must not call json.load() on it directly); a missing file is fail-closed"
         )
-    actual_sha = compute_file_sha256(path)
+    # read-once: digest と parse を同一バッファから導出する（Fix 15）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
     if actual_sha != pinned_sha:
         raise Run9ValidationError(
             f"load_pinned_probe_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
@@ -6186,7 +6201,7 @@ def load_pinned_probe_manifest(
             "拒否する"
         )
     try:
-        data = _loads_strict_json(path.read_text(encoding="utf-8"))
+        data = _loads_strict_json(buf.decode("utf-8"))
     except Run9ValidationError:
         raise
     except Exception as exc:  # pragma: no cover - defensive fail-closed

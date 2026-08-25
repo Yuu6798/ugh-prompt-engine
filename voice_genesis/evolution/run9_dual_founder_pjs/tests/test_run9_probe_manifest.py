@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -1272,6 +1273,64 @@ def test_negative_fix13_pin_not_pinned() -> None:
 
     with pytest.raises(m.Run9ValidationError, match="not PINNED"):
         m.load_pinned_probe_manifest(_FakeContractUnpinned())  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第7巡指摘 Fix 15（P1, 採用）: `load_pinned_probe_manifest()` の
+# read-once 化。旧実装は `compute_file_sha256(path)`（1回目の読込）と
+# `path.read_text()`（2回目の読込）でファイルを2回読んでおり、可変
+# ボリューム/並行差し替え環境で「hash した版」と「parse した版」が別
+# バイト列になり得た（TOCTOU）。`path.read_bytes()` で1回だけ読み、同一
+# バッファから digest（`hashlib.sha256`）と parse 対象（`str.decode`）の
+# 両方を導出するよう変更した——hash した版と parse した版の乖離が
+# 構造的に不可能になる。
+# ---------------------------------------------------------------------------
+
+
+class _ReadCountingPath:
+    """`Path` の薄いラッパー。`load_pinned_probe_manifest()` が呼ぶ
+    `is_file()` / `read_bytes()` のみを実 Path へ委譲しつつ、
+    `read_bytes()` の呼び出し回数を数える（read-once 検証の spy）。"""
+
+    def __init__(self, real_path: Path) -> None:
+        self._real = real_path
+        self.read_bytes_call_count = 0
+
+    def is_file(self) -> bool:
+        return self._real.is_file()
+
+    def read_bytes(self) -> bytes:
+        self.read_bytes_call_count += 1
+        return self._real.read_bytes()
+
+    def __str__(self) -> str:  # エラーメッセージの f-string 埋め込み用
+        return str(self._real)
+
+
+def test_fix15_load_pinned_probe_manifest_reads_file_exactly_once(
+    contract: m.Run9RunContract,
+) -> None:
+    spy = _ReadCountingPath(m.PROBE_MANIFEST_PATH)
+    data = m.load_pinned_probe_manifest(contract, manifest_path=spy)  # type: ignore[arg-type]
+    assert spy.read_bytes_call_count == 1, (
+        "load_pinned_probe_manifest() はファイルをちょうど1回だけ read_bytes() する契約"
+        f"（read-once。実測 {spy.read_bytes_call_count} 回）"
+    )
+    assert data["probes"]
+
+
+def test_fix15_digest_and_parse_derive_from_identical_buffer(
+    contract: m.Run9RunContract, manifest_data: Dict[str, Any]
+) -> None:
+    """digest（sha256）と parse 対象が同一バイト列由来であることを、実
+    ファイルの `read_bytes()` から独立に導出した期待値と突き合わせて
+    確認する（回帰確認——read-once 化で外部挙動が変わっていないこと）。"""
+    buf = m.PROBE_MANIFEST_PATH.read_bytes()
+    expected_sha = hashlib.sha256(buf).hexdigest()
+    field = contract.pin_field("probe_manifest_sha")
+    assert field["value"] == expected_sha
+    loaded = m.load_pinned_probe_manifest(contract)
+    assert loaded == manifest_data
 
 
 # ---------------------------------------------------------------------------
