@@ -3686,6 +3686,47 @@ def founder_genome_from_dict(
     return canonical
 
 
+def issue_founder_genome_document(
+    founder_id: str, *, domain: Run9IdentityDomain, rights_manifest: Mapping[str, Any]
+) -> bytes:
+    """RUN9-BIRTH-PREP-1 §A: Founder genome の永続文書発行を行う唯一の公開
+    経路。内部は必ず `build_founder(domain, founder_id, rights_manifest=
+    rights_manifest)` を経由するため、Fix 6/7 の fail-closed ガード
+    （attested 前提条件・anchor grant 検証・user anchor 実物照合）が発行の
+    たびに毎回実行される——本関数は `build_founder()` を迂回した genome 構築
+    経路を一切持たない。
+
+    直列化はここで凍結する:
+    `(json.dumps(genome.to_dict(), ensure_ascii=False, indent=2,
+    sort_keys=True) + "\\n").encode("utf-8")`。
+
+    発行 = この関数の出力バイト列をそのまま `founders/R9F-0x_genome.json`
+    として書き出すこと。手書き・別形式（インデント幅の違い・末尾改行の
+    有無・キー順の違いを含む）は不正な発行であり、`RUN9_CONTRACT.yaml`
+    `founder_genome_shas` が pin するのはこの関数の出力バイトの sha256
+    （`compute_file_sha256()` と同じファイル実バイト規約）に限る。
+    """
+    genome = build_founder(domain, founder_id, rights_manifest=rights_manifest)
+    return (json.dumps(genome.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+
+
+# rev RUN9-BIRTH-PREP-1: 永続 genome 文書の規約配置（`PRACTICE_MANIFEST_PATH`
+# と同じ命名規約 — schema から機械的に導出せず、リポジトリ内の固定配置として
+# 凍結する）。
+FOUNDER_GENOME_DIR = _THIS_DIR / "founders"
+
+
+def founder_genome_document_path(founder_id: str) -> Path:
+    """`founders/R9F-0x_genome.json` の規約パスを返す。"""
+    if not _FOUNDER_ID_RE.match(founder_id):
+        raise Run9ValidationError(
+            f"founder_id must match {_FOUNDER_ID_RE.pattern}, got {founder_id!r}"
+        )
+    return FOUNDER_GENOME_DIR / f"{founder_id}_genome.json"
+
+
 # ---------------------------------------------------------------------------
 # Run Contract（DESIGN_RUN9 §23 `voicegenesis-run-contract/1.0`）
 # ---------------------------------------------------------------------------

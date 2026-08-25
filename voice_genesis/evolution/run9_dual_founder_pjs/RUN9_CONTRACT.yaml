@@ -4,9 +4,15 @@
 # PINNED になるまで本学習開始禁止。現状の gate_state()（run9_schema.py）は
 # "BLOCKED"（pre-run 欄の一部が依然 PENDING — 2026-08-25 User attestation
 # 実行により User rights attest 待ちは解消済み（下記「2026-08-25 User
-# attestation 実行」節参照）。残る主因は VG-L0 学習ハーネス未実装 +
-# practice/education/learning-recipe manifest・founder genome 文書の
-# 実体未生成のみ）。これは正直な状態表現であり、捏造して PINNED にしていない。
+# attestation 実行」節参照）。〔履歴: 本節は当初「founder genome 文書の
+# 実体未生成」も残る主因に含めていたが、同日中の RUN9-BIRTH-PREP-1
+# （本改訂）で issue_founder_genome_document() により正式発行済み——
+# `founders/R9F-01_genome.json`/`R9F-02_genome.json` を書き出し
+# `founder_genome_shas` を実 raw sha256 で PINNED 化した（下記
+# founder_genome_shas 欄参照）→ RUN9-BIRTH-PREP-1 で解消済み〕。残る
+# 主因は VG-L0 学習ハーネス未実装 + practice/education/learning-recipe
+# manifest の実体未生成のみ）。これは正直な状態表現であり、捏造して
+# PINNED にしていない。
 #
 # 2026-08-24 User 裁定 5件により design_revision 0.1 → 0.2
 # （DESIGN_RUN9_REVISION_0.2.md）。本改訂で af0/ritsu anchor・backbone
@@ -87,13 +93,17 @@
 # を返す（domain 凍結）。凍結の結果、`run9_schema.build_founder()` が
 # 現行 domain draft から R9F-01/R9F-02 の genome_id を決定論的に計算
 # 可能になった（実測当時: R9F-01 = 2f7df5a90a6c99c9 / R9F-02 =
-# 9cd047c667dcb96e、両者相異・再計算で不変であることを確認済み）。ただし
-# `founder_genome_shas` が pin する対象は genome_id ではなく永続 genome
-# 文書ファイル（founders/R9F-0x_genome.json）バイトの sha256 であり
-# （下記コメント参照）、その文書を実際に `founders/` へ書き出して正式
-# 発行する builder・pin 手続きはまだ本 repo に配線されていない
-# （事前配線テストが存在しない）——`founder_genome_shas` は本改訂でも
-# 引き続き PENDING のまま（下記該当欄の reason 参照。捏造 PIN はしない）。
+# 9cd047c667dcb96e、両者相異・再計算で不変であることを確認済み）。
+# 〔履歴: `founder_genome_shas` が pin する対象は genome_id ではなく永続
+# genome 文書ファイル（founders/R9F-0x_genome.json）バイトの sha256 で
+# あり（下記コメント参照）、当時はその文書を実際に `founders/` へ書き出
+# して正式発行する builder・pin 手続きが本 repo に配線されておらず
+# （事前配線テストも存在せず）、`founder_genome_shas` は本改訂（User
+# attestation 実行時点）でも引き続き PENDING のままだった（下記該当欄の
+# reason 参照。捏造 PIN はしない）→ 同日中の
+# issue_founder_genome_document() 新設・founders/ への正式発行・実 raw
+# sha256 での PINNED 化（下記 founder_genome_shas 欄参照）→
+# RUN9-BIRTH-PREP-1 で解消済み〕。
 #
 # 2026-08-25 追記（Codex bot レビュー PR #320 第1巡指摘, P1, 採用, Fix 1）:
 # 上記の anchor_hashes.user binding は「rights_manifest.json 全体」の
@@ -469,45 +479,48 @@ backbone_runtime_bundle_sha:
 # genome_id は文書内部の1フィールドに過ぎない）。
 founder_genome_shas:
   R9F-01:
-    value: null
-    status: PENDING
+    value: "6c90f571c671b461c1d2735ffb7f3536c4a2a18c25d1a7f610300d3b1b2ded2d"
+    status: PINNED
     reason: >-
+      2026-08-25 正式発行（issue_founder_genome_document()、genome_id =
+      66f420672a154283 / 63f4b8f24b827cd4。pin 対象はファイルバイトの
+      sha256 であり 16hex genome_id ではない — 従来規約どおり）。
       2026-08-25 User attestation 実行により identity_domain_run9_v1.json
       の anchor_hashes（af0/ritsu/user）+ metric_space_sha は全て PINNED
-      となり domain.is_pinned()==True（本欄冒頭コメント「2026-08-25 User
-      attestation 実行」節参照）——`run9_schema.build_founder()` の
-      ValueError 拒否（未 pin domain、DESIGN_RUN9 §22 実行順 step 3→4 の
-      機械強制）はもはや働かず、genome_id は現行 domain draft から決定論的
-      に計算可能（実測・再計算一致確認済み: R9F-01 = 66f420672a154283。
-      2026-08-25 Codex bot レビュー PR #320 第2巡 Fix 3（P1, 採用）による
+      となり domain.is_pinned()==True（本ファイル冒頭コメント「2026-08-25
+      User attestation 実行」節参照）となったことで
+      `run9_schema.build_founder()` の ValueError 拒否（未 pin domain、
+      DESIGN_RUN9 §22 実行順 step 3→4 の機械強制）が解除され、genome_id
+      は現行 domain draft から決定論的に計算可能になった（2026-08-25
+      Codex bot レビュー PR #320 第2巡 Fix 3（P1, 採用）による
       anchor_hashes.user の binding scope 再限定 repin 後の値——旧値
       f5ea253804728b3b は第1巡 Fix 1 repin 後（本 projection 化前）の値、
       さらにその前の 2f7df5a90a6c99c9 は repin 前の binding
       （rights_manifest.json 全体束縛）時代の値、上記「2026-08-25 追記」
-      節参照）。
-      ただし本欄が pin する対象は genome_id ではなく永続 genome 文書
-      ファイル（founders/R9F-01_genome.json）バイトの sha256 であり（上記
-      「founder genome shas」コメント参照）、その文書を実際に `founders/`
-      へ書き出して正式発行する builder・pin 手続きはまだ本 repo に配線
-      されていない（事前配線テストが存在しない——捏造 PIN はしない）ため、
-      律速要因が「user anchor 未 pin」から「genome 文書の正式発行未実施」
-      へ移っただけで本欄は引き続き PENDING。発行後は founders/
-      R9F-01_genome.json のバイト sha256（64hex）を pin する。
+      節参照）。RUN9-BIRTH-PREP-1（本改訂）で新設した
+      `run9_schema.issue_founder_genome_document()`（内部は必ず
+      `build_founder()` 経由 = Fix 6/7 の fail-closed ガードが発行経路で
+      毎回実行される）の出力バイトをそのまま `founders/R9F-01_genome.json`
+      として書き出し正式発行した——本欄の値はその実ファイルの raw sha256
+      （`run9_schema.compute_file_sha256()`）。
   R9F-02:
-    value: null
-    status: PENDING
+    value: "6311fdef3c7657384e5366caa9cb5b429b8d7e334a0b2b84fa011d16a086e757"
+    status: PINNED
     reason: >-
+      2026-08-25 正式発行（issue_founder_genome_document()、genome_id =
+      66f420672a154283 / 63f4b8f24b827cd4。pin 対象はファイルバイトの
+      sha256 であり 16hex genome_id ではない — 従来規約どおり）。
       2026-08-25 User attestation 実行により identity_domain_run9_v1.json
-      の user anchor も PINNED 済み（R9F-01 と同一根拠——本欄冒頭コメント
-      「2026-08-25 User attestation 実行」節参照）。genome_id は現行 domain
-      draft から決定論的に計算可能（実測・再計算一致確認済み: R9F-02 =
-      63f4b8f24b827cd4（同 Fix 3 repin 後の値——旧値 72423141c1add7e8 は
-      第1巡 Fix 1 repin 後（本 projection 化前）の値、さらにその前の
-      9cd047c667dcb96e は repin 前の値）、R9F-01 の値と相異することも
-      確認済み）。R9F-01 と
-      同一理由（genome 文書の正式発行 builder・pin 手続き未配線）により
-      本欄は引き続き PENDING。発行後は founders/R9F-02_genome.json のバイト
-      sha256（64hex）を pin する。
+      の user anchor も PINNED 済み（R9F-01 と同一根拠——本ファイル冒頭
+      コメント「2026-08-25 User attestation 実行」節参照）。genome_id は
+      現行 domain draft から決定論的に計算可能（同 Fix 3 repin 後の値
+      = 63f4b8f24b827cd4——旧値 72423141c1add7e8 は第1巡 Fix 1 repin 後
+      （本 projection 化前）の値、さらにその前の 9cd047c667dcb96e は
+      repin 前の値、R9F-01 の値と相異することも確認済み）。
+      RUN9-BIRTH-PREP-1（本改訂）で新設した
+      `run9_schema.issue_founder_genome_document()` の出力バイトをそのまま
+      `founders/R9F-02_genome.json` として書き出し正式発行した——本欄の
+      値はその実ファイルの raw sha256（`run9_schema.compute_file_sha256()`）。
 
 # --- lesson / learning ------------------------------------------------------
 # rev 0.3 改訂A/C（DESIGN_RUN9_REVISION_0.3.md）+ User 外部レビュー PR #317

@@ -1,0 +1,22 @@
+{
+  "coords": {
+    "af0": 0.6,
+    "ritsu": 0.3,
+    "user": 0.1
+  },
+  "ecosystem_generation": 0,
+  "ecosystem_role": "FOUNDER_CANDIDATE",
+  "genetic_generation": 1,
+  "genome_id": "66f420672a154283",
+  "identity_domain": "run9-af0-ritsu-user/1.0",
+  "operator_id": "TRI_CROSSOVER/1.0",
+  "parents": [
+    "AF0",
+    "RITSU",
+    "USER_DONOR"
+  ],
+  "performance_seed": 909001,
+  "profile_label": "AF0_DOMINANT",
+  "skill_state": "DEFAULT_NEUTRAL",
+  "voice_id": "R9F-01"
+}
