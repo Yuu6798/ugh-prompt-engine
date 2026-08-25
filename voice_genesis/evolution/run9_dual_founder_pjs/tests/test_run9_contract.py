@@ -1867,10 +1867,16 @@ def test_revision02_backbone_runtime_bundle_sha_pinned_via_run9_render_code_comm
     まま——対象は別欄）。テスト名は歴史的に revision02_ prefix のまま
     （rename ではなく assertion のみ更新する既存の repo 慣習）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    assert bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
-    assert bundle["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9"
-    assert bundle["run9_render_code_commit"]["declaration"]["declared_by"] == "User"
-    assert bundle["run9_render_code_commit"]["declaration"]["declared_at"] == "2026-08-25"
+    assert bundle["historical_export_provenance"]["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+    assert bundle["run9_runtime_inputs"]["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9"
+    assert (
+        bundle["run9_runtime_inputs"]["run9_render_code_commit"]["declaration"]["declared_by"]
+        == "User"
+    )
+    assert (
+        bundle["run9_runtime_inputs"]["run9_render_code_commit"]["declaration"]["declared_at"]
+        == "2026-08-25"
+    )
 
     field = contract_raw["backbone_runtime_bundle_sha"]
     assert field["status"] == "PINNED"
@@ -1891,7 +1897,7 @@ def test_revision02_render_code_commit_status_and_bundle_sha_status_are_consiste
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     bundle_field_status = contract_raw["backbone_runtime_bundle_sha"]["status"]
     if bundle_field_status == "PINNED":
-        assert bundle["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9", (
+        assert bundle["run9_runtime_inputs"]["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9", (
             "backbone_runtime_bundle_sha は PINNED だが、bundle 内 "
             "run9_render_code_commit は DECLARED_FOR_RUN9 になっていない — "
             "PINNED 判定の根拠が bundle 内で裏付けられていない"
@@ -1939,7 +1945,7 @@ def test_revision02_render_code_commit_value_and_confirmation_metadata_present()
     別テスト test_rev04_run9_render_code_commit_declared_for_run9_with_ruling_reference
     参照）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    rcc = bundle["render_code_commit"]
+    rcc = bundle["historical_export_provenance"]["render_code_commit"]
     assert rcc["commit_full"] == "e2307b1080b00f3999702ce9017cfd75c7f862fe"
     assert rcc["commit_short"] == "e2307b1"
     assert rcc["status"] == "INFERRED_UNCONFIRMED"
@@ -1947,8 +1953,11 @@ def test_revision02_render_code_commit_value_and_confirmation_metadata_present()
     assert rcc["inference_basis"]
     assert "attestation" not in rcc
     history = rcc["history"]
-    assert len(history) == 2
+    # PR #319 第2巡指摘（P2, 採用）の構造分離イベントが append-only で
+    # 追加され、2026-08-25 の昇格→差し戻しの2件に続く3件目となった。
+    assert len(history) == 3
     assert all(h["date"] == "2026-08-25" for h in history)
+    assert any("PR #319" in h["event"] for h in history)
     # RUN6 export 記録自体には commit が明記されていない事実が明文化されていること
     # （note は無改変ではないが、この根拠自体は消えていないことを確認する）。
     assert "s5_record" in rcc["note"]
@@ -1958,7 +1967,7 @@ def test_revision02_render_code_commit_value_and_confirmation_metadata_present()
 def test_revision02_backbone_bundle_acoustic_onnx_matches_ruling() -> None:
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     assert (
-        bundle["acoustic_onnx_sha256"]["value"]
+        bundle["run9_runtime_inputs"]["acoustic_onnx_sha256"]["value"]
         == "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706"
     )
 
@@ -1970,7 +1979,10 @@ def test_revision02_backbone_bundle_checkpoint_matches_contract() -> None:
     降格とは独立に、両ファイルとも引き続き PINNED 相当の値を持つ。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
-    assert bundle["checkpoint_sha256"]["value"] == contract_raw["backbone_checkpoint_sha"]["value"]
+    assert (
+        bundle["run9_runtime_inputs"]["checkpoint_sha256"]["value"]
+        == contract_raw["backbone_checkpoint_sha"]["value"]
+    )
 
 
 def test_revision02_backbone_bundle_run7_not_used_records_teacher_swap_reason() -> None:
@@ -2414,16 +2426,72 @@ def test_revision02_readme_mentions_revision_0_2() -> None:
 
 
 # ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第2巡対応 — Fix 4（P2）: README の stale blocker
+# 文の更新（performer/composer 記録済みなのに未記録と言っていた記述の是正）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_4_readme_blocker_no_longer_claims_singer_composer_unrecorded() -> None:
+    """旧 blocker 文「歌唱者個人・作曲者/作詞者の特定が repo 内に記録なし」
+    は、performer/composer が同 revision（2026-08-25 User 追加裁定②）で
+    既に Junya Koguchi と記録済みであるにもかかわらず未記録と主張していた
+    ——「残存」節（現在ブロッカーとして提示している箇所）からこの stale な
+    文言を除去したことを確認する（Codex bot レビュー PR #319 第2巡指摘,
+    P2, 採用）。"""
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    blocker_section = readme.split("**残存**:", 1)[1]
+    assert "歌唱者個人・作曲者/作詞者の特定が repo 内" not in blocker_section
+    assert "に記録なし" not in blocker_section.split("2. **VG-L0", 1)[0]
+
+
+def test_fix319_4_readme_blocker_1_lists_confirmed_performer_composer_owner() -> None:
+    """残存ブロッカー(1) が、確定済み（performer/composer/owner = Junya
+    Koguchi 出典付き、recording license = CC BY-SA 4.0）を明記している
+    こと。"""
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    blocker_1 = readme.split("**残存**:", 1)[1].split("2. **VG-L0", 1)[0]
+    assert "確定済み" in blocker_1
+    assert "Junya Koguchi" in blocker_1
+    assert "CC BY-SA 4.0" in blocker_1
+
+
+def test_fix319_4_readme_blocker_1_lists_remaining_unresolved_items() -> None:
+    """残存ブロッカー(1) が、真に未解決の項目（lyricist=UNRESOLVED_EXTERNAL・
+    SA義務の解釈・User attest 待ちの usage grants・Fix 5/6 の rights_class/
+    consent_status 仕分け）のみを未解決として挙げていること。"""
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    blocker_1 = readme.split("**残存**:", 1)[1].split("2. **VG-L0", 1)[0]
+    assert "lyricist" in blocker_1
+    assert "UNRESOLVED_EXTERNAL" in blocker_1
+    assert "share_alike_applies_to_synthesis_output" in blocker_1 or "share-alike" in blocker_1
+    assert "PENDING_USER_ATTESTATION" in blocker_1
+    assert "not_granted" in blocker_1
+
+
+def test_fix319_4_readme_no_stale_singer_composer_unrecorded_claim_anywhere() -> None:
+    """README 全体を grep 掃討: 「特定が...記録なし」という stale な確定
+    文言が、履歴的記述（明示的過去形・日付付きセクション）以外に残って
+    いないこと（同型の stale 文の全数確認）。"""
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "の特定が repo 内に記録なし" not in readme
+    assert "の特定が repo 内\n" not in readme
+
+
+# ---------------------------------------------------------------------------
 # PR #316 Codex bot レビュー第2巡対応 — runtime bundle に RUN6 render フロー
 # の全消費物（canon model assets）を追加
 # ---------------------------------------------------------------------------
 
 
 def test_revision02_bundle_has_canon_model_assets_section() -> None:
+    """PR #319 第2巡指摘（P2, 採用）: canon_model_assets は
+    run9_runtime_inputs 節配下へ移動した（RUN9 が実際に消費する入力の
+    直接証拠であり、歴史的推定を含まないため）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    assert "canon_model_assets" in bundle
-    assert "assets" in bundle["canon_model_assets"]
-    assert set(bundle["canon_model_assets"]["assets"].keys()) == {
+    runtime_inputs = bundle["run9_runtime_inputs"]
+    assert "canon_model_assets" in runtime_inputs
+    assert "assets" in runtime_inputs["canon_model_assets"]
+    assert set(runtime_inputs["canon_model_assets"]["assets"].keys()) == {
         "linguistic_onnx",
         "variance_duration_onnx",
         "variance_pitch_onnx",
@@ -2437,9 +2505,10 @@ def test_revision02_bundle_canon_model_assets_entries_have_64hex_and_source() ->
     いない（PENDING 相当）なら reason を持つこと（Codex bot レビュー
     PR #316 第2巡指摘）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    canon_model_assets = bundle["run9_runtime_inputs"]["canon_model_assets"]
     checked = 0
     for section_name in ("assets", "acoustic_export_companions"):
-        section = bundle["canon_model_assets"][section_name]
+        section = canon_model_assets[section_name]
         for entry_name, entry in section.items():
             if not isinstance(entry, dict) or "value" not in entry:
                 continue  # "note" のような非エントリ・メタキーはスキップ
@@ -2464,28 +2533,29 @@ def test_revision02_bundle_canon_model_assets_values_match_probe_records() -> No
     """canon_model_assets の各値が、一次ソースの probe result JSON の
     実測値と一致すること（転記誤りの検出）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    runtime_inputs = bundle["run9_runtime_inputs"]
     probe = json.loads(
         (_RUN_DIR.parent / "records" / "vgl0_control_axis_probe_result_n6.json").read_text(
             encoding="utf-8"
         )
     )
     pins = probe["pins"]
-    assets = bundle["canon_model_assets"]["assets"]
+    assets = runtime_inputs["canon_model_assets"]["assets"]
     assert assets["linguistic_onnx"]["value"] == pins["canon_linguistic_onnx"]["sha256"]
     assert assets["variance_duration_onnx"]["value"] == pins["canon_dur_onnx"]["sha256"]
     assert assets["variance_pitch_onnx"]["value"] == pins["canon_pitch_onnx"]["sha256"]
     assert assets["phonemes_txt"]["value"] == pins["canon_phonemes"]["sha256"]
 
-    companions = bundle["canon_model_assets"]["acoustic_export_companions"]
+    companions = runtime_inputs["canon_model_assets"]["acoustic_export_companions"]
     assert companions["dsconfig_yaml"]["value"] == pins["acoustic_dsconfig"]["sha256"]
     assert companions["acoustic_phonemes_json"]["value"] == pins["acoustic_phonemes_json"]["sha256"]
     assert companions["speaker_embed"]["value"] == pins["speaker_embed"]["sha256"]
 
-    # acoustic_onnx / vocoder_onnx の両方が、bundle 側の既存 top-level pin
-    # とも probe record 側とも一致すること（run6 backbone の同一性の
-    # 追加の交差確認）。
-    assert bundle["acoustic_onnx_sha256"]["value"] == pins["acoustic_onnx"]["sha256"]
-    assert bundle["vocoder"]["runtime_onnx_sha256"]["value"] == pins["vocoder_onnx"]["sha256"]
+    # acoustic_onnx / vocoder_onnx の両方が、bundle 側の既存
+    # run9_runtime_inputs 直下の pin とも probe record 側とも一致すること
+    # （run6 backbone の同一性の追加の交差確認）。
+    assert runtime_inputs["acoustic_onnx_sha256"]["value"] == pins["acoustic_onnx"]["sha256"]
+    assert runtime_inputs["vocoder"]["runtime_onnx_sha256"]["value"] == pins["vocoder_onnx"]["sha256"]
 
 
 def test_revision02_bundle_canon_model_assets_cross_checked_across_4_probe_records() -> None:
@@ -2493,7 +2563,7 @@ def test_revision02_bundle_canon_model_assets_cross_checked_across_4_probe_recor
     n10 / render_reproducibility）すべてで同一であることを確認する
     （n6 以外の3件は補助的な相互一致確認）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    assets = bundle["canon_model_assets"]["assets"]
+    assets = bundle["run9_runtime_inputs"]["canon_model_assets"]["assets"]
     records_dir = _RUN_DIR.parent / "records"
     for filename in (
         "vgl0_control_axis_probe_result.json",
@@ -2514,7 +2584,7 @@ def test_revision02_bundle_canon_model_source_distribution_is_distinct_from_rits
     構造的検査）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
-    canon_zip_sha = bundle["canon_model_assets"]["source_distribution"]["sha256"]
+    canon_zip_sha = bundle["run9_runtime_inputs"]["canon_model_assets"]["source_distribution"]["sha256"]
     ritsu_anchor_sha = domain_raw["anchor_hashes"]["ritsu"]
     assert canon_zip_sha != ritsu_anchor_sha
     assert canon_zip_sha == "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530"
@@ -2541,9 +2611,112 @@ def test_revision02_backbone_runtime_bundle_sha_still_pending_after_canon_assets
     確認であり、PENDING 固定の確認ではない）。"""
     field = contract_raw["backbone_runtime_bundle_sha"]
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    assert "canon_model_assets" in bundle  # 対象拡張が引き続き存在すること
+    assert "canon_model_assets" in bundle["run9_runtime_inputs"]  # 対象拡張が引き続き存在すること
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(BACKBONE_BUNDLE_PATH)
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第2巡対応 — Fix 3（P2）: bundle pin の証明範囲の
+# 構造分離（run9_runtime_inputs / historical_export_provenance）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_2_bundle_has_two_top_level_proof_scope_sections() -> None:
+    """bundle が run9_runtime_inputs / historical_export_provenance の
+    2節へ再編されていること（Codex bot レビュー PR #319 第2巡指摘, P2,
+    採用: bundle pin の証明範囲の構造分離）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert "run9_runtime_inputs" in bundle
+    assert "historical_export_provenance" in bundle
+    # 旧 top-level 直下キーは新節の配下へ移動済みで、bundle 直下には
+    # もう存在しない（構造分離が実体を伴うことの確認 — 節を追加しただけの
+    # 見せかけの分離ではない）。
+    for moved_key in (
+        "checkpoint_sha256",
+        "acoustic_onnx_sha256",
+        "config_sha256",
+        "speaker_map_sha256",
+        "phoneme_map_sha256",
+        "language_map_sha256",
+        "vocoder",
+        "run9_render_code_commit",
+        "canon_model_assets",
+        "render_code_commit",
+    ):
+        assert moved_key not in bundle, f"{moved_key} は旧位置(bundle直下)にまだ残っている"
+
+
+def test_fix319_2_run9_runtime_inputs_contains_only_direct_evidence_fields() -> None:
+    """run9_runtime_inputs 節は「RUN9 が実際に消費する入力の直接証拠」
+    （checkpoint/ONNX sha256・export companions の hash 群・
+    run9_render_code_commit 前方宣言）のみを収載し、歴史的推定
+    （render_code_commit）を含まないこと。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    runtime_inputs = bundle["run9_runtime_inputs"]
+    for expected_key in (
+        "checkpoint_sha256",
+        "acoustic_onnx_sha256",
+        "config_sha256",
+        "speaker_map_sha256",
+        "phoneme_map_sha256",
+        "language_map_sha256",
+        "vocoder",
+        "run9_render_code_commit",
+        "canon_model_assets",
+    ):
+        assert expected_key in runtime_inputs
+    assert "render_code_commit" not in runtime_inputs, (
+        "run9_runtime_inputs は直接証拠のみを収載する節であり、歴史的推定である "
+        "render_code_commit（historical_export_provenance 節に隔離済み）を含んではならない"
+    )
+    assert runtime_inputs["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9"
+
+
+def test_fix319_2_historical_export_provenance_contains_only_render_code_commit() -> None:
+    """historical_export_provenance 節は RUN6 期の export commit 推定
+    （render_code_commit）のみを収載し、status は INFERRED_UNCONFIRMED の
+    まま変化していないこと（構造移動のみで内容は無改変）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    historical = bundle["historical_export_provenance"]
+    assert set(historical.keys()) == {"claim_scope_note", "render_code_commit"}
+    assert historical["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+    assert "RUN9" in historical["claim_scope_note"]
+    assert "根拠には使わない" in historical["claim_scope_note"]
+
+
+def test_fix319_2_bundle_claim_scope_field_documents_pinned_meaning() -> None:
+    """bundle 冒頭の claim_scope 節が、backbone_runtime_bundle_sha の
+    PINNED が主張する範囲（本文書のバイト同一性 + run9_runtime_inputs の
+    確定のみ）と、historical_export_provenance が証明範囲外であることを
+    明記していること。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    claim_scope = bundle["claim_scope"]
+    assert "run9_runtime_inputs" in claim_scope["statement"]
+    assert "historical_export_provenance" in claim_scope["statement"]
+    assert "対象外" in claim_scope["statement"] or "含まれない" in claim_scope["statement"]
+    assert "why_run9_reproducibility_is_unaffected" in claim_scope
+    assert "run9_render_code_commit" in claim_scope["why_run9_reproducibility_is_unaffected"]
+
+
+def test_fix319_2_run9_contract_yaml_pin_comment_documents_claim_scope() -> None:
+    """RUN9_CONTRACT.yaml の backbone_runtime_bundle_sha pin 注記（コメント）
+    にも claim scope の要点（バイト同一性 + run9_runtime_inputs 確定のみを
+    主張し、historical_export_provenance の真理値は主張しない）が記載されて
+    いること（bundle json 側と RUN9_CONTRACT.yaml 側の両方に記載する指示の
+    確認）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert "claim scope" in contract_text.lower()
+    assert "run9_runtime_inputs" in contract_text
+    assert "historical_export_provenance" in contract_text
+    assert "証明範囲外" in contract_text
+
+
+def test_fix319_2_backbone_runtime_bundle_sha_history_notes_prior_value() -> None:
+    """repin 時、旧値（69ea578b...）が履歴として append-only に保持されて
+    いること（コミット規約: sha 再計算 → repin、旧値は履歴保持）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert "69ea578bb702f0dd0ca16c1a20b34d4f78c81495b1318a5d0503050c84d37a53" in contract_text
 
 
 # ---------------------------------------------------------------------------
@@ -6941,6 +7114,157 @@ def test_rev04_rights_manifest_extract_rejects_wrong_top_schema() -> None:
         m.extract_voice_identity_rights_layer(data)
 
 
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第2巡対応 — Fix 5（P2）: 層の permission
+# フィールドの必須化（層別閉集合キー + rights_class/consent_status 語彙）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_5_rejects_recording_master_license_deleted() -> None:
+    """recording_master_rights.license を削除しても旧 validator は非空
+    role と provenance ブロックしか見ておらず受理していた——Fix 5 で
+    層別必須キー閉集合が拒否するようになったことの確認（負例1）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["license"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_5_rejects_performance_rights_class_deleted() -> None:
+    """performance_rights.rights_class の削除を拒否する（負例2）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["performance_rights"]["rights_class"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize(
+    "layer_name",
+    ["voice_identity_rights", "performance_rights", "composition_rights", "recording_master_rights"],
+)
+def test_fix319_5_rejects_consent_status_deleted_in_every_layer(layer_name: str) -> None:
+    """4層すべてで consent_status 削除を拒否する（負例3。指摘が名指しした
+    「各層の consent_status」を1層に留めず全数掃討する）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data[layer_name]["consent_status"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize(
+    "layer_name",
+    ["voice_identity_rights", "performance_rights", "composition_rights", "recording_master_rights"],
+)
+def test_fix319_5_rejects_unknown_key_added_to_every_layer(layer_name: str) -> None:
+    """4層すべてで未知キー追加を拒否する（負例4）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data[layer_name]["unexpected_layer_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_5_rejects_voice_identity_rights_class_deleted() -> None:
+    """User 帰属層（voice_identity_rights）も同じ閉集合強制の対象である
+    ことの確認（layer 固有ではなく全層一律であることの直接確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["voice_identity_rights"]["rights_class"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_5_rejects_bare_pending_user_attestation_in_external_layer() -> None:
+    """performance_rights は外部第三者（PJS）に関する層——rights_class に
+    裸トークン `PENDING_USER_ATTESTATION`（User 帰属専用）を使うのは誤用
+    として拒否し、`UNRESOLVED_EXTERNAL` を使うよう案内する（provenance
+    ブロックの誤用拒否ロジックを層レベルへ拡張したことの確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["performance_rights"]["rights_class"] = "PENDING_USER_ATTESTATION"
+    with pytest.raises(m.Run9ValidationError, match="UNRESOLVED_EXTERNAL"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_5_rejects_bare_unresolved_external_in_user_layer() -> None:
+    """voice_identity_rights は User 帰属層——consent_status に裸トークン
+    `UNRESOLVED_EXTERNAL`（外部第三者専用）を使うのは誤用として拒否する
+    （逆方向の誤用拒否）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["consent_status"] = "UNRESOLVED_EXTERNAL"
+    with pytest.raises(m.Run9ValidationError, match="PENDING_USER_ATTESTATION"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_5_recording_master_rights_free_text_status_still_accepted() -> None:
+    """recording_master_rights.rights_class/consent_status は裸の予約
+    トークンではなく自由記述の具体値（機械検証済みライセンス事実の要約）
+    であり、値語彙検証は誤用としてこれを拒否しない（有効ファイルが
+    green のままであることの直接確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert data["recording_master_rights"]["consent_status"] == (
+        "LICENSE_CONFIRMED_USAGE_SCOPE_PENDING_TOOLING_REVIEW"
+    )
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第2巡対応 — Fix 6（P2）: PJS rights の外部
+# 未解決語彙への張り替え（UNRESOLVED_EXTERNAL）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_6_performance_and_composition_rights_use_unresolved_external() -> None:
+    """performance_rights/composition_rights の rights_class/consent_status
+    は `PENDING_USER_ATTESTATION`（User 帰属専用）ではなく
+    `UNRESOLVED_EXTERNAL`（外部第三者専用）へ張り替え済み——PJS の演者/
+    作曲者に関する権利は User が attest できる対象ではない（Codex bot
+    レビュー PR #319 第2巡指摘, P2, 採用）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    for layer_name in ("performance_rights", "composition_rights"):
+        assert data[layer_name]["rights_class"] == "UNRESOLVED_EXTERNAL"
+        assert data[layer_name]["consent_status"] == "UNRESOLVED_EXTERNAL"
+
+
+def test_fix319_6_voice_identity_rights_still_pending_user_attestation() -> None:
+    """User 帰属欄（User donor の同意・usage grants 等）は張り替え対象外
+    ——引き続き `PENDING_USER_ATTESTATION` のまま維持する（voice_identity_
+    rights は User donor 自身の声の権利であり、Fix 6 の対象は PJS 側の
+    3層のみ）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert data["voice_identity_rights"]["rights_class"] == "PENDING_USER_ATTESTATION"
+    assert data["voice_identity_rights"]["consent_status"] == "PENDING_USER_ATTESTATION"
+    assert data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] == "pending"
+
+
+def test_fix319_6_rights_manifest_still_validates_after_vocab_swap() -> None:
+    """張り替え後も rights_manifest.json 全体が validator を通ることの
+    直接確認（Fix 5 の必須キー閉集合・語彙検証拡張と Fix 6 の張り替えが
+    整合していることの end-to-end 確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_6_recording_master_rights_not_swapped_no_bare_pending_token() -> None:
+    """recording_master_rights は今回の張り替え対象に含めない
+    （誤用パターン自体が元から存在しないため）——rights_class/
+    consent_status に裸トークン `PENDING_USER_ATTESTATION` が残っていない
+    ことの確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert data["recording_master_rights"]["rights_class"] != "PENDING_USER_ATTESTATION"
+    assert data["recording_master_rights"]["consent_status"] != "PENDING_USER_ATTESTATION"
+
+
+def test_fix319_6_history_records_vocab_reassignment_rationale() -> None:
+    """仕分けの根拠（どの欄がどちらの主体に帰属するか）が manifest 注記
+    （history）に明記されていること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    history = data["history"]
+    swap_events = [h for h in history if "Fix 6" in h["event"]]
+    assert len(swap_events) == 1
+    event_text = swap_events[0]["event"]
+    assert "UNRESOLVED_EXTERNAL" in event_text
+    assert "voice_identity_rights" in event_text
+    assert "User" in event_text
+
+
 # --- performance_source ブロック（RUN9_CONTRACT.yaml 新設欄） ----------------
 
 
@@ -6987,7 +7311,7 @@ def test_rev04_render_code_commit_reverted_to_inferred_unconfirmed_historically(
     遡って attest しない方針により INFERRED_UNCONFIRMED へ差し戻した。
     history 配列に昇格・差し戻し両イベントが append-only で記録される。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    rcc = bundle["render_code_commit"]
+    rcc = bundle["historical_export_provenance"]["render_code_commit"]
     assert rcc["status"] == "INFERRED_UNCONFIRMED"
     assert "attestation" not in rcc
     history = rcc["history"]
@@ -7000,9 +7324,10 @@ def test_rev04_render_code_commit_reverted_to_inferred_unconfirmed_historically(
 def test_rev04_run9_render_code_commit_declared_for_run9_with_ruling_reference() -> None:
     """b裁定の実体的な意味（RUN9 が今後使用する commit の確定）は独立の
     新設欄 run9_render_code_commit（status: DECLARED_FOR_RUN9）へ移した
-    （2026-08-25 User 追加裁定①）。"""
+    （2026-08-25 User 追加裁定①）。PR #319 第2巡指摘（P2, 採用）により
+    さらに run9_runtime_inputs 節配下へ構造移動した。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    rrc = bundle["run9_render_code_commit"]
+    rrc = bundle["run9_runtime_inputs"]["run9_render_code_commit"]
     assert rrc["status"] == "DECLARED_FOR_RUN9"
     assert rrc["commit_full"] == "e2307b1080b00f3999702ce9017cfd75c7f862fe"
     assert rrc["declaration"]["declared_by"] == "User"
@@ -7014,13 +7339,15 @@ def test_rev04_render_code_commit_and_run9_render_code_commit_are_independent() 
     """歴史的推定 (render_code_commit) と前方宣言 (run9_render_code_commit)
     は独立の欄——片方が INFERRED_UNCONFIRMED のまま、もう片方が確定済み
     (DECLARED_FOR_RUN9) であることは矛盾ではない。値（commit）は同じだが
-    意味論は独立（2026-08-25 User 追加裁定①）。"""
+    意味論は独立（2026-08-25 User 追加裁定①）。PR #319 以降は別の節
+    （historical_export_provenance / run9_runtime_inputs）に構造分離されて
+    いる。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    assert bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
-    assert bundle["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9"
+    assert bundle["historical_export_provenance"]["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+    assert bundle["run9_runtime_inputs"]["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9"
     assert (
-        bundle["render_code_commit"]["commit_full"]
-        == bundle["run9_render_code_commit"]["commit_full"]
+        bundle["historical_export_provenance"]["render_code_commit"]["commit_full"]
+        == bundle["run9_runtime_inputs"]["run9_render_code_commit"]["commit_full"]
     )
 
 
@@ -7029,11 +7356,14 @@ def test_rev04_backbone_runtime_bundle_sha_pinned_matches_real_file(
 ) -> None:
     """backbone_runtime_bundle_sha の PINNED 判定は run9_render_code_commit
     の確定を根拠とする（render_code_commit が INFERRED_UNCONFIRMED のまま
-    であることは妨げない——2026-08-25 User 追加裁定①）。"""
+    であることは妨げない——2026-08-25 User 追加裁定①）。PR #319 第2巡指摘
+    （P2, 採用）の構造分離により値を再計算した（旧値は
+    test_fix319_2_backbone_runtime_bundle_sha_history_notes_prior_value
+    が別途 append-only 保持を確認する）。"""
     field = contract_raw["backbone_runtime_bundle_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == (
-        "69ea578bb702f0dd0ca16c1a20b34d4f78c81495b1318a5d0503050c84d37a53"
+        "83f67a309a8e918ff7758f0793d68bb885721d84f3a144916927bf00b67952a6"
     )
     assert field["value"] == m.compute_file_sha256(BACKBONE_BUNDLE_PATH)
 

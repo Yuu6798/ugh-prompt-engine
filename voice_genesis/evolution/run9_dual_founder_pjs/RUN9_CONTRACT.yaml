@@ -312,8 +312,35 @@ backbone_checkpoint_sha:
 # commit の status が USER_ATTESTED になったから連動して昇格した」という
 # 上記の旧記述は、その後の構造変更で正確ではなくなった——本パラグラフが
 # 現在の正しい根拠を上書きする）。bundle 実体変更に伴い値を再計算した。
+#
+# 2026-08-25 Codex bot レビュー PR #319 第2巡指摘（P2, 採用）— 証明範囲
+# （claim scope）の構造分離: 前方宣言 `run9_render_code_commit` は RUN9 が
+# 今後使う commit を確定するだけで、bundle 内の既存 RUN6 checkpoint/ONNX/
+# companions を生成した歴史的 commit は確定しない。bundle 全体を PINNED と
+# することは、歴史的 exporter が INFERRED_UNCONFIRMED のままの再現入力
+# 集合を保証してしまう誤解を招く（un-pin ではなく証明範囲の分離を採用—
+# 指摘の後段の選択肢）。bundle 側を2節へ再編した:
+#   ① `run9_runtime_inputs` — RUN9 が実際に消費する入力の直接証拠
+#      （checkpoint/ONNX/companions の hash 群 + run9_render_code_commit
+#      前方宣言）。すべて実測 hash または前方宣言で歴史的推定を含まない。
+#   ② `historical_export_provenance` — RUN6 期の export commit 推定
+#      （render_code_commit、INFERRED_UNCONFIRMED 維持、inference_basis
+#      保持）。「RUN9 の再現性主張の根拠には使わない」と bundle 側にも明記。
+# **claim scope の明文化**: 本欄が PINNED であることが主張するのは
+# 「本文書のバイト同一性 + `run9_runtime_inputs` 節の確定」のみであり、
+# `historical_export_provenance` 節の真理値は主張しない（文書に含まれるが
+# 証明範囲外 — 詳細は `inputs/backbone_runtime_bundle.json` 冒頭の
+# `claim_scope` 節、および同節 `why_run9_reproducibility_is_unaffected`:
+# RUN9 が必要とするのは「これらの実ファイル（hash 確定済み）を
+# run9_render_code_commit（宣言済み）で駆動する」ことであり、それらの
+# ファイルがどの commit で export されたかの歴史的事実は RUN9 の再現入力
+# 集合に含まれない——歴史的推定が誤っていても RUN9 の再現性は破れない）。
+# bundle は構造分離のみで内容変更なし（各フィールドの値・status は無改変、
+# 節の入れ子構造のみ変更）のため、ファイル実バイトが変わり sha を再計算した。
+# 直前の値（履歴として append-only 保持）:
+# "69ea578bb702f0dd0ca16c1a20b34d4f78c81495b1318a5d0503050c84d37a53"
 backbone_runtime_bundle_sha:
-  value: "69ea578bb702f0dd0ca16c1a20b34d4f78c81495b1318a5d0503050c84d37a53"
+  value: "83f67a309a8e918ff7758f0793d68bb885721d84f3a144916927bf00b67952a6"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/backbone_runtime_bundle.json
 

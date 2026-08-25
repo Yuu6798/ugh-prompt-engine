@@ -440,17 +440,41 @@ machine-independent（実音源・実 render・実学習を要さない）次段
 
 **残存**:
 
-1. **User donor rights attest 待ち**: `inputs/rights_manifest.json`
-   （rev 0.4 で4層構造 `voice_identity_rights`/`performance_rights`/
-   `composition_rights`/`recording_master_rights` へ再編済み。Fable
-   起草済み）は `voice_identity_rights.rights_class`/`consent_status` =
-   `PENDING_USER_ATTESTATION`。User の確認前は `anchor_hashes.user` を
-   pin しない（DESIGN_RUN9_REVISION_0.2.md 改訂4。4層再編後も対象・内容は
-   無改変 — User裁定「aとbを承認」のa参照）。raw 音源公開・モデル
-   一般配布は rights anchor 使用可否とは別承認（初期 `not_granted`）。
-   `performance_rights`/`composition_rights`（PJS 側）も
-   `PENDING_USER_ATTESTATION`（歌唱者個人・作曲者/作詞者の特定が repo 内
-   に記録なし——ライセンス自体は CC BY-SA 4.0 で機械検証済み）。
+1. **User donor rights attest 待ち + PJS 側の残る未解決欄**:
+   `inputs/rights_manifest.json`（rev 0.4 で4層構造
+   `voice_identity_rights`/`performance_rights`/`composition_rights`/
+   `recording_master_rights` へ再編済み。Fable 起草済み）の現状（Codex bot
+   レビュー PR #319 第2巡 Fix 5/6 で層別必須キー閉集合・語彙の仕分けを
+   確定済み）:
+   - **確定済み**: PJS の performer（`performance_rights.provenance.
+     performance_author.performer`）・composer（`composition_rights.
+     provenance.composition.composer`）・recording master の owner
+     （`recording_master_rights.provenance.voice_source.owner`）はいずれも
+     Junya Koguchi と外部資料出典付きで記録済み（2026-08-25 User 追加裁定
+     ②）。recording license も CC BY-SA 4.0 で機械検証済み
+     （`recording_master_rights.license`）。
+   - **未解決（PJS 側・外部第三者事実）**: `lyricist`
+     （`composition_rights.provenance.composition.lyricist`）は repo
+     内・原典いずれにも個別クレジットの記録がなく `<UNRESOLVED_EXTERNAL>`
+     のまま。`performance_rights`/`composition_rights` の
+     `rights_class`/`consent_status` も、PJS 内部使用が rights-clean
+     curriculum 要件を満たすかの最終確認（R9-G1 tooling の職務）が未了の
+     ため `UNRESOLVED_EXTERNAL`（Fix 6: 旧 `PENDING_USER_ATTESTATION` は
+     User が attest すべき欄と外部第三者事実欄の語彙を混同する誤用
+     だったため張り替え済み——`voice_identity_rights` のみが
+     `PENDING_USER_ATTESTATION` を保持する対象、両者の仕分けの根拠は
+     rights_manifest.json `history` 参照）。CC BY-SA 4.0 の share-alike
+     義務が合成音声出力へ及ぶかという法解釈も
+     `recording_master_rights.interpretations.
+     share_alike_applies_to_synthesis_output`（`UNSETTLED_LEGAL_
+     INTERPRETATION`）として未確定のまま分離保持されている。
+   - **未解決（User 帰属欄・User attest 待ち）**: `voice_identity_rights.
+     rights_class`/`consent_status` は引き続き `PENDING_USER_ATTESTATION`。
+     User の確認前は `anchor_hashes.user` を pin しない
+     （DESIGN_RUN9_REVISION_0.2.md 改訂4。4層再編後も対象・内容は無改変
+     — User裁定「aとbを承認」のa参照）。raw 音源公開・モデル一般配布は
+     rights anchor 使用可否とは別承認で、いずれも初期 `not_granted`
+     （`voice_identity_rights.usage_grants`）。
 2. **VG-L0 学習ハーネス（実行部）未実装**: rev 0.3 で三枝化された
    PRACTICE_FROM_AUDIO / TRANSFER_TECHNIQUE エッジ（書き込み先は改訂1・
    rev 0.3 改訂A で Performance ControlProfile と規定済み）の**基盤**

@@ -1,113 +1,211 @@
 {
-  "schema": "run9-backbone-runtime-bundle/1.0",
+  "schema": "run9-backbone-runtime-bundle/1.1",
   "backbone_generation": "run6",
   "backbone_label": "RUN6 phase B 40K checkpoint (User ruling 2026-08-24, DESIGN_RUN9_REVISION_0.2.md 改訂5)",
-  "checkpoint_sha256": {
-    "value": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
-    "file": "phase_b/checkpoints/model_ckpt_steps_40000.ckpt",
-    "source": [
-      "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.2 (\"判定の正本\")",
-      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.checkpoint_sha256",
-      "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json#expansion.generations[run6].checkpoint_sha256",
-      "voice_genesis/foundry/run8/provision.sh#run6_ckpt"
-    ],
-    "note": "Cross-checked identical across all 4 sources."
+  "claim_scope": {
+    "statement": "本文書の `backbone_runtime_bundle_sha`（RUN9_CONTRACT.yaml）が PINNED であることが主張するのは (a) 本文書のバイト同一性（`compute_file_sha256()` 実測との一致）と (b) `run9_runtime_inputs` 節に列挙された値が確定済みであること、の2点のみである。`historical_export_provenance` 節は本文書に含まれるが、この claim scope の対象外であり、その真理値（RUN6 期の export に実際に使われた commit が何だったか）は PINNED 判定の根拠に含まれない。",
+    "rationale": "Codex bot レビュー PR #319 第2巡指摘（P2, 採用）: 前方宣言 `run9_runtime_inputs.run9_render_code_commit` は RUN9 が今後使う commit を確定するだけであり、bundle 内の既存 RUN6 checkpoint/ONNX/companions を生成した歴史的 commit は確定しない。bundle 全体を PINNED とすることは、歴史的 exporter が INFERRED_UNCONFIRMED のままの再現入力集合を保証してしまう誤解を招く。この誤解を避けるため、証明範囲を構造的に分離した: ①`run9_runtime_inputs`（RUN9 が実際に消費する入力の直接証拠 — 実測 hash または前方宣言のみで、歴史的推定を含まない）と ②`historical_export_provenance`（RUN6 期の export commit 推定 — INFERRED_UNCONFIRMED 維持）。",
+    "why_run9_reproducibility_is_unaffected": "RUN9 が再現性のために必要とするのは「これらの実ファイル（`run9_runtime_inputs` 配下、hash 確定済み）を `run9_render_code_commit`（前方宣言・確定済み）で駆動する」ことのみである。それらのファイルが歴史的にどの commit で export されたか（`historical_export_provenance.render_code_commit`）は RUN9 の再現入力集合に含まれない — RUN9 は過去の export 手順を再実行するのではなく、既に存在する固定バイト列のファイルを入力として消費するだけだからである。したがって `historical_export_provenance` 側の歴史的推定が誤っていた（実際には別 commit が使われていた）としても、RUN9 自身の再現性（同一入力ファイル + 同一 render_code_commit → 同一出力）は破れない。両節が独立である所以はここにある。",
+    "not_claimed": "`historical_export_provenance` 節の内容が真であること（RUN6 の checkpoint/ONNX/companions が実際に e2307b1080b00f3999702ce9017cfd75c7f862fe で export されたという歴史的事実）は、本 claim scope の主張に含まれない。将来この節が確定（歴史的直接記録の発掘、または `status` を PINNED 相当へ改める設計判断）しても、`backbone_runtime_bundle_sha` の PINNED 判定自体は再計算のみで影響を受けない（`historical_export_provenance` の値が変わればファイルバイトが変わるため sha は再計算になるが、判定基準そのものは変わらない）。"
   },
-  "acoustic_onnx_sha256": {
-    "value": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
-    "file": "acoustic.onnx (exported from the run6 checkpoint above)",
-    "source": "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.4"
-  },
-  "config_sha256": {
-    "value": "3722072045060e316ec9fee3f307412eceacf617d3b3ece7adfcbefa0f9df9d9",
-    "file": "phase_b/config/config.yaml (== run6_bundle/config.yaml)",
-    "source": [
-      "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.2",
-      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.config_sha256",
-      "voice_genesis/foundry/run8/provision.sh#run6_config"
-    ]
-  },
-  "speaker_map_sha256": {
-    "value": "da9748fabfa721a4a789224b50fd52743628fd2396602852f2dc25c54f2e3803",
-    "file": "run6_bundle/spk_map.json",
-    "source": [
-      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs.spk_map.json",
-      "voice_genesis/foundry/run8/provision.sh#run6_spk_map"
-    ],
-    "note": "Byte-identical to run5_bundle/spk_map.json (same value pinned for run5 and run6)."
-  },
-  "phoneme_map_sha256": {
-    "value": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
-    "file": "run6_bundle/dictionary-ja.txt",
-    "source": [
-      "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.3 (dict_txt)",
-      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs[\"dictionary-ja.txt\"]",
-      "voice_genesis/foundry/run8/provision.sh#run6_dict"
-    ],
-    "note": "Grapheme-to-phoneme pronunciation dictionary consumed by the DiffSinger binarizer/renderer. Byte-identical to run5_bundle/dictionary-ja.txt; run7 uses a different dictionary (633ee966...) — not applicable to the RUN6 backbone."
-  },
-  "language_map_sha256": {
-    "value": "2a6a227ee65a49f5c30e848a4b62c5cc1817926bbdab373228e6302d2c794953",
-    "file": "run6_bundle/lang_map.json",
-    "source": [
-      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs.lang_map.json",
-      "voice_genesis/foundry/run8/provision.sh#run6_lang_map"
-    ],
-    "note": "Supplementary field beyond the 5 named fields — included because it is a required exporter input (base_exporter.build_spk_map co-dependency, s7_exporter_input_pins.json#why_all_inputs) and its sha256 is equally well-sourced. Identical value across run5/run6/run7."
-  },
-  "vocoder": {
-    "runtime_onnx_sha256": {
-      "value": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
-      "file": "vocoder_onnx/nsf_hifigan.onnx (extracted)",
-      "source": "voice_genesis/foundry/run8/provision.sh#VOC_WANT (extraction verification target)"
-    },
-    "source_archive_sha256": {
-      "value": "e22f84009804da2e5916e7a2000f4c30278148796376e49368ec5ff8f9f58830",
-      "file": "nsf_hifigan.oudep",
+  "run9_runtime_inputs": {
+    "note": "RUN9 が実際に消費する入力の直接証拠のみを収載する節（Codex bot レビュー PR #319 第2巡指摘, P2, 採用による新設）。全エントリは実測 hash または前方宣言（`run9_render_code_commit`）であり、歴史的推定を含まない — 歴史的推定は `historical_export_provenance` 節に隔離する。",
+    "checkpoint_sha256": {
+      "value": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+      "file": "phase_b/checkpoints/model_ckpt_steps_40000.ckpt",
       "source": [
-        "voice_genesis/foundry/run8/provision.sh#vocoder_oudep",
-        "url:https://github.com/xunmengshe/OpenUtau/releases/download/0.0.0.0/nsf_hifigan.oudep"
+        "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.2 (\"判定の正本\")",
+        "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.checkpoint_sha256",
+        "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json#expansion.generations[run6].checkpoint_sha256",
+        "voice_genesis/foundry/run8/provision.sh#run6_ckpt"
       ],
-      "note": "Distribution archive that nsf_hifigan.onnx (runtime_onnx_sha256 above) is extracted from."
+      "note": "Cross-checked identical across all 4 sources."
+    },
+    "acoustic_onnx_sha256": {
+      "value": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+      "file": "acoustic.onnx (exported from the run6 checkpoint above)",
+      "source": "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.4"
+    },
+    "config_sha256": {
+      "value": "3722072045060e316ec9fee3f307412eceacf617d3b3ece7adfcbefa0f9df9d9",
+      "file": "phase_b/config/config.yaml (== run6_bundle/config.yaml)",
+      "source": [
+        "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.2",
+        "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.config_sha256",
+        "voice_genesis/foundry/run8/provision.sh#run6_config"
+      ]
+    },
+    "speaker_map_sha256": {
+      "value": "da9748fabfa721a4a789224b50fd52743628fd2396602852f2dc25c54f2e3803",
+      "file": "run6_bundle/spk_map.json",
+      "source": [
+        "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs.spk_map.json",
+        "voice_genesis/foundry/run8/provision.sh#run6_spk_map"
+      ],
+      "note": "Byte-identical to run5_bundle/spk_map.json (same value pinned for run5 and run6)."
+    },
+    "phoneme_map_sha256": {
+      "value": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
+      "file": "run6_bundle/dictionary-ja.txt",
+      "source": [
+        "voice_genesis/foundry/results_s5/s5_record_2026-08-20.md#5.3 (dict_txt)",
+        "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs[\"dictionary-ja.txt\"]",
+        "voice_genesis/foundry/run8/provision.sh#run6_dict"
+      ],
+      "note": "Grapheme-to-phoneme pronunciation dictionary consumed by the DiffSinger binarizer/renderer. Byte-identical to run5_bundle/dictionary-ja.txt; run7 uses a different dictionary (633ee966...) — not applicable to the RUN6 backbone."
+    },
+    "language_map_sha256": {
+      "value": "2a6a227ee65a49f5c30e848a4b62c5cc1817926bbdab373228e6302d2c794953",
+      "file": "run6_bundle/lang_map.json",
+      "source": [
+        "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#generations.run6.inputs.lang_map.json",
+        "voice_genesis/foundry/run8/provision.sh#run6_lang_map"
+      ],
+      "note": "Supplementary field beyond the 5 named fields — included because it is a required exporter input (base_exporter.build_spk_map co-dependency, s7_exporter_input_pins.json#why_all_inputs) and its sha256 is equally well-sourced. Identical value across run5/run6/run7."
+    },
+    "vocoder": {
+      "runtime_onnx_sha256": {
+        "value": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
+        "file": "vocoder_onnx/nsf_hifigan.onnx (extracted)",
+        "source": "voice_genesis/foundry/run8/provision.sh#VOC_WANT (extraction verification target)"
+      },
+      "source_archive_sha256": {
+        "value": "e22f84009804da2e5916e7a2000f4c30278148796376e49368ec5ff8f9f58830",
+        "file": "nsf_hifigan.oudep",
+        "source": [
+          "voice_genesis/foundry/run8/provision.sh#vocoder_oudep",
+          "url:https://github.com/xunmengshe/OpenUtau/releases/download/0.0.0.0/nsf_hifigan.oudep"
+        ],
+        "note": "Distribution archive that nsf_hifigan.onnx (runtime_onnx_sha256 above) is extracted from."
+      }
+    },
+    "run9_render_code_commit": {
+      "repo": "openvpi/DiffSinger",
+      "commit_short": "e2307b1",
+      "commit_full": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+      "status": "DECLARED_FOR_RUN9",
+      "declaration": {
+        "declared_by": "User",
+        "declared_at": "2026-08-25",
+        "statement": "User 裁定「aとbを承認」の b、および同日の追加 User 裁定①（歴史的 render_code_commit との分離）。RUN9 が今後の render に使用する DiffSinger commit を e2307b1080b00f3999702ce9017cfd75c7f862fe と前方宣言する。"
+      },
+      "note": "historical_export_provenance.render_code_commit（RUN6 の歴史的 export provenance、INFERRED_UNCONFIRMED のまま）とは独立の欄。値は同じ e2307b1 だが意味論が異なる: 歴史節の render_code_commit は『RUN6 export で実際に何が使われたか』という過去の事実の推定であり未確定のまま、本欄は『RUN9 が今後の render で何を使うか』という前方宣言であり User により確定済み（DECLARED_FOR_RUN9）。歴史的事実の不確定性は前方宣言の確度に影響しない。RUN9_CONTRACT.yaml backbone_runtime_bundle_sha の PINNED 判定は本欄の確定を根拠とする（claim scope の詳細は本文書冒頭の `claim_scope` 節参照）。"
+    },
+    "canon_model_assets": {
+      "source_distribution": {
+        "name": "NamineRitsu_DiffSinger.zip (リツ公式 DiffSinger 配布)",
+        "sha256": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
+        "source": "voice_genesis/foundry/s1_dataprep/README.md (素材3)",
+        "note": "NOT the same zip as the ritsu identity anchor pin (r73_strong_ren0151.zip, 波音リツ強連続音Ver1.5.1, sha256 88c7b3ef... — domains/identity_domain_run9_v1.json anchor_hashes.ritsu). That zip is the raw UTAU voicebank used as the RUN9 Identity anchor; THIS zip is the separate DiffSinger-format canon model distribution consumed at render time via --canon-model-dir. Both are \"Ritsu\"-branded but serve different roles."
+      },
+      "canon_model_dir_role": "gate_synth.py --canon-model-dir points at this zip's extraction directory. gate_synth.py reads linguistic.onnx / dsdur/dur.onnx / dspitch/pitch.onnx / phonemes.txt from it (gate_synth.py lines ~524-526, 647-650, 2292-2294) — the linguistic front-end, duration predictor, and pitch (variance) predictor that DiffSinger's acoustic model depends on, plus the phoneme vocabulary. These are NOT trained/produced by the run5/6/7 acoustic-model finetuning — they are fixed components bundled with the Ritsu voicebank distribution and are reused unchanged across run5/6/7 renders (confirmed identical across 4 independent probe records below).",
+      "assets": {
+        "linguistic_onnx": {
+          "value": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+          "file": "NamineRitsu_DiffSinger/linguistic.onnx",
+          "source": [
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_linguistic_onnx",
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_linguistic_onnx",
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_linguistic_onnx",
+            "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_linguistic_onnx",
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_2026-08-20.md#1 (canon 系 onnx)"
+          ],
+          "note": "Byte-identical across all 4 independent probe result files (cross-checked 2026-08-24)."
+        },
+        "variance_duration_onnx": {
+          "value": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+          "file": "NamineRitsu_DiffSinger/dsdur/dur.onnx",
+          "source": [
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_dur_onnx (== consumed_model_bytes_check covered_keys canon_variance_dur_onnx)",
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_dur_onnx",
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_dur_onnx",
+            "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_dur_onnx"
+          ],
+          "note": "Byte-identical across all 4 independent probe result files."
+        },
+        "variance_pitch_onnx": {
+          "value": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+          "file": "NamineRitsu_DiffSinger/dspitch/pitch.onnx",
+          "source": [
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_pitch_onnx (== consumed_model_bytes_check covered_keys canon_variance_pitch_onnx)",
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_pitch_onnx",
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_pitch_onnx",
+            "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_pitch_onnx"
+          ],
+          "note": "Byte-identical across all 4 independent probe result files."
+        },
+        "phonemes_txt": {
+          "value": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb",
+          "file": "NamineRitsu_DiffSinger/phonemes.txt",
+          "source": [
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_phonemes",
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_2026-08-20.md#1 (canon phonemes)"
+          ],
+          "note": "Phoneme vocabulary consumed by gate_synth.py canon_phonemes_txt (distinct from run6_bundle/dictionary-ja.txt, which is the grapheme-to-phoneme dictionary pinned separately as phoneme_map_sha256 above)."
+        }
+      },
+      "acoustic_export_companions": {
+        "note": "Co-located in the SAME export output directory as acoustic_onnx_sha256 above (.../out_ritsu/onnx_gate_40000/) — produced by the run6 checkpoint export, not sourced from the canon dir. Included here (rather than as bare top-level fields) because closing the render-flow input set requires them alongside canon_model_assets (Codex bot review PR #316 第2巡指摘, 1e84892).",
+        "dsconfig_yaml": {
+          "value": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+          "file": "onnx_gate_40000/dsconfig.yaml",
+          "source": [
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.acoustic_dsconfig (== consumed_model_bytes_check covered_keys acoustic_dsconfig_yaml)",
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.acoustic_dsconfig",
+            "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.acoustic_dsconfig",
+            "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.acoustic_dsconfig"
+          ]
+        },
+        "acoustic_phonemes_json": {
+          "value": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
+          "file": "onnx_gate_40000/s5_run6_acoustic_v1.phonemes.json",
+          "source": "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.acoustic_phonemes_json",
+          "note": "consumed_model_bytes_check lists this key under not_covered (not part of that probe's specific invariance check) but the pin value itself is present and recorded — transcribed as-is, not fabricated."
+        },
+        "speaker_embed": {
+          "value": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
+          "file": "onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb",
+          "source": "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.speaker_embed",
+          "note": "Also listed under consumed_model_bytes_check not_covered for the same reason as acoustic_phonemes_json above."
+        }
+      },
+      "not_included_by_design": {
+        "score_module_code": "voice_genesis/singer/score.py (sha256 24a6004d...) and phoneme_jp.py (sha256 9cbc7e1d...) are also consumed by the render flow per the same probe records (pins.score_module_sakura / score_module_sakura_dep_phoneme_jp), but these are THIS repository's own source files, not external model assets. Their provenance is properly covered by repository_commit_sha (RUN9_CONTRACT.yaml) once that is pinned, not duplicated here as a separate byte pin."
+      }
     }
   },
-  "render_code_commit": {
-    "repo": "openvpi/DiffSinger",
-    "commit_short": "e2307b1",
-    "commit_full": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
-    "status": "INFERRED_UNCONFIRMED",
-    "confirmation_required": "未解消。RUN6 の歴史的 export に実際に使用された commit の直接記録は未発掘のまま。2026-08-25 に一度 User attestation を根拠として USER_ATTESTED へ確定させたが、同日中の追加 User 裁定（下記 history 参照）により差し戻した——歴史的事実（過去に何が使われたか）は遡って User attest できないため（User の attest 権限は自身の許諾・裁定に及ぶのであり、第三者的な過去の事実確定には及ばない）。RUN9 が今後使用する commit の前方宣言は本欄と独立の `run9_render_code_commit`（status: DECLARED_FOR_RUN9）が担う。今後、RUN6 export の直接記録が発掘された場合のみ本欄を確定させられる。",
-    "inference_basis": "This exact revision is the single, repository-wide invariant DiffSinger pin used across run4 through run8 gate_synth/export tooling (dozens of cross-references). The original 2026-08-20 run6 export record (s5_record) does not itself restate the git revision inline, but no evidence anywhere in the repository suggests a different revision was ever used for run5/6/7 rendering or export — the run4 provenance closure record explicitly notes the same absence-of-contrary-evidence reasoning when substituting this pin for an unlogged run4 export (results_s3/run4_provenance_closure_2026-08-23.json). Preserved verbatim (unchanged throughout the 2026-08-25 promotion and reversion below) as the evidentiary record those events reference.",
-    "source": [
-      "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#exporter (repo+revision)",
-      "voice_genesis/foundry/results_s7/s7_b1_calibration_set.json#diffsinger_repo_pin",
-      "voice_genesis/foundry/run8/provision.sh (git checkout e2307b1, HEAD verified)",
-      "voice_genesis/foundry/s1_gate/README.md / gate_synth.py / gate_synth_run4.py (--diffsinger-repo pin: e2307b1)",
-      "voice_genesis/foundry/tests/test_run4_export_device_probe.py (DIFFSINGER_COMMIT full hash)"
-    ],
-    "history": [
-      {
-        "date": "2026-08-25",
-        "event": "rev 0.4 実装時、User 裁定「aとbを承認」の b を根拠に status を INFERRED_UNCONFIRMED から USER_ATTESTED へ昇格した（Codex bot review PR #316 第1巡指摘 P2, 866fcc8 が要求していた確定経路のうち、User attestation 経路）。"
-      },
-      {
-        "date": "2026-08-25",
-        "event": "同日中の追加 User 裁定①により差し戻し: render_code_commit は RUN6 の歴史的 export provenance であり、歴史的事実（過去に何が使われたか）は遡って User attest しない方針が示された。status を INFERRED_UNCONFIRMED へ復元し、User attestation の実体的な意味（RUN9 が今後使用する commit を確定する、という前方宣言）は新設の独立欄 `run9_render_code_commit`（status: DECLARED_FOR_RUN9）へ移した。歴史的事実の不確定性そのものは、この前方宣言の確度に影響しない——両欄は独立である。"
-      }
-    ],
-    "note": "The value above was originally an inference, not a directly-logged fact for the 2026-08-20 run6 export specifically — the original run6 export record (results_s5/s5_record_2026-08-20.md) does NOT itself restate the DiffSinger git revision inline anywhere in that record. Codex bot review PR #316 第1巡指摘 (P2, 866fcc8) required this be held as INFERRED_UNCONFIRMED, not PINNED, until either a direct record or explicit User attestation confirmed it. On 2026-08-25 the User provided an attestation and status was briefly promoted to USER_ATTESTED, but a same-day follow-up User ruling reversed that promotion (see the `history` array above): historical facts about what was actually used in the RUN6 export are not retroactively attestable by the User. status is therefore restored to INFERRED_UNCONFIRMED; the substantive content of the User's 2026-08-25 attestation (declaring which commit RUN9 itself will use going forward) now lives in the independent `run9_render_code_commit` field. The underlying inference_basis text is preserved unchanged throughout, not overwritten."
-  },
-  "run9_render_code_commit": {
-    "repo": "openvpi/DiffSinger",
-    "commit_short": "e2307b1",
-    "commit_full": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
-    "status": "DECLARED_FOR_RUN9",
-    "declaration": {
-      "declared_by": "User",
-      "declared_at": "2026-08-25",
-      "statement": "User 裁定「aとbを承認」の b、および同日の追加 User 裁定①（歴史的 render_code_commit との分離）。RUN9 が今後の render に使用する DiffSinger commit を e2307b1080b00f3999702ce9017cfd75c7f862fe と前方宣言する。"
-    },
-    "note": "render_code_commit（上記、RUN6 の歴史的 export provenance、INFERRED_UNCONFIRMED のまま）とは独立の欄。値は同じ e2307b1 だが意味論が異なる: render_code_commit は『RUN6 export で実際に何が使われたか』という過去の事実の推定であり未確定のまま、本欄は『RUN9 が今後の render で何を使うか』という前方宣言であり User により確定済み（DECLARED_FOR_RUN9）。歴史的事実の不確定性は前方宣言の確度に影響しない。RUN9_CONTRACT.yaml backbone_runtime_bundle_sha の PINNED 判定は本欄の確定を根拠とする。"
+  "historical_export_provenance": {
+    "claim_scope_note": "本節は RUN6 期の export commit の歴史的推定を収載する。`backbone_runtime_bundle_sha`（RUN9_CONTRACT.yaml）の PINNED 判定の claim scope（本文書冒頭の `claim_scope` 節）には含まれない — 本節の真理値は RUN9 の再現性主張の根拠には使わない。RUN9 が使用する commit の確定は `run9_runtime_inputs.run9_render_code_commit`（前方宣言、DECLARED_FOR_RUN9）が独立に担う。",
+    "render_code_commit": {
+      "repo": "openvpi/DiffSinger",
+      "commit_short": "e2307b1",
+      "commit_full": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+      "status": "INFERRED_UNCONFIRMED",
+      "confirmation_required": "未解消。RUN6 の歴史的 export に実際に使用された commit の直接記録は未発掘のまま。2026-08-25 に一度 User attestation を根拠として USER_ATTESTED へ確定させたが、同日中の追加 User 裁定（下記 history 参照）により差し戻した——歴史的事実（過去に何が使われたか）は遡って User attest できないため（User の attest 権限は自身の許諾・裁定に及ぶのであり、第三者的な過去の事実確定には及ばない）。RUN9 が今後使用する commit の前方宣言は本欄と独立の `run9_runtime_inputs.run9_render_code_commit`（status: DECLARED_FOR_RUN9）が担う。今後、RUN6 export の直接記録が発掘された場合のみ本欄を確定させられる。",
+      "inference_basis": "This exact revision is the single, repository-wide invariant DiffSinger pin used across run4 through run8 gate_synth/export tooling (dozens of cross-references). The original 2026-08-20 run6 export record (s5_record) does not itself restate the git revision inline, but no evidence anywhere in the repository suggests a different revision was ever used for run5/6/7 rendering or export — the run4 provenance closure record explicitly notes the same absence-of-contrary-evidence reasoning when substituting this pin for an unlogged run4 export (results_s3/run4_provenance_closure_2026-08-23.json). Preserved verbatim (unchanged throughout the 2026-08-25 promotion and reversion below, and unchanged by the PR #319 structural split into this section) as the evidentiary record those events reference.",
+      "source": [
+        "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#exporter (repo+revision)",
+        "voice_genesis/foundry/results_s7/s7_b1_calibration_set.json#diffsinger_repo_pin",
+        "voice_genesis/foundry/run8/provision.sh (git checkout e2307b1, HEAD verified)",
+        "voice_genesis/foundry/s1_gate/README.md / gate_synth.py / gate_synth_run4.py (--diffsinger-repo pin: e2307b1)",
+        "voice_genesis/foundry/tests/test_run4_export_device_probe.py (DIFFSINGER_COMMIT full hash)"
+      ],
+      "history": [
+        {
+          "date": "2026-08-25",
+          "event": "rev 0.4 実装時、User 裁定「aとbを承認」の b を根拠に status を INFERRED_UNCONFIRMED から USER_ATTESTED へ昇格した（Codex bot review PR #316 第1巡指摘 P2, 866fcc8 が要求していた確定経路のうち、User attestation 経路）。"
+        },
+        {
+          "date": "2026-08-25",
+          "event": "同日中の追加 User 裁定①により差し戻し: render_code_commit は RUN6 の歴史的 export provenance であり、歴史的事実（過去に何が使われたか）は遡って User attest しない方針が示された。status を INFERRED_UNCONFIRMED へ復元し、User attestation の実体的な意味（RUN9 が今後使用する commit を確定する、という前方宣言）は新設の独立欄 `run9_render_code_commit`（status: DECLARED_FOR_RUN9）へ移した。歴史的事実の不確定性そのものは、この前方宣言の確度に影響しない——両欄は独立である。"
+        },
+        {
+          "date": "2026-08-25",
+          "event": "Codex bot レビュー PR #319 第2巡指摘（P2, 採用）により、本欄を独立の `historical_export_provenance` 節へ構造的に移動した（旧: bundle 直下の `render_code_commit`）。status（INFERRED_UNCONFIRMED）・inference_basis・source・confirmation_required はいずれも無改変。目的は bundle 全体の PINNED 判定が本欄の未確定推定を保証してしまう誤解を避けること — claim scope の詳細は本文書冒頭の `claim_scope` 節参照。"
+        }
+      ],
+      "note": "The value above was originally an inference, not a directly-logged fact for the 2026-08-20 run6 export specifically — the original run6 export record (results_s5/s5_record_2026-08-20.md) does NOT itself restate the DiffSinger git revision inline anywhere in that record. Codex bot review PR #316 第1巡指摘 (P2, 866fcc8) required this be held as INFERRED_UNCONFIRMED, not PINNED, until either a direct record or explicit User attestation confirmed it. On 2026-08-25 the User provided an attestation and status was briefly promoted to USER_ATTESTED, but a same-day follow-up User ruling reversed that promotion (see the `history` array above): historical facts about what was actually used in the RUN6 export are not retroactively attestable by the User. status is therefore restored to INFERRED_UNCONFIRMED; the substantive content of the User's 2026-08-25 attestation (declaring which commit RUN9 itself will use going forward) now lives in the independent `run9_runtime_inputs.run9_render_code_commit` field. The underlying inference_basis text is preserved unchanged throughout, not overwritten. PR #319 moved this field into the `historical_export_provenance` section (structural relocation only — no content change) so that its INFERRED_UNCONFIRMED status cannot be misread as covered by the bundle's overall PINNED claim scope."
+    }
   },
   "run7_not_used": {
     "reason": "Teacher swap contamination avoidance (User ruling, DESIGN_RUN9_REVISION_0.2.md 改訂5)",
@@ -117,87 +215,5 @@
       "voice_genesis/foundry/results_s6/s6_record_2026-08-20.md#3 (\"単一介入 = 教師交代\")"
     ]
   },
-  "canon_model_assets": {
-    "source_distribution": {
-      "name": "NamineRitsu_DiffSinger.zip (リツ公式 DiffSinger 配布)",
-      "sha256": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
-      "source": "voice_genesis/foundry/s1_dataprep/README.md (素材3)",
-      "note": "NOT the same zip as the ritsu identity anchor pin (r73_strong_ren0151.zip, 波音リツ強連続音Ver1.5.1, sha256 88c7b3ef... — domains/identity_domain_run9_v1.json anchor_hashes.ritsu). That zip is the raw UTAU voicebank used as the RUN9 Identity anchor; THIS zip is the separate DiffSinger-format canon model distribution consumed at render time via --canon-model-dir. Both are \"Ritsu\"-branded but serve different roles."
-    },
-    "canon_model_dir_role": "gate_synth.py --canon-model-dir points at this zip's extraction directory. gate_synth.py reads linguistic.onnx / dsdur/dur.onnx / dspitch/pitch.onnx / phonemes.txt from it (gate_synth.py lines ~524-526, 647-650, 2292-2294) — the linguistic front-end, duration predictor, and pitch (variance) predictor that DiffSinger's acoustic model depends on, plus the phoneme vocabulary. These are NOT trained/produced by the run5/6/7 acoustic-model finetuning — they are fixed components bundled with the Ritsu voicebank distribution and are reused unchanged across run5/6/7 renders (confirmed identical across 4 independent probe records below).",
-    "assets": {
-      "linguistic_onnx": {
-        "value": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
-        "file": "NamineRitsu_DiffSinger/linguistic.onnx",
-        "source": [
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_linguistic_onnx",
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_linguistic_onnx",
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_linguistic_onnx",
-          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_linguistic_onnx",
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_2026-08-20.md#1 (canon 系 onnx)"
-        ],
-        "note": "Byte-identical across all 4 independent probe result files (cross-checked 2026-08-24)."
-      },
-      "variance_duration_onnx": {
-        "value": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
-        "file": "NamineRitsu_DiffSinger/dsdur/dur.onnx",
-        "source": [
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_dur_onnx (== consumed_model_bytes_check covered_keys canon_variance_dur_onnx)",
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_dur_onnx",
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_dur_onnx",
-          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_dur_onnx"
-        ],
-        "note": "Byte-identical across all 4 independent probe result files."
-      },
-      "variance_pitch_onnx": {
-        "value": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
-        "file": "NamineRitsu_DiffSinger/dspitch/pitch.onnx",
-        "source": [
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_pitch_onnx (== consumed_model_bytes_check covered_keys canon_variance_pitch_onnx)",
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.canon_pitch_onnx",
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.canon_pitch_onnx",
-          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.canon_pitch_onnx"
-        ],
-        "note": "Byte-identical across all 4 independent probe result files."
-      },
-      "phonemes_txt": {
-        "value": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb",
-        "file": "NamineRitsu_DiffSinger/phonemes.txt",
-        "source": [
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.canon_phonemes",
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_2026-08-20.md#1 (canon phonemes)"
-        ],
-        "note": "Phoneme vocabulary consumed by gate_synth.py canon_phonemes_txt (distinct from run6_bundle/dictionary-ja.txt, which is the grapheme-to-phoneme dictionary pinned separately as phoneme_map_sha256 above)."
-      }
-    },
-    "acoustic_export_companions": {
-      "note": "Co-located in the SAME export output directory as acoustic_onnx_sha256 above (.../out_ritsu/onnx_gate_40000/) — produced by the run6 checkpoint export, not sourced from the canon dir. Included here (rather than as bare top-level fields) because closing the render-flow input set requires them alongside canon_model_assets (Codex bot review PR #316 第2巡指摘, 1e84892).",
-      "dsconfig_yaml": {
-        "value": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
-        "file": "onnx_gate_40000/dsconfig.yaml",
-        "source": [
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.acoustic_dsconfig (== consumed_model_bytes_check covered_keys acoustic_dsconfig_yaml)",
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result.json#pins.acoustic_dsconfig",
-          "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n10.json#pins.acoustic_dsconfig",
-          "voice_genesis/evolution/records/vgl0_render_reproducibility_result.json#pins.acoustic_dsconfig"
-        ]
-      },
-      "acoustic_phonemes_json": {
-        "value": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
-        "file": "onnx_gate_40000/s5_run6_acoustic_v1.phonemes.json",
-        "source": "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.acoustic_phonemes_json",
-        "note": "consumed_model_bytes_check lists this key under not_covered (not part of that probe's specific invariance check) but the pin value itself is present and recorded — transcribed as-is, not fabricated."
-      },
-      "speaker_embed": {
-        "value": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
-        "file": "onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb",
-        "source": "voice_genesis/evolution/records/vgl0_control_axis_probe_result_n6.json#pins.speaker_embed",
-        "note": "Also listed under consumed_model_bytes_check not_covered for the same reason as acoustic_phonemes_json above."
-      }
-    },
-    "not_included_by_design": {
-      "score_module_code": "voice_genesis/singer/score.py (sha256 24a6004d...) and phoneme_jp.py (sha256 9cbc7e1d...) are also consumed by the render flow per the same probe records (pins.score_module_sakura / score_module_sakura_dep_phoneme_jp), but these are THIS repository's own source files, not external model assets. Their provenance is properly covered by repository_commit_sha (RUN9_CONTRACT.yaml) once that is pinned, not duplicated here as a separate byte pin."
-    }
-  },
-  "completeness_note": "Codex bot review PR #316 第2巡指摘 (1e84892, 採用): a runtime bundle that pins only the acoustic checkpoint/ONNX (checkpoint_sha256 / acoustic_onnx_sha256) does NOT close the reproduction input set on its own. The render flow (gate_synth.py) also reads canon model assets via --canon-model-dir (linguistic/duration/pitch predictor ONNX + phoneme vocabulary, from the separate NamineRitsu_DiffSinger.zip canon distribution) and acoustic-export companions co-located with acoustic.onnx (dsconfig.yaml / phonemes.json / speaker embedding). Only with canon_model_assets and acoustic_export_companions included does the consumed-input set close. As of 2026-08-24 this bundle intentionally still left render_code_commit as INFERRED_UNCONFIRMED (see that field) and backbone_runtime_bundle_sha in RUN9_CONTRACT.yaml PENDING as a result — unchanged by this addition. On 2026-08-25 backbone_runtime_bundle_sha was promoted to PINNED, but its justification is now the independent forward-declared `run9_render_code_commit` field (status: DECLARED_FOR_RUN9), not a promotion of the historical `render_code_commit` field — that field remains INFERRED_UNCONFIRMED by design (2026-08-25 User ruling: historical export facts are not retroactively attestable). See `render_code_commit.history` and `run9_render_code_commit` above for the full account."
+  "completeness_note": "Codex bot review PR #316 第2巡指摘 (1e84892, 採用): a runtime bundle that pins only the acoustic checkpoint/ONNX (checkpoint_sha256 / acoustic_onnx_sha256) does NOT close the reproduction input set on its own. The render flow (gate_synth.py) also reads canon model assets via --canon-model-dir (linguistic/duration/pitch predictor ONNX + phoneme vocabulary, from the separate NamineRitsu_DiffSinger.zip canon distribution) and acoustic-export companions co-located with acoustic.onnx (dsconfig.yaml / phonemes.json / speaker embedding). Only with canon_model_assets and acoustic_export_companions included does the consumed-input set close. As of 2026-08-24 this bundle intentionally still left render_code_commit as INFERRED_UNCONFIRMED (see that field) and backbone_runtime_bundle_sha in RUN9_CONTRACT.yaml PENDING as a result — unchanged by this addition. On 2026-08-25 backbone_runtime_bundle_sha was promoted to PINNED, but its justification is now the independent forward-declared `run9_render_code_commit` field (status: DECLARED_FOR_RUN9), not a promotion of the historical `render_code_commit` field — that field remains INFERRED_UNCONFIRMED by design (2026-08-25 User ruling: historical export facts are not retroactively attestable). See `historical_export_provenance.render_code_commit.history` and `run9_runtime_inputs.run9_render_code_commit` above for the full account. Codex bot review PR #319 第2巡指摘 (P2, 採用): the acoustic checkpoint/ONNX/companions above pin the runtime *input files* consumed by RUN9, not the historical commit that produced them — that distinction, and the resulting claim-scope boundary of `backbone_runtime_bundle_sha`, is now structural (`run9_runtime_inputs` vs `historical_export_provenance`), not just textual. See the `claim_scope` field at the top of this document."
 }

@@ -4391,6 +4391,119 @@ _RIGHTS_MANIFEST_PROVENANCE_BLOCK_VALUE_KEYS: Dict[str, Dict[str, str]] = {
     },
 }
 
+# 層レベルの rights_class/consent_status 値語彙（Codex bot レビュー PR #319
+# 第2巡指摘, Fix 5, P2, 採用）: provenance ブロック内の値語彙は角括弧付き
+# placeholder `<...>` を使う（_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION /
+# _RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL、下記で定義）のに対し、層直下の
+# rights_class/consent_status は角括弧なしの裸トークンを使う——既存実装の
+# 流儀（voice_identity_rights.rights_class の値 "PENDING_USER_ATTESTATION"、
+# rev 0.2 由来）に合わせて一貫させる。2つの規約は別物であり混同しない。
+_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION = "PENDING_USER_ATTESTATION"
+_RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL = "UNRESOLVED_EXTERNAL"
+
+# 層ごとの主体種別: voice_identity_rights のみ User 帰属（User donor 自身
+# の声の権利。attestation 主体 = User）で、他3層（performance/composition/
+# recording_master）はいずれも PJS という外部第三者に関する権利であり
+# external 種別（provenance ブロックの
+# _RIGHTS_MANIFEST_PROVENANCE_BLOCK_VALUE_KEYS が同3層の全フィールドを
+# external としているのと同じ帰属根拠 — Fix 6 の仕分け）。
+_RIGHTS_MANIFEST_LAYER_FIELD_KIND: Dict[str, str] = {
+    "voice_identity_rights": _RIGHTS_MANIFEST_FIELD_KIND_USER,
+    "performance_rights": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    "composition_rights": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    "recording_master_rights": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+}
+
+# 層ごとの必須キー閉集合（Codex bot レビュー PR #319 第2巡指摘, Fix 5, P2,
+# 採用）: 旧 validate_rights_manifest_four_layer() は非空 role と
+# provenance ブロックの形状しか要求せず、recording_master_rights.license /
+# performance_rights.rights_class / 各層の consent_status を削除しても
+# validator が受理してしまっていた（permission 系フィールドが構造的に
+# 必須になっていなかった）。inputs/rights_manifest.json の実キーを読み、
+# 各層が持つべきキー集合を層別の閉集合として凍結する（欠落・未知キーの
+# いずれも拒否 — fail-closed）。
+_RIGHTS_MANIFEST_LAYER_REQUIRED_KEYS: Dict[str, FrozenSet[str]] = {
+    "voice_identity_rights": frozenset(
+        {
+            "role",
+            "schema_legacy",
+            "donor_ledger_source",
+            "donor_ledger_schema",
+            "transcribed_at",
+            "note",
+            "entries",
+            "rights_class",
+            "consent_status",
+            "attestation",
+            "usage_grants",
+            "usage_grants_note",
+            "binding_note",
+        }
+    ),
+    "performance_rights": frozenset(
+        {
+            "role",
+            "performance_source",
+            "provenance",
+            "rights_class",
+            "consent_status",
+            "consent_status_note",
+        }
+    ),
+    "composition_rights": frozenset({"role", "provenance", "rights_class", "consent_status"}),
+    "recording_master_rights": frozenset(
+        {
+            "role",
+            "provenance",
+            "license",
+            "interpretations",
+            "corpus_pins",
+            "rights_class",
+            "consent_status",
+        }
+    ),
+}
+
+
+def _validate_rights_manifest_layer_status_value(layer_name: str, field_name: str, value: Any) -> None:
+    """層直下の rights_class/consent_status 値の語彙検証（Fix 5）。
+
+    非空文字列であることをまず強制する（削除・null 化・空文字はここで
+    拒否 — permission フィールドの必須化）。値が予約済み裸トークン
+    （`PENDING_USER_ATTESTATION` / `UNRESOLVED_EXTERNAL`）のいずれかに
+    一致する場合のみ、層の主体種別（`_RIGHTS_MANIFEST_LAYER_FIELD_KIND`）
+    と整合しているかを検査する——`_validate_rights_provenance_block()` が
+    provenance ブロック内の角括弧付き placeholder に対して行う誤用拒否
+    ロジックを、角括弧なしの層レベル裸トークン規約へ同型で拡張したもの
+    （Fix 6 の張り替え後、この誤用拒否が全欄で整合することの機械的保証）。
+    それ以外の非空文字列（recording_master_rights.consent_status の
+    `LICENSE_CONFIRMED_USAGE_SCOPE_PENDING_TOOLING_REVIEW` のような具体的
+    記述値）は自由記述として許容する。
+    """
+    path = f"rights manifest.{layer_name}.{field_name}"
+    if not isinstance(value, str) or not value.strip():
+        raise Run9ValidationError(f"{path} must be a non-empty string, got {value!r}")
+    kind = _RIGHTS_MANIFEST_LAYER_FIELD_KIND[layer_name]
+    if (
+        value == _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION
+        and kind != _RIGHTS_MANIFEST_FIELD_KIND_USER
+    ):
+        raise Run9ValidationError(
+            f"{path} is an external-fact layer; "
+            f"{_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} is reserved for "
+            f"User-attributable layers — use {_RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL!r} instead"
+        )
+    if (
+        value == _RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL
+        and kind != _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL
+    ):
+        raise Run9ValidationError(
+            f"{path} is a User-attributable layer; "
+            f"{_RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL!r} is reserved for "
+            f"external-fact layers — use {_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} instead"
+        )
+
+
 # 層ごとに必須の provenance ブロック（DESIGN_RUN9_REVISION_0.4.md 「4層構造
 # への再編」対応表: performance_rights→performance_author /
 # composition_rights→composition / recording_master_rights→voice_source+
@@ -4565,8 +4678,33 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
         layer = data[layer_name]
         if not isinstance(layer, dict):
             raise Run9ValidationError(f"rights manifest.{layer_name} must be an object")
+        # Fix 5（P2, 採用）: 層ごとの必須キー閉集合を強制する——欠落キー
+        # （license/rights_class/consent_status 等の permission フィールド
+        # の削除を含む）・未知キーのいずれも拒否する。role/provenance の
+        # 個別存在チェック（このすぐ下）より前に走らせることで、
+        # 「role だけ・provenance だけ揃っていれば他は素通り」という旧
+        # 経路を構造的に閉じる。
+        required_layer_keys = _RIGHTS_MANIFEST_LAYER_REQUIRED_KEYS[layer_name]
+        missing_layer_keys = required_layer_keys - set(layer.keys())
+        if missing_layer_keys:
+            raise Run9ValidationError(
+                f"rights manifest.{layer_name} missing required key(s): {sorted(missing_layer_keys)}"
+            )
+        extra_layer_keys = set(layer.keys()) - required_layer_keys
+        if extra_layer_keys:
+            raise Run9ValidationError(
+                f"rights manifest.{layer_name} has unknown key(s): {sorted(extra_layer_keys)}"
+            )
         if not isinstance(layer.get("role"), str) or not layer["role"].strip():
             raise Run9ValidationError(f"rights manifest.{layer_name}.role must be a non-empty string")
+        # Fix 5（P2, 採用）+ Fix 6 の張り替え後の整合確認: rights_class/
+        # consent_status は必須キーとして存在するだけでなく、値語彙も検証
+        # する（既存の placeholder 語彙 — 層レベルの裸トークン規約 — + 自由
+        # 記述の具体値のいずれかであることの確認、および誤用拒否）。
+        _validate_rights_manifest_layer_status_value(layer_name, "rights_class", layer.get("rights_class"))
+        _validate_rights_manifest_layer_status_value(
+            layer_name, "consent_status", layer.get("consent_status")
+        )
         if layer_name != "voice_identity_rights":
             # performance_rights/composition_rights/recording_master_rights は
             # いずれも provenance 節を持つ（voice_identity_rights は donor

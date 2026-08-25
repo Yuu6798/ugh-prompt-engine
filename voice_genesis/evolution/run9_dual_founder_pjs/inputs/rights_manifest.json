@@ -154,9 +154,9 @@
         "note": "PJS corpus は自然録音の歌唱コーパスであり、UTAU型の音声合成 + 別途調声者という2レイヤー構造を持たない（出典: voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md 引用の論文 Koguchi & Takamichi, arXiv:2006.02959 が \"singing voice corpus\" と明記）。performer = Junya Koguchi は 2026-08-25 User 追加裁定②（外部資料 pjs_terms_snapshot.md 引用の論文 \"Koguchi & Takamichi, arXiv:2006.02959\" の姓 Koguchi と対応する著者個人名の確認）による充填——旧値 `<PENDING_USER_ATTESTATION>` は誤用だった: performer は User 自身が attest できる対象ではなく外部の第三者事実であるため、本来 `<UNRESOLVED_EXTERNAL>` 語彙で表すべき欄だった（この誤用自体は同裁定②で是正）。performance_editor は構造的に存在しない対象のため not_applicable（値未確定とは区別する）。"
       }
     },
-    "rights_class": "PENDING_USER_ATTESTATION",
-    "consent_status": "PENDING_USER_ATTESTATION",
-    "consent_status_note": "ライセンス自体（CC BY-SA 4.0、研究・商用いずれも利用可 — recording_master_rights.license 参照）は機械検証済みで明確だが、派生設計変更メモが要求する「Performance Author 個人の特定」（R9_G1_PASS_CONDITIONS の PERFORMANCE_AUTHOR_IDENTIFIED）は 2026-08-25 User 追加裁定②による performer 充填（Junya Koguchi、上記 provenance 参照）で満たされた。ただし rights_class/consent_status 自体（PJS 内部使用が rights-clean curriculum 要件を満たすかの最終確認 = R9-G1 tooling の職務）は本裁定の対象外であり、正直に PENDING_USER_ATTESTATION のまま据え置く——performer 個人の特定と、使用許諾条件の確定は別の条件である。"
+    "rights_class": "UNRESOLVED_EXTERNAL",
+    "consent_status": "UNRESOLVED_EXTERNAL",
+    "consent_status_note": "ライセンス自体（CC BY-SA 4.0、研究・商用いずれも利用可 — recording_master_rights.license 参照）は機械検証済みで明確だが、派生設計変更メモが要求する「Performance Author 個人の特定」（R9_G1_PASS_CONDITIONS の PERFORMANCE_AUTHOR_IDENTIFIED）は 2026-08-25 User 追加裁定②による performer 充填（Junya Koguchi、上記 provenance 参照）で満たされた。ただし rights_class/consent_status 自体（PJS 内部使用が rights-clean curriculum 要件を満たすかの最終確認 = R9-G1 tooling の職務）は本裁定の対象外であり、値未確定のまま残る——performer 個人の特定と、使用許諾条件の確定は別の条件である。Codex bot レビュー PR #319 第2巡指摘（P2, 採用, Fix 6）: 値は本欄新設時 `PENDING_USER_ATTESTATION` としていたが、これは裁定②の語彙予約（`PENDING_USER_ATTESTATION` = User 帰属欄専用 / `UNRESOLVED_EXTERNAL` = 外部第三者事実欄専用）に反する誤用だった——performance_rights は PJS という外部第三者の権利であり User donor 自身の権利ではないため、User が attest（自身の許諾・裁定として確定）できる対象ではない。`UNRESOLVED_EXTERNAL` へ張り替え、User が誤って「これは自分が attest すべき欄だ」と誤認する経路を閉じた（値は裸トークンで表記 — provenance ブロック内の角括弧付き `<UNRESOLVED_EXTERNAL>` とは別の既存の層レベル規約、voice_identity_rights.rights_class の裸トークン表記と同型）。"
   },
 
   "composition_rights": {
@@ -168,8 +168,8 @@
         "note": "composer = Junya Koguchi は 2026-08-25 User 追加裁定②（外部資料 pjs_terms_snapshot.md 引用の論文 \"Koguchi & Takamichi, arXiv:2006.02959\" の確認）による充填。lyricist は repo 内・原典いずれにも個別クレジットの記録がなく未解決のまま — `<UNRESOLVED_EXTERNAL>`（外部の第三者事実として未解決、User が attest すべき欄ではないため `<PENDING_USER_ATTESTATION>` は使わない — 同裁定②が導入した語彙区別）。捏造しない。"
       }
     },
-    "rights_class": "PENDING_USER_ATTESTATION",
-    "consent_status": "PENDING_USER_ATTESTATION"
+    "rights_class": "UNRESOLVED_EXTERNAL",
+    "consent_status": "UNRESOLVED_EXTERNAL"
   },
 
   "recording_master_rights": {
@@ -227,6 +227,10 @@
     {
       "date": "2026-08-25",
       "event": "同日中の追加 User 裁定②により provenance を是正: performance_author.performer / composition.composer に外部資料出典付きで Junya Koguchi を充填（旧値 `<PENDING_USER_ATTESTATION>` は誤用——外部の第三者事実を User 帰属欄の語彙で表していた）。recording_master_rights.provenance.voice_source.owner を「PJS corpus」（客体）から著者個人 Junya Koguchi（主体）へ訂正。composition.lyricist は未解決のまま `<UNRESOLVED_EXTERNAL>`（外部事実欄専用の新設 placeholder。User が attest できるのは自身の許諾・裁定のみであり、第三者の事実確認ではないため `<PENDING_USER_ATTESTATION>` と語彙上区別する）へ張り替え。recording_master_rights に `interpretations.share_alike_applies_to_synthesis_output` を新設し、CC BY-SA 4.0 の share-alike 義務が合成音声出力へ及ぶかという法解釈上の論点を、ライセンス自体の事実（license 節）から明示的に分離した。"
+    },
+    {
+      "date": "2026-08-25",
+      "event": "Codex bot レビュー PR #319 第2巡指摘（P2, 採用, Fix 6）: performance_rights.rights_class/consent_status および composition_rights.rights_class/consent_status を `PENDING_USER_ATTESTATION` から `UNRESOLVED_EXTERNAL` へ張り替えた——両層は PJS という外部第三者（歌唱者・作曲者、上記 provenance 参照）に関する権利であり、User donor 自身の権利ではないため、裁定②の語彙予約（`PENDING_USER_ATTESTATION` = User 帰属欄専用 / `UNRESOLVED_EXTERNAL` = 外部第三者事実欄専用）上、`PENDING_USER_ATTESTATION` のままでは「User がこれを attest できる」という誤った経路を示唆してしまっていた。仕分けの根拠（どの欄がどちらの主体に帰属するか）: voice_identity_rights（User donor 自身の声の権利。attestation 主体 = User）のみ `PENDING_USER_ATTESTATION` を維持する——本層の rights_class/consent_status/attestation/usage_grants はいずれも User 自身が確認・許諾すべき対象であり、変更なし。performance_rights/composition_rights/recording_master_rights（PJS という外部第三者の権利。歌唱者・作曲者・原盤権者の事実確認が主体）は `UNRESOLVED_EXTERNAL` 側に属する——recording_master_rights は既に固有の記述的値（`license.value` = CC BY-SA 4.0 機械検証済み事実 / `consent_status` = `LICENSE_CONFIRMED_USAGE_SCOPE_PENDING_TOOLING_REVIEW`）を持つため今回の張り替え対象には含めない（誤用のパターン——裸トークン `PENDING_USER_ATTESTATION` の使用——がそもそも存在しない）。run9_schema.py の provenance ブロック向け誤用拒否（Fix 2 で導入済み、角括弧付き placeholder 対象）を、本張り替え後の rights_class/consent_status（角括弧なしの層レベル裸トークン）へも同一ロジックで拡張した（Fix 5 の層別必須キー閉集合と合わせて validate_rights_manifest_four_layer() に配線 — 詳細は run9_schema.py 該当コメント参照）。"
     }
   ]
 }
