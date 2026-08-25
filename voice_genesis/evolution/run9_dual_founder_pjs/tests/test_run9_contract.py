@@ -9917,11 +9917,12 @@ def test_fix323_5_readme_has_verbatim_executable_recipe_commands() -> None:
     readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
     assert "再現レシピ" in readme_text
     assert "gdown.download(" in readme_text
+    # Fix 11（第11巡, P2, 採用）で zip 検証対象が $workdir 内へ移動
     assert (
         '683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca  '
-        "PJS_corpus_ver1.1.zip\" | sha256sum -c -"
+        '$workdir/PJS_corpus_ver1.1.zip" | sha256sum -c -'
     ) in readme_text
-    assert "unzip -q PJS_corpus_ver1.1.zip -d extracted" in readme_text
+    assert 'unzip -q "$workdir/PJS_corpus_ver1.1.zip" -d "$workdir/extracted"' in readme_text
     assert "psb.build_practice_split_manifest(" in readme_text
     assert "expected_corpus_identity=psb.EXPANDED_CORPUS_IDENTITY_SHA256" in readme_text
     assert "psb.dump_practice_split_manifest_bytes(manifest)" in readme_text
@@ -10005,9 +10006,10 @@ def test_fix323_7a_readme_checksum_steps_use_sha256sum_dash_c_not_bare_print() -
     誤った manifest の書き出しが成功として進んでしまう致命的欠陥だった
     （Codex bot レビュー PR #323 第7巡指摘, P2, 採用, Fix 7a）。"""
     readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    # Fix 11（第11巡, P2, 採用）で zip 検証対象が $workdir 内へ移動
     assert (
         'echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca'
-        '  PJS_corpus_ver1.1.zip" | sha256sum -c -'
+        '  $workdir/PJS_corpus_ver1.1.zip" | sha256sum -c -'
     ) in readme_text
     assert (
         'echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6'
@@ -10178,10 +10180,12 @@ def test_fix323_10a_readme_recipe_has_errexit_preamble_and_explicit_exit_on_chec
     を明示し、かつ zip/manifest の `sha256sum -c -` 双方に `|| exit 1`
     を併記していること（`set -e` の実行し忘れに対する二重の安全策）。"""
     readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
-    assert "```bash\nset -euo pipefail\n```" in readme_text
+    # Fix 11（第11巡）で workdir 作成をこのプリアンブルへ集約したため、
+    # `set -euo pipefail` ブロックには `workdir=`/`export` 行も同居する
+    assert "```bash\nset -euo pipefail\nworkdir=" in readme_text
     assert (
         'echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca'
-        '  PJS_corpus_ver1.1.zip" | sha256sum -c - || exit 1'
+        '  $workdir/PJS_corpus_ver1.1.zip" | sha256sum -c - || exit 1'
     ) in readme_text
     assert (
         'echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6'
@@ -10232,3 +10236,52 @@ def test_fix323_10_replies_document_10_round_cap_reached() -> None:
     self_text = Path(__file__).read_text(encoding="utf-8")
     assert "上限10巡" in self_text
     assert "CLAUDE.md 規約" in self_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第11巡1件（P2, 上限超過後だが3分類の新しい
+# 具体経路として採用, Fix 11）: レシピは repo root での実行を要求
+# （step 4a の repo 相対 `git log` パス）しながら、zip 取得（旧 step 1）と
+# 展開（旧 step 3）を CWD 直下に書いていたため、成功のたびに 275MB の
+# 実音源が checkout 内へ untracked のまま残っていた——「実 PJS 音源・
+# 展開物は repo 配下へ置いていない」という同 README の宣言と矛盾し、
+# 後続コミットへの実音源混入（権利面でも汚染）リスクがあった。
+# workdir 作成をレシピ冒頭へ集約し、取得・展開・生成・照合のすべての
+# データを `$workdir` 側へ閉じ込めることで解消した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_11_readme_workdir_created_before_download_step() -> None:
+    """README.md のレシピが、`workdir="$(mktemp -d)"` をステップ列（取得
+    ステップ）より前のプリアンブルで作成し、取得（gdown 出力先）・検証・
+    展開（unzip 展開先）のいずれもリポジトリ CWD 直下の裸パスではなく
+    `$workdir`/`$PJS_WORKDIR` 配下を参照していること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    preamble_idx = readme_text.index('workdir="$(mktemp -d)"')
+    download_idx = readme_text.index("gdown.download(")
+    assert preamble_idx < download_idx, (
+        "workdir の作成がステップ1（取得）より後にある——repo root 直下への"
+        "書き込みを避けるには取得の前に作成されていなければならない"
+    )
+    assert "output='$PJS_WORKDIR/PJS_corpus_ver1.1.zip'" in readme_text
+    assert 'unzip -q "$workdir/PJS_corpus_ver1.1.zip" -d "$workdir/extracted"' in readme_text
+    assert (
+        'os.path.join(workdir, "extracted", "PJS_corpus_ver1.1")'
+    ) in readme_text
+
+
+def test_fix323_11_readme_no_bare_cwd_writes_for_zip_or_extraction() -> None:
+    """README.md のレシピに、CWD 直下の裸パス（`output='PJS_corpus_
+    ver1.1.zip'` や `unzip ... PJS_corpus_ver1.1.zip -d extracted`、
+    生成入力の裸 `"extracted/PJS_corpus_ver1.1"`）への書き込みコマンドが
+    もう存在しないこと——旧版はこれらの裸パスへ実際に書き込むことで、
+    成功のたびに 275MB の実音源が checkout 内へ untracked のまま残る
+    経路になっていた。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "output='PJS_corpus_ver1.1.zip'" not in readme_text
+    assert "unzip -q PJS_corpus_ver1.1.zip -d extracted" not in readme_text
+    assert '"extracted/PJS_corpus_ver1.1"' not in readme_text
+    # 最終 cleanup が $workdir 一括削除であり、zip/展開物/worktree 出力の
+    # すべてがこの1コマンドに含まれる旨の説明が存在すること
+    assert 'rm -rf "$workdir"' in readme_text
+    assert "zip・展開コーパス・\n   worktree 出力" in readme_text

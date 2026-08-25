@@ -646,19 +646,31 @@ machine-independent（実音源・実 render・実学習を要さない）次段
 （Codex bot レビュー PR #323 第10巡指摘, Fix 10a, P2, 採用 — 個々の
 ステップは非零 exit を返すが、シェルのデフォルト挙動ではその非零 exit
 がスクリプト全体を止めない。これを明示しないと「不一致なら停止」という
-本レシピの主張と実挙動が食い違う）:
+本レシピの主張と実挙動が食い違う。第11巡指摘（Fix 11, P2, 採用）で
+作業ディレクトリの作成もここへ集約した——**git 操作（step 4a の
+`git log`/`git worktree` 等）は repo root で実行しつつ、zip・展開物・
+生成物というデータは一貫して `$workdir` 側に置く分離**が本レシピ全体の
+方針であり、この分離により「実 PJS 音源・展開物は repo 配下へ置いて
+いない」という本 README の宣言（上記「解消済み（実 PJS practice split
+実行）」節）と実際のレシピ挙動が一致する）:
 ```bash
 set -euo pipefail
+workdir="$(mktemp -d)"
+export PJS_WORKDIR="$workdir"
 ```
 
 1. **取得**（`gdown` 未導入なら `pip install gdown`。ミラー入手でも可
-   ——要件は次段の sha 一致のみ）:
+   ——要件は次段の sha 一致のみ。Codex bot レビュー PR #323 第11巡指摘,
+   P2, 採用, Fix 11 — 出力先を repo root 直下の相対パスから `$workdir`
+   内へ変更した。旧版は repo root で実行することを要求しながら zip を
+   CWD 直下へ書いており、実行のたびに 275MB の実音源が checkout 内へ
+   untracked のまま残る欠陥があった）:
    ```
    python3 -c "
    import gdown
    gdown.download(
        'https://drive.google.com/uc?id=1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_',
-       output='PJS_corpus_ver1.1.zip', quiet=False,
+       output='$PJS_WORKDIR/PJS_corpus_ver1.1.zip', quiet=False,
    )
    "
    ```
@@ -669,15 +681,19 @@ set -euo pipefail
    （Fix 10a, P2, 採用）: `set -euo pipefail`（上記）を実行し忘れた場合
    でもこの1ステップ単体で確実に停止するよう、`|| exit 1` を明示併記
    する——ステップ列の「不一致なら中止」という主張と実挙動を一致させる
-   二重の安全策）:
+   二重の安全策。第11巡指摘（Fix 11）で照合対象を `$workdir` 内へ変更）:
    ```
-   echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca  PJS_corpus_ver1.1.zip" | sha256sum -c - || exit 1
+   echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca  $workdir/PJS_corpus_ver1.1.zip" | sha256sum -c - || exit 1
    # 不一致なら "FAILED" + 非零 exit（$?）で停止。後続手順を実行しないこと。
    ```
-3. **展開**（plain unzip・オプション無し・リネーム/変換一切なし）:
+3. **展開**（plain unzip・オプション無し・リネーム/変換一切なし。
+   Codex bot レビュー PR #323 第11巡指摘, P2, 採用, Fix 11 — 展開先を
+   repo root 直下の `./extracted` から `$workdir/extracted` へ変更した
+   ——275MB の実 WAV コーパスが checkout 内に untracked のまま残る
+   経路を閉じる）:
    ```
-   unzip -q PJS_corpus_ver1.1.zip -d extracted
-   # corpus_root = extracted/PJS_corpus_ver1.1
+   unzip -q "$workdir/PJS_corpus_ver1.1.zip" -d "$workdir/extracted"
+   # corpus_root = $workdir/extracted/PJS_corpus_ver1.1
    #   （pjsNNN/pjsNNN.lab + pjsNNN/pjsNNN_song.wav を含む階層）
    ```
 4. **生成（producer tree で実行）**（Codex bot レビュー PR #323 第8巡
@@ -693,7 +709,10 @@ set -euo pipefail
       bot レビュー PR #323 第10巡指摘, Fix 10c, P2, 採用 — `--depth 1`
       等の shallow clone では `git log --follow` が shallow 境界を
       返し、実際の producing commit と食い違う。shallow か判定し、
-      shallow なら先に完全履歴へ展開してから実行する）:
+      shallow なら先に完全履歴へ展開してから実行する。**本ステップは
+      repo root で実行する**——`git log`/`git fetch` は checkout 内の
+      `.git` を対象とする操作であり、データを置く `$workdir` とは
+      別軸）:
       ```
       if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
         git fetch --unshallow
@@ -701,14 +720,14 @@ set -euo pipefail
       producer_rev=$(git log --follow --format=%H -1 -- voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json)
       echo "$producer_rev"
       ```
-   b. 衝突安全な作業ディレクトリを作り、producer tree を worktree
-      として取り出す（Codex bot レビュー PR #323 第10巡指摘, Fix 10b,
-      P1, 採用 — 固定パス `/tmp/pjs_producer` は中断・並行実行時に
-      `git worktree add` の衝突/失敗を招く。`mktemp -d` による一意な
-      作業ディレクトリへ変更する）:
+   b. producer tree を worktree として取り出す（`$workdir` 内・
+      Codex bot レビュー PR #323 第10巡指摘, Fix 10b, P1, 採用 —
+      固定パス `/tmp/pjs_producer` は中断・並行実行時に `git worktree
+      add` の衝突/失敗を招くため、上記で作成済みの一意な `$workdir` の
+      下へ配置する。**本ステップも repo root で実行する**——
+      `git worktree add` 自体は checkout の `.git` に対する操作であり、
+      取り出し先パスが `$workdir` 配下であることと矛盾しない）:
       ```
-      workdir="$(mktemp -d)"
-      export PJS_WORKDIR="$workdir"
       git worktree add "$workdir/producer_tree" "$producer_rev"
       ```
       （現在 checkout がすでに producer revision と一致している場合
@@ -716,16 +735,17 @@ set -euo pipefail
       run9_dual_founder_pjs` が空——は in-place 実行が等価であり、
       worktree 手順は省略してよい。）
    c. worktree 内の `run9_dual_founder_pjs` を `sys.path` 先頭にして
-      実行し、出力を worktree 外の `$workdir` へ書き出す（現在 checkout
-      の `PRACTICE_MANIFEST_PATH` を直接上書きせず、生成に使った
-      コードと出力先を分離する。Codex bot レビュー PR #323 第9巡指摘,
-      P2, 採用, Fix 9 — 旧版はコードフェンスが素の Python のままで、
-      逐語シェル実行の主張と矛盾していた。`python3 - <<'EOF' … EOF`
-      （クォート付き heredoc デリミタでシェル変数展開を防ぐ）へ改め、
-      そのままシェルへ貼れる形にした。第10巡指摘（Fix 10b）で出力先を
-      `$workdir` へ変更したが、クォート付きデリミタは維持したまま——
-      heredoc 内へは環境変数 `PJS_WORKDIR`（上記 `export`）を
-      `os.environ` 経由で渡し、シェル変数展開に頼らない）:
+      実行し、`$workdir/extracted` のコーパスを入力に、出力を worktree
+      外の `$workdir` へ書き出す（現在 checkout の `PRACTICE_MANIFEST_
+      PATH` を直接上書きせず、生成に使ったコードと出力先を分離する。
+      Codex bot レビュー PR #323 第9巡指摘, P2, 採用, Fix 9 — 旧版は
+      コードフェンスが素の Python のままで、逐語シェル実行の主張と
+      矛盾していた。`python3 - <<'EOF' … EOF`（クォート付き heredoc
+      デリミタでシェル変数展開を防ぐ）へ改め、そのままシェルへ貼れる
+      形にした。第10/11巡指摘（Fix 10b/Fix 11）で worktree・出力・入力
+      コーパスをすべて `$workdir` 側へ揃えたが、クォート付きデリミタは
+      維持したまま——heredoc 内へは環境変数 `PJS_WORKDIR`（上記
+      `export`）を `os.environ` 経由で渡し、シェル変数展開に頼らない）:
       ```bash
       python3 - <<'EOF'
       import os
@@ -736,7 +756,7 @@ set -euo pipefail
       import practice_split_builder as psb
 
       manifest = psb.build_practice_split_manifest(
-          "extracted/PJS_corpus_ver1.1",
+          os.path.join(workdir, "extracted", "PJS_corpus_ver1.1"),
           expected_corpus_identity=psb.EXPANDED_CORPUS_IDENTITY_SHA256,
       )
       with open(os.path.join(workdir, "output.json"), "wb") as f:
@@ -750,8 +770,9 @@ set -euo pipefail
       渡した値と展開コーパスから再計算した `expanded_corpus_identity_
       sha256` が厳密一致しない場合 `Run9ValidationError` で fail-closed
       拒否する）。
-   d. worktree を片付ける（`$workdir` 自体の削除は step 5 の照合完了後
-      ——出力ファイルがまだ `$workdir` 内にあるため）:
+   d. worktree を片付ける（`$workdir` 全体の削除は step 5 の照合完了後
+      ——出力ファイル・展開コーパス・zip がまだ `$workdir` 内にある
+      ため）:
       ```
       git worktree remove "$workdir/producer_tree"
       ```
@@ -778,7 +799,11 @@ set -euo pipefail
    print('row_order_sha256 OK')
    "
    ```
-   最後に作業ディレクトリを片付ける:
+   最後に作業ディレクトリを片付ける（Codex bot レビュー PR #323 第11巡
+   指摘, P2, 採用, Fix 11 — この1コマンドが zip・展開コーパス・
+   worktree 出力（producer_tree はステップ d で既に remove 済み）を
+   すべて含む `$workdir` を一括で除去するため、成功時に repo checkout
+   側へ実音源由来のファイルは一切残らない）:
    ```
    rm -rf "$workdir"
    ```
