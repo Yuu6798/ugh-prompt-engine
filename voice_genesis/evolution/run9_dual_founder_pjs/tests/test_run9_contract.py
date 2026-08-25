@@ -48,13 +48,44 @@ AF0_FOUNDER_MANIFEST_PATH = _FOUNDRY_DIR / "artificial_founder" / "results" / "A
 
 
 # ---------------------------------------------------------------------------
-# 共有 fixture: pinned な合成 domain（64hex ダミー値）
+# 共有 fixture: pinned な合成 domain（64hex ダミー値）+ 有効な rights_manifest
+# （Fix 7, Codex bot レビュー PR #320 第5巡指摘, P1, 採用: build_founder() が
+# `rights_manifest` を必須 keyword-only 引数化したため、以降 build_founder()/
+# founder_genome_from_dict() を呼ぶ全テストが有効な manifest を渡す必要が
+# ある。af0/ritsu は取消意味論を持たない外部アーティファクトの形状 pin
+# のため引き続きダミー値のままでよいが、user だけは
+# `extract_user_identity_attestation_projection()` が実際に受理する
+# 内容と、その正規形 sha256 が一致していなければならない——本 fixture
+# domain の user anchor は現行 `inputs/rights_manifest.json` の projection
+# 正規形 sha256 で計算する（ハードコードしない: 同ファイルが将来改訂
+# されても自動的に追随する）。
 # ---------------------------------------------------------------------------
+
+
+def _valid_test_rights_manifest() -> Dict[str, Any]:
+    """`inputs/rights_manifest.json`（現行 attested + anchor grant granted
+    状態）を読み込んだフレッシュなコピーを返す——Fix 7 以降、
+    `build_founder()`/`founder_genome_from_dict()` を呼ぶテストが共有する
+    「有効な」manifest。呼び出しごとに新規ロードする（テスト間の可変
+    状態共有・書き換え混入を避ける——各テストは必要なら
+    `copy.deepcopy` 済みの dict を自由に改変できる）。"""
+    return json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+@pytest.fixture()
+def valid_rights_manifest() -> Dict[str, Any]:
+    return _valid_test_rights_manifest()
 
 
 def _pinned_fixture_domain() -> m.Run9IdentityDomain:
     return m.build_run9_identity_domain(
-        anchor_hashes={"af0": "a" * 64, "ritsu": "b" * 64, "user": "c" * 64},
+        anchor_hashes={
+            "af0": "a" * 64,
+            "ritsu": "b" * 64,
+            "user": _sha256_canonical_json(
+                m.extract_user_identity_attestation_projection(_valid_test_rights_manifest())
+            ),
+        },
         metric_space_sha="d" * 64,
     )
 
@@ -216,11 +247,11 @@ def test_item10_pjs_key_in_coords_document_rejected() -> None:
     （Run9Coords 自体が af0/ritsu/user の3フィールドしか持てないため、
     build_founder() 経由では原理的に到達不能 — from_dict 読込経路で検証する）。"""
     domain = _pinned_fixture_domain()
-    good = m.build_founder(domain, "R9F-01").to_dict()
+    good = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()).to_dict()
     tampered = copy.deepcopy(good)
     tampered["coords"] = {"af0": 0.6, "ritsu": 0.3, "pjs": 0.1}
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(tampered, domain=domain)
+        m.founder_genome_from_dict(tampered, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 # ---------------------------------------------------------------------------
@@ -229,13 +260,13 @@ def test_item10_pjs_key_in_coords_document_rejected() -> None:
 
 
 def test_item11_r9f01_weights_exactly_0p6_0p3_0p1(pinned_domain: m.Run9IdentityDomain) -> None:
-    g = m.build_founder(pinned_domain, "R9F-01")
+    g = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     assert (g.coords.af0, g.coords.ritsu, g.coords.user) == (0.6, 0.3, 0.1)
     assert g.profile_label == "AF0_DOMINANT"
 
 
 def test_item12_r9f02_weights_exactly_0p1_0p3_0p6(pinned_domain: m.Run9IdentityDomain) -> None:
-    g = m.build_founder(pinned_domain, "R9F-02")
+    g = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert (g.coords.af0, g.coords.ritsu, g.coords.user) == (0.1, 0.3, 0.6)
     assert g.profile_label == "USER_DOMINANT"
 
@@ -246,8 +277,8 @@ def test_item12_r9f02_weights_exactly_0p1_0p3_0p6(pinned_domain: m.Run9IdentityD
 
 
 def test_item13_shared_performance_seed_identical(pinned_domain: m.Run9IdentityDomain) -> None:
-    g1 = m.build_founder(pinned_domain, "R9F-01")
-    g2 = m.build_founder(pinned_domain, "R9F-02")
+    g1 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert g1.performance_seed == g2.performance_seed == 909001 == m.SHARED_PERFORMANCE_SEED
 
 
@@ -259,8 +290,8 @@ def test_item13_shared_performance_seed_identical(pinned_domain: m.Run9IdentityD
 def test_item14_genome_id_deterministic_same_input(pinned_domain: m.Run9IdentityDomain) -> None:
     """item 14: 同一 domain + 同一 founder_id → genome_id バイト一致
     （2回呼び出し）。"""
-    a = m.build_founder(pinned_domain, "R9F-01")
-    b = m.build_founder(pinned_domain, "R9F-01")
+    a = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    b = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     assert a.genome_id == b.genome_id
 
 
@@ -269,9 +300,9 @@ def test_item14_genome_id_stable_through_canonical_json_roundtrip(
 ) -> None:
     """item 14 補足: 正規形 JSON 経由の再構築（to_dict -> json.dumps ->
     json.loads -> founder_genome_from_dict）でも genome_id が一致する。"""
-    original = m.build_founder(pinned_domain, "R9F-01")
+    original = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     text = json.dumps(original.to_dict(), sort_keys=True)
-    reconstructed = m.founder_genome_from_dict(json.loads(text), domain=pinned_domain)
+    reconstructed = m.founder_genome_from_dict(json.loads(text), domain=pinned_domain, rights_manifest=_valid_test_rights_manifest())
     assert reconstructed.genome_id == original.genome_id
 
 
@@ -281,8 +312,8 @@ def test_item14_genome_id_stable_through_canonical_json_roundtrip(
 
 
 def test_item15_founder_genome_ids_are_distinct(pinned_domain: m.Run9IdentityDomain) -> None:
-    g1 = m.build_founder(pinned_domain, "R9F-01")
-    g2 = m.build_founder(pinned_domain, "R9F-02")
+    g1 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert g1.genome_id != g2.genome_id
     assert g1.voice_id != g2.voice_id
 
@@ -293,8 +324,8 @@ def test_item15_founder_genome_ids_are_distinct(pinned_domain: m.Run9IdentityDom
 
 
 def test_item16_skill_state_is_default_neutral(pinned_domain: m.Run9IdentityDomain) -> None:
-    g1 = m.build_founder(pinned_domain, "R9F-01")
-    g2 = m.build_founder(pinned_domain, "R9F-02")
+    g1 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert g1.skill_state == "DEFAULT_NEUTRAL"
     assert g2.skill_state == "DEFAULT_NEUTRAL"
 
@@ -303,7 +334,7 @@ def test_item16_genome_dict_has_no_pjs_lesson_derived_field(pinned_domain: m.Run
     """item 16 補足: genome dict のフィールド集合に PJS lesson 由来の
     キー（lesson_id / teacher_reference 等）が存在しない（構造的保証 —
     Run9FounderGenome のフィールド定義そのものに含まれない）。"""
-    g = m.build_founder(pinned_domain, "R9F-01").to_dict()
+    g = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()).to_dict()
     forbidden_substrings = ("lesson", "teacher", "pjs")
     for key in g:
         lowered = key.lower()
@@ -336,16 +367,25 @@ def test_item22_no_public_weight_adjustment_api() -> None:
         assert not leaked, f"public callable {name!r} exposes a coordinate/weight injection param: {leaked}"
 
 
-def test_item22_build_founder_signature_is_domain_and_founder_id_only() -> None:
-    """item 22 直接検査: `build_founder` のシグネチャが (domain, founder_id)
-    の2引数のみであること。"""
-    params = list(inspect.signature(m.build_founder).parameters.keys())
-    assert params == ["domain", "founder_id"]
+def test_item22_build_founder_signature_is_domain_founder_id_and_rights_manifest_only() -> None:
+    """item 22 直接検査: `build_founder` のシグネチャが `(domain, founder_id,
+    *, rights_manifest)` の3引数のみであること（Codex bot レビュー PR #320
+    第5巡指摘, P1, 採用, Fix 7 により `rights_manifest` が必須 keyword-only
+    引数として追加された——weights/coords を直接渡す公開経路が引き続き
+    存在しないことは本テストの主張と別（`test_item22_no_public_weight_
+    adjustment_api` が forbidden_params で直接検査する）。`rights_manifest`
+    が keyword-only（デフォルト値なし）であることも確認する——省略可能な
+    optional 化は fail-open 経路になるため禁止（Fix 7 設計判定）。"""
+    sig = inspect.signature(m.build_founder)
+    assert list(sig.parameters.keys()) == ["domain", "founder_id", "rights_manifest"]
+    rights_manifest_param = sig.parameters["rights_manifest"]
+    assert rights_manifest_param.kind == inspect.Parameter.KEYWORD_ONLY
+    assert rights_manifest_param.default is inspect.Parameter.empty
 
 
 def test_item22_unknown_founder_id_rejected(pinned_domain: m.Run9IdentityDomain) -> None:
     with pytest.raises(m.Run9ValidationError):
-        m.build_founder(pinned_domain, "R9F-03")
+        m.build_founder(pinned_domain, "R9F-03", rights_manifest=_valid_test_rights_manifest())
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +399,7 @@ def test_item40_contract_has_no_total_score_field(contract_raw: Dict[str, Any]) 
 
 
 def test_item40_genome_dict_has_no_total_score_field(pinned_domain: m.Run9IdentityDomain) -> None:
-    g = m.build_founder(pinned_domain, "R9F-01").to_dict()
+    g = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()).to_dict()
     canonical = json.dumps(g).lower().replace("_", "")
     assert "totalscore" not in canonical
 
@@ -529,29 +569,58 @@ def test_item54_current_contract_run_id_is_exactly_run9(contract_raw: Dict[str, 
 # ---------------------------------------------------------------------------
 
 
-def test_unpinned_domain_rejects_build_founder(domain_draft_raw: Dict[str, Any]) -> None:
-    """domains/identity_domain_run9_v1.json のドラフト（プレースホルダ
-    `<PIN_BEFORE_RUN>`）は構造 valid だが is_pinned() == False であり、
-    build_founder() は ValueError を送出する
-    （DESIGN_RUN9 §22 実行順 step 3→4 の機械強制）。"""
-    domain = m.run9_identity_domain_from_dict(domain_draft_raw)
+def test_unpinned_domain_rejects_build_founder() -> None:
+    """合成の未 pin domain（anchor_hashes.user がプレースホルダ）は構造
+    valid だが is_pinned() == False であり、build_founder() は
+    ValueError を送出する（DESIGN_RUN9 §22 実行順 step 3→4 の機械強制）。
+    2026-08-25 RUN9 User attestation 実行により実 domain draft
+    （`domains/identity_domain_run9_v1.json`）は PINNED 済みへ遷移した
+    ため、本テストはプレースホルダを直接注入した合成 domain で未 pin
+    経路の拒否を回帰確認する（実 domain 側の pinned 経路は
+    `test_run9_attest20260825_domain_user_anchor_now_pinned` が担う）。"""
+    domain = m.run9_identity_domain_from_dict({
+        "schema": m.SCHEMA_IDENTITY_DOMAIN,
+        "domain_id": m.RUN9_DOMAIN_ID,
+        "anchor_order": list(m.RUN9_ANCHOR_ORDER),
+        "anchor_hashes": {"af0": "a" * 64, "ritsu": "b" * 64, "user": "<PIN_BEFORE_RUN>"},
+        "excluded_teacher_identities": list(m.RUN9_EXCLUDED_TEACHER_IDENTITIES),
+        "coordinate_precision": m.RUN9_COORDINATE_PRECISION,
+        "normalization": m.RUN9_NORMALIZATION,
+        "metric_space_sha": "d" * 64,
+        "pin_source_candidates": {},
+    })
     assert domain.is_pinned() is False
     with pytest.raises(m.Run9ValidationError):
-        m.build_founder(domain, "R9F-01")
+        m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
 
 
 def test_unpinned_domain_placeholder_is_structurally_valid() -> None:
-    """ドラフト domain 自体は構造検証（未知キー・anchor_order 等）は
-    通過する — 未 pin は「構造不正」ではなく「pin 未充足」として区別する。"""
-    domain = m.run9_identity_domain_from_dict(json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8")))
+    """未 pin ドラフト domain 自体は構造検証（未知キー・anchor_order 等）は
+    通過する — 未 pin は「構造不正」ではなく「pin 未充足」として区別する。
+    2026-08-25 RUN9 User attestation 実行後は実 domain draft
+    （`domains/identity_domain_run9_v1.json`）が PINNED 済みのため、
+    合成の未 pin domain（`test_unpinned_domain_rejects_build_founder` と
+    同一 fixture）で構造検証パスを回帰確認する。"""
+    domain = m.run9_identity_domain_from_dict({
+        "schema": m.SCHEMA_IDENTITY_DOMAIN,
+        "domain_id": m.RUN9_DOMAIN_ID,
+        "anchor_order": list(m.RUN9_ANCHOR_ORDER),
+        "anchor_hashes": {"af0": "a" * 64, "ritsu": "b" * 64, "user": "<PIN_BEFORE_RUN>"},
+        "excluded_teacher_identities": list(m.RUN9_EXCLUDED_TEACHER_IDENTITIES),
+        "coordinate_precision": m.RUN9_COORDINATE_PRECISION,
+        "normalization": m.RUN9_NORMALIZATION,
+        "metric_space_sha": "d" * 64,
+        "pin_source_candidates": {},
+    })
     assert domain.domain_id == m.RUN9_DOMAIN_ID
     assert domain.anchor_order == ("af0", "ritsu", "user")
+    assert domain.is_pinned() is False
 
 
 def test_pinned_fixture_domain_succeeds(pinned_domain: m.Run9IdentityDomain) -> None:
     assert pinned_domain.is_pinned() is True
-    g1 = m.build_founder(pinned_domain, "R9F-01")
-    g2 = m.build_founder(pinned_domain, "R9F-02")
+    g1 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert g1.genome_id and g2.genome_id
 
 
@@ -719,7 +788,7 @@ def test_fix2_metric_space_sha_placeholder_blocks_is_pinned_and_build_founder() 
     )
     assert domain.is_pinned() is False
     with pytest.raises(m.Run9ValidationError):
-        m.build_founder(domain, "R9F-01")
+        m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
 
 
 # ---------------------------------------------------------------------------
@@ -740,11 +809,11 @@ def test_fix3_voice_id_coords_mismatch_rejected() -> None:
     ような偽装 genome document は builder 照合（`build_founder(domain,
     voice_id)` との `to_dict()` 完全一致要求）で検出される。"""
     domain = _pinned_fixture_domain()
-    r9f02 = m.build_founder(domain, "R9F-02")
+    r9f02 = m.build_founder(domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     forged = r9f02.to_dict()
     forged["voice_id"] = "R9F-01"  # 座標・profile_label は R9F-02 のまま、ラベルだけ差し替え
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix3_tampered_genome_id_rejected() -> None:
@@ -752,12 +821,12 @@ def test_fix3_tampered_genome_id_rejected() -> None:
     差し替えた genome document は builder 照合で検出される（構造的には
     正規の16hexだが再計算値と不一致）。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["genome_id"] = "f" * 16
     assert forged["genome_id"] != genuine.genome_id
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix3_correctly_signed_genome_document_still_roundtrips() -> None:
@@ -765,8 +834,8 @@ def test_fix3_correctly_signed_genome_document_still_roundtrips() -> None:
     正典 Run9FounderGenome と完全一致する（Fix 3 が正常系まで壊していない
     ことの確認）。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-02")
-    reconstructed = m.founder_genome_from_dict(genuine.to_dict(), domain=domain)
+    genuine = m.build_founder(domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
+    reconstructed = m.founder_genome_from_dict(genuine.to_dict(), domain=domain, rights_manifest=_valid_test_rights_manifest())
     assert reconstructed.to_dict() == genuine.to_dict()
 
 
@@ -921,7 +990,7 @@ def test_fix6_forged_domain_id_rejected_by_build_founder() -> None:
     )
     assert forged_domain.is_pinned() is True  # is_pinned() 単体は形式しか見ないため通る
     with pytest.raises(m.Run9ValidationError):
-        m.build_founder(forged_domain, "R9F-01")
+        m.build_founder(forged_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix6_validate_domain_invariants_accepts_genuine_domain(
@@ -931,7 +1000,7 @@ def test_fix6_validate_domain_invariants_accepts_genuine_domain(
     `_validate_domain_invariants()` を素通りする（正常系まで壊していない
     ことの確認）。"""
     m._validate_domain_invariants(pinned_domain)  # 例外を投げないことの確認
-    g = m.build_founder(pinned_domain, "R9F-01")
+    g = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     assert g.genome_id
 
 
@@ -1054,10 +1123,10 @@ def test_fix9_build_founder_twice_yields_stable_genome_id_and_is_unaffected_by_m
 ) -> None:
     """Fix 9 の実効性確認: 同一 domain から2回 `build_founder()` を呼んでも
     genome_id は不変（anchor set を差し替える経路が閉じているため）。"""
-    g1 = m.build_founder(pinned_domain, "R9F-01")
+    g1 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     with pytest.raises(TypeError):
         pinned_domain.anchor_hashes["af0"] = "f" * 64  # type: ignore[index]  # 差し替えを試みても失敗する
-    g2 = m.build_founder(pinned_domain, "R9F-01")
+    g2 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     assert g1.genome_id == g2.genome_id
 
 
@@ -1184,7 +1253,7 @@ def test_fix11_directly_instantiated_domain_with_float_precision_rejected_by_bui
     )
     assert forged_domain.is_pinned() is True
     with pytest.raises(m.Run9ValidationError):
-        m.build_founder(forged_domain, "R9F-01")
+        m.build_founder(forged_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix11_is_strict_int_helper_excludes_bool_and_float() -> None:
@@ -1207,11 +1276,11 @@ def test_fix12_coords_string_value_rejected() -> None:
     `founder_genome_from_dict()` が非正準文書を正典として返す契約矛盾に
     なっていた。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["coords"] = {"af0": "0.6", "ritsu": "0.3", "user": "0.1"}
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix12_coords_bool_value_rejected() -> None:
@@ -1219,11 +1288,11 @@ def test_fix12_coords_bool_value_rejected() -> None:
     genome document も拒否される（bool は int のサブクラスのため、
     `isinstance(value, (int, float))` だけの判定だと素通りしてしまう）。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["coords"] = {"af0": True, "ritsu": 0.3, "user": 0.1}
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix12_coords_int_value_is_accepted_and_converted_to_float() -> None:
@@ -1319,11 +1388,11 @@ def test_fix14_parents_dict_masquerading_as_list_rejected() -> None:
     実装の `list(parents_raw) != [...]` はキー列挙で一致してしまい素通り
     していた。`isinstance(list)` を先行させたことで拒否される。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["parents"] = {"AF0": 1, "RITSU": 1, "USER_DONOR": 1}
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix14_performance_seed_float_variant_rejected() -> None:
@@ -1331,11 +1400,11 @@ def test_fix14_performance_seed_float_variant_rejected() -> None:
     `909001.0`（float）を渡すと拒否される（`909001.0 == 909001` は真だが
     `_is_strict_int()` が float を先に排除する）。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["performance_seed"] = 909001.0
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix14_genetic_generation_bool_variant_rejected() -> None:
@@ -1343,11 +1412,11 @@ def test_fix14_genetic_generation_bool_variant_rejected() -> None:
     `True` を渡すと拒否される（`True == 1` は真だが `_is_strict_int()` が
     bool を先に排除する）。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["genetic_generation"] = True
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix14_run_id_and_experiment_id_and_claim_strength_require_str(
@@ -1470,9 +1539,11 @@ def test_fix17_existing_contract_yaml_still_loads() -> None:
 
 
 def test_fix17_existing_domain_draft_json_still_loads() -> None:
-    """正例: 重複キーの無い既存 domain draft JSON は引き続き load できる。"""
+    """正例: 重複キーの無い既存 domain draft JSON は引き続き load できる。
+    2026-08-25 RUN9 User attestation 実行により user anchor も PINNED 済み
+    となったため、is_pinned() は True へ遷移した（旧: False）。"""
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
-    assert domain.is_pinned() is False
+    assert domain.is_pinned() is True
 
 
 def test_fix17_yaml_loader_comment_declares_models_loads_strict_parity() -> None:
@@ -1503,6 +1574,36 @@ def _sha256_canonical_json(obj: Any) -> str:
 
     canonical = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _pending_rights_manifest_fixture() -> Dict[str, Any]:
+    """`inputs/rights_manifest.json`（2026-08-25 RUN9 User attestation 実行
+    後は attested 形態）を読み込み、`voice_identity_rights` 層だけを attest
+    前の pending 形態（`attested=false`・signer/timestamp/statement=`None`・
+    `rights_class`/`consent_status`=`PENDING_USER_ATTESTATION`・
+    `usage_grants` 全3キー `not_granted`）へ差し戻したコピーを返す。
+    entries/donor_ledger_source 等の他フィールド、および他3層
+    （performance_rights/composition_rights/recording_master_rights）は
+    実ファイルのまま——pending 経路の負例テスト群（Fix 16/19/21/27 等）が
+    要求する「現行 fixture の pending baseline」を、実 fixture が attested
+    形態へ遷移した後も保つためのヘルパ（2026-08-25 RUN9 User attestation
+    実行時点で新設。`_attested_voice_identity_rights_layer()` の逆方向）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    layer = data["voice_identity_rights"]
+    layer["attestation"] = {
+        "attested": False,
+        "attested_by": None,
+        "attested_at": None,
+        "statement": None,
+    }
+    layer["rights_class"] = "PENDING_USER_ATTESTATION"
+    layer["consent_status"] = "PENDING_USER_ATTESTATION"
+    layer["usage_grants"] = {
+        "run9_identity_anchor": "not_granted",
+        "raw_audio_publication": "not_granted",
+        "model_general_distribution": "not_granted",
+    }
+    return data
 
 
 # --- item 1: design_revision 0.3 での contract load 成功 / "0.1"/"0.2" 拒否 -
@@ -1854,6 +1955,46 @@ def test_revision02_af0_vs_bundle_hash_convention_difference_documented() -> Non
     assert "compute_file_sha256" in schema_source
 
 
+def test_fix320_5_hash_convention_inventory_lists_user_anchor_as_canonical_projection() -> None:
+    """Codex bot レビュー PR #320 第3巡指摘（P2, 採用, Fix 5）の回帰テスト:
+    `compute_file_sha256()` の docstring と `RUN9_CONTRACT.yaml` の規約
+    サマリーコメントが、`anchor_hashes.user` を「af0 のみの例外」から
+    取り残さず canonical 規約側の一員として列挙し、かつ user anchor が
+    ファイル hash ではなく `extract_user_identity_attestation_
+    projection()` 由来のメモリ上 projection dict の hash であることを
+    明記していることを直接確認する——旧文言（af0 だけが例外）のまま
+    再計算した maintainer が user anchor をファイル bytes で誤って
+    再計算し、異なる pin・異なる genome_id を導出する経路を閉じる。"""
+    schema_source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+
+    # 1. docstring/contract コメントのいずれも "anchor_hashes.af0 のみ" /
+    #    "af0 pin だけは" という単独例外の主張を残していないこと
+    #    （両者とも "のみ"/"だけ" は他の許容された文脈で使われ得るため、
+    #    af0 に限定した独占的例外主張の具体的な文字列のみを負例とする）。
+    assert "`anchor_hashes.af0` のみ" not in schema_source
+    assert "anchor_hashes.af0 pin だけは" not in contract_text
+
+    # 2. compute_file_sha256() の docstring が3件（af0/metric_space_sha/
+    #    user）を canonical 規約側として列挙し、user anchor が
+    #    projection 由来（ファイル hash ではない）であることを明記して
+    #    いること。
+    assert "extract_user_identity_attestation_projection" in schema_source
+    doc = m.compute_file_sha256.__doc__ or ""
+    assert "anchor_hashes.user" in doc
+    assert "extract_user_identity_attestation_projection" in doc
+    assert "ファイルの hash ですらない" in doc
+
+    # 3. RUN9_CONTRACT.yaml の規約サマリーコメントも同様に user anchor を
+    #    canonical 規約側として列挙していること。
+    assert "anchor_hashes.user" in contract_text
+    assert "extract_user_identity_attestation_projection" in contract_text
+    idx = contract_text.index("意図的な例外で正規形（canonical）規約を使う")
+    nearby = contract_text[max(0, idx - 400) : idx + 1000]
+    assert "anchor_hashes.user" in nearby, nearby
+    assert "af0" in nearby and "metric_space_sha" in nearby, nearby
+
+
 def test_revision02_backbone_runtime_bundle_sha_pinned_via_run9_render_code_commit(
     contract_raw: Dict[str, Any],
 ) -> None:
@@ -1990,21 +2131,29 @@ def test_revision02_backbone_bundle_run7_not_used_records_teacher_swap_reason() 
     assert "教師交代" in bundle["run7_not_used"]["reason"] or "teacher swap" in bundle["run7_not_used"]["reason"].lower()
 
 
-# --- item 4: rights_manifest が PENDING_USER_ATTESTATION の間、domain user
-#     anchor は未 pin のまま（gate BLOCKED 継続） -----------------------------
+# --- item 4 (2026-08-25 RUN9 User attestation 実行により attested 形態へ
+#     遷移。旧テスト名 revision02_rights_manifest_is_pending_user_attestation
+#     は「Fix 15 の founder_genome_shas 改名前例」に倣い assertion のみ
+#     更新する) ------------------------------------------------------------
 
 
-def test_revision02_rights_manifest_is_pending_user_attestation() -> None:
-    """rev 0.4（4層再編）後: voice_identity_rights 層の内容・attest 対象は
-    無改変のまま（DESIGN_RUN9_REVISION_0.4.md 変更1・2「attest対象の更新」
-    — User裁定「aとbを承認」のa = 新4層構造に対する attest は次段で確定）。"""
+def test_run9_attest20260825_rights_manifest_is_attested() -> None:
+    """2026-08-25 RUN9 User attestation 実行（User 裁定「承認する」）後:
+    voice_identity_rights 層は pending 形態から attested 形態へ遷移した
+    （旧 test_revision02_rights_manifest_is_pending_user_attestation の
+    assertion を反転——rev 0.4 4層構造自体・他3層・entries は無改変）。"""
     rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     layer = rights["voice_identity_rights"]
-    assert layer["rights_class"] == "PENDING_USER_ATTESTATION"
-    assert layer["consent_status"] == "PENDING_USER_ATTESTATION"
-    assert layer["attestation"]["attested"] is False
+    assert layer["rights_class"] == "USER_ATTESTED_OWN_VOICE"
+    assert layer["consent_status"] == "USER_ATTESTED_OWN_VOICE"
+    assert layer["attestation"]["attested"] is True
+    assert layer["attestation"]["attested_by"] == "Yuu6798"
+    assert layer["attestation"]["attested_at"] == "2026-08-25T06:47:25Z"
+    assert layer["attestation"]["statement"]
+    assert layer["usage_grants"]["run9_identity_anchor"] == "granted"
     assert layer["usage_grants"]["raw_audio_publication"] == "not_granted"
     assert layer["usage_grants"]["model_general_distribution"] == "not_granted"
+    m.validate_rights_manifest_four_layer(rights)  # 例外を投げないことの確認
 
 
 def _load_rights_manifest_and_ledger() -> tuple[Dict[str, Any], Dict[str, Any]]:
@@ -2391,29 +2540,537 @@ def test_revision02_verify_rights_manifest_current_files_match_frozen_donor_set(
     m.verify_rights_manifest_against_ledger(rights, ledger)  # 例外を投げないことの確認
 
 
-def test_revision02_domain_user_anchor_still_unpinned_while_rights_pending() -> None:
+def test_run9_attest20260825_domain_user_anchor_now_pinned() -> None:
+    """2026-08-25 RUN9 User attestation 実行により user anchor が PINNED
+    化された（旧 test_revision02_domain_user_anchor_still_unpinned_while_
+    rights_pending の assertion を反転）。
+
+    Codex bot レビュー PR #320 第1巡指摘（P1, 採用, Fix 1）: binding scope を
+    rights_manifest.json **全体**の正規形 sha256 から、
+    `extract_voice_identity_rights_layer()` が返す **voice_identity_rights
+    層のみ**の正規形 sha256 へ是正した（旧 assertion は全体束縛を検証して
+    いたため反転）——他3層（performance_rights/composition_rights/
+    recording_master_rights）の外部第三者 provenance が将来解決されても
+    anchor が動かないことの直接保証は
+    `test_fix320_1_user_anchor_unaffected_by_external_layer_only_change`
+    が別途担う。
+
+    Codex bot レビュー PR #320 第2巡指摘（P1, 採用, Fix 3）: 束縛対象を
+    voice_identity_rights 層全体から `extract_user_identity_attestation_
+    projection()` が返す不変 projection へさらに再限定したため、本テストの
+    基準関数を張り替える（層抽出関数自体の単体テストは
+    `test_fix320_1_user_anchor_binds_only_voice_identity_rights_layer_not_
+    whole_file` 内で layer_sha として引き続き参照・別途保持）。"""
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
-    assert domain.anchor_hashes["user"] == "<PIN_BEFORE_RUN>"
-    assert domain.is_pinned() is False
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    projection = m.extract_user_identity_attestation_projection(rights)
+    assert domain.anchor_hashes["user"] == _sha256_canonical_json(projection)
+    assert m._SHA256_HEX_RE.match(domain.anchor_hashes["user"])
+    assert domain.anchor_hashes["user"] != "<PIN_BEFORE_RUN>"
+    assert domain.is_pinned() is True
+
+
+def test_fix320_1_user_anchor_binds_only_voice_identity_rights_layer_not_whole_file() -> None:
+    """Codex bot レビュー PR #320 第1巡指摘（P1, 採用, Fix 1）の直接反証
+    テスト: 旧 binding（rights_manifest.json 全体の正規形 sha256）だった
+    ら一致するはずの値と、新 binding（voice_identity_rights 層のみ）の値が
+    異なることを確認する——is_pinned() の pin 値が本当に層限定へ切り替わって
+    いることの negative control。
+
+    Codex bot レビュー PR #320 第2巡指摘（P1, 採用, Fix 3）更新: 現行の
+    anchor 束縛値は layer_sha ですらなく、さらに先の projection_sha である
+    ため、whole_file/layer/projection の3値がいずれも相異し、
+    anchor_hashes.user が projection_sha とのみ一致することを確認する
+    （`extract_voice_identity_rights_layer()` 自体は引き続き存在し
+    layer_sha を計算できる——汎用アダプタとしての単体挙動はここで維持
+    確認する）。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    whole_file_sha = _sha256_canonical_json(rights)
+    layer_sha = _sha256_canonical_json(m.extract_voice_identity_rights_layer(rights))
+    projection_sha = _sha256_canonical_json(m.extract_user_identity_attestation_projection(rights))
+    assert len({whole_file_sha, layer_sha, projection_sha}) == 3
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert domain.anchor_hashes["user"] == projection_sha
+    assert domain.anchor_hashes["user"] != whole_file_sha
+    assert domain.anchor_hashes["user"] != layer_sha
+
+
+def test_fix320_1_user_anchor_unaffected_by_external_layer_only_change() -> None:
+    """Codex bot レビュー PR #320 第1巡指摘（P1, 採用, Fix 1）の中核契約:
+    voice_identity_rights 層の内容（User donor 録音・attestation・
+    usage_grants）が不変のまま、他層（例: composition_rights.provenance.
+    composition.lyricist という PJS 側 `<UNRESOLVED_EXTERNAL>` 欄）だけを
+    具体値へ書き換えた合成 manifest でも、抽出した voice_identity_rights
+    層の正規形 sha256（＝Fix 1 時点で anchor が束縛していた値）は変化
+    しないことを直接確認する——外部第三者 provenance の解決が anchor・
+    genome_id に影響しないという設計原則の機械証明。
+
+    Codex bot レビュー PR #320 第2巡指摘（P1, 採用, Fix 3）更新: 現行の
+    anchor 束縛値は projection_sha であるため、projection_sha についても
+    同じ不変性を直接確認し、domain.anchor_hashes.user との一致を
+    projection_sha 基準へ張り替える（layer_sha の不変性確認は
+    `extract_voice_identity_rights_layer()` 自体の回帰として引き続き
+    保持する）。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original_layer_sha = _sha256_canonical_json(m.extract_voice_identity_rights_layer(rights))
+    original_projection_sha = _sha256_canonical_json(
+        m.extract_user_identity_attestation_projection(rights)
+    )
+
+    mutated = copy.deepcopy(rights)
+    mutated["composition_rights"]["provenance"]["composition"]["lyricist"] = "Someone Resolved"
+    mutated_layer_sha = _sha256_canonical_json(m.extract_voice_identity_rights_layer(mutated))
+    mutated_projection_sha = _sha256_canonical_json(
+        m.extract_user_identity_attestation_projection(mutated)
+    )
+
+    assert mutated_layer_sha == original_layer_sha
+    assert mutated_projection_sha == original_projection_sha
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert domain.anchor_hashes["user"] == mutated_projection_sha
+
+
+# ---------------------------------------------------------------------------
+# PR #320 Codex bot レビュー第2巡対応 — Fix 3（P1）: user anchor 束縛を
+# 「不変 identity-attestation projection」へさらに再限定する
+# （`extract_user_identity_attestation_projection()`）。Fix 1（層全体束縛）は
+# usage_grants/usage_grants_note を含んでおり、raw_audio_publication/
+# model_general_distribution の別承認（rev 0.2 改訂4）が起きるたびに anchor
+# が動く二律背反を再発させていた——本節はその再限定の直接証拠を積む。
+# ---------------------------------------------------------------------------
+
+_ATTESTATION_PROJECTION_KEYS = frozenset(
+    {
+        "schema", "source_layer", "donor_ledger_source", "donor_ledger_schema",
+        "transcribed_at", "entries", "rights_class", "consent_status", "attestation",
+    }
+)
+
+
+def _projection_hash(rights: Dict[str, Any]) -> str:
+    """`extract_user_identity_attestation_projection()` の返り値の正規形
+    sha256（Fix 3 テスト群の共通ヘルパー）。"""
+    return _sha256_canonical_json(m.extract_user_identity_attestation_projection(rights))
+
+
+def test_fix320_3_projection_closed_key_set() -> None:
+    """projection の返り値が閉じた9キーちょうどを持つこと（余剰キーなし・
+    欠落キーなし）——`usage_grants`/`usage_grants_note`/`role`/`note`/
+    `binding_note`/`schema_legacy` がいずれも含まれないことを直接確認
+    する。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    projection = m.extract_user_identity_attestation_projection(rights)
+    assert set(projection.keys()) == _ATTESTATION_PROJECTION_KEYS
+    assert projection["schema"] == "run9-identity-attestation-projection/1.0"
+    assert projection["source_layer"] == "voice_identity_rights"
+    for excluded_key in (
+        "usage_grants", "usage_grants_note", "role", "note", "binding_note", "schema_legacy",
+    ):
+        assert excluded_key not in projection
+
+
+def test_fix320_3_pending_attestation_rejected() -> None:
+    """負例: attestation が pending 形態（`attested=false`）の manifest
+    からの抽出は `Run9ValidationError`（`ValueError` サブクラス）で拒否
+    されること——本 projection は anchor pin 専用であり、pending 形態の
+    hash が anchor 候補として見える経路をここで構造的に閉じる。"""
+    data = _pending_rights_manifest_fixture()
+    with pytest.raises(m.Run9ValidationError, match="attested"):
+        m.extract_user_identity_attestation_projection(data)
+
+
+def test_fix320_3_anchor_equals_projection_hash() -> None:
+    """統合テスト: `domain.anchor_hashes.user` が projection の実 hash と
+    一致すること（旧 `extract_voice_identity_rights_layer()` 基準の
+    anchor 一致テストは本関数基準へ張り替え済み——
+    `test_run9_attest20260825_domain_user_anchor_now_pinned` 参照）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert domain.anchor_hashes["user"] == _projection_hash(rights)
+
+
+def test_fix320_3_invariant_to_raw_audio_publication_separate_approval() -> None:
+    """不変性 (a): `raw_audio_publication` を `granted` + 正しい承認記録
+    （`approved_at` の UTC ISO 8601 タイムスタンプ + 非空
+    `approval_statement` — 既存 validator が要求する形）付きへ遷移しても
+    projection（延いては anchor hash）は不変であること——別承認による
+    設計上正規の遷移が anchor を動かさないことの直接証明。変異後も四層
+    検証自体は通ることを前提として確認する。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    mutated["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Raw audio publication approved by User.",
+    }
+    m.validate_rights_manifest_four_layer(mutated)  # 前提: 変異後も四層検証は通る
+    assert _projection_hash(mutated) == original
+
+
+def test_fix320_3_invariant_to_usage_grants_note_wording() -> None:
+    """不変性 (b): `usage_grants_note` の文言変更は projection を変えない
+    こと。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["usage_grants_note"] = "Rewritten note text for clarity."
+    m.validate_rights_manifest_four_layer(mutated)
+    assert _projection_hash(mutated) == original
+
+
+def test_fix320_3_invariant_to_binding_note_wording() -> None:
+    """不変性 (c): `binding_note` の追記・文言変更は projection を変えない
+    こと——`binding_note` は束縛方式自体の記述という自己参照であり、
+    これを projection 外に置いたことで「binding 文書の明確化のたびに
+    repin」という Fix 1 時代の実例（本 PR の作業自体がその実例）を今後
+    解消することの直接証明。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["binding_note"] += " Additional clarifying remark."
+    m.validate_rights_manifest_four_layer(mutated)
+    assert _projection_hash(mutated) == original
+
+
+def test_fix320_3_invariant_to_role_and_note_wording() -> None:
+    """不変性 (d): `role` / `note` の文言変更は projection を変えないこと。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["role"] = "Rewritten role description."
+    mutated["voice_identity_rights"]["note"] = "Rewritten note description."
+    m.validate_rights_manifest_four_layer(mutated)
+    assert _projection_hash(mutated) == original
+
+
+def test_fix320_3_invariant_to_external_layer_resolution() -> None:
+    """不変性 (e): 外部3層の `<UNRESOLVED_EXTERNAL>` 欄が将来解決されても
+    projection は不変であること（Fix 1 の中核契約を projection 化後も
+    継承していることの確認 — `test_fix320_1_user_anchor_unaffected_by_
+    external_layer_only_change` の複数欄版）。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["composition_rights"]["provenance"]["composition"]["lyricist"] = "Someone Resolved"
+    mutated["recording_master_rights"]["provenance"]["voice_source"]["owner"] = "Someone Resolved"
+    m.validate_rights_manifest_four_layer(mutated)
+    assert _projection_hash(mutated) == original
+
+
+def test_fix320_3_sensitive_to_entries_mutation() -> None:
+    """感度の検証: `entries` の1件改変で projection hash が変わること。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["entries"][0]["duration_sec"] = 999.0
+    assert _projection_hash(mutated) != original
+
+
+def test_fix320_3_sensitive_to_attestation_statement_mutation() -> None:
+    """感度の検証: `attestation.statement` の改変で projection hash が
+    変わること。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["attestation"]["statement"] += " Amended."
+    assert _projection_hash(mutated) != original
+
+
+def test_fix320_3_projection_hash_is_sensitive_to_rights_class_and_consent_status() -> None:
+    """感度の検証（projection 構造への直接検証）: `rights_class`/
+    `consent_status` は projection の閉じたキー集合に含まれるため、値が
+    変われば canonical hash も変わる。
+
+    実装ノート: attested 形態は両 status が厳密に `USER_ATTESTED_OWN_VOICE`
+    と一致することを要求する（`_validate_rights_manifest_voice_identity_
+    attestation()`）ため、四層検証を満たしたまま `rights_class` だけを
+    単独で閉語彙外の値へ書き換えて `extract_user_identity_attestation_
+    projection()` を再度通すことはできない（`Run9ValidationError` の
+    form-mismatch で拒否される——`test_fix320_3_pending_attestation_
+    rejected` が pending 形態側の同種ガードを別途確認する）。本テストは
+    projection の**返り値そのもの**を直接変異させ、`rights_class`/
+    `consent_status` が canonical hash の対象キーに実際に含まれている
+    ことを確認する——宣誓事実（両 status）の変更が anchor hash に反映
+    される設計であることの直接証明であり、四層検証の form-mismatch ガード
+    とは独立した検証。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    projection = m.extract_user_identity_attestation_projection(rights)
+    mutated_projection = copy.deepcopy(projection)
+    mutated_projection["rights_class"] = "SOME_OTHER_VALUE"
+    mutated_projection["consent_status"] = "SOME_OTHER_VALUE"
+    assert _sha256_canonical_json(mutated_projection) != _sha256_canonical_json(projection)
+
+
+# ---------------------------------------------------------------------------
+# PR #320 Codex bot レビュー第2巡対応 — Fix 4（P2）: pin_source_candidates.user
+# の先頭 PINNED エントリを履歴として明示する（全 manifest hash を現行
+# レシピとして提示し続け後続 REPINNED と矛盾していた欠陥の是正）。
+# ---------------------------------------------------------------------------
+
+_PIN_SOURCE_CURRENT_LABELS = ("SUPERSEDED", "PENDING", "REPINNED")
+
+
+def test_fix320_4_no_current_pinned_label_in_user_pin_source_candidates() -> None:
+    """回帰テスト（Codex bot レビュー PR #320 第2巡指摘, P2, 採用, Fix 4）:
+    `pin_source_candidates.user` のどのエントリも先頭語が生の `PINNED`
+    ではないこと（`SUPERSEDED`/`PENDING`/`REPINNED` のいずれかのみ）、
+    かつ末尾以外の `REPINNED`/`PINNED` 系エントリはすべて `SUPERSEDED`
+    注記を含むことを検証する——「現行レシピを名乗る PINNED ラベル」が
+    1件も残らないことの機械証明。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    entries = domain_raw["pin_source_candidates"]["user"]
+    assert len(entries) >= 2
+    for entry in entries:
+        assert entry.startswith(_PIN_SOURCE_CURRENT_LABELS), entry[:80]
+        assert not entry.startswith("PINNED"), entry[:80]
+    for entry in entries[:-1]:
+        if entry.startswith("REPINNED") or entry.startswith("PINNED"):
+            assert "SUPERSEDED" in entry, entry[:80]
+
+
+def test_fix320_4_final_entry_is_current_repinned_recipe() -> None:
+    """回帰テスト: 末尾エントリ（現行レシピ）は `REPINNED` で始まり、
+    `SUPERSEDED` 注記を含まないこと（現行レシピ自身を SUPERSEDED 扱い
+    しては矛盾するため）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    entries = domain_raw["pin_source_candidates"]["user"]
+    final_entry = entries[-1]
+    assert final_entry.startswith("REPINNED")
+    assert "SUPERSEDED" not in final_entry.split(":", 1)[0]
+
+
+# ---------------------------------------------------------------------------
+# PR #320 Codex bot レビュー第4巡対応 — Fix 6（P1）: `usage_grants.
+# run9_identity_anchor` の取消（revoked: "granted" → "not_granted"、
+# attestation 自体は歴史的記録として保持）が projection hash・genome_id の
+# どこにも効かない偽成功経路を閉じる。hash は宣誓事実のみで不変のまま
+# （repin なし）、抽出（`extract_user_identity_attestation_projection()`）を
+# 第2の fail-closed 前提条件でゲートする。
+# ---------------------------------------------------------------------------
+
+
+def _revoked_anchor_grant_rights_manifest_fixture() -> Dict[str, Any]:
+    """`inputs/rights_manifest.json`（attested 形態）を読み込み、
+    `usage_grants.run9_identity_anchor` だけを `"granted"` → `"not_granted"`
+    へ差し戻したコピーを返す——attestation 自体（attested=true / signer /
+    timestamp / statement）と rights_class/consent_status
+    （`USER_ATTESTED_OWN_VOICE`）は不変のまま（Fix 6 の指摘が要求する
+    「attestation は歴史的記録として保持したまま grant のみ取消」状態を
+    再現する）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] = "not_granted"
+    return data
+
+
+def test_fix320_6_projection_extraction_rejects_revoked_anchor_grant() -> None:
+    """(a) 取消 manifest（attested 形 + anchor grant not_granted）から
+    `extract_user_identity_attestation_projection()` を呼ぶと
+    `Run9ValidationError` で拒否されること——取消状態の manifest からは
+    anchor-eligible hash を生成させない。"""
+    revoked = _revoked_anchor_grant_rights_manifest_fixture()
+    with pytest.raises(m.Run9ValidationError, match="run9_identity_anchor"):
+        m.extract_user_identity_attestation_projection(revoked)
+
+
+def test_fix320_6_revoked_manifest_still_passes_four_layer_validation() -> None:
+    """(b) 同じ取消 manifest は `validate_rights_manifest_four_layer()` を
+    通ること——取消は正当に記録可能な文書状態であり、拒否するのは
+    projection 抽出であって文書検証そのものではない（記録すら拒否すると
+    取消の証跡が残せなくなる、という設計判定の直接確認）。"""
+    revoked = _revoked_anchor_grant_rights_manifest_fixture()
+    m.validate_rights_manifest_four_layer(revoked)  # 例外を投げないことの確認
+
+
+def test_fix320_6_gate_is_projection_extraction_not_build_founder_or_gate_state() -> None:
+    """(c) 「gate」側の直接テスト。**Fix 7（Codex bot レビュー PR #320
+    第5巡指摘, P1, 採用）による記述の撤回・是正**: 本テストは元々
+    （Fix 6 時点）「取消後も `domain.anchor_hashes['user']` の pin 値
+    自体は不変のため `is_pinned()`/`build_founder()` は rights_manifest.
+    json を一切参照せず成功し続ける」ことを期待どおりの挙動として明文化
+    していたが、指摘のとおりこれは実効性の無いガード（呼び出し元が
+    テスト/docs のみ）だった。Fix 7 で `build_founder()` へ
+    `rights_manifest` が必須引数化され、内部で `extract_user_identity_
+    attestation_projection()` を実行するようになったため、**取消後の
+    manifest を渡すと `build_founder()` 自身が今度は確実に失敗する**
+    ——本テストのアサーションを反転する（`gate_state()`/
+    `Run9IdentityDomain.is_pinned()` 自体は rights_manifest.json の
+    内容を一切評価しない構造述語のまま据え置き。これは変わらない —
+    `is_pinned()` は pin 値の形状のみを見る）。"""
+    revoked = _revoked_anchor_grant_rights_manifest_fixture()
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+
+    # is_pinned()（domain 側の pin 値の形状のみを見る構造述語）は
+    # rights_manifest.json の内容を一切参照しないため、取消後も引き続き
+    # True のまま——これは Fix 7 でも変更していない。
+    assert domain.is_pinned() is True
+
+    # 一方、build_founder() は Fix 7 により rights_manifest を消費経路へ
+    # 取り込んだため、取消後の manifest を渡すと確実に失敗する
+    # （Fix 6 時点は「成功し続ける」だったが、本 Fix でこれを反転した）。
+    with pytest.raises(m.Run9ValidationError, match="run9_identity_anchor"):
+        m.build_founder(domain, "R9F-01", rights_manifest=revoked)
+
+    # 有効な（取消されていない）manifest を渡せば引き続き成功する。
+    m.build_founder(
+        domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()
+    )  # 例外を投げないことの確認
+
+
+def test_fix320_6_anchor_hash_and_genome_id_unchanged_by_this_fix() -> None:
+    """(d) 回帰: 本 Fix（第2の fail-closed 前提条件の追加）は現行
+    rights_manifest.json・domain の pin 値・genome_id のいずれも変更しない
+    ことの直接確認——「hash 復帰ではなくゲート化」という設計判定どおり
+    repin が発生していないこと。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert (
+        domain.anchor_hashes["user"]
+        == "8569705be318d672d5f77ba955054a76d446664bb0883850a69c1fc35a55e804"
+    )
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert domain.anchor_hashes["user"] == _projection_hash(rights)
+    g1 = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
+    assert g1.genome_id == "66f420672a154283"
+    assert g2.genome_id == "63f4b8f24b827cd4"
+
+
+# ---------------------------------------------------------------------------
+# PR #320 Codex bot レビュー第5巡対応 — Fix 7（P1）: Fix 6 のガード
+# （`extract_user_identity_attestation_projection()` の取消/pending 検知）
+# を実消費経路（`build_founder()`）へ配線する。`rights_manifest` を
+# デフォルト値のない必須 keyword-only 引数として追加し、projection の
+# 正規形 sha256 が `domain.anchor_hashes.user` と厳密一致することも
+# 検証する（stale pin・manifest 改変の検出を「テスト時のみ」から
+# 「genome_id 構築の実経路」へ昇格）。genome_id の計算ロジック自体は
+# 無変更——本節のテストは主に「本 Fix 前後で genome_id が不変」ことを
+# 反復して確認する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix320_7_build_founder_genome_id_unchanged_after_wiring(
+    valid_rights_manifest: Dict[str, Any],
+) -> None:
+    """(a) 既存の `build_founder()` 呼び出し箇所を全て実 manifest 渡しへ
+    更新した後も、実 domain（`domains/identity_domain_run9_v1.json`）から
+    計算される genome_id 期待値が**不変**であることの直接確認
+    （`test_fix320_6_anchor_hash_and_genome_id_unchanged_by_this_fix` と
+    同型だが、本節では Fix 7 固有の観点として明示的に保持する——
+    `rights_manifest` 引数の追加という**署名変更**それ自体が genome_id
+    計算へ影響しないことの確認）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    g1 = m.build_founder(domain, "R9F-01", rights_manifest=valid_rights_manifest)
+    g2 = m.build_founder(domain, "R9F-02", rights_manifest=valid_rights_manifest)
+    assert g1.genome_id == "66f420672a154283"
+    assert g2.genome_id == "63f4b8f24b827cd4"
+    # 決定論: 同一入力で再構築しても同じ genome_id（署名変更後も維持）。
+    assert m.build_founder(
+        domain, "R9F-01", rights_manifest=valid_rights_manifest
+    ).genome_id == g1.genome_id
+
+
+def test_fix320_7_build_founder_rejects_revoked_anchor_grant() -> None:
+    """(b) 取消 manifest（attested 形 + anchor grant not_granted）を渡すと
+    `build_founder()` が `Run9ValidationError` になること——Fix 6 時点の
+    `test_fix320_6_gate_is_projection_extraction_not_build_founder_or_
+    gate_state`（当時「build_founder は成功し続ける」と明文化していた）
+    のアサーションを Fix 7 で反転したことの単体確認。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    revoked = _revoked_anchor_grant_rights_manifest_fixture()
+    with pytest.raises(m.Run9ValidationError, match="run9_identity_anchor"):
+        m.build_founder(domain, "R9F-01", rights_manifest=revoked)
+
+
+def test_fix320_7_build_founder_rejects_pending_attestation() -> None:
+    """(c) pending 形態（attested=false）の manifest を渡すと
+    `build_founder()` が `Run9ValidationError` になること——Fix 6 の
+    attested 前提条件も消費経路（build_founder）で毎回強制されることの
+    確認。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    pending = _pending_rights_manifest_fixture()
+    with pytest.raises(m.Run9ValidationError, match="attested"):
+        m.build_founder(domain, "R9F-01", rights_manifest=pending)
+
+
+def test_fix320_7_build_founder_rejects_manifest_hash_mismatch() -> None:
+    """(d) attested 形 + anchor grant granted であっても、`entries` の
+    1件改変等により projection の正規形 sha256 が `domain.anchor_hashes
+    ['user']` と一致しない manifest を渡すと `build_founder()` が
+    `Run9ValidationError` になること——stale pin・manifest 改変の検出が
+    「テスト時のみ」から「genome_id 構築の実経路」へ昇格したことの核心
+    テスト。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    mismatched = _valid_test_rights_manifest()
+    mismatched["voice_identity_rights"]["entries"][0]["duration_sec"] = 999.0
+    with pytest.raises(m.Run9ValidationError, match="anchor_hashes"):
+        m.build_founder(domain, "R9F-01", rights_manifest=mismatched)
+
+
+def test_fix320_7_build_founder_rights_manifest_argument_is_required() -> None:
+    """(e) `rights_manifest` を省略した呼び出しは `TypeError` になること
+    （署名レベルの fail-closed 確認——デフォルト値のない必須 keyword-only
+    引数であり、None 許容やオプション化のような fail-open 経路は
+    存在しない）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    with pytest.raises(TypeError):
+        m.build_founder(domain, "R9F-01")  # type: ignore[call-arg]
+
+
+def test_fix320_7_founder_genome_from_dict_rights_manifest_argument_is_required() -> None:
+    """(e) 兄弟関数 `founder_genome_from_dict()` も同様に `rights_manifest`
+    が必須 keyword-only 引数であり、省略すると `TypeError` になること
+    （「manifest を渡せない呼び出し形が型的に存在しない」という Fix 7
+    の呼び出し規約を、build_founder() の唯一の内部呼び出し元でも
+    確認する）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    valid = _valid_test_rights_manifest()
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=valid)
+    with pytest.raises(TypeError):
+        m.founder_genome_from_dict(genuine.to_dict(), domain=domain)  # type: ignore[call-arg]
+
+
+def test_fix320_7_founder_genome_from_dict_rejects_revoked_anchor_grant() -> None:
+    """founder_genome_from_dict() 経由でも取消 manifest は拒否されること
+    （build_founder() への配線が兄弟関数からも実効することの end-to-end
+    確認）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    valid = _valid_test_rights_manifest()
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=valid)
+    revoked = _revoked_anchor_grant_rights_manifest_fixture()
+    with pytest.raises(m.Run9ValidationError, match="run9_identity_anchor"):
+        m.founder_genome_from_dict(genuine.to_dict(), domain=domain, rights_manifest=revoked)
 
 
 def test_revision02_gate_remains_blocked_after_af0_ritsu_backbone_pins(
     contract: m.Run9RunContract,
 ) -> None:
-    """af0/ritsu anchor と backbone (checkpoint + runtime bundle) が新たに
-    PINNED になっても、user anchor / lesson / VG-L0 ハーネス関連欄が
-    PENDING のままである限り gate_state() は "BLOCKED" のまま
-    （部分的な pin 進展だけでは READY へ到達しないことの機械証明）。"""
+    """af0/ritsu/user anchor（2026-08-25 User attestation 実行により user も
+    PINNED 化済み）と backbone (checkpoint + runtime bundle) が新たに
+    PINNED になっても、dataset/config/lesson/practice/learning-recipe 等
+    VG-L0 ハーネス関連欄が PENDING のままである限り gate_state() は
+    "BLOCKED" のまま（部分的な pin 進展だけでは READY へ到達しないことの
+    機械証明）。"""
     assert m.gate_state(contract) == "BLOCKED"
 
 
-def test_revision02_build_founder_still_rejects_current_domain_draft() -> None:
-    """user anchor 未 pin のため、現行 domain draft からは
-    build_founder() が依然として拒否されること（Phase 0.2 でも段階3→4の
-    機械強制が有効なままであることの確認）。"""
+def test_run9_attest20260825_build_founder_now_succeeds_for_both_founders() -> None:
+    """2026-08-25 RUN9 User attestation 実行により domain が凍結
+    （is_pinned()==True）されたため、現行 domain draft から
+    build_founder() が両 Founder 分成功するようになったこと（旧
+    test_revision02_build_founder_still_rejects_current_domain_draft の
+    assertion を反転）。genome_id は決定論的（再計算しても同じ値）かつ
+    R9F-01/R9F-02 間で相異することを直接確認する（DESIGN_RUN9 §9.4
+    「両 Founder は異なる座標を持つ」の機械証明）。"""
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
-    with pytest.raises(m.Run9ValidationError):
-        m.build_founder(domain, "R9F-01")
+    assert domain.is_pinned() is True
+    g1 = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
+    assert m._GENOME_ID_RE.match(g1.genome_id)
+    assert m._GENOME_ID_RE.match(g2.genome_id)
+    assert g1.genome_id != g2.genome_id
+    # 決定論: 同一 domain から再構築しても同じ genome_id。
+    assert m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()).genome_id == g1.genome_id
+    assert m.build_founder(domain, "R9F-02", rights_manifest=_valid_test_rights_manifest()).genome_id == g2.genome_id
 
 
 # --- README 更新の整合確認 --------------------------------------------------
@@ -3010,8 +3667,8 @@ def test_por_revision_pinned_domain_and_founder_still_work_under_0_3(
     """pinned_domain フィクスチャ経由の build_founder が rev 0.3 でも
     従来どおり動作し、genome_id が決定論的であること（同じ入力なら同じ
     genome_id — この巡の変更が genome 計算に一切触れていないことの実証）。"""
-    genome_a = m.build_founder(pinned_domain, "R9F-01")
-    genome_b = m.build_founder(pinned_domain, "R9F-01")
+    genome_a = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    genome_b = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     assert genome_a.genome_id == genome_b.genome_id
     assert genome_a.to_dict() == genome_b.to_dict()
 
@@ -3755,11 +4412,11 @@ def test_invariant_tri_crossover_and_genome_id_unchanged(
     既知の pinned_domain 入力から従来と同じ genome_id が出ることを確認
     する（回帰検出のための固定値照合ではなく、決定論の実証）。"""
     assert m.OPERATOR_ID == "TRI_CROSSOVER/1.0"
-    genome_a = m.build_founder(pinned_domain, "R9F-01")
-    genome_b = m.build_founder(pinned_domain, "R9F-02")
+    genome_a = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    genome_b = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert genome_a.genome_id != genome_b.genome_id
     # 決定論: 同じ入力から再度呼び出しても同じ genome_id。
-    assert m.build_founder(pinned_domain, "R9F-01").genome_id == genome_a.genome_id
+    assert m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()).genome_id == genome_a.genome_id
 
 
 def test_invariant_design_revision_doc_sha256_updated_and_matches_file(
@@ -4284,23 +4941,17 @@ def test_phase3_identity_metric_space_feasibility_note_references_design_failure
     assert "事後" in note  # 事後調整で救済しないことの明記
 
 
-def test_phase3_domain_is_pinned_still_false_after_metric_space_pin() -> None:
-    """metric_space_sha が pin されても、user anchor が残るため
-    `is_pinned()` は依然 False（意図どおり）。"""
+def test_phase3_domain_is_pinned_true_after_metric_space_and_user_pin() -> None:
+    """metric_space_sha の pin（Phase 3）に続き、2026-08-25 RUN9 User
+    attestation 実行で user anchor も PINNED 化されたため、実 domain draft
+    は `is_pinned() == True`（旧 test_phase3_domain_is_pinned_still_false_
+    after_metric_space_pin の assertion を反転 — Fix 15 の
+    founder_genome_shas 改名前例に倣い名称・assertion を更新する）。"""
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
-    domain = m.run9_identity_domain_from_dict({
-        **domain_raw,
-        "anchor_hashes": {
-            "af0": domain_raw["anchor_hashes"]["af0"],
-            "ritsu": domain_raw["anchor_hashes"]["ritsu"],
-            "user": "c" * 64,  # user はまだ pin されないため合成値で domain 構築だけ確認
-        },
-    })
-    # user anchor はまだ本物ではないため is_pinned() は本テストの主張対象
-    # ではない（別途 anchor_hashes.user 自体が "<PIN_BEFORE_RUN>" のままで
-    # あることを直接確認する）。
-    assert domain_raw["anchor_hashes"]["user"] == "<PIN_BEFORE_RUN>"
+    domain = m.run9_identity_domain_from_dict(domain_raw)
+    assert domain_raw["anchor_hashes"]["user"] != "<PIN_BEFORE_RUN>"
     assert domain.metric_space_sha == domain_raw["metric_space_sha"]
+    assert domain.is_pinned() is True
 
 
 def test_phase3_readme_documents_metric_space_fable_pin_with_veto() -> None:
@@ -7354,18 +8005,29 @@ def test_fix319_6_performance_and_composition_rights_use_unresolved_external() -
         assert data[layer_name]["consent_status"] == "UNRESOLVED_EXTERNAL"
 
 
-def test_fix319_6_voice_identity_rights_still_pending_user_attestation() -> None:
-    """User 帰属欄（User donor の同意・usage grants 等）は張り替え対象外
-    ——引き続き `PENDING_USER_ATTESTATION` のまま維持する（voice_identity_
-    rights は User donor 自身の声の権利であり、Fix 6 の対象は PJS 側の
-    3層のみ）。usage_grants.run9_identity_anchor は Fix 19（第9巡, P2,
-    採用）で値語彙が {not_granted, granted} の閉集合へ凍結されたのに伴い、
-    旧値 `pending`（閉集合外の第3値）から `not_granted` へ改めた——
-    「まだ承認されていない」という意味論自体は変わらない。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
-    assert data["voice_identity_rights"]["rights_class"] == "PENDING_USER_ATTESTATION"
-    assert data["voice_identity_rights"]["consent_status"] == "PENDING_USER_ATTESTATION"
-    assert data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] == "not_granted"
+def test_fix319_6_voice_identity_rights_scoped_out_of_vocab_swap() -> None:
+    """User 帰属欄（User donor の同意・usage grants 等）は Fix 6 の張り替え
+    対象外——`PENDING_USER_ATTESTATION`/`UNRESOLVED_EXTERNAL` の仕分けは
+    voice_identity_rights 層（User donor 自身の声の権利）には及ばない
+    （Fix 6 の対象は PJS 側の3層のみ）。pending 形態の baseline
+    （`_pending_rights_manifest_fixture()`）で回帰確認する——現行 fixture
+    自体は 2026-08-25 RUN9 User attestation 実行により attested 形態へ
+    遷移済み（`test_run9_attest20260825_rights_manifest_is_attested` 参照。
+    旧テスト名 fix319_6_voice_identity_rights_still_pending_user_attestation
+    は Fix 15 の founder_genome_shas 改名前例に倣い改名した）。
+    usage_grants.run9_identity_anchor は Fix 19（第9巡, P2, 採用）で値語彙が
+    {not_granted, granted} の閉集合へ凍結されたのに伴い、旧値 `pending`
+    （閉集合外の第3値）から `not_granted` へ改めた——「まだ承認されていない」
+    という pending 時点の意味論自体は変わらない。"""
+    pending = _pending_rights_manifest_fixture()
+    assert pending["voice_identity_rights"]["rights_class"] == "PENDING_USER_ATTESTATION"
+    assert pending["voice_identity_rights"]["consent_status"] == "PENDING_USER_ATTESTATION"
+    assert pending["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] == "not_granted"
+    m.validate_rights_manifest_four_layer(pending)  # 例外を投げないことの確認
+    # 現行 fixture 自体は attested 形態（対照）。
+    current = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert current["voice_identity_rights"]["rights_class"] == "USER_ATTESTED_OWN_VOICE"
+    assert current["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] == "granted"
 
 
 def test_fix319_6_rights_manifest_still_validates_after_vocab_swap() -> None:
@@ -7388,10 +8050,20 @@ def test_fix319_6_recording_master_rights_not_swapped_no_bare_pending_token() ->
 
 def test_fix319_6_history_records_vocab_reassignment_rationale() -> None:
     """仕分けの根拠（どの欄がどちらの主体に帰属するか）が manifest 注記
-    （history）に明記されていること。"""
+    （history）に明記されていること。
+
+    フィルタは「PR #319 第2巡指摘（... Fix 6）」まで絞り込む（素の
+    "Fix 6" 部分文字列だけでは、PR ラウンドごとに 1 から振り直される
+    Codex Fix 番号が別 PR で再度 "Fix 6" になった際に衝突する——実例:
+    Codex bot レビュー PR #320 第4巡指摘も "Fix 6" を名乗る。history
+    エントリは "Codex bot レビュー PR #<N> 第<M>巡指摘（..., Fix <K>）"
+    の定型で書かれるため、PR 番号・巡・Fix 番号の3つ組で絞り込めば
+    将来の同名衝突を再発させない）。"""
     data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     history = data["history"]
-    swap_events = [h for h in history if "Fix 6" in h["event"]]
+    swap_events = [
+        h for h in history if "PR #319 第2巡指摘（P2, 採用, Fix 6）" in h["event"]
+    ]
     assert len(swap_events) == 1
     event_text = swap_events[0]["event"]
     assert "UNRESOLVED_EXTERNAL" in event_text
@@ -7972,8 +8644,11 @@ def test_fix319_16_attestation_non_bool_attested_rejected() -> None:
 
 def test_fix319_16_pending_form_with_nonnull_signer_rejected() -> None:
     """pending 形態（attested=false）なのに attested_by が非 null な場合の
-    拒否（負例6 — pending/attested 二形態の混在を許さない）。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    拒否（負例6 — pending/attested 二形態の混在を許さない）。現行
+    rights_manifest.json は 2026-08-25 RUN9 User attestation 実行後は
+    attested 形態のため、pending baseline は
+    `_pending_rights_manifest_fixture()` で構築する。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["attestation"]["attested_by"] = "someone"
     with pytest.raises(m.Run9ValidationError, match=r"attested_by must be null"):
         m.validate_rights_manifest_four_layer(data)
@@ -8009,8 +8684,10 @@ def test_fix319_16_attested_form_empty_statement_rejected() -> None:
 def test_fix319_16_attested_form_while_status_still_pending_rejected() -> None:
     """attestation が attested 形態に埋まっているのに、層の rights_class/
     consent_status が依然 `PENDING_USER_ATTESTATION` のままの場合の拒否
-    （負例9 — 二形態の整合違反、順方向）。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    （負例9 — 二形態の整合違反、順方向）。pending baseline から出発する
+    （現行 fixture は既に attested 形態のため
+    `_pending_rights_manifest_fixture()` で構築）。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["attestation"] = {
         "attested": True,
         "attested_by": "user@example.com",
@@ -8024,8 +8701,12 @@ def test_fix319_16_attested_form_while_status_still_pending_rejected() -> None:
 def test_fix319_16_pending_form_while_status_no_longer_pending_rejected() -> None:
     """層の rights_class/consent_status が `PENDING_USER_ATTESTATION` から
     離れているのに、attestation が pending 形態のまま放置されている場合の
-    拒否（負例10 — 二形態の整合違反、逆方向）。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    拒否（負例10 — 二形態の整合違反、逆方向）。pending baseline から出発
+    する（現行 fixture は既に attested 形態のため
+    `_pending_rights_manifest_fixture()` で構築 — 素の pending fixture に
+    対する mutation でなければ「attestation は pending のまま放置」の
+    シナリオを再現できない）。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
     data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
     with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
@@ -8033,11 +8714,14 @@ def test_fix319_16_pending_form_while_status_no_longer_pending_rejected() -> Non
 
 
 def test_fix319_16_valid_pending_fixture_still_validates() -> None:
-    """正例（回帰）: 現行 rights_manifest.json の pending 形態
+    """正例（回帰）: pending 形態の voice_identity_rights 層
     （attested=false + signer/timestamp/statement すべて null +
-    rights_class/consent_status = PENDING_USER_ATTESTATION）が Fix 16 追加後も
-    validator を通ることの end-to-end 確認。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    rights_class/consent_status = PENDING_USER_ATTESTATION）が Fix 16
+    追加後も validator を通ることの end-to-end 確認。2026-08-25 RUN9
+    User attestation 実行により現行 fixture 自体は attested 形態へ遷移
+    済みのため、`_pending_rights_manifest_fixture()` で pending baseline
+    を構築する（旧: 現行 fixture を直接使用）。"""
+    data = _pending_rights_manifest_fixture()
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
 
 
@@ -8110,8 +8794,10 @@ def test_fix319_19_granted_while_attestation_still_pending_rejected(grant_key: s
     false）のまま grant を 'granted' へ書き換えても拒否されること——
     手編集での「承認証拠なしの公開/配布許可」成立を防ぐ核心の負例。
     run9_identity_anchor も他の2キーと同じ前提条件（attested 形態必須）を
-    適用することの確認を兼ねる。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    適用することの確認を兼ねる。現行 rights_manifest.json は 2026-08-25
+    RUN9 User attestation 実行後は attested 形態のため、pending baseline
+    は `_pending_rights_manifest_fixture()` で構築する。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["usage_grants"][grant_key] = "granted"
     with pytest.raises(m.Run9ValidationError, match="attestation is not in attested form"):
         m.validate_rights_manifest_four_layer(data)
@@ -8206,9 +8892,14 @@ def test_fix319_19_approval_record_unknown_key_rejected() -> None:
 
 
 def test_fix319_19_valid_not_granted_fixture_still_validates() -> None:
-    """正例（回帰）: 現行 rights_manifest.json（3キーとも not_granted）が
-    Fix 19 追加後も validator を通ることの end-to-end 確認。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    """正例（回帰）: pending baseline（3キーとも not_granted）が Fix 19
+    追加後も validator を通ることの end-to-end 確認。2026-08-25 RUN9 User
+    attestation 実行により現行 rights_manifest.json 自体は
+    run9_identity_anchor が granted へ遷移済みのため、pending baseline は
+    `_pending_rights_manifest_fixture()` で構築する（現行 fixture 側の
+    granted 経路は `test_fix319_19_granted_with_full_preconditions_accepted`
+    /`test_fix319_27_*` が回帰確認する）。"""
+    data = _pending_rights_manifest_fixture()
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
 
 
@@ -8283,8 +8974,11 @@ def test_fix319_27_identity_anchor_granted_without_attestation_still_rejected() 
     run9_identity_anchor にも引き続き適用される
     （`test_fix319_19_granted_while_attestation_still_pending_rejected` と
     同型だが、Fix 27 のパラメトライズ変更後も run9_identity_anchor 単独で
-    固定しておく）。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    固定しておく）。現行 rights_manifest.json は 2026-08-25 RUN9 User
+    attestation 実行後は attested 形態（run9_identity_anchor も既に
+    granted）のため、pending baseline は
+    `_pending_rights_manifest_fixture()` で構築する。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] = "granted"
     with pytest.raises(m.Run9ValidationError, match="attestation is not in attested form"):
         m.validate_rights_manifest_four_layer(data)
@@ -8344,8 +9038,12 @@ def test_fix319_21_pending_form_with_only_consent_status_confirmed_rejected() ->
     """負例1（方向A）: consent_status のみを PENDING から確定値へ書き換え、
     rights_class は PENDING_USER_ATTESTATION・attestation は pending 形態
     （attested=false）のままの場合の拒否——Fix 21 導入前の `or` 判定では
-    rights_class が pending のままのため通過してしまっていた抜け道。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    rights_class が pending のままのため通過してしまっていた抜け道。
+    pending baseline から出発する（現行 fixture は 2026-08-25 RUN9 User
+    attestation 実行後は既に両方 attested のため
+    `_pending_rights_manifest_fixture()` で構築しないと本負例を再現
+    できない）。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
     with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
         m.validate_rights_manifest_four_layer(data)
@@ -8354,18 +9052,22 @@ def test_fix319_21_pending_form_with_only_consent_status_confirmed_rejected() ->
 def test_fix319_21_pending_form_with_only_rights_class_confirmed_rejected() -> None:
     """負例2（方向B、負例1 の対称ケース）: rights_class のみを PENDING
     から確定値へ書き換え、consent_status は PENDING_USER_ATTESTATION・
-    attestation は pending 形態（attested=false）のままの場合の拒否。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    attestation は pending 形態（attested=false）のままの場合の拒否。
+    pending baseline から出発する（理由は負例1と同じ）。"""
+    data = _pending_rights_manifest_fixture()
     data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
     with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
         m.validate_rights_manifest_four_layer(data)
 
 
 def test_fix319_21_valid_both_pending_fixture_still_validates() -> None:
-    """正例（回帰）: 現行 rights_manifest.json（rights_class/consent_status
-    ともに PENDING_USER_ATTESTATION・attested=false）が Fix 21 適用後も
-    validator を通ることの end-to-end 確認。"""
-    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    """正例（回帰）: pending 形態（rights_class/consent_status ともに
+    PENDING_USER_ATTESTATION・attested=false）が Fix 21 適用後も validator
+    を通ることの end-to-end 確認。2026-08-25 RUN9 User attestation 実行に
+    より現行 rights_manifest.json 自体は attested 形態へ遷移済みのため、
+    `_pending_rights_manifest_fixture()` で pending baseline を構築する
+    （旧: 現行 fixture を直接使用）。"""
+    data = _pending_rights_manifest_fixture()
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
 
 

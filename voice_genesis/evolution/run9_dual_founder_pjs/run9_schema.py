@@ -1213,19 +1213,58 @@ def compute_file_sha256(path: Path) -> str:
       「このファイルが手元にあるかどうか」を bit-for-bit で照合するのが
       目的。
     - **正規形（canonical）規約**（`domains/identity_domain_run9_v1.json`
-      `anchor_hashes.af0` のみ — `inputs/af0_anchor_manifest.json` 参照）:
-      `json.dumps(obj, sort_keys=True, ensure_ascii=False,
+      `anchor_hashes.af0` / `metric_space_sha` / `anchor_hashes.user` の
+      3件 — `inputs/af0_anchor_manifest.json` / `identity_metric_space.json`
+      参照）: `json.dumps(obj, sort_keys=True, ensure_ascii=False,
       separators=(",",":"))` で正規化してから sha256 する値。AF-P0 の
       `spec_sha256` 系譜（`af_spec.py canonical_json()`）と意味論を揃える
-      ため、こちらだけ意図的に例外としている（af0 側の規約を本関数へ
-      合わせる変更は行わない — 詳細は af0_anchor_manifest.json の
-      `canonicalization_method` フィールド参照）。
+      ため、これらだけ意図的に例外としている（af0/metric_space_sha 側の
+      規約を本関数へ合わせる変更は行わない — 詳細は
+      af0_anchor_manifest.json の `canonicalization_method` フィールド
+      参照）。`anchor_hashes.user` はこの3件の中でもさらに特殊——af0/
+      metric_space_sha が「ファイル内容を正規化した」hash であるのに
+      対し、user はファイルの hash ですらない。`run9_schema.
+      extract_user_identity_attestation_projection()` の返り値（
+      `inputs/rights_manifest.json` から導出するメモリ上の projection
+      dict）を正規化してから sha256 する値であり、正規化対象がディスク上の
+      どのファイルとも1対1対応しない（Codex bot レビュー PR #320 第3巡
+      指摘, P2, 採用, Fix 5 — 旧文言は af0 のみを例外としており、
+      Fix 1/Fix 3（PR #320 第1・2巡）で user anchor が canonical 規約
+      かつ projection 由来へ移行した後も本 docstring が追随していな
+      かった。再計算手順の一次レシピは
+      `domains/identity_domain_run9_v1.json` `pin_source_candidates.user`
+      末尾の最新 REPINNED エントリを正とする）。
     """
     h = hashlib.sha256()
     with Path(path).open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def _compute_canonical_pin_sha256(obj: Any) -> str:
+    """`compute_file_sha256()` docstring が文書化する「正規形（canonical）
+    規約」（`anchor_hashes.af0` / `metric_space_sha` / `anchor_hashes.user`
+    の3 pin が使う規約）を実装するヘルパー: `json.dumps(obj, sort_keys=True,
+    ensure_ascii=False, separators=(",", ":"))` で正規化してから sha256 する。
+
+    `_canonical_json()`（本ファイル冒頭付近、`ensure_ascii=True` —
+    genome_id/`Run9IdentityDomain.content_digest()` 等の直列化規約）とは
+    **意図的に別物**——`ensure_ascii` の差は、対象が非 ASCII 文字を含まない
+    限り出力が一致するが、`extract_user_identity_attestation_projection()`
+    の返り値は `attestation.statement`（User の日本語宣誓文）を含むため、
+    `_canonical_json()`（`ensure_ascii=True`）を誤用すると af0/
+    metric_space_sha/user の既存 pin 値（テストの `_sha256_canonical_json()`
+    ヘルパーが検証する `ensure_ascii=False` 規約で計算済み）と異なる値を
+    生成してしまう。af0/metric_space_sha は現状この関数を経由せず外部で
+    手動計算・pin されるのみだが（対象は本 repo 外のアーティファクトの
+    形状 pin であり内容再検証は R9-G1 tooling の職務のまま — Fix 7 の
+    非対称設計理由、`build_founder()` docstring 参照）、user anchor は
+    Fix 7（PR #320 第5巡指摘, P1, 採用）により `build_founder()` が
+    消費経路で毎回この関数を呼んで実際に再計算する。
+    """
+    canonical = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -3392,6 +3431,40 @@ def _validate_domain_invariants(domain: Run9IdentityDomain) -> None:
         )
 
 
+def _verify_user_anchor_matches_rights_manifest(
+    domain: Run9IdentityDomain, rights_manifest: Mapping[str, Any]
+) -> None:
+    """`rights_manifest`（4層 rights_manifest 生 dict）から
+    `extract_user_identity_attestation_projection()` を実行し、その正規形
+    sha256 が `domain.anchor_hashes["user"]` と厳密一致することを検証する
+    （Codex bot レビュー PR #320 第5巡指摘, P1, 採用, Fix 7）。
+
+    `extract_user_identity_attestation_projection()` 自体が課す2つの
+    fail-closed 前提条件（(i) attestation が attested 形態 (ii)
+    `usage_grants.run9_identity_anchor == "granted"` — Fix 6）を、本関数を
+    経由するあらゆる呼び出し（`build_founder()` 経由）で毎回強制する。
+    さらに、projection の hash が pin 値と一致しない場合（stale pin・
+    manifest の改変・単純な取り違え等）も拒否する——値の実物照合が
+    「テスト時のみ」ではなく「genome_id 構築の実経路」へ昇格したことの
+    核心（Fix 7 の直接目的）。
+    """
+    if not isinstance(rights_manifest, Mapping):
+        raise Run9ValidationError(
+            f"rights_manifest must be an object (Mapping), got {type(rights_manifest).__name__}"
+        )
+    projection = extract_user_identity_attestation_projection(rights_manifest)
+    projection_sha = _compute_canonical_pin_sha256(projection)
+    expected = domain.anchor_hashes.get("user")
+    if projection_sha != expected:
+        raise Run9ValidationError(
+            "build_founder(): the supplied rights_manifest's identity-attestation "
+            "projection hash does not match domain.anchor_hashes['user'] — the pinned user "
+            "anchor is stale relative to the supplied manifest (or the supplied manifest is "
+            f"not the one the domain was pinned against). expected={expected!r} "
+            f"computed={projection_sha!r}"
+        )
+
+
 def _tri_crossover(
     *,
     domain: Run9IdentityDomain,
@@ -3399,12 +3472,23 @@ def _tri_crossover(
     voice_id: str,
     profile_label: str,
     performance_seed: int,
+    rights_manifest: Mapping[str, Any],
 ) -> Run9FounderGenome:
     """TRI_CROSSOVER/1.0 純関数（DESIGN_RUN9 §9.1）。run9 domain では anchor
     が基底ベクトルのため child coords = normalize(weights) そのもの。
     random_search なし・乱数不使用（完全決定論）。本関数は先頭アンダー
     スコアで非公開 — 外部から任意 weights を注入できる公開経路は
-    `build_founder(domain, founder_id)` のみ（§27 item 22）。
+    `build_founder(domain, founder_id, rights_manifest=...)` のみ（§27
+    item 22）。
+
+    `rights_manifest` の消費（Fix 7）は domain 側の既存検証
+    （`_validate_domain_invariants()` / `is_pinned()`）の**後**に行う——
+    未 pin・偽装 domain を渡した既存の負例群（is_pinned()==False・forged
+    domain_id 等）は従来どおり domain 側のエラーメッセージで拒否され、
+    rights_manifest の中身には依存しない。genome_id の計算ロジック
+    （coords 正規化・`_compute_founder_genome_id()`）は本 Fix で一切
+    変更しない——同一入力（domain/weights/voice_id/profile_label/
+    performance_seed）に対する genome_id 値は不変。
     """
     _validate_domain_invariants(domain)
     if not domain.is_pinned():
@@ -3414,6 +3498,7 @@ def _tri_crossover(
             "execution order requires the domain (step 3) to be frozen before founder generation "
             "(step 4)"
         )
+    _verify_user_anchor_matches_rights_manifest(domain, rights_manifest)
     w_af0, w_ritsu, w_user = weights
     coords = normalize_run9_coords(w_af0, w_ritsu, w_user)
     _validate_run9_coords_value(coords)
@@ -3432,11 +3517,51 @@ def _tri_crossover(
     )
 
 
-def build_founder(domain: Run9IdentityDomain, founder_id: str) -> Run9FounderGenome:
+def build_founder(
+    domain: Run9IdentityDomain, founder_id: str, *, rights_manifest: Mapping[str, Any]
+) -> Run9FounderGenome:
     """RUN9 Founder genome を構築する唯一の公開経路。`founder_id` は
     `{"R9F-01", "R9F-02"}` のいずれかのみを受け付け、凍結重みテーブル
     `_FOUNDER_TABLE` から重みを引く。任意の weights を外部から注入する
     公開 API は存在しない（DESIGN_RUN9 §27 item 22 / §9.4）。
+
+    `rights_manifest`（4層 rights_manifest 生 dict、`inputs/
+    rights_manifest.json` をロードしたもの）は**デフォルト値のない必須
+    keyword-only 引数**（Codex bot レビュー PR #320 第5巡指摘, P1, 採用,
+    Fix 7）: `extract_user_identity_attestation_projection(rights_
+    manifest)` を実行し、その正規形 sha256 が `domain.anchor_hashes
+    ["user"]` と厳密一致することを毎回検証する
+    （`_verify_user_anchor_matches_rights_manifest()` 参照）。不一致・
+    取消（`usage_grants.run9_identity_anchor` が `"granted"` でない）・
+    pending 形態（`attestation.attested` が `True` でない）はいずれも
+    `Run9ValidationError` で拒否する。
+
+    **経緯（Fix 6→Fix 7）**: Fix 6 は `extract_user_identity_attestation_
+    projection()` へ取消検知のガードを追加したが、当時の呼び出し元は
+    テストと docstring のみで、`build_founder()` 自身は
+    `domain.anchor_hashes["user"]`（保存済み64hex文字列）のみを消費し
+    `rights_manifest.json` を一切参照しなかった——取消済み・stale な
+    manifest でも `build_founder()` は成功し続ける非接続状態だった
+    （第4巡回帰テスト `test_fix320_6_gate_is_projection_extraction_not_
+    build_founder_or_gate_state` が当時「これが期待どおりの挙動」として
+    明文化していたが、この記述は本 Fix 7 で撤回・是正した——実効性の
+    無いガードだったため）。Fix 7 は `rights_manifest` を必須引数化する
+    ことで、genome_id 構築の実経路（この関数）自体に検証を配線した。
+
+    **非対称の設計理由**（af0/ritsu/metric_space_sha との比較）:
+    af0/ritsu/metric_space_sha の pin は取消意味論を持たない外部
+    アーティファクト（波音リツ配布 zip・AF-P0 canonical manifest・
+    identity metric space 仕様）への**形状**pin であり、その内容が
+    「後から取消される」という遷移軸自体が存在しない——内容の実物照合は
+    引き続き R9-G1 tooling（machine-dependent、未実装）の職務のまま
+    変更しない。user anchor だけが「in-repo の可変文書
+    （`inputs/rights_manifest.json`）+ User が事後に取消し得る許諾
+    （`usage_grants.run9_identity_anchor`）」を源泉とするため、唯一
+    この anchor だけが「pin 後に取消され得る」という性質を持つ——本
+    Fix はこの非対称性そのものに対応するものであり、`gate_state()`/
+    `Run9IdentityDomain.is_pinned()` を含む他の gate 判定はいずれも
+    構造述語のまま変更しない（repo 全体の「gate=構造述語、実体照合=
+    R9-G1 tooling」原則は af0/ritsu/metric_space_sha 側で不変）。
     """
     if founder_id not in _FOUNDER_TABLE:
         raise Run9ValidationError(
@@ -3445,14 +3570,17 @@ def build_founder(domain: Run9IdentityDomain, founder_id: str) -> Run9FounderGen
     weights, profile_label = _FOUNDER_TABLE[founder_id]
     return _tri_crossover(
         domain=domain, weights=weights, voice_id=founder_id, profile_label=profile_label,
-        performance_seed=SHARED_PERFORMANCE_SEED,
+        performance_seed=SHARED_PERFORMANCE_SEED, rights_manifest=rights_manifest,
     )
 
 
-def founder_genome_from_dict(data: Any, *, domain: Run9IdentityDomain) -> Run9FounderGenome:
+def founder_genome_from_dict(
+    data: Any, *, domain: Run9IdentityDomain, rights_manifest: Mapping[str, Any]
+) -> Run9FounderGenome:
     """JSON dict から Run9FounderGenome を再構築する。fail-closed（未知
-    キー拒否）+ 構造検証の後、`build_founder(domain, voice_id)` で正典を
-    再構築し `to_dict()`（genome_id 含む）が完全一致することを要求する
+    キー拒否）+ 構造検証の後、`build_founder(domain, voice_id,
+    rights_manifest=rights_manifest)` で正典を再構築し `to_dict()`
+    （genome_id 含む）が完全一致することを要求する
     （改ざん検出。Codex bot レビュー PR #315 指摘3採用: 従来は voice_id /
     coords / genome_id 相互の整合を検証しておらず、「R9F-01 ラベル +
     R9F-02 座標 + 任意の16hex genome_id」のような偽装 genome document が
@@ -3547,12 +3675,13 @@ def founder_genome_from_dict(data: Any, *, domain: Run9IdentityDomain) -> Run9Fo
     # 宣言値と完全一致することを要求する。voice_id/coords が食い違えば
     # coords 不一致で、genome_id だけが差し替えられていれば genome_id
     # 不一致で検出される。
-    canonical = build_founder(domain, voice_id)
+    canonical = build_founder(domain, voice_id, rights_manifest=rights_manifest)
     if declared.to_dict() != canonical.to_dict():
         raise Run9ValidationError(
             "genome document does not match the canonical reconstruction from "
-            f"build_founder(domain, {voice_id!r}) — declared={declared.to_dict()!r} "
-            f"canonical={canonical.to_dict()!r} (tampering or corruption)"
+            f"build_founder(domain, {voice_id!r}, rights_manifest=...) — "
+            f"declared={declared.to_dict()!r} canonical={canonical.to_dict()!r} "
+            "(tampering or corruption)"
         )
     return canonical
 
@@ -5266,6 +5395,174 @@ def extract_voice_identity_rights_layer(four_layer_rights_manifest: Mapping[str,
     flat.pop("schema_legacy")
     flat["schema"] = legacy_schema
     return flat
+
+
+# Codex bot レビュー PR #320 第2巡指摘（P1, 採用, Fix 3）: `extract_voice_
+# identity_rights_layer()` は voice_identity_rights 層**全体**（Fix 1 の
+# binding scope 是正後の対象）を anchor 束縛値にしていたが、その payload
+# には `usage_grants` と `usage_grants_note` も含まれる。`raw_audio_
+# publication` / `model_general_distribution` は rev 0.2 改訂4が定める
+# 設計上正規の別承認により not_granted → granted へ遷移し得るため、この
+# 遷移が起きるたびに anchor（延いては genome_id）が動く——「据え置けば
+# stale pin、追随すれば不要な genome_id 変動」という Fix 1 で解消した
+# はずの二律背反が形を変えて再発する。anchor 束縛の対象を「attest 後の
+# あらゆる設計上正規の遷移に対して不変な部分集合」（本関数が返す
+# projection）へさらに再限定する。
+_RIGHTS_MANIFEST_ATTESTATION_PROJECTION_SCHEMA = "run9-identity-attestation-projection/1.0"
+
+# projection が voice_identity_rights 層から逐語コピーするキー
+# （donor_ledger_source/donor_ledger_schema/transcribed_at = 転記
+# provenance、entries = UC-001..017、rights_class/consent_status/
+# attestation = 宣誓事実そのもの）。schema/source_layer の2キーは
+# projection 自身が新設するリテラルで、層からのコピーではない。
+_RIGHTS_MANIFEST_ATTESTATION_PROJECTION_COPIED_KEYS: Tuple[str, ...] = (
+    "donor_ledger_source",
+    "donor_ledger_schema",
+    "transcribed_at",
+    "entries",
+    "rights_class",
+    "consent_status",
+    "attestation",
+)
+
+
+def extract_user_identity_attestation_projection(manifest: Mapping[str, Any]) -> Dict[str, Any]:
+    """4層 rights_manifest（schema `run9-rights-manifest/2.0`）から、User
+    donor identity の anchor pin 専用に「attest 後の設計上正規のあらゆる
+    遷移に対して不変な」部分集合（identity-attestation projection）を
+    抽出する（Fix 3）。`domains/identity_domain_run9_v1.json anchor_hashes.
+    user` が束縛するのは本関数の返り値の正規形 sha256 であり、
+    `extract_voice_identity_rights_layer()`（voice_identity_rights 層
+    全体）の返り値ではない——後者は
+    `verify_rights_manifest_against_ledger()` 向けの汎用アダプタとして
+    従来どおり残る（削除・改変しない。anchor 束縛の役割だけが本関数へ
+    移る）。
+
+    内部で `validate_rights_manifest_four_layer()`（既存の4層全体構造
+    検証、`extract_voice_identity_rights_layer()` と同じ fail-closed
+    方式）を先に実行する。さらに2つの fail-closed 前提条件を課す:
+      (i) `attestation` が attested 形態（`attested=True`）であること
+          ——本 projection は anchor pin 専用であり、pending 形態
+          （`attested=False`）の hash が anchor 候補として見える経路を
+          ここで構造的に閉じる。
+      (ii) `usage_grants.run9_identity_anchor == "granted"` であること
+          ——Codex bot レビュー PR #320 第4巡指摘（P1, 採用, Fix 6）:
+          `usage_grants` は除外理由1（下記）により projection の hash
+          payload には含めないが、この grant を User が取消し
+          （`"granted"` → `"not_granted"`、attestation 自体は歴史的
+          記録として保持したまま）ても、hash を不変に保つ設計原則
+          （不変性の設計原則、下記）と衝突しない形で取消を検知しなければ
+          ならない。取消状態の manifest から anchor-eligible hash を
+          生成・再検証させないよう、抽出そのものを拒否する——「hash は
+          宣誓事実のみを表し、許諾状態（取消し得る）はこのゲートで検証
+          する」という層分離が本関数の設計原則である（hash 側を可変
+          grant の値へ連動させて repin させる旧方式（Fix 3 以前）へは
+          戻さない）。いずれかが不成立なら `Run9ValidationError`
+          （`ValueError` サブクラス）で拒否する。
+    どちらの前提条件も違反すると本関数は projection を返さない——
+    projection の**中身**（返り値の閉じたキー集合）に `usage_grants` を
+    含めないことと、抽出**可否**の判定に `usage_grants.run9_identity_
+    anchor` を使うことは矛盾しない（前者は hash 対象、後者は抽出の
+    gate 条件であり、別の軸）。
+
+    返り値は以下の**閉じたキー集合のみ**を持つ dict（他キー混入禁止）:
+      - `schema`: `"run9-identity-attestation-projection/1.0"`
+        （projection 自身の新設リテラル。self-describing であることに
+        加え、`voice_identity_rights.schema_legacy`
+        （`run9-user-donor-rights/1.0`）や `extract_voice_identity_rights_
+        layer()` の返り値（`schema` = 同 legacy 値）とはハッシュ対象の
+        キー集合・意味が異なるため、schema 文字列自体でドメイン分離する）
+      - `source_layer`: `"voice_identity_rights"`
+      - `donor_ledger_source` / `donor_ledger_schema` / `transcribed_at`
+        （層から逐語コピー — donor ledger からの転記であることを示す
+        provenance）
+      - `entries`（層から逐語コピー — UC-001..UC-017 の17件）
+      - `rights_class` / `consent_status`（層から逐語コピー）
+      - `attestation`（層から逐語コピー — attested/attested_by/
+        attested_at/statement の4キー、上記ガードにより常に attested
+        形態）
+
+    **意図的に除外するもの**（除外理由）:
+      1. `usage_grants` / `usage_grants_note` / 任意の `<grant>_approval`
+         ブロック — `raw_audio_publication` / `model_general_distribution`
+         は「User attest 完了後、別承認により not_granted → granted へ
+         遷移する」という rev 0.2 改訂4（DESIGN_RUN9_REVISION_0.2.md
+         194-199行）が定める設計上正規の可変状態であり、宣誓事実
+         （entries/attestation/両 status）とは別の遷移軸を持つ。
+         `run9_identity_anchor` grant も同じ理由で除外する——Fix 27（PR
+         #319 第14巡）により同 grant の唯一の根拠は
+         `attestation.attested=True` 自体であり（別途の承認記録は要求
+         されない）、projection に既に含む `attestation` ブロックを超える
+         情報を grant 自体は持たない派生状態にすぎない。含めれば
+         `usage_grants` の値が動くたびに repin が必要になる編集面が
+         1つ増えるだけで、projection の不変性を薄める。
+         **除外はゲート化とセット**（Fix 6, PR #320 第4巡指摘, P1, 採用）:
+         `run9_identity_anchor` を hash payload から除外する一方で、
+         取消（`"granted"` → `"not_granted"`）は hash ではなく本関数の
+         前提条件 (ii)（下記）で fail-closed に検知する——「hash に
+         戻して repin させる」のではなく「抽出そのものをゲートする」。
+         これにより hash 不変性（Fix 3 の設計原則）を保ったまま、取消の
+         事実を anchor pin 生成/再検証の経路で確実に効かせる。
+      2. `role` / `note` / `usage_grants_note` / `binding_note` の散文
+         ドキュメント欄 — レビューでの文言明確化が宣誓事実を変えずに
+         正当に進化する欄であり、特に `binding_note` は束縛方式自体の
+         記述という自己参照になる（含めると binding 文書の明確化の
+         たびに repin が強制される——実際に Fix 1 で `binding_note` の
+         追記が repin を要した前例がある。Fix 3 でこの自己参照を解消
+         する）。
+      3. `schema_legacy`（`extract_voice_identity_rights_layer()` は
+         これを `schema` へ読み替えて透過するが、本 projection は
+         projection 自身の新設 schema リテラル（上記）で置き換える —
+         legacy アダプタの都合を anchor pin 側へ持ち込まない）。
+
+    不変性の設計原則: projection に含まれる全フィールドは attest 後の
+    設計上正規のあらゆる遷移（grant 別承認・散文編集・外部3層
+    （performance_rights/composition_rights/recording_master_rights）の
+    解決）に対して不変。anchor を動かせるのは宣誓事実そのもの
+    （entries / attestation / 両 status）の変更のみである。
+    """
+    if not isinstance(manifest, dict):
+        raise Run9ValidationError(
+            "four-layer rights manifest must be an object, got "
+            f"{type(manifest).__name__}"
+        )
+    validate_rights_manifest_four_layer(manifest)
+    layer = manifest.get("voice_identity_rights")
+    if not isinstance(layer, dict):
+        raise Run9ValidationError(
+            f"voice_identity_rights layer must be an object, got {type(layer).__name__}"
+        )
+    attestation = layer.get("attestation")
+    attested = attestation.get("attested") if isinstance(attestation, dict) else attestation
+    if attested is not True:
+        raise Run9ValidationError(
+            "extract_user_identity_attestation_projection() requires "
+            "voice_identity_rights.attestation.attested == True — this projection is "
+            "anchor-pin-only and must not expose a pending-form hash as an anchor "
+            f"candidate (Fix 3), got attestation.attested={attested!r}"
+        )
+    usage_grants = layer.get("usage_grants")
+    anchor_grant = (
+        usage_grants.get("run9_identity_anchor") if isinstance(usage_grants, dict) else usage_grants
+    )
+    if anchor_grant != _RIGHTS_MANIFEST_USAGE_GRANT_GRANTED:
+        raise Run9ValidationError(
+            "extract_user_identity_attestation_projection() requires "
+            "voice_identity_rights.usage_grants.run9_identity_anchor == 'granted' — the User "
+            "has revoked the anchor-use grant (attestation itself is retained as a historical "
+            "record, but the grant that authorizes using it as the RUN9 identity anchor is "
+            "not_granted). This projection is anchor-pin-generation/verification-only; it must "
+            "not produce an anchor-eligible hash for a manifest whose anchor-use grant is "
+            f"revoked (Fix 6, PR #320 4th round), got usage_grants.run9_identity_anchor="
+            f"{anchor_grant!r}"
+        )
+    projection: Dict[str, Any] = {
+        "schema": _RIGHTS_MANIFEST_ATTESTATION_PROJECTION_SCHEMA,
+        "source_layer": "voice_identity_rights",
+    }
+    for key in _RIGHTS_MANIFEST_ATTESTATION_PROJECTION_COPIED_KEYS:
+        projection[key] = copy.deepcopy(layer[key])
+    return projection
 
 
 def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:

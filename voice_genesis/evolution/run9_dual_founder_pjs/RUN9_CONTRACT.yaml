@@ -2,9 +2,11 @@
 #
 # R9-G0 (RUN_CONTRACT_COMPLETE): この contract が全 pre-run 欄で status ==
 # PINNED になるまで本学習開始禁止。現状の gate_state()（run9_schema.py）は
-# "BLOCKED"（pre-run 欄の一部が依然 PENDING — 主因は User rights attest 待ち
-# と VG-L0 学習ハーネス未実装）。これは正直な状態表現であり、捏造して
-# PINNED にしていない。
+# "BLOCKED"（pre-run 欄の一部が依然 PENDING — 2026-08-25 User attestation
+# 実行により User rights attest 待ちは解消済み（下記「2026-08-25 User
+# attestation 実行」節参照）。残る主因は VG-L0 学習ハーネス未実装 +
+# practice/education/learning-recipe manifest・founder genome 文書の
+# 実体未生成のみ）。これは正直な状態表現であり、捏造して PINNED にしていない。
 #
 # 2026-08-24 User 裁定 5件により design_revision 0.1 → 0.2
 # （DESIGN_RUN9_REVISION_0.2.md）。本改訂で af0/ritsu anchor・backbone
@@ -64,6 +66,73 @@
 # `interventions` 構造へ既に移行済み）。旧 "0.1"〜"0.3" 形式の contract は
 # run9_schema.DESIGN_REVISION の凍結値照合、および必須キー
 # `performance_source` の欠落により意図どおり fail-closed 拒否される。
+#
+# 2026-08-25 User attestation 実行（本セッション、User 裁定「承認する」
+# — 宣誓文・署名者・日時は inputs/rights_manifest.json
+# voice_identity_rights.attestation / history に逐語記録）: 同ファイルの
+# voice_identity_rights.attestation を pending 形態から attested 形態へ
+# 遷移し（attested_by="Yuu6798" / attested_at="2026-08-25T06:47:25Z"）、
+# rights_class/consent_status を PENDING_USER_ATTESTATION から
+# USER_ATTESTED_OWN_VOICE へ、usage_grants.run9_identity_anchor を
+# not_granted から granted へ更新した（raw_audio_publication /
+# model_general_distribution は rev 0.2 改訂4の別承認規定により
+# not_granted のまま不変）。attest 後の rights_manifest.json 全体の正規形
+# sha256（af0_anchor_manifest.json / identity_metric_space.json と同一の
+# 規約 — canonicalization_method 参照）を
+# domains/identity_domain_run9_v1.json anchor_hashes.user へ直接 pin した
+# （旧 `<PIN_BEFORE_RUN>` を実値
+# e2755c3db6283e40e5080c5de75a70bb8b88e275e548848b1e2e5b8f4bb512d1 へ
+# 置換）。これにより3 anchor（af0/ritsu/user）+ metric_space_sha が全て
+# 実 64hex sha256 となり `Run9IdentityDomain.is_pinned()` が初めて True
+# を返す（domain 凍結）。凍結の結果、`run9_schema.build_founder()` が
+# 現行 domain draft から R9F-01/R9F-02 の genome_id を決定論的に計算
+# 可能になった（実測当時: R9F-01 = 2f7df5a90a6c99c9 / R9F-02 =
+# 9cd047c667dcb96e、両者相異・再計算で不変であることを確認済み）。ただし
+# `founder_genome_shas` が pin する対象は genome_id ではなく永続 genome
+# 文書ファイル（founders/R9F-0x_genome.json）バイトの sha256 であり
+# （下記コメント参照）、その文書を実際に `founders/` へ書き出して正式
+# 発行する builder・pin 手続きはまだ本 repo に配線されていない
+# （事前配線テストが存在しない）——`founder_genome_shas` は本改訂でも
+# 引き続き PENDING のまま（下記該当欄の reason 参照。捏造 PIN はしない）。
+#
+# 2026-08-25 追記（Codex bot レビュー PR #320 第1巡指摘, P1, 採用, Fix 1）:
+# 上記の anchor_hashes.user binding は「rights_manifest.json 全体」の
+# 正規形 sha256 だったため、User donor 録音・attestation 自体は不変でも
+# 同一文書内の PJS 側外部未解決欄（performance_rights/composition_rights/
+# recording_master_rights 配下の `<UNRESOLVED_EXTERNAL>` 欄）が将来解決
+# されるだけで anchor が動いてしまう binding scope 過大の欠陥だった。
+# binding 対象を `run9_schema.extract_voice_identity_rights_layer()` が
+# 返す **voice_identity_rights 層のみ**の正規形 sha256 へ是正し、repin した
+# （旧値 e2755c3db6283e40e5080c5de75a70bb8b88e275e548848b1e2e5b8f4bb512d1
+# から domains/identity_domain_run9_v1.json anchor_hashes.user の現行値
+# へ更新——詳細・理由は同ファイル pin_source_candidates.user と
+# inputs/rights_manifest.json voice_identity_rights.binding_note を正と
+# する）。連動して genome_id も再計算される（当時実測: R9F-01 =
+# f5ea253804728b3b / R9F-02 = 72423141c1add7e8、上記旧値から相異・
+# 再計算で不変であることを確認済み）——RUN9 は出生前（founders/ への
+# 永続 genome 文書の書き出し・render とも未実施）のため科学的影響はない。
+#
+# 2026-08-25 追記（Codex bot レビュー PR #320 第2巡指摘, P1, 採用, Fix 3）:
+# 上記 Fix 1 の binding（voice_identity_rights 層全体）も usage_grants /
+# usage_grants_note を含んでおり、raw_audio_publication /
+# model_general_distribution の別承認（rev 0.2 改訂4が定める設計上正規の
+# 可変状態）が発生するたびに anchor が動く欠陥（据え置けば stale pin・
+# 追随すれば不要な genome_id 変動という Fix 1 で解消したはずの二律背反の
+# 再発）だった。binding 対象を新設
+# `run9_schema.extract_user_identity_attestation_projection()` が返す
+# 「不変 identity-attestation projection」（schema/source_layer/
+# donor_ledger_source/donor_ledger_schema/transcribed_at/entries/
+# rights_class/consent_status/attestation の閉じた9キーのみ——
+# usage_grants 系・role/note/usage_grants_note/binding_note の散文欄・
+# schema_legacy を除外）へさらに再限定し、repin した（旧値
+# ad54200af4d42433439702946aa65e4a38848f3d8ec0e52140b351e2a9afae6b から
+# domains/identity_domain_run9_v1.json anchor_hashes.user の現行値へ
+# 更新——詳細・理由は同ファイル pin_source_candidates.user と
+# inputs/rights_manifest.json voice_identity_rights.binding_note を正と
+# する）。連動して genome_id も再計算される（実測: R9F-01 =
+# 66f420672a154283 / R9F-02 = 63f4b8f24b827cd4、上記旧値から相異・
+# 再計算で不変であることを確認済み）——RUN9 は出生前のため科学的影響は
+# ない。
 #
 # 各欄の pin 状況は {value, status, reason, source?} 形（VG_FOUNDRY の
 # debt/RUN_CONTRACT_SCHEMA_v1.json pinned_field 慣習に倣うが独立実装 —
@@ -234,9 +303,14 @@ dataset_manifest_sha:
     recording_master_rights のいずれかが欠落・不正な manifest からは
     voice_identity_rights 単独が構造的に妥当でも抽出そのものを拒否する
     — Codex bot レビュー PR #319 第7巡指摘, Fix 14, P2, 採用）だが、
-    voice_identity_rights.rights_class/consent_status =
-    PENDING_USER_ATTESTATION のまま — User attest 完了まで User 由来データを
-    学習に用いる権利来歴が確定しない（DESIGN_RUN9_REVISION_0.2.md 改訂4）。
+    2026-08-25 User attestation 実行により voice_identity_rights.rights_class/
+    consent_status は PENDING_USER_ATTESTATION から USER_ATTESTED_OWN_VOICE
+    へ遷移し（User 由来データを学習に用いる権利来歴は確定済み——
+    DESIGN_RUN9_REVISION_0.2.md 改訂4）、domains/identity_domain_run9_v1.json
+    anchor_hashes.user も PINNED 済み（本欄冒頭コメント「2026-08-25 User
+    attestation 実行」節参照）。本欄の残る律速は User rights attest では
+    なく、TRAIN/VALIDATION/SEALED HOLDOUT/IDENTITY PROBE split manifest
+    自体の生成（VG-L0 学習ハーネス実装待ち、残存ブロッカー(2)）のみ。
 
 dataset_row_order_sha:
   value: null
@@ -282,10 +356,15 @@ expected_speaker_map_sha:
   value: null
   status: PENDING
   reason: >-
-    af0 / ritsu の anchor hash は domains/identity_domain_run9_v1.json で
-    PINNED 済み。user の anchor hash が rights attest 待ち（PENDING）のため、
-    3 anchor 揃っての speaker map はまだ確定できない（identity domain
-    is_pinned()==False と同一律速。af0/ritsu 側の律速は解消済み）。
+    2026-08-25 User attestation 実行により、af0 / ritsu に加え user の
+    anchor hash も domains/identity_domain_run9_v1.json で PINNED 済みと
+    なった（本欄冒頭コメント「2026-08-25 User attestation 実行」節参照）
+    ——3 anchor + metric_space_sha が全て揃い `Run9IdentityDomain.
+    is_pinned()` は True（旧来の律速は解消済み）。本欄が引き続き PENDING
+    なのは anchor pin 自体ではなく、speaker map manifest 実体（RUN9 の
+    3 Founder 座標と backbone speaker embedding/id との対応表）そのものが
+    まだ生成・pin 対象として存在しないため（専用 schema・生成手続きは
+    VG-L0 学習ハーネス実装時に確定する、残存ブロッカー(2)）。
 
 backbone_checkpoint_sha:
   value: "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a"
@@ -301,9 +380,19 @@ backbone_checkpoint_sha:
 # **ファイル実バイトの sha256**（design_doc_sha256 と同一規約 —
 # run9_schema.compute_file_sha256() 参照。Codex bot レビュー PR #316
 # 第8巡指摘A採用: 旧 reason 文言が「正規形 sha256」と混在していたため
-# 統一した）。af0_anchor_manifest.json の anchor_hashes.af0 pin だけは
+# 統一した）。domains/identity_domain_run9_v1.json の
+# anchor_hashes.af0 / metric_space_sha / anchor_hashes.user の3 pin は
 # 意図的な例外で正規形（canonical）規約を使う — 両者を混同しないこと
-# （compute_file_sha256() の docstring に規約差の理由を記載）。
+# （compute_file_sha256() の docstring に規約差の理由を記載。Codex bot
+# レビュー PR #320 第3巡指摘, P2, 採用, Fix 5 — 旧文言は af0 のみを例外
+# としており、PR #320 第1・2巡 Fix 1/Fix 3 で user anchor が canonical
+# 規約へ移行した後も本欄が追随していなかった。なお anchor_hashes.user は
+# af0/metric_space_sha とも異なり、ファイルの hash ですらない——
+# `run9_schema.extract_user_identity_attestation_projection()` が
+# `inputs/rights_manifest.json` から導出するメモリ上の projection dict
+# の正規形 hash であり、一次レシピは
+# `domains/identity_domain_run9_v1.json` `pin_source_candidates.user`
+# 末尾の最新 REPINNED エントリを正とする）。
 # bundle 内に PENDING 相当の欄が残る場合はこの欄も PENDING と
 # し理由に「bundle 内 PENDING 解消後に pin」と記す規約。
 # Codex bot レビュー PR #316 第1巡指摘（P2, 866fcc8, 採用）: bundle 内
@@ -383,20 +472,42 @@ founder_genome_shas:
     value: null
     status: PENDING
     reason: >-
-      identity_domain_run9_v1.json の anchor_hashes は af0/ritsu が PINNED
-      済みだが user が rights attest 待ちで未 pin（domain.is_pinned()==False）
-      のため genome を正式発行できず、founders/R9F-01_genome.json 自体が
-      まだ存在しない（run9_schema.build_founder() は未 pin domain を
-      ValueError で拒否する構造 — DESIGN_RUN9 §22 実行順 step 3→4 の
-      機械強制）。発行後は founders/R9F-01_genome.json のバイト sha256
-      （64hex）を pin する。
+      2026-08-25 User attestation 実行により identity_domain_run9_v1.json
+      の anchor_hashes（af0/ritsu/user）+ metric_space_sha は全て PINNED
+      となり domain.is_pinned()==True（本欄冒頭コメント「2026-08-25 User
+      attestation 実行」節参照）——`run9_schema.build_founder()` の
+      ValueError 拒否（未 pin domain、DESIGN_RUN9 §22 実行順 step 3→4 の
+      機械強制）はもはや働かず、genome_id は現行 domain draft から決定論的
+      に計算可能（実測・再計算一致確認済み: R9F-01 = 66f420672a154283。
+      2026-08-25 Codex bot レビュー PR #320 第2巡 Fix 3（P1, 採用）による
+      anchor_hashes.user の binding scope 再限定 repin 後の値——旧値
+      f5ea253804728b3b は第1巡 Fix 1 repin 後（本 projection 化前）の値、
+      さらにその前の 2f7df5a90a6c99c9 は repin 前の binding
+      （rights_manifest.json 全体束縛）時代の値、上記「2026-08-25 追記」
+      節参照）。
+      ただし本欄が pin する対象は genome_id ではなく永続 genome 文書
+      ファイル（founders/R9F-01_genome.json）バイトの sha256 であり（上記
+      「founder genome shas」コメント参照）、その文書を実際に `founders/`
+      へ書き出して正式発行する builder・pin 手続きはまだ本 repo に配線
+      されていない（事前配線テストが存在しない——捏造 PIN はしない）ため、
+      律速要因が「user anchor 未 pin」から「genome 文書の正式発行未実施」
+      へ移っただけで本欄は引き続き PENDING。発行後は founders/
+      R9F-01_genome.json のバイト sha256（64hex）を pin する。
   R9F-02:
     value: null
     status: PENDING
     reason: >-
-      identity_domain_run9_v1.json の user anchor が未 pin のため genome を
-      正式発行できない（R9F-01 と同一律速）。発行後は
-      founders/R9F-02_genome.json のバイト sha256（64hex）を pin する。
+      2026-08-25 User attestation 実行により identity_domain_run9_v1.json
+      の user anchor も PINNED 済み（R9F-01 と同一根拠——本欄冒頭コメント
+      「2026-08-25 User attestation 実行」節参照）。genome_id は現行 domain
+      draft から決定論的に計算可能（実測・再計算一致確認済み: R9F-02 =
+      63f4b8f24b827cd4（同 Fix 3 repin 後の値——旧値 72423141c1add7e8 は
+      第1巡 Fix 1 repin 後（本 projection 化前）の値、さらにその前の
+      9cd047c667dcb96e は repin 前の値）、R9F-01 の値と相異することも
+      確認済み）。R9F-01 と
+      同一理由（genome 文書の正式発行 builder・pin 手続き未配線）により
+      本欄は引き続き PENDING。発行後は founders/R9F-02_genome.json のバイト
+      sha256（64hex）を pin する。
 
 # --- lesson / learning ------------------------------------------------------
 # rev 0.3 改訂A/C（DESIGN_RUN9_REVISION_0.3.md）+ User 外部レビュー PR #317
