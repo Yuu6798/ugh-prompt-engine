@@ -220,11 +220,18 @@ dataset_manifest_sha:
   status: PENDING
   reason: >-
     TRAIN/VALIDATION/SEALED HOLDOUT/IDENTITY PROBE split の manifest が未確定。
-    User donor の rights manifest は起草済み
-    （inputs/rights_manifest.json、schema run9-user-donor-rights/1.0）だが
-    rights_class/consent_status = PENDING_USER_ATTESTATION のまま — User attest
-    完了まで User 由来データを学習に用いる権利来歴が確定しない
-    （DESIGN_RUN9_REVISION_0.2.md 改訂4）。
+    rights manifest は起草済み（inputs/rights_manifest.json、schema
+    run9-rights-manifest/2.0 — voice_identity_rights/performance_rights/
+    composition_rights/recording_master_rights の4層構造。旧
+    run9-user-donor-rights/1.0 相当の内容（User donor UC-001..017・
+    usage_grants・rights_class/consent_status/attestation）は
+    voice_identity_rights 層へ `schema_legacy` 付きで nested 収容されており、
+    legacy verifier（verify_rights_manifest_against_ledger()）へ渡す際は
+    extract_voice_identity_rights_layer() で当該層を抽出してフラット化する
+    — Codex bot レビュー PR #319 第6巡指摘, Fix 13, P2, 採用）だが、
+    voice_identity_rights.rights_class/consent_status =
+    PENDING_USER_ATTESTATION のまま — User attest 完了まで User 由来データを
+    学習に用いる権利来歴が確定しない（DESIGN_RUN9_REVISION_0.2.md 改訂4）。
 
 dataset_row_order_sha:
   value: null

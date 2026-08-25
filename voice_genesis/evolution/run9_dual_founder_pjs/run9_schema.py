@@ -4611,6 +4611,26 @@ _RIGHTS_MANIFEST_PROVENANCE_LAYER_BLOCKS: Dict[str, FrozenSet[str]] = {
 }
 
 _RIGHTS_MANIFEST_NOT_APPLICABLE = "not_applicable"
+# `not_applicable` を許すフィールドの宣言的 allowlist（Codex bot レビュー
+# PR #319 第6巡指摘, Fix 12, P2, 採用）: DESIGN_RUN9_REVISION_0.4.md
+# 「provenance の実値充填」表が構造的欠落（値未確定ではなく主体そのものが
+# 存在しない）として `not_applicable` を許すのは
+# performance_author.performance_editor と synthesis.engine /
+# synthesis.voicebank の3欄のみ——いずれも「PJS は自然録音コーパスで
+# UTAU 型の別調声レイヤー/合成エンジンを経由しない」という同一の構造的
+# 不在根拠を共有する。voice_source.owner / performance_author.performer /
+# composition.composer / composition.lyricist のような必須権利保有者欄へ
+# `not_applicable` を通すと、未解決の owner を消去し将来の R9-G1 tooling
+# に NO_UNKNOWN_RIGHTS_HOLDER を偽成立させ得るため、allowlist 外は
+# fail-closed で拒否する（未解決値は `<UNRESOLVED_EXTERNAL>`／
+# `<PENDING_USER_ATTESTATION>` を使わせる）。
+_RIGHTS_MANIFEST_NOT_APPLICABLE_ALLOWLIST: FrozenSet[Tuple[str, str]] = frozenset(
+    {
+        ("performance_author", "performance_editor"),
+        ("synthesis", "engine"),
+        ("synthesis", "voicebank"),
+    }
+)
 # 2026-08-25 User 追加裁定②: 外部不明値と User 帰属未確定値を同一
 # placeholder `<PENDING_USER_ATTESTATION>` で表していた旧実装は誤り
 # だった——User が attest できるのは自身の許諾・裁定のみであり、PJS の
@@ -4628,7 +4648,14 @@ def _validate_rights_provenance_block(layer_name: str, block_name: str, block: A
     attest すべき対象の未確定値）、`<UNRESOLVED_EXTERNAL>`（**外部事実欄
     のみ** — 第三者の事実で repo 内に確認できる記録が無い未解決値）、
     または `not_applicable`（`note` に非空の理由説明を必須で伴う — 値と
-    理由を切り離さない、捏造禁止規律）。フィールドの種別と異なる
+    理由を切り離さない、捏造禁止規律。かつ
+    `_RIGHTS_MANIFEST_NOT_APPLICABLE_ALLOWLIST` 記載の3欄
+    （performance_author.performance_editor / synthesis.engine /
+    synthesis.voicebank）以外では fail-closed で拒否する — Codex bot
+    レビュー PR #319 第6巡指摘, Fix 12, P2, 採用。値未確定ではなく主体
+    そのものが構造的に存在しない場合のみ許す語彙であり、owner/performer/
+    composer/lyricist のような必須権利保有者欄で使うと未解決を消去し
+    NO_UNKNOWN_RIGHTS_HOLDER を偽成立させ得る）。フィールドの種別と異なる
     placeholder を使った場合は拒否する（例: 外部事実欄に
     `<PENDING_USER_ATTESTATION>` を使うのは誤用 — 旧
     `performance_author.performer`/`composition.composer`/`lyricist` が
@@ -4652,6 +4679,15 @@ def _validate_rights_provenance_block(layer_name: str, block_name: str, block: A
         if not isinstance(value, str) or not value.strip():
             raise Run9ValidationError(f"{path}.{key} must be a non-empty string, got {value!r}")
         if value == _RIGHTS_MANIFEST_NOT_APPLICABLE:
+            if (block_name, key) not in _RIGHTS_MANIFEST_NOT_APPLICABLE_ALLOWLIST:
+                raise Run9ValidationError(
+                    f"{path}.{key} does not permit 'not_applicable' — only "
+                    "performance_author.performance_editor / synthesis.engine / "
+                    "synthesis.voicebank may be structurally absent; for an unresolved "
+                    f"value use {_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} (external-fact "
+                    f"field) or {_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} "
+                    "(User-attributable field) instead"
+                )
             uses_not_applicable = True
             continue
         kind = field_kinds[key]

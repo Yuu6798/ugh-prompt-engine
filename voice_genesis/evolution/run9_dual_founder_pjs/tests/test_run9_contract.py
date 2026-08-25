@@ -7610,3 +7610,109 @@ def test_rev04_doc_mapping_table_covers_all_8_changes() -> None:
     doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
     assert "変更1" in doc and "変更2" in doc and "変更3" in doc and "変更4" in doc
     assert "変更5" in doc and "変更6" in doc and "変更7" in doc and "変更8" in doc
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第6巡対応 — Fix 12（P2）: not_applicable の
+# フィールド別 allowlist 化（performance_author.performance_editor /
+# synthesis.engine / synthesis.voicebank の3欄のみ許可）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("layer_name", "block_name", "field_name"),
+    [
+        ("recording_master_rights", "voice_source", "owner"),
+        ("performance_rights", "performance_author", "performer"),
+        ("composition_rights", "composition", "composer"),
+        ("composition_rights", "composition", "lyricist"),
+    ],
+)
+def test_fix319_12_not_applicable_rejected_outside_allowlist(
+    layer_name: str, block_name: str, field_name: str
+) -> None:
+    """owner/performer/composer/lyricist は allowlist 外——`not_applicable`
+    へ書き換えると、必須権利保有者欄が未解決のまま消去され、将来の
+    R9-G1 tooling に NO_UNKNOWN_RIGHTS_HOLDER を偽成立させ得る（負例
+    ファミリー、Codex bot レビュー PR #319 第6巡指摘, Fix 12, P2, 採用）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data[layer_name]["provenance"][block_name][field_name] = "not_applicable"
+    with pytest.raises(m.Run9ValidationError, match="does not permit 'not_applicable'"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_12_not_applicable_rejection_message_names_replacement_tokens() -> None:
+    """拒否メッセージが未解決値の代替語彙（`<UNRESOLVED_EXTERNAL>` /
+    `<PENDING_USER_ATTESTATION>`）を案内することの確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["provenance"]["voice_source"]["owner"] = "not_applicable"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=r"<UNRESOLVED_EXTERNAL>.*<PENDING_USER_ATTESTATION>",
+    ):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize(
+    ("block_name", "field_name"),
+    [
+        ("performance_author", "performance_editor"),
+        ("synthesis", "engine"),
+        ("synthesis", "voicebank"),
+    ],
+)
+def test_fix319_12_not_applicable_still_accepted_in_allowlisted_fields(
+    block_name: str, field_name: str
+) -> None:
+    """allowlist 3欄（DESIGN_RUN9_REVISION_0.4.md 「provenance の実値充填」表
+    と一致）は実 manifest で `not_applicable` + 理由 note のまま従来どおり
+    受理されることの正例確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    layer_name = "performance_rights" if block_name == "performance_author" else "recording_master_rights"
+    assert data[layer_name]["provenance"][block_name][field_name] == "not_applicable"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第6巡対応 — Fix 13（P2）: 契約 blocker 文の
+# schema 名更新（旧 run9-user-donor-rights/1.0 のまま記述していた誤導経路
+# の是正）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_13_contract_blocker_names_current_four_layer_schema() -> None:
+    """RUN9_CONTRACT.yaml の dataset_manifest_sha blocker 文が、現 schema
+    `run9-rights-manifest/2.0` と、legacy verifier への
+    `extract_voice_identity_rights_layer()` 抽出フローを名指しで記述して
+    いることの確認（Codex bot レビュー PR #319 第6巡指摘, Fix 13, P2,
+    採用）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    reason = yaml.safe_load(contract_text)["dataset_manifest_sha"]["reason"]
+    assert m.SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER in reason
+    assert "extract_voice_identity_rights_layer" in reason
+    assert "PENDING_USER_ATTESTATION" in reason
+
+
+def test_fix319_13_contract_blocker_does_not_name_legacy_schema_as_top_level() -> None:
+    """blocker 文が旧 schema 名 `run9-user-donor-rights/1.0` を rights
+    manifest の**トップレベル** schema として名指ししていないことの確認
+    ——旧値への言及自体は「相当の内容」という nested 層への参照として
+    残る（実装者が legacy verifier へ直接渡す誤導経路を閉じる）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    reason = yaml.safe_load(contract_text)["dataset_manifest_sha"]["reason"]
+    assert "schema run9-user-donor-rights/1.0" not in reason
+    assert "run9-user-donor-rights/1.0 相当の内容" in reason
+
+
+def test_fix319_13_repo_wide_grep_finds_no_stale_present_tense_legacy_schema_top_level_claim() -> None:
+    """repo 全体で、rights_manifest.json のトップレベル schema を旧
+    `run9-user-donor-rights/1.0` と現在形で名指しする残存が無いことを
+    確認する（履歴文脈・legacy verifier のフラット化後入力としての言及
+    ・test 内の定数一致検査は対象外）。domains/identity_domain_run9_v1.json
+    の pending pin note も rev 0.4 の4層 schema 名へ更新済みであることを
+    直接確認する（Fix 13 と同型の誤導経路の同時是正）。"""
+    domain_raw = (_RUN_DIR / "domains" / "identity_domain_run9_v1.json").read_text(
+        encoding="utf-8"
+    )
+    assert "run9-rights-manifest/2.0" in domain_raw
+    assert "schema run9-user-donor-rights/1.0）が起草済み" not in domain_raw
