@@ -4463,6 +4463,24 @@ _RIGHTS_MANIFEST_PROVENANCE_BLOCK_VALUE_KEYS: Dict[str, Dict[str, str]] = {
 _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION = "PENDING_USER_ATTESTATION"
 _RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL = "UNRESOLVED_EXTERNAL"
 
+# Codex bot レビュー PR #319 第11巡指摘（P2, 採用, Fix 24）: attested 形態の
+# 判定（`_validate_rights_manifest_voice_identity_attestation`）は従来
+# 「両 status が PENDING_USER_ATTESTATION と異なる」ことしか要求しておらず、
+# `rights_class`/`consent_status` を `DENIED` 等の任意・矛盾値へ書き換えても
+# 受理してしまっていた——承認記録付き `granted` usage grant（Fix 19 前提条件
+# ①）と組み合わせると、権利状態が否認/未記述のまま raw 公開・配布を許可する
+# 正典 manifest が通ってしまう。
+# 現物確認: `inputs/rights_manifest.json` / DESIGN_RUN9_REVISION_0.2.md
+# 改訂4 / DESIGN_RUN9_REVISION_0.4.md（変更1・2「attest 対象の更新」節）の
+# いずれにも attested 後の意図された status 値の規定はない。ただし
+# `tests/test_run9_contract.py`（Fix 16/19 導入時点、`test_fix319_16_valid_
+# attested_form_accepted` 他 7 箇所）は既に `rights_class`/`consent_status`
+# 双方に "USER_ATTESTED_OWN_VOICE" を使う規約を現物として確立済み——これを
+# 閉語彙として凍結する（新規裁定で非対称な値を導入し既存回帰と乖離させない）。
+# 閉語彙は各1値の閉集合: 拒否・撤回等の他状態は将来の design revision で
+# 語彙追加するまで表現不能（fail-closed）。
+_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE = "USER_ATTESTED_OWN_VOICE"
+
 # 層ごとの主体種別: voice_identity_rights のみ User 帰属（User donor 自身
 # の声の権利。attestation 主体 = User）で、他3層（performance/composition/
 # recording_master）はいずれも PJS という外部第三者に関する権利であり
@@ -4685,7 +4703,8 @@ def _is_real_utc_timestamp(value: str) -> bool:
 def _validate_rights_manifest_voice_identity_attestation(layer: Mapping[str, Any]) -> None:
     """`voice_identity_rights.attestation` の形状 + pending/attested 二形態の
     整合を検証する（Fix 16。両 status 要求化は Codex bot レビュー PR #319
-    第10巡指摘, P2, 採用, Fix 21）。
+    第10巡指摘, P2, 採用, Fix 21。attested 形態の閉語彙化は同第11巡指摘,
+    P2, 採用, Fix 24）。
 
     旧実装は `rights_class == PENDING or consent_status == PENDING` の
     `or` 判定で pending 形態を認定していた——`consent_status` だけを
@@ -4697,6 +4716,18 @@ def _validate_rights_manifest_voice_identity_attestation(layer: Mapping[str, Any
     attested 形態は**どちらも** `PENDING_USER_ATTESTATION` でないことを
     要求し、片方のみが確定化した中間状態はどちらの方向であっても
     form mismatch として拒否する。
+
+    Fix 24: 上記の「`PENDING_USER_ATTESTATION` と異なる」という条件は
+    `rights_class`/`consent_status` に `DENIED` 等の任意・矛盾値を許してしまい、
+    権利状態が否認/未記述のまま attested 形態が成立できていた
+    （`granted` usage grant の前提条件①＝attested 形態、と組み合わさると
+    実害化する）。attested 形態は**両方**が閉語彙値
+    `_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE`
+    （"USER_ATTESTED_OWN_VOICE"）と厳密一致することを要求する——
+    `DENIED`・任意文字列はもちろん、旧条件では通っていた
+    `PENDING_USER_ATTESTATION` 以外の非閉語彙値もすべて拒否する。
+    閉語彙は各1値の閉集合であり、拒否・撤回等の他状態は将来の design
+    revision で語彙追加するまで表現不能（fail-closed）。
     """
     path = "rights manifest.voice_identity_rights.attestation"
     attestation = layer.get("attestation")
@@ -4759,13 +4790,20 @@ def _validate_rights_manifest_voice_identity_attestation(layer: Mapping[str, Any
         raise Run9ValidationError(
             f"{path}.statement must be a non-empty string when attested is true, got {statement!r}"
         )
-    if rights_class_is_pending or consent_status_is_pending:
+    rights_class_is_attested_vocab = (
+        rights_class == _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE
+    )
+    consent_status_is_attested_vocab = (
+        consent_status == _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE
+    )
+    if not (rights_class_is_attested_vocab and consent_status_is_attested_vocab):
         raise Run9ValidationError(
             f"{path} is in attested form (attested=true) but rights manifest."
-            f"voice_identity_rights.rights_class/consent_status is still "
-            f"{_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} for at least one of the "
-            f"two fields (rights_class={rights_class!r}, consent_status={consent_status!r}) "
-            "— status/attestation form mismatch"
+            f"voice_identity_rights.rights_class/consent_status are not BOTH the closed-vocab "
+            f"attested value {_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE!r} "
+            f"(rights_class={rights_class!r}, consent_status={consent_status!r}) — "
+            "status/attestation form mismatch (Fix 24: arbitrary/contradictory values such as "
+            "'DENIED' are no longer accepted for the attested form)"
         )
 
 

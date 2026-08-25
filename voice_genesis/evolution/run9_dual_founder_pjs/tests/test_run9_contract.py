@@ -8425,3 +8425,145 @@ def test_fix319_23_valid_real_corpus_pin_values_accepted() -> None:
     end-to-end 確認。"""
     data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第11巡対応 — Fix 24（P2）: 完了 voice-rights
+# status の閉語彙化。attested 形態の判定（Fix 16/21）は「両 status が
+# PENDING_USER_ATTESTATION と異なる」ことしか要求しておらず、
+# `rights_class`/`consent_status` を `DENIED` 等の任意・矛盾値へ書き換えても
+# 受理してしまっていた——承認記録付き `granted` usage grant（Fix 19 前提
+# 条件①）と組み合わせると、権利状態が否認/未記述のまま raw 公開・配布を
+# 許可する正典 manifest が通ってしまう。閉語彙は現物確認の結果（設計裁定
+# ではなく既存の現物規約）: `inputs/rights_manifest.json` /
+# DESIGN_RUN9_REVISION_0.2.md 改訂4 / DESIGN_RUN9_REVISION_0.4.md いずれにも
+# attested 後の status 値の明文規定はないが、`tests/test_run9_contract.py`
+# 自身が Fix 16/19 導入時点から `rights_class`/`consent_status` 双方に
+# "USER_ATTESTED_OWN_VOICE" を使う規約を既に確立しており（本ファイル上記
+# 7 箇所）、これを閉語彙として run9_schema.py 側で凍結した
+# （`_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE`）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_24_attested_form_both_denied_rejected() -> None:
+    """負例1: attested=true で rights_class/consent_status が両方とも
+    閉語彙外の `DENIED`（否認）の場合の拒否——指摘が名指しする再現例の
+    根本形。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "DENIED"
+    data["voice_identity_rights"]["consent_status"] = "DENIED"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_24_attested_form_rights_class_denied_only_rejected() -> None:
+    """負例2: rights_class のみ `DENIED`、consent_status は閉語彙値
+    （USER_ATTESTED_OWN_VOICE）という片方だけ矛盾した組み合わせの拒否。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "DENIED"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_24_attested_form_consent_status_denied_only_rejected() -> None:
+    """負例3: consent_status のみ `DENIED`、rights_class は閉語彙値という
+    逆方向の片方矛盾の拒否。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "DENIED"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_24_attested_form_arbitrary_string_rejected() -> None:
+    """負例4: `DENIED` に限らず、閉語彙外の任意文字列（PENDING でも
+    USER_ATTESTED_OWN_VOICE でもない未知の記述値）も拒否されること——旧
+    条件（PENDING と異なるかどうかのみ）では通っていた経路。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "SOME_UNSPECIFIED_STATUS"
+    data["voice_identity_rights"]["consent_status"] = "SOME_UNSPECIFIED_STATUS"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_24_denied_status_with_granted_grant_compound_rejected() -> None:
+    """複合負例（指摘本文の再現例）: rights_class/consent_status が両方
+    `DENIED` のまま、attestation は形状要件を満たし usage_grants の1キーを
+    承認記録付きで `granted` へ書き換えても、attestation の二形態整合検証
+    （usage_grants 検証より先に走る）で拒否され、権利状態が否認のまま
+    raw 公開/配布を許可する正典 manifest は成立しないこと。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "DENIED"
+    data["voice_identity_rights"]["consent_status"] = "DENIED"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Publication approved by User.",
+    }
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_24_valid_closed_vocab_attested_form_accepted() -> None:
+    """正例（回帰）: 閉語彙値 `USER_ATTESTED_OWN_VOICE`（両 status）での
+    attested 形態は Fix 24 適用後も受理されること——Fix 16 の正例
+    （`test_fix319_16_valid_attested_form_accepted`）と同型で、Fix 24 が
+    正当な attested 遷移を過剰拒否していないことの確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_24_valid_closed_vocab_attested_form_with_granted_grant_accepted() -> None:
+    """正例（回帰）: 閉語彙値での attested 形態 + 承認記録付き granted
+    usage grant の組み合わせは Fix 24 適用後も受理されること
+    （`test_fix319_19_granted_with_full_preconditions_accepted` と同型の
+    end-to-end 確認 — Fix 19 の granted 前提条件①は本 Fix 24 の閉語彙
+    検証を通った attested 形態のみを意味するようになったことの固定）。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Raw audio publication approved by User.",
+    }
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
