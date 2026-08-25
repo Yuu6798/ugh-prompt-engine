@@ -1437,6 +1437,113 @@ def test_negative_fix11_reintroducing_phrase_dynamics_axis_rejected(
 
 
 # ---------------------------------------------------------------------------
+# PR #322 第19巡指摘 Fix 31（P2, 採用、Fix 28 transition テンプレートと
+# 同族）: diagnostic_structural_pitch_rise role を持つ P2 cell の notes を
+# テンプレート凍結 + 構造述語（非減少 pitch 系列・phrase-final マーカーの
+# 終端位置）の両方で検証する。旧実装は scope_boundary_note の文言のみを
+# 検証し、その文言が主張する notes の実体は一切照合していなかった。
+# ---------------------------------------------------------------------------
+
+
+def test_fix31_positive_real_manifest_passes(manifest_data: Dict[str, Any]) -> None:
+    m.validate_probe_manifest(manifest_data)
+
+
+def test_fix31_diagnostic_cell_notes_match_frozen_template(manifest_data: Dict[str, Any]) -> None:
+    cell = _cell_by_id(_p2_probe(manifest_data), "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    template = m._P2_DIAGNOSTIC_PITCH_RISE_NOTES_TEMPLATE["P2-PHRASE-BUILD-WEAK-TO-STRONG"]
+    assert len(cell["notes"]) == len(template)
+    for note, expected in zip(cell["notes"], template):
+        assert dict(note) == dict(expected)
+    pitches = [n["pitch_midi"] for n in cell["notes"]]
+    assert pitches == sorted(pitches)  # 非減少（上行）であることの回帰確認
+
+
+def test_negative_fix31_leading_pitch_made_non_monotonic(manifest_data: Dict[str, Any]) -> None:
+    """本指摘の核心シナリオ: 先頭 pitch を 60→66 へ変更し 66→62→65 という
+    非単調系列にする——scope_boundary_note の文言はそのままのため旧実装
+    では通過していたが、Fix 31 の構造述語検証で検出される。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p2_probe(bad), "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    cell["notes"][0]["pitch_midi"] = 66
+    with pytest.raises(m.Run9ValidationError, match="non-decreasing"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix31_template_note_kana_swapped(manifest_data: Dict[str, Any]) -> None:
+    """pitch 系列は非減少のまま保ちつつ kana だけ差し替える——構造述語は
+    満たすがテンプレート凍結（全フィールド厳密一致）で検出される。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p2_probe(bad), "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    assert cell["notes"][0]["kana"] == "さ"
+    cell["notes"][0]["kana"] = "そ"  # 同じ fricative_s クラスの別 kana
+    with pytest.raises(m.Run9ValidationError, match="frozen template"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix31_template_note_duration_changed(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p2_probe(bad), "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    cell["notes"][-1]["duration_beats"] = 3
+    with pytest.raises(m.Run9ValidationError, match="frozen template"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix31_direct_call_structural_predicate_only_violation() -> None:
+    """裁定済み対応 (4)「構造述語のみ破る合成ケース」: cell_id をテンプレ
+    ート未登録の合成値にして template チェックを素通りさせつつ、pitch 系列
+    を非単調にする——構造述語がテンプレート凍結から独立に効くことを
+    直接単体呼び出しで確認する。"""
+    cell = {
+        "cell_id": "SYNTHETIC-NOT-IN-TEMPLATE",
+        "notes": [
+            {
+                "kana": "さ", "pitch_midi": 65, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": False,
+            },
+            {
+                "kana": "ぎ", "pitch_midi": 60, "duration_beats": 2, "phrase_index": 0,
+                "is_phrase_final": True,
+            },
+        ],
+    }
+    with pytest.raises(m.Run9ValidationError, match="non-decreasing"):
+        m._validate_p2_diagnostic_pitch_rise_cell(cell, field="test")
+
+
+def test_fix31_direct_call_synthetic_cell_not_in_template_skips_template_check() -> None:
+    """テンプレート未登録の cell_id は、構造述語さえ満たせばテンプレート
+    照合なしに通過することの確認（`_P2_DIAGNOSTIC_PITCH_RISE_NOTES_
+    TEMPLATE.get(cell_id)` が None を返す経路の回帰確認）。"""
+    cell = {
+        "cell_id": "SYNTHETIC-NOT-IN-TEMPLATE",
+        "notes": [
+            {
+                "kana": "た", "pitch_midi": 60, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": False,
+            },
+            {
+                "kana": "み", "pitch_midi": 61, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": True,
+            },
+        ],
+    }
+    m._validate_p2_diagnostic_pitch_rise_cell(cell, field="test")  # 例外を投げないことの確認
+
+
+def test_negative_fix31_direct_call_length_mismatch() -> None:
+    cells_notes = [
+        {
+            "kana": "さ", "pitch_midi": 60, "duration_beats": 1, "phrase_index": 0,
+            "is_phrase_final": True,
+        },
+    ]
+    cell = {"cell_id": "P2-PHRASE-BUILD-WEAK-TO-STRONG", "notes": cells_notes}
+    with pytest.raises(m.Run9ValidationError, match="frozen template"):
+        m._validate_p2_diagnostic_pitch_rise_cell(cell, field="test")
+
+
+# ---------------------------------------------------------------------------
 # PR #322 第5巡指摘 Fix 12（P2, 採用）: P0 の score.py 逐語照合
 # ---------------------------------------------------------------------------
 

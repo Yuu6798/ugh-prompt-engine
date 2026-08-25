@@ -3854,6 +3854,94 @@ _DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID = "diagnostic_structural_pitch_rise"
 _DIAGNOSTIC_ROLE_SCOPE_BOUNDARY_MARKERS: Tuple[str, ...] = (
     "pitch 上行構造のみ", "energy 効果の帰属に使わない",
 )
+
+# ---------------------------------------------------------------------------
+# PR #322 第19巡指摘 Fix 31（P2, 採用、Fix 28 transition テンプレートと
+# 同族）: `_validate_cell_diagnostic_role()` は `scope_boundary_note` の
+# 文言（マーカー含有）しか検証しておらず、その文言が主張する実体
+# （notes 列 60→62→65 の非減少 pitch 系列 + phrase-final note が終端）
+# 自体は一切照合していなかった——amendment で notes を非単調（例: 先頭
+# pitch を 60→66 のように書き換える）へ差し替えても、scope_boundary_note
+# の文言さえ書き換えなければ通過してしまう。
+#  - テンプレート凍結: Fix 28 の `_P1_TRANSITION_NOTES_TEMPLATE` と同方式
+#    で、diagnostic_structural_pitch_rise role を持つ cell の notes 配列
+#    全体（全フィールド）を validator 内凍結テンプレートへ転写し厳密
+#    一致を強制する。amendment には本凍結表の同時更新が必要——意図的な
+#    二重 pin（Fix 7/19/20/25/28 と同じ規約）。
+#  - 構造述語の独立検証: テンプレート凍結とは独立に、role が主張する
+#    構造述語（pitch 系列が非減少=上行であること）自体も検証する——将来
+#    amendment でテンプレートを差し替える際、二重 pin の両方を協調して
+#    更新しても非上行な値へ書き換えることを構造的に禁止するため（テンプ
+#    レート一致だけに頼ると「両方を同時に更新した」という理由だけで
+#    通ってしまう）。phrase-final マーカーが notes 配列の終端であること
+#    は `_select_phrase_final_note()`（Fix 23 と同じ selector）の再利用
+#    で検証する。
+# ---------------------------------------------------------------------------
+_P2_DIAGNOSTIC_PITCH_RISE_NOTES_TEMPLATE: Mapping[str, Tuple[Mapping[str, Any], ...]] = (
+    types.MappingProxyType({
+        "P2-PHRASE-BUILD-WEAK-TO-STRONG": (
+            types.MappingProxyType({
+                "kana": "さ", "pitch_midi": 60, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": False,
+            }),
+            types.MappingProxyType({
+                "kana": "く", "pitch_midi": 62, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": False,
+            }),
+            types.MappingProxyType({
+                "kana": "ぎ", "pitch_midi": 65, "duration_beats": 2, "phrase_index": 0,
+                "is_phrase_final": True,
+            }),
+        ),
+    })
+)
+
+
+def _validate_p2_diagnostic_pitch_rise_cell(cell: Mapping[str, Any], *, field: str) -> None:
+    """Fix 31 の実装: `diagnostic_structural_pitch_rise` role を持つ cell
+    の notes を、構造述語（非減少 pitch 系列・phrase-final マーカーの
+    終端位置）とテンプレート凍結の両方で検証する。"""
+    cell_id = cell.get("cell_id")
+    notes = cell["notes"]
+
+    # 構造述語1（Fix 23 selector の再利用）: phrase-final マーカーが
+    # ちょうど1つ・notes 配列の終端であること。
+    _select_phrase_final_note(cell, field=field)
+
+    # 構造述語2: pitch 系列が非減少（上行）であること——テンプレート凍結
+    # とは独立に検証する。
+    pitches = [note["pitch_midi"] for note in notes]
+    for i in range(1, len(pitches)):
+        if pitches[i] < pitches[i - 1]:
+            raise Run9ValidationError(
+                f"{field}: diagnostic cell {cell_id!r} (role_id="
+                f"{_DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID!r}) declares a non-decreasing "
+                f"pitch-rise structure but notes[{i}].pitch_midi={pitches[i]!r} < "
+                f"notes[{i - 1}].pitch_midi={pitches[i - 1]!r} — the structural predicate the role "
+                "claims (non-decreasing pitch series) does not hold (Fix 31: verified independently "
+                "of the frozen notes template so amending the template cannot silently violate it)"
+            )
+
+    # テンプレート凍結: notes 配列全体（全フィールド）が凍結テンプレート
+    # と厳密一致すること。
+    template = _P2_DIAGNOSTIC_PITCH_RISE_NOTES_TEMPLATE.get(cell_id)
+    if template is None:
+        return
+    if len(notes) != len(template):
+        raise Run9ValidationError(
+            f"{field}: diagnostic cell {cell_id!r} has {len(notes)} note(s), the frozen template "
+            f"requires exactly {len(template)} — amendment requires updating "
+            "_P2_DIAGNOSTIC_PITCH_RISE_NOTES_TEMPLATE too, an intentional double pin (Fix 31)"
+        )
+    for i, (note, expected_note) in enumerate(zip(notes, template)):
+        actual = dict(note)
+        expected = dict(expected_note)
+        if actual != expected:
+            raise Run9ValidationError(
+                f"{field}: diagnostic cell {cell_id!r} notes[{i}] = {actual!r} does not match the "
+                f"frozen template {expected!r} (Fix 31: intentional double pin, amendment requires "
+                "updating _P2_DIAGNOSTIC_PITCH_RISE_NOTES_TEMPLATE too)"
+            )
 # P2 probe レベルの境界宣言（`role` フィールドが保持しなければならない
 # マーカー）: 宣言 harness に energy/velocity/metrical-accent 制御入力が
 # 存在しないこと・P2 の Energy/Attack 軸で実際に操作されるのは
@@ -4562,11 +4650,20 @@ def _validate_cell_levels(value: Any, *, field: str) -> Dict[str, str]:
     return value
 
 
-def _validate_cell_diagnostic_role(value: Any, *, field: str) -> None:
+def _validate_cell_diagnostic_role(
+    value: Any, *, cell: Mapping[str, Any], cell_field: str, field: str
+) -> None:
     """PR #322 第5巡指摘 Fix 11（P1, 採用）の実装: `diagnostic_role` は
     `levels`（操作可能軸システム）とは独立の cell 属性——Energy contrast
     等として登録しない診断用 cell（例: pitch 上行構造のみを操作する
-    構造 cell）であることを機械可読に宣言する。"""
+    構造 cell）であることを機械可読に宣言する。
+
+    PR #322 第19巡指摘 Fix 31（P2, 採用）: 本関数は従来
+    `scope_boundary_note` の文言（マーカー含有）しか検証しておらず、
+    その文言が主張する notes の実体は一切照合していなかった。role_id が
+    `diagnostic_structural_pitch_rise` であることを確認した後、
+    `_validate_p2_diagnostic_pitch_rise_cell()`（テンプレート凍結 +
+    構造述語の独立検証）へ委譲する。"""
     if not isinstance(value, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
     unknown = set(value.keys()) - _CELL_DIAGNOSTIC_ROLE_KEYS
@@ -4591,6 +4688,10 @@ def _validate_cell_diagnostic_role(value: Any, *, field: str) -> None:
                 f"{field}.scope_boundary_note must contain the marker {marker!r} (Fix 11: 何を操作し "
                 "何に使わないかの境界宣言), got a note without that marker"
             )
+    # Fix 31: role_id はここまでで _DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID
+    # と厳密一致していることが確定済み（未登録 role_id は上で fail-closed
+    # 済み）——notes の実体（構造述語 + テンプレート凍結）を検証する。
+    _validate_p2_diagnostic_pitch_rise_cell(cell, field=cell_field)
 
 
 def _validate_probe_cell(
@@ -4701,7 +4802,8 @@ def _validate_probe_cell(
         if _CELL_LEVELS_KEY in cell:
             return _validate_cell_levels(cell[_CELL_LEVELS_KEY], field=f"{field}.{_CELL_LEVELS_KEY}")
         _validate_cell_diagnostic_role(
-            cell[_CELL_DIAGNOSTIC_ROLE_KEY], field=f"{field}.{_CELL_DIAGNOSTIC_ROLE_KEY}"
+            cell[_CELL_DIAGNOSTIC_ROLE_KEY], cell=cell, cell_field=field,
+            field=f"{field}.{_CELL_DIAGNOSTIC_ROLE_KEY}",
         )
         return None
     return None
