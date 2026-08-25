@@ -4,9 +4,15 @@
 # PINNED になるまで本学習開始禁止。現状の gate_state()（run9_schema.py）は
 # "BLOCKED"（pre-run 欄の一部が依然 PENDING — 2026-08-25 User attestation
 # 実行により User rights attest 待ちは解消済み（下記「2026-08-25 User
-# attestation 実行」節参照）。残る主因は VG-L0 学習ハーネス未実装 +
-# practice/education/learning-recipe manifest・founder genome 文書の
-# 実体未生成のみ）。これは正直な状態表現であり、捏造して PINNED にしていない。
+# attestation 実行」節参照）。〔履歴: 本節は当初「founder genome 文書の
+# 実体未生成」も残る主因に含めていたが、同日中の RUN9-BIRTH-PREP-1
+# （本改訂）で issue_founder_genome_document() により正式発行済み——
+# `founders/R9F-01_genome.json`/`R9F-02_genome.json` を書き出し
+# `founder_genome_shas` を実 raw sha256 で PINNED 化した（下記
+# founder_genome_shas 欄参照）→ RUN9-BIRTH-PREP-1 で解消済み〕。残る
+# 主因は VG-L0 学習ハーネス未実装 + practice/education/learning-recipe
+# manifest の実体未生成のみ）。これは正直な状態表現であり、捏造して
+# PINNED にしていない。
 #
 # 2026-08-24 User 裁定 5件により design_revision 0.1 → 0.2
 # （DESIGN_RUN9_REVISION_0.2.md）。本改訂で af0/ritsu anchor・backbone
@@ -87,13 +93,17 @@
 # を返す（domain 凍結）。凍結の結果、`run9_schema.build_founder()` が
 # 現行 domain draft から R9F-01/R9F-02 の genome_id を決定論的に計算
 # 可能になった（実測当時: R9F-01 = 2f7df5a90a6c99c9 / R9F-02 =
-# 9cd047c667dcb96e、両者相異・再計算で不変であることを確認済み）。ただし
-# `founder_genome_shas` が pin する対象は genome_id ではなく永続 genome
-# 文書ファイル（founders/R9F-0x_genome.json）バイトの sha256 であり
-# （下記コメント参照）、その文書を実際に `founders/` へ書き出して正式
-# 発行する builder・pin 手続きはまだ本 repo に配線されていない
-# （事前配線テストが存在しない）——`founder_genome_shas` は本改訂でも
-# 引き続き PENDING のまま（下記該当欄の reason 参照。捏造 PIN はしない）。
+# 9cd047c667dcb96e、両者相異・再計算で不変であることを確認済み）。
+# 〔履歴: `founder_genome_shas` が pin する対象は genome_id ではなく永続
+# genome 文書ファイル（founders/R9F-0x_genome.json）バイトの sha256 で
+# あり（下記コメント参照）、当時はその文書を実際に `founders/` へ書き出
+# して正式発行する builder・pin 手続きが本 repo に配線されておらず
+# （事前配線テストも存在せず）、`founder_genome_shas` は本改訂（User
+# attestation 実行時点）でも引き続き PENDING のままだった（下記該当欄の
+# reason 参照。捏造 PIN はしない）→ 同日中の
+# issue_founder_genome_document() 新設・founders/ への正式発行・実 raw
+# sha256 での PINNED 化（下記 founder_genome_shas 欄参照）→
+# RUN9-BIRTH-PREP-1 で解消済み〕。
 #
 # 2026-08-25 追記（Codex bot レビュー PR #320 第1巡指摘, P1, 採用, Fix 1）:
 # 上記の anchor_hashes.user binding は「rights_manifest.json 全体」の

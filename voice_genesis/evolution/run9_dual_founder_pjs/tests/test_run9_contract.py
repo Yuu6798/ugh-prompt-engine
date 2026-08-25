@@ -9548,3 +9548,64 @@ def test_fix319_29_bare_tokens_and_free_form_unchanged() -> None:
     # 現行 manifest 全体も引き続き valid
     data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     m.validate_rights_manifest_four_layer(data)
+
+
+# ---------------------------------------------------------------------------
+# PR #321 Codex bot レビュー第1巡対応 — Fix 2（P2）: stale founder-genome
+# blocker の掃討。`founder_genome_shas` が PINNED 化された後も、契約ヘッダ
+# （lines 8-9・91-96 付近）が「genome 文書未生成・pin は PENDING のまま」と
+# 現在形で言い続けており正典 run 記録が内部矛盾していた。現状記述を
+# PINNED 後の事実へ更新し、純粋に歴史的な記述は「〔履歴: … →
+# RUN9-BIRTH-PREP-1 で解消済み〕」形式で保持した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix321_2_founder_genome_shas_are_pinned_not_stale_pending() -> None:
+    """`founder_genome_shas.R9F-01/R9F-02` は RUN9-BIRTH-PREP-1 の正式発行
+    以降 PINNED であり、契約ヘッダの「実体未生成」主張と矛盾していた事実の
+    直接確認（Fix 2 の前提条件）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    contract = yaml.safe_load(contract_text)
+    for founder_id in ("R9F-01", "R9F-02"):
+        entry = contract["founder_genome_shas"][founder_id]
+        assert entry["status"] == "PINNED"
+        assert isinstance(entry["value"], str) and len(entry["value"]) == 64
+
+
+def test_fix321_2_no_stale_present_tense_founder_genome_unissued_claim() -> None:
+    """契約ヘッダに founder genome 文書を「未生成」「配線されていない」と
+    現在形で主張する記述が残っていないこと（Codex bot レビュー PR #321
+    第1巡指摘, P2, 採用, Fix 2）。過度に脆い文字列一致は避け、Fix 2 が
+    是正した具体フレーズのみを要点マーカーとして検査する。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    stale_phrases = (
+        "founder genome 文書の\n# 実体未生成のみ",
+        "その文書を実際に\n# `founders/` へ書き出して正式\n# 発行する builder・pin 手続きはまだ本 repo に配線されていない",
+        "`founder_genome_shas` は本改訂でも\n# 引き続き PENDING のまま（下記該当欄の reason 参照。捏造 PIN はしない）。",
+    )
+    for phrase in stale_phrases:
+        assert phrase not in contract_text, (
+            f"RUN9_CONTRACT.yaml に陳腐化した founder genome blocker 記述が残っている: {phrase!r}"
+        )
+
+
+def test_fix321_2_historical_founder_genome_blocker_marked_superseded() -> None:
+    """是正済みの旧記述が単純削除ではなく「〔履歴: … → RUN9-BIRTH-PREP-1
+    で解消済み〕」形式の superseded 明示で保持されていること（AGENTS.md
+    運用: 純粋に歴史的な記述は削除せず superseded 明示で保持する）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert contract_text.count("RUN9-BIRTH-PREP-1 で解消済み") >= 2
+    assert contract_text.count("〔履歴:") >= 2
+
+
+def test_fix321_2_repo_wide_grep_finds_no_other_stale_genome_unissued_claim() -> None:
+    """RUN9_CONTRACT.yaml + README.md 全体を掃討し、同族の「founder genome
+    文書は未生成/PENDING のまま」という現在形の残存がゼロであることを
+    確認する（凍結文書 = founders/*.json・DESIGN_*.md・POR/DERIVED txt は
+    対象外）。README.md は既に RUN9-BIRTH-PREP-1 時点で「解消済み」節へ
+    整理済み（取消線付き履歴マーカー `~~founder genome 文書の正式発行
+    builder・pin 手続き未配線~~` として保持）のため、現在形の未解消主張が
+    無いことのみ確認する。"""
+    for path in (CONTRACT_PATH, _RUN_DIR / "README.md"):
+        text = path.read_text(encoding="utf-8")
+        assert "founder genome 文書の実体未生成" not in text

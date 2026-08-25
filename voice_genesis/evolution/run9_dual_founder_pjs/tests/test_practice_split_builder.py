@@ -310,3 +310,88 @@ def test_sidecar_rejects_manifest_that_fails_validation(tmp_path: Path) -> None:
     del broken["row_ids"]
     with pytest.raises(m.Run9ValidationError):
         psb.build_acoustic_inventory_sidecar(root, broken)
+
+
+# ---------------------------------------------------------------------------
+# build_acoustic_inventory_sidecar(): row_ids の song_id を corpus_root 配下
+# へ拘束する（PR #321 review 指摘・P2 修正: `manifest` は
+# `validate_practice_split_manifest()` を通過する任意の同形 dict を受理
+# する外部入力であり、`row_ids` の song_id 形式は schema 側で保証されない）
+# ---------------------------------------------------------------------------
+
+
+def _manifest_with_training_song_id(base_manifest: dict, malicious_song_id: str) -> dict:
+    """`base_manifest`（`validate_practice_split_manifest()` を通過する
+    正常 manifest）の `row_ids.training` 先頭 1 件を `malicious_song_id`
+    に差し替えた manifest を返す。差し替え後も `row_ids` は非空文字列
+    リスト・split 間排他という schema 制約を満たし続けるため
+    `validate_practice_split_manifest()` はそのまま通過する——本テストが
+    再現する脅威モデルそのもの（song_id の *形式* は schema 側で検証
+    されない）。"""
+    manifest = dict(base_manifest)
+    row_ids = {k: list(v) for k, v in manifest["row_ids"].items()}
+    row_ids["training"] = [malicious_song_id, *row_ids["training"][1:]]
+    manifest["row_ids"] = row_ids
+    return manifest
+
+
+@pytest.mark.parametrize(
+    "malicious_song_id_factory",
+    [
+        pytest.param(lambda outside_dir: str(outside_dir / "evil"), id="absolute_path"),
+        pytest.param(lambda outside_dir: "../escape", id="parent_traversal"),
+        pytest.param(lambda outside_dir: "nested/song", id="path_separator"),
+    ],
+)
+def test_sidecar_rejects_song_id_escaping_corpus_root_before_any_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, malicious_song_id_factory
+) -> None:
+    """絶対パス・`../` 親ディレクトリ脱出・パス区切りを含む `song_id` は
+    read/existence 判定より前に fail-closed で拒否される（レビュー指摘の
+    `song_id='/tmp/evil'` → `/tmp/evil.lab` と同型の脱出）。corpus_root 外
+    に実在する fixture（本物の .lab/.wav）を置いた上で、計測関数
+    （`_measure_phoneme_classes`/`_measure_pitch_range_hz`）が一切呼ばれ
+    ないことをスパイで直接検証する——ファイルが実在しても読まれずに
+    拒否されることの直接証拠。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    _, manifest = _identity_and_manifest(root)
+
+    # corpus_root 外に、脱出が成功すれば読まれてしまう本物の fixture を置く。
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    _write_song(outside_dir, "evil")
+    # "../escape" 系の脱出先（root の親 = tmp_path 直下）にも fixture を置く。
+    _write_song(tmp_path, "escape")
+
+    malicious_song_id = malicious_song_id_factory(outside_dir)
+    malicious_manifest = _manifest_with_training_song_id(manifest, malicious_song_id)
+    m.validate_practice_split_manifest(malicious_manifest)  # 前提: schema は素通りする
+
+    def _must_not_be_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError(
+            f"measurement function must not be called for escaping song_id={malicious_song_id!r}"
+        )
+
+    monkeypatch.setattr(psb, "_measure_phoneme_classes", _must_not_be_called)
+    monkeypatch.setattr(psb, "_measure_pitch_range_hz", _must_not_be_called)
+
+    with pytest.raises(m.Run9ValidationError, match="escape corpus_root"):
+        psb.build_acoustic_inventory_sidecar(root, malicious_manifest)
+
+
+def test_sidecar_accepts_normal_corpus_derived_song_ids_regression(tmp_path: Path) -> None:
+    """corpus enumeration 由来の正常な song_id（`pjsNNN`）は
+    `_reject_song_ids_outside_corpus_root()` を通過し、sidecar が
+    通常どおり構築できることの正常系回帰。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    _, manifest = _identity_and_manifest(root)
+    sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
+    assert {entry["song_id"] for entry in sidecar["songs"]} == set(song_ids)
+
+
+def test_song_id_is_lexically_safe_rejects_unsafe_forms() -> None:
+    assert psb._song_id_is_lexically_safe("pjs001") is True  # noqa: SLF001
+    for unsafe in ("/tmp/evil", "../escape", "nested/song", "nested\\song", "", ".", ".."):
+        assert psb._song_id_is_lexically_safe(unsafe) is False  # noqa: SLF001

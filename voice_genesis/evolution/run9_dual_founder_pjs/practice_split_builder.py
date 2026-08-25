@@ -396,6 +396,61 @@ def _measure_pitch_range_hz(wav_path: Path) -> Optional[Dict[str, float]]:
     }
 
 
+def _song_id_is_lexically_safe(song_id: str) -> bool:
+    """`song_id` が corpus_root 配下の単純な相対単純名（`pjsNNN` 相当）で
+    あるかを語彙的に判定する（P2 修正・PR #321 review: `song_id` は
+    パス区切りを含まず・`..` 成分を持たず・絶対パスでなく・空でないこと。
+    過度に `pjsNNN` 命名へ結合せず汎用の語彙検査とする——
+    `donor_bank_utau._wav_ref_is_basename()` と同じ判定パターン）。
+    """
+    if not song_id:
+        return False
+    if "/" in song_id or "\\" in song_id:
+        return False
+    if song_id in (".", ".."):
+        return False
+    lexical = Path(song_id)
+    if lexical.is_absolute() or ".." in lexical.parts:
+        return False
+    return lexical.name == song_id
+
+
+def _reject_song_ids_outside_corpus_root(song_ids: Sequence[str], root: Path) -> None:
+    """`song_ids`（`build_acoustic_inventory_sidecar()` の `manifest`
+    引数由来 — 外部入力）を read/existence 判定より**前**に二段ガードする:
+    ①`_song_id_is_lexically_safe()` による語彙的拒否 ②`resolved =
+    (root / song_id).resolve()` が `root.resolve()` 配下にあることの包含
+    検査（`Path.is_relative_to`）。`manifest` は
+    `validate_practice_split_manifest()` を通過する任意の同形 dict を
+    受理するため、`row_ids` の `song_id` が絶対パスや `../` 脱出（例:
+    `song_id='/tmp/evil'` → `/tmp/evil.lab`）を含むと `Path` 結合が
+    `corpus_root` を破棄/上方解決し、宣言外のファイルを読んで sidecar に
+    記録してしまう（PR #321 review 指摘）。1 件でも違反すれば fail-closed
+    で `Run9ValidationError`（部分読み取りをしない——呼び出し元は本関数が
+    正常終了した場合にのみ read/exists へ進んでよい）。
+    """
+    root_resolved = root.resolve()
+    violations: List[str] = []
+    for song_id in song_ids:
+        if not _song_id_is_lexically_safe(song_id):
+            violations.append(song_id)
+            continue
+        candidate = root / song_id
+        try:
+            resolved = candidate.resolve(strict=False)
+        except (OSError, RuntimeError):
+            violations.append(song_id)
+            continue
+        if not resolved.is_relative_to(root_resolved):
+            violations.append(song_id)
+    if violations:
+        raise m.Run9ValidationError(
+            "build_acoustic_inventory_sidecar(): manifest row_ids contain song_id(s) that "
+            f"escape corpus_root {root_resolved} (rejected as path traversal / absolute "
+            f"path / symlink escape, before any read or existence check): {sorted(violations)}"
+        )
+
+
 def build_acoustic_inventory_sidecar(
     corpus_root: str | Path, manifest: Mapping[str, Any]
 ) -> Dict[str, Any]:
@@ -410,11 +465,24 @@ def build_acoustic_inventory_sidecar(
     確認するのみ、変更しない）——型的分離: 本関数は manifest を消費する
     が、`build_practice_split_manifest()` は本関数（または `librosa`）を
     一切呼ばない一方向のデータフロー。
+
+    `manifest` は外部入力（`validate_practice_split_manifest()` を通過する
+    任意の同形 dict を受理する）であるため、`row_ids` の各 `song_id` は
+    read/existence 判定より前に `_reject_song_ids_outside_corpus_root()`
+    で corpus_root 包含検査を通す（PR #321 review 指摘・P2 修正）。
     """
     manifest_dict = dict(manifest)
     m.validate_practice_split_manifest(manifest_dict)
     root = Path(corpus_root)
     row_ids = manifest_dict["row_ids"]
+    _reject_song_ids_outside_corpus_root(
+        [
+            song_id
+            for split_name in ("training", "validation", "sealed_holdout")
+            for song_id in row_ids[split_name]
+        ],
+        root,
+    )
     songs: List[Dict[str, Any]] = []
     for split_name in ("training", "validation", "sealed_holdout"):
         for song_id in row_ids[split_name]:
