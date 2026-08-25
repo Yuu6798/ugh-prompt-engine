@@ -659,6 +659,28 @@ workdir="$(mktemp -d)"
 export PJS_WORKDIR="$workdir"
 ```
 
+**依存導入**（Codex bot レビュー PR #323 第13巡指摘, P2, 採用, Fix 13 —
+clean Python 環境では上記ブロックの実行後も `gdown` を含め依存が一切
+未導入のため、下記 step 1 の `import gdown` はもちろん、step 4c の
+`import practice_split_builder`（→ `run9_schema` を import）が
+`ModuleNotFoundError` で止まる。producer tree の実ソースを本セッションで
+確認したところ、生成経路（`build_practice_split_manifest` /
+`dump_practice_split_manifest_bytes`）が要求する top-level import は
+`practice_split_builder.py` の `numpy` と `run9_schema.py` の `PyYAML`
+（`pyproject.toml:13-25` の該当行）のみ——`librosa` は acoustic inventory
+sidecar 専用関数 `_measure_pitch_range_hz` 内のローカル import で、本
+生成経路には到達しない。以下のいずれかを、このステップ列より先に実行
+する）:
+```bash
+# 推奨: リポジトリ標準の導入手順（repo root で実行。CLAUDE.md Commands
+# 節の `pip install -e ".[dev]"` と同一コマンド）
+pip install -e ".[dev]"
+
+# 代替（最小・実ソース確認済みの閉包のみ。リポジトリ全体の開発環境が
+# 不要で本レシピの実行だけが目的の場合）
+pip install numpy pyyaml gdown
+```
+
 1. **取得**（`gdown` 未導入なら `pip install gdown`。ミラー入手でも可
    ——要件は次段の sha 一致のみ。Codex bot レビュー PR #323 第11巡指摘,
    P2, 採用, Fix 11 — 出力先を repo root 直下の相対パスから `$workdir`

@@ -10324,3 +10324,92 @@ def test_fix323_12_readme_in_place_shortcut_removed_worktree_step_mandatory() ->
     ) in readme_text
     assert "〔履歴: Fix 8（第8巡）で" in readme_text
     assert "第12巡で解消〕" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第13巡1件（P2, 上限超過後だが3分類の新しい
+# 具体経路として採用, Fix 13）: clean Python 環境でレシピを逐語実行すると、
+# 「取得」ステップの説明が `gdown` の導入のみを案内する一方、step 4c が
+# import する `practice_split_builder`（→ `run9_schema`）の依存
+# （numpy / PyYAML）を導入する手順が存在しなかった。読者は展開まで完走した
+# 後で初めて `ModuleNotFoundError` に遭遇し、依存導入が必要だったことを
+# 逆算しなければならない——依存欠落による文書化フローの実行不能という
+# 致命的バグ類型の新しい具体経路（Fix 12 の「近道注記の撤去」とは独立の
+# 欠陥）。producer tree の実ソースを確認し（practice_split_builder.py の
+# top-level import は numpy のみ、run9_schema.py の top-level import は
+# PyYAML のみ、librosa は acoustic inventory sidecar 専用の関数内
+# import で本レシピの生成経路には現れない）、README プリアンブルへ
+# 「推奨: `pip install -e ".[dev]"`」「代替（最小）: `pip install numpy
+# pyyaml gdown`」の2段構え依存導入ステップを明記した。venv でのクリーン
+# 環境実測（依存導入前は ModuleNotFoundError、導入後は生成 + sha 一致まで
+# 成功）を本セッションで実施済み（scratchpad/pjs_r14_venv_verify.txt）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_13_readme_dependency_install_step_present_before_download() -> None:
+    """README.md のレシピプリアンブルに、`gdown` 導入案内より前（または
+    同ブロック内）で明示的な依存導入ステップ（推奨 = `pip install
+    -e ".[dev]"`、代替 = 最小閉包 `pip install numpy pyyaml gdown`）が
+    存在し、その位置が「取得」ステップ（gdown.download 呼び出し）より
+    前であること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    dep_idx = readme_text.index("**依存導入**")
+    download_idx = readme_text.index("gdown.download(")
+    assert dep_idx < download_idx, (
+        "依存導入ステップが取得ステップ（gdown.download）より後にある——"
+        "clean 環境の読者が取得ステップに到達する前に依存導入を終えられない"
+    )
+    assert 'pip install -e ".[dev]"' in readme_text
+    assert "pip install numpy pyyaml gdown" in readme_text
+
+
+def test_fix323_13_readme_dependency_closure_matches_verified_imports() -> None:
+    """README.md の依存導入節が、producer tree の実ソースを確認した結果
+    （`practice_split_builder.py` は numpy のみ、`run9_schema.py` は
+    PyYAML のみを top-level import し、librosa は acoustic inventory
+    sidecar 専用のローカル import で生成経路には現れない）と整合する
+    文言を含むこと。実ソース側も matching import 構造を保っていること
+    （閉包の記述が実装からドリフトしていないことの回帰確認）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert (
+        "top-level import は\n"
+        "`practice_split_builder.py` の `numpy` と `run9_schema.py` の `PyYAML`"
+    ) in readme_text
+    assert "_measure_pitch_range_hz" in readme_text
+
+    builder_text = (_RUN_DIR / "practice_split_builder.py").read_text(encoding="utf-8")
+    schema_text = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    builder_lines = builder_text.splitlines()
+    schema_lines = schema_text.splitlines()
+
+    def _top_level_third_party_imports(lines: list[str]) -> list[str]:
+        found = []
+        for line in lines:
+            if line.startswith(("import ", "from ")) and not line.startswith(
+                ("import run9_schema", "from __future__")
+            ):
+                found.append(line.strip())
+        return found
+
+    builder_imports = _top_level_third_party_imports(builder_lines)
+    assert any("numpy" in line for line in builder_imports)
+    assert not any("librosa" in line for line in builder_imports), (
+        "librosa が practice_split_builder.py の top-level import に"
+        "現れている——README の依存閉包記述（librosa 不要）とズレている"
+    )
+    schema_imports = _top_level_third_party_imports(schema_lines)
+    assert any("yaml" in line for line in schema_imports)
+
+
+def test_fix323_13_readme_dependency_steps_appear_exactly_once() -> None:
+    """依存導入ステップの代替（最小閉包）行が README 本文中で重複なく
+    1回だけ記述されていること（コピペミスや二重記載の回帰防止）。推奨
+    コマンド `pip install -e ".[dev]"` は文中で自身を指す説明コメント
+    （CLAUDE.md Commands 節との同一性の言及）と実行行の計2箇所に現れる
+    設計のため、こちらは2回一致で確認する。実測（依存導入前は
+    ModuleNotFoundError、導入後は生成 + pin sha 一致まで成功）は本
+    セッションで実施済み——生ログは scratchpad/pjs_r14_venv_verify.txt
+    （リポジトリ外・監査目的のみで pytest 対象外）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert readme_text.count('pip install -e ".[dev]"') == 2
+    assert readme_text.count("pip install numpy pyyaml gdown") == 1
