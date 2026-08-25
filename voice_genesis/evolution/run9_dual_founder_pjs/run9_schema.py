@@ -608,6 +608,17 @@ def validate_lesson_record(data: Mapping[str, Any]) -> None:
     machine-dependent 作業として VG-L0 ハーネス実装待ちのため、本関数は
     構造・語彙のみを検証する。fail-closed（未知キー拒否・欠落キーの
     デフォルト補完なし）。
+
+    provenance 系フィールド（performance_source/voice_source/
+    performance_author/composition_source/recording_source、および
+    rights_manifest/provenance_manifest 参照欄）は rev 0.4 語彙予約
+    （User 帰属専用 `<PENDING_USER_ATTESTATION>` / 外部第三者未解決
+    `<UNRESOLVED_EXTERNAL>`）を適用する——全て PJS 側（外部第三者）の
+    事実を記述する欄のため `<PENDING_USER_ATTESTATION>` を fail-closed
+    で拒否し、未解決は `<UNRESOLVED_EXTERNAL>` のみ許容する
+    （`validate_rights_manifest_four_layer()` の provenance ブロック
+    誤用拒否と同じ規約 — Codex bot レビュー PR #319 第7巡指摘 Fix 15、
+    P2、採用）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"lesson record must be an object, got {type(data).__name__}")
@@ -636,6 +647,18 @@ def validate_lesson_record(data: Mapping[str, Any]) -> None:
         if not isinstance(value, str) or not value.strip():
             raise Run9ValidationError(
                 f"lesson record.{field} must be a non-empty string, got {value!r}"
+            )
+        # rev 0.4 語彙予約（User 帰属専用 `<PENDING_USER_ATTESTATION>` /
+        # 外部第三者未解決 `<UNRESOLVED_EXTERNAL>`）を LessonRecord
+        # provenance 系フィールドへ適用する——本節の5フィールドは全て
+        # PJS 側（外部第三者）の事実を記述する欄であり、User 帰属欄専用の
+        # `<PENDING_USER_ATTESTATION>` を fail-closed で拒否する
+        # （Codex bot レビュー PR #319 第7巡指摘 Fix 15、P2、採用）。
+        if value == _RIGHTS_MANIFEST_PENDING_USER_ATTESTATION:
+            raise Run9ValidationError(
+                f"lesson record.{field} is an external-fact field (PJS 側の事実欄); "
+                f"{_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} is reserved for "
+                f"User-attributable fields — use {_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} instead"
             )
 
     extracted_traits = data["extracted_traits"]
@@ -673,6 +696,16 @@ def validate_lesson_record(data: Mapping[str, Any]) -> None:
         if not isinstance(value, str) or not value.strip():
             raise Run9ValidationError(
                 f"lesson record.{field} must be a non-empty string (reference/pin), got {value!r}"
+            )
+        # 現行意味論（非空 str の参照/pin）は維持しつつ、同じ語彙予約規約へ
+        # 整合させる——参照/pin 欄に User 帰属専用 attestation sentinel が
+        # 誤って混入するのを同じ fail-closed 経路で拒否する（Fix 15 と
+        # 同型）。
+        if value == _RIGHTS_MANIFEST_PENDING_USER_ATTESTATION:
+            raise Run9ValidationError(
+                f"lesson record.{field} is a reference/pin field, not an attestation value; "
+                f"{_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} is reserved for "
+                f"User-attributable fields — use {_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} instead"
             )
 
 
@@ -4723,12 +4756,22 @@ def extract_voice_identity_rights_layer(four_layer_rights_manifest: Mapping[str,
     読み替える。返り値の他のキー（`entries`/`usage_grants`/`attestation`
     等）は layer の内容をそのまま透過する（コピーであり、呼び出し元が
     書き換えても入力 `four_layer_rights_manifest` には影響しない）。
+
+    抽出は `validate_rights_manifest_four_layer()` による4層全体検証を
+    内包する（fail-closed）——`performance_rights`/`composition_rights`/
+    `recording_master_rights` のいずれかが欠落・不正な manifest からは
+    `voice_identity_rights` 単独が構造的に妥当でも抽出そのものを拒否する。
+    RUN9_CONTRACT.yaml documented フロー「層を抽出して legacy verifier へ
+    渡す」が他の必須層を静かに失ったまま donor rights だけ検証できて
+    しまう抜け道を塞ぐ（Codex bot レビュー PR #319 第7巡指摘 Fix 14、P2、
+    採用）。
     """
     if not isinstance(four_layer_rights_manifest, dict):
         raise Run9ValidationError(
             "four-layer rights manifest must be an object, got "
             f"{type(four_layer_rights_manifest).__name__}"
         )
+    validate_rights_manifest_four_layer(four_layer_rights_manifest)
     top_schema = four_layer_rights_manifest.get("schema")
     if top_schema != SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER:
         raise Run9ValidationError(

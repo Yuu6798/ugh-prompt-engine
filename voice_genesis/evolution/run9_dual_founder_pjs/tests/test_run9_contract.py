@@ -6875,8 +6875,8 @@ def _valid_lesson_record() -> Dict[str, Any]:
         "lesson_id": "LS-R9-PJS-001",
         "performance_source": "PJS",
         "voice_source": "PJS_corpus_ver1.1",
-        "performance_author": "<PENDING_USER_ATTESTATION>",
-        "composition_source": "<PENDING_USER_ATTESTATION>",
+        "performance_author": "<UNRESOLVED_EXTERNAL>",
+        "composition_source": "<UNRESOLVED_EXTERNAL>",
         "recording_source": "PJS_corpus_ver1.1",
         "extracted_traits": ["relative_F0", "duration", "timing", "dynamics", "articulation"],
         "explicitly_excluded_identity_traits": list(m.IDENTITY_EXCLUDED_TRAIT_VOCAB),
@@ -6922,6 +6922,68 @@ def test_rev04_lesson_record_rejects_wrong_schema() -> None:
     record["schema"] = "run9-lesson-record/9.9"
     with pytest.raises(m.Run9ValidationError, match="schema"):
         m.validate_lesson_record(record)
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第7巡対応 — Fix 15（P2）: LessonRecord
+# provenance の語彙予約適用。performance_source/voice_source/
+# performance_author/composition_source/recording_source（+
+# rights_manifest/provenance_manifest 参照欄）は全て外部第三者（PJS 側）の
+# 事実を記述する欄であり、User 帰属専用 `<PENDING_USER_ATTESTATION>` を
+# 拒否し `<UNRESOLVED_EXTERNAL>` のみ未解決値として許容する。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "performance_source",
+        "voice_source",
+        "performance_author",
+        "composition_source",
+        "recording_source",
+    ],
+)
+def test_fix319_15_rejects_user_attestation_sentinel_in_provenance_field(field: str) -> None:
+    """負例（parametrize）: provenance 系5フィールドいずれも User 帰属専用
+    sentinel `<PENDING_USER_ATTESTATION>` を拒否し、`<UNRESOLVED_EXTERNAL>`
+    への誘導メッセージを含むこと（Codex bot レビュー PR #319 第7巡指摘,
+    Fix 15, P2, 採用）。"""
+    record = _valid_lesson_record()
+    record[field] = "<PENDING_USER_ATTESTATION>"
+    with pytest.raises(m.Run9ValidationError, match="UNRESOLVED_EXTERNAL"):
+        m.validate_lesson_record(record)
+
+
+@pytest.mark.parametrize("field", ["rights_manifest", "provenance_manifest"])
+def test_fix319_15_rejects_user_attestation_sentinel_in_reference_field(field: str) -> None:
+    """負例: rights_manifest/provenance_manifest 参照欄も同じ語彙規約へ
+    整合させたことの確認——現行意味論（非空 str の参照/pin）は保ちつつ、
+    User 帰属専用 sentinel の混入だけは拒否する。"""
+    record = _valid_lesson_record()
+    record[field] = "<PENDING_USER_ATTESTATION>"
+    with pytest.raises(m.Run9ValidationError, match="UNRESOLVED_EXTERNAL"):
+        m.validate_lesson_record(record)
+
+
+def test_fix319_15_accepts_unresolved_external_in_provenance_field() -> None:
+    """正例: 未解決の外部第三者事実は `<UNRESOLVED_EXTERNAL>` で表現でき、
+    受理されること（`_valid_lesson_record()` fixture の
+    performance_author/composition_source が実例)。"""
+    m.validate_lesson_record(_valid_lesson_record())  # 例外を投げないことの確認
+
+
+def test_fix319_15_valid_fixture_no_longer_uses_stale_pending_user_attestation_value() -> None:
+    """`_valid_lesson_record()` 正例 fixture が stale な
+    `<PENDING_USER_ATTESTATION>` 値を含まないことの直接確認——Fix 15 の
+    語彙予約適用に伴う必須追随（放置すると正例が赤化する）。"""
+    record = _valid_lesson_record()
+    for field in (
+        "performance_source", "voice_source", "performance_author",
+        "composition_source", "recording_source",
+        "rights_manifest", "provenance_manifest",
+    ):
+        assert record[field] != "<PENDING_USER_ATTESTATION>"
 
 
 # --- rights_manifest 4層構造の validator（変更1・2） -------------------------
@@ -7716,3 +7778,72 @@ def test_fix319_13_repo_wide_grep_finds_no_stale_present_tense_legacy_schema_top
     )
     assert "run9-rights-manifest/2.0" in domain_raw
     assert "schema run9-user-donor-rights/1.0）が起草済み" not in domain_raw
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第7巡対応 — Fix 14（P2）: 層抽出前の4層全体
+# 検証の必須化。旧 extract_voice_identity_rights_layer() はトップレベル
+# schema と voice_identity_rights しか見ておらず、他3層を削除した
+# manifest でも抽出が成功し verify_rights_manifest_against_ledger() を
+# 通過できていた——抽出は validate_rights_manifest_four_layer() を必須
+# 内包する fail-closed 経路へ強化した。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "layer_name",
+    ["performance_rights", "composition_rights", "recording_master_rights"],
+)
+def test_fix319_14_extract_rejects_manifest_missing_other_required_layer(
+    layer_name: str,
+) -> None:
+    """負例（3パターン）: voice_identity_rights 自体は無傷でも、他の必須層
+    （performance_rights/composition_rights/recording_master_rights）の
+    いずれかが manifest から削除されていれば
+    `extract_voice_identity_rights_layer()` が拒否すること——旧経路では
+    donor rights 層だけ見て抽出に成功し、legacy verifier が他3層の欠落に
+    気づかないまま通過していた（Codex bot レビュー PR #319 第7巡指摘,
+    Fix 14, P2, 採用）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data[layer_name]
+    with pytest.raises(m.Run9ValidationError, match="missing required top-level key"):
+        m.extract_voice_identity_rights_layer(data)
+
+
+def test_fix319_14_extract_still_succeeds_and_passes_legacy_verifier_on_valid_manifest() -> None:
+    """正例（回帰）: 現行 rights_manifest.json（4層すべて valid）からの
+    抽出は引き続き成功し、`verify_rights_manifest_against_ledger()` も
+    従来どおり通過すること——Fix 14 の必須検証追加が正常系を壊していない
+    ことの確認。"""
+    raw = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    flat = m.extract_voice_identity_rights_layer(raw)
+    ledger = m.load_user_donor_ledger_json(
+        (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
+    )
+    m.verify_rights_manifest_against_ledger(flat, ledger)  # 例外を投げないことの確認
+    assert len(flat["entries"]) == 17
+
+
+def test_fix319_14_extract_calls_full_four_layer_validation_not_only_layer_shape() -> None:
+    """他3層の構造は保ったまま `recording_master_rights.interpretations`
+    のような4層検証固有のチェック対象を壊した manifest でも抽出が拒否
+    されること——検証がトップレベルキー存在チェックのみに留まらず
+    `validate_rights_manifest_four_layer()` を丸ごと呼んでいることの
+    直接確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["interpretations"]
+    with pytest.raises(m.Run9ValidationError, match="interpretations"):
+        m.extract_voice_identity_rights_layer(data)
+
+
+def test_fix319_14_extract_docstring_and_contract_document_the_four_layer_gate() -> None:
+    """docstring と RUN9_CONTRACT.yaml の抽出フロー記述の双方に、抽出が
+    4層全体検証を内包する旨が追記されていることの確認。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    extract_start = source.index("def extract_voice_identity_rights_layer(")
+    extract_end = source.index("def validate_rights_manifest_four_layer(")
+    extract_body = source[extract_start:extract_end]
+    assert "validate_rights_manifest_four_layer" in extract_body
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    reason = yaml.safe_load(contract_text)["dataset_manifest_sha"]["reason"]
+    assert "validate_rights_manifest_four_layer" in reason

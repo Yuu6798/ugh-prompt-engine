@@ -228,7 +228,12 @@ dataset_manifest_sha:
     voice_identity_rights 層へ `schema_legacy` 付きで nested 収容されており、
     legacy verifier（verify_rights_manifest_against_ledger()）へ渡す際は
     extract_voice_identity_rights_layer() で当該層を抽出してフラット化する
-    — Codex bot レビュー PR #319 第6巡指摘, Fix 13, P2, 採用）だが、
+    — Codex bot レビュー PR #319 第6巡指摘, Fix 13, P2, 採用）。抽出は
+    validate_rights_manifest_four_layer() による4層全体検証を内包し
+    （fail-closed）、performance_rights/composition_rights/
+    recording_master_rights のいずれかが欠落・不正な manifest からは
+    voice_identity_rights 単独が構造的に妥当でも抽出そのものを拒否する
+    — Codex bot レビュー PR #319 第7巡指摘, Fix 14, P2, 採用）だが、
     voice_identity_rights.rights_class/consent_status =
     PENDING_USER_ATTESTATION のまま — User attest 完了まで User 由来データを
     学習に用いる権利来歴が確定しない（DESIGN_RUN9_REVISION_0.2.md 改訂4）。
