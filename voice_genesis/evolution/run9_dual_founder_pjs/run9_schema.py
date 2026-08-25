@@ -1242,6 +1242,31 @@ def compute_file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _compute_canonical_pin_sha256(obj: Any) -> str:
+    """`compute_file_sha256()` docstring が文書化する「正規形（canonical）
+    規約」（`anchor_hashes.af0` / `metric_space_sha` / `anchor_hashes.user`
+    の3 pin が使う規約）を実装するヘルパー: `json.dumps(obj, sort_keys=True,
+    ensure_ascii=False, separators=(",", ":"))` で正規化してから sha256 する。
+
+    `_canonical_json()`（本ファイル冒頭付近、`ensure_ascii=True` —
+    genome_id/`Run9IdentityDomain.content_digest()` 等の直列化規約）とは
+    **意図的に別物**——`ensure_ascii` の差は、対象が非 ASCII 文字を含まない
+    限り出力が一致するが、`extract_user_identity_attestation_projection()`
+    の返り値は `attestation.statement`（User の日本語宣誓文）を含むため、
+    `_canonical_json()`（`ensure_ascii=True`）を誤用すると af0/
+    metric_space_sha/user の既存 pin 値（テストの `_sha256_canonical_json()`
+    ヘルパーが検証する `ensure_ascii=False` 規約で計算済み）と異なる値を
+    生成してしまう。af0/metric_space_sha は現状この関数を経由せず外部で
+    手動計算・pin されるのみだが（対象は本 repo 外のアーティファクトの
+    形状 pin であり内容再検証は R9-G1 tooling の職務のまま — Fix 7 の
+    非対称設計理由、`build_founder()` docstring 参照）、user anchor は
+    Fix 7（PR #320 第5巡指摘, P1, 採用）により `build_founder()` が
+    消費経路で毎回この関数を呼んで実際に再計算する。
+    """
+    canonical = json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # 枝別書込境界の検証（rev 0.3 改訂A、User 外部レビュー PR #317 P1-1）
 # ---------------------------------------------------------------------------
@@ -3406,6 +3431,40 @@ def _validate_domain_invariants(domain: Run9IdentityDomain) -> None:
         )
 
 
+def _verify_user_anchor_matches_rights_manifest(
+    domain: Run9IdentityDomain, rights_manifest: Mapping[str, Any]
+) -> None:
+    """`rights_manifest`（4層 rights_manifest 生 dict）から
+    `extract_user_identity_attestation_projection()` を実行し、その正規形
+    sha256 が `domain.anchor_hashes["user"]` と厳密一致することを検証する
+    （Codex bot レビュー PR #320 第5巡指摘, P1, 採用, Fix 7）。
+
+    `extract_user_identity_attestation_projection()` 自体が課す2つの
+    fail-closed 前提条件（(i) attestation が attested 形態 (ii)
+    `usage_grants.run9_identity_anchor == "granted"` — Fix 6）を、本関数を
+    経由するあらゆる呼び出し（`build_founder()` 経由）で毎回強制する。
+    さらに、projection の hash が pin 値と一致しない場合（stale pin・
+    manifest の改変・単純な取り違え等）も拒否する——値の実物照合が
+    「テスト時のみ」ではなく「genome_id 構築の実経路」へ昇格したことの
+    核心（Fix 7 の直接目的）。
+    """
+    if not isinstance(rights_manifest, Mapping):
+        raise Run9ValidationError(
+            f"rights_manifest must be an object (Mapping), got {type(rights_manifest).__name__}"
+        )
+    projection = extract_user_identity_attestation_projection(rights_manifest)
+    projection_sha = _compute_canonical_pin_sha256(projection)
+    expected = domain.anchor_hashes.get("user")
+    if projection_sha != expected:
+        raise Run9ValidationError(
+            "build_founder(): the supplied rights_manifest's identity-attestation "
+            "projection hash does not match domain.anchor_hashes['user'] — the pinned user "
+            "anchor is stale relative to the supplied manifest (or the supplied manifest is "
+            f"not the one the domain was pinned against). expected={expected!r} "
+            f"computed={projection_sha!r}"
+        )
+
+
 def _tri_crossover(
     *,
     domain: Run9IdentityDomain,
@@ -3413,12 +3472,23 @@ def _tri_crossover(
     voice_id: str,
     profile_label: str,
     performance_seed: int,
+    rights_manifest: Mapping[str, Any],
 ) -> Run9FounderGenome:
     """TRI_CROSSOVER/1.0 純関数（DESIGN_RUN9 §9.1）。run9 domain では anchor
     が基底ベクトルのため child coords = normalize(weights) そのもの。
     random_search なし・乱数不使用（完全決定論）。本関数は先頭アンダー
     スコアで非公開 — 外部から任意 weights を注入できる公開経路は
-    `build_founder(domain, founder_id)` のみ（§27 item 22）。
+    `build_founder(domain, founder_id, rights_manifest=...)` のみ（§27
+    item 22）。
+
+    `rights_manifest` の消費（Fix 7）は domain 側の既存検証
+    （`_validate_domain_invariants()` / `is_pinned()`）の**後**に行う——
+    未 pin・偽装 domain を渡した既存の負例群（is_pinned()==False・forged
+    domain_id 等）は従来どおり domain 側のエラーメッセージで拒否され、
+    rights_manifest の中身には依存しない。genome_id の計算ロジック
+    （coords 正規化・`_compute_founder_genome_id()`）は本 Fix で一切
+    変更しない——同一入力（domain/weights/voice_id/profile_label/
+    performance_seed）に対する genome_id 値は不変。
     """
     _validate_domain_invariants(domain)
     if not domain.is_pinned():
@@ -3428,6 +3498,7 @@ def _tri_crossover(
             "execution order requires the domain (step 3) to be frozen before founder generation "
             "(step 4)"
         )
+    _verify_user_anchor_matches_rights_manifest(domain, rights_manifest)
     w_af0, w_ritsu, w_user = weights
     coords = normalize_run9_coords(w_af0, w_ritsu, w_user)
     _validate_run9_coords_value(coords)
@@ -3446,11 +3517,51 @@ def _tri_crossover(
     )
 
 
-def build_founder(domain: Run9IdentityDomain, founder_id: str) -> Run9FounderGenome:
+def build_founder(
+    domain: Run9IdentityDomain, founder_id: str, *, rights_manifest: Mapping[str, Any]
+) -> Run9FounderGenome:
     """RUN9 Founder genome を構築する唯一の公開経路。`founder_id` は
     `{"R9F-01", "R9F-02"}` のいずれかのみを受け付け、凍結重みテーブル
     `_FOUNDER_TABLE` から重みを引く。任意の weights を外部から注入する
     公開 API は存在しない（DESIGN_RUN9 §27 item 22 / §9.4）。
+
+    `rights_manifest`（4層 rights_manifest 生 dict、`inputs/
+    rights_manifest.json` をロードしたもの）は**デフォルト値のない必須
+    keyword-only 引数**（Codex bot レビュー PR #320 第5巡指摘, P1, 採用,
+    Fix 7）: `extract_user_identity_attestation_projection(rights_
+    manifest)` を実行し、その正規形 sha256 が `domain.anchor_hashes
+    ["user"]` と厳密一致することを毎回検証する
+    （`_verify_user_anchor_matches_rights_manifest()` 参照）。不一致・
+    取消（`usage_grants.run9_identity_anchor` が `"granted"` でない）・
+    pending 形態（`attestation.attested` が `True` でない）はいずれも
+    `Run9ValidationError` で拒否する。
+
+    **経緯（Fix 6→Fix 7）**: Fix 6 は `extract_user_identity_attestation_
+    projection()` へ取消検知のガードを追加したが、当時の呼び出し元は
+    テストと docstring のみで、`build_founder()` 自身は
+    `domain.anchor_hashes["user"]`（保存済み64hex文字列）のみを消費し
+    `rights_manifest.json` を一切参照しなかった——取消済み・stale な
+    manifest でも `build_founder()` は成功し続ける非接続状態だった
+    （第4巡回帰テスト `test_fix320_6_gate_is_projection_extraction_not_
+    build_founder_or_gate_state` が当時「これが期待どおりの挙動」として
+    明文化していたが、この記述は本 Fix 7 で撤回・是正した——実効性の
+    無いガードだったため）。Fix 7 は `rights_manifest` を必須引数化する
+    ことで、genome_id 構築の実経路（この関数）自体に検証を配線した。
+
+    **非対称の設計理由**（af0/ritsu/metric_space_sha との比較）:
+    af0/ritsu/metric_space_sha の pin は取消意味論を持たない外部
+    アーティファクト（波音リツ配布 zip・AF-P0 canonical manifest・
+    identity metric space 仕様）への**形状**pin であり、その内容が
+    「後から取消される」という遷移軸自体が存在しない——内容の実物照合は
+    引き続き R9-G1 tooling（machine-dependent、未実装）の職務のまま
+    変更しない。user anchor だけが「in-repo の可変文書
+    （`inputs/rights_manifest.json`）+ User が事後に取消し得る許諾
+    （`usage_grants.run9_identity_anchor`）」を源泉とするため、唯一
+    この anchor だけが「pin 後に取消され得る」という性質を持つ——本
+    Fix はこの非対称性そのものに対応するものであり、`gate_state()`/
+    `Run9IdentityDomain.is_pinned()` を含む他の gate 判定はいずれも
+    構造述語のまま変更しない（repo 全体の「gate=構造述語、実体照合=
+    R9-G1 tooling」原則は af0/ritsu/metric_space_sha 側で不変）。
     """
     if founder_id not in _FOUNDER_TABLE:
         raise Run9ValidationError(
@@ -3459,14 +3570,17 @@ def build_founder(domain: Run9IdentityDomain, founder_id: str) -> Run9FounderGen
     weights, profile_label = _FOUNDER_TABLE[founder_id]
     return _tri_crossover(
         domain=domain, weights=weights, voice_id=founder_id, profile_label=profile_label,
-        performance_seed=SHARED_PERFORMANCE_SEED,
+        performance_seed=SHARED_PERFORMANCE_SEED, rights_manifest=rights_manifest,
     )
 
 
-def founder_genome_from_dict(data: Any, *, domain: Run9IdentityDomain) -> Run9FounderGenome:
+def founder_genome_from_dict(
+    data: Any, *, domain: Run9IdentityDomain, rights_manifest: Mapping[str, Any]
+) -> Run9FounderGenome:
     """JSON dict から Run9FounderGenome を再構築する。fail-closed（未知
-    キー拒否）+ 構造検証の後、`build_founder(domain, voice_id)` で正典を
-    再構築し `to_dict()`（genome_id 含む）が完全一致することを要求する
+    キー拒否）+ 構造検証の後、`build_founder(domain, voice_id,
+    rights_manifest=rights_manifest)` で正典を再構築し `to_dict()`
+    （genome_id 含む）が完全一致することを要求する
     （改ざん検出。Codex bot レビュー PR #315 指摘3採用: 従来は voice_id /
     coords / genome_id 相互の整合を検証しておらず、「R9F-01 ラベル +
     R9F-02 座標 + 任意の16hex genome_id」のような偽装 genome document が
@@ -3561,12 +3675,13 @@ def founder_genome_from_dict(data: Any, *, domain: Run9IdentityDomain) -> Run9Fo
     # 宣言値と完全一致することを要求する。voice_id/coords が食い違えば
     # coords 不一致で、genome_id だけが差し替えられていれば genome_id
     # 不一致で検出される。
-    canonical = build_founder(domain, voice_id)
+    canonical = build_founder(domain, voice_id, rights_manifest=rights_manifest)
     if declared.to_dict() != canonical.to_dict():
         raise Run9ValidationError(
             "genome document does not match the canonical reconstruction from "
-            f"build_founder(domain, {voice_id!r}) — declared={declared.to_dict()!r} "
-            f"canonical={canonical.to_dict()!r} (tampering or corruption)"
+            f"build_founder(domain, {voice_id!r}, rights_manifest=...) — "
+            f"declared={declared.to_dict()!r} canonical={canonical.to_dict()!r} "
+            "(tampering or corruption)"
         )
     return canonical
 

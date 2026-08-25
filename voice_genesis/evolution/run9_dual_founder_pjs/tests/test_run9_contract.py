@@ -48,13 +48,44 @@ AF0_FOUNDER_MANIFEST_PATH = _FOUNDRY_DIR / "artificial_founder" / "results" / "A
 
 
 # ---------------------------------------------------------------------------
-# 共有 fixture: pinned な合成 domain（64hex ダミー値）
+# 共有 fixture: pinned な合成 domain（64hex ダミー値）+ 有効な rights_manifest
+# （Fix 7, Codex bot レビュー PR #320 第5巡指摘, P1, 採用: build_founder() が
+# `rights_manifest` を必須 keyword-only 引数化したため、以降 build_founder()/
+# founder_genome_from_dict() を呼ぶ全テストが有効な manifest を渡す必要が
+# ある。af0/ritsu は取消意味論を持たない外部アーティファクトの形状 pin
+# のため引き続きダミー値のままでよいが、user だけは
+# `extract_user_identity_attestation_projection()` が実際に受理する
+# 内容と、その正規形 sha256 が一致していなければならない——本 fixture
+# domain の user anchor は現行 `inputs/rights_manifest.json` の projection
+# 正規形 sha256 で計算する（ハードコードしない: 同ファイルが将来改訂
+# されても自動的に追随する）。
 # ---------------------------------------------------------------------------
+
+
+def _valid_test_rights_manifest() -> Dict[str, Any]:
+    """`inputs/rights_manifest.json`（現行 attested + anchor grant granted
+    状態）を読み込んだフレッシュなコピーを返す——Fix 7 以降、
+    `build_founder()`/`founder_genome_from_dict()` を呼ぶテストが共有する
+    「有効な」manifest。呼び出しごとに新規ロードする（テスト間の可変
+    状態共有・書き換え混入を避ける——各テストは必要なら
+    `copy.deepcopy` 済みの dict を自由に改変できる）。"""
+    return json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+@pytest.fixture()
+def valid_rights_manifest() -> Dict[str, Any]:
+    return _valid_test_rights_manifest()
 
 
 def _pinned_fixture_domain() -> m.Run9IdentityDomain:
     return m.build_run9_identity_domain(
-        anchor_hashes={"af0": "a" * 64, "ritsu": "b" * 64, "user": "c" * 64},
+        anchor_hashes={
+            "af0": "a" * 64,
+            "ritsu": "b" * 64,
+            "user": _sha256_canonical_json(
+                m.extract_user_identity_attestation_projection(_valid_test_rights_manifest())
+            ),
+        },
         metric_space_sha="d" * 64,
     )
 
@@ -216,11 +247,11 @@ def test_item10_pjs_key_in_coords_document_rejected() -> None:
     （Run9Coords 自体が af0/ritsu/user の3フィールドしか持てないため、
     build_founder() 経由では原理的に到達不能 — from_dict 読込経路で検証する）。"""
     domain = _pinned_fixture_domain()
-    good = m.build_founder(domain, "R9F-01").to_dict()
+    good = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()).to_dict()
     tampered = copy.deepcopy(good)
     tampered["coords"] = {"af0": 0.6, "ritsu": 0.3, "pjs": 0.1}
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(tampered, domain=domain)
+        m.founder_genome_from_dict(tampered, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 # ---------------------------------------------------------------------------
@@ -229,13 +260,13 @@ def test_item10_pjs_key_in_coords_document_rejected() -> None:
 
 
 def test_item11_r9f01_weights_exactly_0p6_0p3_0p1(pinned_domain: m.Run9IdentityDomain) -> None:
-    g = m.build_founder(pinned_domain, "R9F-01")
+    g = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     assert (g.coords.af0, g.coords.ritsu, g.coords.user) == (0.6, 0.3, 0.1)
     assert g.profile_label == "AF0_DOMINANT"
 
 
 def test_item12_r9f02_weights_exactly_0p1_0p3_0p6(pinned_domain: m.Run9IdentityDomain) -> None:
-    g = m.build_founder(pinned_domain, "R9F-02")
+    g = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert (g.coords.af0, g.coords.ritsu, g.coords.user) == (0.1, 0.3, 0.6)
     assert g.profile_label == "USER_DOMINANT"
 
@@ -246,8 +277,8 @@ def test_item12_r9f02_weights_exactly_0p1_0p3_0p6(pinned_domain: m.Run9IdentityD
 
 
 def test_item13_shared_performance_seed_identical(pinned_domain: m.Run9IdentityDomain) -> None:
-    g1 = m.build_founder(pinned_domain, "R9F-01")
-    g2 = m.build_founder(pinned_domain, "R9F-02")
+    g1 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert g1.performance_seed == g2.performance_seed == 909001 == m.SHARED_PERFORMANCE_SEED
 
 
@@ -259,8 +290,8 @@ def test_item13_shared_performance_seed_identical(pinned_domain: m.Run9IdentityD
 def test_item14_genome_id_deterministic_same_input(pinned_domain: m.Run9IdentityDomain) -> None:
     """item 14: 同一 domain + 同一 founder_id → genome_id バイト一致
     （2回呼び出し）。"""
-    a = m.build_founder(pinned_domain, "R9F-01")
-    b = m.build_founder(pinned_domain, "R9F-01")
+    a = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    b = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     assert a.genome_id == b.genome_id
 
 
@@ -269,9 +300,9 @@ def test_item14_genome_id_stable_through_canonical_json_roundtrip(
 ) -> None:
     """item 14 補足: 正規形 JSON 経由の再構築（to_dict -> json.dumps ->
     json.loads -> founder_genome_from_dict）でも genome_id が一致する。"""
-    original = m.build_founder(pinned_domain, "R9F-01")
+    original = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     text = json.dumps(original.to_dict(), sort_keys=True)
-    reconstructed = m.founder_genome_from_dict(json.loads(text), domain=pinned_domain)
+    reconstructed = m.founder_genome_from_dict(json.loads(text), domain=pinned_domain, rights_manifest=_valid_test_rights_manifest())
     assert reconstructed.genome_id == original.genome_id
 
 
@@ -281,8 +312,8 @@ def test_item14_genome_id_stable_through_canonical_json_roundtrip(
 
 
 def test_item15_founder_genome_ids_are_distinct(pinned_domain: m.Run9IdentityDomain) -> None:
-    g1 = m.build_founder(pinned_domain, "R9F-01")
-    g2 = m.build_founder(pinned_domain, "R9F-02")
+    g1 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert g1.genome_id != g2.genome_id
     assert g1.voice_id != g2.voice_id
 
@@ -293,8 +324,8 @@ def test_item15_founder_genome_ids_are_distinct(pinned_domain: m.Run9IdentityDom
 
 
 def test_item16_skill_state_is_default_neutral(pinned_domain: m.Run9IdentityDomain) -> None:
-    g1 = m.build_founder(pinned_domain, "R9F-01")
-    g2 = m.build_founder(pinned_domain, "R9F-02")
+    g1 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert g1.skill_state == "DEFAULT_NEUTRAL"
     assert g2.skill_state == "DEFAULT_NEUTRAL"
 
@@ -303,7 +334,7 @@ def test_item16_genome_dict_has_no_pjs_lesson_derived_field(pinned_domain: m.Run
     """item 16 補足: genome dict のフィールド集合に PJS lesson 由来の
     キー（lesson_id / teacher_reference 等）が存在しない（構造的保証 —
     Run9FounderGenome のフィールド定義そのものに含まれない）。"""
-    g = m.build_founder(pinned_domain, "R9F-01").to_dict()
+    g = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()).to_dict()
     forbidden_substrings = ("lesson", "teacher", "pjs")
     for key in g:
         lowered = key.lower()
@@ -336,16 +367,25 @@ def test_item22_no_public_weight_adjustment_api() -> None:
         assert not leaked, f"public callable {name!r} exposes a coordinate/weight injection param: {leaked}"
 
 
-def test_item22_build_founder_signature_is_domain_and_founder_id_only() -> None:
-    """item 22 直接検査: `build_founder` のシグネチャが (domain, founder_id)
-    の2引数のみであること。"""
-    params = list(inspect.signature(m.build_founder).parameters.keys())
-    assert params == ["domain", "founder_id"]
+def test_item22_build_founder_signature_is_domain_founder_id_and_rights_manifest_only() -> None:
+    """item 22 直接検査: `build_founder` のシグネチャが `(domain, founder_id,
+    *, rights_manifest)` の3引数のみであること（Codex bot レビュー PR #320
+    第5巡指摘, P1, 採用, Fix 7 により `rights_manifest` が必須 keyword-only
+    引数として追加された——weights/coords を直接渡す公開経路が引き続き
+    存在しないことは本テストの主張と別（`test_item22_no_public_weight_
+    adjustment_api` が forbidden_params で直接検査する）。`rights_manifest`
+    が keyword-only（デフォルト値なし）であることも確認する——省略可能な
+    optional 化は fail-open 経路になるため禁止（Fix 7 設計判定）。"""
+    sig = inspect.signature(m.build_founder)
+    assert list(sig.parameters.keys()) == ["domain", "founder_id", "rights_manifest"]
+    rights_manifest_param = sig.parameters["rights_manifest"]
+    assert rights_manifest_param.kind == inspect.Parameter.KEYWORD_ONLY
+    assert rights_manifest_param.default is inspect.Parameter.empty
 
 
 def test_item22_unknown_founder_id_rejected(pinned_domain: m.Run9IdentityDomain) -> None:
     with pytest.raises(m.Run9ValidationError):
-        m.build_founder(pinned_domain, "R9F-03")
+        m.build_founder(pinned_domain, "R9F-03", rights_manifest=_valid_test_rights_manifest())
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +399,7 @@ def test_item40_contract_has_no_total_score_field(contract_raw: Dict[str, Any]) 
 
 
 def test_item40_genome_dict_has_no_total_score_field(pinned_domain: m.Run9IdentityDomain) -> None:
-    g = m.build_founder(pinned_domain, "R9F-01").to_dict()
+    g = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()).to_dict()
     canonical = json.dumps(g).lower().replace("_", "")
     assert "totalscore" not in canonical
 
@@ -551,7 +591,7 @@ def test_unpinned_domain_rejects_build_founder() -> None:
     })
     assert domain.is_pinned() is False
     with pytest.raises(m.Run9ValidationError):
-        m.build_founder(domain, "R9F-01")
+        m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
 
 
 def test_unpinned_domain_placeholder_is_structurally_valid() -> None:
@@ -579,8 +619,8 @@ def test_unpinned_domain_placeholder_is_structurally_valid() -> None:
 
 def test_pinned_fixture_domain_succeeds(pinned_domain: m.Run9IdentityDomain) -> None:
     assert pinned_domain.is_pinned() is True
-    g1 = m.build_founder(pinned_domain, "R9F-01")
-    g2 = m.build_founder(pinned_domain, "R9F-02")
+    g1 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert g1.genome_id and g2.genome_id
 
 
@@ -748,7 +788,7 @@ def test_fix2_metric_space_sha_placeholder_blocks_is_pinned_and_build_founder() 
     )
     assert domain.is_pinned() is False
     with pytest.raises(m.Run9ValidationError):
-        m.build_founder(domain, "R9F-01")
+        m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
 
 
 # ---------------------------------------------------------------------------
@@ -769,11 +809,11 @@ def test_fix3_voice_id_coords_mismatch_rejected() -> None:
     ような偽装 genome document は builder 照合（`build_founder(domain,
     voice_id)` との `to_dict()` 完全一致要求）で検出される。"""
     domain = _pinned_fixture_domain()
-    r9f02 = m.build_founder(domain, "R9F-02")
+    r9f02 = m.build_founder(domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     forged = r9f02.to_dict()
     forged["voice_id"] = "R9F-01"  # 座標・profile_label は R9F-02 のまま、ラベルだけ差し替え
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix3_tampered_genome_id_rejected() -> None:
@@ -781,12 +821,12 @@ def test_fix3_tampered_genome_id_rejected() -> None:
     差し替えた genome document は builder 照合で検出される（構造的には
     正規の16hexだが再計算値と不一致）。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["genome_id"] = "f" * 16
     assert forged["genome_id"] != genuine.genome_id
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix3_correctly_signed_genome_document_still_roundtrips() -> None:
@@ -794,8 +834,8 @@ def test_fix3_correctly_signed_genome_document_still_roundtrips() -> None:
     正典 Run9FounderGenome と完全一致する（Fix 3 が正常系まで壊していない
     ことの確認）。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-02")
-    reconstructed = m.founder_genome_from_dict(genuine.to_dict(), domain=domain)
+    genuine = m.build_founder(domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
+    reconstructed = m.founder_genome_from_dict(genuine.to_dict(), domain=domain, rights_manifest=_valid_test_rights_manifest())
     assert reconstructed.to_dict() == genuine.to_dict()
 
 
@@ -950,7 +990,7 @@ def test_fix6_forged_domain_id_rejected_by_build_founder() -> None:
     )
     assert forged_domain.is_pinned() is True  # is_pinned() 単体は形式しか見ないため通る
     with pytest.raises(m.Run9ValidationError):
-        m.build_founder(forged_domain, "R9F-01")
+        m.build_founder(forged_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix6_validate_domain_invariants_accepts_genuine_domain(
@@ -960,7 +1000,7 @@ def test_fix6_validate_domain_invariants_accepts_genuine_domain(
     `_validate_domain_invariants()` を素通りする（正常系まで壊していない
     ことの確認）。"""
     m._validate_domain_invariants(pinned_domain)  # 例外を投げないことの確認
-    g = m.build_founder(pinned_domain, "R9F-01")
+    g = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     assert g.genome_id
 
 
@@ -1083,10 +1123,10 @@ def test_fix9_build_founder_twice_yields_stable_genome_id_and_is_unaffected_by_m
 ) -> None:
     """Fix 9 の実効性確認: 同一 domain から2回 `build_founder()` を呼んでも
     genome_id は不変（anchor set を差し替える経路が閉じているため）。"""
-    g1 = m.build_founder(pinned_domain, "R9F-01")
+    g1 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     with pytest.raises(TypeError):
         pinned_domain.anchor_hashes["af0"] = "f" * 64  # type: ignore[index]  # 差し替えを試みても失敗する
-    g2 = m.build_founder(pinned_domain, "R9F-01")
+    g2 = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     assert g1.genome_id == g2.genome_id
 
 
@@ -1213,7 +1253,7 @@ def test_fix11_directly_instantiated_domain_with_float_precision_rejected_by_bui
     )
     assert forged_domain.is_pinned() is True
     with pytest.raises(m.Run9ValidationError):
-        m.build_founder(forged_domain, "R9F-01")
+        m.build_founder(forged_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix11_is_strict_int_helper_excludes_bool_and_float() -> None:
@@ -1236,11 +1276,11 @@ def test_fix12_coords_string_value_rejected() -> None:
     `founder_genome_from_dict()` が非正準文書を正典として返す契約矛盾に
     なっていた。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["coords"] = {"af0": "0.6", "ritsu": "0.3", "user": "0.1"}
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix12_coords_bool_value_rejected() -> None:
@@ -1248,11 +1288,11 @@ def test_fix12_coords_bool_value_rejected() -> None:
     genome document も拒否される（bool は int のサブクラスのため、
     `isinstance(value, (int, float))` だけの判定だと素通りしてしまう）。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["coords"] = {"af0": True, "ritsu": 0.3, "user": 0.1}
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix12_coords_int_value_is_accepted_and_converted_to_float() -> None:
@@ -1348,11 +1388,11 @@ def test_fix14_parents_dict_masquerading_as_list_rejected() -> None:
     実装の `list(parents_raw) != [...]` はキー列挙で一致してしまい素通り
     していた。`isinstance(list)` を先行させたことで拒否される。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["parents"] = {"AF0": 1, "RITSU": 1, "USER_DONOR": 1}
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix14_performance_seed_float_variant_rejected() -> None:
@@ -1360,11 +1400,11 @@ def test_fix14_performance_seed_float_variant_rejected() -> None:
     `909001.0`（float）を渡すと拒否される（`909001.0 == 909001` は真だが
     `_is_strict_int()` が float を先に排除する）。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["performance_seed"] = 909001.0
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix14_genetic_generation_bool_variant_rejected() -> None:
@@ -1372,11 +1412,11 @@ def test_fix14_genetic_generation_bool_variant_rejected() -> None:
     `True` を渡すと拒否される（`True == 1` は真だが `_is_strict_int()` が
     bool を先に排除する）。"""
     domain = _pinned_fixture_domain()
-    genuine = m.build_founder(domain, "R9F-01")
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     forged = genuine.to_dict()
     forged["genetic_generation"] = True
     with pytest.raises(m.Run9ValidationError):
-        m.founder_genome_from_dict(forged, domain=domain)
+        m.founder_genome_from_dict(forged, domain=domain, rights_manifest=_valid_test_rights_manifest())
 
 
 def test_fix14_run_id_and_experiment_id_and_claim_strength_require_str(
@@ -2843,28 +2883,38 @@ def test_fix320_6_revoked_manifest_still_passes_four_layer_validation() -> None:
 
 
 def test_fix320_6_gate_is_projection_extraction_not_build_founder_or_gate_state() -> None:
-    """(c) 「gate」側の直接テスト: 取消後に anchor pin を（再）検証しようと
-    すると、実効ゲートである `extract_user_identity_attestation_
-    projection()` が確実に落ちること——これが取消を検知する唯一の実効
-    ゲートであることの確認（`gate_state()`/`build_founder()`/
-    `Run9IdentityDomain.is_pinned()` は rights_manifest.json の内容を
-    一切評価しない構造述語のまま据え置いた設計判定に対応する回帰）。
-    取消後も `domain.anchor_hashes["user"]` の pin 値自体は不変のため
-    `is_pinned()`/`build_founder()` は成功し続けるが、その pin 値を
-    取消後の manifest から独立に再導出・再検証しようとする経路
-    （projection 抽出）だけが fail-closed で機能することを示す。"""
+    """(c) 「gate」側の直接テスト。**Fix 7（Codex bot レビュー PR #320
+    第5巡指摘, P1, 採用）による記述の撤回・是正**: 本テストは元々
+    （Fix 6 時点）「取消後も `domain.anchor_hashes['user']` の pin 値
+    自体は不変のため `is_pinned()`/`build_founder()` は rights_manifest.
+    json を一切参照せず成功し続ける」ことを期待どおりの挙動として明文化
+    していたが、指摘のとおりこれは実効性の無いガード（呼び出し元が
+    テスト/docs のみ）だった。Fix 7 で `build_founder()` へ
+    `rights_manifest` が必須引数化され、内部で `extract_user_identity_
+    attestation_projection()` を実行するようになったため、**取消後の
+    manifest を渡すと `build_founder()` 自身が今度は確実に失敗する**
+    ——本テストのアサーションを反転する（`gate_state()`/
+    `Run9IdentityDomain.is_pinned()` 自体は rights_manifest.json の
+    内容を一切評価しない構造述語のまま据え置き。これは変わらない —
+    `is_pinned()` は pin 値の形状のみを見る）。"""
     revoked = _revoked_anchor_grant_rights_manifest_fixture()
-
-    # 取消後も pin 値自体（domain 側）は不変のため is_pinned()/build_founder()
-    # は rights_manifest.json を一切参照せず成功し続ける（構造述語のまま）。
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
-    assert domain.is_pinned() is True
-    m.build_founder(domain, "R9F-01")  # 例外を投げないことの確認
 
-    # 一方、取消後の manifest から anchor hash を独立に再検証しようとする
-    # 経路（唯一の実効ゲート）は fail-closed で拒否する。
+    # is_pinned()（domain 側の pin 値の形状のみを見る構造述語）は
+    # rights_manifest.json の内容を一切参照しないため、取消後も引き続き
+    # True のまま——これは Fix 7 でも変更していない。
+    assert domain.is_pinned() is True
+
+    # 一方、build_founder() は Fix 7 により rights_manifest を消費経路へ
+    # 取り込んだため、取消後の manifest を渡すと確実に失敗する
+    # （Fix 6 時点は「成功し続ける」だったが、本 Fix でこれを反転した）。
     with pytest.raises(m.Run9ValidationError, match="run9_identity_anchor"):
-        m.extract_user_identity_attestation_projection(revoked)
+        m.build_founder(domain, "R9F-01", rights_manifest=revoked)
+
+    # 有効な（取消されていない）manifest を渡せば引き続き成功する。
+    m.build_founder(
+        domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()
+    )  # 例外を投げないことの確認
 
 
 def test_fix320_6_anchor_hash_and_genome_id_unchanged_by_this_fix() -> None:
@@ -2879,10 +2929,116 @@ def test_fix320_6_anchor_hash_and_genome_id_unchanged_by_this_fix() -> None:
     )
     rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     assert domain.anchor_hashes["user"] == _projection_hash(rights)
-    g1 = m.build_founder(domain, "R9F-01")
-    g2 = m.build_founder(domain, "R9F-02")
+    g1 = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert g1.genome_id == "66f420672a154283"
     assert g2.genome_id == "63f4b8f24b827cd4"
+
+
+# ---------------------------------------------------------------------------
+# PR #320 Codex bot レビュー第5巡対応 — Fix 7（P1）: Fix 6 のガード
+# （`extract_user_identity_attestation_projection()` の取消/pending 検知）
+# を実消費経路（`build_founder()`）へ配線する。`rights_manifest` を
+# デフォルト値のない必須 keyword-only 引数として追加し、projection の
+# 正規形 sha256 が `domain.anchor_hashes.user` と厳密一致することも
+# 検証する（stale pin・manifest 改変の検出を「テスト時のみ」から
+# 「genome_id 構築の実経路」へ昇格）。genome_id の計算ロジック自体は
+# 無変更——本節のテストは主に「本 Fix 前後で genome_id が不変」ことを
+# 反復して確認する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix320_7_build_founder_genome_id_unchanged_after_wiring(
+    valid_rights_manifest: Dict[str, Any],
+) -> None:
+    """(a) 既存の `build_founder()` 呼び出し箇所を全て実 manifest 渡しへ
+    更新した後も、実 domain（`domains/identity_domain_run9_v1.json`）から
+    計算される genome_id 期待値が**不変**であることの直接確認
+    （`test_fix320_6_anchor_hash_and_genome_id_unchanged_by_this_fix` と
+    同型だが、本節では Fix 7 固有の観点として明示的に保持する——
+    `rights_manifest` 引数の追加という**署名変更**それ自体が genome_id
+    計算へ影響しないことの確認）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    g1 = m.build_founder(domain, "R9F-01", rights_manifest=valid_rights_manifest)
+    g2 = m.build_founder(domain, "R9F-02", rights_manifest=valid_rights_manifest)
+    assert g1.genome_id == "66f420672a154283"
+    assert g2.genome_id == "63f4b8f24b827cd4"
+    # 決定論: 同一入力で再構築しても同じ genome_id（署名変更後も維持）。
+    assert m.build_founder(
+        domain, "R9F-01", rights_manifest=valid_rights_manifest
+    ).genome_id == g1.genome_id
+
+
+def test_fix320_7_build_founder_rejects_revoked_anchor_grant() -> None:
+    """(b) 取消 manifest（attested 形 + anchor grant not_granted）を渡すと
+    `build_founder()` が `Run9ValidationError` になること——Fix 6 時点の
+    `test_fix320_6_gate_is_projection_extraction_not_build_founder_or_
+    gate_state`（当時「build_founder は成功し続ける」と明文化していた）
+    のアサーションを Fix 7 で反転したことの単体確認。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    revoked = _revoked_anchor_grant_rights_manifest_fixture()
+    with pytest.raises(m.Run9ValidationError, match="run9_identity_anchor"):
+        m.build_founder(domain, "R9F-01", rights_manifest=revoked)
+
+
+def test_fix320_7_build_founder_rejects_pending_attestation() -> None:
+    """(c) pending 形態（attested=false）の manifest を渡すと
+    `build_founder()` が `Run9ValidationError` になること——Fix 6 の
+    attested 前提条件も消費経路（build_founder）で毎回強制されることの
+    確認。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    pending = _pending_rights_manifest_fixture()
+    with pytest.raises(m.Run9ValidationError, match="attested"):
+        m.build_founder(domain, "R9F-01", rights_manifest=pending)
+
+
+def test_fix320_7_build_founder_rejects_manifest_hash_mismatch() -> None:
+    """(d) attested 形 + anchor grant granted であっても、`entries` の
+    1件改変等により projection の正規形 sha256 が `domain.anchor_hashes
+    ['user']` と一致しない manifest を渡すと `build_founder()` が
+    `Run9ValidationError` になること——stale pin・manifest 改変の検出が
+    「テスト時のみ」から「genome_id 構築の実経路」へ昇格したことの核心
+    テスト。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    mismatched = _valid_test_rights_manifest()
+    mismatched["voice_identity_rights"]["entries"][0]["duration_sec"] = 999.0
+    with pytest.raises(m.Run9ValidationError, match="anchor_hashes"):
+        m.build_founder(domain, "R9F-01", rights_manifest=mismatched)
+
+
+def test_fix320_7_build_founder_rights_manifest_argument_is_required() -> None:
+    """(e) `rights_manifest` を省略した呼び出しは `TypeError` になること
+    （署名レベルの fail-closed 確認——デフォルト値のない必須 keyword-only
+    引数であり、None 許容やオプション化のような fail-open 経路は
+    存在しない）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    with pytest.raises(TypeError):
+        m.build_founder(domain, "R9F-01")  # type: ignore[call-arg]
+
+
+def test_fix320_7_founder_genome_from_dict_rights_manifest_argument_is_required() -> None:
+    """(e) 兄弟関数 `founder_genome_from_dict()` も同様に `rights_manifest`
+    が必須 keyword-only 引数であり、省略すると `TypeError` になること
+    （「manifest を渡せない呼び出し形が型的に存在しない」という Fix 7
+    の呼び出し規約を、build_founder() の唯一の内部呼び出し元でも
+    確認する）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    valid = _valid_test_rights_manifest()
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=valid)
+    with pytest.raises(TypeError):
+        m.founder_genome_from_dict(genuine.to_dict(), domain=domain)  # type: ignore[call-arg]
+
+
+def test_fix320_7_founder_genome_from_dict_rejects_revoked_anchor_grant() -> None:
+    """founder_genome_from_dict() 経由でも取消 manifest は拒否されること
+    （build_founder() への配線が兄弟関数からも実効することの end-to-end
+    確認）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    valid = _valid_test_rights_manifest()
+    genuine = m.build_founder(domain, "R9F-01", rights_manifest=valid)
+    revoked = _revoked_anchor_grant_rights_manifest_fixture()
+    with pytest.raises(m.Run9ValidationError, match="run9_identity_anchor"):
+        m.founder_genome_from_dict(genuine.to_dict(), domain=domain, rights_manifest=revoked)
 
 
 def test_revision02_gate_remains_blocked_after_af0_ritsu_backbone_pins(
@@ -2907,14 +3063,14 @@ def test_run9_attest20260825_build_founder_now_succeeds_for_both_founders() -> N
     「両 Founder は異なる座標を持つ」の機械証明）。"""
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
     assert domain.is_pinned() is True
-    g1 = m.build_founder(domain, "R9F-01")
-    g2 = m.build_founder(domain, "R9F-02")
+    g1 = m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    g2 = m.build_founder(domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert m._GENOME_ID_RE.match(g1.genome_id)
     assert m._GENOME_ID_RE.match(g2.genome_id)
     assert g1.genome_id != g2.genome_id
     # 決定論: 同一 domain から再構築しても同じ genome_id。
-    assert m.build_founder(domain, "R9F-01").genome_id == g1.genome_id
-    assert m.build_founder(domain, "R9F-02").genome_id == g2.genome_id
+    assert m.build_founder(domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()).genome_id == g1.genome_id
+    assert m.build_founder(domain, "R9F-02", rights_manifest=_valid_test_rights_manifest()).genome_id == g2.genome_id
 
 
 # --- README 更新の整合確認 --------------------------------------------------
@@ -3511,8 +3667,8 @@ def test_por_revision_pinned_domain_and_founder_still_work_under_0_3(
     """pinned_domain フィクスチャ経由の build_founder が rev 0.3 でも
     従来どおり動作し、genome_id が決定論的であること（同じ入力なら同じ
     genome_id — この巡の変更が genome 計算に一切触れていないことの実証）。"""
-    genome_a = m.build_founder(pinned_domain, "R9F-01")
-    genome_b = m.build_founder(pinned_domain, "R9F-01")
+    genome_a = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    genome_b = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
     assert genome_a.genome_id == genome_b.genome_id
     assert genome_a.to_dict() == genome_b.to_dict()
 
@@ -4256,11 +4412,11 @@ def test_invariant_tri_crossover_and_genome_id_unchanged(
     既知の pinned_domain 入力から従来と同じ genome_id が出ることを確認
     する（回帰検出のための固定値照合ではなく、決定論の実証）。"""
     assert m.OPERATOR_ID == "TRI_CROSSOVER/1.0"
-    genome_a = m.build_founder(pinned_domain, "R9F-01")
-    genome_b = m.build_founder(pinned_domain, "R9F-02")
+    genome_a = m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest())
+    genome_b = m.build_founder(pinned_domain, "R9F-02", rights_manifest=_valid_test_rights_manifest())
     assert genome_a.genome_id != genome_b.genome_id
     # 決定論: 同じ入力から再度呼び出しても同じ genome_id。
-    assert m.build_founder(pinned_domain, "R9F-01").genome_id == genome_a.genome_id
+    assert m.build_founder(pinned_domain, "R9F-01", rights_manifest=_valid_test_rights_manifest()).genome_id == genome_a.genome_id
 
 
 def test_invariant_design_revision_doc_sha256_updated_and_matches_file(
