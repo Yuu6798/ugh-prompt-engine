@@ -34,7 +34,7 @@ REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.4.md"
 REVISION_0_2_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
 REVISION_0_3_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.3.md"
 POR_ADJUDICATION_PATH = _RUN_DIR / "POR_CONCEPT_ADJUDICATION_20260824.txt"
-EXTERNAL_REVIEW_AQUEST_PATH = _RUN_DIR / "EXTERNAL_REVIEW_AQUEST_20260825.txt"
+DERIVED_DESIGN_CHANGES_PATH = _RUN_DIR / "DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt"
 POR_UPLOAD_SOURCE_PATH = Path(
     "/root/.claude/uploads/e505c1c2-c4ad-588b-a1b2-258051a522de/"
     "4cdd727c-RUN9_v0.2_PoR_Concept_Adjudication_20260824.txt"
@@ -1541,7 +1541,7 @@ def test_revision03_old_0_2_contract_rejected(contract_raw: Dict[str, Any]) -> N
 
 
 def test_revision04_old_0_3_contract_rejected(contract_raw: Dict[str, Any]) -> None:
-    """rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部レビュー AQUEST 山崎信英氏
+    """rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
     の採用）: 旧 "0.3" を宣言する contract も意図どおり拒否される。"""
     tampered = copy.deepcopy(contract_raw)
     tampered["design_revision"] = "0.3"
@@ -1854,20 +1854,23 @@ def test_revision02_af0_vs_bundle_hash_convention_difference_documented() -> Non
     assert "compute_file_sha256" in schema_source
 
 
-def test_revision02_backbone_runtime_bundle_sha_pending_while_render_commit_unconfirmed(
+def test_revision02_backbone_runtime_bundle_sha_pinned_via_run9_render_code_commit(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """rev 0.4（DESIGN_RUN9_REVISION_0.4.md「User裁定a/bの記録」の b）:
-    2026-08-25 の User attestation により bundle 内 `render_code_commit`
-    の status が `INFERRED_UNCONFIRMED` → `USER_ATTESTED` へ確定し、連動
-    して `backbone_runtime_bundle_sha` も PENDING から PINNED へ昇格した
+    """rev 0.4（DESIGN_RUN9_REVISION_0.4.md「User裁定a/bの記録」の b）→
+    2026-08-25 同日中の追加 User 裁定①による是正後: `backbone_runtime_bundle_sha`
+    が PINNED である根拠は独立の前方宣言欄 `run9_render_code_commit`
+    （status: `DECLARED_FOR_RUN9`）の確定であり、`render_code_commit`
+    （RUN6 の歴史的 export provenance）は `INFERRED_UNCONFIRMED` のまま
+    でよい——歴史的事実は遡って attest しない方針のため両者は独立
     （`backbone_checkpoint_sha` は元々直接記録4件一致のため PINNED の
     まま——対象は別欄）。テスト名は歴史的に revision02_ prefix のまま
     （rename ではなく assertion のみ更新する既存の repo 慣習）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    assert bundle["render_code_commit"]["status"] == "USER_ATTESTED"
-    assert bundle["render_code_commit"]["attestation"]["attested_by"] == "User"
-    assert bundle["render_code_commit"]["attestation"]["attested_at"] == "2026-08-25"
+    assert bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+    assert bundle["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9"
+    assert bundle["run9_render_code_commit"]["declaration"]["declared_by"] == "User"
+    assert bundle["run9_render_code_commit"]["declaration"]["declared_at"] == "2026-08-25"
 
     field = contract_raw["backbone_runtime_bundle_sha"]
     assert field["status"] == "PINNED"
@@ -1877,20 +1880,21 @@ def test_revision02_backbone_runtime_bundle_sha_pending_while_render_commit_unco
 def test_revision02_render_code_commit_status_and_bundle_sha_status_are_consistent(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """負例的整合検査: bundle json の `render_code_commit.status` が
-    `INFERRED_UNCONFIRMED` である間は、contract の
-    `backbone_runtime_bundle_sha.status` が `PINNED` になっていないこと
-    （両者の食い違いを機械的に検出する）。将来 render_code_commit が
-    確定（direct record または User attestation）して status が変わったら、
-    このテストも合わせて更新が必要になる — その追随漏れ自体を検出する
-    ためのテストでもある。"""
+    """負例的整合検査（2026-08-25 User 追加裁定①で意味論を更新）: contract
+    の `backbone_runtime_bundle_sha.status` が `PINNED` であるとき、その
+    根拠であるべき bundle 内 `run9_render_code_commit.status` が
+    `DECLARED_FOR_RUN9` になっていること（両者の食い違いを機械的に検出
+    する）。旧版は `render_code_commit`（歴史的推定）の status を根拠と
+    見なしていたが、追加裁定①により根拠は独立の前方宣言欄へ移った——
+    `render_code_commit` が `INFERRED_UNCONFIRMED` のままであることは
+    もはや不整合ではない。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     bundle_field_status = contract_raw["backbone_runtime_bundle_sha"]["status"]
-    if bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED":
-        assert bundle_field_status != "PINNED", (
-            "backbone_runtime_bundle_sha は PINNED だが、bundle 内 render_code_commit は "
-            "依然 INFERRED_UNCONFIRMED — 未確定の推論値を含む bundle を PINNED として "
-            "契約に取り込んでしまっている"
+    if bundle_field_status == "PINNED":
+        assert bundle["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9", (
+            "backbone_runtime_bundle_sha は PINNED だが、bundle 内 "
+            "run9_render_code_commit は DECLARED_FOR_RUN9 になっていない — "
+            "PINNED 判定の根拠が bundle 内で裏付けられていない"
         )
 
 
@@ -1928,17 +1932,23 @@ def test_revision02_backbone_runtime_bundle_sha_matches_actual_file_once_pinned(
 
 
 def test_revision02_render_code_commit_value_and_confirmation_metadata_present() -> None:
-    """昇格後も値自体・根拠（inference_basis、無改変で保持）・attestation
-    記録がいずれも保持されていること（rev 0.4 User attestation）。"""
+    """2026-08-25 User 追加裁定①による差し戻し後も、値自体・根拠
+    （inference_basis、無改変で保持）・history（昇格→差し戻し両イベント
+    の記録）がいずれも保持されていること。attestation はもはや本欄には
+    無い（実体的な意味は run9_render_code_commit.declaration へ移った —
+    別テスト test_rev04_run9_render_code_commit_declared_for_run9_with_ruling_reference
+    参照）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     rcc = bundle["render_code_commit"]
     assert rcc["commit_full"] == "e2307b1080b00f3999702ce9017cfd75c7f862fe"
     assert rcc["commit_short"] == "e2307b1"
-    assert rcc["status"] == "USER_ATTESTED"
+    assert rcc["status"] == "INFERRED_UNCONFIRMED"
     assert rcc["confirmation_required"]
     assert rcc["inference_basis"]
-    assert rcc["attestation"]["attested_by"] == "User"
-    assert rcc["attestation"]["statement"]
+    assert "attestation" not in rcc
+    history = rcc["history"]
+    assert len(history) == 2
+    assert all(h["date"] == "2026-08-25" for h in history)
     # RUN6 export 記録自体には commit が明記されていない事実が明文化されていること
     # （note は無改変ではないが、この根拠自体は消えていないことを確認する）。
     assert "s5_record" in rcc["note"]
@@ -6527,8 +6537,8 @@ def test_fix37_domain_metric_space_sha_differs_from_pre_round17_value() -> None:
 
 
 # ---------------------------------------------------------------------------
-# rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部レビュー AQUEST 山崎信英氏
-# `EXTERNAL_REVIEW_AQUEST_20260825.txt` の採用 + 2026-08-25 User 追加裁定
+# rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
+# `DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt` の採用 + 2026-08-25 User 追加裁定
 # 「確認メモ / RUN9 用語整理」）対応テスト。
 # ---------------------------------------------------------------------------
 
@@ -6536,19 +6546,19 @@ REVISION_0_4_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.4.md"
 
 
 def test_rev04_external_review_byte_pin() -> None:
-    """外部レビュー原文（EXTERNAL_REVIEW_AQUEST_20260825.txt）の byte-pin
+    """派生設計変更メモ（DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt）の byte-pin
     テスト——既存 POR pin テスト（`test_revision03_por_adjudication_sha256_pin_matches_actual_file`
     等）と同型: sha256 一致 + 無改変であることの確認。"""
-    assert EXTERNAL_REVIEW_AQUEST_PATH.exists()
-    assert _sha256_file(EXTERNAL_REVIEW_AQUEST_PATH) == (
+    assert DERIVED_DESIGN_CHANGES_PATH.exists()
+    assert _sha256_file(DERIVED_DESIGN_CHANGES_PATH) == (
         "a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091"
     )
 
 
 def test_rev04_external_review_declares_design_revision_0_2() -> None:
-    """外部レビュー原文は自称 'design_revision 0.2' — 番号注記の前提事実の
+    """派生設計変更メモは自称 'design_revision 0.2' — 番号注記の前提事実の
     直接確認（本文書は書き換えない）。"""
-    text = EXTERNAL_REVIEW_AQUEST_PATH.read_text(encoding="utf-8")
+    text = DERIVED_DESIGN_CHANGES_PATH.read_text(encoding="utf-8")
     assert "design_revision 0.2" in text
 
 
@@ -6570,7 +6580,7 @@ def test_rev04_doc_sha256_pin_matches_actual_file(contract_raw: Dict[str, Any]) 
 def test_rev04_doc_records_case_a_and_central_problem_redefinition() -> None:
     doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
     assert "CASE A" in doc
-    assert "Identity 非依存の Performance Trait のみを抽出し" in doc
+    assert "Identity 非依存の Performance Residual のみを抽出し" in doc
 
 
 def test_rev04_doc_records_user_ruling_a_and_b() -> None:
@@ -6612,7 +6622,7 @@ def test_rev04_frozen_docs_unchanged_after_rev04() -> None:
     assert _sha256_file(POR_ADJUDICATION_PATH) == (
         "56b66fd8df943fbfa98767f2ea481c0ba2a68c26916832e08517379408d97007"
     )
-    assert _sha256_file(EXTERNAL_REVIEW_AQUEST_PATH) == (
+    assert _sha256_file(DERIVED_DESIGN_CHANGES_PATH) == (
         "a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091"
     )
 
@@ -6655,7 +6665,7 @@ def test_rev04_r9_g1_pass_conditions_declared_structural_predicate() -> None:
         m.r9_g1_pass_conditions_declared("not-a-collection")
 
 
-# --- Performance Trait / Identity 除外語彙（変更3・6） -----------------------
+# --- Performance Residual / Identity 除外語彙（変更3・6） -----------------------
 
 
 def test_rev04_performance_trait_vocab_frozen_9_items() -> None:
@@ -6664,7 +6674,7 @@ def test_rev04_performance_trait_vocab_frozen_9_items() -> None:
         "vibrato", "phrase_dynamics", "attack_behavior", "release_behavior",
         "articulation_timing",
     )
-    assert m.PERFORMANCE_TRAIT_VOCAB == expected
+    assert m.PERFORMANCE_RESIDUAL_VOCAB == expected
 
 
 def test_rev04_identity_excluded_trait_vocab_frozen_7_items() -> None:
@@ -6709,7 +6719,7 @@ def test_rev04_lesson_record_valid_example_passes() -> None:
 def test_rev04_lesson_record_rejects_unknown_trait() -> None:
     record = _valid_lesson_record()
     record["extracted_traits"] = ["not_a_real_trait"]
-    with pytest.raises(m.Run9ValidationError, match="unknown Performance Trait"):
+    with pytest.raises(m.Run9ValidationError, match="unknown Performance Residual"):
         m.validate_lesson_record(record)
 
 
@@ -6784,6 +6794,127 @@ def test_rev04_rights_manifest_rejects_missing_provenance_in_performance_layer()
         m.validate_rights_manifest_four_layer(data)
 
 
+# --- ネストブロック形状の閉集合強制（Codex bot レビュー PR #319 第1巡指摘2、P2）-
+
+
+def test_rev04_rights_manifest_rejects_empty_provenance_dict() -> None:
+    """`provenance: {}` は旧 validator を素通りしていた——ブロック欠落として拒否する。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["provenance"] = {}
+    with pytest.raises(m.Run9ValidationError, match="missing required block"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_missing_synthesis_block() -> None:
+    """DESIGN_RUN9_REVISION_0.4.md が規定する synthesis ブロックが欠落したまま
+    valid-file テストが green だった実際の欠落（本 PR の起点）を再現する負例。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["provenance"]["synthesis"]
+    with pytest.raises(m.Run9ValidationError, match="missing required block"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_unknown_block_in_provenance() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["provenance"]["unexpected_block"] = {"x": "y"}
+    with pytest.raises(m.Run9ValidationError, match="unknown block"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_missing_key_inside_block() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["provenance"]["voice_source"]["source_id"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_unknown_key_inside_block() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["provenance"]["voice_source"]["unexpected_key"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_not_applicable_without_note() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["provenance"]["synthesis"]["note"]
+    with pytest.raises(m.Run9ValidationError, match="not_applicable.*note"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_empty_string_value_in_block() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["performance_rights"]["provenance"]["performance_author"]["performer"] = "  "
+    with pytest.raises(m.Run9ValidationError, match="non-empty string"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+# --- 2026-08-25 User 追加裁定②: performer/composer 充填 + placeholder 語彙分離 -
+
+
+def test_rev04_rights_manifest_performer_and_composer_filled_with_source() -> None:
+    """performer/composer は外部資料出典付きで Junya Koguchi が充填されて
+    いること（旧 `<PENDING_USER_ATTESTATION>` は誤用だった — 追加裁定②）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert data["performance_rights"]["provenance"]["performance_author"]["performer"] == (
+        "Junya Koguchi"
+    )
+    assert data["composition_rights"]["provenance"]["composition"]["composer"] == (
+        "Junya Koguchi"
+    )
+    assert data["recording_master_rights"]["provenance"]["voice_source"]["owner"] == (
+        "Junya Koguchi"
+    )
+
+
+def test_rev04_rights_manifest_lyricist_uses_unresolved_external_not_pending_user_attestation() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    lyricist = data["composition_rights"]["provenance"]["composition"]["lyricist"]
+    assert lyricist == "<UNRESOLVED_EXTERNAL>"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_rev04_rights_manifest_rejects_pending_user_attestation_in_external_field() -> None:
+    """外部の第三者事実欄に `<PENDING_USER_ATTESTATION>`（User 帰属欄専用）を
+    使うのは誤用——`<UNRESOLVED_EXTERNAL>` を使うべき旨のエラーで拒否する
+    （旧 performer/composer/lyricist がこの誤用の実例だった）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["composition_rights"]["provenance"]["composition"]["lyricist"] = (
+        "<PENDING_USER_ATTESTATION>"
+    )
+    with pytest.raises(m.Run9ValidationError, match="UNRESOLVED_EXTERNAL"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_recording_master_rights_has_interpretations_section() -> None:
+    """CC BY-SA 4.0 の share-alike 義務が合成出力へ及ぶかは事実でなく解釈
+    であり、`interpretations` 節で license（事実）から分離されていること
+    （2026-08-25 User 追加裁定②）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    interp = data["recording_master_rights"]["interpretations"][
+        "share_alike_applies_to_synthesis_output"
+    ]
+    assert interp["status"] == "UNSETTLED_LEGAL_INTERPRETATION"
+    assert interp["question"]
+    assert interp["note"]
+
+
+def test_rev04_rights_manifest_rejects_missing_interpretations_section() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["interpretations"]
+    with pytest.raises(m.Run9ValidationError, match="interpretations"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_interpretations_entry_missing_status() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["interpretations"][
+        "share_alike_applies_to_synthesis_output"
+    ]["status"]
+    with pytest.raises(m.Run9ValidationError, match="status"):
+        m.validate_rights_manifest_four_layer(data)
+
+
 def test_rev04_rights_manifest_rejects_wrong_performance_source_id() -> None:
     data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     data["performance_rights"]["performance_source"]["id"] = "NOT_PJS"
@@ -6846,25 +6977,63 @@ def test_rev04_contract_declares_performance_source_top_level_key() -> None:
     assert "performance_source" in m._CONTRACT_TOP_LEVEL_KEYS
 
 
-# --- b 裁定: backbone_runtime_bundle USER_ATTESTED + bundle sha PINNED ------
+# --- b裁定 + 追加①是正: render_code_commit(歴史)=INFERRED_UNCONFIRMED /
+# run9_render_code_commit(前方宣言)=DECLARED_FOR_RUN9 + bundle sha PINNED --
 
 
-def test_rev04_render_code_commit_user_attested_with_ruling_reference() -> None:
+def test_rev04_render_code_commit_reverted_to_inferred_unconfirmed_historically() -> None:
+    """2026-08-25 User 追加裁定①: render_code_commit（RUN6 の歴史的 export
+    provenance）を USER_ATTESTED へ昇格したのは過大だった——歴史的事実は
+    遡って attest しない方針により INFERRED_UNCONFIRMED へ差し戻した。
+    history 配列に昇格・差し戻し両イベントが append-only で記録される。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     rcc = bundle["render_code_commit"]
-    assert rcc["status"] == "USER_ATTESTED"
-    assert rcc["attestation"]["attested_by"] == "User"
-    assert rcc["attestation"]["attested_at"] == "2026-08-25"
-    assert "aとbを承認" in rcc["attestation"]["statement"]
+    assert rcc["status"] == "INFERRED_UNCONFIRMED"
+    assert "attestation" not in rcc
+    history = rcc["history"]
+    assert any("USER_ATTESTED" in h["event"] for h in history)
+    assert any(
+        "INFERRED_UNCONFIRMED" in h["event"] and "差し戻" in h["event"] for h in history
+    )
+
+
+def test_rev04_run9_render_code_commit_declared_for_run9_with_ruling_reference() -> None:
+    """b裁定の実体的な意味（RUN9 が今後使用する commit の確定）は独立の
+    新設欄 run9_render_code_commit（status: DECLARED_FOR_RUN9）へ移した
+    （2026-08-25 User 追加裁定①）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    rrc = bundle["run9_render_code_commit"]
+    assert rrc["status"] == "DECLARED_FOR_RUN9"
+    assert rrc["commit_full"] == "e2307b1080b00f3999702ce9017cfd75c7f862fe"
+    assert rrc["declaration"]["declared_by"] == "User"
+    assert rrc["declaration"]["declared_at"] == "2026-08-25"
+    assert "aとbを承認" in rrc["declaration"]["statement"]
+
+
+def test_rev04_render_code_commit_and_run9_render_code_commit_are_independent() -> None:
+    """歴史的推定 (render_code_commit) と前方宣言 (run9_render_code_commit)
+    は独立の欄——片方が INFERRED_UNCONFIRMED のまま、もう片方が確定済み
+    (DECLARED_FOR_RUN9) であることは矛盾ではない。値（commit）は同じだが
+    意味論は独立（2026-08-25 User 追加裁定①）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+    assert bundle["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9"
+    assert (
+        bundle["render_code_commit"]["commit_full"]
+        == bundle["run9_render_code_commit"]["commit_full"]
+    )
 
 
 def test_rev04_backbone_runtime_bundle_sha_pinned_matches_real_file(
     contract_raw: Dict[str, Any],
 ) -> None:
+    """backbone_runtime_bundle_sha の PINNED 判定は run9_render_code_commit
+    の確定を根拠とする（render_code_commit が INFERRED_UNCONFIRMED のまま
+    であることは妨げない——2026-08-25 User 追加裁定①）。"""
     field = contract_raw["backbone_runtime_bundle_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == (
-        "b92dac0e9077bf816275292123796396bd41ba33f19d03fa67eeb183fc7fcfbb"
+        "69ea578bb702f0dd0ca16c1a20b34d4f78c81495b1318a5d0503050c84d37a53"
     )
     assert field["value"] == m.compute_file_sha256(BACKBONE_BUNDLE_PATH)
 
@@ -6907,14 +7076,14 @@ def test_rev04_teacher_terminology_note_present_where_teacher_word_appears() -> 
 
 def test_rev04_common_teacher_transfer_literal_occurrences_are_old_name_references() -> None:
     """「Common Teacher Transfer」の literal な出現は、frozen 文書
-    （v0.1 §14 見出しラベル・外部レビュー原文、無改変）か、可変 artifact
+    （v0.1 §14 見出しラベル・派生設計変更メモ、無改変）か、可変 artifact
     側では「旧名」として参照される場合に限る（DESIGN_RUN9_REVISION_0.4.md
     「変更4」の旧名注記付き参照規約 — active な呼称としての置換ではなく、
     旧称の由来注記としてのみ言及する）。README.md で言及する場合は
     「旧」または「Common Performance Lesson」という新称が同じ行内に
     現れていることを確認する。"""
     assert "Common Teacher Transfer" in DESIGN_DOC_PATH.read_text(encoding="utf-8")
-    assert "Common Teacher Transfer" in EXTERNAL_REVIEW_AQUEST_PATH.read_text(encoding="utf-8")
+    assert "Common Teacher Transfer" in DERIVED_DESIGN_CHANGES_PATH.read_text(encoding="utf-8")
     readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
     for line in readme_text.splitlines():
         if "Common Teacher Transfer" in line:

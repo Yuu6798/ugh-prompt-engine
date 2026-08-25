@@ -75,15 +75,9 @@
     "repo": "openvpi/DiffSinger",
     "commit_short": "e2307b1",
     "commit_full": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
-    "status": "USER_ATTESTED",
-    "attestation": {
-      "attested_by": "User",
-      "attested_at": "2026-08-25",
-      "statement": "User 裁定「aとbを承認」の b（DESIGN_RUN9_REVISION_0.4.md 「User裁定a/bの記録」参照）。render_code_commit の INFERRED_UNCONFIRMED 状態を USER_ATTESTED へ確定する User attestation。",
-      "basis": "Codex bot review PR #316 第1巡指摘 (P2, 866fcc8) が要求していた確定経路（『RUN6 export の直接記録の発掘、または User attestation』）のうち、User attestation 経路によって確定した。inference_basis（下記、無改変で保持）が示す状況証拠自体は変わらないが、これを事実として確定する主体が User 本人の明示 attestation へ変わったことにより status を昇格する。"
-    },
-    "confirmation_required": "解消済み（2026-08-25 User attestation — 上記 attestation 節参照）。以後の変更（別 commit への差し替え等）は新しい design_revision を要する。",
-    "inference_basis": "This exact revision is the single, repository-wide invariant DiffSinger pin used across run4 through run8 gate_synth/export tooling (dozens of cross-references). The original 2026-08-20 run6 export record (s5_record) does not itself restate the git revision inline, but no evidence anywhere in the repository suggests a different revision was ever used for run5/6/7 rendering or export — the run4 provenance closure record explicitly notes the same absence-of-contrary-evidence reasoning when substituting this pin for an unlogged run4 export (results_s3/run4_provenance_closure_2026-08-23.json). Preserved verbatim (unchanged by the 2026-08-25 User attestation) as the evidentiary record that the attestation confirms.",
+    "status": "INFERRED_UNCONFIRMED",
+    "confirmation_required": "未解消。RUN6 の歴史的 export に実際に使用された commit の直接記録は未発掘のまま。2026-08-25 に一度 User attestation を根拠として USER_ATTESTED へ確定させたが、同日中の追加 User 裁定（下記 history 参照）により差し戻した——歴史的事実（過去に何が使われたか）は遡って User attest できないため（User の attest 権限は自身の許諾・裁定に及ぶのであり、第三者的な過去の事実確定には及ばない）。RUN9 が今後使用する commit の前方宣言は本欄と独立の `run9_render_code_commit`（status: DECLARED_FOR_RUN9）が担う。今後、RUN6 export の直接記録が発掘された場合のみ本欄を確定させられる。",
+    "inference_basis": "This exact revision is the single, repository-wide invariant DiffSinger pin used across run4 through run8 gate_synth/export tooling (dozens of cross-references). The original 2026-08-20 run6 export record (s5_record) does not itself restate the git revision inline, but no evidence anywhere in the repository suggests a different revision was ever used for run5/6/7 rendering or export — the run4 provenance closure record explicitly notes the same absence-of-contrary-evidence reasoning when substituting this pin for an unlogged run4 export (results_s3/run4_provenance_closure_2026-08-23.json). Preserved verbatim (unchanged throughout the 2026-08-25 promotion and reversion below) as the evidentiary record those events reference.",
     "source": [
       "voice_genesis/foundry/results_s7/s7_exporter_input_pins.json#exporter (repo+revision)",
       "voice_genesis/foundry/results_s7/s7_b1_calibration_set.json#diffsinger_repo_pin",
@@ -91,7 +85,29 @@
       "voice_genesis/foundry/s1_gate/README.md / gate_synth.py / gate_synth_run4.py (--diffsinger-repo pin: e2307b1)",
       "voice_genesis/foundry/tests/test_run4_export_device_probe.py (DIFFSINGER_COMMIT full hash)"
     ],
-    "note": "The value above was originally an inference, not a directly-logged fact for the 2026-08-20 run6 export specifically — the original run6 export record (results_s5/s5_record_2026-08-20.md) does NOT itself restate the DiffSinger git revision inline anywhere in that record. Codex bot review PR #316 第1巡指摘 (P2, 866fcc8) required this be held as INFERRED_UNCONFIRMED, not PINNED, until either a direct record or explicit User attestation confirmed it. On 2026-08-25 the User provided that attestation (see the attestation field above), so status is now USER_ATTESTED — the underlying inference_basis text is preserved unchanged as the evidentiary record the attestation confirms, not overwritten."
+    "history": [
+      {
+        "date": "2026-08-25",
+        "event": "rev 0.4 実装時、User 裁定「aとbを承認」の b を根拠に status を INFERRED_UNCONFIRMED から USER_ATTESTED へ昇格した（Codex bot review PR #316 第1巡指摘 P2, 866fcc8 が要求していた確定経路のうち、User attestation 経路）。"
+      },
+      {
+        "date": "2026-08-25",
+        "event": "同日中の追加 User 裁定①により差し戻し: render_code_commit は RUN6 の歴史的 export provenance であり、歴史的事実（過去に何が使われたか）は遡って User attest しない方針が示された。status を INFERRED_UNCONFIRMED へ復元し、User attestation の実体的な意味（RUN9 が今後使用する commit を確定する、という前方宣言）は新設の独立欄 `run9_render_code_commit`（status: DECLARED_FOR_RUN9）へ移した。歴史的事実の不確定性そのものは、この前方宣言の確度に影響しない——両欄は独立である。"
+      }
+    ],
+    "note": "The value above was originally an inference, not a directly-logged fact for the 2026-08-20 run6 export specifically — the original run6 export record (results_s5/s5_record_2026-08-20.md) does NOT itself restate the DiffSinger git revision inline anywhere in that record. Codex bot review PR #316 第1巡指摘 (P2, 866fcc8) required this be held as INFERRED_UNCONFIRMED, not PINNED, until either a direct record or explicit User attestation confirmed it. On 2026-08-25 the User provided an attestation and status was briefly promoted to USER_ATTESTED, but a same-day follow-up User ruling reversed that promotion (see the `history` array above): historical facts about what was actually used in the RUN6 export are not retroactively attestable by the User. status is therefore restored to INFERRED_UNCONFIRMED; the substantive content of the User's 2026-08-25 attestation (declaring which commit RUN9 itself will use going forward) now lives in the independent `run9_render_code_commit` field. The underlying inference_basis text is preserved unchanged throughout, not overwritten."
+  },
+  "run9_render_code_commit": {
+    "repo": "openvpi/DiffSinger",
+    "commit_short": "e2307b1",
+    "commit_full": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+    "status": "DECLARED_FOR_RUN9",
+    "declaration": {
+      "declared_by": "User",
+      "declared_at": "2026-08-25",
+      "statement": "User 裁定「aとbを承認」の b、および同日の追加 User 裁定①（歴史的 render_code_commit との分離）。RUN9 が今後の render に使用する DiffSinger commit を e2307b1080b00f3999702ce9017cfd75c7f862fe と前方宣言する。"
+    },
+    "note": "render_code_commit（上記、RUN6 の歴史的 export provenance、INFERRED_UNCONFIRMED のまま）とは独立の欄。値は同じ e2307b1 だが意味論が異なる: render_code_commit は『RUN6 export で実際に何が使われたか』という過去の事実の推定であり未確定のまま、本欄は『RUN9 が今後の render で何を使うか』という前方宣言であり User により確定済み（DECLARED_FOR_RUN9）。歴史的事実の不確定性は前方宣言の確度に影響しない。RUN9_CONTRACT.yaml backbone_runtime_bundle_sha の PINNED 判定は本欄の確定を根拠とする。"
   },
   "run7_not_used": {
     "reason": "Teacher swap contamination avoidance (User ruling, DESIGN_RUN9_REVISION_0.2.md 改訂5)",
@@ -183,5 +199,5 @@
       "score_module_code": "voice_genesis/singer/score.py (sha256 24a6004d...) and phoneme_jp.py (sha256 9cbc7e1d...) are also consumed by the render flow per the same probe records (pins.score_module_sakura / score_module_sakura_dep_phoneme_jp), but these are THIS repository's own source files, not external model assets. Their provenance is properly covered by repository_commit_sha (RUN9_CONTRACT.yaml) once that is pinned, not duplicated here as a separate byte pin."
     }
   },
-  "completeness_note": "Codex bot review PR #316 第2巡指摘 (1e84892, 採用): a runtime bundle that pins only the acoustic checkpoint/ONNX (checkpoint_sha256 / acoustic_onnx_sha256) does NOT close the reproduction input set on its own. The render flow (gate_synth.py) also reads canon model assets via --canon-model-dir (linguistic/duration/pitch predictor ONNX + phoneme vocabulary, from the separate NamineRitsu_DiffSinger.zip canon distribution) and acoustic-export companions co-located with acoustic.onnx (dsconfig.yaml / phonemes.json / speaker embedding). Only with canon_model_assets and acoustic_export_companions included does the consumed-input set close. This bundle intentionally still leaves render_code_commit as INFERRED_UNCONFIRMED (see that field) and backbone_runtime_bundle_sha in RUN9_CONTRACT.yaml PENDING as a result — unchanged by this addition."
+  "completeness_note": "Codex bot review PR #316 第2巡指摘 (1e84892, 採用): a runtime bundle that pins only the acoustic checkpoint/ONNX (checkpoint_sha256 / acoustic_onnx_sha256) does NOT close the reproduction input set on its own. The render flow (gate_synth.py) also reads canon model assets via --canon-model-dir (linguistic/duration/pitch predictor ONNX + phoneme vocabulary, from the separate NamineRitsu_DiffSinger.zip canon distribution) and acoustic-export companions co-located with acoustic.onnx (dsconfig.yaml / phonemes.json / speaker embedding). Only with canon_model_assets and acoustic_export_companions included does the consumed-input set close. As of 2026-08-24 this bundle intentionally still left render_code_commit as INFERRED_UNCONFIRMED (see that field) and backbone_runtime_bundle_sha in RUN9_CONTRACT.yaml PENDING as a result — unchanged by this addition. On 2026-08-25 backbone_runtime_bundle_sha was promoted to PINNED, but its justification is now the independent forward-declared `run9_render_code_commit` field (status: DECLARED_FOR_RUN9), not a promotion of the historical `render_code_commit` field — that field remains INFERRED_UNCONFIRMED by design (2026-08-25 User ruling: historical export facts are not retroactively attestable). See `render_code_commit.history` and `run9_render_code_commit` above for the full account."
 }

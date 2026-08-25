@@ -3,7 +3,7 @@
 - **裁定日:** 2026-08-25
 - **裁定者:** User
 - **design_revision:** 0.3 → 0.4
-- **裁定ソース:** [`EXTERNAL_REVIEW_AQUEST_20260825.txt`](./EXTERNAL_REVIEW_AQUEST_20260825.txt)
+- **裁定ソース:** [`DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt`](./DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt)
   （「RUN9 外部指摘反映による変更点 / External Review: AQUEST 山崎信英氏 /
   Revision Proposal: RUN9 design_revision 0.2」、**byte-pin 不変**。
   sha256 = `a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091`
@@ -15,7 +15,7 @@
 
 ## 系譜（番号注記）
 
-外部レビュー原文は自称 **「Revision Proposal: RUN9 design_revision 0.2」**
+派生設計変更メモは自称 **「Revision Proposal: RUN9 design_revision 0.2」**
 （原文4行目）だが、リポジトリ上は `design_revision` が既に 0.2 → 0.3 まで
 発行・マージ済みである（[`DESIGN_RUN9_REVISION_0.2.md`](./DESIGN_RUN9_REVISION_0.2.md)
 → [`DESIGN_RUN9_REVISION_0.3.md`](./DESIGN_RUN9_REVISION_0.3.md)）。同じ番号を
@@ -31,7 +31,7 @@
 の系譜処理**である。マージ済み rev 0.2/0.3 文書は**無改変のまま存続**し、
 その内容（ControlProfile 方式・三経路分離・書込境界・結果分類・機械的校正
 の定義等）は、本 rev 0.4 と矛盾しない限りそのまま有効であり続ける。v0.1
-本文・PoR メモ・外部レビュー原文もすべて同様に無改変・byte-pin 不変のまま。
+本文・PoR メモ・派生設計変更メモもすべて同様に無改変・byte-pin 不変のまま。
 
 旧 revision（"0.1"〜"0.3"）を宣言する contract は design_revision 0.4 以降
 fail-closed で拒否される（`run9_schema.DESIGN_REVISION` の凍結値照合）—
@@ -39,7 +39,7 @@ fail-closed で拒否される（`run9_schema.DESIGN_REVISION` の凍結値照�
 
 ## 変更種別
 
-**NON-ARCHITECTURAL DESIGN CORRECTION**（外部レビュー原文「推奨正典変更」
+**NON-ARCHITECTURAL DESIGN CORRECTION**（派生設計変更メモ「推奨正典変更」
 節の逐語区分）。中核仮説は維持する。実験条件（Adapter architecture /
 Backbone freeze / Genome freeze / Identity freeze / Lesson budget / 学習
 回数 / 評価 metric / Pareto・Gate 条件）は**変更 7 のとおり不変**（外部
@@ -66,7 +66,7 @@ RUN9 続行」）に従い、本改訂は provenance schema の追加（§3）�
 採用する:
 
 > 「Teacherの声を学習する」ではなく、**「権利来歴が明確な Performance
-> Source から Identity 非依存の Performance Trait のみを抽出し、Target
+> Source から Identity 非依存の Performance Residual のみを抽出し、Target
 > Voice Identity を保持したまま移送できるか」**。
 
 外部指摘はさらに、v0.1/rev 0.3 が既に採用している「Voice Identity ≠
@@ -88,7 +88,7 @@ Voice Source ≠ Performance Source ≠ Performance Author
 分離」を、[`inputs/rights_manifest.json`](./inputs/rights_manifest.json)
 の再編として実装する。詳細は同ファイル自体を正とし、要点のみここに記す。
 
-### 原則3式（外部レビュー原文、逐語）
+### 原則3式（派生設計変更メモ、逐語）
 
 ```
 Teacher ≠ Voice Identity Owner
@@ -101,7 +101,7 @@ Voice Source ≠ Performance Source
 
 ### 4層構造への再編
 
-`inputs/rights_manifest.json` を次の4層へ再編する（外部レビュー原文の
+`inputs/rights_manifest.json` を次の4層へ再編する（派生設計変更メモの
 `rights_manifest:` 雛形を機械可読キーへ写す）:
 
 | 外部レビューの層 | `rights_manifest.json` のキー | 内容 |
@@ -112,10 +112,10 @@ Voice Source ≠ Performance Source
 | `recording_master_rights` | `recording_master_rights` | 使用する生成音声・録音物自体の権利。`provenance.voice_source` + `provenance.synthesis` + ライセンス実測値（PJS corpus は CC BY-SA 4.0 — 出典は
   `voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md`）を格納 |
 
-**Hard Gate**（外部レビュー原文、逐語）: 4層すべてについて provenance /
+**Hard Gate**（派生設計変更メモ、逐語）: 4層すべてについて provenance /
 permission を確定する。
 
-**禁止**（外部レビュー原文、逐語）: 「VoiceBank利用許諾 → Performance利用
+**禁止**（派生設計変更メモ、逐語）: 「VoiceBank利用許諾 → Performance利用
 許諾も得た」と自動的に解釈すること。この禁止文は `rights_manifest.json`
 トップレベルの `auto_interpretation_prohibited` 欄に逐語収載する。
 
@@ -133,7 +133,7 @@ repo 内の PJS 記録を機械検証し、確認できた値のみ出典参照�
 | `voice_source.source_id` | `PJS_corpus_ver1.1` | `voice_genesis/foundry/s1_dataprep/README.md` 素材2 / `voice_genesis/foundry/adapter/presets/pjs_neutral.json` `donor.corpus_name` | 機械検証済み |
 | `performance_author.performer` | PJS corpus の歌唱者個人名 | — | `<PENDING_USER_ATTESTATION>`（原典・repo いずれにも個人名の記載なし。歌唱と録音が単一の自然録音であり、UTAU 型の別途調声者は存在しないと推定されるが、この推定自体を pin 化はしない） |
 | `performance_author.performance_editor` | 該当なし（自然録音、UTAU 型の別調声レイヤーなし） | `pjs_terms_snapshot.md`（論文は "singing voice corpus" と明記、synthesis 由来ではない） | 機械検証済み（`not_applicable` として明記。placeholder ではなく構造的に存在しない旨を区別する） |
-| `synthesis.engine` / `synthesis.voicebank` | 該当なし（PJS は自然録音コーパスであり、VoiceGenesis 側の合成エンジン/voicebank の入力ではない — RUN9 が PJS から取得するのは Performance Trait のみで音声合成物ではない） | `pjs_terms_snapshot.md` | 機械検証済み（`not_applicable`） |
+| `synthesis.engine` / `synthesis.voicebank` | 該当なし（PJS は自然録音コーパスであり、VoiceGenesis 側の合成エンジン/voicebank の入力ではない — RUN9 が PJS から取得するのは Performance Residual のみで音声合成物ではない） | `pjs_terms_snapshot.md` | 機械検証済み（`not_applicable`） |
 | `composition.composer` / `composition.lyricist` | — | — | `<PENDING_USER_ATTESTATION>`（PJS corpus のトラック別作曲者/作詞者クレジットは repo 内に記録なし） |
 | ライセンス（`recording_master_rights.license`） | **CC BY-SA 4.0**（コーパス全体、研究・商用いずれも利用可。派生物の頒布・公開時は同一ライセンス継承 + attribution 必須） | `pjs_terms_snapshot.md`（論文 Abstract/Conclusion 逐語引用） | 機械検証済み |
 
@@ -141,10 +141,42 @@ repo 内の PJS 記録を機械検証し、確認できた値のみ出典参照�
 （`performance_author.performer` の個人名）が残る間は `voice_identity_rights`
 と同様 `PENDING_USER_ATTESTATION` とする。RUN9 が内部使用するのは PJS の
 raw audio（PRACTICE 枝、rights-clean curriculum として v0.1 §13.2 が要求
-する要件の一部）と、そこから抽出した Performance Trait（EDUCATION 枝）で
+する要件の一部）と、そこから抽出した Performance Residual（EDUCATION 枝）で
 あり、ライセンス自体（CC BY-SA 4.0、研究利用可）は明確だが、**「歌唱者
 個人の attest」という外部レビューが要求する主体特定は本改訂だけでは完結
 しない** — 未解決のまま正直に PENDING とする（捏造禁止規律）。
+
+### provenance の実値充填の是正（2026-08-25 User 追加裁定②）
+
+上記の初出充填には2つの誤りがあった。**誤り1**: `performance_author.performer`
+と `composition.composer`/`lyricist` に使った `<PENDING_USER_ATTESTATION>`
+は語彙の誤用——これらは PJS という外部の第三者に関する事実であり、User
+自身が attest できる対象（自身の許諾・裁定）ではない。**誤り2**:
+`voice_source.owner` に「PJS corpus」（コーパスという物自体）を記載した
+のは主体の誤り——corpus は権利の客体であり主体ではない。User 追加裁定②
+はこの2点を是正する:
+
+| provenance フィールド | 是正後の値 | 出典 | 状態 |
+|---|---|---|---|
+| `voice_source.owner` | **Junya Koguchi**（旧値「PJS corpus」から訂正——corpus は客体、著者個人が主体） | `pjs_terms_snapshot.md` 引用の論文 "Koguchi & Takamichi, arXiv:2006.02959" の姓 Koguchi に対応する著者個人名。個人名の対応確認は User 追加裁定②による | 2026-08-25 User 追加裁定②で充填 |
+| `performance_author.performer` | **Junya Koguchi** | 同上 | 2026-08-25 User 追加裁定②で充填（旧 `<PENDING_USER_ATTESTATION>` は語彙誤用だった） |
+| `composition.composer` | **Junya Koguchi** | 同上 | 2026-08-25 User 追加裁定②で充填（同上） |
+| `composition.lyricist` | 未解決のまま — placeholder のみ `<PENDING_USER_ATTESTATION>` から **`<UNRESOLVED_EXTERNAL>`** へ張り替え | — | 外部の第三者事実として未解決（PJS corpus のトラック別作詞者クレジットは repo 内に記録なし。捏造しない） |
+
+**新設 placeholder 語彙の区別**: `<PENDING_USER_ATTESTATION>` は
+**User 帰属欄専用**（User 自身が attest すべき値。例:
+`voice_identity_rights.attestation`）、`<UNRESOLVED_EXTERNAL>` は
+**外部事実欄専用**（第三者の事実で repo 内に確認できる記録が無い未解決値）
+——`run9_schema._validate_rights_provenance_block()` が両者の取り違えを
+fail-closed で拒否する（詳細は同関数 docstring）。
+
+**SA義務の事実/解釈分離**: `recording_master_rights.license.derivative_obligation`
+が記す CC BY-SA 4.0 の share-alike 義務は、ライセンス文言そのもの（機械
+検証済みの事実）であり、それが RUN9 の合成音声出力へ具体的にどう適用
+されるか（出力が「派生物」に該当するか等）は法解釈であって確定した権利
+判断ではない。両者を rights_manifest.json 上で分離するため
+`recording_master_rights.interpretations.share_alike_applies_to_synthesis_output`
+を新設した（status: `UNSETTLED_LEGAL_INTERPRETATION`）。
 
 ### attest 対象の更新（a 裁定の反映）
 
@@ -163,23 +195,30 @@ raw audio（PRACTICE 枝、rights-clean curriculum として v0.1 §13.2 が要�
 外部レビュー「変更3: 『歌い方』の定義を修正」「変更6: LessonRecord標準仕様
 へ追加」を `run9_schema.py` の run-local 定数として実装する。
 
-### Performance Trait 語彙（変更3、9項目）
+### Performance Residual 語彙（変更3、9項目）
 
-`run9_schema.PERFORMANCE_TRAIT_VOCAB`（外部レビュー原文の逐語9項目）:
+**系譜注記（2026-08-25 User 追加裁定③）**: 本節が実装時点（rev 0.4 初出）
+で用いていた呼称「Performance Trait」は、RUN9 既存の Trait 層（発声形質 =
+`TRAIT_CONTROL`、および Identity/Trait/Technique 三層）と用語衝突するため、
+User 追加裁定③により定数名・散文表記とも「Performance Residual」（Performance
+から抽出された RUN9 内部の数値表現、という確認メモの定義に統一）へ改称した。
+9項目の中身・意味論は不変——名称のみの変更である。以下は改称後の表記で
+記す。
+
+`run9_schema.PERFORMANCE_RESIDUAL_VOCAB`（派生設計変更メモの逐語9項目）:
 `relative_F0` / `duration_ratio` / `onset_offset` / `energy_envelope` /
 `vibrato` / `phrase_dynamics` / `attack_behavior` / `release_behavior` /
 `articulation_timing`。
 
 旧定義（「PJSの歌い方を移植する」）を新定義（「PJS由来Performance Source
-から抽出した Performance Residual / Performance Trait を移植する」）へ
-読み替える — v0.1 §11「PJS Performance Lesson」の Lesson 構成要素（F0_lesson
-/ Duration_lesson / Energy_lesson / End_lesson 等、v0.1 本文・byte-pin
-不変）は、この Performance Trait 語彙の RUN9 固有の初期実装例として引き続き
-有効。
+から抽出した Performance Residual を移植する」）へ読み替える — v0.1 §11
+「PJS Performance Lesson」の Lesson 構成要素（F0_lesson / Duration_lesson /
+Energy_lesson / End_lesson 等、v0.1 本文・byte-pin 不変）は、この
+Performance Residual 語彙の RUN9 固有の初期実装例として引き続き有効。
 
 ### Identity 除外 Trait 語彙（変更3+変更6の統合、7項目）
 
-`run9_schema.IDENTITY_EXCLUDED_TRAIT_VOCAB` は、外部レビュー変更3の除外
+`run9_schema.IDENTITY_EXCLUDED_TRAIT_VOCAB` は、派生設計変更メモ変更3の除外
 6項目（speaker embedding / timbre identity / formant identity / spectral
 identity / Voice Genome / source-specific identity representation）と
 変更6の除外4項目（speaker_embedding / timbre_embedding / formant_profile /
@@ -202,7 +241,7 @@ identity_vector）を統合した正準リストである。重複概念（speak
 `formant_inheritance_target` / `spectral_envelope_identity_replication` /
 `founder_identity_replacement_parameter` /
 `learner_pjs_raw_audio_direct_reference`）との関係を明記する: 両者は
-**別の層**である。`IDENTITY_EXCLUDED_TRAIT_VOCAB` は「Performance Trait
+**別の層**である。`IDENTITY_EXCLUDED_TRAIT_VOCAB` は「Performance Residual
 として扱ってはならない特徴クラスの一般的な正準分類」（LessonRecord が
 `explicitly_excluded_identity_traits` として宣言する対象）であり、
 `EDUCATION_FORBIDDEN_INPUTS`/`PRACTICE_FORBIDDEN_INPUTS` は「RUN9・PJS
@@ -215,14 +254,14 @@ identity_vector）を統合した正準リストである。重複概念（speak
 
 `run9_schema.py` に schema `run9-lesson-record/1.0`
 （`SCHEMA_LESSON_RECORD`）+ `LESSON_RECORD_REQUIRED_KEYS` +
-`validate_lesson_record()` を新設し、外部レビュー原文の LessonRecord
+`validate_lesson_record()` を新設し、派生設計変更メモの LessonRecord
 雛形（`lesson_id` / `performance_source` / `voice_source` /
 `performance_author` / `composition_source` / `recording_source` /
 `extracted_traits` / `explicitly_excluded_identity_traits` /
 `rights_manifest` / `provenance_manifest`）を機械可読な最低要件へ写す。
 
-- `extracted_traits` は `PERFORMANCE_TRAIT_VOCAB` の部分集合でなければ
-  ならない。外部レビュー原文の変更6が使う5つの略記名
+- `extracted_traits` は `PERFORMANCE_RESIDUAL_VOCAB` の部分集合でなければ
+  ならない。派生設計変更メモの変更6が使う5つの略記名
   （`relative_F0` / `duration` / `timing` / `dynamics` / `articulation`）
   は `run9_schema.LESSON_RECORD_TRAIT_ALIASES` により正準名へ解決する
   （`duration`→`duration_ratio`、`timing`→`onset_offset`、
@@ -230,7 +269,7 @@ identity_vector）を統合した正準リストである。重複概念（speak
   `relative_F0`→`relative_F0` 恒等）。
 - `explicitly_excluded_identity_traits` は `IDENTITY_EXCLUDED_TRAIT_VOCAB`
   の7項目を**完全含有**しなければならない（部分集合ではなく上位集合
-  ——外部レビュー原文の4項目例示は最低限の一部であり、正準7項目すべてを
+  ——派生設計変更メモの4項目例示は最低限の一部であり、正準7項目すべてを
   満たすことを rev 0.4 で要求する）。
 - manifest 実体の build（実際の Lesson 抽出処理）は VG-L0 学習ハーネス
   実装待ちの machine-dependent 作業であり、本改訂は validator + 閉集合 +
@@ -248,19 +287,19 @@ Ritsu / User / PJS / Backbone / code / dataset / config / metric の hash
 写像）で拡張する。
 
 - **意味名の追加**: `run9_schema.R9_G1_SEMANTIC_NAME =
-  "RIGHTS_AND_PROVENANCE_GATE"`（外部レビュー原文の逐語）。
+  "RIGHTS_AND_PROVENANCE_GATE"`（派生設計変更メモの逐語）。
   `run9_schema.R9_G1_LEGACY_NAME = "INPUT_FREEZE_AND_RIGHTS"`
   （v0.1 §19 原文名、不変）と対で保持する — v0.1 側の gate ID（`R9-G1`）
   自体は変更しない、意味名の追加読み替えのみ。
 - **PASS 条件8項目の凍結**: `run9_schema.R9_G1_PASS_CONDITIONS`
-  （外部レビュー原文の逐語8項目を機械可読 id へ写した凍結 tuple）:
+  （派生設計変更メモの逐語8項目を機械可読 id へ写した凍結 tuple）:
   `VOICE_SOURCE_IDENTIFIED` / `VOICE_USAGE_TERMS_CONFIRMED` /
   `PERFORMANCE_AUTHOR_IDENTIFIED` / `PERFORMANCE_USAGE_TERMS_CONFIRMED` /
   `COMPOSITION_RIGHTS_CONFIRMED` / `RECORDING_MASTER_RIGHTS_CONFIRMED` /
   `TEACHER_SOURCE_VS_VOICE_IDENTITY_SOURCE_DISTINGUISHED` /
   `NO_UNKNOWN_RIGHTS_HOLDER`。
 - **FAIL 語彙の追加**: `run9_schema.GATE_FAIL_RIGHTS_PROVENANCE_UNRESOLVED
-  = "RIGHTS_PROVENANCE_UNRESOLVED"`（外部レビュー原文の逐語）。既存
+  = "RIGHTS_PROVENANCE_UNRESOLVED"`（派生設計変更メモの逐語）。既存
   `FAILURE_CLASSES`（3分類、rev 0.3 改訂E）とは別軸のゲート単位 FAIL
   値であり、`FAILURE_CLASSES` を置き換えない（gate 個別の FAIL vocabulary
   という性質が異なる — R9-G1 が不成立の attempt は、原因次第で
@@ -338,7 +377,101 @@ pin）はいずれも無改訂。変更対象は provenance / rights / terminolo
 「User attestation」という解釈）が User の意図と異なっていた場合、PR
 レビューで veto 可能——他の Fable 設計判定枠（例: rev 0.3 の
 `metric_space_sha` pin）と同じ「マージ前に User が差し戻せる」運用を
-本裁定の解釈にも適用する。
+本裁定の解釈にも適用する。実際、上記 b の実装（`render_code_commit.status`
+を直接 `USER_ATTESTED` へ昇格）は同日中に veto された——下記「2026-08-25
+User 追加裁定4件」①を参照。
+
+---
+
+## 2026-08-25 User 追加裁定4件（①〜③・P0、同日内の是正）
+
+Codex bot レビュー PR #319 第1巡指摘2件の実装着手中に、User から本改訂
+（上記 a/b の実装を含む）を対象とする4件の追加裁定が入った。①②③は
+番号なしの対応方針裁定、P0 は帰属表記の誤りに関する最優先訂正——いずれも
+本 rev 0.4 の一部として同日中に反映する（design_revision は 0.4 のまま
+据え置き、新しい revision 番号は起こさない）。
+
+### P0 — 派生設計変更メモの帰属表記の訂正（最優先）
+
+本ファイル・`DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt`
+（旧ファイル名 `EXTERNAL_REVIEW_AQUEST_20260825.txt`）は、2026-08-25 まで
+本ファイル・`README.md`・`RUN9_CONTRACT.yaml`・`run9_schema.py`・
+`inputs/rights_manifest.json` の各所で**「外部レビュー原文（AQUEST
+山崎信英氏）」**と特徴付けられていた。この特徴付けは**誤りだった**——
+同ファイルは山崎氏の逐語原文ではなく、**山崎氏の指摘を受けて我々が起草
+した派生設計変更メモ**である。実在の外部者への誤帰属であり、訂正する:
+
+1. **山崎氏に帰属するのは外部指摘の核心のみ**: VoiceBank に歌い方情報は
+   ほぼ含まれないこと、および Voice Source の権利者 ≠ Performance の
+   権利・来歴主体、という分離指摘（上記「中心問題の再定義」節が引用する
+   核心）。
+2. **「変更1」〜「変更8」の具体設計・schema・gate 拡張は我々の派生設計**
+   であり、山崎氏の逐語著述ではない。本ファイルの各所で「派生設計変更
+   メモ、逐語」等と注記している箇所は、「（山崎氏の逐語ではなく）当該
+   メモファイルに書かれている文言そのものが逐語である」という意味に
+   限定して読む——メモの著者は我々であり、山崎氏ではない。
+
+**対応**: ファイルを `git mv` で
+`DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt` へ改名した
+（**内容は1byteも変更していない** — sha256 =
+`a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091` 不変。
+byte-pin テストはパス参照のみ更新）。リポジトリ内の「外部レビュー原文」
+「外部レビュー AQUEST 山崎信英氏の採用」等の特徴付けを「外部指摘
+（AQUEST 山崎信英氏）を受けた派生設計変更メモ」系の正確な表現へ全数
+掃討した（README.md / RUN9_CONTRACT.yaml / run9_schema.py /
+inputs/rights_manifest.json / 本ファイル / tests/test_run9_contract.py）。
+コミット 44f3708（本ファイル・派生設計変更メモの初回収載コミット）の
+メッセージ自体は履歴として不変（git 履歴は書き換えない）——本節が
+「初回収載時の特徴付けは誤りだった」旨を記録することで訂正を append-only
+に残す。
+
+### ① render_code_commit の USER_ATTESTED 昇格は過大だった
+
+上記「User 裁定 a/b の記録」b の実装（`render_code_commit.status` を
+`INFERRED_UNCONFIRMED` から `USER_ATTESTED` へ直接昇格）は過大だった。
+`render_code_commit` は **RUN6 の歴史的 export に実際に何が使われたか**
+という過去の事実の推定であり、User の attest 権限は自身の許諾・裁定に
+及ぶのであって、第三者的・歴史的な事実の確定には及ばない——歴史的事実は
+遡って attest しない。
+
+是正: `inputs/backbone_runtime_bundle.json` `render_code_commit.status`
+を `INFERRED_UNCONFIRMED` へ差し戻した（`history` 配列に昇格・差し戻し
+の両イベントを記録——履歴の抹消はしない）。b の実体的な意味（RUN9 が
+今後の render に使用する commit を User が確定する、という前方宣言）は、
+歴史的推定と独立な新設欄 `run9_render_code_commit`（status:
+`DECLARED_FOR_RUN9` — 新語彙。既存 status 語彙 `PINNED`/`PENDING`/
+`INFERRED_UNCONFIRMED`/`USER_ATTESTED` と同様、状態を表す固定語彙として
+運用する）へ移した。値は同じ `e2307b1080b00f3999702ce9017cfd75c7f862fe`
+だが意味論が異なる: `render_code_commit` は過去の事実の推定で未確定の
+まま、`run9_render_code_commit` は将来の使用対象の宣言で確定済み。
+
+`RUN9_CONTRACT.yaml` `backbone_runtime_bundle_sha` は bundle 実体変更に
+伴い実バイト sha を再計算し、`run9_render_code_commit` の確定を根拠に
+引き続き `PINNED` を維持した（旧値
+`b92dac0e9077bf816275292123796396bd41ba33f19d03fa67eeb183fc7fcfbb` は
+同欄のコメントに履歴として append-only 保持、新値は同欄参照）。
+
+### ② rights_manifest.json provenance の是正
+
+詳細は上記「provenance の実値充填の是正（2026-08-25 User 追加裁定②）」
+節を参照。要点: `performance_author.performer`/`composition.composer` に
+外部資料出典付きで Junya Koguchi を充填、`voice_source.owner` の主体
+誤りを訂正、外部不明値の placeholder を `<PENDING_USER_ATTESTATION>`
+（User 帰属欄専用）と `<UNRESOLVED_EXTERNAL>`（外部事実欄専用、新設）に
+語彙分離、CC BY-SA 4.0 の share-alike 義務が合成出力へ及ぶかという法解釈
+論点を事実（ライセンス文言）から分離する `interpretations` 節を新設。
+
+### ③ Performance Trait の正典化撤回 → Performance Residual への統一
+
+詳細は上記「Performance Residual 語彙（変更3、9項目）」節冒頭の系譜注記
+を参照。要点: `run9_schema.PERFORMANCE_TRAIT_VOCAB` を
+`PERFORMANCE_RESIDUAL_VOCAB` へ改名（9項目の中身は不変）。理由は RUN9
+既存の Trait 層（`TRAIT_CONTROL`、および Identity/Trait/Technique 三層）
+との用語衝突回避——§7 確認メモが定義する「Performance Residual =
+Performance から抽出された RUN9 内部の数値表現」に統一する。散文中の
+「Performance Trait」語も「Performance Residual」（数値表現の文脈）へ
+掃討した。LessonRecord の JSON キー名（`extracted_traits` 等、派生設計
+変更メモの写し）自体は変更しない。
 
 ---
 
@@ -382,7 +515,7 @@ pin）はいずれも無改訂。変更対象は provenance / rights / terminolo
 >    provenance への参照）を role 節に追記する。文言追記による repin は
 >    指示どおり実施
 > 4. 「Common Teacher Transfer」→「Common Performance Lesson」の改名は
->    **維持**（外部レビュー変更4の明示推奨を User が採用済み。旧名注記付き）
+>    **維持**（派生設計変更メモ変更4の明示推奨を User が採用済み。旧名注記付き）
 > 5. validator に「teacher 語の再出現拒否」チェックを入れる予定だったなら
 >    **入れない**。代わりに（可能な範囲で）「teacher 語を含む定義節に
 >    非所有注記が存在する」ことの検証に置き換えるか、検証自体を見送る
@@ -407,7 +540,7 @@ pin）はいずれも無改訂。変更対象は provenance / rights / terminolo
   `verify donor and teacher rights / manifests`（v0.1 §22 step 2 の直接
   引用）等、いずれも frozen 文書の逐語引用であり、RUN9 独自の用語選択
   ではないため無改訂。「Common Teacher Transfer」の literal な出現は
-  frozen 文書（v0.1 §14 見出しラベル・外部レビュー原文）のみであり、
+  frozen 文書（v0.1 §14 見出しラベル・派生設計変更メモ）のみであり、
   これも無改訂（§「変更4」の旧名注記付き参照規約が可変 artifact 側の
   対応）。
 - **validator**: 「teacher 語の再出現拒否」チェックは実装しない（指示5）。
@@ -425,7 +558,7 @@ pin）はいずれも無改訂。変更対象は provenance / rights / terminolo
 |---|---|---|
 | 変更1（Teacher概念の分解） | `inputs/rights_manifest.json`（`principles`/`performance_rights.provenance`）+ `RUN9_CONTRACT.yaml`（`performance_source`、§7 裁定により追加のみ） | §「変更1・2」§7 |
 | 変更2（rights_manifest 4層分離） | `inputs/rights_manifest.json` 全体再編 | §「変更1・2」 |
-| 変更3（「歌い方」定義修正） | `run9_schema.py` `PERFORMANCE_TRAIT_VOCAB`/`IDENTITY_EXCLUDED_TRAIT_VOCAB` | §「変更3・6」 |
+| 変更3（「歌い方」定義修正） | `run9_schema.py` `PERFORMANCE_RESIDUAL_VOCAB`/`IDENTITY_EXCLUDED_TRAIT_VOCAB` | §「変更3・6」 |
 | 変更4（Common Teacher Transfer 名称） | 参照規約のみ（v0.1 §14 は無改変、Common Performance Lesson を rev 0.4 以降の呼称として採用） | §「変更4」 |
 | 変更5（Source Provenance Gate = R9-G1拡張） | `run9_schema.py` `R9_G1_SEMANTIC_NAME`/`R9_G1_PASS_CONDITIONS`/`GATE_FAIL_RIGHTS_PROVENANCE_UNRESOLVED` | §「変更5」 |
 | 変更6（LessonRecord標準仕様） | `run9_schema.py` `SCHEMA_LESSON_RECORD`/`LESSON_RECORD_REQUIRED_KEYS`/`validate_lesson_record()` | §「変更3・6」 |
@@ -440,5 +573,5 @@ pin）はいずれも無改訂。変更対象は provenance / rights / terminolo
 | 0.2（無改変・存続） | `DESIGN_RUN9_REVISION_0.2.md` | `406098e2ac62065855b7e4086fce769a2956b64606594ad83b63b527a23ad4fb` |
 | 0.3（無改変・存続） | `DESIGN_RUN9_REVISION_0.3.md` | `b4f05cfbccb484a16a39b736086e989e1c953f295bda66970d491e4db5b94b04` |
 | PoR 裁定ソース（無改変・byte-pin） | `POR_CONCEPT_ADJUDICATION_20260824.txt` | `56b66fd8df943fbfa98767f2ea481c0ba2a68c26916832e08517379408d97007` |
-| 外部レビュー原文（無改変・byte-pin） | `EXTERNAL_REVIEW_AQUEST_20260825.txt` | `a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091` |
+| 派生設計変更メモ（無改変・byte-pin） | `DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt` | `a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091` |
 | 0.4（本文書） | `DESIGN_RUN9_REVISION_0.4.md` | `RUN9_CONTRACT.yaml` の `design_revision_doc_sha256` が PINNED で保持する（本文書は本文書自身の sha256 を内部に書けないため実測は contract 側を正とする） |

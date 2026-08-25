@@ -53,8 +53,8 @@ RUN_ID = "RUN9"
 EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
 
 # 現行 design_revision（凍結値。User 裁定 2026-08-25 =
-# DESIGN_RUN9_REVISION_0.4.md — 外部レビュー AQUEST 山崎信英氏
-# `EXTERNAL_REVIEW_AQUEST_20260825.txt` の採用）。旧 revision
+# DESIGN_RUN9_REVISION_0.4.md — 外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
+# `DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt` の採用）。旧 revision
 # "0.1"/"0.2"/"0.3" を宣言する contract は意図どおり拒否される — 修正が
 # 必要なら design_revision を上げ、旧 attempt を append-only 履歴として
 # 残す規約（DESIGN_RUN9 ヘッダ注記）。
@@ -428,8 +428,8 @@ HUMAN_AUDIT_MODES: Tuple[str, str] = ("DISABLED", "ADVISORY_PREDECLARED")
 DEFAULT_HUMAN_AUDIT_MODE = "DISABLED"
 
 # ---------------------------------------------------------------------------
-# rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部レビュー AQUEST 山崎信英氏
-# `EXTERNAL_REVIEW_AQUEST_20260825.txt` の採用）: R9-G1 拡張・Performance
+# rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
+# `DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt` の採用）: R9-G1 拡張・Performance
 # Trait/Identity 除外語彙・LessonRecord 標準仕様・performance_source
 # ブロックの凍結定数。実体 tooling（R9-G1 の pin 値実物照合・LessonRecord
 # manifest の実 build）は machine-dependent 作業として引き続き VG-L0
@@ -438,15 +438,15 @@ DEFAULT_HUMAN_AUDIT_MODE = "DISABLED"
 # パターン）。
 # ---------------------------------------------------------------------------
 
-# --- R9-G1 拡張（外部レビュー変更5） -----------------------------------------
+# --- R9-G1 拡張（派生設計変更メモ変更5） -----------------------------------------
 # v0.1 §19「R9-G1 INPUT_FREEZE_AND_RIGHTS」（byte-pin 不変）に対する rev 0.2
 # 方式（Adapter→ControlProfile と同型の「読み替え」— v0.1 本文は書き換え
 # ない）の意味名追加。gate ID（R9-G1）自体は変わらない。
 R9_G1_ID = "R9-G1"
 R9_G1_LEGACY_NAME = "INPUT_FREEZE_AND_RIGHTS"  # v0.1 §19 原文名（不変）
-R9_G1_SEMANTIC_NAME = "RIGHTS_AND_PROVENANCE_GATE"  # rev 0.4 追加読み替え（外部レビュー原文の逐語）
+R9_G1_SEMANTIC_NAME = "RIGHTS_AND_PROVENANCE_GATE"  # rev 0.4 追加読み替え（派生設計変更メモの逐語）
 
-# PASS 条件8項目（外部レビュー原文「変更5」の逐語8項目を機械可読 id へ写した
+# PASS 条件8項目（派生設計変更メモ「変更5」の逐語8項目を機械可読 id へ写した
 # 凍結 tuple）。**gate は構造述語**（PR #316 第4巡の層分離規約を rev 0.4 でも
 # 維持——`gate_state()` の docstring と `verify_rights_manifest_against_ledger()`
 # 直前のコメント参照）: 各条件 id の実体照合（例えば「Voice Source が実際に
@@ -463,7 +463,7 @@ R9_G1_PASS_CONDITIONS: Tuple[str, str, str, str, str, str, str, str] = (
     "NO_UNKNOWN_RIGHTS_HOLDER",
 )
 
-# FAIL 語彙（外部レビュー原文の逐語）。既存 `FAILURE_CLASSES`（rev 0.3
+# FAIL 語彙（派生設計変更メモの逐語）。既存 `FAILURE_CLASSES`（rev 0.3
 # 改訂E、3分類）とは別軸——`FAILURE_CLASSES` は attempt 全体の失敗の性質
 # （実装ミス/科学的無効/設計不能）を分類し、こちらは R9-G1 という個別
 # gate 1つの FAIL 値である。R9-G1 が不成立の attempt は、原因次第で
@@ -487,7 +487,7 @@ def r9_g1_pass_conditions_declared(declared_conditions: Any) -> bool:
     return set(R9_G1_PASS_CONDITIONS).issubset(set(declared_conditions))
 
 
-# --- performance_source ブロック（外部レビュー変更1 + 2026-08-25 User 追加
+# --- performance_source ブロック（派生設計変更メモ変更1 + 2026-08-25 User 追加
 #     裁定「確認メモ / RUN9 用語整理」） -----------------------------------
 # `RUN9_CONTRACT.yaml` 新設トップレベル欄 `performance_source` の凍結値。
 # User 追加裁定の指示2「置換でなく追加」に従い、既存 teacher 表記
@@ -509,15 +509,15 @@ TEACHER_TERMINOLOGY_NOTE = (
 )
 
 
-# --- Performance Trait / Identity 除外語彙（外部レビュー変更3・6） ----------
+# --- Performance Residual / Identity 除外語彙（派生設計変更メモ変更3・6） ----------
 
-# 「歌い方」の定義修正（外部レビュー変更3、逐語9項目）: RUN9 が Performance
-# Source から抽出・移送してよい Performance Trait（= Performance Residual）
+# 「歌い方」の定義修正（派生設計変更メモ変更3、逐語9項目）: RUN9 が Performance
+# Source から抽出・移送してよい Performance Residual（= Performance Residual）
 # の正準語彙。v0.1 §11「PJS Performance Lesson」の F0_lesson/Duration_lesson/
 # Energy_lesson/End_lesson 等（byte-pin 不変）は、本語彙の RUN9 固有の初期
 # 実装例として引き続き有効——本語彙が旧定義（「PJSの歌い方を移植する」）を
 # 置き換える正典。
-PERFORMANCE_TRAIT_VOCAB: Tuple[str, str, str, str, str, str, str, str, str] = (
+PERFORMANCE_RESIDUAL_VOCAB: Tuple[str, str, str, str, str, str, str, str, str] = (
     "relative_F0",
     "duration_ratio",
     "onset_offset",
@@ -529,13 +529,13 @@ PERFORMANCE_TRAIT_VOCAB: Tuple[str, str, str, str, str, str, str, str, str] = (
     "articulation_timing",
 )
 
-# Identity 除外 Trait の正準語彙（外部レビュー変更3の6項目 + 変更6の4項目を
+# Identity 除外 Trait の正準語彙（派生設計変更メモ変更3の6項目 + 変更6の4項目を
 # 統合。重複概念（speaker/timbre/formant の3組）は統一名 + 別名注記で吸収し
 # 7項目へ収束する — DESIGN_RUN9_REVISION_0.4.md「変更3・6」表参照）。
 #
 # 既存 `EDUCATION_FORBIDDEN_INPUTS`/`PRACTICE_FORBIDDEN_INPUTS`（rev 0.3）
 # との関係: 別の層であり、どちらか片方を変更しても他方は自動的に変わらない
-# （別の凍結対象）。`IDENTITY_EXCLUDED_TRAIT_VOCAB` は「Performance Trait
+# （別の凍結対象）。`IDENTITY_EXCLUDED_TRAIT_VOCAB` は「Performance Residual
 # として扱ってはならない特徴クラスの一般的な正準分類」（LessonRecord の
 # `explicitly_excluded_identity_traits` が完全含有すべき対象）であり、
 # `EDUCATION_FORBIDDEN_INPUTS`/`PRACTICE_FORBIDDEN_INPUTS` は「RUN9・PJS
@@ -552,11 +552,11 @@ IDENTITY_EXCLUDED_TRAIT_VOCAB: Tuple[str, str, str, str, str, str, str] = (
 )
 
 
-# --- LessonRecord 標準仕様（外部レビュー変更6） -----------------------------
+# --- LessonRecord 標準仕様（派生設計変更メモ変更6） -----------------------------
 
 SCHEMA_LESSON_RECORD = "run9-lesson-record/1.0"
 
-# 外部レビュー原文の LessonRecord 雛形を機械可読キーへ写した最低要件。
+# 派生設計変更メモの LessonRecord 雛形を機械可読キーへ写した最低要件。
 LESSON_RECORD_REQUIRED_KEYS: Tuple[str, ...] = (
     "schema",
     "lesson_id",
@@ -571,8 +571,8 @@ LESSON_RECORD_REQUIRED_KEYS: Tuple[str, ...] = (
     "provenance_manifest",
 )
 
-# 外部レビュー原文の変更6が使う5つの略記名（extracted_traits 節の逐語）を
-# `PERFORMANCE_TRAIT_VOCAB` の正準名へ解決する対応表。`relative_F0` は
+# 派生設計変更メモの変更6が使う5つの略記名（extracted_traits 節の逐語）を
+# `PERFORMANCE_RESIDUAL_VOCAB` の正準名へ解決する対応表。`relative_F0` は
 # 恒等（両語彙で綴りが同一）。
 LESSON_RECORD_TRAIT_ALIASES: Mapping[str, str] = types.MappingProxyType({
     "relative_F0": "relative_F0",
@@ -584,25 +584,25 @@ LESSON_RECORD_TRAIT_ALIASES: Mapping[str, str] = types.MappingProxyType({
 
 
 def resolve_lesson_record_trait_alias(name: Any) -> str:
-    """LessonRecord の `extracted_traits` 要素1件を正準 `PERFORMANCE_TRAIT_VOCAB`
+    """LessonRecord の `extracted_traits` 要素1件を正準 `PERFORMANCE_RESIDUAL_VOCAB`
     名へ解決する。`LESSON_RECORD_TRAIT_ALIASES` の略記名、または
-    `PERFORMANCE_TRAIT_VOCAB` の正準名そのものを受理し、いずれでもない
+    `PERFORMANCE_RESIDUAL_VOCAB` の正準名そのものを受理し、いずれでもない
     文字列は拒否する（fail-closed — 未知の trait 名を無言で通さない）。"""
     if not isinstance(name, str):
         raise Run9ValidationError(f"trait name must be a string, got {name!r}")
     if name in LESSON_RECORD_TRAIT_ALIASES:
         return LESSON_RECORD_TRAIT_ALIASES[name]
-    if name in PERFORMANCE_TRAIT_VOCAB:
+    if name in PERFORMANCE_RESIDUAL_VOCAB:
         return name
     raise Run9ValidationError(
-        f"unknown Performance Trait name {name!r} — must be one of "
+        f"unknown Performance Residual name {name!r} — must be one of "
         f"{list(LESSON_RECORD_TRAIT_ALIASES.keys())} (aliases) or "
-        f"{list(PERFORMANCE_TRAIT_VOCAB)} (canonical names)"
+        f"{list(PERFORMANCE_RESIDUAL_VOCAB)} (canonical names)"
     )
 
 
 def validate_lesson_record(data: Mapping[str, Any]) -> None:
-    """LessonRecord（外部レビュー変更6）の最低要件を検証する。
+    """LessonRecord（派生設計変更メモ変更6）の最低要件を検証する。
     `validate_practice_split_manifest()`/`validate_education_lesson_manifest()`
     と同じ「骨組み凍結」パターン——実体 build（実際の抽出結果）は
     machine-dependent 作業として VG-L0 ハーネス実装待ちのため、本関数は
@@ -644,11 +644,11 @@ def validate_lesson_record(data: Mapping[str, Any]) -> None:
             f"lesson record.extracted_traits must be a non-empty list, got {extracted_traits!r}"
         )
     resolved_traits = [resolve_lesson_record_trait_alias(t) for t in extracted_traits]
-    unknown_traits = set(resolved_traits) - set(PERFORMANCE_TRAIT_VOCAB)
+    unknown_traits = set(resolved_traits) - set(PERFORMANCE_RESIDUAL_VOCAB)
     if unknown_traits:
         raise Run9ValidationError(
             f"lesson record.extracted_traits resolved to unknown trait(s) not in "
-            f"PERFORMANCE_TRAIT_VOCAB: {sorted(unknown_traits)}"
+            f"PERFORMANCE_RESIDUAL_VOCAB: {sorted(unknown_traits)}"
         )
 
     excluded = data["explicitly_excluded_identity_traits"]
@@ -4332,7 +4332,7 @@ def verify_rights_manifest_against_ledger(
 
 SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER = "run9-rights-manifest/2.0"
 
-# 外部レビュー変更2の4層名（逐語キー、順序は外部レビュー原文の雛形順）。
+# 派生設計変更メモ変更2の4層名（逐語キー、順序は派生設計変更メモの雛形順）。
 RIGHTS_MANIFEST_LAYER_NAMES: Tuple[str, str, str, str] = (
     "voice_identity_rights",
     "performance_rights",
@@ -4340,7 +4340,7 @@ RIGHTS_MANIFEST_LAYER_NAMES: Tuple[str, str, str, str] = (
     "recording_master_rights",
 )
 
-# 外部レビュー変更1「原則」の逐語3式。
+# 派生設計変更メモ変更1「原則」の逐語3式。
 RIGHTS_MANIFEST_PRINCIPLES: Tuple[str, str, str] = (
     "Teacher ≠ Voice Identity Owner",
     "Teacher ≠ Performance Author",
@@ -4351,6 +4351,120 @@ _RIGHTS_MANIFEST_FOUR_LAYER_TOP_KEYS: FrozenSet[str] = frozenset(
     {"schema", "revision_note", "principles", "auto_interpretation_prohibited", "hard_gate", "history"}
     | set(RIGHTS_MANIFEST_LAYER_NAMES)
 )
+
+# 派生設計変更メモ変更1の provenance ネストブロック（逐語ブロック名 + 値
+# フィールド名）。Codex bot レビュー PR #319 第1巡指摘2（P2）採用: 旧
+# validate_rights_manifest_four_layer() は各層の `provenance` が dict で
+# あることしか見ておらず、`provenance: {}` やブロック欠落を素通りさせて
+# いた（DESIGN_RUN9_REVISION_0.4.md の実際の欠落 — rights_manifest.json
+# recording_master_rights.provenance に synthesis ブロックが無いまま
+# valid-file テストが green だった事実で顕在化）。ここでブロック形状を
+# 閉集合として凍結する。
+#
+# 各フィールドは「値の種別」（`_RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL` =
+# 外部の第三者事実 / `_RIGHTS_MANIFEST_FIELD_KIND_USER` = User 自身が
+# attest すべき対象）を伴う（2026-08-25 User 追加裁定②が要求する語彙分離
+# — PJS Performance Source に関する4ブロックはいずれも外部の第三者
+# （PJS corpus・その著者・演者）に関する事実であり、User 自身の権利・
+# 許諾についての欄ではないため、現行スキーマでは全フィールドが external
+# 種別になる。将来 User 自身が主体となる provenance ブロックを追加する
+# 場合のみ user 種別が使われる）。
+_RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL = "external"
+_RIGHTS_MANIFEST_FIELD_KIND_USER = "user"
+
+_RIGHTS_MANIFEST_PROVENANCE_BLOCK_VALUE_KEYS: Dict[str, Dict[str, str]] = {
+    "voice_source": {
+        "owner": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+        "source_id": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    },
+    "performance_author": {
+        "performer": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+        "performance_editor": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    },
+    "synthesis": {
+        "engine": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+        "voicebank": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    },
+    "composition": {
+        "composer": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+        "lyricist": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    },
+}
+
+# 層ごとに必須の provenance ブロック（DESIGN_RUN9_REVISION_0.4.md 「4層構造
+# への再編」対応表: performance_rights→performance_author /
+# composition_rights→composition / recording_master_rights→voice_source+
+# synthesis）。voice_identity_rights は donor ledger 転記であり provenance
+# 節自体を持たない別構造のため、本辞書には含めない（validate 側でも別扱い）。
+_RIGHTS_MANIFEST_PROVENANCE_LAYER_BLOCKS: Dict[str, FrozenSet[str]] = {
+    "performance_rights": frozenset({"performance_author"}),
+    "composition_rights": frozenset({"composition"}),
+    "recording_master_rights": frozenset({"voice_source", "synthesis"}),
+}
+
+_RIGHTS_MANIFEST_NOT_APPLICABLE = "not_applicable"
+# 2026-08-25 User 追加裁定②: 外部不明値と User 帰属未確定値を同一
+# placeholder `<PENDING_USER_ATTESTATION>` で表していた旧実装は誤り
+# だった——User が attest できるのは自身の許諾・裁定のみであり、PJS の
+# performer/composer 等の第三者事実には及ばない。語彙を分離する:
+_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION = "<PENDING_USER_ATTESTATION>"
+_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL = "<UNRESOLVED_EXTERNAL>"
+
+
+def _validate_rights_provenance_block(layer_name: str, block_name: str, block: Any) -> None:
+    """provenance 内の1ブロック（voice_source/performance_author/synthesis/
+    composition のいずれか）が閉集合形状 + 値語彙規約を満たすことを検証する。
+
+    値語彙（2026-08-25 User 追加裁定②）: 非空 str（自由記述文字列）、
+    `<PENDING_USER_ATTESTATION>`（**User 帰属欄のみ** — User 自身が
+    attest すべき対象の未確定値）、`<UNRESOLVED_EXTERNAL>`（**外部事実欄
+    のみ** — 第三者の事実で repo 内に確認できる記録が無い未解決値）、
+    または `not_applicable`（`note` に非空の理由説明を必須で伴う — 値と
+    理由を切り離さない、捏造禁止規律）。フィールドの種別と異なる
+    placeholder を使った場合は拒否する（例: 外部事実欄に
+    `<PENDING_USER_ATTESTATION>` を使うのは誤用 — 旧
+    `performance_author.performer`/`composition.composer`/`lyricist` が
+    この誤用の実例だった）。
+    """
+    field_kinds = _RIGHTS_MANIFEST_PROVENANCE_BLOCK_VALUE_KEYS[block_name]
+    value_keys = frozenset(field_kinds.keys())
+    path = f"rights manifest.{layer_name}.provenance.{block_name}"
+    if not isinstance(block, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(block).__name__}")
+    allowed_keys = value_keys | {"note"}
+    unknown = set(block.keys()) - allowed_keys
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = value_keys - set(block.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+    uses_not_applicable = False
+    for key in sorted(value_keys):
+        value = block[key]
+        if not isinstance(value, str) or not value.strip():
+            raise Run9ValidationError(f"{path}.{key} must be a non-empty string, got {value!r}")
+        if value == _RIGHTS_MANIFEST_NOT_APPLICABLE:
+            uses_not_applicable = True
+            continue
+        kind = field_kinds[key]
+        if value == _RIGHTS_MANIFEST_PENDING_USER_ATTESTATION and kind != _RIGHTS_MANIFEST_FIELD_KIND_USER:
+            raise Run9ValidationError(
+                f"{path}.{key} is an external-fact field; "
+                f"{_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} is reserved for "
+                f"User-attributable fields — use {_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} instead"
+            )
+        if value == _RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL and kind != _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL:
+            raise Run9ValidationError(
+                f"{path}.{key} is a User-attributable field; "
+                f"{_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} is reserved for "
+                f"external-fact fields — use {_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} instead"
+            )
+    if uses_not_applicable:
+        note = block.get("note")
+        if not isinstance(note, str) or not note.strip():
+            raise Run9ValidationError(
+                f"{path} uses 'not_applicable' but is missing a non-empty 'note' reason"
+            )
 
 
 def extract_voice_identity_rights_layer(four_layer_rights_manifest: Mapping[str, Any]) -> Dict[str, Any]:
@@ -4398,9 +4512,18 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
     """4層 rights_manifest（schema `run9-rights-manifest/2.0`）の構造を
     検証する。実体（provenance の個別値が事実として正しいか）は
     R9-G1 tooling の職務のまま——本関数は構造・閉じたキー集合・原則3式・
-    禁止文言・4層すべての存在と最低限の provenance キー充足のみを検証する
-    （`validate_branch_write_policy_manifest()` 等と同じ「構造のみ」の
-    境界宣言）。fail-closed（未知キー拒否・欠落キーのデフォルト補完なし）。
+    禁止文言・4層すべての存在に加え、layer ごとの provenance ネスト
+    ブロック形状（`_RIGHTS_MANIFEST_PROVENANCE_LAYER_BLOCKS`/
+    `_validate_rights_provenance_block()` — voice_source{owner,source_id}/
+    performance_author{performer,performance_editor}/
+    synthesis{engine,voicebank}/composition{composer,lyricist}の閉集合と
+    値語彙）、さらに `recording_master_rights.interpretations`（CC BY-SA
+    4.0 の share-alike 義務が合成出力へ及ぶかという法解釈を、事実である
+    `license` 節から分離する節 — 2026-08-25 User 追加裁定②）の存在・形状
+    まで検証する（`validate_branch_write_policy_manifest()` 等と同じ
+    「構造のみ」の境界宣言）。fail-closed（未知キー拒否・欠落キーの
+    デフォルト補完なし・`provenance: {}` やブロック欠落を素通りさせない
+    — Codex bot レビュー PR #319 第1巡指摘2、P2、採用）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"rights manifest must be an object, got {type(data).__name__}")
@@ -4448,10 +4571,56 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
             # performance_rights/composition_rights/recording_master_rights は
             # いずれも provenance 節を持つ（voice_identity_rights は donor
             # ledger 転記であり provenance 節を持たない別構造 — 混同しない）。
-            if "provenance" not in layer or not isinstance(layer["provenance"], dict):
+            provenance = layer.get("provenance")
+            if not isinstance(provenance, dict):
                 raise Run9ValidationError(
                     f"rights manifest.{layer_name}.provenance must be an object"
                 )
+            # Codex bot レビュー PR #319 第1巡指摘2（P2）採用: dict である
+            # ことだけでなく、層ごとの必須ブロック（下記
+            # _RIGHTS_MANIFEST_PROVENANCE_LAYER_BLOCKS）が揃っていること・
+            # 未知ブロックが無いこと・各ブロック内部の形状が閉集合を満たす
+            # ことまで検証する（`provenance: {}` を素通りさせない）。
+            required_blocks = _RIGHTS_MANIFEST_PROVENANCE_LAYER_BLOCKS[layer_name]
+            missing_blocks = required_blocks - set(provenance.keys())
+            if missing_blocks:
+                raise Run9ValidationError(
+                    f"rights manifest.{layer_name}.provenance missing required block(s): "
+                    f"{sorted(missing_blocks)}"
+                )
+            extra_blocks = set(provenance.keys()) - required_blocks
+            if extra_blocks:
+                raise Run9ValidationError(
+                    f"rights manifest.{layer_name}.provenance has unknown block(s): "
+                    f"{sorted(extra_blocks)}"
+                )
+            for block_name in sorted(required_blocks):
+                _validate_rights_provenance_block(layer_name, block_name, provenance[block_name])
+
+        if layer_name == "recording_master_rights":
+            # 2026-08-25 User 追加裁定②: CC BY-SA 4.0 の share-alike 義務が
+            # 合成出力へ及ぶかは事実でなく法解釈であり、`license`（事実）から
+            # 分離した `interpretations` 節を必須とする。
+            interpretations = layer.get("interpretations")
+            if not isinstance(interpretations, dict) or not interpretations:
+                raise Run9ValidationError(
+                    "rights manifest.recording_master_rights.interpretations must be a "
+                    "non-empty object (事実とライセンス適用の法解釈を分離する節が必須 — "
+                    "2026-08-25 User 追加裁定②)"
+                )
+            for interp_key, interp_value in interpretations.items():
+                path = f"rights manifest.recording_master_rights.interpretations.{interp_key}"
+                if not isinstance(interp_value, dict):
+                    raise Run9ValidationError(f"{path} must be an object")
+                status = interp_value.get("status")
+                if not isinstance(status, str) or not status.strip():
+                    raise Run9ValidationError(f"{path}.status must be a non-empty string")
+                for required_key in ("question", "note"):
+                    value = interp_value.get(required_key)
+                    if not isinstance(value, str) or not value.strip():
+                        raise Run9ValidationError(
+                            f"{path}.{required_key} must be a non-empty string"
+                        )
 
     performance_source = data["performance_rights"].get("performance_source")
     if not isinstance(performance_source, dict):

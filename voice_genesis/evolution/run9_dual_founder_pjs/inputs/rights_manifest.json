@@ -1,19 +1,19 @@
 {
   "schema": "run9-rights-manifest/2.0",
-  "revision_note": "rev 0.4（DESIGN_RUN9_REVISION_0.4.md 変更1・2、外部レビュー AQUEST 山崎信英氏 2026-08-25 の採用）: schema run9-user-donor-rights/1.0 の単層構造（User donor UC-001..017 のみ）を、voice_identity_rights/performance_rights/composition_rights/recording_master_rights の4層構造へ再編した。旧内容（User donor 17件・usage_grants・rights_class/consent_status/attestation）は voice_identity_rights 層へ内容無改変のまま移設し、performance_rights/composition_rights/recording_master_rights の3層を新設した（PJS Performance Source の provenance を機械検証可能な範囲で充填 — 出典は各層の provenance フィールド参照）。",
+  "revision_note": "rev 0.4（DESIGN_RUN9_REVISION_0.4.md 変更1・2、外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ 2026-08-25 の採用）: schema run9-user-donor-rights/1.0 の単層構造（User donor UC-001..017 のみ）を、voice_identity_rights/performance_rights/composition_rights/recording_master_rights の4層構造へ再編した。旧内容（User donor 17件・usage_grants・rights_class/consent_status/attestation）は voice_identity_rights 層へ内容無改変のまま移設し、performance_rights/composition_rights/recording_master_rights の3層を新設した（PJS Performance Source の provenance を機械検証可能な範囲で充填 — 出典は各層の provenance フィールド参照）。",
   "principles": {
-    "source": "EXTERNAL_REVIEW_AQUEST_20260825.txt 変更1（逐語）",
+    "source": "DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt 変更1（逐語）",
     "statements": [
       "Teacher ≠ Voice Identity Owner",
       "Teacher ≠ Performance Author",
       "Voice Source ≠ Performance Source"
     ]
   },
-  "auto_interpretation_prohibited": "VoiceBank利用許諾 → Performance利用許諾も得た、と自動的に解釈することを禁止する（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2、逐語）。4層すべてについて provenance / permission を個別に確定しない限り、いずれかの層の許諾を他層へ流用しない。",
-  "hard_gate": "4層すべてについて provenance / permission を確定する（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2「Hard Gate」、逐語）。本 Gate の機械可読版は run9_schema.R9_G1_PASS_CONDITIONS（R9-G1 RIGHTS_AND_PROVENANCE_GATE、DESIGN_RUN9_REVISION_0.4.md 変更5）を参照。",
+  "auto_interpretation_prohibited": "VoiceBank利用許諾 → Performance利用許諾も得た、と自動的に解釈することを禁止する（DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt 変更2、逐語）。4層すべてについて provenance / permission を個別に確定しない限り、いずれかの層の許諾を他層へ流用しない。",
+  "hard_gate": "4層すべてについて provenance / permission を確定する（DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt 変更2「Hard Gate」、逐語）。本 Gate の機械可読版は run9_schema.R9_G1_PASS_CONDITIONS（R9-G1 RIGHTS_AND_PROVENANCE_GATE、DESIGN_RUN9_REVISION_0.4.md 変更5）を参照。",
 
   "voice_identity_rights": {
-    "role": "Voice / VoiceBank / speaker identity の権利（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2）。RUN9 の User Identity anchor（domains/identity_domain_run9_v1.json anchor_hashes.user）として使用する User donor の声そのものの権利。旧 schema run9-user-donor-rights/1.0 の全内容をここへ無改変で格納する。",
+    "role": "Voice / VoiceBank / speaker identity の権利（DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt 変更2）。RUN9 の User Identity anchor（domains/identity_domain_run9_v1.json anchor_hashes.user）として使用する User donor の声そのものの権利。旧 schema run9-user-donor-rights/1.0 の全内容をここへ無改変で格納する。",
     "schema_legacy": "run9-user-donor-rights/1.0",
     "donor_ledger_source": "voice_genesis/foundry/recording_kit/user_donor_ledger.json",
     "donor_ledger_schema": "user-donor-ledger/0.1",
@@ -141,31 +141,31 @@
   },
 
   "performance_rights": {
-    "role": "歌唱・調声・演奏表現・UST 等の権利/許諾（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2）。RUN9 が PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE 両枝で消費する PJS 由来 Performance の権利来歴。",
+    "role": "歌唱・調声・演奏表現・UST 等の権利/許諾（DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt 変更2）。RUN9 が PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE 両枝で消費する PJS 由来 Performance の権利来歴。",
     "performance_source": {
       "id": "PJS",
       "role": "EXTERNAL_PERFORMANCE_SOURCE",
-      "note": "外部レビュー変更1（逐語 performance_source 雛形）の実装。v0.1 §7.4「External Curriculum Provider / Performance teacher only」の役割記述を精密化する — PJS は Identity anchor でも RUN9 の親4体目でもない（v0.1 §27 item 10「PJS coordinate is structurally impossible」不変）。"
+      "note": "派生設計変更メモ変更1（逐語 performance_source 雛形）の実装。v0.1 §7.4「External Curriculum Provider / Performance teacher only」の役割記述を精密化する — PJS は Identity anchor でも RUN9 の親4体目でもない（v0.1 §27 item 10「PJS coordinate is structurally impossible」不変）。"
     },
     "provenance": {
       "performance_author": {
-        "performer": "<PENDING_USER_ATTESTATION>",
+        "performer": "Junya Koguchi",
         "performance_editor": "not_applicable",
-        "note": "PJS corpus は自然録音の歌唱コーパスであり、UTAU型の音声合成 + 別途調声者という2レイヤー構造を持たない（出典: voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md 引用の論文 Koguchi & Takamichi, arXiv:2006.02959 が \"singing voice corpus\" と明記）。歌唱者個人の氏名は原典・repo いずれにも記載がないため performer は PENDING のまま — 捏造しない。performance_editor は構造的に存在しない対象のため not_applicable（値未確定の PENDING とは区別する）。"
+        "note": "PJS corpus は自然録音の歌唱コーパスであり、UTAU型の音声合成 + 別途調声者という2レイヤー構造を持たない（出典: voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md 引用の論文 Koguchi & Takamichi, arXiv:2006.02959 が \"singing voice corpus\" と明記）。performer = Junya Koguchi は 2026-08-25 User 追加裁定②（外部資料 pjs_terms_snapshot.md 引用の論文 \"Koguchi & Takamichi, arXiv:2006.02959\" の姓 Koguchi と対応する著者個人名の確認）による充填——旧値 `<PENDING_USER_ATTESTATION>` は誤用だった: performer は User 自身が attest できる対象ではなく外部の第三者事実であるため、本来 `<UNRESOLVED_EXTERNAL>` 語彙で表すべき欄だった（この誤用自体は同裁定②で是正）。performance_editor は構造的に存在しない対象のため not_applicable（値未確定とは区別する）。"
       }
     },
     "rights_class": "PENDING_USER_ATTESTATION",
     "consent_status": "PENDING_USER_ATTESTATION",
-    "consent_status_note": "ライセンス自体（CC BY-SA 4.0、研究・商用いずれも利用可 — recording_master_rights.license 参照）は機械検証済みで明確だが、外部レビューが要求する「Performance Author 個人の特定」（R9_G1_PASS_CONDITIONS の PERFORMANCE_AUTHOR_IDENTIFIED）は performer が PENDING のあいだ満たされない。ライセンスが明確であることと、権利主体の個人特定が完了していることは別の条件であり、後者が満たされるまで consent_status は PENDING のまま正直に据え置く。"
+    "consent_status_note": "ライセンス自体（CC BY-SA 4.0、研究・商用いずれも利用可 — recording_master_rights.license 参照）は機械検証済みで明確だが、派生設計変更メモが要求する「Performance Author 個人の特定」（R9_G1_PASS_CONDITIONS の PERFORMANCE_AUTHOR_IDENTIFIED）は 2026-08-25 User 追加裁定②による performer 充填（Junya Koguchi、上記 provenance 参照）で満たされた。ただし rights_class/consent_status 自体（PJS 内部使用が rights-clean curriculum 要件を満たすかの最終確認 = R9-G1 tooling の職務）は本裁定の対象外であり、正直に PENDING_USER_ATTESTATION のまま据え置く——performer 個人の特定と、使用許諾条件の確定は別の条件である。"
   },
 
   "composition_rights": {
-    "role": "楽曲・旋律・歌詞等の権利（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2）。",
+    "role": "楽曲・旋律・歌詞等の権利（DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt 変更2）。",
     "provenance": {
       "composition": {
-        "composer": "<PENDING_USER_ATTESTATION>",
-        "lyricist": "<PENDING_USER_ATTESTATION>",
-        "note": "PJS corpus のトラック別 composer/lyricist クレジットは repo 内に記録がない（pjs_terms_snapshot.md はコーパス全体のライセンスのみを引用し、個別楽曲の作曲者・作詞者クレジットには言及しない）。捏造せず PENDING のまま残す。"
+        "composer": "Junya Koguchi",
+        "lyricist": "<UNRESOLVED_EXTERNAL>",
+        "note": "composer = Junya Koguchi は 2026-08-25 User 追加裁定②（外部資料 pjs_terms_snapshot.md 引用の論文 \"Koguchi & Takamichi, arXiv:2006.02959\" の確認）による充填。lyricist は repo 内・原典いずれにも個別クレジットの記録がなく未解決のまま — `<UNRESOLVED_EXTERNAL>`（外部の第三者事実として未解決、User が attest すべき欄ではないため `<PENDING_USER_ATTESTATION>` は使わない — 同裁定②が導入した語彙区別）。捏造しない。"
       }
     },
     "rights_class": "PENDING_USER_ATTESTATION",
@@ -173,19 +173,32 @@
   },
 
   "recording_master_rights": {
-    "role": "使用する生成音声・録音物自体の権利（EXTERNAL_REVIEW_AQUEST_20260825.txt 変更2）。PJS の実配布 WAV（RUN9 が PRACTICE_FROM_AUDIO 枝で observe する raw audio、および Lesson 抽出の入力）の権利。",
+    "role": "使用する生成音声・録音物自体の権利（DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt 変更2）。PJS の実配布 WAV（RUN9 が PRACTICE_FROM_AUDIO 枝で observe する raw audio、および Lesson 抽出の入力）の権利。",
     "provenance": {
       "voice_source": {
-        "owner": "PJS corpus（\"PJS: phoneme-balanced Japanese singing voice corpus\"、Koguchi & Takamichi, arXiv:2006.02959）",
+        "owner": "Junya Koguchi",
         "source_id": "PJS_corpus_ver1.1",
-        "note": "個人/法人としての著作権者名の disclosure は原典（プロジェクトページ・論文）に見当たらない。コーパス単位のライセンス表示（CC BY-SA 4.0）を owner の実務上の根拠として記録する。"
+        "note": "owner は 2026-08-25 User 追加裁定②による訂正: 旧値「PJS corpus（\"PJS: phoneme-balanced Japanese singing voice corpus\"、Koguchi & Takamichi, arXiv:2006.02959）」はコーパスという物自体を owner（権利主体）として記載する誤りだった——corpus は主体ではなく客体である。正しい主体は出典（pjs_terms_snapshot.md 引用の論文 \"Koguchi & Takamichi, arXiv:2006.02959\"）が示す著者 Junya Koguchi（姓 Koguchi は論文引用と一致、個人名の対応は同裁定②の外部資料確認による）。法人としての著作権者名の disclosure は原典に見当たらないため、確認できた個人名を owner の実務上の根拠として記録する。"
+      },
+      "synthesis": {
+        "engine": "not_applicable",
+        "voicebank": "not_applicable",
+        "note": "PJS corpus は歌手による自然歌唱録音であり、UTAU 型の音声合成エンジン・voicebank を経由しない（RUN9 が PJS から取得するのは Performance Residual のみで音声合成物ではない）。performance_rights.provenance.performance_author.performance_editor が not_applicable である根拠（自然録音、UTAU 型の別調声レイヤーなし）と同一の判断根拠。出典: voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md（論文 Koguchi & Takamichi, arXiv:2006.02959 が \"singing voice corpus\" と明記、synthesis 由来ではない）。DESIGN_RUN9_REVISION_0.4.md 「provenance の実値充填」表 synthesis.engine/synthesis.voicebank 行、参照。"
       }
     },
     "license": {
       "value": "CC BY-SA 4.0",
       "scope": "コーパス全体（\"All the data in our corpus is licensed with CC BY-SA 4.0\"）。研究・商用いずれも利用可。",
-      "derivative_obligation": "派生物（本タスクの合成音声出力を含む）を頒布・公開する場合は同一ライセンス（CC BY-SA 4.0）での継承 + 原著作者へのクレジット表示（Attribution: Koguchi & Takamichi, arXiv:2006.02959）が必須。RUN9 は現時点で出力を頒布・公開していない（machine-independent 設計層のみ）。",
+      "derivative_obligation": "ライセンス文言自体（機械検証済みの事実）: 派生物を頒布・公開する場合は同一ライセンス（CC BY-SA 4.0）での継承 + 原著作者へのクレジット表示（Attribution: Koguchi & Takamichi, arXiv:2006.02959）が必須、と CC BY-SA 4.0 は定める。RUN9 は現時点で出力を頒布・公開していない（machine-independent 設計層のみ）。この文言が RUN9 の合成音声出力に対して具体的にどう適用されるか（本タスクの出力が「派生物」に該当するか等）は事実ではなく法解釈であり、確定した権利判断ではない——`interpretations.share_alike_applies_to_synthesis_output` 参照（2026-08-25 User 追加裁定②: 事実と解釈の分離）。",
       "source": "voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md（プロジェクトページ + 論文 arXiv:2006.02959 の逐語スナップショット、取得日 2026-08-15）"
+    },
+    "interpretations": {
+      "share_alike_applies_to_synthesis_output": {
+        "status": "UNSETTLED_LEGAL_INTERPRETATION",
+        "question": "CC BY-SA 4.0 の share-alike（同一ライセンス継承）義務が、PJS 音源を機械学習入力として用いて生成した合成音声出力（そもそも著作権法上の \"derivative work\" に該当するか自体も未確定）へ及ぶかどうか。",
+        "note": "license.value（CC BY-SA 4.0 というライセンス種別そのもの）とlicense.derivative_obligation（ライセンス文言そのものの記述）は機械検証済みの事実である一方、本欄が扱う適用範囲の問題は法解釈であり、本 manifest のいかなる欄も権利判断を確定させるものではない（2026-08-25 User 追加裁定② — 事実/解釈分離の要求）。「合成音声そのものの生成・公開」を名指しした条文は論文・プロジェクトページいずれにも見当たらない（pjs_terms_snapshot.md 記載どおり、明文不在）。RUN9 は現時点で出力を頒布・公開していないため実務上の帰結は生じていないが、将来 RUN9 の出力を頒布・公開する判断を行う前に、本欄を確定させる法務確認を要する。",
+        "source": "voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md 「ライセンス解釈と本タスクでの attribution 方針」節（同ファイルが既にこの未決性を記録済み — 本欄は rights_manifest.json 側でも同じ区別を機械可読に保持する）"
+      }
     },
     "corpus_pins": {
       "source_archive_sha256": {
@@ -209,7 +222,11 @@
     },
     {
       "date": "2026-08-25",
-      "event": "rev 0.4（DESIGN_RUN9_REVISION_0.4.md 変更1・2、外部レビュー AQUEST 山崎信英氏の採用）: schema を run9-rights-manifest/2.0 へ改版し、単層構造を voice_identity_rights/performance_rights/composition_rights/recording_master_rights の4層構造へ再編。旧内容は voice_identity_rights 層へ無改変で移設。performance_rights/composition_rights/recording_master_rights の3層を新設し、PJS Performance Source の provenance を機械検証可能な範囲で充填（出典: pjs_terms_snapshot.md / s1_dataprep/README.md / pjs_neutral.json）。voice_identity_rights.attestation の値・attest 対象は本改訂で変更しない（User裁定「aとbを承認」のa = 新4層構造に対する attest は次段で確定）。"
+      "event": "rev 0.4（DESIGN_RUN9_REVISION_0.4.md 変更1・2、外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモの編入）: schema を run9-rights-manifest/2.0 へ改版し、単層構造を voice_identity_rights/performance_rights/composition_rights/recording_master_rights の4層構造へ再編。旧内容は voice_identity_rights 層へ無改変で移設。performance_rights/composition_rights/recording_master_rights の3層を新設し、PJS Performance Source の provenance を機械検証可能な範囲で充填（出典: pjs_terms_snapshot.md / s1_dataprep/README.md / pjs_neutral.json）。voice_identity_rights.attestation の値・attest 対象は本改訂で変更しない（User裁定「aとbを承認」のa = 新4層構造に対する attest は次段で確定）。"
+    },
+    {
+      "date": "2026-08-25",
+      "event": "同日中の追加 User 裁定②により provenance を是正: performance_author.performer / composition.composer に外部資料出典付きで Junya Koguchi を充填（旧値 `<PENDING_USER_ATTESTATION>` は誤用——外部の第三者事実を User 帰属欄の語彙で表していた）。recording_master_rights.provenance.voice_source.owner を「PJS corpus」（客体）から著者個人 Junya Koguchi（主体）へ訂正。composition.lyricist は未解決のまま `<UNRESOLVED_EXTERNAL>`（外部事実欄専用の新設 placeholder。User が attest できるのは自身の許諾・裁定のみであり、第三者の事実確認ではないため `<PENDING_USER_ATTESTATION>` と語彙上区別する）へ張り替え。recording_master_rights に `interpretations.share_alike_applies_to_synthesis_output` を新設し、CC BY-SA 4.0 の share-alike 義務が合成音声出力へ及ぶかという法解釈上の論点を、ライセンス自体の事実（license 節）から明示的に分離した。"
     }
   ]
 }

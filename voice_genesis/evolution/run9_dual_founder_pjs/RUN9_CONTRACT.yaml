@@ -25,13 +25,40 @@
 # `interventions`/`single_intervention` キー不一致の双方で意図どおり
 # fail-closed 拒否される）。
 #
-# 2026-08-25 外部レビュー AQUEST 山崎信英氏（EXTERNAL_REVIEW_AQUEST_
-# 20260825.txt、byte-pin 不変）の採用により design_revision 0.3 → 0.4
-# （DESIGN_RUN9_REVISION_0.4.md）。User 裁定「aとbを承認」の b により
-# `backbone_runtime_bundle.json` の `render_code_commit.status` が
-# INFERRED_UNCONFIRMED → USER_ATTESTED へ確定し、連動して本欄
-# `backbone_runtime_bundle_sha` が PENDING → PINNED へ昇格した。新設
-# トップレベル欄 `performance_source`（2026-08-25 User 追加裁定「確認メモ
+# 2026-08-25 外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
+# （DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt、byte-pin
+# 不変）の編入により design_revision 0.3 → 0.4（DESIGN_RUN9_REVISION_0.4.md）。
+# 山崎氏に帰属するのは外部指摘の核心（VoiceBank に歌い方情報はほぼ含まれず、
+# Voice Source の権利者 ≠ Performance の権利・来歴主体、の分離指摘）のみ
+# ——「変更1」〜「変更8」の具体設計・schema・gate 拡張はこの指摘を受けて
+# 我々が起草した派生設計であり、山崎氏の逐語著述ではない（本ファイルは
+# 2026-08-25 まで当該メモ・ファイルを「外部レビュー原文」と誤って特徴付け
+# ていた — 実在の外部者への誤帰属だったため P0 訂正。詳細は
+# DESIGN_RUN9_REVISION_0.4.md「P0 訂正」節）。
+#
+# rev 0.4 実装時、User 裁定「aとbを承認」の b により
+# `backbone_runtime_bundle.json` の `render_code_commit.status` を
+# INFERRED_UNCONFIRMED → USER_ATTESTED へ一時昇格したが、これは過大
+# だった（2026-08-25 User 追加裁定①）: render_code_commit は RUN6 の
+# 歴史的 export provenance であり、歴史的事実は遡って attest しない。
+# 同日中に INFERRED_UNCONFIRMED へ差し戻し、代わりに RUN9 が今後の
+# render に使用する commit を独立に前方宣言する新欄
+# `run9_render_code_commit`（status: DECLARED_FOR_RUN9）を新設した
+# （値は同じ e2307b1 だが意味論は歴史的推定と独立 — 詳細は下記
+# backbone_runtime_bundle_sha コメント参照）。`backbone_runtime_bundle_sha`
+# はこの構造変更を反映して実バイト sha を再計算し PINNED を維持（旧値
+# b92dac0e... は履歴として同コメントに保持）。
+#
+# 同追加裁定②により rights_manifest.json の provenance を是正
+# （performer/composer に外部資料出典付きで Junya Koguchi を充填、
+# voice_source.owner の主体誤り訂正、placeholder 語彙を
+# `<PENDING_USER_ATTESTATION>`＝User 帰属欄専用 /
+# `<UNRESOLVED_EXTERNAL>`＝外部事実欄専用へ分離、CC BY-SA 4.0 の
+# share-alike 義務が合成出力へ及ぶかは事実でなく解釈である旨を
+# `interpretations` 節で分離）。同③により
+# `run9_schema.PERFORMANCE_TRAIT_VOCAB` を `PERFORMANCE_RESIDUAL_VOCAB`
+# へ改名（既存 TRAIT_CONTROL 層との用語衝突回避、9項目の中身は不変）。
+# 新設トップレベル欄 `performance_source`（2026-08-25 User 追加裁定「確認メモ
 # / RUN9 用語整理」指示2）は既存 pin 値・構造を破壊しない追加のみ——
 # teacher_reference 相当の既存欄は元々存在しない（rev 0.3 で
 # `interventions` 構造へ既に移行済み）。旧 "0.1"〜"0.3" 形式の contract は
@@ -137,13 +164,17 @@ design_doc_sha256:
 # まま存続し、その系譜は DESIGN_RUN9_REVISION_0.4.md 末尾「design_revision
 # 系譜」表に記録する（欄としては最新 revision の1件のみを pin する規約は
 # design_doc_sha256/design_revision_doc_sha256 の前例どおり）。
-# 2026-08-25 外部レビュー AQUEST 山崎信英氏
-# （EXTERNAL_REVIEW_AQUEST_20260825.txt、byte-pin 不変。sha256 =
+# 2026-08-25 外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
+# （DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt、byte-pin 不変。sha256 =
 # a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091）の
 # 採用 + User 追加裁定「確認メモ / RUN9 用語整理」を反映した rev 0.4 の
-# sha256 を pin する。
+# sha256 を pin する。同日中の追加 User 裁定4件（①〜③・P0、
+# DESIGN_RUN9_REVISION_0.4.md「2026-08-25 User 追加裁定4件」節）を rev 0.4
+# 文書自身に追記したことに伴い、値を再計算した（旧値
+# 6b998d1b0e806d0a02262f5b62d0cbc6d4d72f7c6b0293a31b84134637785634 は
+# 履歴として append-only 保持）。
 design_revision_doc_sha256:
-  value: "6b998d1b0e806d0a02262f5b62d0cbc6d4d72f7c6b0293a31b84134637785634"
+  value: "fc8e91d76bf92837c930963f97556171c3beaf145a4798671bd5b9a79f8ec4be"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.4.md
 
@@ -198,10 +229,14 @@ dependency_pins_sha:
   status: PENDING
   reason: >-
     Backbone checkpoint 本体は backbone_checkpoint_sha として PINNED 済み。
-    backbone_runtime_bundle_sha は bundle 内 render_code_commit が
-    INFERRED_UNCONFIRMED のため PENDING（下記参照）。VG-L0 学習ハーネス
-    自体の依存関係 pin（Python パッケージ・PyTorch 等のバージョン固定）も
-    未確定のため、本欄全体としてはまだ PENDING。
+    backbone_runtime_bundle_sha も、RUN9 が今後の render に使用する commit
+    の前方宣言 `run9_render_code_commit`（status: DECLARED_FOR_RUN9）の
+    確定を根拠に PINNED 済み（bundle 内 `render_code_commit` は RUN6 の
+    歴史的 export provenance record として INFERRED_UNCONFIRMED のまま
+    ——歴史的事実は遡って attest しない、2026-08-25 User 追加裁定①。
+    両欄は独立であり、下記参照）。VG-L0 学習ハーネス自体の依存関係 pin
+    （Python パッケージ・PyTorch 等のバージョン固定）が未確定のため、
+    本欄全体としてはまだ PENDING。
 
 execution_profile_sha:
   value: null
@@ -263,8 +298,22 @@ backbone_checkpoint_sha:
 # 条件（bundle 内 PENDING 相当欄の解消）が満たされたため PINNED へ昇格
 # する。値は `run9_schema.compute_file_sha256(inputs/backbone_runtime_
 # bundle.json)`（design_doc_sha256 と同一のファイル実バイト規約）の実測値。
+# 当時の値（履歴として append-only 保持）:
+# "b92dac0e9077bf816275292123796396bd41ba33f19d03fa67eeb183fc7fcfbb"
+#
+# 2026-08-25 同日中の追加 User 裁定①（上記ファイル冒頭コメント参照）に
+# より、bundle 側の構造が変わった: render_code_commit（RUN6 の歴史的
+# export provenance）は INFERRED_UNCONFIRMED へ差し戻し、User attestation
+# の実体的意味（RUN9 が今後使う commit の確定）は新設の独立欄
+# `run9_render_code_commit`（status: DECLARED_FOR_RUN9）へ移した。本欄の
+# PINNED 判定はこの `run9_render_code_commit` の確定を根拠とする——
+# render_code_commit が INFERRED_UNCONFIRMED のままであることは本欄の
+# PINNED 判定を妨げない（両者は独立な欄であり、「bundle 内 render_code_
+# commit の status が USER_ATTESTED になったから連動して昇格した」という
+# 上記の旧記述は、その後の構造変更で正確ではなくなった——本パラグラフが
+# 現在の正しい根拠を上書きする）。bundle 実体変更に伴い値を再計算した。
 backbone_runtime_bundle_sha:
-  value: "b92dac0e9077bf816275292123796396bd41ba33f19d03fa67eeb183fc7fcfbb"
+  value: "69ea578bb702f0dd0ca16c1a20b34d4f78c81495b1318a5d0503050c84d37a53"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/backbone_runtime_bundle.json
 
@@ -436,7 +485,7 @@ claim_strength_target: C2
 human_audit_mode: DISABLED
 
 # --- performance_source: pin 欄ではなく通常欄（rev 0.4 新設、
-# DESIGN_RUN9_REVISION_0.4.md、外部レビュー AQUEST 山崎信英氏の変更1 +
+# DESIGN_RUN9_REVISION_0.4.md、外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモの変更1 +
 # 2026-08-25 User 追加裁定「確認メモ / RUN9 用語整理」指示2）。
 # `run9_schema.validate_performance_source_block()` が構造を検証する
 # （id/role は凍結値へ厳密一致、teacher_terminology_note は非所有の趣旨
