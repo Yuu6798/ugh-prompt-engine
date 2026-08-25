@@ -10402,14 +10402,68 @@ def test_fix323_13_readme_dependency_closure_matches_verified_imports() -> None:
 
 
 def test_fix323_13_readme_dependency_steps_appear_exactly_once() -> None:
-    """依存導入ステップの代替（最小閉包）行が README 本文中で重複なく
-    1回だけ記述されていること（コピペミスや二重記載の回帰防止）。推奨
-    コマンド `pip install -e ".[dev]"` は文中で自身を指す説明コメント
-    （CLAUDE.md Commands 節との同一性の言及）と実行行の計2箇所に現れる
-    設計のため、こちらは2回一致で確認する。実測（依存導入前は
+    """依存導入ステップの推奨（`pip install -e ".[dev]"` を含む行）・
+    代替（最小閉包）行が README 本文中でそれぞれ重複なく1回だけ記述
+    されていること（コピペミスや二重記載の回帰防止）。〔履歴: 第13巡
+    導入時点では説明コメントが `pip install -e ".[dev]"` を引用のため
+    2回一致だったが、第14巡（Fix 14）で推奨コマンド自体が `gdown` を
+    追記した1コマンドへ改訂され、説明コメントは引用形を使わなくなった
+    ため1回一致に変わった → 第14巡で解消〕。実測（依存導入前は
     ModuleNotFoundError、導入後は生成 + pin sha 一致まで成功）は本
     セッションで実施済み——生ログは scratchpad/pjs_r14_venv_verify.txt
     （リポジトリ外・監査目的のみで pytest 対象外）。"""
     readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
-    assert readme_text.count('pip install -e ".[dev]"') == 2
+    assert readme_text.count('pip install -e ".[dev]"') == 1
+    assert readme_text.count('pip install -e ".[dev]" gdown') == 1
     assert readme_text.count("pip install numpy pyyaml gdown") == 1
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第14巡1件（P2, 上限超過後だが3分類の新しい
+# 具体経路として採用, Fix 14）: Fix 13 が追加した推奨コマンド `pip
+# install -e ".[dev]"` は、`pyproject.toml` の本体依存にも `dev` extra
+# にも `gdown` を含まないため、推奨経路を選んだ読者が step 1 の
+# `import gdown` で `ModuleNotFoundError` に陥る——Fix 13 自身が対処した
+# 欠陥（依存欠落による文書化フローの実行不能）が、Fix 13 の直した箇所に
+# 残存する新しい具体経路。`pyproject.toml` へ `gdown` を追加する案は
+# 不採用（`gdown` は本レシピ専用でプロジェクト本体の実行時依存ではない
+# ため、本体依存表を汚染しない）。代わりに推奨コマンド自体を `pip
+# install -e ".[dev]" gdown` へ改め、1コマンドで完結させた。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_14_readme_recommended_command_installs_gdown() -> None:
+    """README.md の推奨依存導入コマンドが `pip install -e ".[dev]"
+    gdown`（1コマンドで `gdown` を含む）へ改訂されており、`gdown` を
+    含まない旧単体コマンド `pip install -e ".[dev]"`（末尾がそこで
+    終わる形）がもう本文に残っていないこと。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert 'pip install -e ".[dev]" gdown' in readme_text
+    # 旧・gdown を含まない単体コマンドが独立行として残っていないこと
+    # （直後に " gdown" が続く形以外での出現がないことを確認する）。
+    idx = readme_text.index('pip install -e ".[dev]"')
+    tail = readme_text[idx : idx + len('pip install -e ".[dev]" gdown')]
+    assert tail == 'pip install -e ".[dev]" gdown'
+
+
+def test_fix323_14_pyproject_has_no_gdown_dependency() -> None:
+    """`pyproject.toml` の本体依存 (`[project].dependencies`) にも `dev`
+    extra (`[project.optional-dependencies].dev`) にも `gdown` が
+    含まれていないこと——Fix 14 の裁定根拠（推奨コマンド単体では gdown
+    が入らない）が実ファイルと一致していることの直接確認。本テストは
+    「`pyproject.toml` へ `gdown` を追加しない」という Fix 14 の設計判断
+    （本レシピ専用の依存であり本体依存表を汚染しない）を pin する回帰
+    テストでもある——将来 `pyproject.toml` に `gdown` が追加された場合は
+    本テストが red になり、README 側の二重記載（1コマンド化の前提が
+    崩れる）に気づける。"""
+    repo_root = _RUN_DIR.parent.parent.parent
+    pyproject_text = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+    deps_start = pyproject_text.index("dependencies = [")
+    deps_end = pyproject_text.index("]", deps_start)
+    dependencies_block = pyproject_text[deps_start:deps_end]
+    assert "gdown" not in dependencies_block
+
+    dev_start = pyproject_text.index('dev = ["pytest')
+    dev_end = pyproject_text.index("]", dev_start)
+    dev_block = pyproject_text[dev_start:dev_end]
+    assert "gdown" not in dev_block

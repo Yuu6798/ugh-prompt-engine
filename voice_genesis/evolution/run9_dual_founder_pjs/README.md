@@ -670,11 +670,20 @@ clean Python 環境では上記ブロックの実行後も `gdown` を含め依�
 （`pyproject.toml:13-25` の該当行）のみ——`librosa` は acoustic inventory
 sidecar 専用関数 `_measure_pitch_range_hz` 内のローカル import で、本
 生成経路には到達しない。以下のいずれかを、このステップ列より先に実行
-する）:
+する。第14巡指摘, P2, 採用, Fix 14 — 推奨コマンド `pip install
+-e ".[dev]"` 単体では `gdown` が入らず（`pyproject.toml` の本体依存にも
+`dev` extra にも `gdown` は含まれていない——本セッションで実ファイルを
+再確認済み）、推奨側を選んだ読者が step 1 の `import gdown` で
+`ModuleNotFoundError` に陥る欠陥があった。`pyproject.toml` へ `gdown` を
+追加する案は不採用——`gdown` は本レシピ（PJS 公開配布物の再現取得）
+専用であり、プロジェクト本体が実行時に要求する依存ではないため、
+本体依存表を汚染しない。代わりに推奨コマンド自体へ `gdown` を追記し、
+1コマンドで完結させた）:
 ```bash
-# 推奨: リポジトリ標準の導入手順（repo root で実行。CLAUDE.md Commands
-# 節の `pip install -e ".[dev]"` と同一コマンド）
-pip install -e ".[dev]"
+# 推奨: リポジトリ標準の導入手順（repo root で実行）+ 本レシピ専用の
+# `gdown`（`pyproject.toml` の本体依存にも `dev` extra にも含まれない
+# ため、CLAUDE.md Commands 節のコマンドへ追記する形で1コマンド化）
+pip install -e ".[dev]" gdown
 
 # 代替（最小・実ソース確認済みの閉包のみ。リポジトリ全体の開発環境が
 # 不要で本レシピの実行だけが目的の場合）
