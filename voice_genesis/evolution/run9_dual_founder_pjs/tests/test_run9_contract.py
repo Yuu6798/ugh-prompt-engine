@@ -3724,17 +3724,23 @@ def test_fix6_practice_split_sha_is_a_pin_field() -> None:
     assert "practice_audio_split_manifest_sha" not in m.CONTRACT_OPTIONAL_PIN_FIELDS
 
 
-def test_fix6_current_contract_practice_split_sha_is_pending(
+def test_fix6_current_contract_practice_split_sha_is_pinned(
     contract_raw: Dict[str, Any],
 ) -> None:
+    """2026-08-25 実 PJS practice split 実行により本欄は PENDING → PINNED
+    へ遷移した（`test_fix6a_practice_manifest_sha_matches_actual_file_and_
+    validates_once_pinned` が実ファイル照合・schema 検証まで事前配線済み
+    のため、本テストは現行値の形状のみを確認する軽量スナップショット）。"""
     field = contract_raw["practice_audio_split_manifest_sha"]
-    assert field["status"] == "PENDING"
-    assert field["value"] is None
+    assert field["status"] == "PINNED"
+    assert isinstance(field["value"], str)
+    assert len(field["value"]) == 64
 
 
 def test_fix6_current_contract_still_blocked(contract: m.Run9RunContract) -> None:
-    """practice_audio_split_manifest_sha 新設後も現行 RUN9_CONTRACT.yaml は正直に
-    BLOCKED のまま。"""
+    """practice_audio_split_manifest_sha が PINNED 化した後も、他の VG-L0
+    ハーネス関連欄（dataset_manifest_sha 等）が引き続き PENDING のため
+    現行 RUN9_CONTRACT.yaml は正直に BLOCKED のまま。"""
     assert m.gate_state(contract) == "BLOCKED"
 
 

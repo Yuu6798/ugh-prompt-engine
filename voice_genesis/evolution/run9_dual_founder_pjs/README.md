@@ -548,11 +548,20 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   型的に分離——manifest builder のデータフローは音響解析結果を一切含まない
   （`tests/test_practice_split_builder.py` の
   `test_sidecar_generation_does_not_change_manifest_bytes` が機械強制）。
-  近似重複検出は実装せず manifest 内 note に境界宣言。**実 PJS コーパスに
-  対する実行はまだ行っていない**（fixture は tmp_path の合成ミニコーパス
-  のみ・`practice_audio_split_manifest_sha` は引き続き `PENDING`）——次段は
-  実 PJS コーパスに対する builder 実行と `inputs/practice_audio_split_
-  manifest.json` の実体生成（下記「次フェーズ」節参照）。
+  近似重複検出は実装せず manifest 内 note に境界宣言。~~実 PJS コーパスに
+  対する実行はまだ行っていない~~ → **2026-08-25 実 PJS 公開配布物から生成
+  し解消済み**: PJS corpus ver1.1 zip（CC BY-SA 4.0 公開配布物、Google
+  Drive ID `1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_`）を取得し sha256 が契約 pin
+  と厳密一致することを確認、plain unzip で展開したコーパスに対して
+  builder を実行したところ `expanded_corpus_identity_sha256` も初回試行
+  で一致した（song 数 100・展開レシピのずれなし）。生成した
+  `inputs/practice_audio_split_manifest.json`（training 70 / validation
+  15 / sealed_holdout 15）の raw sha256 で `practice_audio_split_
+  manifest_sha` を **PINNED** 化した。実 PJS 音源・展開物は repo 配下へ
+  置いていない（作業は session scratchpad 限定）。この生成手続きは
+  User の私物マシンや実行時計測を要求しない——公開配布物の sha 検証と
+  builder の決定論処理のみで再現できる（下記「次フェーズ」節の分類訂正も
+  参照）。
 
 **解消済み（RUN9-PROBE-1, 2026-08-25）**:
 - ~~P0-P5 probe set の実ファイル manifest 未作成~~ → DESIGN_RUN9 §15
@@ -593,6 +602,34 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   欄が PENDING のままのため——回帰テスト
   `test_gate_state_still_blocked_after_probe_manifest_sha_pinned` で
   機械確認済み）。
+
+**解消済み（実 PJS practice split 実行, 2026-08-25）**:
+- ~~practice split の実 PJS コーパスに対する実行未実施~~ → PJS corpus
+  ver1.1 zip（CC BY-SA 4.0 公開配布物、Google Drive ID
+  `1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_`。`voice_genesis/foundry/s1_dataprep/
+  README.md` 素材2 / `results_f1_2/licenses/pjs_terms_snapshot.md` に
+  記録済みの同一 URL）を取得し、sha256 が
+  `practice_split_builder.PJS_SOURCE_ARCHIVE_SHA256` と厳密一致すること
+  を確認、plain unzip（リネーム・変換なし）で展開したコーパスに対して
+  `practice_split_builder._enumerate_pjs_song_ids()` を実行したところ
+  `expanded_corpus_identity_sha256` が初回試行で `EXPANDED_CORPUS_
+  IDENTITY_SHA256` と一致した（song 数 100、展開レシピのずれなし）。
+  続けて `build_practice_split_manifest()` を実行し
+  `inputs/practice_audio_split_manifest.json`（training 70 /
+  validation 15 / sealed_holdout 15、`assign_split()` の逐語アルゴリズム
+  どおり厳密70/15/15）を決定論形式で書き出した。`RUN9_CONTRACT.yaml`
+  `practice_audio_split_manifest_sha` を同ファイルの raw sha256 で
+  **PINNED** 化した。音響 sidecar（`build_acoustic_inventory_sidecar()`）
+  は environment-dependent float の懸念があるため本作業では生成していない
+  （advisory・契約 pin 対象外——`RUN9_CONTRACT.yaml` の pin 判定に一切
+  影響しない）。実 PJS 音源・展開物は repo 配下へ置いていない（作業は
+  session scratchpad 限定）。**`gate_state()` は依然 `BLOCKED`**
+  （`dataset_manifest_sha`/`education_technique_lesson_manifest_sha`/
+  `learning_recipe_sha`/`config_sha` 等 VG-L0 ハーネス関連欄が PENDING
+  のままのため）。**分類訂正**: この work は「マシン依存（実音源 =
+  Codex/User）」ではなく、公開配布物の sha 検証で完結する work であり
+  Claude 側の通常実装ルートで完了可能だった——下記「次フェーズ」節の
+  該当箇所を訂正済み。
 
 **残存**:
 
@@ -646,33 +683,35 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    route / learning replay harness / rights-clean curriculum / fixed
    compute budget / frozen recipe / rollback path）はどれも準備段階に
    すら入っていない。
-3. **PJS Performance Lesson / Practice split / learning recipe の実体
-   build 未実施**（PRACTICE 側は RUN9-BIRTH-PREP-1 で builder 配線済み。
-   実 PJS 実行は未実施のまま残る）: 改訂3で pin 方針（source archive pin /
+3. **PJS Performance Lesson / learning recipe の実体 build 未実施**（PRACTICE
+   split は 2026-08-25 実 PJS 実行で解消済み — 下記参照。EDUCATION 側 /
+   learning recipe は引き続き残存）: 改訂3で pin 方針（source archive pin /
    expanded corpus pin とは別の Lesson manifest を生成し pin）は確定した
    が、Lesson build 自体は VG-L0 ハーネス実装待ち。rev 0.3 でこの pin は
    EDUCATION 用 Technique lesson を指すと明確化され
    `education_technique_lesson_manifest_sha` へ改名（User 外部レビュー
-   PR #317 P1-2 採用）。PRACTICE 用の教師音声
-   train/validation/sealed-holdout split manifest（正解 parameter を
+   PR #317 P1-2 採用）——引き続き `PENDING`。~~PRACTICE 用の教師音声
+   train/validation/sealed-holdout split manifest~~（正解 parameter を
    含まない生素材の分割、PoR §12）は
    [`practice_split_builder.py`](./practice_split_builder.py)
    （`build_practice_split_manifest()`/`assign_split()`、
-   RUN9-BIRTH-PREP-1 §B）が生成器として配線済みだが、実 PJS コーパスに
-   対する実行はまだ行っていないため `practice_audio_split_manifest_sha`
+   RUN9-BIRTH-PREP-1 §B）を実 PJS corpus ver1.1（CC BY-SA 4.0 公開配布物、
+   sha256 検証済み）に対して実行し、`practice_audio_split_manifest_sha`
    （`RUN9_CONTRACT.yaml`、PR #317 Codex bot レビュー第2巡 Fix 6 で新設
-   → P1-2 で改名）自体は引き続き `PENDING`。Phase 3 で
+   → P1-2 で改名）を **PINNED** 化した（2026-08-25、training 70 /
+   validation 15 / sealed_holdout 15）。Phase 3 で
    `learning_recipe_sha`（schema `run9-learning-recipe/1.0`: 枝別 recipe
    `practice_recipe`/`education_recipe` の2節 + 共通 seed 909002 + 各枝
-   `equal_budget_within_arm: true`）の**構造**も凍結した — 3欄いずれも
-   実体 manifest の**生成**（EDUCATION 側の builder 含む）は VG-L0
-   ハーネス実装待ちのため PENDING のまま。manifest 自体の最低要件は
+   `equal_budget_within_arm: true`）の**構造**も凍結した — PRACTICE を
+   除く2欄（EDUCATION manifest / learning recipe manifest）は実体
+   manifest の**生成**が VG-L0 ハーネス実装待ちのため PENDING のまま。
+   manifest 自体の最低要件は
    `run9_schema.PRACTICE_MANIFEST_REQUIRED_KEYS`/
    `EDUCATION_MANIFEST_REQUIRED_KEYS`/`validate_practice_split_
    manifest()`/`validate_education_lesson_manifest()`/
    `validate_learning_recipe_manifest()` が凍結済み。
-4. **education builder 未実装 / practice builder は配線済み・実 PJS 実行
-   待ち**（RUN9-BIRTH-PREP-1 で更新）: 情報境界
+4. **education builder 未実装 / practice builder は実 PJS 実行まで完了**
+   （RUN9-BIRTH-PREP-1 で配線 → 2026-08-25 実 PJS 実行で更新）: 情報境界
    （`run9_schema.PRACTICE_FORBIDDEN_INPUTS` /
    `PRACTICE_ALLOWED_DATA_INPUTS` / `PRACTICE_REQUIRED_AUTONOMOUS_
    OPERATIONS` / `PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE` /
@@ -684,11 +723,11 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    （`run9_controlprofile.SCHEMA_PRACTICE_TRACE`）・ControlProfile
    append-only 台帳（`run9_controlprofile.Run9ProfileLedger`）と結果分類
    （`BIRTH_OUTCOMES` 等6分類）の**基盤は Phase 3 で実装済み**。PRACTICE
-   側は `practice_split_builder.py` が split manifest 生成器として配線
-   済み（fixture テスト済み・実 PJS コーパスに対する実行のみ未実施）。
+   側は `practice_split_builder.py` を実 PJS コーパスに対して実行し
+   `inputs/practice_audio_split_manifest.json` を実体発行済み。
    EDUCATION 側の builder（Technique extractor / Lesson builder）、および
    両枝を実際に呼び出して音声処理・特徴抽出・探索を行う学習ループ本体は
-   未着手（machine-independent な骨組みの凍結が完了した段階）。
+   未着手。
 
 ## 次フェーズ（machine-dependent）
 
@@ -721,12 +760,25 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   で **PINNED** 化した。詳細は上記「解消済み（RUN9-PROBE-1）」節参照
   ——render 契約・revision_bridge の凍結までであり、実 render の実行
   自体は VG-L0 ハーネス実装待ちのまま（残存ブロッカー(2)）。
-- **practice / education manifest の実体 build**: PRACTICE 側は
-  builder（`practice_split_builder.build_practice_split_manifest()`）が
-  RUN9-BIRTH-PREP-1 で配線済み——残るのは実 PJS コーパスに対する実行と
-  `inputs/practice_audio_split_manifest.json` の書き出しのみ。EDUCATION 側
+- ~~**practice manifest の実体 build**~~ → 2026-08-25 解消済み・
+  **分類訂正**: 当初本節（machine-dependent 見出し配下）に置いていたが、
+  誤分類だった。practice split は「実音源」を必要とする work ではなく、
+  PJS corpus ver1.1（CC BY-SA 4.0 公開配布物）の zip sha256 が契約 pin と
+  一致することを確認し、plain unzip → corpus identity 照合 →
+  `practice_split_builder.build_practice_split_manifest()` の決定論処理を
+  行うだけで、User の私物マシンや実行時の環境依存値を一切要求せずに
+  誰でも再現できる（マシン局所値ゼロ・要件は「pin と一致するバイト列」の
+  みで CLAUDE.md の「マシン依存（実音源・実重みハッシュ・Suno 生成・G4
+  ライセンス目視）= Codex / User」区分には該当しない——公開配布物 + sha
+  検証で完結する work は Claude 側の通常実装ルートで完了可能）。実際
+  `practice_split_builder.py`（`build_practice_split_manifest()`）を実行
+  したところ `expanded_corpus_identity_sha256` は初回試行で一致し（song
+  数 100）、`inputs/practice_audio_split_manifest.json`（training 70 /
+  validation 15 / sealed_holdout 15）を生成、`practice_audio_split_
+  manifest_sha` を **PINNED** 化した。EDUCATION 側
   （`education_technique_lesson_manifest.json`）は builder 自体が未着手
-  （残存ブロッカー(3)(4)）。
+  のまま machine-dependent（VG-L0 ハーネス実装待ち）に残る（残存
+  ブロッカー(3)(4)）。
 - **learning recipe manifest の実体 build**: `learning_recipe_manifest.json`
   （schema `run9-learning-recipe/1.0`、`run9_schema.LEARNING_RECIPE_
   MANIFEST_PATH` が規約パスを凍結済み・`validate_learning_recipe_

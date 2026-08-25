@@ -548,22 +548,41 @@ education_technique_lesson_manifest_sha:
     sealed-holdout lesson・donor 情報排除証拠・二体同一 bytes 証拠）を
     満たさなければならない。
 
+# 2026-08-25 実 PJS 公開配布物から生成（zip sha 検証 → plain unzip → corpus
+# identity 照合 → builder 決定論分割）: PJS corpus ver1.1 zip
+# （Google Drive ID `1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_`、
+# voice_genesis/foundry/s1_dataprep/README.md 素材2 / results_f1_2/
+# licenses/pjs_terms_snapshot.md に記録済みの同一 URL）を取得し、
+# sha256 が `practice_split_builder.PJS_SOURCE_ARCHIVE_SHA256`
+# （= 本ファイルの pjs_source_archive_sha256 相当・契約 pin）と厳密一致
+# することを確認、plain unzip（リネーム・加工なし）で展開した
+# `PJS_corpus_ver1.1/pjsNNN/{pjsNNN.lab,pjsNNN_song.wav,...}` を
+# corpus_root として `practice_split_builder._enumerate_pjs_song_ids()`
+# を実行したところ、再計算した `expanded_corpus_identity_sha256` が
+# `practice_split_builder.EXPANDED_CORPUS_IDENTITY_SHA256`（本欄の値の
+# 転記元）と一致した（song 数 100、初回試行で一致——展開レシピの
+# ずれなし）。続けて `build_practice_split_manifest()` を実行し
+# `inputs/practice_audio_split_manifest.json` を決定論形式で書き出した
+# （training 70 / validation 15 / sealed_holdout 15、
+# `assign_split()` の逐語アルゴリズムどおり）。本欄の値は同ファイルの
+# raw sha256（`run9_schema.compute_file_sha256()`）。実 PJS 音源・展開物
+# はいずれも repo 配下へ置いていない（作業は session scratchpad 限定・
+# 生成物のみ commit 対象）。
+#
+# 〔履歴: 旧 reason（PENDING 時点）—「PRACTICE 素材 split manifest の
+# 生成・封印後に pin（PoR §12: 稽古でも train/holdout 分離必須・sealed
+# holdout は学習中使用禁止）。稽古で Founder へ提示する PJS 教師音声の
+# train/validation/sealed-holdout split manifest（正解 Technique
+# parameter を含まない生素材の分割）の生成自体が VG-L0 ハーネス実装待ち
+# のため未着手。」——「VG-L0 ハーネス実装待ち」は本改訂で解消済み:
+# split manifest の生成自体は VG-L0 学習ハーネス（学習実行そのもの）を
+# 要求せず、公開配布 zip の sha 検証 + plain unzip + corpus identity
+# 照合 + 決定論割当という独立した手続きで完結することが判明した
+# （下記 practice split 再分類も参照）。〕
 practice_audio_split_manifest_sha:
-  value: null
-  status: PENDING
-  reason: >-
-    PRACTICE 素材 split manifest の生成・封印後に pin（PoR §12: 稽古でも
-    train/holdout 分離必須・sealed holdout は学習中使用禁止）。稽古で
-    Founder へ提示する PJS 教師音声の train/validation/sealed-holdout
-    split manifest（正解 Technique parameter を含まない生素材の分割）の
-    生成自体が VG-L0 ハーネス実装待ちのため未着手。manifest 本体は
-    `run9_schema.SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST`
-    （`run9-practice-audio-split-manifest/1.0`）を自己宣言し、
-    `PRACTICE_MANIFEST_REQUIRED_KEYS` の最低要件（PJS source archive
-    pin・expanded corpus identity pin・training/validation/sealed-holdout
-    hash・row order hash・sample inventory・rights/source class・raw
-    音声証拠・正解 parameter 非含有証拠・二体同一 bytes/順序証拠）を
-    満たさなければならない。
+  value: "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json
 
 # --- branch_write_policy_sha: inputs/branch_write_policy.json の実バイト
 # sha256（PINNED — 本 PR で内容確定。User 外部レビュー PR #317 P1-1
