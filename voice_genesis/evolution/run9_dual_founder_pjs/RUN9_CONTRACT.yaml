@@ -9,10 +9,14 @@
 # （本改訂）で issue_founder_genome_document() により正式発行済み——
 # `founders/R9F-01_genome.json`/`R9F-02_genome.json` を書き出し
 # `founder_genome_shas` を実 raw sha256 で PINNED 化した（下記
-# founder_genome_shas 欄参照）→ RUN9-BIRTH-PREP-1 で解消済み〕。残る
-# 主因は VG-L0 学習ハーネス未実装 + practice/education/learning-recipe
-# manifest の実体未生成のみ）。これは正直な状態表現であり、捏造して
-# PINNED にしていない。
+# founder_genome_shas 欄参照）→ RUN9-BIRTH-PREP-1 で解消済み〕。〔履歴:
+# 本節は当時「VG-L0 学習ハーネス未実装 + practice/education/learning-
+# recipe manifest の実体未生成」を残る主因として挙げていたが、
+# 2026-08-25 実 PJS practice split 実行（下記 practice_audio_split_
+# manifest_sha 欄参照）で PRACTICE 側 manifest は実体生成・PINNED 済み
+# となり解消した〕。残る主因は VG-L0 学習ハーネス未実装 +
+# education/learning-recipe manifest の実体未生成のみ）。これは正直な
+# 状態表現であり、捏造して PINNED にしていない。
 #
 # 2026-08-24 User 裁定 5件により design_revision 0.1 → 0.2
 # （DESIGN_RUN9_REVISION_0.2.md）。本改訂で af0/ritsu anchor・backbone

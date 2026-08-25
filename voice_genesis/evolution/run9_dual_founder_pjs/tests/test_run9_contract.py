@@ -4728,12 +4728,14 @@ def test_fix6a_practice_manifest_sha_matches_actual_file_and_validates_once_pinn
     と実体ファイルの突合は R9-G1（INPUT_FREEZE_AND_RIGHTS）検証ツーリング
     の職務として分離する。
 
-    現状 status は PENDING のためこのテストは「PENDING であること」だけ
-    を確認するが、将来本欄が PINNED へ昇格した瞬間、この同じテストが
-    (a) `compute_file_sha256(PRACTICE_MANIFEST_PATH)` との一致、
-    (b) `PRACTICE_MANIFEST_PATH` の内容が `validate_practice_split_
-    manifest()` を通過すること、の両方を自動的に強制するようになる
-    （テストコードの変更を要さない = 事前配線）。
+    〔履歴: 起草当時（PR #317 第6巡）は status が PENDING のためこの
+    テストは「PENDING であること」だけを確認していた——2026-08-25 実 PJS
+    practice split 実行により本欄は PINNED へ昇格し、事前配線どおり
+    このテストが自動的に (a) `compute_file_sha256(PRACTICE_MANIFEST_PATH)`
+    との一致、(b) `PRACTICE_MANIFEST_PATH` の内容が `validate_practice_
+    split_manifest()` を通過すること、の両方を強制するようになった
+    （テストコード自体は無改変 = 事前配線どおりの動作）。以下は現行
+    PINNED ブランチの検証内容。〕
     """
     field = contract_raw["practice_audio_split_manifest_sha"]
     if field["status"] == "PINNED":
@@ -9615,3 +9617,92 @@ def test_fix321_2_repo_wide_grep_finds_no_other_stale_genome_unissued_claim() ->
     for path in (CONTRACT_PATH, _RUN_DIR / "README.md"):
         text = path.read_text(encoding="utf-8")
         assert "founder genome 文書の実体未生成" not in text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第1巡指摘（P2, 採用, Fix 1）: practice_audio_
+# split_manifest_sha の PINNED 化後も、RUN9_CONTRACT.yaml ヘッダの現状
+# サマリー・README.md P1-2 節・tests/test_run9_contract.py の事前配線
+# テスト docstring が「practice manifest は未生成/PENDING」と現在形で
+# 主張し続けていた（PR #321 Fix 2 の founder genome 陳腐化と同族）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_1_practice_manifest_sha_is_pinned_not_stale_pending() -> None:
+    """`practice_audio_split_manifest_sha` は 2026-08-25 実 PJS practice
+    split 実行以降 PINNED であり、契約ヘッダ/README の「未生成/PENDING」
+    主張と矛盾していた事実の直接確認（Fix 1 の前提条件）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    contract = yaml.safe_load(contract_text)
+    field = contract["practice_audio_split_manifest_sha"]
+    assert field["status"] == "PINNED"
+    assert isinstance(field["value"], str) and len(field["value"]) == 64
+
+
+def test_fix323_1_no_stale_present_tense_practice_manifest_unissued_claim() -> None:
+    """契約ヘッダ・README に practice manifest を「未生成」「両方 PENDING
+    のまま」と現在形で主張する記述が残っていないこと（Codex bot レビュー
+    PR #323 第1巡指摘, P2, 採用, Fix 1）。過度に脆い文字列一致は避け、
+    Fix 1 が是正した具体フレーズのみを要点マーカーとして検査する。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    stale_contract_phrases = (
+        "主因は VG-L0 学習ハーネス未実装 + practice/education/learning-recipe\n"
+        "# manifest の実体未生成のみ",
+    )
+    for phrase in stale_contract_phrases:
+        assert phrase not in contract_text, (
+            f"RUN9_CONTRACT.yaml に陳腐化した practice manifest blocker 記述が残っている: {phrase!r}"
+        )
+    stale_readme_phrases = (
+        "`practice_audio_split_manifest_sha` へ改名（両方 PENDING のまま）",
+    )
+    for phrase in stale_readme_phrases:
+        assert phrase not in readme_text, (
+            f"README.md に陳腐化した practice manifest blocker 記述が残っている: {phrase!r}"
+        )
+
+
+def test_fix323_1_historical_practice_manifest_blocker_marked_superseded() -> None:
+    """是正済みの旧記述が単純削除ではなく「〔履歴: … → 解消済み〕」形式の
+    superseded 明示で保持されていること（AGENTS.md 運用: 純粋に歴史的な
+    記述は削除せず superseded 明示で保持する）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "〔履歴:" in contract_text
+    assert "実 PJS practice split 実行" in contract_text
+    assert "〔履歴:" in readme_text
+
+
+def test_fix323_1_prewired_test_docstring_reflects_pinned_branch_not_stale_pending() -> None:
+    """`test_fix6a_practice_manifest_sha_matches_actual_file_and_validates_
+    once_pinned` の docstring が、起草当時（PENDING）の現在形記述のまま
+    陳腐化していないこと（Fix 1 指摘 tests/test_run9_contract.py:4731-4736
+    該当箇所）。`inspect.getdoc()` で対象関数の docstring のみを取得する
+    ——本ファイル全体を自己参照 grep すると、この assert の文字列 literal
+    自体が誤って自己マッチしてしまうため、対象を関数 1 個の docstring へ
+    厳密に絞る。"""
+    target_doc = inspect.getdoc(
+        test_fix6a_practice_manifest_sha_matches_actual_file_and_validates_once_pinned
+    )
+    assert target_doc is not None
+    stale_docstring_phrase = "現状 status は PENDING の" + "ためこのテストは「PENDING であること」だけ"
+    assert stale_docstring_phrase not in target_doc
+    assert "PINNED へ昇格し" in target_doc
+
+
+def test_fix323_1_repo_wide_grep_finds_no_other_stale_practice_manifest_claim() -> None:
+    """RUN9_CONTRACT.yaml + README.md 全体を掃討し、同族の「practice
+    manifest は未生成/PENDING のまま」という現在形の残存がゼロであることを
+    確認する（凍結文書 = DESIGN_*.md・POR/DERIVED txt・inputs/*.json の
+    既存ファイル・domains/・founders/・evaluation/probe_manifest.json は
+    対象外）。"""
+    stale_markers = (
+        "practice manifest は未生成",
+        "practice manifest は引き続き PENDING",
+        "practice split manifest は未生成",
+    )
+    for path in (CONTRACT_PATH, _RUN_DIR / "README.md"):
+        text = path.read_text(encoding="utf-8")
+        for marker in stale_markers:
+            assert marker not in text, f"{path.name} に陳腐化した記述が残っている: {marker!r}"

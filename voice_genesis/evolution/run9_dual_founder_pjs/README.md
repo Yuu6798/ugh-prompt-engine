@@ -184,7 +184,11 @@ PR #317 head `71eeccadf3f1f7ee49d9cc90763ced8a506abc67` に対する User 本人
    を pre-run pin として新設し **PINNED 済み**。
 2. **P1-2 split pin の明示化**: `lesson_sha` →
    `education_technique_lesson_manifest_sha`、`practice_split_sha` →
-   `practice_audio_split_manifest_sha` へ改名（両方 PENDING のまま）。
+   `practice_audio_split_manifest_sha` へ改名（改名当時は両方 PENDING
+   だった。〔履歴: 「両方 PENDING のまま」→ `practice_audio_split_
+   manifest_sha` は 2026-08-25 実 PJS 実行で **PINNED** 化済み（下記
+   「解消済み（実 PJS practice split 実行, 2026-08-25）」節参照）。
+   `education_technique_lesson_manifest_sha` は引き続き PENDING〕）。
    manifest 最低要件は `PRACTICE_MANIFEST_REQUIRED_KEYS`/
    `EDUCATION_MANIFEST_REQUIRED_KEYS` + `validate_practice_split_
    manifest()`/`validate_education_lesson_manifest()`（schema 欄の
