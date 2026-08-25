@@ -2444,15 +2444,31 @@ def test_fix319_4_readme_blocker_no_longer_claims_singer_composer_unrecorded() -
     assert "に記録なし" not in blocker_section.split("2. **VG-L0", 1)[0]
 
 
-def test_fix319_4_readme_blocker_1_lists_confirmed_performer_composer_owner() -> None:
-    """残存ブロッカー(1) が、確定済み（performer/composer/owner = Junya
-    Koguchi 出典付き、recording license = CC BY-SA 4.0）を明記している
-    こと。"""
+def test_fix319_4_readme_blocker_1_lists_confirmed_and_unresolved_owner() -> None:
+    """残存ブロッカー(1) が、確定済み（performer/composer = Junya Koguchi
+    出典付き、recording license = CC BY-SA 4.0）と、**未解決のままの
+    recording-master owner**（PR #319 第 4 巡指摘採用で
+    `<UNRESOLVED_EXTERNAL>` へ差し戻し — owner は確定済みに含めない）を
+    ともに明記していること（第 15 巡指摘採用: 旧テストは owner を確定済み
+    に分類し汎用文字列しか検証していなかったため、README が owner 主張へ
+    退行しても検知できなかった）。"""
     readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
     blocker_1 = readme.split("**残存**:", 1)[1].split("2. **VG-L0", 1)[0]
     assert "確定済み" in blocker_1
     assert "Junya Koguchi" in blocker_1
     assert "CC BY-SA 4.0" in blocker_1
+    # owner は未解決として明示され、UNRESOLVED_EXTERNAL の現在値が宣言されていること
+    assert "owner" in blocker_1
+    owner_stmt_idx = blocker_1.find("owner")
+    assert "<UNRESOLVED_EXTERNAL>" in blocker_1
+    # 「owner が確定済み」型の現在形主張への退行を検知: 確定済み節（未解決節より前）
+    # に owner が登場しないこと
+    confirmed_part = blocker_1.split("未解決", 1)[0]
+    assert "owner" not in confirmed_part, (
+        "確定済み節に owner が再登場している — recording-master owner は"
+        " <UNRESOLVED_EXTERNAL> 維持（第 4 巡）であり確定済みに含めてはならない"
+    )
+    assert owner_stmt_idx >= 0
 
 
 def test_fix319_4_readme_blocker_1_lists_remaining_unresolved_items() -> None:
