@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import json
@@ -2089,6 +2090,152 @@ def test_negative_fix22_old_retracted_fix21_role_text_rejected(
     "marker", ["_NoteWithMs", "final_phone_dur_override", "run_pipeline", "TAIL_FRAMES", "義務を負う"]
 )
 def test_negative_fix22_control_marker_missing(
+    manifest_data: Dict[str, Any], marker: str,
+) -> None:
+    bad = _mutate(manifest_data)
+    p3 = _p3_probe(bad)
+    p3["role"] = p3["role"].replace(marker, "")
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第13巡指摘 Fix 23（P2, 採用——第12巡 P3 再設計への新規具体経路）:
+# `_select_phrase_final_note()`（Fix 3 の数値/kana/transition/release
+# override 照合、Fix 7 の P2 filler 一貫性検証が共有する唯一の selector）
+# は、is_phrase_final=true の note が cell の notes 配列内のどこにあって
+# も受理していた——gate_synth は is_phrase_final を消費せず、release
+# override は Python list の実際の最終要素へ効くため、マーカー後に note
+# を追記すると検証と実効果の帰属先がずれる。マーカー note が notes 配列
+# の最終要素であることを fail-closed 強制する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix23_positive_real_manifest_passes(manifest_data: Dict[str, Any]) -> None:
+    m.validate_probe_manifest(manifest_data)
+
+
+def test_negative_fix23_note_appended_after_marker_p3_long_cell(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """本指摘の核心シナリオ: P3 の long cell の phrase-final マーカー
+    note の後ろへ valid な note を追記する——release override の実効果は
+    追記 note（実際の最終要素）へ作用するが、旧実装は依然としてマーカー
+    note を意味照合対象として返してしまっていた。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p3_probe(bad), "P3-RELEASE-LONG-VOICED")
+    appended = copy.deepcopy(cell["notes"][-1])
+    appended["is_phrase_final"] = False
+    cell["notes"].append(appended)
+    with pytest.raises(m.Run9ValidationError, match="must be the last element of notes"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix23_marker_at_middle_position_p2_onset_cell(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """P2 onset cell（filler note + phrase-final target note の2 note
+    構造）でマーカーを先頭 note へ動かす——マーカーは依然としてちょうど
+    1つだが、notes 配列の最終要素ではなくなる。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p2_probe(bad), "P2-ONSET-FRICATIVE-S")
+    cell["notes"][0]["is_phrase_final"] = True
+    cell["notes"][-1]["is_phrase_final"] = False
+    with pytest.raises(m.Run9ValidationError, match="must be the last element of notes"):
+        m.validate_probe_manifest(bad)
+
+
+def test_fix23_helper_select_phrase_final_note_accepts_marker_as_last_note() -> None:
+    cell = {
+        "cell_id": "TEST",
+        "notes": [
+            {"kana": "か", "pitch_midi": 60, "duration_beats": 1, "phrase_index": 0,
+             "is_phrase_final": False},
+            {"kana": "ら", "pitch_midi": 62, "duration_beats": 1, "phrase_index": 0,
+             "is_phrase_final": True},
+        ],
+    }
+    final = m._select_phrase_final_note(cell, field="test")
+    assert final is cell["notes"][-1]
+
+
+def test_negative_fix23_helper_select_phrase_final_note_rejects_marker_not_last() -> None:
+    cell = {
+        "cell_id": "TEST",
+        "notes": [
+            {"kana": "か", "pitch_midi": 60, "duration_beats": 1, "phrase_index": 0,
+             "is_phrase_final": True},
+            {"kana": "ら", "pitch_midi": 62, "duration_beats": 1, "phrase_index": 0,
+             "is_phrase_final": False},
+        ],
+    }
+    with pytest.raises(m.Run9ValidationError, match="must be the last element of notes"):
+        m._select_phrase_final_note(cell, field="test")
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第13巡指摘 Fix 24（P2, 採用——第12巡 P3 再設計への新規具体経路）:
+# 第12巡の P3 実行レシピが `gate_synth.frames_from_ms(terminal_extension_
+# ms)` という1引数呼び出しを記載していたが、実 helper のシグネチャは
+# `frames_from_ms(ms, frame_ms)`——レシピどおりの pod harness は全
+# long-release cell で TypeError になる。前例 run8/s7_calib_score.py の
+# `make_tail_extension_override()` 実装を逐語で写した、ctx-aware な正しい
+# レシピへ訂正する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix24_positive_real_manifest_passes_with_corrected_recipe(
+    manifest_data: Dict[str, Any],
+) -> None:
+    m.validate_probe_manifest(manifest_data)
+    role = _p3_probe(manifest_data)["role"]
+    assert "make_tail_extension_override" in role
+    assert "frames_from_ms(terminal_extension_ms, frame_ms)" in role
+    assert m._P3_RELEASE_RECIPE_FORBIDDEN_MARKER not in role
+
+
+def test_fix24_gate_synth_frames_from_ms_signature_matches_recipe() -> None:
+    """PR #322 第13巡指摘 Fix 24: manifest の実行レシピが前提とする
+    `gate_synth.frames_from_ms(ms, frame_ms)` の実シグネチャを、
+    gate_synth.py（凍結・改変禁止の read-only 参照）のソースを AST 解析
+    して検証する——onnxruntime 等の重い実行時依存を要する実 import は
+    避け、静的解析のみで読む（read-only 精神を保ったまま manifest->
+    run_pipeline のラウンドトリップに最も近い機械検証）。"""
+    assert m.GATE_SYNTH_PY_REFERENCE_PATH.is_file()
+    source = m.GATE_SYNTH_PY_REFERENCE_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(m.GATE_SYNTH_PY_REFERENCE_PATH))
+    functions = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    }
+    assert "frames_from_ms" in functions, "gate_synth.py に frames_from_ms が定義されていない"
+    frames_from_ms_args = [a.arg for a in functions["frames_from_ms"].args.args]
+    assert frames_from_ms_args == ["ms", "frame_ms"], (
+        f"gate_synth.frames_from_ms のシグネチャが変わっている（{frames_from_ms_args!r}）——"
+        "manifest の実行レシピは frames_from_ms(ms, frame_ms) の2引数呼び出しを前提とする"
+    )
+    assert "run_pipeline" in functions, "gate_synth.py に run_pipeline が定義されていない"
+    run_pipeline_args = [a.arg for a in functions["run_pipeline"].args.args]
+    assert "final_phone_dur_override" in run_pipeline_args, (
+        "gate_synth.run_pipeline が final_phone_dur_override kwarg を持たなくなっている"
+    )
+
+
+def test_negative_fix24_stale_single_arg_recipe_text_rejected(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """『レシピの1引数呼び出し文言の残存拒否』: 旧（誤り）の1引数呼び出し
+    文言が role へ残置されていると fail-closed で拒否される。"""
+    bad = _mutate(manifest_data)
+    p3 = _p3_probe(bad)
+    p3["role"] = p3["role"] + "\n\n" + m._P3_RELEASE_RECIPE_FORBIDDEN_MARKER + " を使う。"
+    with pytest.raises(m.Run9ValidationError, match="stale single-argument recipe text"):
+        m.validate_probe_manifest(bad)
+
+
+@pytest.mark.parametrize(
+    "marker", ["make_tail_extension_override", "frames_from_ms(terminal_extension_ms, frame_ms)"]
+)
+def test_negative_fix24_recipe_marker_missing(
     manifest_data: Dict[str, Any], marker: str,
 ) -> None:
     bad = _mutate(manifest_data)

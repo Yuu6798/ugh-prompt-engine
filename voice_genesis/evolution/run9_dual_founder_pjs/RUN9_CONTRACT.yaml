@@ -781,8 +781,37 @@ learning_recipe_sha:
 # manifest バイトが変わったため sha256 を再計算した。旧値（履歴として
 # 保持）:
 # "48eb35a001cb5f5e53ea1da34fc05081c902958b2c0167d14a888ffe676a0c84"
+# PR #322 Codex bot レビュー第13巡2件（採用——第12巡 P3 再設計への新規
+# 具体経路）反映による repin:
+# Fix 23（P2）is_phrase_final=true の note の後へ valid な note を追記
+# しても `_select_phrase_final_note()` selector を通過していた——
+# gate_synth は is_phrase_final を消費せず、release override は
+# `final_phone_dur[-1]`（Python list の実際の最終要素）へ効くため、
+# 追記 note が実際の render 効果を受けるのに検証は先のマーカー note へ
+# 帰属し続ける欠陥だった。`_select_phrase_final_note()`（Fix 3 の数値/
+# kana/transition/release override 照合、Fix 7 の P2 filler 一貫性検証が
+# 共有する唯一の selector）へ「マーカー note は notes 配列の最終要素で
+# なければならない」検証を追加した。
+# Fix 24（P2）第12巡の P3 実行レシピが `gate_synth.frames_from_ms(
+# terminal_extension_ms)` という1引数呼び出しを記載していたが、実
+# helper のシグネチャは `frames_from_ms(ms, frame_ms)`（gate_synth.py:
+# 321、read-only 参照で確認済み）——レシピどおりの pod harness は全
+# long-release cell で TypeError になる欠陥だった。前例
+# `run8/s7_calib_score.py::make_tail_extension_override()` の実装を
+# 逐語で写し、pod harness が `run_pipeline` 呼び出し前に
+# `frame_ms = 1000.0 * 512 / 44100`（gate_synth.py:1235-1236 で
+# dsconfig 非依存のハードコード定数と確認済み）を算出したうえで
+# `frames_from_ms(terminal_extension_ms, frame_ms)` によりフレーム数へ
+# 変換する、という正しいレシピへ訂正した。validator は訂正後の必須
+# マーカー（`make_tail_extension_override`/`frames_from_ms(terminal_
+# extension_ms, frame_ms)`）+ 旧1引数呼び出し文言の残存拒否
+# （forbidden marker）を fail-closed 検証する。
+# 2 Fix 合算（Fix 23 は validator のみで manifest バイト無変更・Fix 24
+# の role 文言訂正）で manifest バイトが変わるため sha256 を再計算した。
+# 旧値（履歴として保持）:
+# "b18e8680991b2f74b1fa1ff710f9ed6e5775e87d8a1f2181784bdfc21bfe71ce"
 probe_manifest_sha:
-  value: "b18e8680991b2f74b1fa1ff710f9ed6e5775e87d8a1f2181784bdfc21bfe71ce"
+  value: "91e26ad51773a88694eb4cecee86d740f23ec5186ed46942e8df3cf5625809c1"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 

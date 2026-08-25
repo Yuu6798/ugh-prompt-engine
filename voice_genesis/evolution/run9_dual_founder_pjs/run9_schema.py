@@ -3740,9 +3740,29 @@ _P2_ENERGY_BOUNDARY_MARKERS: Tuple[str, ...] = (
 # `duration_beats` は全 cell 等値へ揃えた（第11巡までの「終端 note 長の
 # 変動」が release との交絡源だったため除去）。
 # ---------------------------------------------------------------------------
+# PR #322 第13巡指摘 Fix 24（P2, 採用）: 上記 Fix 22 の実行レシピ文言が
+# `gate_synth.frames_from_ms(terminal_extension_ms)` という1引数呼び出し
+# を記載していたが、実 helper のシグネチャは `frames_from_ms(ms,
+# frame_ms)`（gate_synth.py:321、read-only 参照で確認済み）——レシピ
+# どおりに実装した pod harness は全 long-release cell で TypeError に
+# なる。`make_tail_extension_override()`（run8/s7_calib_score.py）の
+# 実装を再確認すると、`extension_frames`（フレーム数）への変換は
+# override 呼び出しの**外側**（`run_pipeline` 呼び出し前）で行われており、
+# 変換に使う `frame_ms` は `run_pipeline` 内部と同じ固定グリッド
+# （`hop_size=512`/`sample_rate=44100` — gate_synth.py:1235-1236 で
+# dsconfig に依存しないハードコード定数と確認済み。`s7_calib_score.py`
+# の `FRAME_MS` 定数と同一値）から pod harness が事前に算出できる。
+# レシピを ctx-aware な正しい変換（前例実装を逐語で写す——独自変換は
+# 発明しない）へ訂正し、必須マーカーを実シグネチャ整合形へ更新する。
 _P3_RELEASE_CONTROL_MARKERS: Tuple[str, ...] = (
     "_NoteWithMs", "final_phone_dur_override", "run_pipeline", "TAIL_FRAMES", "義務を負う",
+    "make_tail_extension_override", "frames_from_ms(terminal_extension_ms, frame_ms)",
 )
+# 旧（誤り）の1引数呼び出し文言が残置されていないことを確認する
+# forbidden marker（Fix 24）。正しい2引数呼び出し文言（上記
+# `_P3_RELEASE_CONTROL_MARKERS` の該当要素）はこの部分文字列を含まない
+# （"...terminal_extension_ms," と続くため — 閉じ括弧が直後に来ない）。
+_P3_RELEASE_RECIPE_FORBIDDEN_MARKER = "frames_from_ms(terminal_extension_ms)"
 _CELL_OVERRIDE_KEY = "final_phone_dur_override"
 _CELL_OVERRIDE_KEYS: FrozenSet[str] = frozenset({"kind", "terminal_extension_ms"})
 # 現時点で唯一サポートする override 翻訳の種類（`run8/s7_calib_score.py`
@@ -3784,6 +3804,13 @@ _NOTE_KEYS: FrozenSet[str] = frozenset(
 # P0 の score 転記元（read-only 参照。凍結・改変禁止 — RUN9-PROBE-1
 # Design Memo 冒頭）。`voice_genesis/singer/score.py`。
 SCORE_PY_REFERENCE_PATH = _THIS_DIR.parent.parent / "singer" / "score.py"
+
+# 宣言 harness（read-only 参照。凍結・改変禁止）。`voice_genesis/foundry/
+# s1_gate/gate_synth.py`。PR #322 第13巡指摘 Fix 24 のテスト側 introspection
+# （`frames_from_ms`/`run_pipeline` のシグネチャを AST 解析で確認する）が
+# 参照する——実 import は onnxruntime 等の重い実行時依存を要するため行わない
+# （静的解析のみ）。
+GATE_SYNTH_PY_REFERENCE_PATH = _THIS_DIR.parent.parent / "foundry" / "s1_gate" / "gate_synth.py"
 
 # ---------------------------------------------------------------------------
 # PR #322 第3巡指摘 Fix 6（P2, 採用）: renderer の mora 文法（read-only
@@ -4543,15 +4570,36 @@ def _select_phrase_final_note(cell: Mapping[str, Any], *, field: str) -> Dict[st
     true` の note）をちょうど1つに限定して返す。P1 の単一 note cell では
     その唯一の note、P2/P3 の複数 note cell では終端/target note を指す
     ——note 位置のインデックス（先頭/末尾）ではなく `is_phrase_final`
-    マーカーそのものを根拠にする。"""
-    finals = [n for n in cell["notes"] if n.get("is_phrase_final") is True]
+    マーカーそのものを根拠にする。
+
+    PR #322 第13巡指摘 Fix 23（P2, 採用）: マーカー付き phrase-final note
+    は cell の `notes` 配列の**最終要素**でなければならない——
+    `gate_synth.py` は `is_phrase_final` を一切消費せず、release override
+    等は Python list の実際の最終要素（`final_phone_dur[-1]`）へ効く。
+    マーカー note の後ろへ valid な note を追記すると、本 selector は
+    引き続きマーカー note を意味照合対象として返してしまうが、実際の
+    render 効果（例: Fix 22 の release override 延長）は追記された末尾
+    note へ作用する——検証の帰属先と実効果の帰属先がずれる。本 selector
+    を全 checker（Fix 3 の数値/kana/transition/release override 照合、
+    Fix 7 の P2 filler 一貫性検証）が共有するため、ここで一括して防ぐ。"""
+    notes = cell["notes"]
+    finals = [n for n in notes if n.get("is_phrase_final") is True]
     if len(finals) != 1:
         raise Run9ValidationError(
             f"{field}: cell {cell.get('cell_id')!r} must have exactly one note with "
             f"is_phrase_final=true to serve as the semantic target for axis-value checking "
             f"(Fix 3), got {len(finals)}"
         )
-    return finals[0]
+    final = finals[0]
+    if notes[-1] is not final:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r}'s is_phrase_final=true note must be the last "
+            "element of notes (Fix 23) — gate_synth does not consume is_phrase_final and instead "
+            "operates on the actual last note/phoneme, so a note appended after the marker would "
+            "receive the real render effect while validation keeps attributing it to the earlier "
+            "marker note"
+        )
+    return final
 
 
 def _check_axis_numeric_field(
@@ -5114,9 +5162,19 @@ def _validate_probe_object(
         for marker in _P3_RELEASE_CONTROL_MARKERS:
             if marker not in role:
                 raise Run9ValidationError(
-                    f"{field}.role must contain the marker {marker!r} (Fix 22: P3 の release 制御の "
-                    "訂正記述), got role without that marker"
+                    f"{field}.role must contain the marker {marker!r} (Fix 22/24: P3 の release "
+                    "制御の訂正記述・実行レシピ), got role without that marker"
                 )
+        # PR #322 第13巡指摘 Fix 24: 旧（誤り）の frames_from_ms 1引数
+        # 呼び出し文言が残置されていないことを確認する（正しい訂正が
+        # 古い誤記述を上書きせず併存する事故を防ぐ）。
+        if _P3_RELEASE_RECIPE_FORBIDDEN_MARKER in role:
+            raise Run9ValidationError(
+                f"{field}.role must not contain the stale single-argument recipe text "
+                f"{_P3_RELEASE_RECIPE_FORBIDDEN_MARKER!r} (Fix 24: gate_synth.frames_from_ms() "
+                "requires (ms, frame_ms) — the pod harness would raise TypeError if the recipe "
+                "were followed as written)"
+            )
     if expected_probe_id == "P2":
         # PR #322 第5巡指摘 Fix 11: 計器能力の境界宣言（energy/velocity/
         # metrical-accent 制御入力の不在・実操作は onset_consonant_class
