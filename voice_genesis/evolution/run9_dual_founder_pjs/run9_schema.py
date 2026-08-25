@@ -4837,11 +4837,42 @@ def _validate_rights_manifest_voice_identity_attestation(layer: Mapping[str, Any
 #     独立、`raw_audio_publication` を granted にしても
 #     `model_general_distribution` の承認を兼ねない）が存在し、
 #     承認日時（UTC ISO 8601）+ 承認文言（非空 str）を備えること
-# run9_identity_anchor もこの3キーの一つであり、同じ2条件で granted 化
-# できる——3キーへ特例なく同一の前提条件を適用する構造そのものが、
+# run9_identity_anchor もこの3キーの一つであり、当初は同じ2条件を機械的に
+# 適用した（3キーへ特例なく同一の前提条件を適用する構造そのものが、
 # 「run9_identity_anchor だけ別ルールで granted 化できてしまう」抜け道を
-# 作らない。現行 manifest（3キーとも `not_granted`）はこの2条件を要求
-# しない not_granted 形のまま不変で通る。
+# 作らないという狙い）。現行 manifest（3キーとも `not_granted`）はこの
+# 前提条件を要求しない not_granted 形のまま不変で通る。
+#
+# Codex bot レビュー PR #319 第14巡指摘（P2, 採用, Fix 27）——上記「特例
+# なく同一」裁定の訂正: DESIGN_RUN9_REVISION_0.2.md 194-203行（改訂4）が
+# 定める正典フローは、rights manifest 記載の**別承認**を要求するのは
+# `raw_audio_publication`（raw 音源の公開）と `model_general_distribution`
+# （モデルの一般配布）の2件のみであり、`run9_identity_anchor`（RUN9 内部
+# での identity anchor 使用）は「User attest 完了後、anchor の grant が
+# それに束縛される」という記述（196-199行）であって、attestation 自体が
+# anchor grant の根拠——別途の承認記録は要求されない。第9巡裁定（Fix 19）
+# が3キー一律で承認記録を必須化したのは過剰一般化であり、User が規定
+# どおり attest を完了して `run9_identity_anchor` を `granted` にする
+# 正常遷移を、根拠のない `run9_identity_anchor_approval` 捏造なしには
+# 通過できなくしてしまっていた。
+#
+# 訂正後の規則（grant 別）:
+#   `raw_audio_publication` / `model_general_distribution`
+#     （`_RIGHTS_MANIFEST_USAGE_GRANTS_REQUIRING_SEPARATE_APPROVAL`）:
+#     従来どおり①attested 形態 ②grant 専用の承認記録（`<grant>_approval`）
+#     の両方を要求する（rev 0.2 改訂4の「別承認」規定はこの2キーのみに
+#     適用される）。
+#   `run9_identity_anchor`: ①attested 形態のみを要求する。承認記録
+#     （`run9_identity_anchor_approval`）は要求しない——存在しなくても
+#     `granted` 遷移は受理する。仮に付与されていても拒否はしない
+#     （`run9_identity_anchor_approval` は `_RIGHTS_MANIFEST_USAGE_GRANTS_
+#     KEYS` から機械的に導出される既存の閉集合 `allowed_keys` に元々
+#     含まれているキーであり、「規定にない記録の混入は未知キーとして
+#     拒否する」流儀を適用すると該当しない——閉集合に既にあるキーを
+#     追加の必須性チェックなしに通す方が、正典フローが求めない証跡の
+#     捏造を誘発しないぶん安全と判断した）。付与されている場合は
+#     `_validate_rights_manifest_usage_grant_approval_record()` で形状を
+#     検証する（ゴミデータの無検証通過は防ぐが、必須にはしない）。
 _RIGHTS_MANIFEST_USAGE_GRANT_NOT_GRANTED = "not_granted"
 _RIGHTS_MANIFEST_USAGE_GRANT_GRANTED = "granted"
 _RIGHTS_MANIFEST_USAGE_GRANT_VALUES: FrozenSet[str] = frozenset(
@@ -4850,6 +4881,13 @@ _RIGHTS_MANIFEST_USAGE_GRANT_VALUES: FrozenSet[str] = frozenset(
 _RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_SUFFIX = "_approval"
 _RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_KEYS: FrozenSet[str] = frozenset(
     {"approved_at", "approval_statement"}
+)
+# Fix 27: 別承認（grant 専用の承認記録）を要求する2キー。
+# `run9_identity_anchor` はこの集合に含めない — attestation 自体が
+# anchor grant の根拠であり、追加の承認記録は要求しない
+# （DESIGN_RUN9_REVISION_0.2.md 194-203行）。
+_RIGHTS_MANIFEST_USAGE_GRANTS_REQUIRING_SEPARATE_APPROVAL: FrozenSet[str] = frozenset(
+    {"raw_audio_publication", "model_general_distribution"}
 )
 
 
@@ -4888,11 +4926,23 @@ def _validate_rights_manifest_usage_grant_approval_record(grant_key: str, approv
 
 def _validate_rights_manifest_usage_grants(layer: Mapping[str, Any]) -> None:
     """`voice_identity_rights.usage_grants` の値語彙 + `granted` 遷移の
-    前提条件を検証する（Fix 19）。呼び出し元
+    前提条件を検証する（Fix 19、grant 別規則は Fix 27 で訂正）。呼び出し元
     `validate_rights_manifest_four_layer()` が本関数より先に
     `_validate_rights_manifest_voice_identity_attestation(layer)` を実行
     済みであることを前提にする（`layer["attestation"]["attested"]` が
     型検証済みの bool であることに依拠する）。
+
+    grant 別の `granted` 遷移前提条件（Fix 27, PR #319 第14巡, P2, 採用 —
+    第9巡裁定 Fix 19 の「3キー一律」を訂正。DESIGN_RUN9_REVISION_0.2.md
+    194-203行が正）:
+    - `raw_audio_publication` / `model_general_distribution`
+      （`_RIGHTS_MANIFEST_USAGE_GRANTS_REQUIRING_SEPARATE_APPROVAL`）:
+      ①attested 形態 ②grant 専用の承認記録（`<grant>_approval`）の
+      両方が必須（rev 0.2 改訂4の「別承認」規定）。
+    - `run9_identity_anchor`: ①attested 形態のみが必須。承認記録
+      （`run9_identity_anchor_approval`）は要求しない
+      （attestation 自体が anchor grant の根拠）。ただし付与されている
+      場合は形状を検証する（未検証のゴミデータを通さない）。
     """
     path = "rights manifest.voice_identity_rights.usage_grants"
     usage_grants = layer.get("usage_grants")
@@ -4922,6 +4972,9 @@ def _validate_rights_manifest_usage_grants(layer: Mapping[str, Any]) -> None:
                 f"{sorted(_RIGHTS_MANIFEST_USAGE_GRANT_VALUES)}, got {value!r}"
             )
         approval_key = f"{grant_key}{_RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_SUFFIX}"
+        requires_separate_approval = (
+            grant_key in _RIGHTS_MANIFEST_USAGE_GRANTS_REQUIRING_SEPARATE_APPROVAL
+        )
         if value == _RIGHTS_MANIFEST_USAGE_GRANT_GRANTED:
             if not attested:
                 raise Run9ValidationError(
@@ -4931,15 +4984,18 @@ def _validate_rights_manifest_usage_grants(layer: Mapping[str, Any]) -> None:
                     "(attested=true) — a usage grant requires User attestation to have "
                     "completed first"
                 )
-            if approval_key not in usage_grants:
+            if requires_separate_approval and approval_key not in usage_grants:
                 raise Run9ValidationError(
                     f"{path}.{grant_key} is {_RIGHTS_MANIFEST_USAGE_GRANT_GRANTED!r} but is "
                     f"missing its separate approval record {path}.{approval_key} — "
-                    "raw_audio_publication/model_general_distribution/run9_identity_anchor each "
-                    "require independent approval evidence and are never auto-escalated from "
-                    "one another (DESIGN_RUN9_REVISION_0.2.md 改訂4)"
+                    "raw_audio_publication/model_general_distribution each require independent "
+                    "approval evidence and are never auto-escalated from one another "
+                    "(DESIGN_RUN9_REVISION_0.2.md 改訂4 194-199行). run9_identity_anchor is "
+                    "exempt from this requirement (改訂4 194-203行 — attestation itself is the "
+                    "anchor grant's basis; Fix 27 corrects Fix 19's uniform 3-key rule)"
                 )
-            _validate_rights_manifest_usage_grant_approval_record(grant_key, usage_grants[approval_key])
+            if approval_key in usage_grants:
+                _validate_rights_manifest_usage_grant_approval_record(grant_key, usage_grants[approval_key])
         elif approval_key in usage_grants:
             raise Run9ValidationError(
                 f"{path}.{approval_key} must not be present while {path}.{grant_key} is "

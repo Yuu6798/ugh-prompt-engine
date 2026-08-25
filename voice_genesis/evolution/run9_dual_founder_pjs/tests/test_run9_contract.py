@@ -8101,11 +8101,15 @@ def test_fix319_19_granted_while_attestation_still_pending_rejected(grant_key: s
         m.validate_rights_manifest_four_layer(data)
 
 
-@pytest.mark.parametrize("grant_key", _USAGE_GRANT_KEYS)
+@pytest.mark.parametrize(
+    "grant_key", ("raw_audio_publication", "model_general_distribution")
+)
 def test_fix319_19_granted_without_approval_record_rejected(grant_key: str) -> None:
-    """負例（3キー parametrize）: attestation は attested 形態に整えても、
-    grant 別の承認記録（`<grant>_approval`）が無ければ granted 遷移は拒否
-    されること。"""
+    """負例（2キー parametrize — Fix 27 で `run9_identity_anchor` は本要求
+    から除外された。§rev 0.2 改訂4「別承認」は raw_audio_publication /
+    model_general_distribution のみが対象）: attestation は attested 形態に
+    整えても、grant 別の承認記録（`<grant>_approval`）が無ければ granted
+    遷移は拒否されること。"""
     data = _attested_voice_identity_rights_layer(
         json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     )
@@ -8226,6 +8230,82 @@ def test_fix319_19_grant_approval_is_independent_per_key() -> None:
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
     assert data["voice_identity_rights"]["usage_grants"]["model_general_distribution"] == "not_granted"
     assert "model_general_distribution_approval" not in data["voice_identity_rights"]["usage_grants"]
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第14巡対応 — Fix 27（P2）: identity anchor への
+# 二重承認要求の撤回。Fix 19（第9巡）は usage_grants の3キー
+# （run9_identity_anchor / raw_audio_publication / model_general_
+# distribution）へ一律に「①attested 形態 ②grant 専用の承認記録」を要求
+# したが、DESIGN_RUN9_REVISION_0.2.md 194-203行（改訂4）は「別承認」を
+# raw_audio_publication/model_general_distribution の2件のみに限定して
+# おり、run9_identity_anchor は User attest 完了後に anchor の grant が
+# それへ束縛される（attestation 自体が根拠）——追加の承認記録は正典が
+# 要求しない。User が規定どおり attest を完了して run9_identity_anchor を
+# granted にする正常遷移を、根拠のない承認記録の捏造なしに通せなかった
+# Fix 19 の一律適用（第9巡裁定）をここで訂正する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_27_identity_anchor_granted_without_approval_record_accepted() -> None:
+    """正例（核心）: run9_identity_anchor を attested 形態 + 承認記録なしで
+    granted にしても受理されること——rev 0.2 改訂4が定める正典フロー
+    （attestation が anchor grant の唯一の根拠）どおりの正常遷移が、Fix 19
+    の一律ルールでブロックされていた欠陥の直接的な回帰確認。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] = "granted"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+    assert "run9_identity_anchor_approval" not in data["voice_identity_rights"]["usage_grants"]
+
+
+def test_fix319_27_identity_anchor_granted_without_attestation_still_rejected() -> None:
+    """負例（回帰）: attestation が attested 形態でなければ
+    run9_identity_anchor の granted 遷移は Fix 27 適用後も拒否されること
+    ——撤回したのは承認記録の必須性のみで、attested 形態の前提条件①は
+    run9_identity_anchor にも引き続き適用される
+    （`test_fix319_19_granted_while_attestation_still_pending_rejected` と
+    同型だが、Fix 27 のパラメトライズ変更後も run9_identity_anchor 単独で
+    固定しておく）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] = "granted"
+    with pytest.raises(m.Run9ValidationError, match="attestation is not in attested form"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_27_identity_anchor_granted_with_optional_approval_record_still_validates() -> None:
+    """正例（境界宣言）: run9_identity_anchor に承認記録が付与されていても
+    拒否はしない——`run9_identity_anchor_approval` は
+    `_RIGHTS_MANIFEST_USAGE_GRANTS_KEYS` から機械導出される既存の閉集合
+    `allowed_keys` に元々含まれるキーであり、規定にない記録の混入は未知
+    キー拒否ではなく既存の閉集合検証に委ねる、という設計方針の直接確認。
+    付与されている場合は形状検証（approved_at/approval_statement の閉じた
+    2キー）は引き続き通ること。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Identity anchor usage attested by User.",
+    }
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_27_publication_and_distribution_approval_requirement_unchanged() -> None:
+    """回帰（両輪確認）: raw_audio_publication / model_general_distribution
+    は Fix 27 適用後も「attested 形態 + 承認記録」の両方を要求し続けること
+    ——run9_identity_anchor の撤回がこの2キーへ波及していないことの直接
+    確認（`test_fix319_19_granted_without_approval_record_rejected` の
+    parametrize 縮小と対をなす）。"""
+    for grant_key in ("raw_audio_publication", "model_general_distribution"):
+        data = _attested_voice_identity_rights_layer(
+            json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+        )
+        data["voice_identity_rights"]["usage_grants"][grant_key] = "granted"
+        with pytest.raises(m.Run9ValidationError, match="missing its separate approval record"):
+            m.validate_rights_manifest_four_layer(data)
 
 
 # ---------------------------------------------------------------------------
