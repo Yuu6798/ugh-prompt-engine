@@ -7027,7 +7027,9 @@ def test_rev04_rights_manifest_rejects_empty_string_value_in_block() -> None:
 
 def test_rev04_rights_manifest_performer_and_composer_filled_with_source() -> None:
     """performer/composer は外部資料出典付きで Junya Koguchi が充填されて
-    いること（旧 `<PENDING_USER_ATTESTATION>` は誤用だった — 追加裁定②）。"""
+    いること（旧 `<PENDING_USER_ATTESTATION>` は誤用だった — 追加裁定②）。
+    recording-master owner は裁定②の確定範囲外（論文著者性は録音物権利保有の
+    証拠でない — PR #319 第 4 巡指摘採用）のため <UNRESOLVED_EXTERNAL> を維持。"""
     data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     assert data["performance_rights"]["provenance"]["performance_author"]["performer"] == (
         "Junya Koguchi"
@@ -7036,7 +7038,7 @@ def test_rev04_rights_manifest_performer_and_composer_filled_with_source() -> No
         "Junya Koguchi"
     )
     assert data["recording_master_rights"]["provenance"]["voice_source"]["owner"] == (
-        "Junya Koguchi"
+        "<UNRESOLVED_EXTERNAL>"
     )
 
 

@@ -315,8 +315,10 @@ Owner を意味しない」旨）を各該当箇所へ追記する方式へ変�
   へ再計算し、`run9_render_code_commit` の確定を根拠に **PINNED** を
   維持（旧値 `b92dac0e...` は同欄コメントに履歴として保持）。
 - **②**: `rights_manifest.json` provenance を是正——
-  `performance_author.performer`/`composition.composer`/
-  `voice_source.owner` に外部資料出典付きで **Junya Koguchi** を充填
+  `performance_author.performer`/`composition.composer` に外部資料出典
+  付きで **Junya Koguchi** を充填（`voice_source.owner` への同名充填は
+  論文著者性を録音物権利保有の証拠と誤認した過大推論だったため PR #319
+  第 4 巡指摘採用で `<UNRESOLVED_EXTERNAL>` へ差し戻し）
   （旧 `<PENDING_USER_ATTESTATION>` は誤用だった。performer/composer は
   User 自身が attest できる対象ではなく外部の第三者事実であるため）。
   `composition.lyricist` は未解決のまま placeholder のみ
@@ -448,11 +450,14 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    確定済み）:
    - **確定済み**: PJS の performer（`performance_rights.provenance.
      performance_author.performer`）・composer（`composition_rights.
-     provenance.composition.composer`）・recording master の owner
-     （`recording_master_rights.provenance.voice_source.owner`）はいずれも
-     Junya Koguchi と外部資料出典付きで記録済み（2026-08-25 User 追加裁定
-     ②）。recording license も CC BY-SA 4.0 で機械検証済み
-     （`recording_master_rights.license`）。
+     provenance.composition.composer`）は Junya Koguchi と外部資料出典
+     付きで記録済み（2026-08-25 User 追加裁定②）。recording license も
+     CC BY-SA 4.0 で機械検証済み（`recording_master_rights.license`）。
+   - **未解決（recording master の owner）**: `recording_master_rights.
+     provenance.voice_source.owner` は `<UNRESOLVED_EXTERNAL>` を維持 —
+     論文著者性は録音物の権利保有の証拠でなく、権利者を名指しする
+     disclosure が原典に見当たらないため（PR #319 第 4 巡指摘採用。
+     裁定②の確定範囲は performer/composer のみ）。
    - **未解決（PJS 側・外部第三者事実）**: `lyricist`
      （`composition_rights.provenance.composition.lyricist`）は repo
      内・原典いずれにも個別クレジットの記録がなく `<UNRESOLVED_EXTERNAL>`
