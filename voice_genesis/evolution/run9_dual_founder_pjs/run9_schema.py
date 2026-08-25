@@ -4593,6 +4593,104 @@ def _validate_rights_manifest_corpus_pins_block(corpus_pins: Any) -> None:
         )
 
 
+# Codex bot レビュー PR #319 第8巡指摘（P2, 採用, Fix 16）: `attestation` は
+# `_RIGHTS_MANIFEST_LAYER_REQUIRED_KEYS["voice_identity_rights"]` によって
+# キーの**存在**しか強制されておらず、`{}` やスカラー、あるいは signer/
+# timestamp/statement を欠いた `{"attested": true}` へ置換しても旧
+# `validate_rights_manifest_four_layer()` が受理してしまっていた——User
+# rights 遷移（PENDING_USER_ATTESTATION → 実際の attest 実施）を裏付ける
+# 証拠が構造的に valid のまま消える。`inputs/rights_manifest.json` の実
+# キー（`attested`/`attested_by`/`attested_at`/`statement`）を閉集合として
+# 凍結し、pending/attested の2形態のみを許可する:
+#   - pending 形態（現状 = PENDING_USER_ATTESTATION）: `attested` が
+#     `False` で、将来 attest 時に埋まる `attested_by`/`attested_at`/
+#     `statement` はいずれも `None`（未実施の宣言 — 実データの現物形態）
+#   - attested 形態: `attested` が `True` で、`attested_by`（signer）/
+#     `attested_at`（UTC ISO 8601 timestamp — repo 規約
+#     `CLAUDE.md` 「タイムスタンプ: UTC, ISO 8601 形式で保存」）/
+#     `statement`（非空 str）がすべて埋まっている
+# さらに層の `rights_class`/`consent_status`（Fix 5 で語彙検証済み）と
+# attestation の形態が矛盾しないことを検証する——`PENDING_USER_ATTESTATION`
+# なのに attestation が attested 形、またはその逆（attested 形の
+# rights_class/consent_status なのに attestation が pending 形）を fail-closed
+# で拒否する。
+_RIGHTS_MANIFEST_ATTESTATION_KEYS: FrozenSet[str] = frozenset(
+    {"attested", "attested_by", "attested_at", "statement"}
+)
+# UTC ISO 8601 タイムスタンプ（`Z` サフィックス必須 — repo 規約に合わせる）。
+_RIGHTS_MANIFEST_UTC_TIMESTAMP_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$"
+)
+
+
+def _validate_rights_manifest_voice_identity_attestation(layer: Mapping[str, Any]) -> None:
+    """`voice_identity_rights.attestation` の形状 + pending/attested 二形態の
+    整合を検証する（Fix 16）。
+    """
+    path = "rights manifest.voice_identity_rights.attestation"
+    attestation = layer.get("attestation")
+    if not isinstance(attestation, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(attestation).__name__}")
+    unknown = set(attestation.keys()) - _RIGHTS_MANIFEST_ATTESTATION_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = _RIGHTS_MANIFEST_ATTESTATION_KEYS - set(attestation.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+
+    attested = attestation["attested"]
+    if not isinstance(attested, bool):
+        raise Run9ValidationError(f"{path}.attested must be a bool, got {attested!r}")
+
+    rights_class = layer.get("rights_class")
+    consent_status = layer.get("consent_status")
+    status_is_pending = (
+        rights_class == _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION
+        or consent_status == _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION
+    )
+
+    if not attested:
+        for key in ("attested_by", "attested_at", "statement"):
+            if attestation[key] is not None:
+                raise Run9ValidationError(
+                    f"{path}.{key} must be null while attested is false (pending form), "
+                    f"got {attestation[key]!r}"
+                )
+        if not status_is_pending:
+            raise Run9ValidationError(
+                f"{path} is in pending form (attested=false) but rights manifest."
+                f"voice_identity_rights.rights_class/consent_status is not "
+                f"{_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} — status/attestation "
+                "form mismatch"
+            )
+        return
+
+    attested_by = attestation["attested_by"]
+    if not isinstance(attested_by, str) or not attested_by.strip():
+        raise Run9ValidationError(
+            f"{path}.attested_by must be a non-empty string (signer) when attested is true, "
+            f"got {attested_by!r}"
+        )
+    attested_at = attestation["attested_at"]
+    if not isinstance(attested_at, str) or not _RIGHTS_MANIFEST_UTC_TIMESTAMP_RE.match(attested_at):
+        raise Run9ValidationError(
+            f"{path}.attested_at must be a UTC ISO 8601 timestamp (e.g. "
+            f"'2026-08-25T00:00:00Z') when attested is true, got {attested_at!r}"
+        )
+    statement = attestation["statement"]
+    if not isinstance(statement, str) or not statement.strip():
+        raise Run9ValidationError(
+            f"{path}.statement must be a non-empty string when attested is true, got {statement!r}"
+        )
+    if status_is_pending:
+        raise Run9ValidationError(
+            f"{path} is in attested form (attested=true) but rights manifest."
+            f"voice_identity_rights.rights_class/consent_status is still "
+            f"{_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} — status/attestation form "
+            "mismatch"
+        )
+
+
 def _validate_rights_manifest_layer_status_value(layer_name: str, field_name: str, value: Any) -> None:
     """層直下の rights_class/consent_status 値の語彙検証（Fix 5）。
 
@@ -4808,9 +4906,15 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
     4.0 の share-alike 義務が合成出力へ及ぶかという法解釈を、事実である
     `license` 節から分離する節 — 2026-08-25 User 追加裁定②）の存在・形状
     まで検証する（`validate_branch_write_policy_manifest()` 等と同じ
-    「構造のみ」の境界宣言）。fail-closed（未知キー拒否・欠落キーの
-    デフォルト補完なし・`provenance: {}` やブロック欠落を素通りさせない
-    — Codex bot レビュー PR #319 第1巡指摘2、P2、採用）。
+    「構造のみ」の境界宣言）。`voice_identity_rights.attestation` は
+    pending（`attested=False` + signer/timestamp/statement すべて `None`）/
+    attested（`attested=True` + signer/UTC ISO 8601 timestamp/非空
+    statement すべて充足）の二形態のみを許可し、層の rights_class/
+    consent_status（PENDING_USER_ATTESTATION か否か）との整合も検証する
+    （`_validate_rights_manifest_voice_identity_attestation()` — Codex bot
+    レビュー PR #319 第8巡指摘、Fix 16、P2、採用）。fail-closed（未知キー
+    拒否・欠落キーのデフォルト補完なし・`provenance: {}` やブロック欠落を
+    素通りさせない — Codex bot レビュー PR #319 第1巡指摘2、P2、採用）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"rights manifest must be an object, got {type(data).__name__}")
@@ -4891,6 +4995,10 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
                 layer.get("usage_grants"),
                 _RIGHTS_MANIFEST_USAGE_GRANTS_KEYS,
             )
+            # Fix 16（P2, 採用）: attestation の形状 + pending/attested 二形態の
+            # 整合を検証する（`{}`/スカラー/signer 欠落の `{"attested": true}`
+            # を素通りさせない）。
+            _validate_rights_manifest_voice_identity_attestation(layer)
         if layer_name != "voice_identity_rights":
             # performance_rights/composition_rights/recording_master_rights は
             # いずれも provenance 節を持つ（voice_identity_rights は donor

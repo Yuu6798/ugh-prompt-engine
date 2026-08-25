@@ -92,10 +92,17 @@ CONTROL/C0→`replay` / CONTROL/C1→`r_sham` / PRACTICE_FROM_AUDIO→
    ONNX + phoneme vocabulary、`NamineRitsu_DiffSinger.zip` 由来）と
    acoustic export companions（dsconfig.yaml/phonemes.json/speaker
    embedding）まで含めて記録する — acoustic checkpoint/ONNX だけでは
-   再現入力集合は閉じない（PR #316 第2巡指摘採用）。ただし
-   `backbone_runtime_bundle_sha` 自体は **PENDING**（bundle 内
+   再現入力集合は閉じない（PR #316 第2巡指摘採用）。当初
+   `backbone_runtime_bundle_sha` は **PENDING**（bundle 内
    `render_code_commit` が `INFERRED_UNCONFIRMED` —
-   Codex bot レビュー PR #316 第1巡指摘採用。ブロッカー(4)参照）。
+   Codex bot レビュー PR #316 第1巡指摘採用。ブロッカー(4)参照）だったが、
+   現在は **PINNED**（`83f67a30…`）。claim scope は `run9_runtime_inputs`
+   節に列挙された値の確定 + 文書バイト同一性のみであり、
+   `historical_export_provenance`（RUN6 期の export commit 推定。現在も
+   `INFERRED_UNCONFIRMED` 維持）の真理値は主張しない——両節を独立させた
+   構造分離（Codex bot レビュー PR #319 第2巡指摘, Fix 3, 採用。詳細は
+   下記「解消済み」節および `inputs/backbone_runtime_bundle.json` の
+   `claim_scope`）。
 
 ## 2026-08-24 PoR メモ編入（Revision 0.3）— 要約
 

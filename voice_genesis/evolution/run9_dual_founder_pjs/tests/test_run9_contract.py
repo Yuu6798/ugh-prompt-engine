@@ -7847,3 +7847,141 @@ def test_fix319_14_extract_docstring_and_contract_document_the_four_layer_gate()
     contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
     reason = yaml.safe_load(contract_text)["dataset_manifest_sha"]["reason"]
     assert "validate_rights_manifest_four_layer" in reason
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第8巡対応 — Fix 16（P2）: voice_identity_rights.
+# attestation の形状 + pending/attested 二形態の整合検証。旧
+# validate_rights_manifest_four_layer() は attestation キーの**存在**しか
+# 見ておらず、`{}`/スカラー/signer・timestamp・statement 欠落の
+# `{"attested": true}` へ置換しても受理していた——User rights 遷移を
+# 裏付ける証拠が構造的に valid のまま消えていた。
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_16_attestation_empty_dict_rejected() -> None:
+    """attestation を `{}` へ置換した場合の拒否（負例1）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {}
+    with pytest.raises(m.Run9ValidationError, match="attestation missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attestation_scalar_replacement_rejected() -> None:
+    """attestation をスカラーへ置換した場合の拒否（負例2）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = "not_attested"
+    with pytest.raises(m.Run9ValidationError, match="attestation must be an object"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attestation_attested_true_missing_signer_rejected() -> None:
+    """`{"attested": true}` へ置換（signer/timestamp/statement 欠落）した
+    場合の拒否（負例3 — 指摘本文が名指しするケース）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {"attested": True}
+    with pytest.raises(m.Run9ValidationError, match="attestation missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attestation_unknown_key_rejected() -> None:
+    """attestation への未知キー混入拒否（負例4）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"]["unexpected_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="attestation has unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attestation_non_bool_attested_rejected() -> None:
+    """attestation.attested が bool でない場合の拒否（負例5）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"]["attested"] = "false"
+    with pytest.raises(m.Run9ValidationError, match="attestation.attested must be a bool"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_pending_form_with_nonnull_signer_rejected() -> None:
+    """pending 形態（attested=false）なのに attested_by が非 null な場合の
+    拒否（負例6 — pending/attested 二形態の混在を許さない）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"]["attested_by"] = "someone"
+    with pytest.raises(m.Run9ValidationError, match=r"attested_by must be null"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attested_form_bad_timestamp_rejected() -> None:
+    """attested 形態で attested_at が UTC ISO 8601 でない場合の拒否
+    （負例7）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25",
+        "statement": "I attest this recording as my own voice.",
+    }
+    with pytest.raises(m.Run9ValidationError, match="attested_at must be a UTC ISO 8601 timestamp"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attested_form_empty_statement_rejected() -> None:
+    """attested 形態で statement が空文字列の場合の拒否（負例8）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "   ",
+    }
+    with pytest.raises(m.Run9ValidationError, match="statement must be a non-empty string"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attested_form_while_status_still_pending_rejected() -> None:
+    """attestation が attested 形態に埋まっているのに、層の rights_class/
+    consent_status が依然 `PENDING_USER_ATTESTATION` のままの場合の拒否
+    （負例9 — 二形態の整合違反、順方向）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_pending_form_while_status_no_longer_pending_rejected() -> None:
+    """層の rights_class/consent_status が `PENDING_USER_ATTESTATION` から
+    離れているのに、attestation が pending 形態のまま放置されている場合の
+    拒否（負例10 — 二形態の整合違反、逆方向）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_valid_pending_fixture_still_validates() -> None:
+    """正例（回帰）: 現行 rights_manifest.json の pending 形態
+    （attested=false + signer/timestamp/statement すべて null +
+    rights_class/consent_status = PENDING_USER_ATTESTATION）が Fix 16 追加後も
+    validator を通ることの end-to-end 確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_16_valid_attested_form_accepted() -> None:
+    """正例: pending 形態から attested 形態へ整合的に遷移した manifest
+    （attestation 充足 + rights_class/consent_status を PENDING から離す）
+    は受理されること——二形態の整合検証が誤検知しないことの確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
