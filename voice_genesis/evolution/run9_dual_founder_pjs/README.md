@@ -587,10 +587,14 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   `measurement_boundary`（「どう測るか」は本 manifest の対象外という
   境界明文 — identity 軸は `inputs/identity_metric_space.json`
   正本、development/generalization 軸は `measurement_spec_sha`（別欄）が
-  別途凍結。〔履歴: 当時 PENDING → RUN9-L0-PIN-1（2026-08-25）で
-  identity 軸の extractor カタログを PINNED 化・development/generalization
-  軸は VG-L0 ハーネス実装待ちとして NOT_YET_IMPLEMENTED を明示保留、
-  下記「解消済み」節参照〕）/ `prohibitions`（render 後の cell・
+  別途凍結。〔履歴: 当時 PENDING → RUN9-L0-PIN-1（2026-08-25）で identity
+  軸の extractor カタログを PINNED 化・development/generalization 軸は
+  VG-L0 ハーネス実装待ちとして NOT_YET_IMPLEMENTED を明示保留 → 同日 PR
+  #324 第2巡 Codex bot レビュー Fix 5（偽 READY 経路 + 本 measurement_
+  boundary 節自身との正典矛盾の指摘、採用）で `measurement_spec_sha` は
+  PENDING へ復帰。manifest 実体・validator・loader は撤去せず事前配線の
+  まま残置、下記「解消済み（RUN9-L0-PIN-1）」節参照〕）/ `prohibitions`
+  （render 後の cell・
   水準追加禁止・結果を見た後の probe 変更禁止・測定仕様の変更を本
   manifest で行わない、の3禁則 + render 不能 cell の是正 repin はこの
   禁則の対象外という区別）の閉じたトップレベル構造。P0 cell は
@@ -611,7 +615,9 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   機械確認済み。〔履歴: `measurement_spec_sha` はその後 RUN9-L0-PIN-1
   （2026-08-25、下記「解消済み」節参照）で identity 軸を PINNED 化した
   — `gate_state()` は残る欄（下記「残存」節参照）のため引き続き
-  `BLOCKED`〕）。
+  `BLOCKED`。さらにその後 PR #324 第2巡 Codex bot レビュー（同日、Fix 5）
+  の指摘により PENDING へ復帰した（下記「解消済み（RUN9-L0-PIN-1）」節の
+  対応する箇条を参照）〕）。
 
 **解消済み（実 PJS practice split 実行, 2026-08-25）**:
 - ~~practice split の実 PJS コーパスに対する実行未実施~~ → PJS corpus
@@ -687,16 +693,40 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   項目に `machine_promotion_condition` を新設・付与）。
   `failure_abort_criteria_sha` を実バイト sha256 で repin
   （`RUN9_CONTRACT.yaml` に append-only 履歴コメント記録）〕。
-- ~~`measurement_spec_sha` 未 pin~~ → [`inputs/measurement_spec_manifest.json`](./inputs/measurement_spec_manifest.json)
-  （schema `run9-measurement-spec/1.0`）を新規起草した。測定仕様は
-  identity 軸と development/generalization 軸の2つに分かれる
+  〔履歴: PR #324 Codex bot レビュー第2巡（2026-08-25, 4件, 全て採用）で
+  さらに2件対応。Fix 4（P2）: `tests/test_pin1_seed_policy_manifest_
+  values_match_frozen_sources` が `run9_schema._SEED_POLICY_EXPECTED_
+  VALUE` と同じリテラル `42` を重複主張するだけで `gate_synth.py` の実
+  `SEED` を読んでいなかった指摘——`gate_synth.py` のソーステキストから
+  `SEED = <int>` 代入を正規表現で抽出し（複数マッチ・マッチ0件は
+  fail-closed）manifest 値・期待定数と三者照合する形へ強化、
+  `performance_seed`=909001 も DESIGN §9 の逐語行実在 grep で追加照合した
+  （`gate_synth.py`/DESIGN doc 自体は read-only のまま）。Fix 6（P1）:
+  rule 12（r0 or frozen Genome changed）の raw sha 照合機構が test module
+  にしか存在せず production 消費経路が無い指摘——降格ではなく機構の
+  実体化で対応: `run9_schema.load_pinned_founder_genome_document(
+  founder_id, *, contract, domain, rights_manifest)` を probe manifest と
+  同型の3層防御 + `founder_genome_from_dict()` による実内容検証（builder
+  再構築照合）で新設し、rule 12 の condition をこの関数参照へ更新して
+  MACHINE を維持した。`failure_abort_criteria_sha` を再度実バイト sha256
+  で repin（`RUN9_CONTRACT.yaml` に append-only 履歴コメント記録、3世代
+  目）。founders/*.json は byte 不変（実測確認済み）。Fix 5（P2 ×2）は
+  下記 `measurement_spec_sha` 箇条の履歴を参照〕。
+- `measurement_spec_sha` は **PENDING のまま**（2026-08-25 RUN9-L0-PIN-1 で
+  一時 PINNED 化 → 同日 PR #324 第2巡 Codex bot レビュー Fix 5（P2 ×2、
+  採用）で PENDING へ復帰）。manifest 実体
+  [`inputs/measurement_spec_manifest.json`](./inputs/measurement_spec_manifest.json)
+  （schema `run9-measurement-spec/1.0`）・`run9_schema.validate_
+  measurement_spec_manifest()`・`load_pinned_measurement_spec_manifest()`
+  は事前配線のまま撤去せず残置する。測定仕様は identity 軸と
+  development/generalization 軸の2つに分かれる
   （`evaluation/probe_manifest.json#measurement_boundary` が明文化する
   既存の境界、本 manifest はこれを変更しない）。identity 軸は
   revision_bridge の7 metric-path（PINNED 済み `probe_manifest_sha` 側）
   それぞれについて、extractor（WORLD/pyworld、
   `voice_genesis/foundry/adapter/donor_bank.py:190-196
   analyze_donor_world()` — grep で実在確認済み）+ normalization
-  （`level_normalization`）の参照カタログを追加した（式・閾値そのものは
+  （`level_normalization`）の参照カタログを凍結済み（式・閾値そのものは
   `inputs/identity_metric_space.json` を正本のまま重複定義しない）。
   development/generalization 軸（P4/P5、DESIGN_RUN9 §16.3
   DevelopmentalVector の9指標 + §14 C4 GENERALIZED_GAIN）は対応する
@@ -705,16 +735,31 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   phrase_end_gain/lyrics_delta/artifact_delta/identity_delta/
   GENERALIZED_GAIN のいずれも `*.py` 実装なし——コメント・テスト文字列中
   の言及のみ）、閉じた metric 名の語彙のみを `NOT_YET_IMPLEMENTED` として
-  正直に凍結した（extractor・数値をここで発明していない——ハーネス実装後
-  に別途 design_revision で確定する）。`run9_schema.validate_measurement_
-  spec_manifest()` + `load_pinned_measurement_spec_manifest()` を新設し、
-  `RUN9_CONTRACT.yaml` `measurement_spec_sha` を **PINNED** 化した。
+  正直に凍結（manifest 自身の自己申告）してある。
+  〔履歴: PR #324 第2巡で判明した2件の欠陥により PENDING へ復帰した——
+  (1) **偽 READY 経路**: P4/P5 の9 extractor が repo に不在のまま
+  `measurement_spec_sha` を PINNED にすると、残り必須欄が埋まった瞬間
+  `gate_state()` が本欄を「満たされた」ものとして READY へ算入してしまう
+  （nested `development_generalization_axis.status ==
+  "NOT_YET_IMPLEMENTED"` を `gate_state()` は見ない——pin の shape 判定
+  のみという既存の意図的な層分離のため）。(2) **probe manifest 正典
+  矛盾**: 同時に PINNED 済みの
+  [`evaluation/probe_manifest.json`](./evaluation/probe_manifest.json) が
+  `measurement_boundary.scope_statement`/
+  `development_generalization_axis_source` の両方で「`measurement_spec_
+  sha` は PENDING」と正典宣言しており、`run9_schema.py` の
+  `validate_probe_manifest()` も同ファイルの記述検証で literal
+  `PENDING` マーカーを要求する——`measurement_spec_sha` を PINNED にすると
+  この既存 PINNED 正典と矛盾した状態になる。是正は pin を PENDING へ
+  戻すことのみで解消し、probe manifest / `gate_state()` 本体は無改変〕
 - **`gate_state()` は依然 `BLOCKED`**（`attempt_id`/`repository_commit_sha`/
   `dataset_manifest_sha`/`dataset_row_order_sha`/`config_sha`/
   `dependency_pins_sha`/`execution_profile_sha`/`expected_speaker_map_sha`/
   `education_technique_lesson_manifest_sha`/`learning_recipe_sha`/
-  `hypothesis_algebra_sha` の pre-run 必須11欄が引き続き PENDING のため
-  ——`tests/test_run9_contract.py` の回帰テストで機械確認済み）。
+  `measurement_spec_sha`/`hypothesis_algebra_sha` の pre-run 必須12欄が
+  引き続き PENDING のため（optional の `human_evaluation_protocol_sha` を
+  含めると総 PENDING 13欄）——`tests/test_run9_contract.py` の回帰テストで
+  機械確認済み）。
 
 **再現レシピ（逐語・実行可能、Codex bot レビュー PR #323 第5巡指摘, P2,
 採用, Fix 5）**: fresh checkout の読者が上記 PINNED バイトを実際に再生成

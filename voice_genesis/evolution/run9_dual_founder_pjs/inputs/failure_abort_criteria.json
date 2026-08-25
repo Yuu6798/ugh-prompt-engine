@@ -90,7 +90,7 @@
       "verbatim": "training NaN / checkpoint corruption"
     },
     {
-      "condition": "founder_genome_shas.{R9F-01,R9F-02}（PINNED）と founders/*.json の実在する実ファイルの raw byte 全体の sha256 再照合（既存機構、design_doc_sha256 と同一規約）。is_pinned()/content_digest()（rule #3 で PROCEDURAL 化・run9_schema.py:961-993）と異なり、本チェックは 外部参照の形状ではなく、repo 内に実在する対象ファイルそのものの全バイトを再ハッシュして pin 値と比較する——(a) 実装済み・(b) 実内容検査の両条件を満たす（2026-08-25 監査で生存確認）。",
+      "condition": "founder_genome_shas.{R9F-01,R9F-02}（PINNED）と founders/*.json の実ファイルの raw sha256 照合を production 消費経路として実装した run9_schema.load_pinned_founder_genome_document(founder_id, *, contract, domain, rights_manifest) が担う（2026-08-25 Codex bot レビュー PR #324 第2巡 Fix 6 採用 — 旧 condition は raw sha 照合が tests/test_run9_contract.py の test module にしか存在せず production 消費経路が無い欠陥を指摘された）。load_pinned_probe_manifest() と同型の3層防御（(i) ディスク正典 RUN9_CONTRACT.yaml 再読込で pin 値の乖離検出 (ii) PINNED 状態確認 (iii) founders/R9F-0x_genome.json の実バイト raw sha256 と pin 値の read-once 照合）に加え、(iv) founder_genome_from_dict()（既存の改ざん検出 ロジック — build_founder() による正典再構築との to_dict() 完全一致を要求）で実内容検証まで 行う。harness の genome 消費はこの関数経由のみ（直接 json.load() 禁止、docstring に明記）。",
       "enforcement": "MACHINE",
       "rule_id": 12,
       "verbatim": "r0 or frozen Genome changed"

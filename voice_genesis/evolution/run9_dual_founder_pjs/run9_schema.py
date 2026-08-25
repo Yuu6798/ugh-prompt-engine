@@ -6757,6 +6757,109 @@ def founder_genome_document_path(founder_id: str) -> Path:
     return FOUNDER_GENOME_DIR / f"{founder_id}_genome.json"
 
 
+def load_pinned_founder_genome_document(
+    founder_id: str,
+    *,
+    contract: Run9RunContract,
+    domain: Run9IdentityDomain,
+    rights_manifest: Mapping[str, Any],
+    document_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Run9FounderGenome:
+    """`founder_genome_shas.{founder_id}` pin の**唯一の正規消費経路**
+    （`load_pinned_probe_manifest()` と同型の3層防御・read-once 契約）。
+
+    2026-08-25 Codex bot レビュー PR #324 第2巡 Fix 6（P1, 採用）で新設:
+    従来は `founders/*.json` の実バイトと `founder_genome_shas` pin 値との
+    raw sha256 照合が `tests/test_run9_contract.py` の test module にしか
+    存在せず、production（harness）側の消費経路が無かった——failure_abort_
+    criteria.json rule 12（`r0 or frozen Genome changed`）の `condition` が
+    参照する「既存機構」が実質的にテストコードのみであり、harness 実行時に
+    genome バイト改変を検出する経路が構造的に存在しなかった欠陥の是正。
+
+    **消費契約（事前登録）**: harness の genome 消費はこの関数経由のみで
+    行わなければならない——`founders/R9F-0x_genome.json` への直接
+    `json.load()` は契約違反である。
+
+    手順（いずれかで fail-closed、`load_pinned_probe_manifest()` と同じ
+    3層防御）: (i) `contract_path`（省略時は `RUN9_CONTRACT_YAML_PATH`）が
+    指すディスク上の正典 `RUN9_CONTRACT.yaml` を都度再読込し、渡された
+    `contract` の再検証済み `founder_genome_shas.{founder_id}` pin 値と
+    一致することを確認する（in-process 改変・ディスク正典乖離の双方を
+    検出） (ii) pin 欄が PINNED であること (iii) `document_path`（省略時は
+    `founder_genome_document_path(founder_id)`）の実在 (iv) 実バイトの raw
+    sha256 が pin 値と厳密一致すること（stale/改変を検出。digest と parse
+    は `path.read_bytes()` の同一バッファから導出する read-once 契約 —
+    TOCTOU 対策） (v) `founder_genome_from_dict(data, domain=domain,
+    rights_manifest=rights_manifest)` で **実内容検証**（`build_founder()`
+    による正典再構築との `to_dict()` 完全一致 — voice_id/coords/genome_id
+    相互の整合まで検査する既存の改ざん検出ロジックを再利用する）。
+
+    raw byte sha256 照合（stale/改変検出）と `founder_genome_from_dict()`
+    の意味検証（builder 再構築照合）の両方を通過して初めて
+    `Run9FounderGenome` を返す——rule 12 の condition が要求する「(a) 実装
+    済み・(b) 実内容検査」の両条件をこの production 経路で満たす。
+    """
+    if founder_id not in CONTRACT_FOUNDER_IDS:
+        raise Run9ValidationError(
+            f"load_pinned_founder_genome_document(): founder_id must be one of "
+            f"{CONTRACT_FOUNDER_IDS}, got {founder_id!r}"
+        )
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.founder_genome_sha(founder_id)
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.founder_genome_sha(founder_id)
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_founder_genome_document(): the passed-in contract's "
+            f"founder_genome_shas.{founder_id} pin ({passed_field!r}) diverges from the canonical "
+            f"on-disk RUN9_CONTRACT.yaml pin ({disk_field!r}) at {effective_contract_path} — treated "
+            "as tampering evidence and rejected fail-closed (same defense as "
+            "load_pinned_probe_manifest())"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            f"load_pinned_founder_genome_document(): founder_genome_shas.{founder_id} is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned genome document"
+        )
+    pinned_sha = field["value"]
+    path = document_path if document_path is not None else founder_genome_document_path(founder_id)
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_founder_genome_document(): pinned genome document source {path} does not "
+            "exist — this function is the sole canonical access path (a harness must not call "
+            "json.load() on it directly); a missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（TOCTOU 対策、
+    # load_pinned_probe_manifest() Fix 15 と同型）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_founder_genome_document(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml founder_genome_shas.{founder_id} の pin 値 ({pinned_sha!r}) と "
+            "一致しない — stale または改変された genome document は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_founder_genome_document(): JSON parse に失敗した: {exc}"
+        ) from exc
+    # 実内容検証（rule 12 condition の (b) 要件）: builder 再構築との
+    # to_dict() 完全一致まで検査する（founder_genome_from_dict() 既存ロジック
+    # の再利用 — voice_id/coords/genome_id 相互の改ざんも検出する）。
+    return founder_genome_from_dict(data, domain=domain, rights_manifest=rights_manifest)
+
+
 # ---------------------------------------------------------------------------
 # Run Contract（DESIGN_RUN9 §23 `voicegenesis-run-contract/1.0`）
 # ---------------------------------------------------------------------------

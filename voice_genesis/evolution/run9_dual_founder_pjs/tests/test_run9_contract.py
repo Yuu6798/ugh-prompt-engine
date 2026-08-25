@@ -10506,14 +10506,51 @@ def test_pin1_seed_policy_manifest_registers_exactly_three_seeds() -> None:
 
 
 def test_pin1_seed_policy_manifest_values_match_frozen_sources() -> None:
-    """一次ソースからの逐語転記の実測確認: run9_schema.py の
-    SHARED_PERFORMANCE_SEED/LEARNING_SEED、および gate_synth.py:149 の
-    SEED=42（read-only 参照、値のみの転記）と一致すること。"""
+    """一次ソースからの逐語転記の実測確認（2026-08-25 Codex bot レビュー
+    PR #324 第2巡 Fix 4, P2, 採用 — 旧実装は `_SEED_POLICY_EXPECTED_VALUE`
+    と同じリテラル `42` を manifest 側と重複主張するだけで
+    `gate_synth.py` の実 `SEED` を読んでいなかった。本テストは
+    `gate_synth.py` のソーステキストから `SEED = <int>` 代入を正規表現で
+    抽出し、manifest 値・`run9_schema._SEED_POLICY_EXPECTED_VALUE` の
+    双方と三者照合する。複数マッチ・マッチ0件は fail-closed（構造が
+    変わって抽出が誤動作した場合に静かに緑のままにしない）。"""
+    gate_synth_path = _FOUNDRY_DIR / "s1_gate" / "gate_synth.py"
+    gate_synth_text = gate_synth_path.read_text(encoding="utf-8")
+    seed_matches = re.findall(r"^SEED\s*=\s*(\d+)\s*$", gate_synth_text, flags=re.MULTILINE)
+    assert len(seed_matches) == 1, (
+        f"gate_synth.py の 'SEED = <int>' 代入が厳密に1件であることを期待したが "
+        f"{len(seed_matches)} 件マッチした: {seed_matches!r}（マッチ0件・複数件は "
+        "抽出ロジックの前提が崩れたことを意味し fail-closed で拒否する）"
+    )
+    gate_synth_actual_seed = int(seed_matches[0])
+    assert gate_synth_actual_seed == m._SEED_POLICY_EXPECTED_VALUE["gate_synth_runtime_seed"]
+
     data = _seed_policy_manifest_data()
     by_id = {entry["seed_id"]: entry for entry in data["seeds"]}
-    assert by_id["performance_seed"]["value"] == m.SHARED_PERFORMANCE_SEED == 909001
+    assert by_id["gate_synth_runtime_seed"]["value"] == gate_synth_actual_seed == 42
+
+    # learning_seed/performance_seed は run9_schema モジュールの実定数
+    # （LEARNING_SEED/SHARED_PERFORMANCE_SEED）を直接読むため、
+    # gate_synth_runtime_seed のような別ファイルへのリテラル複製は生じない
+    # ——ここでの `== m.LEARNING_SEED` は「重複リテラルの再主張」ではなく、
+    # 生きた定数値そのものへの参照である。
     assert by_id["learning_seed"]["value"] == m.LEARNING_SEED == 909002
-    assert by_id["gate_synth_runtime_seed"]["value"] == 42
+    assert by_id["performance_seed"]["value"] == m.SHARED_PERFORMANCE_SEED == 909001
+
+    # performance_seed は DESIGN_RUN9 §9 の逐語行（R9F-01/R9F-02 双方）が
+    # 実在することも grep 相当で追加照合する（一次ソース直読み、孫引き
+    # 防止）。
+    design_text = DESIGN_DOC_PATH.read_text(encoding="utf-8")
+    perf_seed_matches = re.findall(
+        r"^performance_seed:\s*(\d+)\s*$", design_text, flags=re.MULTILINE
+    )
+    assert len(perf_seed_matches) == 2, (
+        f"DESIGN_RUN9 §9.2/§9.3 の 'performance_seed: <int>' 逐語行が厳密に2件"
+        f"（R9F-01/R9F-02）であることを期待したが {len(perf_seed_matches)} 件マッチした: "
+        f"{perf_seed_matches!r}"
+    )
+    for value in perf_seed_matches:
+        assert int(value) == m.SHARED_PERFORMANCE_SEED == 909001
 
 
 def test_pin1_seed_policy_manifest_unknown_top_level_key_fail_closed() -> None:
@@ -10899,14 +10936,38 @@ _PIN1_LOADER_CASES = (
     ),
 )
 
+# PR #324 第2巡 Fix 5（measurement_spec_sha を PENDING へ復帰）後、実際に
+# 現在 PINNED なのは seed_policy_sha/failure_abort_criteria_sha の2欄のみ。
+# 「PINNED な artifact に対する loader の正常系/改竄検出」を検証するテスト
+# 群はこの2欄のみを対象とする（measurement_spec_sha 側の対応する期待は
+# 専用テスト `test_pin1_r3_load_pinned_measurement_spec_manifest_raises_pending`
+# が別途カバーする）。`_PIN1_LOADER_CASES`（3欄）は
+# `test_pin1_load_pinned_manifest_rejects_when_not_pinned` のように現在の
+# 実 pin 状態に依存しない合成テストでのみ引き続き使う。
+_PIN1_PINNED_LOADER_CASES = tuple(
+    case for case in _PIN1_LOADER_CASES if case[0] != "measurement_spec_sha"
+)
 
-@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_LOADER_CASES)
+
+@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_PINNED_LOADER_CASES)
 def test_pin1_load_pinned_manifest_happy_path(
     contract: m.Run9RunContract, pin_name: str, loader_name: str, path_const_name: str,
 ) -> None:
     loader = getattr(m, loader_name)
     data = loader(contract)
     assert isinstance(data, dict)
+
+
+def test_pin1_r3_load_pinned_measurement_spec_manifest_raises_pending(
+    contract: m.Run9RunContract,
+) -> None:
+    """PR #324 第2巡 Fix 5: measurement_spec_sha は PENDING へ復帰した
+    ため、`load_pinned_measurement_spec_manifest()` は現在の実 contract に
+    対して呼ぶと必ず『not PINNED』で fail-closed 拒否する（それが正しい
+    挙動 — manifest/validator/loader 自体は事前配線のまま残置しつつ、
+    pin されていない artifact を消費させない）。"""
+    with pytest.raises(m.Run9ValidationError, match="not PINNED"):
+        m.load_pinned_measurement_spec_manifest(contract)
 
 
 @pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_LOADER_CASES)
@@ -10933,7 +10994,7 @@ def test_pin1_load_pinned_manifest_rejects_when_not_pinned(
         loader(tampered_contract, contract_path=tampered_yaml_path)
 
 
-@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_LOADER_CASES)
+@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_PINNED_LOADER_CASES)
 def test_pin1_load_pinned_manifest_detects_in_process_contract_tampering(
     contract: m.Run9RunContract, pin_name: str, loader_name: str, path_const_name: str,
 ) -> None:
@@ -10947,7 +11008,7 @@ def test_pin1_load_pinned_manifest_detects_in_process_contract_tampering(
         loader(tampered)
 
 
-@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_LOADER_CASES)
+@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_PINNED_LOADER_CASES)
 def test_pin1_load_pinned_manifest_detects_manifest_byte_tampering(
     contract: m.Run9RunContract,
     tmp_path: Path,
@@ -10963,7 +11024,7 @@ def test_pin1_load_pinned_manifest_detects_manifest_byte_tampering(
         loader(contract, manifest_path=tampered_path)
 
 
-@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_LOADER_CASES)
+@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_PINNED_LOADER_CASES)
 def test_pin1_load_pinned_manifest_missing_file_fail_closed(
     contract: m.Run9RunContract,
     tmp_path: Path,
@@ -10978,29 +11039,164 @@ def test_pin1_load_pinned_manifest_missing_file_fail_closed(
 
 
 # ---------------------------------------------------------------------------
+# load_pinned_founder_genome_document(): rule 12（failure_abort_criteria
+# #12 r0 or frozen Genome changed）の production 消費経路（2026-08-25
+# Codex bot レビュー PR #324 第2巡 Fix 6, P1, 採用 — 旧実装は raw sha 照合が
+# test module にしか存在せず production 消費経路が無い欠陥の是正）。
+# founders/*.json は byte 不変厳守（本節のいずれのテストも実ファイルへ
+# 書き込まない）。
+# ---------------------------------------------------------------------------
+
+
+def _real_domain() -> m.Run9IdentityDomain:
+    return m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+
+
+def _real_rights_manifest() -> Dict[str, Any]:
+    return json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_pin1_r3_load_pinned_founder_genome_document_happy_path(
+    contract: m.Run9RunContract, founder_id: str,
+) -> None:
+    genome = m.load_pinned_founder_genome_document(
+        founder_id, contract=contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+    )
+    assert genome.voice_id == founder_id
+    # RUN9-BIRTH-PREP-1 実測当時の genome_id と不変であることを確認する
+    # （README.md「解消済み（RUN9-BIRTH-PREP-1）」節と同一値）。
+    expected_genome_id = {"R9F-01": "66f420672a154283", "R9F-02": "63f4b8f24b827cd4"}[founder_id]
+    assert genome.genome_id == expected_genome_id
+
+
+def test_pin1_r3_load_pinned_founder_genome_document_rejects_invalid_founder_id(
+    contract: m.Run9RunContract,
+) -> None:
+    with pytest.raises(m.Run9ValidationError, match="founder_id must be one of"):
+        m.load_pinned_founder_genome_document(
+            "R9F-99", contract=contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+        )
+
+
+def test_pin1_r3_load_pinned_founder_genome_document_detects_byte_tampering(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    real_path = m.founder_genome_document_path("R9F-01")
+    tampered_path = tmp_path / "R9F-01_genome.json"
+    tampered_path.write_bytes(real_path.read_bytes() + b"\n// tampered")
+    with pytest.raises(m.Run9ValidationError, match="実バイト sha256"):
+        m.load_pinned_founder_genome_document(
+            "R9F-01", contract=contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            document_path=tampered_path,
+        )
+
+
+def test_pin1_r3_load_pinned_founder_genome_document_missing_file(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    missing_path = tmp_path / "does_not_exist.json"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_founder_genome_document(
+            "R9F-01", contract=contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            document_path=missing_path,
+        )
+
+
+def test_pin1_r3_load_pinned_founder_genome_document_rejects_when_not_pinned(
+    contract_raw: Dict[str, Any], tmp_path: Path,
+) -> None:
+    tampered = copy.deepcopy(contract_raw)
+    tampered["founder_genome_shas"]["R9F-01"] = {"value": None, "status": "PENDING", "reason": "test"}
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(yaml.safe_dump(tampered, allow_unicode=True), encoding="utf-8")
+    tampered_contract = m.load_run9_contract(tampered)
+    with pytest.raises(m.Run9ValidationError, match="not PINNED"):
+        m.load_pinned_founder_genome_document(
+            "R9F-01", contract=tampered_contract, domain=_real_domain(),
+            rights_manifest=_real_rights_manifest(), contract_path=tampered_yaml_path,
+        )
+
+
+def test_pin1_r3_load_pinned_founder_genome_document_detects_in_process_contract_tampering(
+    contract: m.Run9RunContract,
+) -> None:
+    tampered = copy.deepcopy(contract)
+    tampered.raw["founder_genome_shas"]["R9F-01"]["value"] = "0" * 64
+    with pytest.raises(m.Run9ValidationError, match="diverges from the canonical on-disk"):
+        m.load_pinned_founder_genome_document(
+            "R9F-01", contract=tampered, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+        )
+
+
+def test_pin1_r3_founders_json_bytes_unchanged() -> None:
+    """Fix 6 の対応は founders/*.json のバイトを一切変更しないこと
+    （raw sha256 は既存 founder_genome_shas pin 値と引き続き一致する）。"""
+    contract = m.load_run9_contract_from_yaml_path(m.RUN9_CONTRACT_YAML_PATH)
+    for founder_id in m.CONTRACT_FOUNDER_IDS:
+        pin_value = contract.founder_genome_sha(founder_id)["value"]
+        assert pin_value == m.compute_file_sha256(m.founder_genome_document_path(founder_id))
+
+
+def test_pin1_r3_rule12_condition_references_new_loader_function() -> None:
+    """failure_abort_criteria.json rule 12 の condition が
+    `load_pinned_founder_genome_document` を参照し、production 消費経路の
+    存在を主張していること（Fix 6 の直接回帰）。"""
+    data = _failure_abort_criteria_data()
+    rule12 = next(r for r in data["rules"] if r["rule_id"] == 12)
+    assert rule12["enforcement"] == "MACHINE"
+    assert "load_pinned_founder_genome_document" in rule12["condition"]
+
+
+# ---------------------------------------------------------------------------
 # 全体回帰: 3欄 PINNED + gate_state() BLOCKED + 既存 pin 値不変 + 再直列化
 # byte 一致 + stale PENDING マーカー不在
 # ---------------------------------------------------------------------------
 
 
-def test_pin1_three_fields_pinned_with_real_file_sha(contract_raw: Dict[str, Any]) -> None:
-    expectations = {
+def test_pin1_seed_policy_and_failure_abort_pinned_measurement_spec_pending(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """PR #324 第2巡 Fix 5 後の最終状態: seed_policy_sha/
+    failure_abort_criteria_sha は PINNED（実ファイル sha256 と一致）、
+    measurement_spec_sha は PENDING（value は null）——3欄が横並びで
+    PINNED だった RUN9-L0-PIN-1 直後の状態からの意図的な変更。"""
+    pinned_expectations = {
         "seed_policy_sha": m.SEED_POLICY_MANIFEST_PATH,
         "failure_abort_criteria_sha": m.FAILURE_ABORT_MANIFEST_PATH,
-        "measurement_spec_sha": m.MEASUREMENT_SPEC_MANIFEST_PATH,
     }
-    for field_name, path in expectations.items():
+    for field_name, path in pinned_expectations.items():
         field = contract_raw[field_name]
         assert field["status"] == "PINNED"
         assert field["value"] == m.compute_file_sha256(path)
 
+    measurement_spec_field = contract_raw["measurement_spec_sha"]
+    assert measurement_spec_field["status"] == "PENDING"
+    assert measurement_spec_field["value"] is None
+
 
 def test_pin1_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
-    """3欄が PINNED になっても、残る11の pre-run 欄（attempt_id ほか）が
-    PENDING のままである限り gate_state() は依然 BLOCKED（誤 READY 化
-    していないことの回帰確認 — probe_manifest/founder_genome_shas と同型）。
-    """
+    """seed_policy_sha/failure_abort_criteria_sha が PINNED になっても
+    （measurement_spec_sha は PR #324 第2巡 Fix 5 で PENDING へ復帰済み）、
+    残る pre-run 欄（attempt_id ほか）が PENDING のままである限り
+    gate_state() は依然 BLOCKED（誤 READY 化していないことの回帰確認 —
+    probe_manifest/founder_genome_shas と同型）。"""
     assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_pin1_r3_pre_run_pending_count_is_twelve(contract: m.Run9RunContract) -> None:
+    """PR #324 第2巡 Fix 5（measurement_spec_sha を PENDING へ復帰）後の
+    pre-run PENDING 欄は12件（optional の human_evaluation_protocol_sha を
+    含めると総 PENDING 13件）——README.md の記述更新（12→13）と対応する
+    回帰固定。"""
+    revalidated = m.load_run9_contract(contract.raw)
+    excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
+    pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
+    pending = [
+        n for n in pre_run_fields if not m._is_field_pinned(revalidated.pin_field(n))
+    ]
+    assert len(pending) == 12
+    assert "measurement_spec_sha" in pending
 
 
 def test_pin1_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> None:
@@ -11017,38 +11213,41 @@ def test_pin1_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> Non
     )
 
 
-def test_pin1_r2_seed_policy_and_measurement_spec_manifests_byte_unchanged(
-    contract_raw: Dict[str, Any],
-) -> None:
-    """PR #324 第1巡は failure_abort_criteria.json のみを改訂対象とする
-    （3件の指摘は全て同ファイルのみを対象）。seed_policy_manifest.json /
-    measurement_spec_manifest.json のバイト・pin 値は RUN9-L0-PIN-1 初回
-    実装時点から不変であることをハードコードした sha256 で固定する。"""
+def test_pin1_r2_seed_policy_manifest_byte_unchanged(contract_raw: Dict[str, Any]) -> None:
+    """seed_policy_manifest.json のバイト・pin 値は RUN9-L0-PIN-1 初回
+    実装時点から一貫して不変であること（第1巡・第2巡とも同ファイルは
+    改訂対象外）をハードコードした sha256 で固定する。"""
     assert contract_raw["seed_policy_sha"]["value"] == (
         "1ff25f429e544c1b6c9b10c5a388833fa2506b1ce12162c7b17cc4af32df05f4"
     )
     assert contract_raw["seed_policy_sha"]["value"] == m.compute_file_sha256(
         m.SEED_POLICY_MANIFEST_PATH
     )
-    assert contract_raw["measurement_spec_sha"]["value"] == (
+
+
+def test_pin1_r3_measurement_spec_manifest_file_byte_unchanged_despite_pending_pin() -> None:
+    """PR #324 第2巡 Fix 5: measurement_spec_sha は contract 欄としては
+    PENDING へ復帰したが、inputs/measurement_spec_manifest.json 自体の
+    バイトは RUN9-L0-PIN-1 初回実装時点から一切改変していない（manifest/
+    validator/loader は事前配線のまま残置——撤去していないことの確認）。
+    """
+    assert m.compute_file_sha256(m.MEASUREMENT_SPEC_MANIFEST_PATH) == (
         "cb3e3b45973caa3737531b9636454a4542bc75f60d03a80a6a0411a9847bfdd5"
     )
-    assert contract_raw["measurement_spec_sha"]["value"] == m.compute_file_sha256(
-        m.MEASUREMENT_SPEC_MANIFEST_PATH
-    )
 
 
-def test_pin1_r2_failure_abort_criteria_repinned_to_new_value(contract_raw: Dict[str, Any]) -> None:
-    """failure_abort_criteria_sha は PR #324 第1巡の repin 後の値であること
-    （旧 RUN9-L0-PIN-1 初回値との不一致を明示的に確認 — repin 漏れの回帰
+def test_pin1_r3_failure_abort_criteria_repinned_lineage(contract_raw: Dict[str, Any]) -> None:
+    """failure_abort_criteria_sha の repin 履歴3世代（RUN9-L0-PIN-1 初回
+    → PR #324 第1巡 Fix 1/2/3 → 第2巡 Fix 6）が append-only で、現在値が
+    最新（第2巡）のものであることを明示的に確認する（repin 漏れの回帰
     防止）。"""
-    old_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
-    new_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
-    assert contract_raw["failure_abort_criteria_sha"]["value"] == new_value
-    assert contract_raw["failure_abort_criteria_sha"]["value"] != old_value
-    assert contract_raw["failure_abort_criteria_sha"]["value"] == m.compute_file_sha256(
-        m.FAILURE_ABORT_MANIFEST_PATH
-    )
+    round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
+    round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
+    round3_value = "6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44"
+    current = contract_raw["failure_abort_criteria_sha"]["value"]
+    assert current == round3_value
+    assert current not in (round1_value, round2_value)
+    assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
 
 
 @pytest.mark.parametrize(
@@ -11071,15 +11270,32 @@ def test_pin1_manifest_reserializes_to_identical_bytes(path_const_name: str, loa
 
 
 def test_pin1_readme_has_no_stale_present_tense_pending_claims() -> None:
-    """README.md のブロッカー節・現在地マップに、本 PR で PINNED 化した
-    3欄を「現在 PENDING」と主張する記述が残っていないこと（履歴注記
-    〔履歴: ...〕・取消線 ~~...~~・「解消済み」節見出し内の言及は許容）。
+    """README.md のブロッカー節・現在地マップに、引き続き PINNED のままの
+    2欄（seed_policy_sha/failure_abort_criteria_sha）を「現在 PENDING」と
+    主張する記述が残っていないこと（履歴注記〔履歴: ...〕・取消線
+    ~~...~~・「解消済み」節見出し内の言及は許容）。
+
+    measurement_spec_sha は対象外——PR #324 第2巡 Fix 5 で PENDING へ
+    正当に復帰したため、現在形の PENDING 記述はむしろ正しい状態表現で
+    あり stale ではない（専用テスト
+    `test_pin1_r3_readme_measurement_spec_pending_count_updated` が
+    別途、件数記述の追随を確認する）。
     """
     readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
-    fields = ("seed_policy_sha", "measurement_spec_sha", "failure_abort_criteria_sha")
+    fields = ("seed_policy_sha", "failure_abort_criteria_sha")
     for line in readme_text.splitlines():
         for field in fields:
             if field in line and "PENDING" in line:
                 assert ("履歴" in line) or ("解消済み" in line) or ("~~" in line), (
                     f"stale current-tense PENDING claim for {field!r}: {line!r}"
                 )
+
+
+def test_pin1_r3_readme_measurement_spec_pending_count_updated() -> None:
+    """PR #324 第2巡指摘: 残 PENDING 件数の記述を12→13へ全箇所更新
+    （measurement_spec_sha が PENDING へ復帰した分の増分）。旧い『12件』
+    という総数記述が残存していないことを確認する。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "13" in readme_text
+    for stale in ("残 PENDING 12件", "PENDING 件数 12", "残る12件"):
+        assert stale not in readme_text

@@ -898,28 +898,34 @@ probe_manifest_sha:
 
 # --- measurement_spec_sha: inputs/measurement_spec_manifest.json の実バイト
 # sha256（design_doc_sha256 と同一のファイル実バイト規約 —
-# run9_schema.compute_file_sha256() 参照）。RUN9-L0-PIN-1（2026-08-25 実装）
-# で PINNED 化: 測定仕様は identity 軸と development/generalization 軸の2つに
-# 分かれる（evaluation/probe_manifest.json#measurement_boundary /
-# README.md:587-590 が明文化する既存の境界、本欄はこれを変更しない）。
-# identity 軸は revision_bridge の7 metric-path（PINNED 済み
-# probe_manifest_sha 側）それぞれの extractor（WORLD/pyworld、
-# voice_genesis/foundry/adapter/donor_bank.py:190-196
-# analyze_donor_world()、grep 実在確認済み）+ normalization（level_
-# normalization）参照カタログを凍結した（式・閾値自体は
-# inputs/identity_metric_space.json を正本のまま重複定義しない）。
-# development/generalization 軸（P4/P5、DESIGN_RUN9 §16.3 DevelopmentalVector
-# 9指標 + §14 C4 GENERALIZED_GAIN）は対応する extractor が VG-L0 学習
-# ハーネス未実装のため repo に実在せず（grep 確認: 該当実装なし）、閉じた
-# metric 名の語彙のみを NOT_YET_IMPLEMENTED として正直に凍結した — 数値・
-# extractor をここで発明していない。
+# run9_schema.compute_file_sha256() 参照）。PENDING（2026-08-25 PR #324
+# 第2巡 Codex bot レビュー Fix 5、P2 ×2、採用 — 偽 READY 経路 + probe
+# manifest 正典矛盾のため、RUN9-L0-PIN-1 での一時 PINNED 化を撤回）。
+# manifest 実体（inputs/measurement_spec_manifest.json）・validator・loader
+# は PIN-1 で事前配線済み（identity 軸カタログ + P4/P5 語彙凍結）。ただし
+# P4/P5 の DevelopmentalVector 9指標 + GENERALIZED_GAIN の extractor が
+# 未実装のため測定仕様は完結しておらず、pin は extractor 実装時
+# （VG-L0 ハーネス）とする。
 # 〔履歴: 旧 PENDING 理由「測定仕様（feature extractor / normalization /
-# metric version）が未凍結」→ RUN9-L0-PIN-1 で identity 軸は解消・
-# development/generalization 軸は VG-L0 ハーネス実装待ちとして明示保留〕
+# metric version）が未凍結」→ RUN9-L0-PIN-1（2026-08-25）で一時 PINNED 化
+# → PR #324 第2巡指摘（偽 READY 経路: P4/P5 extractor 不在のまま gate
+# READY へ算入され得る／probe manifest 正典矛盾: PINNED 済み
+# evaluation/probe_manifest.json の measurement_boundary が「measurement_
+# spec_sha は PENDING」を正典宣言しており validate_probe_manifest() も
+# revision_bridge の記述検証で literal PENDING マーカーを要求するため
+# PINNED 化は正典間で矛盾していた）で PENDING へ復帰。manifest/validator/
+# loader 自体は撤去せず事前配線のまま維持（NOT_YET_IMPLEMENTED の自己申告
+# は正直な状態表現であり撤回対象ではない）〕
 measurement_spec_sha:
-  value: "cb3e3b45973caa3737531b9636454a4542bc75f60d03a80a6a0411a9847bfdd5"
-  status: PINNED
-  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/measurement_spec_manifest.json
+  value: null
+  status: PENDING
+  reason: >-
+    manifest 実体（inputs/measurement_spec_manifest.json）・validator・
+    loader は PIN-1 で事前配線済み（identity 軸カタログ + P4/P5 語彙凍結）。
+    ただし P4/P5 の DevelopmentalVector 9指標 + GENERALIZED_GAIN の
+    extractor が未実装のため測定仕様は完結しておらず、pin は extractor
+    実装時（VG-L0 ハーネス）。〔履歴: PIN-1 で一時 PINNED 化 → 第2巡指摘
+    （偽 READY 経路 + probe manifest 正典矛盾）で PENDING へ復帰〕
 
 hypothesis_algebra_sha:
   value: null
@@ -1012,8 +1018,23 @@ cost_record_sha:
 #   `machine_promotion_condition`（将来 MACHINE へ昇格するために必要な
 #   実装/データ）を新設・付与した。分類前文（classification_policy）も
 #   「(a) 実装済み・(b) 実内容検査」の2条件 AND を明文化する形へ強化した。
+# - PR #324 Codex bot レビュー第2巡 Fix 6（2026-08-25、値
+#   6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44 へ
+#   repin、P1、採用）: rule 12（r0 or frozen Genome changed）の condition
+#   が参照する raw sha 照合機構が `tests/test_run9_contract.py` の test
+#   module にしか存在せず production（harness）側の消費経路が無い欠陥の
+#   指摘。降格ではなく機構の実体化で対応: `run9_schema.
+#   load_pinned_founder_genome_document(founder_id, *, contract, domain,
+#   rights_manifest)` を probe manifest と同型の3層防御（pin PINNED 確認
+#   → ディスク正典 RUN9_CONTRACT.yaml 再読込照合 → read-once で raw bytes
+#   sha256 照合 + parse）+ `founder_genome_from_dict()`（既存の builder
+#   再構築照合ロジック）による実内容検証で新設した（harness の genome
+#   消費はこの関数経由のみ、直接 json.load() は契約違反と docstring に
+#   明記）。rule 12 の condition をこの関数参照へ更新し MACHINE を維持
+#   （(a) 実装済み・(b) 実内容検査の両条件を production 経路で満たす）。
+#   founders/*.json は byte 不変（実測確認済み）。
 failure_abort_criteria_sha:
-  value: "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
+  value: "6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 
