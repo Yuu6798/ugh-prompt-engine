@@ -10011,7 +10011,7 @@ def test_fix323_7a_readme_checksum_steps_use_sha256sum_dash_c_not_bare_print() -
     ) in readme_text
     assert (
         'echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6'
-        '  /tmp/pjs_producer_output.json" | sha256sum -c -'
+        '  $workdir/output.json" | sha256sum -c -'
     ) in readme_text
     assert "assert d['row_order_sha256'] ==" in readme_text
     # 旧・非 fail-closed 形式（コメント併記のみ）が残っていないこと
@@ -10057,11 +10057,13 @@ def test_fix323_8_readme_recipe_executes_from_producer_tree_via_git_worktree() -
     の producer revision との差異を見逃す）ではないことの確認。"""
     readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
     assert "producer tree で実行" in readme_text
-    assert "git worktree add /tmp/pjs_producer" in readme_text
-    assert "git worktree remove /tmp/pjs_producer" in readme_text
+    # Fix 10b（第10巡, P1, 採用）で固定パス /tmp/pjs_producer から
+    # mktemp -d ベースの衝突安全パス（$workdir/producer_tree）へ移行済み
+    assert 'git worktree add "$workdir/producer_tree" "$producer_rev"' in readme_text
+    assert 'git worktree remove "$workdir/producer_tree"' in readme_text
     assert (
-        "sys.path.insert(0, \"/tmp/pjs_producer/voice_genesis/evolution/"
-        "run9_dual_founder_pjs\")"
+        'sys.path.insert(0, os.path.join(workdir, "producer_tree", '
+        '"voice_genesis", "evolution", "run9_dual_founder_pjs"))'
     ) in readme_text
     # in-place 実行が等価となる条件（現在 checkout == producer revision）の注記
     assert "in-place 実行が等価" in readme_text
@@ -10154,3 +10156,79 @@ def test_fix323_9_readme_step4c_heredoc_body_compiles_as_valid_python() -> None:
     assert "psb.build_practice_split_manifest(" in body
     assert "psb.dump_practice_split_manifest_bytes(manifest)" in body
     compile(body, "<readme step4c heredoc body>", "exec")  # SyntaxError なら本テストが失敗する
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第10巡3件（P1/P2, 全採用, Fix 10a/10b/10c）:
+# Fix 10a — レシピを一括シェル実行した場合、`sha256sum -c` の非零 exit が
+# 後続ステップを止めない（偽成功経路）。Fix 10b（P1）— 固定パス
+# `/tmp/pjs_producer`・`/tmp/pjs_producer_output.json` は中断/並行実行で
+# 衝突する。Fix 10c — `--depth 1` 等の shallow clone では `git log
+# --follow` が shallow 境界を返し「常に有効」の主張と矛盾する。
+# 本巡で bot レビュー対応の上限10巡（CLAUDE.md 規約）に到達したため、
+# 各返信の末尾にその旨と以降の採否方針を明記した（本ファイル内の
+# コメントとしても記録: 以降の巡では実コード被害/将来汚染/致命的バグの
+# 新しい具体経路を示す指摘のみ採用し、その他は境界宣言として未対応
+# リストへまとめ User のマージ判断へ委ねる）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_10a_readme_recipe_has_errexit_preamble_and_explicit_exit_on_checksum() -> None:
+    """README.md のレシピが、一括実行時の前提として `set -euo pipefail`
+    を明示し、かつ zip/manifest の `sha256sum -c -` 双方に `|| exit 1`
+    を併記していること（`set -e` の実行し忘れに対する二重の安全策）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "```bash\nset -euo pipefail\n```" in readme_text
+    assert (
+        'echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca'
+        '  PJS_corpus_ver1.1.zip" | sha256sum -c - || exit 1'
+    ) in readme_text
+    assert (
+        'echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6'
+        '  $workdir/output.json" | sha256sum -c - || exit 1'
+    ) in readme_text
+
+
+def test_fix323_10b_readme_recipe_uses_mktemp_workdir_not_fixed_tmp_paths() -> None:
+    """README.md のレシピが、衝突しうる固定パス（`/tmp/pjs_producer`・
+    `/tmp/pjs_producer_output.json`）ではなく `mktemp -d` による一意な
+    作業ディレクトリを使っていること。heredoc は Fix 9 のクォート付き
+    デリミタ（`<<'EOF'`）を維持したまま、出力先パスは環境変数
+    `PJS_WORKDIR`（`export` + `os.environ`）経由で heredoc 内へ渡して
+    いる——heredoc 内でのシェル変数展開に頼っていないことも確認する。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert 'workdir="$(mktemp -d)"' in readme_text
+    assert 'export PJS_WORKDIR="$workdir"' in readme_text
+    assert 'workdir = os.environ["PJS_WORKDIR"]' in readme_text
+    assert 'rm -rf "$workdir"' in readme_text
+    # 旧・固定パスへの実行コマンドがもう存在しないこと（Fix 10b の説明文
+    # 内で経緯として言及されるのは許容——実行コマンドの形での残存のみ拒否）
+    assert "git worktree add /tmp/pjs_producer" not in readme_text
+    assert "git worktree remove /tmp/pjs_producer" not in readme_text
+    assert '"/tmp/pjs_producer_output.json"' not in readme_text
+    # heredoc 本体が引き続きクォート付きデリミタであること（Fix 9 維持）
+    block = _extract_step4c_bash_block(readme_text)
+    assert block.splitlines()[0].strip() == "python3 - <<'EOF'"
+
+
+def test_fix323_10c_readme_step4a_guards_against_shallow_clone() -> None:
+    """README.md の step 4a が、`git rev-parse --is-shallow-repository`
+    による shallow 判定 + `git fetch --unshallow` の逐語コマンドを含み、
+    「第一の再現ポインタ」の「常に有効」表記が「完全履歴の checkout で
+    常に有効」へ精密化されていること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert 'git rev-parse --is-shallow-repository' in readme_text
+    assert "git fetch --unshallow" in readme_text
+    assert "完全履歴の\n  checkout で常に有効" in readme_text
+    # 精密化前の無条件「常に有効」（括弧内の単独表記）がもう残っていないこと
+    assert "汎用手順、常に有効）" not in readme_text
+
+
+def test_fix323_10_replies_document_10_round_cap_reached() -> None:
+    """本ファイル（このコメントブロック自体）が、bot レビュー対応の上限
+    10巡（CLAUDE.md 規約）に到達した旨を記録していること——返信本文側の
+    記録は投稿時に別途確認する対象のため、ここではソース側の記録の存在
+    のみを直接確認する。"""
+    self_text = Path(__file__).read_text(encoding="utf-8")
+    assert "上限10巡" in self_text
+    assert "CLAUDE.md 規約" in self_text

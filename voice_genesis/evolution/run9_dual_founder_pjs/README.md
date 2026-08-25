@@ -642,6 +642,14 @@ machine-independent（実音源・実 render・実学習を要さない）次段
 **再現レシピ（逐語・実行可能、Codex bot レビュー PR #323 第5巡指摘, P2,
 採用, Fix 5）**: fresh checkout の読者が上記 PINNED バイトを実際に再生成
 できる手順を逐語で示す（2026-08-25 本セッションで実測済み・初回一致）。
+**一括実行する場合は、以下のステップ列を貼る前に必ず最初に実行する**
+（Codex bot レビュー PR #323 第10巡指摘, Fix 10a, P2, 採用 — 個々の
+ステップは非零 exit を返すが、シェルのデフォルト挙動ではその非零 exit
+がスクリプト全体を止めない。これを明示しないと「不一致なら停止」という
+本レシピの主張と実挙動が食い違う）:
+```bash
+set -euo pipefail
+```
 
 1. **取得**（`gdown` 未導入なら `pip install gdown`。ミラー入手でも可
    ——要件は次段の sha 一致のみ）:
@@ -657,10 +665,13 @@ machine-independent（実音源・実 render・実学習を要さない）次段
 2. **検証**（Codex bot レビュー PR #323 第7巡指摘, P2, 採用, Fix 7a —
    非対話実行では `sha256sum` を素の digest 出力のまま使うと、ファイルが
    読める限り常に exit 0 を返し不一致を検出しない致命的欠陥だった。
-   `sha256sum -c -` は期待値との不一致で非零 exit を返し、後続手順が
-   実行されない）:
+   `sha256sum -c -` は期待値との不一致で非零 exit を返す。第10巡指摘
+   （Fix 10a, P2, 採用）: `set -euo pipefail`（上記）を実行し忘れた場合
+   でもこの1ステップ単体で確実に停止するよう、`|| exit 1` を明示併記
+   する——ステップ列の「不一致なら中止」という主張と実挙動を一致させる
+   二重の安全策）:
    ```
-   echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca  PJS_corpus_ver1.1.zip" | sha256sum -c -
+   echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca  PJS_corpus_ver1.1.zip" | sha256sum -c - || exit 1
    # 不一致なら "FAILED" + 非零 exit（$?）で停止。後続手順を実行しないこと。
    ```
 3. **展開**（plain unzip・オプション無し・リネーム/変換一切なし）:
@@ -678,40 +689,57 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    バイトを再現できなくなり得る——依存閉包全体（上記「依存閉包の範囲」
    参照）を実際に checkout してから実行する）:
 
-   a. producer revision を特定（既記載の「第一の再現ポインタ」）:
+   a. producer revision を特定（既記載の「第一の再現ポインタ」。Codex
+      bot レビュー PR #323 第10巡指摘, Fix 10c, P2, 採用 — `--depth 1`
+      等の shallow clone では `git log --follow` が shallow 境界を
+      返し、実際の producing commit と食い違う。shallow か判定し、
+      shallow なら先に完全履歴へ展開してから実行する）:
       ```
+      if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+        git fetch --unshallow
+      fi
       producer_rev=$(git log --follow --format=%H -1 -- voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json)
       echo "$producer_rev"
       ```
-   b. producer tree を worktree として取り出す:
+   b. 衝突安全な作業ディレクトリを作り、producer tree を worktree
+      として取り出す（Codex bot レビュー PR #323 第10巡指摘, Fix 10b,
+      P1, 採用 — 固定パス `/tmp/pjs_producer` は中断・並行実行時に
+      `git worktree add` の衝突/失敗を招く。`mktemp -d` による一意な
+      作業ディレクトリへ変更する）:
       ```
-      git worktree add /tmp/pjs_producer "$producer_rev"
+      workdir="$(mktemp -d)"
+      export PJS_WORKDIR="$workdir"
+      git worktree add "$workdir/producer_tree" "$producer_rev"
       ```
       （現在 checkout がすでに producer revision と一致している場合
       ——`git diff "$producer_rev"..HEAD -- voice_genesis/evolution/
       run9_dual_founder_pjs` が空——は in-place 実行が等価であり、
       worktree 手順は省略してよい。）
    c. worktree 内の `run9_dual_founder_pjs` を `sys.path` 先頭にして
-      実行し、出力を worktree 外の一時パスへ書き出す（現在 checkout の
-      `PRACTICE_MANIFEST_PATH` を直接上書きせず、生成に使ったコードと
-      出力先を分離する。Codex bot レビュー PR #323 第9巡指摘, P2, 採用,
-      Fix 9 — 旧版はコードフェンスが素の Python のままで、逐語シェル
-      実行の主張と矛盾していた（シェルが `import sys` を実行しようと
-      して構文エラーになり、出力 json が生成されず後続 checksum も
-      走らない）。`python3 - <<'EOF' … EOF`（クォート付き heredoc
-      デリミタで `$producer_rev` 等のシェル変数展開を防ぐ）へ改め、
-      そのままシェルへ貼れる形にした）:
+      実行し、出力を worktree 外の `$workdir` へ書き出す（現在 checkout
+      の `PRACTICE_MANIFEST_PATH` を直接上書きせず、生成に使った
+      コードと出力先を分離する。Codex bot レビュー PR #323 第9巡指摘,
+      P2, 採用, Fix 9 — 旧版はコードフェンスが素の Python のままで、
+      逐語シェル実行の主張と矛盾していた。`python3 - <<'EOF' … EOF`
+      （クォート付き heredoc デリミタでシェル変数展開を防ぐ）へ改め、
+      そのままシェルへ貼れる形にした。第10巡指摘（Fix 10b）で出力先を
+      `$workdir` へ変更したが、クォート付きデリミタは維持したまま——
+      heredoc 内へは環境変数 `PJS_WORKDIR`（上記 `export`）を
+      `os.environ` 経由で渡し、シェル変数展開に頼らない）:
       ```bash
       python3 - <<'EOF'
+      import os
       import sys
-      sys.path.insert(0, "/tmp/pjs_producer/voice_genesis/evolution/run9_dual_founder_pjs")
+
+      workdir = os.environ["PJS_WORKDIR"]
+      sys.path.insert(0, os.path.join(workdir, "producer_tree", "voice_genesis", "evolution", "run9_dual_founder_pjs"))
       import practice_split_builder as psb
 
       manifest = psb.build_practice_split_manifest(
           "extracted/PJS_corpus_ver1.1",
           expected_corpus_identity=psb.EXPANDED_CORPUS_IDENTITY_SHA256,
       )
-      with open("/tmp/pjs_producer_output.json", "wb") as f:
+      with open(os.path.join(workdir, "output.json"), "wb") as f:
           f.write(psb.dump_practice_split_manifest_bytes(manifest))
       EOF
       ```
@@ -722,15 +750,17 @@ machine-independent（実音源・実 render・実学習を要さない）次段
       渡した値と展開コーパスから再計算した `expanded_corpus_identity_
       sha256` が厳密一致しない場合 `Run9ValidationError` で fail-closed
       拒否する）。
-   d. worktree を片付ける:
+   d. worktree を片付ける（`$workdir` 自体の削除は step 5 の照合完了後
+      ——出力ファイルがまだ `$workdir` 内にあるため）:
       ```
-      git worktree remove /tmp/pjs_producer
+      git worktree remove "$workdir/producer_tree"
       ```
-5. **照合**（一時パスの生成物が pin 値と一致することを確認——Fix 7a の
-   `sha256sum -c -`/python `assert` 形式を維持。Fix 8 で照合対象を
-   worktree 出力の一時パスへ変更）:
+5. **照合**（`$workdir` 内の生成物が pin 値と一致することを確認——
+   Fix 7a の `sha256sum -c -`/python `assert` 形式・Fix 10a の
+   `|| exit 1` 併記を維持。Fix 10b で照合対象を `$workdir/output.json`
+   へ変更）:
    ```
-   echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6  /tmp/pjs_producer_output.json" | sha256sum -c -
+   echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6  $workdir/output.json" | sha256sum -c - || exit 1
    # （= RUN9_CONTRACT.yaml practice_audio_split_manifest_sha の pin 値。
    #    不一致なら "FAILED" + 非零 exit。）
    ```
@@ -739,14 +769,18 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    practice_audio_split_manifest.json`）へ配置する（`cp` 等。producer
    revision が現在 checkout と一致する通常運用ではこの配置は不要——
    コミット済みファイルがすでに同一バイトのため）。`row_order_sha256`
-   の照合も一時パスに対して同様に行う:
+   の照合も同ファイルに対して同様に行う:
    ```
    python3 -c "
    import json
-   d = json.load(open('/tmp/pjs_producer_output.json'))
+   d = json.load(open('$workdir/output.json'))
    assert d['row_order_sha256'] == '6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a', d['row_order_sha256']
    print('row_order_sha256 OK')
    "
+   ```
+   最後に作業ディレクトリを片付ける:
+   ```
+   rm -rf "$workdir"
    ```
 
 **producer pin の意味論**（指摘の「producer script/revision を artifact
@@ -791,14 +825,19 @@ pin 済みバイトを実際に作った実装を特定・再実行できない�
 だった。**第7巡指摘（P2, 部分採用, Fix 7b）で優先順位と主張範囲を
 是正**——詳細は下記）:
 
-- **第一の再現ポインタ = `git log --follow`（汎用手順、常に有効）**:
+- **第一の再現ポインタ = `git log --follow`（汎用手順、完全履歴の
+  checkout で常に有効）**〔Codex bot レビュー PR #323 第10巡指摘（Fix
+  10c, P2, 採用）: `--depth 1` 等の shallow clone では `git log
+  --follow` が shallow 境界（浅履歴の先頭コミット）を返し、実際の
+  producing commit を返さない——「常に有効」の記述は精密化した。shallow
+  clone 判定・unshallow 手順は下記 step 4a の逐語コマンド参照〕:
   ```
   git log --follow -- voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json
   ```
   manifest バイトを最後に変えたコミットが、その時点の producer revision
   ——git 履歴自体が台帳であり、下記の固定 40hex を手作業で最新に保つ必要
-  はない。**squash merge でも merge commit でも、現在の checkout 履歴
-  から常にこのコマンド1つで producer revision が得られる**——後続の
+  はない。**squash merge でも merge commit でも、完全履歴の checkout
+  なら常にこのコマンド1つで producer revision が得られる**——後続の
   builder sha256 照合と合わせて使う一次手順とする。
 - **生成時点の builder 内容 sha256**（履歴の取り込み方式に依存しない
   ——`git log --follow` で特定した producer revision の tree から直接
