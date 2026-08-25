@@ -581,13 +581,15 @@ def test_negative_fix3_onset_kana_mismatch(manifest_data: Dict[str, Any]) -> Non
 # 「PR #322 第5巡指摘 Fix 11」節を参照。
 
 
-def test_negative_fix3_final_note_duration_mismatch(manifest_data: Dict[str, Any]) -> None:
-    """PR #322 第11巡指摘 Fix 21 で軸名 `release_duration` ->
-    `final_note_duration` へ改名済み（水準値・cell 構造は不変）。"""
+def test_negative_fix3_release_duration_override_mismatch(manifest_data: Dict[str, Any]) -> None:
+    """PR #322 第12巡指摘 Fix 22: release_duration の照合対象は cell の
+    note フィールドではなく `final_phone_dur_override` pin へ移った
+    （第11巡 Fix 21 の一時的な duration_beats 照合・軸改名はいずれも
+    撤回済み——4 cell の phrase-final duration_beats は現在すべて等値）。"""
     bad = _mutate(manifest_data)
     (p3,) = [p for p in bad["probes"] if p["probe_id"] == "P3"]
-    cell = _cell_by_id(p3, "P3-RELEASE-SHORT-VOICED")
-    cell["notes"][-1]["duration_beats"] = 4  # 宣言は short=1
+    cell = _cell_by_id(p3, "P3-RELEASE-LONG-VOICED")
+    cell["final_phone_dur_override"]["terminal_extension_ms"] = 40.0  # 宣言は long=80.0
     with pytest.raises(m.Run9ValidationError):
         m.validate_probe_manifest(bad)
 
@@ -1806,18 +1808,17 @@ def test_negative_fix19_p2_filler_tuple_coordinated_edit(manifest_data: Dict[str
 
 
 def test_negative_fix19_p3_duration_level_coordinated_edit(manifest_data: Dict[str, Any]) -> None:
-    """P3 final_note_duration.short（PR #322 第11巡指摘 Fix 21 で
-    release_duration から改名済み）の水準値を変更し、対応 cell の
-    phrase-final duration も追随させる——manifest 自己整合性は満たすが
-    Fix 19 の凍結表には違反する。"""
+    """P3 release_duration.long（PR #322 第12巡指摘 Fix 22 で意味論を
+    `final_phone_dur_override.terminal_extension_ms` へ再定義済み——
+    第11巡 Fix 21 の final_note_duration 改名は撤回済み）の水準値を変更
+    し、対応 cell の override も追随させる——cell との内部自己整合性
+    （Fix 3/22）は満たすが、Fix 19 の外部凍結表には違反する。"""
     bad = _mutate(manifest_data)
     p3 = _p3_probe(bad)
-    p3["factor_levels"]["axes"]["final_note_duration"]["short"] = 2
+    p3["factor_levels"]["axes"]["release_duration"]["long"] = 40.0
     for cell in p3["cells"]:
-        if cell.get("levels", {}).get("final_note_duration") == "short":
-            for note in cell["notes"]:
-                if note.get("is_phrase_final"):
-                    note["duration_beats"] = 2
+        if cell.get("levels", {}).get("release_duration") == "long":
+            cell["final_phone_dur_override"]["terminal_extension_ms"] = 40.0
     with pytest.raises(m.Run9ValidationError, match="frozen expected value"):
         m.validate_probe_manifest(bad)
 
@@ -1954,53 +1955,140 @@ def test_negative_fix20_p5_tempo_changed(manifest_data: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# PR #322 第11巡指摘 Fix 21（P1, 採用——上限超過後だが「新しい具体経路を
-# 示す指摘は巡数に依らず採用」規律の例外採用）: gate_synth.py の
-# `_NoteWithMs` は `is_phrase_final` を消費せず、末尾 release は全 cell
-# 固定の `TAIL_FRAMES`——宣言 harness に phrase-end release の制御入力は
-# 存在しない。P3 の `release_duration` 軸を実際に操作している変数の名前
-# （`final_note_duration`）へ改名し、P3 probe.role へ計器能力の境界宣言を
-# 追加した（Fix 11 と同型の設計判断: release 制御の新規発明は不採用）。
+# PR #322 第11巡指摘 Fix 21（P1, 採用）は第12巡 Fix 22 で**訂正・撤回**
+# した——「宣言 harness に phrase-end release の制御入力が存在しない」
+# という前提が誤りだった（`final_phone_dur_override` kwarg が実在）。
+# Fix 21 固有の回帰・負例（軸名 `final_note_duration` への改名・
+# `_P3_RELEASE_BOUNDARY_MARKERS`）はもはや現実装と一致しないため、Fix 22
+# 節へ置き換えた。
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# PR #322 第12巡指摘 Fix 22（P1, 採用——上限超過後だが「凍結した境界宣言
+# が虚偽である可能性」= 致命的クラスの新規具体経路のため例外採用）:
+# Fix 21 の訂正。`release_duration` 軸を復活させ、意味を
+# `final_phone_dur_override.terminal_extension_ms`（ms）へ再定義した
+# （short=0.0=override なし / long=80.0=run 8 B-1 rr_long_tail_080 実
+# 使用値）。cell レベルへ `final_phone_dur_override` pin 欄を新設し
+# （P3 のみ許容・P3 は必須）、P3 の 4 cell の phrase-final note の
+# duration_beats を全 cell 等値へ揃えた。
 # ---------------------------------------------------------------------------
 
 
-def test_fix21_positive_real_manifest_passes(manifest_data: Dict[str, Any]) -> None:
-    """回帰確認: 実 manifest（軸改名済み・境界宣言追加済み）は引き続き
-    通過する。"""
+def test_fix22_positive_real_manifest_passes(manifest_data: Dict[str, Any]) -> None:
+    """回帰確認: 実 manifest（release_duration 軸復活・override pin 追加
+    済み）は引き続き通過する。"""
     m.validate_probe_manifest(manifest_data)
 
 
-def test_fix21_axis_renamed_in_all_frozen_tables() -> None:
-    assert m._PROBE_FACTORIAL_AXES["P3"] == ("final_note_duration", "ending_voicing")
-    assert "final_note_duration" in m._PROBE_EXPECTED_FACTOR_VALUES["P3"]["axes"]
-    assert "release_duration" not in m._PROBE_EXPECTED_FACTOR_VALUES["P3"]["axes"]
-    assert "final_note_duration" in m._AXIS_NUMERIC_FIELD_CHECKS
-    assert m._AXIS_NUMERIC_FIELD_CHECKS["final_note_duration"] == "duration_beats"
+def test_fix22_axis_restored_and_redefined_in_all_frozen_tables() -> None:
+    assert m._PROBE_FACTORIAL_AXES["P3"] == ("release_duration", "ending_voicing")
+    assert m._PROBE_EXPECTED_FACTOR_VALUES["P3"]["axes"]["release_duration"] == {
+        "short": 0.0, "long": 80.0,
+    }
+    assert "final_note_duration" not in m._PROBE_EXPECTED_FACTOR_VALUES["P3"]["axes"]
+    # release_duration は note フィールド照合（_AXIS_NUMERIC_FIELD_CHECKS）
+    # ではなく専用 checker（_check_axis_release_override）へディスパッチ
+    # される。
     assert "release_duration" not in m._AXIS_NUMERIC_FIELD_CHECKS
+    assert "final_note_duration" not in m._AXIS_NUMERIC_FIELD_CHECKS
 
 
-def test_fix21_p3_role_declares_boundary_markers(manifest_data: Dict[str, Any]) -> None:
+def test_fix22_p3_role_declares_control_markers(manifest_data: Dict[str, Any]) -> None:
     role = _p3_probe(manifest_data)["role"]
-    for marker in m._P3_RELEASE_BOUNDARY_MARKERS:
+    for marker in m._P3_RELEASE_CONTROL_MARKERS:
         assert marker in role
 
 
-def test_negative_fix21_old_axis_name_residual_rejected(manifest_data: Dict[str, Any]) -> None:
-    """本指摘の核心の一部: 旧軸名 `release_duration` が factor_levels.axes
-    /cell の levels に残存していると、未登録 axis として fail-closed
-    拒否される（改名の追随漏れを検出する）。"""
-    bad = _mutate(manifest_data)
-    p3 = _p3_probe(bad)
-    axes = p3["factor_levels"]["axes"]
-    axes["release_duration"] = axes.pop("final_note_duration")
+def test_fix22_p3_cells_have_uniform_phrase_final_duration(manifest_data: Dict[str, Any]) -> None:
+    """release_duration との交絡源だった終端 note 長の変動を除去し、
+    全 P3 cell の phrase-final duration_beats が等値であることを確認
+    する。"""
+    p3 = _p3_probe(manifest_data)
+    durations = set()
     for cell in p3["cells"]:
-        cell["levels"]["release_duration"] = cell["levels"].pop("final_note_duration")
+        for note in cell["notes"]:
+            if note.get("is_phrase_final"):
+                durations.add(note["duration_beats"])
+    assert len(durations) == 1, f"P3 cells must share one phrase-final duration, got {durations}"
+
+
+def test_negative_fix22_override_key_missing_on_p3_cell(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    del _cell_by_id(_p3_probe(bad), "P3-RELEASE-SHORT-VOICED")["final_phone_dur_override"]
     with pytest.raises(m.Run9ValidationError):
         m.validate_probe_manifest(bad)
 
 
-@pytest.mark.parametrize("marker", ["_NoteWithMs", "TAIL_FRAMES", "final_note_duration", "再入条件"])
-def test_negative_fix21_boundary_marker_missing(
+def test_negative_fix22_override_key_leaks_into_non_p3_probe(manifest_data: Dict[str, Any]) -> None:
+    """`final_phone_dur_override` は P3 のみ許容——他 probe の cell へ
+    付与すると未知キーとして拒否される。"""
+    bad = _mutate(manifest_data)
+    _cell_by_id(_p1_probe(bad), "P1-REG-LOW-DUR-SHORT")["final_phone_dur_override"] = None
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix22_short_cell_with_non_null_override_rejected(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """short 水準（override なし = null）の cell に非 null override を
+    与えると、宣言水準（0.0）と実 override の不一致として拒否される。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p3_probe(bad), "P3-RELEASE-SHORT-VOICED")
+    cell["final_phone_dur_override"] = {"kind": "tail_extension_ms", "terminal_extension_ms": 80.0}
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix22_long_cell_override_diverges_from_frozen_value(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """long 水準の override 値が凍結値（80.0）から逸脱すると拒否される
+    （本指摘の核心の一つ: 凍結値と実 override の乖離検出）。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p3_probe(bad), "P3-RELEASE-LONG-VOICED")
+    cell["final_phone_dur_override"]["terminal_extension_ms"] = 40.0
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix22_override_unknown_kind_rejected(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p3_probe(bad), "P3-RELEASE-LONG-VOICED")
+    cell["final_phone_dur_override"]["kind"] = "not_a_supported_kind"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix22_old_retracted_fix21_role_text_rejected(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """『旧虚偽宣言文言の残存拒否』: 第11巡 Fix 21 の（今は虚偽と判明した）
+    境界宣言のみを持つ role へ差し替えると、Fix 22 の訂正マーカーが
+    欠落しているため fail-closed で拒否される——訂正なしに古い宣言が
+    残っているケースを検出する。"""
+    bad = _mutate(manifest_data)
+    p3 = _p3_probe(bad)
+    p3["role"] = (
+        "短いrelease・長いrelease・voiced/unvoiced endingを通じてPhrase-End応答をprobeする"
+        "（v0.1 §15 P3）。TRF（Technique Response Function）が未校正の間、本probeの評価は "
+        "diagnostic_when_trf_uncalibrated（診断/advisory）として扱う。"
+        "\n\n境界宣言（旧 Fix 21, 撤回済みの記述をそのまま残置——本テスト専用）: 宣言harness"
+        "（gate_synth.py::run_pipelineの_NoteWithMs/build_inputs()）はphrase-end releaseの制御"
+        "入力を持たない——_NoteWithMsはis_phrase_finalを消費せず、末尾releaseは全cell固定の"
+        "TAIL_FRAMES（定数、cell非依存）である。v0.1 §15 P3のshort/long releaseは本backboneでは"
+        "操作変数として表現不能である。再入条件はrelease制御入力を消費するbackboneへの交換で"
+        "ある。"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+@pytest.mark.parametrize(
+    "marker", ["_NoteWithMs", "final_phone_dur_override", "run_pipeline", "TAIL_FRAMES", "義務を負う"]
+)
+def test_negative_fix22_control_marker_missing(
     manifest_data: Dict[str, Any], marker: str,
 ) -> None:
     bad = _mutate(manifest_data)

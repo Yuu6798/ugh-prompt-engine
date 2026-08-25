@@ -752,8 +752,37 @@ learning_recipe_sha:
 # 軸名変更に伴い manifest バイトが変わるため sha256 を再計算した。旧値
 # （履歴として保持）:
 # "98aa1c8d95f6dad0c9cf126e5a4ca1f0ce592363841c10c30f639b39087812eb"
+# PR #322 Codex bot レビュー第12巡1件（採用——上限超過後だが「凍結した
+# 境界宣言が虚偽である可能性」= 致命的クラスの新規具体経路のため例外
+# 採用）反映による repin — 第11巡 Fix 21 の訂正・撤回:
+# Fix 22（P1）第11巡の前提（「宣言 harness に phrase-end release を制御
+# する入力が存在しない」）は誤りだった。gate_synth.py::run_pipeline は
+# `final_phone_dur_override` kwarg（line 1183/1282-1289）を実際に受け
+# 取り、run 8 B-1 の `rr_long_tail_*` 校正で実使用済みと確認した
+# （read-only 参照 + `voice_genesis/foundry/run8/s7_calib_score.py` /
+# `results_s7/s7_b1_calibration_set.json` で検証）。`_NoteWithMs` が
+# `is_phrase_final` を消費しない点・`TAIL_FRAMES` が cell 非依存の固定
+# パディングである点は事実のままだが、これらは `final_phone_dur_
+# override`（Stage 1 の音素内フレーム配分）とは別階層（Stage 2 の系列
+# 末尾パディング）であり、release 制御の不在を意味しなかった。
+# 対応: (a) P3 role の「release 制御入力を持たない/表現不能」という
+# 虚偽の境界宣言を撤回し、正確な記述（release 制御は実在し、本 manifest
+# が cell 別に pin し pod harness が消費する義務を負う——Fix 13 と同系の
+# 消費契約）へ置換 (b) `release_duration` 軸を復活させ、意味を
+# `final_phone_dur_override.terminal_extension_ms`（ms）へ再定義:
+# short=0.0（override なし。`rr_long_tail_000` の prereg 値と一致）/
+# long=80.0（`rr_long_tail_080` の実使用値——4水準梯子のうち
+# reproducibility/cross_process_reproducibility 両ロールで参照される
+# 代表値であることを根拠に選定） (c) cell レベルへ
+# `final_phone_dur_override` の pin 欄を新設（P3 のみ許容・P3 は必須）
+# (d) P3 の 4 cell の phrase-final note の duration_beats を全 cell
+# 等値（1拍）へ揃え、第11巡までの「終端 note 長の変動」という交絡源を
+# 除去した。Fix 21 の `final_note_duration` 改名は撤回済み。
+# manifest バイトが変わったため sha256 を再計算した。旧値（履歴として
+# 保持）:
+# "48eb35a001cb5f5e53ea1da34fc05081c902958b2c0167d14a888ffe676a0c84"
 probe_manifest_sha:
-  value: "48eb35a001cb5f5e53ea1da34fc05081c902958b2c0167d14a888ffe676a0c84"
+  value: "b18e8680991b2f74b1fa1ff710f9ed6e5775e87d8a1f2181784bdfc21bfe71ce"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 

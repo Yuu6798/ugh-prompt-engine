@@ -3356,8 +3356,10 @@ _FACTOR_LEVELS_AXES_KEY = "axes"
 # を削除しても low/short は他 cell に残る）——凍結された factorial から
 # 1条件が黙って失われる欠陥。probe 別の期待 cell_id 集合（全24個、閉じた
 # 集合・過不足いずれも拒否）を凍結し、加えて P1（register×duration）/
-# P3（final_note_duration×ending_voicing。旧称 release_duration — Fix 21
-# で実操作変数の名前へ改名）の full factorial 直積被覆
+# P3（release_duration×ending_voicing。Fix 21 で final_note_duration へ
+# 改名したが Fix 22 で撤回し release_duration へ戻した——release 制御
+# 入力 `final_phone_dur_override` の実在が判明したため）の full
+# factorial 直積被覆
 # （宣言水準の全組合せが「同一 cell」の levels として実在すること）を
 # 別途検証する。amendment で cell を増減する場合は、本ファイルの凍結表
 # （`_PROBE_EXPECTED_CELL_IDS`/`_PROBE_FACTORIAL_AXES`）の更新が同時に
@@ -3388,7 +3390,7 @@ _PROBE_EXPECTED_CELL_IDS: Mapping[str, FrozenSet[str]] = types.MappingProxyType(
 # （P2 の onset_consonant_class は単一軸で直積構造を持たないため対象外）。
 _PROBE_FACTORIAL_AXES: Mapping[str, Tuple[str, str]] = types.MappingProxyType({
     "P1": ("register", "duration"),
-    "P3": ("final_note_duration", "ending_voicing"),
+    "P3": ("release_duration", "ending_voicing"),
 })
 
 # ---------------------------------------------------------------------------
@@ -3429,8 +3431,11 @@ _PROBE_EXPECTED_TEMPO_BPM: Mapping[str, float] = types.MappingProxyType({
 # 側の変更だけでは通らない摩擦、Fix 8/9 と同じ規約）。現行 manifest の
 # 実値から転記して凍結（P1 register/duration/transition_direction、
 # P2 onset_consonant_class 記述文言 + filler タプル、P3
-# final_note_duration/ending_voicing 記述文言。P3 の軸名は Fix 21 で
-# release_duration から改名済み）。
+# release_duration/ending_voicing 記述文言。P3 の release_duration は
+# Fix 22 で final_phone_dur_override の terminal_extension_ms(ms) を
+# 意味する数値へ再定義済み——short=0.0（override なし）/ long=80.0
+# （run 8 B-1 rr_long_tail_080 実使用値）。Fix 21 の final_note_duration
+# 改名は Fix 22 で撤回した）。
 # ---------------------------------------------------------------------------
 _PROBE_EXPECTED_FACTOR_VALUES: Mapping[str, Any] = types.MappingProxyType({
     "P1": types.MappingProxyType({
@@ -3457,7 +3462,7 @@ _PROBE_EXPECTED_FACTOR_VALUES: Mapping[str, Any] = types.MappingProxyType({
     }),
     "P3": types.MappingProxyType({
         "axes": types.MappingProxyType({
-            "final_note_duration": types.MappingProxyType({"short": 1, "long": 4}),
+            "release_duration": types.MappingProxyType({"short": 0.0, "long": 80.0}),
             "ending_voicing": types.MappingProxyType({
                 "voiced": "有声終端（子音+母音の通常発声、devoicing対象外のモーラ）",
                 "unvoiced": "無声化しうる終端（無声子音+狭母音 /u/ 等、無声化しやすいモーラ）",
@@ -3596,8 +3601,9 @@ def _validate_probe_factorial_coverage(
 # note フィールドとの一致は見ていなかった（例: P1-REG-LOW-DUR-SHORT の
 # MIDI を 57→65 に変えても `levels: {register: low}` のまま通過してい
 # た）。以下、各軸の「宣言 ↔ 実 note」照合をここで凍結する。数値軸
-# （register/duration/final_note_duration。P3 側は Fix 21 で
-# release_duration から改名済み）は cell の**phrase-final note**
+# （register/duration。P3 の release_duration は Fix 22 で
+# `final_phone_dur_override` cell 欄照合の専用 checker へ分離した——
+# note フィールド照合ではない）は cell の**phrase-final note**
 # （`is_phrase_final: true`。P1/P3 の対象 cell は必ずちょうど1つ持つ —
 # 単一 note の register/duration cell では唯一の note、P2/P3 の複数 note
 # cell では終端/target note）の該当フィールドと厳密等値照合する。
@@ -3641,14 +3647,14 @@ _ENDING_VOICING_KANA_TABLE: Mapping[str, str] = types.MappingProxyType({
 })
 
 # 数値照合軸: axis_name -> 照合対象の note フィールド名。
+# `release_duration` は Fix 21 で `final_note_duration`（duration_beats
+# 照合）へ改名したが Fix 22 で撤回した——本軸の照合先は note フィールド
+# ではなく cell レベルの `final_phone_dur_override` pin であり、専用の
+# `_check_axis_release_override()` へディスパッチする（下記
+# `_validate_axis_semantic_value()` 参照）。
 _AXIS_NUMERIC_FIELD_CHECKS: Mapping[str, str] = types.MappingProxyType({
     "register": "pitch_midi",
     "duration": "duration_beats",
-    # PR #322 第11巡指摘 Fix 21: `release_duration` から改名——本軸が実際
-    # に照合しているのは終端 note 自身の duration_beats であり、
-    # phrase-end の release 特性ではない（宣言 harness に release 制御
-    # 入力が存在しないため）。
-    "final_note_duration": "duration_beats",
 })
 # kana クラス照合軸: axis_name -> kana 対応表。
 _AXIS_KANA_CLASS_CHECKS: Mapping[str, Mapping[str, str]] = types.MappingProxyType({
@@ -3703,24 +3709,73 @@ _P2_ENERGY_BOUNDARY_MARKERS: Tuple[str, ...] = (
 )
 
 # ---------------------------------------------------------------------------
-# PR #322 第11巡指摘 Fix 21（P1, 採用——上限超過後だが「新しい具体経路を
-# 示す指摘は巡数に依らず採用」規律の例外採用。Fix 11 と同型の帰属誤り
-# クラスの新規経路）: gate_synth.py の `_NoteWithMs` は `midi`/`mora`/
-# `_dur_ms` のみを保持し `is_phrase_final` を一切消費しない（read-only
-# 参照で確認済み）。`run_pipeline` の末尾 release（`TAIL_FRAMES` 定数、
-# `ph_dur2`/`note_dur_raw` へ全 cell 共通で1回だけ付与）は cell 非依存の
-# 固定値であり、phrase-end release を制御する入力は宣言 harness に存在
-# しない。P3 の `release_duration` 軸が実際に操作しているのは終端 note
-# 自身の `duration_beats`（P1 の `duration` 軸と同じ機構）であり、
-# phrase-end の release 特性ではなかった——**release 制御の新規発明は
-# 不採用**（存在しない harness 入力の捏造になるため、Fix 11 と同じ設計
-# 判断）。軸を実際に操作している変数の名前へ真実化する（`release_
-# duration` -> `final_note_duration`。水準値・cell 構造は不変、名前と
-# その意味記述のみ真実化）+ P3 probe へ計器能力の境界宣言を追加する。
+# PR #322 第11巡指摘 Fix 21（P1, 採用）は本巡 Fix 22 で**訂正・撤回**した。
+# Fix 21 は「宣言 harness に phrase-end release を制御する入力が存在しな
+# い」と判断し、`release_duration` 軸を `final_note_duration`（終端 note
+# 自身の duration_beats）へ改名したが、この前提は誤りだった——
+# `gate_synth.py::run_pipeline` は `final_phone_dur_override` kwarg
+# （line 1183）を実際に受け取り、Stage 1 予測の終端音素フレーム配分を
+# 差し替える機構として存在し、run 8 B-1 の `rr_long_tail_*` 校正で実使用
+# 済みである（read-only 参照 + `voice_genesis/foundry/run8/s7_calib_
+# score.py`/`results_s7/s7_b1_calibration_set.json` で確認済み）。
+# `_NoteWithMs` が `is_phrase_final` を消費しない点・Stage 2 末尾の
+# `TAIL_FRAMES` が cell 非依存の固定パディングである点は事実のままだが、
+# これらは `final_phone_dur_override`（Stage 1 の音素内フレーム配分）とは
+# 別階層（Stage 2 の系列末尾パディング）であり、release 制御の不在を
+# 意味しなかった。
 # ---------------------------------------------------------------------------
-_P3_RELEASE_BOUNDARY_MARKERS: Tuple[str, ...] = (
-    "_NoteWithMs", "TAIL_FRAMES", "final_note_duration", "再入条件",
+# PR #322 第12巡指摘 Fix 22（P1, 採用——上限超過後だが「凍結した境界宣言が
+# 虚偽である可能性」= 致命的クラスの新規具体経路のため例外採用）: 軸名を
+# `release_duration` へ戻し（水準値の意味を release 制御へ再定義）、cell
+# レベルに `final_phone_dur_override` の pin 欄を新設する。short 水準 =
+# override なし（null、harness 既定と同一経路 = `rr_long_tail_000` の
+# `terminal_extension_ms: 0.0` prereg 値と一致）。long 水準 =
+# `terminal_extension_ms: 80.0`（run 8 B-1 の `rr_long_tail_080` 実使用値
+# ——4水準梯子 000/040/080/160 のうち reproducibility/cross_process_
+# reproducibility 両ロールで参照される代表値であることを根拠に選定）。
+# pod render harness は各 P3 cell の render で、pin された
+# `final_phone_dur_override` を `run_pipeline(final_phone_dur_override=
+# ...)` へ渡す義務を負う（Fix 13 の `load_pinned_probe_manifest()` 消費
+# 契約と同系の事前登録）。P3 の 4 cell の phrase-final note の
+# `duration_beats` は全 cell 等値へ揃えた（第11巡までの「終端 note 長の
+# 変動」が release との交絡源だったため除去）。
+# ---------------------------------------------------------------------------
+_P3_RELEASE_CONTROL_MARKERS: Tuple[str, ...] = (
+    "_NoteWithMs", "final_phone_dur_override", "run_pipeline", "TAIL_FRAMES", "義務を負う",
 )
+_CELL_OVERRIDE_KEY = "final_phone_dur_override"
+_CELL_OVERRIDE_KEYS: FrozenSet[str] = frozenset({"kind", "terminal_extension_ms"})
+# 現時点で唯一サポートする override 翻訳の種類（`run8/s7_calib_score.py`
+# `make_tail_extension_override()` 相当——終端音素へ `terminal_extension_ms`
+# を frames 換算のうえ加算する）。
+_CELL_OVERRIDE_KIND_TAIL_EXTENSION_MS = "tail_extension_ms"
+
+
+def _validate_final_phone_dur_override(value: Any, *, field: str) -> None:
+    """PR #322 第12巡指摘 Fix 22 の実装: `final_phone_dur_override` cell
+    欄（`null` または `{"kind": ..., "terminal_extension_ms": ...}`）の
+    形状検証。`null` は「override なし（harness 既定と同一経路）」を表す
+    正当な値であり、それ自体は許容する。"""
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be null or an object, got {type(value).__name__}")
+    unknown = set(value.keys()) - _CELL_OVERRIDE_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _CELL_OVERRIDE_KEYS - set(value.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    kind = value["kind"]
+    if kind != _CELL_OVERRIDE_KIND_TAIL_EXTENSION_MS:
+        raise Run9ValidationError(
+            f"{field}.kind must be exactly {_CELL_OVERRIDE_KIND_TAIL_EXTENSION_MS!r} (the only "
+            f"supported final_phone_dur_override translation — run8/s7_calib_score.py "
+            f"make_tail_extension_override precedent), got {kind!r}"
+        )
+    _require_positive_finite_number(
+        value["terminal_extension_ms"], field=f"{field}.terminal_extension_ms"
+    )
 
 _NOTE_KEYS: FrozenSet[str] = frozenset(
     {"kana", "pitch_midi", "duration_beats", "phrase_index", "is_phrase_final"}
@@ -4347,6 +4402,12 @@ def _validate_probe_cell(
         # 個別検証する——一律 required に入れると両立不可能になるため）。
         allowed.add(_CELL_LEVELS_KEY)
         allowed.add(_CELL_DIAGNOSTIC_ROLE_KEY)
+    if probe_id == "P3":
+        # PR #322 第12巡指摘 Fix 22（P1, 採用）: `final_phone_dur_override`
+        # は P3 のみが許容・P3 は必須（他 probe では未知キーとして拒否
+        # される——P3 のみの cell レベル pin 欄）。
+        allowed.add(_CELL_OVERRIDE_KEY)
+        required.add(_CELL_OVERRIDE_KEY)
     unknown = set(cell.keys()) - allowed
     if unknown:
         raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
@@ -4418,6 +4479,13 @@ def _validate_probe_cell(
         # ——score.py を read-only ロードして build_sakura_score() を再構築
         # し逐語比較する。
         _require_p0_matches_build_sakura_score(cell, score_py_module=score_py_module, field=field)
+
+    if probe_id == "P3":
+        # PR #322 第12巡指摘 Fix 22（P1, 採用）: cell 別の
+        # final_phone_dur_override pin の形状検証。
+        _validate_final_phone_dur_override(
+            cell[_CELL_OVERRIDE_KEY], field=f"{field}.{_CELL_OVERRIDE_KEY}"
+        )
 
     if probe_id in _FACTOR_LEVEL_PROBE_IDS:
         if _CELL_LEVELS_KEY in cell:
@@ -4539,6 +4607,40 @@ def _check_axis_transition_direction(
         )
 
 
+def _check_axis_release_override(
+    cell: Mapping[str, Any], *, expected: Any, field: str, axis_name: str, level_name: str,
+) -> None:
+    """PR #322 第12巡指摘 Fix 22（P1, 採用）の実装: `release_duration` の
+    宣言具体値（`terminal_extension_ms` 単位の float。0.0 = override
+    なし）を cell レベルの `final_phone_dur_override` pin と照合する
+    （note フィールドではなく cell レベルの別欄が照合対象——Fix 21 の
+    duration_beats 照合を撤回した後継）。"""
+    override = cell.get(_CELL_OVERRIDE_KEY)
+    if _numeric_equal(expected, 0.0):
+        if override is not None:
+            raise Run9ValidationError(
+                f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
+                f"(factor_levels.axes.{axis_name}.{level_name} = {expected!r} == no override) but "
+                f"{_CELL_OVERRIDE_KEY} = {override!r} is not null — declared level does not match "
+                "the rendered stimulus"
+            )
+        return
+    if not isinstance(override, dict):
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
+            f"(factor_levels.axes.{axis_name}.{level_name} = {expected!r}) but {_CELL_OVERRIDE_KEY} "
+            f"is not an object (got {override!r}) — a non-zero declared value requires an override"
+        )
+    actual_ms = override.get("terminal_extension_ms")
+    if not _numeric_equal(actual_ms, expected):
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
+            f"(factor_levels.axes.{axis_name}.{level_name} = {expected!r}) but "
+            f"{_CELL_OVERRIDE_KEY}.terminal_extension_ms = {actual_ms!r} — declared level does not "
+            "match the rendered stimulus"
+        )
+
+
 def _validate_axis_semantic_value(
     *, axis_name: str, level_name: str, axis_value: Any, cell: Mapping[str, Any], field: str,
 ) -> None:
@@ -4559,6 +4661,10 @@ def _validate_axis_semantic_value(
         )
     elif axis_name == "transition_direction":
         _check_axis_transition_direction(
+            cell, expected=axis_value, field=field, axis_name=axis_name, level_name=level_name
+        )
+    elif axis_name == "release_duration":
+        _check_axis_release_override(
             cell, expected=axis_value, field=field, axis_name=axis_name, level_name=level_name
         )
     else:
@@ -5000,15 +5106,16 @@ def _validate_probe_object(
             "P3: TRF 未校正時は diagnostic/advisory の機械可読化), got role without the marker"
         )
     if expected_probe_id == "P3":
-        # PR #322 第11巡指摘 Fix 21: 計器能力の境界宣言（_NoteWithMs が
-        # is_phrase_final を消費しない・末尾 release は TAIL_FRAMES 固定・
-        # 実操作は final_note_duration/ending_voicing のみ・再入条件）を
-        # probe.role へ明記する（Fix 11 の P2 境界宣言と同流儀）。
-        for marker in _P3_RELEASE_BOUNDARY_MARKERS:
+        # PR #322 第12巡指摘 Fix 22（Fix 21 の境界宣言を訂正・撤回した
+        # 後継）: release 制御が実在すること（final_phone_dur_override
+        # kwarg・run_pipeline・pod harness の消費義務）と、依然として
+        # 事実である _NoteWithMs の is_phrase_final 非消費・TAIL_FRAMES
+        # 固定パディングを probe.role へ明記する。
+        for marker in _P3_RELEASE_CONTROL_MARKERS:
             if marker not in role:
                 raise Run9ValidationError(
-                    f"{field}.role must contain the marker {marker!r} (Fix 21: P3 の Phrase-End "
-                    "計器能力の境界宣言), got role without that marker"
+                    f"{field}.role must contain the marker {marker!r} (Fix 22: P3 の release 制御の "
+                    "訂正記述), got role without that marker"
                 )
     if expected_probe_id == "P2":
         # PR #322 第5巡指摘 Fix 11: 計器能力の境界宣言（energy/velocity/
@@ -5049,8 +5156,8 @@ def _validate_probe_object(
 
     if expected_probe_id in _PROBE_FACTORIAL_AXES:
         # Fix 9: full factorial 直積被覆（P1: register×duration, P3:
-        # final_note_duration×ending_voicing。P3 側は Fix 21 で
-        # release_duration から改名済み）。
+        # release_duration×ending_voicing。Fix 22 で軸名を最終的に
+        # release_duration へ確定）。
         _validate_probe_factorial_coverage(
             expected_probe_id=expected_probe_id, factor_levels=probe["factor_levels"], cells=cells,
             field=f"{field}.factor_levels",

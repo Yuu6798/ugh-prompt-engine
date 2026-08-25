@@ -585,9 +585,10 @@
       "cells": [
         {
           "cell_id": "P3-RELEASE-SHORT-VOICED",
+          "final_phone_dur_override": null,
           "levels": {
             "ending_voicing": "voiced",
-            "final_note_duration": "short"
+            "release_duration": "short"
           },
           "notes": [
             {
@@ -609,9 +610,13 @@
         },
         {
           "cell_id": "P3-RELEASE-LONG-VOICED",
+          "final_phone_dur_override": {
+            "kind": "tail_extension_ms",
+            "terminal_extension_ms": 80.0
+          },
           "levels": {
             "ending_voicing": "voiced",
-            "final_note_duration": "long"
+            "release_duration": "long"
           },
           "notes": [
             {
@@ -622,7 +627,7 @@
               "pitch_midi": 62
             },
             {
-              "duration_beats": 4,
+              "duration_beats": 1,
               "is_phrase_final": true,
               "kana": "ら",
               "phrase_index": 0,
@@ -633,9 +638,10 @@
         },
         {
           "cell_id": "P3-RELEASE-SHORT-UNVOICED",
+          "final_phone_dur_override": null,
           "levels": {
             "ending_voicing": "unvoiced",
-            "final_note_duration": "short"
+            "release_duration": "short"
           },
           "notes": [
             {
@@ -657,9 +663,13 @@
         },
         {
           "cell_id": "P3-RELEASE-LONG-UNVOICED",
+          "final_phone_dur_override": {
+            "kind": "tail_extension_ms",
+            "terminal_extension_ms": 80.0
+          },
           "levels": {
             "ending_voicing": "unvoiced",
-            "final_note_duration": "long"
+            "release_duration": "long"
           },
           "notes": [
             {
@@ -670,7 +680,7 @@
               "pitch_midi": 62
             },
             {
-              "duration_beats": 4,
+              "duration_beats": 1,
               "is_phrase_final": true,
               "kana": "す",
               "phrase_index": 0,
@@ -687,14 +697,14 @@
             "unvoiced": "無声化しうる終端（無声子音+狭母音 /u/ 等、無声化しやすいモーラ）",
             "voiced": "有声終端（子音+母音の通常発声、devoicing対象外のモーラ）"
           },
-          "final_note_duration": {
-            "long": 4,
-            "short": 1
+          "release_duration": {
+            "long": 80.0,
+            "short": 0.0
           }
         }
       },
       "probe_id": "P3",
-      "role": "短いrelease・長いrelease・voiced/unvoiced endingを通じてPhrase-End応答をprobeする（v0.1 §15 P3）。TRF（Technique Response Function）が未校正の間、本probeの評価は diagnostic_when_trf_uncalibrated（診断/advisory）として扱う——TRF calibration 完了まで PASS/FAIL判定を行うHard Gateには使用しない（v0.1 §15「TRFが未校正の場合、P3はdiagnostic/advisory」の機械可読化）。factor_levels.axesのfinal_note_duration×ending_voicing直交4セルの各cellがlevelsで参照する軸/水準を機械可読に宣言する。\n\n境界宣言（PR #322 第11巡指摘 Fix 21, P1, 採用——上限超過後だが新しい具体経路のため例外採用。Fix 11と同型の帰属誤りクラス）: 宣言harness（gate_synth.py::run_pipelineの_NoteWithMs/build_inputs()）はphrase-end releaseの制御入力を持たない——_NoteWithMsはis_phrase_finalを消費せず、末尾releaseは全cell固定のTAIL_FRAMES（定数、cell非依存）である。v0.1 §15 P3のshort/long releaseは本backboneでは操作変数として表現不能である。P3で実際に操作されているのはfinal_note_duration（終端noteのduration_beats、旧称release_duration——軸名を実操作へ真実化した）とending_voicing（kana由来の音韻的有声性——こちらは実操作）のみであり、releaseに関する観測はこの2操作の範囲に限定される。既存のdiagnostic_when_trf_uncalibrated role（TRF未確立=Run8実測）とも整合する。再入条件はrelease制御入力を消費するbackboneへの交換、またはTRF校正の確立である。",
+      "role": "短いrelease・長いrelease・voiced/unvoiced endingを通じてPhrase-End応答をprobeする（v0.1 §15 P3）。TRF（Technique Response Function）が未校正の間、本probeの評価は diagnostic_when_trf_uncalibrated（診断/advisory）として扱う——TRF calibration 完了まで PASS/FAIL判定を行うHard Gateには使用しない（v0.1 §15「TRFが未校正の場合、P3はdiagnostic/advisory」の機械可読化）。factor_levels.axesのrelease_duration×ending_voicing直交4セルの各cellがlevelsで参照する軸/水準を機械可読に宣言する。\n\nrelease制御の訂正（PR #322 第12巡指摘 Fix 22, P1, 採用——上限超過後だが「凍結した境界宣言が虚偽である可能性」= 致命的クラスの新規具体経路のため例外採用。第11巡の記述の訂正）: 第11巡でP3 probe.roleに『宣言harnessはphrase-end releaseの制御入力を持たない』と記載したが、これは不正確だった——gate_synth.py::run_pipelineはfinal_phone_dur_override kwargを実際に受け取り、Stage 1が予測した終端音素のフレーム配分を差し替える機構として存在する（run 8 B-1 rr_long_tail_*校正で実使用済み）。is_phrase_finalが_NoteWithMsに消費されない点、Stage 2末尾のTAIL_FRAMES（cell非依存の固定パディング）は事実のままだが、これらはfinal_phone_dur_overrideとは別階層（Stage 1の音素内フレーム配分 vs Stage 2の系列末尾パディング）であり、release制御の不在を意味しない。\n\n本manifestはcell別のfinal_phone_dur_override値をpinする——short水準はoverrideなし（null、harness既定と同一経路）、long水準はterminal_extension_ms=80.0（run8 B-1 rr_long_tail_080の実使用値を根拠に選定——4水準梯子rr_long_tail_000/040/080/160のうちreproducibility/cross_process_reproducibility両ロールで参照される代表値）。pod render harnessは各P3 cellのrenderで、pinされたfinal_phone_dur_overrideをrun_pipeline(final_phone_dur_override=...)へ渡す義務を負う（nullの場合は引数省略/Noneのまま——本番既定と同一経路。非nullの場合はgate_synth.frames_from_ms(terminal_extension_ms)でフレーム数へ変換したのち終端音素へ加算するcallableを構築して渡す、run8/s7_calib_score.py make_tail_extension_override相当）——Fix 13のload_pinned_probe_manifest()消費契約と同系の事前登録である。",
       "title": "Phrase-End Probe"
     },
     {
