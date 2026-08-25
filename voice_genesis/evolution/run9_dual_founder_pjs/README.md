@@ -1,6 +1,6 @@
 # RUN9 — Tri-Donor Dual-Founder Common-Teacher Learning
 
-**状態: Preregistered / Phase 3（design_revision 0.3、machine-independent 設計層）。本学習未開始。**
+**状態: Preregistered / Phase 3（design_revision 0.4、machine-independent 設計層）。本学習未開始。**
 
 正本設計書: [`DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md`](./DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md)
 （uploads 原本とバイト同一・**byte-pin 不変**。sha256 は `RUN9_CONTRACT.yaml` の
@@ -9,8 +9,13 @@
 User 裁定5件、無改変のまま存続）→
 [`DESIGN_RUN9_REVISION_0.3.md`](./DESIGN_RUN9_REVISION_0.3.md)（同日、PoR メモ
 [`POR_CONCEPT_ADJUDICATION_20260824.txt`](./POR_CONCEPT_ADJUDICATION_20260824.txt)
-の編入。`design_revision_doc_sha256`/`por_adjudication_sha256` が PINNED で
-保持する）の順で規定する。
+の編入。無改変のまま存続）→
+[`DESIGN_RUN9_REVISION_0.4.md`](./DESIGN_RUN9_REVISION_0.4.md)（2026-08-25、
+外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
+[`DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt`](./DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt)
+（byte-pin 不変）の編入 + User 追加裁定「確認メモ /
+RUN9 用語整理」の編入）の順で規定する。`design_revision_doc_sha256`/
+`por_adjudication_sha256` が PINNED で保持する。
 
 AF0・Ritsu・User Donor の三点 Identity から `TRI_CROSSOVER` で二体の
 Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生
@@ -87,10 +92,17 @@ CONTROL/C0→`replay` / CONTROL/C1→`r_sham` / PRACTICE_FROM_AUDIO→
    ONNX + phoneme vocabulary、`NamineRitsu_DiffSinger.zip` 由来）と
    acoustic export companions（dsconfig.yaml/phonemes.json/speaker
    embedding）まで含めて記録する — acoustic checkpoint/ONNX だけでは
-   再現入力集合は閉じない（PR #316 第2巡指摘採用）。ただし
-   `backbone_runtime_bundle_sha` 自体は **PENDING**（bundle 内
+   再現入力集合は閉じない（PR #316 第2巡指摘採用）。当初
+   `backbone_runtime_bundle_sha` は **PENDING**（bundle 内
    `render_code_commit` が `INFERRED_UNCONFIRMED` —
-   Codex bot レビュー PR #316 第1巡指摘採用。ブロッカー(4)参照）。
+   Codex bot レビュー PR #316 第1巡指摘採用。ブロッカー(4)参照）だったが、
+   現在は **PINNED**（`83f67a30…`）。claim scope は `run9_runtime_inputs`
+   節に列挙された値の確定 + 文書バイト同一性のみであり、
+   `historical_export_provenance`（RUN6 期の export commit 推定。現在も
+   `INFERRED_UNCONFIRMED` 維持）の真理値は主張しない——両節を独立させた
+   構造分離（Codex bot レビュー PR #319 第2巡指摘, Fix 3, 採用。詳細は
+   下記「解消済み」節および `inputs/backbone_runtime_bundle.json` の
+   `claim_scope`）。
 
 ## 2026-08-24 PoR メモ編入（Revision 0.3）— 要約
 
@@ -212,6 +224,125 @@ PR #317 head `71eeccadf3f1f7ee49d9cc90763ced8a506abc67` に対する User 本人
 AF0・Ritsu・rights・backbone pin 値・`TRI_CROSSOVER/1.0`・genome_id 計算
 は無変更。既存 Codex bot レビュー3件（第1〜3巡）の修正も退行なし。
 
+## 2026-08-25 外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモの編入（Revision 0.4）— 要約
+
+詳細・逐語は [`DESIGN_RUN9_REVISION_0.4.md`](./DESIGN_RUN9_REVISION_0.4.md) を
+正とする。派生設計変更メモ
+[`DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt`](./DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt)
+（byte-pin 不変）は自称「design_revision 0.2」だが rev 0.2/0.3 が既に
+マージ済みのため rev 0.4 として発行する（rev 0.3 冒頭「番号注記」と同型の
+系譜処理）。中核仮説・実験条件は不変（NON-ARCHITECTURAL DESIGN
+CORRECTION）。CASE A（Lesson Freeze / 本学習開始前）適用。
+
+1. **rights_manifest の4層再編**（変更1・2）: `inputs/rights_manifest.json`
+   を `voice_identity_rights`（旧内容=User donor 17件、無改変で移設）/
+   `performance_rights`（新設 `performance_source` = {id: PJS, role:
+   EXTERNAL_PERFORMANCE_SOURCE} + provenance.performance_author）/
+   `composition_rights`（provenance.composition）/
+   `recording_master_rights`（provenance.voice_source + synthesis +
+   ライセンス実測値 CC BY-SA 4.0 + `interpretations`）の4層へ再編。
+   原則3式（Teacher ≠ Voice Identity Owner / Teacher ≠ Performance
+   Author / Voice Source ≠ Performance Source）+ 自動解釈禁止文を明記。
+   provenance の実値は
+   `voice_genesis/foundry/results_f1_2/licenses/pjs_terms_snapshot.md` 等
+   から機械検証可能な範囲で充填（performer/composer = Junya Koguchi、
+   2026-08-25 User 追加裁定②で確定 — 下記「追加裁定4件」参照。
+   recording-master owner は裁定②の確定範囲に含まれず、論文著者性を
+   録音物の権利保有の証拠とする過大推論だったため PR #319 第 4 巡指摘
+   採用で `<UNRESOLVED_EXTERNAL>` へ差し戻し済み——現在値はこちら。
+   下記「②」箇条も参照）、
+   なお不明な外部事実欄は `<UNRESOLVED_EXTERNAL>` のまま（捏造禁止。
+   `<PENDING_USER_ATTESTATION>` は User 自身が attest すべき欄専用へ
+   語彙分離済み）。
+2. **Performance Residual / Identity 除外語彙**（変更3・6）:
+   `run9_schema.PERFORMANCE_RESIDUAL_VOCAB`（9項目）+
+   `IDENTITY_EXCLUDED_TRAIT_VOCAB`（変更3の6項目+変更6の4項目を統合・
+   重複吸収した7項目）+ LessonRecord 標準仕様（schema
+   `run9-lesson-record/1.0`、`validate_lesson_record()`）を新設。
+3. **R9-G1 拡張**（変更5）: v0.1 §19 R9-G1「INPUT_FREEZE_AND_RIGHTS」
+   （byte-pin 不変）に対し、意味名 `RIGHTS_AND_PROVENANCE_GATE`・PASS
+   条件8項目（`R9_G1_PASS_CONDITIONS`）・FAIL 語彙
+   `RIGHTS_PROVENANCE_UNRESOLVED` を rev 0.2 と同型の「読み替え」方式で
+   追加（v0.1 本文は書き換えない）。
+4. **Common Performance Lesson**（変更4）: v0.1 §14「H2 — Common Teacher
+   Transfer」（byte-pin 不変）を、rev 0.4 以降の呼称として「Common
+   Performance Lesson」へ読み替える参照規約を確立（教育枝の lesson
+   manifest 経由という実態と一致・`TRANSFER_TECHNIQUE`/`INHERIT_TRAIT`
+   との名称衝突回避が理由）。
+5. **User裁定a/b**（2026-08-25「aとbを承認」）: **a** = rights manifest
+   attest は新4層構造に対し次段で確定（User donor 17件の内容・attest
+   状態自体は無改変）。**b** = 当初 `inputs/backbone_runtime_bundle.json`
+   `render_code_commit.status` を `INFERRED_UNCONFIRMED` → `USER_ATTESTED`
+   へ確定する実装としたが、同日中の追加裁定①でこれは過大と判明し是正
+   した——詳細・現在の構造は下記「2026-08-25 User 追加裁定4件」①を参照。
+6. **performance_source ブロック**（`RUN9_CONTRACT.yaml` 新設欄、
+   pin 欄ではなく通常欄）: `{id: PJS, role: EXTERNAL_PERFORMANCE_SOURCE}`
+   + `teacher_terminology_note`。
+
+### 2026-08-25 User 追加裁定「確認メモ / RUN9 用語整理」による項目5の緩和
+
+実装着手後、User から用語整理の確認メモが追加で入り、terminology 掃討の
+方針が変更された（逐語は `DESIGN_RUN9_REVISION_0.4.md` §7 参照）: **teacher
+語の全面置換はしない**——可変 artifact 中の「teacher」出現は維持し、代わり
+に非所有注記（「Teacher は運用上の呼称であり Voice 所有者・Voice Identity
+Owner を意味しない」旨）を各該当箇所へ追記する方式へ変更した。
+
+- `RUN9_CONTRACT.yaml`: teacher_reference 相当欄は元々存在しない（rev 0.3
+  で `interventions` 構造へ既に移行済み）ため置換対象なし。新設
+  `performance_source.teacher_terminology_note` が非所有注記の置き場所。
+- `inputs/identity_metric_space.json`: `confuser_control.role` /
+  `calibration.validity_gates.negative_reference_gate.negative_reference_definition`
+  の2箇所に「teacher」の literal な出現を維持したまま非所有注記を追記
+  （repin 実施 — `metric_space_sha` は
+  `de3a459bdea761850d465caa60a91a16d7a9a39b65652dd409f6e45a20ee1bb4`
+  へ更新）。
+- 「teacher 語の再出現拒否」validator は実装しない（User 追加裁定 指示5）。
+  代わりに `tests/test_run9_contract.py` に、teacher 語を含むファイルが
+  非所有注記も併せ持つことを確認する軽量テストを追加。
+- 旧称「Common Teacher Transfer」→「Common Performance Lesson」への改名（変更4）は維持。
+
+### 2026-08-25 User 追加裁定4件（①〜③・P0、同日内の是正）
+
+上記実装の着手中に User から4件の追加裁定が入り、同日中に反映した
+（design_revision は 0.4 のまま据え置き）。逐語・詳細は
+`DESIGN_RUN9_REVISION_0.4.md`「2026-08-25 User 追加裁定4件」節を正とする。
+
+- **P0（帰属表記の訂正、最優先）**: `EXTERNAL_REVIEW_AQUEST_20260825.txt`
+  は山崎氏の逐語原文ではなく、山崎氏の指摘を受けて我々が起草した派生
+  設計変更メモだった——実在の外部者への誤帰属だったため訂正する。
+  `git mv` で
+  [`DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt`](./DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt)
+  へ改名（内容は1byteも無改変、sha256 =
+  `a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091` 不変）。
+  山崎氏に帰属するのは外部指摘の核心（VoiceBank に歌い方情報はほぼ含ま
+  れないこと、Voice Source の権利者 ≠ Performance の権利・来歴主体、の
+  分離指摘）のみ——「変更1」〜「変更8」の具体設計は我々の派生設計。
+- **①**: `render_code_commit`（RUN6 の歴史的 export provenance）を
+  `USER_ATTESTED` へ昇格したのは過大だった——歴史的事実は遡って attest
+  しない方針により `INFERRED_UNCONFIRMED` へ差し戻した。RUN9 が今後の
+  render に使用する commit の前方宣言は独立の新設欄
+  `run9_render_code_commit`（status: `DECLARED_FOR_RUN9`）が担う。
+  `backbone_runtime_bundle_sha` はこの構造変更を反映した実バイト sha
+  へ再計算し、`run9_render_code_commit` の確定を根拠に **PINNED** を
+  維持（旧値 `b92dac0e...` は同欄コメントに履歴として保持）。
+- **②**: `rights_manifest.json` provenance を是正——
+  `performance_author.performer`/`composition.composer` に外部資料出典
+  付きで **Junya Koguchi** を充填（`voice_source.owner` への同名充填は
+  論文著者性を録音物権利保有の証拠と誤認した過大推論だったため PR #319
+  第 4 巡指摘採用で `<UNRESOLVED_EXTERNAL>` へ差し戻し）
+  （旧 `<PENDING_USER_ATTESTATION>` は誤用だった。performer/composer は
+  User 自身が attest できる対象ではなく外部の第三者事実であるため）。
+  `composition.lyricist` は未解決のまま placeholder のみ
+  `<UNRESOLVED_EXTERNAL>`（外部事実欄専用の新設語彙）へ張り替え。
+  `recording_master_rights` に `interpretations` 節を新設し、CC BY-SA
+  4.0 の share-alike 義務が合成出力へ及ぶかという法解釈論点を、事実で
+  ある `license` 節から分離した。
+- **③**: `run9_schema.PERFORMANCE_TRAIT_VOCAB` を
+  `PERFORMANCE_RESIDUAL_VOCAB` へ改名（9項目の中身は不変）。RUN9 既存の
+  Trait 層（`TRAIT_CONTROL`、Identity/Trait/Technique 三層）との用語
+  衝突を避け、§7 確認メモの定義「Performance Residual = Performance
+  から抽出された RUN9 内部の数値表現」に統一した。
+
 ## RUN9 Phase 3 — machine-independent 設計層の確定
 
 machine-independent（実音源・実 render・実学習を要さない）次段3点を
@@ -274,12 +405,12 @@ machine-independent（実音源・実 render・実学習を要さない）次段
 
 | step | 内容 | 状態 |
 |---|---|---|
-| 0 | freeze Run Contract | **部分 pin が拡大**（`design_doc_sha256` / `design_revision_doc_sha256` / `por_adjudication_sha256` / `backbone_checkpoint_sha` が新たに PINNED。`backbone_runtime_bundle_sha` は bundle 内 `render_code_commit` が INFERRED_UNCONFIRMED のため PENDING のまま。`interventions` 構造（旧 `single_intervention`）へ改訂済み。他も正直に PENDING。`gate_state()` は依然 `BLOCKED`） |
+| 0 | freeze Run Contract | **部分 pin が拡大**（`design_doc_sha256` / `design_revision_doc_sha256` / `por_adjudication_sha256` / `backbone_checkpoint_sha` に加え、rev 0.4 で `backbone_runtime_bundle_sha` も新設の前方宣言欄 `run9_render_code_commit`（status: `DECLARED_FOR_RUN9`、2026-08-25 User 裁定）の確定により **PINNED** 化——bundle 内 `render_code_commit` 自体は RUN6 の歴史的 export provenance として `INFERRED_UNCONFIRMED` のまま（2026-08-25 追加裁定①、両欄は独立）。`interventions` 構造（旧 `single_intervention`）へ改訂済み。新設 `performance_source` 欄も追加済み。他も正直に PENDING。`gate_state()` は依然 `BLOCKED`） |
 | 1 | verify repository / dependency pins | 未着手（backbone 側は pin 済み。VG-L0 ハーネス自体の依存 pin は未着手） |
 | 2 | verify donor and teacher rights / manifests | **AF0/Ritsu は pin 済み・PJS は役割別2値を整理して解消**。**User donor のみ rights attest 待ち**（ブロッカー(1)参照） |
 | 3 | build run9 Identity Domain | **af0/ritsu/metric_space_sha が PINNED、user のみプレースホルダ**（`domains/identity_domain_run9_v1.json`、`is_pinned() == False` — user anchor 待ちのため依然） |
 | 4 | generate R9F-01:r0 and R9F-02:r0（INHERIT_TRAIT） | **未着手**（`run9_schema.build_founder()` は未 pin domain を構造的に ValueError で拒否する — step 3→4 の機械強制。user anchor 未 pin のため依然ブロック） |
-| 5–20 | render / freeze / lesson / learning / evaluation / verdict | **未着手・rev 0.3 で三枝化**（VG-L0 学習ハーネス自体が未実装 — ブロッカー(2)参照。ハーネス実装時に CONTROL/PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE の3経路分の render/lesson/learning/evaluation を実装する必要がある — ブロッカー(5)参照） |
+| 5–20 | render / freeze / lesson / learning / evaluation / verdict | **未着手・rev 0.3 で三枝化**（VG-L0 学習ハーネス自体が未実装 — ブロッカー(2)参照。ハーネス実装時に CONTROL/PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE の3経路分の render/lesson/learning/evaluation を実装する必要がある — ブロッカー(4)参照） |
 
 ## ブロッカー一覧（正直な現状）
 
@@ -292,7 +423,8 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   を指す2つの正しい値であり、矛盾する同一対象への2値ではなかった。
 - ~~backbone checkpoint 選定未~~ → RUN6 phase B 40K checkpoint を採用し
   `backbone_checkpoint_sha` を PINNED（`backbone_runtime_bundle_sha` は
-  ブロッカー(4)参照 — 未解消）。
+  当時ブロッカー(4)として残存していたが、下記「解消済み（2026-08-25
+  外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモの編入、Revision 0.4）」で解消済み）。
 - ~~`metric_space_sha` 未 pin~~ → Phase 3: `inputs/identity_metric_space.json`
   （schema `run9-identity-metric-space/1.2`。feature_extractor = WORLD
   (pyworld)・identity_feature = voiced フレームの log spectral envelope
@@ -307,13 +439,58 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   veto 可能**）。domain は user anchor が残るため `is_pinned()` は依然
   `False`（意図どおり）。
 
+**解消済み（2026-08-25 外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモの編入、Revision 0.4）**:
+- ~~`render_code_commit` の確定待ち~~ → User 裁定「aとbを承認」の b
+  （2026-08-25）を根拠に、RUN9 が今後の render に使用する commit を
+  独立の新設欄 `run9_render_code_commit`（status: `DECLARED_FOR_RUN9`）
+  として前方宣言で確定。連動して `RUN9_CONTRACT.yaml`
+  `backbone_runtime_bundle_sha` も **PINNED** へ昇格（`backbone_checkpoint_sha`
+  は元々 PINNED のまま——対象は別欄）。bundle 内 `render_code_commit`
+  （RUN6 の歴史的 export provenance）自体は当初 `USER_ATTESTED` へ昇格
+  させたが、同日中の追加裁定①により `INFERRED_UNCONFIRMED` へ差し戻した
+  ——歴史的事実は遡って attest しない方針のため（両欄は独立。詳細は上記
+  「2026-08-25 User 追加裁定4件」①参照）。
+
 **残存**:
 
-1. **User donor rights attest 待ち**: `inputs/rights_manifest.json`
-   （Fable 起草済み）は `rights_class`/`consent_status` =
-   `PENDING_USER_ATTESTATION`。User の確認前は `anchor_hashes.user` を
-   pin しない（DESIGN_RUN9_REVISION_0.2.md 改訂4）。raw 音源公開・モデル
-   一般配布は rights anchor 使用可否とは別承認（初期 `not_granted`）。
+1. **User donor rights attest 待ち + PJS 側の残る未解決欄**:
+   `inputs/rights_manifest.json`（rev 0.4 で4層構造
+   `voice_identity_rights`/`performance_rights`/`composition_rights`/
+   `recording_master_rights` へ再編済み。Fable 起草済み）の現状（Codex bot
+   レビュー PR #319 第2巡 Fix 5/6 で層別必須キー閉集合・語彙の仕分けを
+   確定済み）:
+   - **確定済み**: PJS の performer（`performance_rights.provenance.
+     performance_author.performer`）・composer（`composition_rights.
+     provenance.composition.composer`）は Junya Koguchi と外部資料出典
+     付きで記録済み（2026-08-25 User 追加裁定②）。recording license も
+     CC BY-SA 4.0 で機械検証済み（`recording_master_rights.license`）。
+   - **未解決（recording master の owner）**: `recording_master_rights.
+     provenance.voice_source.owner` は `<UNRESOLVED_EXTERNAL>` を維持 —
+     論文著者性は録音物の権利保有の証拠でなく、権利者を名指しする
+     disclosure が原典に見当たらないため（PR #319 第 4 巡指摘採用。
+     裁定②の確定範囲は performer/composer のみ）。
+   - **未解決（PJS 側・外部第三者事実）**: `lyricist`
+     （`composition_rights.provenance.composition.lyricist`）は repo
+     内・原典いずれにも個別クレジットの記録がなく `<UNRESOLVED_EXTERNAL>`
+     のまま。`performance_rights`/`composition_rights` の
+     `rights_class`/`consent_status` も、PJS 内部使用が rights-clean
+     curriculum 要件を満たすかの最終確認（R9-G1 tooling の職務）が未了の
+     ため `UNRESOLVED_EXTERNAL`（Fix 6: 旧 `PENDING_USER_ATTESTATION` は
+     User が attest すべき欄と外部第三者事実欄の語彙を混同する誤用
+     だったため張り替え済み——`voice_identity_rights` のみが
+     `PENDING_USER_ATTESTATION` を保持する対象、両者の仕分けの根拠は
+     rights_manifest.json `history` 参照）。CC BY-SA 4.0 の share-alike
+     義務が合成音声出力へ及ぶかという法解釈も
+     `recording_master_rights.interpretations.
+     share_alike_applies_to_synthesis_output`（`UNSETTLED_LEGAL_
+     INTERPRETATION`）として未確定のまま分離保持されている。
+   - **未解決（User 帰属欄・User attest 待ち）**: `voice_identity_rights.
+     rights_class`/`consent_status` は引き続き `PENDING_USER_ATTESTATION`。
+     User の確認前は `anchor_hashes.user` を pin しない
+     （DESIGN_RUN9_REVISION_0.2.md 改訂4。4層再編後も対象・内容は無改変
+     — User裁定「aとbを承認」のa参照）。raw 音源公開・モデル一般配布は
+     rights anchor 使用可否とは別承認で、いずれも初期 `not_granted`
+     （`voice_identity_rights.usage_grants`）。
 2. **VG-L0 学習ハーネス（実行部）未実装**: rev 0.3 で三枝化された
    PRACTICE_FROM_AUDIO / TRANSFER_TECHNIQUE エッジ（書き込み先は改訂1・
    rev 0.3 改訂A で Performance ControlProfile と規定済み）の**基盤**
@@ -348,16 +525,7 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    `EDUCATION_MANIFEST_REQUIRED_KEYS`/`validate_practice_split_
    manifest()`/`validate_education_lesson_manifest()`/
    `validate_learning_recipe_manifest()` が凍結済み。
-4. **`render_code_commit` の確定待ち**（Codex bot レビュー PR #316 第1巡
-   指摘採用）: `inputs/backbone_runtime_bundle.json` の
-   `render_code_commit`（`openvpi/DiffSinger @ e2307b1...`）は
-   `status: "INFERRED_UNCONFIRMED"` — run4〜8 全体での単一リビジョン一貫
-   使用・反証なしという状況証拠のみで、RUN6 export の直接記録
-   （`results_s5/s5_record_2026-08-20.md`）自体にはこの commit が明記され
-   ていない。**直接記録の発掘、または User attestation で確定するまで
-   `backbone_runtime_bundle_sha` は PENDING のまま**（`backbone_checkpoint_sha`
-   単体は直接記録4件一致のため PINNED 継続 — 対象を混同しない）。
-5. **practice/education builder 未実装**（Phase 3 更新）: 情報境界
+4. **practice/education builder 未実装**（Phase 3 更新）: 情報境界
    （`run9_schema.PRACTICE_FORBIDDEN_INPUTS` /
    `PRACTICE_ALLOWED_DATA_INPUTS` / `PRACTICE_REQUIRED_AUTONOMOUS_
    OPERATIONS` / `PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE` /
@@ -379,8 +547,14 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
 
 - **User anchor attest**: `anchor_hashes.user` — rights attest 完了待ち
   （残存ブロッカー(1)）。
-- **`render_code_commit` 確定**: `backbone_runtime_bundle_sha`（残存
-  ブロッカー(4)）。
+- ~~**`backbone_runtime_bundle_sha` PINNED 化待ち**~~ → 2026-08-25 User
+  承認 b + 裁定① により解消済み。確定したのは歴史的 `render_code_commit`
+  （RUN6 export 推定）自体ではなく、独立の前方宣言欄
+  `run9_render_code_commit`（status: `DECLARED_FOR_RUN9`）——
+  `render_code_commit` は `INFERRED_UNCONFIRMED` のまま（両欄は独立）。
+  `backbone_runtime_bundle_sha` PINNED の根拠はこの前方宣言の確定（上記
+  「解消済み（2026-08-25 外部指摘（AQUEST 山崎信英氏）を受けた派生設計
+  変更メモの編入）」参照）。
 - **practice / education manifest の実体 build**:
   `practice_audio_split_manifest.json` /
   `education_technique_lesson_manifest.json` の実体生成（残存
@@ -473,22 +647,24 @@ Selection Pressure Routing）が欠落していた。設計書は byte-pin 済�
 run9_dual_founder_pjs/
 ├── DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md   # 正本（バイト同一コピー・不変）
 ├── DESIGN_RUN9_REVISION_0.2.md                                 # v0.1 差分メモ（2026-08-24 User 裁定5件、無改変・存続）
-├── DESIGN_RUN9_REVISION_0.3.md                                 # rev 0.2 差分メモ（同日、PoR メモ編入。三経路分離・三層観測等）
+├── DESIGN_RUN9_REVISION_0.3.md                                 # rev 0.2 差分メモ（同日、PoR メモ編入。三経路分離・三層観測等。無改変・存続）
+├── DESIGN_RUN9_REVISION_0.4.md                                 # rev 0.3 差分メモ（2026-08-25、外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモの編入 + User用語整理裁定編入）
 ├── POR_CONCEPT_ADJUDICATION_20260824.txt                       # PoR 裁定ソース（uploads 原本とバイト同一・不変）
-├── RUN9_CONTRACT.yaml                                          # §23 Run Contract（部分 pin。af0/ritsu/backbone/por_adjudication/branch_write_policy は PINNED。interventions・human_audit_mode 欄）
+├── DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt                         # 派生設計変更メモ（AQUEST 山崎信英氏、byte-pin 不変）
+├── RUN9_CONTRACT.yaml                                          # §23 Run Contract（部分 pin。af0/ritsu/backbone/backbone_runtime_bundle/por_adjudication/branch_write_policy は PINNED。interventions・human_audit_mode・performance_source 欄）
 ├── README.md                                                   # 本ファイル
-├── run9_schema.py                                              # domain / TRI_CROSSOVER / contract / 書込境界 / manifest validator 他の run-local 正本
+├── run9_schema.py                                              # domain / TRI_CROSSOVER / contract / 書込境界 / manifest validator / R9-G1・LessonRecord・rights 4層 他の run-local 正本
 ├── run9_controlprofile.py                                      # Phase 3: ControlProfile schema / derive_profile 書込境界機械強制 / Run9ProfileLedger / practice trace schema
 ├── domains/
 │   └── identity_domain_run9_v1.json                            # af0/ritsu/metric_space_sha PINNED・user はプレースホルダ
 ├── inputs/
 │   ├── af0_anchor_manifest.json                                # AF-P0 正典証拠の複合参照 manifest（anchor_hashes.af0 の入力）
-│   ├── rights_manifest.json                                    # User donor rights（PENDING_USER_ATTESTATION）
-│   ├── backbone_runtime_bundle.json                            # RUN6 backbone の checkpoint/config/vocoder/render commit + canon model assets 一式
+│   ├── rights_manifest.json                                    # rev 0.4: 4層構造（voice_identity_rights/performance_rights/composition_rights/recording_master_rights）。voice_identity_rights は User donor rights（PENDING_USER_ATTESTATION、内容無改変）
+│   ├── backbone_runtime_bundle.json                            # RUN6 backbone の checkpoint/config/vocoder/render commit（render_code_commit=INFERRED_UNCONFIRMED・run9_render_code_commit=DECLARED_FOR_RUN9）+ canon model assets 一式
 │   ├── branch_write_policy.json                                # 枝別書込境界 manifest（State partition・writable集合・不変artifact一覧。PINNED）
-│   └── identity_metric_space.json                              # Phase 3: identity metric space 事前登録 spec（正規形 sha256 が metric_space_sha を pin）
+│   └── identity_metric_space.json                              # Phase 3: identity metric space 事前登録 spec（正規形 sha256 が metric_space_sha を pin。rev 0.4: teacher 非所有注記追記・repin）
 ├── tests/
-│   ├── test_run9_contract.py                                   # §27 最低テストの静的検証可能サブセット + Revision 0.2/0.3 対応テスト + User 外部レビュー P1/P2 対応テスト + Phase 3 item 1/3 テスト
+│   ├── test_run9_contract.py                                   # §27 最低テストの静的検証可能サブセット + Revision 0.2/0.3/0.4 対応テスト + User 外部レビュー P1/P2 対応テスト + Phase 3 item 1/3 テスト
 │   └── test_run9_controlprofile.py                             # Phase 3: run9_controlprofile.py の最低テスト（書込境界・ledger append-only/冪等/conflict・neutral profile 決定論・practice trace）
 └── results/
     └── .gitignore                                              # 実測結果は非同梱（§25 Atomic Results Bundle 用の空ディレクトリ）

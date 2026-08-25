@@ -27,6 +27,7 @@ import re
 import sys
 import types
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
@@ -52,13 +53,13 @@ RUN9_NORMALIZATION = "largest-component-residual"
 RUN_ID = "RUN9"
 EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
 
-# 現行 design_revision（凍結値。User 裁定 2026-08-24 =
-# DESIGN_RUN9_REVISION_0.3.md — PoR メモ
-# `POR_CONCEPT_ADJUDICATION_20260824.txt` の編入）。旧 revision "0.1"/"0.2"
-# を宣言する contract は意図どおり拒否される — 修正が必要なら
-# design_revision を上げ、旧 attempt を append-only 履歴として残す規約
-# （DESIGN_RUN9 ヘッダ注記）。
-DESIGN_REVISION = "0.3"
+# 現行 design_revision（凍結値。User 裁定 2026-08-25 =
+# DESIGN_RUN9_REVISION_0.4.md — 外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
+# `DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt` の採用）。旧 revision
+# "0.1"/"0.2"/"0.3" を宣言する contract は意図どおり拒否される — 修正が
+# 必要なら design_revision を上げ、旧 attempt を append-only 履歴として
+# 残す規約（DESIGN_RUN9 ヘッダ注記）。
+DESIGN_REVISION = "0.4"
 
 # rev 0.3（改訂A、PoR §1/§3/§4/§16）: 単一 LEARN_PERFORMANCE エッジを
 # CONTROL 無介入枝 + 二つの介入エッジ（PRACTICE_FROM_AUDIO / 稽古,
@@ -426,6 +427,329 @@ BRANCH_IMMUTABLE_ARTIFACTS: Tuple[str, ...] = (
 # 使わない規律と対になる（DESIGN_RUN9_REVISION_0.3.md 参照）。
 HUMAN_AUDIT_MODES: Tuple[str, str] = ("DISABLED", "ADVISORY_PREDECLARED")
 DEFAULT_HUMAN_AUDIT_MODE = "DISABLED"
+
+# ---------------------------------------------------------------------------
+# rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
+# `DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt` の採用）: R9-G1 拡張・Performance
+# Trait/Identity 除外語彙・LessonRecord 標準仕様・performance_source
+# ブロックの凍結定数。実体 tooling（R9-G1 の pin 値実物照合・LessonRecord
+# manifest の実 build）は machine-dependent 作業として引き続き VG-L0
+# ハーネス実装待ち — 本節はいずれも語彙・構造・型のみを凍結する
+# （既存 PRACTICE/EDUCATION manifest validator と同じ「骨組み凍結」
+# パターン）。
+# ---------------------------------------------------------------------------
+
+# --- R9-G1 拡張（派生設計変更メモ変更5） -----------------------------------------
+# v0.1 §19「R9-G1 INPUT_FREEZE_AND_RIGHTS」（byte-pin 不変）に対する rev 0.2
+# 方式（Adapter→ControlProfile と同型の「読み替え」— v0.1 本文は書き換え
+# ない）の意味名追加。gate ID（R9-G1）自体は変わらない。
+R9_G1_ID = "R9-G1"
+R9_G1_LEGACY_NAME = "INPUT_FREEZE_AND_RIGHTS"  # v0.1 §19 原文名（不変）
+R9_G1_SEMANTIC_NAME = "RIGHTS_AND_PROVENANCE_GATE"  # rev 0.4 追加読み替え（派生設計変更メモの逐語）
+
+# PASS 条件8項目（派生設計変更メモ「変更5」の逐語8項目を機械可読 id へ写した
+# 凍結 tuple）。**gate は構造述語**（PR #316 第4巡の層分離規約を rev 0.4 でも
+# 維持——`gate_state()` の docstring と `verify_rights_manifest_against_ledger()`
+# 直前のコメント参照）: 各条件 id の実体照合（例えば「Voice Source が実際に
+# 特定されているか」の中身の正しさ）は R9-G1 tooling（machine-dependent）の
+# 職務のまま。本 tuple は8条件の名前と順序のみを凍結する。
+R9_G1_PASS_CONDITIONS: Tuple[str, str, str, str, str, str, str, str] = (
+    "VOICE_SOURCE_IDENTIFIED",
+    "VOICE_USAGE_TERMS_CONFIRMED",
+    "PERFORMANCE_AUTHOR_IDENTIFIED",
+    "PERFORMANCE_USAGE_TERMS_CONFIRMED",
+    "COMPOSITION_RIGHTS_CONFIRMED",
+    "RECORDING_MASTER_RIGHTS_CONFIRMED",
+    "TEACHER_SOURCE_VS_VOICE_IDENTITY_SOURCE_DISTINGUISHED",
+    "NO_UNKNOWN_RIGHTS_HOLDER",
+)
+
+# FAIL 語彙（派生設計変更メモの逐語）。既存 `FAILURE_CLASSES`（rev 0.3
+# 改訂E、3分類）とは別軸——`FAILURE_CLASSES` は attempt 全体の失敗の性質
+# （実装ミス/科学的無効/設計不能）を分類し、こちらは R9-G1 という個別
+# gate 1つの FAIL 値である。R9-G1 が不成立の attempt は、原因次第で
+# `FAILURE_CLASSES` のいずれにも分類され得る独立した2層の語彙であり、
+# 本定数は `FAILURE_CLASSES` を置換しない。
+GATE_FAIL_RIGHTS_PROVENANCE_UNRESOLVED = "RIGHTS_PROVENANCE_UNRESOLVED"
+
+
+def r9_g1_pass_conditions_declared(declared_conditions: Any) -> bool:
+    """R9-G1 の8 PASS 条件（`R9_G1_PASS_CONDITIONS`）が `declared_conditions`
+    （attempt が宣言した条件 id の集合）に全件含まれるかどうかの**構造
+    判定のみ**を行う（`control_conditions_satisfied()` と同型のパターン）。
+    各条件の実体照合（宣言が事実として正しいか）はこの関数の範囲外——
+    R9-G1 tooling の職務のまま変更しない（gate=構造述語、実物照合=tooling
+    という PR #316 第4巡の層分離規約を rev 0.4 でも維持する）。"""
+    if not isinstance(declared_conditions, (set, frozenset, list, tuple)):
+        raise Run9ValidationError(
+            "declared_conditions must be a set/list/tuple, got "
+            f"{type(declared_conditions).__name__}"
+        )
+    return set(R9_G1_PASS_CONDITIONS).issubset(set(declared_conditions))
+
+
+# --- performance_source ブロック（派生設計変更メモ変更1 + 2026-08-25 User 追加
+#     裁定「確認メモ / RUN9 用語整理」） -----------------------------------
+# `RUN9_CONTRACT.yaml` 新設トップレベル欄 `performance_source` の凍結値。
+# User 追加裁定の指示2「置換でなく追加」に従い、既存 teacher 表記
+# （v0.1 §7.4/§11/§19 R9-G6/R9-G7 等、byte-pin 不変の運用上の呼称）は
+# 書き換えず、本ブロックが Voice Source ≠ Performance Source ≠
+# Performance Author の分離を明示する非所有注記の置き場所を担う。
+PERFORMANCE_SOURCE_ID = "PJS"
+PERFORMANCE_SOURCE_ROLE = "EXTERNAL_PERFORMANCE_SOURCE"
+
+# 「teacher」語の非所有注記（User 追加裁定 2026-08-25、指示1の逐語）。
+# `RUN9_CONTRACT.yaml` `performance_source.teacher_terminology_note` /
+# `inputs/identity_metric_space.json` confuser_control 節の role 注記が
+# この文言を参照する（一言一句同一である必要はないが、Voice 所有者を
+# 意味しない旨と rights_manifest provenance を正とする旨の2点は必須）。
+TEACHER_TERMINOLOGY_NOTE = (
+    "Teacher は運用上の呼称であり Voice 所有者・Voice Identity Owner を意味"
+    "しない（Voice Source ≠ Performance Source ≠ Performance Author の分離"
+    "は rev 0.4 / inputs/rights_manifest.json の provenance を正とする）。"
+)
+
+
+# --- Performance Residual / Identity 除外語彙（派生設計変更メモ変更3・6） ----------
+
+# 「歌い方」の定義修正（派生設計変更メモ変更3、逐語9項目）: RUN9 が Performance
+# Source から抽出・移送してよい Performance Residual（= Performance Residual）
+# の正準語彙。v0.1 §11「PJS Performance Lesson」の F0_lesson/Duration_lesson/
+# Energy_lesson/End_lesson 等（byte-pin 不変）は、本語彙の RUN9 固有の初期
+# 実装例として引き続き有効——本語彙が旧定義（「PJSの歌い方を移植する」）を
+# 置き換える正典。
+PERFORMANCE_RESIDUAL_VOCAB: Tuple[str, str, str, str, str, str, str, str, str] = (
+    "relative_F0",
+    "duration_ratio",
+    "onset_offset",
+    "energy_envelope",
+    "vibrato",
+    "phrase_dynamics",
+    "attack_behavior",
+    "release_behavior",
+    "articulation_timing",
+)
+
+# Identity 除外 Trait の正準語彙（派生設計変更メモ変更3の6項目 + 変更6の4項目を
+# 統合。重複概念（speaker/timbre/formant の3組）は統一名 + 別名注記で吸収し
+# 7項目へ収束する — DESIGN_RUN9_REVISION_0.4.md「変更3・6」表参照）。
+#
+# 既存 `EDUCATION_FORBIDDEN_INPUTS`/`PRACTICE_FORBIDDEN_INPUTS`（rev 0.3）
+# との関係: 別の層であり、どちらか片方を変更しても他方は自動的に変わらない
+# （別の凍結対象）。`IDENTITY_EXCLUDED_TRAIT_VOCAB` は「Performance Residual
+# として扱ってはならない特徴クラスの一般的な正準分類」（LessonRecord の
+# `explicitly_excluded_identity_traits` が完全含有すべき対象）であり、
+# `EDUCATION_FORBIDDEN_INPUTS`/`PRACTICE_FORBIDDEN_INPUTS` は「RUN9・PJS
+# 固有の、特定の入力チャネルとして渡してはならない具体的禁止項目の列挙」
+# である。前者は特徴の分類学、後者は運用上の入力境界。
+IDENTITY_EXCLUDED_TRAIT_VOCAB: Tuple[str, str, str, str, str, str, str] = (
+    "speaker_embedding",  # 変更3「speaker embedding」+ 変更6「speaker_embedding」
+    "timbre_identity",  # 変更3「timbre identity」+ 変更6「timbre_embedding」（別名）
+    "formant_identity",  # 変更3「formant identity」+ 変更6「formant_profile」（別名）
+    "spectral_identity",  # 変更3のみ「spectral identity」
+    "voice_genome",  # 変更3のみ「Voice Genome」
+    "source_specific_identity_representation",  # 変更3のみ「source-specific identity representation」
+    "identity_vector",  # 変更6のみ（RUN9 の Identity 座標/genome coordinate 一般を指す汎用項目）
+)
+
+
+# --- LessonRecord 標準仕様（派生設計変更メモ変更6） -----------------------------
+
+SCHEMA_LESSON_RECORD = "run9-lesson-record/1.0"
+
+# 派生設計変更メモの LessonRecord 雛形を機械可読キーへ写した最低要件。
+LESSON_RECORD_REQUIRED_KEYS: Tuple[str, ...] = (
+    "schema",
+    "lesson_id",
+    "performance_source",
+    "voice_source",
+    "performance_author",
+    "composition_source",
+    "recording_source",
+    "extracted_traits",
+    "explicitly_excluded_identity_traits",
+    "rights_manifest",
+    "provenance_manifest",
+)
+
+# 派生設計変更メモの変更6が使う5つの略記名（extracted_traits 節の逐語）を
+# `PERFORMANCE_RESIDUAL_VOCAB` の正準名へ解決する対応表。`relative_F0` は
+# 恒等（両語彙で綴りが同一）。
+LESSON_RECORD_TRAIT_ALIASES: Mapping[str, str] = types.MappingProxyType({
+    "relative_F0": "relative_F0",
+    "duration": "duration_ratio",
+    "timing": "onset_offset",
+    "dynamics": "energy_envelope",
+    "articulation": "articulation_timing",
+})
+
+
+def resolve_lesson_record_trait_alias(name: Any) -> str:
+    """LessonRecord の `extracted_traits` 要素1件を正準 `PERFORMANCE_RESIDUAL_VOCAB`
+    名へ解決する。`LESSON_RECORD_TRAIT_ALIASES` の略記名、または
+    `PERFORMANCE_RESIDUAL_VOCAB` の正準名そのものを受理し、いずれでもない
+    文字列は拒否する（fail-closed — 未知の trait 名を無言で通さない）。"""
+    if not isinstance(name, str):
+        raise Run9ValidationError(f"trait name must be a string, got {name!r}")
+    if name in LESSON_RECORD_TRAIT_ALIASES:
+        return LESSON_RECORD_TRAIT_ALIASES[name]
+    if name in PERFORMANCE_RESIDUAL_VOCAB:
+        return name
+    raise Run9ValidationError(
+        f"unknown Performance Residual name {name!r} — must be one of "
+        f"{list(LESSON_RECORD_TRAIT_ALIASES.keys())} (aliases) or "
+        f"{list(PERFORMANCE_RESIDUAL_VOCAB)} (canonical names)"
+    )
+
+
+def validate_lesson_record(data: Mapping[str, Any]) -> None:
+    """LessonRecord（派生設計変更メモ変更6）の最低要件を検証する。
+    `validate_practice_split_manifest()`/`validate_education_lesson_manifest()`
+    と同じ「骨組み凍結」パターン——実体 build（実際の抽出結果）は
+    machine-dependent 作業として VG-L0 ハーネス実装待ちのため、本関数は
+    構造・語彙のみを検証する。fail-closed（未知キー拒否・欠落キーの
+    デフォルト補完なし）。
+
+    provenance 系フィールド（performance_source/voice_source/
+    performance_author/composition_source/recording_source）は
+    **外部事実欄**——PJS 側（外部第三者）の事実を記述する欄のため rev 0.4
+    語彙予約（User 帰属専用 `<PENDING_USER_ATTESTATION>` / 外部第三者
+    未解決 `<UNRESOLVED_EXTERNAL>`）を適用し、`<PENDING_USER_ATTESTATION>`
+    を fail-closed で拒否し未解決は `<UNRESOLVED_EXTERNAL>` のみ許容する
+    （`validate_rights_manifest_four_layer()` の provenance ブロック
+    誤用拒否と同じ規約 — Codex bot レビュー PR #319 第7巡指摘 Fix 15、
+    P2、採用）。
+
+    一方 rights_manifest/provenance_manifest の2欄は**参照/pin欄**——
+    実在する rights/provenance manifest への具体的な参照を保持する欄で
+    あり、上記の外部事実欄とは性質が異なる。未解決 placeholder の
+    居場所ではないため `<PENDING_USER_ATTESTATION>` /
+    `<UNRESOLVED_EXTERNAL>` の**両 sentinel**を fail-closed で拒否し、
+    実在する参照（非空文字列。形式は `performance_source.rights_manifest_ref`
+    と同じ規約に倣い規定しない）を必須とする（Codex bot レビュー PR #319
+    第9巡指摘 Fix 18、P2、採用 — 第7巡 Fix 15 は `<UNRESOLVED_EXTERNAL>`
+    への代替を推奨したため、両欄がその値になった record が使用可能な
+    参照/pin を一切持たないまま構造的に valid となる抜け道が残っていた）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"lesson record must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - set(LESSON_RECORD_REQUIRED_KEYS)
+    if unknown:
+        raise Run9ValidationError(f"lesson record has unknown key(s): {sorted(unknown)}")
+    missing = set(LESSON_RECORD_REQUIRED_KEYS) - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"lesson record missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_LESSON_RECORD:
+        raise Run9ValidationError(
+            f"lesson record schema must be exactly {SCHEMA_LESSON_RECORD!r}, got {schema!r}"
+        )
+
+    lesson_id = data["lesson_id"]
+    if not isinstance(lesson_id, str) or not lesson_id.strip():
+        raise Run9ValidationError(f"lesson record lesson_id must be a non-empty string, got {lesson_id!r}")
+
+    for field in (
+        "performance_source", "voice_source", "performance_author",
+        "composition_source", "recording_source",
+    ):
+        value = data[field]
+        if not isinstance(value, str) or not value.strip():
+            raise Run9ValidationError(
+                f"lesson record.{field} must be a non-empty string, got {value!r}"
+            )
+        # rev 0.4 語彙予約（User 帰属専用 `<PENDING_USER_ATTESTATION>` /
+        # 外部第三者未解決 `<UNRESOLVED_EXTERNAL>`）を LessonRecord
+        # provenance 系フィールドへ適用する——本節の5フィールドは全て
+        # PJS 側（外部第三者）の事実を記述する欄であり、User 帰属欄専用の
+        # `<PENDING_USER_ATTESTATION>` を fail-closed で拒否する
+        # （Codex bot レビュー PR #319 第7巡指摘 Fix 15、P2、採用）。
+        if value == _RIGHTS_MANIFEST_PENDING_USER_ATTESTATION:
+            raise Run9ValidationError(
+                f"lesson record.{field} is an external-fact field (PJS 側の事実欄); "
+                f"{_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} is reserved for "
+                f"User-attributable fields — use {_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} instead"
+            )
+        # Codex bot レビュー PR #319 第13巡指摘, Fix 26（P2, 採用）: 本節5欄も
+        # `_validate_rights_provenance_block()` と同じ「外部事実の具体値を
+        # 自由記述として受理する」経路であり、`USER_ATTESTED_OWN_VOICE`
+        # （voice_identity_rights 層 User-donor attestation 完了専用トークン）
+        # の混入で PJS 側（外部第三者）の事実を「User attestation 済み」に
+        # 偽装できてしまう対称漏れを同型で塞ぐ。
+        if value == _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE:
+            raise Run9ValidationError(
+                f"lesson record.{field} is an external-fact field (PJS 側の事実欄); "
+                f"{_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE!r} is reserved for "
+                "voice_identity_rights layer User-donor attestation — use "
+                f"{_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} for an unresolved state or a concrete "
+                "external description for a resolved one"
+            )
+
+    extracted_traits = data["extracted_traits"]
+    if not isinstance(extracted_traits, list) or not extracted_traits:
+        raise Run9ValidationError(
+            f"lesson record.extracted_traits must be a non-empty list, got {extracted_traits!r}"
+        )
+    resolved_traits = [resolve_lesson_record_trait_alias(t) for t in extracted_traits]
+    unknown_traits = set(resolved_traits) - set(PERFORMANCE_RESIDUAL_VOCAB)
+    if unknown_traits:
+        raise Run9ValidationError(
+            f"lesson record.extracted_traits resolved to unknown trait(s) not in "
+            f"PERFORMANCE_RESIDUAL_VOCAB: {sorted(unknown_traits)}"
+        )
+
+    excluded = data["explicitly_excluded_identity_traits"]
+    if not isinstance(excluded, list):
+        raise Run9ValidationError(
+            f"lesson record.explicitly_excluded_identity_traits must be a list, got {excluded!r}"
+        )
+    if not all(isinstance(x, str) for x in excluded):
+        raise Run9ValidationError(
+            "lesson record.explicitly_excluded_identity_traits elements must all be strings, "
+            f"got {excluded!r}"
+        )
+    missing_excluded = set(IDENTITY_EXCLUDED_TRAIT_VOCAB) - set(excluded)
+    if missing_excluded:
+        raise Run9ValidationError(
+            "lesson record.explicitly_excluded_identity_traits must fully contain "
+            f"IDENTITY_EXCLUDED_TRAIT_VOCAB — missing: {sorted(missing_excluded)}"
+        )
+
+    for field in ("rights_manifest", "provenance_manifest"):
+        value = data[field]
+        if not isinstance(value, str) or not value.strip():
+            raise Run9ValidationError(
+                f"lesson record.{field} must be a non-empty string (reference/pin), got {value!r}"
+            )
+        # rights_manifest/provenance_manifest は provenance 系5フィールド
+        # （performance_source 等、外部第三者の"事実"を記述し
+        # <UNRESOLVED_EXTERNAL> による未解決表現を許容する欄）とは別枠——
+        # こちらは「実在する rights/provenance manifest への参照/pin」を
+        # 保持する欄であり、未解決 placeholder の居場所ではない。
+        # 第7巡 Fix 15 は User 帰属専用 <PENDING_USER_ATTESTATION> のみを
+        # 拒否し代替として <UNRESOLVED_EXTERNAL> を推奨したが、代替先
+        # 自体を許容すると rights_manifest/provenance_manifest の両方が
+        # <UNRESOLVED_EXTERNAL> の record（＝使用可能な参照/pin を一切
+        # 持たない構造的 valid record）が R9-G1 の要求証拠なしに
+        # validate_lesson_record() を通ってしまう——両 sentinel を
+        # fail-closed で拒否する（Codex bot レビュー PR #319 第9巡指摘
+        # Fix 18、P2、採用）。値の形式（64hex sha か既存 manifest への
+        # 相対パスか）は `performance_source.rights_manifest_ref` と同じ
+        # 規約に倣い規定しない——非空文字列という構造的下限に留め、
+        # 過剰一般化はしない。
+        if value in (
+            _RIGHTS_MANIFEST_PENDING_USER_ATTESTATION,
+            _RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL,
+        ):
+            raise Run9ValidationError(
+                f"lesson record.{field} must hold a genuine reference/pin to an existing "
+                "rights/provenance manifest, not an unresolved placeholder — neither "
+                f"{_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} nor "
+                f"{_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} is a usable reference; if lesson "
+                "generation cannot yet produce the manifest, the record cannot be structurally "
+                f"issued (got {value!r})"
+            )
 
 
 class Run9ValidationError(ValueError):
@@ -3327,6 +3651,10 @@ _CONTRACT_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset(
         # rev 0.3 新設（User 外部レビュー PR #317 P2-2 採用）: pin 欄では
         # なく通常欄。`HUMAN_AUDIT_MODES` のいずれかの文字列値のみ許容。
         "human_audit_mode",
+        # rev 0.4 新設（DESIGN_RUN9_REVISION_0.4.md、2026-08-25 User 追加
+        # 裁定「確認メモ / RUN9 用語整理」指示2）: pin 欄ではなく通常欄。
+        # `validate_performance_source_block()` が構造を検証する。
+        "performance_source",
     }
     | set(CONTRACT_PIN_FIELDS)
 )
@@ -3650,6 +3978,15 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
         raise Run9ValidationError(
             f"human_audit_mode must be one of {list(HUMAN_AUDIT_MODES)}, got {human_audit_mode!r}"
         )
+
+    # rev 0.4 新設（DESIGN_RUN9_REVISION_0.4.md、2026-08-25 User 追加裁定
+    # 「確認メモ / RUN9 用語整理」指示2）: pin 欄ではなく通常欄。
+    # `validate_performance_source_block()`（本モジュール後方定義、
+    # Python は呼び出し時に名前解決するため前方参照で問題ない）が
+    # id/role の凍結値一致 + teacher_terminology_note の非所有注記2要件
+    # （Voice 所有者を意味しない旨 + Voice Source/Performance
+    # Source/Performance Author の3語）を検証する。
+    validate_performance_source_block(data["performance_source"])
 
     # deepcopy（Codex bot レビュー PR #315 第2巡指摘1採用）: `dict(data)` は
     # 浅いコピーのため、ネストした pin 欄 dict（`data["education_technique_
@@ -4056,4 +4393,1129 @@ def verify_rights_manifest_against_ledger(
             raise Run9ValidationError(
                 f"rights_manifest.entries[card_id={card_id!r}].duration_sec does not match "
                 f"donor_ledger: rights={rights_duration!r} ledger={ledger_duration!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# rev 0.4（DESIGN_RUN9_REVISION_0.4.md 変更1・2）: rights_manifest.json の
+# 4層構造（voice_identity_rights/performance_rights/composition_rights/
+# recording_master_rights）。`verify_rights_manifest_against_ledger()` 自体
+# は変更しない（既存テストの後方互換を保つ）— 代わりに、4層文書から
+# voice_identity_rights 層を取り出し、`verify_rights_manifest_against_ledger()`
+# が期待する旧 schema `run9-user-donor-rights/1.0` 相当のフラット構造へ
+# 変換するアダプタを新設する。
+# ---------------------------------------------------------------------------
+
+SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER = "run9-rights-manifest/2.0"
+
+# 派生設計変更メモ変更2の4層名（逐語キー、順序は派生設計変更メモの雛形順）。
+RIGHTS_MANIFEST_LAYER_NAMES: Tuple[str, str, str, str] = (
+    "voice_identity_rights",
+    "performance_rights",
+    "composition_rights",
+    "recording_master_rights",
+)
+
+# 派生設計変更メモ変更1「原則」の逐語3式。
+RIGHTS_MANIFEST_PRINCIPLES: Tuple[str, str, str] = (
+    "Teacher ≠ Voice Identity Owner",
+    "Teacher ≠ Performance Author",
+    "Voice Source ≠ Performance Source",
+)
+
+_RIGHTS_MANIFEST_FOUR_LAYER_TOP_KEYS: FrozenSet[str] = frozenset(
+    {"schema", "revision_note", "principles", "auto_interpretation_prohibited", "hard_gate", "history"}
+    | set(RIGHTS_MANIFEST_LAYER_NAMES)
+)
+
+# 派生設計変更メモ変更1の provenance ネストブロック（逐語ブロック名 + 値
+# フィールド名）。Codex bot レビュー PR #319 第1巡指摘2（P2）採用: 旧
+# validate_rights_manifest_four_layer() は各層の `provenance` が dict で
+# あることしか見ておらず、`provenance: {}` やブロック欠落を素通りさせて
+# いた（DESIGN_RUN9_REVISION_0.4.md の実際の欠落 — rights_manifest.json
+# recording_master_rights.provenance に synthesis ブロックが無いまま
+# valid-file テストが green だった事実で顕在化）。ここでブロック形状を
+# 閉集合として凍結する。
+#
+# 各フィールドは「値の種別」（`_RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL` =
+# 外部の第三者事実 / `_RIGHTS_MANIFEST_FIELD_KIND_USER` = User 自身が
+# attest すべき対象）を伴う（2026-08-25 User 追加裁定②が要求する語彙分離
+# — PJS Performance Source に関する4ブロックはいずれも外部の第三者
+# （PJS corpus・その著者・演者）に関する事実であり、User 自身の権利・
+# 許諾についての欄ではないため、現行スキーマでは全フィールドが external
+# 種別になる。将来 User 自身が主体となる provenance ブロックを追加する
+# 場合のみ user 種別が使われる）。
+_RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL = "external"
+_RIGHTS_MANIFEST_FIELD_KIND_USER = "user"
+
+_RIGHTS_MANIFEST_PROVENANCE_BLOCK_VALUE_KEYS: Dict[str, Dict[str, str]] = {
+    "voice_source": {
+        "owner": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+        "source_id": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    },
+    "performance_author": {
+        "performer": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+        "performance_editor": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    },
+    "synthesis": {
+        "engine": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+        "voicebank": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    },
+    "composition": {
+        "composer": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+        "lyricist": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    },
+}
+
+# 層レベルの rights_class/consent_status 値語彙（Codex bot レビュー PR #319
+# 第2巡指摘, Fix 5, P2, 採用）: provenance ブロック内の値語彙は角括弧付き
+# placeholder `<...>` を使う（_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION /
+# _RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL、下記で定義）のに対し、層直下の
+# rights_class/consent_status は角括弧なしの裸トークンを使う——既存実装の
+# 流儀（voice_identity_rights.rights_class の値 "PENDING_USER_ATTESTATION"、
+# rev 0.2 由来）に合わせて一貫させる。2つの規約は別物であり混同しない。
+_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION = "PENDING_USER_ATTESTATION"
+_RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL = "UNRESOLVED_EXTERNAL"
+
+# Codex bot レビュー PR #319 第11巡指摘（P2, 採用, Fix 24）: attested 形態の
+# 判定（`_validate_rights_manifest_voice_identity_attestation`）は従来
+# 「両 status が PENDING_USER_ATTESTATION と異なる」ことしか要求しておらず、
+# `rights_class`/`consent_status` を `DENIED` 等の任意・矛盾値へ書き換えても
+# 受理してしまっていた——承認記録付き `granted` usage grant（Fix 19 前提条件
+# ①）と組み合わせると、権利状態が否認/未記述のまま raw 公開・配布を許可する
+# 正典 manifest が通ってしまう。
+# 現物確認: `inputs/rights_manifest.json` / DESIGN_RUN9_REVISION_0.2.md
+# 改訂4 / DESIGN_RUN9_REVISION_0.4.md（変更1・2「attest 対象の更新」節）の
+# いずれにも attested 後の意図された status 値の規定はない。ただし
+# `tests/test_run9_contract.py`（Fix 16/19 導入時点、`test_fix319_16_valid_
+# attested_form_accepted` 他 7 箇所）は既に `rights_class`/`consent_status`
+# 双方に "USER_ATTESTED_OWN_VOICE" を使う規約を現物として確立済み——これを
+# 閉語彙として凍結する（新規裁定で非対称な値を導入し既存回帰と乖離させない）。
+# 閉語彙は各1値の閉集合: 拒否・撤回等の他状態は将来の design revision で
+# 語彙追加するまで表現不能（fail-closed）。
+_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE = "USER_ATTESTED_OWN_VOICE"
+
+# 層ごとの主体種別: voice_identity_rights のみ User 帰属（User donor 自身
+# の声の権利。attestation 主体 = User）で、他3層（performance/composition/
+# recording_master）はいずれも PJS という外部第三者に関する権利であり
+# external 種別（provenance ブロックの
+# _RIGHTS_MANIFEST_PROVENANCE_BLOCK_VALUE_KEYS が同3層の全フィールドを
+# external としているのと同じ帰属根拠 — Fix 6 の仕分け）。
+_RIGHTS_MANIFEST_LAYER_FIELD_KIND: Dict[str, str] = {
+    "voice_identity_rights": _RIGHTS_MANIFEST_FIELD_KIND_USER,
+    "performance_rights": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    "composition_rights": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+    "recording_master_rights": _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL,
+}
+
+# 層ごとの必須キー閉集合（Codex bot レビュー PR #319 第2巡指摘, Fix 5, P2,
+# 採用）: 旧 validate_rights_manifest_four_layer() は非空 role と
+# provenance ブロックの形状しか要求せず、recording_master_rights.license /
+# performance_rights.rights_class / 各層の consent_status を削除しても
+# validator が受理してしまっていた（permission 系フィールドが構造的に
+# 必須になっていなかった）。inputs/rights_manifest.json の実キーを読み、
+# 各層が持つべきキー集合を層別の閉集合として凍結する（欠落・未知キーの
+# いずれも拒否 — fail-closed）。
+_RIGHTS_MANIFEST_LAYER_REQUIRED_KEYS: Dict[str, FrozenSet[str]] = {
+    "voice_identity_rights": frozenset(
+        {
+            "role",
+            "schema_legacy",
+            "donor_ledger_source",
+            "donor_ledger_schema",
+            "transcribed_at",
+            "note",
+            "entries",
+            "rights_class",
+            "consent_status",
+            "attestation",
+            "usage_grants",
+            "usage_grants_note",
+            "binding_note",
+        }
+    ),
+    "performance_rights": frozenset(
+        {
+            "role",
+            "performance_source",
+            "provenance",
+            "rights_class",
+            "consent_status",
+            "consent_status_note",
+        }
+    ),
+    "composition_rights": frozenset({"role", "provenance", "rights_class", "consent_status"}),
+    "recording_master_rights": frozenset(
+        {
+            "role",
+            "provenance",
+            "license",
+            "interpretations",
+            "corpus_pins",
+            "rights_class",
+            "consent_status",
+        }
+    ),
+}
+
+# Codex bot レビュー PR #319 第3巡指摘（P2, 採用, Fix 8）: 層別必須キー
+# 閉集合（上記 `_RIGHTS_MANIFEST_LAYER_REQUIRED_KEYS`）はキーの**存在**しか
+# 強制しておらず、`recording_master_rights.license` を `{}` や任意の
+# スカラー値へ置換しても validator が受理してしまっていた——CC BY-SA 4.0
+# のライセンス種別・適用範囲・義務・出典（`inputs/rights_manifest.json`
+# 実データの4キー）が消えても構造的に valid のままだった。ここでネスト
+# object 値の**形状**（閉じたキー集合 + 各値が非空文字列であること）を
+# 凍結する。同じ「存在のみ検証の object 値」欠陥は
+# `voice_identity_rights.usage_grants`・`recording_master_rights.
+# interpretations` の各エントリ・`recording_master_rights.corpus_pins`
+# にも存在したため、同じ流儀でネスト形状検証を追加する（`usage_cards` は
+# 本スキーマに存在しないキーのため対象外——現物の実キーのみを閉集合化し、
+# 過剰一般化はしない）。
+_RIGHTS_MANIFEST_LICENSE_BLOCK_KEYS: FrozenSet[str] = frozenset(
+    {"value", "scope", "derivative_obligation", "source"}
+)
+_RIGHTS_MANIFEST_USAGE_GRANTS_KEYS: FrozenSet[str] = frozenset(
+    {"run9_identity_anchor", "raw_audio_publication", "model_general_distribution"}
+)
+_RIGHTS_MANIFEST_INTERPRETATION_ENTRY_KEYS: FrozenSet[str] = frozenset(
+    {"status", "question", "note", "source"}
+)
+_RIGHTS_MANIFEST_CORPUS_PINS_TOP_KEYS: FrozenSet[str] = frozenset(
+    {"source_archive_sha256", "expanded_corpus_identity_sha256", "note"}
+)
+_RIGHTS_MANIFEST_CORPUS_PIN_SUB_KEYS: FrozenSet[str] = frozenset(
+    {"source_archive_sha256", "expanded_corpus_identity_sha256"}
+)
+_RIGHTS_MANIFEST_CORPUS_PIN_ENTRY_KEYS: FrozenSet[str] = frozenset({"value", "source"})
+
+
+def _validate_closed_string_object(path: str, obj: Any, required_keys: FrozenSet[str]) -> None:
+    """`obj` が `required_keys` の閉集合ちょうどを持ち、全値が非空文字列で
+    あることを検証する共通ヘルパー（Fix 8）。license/usage_grants/
+    interpretations エントリ/corpus_pins サブブロックが共有する「値が
+    すべて非空文字列の閉じた object」という同型の形状検証を重複実装しない
+    ための集約。未知キー・欠落キー・非 dict・空文字列・非文字列値の
+    いずれも fail-closed で拒否する。
+    """
+    if not isinstance(obj, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(obj).__name__}")
+    unknown = set(obj.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(obj.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+    for key in sorted(required_keys):
+        value = obj[key]
+        if not isinstance(value, str) or not value.strip():
+            raise Run9ValidationError(f"{path}.{key} must be a non-empty string, got {value!r}")
+
+
+def _validate_rights_manifest_license_block(license_block: Any) -> None:
+    """`recording_master_rights.license` のネスト形状を検証する（Codex bot
+    レビュー PR #319 第3巡指摘（P2, 採用, Fix 8）: 旧
+    `validate_rights_manifest_four_layer()` は層の必須キー閉集合で
+    `license` キーの存在は強制していたが、値の中身
+    （`value`/`scope`/`derivative_obligation`/`source`）は一切検証しておらず、
+    `license: {}` やスカラー値へ置換しても構造的に valid のまま通過して
+    いた——CC BY-SA 4.0 のライセンス種別・適用範囲・義務・出典が消えても
+    検出できなかった。`inputs/rights_manifest.json` の実キー4つを閉集合と
+    して凍結し、いずれも非空文字列であることを強制する。
+    """
+    _validate_closed_string_object(
+        "rights manifest.recording_master_rights.license",
+        license_block,
+        _RIGHTS_MANIFEST_LICENSE_BLOCK_KEYS,
+    )
+
+
+def _validate_rights_manifest_corpus_pins_block(corpus_pins: Any) -> None:
+    """`recording_master_rights.corpus_pins` のネスト形状を検証する（Fix 8。
+    64hex 形式検証は Codex bot レビュー PR #319 第10巡指摘, P2, 採用, Fix 23）。
+    `source_archive_sha256`/`expanded_corpus_identity_sha256`（各 `value`/
+    `source` の2キー object）+ `note` の3キー閉集合。source archive pin
+    と expanded corpus pin は互いに代替ではない別対象の2値（rev 0.2 改訂3）
+    であり、いずれかが欠落・スカラー化しても validator が受理してはならない。
+    Fix 8 時点では各 `value` は非空 str であることしか検証しておらず、
+    `"x"` のような使用不能な値でも構造的に valid のまま通過していた——
+    `_SHA256_HEX_RE`（既存の 64hex 検証ヘルパー、`_require_manifest_sha256_hex`
+    等と同一正規表現を再利用）で lowercase 64-hex 形式を追加強制する。
+    """
+    path = "rights manifest.recording_master_rights.corpus_pins"
+    if not isinstance(corpus_pins, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(corpus_pins).__name__}")
+    unknown = set(corpus_pins.keys()) - _RIGHTS_MANIFEST_CORPUS_PINS_TOP_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = _RIGHTS_MANIFEST_CORPUS_PINS_TOP_KEYS - set(corpus_pins.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+    note = corpus_pins["note"]
+    if not isinstance(note, str) or not note.strip():
+        raise Run9ValidationError(f"{path}.note must be a non-empty string, got {note!r}")
+    for sub_key in sorted(_RIGHTS_MANIFEST_CORPUS_PIN_SUB_KEYS):
+        sub_path = f"{path}.{sub_key}"
+        _validate_closed_string_object(
+            sub_path, corpus_pins[sub_key], _RIGHTS_MANIFEST_CORPUS_PIN_ENTRY_KEYS
+        )
+        pin_value = corpus_pins[sub_key]["value"]
+        if not isinstance(pin_value, str) or not _SHA256_HEX_RE.match(pin_value):
+            raise Run9ValidationError(
+                f"{sub_path}.value must be exactly 64 lowercase hex characters (sha256 "
+                f"format), got {pin_value!r}"
+            )
+
+
+# Codex bot レビュー PR #319 第8巡指摘（P2, 採用, Fix 16）: `attestation` は
+# `_RIGHTS_MANIFEST_LAYER_REQUIRED_KEYS["voice_identity_rights"]` によって
+# キーの**存在**しか強制されておらず、`{}` やスカラー、あるいは signer/
+# timestamp/statement を欠いた `{"attested": true}` へ置換しても旧
+# `validate_rights_manifest_four_layer()` が受理してしまっていた——User
+# rights 遷移（PENDING_USER_ATTESTATION → 実際の attest 実施）を裏付ける
+# 証拠が構造的に valid のまま消える。`inputs/rights_manifest.json` の実
+# キー（`attested`/`attested_by`/`attested_at`/`statement`）を閉集合として
+# 凍結し、pending/attested の2形態のみを許可する:
+#   - pending 形態（現状 = PENDING_USER_ATTESTATION）: `attested` が
+#     `False` で、将来 attest 時に埋まる `attested_by`/`attested_at`/
+#     `statement` はいずれも `None`（未実施の宣言 — 実データの現物形態）
+#   - attested 形態: `attested` が `True` で、`attested_by`（signer）/
+#     `attested_at`（UTC ISO 8601 timestamp — repo 規約
+#     `CLAUDE.md` 「タイムスタンプ: UTC, ISO 8601 形式で保存」）/
+#     `statement`（非空 str）がすべて埋まっている
+# さらに層の `rights_class`/`consent_status`（Fix 5 で語彙検証済み）と
+# attestation の形態が矛盾しないことを検証する——`PENDING_USER_ATTESTATION`
+# なのに attestation が attested 形、またはその逆（attested 形の
+# rights_class/consent_status なのに attestation が pending 形）を fail-closed
+# で拒否する。
+_RIGHTS_MANIFEST_ATTESTATION_KEYS: FrozenSet[str] = frozenset(
+    {"attested", "attested_by", "attested_at", "statement"}
+)
+# UTC ISO 8601 タイムスタンプ（`Z` サフィックス必須 — repo 規約に合わせる）。
+_RIGHTS_MANIFEST_UTC_TIMESTAMP_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$"
+)
+
+
+# Codex bot レビュー PR #319 第10巡指摘（P2, 採用, Fix 22）: 上記正規形
+# チェックは桁配置しか見ておらず、`2026-99-99T99:99:99Z` のような実在
+# しない日時（月/日/時/分/秒が暦として成立しない値）を通してしまう。
+# 正規形強制の後段で `datetime.fromisoformat`（Python 3.11+ は `Z`
+# サフィックスをそのまま受理する）により実在日時としてパース可能か
+# どうかを追加検証する。`attested_at`（Fix 16）/ `approved_at`（Fix 19）
+# の両方で共有する。
+def _is_real_utc_timestamp(value: str) -> bool:
+    """`value` が正規形（`_RIGHTS_MANIFEST_UTC_TIMESTAMP_RE`）に一致する
+    前提で、暦として実在する日時かどうかを判定する（例: 月 99 / 日 99 /
+    時 99 / 2 月 30 日はいずれも False）。"""
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _validate_rights_manifest_voice_identity_attestation(layer: Mapping[str, Any]) -> None:
+    """`voice_identity_rights.attestation` の形状 + pending/attested 二形態の
+    整合を検証する（Fix 16。両 status 要求化は Codex bot レビュー PR #319
+    第10巡指摘, P2, 採用, Fix 21。attested 形態の閉語彙化は同第11巡指摘,
+    P2, 採用, Fix 24）。
+
+    旧実装は `rights_class == PENDING or consent_status == PENDING` の
+    `or` 判定で pending 形態を認定していた——`consent_status` だけを
+    `USER_ATTESTED_OWN_VOICE` 等へ書き換え `rights_class` は
+    `PENDING_USER_ATTESTATION` のまま・`attested=false` のままでも
+    「どちらかが pending」を満たすため通過してしまい、attestation
+    なしに正典 permission フィールドの一部が完了を主張できていた。
+    pending 形態は**両方**が `PENDING_USER_ATTESTATION` であること、
+    attested 形態は**どちらも** `PENDING_USER_ATTESTATION` でないことを
+    要求し、片方のみが確定化した中間状態はどちらの方向であっても
+    form mismatch として拒否する。
+
+    Fix 24: 上記の「`PENDING_USER_ATTESTATION` と異なる」という条件は
+    `rights_class`/`consent_status` に `DENIED` 等の任意・矛盾値を許してしまい、
+    権利状態が否認/未記述のまま attested 形態が成立できていた
+    （`granted` usage grant の前提条件①＝attested 形態、と組み合わさると
+    実害化する）。attested 形態は**両方**が閉語彙値
+    `_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE`
+    （"USER_ATTESTED_OWN_VOICE"）と厳密一致することを要求する——
+    `DENIED`・任意文字列はもちろん、旧条件では通っていた
+    `PENDING_USER_ATTESTATION` 以外の非閉語彙値もすべて拒否する。
+    閉語彙は各1値の閉集合であり、拒否・撤回等の他状態は将来の design
+    revision で語彙追加するまで表現不能（fail-closed）。
+    """
+    path = "rights manifest.voice_identity_rights.attestation"
+    attestation = layer.get("attestation")
+    if not isinstance(attestation, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(attestation).__name__}")
+    unknown = set(attestation.keys()) - _RIGHTS_MANIFEST_ATTESTATION_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = _RIGHTS_MANIFEST_ATTESTATION_KEYS - set(attestation.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+
+    attested = attestation["attested"]
+    if not isinstance(attested, bool):
+        raise Run9ValidationError(f"{path}.attested must be a bool, got {attested!r}")
+
+    rights_class = layer.get("rights_class")
+    consent_status = layer.get("consent_status")
+    rights_class_is_pending = rights_class == _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION
+    consent_status_is_pending = (
+        consent_status == _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION
+    )
+
+    if not attested:
+        for key in ("attested_by", "attested_at", "statement"):
+            if attestation[key] is not None:
+                raise Run9ValidationError(
+                    f"{path}.{key} must be null while attested is false (pending form), "
+                    f"got {attestation[key]!r}"
+                )
+        if not (rights_class_is_pending and consent_status_is_pending):
+            raise Run9ValidationError(
+                f"{path} is in pending form (attested=false) but rights manifest."
+                f"voice_identity_rights.rights_class/consent_status are not BOTH "
+                f"{_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} "
+                f"(rights_class={rights_class!r}, consent_status={consent_status!r}) — "
+                "status/attestation form mismatch"
+            )
+        return
+
+    attested_by = attestation["attested_by"]
+    if not isinstance(attested_by, str) or not attested_by.strip():
+        raise Run9ValidationError(
+            f"{path}.attested_by must be a non-empty string (signer) when attested is true, "
+            f"got {attested_by!r}"
+        )
+    attested_at = attestation["attested_at"]
+    if (
+        not isinstance(attested_at, str)
+        or not _RIGHTS_MANIFEST_UTC_TIMESTAMP_RE.match(attested_at)
+        or not _is_real_utc_timestamp(attested_at)
+    ):
+        raise Run9ValidationError(
+            f"{path}.attested_at must be a UTC ISO 8601 timestamp denoting a real "
+            f"calendar date/time (e.g. '2026-08-25T00:00:00Z') when attested is true, "
+            f"got {attested_at!r}"
+        )
+    statement = attestation["statement"]
+    if not isinstance(statement, str) or not statement.strip():
+        raise Run9ValidationError(
+            f"{path}.statement must be a non-empty string when attested is true, got {statement!r}"
+        )
+    rights_class_is_attested_vocab = (
+        rights_class == _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE
+    )
+    consent_status_is_attested_vocab = (
+        consent_status == _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE
+    )
+    if not (rights_class_is_attested_vocab and consent_status_is_attested_vocab):
+        raise Run9ValidationError(
+            f"{path} is in attested form (attested=true) but rights manifest."
+            f"voice_identity_rights.rights_class/consent_status are not BOTH the closed-vocab "
+            f"attested value {_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE!r} "
+            f"(rights_class={rights_class!r}, consent_status={consent_status!r}) — "
+            "status/attestation form mismatch (Fix 24: arbitrary/contradictory values such as "
+            "'DENIED' are no longer accepted for the attested form)"
+        )
+
+
+# Codex bot レビュー PR #319 第9巡指摘（P2, 採用, Fix 19）: Fix 8 は
+# usage_grants の3キー閉集合 + 非空文字列という**形状**のみを検証しており、
+# 値そのものは任意の非空文字列を受理していた——
+# `raw_audio_publication`/`model_general_distribution` を手編集で
+# `"granted"` へ書き換えても、`attestation.attested` が `false` のまま
+# validator を通過してしまう。rev 0.2 改訂4（DESIGN_RUN9_REVISION_0.2.md
+# 194-199行）は「raw 音源の公開・モデルの一般配布は別承認まで独立に
+# not_granted 維持」と規定しており、承認証拠なしの公開/配布許可は
+# その規約への違反になる。値語彙を `{not_granted, granted}` の閉集合へ
+# 凍結し、`granted` への遷移には以下2条件を fail-closed で強制する:
+#   ①attestation が attested 形態（`attested=true`、Fix 16 の二形態検証）
+#     であること
+#   ②当該 grant 専用の承認記録（`<grant_key>_approval` — grant ごとに
+#     独立、`raw_audio_publication` を granted にしても
+#     `model_general_distribution` の承認を兼ねない）が存在し、
+#     承認日時（UTC ISO 8601）+ 承認文言（非空 str）を備えること
+# run9_identity_anchor もこの3キーの一つであり、当初は同じ2条件を機械的に
+# 適用した（3キーへ特例なく同一の前提条件を適用する構造そのものが、
+# 「run9_identity_anchor だけ別ルールで granted 化できてしまう」抜け道を
+# 作らないという狙い）。現行 manifest（3キーとも `not_granted`）はこの
+# 前提条件を要求しない not_granted 形のまま不変で通る。
+#
+# Codex bot レビュー PR #319 第14巡指摘（P2, 採用, Fix 27）——上記「特例
+# なく同一」裁定の訂正: DESIGN_RUN9_REVISION_0.2.md 194-203行（改訂4）が
+# 定める正典フローは、rights manifest 記載の**別承認**を要求するのは
+# `raw_audio_publication`（raw 音源の公開）と `model_general_distribution`
+# （モデルの一般配布）の2件のみであり、`run9_identity_anchor`（RUN9 内部
+# での identity anchor 使用）は「User attest 完了後、anchor の grant が
+# それに束縛される」という記述（196-199行）であって、attestation 自体が
+# anchor grant の根拠——別途の承認記録は要求されない。第9巡裁定（Fix 19）
+# が3キー一律で承認記録を必須化したのは過剰一般化であり、User が規定
+# どおり attest を完了して `run9_identity_anchor` を `granted` にする
+# 正常遷移を、根拠のない `run9_identity_anchor_approval` 捏造なしには
+# 通過できなくしてしまっていた。
+#
+# 訂正後の規則（grant 別）:
+#   `raw_audio_publication` / `model_general_distribution`
+#     （`_RIGHTS_MANIFEST_USAGE_GRANTS_REQUIRING_SEPARATE_APPROVAL`）:
+#     従来どおり①attested 形態 ②grant 専用の承認記録（`<grant>_approval`）
+#     の両方を要求する（rev 0.2 改訂4の「別承認」規定はこの2キーのみに
+#     適用される）。
+#   `run9_identity_anchor`: ①attested 形態のみを要求する。承認記録
+#     （`run9_identity_anchor_approval`）は要求しない——存在しなくても
+#     `granted` 遷移は受理する。仮に付与されていても拒否はしない
+#     （`run9_identity_anchor_approval` は `_RIGHTS_MANIFEST_USAGE_GRANTS_
+#     KEYS` から機械的に導出される既存の閉集合 `allowed_keys` に元々
+#     含まれているキーであり、「規定にない記録の混入は未知キーとして
+#     拒否する」流儀を適用すると該当しない——閉集合に既にあるキーを
+#     追加の必須性チェックなしに通す方が、正典フローが求めない証跡の
+#     捏造を誘発しないぶん安全と判断した）。付与されている場合は
+#     `_validate_rights_manifest_usage_grant_approval_record()` で形状を
+#     検証する（ゴミデータの無検証通過は防ぐが、必須にはしない）。
+_RIGHTS_MANIFEST_USAGE_GRANT_NOT_GRANTED = "not_granted"
+_RIGHTS_MANIFEST_USAGE_GRANT_GRANTED = "granted"
+_RIGHTS_MANIFEST_USAGE_GRANT_VALUES: FrozenSet[str] = frozenset(
+    {_RIGHTS_MANIFEST_USAGE_GRANT_NOT_GRANTED, _RIGHTS_MANIFEST_USAGE_GRANT_GRANTED}
+)
+_RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_SUFFIX = "_approval"
+_RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_KEYS: FrozenSet[str] = frozenset(
+    {"approved_at", "approval_statement"}
+)
+# Fix 27: 別承認（grant 専用の承認記録）を要求する2キー。
+# `run9_identity_anchor` はこの集合に含めない — attestation 自体が
+# anchor grant の根拠であり、追加の承認記録は要求しない
+# （DESIGN_RUN9_REVISION_0.2.md 194-203行）。
+_RIGHTS_MANIFEST_USAGE_GRANTS_REQUIRING_SEPARATE_APPROVAL: FrozenSet[str] = frozenset(
+    {"raw_audio_publication", "model_general_distribution"}
+)
+
+
+def _validate_rights_manifest_usage_grant_approval_record(grant_key: str, approval: Any) -> None:
+    """`usage_grants.<grant_key>_approval` の形状を検証する（Fix 19）:
+    `approved_at`（UTC ISO 8601 タイムスタンプ）+ `approval_statement`
+    （非空 str）の2キー閉集合。`_validate_rights_manifest_voice_identity_
+    attestation()` の attested 形態フィールドと同じタイムスタンプ正規表現
+    （`_RIGHTS_MANIFEST_UTC_TIMESTAMP_RE`）を再利用する。
+    """
+    path = f"rights manifest.voice_identity_rights.usage_grants.{grant_key}{_RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_SUFFIX}"
+    if not isinstance(approval, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(approval).__name__}")
+    unknown = set(approval.keys()) - _RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = _RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_KEYS - set(approval.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+    approved_at = approval["approved_at"]
+    if (
+        not isinstance(approved_at, str)
+        or not _RIGHTS_MANIFEST_UTC_TIMESTAMP_RE.match(approved_at)
+        or not _is_real_utc_timestamp(approved_at)
+    ):
+        raise Run9ValidationError(
+            f"{path}.approved_at must be a UTC ISO 8601 timestamp denoting a real "
+            f"calendar date/time (e.g. '2026-08-25T00:00:00Z'), got {approved_at!r}"
+        )
+    approval_statement = approval["approval_statement"]
+    if not isinstance(approval_statement, str) or not approval_statement.strip():
+        raise Run9ValidationError(
+            f"{path}.approval_statement must be a non-empty string, got {approval_statement!r}"
+        )
+
+
+def _validate_rights_manifest_usage_grants(layer: Mapping[str, Any]) -> None:
+    """`voice_identity_rights.usage_grants` の値語彙 + `granted` 遷移の
+    前提条件を検証する（Fix 19、grant 別規則は Fix 27 で訂正）。呼び出し元
+    `validate_rights_manifest_four_layer()` が本関数より先に
+    `_validate_rights_manifest_voice_identity_attestation(layer)` を実行
+    済みであることを前提にする（`layer["attestation"]["attested"]` が
+    型検証済みの bool であることに依拠する）。
+
+    grant 別の `granted` 遷移前提条件（Fix 27, PR #319 第14巡, P2, 採用 —
+    第9巡裁定 Fix 19 の「3キー一律」を訂正。DESIGN_RUN9_REVISION_0.2.md
+    194-203行が正）:
+    - `raw_audio_publication` / `model_general_distribution`
+      （`_RIGHTS_MANIFEST_USAGE_GRANTS_REQUIRING_SEPARATE_APPROVAL`）:
+      ①attested 形態 ②grant 専用の承認記録（`<grant>_approval`）の
+      両方が必須（rev 0.2 改訂4の「別承認」規定）。
+    - `run9_identity_anchor`: ①attested 形態のみが必須。承認記録
+      （`run9_identity_anchor_approval`）は要求しない
+      （attestation 自体が anchor grant の根拠）。ただし付与されている
+      場合は形状を検証する（未検証のゴミデータを通さない）。
+    """
+    path = "rights manifest.voice_identity_rights.usage_grants"
+    usage_grants = layer.get("usage_grants")
+    if not isinstance(usage_grants, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(usage_grants).__name__}")
+
+    approval_keys = {
+        f"{grant_key}{_RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_SUFFIX}"
+        for grant_key in _RIGHTS_MANIFEST_USAGE_GRANTS_KEYS
+    }
+    allowed_keys = _RIGHTS_MANIFEST_USAGE_GRANTS_KEYS | approval_keys
+    unknown = set(usage_grants.keys()) - allowed_keys
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = _RIGHTS_MANIFEST_USAGE_GRANTS_KEYS - set(usage_grants.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+
+    attestation = layer["attestation"]
+    attested = attestation["attested"]
+
+    for grant_key in sorted(_RIGHTS_MANIFEST_USAGE_GRANTS_KEYS):
+        value = usage_grants[grant_key]
+        if value not in _RIGHTS_MANIFEST_USAGE_GRANT_VALUES:
+            raise Run9ValidationError(
+                f"{path}.{grant_key} must be one of "
+                f"{sorted(_RIGHTS_MANIFEST_USAGE_GRANT_VALUES)}, got {value!r}"
+            )
+        approval_key = f"{grant_key}{_RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_SUFFIX}"
+        requires_separate_approval = (
+            grant_key in _RIGHTS_MANIFEST_USAGE_GRANTS_REQUIRING_SEPARATE_APPROVAL
+        )
+        if value == _RIGHTS_MANIFEST_USAGE_GRANT_GRANTED:
+            if not attested:
+                raise Run9ValidationError(
+                    f"{path}.{grant_key} is "
+                    f"{_RIGHTS_MANIFEST_USAGE_GRANT_GRANTED!r} but "
+                    "rights manifest.voice_identity_rights.attestation is not in attested form "
+                    "(attested=true) — a usage grant requires User attestation to have "
+                    "completed first"
+                )
+            if requires_separate_approval and approval_key not in usage_grants:
+                raise Run9ValidationError(
+                    f"{path}.{grant_key} is {_RIGHTS_MANIFEST_USAGE_GRANT_GRANTED!r} but is "
+                    f"missing its separate approval record {path}.{approval_key} — "
+                    "raw_audio_publication/model_general_distribution each require independent "
+                    "approval evidence and are never auto-escalated from one another "
+                    "(DESIGN_RUN9_REVISION_0.2.md 改訂4 194-199行). run9_identity_anchor is "
+                    "exempt from this requirement (改訂4 194-203行 — attestation itself is the "
+                    "anchor grant's basis; Fix 27 corrects Fix 19's uniform 3-key rule)"
+                )
+            if approval_key in usage_grants:
+                _validate_rights_manifest_usage_grant_approval_record(grant_key, usage_grants[approval_key])
+        elif approval_key in usage_grants:
+            raise Run9ValidationError(
+                f"{path}.{approval_key} must not be present while {path}.{grant_key} is "
+                f"{_RIGHTS_MANIFEST_USAGE_GRANT_NOT_GRANTED!r} (an approval record only makes "
+                "sense once the grant has actually transitioned to granted)"
+            )
+
+
+def _validate_rights_manifest_layer_status_value(layer_name: str, field_name: str, value: Any) -> None:
+    """層直下の rights_class/consent_status 値の語彙検証（Fix 5）。
+
+    非空文字列であることをまず強制する（削除・null 化・空文字はここで
+    拒否 — permission フィールドの必須化）。値が予約済み裸トークン
+    （`PENDING_USER_ATTESTATION` / `UNRESOLVED_EXTERNAL`）のいずれかに
+    一致する場合のみ、層の主体種別（`_RIGHTS_MANIFEST_LAYER_FIELD_KIND`）
+    と整合しているかを検査する——`_validate_rights_provenance_block()` が
+    provenance ブロック内の角括弧付き placeholder に対して行う誤用拒否
+    ロジックを、角括弧なしの層レベル裸トークン規約へ同型で拡張したもの
+    （Fix 6 の張り替え後、この誤用拒否が全欄で整合することの機械的保証）。
+    それ以外の非空文字列（recording_master_rights.consent_status の
+    `LICENSE_CONFIRMED_USAGE_SCOPE_PENDING_TOOLING_REVIEW` のような具体的
+    記述値）は自由記述として許容する。
+    """
+    path = f"rights manifest.{layer_name}.{field_name}"
+    if not isinstance(value, str) or not value.strip():
+        raise Run9ValidationError(f"{path} must be a non-empty string, got {value!r}")
+    kind = _RIGHTS_MANIFEST_LAYER_FIELD_KIND[layer_name]
+    # Codex bot レビュー PR #319 第16巡指摘, Fix 29（P2, 採用）: 層レベル
+    # status は角括弧なしの裸トークン規約であり、nested provenance の
+    # 角括弧綴り（`<PENDING_USER_ATTESTATION>` / `<UNRESOLVED_EXTERNAL>`）を
+    # status 欄へ持ち込むと上記の裸トークン等値検査をすべてすり抜けて
+    # 「具体的な自由記述値」として受理されてしまう——外部層が User
+    # attestation 経路へ再入する、または未解決なのに解決済みの具体値に
+    # 見える、の両誤導を塞ぐため、角括弧綴りの予約トークンは層 status
+    # 欄では一律拒否する（正しい綴りは裸トークン）。
+    stripped = value.strip()
+    if stripped.startswith("<") and stripped.endswith(">"):
+        inner = stripped[1:-1]
+        if inner in (
+            _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION,
+            _RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL,
+            _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE,
+        ):
+            raise Run9ValidationError(
+                f"{path} uses bracketed sentinel spelling {value!r}; layer-level "
+                "status fields use the bare-token convention — write the token "
+                "without angle brackets (and only where the layer's subject kind "
+                "permits it)"
+            )
+    if (
+        value == _RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION
+        and kind != _RIGHTS_MANIFEST_FIELD_KIND_USER
+    ):
+        raise Run9ValidationError(
+            f"{path} is an external-fact layer; "
+            f"{_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} is reserved for "
+            f"User-attributable layers — use {_RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL!r} instead"
+        )
+    if (
+        value == _RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL
+        and kind != _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL
+    ):
+        raise Run9ValidationError(
+            f"{path} is a User-attributable layer; "
+            f"{_RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL!r} is reserved for "
+            f"external-fact layers — use {_RIGHTS_MANIFEST_STATUS_PENDING_USER_ATTESTATION!r} instead"
+        )
+    # Codex bot レビュー PR #319 第12巡指摘, Fix 25（P2, 採用）: Fix 24 が
+    # `USER_ATTESTED_OWN_VOICE` を voice_identity_rights 層の User-donor
+    # attestation 完了を表す正確な意味として確立した以上、その語彙を
+    # 外部第三者層（performance_rights/composition_rights/
+    # recording_master_rights = kind external）へ手編集で混入させ「User
+    # attestation 済み」を偽装する経路は対称漏れとして塞ぐ——未解決
+    # provenance と並存したまま validate を通過させない。
+    # recording_master_rights を含む自由記述の具体値（このトークンと
+    # 一致しない値）の既存受理には影響しない。
+    if (
+        value == _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE
+        and kind != _RIGHTS_MANIFEST_FIELD_KIND_USER
+    ):
+        raise Run9ValidationError(
+            f"{path} is an external-fact layer; "
+            f"{_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE!r} is reserved for "
+            "voice_identity_rights layer User-donor attestation — for this external layer, use "
+            f"{_RIGHTS_MANIFEST_STATUS_UNRESOLVED_EXTERNAL!r} for an unresolved state or a concrete "
+            "external rights description for a resolved one"
+        )
+
+
+# 層ごとに必須の provenance ブロック（DESIGN_RUN9_REVISION_0.4.md 「4層構造
+# への再編」対応表: performance_rights→performance_author /
+# composition_rights→composition / recording_master_rights→voice_source+
+# synthesis）。voice_identity_rights は donor ledger 転記であり provenance
+# 節自体を持たない別構造のため、本辞書には含めない（validate 側でも別扱い）。
+_RIGHTS_MANIFEST_PROVENANCE_LAYER_BLOCKS: Dict[str, FrozenSet[str]] = {
+    "performance_rights": frozenset({"performance_author"}),
+    "composition_rights": frozenset({"composition"}),
+    "recording_master_rights": frozenset({"voice_source", "synthesis"}),
+}
+
+_RIGHTS_MANIFEST_NOT_APPLICABLE = "not_applicable"
+# `not_applicable` を許すフィールドの宣言的 allowlist（Codex bot レビュー
+# PR #319 第6巡指摘, Fix 12, P2, 採用）: DESIGN_RUN9_REVISION_0.4.md
+# 「provenance の実値充填」表が構造的欠落（値未確定ではなく主体そのものが
+# 存在しない）として `not_applicable` を許すのは
+# performance_author.performance_editor と synthesis.engine /
+# synthesis.voicebank の3欄のみ——いずれも「PJS は自然録音コーパスで
+# UTAU 型の別調声レイヤー/合成エンジンを経由しない」という同一の構造的
+# 不在根拠を共有する。voice_source.owner / performance_author.performer /
+# composition.composer / composition.lyricist のような必須権利保有者欄へ
+# `not_applicable` を通すと、未解決の owner を消去し将来の R9-G1 tooling
+# に NO_UNKNOWN_RIGHTS_HOLDER を偽成立させ得るため、allowlist 外は
+# fail-closed で拒否する（未解決値は `<UNRESOLVED_EXTERNAL>`／
+# `<PENDING_USER_ATTESTATION>` を使わせる）。
+_RIGHTS_MANIFEST_NOT_APPLICABLE_ALLOWLIST: FrozenSet[Tuple[str, str]] = frozenset(
+    {
+        ("performance_author", "performance_editor"),
+        ("synthesis", "engine"),
+        ("synthesis", "voicebank"),
+    }
+)
+# 2026-08-25 User 追加裁定②: 外部不明値と User 帰属未確定値を同一
+# placeholder `<PENDING_USER_ATTESTATION>` で表していた旧実装は誤り
+# だった——User が attest できるのは自身の許諾・裁定のみであり、PJS の
+# performer/composer 等の第三者事実には及ばない。語彙を分離する:
+_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION = "<PENDING_USER_ATTESTATION>"
+_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL = "<UNRESOLVED_EXTERNAL>"
+
+
+def _validate_rights_provenance_block(layer_name: str, block_name: str, block: Any) -> None:
+    """provenance 内の1ブロック（voice_source/performance_author/synthesis/
+    composition のいずれか）が閉集合形状 + 値語彙規約を満たすことを検証する。
+
+    値語彙（2026-08-25 User 追加裁定②）: 非空 str（自由記述文字列）、
+    `<PENDING_USER_ATTESTATION>`（**User 帰属欄のみ** — User 自身が
+    attest すべき対象の未確定値）、`<UNRESOLVED_EXTERNAL>`（**外部事実欄
+    のみ** — 第三者の事実で repo 内に確認できる記録が無い未解決値）、
+    または `not_applicable`（`note` に非空の理由説明を必須で伴う — 値と
+    理由を切り離さない、捏造禁止規律。かつ
+    `_RIGHTS_MANIFEST_NOT_APPLICABLE_ALLOWLIST` 記載の3欄
+    （performance_author.performance_editor / synthesis.engine /
+    synthesis.voicebank）以外では fail-closed で拒否する — Codex bot
+    レビュー PR #319 第6巡指摘, Fix 12, P2, 採用。値未確定ではなく主体
+    そのものが構造的に存在しない場合のみ許す語彙であり、owner/performer/
+    composer/lyricist のような必須権利保有者欄で使うと未解決を消去し
+    NO_UNKNOWN_RIGHTS_HOLDER を偽成立させ得る）。フィールドの種別と異なる
+    placeholder を使った場合は拒否する（例: 外部事実欄に
+    `<PENDING_USER_ATTESTATION>` を使うのは誤用 — 旧
+    `performance_author.performer`/`composition.composer`/`lyricist` が
+    この誤用の実例だった）。
+    """
+    field_kinds = _RIGHTS_MANIFEST_PROVENANCE_BLOCK_VALUE_KEYS[block_name]
+    value_keys = frozenset(field_kinds.keys())
+    path = f"rights manifest.{layer_name}.provenance.{block_name}"
+    if not isinstance(block, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(block).__name__}")
+    allowed_keys = value_keys | {"note"}
+    unknown = set(block.keys()) - allowed_keys
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = value_keys - set(block.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+    uses_not_applicable = False
+    for key in sorted(value_keys):
+        value = block[key]
+        if not isinstance(value, str) or not value.strip():
+            raise Run9ValidationError(f"{path}.{key} must be a non-empty string, got {value!r}")
+        if value == _RIGHTS_MANIFEST_NOT_APPLICABLE:
+            if (block_name, key) not in _RIGHTS_MANIFEST_NOT_APPLICABLE_ALLOWLIST:
+                raise Run9ValidationError(
+                    f"{path}.{key} does not permit 'not_applicable' — only "
+                    "performance_author.performance_editor / synthesis.engine / "
+                    "synthesis.voicebank may be structurally absent; for an unresolved "
+                    f"value use {_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} (external-fact "
+                    f"field) or {_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} "
+                    "(User-attributable field) instead"
+                )
+            uses_not_applicable = True
+            continue
+        kind = field_kinds[key]
+        if value == _RIGHTS_MANIFEST_PENDING_USER_ATTESTATION and kind != _RIGHTS_MANIFEST_FIELD_KIND_USER:
+            raise Run9ValidationError(
+                f"{path}.{key} is an external-fact field; "
+                f"{_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} is reserved for "
+                f"User-attributable fields — use {_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} instead"
+            )
+        if value == _RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL and kind != _RIGHTS_MANIFEST_FIELD_KIND_EXTERNAL:
+            raise Run9ValidationError(
+                f"{path}.{key} is a User-attributable field; "
+                f"{_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} is reserved for "
+                f"external-fact fields — use {_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} instead"
+            )
+        # Codex bot レビュー PR #319 第13巡指摘, Fix 26（P2, 採用）: Fix 25 は
+        # 層直下の rights_class/consent_status（裸トークン）への
+        # `USER_ATTESTED_OWN_VOICE` 混入は塞いだが、本ブロック（provenance
+        # 内の performance_author.performer / composition.composer /
+        # composition.lyricist / voice_source.owner 等、角括弧なし自由記述
+        # を受理する具体値検証パス）は素通りしていた——第三者 author/権利者
+        # 欄を User-donor 完了トークンで置換したまま validate を通過でき、
+        # R9-G1 が消費する provenance を汚染し得る。Fix 25 と同型の
+        # fail-closed 拒否を対称に適用する。
+        if (
+            value == _RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE
+            and kind != _RIGHTS_MANIFEST_FIELD_KIND_USER
+        ):
+            raise Run9ValidationError(
+                f"{path}.{key} is an external-fact field; "
+                f"{_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE!r} is reserved for "
+                "voice_identity_rights layer User-donor attestation — for this external field, use "
+                f"{_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} for an unresolved state or a concrete "
+                "external rights description for a resolved one"
+            )
+    if uses_not_applicable:
+        note = block.get("note")
+        if not isinstance(note, str) or not note.strip():
+            raise Run9ValidationError(
+                f"{path} uses 'not_applicable' but is missing a non-empty 'note' reason"
+            )
+
+
+def extract_voice_identity_rights_layer(four_layer_rights_manifest: Mapping[str, Any]) -> Dict[str, Any]:
+    """rev 0.4 の4層 rights_manifest（schema `run9-rights-manifest/2.0`）
+    から `voice_identity_rights` 層を取り出し、
+    `verify_rights_manifest_against_ledger()` が受理する旧 schema
+    `run9-user-donor-rights/1.0` 相当のフラット構造へ変換する。
+
+    `verify_rights_manifest_against_ledger()` 自体は書き換えない —
+    本関数はその手前に立つアダプタであり、`.get("schema")`/`.get("entries")`
+    のみを読む同関数の契約に合わせて `schema_legacy` を `schema` へ
+    読み替える。返り値の他のキー（`entries`/`usage_grants`/`attestation`
+    等）は layer の内容をそのまま透過する（コピーであり、呼び出し元が
+    書き換えても入力 `four_layer_rights_manifest` には影響しない）。
+
+    抽出は `validate_rights_manifest_four_layer()` による4層全体検証を
+    内包する（fail-closed）——`performance_rights`/`composition_rights`/
+    `recording_master_rights` のいずれかが欠落・不正な manifest からは
+    `voice_identity_rights` 単独が構造的に妥当でも抽出そのものを拒否する。
+    RUN9_CONTRACT.yaml documented フロー「層を抽出して legacy verifier へ
+    渡す」が他の必須層を静かに失ったまま donor rights だけ検証できて
+    しまう抜け道を塞ぐ（Codex bot レビュー PR #319 第7巡指摘 Fix 14、P2、
+    採用）。
+    """
+    if not isinstance(four_layer_rights_manifest, dict):
+        raise Run9ValidationError(
+            "four-layer rights manifest must be an object, got "
+            f"{type(four_layer_rights_manifest).__name__}"
+        )
+    validate_rights_manifest_four_layer(four_layer_rights_manifest)
+    top_schema = four_layer_rights_manifest.get("schema")
+    if top_schema != SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER:
+        raise Run9ValidationError(
+            f"four-layer rights manifest schema must be exactly "
+            f"{SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER!r}, got {top_schema!r}"
+        )
+    layer = four_layer_rights_manifest.get("voice_identity_rights")
+    if not isinstance(layer, dict):
+        raise Run9ValidationError(
+            f"voice_identity_rights layer must be an object, got {type(layer).__name__}"
+        )
+    legacy_schema = layer.get("schema_legacy")
+    if legacy_schema != "run9-user-donor-rights/1.0":
+        raise Run9ValidationError(
+            "voice_identity_rights.schema_legacy must be exactly 'run9-user-donor-rights/1.0', "
+            f"got {legacy_schema!r}"
+        )
+    flat = copy.deepcopy(dict(layer))
+    flat.pop("schema_legacy")
+    flat["schema"] = legacy_schema
+    return flat
+
+
+def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
+    """4層 rights_manifest（schema `run9-rights-manifest/2.0`）の構造を
+    検証する。実体（provenance の個別値が事実として正しいか）は
+    R9-G1 tooling の職務のまま——本関数は構造・閉じたキー集合・原則3式・
+    禁止文言・4層すべての存在に加え、layer ごとの provenance ネスト
+    ブロック形状（`_RIGHTS_MANIFEST_PROVENANCE_LAYER_BLOCKS`/
+    `_validate_rights_provenance_block()` — voice_source{owner,source_id}/
+    performance_author{performer,performance_editor}/
+    synthesis{engine,voicebank}/composition{composer,lyricist}の閉集合と
+    値語彙）、さらに `recording_master_rights.interpretations`（CC BY-SA
+    4.0 の share-alike 義務が合成出力へ及ぶかという法解釈を、事実である
+    `license` 節から分離する節 — 2026-08-25 User 追加裁定②）の存在・形状
+    まで検証する（`validate_branch_write_policy_manifest()` 等と同じ
+    「構造のみ」の境界宣言）。`voice_identity_rights.attestation` は
+    pending（`attested=False` + signer/timestamp/statement すべて `None`）/
+    attested（`attested=True` + signer/UTC ISO 8601 timestamp/非空
+    statement すべて充足）の二形態のみを許可し、層の rights_class/
+    consent_status（PENDING_USER_ATTESTATION か否か）との整合も検証する
+    （`_validate_rights_manifest_voice_identity_attestation()` — Codex bot
+    レビュー PR #319 第8巡指摘、Fix 16、P2、採用）。fail-closed（未知キー
+    拒否・欠落キーのデフォルト補完なし・`provenance: {}` やブロック欠落を
+    素通りさせない — Codex bot レビュー PR #319 第1巡指摘2、P2、採用）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"rights manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _RIGHTS_MANIFEST_FOUR_LAYER_TOP_KEYS
+    if unknown:
+        raise Run9ValidationError(f"rights manifest has unknown top-level key(s): {sorted(unknown)}")
+    missing = _RIGHTS_MANIFEST_FOUR_LAYER_TOP_KEYS - {"history"} - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"rights manifest missing required top-level key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER:
+        raise Run9ValidationError(
+            f"rights manifest schema must be exactly {SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER!r}, "
+            f"got {schema!r}"
+        )
+
+    principles = data["principles"]
+    if not isinstance(principles, dict) or "statements" not in principles:
+        raise Run9ValidationError("rights manifest.principles must be an object with a 'statements' key")
+    statements = principles["statements"]
+    if not isinstance(statements, list) or tuple(statements) != RIGHTS_MANIFEST_PRINCIPLES:
+        raise Run9ValidationError(
+            f"rights manifest.principles.statements must be exactly {list(RIGHTS_MANIFEST_PRINCIPLES)} "
+            f"(order included), got {statements!r}"
+        )
+
+    auto_interp = data["auto_interpretation_prohibited"]
+    if not isinstance(auto_interp, str) or not auto_interp.strip():
+        raise Run9ValidationError(
+            "rights manifest.auto_interpretation_prohibited must be a non-empty string"
+        )
+
+    hard_gate = data["hard_gate"]
+    if not isinstance(hard_gate, str) or not hard_gate.strip():
+        raise Run9ValidationError("rights manifest.hard_gate must be a non-empty string")
+
+    for layer_name in RIGHTS_MANIFEST_LAYER_NAMES:
+        layer = data[layer_name]
+        if not isinstance(layer, dict):
+            raise Run9ValidationError(f"rights manifest.{layer_name} must be an object")
+        # Fix 5（P2, 採用）: 層ごとの必須キー閉集合を強制する——欠落キー
+        # （license/rights_class/consent_status 等の permission フィールド
+        # の削除を含む）・未知キーのいずれも拒否する。role/provenance の
+        # 個別存在チェック（このすぐ下）より前に走らせることで、
+        # 「role だけ・provenance だけ揃っていれば他は素通り」という旧
+        # 経路を構造的に閉じる。
+        required_layer_keys = _RIGHTS_MANIFEST_LAYER_REQUIRED_KEYS[layer_name]
+        missing_layer_keys = required_layer_keys - set(layer.keys())
+        if missing_layer_keys:
+            raise Run9ValidationError(
+                f"rights manifest.{layer_name} missing required key(s): {sorted(missing_layer_keys)}"
+            )
+        extra_layer_keys = set(layer.keys()) - required_layer_keys
+        if extra_layer_keys:
+            raise Run9ValidationError(
+                f"rights manifest.{layer_name} has unknown key(s): {sorted(extra_layer_keys)}"
+            )
+        if not isinstance(layer.get("role"), str) or not layer["role"].strip():
+            raise Run9ValidationError(f"rights manifest.{layer_name}.role must be a non-empty string")
+        # Fix 5（P2, 採用）+ Fix 6 の張り替え後の整合確認: rights_class/
+        # consent_status は必須キーとして存在するだけでなく、値語彙も検証
+        # する（既存の placeholder 語彙 — 層レベルの裸トークン規約 — + 自由
+        # 記述の具体値のいずれかであることの確認、および誤用拒否）。
+        _validate_rights_manifest_layer_status_value(layer_name, "rights_class", layer.get("rights_class"))
+        _validate_rights_manifest_layer_status_value(
+            layer_name, "consent_status", layer.get("consent_status")
+        )
+        if layer_name == "voice_identity_rights":
+            # Fix 16（P2, 採用）: attestation の形状 + pending/attested 二形態の
+            # 整合を検証する（`{}`/スカラー/signer 欠落の `{"attested": true}`
+            # を素通りさせない）。usage_grants の granted 前提条件（Fix 19）が
+            # attestation の attested 形態を参照するため、usage_grants の
+            # 検証より先に実行する（attestation の形状が既に妥当であることを
+            # 前提にできる）。
+            _validate_rights_manifest_voice_identity_attestation(layer)
+            # Fix 8（P2, 採用, 旧実装）: usage_grants は必須キーとして存在
+            # するだけでは中身の形状を保証しない——`{}` やスカラー置換でも
+            # 旧実装は素通りしていた。Fix 19（P2, 採用, Codex bot レビュー
+            # PR #319 第9巡指摘）でさらに強化: 3キー閉集合 + 非空文字列
+            # という Fix 8 の最小制約だけでは、値そのものを任意の文字列へ
+            # 書き換えても（例 raw_audio_publication を素通りする
+            # `"granted"` へ）attestation.attested=false のまま通ってしまう
+            # ——rev 0.2 改訂4「raw 音源の公開・モデルの一般配布は別承認」を
+            # 裏付ける証拠なしに公開/配布許可を手編集で成立させ得た。値語彙を
+            # `{not_granted, granted}` の閉集合へ凍結し、granted への遷移は
+            # ①attestation が attested 形態であること ②当該 grant の別承認
+            # の証拠記録（承認日時 UTC ISO 8601 + 承認文言）が存在すること、
+            # の両方を fail-closed で要求する。
+            _validate_rights_manifest_usage_grants(layer)
+        if layer_name != "voice_identity_rights":
+            # performance_rights/composition_rights/recording_master_rights は
+            # いずれも provenance 節を持つ（voice_identity_rights は donor
+            # ledger 転記であり provenance 節を持たない別構造 — 混同しない）。
+            provenance = layer.get("provenance")
+            if not isinstance(provenance, dict):
+                raise Run9ValidationError(
+                    f"rights manifest.{layer_name}.provenance must be an object"
+                )
+            # Codex bot レビュー PR #319 第1巡指摘2（P2）採用: dict である
+            # ことだけでなく、層ごとの必須ブロック（下記
+            # _RIGHTS_MANIFEST_PROVENANCE_LAYER_BLOCKS）が揃っていること・
+            # 未知ブロックが無いこと・各ブロック内部の形状が閉集合を満たす
+            # ことまで検証する（`provenance: {}` を素通りさせない）。
+            required_blocks = _RIGHTS_MANIFEST_PROVENANCE_LAYER_BLOCKS[layer_name]
+            missing_blocks = required_blocks - set(provenance.keys())
+            if missing_blocks:
+                raise Run9ValidationError(
+                    f"rights manifest.{layer_name}.provenance missing required block(s): "
+                    f"{sorted(missing_blocks)}"
+                )
+            extra_blocks = set(provenance.keys()) - required_blocks
+            if extra_blocks:
+                raise Run9ValidationError(
+                    f"rights manifest.{layer_name}.provenance has unknown block(s): "
+                    f"{sorted(extra_blocks)}"
+                )
+            for block_name in sorted(required_blocks):
+                _validate_rights_provenance_block(layer_name, block_name, provenance[block_name])
+
+        if layer_name == "recording_master_rights":
+            # Fix 8（P2, 採用）: license は必須キーとして存在するだけでは
+            # 中身の形状を保証しない——`{}` や任意のスカラーへ置換しても
+            # 旧実装は素通りしていた。value/scope/derivative_obligation/
+            # source の4キー閉集合 + 非空文字列を強制する（CC BY-SA 4.0 の
+            # ライセンス種別・適用範囲・義務・出典の欠落を検出可能にする）。
+            _validate_rights_manifest_license_block(layer.get("license"))
+            # Fix 8（P2, 採用）: corpus_pins も同型の未検証 object だった
+            # （source archive pin / expanded corpus pin の2値が欠落・
+            # スカラー化しても構造的に valid のまま通過していた）。
+            _validate_rights_manifest_corpus_pins_block(layer.get("corpus_pins"))
+            # 2026-08-25 User 追加裁定②: CC BY-SA 4.0 の share-alike 義務が
+            # 合成出力へ及ぶかは事実でなく法解釈であり、`license`（事実）から
+            # 分離した `interpretations` 節を必須とする。
+            interpretations = layer.get("interpretations")
+            if not isinstance(interpretations, dict) or not interpretations:
+                raise Run9ValidationError(
+                    "rights manifest.recording_master_rights.interpretations must be a "
+                    "non-empty object (事実とライセンス適用の法解釈を分離する節が必須 — "
+                    "2026-08-25 User 追加裁定②)"
+                )
+            for interp_key, interp_value in interpretations.items():
+                # Fix 8（P2, 採用）: 旧実装は status/question/note の3キーが
+                # 非空文字列であることのみを見ており、未知キーの混入
+                # （実データが持つ `source` を含む）を拒否していなかった。
+                # status/question/note/source の4キー閉集合を強制する。
+                _validate_closed_string_object(
+                    f"rights manifest.recording_master_rights.interpretations.{interp_key}",
+                    interp_value,
+                    _RIGHTS_MANIFEST_INTERPRETATION_ENTRY_KEYS,
+                )
+
+    performance_source = data["performance_rights"].get("performance_source")
+    if not isinstance(performance_source, dict):
+        raise Run9ValidationError("rights manifest.performance_rights.performance_source must be an object")
+    if performance_source.get("id") != PERFORMANCE_SOURCE_ID:
+        raise Run9ValidationError(
+            f"rights manifest.performance_rights.performance_source.id must be "
+            f"{PERFORMANCE_SOURCE_ID!r}, got {performance_source.get('id')!r}"
+        )
+    if performance_source.get("role") != PERFORMANCE_SOURCE_ROLE:
+        raise Run9ValidationError(
+            f"rights manifest.performance_rights.performance_source.role must be "
+            f"{PERFORMANCE_SOURCE_ROLE!r}, got {performance_source.get('role')!r}"
+        )
+
+    # voice_identity_rights 層の内容自体（entries/usage_grants 等）は
+    # `extract_voice_identity_rights_layer()` + 既存
+    # `verify_rights_manifest_against_ledger()` が別途検証する
+    # （層越境の実体検証は本関数の責務外）。
+
+
+# ---------------------------------------------------------------------------
+# rev 0.4（DESIGN_RUN9_REVISION_0.4.md、`RUN9_CONTRACT.yaml` 新設トップ
+# レベル欄 `performance_source`）: 2026-08-25 User 追加裁定「確認メモ /
+# RUN9 用語整理」指示2「置換でなく追加」の実装。既存 teacher 表記
+# （v0.1・rev 0.2/0.3、byte-pin 不変の運用上の呼称）は書き換えず、本欄が
+# Voice Source ≠ Performance Source ≠ Performance Author の分離を明示する
+# 非所有注記の置き場所を担う。
+# ---------------------------------------------------------------------------
+
+_PERFORMANCE_SOURCE_BLOCK_KEYS: FrozenSet[str] = frozenset(
+    {"id", "role", "rights_manifest_ref", "teacher_terminology_note"}
+)
+
+
+def validate_performance_source_block(data: Mapping[str, Any]) -> None:
+    """`RUN9_CONTRACT.yaml` `performance_source` ブロックの構造を検証する。
+    `id`/`role` は凍結値（`PERFORMANCE_SOURCE_ID`/`PERFORMANCE_SOURCE_ROLE`）
+    に厳密一致し、`teacher_terminology_note` は非所有の趣旨（Voice 所有者
+    を意味しない旨）を含む非空文字列でなければならない——文言の一言一句を
+    強制せず、`TEACHER_TERMINOLOGY_NOTE` が満たす2要件（「Voice 所有者」
+    という語と「Voice Source」「Performance Source」「Performance Author」
+    の3語）の存在で判定する（2026-08-25 User 追加裁定 指示1）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"performance_source must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _PERFORMANCE_SOURCE_BLOCK_KEYS
+    if unknown:
+        raise Run9ValidationError(f"performance_source has unknown key(s): {sorted(unknown)}")
+    missing = _PERFORMANCE_SOURCE_BLOCK_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"performance_source missing required key(s): {sorted(missing)}")
+    if data["id"] != PERFORMANCE_SOURCE_ID:
+        raise Run9ValidationError(
+            f"performance_source.id must be {PERFORMANCE_SOURCE_ID!r}, got {data['id']!r}"
+        )
+    if data["role"] != PERFORMANCE_SOURCE_ROLE:
+        raise Run9ValidationError(
+            f"performance_source.role must be {PERFORMANCE_SOURCE_ROLE!r}, got {data['role']!r}"
+        )
+    ref = data["rights_manifest_ref"]
+    if not isinstance(ref, str) or not ref.strip():
+        raise Run9ValidationError("performance_source.rights_manifest_ref must be a non-empty string")
+    note = data["teacher_terminology_note"]
+    if not isinstance(note, str) or not note.strip():
+        raise Run9ValidationError("performance_source.teacher_terminology_note must be a non-empty string")
+    if "Voice 所有者" not in note:
+        raise Run9ValidationError(
+            "performance_source.teacher_terminology_note must state that 'Teacher' does not mean "
+            "the Voice owner (2026-08-25 User 追加裁定 指示1)"
+        )
+    for marker in ("Voice Source", "Performance Source", "Performance Author"):
+        if marker not in note:
+            raise Run9ValidationError(
+                f"performance_source.teacher_terminology_note must reference {marker!r} — the "
+                "Voice Source ≠ Performance Source ≠ Performance Author separation "
+                "(2026-08-25 User 追加裁定 指示1)"
             )

@@ -27,12 +27,14 @@ import run9_schema as m  # noqa: E402
 CONTRACT_PATH = _RUN_DIR / "RUN9_CONTRACT.yaml"
 DOMAIN_DRAFT_PATH = _RUN_DIR / "domains" / "identity_domain_run9_v1.json"
 DESIGN_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md"
-# 現行 design_revision (0.3) の差分メモ。design_revision_doc_sha256 が
+# 現行 design_revision (0.4) の差分メモ。design_revision_doc_sha256 が
 # pin する対象。
-REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.3.md"
-# rev 0.2 文書は無改変のまま存続する（design_revision 系譜の1件）。
+REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.4.md"
+# rev 0.2/0.3 文書は無改変のまま存続する（design_revision 系譜の各1件）。
 REVISION_0_2_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
+REVISION_0_3_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.3.md"
 POR_ADJUDICATION_PATH = _RUN_DIR / "POR_CONCEPT_ADJUDICATION_20260824.txt"
+DERIVED_DESIGN_CHANGES_PATH = _RUN_DIR / "DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt"
 POR_UPLOAD_SOURCE_PATH = Path(
     "/root/.claude/uploads/e505c1c2-c4ad-588b-a1b2-258051a522de/"
     "4cdd727c-RUN9_v0.2_PoR_Concept_Adjudication_20260824.txt"
@@ -1507,15 +1509,15 @@ def _sha256_canonical_json(obj: Any) -> str:
 
 
 def test_revision02_design_revision_constant_is_0_2() -> None:
-    """rev 0.3 では `run9_schema.DESIGN_REVISION` 自体が "0.3" を凍結する
+    """rev 0.4 では `run9_schema.DESIGN_REVISION` 自体が "0.4" を凍結する
     （テスト名は歴史的に revision02_ prefix のまま — Fix 15 の
     founder_genome_shas 改名前例と同様、rename ではなく assertion のみ
     更新する）。"""
-    assert m.DESIGN_REVISION == "0.3"
+    assert m.DESIGN_REVISION == "0.4"
 
 
 def test_revision02_current_contract_declares_0_2(contract_raw: Dict[str, Any]) -> None:
-    assert contract_raw["design_revision"] == "0.3"
+    assert contract_raw["design_revision"] == "0.4"
     m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
 
 
@@ -1530,10 +1532,19 @@ def test_revision02_old_0_1_contract_rejected(contract_raw: Dict[str, Any]) -> N
 
 
 def test_revision03_old_0_2_contract_rejected(contract_raw: Dict[str, Any]) -> None:
-    """design_revision 0.2 → 0.3（PoR メモ編入）: 旧 "0.2" を宣言する
-    contract も同様に意図どおり拒否される。"""
+    """design_revision 0.2 → 0.3 → 0.4: 旧 "0.2" を宣言する contract も
+    引き続き意図どおり拒否される。"""
     tampered = copy.deepcopy(contract_raw)
     tampered["design_revision"] = "0.2"
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
+def test_revision04_old_0_3_contract_rejected(contract_raw: Dict[str, Any]) -> None:
+    """rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
+    の採用）: 旧 "0.3" を宣言する contract も意図どおり拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["design_revision"] = "0.3"
     with pytest.raises(m.Run9ValidationError):
         m.load_run9_contract(tampered)
 
@@ -1544,13 +1555,13 @@ def test_revision03_old_0_2_contract_rejection_message_names_current_revision(
     """PR #317 Codex bot レビュー第1巡 Fix 2 採用: 拒否メッセージが固定
     ファイル名（例: "DESIGN_RUN9_REVISION_0.2.md"）をハードコードして
     いると、design_revision を上げるたびにメッセージ内のファイル名だけが
-    陳腐化する（実際に 0.2 -> 0.3 進行時に発生した不備）。メッセージが
-    `DESIGN_REVISION` 定数（現在は "0.3"）から動的に導出されていること
-    を、"0.2" 拒否時のメッセージに現行の "0.3" が含まれることで確認する
-    — メッセージが旧値のまま固定化されていれば失敗する。"""
+    陳腐化する（実際に 0.2 -> 0.3、0.3 -> 0.4 進行時に発生した不備）。
+    メッセージが `DESIGN_REVISION` 定数（現在は "0.4"）から動的に導出
+    されていることを、"0.2" 拒否時のメッセージに現行の "0.4" が含まれる
+    ことで確認する — メッセージが旧値のまま固定化されていれば失敗する。"""
     tampered = copy.deepcopy(contract_raw)
     tampered["design_revision"] = "0.2"
-    with pytest.raises(m.Run9ValidationError, match="0.3"):
+    with pytest.raises(m.Run9ValidationError, match="0.4"):
         m.load_run9_contract(tampered)
 
 
@@ -1843,43 +1854,53 @@ def test_revision02_af0_vs_bundle_hash_convention_difference_documented() -> Non
     assert "compute_file_sha256" in schema_source
 
 
-def test_revision02_backbone_runtime_bundle_sha_pending_while_render_commit_unconfirmed(
+def test_revision02_backbone_runtime_bundle_sha_pinned_via_run9_render_code_commit(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """Codex bot レビュー PR #316 第1巡指摘（P2, 866fcc8, 採用）:
-    bundle 内 `render_code_commit` は直接記録ではなく推論値（RUN6 export
-    記録 s5_record 自体には commit が明記されていない）のため
-    `status: "INFERRED_UNCONFIRMED"` へ降格した。連動して
-    `backbone_runtime_bundle_sha` も PINNED から PENDING へ降格している
-    （`backbone_checkpoint_sha` は直接記録4件一致のため対象外・PINNED の
-    まま — 下の `test_revision02_backbone_checkpoint_sha_pinned_and_matches_ruling`
-    が別途確認する）。"""
+    """rev 0.4（DESIGN_RUN9_REVISION_0.4.md「User裁定a/bの記録」の b）→
+    2026-08-25 同日中の追加 User 裁定①による是正後: `backbone_runtime_bundle_sha`
+    が PINNED である根拠は独立の前方宣言欄 `run9_render_code_commit`
+    （status: `DECLARED_FOR_RUN9`）の確定であり、`render_code_commit`
+    （RUN6 の歴史的 export provenance）は `INFERRED_UNCONFIRMED` のまま
+    でよい——歴史的事実は遡って attest しない方針のため両者は独立
+    （`backbone_checkpoint_sha` は元々直接記録4件一致のため PINNED の
+    まま——対象は別欄）。テスト名は歴史的に revision02_ prefix のまま
+    （rename ではなく assertion のみ更新する既存の repo 慣習）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    assert bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+    assert bundle["historical_export_provenance"]["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+    assert bundle["run9_runtime_inputs"]["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9"
+    assert (
+        bundle["run9_runtime_inputs"]["run9_render_code_commit"]["declaration"]["declared_by"]
+        == "User"
+    )
+    assert (
+        bundle["run9_runtime_inputs"]["run9_render_code_commit"]["declaration"]["declared_at"]
+        == "2026-08-25"
+    )
 
     field = contract_raw["backbone_runtime_bundle_sha"]
-    assert field["status"] == "PENDING"
-    assert field["value"] is None
-    assert "INFERRED_UNCONFIRMED" in field["reason"] or "render_code_commit" in field["reason"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(BACKBONE_BUNDLE_PATH)
 
 
 def test_revision02_render_code_commit_status_and_bundle_sha_status_are_consistent(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """負例的整合検査: bundle json の `render_code_commit.status` が
-    `INFERRED_UNCONFIRMED` である間は、contract の
-    `backbone_runtime_bundle_sha.status` が `PINNED` になっていないこと
-    （両者の食い違いを機械的に検出する）。将来 render_code_commit が
-    確定（direct record または User attestation）して status が変わったら、
-    このテストも合わせて更新が必要になる — その追随漏れ自体を検出する
-    ためのテストでもある。"""
+    """負例的整合検査（2026-08-25 User 追加裁定①で意味論を更新）: contract
+    の `backbone_runtime_bundle_sha.status` が `PINNED` であるとき、その
+    根拠であるべき bundle 内 `run9_render_code_commit.status` が
+    `DECLARED_FOR_RUN9` になっていること（両者の食い違いを機械的に検出
+    する）。旧版は `render_code_commit`（歴史的推定）の status を根拠と
+    見なしていたが、追加裁定①により根拠は独立の前方宣言欄へ移った——
+    `render_code_commit` が `INFERRED_UNCONFIRMED` のままであることは
+    もはや不整合ではない。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     bundle_field_status = contract_raw["backbone_runtime_bundle_sha"]["status"]
-    if bundle["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED":
-        assert bundle_field_status != "PINNED", (
-            "backbone_runtime_bundle_sha は PINNED だが、bundle 内 render_code_commit は "
-            "依然 INFERRED_UNCONFIRMED — 未確定の推論値を含む bundle を PINNED として "
-            "契約に取り込んでしまっている"
+    if bundle_field_status == "PINNED":
+        assert bundle["run9_runtime_inputs"]["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9", (
+            "backbone_runtime_bundle_sha は PINNED だが、bundle 内 "
+            "run9_render_code_commit は DECLARED_FOR_RUN9 になっていない — "
+            "PINNED 判定の根拠が bundle 内で裏付けられていない"
         )
 
 
@@ -1891,8 +1912,8 @@ def test_revision02_backbone_runtime_bundle_sha_matches_actual_file_once_pinned(
     / `test_revision02_compute_file_sha256_matches_design_doc_sha256_pin`）
     と同型で事前配線する（Codex bot レビュー PR #316 第9巡指摘, e490985,
     部分採用）。現状 status は PENDING のため value は None のままである
-    ことだけを確認するが、将来 render_code_commit が確定して本欄が
-    PINNED へ昇格した瞬間、この同じテストが
+    ことだけを確認するが、将来 `run9_render_code_commit`（前方宣言欄）が
+    確定して本欄が PINNED へ昇格した瞬間、この同じテストが
     `compute_file_sha256(inputs/backbone_runtime_bundle.json)` との一致を
     自動的に強制するようになる（テストコードの変更を要さない）。
 
@@ -1917,15 +1938,28 @@ def test_revision02_backbone_runtime_bundle_sha_matches_actual_file_once_pinned(
 
 
 def test_revision02_render_code_commit_value_and_confirmation_metadata_present() -> None:
-    """降格後も値自体（推論結果）と根拠・確定条件は保持されていること。"""
+    """2026-08-25 User 追加裁定①による差し戻し後も、値自体・根拠
+    （inference_basis、無改変で保持）・history（昇格→差し戻し両イベント
+    の記録）がいずれも保持されていること。attestation はもはや本欄には
+    無い（実体的な意味は run9_render_code_commit.declaration へ移った —
+    別テスト test_rev04_run9_render_code_commit_declared_for_run9_with_ruling_reference
+    参照）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    rcc = bundle["render_code_commit"]
+    rcc = bundle["historical_export_provenance"]["render_code_commit"]
     assert rcc["commit_full"] == "e2307b1080b00f3999702ce9017cfd75c7f862fe"
     assert rcc["commit_short"] == "e2307b1"
     assert rcc["status"] == "INFERRED_UNCONFIRMED"
     assert rcc["confirmation_required"]
     assert rcc["inference_basis"]
-    # RUN6 export 記録自体には commit が明記されていない事実が明文化されていること。
+    assert "attestation" not in rcc
+    history = rcc["history"]
+    # PR #319 第2巡指摘（P2, 採用）の構造分離イベントが append-only で
+    # 追加され、2026-08-25 の昇格→差し戻しの2件に続く3件目となった。
+    assert len(history) == 3
+    assert all(h["date"] == "2026-08-25" for h in history)
+    assert any("PR #319" in h["event"] for h in history)
+    # RUN6 export 記録自体には commit が明記されていない事実が明文化されていること
+    # （note は無改変ではないが、この根拠自体は消えていないことを確認する）。
     assert "s5_record" in rcc["note"]
     assert "does not" in rcc["note"].lower() or "does NOT" in rcc["note"]
 
@@ -1933,7 +1967,7 @@ def test_revision02_render_code_commit_value_and_confirmation_metadata_present()
 def test_revision02_backbone_bundle_acoustic_onnx_matches_ruling() -> None:
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     assert (
-        bundle["acoustic_onnx_sha256"]["value"]
+        bundle["run9_runtime_inputs"]["acoustic_onnx_sha256"]["value"]
         == "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706"
     )
 
@@ -1945,7 +1979,10 @@ def test_revision02_backbone_bundle_checkpoint_matches_contract() -> None:
     降格とは独立に、両ファイルとも引き続き PINNED 相当の値を持つ。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
-    assert bundle["checkpoint_sha256"]["value"] == contract_raw["backbone_checkpoint_sha"]["value"]
+    assert (
+        bundle["run9_runtime_inputs"]["checkpoint_sha256"]["value"]
+        == contract_raw["backbone_checkpoint_sha"]["value"]
+    )
 
 
 def test_revision02_backbone_bundle_run7_not_used_records_teacher_swap_reason() -> None:
@@ -1958,12 +1995,16 @@ def test_revision02_backbone_bundle_run7_not_used_records_teacher_swap_reason() 
 
 
 def test_revision02_rights_manifest_is_pending_user_attestation() -> None:
+    """rev 0.4（4層再編）後: voice_identity_rights 層の内容・attest 対象は
+    無改変のまま（DESIGN_RUN9_REVISION_0.4.md 変更1・2「attest対象の更新」
+    — User裁定「aとbを承認」のa = 新4層構造に対する attest は次段で確定）。"""
     rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
-    assert rights["rights_class"] == "PENDING_USER_ATTESTATION"
-    assert rights["consent_status"] == "PENDING_USER_ATTESTATION"
-    assert rights["attestation"]["attested"] is False
-    assert rights["usage_grants"]["raw_audio_publication"] == "not_granted"
-    assert rights["usage_grants"]["model_general_distribution"] == "not_granted"
+    layer = rights["voice_identity_rights"]
+    assert layer["rights_class"] == "PENDING_USER_ATTESTATION"
+    assert layer["consent_status"] == "PENDING_USER_ATTESTATION"
+    assert layer["attestation"]["attested"] is False
+    assert layer["usage_grants"]["raw_audio_publication"] == "not_granted"
+    assert layer["usage_grants"]["model_general_distribution"] == "not_granted"
 
 
 def _load_rights_manifest_and_ledger() -> tuple[Dict[str, Any], Dict[str, Any]]:
@@ -1973,8 +2014,17 @@ def _load_rights_manifest_and_ledger() -> tuple[Dict[str, Any], Dict[str, Any]]:
     は使わない（Codex bot レビュー PR #316 第10巡指摘採用, c34bdff: 生
     `json.loads()` は同一 entry 内の重複キーを last-key-wins で黙って
     解決してしまうため、rights 検証テスト群全体をこの2関数経由へ統一する）。
+
+    rev 0.4（DESIGN_RUN9_REVISION_0.4.md 変更1・2）: 実ファイルは4層構造
+    （schema `run9-rights-manifest/2.0`）へ再編済みのため、
+    `run9_schema.extract_voice_identity_rights_layer()` で
+    voice_identity_rights 層を旧 schema `run9-user-donor-rights/1.0`
+    相当のフラット構造へ変換してから返す——本ヘルパを消費する既存テスト群
+    （card_id 完全一致・値照合・改ざん拒否等）はこの変換により無改訂で
+    そのまま通る。
     """
-    rights = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    raw = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    rights = m.extract_voice_identity_rights_layer(raw)
     ledger = m.load_user_donor_ledger_json(
         (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
     )
@@ -2035,8 +2085,10 @@ def test_revision02_load_user_donor_ledger_json_rejects_duplicate_entry_key() ->
 
 def test_revision02_load_rights_manifest_json_and_ledger_accept_well_formed_text() -> None:
     """対照実験: 重複キーの無い実ファイルは引き続き読み込める（正常系まで
-    壊していないことの確認）。"""
-    rights = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    壊していないことの確認）。rev 0.4 の4層構造は
+    `extract_voice_identity_rights_layer()` でフラット化してから渡す。"""
+    raw = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    rights = m.extract_voice_identity_rights_layer(raw)
     ledger = m.load_user_donor_ledger_json(
         (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
     )
@@ -2374,16 +2426,88 @@ def test_revision02_readme_mentions_revision_0_2() -> None:
 
 
 # ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第2巡対応 — Fix 4（P2）: README の stale blocker
+# 文の更新（performer/composer 記録済みなのに未記録と言っていた記述の是正）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_4_readme_blocker_no_longer_claims_singer_composer_unrecorded() -> None:
+    """旧 blocker 文「歌唱者個人・作曲者/作詞者の特定が repo 内に記録なし」
+    は、performer/composer が同 revision（2026-08-25 User 追加裁定②）で
+    既に Junya Koguchi と記録済みであるにもかかわらず未記録と主張していた
+    ——「残存」節（現在ブロッカーとして提示している箇所）からこの stale な
+    文言を除去したことを確認する（Codex bot レビュー PR #319 第2巡指摘,
+    P2, 採用）。"""
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    blocker_section = readme.split("**残存**:", 1)[1]
+    assert "歌唱者個人・作曲者/作詞者の特定が repo 内" not in blocker_section
+    assert "に記録なし" not in blocker_section.split("2. **VG-L0", 1)[0]
+
+
+def test_fix319_4_readme_blocker_1_lists_confirmed_and_unresolved_owner() -> None:
+    """残存ブロッカー(1) が、確定済み（performer/composer = Junya Koguchi
+    出典付き、recording license = CC BY-SA 4.0）と、**未解決のままの
+    recording-master owner**（PR #319 第 4 巡指摘採用で
+    `<UNRESOLVED_EXTERNAL>` へ差し戻し — owner は確定済みに含めない）を
+    ともに明記していること（第 15 巡指摘採用: 旧テストは owner を確定済み
+    に分類し汎用文字列しか検証していなかったため、README が owner 主張へ
+    退行しても検知できなかった）。"""
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    blocker_1 = readme.split("**残存**:", 1)[1].split("2. **VG-L0", 1)[0]
+    assert "確定済み" in blocker_1
+    assert "Junya Koguchi" in blocker_1
+    assert "CC BY-SA 4.0" in blocker_1
+    # owner は未解決として明示され、UNRESOLVED_EXTERNAL の現在値が宣言されていること
+    assert "owner" in blocker_1
+    owner_stmt_idx = blocker_1.find("owner")
+    assert "<UNRESOLVED_EXTERNAL>" in blocker_1
+    # 「owner が確定済み」型の現在形主張への退行を検知: 確定済み節（未解決節より前）
+    # に owner が登場しないこと
+    confirmed_part = blocker_1.split("未解決", 1)[0]
+    assert "owner" not in confirmed_part, (
+        "確定済み節に owner が再登場している — recording-master owner は"
+        " <UNRESOLVED_EXTERNAL> 維持（第 4 巡）であり確定済みに含めてはならない"
+    )
+    assert owner_stmt_idx >= 0
+
+
+def test_fix319_4_readme_blocker_1_lists_remaining_unresolved_items() -> None:
+    """残存ブロッカー(1) が、真に未解決の項目（lyricist=UNRESOLVED_EXTERNAL・
+    SA義務の解釈・User attest 待ちの usage grants・Fix 5/6 の rights_class/
+    consent_status 仕分け）のみを未解決として挙げていること。"""
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    blocker_1 = readme.split("**残存**:", 1)[1].split("2. **VG-L0", 1)[0]
+    assert "lyricist" in blocker_1
+    assert "UNRESOLVED_EXTERNAL" in blocker_1
+    assert "share_alike_applies_to_synthesis_output" in blocker_1 or "share-alike" in blocker_1
+    assert "PENDING_USER_ATTESTATION" in blocker_1
+    assert "not_granted" in blocker_1
+
+
+def test_fix319_4_readme_no_stale_singer_composer_unrecorded_claim_anywhere() -> None:
+    """README 全体を grep 掃討: 「特定が...記録なし」という stale な確定
+    文言が、履歴的記述（明示的過去形・日付付きセクション）以外に残って
+    いないこと（同型の stale 文の全数確認）。"""
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "の特定が repo 内に記録なし" not in readme
+    assert "の特定が repo 内\n" not in readme
+
+
+# ---------------------------------------------------------------------------
 # PR #316 Codex bot レビュー第2巡対応 — runtime bundle に RUN6 render フロー
 # の全消費物（canon model assets）を追加
 # ---------------------------------------------------------------------------
 
 
 def test_revision02_bundle_has_canon_model_assets_section() -> None:
+    """PR #319 第2巡指摘（P2, 採用）: canon_model_assets は
+    run9_runtime_inputs 節配下へ移動した（RUN9 が実際に消費する入力の
+    直接証拠であり、歴史的推定を含まないため）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    assert "canon_model_assets" in bundle
-    assert "assets" in bundle["canon_model_assets"]
-    assert set(bundle["canon_model_assets"]["assets"].keys()) == {
+    runtime_inputs = bundle["run9_runtime_inputs"]
+    assert "canon_model_assets" in runtime_inputs
+    assert "assets" in runtime_inputs["canon_model_assets"]
+    assert set(runtime_inputs["canon_model_assets"]["assets"].keys()) == {
         "linguistic_onnx",
         "variance_duration_onnx",
         "variance_pitch_onnx",
@@ -2397,9 +2521,10 @@ def test_revision02_bundle_canon_model_assets_entries_have_64hex_and_source() ->
     いない（PENDING 相当）なら reason を持つこと（Codex bot レビュー
     PR #316 第2巡指摘）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    canon_model_assets = bundle["run9_runtime_inputs"]["canon_model_assets"]
     checked = 0
     for section_name in ("assets", "acoustic_export_companions"):
-        section = bundle["canon_model_assets"][section_name]
+        section = canon_model_assets[section_name]
         for entry_name, entry in section.items():
             if not isinstance(entry, dict) or "value" not in entry:
                 continue  # "note" のような非エントリ・メタキーはスキップ
@@ -2424,28 +2549,29 @@ def test_revision02_bundle_canon_model_assets_values_match_probe_records() -> No
     """canon_model_assets の各値が、一次ソースの probe result JSON の
     実測値と一致すること（転記誤りの検出）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    runtime_inputs = bundle["run9_runtime_inputs"]
     probe = json.loads(
         (_RUN_DIR.parent / "records" / "vgl0_control_axis_probe_result_n6.json").read_text(
             encoding="utf-8"
         )
     )
     pins = probe["pins"]
-    assets = bundle["canon_model_assets"]["assets"]
+    assets = runtime_inputs["canon_model_assets"]["assets"]
     assert assets["linguistic_onnx"]["value"] == pins["canon_linguistic_onnx"]["sha256"]
     assert assets["variance_duration_onnx"]["value"] == pins["canon_dur_onnx"]["sha256"]
     assert assets["variance_pitch_onnx"]["value"] == pins["canon_pitch_onnx"]["sha256"]
     assert assets["phonemes_txt"]["value"] == pins["canon_phonemes"]["sha256"]
 
-    companions = bundle["canon_model_assets"]["acoustic_export_companions"]
+    companions = runtime_inputs["canon_model_assets"]["acoustic_export_companions"]
     assert companions["dsconfig_yaml"]["value"] == pins["acoustic_dsconfig"]["sha256"]
     assert companions["acoustic_phonemes_json"]["value"] == pins["acoustic_phonemes_json"]["sha256"]
     assert companions["speaker_embed"]["value"] == pins["speaker_embed"]["sha256"]
 
-    # acoustic_onnx / vocoder_onnx の両方が、bundle 側の既存 top-level pin
-    # とも probe record 側とも一致すること（run6 backbone の同一性の
-    # 追加の交差確認）。
-    assert bundle["acoustic_onnx_sha256"]["value"] == pins["acoustic_onnx"]["sha256"]
-    assert bundle["vocoder"]["runtime_onnx_sha256"]["value"] == pins["vocoder_onnx"]["sha256"]
+    # acoustic_onnx / vocoder_onnx の両方が、bundle 側の既存
+    # run9_runtime_inputs 直下の pin とも probe record 側とも一致すること
+    # （run6 backbone の同一性の追加の交差確認）。
+    assert runtime_inputs["acoustic_onnx_sha256"]["value"] == pins["acoustic_onnx"]["sha256"]
+    assert runtime_inputs["vocoder"]["runtime_onnx_sha256"]["value"] == pins["vocoder_onnx"]["sha256"]
 
 
 def test_revision02_bundle_canon_model_assets_cross_checked_across_4_probe_records() -> None:
@@ -2453,7 +2579,7 @@ def test_revision02_bundle_canon_model_assets_cross_checked_across_4_probe_recor
     n10 / render_reproducibility）すべてで同一であることを確認する
     （n6 以外の3件は補助的な相互一致確認）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
-    assets = bundle["canon_model_assets"]["assets"]
+    assets = bundle["run9_runtime_inputs"]["canon_model_assets"]["assets"]
     records_dir = _RUN_DIR.parent / "records"
     for filename in (
         "vgl0_control_axis_probe_result.json",
@@ -2474,7 +2600,7 @@ def test_revision02_bundle_canon_model_source_distribution_is_distinct_from_rits
     構造的検査）。"""
     bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
-    canon_zip_sha = bundle["canon_model_assets"]["source_distribution"]["sha256"]
+    canon_zip_sha = bundle["run9_runtime_inputs"]["canon_model_assets"]["source_distribution"]["sha256"]
     ritsu_anchor_sha = domain_raw["anchor_hashes"]["ritsu"]
     assert canon_zip_sha != ritsu_anchor_sha
     assert canon_zip_sha == "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530"
@@ -2492,12 +2618,124 @@ def test_revision02_bundle_completeness_note_explains_canon_assets_are_required(
 def test_revision02_backbone_runtime_bundle_sha_still_pending_after_canon_assets_added(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """canon_model_assets 追加は render_code_commit の確定状態を変えない
-    ため、`backbone_runtime_bundle_sha` は引き続き PENDING のまま
-    （変更なし — この巡の追加が既存の降格判断へ副作用しないことの確認）。"""
+    """canon_model_assets 追加自体は backbone_runtime_bundle_sha の PINNED
+    化手段を変えない——PINNED 化するのは 2026-08-25 の User 承認 b +
+    裁定①によって前方宣言欄 `run9_render_code_commit`（status:
+    `DECLARED_FOR_RUN9`）が確定したことによってであり（歴史的
+    `render_code_commit` は `INFERRED_UNCONFIRMED` のまま・両欄は独立）、
+    canon_model_assets 追加（別巡の独立した拡張）が副作用として昇格を
+    引き起こしたのではないことを確認する（`backbone_runtime_bundle_sha`
+    は rev 0.4 時点では PINNED — 昇格の原因が正しく
+    run9_render_code_commit.status の変化であることの確認であり、
+    PENDING 固定の確認ではない）。"""
     field = contract_raw["backbone_runtime_bundle_sha"]
-    assert field["status"] == "PENDING"
-    assert field["value"] is None
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert "canon_model_assets" in bundle["run9_runtime_inputs"]  # 対象拡張が引き続き存在すること
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(BACKBONE_BUNDLE_PATH)
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第2巡対応 — Fix 3（P2）: bundle pin の証明範囲の
+# 構造分離（run9_runtime_inputs / historical_export_provenance）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_2_bundle_has_two_top_level_proof_scope_sections() -> None:
+    """bundle が run9_runtime_inputs / historical_export_provenance の
+    2節へ再編されていること（Codex bot レビュー PR #319 第2巡指摘, P2,
+    採用: bundle pin の証明範囲の構造分離）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert "run9_runtime_inputs" in bundle
+    assert "historical_export_provenance" in bundle
+    # 旧 top-level 直下キーは新節の配下へ移動済みで、bundle 直下には
+    # もう存在しない（構造分離が実体を伴うことの確認 — 節を追加しただけの
+    # 見せかけの分離ではない）。
+    for moved_key in (
+        "checkpoint_sha256",
+        "acoustic_onnx_sha256",
+        "config_sha256",
+        "speaker_map_sha256",
+        "phoneme_map_sha256",
+        "language_map_sha256",
+        "vocoder",
+        "run9_render_code_commit",
+        "canon_model_assets",
+        "render_code_commit",
+    ):
+        assert moved_key not in bundle, f"{moved_key} は旧位置(bundle直下)にまだ残っている"
+
+
+def test_fix319_2_run9_runtime_inputs_contains_only_direct_evidence_fields() -> None:
+    """run9_runtime_inputs 節は「RUN9 が実際に消費する入力の直接証拠」
+    （checkpoint/ONNX sha256・export companions の hash 群・
+    run9_render_code_commit 前方宣言）のみを収載し、歴史的推定
+    （render_code_commit）を含まないこと。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    runtime_inputs = bundle["run9_runtime_inputs"]
+    for expected_key in (
+        "checkpoint_sha256",
+        "acoustic_onnx_sha256",
+        "config_sha256",
+        "speaker_map_sha256",
+        "phoneme_map_sha256",
+        "language_map_sha256",
+        "vocoder",
+        "run9_render_code_commit",
+        "canon_model_assets",
+    ):
+        assert expected_key in runtime_inputs
+    assert "render_code_commit" not in runtime_inputs, (
+        "run9_runtime_inputs は直接証拠のみを収載する節であり、歴史的推定である "
+        "render_code_commit（historical_export_provenance 節に隔離済み）を含んではならない"
+    )
+    assert runtime_inputs["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9"
+
+
+def test_fix319_2_historical_export_provenance_contains_only_render_code_commit() -> None:
+    """historical_export_provenance 節は RUN6 期の export commit 推定
+    （render_code_commit）のみを収載し、status は INFERRED_UNCONFIRMED の
+    まま変化していないこと（構造移動のみで内容は無改変）。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    historical = bundle["historical_export_provenance"]
+    assert set(historical.keys()) == {"claim_scope_note", "render_code_commit"}
+    assert historical["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+    assert "RUN9" in historical["claim_scope_note"]
+    assert "根拠には使わない" in historical["claim_scope_note"]
+
+
+def test_fix319_2_bundle_claim_scope_field_documents_pinned_meaning() -> None:
+    """bundle 冒頭の claim_scope 節が、backbone_runtime_bundle_sha の
+    PINNED が主張する範囲（本文書のバイト同一性 + run9_runtime_inputs の
+    確定のみ）と、historical_export_provenance が証明範囲外であることを
+    明記していること。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    claim_scope = bundle["claim_scope"]
+    assert "run9_runtime_inputs" in claim_scope["statement"]
+    assert "historical_export_provenance" in claim_scope["statement"]
+    assert "対象外" in claim_scope["statement"] or "含まれない" in claim_scope["statement"]
+    assert "why_run9_reproducibility_is_unaffected" in claim_scope
+    assert "run9_render_code_commit" in claim_scope["why_run9_reproducibility_is_unaffected"]
+
+
+def test_fix319_2_run9_contract_yaml_pin_comment_documents_claim_scope() -> None:
+    """RUN9_CONTRACT.yaml の backbone_runtime_bundle_sha pin 注記（コメント）
+    にも claim scope の要点（バイト同一性 + run9_runtime_inputs 確定のみを
+    主張し、historical_export_provenance の真理値は主張しない）が記載されて
+    いること（bundle json 側と RUN9_CONTRACT.yaml 側の両方に記載する指示の
+    確認）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert "claim scope" in contract_text.lower()
+    assert "run9_runtime_inputs" in contract_text
+    assert "historical_export_provenance" in contract_text
+    assert "証明範囲外" in contract_text
+
+
+def test_fix319_2_backbone_runtime_bundle_sha_history_notes_prior_value() -> None:
+    """repin 時、旧値（69ea578b...）が履歴として append-only に保持されて
+    いること（コミット規約: sha 再計算 → repin、旧値は履歴保持）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert "69ea578bb702f0dd0ca16c1a20b34d4f78c81495b1318a5d0503050c84d37a53" in contract_text
 
 
 # ---------------------------------------------------------------------------
@@ -2506,8 +2744,11 @@ def test_revision02_backbone_runtime_bundle_sha_still_pending_after_canon_assets
 
 
 def test_por_revision_design_revision_doc_path_exists() -> None:
+    """テスト名は歴史的に por_revision_ prefix のまま（PoR メモ編入時の
+    命名）——rev 0.4 現在は最新差分メモへ追随して assertion のみ更新する。"""
     assert REVISION_DOC_PATH.exists()
-    assert REVISION_DOC_PATH.name == "DESIGN_RUN9_REVISION_0.3.md"
+    assert REVISION_DOC_PATH.name == "DESIGN_RUN9_REVISION_0.4.md"
+    assert REVISION_0_3_DOC_PATH.exists()
 
 
 def test_por_revision_por_adjudication_path_exists() -> None:
@@ -2623,7 +2864,7 @@ def test_por_revision_outcome_vocabulary_sizes_match_por_13() -> None:
 def test_por_revision_v01_transfer_status_superseded_note_present() -> None:
     """v0.1 §20 の transfer_status 語彙が rev 0.3 で superseded と明記
     されていること（DESIGN_RUN9_REVISION_0.3.md 改訂D）。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "transfer_status" in doc
     assert "superseded" in doc
 
@@ -2793,7 +3034,7 @@ def test_por_revision_full_contract_gate_state_still_blocked(
 def test_fix5_r9_g5_supersession_row_present_in_contradiction_table() -> None:
     """DESIGN_RUN9_REVISION_0.3.md の矛盾解決表に v0.1 §19 R9-G5
     （BIRTH_IDENTITY_SEPARATION）の読み替え行が追加されていること。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "R9-G5" in doc
     assert "BIRTH_IDENTITY_SEPARATION" in doc
     assert "機械計測の出生分離ゲートとして存続" in doc
@@ -2886,7 +3127,7 @@ def test_fix7_rev03_doc_practice_forbidden_prose_mentions_technique_label() -> N
     「教師付与の Technique label」が存在すること — 第2巡 Fix 4 で
     `PRACTICE_FORBIDDEN_INPUTS` へ追加した `teacher_technique_label` と
     文書側が同期していなかった漏れ（第3巡 Fix 7）の是正確認。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "教師付与の Technique label" in doc
     assert "teacher_technique_label" in doc
 
@@ -2899,7 +3140,7 @@ def test_fix7_rev03_doc_practice_forbidden_prose_item_count_matches_tuple() -> N
     禁止列挙の直後が '**許可**' から '**3分割の意味論**' へ変わった）に
     含まれる、行頭が `- `（インデントなし = 継続行ではなくトップレベル
     箇条書き）の行数を数える。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     marker = "**禁止（データ入力として渡してはいけないもの）**（PoR §3.2）:"
     next_heading = "**3分割の意味論**"
     start = doc.index(marker) + len(marker)
@@ -3070,7 +3311,7 @@ def test_p1_1_trait_change_definition_documented() -> None:
     """修正指示6: PRACTICE で許す Trait 変化は speaker embedding や Genome
     変更ではなく「明示的に許可された発声制御領域の後天的変化」であること
     の文書化。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "明示的に許可された発声制御領域の後天的変化" in doc
 
 
@@ -3232,12 +3473,12 @@ def test_p1_3_c1_condition_is_neutral_profile_no_learning_step() -> None:
 
 
 def test_p1_3_gain_baseline_noise_from_c0_documented() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "Practice/Education gain の\n基準ノイズは C0 由来" in doc or "基準ノイズは C0 由来" in doc
 
 
 def test_p1_3_profile_side_effect_recorded_as_c1_minus_c0_documented() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "C1−C0" in doc or "C1-C0" in doc
 
 
@@ -3311,7 +3552,7 @@ def test_p1_4_parent_pool_registration_requires_separate_user_ruling_documented(
     確認（機械強制は本 PR の範囲外 — PROMOTION_STATUSES の拡張自体が新しい
     design_revision を要する設計になっていることの語彙的裏付けは上記
     test_p1_4_promotion_statuses_never_a_promoted_value が担う）。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "別の User ruling pin" in doc or "別の\nUser 裁定" in doc or "新しい design_revision（= 別の" in doc
 
 
@@ -3367,7 +3608,7 @@ def test_p2_4_required_and_optional_gain_fields_disjoint() -> None:
 
 
 def test_p2_4_heldout_gain_documented_as_mandatory_not_best_effort() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "実装可能なら」ではなく" in doc
 
 
@@ -3431,7 +3672,7 @@ def test_p2_2_advisory_predeclared_requires_protocol_sha_pinned_for_ready(
 
 
 def test_p2_2_holdout_and_null_shift_rescue_discipline_documented() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "holdout 開封後の" in doc
     assert "human_audit_mode` 変更は禁止" in doc
     assert "人間監査を" in doc
@@ -3443,13 +3684,13 @@ def test_p2_2_holdout_and_null_shift_rescue_discipline_documented() -> None:
 
 
 def test_p2_3_calibration_definition_section_present() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "## 改訂 G — 機械的校正の定義" in doc
     assert "人間知覚との一致証明ではない" in doc
 
 
 def test_p2_3_calibration_result_rules_present() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "UNCALIBRATED" in doc
     assert "holdout 開封前に freeze" in doc
 
@@ -3458,7 +3699,7 @@ def test_p2_3_calibration_result_rules_present() -> None:
 
 
 def test_p2_5_non_claim_rights_boundary_section_present() -> None:
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "## 改訂 H — Non-Claim / Rights Boundary" in doc
 
 
@@ -3466,7 +3707,7 @@ def test_p2_5_non_claim_five_items_present() -> None:
     """本文は Markdown の折り返しで改行+インデント空白を含むため、
     照合前に空白（改行含む）を単一スペースへ正規化してから部分文字列
     一致を見る。"""
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     normalized = " ".join(doc.split())
     required_phrases = [
         "法的・契約上の 許諾が自動成立するわけではない",
@@ -3552,7 +3793,7 @@ def test_invariant_existing_codex_fixes_not_regressed(contract_raw: Dict[str, An
     assert "practice_audio_split_manifest_sha" in m.CONTRACT_PIN_FIELDS
     # 第3巡 Fix 7/8: rev 0.3 文書の PRACTICE 禁止列挙に Technique label が
     # 存在し、陳腐化した繰延記述が残っていない。
-    doc = REVISION_DOC_PATH.read_text(encoding="utf-8")
+    doc = REVISION_0_3_DOC_PATH.read_text(encoding="utf-8")
     assert "教師付与の Technique label" in doc
     contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
     for stale_phrase in ("新設予定", "新設する想定"):
@@ -6485,3 +6726,2123 @@ def test_fix37_domain_metric_space_sha_differs_from_pre_round17_value() -> None:
     domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
     old_pre_round17_sha = "00264b5641e1b3b3112a9ef06912e2f96a2c449d25ae78adba36fab6613020e9"
     assert domain_raw["metric_space_sha"] != old_pre_round17_sha
+
+
+# ---------------------------------------------------------------------------
+# rev 0.4（DESIGN_RUN9_REVISION_0.4.md、外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
+# `DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt` の採用 + 2026-08-25 User 追加裁定
+# 「確認メモ / RUN9 用語整理」）対応テスト。
+# ---------------------------------------------------------------------------
+
+REVISION_0_4_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.4.md"
+
+
+def test_rev04_external_review_byte_pin() -> None:
+    """派生設計変更メモ（DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt）の byte-pin
+    テスト——既存 POR pin テスト（`test_revision03_por_adjudication_sha256_pin_matches_actual_file`
+    等）と同型: sha256 一致 + 無改変であることの確認。"""
+    assert DERIVED_DESIGN_CHANGES_PATH.exists()
+    assert _sha256_file(DERIVED_DESIGN_CHANGES_PATH) == (
+        "a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091"
+    )
+
+
+def test_rev04_external_review_declares_design_revision_0_2() -> None:
+    """派生設計変更メモは自称 'design_revision 0.2' — 番号注記の前提事実の
+    直接確認（本文書は書き換えない）。"""
+    text = DERIVED_DESIGN_CHANGES_PATH.read_text(encoding="utf-8")
+    assert "design_revision 0.2" in text
+
+
+def test_rev04_doc_exists_and_declares_lineage() -> None:
+    """rev 0.4 文書の存在 + 系譜（0.3 → 0.4）の宣言確認。"""
+    assert REVISION_0_4_DOC_PATH.exists()
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "0.3 → 0.4" in doc
+    assert "a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091" in doc
+
+
+def test_rev04_doc_sha256_pin_matches_actual_file(contract_raw: Dict[str, Any]) -> None:
+    field = contract_raw["design_revision_doc_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == _sha256_file(REVISION_0_4_DOC_PATH)
+    assert field["value"] == m.compute_file_sha256(REVISION_0_4_DOC_PATH)
+
+
+def test_rev04_doc_records_case_a_and_central_problem_redefinition() -> None:
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "CASE A" in doc
+    assert "Identity 非依存の Performance Residual のみを抽出し" in doc
+
+
+def test_rev04_doc_records_user_ruling_a_and_b() -> None:
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "aとbを承認" in doc
+    assert "USER_ATTESTED" in doc
+
+
+def test_rev04_doc_records_user_terminology_memo_verbatim() -> None:
+    """2026-08-25 User 追加裁定「確認メモ / RUN9 用語整理」が rev 0.4 doc
+    へ逐語収載されていることの確認（指示1〜6の要旨語を機械的に検査）。"""
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "確認メモ / RUN9 用語整理" in doc
+    assert "teacher 語の全面置換はしない" in doc
+    assert "Voice 所有者" in doc
+    for i in range(1, 7):
+        assert f"{i}. " in doc or f"{i}." in doc  # 指示1〜6 の番号付き列挙
+
+
+def test_rev04_doc_common_performance_lesson_adopted_with_legacy_note() -> None:
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "Common Performance Lesson" in doc
+    assert "旧称" in doc
+    assert "Common Teacher Transfer" in doc  # 旧名注記として言及される
+
+
+def test_rev04_frozen_docs_unchanged_after_rev04() -> None:
+    """凍結文書（v0.1 / rev 0.2 / rev 0.3 / POR txt / 派生設計変更メモ txt）の
+    無改変を sha256 で確認する（git diff とは独立の直接検証）。"""
+    assert _sha256_file(DESIGN_DOC_PATH) == (
+        "b1f6901c0ba8bcfcbd61170aa672c95e96a37d082fce5e3f12f245bc4faaae1e"
+    )
+    assert _sha256_file(REVISION_0_2_DOC_PATH) == (
+        "406098e2ac62065855b7e4086fce769a2956b64606594ad83b63b527a23ad4fb"
+    )
+    assert _sha256_file(REVISION_0_3_DOC_PATH) == (
+        "b4f05cfbccb484a16a39b736086e989e1c953f295bda66970d491e4db5b94b04"
+    )
+    assert _sha256_file(POR_ADJUDICATION_PATH) == (
+        "56b66fd8df943fbfa98767f2ea481c0ba2a68c26916832e08517379408d97007"
+    )
+    assert _sha256_file(DERIVED_DESIGN_CHANGES_PATH) == (
+        "a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091"
+    )
+
+
+# --- R9-G1 拡張（変更5） ------------------------------------------------------
+
+
+def test_rev04_r9_g1_semantic_name_and_legacy_name() -> None:
+    assert m.R9_G1_ID == "R9-G1"
+    assert m.R9_G1_LEGACY_NAME == "INPUT_FREEZE_AND_RIGHTS"
+    assert m.R9_G1_SEMANTIC_NAME == "RIGHTS_AND_PROVENANCE_GATE"
+
+
+def test_rev04_r9_g1_pass_conditions_frozen_8_items() -> None:
+    expected = (
+        "VOICE_SOURCE_IDENTIFIED",
+        "VOICE_USAGE_TERMS_CONFIRMED",
+        "PERFORMANCE_AUTHOR_IDENTIFIED",
+        "PERFORMANCE_USAGE_TERMS_CONFIRMED",
+        "COMPOSITION_RIGHTS_CONFIRMED",
+        "RECORDING_MASTER_RIGHTS_CONFIRMED",
+        "TEACHER_SOURCE_VS_VOICE_IDENTITY_SOURCE_DISTINGUISHED",
+        "NO_UNKNOWN_RIGHTS_HOLDER",
+    )
+    assert m.R9_G1_PASS_CONDITIONS == expected
+    assert len(m.R9_G1_PASS_CONDITIONS) == 8
+
+
+def test_rev04_gate_fail_rights_provenance_unresolved_vocab() -> None:
+    assert m.GATE_FAIL_RIGHTS_PROVENANCE_UNRESOLVED == "RIGHTS_PROVENANCE_UNRESOLVED"
+    # 独立した2層の語彙であることの確認 — FAILURE_CLASSES を置換しない。
+    assert m.GATE_FAIL_RIGHTS_PROVENANCE_UNRESOLVED not in m.FAILURE_CLASSES
+
+
+def test_rev04_r9_g1_pass_conditions_declared_structural_predicate() -> None:
+    assert m.r9_g1_pass_conditions_declared(set(m.R9_G1_PASS_CONDITIONS)) is True
+    assert m.r9_g1_pass_conditions_declared(set(m.R9_G1_PASS_CONDITIONS[:-1])) is False
+    assert m.r9_g1_pass_conditions_declared(list(m.R9_G1_PASS_CONDITIONS)) is True
+    with pytest.raises(m.Run9ValidationError):
+        m.r9_g1_pass_conditions_declared("not-a-collection")
+
+
+# --- Performance Residual / Identity 除外語彙（変更3・6） -----------------------
+
+
+def test_rev04_performance_trait_vocab_frozen_9_items() -> None:
+    expected = (
+        "relative_F0", "duration_ratio", "onset_offset", "energy_envelope",
+        "vibrato", "phrase_dynamics", "attack_behavior", "release_behavior",
+        "articulation_timing",
+    )
+    assert m.PERFORMANCE_RESIDUAL_VOCAB == expected
+
+
+def test_rev04_identity_excluded_trait_vocab_frozen_7_items() -> None:
+    expected = (
+        "speaker_embedding", "timbre_identity", "formant_identity",
+        "spectral_identity", "voice_genome",
+        "source_specific_identity_representation", "identity_vector",
+    )
+    assert m.IDENTITY_EXCLUDED_TRAIT_VOCAB == expected
+
+
+def test_rev04_lesson_record_trait_alias_resolution() -> None:
+    assert m.resolve_lesson_record_trait_alias("relative_F0") == "relative_F0"
+    assert m.resolve_lesson_record_trait_alias("duration") == "duration_ratio"
+    assert m.resolve_lesson_record_trait_alias("timing") == "onset_offset"
+    assert m.resolve_lesson_record_trait_alias("dynamics") == "energy_envelope"
+    assert m.resolve_lesson_record_trait_alias("articulation") == "articulation_timing"
+    with pytest.raises(m.Run9ValidationError):
+        m.resolve_lesson_record_trait_alias("unknown_trait_xyz")
+
+
+def _valid_lesson_record() -> Dict[str, Any]:
+    return {
+        "schema": m.SCHEMA_LESSON_RECORD,
+        "lesson_id": "LS-R9-PJS-001",
+        "performance_source": "PJS",
+        "voice_source": "PJS_corpus_ver1.1",
+        "performance_author": "<UNRESOLVED_EXTERNAL>",
+        "composition_source": "<UNRESOLVED_EXTERNAL>",
+        "recording_source": "PJS_corpus_ver1.1",
+        "extracted_traits": ["relative_F0", "duration", "timing", "dynamics", "articulation"],
+        "explicitly_excluded_identity_traits": list(m.IDENTITY_EXCLUDED_TRAIT_VOCAB),
+        "rights_manifest": "inputs/rights_manifest.json",
+        "provenance_manifest": "inputs/rights_manifest.json#performance_rights.provenance",
+    }
+
+
+def test_rev04_lesson_record_valid_example_passes() -> None:
+    m.validate_lesson_record(_valid_lesson_record())  # 例外を投げないことの確認
+
+
+def test_rev04_lesson_record_rejects_unknown_trait() -> None:
+    record = _valid_lesson_record()
+    record["extracted_traits"] = ["not_a_real_trait"]
+    with pytest.raises(m.Run9ValidationError, match="unknown Performance Residual"):
+        m.validate_lesson_record(record)
+
+
+def test_rev04_lesson_record_rejects_incomplete_identity_exclusion() -> None:
+    record = _valid_lesson_record()
+    record["explicitly_excluded_identity_traits"] = ["speaker_embedding"]
+    with pytest.raises(m.Run9ValidationError, match="fully contain"):
+        m.validate_lesson_record(record)
+
+
+def test_rev04_lesson_record_rejects_missing_key() -> None:
+    record = _valid_lesson_record()
+    del record["lesson_id"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_lesson_record(record)
+
+
+def test_rev04_lesson_record_rejects_unknown_key() -> None:
+    record = _valid_lesson_record()
+    record["unexpected_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_lesson_record(record)
+
+
+def test_rev04_lesson_record_rejects_wrong_schema() -> None:
+    record = _valid_lesson_record()
+    record["schema"] = "run9-lesson-record/9.9"
+    with pytest.raises(m.Run9ValidationError, match="schema"):
+        m.validate_lesson_record(record)
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第7巡対応 — Fix 15（P2）: LessonRecord
+# provenance の語彙予約適用。performance_source/voice_source/
+# performance_author/composition_source/recording_source（+
+# rights_manifest/provenance_manifest 参照欄）は全て外部第三者（PJS 側）の
+# 事実を記述する欄であり、User 帰属専用 `<PENDING_USER_ATTESTATION>` を
+# 拒否し `<UNRESOLVED_EXTERNAL>` のみ未解決値として許容する。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "performance_source",
+        "voice_source",
+        "performance_author",
+        "composition_source",
+        "recording_source",
+    ],
+)
+def test_fix319_15_rejects_user_attestation_sentinel_in_provenance_field(field: str) -> None:
+    """負例（parametrize）: provenance 系5フィールドいずれも User 帰属専用
+    sentinel `<PENDING_USER_ATTESTATION>` を拒否し、`<UNRESOLVED_EXTERNAL>`
+    への誘導メッセージを含むこと（Codex bot レビュー PR #319 第7巡指摘,
+    Fix 15, P2, 採用）。"""
+    record = _valid_lesson_record()
+    record[field] = "<PENDING_USER_ATTESTATION>"
+    with pytest.raises(m.Run9ValidationError, match="UNRESOLVED_EXTERNAL"):
+        m.validate_lesson_record(record)
+
+
+@pytest.mark.parametrize("field", ["rights_manifest", "provenance_manifest"])
+def test_fix319_15_rejects_user_attestation_sentinel_in_reference_field(field: str) -> None:
+    """負例: rights_manifest/provenance_manifest 参照欄で User 帰属専用
+    sentinel の混入を拒否する（Fix 15 導入時点の挙動 — Fix 18 でこの2欄は
+    さらに `<UNRESOLVED_EXTERNAL>` も拒否するよう強化されたが、
+    `<PENDING_USER_ATTESTATION>` の拒否自体は変わらず回帰対象として残す。
+    下記 `test_fix319_18_*` が Fix 18 で追加された両 sentinel 拒否を
+    網羅する）。"""
+    record = _valid_lesson_record()
+    record[field] = "<PENDING_USER_ATTESTATION>"
+    with pytest.raises(m.Run9ValidationError, match="UNRESOLVED_EXTERNAL"):
+        m.validate_lesson_record(record)
+
+
+def test_fix319_15_accepts_unresolved_external_in_provenance_field() -> None:
+    """正例: 未解決の外部第三者事実は `<UNRESOLVED_EXTERNAL>` で表現でき、
+    受理されること（`_valid_lesson_record()` fixture の
+    performance_author/composition_source が実例)。"""
+    m.validate_lesson_record(_valid_lesson_record())  # 例外を投げないことの確認
+
+
+def test_fix319_15_valid_fixture_no_longer_uses_stale_pending_user_attestation_value() -> None:
+    """`_valid_lesson_record()` 正例 fixture が stale な
+    `<PENDING_USER_ATTESTATION>` 値を含まないことの直接確認——Fix 15 の
+    語彙予約適用に伴う必須追随（放置すると正例が赤化する）。"""
+    record = _valid_lesson_record()
+    for field in (
+        "performance_source", "voice_source", "performance_author",
+        "composition_source", "recording_source",
+        "rights_manifest", "provenance_manifest",
+    ):
+        assert record[field] != "<PENDING_USER_ATTESTATION>"
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第9巡対応 — Fix 18（P2）: LessonRecord の
+# rights_manifest/provenance_manifest（参照/pin欄）で両 sentinel を拒否
+# する。第7巡 Fix 15 は `<PENDING_USER_ATTESTATION>` のみを拒否し
+# `<UNRESOLVED_EXTERNAL>` を代替として推奨したため、両欄が
+# `<UNRESOLVED_EXTERNAL>` の record（使用可能な参照/pin を一切持たない）
+# が構造的 valid のまま validate_lesson_record() を通過してしまっていた。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("field", ["rights_manifest", "provenance_manifest"])
+@pytest.mark.parametrize(
+    "sentinel", ["<PENDING_USER_ATTESTATION>", "<UNRESOLVED_EXTERNAL>"]
+)
+def test_fix319_18_rejects_both_sentinels_in_reference_field(field: str, sentinel: str) -> None:
+    """負例（2欄 × 2 sentinel の parametrize、計4ケース）: rights_manifest/
+    provenance_manifest はいずれの sentinel も参照/pin として使用不可の
+    ため拒否されること——特に `<UNRESOLVED_EXTERNAL>` は provenance 系
+    外部事実欄では許容される値だが、本2欄（参照/pin欄）では許容しない
+    ことがこの負例の核心（Fix 15 との差分）。"""
+    record = _valid_lesson_record()
+    record[field] = sentinel
+    with pytest.raises(m.Run9ValidationError, match="genuine reference/pin"):
+        m.validate_lesson_record(record)
+
+
+def test_fix319_18_both_reference_fields_unresolved_external_rejected() -> None:
+    """負例（指摘本文が名指しするケース）: rights_manifest と
+    provenance_manifest の両方が `<UNRESOLVED_EXTERNAL>` の record は、
+    使用可能な参照/pin を一切持たない構造的 valid record になってはならず
+    拒否されること。"""
+    record = _valid_lesson_record()
+    record["rights_manifest"] = "<UNRESOLVED_EXTERNAL>"
+    record["provenance_manifest"] = "<UNRESOLVED_EXTERNAL>"
+    with pytest.raises(m.Run9ValidationError, match="genuine reference/pin"):
+        m.validate_lesson_record(record)
+
+
+def test_fix319_18_valid_fixture_still_validates() -> None:
+    """正例（回帰）: `_valid_lesson_record()` の rights_manifest/
+    provenance_manifest（実在ファイルへの相対パス参照）が Fix 18 追加後も
+    validator を通ることの end-to-end 確認。"""
+    m.validate_lesson_record(_valid_lesson_record())  # 例外を投げないことの確認
+
+
+# --- rights_manifest 4層構造の validator（変更1・2） -------------------------
+
+
+def test_rev04_rights_manifest_four_layer_valid_file_passes() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_rev04_rights_manifest_principles_exact_3_statements() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert tuple(data["principles"]["statements"]) == (
+        "Teacher ≠ Voice Identity Owner",
+        "Teacher ≠ Performance Author",
+        "Voice Source ≠ Performance Source",
+    )
+
+
+def test_rev04_rights_manifest_auto_interpretation_prohibited_present() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert "自動的に解釈" in data["auto_interpretation_prohibited"]
+
+
+def test_rev04_rights_manifest_rejects_missing_layer() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["performance_rights"]
+    with pytest.raises(m.Run9ValidationError, match="missing required top-level key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_unknown_top_level_key() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["unexpected_top_level"] = {}
+    with pytest.raises(m.Run9ValidationError, match="unknown top-level key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_missing_provenance_in_performance_layer() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["performance_rights"]["provenance"]
+    with pytest.raises(m.Run9ValidationError, match="provenance"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+# --- ネストブロック形状の閉集合強制（Codex bot レビュー PR #319 第1巡指摘2、P2）-
+
+
+def test_rev04_rights_manifest_rejects_empty_provenance_dict() -> None:
+    """`provenance: {}` は旧 validator を素通りしていた——ブロック欠落として拒否する。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["provenance"] = {}
+    with pytest.raises(m.Run9ValidationError, match="missing required block"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_missing_synthesis_block() -> None:
+    """DESIGN_RUN9_REVISION_0.4.md が規定する synthesis ブロックが欠落したまま
+    valid-file テストが green だった実際の欠落（本 PR の起点）を再現する負例。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["provenance"]["synthesis"]
+    with pytest.raises(m.Run9ValidationError, match="missing required block"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_unknown_block_in_provenance() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["provenance"]["unexpected_block"] = {"x": "y"}
+    with pytest.raises(m.Run9ValidationError, match="unknown block"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_missing_key_inside_block() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["provenance"]["voice_source"]["source_id"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_unknown_key_inside_block() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["provenance"]["voice_source"]["unexpected_key"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_not_applicable_without_note() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["provenance"]["synthesis"]["note"]
+    with pytest.raises(m.Run9ValidationError, match="not_applicable.*note"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_empty_string_value_in_block() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["performance_rights"]["provenance"]["performance_author"]["performer"] = "  "
+    with pytest.raises(m.Run9ValidationError, match="non-empty string"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+# --- 2026-08-25 User 追加裁定②: performer/composer 充填 + placeholder 語彙分離 -
+
+
+def test_rev04_rights_manifest_performer_and_composer_filled_with_source() -> None:
+    """performer/composer は外部資料出典付きで Junya Koguchi が充填されて
+    いること（旧 `<PENDING_USER_ATTESTATION>` は誤用だった — 追加裁定②）。
+    recording-master owner は裁定②の確定範囲外（論文著者性は録音物権利保有の
+    証拠でない — PR #319 第 4 巡指摘採用）のため <UNRESOLVED_EXTERNAL> を維持。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert data["performance_rights"]["provenance"]["performance_author"]["performer"] == (
+        "Junya Koguchi"
+    )
+    assert data["composition_rights"]["provenance"]["composition"]["composer"] == (
+        "Junya Koguchi"
+    )
+    assert data["recording_master_rights"]["provenance"]["voice_source"]["owner"] == (
+        "<UNRESOLVED_EXTERNAL>"
+    )
+
+
+def test_rev04_rights_manifest_lyricist_uses_unresolved_external_not_pending_user_attestation() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    lyricist = data["composition_rights"]["provenance"]["composition"]["lyricist"]
+    assert lyricist == "<UNRESOLVED_EXTERNAL>"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_rev04_rights_manifest_rejects_pending_user_attestation_in_external_field() -> None:
+    """外部の第三者事実欄に `<PENDING_USER_ATTESTATION>`（User 帰属欄専用）を
+    使うのは誤用——`<UNRESOLVED_EXTERNAL>` を使うべき旨のエラーで拒否する
+    （旧 performer/composer/lyricist がこの誤用の実例だった）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["composition_rights"]["provenance"]["composition"]["lyricist"] = (
+        "<PENDING_USER_ATTESTATION>"
+    )
+    with pytest.raises(m.Run9ValidationError, match="UNRESOLVED_EXTERNAL"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_recording_master_rights_has_interpretations_section() -> None:
+    """CC BY-SA 4.0 の share-alike 義務が合成出力へ及ぶかは事実でなく解釈
+    であり、`interpretations` 節で license（事実）から分離されていること
+    （2026-08-25 User 追加裁定②）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    interp = data["recording_master_rights"]["interpretations"][
+        "share_alike_applies_to_synthesis_output"
+    ]
+    assert interp["status"] == "UNSETTLED_LEGAL_INTERPRETATION"
+    assert interp["question"]
+    assert interp["note"]
+
+
+def test_rev04_rights_manifest_rejects_missing_interpretations_section() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["interpretations"]
+    with pytest.raises(m.Run9ValidationError, match="interpretations"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_interpretations_entry_missing_status() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["interpretations"][
+        "share_alike_applies_to_synthesis_output"
+    ]["status"]
+    with pytest.raises(m.Run9ValidationError, match="status"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_rejects_wrong_performance_source_id() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["performance_rights"]["performance_source"]["id"] = "NOT_PJS"
+    with pytest.raises(m.Run9ValidationError, match="performance_source.id"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_rev04_rights_manifest_voice_identity_layer_extraction_matches_ledger() -> None:
+    """4層再編後も voice_identity_rights 層の実体（17件・attest 状態）は
+    無改変であることを既存 verify 関数経由で再確認する。"""
+    raw = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    flat = m.extract_voice_identity_rights_layer(raw)
+    ledger = m.load_user_donor_ledger_json(
+        (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
+    )
+    m.verify_rights_manifest_against_ledger(flat, ledger)  # 例外を投げないことの確認
+    assert len(flat["entries"]) == 17
+
+
+def test_rev04_rights_manifest_extract_rejects_wrong_top_schema() -> None:
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["schema"] = "some-other-schema/1.0"
+    with pytest.raises(m.Run9ValidationError, match="schema"):
+        m.extract_voice_identity_rights_layer(data)
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第2巡対応 — Fix 5（P2）: 層の permission
+# フィールドの必須化（層別閉集合キー + rights_class/consent_status 語彙）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_5_rejects_recording_master_license_deleted() -> None:
+    """recording_master_rights.license を削除しても旧 validator は非空
+    role と provenance ブロックしか見ておらず受理していた——Fix 5 で
+    層別必須キー閉集合が拒否するようになったことの確認（負例1）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["license"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_5_rejects_performance_rights_class_deleted() -> None:
+    """performance_rights.rights_class の削除を拒否する（負例2）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["performance_rights"]["rights_class"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize(
+    "layer_name",
+    ["voice_identity_rights", "performance_rights", "composition_rights", "recording_master_rights"],
+)
+def test_fix319_5_rejects_consent_status_deleted_in_every_layer(layer_name: str) -> None:
+    """4層すべてで consent_status 削除を拒否する（負例3。指摘が名指しした
+    「各層の consent_status」を1層に留めず全数掃討する）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data[layer_name]["consent_status"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize(
+    "layer_name",
+    ["voice_identity_rights", "performance_rights", "composition_rights", "recording_master_rights"],
+)
+def test_fix319_5_rejects_unknown_key_added_to_every_layer(layer_name: str) -> None:
+    """4層すべてで未知キー追加を拒否する（負例4）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data[layer_name]["unexpected_layer_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_5_rejects_voice_identity_rights_class_deleted() -> None:
+    """User 帰属層（voice_identity_rights）も同じ閉集合強制の対象である
+    ことの確認（layer 固有ではなく全層一律であることの直接確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["voice_identity_rights"]["rights_class"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_5_rejects_bare_pending_user_attestation_in_external_layer() -> None:
+    """performance_rights は外部第三者（PJS）に関する層——rights_class に
+    裸トークン `PENDING_USER_ATTESTATION`（User 帰属専用）を使うのは誤用
+    として拒否し、`UNRESOLVED_EXTERNAL` を使うよう案内する（provenance
+    ブロックの誤用拒否ロジックを層レベルへ拡張したことの確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["performance_rights"]["rights_class"] = "PENDING_USER_ATTESTATION"
+    with pytest.raises(m.Run9ValidationError, match="UNRESOLVED_EXTERNAL"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_5_rejects_bare_unresolved_external_in_user_layer() -> None:
+    """voice_identity_rights は User 帰属層——consent_status に裸トークン
+    `UNRESOLVED_EXTERNAL`（外部第三者専用）を使うのは誤用として拒否する
+    （逆方向の誤用拒否）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["consent_status"] = "UNRESOLVED_EXTERNAL"
+    with pytest.raises(m.Run9ValidationError, match="PENDING_USER_ATTESTATION"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_5_recording_master_rights_free_text_status_still_accepted() -> None:
+    """recording_master_rights.rights_class/consent_status は裸の予約
+    トークンではなく自由記述の具体値（機械検証済みライセンス事実の要約）
+    であり、値語彙検証は誤用としてこれを拒否しない（有効ファイルが
+    green のままであることの直接確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert data["recording_master_rights"]["consent_status"] == (
+        "LICENSE_CONFIRMED_USAGE_SCOPE_PENDING_TOOLING_REVIEW"
+    )
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第2巡対応 — Fix 6（P2）: PJS rights の外部
+# 未解決語彙への張り替え（UNRESOLVED_EXTERNAL）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_6_performance_and_composition_rights_use_unresolved_external() -> None:
+    """performance_rights/composition_rights の rights_class/consent_status
+    は `PENDING_USER_ATTESTATION`（User 帰属専用）ではなく
+    `UNRESOLVED_EXTERNAL`（外部第三者専用）へ張り替え済み——PJS の演者/
+    作曲者に関する権利は User が attest できる対象ではない（Codex bot
+    レビュー PR #319 第2巡指摘, P2, 採用）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    for layer_name in ("performance_rights", "composition_rights"):
+        assert data[layer_name]["rights_class"] == "UNRESOLVED_EXTERNAL"
+        assert data[layer_name]["consent_status"] == "UNRESOLVED_EXTERNAL"
+
+
+def test_fix319_6_voice_identity_rights_still_pending_user_attestation() -> None:
+    """User 帰属欄（User donor の同意・usage grants 等）は張り替え対象外
+    ——引き続き `PENDING_USER_ATTESTATION` のまま維持する（voice_identity_
+    rights は User donor 自身の声の権利であり、Fix 6 の対象は PJS 側の
+    3層のみ）。usage_grants.run9_identity_anchor は Fix 19（第9巡, P2,
+    採用）で値語彙が {not_granted, granted} の閉集合へ凍結されたのに伴い、
+    旧値 `pending`（閉集合外の第3値）から `not_granted` へ改めた——
+    「まだ承認されていない」という意味論自体は変わらない。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert data["voice_identity_rights"]["rights_class"] == "PENDING_USER_ATTESTATION"
+    assert data["voice_identity_rights"]["consent_status"] == "PENDING_USER_ATTESTATION"
+    assert data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] == "not_granted"
+
+
+def test_fix319_6_rights_manifest_still_validates_after_vocab_swap() -> None:
+    """張り替え後も rights_manifest.json 全体が validator を通ることの
+    直接確認（Fix 5 の必須キー閉集合・語彙検証拡張と Fix 6 の張り替えが
+    整合していることの end-to-end 確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_6_recording_master_rights_not_swapped_no_bare_pending_token() -> None:
+    """recording_master_rights は今回の張り替え対象に含めない
+    （誤用パターン自体が元から存在しないため）——rights_class/
+    consent_status に裸トークン `PENDING_USER_ATTESTATION` が残っていない
+    ことの確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert data["recording_master_rights"]["rights_class"] != "PENDING_USER_ATTESTATION"
+    assert data["recording_master_rights"]["consent_status"] != "PENDING_USER_ATTESTATION"
+
+
+def test_fix319_6_history_records_vocab_reassignment_rationale() -> None:
+    """仕分けの根拠（どの欄がどちらの主体に帰属するか）が manifest 注記
+    （history）に明記されていること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    history = data["history"]
+    swap_events = [h for h in history if "Fix 6" in h["event"]]
+    assert len(swap_events) == 1
+    event_text = swap_events[0]["event"]
+    assert "UNRESOLVED_EXTERNAL" in event_text
+    assert "voice_identity_rights" in event_text
+    assert "User" in event_text
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第3巡対応 — Fix 8（P2）: license ネスト payload
+# の形状検証（+ 同型欠陥だった usage_grants/interpretations エントリ/
+# corpus_pins への同流儀の拡張）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_8_license_empty_dict_rejected() -> None:
+    """recording_master_rights.license を `{}` へ置換しても、Fix 5 の層別
+    必須キー閉集合はキーの**存在**しか見ていないため旧実装は受理していた
+    ——Fix 8 のネスト形状検証（value/scope/derivative_obligation/source の
+    4キー閉集合）が missing key として拒否することの確認（負例1）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["license"] = {}
+    with pytest.raises(m.Run9ValidationError, match="license missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_license_scalar_replacement_rejected() -> None:
+    """license をスカラー文字列へ置換した場合の拒否（負例2）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["license"] = "CC BY-SA 4.0"
+    with pytest.raises(m.Run9ValidationError, match="license must be an object"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_license_value_field_deleted_rejected() -> None:
+    """license.value（ライセンス種別そのもの）だけを削除した場合の拒否
+    （負例3 — CC BY-SA 4.0 という値自体が消えるケースを名指しで検査）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["license"]["value"]
+    with pytest.raises(m.Run9ValidationError, match=r"license missing required key.*value"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_license_unknown_key_rejected() -> None:
+    """license に未知キーが混入した場合の拒否（負例4）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["license"]["unexpected_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="license has unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_license_blank_string_value_rejected() -> None:
+    """license の値が空白のみの文字列の場合の拒否（非空文字列強制の確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["license"]["source"] = "   "
+    with pytest.raises(m.Run9ValidationError, match=r"license\.source"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_usage_grants_empty_dict_rejected() -> None:
+    """voice_identity_rights.usage_grants を `{}` へ置換した場合の拒否
+    （負例1 — rev 0.2 改訂4「raw_audio_publication/model_general_
+    distribution は run9_identity_anchor と別承認」の意味論を担う3キーが
+    消えても旧実装は受理していた）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"] = {}
+    with pytest.raises(m.Run9ValidationError, match="usage_grants missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_usage_grants_scalar_replacement_rejected() -> None:
+    """usage_grants をスカラーへ置換した場合の拒否（負例2）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"] = "not_granted"
+    with pytest.raises(m.Run9ValidationError, match="usage_grants must be an object"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_usage_grants_key_deleted_rejected() -> None:
+    """usage_grants.raw_audio_publication の削除拒否（負例3）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"]
+    with pytest.raises(m.Run9ValidationError, match="usage_grants missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_usage_grants_unknown_key_rejected() -> None:
+    """usage_grants への未知キー混入拒否（負例4）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"]["unexpected_grant"] = "granted"
+    with pytest.raises(m.Run9ValidationError, match="usage_grants has unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_interpretations_entry_unknown_key_rejected() -> None:
+    """recording_master_rights.interpretations の1エントリに未知キーが
+    混入した場合の拒否（負例1 — 旧実装は status/question/note の3キーが
+    非空文字列であることのみを見ており、実データが持つ `source` を含む
+    閉集合としては強制していなかった）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["interpretations"][
+        "share_alike_applies_to_synthesis_output"
+    ]["unexpected_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_interpretations_entry_source_deleted_rejected() -> None:
+    """interpretations エントリの source 削除拒否（負例2 — source は実
+    データに存在するが旧実装では必須キーとして強制されていなかった）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["interpretations"][
+        "share_alike_applies_to_synthesis_output"
+    ]["source"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_interpretations_entry_scalar_replacement_rejected() -> None:
+    """interpretations の1エントリをスカラーへ置換した場合の拒否（負例3）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["interpretations"][
+        "share_alike_applies_to_synthesis_output"
+    ] = "UNSETTLED_LEGAL_INTERPRETATION"
+    with pytest.raises(m.Run9ValidationError, match="must be an object"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_corpus_pins_scalar_replacement_rejected() -> None:
+    """recording_master_rights.corpus_pins.source_archive_sha256（実 sha256
+    pin 値）をスカラーへ置換した場合の拒否（負例1 — source archive pin /
+    expanded corpus pin の2値は互いに代替ではない別対象、rev 0.2 改訂3）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"]["source_archive_sha256"] = (
+        "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca"
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be an object"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_corpus_pins_note_deleted_rejected() -> None:
+    """corpus_pins.note 削除の拒否（負例2）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["corpus_pins"]["note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_corpus_pins_empty_dict_rejected() -> None:
+    """corpus_pins を `{}` へ置換した場合の拒否（負例3）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"] = {}
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_corpus_pins_sub_block_unknown_key_rejected() -> None:
+    """corpus_pins のサブブロック（source_archive_sha256）への未知キー
+    混入拒否（負例4）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"]["source_archive_sha256"]["extra"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_valid_manifest_still_validates_after_shape_checks_added() -> None:
+    """実 manifest（license/usage_grants/interpretations/corpus_pins 全て
+    実キーのみを持つ）が Fix 8 追加後も validator を通ることの end-to-end
+    確認（有効ファイルへの過剰一般化による誤検知が無いことの確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# --- performance_source ブロック（RUN9_CONTRACT.yaml 新設欄） ----------------
+
+
+def test_rev04_performance_source_block_present_and_valid(contract_raw: Dict[str, Any]) -> None:
+    block = contract_raw["performance_source"]
+    assert block["id"] == "PJS"
+    assert block["role"] == "EXTERNAL_PERFORMANCE_SOURCE"
+    m.validate_performance_source_block(block)  # 例外を投げないことの確認
+
+
+def test_rev04_performance_source_block_rejects_missing_teacher_note() -> None:
+    block = {
+        "id": "PJS",
+        "role": "EXTERNAL_PERFORMANCE_SOURCE",
+        "rights_manifest_ref": "inputs/rights_manifest.json#performance_rights",
+        "teacher_terminology_note": "no owner claim here",
+    }
+    with pytest.raises(m.Run9ValidationError, match="does not mean the Voice owner"):
+        m.validate_performance_source_block(block)
+
+
+def test_rev04_performance_source_block_rejects_missing_separation_markers() -> None:
+    block = {
+        "id": "PJS",
+        "role": "EXTERNAL_PERFORMANCE_SOURCE",
+        "rights_manifest_ref": "inputs/rights_manifest.json#performance_rights",
+        "teacher_terminology_note": "Teacher は Voice 所有者を意味しない。",
+    }
+    with pytest.raises(m.Run9ValidationError, match="Voice Source"):
+        m.validate_performance_source_block(block)
+
+
+def test_rev04_contract_declares_performance_source_top_level_key() -> None:
+    assert "performance_source" in m._CONTRACT_TOP_LEVEL_KEYS
+
+
+# --- b裁定 + 追加①是正: render_code_commit(歴史)=INFERRED_UNCONFIRMED /
+# run9_render_code_commit(前方宣言)=DECLARED_FOR_RUN9 + bundle sha PINNED --
+
+
+def test_rev04_render_code_commit_reverted_to_inferred_unconfirmed_historically() -> None:
+    """2026-08-25 User 追加裁定①: render_code_commit（RUN6 の歴史的 export
+    provenance）を USER_ATTESTED へ昇格したのは過大だった——歴史的事実は
+    遡って attest しない方針により INFERRED_UNCONFIRMED へ差し戻した。
+    history 配列に昇格・差し戻し両イベントが append-only で記録される。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    rcc = bundle["historical_export_provenance"]["render_code_commit"]
+    assert rcc["status"] == "INFERRED_UNCONFIRMED"
+    assert "attestation" not in rcc
+    history = rcc["history"]
+    assert any("USER_ATTESTED" in h["event"] for h in history)
+    assert any(
+        "INFERRED_UNCONFIRMED" in h["event"] and "差し戻" in h["event"] for h in history
+    )
+
+
+def test_rev04_run9_render_code_commit_declared_for_run9_with_ruling_reference() -> None:
+    """b裁定の実体的な意味（RUN9 が今後使用する commit の確定）は独立の
+    新設欄 run9_render_code_commit（status: DECLARED_FOR_RUN9）へ移した
+    （2026-08-25 User 追加裁定①）。PR #319 第2巡指摘（P2, 採用）により
+    さらに run9_runtime_inputs 節配下へ構造移動した。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    rrc = bundle["run9_runtime_inputs"]["run9_render_code_commit"]
+    assert rrc["status"] == "DECLARED_FOR_RUN9"
+    assert rrc["commit_full"] == "e2307b1080b00f3999702ce9017cfd75c7f862fe"
+    assert rrc["declaration"]["declared_by"] == "User"
+    assert rrc["declaration"]["declared_at"] == "2026-08-25"
+    assert "aとbを承認" in rrc["declaration"]["statement"]
+
+
+def test_rev04_render_code_commit_and_run9_render_code_commit_are_independent() -> None:
+    """歴史的推定 (render_code_commit) と前方宣言 (run9_render_code_commit)
+    は独立の欄——片方が INFERRED_UNCONFIRMED のまま、もう片方が確定済み
+    (DECLARED_FOR_RUN9) であることは矛盾ではない。値（commit）は同じだが
+    意味論は独立（2026-08-25 User 追加裁定①）。PR #319 以降は別の節
+    （historical_export_provenance / run9_runtime_inputs）に構造分離されて
+    いる。"""
+    bundle = json.loads(BACKBONE_BUNDLE_PATH.read_text(encoding="utf-8"))
+    assert bundle["historical_export_provenance"]["render_code_commit"]["status"] == "INFERRED_UNCONFIRMED"
+    assert bundle["run9_runtime_inputs"]["run9_render_code_commit"]["status"] == "DECLARED_FOR_RUN9"
+    assert (
+        bundle["historical_export_provenance"]["render_code_commit"]["commit_full"]
+        == bundle["run9_runtime_inputs"]["run9_render_code_commit"]["commit_full"]
+    )
+
+
+def test_rev04_backbone_runtime_bundle_sha_pinned_matches_real_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """backbone_runtime_bundle_sha の PINNED 判定は run9_render_code_commit
+    の確定を根拠とする（render_code_commit が INFERRED_UNCONFIRMED のまま
+    であることは妨げない——2026-08-25 User 追加裁定①）。PR #319 第2巡指摘
+    （P2, 採用）の構造分離により値を再計算した（旧値は
+    test_fix319_2_backbone_runtime_bundle_sha_history_notes_prior_value
+    が別途 append-only 保持を確認する）。"""
+    field = contract_raw["backbone_runtime_bundle_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == (
+        "83f67a309a8e918ff7758f0793d68bb885721d84f3a144916927bf00b67952a6"
+    )
+    assert field["value"] == m.compute_file_sha256(BACKBONE_BUNDLE_PATH)
+
+
+def test_rev04_gate_state_still_blocked_after_bundle_promotion(contract: m.Run9RunContract) -> None:
+    """backbone_runtime_bundle_sha の昇格だけでは他の PENDING 欄
+    （dataset/config/learning_recipe 等）が残るため gate_state() は
+    引き続き BLOCKED——正直な状態表現であることの確認（実装バグではない）。"""
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+# --- metric_space_sha repin 整合 + terminology 非所有注記（変更1・4/§7裁定） -
+
+
+def test_rev04_metric_space_sha_repinned_and_matches_domain() -> None:
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == (
+        "de3a459bdea761850d465caa60a91a16d7a9a39b65652dd409f6e45a20ee1bb4"
+    )
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_rev04_metric_space_manifest_still_validates_after_terminology_note() -> None:
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    m.validate_identity_metric_space_manifest(metric_space_obj)  # 例外を投げないことの確認
+
+
+def test_rev04_teacher_terminology_note_present_where_teacher_word_appears() -> None:
+    """2026-08-25 User 追加裁定「確認メモ / RUN9 用語整理」指示5: 「teacher
+    語の再出現拒否」チェックは実装しない代わりに、teacher という語が
+    出現する identity_metric_space.json が非所有注記も併せ持つことを
+    軽量に確認する（専用の run9_schema.py validator 関数としては実装
+    しない——検証自体を見送る選択肢の部分的採用）。"""
+    text = IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8")
+    assert "teacher" in text
+    assert "Voice 所有者" in text
+    assert "Voice Source ≠ Performance Source ≠ Performance Author" in text
+
+
+def test_rev04_common_teacher_transfer_literal_occurrences_are_old_name_references() -> None:
+    """「Common Teacher Transfer」の literal な出現は、frozen 文書
+    （v0.1 §14 見出しラベル・派生設計変更メモ、無改変）か、可変 artifact
+    側では「旧名」として参照される場合に限る（DESIGN_RUN9_REVISION_0.4.md
+    「変更4」の旧名注記付き参照規約 — active な呼称としての置換ではなく、
+    旧称の由来注記としてのみ言及する）。README.md で言及する場合は
+    「旧」または「Common Performance Lesson」という新称が同じ行内に
+    現れていることを確認する。"""
+    assert "Common Teacher Transfer" in DESIGN_DOC_PATH.read_text(encoding="utf-8")
+    assert "Common Teacher Transfer" in DERIVED_DESIGN_CHANGES_PATH.read_text(encoding="utf-8")
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    for line in readme_text.splitlines():
+        if "Common Teacher Transfer" in line:
+            assert "旧" in line or "Common Performance Lesson" in line, (
+                f"README references the old name without old-name framing: {line!r}"
+            )
+
+
+def test_rev04_teacher_reference_field_does_not_reappear_in_contract(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """terminology 逆行拒否（可能な範囲で）: `teacher_reference` という
+    旧 v0.1 §11 の欄名が RUN9_CONTRACT.yaml の実際のトップレベルキーとして
+    再出現していないことの確認——rev 0.3 で `interventions` 構造へ移行
+    済みであり、rev 0.4 の `performance_source` 新設もこの欄を再導入
+    しない。コメント中の説明的な言及（「teacher_reference 相当の欄は
+    存在しない」等）まで禁止すると、その説明自体が書けなくなるため、
+    パース済みキー集合を見る（生テキストの文字列検索ではない）。"""
+    assert "teacher_reference" not in contract_raw.keys()
+    assert "teacher_reference" not in contract_raw.get("interventions", {}).keys()
+
+
+# --- design_revision 系譜表の repo artifact 写像確認 -------------------------
+
+
+def test_rev04_doc_mapping_table_covers_all_8_changes() -> None:
+    doc = REVISION_0_4_DOC_PATH.read_text(encoding="utf-8")
+    assert "変更1" in doc and "変更2" in doc and "変更3" in doc and "変更4" in doc
+    assert "変更5" in doc and "変更6" in doc and "変更7" in doc and "変更8" in doc
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第6巡対応 — Fix 12（P2）: not_applicable の
+# フィールド別 allowlist 化（performance_author.performance_editor /
+# synthesis.engine / synthesis.voicebank の3欄のみ許可）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("layer_name", "block_name", "field_name"),
+    [
+        ("recording_master_rights", "voice_source", "owner"),
+        ("performance_rights", "performance_author", "performer"),
+        ("composition_rights", "composition", "composer"),
+        ("composition_rights", "composition", "lyricist"),
+    ],
+)
+def test_fix319_12_not_applicable_rejected_outside_allowlist(
+    layer_name: str, block_name: str, field_name: str
+) -> None:
+    """owner/performer/composer/lyricist は allowlist 外——`not_applicable`
+    へ書き換えると、必須権利保有者欄が未解決のまま消去され、将来の
+    R9-G1 tooling に NO_UNKNOWN_RIGHTS_HOLDER を偽成立させ得る（負例
+    ファミリー、Codex bot レビュー PR #319 第6巡指摘, Fix 12, P2, 採用）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data[layer_name]["provenance"][block_name][field_name] = "not_applicable"
+    with pytest.raises(m.Run9ValidationError, match="does not permit 'not_applicable'"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_12_not_applicable_rejection_message_names_replacement_tokens() -> None:
+    """拒否メッセージが未解決値の代替語彙（`<UNRESOLVED_EXTERNAL>` /
+    `<PENDING_USER_ATTESTATION>`）を案内することの確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["provenance"]["voice_source"]["owner"] = "not_applicable"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=r"<UNRESOLVED_EXTERNAL>.*<PENDING_USER_ATTESTATION>",
+    ):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize(
+    ("block_name", "field_name"),
+    [
+        ("performance_author", "performance_editor"),
+        ("synthesis", "engine"),
+        ("synthesis", "voicebank"),
+    ],
+)
+def test_fix319_12_not_applicable_still_accepted_in_allowlisted_fields(
+    block_name: str, field_name: str
+) -> None:
+    """allowlist 3欄（DESIGN_RUN9_REVISION_0.4.md 「provenance の実値充填」表
+    と一致）は実 manifest で `not_applicable` + 理由 note のまま従来どおり
+    受理されることの正例確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    layer_name = "performance_rights" if block_name == "performance_author" else "recording_master_rights"
+    assert data[layer_name]["provenance"][block_name][field_name] == "not_applicable"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第6巡対応 — Fix 13（P2）: 契約 blocker 文の
+# schema 名更新（旧 run9-user-donor-rights/1.0 のまま記述していた誤導経路
+# の是正）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_13_contract_blocker_names_current_four_layer_schema() -> None:
+    """RUN9_CONTRACT.yaml の dataset_manifest_sha blocker 文が、現 schema
+    `run9-rights-manifest/2.0` と、legacy verifier への
+    `extract_voice_identity_rights_layer()` 抽出フローを名指しで記述して
+    いることの確認（Codex bot レビュー PR #319 第6巡指摘, Fix 13, P2,
+    採用）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    reason = yaml.safe_load(contract_text)["dataset_manifest_sha"]["reason"]
+    assert m.SCHEMA_RIGHTS_MANIFEST_FOUR_LAYER in reason
+    assert "extract_voice_identity_rights_layer" in reason
+    assert "PENDING_USER_ATTESTATION" in reason
+
+
+def test_fix319_13_contract_blocker_does_not_name_legacy_schema_as_top_level() -> None:
+    """blocker 文が旧 schema 名 `run9-user-donor-rights/1.0` を rights
+    manifest の**トップレベル** schema として名指ししていないことの確認
+    ——旧値への言及自体は「相当の内容」という nested 層への参照として
+    残る（実装者が legacy verifier へ直接渡す誤導経路を閉じる）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    reason = yaml.safe_load(contract_text)["dataset_manifest_sha"]["reason"]
+    assert "schema run9-user-donor-rights/1.0" not in reason
+    assert "run9-user-donor-rights/1.0 相当の内容" in reason
+
+
+def test_fix319_13_repo_wide_grep_finds_no_stale_present_tense_legacy_schema_top_level_claim() -> None:
+    """repo 全体で、rights_manifest.json のトップレベル schema を旧
+    `run9-user-donor-rights/1.0` と現在形で名指しする残存が無いことを
+    確認する（履歴文脈・legacy verifier のフラット化後入力としての言及
+    ・test 内の定数一致検査は対象外）。domains/identity_domain_run9_v1.json
+    の pending pin note も rev 0.4 の4層 schema 名へ更新済みであることを
+    直接確認する（Fix 13 と同型の誤導経路の同時是正）。"""
+    domain_raw = (_RUN_DIR / "domains" / "identity_domain_run9_v1.json").read_text(
+        encoding="utf-8"
+    )
+    assert "run9-rights-manifest/2.0" in domain_raw
+    assert "schema run9-user-donor-rights/1.0）が起草済み" not in domain_raw
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第7巡対応 — Fix 14（P2）: 層抽出前の4層全体
+# 検証の必須化。旧 extract_voice_identity_rights_layer() はトップレベル
+# schema と voice_identity_rights しか見ておらず、他3層を削除した
+# manifest でも抽出が成功し verify_rights_manifest_against_ledger() を
+# 通過できていた——抽出は validate_rights_manifest_four_layer() を必須
+# 内包する fail-closed 経路へ強化した。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "layer_name",
+    ["performance_rights", "composition_rights", "recording_master_rights"],
+)
+def test_fix319_14_extract_rejects_manifest_missing_other_required_layer(
+    layer_name: str,
+) -> None:
+    """負例（3パターン）: voice_identity_rights 自体は無傷でも、他の必須層
+    （performance_rights/composition_rights/recording_master_rights）の
+    いずれかが manifest から削除されていれば
+    `extract_voice_identity_rights_layer()` が拒否すること——旧経路では
+    donor rights 層だけ見て抽出に成功し、legacy verifier が他3層の欠落に
+    気づかないまま通過していた（Codex bot レビュー PR #319 第7巡指摘,
+    Fix 14, P2, 採用）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data[layer_name]
+    with pytest.raises(m.Run9ValidationError, match="missing required top-level key"):
+        m.extract_voice_identity_rights_layer(data)
+
+
+def test_fix319_14_extract_still_succeeds_and_passes_legacy_verifier_on_valid_manifest() -> None:
+    """正例（回帰）: 現行 rights_manifest.json（4層すべて valid）からの
+    抽出は引き続き成功し、`verify_rights_manifest_against_ledger()` も
+    従来どおり通過すること——Fix 14 の必須検証追加が正常系を壊していない
+    ことの確認。"""
+    raw = m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    flat = m.extract_voice_identity_rights_layer(raw)
+    ledger = m.load_user_donor_ledger_json(
+        (_FOUNDRY_DIR / "recording_kit" / "user_donor_ledger.json").read_text(encoding="utf-8")
+    )
+    m.verify_rights_manifest_against_ledger(flat, ledger)  # 例外を投げないことの確認
+    assert len(flat["entries"]) == 17
+
+
+def test_fix319_14_extract_calls_full_four_layer_validation_not_only_layer_shape() -> None:
+    """他3層の構造は保ったまま `recording_master_rights.interpretations`
+    のような4層検証固有のチェック対象を壊した manifest でも抽出が拒否
+    されること——検証がトップレベルキー存在チェックのみに留まらず
+    `validate_rights_manifest_four_layer()` を丸ごと呼んでいることの
+    直接確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["interpretations"]
+    with pytest.raises(m.Run9ValidationError, match="interpretations"):
+        m.extract_voice_identity_rights_layer(data)
+
+
+def test_fix319_14_extract_docstring_and_contract_document_the_four_layer_gate() -> None:
+    """docstring と RUN9_CONTRACT.yaml の抽出フロー記述の双方に、抽出が
+    4層全体検証を内包する旨が追記されていることの確認。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    extract_start = source.index("def extract_voice_identity_rights_layer(")
+    extract_end = source.index("def validate_rights_manifest_four_layer(")
+    extract_body = source[extract_start:extract_end]
+    assert "validate_rights_manifest_four_layer" in extract_body
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    reason = yaml.safe_load(contract_text)["dataset_manifest_sha"]["reason"]
+    assert "validate_rights_manifest_four_layer" in reason
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第8巡対応 — Fix 16（P2）: voice_identity_rights.
+# attestation の形状 + pending/attested 二形態の整合検証。旧
+# validate_rights_manifest_four_layer() は attestation キーの**存在**しか
+# 見ておらず、`{}`/スカラー/signer・timestamp・statement 欠落の
+# `{"attested": true}` へ置換しても受理していた——User rights 遷移を
+# 裏付ける証拠が構造的に valid のまま消えていた。
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_16_attestation_empty_dict_rejected() -> None:
+    """attestation を `{}` へ置換した場合の拒否（負例1）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {}
+    with pytest.raises(m.Run9ValidationError, match="attestation missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attestation_scalar_replacement_rejected() -> None:
+    """attestation をスカラーへ置換した場合の拒否（負例2）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = "not_attested"
+    with pytest.raises(m.Run9ValidationError, match="attestation must be an object"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attestation_attested_true_missing_signer_rejected() -> None:
+    """`{"attested": true}` へ置換（signer/timestamp/statement 欠落）した
+    場合の拒否（負例3 — 指摘本文が名指しするケース）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {"attested": True}
+    with pytest.raises(m.Run9ValidationError, match="attestation missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attestation_unknown_key_rejected() -> None:
+    """attestation への未知キー混入拒否（負例4）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"]["unexpected_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="attestation has unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attestation_non_bool_attested_rejected() -> None:
+    """attestation.attested が bool でない場合の拒否（負例5）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"]["attested"] = "false"
+    with pytest.raises(m.Run9ValidationError, match="attestation.attested must be a bool"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_pending_form_with_nonnull_signer_rejected() -> None:
+    """pending 形態（attested=false）なのに attested_by が非 null な場合の
+    拒否（負例6 — pending/attested 二形態の混在を許さない）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"]["attested_by"] = "someone"
+    with pytest.raises(m.Run9ValidationError, match=r"attested_by must be null"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attested_form_bad_timestamp_rejected() -> None:
+    """attested 形態で attested_at が UTC ISO 8601 でない場合の拒否
+    （負例7）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25",
+        "statement": "I attest this recording as my own voice.",
+    }
+    with pytest.raises(m.Run9ValidationError, match="attested_at must be a UTC ISO 8601 timestamp"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attested_form_empty_statement_rejected() -> None:
+    """attested 形態で statement が空文字列の場合の拒否（負例8）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "   ",
+    }
+    with pytest.raises(m.Run9ValidationError, match="statement must be a non-empty string"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_attested_form_while_status_still_pending_rejected() -> None:
+    """attestation が attested 形態に埋まっているのに、層の rights_class/
+    consent_status が依然 `PENDING_USER_ATTESTATION` のままの場合の拒否
+    （負例9 — 二形態の整合違反、順方向）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_pending_form_while_status_no_longer_pending_rejected() -> None:
+    """層の rights_class/consent_status が `PENDING_USER_ATTESTATION` から
+    離れているのに、attestation が pending 形態のまま放置されている場合の
+    拒否（負例10 — 二形態の整合違反、逆方向）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_16_valid_pending_fixture_still_validates() -> None:
+    """正例（回帰）: 現行 rights_manifest.json の pending 形態
+    （attested=false + signer/timestamp/statement すべて null +
+    rights_class/consent_status = PENDING_USER_ATTESTATION）が Fix 16 追加後も
+    validator を通ることの end-to-end 確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_16_valid_attested_form_accepted() -> None:
+    """正例: pending 形態から attested 形態へ整合的に遷移した manifest
+    （attestation 充足 + rights_class/consent_status を PENDING から離す）
+    は受理されること——二形態の整合検証が誤検知しないことの確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第9巡対応 — Fix 19（P2）: usage_grants の値語彙を
+# {not_granted, granted} の閉集合へ凍結し、granted への遷移に
+# ①attestation の attested 形態 ②grant ごとの独立した承認記録
+# （<grant>_approval: approved_at + approval_statement）を fail-closed で
+# 要求する。旧 Fix 8（非空文字列のみの形状検証）は attestation.attested=
+# false のまま raw_audio_publication/model_general_distribution を
+# "granted" へ手編集しても受理してしまっていた——rev 0.2 改訂4
+# （DESIGN_RUN9_REVISION_0.2.md 194-199行、「別承認まで独立に not_granted
+# 維持」）への違反を構造的に防げていなかった。
+# ---------------------------------------------------------------------------
+
+
+_USAGE_GRANT_KEYS = (
+    "run9_identity_anchor", "raw_audio_publication", "model_general_distribution",
+)
+
+
+def _attested_voice_identity_rights_layer(data: Dict[str, Any]) -> Dict[str, Any]:
+    """`voice_identity_rights` 層を attested 形態（attestation.attested=true
+    + rights_class/consent_status を PENDING から離す）へ書き換えたコピーを
+    返す——Fix 19 の granted 前提条件①（attested 形態必須）を満たした
+    状態から出発するテスト群の共通セットアップ。"""
+    data = copy.deepcopy(data)
+    layer = data["voice_identity_rights"]
+    layer["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    layer["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    layer["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    return data
+
+
+@pytest.mark.parametrize("grant_key", _USAGE_GRANT_KEYS)
+def test_fix319_19_out_of_vocab_grant_value_rejected(grant_key: str) -> None:
+    """負例（3キー parametrize）: usage_grants の値が {not_granted, granted}
+    の閉集合外（例 'pending' — Fix 19 導入前の run9_identity_anchor の旧値）
+    の場合に拒否されること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"][grant_key] = "pending"
+    with pytest.raises(m.Run9ValidationError, match=r"usage_grants\." + grant_key + r" must be one of"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize("grant_key", _USAGE_GRANT_KEYS)
+def test_fix319_19_granted_while_attestation_still_pending_rejected(grant_key: str) -> None:
+    """負例（3キー parametrize）: attestation が pending 形態（attested=
+    false）のまま grant を 'granted' へ書き換えても拒否されること——
+    手編集での「承認証拠なしの公開/配布許可」成立を防ぐ核心の負例。
+    run9_identity_anchor も他の2キーと同じ前提条件（attested 形態必須）を
+    適用することの確認を兼ねる。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"][grant_key] = "granted"
+    with pytest.raises(m.Run9ValidationError, match="attestation is not in attested form"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize(
+    "grant_key", ("raw_audio_publication", "model_general_distribution")
+)
+def test_fix319_19_granted_without_approval_record_rejected(grant_key: str) -> None:
+    """負例（2キー parametrize — Fix 27 で `run9_identity_anchor` は本要求
+    から除外された。§rev 0.2 改訂4「別承認」は raw_audio_publication /
+    model_general_distribution のみが対象）: attestation は attested 形態に
+    整えても、grant 別の承認記録（`<grant>_approval`）が無ければ granted
+    遷移は拒否されること。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"][grant_key] = "granted"
+    with pytest.raises(m.Run9ValidationError, match="missing its separate approval record"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_approval_record_missing_key_rejected() -> None:
+    """負例: 承認記録が approval_statement を欠いた場合の拒否
+    （`{"approved_at": ...}` のみ）。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+    }
+    with pytest.raises(m.Run9ValidationError, match="approval missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_approval_record_bad_timestamp_rejected() -> None:
+    """負例: 承認記録の approved_at が UTC ISO 8601 でない場合の拒否。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25",
+        "approval_statement": "Publication approved by User.",
+    }
+    with pytest.raises(m.Run9ValidationError, match="approved_at must be a UTC ISO 8601 timestamp"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_approval_record_blank_statement_rejected() -> None:
+    """負例: 承認記録の approval_statement が空白のみの文字列の場合の拒否。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "   ",
+    }
+    with pytest.raises(m.Run9ValidationError, match="approval_statement must be a non-empty string"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_approval_record_present_while_not_granted_rejected() -> None:
+    """負例: grant が not_granted のまま承認記録キーだけが残置されている
+    場合の拒否（取り消し後の残置レコードのような矛盾状態を許さない）。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Publication approved by User.",
+    }
+    with pytest.raises(m.Run9ValidationError, match="must not be present while"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_approval_record_unknown_key_rejected() -> None:
+    """負例: 承認記録に未知キーが混入した場合の拒否。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Publication approved by User.",
+        "unexpected_field": "x",
+    }
+    with pytest.raises(m.Run9ValidationError, match="approval has unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_valid_not_granted_fixture_still_validates() -> None:
+    """正例（回帰）: 現行 rights_manifest.json（3キーとも not_granted）が
+    Fix 19 追加後も validator を通ることの end-to-end 確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+@pytest.mark.parametrize("grant_key", _USAGE_GRANT_KEYS)
+def test_fix319_19_granted_with_full_preconditions_accepted(grant_key: str) -> None:
+    """正例（3キー parametrize、run9_identity_anchor を含む）: attestation
+    が attested 形態 + grant 別の承認記録が整っていれば granted 遷移は
+    受理されること——run9_identity_anchor も他の2キーと同じ構造で
+    granted 化できることの確認（境界宣言: 既存の attest 受理検証器要件
+    run9_identity_anchor=='granted' と矛盾しない構造）。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"][grant_key] = "granted"
+    data["voice_identity_rights"]["usage_grants"][f"{grant_key}_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": f"{grant_key} approved by User.",
+    }
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_19_grant_approval_is_independent_per_key() -> None:
+    """正例: raw_audio_publication を granted 化しても
+    model_general_distribution は not_granted のまま独立に維持できること
+    ——rev 0.2 改訂4「別承認」の意味論が承認記録レベルでも保たれていること
+    の確認（一方の承認記録が他方の grant を暗黙に granted 化しない）。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Raw audio publication approved by User.",
+    }
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+    assert data["voice_identity_rights"]["usage_grants"]["model_general_distribution"] == "not_granted"
+    assert "model_general_distribution_approval" not in data["voice_identity_rights"]["usage_grants"]
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第14巡対応 — Fix 27（P2）: identity anchor への
+# 二重承認要求の撤回。Fix 19（第9巡）は usage_grants の3キー
+# （run9_identity_anchor / raw_audio_publication / model_general_
+# distribution）へ一律に「①attested 形態 ②grant 専用の承認記録」を要求
+# したが、DESIGN_RUN9_REVISION_0.2.md 194-203行（改訂4）は「別承認」を
+# raw_audio_publication/model_general_distribution の2件のみに限定して
+# おり、run9_identity_anchor は User attest 完了後に anchor の grant が
+# それへ束縛される（attestation 自体が根拠）——追加の承認記録は正典が
+# 要求しない。User が規定どおり attest を完了して run9_identity_anchor を
+# granted にする正常遷移を、根拠のない承認記録の捏造なしに通せなかった
+# Fix 19 の一律適用（第9巡裁定）をここで訂正する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_27_identity_anchor_granted_without_approval_record_accepted() -> None:
+    """正例（核心）: run9_identity_anchor を attested 形態 + 承認記録なしで
+    granted にしても受理されること——rev 0.2 改訂4が定める正典フロー
+    （attestation が anchor grant の唯一の根拠）どおりの正常遷移が、Fix 19
+    の一律ルールでブロックされていた欠陥の直接的な回帰確認。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] = "granted"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+    assert "run9_identity_anchor_approval" not in data["voice_identity_rights"]["usage_grants"]
+
+
+def test_fix319_27_identity_anchor_granted_without_attestation_still_rejected() -> None:
+    """負例（回帰）: attestation が attested 形態でなければ
+    run9_identity_anchor の granted 遷移は Fix 27 適用後も拒否されること
+    ——撤回したのは承認記録の必須性のみで、attested 形態の前提条件①は
+    run9_identity_anchor にも引き続き適用される
+    （`test_fix319_19_granted_while_attestation_still_pending_rejected` と
+    同型だが、Fix 27 のパラメトライズ変更後も run9_identity_anchor 単独で
+    固定しておく）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] = "granted"
+    with pytest.raises(m.Run9ValidationError, match="attestation is not in attested form"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_27_identity_anchor_granted_with_optional_approval_record_still_validates() -> None:
+    """正例（境界宣言）: run9_identity_anchor に承認記録が付与されていても
+    拒否はしない——`run9_identity_anchor_approval` は
+    `_RIGHTS_MANIFEST_USAGE_GRANTS_KEYS` から機械導出される既存の閉集合
+    `allowed_keys` に元々含まれるキーであり、規定にない記録の混入は未知
+    キー拒否ではなく既存の閉集合検証に委ねる、という設計方針の直接確認。
+    付与されている場合は形状検証（approved_at/approval_statement の閉じた
+    2キー）は引き続き通ること。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Identity anchor usage attested by User.",
+    }
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_27_publication_and_distribution_approval_requirement_unchanged() -> None:
+    """回帰（両輪確認）: raw_audio_publication / model_general_distribution
+    は Fix 27 適用後も「attested 形態 + 承認記録」の両方を要求し続けること
+    ——run9_identity_anchor の撤回がこの2キーへ波及していないことの直接
+    確認（`test_fix319_19_granted_without_approval_record_rejected` の
+    parametrize 縮小と対をなす）。"""
+    for grant_key in ("raw_audio_publication", "model_general_distribution"):
+        data = _attested_voice_identity_rights_layer(
+            json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+        )
+        data["voice_identity_rights"]["usage_grants"][grant_key] = "granted"
+        with pytest.raises(m.Run9ValidationError, match="missing its separate approval record"):
+            m.validate_rights_manifest_four_layer(data)
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第10巡対応 — Fix 21（P2）: pending/attested
+# 二形態判定の両 status 要求化。旧 Fix 16 の判定は
+# `rights_class == PENDING or consent_status == PENDING` という `or` 判定
+# で pending 形態を認定しており、`consent_status` だけを
+# `USER_ATTESTED_OWN_VOICE` 等へ書き換え `rights_class` を
+# `PENDING_USER_ATTESTATION` のまま・attestation も pending 形態
+# （attested=false）のままにしても「どちらかが pending」を満たすため通過
+# してしまっていた——attestation なしに正典 permission フィールドの一部が
+# 完了を主張できる抜け道。pending 形態は rights_class/consent_status の
+# **両方**が `PENDING_USER_ATTESTATION` であることを要求し、attested
+# 形態は**どちらも** PENDING でないことを要求する（片方のみの中間状態は
+# 双方向とも form mismatch として拒否）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_21_pending_form_with_only_consent_status_confirmed_rejected() -> None:
+    """負例1（方向A）: consent_status のみを PENDING から確定値へ書き換え、
+    rights_class は PENDING_USER_ATTESTATION・attestation は pending 形態
+    （attested=false）のままの場合の拒否——Fix 21 導入前の `or` 判定では
+    rights_class が pending のままのため通過してしまっていた抜け道。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_21_pending_form_with_only_rights_class_confirmed_rejected() -> None:
+    """負例2（方向B、負例1 の対称ケース）: rights_class のみを PENDING
+    から確定値へ書き換え、consent_status は PENDING_USER_ATTESTATION・
+    attestation は pending 形態（attested=false）のままの場合の拒否。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_21_valid_both_pending_fixture_still_validates() -> None:
+    """正例（回帰）: 現行 rights_manifest.json（rights_class/consent_status
+    ともに PENDING_USER_ATTESTATION・attested=false）が Fix 21 適用後も
+    validator を通ることの end-to-end 確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_21_valid_both_confirmed_attested_form_accepted() -> None:
+    """正例: rights_class/consent_status を両方 PENDING から離し、
+    attestation も attested 形態へ整合的に遷移した manifest は受理される
+    こと（Fix 16 の正例と同型 — Fix 21 が両方向とも過剰一般化していない
+    ことの確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第10巡対応 — Fix 22（P2）: attestation の
+# timestamp 実在日時検証。`_RIGHTS_MANIFEST_UTC_TIMESTAMP_RE` は桁配置しか
+# 見ておらず、`2026-99-99T99:99:99Z` のような実在しない日時（暦として
+# 成立しない月/日/時/分/秒）を通してしまっていた。正規形チェックの後段で
+# `datetime.fromisoformat`（Python 3.11+ は `Z` サフィックスをそのまま
+# 受理する）による実在日時としてのパース可能性を追加検証する
+# （`_is_real_utc_timestamp()`、`attested_at`/`approved_at` 両方で共有）。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_timestamp",
+    [
+        "2026-99-99T99:99:99Z",  # 指摘本文が名指しする値そのもの
+        "2026-13-01T00:00:00Z",  # 月 13
+        "2026-02-30T00:00:00Z",  # 2 月 30 日（実在しない日）
+        "2026-08-25T25:00:00Z",  # 時 25
+        "2026-08-25T00:60:00Z",  # 分 60
+    ],
+)
+def test_fix319_22_attested_at_impossible_datetime_rejected(bad_timestamp: str) -> None:
+    """負例（5値 parametrize）: attested_at が正規形（桁配置）には一致する
+    が暦として実在しない日時の場合、attested 形態として拒否されること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": bad_timestamp,
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(
+        m.Run9ValidationError, match="attested_at must be a UTC ISO 8601 timestamp denoting a real"
+    ):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_22_approved_at_impossible_datetime_rejected() -> None:
+    """負例: usage_grants の承認記録（approved_at）が同じ実在しない日時
+    （月 99 / 日 99 / 時 99 / 分 99 / 秒 99）の場合の拒否——`attested_at`
+    と共有する `_is_real_utc_timestamp()` が承認記録側にも配線されている
+    ことの確認。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-99-99T99:99:99Z",
+        "approval_statement": "Publication approved by User.",
+    }
+    with pytest.raises(
+        m.Run9ValidationError, match="approved_at must be a UTC ISO 8601 timestamp denoting a real"
+    ):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_22_valid_real_attested_at_accepted() -> None:
+    """正例（回帰）: 実在日時の attested_at（既存 Fix 16 正例と同じ値）は
+    Fix 22 適用後も受理されること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_22_valid_real_approved_at_accepted() -> None:
+    """正例（回帰）: 実在日時の approved_at（既存 Fix 19 正例と同じ値）は
+    Fix 22 適用後も受理されること。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Publication approved by User.",
+    }
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第10巡対応 — Fix 23（P2）: corpus_pins 値の
+# 64hex 強制。Fix 8 は corpus_pins の各 `value` を非空文字列としてしか
+# 検証しておらず、`"x"` のような使用不能な値でも構造的に valid のまま通過
+# していた——実際に利用可能な sha256 pin を失っても検出できなかった。
+# 既存の 64hex 検証ヘルパーと同じ正規表現（`_SHA256_HEX_RE`）を再利用し、
+# `corpus_pins` の両 sha256 サブブロックの `value` に lowercase 64-hex を
+# 追加強制する。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("sub_key", ["source_archive_sha256", "expanded_corpus_identity_sha256"])
+def test_fix319_23_corpus_pin_value_too_short_rejected(sub_key: str) -> None:
+    """負例1（2キー parametrize）: corpus_pins の value を短い hex 文字列
+    （指摘本文が名指しする `"x"` 相当）へ書き換えた場合の拒否。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"][sub_key]["value"] = "x"
+    with pytest.raises(m.Run9ValidationError, match=r"\.value must be exactly 64 lowercase hex"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize("sub_key", ["source_archive_sha256", "expanded_corpus_identity_sha256"])
+def test_fix319_23_corpus_pin_value_uppercase_rejected(sub_key: str) -> None:
+    """負例2（2キー parametrize）: 64桁ではあるが大文字混じりの hex 文字列
+    は拒否されること（lowercase 強制）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"][sub_key]["value"] = "A" * 64
+    with pytest.raises(m.Run9ValidationError, match=r"\.value must be exactly 64 lowercase hex"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize("sub_key", ["source_archive_sha256", "expanded_corpus_identity_sha256"])
+def test_fix319_23_corpus_pin_value_non_hex_rejected(sub_key: str) -> None:
+    """負例3（2キー parametrize）: 64桁だが16進以外の文字を含む文字列は
+    拒否されること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"][sub_key]["value"] = "g" * 64
+    with pytest.raises(m.Run9ValidationError, match=r"\.value must be exactly 64 lowercase hex"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_23_valid_real_corpus_pin_values_accepted() -> None:
+    """正例（回帰）: 現行 rights_manifest.json の corpus_pins 実値
+    （source_archive_sha256/expanded_corpus_identity_sha256 いずれも実在の
+    lowercase 64-hex）が Fix 23 適用後も validator を通ることの
+    end-to-end 確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第11巡対応 — Fix 24（P2）: 完了 voice-rights
+# status の閉語彙化。attested 形態の判定（Fix 16/21）は「両 status が
+# PENDING_USER_ATTESTATION と異なる」ことしか要求しておらず、
+# `rights_class`/`consent_status` を `DENIED` 等の任意・矛盾値へ書き換えても
+# 受理してしまっていた——承認記録付き `granted` usage grant（Fix 19 前提
+# 条件①）と組み合わせると、権利状態が否認/未記述のまま raw 公開・配布を
+# 許可する正典 manifest が通ってしまう。閉語彙は現物確認の結果（設計裁定
+# ではなく既存の現物規約）: `inputs/rights_manifest.json` /
+# DESIGN_RUN9_REVISION_0.2.md 改訂4 / DESIGN_RUN9_REVISION_0.4.md いずれにも
+# attested 後の status 値の明文規定はないが、`tests/test_run9_contract.py`
+# 自身が Fix 16/19 導入時点から `rights_class`/`consent_status` 双方に
+# "USER_ATTESTED_OWN_VOICE" を使う規約を既に確立しており（本ファイル上記
+# 7 箇所）、これを閉語彙として run9_schema.py 側で凍結した
+# （`_RIGHTS_MANIFEST_STATUS_USER_ATTESTED_OWN_VOICE`）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_24_attested_form_both_denied_rejected() -> None:
+    """負例1: attested=true で rights_class/consent_status が両方とも
+    閉語彙外の `DENIED`（否認）の場合の拒否——指摘が名指しする再現例の
+    根本形。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "DENIED"
+    data["voice_identity_rights"]["consent_status"] = "DENIED"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_24_attested_form_rights_class_denied_only_rejected() -> None:
+    """負例2: rights_class のみ `DENIED`、consent_status は閉語彙値
+    （USER_ATTESTED_OWN_VOICE）という片方だけ矛盾した組み合わせの拒否。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "DENIED"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_24_attested_form_consent_status_denied_only_rejected() -> None:
+    """負例3: consent_status のみ `DENIED`、rights_class は閉語彙値という
+    逆方向の片方矛盾の拒否。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "DENIED"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_24_attested_form_arbitrary_string_rejected() -> None:
+    """負例4: `DENIED` に限らず、閉語彙外の任意文字列（PENDING でも
+    USER_ATTESTED_OWN_VOICE でもない未知の記述値）も拒否されること——旧
+    条件（PENDING と異なるかどうかのみ）では通っていた経路。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "SOME_UNSPECIFIED_STATUS"
+    data["voice_identity_rights"]["consent_status"] = "SOME_UNSPECIFIED_STATUS"
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_24_denied_status_with_granted_grant_compound_rejected() -> None:
+    """複合負例（指摘本文の再現例）: rights_class/consent_status が両方
+    `DENIED` のまま、attestation は形状要件を満たし usage_grants の1キーを
+    承認記録付きで `granted` へ書き換えても、attestation の二形態整合検証
+    （usage_grants 検証より先に走る）で拒否され、権利状態が否認のまま
+    raw 公開/配布を許可する正典 manifest は成立しないこと。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "DENIED"
+    data["voice_identity_rights"]["consent_status"] = "DENIED"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Publication approved by User.",
+    }
+    with pytest.raises(m.Run9ValidationError, match="status/attestation form mismatch"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_24_valid_closed_vocab_attested_form_accepted() -> None:
+    """正例（回帰）: 閉語彙値 `USER_ATTESTED_OWN_VOICE`（両 status）での
+    attested 形態は Fix 24 適用後も受理されること——Fix 16 の正例
+    （`test_fix319_16_valid_attested_form_accepted`）と同型で、Fix 24 が
+    正当な attested 遷移を過剰拒否していないことの確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_24_valid_closed_vocab_attested_form_with_granted_grant_accepted() -> None:
+    """正例（回帰）: 閉語彙値での attested 形態 + 承認記録付き granted
+    usage grant の組み合わせは Fix 24 適用後も受理されること
+    （`test_fix319_19_granted_with_full_preconditions_accepted` と同型の
+    end-to-end 確認 — Fix 19 の granted 前提条件①は本 Fix 24 の閉語彙
+    検証を通った attested 形態のみを意味するようになったことの固定）。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Raw audio publication approved by User.",
+    }
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第12巡対応 — Fix 25（P2）: 外部層での User 専用
+# 完了トークンの拒否。Fix 24 が `USER_ATTESTED_OWN_VOICE` を
+# voice_identity_rights 層の User-donor attestation 完了を表す正確な意味と
+# して閉語彙化した以上、performance_rights/composition_rights のような
+# 外部第三者層がこの同じトークンで「User attestation 済み」を手編集で
+# 主張できてしまうのは対称漏れ——未解決 provenance と並存したまま validate
+# を通過させない。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("layer_name", "field_name"),
+    [
+        ("performance_rights", "rights_class"),
+        ("performance_rights", "consent_status"),
+        ("composition_rights", "rights_class"),
+        ("composition_rights", "consent_status"),
+    ],
+)
+def test_fix319_25_rejects_user_attested_own_voice_in_external_layer(
+    layer_name: str, field_name: str
+) -> None:
+    """負例（4ケース）: performance_rights/composition_rights の
+    rights_class/consent_status へ `USER_ATTESTED_OWN_VOICE`（voice_identity_
+    rights 層の User-donor attestation 専用トークン）を手編集で混入させても
+    「外部層で User attestation 済み」を偽装できないことの確認——拒否
+    メッセージは voice_identity_rights 層専用であることと、この外部層での
+    代替語彙（UNRESOLVED_EXTERNAL / 具体的な外部権利状態の記述）を案内する。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data[layer_name][field_name] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=r"voice_identity_rights layer User-donor attestation",
+    ):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_25_unresolved_external_regression_still_accepted() -> None:
+    """正例（回帰）: performance_rights/composition_rights の現行値
+    `UNRESOLVED_EXTERNAL` は Fix 25 適用後も引き続き受理されること
+    （`test_fix319_6_performance_and_composition_rights_use_unresolved_external`
+    と同一 fixture 値での end-to-end 回帰確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    for layer_name in ("performance_rights", "composition_rights"):
+        assert data[layer_name]["rights_class"] == "UNRESOLVED_EXTERNAL"
+        assert data[layer_name]["consent_status"] == "UNRESOLVED_EXTERNAL"
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第13巡対応 — Fix 26（P2）: nested provenance /
+# LessonRecord 外部事実欄での User 完了トークン拒否。Fix 25 は層直下の
+# rights_class/consent_status（角括弧なし裸トークン）への
+# `USER_ATTESTED_OWN_VOICE` 混入は塞いだが、nested provenance ブロック
+# （`_validate_rights_provenance_block()` の値検証 — performance_author.
+# performer / composition.composer / composition.lyricist / voice_source.
+# owner 等、角括弧なし自由記述の具体値を受理する経路）と
+# `validate_lesson_record()` の外部事実5欄は同トークンを通常の具体値として
+# 素通りさせていた。Fix 25 と同型の fail-closed 拒否を両経路へ対称適用する。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("layer_name", "block_name", "field_name"),
+    [
+        ("performance_rights", "performance_author", "performer"),
+        ("recording_master_rights", "voice_source", "owner"),
+        ("composition_rights", "composition", "composer"),
+        ("composition_rights", "composition", "lyricist"),
+    ],
+)
+def test_fix319_26_rejects_user_attested_own_voice_in_nested_provenance(
+    layer_name: str, block_name: str, field_name: str
+) -> None:
+    """負例（4ケース）: nested provenance ブロック内の代表4欄
+    （performance_author.performer / voice_source.owner / composition.
+    composer / composition.lyricist）へ `USER_ATTESTED_OWN_VOICE`
+    （voice_identity_rights 層 User-donor attestation 完了専用トークン）を
+    手編集で混入させても、第三者 author/権利者欄を「User attestation 済み」
+    に偽装できないことの確認——拒否メッセージは voice_identity_rights 層
+    専用であることと、この外部欄での代替語彙（UNRESOLVED_EXTERNAL / 具体的
+    な外部権利状態の記述）を案内する。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data[layer_name]["provenance"][block_name][field_name] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=r"voice_identity_rights layer User-donor attestation",
+    ):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_26_nested_provenance_current_values_regression_accepted() -> None:
+    """正例（回帰）: `inputs/rights_manifest.json` の nested provenance
+    現行値（`Junya Koguchi` の具体的記述値 / `<UNRESOLVED_EXTERNAL>`）は
+    Fix 26 適用後も引き続き受理されること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "performance_source",
+        "voice_source",
+        "performance_author",
+        "composition_source",
+        "recording_source",
+    ],
+)
+def test_fix319_26_rejects_user_attested_own_voice_in_lesson_record_field(field: str) -> None:
+    """負例（5ケース、parametrize）: LessonRecord 外部事実5欄いずれも
+    `USER_ATTESTED_OWN_VOICE`（voice_identity_rights 層 User-donor
+    attestation 完了専用トークン）を拒否し、voice_identity_rights 層専用で
+    あることを案内するメッセージを含むこと（Codex bot レビュー PR #319
+    第13巡指摘, Fix 26, P2, 採用）。"""
+    record = _valid_lesson_record()
+    record[field] = "USER_ATTESTED_OWN_VOICE"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=r"voice_identity_rights layer User-donor attestation",
+    ):
+        m.validate_lesson_record(record)
+
+
+def test_fix319_26_valid_lesson_record_fixture_still_validates() -> None:
+    """正例（回帰）: `_valid_lesson_record()` fixture は Fix 26 適用後も
+    引き続き受理されること。"""
+    m.validate_lesson_record(_valid_lesson_record())  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #319 第16巡指摘, Fix 29（P2, 採用）: 層 status 欄での
+# 角括弧綴り sentinel の拒否（裸トークン検査をすり抜ける別綴り経路の閉鎖）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("layer_name", "field_name"),
+    [
+        ("performance_rights", "rights_class"),
+        ("performance_rights", "consent_status"),
+        ("composition_rights", "rights_class"),
+        ("composition_rights", "consent_status"),
+        ("voice_identity_rights", "rights_class"),
+    ],
+)
+@pytest.mark.parametrize(
+    "bracketed",
+    [
+        "<PENDING_USER_ATTESTATION>",
+        "<UNRESOLVED_EXTERNAL>",
+        "<USER_ATTESTED_OWN_VOICE>",
+    ],
+)
+def test_fix319_29_bracketed_sentinel_rejected_in_layer_status(
+    layer_name: str, field_name: str, bracketed: str
+) -> None:
+    """層 status 欄は裸トークン規約 — 角括弧綴りの予約トークンは、裸トークン
+    等値検査（主体種別の誤用拒否・Fix 5/6/25）をすべてすり抜けて自由記述の
+    具体値として受理されてしまうため、一律拒否する（第16巡指摘採用）。"""
+    with pytest.raises(m.Run9ValidationError, match="bracketed sentinel"):
+        m._validate_rights_manifest_layer_status_value(layer_name, field_name, bracketed)
+
+
+def test_fix319_29_bare_tokens_and_free_form_unchanged() -> None:
+    """裸トークンの既存意味論（主体種別整合の受理/拒否）と自由記述の具体値の
+    受理は不変であることの回帰。"""
+    # 外部層の裸 UNRESOLVED_EXTERNAL は従来どおり受理
+    m._validate_rights_manifest_layer_status_value(
+        "performance_rights", "rights_class", "UNRESOLVED_EXTERNAL"
+    )
+    # 自由記述の具体値も従来どおり受理
+    m._validate_rights_manifest_layer_status_value(
+        "recording_master_rights",
+        "consent_status",
+        "LICENSE_CONFIRMED_USAGE_SCOPE_PENDING_TOOLING_REVIEW",
+    )
+    # 現行 manifest 全体も引き続き valid
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)
