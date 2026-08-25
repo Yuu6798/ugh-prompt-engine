@@ -1,0 +1,912 @@
+{
+  "measurement_boundary": {
+    "development_generalization_axis_source": "P4/P5のdevelopment/generalization軸（feature extractor・normalization・metric version）はRUN9_CONTRACT.yaml measurement_spec_sha（別欄）が別途凍結する。同欄は本PR 時点で引き続きPENDING。",
+    "identity_axis_source": "inputs/identity_metric_space.json が正本（domains/identity_domain_run9_v1.json の metric_space_sha としてpin済み）。distance/calibration/confuser_controlの式・閾値は 本manifestで重複定義しない。",
+    "scope_statement": "本manifestが定義するのは何を鳴らすか（score cells + render契約 + take台帳）のみ。どう測るかは対象外——identity軸はinputs/identity_metric_space.json（metric_space_sha としてpin済み）が正本、P4/P5のdevelopment/generalization軸の測定仕様はmeasurement_spec_sha（別欄・PENDINGのまま）が別途凍結する。"
+  },
+  "note": "RUN9-PROBE-1: DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15 Probe Set (P0-P5) の実体manifest。score cellsはmanifest内にself-contained直書きし、新規score moduleは作らない。JSON→ScoreNote変換ハーネスはmachine-dependentの別フェーズで本manifest の対象外。書式は決定論pretty（ensure_ascii=False, indent=2, sort_keys=True + 末尾改行）——founders/*.jsonと同一規約。PR #322 Codexレビュー第1巡2件（採用）反映済み: Fix 1 = render_contract.harness_runtime_seed_policy新設（宣言harnessが実消費するruntime seed=42を明示、performance_seed=909001はgenome-policy層と精密化。gate_synth.py自体の改変は不採用）。Fix 2 = P1-P3のfactor_levelsを{axes: {...}}構造へ再編し、各cellへlevelsメタデータを付与、factor_levels⇔cellの双方向対応をvalidate_probe_manifest()が機械検証する。第2-4巡（validatorロジック中心、manifestバイト変更を伴う分のみ記載）: Fix 7 = P2 filler tuple凍結（medial_filler_pitch_midi追加）。第5巡: Fix 11 = P2のphrase_dynamics軸を操作可能軸表から除去し、対応cellをdiagnostic_role（levelsとは独立のcell属性）へ再分類、P2 roleへEnergy計器能力の境界宣言を追記（energy制御の新規発明は不採用——計器能力の正直な境界宣言を採った）。",
+  "probes": [
+    {
+      "cells": [
+        {
+          "cell_id": "P0-NEUTRAL-SAKURA-FRAGMENT",
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "さ",
+              "phrase_index": 0,
+              "pitch_midi": 64
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "く",
+              "phrase_index": 0,
+              "pitch_midi": 64
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "さ",
+              "phrase_index": 1,
+              "pitch_midi": 64
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "く",
+              "phrase_index": 1,
+              "pitch_midi": 64
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "ら",
+              "phrase_index": 1,
+              "pitch_midi": 62
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "や",
+              "phrase_index": 2,
+              "pitch_midi": 65
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "よ",
+              "phrase_index": 2,
+              "pitch_midi": 69
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "い",
+              "phrase_index": 2,
+              "pitch_midi": 69
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "の",
+              "phrase_index": 2,
+              "pitch_midi": 65
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "そ",
+              "phrase_index": 3,
+              "pitch_midi": 64
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "ら",
+              "phrase_index": 3,
+              "pitch_midi": 62
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "は",
+              "phrase_index": 3,
+              "pitch_midi": 62
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "み",
+              "phrase_index": 4,
+              "pitch_midi": 64
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "わ",
+              "phrase_index": 4,
+              "pitch_midi": 65
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "た",
+              "phrase_index": 4,
+              "pitch_midi": 64
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "す",
+              "phrase_index": 4,
+              "pitch_midi": 62
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 5,
+              "pitch_midi": 64
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "ぎ",
+              "phrase_index": 5,
+              "pitch_midi": 62
+            },
+            {
+              "duration_beats": 4,
+              "is_phrase_final": true,
+              "kana": "り",
+              "phrase_index": 5,
+              "pitch_midi": 57
+            }
+          ],
+          "source": {
+            "transcribed_from": "voice_genesis/singer/score.py",
+            "transcribed_from_sha256": "24a6004daeb0b5d02c55c87642c6eac2cb2ca931c97570d1be666b6a57ade116",
+            "transcription_scope": "build_sakura_score() の全20ノート（6フレーズ、さくらさくら冒頭2フレーズのin音階採譜）をkana/pitch_midi(midi値をintへ丸め)/duration_beats/phrase_index/is_phrase_finalとして値のまま逐語転記した。score.py 全音域はMIDI 57-69であり、P0が要求する中央音域 [57, 72] に全音符が収まるため、断片抽出（部分選択）ではなく全曲をそのままP0の中央域断片として採用した——恣意的な部分選定を避けるための選択。",
+            "verbatim": true
+          },
+          "tempo_bpm": 72.0
+        }
+      ],
+      "design_source": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15",
+      "probe_id": "P0",
+      "role": "同一score・同一lyrics・中央音域・表現指定を最小化した単一cellでIdentity比較の基準点を提供する（v0.1 §15 P0）。この cell が revision_bridge の reference_render/c0_replay_takes/c1_sham_takes/positive_reference/evaluated_renders が共有する score となる（同一score・同一performance_seedでfounder間・条件間を比較するための固定点）。",
+      "title": "Neutral Identity Probe"
+    },
+    {
+      "cells": [
+        {
+          "cell_id": "P1-REG-LOW-DUR-SHORT",
+          "levels": {
+            "duration": "short",
+            "register": "low"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": true,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 57
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P1-REG-LOW-DUR-LONG",
+          "levels": {
+            "duration": "long",
+            "register": "low"
+          },
+          "notes": [
+            {
+              "duration_beats": 4,
+              "is_phrase_final": true,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 57
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P1-REG-MID-DUR-SHORT",
+          "levels": {
+            "duration": "short",
+            "register": "mid"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": true,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 62
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P1-REG-MID-DUR-LONG",
+          "levels": {
+            "duration": "long",
+            "register": "mid"
+          },
+          "notes": [
+            {
+              "duration_beats": 4,
+              "is_phrase_final": true,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 62
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P1-REG-HIGH-DUR-SHORT",
+          "levels": {
+            "duration": "short",
+            "register": "high"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": true,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P1-REG-HIGH-DUR-LONG",
+          "levels": {
+            "duration": "long",
+            "register": "high"
+          },
+          "notes": [
+            {
+              "duration_beats": 4,
+              "is_phrase_final": true,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P1-TRANS-LOW-TO-HIGH",
+          "levels": {
+            "transition_direction": "low_to_high"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 57
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": true,
+              "kana": "り",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P1-TRANS-HIGH-TO-LOW",
+          "levels": {
+            "transition_direction": "high_to_low"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": true,
+              "kana": "り",
+              "phrase_index": 0,
+              "pitch_midi": 57
+            }
+          ],
+          "tempo_bpm": 72.0
+        }
+      ],
+      "design_source": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15",
+      "factor_levels": {
+        "axes": {
+          "duration": {
+            "long": 4,
+            "short": 1
+          },
+          "register": {
+            "high": 65,
+            "low": 57,
+            "mid": 62
+          },
+          "transition_direction": {
+            "high_to_low": "65->57",
+            "low_to_high": "57->65"
+          }
+        },
+        "source_precedent": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json#factor_levels の pitch_bank(low/mid/high=57/62/65)・duration_bank(b1/b4=1/4) と同一の水準値を踏襲する （s7_0b_probe_spec.json は read-only 参照。値のみ precedent として再利用し、同ファイルの改変・再pinは行わない）。"
+      },
+      "probe_id": "P1",
+      "role": "持続音・音程遷移・duration長短・register差を通じてIdentityの物理層応答をprobeする（v0.1 §15 P1）。factor_levels.axesが定義するregister(低/中/高)×duration(短/長)の直交6セル（持続音・register差・duration長短を担当）に、transition_direction軸の音程遷移2セル（低→高/高→低）を加えた8セルで構成する。各cellはlevelsで参照する軸/水準を機械可読に宣言する。",
+      "title": "Pitch / Duration Probe"
+    },
+    {
+      "cells": [
+        {
+          "cell_id": "P2-ONSET-FRICATIVE-S",
+          "levels": {
+            "onset_consonant_class": "fricative_s"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "さ",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P2-ONSET-STOP-K",
+          "levels": {
+            "onset_consonant_class": "stop_k"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "く",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P2-ONSET-STOP-G",
+          "levels": {
+            "onset_consonant_class": "stop_g_voiced"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "ぎ",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P2-ONSET-NASAL-N",
+          "levels": {
+            "onset_consonant_class": "nasal_n"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "の",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P2-ONSET-SEMIVOWEL-Y",
+          "levels": {
+            "onset_consonant_class": "semivowel_y"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "や",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P2-ONSET-SEMIVOWEL-W",
+          "levels": {
+            "onset_consonant_class": "semivowel_w"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "わ",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P2-ONSET-LIQUID-R",
+          "levels": {
+            "onset_consonant_class": "liquid_r"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P2-ONSET-VOWEL-ONLY",
+          "levels": {
+            "onset_consonant_class": "vowel_only"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "い",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P2-PHRASE-BUILD-WEAK-TO-STRONG",
+          "diagnostic_role": {
+            "role_id": "diagnostic_structural_pitch_rise",
+            "scope_boundary_note": "PR #322 第5巡指摘 Fix 11（P1, 採用）: 宣言harness（build_inputs()）にはenergy/velocity/metrical-accentの制御入力が存在しないため、本cellが操作しているのは pitch 上行構造のみ である（note列 60→62→65 の非減少pitch系列 + phrase-final noteが末尾）。energy 効果の帰属に使わない——Energy contrastとしては登録しない診断用cellである。"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "さ",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "く",
+              "phrase_index": 0,
+              "pitch_midi": 62
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "ぎ",
+              "phrase_index": 0,
+              "pitch_midi": 65
+            }
+          ],
+          "tempo_bpm": 72.0
+        }
+      ],
+      "design_source": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15",
+      "factor_levels": {
+        "axes": {
+          "onset_consonant_class": {
+            "fricative_s": "さ/そ/す",
+            "liquid_r": "ら/り",
+            "nasal_n": "の",
+            "semivowel_w": "わ",
+            "semivowel_y": "や/よ",
+            "stop_g_voiced": "ぎ",
+            "stop_k": "く/か",
+            "vowel_only": "い"
+          }
+        },
+        "medial_filler_beats": 1,
+        "medial_filler_kana": "か",
+        "medial_filler_note": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json#factor_levels の medial_filler_kana/medial_filler_beats と同一の水準値を踏襲する（read-only 参照）。medial_filler_pitch_midi=60 は現行 cell の実 filler note 値からの転記（PR #322 第3巡指摘 Fix 7 — 全 onset cell の前置 filler note がこの凍結タプルと完全一致することを validate_probe_manifest() が機械検証する）。",
+        "medial_filler_pitch_midi": 60,
+        "onset_target_duration_beats": 2,
+        "onset_target_note": "Fix 25（PR #322 第14巡指摘、採用）: 全 onset cell の phrase-final 検定 note が共有すべき凍結 target タプル。現行 cell の実値（MIDI 65 / 2拍）から転記。validate_probe_manifest() が全 onset cell（onset_consonant_class 軸を持つ cell）の phrase-final note の pitch_midi/duration_beats をこの凍結タプルと完全一致検証する（Fix 7 の filler 一貫性検証とは独立）。",
+        "onset_target_pitch_midi": 65
+      },
+      "probe_id": "P2",
+      "role": "phrase内の弱→強・onset class差・consonant/vowel組合せを通じてEnergy/Attack応答をprobeする（v0.1 §15 P2）。factor_levels.axesが定義するonset_consonant_class毎に、共通filler note (弱)→target onset note (強)の2ノートcellで水準を張る。各cellはlevelsで参照する軸/水準を機械可読に宣言する。\n\n境界宣言（PR #322 第5巡指摘 Fix 11, P1, 採用）: 宣言harness（gate_synth.py::run_pipelineのbuild_inputs()）には energy/velocity/metrical-accent の制御入力が存在しない。v0.1 §15 P2の『phrase内の弱→強』は本backboneでは操作変数として表現不能である。P2のEnergy/Attack軸で実際に操作されるのは onset consonant class のみ（子音クラスはattack energy特性を音韻経由で実変化させる）であり、energyに関するP2測定はこの操作の観察に限定される。P2-PHRASE-BUILD-WEAK-TO-STRONG cellはEnergy contrastとしては登録せず、diagnostic_role（pitch上行構造のみを操作する診断用cell）として保持する。energy直接制御が可能なbackboneへの交換時が本境界宣言の再入条件である。",
+      "title": "Energy / Attack Probe"
+    },
+    {
+      "cells": [
+        {
+          "cell_id": "P3-RELEASE-SHORT-VOICED",
+          "final_phone_dur_override": null,
+          "levels": {
+            "ending_voicing": "voiced",
+            "release_duration": "short"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 62
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": true,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 62
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P3-RELEASE-LONG-VOICED",
+          "final_phone_dur_override": {
+            "kind": "tail_extension_ms",
+            "terminal_extension_ms": 80.0
+          },
+          "levels": {
+            "ending_voicing": "voiced",
+            "release_duration": "long"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 62
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": true,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 62
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P3-RELEASE-SHORT-UNVOICED",
+          "final_phone_dur_override": null,
+          "levels": {
+            "ending_voicing": "unvoiced",
+            "release_duration": "short"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 62
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": true,
+              "kana": "す",
+              "phrase_index": 0,
+              "pitch_midi": 62
+            }
+          ],
+          "tempo_bpm": 72.0
+        },
+        {
+          "cell_id": "P3-RELEASE-LONG-UNVOICED",
+          "final_phone_dur_override": {
+            "kind": "tail_extension_ms",
+            "terminal_extension_ms": 80.0
+          },
+          "levels": {
+            "ending_voicing": "unvoiced",
+            "release_duration": "long"
+          },
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "か",
+              "phrase_index": 0,
+              "pitch_midi": 62
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": true,
+              "kana": "す",
+              "phrase_index": 0,
+              "pitch_midi": 62
+            }
+          ],
+          "tempo_bpm": 72.0
+        }
+      ],
+      "design_source": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15",
+      "factor_levels": {
+        "axes": {
+          "ending_voicing": {
+            "unvoiced": "無声化しうる終端（無声子音+狭母音 /u/ 等、無声化しやすいモーラ）",
+            "voiced": "有声終端（子音+母音の通常発声、devoicing対象外のモーラ）"
+          },
+          "release_duration": {
+            "long": 80.0,
+            "short": 0.0
+          }
+        }
+      },
+      "probe_id": "P3",
+      "role": "短いrelease・長いrelease・voiced/unvoiced endingを通じてPhrase-End応答をprobeする（v0.1 §15 P3）。TRF（Technique Response Function）が未校正の間、本probeの評価は diagnostic_when_trf_uncalibrated（診断/advisory）として扱う——TRF calibration 完了まで PASS/FAIL判定を行うHard Gateには使用しない（v0.1 §15「TRFが未校正の場合、P3はdiagnostic/advisory」の機械可読化）。factor_levels.axesのrelease_duration×ending_voicing直交4セルの各cellがlevelsで参照する軸/水準を機械可読に宣言する。\n\nrelease制御の訂正（PR #322 第12巡指摘 Fix 22, P1, 採用——上限超過後だが「凍結した境界宣言が虚偽である可能性」= 致命的クラスの新規具体経路のため例外採用。第11巡の記述の訂正）: 第11巡でP3 probe.roleに『宣言harnessはphrase-end releaseの制御入力を持たない』と記載したが、これは不正確だった——gate_synth.py::run_pipelineはfinal_phone_dur_override kwargを実際に受け取り、Stage 1が予測した終端音素のフレーム配分を差し替える機構として存在する（run 8 B-1 rr_long_tail_*校正で実使用済み）。is_phrase_finalが_NoteWithMsに消費されない点、Stage 2末尾のTAIL_FRAMES（cell非依存の固定パディング）は事実のままだが、これらはfinal_phone_dur_overrideとは別階層（Stage 1の音素内フレーム配分 vs Stage 2の系列末尾パディング）であり、release制御の不在を意味しない。\n\n本manifestはcell別のfinal_phone_dur_override値をpinする——short水準はoverrideなし（null、harness既定と同一経路）、long水準はterminal_extension_ms=80.0（run8 B-1 rr_long_tail_080の実使用値を根拠に選定——4水準梯子rr_long_tail_000/040/080/160のうちreproducibility/cross_process_reproducibility両ロールで参照される代表値）。pod render harnessは各P3 cellのrenderで、pinされたfinal_phone_dur_overrideをrun_pipeline(final_phone_dur_override=...)へ渡す義務を負う（nullの場合は引数省略/Noneのまま——本番既定と同一経路）。\n\n実行レシピの訂正（PR #322 第13巡指摘 Fix 24, P2, 採用。第12巡レシピの誤りを訂正）: 第12巡のレシピはgate_synth.frames_from_msをms引数のみの1引数で呼び出す記述をしていたが、実helperのシグネチャはframes_from_ms(ms, frame_ms)（gate_synth.py:321）であり1引数呼び出しはTypeErrorになる。正しい変換は前例run8/s7_calib_score.pyのmake_tail_extension_override実装を逐語で写す: (1) pod harnessはrun_pipeline呼び出し前にframe_ms = 1000.0 * 512 / 44100を算出する（gate_synth.py:1235-1236のhop_size=512/sample_rate=44100はdsconfigに依存しないハードコード定数であり、run8/s7_calib_score.pyのFRAME_MS定数と同一値——ctx経由でframe_msを受け取るのではなく、この固定グリッドをpod harness側で事前に算出する）(2) gate_synth.frames_from_ms(terminal_extension_ms, frame_ms)でフレーム数へ変換する (3) make_tail_extension_override(extension_frames)相当のcallable（out[-1] += extension_framesのみを行い、_ctxは参照しない）を構築し、run_pipeline(final_phone_dur_override=...)へ渡す——Fix 13のload_pinned_probe_manifest()消費契約と同系の事前登録である。",
+      "title": "Phrase-End Probe"
+    },
+    {
+      "cells": [
+        {
+          "cell_id": "P4-HELDOUT-ORIGINAL-FRAGMENT",
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "た",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "す",
+              "phrase_index": 0,
+              "pitch_midi": 63
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "み",
+              "phrase_index": 0,
+              "pitch_midi": 67
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "わ",
+              "phrase_index": 0,
+              "pitch_midi": 64
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "り",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            }
+          ],
+          "tempo_bpm": 80.0
+        }
+      ],
+      "design_source": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15",
+      "heldout_independence": {
+        "authorship": {
+          "author": "本PR（PR #322）の実装エージェント（Claude セッション、RUN9-PROBE-1 Design Memo 遂行主体）。P4-HELDOUT-ORIGINAL-FRAGMENT の音高列・duration列・kana列を新規に著述した。",
+          "authored_at": "2026-08-25",
+          "provenance_record": "著述の一次証跡は PR #322 の commit 履歴（本 repo の git 履歴）である——evaluation/probe_manifest.json の P4 cell を追加した commit がそのまま著述時点の作業成果物であり、別途 attestation ファイルを持たない。"
+        },
+        "environment_evidence": {
+          "author_record": {
+            "claim": "著述セッションの作業環境に PJS 音源・PJS採譜・PJS歌詞テキストは存在しなかった——これは著者（本PRの実装エージェント）による事実記録であり、機械証明ではない。"
+          },
+          "machine_checked": {
+            "claim": "現在の repo checkout に、ファイル名ベースで pjs を含む wav/lab 実体ファイルは一切存在しない——PJS音源・PJS採譜の実体ファイル不在をファイル名ベースで検査した結果であり、現在の repo checkout に限定される（過去の作業環境や別名ファイルは対象外）。",
+            "verification_method": "tests/test_run9_probe_manifest.py が現在の repo checkout 全体を対象に *pjs*.wav / *pjs*.lab のファイル名パターンで実体ファイルの不在を glob 検査する（*.json 等のメタデータ内の pin 値としての 'pjs' 文字列参照は対象外——ファイル名ベース・現 checkout 限定であることを検査自体が保証する）。"
+          }
+        },
+        "independent_of": [
+          "PJS practice/education material（voice_genesis/foundry PJSコーパス由来の教材・素材）",
+          "本manifest P0-P3のscore cell（音高列・duration列・kana列いずれも非共有）"
+        ],
+        "machine_checked_separation": {
+          "reference": "Fix 10 の cross-probe 分離検証 _validate_p4_heldout_separation()（PR #322 第8巡指摘 Fix 17 で射影別・duration閾値付きの独立検査へ拡張済み）が、P4 cell の pitch_midi 射影・kana 射影の完全一致/連続部分列包含（厳密拒否）と、duration_beats 射影の最小長4以上の完全一致/連続部分列包含（低エントロピー対策の閾値付き拒否）、および結合 (kana, pitch, duration) タプルの完全一致/連続部分列包含（多層防御）を、P0-P3 いずれの cell に対しても machine-checked で保証する。"
+        },
+        "note": "original melodic fragment authored specifically for this RUN9 probe manifest; not derived from, transcribed from, or overlapping with any PJS corpus recording, lesson material, or the P0-P3 cells defined above. kana vocabulary is drawn from score.py's proven vocabulary per design instruction (score.py 自体は参照するが、note列はP0とは 別の独自配列であり P0 の転記ではない).",
+        "residual_risk_declaration": {
+          "note": "著者（言語モデル）の事前知識経由での PJS 楽曲への類似・影響は機械的に排除できない——本ステータスが主張するのは『著述環境に PJS 素材が存在しない状態で authored された』ことまでであり、それ以上は主張しない（推定で補完しない）。加えて、別 workspace・別名ファイル・MIDI/MusicXML/テキスト形態の PJS 素材、および著者モデルの事前知識はいずれも検査対象外であり、本 status はそれらについて主張しない。"
+        },
+        "status": "AUTHORED_WITHOUT_PJS_MATERIAL_IN_AUTHORING_ENVIRONMENT"
+      },
+      "probe_id": "P4",
+      "role": "学習に使っていない曲またはscore断片でGENERALIZED_GAINを検証する（v0.1 §15 P4）。PJS楽曲の採譜は不採用とする（採譜作業が必要な上、sealed-holdout非開封規律と衝突するため）。practice/education素材（PJSコーパス）とも、本manifestのP0-P3 cellとも異なる、original にauthoredされた断片をheldout_independenceで独立性宣言のうえ使用する。",
+      "title": "Held-out Song"
+    },
+    {
+      "cells": [
+        {
+          "cell_id": "P5-HELDOUT-REGISTER-PHRASE",
+          "notes": [
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "ら",
+              "phrase_index": 0,
+              "pitch_midi": 50
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "み",
+              "phrase_index": 0,
+              "pitch_midi": 60
+            },
+            {
+              "duration_beats": 1,
+              "is_phrase_final": false,
+              "kana": "の",
+              "phrase_index": 0,
+              "pitch_midi": 78
+            },
+            {
+              "duration_beats": 2,
+              "is_phrase_final": true,
+              "kana": "り",
+              "phrase_index": 0,
+              "pitch_midi": 68
+            }
+          ],
+          "tempo_bpm": 72.0
+        }
+      ],
+      "deferred_verification": {
+        "blocked_by": [
+          "practice_audio_split_manifest_sha",
+          "education_technique_lesson_manifest_sha"
+        ],
+        "consumption_prohibition": "この検証手続きが完了する前に P5 を held-out として消費してはならない——特に GENERALIZED_GAIN 評価等の out-of-distribution evidence として使うことは、検証完了が前提条件であり、未検証のまま行ってはならない。",
+        "status": "TRAINING_DISTRIBUTION_SEPARATION_NOT_YET_VERIFIABLE",
+        "verification_procedure": "RUN9_CONTRACT.yaml の practice_audio_split_manifest_sha と education_technique_lesson_manifest_sha が両方とも PINNED になった時点で、P5 のフレーズ/音域（本 cell の notes 列が使用する kana・pitch_midi の実値）と実学習素材（当該2 manifest が指す PJS practice/education 素材の実体）を照合し、結果を記録する。"
+      },
+      "design_source": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15",
+      "probe_id": "P5",
+      "role": "baseline domain（MIDI 45-90）内の音域・フレーズでDevelopmentalVectorの外周応答をprobeする（v0.1 §15 P5）。使用域は本 manifest 内の他 probe（P0: MIDI 57-72 / P1: register 軸の実値 57/62/65）の外周・baseline domain（MIDI 45-90）内であることを validate_probe_manifest() が機械検査する——これは現に検査している内容のみの主張である（PR #322 第20巡指摘 Fix 32 採用: 旧「学習分布外寄り」という記述は、実際の学習分布（PJS practice/education 素材）との分離を検証 しないまま主張していたため、検証済み事実へ限定した）。学習分布との分離は deferred_verification ブロックが機械可読に宣言するとおり本 manifest 単独では未検証である。",
+      "title": "Held-out Register / Phrase"
+    }
+  ],
+  "prohibitions": [
+    "render後のcell・水準追加を禁止する。追加が必要になった場合はamendment（=repin）として 履歴化し、既存cell・水準の暗黙差し替えは行わない。",
+    "結果を見た後のprobe変更を禁止する（probe_id・title・role・cells・factor_levelsの事後改変）。",
+    "測定仕様の変更を本manifestで行わない——測定仕様の変更はmeasurement_spec_sha（別欄）の管轄であり、本manifestのprohibitions/measurement_boundaryはその境界を越えない。",
+    "上記2点の例外: render不能cellの是正repinは「結果を見た後の水増し」禁止の対象外とする。音素被覆等の理由でcellがrender不能とpodフェーズに判明した場合、そのcellをrender可能な形へ是正するrepinは正当な是正経路であり、水増し（有利な結果を選ぶための事後cell追加）とは区別する。"
+  ],
+  "render_contract": {
+    "backbone_ref": {
+      "contract_field": "backbone_runtime_bundle_sha",
+      "contract_path": "voice_genesis/evolution/run9_dual_founder_pjs/RUN9_CONTRACT.yaml"
+    },
+    "harness": "voice_genesis/foundry/s1_gate/gate_synth.py::run_pipeline",
+    "harness_runtime_seed_policy": {
+      "freeze_basis": "42はmanifestが独自に選んだ値ではなくharnessバイトの一部であり、run開始時にRUN9_CONTRACT.yaml repository_commit_sha がrepoバイト全体をpinすることで凍結される——replay契約 = 同一harnessバイト -> 同一seed。gate_synth.pyはRUN6/7/8と共用の凍結計器であり、本Fixではgate_synth.py自体の改変は不採用とした（過去runのprovenanceを壊すため）。",
+      "harness_hardcoded_seed": 42,
+      "harness_hardcoded_seed_source": "voice_genesis/foundry/s1_gate/gate_synth.py:149（定数 SEED = 42）/ gate_synth.py:1213-1214（ort.set_seed(SEED); record[\"seed\"] = SEED）。gate_synth.py::run_pipeline は seed 引数を持たず、この定数のみを使用する。",
+      "no_wiring_declaration": "909001（genome/ControlProfileレベルのperformance policy seed）をONNX runtimeのseedとして gate_synth.py へ配線する変更は行わない。宣言（909001が唯一のseedであるという旧manifestの主張）と実装（gate_synth.pyが42を使う）が乖離していた場合、実挙動側(42)を正とし宣言を真実化する——これが本Fixの設計判定である。",
+      "runtime_verification_condition": "render record（gate_synth.py run_pipeline の出力 record['seed']）に記録されたSEEDが42と一致しない場合、そのrenderは本契約違反としてfail-closedで拒否する——podフェーズの検収条件としてここに事前登録する。"
+    },
+    "pcm_publication_discipline": "すべての最終WAVは float output -> PCM publication -> file readback -> meter -> actual WAV sha256 の順で評価する。メモリ上floatだけで最終Gateを作らない（DESIGN_RUN9 §15 末尾）。",
+    "performance_seed": 909001,
+    "performance_seed_note": "SHARED_PERFORMANCE_SEED=909001。学習seed LEARNING_SEED=909002 とは別の値であり混同しない——両founderの全render（reference_render/C0/C1/positive_reference/evaluated_renders）でこの1値のみを使用する。PR #322 第1巡指摘Fix 1（P1, 採用）: この909001は genome/ControlProfileレベルのperformance policy seed（v0.1 §9.3・founders/*.jsonのperformance_seed欄・validate_founder_genome()が厳格検証する対象）であり、宣言harness（gate_synth.py::run_pipeline）内部で消費される ONNX runtime の乱数 seed ではない——両者は別の層の値であり、runtime側の実際の消費値はharness_runtime_seed_policy節を参照。",
+    "probe_manifest_access_contract": "PR #322 第6巡指摘 Fix 13: podフェーズのrender harnessは probe manifest を load_pinned_probe_manifest() 経由でのみ取得しなければならない——直接 json.load は契約違反である。load_pinned_probe_manifest() は実ファイルの生バイトを読み、raw sha256 を RUN9_CONTRACT.yaml probe_manifest_sha の pin 値と厳密一致検証したうえで json parse -> validate_probe_manifest() 全検証まで一括で行う唯一の正規取得経路であり、manifest欠落・stale・改変・schema違反はすべて Run9ValidationError で fail-closed になる。gate_state() の READY は probe_manifest_sha が PINNED 形状であることのみを見る構造述語判定（形状判定）であり、実物照合（実バイトhash一致・schema検証）はgate_state()では行わない——実物照合は load_pinned_probe_manifest() が呼び出された消費時点で行う、というのがgate=構造述語 / 消費関数=実物照合 の原則（PR #320 第4-5巡で確立、PR #320 Fix 7と同型）。",
+    "same_conditions_note": "同一score・同一seed・同一ExecutionProfileで両founderをrenderする（DESIGN_RUN9 §27 item 13「shared performance seed is identical」/ item 18「birth probes use same score/seed/ExecutionProfile」参照）。PR #322 第1巡指摘 Fix 1: 「same seed」は genome-policy 層(909001)とharness-runtime層(42)の両方について成立する——両founderともgenome-policy seedは909001で共通、harnessが実際に消費・記録するruntime seedも42で共通であり、いずれの層で見てもitem 13/18の same-seed 要求は充足する。"
+  },
+  "revision_bridge": {
+    "c0_replay_takes": {
+      "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
+      "contract_field_ref": "RUN9_CONTRACT.yaml#interventions.c0_replay_takes_per_founder",
+      "description": "P0 cellの同条件再render。RUN9_CONTRACT.yaml interventions.c0_replay_takes_per_founder （PINNED、founder 1体あたりn=20）本。",
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population",
+      "new_render_required": true
+    },
+    "c1_sham_takes": {
+      "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
+      "contract_field_ref": "RUN9_CONTRACT.yaml#interventions.c1_sham_takes_per_founder",
+      "description": "P0 cell + ZERO_CONTROLPROFILE_SHAM条件でのrender。RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder（PINNED、founder 1体あたりn=20）本。",
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.c1_gate.d_c1_population",
+      "new_render_required": true
+    },
+    "evaluated_renders": {
+      "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
+      "description": "PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE/CONTROL各枝の最終revision（BRANCH_REVISIONSのr_practice/r_taught/r_sham）で、P0 cellをrenderする。",
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#identity_feature.scope",
+      "new_render_required": true
+    },
+    "negative_reference": {
+      "description": "新規render不要。他方founderのreference_render（P0 cellのbirth probe時初回render）をそのまま参照する（negative_reference_gate.negative_reference_definitionの定義どおり）。",
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.negative_reference_gate.negative_reference_definition",
+      "new_render_required": false
+    },
+    "pjs_reference": {
+      "description": "新規render不要。RUN9側でのrenderではなく、inputs/identity_metric_space.json confuser_control.pjs_reference_definitionが定める決定論的PJSコーパス集約（_song.wavペアの辞書順集約）から導出する。",
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#confuser_control.pjs_reference_definition",
+      "new_render_required": false
+    },
+    "positive_reference": {
+      "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
+      "description": "P0 cellのbirth probe時専用追加render1本。reference_renderともC0の20テイクいずれとも別の独立テイク（positive_reference_gate.positive_reference_definitionの定義どおり）。",
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.positive_reference_gate.positive_reference_definition",
+      "new_render_required": true
+    },
+    "reference_render": {
+      "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
+      "description": "当該founder自身のP0 cellの初回render。C0/C1母集団からは除外し、founderごとに1本のみ（distance_unit.reference_render_definitionの定義どおり）。",
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.distance_unit.reference_render_definition",
+      "new_render_required": true
+    }
+  },
+  "schema": "run9-probe-manifest/1.0"
+}

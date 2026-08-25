@@ -607,10 +607,253 @@ learning_recipe_sha:
     試行回数・render 予算の具体値と manifest 実体の生成は VG-L0 ハーネス
     実装時の build 対象のため、本欄は引き続き PENDING。
 
+# RUN9-PROBE-1（本改訂）: DESIGN_RUN9 §15 Probe Set (P0-P5) の実体
+# manifest を `evaluation/probe_manifest.json`（`evaluation/` 初出）へ
+# 起草した。schema `run9-probe-manifest/1.0`（`run9_schema.
+# validate_probe_manifest()` が検証）— probes（P0-P5 全6・score cell を
+# self-contained 直書き）/ render_contract（harness・backbone_ref は
+# 本欄へのフィールド名参照のみ・performance_seed=909001・PCM publication
+# 規律）/ revision_bridge（§15 probe 語彙 ↔ inputs/identity_metric_space.json
+# 語彙の橋渡し7エントリ。式・値は同ファイルへの参照のみで重複定義しない）/
+# measurement_boundary（「どう測るか」は対象外の境界宣言）/ prohibitions
+# （render後のcell追加禁止・結果を見た後のprobe変更禁止・測定仕様変更禁止
+# + render不能cellの是正repinはこの禁則の対象外という区別）の閉じた
+# トップレベル構造。値は `evaluation/probe_manifest.json` の実バイト
+# sha256（`design_doc_sha256` と同一のファイル実バイト規約）。〔履歴:
+# 旧 reason は「P0-P5 probe set の実ファイル manifest 未作成。」の1行
+# だった — 本改訂で実体が発行されたため要約保持のみ〕。
+#
+# PR #322 Codex bot レビュー第1巡2件（採用）反映による repin:
+# Fix 1（P1）render_contract へ `harness_runtime_seed_policy` 節を新設
+# ——宣言 harness `gate_synth.py::run_pipeline` は seed 引数を持たず自身の
+# ハードコード定数 `SEED = 42`（gate_synth.py:149、`ort.set_seed`/
+# `record["seed"]` は :1213-1214）を実消費・記録する事実を明示し、
+# `performance_seed`=909001 は genome/ControlProfile レベルの performance
+# policy seed であって ONNX runtime の乱数 seed ではないことを
+# `performance_seed_note` で精密化した（gate_synth.py 自体は RUN6/7/8 と
+# 共用の凍結計器のため改変は不採用——宣言側を実挙動へ真実化する設計判定）。
+# Fix 2（P2）P1-P3 の `factor_levels` を `{axes: {...}}` 構造へ再編し、
+# 各 cell へ `levels`（axis_name -> level_name）メタデータを付与、
+# `factor_levels.axes` ⇔ cell `levels` の双方向対応（未知水準参照の拒否 +
+# 未使用水準の拒否）を `validate_probe_manifest()` が機械検証するように
+# なった。両 Fix とも manifest バイトを変更するため sha256 を再計算した。
+# 旧値（履歴として保持）:
+# "20b5638537881ef2565795ef040d4490202c8b9907c9c0dc750d15d043bb1730"
+#
+# PR #322 Codex bot レビュー第3巡2件（採用）反映による repin:
+# Fix 6（P2）P0-P5 全 note の kana を renderer の mora 文法（唯一の正本
+# ——`voice_genesis/singer/phoneme_jp.py`、read-only 参照）へ通し
+# 「ちょうど1モーラ」であることを機械検証するようにした（validator 内
+# での語彙表複製は不採用。ファイル不在時も fail-closed）。本 Fix 自体は
+# manifest 内容の変更を伴わない（既存の全 note が元々正しい単一モーラ
+# 表現だったため — validator ロジックの追加のみ）。
+# Fix 7（P2）P2 の `factor_levels` へ凍結 filler タプル
+# （`medial_filler_kana`="か"/`medial_filler_beats`=1/
+# `medial_filler_pitch_midi`=60、現行 cell の実 filler note 値から
+# 転記）を追加し、全 onset cell（`onset_consonant_class` 軸を持つ cell）
+# の前置 note がこのタプルと完全一致すること（= 全 onset cell 間で
+# filler が同一であること）を `validate_probe_manifest()` が機械検証する
+# ようにした。`medial_filler_pitch_midi` の新規追加により manifest バイト
+# が変わるため sha256 を再計算した。旧値（履歴として保持）:
+# "722653475646e169058a1e53584585ae1af42f4bfb5152a59432251d30a421c1"
+#
+# PR #322 Codex bot レビュー第5巡3件（採用）反映による repin:
+# Fix 10（P2）P4 の held-out 分離を機械検証可能にした——validator が P4
+# 各 cell の (kana, pitch_midi, duration_beats) 系列を全非 held-out cell
+# （P0-P3）の系列と比較し、完全一致/連続部分列としての包含を fail-closed
+# で拒否する（`_validate_p4_heldout_separation()` 新設）。manifest 内容
+# 自体は元々分離済みだったため本 Fix 単体はバイト変更を伴わない。
+# Fix 11（P1）宣言 harness（gate_synth.py build_inputs()）に energy/
+# velocity/metrical-accent の制御入力が存在しないため、
+# `P2-PHRASE-BUILD-WEAK-TO-STRONG` を Energy contrast の登録
+# （`phrase_dynamics` 軸）から除外し、`diagnostic_role`（軸システムとは
+# 独立の cell 属性、role_id=`diagnostic_structural_pitch_rise`）へ
+# 再分類した。`phrase_dynamics` 軸は factor_levels.axes から除去（cell 削
+# 除はしない）。P2 probe.role へ計器能力の境界宣言（energy 制御入力の不
+# 在・実操作は onset_consonant_class のみ・energy 直接制御可能な
+# backbone への交換時が再入条件）を追記した——**energy 制御の新規発明は
+# 不採用**（存在しない harness 入力の捏造になるため。計器能力の正直な
+# 境界宣言を採った）。
+# Fix 12（P2）P0 cell の notes/tempo_bpm を、validator が score.py を
+# read-only ロードして `build_sakura_score()` を再構築し逐語比較するよう
+# にした（`_load_score_py_module()`/`_require_p0_matches_build_sakura_
+# score()` 新設。hash 一致 + verbatim:true 宣言だけでは検出できない内容
+# 改変を捕捉する）。manifest 内容自体は元々一致していたため本 Fix 単体は
+# バイト変更を伴わない。
+# 3 Fix 合算で `phrase_dynamics` 軸除去・`diagnostic_role` 追加・P2
+# role 境界宣言追記により manifest バイトが変わるため sha256 を再計算
+# した。旧値（履歴として保持）:
+# "d50266e51acbf83e47ef047dfa91c8bd8e6ede129dd1ba24d5b111581b98a804"
+#
+# PR #322 Codex bot レビュー第6巡2件（採用）反映による repin:
+# Fix 13（P1）pin は 64hex 形状/status しか検証されず実物照合が pytest
+# assert 頼みだった（pod checkout での manifest 欠落/stale/改変でも
+# READY に到達し得る）。`load_pinned_probe_manifest(contract)` を
+# run9_schema.py へ新設——実バイト読込→raw sha256 計算→本 pin 値との
+# 厳密一致検証→json parse→`validate_probe_manifest()` 全検証まで一括で
+# 行う唯一の正規取得経路とし、欠落/stale/改変/schema 違反はすべて
+# Run9ValidationError で fail-closed にした。**gate_state() 自体は不変**
+# （構造述語のまま——PINNED 形状のみを見る）。pod フェーズの render
+# harness は本関数経由でのみ probe manifest を取得しなければならない旨を
+# render_contract.probe_manifest_access_contract として manifest 側にも
+# 事前登録した（消費契約。PR #320 Fix 7 と同型の消費関数方式）。
+# Fix 14（P2）P4 の heldout_independence ステータスが無認証の散文自己
+# 宣言のみだった（著者確認・作成証跡・attestation が無い）。authorship /
+# environment_evidence / machine_checked_separation / residual_risk_
+# declaration の 4 ブロックへ拡張し、検証可能な範囲の証跡（著述環境に
+# PJS 実体ファイルが存在しないことの機械検証可能な主張・Fix 10 分離検証
+# への参照）+ 正直な残余宣言（言語モデルの事前知識経由の影響は機械的に
+# 排除できない旨。推定で補完しない）へ再定義した——**絶対独立の主張は
+# しない**。
+# 2 Fix 合算で render_contract.probe_manifest_access_contract 追加・P4
+# heldout_independence の 4 ブロック追加により manifest バイトが変わる
+# ため sha256 を再計算した。旧値（履歴として保持）:
+# "c09f140c718bbea35301e9a6920083f8c02ae723e3590e07a4c6093e076f0e16"
+#
+# PR #322 Codex bot レビュー第8巡3件（採用）反映による repin
+# （Fix 16 は run9_schema.py のみの局所修正で manifest バイトは無変更）:
+# Fix 17（P2）P4 held-out 分離の結合タプル検査は kana だけ変えて旋律/
+# リズムを丸コピーした P4 を通してしまう欠陥があった——pitch_midi/kana
+# 射影は完全一致・連続部分列包含を厳密拒否、duration_beats 射影は低
+# エントロピー対策として最小長4以上の完全一致/連続部分列に限って拒否する
+# よう `_validate_p4_heldout_separation()` を拡張した（結合タプル検査は
+# 多層防御として残置）。manifest 側の `machine_checked_separation.
+# reference` を実際の検査内容（射影別・duration閾値）と一致するよう更新。
+# 実 manifest は新検査でも fail しなかった（cell 書き換え不要）。
+# Fix 18（P2）status literal `AUTHORED_INDEPENDENTLY_OF_PJS_CORPUS` は
+# 現 repo checkout の pjs 名 wav/lab 検査のみなのに歴史的作業環境・全形態
+# （MIDI/MusicXML/歌詞テキスト・別名）にまで及ぶ主張に読めた——主張を
+# 収集済み証拠へ縮小: (a) status を
+# `AUTHORED_WITHOUT_PJS_MATERIAL_IN_AUTHORING_ENVIRONMENT` へ改名
+# (b) `environment_evidence` を `machine_checked`（現 checkout・ファイル
+# 名ベース限定と明記）/ `author_record`（著者の事実記録、機械証明では
+# ない）に区分 (c) `residual_risk_declaration` へ別 workspace・別名
+# ファイル・MIDI/MusicXML/テキスト形態・モデル事前知識は検査対象外である
+# 旨を追加。
+# 3 Fix 合算（Fix 17 の manifest 文言更新 + Fix 18 の status/evidence
+# 再構造化）で manifest バイトが変わるため sha256 を再計算した。旧値
+# （履歴として保持）:
+# "0e43616cd25bb9fd66dc6dde566024a4c1b0809d29d6202ed2d8861a16c884ca"
+# PR #322 Codex bot レビュー第11巡1件（採用——上限超過後だが「新しい
+# 具体経路を示す指摘は巡数に依らず採用」規律の例外採用）反映による repin:
+# Fix 21（P1）gate_synth.py の `_NoteWithMs` は `is_phrase_final` を一切
+# 消費せず、末尾 release は全 cell 固定の `TAIL_FRAMES` 定数——宣言
+# harness に phrase-end release を制御する入力が存在しないと判明した
+# （Fix 11 と同型の帰属誤りクラスの新規経路）。P3 の `release_duration`
+# 軸が実際に操作していたのは終端 note 自身の `duration_beats`（P1 の
+# `duration` 軸と同じ機構）だった。**release 制御の新規発明は不採用**
+# （存在しない harness 入力の捏造になるため、Fix 11 と同じ設計判断）——
+# 軸を実際に操作している変数の名前へ真実化: `release_duration` ->
+# `final_note_duration`（水準値・cell 構造は不変、名前とその意味記述の
+# み真実化）。P3 probe.role へ計器能力の境界宣言（_NoteWithMs が
+# is_phrase_final を消費しない・末尾 release は TAIL_FRAMES 固定・実操作
+# は final_note_duration/ending_voicing のみ・再入条件 = release 制御
+# 入力を消費する backbone への交換 or TRF 校正の確立）を追記した。
+# 軸名変更に伴い manifest バイトが変わるため sha256 を再計算した。旧値
+# （履歴として保持）:
+# "98aa1c8d95f6dad0c9cf126e5a4ca1f0ce592363841c10c30f639b39087812eb"
+# PR #322 Codex bot レビュー第12巡1件（採用——上限超過後だが「凍結した
+# 境界宣言が虚偽である可能性」= 致命的クラスの新規具体経路のため例外
+# 採用）反映による repin — 第11巡 Fix 21 の訂正・撤回:
+# Fix 22（P1）第11巡の前提（「宣言 harness に phrase-end release を制御
+# する入力が存在しない」）は誤りだった。gate_synth.py::run_pipeline は
+# `final_phone_dur_override` kwarg（line 1183/1282-1289）を実際に受け
+# 取り、run 8 B-1 の `rr_long_tail_*` 校正で実使用済みと確認した
+# （read-only 参照 + `voice_genesis/foundry/run8/s7_calib_score.py` /
+# `results_s7/s7_b1_calibration_set.json` で検証）。`_NoteWithMs` が
+# `is_phrase_final` を消費しない点・`TAIL_FRAMES` が cell 非依存の固定
+# パディングである点は事実のままだが、これらは `final_phone_dur_
+# override`（Stage 1 の音素内フレーム配分）とは別階層（Stage 2 の系列
+# 末尾パディング）であり、release 制御の不在を意味しなかった。
+# 対応: (a) P3 role の「release 制御入力を持たない/表現不能」という
+# 虚偽の境界宣言を撤回し、正確な記述（release 制御は実在し、本 manifest
+# が cell 別に pin し pod harness が消費する義務を負う——Fix 13 と同系の
+# 消費契約）へ置換 (b) `release_duration` 軸を復活させ、意味を
+# `final_phone_dur_override.terminal_extension_ms`（ms）へ再定義:
+# short=0.0（override なし。`rr_long_tail_000` の prereg 値と一致）/
+# long=80.0（`rr_long_tail_080` の実使用値——4水準梯子のうち
+# reproducibility/cross_process_reproducibility 両ロールで参照される
+# 代表値であることを根拠に選定） (c) cell レベルへ
+# `final_phone_dur_override` の pin 欄を新設（P3 のみ許容・P3 は必須）
+# (d) P3 の 4 cell の phrase-final note の duration_beats を全 cell
+# 等値（1拍）へ揃え、第11巡までの「終端 note 長の変動」という交絡源を
+# 除去した。Fix 21 の `final_note_duration` 改名は撤回済み。
+# manifest バイトが変わったため sha256 を再計算した。旧値（履歴として
+# 保持）:
+# "48eb35a001cb5f5e53ea1da34fc05081c902958b2c0167d14a888ffe676a0c84"
+# PR #322 Codex bot レビュー第13巡2件（採用——第12巡 P3 再設計への新規
+# 具体経路）反映による repin:
+# Fix 23（P2）is_phrase_final=true の note の後へ valid な note を追記
+# しても `_select_phrase_final_note()` selector を通過していた——
+# gate_synth は is_phrase_final を消費せず、release override は
+# `final_phone_dur[-1]`（Python list の実際の最終要素）へ効くため、
+# 追記 note が実際の render 効果を受けるのに検証は先のマーカー note へ
+# 帰属し続ける欠陥だった。`_select_phrase_final_note()`（Fix 3 の数値/
+# kana/transition/release override 照合、Fix 7 の P2 filler 一貫性検証が
+# 共有する唯一の selector）へ「マーカー note は notes 配列の最終要素で
+# なければならない」検証を追加した。
+# Fix 24（P2）第12巡の P3 実行レシピが `gate_synth.frames_from_ms(
+# terminal_extension_ms)` という1引数呼び出しを記載していたが、実
+# helper のシグネチャは `frames_from_ms(ms, frame_ms)`（gate_synth.py:
+# 321、read-only 参照で確認済み）——レシピどおりの pod harness は全
+# long-release cell で TypeError になる欠陥だった。前例
+# `run8/s7_calib_score.py::make_tail_extension_override()` の実装を
+# 逐語で写し、pod harness が `run_pipeline` 呼び出し前に
+# `frame_ms = 1000.0 * 512 / 44100`（gate_synth.py:1235-1236 で
+# dsconfig 非依存のハードコード定数と確認済み）を算出したうえで
+# `frames_from_ms(terminal_extension_ms, frame_ms)` によりフレーム数へ
+# 変換する、という正しいレシピへ訂正した。validator は訂正後の必須
+# マーカー（`make_tail_extension_override`/`frames_from_ms(terminal_
+# extension_ms, frame_ms)`）+ 旧1引数呼び出し文言の残存拒否
+# （forbidden marker）を fail-closed 検証する。
+# 2 Fix 合算（Fix 23 は validator のみで manifest バイト無変更・Fix 24
+# の role 文言訂正）で manifest バイトが変わるため sha256 を再計算した。
+# 旧値（履歴として保持）:
+# "b18e8680991b2f74b1fa1ff710f9ed6e5775e87d8a1f2181784bdfc21bfe71ce"
+# PR #322 Codex bot レビュー第14巡1件（採用）反映による repin:
+# Fix 25（P2）amendment/repin で onset cell の phrase-final 検定 note を
+# MIDI 65 / 2拍から別の pitch/duration へ変えても通過していた——
+# `_check_axis_kana_class()` は検定 note の kana クラスしか見ず、Fix 7 の
+# 一貫性検査は前置 filler note しか比較しないため、P2 比較が onset class
+# と pitch/duration を同時に変え、その交絡が Attack へ帰属され得る欠陥
+# だった。Fix 7/19 と同方式で、P2 の factor_levels へ凍結 target タプル
+# （`onset_target_pitch_midi`=65/`onset_target_duration_beats`=2、現行
+# cell の実値から転記）を追加宣言し、全 onset cell の phrase-final 検定
+# note の pitch_midi/duration_beats がこのタプルと完全一致することを
+# fail-closed 検証する（`_validate_p2_onset_target_consistency()`）新関数
+# を追加した。宣言値自体も `_PROBE_EXPECTED_FACTOR_VALUES["P2"]["extra"]`
+# （Fix 19 の凍結表）へ追加し二重 pin した。manifest バイトが変わったため
+# sha256 を再計算した。旧値（履歴として保持）:
+# "91e26ad51773a88694eb4cecee86d740f23ec5186ed46942e8df3cf5625809c1"
+# PR #322 Codex bot レビュー第20巡2件（採用）反映による repin:
+# Fix 32（P2）P5 の域内制約検査（P0 中央域外周・baseline domain 内）は
+# 「本 manifest 内の他 probe（P0/P1）の使用域の外周であること」しか証明
+# せず、実際の学習分布（PJS practice/education 素材）との分離は検証して
+# いなかった——practice_audio_split_manifest_sha/education_technique_
+# lesson_manifest_sha が PENDING の現時点ではこの分離検証は実行不能
+# （Fix 14/18 と同じ「主張を収集済み証拠へ縮小 + 再入条件の事前登録」
+# 規約）。P5 の role 文言を検証済み事実（他 probe の使用域の外周・
+# baseline domain 内であること）へ限定し、P5 probe レベルへ機械可読
+# ブロック `deferred_verification`（status/blocked_by/verification_
+# procedure/consumption_prohibition の4キー——上記2 pin 欄が両方 PINNED
+# になるまで学習分布との分離は未検証であり、held-out としての消費
+# （GENERALIZED_GAIN 評価等）はその検証完了が前提条件であることを明示）
+# を新設し、validator（`_validate_p5_deferred_verification()`）で必須
+# マーカーを fail-closed 検証する。
+# Fix 33（P2）Fix 31 の構造述語（非減少 pitch 系列）は「減少しないこと」
+# しか検証しておらず、テンプレートと cell を協調して 60→60→60（全て同一
+# pitch）へ amendment すれば「上行が一切ない」まま
+# diagnostic_structural_pitch_rise を名乗れてしまっていた——述語へ厳密
+# 増加（終端 pitch > 先頭 pitch）を追加した（`_validate_p2_diagnostic_
+# pitch_rise_cell()`、コード変更のみで本 repin には manifest バイトの
+# 変化を伴わない——Fix 32 の repin に合算）。
+# 2 Fix 合算で manifest バイトが変わったため sha256 を再計算した。旧値
+# （履歴として保持）:
+# "98d1b2b01abcb79eae82a26a7b0f2af834b58562d0ba3131b41db9cb1c7c5b9e"
 probe_manifest_sha:
-  value: null
-  status: PENDING
-  reason: P0-P5 probe set の実ファイル manifest 未作成。
+  value: "c6c4b862e775ce99e579ba8e4574453ae86048fa801c9b4e1265743021475534"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 
 measurement_spec_sha:
   value: null

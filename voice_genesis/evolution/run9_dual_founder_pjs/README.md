@@ -413,7 +413,7 @@ machine-independent（実音源・実 render・実学習を要さない）次段
 | 2 | verify donor and teacher rights / manifests | **AF0/Ritsu は pin 済み・PJS は役割別2値を整理して解消・User donor は 2026-08-25 User attestation 実行により attest 完了**（`voice_identity_rights.attestation.attested=true`）。PJS 側の recording-master owner/lyricist/share-alike 解釈のみ未解決のまま残る（ブロッカー(1)参照） |
 | 3 | build run9 Identity Domain | **af0/ritsu/metric_space_sha/user が全て PINNED**（`domains/identity_domain_run9_v1.json`、2026-08-25 User attestation 実行により `is_pinned() == True` — domain 凍結済み） |
 | 4 | generate R9F-01:r0 and R9F-02:r0（INHERIT_TRAIT） | **正式発行済み**（RUN9-BIRTH-PREP-1, 2026-08-25）: `run9_schema.issue_founder_genome_document()` の出力バイトを `founders/R9F-01_genome.json` / `founders/R9F-02_genome.json` としてそのまま書き出し、`RUN9_CONTRACT.yaml` `founder_genome_shas.R9F-01/R9F-02` を各ファイルの raw sha256 で **PINNED** 化した（genome_id = `66f420672a154283` / `63f4b8f24b827cd4`——2026-08-25 Codex bot レビュー PR #320 第2巡 Fix 3 の anchor_hashes.user binding scope 再限定 repin 後の値、下記「解消済み」節参照。値自体は無変更）。詳細は下記「解消済み（RUN9-BIRTH-PREP-1）」節 |
-| 5–20 | render / freeze / lesson / learning / evaluation / verdict | **未着手・rev 0.3 で三枝化**（VG-L0 学習ハーネス自体が未実装 — ブロッカー(2)参照。ハーネス実装時に CONTROL/PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE の3経路分の render/lesson/learning/evaluation を実装する必要がある — ブロッカー(4)参照） |
+| 5–20 | render / freeze / lesson / learning / evaluation / verdict | **未着手・rev 0.3 で三枝化**（VG-L0 学習ハーネス自体が未実装 — ブロッカー(2)参照。ハーネス実装時に CONTROL/PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE の3経路分の render/lesson/learning/evaluation を実装する必要がある — ブロッカー(4)参照）。ただし render 対象となる **P0-P5 Probe Set の実体 manifest は RUN9-PROBE-1（2026-08-25）で起草・PINNED 化済み**（`evaluation/probe_manifest.json`、下記「解消済み（RUN9-PROBE-1）」節参照）——score cell・render 契約・revision_bridge の凍結までであり、実 render の実行自体は未着手のまま |
 
 ## ブロッカー一覧（正直な現状）
 
@@ -554,6 +554,46 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   実 PJS コーパスに対する builder 実行と `inputs/practice_audio_split_
   manifest.json` の実体生成（下記「次フェーズ」節参照）。
 
+**解消済み（RUN9-PROBE-1, 2026-08-25）**:
+- ~~P0-P5 probe set の実ファイル manifest 未作成~~ → DESIGN_RUN9 §15
+  Probe Set の実体 manifest [`evaluation/probe_manifest.json`](./evaluation/probe_manifest.json)
+  （`evaluation/` は本ファイルが初出のディレクトリ）を新設した。schema
+  `run9-probe-manifest/1.0`（`run9_schema.validate_probe_manifest()` が
+  fail-closed 検証）— P0-P5 全6probe（score cell は本 manifest へ
+  self-contained 直書き。新規 score module は作らず、JSON→ScoreNote
+  変換ハーネスは machine-dependent の別フェーズへ据え置く）/
+  `render_contract`（harness・`backbone_ref` は `RUN9_CONTRACT.yaml`
+  `backbone_runtime_bundle_sha` へのフィールド名参照のみ・
+  `performance_seed=909001`（学習 seed 909002 と混同しない note 付き）・
+  §15 末尾 PCM publication 規律の逐語）/ `revision_bridge`（§15 probe 語彙
+  ↔ `inputs/identity_metric_space.json` 語彙の橋渡し7エントリ
+  — reference_render / c0_replay_takes / c1_sham_takes /
+  positive_reference / negative_reference / pjs_reference /
+  evaluated_renders。式・値は同ファイルへの参照のみで重複定義せず、
+  negative_reference/pjs_reference は新規 render 不要）/
+  `measurement_boundary`（「どう測るか」は本 manifest の対象外という
+  境界明文 — identity 軸は `inputs/identity_metric_space.json`
+  正本、development/generalization 軸は `measurement_spec_sha`（別欄、
+  引き続き PENDING）が別途凍結）/ `prohibitions`（render 後の cell・
+  水準追加禁止・結果を見た後の probe 変更禁止・測定仕様の変更を本
+  manifest で行わない、の3禁則 + render 不能 cell の是正 repin はこの
+  禁則の対象外という区別）の閉じたトップレベル構造。P0 cell は
+  [`voice_genesis/singer/score.py`](../../singer/score.py)（read-only
+  参照）の `build_sakura_score()` 全20ノートを値として逐語転記し、
+  cell の `source` に転記元パス + 実 sha256 を記録（`validate_probe_
+  manifest()` が実ファイルの実 sha256 と照合する fail-closed チェック
+  付き）——全音域が MIDI 57-69 で P0 の中央音域要求 [57, 72] に収まる
+  ため断片抽出ではなく全曲をそのまま採用した。`RUN9_CONTRACT.yaml`
+  `probe_manifest_sha` を manifest 実バイトの sha256 で **PINNED** 化
+  した。`tests/test_run9_probe_manifest.py` が構造検証・実ファイル sha
+  照合・P0 逐語照合（`score.py` を直接 import して note 列を突き合わせ）・
+  P4 heldout_independence・P5 域・負例群を検証する。**`gate_state()` は
+  依然 `BLOCKED`**（`dataset_manifest_sha`/`learning_recipe_sha`/
+  `measurement_spec_sha`/`hypothesis_algebra_sha` 等 VG-L0 ハーネス関連
+  欄が PENDING のままのため——回帰テスト
+  `test_gate_state_still_blocked_after_probe_manifest_sha_pinned` で
+  機械確認済み）。
+
 **残存**:
 
 1. **PJS 側の残る未解決欄**（User donor 側は上記の通り 2026-08-25 attest
@@ -675,6 +715,12 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   `backbone_runtime_bundle_sha` PINNED の根拠はこの前方宣言の確定（上記
   「解消済み（2026-08-25 外部指摘（AQUEST 山崎信英氏）を受けた派生設計
   変更メモの編入）」参照）。
+- ~~**P0-P5 probe set manifest 未作成**~~ → RUN9-PROBE-1（2026-08-25）で
+  解消済み。[`evaluation/probe_manifest.json`](./evaluation/probe_manifest.json)
+  を起草し、`RUN9_CONTRACT.yaml` `probe_manifest_sha` を実バイト sha256
+  で **PINNED** 化した。詳細は上記「解消済み（RUN9-PROBE-1）」節参照
+  ——render 契約・revision_bridge の凍結までであり、実 render の実行
+  自体は VG-L0 ハーネス実装待ちのまま（残存ブロッカー(2)）。
 - **practice / education manifest の実体 build**: PRACTICE 側は
   builder（`practice_split_builder.build_practice_split_manifest()`）が
   RUN9-BIRTH-PREP-1 で配線済み——残るのは実 PJS コーパスに対する実行と

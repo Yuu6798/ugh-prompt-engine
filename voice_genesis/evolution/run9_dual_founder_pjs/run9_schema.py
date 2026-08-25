@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
 import math
 import re
@@ -3277,6 +3278,3018 @@ def validate_education_lesson_manifest(data: Mapping[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# probe manifest（RUN9-PROBE-1, DESIGN_RUN9 §15 Probe Set の実体 manifest）:
+# P0-P5 の score cells + render 契約 + revision_bridge（§15 probe 語彙 ↔
+# identity_metric_space 語彙の橋渡し）を単一ファイルへ凍結する。「どう
+# 測るか」は本 manifest の対象外のまま——identity 軸は
+# `inputs/identity_metric_space.json` が正本、development/generalization
+# 軸の測定仕様は `measurement_spec_sha`（別欄、PENDING のまま）が別途
+# 凍結する（`measurement_boundary` 節が明文化）。
+# ---------------------------------------------------------------------------
+
+SCHEMA_PROBE_MANIFEST = "run9-probe-manifest/1.0"
+
+# 規約パス（`PRACTICE_MANIFEST_PATH` 等と同じ命名規約 — schema から機械的
+# に導出せず、リポジトリ内の固定配置として凍結する）。`evaluation/` は
+# 本 manifest が初出のディレクトリ。
+PROBE_MANIFEST_PATH = _THIS_DIR / "evaluation" / "probe_manifest.json"
+
+# PR #322 第17巡指摘（P1, 採用）: `load_pinned_probe_manifest()` がディスク
+# 上の正典 `RUN9_CONTRACT.yaml` を都度再読込するためのアンカーパス
+# （`PROBE_MANIFEST_PATH` と同じ命名規約 — schema から機械的に導出せず
+# リポジトリ内の固定配置として凍結する）。
+RUN9_CONTRACT_YAML_PATH = _THIS_DIR / "RUN9_CONTRACT.yaml"
+
+# DESIGN_RUN9 §15 が定義する Probe Set の閉語彙（記載順）。
+PROBE_IDS: Tuple[str, str, str, str, str, str] = ("P0", "P1", "P2", "P3", "P4", "P5")
+
+# §15 の名称を逐語で固定する（probe.title はこの値と厳密一致でなければ
+# ならない）。design_source はどの probe も同一の §15 参照。
+PROBE_TITLES: Mapping[str, str] = types.MappingProxyType({
+    "P0": "Neutral Identity Probe",
+    "P1": "Pitch / Duration Probe",
+    "P2": "Energy / Attack Probe",
+    "P3": "Phrase-End Probe",
+    "P4": "Held-out Song",
+    "P5": "Held-out Register / Phrase",
+})
+
+PROBE_DESIGN_SOURCE = "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15"
+
+_PROBE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "probes", "render_contract", "revision_bridge",
+    "measurement_boundary", "prohibitions", "note",
+})
+
+# probe object の基本閉集合（全 probe 共通）。P1-P3 は起草要求（項目4）が
+# 明記する `factor_levels`（水準表）、P4 は `heldout_independence`（独立性
+# 宣言）を、汎用の role/cells とは別の追加必須キーとして要求する。
+_PROBE_BASE_KEYS: FrozenSet[str] = frozenset({"probe_id", "title", "design_source", "role", "cells"})
+_PROBE_REQUIRED_EXTRA_KEYS: Mapping[str, FrozenSet[str]] = types.MappingProxyType({
+    "P0": frozenset(),
+    "P1": frozenset({"factor_levels"}),
+    "P2": frozenset({"factor_levels"}),
+    "P3": frozenset({"factor_levels"}),
+    "P4": frozenset({"heldout_independence"}),
+    # PR #322 第20巡指摘 Fix 32（P2, 採用）: `deferred_verification`
+    # ブロックを P5 の追加必須キーとして要求する（Fix 14/18 と同じ「主張を
+    # 収集済み証拠へ縮小 + 再入条件の事前登録」規約）。詳細は
+    # `_validate_p5_deferred_verification()` のコメント参照。
+    "P5": frozenset({"deferred_verification"}),
+})
+
+_CELL_KEYS_BASE: FrozenSet[str] = frozenset({"cell_id", "tempo_bpm", "notes"})
+# P0 cell のみ `source`（score.py への転記元メタデータ）を追加で要求する
+# （起草要求 P0: 「cell の source メタデータに転記元…を記録」）。
+_CELL_SOURCE_KEY = "source"
+_CELL_SOURCE_KEYS: FrozenSet[str] = frozenset(
+    {"transcribed_from", "transcribed_from_sha256", "transcription_scope", "verbatim"}
+)
+
+# PR #322 第1巡指摘 Fix 2（P2, 採用）: P1-P3 は `factor_levels` の形状と
+# cell 対応の双方向検証を要求する。cell 側にどの水準の組かを機械可読に
+# 持たせる `levels` メタデータ（cell_id 文字列のパースに依存しない）。
+_CELL_LEVELS_KEY = "levels"
+# `factor_levels` が形状検証・cell 対応検証の対象とする probe（水準表を
+# 持つ probe と同一集合 — `_PROBE_REQUIRED_EXTRA_KEYS` の "factor_levels"
+# 要求 probe と揃える）。
+_FACTOR_LEVEL_PROBE_IDS: FrozenSet[str] = frozenset({"P1", "P2", "P3"})
+# `factor_levels` 内の「軸」節を保持する必須キー。他の記述的メタデータ
+# キー（`source_precedent`/`medial_filler_kana` 等）は axes とは別に
+# 自由記述のまま許容する（本 Fix の対象は axes の形状・cell 対応のみ）。
+_FACTOR_LEVELS_AXES_KEY = "axes"
+
+# ---------------------------------------------------------------------------
+# PR #322 第4巡指摘 Fix 9（P2, 採用）: 旧 Fix 2/3 は「各水準がどこかの
+# cell で使われている」ことしか要求しておらず、cell を削除しても他 cell
+# が同じ水準を使っていれば通過してしまっていた（例: P1-REG-LOW-DUR-SHORT
+# を削除しても low/short は他 cell に残る）——凍結された factorial から
+# 1条件が黙って失われる欠陥。probe 別の期待 cell_id 集合（全24個、閉じた
+# 集合・過不足いずれも拒否）を凍結し、加えて P1（register×duration）/
+# P3（release_duration×ending_voicing。Fix 21 で final_note_duration へ
+# 改名したが Fix 22 で撤回し release_duration へ戻した——release 制御
+# 入力 `final_phone_dur_override` の実在が判明したため）の full
+# factorial 直積被覆
+# （宣言水準の全組合せが「同一 cell」の levels として実在すること）を
+# 別途検証する。amendment で cell を増減する場合は、本ファイルの凍結表
+# （`_PROBE_EXPECTED_CELL_IDS`/`_PROBE_FACTORIAL_AXES`）の更新が同時に
+# 必要——意図的な二重 pin（manifest 側の変更だけでは通らない摩擦）。
+# ---------------------------------------------------------------------------
+_PROBE_EXPECTED_CELL_IDS: Mapping[str, FrozenSet[str]] = types.MappingProxyType({
+    "P0": frozenset({"P0-NEUTRAL-SAKURA-FRAGMENT"}),
+    "P1": frozenset({
+        "P1-REG-LOW-DUR-SHORT", "P1-REG-LOW-DUR-LONG",
+        "P1-REG-MID-DUR-SHORT", "P1-REG-MID-DUR-LONG",
+        "P1-REG-HIGH-DUR-SHORT", "P1-REG-HIGH-DUR-LONG",
+        "P1-TRANS-LOW-TO-HIGH", "P1-TRANS-HIGH-TO-LOW",
+    }),
+    "P2": frozenset({
+        "P2-ONSET-FRICATIVE-S", "P2-ONSET-STOP-K", "P2-ONSET-STOP-G", "P2-ONSET-NASAL-N",
+        "P2-ONSET-SEMIVOWEL-Y", "P2-ONSET-SEMIVOWEL-W", "P2-ONSET-LIQUID-R", "P2-ONSET-VOWEL-ONLY",
+        "P2-PHRASE-BUILD-WEAK-TO-STRONG",
+    }),
+    "P3": frozenset({
+        "P3-RELEASE-SHORT-VOICED", "P3-RELEASE-LONG-VOICED",
+        "P3-RELEASE-SHORT-UNVOICED", "P3-RELEASE-LONG-UNVOICED",
+    }),
+    "P4": frozenset({"P4-HELDOUT-ORIGINAL-FRAGMENT"}),
+    "P5": frozenset({"P5-HELDOUT-REGISTER-PHRASE"}),
+})
+# full factorial 直積被覆を要求する probe -> (axis_a, axis_b)。両軸を
+# 同時に参照する cell が、宣言水準の全組合せ分だけ存在することを要求する
+# （P2 の onset_consonant_class は単一軸で直積構造を持たないため対象外）。
+_PROBE_FACTORIAL_AXES: Mapping[str, Tuple[str, str]] = types.MappingProxyType({
+    "P1": ("register", "duration"),
+    "P3": ("release_duration", "ending_voicing"),
+})
+
+# ---------------------------------------------------------------------------
+# PR #322 第10巡指摘 Fix 20（P2, 採用）: `tempo_bpm` は正値検査のみで、
+# amendment で cell 別に tempo を変えても水準ラベル検証を保ったまま通過
+# していた——`gate_synth::run_pipeline` は各 cell の tempo で beats->ms
+# 換算するため、例えば P1 の short cell だけ 18 BPM に変えると、検証済み
+# 「1 拍 note」が 72 BPM 基準の 4 拍相当の実時間になり、duration 比較が
+# 黙って交絡する。Fix 19 と同方式（validator 内凍結表による外部アンカー
+# 化・cell 非依存）で、probe 別の期待 tempo を全 probe（P1-P3 の factor
+# 比較 probe だけでなく P0/P4/P5 も含む）で固定し、全 cell の tempo_bpm が
+# 凍結値と厳密一致することを要求する。amendment には本凍結表の同時更新が
+# 必要——意図的な二重 pin（Fix 8/9/19 と同じ規約）。P0 の凍結値は
+# `voice_genesis/singer/score.py` の `TEMPO_BPM` と一致すべき値であり、
+# Fix 12 の逐語比較（score_py_module.TEMPO_BPM との動的照合）と独立に
+# 整合する（本表は静的 pin、Fix 12 は動的照合——二重防御）。現行 manifest
+# の実 tempo 値から転記して凍結。
+# ---------------------------------------------------------------------------
+_PROBE_EXPECTED_TEMPO_BPM: Mapping[str, float] = types.MappingProxyType({
+    "P0": 72.0,
+    "P1": 72.0,
+    "P2": 72.0,
+    "P3": 72.0,
+    "P4": 80.0,
+    "P5": 72.0,
+})
+
+# ---------------------------------------------------------------------------
+# PR #322 第9巡指摘 Fix 19（P2, 採用）: Fix 3 の軸別意味照合は
+# factor_levels.axes の宣言値と**対応 cell の note フィールド**の内部
+# 自己整合性しか見ない——協調編集（例: axes.register.low を 57->58 に
+# 変え、low-register の cell も同時に MIDI 58 へ揃える）は通過してしまう。
+# `source_precedent`（S7 凍結値等）が主張し続ける値と、実際に registered
+# された刺激が黙って乖離し得る欠陥。Fix 8/9 と同方式（validator 内凍結表
+# による外部アンカー化・manifest から独立）で、`factor_levels.axes` の
+# 全水準の具体値（+ P2 filler タプル3値）を凍結表 と厳密一致検証する。
+# amendment には本凍結表の同時更新が必要——意図的な二重 pin（manifest
+# 側の変更だけでは通らない摩擦、Fix 8/9 と同じ規約）。現行 manifest の
+# 実値から転記して凍結（P1 register/duration/transition_direction、
+# P2 onset_consonant_class 記述文言 + filler タプル、P3
+# release_duration/ending_voicing 記述文言。P3 の release_duration は
+# Fix 22 で final_phone_dur_override の terminal_extension_ms(ms) を
+# 意味する数値へ再定義済み——short=0.0（override なし）/ long=80.0
+# （run 8 B-1 rr_long_tail_080 実使用値）。Fix 21 の final_note_duration
+# 改名は Fix 22 で撤回した）。
+# ---------------------------------------------------------------------------
+_PROBE_EXPECTED_FACTOR_VALUES: Mapping[str, Any] = types.MappingProxyType({
+    "P1": types.MappingProxyType({
+        "axes": types.MappingProxyType({
+            "register": types.MappingProxyType({"low": 57, "mid": 62, "high": 65}),
+            "duration": types.MappingProxyType({"short": 1, "long": 4}),
+            "transition_direction": types.MappingProxyType({
+                "low_to_high": "57->65", "high_to_low": "65->57",
+            }),
+        }),
+        "extra": types.MappingProxyType({}),
+    }),
+    "P2": types.MappingProxyType({
+        "axes": types.MappingProxyType({
+            "onset_consonant_class": types.MappingProxyType({
+                "fricative_s": "さ/そ/す", "stop_k": "く/か", "stop_g_voiced": "ぎ",
+                "nasal_n": "の", "semivowel_y": "や/よ", "semivowel_w": "わ",
+                "liquid_r": "ら/り", "vowel_only": "い",
+            }),
+        }),
+        "extra": types.MappingProxyType({
+            "medial_filler_kana": "か", "medial_filler_beats": 1, "medial_filler_pitch_midi": 60,
+            # Fix 25: 全 onset cell の phrase-final 検定 note が共有すべき
+            # 凍結 target タプル（現行 manifest の実値から転記）。
+            "onset_target_pitch_midi": 65, "onset_target_duration_beats": 2,
+        }),
+    }),
+    "P3": types.MappingProxyType({
+        "axes": types.MappingProxyType({
+            "release_duration": types.MappingProxyType({"short": 0.0, "long": 80.0}),
+            "ending_voicing": types.MappingProxyType({
+                "voiced": "有声終端（子音+母音の通常発声、devoicing対象外のモーラ）",
+                "unvoiced": "無声化しうる終端（無声子音+狭母音 /u/ 等、無声化しやすいモーラ）",
+            }),
+        }),
+        "extra": types.MappingProxyType({}),
+    }),
+})
+
+
+def _frozen_factor_value_equal(actual: Any, expected: Any) -> bool:
+    """Fix 19 の凍結値照合専用の等値判定。bool は int のサブクラスのため
+    `True == 1` のような誤許可を避ける——期待値が数値なら実値も
+    非bool数値でなければならない、期待値が bool なら実値も bool でなければ
+    ならない、それ以外（文字列等）は素の等値。"""
+    if isinstance(expected, bool):
+        return isinstance(actual, bool) and actual == expected
+    if isinstance(expected, (int, float)):
+        return isinstance(actual, (int, float)) and not isinstance(actual, bool) and actual == expected
+    return actual == expected
+
+
+def _validate_probe_expected_factor_values(
+    *, expected_probe_id: str, factor_levels: Mapping[str, Any], field: str
+) -> None:
+    """PR #322 第9巡指摘 Fix 19（P2, 採用）の実装: `factor_levels.axes` の
+    全水準の具体値（+ P2 filler タプル）を、manifest から独立した凍結表
+    `_PROBE_EXPECTED_FACTOR_VALUES` と厳密一致検証する。cell との内部
+    自己整合性（Fix 3）だけでは、axes の値と対応 cell の note フィールドを
+    協調して書き換える amendment を検出できない——本関数は cell を一切
+    参照せず、axes/filler の宣言値のみを外部凍結値と照合する。"""
+    expected = _PROBE_EXPECTED_FACTOR_VALUES.get(expected_probe_id)
+    if expected is None:
+        return
+    actual_axes = factor_levels.get(_FACTOR_LEVELS_AXES_KEY, {})
+    expected_axes = expected["axes"]
+    unknown_axes = set(actual_axes.keys()) - set(expected_axes.keys())
+    if unknown_axes:
+        raise Run9ValidationError(
+            f"{field}.axes has axis name(s) not present in the frozen expected-value table for "
+            f"{expected_probe_id}: {sorted(unknown_axes)} (Fix 19: amendment requires updating both "
+            "the manifest and _PROBE_EXPECTED_FACTOR_VALUES — intentional double pin, same convention "
+            "as Fix 8/9)"
+        )
+    missing_axes = set(expected_axes.keys()) - set(actual_axes.keys())
+    if missing_axes:
+        raise Run9ValidationError(
+            f"{field}.axes is missing axis name(s) required by the frozen expected-value table for "
+            f"{expected_probe_id}: {sorted(missing_axes)} (Fix 19)"
+        )
+    for axis_name, expected_levels in expected_axes.items():
+        actual_levels = actual_axes[axis_name]
+        unknown_levels = set(actual_levels.keys()) - set(expected_levels.keys())
+        if unknown_levels:
+            raise Run9ValidationError(
+                f"{field}.axes.{axis_name} has level name(s) not present in the frozen table: "
+                f"{sorted(unknown_levels)} (Fix 19: intentional double pin)"
+            )
+        missing_levels = set(expected_levels.keys()) - set(actual_levels.keys())
+        if missing_levels:
+            raise Run9ValidationError(
+                f"{field}.axes.{axis_name} is missing level name(s) required by the frozen table: "
+                f"{sorted(missing_levels)} (Fix 19)"
+            )
+        for level_name, expected_value in expected_levels.items():
+            actual_value = actual_levels[level_name]
+            if not _frozen_factor_value_equal(actual_value, expected_value):
+                raise Run9ValidationError(
+                    f"{field}.axes.{axis_name}.{level_name} = {actual_value!r} does not match the "
+                    f"frozen expected value {expected_value!r} for {expected_probe_id} (Fix 19: a "
+                    "coordinated edit that moves both factor_levels.axes and the corresponding cell's "
+                    "note fields together passes Fix 3's cell-consistency check but violates this "
+                    "manifest-independent frozen anchor — amendment requires updating "
+                    "_PROBE_EXPECTED_FACTOR_VALUES too, an intentional double pin)"
+                )
+
+    for extra_key, expected_value in expected["extra"].items():
+        actual_value = factor_levels.get(extra_key)
+        if not _frozen_factor_value_equal(actual_value, expected_value):
+            raise Run9ValidationError(
+                f"{field}.{extra_key} = {actual_value!r} does not match the frozen expected value "
+                f"{expected_value!r} for {expected_probe_id} (Fix 19: intentional double pin)"
+            )
+
+
+def _validate_probe_expected_cell_ids(
+    *, expected_probe_id: str, cells: List[Dict[str, Any]], field: str
+) -> None:
+    expected = _PROBE_EXPECTED_CELL_IDS[expected_probe_id]
+    actual = {cell.get("cell_id") for cell in cells}
+    if actual != expected:
+        missing = expected - actual
+        extra = actual - expected
+        detail = []
+        if missing:
+            detail.append(f"missing {sorted(missing)}")
+        if extra:
+            detail.append(f"unexpected {sorted(extra)}")
+        raise Run9ValidationError(
+            f"{field}.cells cell_id set does not match the frozen expected set for "
+            f"{expected_probe_id} ({'; '.join(detail)}) — amendment requires updating both the "
+            "manifest and this validator's frozen expected-cell-id table (Fix 9: intentional double "
+            "pin)"
+        )
+
+
+def _validate_probe_factorial_coverage(
+    *, expected_probe_id: str, factor_levels: Mapping[str, Any], cells: List[Dict[str, Any]],
+    field: str,
+) -> None:
+    axes_pair = _PROBE_FACTORIAL_AXES.get(expected_probe_id)
+    if axes_pair is None:
+        return
+    axis_a, axis_b = axes_pair
+    axes = factor_levels[_FACTOR_LEVELS_AXES_KEY]
+    expected_pairs = {
+        (level_a, level_b) for level_a in axes[axis_a] for level_b in axes[axis_b]
+    }
+    covered_pairs = set()
+    for cell in cells:
+        levels = cell.get(_CELL_LEVELS_KEY, {})
+        if isinstance(levels, dict) and axis_a in levels and axis_b in levels:
+            covered_pairs.add((levels[axis_a], levels[axis_b]))
+    missing_pairs = expected_pairs - covered_pairs
+    if missing_pairs:
+        raise Run9ValidationError(
+            f"{field}: {expected_probe_id} full factorial {axis_a}×{axis_b} is missing combination(s) "
+            f"{sorted(missing_pairs)} — every declared level combination must be realized by a single "
+            "cell that references both axes simultaneously (a frozen factorial silently losing a "
+            "condition is fail-closed, Fix 9)"
+        )
+
+# ---------------------------------------------------------------------------
+# PR #322 第16巡指摘 Fix 28（P2, 採用、Fix 25/26 と同族の文脈凍結）: P1 の
+# register×duration グリッド cell は kana を変えても通過していた（軸
+# checker は pitch_midi/duration_beats のみ照合）。transition cell も
+# `_check_axis_transition_direction()` が先頭/末尾 note の pitch_midi 系列
+# しか見ておらず、kana/duration の変更や中間 note の挿入を検出できな
+# かった——いずれも pitch/duration の比較が音韻・タイミング・輪郭差と
+# 交絡し得る欠陥。grid/transition で対応方式を分ける:
+#  - grid cell: pitch_midi/duration_beats（factor そのもの）のみ相違を
+#    許すホワイトリスト方式で、それ以外の全 note フィールド + note 数が
+#    全 grid cell 間で同一であることを強制する（cell 間相対比較 — grid
+#    cell は factor 水準ごとに増減するため単一 cell への外部 pin は
+#    不適）。
+#  - transition cell: cell がちょうど2個の閉じた集合（Fix 9 が cell_id
+#    集合自体を凍結済み）のため、両 cell の notes 配列全体（全フィール
+#    ド）を validator 内凍結表 `_P1_TRANSITION_NOTES_TEMPLATE` へ転写し
+#    厳密一致を強制する——中間 note の挿入・kana/duration 変更を構造的に
+#    排除する。amendment には本凍結表の同時更新が必要——意図的な二重 pin
+#    （Fix 7/19/20/25 と同じ規約）。現行 manifest の実値から転記して
+#    凍結。
+# ---------------------------------------------------------------------------
+_P1_GRID_VARIABLE_NOTE_FIELDS: FrozenSet[str] = frozenset({"pitch_midi", "duration_beats"})
+
+_P1_TRANSITION_NOTES_TEMPLATE: Mapping[str, Tuple[Mapping[str, Any], ...]] = types.MappingProxyType({
+    "P1-TRANS-LOW-TO-HIGH": (
+        types.MappingProxyType({
+            "kana": "ら", "pitch_midi": 57, "duration_beats": 1, "phrase_index": 0,
+            "is_phrase_final": False,
+        }),
+        types.MappingProxyType({
+            "kana": "り", "pitch_midi": 65, "duration_beats": 1, "phrase_index": 0,
+            "is_phrase_final": True,
+        }),
+    ),
+    "P1-TRANS-HIGH-TO-LOW": (
+        types.MappingProxyType({
+            "kana": "ら", "pitch_midi": 65, "duration_beats": 1, "phrase_index": 0,
+            "is_phrase_final": False,
+        }),
+        types.MappingProxyType({
+            "kana": "り", "pitch_midi": 57, "duration_beats": 1, "phrase_index": 0,
+            "is_phrase_final": True,
+        }),
+    ),
+})
+
+
+def _validate_p1_grid_note_context_consistency(
+    *, cells: List[Dict[str, Any]], field: str
+) -> None:
+    """Fix 28（P1 grid 部分）の実装: `register`/`duration` 軸を同時に
+    参照する全 cell（grid cell）の notes 配列を比較し、
+    `_P1_GRID_VARIABLE_NOTE_FIELDS`（factor そのもの）以外の全フィールド
+    + note 数が全 grid cell 間で同一であることを機械強制する。cell_id
+    昇順で最初に現れる grid cell を基準にする（`_PROBE_EXPECTED_CELL_IDS`
+    により cell_id 集合は既に閉じているため、どの cell を基準にしても
+    対称的に同じ判定になる）。"""
+    grid_cells = [
+        cell for cell in cells
+        if isinstance(cell.get(_CELL_LEVELS_KEY), dict)
+        and "register" in cell[_CELL_LEVELS_KEY] and "duration" in cell[_CELL_LEVELS_KEY]
+    ]
+    if not grid_cells:
+        return
+    reference = sorted(grid_cells, key=lambda c: str(c.get("cell_id")))[0]
+    ref_notes = reference["notes"]
+
+    def _shape(notes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {k: v for k, v in note.items() if k not in _P1_GRID_VARIABLE_NOTE_FIELDS}
+            for note in notes
+        ]
+
+    ref_shape = _shape(ref_notes)
+    for cell in grid_cells:
+        if cell is reference:
+            continue
+        notes = cell["notes"]
+        if len(notes) != len(ref_notes):
+            raise Run9ValidationError(
+                f"{field}: P1 grid cell {cell.get('cell_id')!r} has {len(notes)} note(s), reference "
+                f"grid cell {reference.get('cell_id')!r} has {len(ref_notes)} — all register×duration "
+                "grid cells must share an identical note structure so the pitch/duration comparison "
+                "is not confounded by a differing note count (Fix 28)"
+            )
+        shape = _shape(notes)
+        if shape != ref_shape:
+            raise Run9ValidationError(
+                f"{field}: P1 grid cell {cell.get('cell_id')!r} non-factor note fields {shape!r} "
+                f"diverge from reference grid cell {reference.get('cell_id')!r} {ref_shape!r} — only "
+                f"{sorted(_P1_GRID_VARIABLE_NOTE_FIELDS)} may differ across register×duration grid "
+                "cells (Fix 28: the pitch/duration comparison must not be confounded by differing "
+                "phonology/timing structure)"
+            )
+
+
+def _validate_p1_transition_notes_template(
+    *, cells: List[Dict[str, Any]], field: str
+) -> None:
+    """Fix 28（P1 transition 部分）の実装: `_P1_TRANSITION_NOTES_TEMPLATE`
+    に転写した凍結 notes 配列と、対応 cell_id の実 notes 配列が全フィール
+    ドで厳密一致することを検証する——中間 note の挿入・kana/duration 変更
+    を構造的に排除する。テンプレートに存在しない cell_id（transition
+    cell 以外）は対象外。"""
+    for cell in cells:
+        cell_id = cell.get("cell_id")
+        template = _P1_TRANSITION_NOTES_TEMPLATE.get(cell_id)
+        if template is None:
+            continue
+        notes = cell["notes"]
+        if len(notes) != len(template):
+            raise Run9ValidationError(
+                f"{field}: P1 transition cell {cell_id!r} has {len(notes)} note(s), the frozen "
+                f"template requires exactly {len(template)} — amendment requires updating "
+                "_P1_TRANSITION_NOTES_TEMPLATE too, an intentional double pin (Fix 28)"
+            )
+        for i, (note, expected_note) in enumerate(zip(notes, template)):
+            actual = dict(note)
+            expected = dict(expected_note)
+            if actual != expected:
+                raise Run9ValidationError(
+                    f"{field}: P1 transition cell {cell_id!r} notes[{i}] = {actual!r} does not match "
+                    f"the frozen template {expected!r} — the transition_direction comparison must not "
+                    "be confounded by an inserted note or a kana/duration change (Fix 28: intentional "
+                    "double pin, amendment requires updating _P1_TRANSITION_NOTES_TEMPLATE too)"
+                )
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第2巡指摘 Fix 3（P2, 採用）: 軸別の意味照合。Fix 2 はラベル
+# （axis_name/level_name）の実在照合のみで、宣言された具体値と cell の実
+# note フィールドとの一致は見ていなかった（例: P1-REG-LOW-DUR-SHORT の
+# MIDI を 57→65 に変えても `levels: {register: low}` のまま通過してい
+# た）。以下、各軸の「宣言 ↔ 実 note」照合をここで凍結する。数値軸
+# （register/duration。P3 の release_duration は Fix 22 で
+# `final_phone_dur_override` cell 欄照合の専用 checker へ分離した——
+# note フィールド照合ではない）は cell の**phrase-final note**
+# （`is_phrase_final: true`。P1/P3 の対象 cell は必ずちょうど1つ持つ —
+# 単一 note の register/duration cell では唯一の note、P2/P3 の複数 note
+# cell では終端/target note）の該当フィールドと厳密等値照合する。
+# transition_direction は先頭 note → 終端 note の pitch_midi 系列を
+# `"{start}->{end}"` として文字列照合する。onset_consonant_class /
+# ending_voicing は kana → クラスの対応表（validator 内で独立に凍結 —
+# manifest 側の記述テキストを自己参照しない）を phrase-final note の kana
+# へ適用して照合する。phrase_dynamics は velocity/dynamics 欄が note
+# schema に存在しないため、構造（非減少 pitch 系列 + phrase-final note が
+# 末尾）の実在を照合する。
+# ---------------------------------------------------------------------------
+
+# onset_consonant_class の各水準に属する kana → level_name の対応表
+# （P2 factor_levels.axes.onset_consonant_class の記述テキストと同じ
+# メンバー構成だが、manifest 側の自由記述文字列をパースするのではなく
+# validator 内の独立した凍結表として保持する — 記述文字列と note の両方
+# が同時にずれて「整合しているように見える」誤りを検出できない循環照合を
+# 避けるため）。
+_ONSET_CONSONANT_CLASS_KANA_TABLE: Mapping[str, str] = types.MappingProxyType({
+    "さ": "fricative_s", "そ": "fricative_s", "す": "fricative_s",
+    "く": "stop_k", "か": "stop_k",
+    "ぎ": "stop_g_voiced",
+    "の": "nasal_n",
+    "や": "semivowel_y", "よ": "semivowel_y",
+    "わ": "semivowel_w",
+    "ら": "liquid_r", "り": "liquid_r",
+    "い": "vowel_only",
+})
+
+# ending_voicing の kana → 有声性区分の対応表。標準的な日本語の無声化
+# 規則（無声子音 + 狭母音 /i//u/ は無声化しやすい）に基づく（P3
+# factor_levels.axes.ending_voicing の記述と同一の理解に基づく独立表）。
+# vocabulary に登場する16 kana 全件を分類する（登場していない水準・軸の
+# ためだが、将来 cell が増えた際にも kana table の再定義を要さない）。
+_ENDING_VOICING_KANA_TABLE: Mapping[str, str] = types.MappingProxyType({
+    "く": "unvoiced", "す": "unvoiced",  # 無声子音 + /u/ = 無声化しやすい
+    "さ": "voiced", "そ": "voiced", "か": "voiced", "ぎ": "voiced",
+    "の": "voiced", "や": "voiced", "よ": "voiced", "わ": "voiced",
+    "ら": "voiced", "り": "voiced", "い": "voiced", "は": "voiced",
+    "み": "voiced", "た": "voiced",
+})
+
+# 数値照合軸: axis_name -> 照合対象の note フィールド名。
+# `release_duration` は Fix 21 で `final_note_duration`（duration_beats
+# 照合）へ改名したが Fix 22 で撤回した——本軸の照合先は note フィールド
+# ではなく cell レベルの `final_phone_dur_override` pin であり、専用の
+# `_check_axis_release_override()` へディスパッチする（下記
+# `_validate_axis_semantic_value()` 参照）。
+_AXIS_NUMERIC_FIELD_CHECKS: Mapping[str, str] = types.MappingProxyType({
+    "register": "pitch_midi",
+    "duration": "duration_beats",
+})
+# kana クラス照合軸: axis_name -> kana 対応表。
+_AXIS_KANA_CLASS_CHECKS: Mapping[str, Mapping[str, str]] = types.MappingProxyType({
+    "onset_consonant_class": _ONSET_CONSONANT_CLASS_KANA_TABLE,
+    "ending_voicing": _ENDING_VOICING_KANA_TABLE,
+})
+
+# PR #322 第3巡指摘 Fix 7（P2, 採用）: 第2巡 Fix 3 の onset checker は
+# phrase-final の検定 note しか見ておらず、P2 onset cell の前置 filler
+# note（か・1拍相当）を cell ごとに別 kana/pitch/duration へ変えても
+# 通過してしまっていた（前コンテキスト交絡で onset class 比較が壊れる）。
+# P2 の `factor_levels` へ凍結 filler タプル（`medial_filler_kana`/
+# `medial_filler_beats`/`medial_filler_pitch_midi`）を宣言し、全 onset
+# cell（`onset_consonant_class` 軸を持つ cell）の前置 note 列がこの
+# タプルと完全一致することを機械強制する。
+_P2_FILLER_TUPLE_KEYS: FrozenSet[str] = frozenset(
+    {"medial_filler_kana", "medial_filler_beats", "medial_filler_pitch_midi"}
+)
+_P2_ONSET_AXIS_NAME = "onset_consonant_class"
+
+# ---------------------------------------------------------------------------
+# PR #322 第14巡指摘 Fix 25（P2, 採用）: Fix 7 は前置 filler note の一貫性
+# しか強制していない——`_check_axis_kana_class()` は phrase-final 検定
+# note の kana クラスしか見ず、Fix 7 の一貫性検査は前置 filler note しか
+# 比較しないため、amendment/repin で onset cell の phrase-final 検定 note
+# を MIDI 65 / 2拍から別の pitch/duration へ変えても通過してしまう——P2
+# 比較が onset class と pitch/duration を同時に変え、その交絡が Attack へ
+# 誤帰属され得る欠陥。Fix 7 と同方式で、P2 の `factor_levels` へ凍結
+# target タプル（`onset_target_pitch_midi`/`onset_target_duration_beats`）
+# を宣言し、全 onset cell（`onset_consonant_class` 軸を持つ cell）の
+# phrase-final 検定 note の pitch_midi/duration_beats がこのタプルと
+# 完全一致すること（結果として全 onset cell 間で target context が同一
+# であること）を機械強制する。宣言値自体も Fix 19 の
+# `_PROBE_EXPECTED_FACTOR_VALUES["P2"]["extra"]` により manifest から
+# 独立した凍結表と照合される（二重 pin）。
+# ---------------------------------------------------------------------------
+_P2_TARGET_TUPLE_KEYS: FrozenSet[str] = frozenset(
+    {"onset_target_pitch_midi", "onset_target_duration_beats"}
+)
+
+# ---------------------------------------------------------------------------
+# PR #322 第5巡指摘 Fix 11（P1, 採用）: 宣言 harness
+# （`gate_synth.py::run_pipeline` の `build_inputs()`）には energy/
+# velocity/metrical-accent の制御入力が存在しない（`_NoteWithMs` は
+# MIDI/mora/duration のみ保持）——P2-PHRASE-BUILD-WEAK-TO-STRONG が変えて
+# いるのは pitch 系列のみであり、これを Energy contrast として登録する
+# と、後続の Energy 測定結果が「実際には適用されていない要因」へ誤帰属
+# され得る。**energy 制御の新規発明は不採用**（存在しない harness 入力の
+# 捏造になるため）——計器能力の正直な境界宣言として、当該 cell を
+# Energy contrast の登録（`onset_consonant_class`/`phrase_dynamics` 等の
+# 操作可能軸システム）から除外し、`diagnostic_role`（軸システムとは独立
+# の cell 属性）で「pitch 上行構造のみを操作する診断用 cell であり、
+# energy 効果の帰属には使わない」ことを機械可読に宣言する。
+# ---------------------------------------------------------------------------
+_CELL_DIAGNOSTIC_ROLE_KEY = "diagnostic_role"
+_CELL_DIAGNOSTIC_ROLE_KEYS: FrozenSet[str] = frozenset({"role_id", "scope_boundary_note"})
+_DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID = "diagnostic_structural_pitch_rise"
+# `scope_boundary_note` が保持しなければならないマーカー（Fix 11 裁定文
+# の核心2点: 何を操作しているか / 何に使わないか）。
+_DIAGNOSTIC_ROLE_SCOPE_BOUNDARY_MARKERS: Tuple[str, ...] = (
+    "pitch 上行構造のみ", "energy 効果の帰属に使わない",
+)
+
+# ---------------------------------------------------------------------------
+# PR #322 第19巡指摘 Fix 31（P2, 採用、Fix 28 transition テンプレートと
+# 同族）: `_validate_cell_diagnostic_role()` は `scope_boundary_note` の
+# 文言（マーカー含有）しか検証しておらず、その文言が主張する実体
+# （notes 列 60→62→65 の非減少 pitch 系列 + phrase-final note が終端）
+# 自体は一切照合していなかった——amendment で notes を非単調（例: 先頭
+# pitch を 60→66 のように書き換える）へ差し替えても、scope_boundary_note
+# の文言さえ書き換えなければ通過してしまう。
+#  - テンプレート凍結: Fix 28 の `_P1_TRANSITION_NOTES_TEMPLATE` と同方式
+#    で、diagnostic_structural_pitch_rise role を持つ cell の notes 配列
+#    全体（全フィールド）を validator 内凍結テンプレートへ転写し厳密
+#    一致を強制する。amendment には本凍結表の同時更新が必要——意図的な
+#    二重 pin（Fix 7/19/20/25/28 と同じ規約）。
+#  - 構造述語の独立検証: テンプレート凍結とは独立に、role が主張する
+#    構造述語（pitch 系列が非減少=上行であること）自体も検証する——将来
+#    amendment でテンプレートを差し替える際、二重 pin の両方を協調して
+#    更新しても非上行な値へ書き換えることを構造的に禁止するため（テンプ
+#    レート一致だけに頼ると「両方を同時に更新した」という理由だけで
+#    通ってしまう）。phrase-final マーカーが notes 配列の終端であること
+#    は `_select_phrase_final_note()`（Fix 23 と同じ selector）の再利用
+#    で検証する。
+# ---------------------------------------------------------------------------
+_P2_DIAGNOSTIC_PITCH_RISE_NOTES_TEMPLATE: Mapping[str, Tuple[Mapping[str, Any], ...]] = (
+    types.MappingProxyType({
+        "P2-PHRASE-BUILD-WEAK-TO-STRONG": (
+            types.MappingProxyType({
+                "kana": "さ", "pitch_midi": 60, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": False,
+            }),
+            types.MappingProxyType({
+                "kana": "く", "pitch_midi": 62, "duration_beats": 1, "phrase_index": 0,
+                "is_phrase_final": False,
+            }),
+            types.MappingProxyType({
+                "kana": "ぎ", "pitch_midi": 65, "duration_beats": 2, "phrase_index": 0,
+                "is_phrase_final": True,
+            }),
+        ),
+    })
+)
+
+
+def _validate_p2_diagnostic_pitch_rise_cell(cell: Mapping[str, Any], *, field: str) -> None:
+    """Fix 31 の実装: `diagnostic_structural_pitch_rise` role を持つ cell
+    の notes を、構造述語（非減少 + 少なくとも1箇所の厳密増加を伴う
+    pitch 系列・phrase-final マーカーの終端位置）とテンプレート凍結の
+    両方で検証する。
+
+    PR #322 第20巡指摘 Fix 33（P2, 採用）: Fix 31 の構造述語は「減少しない
+    こと」しか検証しておらず、テンプレートと cell を協調して 60→60→60
+    （全て同一 pitch）へ amendment すれば「上行が一切ない」まま
+    diagnostic_structural_pitch_rise を名乗れてしまっていた——role が
+    主張する「pitch 上行構造」は単調非減少だけでなく実際の上昇を要求する
+    ため、終端 pitch が先頭 pitch より厳密に大きいこと（非減少 + 少なくとも
+    1箇所の厳密増加）を追加で検証する。"""
+    cell_id = cell.get("cell_id")
+    notes = cell["notes"]
+
+    # 構造述語1（Fix 23 selector の再利用）: phrase-final マーカーが
+    # ちょうど1つ・notes 配列の終端であること。
+    _select_phrase_final_note(cell, field=field)
+
+    # 構造述語2: pitch 系列が非減少（上行）であること——テンプレート凍結
+    # とは独立に検証する。
+    pitches = [note["pitch_midi"] for note in notes]
+    for i in range(1, len(pitches)):
+        if pitches[i] < pitches[i - 1]:
+            raise Run9ValidationError(
+                f"{field}: diagnostic cell {cell_id!r} (role_id="
+                f"{_DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID!r}) declares a non-decreasing "
+                f"pitch-rise structure but notes[{i}].pitch_midi={pitches[i]!r} < "
+                f"notes[{i - 1}].pitch_midi={pitches[i - 1]!r} — the structural predicate the role "
+                "claims (non-decreasing pitch series) does not hold (Fix 31: verified independently "
+                "of the frozen notes template so amending the template cannot silently violate it)"
+            )
+
+    # 構造述語3（Fix 33, 採用）: 非減少だけでは「全 note 同一 pitch」
+    # （上行なし）を許してしまう——終端 pitch が先頭 pitch より厳密に
+    # 大きいこと（少なくとも1箇所の厳密増加）を追加で要求する。
+    if pitches[-1] <= pitches[0]:
+        raise Run9ValidationError(
+            f"{field}: diagnostic cell {cell_id!r} (role_id="
+            f"{_DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID!r}) declares a pitch-rise structure but the "
+            f"terminal pitch_midi={pitches[-1]!r} is not strictly greater than the leading "
+            f"pitch_midi={pitches[0]!r} — non-decreasing alone permits a flat (no-rise) sequence such "
+            "as an all-equal pitch series, which does not constitute a 'rise' (Fix 33: verified "
+            "independently of the frozen notes template so a coordinated amendment of both cannot "
+            "silently claim a rise that never occurs)"
+        )
+
+    # テンプレート凍結: notes 配列全体（全フィールド）が凍結テンプレート
+    # と厳密一致すること。
+    template = _P2_DIAGNOSTIC_PITCH_RISE_NOTES_TEMPLATE.get(cell_id)
+    if template is None:
+        return
+    if len(notes) != len(template):
+        raise Run9ValidationError(
+            f"{field}: diagnostic cell {cell_id!r} has {len(notes)} note(s), the frozen template "
+            f"requires exactly {len(template)} — amendment requires updating "
+            "_P2_DIAGNOSTIC_PITCH_RISE_NOTES_TEMPLATE too, an intentional double pin (Fix 31)"
+        )
+    for i, (note, expected_note) in enumerate(zip(notes, template)):
+        actual = dict(note)
+        expected = dict(expected_note)
+        if actual != expected:
+            raise Run9ValidationError(
+                f"{field}: diagnostic cell {cell_id!r} notes[{i}] = {actual!r} does not match the "
+                f"frozen template {expected!r} (Fix 31: intentional double pin, amendment requires "
+                "updating _P2_DIAGNOSTIC_PITCH_RISE_NOTES_TEMPLATE too)"
+            )
+# P2 probe レベルの境界宣言（`role` フィールドが保持しなければならない
+# マーカー）: 宣言 harness に energy/velocity/metrical-accent 制御入力が
+# 存在しないこと・P2 の Energy/Attack 軸で実際に操作されるのは
+# onset_consonant_class のみであること・再入条件、の3点。
+_P2_ENERGY_BOUNDARY_MARKERS: Tuple[str, ...] = (
+    "build_inputs()",
+    "energy/velocity/metrical-accent",
+    "onset consonant class のみ",
+    "再入条件",
+)
+
+# ---------------------------------------------------------------------------
+# PR #322 第11巡指摘 Fix 21（P1, 採用）は本巡 Fix 22 で**訂正・撤回**した。
+# Fix 21 は「宣言 harness に phrase-end release を制御する入力が存在しな
+# い」と判断し、`release_duration` 軸を `final_note_duration`（終端 note
+# 自身の duration_beats）へ改名したが、この前提は誤りだった——
+# `gate_synth.py::run_pipeline` は `final_phone_dur_override` kwarg
+# （line 1183）を実際に受け取り、Stage 1 予測の終端音素フレーム配分を
+# 差し替える機構として存在し、run 8 B-1 の `rr_long_tail_*` 校正で実使用
+# 済みである（read-only 参照 + `voice_genesis/foundry/run8/s7_calib_
+# score.py`/`results_s7/s7_b1_calibration_set.json` で確認済み）。
+# `_NoteWithMs` が `is_phrase_final` を消費しない点・Stage 2 末尾の
+# `TAIL_FRAMES` が cell 非依存の固定パディングである点は事実のままだが、
+# これらは `final_phone_dur_override`（Stage 1 の音素内フレーム配分）とは
+# 別階層（Stage 2 の系列末尾パディング）であり、release 制御の不在を
+# 意味しなかった。
+# ---------------------------------------------------------------------------
+# PR #322 第12巡指摘 Fix 22（P1, 採用——上限超過後だが「凍結した境界宣言が
+# 虚偽である可能性」= 致命的クラスの新規具体経路のため例外採用）: 軸名を
+# `release_duration` へ戻し（水準値の意味を release 制御へ再定義）、cell
+# レベルに `final_phone_dur_override` の pin 欄を新設する。short 水準 =
+# override なし（null、harness 既定と同一経路 = `rr_long_tail_000` の
+# `terminal_extension_ms: 0.0` prereg 値と一致）。long 水準 =
+# `terminal_extension_ms: 80.0`（run 8 B-1 の `rr_long_tail_080` 実使用値
+# ——4水準梯子 000/040/080/160 のうち reproducibility/cross_process_
+# reproducibility 両ロールで参照される代表値であることを根拠に選定）。
+# pod render harness は各 P3 cell の render で、pin された
+# `final_phone_dur_override` を `run_pipeline(final_phone_dur_override=
+# ...)` へ渡す義務を負う（Fix 13 の `load_pinned_probe_manifest()` 消費
+# 契約と同系の事前登録）。P3 の 4 cell の phrase-final note の
+# `duration_beats` は全 cell 等値へ揃えた（第11巡までの「終端 note 長の
+# 変動」が release との交絡源だったため除去）。
+# ---------------------------------------------------------------------------
+# PR #322 第13巡指摘 Fix 24（P2, 採用）: 上記 Fix 22 の実行レシピ文言が
+# `gate_synth.frames_from_ms(terminal_extension_ms)` という1引数呼び出し
+# を記載していたが、実 helper のシグネチャは `frames_from_ms(ms,
+# frame_ms)`（gate_synth.py:321、read-only 参照で確認済み）——レシピ
+# どおりに実装した pod harness は全 long-release cell で TypeError に
+# なる。`make_tail_extension_override()`（run8/s7_calib_score.py）の
+# 実装を再確認すると、`extension_frames`（フレーム数）への変換は
+# override 呼び出しの**外側**（`run_pipeline` 呼び出し前）で行われており、
+# 変換に使う `frame_ms` は `run_pipeline` 内部と同じ固定グリッド
+# （`hop_size=512`/`sample_rate=44100` — gate_synth.py:1235-1236 で
+# dsconfig に依存しないハードコード定数と確認済み。`s7_calib_score.py`
+# の `FRAME_MS` 定数と同一値）から pod harness が事前に算出できる。
+# レシピを ctx-aware な正しい変換（前例実装を逐語で写す——独自変換は
+# 発明しない）へ訂正し、必須マーカーを実シグネチャ整合形へ更新する。
+_P3_RELEASE_CONTROL_MARKERS: Tuple[str, ...] = (
+    "_NoteWithMs", "final_phone_dur_override", "run_pipeline", "TAIL_FRAMES", "義務を負う",
+    "make_tail_extension_override", "frames_from_ms(terminal_extension_ms, frame_ms)",
+)
+# 旧（誤り）の1引数呼び出し文言が残置されていないことを確認する
+# forbidden marker（Fix 24）。正しい2引数呼び出し文言（上記
+# `_P3_RELEASE_CONTROL_MARKERS` の該当要素）はこの部分文字列を含まない
+# （"...terminal_extension_ms," と続くため — 閉じ括弧が直後に来ない）。
+_P3_RELEASE_RECIPE_FORBIDDEN_MARKER = "frames_from_ms(terminal_extension_ms)"
+_CELL_OVERRIDE_KEY = "final_phone_dur_override"
+_CELL_OVERRIDE_KEYS: FrozenSet[str] = frozenset({"kind", "terminal_extension_ms"})
+# 現時点で唯一サポートする override 翻訳の種類（`run8/s7_calib_score.py`
+# `make_tail_extension_override()` 相当——終端音素へ `terminal_extension_ms`
+# を frames 換算のうえ加算する）。
+_CELL_OVERRIDE_KIND_TAIL_EXTENSION_MS = "tail_extension_ms"
+
+
+def _validate_final_phone_dur_override(value: Any, *, field: str) -> None:
+    """PR #322 第12巡指摘 Fix 22 の実装: `final_phone_dur_override` cell
+    欄（`null` または `{"kind": ..., "terminal_extension_ms": ...}`）の
+    形状検証。`null` は「override なし（harness 既定と同一経路）」を表す
+    正当な値であり、それ自体は許容する。"""
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be null or an object, got {type(value).__name__}")
+    unknown = set(value.keys()) - _CELL_OVERRIDE_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _CELL_OVERRIDE_KEYS - set(value.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    kind = value["kind"]
+    if kind != _CELL_OVERRIDE_KIND_TAIL_EXTENSION_MS:
+        raise Run9ValidationError(
+            f"{field}.kind must be exactly {_CELL_OVERRIDE_KIND_TAIL_EXTENSION_MS!r} (the only "
+            f"supported final_phone_dur_override translation — run8/s7_calib_score.py "
+            f"make_tail_extension_override precedent), got {kind!r}"
+        )
+    _require_positive_finite_number(
+        value["terminal_extension_ms"], field=f"{field}.terminal_extension_ms"
+    )
+
+_NOTE_KEYS: FrozenSet[str] = frozenset(
+    {"kana", "pitch_midi", "duration_beats", "phrase_index", "is_phrase_final"}
+)
+
+# P0 の score 転記元（read-only 参照。凍結・改変禁止 — RUN9-PROBE-1
+# Design Memo 冒頭）。`voice_genesis/singer/score.py`。
+SCORE_PY_REFERENCE_PATH = _THIS_DIR.parent.parent / "singer" / "score.py"
+
+# 宣言 harness（read-only 参照。凍結・改変禁止）。`voice_genesis/foundry/
+# s1_gate/gate_synth.py`。PR #322 第13巡指摘 Fix 24 のテスト側 introspection
+# （`frames_from_ms`/`run_pipeline` のシグネチャを AST 解析で確認する）が
+# 参照する——実 import は onnxruntime 等の重い実行時依存を要するため行わない
+# （静的解析のみ）。
+GATE_SYNTH_PY_REFERENCE_PATH = _THIS_DIR.parent.parent / "foundry" / "s1_gate" / "gate_synth.py"
+
+# ---------------------------------------------------------------------------
+# PR #322 第3巡指摘 Fix 6（P2, 採用）: renderer の mora 文法（read-only
+# 参照。凍結・改変禁止）を唯一の正本として note.kana を検証する。
+# validator 内での語彙表複製（kana -> mora 対応表を validator 側で再定義
+# すること）は renderer 側の対応範囲拡張・変更に追随できず乖離の温床に
+# なるため不採用——`voice_genesis/singer/phoneme_jp.py` を read-only で
+# ロードし、`kana_to_morae()` をそのまま呼び出す。renderer 文法は repo
+# バイトの一部であり、run 時に `repository_commit_sha` が repo バイト
+# 全体を pin することで凍結される（Fix 1 の harness runtime seed 凍結
+# 根拠と同じ論理）。
+# ---------------------------------------------------------------------------
+PHONEME_JP_REFERENCE_PATH = _THIS_DIR.parent.parent / "singer" / "phoneme_jp.py"
+
+
+def _load_phoneme_jp_module(*, path: Optional[Path] = None) -> Any:
+    """`voice_genesis/singer/phoneme_jp.py`（凍結・改変禁止の read-only
+    参照）を read-only でロードする。`path` 省略時（`None`）はモジュール
+    定数 `PHONEME_JP_REFERENCE_PATH` を呼び出しのたびに参照する
+    （`_validate_probe_cell_source()`/`_load_identity_metric_space_
+    document()` と同じ late-binding 回避パターン——テストが `run9_schema.
+    PHONEME_JP_REFERENCE_PATH` を monkeypatch しても本関数の既定値へ
+    反映されない def 時束縛の罠を避ける）。ファイル不在・import 失敗・
+    `kana_to_morae` 未定義はいずれも fail-closed（Fix 4「照合できない =
+    検証失敗」と同じ原則。実 phoneme_jp.py の rename/削除は一切行わない
+    ——テスト用の依存性注入点は `path` 引数のみ）。
+    """
+    if path is None:
+        path = PHONEME_JP_REFERENCE_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"note kana の mora 文法検証には {path} の実在が必須だが見つからない（凍結・改変禁止の "
+            "read-only 参照 — 本 validator は repo checkout 内での実行を前提とする。照合できない = "
+            "検証失敗、PR #322 第2巡 Fix 4 と同じ fail-closed 原則）"
+        )
+    module_name = "_run9_probe_manifest_phoneme_jp_readonly"
+    try:
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            raise Run9ValidationError(f"{path} の import spec を構築できない")
+        module = importlib.util.module_from_spec(spec)
+        # `phoneme_jp.py` は `@dataclass` を使用しており、dataclasses 内部
+        # が `sys.modules[cls.__module__]` を参照する（型ヒント解決の
+        # ため）。`module_from_spec()` だけでは `sys.modules` へ登録され
+        # ないため、`exec_module()` 前に明示登録する必要がある——登録
+        # しないと `AttributeError: 'NoneType' object has no attribute
+        # '__dict__'` でロード自体が失敗する。
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(f"{path} のロードに失敗した: {exc}") from exc
+    if not hasattr(module, "kana_to_morae"):
+        raise Run9ValidationError(f"{path} に kana_to_morae() が定義されていない")
+    return module
+
+
+def _require_single_mora_kana(kana: str, *, phoneme_jp_module: Any, field: str) -> None:
+    """PR #322 第3巡指摘 Fix 6（P2, 採用）の実装: `kana` が renderer の
+    `phoneme_jp.kana_to_morae()` へ通したとき、ちょうど1モーラを構成する
+    ことを検証する（1 note = 1 Mora。メリスマ非対応・未対応文字は
+    fail-closed で拒否 — score.py docstring「1 モーラ = 1 ノート」と
+    同一の制約を機械強制する）。"""
+    try:
+        morae = phoneme_jp_module.kana_to_morae(kana)
+    except Exception as exc:
+        raise Run9ValidationError(
+            f"{field} = {kana!r} は phoneme_jp.kana_to_morae() が受理しない（renderer 文法の対応外 "
+            f"文字を含む可能性がある）: {exc}"
+        ) from exc
+    if len(morae) != 1:
+        raise Run9ValidationError(
+            f"{field} = {kana!r} は phoneme_jp.kana_to_morae() でちょうど1モーラに分割されなかった "
+            f"（実際は{len(morae)}モーラ）— 1 note は単一 Mora のみ表現できる（メリスマ非対応、"
+            "score.py の「1 モーラ = 1 ノート」制約の機械強制）"
+        )
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第5巡指摘 Fix 12（P2, 採用）: hash 一致 + `verbatim: true` 宣言
+# だけでは P0 cell の内容改変（notes/tempo_bpm の値そのもの）を検出でき
+# ない——`score.py`（凍結・改変禁止の read-only 参照）を validator 内で
+# 実際にロードし `build_sakura_score()` を再構築、P0 cell の notes と
+# tempo_bpm を実物と逐語比較する。既存 fixture テスト
+# （`tests/test_run9_probe_manifest.py`）の比較は補助として残すが、正本は
+# 本 validator。Fix 6 の phoneme_jp ローダと同型（sys.modules 登録込み）。
+# ---------------------------------------------------------------------------
+_SCORE_PY_MODULE_NAME = "_run9_probe_manifest_score_py_readonly"
+
+
+def _load_score_py_module(*, path: Optional[Path] = None) -> Any:
+    """`voice_genesis/singer/score.py`（凍結・改変禁止の read-only 参照）
+    を read-only でロードする。`path` 省略時（`None`）はモジュール定数
+    `SCORE_PY_REFERENCE_PATH` を呼び出しのたびに参照する（他の read-only
+    ローダと同じ late-binding 回避パターン）。ファイル不在・import 失敗・
+    `build_sakura_score`/`TEMPO_BPM` 未定義はいずれも fail-closed
+    （Fix 4「照合できない = 検証失敗」と同じ原則。実 score.py の
+    rename/削除は一切行わない）。score.py は `@dataclass` の `ScoreNote`
+    を定義するため phoneme_jp.py と同じ sys.modules 登録が必要。また
+    score.py は `import phoneme_jp as pj`（同ディレクトリの sibling
+    module への素の import 文）を持つため、ロード中だけ一時的に
+    `voice_genesis/singer/` を `sys.path` へ加える（ロード後は復元し、
+    恒久的な sys.path 汚染を避ける）。
+
+    **read-once 契約（PR #322 第8巡指摘 Fix 16, 採用。Fix 15 と同型）**:
+    hash 照合対象と実行対象は同一バイト列から導出する——`path.read_bytes()`
+    で**1回だけ**読み、そのバッファ `buf` から (a) `hashlib.sha256(buf)
+    .hexdigest()` を戻り値 module の `__source_sha256__` 属性として保持し
+    （`_validate_probe_cell_source()` の P0 source hash 照合が
+    `score_py_module` 経由で本値を再利用し、別読みしない構造にしている）
+    (b) `compile(buf.decode("utf-8"), str(path), "exec")` で得たコード
+    オブジェクトを `module.__dict__` へ直接 `exec` する。`spec.loader
+    .exec_module()` は使わない（それ自体が独立にファイルを再読込するため、
+    read-once の趣旨に反する）——hash した版と実行した版の乖離が構造的に
+    不可能になる。"""
+    if path is None:
+        path = SCORE_PY_REFERENCE_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"P0 cell の逐語照合には {path} の実在が必須だが見つからない（凍結・改変禁止の "
+            "read-only 参照 — 本 validator は repo checkout 内での実行を前提とする。照合できない = "
+            "検証失敗、PR #322 第2巡 Fix 4 と同じ fail-closed 原則）"
+        )
+    singer_dir = str(path.parent)
+    inserted = singer_dir not in sys.path
+    if inserted:
+        sys.path.insert(0, singer_dir)
+    try:
+        buf = path.read_bytes()
+        # `spec_from_file_location()` へは str(path) を渡す（テスト用の
+        # read-once spy が `os.PathLike` を実装していない場合でも動作
+        # するようにするため）。以降 `spec.loader.exec_module()` は
+        # 使わない（read-once の趣旨に反するため）ので、location の実体
+        # そのものに再アクセスすることはない——モジュール識別情報
+        # （`__name__`/`__file__`）の構築にのみ使われる。
+        spec = importlib.util.spec_from_file_location(_SCORE_PY_MODULE_NAME, str(path))
+        if spec is None or spec.loader is None:
+            raise Run9ValidationError(f"{path} の import spec を構築できない")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[_SCORE_PY_MODULE_NAME] = module
+        code = compile(buf.decode("utf-8"), str(path), "exec")
+        exec(code, module.__dict__)
+        module.__source_sha256__ = hashlib.sha256(buf).hexdigest()
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(f"{path} のロードに失敗した: {exc}") from exc
+    finally:
+        if inserted:
+            try:
+                sys.path.remove(singer_dir)
+            except ValueError:  # pragma: no cover - defensive
+                pass
+    if not hasattr(module, "build_sakura_score") or not hasattr(module, "TEMPO_BPM"):
+        raise Run9ValidationError(f"{path} に build_sakura_score()/TEMPO_BPM が定義されていない")
+    return module
+
+
+def _require_p0_matches_build_sakura_score(
+    cell: Mapping[str, Any], *, score_py_module: Any, field: str
+) -> None:
+    """PR #322 第5巡指摘 Fix 12 の実装: P0 cell の `notes`/`tempo_bpm` が
+    `score_py_module.build_sakura_score()`/`TEMPO_BPM` の実出力と逐語一致
+    することを検証する。"""
+    try:
+        score_notes = score_py_module.build_sakura_score()
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(f"{field}: build_sakura_score() の実行に失敗した: {exc}") from exc
+    expected_notes = [
+        {
+            "kana": n.mora.kana,
+            "pitch_midi": int(n.midi),
+            "duration_beats": n.duration_beats,
+            "phrase_index": n.phrase_index,
+            "is_phrase_final": n.is_phrase_final,
+        }
+        for n in score_notes
+    ]
+    actual_notes = cell["notes"]
+    if actual_notes != expected_notes:
+        raise Run9ValidationError(
+            f"{field}.notes does not verbatim-match voice_genesis/singer/score.py "
+            "build_sakura_score() output — hash equality + verbatim:true alone cannot catch a "
+            f"content edit (Fix 12). expected={expected_notes!r}, got={actual_notes!r}"
+        )
+    tempo_bpm = cell["tempo_bpm"]
+    if not _numeric_equal(tempo_bpm, score_py_module.TEMPO_BPM):
+        raise Run9ValidationError(
+            f"{field}.tempo_bpm ({tempo_bpm!r}) does not match voice_genesis/singer/score.py "
+            f"TEMPO_BPM ({score_py_module.TEMPO_BPM!r}) — Fix 12"
+        )
+
+# P0 は「同一 score・同一 lyrics・中央音域・表現指定を最小化」（§15）—
+# 中央音域を MIDI 57-72 に固定する（score.py の in 音階 A3=57 を主音と
+# する build_sakura_score() 全音域が MIDI 57-69 でこの帯に収まる）。
+_P0_MIDI_LOW = 57
+_P0_MIDI_HIGH = 72
+
+# P5 は「学習分布外寄りだが baseline domain 内」（§15）— baseline domain
+# を MIDI 45-90 に固定し、P0 域より外周（<57 または >72）の note を
+# 少なくとも1つ含むことを要求する。
+_P5_MIDI_LOW = 45
+_P5_MIDI_HIGH = 90
+
+# ---------------------------------------------------------------------------
+# PR #322 第20巡指摘 Fix 32（P2, 採用）: P5 の検査（上記 `_P5_MIDI_LOW`/
+# `_P5_MIDI_HIGH` 域内制約 + P0 中央域外周制約）は「本 manifest 内の他
+# probe（P0/P1）の使用域の外周・baseline domain 内であること」しか
+# 証明しない——実際の学習分布（PJS practice/education 素材）との分離は
+# 検証していない。`practice_audio_split_manifest_sha`/
+# `education_technique_lesson_manifest_sha` が PENDING の現時点ではこの
+# 分離検証は実行不能（Fix 14/18 と同じ「主張を収集済み証拠へ縮小 + 再入
+# 条件の事前登録」規約 — 検証不能な主張を凍結しない）。P5 probe レベルへ
+# `deferred_verification` ブロック（機械可読）を要求し、(a) 現状の
+# status literal（未検証であることの正直な宣言） (b) 検証を塞いでいる
+# RUN9_CONTRACT.yaml pin 欄の凍結集合（`blocked_by`） (c) 当該 pin が
+# PINNED になった時点で実施すべき検証手続き（`verification_procedure`）
+# (d) 未検証のまま held-out として消費（GENERALIZED_GAIN 評価等）しては
+# ならないという禁止宣言（`consumption_prohibition`）を機械強制する。
+# ---------------------------------------------------------------------------
+_P5_DEFERRED_VERIFICATION_KEY = "deferred_verification"
+_P5_DEFERRED_VERIFICATION_KEYS: FrozenSet[str] = frozenset(
+    {"status", "blocked_by", "verification_procedure", "consumption_prohibition"}
+)
+# status literal: 「学習分布との分離は未検証」の正直な宣言（Fix 14 の
+# HELDOUT_INDEPENDENCE_STATUS と同じ規約 — 検証範囲に正直な固定文字列）。
+P5_DEFERRED_VERIFICATION_STATUS = "TRAINING_DISTRIBUTION_SEPARATION_NOT_YET_VERIFIABLE"
+# 検証を塞いでいる RUN9_CONTRACT.yaml pin 欄の凍結集合。この2欄は共に
+# PENDING（PRACTICE/education 教材ハーネス未実装）——値そのものではなく
+# 欄名の集合を凍結する（値は RUN9_CONTRACT.yaml 側が別途 pin する）。
+_P5_DEFERRED_VERIFICATION_BLOCKED_BY: FrozenSet[str] = frozenset(
+    {"practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha"}
+)
+_P5_DEFERRED_VERIFICATION_PROCEDURE_MARKERS: Tuple[str, ...] = (
+    "practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha", "PINNED",
+    "P5", "フレーズ", "音域", "実学習素材", "照合",
+)
+_P5_DEFERRED_VERIFICATION_PROHIBITION_MARKERS: Tuple[str, ...] = (
+    "held-out", "GENERALIZED_GAIN", "検証", "前提条件",
+)
+
+_P3_DIAGNOSTIC_ROLE_MARKER = "diagnostic_when_trf_uncalibrated"
+
+_RENDER_CONTRACT_KEYS: FrozenSet[str] = frozenset({
+    "harness", "backbone_ref", "performance_seed", "performance_seed_note",
+    "same_conditions_note", "pcm_publication_discipline", "harness_runtime_seed_policy",
+    "probe_manifest_access_contract",
+})
+# PR #322 第6巡指摘 Fix 13（P1, 採用）: 消費契約の事前登録マーカー
+# （`probe_manifest_access_contract` フィールドが保持しなければならない
+# 3点 — 正規取得経路の関数名・直接 json.load の禁止・gate READY は形状
+# 判定に過ぎないこと）。実物照合の消費点は `load_pinned_probe_manifest()`
+# のみ——gate_state() 自体は構造述語のまま変更しない。
+_PROBE_MANIFEST_ACCESS_CONTRACT_MARKERS: Tuple[str, ...] = (
+    "load_pinned_probe_manifest", "契約違反", "形状判定",
+)
+_RENDER_CONTRACT_HARNESS = "voice_genesis/foundry/s1_gate/gate_synth.py::run_pipeline"
+_BACKBONE_REF_KEYS: FrozenSet[str] = frozenset({"contract_path", "contract_field"})
+_BACKBONE_REF_CONTRACT_PATH = "voice_genesis/evolution/run9_dual_founder_pjs/RUN9_CONTRACT.yaml"
+_BACKBONE_REF_CONTRACT_FIELD = "backbone_runtime_bundle_sha"
+# 学習 seed (909002) と混同しないことのマーカー（performance_seed_note が
+# 保持しなければならない）。
+_LEARNING_SEED_DISAMBIGUATION_MARKER = str(LEARNING_SEED)
+# PR #322 第1巡指摘 Fix 1（P1, 採用）: `performance_seed` (909001) は
+# genome/ControlProfile レベルの performance policy seed（v0.1 §9.3・
+# founders/*.json `performance_seed` 欄・`validate_founder_genome()` が
+# 厳格検証する対象）であり、宣言 harness（`gate_synth.py::run_pipeline`）
+# 内部の ONNX runtime 乱数 seed ではない——両者を混同しないことの
+# マーカー（`performance_seed_note` が保持しなければならない）。
+_PERFORMANCE_SEED_GENOME_POLICY_MARKER = "performance policy seed"
+_PERFORMANCE_SEED_NOT_ONNX_RUNTIME_MARKER = "ONNX runtime の乱数 seed ではない"
+# §27 item 13「shared performance seed is identical」/ item 18「birth
+# probes use same score/seed/ExecutionProfile」の参照マーカー。
+_RENDER_CONTRACT_SECTION27_MARKER = "§27"
+_RENDER_CONTRACT_ITEM13_MARKER = "item 13"
+_RENDER_CONTRACT_ITEM18_MARKER = "item 18"
+# PR #322 第1巡指摘 Fix 1: item 13/18 の「same seed」は genome-policy 層
+# (909001) と harness-runtime 層 (42) の両方で、両 founder 間では同一値
+# が使われることを指す——`same_conditions_note` がこの二層整合注記を
+# 保持しなければならないマーカー（両方の値自体を含むことで確認する）。
+_RENDER_CONTRACT_SAME_SEED_BOTH_LAYERS_MARKERS: Tuple[str, ...] = (
+    str(SHARED_PERFORMANCE_SEED), "42",
+)
+# §15 末尾の PCM publication 規律（逐語順序）。
+_PCM_PUBLICATION_DISCIPLINE_MARKERS: Tuple[str, ...] = (
+    "float output", "PCM publication", "file readback", "meter", "actual WAV sha256",
+)
+
+# ---------------------------------------------------------------------------
+# harness_runtime_seed_policy（PR #322 第1巡指摘 Fix 1, P1, 採用）:
+# 宣言 harness `gate_synth.py::run_pipeline` は seed 引数を持たず、自身の
+# ハードコード定数 `SEED = 42`（gate_synth.py:149）を `ort.set_seed(SEED)`
+# / `record["seed"] = SEED`（gate_synth.py:1213-1214）で適用・記録する。
+# gate_synth.py は RUN6/7/8 と共用の凍結計器であり、過去 run の provenance
+# を壊さないため**改変は不採用**——本節は「909001 を runtime seed へ配線
+# する」のではなく、実挙動（42）を manifest 側の宣言として真実化する
+# 設計判定を記録する。42 は manifest が独自に選んだ値ではなく harness
+# バイトの一部であり、run 開始時に `repository_commit_sha` が repo バイト
+# 全体を pin することで凍結される（replay 契約 = 同一 harness バイト →
+# 同一 seed）。
+# ---------------------------------------------------------------------------
+_HARNESS_RUNTIME_SEED_POLICY_KEYS: FrozenSet[str] = frozenset({
+    "harness_hardcoded_seed", "harness_hardcoded_seed_source", "freeze_basis",
+    "runtime_verification_condition", "no_wiring_declaration",
+})
+# gate_synth.py 実コードから転記した定数値（`SEED = 42`）。
+_GATE_SYNTH_HARDCODED_SEED = 42
+_HARNESS_HARDCODED_SEED_SOURCE_MARKERS: Tuple[str, ...] = ("gate_synth.py:149", "1213-1214")
+_HARNESS_FREEZE_BASIS_MARKER = "repository_commit_sha"
+_HARNESS_RUNTIME_VERIFICATION_MARKERS: Tuple[str, ...] = ("fail-closed", "42")
+_HARNESS_NO_WIRING_DECLARATION_MARKER = "配線する変更は行わない"
+
+_REVISION_BRIDGE_ENTRY_NAMES: Tuple[str, ...] = (
+    "reference_render", "c0_replay_takes", "c1_sham_takes", "positive_reference",
+    "negative_reference", "pjs_reference", "evaluated_renders",
+)
+# True のエントリは P0 cell を使った新規 render を要求する（`cell_ref`
+# 必須）。False のエントリは新規 render 不要（`cell_ref` を持たない —
+# 他方 founder の既存 reference_render / confuser_control の決定論的
+# コーパス集約を参照するのみ）。
+_REVISION_BRIDGE_NEW_RENDER_REQUIRED: Mapping[str, bool] = types.MappingProxyType({
+    "reference_render": True,
+    "c0_replay_takes": True,
+    "c1_sham_takes": True,
+    "positive_reference": True,
+    "negative_reference": False,
+    "pjs_reference": False,
+    "evaluated_renders": True,
+})
+# c0/c1 のみ RUN9_CONTRACT.yaml interventions 配下のテイク数 pin 欄
+# （INTERVENTION_TAKE_COUNT_FIELDS）へフィールド名参照する
+# `contract_field_ref` を追加で要求する。
+_REVISION_BRIDGE_CONTRACT_FIELD_REF: Mapping[str, str] = types.MappingProxyType({
+    "c0_replay_takes": "RUN9_CONTRACT.yaml#interventions.c0_replay_takes_per_founder",
+    "c1_sham_takes": "RUN9_CONTRACT.yaml#interventions.c1_sham_takes_per_founder",
+})
+_REVISION_BRIDGE_NO_NEW_RENDER_MARKER = "新規render不要"
+_IDENTITY_METRIC_SPACE_REF_PREFIX = "inputs/identity_metric_space.json#"
+
+# PR #322 第4巡指摘 Fix 8（P2, 採用）: 第2巡 Fix 5 の dotted path 走査は
+# 「参照先が実在するか」しか証明せず、「その参照が“この”エントリの
+# 意図する定義を指しているか」までは見ていなかった——2エントリ間で
+# （どちらも実在する）path を入れ替えても通過してしまう欠陥だった。
+# 本 dict が7エントリそれぞれの `identity_metric_space_ref` が指すべき
+# 正確な dotted path を凍結する「エントリ→期待 path」の厳密対応表
+# （実在走査に加えて厳密一致も要求する）。amendment で参照先の path 自体
+# を変更する場合は、本対応表の更新が同時に必要——これは意図的な二重 pin
+# （manifest 側の値変更だけでは通らない摩擦）であり、片方だけの更新で
+# 「新しい path」が黙って別エントリへ流用されることを防ぐ。
+_REVISION_BRIDGE_EXPECTED_METRIC_REF: Mapping[str, str] = types.MappingProxyType({
+    "reference_render": (
+        _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.distance_unit.reference_render_definition"
+    ),
+    "c0_replay_takes": (
+        _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.freeze_threshold.d_c0_population"
+    ),
+    "c1_sham_takes": (
+        _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.validity_gates.c1_gate.d_c1_population"
+    ),
+    "positive_reference": (
+        _IDENTITY_METRIC_SPACE_REF_PREFIX
+        + "calibration.validity_gates.positive_reference_gate.positive_reference_definition"
+    ),
+    "negative_reference": (
+        _IDENTITY_METRIC_SPACE_REF_PREFIX
+        + "calibration.validity_gates.negative_reference_gate.negative_reference_definition"
+    ),
+    "pjs_reference": _IDENTITY_METRIC_SPACE_REF_PREFIX + "confuser_control.pjs_reference_definition",
+    "evaluated_renders": _IDENTITY_METRIC_SPACE_REF_PREFIX + "identity_feature.scope",
+})
+
+# PR #322 第18巡指摘 Fix 30（P2, 採用、Fix 8 と同族 — entry→cell_ref の
+# 対応固定）: `cell_ref` の旧検証（`_validate_revision_bridge_entry()`）は
+# 「probes[] に実在する cell_id のいずれかか」しか見ておらず、render 系
+# エントリ（`reference_render`/`c0_replay_takes`/`c1_sham_takes`/
+# `positive_reference`/`evaluated_renders`）の `cell_ref` を P0 以外の
+# probe（例: P1/P4）の cell へ差し替えても通過してしまっていた。identity
+# 校正・評価（`identity_metric_space.json` の calibration/confuser_control/
+# identity_feature 各節）は**同一 P0 score での比較**が前提の設計であり
+# （r0/neutral 条件 — DESIGN_RUN9 §15 P0「中立フレーズ断片」が render 契約
+# 全体のベースライン score である）、render 系エントリの `cell_ref` が
+# P0 以外を指すと、比較対象の score 自体が意図と異なる——render harness
+# は「同じ音楽的内容を異なる founder/条件で歌わせて identity を比較する」
+# ことを前提とするため、cell_ref の取り違えは校正・評価の意味を静かに
+# 壊す。本 dict は render 系5エントリの `cell_ref` が指すべき唯一の cell_id
+# （`P0-NEUTRAL-SAKURA-FRAGMENT`）を凍結する「エントリ→期待 cell_ref」の
+# 厳密対応表（Fix 8 の `_REVISION_BRIDGE_EXPECTED_METRIC_REF` と同方式・
+# 並置）。amendment で参照先の cell_id 自体を変更する場合は、本対応表の
+# 更新が同時に必要——意図的な二重 pin（Fix 8 と同じ規約）。
+_REVISION_BRIDGE_EXPECTED_CELL_REF: Mapping[str, str] = types.MappingProxyType({
+    "reference_render": "P0-NEUTRAL-SAKURA-FRAGMENT",
+    "c0_replay_takes": "P0-NEUTRAL-SAKURA-FRAGMENT",
+    "c1_sham_takes": "P0-NEUTRAL-SAKURA-FRAGMENT",
+    "positive_reference": "P0-NEUTRAL-SAKURA-FRAGMENT",
+    "evaluated_renders": "P0-NEUTRAL-SAKURA-FRAGMENT",
+})
+
+_MEASUREMENT_BOUNDARY_KEYS: FrozenSet[str] = frozenset(
+    {"scope_statement", "identity_axis_source", "development_generalization_axis_source"}
+)
+_MEASUREMENT_BOUNDARY_SCOPE_MARKERS: Tuple[str, ...] = ("何を鳴らすか", "どう測るかは対象外")
+_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS: Tuple[str, ...] = (
+    "inputs/identity_metric_space.json", "metric_space_sha",
+)
+_MEASUREMENT_BOUNDARY_DEV_GEN_AXIS_MARKERS: Tuple[str, ...] = ("measurement_spec_sha", "PENDING")
+
+_PROHIBITION_MARKERS: Tuple[str, ...] = (
+    "render後のcell",
+    "結果を見た後のprobe変更",
+    "測定仕様の変更を本manifestで行わない",
+    "render不能cellの是正repin",
+)
+# render 不能 cell の是正 repin は「結果を見た後の水増し」禁止の対象外
+# ——この区別（carve-out）自体を文言として要求する（項目8）。
+_PROHIBITION_RENDER_INFEASIBLE_CARVEOUT_MARKERS: Tuple[str, ...] = ("水増し", "対象外")
+
+HELDOUT_INDEPENDENCE_STATUS = "AUTHORED_WITHOUT_PJS_MATERIAL_IN_AUTHORING_ENVIRONMENT"
+
+# ---------------------------------------------------------------------------
+# PR #322 第6巡指摘 Fix 14（P2, 採用）: `AUTHORED_INDEPENDENTLY_OF_PJS_
+# CORPUS` は無認証の散文自己宣言のみだった（著者確認・作成証跡・
+# attestation が無い）。検証可能な範囲の証跡 + 正直な残余宣言（AGENTS.md
+# の推定補完禁止規律の適用）へ拡張する——**絶対独立の主張はしない**。
+# status の意味論をこの4ブロックの範囲へ再定義する。
+#
+# PR #322 第8巡指摘 Fix 18（P2, 採用）: Fix 14 の検査は現 repo checkout の
+# pjs 名 wav/lab のみだったのに、status literal `AUTHORED_INDEPENDENTLY_
+# OF_PJS_CORPUS` は歴史的作業環境 + 全形態（MIDI/MusicXML/歌詞テキスト・
+# 別名ファイル）にまで及ぶ主張に読めた——**主張を収集済み証拠へ縮小する
+# （拡大側の証拠捏造はしない）**。
+# 1. status literal を証拠範囲に正直な名前へ改名:
+#    `AUTHORED_WITHOUT_PJS_MATERIAL_IN_AUTHORING_ENVIRONMENT`
+# 2. `environment_evidence` を `machine_checked`（現 checkout・ファイル名
+#    ベースの機械検査済み事実）と `author_record`（著述セッションの
+#    作業環境についての著者の事実記録——機械証明ではない）に明示区分する。
+# 3. `residual_risk_declaration` を拡張し、別 workspace・別名ファイル・
+#    MIDI/MusicXML/テキスト形態・モデル事前知識はいずれも検査対象外で
+#    あり本 status は主張しないことを明記する。
+# ---------------------------------------------------------------------------
+_HELDOUT_INDEPENDENCE_KEYS: FrozenSet[str] = frozenset({
+    "status", "independent_of", "note",
+    "authorship", "environment_evidence", "machine_checked_separation",
+    "residual_risk_declaration",
+})
+_HELDOUT_AUTHORSHIP_KEYS: FrozenSet[str] = frozenset({"author", "authored_at", "provenance_record"})
+# Fix 18: `environment_evidence` は「機械検査済み」と「著者記録（機械
+# 検証不能）」の2ブロックへ明示区分する。
+_HELDOUT_ENVIRONMENT_EVIDENCE_KEYS: FrozenSet[str] = frozenset({"machine_checked", "author_record"})
+_HELDOUT_ENV_EVIDENCE_MACHINE_CHECKED_KEYS: FrozenSet[str] = frozenset({"claim", "verification_method"})
+_HELDOUT_ENV_EVIDENCE_AUTHOR_RECORD_KEYS: FrozenSet[str] = frozenset({"claim"})
+_HELDOUT_MACHINE_CHECKED_SEPARATION_KEYS: FrozenSet[str] = frozenset({"reference"})
+_HELDOUT_RESIDUAL_RISK_DECLARATION_KEYS: FrozenSet[str] = frozenset({"note"})
+# `authored_at` は ISO 8601 の日付（YYYY-MM-DD）形式を要求する。
+_HELDOUT_AUTHORED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# `environment_evidence.machine_checked.claim` が保持しなければならない
+# マーカー（PJS 実体ファイル不在という主張の核心語彙 + Fix 18: 検査範囲
+# が「現在の repo checkout」「ファイル名ベース」に限定されることを隠さず
+# 明記させる）。「repo 内 PJS wav/lab 実体ファイルの不在」を検証する
+# テストは `tests/test_run9_probe_manifest.py` 側の glob が担う——pin 値の
+# 文字列参照はこのマーカー照合の対象外。
+_HELDOUT_ENV_EVIDENCE_MACHINE_CHECKED_CLAIM_MARKERS: Tuple[str, ...] = (
+    "PJS音源", "PJS採譜", "一切存在しない", "現在の repo checkout", "ファイル名ベース",
+)
+# `environment_evidence.author_record.claim` が保持しなければならない
+# マーカー（著述セッションの作業環境についての著者の事実記録であり、
+# 機械証明ではないことを明示する——Fix 18）。
+_HELDOUT_ENV_EVIDENCE_AUTHOR_RECORD_CLAIM_MARKERS: Tuple[str, ...] = (
+    "著述セッション", "作業環境", "存在しなかった", "機械証明ではない",
+)
+# `machine_checked_separation.reference` が保持しなければならないマーカー
+# （Fix 10 の cross-probe 分離検証への参照）。
+_HELDOUT_MACHINE_CHECKED_SEPARATION_MARKER = "_validate_p4_heldout_separation"
+# `residual_risk_declaration.note` が保持しなければならないマーカー
+# （著者=言語モデルの事前知識経由の類似・影響は機械的に排除できないこと
+# の正直な残余宣言、推定で補完しないことの明示。Fix 18 で、検査対象外の
+# 具体的な範囲——別 workspace・別名ファイル・MIDI/MusicXML/テキスト形態・
+# モデル事前知識——を明示するマーカーを追加した）。
+_HELDOUT_RESIDUAL_RISK_MARKERS: Tuple[str, ...] = (
+    "言語モデル", "機械的に排除できない", "推定で補完しない",
+    "別 workspace", "別名ファイル", "MIDI", "MusicXML", "テキスト形態", "事前知識",
+)
+
+
+def _require_probe_int(value: Any, *, field: str) -> int:
+    """bool を除外した厳密 int（`pitch_midi`/`phrase_index` 用。
+    `_is_strict_int()` を再利用する — bool は int のサブクラスのため
+    素の `isinstance(value, int)` では `True`/`False` を誤って許可して
+    しまう。"""
+    if not _is_strict_int(value):
+        raise Run9ValidationError(
+            f"{field} must be an exact int (bool/float/str/None rejected), got {value!r} "
+            f"({type(value).__name__})"
+        )
+    return value
+
+
+def _require_probe_bool(value: Any, *, field: str) -> bool:
+    if not isinstance(value, bool):
+        raise Run9ValidationError(f"{field} must be exactly a bool, got {value!r}")
+    return value
+
+
+def _validate_probe_note(note: Any, *, field: str, phoneme_jp_module: Any) -> Dict[str, Any]:
+    if not isinstance(note, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(note).__name__}")
+    unknown = set(note.keys()) - _NOTE_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _NOTE_KEYS - set(note.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    kana = _require_non_empty_str(note["kana"], field=f"{field}.kana")
+    # PR #322 第3巡指摘 Fix 6（P2, 採用）: renderer の mora 文法（唯一の
+    # 正本、read-only 参照）に対し「ちょうど1モーラ」であることを全 note
+    # で検証する（P2/P3 のクラス表対象外の note も含む）。
+    _require_single_mora_kana(kana, phoneme_jp_module=phoneme_jp_module, field=f"{field}.kana")
+    _require_probe_int(note["pitch_midi"], field=f"{field}.pitch_midi")
+    _require_positive_finite_number(note["duration_beats"], field=f"{field}.duration_beats")
+    phrase_index = _require_probe_int(note["phrase_index"], field=f"{field}.phrase_index")
+    if phrase_index < 0:
+        raise Run9ValidationError(f"{field}.phrase_index must be >= 0, got {phrase_index!r}")
+    _require_probe_bool(note["is_phrase_final"], field=f"{field}.is_phrase_final")
+    return note
+
+
+def _validate_probe_cell_source(
+    source: Any, *, field: str, score_path: Optional[Path] = None, score_py_module: Any = None
+) -> None:
+    """`score_path` はテスト用の依存性注入点（PR #322 第2巡指摘 Fix 4）—
+    省略時（`None`）は呼び出しのたびにモジュールレベル定数
+    `SCORE_PY_REFERENCE_PATH`（凍結・改変禁止の read-only 参照）を都度
+    参照する（デフォルト引数値として def 時に束縛すると、テストが
+    `run9_schema.SCORE_PY_REFERENCE_PATH` を monkeypatch しても本関数の
+    既定値には反映されない late-binding の罠を避けるため、あえて `None`
+    センチネル + 関数本体内解決にしている）。実 score.py の rename/削除は
+    一切行わない。
+
+    `score_py_module` はテスト用ではなく本番経路の read-once 配線
+    （PR #322 第8巡指摘 Fix 16, 採用）: `validate_probe_manifest()` から
+    呼ばれる full-chain 経路では `_load_score_py_module()` が既にロード
+    済みの module（`__source_sha256__` 属性に read-once digest を保持）が
+    渡され、本関数はそれを再利用するだけで独自にファイルを読まない
+    （score_path 引数は使われない）。`score_py_module` を渡さない単体
+    呼び出し（既存テスト・スタンドアロン利用）は従来どおり `score_path`
+    経由で自己完結的にファイルを読む——後方互換のフォールバック。"""
+    if score_py_module is None and score_path is None:
+        score_path = SCORE_PY_REFERENCE_PATH
+    if not isinstance(source, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(source).__name__}")
+    unknown = set(source.keys()) - _CELL_SOURCE_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _CELL_SOURCE_KEYS - set(source.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    transcribed_from = _require_non_empty_str(
+        source["transcribed_from"], field=f"{field}.transcribed_from"
+    )
+    if transcribed_from != "voice_genesis/singer/score.py":
+        raise Run9ValidationError(
+            f"{field}.transcribed_from must be exactly 'voice_genesis/singer/score.py', "
+            f"got {transcribed_from!r}"
+        )
+    declared_sha = source["transcribed_from_sha256"]
+    if not isinstance(declared_sha, str) or not _SHA256_HEX_RE.match(declared_sha):
+        raise Run9ValidationError(
+            f"{field}.transcribed_from_sha256 must be exactly 64 lowercase hex characters, "
+            f"got {declared_sha!r}"
+        )
+    if score_py_module is not None:
+        # PR #322 第8巡指摘 Fix 16（P1, 採用）: full-chain 経路では
+        # `_load_score_py_module()` が read-once で導出した digest を
+        # 再利用する——本関数が独自に score.py を再読込することはない
+        # （hash した版と実行した版が別バイト列になり得る TOCTOU を、
+        # Fix 15 と同型の read-once 化で構造的に排除する）。
+        actual_sha = getattr(score_py_module, "__source_sha256__", None)
+        if actual_sha is None:  # pragma: no cover - defensive fail-closed
+            raise Run9ValidationError(
+                f"{field}: score_py_module に __source_sha256__ が設定されていない — "
+                "_load_score_py_module() を経由せずに渡された可能性がある"
+            )
+    else:
+        # PR #322 第2巡指摘 Fix 4（P2, 採用）: 転記元ファイル不在を
+        # fail-closed とする（旧実装は `score_path.is_file()` が False の
+        # ときに照合そのものをスキップし、64hex 形式でさえあれば値を無条件に
+        # 受理していた——installed/部分アーティファクト環境で P0 の
+        # byte-verified 主張が無音で失われる欠陥だった）。本 validator は
+        # repo checkout 内での実行を前提とし、転記元 score.py の実在 + hash
+        # 一致が P0 受理の必須条件である。単体呼び出し（score_py_module 省略
+        # 時）専用のフォールバック経路であり、full-chain 経路は上の分岐で
+        # score_py_module 経由の digest を使う（別読みしない）。
+        if not score_path.is_file():
+            raise Run9ValidationError(
+                f"{field}: pinned P0 transcription source {score_path} does not exist — this "
+                "validator requires running from within a full repo checkout where the frozen "
+                "read-only reference voice_genesis/singer/score.py is present; existence + hash "
+                "equality against this file is a mandatory precondition for P0 acceptance (cannot "
+                "verify a byte-verified verbatim transcription claim without the source file to "
+                "verify it against)"
+            )
+        actual_sha = compute_file_sha256(score_path)
+    if declared_sha != actual_sha:
+        raise Run9ValidationError(
+            f"{field}.transcribed_from_sha256 ({declared_sha!r}) does not match the actual raw "
+            f"sha256 of {score_path} ({actual_sha!r}) — the P0 transcription source must stay "
+            "byte-verified against the frozen read-only reference"
+        )
+    _require_non_empty_str(source["transcription_scope"], field=f"{field}.transcription_scope")
+    if source["verbatim"] is not True:
+        raise Run9ValidationError(f"{field}.verbatim must be exactly True, got {source['verbatim']!r}")
+
+
+def _validate_cell_levels(value: Any, *, field: str) -> Dict[str, str]:
+    """PR #322 第1巡指摘 Fix 2: cell の `levels` メタデータ（axis_name ->
+    level_name の str->str 対応）の構造検証のみを行う。`factor_levels.axes`
+    への実在照合は probe 単位（`_validate_probe_object`）でまとめて行う
+    ——cell 単体では同じ probe の factor_levels にアクセスできないため。
+    """
+    if not isinstance(value, dict) or not value:
+        raise Run9ValidationError(f"{field} must be a non-empty object, got {value!r}")
+    for axis_name, level_name in value.items():
+        if not isinstance(axis_name, str) or not axis_name.strip():
+            raise Run9ValidationError(f"{field} has a non-string/empty axis key: {axis_name!r}")
+        if not isinstance(level_name, str) or not level_name.strip():
+            raise Run9ValidationError(
+                f"{field}.{axis_name} must be a non-empty string level name, got {level_name!r}"
+            )
+    return value
+
+
+def _validate_cell_diagnostic_role(
+    value: Any, *, cell: Mapping[str, Any], cell_field: str, field: str
+) -> None:
+    """PR #322 第5巡指摘 Fix 11（P1, 採用）の実装: `diagnostic_role` は
+    `levels`（操作可能軸システム）とは独立の cell 属性——Energy contrast
+    等として登録しない診断用 cell（例: pitch 上行構造のみを操作する
+    構造 cell）であることを機械可読に宣言する。
+
+    PR #322 第19巡指摘 Fix 31（P2, 採用）: 本関数は従来
+    `scope_boundary_note` の文言（マーカー含有）しか検証しておらず、
+    その文言が主張する notes の実体は一切照合していなかった。role_id が
+    `diagnostic_structural_pitch_rise` であることを確認した後、
+    `_validate_p2_diagnostic_pitch_rise_cell()`（テンプレート凍結 +
+    構造述語の独立検証）へ委譲する。"""
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
+    unknown = set(value.keys()) - _CELL_DIAGNOSTIC_ROLE_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _CELL_DIAGNOSTIC_ROLE_KEYS - set(value.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    role_id = value["role_id"]
+    if role_id != _DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID:
+        raise Run9ValidationError(
+            f"{field}.role_id must be exactly {_DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID!r} (未登録の "
+            "diagnostic role は fail-closed — 新しい role_id を追加したのに対応する構造検証を追加し "
+            f"忘れる事故を防ぐ), got {role_id!r}"
+        )
+    scope_note = _require_non_empty_str(
+        value["scope_boundary_note"], field=f"{field}.scope_boundary_note"
+    )
+    for marker in _DIAGNOSTIC_ROLE_SCOPE_BOUNDARY_MARKERS:
+        if marker not in scope_note:
+            raise Run9ValidationError(
+                f"{field}.scope_boundary_note must contain the marker {marker!r} (Fix 11: 何を操作し "
+                "何に使わないかの境界宣言), got a note without that marker"
+            )
+    # Fix 31: role_id はここまでで _DIAGNOSTIC_STRUCTURAL_PITCH_RISE_ROLE_ID
+    # と厳密一致していることが確定済み（未登録 role_id は上で fail-closed
+    # 済み）——notes の実体（構造述語 + テンプレート凍結）を検証する。
+    _validate_p2_diagnostic_pitch_rise_cell(cell, field=cell_field)
+
+
+def _validate_probe_cell(
+    cell: Any, *, probe_id: str, field: str, seen_cell_ids: Dict[str, str], phoneme_jp_module: Any,
+    score_py_module: Any,
+) -> Optional[Dict[str, str]]:
+    if not isinstance(cell, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(cell).__name__}")
+    allowed = set(_CELL_KEYS_BASE)
+    required = set(_CELL_KEYS_BASE)
+    if probe_id == "P0":
+        allowed.add(_CELL_SOURCE_KEY)
+        required.add(_CELL_SOURCE_KEY)
+    if probe_id in _FACTOR_LEVEL_PROBE_IDS:
+        # PR #322 第5巡指摘 Fix 11: factor-level probe の cell は `levels`
+        # （操作可能軸システムへの参加）と `diagnostic_role`（軸システム
+        # から除外された診断用 cell の宣言）のうち**どちらか一方のみ**を
+        # 持つ（両方 unknown-key チェックの対象から外し、後段で排他性を
+        # 個別検証する——一律 required に入れると両立不可能になるため）。
+        allowed.add(_CELL_LEVELS_KEY)
+        allowed.add(_CELL_DIAGNOSTIC_ROLE_KEY)
+    if probe_id == "P3":
+        # PR #322 第12巡指摘 Fix 22（P1, 採用）: `final_phone_dur_override`
+        # は P3 のみが許容・P3 は必須（他 probe では未知キーとして拒否
+        # される——P3 のみの cell レベル pin 欄）。
+        allowed.add(_CELL_OVERRIDE_KEY)
+        required.add(_CELL_OVERRIDE_KEY)
+    unknown = set(cell.keys()) - allowed
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = required - set(cell.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+
+    if probe_id in _FACTOR_LEVEL_PROBE_IDS:
+        has_levels = _CELL_LEVELS_KEY in cell
+        has_diagnostic = _CELL_DIAGNOSTIC_ROLE_KEY in cell
+        if has_levels == has_diagnostic:  # 両方 or どちらも無し、はいずれも不正
+            raise Run9ValidationError(
+                f"{field} must have exactly one of {_CELL_LEVELS_KEY!r}/"
+                f"{_CELL_DIAGNOSTIC_ROLE_KEY!r} (got levels={has_levels}, diagnostic_role="
+                f"{has_diagnostic})"
+            )
+
+    cell_id = _require_non_empty_str(cell["cell_id"], field=f"{field}.cell_id")
+    if cell_id in seen_cell_ids:
+        raise Run9ValidationError(
+            f"{field}.cell_id {cell_id!r} duplicates the cell_id already used by "
+            f"{seen_cell_ids[cell_id]!r} — cell_id must be unique across the entire manifest"
+        )
+    seen_cell_ids[cell_id] = field
+
+    tempo_bpm = _require_positive_finite_number(cell["tempo_bpm"], field=f"{field}.tempo_bpm")
+    # PR #322 第10巡指摘 Fix 20（P2, 採用）: tempo_bpm は正値検査のみで、
+    # amendment で cell 別に tempo を変えても水準ラベル検証を保ったまま
+    # 通過していた——gate_synth::run_pipeline は各 cell の tempo で
+    # beats->ms 換算するため、tempo を変えるだけで duration 比較が黙って
+    # 交絡し得る欠陥だった（Fix 19 と同方式: cell 非依存の外部凍結表で
+    # 全 probe の全 cell の tempo を固定する）。
+    expected_tempo = _PROBE_EXPECTED_TEMPO_BPM.get(probe_id)
+    if expected_tempo is not None and not _numeric_equal(tempo_bpm, expected_tempo):
+        raise Run9ValidationError(
+            f"{field}.tempo_bpm = {tempo_bpm!r} does not match the frozen expected tempo "
+            f"{expected_tempo!r} for probe {probe_id!r} (Fix 20: amendment requires updating both "
+            "the manifest and _PROBE_EXPECTED_TEMPO_BPM — intentional double pin, same convention "
+            "as Fix 8/9/19; P0's frozen value must also match voice_genesis/singer/score.py "
+            "TEMPO_BPM per Fix 12's separate dynamic check)"
+        )
+
+    notes = cell["notes"]
+    if not isinstance(notes, list) or not notes:
+        raise Run9ValidationError(f"{field}.notes must be a non-empty list, got {notes!r}")
+    for i, note in enumerate(notes):
+        validated = _validate_probe_note(
+            note, field=f"{field}.notes[{i}]", phoneme_jp_module=phoneme_jp_module
+        )
+        pitch = validated["pitch_midi"]
+        if probe_id == "P0" and not (_P0_MIDI_LOW <= pitch <= _P0_MIDI_HIGH):
+            raise Run9ValidationError(
+                f"{field}.notes[{i}].pitch_midi = {pitch!r} is outside the P0 central-register "
+                f"domain [{_P0_MIDI_LOW}, {_P0_MIDI_HIGH}] (DESIGN_RUN9 §15 P0: 中央音域)"
+            )
+        if probe_id == "P5" and not (_P5_MIDI_LOW <= pitch <= _P5_MIDI_HIGH):
+            raise Run9ValidationError(
+                f"{field}.notes[{i}].pitch_midi = {pitch!r} is outside the P5 baseline domain "
+                f"[{_P5_MIDI_LOW}, {_P5_MIDI_HIGH}] (DESIGN_RUN9 §15 P5: baseline domain 内)"
+            )
+
+    if probe_id == "P0":
+        _validate_probe_cell_source(
+            cell[_CELL_SOURCE_KEY], field=f"{field}.{_CELL_SOURCE_KEY}",
+            score_py_module=score_py_module,
+        )
+        # PR #322 第5巡指摘 Fix 12（P2, 採用）: hash 一致 + verbatim:true
+        # だけでは内容改変（notes/tempo_bpm の値そのもの）を検出できない
+        # ——score.py を read-only ロードして build_sakura_score() を再構築
+        # し逐語比較する。
+        _require_p0_matches_build_sakura_score(cell, score_py_module=score_py_module, field=field)
+
+    if probe_id == "P3":
+        # PR #322 第12巡指摘 Fix 22（P1, 採用）: cell 別の
+        # final_phone_dur_override pin の形状検証。
+        _validate_final_phone_dur_override(
+            cell[_CELL_OVERRIDE_KEY], field=f"{field}.{_CELL_OVERRIDE_KEY}"
+        )
+
+    if probe_id in _FACTOR_LEVEL_PROBE_IDS:
+        if _CELL_LEVELS_KEY in cell:
+            return _validate_cell_levels(cell[_CELL_LEVELS_KEY], field=f"{field}.{_CELL_LEVELS_KEY}")
+        _validate_cell_diagnostic_role(
+            cell[_CELL_DIAGNOSTIC_ROLE_KEY], cell=cell, cell_field=field,
+            field=f"{field}.{_CELL_DIAGNOSTIC_ROLE_KEY}",
+        )
+        return None
+    return None
+
+
+def _validate_factor_levels_axes(data: Any, *, field: str) -> Dict[str, Dict[str, Any]]:
+    """PR #322 第1巡指摘 Fix 2: `factor_levels.axes` の形状・型検証。各軸は
+    非空 dict（水準名 -> 具体値）、水準名は非空 str、値は bool を除く
+    実数（register/duration 等の数値水準）または非空 str（onset
+    consonant class・ending voicing 等の記号水準）のいずれか——空文字列・
+    空 list/dict・None・bool は拒否する。"""
+    if not isinstance(data, dict) or not data:
+        raise Run9ValidationError(f"{field} must be a non-empty object, got {data!r}")
+    for axis_name, levels in data.items():
+        if not isinstance(axis_name, str) or not axis_name.strip():
+            raise Run9ValidationError(f"{field} has a non-string/empty axis key: {axis_name!r}")
+        axis_field = f"{field}.{axis_name}"
+        if not isinstance(levels, dict) or not levels:
+            raise Run9ValidationError(f"{axis_field} must be a non-empty object, got {levels!r}")
+        for level_name, level_value in levels.items():
+            if not isinstance(level_name, str) or not level_name.strip():
+                raise Run9ValidationError(
+                    f"{axis_field} has a non-string/empty level key: {level_name!r}"
+                )
+            level_field = f"{axis_field}.{level_name}"
+            if isinstance(level_value, bool):
+                raise Run9ValidationError(f"{level_field} must not be a bool, got {level_value!r}")
+            is_number = isinstance(level_value, (int, float)) and math.isfinite(level_value)
+            is_nonempty_str = isinstance(level_value, str) and bool(level_value.strip())
+            if not (is_number or is_nonempty_str):
+                raise Run9ValidationError(
+                    f"{level_field} must be a finite non-bool number or a non-empty string "
+                    f"(concrete stimulus value), got {level_value!r}"
+                )
+    return data
+
+
+def _numeric_equal(a: Any, b: Any) -> bool:
+    """bool を除外した int/float 同士の厳密等値。"""
+    return (
+        isinstance(a, (int, float)) and not isinstance(a, bool)
+        and isinstance(b, (int, float)) and not isinstance(b, bool)
+        and a == b
+    )
+
+
+def _select_phrase_final_note(cell: Mapping[str, Any], *, field: str) -> Dict[str, Any]:
+    """PR #322 第2巡指摘 Fix 3: 軸別意味照合の対象 note（`is_phrase_final:
+    true` の note）をちょうど1つに限定して返す。P1 の単一 note cell では
+    その唯一の note、P2/P3 の複数 note cell では終端/target note を指す
+    ——note 位置のインデックス（先頭/末尾）ではなく `is_phrase_final`
+    マーカーそのものを根拠にする。
+
+    PR #322 第13巡指摘 Fix 23（P2, 採用）: マーカー付き phrase-final note
+    は cell の `notes` 配列の**最終要素**でなければならない——
+    `gate_synth.py` は `is_phrase_final` を一切消費せず、release override
+    等は Python list の実際の最終要素（`final_phone_dur[-1]`）へ効く。
+    マーカー note の後ろへ valid な note を追記すると、本 selector は
+    引き続きマーカー note を意味照合対象として返してしまうが、実際の
+    render 効果（例: Fix 22 の release override 延長）は追記された末尾
+    note へ作用する——検証の帰属先と実効果の帰属先がずれる。本 selector
+    を全 checker（Fix 3 の数値/kana/transition/release override 照合、
+    Fix 7 の P2 filler 一貫性検証）が共有するため、ここで一括して防ぐ。"""
+    notes = cell["notes"]
+    finals = [n for n in notes if n.get("is_phrase_final") is True]
+    if len(finals) != 1:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} must have exactly one note with "
+            f"is_phrase_final=true to serve as the semantic target for axis-value checking "
+            f"(Fix 3), got {len(finals)}"
+        )
+    final = finals[0]
+    if notes[-1] is not final:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r}'s is_phrase_final=true note must be the last "
+            "element of notes (Fix 23) — gate_synth does not consume is_phrase_final and instead "
+            "operates on the actual last note/phoneme, so a note appended after the marker would "
+            "receive the real render effect while validation keeps attributing it to the earlier "
+            "marker note"
+        )
+    return final
+
+
+def _check_axis_numeric_field(
+    cell: Mapping[str, Any], *, field_name: str, expected: Any, field: str, axis_name: str,
+    level_name: str,
+) -> None:
+    note = _select_phrase_final_note(cell, field=field)
+    actual = note[field_name]
+    if not _numeric_equal(actual, expected):
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
+            f"(factor_levels.axes.{axis_name}.{level_name} = {expected!r}) but the phrase-final "
+            f"note's {field_name} = {actual!r} — declared level does not match the rendered stimulus"
+        )
+
+
+def _check_axis_kana_class(
+    cell: Mapping[str, Any], *, table: Mapping[str, str], field: str, axis_name: str, level_name: str,
+) -> None:
+    note = _select_phrase_final_note(cell, field=field)
+    kana = note["kana"]
+    if kana not in table:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} phrase-final note kana {kana!r} is not in the "
+            f"frozen {axis_name} kana table ({sorted(table)}) — cannot verify declared level "
+            f"{level_name!r}"
+        )
+    actual_class = table[kana]
+    if actual_class != level_name:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} but "
+            f"phrase-final note kana {kana!r} maps to {actual_class!r} in the frozen {axis_name} "
+            "kana table — declared level does not match the rendered stimulus"
+        )
+
+
+def _check_axis_transition_direction(
+    cell: Mapping[str, Any], *, expected: Any, field: str, axis_name: str, level_name: str,
+) -> None:
+    notes = cell["notes"]
+    if len(notes) < 2:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} but "
+            f"has fewer than 2 notes ({len(notes)}) — a transition needs a start and end note"
+        )
+    actual = f"{notes[0]['pitch_midi']}->{notes[-1]['pitch_midi']}"
+    if not isinstance(expected, str) or actual != expected:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
+            f"(factor_levels.axes.{axis_name}.{level_name} = {expected!r}) but the actual first->last "
+            f"note pitch_midi sequence is {actual!r} — declared level does not match the rendered "
+            "stimulus"
+        )
+
+
+def _check_axis_release_override(
+    cell: Mapping[str, Any], *, expected: Any, field: str, axis_name: str, level_name: str,
+) -> None:
+    """PR #322 第12巡指摘 Fix 22（P1, 採用）の実装: `release_duration` の
+    宣言具体値（`terminal_extension_ms` 単位の float。0.0 = override
+    なし）を cell レベルの `final_phone_dur_override` pin と照合する
+    （note フィールドではなく cell レベルの別欄が照合対象——Fix 21 の
+    duration_beats 照合を撤回した後継）。"""
+    override = cell.get(_CELL_OVERRIDE_KEY)
+    if _numeric_equal(expected, 0.0):
+        if override is not None:
+            raise Run9ValidationError(
+                f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
+                f"(factor_levels.axes.{axis_name}.{level_name} = {expected!r} == no override) but "
+                f"{_CELL_OVERRIDE_KEY} = {override!r} is not null — declared level does not match "
+                "the rendered stimulus"
+            )
+        return
+    if not isinstance(override, dict):
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
+            f"(factor_levels.axes.{axis_name}.{level_name} = {expected!r}) but {_CELL_OVERRIDE_KEY} "
+            f"is not an object (got {override!r}) — a non-zero declared value requires an override"
+        )
+    actual_ms = override.get("terminal_extension_ms")
+    if not _numeric_equal(actual_ms, expected):
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
+            f"(factor_levels.axes.{axis_name}.{level_name} = {expected!r}) but "
+            f"{_CELL_OVERRIDE_KEY}.terminal_extension_ms = {actual_ms!r} — declared level does not "
+            "match the rendered stimulus"
+        )
+
+
+def _validate_axis_semantic_value(
+    *, axis_name: str, level_name: str, axis_value: Any, cell: Mapping[str, Any], field: str,
+) -> None:
+    """PR #322 第2巡指摘 Fix 3（P2, 採用）の実装: cell が参照する
+    (axis_name, level_name) について、factor_levels.axes が宣言する
+    具体値 (`axis_value`) が cell の実 note フィールドと一致することを
+    照合する。未登録の axis は fail-closed で拒否する（新しい軸を追加した
+    のに対応する意味照合を追加し忘れる事故を構造的に防ぐ）。"""
+    if axis_name in _AXIS_NUMERIC_FIELD_CHECKS:
+        _check_axis_numeric_field(
+            cell, field_name=_AXIS_NUMERIC_FIELD_CHECKS[axis_name], expected=axis_value, field=field,
+            axis_name=axis_name, level_name=level_name,
+        )
+    elif axis_name in _AXIS_KANA_CLASS_CHECKS:
+        _check_axis_kana_class(
+            cell, table=_AXIS_KANA_CLASS_CHECKS[axis_name], field=field, axis_name=axis_name,
+            level_name=level_name,
+        )
+    elif axis_name == "transition_direction":
+        _check_axis_transition_direction(
+            cell, expected=axis_value, field=field, axis_name=axis_name, level_name=level_name
+        )
+    elif axis_name == "release_duration":
+        _check_axis_release_override(
+            cell, expected=axis_value, field=field, axis_name=axis_name, level_name=level_name
+        )
+    else:
+        raise Run9ValidationError(
+            f"{field}: no axis-specific semantic checker is registered for axis {axis_name!r} (Fix 3 "
+            "requires every declared factor_levels axis to have a checker comparing the declared "
+            "level value against the actual rendered stimulus — an unregistered axis would silently "
+            "accept a repin that changes the notes without updating the label. Fix 11: "
+            "'phrase_dynamics' was removed from the operable-axis system entirely — a P2 cell that "
+            "is not an Energy contrast belongs under 'diagnostic_role', not 'levels')"
+        )
+
+
+def _validate_probe_factor_levels_cell_mapping(
+    *, factor_levels: Any, cells: List[Dict[str, Any]], field: str
+) -> None:
+    """PR #322 第1巡指摘 Fix 2 + 第2巡指摘 Fix 3: `factor_levels.axes` と
+    各 cell の `levels` の双方向対応（ラベル実在）+ 軸別の意味照合
+    （宣言された具体値と cell の実 note フィールドの一致）を検証する。
+    前方（cell -> factor_levels 実在確認）+ 後方（factor_levels の全水準
+    が最低1 cell で使用されているか——未使用水準は宣言と刺激の乖離として
+    拒否）の両方向のラベル対応に加え、参照された水準の具体値そのものが
+    実際に render される note と一致するかを軸別 checker
+    （`_validate_axis_semantic_value()`）で照合する。個々の cell は
+    factor_levels の全軸を参照する必要はない（部分参照可 — 例: P1 の
+    音程遷移 cell は register/duration 軸を参照しない）。"""
+    if not isinstance(factor_levels, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(factor_levels).__name__}")
+    if _FACTOR_LEVELS_AXES_KEY not in factor_levels:
+        raise Run9ValidationError(f"{field} missing required key(s): ['{_FACTOR_LEVELS_AXES_KEY}']")
+    axes = _validate_factor_levels_axes(
+        factor_levels[_FACTOR_LEVELS_AXES_KEY], field=f"{field}.{_FACTOR_LEVELS_AXES_KEY}"
+    )
+
+    used: Dict[str, set] = {axis_name: set() for axis_name in axes}
+    for i, cell in enumerate(cells):
+        if _CELL_LEVELS_KEY not in cell:
+            continue  # Fix 11: diagnostic_role cell は操作可能軸システムの対象外
+        levels = cell[_CELL_LEVELS_KEY]
+        for axis_name, level_name in levels.items():
+            if axis_name not in axes:
+                raise Run9ValidationError(
+                    f"cells[{i}].{_CELL_LEVELS_KEY} references unknown axis {axis_name!r} — not "
+                    f"declared in {field}.{_FACTOR_LEVELS_AXES_KEY} ({sorted(axes)})"
+                )
+            if level_name not in axes[axis_name]:
+                raise Run9ValidationError(
+                    f"cells[{i}].{_CELL_LEVELS_KEY}.{axis_name} references unknown level "
+                    f"{level_name!r} — not declared in {field}.{_FACTOR_LEVELS_AXES_KEY}.{axis_name} "
+                    f"({sorted(axes[axis_name])})"
+                )
+            used[axis_name].add(level_name)
+            _validate_axis_semantic_value(
+                axis_name=axis_name, level_name=level_name, axis_value=axes[axis_name][level_name],
+                cell=cell, field=f"cells[{i}]",
+            )
+
+    for axis_name, levels in axes.items():
+        unused = set(levels) - used[axis_name]
+        if unused:
+            raise Run9ValidationError(
+                f"{field}.{_FACTOR_LEVELS_AXES_KEY}.{axis_name} declares level(s) {sorted(unused)} "
+                "that no cell's `levels` references — an unused declared level is a drift between "
+                "the frozen experimental axis table and what is actually rendered"
+            )
+
+
+def _validate_probe_heldout_independence(value: Any, *, field: str) -> None:
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
+    unknown = set(value.keys()) - _HELDOUT_INDEPENDENCE_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _HELDOUT_INDEPENDENCE_KEYS - set(value.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    status = value["status"]
+    if status != HELDOUT_INDEPENDENCE_STATUS:
+        raise Run9ValidationError(
+            f"{field}.status must be exactly {HELDOUT_INDEPENDENCE_STATUS!r}, got {status!r}"
+        )
+    _require_nonempty_str_list(
+        value["independent_of"], manifest_kind="probe manifest", field=f"{field}.independent_of"
+    )
+    _require_non_empty_str(value["note"], field=f"{field}.note")
+
+    # PR #322 第6巡指摘 Fix 14（P2, 採用）: 検証可能な範囲の証跡 + 正直な
+    # 残余宣言。4ブロック必須。
+    authorship = value["authorship"]
+    if not isinstance(authorship, dict):
+        raise Run9ValidationError(f"{field}.authorship must be an object, got {type(authorship).__name__}")
+    unknown_a = set(authorship.keys()) - _HELDOUT_AUTHORSHIP_KEYS
+    if unknown_a:
+        raise Run9ValidationError(f"{field}.authorship has unknown key(s): {sorted(unknown_a)}")
+    missing_a = _HELDOUT_AUTHORSHIP_KEYS - set(authorship.keys())
+    if missing_a:
+        raise Run9ValidationError(f"{field}.authorship missing required key(s): {sorted(missing_a)}")
+    _require_non_empty_str(authorship["author"], field=f"{field}.authorship.author")
+    authored_at = _require_non_empty_str(authorship["authored_at"], field=f"{field}.authorship.authored_at")
+    if not _HELDOUT_AUTHORED_AT_RE.match(authored_at):
+        raise Run9ValidationError(
+            f"{field}.authorship.authored_at must be an ISO 8601 date (YYYY-MM-DD), got "
+            f"{authored_at!r}"
+        )
+    _require_non_empty_str(
+        authorship["provenance_record"], field=f"{field}.authorship.provenance_record"
+    )
+
+    # PR #322 第8巡指摘 Fix 18（P2, 採用）: `environment_evidence` を
+    # 「機械検査済み」（現 checkout・ファイル名ベース限定であることを
+    # 隠さず明記）と「著者記録」（機械証明ではない事実記録）の2ブロックへ
+    # 明示区分する——検査の実際の範囲と status の主張範囲を一致させる。
+    env_evidence = value["environment_evidence"]
+    if not isinstance(env_evidence, dict):
+        raise Run9ValidationError(
+            f"{field}.environment_evidence must be an object, got {type(env_evidence).__name__}"
+        )
+    unknown_e = set(env_evidence.keys()) - _HELDOUT_ENVIRONMENT_EVIDENCE_KEYS
+    if unknown_e:
+        raise Run9ValidationError(f"{field}.environment_evidence has unknown key(s): {sorted(unknown_e)}")
+    missing_e = _HELDOUT_ENVIRONMENT_EVIDENCE_KEYS - set(env_evidence.keys())
+    if missing_e:
+        raise Run9ValidationError(
+            f"{field}.environment_evidence missing required key(s): {sorted(missing_e)}"
+        )
+
+    machine_checked = env_evidence["machine_checked"]
+    if not isinstance(machine_checked, dict):
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.machine_checked must be an object, got "
+            f"{type(machine_checked).__name__}"
+        )
+    unknown_mc = set(machine_checked.keys()) - _HELDOUT_ENV_EVIDENCE_MACHINE_CHECKED_KEYS
+    if unknown_mc:
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.machine_checked has unknown key(s): {sorted(unknown_mc)}"
+        )
+    missing_mc = _HELDOUT_ENV_EVIDENCE_MACHINE_CHECKED_KEYS - set(machine_checked.keys())
+    if missing_mc:
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.machine_checked missing required key(s): "
+            f"{sorted(missing_mc)}"
+        )
+    mc_claim = _require_non_empty_str(
+        machine_checked["claim"], field=f"{field}.environment_evidence.machine_checked.claim"
+    )
+    for marker in _HELDOUT_ENV_EVIDENCE_MACHINE_CHECKED_CLAIM_MARKERS:
+        if marker not in mc_claim:
+            raise Run9ValidationError(
+                f"{field}.environment_evidence.machine_checked.claim must contain the marker "
+                f"{marker!r} (Fix 18: 検査範囲が現在の repo checkout・ファイル名ベースに限定される "
+                "ことを隠さず明記する), got a claim without that marker"
+            )
+    _require_non_empty_str(
+        machine_checked["verification_method"],
+        field=f"{field}.environment_evidence.machine_checked.verification_method",
+    )
+
+    author_record = env_evidence["author_record"]
+    if not isinstance(author_record, dict):
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.author_record must be an object, got "
+            f"{type(author_record).__name__}"
+        )
+    unknown_ar = set(author_record.keys()) - _HELDOUT_ENV_EVIDENCE_AUTHOR_RECORD_KEYS
+    if unknown_ar:
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.author_record has unknown key(s): {sorted(unknown_ar)}"
+        )
+    missing_ar = _HELDOUT_ENV_EVIDENCE_AUTHOR_RECORD_KEYS - set(author_record.keys())
+    if missing_ar:
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.author_record missing required key(s): {sorted(missing_ar)}"
+        )
+    ar_claim = _require_non_empty_str(
+        author_record["claim"], field=f"{field}.environment_evidence.author_record.claim"
+    )
+    for marker in _HELDOUT_ENV_EVIDENCE_AUTHOR_RECORD_CLAIM_MARKERS:
+        if marker not in ar_claim:
+            raise Run9ValidationError(
+                f"{field}.environment_evidence.author_record.claim must contain the marker "
+                f"{marker!r} (Fix 18: 著者の事実記録であり機械証明ではないことを明示する), got a "
+                "claim without that marker"
+            )
+
+    mcs = value["machine_checked_separation"]
+    if not isinstance(mcs, dict):
+        raise Run9ValidationError(
+            f"{field}.machine_checked_separation must be an object, got {type(mcs).__name__}"
+        )
+    unknown_m = set(mcs.keys()) - _HELDOUT_MACHINE_CHECKED_SEPARATION_KEYS
+    if unknown_m:
+        raise Run9ValidationError(
+            f"{field}.machine_checked_separation has unknown key(s): {sorted(unknown_m)}"
+        )
+    missing_m = _HELDOUT_MACHINE_CHECKED_SEPARATION_KEYS - set(mcs.keys())
+    if missing_m:
+        raise Run9ValidationError(
+            f"{field}.machine_checked_separation missing required key(s): {sorted(missing_m)}"
+        )
+    reference = _require_non_empty_str(
+        mcs["reference"], field=f"{field}.machine_checked_separation.reference"
+    )
+    if _HELDOUT_MACHINE_CHECKED_SEPARATION_MARKER not in reference:
+        raise Run9ValidationError(
+            f"{field}.machine_checked_separation.reference must contain the marker "
+            f"{_HELDOUT_MACHINE_CHECKED_SEPARATION_MARKER!r} (Fix 10 の cross-probe 分離検証への "
+            "参照), got a reference without that marker"
+        )
+
+    residual = value["residual_risk_declaration"]
+    if not isinstance(residual, dict):
+        raise Run9ValidationError(
+            f"{field}.residual_risk_declaration must be an object, got {type(residual).__name__}"
+        )
+    unknown_r = set(residual.keys()) - _HELDOUT_RESIDUAL_RISK_DECLARATION_KEYS
+    if unknown_r:
+        raise Run9ValidationError(
+            f"{field}.residual_risk_declaration has unknown key(s): {sorted(unknown_r)}"
+        )
+    missing_r = _HELDOUT_RESIDUAL_RISK_DECLARATION_KEYS - set(residual.keys())
+    if missing_r:
+        raise Run9ValidationError(
+            f"{field}.residual_risk_declaration missing required key(s): {sorted(missing_r)}"
+        )
+    residual_note = _require_non_empty_str(
+        residual["note"], field=f"{field}.residual_risk_declaration.note"
+    )
+    for marker in _HELDOUT_RESIDUAL_RISK_MARKERS:
+        if marker not in residual_note:
+            raise Run9ValidationError(
+                f"{field}.residual_risk_declaration.note must contain the marker {marker!r} (Fix 14: "
+                "著者=言語モデルの事前知識経由の類似・影響は機械的に排除できないことの正直な残余宣言 "
+                "——絶対独立は主張しない), got a note without that marker"
+            )
+
+
+def _validate_p5_deferred_verification(value: Any, *, field: str) -> None:
+    """PR #322 第20巡指摘 Fix 32（P2, 採用）の実装: P5 の域内制約検査
+    （`_P5_MIDI_LOW`/`_P5_MIDI_HIGH`・P0 中央域外周制約）は「本 manifest
+    内の他 probe（P0/P1）の使用域の外周・baseline domain 内であること」
+    しか証明せず、実際の学習分布（PJS practice/education 素材）との分離は
+    証明しない。Fix 14/18 と同じ「主張を収集済み証拠へ縮小 + 再入条件の
+    事前登録」規約で、未検証のまま held-out として消費されないことを
+    機械強制する（`practice_audio_split_manifest_sha`/
+    `education_technique_lesson_manifest_sha` がいずれも PINNED になる
+    まで、この分離検証は実行不能——検証不能な主張を凍結しない）。"""
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
+    unknown = set(value.keys()) - _P5_DEFERRED_VERIFICATION_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _P5_DEFERRED_VERIFICATION_KEYS - set(value.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+
+    status = value["status"]
+    if status != P5_DEFERRED_VERIFICATION_STATUS:
+        raise Run9ValidationError(
+            f"{field}.status must be exactly {P5_DEFERRED_VERIFICATION_STATUS!r} (Fix 32: 学習分布との "
+            f"分離が未検証であることの正直な宣言), got {status!r}"
+        )
+
+    blocked_by = _require_nonempty_str_list(
+        value["blocked_by"], manifest_kind="probe manifest", field=f"{field}.blocked_by"
+    )
+    if set(blocked_by) != _P5_DEFERRED_VERIFICATION_BLOCKED_BY:
+        raise Run9ValidationError(
+            f"{field}.blocked_by must be exactly the frozen set "
+            f"{sorted(_P5_DEFERRED_VERIFICATION_BLOCKED_BY)} (RUN9_CONTRACT.yaml pin field names that "
+            f"gate the deferred verification, Fix 32), got {sorted(set(blocked_by))}"
+        )
+
+    procedure = _require_non_empty_str(
+        value["verification_procedure"], field=f"{field}.verification_procedure"
+    )
+    for marker in _P5_DEFERRED_VERIFICATION_PROCEDURE_MARKERS:
+        if marker not in procedure:
+            raise Run9ValidationError(
+                f"{field}.verification_procedure must contain the marker {marker!r} (Fix 32: 当該 pin "
+                "が PINNED になった時点で実施すべき検証手続き — P5 のフレーズ/音域と実学習素材の照合"
+                "), got a procedure without that marker"
+            )
+
+    prohibition = _require_non_empty_str(
+        value["consumption_prohibition"], field=f"{field}.consumption_prohibition"
+    )
+    for marker in _P5_DEFERRED_VERIFICATION_PROHIBITION_MARKERS:
+        if marker not in prohibition:
+            raise Run9ValidationError(
+                f"{field}.consumption_prohibition must contain the marker {marker!r} (Fix 32: 未検証の "
+                "まま held-out として消費（GENERALIZED_GAIN 評価等）してはならないという禁止宣言), got "
+                "a prohibition without that marker"
+            )
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第5巡指摘 Fix 10（P2, 採用）: `heldout_independence` はこれまで
+# status literal + 非空散文のみを検証しており、P4 が P0-P3 のいずれかの
+# cell の note 列を丸ごと（または部分列として）コピーしていても機械検証
+# できなかった——宣言される「機械検証可能な分離」を実装する。P4 の各
+# cell の (kana, pitch_midi, duration_beats) 系列を、全非 held-out cell
+# （P0-P3。P5 も held-out のため比較元に含めない）の系列と比較し、完全
+# 一致または連続部分列としての包含があれば fail-closed とする。
+#
+# PR #322 第8巡指摘 Fix 17（P2, 採用）: 上記の結合 (kana, pitch, duration)
+# タプル比較は、kana だけ変えて旋律・リズム（pitch/duration 系列）を丸
+# コピーした P4 を通してしまう（kana が変わるとタプル全体が不一致になる
+# ため）。射影（projection）別に独立して比較する検査を追加する（結合
+# タプル検査は多層防御として残置）:
+#   - pitch_midi 射影 / kana 射影: 値域が広く誤検知リスクが小さいため、
+#     完全一致・連続部分列包含のいずれも厳密拒否する。
+#   - duration_beats 射影: 等拍の並びなど低エントロピーな値域のため、
+#     短い偶然の一致が誤検知になりやすい——最小長
+#     `_HELDOUT_DURATION_MIN_LEAK_LENGTH`（=4）**以上**の連続部分列/完全
+#     一致に限って拒否する（3以下の短い一致は誤検知としてスルーする）。
+# ---------------------------------------------------------------------------
+_HELDOUT_SEPARATION_SOURCE_PROBE_IDS: Tuple[str, ...] = ("P0", "P1", "P2", "P3")
+_HELDOUT_DURATION_MIN_LEAK_LENGTH = 4
+
+
+def _note_signature_sequence(cell: Mapping[str, Any]) -> Tuple[Tuple[str, int, float], ...]:
+    return tuple((n["kana"], n["pitch_midi"], n["duration_beats"]) for n in cell["notes"])
+
+
+def _note_pitch_sequence(cell: Mapping[str, Any]) -> Tuple[int, ...]:
+    return tuple(n["pitch_midi"] for n in cell["notes"])
+
+
+def _note_kana_sequence(cell: Mapping[str, Any]) -> Tuple[str, ...]:
+    return tuple(n["kana"] for n in cell["notes"])
+
+
+def _note_duration_sequence(cell: Mapping[str, Any]) -> Tuple[float, ...]:
+    return tuple(n["duration_beats"] for n in cell["notes"])
+
+
+def _is_contiguous_subsequence(needle: Tuple[Any, ...], haystack: Tuple[Any, ...]) -> bool:
+    n, h = len(needle), len(haystack)
+    if n == 0 or n > h:
+        return False
+    return any(haystack[start:start + n] == needle for start in range(h - n + 1))
+
+
+def _validate_p4_heldout_separation(
+    *, p4_cells: List[Dict[str, Any]], source_cells_by_probe: Mapping[str, List[Dict[str, Any]]],
+    field: str,
+) -> None:
+    for p4_cell in p4_cells:
+        p4_seq = _note_signature_sequence(p4_cell)
+        p4_pitch = _note_pitch_sequence(p4_cell)
+        p4_kana = _note_kana_sequence(p4_cell)
+        p4_duration = _note_duration_sequence(p4_cell)
+        for source_probe_id in _HELDOUT_SEPARATION_SOURCE_PROBE_IDS:
+            for source_cell in source_cells_by_probe.get(source_probe_id, []):
+                # 多層防御その1（Fix 10, 残置）: 結合 (kana, pitch, duration)
+                # タプルの完全一致/連続部分列包含。
+                source_seq = _note_signature_sequence(source_cell)
+                shorter, longer = (
+                    (p4_seq, source_seq) if len(p4_seq) <= len(source_seq) else (source_seq, p4_seq)
+                )
+                if shorter == longer or _is_contiguous_subsequence(shorter, longer):
+                    raise Run9ValidationError(
+                        f"{field}: P4 cell {p4_cell.get('cell_id')!r} note sequence duplicates "
+                        f"(fully or as a contiguous subsequence of) probe {source_probe_id} cell "
+                        f"{source_cell.get('cell_id')!r} — violates the declared machine-checkable "
+                        "separation of heldout_independence (Fix 10); GENERALIZED_GAIN would be "
+                        "contaminated by evaluation leakage"
+                    )
+
+                # 多層防御その2（Fix 17, 新設）: pitch_midi / kana を射影別に
+                # 独立して厳密拒否する（結合タプルでは検出できない
+                # 「kana だけ差し替えて旋律/リズムを丸コピー」を捕捉する）。
+                for projection_name, p4_proj, source_proj in (
+                    ("pitch_midi", p4_pitch, _note_pitch_sequence(source_cell)),
+                    ("kana", p4_kana, _note_kana_sequence(source_cell)),
+                ):
+                    shorter_p, longer_p = (
+                        (p4_proj, source_proj) if len(p4_proj) <= len(source_proj)
+                        else (source_proj, p4_proj)
+                    )
+                    if shorter_p == longer_p or _is_contiguous_subsequence(shorter_p, longer_p):
+                        raise Run9ValidationError(
+                            f"{field}: P4 cell {p4_cell.get('cell_id')!r} の {projection_name} 射影が "
+                            f"probe {source_probe_id} cell {source_cell.get('cell_id')!r} と完全一致 "
+                            "または連続部分列として重複する（Fix 17: 射影別独立検査 — 結合タプル比較 "
+                            "だけでは kana のみ差し替えた旋律/リズムの丸コピーを検出できないため追加）"
+                        )
+
+                # 多層防御その3（Fix 17, 新設）: duration_beats 射影は
+                # 低エントロピー（等拍の並び等）による自明一致の誤検知を
+                # 避けるため、最小長 _HELDOUT_DURATION_MIN_LEAK_LENGTH
+                # （=4）以上の完全一致/連続部分列に限って拒否する。
+                source_duration = _note_duration_sequence(source_cell)
+                shorter_d, longer_d = (
+                    (p4_duration, source_duration) if len(p4_duration) <= len(source_duration)
+                    else (source_duration, p4_duration)
+                )
+                if len(shorter_d) >= _HELDOUT_DURATION_MIN_LEAK_LENGTH and (
+                    shorter_d == longer_d or _is_contiguous_subsequence(shorter_d, longer_d)
+                ):
+                    raise Run9ValidationError(
+                        f"{field}: P4 cell {p4_cell.get('cell_id')!r} の duration_beats 射影が probe "
+                        f"{source_probe_id} cell {source_cell.get('cell_id')!r} と長さ {len(shorter_d)}"
+                        f"（閾値 {_HELDOUT_DURATION_MIN_LEAK_LENGTH} 以上）の完全一致/連続部分列として "
+                        "重複する（Fix 17: duration は低エントロピーなため誤検知を避け最小長"
+                        f"{_HELDOUT_DURATION_MIN_LEAK_LENGTH}以上でのみ拒否する）"
+                    )
+
+
+def _validate_p2_onset_filler_consistency(
+    *, factor_levels: Mapping[str, Any], cells: List[Dict[str, Any]], field: str
+) -> None:
+    """PR #322 第3巡指摘 Fix 7（P2, 採用）の実装: `factor_levels` が宣言
+    する凍結 filler タプル（`medial_filler_kana`/`medial_filler_beats`/
+    `medial_filler_pitch_midi`）を検証し、`onset_consonant_class` 軸を
+    持つ全 cell（onset cell）の前置 note 列（検定 note = phrase-final note
+    より前の全 note）がこのタプルと完全一致すること——結果として全 onset
+    cell 間で filler が同一であること——を機械強制する。"""
+    missing = _P2_FILLER_TUPLE_KEYS - set(factor_levels.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"{field} missing required P2 filler declaration key(s): {sorted(missing)}"
+        )
+    filler_kana = _require_non_empty_str(
+        factor_levels["medial_filler_kana"], field=f"{field}.medial_filler_kana"
+    )
+    filler_beats = _require_positive_finite_number(
+        factor_levels["medial_filler_beats"], field=f"{field}.medial_filler_beats"
+    )
+    filler_pitch = _require_probe_int(
+        factor_levels["medial_filler_pitch_midi"], field=f"{field}.medial_filler_pitch_midi"
+    )
+
+    for cell in cells:
+        levels = cell.get(_CELL_LEVELS_KEY, {})
+        if not isinstance(levels, dict) or _P2_ONSET_AXIS_NAME not in levels:
+            continue  # onset_consonant_class 軸を参照しない cell（P2-PHRASE-BUILD 等）は対象外
+        cell_id = cell.get("cell_id")
+        notes = cell["notes"]
+        final = _select_phrase_final_note(cell, field=f"{field} (cell_id={cell_id!r})")
+        final_idx = next(i for i, n in enumerate(notes) if n is final)
+        prefix = notes[:final_idx]
+        if len(prefix) != 1:
+            raise Run9ValidationError(
+                f"{field}: onset cell {cell_id!r} must have exactly one prefix (filler) note before "
+                f"the phrase-final target note, got {len(prefix)}"
+            )
+        p = prefix[0]
+        if (
+            p["kana"] != filler_kana
+            or not _numeric_equal(p["duration_beats"], filler_beats)
+            or not _numeric_equal(p["pitch_midi"], filler_pitch)
+        ):
+            raise Run9ValidationError(
+                f"{field}: onset cell {cell_id!r} prefix note "
+                f"(kana={p['kana']!r}, duration_beats={p['duration_beats']!r}, "
+                f"pitch_midi={p['pitch_midi']!r}) does not match the frozen P2 filler tuple "
+                f"(kana={filler_kana!r}, duration_beats={filler_beats!r}, pitch_midi={filler_pitch!r}"
+                ") declared in factor_levels — all onset cells must share the identical filler "
+                "pre-context so the onset-class comparison is not confounded by differing context"
+            )
+
+
+def _validate_p2_onset_target_consistency(
+    *, factor_levels: Mapping[str, Any], cells: List[Dict[str, Any]], field: str
+) -> None:
+    """PR #322 第14巡指摘 Fix 25（P2, 採用）の実装: `factor_levels` が宣言
+    する凍結 target タプル（`onset_target_pitch_midi`/
+    `onset_target_duration_beats`）を検証し、`onset_consonant_class` 軸を
+    持つ全 cell（onset cell）の phrase-final 検定 note の pitch_midi/
+    duration_beats がこのタプルと完全一致すること——結果として全 onset
+    cell 間で target context（pitch/duration）が同一であること——を機械
+    強制する。Fix 7 が前置 filler note の一貫性を強制する一方、本関数は
+    検定対象そのもの（phrase-final note）の一貫性を強制する——両者は独立
+    の欠陥（`_check_axis_kana_class()` は kana クラスしか見ず、Fix 7 は
+    前置 note しか比較しない）であるため別関数として並置する。"""
+    missing = _P2_TARGET_TUPLE_KEYS - set(factor_levels.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"{field} missing required P2 onset target declaration key(s): {sorted(missing)}"
+        )
+    target_pitch = _require_probe_int(
+        factor_levels["onset_target_pitch_midi"], field=f"{field}.onset_target_pitch_midi"
+    )
+    target_beats = _require_positive_finite_number(
+        factor_levels["onset_target_duration_beats"], field=f"{field}.onset_target_duration_beats"
+    )
+
+    for cell in cells:
+        levels = cell.get(_CELL_LEVELS_KEY, {})
+        if not isinstance(levels, dict) or _P2_ONSET_AXIS_NAME not in levels:
+            continue  # onset_consonant_class 軸を参照しない cell（P2-PHRASE-BUILD 等）は対象外
+        cell_id = cell.get("cell_id")
+        final = _select_phrase_final_note(cell, field=f"{field} (cell_id={cell_id!r})")
+        if not _numeric_equal(final["pitch_midi"], target_pitch) or not _numeric_equal(
+            final["duration_beats"], target_beats
+        ):
+            raise Run9ValidationError(
+                f"{field}: onset cell {cell_id!r} phrase-final note "
+                f"(pitch_midi={final['pitch_midi']!r}, duration_beats={final['duration_beats']!r}) "
+                "does not match the frozen P2 onset target tuple "
+                f"(pitch_midi={target_pitch!r}, duration_beats={target_beats!r}) declared in "
+                "factor_levels — all onset cells must share the identical target context so the "
+                "onset-class comparison is not confounded by differing target pitch/duration "
+                "(Fix 25)"
+            )
+
+
+def _validate_p3_release_pair_context(
+    *, factor_levels: Mapping[str, Any], cells: List[Dict[str, Any]], field: str
+) -> None:
+    """PR #322 第15巡指摘 Fix 26（P2, 採用、Fix 25 と同族の新規具体経路）
+    の実装: `_check_axis_release_override()`（release checker）は
+    release ラベルと cell の `final_phone_dur_override` の対応しか見ておら
+    ず、short/long cell の notes 配列（pitch/duration/filler/同
+    ending_voicing クラス内の別 kana 等）を互いに変えても通過してしまって
+    いた。release の効果は cell レベルの `final_phone_dur_override` pin
+    のみが駆動する設計（Fix 22）であるため、short/long pair 間の相違は
+    この override 欄以外に存在してはならない——そうでなければ short/long
+    比較（release 効果の検定）が score context の差と交絡する。
+    `ending_voicing` の各水準について、同水準を共有する short cell と
+    long cell の notes 配列が `_NOTE_KEYS`
+    （kana/pitch_midi/duration_beats/phrase_index/is_phrase_final）の
+    全フィールドで完全同一であることを機械強制する
+    （release_duration 軸そのもの・`final_phone_dur_override` 欄は意図的
+    な相違点のため対象外）。pair のどちらかが欠落するケースは
+    `_validate_probe_factorial_coverage()`（Fix 9）が別途検出するため、
+    本関数は pair が両方揃っている場合のみを対象とする。"""
+    release_axis, voicing_axis = _PROBE_FACTORIAL_AXES["P3"]
+    by_voicing: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for cell in cells:
+        levels = cell.get(_CELL_LEVELS_KEY, {})
+        if not isinstance(levels, dict) or release_axis not in levels or voicing_axis not in levels:
+            continue
+        by_voicing.setdefault(levels[voicing_axis], {})[levels[release_axis]] = cell
+
+    for voicing_level, pair in by_voicing.items():
+        short_cell = pair.get("short")
+        long_cell = pair.get("long")
+        if short_cell is None or long_cell is None:
+            continue
+        short_notes = short_cell["notes"]
+        long_notes = long_cell["notes"]
+        pair_desc = (
+            f"{voicing_axis}={voicing_level!r} pair "
+            f"({short_cell.get('cell_id')!r} / {long_cell.get('cell_id')!r})"
+        )
+        if len(short_notes) != len(long_notes):
+            raise Run9ValidationError(
+                f"{field}: P3 {pair_desc} has notes arrays of different length "
+                f"({len(short_notes)} vs {len(long_notes)}) — release is designed to be driven "
+                "solely by the cell-level final_phone_dur_override pin, so the notes context must "
+                "be identical across the short/long pair (Fix 26)"
+            )
+        for i, (s_note, l_note) in enumerate(zip(short_notes, long_notes)):
+            for key in _NOTE_KEYS:
+                if s_note.get(key) != l_note.get(key):
+                    raise Run9ValidationError(
+                        f"{field}: P3 {pair_desc} notes[{i}].{key} diverges "
+                        f"({s_note.get(key)!r} vs {l_note.get(key)!r}) — release must be driven "
+                        "solely by final_phone_dur_override; any other divergence between the "
+                        "short/long score context confounds the release comparison (Fix 26)"
+                    )
+
+
+def _validate_probe_object(
+    probe: Any, *, expected_probe_id: str, field: str, seen_cell_ids: Dict[str, str],
+    phoneme_jp_module: Any, score_py_module: Any,
+) -> None:
+    if not isinstance(probe, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(probe).__name__}")
+    extra = _PROBE_REQUIRED_EXTRA_KEYS[expected_probe_id]
+    allowed = set(_PROBE_BASE_KEYS) | extra
+    unknown = set(probe.keys()) - allowed
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = allowed - set(probe.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+
+    if probe["probe_id"] != expected_probe_id:
+        raise Run9ValidationError(
+            f"{field}.probe_id must be exactly {expected_probe_id!r}, got {probe['probe_id']!r}"
+        )
+    if probe["title"] != PROBE_TITLES[expected_probe_id]:
+        raise Run9ValidationError(
+            f"{field}.title must be exactly {PROBE_TITLES[expected_probe_id]!r} (DESIGN_RUN9 §15 "
+            f"逐語), got {probe['title']!r}"
+        )
+    if probe["design_source"] != PROBE_DESIGN_SOURCE:
+        raise Run9ValidationError(
+            f"{field}.design_source must be exactly {PROBE_DESIGN_SOURCE!r}, got "
+            f"{probe['design_source']!r}"
+        )
+    role = _require_non_empty_str(probe["role"], field=f"{field}.role")
+    if expected_probe_id == "P3" and _P3_DIAGNOSTIC_ROLE_MARKER not in role:
+        raise Run9ValidationError(
+            f"{field}.role must contain the marker {_P3_DIAGNOSTIC_ROLE_MARKER!r} (DESIGN_RUN9 §15 "
+            "P3: TRF 未校正時は diagnostic/advisory の機械可読化), got role without the marker"
+        )
+    if expected_probe_id == "P3":
+        # PR #322 第12巡指摘 Fix 22（Fix 21 の境界宣言を訂正・撤回した
+        # 後継）: release 制御が実在すること（final_phone_dur_override
+        # kwarg・run_pipeline・pod harness の消費義務）と、依然として
+        # 事実である _NoteWithMs の is_phrase_final 非消費・TAIL_FRAMES
+        # 固定パディングを probe.role へ明記する。
+        for marker in _P3_RELEASE_CONTROL_MARKERS:
+            if marker not in role:
+                raise Run9ValidationError(
+                    f"{field}.role must contain the marker {marker!r} (Fix 22/24: P3 の release "
+                    "制御の訂正記述・実行レシピ), got role without that marker"
+                )
+        # PR #322 第13巡指摘 Fix 24: 旧（誤り）の frames_from_ms 1引数
+        # 呼び出し文言が残置されていないことを確認する（正しい訂正が
+        # 古い誤記述を上書きせず併存する事故を防ぐ）。
+        if _P3_RELEASE_RECIPE_FORBIDDEN_MARKER in role:
+            raise Run9ValidationError(
+                f"{field}.role must not contain the stale single-argument recipe text "
+                f"{_P3_RELEASE_RECIPE_FORBIDDEN_MARKER!r} (Fix 24: gate_synth.frames_from_ms() "
+                "requires (ms, frame_ms) — the pod harness would raise TypeError if the recipe "
+                "were followed as written)"
+            )
+    if expected_probe_id == "P2":
+        # PR #322 第5巡指摘 Fix 11: 計器能力の境界宣言（energy/velocity/
+        # metrical-accent 制御入力の不在・実操作は onset_consonant_class
+        # のみ・再入条件）を probe.role へ明記する。
+        for marker in _P2_ENERGY_BOUNDARY_MARKERS:
+            if marker not in role:
+                raise Run9ValidationError(
+                    f"{field}.role must contain the marker {marker!r} (Fix 11: P2 の Energy/Attack "
+                    "計器能力の境界宣言), got role without that marker"
+                )
+
+    cells = probe["cells"]
+    if not isinstance(cells, list) or not cells:
+        raise Run9ValidationError(f"{field}.cells must be a non-empty list, got {cells!r}")
+    for i, cell in enumerate(cells):
+        _validate_probe_cell(
+            cell, probe_id=expected_probe_id, field=f"{field}.cells[{i}]", seen_cell_ids=seen_cell_ids,
+            phoneme_jp_module=phoneme_jp_module, score_py_module=score_py_module,
+        )
+
+    # PR #322 第4巡指摘 Fix 9（P2, 採用）: probe 別の期待 cell_id 集合
+    # （閉じた集合）と厳密一致することを要求する——cell 削除/余剰追加の
+    # いずれも fail-closed。
+    _validate_probe_expected_cell_ids(expected_probe_id=expected_probe_id, cells=cells, field=field)
+
+    if expected_probe_id in _FACTOR_LEVEL_PROBE_IDS:
+        _validate_probe_factor_levels_cell_mapping(
+            factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
+        )
+        # PR #322 第9巡指摘 Fix 19: axes/filler の宣言値そのものを cell から
+        # 独立した凍結表と照合する（cell との内部自己整合性だけでは検出
+        # できない協調編集を捕捉する）。
+        _validate_probe_expected_factor_values(
+            expected_probe_id=expected_probe_id, factor_levels=probe["factor_levels"],
+            field=f"{field}.factor_levels",
+        )
+
+    if expected_probe_id in _PROBE_FACTORIAL_AXES:
+        # Fix 9: full factorial 直積被覆（P1: register×duration, P3:
+        # release_duration×ending_voicing。Fix 22 で軸名を最終的に
+        # release_duration へ確定）。
+        _validate_probe_factorial_coverage(
+            expected_probe_id=expected_probe_id, factor_levels=probe["factor_levels"], cells=cells,
+            field=f"{field}.factor_levels",
+        )
+
+    if expected_probe_id == "P1":
+        # PR #322 第16巡指摘 Fix 28（Fix 25/26 と同族の文脈凍結）: grid
+        # cell 間の非 factor note フィールド一貫性 + transition cell の
+        # notes 配列全体の完全テンプレート一致を、軸別 checker（factor
+        # フィールドのみ照合）とは独立に強制する。
+        _validate_p1_grid_note_context_consistency(cells=cells, field=f"{field}.factor_levels")
+        _validate_p1_transition_notes_template(cells=cells, field=f"{field}.factor_levels")
+
+    if expected_probe_id == "P3":
+        # PR #322 第15巡指摘 Fix 26（Fix 25 と同族の新規具体経路）:
+        # release checker（override とラベルの対応のみ）とは独立に、
+        # short/long release pair の score context（notes 配列）が
+        # 完全同一であることを強制する。
+        _validate_p3_release_pair_context(
+            factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
+        )
+
+    if expected_probe_id == "P2":
+        _validate_p2_onset_filler_consistency(
+            factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
+        )
+        # Fix 25: onset cell 間の phrase-final target（pitch/duration）の
+        # 一貫性を Fix 7（prefix filler の一貫性）とは独立に強制する。
+        _validate_p2_onset_target_consistency(
+            factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
+        )
+
+    if expected_probe_id == "P5":
+        pitches = [note["pitch_midi"] for cell in cells for note in cell["notes"]]
+        if not any(p < _P0_MIDI_LOW or p > _P0_MIDI_HIGH for p in pitches):
+            raise Run9ValidationError(
+                f"{field}: P5 must include at least one note outside the P0 central-register domain "
+                f"[{_P0_MIDI_LOW}, {_P0_MIDI_HIGH}] while staying within the P5 baseline domain "
+                f"[{_P5_MIDI_LOW}, {_P5_MIDI_HIGH}] (DESIGN_RUN9 §15 P5: 学習分布外寄り)"
+            )
+        # PR #322 第20巡指摘 Fix 32（P2, 採用）: 上記の域内制約検査だけでは
+        # 実際の学習分布との分離を証明しない——deferred_verification
+        # ブロックで未検証のまま消費されないことを機械強制する。
+        _validate_p5_deferred_verification(
+            probe[_P5_DEFERRED_VERIFICATION_KEY], field=f"{field}.{_P5_DEFERRED_VERIFICATION_KEY}"
+        )
+
+    if expected_probe_id == "P4":
+        _validate_probe_heldout_independence(
+            probe["heldout_independence"], field=f"{field}.heldout_independence"
+        )
+
+
+def _validate_harness_runtime_seed_policy(data: Any) -> None:
+    """PR #322 第1巡指摘 Fix 1（P1, 採用）の実装: 宣言 harness
+    `gate_synth.py::run_pipeline` が実際に消費する runtime seed（自身の
+    ハードコード定数 `SEED = 42`）を manifest 側に明示し、
+    `performance_seed` (909001, genome/ControlProfile レベル) と混同
+    しないことを機械強制する。gate_synth.py 自体の改変は不採用（RUN6/7/8
+    と共用の凍結計器のため）——本 validator は宣言の真実化のみを検証する。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"render_contract.harness_runtime_seed_policy must be an object, got "
+            f"{type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _HARNESS_RUNTIME_SEED_POLICY_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"render_contract.harness_runtime_seed_policy has unknown key(s): {sorted(unknown)}"
+        )
+    missing = _HARNESS_RUNTIME_SEED_POLICY_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"render_contract.harness_runtime_seed_policy missing required key(s): {sorted(missing)}"
+        )
+
+    seed = data["harness_hardcoded_seed"]
+    if not _is_strict_int(seed) or seed != _GATE_SYNTH_HARDCODED_SEED:
+        raise Run9ValidationError(
+            "render_contract.harness_runtime_seed_policy.harness_hardcoded_seed must be the exact "
+            f"int {_GATE_SYNTH_HARDCODED_SEED!r} (bool/float variants rejected), got {seed!r} "
+            f"({type(seed).__name__})"
+        )
+
+    source = _require_non_empty_str(
+        data["harness_hardcoded_seed_source"],
+        field="render_contract.harness_runtime_seed_policy.harness_hardcoded_seed_source",
+    )
+    for marker in _HARNESS_HARDCODED_SEED_SOURCE_MARKERS:
+        if marker not in source:
+            raise Run9ValidationError(
+                "render_contract.harness_runtime_seed_policy.harness_hardcoded_seed_source must "
+                f"contain the marker {marker!r} (実コードの行番号転記), got a source without that "
+                "marker"
+            )
+
+    freeze_basis = _require_non_empty_str(
+        data["freeze_basis"], field="render_contract.harness_runtime_seed_policy.freeze_basis"
+    )
+    if _HARNESS_FREEZE_BASIS_MARKER not in freeze_basis:
+        raise Run9ValidationError(
+            "render_contract.harness_runtime_seed_policy.freeze_basis must contain the marker "
+            f"{_HARNESS_FREEZE_BASIS_MARKER!r} (42 は harness バイトの一部であり "
+            "repository_commit_sha が repo バイト全体を pin することで凍結される), got a freeze_basis "
+            "without that marker"
+        )
+
+    verification = _require_non_empty_str(
+        data["runtime_verification_condition"],
+        field="render_contract.harness_runtime_seed_policy.runtime_verification_condition",
+    )
+    for marker in _HARNESS_RUNTIME_VERIFICATION_MARKERS:
+        if marker not in verification:
+            raise Run9ValidationError(
+                "render_contract.harness_runtime_seed_policy.runtime_verification_condition must "
+                f"contain the marker {marker!r} (render record の SEED が 42 と不一致なら契約違反 "
+                "として fail-closed とする、pod フェーズの検収条件の事前登録), got a condition "
+                "without that marker"
+            )
+
+    no_wiring = _require_non_empty_str(
+        data["no_wiring_declaration"],
+        field="render_contract.harness_runtime_seed_policy.no_wiring_declaration",
+    )
+    if _HARNESS_NO_WIRING_DECLARATION_MARKER not in no_wiring:
+        raise Run9ValidationError(
+            "render_contract.harness_runtime_seed_policy.no_wiring_declaration must contain the "
+            f"marker {_HARNESS_NO_WIRING_DECLARATION_MARKER!r} (909001 を runtime seed として "
+            "harness へ配線する変更は行わない——宣言と実装の乖離は実挙動側を正とし宣言を真実化する "
+            "設計判定), got a declaration without that marker"
+        )
+
+
+def _validate_render_contract(data: Any) -> None:
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"render_contract must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _RENDER_CONTRACT_KEYS
+    if unknown:
+        raise Run9ValidationError(f"render_contract has unknown key(s): {sorted(unknown)}")
+    missing = _RENDER_CONTRACT_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"render_contract missing required key(s): {sorted(missing)}")
+
+    if data["harness"] != _RENDER_CONTRACT_HARNESS:
+        raise Run9ValidationError(
+            f"render_contract.harness must be exactly {_RENDER_CONTRACT_HARNESS!r}, "
+            f"got {data['harness']!r}"
+        )
+
+    backbone_ref = data["backbone_ref"]
+    if not isinstance(backbone_ref, dict):
+        raise Run9ValidationError(
+            f"render_contract.backbone_ref must be an object, got {type(backbone_ref).__name__}"
+        )
+    unknown_ref = set(backbone_ref.keys()) - _BACKBONE_REF_KEYS
+    if unknown_ref:
+        raise Run9ValidationError(
+            f"render_contract.backbone_ref has unknown key(s): {sorted(unknown_ref)}"
+        )
+    missing_ref = _BACKBONE_REF_KEYS - set(backbone_ref.keys())
+    if missing_ref:
+        raise Run9ValidationError(
+            f"render_contract.backbone_ref missing required key(s): {sorted(missing_ref)}"
+        )
+    if backbone_ref["contract_path"] != _BACKBONE_REF_CONTRACT_PATH:
+        raise Run9ValidationError(
+            f"render_contract.backbone_ref.contract_path must be exactly "
+            f"{_BACKBONE_REF_CONTRACT_PATH!r}, got {backbone_ref['contract_path']!r}"
+        )
+    if backbone_ref["contract_field"] != _BACKBONE_REF_CONTRACT_FIELD:
+        raise Run9ValidationError(
+            f"render_contract.backbone_ref.contract_field must be exactly "
+            f"{_BACKBONE_REF_CONTRACT_FIELD!r} (field-name reference only — the pin value itself "
+            f"must not be duplicated here), got {backbone_ref['contract_field']!r}"
+        )
+
+    seed = data["performance_seed"]
+    if not _is_strict_int(seed) or seed != SHARED_PERFORMANCE_SEED:
+        raise Run9ValidationError(
+            f"render_contract.performance_seed must be the exact int {SHARED_PERFORMANCE_SEED!r} "
+            f"(bool/float variants rejected), got {seed!r} ({type(seed).__name__})"
+        )
+    seed_note = _require_non_empty_str(
+        data["performance_seed_note"], field="render_contract.performance_seed_note"
+    )
+    if _LEARNING_SEED_DISAMBIGUATION_MARKER not in seed_note:
+        raise Run9ValidationError(
+            "render_contract.performance_seed_note must mention the learning seed "
+            f"({_LEARNING_SEED_DISAMBIGUATION_MARKER!r}) to disambiguate it from the shared "
+            "performance seed, got a note without that marker"
+        )
+    for marker in (_PERFORMANCE_SEED_GENOME_POLICY_MARKER, _PERFORMANCE_SEED_NOT_ONNX_RUNTIME_MARKER):
+        if marker not in seed_note:
+            raise Run9ValidationError(
+                f"render_contract.performance_seed_note must contain the marker {marker!r} (PR #322 "
+                "第1巡指摘 Fix 1: 909001 は genome/ControlProfile レベルの performance policy seed "
+                "であり、宣言 harness 内部の ONNX runtime 乱数 seed ではないことを明記する), got a "
+                "note without that marker"
+            )
+
+    same_conditions_note = _require_non_empty_str(
+        data["same_conditions_note"], field="render_contract.same_conditions_note"
+    )
+    for marker in (
+        _RENDER_CONTRACT_SECTION27_MARKER, _RENDER_CONTRACT_ITEM13_MARKER, _RENDER_CONTRACT_ITEM18_MARKER,
+    ):
+        if marker not in same_conditions_note:
+            raise Run9ValidationError(
+                f"render_contract.same_conditions_note must contain the marker {marker!r} "
+                "(DESIGN_RUN9 §27 item 13/18 参照マーカー), got a note without that marker"
+            )
+    for marker in _RENDER_CONTRACT_SAME_SEED_BOTH_LAYERS_MARKERS:
+        if marker not in same_conditions_note:
+            raise Run9ValidationError(
+                f"render_contract.same_conditions_note must contain the marker {marker!r} (PR #322 "
+                "第1巡指摘 Fix 1: item 13/18 の same-seed 要求は genome-policy 層 (909001) と "
+                "harness-runtime 層 (42) の両方で両 founder 間同一であることを一言で確認する), got "
+                "a note without that marker"
+            )
+
+    _validate_harness_runtime_seed_policy(data["harness_runtime_seed_policy"])
+
+    discipline = _require_non_empty_str(
+        data["pcm_publication_discipline"], field="render_contract.pcm_publication_discipline"
+    )
+    last_index = -1
+    for marker in _PCM_PUBLICATION_DISCIPLINE_MARKERS:
+        idx = discipline.find(marker)
+        if idx == -1:
+            raise Run9ValidationError(
+                f"render_contract.pcm_publication_discipline must contain the marker {marker!r} "
+                "(DESIGN_RUN9 §15 末尾 PCM publication 規律の逐語), got a discipline text without it"
+            )
+        if idx <= last_index:
+            raise Run9ValidationError(
+                "render_contract.pcm_publication_discipline markers must appear in the DESIGN_RUN9 "
+                "§15 order (float output -> PCM publication -> file readback -> meter -> actual WAV "
+                f"sha256) — {marker!r} appears out of order"
+            )
+        last_index = idx
+
+    access_contract = _require_non_empty_str(
+        data["probe_manifest_access_contract"], field="render_contract.probe_manifest_access_contract"
+    )
+    for marker in _PROBE_MANIFEST_ACCESS_CONTRACT_MARKERS:
+        if marker not in access_contract:
+            raise Run9ValidationError(
+                f"render_contract.probe_manifest_access_contract must contain the marker {marker!r} "
+                "(PR #322 第6巡指摘 Fix 13: pod フェーズの render harness は probe manifest を "
+                "load_pinned_probe_manifest() 経由でのみ取得しなければならない——直接 json.load は "
+                "契約違反。gate_state() READY は形状判定であり、実物照合は消費時点で行う), got an "
+                "access contract without that marker"
+            )
+
+
+def _load_identity_metric_space_document(*, path: Optional[Path] = None) -> Dict[str, Any]:
+    """PR #322 第2巡指摘 Fix 5 用: `revision_bridge.*.identity_metric_space_ref`
+    の dotted path 全体を実文書に対して走査するために、
+    `inputs/identity_metric_space.json`（凍結・改変禁止の read-only 入力）
+    を読み込むだけの loader。他の validator（`validate_identity_metric_
+    space_manifest()`）と異なり、本関数は形状検証は行わず単に
+    `_loads_strict_json()` でパースした dict を返す——形状検証は
+    `validate_identity_metric_space_manifest()` の職務のまま重複させない。
+    `path` 省略時（`None`）はモジュールレベル定数 `IDENTITY_METRIC_SPACE_
+    PATH` を呼び出しのたびに参照する（`_validate_probe_cell_source()` と
+    同じ late-binding 回避パターン）。
+    """
+    if path is None:
+        path = IDENTITY_METRIC_SPACE_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"revision_bridge.*.identity_metric_space_ref の dotted path 解決には {path} の実在が "
+            "必須だが見つからない（凍結・改変禁止の read-only 入力）"
+        )
+    return _loads_strict_json(path.read_text(encoding="utf-8"))
+
+
+def _resolve_identity_metric_space_ref(
+    ref: str, *, document: Mapping[str, Any], field: str
+) -> None:
+    """PR #322 第2巡指摘 Fix 5（P2, 採用）の実装: `inputs/identity_metric_
+    space.json#a.b.c` 形式の参照の dotted path 全セグメントを実文書に
+    対して走査し、途中の typo（例: `#calibration.does_not_exist`）を
+    fail-closed で検出する。旧実装は先頭セグメントのみを閉じた語彙表と
+    照合しており、深部・中間セグメントの typo は素通りしていた。"""
+    suffix = ref[len(_IDENTITY_METRIC_SPACE_REF_PREFIX):]
+    segments = suffix.split(".") if suffix else []
+    if not segments or any(not s for s in segments):
+        raise Run9ValidationError(
+            f"{field} has a malformed dotted path suffix after "
+            f"{_IDENTITY_METRIC_SPACE_REF_PREFIX!r}: {suffix!r}"
+        )
+    current: Any = document
+    walked: List[str] = []
+    for segment in segments:
+        walked.append(segment)
+        if not isinstance(current, Mapping) or segment not in current:
+            raise Run9ValidationError(
+                f"{field} = {ref!r} does not resolve against {IDENTITY_METRIC_SPACE_PATH} — segment "
+                f"{segment!r} (path so far: {'.'.join(walked)!r}) does not exist"
+            )
+        current = current[segment]
+
+
+def _validate_revision_bridge_entry(
+    entry: Any, *, entry_name: str, field: str, valid_cell_ids: FrozenSet[str],
+    identity_metric_space_document: Mapping[str, Any],
+) -> None:
+    if not isinstance(entry, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(entry).__name__}")
+    requires_new_render = _REVISION_BRIDGE_NEW_RENDER_REQUIRED[entry_name]
+    has_contract_field_ref = entry_name in _REVISION_BRIDGE_CONTRACT_FIELD_REF
+    allowed = {"description", "identity_metric_space_ref", "new_render_required"}
+    if requires_new_render:
+        allowed.add("cell_ref")
+    if has_contract_field_ref:
+        allowed.add("contract_field_ref")
+    unknown = set(entry.keys()) - allowed
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = allowed - set(entry.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+
+    description = _require_non_empty_str(entry["description"], field=f"{field}.description")
+    if not requires_new_render and _REVISION_BRIDGE_NO_NEW_RENDER_MARKER not in description:
+        raise Run9ValidationError(
+            f"{field}.description must contain the marker {_REVISION_BRIDGE_NO_NEW_RENDER_MARKER!r} "
+            "(negative_reference/pjs_reference は新規 render 不要), got a description without that "
+            "marker"
+        )
+
+    ref = entry["identity_metric_space_ref"]
+    if not isinstance(ref, str) or not ref.startswith(_IDENTITY_METRIC_SPACE_REF_PREFIX):
+        raise Run9ValidationError(
+            f"{field}.identity_metric_space_ref must be a string starting with "
+            f"{_IDENTITY_METRIC_SPACE_REF_PREFIX!r} (正本は inputs/identity_metric_space.json への "
+            f"参照のみ — 式・値の重複定義禁止), got {ref!r}"
+        )
+    _resolve_identity_metric_space_ref(
+        ref, document=identity_metric_space_document, field=f"{field}.identity_metric_space_ref"
+    )
+    # PR #322 第4巡指摘 Fix 8（P2, 採用）: 実在走査だけでは「別エントリの
+    # 正しい path」を取り違えて指しても通過してしまう（例:
+    # reference_render と evaluated_renders の valid path を入れ替え）。
+    # エントリ名ごとの期待 path と厳密一致することを追加で要求する。
+    expected_ref = _REVISION_BRIDGE_EXPECTED_METRIC_REF[entry_name]
+    if ref != expected_ref:
+        raise Run9ValidationError(
+            f"{field}.identity_metric_space_ref must be exactly {expected_ref!r} for entry "
+            f"{entry_name!r} (Fix 8: エントリ→期待 path の厳密対応 — 他エントリの正しい path を "
+            f"取り違えて指すことを防ぐ), got {ref!r}"
+        )
+
+    new_render_required = entry["new_render_required"]
+    if not isinstance(new_render_required, bool) or new_render_required is not requires_new_render:
+        raise Run9ValidationError(
+            f"{field}.new_render_required must be exactly {requires_new_render!r}, "
+            f"got {new_render_required!r}"
+        )
+
+    if requires_new_render:
+        cell_ref = entry["cell_ref"]
+        if cell_ref not in valid_cell_ids:
+            raise Run9ValidationError(
+                f"{field}.cell_ref {cell_ref!r} does not reference a cell_id declared in probes[]"
+            )
+        # PR #322 第18巡指摘 Fix 30（P2, 採用、Fix 8 と同族）: 「probes[]
+        # のどこかに実在するか」だけでは、P0 以外の probe（P1/P4 等）の
+        # cell へ差し替えても通過してしまう。identity 校正・評価は同一 P0
+        # score での比較が前提のため、render 系エントリの cell_ref は
+        # 凍結表 `_REVISION_BRIDGE_EXPECTED_CELL_REF` と厳密一致すること
+        # を追加で要求する。
+        expected_cell_ref = _REVISION_BRIDGE_EXPECTED_CELL_REF[entry_name]
+        if cell_ref != expected_cell_ref:
+            raise Run9ValidationError(
+                f"{field}.cell_ref must be exactly {expected_cell_ref!r} for entry {entry_name!r} "
+                "(Fix 30: identity 校正・評価は同一 P0 score での比較が前提であり、render 系"
+                "エントリの cell_ref を P0 以外の probe の cell へ差し替えることを防ぐ — Fix 8 の "
+                f"identity_metric_space_ref 厳密対応と同方式), got {cell_ref!r}"
+            )
+
+    if has_contract_field_ref:
+        expected = _REVISION_BRIDGE_CONTRACT_FIELD_REF[entry_name]
+        if entry["contract_field_ref"] != expected:
+            raise Run9ValidationError(
+                f"{field}.contract_field_ref must be exactly {expected!r}, got "
+                f"{entry['contract_field_ref']!r}"
+            )
+
+
+def _validate_marker_bearing_str(value: Any, *, field: str, markers: Tuple[str, ...]) -> str:
+    text = _require_non_empty_str(value, field=field)
+    for marker in markers:
+        if marker not in text:
+            raise Run9ValidationError(
+                f"{field} must contain the marker {marker!r}, got text without that marker"
+            )
+    return text
+
+
+def _validate_measurement_boundary(data: Any) -> None:
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"measurement_boundary must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _MEASUREMENT_BOUNDARY_KEYS
+    if unknown:
+        raise Run9ValidationError(f"measurement_boundary has unknown key(s): {sorted(unknown)}")
+    missing = _MEASUREMENT_BOUNDARY_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"measurement_boundary missing required key(s): {sorted(missing)}")
+    _validate_marker_bearing_str(
+        data["scope_statement"], field="measurement_boundary.scope_statement",
+        markers=_MEASUREMENT_BOUNDARY_SCOPE_MARKERS,
+    )
+    _validate_marker_bearing_str(
+        data["identity_axis_source"], field="measurement_boundary.identity_axis_source",
+        markers=_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS,
+    )
+    _validate_marker_bearing_str(
+        data["development_generalization_axis_source"],
+        field="measurement_boundary.development_generalization_axis_source",
+        markers=_MEASUREMENT_BOUNDARY_DEV_GEN_AXIS_MARKERS,
+    )
+
+
+def _validate_prohibitions(data: Any) -> None:
+    if not isinstance(data, list) or not data:
+        raise Run9ValidationError(f"prohibitions must be a non-empty list, got {data!r}")
+    for i, item in enumerate(data):
+        _require_non_empty_str(item, field=f"prohibitions[{i}]")
+    joined = "\n".join(data)
+    for marker in _PROHIBITION_MARKERS:
+        if marker not in joined:
+            raise Run9ValidationError(
+                f"prohibitions must contain a statement with the marker {marker!r}, got a list "
+                "without any such statement"
+            )
+    for marker in _PROHIBITION_RENDER_INFEASIBLE_CARVEOUT_MARKERS:
+        if marker not in joined:
+            raise Run9ValidationError(
+                f"prohibitions must contain the render-infeasible-cell carve-out marker {marker!r} "
+                "(render 不能 cell の是正 repin は水増し禁止の対象外——この区別を明文化する), got a "
+                "list without it"
+            )
+
+
+def validate_probe_manifest(data: Mapping[str, Any]) -> None:
+    """probe manifest（schema `run9-probe-manifest/1.0`、規約パス
+    `PROBE_MANIFEST_PATH` = `evaluation/probe_manifest.json`）の構造を
+    検証する。DESIGN_RUN9 §15 Probe Set（P0-P5）の score cells + render
+    契約 + revision_bridge（§15 probe 語彙 ↔ identity_metric_space 語彙の
+    橋渡し）を凍結した実体 manifest の fail-closed 検証（既存 validator
+    群と同じ流儀 — Run9ValidationError・意味論マーカー方式・閉集合）。
+
+    「どう測るか」は本 manifest の対象外（`measurement_boundary` が明文化
+    ——identity 軸は `inputs/identity_metric_space.json` が正本のまま、
+    P4/P5 の development/generalization 軸の測定仕様は
+    `measurement_spec_sha`（別欄、PENDING のまま）が別途凍結する）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"probe manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _PROBE_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"probe manifest has unknown key(s): {sorted(unknown)}")
+    missing = _PROBE_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"probe manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_PROBE_MANIFEST:
+        raise Run9ValidationError(
+            f"probe manifest schema must be exactly {SCHEMA_PROBE_MANIFEST!r}, got {schema!r}"
+        )
+
+    _require_non_empty_str(data["note"], field="note")
+
+    probes = data["probes"]
+    if not isinstance(probes, list) or len(probes) != len(PROBE_IDS):
+        raise Run9ValidationError(
+            f"probe manifest.probes must be a list containing exactly the {len(PROBE_IDS)} probes "
+            f"{list(PROBE_IDS)} (P0-P5 全6probe必須), got "
+            f"{probes if not isinstance(probes, list) else f'{len(probes)} item(s)'}"
+        )
+
+    # PR #322 第3巡指摘 Fix 6: renderer の mora 文法（唯一の正本、
+    # read-only 参照）を1回だけロードし、全 probe の全 note の kana
+    # 検証で使い回す（probe/cell ごとの重複ロードを避ける）。
+    phoneme_jp_module = _load_phoneme_jp_module()
+    # PR #322 第5巡指摘 Fix 12: P0 の逐語照合用に score.py を1回だけ
+    # ロードし使い回す（build_sakura_score() は決定論的だが、複数回呼ぶ
+    # 意味がないため）。
+    score_py_module = _load_score_py_module()
+
+    seen_cell_ids: Dict[str, str] = {}
+    seen_probe_ids: set = set()
+    cells_by_probe_id: Dict[str, List[Dict[str, Any]]] = {}
+    for i, probe in enumerate(probes):
+        if not isinstance(probe, dict):
+            raise Run9ValidationError(f"probes[{i}] must be an object, got {type(probe).__name__}")
+        probe_id = probe.get("probe_id")
+        if probe_id not in PROBE_IDS:
+            raise Run9ValidationError(
+                f"probes[{i}].probe_id must be one of {list(PROBE_IDS)}, got {probe_id!r}"
+            )
+        if probe_id in seen_probe_ids:
+            raise Run9ValidationError(
+                f"probes[{i}].probe_id {probe_id!r} is duplicated — each of P0-P5 must appear "
+                "exactly once"
+            )
+        seen_probe_ids.add(probe_id)
+        _validate_probe_object(
+            probe, expected_probe_id=probe_id, field=f"probes[{i}]", seen_cell_ids=seen_cell_ids,
+            phoneme_jp_module=phoneme_jp_module, score_py_module=score_py_module,
+        )
+        if isinstance(probe.get("cells"), list):
+            cells_by_probe_id[probe_id] = probe["cells"]
+    if seen_probe_ids != set(PROBE_IDS):
+        raise Run9ValidationError(
+            f"probe manifest.probes is missing required probe_id(s): "
+            f"{sorted(set(PROBE_IDS) - seen_probe_ids)}"
+        )
+
+    # PR #322 第5巡指摘 Fix 10: P4 の各 cell の note 系列を、全非
+    # held-out cell（P0-P3）の系列と比較する（cross-probe のため全 probe
+    # 検証後にまとめて行う）。
+    if "P4" in cells_by_probe_id:
+        _validate_p4_heldout_separation(
+            p4_cells=cells_by_probe_id["P4"], source_cells_by_probe=cells_by_probe_id,
+            field="probes[P4]",
+        )
+
+    valid_cell_ids = frozenset(seen_cell_ids.keys())
+
+    _validate_render_contract(data["render_contract"])
+
+    revision_bridge = data["revision_bridge"]
+    if not isinstance(revision_bridge, dict):
+        raise Run9ValidationError(
+            f"revision_bridge must be an object, got {type(revision_bridge).__name__}"
+        )
+    unknown_rb = set(revision_bridge.keys()) - set(_REVISION_BRIDGE_ENTRY_NAMES)
+    if unknown_rb:
+        raise Run9ValidationError(f"revision_bridge has unknown key(s): {sorted(unknown_rb)}")
+    missing_rb = set(_REVISION_BRIDGE_ENTRY_NAMES) - set(revision_bridge.keys())
+    if missing_rb:
+        raise Run9ValidationError(f"revision_bridge missing required entry(ies): {sorted(missing_rb)}")
+    # PR #322 第2巡指摘 Fix 5: dotted path 全体を実文書に対して走査する
+    # ため、`inputs/identity_metric_space.json`（凍結・改変禁止の
+    # read-only 入力）を1回だけ読み込み、全 revision_bridge エントリで
+    # 使い回す（エントリごとの再読み込みを避ける）。
+    identity_metric_space_document = _load_identity_metric_space_document()
+    for entry_name in _REVISION_BRIDGE_ENTRY_NAMES:
+        _validate_revision_bridge_entry(
+            revision_bridge[entry_name], entry_name=entry_name,
+            field=f"revision_bridge.{entry_name}", valid_cell_ids=valid_cell_ids,
+            identity_metric_space_document=identity_metric_space_document,
+        )
+
+    _validate_measurement_boundary(data["measurement_boundary"])
+    _validate_prohibitions(data["prohibitions"])
+
+
+# ---------------------------------------------------------------------------
 # TRI_CROSSOVER + Run9FounderGenome（DESIGN_RUN9 §9）
 # ---------------------------------------------------------------------------
 
@@ -4246,6 +7259,146 @@ def gate_state(contract: Run9RunContract) -> str:
         if not _is_field_pinned(revalidated.intervention_take_count_field(take_field_name)):
             return "BLOCKED"
     return "READY"
+
+
+def load_pinned_probe_manifest(
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """PR #322 第6巡指摘 Fix 13（P1, 採用）の実装: `probe_manifest_sha`
+    pin の**唯一の正規消費経路**。`gate_state()` の構造述語性は変更しない
+    （PR #320 第4-5巡で確立した「gate=構造述語（PINNED/PENDING の
+    snapshot 判定）・実物照合=消費点」原則、PR #320 Fix 7 と同型の消費
+    関数方式）——`gate_state()` は引き続き pin の shape/status しか見ず、
+    実ファイルの読込・hash 照合・schema 検証は一切行わない。それらは
+    すべて本関数が呼ばれるたびに行う。
+
+    **消費契約（事前登録）**: pod フェーズの render harness は probe
+    manifest を本関数経由でのみ取得しなければならない——直接
+    `json.load(PROBE_MANIFEST_PATH)` は契約違反である。`gate_state()`
+    の READY は「`probe_manifest_sha` が PINNED 状態にある」ことの形状
+    判定に過ぎず、実ファイルが欠落・stale・改変されていないことの証明
+    ではない。同じ契約文言を `RUN9_CONTRACT.yaml` `probe_manifest_sha`
+    の reason と、manifest 自身の `render_contract.probe_manifest_
+    access_contract` にも明記する（3箇所整合）。
+
+    手順（いずれかで fail-closed）: (1) pin 欄が PINNED であること
+    (2) `manifest_path`（省略時は `PROBE_MANIFEST_PATH` を都度参照 —
+    他の read-only ローダと同じ late-binding 回避パターン）の実在
+    (3) 実バイトの raw sha256 が pin 値と厳密一致すること（stale/改変を
+    検出） (4) JSON parse (5) `validate_probe_manifest()` 全検証。
+
+    **read-once 契約（PR #322 第7巡指摘 Fix 15, 採用）**: digest と parse
+    は同一バイト列から導出する——`path.read_bytes()` で**1回だけ**読み、
+    そのバッファ `buf` から `hashlib.sha256(buf).hexdigest()`（digest）と
+    `json.loads(buf.decode("utf-8"))`（parse 対象）の両方を導出する。
+    ファイルを2回（hash 用・parse 用）に分けて読むと、可変ボリューム/
+    並行差し替え環境で「hash した版」と「parse した版」が別バイト列に
+    なり得（TOCTOU）、pin 未被覆の内容を返しながら fail-closed pin 検証
+    を主張してしまう——read-once 化によりこの乖離は構造的に不可能になる。
+    （区別: PR #321 で見送った TOCTOU 指摘は advisory sidecar 用の共有
+    列挙関数の再構造化を要し逓減領域と判定したが、本関数は pin 保証を
+    職務とする正規消費関数の単一ファイル・局所修正であり、fail-closed の
+    主張自体の整合性に関わるため採用とした。）
+
+    戻り値は検証済み manifest dict。
+
+    **in-process 改変への防御（PR #322 第16巡指摘 Fix 27, P1, 採用）**:
+    `Run9RunContract` は frozen dataclass だが `raw: Dict[str, Any]` 自体
+    はミュータブルであり、load 後に呼び出し元が
+    `contract.raw["probe_manifest_sha"]["value"]` を直接書き換えれば、
+    `RUN9_CONTRACT.yaml` の正典 pin に被覆されないバイトを本関数が
+    受理してしまい得る（render provenance が黙って汚染される）。
+    `gate_state()`（Codex bot レビュー PR #315 第2巡指摘1採用）と同一の
+    再検証パターンを適用する: 消費時点で `contract.raw` のスナップショット
+    を `load_run9_contract()` で丸ごと再検証し、pin 値は再検証済みの
+    `revalidated` 側から読む——素通しの pin 判定だけを見ていた旧実装
+    では、load 後の直接改変で fail-closed を騙る経路が残っていた。
+
+    **ディスク正典アンカー（PR #322 第17巡指摘, P1, 採用 — Fix 27 への
+    正当な追撃）**: Fix 27 の `load_run9_contract(contract.raw)` 再検証は
+    「改変後の raw の自己整合性（構造/値検証を通る形式かどうか）」しか
+    証明せず、ディスク上の正典 `RUN9_CONTRACT.yaml` との一致は証明しない
+    ——in-process で `contract.raw` を丸ごと自己無矛盾な別内容（schema-valid
+    な別の64hex sha を持つ）へ差し替える攻撃者に対しては Fix 27 単体では
+    無力だった。本関数は `contract_path`（省略時は
+    `RUN9_CONTRACT_YAML_PATH`）が指すディスク上の正典 YAML を
+    `load_run9_contract_from_yaml_path()`（`load_run9_contract_from_yaml_
+    text()` 経由——重複キー fail-closed 拒否込み）で**都度再読込**し、
+    `probe_manifest_sha` pin 欄はこのディスク再読込 contract（`disk_field`）
+    から取る——渡された `contract` 引数はもはや権威ではない。渡された
+    `contract` の pin 値（Fix 27 の自己整合性再検証を経た `passed_field`）
+    が `disk_field` と厳密一致しない場合、in-process contract オブジェクト
+    がディスク正典から乖離した改竄証拠として fail-closed で拒否する
+    （黙って無視しない）。
+
+    3層の防御構造（内側から）: (i) ディスク再読込アンカー — pin の権威は
+    常にディスク上の `RUN9_CONTRACT.yaml` (ii) 引数 `contract` との一致
+    検証 — in-process オブジェクトがディスク正典から乖離していないかを
+    fail-closed 確認 (iii) 下記 read-once バイト hash 照合（Fix 15）—
+    `probe_manifest.json` 自体の stale/改変検出。
+
+    **残余境界の正直な宣言**: 本関数が保証するのは「ディスク上の正典
+    `RUN9_CONTRACT.yaml` と `probe_manifest.json` の組に対する fail-closed
+    照合」までである。Python プロセス内で本関数自体・`load_run9_contract`・
+    `RUN9_CONTRACT_YAML_PATH` 定数を書き換えられる敵対者、あるいはディスク
+    上の `RUN9_CONTRACT.yaml`/`probe_manifest.json` 自体を書き換えられる
+    敵対者に対しては、いかなる in-process 検証も強制不能である
+    （強制可能な脅威モデルの外）。本関数の脅威モデルは「呼び出し元が
+    in-process の `Run9RunContract` オブジェクト（またはその `raw`）を
+    ディスク正典から乖離させて渡す」経路の閉塞に限定される。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("probe_manifest_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("probe_manifest_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_probe_manifest(): the passed-in contract's probe_manifest_sha pin "
+            f"({passed_field!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml pin "
+            f"({disk_field!r}) at {effective_contract_path} — an in-process Run9RunContract that "
+            "disagrees with the canonical on-disk file is treated as tampering evidence and rejected "
+            "fail-closed (PR #322 第17巡: Fix 27's self-consistency revalidation alone proves only "
+            "that a wholesale in-process substitution of contract.raw is internally well-formed, not "
+            "that it matches the canonical file)"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_probe_manifest(): probe_manifest_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned probe manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else PROBE_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_probe_manifest(): pinned probe manifest source {path} does not exist — "
+            "this function is the sole canonical access path for the probe manifest (a pod render "
+            "harness must not call json.load() on it directly); a missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（Fix 15）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_probe_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml probe_manifest_sha の pin 値 ({pinned_sha!r}) と一致しない — "
+            "stale または改変された manifest（pod checkout での欠落/改変を含む）は fail-closed で "
+            "拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(f"load_pinned_probe_manifest(): JSON parse に失敗した: {exc}") from exc
+    validate_probe_manifest(data)
+    return data
 
 
 # ---------------------------------------------------------------------------
