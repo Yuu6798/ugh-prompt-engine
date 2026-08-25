@@ -694,8 +694,15 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    c. worktree 内の `run9_dual_founder_pjs` を `sys.path` 先頭にして
       実行し、出力を worktree 外の一時パスへ書き出す（現在 checkout の
       `PRACTICE_MANIFEST_PATH` を直接上書きせず、生成に使ったコードと
-      出力先を分離する）:
-      ```python
+      出力先を分離する。Codex bot レビュー PR #323 第9巡指摘, P2, 採用,
+      Fix 9 — 旧版はコードフェンスが素の Python のままで、逐語シェル
+      実行の主張と矛盾していた（シェルが `import sys` を実行しようと
+      して構文エラーになり、出力 json が生成されず後続 checksum も
+      走らない）。`python3 - <<'EOF' … EOF`（クォート付き heredoc
+      デリミタで `$producer_rev` 等のシェル変数展開を防ぐ）へ改め、
+      そのままシェルへ貼れる形にした）:
+      ```bash
+      python3 - <<'EOF'
       import sys
       sys.path.insert(0, "/tmp/pjs_producer/voice_genesis/evolution/run9_dual_founder_pjs")
       import practice_split_builder as psb
@@ -706,6 +713,7 @@ machine-independent（実音源・実 render・実学習を要さない）次段
       )
       with open("/tmp/pjs_producer_output.json", "wb") as f:
           f.write(psb.dump_practice_split_manifest_bytes(manifest))
+      EOF
       ```
       （`expected_corpus_identity` に渡した `psb.EXPANDED_CORPUS_
       IDENTITY_SHA256` はモジュール冒頭でハードコード転記された定数

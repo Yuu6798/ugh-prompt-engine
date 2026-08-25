@@ -12,6 +12,7 @@ import inspect
 import json
 import re
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any, Dict
 
@@ -10080,3 +10081,76 @@ def test_fix323_8_readme_clarifies_dependency_closure_is_full_package_not_builde
     assert "split ロジック\n本体の同一性の証跡" in readme_text
     assert "この閉包全体を覆わない" in readme_text
     assert "コメント編集\nだけで頻繁に変わる" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第9巡指摘（P2, 採用, Fix 9）: レシピ step 4c が
+# 生の Python コードフェンスのままで、逐語シェル実行の主張と矛盾していた
+# （シェルが `import sys` を実行しようとして構文エラーになり、出力 json が
+# 生成されず後続 checksum も走らない）。`python3 - <<'EOF' … EOF` heredoc
+# 形式へ改訂し、README から step 4c のコードブロックを機械抽出して
+# (a) heredoc ラッパー構造 (b) heredoc 内 Python body の構文、を検証する
+# 回帰テストを新設した。**境界宣言**: 完全実行（275MB の PJS コーパス
+# 取得を要する）は CI では実行不能なため、本テストは構文レベルの検証に
+# 留める——完全な通し実行は本セッションの実測ログ
+# （scratchpad/pjs_r10_heredoc_rerun.txt、worktree add → heredoc python
+# 実行 → sha256sum -c OK → row_order_sha256 OK → worktree remove まで
+# 全ステップ成功）で担保する。
+# ---------------------------------------------------------------------------
+
+
+def _extract_step4c_bash_block(readme_text: str) -> str:
+    """README.md の step 4c（`python3 - <<'EOF' … EOF` を含む ```bash
+    フェンス）の中身を、Markdown のリスト項目インデント（本文の共通
+    先頭空白）を除去して返す——GitHub のレンダリングで読者が実際に目に
+    する/コピーする形と一致させる（`textwrap.dedent()`）。閉じ ``` も
+    リスト項目インデント付きで出現する（列挙の呼応点）ため、終端を
+    非貪欲パターンへ焼き込まず「```bash フェンスを全列挙し、対象の
+    heredoc マーカーを含む最初の1件を選ぶ」方式にする——フェンス記法
+    自体が壊れていれば1件も見つからずここで例外になる（抽出ロジックも
+    「実在するコードブロックを対象にしている」ことの間接検証を兼ねる）。
+    """
+    for match in re.finditer(r"```bash\n(.*?)\n[ \t]*```", readme_text, re.DOTALL):
+        block = textwrap.dedent(match.group(1))
+        if "python3 - <<'EOF'" in block:
+            return block
+    raise AssertionError("README.md に step 4c の ```bash フェンス（heredoc含む）が見つからない")
+
+
+def test_fix323_9_readme_step4c_is_heredoc_wrapped_not_raw_python_fence() -> None:
+    """README.md の step 4c が、生の Python コードフェンスではなく
+    `python3 - <<'EOF' … EOF`（クォート付きデリミタ）で包まれた実行可能
+    シェルコマンドであること。旧・生フェンス形式（```python 単体）は
+    もう存在しない。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    block = _extract_step4c_bash_block(readme_text)
+    lines = [line for line in block.splitlines() if line.strip()]
+    assert lines[0].strip() == "python3 - <<'EOF'", lines[0]
+    assert lines[-1].strip() == "EOF", lines[-1]
+    # クォート付きデリミタ（'EOF'）であること——非クォートだと $producer_rev 等の
+    # シェル変数展開がヒアドキュメント内で起きてしまう
+    assert "<<'EOF'" in block
+    # 旧・生フェンス（```python）がもう存在しないこと
+    assert "```python\n" not in readme_text
+
+
+def test_fix323_9_readme_step4c_heredoc_body_compiles_as_valid_python() -> None:
+    """README.md の step 4c heredoc 内 Python body を `compile(..., 'exec')`
+    で構文検証する（実行はしない——275MB の PJS コーパス取得を要するため
+    CI では実行不能。完全な通し実行は本セッションの実測ログで担保する
+    境界宣言）。旧版（生フェンス）は Fix 9 是正前は README 上の文字列と
+    しては元々正しい Python だったため、本テストは「heredoc 抽出ロジック
+    が実際に動く Python を取り出せていること」の直接確認として機能する
+    ——将来 heredoc 記法が壊れれば（閉じ `EOF` 欠落等）抽出結果が空/不正
+    になり compile が失敗する。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    block = _extract_step4c_bash_block(readme_text)
+    lines = block.splitlines()
+    # 先頭行（python3 - <<'EOF'）と末尾行（EOF）を除いた本体
+    body_lines = lines[1:-1]
+    assert body_lines, "heredoc 本体が空——抽出に失敗している"
+    body = "\n".join(body_lines)
+    assert "import practice_split_builder as psb" in body
+    assert "psb.build_practice_split_manifest(" in body
+    assert "psb.dump_practice_split_manifest_bytes(manifest)" in body
+    compile(body, "<readme step4c heredoc body>", "exec")  # SyntaxError なら本テストが失敗する
