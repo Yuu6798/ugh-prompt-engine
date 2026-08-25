@@ -10,7 +10,9 @@ from __future__ import annotations
 import copy
 import inspect
 import json
+import re
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any, Dict
 
@@ -3724,17 +3726,23 @@ def test_fix6_practice_split_sha_is_a_pin_field() -> None:
     assert "practice_audio_split_manifest_sha" not in m.CONTRACT_OPTIONAL_PIN_FIELDS
 
 
-def test_fix6_current_contract_practice_split_sha_is_pending(
+def test_fix6_current_contract_practice_split_sha_is_pinned(
     contract_raw: Dict[str, Any],
 ) -> None:
+    """2026-08-25 実 PJS practice split 実行により本欄は PENDING → PINNED
+    へ遷移した（`test_fix6a_practice_manifest_sha_matches_actual_file_and_
+    validates_once_pinned` が実ファイル照合・schema 検証まで事前配線済み
+    のため、本テストは現行値の形状のみを確認する軽量スナップショット）。"""
     field = contract_raw["practice_audio_split_manifest_sha"]
-    assert field["status"] == "PENDING"
-    assert field["value"] is None
+    assert field["status"] == "PINNED"
+    assert isinstance(field["value"], str)
+    assert len(field["value"]) == 64
 
 
 def test_fix6_current_contract_still_blocked(contract: m.Run9RunContract) -> None:
-    """practice_audio_split_manifest_sha 新設後も現行 RUN9_CONTRACT.yaml は正直に
-    BLOCKED のまま。"""
+    """practice_audio_split_manifest_sha が PINNED 化した後も、他の VG-L0
+    ハーネス関連欄（dataset_manifest_sha 等）が引き続き PENDING のため
+    現行 RUN9_CONTRACT.yaml は正直に BLOCKED のまま。"""
     assert m.gate_state(contract) == "BLOCKED"
 
 
@@ -4722,12 +4730,14 @@ def test_fix6a_practice_manifest_sha_matches_actual_file_and_validates_once_pinn
     と実体ファイルの突合は R9-G1（INPUT_FREEZE_AND_RIGHTS）検証ツーリング
     の職務として分離する。
 
-    現状 status は PENDING のためこのテストは「PENDING であること」だけ
-    を確認するが、将来本欄が PINNED へ昇格した瞬間、この同じテストが
-    (a) `compute_file_sha256(PRACTICE_MANIFEST_PATH)` との一致、
-    (b) `PRACTICE_MANIFEST_PATH` の内容が `validate_practice_split_
-    manifest()` を通過すること、の両方を自動的に強制するようになる
-    （テストコードの変更を要さない = 事前配線）。
+    〔履歴: 起草当時（PR #317 第6巡）は status が PENDING のためこの
+    テストは「PENDING であること」だけを確認していた——2026-08-25 実 PJS
+    practice split 実行により本欄は PINNED へ昇格し、事前配線どおり
+    このテストが自動的に (a) `compute_file_sha256(PRACTICE_MANIFEST_PATH)`
+    との一致、(b) `PRACTICE_MANIFEST_PATH` の内容が `validate_practice_
+    split_manifest()` を通過すること、の両方を強制するようになった
+    （テストコード自体は無改変 = 事前配線どおりの動作）。以下は現行
+    PINNED ブランチの検証内容。〕
     """
     field = contract_raw["practice_audio_split_manifest_sha"]
     if field["status"] == "PINNED":
@@ -9609,3 +9619,851 @@ def test_fix321_2_repo_wide_grep_finds_no_other_stale_genome_unissued_claim() ->
     for path in (CONTRACT_PATH, _RUN_DIR / "README.md"):
         text = path.read_text(encoding="utf-8")
         assert "founder genome 文書の実体未生成" not in text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第1巡指摘（P2, 採用, Fix 1）: practice_audio_
+# split_manifest_sha の PINNED 化後も、RUN9_CONTRACT.yaml ヘッダの現状
+# サマリー・README.md P1-2 節・tests/test_run9_contract.py の事前配線
+# テスト docstring が「practice manifest は未生成/PENDING」と現在形で
+# 主張し続けていた（PR #321 Fix 2 の founder genome 陳腐化と同族）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_1_practice_manifest_sha_is_pinned_not_stale_pending() -> None:
+    """`practice_audio_split_manifest_sha` は 2026-08-25 実 PJS practice
+    split 実行以降 PINNED であり、契約ヘッダ/README の「未生成/PENDING」
+    主張と矛盾していた事実の直接確認（Fix 1 の前提条件）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    contract = yaml.safe_load(contract_text)
+    field = contract["practice_audio_split_manifest_sha"]
+    assert field["status"] == "PINNED"
+    assert isinstance(field["value"], str) and len(field["value"]) == 64
+
+
+def test_fix323_1_no_stale_present_tense_practice_manifest_unissued_claim() -> None:
+    """契約ヘッダ・README に practice manifest を「未生成」「両方 PENDING
+    のまま」と現在形で主張する記述が残っていないこと（Codex bot レビュー
+    PR #323 第1巡指摘, P2, 採用, Fix 1）。過度に脆い文字列一致は避け、
+    Fix 1 が是正した具体フレーズのみを要点マーカーとして検査する。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    stale_contract_phrases = (
+        "主因は VG-L0 学習ハーネス未実装 + practice/education/learning-recipe\n"
+        "# manifest の実体未生成のみ",
+    )
+    for phrase in stale_contract_phrases:
+        assert phrase not in contract_text, (
+            f"RUN9_CONTRACT.yaml に陳腐化した practice manifest blocker 記述が残っている: {phrase!r}"
+        )
+    stale_readme_phrases = (
+        "`practice_audio_split_manifest_sha` へ改名（両方 PENDING のまま）",
+    )
+    for phrase in stale_readme_phrases:
+        assert phrase not in readme_text, (
+            f"README.md に陳腐化した practice manifest blocker 記述が残っている: {phrase!r}"
+        )
+
+
+def test_fix323_1_historical_practice_manifest_blocker_marked_superseded() -> None:
+    """是正済みの旧記述が単純削除ではなく「〔履歴: … → 解消済み〕」形式の
+    superseded 明示で保持されていること（AGENTS.md 運用: 純粋に歴史的な
+    記述は削除せず superseded 明示で保持する）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "〔履歴:" in contract_text
+    assert "実 PJS practice split 実行" in contract_text
+    assert "〔履歴:" in readme_text
+
+
+def test_fix323_1_prewired_test_docstring_reflects_pinned_branch_not_stale_pending() -> None:
+    """`test_fix6a_practice_manifest_sha_matches_actual_file_and_validates_
+    once_pinned` の docstring が、起草当時（PENDING）の現在形記述のまま
+    陳腐化していないこと（Fix 1 指摘 tests/test_run9_contract.py:4731-4736
+    該当箇所）。`inspect.getdoc()` で対象関数の docstring のみを取得する
+    ——本ファイル全体を自己参照 grep すると、この assert の文字列 literal
+    自体が誤って自己マッチしてしまうため、対象を関数 1 個の docstring へ
+    厳密に絞る。"""
+    target_doc = inspect.getdoc(
+        test_fix6a_practice_manifest_sha_matches_actual_file_and_validates_once_pinned
+    )
+    assert target_doc is not None
+    stale_docstring_phrase = "現状 status は PENDING の" + "ためこのテストは「PENDING であること」だけ"
+    assert stale_docstring_phrase not in target_doc
+    assert "PINNED へ昇格し" in target_doc
+
+
+def test_fix323_1_repo_wide_grep_finds_no_other_stale_practice_manifest_claim() -> None:
+    """RUN9_CONTRACT.yaml + README.md + run9_schema.py + practice_split_
+    builder.py を掃討し、同族の「practice manifest は未生成/PENDING の
+    まま」という現在形の残存がゼロであることを確認する（PR #323 第2巡
+    指摘, P2, 採用, Fix 2 — 走査対象を run9_schema.py/practice_split_
+    builder.py へ拡張。読み取り専用参照の gate_synth.py/score.py/
+    phoneme_jp.py、凍結文書 = DESIGN_*.md・POR/DERIVED txt・inputs/*.json
+    の既存ファイル・domains/・founders/・evaluation/probe_manifest.json は
+    対象外）。"""
+    stale_markers = (
+        "practice manifest は未生成",
+        "practice manifest は引き続き PENDING",
+        "practice split manifest は未生成",
+    )
+    swept_paths = (
+        CONTRACT_PATH,
+        _RUN_DIR / "README.md",
+        _RUN_DIR / "run9_schema.py",
+        _RUN_DIR / "practice_split_builder.py",
+    )
+    for path in swept_paths:
+        text = path.read_text(encoding="utf-8")
+        for marker in stale_markers:
+            assert marker not in text, f"{path.name} に陳腐化した記述が残っている: {marker!r}"
+
+    # PR #323 第4巡指摘（P2, 採用, Fix 4）: 「両欄名併記 + PENDING の
+    # 現時点」パターン（例: RUN9_CONTRACT.yaml:855-856 の PR #322 第20巡
+    # repin 履歴）は、practice 側 PINNED 化後に読者が「現時点」を執筆時点
+    # ではなく現在と誤読しうる。append-only 規約により原文（履歴記録）は
+    # 書き換えないため単純不在チェックにはできない——このパターンが検出
+    # されたら、その直後に supersede 注記（`〔履歴注記` または `〔履歴:`
+    # + 2026-08-25 の日付）が存在することを要求する条件付き検査とする
+    # （存在しないまま放置されている＝新規/未 supersede の stale 主張と
+    # して拒否）。
+    two_pin_pending_present_tense = re.compile(
+        r"practice_audio_split_manifest_sha.{0,80}education_technique_lesson_manifest_sha"
+        r".{0,40}PENDING.{0,10}現時点",
+        re.DOTALL,
+    )
+    for path in swept_paths:
+        text = path.read_text(encoding="utf-8")
+        for match in two_pin_pending_present_tense.finditer(text):
+            # supersede 注記は原文の直前（quote を開く形）か直後（追記形）
+            # のいずれの配置もあり得るため、前後 400 文字を合わせて検査する
+            # （前方: run9_schema.py の `〔履歴: 当初は「…」と記していたが、
+            # 2026-08-25…` 型／後方: RUN9_CONTRACT.yaml の「原文の後に
+            # `〔履歴注記 2026-08-25…〕` を追記」型）。
+            context = text[max(0, match.start() - 400) : match.end() + 400]
+            has_supersede_marker = "履歴注記" in context or "〔履歴" in context
+            assert has_supersede_marker and "2026-08-25" in context, (
+                f"{path.name} に「両欄名併記 + PENDING の現時点」パターンが supersede "
+                f"注記なしで残っている（match={match.group()!r}）"
+            )
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第2巡指摘（P2, 採用, Fix 2）: 第1巡 sweep
+# （test_fix323_1_repo_wide_grep_finds_no_other_stale_practice_manifest_
+# claim、当時は CONTRACT_PATH/README のみ走査）が run9_schema.py:4296-4298
+# / 4314-4316 の同族 stale コメント（「practice_audio_split_manifest_sha/
+# education_technique_lesson_manifest_sha は共に PENDING」現在形）を見逃して
+# いた。第1巡と同じく、コメントのみを是正しロジック・凍結表・定数値は
+# 一切変更しない（`_P5_DEFERRED_VERIFICATION_BLOCKED_BY` の2欄列挙は
+# 「probe manifest 発行時点の凍結宣言」として正当なまま不変）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_2_run9_schema_comment_reflects_practice_pinned_education_pending() -> None:
+    """run9_schema.py の `_P5_DEFERRED_VERIFICATION_BLOCKED_BY` 周辺コメント
+    が、practice 側は 2026-08-25 実 PJS 実行で PINNED 化済み・education 側は
+    引き続き PENDING という現行の非対称状態を正確に記述していること。"""
+    schema_text = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert "2026-08-25 実 PJS practice split" in schema_text
+    assert "practice_audio_split_manifest_sha` は PINNED 化された" in schema_text
+    assert "education_technique_lesson_manifest_sha` が依然 PENDING" in schema_text
+
+
+def test_fix323_2_run9_schema_historical_stale_comment_marked_superseded() -> None:
+    """是正済みの旧コメントが単純削除ではなく「〔履歴: … → 解消済み〕」
+    相当の superseded 明示で保持されていること（AGENTS.md 運用: 純粋に
+    歴史的な記述は削除せず superseded 明示で保持する。第1巡 Fix 1・PR #321
+    Fix 2 と同じ規約）。"""
+    schema_text = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert schema_text.count("〔履歴:") >= 2
+    assert "stale になった" in schema_text
+
+
+def test_fix323_2_frozen_probe_manifest_blocked_by_untouched_after_schema_comment_fix() -> None:
+    """凍結済み `evaluation/probe_manifest.json`（sha pin 済み）は本 Fix で
+    一切改変されていないこと——`blocked_by` が practice/education 両欄を
+    列挙し続けるのは「probe manifest 発行時点の凍結宣言」として正当で
+    あり、practice 側が事後に PINNED 化されたことは凍結済み manifest の
+    改変理由にならない（RUN9_CONTRACT.yaml `probe_manifest_sha` pin 値との
+    一致がこのテストの実体保証——凍結境界の直接確認）。"""
+    probe_manifest_path = _RUN_DIR / "evaluation" / "probe_manifest.json"
+    field = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))["probe_manifest_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(probe_manifest_path)
+    manifest_data = json.loads(probe_manifest_path.read_text(encoding="utf-8"))
+    p5 = next(p for p in manifest_data["probes"] if p["probe_id"] == "P5")
+    assert set(p5["deferred_verification"]["blocked_by"]) == {
+        "practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha",
+    }
+
+
+def test_fix323_2_p5_deferred_verification_blocked_by_constant_unchanged() -> None:
+    """Fix 2 はコメントのみの変更であり、`_P5_DEFERRED_VERIFICATION_
+    BLOCKED_BY`（凍結集合の実体）自体は変更していないことの直接確認。"""
+    assert m._P5_DEFERRED_VERIFICATION_BLOCKED_BY == frozenset(
+        {"practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha"}
+    )
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第3巡指摘（P2, 部分採用, Fix 3）: README.md の
+# practice split 「分類訂正」記述（次フェーズ節）が、権限根拠を示さずに
+# CLAUDE.md:71-75 の一般分類（実音源 = マシン依存 = Codex/User）を上書き
+# して見え、後続セッションへ規約違反を指示しうるという懸念——正当なため
+# 採用。ただし再分類そのものの削除は不採用（2026-08-25 本 PR セッション
+# 中の User 裁定による scoped 事実であり、削除は逆方向の汚染）。採った
+# 対応は出所（User 裁定）と適用範囲（practice_audio_split_manifest 生成
+# のみ・2条件）の明記。CLAUDE.md/AGENTS.md 自体は本 Fix で改変しない
+# （一般政策の改訂は User 権限 — 境界宣言）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_3_readme_practice_scoped_exception_has_user_decision_provenance() -> None:
+    """README.md の practice split scoped 例外記述に、出所（User 裁定・
+    2026-08-25）を示す provenance マーカーが存在すること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "User 裁定" in readme_text
+    assert "2026-08-25" in readme_text
+    assert "scoped 例外" in readme_text
+
+
+def test_fix323_3_readme_practice_scoped_exception_states_claude_md_classification_unchanged() -> None:
+    """README.md が、CLAUDE.md の一般分類（実音源 = マシン依存 =
+    Codex/User）は不変のままであり、本節がそれを上書きする一般規則では
+    ないことを明記していること（Codex bot レビュー PR #323 第3巡指摘の
+    核心 — 権限根拠なき上書きに見えることの是正）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "CLAUDE.md:71-75 の一般分類は不変" in readme_text
+    assert "一般政策の改訂自体は User 権限" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第4巡指摘（P2, 採用, Fix 4）: RUN9_CONTRACT.yaml
+# の PR #322 第20巡 repin 履歴ブロック（855-856行）「practice_audio_split_
+# manifest_sha/education_technique_lesson_manifest_sha が PENDING の
+# 現時点ではこの分離検証は実行不能」——第2巡では「日付明記済み過去記録」
+# として無修正と判定したが、「現時点」という語が記録執筆時点か現在かを
+# 曖昧にし読者が誤読しうるという新しい具体経路の指摘で採用に転じた。
+# append-only 規約（第2巡返信で自ら宣言済み）を守り、原文（855-858行）は
+# 一切書き換えず、直後に supersede 注記コメントを追記のみした。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_4_contract_two_pin_pending_claim_has_supersede_annotation() -> None:
+    """RUN9_CONTRACT.yaml の PR #322 第20巡 repin 履歴ブロック直後に、
+    「現時点」の曖昧性を是正する 2026-08-25 付 supersede 注記が実在する
+    こと（原文は書き換えず追記のみ — append-only 規約の直接確認）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert "PENDING の現時点ではこの分離検証は実行不能" in contract_text  # 原文は不変
+    assert "履歴注記 2026-08-25" in contract_text
+    assert "本 repin 記録の執筆時点（PR #322 第20巡）を指す" in contract_text
+    assert "education_technique_lesson_\n# manifest_sha は引き続き PENDING" in contract_text
+
+
+def test_fix323_4_repo_wide_two_pin_pending_pattern_all_supersede_or_absent() -> None:
+    """`test_fix323_1_repo_wide_grep_finds_no_other_stale_practice_manifest_
+    claim` が実装した条件付き検査（「両欄名併記 + PENDING の現時点」パター
+    ンが見つかった場合、直後に 2026-08-25 supersede 注記が存在すること）
+    を、走査対象全ファイルに対して独立に直接実行し、少なくとも1件
+    （RUN9_CONTRACT.yaml の当該箇所）が実際に検出・supersede 確認されて
+    いること（検査ロジック自体が「一致ゼロで常に pass する」空振りテスト
+    になっていないことの確認）。"""
+    pattern = re.compile(
+        r"practice_audio_split_manifest_sha.{0,80}education_technique_lesson_manifest_sha"
+        r".{0,40}PENDING.{0,10}現時点",
+        re.DOTALL,
+    )
+    swept_paths = (
+        CONTRACT_PATH,
+        _RUN_DIR / "README.md",
+        _RUN_DIR / "run9_schema.py",
+        _RUN_DIR / "practice_split_builder.py",
+    )
+    total_matches = 0
+    for path in swept_paths:
+        text = path.read_text(encoding="utf-8")
+        for match in pattern.finditer(text):
+            total_matches += 1
+            context = text[max(0, match.start() - 400) : match.end() + 400]
+            has_supersede_marker = "履歴注記" in context or "〔履歴" in context
+            assert has_supersede_marker and "2026-08-25" in context, (
+                f"{path.name} に supersede 注記なしのパターンが残っている"
+            )
+    assert total_matches >= 1, (
+        "パターンが一件も検出されなかった — 検査ロジックが実際に機能して"
+        "いることを確認できない（空振りテストの疑い）"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第5巡指摘（P2, 採用, Fix 5）: README の
+# practice split 節は再現可能と主張しながら、fresh checkout の読者が
+# 実行できる逐語レシピ（取得コマンド・sha 検証・展開・builder 呼び出し・
+# 直列化・出力 sha 照合）を示していなかった。producer script を別途 pin
+# せよという提案は、producer（practice_split_builder.py）が manifest と
+# 同一リポジトリ・同一コミットで版管理され、identity 定数がモジュール内
+# ハードコードで fail-closed 照合されることを理由に「追加機構不要」と
+# 整理し、README にその論理を明記した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_5_readme_has_verbatim_executable_recipe_commands() -> None:
+    """README.md の practice split 節に、取得（gdown）・sha 検証・展開
+    （unzip）・生成（build_practice_split_manifest 呼び出し）の逐語
+    コマンドが実在すること。sha 検証コマンドは PR #323 第7巡 Fix 7a で
+    `sha256sum -c -`（不一致を非零 exit で検出する形）へ改訂済み——
+    旧形式（素の `sha256sum FILE` 併記コメント）はもう存在しない。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "再現レシピ" in readme_text
+    assert "gdown.download(" in readme_text
+    # Fix 11（第11巡, P2, 採用）で zip 検証対象が $workdir 内へ移動
+    assert (
+        '683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca  '
+        '$workdir/PJS_corpus_ver1.1.zip" | sha256sum -c -'
+    ) in readme_text
+    assert 'unzip -q "$workdir/PJS_corpus_ver1.1.zip" -d "$workdir/extracted"' in readme_text
+    assert "psb.build_practice_split_manifest(" in readme_text
+    assert "expected_corpus_identity=psb.EXPANDED_CORPUS_IDENTITY_SHA256" in readme_text
+    assert "psb.dump_practice_split_manifest_bytes(manifest)" in readme_text
+
+
+def test_fix323_5_readme_recipe_pins_both_output_hashes() -> None:
+    """README.md のレシピが、manifest 実バイトの sha256（契約 pin 値）と
+    row_order_sha256 の両方を照合対象として明記していること——契約 pin
+    値との一致は builder 呼び出しだけでは自動確認されないため、レシピ
+    自体に照合手順が要る。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6" in readme_text
+    assert "6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a" in readme_text
+
+
+def test_fix323_5_readme_states_producer_pin_needs_no_extra_mechanism() -> None:
+    """README.md が、producer（practice_split_builder.py）の版管理・
+    identity 定数ハードコード・fail-closed 照合という既存構造が producer
+    pin として機能する旨——別途 producer pin 機構は不要という整理——を
+    明記していること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "producer pin の意味論" in readme_text
+    assert "同一リポジトリ・同一コミットで版管理" in readme_text
+    assert "この構造自体が producer" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第6巡指摘（P2, 採用, Fix 6）: 第5巡の整理
+# 「生成コミット自体が producer pin」は、その生成コミットの具体値を
+# README に記録していなかったため、後日 checkout の読者は `git rev-parse
+# HEAD` が現在のコミットを返すだけで、pin 済みバイトを作った実装を
+# 特定・再実行できないという残欠陥だった（第5巡整理の未完部分を突く
+# 新しい具体経路）。生成コミット全 40hex・汎用の特定手順（`git log
+# --follow`）・生成時点の builder sha256 を README に記録した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_6_readme_records_generating_commit_and_git_log_follow_recipe() -> None:
+    """README.md の producer pin 節に、生成コミットの全 40hex sha と、
+    今後 producer が変わっても通用する `git log --follow` による汎用の
+    特定手順が記載されていること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "producer revision の具体記録" in readme_text
+    assert "bf056ae635b2435e6888b85091c65626a9b0e3a3" in readme_text
+    assert (
+        "git log --follow -- voice_genesis/evolution/run9_dual_founder_pjs/"
+        "inputs/practice_audio_split_manifest.json"
+    ) in readme_text
+
+
+def test_fix323_6_readme_builder_sha_matches_actual_file() -> None:
+    """README.md に記載された生成時点の `practice_split_builder.py`
+    sha256 が、現在のリポジトリ実ファイルの実測 sha256 と一致すること
+    ——**fail-closed 配線**: `practice_split_builder.py` が将来変更
+    されると本テストが赤くなり、README の producer 記録（生成コミット
+    sha・builder sha256）を同じ PR で同時更新する repin 手続きを機械
+    強制する（更新を怠って README の記録だけが stale になることを防ぐ
+    ための直接照合であり、単なる存在確認ではない）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    recorded_sha = "894451c953d5eb5b50448687480ede9b7b808c8c2c620a97b63978704e37d479"
+    assert recorded_sha in readme_text
+    actual_sha = m.compute_file_sha256(_RUN_DIR / "practice_split_builder.py")
+    assert actual_sha == recorded_sha, (
+        "practice_split_builder.py が変更されたが README.md の producer 記録"
+        f"（builder sha256）が追随していない: recorded={recorded_sha!r} "
+        f"actual={actual_sha!r} — この PR で README を repin として更新すること"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第7巡2件の対応（Fix 7a: 採用 / Fix 7b: 部分採用）
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_7a_readme_checksum_steps_use_sha256sum_dash_c_not_bare_print() -> None:
+    """README.md の practice split レシピの sha 検証手順（zip archive /
+    manifest / row_order_sha256）が、非対話実行でも不一致を非零 exit で
+    検出する形（`sha256sum -c -` または python `assert`）を使っている
+    こと——旧形式（素の `sha256sum FILE` と期待値コメント併記のみ）は
+    ファイルが読める限り常に exit 0 を返し、誤った archive の展開・
+    誤った manifest の書き出しが成功として進んでしまう致命的欠陥だった
+    （Codex bot レビュー PR #323 第7巡指摘, P2, 採用, Fix 7a）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    # Fix 11（第11巡, P2, 採用）で zip 検証対象が $workdir 内へ移動
+    assert (
+        'echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca'
+        '  $workdir/PJS_corpus_ver1.1.zip" | sha256sum -c -'
+    ) in readme_text
+    assert (
+        'echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6'
+        '  $workdir/output.json" | sha256sum -c -'
+    ) in readme_text
+    assert "assert d['row_order_sha256'] ==" in readme_text
+    # 旧・非 fail-closed 形式（コメント併記のみ）が残っていないこと
+    assert "sha256sum PJS_corpus_ver1.1.zip\n" not in readme_text
+
+
+def test_fix323_7b_readme_downgrades_pr_commit_to_attestation_and_prioritizes_git_log_follow() -> None:
+    """README.md が、PR 側生成コミット `bf056ae…` を「checkout 保証付きの
+    再現パス」ではなく「生成イベントの attestation（証跡）」へ明示的に
+    降格し、実行可能な第一の再現ポインタとして `git log --follow`
+    （マージ方式に依存せず常に有効）を優先していること（Codex bot
+    レビュー PR #323 第7巡指摘, P2, 部分採用, Fix 7b — 核心＝checkout
+    可能性はマージ方式依存という指摘は採用。「reviewed commit の祖先で
+    ない」という副次的主張は事実誤認として返信で訂正済み）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "第一の再現ポインタ" in readme_text
+    assert "attestation（証跡・降格記録）" in readme_text
+    assert "squash merge" in readme_text and "merge commit" in readme_text
+    # 「第一の再現ポインタ」節が「生成イベントの attestation」節より先に出現すること
+    assert readme_text.index("第一の再現ポインタ") < readme_text.index("attestation（証跡・降格記録）")
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第8巡指摘（P2, 採用, Fix 8）: レシピ step 4 は
+# 現在 checkout の run9_schema.py を import しており、_song_score()/
+# assign_split() が消費する LEARNING_SEED や検証ロジックが producer
+# revision と異なり得る。記録・照合済みの producer sha は
+# practice_split_builder.py 単体のみで、run9_schema.py 側の変更では
+# test_fix323_6_readme_builder_sha_matches_actual_file が green のまま
+# レシピが pin バイトを再現できなくなる欠陥だった。是正方式は指摘の
+# 第1選択肢「producer tree からの実行」（git worktree）を採用——第2選択肢
+# （依存閉包の全ファイル sha pin）は run9_schema.py がコメント編集で頻繁に
+# 変わり（本 PR の Fix 2 が実例）脆いため不採用。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_8_readme_recipe_executes_from_producer_tree_via_git_worktree() -> None:
+    """README.md のレシピ step 4 が、`git log --follow` で特定した
+    producer revision を `git worktree add` で実際に checkout し、その
+    worktree 内の `practice_split_builder.py`/`run9_schema.py`（依存閉包
+    全体）から実行する逐語コマンドを含んでいること——現在 checkout の
+    `run9_schema.py` を import する旧手順（`LEARNING_SEED`/検証ロジック
+    の producer revision との差異を見逃す）ではないことの確認。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "producer tree で実行" in readme_text
+    # Fix 10b（第10巡, P1, 採用）で固定パス /tmp/pjs_producer から
+    # mktemp -d ベースの衝突安全パス（$workdir/producer_tree）へ移行済み
+    assert 'git worktree add "$workdir/producer_tree" "$producer_rev"' in readme_text
+    assert 'git worktree remove "$workdir/producer_tree"' in readme_text
+    assert (
+        'sys.path.insert(0, os.path.join(workdir, "producer_tree", '
+        '"voice_genesis", "evolution", "run9_dual_founder_pjs"))'
+    ) in readme_text
+    # Fix 12（第12巡, P2, 採用）で in-place 近道注記（省略可能扱い）を
+    # 撤去済み——worktree 手順は常に実行する単一経路であることの確認
+    assert "in-place 実行が等価" not in readme_text
+    assert "本手順は現在 checkout が producer revision と一致している場合" in readme_text
+    assert "でも省略せずそのまま実行する" in readme_text
+
+
+def test_fix323_8_readme_clarifies_dependency_closure_is_full_package_not_builder_alone() -> None:
+    """README.md の producer pin 意味論節が、依存閉包は
+    `practice_split_builder.py` 単体ではなく producer revision 時点の
+    `run9_dual_founder_pjs/` パッケージ全体であり、builder sha256 記録は
+    「split ロジック本体の同一性の証跡」に過ぎず閉包全体を覆わないことを
+    明記していること。閉包全体を pin する手段として、依存ファイル個別の
+    sha pin 方式ではなく producer tree 実行を選んだ理由（run9_schema.py
+    がコメント編集で頻繁に変わり脆いこと、本 PR の Fix 2 が実例）も
+    明記されていること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "依存閉包の範囲" in readme_text
+    assert "split ロジック\n本体の同一性の証跡" in readme_text
+    assert "この閉包全体を覆わない" in readme_text
+    assert "コメント編集\nだけで頻繁に変わる" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第9巡指摘（P2, 採用, Fix 9）: レシピ step 4c が
+# 生の Python コードフェンスのままで、逐語シェル実行の主張と矛盾していた
+# （シェルが `import sys` を実行しようとして構文エラーになり、出力 json が
+# 生成されず後続 checksum も走らない）。`python3 - <<'EOF' … EOF` heredoc
+# 形式へ改訂し、README から step 4c のコードブロックを機械抽出して
+# (a) heredoc ラッパー構造 (b) heredoc 内 Python body の構文、を検証する
+# 回帰テストを新設した。**境界宣言**: 完全実行（275MB の PJS コーパス
+# 取得を要する）は CI では実行不能なため、本テストは構文レベルの検証に
+# 留める——完全な通し実行は本セッションの実測ログ
+# （scratchpad/pjs_r10_heredoc_rerun.txt、worktree add → heredoc python
+# 実行 → sha256sum -c OK → row_order_sha256 OK → worktree remove まで
+# 全ステップ成功）で担保する。
+# ---------------------------------------------------------------------------
+
+
+def _extract_step4c_bash_block(readme_text: str) -> str:
+    """README.md の step 4c（`python3 - <<'EOF' … EOF` を含む ```bash
+    フェンス）の中身を、Markdown のリスト項目インデント（本文の共通
+    先頭空白）を除去して返す——GitHub のレンダリングで読者が実際に目に
+    する/コピーする形と一致させる（`textwrap.dedent()`）。閉じ ``` も
+    リスト項目インデント付きで出現する（列挙の呼応点）ため、終端を
+    非貪欲パターンへ焼き込まず「```bash フェンスを全列挙し、対象の
+    heredoc マーカーを含む最初の1件を選ぶ」方式にする——フェンス記法
+    自体が壊れていれば1件も見つからずここで例外になる（抽出ロジックも
+    「実在するコードブロックを対象にしている」ことの間接検証を兼ねる）。
+    """
+    for match in re.finditer(r"```bash\n(.*?)\n[ \t]*```", readme_text, re.DOTALL):
+        block = textwrap.dedent(match.group(1))
+        if "python3 - <<'EOF'" in block:
+            return block
+    raise AssertionError("README.md に step 4c の ```bash フェンス（heredoc含む）が見つからない")
+
+
+def test_fix323_9_readme_step4c_is_heredoc_wrapped_not_raw_python_fence() -> None:
+    """README.md の step 4c が、生の Python コードフェンスではなく
+    `python3 - <<'EOF' … EOF`（クォート付きデリミタ）で包まれた実行可能
+    シェルコマンドであること。旧・生フェンス形式（```python 単体）は
+    もう存在しない。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    block = _extract_step4c_bash_block(readme_text)
+    lines = [line for line in block.splitlines() if line.strip()]
+    assert lines[0].strip() == "python3 - <<'EOF'", lines[0]
+    assert lines[-1].strip() == "EOF", lines[-1]
+    # クォート付きデリミタ（'EOF'）であること——非クォートだと $producer_rev 等の
+    # シェル変数展開がヒアドキュメント内で起きてしまう
+    assert "<<'EOF'" in block
+    # 旧・生フェンス（```python）がもう存在しないこと
+    assert "```python\n" not in readme_text
+
+
+def test_fix323_9_readme_step4c_heredoc_body_compiles_as_valid_python() -> None:
+    """README.md の step 4c heredoc 内 Python body を `compile(..., 'exec')`
+    で構文検証する（実行はしない——275MB の PJS コーパス取得を要するため
+    CI では実行不能。完全な通し実行は本セッションの実測ログで担保する
+    境界宣言）。旧版（生フェンス）は Fix 9 是正前は README 上の文字列と
+    しては元々正しい Python だったため、本テストは「heredoc 抽出ロジック
+    が実際に動く Python を取り出せていること」の直接確認として機能する
+    ——将来 heredoc 記法が壊れれば（閉じ `EOF` 欠落等）抽出結果が空/不正
+    になり compile が失敗する。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    block = _extract_step4c_bash_block(readme_text)
+    lines = block.splitlines()
+    # 先頭行（python3 - <<'EOF'）と末尾行（EOF）を除いた本体
+    body_lines = lines[1:-1]
+    assert body_lines, "heredoc 本体が空——抽出に失敗している"
+    body = "\n".join(body_lines)
+    assert "import practice_split_builder as psb" in body
+    assert "psb.build_practice_split_manifest(" in body
+    assert "psb.dump_practice_split_manifest_bytes(manifest)" in body
+    compile(body, "<readme step4c heredoc body>", "exec")  # SyntaxError なら本テストが失敗する
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第10巡3件（P1/P2, 全採用, Fix 10a/10b/10c）:
+# Fix 10a — レシピを一括シェル実行した場合、`sha256sum -c` の非零 exit が
+# 後続ステップを止めない（偽成功経路）。Fix 10b（P1）— 固定パス
+# `/tmp/pjs_producer`・`/tmp/pjs_producer_output.json` は中断/並行実行で
+# 衝突する。Fix 10c — `--depth 1` 等の shallow clone では `git log
+# --follow` が shallow 境界を返し「常に有効」の主張と矛盾する。
+# 本巡で bot レビュー対応の上限10巡（CLAUDE.md 規約）に到達したため、
+# 各返信の末尾にその旨と以降の採否方針を明記した（本ファイル内の
+# コメントとしても記録: 以降の巡では実コード被害/将来汚染/致命的バグの
+# 新しい具体経路を示す指摘のみ採用し、その他は境界宣言として未対応
+# リストへまとめ User のマージ判断へ委ねる）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_10a_readme_recipe_has_errexit_preamble_and_explicit_exit_on_checksum() -> None:
+    """README.md のレシピが、一括実行時の前提として `set -euo pipefail`
+    を明示し、かつ zip/manifest の `sha256sum -c -` 双方に `|| exit 1`
+    を併記していること（`set -e` の実行し忘れに対する二重の安全策）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    # Fix 11（第11巡）で workdir 作成をこのプリアンブルへ集約したため、
+    # `set -euo pipefail` ブロックには `workdir=`/`export` 行も同居する
+    assert "```bash\nset -euo pipefail\nworkdir=" in readme_text
+    assert (
+        'echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca'
+        '  $workdir/PJS_corpus_ver1.1.zip" | sha256sum -c - || exit 1'
+    ) in readme_text
+    assert (
+        'echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6'
+        '  $workdir/output.json" | sha256sum -c - || exit 1'
+    ) in readme_text
+
+
+def test_fix323_10b_readme_recipe_uses_mktemp_workdir_not_fixed_tmp_paths() -> None:
+    """README.md のレシピが、衝突しうる固定パス（`/tmp/pjs_producer`・
+    `/tmp/pjs_producer_output.json`）ではなく `mktemp -d` による一意な
+    作業ディレクトリを使っていること。heredoc は Fix 9 のクォート付き
+    デリミタ（`<<'EOF'`）を維持したまま、出力先パスは環境変数
+    `PJS_WORKDIR`（`export` + `os.environ`）経由で heredoc 内へ渡して
+    いる——heredoc 内でのシェル変数展開に頼っていないことも確認する。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert 'workdir="$(mktemp -d)"' in readme_text
+    assert 'export PJS_WORKDIR="$workdir"' in readme_text
+    assert 'workdir = os.environ["PJS_WORKDIR"]' in readme_text
+    assert 'rm -rf "$workdir"' in readme_text
+    # 旧・固定パスへの実行コマンドがもう存在しないこと（Fix 10b の説明文
+    # 内で経緯として言及されるのは許容——実行コマンドの形での残存のみ拒否）
+    assert "git worktree add /tmp/pjs_producer" not in readme_text
+    assert "git worktree remove /tmp/pjs_producer" not in readme_text
+    assert '"/tmp/pjs_producer_output.json"' not in readme_text
+    # heredoc 本体が引き続きクォート付きデリミタであること（Fix 9 維持）
+    block = _extract_step4c_bash_block(readme_text)
+    assert block.splitlines()[0].strip() == "python3 - <<'EOF'"
+
+
+def test_fix323_10c_readme_step4a_guards_against_shallow_clone() -> None:
+    """README.md の step 4a が、`git rev-parse --is-shallow-repository`
+    による shallow 判定 + `git fetch --unshallow` の逐語コマンドを含み、
+    「第一の再現ポインタ」の「常に有効」表記が「完全履歴の checkout で
+    常に有効」へ精密化されていること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert 'git rev-parse --is-shallow-repository' in readme_text
+    assert "git fetch --unshallow" in readme_text
+    assert "完全履歴の\n  checkout で常に有効" in readme_text
+    # 精密化前の無条件「常に有効」（括弧内の単独表記）がもう残っていないこと
+    assert "汎用手順、常に有効）" not in readme_text
+
+
+def test_fix323_10_replies_document_10_round_cap_reached() -> None:
+    """本ファイル（このコメントブロック自体）が、bot レビュー対応の上限
+    10巡（CLAUDE.md 規約）に到達した旨を記録していること——返信本文側の
+    記録は投稿時に別途確認する対象のため、ここではソース側の記録の存在
+    のみを直接確認する。"""
+    self_text = Path(__file__).read_text(encoding="utf-8")
+    assert "上限10巡" in self_text
+    assert "CLAUDE.md 規約" in self_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第11巡1件（P2, 上限超過後だが3分類の新しい
+# 具体経路として採用, Fix 11）: レシピは repo root での実行を要求
+# （step 4a の repo 相対 `git log` パス）しながら、zip 取得（旧 step 1）と
+# 展開（旧 step 3）を CWD 直下に書いていたため、成功のたびに 275MB の
+# 実音源が checkout 内へ untracked のまま残っていた——「実 PJS 音源・
+# 展開物は repo 配下へ置いていない」という同 README の宣言と矛盾し、
+# 後続コミットへの実音源混入（権利面でも汚染）リスクがあった。
+# workdir 作成をレシピ冒頭へ集約し、取得・展開・生成・照合のすべての
+# データを `$workdir` 側へ閉じ込めることで解消した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_11_readme_workdir_created_before_download_step() -> None:
+    """README.md のレシピが、`workdir="$(mktemp -d)"` をステップ列（取得
+    ステップ）より前のプリアンブルで作成し、取得（gdown 出力先）・検証・
+    展開（unzip 展開先）のいずれもリポジトリ CWD 直下の裸パスではなく
+    `$workdir`/`$PJS_WORKDIR` 配下を参照していること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    preamble_idx = readme_text.index('workdir="$(mktemp -d)"')
+    download_idx = readme_text.index("gdown.download(")
+    assert preamble_idx < download_idx, (
+        "workdir の作成がステップ1（取得）より後にある——repo root 直下への"
+        "書き込みを避けるには取得の前に作成されていなければならない"
+    )
+    assert "output='$PJS_WORKDIR/PJS_corpus_ver1.1.zip'" in readme_text
+    assert 'unzip -q "$workdir/PJS_corpus_ver1.1.zip" -d "$workdir/extracted"' in readme_text
+    assert (
+        'os.path.join(workdir, "extracted", "PJS_corpus_ver1.1")'
+    ) in readme_text
+
+
+def test_fix323_11_readme_no_bare_cwd_writes_for_zip_or_extraction() -> None:
+    """README.md のレシピに、CWD 直下の裸パス（`output='PJS_corpus_
+    ver1.1.zip'` や `unzip ... PJS_corpus_ver1.1.zip -d extracted`、
+    生成入力の裸 `"extracted/PJS_corpus_ver1.1"`）への書き込みコマンドが
+    もう存在しないこと——旧版はこれらの裸パスへ実際に書き込むことで、
+    成功のたびに 275MB の実音源が checkout 内へ untracked のまま残る
+    経路になっていた。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "output='PJS_corpus_ver1.1.zip'" not in readme_text
+    assert "unzip -q PJS_corpus_ver1.1.zip -d extracted" not in readme_text
+    assert '"extracted/PJS_corpus_ver1.1"' not in readme_text
+    # 最終 cleanup が $workdir 一括削除であり、zip/展開物/worktree 出力の
+    # すべてがこの1コマンドに含まれる旨の説明が存在すること
+    assert 'rm -rf "$workdir"' in readme_text
+    assert "zip・展開コーパス・\n   worktree 出力" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第12巡1件（P2, 上限超過後だが3分類の新しい
+# 具体経路として採用, Fix 12）: Fix 8（第8巡）で導入した「現在 checkout
+# が producer revision と一致する場合は in-place 実行が等価であり
+# worktree 手順は省略してよい」という近道注記が、第9〜11巡の改訂
+# （heredoc 化・`$workdir` 集約）後も残っていたが、step 4c/4d は無条件に
+# `$workdir/producer_tree/...` を参照するため、近道に従った読者は
+# `ModuleNotFoundError`（4c）/存在しない worktree への `remove` 失敗
+# （4d）に陥る——文書化された近道が実行不能という致命的バグ類型の新しい
+# 具体経路。worktree 手順自体は checkout が producer revision と一致
+# していても問題なく動作するため、in-place 代替2系統を維持する価値が
+# なく、近道の撤去（単一経路への一本化）を選んだ。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_12_readme_in_place_shortcut_removed_worktree_step_mandatory() -> None:
+    """README.md から Fix 8 が導入した in-place 近道注記（省略可能扱い）
+    が撤去され、worktree 手順（`git worktree add`）が現在 checkout の
+    状態に関わらず常に実行される単一経路であることを明記した文へ
+    置き換わっていること。撤去理由は `〔履歴:〕` 形式で保持されている
+    こと（AGENTS.md 運用: 純粋に歴史的な記述は削除せず superseded 明示で
+    保持する）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    # 旧・近道注記の決定的フレーズ（改行なし連続文字列）が本文として
+    # 残っていないこと——同フレーズは下記〔履歴:〕引用内にのみ改行を挟んで
+    # 分割再掲されるため、この形での不在確認は歴史的引用と現在の本文を
+    # 正しく区別する。
+    assert "in-place 実行が等価" not in readme_text
+    assert (
+        "**本手順は現在 checkout が producer revision と一致している場合\n"
+        "      でも省略せずそのまま実行する**——分岐は不要"
+    ) in readme_text
+    assert "〔履歴: Fix 8（第8巡）で" in readme_text
+    assert "第12巡で解消〕" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第13巡1件（P2, 上限超過後だが3分類の新しい
+# 具体経路として採用, Fix 13）: clean Python 環境でレシピを逐語実行すると、
+# 「取得」ステップの説明が `gdown` の導入のみを案内する一方、step 4c が
+# import する `practice_split_builder`（→ `run9_schema`）の依存
+# （numpy / PyYAML）を導入する手順が存在しなかった。読者は展開まで完走した
+# 後で初めて `ModuleNotFoundError` に遭遇し、依存導入が必要だったことを
+# 逆算しなければならない——依存欠落による文書化フローの実行不能という
+# 致命的バグ類型の新しい具体経路（Fix 12 の「近道注記の撤去」とは独立の
+# 欠陥）。producer tree の実ソースを確認し（practice_split_builder.py の
+# top-level import は numpy のみ、run9_schema.py の top-level import は
+# PyYAML のみ、librosa は acoustic inventory sidecar 専用の関数内
+# import で本レシピの生成経路には現れない）、README プリアンブルへ
+# 「推奨: `pip install -e ".[dev]"`」「代替（最小）: `pip install numpy
+# pyyaml gdown`」の2段構え依存導入ステップを明記した。venv でのクリーン
+# 環境実測（依存導入前は ModuleNotFoundError、導入後は生成 + sha 一致まで
+# 成功）を本セッションで実施済み（scratchpad/pjs_r14_venv_verify.txt）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_13_readme_dependency_install_step_present_before_download() -> None:
+    """README.md のレシピプリアンブルに、`gdown` 導入案内より前（または
+    同ブロック内）で明示的な依存導入ステップ（推奨 = `pip install
+    -e ".[dev]"`、代替 = 最小閉包 `pip install numpy pyyaml gdown`）が
+    存在し、その位置が「取得」ステップ（gdown.download 呼び出し）より
+    前であること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    dep_idx = readme_text.index("**依存導入**")
+    download_idx = readme_text.index("gdown.download(")
+    assert dep_idx < download_idx, (
+        "依存導入ステップが取得ステップ（gdown.download）より後にある——"
+        "clean 環境の読者が取得ステップに到達する前に依存導入を終えられない"
+    )
+    assert 'pip install -e ".[dev]"' in readme_text
+    assert "pip install numpy pyyaml gdown" in readme_text
+
+
+def test_fix323_13_readme_dependency_closure_matches_verified_imports() -> None:
+    """README.md の依存導入節が、producer tree の実ソースを確認した結果
+    （`practice_split_builder.py` は numpy のみ、`run9_schema.py` は
+    PyYAML のみを top-level import し、librosa は acoustic inventory
+    sidecar 専用のローカル import で生成経路には現れない）と整合する
+    文言を含むこと。実ソース側も matching import 構造を保っていること
+    （閉包の記述が実装からドリフトしていないことの回帰確認）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert (
+        "top-level import は\n"
+        "`practice_split_builder.py` の `numpy` と `run9_schema.py` の `PyYAML`"
+    ) in readme_text
+    assert "_measure_pitch_range_hz" in readme_text
+
+    builder_text = (_RUN_DIR / "practice_split_builder.py").read_text(encoding="utf-8")
+    schema_text = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    builder_lines = builder_text.splitlines()
+    schema_lines = schema_text.splitlines()
+
+    def _top_level_third_party_imports(lines: list[str]) -> list[str]:
+        found = []
+        for line in lines:
+            if line.startswith(("import ", "from ")) and not line.startswith(
+                ("import run9_schema", "from __future__")
+            ):
+                found.append(line.strip())
+        return found
+
+    builder_imports = _top_level_third_party_imports(builder_lines)
+    assert any("numpy" in line for line in builder_imports)
+    assert not any("librosa" in line for line in builder_imports), (
+        "librosa が practice_split_builder.py の top-level import に"
+        "現れている——README の依存閉包記述（librosa 不要）とズレている"
+    )
+    schema_imports = _top_level_third_party_imports(schema_lines)
+    assert any("yaml" in line for line in schema_imports)
+
+
+def test_fix323_13_readme_dependency_steps_appear_exactly_once() -> None:
+    """依存導入ステップの推奨（`pip install -e ".[dev]"` を含む行）・
+    代替（最小閉包）行が README 本文中でそれぞれ重複なく1回だけ記述
+    されていること（コピペミスや二重記載の回帰防止）。〔履歴: 第13巡
+    導入時点では説明コメントが `pip install -e ".[dev]"` を引用のため
+    2回一致だったが、第14巡（Fix 14）で推奨コマンド自体が `gdown` を
+    追記した1コマンドへ改訂され、説明コメントは引用形を使わなくなった
+    ため1回一致に変わった → 第14巡で解消〕。実測（依存導入前は
+    ModuleNotFoundError、導入後は生成 + pin sha 一致まで成功）は本
+    セッションで実施済み——生ログは scratchpad/pjs_r14_venv_verify.txt
+    （リポジトリ外・監査目的のみで pytest 対象外）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert readme_text.count('pip install -e ".[dev]"') == 1
+    assert readme_text.count('pip install -e ".[dev]" gdown') == 1
+    assert readme_text.count("pip install numpy pyyaml gdown") == 1
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第14巡1件（P2, 上限超過後だが3分類の新しい
+# 具体経路として採用, Fix 14）: Fix 13 が追加した推奨コマンド `pip
+# install -e ".[dev]"` は、`pyproject.toml` の本体依存にも `dev` extra
+# にも `gdown` を含まないため、推奨経路を選んだ読者が step 1 の
+# `import gdown` で `ModuleNotFoundError` に陥る——Fix 13 自身が対処した
+# 欠陥（依存欠落による文書化フローの実行不能）が、Fix 13 の直した箇所に
+# 残存する新しい具体経路。`pyproject.toml` へ `gdown` を追加する案は
+# 不採用（`gdown` は本レシピ専用でプロジェクト本体の実行時依存ではない
+# ため、本体依存表を汚染しない）。代わりに推奨コマンド自体を `pip
+# install -e ".[dev]" gdown` へ改め、1コマンドで完結させた。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_14_readme_recommended_command_installs_gdown() -> None:
+    """README.md の推奨依存導入コマンドが `pip install -e ".[dev]"
+    gdown`（1コマンドで `gdown` を含む）へ改訂されており、`gdown` を
+    含まない旧単体コマンド `pip install -e ".[dev]"`（末尾がそこで
+    終わる形）がもう本文に残っていないこと。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert 'pip install -e ".[dev]" gdown' in readme_text
+    # 旧・gdown を含まない単体コマンドが独立行として残っていないこと
+    # （直後に " gdown" が続く形以外での出現がないことを確認する）。
+    idx = readme_text.index('pip install -e ".[dev]"')
+    tail = readme_text[idx : idx + len('pip install -e ".[dev]" gdown')]
+    assert tail == 'pip install -e ".[dev]" gdown'
+
+
+def test_fix323_14_pyproject_has_no_gdown_dependency() -> None:
+    """`pyproject.toml` の本体依存 (`[project].dependencies`) にも `dev`
+    extra (`[project.optional-dependencies].dev`) にも `gdown` が
+    含まれていないこと——Fix 14 の裁定根拠（推奨コマンド単体では gdown
+    が入らない）が実ファイルと一致していることの直接確認。本テストは
+    「`pyproject.toml` へ `gdown` を追加しない」という Fix 14 の設計判断
+    （本レシピ専用の依存であり本体依存表を汚染しない）を pin する回帰
+    テストでもある——将来 `pyproject.toml` に `gdown` が追加された場合は
+    本テストが red になり、README 側の二重記載（1コマンド化の前提が
+    崩れる）に気づける。"""
+    repo_root = _RUN_DIR.parent.parent.parent
+    pyproject_text = (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+    deps_start = pyproject_text.index("dependencies = [")
+    deps_end = pyproject_text.index("]", deps_start)
+    dependencies_block = pyproject_text[deps_start:deps_end]
+    assert "gdown" not in dependencies_block
+
+    dev_start = pyproject_text.index('dev = ["pytest')
+    dev_end = pyproject_text.index("]", dev_start)
+    dev_block = pyproject_text[dev_start:dev_end]
+    assert "gdown" not in dev_block

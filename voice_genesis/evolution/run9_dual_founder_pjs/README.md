@@ -184,7 +184,11 @@ PR #317 head `71eeccadf3f1f7ee49d9cc90763ced8a506abc67` に対する User 本人
    を pre-run pin として新設し **PINNED 済み**。
 2. **P1-2 split pin の明示化**: `lesson_sha` →
    `education_technique_lesson_manifest_sha`、`practice_split_sha` →
-   `practice_audio_split_manifest_sha` へ改名（両方 PENDING のまま）。
+   `practice_audio_split_manifest_sha` へ改名（改名当時は両方 PENDING
+   だった。〔履歴: 「両方 PENDING のまま」→ `practice_audio_split_
+   manifest_sha` は 2026-08-25 実 PJS 実行で **PINNED** 化済み（下記
+   「解消済み（実 PJS practice split 実行, 2026-08-25）」節参照）。
+   `education_technique_lesson_manifest_sha` は引き続き PENDING〕）。
    manifest 最低要件は `PRACTICE_MANIFEST_REQUIRED_KEYS`/
    `EDUCATION_MANIFEST_REQUIRED_KEYS` + `validate_practice_split_
    manifest()`/`validate_education_lesson_manifest()`（schema 欄の
@@ -548,11 +552,20 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   型的に分離——manifest builder のデータフローは音響解析結果を一切含まない
   （`tests/test_practice_split_builder.py` の
   `test_sidecar_generation_does_not_change_manifest_bytes` が機械強制）。
-  近似重複検出は実装せず manifest 内 note に境界宣言。**実 PJS コーパスに
-  対する実行はまだ行っていない**（fixture は tmp_path の合成ミニコーパス
-  のみ・`practice_audio_split_manifest_sha` は引き続き `PENDING`）——次段は
-  実 PJS コーパスに対する builder 実行と `inputs/practice_audio_split_
-  manifest.json` の実体生成（下記「次フェーズ」節参照）。
+  近似重複検出は実装せず manifest 内 note に境界宣言。~~実 PJS コーパスに
+  対する実行はまだ行っていない~~ → **2026-08-25 実 PJS 公開配布物から生成
+  し解消済み**: PJS corpus ver1.1 zip（CC BY-SA 4.0 公開配布物、Google
+  Drive ID `1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_`）を取得し sha256 が契約 pin
+  と厳密一致することを確認、plain unzip で展開したコーパスに対して
+  builder を実行したところ `expanded_corpus_identity_sha256` も初回試行
+  で一致した（song 数 100・展開レシピのずれなし）。生成した
+  `inputs/practice_audio_split_manifest.json`（training 70 / validation
+  15 / sealed_holdout 15）の raw sha256 で `practice_audio_split_
+  manifest_sha` を **PINNED** 化した。実 PJS 音源・展開物は repo 配下へ
+  置いていない（作業は session scratchpad 限定）。この生成手続きは
+  User の私物マシンや実行時計測を要求しない——公開配布物の sha 検証と
+  builder の決定論処理のみで再現できる（User 裁定による scoped 例外の
+  成立条件・出所は下記「次フェーズ」節参照）。
 
 **解消済み（RUN9-PROBE-1, 2026-08-25）**:
 - ~~P0-P5 probe set の実ファイル manifest 未作成~~ → DESIGN_RUN9 §15
@@ -593,6 +606,343 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   欄が PENDING のままのため——回帰テスト
   `test_gate_state_still_blocked_after_probe_manifest_sha_pinned` で
   機械確認済み）。
+
+**解消済み（実 PJS practice split 実行, 2026-08-25）**:
+- ~~practice split の実 PJS コーパスに対する実行未実施~~ → PJS corpus
+  ver1.1 zip（CC BY-SA 4.0 公開配布物、Google Drive ID
+  `1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_`。`voice_genesis/foundry/s1_dataprep/
+  README.md` 素材2 / `results_f1_2/licenses/pjs_terms_snapshot.md` に
+  記録済みの同一 URL）を取得し、sha256 が
+  `practice_split_builder.PJS_SOURCE_ARCHIVE_SHA256` と厳密一致すること
+  を確認、plain unzip（リネーム・変換なし）で展開したコーパスに対して
+  `practice_split_builder._enumerate_pjs_song_ids()` を実行したところ
+  `expanded_corpus_identity_sha256` が初回試行で `EXPANDED_CORPUS_
+  IDENTITY_SHA256` と一致した（song 数 100、展開レシピのずれなし）。
+  続けて `build_practice_split_manifest()` を実行し
+  `inputs/practice_audio_split_manifest.json`（training 70 /
+  validation 15 / sealed_holdout 15、`assign_split()` の逐語アルゴリズム
+  どおり厳密70/15/15）を決定論形式で書き出した。`RUN9_CONTRACT.yaml`
+  `practice_audio_split_manifest_sha` を同ファイルの raw sha256 で
+  **PINNED** 化した。音響 sidecar（`build_acoustic_inventory_sidecar()`）
+  は environment-dependent float の懸念があるため本作業では生成していない
+  （advisory・契約 pin 対象外——`RUN9_CONTRACT.yaml` の pin 判定に一切
+  影響しない）。実 PJS 音源・展開物は repo 配下へ置いていない（作業は
+  session scratchpad 限定）。**`gate_state()` は依然 `BLOCKED`**
+  （`dataset_manifest_sha`/`education_technique_lesson_manifest_sha`/
+  `learning_recipe_sha`/`config_sha` 等 VG-L0 ハーネス関連欄が PENDING
+  のままのため）。**User 裁定による scoped 例外**〔履歴: 当初「この work
+  は『マシン依存（実音源 = Codex/User）』ではなく…Claude 側の通常実装
+  ルートで完了可能だった」と、権限根拠を示さず一般規則であるかのように
+  記していた——Codex bot レビュー PR #323 第3巡指摘（P2, 部分採用）で
+  是正: CLAUDE.md:71-75 の一般分類は不変のまま、本件は User が本 PR
+  セッション（2026-08-25）で直接承認・実行指示した scoped 例外である旨、
+  および成立条件（公開配布物 + sha 完全一致検証）を下記「次フェーズ」節
+  へ明記した〕。詳細・成立条件・権限の出所は下記「次フェーズ」節参照。
+
+**再現レシピ（逐語・実行可能、Codex bot レビュー PR #323 第5巡指摘, P2,
+採用, Fix 5）**: fresh checkout の読者が上記 PINNED バイトを実際に再生成
+できる手順を逐語で示す（2026-08-25 本セッションで実測済み・初回一致）。
+**一括実行する場合は、以下のステップ列を貼る前に必ず最初に実行する**
+（Codex bot レビュー PR #323 第10巡指摘, Fix 10a, P2, 採用 — 個々の
+ステップは非零 exit を返すが、シェルのデフォルト挙動ではその非零 exit
+がスクリプト全体を止めない。これを明示しないと「不一致なら停止」という
+本レシピの主張と実挙動が食い違う。第11巡指摘（Fix 11, P2, 採用）で
+作業ディレクトリの作成もここへ集約した——**git 操作（step 4a の
+`git log`/`git worktree` 等）は repo root で実行しつつ、zip・展開物・
+生成物というデータは一貫して `$workdir` 側に置く分離**が本レシピ全体の
+方針であり、この分離により「実 PJS 音源・展開物は repo 配下へ置いて
+いない」という本 README の宣言（上記「解消済み（実 PJS practice split
+実行）」節）と実際のレシピ挙動が一致する）:
+```bash
+set -euo pipefail
+workdir="$(mktemp -d)"
+export PJS_WORKDIR="$workdir"
+```
+
+**依存導入**（Codex bot レビュー PR #323 第13巡指摘, P2, 採用, Fix 13 —
+clean Python 環境では上記ブロックの実行後も `gdown` を含め依存が一切
+未導入のため、下記 step 1 の `import gdown` はもちろん、step 4c の
+`import practice_split_builder`（→ `run9_schema` を import）が
+`ModuleNotFoundError` で止まる。producer tree の実ソースを本セッションで
+確認したところ、生成経路（`build_practice_split_manifest` /
+`dump_practice_split_manifest_bytes`）が要求する top-level import は
+`practice_split_builder.py` の `numpy` と `run9_schema.py` の `PyYAML`
+（`pyproject.toml:13-25` の該当行）のみ——`librosa` は acoustic inventory
+sidecar 専用関数 `_measure_pitch_range_hz` 内のローカル import で、本
+生成経路には到達しない。以下のいずれかを、このステップ列より先に実行
+する。第14巡指摘, P2, 採用, Fix 14 — 推奨コマンド `pip install
+-e ".[dev]"` 単体では `gdown` が入らず（`pyproject.toml` の本体依存にも
+`dev` extra にも `gdown` は含まれていない——本セッションで実ファイルを
+再確認済み）、推奨側を選んだ読者が step 1 の `import gdown` で
+`ModuleNotFoundError` に陥る欠陥があった。`pyproject.toml` へ `gdown` を
+追加する案は不採用——`gdown` は本レシピ（PJS 公開配布物の再現取得）
+専用であり、プロジェクト本体が実行時に要求する依存ではないため、
+本体依存表を汚染しない。代わりに推奨コマンド自体へ `gdown` を追記し、
+1コマンドで完結させた）:
+```bash
+# 推奨: リポジトリ標準の導入手順（repo root で実行）+ 本レシピ専用の
+# `gdown`（`pyproject.toml` の本体依存にも `dev` extra にも含まれない
+# ため、CLAUDE.md Commands 節のコマンドへ追記する形で1コマンド化）
+pip install -e ".[dev]" gdown
+
+# 代替（最小・実ソース確認済みの閉包のみ。リポジトリ全体の開発環境が
+# 不要で本レシピの実行だけが目的の場合）
+pip install numpy pyyaml gdown
+```
+
+1. **取得**（`gdown` 未導入なら `pip install gdown`。ミラー入手でも可
+   ——要件は次段の sha 一致のみ。Codex bot レビュー PR #323 第11巡指摘,
+   P2, 採用, Fix 11 — 出力先を repo root 直下の相対パスから `$workdir`
+   内へ変更した。旧版は repo root で実行することを要求しながら zip を
+   CWD 直下へ書いており、実行のたびに 275MB の実音源が checkout 内へ
+   untracked のまま残る欠陥があった）:
+   ```
+   python3 -c "
+   import gdown
+   gdown.download(
+       'https://drive.google.com/uc?id=1hPHwOkSe2Vnq6hXrhVtzNskJjVMQmvN_',
+       output='$PJS_WORKDIR/PJS_corpus_ver1.1.zip', quiet=False,
+   )
+   "
+   ```
+2. **検証**（Codex bot レビュー PR #323 第7巡指摘, P2, 採用, Fix 7a —
+   非対話実行では `sha256sum` を素の digest 出力のまま使うと、ファイルが
+   読める限り常に exit 0 を返し不一致を検出しない致命的欠陥だった。
+   `sha256sum -c -` は期待値との不一致で非零 exit を返す。第10巡指摘
+   （Fix 10a, P2, 採用）: `set -euo pipefail`（上記）を実行し忘れた場合
+   でもこの1ステップ単体で確実に停止するよう、`|| exit 1` を明示併記
+   する——ステップ列の「不一致なら中止」という主張と実挙動を一致させる
+   二重の安全策。第11巡指摘（Fix 11）で照合対象を `$workdir` 内へ変更）:
+   ```
+   echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca  $workdir/PJS_corpus_ver1.1.zip" | sha256sum -c - || exit 1
+   # 不一致なら "FAILED" + 非零 exit（$?）で停止。後続手順を実行しないこと。
+   ```
+3. **展開**（plain unzip・オプション無し・リネーム/変換一切なし。
+   Codex bot レビュー PR #323 第11巡指摘, P2, 採用, Fix 11 — 展開先を
+   repo root 直下の `./extracted` から `$workdir/extracted` へ変更した
+   ——275MB の実 WAV コーパスが checkout 内に untracked のまま残る
+   経路を閉じる）:
+   ```
+   unzip -q "$workdir/PJS_corpus_ver1.1.zip" -d "$workdir/extracted"
+   # corpus_root = $workdir/extracted/PJS_corpus_ver1.1
+   #   （pjsNNN/pjsNNN.lab + pjsNNN/pjsNNN_song.wav を含む階層）
+   ```
+4. **生成（producer tree で実行）**（Codex bot レビュー PR #323 第8巡
+   指摘, P2, 採用, Fix 8 — 現在 checkout の `run9_schema.py` を import
+   すると、`assign_split()` が消費する `LEARNING_SEED` や検証ロジックが
+   producer revision と異なる可能性がある。記録・照合済みの producer
+   sha は `practice_split_builder.py` 単体のみで、`run9_schema.py` 側の
+   seed/検証/出力パス変更ではこの sha 照合が green のままレシピが pin
+   バイトを再現できなくなり得る——依存閉包全体（上記「依存閉包の範囲」
+   参照）を実際に checkout してから実行する）:
+
+   a. producer revision を特定（既記載の「第一の再現ポインタ」。Codex
+      bot レビュー PR #323 第10巡指摘, Fix 10c, P2, 採用 — `--depth 1`
+      等の shallow clone では `git log --follow` が shallow 境界を
+      返し、実際の producing commit と食い違う。shallow か判定し、
+      shallow なら先に完全履歴へ展開してから実行する。**本ステップは
+      repo root で実行する**——`git log`/`git fetch` は checkout 内の
+      `.git` を対象とする操作であり、データを置く `$workdir` とは
+      別軸）:
+      ```
+      if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+        git fetch --unshallow
+      fi
+      producer_rev=$(git log --follow --format=%H -1 -- voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json)
+      echo "$producer_rev"
+      ```
+   b. producer tree を worktree として取り出す（`$workdir` 内・
+      Codex bot レビュー PR #323 第10巡指摘, Fix 10b, P1, 採用 —
+      固定パス `/tmp/pjs_producer` は中断・並行実行時に `git worktree
+      add` の衝突/失敗を招くため、上記で作成済みの一意な `$workdir` の
+      下へ配置する。**本ステップも repo root で実行する**——
+      `git worktree add` 自体は checkout の `.git` に対する操作であり、
+      取り出し先パスが `$workdir` 配下であることと矛盾しない）:
+      ```
+      git worktree add "$workdir/producer_tree" "$producer_rev"
+      ```
+      **本手順は現在 checkout が producer revision と一致している場合
+      でも省略せずそのまま実行する**——分岐は不要（Codex bot レビュー
+      PR #323 第12巡指摘, P2, 採用, Fix 12。〔履歴: Fix 8（第8巡）で
+      「現在 checkout が producer revision と一致する場合は in-place
+      実行が等価であり worktree 手順は省略してよい」という近道注記を
+      導入したが、第12巡までの改訂（Fix 9 の heredoc 化・Fix 10b/11 の
+      `$workdir` 集約）で step 4c/4d は無条件に `$workdir/producer_
+      tree/...` を参照するようになり、近道に従うと `git worktree add`
+      を飛ばした読者が `ModuleNotFoundError`（4c）/存在しない worktree
+      への `remove` 失敗（4d）に陥る矛盾が生じた。worktree 手順自体は
+      checkout が producer revision と一致していても問題なく動作する
+      ため in-place 代替の2系統を維持する価値がなく、近道注記を撤去し
+      単一経路（worktree 手順を常に実行）へ一本化した → 第12巡で解消〕。
+   c. worktree 内の `run9_dual_founder_pjs` を `sys.path` 先頭にして
+      実行し、`$workdir/extracted` のコーパスを入力に、出力を worktree
+      外の `$workdir` へ書き出す（現在 checkout の `PRACTICE_MANIFEST_
+      PATH` を直接上書きせず、生成に使ったコードと出力先を分離する。
+      Codex bot レビュー PR #323 第9巡指摘, P2, 採用, Fix 9 — 旧版は
+      コードフェンスが素の Python のままで、逐語シェル実行の主張と
+      矛盾していた。`python3 - <<'EOF' … EOF`（クォート付き heredoc
+      デリミタでシェル変数展開を防ぐ）へ改め、そのままシェルへ貼れる
+      形にした。第10/11巡指摘（Fix 10b/Fix 11）で worktree・出力・入力
+      コーパスをすべて `$workdir` 側へ揃えたが、クォート付きデリミタは
+      維持したまま——heredoc 内へは環境変数 `PJS_WORKDIR`（上記
+      `export`）を `os.environ` 経由で渡し、シェル変数展開に頼らない）:
+      ```bash
+      python3 - <<'EOF'
+      import os
+      import sys
+
+      workdir = os.environ["PJS_WORKDIR"]
+      sys.path.insert(0, os.path.join(workdir, "producer_tree", "voice_genesis", "evolution", "run9_dual_founder_pjs"))
+      import practice_split_builder as psb
+
+      manifest = psb.build_practice_split_manifest(
+          os.path.join(workdir, "extracted", "PJS_corpus_ver1.1"),
+          expected_corpus_identity=psb.EXPANDED_CORPUS_IDENTITY_SHA256,
+      )
+      with open(os.path.join(workdir, "output.json"), "wb") as f:
+          f.write(psb.dump_practice_split_manifest_bytes(manifest))
+      EOF
+      ```
+      （`expected_corpus_identity` に渡した `psb.EXPANDED_CORPUS_
+      IDENTITY_SHA256` はモジュール冒頭でハードコード転記された定数
+      ——照合対象はこのコード自体に焼き込まれており、外部ファイルからの
+      読み込みではない。**必須引数**——省略不可・デフォルト値なしで、
+      渡した値と展開コーパスから再計算した `expanded_corpus_identity_
+      sha256` が厳密一致しない場合 `Run9ValidationError` で fail-closed
+      拒否する）。
+   d. worktree を片付ける（`$workdir` 全体の削除は step 5 の照合完了後
+      ——出力ファイル・展開コーパス・zip がまだ `$workdir` 内にある
+      ため）:
+      ```
+      git worktree remove "$workdir/producer_tree"
+      ```
+5. **照合**（`$workdir` 内の生成物が pin 値と一致することを確認——
+   Fix 7a の `sha256sum -c -`/python `assert` 形式・Fix 10a の
+   `|| exit 1` 併記を維持。Fix 10b で照合対象を `$workdir/output.json`
+   へ変更）:
+   ```
+   echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6  $workdir/output.json" | sha256sum -c - || exit 1
+   # （= RUN9_CONTRACT.yaml practice_audio_split_manifest_sha の pin 値。
+   #    不一致なら "FAILED" + 非零 exit。）
+   ```
+   一致確認後、必要なら現在 checkout の `PRACTICE_MANIFEST_PATH`
+   （`voice_genesis/evolution/run9_dual_founder_pjs/inputs/
+   practice_audio_split_manifest.json`）へ配置する（`cp` 等。producer
+   revision が現在 checkout と一致する通常運用ではこの配置は不要——
+   コミット済みファイルがすでに同一バイトのため）。`row_order_sha256`
+   の照合も同ファイルに対して同様に行う:
+   ```
+   python3 -c "
+   import json
+   d = json.load(open('$workdir/output.json'))
+   assert d['row_order_sha256'] == '6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a', d['row_order_sha256']
+   print('row_order_sha256 OK')
+   "
+   ```
+   最後に作業ディレクトリを片付ける（Codex bot レビュー PR #323 第11巡
+   指摘, P2, 採用, Fix 11 — この1コマンドが zip・展開コーパス・
+   worktree 出力（producer_tree はステップ d で既に remove 済み）を
+   すべて含む `$workdir` を一括で除去するため、成功時に repo checkout
+   側へ実音源由来のファイルは一切残らない）:
+   ```
+   rm -rf "$workdir"
+   ```
+
+**producer pin の意味論**（指摘の「producer script/revision を artifact
+と別途 pin せよ」への回答 = 追加機構は不要と整理）: `practice_split_
+builder.py` は manifest（`inputs/practice_audio_split_manifest.json`）と
+**同一リポジトリ・同一コミットで版管理**されている——別ファイルへの
+producer pin を新設しなくても、manifest を生成したコミット自体が
+producer の版を一意に定める。加えて `PJS_SOURCE_ARCHIVE_SHA256`/
+`EXPANDED_CORPUS_IDENTITY_SHA256`（照合対象の期待値）はモジュール冒頭に
+ハードコード定数として直接埋め込まれており、`LEARNING_SEED`
+（`run9_schema.py`、`assign_split()` が消費）を含め producer 側のロジック
+や定数を変更すれば、再生成したバイト列の sha256 が変わり `RUN9_CONTRACT.
+yaml` の pin 値との照合で機械的に検出される——この構造自体が producer
+pin として機能する（fail-closed）。したがって本レシピは「pin と同一
+バイトを再生成する手順」であり、producer 変更後の再生成は新しい repin
+（PR レビュー経由での pin 値更新）として扱う——変更前後のバイトを
+黙って同一 pin の下に混在させることは構造的にできない。
+
+**依存閉包の範囲**（Codex bot レビュー PR #323 第8巡指摘, P2, 採用,
+Fix 8 — 明確化）: 生成の依存閉包は `practice_split_builder.py` 単体
+ではなく、**producer revision 時点の `voice_genesis/evolution/
+run9_dual_founder_pjs/` パッケージ全体**である。`build_practice_split_
+manifest()` は同ディレクトリの `run9_schema.py`（`Run9ValidationError`/
+`_require_no_duplicate_list_items`/`_compute_canonical_pin_sha256` 等）
+を import し、`assign_split()` が消費する `LEARNING_SEED` もこのファイル
+定義。記録・照合している builder sha256（下記）は**「split ロジック
+本体の同一性の証跡」に過ぎず、この閉包全体を覆わない**——
+`run9_schema.py` 側の `LEARNING_SEED`/検証ロジック/出力パス定数が変わって
+も builder sha256 の照合は green のままレシピが pin バイトを再現できなく
+なり得る（`practice_split_builder.py` は無変更のため）。閉包全体を pin
+するのは特定ファイルの sha 列挙ではなく、下記「生成」ステップが行う
+**producer tree からの実行**である——`run9_schema.py` はコメント編集
+だけで頻繁に変わるファイルであり（本 PR の Fix 2 が実例——コメントのみの
+是正でもファイル実バイトの sha256 は変わる）、依存閉包の全ファイルを
+個別に sha pin する方式は再 pin の頻度が高く脆いため不採用とした。
+
+**producer revision の具体記録**（Codex bot レビュー PR #323 第6巡指摘,
+P2, 採用, Fix 6 — 第5巡の整理は「生成コミット自体が producer pin」と
+述べたが、その生成コミットの具体値を記録しておらず、後日 checkout の
+読者にとって `git rev-parse HEAD` は現在のコミットを返すだけで、
+pin 済みバイトを実際に作った実装を特定・再実行できないという残欠陥
+だった。**第7巡指摘（P2, 部分採用, Fix 7b）で優先順位と主張範囲を
+是正**——詳細は下記）:
+
+- **第一の再現ポインタ = `git log --follow`（汎用手順、完全履歴の
+  checkout で常に有効）**〔Codex bot レビュー PR #323 第10巡指摘（Fix
+  10c, P2, 採用）: `--depth 1` 等の shallow clone では `git log
+  --follow` が shallow 境界（浅履歴の先頭コミット）を返し、実際の
+  producing commit を返さない——「常に有効」の記述は精密化した。shallow
+  clone 判定・unshallow 手順は下記 step 4a の逐語コマンド参照〕:
+  ```
+  git log --follow -- voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json
+  ```
+  manifest バイトを最後に変えたコミットが、その時点の producer revision
+  ——git 履歴自体が台帳であり、下記の固定 40hex を手作業で最新に保つ必要
+  はない。**squash merge でも merge commit でも、完全履歴の checkout
+  なら常にこのコマンド1つで producer revision が得られる**——後続の
+  builder sha256 照合と合わせて使う一次手順とする。
+- **生成時点の builder 内容 sha256**（履歴の取り込み方式に依存しない
+  ——`git log --follow` で特定した producer revision の tree から直接
+  照合できる値）:
+  `894451c953d5eb5b50448687480ede9b7b808c8c2c620a97b63978704e37d479`
+  （本 README 執筆時点でも同一——`practice_split_builder.py` は本節
+  記載の生成イベント以降無変更）。
+- **生成イベントの attestation（証跡・降格記録）**: 生成コミット
+  （`inputs/practice_audio_split_manifest.json` の初コミット +
+  `RUN9_CONTRACT.yaml` `practice_audio_split_manifest_sha` PINNED 化を
+  含むコミット）は本 PR 側の `bf056ae635b2435e6888b85091c65626a9b0e3a3`
+  （2026-08-25 push 済み・不変）。〔Codex bot レビュー PR #323 第7巡
+  指摘（P2, 部分採用）: この値を「fresh clone から checkout 可能な
+  再現パス」と主張していたのは過大——本 PR が **merge commit** で
+  main へ取り込まれれば `bf056ae…` は main の履歴からも到達可能になる
+  が、**squash merge** の場合 PR 側 object は main から到達不能になり、
+  読者は別途 PR ref の fetch を要する。マージ方式は README が保証できる
+  事項ではないため、本値は「checkout 保証付きの再現パス」ではなく
+  **「この sha256 群を生成した実際のイベントを指し示す attestation
+  （証跡）」へ降格する**——実行可能な再現パスとしては上記「第一の再現
+  ポインタ」（`git log --follow`）を使うこと。指摘が示した反例
+  `7dad04d…` は本 PR のいかなる local/remote object にも実在せず
+  （`git cat-file -t 7dad04d` は該当なし・`git ls-remote` にも出現しな
+  い）、`bf056ae…` は本 PR head の直系祖先である（`git merge-base
+  --is-ancestor bf056ae635b2435e6888b85091c65626a9b0e3a3 <PR head>` は
+  真——`bf056ae→e9f953b→6c4845a→d5f4dc0→ed18194→d85eb4f→f694701` の
+  線形連鎖）——「reviewed commit の祖先でない」という指摘の副次的主張
+  は事実誤認だった（1854b92 との merge-base は「main の現 tip との」
+  merge base であり、`bf056ae…` が本 PR 側でまだ main に取り込まれて
+  いないことの帰結にすぎず、祖先関係の否定にはならない）。ただし
+  **核心（checkout 可能性はマージ方式依存であり保証できない）は正しい
+  ため採用**——上記の降格・優先順位変更で対応した。
+- **更新規約**: `practice_split_builder.py` または `LEARNING_SEED` を
+  変更して manifest を再生成する場合は、その変更を repin（PR レビュー
+  経由での `practice_audio_split_manifest_sha` 更新）として扱い、
+  同じ PR で本節の producer 記録（生成コミット sha・builder sha256）も
+  同時に更新する——`tests/test_run9_contract.py` の
+  `test_fix323_6_readme_builder_sha_matches_actual_file` が、記載
+  builder sha256 と実ファイルの実測 sha256 との不一致を fail-closed で
+  検出し、この同時更新を機械強制する。
 
 **残存**:
 
@@ -646,33 +996,35 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    route / learning replay harness / rights-clean curriculum / fixed
    compute budget / frozen recipe / rollback path）はどれも準備段階に
    すら入っていない。
-3. **PJS Performance Lesson / Practice split / learning recipe の実体
-   build 未実施**（PRACTICE 側は RUN9-BIRTH-PREP-1 で builder 配線済み。
-   実 PJS 実行は未実施のまま残る）: 改訂3で pin 方針（source archive pin /
+3. **PJS Performance Lesson / learning recipe の実体 build 未実施**（PRACTICE
+   split は 2026-08-25 実 PJS 実行で解消済み — 下記参照。EDUCATION 側 /
+   learning recipe は引き続き残存）: 改訂3で pin 方針（source archive pin /
    expanded corpus pin とは別の Lesson manifest を生成し pin）は確定した
    が、Lesson build 自体は VG-L0 ハーネス実装待ち。rev 0.3 でこの pin は
    EDUCATION 用 Technique lesson を指すと明確化され
    `education_technique_lesson_manifest_sha` へ改名（User 外部レビュー
-   PR #317 P1-2 採用）。PRACTICE 用の教師音声
-   train/validation/sealed-holdout split manifest（正解 parameter を
+   PR #317 P1-2 採用）——引き続き `PENDING`。~~PRACTICE 用の教師音声
+   train/validation/sealed-holdout split manifest~~（正解 parameter を
    含まない生素材の分割、PoR §12）は
    [`practice_split_builder.py`](./practice_split_builder.py)
    （`build_practice_split_manifest()`/`assign_split()`、
-   RUN9-BIRTH-PREP-1 §B）が生成器として配線済みだが、実 PJS コーパスに
-   対する実行はまだ行っていないため `practice_audio_split_manifest_sha`
+   RUN9-BIRTH-PREP-1 §B）を実 PJS corpus ver1.1（CC BY-SA 4.0 公開配布物、
+   sha256 検証済み）に対して実行し、`practice_audio_split_manifest_sha`
    （`RUN9_CONTRACT.yaml`、PR #317 Codex bot レビュー第2巡 Fix 6 で新設
-   → P1-2 で改名）自体は引き続き `PENDING`。Phase 3 で
+   → P1-2 で改名）を **PINNED** 化した（2026-08-25、training 70 /
+   validation 15 / sealed_holdout 15）。Phase 3 で
    `learning_recipe_sha`（schema `run9-learning-recipe/1.0`: 枝別 recipe
    `practice_recipe`/`education_recipe` の2節 + 共通 seed 909002 + 各枝
-   `equal_budget_within_arm: true`）の**構造**も凍結した — 3欄いずれも
-   実体 manifest の**生成**（EDUCATION 側の builder 含む）は VG-L0
-   ハーネス実装待ちのため PENDING のまま。manifest 自体の最低要件は
+   `equal_budget_within_arm: true`）の**構造**も凍結した — PRACTICE を
+   除く2欄（EDUCATION manifest / learning recipe manifest）は実体
+   manifest の**生成**が VG-L0 ハーネス実装待ちのため PENDING のまま。
+   manifest 自体の最低要件は
    `run9_schema.PRACTICE_MANIFEST_REQUIRED_KEYS`/
    `EDUCATION_MANIFEST_REQUIRED_KEYS`/`validate_practice_split_
    manifest()`/`validate_education_lesson_manifest()`/
    `validate_learning_recipe_manifest()` が凍結済み。
-4. **education builder 未実装 / practice builder は配線済み・実 PJS 実行
-   待ち**（RUN9-BIRTH-PREP-1 で更新）: 情報境界
+4. **education builder 未実装 / practice builder は実 PJS 実行まで完了**
+   （RUN9-BIRTH-PREP-1 で配線 → 2026-08-25 実 PJS 実行で更新）: 情報境界
    （`run9_schema.PRACTICE_FORBIDDEN_INPUTS` /
    `PRACTICE_ALLOWED_DATA_INPUTS` / `PRACTICE_REQUIRED_AUTONOMOUS_
    OPERATIONS` / `PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE` /
@@ -684,11 +1036,11 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    （`run9_controlprofile.SCHEMA_PRACTICE_TRACE`）・ControlProfile
    append-only 台帳（`run9_controlprofile.Run9ProfileLedger`）と結果分類
    （`BIRTH_OUTCOMES` 等6分類）の**基盤は Phase 3 で実装済み**。PRACTICE
-   側は `practice_split_builder.py` が split manifest 生成器として配線
-   済み（fixture テスト済み・実 PJS コーパスに対する実行のみ未実施）。
+   側は `practice_split_builder.py` を実 PJS コーパスに対して実行し
+   `inputs/practice_audio_split_manifest.json` を実体発行済み。
    EDUCATION 側の builder（Technique extractor / Lesson builder）、および
    両枝を実際に呼び出して音声処理・特徴抽出・探索を行う学習ループ本体は
-   未着手（machine-independent な骨組みの凍結が完了した段階）。
+   未着手。
 
 ## 次フェーズ（machine-dependent）
 
@@ -721,12 +1073,49 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   で **PINNED** 化した。詳細は上記「解消済み（RUN9-PROBE-1）」節参照
   ——render 契約・revision_bridge の凍結までであり、実 render の実行
   自体は VG-L0 ハーネス実装待ちのまま（残存ブロッカー(2)）。
-- **practice / education manifest の実体 build**: PRACTICE 側は
-  builder（`practice_split_builder.build_practice_split_manifest()`）が
-  RUN9-BIRTH-PREP-1 で配線済み——残るのは実 PJS コーパスに対する実行と
-  `inputs/practice_audio_split_manifest.json` の書き出しのみ。EDUCATION 側
-  （`education_technique_lesson_manifest.json`）は builder 自体が未着手
-  （残存ブロッカー(3)(4)）。
+- ~~**practice manifest の実体 build**~~ → 2026-08-25 解消済み・
+  **User 裁定による scoped 例外（分類の一般改訂ではない）**: 当初本節
+  （machine-dependent 見出し配下）に置いていたが、本 PR セッション中
+  （2026-08-25）に Claude が「practice split は公開 PJS 配布物 + sha
+  完全一致検証で足り、User 手元コーパス不要」という事実確認を提示し、
+  **User が「1を実行できるなら実行してください」と実行そのものを直接
+  指示した**（本節の再分類・実行は User 裁定に基づく行為であり、Claude
+  の単独判断による role split 上書きではない）。
+  〔履歴: 当初の記述は「誤分類だった」「CLAUDE.md の…区分には該当しない
+  ……公開配布物 + sha 検証で完結する work は Claude 側の通常実装ルートで
+  完了可能」と、権限根拠を示さずに一般規則であるかのような書き方をして
+  いた——Codex bot レビュー PR #323 第3巡指摘（P2, 部分採用）: 実音源処理
+  を Codex/User 経路に留める CLAUDE.md:71-75 の一般分類を、根拠なく
+  README が上書きして見え、後続セッションへ規約違反を誤って指示しうる
+  という懸念は正当（将来汚染として採用）。ただし再分類の削除は不採用
+  ——本件は User が本セッションで直接承認・実行指示した scoped な事実
+  であり、削除は事実を消す逆方向の汚染になる。採った対応は出所と適用
+  範囲の明記（本文）〕。
+  **本 scoped 例外の成立条件**（`practice_audio_split_manifest` の生成
+  作業のみに限定・他の実音源作業へ一般化しない）: (a) 入力が CC BY-SA
+  4.0 の公開配布物（PJS corpus ver1.1、User の私物音源ではない）
+  であること、(b) `pjs_source_archive_sha256`（配布 zip 全体）+
+  `expanded_corpus_identity_sha256`（展開後コーパス identity）の完全
+  一致検証により、実行環境・実音源そのものへの機械依存（どのマシンで
+  展開したか・誰の手元にあるか）が構造的に消えること——不一致なら
+  builder は fail-closed 拒否し部分続行しない設計そのものが、この条件を
+  担保する。
+  **CLAUDE.md:71-75 の一般分類は不変**: 「マシン依存（実音源・実重み
+  ハッシュ・Suno 生成・G4 ライセンス目視）= Codex / User」という一般規則
+  自体は正しいまま変更していない。本節は上記2条件を満たす1作業
+  （practice split manifest 生成）に限った User 裁定済み scoped 例外の
+  記録であり、CLAUDE.md/AGENTS.md 側の一般政策を書き換える一般規則
+  ではない——一般政策の改訂自体は User 権限であり、本 PR では
+  CLAUDE.md/AGENTS.md を一切改変していない。
+
+  実際 `practice_split_builder.py`（`build_practice_split_manifest()`）を
+  実行したところ `expanded_corpus_identity_sha256` は初回試行で一致し
+  （song 数 100）、`inputs/practice_audio_split_manifest.json`
+  （training 70 / validation 15 / sealed_holdout 15）を生成、
+  `practice_audio_split_manifest_sha` を **PINNED** 化した。EDUCATION 側
+  （`education_technique_lesson_manifest.json`）は上記 scoped 例外の
+  対象外——builder 自体が未着手のまま machine-dependent（VG-L0 ハーネス
+  実装待ち）に残る（残存ブロッカー(3)(4)）。
 - **learning recipe manifest の実体 build**: `learning_recipe_manifest.json`
   （schema `run9-learning-recipe/1.0`、`run9_schema.LEARNING_RECIPE_
   MANIFEST_PATH` が規約パスを凍結済み・`validate_learning_recipe_
