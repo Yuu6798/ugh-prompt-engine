@@ -9910,11 +9910,16 @@ def test_fix323_4_repo_wide_two_pin_pending_pattern_all_supersede_or_absent() ->
 def test_fix323_5_readme_has_verbatim_executable_recipe_commands() -> None:
     """README.md の practice split 節に、取得（gdown）・sha 検証・展開
     （unzip）・生成（build_practice_split_manifest 呼び出し）の逐語
-    コマンドが実在すること。"""
+    コマンドが実在すること。sha 検証コマンドは PR #323 第7巡 Fix 7a で
+    `sha256sum -c -`（不一致を非零 exit で検出する形）へ改訂済み——
+    旧形式（素の `sha256sum FILE` 併記コメント）はもう存在しない。"""
     readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
     assert "再現レシピ" in readme_text
     assert "gdown.download(" in readme_text
-    assert "sha256sum PJS_corpus_ver1.1.zip" in readme_text
+    assert (
+        '683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca  '
+        "PJS_corpus_ver1.1.zip\" | sha256sum -c -"
+    ) in readme_text
     assert "unzip -q PJS_corpus_ver1.1.zip -d extracted" in readme_text
     assert "psb.build_practice_split_manifest(" in readme_text
     assert "expected_corpus_identity=psb.EXPANDED_CORPUS_IDENTITY_SHA256" in readme_text
@@ -9983,3 +9988,47 @@ def test_fix323_6_readme_builder_sha_matches_actual_file() -> None:
         f"（builder sha256）が追随していない: recorded={recorded_sha!r} "
         f"actual={actual_sha!r} — この PR で README を repin として更新すること"
     )
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第7巡2件の対応（Fix 7a: 採用 / Fix 7b: 部分採用）
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_7a_readme_checksum_steps_use_sha256sum_dash_c_not_bare_print() -> None:
+    """README.md の practice split レシピの sha 検証手順（zip archive /
+    manifest / row_order_sha256）が、非対話実行でも不一致を非零 exit で
+    検出する形（`sha256sum -c -` または python `assert`）を使っている
+    こと——旧形式（素の `sha256sum FILE` と期待値コメント併記のみ）は
+    ファイルが読める限り常に exit 0 を返し、誤った archive の展開・
+    誤った manifest の書き出しが成功として進んでしまう致命的欠陥だった
+    （Codex bot レビュー PR #323 第7巡指摘, P2, 採用, Fix 7a）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert (
+        'echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca'
+        '  PJS_corpus_ver1.1.zip" | sha256sum -c -'
+    ) in readme_text
+    assert (
+        'echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6'
+        "  voice_genesis/evolution/run9_dual_founder_pjs/inputs/"
+        'practice_audio_split_manifest.json" | sha256sum -c -'
+    ) in readme_text
+    assert "assert d['row_order_sha256'] ==" in readme_text
+    # 旧・非 fail-closed 形式（コメント併記のみ）が残っていないこと
+    assert "sha256sum PJS_corpus_ver1.1.zip\n" not in readme_text
+
+
+def test_fix323_7b_readme_downgrades_pr_commit_to_attestation_and_prioritizes_git_log_follow() -> None:
+    """README.md が、PR 側生成コミット `bf056ae…` を「checkout 保証付きの
+    再現パス」ではなく「生成イベントの attestation（証跡）」へ明示的に
+    降格し、実行可能な第一の再現ポインタとして `git log --follow`
+    （マージ方式に依存せず常に有効）を優先していること（Codex bot
+    レビュー PR #323 第7巡指摘, P2, 部分採用, Fix 7b — 核心＝checkout
+    可能性はマージ方式依存という指摘は採用。「reviewed commit の祖先で
+    ない」という副次的主張は事実誤認として返信で訂正済み）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "第一の再現ポインタ" in readme_text
+    assert "attestation（証跡・降格記録）" in readme_text
+    assert "squash merge" in readme_text and "merge commit" in readme_text
+    # 「第一の再現ポインタ」節が「生成イベントの attestation」節より先に出現すること
+    assert readme_text.index("第一の再現ポインタ") < readme_text.index("attestation（証跡・降格記録）")

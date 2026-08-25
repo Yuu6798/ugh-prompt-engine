@@ -654,10 +654,14 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    )
    "
    ```
-2. **検証**（不一致なら中止・後続手順は実行しない）:
+2. **検証**（Codex bot レビュー PR #323 第7巡指摘, P2, 採用, Fix 7a —
+   非対話実行では `sha256sum` を素の digest 出力のまま使うと、ファイルが
+   読める限り常に exit 0 を返し不一致を検出しない致命的欠陥だった。
+   `sha256sum -c -` は期待値との不一致で非零 exit を返し、後続手順が
+   実行されない）:
    ```
-   sha256sum PJS_corpus_ver1.1.zip
-   # 期待値: 683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca
+   echo "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca  PJS_corpus_ver1.1.zip" | sha256sum -c -
+   # 不一致なら "FAILED" + 非零 exit（$?）で停止。後続手順を実行しないこと。
    ```
 3. **展開**（plain unzip・オプション無し・リネーム/変換一切なし）:
    ```
@@ -686,16 +690,24 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    （`expected_corpus_identity` に渡した `psb.EXPANDED_CORPUS_IDENTITY_
    SHA256` はモジュール冒頭でハードコード転記された定数——照合対象は
    このコード自体に焼き込まれており、外部ファイルからの読み込みではない）。
-5. **照合**（生成物のバイト列が pin 値と一致することを確認）:
+5. **照合**（生成物のバイト列が pin 値と一致することを確認——Fix 7a:
+   ここも `sha256sum -c -` へ揃え、不一致を非零 exit で検出する）:
    ```
-   sha256sum voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json
-   # 期待値: fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6
-   #  （= RUN9_CONTRACT.yaml practice_audio_split_manifest_sha の pin 値）
+   echo "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6  voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json" | sha256sum -c -
+   # （= RUN9_CONTRACT.yaml practice_audio_split_manifest_sha の pin 値。
+   #    不一致なら "FAILED" + 非零 exit。）
    ```
    manifest 内 `row_order_sha256` フィールドの値も
    `6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a`
-   と一致することを確認する（`jq .row_order_sha256 inputs/practice_audio_
-   split_manifest.json` 等）。
+   と一致することを、非零 exit で失敗する形で確認する:
+   ```
+   python3 -c "
+   import json
+   d = json.load(open('voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json'))
+   assert d['row_order_sha256'] == '6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a', d['row_order_sha256']
+   print('row_order_sha256 OK')
+   "
+   ```
 
 **producer pin の意味論**（指摘の「producer script/revision を artifact
 と別途 pin せよ」への回答 = 追加機構は不要と整理）: `practice_split_
@@ -718,25 +730,49 @@ P2, 採用, Fix 6 — 第5巡の整理は「生成コミット自体が producer
 述べたが、その生成コミットの具体値を記録しておらず、後日 checkout の
 読者にとって `git rev-parse HEAD` は現在のコミットを返すだけで、
 pin 済みバイトを実際に作った実装を特定・再実行できないという残欠陥
-だった）:
-- **生成コミット**（`inputs/practice_audio_split_manifest.json` の初
-  コミット + `RUN9_CONTRACT.yaml` の `practice_audio_split_manifest_sha`
-  PINNED 化を含むコミット）: `bf056ae635b2435e6888b85091c65626a9b0e3a3`
-  （push 済み・不変）。このコミットを checkout すれば、生成時点の
-  `practice_split_builder.py` と依存定数一式がそのまま得られる。
-- **汎用の特定手順**（今後 producer が変わっても通用する一般手順）:
+だった。**第7巡指摘（P2, 部分採用, Fix 7b）で優先順位と主張範囲を
+是正**——詳細は下記）:
+
+- **第一の再現ポインタ = `git log --follow`（汎用手順、常に有効）**:
   ```
   git log --follow -- voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json
   ```
   manifest バイトを最後に変えたコミットが、その時点の producer revision
-  ——git 履歴自体が台帳であり、`bf056ae…` を別途手作業で最新に保つ必要は
-  ない（コマンドを実行するたびに正しい現在値が得られる）。
-- **生成時点の builder 内容 sha256**（`practice_split_builder.py` の
-  ファイル実バイト、`bf056ae…` 時点）:
+  ——git 履歴自体が台帳であり、下記の固定 40hex を手作業で最新に保つ必要
+  はない。**squash merge でも merge commit でも、現在の checkout 履歴
+  から常にこのコマンド1つで producer revision が得られる**——後続の
+  builder sha256 照合と合わせて使う一次手順とする。
+- **生成時点の builder 内容 sha256**（履歴の取り込み方式に依存しない
+  ——`git log --follow` で特定した producer revision の tree から直接
+  照合できる値）:
   `894451c953d5eb5b50448687480ede9b7b808c8c2c620a97b63978704e37d479`
-  （本 README 執筆時点でも同一——`bf056ae…` 以降 `practice_split_
-  builder.py` は無変更、`git diff bf056ae635b2435e6888b85091c65626a9b0e3a3
-  -- practice_split_builder.py` が空であることで確認済み）。
+  （本 README 執筆時点でも同一——`practice_split_builder.py` は本節
+  記載の生成イベント以降無変更）。
+- **生成イベントの attestation（証跡・降格記録）**: 生成コミット
+  （`inputs/practice_audio_split_manifest.json` の初コミット +
+  `RUN9_CONTRACT.yaml` `practice_audio_split_manifest_sha` PINNED 化を
+  含むコミット）は本 PR 側の `bf056ae635b2435e6888b85091c65626a9b0e3a3`
+  （2026-08-25 push 済み・不変）。〔Codex bot レビュー PR #323 第7巡
+  指摘（P2, 部分採用）: この値を「fresh clone から checkout 可能な
+  再現パス」と主張していたのは過大——本 PR が **merge commit** で
+  main へ取り込まれれば `bf056ae…` は main の履歴からも到達可能になる
+  が、**squash merge** の場合 PR 側 object は main から到達不能になり、
+  読者は別途 PR ref の fetch を要する。マージ方式は README が保証できる
+  事項ではないため、本値は「checkout 保証付きの再現パス」ではなく
+  **「この sha256 群を生成した実際のイベントを指し示す attestation
+  （証跡）」へ降格する**——実行可能な再現パスとしては上記「第一の再現
+  ポインタ」（`git log --follow`）を使うこと。指摘が示した反例
+  `7dad04d…` は本 PR のいかなる local/remote object にも実在せず
+  （`git cat-file -t 7dad04d` は該当なし・`git ls-remote` にも出現しな
+  い）、`bf056ae…` は本 PR head の直系祖先である（`git merge-base
+  --is-ancestor bf056ae635b2435e6888b85091c65626a9b0e3a3 <PR head>` は
+  真——`bf056ae→e9f953b→6c4845a→d5f4dc0→ed18194→d85eb4f→f694701` の
+  線形連鎖）——「reviewed commit の祖先でない」という指摘の副次的主張
+  は事実誤認だった（1854b92 との merge-base は「main の現 tip との」
+  merge base であり、`bf056ae…` が本 PR 側でまだ main に取り込まれて
+  いないことの帰結にすぎず、祖先関係の否定にはならない）。ただし
+  **核心（checkout 可能性はマージ方式依存であり保証できない）は正しい
+  ため採用**——上記の降格・優先順位変更で対応した。
 - **更新規約**: `practice_split_builder.py` または `LEARNING_SEED` を
   変更して manifest を再生成する場合は、その変更を repin（PR レビュー
   経由での `practice_audio_split_manifest_sha` 更新）として扱い、
