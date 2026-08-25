@@ -107,10 +107,32 @@
 # から domains/identity_domain_run9_v1.json anchor_hashes.user の現行値
 # へ更新——詳細・理由は同ファイル pin_source_candidates.user と
 # inputs/rights_manifest.json voice_identity_rights.binding_note を正と
-# する）。連動して genome_id も再計算される（実測: R9F-01 =
+# する）。連動して genome_id も再計算される（当時実測: R9F-01 =
 # f5ea253804728b3b / R9F-02 = 72423141c1add7e8、上記旧値から相異・
 # 再計算で不変であることを確認済み）——RUN9 は出生前（founders/ への
 # 永続 genome 文書の書き出し・render とも未実施）のため科学的影響はない。
+#
+# 2026-08-25 追記（Codex bot レビュー PR #320 第2巡指摘, P1, 採用, Fix 3）:
+# 上記 Fix 1 の binding（voice_identity_rights 層全体）も usage_grants /
+# usage_grants_note を含んでおり、raw_audio_publication /
+# model_general_distribution の別承認（rev 0.2 改訂4が定める設計上正規の
+# 可変状態）が発生するたびに anchor が動く欠陥（据え置けば stale pin・
+# 追随すれば不要な genome_id 変動という Fix 1 で解消したはずの二律背反の
+# 再発）だった。binding 対象を新設
+# `run9_schema.extract_user_identity_attestation_projection()` が返す
+# 「不変 identity-attestation projection」（schema/source_layer/
+# donor_ledger_source/donor_ledger_schema/transcribed_at/entries/
+# rights_class/consent_status/attestation の閉じた9キーのみ——
+# usage_grants 系・role/note/usage_grants_note/binding_note の散文欄・
+# schema_legacy を除外）へさらに再限定し、repin した（旧値
+# ad54200af4d42433439702946aa65e4a38848f3d8ec0e52140b351e2a9afae6b から
+# domains/identity_domain_run9_v1.json anchor_hashes.user の現行値へ
+# 更新——詳細・理由は同ファイル pin_source_candidates.user と
+# inputs/rights_manifest.json voice_identity_rights.binding_note を正と
+# する）。連動して genome_id も再計算される（実測: R9F-01 =
+# 66f420672a154283 / R9F-02 = 63f4b8f24b827cd4、上記旧値から相異・
+# 再計算で不変であることを確認済み）——RUN9 は出生前のため科学的影響は
+# ない。
 #
 # 各欄の pin 状況は {value, status, reason, source?} 形（VG_FOUNDRY の
 # debt/RUN_CONTRACT_SCHEMA_v1.json pinned_field 慣習に倣うが独立実装 —
@@ -446,11 +468,13 @@ founder_genome_shas:
       attestation 実行」節参照）——`run9_schema.build_founder()` の
       ValueError 拒否（未 pin domain、DESIGN_RUN9 §22 実行順 step 3→4 の
       機械強制）はもはや働かず、genome_id は現行 domain draft から決定論的
-      に計算可能（実測・再計算一致確認済み: R9F-01 = f5ea253804728b3b。
-      2026-08-25 Codex bot レビュー PR #320 第1巡 Fix 1（P1, 採用）による
-      anchor_hashes.user の binding scope 是正 repin 後の値——旧値
-      2f7df5a90a6c99c9 は repin 前の binding（rights_manifest.json 全体
-      束縛）時代の値、上記「2026-08-25 追記」節参照）。
+      に計算可能（実測・再計算一致確認済み: R9F-01 = 66f420672a154283。
+      2026-08-25 Codex bot レビュー PR #320 第2巡 Fix 3（P1, 採用）による
+      anchor_hashes.user の binding scope 再限定 repin 後の値——旧値
+      f5ea253804728b3b は第1巡 Fix 1 repin 後（本 projection 化前）の値、
+      さらにその前の 2f7df5a90a6c99c9 は repin 前の binding
+      （rights_manifest.json 全体束縛）時代の値、上記「2026-08-25 追記」
+      節参照）。
       ただし本欄が pin する対象は genome_id ではなく永続 genome 文書
       ファイル（founders/R9F-01_genome.json）バイトの sha256 であり（上記
       「founder genome shas」コメント参照）、その文書を実際に `founders/`
@@ -467,8 +491,10 @@ founder_genome_shas:
       の user anchor も PINNED 済み（R9F-01 と同一根拠——本欄冒頭コメント
       「2026-08-25 User attestation 実行」節参照）。genome_id は現行 domain
       draft から決定論的に計算可能（実測・再計算一致確認済み: R9F-02 =
-      72423141c1add7e8（同 Fix 1 repin 後の値——旧値 9cd047c667dcb96e は
-      repin 前の値）、R9F-01 の値と相異することも確認済み）。R9F-01 と
+      63f4b8f24b827cd4（同 Fix 3 repin 後の値——旧値 72423141c1add7e8 は
+      第1巡 Fix 1 repin 後（本 projection 化前）の値、さらにその前の
+      9cd047c667dcb96e は repin 前の値）、R9F-01 の値と相異することも
+      確認済み）。R9F-01 と
       同一理由（genome 文書の正式発行 builder・pin 手続き未配線）により
       本欄は引き続き PENDING。発行後は founders/R9F-02_genome.json のバイト
       sha256（64hex）を pin する。

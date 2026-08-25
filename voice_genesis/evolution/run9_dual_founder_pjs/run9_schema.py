@@ -5268,6 +5268,133 @@ def extract_voice_identity_rights_layer(four_layer_rights_manifest: Mapping[str,
     return flat
 
 
+# Codex bot レビュー PR #320 第2巡指摘（P1, 採用, Fix 3）: `extract_voice_
+# identity_rights_layer()` は voice_identity_rights 層**全体**（Fix 1 の
+# binding scope 是正後の対象）を anchor 束縛値にしていたが、その payload
+# には `usage_grants` と `usage_grants_note` も含まれる。`raw_audio_
+# publication` / `model_general_distribution` は rev 0.2 改訂4が定める
+# 設計上正規の別承認により not_granted → granted へ遷移し得るため、この
+# 遷移が起きるたびに anchor（延いては genome_id）が動く——「据え置けば
+# stale pin、追随すれば不要な genome_id 変動」という Fix 1 で解消した
+# はずの二律背反が形を変えて再発する。anchor 束縛の対象を「attest 後の
+# あらゆる設計上正規の遷移に対して不変な部分集合」（本関数が返す
+# projection）へさらに再限定する。
+_RIGHTS_MANIFEST_ATTESTATION_PROJECTION_SCHEMA = "run9-identity-attestation-projection/1.0"
+
+# projection が voice_identity_rights 層から逐語コピーするキー
+# （donor_ledger_source/donor_ledger_schema/transcribed_at = 転記
+# provenance、entries = UC-001..017、rights_class/consent_status/
+# attestation = 宣誓事実そのもの）。schema/source_layer の2キーは
+# projection 自身が新設するリテラルで、層からのコピーではない。
+_RIGHTS_MANIFEST_ATTESTATION_PROJECTION_COPIED_KEYS: Tuple[str, ...] = (
+    "donor_ledger_source",
+    "donor_ledger_schema",
+    "transcribed_at",
+    "entries",
+    "rights_class",
+    "consent_status",
+    "attestation",
+)
+
+
+def extract_user_identity_attestation_projection(manifest: Mapping[str, Any]) -> Dict[str, Any]:
+    """4層 rights_manifest（schema `run9-rights-manifest/2.0`）から、User
+    donor identity の anchor pin 専用に「attest 後の設計上正規のあらゆる
+    遷移に対して不変な」部分集合（identity-attestation projection）を
+    抽出する（Fix 3）。`domains/identity_domain_run9_v1.json anchor_hashes.
+    user` が束縛するのは本関数の返り値の正規形 sha256 であり、
+    `extract_voice_identity_rights_layer()`（voice_identity_rights 層
+    全体）の返り値ではない——後者は
+    `verify_rights_manifest_against_ledger()` 向けの汎用アダプタとして
+    従来どおり残る（削除・改変しない。anchor 束縛の役割だけが本関数へ
+    移る）。
+
+    内部で `validate_rights_manifest_four_layer()`（既存の4層全体構造
+    検証、`extract_voice_identity_rights_layer()` と同じ fail-closed
+    方式）を先に実行する。さらに `attestation` が attested 形態
+    （`attested=True`）でなければ `Run9ValidationError`（`ValueError`
+    サブクラス）で拒否する——本 projection は anchor pin 専用であり、
+    pending 形態（`attested=False`）の hash が anchor 候補として見える
+    経路をここで構造的に閉じる。
+
+    返り値は以下の**閉じたキー集合のみ**を持つ dict（他キー混入禁止）:
+      - `schema`: `"run9-identity-attestation-projection/1.0"`
+        （projection 自身の新設リテラル。self-describing であることに
+        加え、`voice_identity_rights.schema_legacy`
+        （`run9-user-donor-rights/1.0`）や `extract_voice_identity_rights_
+        layer()` の返り値（`schema` = 同 legacy 値）とはハッシュ対象の
+        キー集合・意味が異なるため、schema 文字列自体でドメイン分離する）
+      - `source_layer`: `"voice_identity_rights"`
+      - `donor_ledger_source` / `donor_ledger_schema` / `transcribed_at`
+        （層から逐語コピー — donor ledger からの転記であることを示す
+        provenance）
+      - `entries`（層から逐語コピー — UC-001..UC-017 の17件）
+      - `rights_class` / `consent_status`（層から逐語コピー）
+      - `attestation`（層から逐語コピー — attested/attested_by/
+        attested_at/statement の4キー、上記ガードにより常に attested
+        形態）
+
+    **意図的に除外するもの**（除外理由）:
+      1. `usage_grants` / `usage_grants_note` / 任意の `<grant>_approval`
+         ブロック — `raw_audio_publication` / `model_general_distribution`
+         は「User attest 完了後、別承認により not_granted → granted へ
+         遷移する」という rev 0.2 改訂4（DESIGN_RUN9_REVISION_0.2.md
+         194-199行）が定める設計上正規の可変状態であり、宣誓事実
+         （entries/attestation/両 status）とは別の遷移軸を持つ。
+         `run9_identity_anchor` grant も同じ理由で除外する——Fix 27（PR
+         #319 第14巡）により同 grant の唯一の根拠は
+         `attestation.attested=True` 自体であり（別途の承認記録は要求
+         されない）、projection に既に含む `attestation` ブロックを超える
+         情報を grant 自体は持たない派生状態にすぎない。含めれば
+         `usage_grants` の値が動くたびに repin が必要になる編集面が
+         1つ増えるだけで、projection の不変性を薄める。
+      2. `role` / `note` / `usage_grants_note` / `binding_note` の散文
+         ドキュメント欄 — レビューでの文言明確化が宣誓事実を変えずに
+         正当に進化する欄であり、特に `binding_note` は束縛方式自体の
+         記述という自己参照になる（含めると binding 文書の明確化の
+         たびに repin が強制される——実際に Fix 1 で `binding_note` の
+         追記が repin を要した前例がある。Fix 3 でこの自己参照を解消
+         する）。
+      3. `schema_legacy`（`extract_voice_identity_rights_layer()` は
+         これを `schema` へ読み替えて透過するが、本 projection は
+         projection 自身の新設 schema リテラル（上記）で置き換える —
+         legacy アダプタの都合を anchor pin 側へ持ち込まない）。
+
+    不変性の設計原則: projection に含まれる全フィールドは attest 後の
+    設計上正規のあらゆる遷移（grant 別承認・散文編集・外部3層
+    （performance_rights/composition_rights/recording_master_rights）の
+    解決）に対して不変。anchor を動かせるのは宣誓事実そのもの
+    （entries / attestation / 両 status）の変更のみである。
+    """
+    if not isinstance(manifest, dict):
+        raise Run9ValidationError(
+            "four-layer rights manifest must be an object, got "
+            f"{type(manifest).__name__}"
+        )
+    validate_rights_manifest_four_layer(manifest)
+    layer = manifest.get("voice_identity_rights")
+    if not isinstance(layer, dict):
+        raise Run9ValidationError(
+            f"voice_identity_rights layer must be an object, got {type(layer).__name__}"
+        )
+    attestation = layer.get("attestation")
+    attested = attestation.get("attested") if isinstance(attestation, dict) else attestation
+    if attested is not True:
+        raise Run9ValidationError(
+            "extract_user_identity_attestation_projection() requires "
+            "voice_identity_rights.attestation.attested == True — this projection is "
+            "anchor-pin-only and must not expose a pending-form hash as an anchor "
+            f"candidate (Fix 3), got attestation.attested={attested!r}"
+        )
+    projection: Dict[str, Any] = {
+        "schema": _RIGHTS_MANIFEST_ATTESTATION_PROJECTION_SCHEMA,
+        "source_layer": "voice_identity_rights",
+    }
+    for key in _RIGHTS_MANIFEST_ATTESTATION_PROJECTION_COPIED_KEYS:
+        projection[key] = copy.deepcopy(layer[key])
+    return projection
+
+
 def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
     """4層 rights_manifest（schema `run9-rights-manifest/2.0`）の構造を
     検証する。実体（provenance の個別値が事実として正しいか）は

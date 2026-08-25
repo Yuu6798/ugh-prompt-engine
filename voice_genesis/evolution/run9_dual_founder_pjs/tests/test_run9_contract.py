@@ -2473,11 +2473,18 @@ def test_run9_attest20260825_domain_user_anchor_now_pinned() -> None:
     recording_master_rights）の外部第三者 provenance が将来解決されても
     anchor が動かないことの直接保証は
     `test_fix320_1_user_anchor_unaffected_by_external_layer_only_change`
-    が別途担う。"""
+    が別途担う。
+
+    Codex bot レビュー PR #320 第2巡指摘（P1, 採用, Fix 3）: 束縛対象を
+    voice_identity_rights 層全体から `extract_user_identity_attestation_
+    projection()` が返す不変 projection へさらに再限定したため、本テストの
+    基準関数を張り替える（層抽出関数自体の単体テストは
+    `test_fix320_1_user_anchor_binds_only_voice_identity_rights_layer_not_
+    whole_file` 内で layer_sha として引き続き参照・別途保持）。"""
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
     rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
-    layer = m.extract_voice_identity_rights_layer(rights)
-    assert domain.anchor_hashes["user"] == _sha256_canonical_json(layer)
+    projection = m.extract_user_identity_attestation_projection(rights)
+    assert domain.anchor_hashes["user"] == _sha256_canonical_json(projection)
     assert m._SHA256_HEX_RE.match(domain.anchor_hashes["user"])
     assert domain.anchor_hashes["user"] != "<PIN_BEFORE_RUN>"
     assert domain.is_pinned() is True
@@ -2488,14 +2495,24 @@ def test_fix320_1_user_anchor_binds_only_voice_identity_rights_layer_not_whole_f
     テスト: 旧 binding（rights_manifest.json 全体の正規形 sha256）だった
     ら一致するはずの値と、新 binding（voice_identity_rights 層のみ）の値が
     異なることを確認する——is_pinned() の pin 値が本当に層限定へ切り替わって
-    いることの negative control。"""
+    いることの negative control。
+
+    Codex bot レビュー PR #320 第2巡指摘（P1, 採用, Fix 3）更新: 現行の
+    anchor 束縛値は layer_sha ですらなく、さらに先の projection_sha である
+    ため、whole_file/layer/projection の3値がいずれも相異し、
+    anchor_hashes.user が projection_sha とのみ一致することを確認する
+    （`extract_voice_identity_rights_layer()` 自体は引き続き存在し
+    layer_sha を計算できる——汎用アダプタとしての単体挙動はここで維持
+    確認する）。"""
     rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     whole_file_sha = _sha256_canonical_json(rights)
     layer_sha = _sha256_canonical_json(m.extract_voice_identity_rights_layer(rights))
-    assert whole_file_sha != layer_sha
+    projection_sha = _sha256_canonical_json(m.extract_user_identity_attestation_projection(rights))
+    assert len({whole_file_sha, layer_sha, projection_sha}) == 3
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
-    assert domain.anchor_hashes["user"] == layer_sha
+    assert domain.anchor_hashes["user"] == projection_sha
     assert domain.anchor_hashes["user"] != whole_file_sha
+    assert domain.anchor_hashes["user"] != layer_sha
 
 
 def test_fix320_1_user_anchor_unaffected_by_external_layer_only_change() -> None:
@@ -2504,19 +2521,243 @@ def test_fix320_1_user_anchor_unaffected_by_external_layer_only_change() -> None
     usage_grants）が不変のまま、他層（例: composition_rights.provenance.
     composition.lyricist という PJS 側 `<UNRESOLVED_EXTERNAL>` 欄）だけを
     具体値へ書き換えた合成 manifest でも、抽出した voice_identity_rights
-    層の正規形 sha256（＝anchor が束縛する値）は変化しないことを直接
-    確認する——外部第三者 provenance の解決が anchor・genome_id に影響
-    しないという設計原則の機械証明。"""
+    層の正規形 sha256（＝Fix 1 時点で anchor が束縛していた値）は変化
+    しないことを直接確認する——外部第三者 provenance の解決が anchor・
+    genome_id に影響しないという設計原則の機械証明。
+
+    Codex bot レビュー PR #320 第2巡指摘（P1, 採用, Fix 3）更新: 現行の
+    anchor 束縛値は projection_sha であるため、projection_sha についても
+    同じ不変性を直接確認し、domain.anchor_hashes.user との一致を
+    projection_sha 基準へ張り替える（layer_sha の不変性確認は
+    `extract_voice_identity_rights_layer()` 自体の回帰として引き続き
+    保持する）。"""
     rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     original_layer_sha = _sha256_canonical_json(m.extract_voice_identity_rights_layer(rights))
+    original_projection_sha = _sha256_canonical_json(
+        m.extract_user_identity_attestation_projection(rights)
+    )
 
     mutated = copy.deepcopy(rights)
     mutated["composition_rights"]["provenance"]["composition"]["lyricist"] = "Someone Resolved"
     mutated_layer_sha = _sha256_canonical_json(m.extract_voice_identity_rights_layer(mutated))
+    mutated_projection_sha = _sha256_canonical_json(
+        m.extract_user_identity_attestation_projection(mutated)
+    )
 
     assert mutated_layer_sha == original_layer_sha
+    assert mutated_projection_sha == original_projection_sha
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
-    assert domain.anchor_hashes["user"] == mutated_layer_sha
+    assert domain.anchor_hashes["user"] == mutated_projection_sha
+
+
+# ---------------------------------------------------------------------------
+# PR #320 Codex bot レビュー第2巡対応 — Fix 3（P1）: user anchor 束縛を
+# 「不変 identity-attestation projection」へさらに再限定する
+# （`extract_user_identity_attestation_projection()`）。Fix 1（層全体束縛）は
+# usage_grants/usage_grants_note を含んでおり、raw_audio_publication/
+# model_general_distribution の別承認（rev 0.2 改訂4）が起きるたびに anchor
+# が動く二律背反を再発させていた——本節はその再限定の直接証拠を積む。
+# ---------------------------------------------------------------------------
+
+_ATTESTATION_PROJECTION_KEYS = frozenset(
+    {
+        "schema", "source_layer", "donor_ledger_source", "donor_ledger_schema",
+        "transcribed_at", "entries", "rights_class", "consent_status", "attestation",
+    }
+)
+
+
+def _projection_hash(rights: Dict[str, Any]) -> str:
+    """`extract_user_identity_attestation_projection()` の返り値の正規形
+    sha256（Fix 3 テスト群の共通ヘルパー）。"""
+    return _sha256_canonical_json(m.extract_user_identity_attestation_projection(rights))
+
+
+def test_fix320_3_projection_closed_key_set() -> None:
+    """projection の返り値が閉じた9キーちょうどを持つこと（余剰キーなし・
+    欠落キーなし）——`usage_grants`/`usage_grants_note`/`role`/`note`/
+    `binding_note`/`schema_legacy` がいずれも含まれないことを直接確認
+    する。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    projection = m.extract_user_identity_attestation_projection(rights)
+    assert set(projection.keys()) == _ATTESTATION_PROJECTION_KEYS
+    assert projection["schema"] == "run9-identity-attestation-projection/1.0"
+    assert projection["source_layer"] == "voice_identity_rights"
+    for excluded_key in (
+        "usage_grants", "usage_grants_note", "role", "note", "binding_note", "schema_legacy",
+    ):
+        assert excluded_key not in projection
+
+
+def test_fix320_3_pending_attestation_rejected() -> None:
+    """負例: attestation が pending 形態（`attested=false`）の manifest
+    からの抽出は `Run9ValidationError`（`ValueError` サブクラス）で拒否
+    されること——本 projection は anchor pin 専用であり、pending 形態の
+    hash が anchor 候補として見える経路をここで構造的に閉じる。"""
+    data = _pending_rights_manifest_fixture()
+    with pytest.raises(m.Run9ValidationError, match="attested"):
+        m.extract_user_identity_attestation_projection(data)
+
+
+def test_fix320_3_anchor_equals_projection_hash() -> None:
+    """統合テスト: `domain.anchor_hashes.user` が projection の実 hash と
+    一致すること（旧 `extract_voice_identity_rights_layer()` 基準の
+    anchor 一致テストは本関数基準へ張り替え済み——
+    `test_run9_attest20260825_domain_user_anchor_now_pinned` 参照）。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert domain.anchor_hashes["user"] == _projection_hash(rights)
+
+
+def test_fix320_3_invariant_to_raw_audio_publication_separate_approval() -> None:
+    """不変性 (a): `raw_audio_publication` を `granted` + 正しい承認記録
+    （`approved_at` の UTC ISO 8601 タイムスタンプ + 非空
+    `approval_statement` — 既存 validator が要求する形）付きへ遷移しても
+    projection（延いては anchor hash）は不変であること——別承認による
+    設計上正規の遷移が anchor を動かさないことの直接証明。変異後も四層
+    検証自体は通ることを前提として確認する。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    mutated["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Raw audio publication approved by User.",
+    }
+    m.validate_rights_manifest_four_layer(mutated)  # 前提: 変異後も四層検証は通る
+    assert _projection_hash(mutated) == original
+
+
+def test_fix320_3_invariant_to_usage_grants_note_wording() -> None:
+    """不変性 (b): `usage_grants_note` の文言変更は projection を変えない
+    こと。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["usage_grants_note"] = "Rewritten note text for clarity."
+    m.validate_rights_manifest_four_layer(mutated)
+    assert _projection_hash(mutated) == original
+
+
+def test_fix320_3_invariant_to_binding_note_wording() -> None:
+    """不変性 (c): `binding_note` の追記・文言変更は projection を変えない
+    こと——`binding_note` は束縛方式自体の記述という自己参照であり、
+    これを projection 外に置いたことで「binding 文書の明確化のたびに
+    repin」という Fix 1 時代の実例（本 PR の作業自体がその実例）を今後
+    解消することの直接証明。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["binding_note"] += " Additional clarifying remark."
+    m.validate_rights_manifest_four_layer(mutated)
+    assert _projection_hash(mutated) == original
+
+
+def test_fix320_3_invariant_to_role_and_note_wording() -> None:
+    """不変性 (d): `role` / `note` の文言変更は projection を変えないこと。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["role"] = "Rewritten role description."
+    mutated["voice_identity_rights"]["note"] = "Rewritten note description."
+    m.validate_rights_manifest_four_layer(mutated)
+    assert _projection_hash(mutated) == original
+
+
+def test_fix320_3_invariant_to_external_layer_resolution() -> None:
+    """不変性 (e): 外部3層の `<UNRESOLVED_EXTERNAL>` 欄が将来解決されても
+    projection は不変であること（Fix 1 の中核契約を projection 化後も
+    継承していることの確認 — `test_fix320_1_user_anchor_unaffected_by_
+    external_layer_only_change` の複数欄版）。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["composition_rights"]["provenance"]["composition"]["lyricist"] = "Someone Resolved"
+    mutated["recording_master_rights"]["provenance"]["voice_source"]["owner"] = "Someone Resolved"
+    m.validate_rights_manifest_four_layer(mutated)
+    assert _projection_hash(mutated) == original
+
+
+def test_fix320_3_sensitive_to_entries_mutation() -> None:
+    """感度の検証: `entries` の1件改変で projection hash が変わること。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["entries"][0]["duration_sec"] = 999.0
+    assert _projection_hash(mutated) != original
+
+
+def test_fix320_3_sensitive_to_attestation_statement_mutation() -> None:
+    """感度の検証: `attestation.statement` の改変で projection hash が
+    変わること。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original = _projection_hash(rights)
+    mutated = copy.deepcopy(rights)
+    mutated["voice_identity_rights"]["attestation"]["statement"] += " Amended."
+    assert _projection_hash(mutated) != original
+
+
+def test_fix320_3_projection_hash_is_sensitive_to_rights_class_and_consent_status() -> None:
+    """感度の検証（projection 構造への直接検証）: `rights_class`/
+    `consent_status` は projection の閉じたキー集合に含まれるため、値が
+    変われば canonical hash も変わる。
+
+    実装ノート: attested 形態は両 status が厳密に `USER_ATTESTED_OWN_VOICE`
+    と一致することを要求する（`_validate_rights_manifest_voice_identity_
+    attestation()`）ため、四層検証を満たしたまま `rights_class` だけを
+    単独で閉語彙外の値へ書き換えて `extract_user_identity_attestation_
+    projection()` を再度通すことはできない（`Run9ValidationError` の
+    form-mismatch で拒否される——`test_fix320_3_pending_attestation_
+    rejected` が pending 形態側の同種ガードを別途確認する）。本テストは
+    projection の**返り値そのもの**を直接変異させ、`rights_class`/
+    `consent_status` が canonical hash の対象キーに実際に含まれている
+    ことを確認する——宣誓事実（両 status）の変更が anchor hash に反映
+    される設計であることの直接証明であり、四層検証の form-mismatch ガード
+    とは独立した検証。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    projection = m.extract_user_identity_attestation_projection(rights)
+    mutated_projection = copy.deepcopy(projection)
+    mutated_projection["rights_class"] = "SOME_OTHER_VALUE"
+    mutated_projection["consent_status"] = "SOME_OTHER_VALUE"
+    assert _sha256_canonical_json(mutated_projection) != _sha256_canonical_json(projection)
+
+
+# ---------------------------------------------------------------------------
+# PR #320 Codex bot レビュー第2巡対応 — Fix 4（P2）: pin_source_candidates.user
+# の先頭 PINNED エントリを履歴として明示する（全 manifest hash を現行
+# レシピとして提示し続け後続 REPINNED と矛盾していた欠陥の是正）。
+# ---------------------------------------------------------------------------
+
+_PIN_SOURCE_CURRENT_LABELS = ("SUPERSEDED", "PENDING", "REPINNED")
+
+
+def test_fix320_4_no_current_pinned_label_in_user_pin_source_candidates() -> None:
+    """回帰テスト（Codex bot レビュー PR #320 第2巡指摘, P2, 採用, Fix 4）:
+    `pin_source_candidates.user` のどのエントリも先頭語が生の `PINNED`
+    ではないこと（`SUPERSEDED`/`PENDING`/`REPINNED` のいずれかのみ）、
+    かつ末尾以外の `REPINNED`/`PINNED` 系エントリはすべて `SUPERSEDED`
+    注記を含むことを検証する——「現行レシピを名乗る PINNED ラベル」が
+    1件も残らないことの機械証明。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    entries = domain_raw["pin_source_candidates"]["user"]
+    assert len(entries) >= 2
+    for entry in entries:
+        assert entry.startswith(_PIN_SOURCE_CURRENT_LABELS), entry[:80]
+        assert not entry.startswith("PINNED"), entry[:80]
+    for entry in entries[:-1]:
+        if entry.startswith("REPINNED") or entry.startswith("PINNED"):
+            assert "SUPERSEDED" in entry, entry[:80]
+
+
+def test_fix320_4_final_entry_is_current_repinned_recipe() -> None:
+    """回帰テスト: 末尾エントリ（現行レシピ）は `REPINNED` で始まり、
+    `SUPERSEDED` 注記を含まないこと（現行レシピ自身を SUPERSEDED 扱い
+    しては矛盾するため）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    entries = domain_raw["pin_source_candidates"]["user"]
+    final_entry = entries[-1]
+    assert final_entry.startswith("REPINNED")
+    assert "SUPERSEDED" not in final_entry.split(":", 1)[0]
 
 
 def test_revision02_gate_remains_blocked_after_af0_ritsu_backbone_pins(
