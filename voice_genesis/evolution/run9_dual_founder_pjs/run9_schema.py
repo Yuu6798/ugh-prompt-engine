@@ -3348,6 +3348,67 @@ _FACTOR_LEVEL_PROBE_IDS: FrozenSet[str] = frozenset({"P1", "P2", "P3"})
 # 自由記述のまま許容する（本 Fix の対象は axes の形状・cell 対応のみ）。
 _FACTOR_LEVELS_AXES_KEY = "axes"
 
+# ---------------------------------------------------------------------------
+# PR #322 第2巡指摘 Fix 3（P2, 採用）: 軸別の意味照合。Fix 2 はラベル
+# （axis_name/level_name）の実在照合のみで、宣言された具体値と cell の実
+# note フィールドとの一致は見ていなかった（例: P1-REG-LOW-DUR-SHORT の
+# MIDI を 57→65 に変えても `levels: {register: low}` のまま通過してい
+# た）。以下、各軸の「宣言 ↔ 実 note」照合をここで凍結する。数値軸
+# （register/duration/release_duration）は cell の**phrase-final note**
+# （`is_phrase_final: true`。P1/P3 の対象 cell は必ずちょうど1つ持つ —
+# 単一 note の register/duration cell では唯一の note、P2/P3 の複数 note
+# cell では終端/target note）の該当フィールドと厳密等値照合する。
+# transition_direction は先頭 note → 終端 note の pitch_midi 系列を
+# `"{start}->{end}"` として文字列照合する。onset_consonant_class /
+# ending_voicing は kana → クラスの対応表（validator 内で独立に凍結 —
+# manifest 側の記述テキストを自己参照しない）を phrase-final note の kana
+# へ適用して照合する。phrase_dynamics は velocity/dynamics 欄が note
+# schema に存在しないため、構造（非減少 pitch 系列 + phrase-final note が
+# 末尾）の実在を照合する。
+# ---------------------------------------------------------------------------
+
+# onset_consonant_class の各水準に属する kana → level_name の対応表
+# （P2 factor_levels.axes.onset_consonant_class の記述テキストと同じ
+# メンバー構成だが、manifest 側の自由記述文字列をパースするのではなく
+# validator 内の独立した凍結表として保持する — 記述文字列と note の両方
+# が同時にずれて「整合しているように見える」誤りを検出できない循環照合を
+# 避けるため）。
+_ONSET_CONSONANT_CLASS_KANA_TABLE: Mapping[str, str] = types.MappingProxyType({
+    "さ": "fricative_s", "そ": "fricative_s", "す": "fricative_s",
+    "く": "stop_k", "か": "stop_k",
+    "ぎ": "stop_g_voiced",
+    "の": "nasal_n",
+    "や": "semivowel_y", "よ": "semivowel_y",
+    "わ": "semivowel_w",
+    "ら": "liquid_r", "り": "liquid_r",
+    "い": "vowel_only",
+})
+
+# ending_voicing の kana → 有声性区分の対応表。標準的な日本語の無声化
+# 規則（無声子音 + 狭母音 /i//u/ は無声化しやすい）に基づく（P3
+# factor_levels.axes.ending_voicing の記述と同一の理解に基づく独立表）。
+# vocabulary に登場する16 kana 全件を分類する（登場していない水準・軸の
+# ためだが、将来 cell が増えた際にも kana table の再定義を要さない）。
+_ENDING_VOICING_KANA_TABLE: Mapping[str, str] = types.MappingProxyType({
+    "く": "unvoiced", "す": "unvoiced",  # 無声子音 + /u/ = 無声化しやすい
+    "さ": "voiced", "そ": "voiced", "か": "voiced", "ぎ": "voiced",
+    "の": "voiced", "や": "voiced", "よ": "voiced", "わ": "voiced",
+    "ら": "voiced", "り": "voiced", "い": "voiced", "は": "voiced",
+    "み": "voiced", "た": "voiced",
+})
+
+# 数値照合軸: axis_name -> 照合対象の note フィールド名。
+_AXIS_NUMERIC_FIELD_CHECKS: Mapping[str, str] = types.MappingProxyType({
+    "register": "pitch_midi",
+    "duration": "duration_beats",
+    "release_duration": "duration_beats",
+})
+# kana クラス照合軸: axis_name -> kana 対応表。
+_AXIS_KANA_CLASS_CHECKS: Mapping[str, Mapping[str, str]] = types.MappingProxyType({
+    "onset_consonant_class": _ONSET_CONSONANT_CLASS_KANA_TABLE,
+    "ending_voicing": _ENDING_VOICING_KANA_TABLE,
+})
+
 _NOTE_KEYS: FrozenSet[str] = frozenset(
     {"kana", "pitch_midi", "duration_beats", "phrase_index", "is_phrase_final"}
 )
@@ -3518,7 +3579,19 @@ def _validate_probe_note(note: Any, *, field: str) -> Dict[str, Any]:
     return note
 
 
-def _validate_probe_cell_source(source: Any, *, field: str) -> None:
+def _validate_probe_cell_source(
+    source: Any, *, field: str, score_path: Optional[Path] = None
+) -> None:
+    """`score_path` はテスト用の依存性注入点（PR #322 第2巡指摘 Fix 4）—
+    省略時（`None`）は呼び出しのたびにモジュールレベル定数
+    `SCORE_PY_REFERENCE_PATH`（凍結・改変禁止の read-only 参照）を都度
+    参照する（デフォルト引数値として def 時に束縛すると、テストが
+    `run9_schema.SCORE_PY_REFERENCE_PATH` を monkeypatch しても本関数の
+    既定値には反映されない late-binding の罠を避けるため、あえて `None`
+    センチネル + 関数本体内解決にしている）。実 score.py の rename/削除は
+    一切行わない。"""
+    if score_path is None:
+        score_path = SCORE_PY_REFERENCE_PATH
     if not isinstance(source, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(source).__name__}")
     unknown = set(source.keys()) - _CELL_SOURCE_KEYS
@@ -3541,19 +3614,28 @@ def _validate_probe_cell_source(source: Any, *, field: str) -> None:
             f"{field}.transcribed_from_sha256 must be exactly 64 lowercase hex characters, "
             f"got {declared_sha!r}"
         )
-    if SCORE_PY_REFERENCE_PATH.is_file():
-        # read-only 参照の実バイトと逐語照合する（Design Memo 冒頭「score.py
-        # は read-only 参照」— 読むだけで改変しない）。ファイルが見つから
-        # ない実行環境（配布物にこのパスを含まない等）では構造検証のみに
-        # 留め fail-open にはしない代わりに fail-closed にもしない —
-        # 純粋な形式検証（64hex）は上で既に強制済み。
-        actual_sha = compute_file_sha256(SCORE_PY_REFERENCE_PATH)
-        if declared_sha != actual_sha:
-            raise Run9ValidationError(
-                f"{field}.transcribed_from_sha256 ({declared_sha!r}) does not match the actual raw "
-                f"sha256 of {SCORE_PY_REFERENCE_PATH} ({actual_sha!r}) — the P0 transcription source "
-                "must stay byte-verified against the frozen read-only reference"
-            )
+    # PR #322 第2巡指摘 Fix 4（P2, 採用）: 転記元ファイル不在を
+    # fail-closed とする（旧実装は `score_path.is_file()` が False の
+    # ときに照合そのものをスキップし、64hex 形式でさえあれば値を無条件に
+    # 受理していた——installed/部分アーティファクト環境で P0 の
+    # byte-verified 主張が無音で失われる欠陥だった）。本 validator は
+    # repo checkout 内での実行を前提とし、転記元 score.py の実在 + hash
+    # 一致が P0 受理の必須条件である。
+    if not score_path.is_file():
+        raise Run9ValidationError(
+            f"{field}: pinned P0 transcription source {score_path} does not exist — this validator "
+            "requires running from within a full repo checkout where the frozen read-only reference "
+            "voice_genesis/singer/score.py is present; existence + hash equality against this file "
+            "is a mandatory precondition for P0 acceptance (cannot verify a byte-verified verbatim "
+            "transcription claim without the source file to verify it against)"
+        )
+    actual_sha = compute_file_sha256(score_path)
+    if declared_sha != actual_sha:
+        raise Run9ValidationError(
+            f"{field}.transcribed_from_sha256 ({declared_sha!r}) does not match the actual raw "
+            f"sha256 of {score_path} ({actual_sha!r}) — the P0 transcription source must stay "
+            "byte-verified against the frozen read-only reference"
+        )
     _require_non_empty_str(source["transcription_scope"], field=f"{field}.transcription_scope")
     if source["verbatim"] is not True:
         raise Run9ValidationError(f"{field}.verbatim must be exactly True, got {source['verbatim']!r}")
@@ -3664,15 +3746,155 @@ def _validate_factor_levels_axes(data: Any, *, field: str) -> Dict[str, Dict[str
     return data
 
 
-def _validate_probe_factor_levels_cell_mapping(
-    *, factor_levels: Any, cell_levels: List[Dict[str, str]], field: str
+def _numeric_equal(a: Any, b: Any) -> bool:
+    """bool を除外した int/float 同士の厳密等値。"""
+    return (
+        isinstance(a, (int, float)) and not isinstance(a, bool)
+        and isinstance(b, (int, float)) and not isinstance(b, bool)
+        and a == b
+    )
+
+
+def _select_phrase_final_note(cell: Mapping[str, Any], *, field: str) -> Dict[str, Any]:
+    """PR #322 第2巡指摘 Fix 3: 軸別意味照合の対象 note（`is_phrase_final:
+    true` の note）をちょうど1つに限定して返す。P1 の単一 note cell では
+    その唯一の note、P2/P3 の複数 note cell では終端/target note を指す
+    ——note 位置のインデックス（先頭/末尾）ではなく `is_phrase_final`
+    マーカーそのものを根拠にする。"""
+    finals = [n for n in cell["notes"] if n.get("is_phrase_final") is True]
+    if len(finals) != 1:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} must have exactly one note with "
+            f"is_phrase_final=true to serve as the semantic target for axis-value checking "
+            f"(Fix 3), got {len(finals)}"
+        )
+    return finals[0]
+
+
+def _check_axis_numeric_field(
+    cell: Mapping[str, Any], *, field_name: str, expected: Any, field: str, axis_name: str,
+    level_name: str,
 ) -> None:
-    """PR #322 第1巡指摘 Fix 2: `factor_levels.axes` と各 cell の `levels`
-    の双方向対応を検証する。前方（cell -> factor_levels 実在確認）+
-    後方（factor_levels の全水準が最低1 cell で使用されているか——未使用
-    水準は宣言と刺激の乖離として拒否）の両方向を機械強制する。個々の
-    cell は factor_levels の全軸を参照する必要はない（部分参照可 —
-    例: P1 の音程遷移 cell は register/duration 軸を参照しない）。"""
+    note = _select_phrase_final_note(cell, field=field)
+    actual = note[field_name]
+    if not _numeric_equal(actual, expected):
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
+            f"(factor_levels.axes.{axis_name}.{level_name} = {expected!r}) but the phrase-final "
+            f"note's {field_name} = {actual!r} — declared level does not match the rendered stimulus"
+        )
+
+
+def _check_axis_kana_class(
+    cell: Mapping[str, Any], *, table: Mapping[str, str], field: str, axis_name: str, level_name: str,
+) -> None:
+    note = _select_phrase_final_note(cell, field=field)
+    kana = note["kana"]
+    if kana not in table:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} phrase-final note kana {kana!r} is not in the "
+            f"frozen {axis_name} kana table ({sorted(table)}) — cannot verify declared level "
+            f"{level_name!r}"
+        )
+    actual_class = table[kana]
+    if actual_class != level_name:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} but "
+            f"phrase-final note kana {kana!r} maps to {actual_class!r} in the frozen {axis_name} "
+            "kana table — declared level does not match the rendered stimulus"
+        )
+
+
+def _check_axis_transition_direction(
+    cell: Mapping[str, Any], *, expected: Any, field: str, axis_name: str, level_name: str,
+) -> None:
+    notes = cell["notes"]
+    if len(notes) < 2:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} but "
+            f"has fewer than 2 notes ({len(notes)}) — a transition needs a start and end note"
+        )
+    actual = f"{notes[0]['pitch_midi']}->{notes[-1]['pitch_midi']}"
+    if not isinstance(expected, str) or actual != expected:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
+            f"(factor_levels.axes.{axis_name}.{level_name} = {expected!r}) but the actual first->last "
+            f"note pitch_midi sequence is {actual!r} — declared level does not match the rendered "
+            "stimulus"
+        )
+
+
+def _check_axis_phrase_dynamics_structure(
+    cell: Mapping[str, Any], *, field: str, axis_name: str, level_name: str,
+) -> None:
+    """phrase_dynamics（弱→強）: note schema に velocity/dynamics 欄が
+    存在しないため、構造（非減少 pitch 系列 + phrase-final note が末尾）
+    の実在を意味照合の代替とする。"""
+    notes = cell["notes"]
+    final = _select_phrase_final_note(cell, field=field)
+    if len(notes) < 2 or notes[-1] is not final:
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} but "
+            "does not have >= 2 notes ending with the phrase-final note — a weak->strong build "
+            "requires the phrase-final (strong) note to be the last note in the sequence"
+        )
+    pitches = [n["pitch_midi"] for n in notes]
+    if any(pitches[i] > pitches[i + 1] for i in range(len(pitches) - 1)):
+        raise Run9ValidationError(
+            f"{field}: cell {cell.get('cell_id')!r} declares levels.{axis_name}={level_name!r} "
+            "which requires a non-decreasing pitch contour across notes (the structural proxy for "
+            f"weak->strong used in the absence of a velocity/dynamics field), got pitches {pitches!r}"
+        )
+
+
+def _validate_axis_semantic_value(
+    *, axis_name: str, level_name: str, axis_value: Any, cell: Mapping[str, Any], field: str,
+) -> None:
+    """PR #322 第2巡指摘 Fix 3（P2, 採用）の実装: cell が参照する
+    (axis_name, level_name) について、factor_levels.axes が宣言する
+    具体値 (`axis_value`) が cell の実 note フィールドと一致することを
+    照合する。未登録の axis は fail-closed で拒否する（新しい軸を追加した
+    のに対応する意味照合を追加し忘れる事故を構造的に防ぐ）。"""
+    if axis_name in _AXIS_NUMERIC_FIELD_CHECKS:
+        _check_axis_numeric_field(
+            cell, field_name=_AXIS_NUMERIC_FIELD_CHECKS[axis_name], expected=axis_value, field=field,
+            axis_name=axis_name, level_name=level_name,
+        )
+    elif axis_name in _AXIS_KANA_CLASS_CHECKS:
+        _check_axis_kana_class(
+            cell, table=_AXIS_KANA_CLASS_CHECKS[axis_name], field=field, axis_name=axis_name,
+            level_name=level_name,
+        )
+    elif axis_name == "transition_direction":
+        _check_axis_transition_direction(
+            cell, expected=axis_value, field=field, axis_name=axis_name, level_name=level_name
+        )
+    elif axis_name == "phrase_dynamics":
+        _check_axis_phrase_dynamics_structure(
+            cell, field=field, axis_name=axis_name, level_name=level_name
+        )
+    else:
+        raise Run9ValidationError(
+            f"{field}: no axis-specific semantic checker is registered for axis {axis_name!r} (Fix 3 "
+            "requires every declared factor_levels axis to have a checker comparing the declared "
+            "level value against the actual rendered stimulus — an unregistered axis would silently "
+            "accept a repin that changes the notes without updating the label)"
+        )
+
+
+def _validate_probe_factor_levels_cell_mapping(
+    *, factor_levels: Any, cells: List[Dict[str, Any]], field: str
+) -> None:
+    """PR #322 第1巡指摘 Fix 2 + 第2巡指摘 Fix 3: `factor_levels.axes` と
+    各 cell の `levels` の双方向対応（ラベル実在）+ 軸別の意味照合
+    （宣言された具体値と cell の実 note フィールドの一致）を検証する。
+    前方（cell -> factor_levels 実在確認）+ 後方（factor_levels の全水準
+    が最低1 cell で使用されているか——未使用水準は宣言と刺激の乖離として
+    拒否）の両方向のラベル対応に加え、参照された水準の具体値そのものが
+    実際に render される note と一致するかを軸別 checker
+    （`_validate_axis_semantic_value()`）で照合する。個々の cell は
+    factor_levels の全軸を参照する必要はない（部分参照可 — 例: P1 の
+    音程遷移 cell は register/duration 軸を参照しない）。"""
     if not isinstance(factor_levels, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(factor_levels).__name__}")
     if _FACTOR_LEVELS_AXES_KEY not in factor_levels:
@@ -3682,7 +3904,8 @@ def _validate_probe_factor_levels_cell_mapping(
     )
 
     used: Dict[str, set] = {axis_name: set() for axis_name in axes}
-    for i, levels in enumerate(cell_levels):
+    for i, cell in enumerate(cells):
+        levels = cell[_CELL_LEVELS_KEY]
         for axis_name, level_name in levels.items():
             if axis_name not in axes:
                 raise Run9ValidationError(
@@ -3696,6 +3919,10 @@ def _validate_probe_factor_levels_cell_mapping(
                     f"({sorted(axes[axis_name])})"
                 )
             used[axis_name].add(level_name)
+            _validate_axis_semantic_value(
+                axis_name=axis_name, level_name=level_name, axis_value=axes[axis_name][level_name],
+                cell=cell, field=f"cells[{i}]",
+            )
 
     for axis_name, levels in axes.items():
         unused = set(levels) - used[axis_name]
@@ -3765,17 +3992,14 @@ def _validate_probe_object(
     cells = probe["cells"]
     if not isinstance(cells, list) or not cells:
         raise Run9ValidationError(f"{field}.cells must be a non-empty list, got {cells!r}")
-    cell_levels: List[Dict[str, str]] = []
     for i, cell in enumerate(cells):
-        levels = _validate_probe_cell(
+        _validate_probe_cell(
             cell, probe_id=expected_probe_id, field=f"{field}.cells[{i}]", seen_cell_ids=seen_cell_ids
         )
-        if levels is not None:
-            cell_levels.append(levels)
 
     if expected_probe_id in _FACTOR_LEVEL_PROBE_IDS:
         _validate_probe_factor_levels_cell_mapping(
-            factor_levels=probe["factor_levels"], cell_levels=cell_levels, field=f"{field}.factor_levels"
+            factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
         )
 
     if expected_probe_id == "P5":
@@ -3983,8 +4207,58 @@ def _validate_render_contract(data: Any) -> None:
         last_index = idx
 
 
+def _load_identity_metric_space_document(*, path: Optional[Path] = None) -> Dict[str, Any]:
+    """PR #322 第2巡指摘 Fix 5 用: `revision_bridge.*.identity_metric_space_ref`
+    の dotted path 全体を実文書に対して走査するために、
+    `inputs/identity_metric_space.json`（凍結・改変禁止の read-only 入力）
+    を読み込むだけの loader。他の validator（`validate_identity_metric_
+    space_manifest()`）と異なり、本関数は形状検証は行わず単に
+    `_loads_strict_json()` でパースした dict を返す——形状検証は
+    `validate_identity_metric_space_manifest()` の職務のまま重複させない。
+    `path` 省略時（`None`）はモジュールレベル定数 `IDENTITY_METRIC_SPACE_
+    PATH` を呼び出しのたびに参照する（`_validate_probe_cell_source()` と
+    同じ late-binding 回避パターン）。
+    """
+    if path is None:
+        path = IDENTITY_METRIC_SPACE_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"revision_bridge.*.identity_metric_space_ref の dotted path 解決には {path} の実在が "
+            "必須だが見つからない（凍結・改変禁止の read-only 入力）"
+        )
+    return _loads_strict_json(path.read_text(encoding="utf-8"))
+
+
+def _resolve_identity_metric_space_ref(
+    ref: str, *, document: Mapping[str, Any], field: str
+) -> None:
+    """PR #322 第2巡指摘 Fix 5（P2, 採用）の実装: `inputs/identity_metric_
+    space.json#a.b.c` 形式の参照の dotted path 全セグメントを実文書に
+    対して走査し、途中の typo（例: `#calibration.does_not_exist`）を
+    fail-closed で検出する。旧実装は先頭セグメントのみを閉じた語彙表と
+    照合しており、深部・中間セグメントの typo は素通りしていた。"""
+    suffix = ref[len(_IDENTITY_METRIC_SPACE_REF_PREFIX):]
+    segments = suffix.split(".") if suffix else []
+    if not segments or any(not s for s in segments):
+        raise Run9ValidationError(
+            f"{field} has a malformed dotted path suffix after "
+            f"{_IDENTITY_METRIC_SPACE_REF_PREFIX!r}: {suffix!r}"
+        )
+    current: Any = document
+    walked: List[str] = []
+    for segment in segments:
+        walked.append(segment)
+        if not isinstance(current, Mapping) or segment not in current:
+            raise Run9ValidationError(
+                f"{field} = {ref!r} does not resolve against {IDENTITY_METRIC_SPACE_PATH} — segment "
+                f"{segment!r} (path so far: {'.'.join(walked)!r}) does not exist"
+            )
+        current = current[segment]
+
+
 def _validate_revision_bridge_entry(
-    entry: Any, *, entry_name: str, field: str, valid_cell_ids: FrozenSet[str]
+    entry: Any, *, entry_name: str, field: str, valid_cell_ids: FrozenSet[str],
+    identity_metric_space_document: Mapping[str, Any],
 ) -> None:
     if not isinstance(entry, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(entry).__name__}")
@@ -4017,13 +4291,9 @@ def _validate_revision_bridge_entry(
             f"{_IDENTITY_METRIC_SPACE_REF_PREFIX!r} (正本は inputs/identity_metric_space.json への "
             f"参照のみ — 式・値の重複定義禁止), got {ref!r}"
         )
-    top_segment = ref[len(_IDENTITY_METRIC_SPACE_REF_PREFIX):].split(".", 1)[0]
-    if top_segment not in _IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS:
-        raise Run9ValidationError(
-            f"{field}.identity_metric_space_ref top-level segment {top_segment!r} is not a known "
-            f"inputs/identity_metric_space.json top-level key "
-            f"({sorted(_IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS)})"
-        )
+    _resolve_identity_metric_space_ref(
+        ref, document=identity_metric_space_document, field=f"{field}.identity_metric_space_ref"
+    )
 
     new_render_required = entry["new_render_required"]
     if not isinstance(new_render_required, bool) or new_render_required is not requires_new_render:
@@ -4181,10 +4451,16 @@ def validate_probe_manifest(data: Mapping[str, Any]) -> None:
     missing_rb = set(_REVISION_BRIDGE_ENTRY_NAMES) - set(revision_bridge.keys())
     if missing_rb:
         raise Run9ValidationError(f"revision_bridge missing required entry(ies): {sorted(missing_rb)}")
+    # PR #322 第2巡指摘 Fix 5: dotted path 全体を実文書に対して走査する
+    # ため、`inputs/identity_metric_space.json`（凍結・改変禁止の
+    # read-only 入力）を1回だけ読み込み、全 revision_bridge エントリで
+    # 使い回す（エントリごとの再読み込みを避ける）。
+    identity_metric_space_document = _load_identity_metric_space_document()
     for entry_name in _REVISION_BRIDGE_ENTRY_NAMES:
         _validate_revision_bridge_entry(
             revision_bridge[entry_name], entry_name=entry_name,
             field=f"revision_bridge.{entry_name}", valid_cell_ids=valid_cell_ids,
+            identity_metric_space_document=identity_metric_space_document,
         )
 
     _validate_measurement_boundary(data["measurement_boundary"])

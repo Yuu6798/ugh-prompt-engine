@@ -507,3 +507,201 @@ def test_negative_fix2_cell_levels_empty_dict(manifest_data: Dict[str, Any]) -> 
     _p1_probe(bad)["cells"][0]["levels"] = {}
     with pytest.raises(m.Run9ValidationError):
         m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第2巡指摘 Fix 3（P2, 採用）: 軸別の意味照合
+# ---------------------------------------------------------------------------
+
+
+def _cell_by_id(probe: Dict[str, Any], cell_id: str) -> Dict[str, Any]:
+    (cell,) = [c for c in probe["cells"] if c["cell_id"] == cell_id]
+    return cell
+
+
+def test_fix3_positive_manifest_notes_match_declared_levels(manifest_data: Dict[str, Any]) -> None:
+    """回帰確認: Fix 3 導入後も実体 manifest（正しく宣言済み）は素通りする。"""
+    m.validate_probe_manifest(manifest_data)
+
+
+def test_negative_fix3_register_midi_mismatch(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p1_probe(bad), "P1-REG-LOW-DUR-SHORT")
+    cell["notes"][0]["pitch_midi"] = 65  # 宣言は low=57
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix3_duration_mismatch(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p1_probe(bad), "P1-REG-LOW-DUR-SHORT")
+    cell["notes"][0]["duration_beats"] = 4  # 宣言は short=1
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix3_transition_direction_mismatch(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p1_probe(bad), "P1-TRANS-LOW-TO-HIGH")
+    cell["notes"][0]["pitch_midi"] = 50  # 宣言は "57->65"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix3_onset_kana_mismatch(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    (p2,) = [p for p in bad["probes"] if p["probe_id"] == "P2"]
+    cell = _cell_by_id(p2, "P2-ONSET-FRICATIVE-S")
+    cell["notes"][-1]["kana"] = "ぎ"  # 宣言は fricative_s だが ぎ は stop_g_voiced
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix3_phrase_dynamics_structure_broken(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    (p2,) = [p for p in bad["probes"] if p["probe_id"] == "P2"]
+    cell = _cell_by_id(p2, "P2-PHRASE-BUILD-WEAK-TO-STRONG")
+    cell["notes"][-1]["pitch_midi"] = 50  # 非減少 pitch 系列を破壊
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix3_release_duration_mismatch(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    (p3,) = [p for p in bad["probes"] if p["probe_id"] == "P3"]
+    cell = _cell_by_id(p3, "P3-RELEASE-SHORT-VOICED")
+    cell["notes"][-1]["duration_beats"] = 4  # 宣言は short=1
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix3_ending_voicing_inverted(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    (p3,) = [p for p in bad["probes"] if p["probe_id"] == "P3"]
+    cell = _cell_by_id(p3, "P3-RELEASE-SHORT-VOICED")
+    cell["notes"][-1]["kana"] = "す"  # 宣言は voiced だが す は unvoiced
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix3_unregistered_axis_rejected() -> None:
+    """未登録 axis 名は意味照合器が存在しないため fail-closed で拒否される
+    （新しい軸を追加したのに checker を追加し忘れる事故を防ぐ構造）。"""
+    cell = {
+        "cell_id": "X",
+        "tempo_bpm": 72.0,
+        "notes": [
+            {
+                "kana": "ら", "pitch_midi": 60, "duration_beats": 1.0,
+                "phrase_index": 0, "is_phrase_final": True,
+            }
+        ],
+        "levels": {"not_a_real_axis": "whatever"},
+    }
+    with pytest.raises(m.Run9ValidationError):
+        m._validate_axis_semantic_value(
+            axis_name="not_a_real_axis", level_name="whatever", axis_value="whatever",
+            cell=cell, field="test",
+        )
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第2巡指摘 Fix 4（P2, 採用）: 転記元不在時の fail-closed
+# ---------------------------------------------------------------------------
+
+
+def _valid_p0_source(sha256_hex: str) -> Dict[str, Any]:
+    return {
+        "transcribed_from": "voice_genesis/singer/score.py",
+        "transcribed_from_sha256": sha256_hex,
+        "transcription_scope": "test",
+        "verbatim": True,
+    }
+
+
+def test_fix4_positive_real_score_py_present_and_matching() -> None:
+    """回帰確認: 実 score.py（read-only 参照、無改変）は既定パスのままで
+    引き続き受理される。"""
+    actual_sha = m.compute_file_sha256(m.SCORE_PY_REFERENCE_PATH)
+    m._validate_probe_cell_source(_valid_p0_source(actual_sha), field="test")
+
+
+def test_negative_fix4_missing_source_file_fails_closed(tmp_path: Path) -> None:
+    """score.py パスを一時 rename する monkeypatch ではなく、
+    `score_path` 引数を存在しない tmp パスへ差し替えることで不在時の
+    fail-closed 挙動を検証する（実 score.py は一切触れない）。"""
+    nonexistent = tmp_path / "does_not_exist" / "score.py"
+    assert not nonexistent.exists()
+    source = _valid_p0_source("0" * 64)
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m._validate_probe_cell_source(source, field="test", score_path=nonexistent)
+
+
+def test_negative_fix4_missing_source_file_via_full_manifest(
+    manifest_data: Dict[str, Any], tmp_path: Path
+) -> None:
+    """`validate_probe_manifest()` 経由でも、P0 cell の source 検証に
+    渡る score_path が存在しなければ拒否される（モジュール定数を直接
+    monkeypatch して full-chain の挙動も確認する——`monkeypatch` fixture
+    ではなく setattr/finally で明示的に復元し、実ファイルには一切触れ
+    ない）。"""
+    original = m.SCORE_PY_REFERENCE_PATH
+    fake = tmp_path / "does_not_exist" / "score.py"
+    try:
+        m.SCORE_PY_REFERENCE_PATH = fake  # type: ignore[misc]
+        with pytest.raises(m.Run9ValidationError, match="does not exist"):
+            m.validate_probe_manifest(_mutate(manifest_data))
+    finally:
+        m.SCORE_PY_REFERENCE_PATH = original
+    # 復元後は通常どおり通過することを確認する（後続テストへの汚染防止）。
+    m.validate_probe_manifest(_mutate(manifest_data))
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第2巡指摘 Fix 5（P2, 採用）: identity_metric_space_ref の
+# dotted path 全体解決
+# ---------------------------------------------------------------------------
+
+
+def test_fix5_positive_all_revision_bridge_refs_resolve(manifest_data: Dict[str, Any]) -> None:
+    document = m._load_identity_metric_space_document()
+    for entry_name, entry in manifest_data["revision_bridge"].items():
+        m._resolve_identity_metric_space_ref(
+            entry["identity_metric_space_ref"], document=document, field=entry_name
+        )
+
+
+def test_negative_fix5_deep_segment_typo(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    bad["revision_bridge"]["reference_render"]["identity_metric_space_ref"] = (
+        "inputs/identity_metric_space.json#calibration.does_not_exist"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix5_mid_segment_typo(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    bad["revision_bridge"]["reference_render"]["identity_metric_space_ref"] = (
+        "inputs/identity_metric_space.json#calibration.freeze_threshold.does_not_exist"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix5_malformed_empty_suffix(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    bad["revision_bridge"]["reference_render"]["identity_metric_space_ref"] = (
+        "inputs/identity_metric_space.json#"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix5_missing_identity_metric_space_document(tmp_path: Path) -> None:
+    """`inputs/identity_metric_space.json` の文書自体が見つからない場合
+    も fail-closed（凍結・改変禁止の read-only 入力を一時ディレクトリの
+    存在しないパスへ差し替えるだけで、実ファイルには触れない）。"""
+    nonexistent = tmp_path / "does_not_exist" / "identity_metric_space.json"
+    with pytest.raises(m.Run9ValidationError, match="実在が"):
+        m._load_identity_metric_space_document(path=nonexistent)
