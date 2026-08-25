@@ -11,9 +11,9 @@ User 裁定5件、無改変のまま存続）→
 [`POR_CONCEPT_ADJUDICATION_20260824.txt`](./POR_CONCEPT_ADJUDICATION_20260824.txt)
 の編入。無改変のまま存続）→
 [`DESIGN_RUN9_REVISION_0.4.md`](./DESIGN_RUN9_REVISION_0.4.md)（2026-08-25、
-外部レビュー
+外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
 [`DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt`](./DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt)
-（AQUEST 山崎信英氏、byte-pin 不変）の採用 + User 追加裁定「確認メモ /
+（byte-pin 不変）の編入 + User 追加裁定「確認メモ /
 RUN9 用語整理」の編入）の順で規定する。`design_revision_doc_sha256`/
 `por_adjudication_sha256` が PINNED で保持する。
 
@@ -411,7 +411,7 @@ machine-independent（実音源・実 render・実学習を要さない）次段
 - ~~backbone checkpoint 選定未~~ → RUN6 phase B 40K checkpoint を採用し
   `backbone_checkpoint_sha` を PINNED（`backbone_runtime_bundle_sha` は
   当時ブロッカー(4)として残存していたが、下記「解消済み（2026-08-25
-  外部レビュー採用）」で解消済み）。
+  外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモの編入、Revision 0.4）」で解消済み）。
 - ~~`metric_space_sha` 未 pin~~ → Phase 3: `inputs/identity_metric_space.json`
   （schema `run9-identity-metric-space/1.2`。feature_extractor = WORLD
   (pyworld)・identity_feature = voiced フレームの log spectral envelope

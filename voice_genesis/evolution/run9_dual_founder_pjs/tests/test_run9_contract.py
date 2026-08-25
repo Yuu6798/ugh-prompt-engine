@@ -6781,7 +6781,7 @@ def test_rev04_doc_common_performance_lesson_adopted_with_legacy_note() -> None:
 
 
 def test_rev04_frozen_docs_unchanged_after_rev04() -> None:
-    """凍結文書（v0.1 / rev 0.2 / rev 0.3 / POR txt / 外部レビュー txt）の
+    """凍結文書（v0.1 / rev 0.2 / rev 0.3 / POR txt / 派生設計変更メモ txt）の
     無改変を sha256 で確認する（git diff とは独立の直接検証）。"""
     assert _sha256_file(DESIGN_DOC_PATH) == (
         "b1f6901c0ba8bcfcbd61170aa672c95e96a37d082fce5e3f12f245bc4faaae1e"
@@ -7263,6 +7263,171 @@ def test_fix319_6_history_records_vocab_reassignment_rationale() -> None:
     assert "UNRESOLVED_EXTERNAL" in event_text
     assert "voice_identity_rights" in event_text
     assert "User" in event_text
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第3巡対応 — Fix 8（P2）: license ネスト payload
+# の形状検証（+ 同型欠陥だった usage_grants/interpretations エントリ/
+# corpus_pins への同流儀の拡張）
+# ---------------------------------------------------------------------------
+
+
+def test_fix319_8_license_empty_dict_rejected() -> None:
+    """recording_master_rights.license を `{}` へ置換しても、Fix 5 の層別
+    必須キー閉集合はキーの**存在**しか見ていないため旧実装は受理していた
+    ——Fix 8 のネスト形状検証（value/scope/derivative_obligation/source の
+    4キー閉集合）が missing key として拒否することの確認（負例1）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["license"] = {}
+    with pytest.raises(m.Run9ValidationError, match="license missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_license_scalar_replacement_rejected() -> None:
+    """license をスカラー文字列へ置換した場合の拒否（負例2）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["license"] = "CC BY-SA 4.0"
+    with pytest.raises(m.Run9ValidationError, match="license must be an object"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_license_value_field_deleted_rejected() -> None:
+    """license.value（ライセンス種別そのもの）だけを削除した場合の拒否
+    （負例3 — CC BY-SA 4.0 という値自体が消えるケースを名指しで検査）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["license"]["value"]
+    with pytest.raises(m.Run9ValidationError, match=r"license missing required key.*value"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_license_unknown_key_rejected() -> None:
+    """license に未知キーが混入した場合の拒否（負例4）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["license"]["unexpected_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="license has unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_license_blank_string_value_rejected() -> None:
+    """license の値が空白のみの文字列の場合の拒否（非空文字列強制の確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["license"]["source"] = "   "
+    with pytest.raises(m.Run9ValidationError, match=r"license\.source"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_usage_grants_empty_dict_rejected() -> None:
+    """voice_identity_rights.usage_grants を `{}` へ置換した場合の拒否
+    （負例1 — rev 0.2 改訂4「raw_audio_publication/model_general_
+    distribution は run9_identity_anchor と別承認」の意味論を担う3キーが
+    消えても旧実装は受理していた）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"] = {}
+    with pytest.raises(m.Run9ValidationError, match="usage_grants missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_usage_grants_scalar_replacement_rejected() -> None:
+    """usage_grants をスカラーへ置換した場合の拒否（負例2）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"] = "not_granted"
+    with pytest.raises(m.Run9ValidationError, match="usage_grants must be an object"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_usage_grants_key_deleted_rejected() -> None:
+    """usage_grants.raw_audio_publication の削除拒否（負例3）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"]
+    with pytest.raises(m.Run9ValidationError, match="usage_grants missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_usage_grants_unknown_key_rejected() -> None:
+    """usage_grants への未知キー混入拒否（負例4）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"]["unexpected_grant"] = "granted"
+    with pytest.raises(m.Run9ValidationError, match="usage_grants has unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_interpretations_entry_unknown_key_rejected() -> None:
+    """recording_master_rights.interpretations の1エントリに未知キーが
+    混入した場合の拒否（負例1 — 旧実装は status/question/note の3キーが
+    非空文字列であることのみを見ており、実データが持つ `source` を含む
+    閉集合としては強制していなかった）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["interpretations"][
+        "share_alike_applies_to_synthesis_output"
+    ]["unexpected_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_interpretations_entry_source_deleted_rejected() -> None:
+    """interpretations エントリの source 削除拒否（負例2 — source は実
+    データに存在するが旧実装では必須キーとして強制されていなかった）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["interpretations"][
+        "share_alike_applies_to_synthesis_output"
+    ]["source"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_interpretations_entry_scalar_replacement_rejected() -> None:
+    """interpretations の1エントリをスカラーへ置換した場合の拒否（負例3）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["interpretations"][
+        "share_alike_applies_to_synthesis_output"
+    ] = "UNSETTLED_LEGAL_INTERPRETATION"
+    with pytest.raises(m.Run9ValidationError, match="must be an object"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_corpus_pins_scalar_replacement_rejected() -> None:
+    """recording_master_rights.corpus_pins.source_archive_sha256（実 sha256
+    pin 値）をスカラーへ置換した場合の拒否（負例1 — source archive pin /
+    expanded corpus pin の2値は互いに代替ではない別対象、rev 0.2 改訂3）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"]["source_archive_sha256"] = (
+        "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca"
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be an object"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_corpus_pins_note_deleted_rejected() -> None:
+    """corpus_pins.note 削除の拒否（負例2）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    del data["recording_master_rights"]["corpus_pins"]["note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_corpus_pins_empty_dict_rejected() -> None:
+    """corpus_pins を `{}` へ置換した場合の拒否（負例3）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"] = {}
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_corpus_pins_sub_block_unknown_key_rejected() -> None:
+    """corpus_pins のサブブロック（source_archive_sha256）への未知キー
+    混入拒否（負例4）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["recording_master_rights"]["corpus_pins"]["source_archive_sha256"]["extra"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_8_valid_manifest_still_validates_after_shape_checks_added() -> None:
+    """実 manifest（license/usage_grants/interpretations/corpus_pins 全て
+    実キーのみを持つ）が Fix 8 追加後も validator を通ることの end-to-end
+    確認（有効ファイルへの過剰一般化による誤検知が無いことの確認）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
 
 
 # --- performance_source ブロック（RUN9_CONTRACT.yaml 新設欄） ----------------

@@ -19,11 +19,11 @@
 （原文4行目）だが、リポジトリ上は `design_revision` が既に 0.2 → 0.3 まで
 発行・マージ済みである（[`DESIGN_RUN9_REVISION_0.2.md`](./DESIGN_RUN9_REVISION_0.2.md)
 → [`DESIGN_RUN9_REVISION_0.3.md`](./DESIGN_RUN9_REVISION_0.3.md)）。同じ番号を
-外部レビューの内容で上書きすると、マージ済み rev 0.2/0.3 が固定した pin
+派生設計変更メモの内容で上書きすると、マージ済み rev 0.2/0.3 が固定した pin
 （`design_doc_sha256` / `design_revision_doc_sha256` /
 `backbone_checkpoint_sha` / `metric_space_sha` 等）の版管理上の意味が曖昧に
-なる。したがって **本編入は rev 0.4 として発行する**（意味上は外部レビュー
-の言う「0.2」に相当する内容である）。
+なる。したがって **本編入は rev 0.4 として発行する**（意味上は派生設計
+変更メモの言う「0.2」に相当する内容である）。
 
 これは [`DESIGN_RUN9_REVISION_0.3.md`](./DESIGN_RUN9_REVISION_0.3.md) 冒頭
 「番号注記」が確立した前例（PoR メモ「RUN9 v0.2 PoR整理・設計裁定メモ」も
@@ -50,7 +50,7 @@ provenance / rights / terminology / Teacher・Voice・Performance の概念分�
 
 ## CASE A の適用
 
-外部レビュー「変更8: 現RUN9の処理方針」が定める3分岐のうち、RUN9 は
+派生設計変更メモ「変更8: 現RUN9の処理方針」が定める3分岐のうち、RUN9 は
 **CASE A（まだ Lesson Freeze / 本学習開始前）** に該当する。RUN9 Phase 3
 時点の現在地（`README.md` 実行順マップ）は step 0〜3 の部分 pin 段階に
 留まり、`education_technique_lesson_manifest_sha` / `learning_recipe_sha`
@@ -62,7 +62,7 @@ RUN9 続行」）に従い、本改訂は provenance schema の追加（§3）�
 
 ## 中心問題の再定義
 
-外部レビュー「RUN9への理論的影響」節の逐語再定義を rev 0.4 の中心問題として
+派生設計変更メモ「RUN9への理論的影響」節の逐語再定義を rev 0.4 の中心問題として
 採用する:
 
 > 「Teacherの声を学習する」ではなく、**「権利来歴が明確な Performance
@@ -84,7 +84,7 @@ Voice Source ≠ Performance Source ≠ Performance Author
 
 ## 変更1・2 — Teacher 概念の分解 + rights_manifest の4層分離
 
-外部レビュー「変更1: Teacher概念を分解」「変更2: rights_manifestを4層へ
+派生設計変更メモ「変更1: Teacher概念を分解」「変更2: rights_manifestを4層へ
 分離」を、[`inputs/rights_manifest.json`](./inputs/rights_manifest.json)
 の再編として実装する。詳細は同ファイル自体を正とし、要点のみここに記す。
 
@@ -104,7 +104,7 @@ Voice Source ≠ Performance Source
 `inputs/rights_manifest.json` を次の4層へ再編する（派生設計変更メモの
 `rights_manifest:` 雛形を機械可読キーへ写す）:
 
-| 外部レビューの層 | `rights_manifest.json` のキー | 内容 |
+| 派生設計変更メモの層 | `rights_manifest.json` のキー | 内容 |
 |---|---|---|
 | `voice_identity_rights` | `voice_identity_rights` | Voice / VoiceBank / speaker identity の権利。**既存 User donor 17件（UC-001..017）・usage_grants・rights_class/consent_status/attestation を内容無改変のまま本層へ格納**（`schema: run9-user-donor-rights/1.0` の意味論は不変 — `verify_rights_manifest_against_ledger()` は本層の `entries`/`usage_grants` を従来どおり検証対象とする） |
 | `performance_rights` | `performance_rights` | 歌唱・調声・演奏表現・UST 等の権利/許諾。新設 `performance_source`（`id: PJS`, `role: EXTERNAL_PERFORMANCE_SOURCE`）+ `provenance.performance_author` を格納 |
@@ -143,7 +143,7 @@ repo 内の PJS 記録を機械検証し、確認できた値のみ出典参照�
 raw audio（PRACTICE 枝、rights-clean curriculum として v0.1 §13.2 が要求
 する要件の一部）と、そこから抽出した Performance Residual（EDUCATION 枝）で
 あり、ライセンス自体（CC BY-SA 4.0、研究利用可）は明確だが、**「歌唱者
-個人の attest」という外部レビューが要求する主体特定は本改訂だけでは完結
+個人の attest」という派生設計変更メモが要求する主体特定は本改訂だけでは完結
 しない** — 未解決のまま正直に PENDING とする（捏造禁止規律）。
 
 ### provenance の実値充填の是正（2026-08-25 User 追加裁定②）
@@ -192,7 +192,7 @@ fail-closed で拒否する（詳細は同関数 docstring）。
 
 ## 変更3・6 — 「歌い方」の定義修正 + LessonRecord 標準仕様
 
-外部レビュー「変更3: 『歌い方』の定義を修正」「変更6: LessonRecord標準仕様
+派生設計変更メモ「変更3: 『歌い方』の定義を修正」「変更6: LessonRecord標準仕様
 へ追加」を `run9_schema.py` の run-local 定数として実装する。
 
 ### Performance Residual 語彙（変更3、9項目）
@@ -319,7 +319,7 @@ Ritsu / User / PJS / Backbone / code / dataset / config / metric の hash
 
 ## 変更4 — Common Performance Lesson
 
-外部レビュー「変更4: Common Teacher Transfer名称の見直し」の新候補3案
+派生設計変更メモ「変更4: Common Teacher Transfer名称の見直し」の新候補3案
 （Common Performance Lesson / Common Performance Transfer / Performance
 Residual Transfer）のうち、**Common Performance Lesson**（第1候補）を
 採用する。
@@ -554,7 +554,7 @@ Performance から抽出された RUN9 内部の数値表現」に統一する�
 
 ## 8変更 × repo artifact 写像表
 
-| 外部レビューの変更 | 適用先 artifact | 本文書の節 |
+| 派生設計変更メモの変更 | 適用先 artifact | 本文書の節 |
 |---|---|---|
 | 変更1（Teacher概念の分解） | `inputs/rights_manifest.json`（`principles`/`performance_rights.provenance`）+ `RUN9_CONTRACT.yaml`（`performance_source`、§7 裁定により追加のみ） | §「変更1・2」§7 |
 | 変更2（rights_manifest 4層分離） | `inputs/rights_manifest.json` 全体再編 | §「変更1・2」 |

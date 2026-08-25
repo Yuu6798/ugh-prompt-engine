@@ -172,9 +172,16 @@ design_doc_sha256:
 # DESIGN_RUN9_REVISION_0.4.md「2026-08-25 User 追加裁定4件」節）を rev 0.4
 # 文書自身に追記したことに伴い、値を再計算した（旧値
 # 6b998d1b0e806d0a02262f5b62d0cbc6d4d72f7c6b0293a31b84134637785634 は
+# 履歴として append-only 保持）。Codex bot レビュー PR #319 第3巡指摘（P2,
+# 採用, Fix 7）: CASE A 節・変更1〜6 の各記述・artifact 写像表が、P0 訂正節
+# 後も現在形の「外部レビュー「変更N: …」」という帰属表現を残していた
+# （P0 訂正節自体は正しく「派生設計変更メモ」化済みだったが、他節へ波及
+# していなかった）。全数「派生設計変更メモ」表現へ改訂したことに伴い、
+# 値を再計算した（旧値
+# fc8e91d76bf92837c930963f97556171c3beaf145a4798671bd5b9a79f8ec4be は
 # 履歴として append-only 保持）。
 design_revision_doc_sha256:
-  value: "fc8e91d76bf92837c930963f97556171c3beaf145a4798671bd5b9a79f8ec4be"
+  value: "acaa8586a93b6c662e427b5f2015e57ca314128ba4cc1dde7ca7ce8841ca6fec"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.4.md
 

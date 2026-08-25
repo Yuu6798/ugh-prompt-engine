@@ -4464,6 +4464,101 @@ _RIGHTS_MANIFEST_LAYER_REQUIRED_KEYS: Dict[str, FrozenSet[str]] = {
     ),
 }
 
+# Codex bot レビュー PR #319 第3巡指摘（P2, 採用, Fix 8）: 層別必須キー
+# 閉集合（上記 `_RIGHTS_MANIFEST_LAYER_REQUIRED_KEYS`）はキーの**存在**しか
+# 強制しておらず、`recording_master_rights.license` を `{}` や任意の
+# スカラー値へ置換しても validator が受理してしまっていた——CC BY-SA 4.0
+# のライセンス種別・適用範囲・義務・出典（`inputs/rights_manifest.json`
+# 実データの4キー）が消えても構造的に valid のままだった。ここでネスト
+# object 値の**形状**（閉じたキー集合 + 各値が非空文字列であること）を
+# 凍結する。同じ「存在のみ検証の object 値」欠陥は
+# `voice_identity_rights.usage_grants`・`recording_master_rights.
+# interpretations` の各エントリ・`recording_master_rights.corpus_pins`
+# にも存在したため、同じ流儀でネスト形状検証を追加する（`usage_cards` は
+# 本スキーマに存在しないキーのため対象外——現物の実キーのみを閉集合化し、
+# 過剰一般化はしない）。
+_RIGHTS_MANIFEST_LICENSE_BLOCK_KEYS: FrozenSet[str] = frozenset(
+    {"value", "scope", "derivative_obligation", "source"}
+)
+_RIGHTS_MANIFEST_USAGE_GRANTS_KEYS: FrozenSet[str] = frozenset(
+    {"run9_identity_anchor", "raw_audio_publication", "model_general_distribution"}
+)
+_RIGHTS_MANIFEST_INTERPRETATION_ENTRY_KEYS: FrozenSet[str] = frozenset(
+    {"status", "question", "note", "source"}
+)
+_RIGHTS_MANIFEST_CORPUS_PINS_TOP_KEYS: FrozenSet[str] = frozenset(
+    {"source_archive_sha256", "expanded_corpus_identity_sha256", "note"}
+)
+_RIGHTS_MANIFEST_CORPUS_PIN_SUB_KEYS: FrozenSet[str] = frozenset(
+    {"source_archive_sha256", "expanded_corpus_identity_sha256"}
+)
+_RIGHTS_MANIFEST_CORPUS_PIN_ENTRY_KEYS: FrozenSet[str] = frozenset({"value", "source"})
+
+
+def _validate_closed_string_object(path: str, obj: Any, required_keys: FrozenSet[str]) -> None:
+    """`obj` が `required_keys` の閉集合ちょうどを持ち、全値が非空文字列で
+    あることを検証する共通ヘルパー（Fix 8）。license/usage_grants/
+    interpretations エントリ/corpus_pins サブブロックが共有する「値が
+    すべて非空文字列の閉じた object」という同型の形状検証を重複実装しない
+    ための集約。未知キー・欠落キー・非 dict・空文字列・非文字列値の
+    いずれも fail-closed で拒否する。
+    """
+    if not isinstance(obj, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(obj).__name__}")
+    unknown = set(obj.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(obj.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+    for key in sorted(required_keys):
+        value = obj[key]
+        if not isinstance(value, str) or not value.strip():
+            raise Run9ValidationError(f"{path}.{key} must be a non-empty string, got {value!r}")
+
+
+def _validate_rights_manifest_license_block(license_block: Any) -> None:
+    """`recording_master_rights.license` のネスト形状を検証する（Codex bot
+    レビュー PR #319 第3巡指摘（P2, 採用, Fix 8）: 旧
+    `validate_rights_manifest_four_layer()` は層の必須キー閉集合で
+    `license` キーの存在は強制していたが、値の中身
+    （`value`/`scope`/`derivative_obligation`/`source`）は一切検証しておらず、
+    `license: {}` やスカラー値へ置換しても構造的に valid のまま通過して
+    いた——CC BY-SA 4.0 のライセンス種別・適用範囲・義務・出典が消えても
+    検出できなかった。`inputs/rights_manifest.json` の実キー4つを閉集合と
+    して凍結し、いずれも非空文字列であることを強制する。
+    """
+    _validate_closed_string_object(
+        "rights manifest.recording_master_rights.license",
+        license_block,
+        _RIGHTS_MANIFEST_LICENSE_BLOCK_KEYS,
+    )
+
+
+def _validate_rights_manifest_corpus_pins_block(corpus_pins: Any) -> None:
+    """`recording_master_rights.corpus_pins` のネスト形状を検証する（Fix 8）。
+    `source_archive_sha256`/`expanded_corpus_identity_sha256`（各 `value`/
+    `source` の2キー object）+ `note` の3キー閉集合。source archive pin
+    と expanded corpus pin は互いに代替ではない別対象の2値（rev 0.2 改訂3）
+    であり、いずれかが欠落・スカラー化しても validator が受理してはならない。
+    """
+    path = "rights manifest.recording_master_rights.corpus_pins"
+    if not isinstance(corpus_pins, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(corpus_pins).__name__}")
+    unknown = set(corpus_pins.keys()) - _RIGHTS_MANIFEST_CORPUS_PINS_TOP_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = _RIGHTS_MANIFEST_CORPUS_PINS_TOP_KEYS - set(corpus_pins.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+    note = corpus_pins["note"]
+    if not isinstance(note, str) or not note.strip():
+        raise Run9ValidationError(f"{path}.note must be a non-empty string, got {note!r}")
+    for sub_key in sorted(_RIGHTS_MANIFEST_CORPUS_PIN_SUB_KEYS):
+        _validate_closed_string_object(
+            f"{path}.{sub_key}", corpus_pins[sub_key], _RIGHTS_MANIFEST_CORPUS_PIN_ENTRY_KEYS
+        )
+
 
 def _validate_rights_manifest_layer_status_value(layer_name: str, field_name: str, value: Any) -> None:
     """層直下の rights_class/consent_status 値の語彙検証（Fix 5）。
@@ -4705,6 +4800,18 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
         _validate_rights_manifest_layer_status_value(
             layer_name, "consent_status", layer.get("consent_status")
         )
+        if layer_name == "voice_identity_rights":
+            # Fix 8（P2, 採用）: usage_grants は必須キーとして存在するだけ
+            # では中身の形状を保証しない——`{}` やスカラー置換でも旧実装は
+            # 素通りしていた。run9_identity_anchor/raw_audio_publication/
+            # model_general_distribution の3キー閉集合 + 非空文字列を強制する
+            # （値語彙自体はまだ凍結済みの閉集合でないため、非空文字列という
+            # 最小制約に留める——過剰一般化はしない）。
+            _validate_closed_string_object(
+                "rights manifest.voice_identity_rights.usage_grants",
+                layer.get("usage_grants"),
+                _RIGHTS_MANIFEST_USAGE_GRANTS_KEYS,
+            )
         if layer_name != "voice_identity_rights":
             # performance_rights/composition_rights/recording_master_rights は
             # いずれも provenance 節を持つ（voice_identity_rights は donor
@@ -4736,6 +4843,16 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
                 _validate_rights_provenance_block(layer_name, block_name, provenance[block_name])
 
         if layer_name == "recording_master_rights":
+            # Fix 8（P2, 採用）: license は必須キーとして存在するだけでは
+            # 中身の形状を保証しない——`{}` や任意のスカラーへ置換しても
+            # 旧実装は素通りしていた。value/scope/derivative_obligation/
+            # source の4キー閉集合 + 非空文字列を強制する（CC BY-SA 4.0 の
+            # ライセンス種別・適用範囲・義務・出典の欠落を検出可能にする）。
+            _validate_rights_manifest_license_block(layer.get("license"))
+            # Fix 8（P2, 採用）: corpus_pins も同型の未検証 object だった
+            # （source archive pin / expanded corpus pin の2値が欠落・
+            # スカラー化しても構造的に valid のまま通過していた）。
+            _validate_rights_manifest_corpus_pins_block(layer.get("corpus_pins"))
             # 2026-08-25 User 追加裁定②: CC BY-SA 4.0 の share-alike 義務が
             # 合成出力へ及ぶかは事実でなく法解釈であり、`license`（事実）から
             # 分離した `interpretations` 節を必須とする。
@@ -4747,18 +4864,15 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
                     "2026-08-25 User 追加裁定②)"
                 )
             for interp_key, interp_value in interpretations.items():
-                path = f"rights manifest.recording_master_rights.interpretations.{interp_key}"
-                if not isinstance(interp_value, dict):
-                    raise Run9ValidationError(f"{path} must be an object")
-                status = interp_value.get("status")
-                if not isinstance(status, str) or not status.strip():
-                    raise Run9ValidationError(f"{path}.status must be a non-empty string")
-                for required_key in ("question", "note"):
-                    value = interp_value.get(required_key)
-                    if not isinstance(value, str) or not value.strip():
-                        raise Run9ValidationError(
-                            f"{path}.{required_key} must be a non-empty string"
-                        )
+                # Fix 8（P2, 採用）: 旧実装は status/question/note の3キーが
+                # 非空文字列であることのみを見ており、未知キーの混入
+                # （実データが持つ `source` を含む）を拒否していなかった。
+                # status/question/note/source の4キー閉集合を強制する。
+                _validate_closed_string_object(
+                    f"rights manifest.recording_master_rights.interpretations.{interp_key}",
+                    interp_value,
+                    _RIGHTS_MANIFEST_INTERPRETATION_ENTRY_KEYS,
+                )
 
     performance_source = data["performance_rights"].get("performance_source")
     if not isinstance(performance_source, dict):
