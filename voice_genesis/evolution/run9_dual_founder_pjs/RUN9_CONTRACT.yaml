@@ -639,8 +639,25 @@ learning_recipe_sha:
 # なった。両 Fix とも manifest バイトを変更するため sha256 を再計算した。
 # 旧値（履歴として保持）:
 # "20b5638537881ef2565795ef040d4490202c8b9907c9c0dc750d15d043bb1730"
+#
+# PR #322 Codex bot レビュー第3巡2件（採用）反映による repin:
+# Fix 6（P2）P0-P5 全 note の kana を renderer の mora 文法（唯一の正本
+# ——`voice_genesis/singer/phoneme_jp.py`、read-only 参照）へ通し
+# 「ちょうど1モーラ」であることを機械検証するようにした（validator 内
+# での語彙表複製は不採用。ファイル不在時も fail-closed）。本 Fix 自体は
+# manifest 内容の変更を伴わない（既存の全 note が元々正しい単一モーラ
+# 表現だったため — validator ロジックの追加のみ）。
+# Fix 7（P2）P2 の `factor_levels` へ凍結 filler タプル
+# （`medial_filler_kana`="か"/`medial_filler_beats`=1/
+# `medial_filler_pitch_midi`=60、現行 cell の実 filler note 値から
+# 転記）を追加し、全 onset cell（`onset_consonant_class` 軸を持つ cell）
+# の前置 note がこのタプルと完全一致すること（= 全 onset cell 間で
+# filler が同一であること）を `validate_probe_manifest()` が機械検証する
+# ようにした。`medial_filler_pitch_midi` の新規追加により manifest バイト
+# が変わるため sha256 を再計算した。旧値（履歴として保持）:
+# "722653475646e169058a1e53584585ae1af42f4bfb5152a59432251d30a421c1"
 probe_manifest_sha:
-  value: "722653475646e169058a1e53584585ae1af42f4bfb5152a59432251d30a421c1"
+  value: "d50266e51acbf83e47ef047dfa91c8bd8e6ede129dd1ba24d5b111581b98a804"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 

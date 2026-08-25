@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib.util
 import json
 import math
 import re
@@ -3409,6 +3410,19 @@ _AXIS_KANA_CLASS_CHECKS: Mapping[str, Mapping[str, str]] = types.MappingProxyTyp
     "ending_voicing": _ENDING_VOICING_KANA_TABLE,
 })
 
+# PR #322 第3巡指摘 Fix 7（P2, 採用）: 第2巡 Fix 3 の onset checker は
+# phrase-final の検定 note しか見ておらず、P2 onset cell の前置 filler
+# note（か・1拍相当）を cell ごとに別 kana/pitch/duration へ変えても
+# 通過してしまっていた（前コンテキスト交絡で onset class 比較が壊れる）。
+# P2 の `factor_levels` へ凍結 filler タプル（`medial_filler_kana`/
+# `medial_filler_beats`/`medial_filler_pitch_midi`）を宣言し、全 onset
+# cell（`onset_consonant_class` 軸を持つ cell）の前置 note 列がこの
+# タプルと完全一致することを機械強制する。
+_P2_FILLER_TUPLE_KEYS: FrozenSet[str] = frozenset(
+    {"medial_filler_kana", "medial_filler_beats", "medial_filler_pitch_midi"}
+)
+_P2_ONSET_AXIS_NAME = "onset_consonant_class"
+
 _NOTE_KEYS: FrozenSet[str] = frozenset(
     {"kana", "pitch_midi", "duration_beats", "phrase_index", "is_phrase_final"}
 )
@@ -3416,6 +3430,83 @@ _NOTE_KEYS: FrozenSet[str] = frozenset(
 # P0 の score 転記元（read-only 参照。凍結・改変禁止 — RUN9-PROBE-1
 # Design Memo 冒頭）。`voice_genesis/singer/score.py`。
 SCORE_PY_REFERENCE_PATH = _THIS_DIR.parent.parent / "singer" / "score.py"
+
+# ---------------------------------------------------------------------------
+# PR #322 第3巡指摘 Fix 6（P2, 採用）: renderer の mora 文法（read-only
+# 参照。凍結・改変禁止）を唯一の正本として note.kana を検証する。
+# validator 内での語彙表複製（kana -> mora 対応表を validator 側で再定義
+# すること）は renderer 側の対応範囲拡張・変更に追随できず乖離の温床に
+# なるため不採用——`voice_genesis/singer/phoneme_jp.py` を read-only で
+# ロードし、`kana_to_morae()` をそのまま呼び出す。renderer 文法は repo
+# バイトの一部であり、run 時に `repository_commit_sha` が repo バイト
+# 全体を pin することで凍結される（Fix 1 の harness runtime seed 凍結
+# 根拠と同じ論理）。
+# ---------------------------------------------------------------------------
+PHONEME_JP_REFERENCE_PATH = _THIS_DIR.parent.parent / "singer" / "phoneme_jp.py"
+
+
+def _load_phoneme_jp_module(*, path: Optional[Path] = None) -> Any:
+    """`voice_genesis/singer/phoneme_jp.py`（凍結・改変禁止の read-only
+    参照）を read-only でロードする。`path` 省略時（`None`）はモジュール
+    定数 `PHONEME_JP_REFERENCE_PATH` を呼び出しのたびに参照する
+    （`_validate_probe_cell_source()`/`_load_identity_metric_space_
+    document()` と同じ late-binding 回避パターン——テストが `run9_schema.
+    PHONEME_JP_REFERENCE_PATH` を monkeypatch しても本関数の既定値へ
+    反映されない def 時束縛の罠を避ける）。ファイル不在・import 失敗・
+    `kana_to_morae` 未定義はいずれも fail-closed（Fix 4「照合できない =
+    検証失敗」と同じ原則。実 phoneme_jp.py の rename/削除は一切行わない
+    ——テスト用の依存性注入点は `path` 引数のみ）。
+    """
+    if path is None:
+        path = PHONEME_JP_REFERENCE_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"note kana の mora 文法検証には {path} の実在が必須だが見つからない（凍結・改変禁止の "
+            "read-only 参照 — 本 validator は repo checkout 内での実行を前提とする。照合できない = "
+            "検証失敗、PR #322 第2巡 Fix 4 と同じ fail-closed 原則）"
+        )
+    module_name = "_run9_probe_manifest_phoneme_jp_readonly"
+    try:
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            raise Run9ValidationError(f"{path} の import spec を構築できない")
+        module = importlib.util.module_from_spec(spec)
+        # `phoneme_jp.py` は `@dataclass` を使用しており、dataclasses 内部
+        # が `sys.modules[cls.__module__]` を参照する（型ヒント解決の
+        # ため）。`module_from_spec()` だけでは `sys.modules` へ登録され
+        # ないため、`exec_module()` 前に明示登録する必要がある——登録
+        # しないと `AttributeError: 'NoneType' object has no attribute
+        # '__dict__'` でロード自体が失敗する。
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(f"{path} のロードに失敗した: {exc}") from exc
+    if not hasattr(module, "kana_to_morae"):
+        raise Run9ValidationError(f"{path} に kana_to_morae() が定義されていない")
+    return module
+
+
+def _require_single_mora_kana(kana: str, *, phoneme_jp_module: Any, field: str) -> None:
+    """PR #322 第3巡指摘 Fix 6（P2, 採用）の実装: `kana` が renderer の
+    `phoneme_jp.kana_to_morae()` へ通したとき、ちょうど1モーラを構成する
+    ことを検証する（1 note = 1 Mora。メリスマ非対応・未対応文字は
+    fail-closed で拒否 — score.py docstring「1 モーラ = 1 ノート」と
+    同一の制約を機械強制する）。"""
+    try:
+        morae = phoneme_jp_module.kana_to_morae(kana)
+    except Exception as exc:
+        raise Run9ValidationError(
+            f"{field} = {kana!r} は phoneme_jp.kana_to_morae() が受理しない（renderer 文法の対応外 "
+            f"文字を含む可能性がある）: {exc}"
+        ) from exc
+    if len(morae) != 1:
+        raise Run9ValidationError(
+            f"{field} = {kana!r} は phoneme_jp.kana_to_morae() でちょうど1モーラに分割されなかった "
+            f"（実際は{len(morae)}モーラ）— 1 note は単一 Mora のみ表現できる（メリスマ非対応、"
+            "score.py の「1 モーラ = 1 ノート」制約の機械強制）"
+        )
 
 # P0 は「同一 score・同一 lyrics・中央音域・表現指定を最小化」（§15）—
 # 中央音域を MIDI 57-72 に固定する（score.py の in 音階 A3=57 を主音と
@@ -3560,7 +3651,7 @@ def _require_probe_bool(value: Any, *, field: str) -> bool:
     return value
 
 
-def _validate_probe_note(note: Any, *, field: str) -> Dict[str, Any]:
+def _validate_probe_note(note: Any, *, field: str, phoneme_jp_module: Any) -> Dict[str, Any]:
     if not isinstance(note, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(note).__name__}")
     unknown = set(note.keys()) - _NOTE_KEYS
@@ -3569,7 +3660,11 @@ def _validate_probe_note(note: Any, *, field: str) -> Dict[str, Any]:
     missing = _NOTE_KEYS - set(note.keys())
     if missing:
         raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
-    _require_non_empty_str(note["kana"], field=f"{field}.kana")
+    kana = _require_non_empty_str(note["kana"], field=f"{field}.kana")
+    # PR #322 第3巡指摘 Fix 6（P2, 採用）: renderer の mora 文法（唯一の
+    # 正本、read-only 参照）に対し「ちょうど1モーラ」であることを全 note
+    # で検証する（P2/P3 のクラス表対象外の note も含む）。
+    _require_single_mora_kana(kana, phoneme_jp_module=phoneme_jp_module, field=f"{field}.kana")
     _require_probe_int(note["pitch_midi"], field=f"{field}.pitch_midi")
     _require_positive_finite_number(note["duration_beats"], field=f"{field}.duration_beats")
     phrase_index = _require_probe_int(note["phrase_index"], field=f"{field}.phrase_index")
@@ -3660,7 +3755,7 @@ def _validate_cell_levels(value: Any, *, field: str) -> Dict[str, str]:
 
 
 def _validate_probe_cell(
-    cell: Any, *, probe_id: str, field: str, seen_cell_ids: Dict[str, str]
+    cell: Any, *, probe_id: str, field: str, seen_cell_ids: Dict[str, str], phoneme_jp_module: Any
 ) -> Optional[Dict[str, str]]:
     if not isinstance(cell, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(cell).__name__}")
@@ -3693,7 +3788,9 @@ def _validate_probe_cell(
     if not isinstance(notes, list) or not notes:
         raise Run9ValidationError(f"{field}.notes must be a non-empty list, got {notes!r}")
     for i, note in enumerate(notes):
-        validated = _validate_probe_note(note, field=f"{field}.notes[{i}]")
+        validated = _validate_probe_note(
+            note, field=f"{field}.notes[{i}]", phoneme_jp_module=phoneme_jp_module
+        )
         pitch = validated["pitch_midi"]
         if probe_id == "P0" and not (_P0_MIDI_LOW <= pitch <= _P0_MIDI_HIGH):
             raise Run9ValidationError(
@@ -3954,8 +4051,63 @@ def _validate_probe_heldout_independence(value: Any, *, field: str) -> None:
     _require_non_empty_str(value["note"], field=f"{field}.note")
 
 
+def _validate_p2_onset_filler_consistency(
+    *, factor_levels: Mapping[str, Any], cells: List[Dict[str, Any]], field: str
+) -> None:
+    """PR #322 第3巡指摘 Fix 7（P2, 採用）の実装: `factor_levels` が宣言
+    する凍結 filler タプル（`medial_filler_kana`/`medial_filler_beats`/
+    `medial_filler_pitch_midi`）を検証し、`onset_consonant_class` 軸を
+    持つ全 cell（onset cell）の前置 note 列（検定 note = phrase-final note
+    より前の全 note）がこのタプルと完全一致すること——結果として全 onset
+    cell 間で filler が同一であること——を機械強制する。"""
+    missing = _P2_FILLER_TUPLE_KEYS - set(factor_levels.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"{field} missing required P2 filler declaration key(s): {sorted(missing)}"
+        )
+    filler_kana = _require_non_empty_str(
+        factor_levels["medial_filler_kana"], field=f"{field}.medial_filler_kana"
+    )
+    filler_beats = _require_positive_finite_number(
+        factor_levels["medial_filler_beats"], field=f"{field}.medial_filler_beats"
+    )
+    filler_pitch = _require_probe_int(
+        factor_levels["medial_filler_pitch_midi"], field=f"{field}.medial_filler_pitch_midi"
+    )
+
+    for cell in cells:
+        levels = cell.get(_CELL_LEVELS_KEY, {})
+        if not isinstance(levels, dict) or _P2_ONSET_AXIS_NAME not in levels:
+            continue  # onset_consonant_class 軸を参照しない cell（P2-PHRASE-BUILD 等）は対象外
+        cell_id = cell.get("cell_id")
+        notes = cell["notes"]
+        final = _select_phrase_final_note(cell, field=f"{field} (cell_id={cell_id!r})")
+        final_idx = next(i for i, n in enumerate(notes) if n is final)
+        prefix = notes[:final_idx]
+        if len(prefix) != 1:
+            raise Run9ValidationError(
+                f"{field}: onset cell {cell_id!r} must have exactly one prefix (filler) note before "
+                f"the phrase-final target note, got {len(prefix)}"
+            )
+        p = prefix[0]
+        if (
+            p["kana"] != filler_kana
+            or not _numeric_equal(p["duration_beats"], filler_beats)
+            or not _numeric_equal(p["pitch_midi"], filler_pitch)
+        ):
+            raise Run9ValidationError(
+                f"{field}: onset cell {cell_id!r} prefix note "
+                f"(kana={p['kana']!r}, duration_beats={p['duration_beats']!r}, "
+                f"pitch_midi={p['pitch_midi']!r}) does not match the frozen P2 filler tuple "
+                f"(kana={filler_kana!r}, duration_beats={filler_beats!r}, pitch_midi={filler_pitch!r}"
+                ") declared in factor_levels — all onset cells must share the identical filler "
+                "pre-context so the onset-class comparison is not confounded by differing context"
+            )
+
+
 def _validate_probe_object(
-    probe: Any, *, expected_probe_id: str, field: str, seen_cell_ids: Dict[str, str]
+    probe: Any, *, expected_probe_id: str, field: str, seen_cell_ids: Dict[str, str],
+    phoneme_jp_module: Any,
 ) -> None:
     if not isinstance(probe, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(probe).__name__}")
@@ -3994,11 +4146,17 @@ def _validate_probe_object(
         raise Run9ValidationError(f"{field}.cells must be a non-empty list, got {cells!r}")
     for i, cell in enumerate(cells):
         _validate_probe_cell(
-            cell, probe_id=expected_probe_id, field=f"{field}.cells[{i}]", seen_cell_ids=seen_cell_ids
+            cell, probe_id=expected_probe_id, field=f"{field}.cells[{i}]", seen_cell_ids=seen_cell_ids,
+            phoneme_jp_module=phoneme_jp_module,
         )
 
     if expected_probe_id in _FACTOR_LEVEL_PROBE_IDS:
         _validate_probe_factor_levels_cell_mapping(
+            factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
+        )
+
+    if expected_probe_id == "P2":
+        _validate_p2_onset_filler_consistency(
             factor_levels=probe["factor_levels"], cells=cells, field=f"{field}.factor_levels"
         )
 
@@ -4411,6 +4569,11 @@ def validate_probe_manifest(data: Mapping[str, Any]) -> None:
             f"{probes if not isinstance(probes, list) else f'{len(probes)} item(s)'}"
         )
 
+    # PR #322 第3巡指摘 Fix 6: renderer の mora 文法（唯一の正本、
+    # read-only 参照）を1回だけロードし、全 probe の全 note の kana
+    # 検証で使い回す（probe/cell ごとの重複ロードを避ける）。
+    phoneme_jp_module = _load_phoneme_jp_module()
+
     seen_cell_ids: Dict[str, str] = {}
     seen_probe_ids: set = set()
     for i, probe in enumerate(probes):
@@ -4428,7 +4591,8 @@ def validate_probe_manifest(data: Mapping[str, Any]) -> None:
             )
         seen_probe_ids.add(probe_id)
         _validate_probe_object(
-            probe, expected_probe_id=probe_id, field=f"probes[{i}]", seen_cell_ids=seen_cell_ids
+            probe, expected_probe_id=probe_id, field=f"probes[{i}]", seen_cell_ids=seen_cell_ids,
+            phoneme_jp_module=phoneme_jp_module,
         )
     if seen_probe_ids != set(PROBE_IDS):
         raise Run9ValidationError(

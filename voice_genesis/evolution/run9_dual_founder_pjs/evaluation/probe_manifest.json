@@ -576,7 +576,8 @@
         },
         "medial_filler_beats": 1,
         "medial_filler_kana": "か",
-        "medial_filler_note": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json#factor_levels の medial_filler_kana/medial_filler_beats と同一の水準値を踏襲する（read-only 参照）。",
+        "medial_filler_note": "voice_genesis/foundry/results_s7/s7_0b_probe_spec.json#factor_levels の medial_filler_kana/medial_filler_beats と同一の水準値を踏襲する（read-only 参照）。medial_filler_pitch_midi=60 は現行 cell の実 filler note 値からの転記（PR #322 第3巡指摘 Fix 7 — 全 onset cell の前置 filler note がこの凍結タプルと完全一致することを validate_probe_manifest() が機械検証する）。",
+        "medial_filler_pitch_midi": 60,
         "phrase_dynamics_shape": "note schema（kana/pitch_midi/duration_beats/phrase_index/is_phrase_final）に velocity/dynamics欄が存在しないため、弱→強はnote位置構造（filler note を弱、target onset note をphrase_final直前〜final付近の強拍として配置）で表現する。"
       },
       "probe_id": "P2",

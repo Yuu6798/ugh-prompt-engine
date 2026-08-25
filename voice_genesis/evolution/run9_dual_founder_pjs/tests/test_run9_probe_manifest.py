@@ -705,3 +705,183 @@ def test_negative_fix5_missing_identity_metric_space_document(tmp_path: Path) ->
     nonexistent = tmp_path / "does_not_exist" / "identity_metric_space.json"
     with pytest.raises(m.Run9ValidationError, match="実在が"):
         m._load_identity_metric_space_document(path=nonexistent)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第3巡指摘 Fix 6（P2, 採用）: renderer の mora 文法照合
+# ---------------------------------------------------------------------------
+
+
+def test_fix6_positive_all_notes_single_mora(manifest_data: Dict[str, Any]) -> None:
+    """回帰確認: 実 manifest の全24 cell・全 note が phoneme_jp の mora
+    文法でちょうど1モーラに分割されることを確認する（full-chain 経由）。"""
+    m.validate_probe_manifest(manifest_data)
+    phoneme_jp_module = m._load_phoneme_jp_module()
+    for probe in manifest_data["probes"]:
+        for cell in probe["cells"]:
+            for note in cell["notes"]:
+                m._require_single_mora_kana(
+                    note["kana"], phoneme_jp_module=phoneme_jp_module, field="test"
+                )
+
+
+def test_negative_fix6_unsupported_character_kana(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    bad["probes"][0]["cells"][0]["notes"][0]["kana"] = "abc"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix6_multi_mora_kana(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    bad["probes"][0]["cells"][0]["notes"][0]["kana"] = "さくら"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix6_applies_outside_p2_p3_class_tables(manifest_data: Dict[str, Any]) -> None:
+    """P2/P3 のクラス表対象外の note（P5 の note）も Fix 6 の対象である
+    ことを確認する。"""
+    bad = _mutate(manifest_data)
+    (p5,) = [p for p in bad["probes"] if p["probe_id"] == "P5"]
+    p5["cells"][0]["notes"][0]["kana"] = "xyz"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix6_phoneme_jp_module_missing(tmp_path: Path) -> None:
+    """phoneme_jp.py パスを一時 rename する monkeypatch ではなく、`path`
+    引数を存在しない tmp パスへ差し替えることで不在時の fail-closed
+    挙動を検証する（実 phoneme_jp.py は一切触れない）。"""
+    nonexistent = tmp_path / "does_not_exist" / "phoneme_jp.py"
+    with pytest.raises(m.Run9ValidationError, match="実在が"):
+        m._load_phoneme_jp_module(path=nonexistent)
+
+
+def test_negative_fix6_phoneme_jp_module_missing_via_full_manifest(
+    manifest_data: Dict[str, Any], tmp_path: Path
+) -> None:
+    """`validate_probe_manifest()` 経由でも phoneme_jp.py 不在が
+    fail-closed になることを、モジュール定数の一時差し替え（finally で
+    復元、実ファイル無改変）で確認する。"""
+    original = m.PHONEME_JP_REFERENCE_PATH
+    fake = tmp_path / "does_not_exist" / "phoneme_jp.py"
+    try:
+        m.PHONEME_JP_REFERENCE_PATH = fake  # type: ignore[misc]
+        with pytest.raises(m.Run9ValidationError, match="実在が"):
+            m.validate_probe_manifest(_mutate(manifest_data))
+    finally:
+        m.PHONEME_JP_REFERENCE_PATH = original
+    m.validate_probe_manifest(_mutate(manifest_data))  # 復元後は通常どおり通過
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第3巡指摘 Fix 7（P2, 採用）: P2 onset cell の共通 filler 強制
+# ---------------------------------------------------------------------------
+
+
+def _p2_probe(data: Dict[str, Any]) -> Dict[str, Any]:
+    (p2,) = [p for p in data["probes"] if p["probe_id"] == "P2"]
+    return p2
+
+
+def test_fix7_filler_tuple_declared_and_matches_cells(manifest_data: Dict[str, Any]) -> None:
+    p2 = _p2_probe(manifest_data)
+    fl = p2["factor_levels"]
+    assert fl["medial_filler_kana"] == "か"
+    assert fl["medial_filler_beats"] == 1
+    assert fl["medial_filler_pitch_midi"] == 60
+    for cell in p2["cells"]:
+        if "onset_consonant_class" not in cell["levels"]:
+            continue
+        prefix = cell["notes"][:-1]
+        assert len(prefix) == 1
+        assert prefix[0]["kana"] == fl["medial_filler_kana"]
+        assert prefix[0]["duration_beats"] == fl["medial_filler_beats"]
+        assert prefix[0]["pitch_midi"] == fl["medial_filler_pitch_midi"]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda note: note.__setitem__("kana", "た"),
+        lambda note: note.__setitem__("pitch_midi", 65),
+        lambda note: note.__setitem__("duration_beats", 2),
+    ],
+)
+def test_negative_fix7_filler_note_mismatch(manifest_data: Dict[str, Any], mutate) -> None:
+    bad = _mutate(manifest_data)
+    p2 = _p2_probe(bad)
+    cell = _cell_by_id(p2, "P2-ONSET-STOP-K")
+    mutate(cell["notes"][0])
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix7_filler_mismatch_only_one_cell_diverges(manifest_data: Dict[str, Any]) -> None:
+    """複数 onset cell のうち1つだけ filler を変えても、他 cell との
+    ペアワイズ比較ではなく凍結タプルとの直接比較で検出される。"""
+    bad = _mutate(manifest_data)
+    p2 = _p2_probe(bad)
+    cell = _cell_by_id(p2, "P2-ONSET-VOWEL-ONLY")
+    cell["notes"][0]["kana"] = "の"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+@pytest.mark.parametrize(
+    "missing_key", ["medial_filler_kana", "medial_filler_beats", "medial_filler_pitch_midi"]
+)
+def test_negative_fix7_filler_declaration_key_missing(
+    manifest_data: Dict[str, Any], missing_key: str
+) -> None:
+    bad = _mutate(manifest_data)
+    del _p2_probe(bad)["factor_levels"][missing_key]
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix7_onset_cell_prefix_length_not_one() -> None:
+    """onset cell の前置 note が0個/2個以上の場合も拒否される（実
+    manifest では常にちょうど1個のため、private 関数への直接単体呼び出し
+    で検証する——既存テスト流儀と同型）。"""
+    factor_levels = {
+        "medial_filler_kana": "か", "medial_filler_beats": 1, "medial_filler_pitch_midi": 60,
+    }
+    cell_no_prefix = {
+        "cell_id": "X",
+        "notes": [
+            {
+                "kana": "さ", "pitch_midi": 65, "duration_beats": 1.0,
+                "phrase_index": 0, "is_phrase_final": True,
+            }
+        ],
+        "levels": {"onset_consonant_class": "fricative_s"},
+    }
+    with pytest.raises(m.Run9ValidationError):
+        m._validate_p2_onset_filler_consistency(
+            factor_levels=factor_levels, cells=[cell_no_prefix], field="test"
+        )
+
+    cell_two_prefix = {
+        "cell_id": "Y",
+        "notes": [
+            {
+                "kana": "か", "pitch_midi": 60, "duration_beats": 1.0,
+                "phrase_index": 0, "is_phrase_final": False,
+            },
+            {
+                "kana": "か", "pitch_midi": 60, "duration_beats": 1.0,
+                "phrase_index": 0, "is_phrase_final": False,
+            },
+            {
+                "kana": "さ", "pitch_midi": 65, "duration_beats": 1.0,
+                "phrase_index": 0, "is_phrase_final": True,
+            },
+        ],
+        "levels": {"onset_consonant_class": "fricative_s"},
+    }
+    with pytest.raises(m.Run9ValidationError):
+        m._validate_p2_onset_filler_consistency(
+            factor_levels=factor_levels, cells=[cell_two_prefix], field="test"
+        )
