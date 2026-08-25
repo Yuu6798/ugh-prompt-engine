@@ -734,8 +734,26 @@ learning_recipe_sha:
 # 再構造化）で manifest バイトが変わるため sha256 を再計算した。旧値
 # （履歴として保持）:
 # "0e43616cd25bb9fd66dc6dde566024a4c1b0809d29d6202ed2d8861a16c884ca"
+# PR #322 Codex bot レビュー第11巡1件（採用——上限超過後だが「新しい
+# 具体経路を示す指摘は巡数に依らず採用」規律の例外採用）反映による repin:
+# Fix 21（P1）gate_synth.py の `_NoteWithMs` は `is_phrase_final` を一切
+# 消費せず、末尾 release は全 cell 固定の `TAIL_FRAMES` 定数——宣言
+# harness に phrase-end release を制御する入力が存在しないと判明した
+# （Fix 11 と同型の帰属誤りクラスの新規経路）。P3 の `release_duration`
+# 軸が実際に操作していたのは終端 note 自身の `duration_beats`（P1 の
+# `duration` 軸と同じ機構）だった。**release 制御の新規発明は不採用**
+# （存在しない harness 入力の捏造になるため、Fix 11 と同じ設計判断）——
+# 軸を実際に操作している変数の名前へ真実化: `release_duration` ->
+# `final_note_duration`（水準値・cell 構造は不変、名前とその意味記述の
+# み真実化）。P3 probe.role へ計器能力の境界宣言（_NoteWithMs が
+# is_phrase_final を消費しない・末尾 release は TAIL_FRAMES 固定・実操作
+# は final_note_duration/ending_voicing のみ・再入条件 = release 制御
+# 入力を消費する backbone への交換 or TRF 校正の確立）を追記した。
+# 軸名変更に伴い manifest バイトが変わるため sha256 を再計算した。旧値
+# （履歴として保持）:
+# "98aa1c8d95f6dad0c9cf126e5a4ca1f0ce592363841c10c30f639b39087812eb"
 probe_manifest_sha:
-  value: "98aa1c8d95f6dad0c9cf126e5a4ca1f0ce592363841c10c30f639b39087812eb"
+  value: "48eb35a001cb5f5e53ea1da34fc05081c902958b2c0167d14a888ffe676a0c84"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 

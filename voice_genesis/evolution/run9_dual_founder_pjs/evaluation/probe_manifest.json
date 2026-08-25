@@ -587,7 +587,7 @@
           "cell_id": "P3-RELEASE-SHORT-VOICED",
           "levels": {
             "ending_voicing": "voiced",
-            "release_duration": "short"
+            "final_note_duration": "short"
           },
           "notes": [
             {
@@ -611,7 +611,7 @@
           "cell_id": "P3-RELEASE-LONG-VOICED",
           "levels": {
             "ending_voicing": "voiced",
-            "release_duration": "long"
+            "final_note_duration": "long"
           },
           "notes": [
             {
@@ -635,7 +635,7 @@
           "cell_id": "P3-RELEASE-SHORT-UNVOICED",
           "levels": {
             "ending_voicing": "unvoiced",
-            "release_duration": "short"
+            "final_note_duration": "short"
           },
           "notes": [
             {
@@ -659,7 +659,7 @@
           "cell_id": "P3-RELEASE-LONG-UNVOICED",
           "levels": {
             "ending_voicing": "unvoiced",
-            "release_duration": "long"
+            "final_note_duration": "long"
           },
           "notes": [
             {
@@ -687,14 +687,14 @@
             "unvoiced": "無声化しうる終端（無声子音+狭母音 /u/ 等、無声化しやすいモーラ）",
             "voiced": "有声終端（子音+母音の通常発声、devoicing対象外のモーラ）"
           },
-          "release_duration": {
+          "final_note_duration": {
             "long": 4,
             "short": 1
           }
         }
       },
       "probe_id": "P3",
-      "role": "短いrelease・長いrelease・voiced/unvoiced endingを通じてPhrase-End応答をprobeする（v0.1 §15 P3）。TRF（Technique Response Function）が未校正の間、本probeの評価は diagnostic_when_trf_uncalibrated（診断/advisory）として扱う——TRF calibration 完了まで PASS/FAIL判定を行うHard Gateには使用しない（v0.1 §15「TRFが未校正の場合、P3はdiagnostic/advisory」の機械可読化）。factor_levels.axesのrelease_duration×ending_voicing直交4セルの各cellがlevelsで参照する軸/水準を機械可読に宣言する。",
+      "role": "短いrelease・長いrelease・voiced/unvoiced endingを通じてPhrase-End応答をprobeする（v0.1 §15 P3）。TRF（Technique Response Function）が未校正の間、本probeの評価は diagnostic_when_trf_uncalibrated（診断/advisory）として扱う——TRF calibration 完了まで PASS/FAIL判定を行うHard Gateには使用しない（v0.1 §15「TRFが未校正の場合、P3はdiagnostic/advisory」の機械可読化）。factor_levels.axesのfinal_note_duration×ending_voicing直交4セルの各cellがlevelsで参照する軸/水準を機械可読に宣言する。\n\n境界宣言（PR #322 第11巡指摘 Fix 21, P1, 採用——上限超過後だが新しい具体経路のため例外採用。Fix 11と同型の帰属誤りクラス）: 宣言harness（gate_synth.py::run_pipelineの_NoteWithMs/build_inputs()）はphrase-end releaseの制御入力を持たない——_NoteWithMsはis_phrase_finalを消費せず、末尾releaseは全cell固定のTAIL_FRAMES（定数、cell非依存）である。v0.1 §15 P3のshort/long releaseは本backboneでは操作変数として表現不能である。P3で実際に操作されているのはfinal_note_duration（終端noteのduration_beats、旧称release_duration——軸名を実操作へ真実化した）とending_voicing（kana由来の音韻的有声性——こちらは実操作）のみであり、releaseに関する観測はこの2操作の範囲に限定される。既存のdiagnostic_when_trf_uncalibrated role（TRF未確立=Run8実測）とも整合する。再入条件はrelease制御入力を消費するbackboneへの交換、またはTRF校正の確立である。",
       "title": "Phrase-End Probe"
     },
     {

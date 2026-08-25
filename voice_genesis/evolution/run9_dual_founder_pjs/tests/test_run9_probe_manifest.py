@@ -581,7 +581,9 @@ def test_negative_fix3_onset_kana_mismatch(manifest_data: Dict[str, Any]) -> Non
 # 「PR #322 第5巡指摘 Fix 11」節を参照。
 
 
-def test_negative_fix3_release_duration_mismatch(manifest_data: Dict[str, Any]) -> None:
+def test_negative_fix3_final_note_duration_mismatch(manifest_data: Dict[str, Any]) -> None:
+    """PR #322 第11巡指摘 Fix 21 で軸名 `release_duration` ->
+    `final_note_duration` へ改名済み（水準値・cell 構造は不変）。"""
     bad = _mutate(manifest_data)
     (p3,) = [p for p in bad["probes"] if p["probe_id"] == "P3"]
     cell = _cell_by_id(p3, "P3-RELEASE-SHORT-VOICED")
@@ -1804,14 +1806,15 @@ def test_negative_fix19_p2_filler_tuple_coordinated_edit(manifest_data: Dict[str
 
 
 def test_negative_fix19_p3_duration_level_coordinated_edit(manifest_data: Dict[str, Any]) -> None:
-    """P3 release_duration.short の水準値を変更し、対応 cell の
+    """P3 final_note_duration.short（PR #322 第11巡指摘 Fix 21 で
+    release_duration から改名済み）の水準値を変更し、対応 cell の
     phrase-final duration も追随させる——manifest 自己整合性は満たすが
     Fix 19 の凍結表には違反する。"""
     bad = _mutate(manifest_data)
     p3 = _p3_probe(bad)
-    p3["factor_levels"]["axes"]["release_duration"]["short"] = 2
+    p3["factor_levels"]["axes"]["final_note_duration"]["short"] = 2
     for cell in p3["cells"]:
-        if cell.get("levels", {}).get("release_duration") == "short":
+        if cell.get("levels", {}).get("final_note_duration") == "short":
             for note in cell["notes"]:
                 if note.get("is_phrase_final"):
                     note["duration_beats"] = 2
@@ -1947,4 +1950,61 @@ def test_negative_fix20_p5_tempo_changed(manifest_data: Dict[str, Any]) -> None:
     bad = _mutate(manifest_data)
     _p5_probe(bad)["cells"][0]["tempo_bpm"] = 60.0
     with pytest.raises(m.Run9ValidationError, match="frozen expected tempo"):
+        m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第11巡指摘 Fix 21（P1, 採用——上限超過後だが「新しい具体経路を
+# 示す指摘は巡数に依らず採用」規律の例外採用）: gate_synth.py の
+# `_NoteWithMs` は `is_phrase_final` を消費せず、末尾 release は全 cell
+# 固定の `TAIL_FRAMES`——宣言 harness に phrase-end release の制御入力は
+# 存在しない。P3 の `release_duration` 軸を実際に操作している変数の名前
+# （`final_note_duration`）へ改名し、P3 probe.role へ計器能力の境界宣言を
+# 追加した（Fix 11 と同型の設計判断: release 制御の新規発明は不採用）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix21_positive_real_manifest_passes(manifest_data: Dict[str, Any]) -> None:
+    """回帰確認: 実 manifest（軸改名済み・境界宣言追加済み）は引き続き
+    通過する。"""
+    m.validate_probe_manifest(manifest_data)
+
+
+def test_fix21_axis_renamed_in_all_frozen_tables() -> None:
+    assert m._PROBE_FACTORIAL_AXES["P3"] == ("final_note_duration", "ending_voicing")
+    assert "final_note_duration" in m._PROBE_EXPECTED_FACTOR_VALUES["P3"]["axes"]
+    assert "release_duration" not in m._PROBE_EXPECTED_FACTOR_VALUES["P3"]["axes"]
+    assert "final_note_duration" in m._AXIS_NUMERIC_FIELD_CHECKS
+    assert m._AXIS_NUMERIC_FIELD_CHECKS["final_note_duration"] == "duration_beats"
+    assert "release_duration" not in m._AXIS_NUMERIC_FIELD_CHECKS
+
+
+def test_fix21_p3_role_declares_boundary_markers(manifest_data: Dict[str, Any]) -> None:
+    role = _p3_probe(manifest_data)["role"]
+    for marker in m._P3_RELEASE_BOUNDARY_MARKERS:
+        assert marker in role
+
+
+def test_negative_fix21_old_axis_name_residual_rejected(manifest_data: Dict[str, Any]) -> None:
+    """本指摘の核心の一部: 旧軸名 `release_duration` が factor_levels.axes
+    /cell の levels に残存していると、未登録 axis として fail-closed
+    拒否される（改名の追随漏れを検出する）。"""
+    bad = _mutate(manifest_data)
+    p3 = _p3_probe(bad)
+    axes = p3["factor_levels"]["axes"]
+    axes["release_duration"] = axes.pop("final_note_duration")
+    for cell in p3["cells"]:
+        cell["levels"]["release_duration"] = cell["levels"].pop("final_note_duration")
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+@pytest.mark.parametrize("marker", ["_NoteWithMs", "TAIL_FRAMES", "final_note_duration", "再入条件"])
+def test_negative_fix21_boundary_marker_missing(
+    manifest_data: Dict[str, Any], marker: str,
+) -> None:
+    bad = _mutate(manifest_data)
+    p3 = _p3_probe(bad)
+    p3["role"] = p3["role"].replace(marker, "")
+    with pytest.raises(m.Run9ValidationError):
         m.validate_probe_manifest(bad)

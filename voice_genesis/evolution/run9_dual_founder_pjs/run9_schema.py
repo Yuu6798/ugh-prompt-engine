@@ -3356,7 +3356,8 @@ _FACTOR_LEVELS_AXES_KEY = "axes"
 # を削除しても low/short は他 cell に残る）——凍結された factorial から
 # 1条件が黙って失われる欠陥。probe 別の期待 cell_id 集合（全24個、閉じた
 # 集合・過不足いずれも拒否）を凍結し、加えて P1（register×duration）/
-# P3（release_duration×ending_voicing）の full factorial 直積被覆
+# P3（final_note_duration×ending_voicing。旧称 release_duration — Fix 21
+# で実操作変数の名前へ改名）の full factorial 直積被覆
 # （宣言水準の全組合せが「同一 cell」の levels として実在すること）を
 # 別途検証する。amendment で cell を増減する場合は、本ファイルの凍結表
 # （`_PROBE_EXPECTED_CELL_IDS`/`_PROBE_FACTORIAL_AXES`）の更新が同時に
@@ -3387,7 +3388,7 @@ _PROBE_EXPECTED_CELL_IDS: Mapping[str, FrozenSet[str]] = types.MappingProxyType(
 # （P2 の onset_consonant_class は単一軸で直積構造を持たないため対象外）。
 _PROBE_FACTORIAL_AXES: Mapping[str, Tuple[str, str]] = types.MappingProxyType({
     "P1": ("register", "duration"),
-    "P3": ("release_duration", "ending_voicing"),
+    "P3": ("final_note_duration", "ending_voicing"),
 })
 
 # ---------------------------------------------------------------------------
@@ -3428,7 +3429,8 @@ _PROBE_EXPECTED_TEMPO_BPM: Mapping[str, float] = types.MappingProxyType({
 # 側の変更だけでは通らない摩擦、Fix 8/9 と同じ規約）。現行 manifest の
 # 実値から転記して凍結（P1 register/duration/transition_direction、
 # P2 onset_consonant_class 記述文言 + filler タプル、P3
-# release_duration/ending_voicing 記述文言）。
+# final_note_duration/ending_voicing 記述文言。P3 の軸名は Fix 21 で
+# release_duration から改名済み）。
 # ---------------------------------------------------------------------------
 _PROBE_EXPECTED_FACTOR_VALUES: Mapping[str, Any] = types.MappingProxyType({
     "P1": types.MappingProxyType({
@@ -3455,7 +3457,7 @@ _PROBE_EXPECTED_FACTOR_VALUES: Mapping[str, Any] = types.MappingProxyType({
     }),
     "P3": types.MappingProxyType({
         "axes": types.MappingProxyType({
-            "release_duration": types.MappingProxyType({"short": 1, "long": 4}),
+            "final_note_duration": types.MappingProxyType({"short": 1, "long": 4}),
             "ending_voicing": types.MappingProxyType({
                 "voiced": "有声終端（子音+母音の通常発声、devoicing対象外のモーラ）",
                 "unvoiced": "無声化しうる終端（無声子音+狭母音 /u/ 等、無声化しやすいモーラ）",
@@ -3594,7 +3596,8 @@ def _validate_probe_factorial_coverage(
 # note フィールドとの一致は見ていなかった（例: P1-REG-LOW-DUR-SHORT の
 # MIDI を 57→65 に変えても `levels: {register: low}` のまま通過してい
 # た）。以下、各軸の「宣言 ↔ 実 note」照合をここで凍結する。数値軸
-# （register/duration/release_duration）は cell の**phrase-final note**
+# （register/duration/final_note_duration。P3 側は Fix 21 で
+# release_duration から改名済み）は cell の**phrase-final note**
 # （`is_phrase_final: true`。P1/P3 の対象 cell は必ずちょうど1つ持つ —
 # 単一 note の register/duration cell では唯一の note、P2/P3 の複数 note
 # cell では終端/target note）の該当フィールドと厳密等値照合する。
@@ -3641,7 +3644,11 @@ _ENDING_VOICING_KANA_TABLE: Mapping[str, str] = types.MappingProxyType({
 _AXIS_NUMERIC_FIELD_CHECKS: Mapping[str, str] = types.MappingProxyType({
     "register": "pitch_midi",
     "duration": "duration_beats",
-    "release_duration": "duration_beats",
+    # PR #322 第11巡指摘 Fix 21: `release_duration` から改名——本軸が実際
+    # に照合しているのは終端 note 自身の duration_beats であり、
+    # phrase-end の release 特性ではない（宣言 harness に release 制御
+    # 入力が存在しないため）。
+    "final_note_duration": "duration_beats",
 })
 # kana クラス照合軸: axis_name -> kana 対応表。
 _AXIS_KANA_CLASS_CHECKS: Mapping[str, Mapping[str, str]] = types.MappingProxyType({
@@ -3693,6 +3700,26 @@ _P2_ENERGY_BOUNDARY_MARKERS: Tuple[str, ...] = (
     "energy/velocity/metrical-accent",
     "onset consonant class のみ",
     "再入条件",
+)
+
+# ---------------------------------------------------------------------------
+# PR #322 第11巡指摘 Fix 21（P1, 採用——上限超過後だが「新しい具体経路を
+# 示す指摘は巡数に依らず採用」規律の例外採用。Fix 11 と同型の帰属誤り
+# クラスの新規経路）: gate_synth.py の `_NoteWithMs` は `midi`/`mora`/
+# `_dur_ms` のみを保持し `is_phrase_final` を一切消費しない（read-only
+# 参照で確認済み）。`run_pipeline` の末尾 release（`TAIL_FRAMES` 定数、
+# `ph_dur2`/`note_dur_raw` へ全 cell 共通で1回だけ付与）は cell 非依存の
+# 固定値であり、phrase-end release を制御する入力は宣言 harness に存在
+# しない。P3 の `release_duration` 軸が実際に操作しているのは終端 note
+# 自身の `duration_beats`（P1 の `duration` 軸と同じ機構）であり、
+# phrase-end の release 特性ではなかった——**release 制御の新規発明は
+# 不採用**（存在しない harness 入力の捏造になるため、Fix 11 と同じ設計
+# 判断）。軸を実際に操作している変数の名前へ真実化する（`release_
+# duration` -> `final_note_duration`。水準値・cell 構造は不変、名前と
+# その意味記述のみ真実化）+ P3 probe へ計器能力の境界宣言を追加する。
+# ---------------------------------------------------------------------------
+_P3_RELEASE_BOUNDARY_MARKERS: Tuple[str, ...] = (
+    "_NoteWithMs", "TAIL_FRAMES", "final_note_duration", "再入条件",
 )
 
 _NOTE_KEYS: FrozenSet[str] = frozenset(
@@ -4972,6 +4999,17 @@ def _validate_probe_object(
             f"{field}.role must contain the marker {_P3_DIAGNOSTIC_ROLE_MARKER!r} (DESIGN_RUN9 §15 "
             "P3: TRF 未校正時は diagnostic/advisory の機械可読化), got role without the marker"
         )
+    if expected_probe_id == "P3":
+        # PR #322 第11巡指摘 Fix 21: 計器能力の境界宣言（_NoteWithMs が
+        # is_phrase_final を消費しない・末尾 release は TAIL_FRAMES 固定・
+        # 実操作は final_note_duration/ending_voicing のみ・再入条件）を
+        # probe.role へ明記する（Fix 11 の P2 境界宣言と同流儀）。
+        for marker in _P3_RELEASE_BOUNDARY_MARKERS:
+            if marker not in role:
+                raise Run9ValidationError(
+                    f"{field}.role must contain the marker {marker!r} (Fix 21: P3 の Phrase-End "
+                    "計器能力の境界宣言), got role without that marker"
+                )
     if expected_probe_id == "P2":
         # PR #322 第5巡指摘 Fix 11: 計器能力の境界宣言（energy/velocity/
         # metrical-accent 制御入力の不在・実操作は onset_consonant_class
@@ -5011,7 +5049,8 @@ def _validate_probe_object(
 
     if expected_probe_id in _PROBE_FACTORIAL_AXES:
         # Fix 9: full factorial 直積被覆（P1: register×duration, P3:
-        # release_duration×ending_voicing）。
+        # final_note_duration×ending_voicing。P3 側は Fix 21 で
+        # release_duration から改名済み）。
         _validate_probe_factorial_coverage(
             expected_probe_id=expected_probe_id, factor_levels=probe["factor_levels"], cells=cells,
             field=f"{field}.factor_levels",
