@@ -564,8 +564,8 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   manifest_sha` を **PINNED** 化した。実 PJS 音源・展開物は repo 配下へ
   置いていない（作業は session scratchpad 限定）。この生成手続きは
   User の私物マシンや実行時計測を要求しない——公開配布物の sha 検証と
-  builder の決定論処理のみで再現できる（下記「次フェーズ」節の分類訂正も
-  参照）。
+  builder の決定論処理のみで再現できる（User 裁定による scoped 例外の
+  成立条件・出所は下記「次フェーズ」節参照）。
 
 **解消済み（RUN9-PROBE-1, 2026-08-25）**:
 - ~~P0-P5 probe set の実ファイル manifest 未作成~~ → DESIGN_RUN9 §15
@@ -630,10 +630,14 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   session scratchpad 限定）。**`gate_state()` は依然 `BLOCKED`**
   （`dataset_manifest_sha`/`education_technique_lesson_manifest_sha`/
   `learning_recipe_sha`/`config_sha` 等 VG-L0 ハーネス関連欄が PENDING
-  のままのため）。**分類訂正**: この work は「マシン依存（実音源 =
-  Codex/User）」ではなく、公開配布物の sha 検証で完結する work であり
-  Claude 側の通常実装ルートで完了可能だった——下記「次フェーズ」節の
-  該当箇所を訂正済み。
+  のままのため）。**User 裁定による scoped 例外**〔履歴: 当初「この work
+  は『マシン依存（実音源 = Codex/User）』ではなく…Claude 側の通常実装
+  ルートで完了可能だった」と、権限根拠を示さず一般規則であるかのように
+  記していた——Codex bot レビュー PR #323 第3巡指摘（P2, 部分採用）で
+  是正: CLAUDE.md:71-75 の一般分類は不変のまま、本件は User が本 PR
+  セッション（2026-08-25）で直接承認・実行指示した scoped 例外である旨、
+  および成立条件（公開配布物 + sha 完全一致検証）を下記「次フェーズ」節
+  へ明記した〕。詳細・成立条件・権限の出所は下記「次フェーズ」節参照。
 
 **残存**:
 
@@ -765,24 +769,48 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   ——render 契約・revision_bridge の凍結までであり、実 render の実行
   自体は VG-L0 ハーネス実装待ちのまま（残存ブロッカー(2)）。
 - ~~**practice manifest の実体 build**~~ → 2026-08-25 解消済み・
-  **分類訂正**: 当初本節（machine-dependent 見出し配下）に置いていたが、
-  誤分類だった。practice split は「実音源」を必要とする work ではなく、
-  PJS corpus ver1.1（CC BY-SA 4.0 公開配布物）の zip sha256 が契約 pin と
-  一致することを確認し、plain unzip → corpus identity 照合 →
-  `practice_split_builder.build_practice_split_manifest()` の決定論処理を
-  行うだけで、User の私物マシンや実行時の環境依存値を一切要求せずに
-  誰でも再現できる（マシン局所値ゼロ・要件は「pin と一致するバイト列」の
-  みで CLAUDE.md の「マシン依存（実音源・実重みハッシュ・Suno 生成・G4
-  ライセンス目視）= Codex / User」区分には該当しない——公開配布物 + sha
-  検証で完結する work は Claude 側の通常実装ルートで完了可能）。実際
-  `practice_split_builder.py`（`build_practice_split_manifest()`）を実行
-  したところ `expanded_corpus_identity_sha256` は初回試行で一致し（song
-  数 100）、`inputs/practice_audio_split_manifest.json`（training 70 /
-  validation 15 / sealed_holdout 15）を生成、`practice_audio_split_
-  manifest_sha` を **PINNED** 化した。EDUCATION 側
-  （`education_technique_lesson_manifest.json`）は builder 自体が未着手
-  のまま machine-dependent（VG-L0 ハーネス実装待ち）に残る（残存
-  ブロッカー(3)(4)）。
+  **User 裁定による scoped 例外（分類の一般改訂ではない）**: 当初本節
+  （machine-dependent 見出し配下）に置いていたが、本 PR セッション中
+  （2026-08-25）に Claude が「practice split は公開 PJS 配布物 + sha
+  完全一致検証で足り、User 手元コーパス不要」という事実確認を提示し、
+  **User が「1を実行できるなら実行してください」と実行そのものを直接
+  指示した**（本節の再分類・実行は User 裁定に基づく行為であり、Claude
+  の単独判断による role split 上書きではない）。
+  〔履歴: 当初の記述は「誤分類だった」「CLAUDE.md の…区分には該当しない
+  ……公開配布物 + sha 検証で完結する work は Claude 側の通常実装ルートで
+  完了可能」と、権限根拠を示さずに一般規則であるかのような書き方をして
+  いた——Codex bot レビュー PR #323 第3巡指摘（P2, 部分採用）: 実音源処理
+  を Codex/User 経路に留める CLAUDE.md:71-75 の一般分類を、根拠なく
+  README が上書きして見え、後続セッションへ規約違反を誤って指示しうる
+  という懸念は正当（将来汚染として採用）。ただし再分類の削除は不採用
+  ——本件は User が本セッションで直接承認・実行指示した scoped な事実
+  であり、削除は事実を消す逆方向の汚染になる。採った対応は出所と適用
+  範囲の明記（本文）〕。
+  **本 scoped 例外の成立条件**（`practice_audio_split_manifest` の生成
+  作業のみに限定・他の実音源作業へ一般化しない）: (a) 入力が CC BY-SA
+  4.0 の公開配布物（PJS corpus ver1.1、User の私物音源ではない）
+  であること、(b) `pjs_source_archive_sha256`（配布 zip 全体）+
+  `expanded_corpus_identity_sha256`（展開後コーパス identity）の完全
+  一致検証により、実行環境・実音源そのものへの機械依存（どのマシンで
+  展開したか・誰の手元にあるか）が構造的に消えること——不一致なら
+  builder は fail-closed 拒否し部分続行しない設計そのものが、この条件を
+  担保する。
+  **CLAUDE.md:71-75 の一般分類は不変**: 「マシン依存（実音源・実重み
+  ハッシュ・Suno 生成・G4 ライセンス目視）= Codex / User」という一般規則
+  自体は正しいまま変更していない。本節は上記2条件を満たす1作業
+  （practice split manifest 生成）に限った User 裁定済み scoped 例外の
+  記録であり、CLAUDE.md/AGENTS.md 側の一般政策を書き換える一般規則
+  ではない——一般政策の改訂自体は User 権限であり、本 PR では
+  CLAUDE.md/AGENTS.md を一切改変していない。
+
+  実際 `practice_split_builder.py`（`build_practice_split_manifest()`）を
+  実行したところ `expanded_corpus_identity_sha256` は初回試行で一致し
+  （song 数 100）、`inputs/practice_audio_split_manifest.json`
+  （training 70 / validation 15 / sealed_holdout 15）を生成、
+  `practice_audio_split_manifest_sha` を **PINNED** 化した。EDUCATION 側
+  （`education_technique_lesson_manifest.json`）は上記 scoped 例外の
+  対象外——builder 自体が未着手のまま machine-dependent（VG-L0 ハーネス
+  実装待ち）に残る（残存ブロッカー(3)(4)）。
 - **learning recipe manifest の実体 build**: `learning_recipe_manifest.json`
   （schema `run9-learning-recipe/1.0`、`run9_schema.LEARNING_RECIPE_
   MANIFEST_PATH` が規約パスを凍結済み・`validate_learning_recipe_

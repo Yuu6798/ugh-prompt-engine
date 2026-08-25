@@ -9773,3 +9773,35 @@ def test_fix323_2_p5_deferred_verification_blocked_by_constant_unchanged() -> No
     assert m._P5_DEFERRED_VERIFICATION_BLOCKED_BY == frozenset(
         {"practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha"}
     )
+
+
+# ---------------------------------------------------------------------------
+# PR #323 Codex bot レビュー第3巡指摘（P2, 部分採用, Fix 3）: README.md の
+# practice split 「分類訂正」記述（次フェーズ節）が、権限根拠を示さずに
+# CLAUDE.md:71-75 の一般分類（実音源 = マシン依存 = Codex/User）を上書き
+# して見え、後続セッションへ規約違反を指示しうるという懸念——正当なため
+# 採用。ただし再分類そのものの削除は不採用（2026-08-25 本 PR セッション
+# 中の User 裁定による scoped 事実であり、削除は逆方向の汚染）。採った
+# 対応は出所（User 裁定）と適用範囲（practice_audio_split_manifest 生成
+# のみ・2条件）の明記。CLAUDE.md/AGENTS.md 自体は本 Fix で改変しない
+# （一般政策の改訂は User 権限 — 境界宣言）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix323_3_readme_practice_scoped_exception_has_user_decision_provenance() -> None:
+    """README.md の practice split scoped 例外記述に、出所（User 裁定・
+    2026-08-25）を示す provenance マーカーが存在すること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "User 裁定" in readme_text
+    assert "2026-08-25" in readme_text
+    assert "scoped 例外" in readme_text
+
+
+def test_fix323_3_readme_practice_scoped_exception_states_claude_md_classification_unchanged() -> None:
+    """README.md が、CLAUDE.md の一般分類（実音源 = マシン依存 =
+    Codex/User）は不変のままであり、本節がそれを上書きする一般規則では
+    ないことを明記していること（Codex bot レビュー PR #323 第3巡指摘の
+    核心 — 権限根拠なき上書きに見えることの是正）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "CLAUDE.md:71-75 の一般分類は不変" in readme_text
+    assert "一般政策の改訂自体は User 権限" in readme_text
