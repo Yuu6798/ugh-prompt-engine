@@ -11,7 +11,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pytest
 import yaml
@@ -1347,9 +1347,14 @@ def test_fix14_positive_p4_provenance_blocks_well_formed(manifest_data: Dict[str
     assert independence["authorship"]["author"].strip()
     assert m._HELDOUT_AUTHORED_AT_RE.match(independence["authorship"]["authored_at"])
     assert independence["authorship"]["provenance_record"].strip()
-    for marker in m._HELDOUT_ENV_EVIDENCE_CLAIM_MARKERS:
-        assert marker in independence["environment_evidence"]["claim"]
-    assert independence["environment_evidence"]["verification_method"].strip()
+    # PR #322 第8巡指摘 Fix 18: environment_evidence は machine_checked /
+    # author_record の2ブロックへ区分済み。
+    env = independence["environment_evidence"]
+    for marker in m._HELDOUT_ENV_EVIDENCE_MACHINE_CHECKED_CLAIM_MARKERS:
+        assert marker in env["machine_checked"]["claim"]
+    assert env["machine_checked"]["verification_method"].strip()
+    for marker in m._HELDOUT_ENV_EVIDENCE_AUTHOR_RECORD_CLAIM_MARKERS:
+        assert marker in env["author_record"]["claim"]
     assert (
         m._HELDOUT_MACHINE_CHECKED_SEPARATION_MARKER
         in independence["machine_checked_separation"]["reference"]
@@ -1379,8 +1384,22 @@ def test_negative_fix14_authorship_bad_date_format(manifest_data: Dict[str, Any]
 
 
 def test_negative_fix14_environment_evidence_missing_marker(manifest_data: Dict[str, Any]) -> None:
+    """PR #322 第8巡指摘 Fix 18 で `environment_evidence` は
+    machine_checked/author_record へ分割された——ここでは machine_checked
+    側のマーカー欠落を検証する（author_record 側は別テストで検証）。"""
     bad = _mutate(manifest_data)
-    _p4_probe(bad)["heldout_independence"]["environment_evidence"]["claim"] = "no markers here"
+    _p4_probe(bad)["heldout_independence"]["environment_evidence"]["machine_checked"]["claim"] = (
+        "no markers here"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix18_author_record_missing_marker(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p4_probe(bad)["heldout_independence"]["environment_evidence"]["author_record"]["claim"] = (
+        "no markers here"
+    )
     with pytest.raises(m.Run9ValidationError):
         m.validate_probe_manifest(bad)
 
@@ -1415,11 +1434,13 @@ def test_negative_fix14_unknown_key_in_provenance_block(manifest_data: Dict[str,
 
 
 def test_fix14_repo_has_no_pjs_audio_or_label_files() -> None:
-    """`environment_evidence.claim`（著述時点の repo に PJS音源(wav/lab)
-    実体ファイルが一切存在しない）を機械検証する——repo 内を glob して
-    ファイル名に "pjs" を含む .wav / .lab 実体ファイルの不在を確認する。
-    メタデータ *.json 内の "pjs" 文字列参照（pin 値の文字列参照等）は
-    対象外——音源・採譜の実体ファイルのみを検査する。"""
+    """`environment_evidence.machine_checked.claim`（PR #322 第8巡指摘
+    Fix 18 で `machine_checked`/`author_record` へ分割済み——現在の repo
+    checkout に、ファイル名ベースで pjs を含む wav/lab 実体ファイルが
+    一切存在しない）を機械検証する——repo 内を glob してファイル名に
+    "pjs" を含む .wav / .lab 実体ファイルの不在を確認する。メタデータ
+    *.json 内の "pjs" 文字列参照（pin 値の文字列参照等）は対象外——
+    音源・採譜の実体ファイルのみを検査する。"""
     repo_root = _RUN_DIR
     while not (repo_root / ".git").exists():
         if repo_root.parent == repo_root:
@@ -1437,3 +1458,289 @@ def test_fix14_repo_has_no_pjs_audio_or_label_files() -> None:
         "repo 内に PJS 音源/採譜の実体ファイルが見つかった（environment_evidence.claim と矛盾）: "
         f"{hits}"
     )
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第8巡指摘 Fix 16（P1, 採用）: `_load_score_py_module()` の
+# read-once 化（Fix 15 と同型）。hash 照合対象と実行対象は同一バイト列
+# から導出し、`_validate_probe_cell_source()`（P0 source hash 照合）は
+# score_py_module 経由でその digest を再利用し、独自に別読みしない。
+# ---------------------------------------------------------------------------
+
+
+class _ReadBytesCountingPath:
+    """`_load_score_py_module()` が呼ぶ `is_file()` / `read_bytes()` のみを
+    実 Path へ委譲しつつ、`read_bytes()` の呼び出し回数を数える
+    （read-once 検証の spy。Fix 15 の `_ReadCountingPath` と同型）。"""
+
+    def __init__(self, real_path: Path) -> None:
+        self._real = real_path
+        self.read_bytes_call_count = 0
+
+    def is_file(self) -> bool:
+        return self._real.is_file()
+
+    def read_bytes(self) -> bytes:
+        self.read_bytes_call_count += 1
+        return self._real.read_bytes()
+
+    @property
+    def parent(self) -> Path:
+        return self._real.parent
+
+    def __str__(self) -> str:  # エラーメッセージの f-string 埋め込み用
+        return str(self._real)
+
+
+def test_fix16_load_score_py_module_reads_file_exactly_once() -> None:
+    spy = _ReadBytesCountingPath(m.SCORE_PY_REFERENCE_PATH)
+    module = m._load_score_py_module(path=spy)  # type: ignore[arg-type]
+    assert spy.read_bytes_call_count == 1, (
+        "_load_score_py_module() はファイルをちょうど1回だけ read_bytes() する契約（read-once。"
+        f"実測 {spy.read_bytes_call_count} 回）"
+    )
+    assert hasattr(module, "build_sakura_score")
+
+
+def test_fix16_digest_and_execution_derive_from_identical_buffer() -> None:
+    """digest（module.__source_sha256__）と実行対象が同一バイト列由来で
+    あることを、実ファイルから独立に導出した期待 digest と突き合わせて
+    確認する（回帰確認——read-once 化で外部挙動が変わっていないこと）。"""
+    module = m._load_score_py_module()
+    expected_sha = hashlib.sha256(m.SCORE_PY_REFERENCE_PATH.read_bytes()).hexdigest()
+    assert module.__source_sha256__ == expected_sha
+    assert module.__source_sha256__ == m.compute_file_sha256(m.SCORE_PY_REFERENCE_PATH)
+    # 実行対象（build_sakura_score）が正しく動作することも確認する。
+    notes = module.build_sakura_score()
+    assert notes
+
+
+def test_fix16_validate_probe_cell_source_reuses_module_digest_no_reread() -> None:
+    """full-chain 経路の配線を単体で確認する: `score_py_module` を渡した
+    場合、`_validate_probe_cell_source()` は独自に score.py を読まない
+    （score_path は使われない——存在しない score_path を同時に渡しても
+    無視されて通過することで、別読みしていないことを示す）。"""
+    module = m._load_score_py_module()
+    actual_sha = m.compute_file_sha256(m.SCORE_PY_REFERENCE_PATH)
+    source = _valid_p0_source(actual_sha)
+    nonexistent = Path("/tmp/pr322_r8_fix16_does_not_exist/score.py")
+    assert not nonexistent.exists()
+    # score_path はダミー（存在しない）だが score_py_module を渡すため
+    # 参照されない——別読みしない配線の確認。
+    m._validate_probe_cell_source(
+        source, field="test", score_path=nonexistent, score_py_module=module
+    )
+
+
+def test_negative_fix16_validate_probe_cell_source_mismatched_sha_via_module(
+) -> None:
+    module = m._load_score_py_module()
+    bad_source = _valid_p0_source("0" * 64)
+    with pytest.raises(m.Run9ValidationError, match="does not match"):
+        m._validate_probe_cell_source(bad_source, field="test", score_py_module=module)
+
+
+def test_fix16_standalone_fallback_still_works_without_module(
+) -> None:
+    """回帰確認: `score_py_module` を渡さない既存テスト・スタンドアロン
+    呼び出しは従来どおり `score_path` 経由で自己完結的にファイルを読む
+    （後方互換フォールバック、Fix 4/12 のテストは無変更で green）。"""
+    actual_sha = m.compute_file_sha256(m.SCORE_PY_REFERENCE_PATH)
+    m._validate_probe_cell_source(_valid_p0_source(actual_sha), field="test")
+
+
+def test_fix16_phoneme_jp_loader_out_of_scope_has_no_hash_check() -> None:
+    """`_load_phoneme_jp_module()` は Fix 16 の対象外であることの根拠
+    確認: phoneme_jp.py には hash 照合が一切存在しない（mora 文法検証の
+    みを行う）ため、read-once 化すべき「hash した版と実行した版の乖離」
+    という契約自体が存在しない。"""
+    module = m._load_phoneme_jp_module()
+    assert not hasattr(module, "__source_sha256__")
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第8巡指摘 Fix 17（P2, 採用）: P4 held-out 分離を射影別に独立して
+# 比較する（結合 (kana, pitch, duration) タプル比較は kana だけ変えて
+# 旋律・リズムを丸コピーした P4 を通してしまうため）。pitch_midi/kana は
+# 完全一致・連続部分列包含を厳密拒否、duration_beats は低エントロピー
+# 対策として最小長4以上の完全一致/連続部分列に限って拒否する。
+# ---------------------------------------------------------------------------
+
+
+def _set_p4_notes(data: Dict[str, Any], notes: List[Dict[str, Any]]) -> None:
+    _p4_probe(data)["cells"][0]["notes"] = notes
+
+
+def _p0_note_slice(data: Dict[str, Any], start: int, stop: int) -> List[Dict[str, Any]]:
+    return copy.deepcopy(_p0_probe(data)["cells"][0]["notes"][start:stop])
+
+
+def test_fix17_positive_real_manifest_passes_projection_checks(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """回帰確認: 実 manifest（P4 は元々分離済み）は Fix 17 の射影別検査
+    でも引き続き通過する（cell の書き換えは不要だった）。"""
+    m.validate_probe_manifest(manifest_data)
+
+
+def test_negative_fix17_kana_replaced_but_pitch_and_duration_copied(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """kana だけ差し替えて pitch/duration を P0 の連続部分列から丸コピー
+    した P4 は、結合タプル検査（Fix 10）をすり抜けても pitch_midi 射影の
+    独立検査（Fix 17）で捕捉されることを確認する——本指摘の核心シナリオ。"""
+    bad = _mutate(manifest_data)
+    src = _p0_note_slice(bad, 13, 18)  # み,わ,た,す,か (5 notes; P4 と同じ長さ)
+    for n in src:
+        n["kana"] = "ぬ"  # kana だけ差し替え、pitch/duration はそのまま
+    _set_p4_notes(bad, src)
+    with pytest.raises(m.Run9ValidationError, match="pitch_midi"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix17_pitch_projection_only_copy(manifest_data: Dict[str, Any]) -> None:
+    """pitch 系列のみを既存 cell からコピーし、kana/duration は変えた
+    場合でも pitch_midi 射影の独立検査で拒否されることを確認する。"""
+    bad = _mutate(manifest_data)
+    src_cell = _cell_by_id(_p1_probe(bad), "P1-TRANS-LOW-TO-HIGH")  # pitch [57, 65]
+    notes = []
+    for n in src_cell["notes"]:
+        notes.append({
+            "kana": "ぬ", "pitch_midi": n["pitch_midi"], "duration_beats": 9,
+            "phrase_index": 0, "is_phrase_final": n is src_cell["notes"][-1],
+        })
+    _set_p4_notes(bad, notes)
+    with pytest.raises(m.Run9ValidationError, match="pitch_midi"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix17_duration_long_run_copy(manifest_data: Dict[str, Any]) -> None:
+    """duration 系列の長い連続部分列（長さ5、閾値4以上）を P0 からコピー
+    すると duration_beats 射影の独立検査で拒否されることを確認する
+    （kana/pitch は変える）。"""
+    bad = _mutate(manifest_data)
+    src = _p0_note_slice(bad, 0, 5)  # duration pattern: 1,1,2,1,1
+    for i, n in enumerate(src):
+        n["kana"] = "ぬ"
+        n["pitch_midi"] = 40  # P0/P4 の中央音域制約を外れない値は後段で
+        n["is_phrase_final"] = i == len(src) - 1
+    _set_p4_notes(bad, src)
+    with pytest.raises(m.Run9ValidationError, match="duration_beats"):
+        m.validate_probe_manifest(bad)
+
+
+def test_positive_fix17_duration_short_match_not_flagged(manifest_data: Dict[str, Any]) -> None:
+    """duration の短い一致（長さ3以下）は低エントロピーの誤検知として
+    フラグされないことを確認する——P4 の一部 note の duration だけを
+    他 cell と揃えても、長さが閾値未満なら通過する。"""
+    bad = _mutate(manifest_data)
+    p4_cell = _p4_probe(bad)["cells"][0]
+    # 先頭2 note の duration を P1 transition cell（duration [1, 1]）と
+    # 揃える——長さ2 < 閾値4 のため duration 射影検査はフラグしない
+    # （kana/pitch は元のままなので他射影・結合タプル検査にも抵触しない）。
+    p4_cell["notes"][0]["duration_beats"] = 1
+    p4_cell["notes"][1]["duration_beats"] = 1
+    m.validate_probe_manifest(bad)  # 例外を投げないことの確認
+
+
+def test_fix17_helper_duration_threshold_constant() -> None:
+    assert m._HELDOUT_DURATION_MIN_LEAK_LENGTH == 4
+
+
+def test_fix17_manifest_reference_text_matches_actual_check_content(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """`machine_checked_separation.reference` の宣言文言が、実際の検査
+    内容（射影別・duration閾値付き）と一致することを確認する（指摘:
+    「manifest の分離宣言文言を実際の検査内容と一致するよう更新」）。"""
+    reference = _p4_probe(manifest_data)["heldout_independence"][
+        "machine_checked_separation"
+    ]["reference"]
+    for marker in ("pitch_midi", "kana", "duration_beats", "4"):
+        assert marker in reference
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第8巡指摘 Fix 18（P2, 採用）: `AUTHORED_INDEPENDENTLY_OF_PJS_
+# CORPUS` は現 repo checkout の pjs 名 wav/lab 検査のみなのに、歴史的
+# 作業環境 + 全形態（MIDI/MusicXML/歌詞テキスト・別名）にまで及ぶ主張に
+# 読めた——主張を収集済み証拠へ縮小する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix18_status_literal_renamed() -> None:
+    assert m.HELDOUT_INDEPENDENCE_STATUS == "AUTHORED_WITHOUT_PJS_MATERIAL_IN_AUTHORING_ENVIRONMENT"
+
+
+def test_negative_fix18_old_status_literal_rejected(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p4_probe(bad)["heldout_independence"]["status"] = "AUTHORED_INDEPENDENTLY_OF_PJS_CORPUS"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix18_old_flat_environment_evidence_shape_rejected(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """Fix 14 時点の旧形状（`claim`/`verification_method` を
+    environment_evidence 直下に持つ）はもはや unknown key として拒否
+    される——Fix 18 の再構造化が実際に強制されていることの確認。"""
+    bad = _mutate(manifest_data)
+    _p4_probe(bad)["heldout_independence"]["environment_evidence"] = {
+        "claim": "old shape", "verification_method": "old shape",
+    }
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix18_unknown_key_in_machine_checked(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p4_probe(bad)["heldout_independence"]["environment_evidence"]["machine_checked"][
+        "unexpected_extra_key"
+    ] = "x"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix18_unknown_key_in_author_record(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    _p4_probe(bad)["heldout_independence"]["environment_evidence"]["author_record"][
+        "unexpected_extra_key"
+    ] = "x"
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix18_machine_checked_missing_key(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    del _p4_probe(bad)["heldout_independence"]["environment_evidence"]["machine_checked"][
+        "verification_method"
+    ]
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix18_author_record_missing_key(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    del _p4_probe(bad)["heldout_independence"]["environment_evidence"]["author_record"]["claim"]
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+@pytest.mark.parametrize(
+    "marker", ["別 workspace", "別名ファイル", "MIDI", "MusicXML", "テキスト形態", "事前知識"]
+)
+def test_negative_fix18_residual_risk_scope_marker_missing(
+    manifest_data: Dict[str, Any], marker: str,
+) -> None:
+    """PR #322 第8巡指摘 Fix 18 が residual_risk_declaration へ追加した
+    検査対象外範囲マーカー（別 workspace・別名ファイル・MIDI/MusicXML・
+    テキスト形態・モデル事前知識）が、それぞれ個別に必須であることを
+    確認する。"""
+    bad = _mutate(manifest_data)
+    note = _p4_probe(bad)["heldout_independence"]["residual_risk_declaration"]["note"]
+    _p4_probe(bad)["heldout_independence"]["residual_risk_declaration"]["note"] = note.replace(
+        marker, ""
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)

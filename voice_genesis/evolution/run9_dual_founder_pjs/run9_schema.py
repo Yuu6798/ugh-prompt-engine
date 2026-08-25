@@ -3655,7 +3655,19 @@ def _load_score_py_module(*, path: Optional[Path] = None) -> Any:
     score.py は `import phoneme_jp as pj`（同ディレクトリの sibling
     module への素の import 文）を持つため、ロード中だけ一時的に
     `voice_genesis/singer/` を `sys.path` へ加える（ロード後は復元し、
-    恒久的な sys.path 汚染を避ける）。"""
+    恒久的な sys.path 汚染を避ける）。
+
+    **read-once 契約（PR #322 第8巡指摘 Fix 16, 採用。Fix 15 と同型）**:
+    hash 照合対象と実行対象は同一バイト列から導出する——`path.read_bytes()`
+    で**1回だけ**読み、そのバッファ `buf` から (a) `hashlib.sha256(buf)
+    .hexdigest()` を戻り値 module の `__source_sha256__` 属性として保持し
+    （`_validate_probe_cell_source()` の P0 source hash 照合が
+    `score_py_module` 経由で本値を再利用し、別読みしない構造にしている）
+    (b) `compile(buf.decode("utf-8"), str(path), "exec")` で得たコード
+    オブジェクトを `module.__dict__` へ直接 `exec` する。`spec.loader
+    .exec_module()` は使わない（それ自体が独立にファイルを再読込するため、
+    read-once の趣旨に反する）——hash した版と実行した版の乖離が構造的に
+    不可能になる。"""
     if path is None:
         path = SCORE_PY_REFERENCE_PATH
     if not path.is_file():
@@ -3669,12 +3681,21 @@ def _load_score_py_module(*, path: Optional[Path] = None) -> Any:
     if inserted:
         sys.path.insert(0, singer_dir)
     try:
-        spec = importlib.util.spec_from_file_location(_SCORE_PY_MODULE_NAME, path)
+        buf = path.read_bytes()
+        # `spec_from_file_location()` へは str(path) を渡す（テスト用の
+        # read-once spy が `os.PathLike` を実装していない場合でも動作
+        # するようにするため）。以降 `spec.loader.exec_module()` は
+        # 使わない（read-once の趣旨に反するため）ので、location の実体
+        # そのものに再アクセスすることはない——モジュール識別情報
+        # （`__name__`/`__file__`）の構築にのみ使われる。
+        spec = importlib.util.spec_from_file_location(_SCORE_PY_MODULE_NAME, str(path))
         if spec is None or spec.loader is None:
             raise Run9ValidationError(f"{path} の import spec を構築できない")
         module = importlib.util.module_from_spec(spec)
         sys.modules[_SCORE_PY_MODULE_NAME] = module
-        spec.loader.exec_module(module)
+        code = compile(buf.decode("utf-8"), str(path), "exec")
+        exec(code, module.__dict__)
+        module.__source_sha256__ = hashlib.sha256(buf).hexdigest()
     except Run9ValidationError:
         raise
     except Exception as exc:  # pragma: no cover - defensive fail-closed
@@ -3885,7 +3906,7 @@ _PROHIBITION_MARKERS: Tuple[str, ...] = (
 # ——この区別（carve-out）自体を文言として要求する（項目8）。
 _PROHIBITION_RENDER_INFEASIBLE_CARVEOUT_MARKERS: Tuple[str, ...] = ("水増し", "対象外")
 
-HELDOUT_INDEPENDENCE_STATUS = "AUTHORED_INDEPENDENTLY_OF_PJS_CORPUS"
+HELDOUT_INDEPENDENCE_STATUS = "AUTHORED_WITHOUT_PJS_MATERIAL_IN_AUTHORING_ENVIRONMENT"
 
 # ---------------------------------------------------------------------------
 # PR #322 第6巡指摘 Fix 14（P2, 採用）: `AUTHORED_INDEPENDENTLY_OF_PJS_
@@ -3893,6 +3914,20 @@ HELDOUT_INDEPENDENCE_STATUS = "AUTHORED_INDEPENDENTLY_OF_PJS_CORPUS"
 # attestation が無い）。検証可能な範囲の証跡 + 正直な残余宣言（AGENTS.md
 # の推定補完禁止規律の適用）へ拡張する——**絶対独立の主張はしない**。
 # status の意味論をこの4ブロックの範囲へ再定義する。
+#
+# PR #322 第8巡指摘 Fix 18（P2, 採用）: Fix 14 の検査は現 repo checkout の
+# pjs 名 wav/lab のみだったのに、status literal `AUTHORED_INDEPENDENTLY_
+# OF_PJS_CORPUS` は歴史的作業環境 + 全形態（MIDI/MusicXML/歌詞テキスト・
+# 別名ファイル）にまで及ぶ主張に読めた——**主張を収集済み証拠へ縮小する
+# （拡大側の証拠捏造はしない）**。
+# 1. status literal を証拠範囲に正直な名前へ改名:
+#    `AUTHORED_WITHOUT_PJS_MATERIAL_IN_AUTHORING_ENVIRONMENT`
+# 2. `environment_evidence` を `machine_checked`（現 checkout・ファイル名
+#    ベースの機械検査済み事実）と `author_record`（著述セッションの
+#    作業環境についての著者の事実記録——機械証明ではない）に明示区分する。
+# 3. `residual_risk_declaration` を拡張し、別 workspace・別名ファイル・
+#    MIDI/MusicXML/テキスト形態・モデル事前知識はいずれも検査対象外で
+#    あり本 status は主張しないことを明記する。
 # ---------------------------------------------------------------------------
 _HELDOUT_INDEPENDENCE_KEYS: FrozenSet[str] = frozenset({
     "status", "independent_of", "note",
@@ -3900,27 +3935,41 @@ _HELDOUT_INDEPENDENCE_KEYS: FrozenSet[str] = frozenset({
     "residual_risk_declaration",
 })
 _HELDOUT_AUTHORSHIP_KEYS: FrozenSet[str] = frozenset({"author", "authored_at", "provenance_record"})
-_HELDOUT_ENVIRONMENT_EVIDENCE_KEYS: FrozenSet[str] = frozenset({"claim", "verification_method"})
+# Fix 18: `environment_evidence` は「機械検査済み」と「著者記録（機械
+# 検証不能）」の2ブロックへ明示区分する。
+_HELDOUT_ENVIRONMENT_EVIDENCE_KEYS: FrozenSet[str] = frozenset({"machine_checked", "author_record"})
+_HELDOUT_ENV_EVIDENCE_MACHINE_CHECKED_KEYS: FrozenSet[str] = frozenset({"claim", "verification_method"})
+_HELDOUT_ENV_EVIDENCE_AUTHOR_RECORD_KEYS: FrozenSet[str] = frozenset({"claim"})
 _HELDOUT_MACHINE_CHECKED_SEPARATION_KEYS: FrozenSet[str] = frozenset({"reference"})
 _HELDOUT_RESIDUAL_RISK_DECLARATION_KEYS: FrozenSet[str] = frozenset({"note"})
 # `authored_at` は ISO 8601 の日付（YYYY-MM-DD）形式を要求する。
 _HELDOUT_AUTHORED_AT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-# `environment_evidence.claim` が保持しなければならないマーカー（著述
-# 時点の repo・作業環境に PJS 実体ファイルが存在しないという主張の核心
-# 語彙。「repo 内 PJS wav/lab 実体ファイルの不在」を検証するテストは
-# `tests/test_run9_probe_manifest.py` 側の grep/glob が担う——pin 値の
-# 文字列参照はこのマーカー照合の対象外）。
-_HELDOUT_ENV_EVIDENCE_CLAIM_MARKERS: Tuple[str, ...] = (
-    "PJS音源", "PJS採譜", "PJS歌詞テキスト", "一切存在しない",
+# `environment_evidence.machine_checked.claim` が保持しなければならない
+# マーカー（PJS 実体ファイル不在という主張の核心語彙 + Fix 18: 検査範囲
+# が「現在の repo checkout」「ファイル名ベース」に限定されることを隠さず
+# 明記させる）。「repo 内 PJS wav/lab 実体ファイルの不在」を検証する
+# テストは `tests/test_run9_probe_manifest.py` 側の glob が担う——pin 値の
+# 文字列参照はこのマーカー照合の対象外。
+_HELDOUT_ENV_EVIDENCE_MACHINE_CHECKED_CLAIM_MARKERS: Tuple[str, ...] = (
+    "PJS音源", "PJS採譜", "一切存在しない", "現在の repo checkout", "ファイル名ベース",
+)
+# `environment_evidence.author_record.claim` が保持しなければならない
+# マーカー（著述セッションの作業環境についての著者の事実記録であり、
+# 機械証明ではないことを明示する——Fix 18）。
+_HELDOUT_ENV_EVIDENCE_AUTHOR_RECORD_CLAIM_MARKERS: Tuple[str, ...] = (
+    "著述セッション", "作業環境", "存在しなかった", "機械証明ではない",
 )
 # `machine_checked_separation.reference` が保持しなければならないマーカー
 # （Fix 10 の cross-probe 分離検証への参照）。
 _HELDOUT_MACHINE_CHECKED_SEPARATION_MARKER = "_validate_p4_heldout_separation"
 # `residual_risk_declaration.note` が保持しなければならないマーカー
 # （著者=言語モデルの事前知識経由の類似・影響は機械的に排除できないこと
-# の正直な残余宣言、推定で補完しないことの明示）。
+# の正直な残余宣言、推定で補完しないことの明示。Fix 18 で、検査対象外の
+# 具体的な範囲——別 workspace・別名ファイル・MIDI/MusicXML/テキスト形態・
+# モデル事前知識——を明示するマーカーを追加した）。
 _HELDOUT_RESIDUAL_RISK_MARKERS: Tuple[str, ...] = (
     "言語モデル", "機械的に排除できない", "推定で補完しない",
+    "別 workspace", "別名ファイル", "MIDI", "MusicXML", "テキスト形態", "事前知識",
 )
 
 
@@ -3967,7 +4016,7 @@ def _validate_probe_note(note: Any, *, field: str, phoneme_jp_module: Any) -> Di
 
 
 def _validate_probe_cell_source(
-    source: Any, *, field: str, score_path: Optional[Path] = None
+    source: Any, *, field: str, score_path: Optional[Path] = None, score_py_module: Any = None
 ) -> None:
     """`score_path` はテスト用の依存性注入点（PR #322 第2巡指摘 Fix 4）—
     省略時（`None`）は呼び出しのたびにモジュールレベル定数
@@ -3976,8 +4025,17 @@ def _validate_probe_cell_source(
     `run9_schema.SCORE_PY_REFERENCE_PATH` を monkeypatch しても本関数の
     既定値には反映されない late-binding の罠を避けるため、あえて `None`
     センチネル + 関数本体内解決にしている）。実 score.py の rename/削除は
-    一切行わない。"""
-    if score_path is None:
+    一切行わない。
+
+    `score_py_module` はテスト用ではなく本番経路の read-once 配線
+    （PR #322 第8巡指摘 Fix 16, 採用）: `validate_probe_manifest()` から
+    呼ばれる full-chain 経路では `_load_score_py_module()` が既にロード
+    済みの module（`__source_sha256__` 属性に read-once digest を保持）が
+    渡され、本関数はそれを再利用するだけで独自にファイルを読まない
+    （score_path 引数は使われない）。`score_py_module` を渡さない単体
+    呼び出し（既存テスト・スタンドアロン利用）は従来どおり `score_path`
+    経由で自己完結的にファイルを読む——後方互換のフォールバック。"""
+    if score_py_module is None and score_path is None:
         score_path = SCORE_PY_REFERENCE_PATH
     if not isinstance(source, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(source).__name__}")
@@ -4001,22 +4059,38 @@ def _validate_probe_cell_source(
             f"{field}.transcribed_from_sha256 must be exactly 64 lowercase hex characters, "
             f"got {declared_sha!r}"
         )
-    # PR #322 第2巡指摘 Fix 4（P2, 採用）: 転記元ファイル不在を
-    # fail-closed とする（旧実装は `score_path.is_file()` が False の
-    # ときに照合そのものをスキップし、64hex 形式でさえあれば値を無条件に
-    # 受理していた——installed/部分アーティファクト環境で P0 の
-    # byte-verified 主張が無音で失われる欠陥だった）。本 validator は
-    # repo checkout 内での実行を前提とし、転記元 score.py の実在 + hash
-    # 一致が P0 受理の必須条件である。
-    if not score_path.is_file():
-        raise Run9ValidationError(
-            f"{field}: pinned P0 transcription source {score_path} does not exist — this validator "
-            "requires running from within a full repo checkout where the frozen read-only reference "
-            "voice_genesis/singer/score.py is present; existence + hash equality against this file "
-            "is a mandatory precondition for P0 acceptance (cannot verify a byte-verified verbatim "
-            "transcription claim without the source file to verify it against)"
-        )
-    actual_sha = compute_file_sha256(score_path)
+    if score_py_module is not None:
+        # PR #322 第8巡指摘 Fix 16（P1, 採用）: full-chain 経路では
+        # `_load_score_py_module()` が read-once で導出した digest を
+        # 再利用する——本関数が独自に score.py を再読込することはない
+        # （hash した版と実行した版が別バイト列になり得る TOCTOU を、
+        # Fix 15 と同型の read-once 化で構造的に排除する）。
+        actual_sha = getattr(score_py_module, "__source_sha256__", None)
+        if actual_sha is None:  # pragma: no cover - defensive fail-closed
+            raise Run9ValidationError(
+                f"{field}: score_py_module に __source_sha256__ が設定されていない — "
+                "_load_score_py_module() を経由せずに渡された可能性がある"
+            )
+    else:
+        # PR #322 第2巡指摘 Fix 4（P2, 採用）: 転記元ファイル不在を
+        # fail-closed とする（旧実装は `score_path.is_file()` が False の
+        # ときに照合そのものをスキップし、64hex 形式でさえあれば値を無条件に
+        # 受理していた——installed/部分アーティファクト環境で P0 の
+        # byte-verified 主張が無音で失われる欠陥だった）。本 validator は
+        # repo checkout 内での実行を前提とし、転記元 score.py の実在 + hash
+        # 一致が P0 受理の必須条件である。単体呼び出し（score_py_module 省略
+        # 時）専用のフォールバック経路であり、full-chain 経路は上の分岐で
+        # score_py_module 経由の digest を使う（別読みしない）。
+        if not score_path.is_file():
+            raise Run9ValidationError(
+                f"{field}: pinned P0 transcription source {score_path} does not exist — this "
+                "validator requires running from within a full repo checkout where the frozen "
+                "read-only reference voice_genesis/singer/score.py is present; existence + hash "
+                "equality against this file is a mandatory precondition for P0 acceptance (cannot "
+                "verify a byte-verified verbatim transcription claim without the source file to "
+                "verify it against)"
+            )
+        actual_sha = compute_file_sha256(score_path)
     if declared_sha != actual_sha:
         raise Run9ValidationError(
             f"{field}.transcribed_from_sha256 ({declared_sha!r}) does not match the actual raw "
@@ -4143,7 +4217,10 @@ def _validate_probe_cell(
             )
 
     if probe_id == "P0":
-        _validate_probe_cell_source(cell[_CELL_SOURCE_KEY], field=f"{field}.{_CELL_SOURCE_KEY}")
+        _validate_probe_cell_source(
+            cell[_CELL_SOURCE_KEY], field=f"{field}.{_CELL_SOURCE_KEY}",
+            score_py_module=score_py_module,
+        )
         # PR #322 第5巡指摘 Fix 12（P2, 採用）: hash 一致 + verbatim:true
         # だけでは内容改変（notes/tempo_bpm の値そのもの）を検出できない
         # ——score.py を read-only ロードして build_sakura_score() を再構築
@@ -4398,6 +4475,10 @@ def _validate_probe_heldout_independence(value: Any, *, field: str) -> None:
         authorship["provenance_record"], field=f"{field}.authorship.provenance_record"
     )
 
+    # PR #322 第8巡指摘 Fix 18（P2, 採用）: `environment_evidence` を
+    # 「機械検査済み」（現 checkout・ファイル名ベース限定であることを
+    # 隠さず明記）と「著者記録」（機械証明ではない事実記録）の2ブロックへ
+    # 明示区分する——検査の実際の範囲と status の主張範囲を一致させる。
     env_evidence = value["environment_evidence"]
     if not isinstance(env_evidence, dict):
         raise Run9ValidationError(
@@ -4411,17 +4492,65 @@ def _validate_probe_heldout_independence(value: Any, *, field: str) -> None:
         raise Run9ValidationError(
             f"{field}.environment_evidence missing required key(s): {sorted(missing_e)}"
         )
-    claim = _require_non_empty_str(env_evidence["claim"], field=f"{field}.environment_evidence.claim")
-    for marker in _HELDOUT_ENV_EVIDENCE_CLAIM_MARKERS:
-        if marker not in claim:
+
+    machine_checked = env_evidence["machine_checked"]
+    if not isinstance(machine_checked, dict):
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.machine_checked must be an object, got "
+            f"{type(machine_checked).__name__}"
+        )
+    unknown_mc = set(machine_checked.keys()) - _HELDOUT_ENV_EVIDENCE_MACHINE_CHECKED_KEYS
+    if unknown_mc:
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.machine_checked has unknown key(s): {sorted(unknown_mc)}"
+        )
+    missing_mc = _HELDOUT_ENV_EVIDENCE_MACHINE_CHECKED_KEYS - set(machine_checked.keys())
+    if missing_mc:
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.machine_checked missing required key(s): "
+            f"{sorted(missing_mc)}"
+        )
+    mc_claim = _require_non_empty_str(
+        machine_checked["claim"], field=f"{field}.environment_evidence.machine_checked.claim"
+    )
+    for marker in _HELDOUT_ENV_EVIDENCE_MACHINE_CHECKED_CLAIM_MARKERS:
+        if marker not in mc_claim:
             raise Run9ValidationError(
-                f"{field}.environment_evidence.claim must contain the marker {marker!r} (Fix 14: "
-                "著述時点の repo・作業環境に PJS 実体ファイルが存在しないという主張の核心語彙), got a "
-                "claim without that marker"
+                f"{field}.environment_evidence.machine_checked.claim must contain the marker "
+                f"{marker!r} (Fix 18: 検査範囲が現在の repo checkout・ファイル名ベースに限定される "
+                "ことを隠さず明記する), got a claim without that marker"
             )
     _require_non_empty_str(
-        env_evidence["verification_method"], field=f"{field}.environment_evidence.verification_method"
+        machine_checked["verification_method"],
+        field=f"{field}.environment_evidence.machine_checked.verification_method",
     )
+
+    author_record = env_evidence["author_record"]
+    if not isinstance(author_record, dict):
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.author_record must be an object, got "
+            f"{type(author_record).__name__}"
+        )
+    unknown_ar = set(author_record.keys()) - _HELDOUT_ENV_EVIDENCE_AUTHOR_RECORD_KEYS
+    if unknown_ar:
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.author_record has unknown key(s): {sorted(unknown_ar)}"
+        )
+    missing_ar = _HELDOUT_ENV_EVIDENCE_AUTHOR_RECORD_KEYS - set(author_record.keys())
+    if missing_ar:
+        raise Run9ValidationError(
+            f"{field}.environment_evidence.author_record missing required key(s): {sorted(missing_ar)}"
+        )
+    ar_claim = _require_non_empty_str(
+        author_record["claim"], field=f"{field}.environment_evidence.author_record.claim"
+    )
+    for marker in _HELDOUT_ENV_EVIDENCE_AUTHOR_RECORD_CLAIM_MARKERS:
+        if marker not in ar_claim:
+            raise Run9ValidationError(
+                f"{field}.environment_evidence.author_record.claim must contain the marker "
+                f"{marker!r} (Fix 18: 著者の事実記録であり機械証明ではないことを明示する), got a "
+                "claim without that marker"
+            )
 
     mcs = value["machine_checked_separation"]
     if not isinstance(mcs, dict):
@@ -4483,12 +4612,37 @@ def _validate_probe_heldout_independence(value: Any, *, field: str) -> None:
 # cell の (kana, pitch_midi, duration_beats) 系列を、全非 held-out cell
 # （P0-P3。P5 も held-out のため比較元に含めない）の系列と比較し、完全
 # 一致または連続部分列としての包含があれば fail-closed とする。
+#
+# PR #322 第8巡指摘 Fix 17（P2, 採用）: 上記の結合 (kana, pitch, duration)
+# タプル比較は、kana だけ変えて旋律・リズム（pitch/duration 系列）を丸
+# コピーした P4 を通してしまう（kana が変わるとタプル全体が不一致になる
+# ため）。射影（projection）別に独立して比較する検査を追加する（結合
+# タプル検査は多層防御として残置）:
+#   - pitch_midi 射影 / kana 射影: 値域が広く誤検知リスクが小さいため、
+#     完全一致・連続部分列包含のいずれも厳密拒否する。
+#   - duration_beats 射影: 等拍の並びなど低エントロピーな値域のため、
+#     短い偶然の一致が誤検知になりやすい——最小長
+#     `_HELDOUT_DURATION_MIN_LEAK_LENGTH`（=4）**以上**の連続部分列/完全
+#     一致に限って拒否する（3以下の短い一致は誤検知としてスルーする）。
 # ---------------------------------------------------------------------------
 _HELDOUT_SEPARATION_SOURCE_PROBE_IDS: Tuple[str, ...] = ("P0", "P1", "P2", "P3")
+_HELDOUT_DURATION_MIN_LEAK_LENGTH = 4
 
 
 def _note_signature_sequence(cell: Mapping[str, Any]) -> Tuple[Tuple[str, int, float], ...]:
     return tuple((n["kana"], n["pitch_midi"], n["duration_beats"]) for n in cell["notes"])
+
+
+def _note_pitch_sequence(cell: Mapping[str, Any]) -> Tuple[int, ...]:
+    return tuple(n["pitch_midi"] for n in cell["notes"])
+
+
+def _note_kana_sequence(cell: Mapping[str, Any]) -> Tuple[str, ...]:
+    return tuple(n["kana"] for n in cell["notes"])
+
+
+def _note_duration_sequence(cell: Mapping[str, Any]) -> Tuple[float, ...]:
+    return tuple(n["duration_beats"] for n in cell["notes"])
 
 
 def _is_contiguous_subsequence(needle: Tuple[Any, ...], haystack: Tuple[Any, ...]) -> bool:
@@ -4504,8 +4658,13 @@ def _validate_p4_heldout_separation(
 ) -> None:
     for p4_cell in p4_cells:
         p4_seq = _note_signature_sequence(p4_cell)
+        p4_pitch = _note_pitch_sequence(p4_cell)
+        p4_kana = _note_kana_sequence(p4_cell)
+        p4_duration = _note_duration_sequence(p4_cell)
         for source_probe_id in _HELDOUT_SEPARATION_SOURCE_PROBE_IDS:
             for source_cell in source_cells_by_probe.get(source_probe_id, []):
+                # 多層防御その1（Fix 10, 残置）: 結合 (kana, pitch, duration)
+                # タプルの完全一致/連続部分列包含。
                 source_seq = _note_signature_sequence(source_cell)
                 shorter, longer = (
                     (p4_seq, source_seq) if len(p4_seq) <= len(source_seq) else (source_seq, p4_seq)
@@ -4517,6 +4676,45 @@ def _validate_p4_heldout_separation(
                         f"{source_cell.get('cell_id')!r} — violates the declared machine-checkable "
                         "separation of heldout_independence (Fix 10); GENERALIZED_GAIN would be "
                         "contaminated by evaluation leakage"
+                    )
+
+                # 多層防御その2（Fix 17, 新設）: pitch_midi / kana を射影別に
+                # 独立して厳密拒否する（結合タプルでは検出できない
+                # 「kana だけ差し替えて旋律/リズムを丸コピー」を捕捉する）。
+                for projection_name, p4_proj, source_proj in (
+                    ("pitch_midi", p4_pitch, _note_pitch_sequence(source_cell)),
+                    ("kana", p4_kana, _note_kana_sequence(source_cell)),
+                ):
+                    shorter_p, longer_p = (
+                        (p4_proj, source_proj) if len(p4_proj) <= len(source_proj)
+                        else (source_proj, p4_proj)
+                    )
+                    if shorter_p == longer_p or _is_contiguous_subsequence(shorter_p, longer_p):
+                        raise Run9ValidationError(
+                            f"{field}: P4 cell {p4_cell.get('cell_id')!r} の {projection_name} 射影が "
+                            f"probe {source_probe_id} cell {source_cell.get('cell_id')!r} と完全一致 "
+                            "または連続部分列として重複する（Fix 17: 射影別独立検査 — 結合タプル比較 "
+                            "だけでは kana のみ差し替えた旋律/リズムの丸コピーを検出できないため追加）"
+                        )
+
+                # 多層防御その3（Fix 17, 新設）: duration_beats 射影は
+                # 低エントロピー（等拍の並び等）による自明一致の誤検知を
+                # 避けるため、最小長 _HELDOUT_DURATION_MIN_LEAK_LENGTH
+                # （=4）以上の完全一致/連続部分列に限って拒否する。
+                source_duration = _note_duration_sequence(source_cell)
+                shorter_d, longer_d = (
+                    (p4_duration, source_duration) if len(p4_duration) <= len(source_duration)
+                    else (source_duration, p4_duration)
+                )
+                if len(shorter_d) >= _HELDOUT_DURATION_MIN_LEAK_LENGTH and (
+                    shorter_d == longer_d or _is_contiguous_subsequence(shorter_d, longer_d)
+                ):
+                    raise Run9ValidationError(
+                        f"{field}: P4 cell {p4_cell.get('cell_id')!r} の duration_beats 射影が probe "
+                        f"{source_probe_id} cell {source_cell.get('cell_id')!r} と長さ {len(shorter_d)}"
+                        f"（閾値 {_HELDOUT_DURATION_MIN_LEAK_LENGTH} 以上）の完全一致/連続部分列として "
+                        "重複する（Fix 17: duration は低エントロピーなため誤検知を避け最小長"
+                        f"{_HELDOUT_DURATION_MIN_LEAK_LENGTH}以上でのみ拒否する）"
                     )
 
 

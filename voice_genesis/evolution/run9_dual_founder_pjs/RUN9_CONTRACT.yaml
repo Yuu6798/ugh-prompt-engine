@@ -709,8 +709,33 @@ learning_recipe_sha:
 # heldout_independence の 4 ブロック追加により manifest バイトが変わる
 # ため sha256 を再計算した。旧値（履歴として保持）:
 # "c09f140c718bbea35301e9a6920083f8c02ae723e3590e07a4c6093e076f0e16"
+#
+# PR #322 Codex bot レビュー第8巡3件（採用）反映による repin
+# （Fix 16 は run9_schema.py のみの局所修正で manifest バイトは無変更）:
+# Fix 17（P2）P4 held-out 分離の結合タプル検査は kana だけ変えて旋律/
+# リズムを丸コピーした P4 を通してしまう欠陥があった——pitch_midi/kana
+# 射影は完全一致・連続部分列包含を厳密拒否、duration_beats 射影は低
+# エントロピー対策として最小長4以上の完全一致/連続部分列に限って拒否する
+# よう `_validate_p4_heldout_separation()` を拡張した（結合タプル検査は
+# 多層防御として残置）。manifest 側の `machine_checked_separation.
+# reference` を実際の検査内容（射影別・duration閾値）と一致するよう更新。
+# 実 manifest は新検査でも fail しなかった（cell 書き換え不要）。
+# Fix 18（P2）status literal `AUTHORED_INDEPENDENTLY_OF_PJS_CORPUS` は
+# 現 repo checkout の pjs 名 wav/lab 検査のみなのに歴史的作業環境・全形態
+# （MIDI/MusicXML/歌詞テキスト・別名）にまで及ぶ主張に読めた——主張を
+# 収集済み証拠へ縮小: (a) status を
+# `AUTHORED_WITHOUT_PJS_MATERIAL_IN_AUTHORING_ENVIRONMENT` へ改名
+# (b) `environment_evidence` を `machine_checked`（現 checkout・ファイル
+# 名ベース限定と明記）/ `author_record`（著者の事実記録、機械証明では
+# ない）に区分 (c) `residual_risk_declaration` へ別 workspace・別名
+# ファイル・MIDI/MusicXML/テキスト形態・モデル事前知識は検査対象外である
+# 旨を追加。
+# 3 Fix 合算（Fix 17 の manifest 文言更新 + Fix 18 の status/evidence
+# 再構造化）で manifest バイトが変わるため sha256 を再計算した。旧値
+# （履歴として保持）:
+# "0e43616cd25bb9fd66dc6dde566024a4c1b0809d29d6202ed2d8861a16c884ca"
 probe_manifest_sha:
-  value: "0e43616cd25bb9fd66dc6dde566024a4c1b0809d29d6202ed2d8861a16c884ca"
+  value: "98aa1c8d95f6dad0c9cf126e5a4ca1f0ce592363841c10c30f639b39087812eb"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 

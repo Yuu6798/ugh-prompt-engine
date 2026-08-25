@@ -749,21 +749,26 @@
           "provenance_record": "著述の一次証跡は PR #322 の commit 履歴（本 repo の git 履歴）である——evaluation/probe_manifest.json の P4 cell を追加した commit がそのまま著述時点の作業成果物であり、別途 attestation ファイルを持たない。"
         },
         "environment_evidence": {
-          "claim": "著述時点の repo・作業環境に PJS音源（wav/lab）・PJS採譜・PJS歌詞テキストは一切存在しない——repo内 PJS 実体ファイルのゼロ件は機械検証可能である。",
-          "verification_method": "tests/test_run9_probe_manifest.py がリポジトリ全体を対象に *pjs*.wav / *pjs*.lab のファイル実体不在を glob で確認するテストを持つ（*.json 等のメタデータ内の pin 値としての 'pjs' 文字列参照は対象外——音源・採譜の実体ファイルのみを検査する）。"
+          "author_record": {
+            "claim": "著述セッションの作業環境に PJS 音源・PJS採譜・PJS歌詞テキストは存在しなかった——これは著者（本PRの実装エージェント）による事実記録であり、機械証明ではない。"
+          },
+          "machine_checked": {
+            "claim": "現在の repo checkout に、ファイル名ベースで pjs を含む wav/lab 実体ファイルは一切存在しない——PJS音源・PJS採譜の実体ファイル不在をファイル名ベースで検査した結果であり、現在の repo checkout に限定される（過去の作業環境や別名ファイルは対象外）。",
+            "verification_method": "tests/test_run9_probe_manifest.py が現在の repo checkout 全体を対象に *pjs*.wav / *pjs*.lab のファイル名パターンで実体ファイルの不在を glob 検査する（*.json 等のメタデータ内の pin 値としての 'pjs' 文字列参照は対象外——ファイル名ベース・現 checkout 限定であることを検査自体が保証する）。"
+          }
         },
         "independent_of": [
           "PJS practice/education material（voice_genesis/foundry PJSコーパス由来の教材・素材）",
           "本manifest P0-P3のscore cell（音高列・duration列・kana列いずれも非共有）"
         ],
         "machine_checked_separation": {
-          "reference": "Fix 10 の cross-probe 分離検証 _validate_p4_heldout_separation() が、P4 cell の 音高列・duration列（note signature sequence）が P0-P3 いずれの cell の 連続部分列としても出現しないことを machine-checked で保証する。"
+          "reference": "Fix 10 の cross-probe 分離検証 _validate_p4_heldout_separation()（PR #322 第8巡指摘 Fix 17 で射影別・duration閾値付きの独立検査へ拡張済み）が、P4 cell の pitch_midi 射影・kana 射影の完全一致/連続部分列包含（厳密拒否）と、duration_beats 射影の最小長4以上の完全一致/連続部分列包含（低エントロピー対策の閾値付き拒否）、および結合 (kana, pitch, duration) タプルの完全一致/連続部分列包含（多層防御）を、P0-P3 いずれの cell に対しても machine-checked で保証する。"
         },
         "note": "original melodic fragment authored specifically for this RUN9 probe manifest; not derived from, transcribed from, or overlapping with any PJS corpus recording, lesson material, or the P0-P3 cells defined above. kana vocabulary is drawn from score.py's proven vocabulary per design instruction (score.py 自体は参照するが、note列はP0とは 別の独自配列であり P0 の転記ではない).",
         "residual_risk_declaration": {
-          "note": "著者（言語モデル）の事前知識経由での PJS 楽曲への類似・影響は機械的に排除できない——本ステータスが主張するのは『著述環境に PJS 素材が存在しない状態で authored された』ことまでであり、それ以上は主張しない（絶対独立の証明ではない。推定で補完しない）。"
+          "note": "著者（言語モデル）の事前知識経由での PJS 楽曲への類似・影響は機械的に排除できない——本ステータスが主張するのは『著述環境に PJS 素材が存在しない状態で authored された』ことまでであり、それ以上は主張しない（推定で補完しない）。加えて、別 workspace・別名ファイル・MIDI/MusicXML/テキスト形態の PJS 素材、および著者モデルの事前知識はいずれも検査対象外であり、本 status はそれらについて主張しない。"
         },
-        "status": "AUTHORED_INDEPENDENTLY_OF_PJS_CORPUS"
+        "status": "AUTHORED_WITHOUT_PJS_MATERIAL_IN_AUTHORING_ENVIRONMENT"
       },
       "probe_id": "P4",
       "role": "学習に使っていない曲またはscore断片でGENERALIZED_GAINを検証する（v0.1 §15 P4）。PJS楽曲の採譜は不採用とする（採譜作業が必要な上、sealed-holdout非開封規律と衝突するため）。practice/education素材（PJSコーパス）とも、本manifestのP0-P3 cellとも異なる、original にauthoredされた断片をheldout_independenceで独立性宣言のうえ使用する。",
