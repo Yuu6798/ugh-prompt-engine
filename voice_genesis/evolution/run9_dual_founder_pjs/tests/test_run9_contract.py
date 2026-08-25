@@ -2463,14 +2463,60 @@ def test_revision02_verify_rights_manifest_current_files_match_frozen_donor_set(
 def test_run9_attest20260825_domain_user_anchor_now_pinned() -> None:
     """2026-08-25 RUN9 User attestation 実行により user anchor が PINNED
     化された（旧 test_revision02_domain_user_anchor_still_unpinned_while_
-    rights_pending の assertion を反転）。値は attest 後 rights_manifest.json
-    の正規形 sha256（af0/metric_space_sha と同一規約）と一致する。"""
+    rights_pending の assertion を反転）。
+
+    Codex bot レビュー PR #320 第1巡指摘（P1, 採用, Fix 1）: binding scope を
+    rights_manifest.json **全体**の正規形 sha256 から、
+    `extract_voice_identity_rights_layer()` が返す **voice_identity_rights
+    層のみ**の正規形 sha256 へ是正した（旧 assertion は全体束縛を検証して
+    いたため反転）——他3層（performance_rights/composition_rights/
+    recording_master_rights）の外部第三者 provenance が将来解決されても
+    anchor が動かないことの直接保証は
+    `test_fix320_1_user_anchor_unaffected_by_external_layer_only_change`
+    が別途担う。"""
     domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
     rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
-    assert domain.anchor_hashes["user"] == _sha256_canonical_json(rights)
+    layer = m.extract_voice_identity_rights_layer(rights)
+    assert domain.anchor_hashes["user"] == _sha256_canonical_json(layer)
     assert m._SHA256_HEX_RE.match(domain.anchor_hashes["user"])
     assert domain.anchor_hashes["user"] != "<PIN_BEFORE_RUN>"
     assert domain.is_pinned() is True
+
+
+def test_fix320_1_user_anchor_binds_only_voice_identity_rights_layer_not_whole_file() -> None:
+    """Codex bot レビュー PR #320 第1巡指摘（P1, 採用, Fix 1）の直接反証
+    テスト: 旧 binding（rights_manifest.json 全体の正規形 sha256）だった
+    ら一致するはずの値と、新 binding（voice_identity_rights 層のみ）の値が
+    異なることを確認する——is_pinned() の pin 値が本当に層限定へ切り替わって
+    いることの negative control。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    whole_file_sha = _sha256_canonical_json(rights)
+    layer_sha = _sha256_canonical_json(m.extract_voice_identity_rights_layer(rights))
+    assert whole_file_sha != layer_sha
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert domain.anchor_hashes["user"] == layer_sha
+    assert domain.anchor_hashes["user"] != whole_file_sha
+
+
+def test_fix320_1_user_anchor_unaffected_by_external_layer_only_change() -> None:
+    """Codex bot レビュー PR #320 第1巡指摘（P1, 採用, Fix 1）の中核契約:
+    voice_identity_rights 層の内容（User donor 録音・attestation・
+    usage_grants）が不変のまま、他層（例: composition_rights.provenance.
+    composition.lyricist という PJS 側 `<UNRESOLVED_EXTERNAL>` 欄）だけを
+    具体値へ書き換えた合成 manifest でも、抽出した voice_identity_rights
+    層の正規形 sha256（＝anchor が束縛する値）は変化しないことを直接
+    確認する——外部第三者 provenance の解決が anchor・genome_id に影響
+    しないという設計原則の機械証明。"""
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    original_layer_sha = _sha256_canonical_json(m.extract_voice_identity_rights_layer(rights))
+
+    mutated = copy.deepcopy(rights)
+    mutated["composition_rights"]["provenance"]["composition"]["lyricist"] = "Someone Resolved"
+    mutated_layer_sha = _sha256_canonical_json(m.extract_voice_identity_rights_layer(mutated))
+
+    assert mutated_layer_sha == original_layer_sha
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert domain.anchor_hashes["user"] == mutated_layer_sha
 
 
 def test_revision02_gate_remains_blocked_after_af0_ritsu_backbone_pins(
