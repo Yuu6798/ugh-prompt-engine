@@ -6957,9 +6957,12 @@ def test_fix319_15_rejects_user_attestation_sentinel_in_provenance_field(field: 
 
 @pytest.mark.parametrize("field", ["rights_manifest", "provenance_manifest"])
 def test_fix319_15_rejects_user_attestation_sentinel_in_reference_field(field: str) -> None:
-    """負例: rights_manifest/provenance_manifest 参照欄も同じ語彙規約へ
-    整合させたことの確認——現行意味論（非空 str の参照/pin）は保ちつつ、
-    User 帰属専用 sentinel の混入だけは拒否する。"""
+    """負例: rights_manifest/provenance_manifest 参照欄で User 帰属専用
+    sentinel の混入を拒否する（Fix 15 導入時点の挙動 — Fix 18 でこの2欄は
+    さらに `<UNRESOLVED_EXTERNAL>` も拒否するよう強化されたが、
+    `<PENDING_USER_ATTESTATION>` の拒否自体は変わらず回帰対象として残す。
+    下記 `test_fix319_18_*` が Fix 18 で追加された両 sentinel 拒否を
+    網羅する）。"""
     record = _valid_lesson_record()
     record[field] = "<PENDING_USER_ATTESTATION>"
     with pytest.raises(m.Run9ValidationError, match="UNRESOLVED_EXTERNAL"):
@@ -6984,6 +6987,51 @@ def test_fix319_15_valid_fixture_no_longer_uses_stale_pending_user_attestation_v
         "rights_manifest", "provenance_manifest",
     ):
         assert record[field] != "<PENDING_USER_ATTESTATION>"
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第9巡対応 — Fix 18（P2）: LessonRecord の
+# rights_manifest/provenance_manifest（参照/pin欄）で両 sentinel を拒否
+# する。第7巡 Fix 15 は `<PENDING_USER_ATTESTATION>` のみを拒否し
+# `<UNRESOLVED_EXTERNAL>` を代替として推奨したため、両欄が
+# `<UNRESOLVED_EXTERNAL>` の record（使用可能な参照/pin を一切持たない）
+# が構造的 valid のまま validate_lesson_record() を通過してしまっていた。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("field", ["rights_manifest", "provenance_manifest"])
+@pytest.mark.parametrize(
+    "sentinel", ["<PENDING_USER_ATTESTATION>", "<UNRESOLVED_EXTERNAL>"]
+)
+def test_fix319_18_rejects_both_sentinels_in_reference_field(field: str, sentinel: str) -> None:
+    """負例（2欄 × 2 sentinel の parametrize、計4ケース）: rights_manifest/
+    provenance_manifest はいずれの sentinel も参照/pin として使用不可の
+    ため拒否されること——特に `<UNRESOLVED_EXTERNAL>` は provenance 系
+    外部事実欄では許容される値だが、本2欄（参照/pin欄）では許容しない
+    ことがこの負例の核心（Fix 15 との差分）。"""
+    record = _valid_lesson_record()
+    record[field] = sentinel
+    with pytest.raises(m.Run9ValidationError, match="genuine reference/pin"):
+        m.validate_lesson_record(record)
+
+
+def test_fix319_18_both_reference_fields_unresolved_external_rejected() -> None:
+    """負例（指摘本文が名指しするケース）: rights_manifest と
+    provenance_manifest の両方が `<UNRESOLVED_EXTERNAL>` の record は、
+    使用可能な参照/pin を一切持たない構造的 valid record になってはならず
+    拒否されること。"""
+    record = _valid_lesson_record()
+    record["rights_manifest"] = "<UNRESOLVED_EXTERNAL>"
+    record["provenance_manifest"] = "<UNRESOLVED_EXTERNAL>"
+    with pytest.raises(m.Run9ValidationError, match="genuine reference/pin"):
+        m.validate_lesson_record(record)
+
+
+def test_fix319_18_valid_fixture_still_validates() -> None:
+    """正例（回帰）: `_valid_lesson_record()` の rights_manifest/
+    provenance_manifest（実在ファイルへの相対パス参照）が Fix 18 追加後も
+    validator を通ることの end-to-end 確認。"""
+    m.validate_lesson_record(_valid_lesson_record())  # 例外を投げないことの確認
 
 
 # --- rights_manifest 4層構造の validator（変更1・2） -------------------------
@@ -7291,11 +7339,14 @@ def test_fix319_6_voice_identity_rights_still_pending_user_attestation() -> None
     """User 帰属欄（User donor の同意・usage grants 等）は張り替え対象外
     ——引き続き `PENDING_USER_ATTESTATION` のまま維持する（voice_identity_
     rights は User donor 自身の声の権利であり、Fix 6 の対象は PJS 側の
-    3層のみ）。"""
+    3層のみ）。usage_grants.run9_identity_anchor は Fix 19（第9巡, P2,
+    採用）で値語彙が {not_granted, granted} の閉集合へ凍結されたのに伴い、
+    旧値 `pending`（閉集合外の第3値）から `not_granted` へ改めた——
+    「まだ承認されていない」という意味論自体は変わらない。"""
     data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     assert data["voice_identity_rights"]["rights_class"] == "PENDING_USER_ATTESTATION"
     assert data["voice_identity_rights"]["consent_status"] == "PENDING_USER_ATTESTATION"
-    assert data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] == "pending"
+    assert data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] == "not_granted"
 
 
 def test_fix319_6_rights_manifest_still_validates_after_vocab_swap() -> None:
@@ -7985,3 +8036,190 @@ def test_fix319_16_valid_attested_form_accepted() -> None:
     data["voice_identity_rights"]["rights_class"] = "USER_ATTESTED_OWN_VOICE"
     data["voice_identity_rights"]["consent_status"] = "USER_ATTESTED_OWN_VOICE"
     m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #319 Codex bot レビュー第9巡対応 — Fix 19（P2）: usage_grants の値語彙を
+# {not_granted, granted} の閉集合へ凍結し、granted への遷移に
+# ①attestation の attested 形態 ②grant ごとの独立した承認記録
+# （<grant>_approval: approved_at + approval_statement）を fail-closed で
+# 要求する。旧 Fix 8（非空文字列のみの形状検証）は attestation.attested=
+# false のまま raw_audio_publication/model_general_distribution を
+# "granted" へ手編集しても受理してしまっていた——rev 0.2 改訂4
+# （DESIGN_RUN9_REVISION_0.2.md 194-199行、「別承認まで独立に not_granted
+# 維持」）への違反を構造的に防げていなかった。
+# ---------------------------------------------------------------------------
+
+
+_USAGE_GRANT_KEYS = (
+    "run9_identity_anchor", "raw_audio_publication", "model_general_distribution",
+)
+
+
+def _attested_voice_identity_rights_layer(data: Dict[str, Any]) -> Dict[str, Any]:
+    """`voice_identity_rights` 層を attested 形態（attestation.attested=true
+    + rights_class/consent_status を PENDING から離す）へ書き換えたコピーを
+    返す——Fix 19 の granted 前提条件①（attested 形態必須）を満たした
+    状態から出発するテスト群の共通セットアップ。"""
+    data = copy.deepcopy(data)
+    layer = data["voice_identity_rights"]
+    layer["attestation"] = {
+        "attested": True,
+        "attested_by": "user@example.com",
+        "attested_at": "2026-08-25T00:00:00Z",
+        "statement": "I attest this recording as my own voice.",
+    }
+    layer["rights_class"] = "USER_ATTESTED_OWN_VOICE"
+    layer["consent_status"] = "USER_ATTESTED_OWN_VOICE"
+    return data
+
+
+@pytest.mark.parametrize("grant_key", _USAGE_GRANT_KEYS)
+def test_fix319_19_out_of_vocab_grant_value_rejected(grant_key: str) -> None:
+    """負例（3キー parametrize）: usage_grants の値が {not_granted, granted}
+    の閉集合外（例 'pending' — Fix 19 導入前の run9_identity_anchor の旧値）
+    の場合に拒否されること。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"][grant_key] = "pending"
+    with pytest.raises(m.Run9ValidationError, match=r"usage_grants\." + grant_key + r" must be one of"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize("grant_key", _USAGE_GRANT_KEYS)
+def test_fix319_19_granted_while_attestation_still_pending_rejected(grant_key: str) -> None:
+    """負例（3キー parametrize）: attestation が pending 形態（attested=
+    false）のまま grant を 'granted' へ書き換えても拒否されること——
+    手編集での「承認証拠なしの公開/配布許可」成立を防ぐ核心の負例。
+    run9_identity_anchor も他の2キーと同じ前提条件（attested 形態必須）を
+    適用することの確認を兼ねる。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"][grant_key] = "granted"
+    with pytest.raises(m.Run9ValidationError, match="attestation is not in attested form"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+@pytest.mark.parametrize("grant_key", _USAGE_GRANT_KEYS)
+def test_fix319_19_granted_without_approval_record_rejected(grant_key: str) -> None:
+    """負例（3キー parametrize）: attestation は attested 形態に整えても、
+    grant 別の承認記録（`<grant>_approval`）が無ければ granted 遷移は拒否
+    されること。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"][grant_key] = "granted"
+    with pytest.raises(m.Run9ValidationError, match="missing its separate approval record"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_approval_record_missing_key_rejected() -> None:
+    """負例: 承認記録が approval_statement を欠いた場合の拒否
+    （`{"approved_at": ...}` のみ）。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+    }
+    with pytest.raises(m.Run9ValidationError, match="approval missing required key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_approval_record_bad_timestamp_rejected() -> None:
+    """負例: 承認記録の approved_at が UTC ISO 8601 でない場合の拒否。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25",
+        "approval_statement": "Publication approved by User.",
+    }
+    with pytest.raises(m.Run9ValidationError, match="approved_at must be a UTC ISO 8601 timestamp"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_approval_record_blank_statement_rejected() -> None:
+    """負例: 承認記録の approval_statement が空白のみの文字列の場合の拒否。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "   ",
+    }
+    with pytest.raises(m.Run9ValidationError, match="approval_statement must be a non-empty string"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_approval_record_present_while_not_granted_rejected() -> None:
+    """負例: grant が not_granted のまま承認記録キーだけが残置されている
+    場合の拒否（取り消し後の残置レコードのような矛盾状態を許さない）。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Publication approved by User.",
+    }
+    with pytest.raises(m.Run9ValidationError, match="must not be present while"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_approval_record_unknown_key_rejected() -> None:
+    """負例: 承認記録に未知キーが混入した場合の拒否。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Publication approved by User.",
+        "unexpected_field": "x",
+    }
+    with pytest.raises(m.Run9ValidationError, match="approval has unknown key"):
+        m.validate_rights_manifest_four_layer(data)
+
+
+def test_fix319_19_valid_not_granted_fixture_still_validates() -> None:
+    """正例（回帰）: 現行 rights_manifest.json（3キーとも not_granted）が
+    Fix 19 追加後も validator を通ることの end-to-end 確認。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+@pytest.mark.parametrize("grant_key", _USAGE_GRANT_KEYS)
+def test_fix319_19_granted_with_full_preconditions_accepted(grant_key: str) -> None:
+    """正例（3キー parametrize、run9_identity_anchor を含む）: attestation
+    が attested 形態 + grant 別の承認記録が整っていれば granted 遷移は
+    受理されること——run9_identity_anchor も他の2キーと同じ構造で
+    granted 化できることの確認（境界宣言: 既存の attest 受理検証器要件
+    run9_identity_anchor=='granted' と矛盾しない構造）。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"][grant_key] = "granted"
+    data["voice_identity_rights"]["usage_grants"][f"{grant_key}_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": f"{grant_key} approved by User.",
+    }
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+
+
+def test_fix319_19_grant_approval_is_independent_per_key() -> None:
+    """正例: raw_audio_publication を granted 化しても
+    model_general_distribution は not_granted のまま独立に維持できること
+    ——rev 0.2 改訂4「別承認」の意味論が承認記録レベルでも保たれていること
+    の確認（一方の承認記録が他方の grant を暗黙に granted 化しない）。"""
+    data = _attested_voice_identity_rights_layer(
+        json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    )
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication"] = "granted"
+    data["voice_identity_rights"]["usage_grants"]["raw_audio_publication_approval"] = {
+        "approved_at": "2026-08-25T00:00:00Z",
+        "approval_statement": "Raw audio publication approved by User.",
+    }
+    m.validate_rights_manifest_four_layer(data)  # 例外を投げないことの確認
+    assert data["voice_identity_rights"]["usage_grants"]["model_general_distribution"] == "not_granted"
+    assert "model_general_distribution_approval" not in data["voice_identity_rights"]["usage_grants"]

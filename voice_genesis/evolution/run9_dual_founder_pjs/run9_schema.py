@@ -610,15 +610,25 @@ def validate_lesson_record(data: Mapping[str, Any]) -> None:
     デフォルト補完なし）。
 
     provenance 系フィールド（performance_source/voice_source/
-    performance_author/composition_source/recording_source、および
-    rights_manifest/provenance_manifest 参照欄）は rev 0.4 語彙予約
-    （User 帰属専用 `<PENDING_USER_ATTESTATION>` / 外部第三者未解決
-    `<UNRESOLVED_EXTERNAL>`）を適用する——全て PJS 側（外部第三者）の
-    事実を記述する欄のため `<PENDING_USER_ATTESTATION>` を fail-closed
-    で拒否し、未解決は `<UNRESOLVED_EXTERNAL>` のみ許容する
+    performance_author/composition_source/recording_source）は
+    **外部事実欄**——PJS 側（外部第三者）の事実を記述する欄のため rev 0.4
+    語彙予約（User 帰属専用 `<PENDING_USER_ATTESTATION>` / 外部第三者
+    未解決 `<UNRESOLVED_EXTERNAL>`）を適用し、`<PENDING_USER_ATTESTATION>`
+    を fail-closed で拒否し未解決は `<UNRESOLVED_EXTERNAL>` のみ許容する
     （`validate_rights_manifest_four_layer()` の provenance ブロック
     誤用拒否と同じ規約 — Codex bot レビュー PR #319 第7巡指摘 Fix 15、
     P2、採用）。
+
+    一方 rights_manifest/provenance_manifest の2欄は**参照/pin欄**——
+    実在する rights/provenance manifest への具体的な参照を保持する欄で
+    あり、上記の外部事実欄とは性質が異なる。未解決 placeholder の
+    居場所ではないため `<PENDING_USER_ATTESTATION>` /
+    `<UNRESOLVED_EXTERNAL>` の**両 sentinel**を fail-closed で拒否し、
+    実在する参照（非空文字列。形式は `performance_source.rights_manifest_ref`
+    と同じ規約に倣い規定しない）を必須とする（Codex bot レビュー PR #319
+    第9巡指摘 Fix 18、P2、採用 — 第7巡 Fix 15 は `<UNRESOLVED_EXTERNAL>`
+    への代替を推奨したため、両欄がその値になった record が使用可能な
+    参照/pin を一切持たないまま構造的に valid となる抜け道が残っていた）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"lesson record must be an object, got {type(data).__name__}")
@@ -697,15 +707,33 @@ def validate_lesson_record(data: Mapping[str, Any]) -> None:
             raise Run9ValidationError(
                 f"lesson record.{field} must be a non-empty string (reference/pin), got {value!r}"
             )
-        # 現行意味論（非空 str の参照/pin）は維持しつつ、同じ語彙予約規約へ
-        # 整合させる——参照/pin 欄に User 帰属専用 attestation sentinel が
-        # 誤って混入するのを同じ fail-closed 経路で拒否する（Fix 15 と
-        # 同型）。
-        if value == _RIGHTS_MANIFEST_PENDING_USER_ATTESTATION:
+        # rights_manifest/provenance_manifest は provenance 系5フィールド
+        # （performance_source 等、外部第三者の"事実"を記述し
+        # <UNRESOLVED_EXTERNAL> による未解決表現を許容する欄）とは別枠——
+        # こちらは「実在する rights/provenance manifest への参照/pin」を
+        # 保持する欄であり、未解決 placeholder の居場所ではない。
+        # 第7巡 Fix 15 は User 帰属専用 <PENDING_USER_ATTESTATION> のみを
+        # 拒否し代替として <UNRESOLVED_EXTERNAL> を推奨したが、代替先
+        # 自体を許容すると rights_manifest/provenance_manifest の両方が
+        # <UNRESOLVED_EXTERNAL> の record（＝使用可能な参照/pin を一切
+        # 持たない構造的 valid record）が R9-G1 の要求証拠なしに
+        # validate_lesson_record() を通ってしまう——両 sentinel を
+        # fail-closed で拒否する（Codex bot レビュー PR #319 第9巡指摘
+        # Fix 18、P2、採用）。値の形式（64hex sha か既存 manifest への
+        # 相対パスか）は `performance_source.rights_manifest_ref` と同じ
+        # 規約に倣い規定しない——非空文字列という構造的下限に留め、
+        # 過剰一般化はしない。
+        if value in (
+            _RIGHTS_MANIFEST_PENDING_USER_ATTESTATION,
+            _RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL,
+        ):
             raise Run9ValidationError(
-                f"lesson record.{field} is a reference/pin field, not an attestation value; "
-                f"{_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} is reserved for "
-                f"User-attributable fields — use {_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} instead"
+                f"lesson record.{field} must hold a genuine reference/pin to an existing "
+                "rights/provenance manifest, not an unresolved placeholder — neither "
+                f"{_RIGHTS_MANIFEST_PENDING_USER_ATTESTATION!r} nor "
+                f"{_RIGHTS_MANIFEST_UNRESOLVED_EXTERNAL!r} is a usable reference; if lesson "
+                "generation cannot yet produce the manifest, the record cannot be structurally "
+                f"issued (got {value!r})"
             )
 
 
@@ -4691,6 +4719,129 @@ def _validate_rights_manifest_voice_identity_attestation(layer: Mapping[str, Any
         )
 
 
+# Codex bot レビュー PR #319 第9巡指摘（P2, 採用, Fix 19）: Fix 8 は
+# usage_grants の3キー閉集合 + 非空文字列という**形状**のみを検証しており、
+# 値そのものは任意の非空文字列を受理していた——
+# `raw_audio_publication`/`model_general_distribution` を手編集で
+# `"granted"` へ書き換えても、`attestation.attested` が `false` のまま
+# validator を通過してしまう。rev 0.2 改訂4（DESIGN_RUN9_REVISION_0.2.md
+# 194-199行）は「raw 音源の公開・モデルの一般配布は別承認まで独立に
+# not_granted 維持」と規定しており、承認証拠なしの公開/配布許可は
+# その規約への違反になる。値語彙を `{not_granted, granted}` の閉集合へ
+# 凍結し、`granted` への遷移には以下2条件を fail-closed で強制する:
+#   ①attestation が attested 形態（`attested=true`、Fix 16 の二形態検証）
+#     であること
+#   ②当該 grant 専用の承認記録（`<grant_key>_approval` — grant ごとに
+#     独立、`raw_audio_publication` を granted にしても
+#     `model_general_distribution` の承認を兼ねない）が存在し、
+#     承認日時（UTC ISO 8601）+ 承認文言（非空 str）を備えること
+# run9_identity_anchor もこの3キーの一つであり、同じ2条件で granted 化
+# できる——3キーへ特例なく同一の前提条件を適用する構造そのものが、
+# 「run9_identity_anchor だけ別ルールで granted 化できてしまう」抜け道を
+# 作らない。現行 manifest（3キーとも `not_granted`）はこの2条件を要求
+# しない not_granted 形のまま不変で通る。
+_RIGHTS_MANIFEST_USAGE_GRANT_NOT_GRANTED = "not_granted"
+_RIGHTS_MANIFEST_USAGE_GRANT_GRANTED = "granted"
+_RIGHTS_MANIFEST_USAGE_GRANT_VALUES: FrozenSet[str] = frozenset(
+    {_RIGHTS_MANIFEST_USAGE_GRANT_NOT_GRANTED, _RIGHTS_MANIFEST_USAGE_GRANT_GRANTED}
+)
+_RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_SUFFIX = "_approval"
+_RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_KEYS: FrozenSet[str] = frozenset(
+    {"approved_at", "approval_statement"}
+)
+
+
+def _validate_rights_manifest_usage_grant_approval_record(grant_key: str, approval: Any) -> None:
+    """`usage_grants.<grant_key>_approval` の形状を検証する（Fix 19）:
+    `approved_at`（UTC ISO 8601 タイムスタンプ）+ `approval_statement`
+    （非空 str）の2キー閉集合。`_validate_rights_manifest_voice_identity_
+    attestation()` の attested 形態フィールドと同じタイムスタンプ正規表現
+    （`_RIGHTS_MANIFEST_UTC_TIMESTAMP_RE`）を再利用する。
+    """
+    path = f"rights manifest.voice_identity_rights.usage_grants.{grant_key}{_RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_SUFFIX}"
+    if not isinstance(approval, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(approval).__name__}")
+    unknown = set(approval.keys()) - _RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = _RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_KEYS - set(approval.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+    approved_at = approval["approved_at"]
+    if not isinstance(approved_at, str) or not _RIGHTS_MANIFEST_UTC_TIMESTAMP_RE.match(approved_at):
+        raise Run9ValidationError(
+            f"{path}.approved_at must be a UTC ISO 8601 timestamp (e.g. "
+            f"'2026-08-25T00:00:00Z'), got {approved_at!r}"
+        )
+    approval_statement = approval["approval_statement"]
+    if not isinstance(approval_statement, str) or not approval_statement.strip():
+        raise Run9ValidationError(
+            f"{path}.approval_statement must be a non-empty string, got {approval_statement!r}"
+        )
+
+
+def _validate_rights_manifest_usage_grants(layer: Mapping[str, Any]) -> None:
+    """`voice_identity_rights.usage_grants` の値語彙 + `granted` 遷移の
+    前提条件を検証する（Fix 19）。呼び出し元
+    `validate_rights_manifest_four_layer()` が本関数より先に
+    `_validate_rights_manifest_voice_identity_attestation(layer)` を実行
+    済みであることを前提にする（`layer["attestation"]["attested"]` が
+    型検証済みの bool であることに依拠する）。
+    """
+    path = "rights manifest.voice_identity_rights.usage_grants"
+    usage_grants = layer.get("usage_grants")
+    if not isinstance(usage_grants, dict):
+        raise Run9ValidationError(f"{path} must be an object, got {type(usage_grants).__name__}")
+
+    approval_keys = {
+        f"{grant_key}{_RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_SUFFIX}"
+        for grant_key in _RIGHTS_MANIFEST_USAGE_GRANTS_KEYS
+    }
+    allowed_keys = _RIGHTS_MANIFEST_USAGE_GRANTS_KEYS | approval_keys
+    unknown = set(usage_grants.keys()) - allowed_keys
+    if unknown:
+        raise Run9ValidationError(f"{path} has unknown key(s): {sorted(unknown)}")
+    missing = _RIGHTS_MANIFEST_USAGE_GRANTS_KEYS - set(usage_grants.keys())
+    if missing:
+        raise Run9ValidationError(f"{path} missing required key(s): {sorted(missing)}")
+
+    attestation = layer["attestation"]
+    attested = attestation["attested"]
+
+    for grant_key in sorted(_RIGHTS_MANIFEST_USAGE_GRANTS_KEYS):
+        value = usage_grants[grant_key]
+        if value not in _RIGHTS_MANIFEST_USAGE_GRANT_VALUES:
+            raise Run9ValidationError(
+                f"{path}.{grant_key} must be one of "
+                f"{sorted(_RIGHTS_MANIFEST_USAGE_GRANT_VALUES)}, got {value!r}"
+            )
+        approval_key = f"{grant_key}{_RIGHTS_MANIFEST_USAGE_GRANT_APPROVAL_SUFFIX}"
+        if value == _RIGHTS_MANIFEST_USAGE_GRANT_GRANTED:
+            if not attested:
+                raise Run9ValidationError(
+                    f"{path}.{grant_key} is "
+                    f"{_RIGHTS_MANIFEST_USAGE_GRANT_GRANTED!r} but "
+                    "rights manifest.voice_identity_rights.attestation is not in attested form "
+                    "(attested=true) — a usage grant requires User attestation to have "
+                    "completed first"
+                )
+            if approval_key not in usage_grants:
+                raise Run9ValidationError(
+                    f"{path}.{grant_key} is {_RIGHTS_MANIFEST_USAGE_GRANT_GRANTED!r} but is "
+                    f"missing its separate approval record {path}.{approval_key} — "
+                    "raw_audio_publication/model_general_distribution/run9_identity_anchor each "
+                    "require independent approval evidence and are never auto-escalated from "
+                    "one another (DESIGN_RUN9_REVISION_0.2.md 改訂4)"
+                )
+            _validate_rights_manifest_usage_grant_approval_record(grant_key, usage_grants[approval_key])
+        elif approval_key in usage_grants:
+            raise Run9ValidationError(
+                f"{path}.{approval_key} must not be present while {path}.{grant_key} is "
+                f"{_RIGHTS_MANIFEST_USAGE_GRANT_NOT_GRANTED!r} (an approval record only makes "
+                "sense once the grant has actually transitioned to granted)"
+            )
+
+
 def _validate_rights_manifest_layer_status_value(layer_name: str, field_name: str, value: Any) -> None:
     """層直下の rights_class/consent_status 値の語彙検証（Fix 5）。
 
@@ -4984,21 +5135,27 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
             layer_name, "consent_status", layer.get("consent_status")
         )
         if layer_name == "voice_identity_rights":
-            # Fix 8（P2, 採用）: usage_grants は必須キーとして存在するだけ
-            # では中身の形状を保証しない——`{}` やスカラー置換でも旧実装は
-            # 素通りしていた。run9_identity_anchor/raw_audio_publication/
-            # model_general_distribution の3キー閉集合 + 非空文字列を強制する
-            # （値語彙自体はまだ凍結済みの閉集合でないため、非空文字列という
-            # 最小制約に留める——過剰一般化はしない）。
-            _validate_closed_string_object(
-                "rights manifest.voice_identity_rights.usage_grants",
-                layer.get("usage_grants"),
-                _RIGHTS_MANIFEST_USAGE_GRANTS_KEYS,
-            )
             # Fix 16（P2, 採用）: attestation の形状 + pending/attested 二形態の
             # 整合を検証する（`{}`/スカラー/signer 欠落の `{"attested": true}`
-            # を素通りさせない）。
+            # を素通りさせない）。usage_grants の granted 前提条件（Fix 19）が
+            # attestation の attested 形態を参照するため、usage_grants の
+            # 検証より先に実行する（attestation の形状が既に妥当であることを
+            # 前提にできる）。
             _validate_rights_manifest_voice_identity_attestation(layer)
+            # Fix 8（P2, 採用, 旧実装）: usage_grants は必須キーとして存在
+            # するだけでは中身の形状を保証しない——`{}` やスカラー置換でも
+            # 旧実装は素通りしていた。Fix 19（P2, 採用, Codex bot レビュー
+            # PR #319 第9巡指摘）でさらに強化: 3キー閉集合 + 非空文字列
+            # という Fix 8 の最小制約だけでは、値そのものを任意の文字列へ
+            # 書き換えても（例 raw_audio_publication を素通りする
+            # `"granted"` へ）attestation.attested=false のまま通ってしまう
+            # ——rev 0.2 改訂4「raw 音源の公開・モデルの一般配布は別承認」を
+            # 裏付ける証拠なしに公開/配布許可を手編集で成立させ得た。値語彙を
+            # `{not_granted, granted}` の閉集合へ凍結し、granted への遷移は
+            # ①attestation が attested 形態であること ②当該 grant の別承認
+            # の証拠記録（承認日時 UTC ISO 8601 + 承認文言）が存在すること、
+            # の両方を fail-closed で要求する。
+            _validate_rights_manifest_usage_grants(layer)
         if layer_name != "voice_identity_rights":
             # performance_rights/composition_rights/recording_master_rights は
             # いずれも provenance 節を持つ（voice_identity_rights は donor

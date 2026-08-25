@@ -131,11 +131,11 @@
       "statement": null
     },
     "usage_grants": {
-      "run9_identity_anchor": "pending",
+      "run9_identity_anchor": "not_granted",
       "raw_audio_publication": "not_granted",
       "model_general_distribution": "not_granted"
     },
-    "usage_grants_note": "raw_audio_publication and model_general_distribution require separate approval from run9_identity_anchor (User ruling, DESIGN_RUN9_REVISION_0.2.md 改訂4) — granting the identity-anchor usage does not imply either publication grant. Both default to not_granted and are never auto-escalated.",
+    "usage_grants_note": "raw_audio_publication and model_general_distribution require separate approval from run9_identity_anchor (User ruling, DESIGN_RUN9_REVISION_0.2.md 改訂4) — granting the identity-anchor usage does not imply either publication grant. All three default to not_granted and are never auto-escalated. Codex bot レビュー PR #319 第9巡指摘 Fix 19（P2, 採用）: usage_grants の値語彙を {not_granted, granted} の閉集合へ凍結した — run9_identity_anchor の旧値 'pending' は閉集合外のため 'not_granted'（まだ承認されていない、という意味で等価）へ改めた。granted へ遷移するには attestation.attested=true + grant ごとの独立した承認記録（<grant>_approval: approved_at + approval_statement）が必須になる。",
     "binding_note": "After User attestation completes, the sha256 of this file (as it stands post-attestation) is bound into the input set for domains/identity_domain_run9_v1.json anchor_hashes.user (exact binding mechanism — e.g. direct pin vs composite manifest — to be finalized at attestation time). Until then anchor_hashes.user remains the <PIN_BEFORE_RUN> placeholder. rev 0.4 の4層再編は本層の内容・attest 対象を変更しない（DESIGN_RUN9_REVISION_0.4.md 変更1・2「attest対象の更新（a裁定の反映）」参照 — User裁定「aとbを承認」のa）。"
   },
   "performance_rights": {
@@ -230,6 +230,10 @@
     {
       "date": "2026-08-25",
       "event": "Codex bot レビュー PR #319 第5巡指摘（P2, 見送り, Fix 10）: performance_author.performer / composition.composer を未解決化する指摘は見送った——値は変更しない（User 裁定 2026-08-25 ②を根拠として維持）。指摘の正当な部分（repo 内出典 pjs_terms_snapshot.md には歌唱者・作曲者クレジットが記録されておらず、論文著者性だけでは役割特定にならないため出典の帰属が曖昧、という点）には両欄の note を改訂して対応した: 確定根拠は User 裁定②（裁定は bot 指摘の上位にあり、bot が参照できる repo 内 snapshot のみが証拠ではない）であり、pjs_terms_snapshot.md は license 文言の出典であって役割クレジットの出典ではないことを明記。裁定②の確定範囲はこの2欄（performer/composer）のみで recording_master_rights.provenance.voice_source.owner は含まれない（owner は PR #319 第4巡指摘採用により `<UNRESOLVED_EXTERNAL>` を既に維持中——同欄 note 参照）ことも明示した。値・rights_class/consent_status への影響なし（note 文言のみの改訂）。"
+    },
+    {
+      "date": "2026-08-25",
+      "event": "Codex bot レビュー PR #319 第9巡指摘（P2, 採用, Fix 19）: usage_grants の値語彙形状検証（Fix 8、非空文字列のみ）は「granted への手編集」を検出できず、attestation.attested=false のまま raw_audio_publication/model_general_distribution を granted へ書き換えても validator が受理してしまっていた——rev 0.2 改訂4（DESIGN_RUN9_REVISION_0.2.md 194-199行）の「別承認まで独立に not_granted 維持」規約への違反を構造的に防げていなかった。usage_grants の値語彙を {not_granted, granted} の閉集合へ凍結し、granted への遷移には①attestation の attested 形態（attested=true）②当該 grant 専用の承認記録（<grant>_approval: approved_at の UTC ISO 8601 タイムスタンプ + approval_statement の非空文字列、grant ごとに独立——一つの grant の承認が他へ流用されない）の両方を fail-closed で要求する構造を run9_schema.py へ追加した。付随して run9_identity_anchor の値を旧 'pending'（{not_granted, granted} 閉集合外の第3値）から 'not_granted' へ改めた（意味論上の変更はない——まだ承認されていない、という同一状態を閉集合内の正準値で表現し直しただけ）。raw_audio_publication/model_general_distribution は変更なし（元々 not_granted）。"
     }
   ]
 }
