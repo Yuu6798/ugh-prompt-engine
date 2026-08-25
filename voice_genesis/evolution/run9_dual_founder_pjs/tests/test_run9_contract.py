@@ -3954,3 +3954,2534 @@ def test_fix6b_design_revision_doc_unchanged_this_round() -> None:
     contract_raw_local = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
     field = contract_raw_local["design_revision_doc_sha256"]
     assert field["value"] == _sha256_file(REVISION_DOC_PATH)
+
+
+# ---------------------------------------------------------------------------
+# RUN9 Phase 3 対応 — item 1: identity metric space の定義と pin
+# ---------------------------------------------------------------------------
+
+IDENTITY_METRIC_SPACE_PATH = _RUN_DIR / "inputs" / "identity_metric_space.json"
+
+
+def test_phase3_identity_metric_space_file_exists_and_is_valid_json() -> None:
+    """Codex bot レビュー PR #318 第6巡 Fix 19 で validator 呼び出しへ強化
+    （削除ではなく置換）: 旧実装はトップレベルの `schema`/`metric_version`
+    2ラベルしか検証しておらず、`extraction_procedure` の削除や
+    `voiced_mask` の省略・ネスト型変更が素通りしていた。
+    `validate_identity_metric_space_manifest()` を通すことで、閉じた
+    形状（トップレベル必須キー閉集合・`extraction_procedure`/
+    `calibration` の必須ネストキーと型）を機械強制する。"""
+    assert IDENTITY_METRIC_SPACE_PATH.exists()
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert data["schema"] == "run9-identity-metric-space/1.2"
+    assert data["metric_version"] == "run9-identity-metric/0.5"
+    m.validate_identity_metric_space_manifest(data)  # raises on any shape defect
+
+
+def test_phase3_domain_metric_space_sha_matches_canonical_form_of_identity_metric_space() -> None:
+    """`domains/identity_domain_run9_v1.json` の `metric_space_sha` が、
+    `inputs/identity_metric_space.json` の正規形 sha256（af0_anchor_manifest
+    と同一規約）と一致することを実測で確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    recomputed = _sha256_canonical_json(metric_space_obj)
+    assert domain_raw["metric_space_sha"] == recomputed
+    assert m._SHA256_HEX_RE.match(domain_raw["metric_space_sha"])
+    assert domain_raw["metric_space_sha"] != "<PIN_BEFORE_RUN>"
+
+
+def test_phase3_identity_metric_space_excludes_f0() -> None:
+    """f0 が identity metric から明示除外されていることの内容検証
+    （PoR §2 の層分離整合 — pitch は Trait/Technique 層の観測軸）。"""
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    f0_exclusion = data["identity_feature"]["f0_exclusion"]
+    assert f0_exclusion["excluded"] is True
+    # distance 節に f0 が混入していないこと（ensure_ascii=False で
+    # ダンプする — True だと日本語の unicode エスケープ列に偶然 "f0" と
+    # いう16進数の並びが現れ得るため、素の文字列として照合する）。
+    assert "f0" not in json.dumps(data["distance"], ensure_ascii=False).lower()
+    # identity_feature の vector_source は sp（スペクトル包絡）由来であり、
+    # f0 という語を独立トークンとして含まない。
+    vector_source = data["identity_feature"]["vector_source"].lower()
+    assert "f0" not in vector_source
+
+
+def test_phase3_identity_metric_space_aperiodicity_is_advisory_only() -> None:
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert data["identity_feature"]["aperiodicity"]["status"] == "advisory"
+
+
+def test_phase3_identity_metric_space_distance_is_euclidean_symmetric_deterministic() -> None:
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert data["distance"]["method"] == "Euclidean distance"
+    assert "symmetric" in data["distance"]["properties"]
+    assert "deterministic" in data["distance"]["properties"]
+
+
+def test_phase3_identity_metric_space_calibration_references_c0_c1_and_holdout_freeze() -> None:
+    """Codex bot レビュー PR #318 第6巡 Fix 18 で `calibration_procedure`
+    （散文）は機械可読な `calibration` 節へ置換された。旧テストが確認して
+    いた内容（C0/C1・95th percentile・R9-G5・holdout freeze・positive/
+    negative reference への言及）を新構造で同値に確認する。"""
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    calibration = data["calibration"]
+    assert "calibration_procedure" not in data
+    dumped = json.dumps(calibration, ensure_ascii=False)
+    assert "C0" in dumped and "C1" in dumped
+    assert "P95" in calibration["freeze_threshold"]["formula"]
+    assert "R9-G5" in calibration["source_references"]["r9_g5"]
+    assert "holdout 開封前に freeze" in calibration["source_references"]["holdout_freeze"]
+    assert "positive_reference" in calibration["validity_gates"]["positive_reference_gate"]["id"]
+    assert "negative_reference" in calibration["validity_gates"]["negative_reference_gate"]["id"]
+
+
+def test_phase3_identity_metric_space_feasibility_note_references_design_failure() -> None:
+    data = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    note = data["feasibility_note"]
+    assert "DESIGN FAILURE" in note or "DESIGN_FAILURE" in note
+    assert "UNOBSERVABLE" in note
+    assert "事後" in note  # 事後調整で救済しないことの明記
+
+
+def test_phase3_domain_is_pinned_still_false_after_metric_space_pin() -> None:
+    """metric_space_sha が pin されても、user anchor が残るため
+    `is_pinned()` は依然 False（意図どおり）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    domain = m.run9_identity_domain_from_dict({
+        **domain_raw,
+        "anchor_hashes": {
+            "af0": domain_raw["anchor_hashes"]["af0"],
+            "ritsu": domain_raw["anchor_hashes"]["ritsu"],
+            "user": "c" * 64,  # user はまだ pin されないため合成値で domain 構築だけ確認
+        },
+    })
+    # user anchor はまだ本物ではないため is_pinned() は本テストの主張対象
+    # ではない（別途 anchor_hashes.user 自体が "<PIN_BEFORE_RUN>" のままで
+    # あることを直接確認する）。
+    assert domain_raw["anchor_hashes"]["user"] == "<PIN_BEFORE_RUN>"
+    assert domain.metric_space_sha == domain_raw["metric_space_sha"]
+
+
+def test_phase3_readme_documents_metric_space_fable_pin_with_veto() -> None:
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "metric space" in readme.lower() or "metric_space" in readme
+    assert "Fable" in readme
+    assert "veto" in readme.lower()
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第6巡 Fix 19: identity metric space manifest
+# validator の閉じた形状検証（正例 + 負例）。旧テストはトップレベル
+# ラベル2個しか見ておらず、`extraction_procedure` 削除・`voiced_mask`
+# 省略・ネスト型変更・calibration ゲート欠落のいずれも素通りしていた。
+# ---------------------------------------------------------------------------
+
+
+def _valid_metric_space_doc() -> Dict[str, Any]:
+    return json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+
+
+def test_fix19_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: 現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix19_validator_rejects_extraction_procedure_deletion() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["extraction_procedure"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_voiced_mask_omission() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["extraction_procedure"]["voiced_mask"]
+    with pytest.raises(m.Run9ValidationError, match="voiced_mask"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_voiced_mask_definition_missing() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["extraction_procedure"]["voiced_mask"]["definition"]
+    with pytest.raises(m.Run9ValidationError, match="voiced_mask missing required key.*definition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_frame_period_ms_nested_type_change() -> None:
+    """`frame_period_ms` が数値でなく文字列化された repin を拒否する
+    （ネスト型変更が素通りする穴のリグレッションガード）。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["frame_period_ms"] = "5.0"
+    with pytest.raises(m.Run9ValidationError, match="frame_period_ms"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_sample_rate_value_hz_as_float() -> None:
+    """`_is_strict_int()` 系の型厳密化を sample_rate.value_hz にも適用する
+    （6.0/True のような非正準値が genome_id 決定論を壊す穴と同型）。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate"]["value_hz"] = 44100.0
+    with pytest.raises(m.Run9ValidationError, match="value_hz"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_calibration_c1_gate_deletion() -> None:
+    """calibration ゲート欠落（C1 を無視する実装が同じ pin に適合してし
+    まっていた Fix 18 指摘の再発防止）を拒否する。"""
+    doc = _valid_metric_space_doc()
+    del doc["calibration"]["validity_gates"]["c1_gate"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_calibration_worked_example_without_synthetic_disclaimer() -> None:
+    """worked_example の disclaimer が synthetic/実測ではない旨を含まない
+    場合を拒否する（実測偽装の禁止 — 本 repo の規律）。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["worked_example"]["disclaimer"] = "この例は正しい"
+    with pytest.raises(m.Run9ValidationError, match="synthetic"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_unknown_top_level_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix19_validator_rejects_schema_version_mismatch() -> None:
+    doc = _valid_metric_space_doc()
+    doc["schema"] = "run9-identity-metric-space/1.0"
+    with pytest.raises(m.Run9ValidationError, match="schema"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+# ---------------------------------------------------------------------------
+# RUN9 Phase 3 対応 — item 3: learning recipe manifest
+# ---------------------------------------------------------------------------
+
+
+def _valid_learning_recipe_arm() -> Dict[str, Any]:
+    """Codex bot レビュー PR #318 第2巡 Fix 7 採用: draft/runnable の
+    二段 schema は作らず単一の厳密 schema とするため、stopping_rule/
+    trial_count/render_budget はもはや None を許容しない（実行可能な
+    プレースホルダ値へ更新 — 具体的な語彙・数値そのものは VG-L0 ハーネス
+    実装時の build 対象のまま、ここでは「型として実行可能」な最小例）。
+
+    第5巡 Fix 17 採用: rev 0.3 改訂E「公平性（PoR §8）」節が定める枝内
+    二体等条件のうち、Fix 7/15 で未カバーだった残り5項目
+    （search_space/candidate_generation/evaluator/compute_budget/
+    data_binding）を追加。値そのものの語彙・形式は VG-L0 ハーネス実装時の
+    build 対象のまま、ここでは「非空文字列」の最小例。"""
+    return {
+        "equal_budget_within_arm": True,
+        "stopping_rule": "fixed_trial_count",
+        "trial_count": 100,
+        "render_budget": 100,
+        "search_space": "placeholder_search_space_v0",
+        "candidate_generation": "placeholder_candidate_generation_v0",
+        "evaluator": "placeholder_evaluator_v0",
+        "compute_budget": "placeholder_compute_budget_v0",
+        "data_binding": "placeholder_data_binding_v0",
+    }
+
+
+def _valid_learning_recipe_manifest() -> Dict[str, Any]:
+    return {
+        "schema": m.SCHEMA_LEARNING_RECIPE_MANIFEST,
+        "seed": m.LEARNING_SEED,
+        "practice_recipe": _valid_learning_recipe_arm(),
+        "education_recipe": _valid_learning_recipe_arm(),
+    }
+
+
+def test_phase3_learning_recipe_manifest_valid_passes() -> None:
+    m.validate_learning_recipe_manifest(_valid_learning_recipe_manifest())
+
+
+def test_phase3_learning_recipe_manifest_wrong_seed_rejected() -> None:
+    manifest = _valid_learning_recipe_manifest()
+    manifest["seed"] = 1
+    with pytest.raises(m.Run9ValidationError, match="seed must be the exact int"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+def test_phase3_learning_recipe_manifest_seed_bool_rejected() -> None:
+    """`seed` は bool を拒否する（`True == 1` だが 909002 とは一致しない
+    ため実害は小さいが、`_is_strict_int` の家風どおり bool を明示的に
+    排除することの確認）。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest["seed"] = True
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_phase3_learning_recipe_manifest_equal_budget_false_rejected(arm_name: str) -> None:
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["equal_budget_within_arm"] = False
+    with pytest.raises(m.Run9ValidationError, match="equal_budget_within_arm must be exactly True"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_phase3_learning_recipe_manifest_arm_missing_rejected(arm_name: str) -> None:
+    manifest = _valid_learning_recipe_manifest()
+    del manifest[arm_name]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("bad_value", [None, "", "   ", 123, 1.5, True])
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix7_stopping_rule_non_empty_str_required(arm_name: str, bad_value: Any) -> None:
+    """必須テスト（Codex bot レビュー PR #318 第2巡 Fix 7, 負例1/3）:
+    `stopping_rule` は非空文字列以外（None/空文字/空白のみ/数値/bool）を
+    すべて拒否する — draft 段階の None プレースホルダはもはや通らない。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["stopping_rule"] = bad_value
+    with pytest.raises(m.Run9ValidationError, match="stopping_rule must be a non-empty string"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    "bad_value", [None, 0, -1, -0.5, "10", True, float("nan"), float("inf"), 1.5, 2.0],
+)
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix7_trial_count_positive_finite_number_required(arm_name: str, bad_value: Any) -> None:
+    """必須テスト（Fix 7, 負例2/3。Fix 15 で 1.5/2.0 の float 全般拒否へ
+    厳密化）: `trial_count` は None/0/負値/文字列/bool/NaN/inf に加え、
+    `1.5`（分数）・`2.0`（整数値だが型が float）もすべて拒否し、厳密な
+    正の int のみを許可する — READY 昇格時点で実行不能な予算（0件・負の
+    試行回数・分数試行等）が凍結される事故を防ぐ。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["trial_count"] = bad_value
+    with pytest.raises(m.Run9ValidationError, match="trial_count must be"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("bad_value", [None, 0, -1, -0.5, "10", True, float("nan"), float("inf")])
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix7_render_budget_positive_finite_number_required(arm_name: str, bad_value: Any) -> None:
+    """必須テスト（Fix 7, 負例3/3）: `render_budget` も trial_count と
+    同じ実行可能性要件（正の有限数値）を課される。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["render_budget"] = bad_value
+    with pytest.raises(m.Run9ValidationError, match="render_budget must be"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+def test_fix7_valid_arm_with_float_render_budget_accepted() -> None:
+    """正例回帰: render_budget は連続予算でありうるため、正の有限 float
+    も引き続き受理される（bool のみを明示的に除外し、それ以外の数値型は
+    許容する設計であることの確認）。trial_count の float 受理は Fix 15 で
+    廃止された — 旧テスト名が主張していた `trial_count = 100.0` の受理は
+    もはや成立しない（下記 Fix 15 セクションの負例で 100.0 相当の
+    `2.0` が拒否されることを確認する）。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest["practice_recipe"]["render_budget"] = 50.5
+    m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
+# RUN9 Phase 3 対応 — Codex bot レビュー PR #318 第5巡 Fix 17: rev 0.3
+# 改訂E「公平性（PoR §8）」節が定める枝内二体等条件のうち、Fix 7/15 で
+# 未カバーだった残り5項目（search_space/candidate_generation/evaluator/
+# compute_budget/data_binding）を機械検証可能フィールドとして追加する。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["search_space", "candidate_generation", "evaluator", "compute_budget", "data_binding"],
+)
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix17_equal_condition_field_missing_rejected(arm_name: str, field_name: str) -> None:
+    """必須テスト（Fix 17, 負例1/3）: 新設5キーはいずれも欠落すると
+    `missing required key` で拒否される（`_LEARNING_RECIPE_ARM_KEYS` の
+    必須集合に組み込まれていることの確認）。"""
+    manifest = _valid_learning_recipe_manifest()
+    del manifest[arm_name][field_name]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("bad_value", [None, "", "   ", 123, 1.5, True, [], {}])
+@pytest.mark.parametrize(
+    "field_name",
+    ["search_space", "candidate_generation", "evaluator", "compute_budget", "data_binding"],
+)
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix17_equal_condition_field_non_empty_str_required(
+    arm_name: str, field_name: str, bad_value: Any
+) -> None:
+    """必須テスト（Fix 17, 負例2/3）: 新設5キーはいずれも非空文字列以外
+    （None/空文字/空白のみ/数値/bool/list/dict）を拒否する — Fix 7 の
+    stopping_rule と同じ機械検証水準を適用する。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name][field_name] = bad_value
+    with pytest.raises(m.Run9ValidationError, match=f"{field_name} must be a non-empty string"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+def test_fix17_equal_condition_fields_shared_object_enforces_equality_by_construction() -> None:
+    """必須テスト（Fix 17, 負例3/3 の代替 — 「founder 間不一致」テスト）:
+    `practice_recipe`/`education_recipe` は各枝ごとに単一の object として
+    定義され、R9F-01/R9F-02 の双方へその1つの object がそのまま共通適用
+    される（`run9_controlprofile.derive_profile()` は `branch` 単位で
+    `updates` を受け取り、founder 別の recipe 値を表現するフィールドは
+    schema 上そもそも存在しない）。したがって「founder 間で新フィールドが
+    不一致」を表現する入力自体が構造的に組み立てられず、既存の founder
+    間一致比較器（`run9_schema.load_run9_contract()` の
+    `founder_genome_shas` 一致検証等）を新フィールドへ配線する対象も
+    存在しない — 本テストはその構造的保証（等条件は比較ではなく共有に
+    よって保証される）そのものを固定する: manifest の practice_recipe と
+    education_recipe が独立した dict オブジェクトであっても、それぞれの
+    中身が単一の値である以上、二体 Founder 間の不一致という状態を
+    manifest 上に作ることはできない。"""
+    manifest = _valid_learning_recipe_manifest()
+    # practice_recipe を書き換えても education_recipe とは独立に検証が通る
+    # （枝間の値は比較対象外 — PoR §8「PRACTICE と EDUCATION は情報量が
+    # 本質的に異なるため、両者を『同じ入力』とはしない」の確認）。
+    manifest["practice_recipe"]["search_space"] = "practice_only_space"
+    manifest["education_recipe"]["search_space"] = "education_only_space"
+    m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認（枝間は非比較）
+
+
+def test_fix17_equal_condition_fields_all_present_accepted() -> None:
+    """正例（Fix 17）: 新設5キーを全て充足した manifest は引き続き
+    受理される（`_valid_learning_recipe_arm()` fixture 更新後の回帰
+    確認）。"""
+    manifest = _valid_learning_recipe_manifest()
+    m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認
+    for arm_name in ("practice_recipe", "education_recipe"):
+        for field_name in (
+            "search_space", "candidate_generation", "evaluator", "compute_budget", "data_binding",
+        ):
+            assert field_name in manifest[arm_name]
+            assert isinstance(manifest[arm_name][field_name], str) and manifest[arm_name][field_name]
+
+
+# ---------------------------------------------------------------------------
+# RUN9 Phase 3 対応 — Codex bot レビュー PR #318 第4巡 Fix 15: trial_count
+# の整数厳密化。共有の `_require_positive_finite_number()` は
+# `trial_count: 1.5` のような分数試行を通してしまい、PINNED recipe
+# チェックも満たしてしまっていた（分数試行は実行不能であり、PoR §8 の
+# equal_budget_within_arm — 枝内の二体 Founder 間の等予算契約 — を
+# 掘り崩す）。`_require_positive_int()` を trial_count 専用に配線する。
+# render_budget は連続予算でありうるため対象外のまま
+# `_require_positive_finite_number()` を維持する。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_value", [1.5, 2.0, True, "3"])
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_fix15_trial_count_rejects_non_strict_int_values(arm_name: str, bad_value: Any) -> None:
+    """必須テスト（Fix 15, 負例）: trial_count は bool を除く厳密 int の
+    みを許可し、`1.5`（分数）・`2.0`（整数値に見える float）・`True`
+    （bool）・`"3"`（文字列表現）のいずれも型として拒否する。render_budget
+    はこの厳密化の対象外であり、これらの値をそのまま許容し続ける
+    （trial_count と render_budget の意味論が異なることの確認）。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["trial_count"] = bad_value
+    with pytest.raises(m.Run9ValidationError, match="trial_count must be an exact int"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+def test_fix15_trial_count_accepts_positive_int() -> None:
+    """正例（Fix 15）: 厳密な正の int である trial_count は引き続き
+    受理される（既存 fixture `_valid_learning_recipe_arm()` も
+    `trial_count: 100`（int）を使用しており、Fix 15 適用後も無変更で
+    通ることを確認する）。"""
+    manifest = _valid_learning_recipe_manifest()
+    manifest["practice_recipe"]["trial_count"] = 100
+    m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認
+
+
+def test_phase3_learning_recipe_manifest_no_control_recipe_section() -> None:
+    """CONTROL は学習 step を実行しないため recipe を持たない（PoR §4）—
+    manifest の許容トップレベルキーに control_recipe 相当が存在しない
+    ことの確認。"""
+    assert "control_recipe" not in m._LEARNING_RECIPE_TOP_LEVEL_KEYS
+    assert m._LEARNING_RECIPE_TOP_LEVEL_KEYS == {"schema", "seed", "practice_recipe", "education_recipe"}
+
+
+def test_phase3_learning_recipe_manifest_sha_still_pending(contract_raw: Dict[str, Any]) -> None:
+    field = contract_raw["learning_recipe_sha"]
+    assert field["status"] == "PENDING"
+    assert field["value"] is None
+
+
+def test_phase3_learning_recipe_manifest_pin_prewired_once_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """`learning_recipe_sha` の実ファイル照合を、practice/education
+    manifest と同型でテスト層へ事前配線する（PENDING の間は待機。
+    PINNED へ昇格した瞬間、この同じテストが (a) 実ファイル sha256 一致、
+    (b) `validate_learning_recipe_manifest()` の通過、を自動的に強制
+    するようになる）。"""
+    field = contract_raw["learning_recipe_sha"]
+    if field["status"] == "PINNED":
+        assert field["value"] == m.compute_file_sha256(m.LEARNING_RECIPE_MANIFEST_PATH), (
+            "learning_recipe_sha が PINNED を宣言しているが、"
+            f"{m.LEARNING_RECIPE_MANIFEST_PATH} の実バイト sha256 と一致しない"
+        )
+        manifest_data = m._loads_strict_json(
+            m.LEARNING_RECIPE_MANIFEST_PATH.read_text(encoding="utf-8")
+        )
+        m.validate_learning_recipe_manifest(manifest_data)  # 例外を投げないことの確認
+    else:
+        assert field["status"] == "PENDING"
+        assert field["value"] is None
+
+
+def test_phase3_learning_recipe_manifest_path_constant_conventional_location() -> None:
+    assert m.LEARNING_RECIPE_MANIFEST_PATH.name == "learning_recipe_manifest.json"
+    assert m.LEARNING_RECIPE_MANIFEST_PATH.parent == _RUN_DIR / "inputs"
+
+
+def test_phase3_learning_recipe_manifest_prewired_check_fails_for_invalid_manifest_simulation(
+    tmp_path: Path,
+) -> None:
+    """事前配線が偽陽性でないことのシミュレーション確認: 不正 manifest
+    （seed 不一致）を一時ファイルへ書き、validator が実際に拒否すること
+    を確認する。"""
+    bad_manifest = _valid_learning_recipe_manifest()
+    bad_manifest["seed"] = 1
+    bad_path = tmp_path / "learning_recipe_manifest.json"
+    bad_path.write_text(json.dumps(bad_manifest), encoding="utf-8")
+    data = m._loads_strict_json(bad_path.read_text(encoding="utf-8"))
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_learning_recipe_manifest(data)
+
+
+# ---------------------------------------------------------------------------
+# RUN9 Phase 3 対応 — 既存不変制約の回帰確認
+# ---------------------------------------------------------------------------
+
+
+def test_phase3_existing_pin_values_unchanged() -> None:
+    """既存 pin 値・設計書3本・PoR は無変更（byte-pin テスト維持）の
+    直接確認 — Phase 3 は metric_space_sha 以外の pin を一切変更しない。"""
+    assert _sha256_file(DESIGN_DOC_PATH) == (
+        "b1f6901c0ba8bcfcbd61170aa672c95e96a37d082fce5e3f12f245bc4faaae1e"
+    )
+    assert _sha256_file(REVISION_0_2_DOC_PATH) == (
+        "406098e2ac62065855b7e4086fce769a2956b64606594ad83b63b527a23ad4fb"
+    )
+    assert _sha256_file(POR_ADJUDICATION_PATH) == (
+        "56b66fd8df943fbfa98767f2ea481c0ba2a68c26916832e08517379408d97007"
+    )
+
+
+def test_phase3_domain_af0_and_ritsu_anchors_unchanged() -> None:
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["anchor_hashes"]["af0"] == (
+        "183bf32561589ddad69daa0faf5838c3e9601d17b24b62ee32aa629123a87f1e"
+    )
+    assert domain_raw["anchor_hashes"]["ritsu"] == (
+        "88c7b3efcf134945169d9cb4bf1d124e49c387ef1793391a31f56f4df66dde76"
+    )
+
+
+def test_phase3_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第7巡 Fix 20（P1）: C0/C1 校正標本の
+# per-founder テイク数を RUN9_CONTRACT.yaml の `interventions` 配下へ
+# 契約 pin する。旧 identity_metric_space.json は「テイク数は本ファイルの
+# interventions 規定に従う」と書きながら実体の無い欄への委譲だった欠陥を
+# 是正する。正例/負例は他の pin 欄（Fix 15 の trial_count 等）と同型の
+# fail-closed 流儀で検証する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix20_intervention_take_count_fields_constant() -> None:
+    assert m.INTERVENTION_TAKE_COUNT_FIELDS == (
+        "c0_replay_takes_per_founder",
+        "c1_sham_takes_per_founder",
+    )
+
+
+def test_fix20_current_contract_take_count_fields_are_pinned_twenty(
+    contract_raw: Dict[str, Any],
+) -> None:
+    for name in m.INTERVENTION_TAKE_COUNT_FIELDS:
+        field = contract_raw["interventions"][name]
+        assert field["status"] == "PINNED"
+        assert field["value"] == 20
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix20_take_count_field_missing_rejected(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """欠落: `interventions` の必須キー閉集合検査（allowed/missing）で
+    fail-closed 拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    del tampered["interventions"][field_name]
+    with pytest.raises(m.Run9ValidationError, match="interventions missing key"):
+        m.load_run9_contract(tampered)
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+@pytest.mark.parametrize("bad_value", [0, -1, -20, 1.5, 20.0, True, False])
+def test_fix20_take_count_field_pinned_bad_value_rejected(
+    contract_raw: Dict[str, Any], field_name: str, bad_value: Any
+) -> None:
+    """負例（0・負値・float・bool）: `_require_positive_int()` は
+    `_is_strict_int()`（bool 除外）+ 正値要求のため、いずれも拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"][field_name] = {"value": bad_value, "status": "PINNED"}
+    with pytest.raises(m.Run9ValidationError, match=f"interventions.{field_name}.value"):
+        m.load_run9_contract(tampered)
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix20_take_count_field_pinned_null_value_rejected(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """欠落級の負例: PINNED を名乗りながら value が null な欄は、他の pin
+    欄と同型の `_validate_pin_field()` null チェックで拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"][field_name] = {"value": None, "status": "PINNED"}
+    with pytest.raises(m.Run9ValidationError, match="status is PINNED but value is null"):
+        m.load_run9_contract(tampered)
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix20_take_count_field_pinned_positive_int_accepted(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """正例: 正の厳密 int（bool でない）は PINNED として受理される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"][field_name] = {"value": 42, "status": "PINNED"}
+    m.load_run9_contract(tampered)  # raises on failure
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix20_take_count_field_pending_with_null_value_accepted(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """正例: PENDING/BLOCKED は他の pin 欄と同様、value=null のままでも
+    正直な未 pin 表現として許容される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["interventions"][field_name] = {
+        "value": None,
+        "status": "PENDING",
+        "reason": "not yet decided",
+    }
+    m.load_run9_contract(tampered)  # raises on failure
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第7巡 Fix 20（P1, つづき）: identity_metric_
+# space.json validator 側 — pooling 禁止文言・per-founder フィールド名
+# 参照の欠落を fail-closed で拒否する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix20_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix20_validator_rejects_d_c0_population_missing_pooling_prohibition() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["freeze_threshold"]["d_c0_population"] = (
+        "founder F 自身の C0 テイクと reference_render(F) の距離標本。テイク数は "
+        "RUN9_CONTRACT.yaml の interventions.c0_replay_takes_per_founder を参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="founder-pooling prohibition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix20_validator_rejects_d_c0_population_missing_field_ref() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["freeze_threshold"]["d_c0_population"] = (
+        "founder F 自身の C0 テイクと reference_render(F) の距離標本のみ（founder 横断の "
+        "pooling は不採用）。テイク数は RUN9_CONTRACT.yaml の interventions 規定に従う。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="reference RUN9_CONTRACT.yaml"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix20_validator_rejects_d_c1_population_missing_field_ref() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"] = (
+        "founder F 自身の C1 テイクと reference_render(F) の距離標本のみ（pooling 禁止）。"
+        "テイク数は RUN9_CONTRACT.yaml の interventions 規定に従う。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="reference RUN9_CONTRACT.yaml"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix20_validator_rejects_reference_render_definition_missing_per_founder_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["distance_unit"]["reference_render_definition"] = (
+        "reference_example 節が固定する first birth-probe measurement の実測値。捏造禁止。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="fixed per founder"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第7巡 Fix 21（P2）:
+# `validate_identity_metric_space_manifest()` を全トップレベル実行関連
+# フィールド（`feature_extractor`/`identity_feature`/`distance`/
+# `reference_example`/`feasibility_note`）へ拡張する。旧実装はこれらを
+# トップレベルキー集合にのみ含め、null 化・ネストキー欠落・追加がいずれも
+# 素通りしていた。
+# ---------------------------------------------------------------------------
+
+
+def test_fix21_validator_rejects_feature_extractor_null() -> None:
+    doc = _valid_metric_space_doc()
+    doc["feature_extractor"] = None
+    with pytest.raises(m.Run9ValidationError, match="feature_extractor must be an object"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_feature_extractor_missing_key() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["feature_extractor"]["reference_implementation"]
+    with pytest.raises(m.Run9ValidationError, match="feature_extractor missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_feature_extractor_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["feature_extractor"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(m.Run9ValidationError, match="feature_extractor has unknown key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_feature_extractor_version_source_missing_key() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["feature_extractor"]["version_source"]["note"]
+    with pytest.raises(
+        m.Run9ValidationError, match="feature_extractor.version_source missing required key"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_identity_feature_null() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"] = None
+    with pytest.raises(m.Run9ValidationError, match="identity_feature must be an object"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_identity_feature_f0_exclusion_excluded_non_bool() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["f0_exclusion"]["excluded"] = "true"
+    with pytest.raises(m.Run9ValidationError, match="f0_exclusion.excluded must be a bool"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_distance_null() -> None:
+    doc = _valid_metric_space_doc()
+    doc["distance"] = None
+    with pytest.raises(m.Run9ValidationError, match="distance must be an object"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_distance_properties_not_a_list() -> None:
+    doc = _valid_metric_space_doc()
+    doc["distance"]["properties"] = "symmetric,deterministic"
+    with pytest.raises(m.Run9ValidationError, match="distance.properties must be a non-empty list"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_reference_example_null() -> None:
+    """指摘の中心事例: `feature_extractor`/`reference_example` 等は存在
+    チェックのみで null 置換が通っていた欠陥の直接リグレッションガード。"""
+    doc = _valid_metric_space_doc()
+    doc["reference_example"] = None
+    with pytest.raises(m.Run9ValidationError, match="reference_example must be an object"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_reference_example_missing_nested_key() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["reference_example"]["procedure"]
+    with pytest.raises(m.Run9ValidationError, match="reference_example missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_reference_example_unknown_nested_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["reference_example"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(m.Run9ValidationError, match="reference_example has unknown key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_reference_example_value_present_while_pending() -> None:
+    """捏造禁止の裏側: 手続きのみの status のまま value を非 null にする
+    （実測前の値のでっち上げ）ことも拒否する。第12巡 Fix 29 で
+    reference_example.value は「常に null が正」の恒久ルールへ書き換わった
+    （旧 PENDING_BIRTH_PROBE の非対称ルールを反転 — 詳細は Fix 29 の
+    テスト群を参照）ため、本テストのエラー文言もそれに追随する。"""
+    doc = _valid_metric_space_doc()
+    doc["reference_example"]["value"] = {"fabricated": True}
+    with pytest.raises(m.Run9ValidationError, match="value must remain permanently null"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_reference_example_status_not_procedure_only() -> None:
+    """第12巡 Fix 29 による置換: 旧テストは「status が PENDING_BIRTH_PROBE
+    を過ぎたら value は null であってはならない」という非対称ルールの片側を
+    確認していたが、Fix 29 でこの非対称ルールは反転し（value は常に null が
+    正）、status 自体も凍結した唯一の値と厳密一致するよう強化された。
+    status を別の値（例: 旧 "MEASURED"）へ変えると、value の状態に関わらず
+    status 不一致として拒否されることを確認する。"""
+    doc = _valid_metric_space_doc()
+    doc["reference_example"]["status"] = "MEASURED"
+    with pytest.raises(m.Run9ValidationError, match="status must be exactly"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix21_validator_rejects_feasibility_note_empty() -> None:
+    doc = _valid_metric_space_doc()
+    doc["feasibility_note"] = "   "
+    with pytest.raises(m.Run9ValidationError, match="feasibility_note must be a non-empty string"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第8巡 Fix 22（P1）: gate_state() の READY 判定へ
+# calibration take pin（`interventions.{c0_replay,c1_sham}_takes_per_founder`、
+# Fix 20 新設）を組み込む。旧実装は `pre_run_fields` を `CONTRACT_PIN_FIELDS`
+# （トップレベル欄のみ）からしか導出しておらず、両ネスト欄が PENDING でも
+# 他のトップレベル欄が全 PINNED なら READY を返してしまっていた ——
+# C0/C1 校正母集団サイズが未凍結のまま学習が開始でき、事前登録 P95 閾値が
+# 無効化される穴だった。
+# ---------------------------------------------------------------------------
+
+
+def test_fix22_fully_pinned_synthetic_contract_with_take_counts_pinned_is_ready(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """回帰①: 現行 RUN9_CONTRACT.yaml の interventions 配下は既に両欄
+    PINNED=20（Fix 20）。他のトップレベル pre-run 欄も合成 PINNED にした
+    fully-pinned fixture は Fix 22 適用後も従来どおり READY を返す
+    （新チェックが既存の正常系まで巻き込んで壊していないことの確認）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    for name in m.INTERVENTION_TAKE_COUNT_FIELDS:
+        assert fully_pinned["interventions"][name]["status"] == "PINNED"
+    contract = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract) == "READY"
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix22_pending_take_count_field_blocks_gate(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """負例②: `interventions.{c0_replay,c1_sham}_takes_per_founder` の
+    どちらか一方だけを PENDING 化すると、他の全欄が PINNED でも
+    gate_state() は READY にならず BLOCKED を返す（校正母集団サイズが
+    未凍結のまま学習開始できてしまう穴の直接リグレッションガード）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    fully_pinned["interventions"][field_name] = {
+        "value": None,
+        "status": "PENDING",
+        "reason": "regressed for fix22 test",
+    }
+    contract = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_fix22_both_take_count_fields_pending_blocks_gate(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """負例②補足: 両欄同時 PENDING でも同様に BLOCKED。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    for name in m.INTERVENTION_TAKE_COUNT_FIELDS:
+        fully_pinned["interventions"][name] = {
+            "value": None,
+            "status": "PENDING",
+            "reason": "regressed for fix22 test",
+        }
+    contract = m.load_run9_contract(fully_pinned)
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix22_take_count_field_missing_status_key_fails_closed_via_gate(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """負例③: gate_state() の再検証時（Fix 4 と同じ「load 後に
+    contract.raw を直接改変する」パターン）に status キーが欠落した入れ子
+    pin を混入させても、READY を騙れず Run9ValidationError で
+    fail-closed する。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    contract = m.load_run9_contract(fully_pinned)
+    del contract.raw["interventions"][field_name]["status"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.gate_state(contract)
+
+
+@pytest.mark.parametrize("field_name", list(m.INTERVENTION_TAKE_COUNT_FIELDS))
+def test_fix22_take_count_field_invalid_status_fails_closed_via_gate(
+    contract_raw: Dict[str, Any], field_name: str
+) -> None:
+    """負例③補足: status に語彙外の値（"READY" という偽装値）を直接
+    混入させても、gate_state() の再検証で Run9ValidationError が飛ぶ
+    （PINNED を騙る経路が status 語彙検査でも閉じていることの確認）。"""
+    fully_pinned = _fully_pinned_synthetic_contract(contract_raw)
+    contract = m.load_run9_contract(fully_pinned)
+    contract.raw["interventions"][field_name]["status"] = "READY"
+    with pytest.raises(m.Run9ValidationError, match="status must be one of"):
+        m.gate_state(contract)
+
+
+def test_fix22_intervention_take_count_field_accessor() -> None:
+    """`Run9RunContract.intervention_take_count_field()` が
+    `pin_field()`/`founder_genome_sha()` と同じアクセサ規約で
+    `interventions` 配下の入れ子 pin 欄を返すことの直接確認。"""
+    contract = m.load_run9_contract_from_yaml_path(CONTRACT_PATH)
+    for name in m.INTERVENTION_TAKE_COUNT_FIELDS:
+        assert (
+            contract.intervention_take_count_field(name)
+            == contract.raw["interventions"][name]
+        )
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第9巡 Fix 23（P1）: reference テイクの C0
+# 母集団からの除外を凍結する。reference_render(F) が C0/C1 replay テイクの
+# 一員なら D_C0(F)/D_C1(F) に自己比較ゼロ距離が保証混入し、P95 閾値と
+# STABLE/SHIFTED 判定が変わり得た未確定点を、d_c0_population/
+# d_c1_population/reference_render_definition の文言凍結 + validator
+# チェックとして機械強制する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix23_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix23_d_c0_population_states_self_comparison_prohibition() -> None:
+    data = _valid_metric_space_doc()
+    d_c0_population = data["calibration"]["freeze_threshold"]["d_c0_population"]
+    assert "自己比較" in d_c0_population
+    assert "C0 母集団に属さない" in d_c0_population
+
+
+def test_fix23_d_c1_population_states_self_comparison_prohibition() -> None:
+    data = _valid_metric_space_doc()
+    d_c1_population = data["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"]
+    assert "自己比較" in d_c1_population
+    assert "C1 母集団にも属さない" in d_c1_population
+
+
+def test_fix23_reference_render_definition_states_not_a_take_member() -> None:
+    data = _valid_metric_space_doc()
+    reference_render_definition = data["calibration"]["distance_unit"]["reference_render_definition"]
+    assert "C0/C1 テイクの一員ではなく" in reference_render_definition
+    assert "独立レンダー" in reference_render_definition
+
+
+def test_fix23_worked_example_disclaimer_states_samples_are_independent_of_reference() -> None:
+    data = _valid_metric_space_doc()
+    disclaimer = data["calibration"]["worked_example"]["disclaimer"]
+    assert "reference_render(F) と独立なテイク" in disclaimer
+    assert "自己比較" in disclaimer
+
+
+def test_fix23_validator_rejects_d_c0_population_missing_self_comparison_prohibition() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["freeze_threshold"]["d_c0_population"] = (
+        "D_C0(F) = founder F 自身の C0 テイクと reference_render(F) との距離標本のみで構成する。"
+        "founder 横断の pooling は不採用。テイク数は RUN9_CONTRACT.yaml の "
+        "interventions.c0_replay_takes_per_founder を参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="self-comparison contamination prohibition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix23_validator_rejects_d_c1_population_missing_self_comparison_prohibition() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"] = (
+        "D_C1(F) = founder F 自身の C1 テイクと reference_render(F) との距離標本のみで構成する"
+        "（pooling 不採用）。テイク数は RUN9_CONTRACT.yaml の "
+        "interventions.c1_sham_takes_per_founder を参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="self-comparison contamination prohibition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix23_validator_rejects_reference_render_definition_missing_not_a_take_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["distance_unit"]["reference_render_definition"] = (
+        "当該 founder F 自身の first birth-probe measurement に固定する（founder ごとに1つ）。"
+        "実測値は reference_example 節が固定する手続きに従う。捏造禁止。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="not a member of the C0/C1 takes"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix23_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 23 の文言追記後、`metric_space_sha` は
+    `identity_metric_space.json` の正規形 sha256 を再計算した値と一致する
+    （= repin 済みであり、追記前の pin 値のまま素通りしていない）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第9巡 Fix 24（P2）: `_validate_nested_str_keys()`
+# を「必須キー存在」から「キー集合完全一致（未知キー拒否）」へ強化する。
+# `f0_estimation.algorithm_override: "dio"` のような契約に無いキーの追加が
+# repin だけで素通りしていた穴の是正 — 本関数を呼ぶ全ネスト object へ
+# 一括適用されることを個別に確認する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix24_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例（回帰確認）: 現行ファイルは追加のキーを一切含まないため、
+    キー集合完全一致チェックを追加してもそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix24_validator_rejects_f0_estimation_algorithm_override() -> None:
+    """指摘の直接事例: `f0_estimation.algorithm_override: "dio"` のような
+    矛盾キーの追加を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["f0_estimation"]["algorithm_override"] = "dio"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=r"f0_estimation has unknown key.*algorithm_override",
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_spectral_envelope_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["spectral_envelope"]["q1"] = 0.5
+    with pytest.raises(m.Run9ValidationError, match=r"spectral_envelope has unknown key.*q1"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_voiced_mask_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["voiced_mask"]["threshold"] = "0.0"
+    with pytest.raises(m.Run9ValidationError, match=r"voiced_mask has unknown key.*threshold"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_distance_unit_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["distance_unit"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"distance_unit has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_freeze_threshold_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["freeze_threshold"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"freeze_threshold has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_decision_rule_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["decision_rule"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"decision_rule has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_rejects_source_references_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["source_references"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"source_references has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_still_rejects_sample_rate_unknown_key_after_allowed_keys_refactor() -> None:
+    """回帰ガード: `sample_rate`/`log_transform` は `value_hz`/`floor_value`
+    という非 str 型フィールドを含む部分集合を `_validate_nested_str_keys()`
+    へ渡すため、`allowed_keys` 経由の閉集合検証が壊れていないかを個別に
+    確認する（壊れていると `value_hz` 自体を未知キーと誤検知していた —
+    実装中に一度この regression を踏んだ)。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"sample_rate has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix24_validator_still_rejects_log_transform_unknown_key_after_allowed_keys_refactor() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["log_transform"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"log_transform has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第10巡 Fix 25（P1）: identity feature のゲイン
+# 不変化を凍結する。WORLD の sp はパワー領域でレンダーゲインに比例スケール
+# するため、raw log 包絡は全 bin に約定数のオフセットが乗り、稽古/教育が
+# dynamics/全体ゲインだけ変えても Euclidean 距離が閾値超過し得た
+# （Technique の dynamics 軸と Identity の混同）。identity_feature に
+# level_normalization 節（集約後ベクトルへの1回のスカラー平均減算）を新設
+# し、validator が gain invariance の理由 + 凍結した式を機械強制する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix25_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix25_metric_version_bumped_to_0_3() -> None:
+    """feature 定義の意味変更（level 正規化の導入）に伴い metric_version が
+    0.2 から 0.3 へ bump されたことの歴史的事実を確認する（現行値は第13巡
+    Fix 32 の校正規則変更でさらに 0.4 へ進んでいるため、ここでは 0.2 への
+    逆行がないことのみを confirm し、現行の正確な値は
+    `test_fix32_metric_version_bumped_to_0_4` が担う）。"""
+    data = _valid_metric_space_doc()
+    assert data["metric_version"] != "run9-identity-metric/0.2"
+
+
+def test_fix25_identity_feature_definition_states_gain_invariance() -> None:
+    data = _valid_metric_space_doc()
+    definition = data["identity_feature"]["definition"]
+    assert "mean(v(x))" in definition
+    assert "レンダーゲイン" in definition or "ゲイン" in definition
+
+
+def test_fix25_level_normalization_formula_is_scalar_mean_subtraction() -> None:
+    data = _valid_metric_space_doc()
+    level_normalization = data["identity_feature"]["level_normalization"]
+    assert level_normalization["formula"] == "feature(x) = v(x) - mean(v(x))・1"
+
+
+def test_fix25_level_normalization_rationale_explains_gain_invariance_mechanism() -> None:
+    data = _valid_metric_space_doc()
+    rationale = data["identity_feature"]["level_normalization"]["rationale"]
+    assert "ゲイン" in rationale
+    assert "log" in rationale.lower()
+
+
+def test_fix25_level_normalization_method_justifies_aggregate_once_choice() -> None:
+    """per-frame 正規化ではなく集約後1回の減算を選んだ理由が明記されている
+    ことを確認する（凍結裁定の一部）。"""
+    data = _valid_metric_space_doc()
+    method = data["identity_feature"]["level_normalization"]["method"]
+    assert "per-frame" in method
+    assert "集約後" in method
+
+
+def test_fix25_worked_example_disclaimer_notes_normalized_distances() -> None:
+    data = _valid_metric_space_doc()
+    disclaimer = data["calibration"]["worked_example"]["disclaimer"]
+    assert "level_normalization" in disclaimer
+    assert "gain-invariant" in disclaimer
+
+
+def test_fix25_validator_rejects_identity_feature_missing_level_normalization() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["identity_feature"]["level_normalization"]
+    with pytest.raises(m.Run9ValidationError, match="identity_feature missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix25_validator_rejects_level_normalization_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["level_normalization"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"level_normalization has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix25_validator_rejects_rationale_missing_gain_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["level_normalization"]["rationale"] = (
+        "log スペクトル包絡の平均を差し引くことで一定のオフセットを除去する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="render-gain invariance"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix25_validator_rejects_formula_replaced_by_per_frame_normalization() -> None:
+    """凍結した式（集約後1回のスカラー平均減算）以外への無断置換
+    （例: per-frame 正規化への repin）を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["level_normalization"]["formula"] = (
+        "feature(x, t) = v(x, t) - mean_bin(v(x, t))・1  # per-frame"
+    )
+    with pytest.raises(m.Run9ValidationError, match="frozen scalar-mean-subtraction"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix25_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 25/Fix 27 の文言改訂後、`metric_space_sha` は
+    `identity_metric_space.json` の正規形 sha256 を再計算した値と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第10巡 Fix 27（P1）: positive/negative reference
+# の生成・選定手続きを凍結する。「同一 founder の再レンダー」では枝・
+# revision・制御条件・テイク・生成タイミングが未指定で、neutral C0 レンダー
+# を使う評価者と学習後レンダーを使う評価者で gate が反転し得た。
+# ---------------------------------------------------------------------------
+
+
+def test_fix27_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix27_positive_reference_definition_is_dedicated_independent_take() -> None:
+    data = _valid_metric_space_doc()
+    positive_reference_definition = data["calibration"]["validity_gates"]["positive_reference_gate"][
+        "positive_reference_definition"
+    ]
+    assert "専用" in positive_reference_definition
+    assert "reference_render(F) 自身ではなく" in positive_reference_definition
+    assert "いずれでもない" in positive_reference_definition
+
+
+def test_fix27_positive_reference_definition_pins_birth_probe_timing_and_forbids_post_learning() -> None:
+    data = _valid_metric_space_doc()
+    positive_reference_definition = data["calibration"]["validity_gates"]["positive_reference_gate"][
+        "positive_reference_definition"
+    ]
+    assert "birth probe" in positive_reference_definition
+    assert "学習後レンダーの使用は明示禁止" in positive_reference_definition
+
+
+def test_fix27_negative_reference_definition_pins_birth_probe_timing() -> None:
+    data = _valid_metric_space_doc()
+    negative_reference_definition = data["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    assert "birth probe" in negative_reference_definition
+
+
+def test_fix27_validator_rejects_positive_reference_definition_reproduction_case() -> None:
+    """指摘の再現例そのもの: 旧文言「同一 founder F 自身の再レンダー。」は
+    5マーカーのいずれも含まない。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["positive_reference_gate"][
+        "positive_reference_definition"
+    ] = "同一 founder F 自身の再レンダー。"
+    with pytest.raises(m.Run9ValidationError, match="positive_reference_definition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+_POSITIVE_REFERENCE_MARKER_PHRASES: Dict[str, str] = {
+    "専用": "専用の追加レンダー",
+    "reference_render(F) 自身ではなく": "reference_render(F) 自身ではなく",
+    "いずれでもない": "C0 母集団のいずれでもない",
+    "birth probe": "birth probe 時に生成する",
+    "学習後レンダーの使用は明示禁止": "学習後レンダーの使用は明示禁止",
+}
+
+
+@pytest.mark.parametrize("missing_marker", list(_POSITIVE_REFERENCE_MARKER_PHRASES))
+def test_fix27_validator_rejects_positive_reference_definition_missing_one_marker(
+    missing_marker: str,
+) -> None:
+    """5マーカーのうち1つだけを個別に欠落させ、他4件は残した文言でも拒否
+    されることを確認する（各マーカーが独立に enforce されていることの
+    確認 — 全マーカー一括欠落だけでは他マーカーのチェックがショート
+    サーキットで通過していないかを見分けられない）。"""
+    doc = _valid_metric_space_doc()
+    included = [
+        phrase
+        for marker, phrase in _POSITIVE_REFERENCE_MARKER_PHRASES.items()
+        if marker != missing_marker
+    ]
+    doc["calibration"]["validity_gates"]["positive_reference_gate"]["positive_reference_definition"] = (
+        "positive_reference(F) = " + "。".join(included) + "。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="positive_reference_definition"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix27_validator_rejects_negative_reference_definition_missing_timing() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ] = (
+        "他方 founder のレンダー（PJS は teacher であり RUN9 Identity anchor 空間から構造的に"
+        "排除済み — negative reference としてのみ利用する）。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="generation timing"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix27_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認（Fix 25 と共通の repin — 同ラウンドで両方改訂）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第11巡 Fix 28（P1）: 校正距離を
+# identity_feature.level_normalization が定義する正規化 feature 基準へ統一
+# する。旧 calibration.distance_unit.formula は feature 定義がゲイン不変
+# （Fix 25）になった後も raw な mean_voiced_log_sp ベクトルへ直接 Euclidean
+# を適用しており、ハーネスが pin どおりに計算すると dynamics のみのゲイン
+# 変化が再び STABLE/SHIFTED を反転させ得た（metric_version 0.3 のゲイン
+# 不変の主張と矛盾）。
+# ---------------------------------------------------------------------------
+
+
+def test_fix28_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix28_distance_unit_formula_uses_normalized_feature_call() -> None:
+    data = _valid_metric_space_doc()
+    formula = data["calibration"]["distance_unit"]["formula"]
+    assert "feature(reference_render(F))" in formula
+    assert "feature(take_i(F))" in formula
+    assert "mean_voiced_log_sp" not in formula
+
+
+def test_fix28_distance_unit_formula_references_level_normalization_definition() -> None:
+    """定義の重複記載ではなく参照で束縛されていることを確認する。"""
+    data = _valid_metric_space_doc()
+    formula = data["calibration"]["distance_unit"]["formula"]
+    assert "level_normalization" in formula
+
+
+def test_fix28_calibration_section_has_no_remaining_raw_vector_reference() -> None:
+    """calibration 節全体を通じて raw な mean_voiced_log_sp への直接参照が
+    残っていないことを確認する（指摘②: 他箇所への残存確認）。"""
+    data = _valid_metric_space_doc()
+    calibration_text = json.dumps(data["calibration"], ensure_ascii=False)
+    assert "mean_voiced_log_sp" not in calibration_text
+
+
+def test_fix28_worked_example_disclaimer_already_notes_normalized_distances() -> None:
+    """worked_example は Fix 25 時点で既に『距離はすべて正規化 feature 間の
+    Euclidean』相当の注記を保持しているため、Fix 28 では追加改訂不要
+    （指摘②の worked_example 免除条件を満たすことの確認）。"""
+    data = _valid_metric_space_doc()
+    disclaimer = data["calibration"]["worked_example"]["disclaimer"]
+    assert "level_normalization" in disclaimer
+    assert "raw ベクトル距離ではない" in disclaimer
+
+
+def test_fix28_validator_rejects_formula_regression_to_raw_vector_distance() -> None:
+    """指摘の再現例そのもの: raw mean_voiced_log_sp ベクトルへの直接
+    Euclidean への逆行を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["distance_unit"]["formula"] = (
+        "d_i(F) = euclidean(mean_voiced_log_sp(reference_render(F)), "
+        "mean_voiced_log_sp(take_i(F)))"
+    )
+    with pytest.raises(m.Run9ValidationError, match="normalized feature"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix28_validator_rejects_formula_missing_level_normalization_reference() -> None:
+    """feature(...) 呼び出し形式であっても、level_normalization への参照が
+    欠落した文言（定義を暗黙のうちに別のものへすり替え得る）は拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["distance_unit"]["formula"] = (
+        "d_i(F) = euclidean(feature(reference_render(F)), feature(take_i(F)))"
+    )
+    with pytest.raises(m.Run9ValidationError, match="level_normalization"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix28_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 28 の formula 改訂後、`metric_space_sha` は
+    `identity_metric_space.json` の正規形 sha256 を再計算した値と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix28_domain_metric_space_sha_differs_from_pre_fix28_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 28 の formula 改訂により
+    metric_space_sha が Fix 27 時点の旧値から更新されていることを確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_fix28_sha = "196de131cbe50ed71e93254ae89175be7c92f878e720dfc3a28b916b2ff2ef62"
+    assert domain_raw["metric_space_sha"] != old_pre_fix28_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第12巡 Fix 29（P1）: 実測 reference の循環
+# provenance 解消。reference_example は procedure-only の恒久 pin へ改訂し、
+# 実測値の記録先を出生後アーティファクト（RUN9_CONTRACT.yaml の post-run
+# pin `artifact_manifest_sha` 配下）へ切り出す。旧 status
+# PENDING_BIRTH_PROBE の非対称ルール（PENDING 中のみ value null 許容）は
+# 反転し、新 status では value は常に null が正・null 以外は拒否する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix29_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix29_reference_example_status_is_procedure_only_literal() -> None:
+    data = _valid_metric_space_doc()
+    assert (
+        data["reference_example"]["status"]
+        == "PROCEDURE_ONLY_VALUE_RECORDED_IN_POST_BIRTH_ARTIFACT"
+    )
+    assert data["reference_example"]["status"] != "PENDING_BIRTH_PROBE"
+
+
+def test_fix29_reference_example_value_is_permanently_null() -> None:
+    data = _valid_metric_space_doc()
+    assert data["reference_example"]["value"] is None
+
+
+def test_fix29_reference_example_procedure_states_circular_provenance_mechanism() -> None:
+    """循環 provenance の機序（metric_space_sha → content_digest() →
+    genome_id）が procedure 文言に明記されていることを確認する。"""
+    data = _valid_metric_space_doc()
+    procedure = data["reference_example"]["procedure"]
+    assert "metric_space_sha" in procedure
+    assert "content_digest" in procedure
+    assert "genome_id" in procedure
+    assert "循環" in procedure
+
+
+def test_fix29_reference_example_procedure_states_post_birth_artifact_destination() -> None:
+    """実測値の記録先が出生後アーティファクト（RUN9_CONTRACT.yaml の
+    post-run pin artifact_manifest_sha 配下）であることが明記されている
+    ことを確認する。"""
+    data = _valid_metric_space_doc()
+    procedure = data["reference_example"]["procedure"]
+    assert "artifact_manifest_sha" in procedure
+    assert "post-birth artifact" in procedure or "出生後アーティファクト" in procedure
+
+
+def test_fix29_reference_example_procedure_states_never_written_back() -> None:
+    data = _valid_metric_space_doc()
+    procedure = data["reference_example"]["procedure"]
+    assert "書き込まない" in procedure or "一切書き込まない" in procedure
+
+
+def test_fix29_distance_unit_reference_render_definition_no_longer_promises_write_back() -> None:
+    """calibration.distance_unit.reference_render_definition も、実測値を
+    この manifest へ記録する旨の旧文言（書き戻しを前提とした表現）を残して
+    いないことを確認する。"""
+    data = _valid_metric_space_doc()
+    reference_render_definition = data["calibration"]["distance_unit"][
+        "reference_render_definition"
+    ]
+    assert "procedure-only" in reference_render_definition or (
+        "書き込まない" in reference_render_definition
+    )
+
+
+def test_fix29_validator_rejects_reference_example_status_old_pending_literal() -> None:
+    """指摘の直接再現例: 旧 status PENDING_BIRTH_PROBE への逆行を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["reference_example"]["status"] = "PENDING_BIRTH_PROBE"
+    with pytest.raises(m.Run9ValidationError, match="status must be exactly"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix29_validator_rejects_reference_example_value_non_null() -> None:
+    doc = _valid_metric_space_doc()
+    doc["reference_example"]["value"] = {"mean_bin_0": 0.021}
+    with pytest.raises(m.Run9ValidationError, match="value must remain permanently null"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix29_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 29/30/31 の文言改訂後、`metric_space_sha` は
+    `identity_metric_space.json` の正規形 sha256 を再計算した値と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第12巡 Fix 30（P1）: negative reference の
+# 単一ソース化。negative_reference_definition は「他方 founder の
+# reference_render のみ」と定めつつ、同節内で PJS を negative reference と
+# して使う旨の矛盾節が残存していた（PJS は構造的に Identity anchor 空間から
+# 排除済みのはずなのに、直後で negative reference としての利用を肯定する
+# 自己矛盾）。旧 validator は birth probe マーカーしか見ておらず、この
+# 内容矛盾を素通りさせていた。
+# ---------------------------------------------------------------------------
+
+
+def test_fix30_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix30_negative_reference_definition_states_pjs_non_use() -> None:
+    data = _valid_metric_space_doc()
+    negative_reference_definition = data["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    assert "PJS" in negative_reference_definition
+    assert "negative reference としても使用しない" in negative_reference_definition
+
+
+def test_fix30_negative_reference_definition_no_longer_contains_contradictory_phrase() -> None:
+    data = _valid_metric_space_doc()
+    negative_reference_definition = data["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    assert "negative reference としてのみ利用する" not in negative_reference_definition
+
+
+def test_fix30_negative_reference_definition_single_sources_from_other_founder_reference_render() -> None:
+    data = _valid_metric_space_doc()
+    negative_reference_definition = data["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    assert "他方 founder" in negative_reference_definition
+    assert "reference_render" in negative_reference_definition
+
+
+def test_fix30_validator_rejects_negative_reference_definition_reintroducing_contradictory_phrase() -> (
+    None
+):
+    """指摘の直接再現例: 「構造的に排除済み」と述べつつ直後で「negative
+    reference としてのみ利用する」と矛盾させる旧文言への逆行を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ] = (
+        "negative_reference(F) = 他方 founder F' の reference_render(F')（birth probe 時に生成）。"
+        "PJS は teacher であり RUN9 Identity anchor 空間から構造的に排除済み — negative reference "
+        "としても使用しない。ただし旧文言は negative reference としてのみ利用する、とも読めた。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="old contradictory phrase"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix30_validator_rejects_negative_reference_definition_pjs_mention_without_non_use_marker() -> (
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ] = (
+        "negative_reference(F) = 他方 founder F' の reference_render(F')（birth probe 時に生成）。"
+        "PJS is the teacher and is excluded from the anchor space."
+    )
+    with pytest.raises(m.Run9ValidationError, match="mentions PJS but does not state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix30_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認（Fix 29/31 と共通の repin — 同ラウンドで3件改訂）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第12巡 Fix 31（P1）: identity_feature の
+# 定義域（scope）を評価レンダー全体へ拡張する。旧 scope は neutral P0/C0
+# レンダー限定だったが、calibration.decision_rule は post-practice/
+# post-education レンダーの d(r) を要求しており、厳密実装は feature を
+# 計算できず、寛容実装は pinned scope を無視するしかない契約矛盾を抱えて
+# いた。「feature の計算可能域」と「校正・参照に使える母集団（neutral 限定）」
+# を区別して明文化する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix31_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix31_identity_feature_scope_states_evaluated_renders_extension() -> None:
+    data = _valid_metric_space_doc()
+    scope = data["identity_feature"]["scope"]
+    assert "全ての identity 評価対象レンダー" in scope
+    assert "r0" in scope
+    assert "r_practice" in scope
+    assert "r_taught" in scope
+
+
+def test_fix31_identity_feature_scope_distinguishes_computable_domain_from_neutral_population() -> None:
+    data = _valid_metric_space_doc()
+    scope = data["identity_feature"]["scope"]
+    assert "計算可能域" in scope
+    assert "neutral" in scope
+    assert "校正母集団" in scope or "reference" in scope
+
+
+def test_fix31_identity_feature_definition_no_longer_restricted_to_p0_probe() -> None:
+    """指摘の直接事例: definition の冒頭が「P0 中立 identity probe の」に
+    固定されたままだと、C0/C1/r_practice/r_taught レンダーへの feature(x)
+    適用（calibration.distance_unit.formula が要求する）と矛盾する。"""
+    data = _valid_metric_space_doc()
+    definition = data["identity_feature"]["definition"]
+    assert "P0 中立 identity probe の voiced フレームにおける" not in definition
+    assert "mean(v(x))" in definition  # Fix 25 のゲイン不変式は維持される
+
+
+def test_fix31_validator_rejects_scope_missing_evaluated_renders_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["scope"] = (
+        "identity_feature の計算可能域は neutral な r0 校正母集団に限定する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="identity_feature.scope must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix31_validator_rejects_scope_missing_neutral_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["scope"] = (
+        "identity_feature の計算可能域は全ての identity 評価対象レンダー（r0/r_practice/"
+        "r_taught）へ拡張する。校正母集団は限定的なレンダーのみに絞る。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="identity_feature.scope must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix31_validator_rejects_scope_missing_distinction_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["scope"] = (
+        "全ての identity 評価対象レンダー（r0/r_practice/r_taught）の voiced フレームを対象と"
+        "する。校正母集団は neutral なレンダーのみに絞る。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="identity_feature.scope must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix31_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認（Fix 29/30 と共通の repin — 同ラウンドで3件改訂）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix31_domain_metric_space_sha_differs_from_pre_fix29_round_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 29/30/31（第12巡）の3件改訂に
+    より metric_space_sha が Fix 28 時点（第11巡）の旧値から更新されている
+    ことを確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round12_sha = "b135ca1434c89fc981e994b52794c50675b44a074cdb7e14b68d4de148be93df"
+    assert domain_raw["metric_space_sha"] != old_pre_round12_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第13巡 Fix 32（P1）: C1 ゲートの統計的欠陥の
+# 是正。C1 のアダプター効果が完全にゼロのとき D_C0(F)/D_C1(F) は同一
+# replay-noise 分布からの独立標本であり、経験 P95 同士（尾側 vs 尾側）は
+# 交換可能なため、旧ゲート `P95(D_C1(F)) <= theta_cal(F)` はゼロ効果下でも
+# 約1/2の確率で偽って不成立となり founder を不当に INVALID 化していた。
+# ゲート条件を分布中心（P50）vs 尾側（theta_cal(F)）の比較へ改訂する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix32_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix32_c1_gate_condition_is_median_vs_tail_comparison() -> None:
+    data = _valid_metric_space_doc()
+    condition = data["calibration"]["validity_gates"]["c1_gate"]["condition"]
+    assert condition == "P50(D_C1(F)) <= theta_cal(F)"
+    assert "P95(D_C1(F))" not in condition
+
+
+def test_fix32_worked_example_uses_d_c1_p50_key_not_d_c1_p95() -> None:
+    data = _valid_metric_space_doc()
+    worked_example = data["calibration"]["worked_example"]
+    assert "d_c1_p50" in worked_example
+    assert "d_c1_p95" not in worked_example
+    assert isinstance(worked_example["d_c1_p50"], (int, float))
+
+
+def test_fix32_metric_version_bumped_to_0_4() -> None:
+    """C1 ゲートの校正規則変更（式は不変だが判定意味論が変わる）に伴い
+    metric_version が run9-identity-metric/0.3 から 0.4 へ bump された歴史的
+    事実を確認する（現行値は第15巡 Fix 35 の入力正規化導入でさらに 0.5 へ
+    進んでいるため、ここでは 0.3 への逆行がないことのみを confirm し、現行の
+    正確な値は `test_fix35_metric_version_bumped_to_0_5` が担う）。"""
+    data = _valid_metric_space_doc()
+    assert data["metric_version"] != "run9-identity-metric/0.3"
+
+
+def test_fix32_d_c1_population_binds_p50_to_percentile_method_by_reference() -> None:
+    data = _valid_metric_space_doc()
+    d_c1_population = data["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"]
+    assert "percentile_method" in d_c1_population
+
+
+def test_fix32_d_c1_population_states_zero_effect_exchangeability_rationale() -> None:
+    data = _valid_metric_space_doc()
+    d_c1_population = data["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"]
+    assert "交換可能" in d_c1_population
+
+
+def test_fix32_validator_rejects_c1_gate_condition_regression_to_old_p95() -> None:
+    """指摘の直接再現例: 新条件マーカーは満たしつつ、旧尾側 vs 尾側条件
+    （統計的欠陥のあった式）の文言が併存する repin を拒否する。"""
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["condition"] = (
+        "P50(D_C1(F)) <= theta_cal(F)（旧 P95(D_C1(F)) <= theta_cal(F) から改訂）"
+    )
+    with pytest.raises(m.Run9ValidationError, match="must not regress to the old tail-vs-tail"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix32_validator_rejects_c1_gate_condition_missing_p50_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["condition"] = "D_C1(F) <= theta_cal(F)"
+    with pytest.raises(m.Run9ValidationError, match="must be the median-vs-tail comparison"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix32_validator_rejects_d_c1_population_missing_percentile_method_reference() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"] = (
+        "D_C1(F) = founder F 自身の C1 枝テイクと founder F 自身の reference_render(F) との距離"
+        "標本のみで構成する（pooling は不採用、自己比較は禁止する）。P50 は交換可能な旧 P95 の"
+        "欠陥を是正する。テイク数は RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder "
+        "を参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="must bind P50's quantile method"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix32_validator_rejects_d_c1_population_missing_exchangeability_rationale() -> None:
+    doc = _valid_metric_space_doc()
+    doc["calibration"]["validity_gates"]["c1_gate"]["d_c1_population"] = (
+        "D_C1(F) = founder F 自身の C1 枝テイクと founder F 自身の reference_render(F) との距離"
+        "標本のみで構成する（pooling は不採用、自己比較は禁止する）。P50 は "
+        "calibration.freeze_threshold.percentile_method が定める線形補間分位で算出する。テイク数は "
+        "RUN9_CONTRACT.yaml の interventions.c1_sham_takes_per_founder を参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="must state the zero-effect"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix32_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認（Fix 33 と共通の repin — 同ラウンドで2件改訂）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第13巡 Fix 33（P1）: PJS confuser（C3）評価
+# 経路の復元。DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §14
+# C3「PJS Confuser」は PJS を Identity confuser としてのみ評価へ入れ、
+# Founder が PJS へ接近していないことを確認することを要求していたが、第12巡
+# Fix 30 の PJS 全面不使用宣言 + founder revision 限定 scope により、この
+# 評価経路が消えていた。新設 `confuser_control` 節（role/metric/
+# pjs_reference_definition/evaluation）としてこの評価経路を復元する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix33_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix33_schema_bumped_to_1_2() -> None:
+    """confuser_control キー追加に伴い schema が run9-identity-metric-space/1.2
+    へ minor bump されていることを確認する。"""
+    data = _valid_metric_space_doc()
+    assert data["schema"] == "run9-identity-metric-space/1.2"
+    assert m.SCHEMA_IDENTITY_METRIC_SPACE == "run9-identity-metric-space/1.2"
+
+
+def test_fix33_confuser_control_section_present_with_required_keys() -> None:
+    data = _valid_metric_space_doc()
+    assert "confuser_control" in data
+    confuser = data["confuser_control"]
+    assert set(confuser.keys()) == {"role", "metric", "pjs_reference_definition", "evaluation"}
+
+
+def test_fix33_confuser_control_role_states_non_use_and_confuser_only_distinction() -> None:
+    data = _valid_metric_space_doc()
+    role = data["confuser_control"]["role"]
+    assert "negative reference としては使用しない" in role
+    assert "confuser control としてのみ使用する" in role
+    assert "PJS" in role
+
+
+def test_fix33_confuser_control_metric_binds_to_level_normalization_feature() -> None:
+    """独自の距離式を新設せず identity_feature.level_normalization の
+    feature(x) を参照していることを確認する（distance_unit の Fix 28 と同型
+    の規律）。"""
+    data = _valid_metric_space_doc()
+    metric = data["confuser_control"]["metric"]
+    assert "feature(" in metric
+    assert "level_normalization" in metric
+    assert "euclidean" in metric.lower()
+
+
+def test_fix33_confuser_control_pjs_reference_definition_is_procedure_only() -> None:
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "事前登録手続き" in pjs_reference_definition
+    assert "artifact_manifest_sha" in pjs_reference_definition
+
+
+def test_fix33_confuser_control_evaluation_states_no_aggregate_score_and_calibration_independence() -> (
+    None
+):
+    data = _valid_metric_space_doc()
+    evaluation = data["confuser_control"]["evaluation"]
+    assert "PASS/FAIL" in evaluation
+    assert "calibration_status" in evaluation
+    assert "独立" in evaluation
+
+
+def test_fix33_identity_feature_scope_extended_to_confuser_control_pjs_reference() -> None:
+    data = _valid_metric_space_doc()
+    scope = data["identity_feature"]["scope"]
+    assert "confuser_control" in scope
+    assert "pjs_reference" in scope
+
+
+def test_fix33_negative_reference_definition_cross_references_confuser_control() -> None:
+    """Fix 30 の non-use 宣言（校正ゲート専用スコープ）と Fix 33 の
+    confuser_control（別スコープ）が矛盾しないよう、negative_reference_
+    definition 側にも相互参照が追記されていることを確認する。"""
+    data = _valid_metric_space_doc()
+    negative_reference_definition = data["calibration"]["validity_gates"]["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    assert "confuser_control" in negative_reference_definition
+    # Fix 30 のマーカーは引き続き健在（Fix 33 が上書きしていないこと）。
+    assert "negative reference としても使用しない" in negative_reference_definition
+    assert "negative reference としてのみ利用する" not in negative_reference_definition
+
+
+def test_fix33_validator_rejects_confuser_control_deletion() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["confuser_control"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_confuser_control_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(m.Run9ValidationError, match="confuser_control has unknown key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_confuser_control_missing_key() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["confuser_control"]["evaluation"]
+    with pytest.raises(m.Run9ValidationError, match="confuser_control missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_role_missing_non_use_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["role"] = (
+        "PJS は confuser control としてのみ使用する（本節の距離計算にのみ登場する）。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="confuser_control.role must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_role_missing_confuser_only_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["role"] = (
+        "PJS は negative reference としては使用しない（校正ゲートには登場しない）。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="confuser_control.role must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_metric_missing_feature_call_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["metric"] = (
+        "d_pjs(r) = euclidean(mean_voiced_log_sp(r), mean_voiced_log_sp(pjs_reference))。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="confuser_control.metric must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_metric_missing_level_normalization_reference() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["metric"] = "d_pjs(r) = euclidean(feature(r), feature(pjs_reference))。"
+    with pytest.raises(m.Run9ValidationError, match="confuser_control.metric must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_evaluation_missing_no_aggregate_score_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["evaluation"] = (
+        "per-founder で d_pjs(r_learned) と d_pjs(r0) を比較し、系統的減少を evidence として報告"
+        "する。本評価は calibration_status(F) から独立である。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="must state that no aggregate score"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_evaluation_missing_calibration_independence_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["evaluation"] = (
+        "per-founder で d_pjs(r_learned) と d_pjs(r0) を比較し、系統的減少を evidence として報告"
+        "する。総合スコア化・PASS/FAIL 化はしない。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="must state its independence from calibration_status"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_validator_rejects_identity_feature_scope_missing_confuser_control_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["identity_feature"]["scope"] = (
+        "identity_feature の計算可能域は全ての identity 評価対象レンダー（r0/r_practice/"
+        "r_taught）へ拡張する。校正母集団・reference は neutral な r0 限定のまま。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="identity_feature.scope must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix33_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認（Fix 32 と共通の repin — 同ラウンドで2件改訂）。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix33_domain_metric_space_sha_differs_from_pre_round13_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 32/33（第13巡）の2件改訂により
+    metric_space_sha が Fix 31 時点（第12巡）の旧値から更新されていることを
+    確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round13_sha = "3c79a742627530b80a43cd6d70e601cd91cc7013c588780bc3f6a0bee8dc0fb3"
+    assert domain_raw["metric_space_sha"] != old_pre_round13_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第14巡 Fix 34（P1）: pjs_reference の学習前
+# 決定論的凍結。旧 pjs_reference_definition は「事前登録手続きで単一の
+# 参照レンダー/特徴を選ぶ」としか言っておらず、テイク index・digest・生成
+# 条件・決定論的集約規則を指定していなかった。選定値は post-run の
+# artifact_manifest_sha 配下にしか記録されないため、評価者が学習後レンダー
+# を観察したあとで有利な PJS テイクを選定でき、d_pjs(r_learned) の減少
+# 有無 = no-leakage evidence を汚染し得た。単一テイク選択を全廃し、
+# 決定論的コーパス全体集約（辞書順列挙 → 同一抽出手続き適用 → 機械的
+# voiced_mask 除外 → 要素ごとの算術平均）へ置換した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix34_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix34_pjs_reference_definition_states_deterministic_corpus_aggregation_markers() -> None:
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "辞書順" in pjs_reference_definition
+    assert "算術平均" in pjs_reference_definition
+    assert "expanded_corpus_identity_sha256" in pjs_reference_definition
+    assert "voiced_mask" in pjs_reference_definition
+    assert "事後選択" in pjs_reference_definition
+    # procedure-only の恒久 pin であること（Fix 29 と同型の一方向 provenance）
+    # を示す既存マーカーは Fix 34 改訂後も健在。
+    assert "事前登録手続き" in pjs_reference_definition
+    assert "artifact_manifest_sha" in pjs_reference_definition
+
+
+def test_fix34_pjs_reference_definition_does_not_regress_to_single_take_selection() -> None:
+    """現ファイルが旧「単一の参照レンダー」選択方式の文言を含まないこと
+    （言い換えでの再導入がないこと）を確認する。"""
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "単一の参照レンダー" not in pjs_reference_definition
+
+
+def test_fix34_validator_rejects_single_take_selection_regression() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference = PJS 教材コーパスから事前登録手続きで固定する単一の参照レンダー/特徴。"
+        "実測値は出生後アーティファクト側（artifact_manifest_sha 配下）に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="must not regress to single-take PJS reference selection"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_validator_rejects_pjs_reference_definition_missing_lexicographic_enumeration_marker() -> (
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は expanded_corpus_identity_sha256 が pin する PJS expanded corpus 内の"
+        "全ファイルへ extraction_procedure と identity_feature（voiced_mask 除外込み）を適用し、"
+        "feature ベクトルを要素ごとの算術平均で集約する。事後選択は構造的に不可能。事前登録手続き"
+        "として artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_validator_rejects_pjs_reference_definition_missing_arithmetic_mean_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は expanded_corpus_identity_sha256 が pin する PJS expanded corpus 内の"
+        "全ファイルを相対パスの辞書順で列挙し、extraction_procedure と identity_feature"
+        "（voiced_mask 除外込み）を適用したうえで集約する。事後選択は構造的に不可能。事前登録"
+        "手続きとして artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_validator_rejects_pjs_reference_definition_missing_corpus_pin_field_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は PJS expanded corpus 内の全ファイルを相対パスの辞書順で列挙し、"
+        "extraction_procedure と identity_feature（voiced_mask 除外込み）を適用し、feature "
+        "ベクトルを要素ごとの算術平均で集約する。事後選択は構造的に不可能。事前登録手続きとして "
+        "artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_validator_rejects_pjs_reference_definition_missing_voiced_mask_exclusion_marker() -> (
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は expanded_corpus_identity_sha256 が pin する PJS expanded corpus 内の"
+        "全ファイルを相対パスの辞書順で列挙し、extraction_procedure と identity_feature を"
+        "適用したうえで feature ベクトルを要素ごとの算術平均で集約する。事後選択は構造的に"
+        "不可能。事前登録手続きとして artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_validator_rejects_pjs_reference_definition_missing_post_hoc_selection_impossible_marker() -> (  # noqa: E501
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は expanded_corpus_identity_sha256 が pin する PJS expanded corpus 内の"
+        "全ファイルを相対パスの辞書順で列挙し、extraction_procedure と identity_feature"
+        "（voiced_mask 除外込み）を適用し、feature ベクトルを要素ごとの算術平均で集約する。"
+        "事前登録手続きとして artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix34_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 34 の pjs_reference_definition 改訂後、
+    `metric_space_sha` は正規形 sha256 と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix34_domain_metric_space_sha_differs_from_pre_round14_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 34（第14巡）の改訂により
+    metric_space_sha が Fix 32/33 時点（第13巡）の旧値から更新されている
+    ことを確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round14_sha = "747113488043b944587eb7de1cf7f175193178e9ba6fbe034c90646b54a1e7d1"
+    assert domain_raw["metric_space_sha"] != old_pre_round14_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第15巡 Fix 35（P1）: PJS コーパスの metric
+# sample rate への決定論的正規化。corpus_inventory_pjs.json によれば PJS の
+# 203 WAV は全て 48000 Hz である一方、旧 extraction_procedure.sample_rate は
+# 44100 Hz を pin するのみで再サンプル手続きが存在せず、WORLD をネイティブ
+# 適用すればスペクトル bin の対応周波数が食い違い、未凍結の再サンプルなら
+# 実装者間で結果が再現不能になる（いずれの経路でも confuser_control の
+# d_pjs(r) が壊れる）。着手前調査で引用一次ソース donor_bank.py:190-196
+# analyze_donor_world() が内部リサンプルを行わないことを確認したうえで、
+# extraction_procedure.sample_rate_normalization（scipy.signal.resample_poly
+# による 44100/48000 の既約有理比変換）を新規に決定論的 pin した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix35_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix35_metric_version_bumped_to_0_5() -> None:
+    """入力正規化ステップの導入（feature 値を変え得る抽出手続きの意味追加）
+    に伴い metric_version が run9-identity-metric/0.5 へ bump されている
+    ことを確認する（Fix 25/28/32 と同型の「抽出手続き変更 = metric の意味
+    変更」判断）。"""
+    data = _valid_metric_space_doc()
+    assert data["metric_version"] == "run9-identity-metric/0.5"
+
+
+def test_fix35_schema_unchanged_at_1_2() -> None:
+    """sample_rate_normalization の追加は extraction_procedure 配下に収まる
+    キー追加のため schema は run9-identity-metric-space/1.2 のまま据え置き
+    であることを確認する。"""
+    data = _valid_metric_space_doc()
+    assert data["schema"] == "run9-identity-metric-space/1.2"
+
+
+def test_fix35_extraction_procedure_sample_rate_normalization_present_with_required_keys() -> None:
+    data = _valid_metric_space_doc()
+    sample_rate_normalization = data["extraction_procedure"]["sample_rate_normalization"]
+    assert set(sample_rate_normalization.keys()) == {
+        "role", "investigation_finding", "rule", "applies_to", "procedure_only",
+    }
+
+
+def test_fix35_sample_rate_normalization_rule_states_deterministic_ratio() -> None:
+    """48kHz 導出例マーカー（Fix 36 で「固定比の rule」から「一般導出式の
+    適用例」へ意味づけを更新済み — 具体文字列自体は不変）。"""
+    data = _valid_metric_space_doc()
+    rule = data["extraction_procedure"]["sample_rate_normalization"]["rule"]
+    assert "resample_poly(x, up=147, down=160)" in rule
+    assert "147/160" in rule
+
+
+def test_fix36_sample_rate_normalization_rule_states_general_derivation_formula() -> None:
+    """Fix 36: rule が固定比ではなく native rate ごとの一般導出式
+    （g = gcd(44100, native_sr) → up=44100//g, down=native_sr//g）を
+    述べていることの直接確認。"""
+    data = _valid_metric_space_doc()
+    rule = data["extraction_procedure"]["sample_rate_normalization"]["rule"]
+    assert "gcd(44100, native_sr)" in rule
+    assert "up=44100//g" in rule
+    assert "down=native_sr//g" in rule
+
+
+def test_fix35_sample_rate_normalization_applies_to_states_general_rule_not_pjs_specific() -> None:
+    data = _valid_metric_space_doc()
+    applies_to = data["extraction_procedure"]["sample_rate_normalization"]["applies_to"]
+    assert "あらゆる入力" in applies_to
+    assert "PJS corpus に限定しない" in applies_to
+
+
+def test_fix35_sample_rate_normalization_investigation_finding_states_no_fixed_sr_load() -> None:
+    """着手前調査の実測結果（参照実装に固定 sr ロードが無い）が記録されて
+    いることの直接確認。"""
+    data = _valid_metric_space_doc()
+    finding = data["extraction_procedure"]["sample_rate_normalization"]["investigation_finding"]
+    assert "donor_bank.py" in finding
+    assert "analyze_donor_world" in finding
+
+
+def test_fix35_pjs_reference_definition_cross_references_sample_rate_normalization() -> None:
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "sample_rate_normalization" in pjs_reference_definition
+
+
+def test_fix35_validator_rejects_sample_rate_normalization_deletion() -> None:
+    """旧「変換規則なし」状態への逆行拒否の直接確認。"""
+    doc = _valid_metric_space_doc()
+    del doc["extraction_procedure"]["sample_rate_normalization"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_sample_rate_normalization_unknown_key() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["extra_unexpected_field"] = "sneaked in"
+    with pytest.raises(
+        m.Run9ValidationError, match=r"sample_rate_normalization has unknown key.*extra_unexpected_field"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_sample_rate_normalization_missing_key() -> None:
+    doc = _valid_metric_space_doc()
+    del doc["extraction_procedure"]["sample_rate_normalization"]["procedure_only"]
+    with pytest.raises(
+        m.Run9ValidationError, match=r"sample_rate_normalization missing required key.*procedure_only"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_rule_missing_ratio_call_marker() -> None:
+    """一般導出式は述べているが 48kHz 導出例の呼び出し形が欠落する repin を
+    拒否する（Fix 36: 導出例チェックは一般式チェックとは独立の第2段
+    チェックであることの確認）。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
+        "native sr が 44100 Hz と異なる入力は、g = gcd(44100, native_sr) として "
+        "scipy.signal.resample_poly(x, up=44100//g, down=native_sr//g) を適用し 44100 Hz へ"
+        "決定論的に変換する。導出例: native 48000 Hz は既約有理比 147/160 となる。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="must state the worked 48000 Hz derivation example"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_rule_missing_ratio_fraction_marker() -> None:
+    """有理比呼び出しの up/down 数値は書かれているが 147/160 表記が欠落する
+    repin を拒否する（部分一致だけでは決定論性の主張として不十分）。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
+        "native sr が 44100 Hz と異なる入力は、g = gcd(44100, native_sr) として "
+        "scipy.signal.resample_poly(x, up=44100//g, down=native_sr//g) を適用し 44100 Hz へ"
+        "決定論的に変換する。導出例: native 48000 Hz は scipy.signal.resample_poly(x, up=147, "
+        "down=160) となる。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="must state the worked 48000 Hz derivation example"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix36_validator_rejects_general_formula_missing_gcd_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
+        "native sr が 44100 Hz と異なる入力は scipy.signal.resample_poly(x, up=44100//g, "
+        "down=native_sr//g)（g は既約化に使う共通因数）を適用し 44100 Hz へ決定論的に変換する。"
+        "導出例: native 48000 Hz は既約有理比 147/160、すなわち "
+        "scipy.signal.resample_poly(x, up=147, down=160) となる。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="must state the general per-native-rate ratio derivation formula",
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix36_validator_rejects_general_formula_missing_up_down_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
+        "native sr が 44100 Hz と異なる入力は g = gcd(44100, native_sr) から導かれる既約有理比で"
+        "scipy.signal.resample_poly を適用し 44100 Hz へ決定論的に変換する。導出例: native "
+        "48000 Hz は既約有理比 147/160、すなわち scipy.signal.resample_poly(x, up=147, "
+        "down=160) となる。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="must state the general per-native-rate ratio derivation formula",
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix36_validator_rejects_regression_to_pre_fix36_fixed_ratio_only_rule() -> None:
+    """負例（Fix 36 の核心要求）: 一般導出式を欠き固定 147/160 比のみを pin
+    していた第15巡 Fix 35 時点の rule 文言そのものへの逆行を拒否する —
+    47/160 という導出例の値自体は残っていても、native rate ごとの導出式
+    （gcd(44100, native_sr) / up=44100//g / down=native_sr//g）が無ければ、
+    このルールは『あらゆる native sr ≠ 44100 Hz の入力に適用する一般規則』
+    という applies_to の主張と矛盾したまま repin されてしまう。"""
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["rule"] = (
+        "native sr が 44100 Hz と異なる入力は、extraction_procedure（f0_estimation 以降）を"
+        "適用する前の入力正規化ステップとして、soundfile 直読みで得た native サンプル列 x に "
+        "scipy.signal.resample_poly(x, up=147, down=160) を適用し 44100 Hz へ決定論的に変換する"
+        "（44100 Hz / 48000 Hz の既約有理比 = gcd(44100,48000)=300 → 147/160。"
+        "load_donor_24k_bytes() の up/down 明示指定パターンと同型 — RUN9 側で独自に再実装しない）。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="must state the general per-native-rate ratio derivation formula",
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_applies_to_missing_general_rule_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["applies_to"] = (
+        "PJS corpus に限定しない一般規則。native 44.1kHz の入力は変換不要。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="sample_rate_normalization.applies_to must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_applies_to_missing_not_pjs_specific_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["extraction_procedure"]["sample_rate_normalization"]["applies_to"] = (
+        "native sr ≠ 44100 Hz のあらゆる入力に適用する一般規則。native 44.1kHz の入力は変換不要。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="sample_rate_normalization.applies_to must state"):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_validator_rejects_pjs_reference_definition_missing_sample_rate_normalization_marker() -> (
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference は expanded_corpus_identity_sha256 が pin する PJS expanded corpus 内の"
+        "全ファイルを相対パスの辞書順で列挙し、extraction_procedure と identity_feature"
+        "（voiced_mask 除外込み）を適用し、feature ベクトルを要素ごとの算術平均で集約する。"
+        "事後選択は構造的に不可能。事前登録手続きとして artifact_manifest_sha 配下に記録する。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="pjs_reference_definition must cross-reference"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix35_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 35 の sample_rate_normalization 追加後、
+    `metric_space_sha` は正規形 sha256 と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix35_domain_metric_space_sha_differs_from_pre_round15_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 35（第15巡）の改訂により
+    metric_space_sha が Fix 34 時点（第14巡）の旧値から更新されていることを
+    確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round15_sha = "7eef67beab1028f205c292a89f84aeab5d042862152284362a0a189d69722283"
+    assert domain_raw["metric_space_sha"] != old_pre_round15_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第16巡 Fix 36（P1）: リサンプル比の native rate
+# からの一般導出。第15巡 Fix 35 の rule は固定 147/160 比を pin していたが、
+# 直後の applies_to が宣言する「native sr ≠ 44100 Hz のあらゆる入力に適用
+# する一般規則」と矛盾していた（例: native 24000 Hz の入力に 147/160 を
+# 適用すると 22050 Hz へ変換され、WORLD には 44100 Hz として扱われて時間軸・
+# 周波数軸と identity 距離が壊れる）。rule を g = gcd(44100, native_sr) から
+# up/down を native rate ごとに機械的に導出する一般導出式へ改訂し、147/160
+# は native 48000 Hz（PJS の全203 WAV）に対する導出例として位置づけ直した。
+# ---------------------------------------------------------------------------
+
+
+def test_fix36_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix36_metric_version_still_0_5() -> None:
+    """内部矛盾（一般規則の宣言と固定比のみの rule）の是正であり feature 値
+    の意味を変えないため、metric_version は Fix 35 時点の run9-identity-
+    metric/0.5 のまま据え置きであることを確認する。"""
+    data = _valid_metric_space_doc()
+    assert data["metric_version"] == "run9-identity-metric/0.5"
+
+
+def test_fix36_schema_still_1_2() -> None:
+    """rule 文言の改訂のみで extraction_procedure 配下のキー集合は不変の
+    ため schema は run9-identity-metric-space/1.2 のまま据え置き。"""
+    data = _valid_metric_space_doc()
+    assert data["schema"] == "run9-identity-metric-space/1.2"
+
+
+def test_fix36_applies_to_still_general_and_not_pjs_specific() -> None:
+    """applies_to（Fix 35 で凍結済みの一般規則宣言）は Fix 36 で無改訂の
+    まま、rule 側がその宣言に整合する内容へ追いついたことを確認する。"""
+    data = _valid_metric_space_doc()
+    applies_to = data["extraction_procedure"]["sample_rate_normalization"]["applies_to"]
+    assert "あらゆる入力" in applies_to
+    assert "PJS corpus に限定しない" in applies_to
+
+
+def test_fix36_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 36 の rule 一般導出式化後、`metric_space_sha`
+    は正規形 sha256 と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix36_domain_metric_space_sha_differs_from_pre_round16_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 36（第16巡）の改訂により
+    metric_space_sha が Fix 35 時点（第15巡）の旧値から更新されていることを
+    確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round16_sha = "7ff07e874a95bbd6224161566068fdf57526218a7f6a6d193b66e6ebedc7b115"
+    assert domain_raw["metric_space_sha"] != old_pre_round16_sha
+
+
+# ---------------------------------------------------------------------------
+# Codex bot レビュー PR #318 第17巡 Fix 37（P1）: PJS reference 集約対象を
+# pin 被覆ファイルへ限定。着手前調査（donor_bank_lab.py corpus_identity_
+# hash() line 192-227 付近）の実測により、①が引用する corpus_sha256 は
+# 各 .lab とその対応 _song.wav のみから決定論的集約された値であり、speech
+# 100 WAV・background 3 WAV は被覆外と判明した。旧②列挙規則（コーパス内の
+# 音声ファイル全件 = 全203 WAV を対象化）はこの被覆外ファイルを pjs_
+# reference の集約対象へ混入させており、未 pin ファイルは corpus_identity_
+# hash() を変えずに pjs_reference・no-leakage evidence を汚染し得る欠陥
+# だった（identity_metric_space.json 旧143行付近）。集約対象を pin 被覆
+# ファイル集合（`_song.wav`）へ限定したことを機械強制する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix37_validator_accepts_current_identity_metric_space_file() -> None:
+    """正例: repin 済みの現ファイルが validator をそのまま通る。"""
+    m.validate_identity_metric_space_manifest(_valid_metric_space_doc())
+
+
+def test_fix37_pjs_reference_definition_states_song_wav_scope_marker() -> None:
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "_song.wav" in pjs_reference_definition
+
+
+def test_fix37_pjs_reference_definition_references_corpus_identity_hash() -> None:
+    """被覆定義の一次ソース（donor_bank_lab.py corpus_identity_hash()）が
+    フィールド参照で明記されていることの直接確認。"""
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "corpus_identity_hash" in pjs_reference_definition
+    assert "donor_bank_lab.py" in pjs_reference_definition
+
+
+def test_fix37_pjs_reference_definition_states_speech_background_exclusion() -> None:
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "混入禁止" in pjs_reference_definition
+    assert "speech" in pjs_reference_definition
+    assert "background" in pjs_reference_definition
+
+
+def test_fix37_pjs_reference_definition_does_not_regress_to_full_corpus_enumeration() -> None:
+    """負例（Fix 37 の核心要求）: 旧②「束縛したコーパス内の音声ファイルを
+    相対パスの辞書順で全件列挙する」（pin 被覆に関係なく全203 WAV を対象化
+    する規則）文言そのものへの逆行を拒否する。"""
+    data = _valid_metric_space_doc()
+    pjs_reference_definition = data["confuser_control"]["pjs_reference_definition"]
+    assert "束縛したコーパス内の音声ファイルを相対パスの辞書順" not in pjs_reference_definition
+
+
+def test_fix37_validator_rejects_regression_to_pre_fix37_full_corpus_enumeration_rule() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference = 単一テイク選択を全廃し、決定論的コーパス集約で学習前に凍結する。①入力"
+        "束縛 — expanded_corpus_identity_sha256 が pin する PJS expanded corpus に束縛する。②"
+        "列挙規則 — 束縛したコーパス内の音声ファイルを相対パスの辞書順（bytewise lexicographic）"
+        "で全件列挙する（乱数・手動選定・任意順は不採用）。③特徴計算 — extraction_procedure."
+        "sample_rate_normalization を適用してから extraction_procedure と identity_feature を"
+        "適用する。④除外規則 — voiced_mask に従い除外する。⑤集約 — 要素ごとの算術平均で集約する。"
+        "⑥記録 — artifact_manifest_sha 配下へ記録する。事後選択は構造的に不可能。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="must not regress to enumerating every audio file in the bound corpus",
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix37_validator_rejects_pjs_reference_definition_missing_song_wav_marker() -> None:
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference = 単一テイク選択を全廃し、決定論的コーパス集約で学習前に凍結する。①入力"
+        "束縛 — expanded_corpus_identity_sha256 が pin する PJS expanded corpus に束縛する。②"
+        "列挙規則 — corpus_identity_hash() が被覆するファイルのみを相対パスの辞書順で列挙する。"
+        "speech/background は混入禁止。③特徴計算 — sample_rate_normalization を適用してから"
+        "extraction_procedure と identity_feature を適用する。④除外規則 — voiced_mask に従い"
+        "除外する。⑤集約 — 要素ごとの算術平均で集約する。⑥記録 — artifact_manifest_sha 配下へ"
+        "記録する。事後選択は構造的に不可能。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix37_validator_rejects_pjs_reference_definition_missing_corpus_identity_hash_marker() -> (
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference = 単一テイク選択を全廃し、決定論的コーパス集約で学習前に凍結する。①入力"
+        "束縛 — expanded_corpus_identity_sha256 が pin する PJS expanded corpus に束縛する。②"
+        "列挙規則 — 既 pin が被覆する `_song.wav` ファイルのみを相対パスの辞書順で列挙する。"
+        "speech/background は混入禁止。③特徴計算 — sample_rate_normalization を適用してから"
+        "extraction_procedure と identity_feature を適用する。④除外規則 — voiced_mask に従い"
+        "除外する。⑤集約 — 要素ごとの算術平均で集約する。⑥記録 — artifact_manifest_sha 配下へ"
+        "記録する。事後選択は構造的に不可能。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix37_validator_rejects_pjs_reference_definition_missing_speech_background_exclusion_marker() -> (  # noqa: E501
+    None
+):
+    doc = _valid_metric_space_doc()
+    doc["confuser_control"]["pjs_reference_definition"] = (
+        "pjs_reference = 単一テイク選択を全廃し、決定論的コーパス集約で学習前に凍結する。①入力"
+        "束縛 — expanded_corpus_identity_sha256 が pin する PJS expanded corpus に束縛する。②"
+        "列挙規則 — corpus_identity_hash() が被覆する `_song.wav` ファイルのみを相対パスの辞書順"
+        "で列挙する。③特徴計算 — sample_rate_normalization を適用してから extraction_procedure"
+        "と identity_feature を適用する。④除外規則 — voiced_mask に従い除外する。⑤集約 — 要素"
+        "ごとの算術平均で集約する。⑥記録 — artifact_manifest_sha 配下へ記録する。事後選択は構造"
+        "的に不可能。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="confuser_control.pjs_reference_definition must state"
+    ):
+        m.validate_identity_metric_space_manifest(doc)
+
+
+def test_fix37_metric_version_still_0_5() -> None:
+    """入力集合の是正（pin 整合化）であり feature 式・校正規則は不変のため
+    metric_version は Fix 35 時点の run9-identity-metric/0.5 のまま据え置き。"""
+    data = _valid_metric_space_doc()
+    assert data["metric_version"] == "run9-identity-metric/0.5"
+
+
+def test_fix37_schema_still_1_2() -> None:
+    """キー集合不変（definition 文言の限定のみ）のため schema は
+    run9-identity-metric-space/1.2 のまま据え置き。"""
+    data = _valid_metric_space_doc()
+    assert data["schema"] == "run9-identity-metric-space/1.2"
+
+
+def test_fix37_domain_metric_space_sha_matches_recomputed_canonical_form() -> None:
+    """repin の直接確認: Fix 37 の集約対象限定後、`metric_space_sha` は
+    正規形 sha256 と一致する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    metric_space_obj = json.loads(IDENTITY_METRIC_SPACE_PATH.read_text(encoding="utf-8"))
+    assert domain_raw["metric_space_sha"] == _sha256_canonical_json(metric_space_obj)
+
+
+def test_fix37_domain_metric_space_sha_differs_from_pre_round17_value() -> None:
+    """repin の直接確認（旧値との差分）: Fix 37（第17巡）の改訂により
+    metric_space_sha が Fix 36 時点（第16巡）の旧値から更新されていることを
+    確認する。"""
+    domain_raw = json.loads(DOMAIN_DRAFT_PATH.read_text(encoding="utf-8"))
+    old_pre_round17_sha = "00264b5641e1b3b3112a9ef06912e2f96a2c449d25ae78adba36fab6613020e9"
+    assert domain_raw["metric_space_sha"] != old_pre_round17_sha

@@ -28,7 +28,7 @@ import sys
 import types
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, List, Mapping, Tuple
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Tuple
 
 import yaml  # PyYAML は本体必須依存（pyproject.toml [project].dependencies）
 
@@ -73,6 +73,21 @@ INTERVENTION_EDGES: Tuple[str, str] = ("PRACTICE_FROM_AUDIO", "TRANSFER_TECHNIQU
 
 # PoR §4 の3分岐のうち、学習介入を伴わない無介入 replay 枝（対照条件）。
 CONTROL_BRANCH = "CONTROL"
+
+# Codex bot レビュー PR #318 第7巡 Fix 20 採用（P1）: C0/C1 校正標本の
+# per-founder テイク数を契約 pin する `interventions` 配下の pin 欄名
+# （§ RUN9_CONTRACT.yaml `interventions.c0_replay_takes_per_founder` /
+# `interventions.c1_sham_takes_per_founder`）。旧 identity_metric_space.json
+# は「テイク数は本ファイルの `interventions` 規定に従う」と書きながら
+# 実体が存在しない欠陥（存在しない参照）を持っていた — 本タプルが宣言する
+# 2欄がその実体であり、`load_run9_contract()` が pin 欄と同型の
+# {value, status, reason?, source?} 形（`_validate_pin_field()`）+ PINNED
+# 時の正の int 型検証（`_require_positive_int()` — bool/float/0/負値を
+# 拒否）で検証する。
+INTERVENTION_TAKE_COUNT_FIELDS: Tuple[str, str] = (
+    "c0_replay_takes_per_founder",
+    "c1_sham_takes_per_founder",
+)
 
 # PoR §3.1「交配 — INHERIT_TRAIT」: 出生エッジの正式名。operator 自体は
 # 引き続き `TRI_CROSSOVER/1.0`（genome_id 決定論を壊さない — エッジ名の
@@ -654,7 +669,14 @@ class Run9IdentityDomain:
 
 
 def _canonical_json(obj: Any) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    # allow_nan=False（Codex bot レビュー PR #318 第2巡 Fix 8 採用）:
+    # 標準 json.dumps() の既定は allow_nan=True で NaN/Infinity/-Infinity を
+    # 非標準の JSON リテラル（NaN/Infinity 等）として黙って出力してしまう。
+    # 正規形ハッシュ（genome_id/profile_id 等）の入力に非有限値が紛れ込むと、
+    # 決定論性は保たれても値そのものが JSON 標準外・下流の再パースで壊れ得る
+    # 汚染源になるため、ここで fail-closed にする（呼び出し側の再帰検証との
+    # 二重防御 — 詳細は run9_controlprofile.py の `_reject_non_finite()`）。
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
 
 
 def _reject_pjs_key(*, context: str, keys: Any) -> None:
@@ -1026,6 +1048,1548 @@ SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST = "run9-education-technique-lesson-ma
 # して凍結する。
 PRACTICE_MANIFEST_PATH = _THIS_DIR / "inputs" / "practice_audio_split_manifest.json"
 EDUCATION_MANIFEST_PATH = _THIS_DIR / "inputs" / "education_technique_lesson_manifest.json"
+
+# ---------------------------------------------------------------------------
+# learning recipe manifest（RUN9 Phase 3 item 3）: rev 0.3 の枝別原則
+# （DESIGN_RUN9_REVISION_0.3.md 改訂A・Codex bot レビュー第6巡 Fix B 是正
+# 後の learning_recipe_sha reason）を機械可読な構造として凍結する。
+# `learning_recipe_sha` は本 PR でも PENDING のまま — ここで凍結するのは
+# 構造（枝別 recipe を束ねた単一 manifest・共通 seed・各枝内の二体等予算
+# 宣言）+ 停止規則/試行回数/render 予算が「実行可能な形」であることの
+# 型的保証（Codex bot レビュー PR #318 第2巡 Fix 7 採用 — 非空文字列 /
+# 正の有限数値）。具体的な語彙・数値そのものの build（例えば
+# stopping_rule を閉じた語彙へ絞る等）は VG-L0 ハーネス実装時の課題として
+# 据え置く。
+# ---------------------------------------------------------------------------
+
+SCHEMA_LEARNING_RECIPE_MANIFEST = "run9-learning-recipe/1.0"
+
+# rev 0.3 の枝別原則（PoR §8）: recipe は PRACTICE_FROM_AUDIO と
+# TRANSFER_TECHNIQUE で別節に分ける（両者は情報量が本質的に異なる非対称
+# フローであり、非対称性そのものが実験変数 — 単一 recipe で括らない）。
+LEARNING_RECIPE_MANIFEST_PATH = _THIS_DIR / "inputs" / "learning_recipe_manifest.json"
+
+_LEARNING_RECIPE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "seed", "practice_recipe", "education_recipe",
+})
+
+# 各枝 recipe 節の必須キー。`equal_budget_within_arm` は bool True 必須、
+# `stopping_rule`/`trial_count`/`render_budget` は「実行可能な形」まで
+# 型的に検証する（Codex bot レビュー PR #318 第2巡 Fix 7 採用 — draft/
+# runnable の二段 schema は作らず単一の厳密 schema とする）。具体的な
+# 語彙・数値そのものの決定は VG-L0 ハーネス実装時の build 対象のまま。
+#
+# rev 0.3 改訂E「公平性（PoR §8）」節（DESIGN_RUN9_REVISION_0.3.md
+# line 432-435 付近、Codex bot レビュー PR #318 第5巡 Fix 17 採用）:
+# 「R9F-01 / R9F-02 で条件を変えない。必須共通条件（同じ PJS 素材 / 同じ
+# train・validation・holdout split / 同じ探索空間 / 同じ候補生成規則 /
+# 同じ試行回数 / 同じ render 予算 / 同じ評価器 / 同じ停止規則 / 同じ計算
+# 予算）は各枝内で二体等予算として適用する」の9項目のうち、
+# `stopping_rule`/`trial_count`/`render_budget` は Fix 7/15 で既に機械可読
+# 化済み。残る5項目（探索空間・候補生成規則・評価器・計算予算・PJS素材+
+# train/validation/holdout split 束縛）はこれまで recipe schema の閉じた
+# キー集合に存在せず、未知キーとして拒否されるため後から足せなかった
+# （Fix 17 指摘: `learning_recipe_sha` が PINNED になった後、「true の
+# 等条件宣言 + trial/render 数」だけの manifest が検証を通り、公平性
+# クリティカルな手続きが実装ごとに異なる比較不能実験が READY に到達し
+# 得た）。以下4キーを追加する（型検証は本 PR では非空文字列の識別子/
+# 記述までに留め、下位スキーマの厳密化は VG-L0 ハーネス実装時の build
+# 対象のまま据え置く — Fix 7 と同じ層分離）。
+_LEARNING_RECIPE_ARM_KEYS: FrozenSet[str] = frozenset({
+    "equal_budget_within_arm",  # PoR §8: 各枝『内』の二体間の等予算宣言。bool True 必須
+    "stopping_rule",  # 停止規則。非空文字列必須（値そのものは build 時に確定）
+    "trial_count",  # 試行回数。正の厳密 int 必須（Fix 15。値そのものは build 時に確定）
+    "render_budget",  # render 予算。正の有限数値必須（値そのものは build 時に確定）
+    "search_space",  # rev0.3 改訂E: 同じ探索空間。非空文字列必須（Fix 17）
+    "candidate_generation",  # rev0.3 改訂E: 同じ候補生成規則。非空文字列必須（Fix 17）
+    "evaluator",  # rev0.3 改訂E: 同じ評価器。非空文字列必須（Fix 17）
+    "compute_budget",  # rev0.3 改訂E: 同じ計算予算。非空文字列必須（Fix 17）
+    "data_binding",  # rev0.3 改訂E: 同じ PJS 素材 / train・validation・holdout split 束縛。非空文字列必須（Fix 17）
+})
+
+# Fix 17 で追加した5キー（`_validate_learning_recipe_arm()` から一律に
+# 「非空文字列の識別子/記述」として検証する。個々の下位スキーマ
+# （例えば data_binding を sha256 pin に限定する等）は VG-L0 ハーネス
+# 実装時の build 対象のまま据え置く — 本 PR は「条件が宣言されており
+# 空でない」ことの機械検証までを目的とする）。
+_LEARNING_RECIPE_EQUAL_CONDITION_STR_KEYS: Tuple[str, ...] = (
+    "search_space", "candidate_generation", "evaluator", "compute_budget", "data_binding",
+)
+
+_LEARNING_RECIPE_ARMS: Tuple[str, str] = ("practice_recipe", "education_recipe")
+
+
+def _require_non_empty_str(value: Any, *, field: str) -> str:
+    """空文字列・非文字列を拒否する（Codex bot レビュー PR #318 第2巡
+    Fix 7 採用）。閉じた語彙の凍結は VG-L0 ハーネス実装時の課題として
+    据え置き、本 PR では「非空文字列であること」までを機械強制する。"""
+    if not isinstance(value, str) or not value.strip():
+        raise Run9ValidationError(f"{field} must be a non-empty string, got {value!r}")
+    return value
+
+
+def _require_positive_finite_number(value: Any, *, field: str) -> float:
+    """bool を除外した int/float のみを許容し、有限かつ正（>0）であること
+    を要求する（Codex bot レビュー PR #318 第2巡 Fix 7 採用）:
+    `stopping_rule`/`trial_count`/`render_budget` は PINNED 昇格時に
+    「READY 時点で実行可能な予算が凍結されている」ことを保証する必要が
+    あり、None・負値・0・NaN/inf・文字列はいずれも実行不能な予算を
+    静かに通してしまうため fail-closed で拒否する。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise Run9ValidationError(f"{field} must be a number (bool/str/None rejected), got {value!r}")
+    out = float(value)
+    if not math.isfinite(out) or out <= 0.0:
+        raise Run9ValidationError(f"{field} must be a finite positive number, got {value!r}")
+    return out
+
+
+def _require_positive_int(value: Any, *, field: str) -> int:
+    """`trial_count` 専用の厳密 int 検証（Codex bot レビュー PR #318 第4巡
+    Fix 15 採用、Fix 7 の是正）: `_require_positive_finite_number()` は
+    bool を除く int/float を等しく許可するため、`trial_count: 1.5` の
+    ような分数試行回数が PINNED recipe チェックを素通りしてしまっていた
+    — 試行は実行可能な単位が整数個の離散イベントであり分数個は実行不能
+    （半端な1回を実行することはできない）、かつ PoR §8 の
+    `equal_budget_within_arm`（枝内の二体 Founder 間の等予算契約）は
+    双方が同じ整数個の試行を消化できることを前提とするため、分数試行は
+    その契約自体を掘り崩す。`_is_strict_int()` を再利用して bool を
+    明示的に除外した厳密 int 判定を行う — `2.0`（値としては整数だが型が
+    float）のような「一見整数に見える」値も型で拒否する（int 型のみ
+    許可。`isinstance(value, int)` を素通しにすると `True`/`False` を
+    誤って正の整数として通してしまうため、`_is_strict_int()` の bool
+    除外が本関数でも必須）。`render_budget` は連続予算でありうるため
+    対象外のまま `_require_positive_finite_number()` を使い続ける
+    （本関数は `trial_count` にのみ配線する）。"""
+    if not _is_strict_int(value):
+        raise Run9ValidationError(
+            f"{field} must be an exact int (bool/float/str/None rejected — fractional trial counts "
+            f"are not executable and would undercut the equal-budget-within-arm contract), got "
+            f"{value!r} ({type(value).__name__})"
+        )
+    if value <= 0:
+        raise Run9ValidationError(f"{field} must be a positive int, got {value!r}")
+    return value
+
+
+def _validate_learning_recipe_arm(arm: Any, *, arm_name: str) -> None:
+    if not isinstance(arm, dict):
+        raise Run9ValidationError(f"learning recipe manifest.{arm_name} must be an object, got {type(arm).__name__}")
+    unknown = set(arm.keys()) - _LEARNING_RECIPE_ARM_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"learning recipe manifest.{arm_name} has unknown key(s): {sorted(unknown)}"
+        )
+    missing = _LEARNING_RECIPE_ARM_KEYS - set(arm.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"learning recipe manifest.{arm_name} missing required key(s): {sorted(missing)}"
+        )
+    if arm["equal_budget_within_arm"] is not True:
+        raise Run9ValidationError(
+            f"learning recipe manifest.{arm_name}.equal_budget_within_arm must be exactly True "
+            f"(PoR §8: equal budget is required within each arm, across the two founders), got "
+            f"{arm['equal_budget_within_arm']!r}"
+        )
+    # 実行可能厳密化（Codex bot レビュー PR #318 第2巡 Fix 7 採用）: draft
+    # /runnable の二段 schema は作らず、単一の厳密 schema とする。PINNED
+    # 事前配線が本 validator をそのまま呼ぶ以上、READY 昇格時点で
+    # stopping_rule/trial_count/render_budget が実行可能な値まで凍結
+    # されていることをここで機械強制する。
+    _require_non_empty_str(
+        arm["stopping_rule"], field=f"learning recipe manifest.{arm_name}.stopping_rule"
+    )
+    # trial_count は厳密 int（Fix 15 — docstring は `_require_positive_
+    # int()` 参照）。render_budget は連続予算でありうるため引き続き
+    # `_require_positive_finite_number()`（正の有限 int/float）のまま。
+    _require_positive_int(
+        arm["trial_count"], field=f"learning recipe manifest.{arm_name}.trial_count"
+    )
+    _require_positive_finite_number(
+        arm["render_budget"], field=f"learning recipe manifest.{arm_name}.render_budget"
+    )
+    # rev 0.3 改訂E「公平性（PoR §8）」節の残り5共通条件（Codex bot レビュー
+    # PR #318 第5巡 Fix 17 採用 — `_LEARNING_RECIPE_ARM_KEYS` docstring
+    # 参照）。stopping_rule と同じ「非空文字列」までの機械検証（具体的な
+    # 語彙・形式の厳密化は VG-L0 ハーネス実装時の build 対象）。
+    for field_name in _LEARNING_RECIPE_EQUAL_CONDITION_STR_KEYS:
+        _require_non_empty_str(
+            arm[field_name], field=f"learning recipe manifest.{arm_name}.{field_name}"
+        )
+
+
+def validate_learning_recipe_manifest(data: Mapping[str, Any]) -> None:
+    """learning recipe manifest（`run9-learning-recipe/1.0`）の構造を検証
+    する。枝別 recipe（`practice_recipe`/`education_recipe` の2節。
+    CONTROL は学習 step を実行しないため recipe を持たない — PoR §4 の
+    CONTROL 定義と整合）+ 共通 `seed`（`LEARNING_SEED` = 909002 固定）+
+    各枝内の二体等予算宣言（`equal_budget_within_arm: true` 必須）を検証
+    する。`stopping_rule`/`trial_count`/`render_budget` は具体的な語彙・
+    数値そのものまでは固定しないが、「実行可能な形」であることは
+    fail-closed で強制する（非空文字列 / 正の有限数値 — Codex bot レビュー
+    PR #318 第2巡 Fix 7 採用。PINNED 事前配線が本 validator をそのまま
+    呼ぶため、READY 昇格時点で実行不能な予算が凍結される事故を防ぐ）。
+
+    `search_space`/`candidate_generation`/`evaluator`/`compute_budget`/
+    `data_binding` の5キーも同様に非空文字列を必須とする（Codex bot
+    レビュー PR #318 第5巡 Fix 17 採用、rev 0.3 改訂E「公平性（PoR §8）」
+    節が定める枝内二体等条件9項目のうち、Fix 7/15 で未カバーだった残り
+    5項目を機械検証可能フィールドとして追加）。各枝 recipe は
+    `practice_recipe`/`education_recipe` それぞれ単一の object として
+    定義され、その1つの object が該当枝の二体 Founder 双方へ共通適用
+    される構造そのものが等条件を保証する（founder 別の値を持つ余地が
+    schema 上そもそも存在しない）ため、既存の枝内二体一致比較は行わない
+    — 個別 founder 向けの比較器を新設する必要はない。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"learning recipe manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _LEARNING_RECIPE_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"learning recipe manifest has unknown key(s): {sorted(unknown)}")
+    missing = _LEARNING_RECIPE_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"learning recipe manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_LEARNING_RECIPE_MANIFEST:
+        raise Run9ValidationError(
+            f"learning recipe manifest schema must be exactly {SCHEMA_LEARNING_RECIPE_MANIFEST!r}, "
+            f"got {schema!r}"
+        )
+
+    seed = data["seed"]
+    if not _is_strict_int(seed) or seed != LEARNING_SEED:
+        raise Run9ValidationError(
+            f"learning recipe manifest.seed must be the exact int {LEARNING_SEED!r} (bool/float "
+            f"variants rejected), got {seed!r} ({type(seed).__name__})"
+        )
+
+    for arm_name in _LEARNING_RECIPE_ARMS:
+        _validate_learning_recipe_arm(data[arm_name], arm_name=arm_name)
+
+
+# ---------------------------------------------------------------------------
+# identity metric space manifest（RUN9 Phase 3 item 1 / Codex bot レビュー
+# PR #318 第6巡 Fix 19）: `inputs/identity_metric_space.json` の閉じた形状
+# 検証。旧テストはトップレベルの `schema`/`metric_version` 2ラベルしか
+# 検証しておらず、repin 時に `extraction_procedure` 削除・`voiced_mask`
+# 省略・ネスト型変更が素通りしていた（digest テストは「そこにある形」を
+# 祝福するだけで、形そのものは検証しない）。本 validator は
+# `validate_branch_write_policy_manifest()`/`validate_learning_recipe_
+# manifest()` と同型の fail-closed 流儀（未知キー拒否・必須キー閉集合・
+# 型検証）で、トップレベル・`extraction_procedure` の必須ネストキー・
+# Fix 18 で導入した `calibration` 節の必須キーを検証する。
+# ---------------------------------------------------------------------------
+
+SCHEMA_IDENTITY_METRIC_SPACE = "run9-identity-metric-space/1.2"
+
+IDENTITY_METRIC_SPACE_PATH = _THIS_DIR / "inputs" / "identity_metric_space.json"
+
+# Codex bot レビュー PR #318 第13巡 Fix 33 採用（P1）: `confuser_control` を
+# トップレベルキーへ追加（schema を 1.1 → 1.2 へ minor bump — 既存キーの
+# 意味変更ではなくキー追加のため minor）。DESIGN_RUN9 §14 C3「PJS
+# Confuser」の評価経路を復元する新設節。
+_IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "metric_version", "canonicalization_method", "feature_extractor",
+    "extraction_procedure", "identity_feature", "distance", "calibration",
+    "reference_example", "confuser_control", "feasibility_note",
+})
+
+# Codex bot レビュー PR #318 第7巡 Fix 21 採用（P2）: `feature_extractor`/
+# `identity_feature`/`distance`/`reference_example` は旧 validator がトップ
+# レベルキー集合にのみ含め、内容は既存の内容照合テスト（test_phase3_*）に
+# 委ねていた。しかし内容照合テストは「そこにある形」の一部だけを部分的に
+# assert するに過ぎず、例えば `feature_extractor` 全体を null 化したり
+# `reference_example.procedure`（参照レンダー手続きの一次記述）を削除・
+# null 化する repin は、正規形 sha256 さえ pin 値と再一致すれば digest
+# テストも内容照合テストの assert しない部分も素通りしてしまう。本節は
+# これらの object 型トップレベルフィールド全件へ、`extraction_procedure`/
+# `calibration` と同型の閉じた必須ネストキー集合 + 型検証（未知キー拒否・
+# null 拒否・非空 str 強制）を追加する。純メタデータ的な str フィールド
+# （`feasibility_note`）は非空 str 検証のみ追加する。
+_FEATURE_EXTRACTOR_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "name", "library", "role", "version_source", "reference_implementation",
+})
+_FEATURE_EXTRACTOR_STR_KEYS: Tuple[str, ...] = (
+    "name", "library", "role", "reference_implementation",
+)
+_FEATURE_EXTRACTOR_VERSION_SOURCE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "value", "source", "note",
+})
+
+_IDENTITY_FEATURE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "definition", "scope", "vector_source", "f0_exclusion", "aperiodicity", "level_normalization",
+})
+_IDENTITY_FEATURE_STR_KEYS: Tuple[str, ...] = ("definition", "scope", "vector_source")
+_F0_EXCLUSION_REQUIRED_KEYS: FrozenSet[str] = frozenset({"excluded", "rationale"})
+_APERIODICITY_REQUIRED_KEYS: FrozenSet[str] = frozenset({"status", "note"})
+
+# Codex bot レビュー PR #318 第10巡 Fix 25 採用（P1）: identity feature の
+# レンダーゲイン不変化を凍結する。WORLD の sp はパワー領域でレンダーゲイン
+# に比例スケールするため、raw log 包絡は全 bin に約定数のオフセットが乗り、
+# 稽古/教育が dynamics・全体ゲインだけ変えても Euclidean 距離が閾値超過し
+# 得た（C0 はこの介入起因のエネルギー変化を校正せず、Technique の dynamics
+# 軸と Identity を混同する未凍結の穴）。`level_normalization` 節へ、集約後
+# ベクトルからのスカラー平均減算（gain invariance）を機械可読な形で凍結
+# する。
+_LEVEL_NORMALIZATION_REQUIRED_KEYS: FrozenSet[str] = frozenset({"method", "formula", "rationale"})
+_LEVEL_NORMALIZATION_STR_KEYS: Tuple[str, ...] = ("method", "formula", "rationale")
+# rationale がレンダーゲイン不変化（gain invariance）の理由を明文化して
+# いることを最低限の証拠として要求する。
+_LEVEL_NORMALIZATION_GAIN_MARKER = "ゲイン"
+# formula が「集約後ベクトルからのスカラー平均減算」という凍結した式
+# （feature(x) = v(x) - mean(v(x))・1）であることを要求する — per-frame
+# 正規化のような別方式へこっそり repin されるのを防ぐ。
+_LEVEL_NORMALIZATION_MEAN_SUBTRACTION_MARKER = "mean(v(x))"
+
+_DISTANCE_SECTION_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "method", "definition", "properties", "note",
+})
+_DISTANCE_SECTION_STR_KEYS: Tuple[str, ...] = ("method", "definition", "note")
+
+_REFERENCE_EXAMPLE_REQUIRED_KEYS: FrozenSet[str] = frozenset({"status", "procedure", "value"})
+# Codex bot レビュー PR #318 第12巡 Fix 29 採用（P1）: 実測 reference の
+# 循環 provenance 解消。旧 status PENDING_BIRTH_PROBE は「実測前は null、
+# 実測後は書き戻して非 null にする」非対称ルールだったが、その書き戻し
+# 手順自体が循環 provenance を生む欠陥だった（metric_space_sha →
+# Run9IdentityDomain.content_digest() → founder の genome_id という連鎖の
+# ため、実測後に本 manifest を repin すると repin 後の domain は別の
+# founder を記述することになり、記録した probe の identity と manifest の
+# identity が循環参照する）。本 status は手続きのみを恒久的に固定する唯一の
+# 値であり、value は恒久に null（実測待ちの一時的な null ではない — この
+# manifest には決して書き込まない）。実測値は出生後アーティファクト
+# （RUN9_CONTRACT.yaml の post-run pin `artifact_manifest_sha` 配下の
+# per-founder reference measurement record）へ記録する。非対称ルールの
+# 向きは Fix 21 から反転する: 旧ルールは「PENDING 中のみ value null 許容」
+# だったが、新ルールは「value は常に null が正、null 以外は拒否」
+# （書き戻し企図の拒否）。
+_REFERENCE_EXAMPLE_PROCEDURE_ONLY_STATUS = "PROCEDURE_ONLY_VALUE_RECORDED_IN_POST_BIRTH_ARTIFACT"
+
+_EXTRACTION_PROCEDURE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "f0_estimation", "frame_period_ms", "frame_period_source", "spectral_envelope",
+    "fft_size_rule", "voiced_mask", "sample_rate", "sample_rate_normalization", "log_transform",
+})
+
+_F0_ESTIMATION_REQUIRED_STR_KEYS: Tuple[str, ...] = ("algorithm", "call", "note")
+_SPECTRAL_ENVELOPE_REQUIRED_STR_KEYS: Tuple[str, ...] = ("algorithm", "call", "parameters", "note")
+_VOICED_MASK_REQUIRED_STR_KEYS: Tuple[str, ...] = ("definition", "source")
+_SAMPLE_RATE_REQUIRED_STR_KEYS: Tuple[str, ...] = ("policy", "source", "distinct_from_donor_bank_sr")
+_LOG_TRANSFORM_REQUIRED_STR_KEYS: Tuple[str, ...] = ("formula", "source")
+
+# Codex bot レビュー PR #318 第15巡 Fix 35 採用（P1）: PJS コーパスの metric
+# sample rate への決定論的正規化。corpus_inventory_pjs.json によれば PJS の
+# 203 WAV は全て 48000 Hz である一方、旧 extraction_procedure.sample_rate は
+# 44100 Hz を pin するのみで再サンプル手続きが無く、WORLD をネイティブ適用
+# すればスペクトル bin の対応周波数が食い違い、未凍結の再サンプルなら実装者
+# 間で結果が再現不能になる、いずれの経路でも confuser_control の d_pjs(r)
+# が壊れていた（identity_metric_space.json 旧136行付近）。着手前調査:
+# feature_extractor.reference_implementation が引用する donor_bank.py:190-196
+# analyze_donor_world(x, sr, ...) は x/sr を引数で受け取るだけで内部リサンプル
+# を一切行わない（固定 44100Hz ロード経路は存在しない）。唯一の実装済みロード
+# 経路 load_donor_24k_bytes() は soundfile 直読み + scipy.signal.resample_poly
+# による有理比変換（44100→24000、up=80/down=147）だが対象は vocadito ドナー・
+# 目標レートも 24000Hz で RUN9 の対象（目標 44100Hz）とは別物。
+#
+# Codex bot レビュー PR #318 第16巡 Fix 36 採用（P1）: 第15巡時点の rule は
+# 固定 147/160 比を pin していたが、直後の applies_to が宣言する「native sr
+# ≠ 44100 Hz のあらゆる入力に適用する一般規則」と矛盾していた（例: native
+# 24000 Hz の入力に 147/160 を適用すると 22050 Hz へ変換され、WORLD には
+# 44100 Hz として扱われて時間軸・周波数軸と identity 距離が壊れる）。本節が
+# g = gcd(44100, native_sr) から up/down を native rate ごとに機械的に導出
+# する一般導出式を manifest 側に pin し、147/160 は native 48000 Hz（PJS の
+# 全203 WAV）に対する導出例として位置づけ直す（donor_bank.py 自体の変更は
+# この PR の範囲外）。
+_SAMPLE_RATE_NORMALIZATION_REQUIRED_STR_KEYS: Tuple[str, ...] = (
+    "role", "investigation_finding", "rule", "applies_to", "procedure_only",
+)
+# rule の一般導出式マーカー（Fix 36）: native rate ごとに up/down を機械的に
+# 導出する式そのもの（gcd 計算 + up/down の導出形）が現れていることを要求
+# する — 固定比のみを pin して一般式を欠く旧 Fix 35 状態（あらゆる入力への
+# 適用を宣言しつつ 44100/48000 専用の固定比しか書かない矛盾）への逆行を
+# 拒否する。
+_SAMPLE_RATE_NORMALIZATION_GENERAL_GCD_MARKER = "gcd(44100, native_sr)"
+_SAMPLE_RATE_NORMALIZATION_GENERAL_UP_MARKER = "up=44100//g"
+_SAMPLE_RATE_NORMALIZATION_GENERAL_DOWN_MARKER = "down=native_sr//g"
+# rule の 48kHz 導出例マーカー: 一般導出式を native 48000 Hz（PJS 全203 WAV）
+# へ適用した具体例として 147/160 が現れていることを要求する — 暗黙のライブ
+# ラリ既定 sr 変換への逆行（ratio 未指定のまま「適切にリサンプルする」等の
+# 曖昧な記述）や、導出例そのものの欠落を拒否する。
+_SAMPLE_RATE_NORMALIZATION_DERIVATION_EXAMPLE_CALL_MARKER = "resample_poly(x, up=147, down=160)"
+_SAMPLE_RATE_NORMALIZATION_DERIVATION_EXAMPLE_FRACTION_MARKER = "147/160"
+# applies_to の一般規則性マーカー: 変換規則が PJS 特例ではなく「native sr ≠
+# 44100 のあらゆる入力」に適用される一般規則であることの明文を要求する。
+_SAMPLE_RATE_NORMALIZATION_GENERAL_RULE_MARKER = "あらゆる入力"
+_SAMPLE_RATE_NORMALIZATION_NOT_PJS_SPECIFIC_MARKER = "PJS corpus に限定しない"
+
+_CALIBRATION_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "status", "note", "distance_unit", "freeze_threshold", "validity_gates",
+    "decision_rule", "worked_example", "source_references",
+})
+
+_CALIBRATION_DISTANCE_UNIT_STR_KEYS: Tuple[str, ...] = (
+    "formula", "aggregation_unit", "reference_render_definition",
+)
+_CALIBRATION_FREEZE_THRESHOLD_STR_KEYS: Tuple[str, ...] = (
+    "formula", "d_c0_population", "percentile_method",
+)
+_CALIBRATION_VALIDITY_GATES_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "policy", "c1_gate", "positive_reference_gate", "negative_reference_gate", "on_failure",
+})
+_CALIBRATION_GATE_STR_KEYS: Tuple[str, ...] = ("id", "condition")
+_CALIBRATION_DECISION_RULE_STR_KEYS: Tuple[str, ...] = ("applies_when", "formula", "boundary")
+_CALIBRATION_SOURCE_REFERENCES_STR_KEYS: Tuple[str, ...] = ("r9_g5", "holdout_freeze")
+
+# Codex bot レビュー PR #318 第7巡 Fix 20 採用（P1）: founder 横断
+# pooling 禁止の明文化と、RUN9_CONTRACT.yaml 側の実欄（Fix 20 で新設した
+# `interventions.c0_replay_takes_per_founder`/`c1_sham_takes_per_founder`）
+# への実参照を、フィールド名の文字列一致で機械強制する（「存在しない
+# 参照」欠陥の再発防止 — 数だけ repin されて参照文言が欠落する事態を
+# fail-closed で拒否する）。
+_D_C0_POPULATION_POOLING_PROHIBITION_MARKER = "pooling"
+_D_C0_POPULATION_FIELD_REF_MARKER = "c0_replay_takes_per_founder"
+_D_C1_POPULATION_FIELD_REF_MARKER = "c1_sham_takes_per_founder"
+# reference_render は founder ごとに1つに固定する（founder 横断の
+# pooling/共用を禁止）— reference_render_definition 文言に "founder" が
+# 独立トークンとして現れることを最低限の per-founder 明記の証拠とする。
+_REFERENCE_RENDER_DEFINITION_PER_FOUNDER_MARKER = "founder"
+
+# Codex bot レビュー PR #318 第9巡 Fix 23 採用（P1）: reference_render(F)
+# が C0/C1 母集団に属するか（自己比較ゼロ距離混入）が未確定だった指摘の
+# 凍結を、pooling 禁止チェックと同型のマーカー方式で機械強制する。
+# reference_render(F) 自身との距離（恒等ゼロ標本）が D_C0(F)/D_C1(F) へ
+# 混入すると P95 が下方へ歪み STABLE_BY_MACHINE_METRIC 側へ判定が偏る
+# ため、両母集団の定義文に自己比較禁止の明文が存在することを要求する。
+_SELF_COMPARISON_PROHIBITION_MARKER = "自己比較"
+# reference_render_definition にも、reference が C0/C1 テイクの一員では
+# ないこと（独立レンダーであること）の明文を要求する。
+_REFERENCE_RENDER_NOT_A_TAKE_MARKER = "の一員ではな"
+
+# Codex bot レビュー PR #318 第10巡 Fix 27 採用（P1）: positive/negative
+# reference の生成・選定手続きの凍結。「同一 founder の再レンダー」では
+# 枝・revision・制御条件・テイク・生成タイミングが未指定で、neutral C0
+# レンダーを使う評価者と学習後レンダーを使う評価者で gate が反転し得た。
+# positive_reference_definition が、①専用の追加テイクであること
+# ②reference_render(F) 自身ではないこと ③C0 母集団のいずれのテイクでも
+# ないこと ④生成タイミングが birth probe であること ⑤学習後レンダーの
+# 使用が明示禁止であることを、文言マーカーとして機械強制する。
+_POSITIVE_REFERENCE_DEDICATED_TAKE_MARKER = "専用"
+_POSITIVE_REFERENCE_NOT_REFERENCE_RENDER_ITSELF_MARKER = "reference_render(F) 自身ではなく"
+_POSITIVE_REFERENCE_NOT_C0_MEMBER_MARKER = "いずれでもない"
+_POSITIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER = "birth probe"
+_POSITIVE_REFERENCE_POST_LEARNING_PROHIBITION_MARKER = "学習後レンダーの使用は明示禁止"
+_POSITIVE_REFERENCE_DEFINITION_MARKERS: Tuple[str, ...] = (
+    _POSITIVE_REFERENCE_DEDICATED_TAKE_MARKER,
+    _POSITIVE_REFERENCE_NOT_REFERENCE_RENDER_ITSELF_MARKER,
+    _POSITIVE_REFERENCE_NOT_C0_MEMBER_MARKER,
+    _POSITIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER,
+    _POSITIVE_REFERENCE_POST_LEARNING_PROHIBITION_MARKER,
+)
+# negative_reference_definition も同様に、生成タイミング（birth probe）が
+# 明示されていることを要求する（曖昧な「他方 founder のレンダー」だけでは
+# どの時点のレンダーかが未指定のまま残るため）。
+_NEGATIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER = "birth probe"
+
+# Codex bot レビュー PR #318 第11巡 Fix 28 採用（P1）: 校正距離を
+# identity_feature.level_normalization が定義する正規化 feature 基準へ
+# 統一する。旧 distance_unit.formula は raw な mean_voiced_log_sp ベクトルへ
+# 直接 Euclidean を適用しており、ハーネスが pin どおりに計算すると
+# dynamics のみのゲイン変化が再び STABLE/SHIFTED を反転させ得た
+# （metric_version 0.3 のゲイン不変の主張と矛盾）。formula が feature(...)
+# 呼び出し形式であること（raw ベクトルへの直接適用への逆行を拒否）と、
+# level_normalization の定義を参照する旨の明文が存在すること（定義の
+# 重複記載ではなく参照で束縛されていること）の2点を機械強制する。
+_DISTANCE_UNIT_FORMULA_FEATURE_CALL_MARKER = "feature("
+_DISTANCE_UNIT_FORMULA_LEVEL_NORMALIZATION_REF_MARKER = "level_normalization"
+
+# Codex bot レビュー PR #318 第12巡 Fix 30 採用（P1）: negative reference の
+# 単一ソース化。旧 negative_reference_definition は「他方 founder の
+# reference_render のみ」と定めつつ、同文中に「PJS は... negative reference
+# としてのみ利用する」という矛盾節が残存していた（PJS は構造的に Identity
+# anchor 空間から排除済みのはずなのに、直後で negative reference としての
+# 利用を肯定する自己矛盾）。旧 validator は
+# `_NEGATIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER`（"birth probe"）しか見て
+# おらず、この内容矛盾を素通りさせていた。本節は PJS 不使用の明文マーカーを
+# 要求し、旧矛盾文言への逆行を負例で拒否する。
+_NEGATIVE_REFERENCE_PJS_NAME_MARKER = "PJS"
+_NEGATIVE_REFERENCE_PJS_NON_USE_MARKER = "negative reference としても使用しない"
+# 旧矛盾文言（削除対象）— 逆行検出用。
+_NEGATIVE_REFERENCE_PJS_CONTRADICTORY_MARKER = "negative reference としてのみ利用する"
+
+# Codex bot レビュー PR #318 第12巡 Fix 31 採用（P1）: identity_feature の
+# 定義域（scope）を全 identity 評価対象レンダーへ拡張する。旧 scope は
+# neutral P0/C0 レンダー限定だったが、calibration.decision_rule は
+# post-practice/post-education レンダーの d(r) を要求しており、厳密実装は
+# feature を計算できず、寛容実装は pinned scope を無視するしかない契約矛盾
+# を抱えていた。「feature の計算可能域（全評価対象レンダー）」と「校正・
+# 参照に使える母集団（neutral な r0 限定）」を区別して明文化することを
+# validator が機械強制する。
+_IDENTITY_FEATURE_SCOPE_EVALUATED_RENDERS_MARKER = "全ての identity 評価対象レンダー"
+_IDENTITY_FEATURE_SCOPE_NEUTRAL_POPULATION_MARKER = "neutral"
+_IDENTITY_FEATURE_SCOPE_DISTINCTION_MARKER = "計算可能域"
+
+# Codex bot レビュー PR #318 第13巡 Fix 32 採用（P1）: C1 ゲートの統計的
+# 欠陥の是正。C1 のアダプター効果が完全にゼロのとき D_C0(F)/D_C1(F) は
+# 同一 replay-noise 分布からの独立標本であり、経験 P95 同士（尾側 vs 尾側）
+# は交換可能なため、旧ゲート `P95(D_C1(F)) <= theta_cal(F)` はゼロ効果下でも
+# 約1/2の確率で偽って不成立となり、on_failure の founder INVALID 化を通じて
+# 全 identity 結果を不当に抑制していた。ゲート条件を分布中心（P50）vs 尾側
+# （theta_cal(F) = P95(D_C0(F))）の比較へ改訂する。
+_C1_GATE_CONDITION_P50_MARKER = "P50(D_C1(F)) <= theta_cal(F)"
+# 旧条件文言（逆行拒否対象）。
+_C1_GATE_CONDITION_OLD_P95_MARKER = "P95(D_C1(F))"
+# d_c1_population が P50 の分位計算法を freeze_threshold.percentile_method
+# （P95(D_C0(F)) と同一の線形補間分位）へ束縛（参照であり再定義ではない）
+# していることを要求する。
+_D_C1_POPULATION_PERCENTILE_METHOD_REF_MARKER = "percentile_method"
+# d_c1_population が旧ゲートの統計的欠陥（ゼロ効果下での交換可能性）の
+# 理由を明文していることを要求する。
+_C1_GATE_EXCHANGEABLE_RATIONALE_MARKER = "交換可能"
+
+# Codex bot レビュー PR #318 第13巡 Fix 33 採用（P1）: PJS confuser（C3）
+# 評価経路の復元。DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
+# §14 C3「PJS Confuser」が要求する no-PJS-leakage 検出経路が、第12巡 Fix 30
+# の PJS 全面不使用宣言により消えていた（Fix 30 は校正ゲート専用の宣言
+# だったが、C3 confuser control としての限定利用まで一律に塞いでいた）。
+# `identity_feature.scope` が confuser_control 節の pjs_reference を feature
+# 計算可能域へ含める旨を明文していることを要求する。
+_IDENTITY_FEATURE_SCOPE_CONFUSER_CONTROL_MARKER = "confuser_control"
+_IDENTITY_FEATURE_SCOPE_PJS_REFERENCE_MARKER = "pjs_reference"
+
+# confuser_control 節の閉じた必須キー集合 + 型検証（`calibration` 等と同型の
+# fail-closed 流儀）。
+_CONFUSER_CONTROL_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "role", "metric", "pjs_reference_definition", "evaluation",
+})
+_CONFUSER_CONTROL_STR_KEYS: Tuple[str, ...] = (
+    "role", "metric", "pjs_reference_definition", "evaluation",
+)
+# role は、PJS が negative reference としては使用しない（校正ゲートの
+# 母集団・reference には登場しない）が confuser control としてのみ使用する
+# （本節の距離計算にのみ登場する）ことを、Fix 30 の non-use 宣言と矛盾しない
+# 精密な文言で区別していることを要求する。
+_CONFUSER_CONTROL_ROLE_NON_USE_AS_NEGATIVE_REFERENCE_MARKER = "negative reference としては使用しない"
+_CONFUSER_CONTROL_ROLE_CONFUSER_ONLY_USE_MARKER = "confuser control としてのみ使用する"
+# metric は独自の距離式を新設せず、identity_feature.level_normalization の
+# 定義する正規化 feature(x) を参照（束縛）していることを要求する
+# （distance_unit.formula の Fix 28 と同型の規律）。
+_CONFUSER_CONTROL_METRIC_LEVEL_NORMALIZATION_REF_MARKER = "level_normalization"
+_CONFUSER_CONTROL_METRIC_FEATURE_CALL_MARKER = "feature("
+# evaluation は、総合スコア化・PASS/FAIL 化をしないこと（軸別 evidence のみ
+# 規律）と、calibration_status(F) から独立であることの両方を明文している
+# ことを要求する。
+_CONFUSER_CONTROL_EVALUATION_NO_AGGREGATE_SCORE_MARKER = "PASS/FAIL"
+_CONFUSER_CONTROL_EVALUATION_CALIBRATION_INDEPENDENCE_MARKER = "calibration_status"
+
+# Codex bot レビュー PR #318 第14巡 Fix 34 採用（P1）: pjs_reference の学習前
+# 決定論的凍結。旧 pjs_reference_definition は「PJS 教材コーパスから事前登録
+# 手続きで固定する単一の参照レンダー/特徴」としか言っておらず、テイク
+# index・digest・生成条件・決定論的集約規則を指定していなかった。選定値は
+# post-run の artifact_manifest_sha 配下にしか記録されないため、評価者が
+# 学習後レンダーを観察したあとで有利な PJS テイクを選定でき、
+# d_pjs(r_learned) の減少有無（no-PJS-leakage evidence）を汚染し得る欠陥
+# だった（identity_metric_space.json 旧136行付近）。単一テイク選択を全廃し、
+# 決定論的コーパス全体集約（辞書順列挙 → 同一抽出手続き適用 → 機械的
+# voiced_mask 除外 → 要素ごとの算術平均）へ置換したことを機械強制する。
+_PJS_REFERENCE_DEFINITION_LEXICOGRAPHIC_ENUMERATION_MARKER = "辞書順"
+_PJS_REFERENCE_DEFINITION_ARITHMETIC_MEAN_MARKER = "算術平均"
+_PJS_REFERENCE_DEFINITION_CORPUS_PIN_FIELD_MARKER = "expanded_corpus_identity_sha256"
+_PJS_REFERENCE_DEFINITION_VOICED_MASK_EXCLUSION_MARKER = "voiced_mask"
+_PJS_REFERENCE_DEFINITION_POST_HOC_SELECTION_IMPOSSIBLE_MARKER = "事後選択"
+# 旧「単一の参照レンダー」選択方式（言い換えでの再導入も含む、この具体的な
+# 旧フレーズ自体）が再出現しないことを機械強制する（Fix 30 の旧矛盾文言
+# 逆行拒否と同型の規律）。
+_PJS_REFERENCE_DEFINITION_OLD_SINGLE_TAKE_REGRESSION_MARKER = "単一の参照レンダー"
+
+# Codex bot レビュー PR #318 第15巡 Fix 35 採用（P1）: pjs_reference_definition
+# の③特徴計算クローズが、extraction_procedure.sample_rate_normalization が
+# 定める入力正規化ステップ（native 48000Hz の PJS 全203 WAV を 44100Hz へ
+# 決定論的変換してから特徴計算する）を参照していることを要求する — この
+# 相互参照が欠けると PJS 特徴計算が sample rate 不一致のまま行われ得る。
+_PJS_REFERENCE_DEFINITION_SAMPLE_RATE_NORMALIZATION_REF_MARKER = "sample_rate_normalization"
+
+# Codex bot レビュー PR #318 第17巡 Fix 37 採用（P1）: pjs_reference_definition
+# ②列挙規則の集約対象を、既 pin（PRACTICE_MANIFEST_REQUIRED_KEYS.
+# expanded_corpus_identity_sha256 → pjs_neutral.json corpus_sha256）が実際に
+# 被覆するファイル集合へ限定する。着手前調査（donor_bank_lab.py
+# corpus_identity_hash() line 192-227 付近）の実測により、同関数は各
+# `pjsNNN/pjsNNN.lab`（音素セグメンテーション）とその対応 `pjsNNN/
+# pjsNNN_song.wav` のみを対象に集約しており、speech 100 WAV・background
+# 3 WAV は被覆外と判明した。旧規則（束縛したコーパス内の全音声ファイルを
+# 列挙）はこの被覆外ファイルを pjs_reference の集約対象へ混入させており、
+# 未 pin ファイルが corpus_identity_hash() を変えずに pjs_reference・
+# no-leakage evidence を汚染し得る欠陥だった（identity_metric_space.json
+# 旧143行付近）。集約対象を pin 被覆ファイル集合（`_song.wav`）へ厳密に
+# 限定したことを機械強制する: ①`_song.wav` 限定への言及 ②pin 被覆の一次
+# ソース（corpus_identity_hash）への参照 ③speech/background 混入禁止の
+# 明文、の3マーカー必須化 + 旧「全音声ファイル列挙」規則文言への逆行拒否。
+_PJS_REFERENCE_DEFINITION_SONG_WAV_SCOPE_MARKER = "_song.wav"
+_PJS_REFERENCE_DEFINITION_CORPUS_IDENTITY_HASH_REF_MARKER = "corpus_identity_hash"
+_PJS_REFERENCE_DEFINITION_SPEECH_BACKGROUND_EXCLUSION_MARKER = "混入禁止"
+# 旧②（pin 被覆に関係なくコーパス内の音声ファイル全件を対象とする列挙規則）
+# の具体的な旧フレーズ自体が再出現しないことを機械強制する（Fix 34 の
+# OLD_SINGLE_TAKE_REGRESSION_MARKER と同型の逆行拒否規律）。
+_PJS_REFERENCE_DEFINITION_OLD_FULL_CORPUS_ENUMERATION_REGRESSION_MARKER = (
+    "束縛したコーパス内の音声ファイルを相対パスの辞書順"
+)
+
+_CALIBRATION_WORKED_EXAMPLE_STR_KEYS: Tuple[str, ...] = (
+    "disclaimer", "theta_cal_derivation", "c1_gate_result", "positive_reference_gate_result",
+    "negative_reference_gate_result", "calibration_status_example", "evaluated_render_outcome",
+)
+_CALIBRATION_WORKED_EXAMPLE_NUMBER_KEYS: Tuple[str, ...] = (
+    "theta_cal", "d_c1_p50", "positive_reference_distance", "negative_reference_distance",
+    "evaluated_render_distance",
+)
+# 実測偽装の禁止（本 repo の規律）: worked_example は合成数値例であり
+# 実測ではないことを disclaimer 文言そのもので機械強制する。
+_WORKED_EXAMPLE_DISCLAIMER_MARKERS: Tuple[str, ...] = ("synthetic", "実測ではない")
+
+
+def _require_dict(value: Any, *, field: str) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
+    return value
+
+
+def _validate_nested_str_keys(
+    data: Mapping[str, Any],
+    *,
+    field: str,
+    keys: Tuple[str, ...],
+    allowed_keys: Optional[FrozenSet[str]] = None,
+) -> None:
+    # Codex bot レビュー PR #318 第9巡 Fix 24 採用（P2）: 旧実装は `keys` の
+    # 存在のみを検証し、キー集合の一致（未知キー拒否）を見ていなかった
+    # ため、`f0_estimation.algorithm_override: "dio"` のような契約に無い
+    # キーの追加が repin だけで素通りしていた。`sample_rate`/トップレベル
+    # 等で個別に行っていたキー集合比較と同型のクローズド集合検証をここへ
+    # 集約し、本関数を呼ぶ全ネスト object（f0_estimation/spectral_
+    # envelope/voiced_mask/distance_unit/freeze_threshold/decision_rule/
+    # source_references）へ一括適用する。`keys` が非 str 型フィールド
+    # （value_hz/floor_value 等、別途型検証済み）を含まない部分集合に
+    # なる呼び出し元（sample_rate/log_transform）は `allowed_keys` で
+    # 実際の閉集合を明示する（省略時は `keys` 自体が閉集合とみなされる）。
+    permitted = set(allowed_keys) if allowed_keys is not None else set(keys)
+    unknown = set(data.keys()) - permitted
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    for key in keys:
+        if key not in data:
+            raise Run9ValidationError(f"{field} missing required key: {key!r}")
+        _require_non_empty_str(data[key], field=f"{field}.{key}")
+
+
+def _validate_calibration_gate(data: Any, *, field: str, definition_key: str) -> None:
+    gate = _require_dict(data, field=field)
+    required = set(_CALIBRATION_GATE_STR_KEYS) | {definition_key}
+    unknown = set(gate.keys()) - required
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = required - set(gate.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    for key in required:
+        _require_non_empty_str(gate[key], field=f"{field}.{key}")
+
+
+def _validate_calibration_section(data: Any) -> None:
+    calibration = _require_dict(data, field="identity metric space manifest.calibration")
+    unknown = set(calibration.keys()) - _CALIBRATION_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"calibration has unknown key(s): {sorted(unknown)}")
+    missing = _CALIBRATION_REQUIRED_KEYS - set(calibration.keys())
+    if missing:
+        raise Run9ValidationError(f"calibration missing required key(s): {sorted(missing)}")
+
+    _require_non_empty_str(calibration["status"], field="calibration.status")
+    _require_non_empty_str(calibration["note"], field="calibration.note")
+
+    distance_unit = _require_dict(calibration["distance_unit"], field="calibration.distance_unit")
+    _validate_nested_str_keys(
+        distance_unit, field="calibration.distance_unit", keys=_CALIBRATION_DISTANCE_UNIT_STR_KEYS
+    )
+    # Fix 20: reference_render は founder ごとに1つに固定する（他方
+    # founder の reference と混同・共用しない）ことを文言レベルで強制する。
+    reference_render_definition_raw = distance_unit["reference_render_definition"]
+    reference_render_definition = reference_render_definition_raw.lower()
+    if _REFERENCE_RENDER_DEFINITION_PER_FOUNDER_MARKER not in reference_render_definition:
+        raise Run9ValidationError(
+            "calibration.distance_unit.reference_render_definition must state that the reference "
+            f"render is fixed per founder (expected {_REFERENCE_RENDER_DEFINITION_PER_FOUNDER_MARKER!r} "
+            f"to appear), got {distance_unit['reference_render_definition']!r} (Codex bot レビュー "
+            "PR #318 第7巡 Fix 20 — pooling across founders is forbidden)"
+        )
+    # Fix 23: reference_render(F) が C0/C1 テイクの一員ではなく独立レンダー
+    # であることの明文を強制する（自己比較ゼロ距離混入の凍結）。
+    if _REFERENCE_RENDER_NOT_A_TAKE_MARKER not in reference_render_definition_raw:
+        raise Run9ValidationError(
+            "calibration.distance_unit.reference_render_definition must state that the reference "
+            f"render is not a member of the C0/C1 takes (expected {_REFERENCE_RENDER_NOT_A_TAKE_MARKER!r} "
+            f"to appear), got {reference_render_definition_raw!r} (Codex bot レビュー PR #318 第9巡 "
+            "Fix 23 — self-comparison zero-distance contamination is forbidden)"
+        )
+    # Fix 28: distance_unit.formula は identity_feature.level_normalization が
+    # 定義する正規化 feature 基準（feature(x)）でなければならない。raw な
+    # mean_voiced_log_sp ベクトルへの直接 Euclidean へ逆行すると、level 正規化
+    # 前のゲイン変化が再び距離へ漏れ込み、metric_version 0.3 のゲイン不変の
+    # 主張と矛盾する。
+    distance_unit_formula = distance_unit["formula"]
+    if _DISTANCE_UNIT_FORMULA_FEATURE_CALL_MARKER not in distance_unit_formula:
+        raise Run9ValidationError(
+            "calibration.distance_unit.formula must be expressed in terms of the normalized "
+            f"feature(...) call (expected {_DISTANCE_UNIT_FORMULA_FEATURE_CALL_MARKER!r} to appear), "
+            f"got {distance_unit_formula!r} (Codex bot レビュー PR #318 第11巡 Fix 28 — regressing to "
+            "a raw mean_voiced_log_sp vector distance lets dynamics-only gain changes flip "
+            "STABLE/SHIFTED again)"
+        )
+    if _DISTANCE_UNIT_FORMULA_LEVEL_NORMALIZATION_REF_MARKER not in distance_unit_formula:
+        raise Run9ValidationError(
+            "calibration.distance_unit.formula must reference identity_feature.level_normalization's "
+            f"definition of feature(x) (expected "
+            f"{_DISTANCE_UNIT_FORMULA_LEVEL_NORMALIZATION_REF_MARKER!r} to appear), got "
+            f"{distance_unit_formula!r} (Codex bot レビュー PR #318 第11巡 Fix 28 — bind by reference "
+            "rather than redefining feature(x) here)"
+        )
+
+    freeze_threshold = _require_dict(calibration["freeze_threshold"], field="calibration.freeze_threshold")
+    _validate_nested_str_keys(
+        freeze_threshold,
+        field="calibration.freeze_threshold",
+        keys=_CALIBRATION_FREEZE_THRESHOLD_STR_KEYS,
+    )
+    # Fix 20: D_C0 の pooling 禁止文言と、RUN9_CONTRACT.yaml
+    # `interventions.c0_replay_takes_per_founder` へのフィールド名参照を
+    # 両方強制する（数だけ repin されて禁止文言/参照が欠落する事態の防止）。
+    d_c0_population = freeze_threshold["d_c0_population"]
+    if _D_C0_POPULATION_POOLING_PROHIBITION_MARKER not in d_c0_population.lower():
+        raise Run9ValidationError(
+            "calibration.freeze_threshold.d_c0_population must state the founder-pooling "
+            f"prohibition (expected {_D_C0_POPULATION_POOLING_PROHIBITION_MARKER!r} to appear — "
+            "pooling would mix cross-founder identity distance into the replay noise "
+            f"distribution), got {d_c0_population!r}"
+        )
+    if _D_C0_POPULATION_FIELD_REF_MARKER not in d_c0_population:
+        raise Run9ValidationError(
+            "calibration.freeze_threshold.d_c0_population must reference RUN9_CONTRACT.yaml's "
+            f"{_D_C0_POPULATION_FIELD_REF_MARKER!r} field by name (dangling delegation to a "
+            f"nonexistent contract field is forbidden), got {d_c0_population!r}"
+        )
+    # Fix 23: reference_render(F) 自身との自己比較（恒等ゼロ距離標本）の
+    # D_C0(F) への混入禁止を文言レベルで強制する（未凍結のままだと P95 が
+    # 下方へ歪み STABLE_BY_MACHINE_METRIC 側へ判定が偏る）。
+    if _SELF_COMPARISON_PROHIBITION_MARKER not in d_c0_population:
+        raise Run9ValidationError(
+            "calibration.freeze_threshold.d_c0_population must state the self-comparison "
+            f"contamination prohibition (expected {_SELF_COMPARISON_PROHIBITION_MARKER!r} to appear "
+            "— reference_render(F) does not belong to the C0 population), got "
+            f"{d_c0_population!r} (Codex bot レビュー PR #318 第9巡 Fix 23)"
+        )
+
+    validity_gates = _require_dict(calibration["validity_gates"], field="calibration.validity_gates")
+    unknown_gates = set(validity_gates.keys()) - _CALIBRATION_VALIDITY_GATES_REQUIRED_KEYS
+    if unknown_gates:
+        raise Run9ValidationError(f"calibration.validity_gates has unknown key(s): {sorted(unknown_gates)}")
+    missing_gates = _CALIBRATION_VALIDITY_GATES_REQUIRED_KEYS - set(validity_gates.keys())
+    if missing_gates:
+        raise Run9ValidationError(
+            f"calibration.validity_gates missing required key(s): {sorted(missing_gates)}"
+        )
+    _require_non_empty_str(validity_gates["policy"], field="calibration.validity_gates.policy")
+    _require_non_empty_str(validity_gates["on_failure"], field="calibration.validity_gates.on_failure")
+    _validate_calibration_gate(
+        validity_gates["c1_gate"],
+        field="calibration.validity_gates.c1_gate",
+        definition_key="d_c1_population",
+    )
+    # Fix 20: D_C1 も RUN9_CONTRACT.yaml `interventions.c1_sham_takes_per_founder`
+    # へのフィールド名参照を強制する（D_C0 と対になる欠陥の同時是正）。
+    d_c1_population = validity_gates["c1_gate"]["d_c1_population"]
+    if _D_C1_POPULATION_FIELD_REF_MARKER not in d_c1_population:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.d_c1_population must reference RUN9_CONTRACT.yaml's "
+            f"{_D_C1_POPULATION_FIELD_REF_MARKER!r} field by name (dangling delegation to a "
+            f"nonexistent contract field is forbidden), got {d_c1_population!r}"
+        )
+    # Fix 23: D_C0(F) と対になる自己比較禁止チェック。
+    if _SELF_COMPARISON_PROHIBITION_MARKER not in d_c1_population:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.d_c1_population must state the self-comparison "
+            f"contamination prohibition (expected {_SELF_COMPARISON_PROHIBITION_MARKER!r} to appear "
+            "— reference_render(F) does not belong to the C1 population), got "
+            f"{d_c1_population!r} (Codex bot レビュー PR #318 第9巡 Fix 23)"
+        )
+    # Fix 32: C1 ゲート条件が分布中心（P50）vs 尾側（theta_cal(F)）の比較で
+    # あることを機械強制し、統計的欠陥のあった旧尾側 vs 尾側比較
+    # （P95(D_C1(F))）への逆行を拒否する。
+    c1_condition = validity_gates["c1_gate"]["condition"]
+    if _C1_GATE_CONDITION_P50_MARKER not in c1_condition:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.condition must be the median-vs-tail comparison "
+            f"(expected {_C1_GATE_CONDITION_P50_MARKER!r} to appear), got {c1_condition!r} (Codex bot "
+            "レビュー PR #318 第13巡 Fix 32 — the old tail-vs-tail comparison P95(D_C1(F)) is "
+            "exchangeable with P95(D_C0(F)) under a zero adapter effect and spuriously fails ~50% of "
+            "the time)"
+        )
+    if _C1_GATE_CONDITION_OLD_P95_MARKER in c1_condition:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.condition must not regress to the old tail-vs-tail "
+            f"phrase {_C1_GATE_CONDITION_OLD_P95_MARKER!r} (Codex bot レビュー PR #318 第13巡 Fix 32), "
+            f"got {c1_condition!r}"
+        )
+    # Fix 32: d_c1_population が P50 の分位計算法を percentile_method へ
+    # 参照束縛していること、および旧ゲートの統計的欠陥（交換可能性）の理由を
+    # 明文していることを要求する。
+    if _D_C1_POPULATION_PERCENTILE_METHOD_REF_MARKER not in d_c1_population:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.d_c1_population must bind P50's quantile method to "
+            f"freeze_threshold.percentile_method by reference (expected "
+            f"{_D_C1_POPULATION_PERCENTILE_METHOD_REF_MARKER!r} to appear), got {d_c1_population!r} "
+            "(Codex bot レビュー PR #318 第13巡 Fix 32)"
+        )
+    if _C1_GATE_EXCHANGEABLE_RATIONALE_MARKER not in d_c1_population:
+        raise Run9ValidationError(
+            "calibration.validity_gates.c1_gate.d_c1_population must state the zero-effect "
+            f"exchangeability rationale for the P50 revision (expected "
+            f"{_C1_GATE_EXCHANGEABLE_RATIONALE_MARKER!r} to appear), got {d_c1_population!r} "
+            "(Codex bot レビュー PR #318 第13巡 Fix 32)"
+        )
+    _validate_calibration_gate(
+        validity_gates["positive_reference_gate"],
+        field="calibration.validity_gates.positive_reference_gate",
+        definition_key="positive_reference_definition",
+    )
+    # Fix 27: positive reference の生成・選定手続きの凍結を文言マーカーで
+    # 機械強制する（docstring 参照）。
+    positive_reference_definition = validity_gates["positive_reference_gate"][
+        "positive_reference_definition"
+    ]
+    for marker in _POSITIVE_REFERENCE_DEFINITION_MARKERS:
+        if marker not in positive_reference_definition:
+            raise Run9ValidationError(
+                "calibration.validity_gates.positive_reference_gate.positive_reference_definition "
+                f"must state {marker!r} (Codex bot レビュー PR #318 第10巡 Fix 27 — pin the "
+                f"positive-reference render selection procedure), got "
+                f"{positive_reference_definition!r}"
+            )
+    _validate_calibration_gate(
+        validity_gates["negative_reference_gate"],
+        field="calibration.validity_gates.negative_reference_gate",
+        definition_key="negative_reference_definition",
+    )
+    # Fix 27: negative reference にも生成タイミング（birth probe）の明示を
+    # 要求する（同型の曖昧さ再発防止）。
+    negative_reference_definition = validity_gates["negative_reference_gate"][
+        "negative_reference_definition"
+    ]
+    if _NEGATIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER not in negative_reference_definition:
+        raise Run9ValidationError(
+            "calibration.validity_gates.negative_reference_gate.negative_reference_definition must "
+            f"state its generation timing (expected "
+            f"{_NEGATIVE_REFERENCE_BIRTH_PROBE_TIMING_MARKER!r} to appear), got "
+            f"{negative_reference_definition!r} (Codex bot レビュー PR #318 第10巡 Fix 27)"
+        )
+    # Fix 30: negative reference の単一ソース化 — PJS への言及がある場合は
+    # 必ず「negative reference としても使用しない」旨でなければならず、
+    # 旧矛盾文言（「negative reference としてのみ利用する」）への逆行を
+    # 拒否する。
+    if _NEGATIVE_REFERENCE_PJS_NAME_MARKER in negative_reference_definition:
+        if _NEGATIVE_REFERENCE_PJS_NON_USE_MARKER not in negative_reference_definition:
+            raise Run9ValidationError(
+                "calibration.validity_gates.negative_reference_gate.negative_reference_definition "
+                f"mentions PJS but does not state the non-use marker (expected "
+                f"{_NEGATIVE_REFERENCE_PJS_NON_USE_MARKER!r} to appear), got "
+                f"{negative_reference_definition!r} (Codex bot レビュー PR #318 第12巡 Fix 30 — PJS "
+                "is structurally excluded from the Identity anchor space and must not be used as a "
+                "negative reference either)"
+            )
+    if _NEGATIVE_REFERENCE_PJS_CONTRADICTORY_MARKER in negative_reference_definition:
+        raise Run9ValidationError(
+            "calibration.validity_gates.negative_reference_gate.negative_reference_definition must "
+            f"not contain the old contradictory phrase {_NEGATIVE_REFERENCE_PJS_CONTRADICTORY_MARKER!r} "
+            f"(PJS being 'structurally excluded' and then 'used only as a negative reference' in the "
+            f"same definition is self-contradictory), got {negative_reference_definition!r} (Codex bot "
+            "レビュー PR #318 第12巡 Fix 30)"
+        )
+
+    decision_rule = _require_dict(calibration["decision_rule"], field="calibration.decision_rule")
+    _validate_nested_str_keys(
+        decision_rule, field="calibration.decision_rule", keys=_CALIBRATION_DECISION_RULE_STR_KEYS
+    )
+
+    source_references = _require_dict(
+        calibration["source_references"], field="calibration.source_references"
+    )
+    _validate_nested_str_keys(
+        source_references,
+        field="calibration.source_references",
+        keys=_CALIBRATION_SOURCE_REFERENCES_STR_KEYS,
+    )
+
+    worked_example = _require_dict(calibration["worked_example"], field="calibration.worked_example")
+    required_worked_keys = set(_CALIBRATION_WORKED_EXAMPLE_STR_KEYS) | set(
+        _CALIBRATION_WORKED_EXAMPLE_NUMBER_KEYS
+    ) | {"d_c0_samples"}
+    unknown_worked = set(worked_example.keys()) - required_worked_keys
+    if unknown_worked:
+        raise Run9ValidationError(f"calibration.worked_example has unknown key(s): {sorted(unknown_worked)}")
+    missing_worked = required_worked_keys - set(worked_example.keys())
+    if missing_worked:
+        raise Run9ValidationError(
+            f"calibration.worked_example missing required key(s): {sorted(missing_worked)}"
+        )
+    for key in _CALIBRATION_WORKED_EXAMPLE_STR_KEYS:
+        _require_non_empty_str(worked_example[key], field=f"calibration.worked_example.{key}")
+    disclaimer = worked_example["disclaimer"].lower()
+    if not any(marker.lower() in disclaimer for marker in _WORKED_EXAMPLE_DISCLAIMER_MARKERS):
+        raise Run9ValidationError(
+            "calibration.worked_example.disclaimer must mark the example as a synthetic "
+            f"illustration (expected one of {_WORKED_EXAMPLE_DISCLAIMER_MARKERS!r} to appear), "
+            f"got {worked_example['disclaimer']!r} (実測偽装の禁止 — 本 repo の規律)"
+        )
+    for key in _CALIBRATION_WORKED_EXAMPLE_NUMBER_KEYS:
+        _require_positive_finite_number(worked_example[key], field=f"calibration.worked_example.{key}")
+    d_c0_samples = worked_example["d_c0_samples"]
+    if not isinstance(d_c0_samples, list) or not d_c0_samples:
+        raise Run9ValidationError(
+            f"calibration.worked_example.d_c0_samples must be a non-empty list, got {d_c0_samples!r}"
+        )
+    for i, sample in enumerate(d_c0_samples):
+        _require_positive_finite_number(sample, field=f"calibration.worked_example.d_c0_samples[{i}]")
+
+
+def _validate_extraction_procedure(data: Any) -> None:
+    extraction = _require_dict(data, field="identity metric space manifest.extraction_procedure")
+    unknown = set(extraction.keys()) - _EXTRACTION_PROCEDURE_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"extraction_procedure has unknown key(s): {sorted(unknown)}")
+    missing = _EXTRACTION_PROCEDURE_REQUIRED_KEYS - set(extraction.keys())
+    if missing:
+        raise Run9ValidationError(f"extraction_procedure missing required key(s): {sorted(missing)}")
+
+    f0_estimation = _require_dict(extraction["f0_estimation"], field="extraction_procedure.f0_estimation")
+    _validate_nested_str_keys(
+        f0_estimation, field="extraction_procedure.f0_estimation", keys=_F0_ESTIMATION_REQUIRED_STR_KEYS
+    )
+
+    _require_positive_finite_number(
+        extraction["frame_period_ms"], field="extraction_procedure.frame_period_ms"
+    )
+    _require_non_empty_str(
+        extraction["frame_period_source"], field="extraction_procedure.frame_period_source"
+    )
+
+    spectral_envelope = _require_dict(
+        extraction["spectral_envelope"], field="extraction_procedure.spectral_envelope"
+    )
+    _validate_nested_str_keys(
+        spectral_envelope,
+        field="extraction_procedure.spectral_envelope",
+        keys=_SPECTRAL_ENVELOPE_REQUIRED_STR_KEYS,
+    )
+
+    _require_non_empty_str(extraction["fft_size_rule"], field="extraction_procedure.fft_size_rule")
+
+    voiced_mask = _require_dict(extraction["voiced_mask"], field="extraction_procedure.voiced_mask")
+    _validate_nested_str_keys(
+        voiced_mask, field="extraction_procedure.voiced_mask", keys=_VOICED_MASK_REQUIRED_STR_KEYS
+    )
+
+    sample_rate = _require_dict(extraction["sample_rate"], field="extraction_procedure.sample_rate")
+    required_sample_rate_keys = set(_SAMPLE_RATE_REQUIRED_STR_KEYS) | {"value_hz"}
+    unknown_sr = set(sample_rate.keys()) - required_sample_rate_keys
+    if unknown_sr:
+        raise Run9ValidationError(f"extraction_procedure.sample_rate has unknown key(s): {sorted(unknown_sr)}")
+    missing_sr = required_sample_rate_keys - set(sample_rate.keys())
+    if missing_sr:
+        raise Run9ValidationError(
+            f"extraction_procedure.sample_rate missing required key(s): {sorted(missing_sr)}"
+        )
+    value_hz = sample_rate["value_hz"]
+    if not _is_strict_int(value_hz) or value_hz <= 0:
+        raise Run9ValidationError(
+            f"extraction_procedure.sample_rate.value_hz must be a positive exact int (bool/float "
+            f"rejected), got {value_hz!r} ({type(value_hz).__name__})"
+        )
+    _validate_nested_str_keys(
+        sample_rate,
+        field="extraction_procedure.sample_rate",
+        keys=_SAMPLE_RATE_REQUIRED_STR_KEYS,
+        allowed_keys=frozenset(required_sample_rate_keys),
+    )
+
+    # Fix 35: sample_rate_normalization — native sr ≠ 44100 Hz の入力（PJS
+    # corpus 等）への決定論的変換規則の存在・決定論性・一般規則性を機械
+    # 強制する。旧「変換規則なし」状態（本キー欠落）は
+    # _EXTRACTION_PROCEDURE_REQUIRED_KEYS の必須キー化により既に拒否される。
+    sample_rate_normalization = _require_dict(
+        extraction["sample_rate_normalization"], field="extraction_procedure.sample_rate_normalization"
+    )
+    _validate_nested_str_keys(
+        sample_rate_normalization,
+        field="extraction_procedure.sample_rate_normalization",
+        keys=_SAMPLE_RATE_NORMALIZATION_REQUIRED_STR_KEYS,
+    )
+    sr_norm_rule = sample_rate_normalization["rule"]
+    for marker in (
+        _SAMPLE_RATE_NORMALIZATION_GENERAL_GCD_MARKER,
+        _SAMPLE_RATE_NORMALIZATION_GENERAL_UP_MARKER,
+        _SAMPLE_RATE_NORMALIZATION_GENERAL_DOWN_MARKER,
+    ):
+        if marker not in sr_norm_rule:
+            raise Run9ValidationError(
+                "extraction_procedure.sample_rate_normalization.rule must state the general "
+                f"per-native-rate ratio derivation formula (expected {marker!r} to appear — a rule "
+                "that pins a single fixed ratio (e.g. 147/160) without the derivation formula would "
+                "silently misconvert any native rate other than the one the fixed ratio was derived "
+                "for, contradicting the adjacent applies_to claim that this rule applies to every "
+                f"native sr != 44100 Hz input), got {sr_norm_rule!r} (Codex bot レビュー PR #318 "
+                "第16巡 Fix 36)"
+            )
+    for marker in (
+        _SAMPLE_RATE_NORMALIZATION_DERIVATION_EXAMPLE_CALL_MARKER,
+        _SAMPLE_RATE_NORMALIZATION_DERIVATION_EXAMPLE_FRACTION_MARKER,
+    ):
+        if marker not in sr_norm_rule:
+            raise Run9ValidationError(
+                "extraction_procedure.sample_rate_normalization.rule must state the worked 48000 Hz "
+                f"derivation example (expected {marker!r} to appear — an implicit or unspecified "
+                "resample procedure would make results reproducible only by accident), "
+                f"got {sr_norm_rule!r} (Codex bot レビュー PR #318 第15巡 Fix 35 / 第16巡 Fix 36)"
+            )
+    sr_norm_applies_to = sample_rate_normalization["applies_to"]
+    for marker in (
+        _SAMPLE_RATE_NORMALIZATION_GENERAL_RULE_MARKER,
+        _SAMPLE_RATE_NORMALIZATION_NOT_PJS_SPECIFIC_MARKER,
+    ):
+        if marker not in sr_norm_applies_to:
+            raise Run9ValidationError(
+                f"extraction_procedure.sample_rate_normalization.applies_to must state {marker!r} "
+                "(Codex bot レビュー PR #318 第15巡 Fix 35 — the conversion rule must be a general "
+                "rule for any input whose native sr differs from 44100 Hz, not a PJS-only special "
+                f"case), got {sr_norm_applies_to!r}"
+            )
+
+    log_transform = _require_dict(extraction["log_transform"], field="extraction_procedure.log_transform")
+    required_log_keys = set(_LOG_TRANSFORM_REQUIRED_STR_KEYS) | {"floor_value"}
+    unknown_log = set(log_transform.keys()) - required_log_keys
+    if unknown_log:
+        raise Run9ValidationError(f"extraction_procedure.log_transform has unknown key(s): {sorted(unknown_log)}")
+    missing_log = required_log_keys - set(log_transform.keys())
+    if missing_log:
+        raise Run9ValidationError(
+            f"extraction_procedure.log_transform missing required key(s): {sorted(missing_log)}"
+        )
+    _require_positive_finite_number(
+        log_transform["floor_value"], field="extraction_procedure.log_transform.floor_value"
+    )
+    _validate_nested_str_keys(
+        log_transform,
+        field="extraction_procedure.log_transform",
+        keys=_LOG_TRANSFORM_REQUIRED_STR_KEYS,
+        allowed_keys=frozenset(required_log_keys),
+    )
+
+
+def _validate_feature_extractor(data: Any) -> None:
+    fe = _require_dict(data, field="identity metric space manifest.feature_extractor")
+    unknown = set(fe.keys()) - _FEATURE_EXTRACTOR_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"feature_extractor has unknown key(s): {sorted(unknown)}")
+    missing = _FEATURE_EXTRACTOR_REQUIRED_KEYS - set(fe.keys())
+    if missing:
+        raise Run9ValidationError(f"feature_extractor missing required key(s): {sorted(missing)}")
+    for key in _FEATURE_EXTRACTOR_STR_KEYS:
+        _require_non_empty_str(fe[key], field=f"feature_extractor.{key}")
+
+    version_source = _require_dict(fe["version_source"], field="feature_extractor.version_source")
+    unknown_vs = set(version_source.keys()) - _FEATURE_EXTRACTOR_VERSION_SOURCE_REQUIRED_KEYS
+    if unknown_vs:
+        raise Run9ValidationError(f"feature_extractor.version_source has unknown key(s): {sorted(unknown_vs)}")
+    missing_vs = _FEATURE_EXTRACTOR_VERSION_SOURCE_REQUIRED_KEYS - set(version_source.keys())
+    if missing_vs:
+        raise Run9ValidationError(
+            f"feature_extractor.version_source missing required key(s): {sorted(missing_vs)}"
+        )
+    for key in _FEATURE_EXTRACTOR_VERSION_SOURCE_REQUIRED_KEYS:
+        _require_non_empty_str(version_source[key], field=f"feature_extractor.version_source.{key}")
+
+
+def _validate_identity_feature(data: Any) -> None:
+    identity_feature = _require_dict(data, field="identity metric space manifest.identity_feature")
+    unknown = set(identity_feature.keys()) - _IDENTITY_FEATURE_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"identity_feature has unknown key(s): {sorted(unknown)}")
+    missing = _IDENTITY_FEATURE_REQUIRED_KEYS - set(identity_feature.keys())
+    if missing:
+        raise Run9ValidationError(f"identity_feature missing required key(s): {sorted(missing)}")
+    for key in _IDENTITY_FEATURE_STR_KEYS:
+        _require_non_empty_str(identity_feature[key], field=f"identity_feature.{key}")
+
+    # Fix 31: scope はここで「feature の計算可能域（全 identity 評価対象
+    # レンダー）」と「校正・参照に使える母集団（neutral な r0 限定）」の
+    # 両方を明文で区別していなければならない — 旧 P0/C0 限定 scope への
+    # 無断退行（calibration.decision_rule が要求する post-practice/
+    # post-education レンダーの d(r) が再び計算不能になる）を防ぐ。
+    scope = identity_feature["scope"]
+    for marker in (
+        _IDENTITY_FEATURE_SCOPE_EVALUATED_RENDERS_MARKER,
+        _IDENTITY_FEATURE_SCOPE_NEUTRAL_POPULATION_MARKER,
+        _IDENTITY_FEATURE_SCOPE_DISTINCTION_MARKER,
+    ):
+        if marker not in scope:
+            raise Run9ValidationError(
+                f"identity_feature.scope must state {marker!r} (Codex bot レビュー PR #318 第12巡 "
+                "Fix 31 — the feature's computable domain must cover every identity-evaluation "
+                "render that calibration.decision_rule requires d(r) for, while the calibration "
+                "population and reference renders remain neutral-only; both must be stated and kept "
+                f"distinct), got {scope!r}"
+            )
+    # Fix 33: scope は confuser_control 節の pjs_reference も feature の計算
+    # 可能域へ含める旨を明文していなければならない（DESIGN_RUN9 §14 C3 の
+    # 評価経路が feature を計算できる対象を確保するため）。
+    for marker in (
+        _IDENTITY_FEATURE_SCOPE_CONFUSER_CONTROL_MARKER,
+        _IDENTITY_FEATURE_SCOPE_PJS_REFERENCE_MARKER,
+    ):
+        if marker not in scope:
+            raise Run9ValidationError(
+                f"identity_feature.scope must state {marker!r} (Codex bot レビュー PR #318 第13巡 "
+                "Fix 33 — the feature's computable domain must also cover the confuser_control "
+                "section's pjs_reference render, without folding it into the neutral calibration "
+                f"population/reference), got {scope!r}"
+            )
+
+    f0_exclusion = _require_dict(identity_feature["f0_exclusion"], field="identity_feature.f0_exclusion")
+    unknown_f0 = set(f0_exclusion.keys()) - _F0_EXCLUSION_REQUIRED_KEYS
+    if unknown_f0:
+        raise Run9ValidationError(f"identity_feature.f0_exclusion has unknown key(s): {sorted(unknown_f0)}")
+    missing_f0 = _F0_EXCLUSION_REQUIRED_KEYS - set(f0_exclusion.keys())
+    if missing_f0:
+        raise Run9ValidationError(
+            f"identity_feature.f0_exclusion missing required key(s): {sorted(missing_f0)}"
+        )
+    if not isinstance(f0_exclusion["excluded"], bool):
+        raise Run9ValidationError(
+            f"identity_feature.f0_exclusion.excluded must be a bool, got {f0_exclusion['excluded']!r} "
+            f"({type(f0_exclusion['excluded']).__name__})"
+        )
+    _require_non_empty_str(f0_exclusion["rationale"], field="identity_feature.f0_exclusion.rationale")
+
+    aperiodicity = _require_dict(identity_feature["aperiodicity"], field="identity_feature.aperiodicity")
+    unknown_ap = set(aperiodicity.keys()) - _APERIODICITY_REQUIRED_KEYS
+    if unknown_ap:
+        raise Run9ValidationError(f"identity_feature.aperiodicity has unknown key(s): {sorted(unknown_ap)}")
+    missing_ap = _APERIODICITY_REQUIRED_KEYS - set(aperiodicity.keys())
+    if missing_ap:
+        raise Run9ValidationError(
+            f"identity_feature.aperiodicity missing required key(s): {sorted(missing_ap)}"
+        )
+    _require_non_empty_str(aperiodicity["status"], field="identity_feature.aperiodicity.status")
+    _require_non_empty_str(aperiodicity["note"], field="identity_feature.aperiodicity.note")
+
+    # Fix 25: level_normalization 節（gain invariance の凍結）を検証する。
+    level_normalization = _require_dict(
+        identity_feature["level_normalization"], field="identity_feature.level_normalization"
+    )
+    _validate_nested_str_keys(
+        level_normalization,
+        field="identity_feature.level_normalization",
+        keys=_LEVEL_NORMALIZATION_STR_KEYS,
+    )
+    rationale = level_normalization["rationale"]
+    if _LEVEL_NORMALIZATION_GAIN_MARKER not in rationale:
+        raise Run9ValidationError(
+            "identity_feature.level_normalization.rationale must state the render-gain invariance "
+            f"reasoning (expected {_LEVEL_NORMALIZATION_GAIN_MARKER!r} to appear), got {rationale!r} "
+            "(Codex bot レビュー PR #318 第10巡 Fix 25 — WORLD の sp はパワー領域でレンダーゲインに "
+            "比例スケールするため、raw log 包絡は全 bin に約定数のオフセットが乗る)"
+        )
+    formula = level_normalization["formula"]
+    if _LEVEL_NORMALIZATION_MEAN_SUBTRACTION_MARKER not in formula:
+        raise Run9ValidationError(
+            "identity_feature.level_normalization.formula must be the frozen scalar-mean-subtraction "
+            f"form (expected {_LEVEL_NORMALIZATION_MEAN_SUBTRACTION_MARKER!r} to appear), got "
+            f"{formula!r} (Codex bot レビュー PR #318 第10巡 Fix 25 — per-frame 正規化等への無断置換 "
+            "を防ぐ)"
+        )
+
+
+def _validate_distance_section(data: Any) -> None:
+    distance = _require_dict(data, field="identity metric space manifest.distance")
+    unknown = set(distance.keys()) - _DISTANCE_SECTION_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"distance has unknown key(s): {sorted(unknown)}")
+    missing = _DISTANCE_SECTION_REQUIRED_KEYS - set(distance.keys())
+    if missing:
+        raise Run9ValidationError(f"distance missing required key(s): {sorted(missing)}")
+    for key in _DISTANCE_SECTION_STR_KEYS:
+        _require_non_empty_str(distance[key], field=f"distance.{key}")
+
+    properties = distance["properties"]
+    if not isinstance(properties, list) or not properties:
+        raise Run9ValidationError(f"distance.properties must be a non-empty list, got {properties!r}")
+    for i, prop in enumerate(properties):
+        _require_non_empty_str(prop, field=f"distance.properties[{i}]")
+
+
+def _validate_reference_example(data: Any) -> None:
+    """Codex bot レビュー PR #318 第12巡 Fix 29 採用（P1）: 実測 reference の
+    循環 provenance を解消するため、reference_example は procedure-only の
+    恒久 pin として検証する。status は凍結した唯一の値
+    （`_REFERENCE_EXAMPLE_PROCEDURE_ONLY_STATUS`）と厳密一致し、value は
+    常に null でなければならない（非対称ルールを Fix 21 から反転: 旧ルールは
+    「PENDING 中のみ null 許容・それ以外は非 null 必須」だったが、新ルールは
+    「常に null が正・null 以外は拒否」——実測値をこの founder-defining pin
+    へ書き戻す企図そのものを拒否する）。実測値は
+    RUN9_CONTRACT.yaml の post-run pin `artifact_manifest_sha` 配下の
+    post-birth artifact（測定記録側）に記録し、本 manifest（founder 定義側）
+    は手続きのみを保持する片方向の provenance を維持する。
+    """
+    ref = _require_dict(data, field="identity metric space manifest.reference_example")
+    unknown = set(ref.keys()) - _REFERENCE_EXAMPLE_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"reference_example has unknown key(s): {sorted(unknown)}")
+    missing = _REFERENCE_EXAMPLE_REQUIRED_KEYS - set(ref.keys())
+    if missing:
+        raise Run9ValidationError(f"reference_example missing required key(s): {sorted(missing)}")
+    _require_non_empty_str(ref["status"], field="reference_example.status")
+    _require_non_empty_str(ref["procedure"], field="reference_example.procedure")
+
+    status = ref["status"]
+    if status != _REFERENCE_EXAMPLE_PROCEDURE_ONLY_STATUS:
+        raise Run9ValidationError(
+            f"reference_example.status must be exactly {_REFERENCE_EXAMPLE_PROCEDURE_ONLY_STATUS!r} "
+            "(Codex bot レビュー PR #318 第12巡 Fix 29 — this manifest is a procedure-only pin that "
+            f"never records the measured birth-probe reference value), got {status!r}"
+        )
+
+    value = ref["value"]
+    if value is not None:
+        raise Run9ValidationError(
+            "reference_example.value must remain permanently null — writing the measured "
+            "birth-probe reference value back into this manifest would repin metric_space_sha and, "
+            "via Run9IdentityDomain.content_digest(), change the founder's genome_id, creating a "
+            "circular provenance between the recorded probe's identity and the manifest that defines "
+            "that identity (Codex bot レビュー PR #318 第12巡 Fix 29). Record the measured value in "
+            "the post-birth artifact bound under RUN9_CONTRACT.yaml's artifact_manifest_sha instead, "
+            f"got {value!r}"
+        )
+
+
+def _validate_confuser_control_section(data: Any) -> None:
+    """Codex bot レビュー PR #318 第13巡 Fix 33 採用（P1）: `confuser_control`
+    節（DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §14 C3「PJS
+    Confuser」の実装復元）の閉じた形状を検証する。role/metric/
+    pjs_reference_definition/evaluation の4キー閉集合 + 非空 str 型検証に
+    加え、以下の意味論マーカーを機械強制する: ①role は「negative reference
+    としては使用しない」と「confuser control としてのみ使用する」の両方を
+    区別して明文（Fix 30 の校正ゲート専用 non-use 宣言と矛盾しない精密化）
+    ②metric は identity_feature.level_normalization の定義する feature(x)
+    を参照（独自距離式を新設しない）③evaluation は総合スコア化・PASS/FAIL
+    化をしないこと（軸別 evidence のみ規律）と calibration_status(F) から
+    独立であることの両方を明文。
+
+    第14巡 Fix 34（P1）: pjs_reference_definition の学習前決定論的凍結を
+    追加検証する。単一テイク選択（旧「単一の参照レンダー/特徴」）への逆行を
+    拒否し、決定論的コーパス集約（辞書順列挙・expanded_corpus_identity_
+    sha256 pin フィールドへの入力束縛・voiced_mask による機械的除外・要素
+    ごとの算術平均・学習後の事後選択が構造的に不可能である旨の明文）の
+    5マーカーを機械強制する。
+
+    第17巡 Fix 37（P1）: ②列挙規則の集約対象を、既 pin（corpus_identity_
+    hash()）が実際に被覆するファイル集合（`_song.wav`）へ限定したことを
+    追加検証する。旧「コーパス内の全音声ファイル列挙」（speech 100 WAV・
+    background 3 WAV を含む pin 被覆外ファイルの混入を許した規則）への
+    逆行を拒否し、`_song.wav` 限定・corpus_identity_hash() への被覆一次
+    ソース参照・speech/background 混入禁止の明文の3マーカーを機械強制する。
+    """
+    confuser = _require_dict(data, field="identity metric space manifest.confuser_control")
+    unknown = set(confuser.keys()) - _CONFUSER_CONTROL_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"confuser_control has unknown key(s): {sorted(unknown)}")
+    missing = _CONFUSER_CONTROL_REQUIRED_KEYS - set(confuser.keys())
+    if missing:
+        raise Run9ValidationError(f"confuser_control missing required key(s): {sorted(missing)}")
+    for key in _CONFUSER_CONTROL_STR_KEYS:
+        _require_non_empty_str(confuser[key], field=f"confuser_control.{key}")
+
+    role = confuser["role"]
+    for marker in (
+        _CONFUSER_CONTROL_ROLE_NON_USE_AS_NEGATIVE_REFERENCE_MARKER,
+        _CONFUSER_CONTROL_ROLE_CONFUSER_ONLY_USE_MARKER,
+    ):
+        if marker not in role:
+            raise Run9ValidationError(
+                f"confuser_control.role must state {marker!r} (Codex bot レビュー PR #318 第13巡 "
+                "Fix 33 — PJS's role must be precisely distinguished as 'not used as a negative "
+                "reference' vs 'used only as a confuser control', without contradicting Fix 30's "
+                f"calibration-gate-scoped non-use declaration), got {role!r}"
+            )
+
+    metric = confuser["metric"]
+    for marker in (
+        _CONFUSER_CONTROL_METRIC_FEATURE_CALL_MARKER,
+        _CONFUSER_CONTROL_METRIC_LEVEL_NORMALIZATION_REF_MARKER,
+    ):
+        if marker not in metric:
+            raise Run9ValidationError(
+                f"confuser_control.metric must state {marker!r} (Codex bot レビュー PR #318 第13巡 "
+                "Fix 33 — the confuser distance must bind by reference to "
+                "identity_feature.level_normalization's feature(x) rather than defining a new "
+                f"distance formula), got {metric!r}"
+            )
+
+    pjs_reference_definition = confuser["pjs_reference_definition"]
+    if _PJS_REFERENCE_DEFINITION_OLD_SINGLE_TAKE_REGRESSION_MARKER in pjs_reference_definition:
+        raise Run9ValidationError(
+            "confuser_control.pjs_reference_definition must not regress to single-take PJS "
+            "reference selection (Codex bot レビュー PR #318 第14巡 Fix 34 — single-take selection, "
+            "even with a pinned take index/digest, still leaves residual selection discretion and "
+            "post-run-only recording of the selected value, which structurally permits post-hoc "
+            "cherry-picking of a favorable PJS take after observing post-learning renders; it was "
+            "replaced by deterministic full-corpus aggregation), "
+            f"got {pjs_reference_definition!r}"
+        )
+    for marker in (
+        _PJS_REFERENCE_DEFINITION_LEXICOGRAPHIC_ENUMERATION_MARKER,
+        _PJS_REFERENCE_DEFINITION_ARITHMETIC_MEAN_MARKER,
+        _PJS_REFERENCE_DEFINITION_CORPUS_PIN_FIELD_MARKER,
+        _PJS_REFERENCE_DEFINITION_VOICED_MASK_EXCLUSION_MARKER,
+        _PJS_REFERENCE_DEFINITION_POST_HOC_SELECTION_IMPOSSIBLE_MARKER,
+    ):
+        if marker not in pjs_reference_definition:
+            raise Run9ValidationError(
+                f"confuser_control.pjs_reference_definition must state {marker!r} (Codex bot "
+                "レビュー PR #318 第14巡 Fix 34 — pjs_reference must be frozen pre-learning as a "
+                "deterministic corpus-wide aggregate: lexicographic enumeration of the pinned "
+                "expanded corpus, the same extraction procedure per file, mechanical voiced_mask-"
+                "based exclusion, element-wise arithmetic mean aggregation, and an explicit "
+                "statement that post-hoc PJS-take selection is structurally impossible), "
+                f"got {pjs_reference_definition!r}"
+            )
+    # Fix 35: ③特徴計算クローズが extraction_procedure.sample_rate_normalization
+    # を参照していることを要求する（PJS の native 48000Hz を 44100Hz へ変換
+    # してから特徴計算する手続きとの相互参照の欠落を拒否する）。
+    if _PJS_REFERENCE_DEFINITION_SAMPLE_RATE_NORMALIZATION_REF_MARKER not in pjs_reference_definition:
+        raise Run9ValidationError(
+            "confuser_control.pjs_reference_definition must cross-reference "
+            f"{_PJS_REFERENCE_DEFINITION_SAMPLE_RATE_NORMALIZATION_REF_MARKER!r} (Codex bot レビュー "
+            "PR #318 第15巡 Fix 35 — feature computation over the PJS corpus must apply the "
+            "extraction_procedure.sample_rate_normalization input-normalization step first, since "
+            "PJS's native sample rate (48000 Hz) differs from the pinned metric sample rate "
+            f"(44100 Hz)), got {pjs_reference_definition!r}"
+        )
+
+    # Fix 37: ②列挙規則が pin 被覆ファイル集合（`_song.wav`）へ限定されて
+    # いることを機械強制する。旧「コーパス内の全音声ファイル列挙」規則
+    # （speech/background を含む全203 WAV を対象化し、corpus_identity_hash()
+    # の被覆外ファイルが pjs_reference・no-leakage evidence を pin を変えず
+    # に汚染し得た欠陥）への逆行を拒否する。
+    if (
+        _PJS_REFERENCE_DEFINITION_OLD_FULL_CORPUS_ENUMERATION_REGRESSION_MARKER
+        in pjs_reference_definition
+    ):
+        raise Run9ValidationError(
+            "confuser_control.pjs_reference_definition must not regress to enumerating every "
+            "audio file in the bound corpus regardless of pin coverage (Codex bot レビュー PR #318 "
+            "第17巡 Fix 37 — the referenced corpus_sha256 (pjs_neutral.json, via "
+            "corpus_identity_hash()) covers only .lab + paired _song.wav files; speech/background "
+            "WAV outside that coverage can be swapped without changing the pin, contaminating "
+            f"pjs_reference and no-leakage evidence), got {pjs_reference_definition!r}"
+        )
+    for marker in (
+        _PJS_REFERENCE_DEFINITION_SONG_WAV_SCOPE_MARKER,
+        _PJS_REFERENCE_DEFINITION_CORPUS_IDENTITY_HASH_REF_MARKER,
+        _PJS_REFERENCE_DEFINITION_SPEECH_BACKGROUND_EXCLUSION_MARKER,
+    ):
+        if marker not in pjs_reference_definition:
+            raise Run9ValidationError(
+                f"confuser_control.pjs_reference_definition must state {marker!r} (Codex bot "
+                "レビュー PR #318 第17巡 Fix 37 — the enumeration scope (②) must be limited to the "
+                "`_song.wav` files that donor_bank_lab.py's corpus_identity_hash() actually pins "
+                "(.lab + paired _song.wav only), with speech/background WAV explicitly excluded "
+                "from aggregation because they fall outside pin coverage), "
+                f"got {pjs_reference_definition!r}"
+            )
+
+    evaluation = confuser["evaluation"]
+    if _CONFUSER_CONTROL_EVALUATION_NO_AGGREGATE_SCORE_MARKER not in evaluation:
+        raise Run9ValidationError(
+            "confuser_control.evaluation must state that no aggregate score / PASS-FAIL threshold "
+            f"is produced (expected {_CONFUSER_CONTROL_EVALUATION_NO_AGGREGATE_SCORE_MARKER!r} to "
+            f"appear), got {evaluation!r} (Codex bot レビュー PR #318 第13巡 Fix 33 — axis-specific "
+            "evidence only, no single Total Score)"
+        )
+    if _CONFUSER_CONTROL_EVALUATION_CALIBRATION_INDEPENDENCE_MARKER not in evaluation:
+        raise Run9ValidationError(
+            "confuser_control.evaluation must state its independence from calibration_status(F) "
+            f"(expected {_CONFUSER_CONTROL_EVALUATION_CALIBRATION_INDEPENDENCE_MARKER!r} to appear), "
+            f"got {evaluation!r} (Codex bot レビュー PR #318 第13巡 Fix 33)"
+        )
+
+
+def validate_identity_metric_space_manifest(data: Mapping[str, Any]) -> None:
+    """`inputs/identity_metric_space.json`（`run9-identity-metric-space/1.2`）
+    の閉じた形状を検証する（Codex bot レビュー PR #318 第6巡 Fix 19、
+    第7巡 Fix 20/Fix 21、第9巡 Fix 23/Fix 24、第11巡 Fix 28、
+    第12巡 Fix 29/Fix 30/Fix 31、第13巡 Fix 32/Fix 33、第14巡 Fix 34、
+    第15巡 Fix 35、第16巡 Fix 36 で拡張）。
+
+    第16巡 Fix 36（P1）: リサンプル比の native rate からの一般導出。第15巡
+    Fix 35 時点の rule は固定 147/160 比を pin していたが、直後の
+    applies_to が宣言する「native sr ≠ 44100 Hz のあらゆる入力に適用する
+    一般規則」と矛盾していた（例: native 24000 Hz の入力に 147/160 を適用
+    すると 22050 Hz へ変換され、WORLD には 44100 Hz として扱われて時間軸・
+    周波数軸と identity 距離が壊れる）。rule を g = gcd(44100, native_sr) と
+    して scipy.signal.resample_poly(x, up=44100//g, down=native_sr//g) を
+    適用する一般導出式へ改訂し、147/160 は native 48000 Hz（PJS の全203
+    WAV）に対する導出例として位置づけ直した。他の native rate も同一の
+    一般導出式が機械的に up/down を定め、固定比の他 rate への流用は不可と
+    明記した。native 44100 Hz の入力は引き続き恒等（変換不要）。validator
+    は旧固定比マーカーを一般導出式マーカー（`gcd(44100, native_sr)` /
+    `up=44100//g` / `down=native_sr//g`）+ 48kHz 導出例マーカー
+    （`resample_poly(x, up=147, down=160)` / `147/160`）へ更新し、固定比
+    のみで一般式を欠く旧状態への逆行を拒否する。
+
+    第15巡 Fix 35（P1）: PJS コーパスの metric sample rate への決定論的
+    正規化。corpus_inventory_pjs.json によれば PJS の203 WAVは全て48000Hzで
+    あり、旧 extraction_procedure.sample_rate は44100Hzを pin するのみで
+    再サンプル手続きが存在しなかった（WORLDネイティブ適用ならbin対応周波数
+    が食い違い、未凍結の再サンプルなら実装者間で再現不能になる、いずれの
+    経路でも confuser_control の d_pjs(r) が壊れる）。着手前調査の結果、
+    引用一次ソース donor_bank.py:190-196 analyze_donor_world() は内部で
+    固定 sr ロードを行わないことを確認し、新規に
+    extraction_procedure.sample_rate_normalization
+    （scipy.signal.resample_poly(x, up=147, down=160) — 44100/48000 の
+    既約有理比、window は scipy 既定 Kaiser を明示採用）を decisive な
+    決定論的変換規則として pin した。native sr が既に44100Hzの入力
+    （P0 identity probe founder render 等）は恒等（無変換）。PJS 特例では
+    なく「native sr ≠ 44100Hz のあらゆる入力」に適用する一般規則である旨も
+    明文化した。confuser_control.pjs_reference_definition の③特徴計算
+    クローズにもこの入力正規化ステップへの相互参照を追記した。
+
+    第14巡 Fix 34（P1）: pjs_reference の学習前決定論的凍結。旧
+    `confuser_control.pjs_reference_definition` は「事前登録手続きで単一の
+    参照レンダー/特徴を選ぶ」としか言っておらず、テイク index・digest・
+    生成条件・決定論的集約規則の指定を欠いていた。選定値は post-run の
+    `artifact_manifest_sha` 配下にしか記録されないため、評価者が学習後
+    レンダーを観察したあとで有利な PJS テイクを選定でき、
+    d_pjs(r_learned) の減少有無（no-PJS-leakage evidence）を汚染し得た。
+    単一テイク選択を全廃し、①`expanded_corpus_identity_sha256` pin
+    フィールドへの入力束縛 ②相対パス辞書順の全件列挙 ③
+    extraction_procedure/identity_feature の同一手続き適用 ④voiced_mask
+    による機械的（裁量ゼロ）除外 + 除外リストの出生後アーティファクト記録
+    ⑤要素ごとの算術平均集約 ⑥計算結果の一方向 provenance 記録（規則・
+    入力束縛自体は本 manifest で学習前に凍結済みで評価者に選択自由度は
+    存在しない）— の6要素からなる決定論的コーパス集約規則へ置換した。
+    `_validate_confuser_control_section()` が pjs_reference_definition の
+    旧単一テイク文言への逆行拒否 + 上記5マーカー（辞書順・算術平均・
+    corpus pin フィールド参照・voiced_mask 除外・事後選択不可能の明文）を
+    機械強制する。
+
+    第13巡 Fix 32（P1）: C1 ゲートの統計的欠陥の是正。C1 のアダプター効果が
+    完全にゼロのとき D_C0(F)/D_C1(F) は同一 replay-noise 分布からの独立標本
+    であり経験 P95 同士（尾側 vs 尾側）は交換可能なため、旧ゲート
+    `P95(D_C1(F)) <= theta_cal(F)` はゼロ効果下でも約1/2の確率で偽って
+    不成立となり founder を不当に INVALID 化していた。ゲート条件を
+    `P50(D_C1(F)) <= theta_cal(F)`（分布中心 vs 尾側の比較）へ改訂する。
+
+    第13巡 Fix 33（P1）: PJS confuser（C3）評価経路の復元。DESIGN_RUN9
+    §14 C3「PJS Confuser」が要求する no-PJS-leakage 検出経路を、第12巡
+    Fix 30 の校正ゲート専用 non-use 宣言と区別した新設 `confuser_control`
+    節（role/metric/pjs_reference_definition/evaluation）として復元する。
+    総合スコア化・PASS/FAIL 化はせず、校正 validity gates とも独立
+    （calibration_status(F) を変えない）。
+
+    第12巡 Fix 29（P1）: reference_example を procedure-only の恒久 pin と
+    して検証する。status は凍結した唯一の値と厳密一致し、value は常に null
+    でなければならない（Fix 21 の非対称ルールを反転 — 実測値の書き戻しは
+    metric_space_sha → content_digest() → genome_id の連鎖により循環
+    provenance を生むため、書き戻し自体を拒否する）。第12巡 Fix 30（P1）:
+    negative_reference_definition が PJS へ言及する場合、必ず「negative
+    reference としても使用しない」旨でなければならず、旧矛盾文言（「PJS は
+    構造的に排除済み」と述べつつ「negative reference としてのみ利用する」）
+    への逆行を拒否する。第12巡 Fix 31（P1）: identity_feature.scope が
+    「feature の計算可能域（全 identity 評価対象レンダー）」と「校正・参照に
+    使える母集団（neutral な r0 限定）」を区別して明文化していることを
+    機械強制する。
+
+    第11巡 Fix 28（P1）: calibration.distance_unit.formula が
+    identity_feature.level_normalization の定義する正規化 feature(x) 基準で
+    あることを機械強制する。raw な mean_voiced_log_sp ベクトルへの直接
+    Euclidean へ逆行すると、level 正規化前のゲイン変化が dynamics のみの
+    変化でも再び距離へ漏れ込み、metric_version 0.3 のゲイン不変の主張と
+    矛盾する。
+
+    第9巡 Fix 23（P1）: reference_render(F) が C0/C1 母集団に属するか
+    （自己比較ゼロ距離混入）が未凍結だった指摘を、`d_c0_population`/
+    `d_c1_population`/`reference_render_definition` の文言検証として
+    機械強制する。第9巡 Fix 24（P2）: `_validate_nested_str_keys()` を
+    必須キー存在チェックからキー集合完全一致（未知キー拒否）へ強化し、
+    本関数が呼ぶ全ネスト object（f0_estimation/spectral_envelope/
+    voiced_mask/distance_unit/freeze_threshold/decision_rule/
+    source_references 等）へ一括適用する。
+
+    旧実装はトップレベルの `schema`/`metric_version` 2ラベルしか検証して
+    おらず、digest テスト（正規形 sha256 が pin 値と一致すること）は
+    「そこにある形」を祝福するだけだった。repin 時に `extraction_
+    procedure` の丸ごと削除・`voiced_mask` の省略・ネスト型変更（例:
+    `frame_period_ms` が文字列化される）が起きても、digest テストは
+    改変後の内容から再計算した sha が pin 値と一致しさえすれば素通り
+    してしまう構造的な穴があった。
+
+    本関数はトップレベル必須キー閉集合・`extraction_procedure` の必須
+    ネストキー閉集合と型（harvest/cheaptrick/voiced_mask=f0>0/sample_rate/
+    fft/log floor の各キー）・`calibration` 節の必須キー閉集合と型
+    （distance_unit/freeze_threshold/validity_gates の3ゲート/
+    decision_rule/worked_example の synthetic disclaimer 必須/
+    source_references、Fix 20 で pooling 禁止文言 + per-founder 参照の
+    欠落も拒否）を検証する。Fix 21（PR #318 第7巡 Fix 21）採用: 旧実装は
+    `feature_extractor`/`identity_feature`/`distance`/`reference_example`
+    をトップレベルキー集合にのみ含め、内容は既存の `test_phase3_
+    identity_metric_space_*` 群（部分的な内容照合テスト）に委ねていた
+    ため、これら object 型フィールド全体の null 化やネストキーの欠落・
+    追加が repin だけで素通りする穴があった。本関数はこれら4フィールド
+    （+ 純メタデータ str の `feasibility_note`）にも `extraction_
+    procedure`/`calibration` と同型の閉じた必須ネストキー集合 + 型検証
+    を適用する（内容の意味論そのもの — 例えば具体的な文言 — は引き続き
+    `test_phase3_*` 群の責務のまま。本 validator は形状 + 最低限の型を
+    対象とする）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"identity metric space manifest must be an object, got {type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"identity metric space manifest has unknown key(s): {sorted(unknown)}")
+    missing = _IDENTITY_METRIC_SPACE_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"identity metric space manifest missing required key(s): {sorted(missing)}"
+        )
+
+    schema = data["schema"]
+    if schema != SCHEMA_IDENTITY_METRIC_SPACE:
+        raise Run9ValidationError(
+            f"identity metric space manifest schema must be exactly {SCHEMA_IDENTITY_METRIC_SPACE!r}, "
+            f"got {schema!r}"
+        )
+    _require_non_empty_str(data["metric_version"], field="identity metric space manifest.metric_version")
+    _require_non_empty_str(
+        data["canonicalization_method"], field="identity metric space manifest.canonicalization_method"
+    )
+
+    _validate_feature_extractor(data["feature_extractor"])
+    _validate_extraction_procedure(data["extraction_procedure"])
+    _validate_identity_feature(data["identity_feature"])
+    _validate_distance_section(data["distance"])
+    _validate_calibration_section(data["calibration"])
+    _validate_reference_example(data["reference_example"])
+    _validate_confuser_control_section(data["confuser_control"])
+    _require_non_empty_str(
+        data["feasibility_note"], field="identity metric space manifest.feasibility_note"
+    )
+
 
 # PoR §12 + User 外部レビュー PR #317 P1-2 修正指示4の逐語項目を機械可読
 # キー名へ写した最低要件（practice split manifest）。
@@ -1891,6 +3455,13 @@ class Run9RunContract:
     def founder_genome_sha(self, founder_id: str) -> Dict[str, Any]:
         return self.raw["founder_genome_shas"][founder_id]
 
+    def intervention_take_count_field(self, name: str) -> Dict[str, Any]:
+        """`interventions` 配下の入れ子 pin 欄（`INTERVENTION_TAKE_COUNT_FIELDS`
+        の各要素）を返す。`pin_field()`/`founder_genome_sha()` と同じ
+        アクセサ規約（Codex bot レビュー PR #318 第8巡 Fix 22 で新設 —
+        `gate_state()` がこの入れ子 pin も pre-run 判定に含めるための足場）。"""
+        return self.raw["interventions"][name]
+
 
 def _is_field_pinned(field: Mapping[str, Any]) -> bool:
     return field.get("status") == "PINNED"
@@ -1957,7 +3528,9 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
     interventions = data["interventions"]
     if not isinstance(interventions, dict):
         raise Run9ValidationError("interventions must be an object")
-    allowed_interv_keys = {"description", "edges", "control_branch"}
+    allowed_interv_keys = {"description", "edges", "control_branch"} | set(
+        INTERVENTION_TAKE_COUNT_FIELDS
+    )
     unknown_interv = set(interventions.keys()) - allowed_interv_keys
     if unknown_interv:
         raise Run9ValidationError(f"interventions has unknown key(s): {sorted(unknown_interv)}")
@@ -1986,6 +3559,24 @@ def load_run9_contract(data: Mapping[str, Any]) -> Run9RunContract:
             f"interventions.control_branch must be exactly {CONTROL_BRANCH!r} — PoR §4 の無介入"
             f"replay 枝は固定名, got {interv_control_branch!r}"
         )
+
+    # Codex bot レビュー PR #318 第7巡 Fix 20 採用（P1）: C0/C1 校正標本の
+    # per-founder テイク数 pin 欄。他の pin 欄と同型の {value, status,
+    # reason?, source?} 形（`_validate_pin_field()`）で包絡を検証し、
+    # PINNED 昇格時は `_require_positive_int()`（bool/float/0/負値を拒否
+    # する厳密正 int 判定）で値自体の型を検証する。`_validate_pin_field()`
+    # は欄名が `_sha`/`_sha256` サフィックスでも `attempt_id`/
+    # `founder_genome_shas.*` でもない場合は値の形式まで検査しないため
+    # （PIN_FIELD_ALLOWED_KEYS の envelope 検査のみ）、テイク数の型検証は
+    # ここで明示的に追加する。
+    for take_field_name in INTERVENTION_TAKE_COUNT_FIELDS:
+        take_field = _validate_pin_field(
+            f"interventions.{take_field_name}", interventions[take_field_name]
+        )
+        if _is_field_pinned(take_field):
+            _require_positive_int(
+                take_field["value"], field=f"interventions.{take_field_name}.value"
+            )
 
     if data["baseline_run"] is not None:
         raise Run9ValidationError(f"baseline_run must be null (RUN9 has no baseline_run), got {data['baseline_run']!r}")
@@ -2108,6 +3699,20 @@ def gate_state(contract: Run9RunContract) -> str:
     （= この場合に限り optional 除外から差し戻す）。`human_audit_mode ==
     "DISABLED"`（既定値）のときは従来どおり除外されたまま。
 
+    `interventions.{c0_replay_takes_per_founder,c1_sham_takes_per_founder}`
+    （`INTERVENTION_TAKE_COUNT_FIELDS`、Codex bot レビュー PR #318 第7巡
+    Fix 20 で新設）も pre-run 必須の pin 欄として判定に含める（同 PR 第8巡
+    Fix 22 採用）: これらはトップレベルではなく `interventions` 配下の
+    入れ子 dict のため、`CONTRACT_PIN_FIELDS` からの `pre_run_fields`
+    導出には現れない — 何もしなければ両欄が PENDING のままでも他の
+    トップレベル欄が全 PINNED なら READY を返してしまい、C0/C1 校正母集団
+    サイズが未凍結のまま学習が開始できてしまう（事前登録 P95 閾値が
+    無効化される）。gate は構造述語（PINNED/PENDING の snapshot 判定）に
+    留め、pin 値の実物照合は引き続き R9-G1 tooling の職務のまま変更しない
+    — `_require_positive_int()` による値の型検証は `load_run9_contract()`
+    が pin 時点で既に行っており（`intervention_take_count_field()` 経由の
+    再検証がその検証済み snapshot を読むだけなので）ここで重複させない。
+
     毎回 `contract.raw` のスナップショットを `load_run9_contract()` で
     再検証してから判定する（Codex bot レビュー PR #315 第2巡指摘1採用）:
     呼び出し元が load 済みの `Run9RunContract.raw`（`Run9RunContract` は
@@ -2129,6 +3734,9 @@ def gate_state(contract: Run9RunContract) -> str:
             return "BLOCKED"
     for founder_id in CONTRACT_FOUNDER_IDS:
         if not _is_field_pinned(revalidated.founder_genome_sha(founder_id)):
+            return "BLOCKED"
+    for take_field_name in INTERVENTION_TAKE_COUNT_FIELDS:
+        if not _is_field_pinned(revalidated.intervention_take_count_field(take_field_name)):
             return "BLOCKED"
     return "READY"
 

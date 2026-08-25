@@ -1,6 +1,6 @@
 # RUN9 — Tri-Donor Dual-Founder Common-Teacher Learning
 
-**状態: Preregistered / Phase 0.3（design_revision 0.3）。本学習未開始。**
+**状態: Preregistered / Phase 3（design_revision 0.3、machine-independent 設計層）。本学習未開始。**
 
 正本設計書: [`DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md`](./DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md)
 （uploads 原本とバイト同一・**byte-pin 不変**。sha256 は `RUN9_CONTRACT.yaml` の
@@ -90,7 +90,7 @@ CONTROL/C0→`replay` / CONTROL/C1→`r_sham` / PRACTICE_FROM_AUDIO→
    再現入力集合は閉じない（PR #316 第2巡指摘採用）。ただし
    `backbone_runtime_bundle_sha` 自体は **PENDING**（bundle 内
    `render_code_commit` が `INFERRED_UNCONFIRMED` —
-   Codex bot レビュー PR #316 第1巡指摘採用。ブロッカー(5)参照）。
+   Codex bot レビュー PR #316 第1巡指摘採用。ブロッカー(4)参照）。
 
 ## 2026-08-24 PoR メモ編入（Revision 0.3）— 要約
 
@@ -212,20 +212,74 @@ PR #317 head `71eeccadf3f1f7ee49d9cc90763ced8a506abc67` に対する User 本人
 AF0・Ritsu・rights・backbone pin 値・`TRI_CROSSOVER/1.0`・genome_id 計算
 は無変更。既存 Codex bot レビュー3件（第1〜3巡）の修正も退行なし。
 
+## RUN9 Phase 3 — machine-independent 設計層の確定
+
+machine-independent（実音源・実 render・実学習を要さない）次段3点を
+実装した。詳細は各節・`run9_controlprofile.py` の docstring を正とする。
+
+1. **identity metric space の定義と pin**（Fable 設計判定 — **User は
+   マージ前に veto 可能**）: 新規 [`inputs/identity_metric_space.json`](./inputs/identity_metric_space.json)
+   （schema `run9-identity-metric-space/1.2`）— feature_extractor = WORLD
+   (pyworld、foundry S1〜S3 と同系)・identity_feature = voiced フレームの
+   log spectral envelope (sp) 時間平均ベクトルのスカラー平均減算 level
+   正規化形状（計算可能域は **全 identity 評価対象レンダー** — r0 birth
+   probe・C0/C1 校正テイク・r_practice / r_taught / r_sham・pjs_reference。
+   校正母集団と校正 reference は neutral r0 限定のまま = Fix 31/33）
+   （**f0 は明示除外** — pitch は Trait/Technique 層の観測軸のため
+   identity 距離への交絡を避ける、PoR §2 層分離）・aperiodicity は
+   advisory・distance = Euclidean（対称・決定論）・calibration
+   = C0 95 パーセンタイル閾値（`theta_cal = P95(D_C0)`）+ C1/正負参照の
+   3 校正有効性ゲート + STABLE/SHIFTED 判定式を機械可読に凍結
+   （Codex bot レビュー PR #318 第6巡 Fix 18。`run9_schema.
+   validate_identity_metric_space_manifest()` が閉じた形状を検証）・
+   feasibility_note = 退化時は PoR §9 [C] DESIGN FAILURE/UNOBSERVABLE で
+   正直に閉じ事後調整はしない。このファイルの**正規形 sha256** を
+   `domains/identity_domain_run9_v1.json` `metric_space_sha` へ **pin
+   済み**（af0_anchor_manifest と同一の正規形規約）。domain は user
+   anchor が残るため `is_pinned()` は依然 `False`（意図どおり）。
+2. **ControlProfile 基盤**（新規モジュール [`run9_controlprofile.py`](./run9_controlprofile.py)）:
+   `run9-control-profile/1.0` — `voice_id`/`branch`/`revision`
+   （`BRANCH_REVISIONS` 語彙と整合: `r0` 出生中立・`replay`/`r_sham`/
+   `r_practice`/`r_taught`）/`parent_revision`/`partitions`
+   （`trait_control`/`technique_control` の**2節のみ** — `IDENTITY_STATE`
+   は profile schema に構造的に存在しない）/`profile_id`（正規形 JSON
+   sha256 先頭16hex）。`build_neutral_profile(voice_id)` が中立 r0 を
+   決定論生成し、`derive_profile(parent, branch, updates)` が
+   `run9_schema.validate_branch_write()`/`BRANCH_WRITABLE_PARTITIONS` を
+   必ず経由して書込境界を機械強制する（EDUCATION→trait は fail-closed・
+   CONTROL は非空 updates を拒否）。`Run9ProfileLedger` は VG-E0
+   `ledger.py` の append-only 意味論（tmp→fsync→`os.link` 排他 create・
+   バイト同一冪等・差異は conflict・重複キー拒否読込・symlink escape
+   guard）を run-local に踏襲し、親 revision の実在検証を行う。
+   practice trace schema（`run9-practice-trace/1.0`、
+   `validate_practice_trace()`）は模倣対象選択・内部差分推定・探索履歴の
+   保存要件（PoR §7/改訂C）を凍結 — 中身の生成は harness 実装時。
+3. **learning recipe manifest schema**: `run9_schema.
+   validate_learning_recipe_manifest()`（schema `run9-learning-recipe/1.0`）
+   — 枝別 recipe（`practice_recipe`/`education_recipe` の2節、rev 0.3 の
+   枝別原則 — Codex bot レビュー第6巡 Fix B「両枝が同一の recipe を共有
+   する」誤記是正後の reason と整合）+ 共通 `seed`（`LEARNING_SEED` =
+   909002 固定）+ 各枝内の二体等予算宣言（`equal_budget_within_arm: true`
+   必須）。停止規則/試行回数/render 予算は構造のみ凍結（値は build 時）。
+   `learning_recipe_sha` は本 PR でも PENDING のまま。規約パス
+   `run9_schema.LEARNING_RECIPE_MANIFEST_PATH`
+   （`inputs/learning_recipe_manifest.json`）を凍結し、PINNED 時照合を
+   practice/education manifest と同型でテスト層へ事前配線した。
+
 ## 実行順 §22 に対する現在地マップ
 
 設計書 §22 は 0–20 の実行順を規定する（v0.1 本文の番号は不変。rev 0.3
 以降、step 5–20 が三経路化の影響を受ける — 詳細は
-`DESIGN_RUN9_REVISION_0.3.md` 改訂A/C）。Phase 0.3 時点の現在地:
+`DESIGN_RUN9_REVISION_0.3.md` 改訂A/C）。Phase 3 時点の現在地:
 
 | step | 内容 | 状態 |
 |---|---|---|
 | 0 | freeze Run Contract | **部分 pin が拡大**（`design_doc_sha256` / `design_revision_doc_sha256` / `por_adjudication_sha256` / `backbone_checkpoint_sha` が新たに PINNED。`backbone_runtime_bundle_sha` は bundle 内 `render_code_commit` が INFERRED_UNCONFIRMED のため PENDING のまま。`interventions` 構造（旧 `single_intervention`）へ改訂済み。他も正直に PENDING。`gate_state()` は依然 `BLOCKED`） |
 | 1 | verify repository / dependency pins | 未着手（backbone 側は pin 済み。VG-L0 ハーネス自体の依存 pin は未着手） |
 | 2 | verify donor and teacher rights / manifests | **AF0/Ritsu は pin 済み・PJS は役割別2値を整理して解消**。**User donor のみ rights attest 待ち**（ブロッカー(1)参照） |
-| 3 | build run9 Identity Domain | **af0/ritsu が PINNED、user/metric_space_sha はプレースホルダのまま**（`domains/identity_domain_run9_v1.json`、`is_pinned() == False`） |
+| 3 | build run9 Identity Domain | **af0/ritsu/metric_space_sha が PINNED、user のみプレースホルダ**（`domains/identity_domain_run9_v1.json`、`is_pinned() == False` — user anchor 待ちのため依然） |
 | 4 | generate R9F-01:r0 and R9F-02:r0（INHERIT_TRAIT） | **未着手**（`run9_schema.build_founder()` は未 pin domain を構造的に ValueError で拒否する — step 3→4 の機械強制。user anchor 未 pin のため依然ブロック） |
-| 5–20 | render / freeze / lesson / learning / evaluation / verdict | **未着手・rev 0.3 で三枝化**（VG-L0 学習ハーネス自体が未実装 — ブロッカー(3)参照。ハーネス実装時に CONTROL/PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE の3経路分の render/lesson/learning/evaluation を実装する必要がある — ブロッカー(6)参照） |
+| 5–20 | render / freeze / lesson / learning / evaluation / verdict | **未着手・rev 0.3 で三枝化**（VG-L0 学習ハーネス自体が未実装 — ブロッカー(2)参照。ハーネス実装時に CONTROL/PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE の3経路分の render/lesson/learning/evaluation を実装する必要がある — ブロッカー(5)参照） |
 
 ## ブロッカー一覧（正直な現状）
 
@@ -238,7 +292,20 @@ AF0・Ritsu・rights・backbone pin 値・`TRI_CROSSOVER/1.0`・genome_id 計算
   を指す2つの正しい値であり、矛盾する同一対象への2値ではなかった。
 - ~~backbone checkpoint 選定未~~ → RUN6 phase B 40K checkpoint を採用し
   `backbone_checkpoint_sha` を PINNED（`backbone_runtime_bundle_sha` は
-  ブロッカー(5)参照 — 未解消）。
+  ブロッカー(4)参照 — 未解消）。
+- ~~`metric_space_sha` 未 pin~~ → Phase 3: `inputs/identity_metric_space.json`
+  （schema `run9-identity-metric-space/1.2`。feature_extractor = WORLD
+  (pyworld)・identity_feature = voiced フレームの log spectral envelope
+  (sp) 時間平均ベクトルの level 正規化形状 — 計算可能域は全 identity
+  評価対象レンダー（r_practice / r_taught / r_sham・pjs_reference 含む。
+  校正母集団・校正 reference は neutral r0 限定 = Fix 31/33）・
+  **f0 は明示除外**・
+  distance = Euclidean・calibration = C0/C1 機械校正を実行可能な式へ
+  凍結（Fix 18））を新設し、
+  その正規形 sha256 を `domains/identity_domain_run9_v1.json`
+  `metric_space_sha` へ **PINNED**（**Fable 設計判定 — User はマージ前に
+  veto 可能**）。domain は user anchor が残るため `is_pinned()` は依然
+  `False`（意図どおり）。
 
 **残存**:
 
@@ -247,35 +314,41 @@ AF0・Ritsu・rights・backbone pin 値・`TRI_CROSSOVER/1.0`・genome_id 計算
    `PENDING_USER_ATTESTATION`。User の確認前は `anchor_hashes.user` を
    pin しない（DESIGN_RUN9_REVISION_0.2.md 改訂4）。raw 音源公開・モデル
    一般配布は rights anchor 使用可否とは別承認（初期 `not_granted`）。
-2. **`metric_space_sha` 未 pin**: identity domain の3つ目の必須 pin
-   （anchor_hashes 3件とは別欄）。校正/採用する metric space の選定が
-   未着手。
-3. **VG-L0 学習ハーネス未実装**: rev 0.3 で三枝化された
+2. **VG-L0 学習ハーネス（実行部）未実装**: rev 0.3 で三枝化された
    PRACTICE_FROM_AUDIO / TRANSFER_TECHNIQUE エッジ（書き込み先は改訂1・
-   rev 0.3 改訂A で Performance ControlProfile と規定済み）ともにハーネス
-   自体の実装は未着手。**ControlProfile Entry Gate**（旧 Adapter Entry
-   Gate。改訂1 §対応マップ項目1 — `control-layer ceiling evidence or
-   explicit User waiver` は循環要求のため削除済み・不足時の状態名は
+   rev 0.3 改訂A で Performance ControlProfile と規定済み）の**基盤**
+   （`run9_controlprofile.py`: profile schema・書込境界の機械強制
+   `derive_profile()`・append-only 台帳 `Run9ProfileLedger`）は Phase 3
+   で実装済みだが、実際に音声を処理して特徴抽出・差分推定・探索を行う
+   ハーネス本体（builder が `derive_profile()` を呼ぶ実処理）は未着手。
+   **ControlProfile Entry Gate**（旧 Adapter Entry Gate。改訂1
+   §対応マップ項目1 — `control-layer ceiling evidence or explicit User
+   waiver` は循環要求のため削除済み・不足時の状態名は
    `BLOCKED_CONTROLPROFILE_ENTRY`）の残る要件（calibrated Identity audit
    route / learning replay harness / rights-clean curriculum / fixed
    compute budget / frozen recipe / rollback path）はどれも準備段階に
    すら入っていない。
-4. **PJS Performance Lesson / Practice split build 未実施**: 改訂3で
-   pin 方針（source archive pin / expanded corpus pin とは別の Lesson
-   manifest を生成し pin）は確定したが、Lesson build 自体は VG-L0
-   ハーネス実装待ち。rev 0.3 でこの pin は EDUCATION 用 Technique lesson
-   を指すと明確化され `education_technique_lesson_manifest_sha` へ改名
-   （User 外部レビュー PR #317 P1-2 採用）。PRACTICE 用の教師音声
+3. **PJS Performance Lesson / Practice split / learning recipe の実体
+   build 未実施**: 改訂3で pin 方針（source archive pin / expanded
+   corpus pin とは別の Lesson manifest を生成し pin）は確定したが、
+   Lesson build 自体は VG-L0 ハーネス実装待ち。rev 0.3 でこの pin は
+   EDUCATION 用 Technique lesson を指すと明確化され
+   `education_technique_lesson_manifest_sha` へ改名（User 外部レビュー
+   PR #317 P1-2 採用）。PRACTICE 用の教師音声
    train/validation/sealed-holdout split manifest（正解 parameter を
    含まない生素材の分割、PoR §12）も同様に `practice_audio_split_
    manifest_sha`（`RUN9_CONTRACT.yaml`、PR #317 Codex bot レビュー第2巡
-   Fix 6 で新設 → P1-2 で改名）として既に pin 欄が新設済み — ただし
-   split manifest 自体の**生成**は lesson build と同じく VG-L0 ハーネス
-   実装待ちのため、両欄とも PENDING のまま。manifest 自体の最低要件は
+   Fix 6 で新設 → P1-2 で改名）として既に pin 欄が新設済み。Phase 3 で
+   `learning_recipe_sha`（schema `run9-learning-recipe/1.0`: 枝別 recipe
+   `practice_recipe`/`education_recipe` の2節 + 共通 seed 909002 + 各枝
+   `equal_budget_within_arm: true`）の**構造**も凍結した — ただし3欄
+   いずれも実体 manifest の**生成**は VG-L0 ハーネス実装待ちのため
+   PENDING のまま。manifest 自体の最低要件は
    `run9_schema.PRACTICE_MANIFEST_REQUIRED_KEYS`/
-   `EDUCATION_MANIFEST_REQUIRED_KEYS` + `validate_practice_split_
-   manifest()`/`validate_education_lesson_manifest()` が凍結済み。
-5. **`render_code_commit` の確定待ち**（Codex bot レビュー PR #316 第1巡
+   `EDUCATION_MANIFEST_REQUIRED_KEYS`/`validate_practice_split_
+   manifest()`/`validate_education_lesson_manifest()`/
+   `validate_learning_recipe_manifest()` が凍結済み。
+4. **`render_code_commit` の確定待ち**（Codex bot レビュー PR #316 第1巡
    指摘採用）: `inputs/backbone_runtime_bundle.json` の
    `render_code_commit`（`openvpi/DiffSinger @ e2307b1...`）は
    `status: "INFERRED_UNCONFIRMED"` — run4〜8 全体での単一リビジョン一貫
@@ -284,19 +357,46 @@ AF0・Ritsu・rights・backbone pin 値・`TRI_CROSSOVER/1.0`・genome_id 計算
    ていない。**直接記録の発掘、または User attestation で確定するまで
    `backbone_runtime_bundle_sha` は PENDING のまま**（`backbone_checkpoint_sha`
    単体は直接記録4件一致のため PINNED 継続 — 対象を混同しない）。
-6. **practice/education builder 未実装**（rev 0.3 新設）: 情報境界
+5. **practice/education builder 未実装**（Phase 3 更新）: 情報境界
    （`run9_schema.PRACTICE_FORBIDDEN_INPUTS` /
    `PRACTICE_ALLOWED_DATA_INPUTS` / `PRACTICE_REQUIRED_AUTONOMOUS_
    OPERATIONS` / `PRACTICE_FORBIDDEN_EXTERNAL_ASSISTANCE` /
    `EDUCATION_ALLOWED_CHANNELS` / `EDUCATION_FORBIDDEN_INPUTS`）・
-   書込境界（`BRANCH_WRITABLE_PARTITIONS`）・manifest 最低要件
-   （`PRACTICE_MANIFEST_REQUIRED_KEYS`/`EDUCATION_MANIFEST_REQUIRED_KEYS`）
-   と結果分類（`BIRTH_OUTCOMES` 等6分類）の語彙は凍結済みだが、これらを
-   import して実際に PRACTICE_FROM_AUDIO / TRANSFER_TECHNIQUE を実行する
-   builder・評価器は本 Phase 0.3 では未着手
-   （語彙の凍結のみが完了した段階）。
+   書込境界（`BRANCH_WRITABLE_PARTITIONS` + `run9_controlprofile.
+   derive_profile()`/`validate_branch_write()` による機械強制）・
+   manifest 最低要件（`PRACTICE_MANIFEST_REQUIRED_KEYS`/
+   `EDUCATION_MANIFEST_REQUIRED_KEYS`）・practice trace schema
+   （`run9_controlprofile.SCHEMA_PRACTICE_TRACE`）・ControlProfile
+   append-only 台帳（`run9_controlprofile.Run9ProfileLedger`）と結果分類
+   （`BIRTH_OUTCOMES` 等6分類）の**基盤は Phase 3 で実装済み**だが、これら
+   を実際に呼び出して音声処理・特徴抽出・探索を行う builder・評価器
+   本体は未着手（machine-independent な骨組みの凍結が完了した段階）。
 
 ## 次フェーズ（machine-dependent）
+
+Phase 3 で machine-independent な設計・schema・contract・validator は
+一通り確定した。残 pin（machine-dependent、実測が必要なもの）:
+
+- **User anchor attest**: `anchor_hashes.user` — rights attest 完了待ち
+  （残存ブロッカー(1)）。
+- **`render_code_commit` 確定**: `backbone_runtime_bundle_sha`（残存
+  ブロッカー(4)）。
+- **practice / education manifest の実体 build**:
+  `practice_audio_split_manifest.json` /
+  `education_technique_lesson_manifest.json` の実体生成（残存
+  ブロッカー(3)）。
+- **learning recipe manifest の実体 build**: `learning_recipe_manifest.json`
+  （schema `run9-learning-recipe/1.0`、`run9_schema.LEARNING_RECIPE_
+  MANIFEST_PATH` が規約パスを凍結済み・`validate_learning_recipe_
+  manifest()` が構造を検証）の実体生成（残存ブロッカー(3)）。
+- **identity metric space の実測校正**: `inputs/identity_metric_space.json`
+  の `calibration`（`freeze_threshold`/`validity_gates`/`decision_rule`）が
+  定める閾値生成（C0 95 パーセンタイル・C1 sham 副作用・positive/negative
+  reference からの実測 threshold freeze）は spec の事前登録のみで、実測は
+  birth probe 実行後（Founder 生成待ち）。`worked_example` は synthetic
+  illustration であり実測ではない。
+
+上記の残 pin を除く machine-dependent な実装作業:
 
 - **practice/education harness 実装**: VG-L0 学習ハーネスの一部として、
   PRACTICE_FROM_AUDIO（Founder 自身の自律特徴抽出・差分推定・制御探索
@@ -304,21 +404,23 @@ AF0・Ritsu・rights・backbone pin 値・`TRI_CROSSOVER/1.0`・genome_id 計算
   extractor / Lesson builder → Founder 提示 → 自声再現、PoR §3.3 の基本
   ループ）を実装する。`PRACTICE_FORBIDDEN_INPUTS`/`EDUCATION_FORBIDDEN_INPUTS`
   を実行時検証で強制する構造（禁止入力が builder の入力経路に構造的に
-  現れない設計）が要件。
+  現れない設計）が要件。harness は `run9_controlprofile.derive_profile()`
+  を通じて `Run9ProfileLedger` へ publish する（書込境界は Phase 3 で
+  既に機械強制済み — builder は境界検証を再実装しない）。
 - **6分類の実測パイプライン**: `BIRTH_OUTCOMES`〜`IDENTITY_OUTCOMES` を
   実際の render/measurement 結果から機械判定するロジックの実装（現状は
   語彙の凍結のみ）。`REQUIRED_GAIN_FIELDS`（held-out gain 必須4欄）の
-  実測パイプラインも同様。
-- **practice_audio_split_manifest.json / education_technique_lesson_
-  manifest.json の実体生成**: `PRACTICE_MANIFEST_REQUIRED_KEYS`/
-  `EDUCATION_MANIFEST_REQUIRED_KEYS` の最低要件を満たす実 manifest の
-  生成（上記ブロッカー(4)参照）。
-- **branch write policy の実行時強制**: `validate_branch_write()` を
-  practice/education builder の書込経路へ実際に配線する（現状は
-  builder 自体が未実装のため関数の存在のみ）。
+  実測パイプラインも同様。identity 距離の実測は
+  `inputs/identity_metric_space.json` の spec（WORLD sp 平均ベクトル・
+  Euclidean 距離）を実装する。
 - **C0/C1 の実 render**: `CONTROL_CONDITIONS` の両条件を実際に render し
   `control_conditions_satisfied()` で評価 readiness を確認するパイプ
-  ライン。
+  ライン。`run9_controlprofile.derive_profile(..., control_condition=...)`
+  が C0/C1 それぞれの ControlProfile revision（`replay`/`r_sham`）を
+  既に生成できる — harness はこれを呼ぶだけでよい。
+- **practice trace の実体生成**: `run9_controlprofile.SCHEMA_PRACTICE_
+  TRACE`/`validate_practice_trace()` の最低要件を満たす実トレースの記録
+  （模倣対象選択・内部差分推定・探索履歴）は harness 実装時。
 - これらは全て実音源・実 render・実学習を要する machine-dependent 作業
   であり、Claude 側での設計・語彙凍結の範囲を超える
   （CLAUDE.md の「マシン依存 = Codex / User」区分に該当）。
@@ -365,7 +467,7 @@ Selection Pressure Routing）が欠落していた。設計書は byte-pin 済�
 側は VoiceGenesis Founder の Performance 制御パラメータの版付き集合。
 `DESIGN_RUN9_REVISION_0.2.md` 改訂1に明記済み。
 
-## ディレクトリ構成（Phase 0.3 時点）
+## ディレクトリ構成（Phase 3 時点）
 
 ```
 run9_dual_founder_pjs/
@@ -376,15 +478,18 @@ run9_dual_founder_pjs/
 ├── RUN9_CONTRACT.yaml                                          # §23 Run Contract（部分 pin。af0/ritsu/backbone/por_adjudication/branch_write_policy は PINNED。interventions・human_audit_mode 欄）
 ├── README.md                                                   # 本ファイル
 ├── run9_schema.py                                              # domain / TRI_CROSSOVER / contract / 書込境界 / manifest validator 他の run-local 正本
+├── run9_controlprofile.py                                      # Phase 3: ControlProfile schema / derive_profile 書込境界機械強制 / Run9ProfileLedger / practice trace schema
 ├── domains/
-│   └── identity_domain_run9_v1.json                            # af0/ritsu PINNED・user/metric_space_sha はプレースホルダ
+│   └── identity_domain_run9_v1.json                            # af0/ritsu/metric_space_sha PINNED・user はプレースホルダ
 ├── inputs/
 │   ├── af0_anchor_manifest.json                                # AF-P0 正典証拠の複合参照 manifest（anchor_hashes.af0 の入力）
 │   ├── rights_manifest.json                                    # User donor rights（PENDING_USER_ATTESTATION）
 │   ├── backbone_runtime_bundle.json                            # RUN6 backbone の checkpoint/config/vocoder/render commit + canon model assets 一式
-│   └── branch_write_policy.json                                # 枝別書込境界 manifest（State partition・writable集合・不変artifact一覧。PINNED）
+│   ├── branch_write_policy.json                                # 枝別書込境界 manifest（State partition・writable集合・不変artifact一覧。PINNED）
+│   └── identity_metric_space.json                              # Phase 3: identity metric space 事前登録 spec（正規形 sha256 が metric_space_sha を pin）
 ├── tests/
-│   └── test_run9_contract.py                                   # §27 最低テストの静的検証可能サブセット + Revision 0.2/0.3 対応テスト + User 外部レビュー P1/P2 対応テスト
+│   ├── test_run9_contract.py                                   # §27 最低テストの静的検証可能サブセット + Revision 0.2/0.3 対応テスト + User 外部レビュー P1/P2 対応テスト + Phase 3 item 1/3 テスト
+│   └── test_run9_controlprofile.py                             # Phase 3: run9_controlprofile.py の最低テスト（書込境界・ledger append-only/冪等/conflict・neutral profile 決定論・practice trace）
 └── results/
     └── .gitignore                                              # 実測結果は非同梱（§25 Atomic Results Bundle 用の空ディレクトリ）
 ```

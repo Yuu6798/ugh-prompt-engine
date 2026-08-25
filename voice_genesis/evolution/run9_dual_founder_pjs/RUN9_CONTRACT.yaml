@@ -62,6 +62,32 @@ interventions:
     - PRACTICE_FROM_AUDIO
     - TRANSFER_TECHNIQUE
   control_branch: CONTROL
+  # Codex bot レビュー PR #318 第7巡 Fix 20 採用（P1）: C0/C1 校正標本の
+  # per-founder テイク数を契約 pin する。旧 identity_metric_space.json
+  # calibration.freeze_threshold.d_c0_population は「テイク数は本
+  # RUN9_CONTRACT.yaml の interventions 規定に従って束縛する」と書きながら、
+  # 実体となる欄がこの契約に存在しない欠陥（存在しない参照への委譲）
+  # だった。本欄がその実体であり、founder 1体あたりの値（両 founder 共通の
+  # 同数、pooling はしない — identity_metric_space.json calibration 節参照）
+  # を PINNED で凍結する。
+  c0_replay_takes_per_founder:
+    value: 20
+    status: PINNED
+    reason: >-
+      P95 線形補間が最大値外挿にならない最小標本数（n=20 で P95 の分位
+      position = 0.95*(20-1) = 18.05、上位2標本間の線形補間となり最大値
+      そのものへの外挿を回避できる最小 n）。identity_metric_space.json
+      calibration.freeze_threshold の theta_cal(F) = P95(D_C0(F)) が
+      本欄をテイク数（founder 1体あたり）の束縛元としてフィールド名で
+      参照する。
+  c1_sham_takes_per_founder:
+    value: 20
+    status: PINNED
+    reason: >-
+      同上（P95 線形補間が最大値外挿にならない最小標本数、n=20 で
+      position 18.05・上位2標本間の補間）。identity_metric_space.json
+      calibration.validity_gates.c1_gate の D_C1(F) が本欄をテイク数
+      （founder 1体あたり）の束縛元としてフィールド名で参照する。
 
 baseline_run: null
 
@@ -327,6 +353,15 @@ learning_recipe_sha:
     各枝「内」の二体間（同一探索空間・同一試行回数・同一render予算・
     同一評価器・同一停止規則、PoR §8）のみ。CONTROL は学習 step を
     実行しないため recipe 自体を持たない（PoR §4 CONTROL の定義）。
+    Phase 3: 上記の構造を schema `run9-learning-recipe/1.0`
+    （`run9_schema.validate_learning_recipe_manifest()`）として凍結した
+    — `practice_recipe`/`education_recipe` の2節・共通 `seed`
+    （`LEARNING_SEED`=909002 固定）・各枝 `equal_budget_within_arm: true`
+    必須。規約パスは `run9_schema.LEARNING_RECIPE_MANIFEST_PATH`
+    （`inputs/learning_recipe_manifest.json`）に凍結済み・PINNED 時照合
+    はテスト層へ事前配線済み（`tests/test_run9_contract.py`）。停止規則・
+    試行回数・render 予算の具体値と manifest 実体の生成は VG-L0 ハーネス
+    実装時の build 対象のため、本欄は引き続き PENDING。
 
 probe_manifest_sha:
   value: null
