@@ -5325,11 +5325,30 @@ def extract_user_identity_attestation_projection(manifest: Mapping[str, Any]) ->
 
     内部で `validate_rights_manifest_four_layer()`（既存の4層全体構造
     検証、`extract_voice_identity_rights_layer()` と同じ fail-closed
-    方式）を先に実行する。さらに `attestation` が attested 形態
-    （`attested=True`）でなければ `Run9ValidationError`（`ValueError`
-    サブクラス）で拒否する——本 projection は anchor pin 専用であり、
-    pending 形態（`attested=False`）の hash が anchor 候補として見える
-    経路をここで構造的に閉じる。
+    方式）を先に実行する。さらに2つの fail-closed 前提条件を課す:
+      (i) `attestation` が attested 形態（`attested=True`）であること
+          ——本 projection は anchor pin 専用であり、pending 形態
+          （`attested=False`）の hash が anchor 候補として見える経路を
+          ここで構造的に閉じる。
+      (ii) `usage_grants.run9_identity_anchor == "granted"` であること
+          ——Codex bot レビュー PR #320 第4巡指摘（P1, 採用, Fix 6）:
+          `usage_grants` は除外理由1（下記）により projection の hash
+          payload には含めないが、この grant を User が取消し
+          （`"granted"` → `"not_granted"`、attestation 自体は歴史的
+          記録として保持したまま）ても、hash を不変に保つ設計原則
+          （不変性の設計原則、下記）と衝突しない形で取消を検知しなければ
+          ならない。取消状態の manifest から anchor-eligible hash を
+          生成・再検証させないよう、抽出そのものを拒否する——「hash は
+          宣誓事実のみを表し、許諾状態（取消し得る）はこのゲートで検証
+          する」という層分離が本関数の設計原則である（hash 側を可変
+          grant の値へ連動させて repin させる旧方式（Fix 3 以前）へは
+          戻さない）。いずれかが不成立なら `Run9ValidationError`
+          （`ValueError` サブクラス）で拒否する。
+    どちらの前提条件も違反すると本関数は projection を返さない——
+    projection の**中身**（返り値の閉じたキー集合）に `usage_grants` を
+    含めないことと、抽出**可否**の判定に `usage_grants.run9_identity_
+    anchor` を使うことは矛盾しない（前者は hash 対象、後者は抽出の
+    gate 条件であり、別の軸）。
 
     返り値は以下の**閉じたキー集合のみ**を持つ dict（他キー混入禁止）:
       - `schema`: `"run9-identity-attestation-projection/1.0"`
@@ -5362,6 +5381,13 @@ def extract_user_identity_attestation_projection(manifest: Mapping[str, Any]) ->
          情報を grant 自体は持たない派生状態にすぎない。含めれば
          `usage_grants` の値が動くたびに repin が必要になる編集面が
          1つ増えるだけで、projection の不変性を薄める。
+         **除外はゲート化とセット**（Fix 6, PR #320 第4巡指摘, P1, 採用）:
+         `run9_identity_anchor` を hash payload から除外する一方で、
+         取消（`"granted"` → `"not_granted"`）は hash ではなく本関数の
+         前提条件 (ii)（下記）で fail-closed に検知する——「hash に
+         戻して repin させる」のではなく「抽出そのものをゲートする」。
+         これにより hash 不変性（Fix 3 の設計原則）を保ったまま、取消の
+         事実を anchor pin 生成/再検証の経路で確実に効かせる。
       2. `role` / `note` / `usage_grants_note` / `binding_note` の散文
          ドキュメント欄 — レビューでの文言明確化が宣誓事実を変えずに
          正当に進化する欄であり、特に `binding_note` は束縛方式自体の
@@ -5399,6 +5425,21 @@ def extract_user_identity_attestation_projection(manifest: Mapping[str, Any]) ->
             "voice_identity_rights.attestation.attested == True — this projection is "
             "anchor-pin-only and must not expose a pending-form hash as an anchor "
             f"candidate (Fix 3), got attestation.attested={attested!r}"
+        )
+    usage_grants = layer.get("usage_grants")
+    anchor_grant = (
+        usage_grants.get("run9_identity_anchor") if isinstance(usage_grants, dict) else usage_grants
+    )
+    if anchor_grant != _RIGHTS_MANIFEST_USAGE_GRANT_GRANTED:
+        raise Run9ValidationError(
+            "extract_user_identity_attestation_projection() requires "
+            "voice_identity_rights.usage_grants.run9_identity_anchor == 'granted' — the User "
+            "has revoked the anchor-use grant (attestation itself is retained as a historical "
+            "record, but the grant that authorizes using it as the RUN9 identity anchor is "
+            "not_granted). This projection is anchor-pin-generation/verification-only; it must "
+            "not produce an anchor-eligible hash for a manifest whose anchor-use grant is "
+            f"revoked (Fix 6, PR #320 4th round), got usage_grants.run9_identity_anchor="
+            f"{anchor_grant!r}"
         )
     projection: Dict[str, Any] = {
         "schema": _RIGHTS_MANIFEST_ATTESTATION_PROJECTION_SCHEMA,

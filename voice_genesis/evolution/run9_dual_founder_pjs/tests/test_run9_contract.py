@@ -2800,6 +2800,91 @@ def test_fix320_4_final_entry_is_current_repinned_recipe() -> None:
     assert "SUPERSEDED" not in final_entry.split(":", 1)[0]
 
 
+# ---------------------------------------------------------------------------
+# PR #320 Codex bot レビュー第4巡対応 — Fix 6（P1）: `usage_grants.
+# run9_identity_anchor` の取消（revoked: "granted" → "not_granted"、
+# attestation 自体は歴史的記録として保持）が projection hash・genome_id の
+# どこにも効かない偽成功経路を閉じる。hash は宣誓事実のみで不変のまま
+# （repin なし）、抽出（`extract_user_identity_attestation_projection()`）を
+# 第2の fail-closed 前提条件でゲートする。
+# ---------------------------------------------------------------------------
+
+
+def _revoked_anchor_grant_rights_manifest_fixture() -> Dict[str, Any]:
+    """`inputs/rights_manifest.json`（attested 形態）を読み込み、
+    `usage_grants.run9_identity_anchor` だけを `"granted"` → `"not_granted"`
+    へ差し戻したコピーを返す——attestation 自体（attested=true / signer /
+    timestamp / statement）と rights_class/consent_status
+    （`USER_ATTESTED_OWN_VOICE`）は不変のまま（Fix 6 の指摘が要求する
+    「attestation は歴史的記録として保持したまま grant のみ取消」状態を
+    再現する）。"""
+    data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    data["voice_identity_rights"]["usage_grants"]["run9_identity_anchor"] = "not_granted"
+    return data
+
+
+def test_fix320_6_projection_extraction_rejects_revoked_anchor_grant() -> None:
+    """(a) 取消 manifest（attested 形 + anchor grant not_granted）から
+    `extract_user_identity_attestation_projection()` を呼ぶと
+    `Run9ValidationError` で拒否されること——取消状態の manifest からは
+    anchor-eligible hash を生成させない。"""
+    revoked = _revoked_anchor_grant_rights_manifest_fixture()
+    with pytest.raises(m.Run9ValidationError, match="run9_identity_anchor"):
+        m.extract_user_identity_attestation_projection(revoked)
+
+
+def test_fix320_6_revoked_manifest_still_passes_four_layer_validation() -> None:
+    """(b) 同じ取消 manifest は `validate_rights_manifest_four_layer()` を
+    通ること——取消は正当に記録可能な文書状態であり、拒否するのは
+    projection 抽出であって文書検証そのものではない（記録すら拒否すると
+    取消の証跡が残せなくなる、という設計判定の直接確認）。"""
+    revoked = _revoked_anchor_grant_rights_manifest_fixture()
+    m.validate_rights_manifest_four_layer(revoked)  # 例外を投げないことの確認
+
+
+def test_fix320_6_gate_is_projection_extraction_not_build_founder_or_gate_state() -> None:
+    """(c) 「gate」側の直接テスト: 取消後に anchor pin を（再）検証しようと
+    すると、実効ゲートである `extract_user_identity_attestation_
+    projection()` が確実に落ちること——これが取消を検知する唯一の実効
+    ゲートであることの確認（`gate_state()`/`build_founder()`/
+    `Run9IdentityDomain.is_pinned()` は rights_manifest.json の内容を
+    一切評価しない構造述語のまま据え置いた設計判定に対応する回帰）。
+    取消後も `domain.anchor_hashes["user"]` の pin 値自体は不変のため
+    `is_pinned()`/`build_founder()` は成功し続けるが、その pin 値を
+    取消後の manifest から独立に再導出・再検証しようとする経路
+    （projection 抽出）だけが fail-closed で機能することを示す。"""
+    revoked = _revoked_anchor_grant_rights_manifest_fixture()
+
+    # 取消後も pin 値自体（domain 側）は不変のため is_pinned()/build_founder()
+    # は rights_manifest.json を一切参照せず成功し続ける（構造述語のまま）。
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert domain.is_pinned() is True
+    m.build_founder(domain, "R9F-01")  # 例外を投げないことの確認
+
+    # 一方、取消後の manifest から anchor hash を独立に再検証しようとする
+    # 経路（唯一の実効ゲート）は fail-closed で拒否する。
+    with pytest.raises(m.Run9ValidationError, match="run9_identity_anchor"):
+        m.extract_user_identity_attestation_projection(revoked)
+
+
+def test_fix320_6_anchor_hash_and_genome_id_unchanged_by_this_fix() -> None:
+    """(d) 回帰: 本 Fix（第2の fail-closed 前提条件の追加）は現行
+    rights_manifest.json・domain の pin 値・genome_id のいずれも変更しない
+    ことの直接確認——「hash 復帰ではなくゲート化」という設計判定どおり
+    repin が発生していないこと。"""
+    domain = m.load_run9_identity_domain(DOMAIN_DRAFT_PATH)
+    assert (
+        domain.anchor_hashes["user"]
+        == "8569705be318d672d5f77ba955054a76d446664bb0883850a69c1fc35a55e804"
+    )
+    rights = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert domain.anchor_hashes["user"] == _projection_hash(rights)
+    g1 = m.build_founder(domain, "R9F-01")
+    g2 = m.build_founder(domain, "R9F-02")
+    assert g1.genome_id == "66f420672a154283"
+    assert g2.genome_id == "63f4b8f24b827cd4"
+
+
 def test_revision02_gate_remains_blocked_after_af0_ritsu_backbone_pins(
     contract: m.Run9RunContract,
 ) -> None:
@@ -7809,10 +7894,20 @@ def test_fix319_6_recording_master_rights_not_swapped_no_bare_pending_token() ->
 
 def test_fix319_6_history_records_vocab_reassignment_rationale() -> None:
     """仕分けの根拠（どの欄がどちらの主体に帰属するか）が manifest 注記
-    （history）に明記されていること。"""
+    （history）に明記されていること。
+
+    フィルタは「PR #319 第2巡指摘（... Fix 6）」まで絞り込む（素の
+    "Fix 6" 部分文字列だけでは、PR ラウンドごとに 1 から振り直される
+    Codex Fix 番号が別 PR で再度 "Fix 6" になった際に衝突する——実例:
+    Codex bot レビュー PR #320 第4巡指摘も "Fix 6" を名乗る。history
+    エントリは "Codex bot レビュー PR #<N> 第<M>巡指摘（..., Fix <K>）"
+    の定型で書かれるため、PR 番号・巡・Fix 番号の3つ組で絞り込めば
+    将来の同名衝突を再発させない）。"""
     data = json.loads(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
     history = data["history"]
-    swap_events = [h for h in history if "Fix 6" in h["event"]]
+    swap_events = [
+        h for h in history if "PR #319 第2巡指摘（P2, 採用, Fix 6）" in h["event"]
+    ]
     assert len(swap_events) == 1
     event_text = swap_events[0]["event"]
     assert "UNRESOLVED_EXTERNAL" in event_text
