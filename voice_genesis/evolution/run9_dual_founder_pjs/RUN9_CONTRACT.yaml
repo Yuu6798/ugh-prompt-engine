@@ -359,12 +359,21 @@ execution_profile_sha:
   status: PENDING
   reason: 学習実行環境（GPU / hardware profile）が未選定。
 
+# --- seed_policy_sha: inputs/seed_policy_manifest.json の実バイト sha256
+# （design_doc_sha256 と同一のファイル実バイト規約 —
+# run9_schema.compute_file_sha256() 参照）。RUN9-L0-PIN-1（2026-08-25 実装）
+# で PINNED 化: RUN9 が現に消費する3つの独立した乱数 seed
+# （performance_seed=909001 = DESIGN_RUN9 §9.2/§9.3 の凍結値・
+# SHARED_PERFORMANCE_SEED / learning_seed=909002 = run9_schema.py:119
+# LEARNING_SEED / gate_synth_runtime_seed=42 = gate_synth.py:149 SEED、
+# 消費点 ort.set_seed/record["seed"] は gate_synth.py:1213-1214）を、role・
+# 消費点(file:line)・他 seed からの独立宣言込みで全数登録した。
+# 〔履歴: 旧 PENDING 理由「正式な seed_policy 文書化・sha 転記が未実施」→
+# RUN9-L0-PIN-1 で解消済み〕
 seed_policy_sha:
-  value: null
-  status: PENDING
-  reason: >-
-    performance_seed=909001 / learning_seed=909002 は設計書 §9/§13 の凍結値だが、
-    正式な seed_policy 文書化・sha 転記が未実施。
+  value: "1ff25f429e544c1b6c9b10c5a388833fa2506b1ce12162c7b17cc4af32df05f4"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/seed_policy_manifest.json
 
 expected_speaker_map_sha:
   value: null
@@ -887,10 +896,30 @@ probe_manifest_sha:
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 
+# --- measurement_spec_sha: inputs/measurement_spec_manifest.json の実バイト
+# sha256（design_doc_sha256 と同一のファイル実バイト規約 —
+# run9_schema.compute_file_sha256() 参照）。RUN9-L0-PIN-1（2026-08-25 実装）
+# で PINNED 化: 測定仕様は identity 軸と development/generalization 軸の2つに
+# 分かれる（evaluation/probe_manifest.json#measurement_boundary /
+# README.md:587-590 が明文化する既存の境界、本欄はこれを変更しない）。
+# identity 軸は revision_bridge の7 metric-path（PINNED 済み
+# probe_manifest_sha 側）それぞれの extractor（WORLD/pyworld、
+# voice_genesis/foundry/adapter/donor_bank.py:190-196
+# analyze_donor_world()、grep 実在確認済み）+ normalization（level_
+# normalization）参照カタログを凍結した（式・閾値自体は
+# inputs/identity_metric_space.json を正本のまま重複定義しない）。
+# development/generalization 軸（P4/P5、DESIGN_RUN9 §16.3 DevelopmentalVector
+# 9指標 + §14 C4 GENERALIZED_GAIN）は対応する extractor が VG-L0 学習
+# ハーネス未実装のため repo に実在せず（grep 確認: 該当実装なし）、閉じた
+# metric 名の語彙のみを NOT_YET_IMPLEMENTED として正直に凍結した — 数値・
+# extractor をここで発明していない。
+# 〔履歴: 旧 PENDING 理由「測定仕様（feature extractor / normalization /
+# metric version）が未凍結」→ RUN9-L0-PIN-1 で identity 軸は解消・
+# development/generalization 軸は VG-L0 ハーネス実装待ちとして明示保留〕
 measurement_spec_sha:
-  value: null
-  status: PENDING
-  reason: 測定仕様（feature extractor / normalization / metric version）が未凍結。
+  value: "cb3e3b45973caa3737531b9636454a4542bc75f60d03a80a6a0411a9847bfdd5"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/measurement_spec_manifest.json
 
 hypothesis_algebra_sha:
   value: null
@@ -921,10 +950,24 @@ cost_record_sha:
   status: PENDING
   reason: PIN_AFTER_RUN
 
+# --- failure_abort_criteria_sha: inputs/failure_abort_criteria.json の実
+# バイト sha256（design_doc_sha256 と同一のファイル実バイト規約 —
+# run9_schema.compute_file_sha256() 参照）。RUN9-L0-PIN-1（2026-08-25 実装）
+# で PINNED 化: DESIGN_RUN9 §30 Stop Rules の20項目全数を逐語収載し、各項目
+# を enforcement: MACHINE（既存 pin 済み機構への condition 参照。10件）/
+# PROCEDURAL（§22 のどの step で誰が判定するかの checkpoint。10件）へ分類
+# した。校正未実施の数値閾値を要する項目（#14 mandatory metric degeneracy /
+# #16 Identity drift beyond non-inferiority）は deferred_threshold_ref:
+# "hypothesis_algebra_sha" で参照するのみとし、数値そのものは発明していない
+# （hypothesis_algebra_sha は引き続き PENDING、Group D）。§30 末尾の停止後
+# 救済禁止6項目（new weights/new teacher/new Founder/new metric threshold/
+# new Lesson channel/new optimizer search）も逐語収載した。
+# 〔履歴: 旧 PENDING 理由「DESIGN_RUN9 §30 Stop Rules の20項目を機械可読な
+# 閾値/条件文書へ未変換」→ RUN9-L0-PIN-1 で解消済み〕
 failure_abort_criteria_sha:
-  value: null
-  status: PENDING
-  reason: DESIGN_RUN9 §30 Stop Rules の20項目を機械可読な閾値/条件文書へ未変換。
+  value: "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 
 claim_strength_target: C2
 

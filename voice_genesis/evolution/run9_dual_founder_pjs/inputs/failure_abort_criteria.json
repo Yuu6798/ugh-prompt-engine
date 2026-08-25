@@ -1,0 +1,140 @@
+{
+  "classification_policy": "既存 pin 済み機構への決定論的照合で判定可能 = MACHINE、人間/手続き判定を含む = PROCEDURAL。迷えば PROCEDURAL に倒す（偽 MACHINE 化が最悪ケース — Design Memo RUN9-L0-PIN-1 Risk 節）。MACHINE のうち校正未実施の数値閾値を要する項目（#14/#16）は deferred_threshold_ref で 該当 pin 欄名を参照し、閾値の数値そのものはここで発明しない。",
+  "post_stop_prohibitions": {
+    "escape_hatch_verbatim": "修正が必要ならExperiment IDはRUN9のまま、design_revisionを上げ、旧attemptをappend-only履歴として残す。",
+    "items": [
+      "new weights",
+      "new teacher",
+      "new Founder",
+      "new metric threshold",
+      "new Lesson channel",
+      "new optimizer search"
+    ],
+    "scope_note_verbatim": "停止後に同じattempt内で、new weights / new teacher / new Founder / new metric threshold / new Lesson channel / new optimizer search を追加しない。"
+  },
+  "rules": [
+    {
+      "checkpoint": "§22 step 2『verify donor and teacher rights / manifests』— Codex/User が rights_manifest.json の attestation/consent_status を人間判断で確認する。個別構造欄の機械検証は rule #2 が別途カバーするが、権利関係『unresolved』の総合判定自体は機械単独で閉じない。",
+      "enforcement": "PROCEDURAL",
+      "rule_id": 1,
+      "verbatim": "donor/teacher rights unresolved"
+    },
+    {
+      "condition": "inputs/rights_manifest.json の必須構造充足を validate_rights_manifest_four_layer()（run9_schema.py、既存 pin 済み validator）が fail-closed 検証する。2026-08-25 User attestation 実行により現状 PASS。",
+      "enforcement": "MACHINE",
+      "rule_id": 2,
+      "verbatim": "User donor manifest incomplete"
+    },
+    {
+      "condition": "Run9IdentityDomain.is_pinned()/content_digest() が domains/identity_domain_run9_v1.json の anchor_hashes.{af0,ritsu,user}・metric_space_sha（全て PINNED）との raw sha 再照合で判定する既存機構。",
+      "enforcement": "MACHINE",
+      "rule_id": 3,
+      "verbatim": "anchor metric/model space mismatch"
+    },
+    {
+      "condition": "practice/education manifest の excludes_correct_technique_parameters（PRACTICE_MANIFEST_REQUIRED_KEYS）/ excludes_identity_and_trait_donor_info（EDUCATION_MANIFEST_REQUIRED_KEYS）bool True 必須検証（validate_practice_split_manifest()/validate_education_lesson_manifest()、既存 pin 済み validator。_MANIFEST_REQUIRED_TRUE_KEYS 参照）。",
+      "enforcement": "MACHINE",
+      "rule_id": 4,
+      "verbatim": "PJS identity channel contamination"
+    },
+    {
+      "condition": "同一入力を2回実行し byte-identical であることの照合（gate_synth.py:149 SEED = 42 ハードコード固定 + run9_schema.py:122 OPERATOR_ID = \"TRI_CROSSOVER/1.0\" の決定論契約）。",
+      "enforcement": "MACHINE",
+      "rule_id": 5,
+      "verbatim": "TRI_CROSSOVER non-deterministic"
+    },
+    {
+      "condition": "inputs/identity_metric_space.json calibration.validity_gates の3ゲート（c1_gate/positive_reference_gate/negative_reference_gate）のいずれか不成立で calibration_status(F) = INVALID となる（on_failure 節。metric_space_sha として既存 PINNED 済み）。",
+      "enforcement": "MACHINE",
+      "rule_id": 6,
+      "verbatim": "one or both Founders fail viability"
+    },
+    {
+      "checkpoint": "§22 step 7『adjudicate Birth Identity Separation』（逐語）— identity_metric_space.json の distance/calibration evidence を用いた Codex/User の人間判定。単一閾値による PASS/FAIL 化はしない（confuser_control.evaluation と同じ evidence-only 規律を踏襲）。",
+      "enforcement": "PROCEDURAL",
+      "rule_id": 7,
+      "verbatim": "Birth Identity separation not established"
+    },
+    {
+      "condition": "validate_education_lesson_manifest()（既存 pin 済み validator）が EDUCATION_MANIFEST_REQUIRED_KEYS 充足検証に失敗した場合。",
+      "enforcement": "MACHINE",
+      "rule_id": 8,
+      "verbatim": "PJS Lesson cannot be frozen"
+    },
+    {
+      "checkpoint": "§22 step 9〜10 の境界 — README.md 残存ブロッカー(2) が列挙する ControlProfile Entry Gate 残要件（calibrated Identity audit route / learning replay harness / rights-clean curriculum / fixed compute budget / frozen recipe / rollback path）は 既存の機械 gate 機構を持たず、Codex/User が個別に確認する。",
+      "enforcement": "PROCEDURAL",
+      "rule_id": 9,
+      "verbatim": "Adapter Entry Gate not satisfied"
+    },
+    {
+      "condition": "validate_learning_recipe_manifest()（既存 pin 済み validator）が 各枝 equal_budget_within_arm bool True 必須検証に失敗した場合。",
+      "enforcement": "MACHINE",
+      "rule_id": 10,
+      "verbatim": "equal budget cannot be guaranteed"
+    },
+    {
+      "checkpoint": "§22 step 10〜12（execute LEARN_PERFORMANCE / freeze Adapter checkpoints）— VG-L0 学習ハーネス未実装のため isnan/isinf・checkpoint 整合性照合に相当する機械検査は repo に存在しない（既存 pin 済み機構なし。grep 確認済み — 迷えば PROCEDURAL の原則を適用）。ハーネス実装時に新設する。",
+      "enforcement": "PROCEDURAL",
+      "rule_id": 11,
+      "verbatim": "training NaN / checkpoint corruption"
+    },
+    {
+      "condition": "founder_genome_shas.{R9F-01,R9F-02}（PINNED）と founders/*.json 実バイト sha256 の 再照合（既存機構）。",
+      "enforcement": "MACHINE",
+      "rule_id": 12,
+      "verbatim": "r0 or frozen Genome changed"
+    },
+    {
+      "checkpoint": "§22 step 14『open sealed holdout』— sealed holdout は学習完了後にのみ開封する手続き規律（PoR §12）であり、開封タイミング自体を機械強制する既存ランタイム機構は repo に存在しない（practice_audio_split_manifest.json の sealed_holdout_sha256 は分割の byte-hash 分離のみ保証し、実行時アクセス制御は保証しない）。Codex/User が開封タイミングを確認する。",
+      "enforcement": "PROCEDURAL",
+      "rule_id": 13,
+      "verbatim": "holdout leakage"
+    },
+    {
+      "condition": "hypothesis_algebra_sha（PENDING, Group D）が校正する H1-H6 閾値に基づく退化判定。実測前は数値を発明しない。",
+      "deferred_threshold_ref": "hypothesis_algebra_sha",
+      "enforcement": "MACHINE",
+      "rule_id": 14,
+      "verbatim": "mandatory metric degeneracy without audit fallback"
+    },
+    {
+      "checkpoint": "§22 step 16『identity/leakage/developmental evaluation』— identity_metric_space.json confuser_control.evaluation は『総合スコア化・閾値によるPASS/FAIL化はしない』と明記する（同ファイル逐語）。d_pjs(r) の系統的減少 evidence を Codex/User が判定する。",
+      "enforcement": "PROCEDURAL",
+      "rule_id": 15,
+      "verbatim": "PJS Identity leakage after all preregistered candidates"
+    },
+    {
+      "condition": "hypothesis_algebra_sha（PENDING, Group D）が校正する non-inferiority margin に基づく drift 判定（identity_metric_space.json calibration.decision_rule の theta_cal(F) 比較とは 別軸 — non-inferiority margin は H1-H6 側の校正対象であり theta_cal(F) と同一視しない）。実測前は数値を発明しない。",
+      "deferred_threshold_ref": "hypothesis_algebra_sha",
+      "enforcement": "MACHINE",
+      "rule_id": 16,
+      "verbatim": "Identity drift beyond non-inferiority"
+    },
+    {
+      "checkpoint": "§22 step 17『deterministic replay』— VG-L0 学習ハーネス未実装のため replay 実行機構自体が repo に存在しない（既存 pin 済み機構なし）。ハーネス実装時に新設する。",
+      "enforcement": "PROCEDURAL",
+      "rule_id": 17,
+      "verbatim": "learning replay failure"
+    },
+    {
+      "checkpoint": "§22 step 1『verify repository / dependency pins』/ step 19『provenance and atomic publication』— repository_commit_sha/dependency_pins_sha（いずれも Group C、現状 PENDING）が pin された後、Codex/User が sha 一致を確認する。",
+      "enforcement": "PROCEDURAL",
+      "rule_id": 18,
+      "verbatim": "provenance / code closure failure"
+    },
+    {
+      "checkpoint": "§22 step 9『freeze learning recipe / equal budget』— execution_profile_sha（Group C、現状 PENDING）に cost cap 数値は未凍結。数値をここで発明しない。budget 凍結後、Codex/User が超過を確認する。",
+      "enforcement": "PROCEDURAL",
+      "rule_id": 19,
+      "verbatim": "cost cap exceeded"
+    },
+    {
+      "checkpoint": "§22 step 10〜11『execute LEARN_PERFORMANCE』— learning_recipe.search_space/candidate_generation（Group B、現状 PENDING）の枯渇判定は探索実行時の Codex/User 判断。既存の自動枯渇検出機構なし。",
+      "enforcement": "PROCEDURAL",
+      "rule_id": 20,
+      "verbatim": "candidate class exhausted"
+    }
+  ],
+  "schema": "run9-failure-abort-criteria/1.0"
+}

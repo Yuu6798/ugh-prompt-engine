@@ -10467,3 +10467,519 @@ def test_fix323_14_pyproject_has_no_gdown_dependency() -> None:
     dev_end = pyproject_text.index("]", dev_start)
     dev_block = pyproject_text[dev_start:dev_end]
     assert "gdown" not in dev_block
+# ---------------------------------------------------------------------------
+# RUN9-L0-PIN-1（Design Memo, 2026-08-25 実装）: seed_policy_sha /
+# failure_abort_criteria_sha / measurement_spec_sha の manifest 化 + PINNED
+# 化に対する回帰・fail-closed テスト。probe_manifest（PR #322）のテスト構成
+# を踏襲する: 実ファイル validate 成功 → fail-closed 分岐 → read-once
+# loader（PINNED 確認・contract 改竄検出・バイト改竄検出・正常系）→
+# 全体回帰（3欄 PINNED・gate_state() BLOCKED・再直列化 byte 一致・
+# stale PENDING マーカー不在）。
+# ---------------------------------------------------------------------------
+
+
+def _seed_policy_manifest_data() -> Dict[str, Any]:
+    return m._loads_strict_json(m.SEED_POLICY_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _failure_abort_criteria_data() -> Dict[str, Any]:
+    return m._loads_strict_json(m.FAILURE_ABORT_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _measurement_spec_manifest_data() -> Dict[str, Any]:
+    return m._loads_strict_json(m.MEASUREMENT_SPEC_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# seed_policy_manifest: 正常系 + fail-closed 分岐
+# ---------------------------------------------------------------------------
+
+
+def test_pin1_seed_policy_manifest_validates() -> None:
+    m.validate_seed_policy_manifest(_seed_policy_manifest_data())  # 例外を投げないことの確認
+
+
+def test_pin1_seed_policy_manifest_registers_exactly_three_seeds() -> None:
+    data = _seed_policy_manifest_data()
+    seed_ids = {entry["seed_id"] for entry in data["seeds"]}
+    assert seed_ids == {"performance_seed", "learning_seed", "gate_synth_runtime_seed"}
+
+
+def test_pin1_seed_policy_manifest_values_match_frozen_sources() -> None:
+    """一次ソースからの逐語転記の実測確認: run9_schema.py の
+    SHARED_PERFORMANCE_SEED/LEARNING_SEED、および gate_synth.py:149 の
+    SEED=42（read-only 参照、値のみの転記）と一致すること。"""
+    data = _seed_policy_manifest_data()
+    by_id = {entry["seed_id"]: entry for entry in data["seeds"]}
+    assert by_id["performance_seed"]["value"] == m.SHARED_PERFORMANCE_SEED == 909001
+    assert by_id["learning_seed"]["value"] == m.LEARNING_SEED == 909002
+    assert by_id["gate_synth_runtime_seed"]["value"] == 42
+
+
+def test_pin1_seed_policy_manifest_unknown_top_level_key_fail_closed() -> None:
+    data = copy.deepcopy(_seed_policy_manifest_data())
+    data["unexpected"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_seed_policy_manifest(data)
+
+
+def test_pin1_seed_policy_manifest_missing_seed_fail_closed() -> None:
+    data = copy.deepcopy(_seed_policy_manifest_data())
+    data["seeds"] = [e for e in data["seeds"] if e["seed_id"] != "learning_seed"]
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_seed_policy_manifest(data)
+
+
+def test_pin1_seed_policy_manifest_wrong_value_fail_closed() -> None:
+    data = copy.deepcopy(_seed_policy_manifest_data())
+    for entry in data["seeds"]:
+        if entry["seed_id"] == "gate_synth_runtime_seed":
+            entry["value"] = 43
+    with pytest.raises(m.Run9ValidationError, match="must be exactly 42"):
+        m.validate_seed_policy_manifest(data)
+
+
+def test_pin1_seed_policy_manifest_wrong_independent_from_fail_closed() -> None:
+    data = copy.deepcopy(_seed_policy_manifest_data())
+    for entry in data["seeds"]:
+        if entry["seed_id"] == "performance_seed":
+            entry["independent_from"] = ["learning_seed"]  # gate_synth_runtime_seed が欠落
+    with pytest.raises(m.Run9ValidationError, match="independent_from"):
+        m.validate_seed_policy_manifest(data)
+
+
+def test_pin1_seed_policy_manifest_unregistered_seed_prohibition_present() -> None:
+    data = _seed_policy_manifest_data()
+    assert isinstance(data["unregistered_seed_prohibition"], str)
+    assert data["unregistered_seed_prohibition"].strip()
+
+
+# ---------------------------------------------------------------------------
+# failure_abort_criteria: 正常系 + fail-closed 分岐
+# ---------------------------------------------------------------------------
+
+
+def test_pin1_failure_abort_criteria_validates() -> None:
+    m.validate_failure_abort_criteria(_failure_abort_criteria_data())  # 例外を投げないことの確認
+
+
+def test_pin1_failure_abort_criteria_has_exactly_twenty_rules_1_to_20() -> None:
+    data = _failure_abort_criteria_data()
+    assert len(data["rules"]) == 20
+    assert [r["rule_id"] for r in data["rules"]] == list(range(1, 21))
+
+
+def test_pin1_failure_abort_criteria_verbatim_matches_design_doc_section30() -> None:
+    """DESIGN_RUN9 §30（1466-1489行）の20項目逐語との一致を、design_doc
+    実ファイルから直接抽出して照合する（孫引き防止 — 一次ソース直読み）。"""
+    design_text = DESIGN_DOC_PATH.read_text(encoding="utf-8")
+    section = design_text.split("# 30. Stop Rules", 1)[1]
+    block = section.split("```text", 1)[1].split("```", 1)[0]
+    expected_lines = [
+        re.sub(r"^\d+\s+", "", line).strip()
+        for line in block.strip().splitlines()
+        if line.strip()
+    ]
+    assert len(expected_lines) == 20
+    data = _failure_abort_criteria_data()
+    actual_lines = [r["verbatim"] for r in data["rules"]]
+    assert actual_lines == expected_lines
+
+
+def test_pin1_failure_abort_criteria_enforcement_vocab_closed() -> None:
+    data = _failure_abort_criteria_data()
+    for rule in data["rules"]:
+        assert rule["enforcement"] in ("MACHINE", "PROCEDURAL")
+
+
+def test_pin1_failure_abort_criteria_ten_machine_ten_procedural() -> None:
+    data = _failure_abort_criteria_data()
+    machine = [r for r in data["rules"] if r["enforcement"] == "MACHINE"]
+    procedural = [r for r in data["rules"] if r["enforcement"] == "PROCEDURAL"]
+    assert len(machine) == 10
+    assert len(procedural) == 10
+
+
+def test_pin1_failure_abort_criteria_deferred_threshold_ref_targets_real_pin_field() -> None:
+    data = _failure_abort_criteria_data()
+    deferred = [r for r in data["rules"] if "deferred_threshold_ref" in r]
+    assert {r["rule_id"] for r in deferred} == {14, 16}
+    for r in deferred:
+        assert r["deferred_threshold_ref"] in m.CONTRACT_PIN_FIELDS
+        assert r["deferred_threshold_ref"] == "hypothesis_algebra_sha"
+
+
+def test_pin1_failure_abort_criteria_post_stop_prohibitions_match_design_doc() -> None:
+    design_text = DESIGN_DOC_PATH.read_text(encoding="utf-8")
+    assert (
+        "new weights\nnew teacher\nnew Founder\nnew metric threshold\n"
+        "new Lesson channel\nnew optimizer search" in design_text
+    )
+    data = _failure_abort_criteria_data()
+    assert data["post_stop_prohibitions"]["items"] == [
+        "new weights", "new teacher", "new Founder", "new metric threshold",
+        "new Lesson channel", "new optimizer search",
+    ]
+
+
+def test_pin1_failure_abort_criteria_rule_id_not_matching_index_fail_closed() -> None:
+    data = copy.deepcopy(_failure_abort_criteria_data())
+    data["rules"][0]["rule_id"] = 2
+    with pytest.raises(m.Run9ValidationError, match="rule_id"):
+        m.validate_failure_abort_criteria(data)
+
+
+def test_pin1_failure_abort_criteria_wrong_verbatim_fail_closed() -> None:
+    data = copy.deepcopy(_failure_abort_criteria_data())
+    data["rules"][0]["verbatim"] = "something else entirely"
+    with pytest.raises(m.Run9ValidationError, match="verbatim"):
+        m.validate_failure_abort_criteria(data)
+
+
+def test_pin1_failure_abort_criteria_unknown_enforcement_fail_closed() -> None:
+    data = copy.deepcopy(_failure_abort_criteria_data())
+    data["rules"][0]["enforcement"] = "AUTOMATIC"
+    with pytest.raises(m.Run9ValidationError, match="enforcement"):
+        m.validate_failure_abort_criteria(data)
+
+
+def test_pin1_failure_abort_criteria_machine_rule_with_checkpoint_fail_closed() -> None:
+    """MACHINE 項目に PROCEDURAL 専用キー checkpoint を混入させると拒否
+    される（両語彙の排他性の機械強制）。"""
+    data = copy.deepcopy(_failure_abort_criteria_data())
+    machine_rule = next(r for r in data["rules"] if r["enforcement"] == "MACHINE")
+    machine_rule["checkpoint"] = "should not be allowed here"
+    with pytest.raises(m.Run9ValidationError, match="checkpoint"):
+        m.validate_failure_abort_criteria(data)
+
+
+def test_pin1_failure_abort_criteria_procedural_rule_with_condition_fail_closed() -> None:
+    data = copy.deepcopy(_failure_abort_criteria_data())
+    procedural_rule = next(r for r in data["rules"] if r["enforcement"] == "PROCEDURAL")
+    procedural_rule["condition"] = "should not be allowed here"
+    with pytest.raises(m.Run9ValidationError, match="condition"):
+        m.validate_failure_abort_criteria(data)
+
+
+def test_pin1_failure_abort_criteria_bogus_deferred_threshold_ref_fail_closed() -> None:
+    """deferred_threshold_ref に CONTRACT_PIN_FIELDS 外の名前（＝実質的な
+    裸の閾値発明の代替経路）を与えると拒否される。"""
+    data = copy.deepcopy(_failure_abort_criteria_data())
+    rule14 = next(r for r in data["rules"] if r["rule_id"] == 14)
+    rule14["deferred_threshold_ref"] = "made_up_threshold_field"
+    with pytest.raises(m.Run9ValidationError, match="deferred_threshold_ref"):
+        m.validate_failure_abort_criteria(data)
+
+
+def test_pin1_failure_abort_criteria_missing_top_level_key_fail_closed() -> None:
+    data = copy.deepcopy(_failure_abort_criteria_data())
+    del data["classification_policy"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_failure_abort_criteria(data)
+
+
+# ---------------------------------------------------------------------------
+# measurement_spec_manifest: 正常系 + fail-closed 分岐
+# ---------------------------------------------------------------------------
+
+
+def test_pin1_measurement_spec_manifest_validates() -> None:
+    m.validate_measurement_spec_manifest(_measurement_spec_manifest_data())  # 例外なし確認
+
+
+def test_pin1_measurement_spec_manifest_identity_axis_matches_revision_bridge_entries() -> None:
+    """identity_axis_metric_paths が evaluation/probe_manifest.json
+    revision_bridge の7エントリと過不足なく一致すること（一次ソース直読み
+    で照合 — 孫引き防止）。"""
+    probe_manifest = m._loads_strict_json(m.PROBE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    revision_bridge_keys = set(probe_manifest["revision_bridge"].keys())
+    data = _measurement_spec_manifest_data()
+    assert set(data["identity_axis_metric_paths"].keys()) == revision_bridge_keys
+    assert revision_bridge_keys == set(m._REVISION_BRIDGE_ENTRY_NAMES)
+
+
+def test_pin1_measurement_spec_manifest_metric_path_refs_match_frozen_table() -> None:
+    data = _measurement_spec_manifest_data()
+    for entry_name, expected_ref in m._REVISION_BRIDGE_EXPECTED_METRIC_REF.items():
+        assert (
+            data["identity_axis_metric_paths"][entry_name]["identity_metric_space_ref"]
+            == expected_ref
+        )
+
+
+def test_pin1_measurement_spec_manifest_extractor_module_exists_and_function_greppable() -> None:
+    """extractor 参照（module path + 消費関数）が実在することを grep 相当
+    で機械照合する（Design Memo Risk 節: 存在しない extractor を書かない）。"""
+    data = _measurement_spec_manifest_data()
+    repo_root = _RUN_DIR.parent.parent.parent
+    for entry in data["identity_axis_metric_paths"].values():
+        module_path = repo_root / entry["extractor"]["module"]
+        assert module_path.is_file(), f"extractor module does not exist: {module_path}"
+        source = module_path.read_text(encoding="utf-8")
+        assert "def analyze_donor_world" in source
+
+
+def test_pin1_measurement_spec_manifest_calibration_status_all_uncalibrated() -> None:
+    """C0/C1 実測前の現在のデータスナップショットは全エントリ
+    UNCALIBRATED（REVISION_0.3 改訂G 語彙）。"""
+    data = _measurement_spec_manifest_data()
+    for entry in data["identity_axis_metric_paths"].values():
+        assert entry["calibration_status"] == "UNCALIBRATED"
+
+
+def test_pin1_measurement_spec_manifest_dev_gen_axis_metrics_match_design_doc_16_3() -> None:
+    """一次ソース DESIGN_RUN9 §16.3 DevelopmentalVector の逐語9指標との
+    照合（design_doc から直接抽出、孫引き防止）。"""
+    design_text = DESIGN_DOC_PATH.read_text(encoding="utf-8")
+    section = design_text.split("## 16.3 DevelopmentalVector", 1)[1]
+    block = section.split("```text", 1)[1].split("```", 1)[0]
+    expected = [line.strip() for line in block.strip().splitlines() if line.strip()]
+    assert len(expected) == 9
+    data = _measurement_spec_manifest_data()
+    assert data["development_generalization_axis"]["metrics"] == expected
+
+
+def test_pin1_measurement_spec_manifest_dev_gen_axis_status_not_yet_implemented() -> None:
+    data = _measurement_spec_manifest_data()
+    assert data["development_generalization_axis"]["status"] == "NOT_YET_IMPLEMENTED"
+
+
+def test_pin1_measurement_spec_manifest_dev_gen_extractors_confirmed_absent_from_repo() -> None:
+    """development/generalization 軸9指標 + GENERALIZED_GAIN の extractor
+    実装が repo に実在しないことの grep 機械照合（「あるべき姿」で書かず
+    正直に NOT_YET_IMPLEMENTED を宣言している、という主張自体を検証する）。
+    """
+    repo_root = _RUN_DIR.parent.parent.parent
+    names = [
+        "pitch_gain", "voicing_gain", "duration_gain", "energy_contour_gain",
+        "attack_gain", "phrase_end_gain", "lyrics_delta", "artifact_delta",
+        "identity_delta",
+    ]
+    hits = 0
+    for py_file in repo_root.rglob("*.py"):
+        try:
+            text = py_file.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for name in names:
+            if f"def {name}" in text or f" {name}(" in text:
+                hits += 1
+    assert hits == 0, "development/generalization axis の extractor 実装が repo に見つかった"
+
+
+def test_pin1_measurement_spec_manifest_unknown_metric_path_key_fail_closed() -> None:
+    data = copy.deepcopy(_measurement_spec_manifest_data())
+    data["identity_axis_metric_paths"]["bogus_entry"] = data["identity_axis_metric_paths"][
+        "reference_render"
+    ]
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_measurement_spec_manifest(data)
+
+
+def test_pin1_measurement_spec_manifest_missing_metric_path_entry_fail_closed() -> None:
+    data = copy.deepcopy(_measurement_spec_manifest_data())
+    del data["identity_axis_metric_paths"]["pjs_reference"]
+    with pytest.raises(m.Run9ValidationError, match="missing required entry"):
+        m.validate_measurement_spec_manifest(data)
+
+
+def test_pin1_measurement_spec_manifest_wrong_ref_fail_closed() -> None:
+    data = copy.deepcopy(_measurement_spec_manifest_data())
+    data["identity_axis_metric_paths"]["reference_render"]["identity_metric_space_ref"] = (
+        "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population"
+    )
+    with pytest.raises(m.Run9ValidationError, match="identity_metric_space_ref"):
+        m.validate_measurement_spec_manifest(data)
+
+
+def test_pin1_measurement_spec_manifest_bad_calibration_status_fail_closed() -> None:
+    data = copy.deepcopy(_measurement_spec_manifest_data())
+    data["identity_axis_metric_paths"]["reference_render"]["calibration_status"] = "MADE_UP"
+    with pytest.raises(m.Run9ValidationError, match="calibration_status"):
+        m.validate_measurement_spec_manifest(data)
+
+
+def test_pin1_measurement_spec_manifest_wrong_dev_gen_metrics_order_fail_closed() -> None:
+    data = copy.deepcopy(_measurement_spec_manifest_data())
+    data["development_generalization_axis"]["metrics"] = list(
+        reversed(data["development_generalization_axis"]["metrics"])
+    )
+    with pytest.raises(m.Run9ValidationError, match="metrics"):
+        m.validate_measurement_spec_manifest(data)
+
+
+def test_pin1_measurement_spec_manifest_bad_dev_gen_status_fail_closed() -> None:
+    data = copy.deepcopy(_measurement_spec_manifest_data())
+    data["development_generalization_axis"]["status"] = "IMPLEMENTED"
+    with pytest.raises(m.Run9ValidationError, match="status"):
+        m.validate_measurement_spec_manifest(data)
+
+
+# ---------------------------------------------------------------------------
+# read-once loader: PINNED確認 / contract改竄検出 / manifestバイト改竄検出 /
+# 正常系 parse 返却（3関数とも同一パターン、Persistent Artifact Safety Gate
+# 該当項目 = AGENTS.md §8: 単一 read で parse+hash・unknown 推測補完禁止）。
+# ---------------------------------------------------------------------------
+
+_PIN1_LOADER_CASES = (
+    ("seed_policy_sha", "load_pinned_seed_policy_manifest", "SEED_POLICY_MANIFEST_PATH"),
+    (
+        "failure_abort_criteria_sha", "load_pinned_failure_abort_criteria",
+        "FAILURE_ABORT_MANIFEST_PATH",
+    ),
+    (
+        "measurement_spec_sha", "load_pinned_measurement_spec_manifest",
+        "MEASUREMENT_SPEC_MANIFEST_PATH",
+    ),
+)
+
+
+@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_LOADER_CASES)
+def test_pin1_load_pinned_manifest_happy_path(
+    contract: m.Run9RunContract, pin_name: str, loader_name: str, path_const_name: str,
+) -> None:
+    loader = getattr(m, loader_name)
+    data = loader(contract)
+    assert isinstance(data, dict)
+
+
+@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_LOADER_CASES)
+def test_pin1_load_pinned_manifest_rejects_when_not_pinned(
+    contract_raw: Dict[str, Any],
+    tmp_path: Path,
+    pin_name: str,
+    loader_name: str,
+    path_const_name: str,
+) -> None:
+    """disk 正典側もあわせて PENDING にした contract_path を渡し、
+    ディスク正典との乖離チェック（層(i)）ではなく PINNED 状態チェック
+    （層(ii)）が拒否理由になる分岐を確認する（両チェックが独立に機能する
+    ことの確認 — in-process 改竄検出とは別のテスト、上記
+    `test_pin1_load_pinned_manifest_detects_in_process_contract_tampering`
+    と対）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered[pin_name] = {"value": None, "status": "PENDING", "reason": "test"}
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(yaml.safe_dump(tampered, allow_unicode=True), encoding="utf-8")
+    tampered_contract = m.load_run9_contract(tampered)
+    loader = getattr(m, loader_name)
+    with pytest.raises(m.Run9ValidationError, match="not PINNED"):
+        loader(tampered_contract, contract_path=tampered_yaml_path)
+
+
+@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_LOADER_CASES)
+def test_pin1_load_pinned_manifest_detects_in_process_contract_tampering(
+    contract: m.Run9RunContract, pin_name: str, loader_name: str, path_const_name: str,
+) -> None:
+    """in-process contract.raw を直接改竄しても、ディスク正典
+    RUN9_CONTRACT.yaml との乖離が fail-closed で検出される
+    （load_pinned_probe_manifest() Fix 27/17 と同型の3層防御）。"""
+    tampered = copy.deepcopy(contract)
+    tampered.raw[pin_name]["value"] = "0" * 64
+    loader = getattr(m, loader_name)
+    with pytest.raises(m.Run9ValidationError, match="diverges from the canonical on-disk"):
+        loader(tampered)
+
+
+@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_LOADER_CASES)
+def test_pin1_load_pinned_manifest_detects_manifest_byte_tampering(
+    contract: m.Run9RunContract,
+    tmp_path: Path,
+    pin_name: str,
+    loader_name: str,
+    path_const_name: str,
+) -> None:
+    path_const: Path = getattr(m, path_const_name)
+    tampered_path = tmp_path / path_const.name
+    tampered_path.write_bytes(path_const.read_bytes() + b"\n// tampered")
+    loader = getattr(m, loader_name)
+    with pytest.raises(m.Run9ValidationError, match="実バイト sha256"):
+        loader(contract, manifest_path=tampered_path)
+
+
+@pytest.mark.parametrize("pin_name,loader_name,path_const_name", _PIN1_LOADER_CASES)
+def test_pin1_load_pinned_manifest_missing_file_fail_closed(
+    contract: m.Run9RunContract,
+    tmp_path: Path,
+    pin_name: str,
+    loader_name: str,
+    path_const_name: str,
+) -> None:
+    missing_path = tmp_path / "does_not_exist.json"
+    loader = getattr(m, loader_name)
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        loader(contract, manifest_path=missing_path)
+
+
+# ---------------------------------------------------------------------------
+# 全体回帰: 3欄 PINNED + gate_state() BLOCKED + 既存 pin 値不変 + 再直列化
+# byte 一致 + stale PENDING マーカー不在
+# ---------------------------------------------------------------------------
+
+
+def test_pin1_three_fields_pinned_with_real_file_sha(contract_raw: Dict[str, Any]) -> None:
+    expectations = {
+        "seed_policy_sha": m.SEED_POLICY_MANIFEST_PATH,
+        "failure_abort_criteria_sha": m.FAILURE_ABORT_MANIFEST_PATH,
+        "measurement_spec_sha": m.MEASUREMENT_SPEC_MANIFEST_PATH,
+    }
+    for field_name, path in expectations.items():
+        field = contract_raw[field_name]
+        assert field["status"] == "PINNED"
+        assert field["value"] == m.compute_file_sha256(path)
+
+
+def test_pin1_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
+    """3欄が PINNED になっても、残る11の pre-run 欄（attempt_id ほか）が
+    PENDING のままである限り gate_state() は依然 BLOCKED（誤 READY 化
+    していないことの回帰確認 — probe_manifest/founder_genome_shas と同型）。
+    """
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_pin1_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> None:
+    """本 PR は Scope IN の3欄以外の既存 pin 値を一切変更していないこと
+    （代表サンプル: probe_manifest_sha / practice_audio_split_manifest_sha /
+    backbone_checkpoint_sha が実ファイルと引き続き一致する）。"""
+    assert contract_raw["probe_manifest_sha"]["status"] == "PINNED"
+    assert contract_raw["probe_manifest_sha"]["value"] == m.compute_file_sha256(
+        m.PROBE_MANIFEST_PATH
+    )
+    assert contract_raw["practice_audio_split_manifest_sha"]["status"] == "PINNED"
+    assert contract_raw["practice_audio_split_manifest_sha"]["value"] == m.compute_file_sha256(
+        m.PRACTICE_MANIFEST_PATH
+    )
+
+
+@pytest.mark.parametrize(
+    "path_const_name,loader",
+    [
+        ("SEED_POLICY_MANIFEST_PATH", "_seed_policy_manifest_data"),
+        ("FAILURE_ABORT_MANIFEST_PATH", "_failure_abort_criteria_data"),
+        ("MEASUREMENT_SPEC_MANIFEST_PATH", "_measurement_spec_manifest_data"),
+    ],
+)
+def test_pin1_manifest_reserializes_to_identical_bytes(path_const_name: str, loader: str) -> None:
+    """`json.dumps(..., ensure_ascii=False, sort_keys=True, indent=2)` +
+    末尾改行の決定論 pretty 規約で再直列化した結果が実ファイルと byte-for-
+    byte 一致すること（founders/*.json・probe_manifest.json と同一規約）。
+    """
+    path: Path = getattr(m, path_const_name)
+    data = globals()[loader]()
+    reserialized = json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    assert reserialized.encode("utf-8") == path.read_bytes()
+
+
+def test_pin1_readme_has_no_stale_present_tense_pending_claims() -> None:
+    """README.md のブロッカー節・現在地マップに、本 PR で PINNED 化した
+    3欄を「現在 PENDING」と主張する記述が残っていないこと（履歴注記
+    〔履歴: ...〕・取消線 ~~...~~・「解消済み」節見出し内の言及は許容）。
+    """
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    fields = ("seed_policy_sha", "measurement_spec_sha", "failure_abort_criteria_sha")
+    for line in readme_text.splitlines():
+        for field in fields:
+            if field in line and "PENDING" in line:
+                assert ("履歴" in line) or ("解消済み" in line) or ("~~" in line), (
+                    f"stale current-tense PENDING claim for {field!r}: {line!r}"
+                )

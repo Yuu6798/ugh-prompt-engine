@@ -7419,6 +7419,779 @@ def load_pinned_probe_manifest(
 
 
 # ---------------------------------------------------------------------------
+# RUN9-L0-PIN-1（Design Memo）: 宣言凍結系3 pin — seed_policy_sha /
+# failure_abort_criteria_sha / measurement_spec_sha。probe_manifest（PR #322）
+# と同じ4段構成（schema自己宣言 → REQUIRED_KEYS + validate_*() → 実バイト
+# sha256でPINNED → load_pinned_*() read-once アンカー）を踏襲する。3欄とも
+# machine非依存の宣言凍結（既存凍結事実の転記）であり、VG-L0学習ハーネス本体
+# の実装を要しない — CONTRACT_PIN_FIELDS 自体は既存（`seed_policy_sha`/
+# `measurement_spec_sha`/`failure_abort_criteria_sha` は元々 CONTRACT_PIN_
+# FIELDS に含まれていた欄。本節が追加するのは各欄の実体 manifest + validator
+# + read-once loader）。
+# ---------------------------------------------------------------------------
+
+# ===== seed_policy_manifest ================================================
+
+SCHEMA_SEED_POLICY_MANIFEST = "run9-seed-policy/1.0"
+
+# 規約パス（`PRACTICE_MANIFEST_PATH` 等と同じ命名規約 — schema から機械的に
+# 導出せず、リポジトリ内の固定配置として凍結する）。
+SEED_POLICY_MANIFEST_PATH = _THIS_DIR / "inputs" / "seed_policy_manifest.json"
+
+_SEED_POLICY_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "seeds", "unregistered_seed_prohibition",
+})
+
+_SEED_ENTRY_KEYS: FrozenSet[str] = frozenset({
+    "seed_id", "value", "role", "consumption_point", "independent_from",
+})
+
+# RUN9 が現に消費する3つの独立した乱数 seed（RUN9_CONTRACT.yaml 655-657行
+# 付近の精密化コメントと同じ3分類）。値は一次ソースからの逐語転記:
+# performance_seed/learning_seed は run9_schema.py 自身の凍結定数
+# （SHARED_PERFORMANCE_SEED/LEARNING_SEED、本ファイル118-119行）、
+# gate_synth_runtime_seed は gate_synth.py:149 のハードコード定数の値を
+# 直接転記する（gate_synth.py は import しない — 未知の transitive 依存
+# （onnxruntime 等）を本モジュールへ持ち込まないため。Scope OUT: gate_synth.py
+# は read-only 参照のみ）。
+_SEED_POLICY_IDS: Tuple[str, ...] = (
+    "performance_seed", "learning_seed", "gate_synth_runtime_seed",
+)
+_SEED_POLICY_EXPECTED_VALUE: Mapping[str, int] = types.MappingProxyType({
+    "performance_seed": SHARED_PERFORMANCE_SEED,
+    "learning_seed": LEARNING_SEED,
+    # gate_synth.py:149 SEED = 42（read-only 参照による逐語転記。import せず
+    # 値のみをこのモジュールに独立して凍結する）。
+    "gate_synth_runtime_seed": 42,
+})
+
+
+def _validate_seed_entry(entry: Any, *, seed_id: str) -> None:
+    if not isinstance(entry, dict):
+        raise Run9ValidationError(
+            f"seed policy manifest.seeds[{seed_id!r}] must be an object, got {type(entry).__name__}"
+        )
+    unknown = set(entry.keys()) - _SEED_ENTRY_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"seed policy manifest.seeds[{seed_id!r}] has unknown key(s): {sorted(unknown)}"
+        )
+    missing = _SEED_ENTRY_KEYS - set(entry.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"seed policy manifest.seeds[{seed_id!r}] missing required key(s): {sorted(missing)}"
+        )
+    if entry["seed_id"] != seed_id:
+        raise Run9ValidationError(
+            f"seed policy manifest.seeds[{seed_id!r}].seed_id must equal the entry's own key "
+            f"({seed_id!r}), got {entry['seed_id']!r}"
+        )
+    expected_value = _SEED_POLICY_EXPECTED_VALUE[seed_id]
+    if entry["value"] is not expected_value and entry["value"] != expected_value:
+        raise Run9ValidationError(
+            f"seed policy manifest.seeds[{seed_id!r}].value must be exactly {expected_value!r} "
+            f"(frozen source value), got {entry['value']!r}"
+        )
+    if isinstance(entry["value"], bool) or not isinstance(entry["value"], int):
+        raise Run9ValidationError(
+            f"seed policy manifest.seeds[{seed_id!r}].value must be a plain int (bool rejected), "
+            f"got {entry['value']!r}"
+        )
+    _require_non_empty_str(entry["role"], field=f"seed policy manifest.seeds[{seed_id!r}].role")
+    _require_non_empty_str(
+        entry["consumption_point"], field=f"seed policy manifest.seeds[{seed_id!r}].consumption_point"
+    )
+    independent_from = entry["independent_from"]
+    expected_independent = set(_SEED_POLICY_IDS) - {seed_id}
+    if not isinstance(independent_from, list) or set(independent_from) != expected_independent:
+        raise Run9ValidationError(
+            f"seed policy manifest.seeds[{seed_id!r}].independent_from must list exactly the other "
+            f"{len(expected_independent)} seed_id(s) {sorted(expected_independent)} (each seed is "
+            f"declared independent from every other registered seed), got {independent_from!r}"
+        )
+
+
+def validate_seed_policy_manifest(data: Mapping[str, Any]) -> None:
+    """seed policy manifest（`run9-seed-policy/1.0`）の構造を検証する。
+
+    RUN9 が現に消費する3つの独立した乱数 seed（`performance_seed` =
+    `SHARED_PERFORMANCE_SEED` = 909001 / `learning_seed` = `LEARNING_SEED` =
+    909002 / `gate_synth_runtime_seed` = gate_synth.py:149 `SEED` = 42）の
+    全数登録を強制する（未知 seed_id 拒否・欠落拒否・値の逐語一致・
+    consumption_point/role 非空文字列・独立性宣言の相互整合）。3つ以外の
+    seed_id は unknown key として fail-closed 拒否する — VG-L0 ハーネスが
+    新しい乱数 seed を追加する場合は、本 manifest の更新（+ 本 validator の
+    `_SEED_POLICY_IDS`/`_SEED_POLICY_EXPECTED_VALUE` 拡張）と repin が
+    先行条件になる（`unregistered_seed_prohibition` 節が宣言する規律の
+    machine 側の裏付け）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"seed policy manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _SEED_POLICY_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"seed policy manifest has unknown key(s): {sorted(unknown)}")
+    missing = _SEED_POLICY_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"seed policy manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_SEED_POLICY_MANIFEST:
+        raise Run9ValidationError(
+            f"seed policy manifest.schema must be {SCHEMA_SEED_POLICY_MANIFEST!r}, got {schema!r}"
+        )
+
+    seeds = data["seeds"]
+    if not isinstance(seeds, list) or len(seeds) != len(_SEED_POLICY_IDS):
+        raise Run9ValidationError(
+            f"seed policy manifest.seeds must be a list of exactly {len(_SEED_POLICY_IDS)} entries, "
+            f"got {seeds!r}"
+        )
+    seen_ids = [entry.get("seed_id") if isinstance(entry, dict) else None for entry in seeds]
+    if set(seen_ids) != set(_SEED_POLICY_IDS):
+        raise Run9ValidationError(
+            f"seed policy manifest.seeds must register exactly the seed_id set "
+            f"{sorted(_SEED_POLICY_IDS)} (no duplicates, no missing, no unknown), got {seen_ids!r}"
+        )
+    for entry in seeds:
+        _validate_seed_entry(entry, seed_id=entry["seed_id"])
+
+    _require_non_empty_str(
+        data["unregistered_seed_prohibition"],
+        field="seed policy manifest.unregistered_seed_prohibition",
+    )
+
+
+def load_pinned_seed_policy_manifest(
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`seed_policy_sha` pin の**唯一の正規消費経路**（`load_pinned_probe_
+    manifest()` と同型の3層防御 — 本 docstring は同関数の詳細説明を要約
+    参照する形とし、逐語の再掲はしない）。
+
+    **消費契約（事前登録）**: VG-L0 ハーネスは seed policy を本関数経由でのみ
+    取得しなければならない——直接 `json.load(SEED_POLICY_MANIFEST_PATH)` は
+    契約違反である。
+
+    手順（いずれかで fail-closed）: (1) ディスク上の正典 `RUN9_CONTRACT.yaml`
+    （`contract_path` 省略時は `RUN9_CONTRACT_YAML_PATH`）を都度再読込し、
+    渡された `contract` の再検証済み pin 値と一致することを確認する
+    （in-process 改変・ディスク正典乖離の双方を検出） (2) `seed_policy_sha`
+    pin 欄が PINNED であること (3) `manifest_path`（省略時は
+    `SEED_POLICY_MANIFEST_PATH`）の実在 (4) 実バイトの raw sha256 が pin 値と
+    厳密一致すること（stale/改変を検出。digest と parse は
+    `path.read_bytes()` の同一バッファから導出する read-once 契約 — TOCTOU
+    対策） (5) `validate_seed_policy_manifest()` 全検証。
+
+    戻り値は検証済み manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("seed_policy_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("seed_policy_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_seed_policy_manifest(): the passed-in contract's seed_policy_sha pin "
+            f"({passed_field!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml pin "
+            f"({disk_field!r}) at {effective_contract_path} — treated as tampering evidence and "
+            "rejected fail-closed (same defense as load_pinned_probe_manifest())"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_seed_policy_manifest(): seed_policy_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned seed policy"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else SEED_POLICY_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_seed_policy_manifest(): pinned seed policy manifest source {path} does not "
+            "exist — this function is the sole canonical access path (direct json.load() elsewhere is "
+            "a contract violation); a missing file is fail-closed"
+        )
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_seed_policy_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml seed_policy_sha の pin 値 ({pinned_sha!r}) と一致しない — "
+            "stale または改変された manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_seed_policy_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_seed_policy_manifest(data)
+    return data
+
+
+# ===== failure_abort_criteria manifest ======================================
+
+SCHEMA_FAILURE_ABORT_CRITERIA = "run9-failure-abort-criteria/1.0"
+
+FAILURE_ABORT_MANIFEST_PATH = _THIS_DIR / "inputs" / "failure_abort_criteria.json"
+
+_FAILURE_ABORT_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "classification_policy", "rules", "post_stop_prohibitions",
+})
+
+_FAILURE_ABORT_RULE_ALLOWED_KEYS: FrozenSet[str] = frozenset({
+    "rule_id", "verbatim", "enforcement", "condition", "checkpoint", "deferred_threshold_ref",
+})
+_FAILURE_ABORT_RULE_BASE_KEYS: FrozenSet[str] = frozenset({"rule_id", "verbatim", "enforcement"})
+_FAILURE_ABORT_ENFORCEMENT_VOCAB: Tuple[str, str] = ("MACHINE", "PROCEDURAL")
+
+_FAILURE_ABORT_POST_STOP_KEYS: FrozenSet[str] = frozenset({
+    "items", "scope_note_verbatim", "escape_hatch_verbatim",
+})
+
+# DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §30 Stop Rules
+# （1466-1489行）の20項目の逐語（順序込み、rule_id = list index + 1）。
+_FAILURE_ABORT_VERBATIM: Tuple[str, ...] = (
+    "donor/teacher rights unresolved",
+    "User donor manifest incomplete",
+    "anchor metric/model space mismatch",
+    "PJS identity channel contamination",
+    "TRI_CROSSOVER non-deterministic",
+    "one or both Founders fail viability",
+    "Birth Identity separation not established",
+    "PJS Lesson cannot be frozen",
+    "Adapter Entry Gate not satisfied",
+    "equal budget cannot be guaranteed",
+    "training NaN / checkpoint corruption",
+    "r0 or frozen Genome changed",
+    "holdout leakage",
+    "mandatory metric degeneracy without audit fallback",
+    "PJS Identity leakage after all preregistered candidates",
+    "Identity drift beyond non-inferiority",
+    "learning replay failure",
+    "provenance / code closure failure",
+    "cost cap exceeded",
+    "candidate class exhausted",
+)
+
+# 同§30（1491-1502行）「停止後に同じattempt内で...を追加しない」の6項目逐語
+# （順序込み）。
+_FAILURE_ABORT_POST_STOP_ITEMS: Tuple[str, ...] = (
+    "new weights",
+    "new teacher",
+    "new Founder",
+    "new metric threshold",
+    "new Lesson channel",
+    "new optimizer search",
+)
+
+
+def _validate_failure_abort_rule(rule: Any, *, expected_rule_id: int) -> None:
+    if not isinstance(rule, dict):
+        raise Run9ValidationError(
+            f"failure abort criteria.rules[{expected_rule_id - 1}] must be an object, got "
+            f"{type(rule).__name__}"
+        )
+    unknown = set(rule.keys()) - _FAILURE_ABORT_RULE_ALLOWED_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"failure abort criteria.rules[rule_id={expected_rule_id}] has unknown key(s): "
+            f"{sorted(unknown)}"
+        )
+    missing = _FAILURE_ABORT_RULE_BASE_KEYS - set(rule.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"failure abort criteria.rules[rule_id={expected_rule_id}] missing required key(s): "
+            f"{sorted(missing)}"
+        )
+    rule_id = rule["rule_id"]
+    if isinstance(rule_id, bool) or rule_id != expected_rule_id:
+        raise Run9ValidationError(
+            f"failure abort criteria.rules[{expected_rule_id - 1}].rule_id must be exactly "
+            f"{expected_rule_id!r} (strict 1..20 ordering, no gaps/duplicates), got {rule_id!r}"
+        )
+    expected_verbatim = _FAILURE_ABORT_VERBATIM[expected_rule_id - 1]
+    if rule["verbatim"] != expected_verbatim:
+        raise Run9ValidationError(
+            f"failure abort criteria.rules[rule_id={expected_rule_id}].verbatim must equal "
+            f"DESIGN_RUN9 §30 の逐語 {expected_verbatim!r}, got {rule['verbatim']!r}"
+        )
+    enforcement = rule["enforcement"]
+    if enforcement not in _FAILURE_ABORT_ENFORCEMENT_VOCAB:
+        raise Run9ValidationError(
+            f"failure abort criteria.rules[rule_id={expected_rule_id}].enforcement must be one of "
+            f"{_FAILURE_ABORT_ENFORCEMENT_VOCAB}, got {enforcement!r}"
+        )
+    if enforcement == "MACHINE":
+        if "checkpoint" in rule:
+            raise Run9ValidationError(
+                f"failure abort criteria.rules[rule_id={expected_rule_id}]: enforcement=MACHINE の "
+                "項目は checkpoint（PROCEDURAL 専用キー）を持ってはならない"
+            )
+        _require_non_empty_str(
+            rule.get("condition"),
+            field=f"failure abort criteria.rules[rule_id={expected_rule_id}].condition",
+        )
+        if "deferred_threshold_ref" in rule:
+            ref = rule["deferred_threshold_ref"]
+            if not isinstance(ref, str) or ref not in CONTRACT_PIN_FIELDS:
+                raise Run9ValidationError(
+                    f"failure abort criteria.rules[rule_id={expected_rule_id}].deferred_threshold_ref "
+                    f"must name an existing CONTRACT_PIN_FIELDS entry (a real pin field the eventual "
+                    f"numeric threshold will be sourced from — bare invented numbers are forbidden), "
+                    f"got {ref!r}"
+                )
+    else:  # PROCEDURAL
+        if "condition" in rule or "deferred_threshold_ref" in rule:
+            raise Run9ValidationError(
+                f"failure abort criteria.rules[rule_id={expected_rule_id}]: enforcement=PROCEDURAL の "
+                "項目は condition/deferred_threshold_ref（MACHINE 専用キー）を持ってはならない"
+            )
+        _require_non_empty_str(
+            rule.get("checkpoint"),
+            field=f"failure abort criteria.rules[rule_id={expected_rule_id}].checkpoint",
+        )
+
+
+def validate_failure_abort_criteria(data: Mapping[str, Any]) -> None:
+    """failure abort criteria manifest（`run9-failure-abort-criteria/1.0`）の
+    構造を検証する。DESIGN_RUN9 §30 Stop Rules の20項目全数を逐語一致まで
+    強制し（`rule_id` 1..20 の厳密連番 = 全数性・重複/欠番の同時排除）、各
+    項目の `enforcement` は閉じた語彙 `MACHINE`/`PROCEDURAL` のいずれか
+    ちょうど一方に分類させる。`MACHINE` は既存 pin 済み機構への `condition`
+    参照を必須とし、未校正の数値閾値を要する項目は `deferred_threshold_ref`
+    で `CONTRACT_PIN_FIELDS` 内の実在欄名を参照させる（裸の数値発明を
+    構造的に拒否 — bare な数値 field はそもそも許可キー集合に存在しない）。
+    `PROCEDURAL` は §22 のどの step で誰が判定するかの `checkpoint` を必須と
+    する。停止後の救済6項目（`post_stop_prohibitions`）も同じ §30 の逐語で
+    固定する。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"failure abort criteria must be an object, got {type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _FAILURE_ABORT_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"failure abort criteria has unknown key(s): {sorted(unknown)}")
+    missing = _FAILURE_ABORT_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"failure abort criteria missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_FAILURE_ABORT_CRITERIA:
+        raise Run9ValidationError(
+            f"failure abort criteria.schema must be {SCHEMA_FAILURE_ABORT_CRITERIA!r}, got {schema!r}"
+        )
+
+    _require_non_empty_str(
+        data["classification_policy"], field="failure abort criteria.classification_policy"
+    )
+
+    rules = data["rules"]
+    if not isinstance(rules, list) or len(rules) != len(_FAILURE_ABORT_VERBATIM):
+        raise Run9ValidationError(
+            f"failure abort criteria.rules must be a list of exactly {len(_FAILURE_ABORT_VERBATIM)} "
+            f"entries (DESIGN_RUN9 §30 の全20項目), got {rules!r}"
+        )
+    for i, rule in enumerate(rules):
+        _validate_failure_abort_rule(rule, expected_rule_id=i + 1)
+
+    post_stop = data["post_stop_prohibitions"]
+    if not isinstance(post_stop, dict):
+        raise Run9ValidationError(
+            f"failure abort criteria.post_stop_prohibitions must be an object, got "
+            f"{type(post_stop).__name__}"
+        )
+    unknown_ps = set(post_stop.keys()) - _FAILURE_ABORT_POST_STOP_KEYS
+    if unknown_ps:
+        raise Run9ValidationError(
+            f"failure abort criteria.post_stop_prohibitions has unknown key(s): {sorted(unknown_ps)}"
+        )
+    missing_ps = _FAILURE_ABORT_POST_STOP_KEYS - set(post_stop.keys())
+    if missing_ps:
+        raise Run9ValidationError(
+            f"failure abort criteria.post_stop_prohibitions missing required key(s): "
+            f"{sorted(missing_ps)}"
+        )
+    if list(post_stop["items"]) != list(_FAILURE_ABORT_POST_STOP_ITEMS):
+        raise Run9ValidationError(
+            f"failure abort criteria.post_stop_prohibitions.items must equal DESIGN_RUN9 §30 の逐語6項目 "
+            f"{list(_FAILURE_ABORT_POST_STOP_ITEMS)} (順序込み), got {post_stop['items']!r}"
+        )
+    _require_non_empty_str(
+        post_stop["scope_note_verbatim"],
+        field="failure abort criteria.post_stop_prohibitions.scope_note_verbatim",
+    )
+    _require_non_empty_str(
+        post_stop["escape_hatch_verbatim"],
+        field="failure abort criteria.post_stop_prohibitions.escape_hatch_verbatim",
+    )
+
+
+def load_pinned_failure_abort_criteria(
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`failure_abort_criteria_sha` pin の**唯一の正規消費経路**
+    （`load_pinned_probe_manifest()`/`load_pinned_seed_policy_manifest()` と
+    同型の3層防御・read-once 契約）。直接 `json.load(FAILURE_ABORT_MANIFEST_
+    PATH)` は契約違反である。戻り値は検証済み manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("failure_abort_criteria_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("failure_abort_criteria_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_failure_abort_criteria(): the passed-in contract's "
+            f"failure_abort_criteria_sha pin ({passed_field!r}) diverges from the canonical on-disk "
+            f"RUN9_CONTRACT.yaml pin ({disk_field!r}) at {effective_contract_path} — treated as "
+            "tampering evidence and rejected fail-closed (same defense as load_pinned_probe_manifest())"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_failure_abort_criteria(): failure_abort_criteria_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume unpinned failure abort criteria"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else FAILURE_ABORT_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_failure_abort_criteria(): pinned manifest source {path} does not exist — "
+            "this function is the sole canonical access path; a missing file is fail-closed"
+        )
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_failure_abort_criteria(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml failure_abort_criteria_sha の pin 値 ({pinned_sha!r}) と一致しない — "
+            "stale または改変された manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_failure_abort_criteria(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_failure_abort_criteria(data)
+    return data
+
+
+# ===== measurement_spec manifest ============================================
+
+SCHEMA_MEASUREMENT_SPEC_MANIFEST = "run9-measurement-spec/1.0"
+
+MEASUREMENT_SPEC_MANIFEST_PATH = _THIS_DIR / "inputs" / "measurement_spec_manifest.json"
+
+_MEASUREMENT_SPEC_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "scope_note", "identity_axis_metric_paths", "development_generalization_axis",
+})
+_MEASUREMENT_SPEC_METRIC_PATH_KEYS: FrozenSet[str] = frozenset({
+    "identity_metric_space_ref", "extractor", "normalization", "metric_version",
+    "calibration_status",
+})
+_MEASUREMENT_SPEC_EXTRACTOR_KEYS: FrozenSet[str] = frozenset({"module", "function", "verified_by"})
+_MEASUREMENT_SPEC_NORMALIZATION_KEYS: FrozenSet[str] = frozenset({"method", "formula", "source_ref"})
+
+# REVISION_0.3 改訂G「機械的校正の定義」（DESIGN_RUN9_REVISION_0.3.md
+# 522-543行）の語彙: 校正済み machine metric のみが STABLE_BY_MACHINE_METRIC、
+# 未校正なら UNCALIBRATED。SHIFTED は identity_metric_space.json
+# calibration.decision_rule が定義する校正後の判定結果語彙（本 manifest は
+# C0/C1 実測前のため全エントリが UNCALIBRATED を宣言する — データ内容の
+# pin は tests 側の責務、本 validator は構造/語彙の fail-closed 検証のみ）。
+_MEASUREMENT_SPEC_CALIBRATION_STATUS_VOCAB: Tuple[str, str, str] = (
+    "UNCALIBRATED", "STABLE_BY_MACHINE_METRIC", "SHIFTED",
+)
+
+# identity_metric_space.json#metric_version の値の echo（式・閾値の重複定義
+# ではなく、measurement_spec 側が参照している metric バージョンが同ファイル
+# と一致することの一致検証用）。
+_IDENTITY_METRIC_VERSION = "run9-identity-metric/0.5"
+
+_MEASUREMENT_SPEC_DEV_GEN_AXIS_KEYS: FrozenSet[str] = frozenset({
+    "status", "scope_source", "metrics", "generalized_gain", "reason",
+})
+_MEASUREMENT_SPEC_DEV_GEN_STATUS_VOCAB: Tuple[str, ...] = ("NOT_YET_IMPLEMENTED",)
+_MEASUREMENT_SPEC_DEV_GEN_GENERALIZED_GAIN_KEYS: FrozenSet[str] = frozenset({
+    "distinction_verbatim", "source",
+})
+
+# DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §16.3
+# DevelopmentalVector（826-839行）の逐語列挙（順序込み）。
+_MEASUREMENT_SPEC_DEV_GEN_METRICS: Tuple[str, ...] = (
+    "pitch_gain", "voicing_gain", "duration_gain", "energy_contour_gain",
+    "attack_gain", "phrase_end_gain", "lyrics_delta", "artifact_delta", "identity_delta",
+)
+
+
+def _validate_measurement_spec_metric_path(entry: Any, *, entry_name: str) -> None:
+    if not isinstance(entry, dict):
+        raise Run9ValidationError(
+            f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}] must be an "
+            f"object, got {type(entry).__name__}"
+        )
+    unknown = set(entry.keys()) - _MEASUREMENT_SPEC_METRIC_PATH_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}] has unknown "
+            f"key(s): {sorted(unknown)}"
+        )
+    missing = _MEASUREMENT_SPEC_METRIC_PATH_KEYS - set(entry.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}] missing "
+            f"required key(s): {sorted(missing)}"
+        )
+    # revision_bridge（evaluation/probe_manifest.json、既存 PINNED）の
+    # 「エントリ→期待 path」凍結表と厳密一致させる — probe_manifest.json 側の
+    # 7エントリと本 manifest 側の7エントリが独立に乖離しないための二重 pin。
+    expected_ref = _REVISION_BRIDGE_EXPECTED_METRIC_REF[entry_name]
+    if entry["identity_metric_space_ref"] != expected_ref:
+        raise Run9ValidationError(
+            f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}]"
+            f".identity_metric_space_ref must equal revision_bridge の凍結値 {expected_ref!r} "
+            f"(evaluation/probe_manifest.json との整合— 二重 pin), got "
+            f"{entry['identity_metric_space_ref']!r}"
+        )
+    extractor = entry["extractor"]
+    if not isinstance(extractor, dict) or set(extractor.keys()) != _MEASUREMENT_SPEC_EXTRACTOR_KEYS:
+        raise Run9ValidationError(
+            f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}].extractor must be "
+            f"an object with exactly the keys {sorted(_MEASUREMENT_SPEC_EXTRACTOR_KEYS)}, got "
+            f"{extractor!r}"
+        )
+    for key in _MEASUREMENT_SPEC_EXTRACTOR_KEYS:
+        _require_non_empty_str(
+            extractor[key],
+            field=f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}].extractor.{key}",
+        )
+    normalization = entry["normalization"]
+    if (
+        not isinstance(normalization, dict)
+        or set(normalization.keys()) != _MEASUREMENT_SPEC_NORMALIZATION_KEYS
+    ):
+        raise Run9ValidationError(
+            f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}].normalization "
+            f"must be an object with exactly the keys {sorted(_MEASUREMENT_SPEC_NORMALIZATION_KEYS)}, "
+            f"got {normalization!r}"
+        )
+    for key in _MEASUREMENT_SPEC_NORMALIZATION_KEYS:
+        _require_non_empty_str(
+            normalization[key],
+            field=(
+                f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}]"
+                f".normalization.{key}"
+            ),
+        )
+    metric_version = entry["metric_version"]
+    if metric_version != _IDENTITY_METRIC_VERSION:
+        raise Run9ValidationError(
+            f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}].metric_version "
+            f"must equal identity_metric_space.json#metric_version の値 {_IDENTITY_METRIC_VERSION!r} "
+            f"(echo — 重複定義ではなく一致検証), got {metric_version!r}"
+        )
+    calibration_status = entry["calibration_status"]
+    if calibration_status not in _MEASUREMENT_SPEC_CALIBRATION_STATUS_VOCAB:
+        raise Run9ValidationError(
+            f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}]"
+            f".calibration_status must be one of {_MEASUREMENT_SPEC_CALIBRATION_STATUS_VOCAB} "
+            f"(REVISION_0.3 改訂G 語彙), got {calibration_status!r}"
+        )
+
+
+def validate_measurement_spec_manifest(data: Mapping[str, Any]) -> None:
+    """measurement spec manifest（`run9-measurement-spec/1.0`）の構造を検証
+    する。測定仕様は identity 軸と development/generalization 軸の2つに
+    分かれる（`evaluation/probe_manifest.json#measurement_boundary` /
+    README.md が明文化する既存の境界 — 本 validator はこの境界を変更しない）。
+
+    `identity_axis_metric_paths` は `evaluation/probe_manifest.json`
+    revision_bridge が凍結した7つの metric-path（`_REVISION_BRIDGE_ENTRY_
+    NAMES`）それぞれについて「どの extractor がその測定を実行するか」の
+    カタログを要求する（`identity_metric_space_ref` は revision_bridge の
+    凍結表と厳密一致 — 二重 pin。式・閾値そのものは
+    `inputs/identity_metric_space.json` の職務のため再掲しない）。
+
+    `development_generalization_axis` は DESIGN_RUN9 §16.3 DevelopmentalVector
+    の9指標 + §14 C4 GENERALIZED_GAIN を対象とするが、対応する extractor は
+    VG-L0 学習ハーネス未実装のため repo に実在しない（grep 確認済み — テストで
+    機械照合）。本 validator は閉じた metric 名の語彙のみを固定し、存在しない
+    extractor・未校正の数値を要求しない（`status` は現状
+    `NOT_YET_IMPLEMENTED` の1値のみ許容 — ハーネス実装後の repin で語彙を
+    拡張する）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"measurement spec manifest must be an object, got {type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _MEASUREMENT_SPEC_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"measurement spec manifest has unknown key(s): {sorted(unknown)}")
+    missing = _MEASUREMENT_SPEC_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"measurement spec manifest missing required key(s): {sorted(missing)}"
+        )
+
+    schema = data["schema"]
+    if schema != SCHEMA_MEASUREMENT_SPEC_MANIFEST:
+        raise Run9ValidationError(
+            f"measurement spec manifest.schema must be {SCHEMA_MEASUREMENT_SPEC_MANIFEST!r}, got "
+            f"{schema!r}"
+        )
+
+    _require_non_empty_str(data["scope_note"], field="measurement spec manifest.scope_note")
+
+    metric_paths = data["identity_axis_metric_paths"]
+    if not isinstance(metric_paths, dict):
+        raise Run9ValidationError(
+            f"measurement spec manifest.identity_axis_metric_paths must be an object, got "
+            f"{type(metric_paths).__name__}"
+        )
+    unknown_mp = set(metric_paths.keys()) - set(_REVISION_BRIDGE_ENTRY_NAMES)
+    if unknown_mp:
+        raise Run9ValidationError(
+            f"measurement spec manifest.identity_axis_metric_paths has unknown key(s) (must match "
+            f"evaluation/probe_manifest.json revision_bridge の7エントリのみ): {sorted(unknown_mp)}"
+        )
+    missing_mp = set(_REVISION_BRIDGE_ENTRY_NAMES) - set(metric_paths.keys())
+    if missing_mp:
+        raise Run9ValidationError(
+            f"measurement spec manifest.identity_axis_metric_paths missing required entry(ies) "
+            f"(revision_bridge の7エントリ全数性): {sorted(missing_mp)}"
+        )
+    for entry_name in _REVISION_BRIDGE_ENTRY_NAMES:
+        _validate_measurement_spec_metric_path(metric_paths[entry_name], entry_name=entry_name)
+
+    dev_gen = data["development_generalization_axis"]
+    if not isinstance(dev_gen, dict):
+        raise Run9ValidationError(
+            f"measurement spec manifest.development_generalization_axis must be an object, got "
+            f"{type(dev_gen).__name__}"
+        )
+    unknown_dg = set(dev_gen.keys()) - _MEASUREMENT_SPEC_DEV_GEN_AXIS_KEYS
+    if unknown_dg:
+        raise Run9ValidationError(
+            f"measurement spec manifest.development_generalization_axis has unknown key(s): "
+            f"{sorted(unknown_dg)}"
+        )
+    missing_dg = _MEASUREMENT_SPEC_DEV_GEN_AXIS_KEYS - set(dev_gen.keys())
+    if missing_dg:
+        raise Run9ValidationError(
+            f"measurement spec manifest.development_generalization_axis missing required key(s): "
+            f"{sorted(missing_dg)}"
+        )
+    status = dev_gen["status"]
+    if status not in _MEASUREMENT_SPEC_DEV_GEN_STATUS_VOCAB:
+        raise Run9ValidationError(
+            f"measurement spec manifest.development_generalization_axis.status must be one of "
+            f"{_MEASUREMENT_SPEC_DEV_GEN_STATUS_VOCAB}, got {status!r}"
+        )
+    _require_non_empty_str(
+        dev_gen["scope_source"],
+        field="measurement spec manifest.development_generalization_axis.scope_source",
+    )
+    if list(dev_gen["metrics"]) != list(_MEASUREMENT_SPEC_DEV_GEN_METRICS):
+        raise Run9ValidationError(
+            f"measurement spec manifest.development_generalization_axis.metrics must equal "
+            f"DESIGN_RUN9 §16.3 の逐語9指標 {list(_MEASUREMENT_SPEC_DEV_GEN_METRICS)}（順序込み）, "
+            f"got {dev_gen['metrics']!r}"
+        )
+    generalized_gain = dev_gen["generalized_gain"]
+    if (
+        not isinstance(generalized_gain, dict)
+        or set(generalized_gain.keys()) != _MEASUREMENT_SPEC_DEV_GEN_GENERALIZED_GAIN_KEYS
+    ):
+        raise Run9ValidationError(
+            f"measurement spec manifest.development_generalization_axis.generalized_gain must be an "
+            f"object with exactly the keys "
+            f"{sorted(_MEASUREMENT_SPEC_DEV_GEN_GENERALIZED_GAIN_KEYS)}, got {generalized_gain!r}"
+        )
+    for key in _MEASUREMENT_SPEC_DEV_GEN_GENERALIZED_GAIN_KEYS:
+        _require_non_empty_str(
+            generalized_gain[key],
+            field=f"measurement spec manifest.development_generalization_axis.generalized_gain.{key}",
+        )
+    _require_non_empty_str(
+        dev_gen["reason"], field="measurement spec manifest.development_generalization_axis.reason"
+    )
+
+
+def load_pinned_measurement_spec_manifest(
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`measurement_spec_sha` pin の**唯一の正規消費経路**
+    （`load_pinned_probe_manifest()` と同型の3層防御・read-once 契約）。
+    直接 `json.load(MEASUREMENT_SPEC_MANIFEST_PATH)` は契約違反である。
+    戻り値は検証済み manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("measurement_spec_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("measurement_spec_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_measurement_spec_manifest(): the passed-in contract's measurement_spec_sha "
+            f"pin ({passed_field!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml pin "
+            f"({disk_field!r}) at {effective_contract_path} — treated as tampering evidence and "
+            "rejected fail-closed (same defense as load_pinned_probe_manifest())"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_measurement_spec_manifest(): measurement_spec_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned measurement spec"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else MEASUREMENT_SPEC_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_measurement_spec_manifest(): pinned manifest source {path} does not exist "
+            "— this function is the sole canonical access path; a missing file is fail-closed"
+        )
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_measurement_spec_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml measurement_spec_sha の pin 値 ({pinned_sha!r}) と一致しない — "
+            "stale または改変された manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_measurement_spec_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_measurement_spec_manifest(data)
+    return data
+
+
+
+# ---------------------------------------------------------------------------
 # User donor rights manifest 検証（DESIGN_RUN9_REVISION_0.2.md 改訂4）。
 # `inputs/rights_manifest.json` が `voice_genesis/foundry/recording_kit/
 # user_donor_ledger.json` の転記として過不足なく正しいことを検証する

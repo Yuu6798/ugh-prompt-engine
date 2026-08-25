@@ -1,0 +1,131 @@
+{
+  "development_generalization_axis": {
+    "generalized_gain": {
+      "distinction_verbatim": "TRAIN_ONLY_GAIN != GENERALIZED_GAIN",
+      "source": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §14 C4 Training / Holdout Separation（729-736行）"
+    },
+    "metrics": [
+      "pitch_gain",
+      "voicing_gain",
+      "duration_gain",
+      "energy_contour_gain",
+      "attack_gain",
+      "phrase_end_gain",
+      "lyrics_delta",
+      "artifact_delta",
+      "identity_delta"
+    ],
+    "reason": "VG-L0 学習ハーネス未実装のため、DESIGN_RUN9 §16.3 DevelopmentalVector の9指標および GENERALIZED_GAIN を計算する extractor が repo に存在しない（grep 確認: pitch_gain / voicing_gain / duration_gain / energy_contour_gain / attack_gain / phrase_end_gain / lyrics_delta / artifact_delta / identity_delta / GENERALIZED_GAIN のいずれも *.py 実装なし — コメント・テスト文字列中の言及のみ）。extractor・normalization・閾値をここで発明せず、ハーネス実装時に別途 design_revision で確定する。",
+    "scope_source": "evaluation/probe_manifest.json#measurement_boundary.development_generalization_axis_source / README.md:587-590",
+    "status": "NOT_YET_IMPLEMENTED"
+  },
+  "identity_axis_metric_paths": {
+    "c0_replay_takes": {
+      "calibration_status": "UNCALIBRATED",
+      "extractor": {
+        "function": "analyze_donor_world(x, sr, frame_period_ms=FRAME_PERIOD_MS)（190-196行）",
+        "module": "voice_genesis/foundry/adapter/donor_bank.py",
+        "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
+      },
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population",
+      "metric_version": "run9-identity-metric/0.5",
+      "normalization": {
+        "formula": "feature(x) = v(x) - mean(v(x))・1",
+        "method": "level_normalization",
+        "source_ref": "inputs/identity_metric_space.json#identity_feature.level_normalization"
+      }
+    },
+    "c1_sham_takes": {
+      "calibration_status": "UNCALIBRATED",
+      "extractor": {
+        "function": "analyze_donor_world(x, sr, frame_period_ms=FRAME_PERIOD_MS)（190-196行）",
+        "module": "voice_genesis/foundry/adapter/donor_bank.py",
+        "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
+      },
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.c1_gate.d_c1_population",
+      "metric_version": "run9-identity-metric/0.5",
+      "normalization": {
+        "formula": "feature(x) = v(x) - mean(v(x))・1",
+        "method": "level_normalization",
+        "source_ref": "inputs/identity_metric_space.json#identity_feature.level_normalization"
+      }
+    },
+    "evaluated_renders": {
+      "calibration_status": "UNCALIBRATED",
+      "extractor": {
+        "function": "analyze_donor_world(x, sr, frame_period_ms=FRAME_PERIOD_MS)（190-196行）",
+        "module": "voice_genesis/foundry/adapter/donor_bank.py",
+        "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
+      },
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#identity_feature.scope",
+      "metric_version": "run9-identity-metric/0.5",
+      "normalization": {
+        "formula": "feature(x) = v(x) - mean(v(x))・1",
+        "method": "level_normalization",
+        "source_ref": "inputs/identity_metric_space.json#identity_feature.level_normalization"
+      }
+    },
+    "negative_reference": {
+      "calibration_status": "UNCALIBRATED",
+      "extractor": {
+        "function": "analyze_donor_world(x, sr, frame_period_ms=FRAME_PERIOD_MS)（190-196行）",
+        "module": "voice_genesis/foundry/adapter/donor_bank.py",
+        "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
+      },
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.negative_reference_gate.negative_reference_definition",
+      "metric_version": "run9-identity-metric/0.5",
+      "normalization": {
+        "formula": "feature(x) = v(x) - mean(v(x))・1",
+        "method": "level_normalization",
+        "source_ref": "inputs/identity_metric_space.json#identity_feature.level_normalization"
+      }
+    },
+    "pjs_reference": {
+      "calibration_status": "UNCALIBRATED",
+      "extractor": {
+        "function": "analyze_donor_world(x, sr, frame_period_ms=FRAME_PERIOD_MS)（190-196行）",
+        "module": "voice_genesis/foundry/adapter/donor_bank.py",
+        "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
+      },
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#confuser_control.pjs_reference_definition",
+      "metric_version": "run9-identity-metric/0.5",
+      "normalization": {
+        "formula": "feature(x) = v(x) - mean(v(x))・1",
+        "method": "level_normalization",
+        "source_ref": "inputs/identity_metric_space.json#identity_feature.level_normalization"
+      }
+    },
+    "positive_reference": {
+      "calibration_status": "UNCALIBRATED",
+      "extractor": {
+        "function": "analyze_donor_world(x, sr, frame_period_ms=FRAME_PERIOD_MS)（190-196行）",
+        "module": "voice_genesis/foundry/adapter/donor_bank.py",
+        "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
+      },
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.positive_reference_gate.positive_reference_definition",
+      "metric_version": "run9-identity-metric/0.5",
+      "normalization": {
+        "formula": "feature(x) = v(x) - mean(v(x))・1",
+        "method": "level_normalization",
+        "source_ref": "inputs/identity_metric_space.json#identity_feature.level_normalization"
+      }
+    },
+    "reference_render": {
+      "calibration_status": "UNCALIBRATED",
+      "extractor": {
+        "function": "analyze_donor_world(x, sr, frame_period_ms=FRAME_PERIOD_MS)（190-196行）",
+        "module": "voice_genesis/foundry/adapter/donor_bank.py",
+        "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
+      },
+      "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.distance_unit.reference_render_definition",
+      "metric_version": "run9-identity-metric/0.5",
+      "normalization": {
+        "formula": "feature(x) = v(x) - mean(v(x))・1",
+        "method": "level_normalization",
+        "source_ref": "inputs/identity_metric_space.json#identity_feature.level_normalization"
+      }
+    }
+  },
+  "schema": "run9-measurement-spec/1.0",
+  "scope_note": "本 manifest は RUN9_CONTRACT.yaml measurement_spec_sha の実体。測定仕様は identity 軸と development/generalization 軸の2つに分かれる（evaluation/probe_manifest.json#measurement_boundary、および README.md:587-590 が明文化する境界。本節はこの境界を変更しない）。identity 軸の距離・校正・閾値の正本は inputs/identity_metric_space.json（metric_space_sha として既 PINNED）であり、本 manifest では重複定義しない — identity_axis_metric_paths 節は同ファイル revision_bridge が凍結した7つの metric-path それぞれについて『どの extractor がその測定を実行するか』のカタログ（extractor 参照 + normalization 参照。式・閾値は再掲しない）のみを追加する。development/generalization 軸（P4/P5、DESIGN_RUN9 §16.3 DevelopmentalVector + §14 C4 GENERALIZED_GAIN）は本欄が別途凍結すべき対象だが、対応する extractor は VG-L0 学習ハーネス未実装のため repo に実在しない（grep 確認: 該当実装なし）。development_generalization_axis 節はこの事実を正直に記録し、閉じた metric 名の語彙のみを 凍結する。存在しない extractor・未校正の数値をここで発明しない。"
+}
