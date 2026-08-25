@@ -3599,6 +3599,134 @@ def _validate_probe_factorial_coverage(
         )
 
 # ---------------------------------------------------------------------------
+# PR #322 第16巡指摘 Fix 28（P2, 採用、Fix 25/26 と同族の文脈凍結）: P1 の
+# register×duration グリッド cell は kana を変えても通過していた（軸
+# checker は pitch_midi/duration_beats のみ照合）。transition cell も
+# `_check_axis_transition_direction()` が先頭/末尾 note の pitch_midi 系列
+# しか見ておらず、kana/duration の変更や中間 note の挿入を検出できな
+# かった——いずれも pitch/duration の比較が音韻・タイミング・輪郭差と
+# 交絡し得る欠陥。grid/transition で対応方式を分ける:
+#  - grid cell: pitch_midi/duration_beats（factor そのもの）のみ相違を
+#    許すホワイトリスト方式で、それ以外の全 note フィールド + note 数が
+#    全 grid cell 間で同一であることを強制する（cell 間相対比較 — grid
+#    cell は factor 水準ごとに増減するため単一 cell への外部 pin は
+#    不適）。
+#  - transition cell: cell がちょうど2個の閉じた集合（Fix 9 が cell_id
+#    集合自体を凍結済み）のため、両 cell の notes 配列全体（全フィール
+#    ド）を validator 内凍結表 `_P1_TRANSITION_NOTES_TEMPLATE` へ転写し
+#    厳密一致を強制する——中間 note の挿入・kana/duration 変更を構造的に
+#    排除する。amendment には本凍結表の同時更新が必要——意図的な二重 pin
+#    （Fix 7/19/20/25 と同じ規約）。現行 manifest の実値から転記して
+#    凍結。
+# ---------------------------------------------------------------------------
+_P1_GRID_VARIABLE_NOTE_FIELDS: FrozenSet[str] = frozenset({"pitch_midi", "duration_beats"})
+
+_P1_TRANSITION_NOTES_TEMPLATE: Mapping[str, Tuple[Mapping[str, Any], ...]] = types.MappingProxyType({
+    "P1-TRANS-LOW-TO-HIGH": (
+        types.MappingProxyType({
+            "kana": "ら", "pitch_midi": 57, "duration_beats": 1, "phrase_index": 0,
+            "is_phrase_final": False,
+        }),
+        types.MappingProxyType({
+            "kana": "り", "pitch_midi": 65, "duration_beats": 1, "phrase_index": 0,
+            "is_phrase_final": True,
+        }),
+    ),
+    "P1-TRANS-HIGH-TO-LOW": (
+        types.MappingProxyType({
+            "kana": "ら", "pitch_midi": 65, "duration_beats": 1, "phrase_index": 0,
+            "is_phrase_final": False,
+        }),
+        types.MappingProxyType({
+            "kana": "り", "pitch_midi": 57, "duration_beats": 1, "phrase_index": 0,
+            "is_phrase_final": True,
+        }),
+    ),
+})
+
+
+def _validate_p1_grid_note_context_consistency(
+    *, cells: List[Dict[str, Any]], field: str
+) -> None:
+    """Fix 28（P1 grid 部分）の実装: `register`/`duration` 軸を同時に
+    参照する全 cell（grid cell）の notes 配列を比較し、
+    `_P1_GRID_VARIABLE_NOTE_FIELDS`（factor そのもの）以外の全フィールド
+    + note 数が全 grid cell 間で同一であることを機械強制する。cell_id
+    昇順で最初に現れる grid cell を基準にする（`_PROBE_EXPECTED_CELL_IDS`
+    により cell_id 集合は既に閉じているため、どの cell を基準にしても
+    対称的に同じ判定になる）。"""
+    grid_cells = [
+        cell for cell in cells
+        if isinstance(cell.get(_CELL_LEVELS_KEY), dict)
+        and "register" in cell[_CELL_LEVELS_KEY] and "duration" in cell[_CELL_LEVELS_KEY]
+    ]
+    if not grid_cells:
+        return
+    reference = sorted(grid_cells, key=lambda c: str(c.get("cell_id")))[0]
+    ref_notes = reference["notes"]
+
+    def _shape(notes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {k: v for k, v in note.items() if k not in _P1_GRID_VARIABLE_NOTE_FIELDS}
+            for note in notes
+        ]
+
+    ref_shape = _shape(ref_notes)
+    for cell in grid_cells:
+        if cell is reference:
+            continue
+        notes = cell["notes"]
+        if len(notes) != len(ref_notes):
+            raise Run9ValidationError(
+                f"{field}: P1 grid cell {cell.get('cell_id')!r} has {len(notes)} note(s), reference "
+                f"grid cell {reference.get('cell_id')!r} has {len(ref_notes)} — all register×duration "
+                "grid cells must share an identical note structure so the pitch/duration comparison "
+                "is not confounded by a differing note count (Fix 28)"
+            )
+        shape = _shape(notes)
+        if shape != ref_shape:
+            raise Run9ValidationError(
+                f"{field}: P1 grid cell {cell.get('cell_id')!r} non-factor note fields {shape!r} "
+                f"diverge from reference grid cell {reference.get('cell_id')!r} {ref_shape!r} — only "
+                f"{sorted(_P1_GRID_VARIABLE_NOTE_FIELDS)} may differ across register×duration grid "
+                "cells (Fix 28: the pitch/duration comparison must not be confounded by differing "
+                "phonology/timing structure)"
+            )
+
+
+def _validate_p1_transition_notes_template(
+    *, cells: List[Dict[str, Any]], field: str
+) -> None:
+    """Fix 28（P1 transition 部分）の実装: `_P1_TRANSITION_NOTES_TEMPLATE`
+    に転写した凍結 notes 配列と、対応 cell_id の実 notes 配列が全フィール
+    ドで厳密一致することを検証する——中間 note の挿入・kana/duration 変更
+    を構造的に排除する。テンプレートに存在しない cell_id（transition
+    cell 以外）は対象外。"""
+    for cell in cells:
+        cell_id = cell.get("cell_id")
+        template = _P1_TRANSITION_NOTES_TEMPLATE.get(cell_id)
+        if template is None:
+            continue
+        notes = cell["notes"]
+        if len(notes) != len(template):
+            raise Run9ValidationError(
+                f"{field}: P1 transition cell {cell_id!r} has {len(notes)} note(s), the frozen "
+                f"template requires exactly {len(template)} — amendment requires updating "
+                "_P1_TRANSITION_NOTES_TEMPLATE too, an intentional double pin (Fix 28)"
+            )
+        for i, (note, expected_note) in enumerate(zip(notes, template)):
+            actual = dict(note)
+            expected = dict(expected_note)
+            if actual != expected:
+                raise Run9ValidationError(
+                    f"{field}: P1 transition cell {cell_id!r} notes[{i}] = {actual!r} does not match "
+                    f"the frozen template {expected!r} — the transition_direction comparison must not "
+                    "be confounded by an inserted note or a kana/duration change (Fix 28: intentional "
+                    "double pin, amendment requires updating _P1_TRANSITION_NOTES_TEMPLATE too)"
+                )
+
+
+# ---------------------------------------------------------------------------
 # PR #322 第2巡指摘 Fix 3（P2, 採用）: 軸別の意味照合。Fix 2 はラベル
 # （axis_name/level_name）の実在照合のみで、宣言された具体値と cell の実
 # note フィールドとの一致は見ていなかった（例: P1-REG-LOW-DUR-SHORT の
@@ -5346,6 +5474,14 @@ def _validate_probe_object(
             field=f"{field}.factor_levels",
         )
 
+    if expected_probe_id == "P1":
+        # PR #322 第16巡指摘 Fix 28（Fix 25/26 と同族の文脈凍結）: grid
+        # cell 間の非 factor note フィールド一貫性 + transition cell の
+        # notes 配列全体の完全テンプレート一致を、軸別 checker（factor
+        # フィールドのみ照合）とは独立に強制する。
+        _validate_p1_grid_note_context_consistency(cells=cells, field=f"{field}.factor_levels")
+        _validate_p1_transition_notes_template(cells=cells, field=f"{field}.factor_levels")
+
     if expected_probe_id == "P3":
         # PR #322 第15巡指摘 Fix 26（Fix 25 と同族の新規具体経路）:
         # release checker（override とラベルの対応のみ）とは独立に、
@@ -6888,8 +7024,26 @@ def load_pinned_probe_manifest(
     主張自体の整合性に関わるため採用とした。）
 
     戻り値は検証済み manifest dict。
+
+    **in-process 改変への防御（PR #322 第16巡指摘 Fix 27, P1, 採用）**:
+    `Run9RunContract` は frozen dataclass だが `raw: Dict[str, Any]` 自体
+    はミュータブルであり、load 後に呼び出し元が
+    `contract.raw["probe_manifest_sha"]["value"]` を直接書き換えれば、
+    `RUN9_CONTRACT.yaml` の正典 pin に被覆されないバイトを本関数が
+    受理してしまい得る（render provenance が黙って汚染される）。
+    `gate_state()`（Codex bot レビュー PR #315 第2巡指摘1採用）と同一の
+    再検証パターンを適用する: 消費時点で `contract.raw` のスナップショット
+    を `load_run9_contract()` で丸ごと再検証し、pin 値は再検証済みの
+    `revalidated` 側から読む——素通しの pin 判定だけを見ていた旧実装
+    では、load 後の直接改変で fail-closed を騙る経路が残っていた。
+    構造/値検証（`_validate_pin_field_value_shape()` 等）に違反する改変
+    （例: status を非 PINNED へ変える）は再検証そのものが拒否する一方、
+    schema-valid な別の 64hex sha へ差し替えるケースは再検証を通過するが、
+    その場合は下記 (3) の実バイト sha256 照合が pin 値と不一致になり
+    別経路で fail-closed になる——二段構えの防御。
     """
-    field = contract.pin_field("probe_manifest_sha")
+    revalidated = load_run9_contract(contract.raw)
+    field = revalidated.pin_field("probe_manifest_sha")
     if not _is_field_pinned(field):
         raise Run9ValidationError(
             "load_pinned_probe_manifest(): probe_manifest_sha is not PINNED "

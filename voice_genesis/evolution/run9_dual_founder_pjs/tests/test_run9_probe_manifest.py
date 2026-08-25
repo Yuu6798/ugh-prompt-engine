@@ -1119,6 +1119,144 @@ def test_fix9_factorial_coverage_full_grid_passes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# PR #322 第16巡指摘 Fix 28（P2, 採用、Fix 25/26 と同族の文脈凍結）: P1 の
+# register×duration グリッド cell は kana を変えても通過し、transition
+# cell は先頭/末尾 note の pitch_midi 系列しか見ておらず kana/duration
+# 変更や中間 note の挿入が通過していた。
+# ---------------------------------------------------------------------------
+
+
+def test_fix28_positive_real_manifest_passes(manifest_data: Dict[str, Any]) -> None:
+    m.validate_probe_manifest(manifest_data)
+
+
+def test_fix28_grid_cells_share_identical_non_factor_note_fields(
+    manifest_data: Dict[str, Any],
+) -> None:
+    p1 = _p1_probe(manifest_data)
+    grid_cells = [
+        c for c in p1["cells"]
+        if "register" in c.get("levels", {}) and "duration" in c.get("levels", {})
+    ]
+    assert len(grid_cells) == 6
+    shapes = {
+        tuple(
+            (n["kana"], n["phrase_index"], n["is_phrase_final"]) for n in c["notes"]
+        )
+        for c in grid_cells
+    }
+    assert len(shapes) == 1, f"grid cells must share identical non-factor note shape, got {shapes}"
+
+
+def test_negative_fix28_grid_cell_kana_swapped(manifest_data: Dict[str, Any]) -> None:
+    """本指摘の核心シナリオ: grid cell の kana を差し替えても、軸 checker
+    （pitch_midi/duration_beats のみ照合）は検出できない——Fix 28 の
+    cell 間一貫性検証でのみ検出される。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p1_probe(bad), "P1-REG-LOW-DUR-SHORT")
+    cell["notes"][0]["kana"] = "り"
+    with pytest.raises(m.Run9ValidationError, match="diverge"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix28_grid_cell_note_appended(manifest_data: Dict[str, Any]) -> None:
+    """grid cell へ note を追加すると note 数不一致で拒否される。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p1_probe(bad), "P1-REG-LOW-DUR-SHORT")
+    extra = copy.deepcopy(cell["notes"][0])
+    extra["is_phrase_final"] = False
+    cell["notes"].insert(0, extra)
+    with pytest.raises(m.Run9ValidationError, match="note"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix28_direct_call_grid_field_diverges() -> None:
+    """`_validate_p1_grid_note_context_consistency()` への直接単体呼び出し
+    で、phrase_index の相違（ホワイトリスト外のフィールド）を検出する
+    ことを確認する（既存テスト流儀と同型）。"""
+    cells = [
+        {
+            "cell_id": "A", "levels": {"register": "low", "duration": "short"},
+            "notes": [
+                {
+                    "kana": "ら", "pitch_midi": 57, "duration_beats": 1, "phrase_index": 0,
+                    "is_phrase_final": True,
+                }
+            ],
+        },
+        {
+            "cell_id": "B", "levels": {"register": "low", "duration": "long"},
+            "notes": [
+                {
+                    "kana": "ら", "pitch_midi": 57, "duration_beats": 4, "phrase_index": 1,
+                    "is_phrase_final": True,
+                }
+            ],
+        },
+    ]
+    with pytest.raises(m.Run9ValidationError, match="diverge"):
+        m._validate_p1_grid_note_context_consistency(cells=cells, field="test")
+
+
+def test_negative_fix28_transition_cell_middle_pitch_inserted(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """本指摘の核心シナリオ: transition cell の先頭/末尾 note の間に中間
+    pitch を挿入する——`_check_axis_transition_direction()`（先頭/末尾のみ
+    参照）は通過するが、テンプレート凍結（Fix 28）で拒否される。"""
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p1_probe(bad), "P1-TRANS-LOW-TO-HIGH")
+    middle = {
+        "kana": "り", "pitch_midi": 60, "duration_beats": 1, "phrase_index": 0,
+        "is_phrase_final": False,
+    }
+    cell["notes"].insert(1, middle)
+    with pytest.raises(m.Run9ValidationError, match="frozen template"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix28_transition_cell_kana_changed(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p1_probe(bad), "P1-TRANS-LOW-TO-HIGH")
+    cell["notes"][0]["kana"] = "た"
+    with pytest.raises(m.Run9ValidationError, match="frozen template"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix28_transition_cell_duration_changed(manifest_data: Dict[str, Any]) -> None:
+    bad = _mutate(manifest_data)
+    cell = _cell_by_id(_p1_probe(bad), "P1-TRANS-HIGH-TO-LOW")
+    cell["notes"][-1]["duration_beats"] = 2
+    with pytest.raises(m.Run9ValidationError, match="frozen template"):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_fix28_direct_call_transition_length_mismatch() -> None:
+    """`_validate_p1_transition_notes_template()` への直接単体呼び出しで、
+    notes 配列の長さ不一致を検出することを確認する。"""
+    cells = [
+        {
+            "cell_id": "P1-TRANS-LOW-TO-HIGH",
+            "notes": [
+                {
+                    "kana": "ら", "pitch_midi": 57, "duration_beats": 1, "phrase_index": 0,
+                    "is_phrase_final": False,
+                },
+            ],
+        },
+    ]
+    with pytest.raises(m.Run9ValidationError, match="frozen template"):
+        m._validate_p1_transition_notes_template(cells=cells, field="test")
+
+
+def test_fix28_direct_call_transition_ignores_non_transition_cell_id() -> None:
+    """テンプレートに存在しない cell_id（transition cell 以外）は本関数の
+    対象外——例外を投げずに素通りすることを確認する。"""
+    cells = [{"cell_id": "P1-REG-LOW-DUR-SHORT", "notes": [{"kana": "x"}]}]
+    m._validate_p1_transition_notes_template(cells=cells, field="test")  # 例外を投げないことの確認
+
+
+# ---------------------------------------------------------------------------
 # PR #322 第5巡指摘 Fix 10（P2, 採用）: P4 held-out 分離の機械検証
 # ---------------------------------------------------------------------------
 
@@ -1341,30 +1479,88 @@ def test_negative_fix13_byte_altered_manifest_copy(
         m.load_pinned_probe_manifest(contract, manifest_path=tmp_manifest)
 
 
-def test_negative_fix13_pin_value_mismatch() -> None:
+def test_negative_fix13_pin_value_mismatch(contract_raw: Dict[str, Any]) -> None:
     """`RUN9_CONTRACT.yaml` 側の pin 値が実ファイルの sha256 と一致しない
-    場合の fail-closed 挙動を、偽の `contract` オブジェクト（`pin_field`
-    のみを実装）で検証する——実 RUN9_CONTRACT.yaml は一切触れない。"""
-
-    class _FakeContractWrongPin:
-        def pin_field(self, name: str) -> Dict[str, Any]:
-            assert name == "probe_manifest_sha"
-            return {"status": "PINNED", "value": "0" * 64}
-
+    場合の fail-closed 挙動を検証する——実 RUN9_CONTRACT.yaml は一切触れず、
+    実 contract の deepcopy を mutate した `Run9RunContract` を渡す（Fix 27
+    により `load_pinned_probe_manifest()` は `contract.raw` を
+    `load_run9_contract()` で再検証するため、`pin_field()` のみを実装した
+    偽オブジェクトでは通らない——schema-valid な別の64hex値へ差し替える
+    ことで再検証自体は通過させ、実バイト sha256 不一致の経路を検証する）。
+    """
+    mutated = copy.deepcopy(contract_raw)
+    mutated["probe_manifest_sha"]["value"] = "0" * 64
+    fake_contract = m.Run9RunContract(raw=mutated)
     with pytest.raises(m.Run9ValidationError, match="一致しない"):
-        m.load_pinned_probe_manifest(_FakeContractWrongPin())  # type: ignore[arg-type]
+        m.load_pinned_probe_manifest(fake_contract)
 
 
-def test_negative_fix13_pin_not_pinned() -> None:
+def test_negative_fix13_pin_not_pinned(contract_raw: Dict[str, Any]) -> None:
     """pin の status が PINNED でない（PENDING 等）場合、実バイト照合の
-    前段で fail-closed になることを検証する。"""
-
-    class _FakeContractUnpinned:
-        def pin_field(self, name: str) -> Dict[str, Any]:
-            return {"status": "PENDING", "value": None}
-
+    前段で fail-closed になることを検証する（Fix 27: 実 contract の
+    deepcopy を mutate——`load_run9_contract()` の再検証を通過する形式で
+    status のみ変更する）。"""
+    mutated = copy.deepcopy(contract_raw)
+    mutated["probe_manifest_sha"] = {
+        "status": "PENDING", "value": None, "source": mutated["probe_manifest_sha"]["source"],
+    }
+    fake_contract = m.Run9RunContract(raw=mutated)
     with pytest.raises(m.Run9ValidationError, match="not PINNED"):
-        m.load_pinned_probe_manifest(_FakeContractUnpinned())  # type: ignore[arg-type]
+        m.load_pinned_probe_manifest(fake_contract)
+
+
+# ---------------------------------------------------------------------------
+# PR #322 第16巡指摘 Fix 27（P1, 採用）: `Run9RunContract` は frozen
+# dataclass だが `raw: Dict[str, Any]` 自体はミュータブル——load 後に
+# `contract.raw["probe_manifest_sha"]["value"]` を直接書き換えれば、
+# `RUN9_CONTRACT.yaml` の正典 pin に被覆されないバイトを
+# `load_pinned_probe_manifest()` が受理し得た（旧実装は `contract.raw` を
+# 再検証せず直読みしていた）。`gate_state()`（PR #315 Fix 4 と同型）の
+# 再検証パターンを本関数へも適用する。
+# ---------------------------------------------------------------------------
+
+
+def test_fix27_load_pinned_probe_manifest_still_works_on_untampered_contract(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """対照実験: 改変していない contract では再検証の追加が正常系を壊して
+    いないことの確認。"""
+    fresh_raw = copy.deepcopy(contract_raw)
+    contract = m.load_run9_contract(fresh_raw)
+    m.load_pinned_probe_manifest(contract)  # 例外を投げないことの確認
+
+
+def test_negative_fix27_in_process_value_tampering_after_load_still_fail_closed(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """本指摘の核心シナリオ: 正常 load 後に
+    `contract.raw["probe_manifest_sha"]["value"]` を直接（schema-valid な
+    別の64hex へ）書き換える——`load_run9_contract()` の再検証はこの
+    書き換えを構造的には受理する（形式的には有効な64hexのため）が、下流の
+    実バイト sha256 照合が新しい pin 値と一致しなくなるため、書き換え後の
+    値ではなく再検証済みの値が一貫して使われたうえで fail-closed になる
+    ことを確認する。"""
+    fresh_raw = copy.deepcopy(contract_raw)
+    contract = m.load_run9_contract(fresh_raw)
+    m.load_pinned_probe_manifest(contract)  # 前提: 改変前は正常に通る
+    contract.raw["probe_manifest_sha"]["value"] = "1" * 64  # in-process 改変
+    with pytest.raises(m.Run9ValidationError, match="一致しない"):
+        m.load_pinned_probe_manifest(contract)
+
+
+def test_negative_fix27_in_process_structural_tampering_after_load_rejected(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """正常 load 後に `contract.raw` の非 pin 欄（`run_id`）を直接書き換え
+    構造的に無効な contract にすると、`probe_manifest_sha` 自体は無傷でも
+    再検証（`load_run9_contract()`）が先に fail-closed で拒否することを
+    確認する——旧実装（`contract.pin_field()` の直読み）ではこの構造破壊は
+    一切検出されなかった。"""
+    fresh_raw = copy.deepcopy(contract_raw)
+    contract = m.load_run9_contract(fresh_raw)
+    contract.raw["run_id"] = "RUN9X"  # in-process 改変（probe_manifest_sha 自体は無傷）
+    with pytest.raises(m.Run9ValidationError, match="run_id"):
+        m.load_pinned_probe_manifest(contract)
 
 
 # ---------------------------------------------------------------------------
