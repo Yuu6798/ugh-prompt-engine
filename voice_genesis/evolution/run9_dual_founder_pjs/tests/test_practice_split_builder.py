@@ -262,6 +262,9 @@ def test_expanded_corpus_identity_matches_pinned_contract_value() -> None:
 
 
 def test_sidecar_generation_does_not_change_manifest_bytes(tmp_path: Path) -> None:
+    """PR #321 review 第5巡 Fix 6（P1・sealed-holdout 非開封）以降、
+    sidecar の計測対象は training/validation のみ——`sealed_holdout` の
+    song は sidecar["songs"] に一切現れない。"""
     song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
     root = _build_corpus(tmp_path, song_ids)
     _, manifest = _identity_and_manifest(root)
@@ -272,7 +275,9 @@ def test_sidecar_generation_does_not_change_manifest_bytes(tmp_path: Path) -> No
     after = psb.dump_practice_split_manifest_bytes(manifest)
     assert before == after
     assert sidecar["schema"] == psb.SCHEMA_PRACTICE_ACOUSTIC_INVENTORY_SIDECAR
-    assert len(sidecar["songs"]) == len(song_ids)
+    expected_measured_ids = set(manifest["row_ids"]["training"]) | set(manifest["row_ids"]["validation"])
+    assert len(sidecar["songs"]) == len(expected_measured_ids)
+    assert {entry["song_id"] for entry in sidecar["songs"]} == expected_measured_ids
 
 
 def test_sidecar_generation_with_corrupt_audio_still_leaves_manifest_unchanged(tmp_path: Path) -> None:
@@ -406,12 +411,15 @@ def test_sidecar_rejects_song_id_escaping_corpus_root_before_any_read(
 def test_sidecar_accepts_normal_corpus_derived_song_ids_regression(tmp_path: Path) -> None:
     """corpus enumeration 由来の正常な song_id（`pjsNNN`）は
     `_reject_song_ids_outside_corpus_root()` を通過し、sidecar が
-    通常どおり構築できることの正常系回帰。"""
+    通常どおり構築できることの正常系回帰。PR #321 review 第5巡 Fix 6
+    （sealed-holdout 非開封）以降、計測対象は training/validation の
+    song_id のみ（`sealed_holdout` は含まれない）。"""
     song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
     root = _build_corpus(tmp_path, song_ids)
     _, manifest = _identity_and_manifest(root)
     sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
-    assert {entry["song_id"] for entry in sidecar["songs"]} == set(song_ids)
+    expected_measured_ids = set(manifest["row_ids"]["training"]) | set(manifest["row_ids"]["validation"])
+    assert {entry["song_id"] for entry in sidecar["songs"]} == expected_measured_ids
 
 
 def test_song_id_is_lexically_safe_rejects_unsafe_forms() -> None:
@@ -588,12 +596,15 @@ def test_sidecar_rejects_self_consistent_forged_split_and_hashes(
 
 def test_sidecar_accepts_unmodified_manifest_regression_fix4(tmp_path: Path) -> None:
     """未改変の正常 manifest は Fix 4 の split assignment / hash pin 検証を
-    通過し、sidecar が通常どおり構築できることの正常系回帰。"""
+    通過し、sidecar が通常どおり構築できることの正常系回帰。PR #321 review
+    第5巡 Fix 6（sealed-holdout 非開封）以降、計測対象は training/
+    validation の song_id のみ。"""
     song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
     root = _build_corpus(tmp_path, song_ids)
     _, manifest = _identity_and_manifest(root)
     sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
-    assert {entry["song_id"] for entry in sidecar["songs"]} == set(song_ids)
+    expected_measured_ids = set(manifest["row_ids"]["training"]) | set(manifest["row_ids"]["validation"])
+    assert {entry["song_id"] for entry in sidecar["songs"]} == expected_measured_ids
 
 
 # ---------------------------------------------------------------------------
@@ -653,11 +664,110 @@ def test_sidecar_rejects_final_path_symlink_escape_before_any_read(
 
 def test_sidecar_accepts_non_symlinked_files_regression_fix5(tmp_path: Path) -> None:
     """symlink を伴わない通常の corpus では、Fix 5 の最終パス検査を通過し
-    sidecar が通常どおり構築できることの正常系回帰。"""
+    sidecar が通常どおり構築できることの正常系回帰。PR #321 review 第5巡
+    Fix 6（sealed-holdout 非開封）以降、計測対象は training/validation の
+    song のみ。"""
     song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
     root = _build_corpus(tmp_path, song_ids)
     _, manifest = _identity_and_manifest(root)
     sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
-    assert len(sidecar["songs"]) == len(song_ids)
+    expected_measured_ids = set(manifest["row_ids"]["training"]) | set(manifest["row_ids"]["validation"])
+    assert len(sidecar["songs"]) == len(expected_measured_ids)
     for entry in sidecar["songs"]:
         assert entry["pitch_range_hz"] is not None
+
+
+# ---------------------------------------------------------------------------
+# build_acoustic_inventory_sidecar(): sealed_holdout を計測対象・最終パス
+# read 対象から構造的に除外する（PR #321 review 第5巡指摘・P1 修正 Fix 6:
+# DESIGN_RUN9_REVISION_0.3.md の学習中使用禁止規定・
+# DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §22 step 14
+# （開封＝両 adapter 凍結後）に反し、通常の（学習前）sidecar 生成が
+# sealed_holdout の `.lab`/WAV を読んで pitch/phrase/phoneme 観測値を
+# 出力し、実験設計を汚染していた）
+# ---------------------------------------------------------------------------
+
+
+def test_sidecar_excludes_sealed_holdout_songs_and_marks_flag(tmp_path: Path) -> None:
+    """sidecar 出力に `sealed_holdout` の song entry が1件も含まれず、
+    `sealed_holdout_excluded` が `true` であること。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    _, manifest = _identity_and_manifest(root)
+    sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
+
+    holdout_ids = set(manifest["row_ids"]["sealed_holdout"])
+    assert holdout_ids  # 前提: N=9 では sealed_holdout は非空（n_holdout=1）
+
+    measured_ids = {entry["song_id"] for entry in sidecar["songs"]}
+    assert not (measured_ids & holdout_ids)
+    assert all(entry["split"] != "sealed_holdout" for entry in sidecar["songs"])
+    assert sidecar["sealed_holdout_excluded"] is True
+    assert "sealed_holdout" in sidecar["note"]
+
+
+def test_sidecar_never_calls_measurement_functions_for_sealed_holdout_song(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """holdout の song_id に対して計測関数（`_measure_phoneme_classes`/
+    `_measure_pitch_range_hz`）が一切呼ばれないことをスパイで直接検証する
+    （既存流儀）。training/validation の計測は実関数へ委譲し従来どおり
+    成功させることで、スパイが単なる「常に失敗させる」モックではなく
+    「実際に呼ばれた song を記録する」ものであることを担保する。
+
+    ファイルの物理的破損による「read 非発生」の直接証明（Fix 1/3/5 で
+    採ってきた既存流儀）は、`sealed_holdout` についてはそのままでは
+    適用できない: corpus identity 検証（層1, Fix 3・`_enumerate_pjs_
+    song_ids()`）は corpus 全体（sealed_holdout を含む）の `.lab`/WAV
+    バイトを sha256 化して provenance を確定するため、holdout ファイルを
+    破損させると本 Fix の層（計測対象からの除外）ではなく層1（corpus
+    identity 不一致）で拒否されてしまい、「計測のために読まれていない」
+    ことの独立証拠にならない。層1 のバイト読み取りは一方向 hash 化のみで
+    意味のある観測値を一切生成・出力しない（docstring 前提条件節に明記
+    済み）——本 Fix が禁止するのは「pitch/phrase/phoneme 等、意味のある
+    観測値の生成・sidecar への記録」であり、corpus-wide の provenance
+    hash 化はその対象外。そのため本テストはスパイのみを直接証拠とする。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    _, manifest = _identity_and_manifest(root)
+    holdout_ids = set(manifest["row_ids"]["sealed_holdout"])
+    assert holdout_ids
+
+    real_measure_phoneme_classes = psb._measure_phoneme_classes  # noqa: SLF001
+    real_measure_pitch_range_hz = psb._measure_pitch_range_hz  # noqa: SLF001
+    called_lab_paths: List[Path] = []
+    called_wav_paths: List[Path] = []
+
+    def _spy_measure_phoneme_classes(lab_path: Path):
+        called_lab_paths.append(lab_path)
+        return real_measure_phoneme_classes(lab_path)
+
+    def _spy_measure_pitch_range_hz(wav_path: Path):
+        called_wav_paths.append(wav_path)
+        return real_measure_pitch_range_hz(wav_path)
+
+    monkeypatch.setattr(psb, "_measure_phoneme_classes", _spy_measure_phoneme_classes)
+    monkeypatch.setattr(psb, "_measure_pitch_range_hz", _spy_measure_pitch_range_hz)
+
+    sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
+    assert sidecar["songs"]  # training/validation は実測されていることの前提確認
+
+    called_song_ids_from_lab = {p.stem for p in called_lab_paths}
+    called_song_ids_from_wav = {p.parent.name for p in called_wav_paths}
+    assert not (called_song_ids_from_lab & holdout_ids)
+    assert not (called_song_ids_from_wav & holdout_ids)
+
+
+def test_sidecar_still_measures_training_and_validation_regression_fix6(tmp_path: Path) -> None:
+    """sealed_holdout 除外後も、training/validation の song は従来どおり
+    計測されることの正常系回帰。"""
+    song_ids = [f"pjs{i:03d}" for i in range(1, 10)]
+    root = _build_corpus(tmp_path, song_ids)
+    _, manifest = _identity_and_manifest(root)
+    sidecar = psb.build_acoustic_inventory_sidecar(root, manifest)
+    expected_measured_ids = set(manifest["row_ids"]["training"]) | set(manifest["row_ids"]["validation"])
+    assert expected_measured_ids
+    for entry in sidecar["songs"]:
+        assert entry["split"] in ("training", "validation")
+        assert entry["pitch_range_hz"] is not None
+        assert entry["phrase_count"] is not None

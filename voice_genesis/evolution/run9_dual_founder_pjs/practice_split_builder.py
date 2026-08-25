@@ -508,17 +508,44 @@ def build_acoustic_inventory_sidecar(
        照合する。`row_ids` と 6 hash を両方偽造して自己整合させた
        manifest でも、真の決定論割当（層 2）とは一致しないため拒否
        される。
-    4. **final path**（Fix 5）: 層 2/3 を通過した song_id から構成する
-       最終消費パス（`root/song_id/song_id.lab` /
-       `root/song_id/song_id_song.wav`）**それぞれ**を `exists()`/
-       `read_text()`/`librosa.load()` より前に resolve し
-       `corpus_root` 配下包含検査を通す（`_reject_paths_outside_corpus_
-       root()` — `_enumerate_pjs_song_ids()` と共有する既存関数）。
-       song_id 自体・その親ディレクトリ（`root/song_id`）が安全でも、
-       最終ファイルだけが corpus_root 外を指す symlink である経路は
-       layer 1-3 では捕捉できない（symlink の中身が corpus 内の実体と
-       バイト同一なら corpus identity も変化しないため）——独立した
-       防御層として必須。
+    4. **final path**（Fix 5）: 層 2/3 を通過した song_id のうち
+       **計測対象になる song のみ**（下記 5. 参照 — `sealed_holdout` は
+       そもそも read しないため対象外）について、最終消費パス
+       （`root/song_id/song_id.lab` / `root/song_id/song_id_song.wav`）
+       **それぞれ**を `exists()`/`read_text()`/`librosa.load()` より前に
+       resolve し `corpus_root` 配下包含検査を通す
+       （`_reject_paths_outside_corpus_root()` — `_enumerate_pjs_song_
+       ids()` と共有する既存関数）。song_id 自体・その親ディレクトリ
+       （`root/song_id`）が安全でも、最終ファイルだけが corpus_root 外を
+       指す symlink である経路は layer 1-3 では捕捉できない（symlink の
+       中身が corpus 内の実体とバイト同一なら corpus identity も変化
+       しないため）——独立した防御層として必須。
+    5. **sealed-holdout 非開封**（Fix 6, P1）: `sealed_holdout` split の
+       song は **計測しないだけでなく `.lab`/WAV を一切 read しない**
+       （read + 出力の両方がリーク経路になるため）。`DESIGN_RUN9_
+       REVISION_0.3.md` §（教師音声/評価対象の学習中使用禁止規定）と
+       `DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md` §22
+       step 14（開封＝両 adapter 凍結後）に整合させるため、本 builder は
+       通常の（学習前）実行では `sealed_holdout` を read/existence 判定の
+       対象から構造的に除外する——「開封状態を検証する」のではなく
+       「開封しない」ことで規律を守る（下記「開封状態検証を配線しなかった
+       理由」参照）。層 1-3（identity/split assignment/hash pin）は
+       `sealed_holdout` を含む全 `row_ids` に対して引き続き実施する——
+       id 列のみで完結し file read を伴わないため、holdout を含めても
+       本規律に抵触しない。除外は sidecar 出力の
+       `sealed_holdout_excluded: true` として機械可読に明示する。
+
+    **開封状態検証を配線しなかった理由**: 指摘は代替として
+    「training-complete/open 状態の検証を要求する」経路も提示したが、
+    本 repo には学習前の時点で「training-complete」を表す状態機構が
+    まだ存在しない（VG-L0 学習ハーネス自体が未実装 — `RUN9_CONTRACT.yaml`
+    冒頭参照）。存在しない状態を検証するコードを書くことは、検証している
+    ふりをする捏造になる（AGENTS.md の「実測できない主張はしない」規律に
+    抵触）。そのため本改訂では「学習前は常に sealed_holdout を開封しない」
+    という単純規律のみを実装し、post-training の開封後計測（sealed_holdout
+    の音響 inventory が実際に必要になる評価フェーズ）は本関数の対象外と
+    する——**再入条件**は「training-complete 状態を検証可能な形で記録する
+    機構」が別途実装された時点。
 
     いずれの層も不一致は `Run9ValidationError` で fail-closed（部分計測・
     部分出力なし）。
@@ -580,10 +607,17 @@ def build_acoustic_inventory_sidecar(
         root,
     )
 
-    # --- layer 4: final path containment（Fix 5） -----------------------
+    # --- sealed-holdout 非開封（Fix 6, P1）: training/validation のみが
+    # 計測対象。sealed_holdout の song_id は、この行より下のどの read/
+    # existence 判定にも一切登場しない（層 1-3 の id レベル検証は上で
+    # sealed_holdout を含めて既に完了している——file read を伴わないため
+    # 非開封規律に抵触しない）。
+    measured_split_names: Tuple[str, ...] = ("training", "validation")
+
+    # --- layer 4: final path containment（Fix 5、計測対象のみ） ----------
     entries_meta: List[Tuple[str, str, Path, Path]] = []
     final_paths: List[Path] = []
-    for split_name in ("training", "validation", "sealed_holdout"):
+    for split_name in measured_split_names:
         for song_id in canonical_split[split_name]:
             wav_path = root / song_id / f"{song_id}_song.wav"
             lab_path = root / song_id / f"{song_id}.lab"
@@ -605,14 +639,19 @@ def build_acoustic_inventory_sidecar(
     return {
         "schema": SCHEMA_PRACTICE_ACOUSTIC_INVENTORY_SIDECAR,
         "verified_expanded_corpus_identity_sha256": verified_corpus_identity,
+        "sealed_holdout_excluded": True,
         "note": (
             "advisory only — RUN9_CONTRACT.yaml の pin 対象外。校正済み計器の主張はしない"
             "（librosa.pyin 実測値・0.1 Hz 丸め、閾値較正・帯域検証は未実施の生の観測値）。"
             "advisory な計測値であっても provenance（どの corpus_root を計測したか）は必須の"
             "ため、`verified_expanded_corpus_identity_sha256` に manifest の "
             "`expanded_corpus_identity_sha256` と一致検証済みの再計算値を保持する。"
-            "入力検証は corpus identity・split assignment・hash pin・最終パス解決の4層で"
-            "閉じている（PR #321 review Fix 3/4/5）。"
+            "入力検証は corpus identity・split assignment・hash pin・最終パス解決の4層 + "
+            "sealed-holdout 非開封の計5契約で閉じている（PR #321 review Fix 3/4/5/6）。"
+            "sealed_holdout の音響計測は rev 0.3 の使用禁止規定・v0.1 §22 step 14"
+            "（開封＝両 adapter 凍結後）により学習前は生成しない（`sealed_holdout_excluded`"
+            "= true）。post-training の開封後計測は本関数の対象外——再入条件は"
+            "training-complete 状態を検証可能な形で記録する機構の実装。"
         ),
         "songs": songs,
     }
