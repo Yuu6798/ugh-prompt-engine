@@ -13186,6 +13186,18 @@ _REEXPORT_REPLAY_RECIPE_VENV_DIR: str = "venv_export_replay"
 # 経由の呼び出しは negative lookbehind で除外する——`/bin/` の直後に続く
 # トークンは venv 接続済みとみなす）。
 _REEXPORT_BARE_INTERPRETER_PATTERN = re.compile(r"(?<!/bin/)\b(python|pip)\b")
+# venv 作成 step 検出マーカー（PR #327 レビュー第7巡指摘14対応、P2）。この
+# step の**前**に interpreter 版検証 step が存在しなければならない——venv
+# 作成に使う interpreter が ambient のままだと、記録された
+# `environment_versions.python` と異なる版で venv 自体が作られ得る
+# （第6巡指摘12の bare-export-interpreter 指摘とは別の穴: あちらは
+# export_command 実行時の interpreter、こちらは venv 自体の生成元）。
+_REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER: str = "-m venv"
+# interpreter 版検証 step の存在確認に使うマーカー: 検証 step は pin
+# フィールド名 "environment_versions.python" と、その実測 pin 値（文字列）
+# の両方を逐語で参照していなければならない（fail-closed、ハードコード値の
+# 二重管理を避けるため pin 値は manifest 実測から動的に取得する）。
+_REEXPORT_REPLAY_RECIPE_INTERPRETER_CHECK_FIELD_MARKER: str = "environment_versions.python"
 _REEXPORT_REPRODUCIBILITY_CHECK_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "description", "all_run1_run2_identical",
 })
@@ -13411,6 +13423,18 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
     （`python -m venv venv_export_replay`）を除く全 step に、
     `venv_export_replay/bin/` を前置しない bare `python`/`pip` 起動が
     残っていないこと、の2点を fail-closed で machine 強制する。
+
+    **replay_environment_recipe の venv 作成 interpreter 版検証（PR #327
+    レビュー第7巡指摘14対応、P2）**: 上記 (ii) の例外規定（venv 作成 step
+    自体は ambient python を使ってよい）は、その ambient interpreter が
+    記録された `environment_versions.python`（"3.11.15"）と同じ版である
+    ことを何も保証していなかった——venv 自体が unpinned interpreter から
+    作られ得る穴（第6巡指摘12の bare-export-interpreter 指摘とは別物:
+    あちらは export_command 実行時の interpreter、こちらは venv 自体の
+    生成元）。本関数は venv 作成 step（`-m venv` を含む最初の step）の
+    **前**に、`environment_versions.python` フィールド名とその pin 値を
+    逐語参照する interpreter 版検証 step が存在することを fail-closed で
+    machine 強制する（欠落・venv 作成 step 以降への配置のいずれも拒否）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"reexport manifest must be an object, got {type(data).__name__}")
@@ -13711,6 +13735,40 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             f"one-liner that json.load()s the manifest and derives a requirements file from "
             f"{_REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME!r}"
         )
+    # PR #327 レビュー第7巡指摘14（P2、採用）: replay recipe の venv 作成
+    # step が ambient `python` で実行されるため、記録された 3.11.15 でない
+    # interpreter で venv が作られ得た（第6巡指摘12の bare-export-
+    # interpreter 指摘とは別の穴——venv 自体の生成元が unpinned）。venv
+    # 作成 step の**前**に interpreter 版検証 step（記録済み
+    # `environment_versions.python` の pin 値を逐語参照する）が存在する
+    # ことを fail-closed で machine 強制する。
+    venv_create_indices = [
+        i for i, step in enumerate(replay_steps)
+        if _REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER in step
+    ]
+    if not venv_create_indices:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a venv creation step "
+            f"(containing {_REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER!r})"
+        )
+    venv_create_index = venv_create_indices[0]
+    pinned_python_version = env_versions.get("python")
+    interpreter_check_indices = [
+        i for i, step in enumerate(replay_steps)
+        if _REEXPORT_REPLAY_RECIPE_INTERPRETER_CHECK_FIELD_MARKER in step
+        and isinstance(pinned_python_version, str)
+        and pinned_python_version in step
+    ]
+    if not interpreter_check_indices or interpreter_check_indices[0] >= venv_create_index:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain an interpreter "
+            f"version verification step (referencing {_REEXPORT_REPLAY_RECIPE_INTERPRETER_CHECK_FIELD_MARKER!r} "
+            f"and its pinned value {pinned_python_version!r}) strictly before the venv creation "
+            f"step (index {venv_create_index}, containing "
+            f"{_REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER!r}) — fail-closed guard against creating "
+            "the replay venv with an interpreter whose version was never checked against "
+            "environment_versions.python"
+        )
     # PR #327 レビュー第6巡指摘12（P2、採用）: replay recipe が checkpoint-side
     # 入力の照合まで書いていながら、肝心の export 実行手順を一切書いておらず
     # （黙示的に export_command を bare token のまま実行させる余地が残ってい
@@ -13726,13 +13784,15 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             "leaving the ambient interpreter to resolve export_command's bare `python` token — "
             "otherwise a replay would produce artifacts from an unpinned ambient environment"
         )
-    # fail-closed (ii): venv bootstrap（`python -m venv ...`、venv がまだ存在
-    # しないため ambient python を使うのが正当）を除く全 step で、bare
-    # `python`/`pip` 起動（venv_export_replay/bin/ を前置しない裸呼び出し）が
-    # 残っていないことを全数走査する（「venv 接続が曖昧な step を全数解消」の
-    # machine 強制——目視レビューでの見落としに依存しない）。
+    # fail-closed (ii): venv bootstrap 以前の step（interpreter 版検証・
+    # `python -m venv ...` 自体、venv がまだ存在しないため ambient python
+    # を使うのが正当——PR #327 レビュー第7巡指摘14対応で検証 step もこの
+    # 例外に含める）を除く全 step で、bare `python`/`pip` 起動
+    # （venv_export_replay/bin/ を前置しない裸呼び出し）が残っていないこと
+    # を全数走査する（「venv 接続が曖昧な step を全数解消」の machine
+    # 強制——目視レビューでの見落としに依存しない）。
     for i, step in enumerate(replay_steps):
-        if "-m venv" in step:
+        if i <= venv_create_index:
             continue
         match = _REEXPORT_BARE_INTERPRETER_PATTERN.search(step)
         if match:
@@ -15055,33 +15115,58 @@ def _build_live_os_identity(os_release_path: Optional[Path] = None) -> str:
 
 
 def verify_execution_profile_runtime(
-    manifest: Mapping[str, Any], *, selected_providers: Optional[List[str]] = None,
+    contract: Run9RunContract, *, selected_providers: Optional[List[str]] = None,
     os_release_path: Optional[Path] = None,
+    manifest_path: Optional[Path] = None, contract_path: Optional[Path] = None,
+    adjudication_basis_path: Optional[Path] = None, render_code_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`execution_profile_sha` pin が記述する runtime identity 5値
     （python/onnxruntime/os/architecture/selected_execution_provider）
     を、**現在実行中の live 環境**（`sys.version_info`・
     `onnxruntime.__version__`・`onnxruntime.get_available_providers()`・
     `platform.machine()`・`/etc/os-release`）に対して fail-closed で照合
-    する（PR #327 レビュー第3巡指摘8(b) + 第5巡指摘11対応、2026-08-26。
-    第5巡指摘11: 旧実装は5値のうち python/onnxruntime/
+    する（PR #327 レビュー第3巡指摘8(b) + 第5巡指摘11対応 + 第7巡指摘13
+    対応、2026-08-26。第5巡指摘11: 旧実装は5値のうち python/onnxruntime/
     selected_execution_provider の3値しか live probe しておらず、
     os/architecture は manifest 記載値を無条件に信頼していた——別 OS・
     別アーキテクチャでもパッケージ版と CPU provider さえ揃えば run gate
     が通り、旧 execution_profile_sha の下で偽成功実験が可能だった）。
 
+    **第7巡指摘13対応（P1、2026-08-26）——引数を manifest dict から
+    contract へ変更した**: 旧実装は第一引数として呼び出し側供給の任意
+    `Mapping[str, Any]` を受け取り、それを一切 validate も
+    execution_profile_sha 照合もせずそのまま live 照合に使っていた。
+    これは HARNESS-3 run gate が再構成/改変された manifest を渡すと、
+    live ホストに合わせた値で偽成功検証が成立してしまう穴だった
+    （`load_pinned_execution_profile_manifest()` の全 cross-check・sha
+    照合を素通りできる経路が存在した）。本関数は第一引数を「load 済み
+    `Run9RunContract`」（他の `load_pinned_*` 系関数と同じ流儀）へ変更し、
+    関数内部で `load_pinned_execution_profile_manifest(contract, ...)`
+    （disk 正典再読込・改変検出・PINNED 確認・実在確認・実バイト sha256
+    一致確認・構造検証・adjudication/render-code cross-check を含む全防御）
+    を atomic に呼んでから、その戻り値のみを live 照合に使う。manifest
+    dict を直接注入できる公開経路はこれで存在しない
+    （`manifest_path`/`contract_path`/`adjudication_basis_path`/
+    `render_code_path` はテスト用のパス上書き引数であり、実バイトは
+    引き続き実 read + sha256 再計算で照合される——`load_pinned_
+    execution_profile_manifest()` の read-once 3層防御と同型）。
+
     **契約——RUN9 実行段（学習ハーネス/render 実行の run gate）は render を
     開始する前に本関数を必ず呼ぶこと。** `load_pinned_execution_profile_
-    manifest()` はこの照合を行わない（load 時ではなく実行時照合である
-    理由: `load_pinned_execution_profile_manifest()` は CI が Python
+    manifest()` 自体は live 照合を行わない（load 時ではなく実行時照合で
+    ある理由: `load_pinned_execution_profile_manifest()` は CI が Python
     3.11/3.12 マトリクスで実行するテストスイートからも呼ばれる——load 時に
     live Python/onnxruntime バージョンを照合すると、3.12 環境で走る正当な
     CI が「pin は 3.11.15 なのに live は 3.12」という理由で構造的に落ちる。
     RUN9 実行環境と CI マトリクス環境は意味的に別物であり、live 照合は
-    実際に render を実行する段——本関数の呼び出し点——に分離する）。
+    実際に render を実行する段——本関数の呼び出し点——に分離する。本関数が
+    内部で呼ぶ pinned load 自体は毎回 disk 正典を再読込するため、この
+    分離は変わらず維持される）。
 
     照合内容（6項目、`identity_semantics.runtime`/`identity_semantics.
-    provider_fixation_rules` に対する fail-closed 判定）:
+    provider_fixation_rules` に対する fail-closed 判定。manifest は
+    `load_pinned_execution_profile_manifest(contract, ...)` の戻り値の
+    みを用いる）:
     (a) `sys.version_info` から組み立てた `"{major}.{minor}.{micro}"` が
         `identity_semantics.runtime.python` と厳密一致すること。
     (b) `onnxruntime.__version__` が `identity_semantics.runtime.
@@ -15115,6 +15200,10 @@ def verify_execution_profile_runtime(
     `available_providers`/`selected_execution_provider`/`architecture`/
     `os` の6キー）——呼び出し側が render 実行ログへ転記できるようにする。
     """
+    manifest = load_pinned_execution_profile_manifest(
+        contract, manifest_path=manifest_path, contract_path=contract_path,
+        adjudication_basis_path=adjudication_basis_path, render_code_path=render_code_path,
+    )
     runtime = manifest["identity_semantics"]["runtime"]
 
     # (a) Python バージョン: sys.version_info ベースで組み立てる（sys.

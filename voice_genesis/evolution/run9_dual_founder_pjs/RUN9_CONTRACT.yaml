@@ -668,6 +668,16 @@ config_sha:
 # のまま、repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の
 # 実バイト、第6世代）は情報記録として保持する:
 #   "8b8dc1d9596635e262725b6b361caf05b347f8d12cc6228f08a6d355439a9da8"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第7巡指摘14、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第6世代、venv 作成 interpreter 版検証 step 新設）
+# へ追随させた結果、`dependency_pins_manifest.json` 自体の実バイトが
+# 変わった。台帳の内容（render_asset_ledger 等）自体は無変更。pin 欄自体
+# は PENDING のまま、repin ではなく情報記録の更新）。実測済みの sha256
+# （本改訂後の実バイト、第7世代）は情報記録として保持する:
+#   "4d2922825deb5790c537e1238a4e0459c619a791fc845b8fbab0ec137d30f285"
 dependency_pins_sha:
   value: null
   status: PENDING
@@ -846,8 +856,38 @@ dependency_pins_sha:
 # ノートのみで実バイトが変わったための repin。旧 pin 値（第4世代、PR #327
 # 第4巡指摘10対応後）は履歴として保持する:
 #   af4fb42e86b52f510c78f3f2d3442a6b7da16075fb06ede181fee6cd97789f95
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第7巡指摘14、P2、採用。Claude
+# 完結ルート）: `replay_environment_recipe` の venv 作成 step
+# （`python -m venv venv_export_replay`）が ambient `python` で実行される
+# ため、記録された 3.11.15 でない interpreter で venv 自体が作られ得た
+# （第6巡指摘12の bare-export-interpreter 指摘とは別の穴——あちらは
+# export_command 実行時の interpreter、こちらは venv 自体の生成元）。
+# `replay_environment_recipe.steps` の venv 作成 step の**前**に
+# interpreter 版検証 step（`python -c "import platform; ..."` で
+# `platform.python_version()` を実測し `environment_versions.python`
+# （"3.11.15"）と厳密一致しなければ AssertionError で中止する手順を逐語
+# 収載）を新設した。venv 作成 step 自体の文言にも「直前の step で版検証
+# 済みの、その ambient interpreter を使って作成する」旨を追記した
+# （`export_command`/`export_command_cwd`/`export_environment_lock`/
+# `experiment_side_inputs` 等、他の実測事実は1文字も変更していない）。
+# `run9_schema.validate_reexport_manifest()` へ fail-closed 検証を追加した:
+# venv 作成 step（`-m venv` を含む最初の step）より前に、
+# `environment_versions.python` フィールド名とその pin 値を逐語参照する
+# interpreter 版検証 step が存在することを machine 強制する（欠落・venv
+# 作成 step 以降への配置のいずれも reject。負例テスト2件——検証 step
+# 欠落・venv 作成より後に配置——を追加、いずれも reject を確認）。bare
+# interpreter 起動の全数走査（第6巡指摘12由来）の例外範囲を「venv 作成
+# step まで（venv 作成 step を含む）」へ一般化し、新設した検証 step も
+# その例外に含めた（検証 step 自体は venv が存在する前に ambient
+# interpreter で実行するのが正当であるため）。上記いずれも manifest の
+# 実測事実（checkpoint/exporter/artifacts/smoke render の各 sha256・秒数）
+# を一切変更しない——新設 step + 既存 step への注記追記のみで実バイトが
+# 変わったための repin。旧 pin 値（第5世代、PR #327 第6巡指摘12対応後）は
+# 履歴として保持する:
+#   c06c3f7eecf64ddc1357b54539fd093e0189e3405739eb6bda8a104210abf140
 reexport_manifest_sha:
-  value: "c06c3f7eecf64ddc1357b54539fd093e0189e3405739eb6bda8a104210abf140"
+  value: "efe4ff2101d84b9062ac6fb34f6416db5a2277aa0324effdc684249c1c95cdb5"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json
 
@@ -935,6 +975,23 @@ reexport_manifest_sha:
 # /etc/os-release 実 read による os 照合（導出規則は run9_schema.
 # _build_live_os_identity() docstring 参照）を追加し、runtime identity
 # 5値全てを live probe で fail-closed 照合する契約とした。
+#
+# 2026-08-26 verify 強化（PR #327 Codex レビュー第7巡指摘13、P1、採用
+# ——runtime 検証が pinned manifest に結合していない穴。manifest 実体は
+# 無変更、run9_schema.py/tests 側のみ強化）: 旧 verify_execution_profile_
+# runtime(manifest) は呼び出し側供給の任意 Mapping をそのまま受け取り、
+# validate も execution_profile_sha 照合も一切せず live 照合していたため、
+# HARNESS-3 run gate が再構成/改変された manifest を渡すと live ホストに
+# 合わせた値で偽成功検証が可能だった（`load_pinned_execution_profile_
+# manifest()` の全 cross-check・sha 照合を素通りできる経路が存在した）。
+# 第一引数を「load 済み contract」（`run9_schema.Run9RunContract`、他の
+# `load_pinned_*` 系関数と同じ流儀）へ変更し、関数内部で
+# `load_pinned_execution_profile_manifest(contract, ...)`（disk 正典再読込
+# ・改変検出・PINNED 確認・実在確認・実バイト sha256 一致確認・構造検証・
+# adjudication/render-code cross-check を含む全防御）を atomic に呼んで
+# から、その戻り値のみを live 照合に使う契約へ改めた——
+# `run9_schema.verify_execution_profile_runtime(contract, ...)` として
+# 呼ぶこと。manifest dict を直接注入できる公開経路はこれで存在しない。
 execution_profile_sha:
   value: "200c975967a7b34aa55d9e89a8c59ace2be850e5fd1d93a4ba4a7dbed5f06d34"
   status: PINNED

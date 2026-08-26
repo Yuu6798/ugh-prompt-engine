@@ -15901,12 +15901,68 @@ def test_harness2_reexport_manifest_replay_recipe_bare_pip_step_rejected() -> No
 
 
 def test_harness2_reexport_manifest_replay_recipe_venv_bootstrap_bare_python_allowed() -> None:
-    """venv 作成 step 自体（`python -m venv venv_export_replay`）は
-    ambient python を使うのが正当であり、bare-interpreter 検査から除外
-    されること（誤検知しないことの回帰固定）。"""
+    """venv 作成 step 自体（`python -m venv venv_export_replay`、直前の
+    interpreter 版検証 step の対象）は ambient python を使うのが正当で
+    あり、bare-interpreter 検査から除外されること（誤検知しないことの
+    回帰固定）。PR #327 第7巡指摘14対応後は steps[0] が interpreter 版
+    検証 step、steps[1] が venv 作成 step になった。"""
     data = _reexport_manifest_data()
-    assert data["replay_environment_recipe"]["steps"][0] == "python -m venv venv_export_replay"
+    steps = data["replay_environment_recipe"]["steps"]
+    assert "-m venv" in steps[1]
+    assert "python -m venv venv_export_replay" in steps[1]
     m.validate_reexport_manifest(data)  # 例外なしの確認
+
+
+# --- PR #327 レビュー第7巡指摘14（P2, 採用）: venv 作成 interpreter 版検証 ---
+
+
+def test_harness2_reexport_manifest_replay_recipe_interpreter_check_step_present() -> None:
+    """正常系: venv 作成 step より前に、`environment_versions.python` の
+    pin 値（"3.11.15"）を逐語参照する interpreter 版検証 step が存在する
+    こと（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    venv_create_index = next(i for i, s in enumerate(steps) if "-m venv" in s)
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "environment_versions.python" in s and "3.11.15" in s
+    )
+    assert check_index < venv_create_index
+
+
+def test_harness2_reexport_manifest_replay_recipe_interpreter_check_step_missing_rejected() -> None:
+    """interpreter 版検証 step が丸ごと欠落していると reject される
+    （PR #327 第7巡指摘13の元の欠陥: venv がどの interpreter から作られた
+    か検証されないまま）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"]
+        if "environment_versions.python" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="interpreter version verification step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_interpreter_check_step_after_venv_create_rejected() -> None:
+    """interpreter 版検証 step が venv 作成 step より後に配置されている
+    と reject される（存在するだけでは不十分——venv 作成前に実行されて
+    いなければ venv の生成元を保護できない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "environment_versions.python" in s and "3.11.15" in s
+    )
+    venv_create_index = next(i for i, s in enumerate(steps) if "-m venv" in s)
+    assert check_index < venv_create_index
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    # venv 作成 step の直後（元の check_index を除去した分インデックスが
+    # 1つ詰まっているため venv_create_index の位置）へ挿入し直す。
+    reordered.insert(venv_create_index, check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="interpreter version verification step"):
+        m.validate_reexport_manifest(data)
 
 
 # --- PR #327 レビュー第1巡指摘3: adjudication_basis 実バイト cross-check (9) ---
@@ -16610,18 +16666,25 @@ def test_execprofile_load_pinned_execution_profile_manifest_render_code_missing_
 
 
 # --- verify_execution_profile_runtime(): run-gate live probe ---------------
-# (PR #327 レビュー第3巡指摘8(b)対応、2026-08-26) `load_pinned_execution_
-# profile_manifest()` からは意図的に分離した live 環境照合（CI マトリクス
-# 環境との構造衝突回避、詳細は関数 docstring 参照）。
+# (PR #327 レビュー第3巡指摘8(b) + 第7巡指摘13対応、2026-08-26)
+# `load_pinned_execution_profile_manifest()` からは意図的に分離した live
+# 環境照合（CI マトリクス環境との構造衝突回避、詳細は関数 docstring 参照）。
+# 第7巡指摘13: 第一引数は任意 manifest dict ではなく `Run9RunContract` へ
+# 変更された——関数内部で `load_pinned_execution_profile_manifest()` の全
+# cross-check を経由した manifest のみが live 照合に使われる。manifest の
+# 中身を変えて検証したいテストは `_tampered_execprofile_contract()` で
+# 「改変 manifest ファイル + それに合わせた pin を持つ合成 contract」を
+# 経由する（manifest dict を直接注入する経路はもう存在しない）。
 
 
-def test_execprofile_verify_runtime_happy_path_real_environment() -> None:
+def test_execprofile_verify_runtime_happy_path_real_environment(
+    contract: m.Run9RunContract,
+) -> None:
     """本 session の実行環境自体が execution_profile_sha pin と一致する
     （Python 3.11.15 / onnxruntime 1.29.0 / available_providers に
     AzureExecutionProvider・CPUExecutionProvider を含む）ため、monkeypatch
     なしで happy path を実測確認できる。"""
-    manifest = _execprofile_manifest_data()
-    result = m.verify_execution_profile_runtime(manifest)
+    result = m.verify_execution_profile_runtime(contract)
     assert result == {
         "python": "3.11.15",
         "onnxruntime": "1.29.0",
@@ -16632,11 +16695,28 @@ def test_execprofile_verify_runtime_happy_path_real_environment() -> None:
     }
 
 
-def test_execprofile_verify_runtime_python_mismatch_rejected(
-    monkeypatch: pytest.MonkeyPatch,
+def test_execprofile_verify_runtime_manifest_injection_without_matching_pin_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
 ) -> None:
-    manifest = _execprofile_manifest_data()
+    """第7巡指摘13の直接非退行確認: 任意に改変した manifest ファイルを
+    `manifest_path` で指し示しても、`contract` 側の execution_profile_sha
+    pin をそれに合わせて差し替えていなければ実バイト sha256 不一致として
+    `load_pinned_execution_profile_manifest()` 側で fail-closed 拒否される
+    ——旧実装（呼び出し側供給の任意 mapping をそのまま live 照合していた）
+    で可能だった「live ホストに合わせた偽 manifest を注入して偽成功させる」
+    経路が閉じたことの確認。live 環境の実測値と一致するよう改変した
+    manifest を用意しても、pin が未更新のため拒否される。"""
+    forged = copy.deepcopy(_execprofile_manifest_data())
+    forged["identity_semantics"]["runtime"]["python"] = "9.9.9"
+    forged_path = tmp_path / "execution_profile_manifest.json"
+    forged_path.write_bytes(_canonical_json_bytes(forged))
+    with pytest.raises(m.Run9ValidationError, match="実バイト sha256"):
+        m.verify_execution_profile_runtime(contract, manifest_path=forged_path)
 
+
+def test_execprofile_verify_runtime_python_mismatch_rejected(
+    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class _FakeVersionInfo:
         major = 3
         minor = 12
@@ -16644,86 +16724,93 @@ def test_execprofile_verify_runtime_python_mismatch_rejected(
 
     monkeypatch.setattr(m.sys, "version_info", _FakeVersionInfo())
     with pytest.raises(m.Run9ValidationError, match="live Python version"):
-        m.verify_execution_profile_runtime(manifest)
+        m.verify_execution_profile_runtime(contract)
 
 
 def test_execprofile_verify_runtime_onnxruntime_import_failure_rejected(
-    monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """onnxruntime が import 不能な環境では fail-closed（静かに skip
     しない）——`sys.modules["onnxruntime"] = None` は `import onnxruntime`
     を `ModuleNotFoundError` にする標準テクニック。"""
-    manifest = _execprofile_manifest_data()
     monkeypatch.setitem(sys.modules, "onnxruntime", None)
     with pytest.raises(m.Run9ValidationError, match="onnxruntime を import できない"):
-        m.verify_execution_profile_runtime(manifest)
+        m.verify_execution_profile_runtime(contract)
 
 
 def test_execprofile_verify_runtime_onnxruntime_version_mismatch_rejected(
-    monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manifest = _execprofile_manifest_data()
     fake_ort = types.SimpleNamespace(
         __version__="9.9.9",
         get_available_providers=lambda: ["AzureExecutionProvider", "CPUExecutionProvider"],
     )
     monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
     with pytest.raises(m.Run9ValidationError, match="live onnxruntime version"):
-        m.verify_execution_profile_runtime(manifest)
+        m.verify_execution_profile_runtime(contract)
 
 
 def test_execprofile_verify_runtime_available_providers_mismatch_rejected(
-    monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """provider 不在（GPU provider が消えた等）・新規出現のいずれも
     fail-closed で拒否される——ここでは CUDAExecutionProvider が新たに
     観測された（自動 upgrade の兆候）ケースを確認する。"""
-    manifest = _execprofile_manifest_data()
     fake_ort = types.SimpleNamespace(
         __version__="1.29.0",
         get_available_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
     )
     monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
     with pytest.raises(m.Run9ValidationError, match="get_available_providers"):
-        m.verify_execution_profile_runtime(manifest)
+        m.verify_execution_profile_runtime(contract)
 
 
 def test_execprofile_verify_runtime_gpu_provider_selection_intent_rejected(
-    monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """呼び出し側が GPU provider を選択しようとする企図（`selected_
     providers` 引数）は、available 側が正当でも fail-closed で拒否
     される（GPU/CUDA 自動fallback/upgrade禁止規則の機械化）。"""
-    manifest = _execprofile_manifest_data()
     fake_ort = types.SimpleNamespace(
         __version__="1.29.0",
         get_available_providers=lambda: ["AzureExecutionProvider", "CPUExecutionProvider"],
     )
     monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
     with pytest.raises(m.Run9ValidationError, match="selected provider argument"):
-        m.verify_execution_profile_runtime(manifest, selected_providers=["CUDAExecutionProvider"])
+        m.verify_execution_profile_runtime(contract, selected_providers=["CUDAExecutionProvider"])
 
 
 def test_execprofile_verify_runtime_cpu_only_available_accepted(
-    monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """PR #327 レビュー第3巡指摘9と対をなす確認: live 環境が CPU-only
     （available == ["CPUExecutionProvider"] のみ）でも、pin 側の
     `onnxruntime_available_providers.value` が同じく CPU-only であれば
     受理される（`verify_execution_profile_runtime()` 側も strict subset
     要件を課していないことの確認）。manifest 側の available を CPU-only
-    へ書き換えた合成データで検証する（本物の manifest は Azure+CPU の
-    ため）。"""
-    manifest = copy.deepcopy(_execprofile_manifest_data())
-    manifest["additional_measurements"]["onnxruntime_available_providers"]["value"] = [
-        "CPUExecutionProvider"
-    ]
+    へ書き換えた合成データ + それに合わせた pin を持つ合成 contract で
+    検証する（本物の manifest は Azure+CPU のため、第7巡指摘13対応後は
+    `_tampered_execprofile_contract()` 経由で pin を差し替える必要が
+    ある——manifest dict を直接注入する経路はもう存在しない）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        avail = data["additional_measurements"]["onnxruntime_available_providers"]
+        avail["value"] = ["CPUExecutionProvider"]
+        # value を smoke_record_value（Azure+CPU）から乖離させるため、
+        # 自己整合性チェック（matches_smoke_record ==
+        # (value == smoke_record_value)）を満たすよう False へ更新する。
+        avail["matches_smoke_record"] = False
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
     fake_ort = types.SimpleNamespace(
         __version__="1.29.0",
         get_available_providers=lambda: ["CPUExecutionProvider"],
     )
     monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
-    result = m.verify_execution_profile_runtime(manifest)
+    result = m.verify_execution_profile_runtime(
+        tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+    )
     assert result["available_providers"] == ["CPUExecutionProvider"]
 
 
@@ -16735,83 +16822,82 @@ def test_execprofile_verify_runtime_cpu_only_available_accepted(
 
 
 def test_execprofile_verify_runtime_architecture_mismatch_rejected(
-    monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    manifest = _execprofile_manifest_data()
     monkeypatch.setattr(m.platform, "machine", lambda: "aarch64")
     with pytest.raises(m.Run9ValidationError, match="live architecture"):
-        m.verify_execution_profile_runtime(manifest)
+        m.verify_execution_profile_runtime(contract)
 
 
-def test_execprofile_verify_runtime_os_name_mismatch_rejected(tmp_path: Path) -> None:
-    manifest = _execprofile_manifest_data()
+def test_execprofile_verify_runtime_os_name_mismatch_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
     os_release_path = tmp_path / "os-release"
     os_release_path.write_text(
         'NAME="Debian"\nVERSION_ID="12"\nVERSION="12.5 (bookworm)"\n', encoding="utf-8",
     )
     with pytest.raises(m.Run9ValidationError, match="live OS identity"):
-        m.verify_execution_profile_runtime(manifest, os_release_path=os_release_path)
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
 
 
-def test_execprofile_verify_runtime_os_version_mismatch_rejected(tmp_path: Path) -> None:
-    manifest = _execprofile_manifest_data()
+def test_execprofile_verify_runtime_os_version_mismatch_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
     os_release_path = tmp_path / "os-release"
     os_release_path.write_text(
         'NAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION="24.04.5 LTS (Noble Numbat)"\n',
         encoding="utf-8",
     )
     with pytest.raises(m.Run9ValidationError, match="live OS identity"):
-        m.verify_execution_profile_runtime(manifest, os_release_path=os_release_path)
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
 
 
-def test_execprofile_verify_runtime_os_release_missing_rejected(tmp_path: Path) -> None:
-    manifest = _execprofile_manifest_data()
+def test_execprofile_verify_runtime_os_release_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
     missing_path = tmp_path / "does_not_exist_os_release"
     with pytest.raises(m.Run9ValidationError, match="live OS identity を構成できない"):
-        m.verify_execution_profile_runtime(manifest, os_release_path=missing_path)
+        m.verify_execution_profile_runtime(contract, os_release_path=missing_path)
 
 
 def test_execprofile_verify_runtime_os_release_name_field_missing_rejected(
-    tmp_path: Path,
+    contract: m.Run9RunContract, tmp_path: Path,
 ) -> None:
     """NAME フィールドが欠落した /etc/os-release は抽出不能として
     fail-closed 拒否される。"""
-    manifest = _execprofile_manifest_data()
     os_release_path = tmp_path / "os-release"
     os_release_path.write_text('VERSION_ID="24.04"\nVERSION="24.04.4 LTS"\n', encoding="utf-8")
     with pytest.raises(m.Run9ValidationError, match="live OS identity を構成できない"):
-        m.verify_execution_profile_runtime(manifest, os_release_path=os_release_path)
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
 
 
 def test_execprofile_verify_runtime_os_release_version_token_unparseable_rejected(
-    tmp_path: Path,
+    contract: m.Run9RunContract, tmp_path: Path,
 ) -> None:
     """VERSION フィールドの先頭トークンが数字/ドットのみで構成されていない
     場合はバージョン番号抽出不能として fail-closed 拒否される。"""
-    manifest = _execprofile_manifest_data()
     os_release_path = tmp_path / "os-release"
     os_release_path.write_text(
         'NAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION="rolling"\n', encoding="utf-8",
     )
     with pytest.raises(m.Run9ValidationError, match="live OS identity を構成できない"):
-        m.verify_execution_profile_runtime(manifest, os_release_path=os_release_path)
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
 
 
 def test_execprofile_verify_runtime_os_architecture_positive_via_override(
-    tmp_path: Path,
+    contract: m.Run9RunContract, tmp_path: Path,
 ) -> None:
     """正例: `os_release_path` を実機 `/etc/os-release` と同じ形式・値で
     差し替えても（`PRETTY_NAME`/`ID` 等の余剰フィールド込み）manifest pin
     と一致するため happy path が成立する——os probe 経路の正例確認
     （実環境自体が pin と一致するため monkeypatch なしで確認できる）。"""
-    manifest = _execprofile_manifest_data()
     os_release_path = tmp_path / "os-release"
     os_release_path.write_text(
         'PRETTY_NAME="Ubuntu 24.04.4 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\n'
         'VERSION="24.04.4 LTS (Noble Numbat)"\nID=ubuntu\n',
         encoding="utf-8",
     )
-    result = m.verify_execution_profile_runtime(manifest, os_release_path=os_release_path)
+    result = m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
     assert result["os"] == "Ubuntu 24.04.4"
     assert result["architecture"] == "x86_64"
 

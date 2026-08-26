@@ -1129,7 +1129,15 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   学習ハーネス/render 実行の run gate を配線する際は、render を開始する
   前に必ず `verify_execution_profile_runtime()` を呼ぶこと**（load 時
   ではなく実行時照合である理由は CI マトリクス環境との分離、詳細は
-  `RUN9_CONTRACT.yaml#execution_profile_sha` コメント参照）。
+  `RUN9_CONTRACT.yaml#execution_profile_sha` コメント参照）。PR #327 第7巡
+  指摘13対応（2026-08-26）: `verify_execution_profile_runtime()` の第一
+  引数を任意 manifest dict から load 済み `Run9RunContract` へ変更し、
+  関数内部で `load_pinned_execution_profile_manifest(contract, ...)`
+  （全 cross-check・execution_profile_sha 実バイト sha256 照合込み）を
+  atomic に呼んでから live 照合するよう配線した——run gate が
+  validate/sha 照合を経ていない任意 manifest を渡して live ホストに
+  合わせた値で偽成功検証する経路を閉じた（manifest dict を直接注入する
+  公開経路は存在しない）。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

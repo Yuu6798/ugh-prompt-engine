@@ -274,7 +274,8 @@
     "declaration": "新規に再現する場合は install_steps（歴史記録、当時実際に実行した手順であり1文字も変更しない）ではなく本 recipe を使う。バージョン正本は export_environment_lock 配列（単一正本）——別ファイルの lock file は置かない（二重正本 drift 防止）。",
     "lock_array_reference": "export_environment_lock",
     "steps": [
-      "python -m venv venv_export_replay",
+      "venv 作成に使う ambient interpreter の版を検証する（fail-closed）: `python -c \"import platform; v = platform.python_version(); assert v == '3.11.15', f'python version mismatch: live={v!r} pinned=environment_versions.python=3.11.15'\"` を実行する。AssertionError（非ゼロ終了）ならここで中止し、以降の step（venv 作成を含む）を一切実行しない——記録済み environment_versions.python（\"3.11.15\"）と異なる interpreter で venv を作成すると、venv 自体の生成元が unpinned になる（bare-export-interpreter 指摘とは別の穴）。",
+      "python -m venv venv_export_replay（直前の step で版検証済みの、その ambient interpreter を使って作成する）",
       "venv_export_replay/bin/python -c \"import json, pathlib; manifest = json.load(open('inputs/reexport_manifest.json', encoding='utf-8')); pathlib.Path('requirements_replay.txt').write_text('\\n'.join(manifest['export_environment_lock']) + '\\n', encoding='utf-8')\"",
       "venv_export_replay/bin/pip install --no-deps -r requirements_replay.txt --extra-index-url https://download.pytorch.org/whl/cpu",
       "export 実行前に、以下の checkpoint-side 入力を <diffsinger_repo clone（session workdir、repo外）>/DiffSinger/checkpoints/s5_run6_acoustic_v1/ へ配置する: config.yaml / spk_map.json / lang_map.json / dictionary-ja.txt（本 manifest の experiment_side_inputs.items 参照、logical_name で dependency_pins_manifest.json#render_asset_ledger と対応）に加え checkpoint 本体 model_ckpt_steps_40000.ckpt（input_checkpoint 節参照）。",
