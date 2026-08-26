@@ -614,6 +614,15 @@ config_sha:
 # （claim_scope.statement へ「の完全な充足を主張しない」の明示句を追記した
 # ことに伴う再計算値。追記前の値 "624b40ecf3d9c6f423210f73fcee6c39d7598
 # dcead2af479e4c822ea0e6ec897" は履歴として保持する）
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第1巡、指摘1の連鎖更新
+# ——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値へ追随させた結果、`dependency_pins_manifest.json`
+# 自体の実バイトが変わった。pin 欄自体は PENDING のまま、repin ではなく
+# 情報記録の更新）。実測済みの sha256（本改訂後の実バイト）は情報記録
+# として保持する:
+#   "e94a57915064d8ec204b922b9c76aa69473fb43da9b884ef81e9aa7c55539386"
 dependency_pins_sha:
   value: null
   status: PENDING
@@ -664,8 +673,39 @@ dependency_pins_sha:
 #   1806955c12ab3c002a9083929fd517e3312de9fe0eff6dc01d2b26018bb1e3ca
 # 本ファイルは CONTRACT_PIN_FIELDS へ追加しない（裁定文書自体は「値の
 # 転記元の証跡」であって RUN9 の実行前提条件そのものではないため）。
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第1巡3件、いずれも採用。Claude
+# 完結ルート）: 指摘1 export_command/export_command_cwd のプレースホルダ
+# （`<session workdir（repo外）>`/`<diffsinger_repo clone（session
+# workdir、repo外）>`）が未定義で「逐語」recipe として再実行不能だった
+# 穴を閉じた——新設 `export_command_variables` 節が各プレースホルダの
+# 定義（任意の書込可能ディレクトリでよい／pin commit を checkout した
+# DiffSinger clone）と、出力バイトがパス選択に依存しないこと（同一性
+# 検証則は raw sha256 であり、run1/run2 で実際に異なるパス
+# `reexport_out`/`reexport_out2` を用いても全9 artifacts が sha256 完全
+# 一致した——`reproducibility_check` 参照）を明記する。`export_command`
+# 自体の実測事実（何を実行したか）は不変・再実行なし（既存の独立2回
+# export sha 完全一致という実測記録を参照するのみ）。指摘2 export 依存
+# 環境の完全 lock 欠如（requirements.txt がレンジ指定のため将来の再解決
+# で transitive バージョンが変わり得る）を閉じた——export 用 venv
+# （`venv_export`）の `pip freeze --all` 実測（81パッケージ、read-only
+# 実行）を新設 `export_environment_lock`（配列、逐語）+
+# `export_environment_lock_sha256`（同配列を "\n".join()+"\n" した
+# テキストの sha256、loader が recompute 一致を machine 強制）として
+# 収載した。既存 `environment_versions`（主要サブセット）は不変のまま
+# 残す——完全 lock は `export_environment_lock` が正である。指摘3
+# （`run9_schema.py` 側、loader が `adjudication_basis.sha256` の 64hex
+# shape のみ検証し `source_file` の実バイトを照合していなかった穴）は
+# `load_pinned_reexport_manifest()` に cross-check (9) として実装した
+# （裁定 txt の実 sha256 が `adjudication_basis.sha256` と食い違えば
+# fail-closed で拒否）。上記3件はいずれも manifest の実測事実
+# （checkpoint/exporter/artifacts/smoke render の各 sha256・秒数）を
+# 一切変更しない——自己記述性の補強と新規 cross-check のみで実バイトが
+# 変わったための repin。旧 pin 値（第1世代、HARNESS-2 初回 PINNED 時）は
+# 履歴として保持する:
+#   9c6c32940f2b09361257f2331b1f19390164fdbbc5172f5fb8af889e716c5a14
 reexport_manifest_sha:
-  value: "9c6c32940f2b09361257f2331b1f19390164fdbbc5172f5fb8af889e716c5a14"
+  value: "d8af88cf0d7721ee024370da7ee9de5943c388f978eb3dab510480d12bde3ae9"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json
 

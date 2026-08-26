@@ -15525,6 +15525,124 @@ def test_harness2_load_pinned_reexport_manifest_speaker_embed_cross_check_fail_c
         )
 
 
+# --- PR #327 レビュー第1巡指摘1: export_command_variables (self-contained recipe) ---
+
+
+def test_harness2_reexport_manifest_export_command_variables_registers_placeholders() -> None:
+    data = _reexport_manifest_data()
+    variables = data["export_command_variables"]["variables"]
+    assert set(variables.keys()) == m._REEXPORT_COMMAND_VARIABLE_NAMES
+    assert len(variables) == 2
+    for var_def in variables.values():
+        assert isinstance(var_def, str) and var_def.strip()
+    assert data["export_command_variables"]["path_independence_note"].strip()
+
+
+def test_harness2_reexport_manifest_export_command_variables_unknown_key_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_command_variables"]["variables"]["<extra>"] = "unexpected"
+    with pytest.raises(m.Run9ValidationError, match="must register exactly"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_export_command_variables_missing_placeholder_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    del data["export_command_variables"]["variables"][m._REEXPORT_OUT_DIR_PLACEHOLDER]
+    with pytest.raises(m.Run9ValidationError, match="must register exactly"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_export_command_variables_out_dir_mismatch_rejected() -> None:
+    """out_dir プレースホルダの定義があっても、実際の export_command の
+    最終トークンがそれで始まっていなければ拒否される（定義と実コマンドの
+    乖離を machine 強制で防ぐ）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_command"][-1] = "/some/unrelated/path/onnx_gate_40000"
+    with pytest.raises(m.Run9ValidationError, match="out_dir placeholder"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_export_command_variables_diffsinger_repo_mismatch_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_command_cwd"] = "/some/unrelated/DiffSinger"
+    with pytest.raises(m.Run9ValidationError, match="diffsinger_repo placeholder"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第1巡指摘2: export_environment_lock (完全 pip freeze) ---
+
+
+def test_harness2_reexport_manifest_export_environment_lock_sha_matches() -> None:
+    data = _reexport_manifest_data()
+    lock = data["export_environment_lock"]
+    assert isinstance(lock, list) and len(lock) > 0
+    import hashlib as _hashlib
+    expected = _hashlib.sha256(("\n".join(lock) + "\n").encode("utf-8")).hexdigest()
+    assert data["export_environment_lock_sha256"] == expected
+
+
+def test_harness2_reexport_manifest_export_environment_lock_sha_mismatch_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_environment_lock"][0] = "tampered-package==0.0.0"
+    with pytest.raises(m.Run9ValidationError, match="export_environment_lock_sha256"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_export_environment_lock_empty_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_environment_lock"] = []
+    with pytest.raises(m.Run9ValidationError, match="non-empty list"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_export_environment_lock_sha256_shape_enforced() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_environment_lock_sha256"] = "not-a-hash"
+    with pytest.raises(m.Run9ValidationError, match="64hex"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第1巡指摘3: adjudication_basis 実バイト cross-check (9) ---
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_source_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(9) cross-check (i): adjudication_basis.source_file の実バイトが
+    改変されていると（sha256 が adjudication_basis.sha256 と食い違うと）
+    fail-closed で拒否される——裁定 txt の事後編集を検出する。"""
+    tampered_path = tmp_path / "USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt"
+    tampered_path.write_bytes(HARNESS2_ADJUDICATION_PATH.read_bytes() + b"\ntampered\n")
+    with pytest.raises(m.Run9ValidationError, match="adjudication_basis.sha256"):
+        m.load_pinned_reexport_manifest(contract, adjudication_basis_path=tampered_path)
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_manifest_sha_forged_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(9) cross-check (i): manifest 側 adjudication_basis.sha256 を実
+    バイトと異なる値へ改竄しても、実 read + 再計算で fail-closed 拒否
+    される（source_file 自体は改変しない）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["sha256"] = "0" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="adjudication_basis.sha256"):
+        m.load_pinned_reexport_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_source_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    missing_path = tmp_path / "does_not_exist.txt"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_reexport_manifest(contract, adjudication_basis_path=missing_path)
+
+
 # --- 新 status OBTAINED_DERIVED_NEW_BYTES / OBTAINED_VIA_REEXPORT 判別 shape ---
 
 

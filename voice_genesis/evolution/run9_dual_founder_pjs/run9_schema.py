@@ -13084,15 +13084,36 @@ SCHEMA_REEXPORT_MANIFEST = "run9-reexport-manifest/1.0"
 
 REEXPORT_MANIFEST_PATH = _THIS_DIR / "inputs" / "reexport_manifest.json"
 
+# repo ルート（`run9_dual_founder_pjs` -> `evolution` -> `voice_genesis` ->
+# repo root の3階層上）。`adjudication_basis.source_file` は repo ルート
+# 相対パスとして manifest に収載されているため、cross-check (9) の実バイト
+# 照合に使う（load_pinned_reexport_manifest() 参照、PR #327 レビュー指摘3
+# 対応）。
+_REEXPORT_REPO_ROOT = _THIS_DIR.parent.parent.parent
+
 REEXPORT_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "schema", "generated_at_utc", "adjudication_basis", "input_checkpoint", "exporter",
-    "export_command", "export_command_cwd", "export_venv_setup", "environment_versions",
+    "export_command", "export_command_cwd", "export_command_variables", "export_venv_setup",
+    "environment_versions", "export_environment_lock", "export_environment_lock_sha256",
     "reproducibility_check", "artifacts", "historical_comparison_summary",
     "smoke_render_cross_check", "pin_disposition",
 })
 
 _REEXPORT_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "source_file", "sha256", "summary",
+})
+# export_command の `--out` 値 / export_command_cwd が実際に前置きとして
+# 使っているプレースホルダ文字列（PR #327 レビュー指摘1: これらが manifest
+# 内で未定義だったため「逐語」recipe として再実行不能という指摘への対応。
+# `export_command`/`export_command_cwd` 自体（実測事実=何を実行したか）は
+# 改変しない——`export_command_variables` はその上に定義を足すだけ）。
+_REEXPORT_OUT_DIR_PLACEHOLDER = "<session workdir（repo外）>"
+_REEXPORT_DIFFSINGER_REPO_PLACEHOLDER = "<diffsinger_repo clone（session workdir、repo外）>"
+_REEXPORT_COMMAND_VARIABLES_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "variables", "path_independence_note",
+})
+_REEXPORT_COMMAND_VARIABLE_NAMES: FrozenSet[str] = frozenset({
+    _REEXPORT_OUT_DIR_PLACEHOLDER, _REEXPORT_DIFFSINGER_REPO_PLACEHOLDER,
 })
 _REEXPORT_INPUT_CHECKPOINT_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "path", "sha256", "expected_sha256_per_run9_contract", "sha256_matches_pin", "bytes",
@@ -13329,6 +13350,47 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
         _require_non_empty_str(token, field=f"export_command[{i}]")
     _require_non_empty_str(data["export_command_cwd"], field="export_command_cwd")
 
+    # export_command_variables（PR #327 レビュー指摘1対応）: export_command
+    # の `--out` 値・export_command_cwd が使うプレースホルダ2点を自己記述
+    # 定義し、self-contained な「逐語」recipe として再実行可能にする。
+    command_vars = _validate_reexport_shape(
+        data["export_command_variables"], field="export_command_variables",
+        required_keys=_REEXPORT_COMMAND_VARIABLES_REQUIRED_KEYS,
+    )
+    variables = command_vars["variables"]
+    if not isinstance(variables, dict):
+        raise Run9ValidationError(
+            f"reexport manifest.export_command_variables.variables must be an object, got "
+            f"{type(variables).__name__}"
+        )
+    if set(variables.keys()) != _REEXPORT_COMMAND_VARIABLE_NAMES:
+        raise Run9ValidationError(
+            "reexport manifest.export_command_variables.variables must register exactly "
+            f"{sorted(_REEXPORT_COMMAND_VARIABLE_NAMES)}, got {sorted(variables.keys())}"
+        )
+    for var_name, var_def in variables.items():
+        _require_non_empty_str(var_def, field=f"export_command_variables.variables[{var_name!r}]")
+    _require_non_empty_str(
+        command_vars["path_independence_note"], field="export_command_variables.path_independence_note"
+    )
+    # fail-closed: プレースホルダの定義が、実際に export_command/
+    # export_command_cwd が使っている文字列と食い違っていないこと
+    # （定義だけ足して実コマンドと乖離する事故を machine 強制で防ぐ）。
+    out_arg = export_command[-1]
+    if not out_arg.startswith(_REEXPORT_OUT_DIR_PLACEHOLDER):
+        raise Run9ValidationError(
+            "reexport manifest.export_command_variables: out_dir placeholder "
+            f"{_REEXPORT_OUT_DIR_PLACEHOLDER!r} does not prefix export_command's last token "
+            f"({out_arg!r}) — variable definitions must match the literal command"
+        )
+    cwd_value = data["export_command_cwd"]
+    if not cwd_value.startswith(_REEXPORT_DIFFSINGER_REPO_PLACEHOLDER):
+        raise Run9ValidationError(
+            "reexport manifest.export_command_variables: diffsinger_repo placeholder "
+            f"{_REEXPORT_DIFFSINGER_REPO_PLACEHOLDER!r} does not prefix export_command_cwd "
+            f"({cwd_value!r}) — variable definitions must match the literal command"
+        )
+
     venv_setup = _validate_reexport_shape(
         data["export_venv_setup"], field="export_venv_setup",
         required_keys=_REEXPORT_EXPORT_VENV_SETUP_REQUIRED_KEYS,
@@ -13354,6 +13416,36 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
                 f"reexport manifest.environment_versions has a non-string/empty key: {env_key!r}"
             )
         _require_non_empty_str(env_value, field=f"environment_versions[{env_key!r}]")
+
+    # export_environment_lock（PR #327 レビュー指摘2対応）: DiffSinger
+    # requirements.txt がレンジ指定のため、`environment_versions`（主要
+    # サブセット）だけでは将来の再解決で transitive 依存が変わり異なる
+    # ONNX bytes になり得る、という指摘への対応——export 用 venv の
+    # `pip freeze --all` 全文を逐語収載し、fail-closed で自己整合性
+    # （sha256 recompute 一致）を machine 強制する。
+    env_lock = data["export_environment_lock"]
+    if not isinstance(env_lock, list) or not env_lock:
+        raise Run9ValidationError(
+            f"reexport manifest.export_environment_lock must be a non-empty list, got {env_lock!r}"
+        )
+    for i, line in enumerate(env_lock):
+        _require_non_empty_str(line, field=f"export_environment_lock[{i}]")
+    env_lock_sha = data["export_environment_lock_sha256"]
+    if not isinstance(env_lock_sha, str) or not _SHA256_HEX_RE.match(env_lock_sha):
+        raise Run9ValidationError(
+            "reexport manifest.export_environment_lock_sha256 must be a 64hex sha256, got "
+            f"{env_lock_sha!r}"
+        )
+    # (i) fail-closed: 自己申告ではなく export_environment_lock 全文
+    # （"\n".join(...) + "\n" — `pip freeze --all` の実際の標準出力形式）の
+    # in-process 再計算と一致しなければならない。
+    expected_lock_sha = hashlib.sha256(("\n".join(env_lock) + "\n").encode("utf-8")).hexdigest()
+    if env_lock_sha != expected_lock_sha:
+        raise Run9ValidationError(
+            f"reexport manifest.export_environment_lock_sha256 ({env_lock_sha!r}) diverges from "
+            f"the in-process recomputation over export_environment_lock "
+            f"(\"\\n\".join(...) + \"\\n\"), which is {expected_lock_sha!r}"
+        )
 
     artifacts = data["artifacts"]
     if not isinstance(artifacts, dict):
@@ -13477,6 +13569,7 @@ def load_pinned_reexport_manifest(
     contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
     contract_path: Optional[Path] = None, bundle_path: Optional[Path] = None,
     dependency_pins_manifest_path: Optional[Path] = None,
+    adjudication_basis_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`reexport_manifest_sha` pin の**唯一の正規消費経路**
     （`load_pinned_dependency_pins_manifest()` と同型の3層防御 read-once。
@@ -13501,6 +13594,14 @@ def load_pinned_reexport_manifest(
         pins_manifest()` は呼ばない。読んだバイトへの改変検出は本 cross-
         check の対象外——それは `dependency_pins_sha` が将来 PINNED 化
         された時点で担保される）。
+    (9) cross-check (i)（PR #327 レビュー指摘3対応）:
+        `adjudication_basis.source_file` の実バイト sha256 を実測し、
+        `adjudication_basis.sha256` と一致することを machine 強制する
+        ——旧実装は 64hex 形式のみ検証しており、裁定 txt が後で編集されて
+        も旧 provenance を受理し得た穴を閉じる。`source_file` は repo
+        ルート相対パスとして manifest に収載されているため
+        `_REEXPORT_REPO_ROOT`（`run9_dual_founder_pjs` の3階層上）で解決
+        する（`adjudication_basis_path` を渡せばテスト用に上書き可能）。
 
     戻り値は検証済み manifest dict。
     """
@@ -13632,5 +13733,30 @@ def load_pinned_reexport_manifest(
                 f"speaker_embeddings_unpinned_candidates.{candidate_key}.{sha_key} "
                 f"({candidate_sha!r}) — cross-check fail-closed"
             )
+
+    # (9) cross-check (i): adjudication_basis.source_file の実バイト
+    # sha256 が adjudication_basis.sha256 と一致すること（PR #327 レビュー
+    # 指摘3対応）。旧実装は 64hex 形式のみ検証しており、裁定 txt が後で
+    # 編集されても旧 provenance を fail-open で受理し得た——実 read + 実
+    # sha256 再計算による fail-closed 照合を追加する。
+    effective_adjudication_path = (
+        adjudication_basis_path
+        if adjudication_basis_path is not None
+        else _REEXPORT_REPO_ROOT / data["adjudication_basis"]["source_file"]
+    )
+    if not effective_adjudication_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): cross-check source {effective_adjudication_path} "
+            "(adjudication_basis.source_file) does not exist"
+        )
+    adjudication_actual_sha = hashlib.sha256(effective_adjudication_path.read_bytes()).hexdigest()
+    adjudication_pinned_sha = data["adjudication_basis"]["sha256"]
+    if adjudication_actual_sha != adjudication_pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): {effective_adjudication_path} の実バイト sha256 "
+            f"({adjudication_actual_sha!r}) が adjudication_basis.sha256 pin 値 "
+            f"({adjudication_pinned_sha!r}) と一致しない — 裁定文書の改変を fail-closed で "
+            "拒否する"
+        )
 
     return data

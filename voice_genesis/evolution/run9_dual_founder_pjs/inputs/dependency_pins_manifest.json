@@ -22,7 +22,7 @@
         "measured_sha256": "cdbd779c686504cd1277bf74036e5fb334e4fcdc88ab7612f435ced7c1d6687b",
         "reexport_manifest_ref": {
           "artifact_key": "acoustic_onnx",
-          "reexport_manifest_sha256": "9c6c32940f2b09361257f2331b1f19390164fdbbc5172f5fb8af889e716c5a14"
+          "reexport_manifest_sha256": "d8af88cf0d7721ee024370da7ee9de5943c388f978eb3dab510480d12bde3ae9"
         },
         "status": "OBTAINED_DERIVED_NEW_BYTES"
       },

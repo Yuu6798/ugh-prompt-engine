@@ -114,6 +114,124 @@ acoustic.onnx の MISMATCH について: ckpt/exporter commit は pin 一致確�
 済みだが、export 実行環境（torch/onnx/onnxsim 具体バージョン・GPU/CPU・
 当時の OS）は historical 側で未記録のため、環境差要因を断定できない。
 
+### 2-3-1. export 用 venv の完全 dependency lock（PR #327 レビュー第1巡
+指摘2対応）
+
+DiffSinger `requirements.txt` はレンジ指定（`numpy<2.0.0`/`onnx>=1.21.0`
+等）のため、§2-1 記載の主要サブセット（`environment_versions`）だけでは
+将来の再解決で transitive 依存バージョンが変わり、異なる ONNX bytes に
+なり得る。export 用 venv（`venv_export`、session workdir 内・repo 外、
+2026-08-26 時点で現存）に対し `pip freeze --all` を実行し（read-only、
+install/変更なし）、全81パッケージの完全バージョンを実測した——全文は
+`inputs/reexport_manifest.json#export_environment_lock`（配列）+
+`#export_environment_lock_sha256`（同配列を `"\n".join(...) + "\n"` した
+テキストの sha256、`validate_reexport_manifest()` が recompute 一致を
+machine 強制）が正。以下は実測した `pip freeze --all` の逐語全文（81行、
+sha256 `24dbd5831041ac3db3a314b65a09feeabe69d89010d1486ed669277a225580f5`）:
+
+```
+absl-py==2.5.0
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.3
+aiosignal==1.4.0
+attrs==26.1.0
+audioread==3.1.0
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+click==8.5.0
+contourpy==1.3.3
+cycler==0.12.1
+Cython==3.3.0
+decorator==5.3.1
+einops==0.8.2
+filelock==3.32.3
+fonttools==4.63.0
+frozenlist==1.8.0
+fsspec==2025.12.0
+grpcio==1.83.0
+h5py==3.16.0
+idna==3.19
+Jinja2==3.1.6
+joblib==1.5.3
+kiwisolver==1.5.0
+libcst==1.9.0
+librosa==0.9.2
+lightning==2.3.3
+lightning-utilities==0.15.3
+llvmlite==0.49.0
+Markdown==3.10.3
+markdown-it-py==4.2.0
+MarkupSafe==3.0.3
+matplotlib==3.11.1
+mdurl==0.1.2
+ml_dtypes==0.5.4
+MonkeyType==23.3.0
+mpmath==1.3.0
+multidict==6.7.1
+mypy_extensions==1.1.0
+narwhals==2.25.0
+networkx==3.6.1
+numba==0.67.0
+numpy==1.26.4
+onnx==1.22.0
+onnxsim==0.7.3
+packaging==24.2
+pillow==12.3.0
+pip==26.2.1
+platformdirs==4.11.4
+pooch==1.9.0
+praat-parselmouth==0.4.3
+propcache==0.5.2
+protobuf==7.36.0
+pycparser==3.0
+Pygments==2.21.0
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+pytorch-lightning==2.6.5
+pyworld==0.3.4
+PyYAML==6.0.3
+requests==2.34.2
+resampy==0.4.3
+rich==15.0.0
+scikit-learn==1.9.0
+scipy==1.17.1
+setuptools==79.0.1
+six==1.17.0
+soundfile==0.14.0
+sympy==1.14.0
+tensorboard==2.21.0
+tensorboard-data-server==0.7.2
+tensorboardX==2.6.5
+threadpoolctl==3.6.0
+torch==2.13.0+cpu
+torchmetrics==1.9.0
+tqdm==4.70.0
+typing_extensions==4.16.0
+urllib3==2.7.0
+Werkzeug==3.1.8
+yarl==1.24.5
+```
+
+§2-1 記載の主要サブセット（lightning 2.3.3 / numpy 1.26.4 / onnx 1.22.0 /
+onnxsim 0.7.3 / torch 2.13.0+cpu）はいずれも上記完全 freeze と矛盾しない
+（`onnxsim` の表記差 `v0.7.3` 対 `0.7.3` はバージョン文字列の表記のみで
+実体は同一）。完全 lock は `export_environment_lock` が正——再解決時は
+本節ではなく同フィールドを参照する。
+
+### 2-3-2. export command recipe の self-containment（PR #327 レビュー
+第1巡指摘1対応）
+
+§2-2 記載の export コマンド・cwd（`<session workdir（repo外）>` /
+`<diffsinger_repo clone（session workdir、repo外）>`）は逐語のまま
+不変——`inputs/reexport_manifest.json#export_command_variables` が各
+プレースホルダの定義（任意の書込可能ディレクトリでよい／pin commit を
+checkout した DiffSinger clone）と、出力バイトがパス選択に依存しない
+こと（run1/run2 で実際に `reexport_out`/`reexport_out2` という異なる
+パスを用いても全9 artifacts が sha256 完全一致した——§2-3 参照）を自己
+記述する。再実行（replay 再検証）は本改訂では行っていない——既に実測
+済みの run1/run2 sha 完全一致（§2-3）を参照する。
+
 pjs.emb/user.emb は User 裁定3の正式 PINNED 昇格条件（同一 directory/
 archive 内で歴史4 sha と同時実在の実測確認）を満たさない——Step A で
 その directory/archive 自体が発見できなかったため。本 replay evidence は
