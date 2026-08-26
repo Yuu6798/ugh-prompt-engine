@@ -710,6 +710,17 @@ config_sha:
 # 実測済みの sha256（本改訂後の実バイト、第10世代）は情報記録として
 # 保持する:
 #   "73dec00fbde42b6c96e057e07f9f7097ee6555e85e014789cc3dfb61bde9c2b1"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第11巡指摘20、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第10世代、manifest 自身/requirements_replay.txt
+# 参照の checkout-stable 明示化）へ追随させた結果、
+# `dependency_pins_manifest.json` 自体の実バイトが変わった。台帳の内容
+# （render_asset_ledger 等）自体は無変更。pin 欄自体は PENDING のまま、
+# repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の実バイト、
+# 第11世代）は情報記録として保持する:
+#   "e454b941b66c983f54f3622cc8fa0bd9cb809bc75a9d80d0ad090cbc6ff39070"
 dependency_pins_sha:
   value: null
   status: PENDING
@@ -1005,8 +1016,40 @@ dependency_pins_sha:
 # ための repin。旧 pin 値（第8世代、PR #327 第9巡指摘16/17対応後）は
 # 履歴として保持する:
 #   9ba64a662fc4683d7a6741d26c199d600a5f51ca1b58acbc98fdc351cb086545
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第11巡指摘20、P2。規約上限10巡
+# 超過後だが、既存「未定義トークン」ファミリー（第10巡）とは別の新しい
+# 具体経路——manifest 自身/requirements_replay.txt への**相対**参照は
+# `<...>` 形式ではないため第10巡の未定義トークン検証をすり抜けていた——
+# として3分類（将来汚染）に該当し採用）: replay_environment_recipe.steps
+# 内の lock 生成 step（本 manifest 自身を json.load して requirements_
+# replay.txt を導出する python ワンライナー）が manifest パスを相対
+# 'inputs/reexport_manifest.json' のまま参照しており、repo root や session
+# workdir から開始した clean replay は cwd 未確立のため FileNotFoundError
+# で失敗し requirements_replay.txt が作られなかった。
+# export_command_variables.variables へ新規変数 <repo checkout>（本
+# リポジトリ Yuu6798/ugh-prompt-engine の checkout ルート）を追加登録し、
+# lock 生成 step の manifest 参照を <repo checkout>/voice_genesis/
+# evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json の明示形
+# へ、生成先 requirements_replay.txt と後続 pip install -r の参照は
+# <session workdir（repo外）> 起点の明示形へ揃えた（後続 step の参照整合を
+# 確認済み）。第10巡で入れた「未定義トークン全数拒否」検証は変数追加登録
+# により自動的に整合することを確認した。`run9_schema.
+# validate_reexport_manifest()` へ新規 fail-closed 検証を追加した:
+# replay_environment_recipe.steps のバッククォートコマンド内で
+# "reexport_manifest.json"/"requirements_replay.txt" が出現する箇所
+# すべてが、それぞれの checkout-stable な rooted prefix（<repo checkout>/
+# voice_genesis/evolution/run9_dual_founder_pjs/inputs/ /
+# <session workdir（repo外）>/）を伴うことを全数走査で強制する（未登録の
+# 相対参照が backtick コマンド内に現れたら reject、負例テスト2件を追加）。
+# `export_command`/`export_command_cwd`/`export_environment_lock`/
+# `experiment_side_inputs`/`artifacts`/`exporter` 等、既存の実測事実は
+# 1文字も変更していない——step 内パス参照の明示化のみで実バイトが変わった
+# ための repin。旧 pin 値（第9世代、PR #327 第10巡指摘19対応後）は履歴
+# として保持する:
+#   a9b3d09db0ff13bb6b4175221327f58773a36821f8790ccd06aa8c0e5cea3ea2
 reexport_manifest_sha:
-  value: "a9b3d09db0ff13bb6b4175221327f58773a36821f8790ccd06aa8c0e5cea3ea2"
+  value: "fd99519a598fd5ad19a474626d332a2f426cd8b560a925bb0ab6b34708ab0f13"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json
 

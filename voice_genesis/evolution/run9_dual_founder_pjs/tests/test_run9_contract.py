@@ -15720,7 +15720,7 @@ def test_harness2_reexport_manifest_export_command_variables_registers_placehold
     data = _reexport_manifest_data()
     variables = data["export_command_variables"]["variables"]
     assert set(variables.keys()) == m._REEXPORT_COMMAND_VARIABLE_NAMES
-    assert len(variables) == 2
+    assert len(variables) == 3
     for var_def in variables.values():
         assert isinstance(var_def, str) and var_def.strip()
     assert data["export_command_variables"]["path_independence_note"].strip()
@@ -16190,6 +16190,84 @@ def test_harness2_reexport_manifest_replay_recipe_export_step_argument_mismatch_
         m.validate_reexport_manifest(data)
 
 
+# --- PR #327 レビュー第11巡指摘20（P2。規約上限10巡超過後だが、既存
+# 「未定義トークン」ファミリー（第10巡）とは別の新しい具体経路——manifest
+# 自身/requirements_replay.txt への**相対**参照は `<...>` 形式ではないため
+# 第10巡の未定義トークン検証をすり抜けていた——として3分類（将来汚染）に
+# 該当し採用）: lock 生成 step が manifest 自身を相対パス
+# 'inputs/reexport_manifest.json' のまま json.load しており、repo root や
+# workdir から開始した clean replay が FileNotFoundError で落ちる穴。
+# `<repo checkout>` 変数を新規登録し、manifest 自身/requirements_replay.txt
+# への参照をそれぞれ checkout-stable な rooted prefix へ揃えた。
+
+
+def test_harness2_reexport_manifest_repo_checkout_variable_registered() -> None:
+    """新規登録変数 <repo checkout> が『本リポジトリ Yuu6798/ugh-prompt-engine
+    の checkout ルート』を指す定義文であることを固定する。"""
+    data = _reexport_manifest_data()
+    variables = data["export_command_variables"]["variables"]
+    assert m._REEXPORT_REPO_CHECKOUT_PLACEHOLDER in variables
+    assert "Yuu6798/ugh-prompt-engine" in variables[m._REEXPORT_REPO_CHECKOUT_PLACEHOLDER]
+
+
+def test_harness2_reexport_manifest_lock_step_manifest_reference_rooted() -> None:
+    """正常系: lock 生成 step のバッククォートコマンドが manifest 自身への
+    参照を rooted prefix <repo checkout>/voice_genesis/evolution/
+    run9_dual_founder_pjs/inputs/ 付きで持つこと（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    lock_index = next(
+        i for i, s in enumerate(steps) if "json.load" in s and "export_environment_lock" in s
+    )
+    rooted = (
+        "<repo checkout>/voice_genesis/evolution/run9_dual_founder_pjs/inputs/"
+        "reexport_manifest.json"
+    )
+    backtick_commands = m._REEXPORT_BACKTICK_COMMAND_PATTERN.findall(steps[lock_index])
+    assert len(backtick_commands) == 1
+    assert rooted in backtick_commands[0]
+    assert "'inputs/reexport_manifest.json'" not in backtick_commands[0]
+
+
+def test_harness2_reexport_manifest_lock_step_manifest_relative_reference_rejected() -> None:
+    """lock 生成 step のバッククォートコマンド内で reexport_manifest.json
+    への参照が rooted prefix を伴わない（旧版のような裸の相対パス）と
+    reject される（PR #327 レビュー第11巡指摘20の元の欠陥: repo root/
+    workdir から開始した clean replay が FileNotFoundError で落ちていた）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    lock_index = next(
+        i for i, s in enumerate(steps) if "json.load" in s and "export_environment_lock" in s
+    )
+    rooted = (
+        "<repo checkout>/voice_genesis/evolution/run9_dual_founder_pjs/inputs/"
+        "reexport_manifest.json"
+    )
+    mutated = steps[lock_index].replace(rooted, "inputs/reexport_manifest.json")
+    assert mutated != steps[lock_index]
+    steps[lock_index] = mutated
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="checkout-stable rooted prefix"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_requirements_replay_relative_reference_rejected() -> None:
+    """pip install step のバッククォートコマンド内で requirements_replay.txt
+    への参照が rooted prefix <session workdir（repo外）>/ を伴わない
+    （裸の相対パス）と reject される。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    pip_index = next(i for i, s in enumerate(steps) if "pip install --no-deps" in s)
+    rooted = "<session workdir（repo外）>/requirements_replay.txt"
+    assert steps[pip_index].count(rooted) == 1
+    mutated = steps[pip_index].replace(rooted, "requirements_replay.txt", 1)
+    assert mutated != steps[pip_index]
+    steps[pip_index] = mutated
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="checkout-stable rooted prefix"):
+        m.validate_reexport_manifest(data)
+
+
 # --- PR #327 レビュー第1巡指摘3: adjudication_basis 実バイト cross-check (9) ---
 
 
@@ -16229,6 +16307,120 @@ def test_harness2_load_pinned_reexport_manifest_adjudication_source_missing_reje
     missing_path = tmp_path / "does_not_exist.txt"
     with pytest.raises(m.Run9ValidationError, match="does not exist"):
         m.load_pinned_reexport_manifest(contract, adjudication_basis_path=missing_path)
+
+
+# --- PR #327 レビュー第11巡指摘21（P2、採用）: adjudication_basis.source_
+# file の join 解決が絶対パス・`../` traversal・symlink 脱出を containment
+# check なしで受理し、digest さえ一致すれば checkout 外のファイルでも正典
+# provenance として通ってしまっていた。`_resolve_repo_contained_path()`
+# （lexical 検証 + resolved 検証の二重 fail-closed）を新設し、reexport
+# manifest の adjudication_basis / execution profile loader の裁定 txt
+# パス / render_code パス解決という同型の解決点すべてへ適用する（ファミリー
+# 掃討）。テスト用パスオーバーライド引数（`adjudication_basis_path`/
+# `render_code_path`）は検証対象外のまま——既存テストは `tmp_path` 配下の
+# 絶対パスをオーバーライドへ渡す流儀のため、オーバーライドまで検証対象に
+# 含めると壊れる（`_resolve_repo_contained_path()` docstring に設計判断を
+# 明記）。
+
+
+def test_resolve_repo_contained_path_absolute_rejected(tmp_path: Path) -> None:
+    """(i) lexical 検証: 絶対パスは即座に拒否される。"""
+    with pytest.raises(m.Run9ValidationError, match="must be a repo-relative path"):
+        m._resolve_repo_contained_path(
+            str(tmp_path / "escaped.txt"), repo_root=tmp_path, field="x.y", context="test",
+        )
+
+
+def test_resolve_repo_contained_path_traversal_rejected(tmp_path: Path) -> None:
+    """(i) lexical 検証: `..` 成分を含む相対パスは即座に拒否される。"""
+    with pytest.raises(m.Run9ValidationError, match="must not contain '\\.\\.'"):
+        m._resolve_repo_contained_path(
+            "../escaped.txt", repo_root=tmp_path, field="x.y", context="test",
+        )
+
+
+def test_resolve_repo_contained_path_symlink_escape_rejected(tmp_path: Path) -> None:
+    """(ii) resolved 検証: lexical には repo 配下に見える相対パスでも、
+    symlink 経由で repo 外を指していれば resolve() 後の実体パスで拒否
+    される。"""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    outside_target = tmp_path / "outside.txt"
+    outside_target.write_text("outside\n", encoding="utf-8")
+    link = repo_root / "escape_link.txt"
+    link.symlink_to(outside_target)
+    with pytest.raises(m.Run9ValidationError, match="escapes the repo root"):
+        m._resolve_repo_contained_path(
+            "escape_link.txt", repo_root=repo_root, field="x.y", context="test",
+        )
+
+
+def test_resolve_repo_contained_path_legitimate_relative_resolves(tmp_path: Path) -> None:
+    """正常系: repo 配下に実在する正当な相対パスは resolve() された絶対
+    パスを返す（回帰固定——containment guard が正当な参照まで拒否しない
+    こと）。"""
+    repo_root = tmp_path / "repo"
+    (repo_root / "sub").mkdir(parents=True)
+    target = repo_root / "sub" / "file.txt"
+    target.write_text("ok\n", encoding="utf-8")
+    resolved = m._resolve_repo_contained_path(
+        "sub/file.txt", repo_root=repo_root, field="x.y", context="test",
+    )
+    assert resolved == target.resolve()
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_source_absolute_path_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """適用点1/3（reexport manifest）: adjudication_basis.source_file が
+    絶対パスだと containment guard で拒否される（digest 自体は本物の裁定
+    txt を指すため一致し得るが、絶対パスというだけで fail-closed 拒否）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["source_file"] = str(HARNESS2_ADJUDICATION_PATH)
+
+    tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be a repo-relative path"):
+        m.load_pinned_reexport_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_source_traversal_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """適用点1/3（reexport manifest）: `../` traversal を含む source_file
+    は containment guard で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["source_file"] = "../" * 6 + "etc/passwd"
+
+    tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must not contain '\\.\\.'"):
+        m.load_pinned_reexport_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_source_symlink_escape_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """適用点1/3（reexport manifest）: lexical には repo 配下に見える
+    相対 source_file でも、実体が symlink 経由で repo 外を指していれば
+    拒否される。実リポジトリへは一切書き込まない——`_REEXPORT_REPO_ROOT`
+    を隔離 tmp_path へ monkeypatch し、その配下にのみ symlink を作る。"""
+    fake_repo_root = tmp_path / "fake_repo"
+    rel = _reexport_manifest_data()["adjudication_basis"]["source_file"]
+    link_path = fake_repo_root / rel
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    outside_target = tmp_path / "outside_adjudication.txt"
+    outside_target.write_text("outside\n", encoding="utf-8")
+    link_path.symlink_to(outside_target)
+    monkeypatch.setattr(m, "_REEXPORT_REPO_ROOT", fake_repo_root)
+    with pytest.raises(m.Run9ValidationError, match="escapes the repo root"):
+        m.load_pinned_reexport_manifest(contract)
 
 
 # --- 新 status OBTAINED_DERIVED_NEW_BYTES / OBTAINED_VIA_REEXPORT 判別 shape ---
@@ -16851,6 +17043,63 @@ def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_
         m.load_pinned_execution_profile_manifest(contract, adjudication_basis_path=missing_path)
 
 
+# --- PR #327 レビュー第11巡指摘21（P2、採用）: 適用点2/3（execution profile
+# manifest, adjudication_basis） --------------------------------------------
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_absolute_path_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """絶対パスは containment guard で拒否される（digest 自体は本物の裁定
+    txt を指すため一致し得るが、絶対パスというだけで fail-closed 拒否）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["source_file"] = str(EXECPROFILE_ADJUDICATION_PATH)
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be a repo-relative path"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_traversal_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`../` traversal を含む source_file は containment guard で拒否
+    される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["source_file"] = "../" * 6 + "etc/passwd"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must not contain '\\.\\.'"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_symlink_escape_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lexical には repo 配下に見える相対 source_file でも、実体が symlink
+    経由で repo 外を指していれば拒否される。実リポジトリへは一切書き込ま
+    ない——`_EXECPROFILE_REPO_ROOT` を隔離 tmp_path へ monkeypatch し、その
+    配下にのみ symlink を作る。"""
+    fake_repo_root = tmp_path / "fake_repo"
+    rel = _execprofile_manifest_data()["adjudication_basis"]["source_file"]
+    link_path = fake_repo_root / rel
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    outside_target = tmp_path / "outside_adjudication.txt"
+    outside_target.write_text("outside\n", encoding="utf-8")
+    link_path.symlink_to(outside_target)
+    monkeypatch.setattr(m, "_EXECPROFILE_REPO_ROOT", fake_repo_root)
+    with pytest.raises(m.Run9ValidationError, match="escapes the repo root"):
+        m.load_pinned_execution_profile_manifest(contract)
+
+
 # --- load_pinned_execution_profile_manifest(): render code cross-check (7)
 # (PR #327 レビュー第3巡指摘8(a)対応、2026-08-26) -----------------------------
 
@@ -16888,6 +17137,71 @@ def test_execprofile_load_pinned_execution_profile_manifest_render_code_missing_
     missing_path = tmp_path / "does_not_exist_gate_synth.py"
     with pytest.raises(m.Run9ValidationError, match="does not exist"):
         m.load_pinned_execution_profile_manifest(contract, render_code_path=missing_path)
+
+
+# --- PR #327 レビュー第11巡指摘21（P2、採用）: 適用点3/3（execution profile
+# manifest, additional_measurements.render_code_commit.file） ---------------
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_absolute_path_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """絶対パスは containment guard で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        gate_synth_path = _RUN_DIR.parent.parent / "foundry" / "s1_gate" / "gate_synth.py"
+        data["additional_measurements"]["render_code_commit"]["file"] = str(gate_synth_path)
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be a repo-relative path"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_traversal_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`../` traversal を含む file は containment guard で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["render_code_commit"]["file"] = "../" * 6 + "etc/passwd"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must not contain '\\.\\.'"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_symlink_escape_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lexical には repo 配下に見える相対 file でも、実体が symlink 経由で
+    repo 外を指していれば拒否される。cross-check (6) adjudication_basis は
+    本 monkeypatch 環境下でも (7) より先に走るため、その相対パスには実物と
+    同一バイトのコピーを正しく配置しておく（(6) 自体の検証内容ではなく、
+    (7) の symlink 検証まで到達させるための前提整備）。"""
+    exec_data = _execprofile_manifest_data()
+    fake_repo_root = tmp_path / "fake_repo"
+
+    adjudication_rel = exec_data["adjudication_basis"]["source_file"]
+    adjudication_copy = fake_repo_root / adjudication_rel
+    adjudication_copy.parent.mkdir(parents=True, exist_ok=True)
+    adjudication_copy.write_bytes(EXECPROFILE_ADJUDICATION_PATH.read_bytes())
+
+    render_code_rel = exec_data["additional_measurements"]["render_code_commit"]["file"]
+    link_path = fake_repo_root / render_code_rel
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    outside_target = tmp_path / "outside_gate_synth.py"
+    outside_target.write_text("# outside\n", encoding="utf-8")
+    link_path.symlink_to(outside_target)
+
+    monkeypatch.setattr(m, "_EXECPROFILE_REPO_ROOT", fake_repo_root)
+    with pytest.raises(m.Run9ValidationError, match="escapes the repo root"):
+        m.load_pinned_execution_profile_manifest(contract)
 
 
 # --- verify_execution_profile_runtime(): run-gate live probe ---------------

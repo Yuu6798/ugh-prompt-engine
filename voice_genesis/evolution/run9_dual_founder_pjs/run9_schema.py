@@ -13099,6 +13099,54 @@ REEXPORT_MANIFEST_PATH = _THIS_DIR / "inputs" / "reexport_manifest.json"
 # 対応）。
 _REEXPORT_REPO_ROOT = _THIS_DIR.parent.parent.parent
 
+
+def _resolve_repo_contained_path(
+    relative: str, *, repo_root: Path, field: str, context: str,
+) -> Path:
+    """manifest 収載の repo 相対パス文字列を `repo_root` 配下限定で解決する
+    fail-closed ヘルパー（PR #327 レビュー第11巡指摘21対応、P2、採用）。
+
+    旧実装は `repo_root / relative` を無条件で join しており、digest（sha256
+    cross-check）さえ一致すれば絶対パス・`../` traversal・symlink 脱出でも
+    checkout 外のファイルが正典 provenance として通ってしまっていた。ここで
+    二重の fail-closed 検証を行う: (i) lexical 検証——`relative` 自体が絶対
+    パスであること、または `..` 成分を含むことを解決前に拒否する。(ii)
+    resolved 検証——`Path.resolve()` 後の実体パスが `repo_root` 配下にある
+    ことを `is_relative_to()` で強制する（symlink 脱出は resolve() が実体
+    パスへ展開するためここで捕捉される）。
+
+    `load_pinned_reexport_manifest()`/`load_pinned_execution_profile_
+    manifest()` の adjudication_basis.source_file・
+    additional_measurements.render_code_commit.file という同型の解決点
+    すべてに適用する（ファミリー掃討）。テスト用パスオーバーライド引数
+    （`adjudication_basis_path`/`render_code_path`）は呼び出し側が明示的に
+    指定した絶対パスであり、本関数の検証対象には含めない——オーバーライドは
+    manifest 収載データを経由しないため、この containment guard が守る脅威
+    モデル（manifest 内の攻撃者/事故由来の相対パス文字列）の対象外である
+    （既存テストが `tmp_path` 配下の絶対パスをオーバーライドへ渡す流儀を
+    踏襲し、壊さない）。
+    """
+    if Path(relative).is_absolute():
+        raise Run9ValidationError(
+            f"{context}: {field} must be a repo-relative path, got an absolute path {relative!r} "
+            "— rejected fail-closed (repo-containment guard)"
+        )
+    if ".." in Path(relative).parts:
+        raise Run9ValidationError(
+            f"{context}: {field} must not contain '..' path traversal components, got "
+            f"{relative!r} — rejected fail-closed (repo-containment guard)"
+        )
+    resolved_root = repo_root.resolve()
+    candidate = (repo_root / relative).resolve()
+    if not candidate.is_relative_to(resolved_root):
+        raise Run9ValidationError(
+            f"{context}: {field} ({relative!r}) resolves to {candidate} which escapes the repo "
+            f"root {resolved_root} (e.g. via a symlink) — rejected fail-closed "
+            "(repo-containment guard)"
+        )
+    return candidate
+
+
 REEXPORT_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "schema", "generated_at_utc", "adjudication_basis", "input_checkpoint", "exporter",
     "experiment_side_inputs", "export_command", "export_command_cwd",
@@ -13118,12 +13166,30 @@ _REEXPORT_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 # 改変しない——`export_command_variables` はその上に定義を足すだけ）。
 _REEXPORT_OUT_DIR_PLACEHOLDER = "<session workdir（repo外）>"
 _REEXPORT_DIFFSINGER_REPO_PLACEHOLDER = "<diffsinger_repo clone（session workdir、repo外）>"
+# PR #327 レビュー第11巡指摘20（P2、採用）: lock 生成 step（本 manifest
+# 自身を json.load して requirements_replay.txt を導出する python ワン
+# ライナー）が manifest パスを相対 'inputs/reexport_manifest.json' のまま
+# 参照しており、repo root や session workdir から開始した clean replay は
+# cwd 未確立のため FileNotFoundError で失敗していた。本 manifest 自身への
+# checkout-stable な明示参照に使う変数を追加登録する。
+_REEXPORT_REPO_CHECKOUT_PLACEHOLDER = "<repo checkout>"
 _REEXPORT_COMMAND_VARIABLES_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "variables", "path_independence_note",
 })
 _REEXPORT_COMMAND_VARIABLE_NAMES: FrozenSet[str] = frozenset({
     _REEXPORT_OUT_DIR_PLACEHOLDER, _REEXPORT_DIFFSINGER_REPO_PLACEHOLDER,
+    _REEXPORT_REPO_CHECKOUT_PLACEHOLDER,
 })
+# 同指摘20対応: manifest 自身（reexport_manifest.json）への参照、および
+# 生成される requirements_replay.txt への参照は、backtick 逐語コマンド内
+# ではこの rooted prefix を必ず伴うことを machine 強制する（相対参照は
+# categorical に拒否——`<out_dir>` 系の未定義トークン検証と同型の意匠）。
+_REEXPORT_MANIFEST_FILENAME = "reexport_manifest.json"
+_REEXPORT_ROOTED_MANIFEST_DIR = (
+    f"{_REEXPORT_REPO_CHECKOUT_PLACEHOLDER}/voice_genesis/evolution/run9_dual_founder_pjs/inputs/"
+)
+_REEXPORT_REQUIREMENTS_REPLAY_FILENAME = "requirements_replay.txt"
+_REEXPORT_ROOTED_REQUIREMENTS_REPLAY_DIR = f"{_REEXPORT_OUT_DIR_PLACEHOLDER}/"
 _REEXPORT_INPUT_CHECKPOINT_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "path", "sha256", "expected_sha256_per_run9_contract", "sha256_matches_pin", "bytes",
 })
@@ -13865,6 +13931,38 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
                         "a fail-closed categorical rejection of the undefined-token family, not "
                         "a one-off fix for a specific token"
                     )
+    # PR #327 レビュー第11巡指摘20（P2、採用）: 未定義トークン検証（上記）
+    # とは別の穴——manifest 自身（`reexport_manifest.json`）や生成物
+    # （`requirements_replay.txt`）を指す**相対**参照は `<...>` 形式では
+    # ないため上の検証をすり抜ける。ここでは backtick 逐語コマンド内に
+    # 出現するこの2つのファイル名それぞれについて、直前に checkout-stable
+    # な rooted prefix（`<repo checkout>/voice_genesis/evolution/
+    # run9_dual_founder_pjs/inputs/` / `<session workdir（repo外）>/`）を
+    # 伴っていることを全数走査で fail-closed 強制する（cwd 未確立のまま
+    # 相対パスで開くと repo root/workdir から開始した clean replay が
+    # FileNotFoundError で落ちる事故を防ぐ——`<out_dir>` 系の未定義トークン
+    # 検証と同型の「ファミリー全体をカテゴリカルに閉じる」意匠）。
+    for filename, rooted_prefix in (
+        (_REEXPORT_MANIFEST_FILENAME, _REEXPORT_ROOTED_MANIFEST_DIR),
+        (_REEXPORT_REQUIREMENTS_REPLAY_FILENAME, _REEXPORT_ROOTED_REQUIREMENTS_REPLAY_DIR),
+    ):
+        for i, step in enumerate(replay_steps):
+            for command in _REEXPORT_BACKTICK_COMMAND_PATTERN.findall(step):
+                search_from = 0
+                while True:
+                    idx = command.find(filename, search_from)
+                    if idx == -1:
+                        break
+                    prefix_start = idx - len(rooted_prefix)
+                    if prefix_start < 0 or command[prefix_start:idx] != rooted_prefix:
+                        raise Run9ValidationError(
+                            f"reexport manifest.replay_environment_recipe.steps[{i}] contains a "
+                            f"backtick-delimited command referencing {filename!r} without the "
+                            f"checkout-stable rooted prefix {rooted_prefix!r} — a bare relative "
+                            "reference fails with FileNotFoundError when replay is started from "
+                            f"the repo root or an unrelated workdir — got command {command!r}"
+                        )
+                    search_from = idx + len(filename)
     if not any("--no-deps" in step for step in replay_steps):
         raise Run9ValidationError(
             "reexport manifest.replay_environment_recipe.steps must contain a pip install step "
@@ -14401,11 +14499,19 @@ def load_pinned_reexport_manifest(
     # sha256 が adjudication_basis.sha256 と一致すること（PR #327 レビュー
     # 指摘3対応）。旧実装は 64hex 形式のみ検証しており、裁定 txt が後で
     # 編集されても旧 provenance を fail-open で受理し得た——実 read + 実
-    # sha256 再計算による fail-closed 照合を追加する。
+    # sha256 再計算による fail-closed 照合を追加する。第11巡指摘21対応:
+    # `source_file` の解決自体も repo-containment guard
+    # （`_resolve_repo_contained_path()`）を経由させ、絶対パス・`../`
+    # traversal・symlink 脱出を digest 一致とは無関係に拒否する。
     effective_adjudication_path = (
         adjudication_basis_path
         if adjudication_basis_path is not None
-        else _REEXPORT_REPO_ROOT / data["adjudication_basis"]["source_file"]
+        else _resolve_repo_contained_path(
+            data["adjudication_basis"]["source_file"],
+            repo_root=_REEXPORT_REPO_ROOT,
+            field="adjudication_basis.source_file",
+            context="load_pinned_reexport_manifest()",
+        )
     )
     if not effective_adjudication_path.is_file():
         raise Run9ValidationError(
@@ -15259,11 +15365,19 @@ def load_pinned_execution_profile_manifest(
 
     # (6) cross-check: adjudication_basis.source_file の実バイト sha256 が
     # adjudication_basis.sha256 と一致すること（裁定文書の改変を fail-closed
-    # で拒否する）。
+    # で拒否する）。第11巡指摘21対応: `source_file` の解決自体も
+    # repo-containment guard（`_resolve_repo_contained_path()`）を経由さ
+    # せ、絶対パス・`../` traversal・symlink 脱出を digest 一致とは無関係
+    # に拒否する。
     effective_adjudication_path = (
         adjudication_basis_path
         if adjudication_basis_path is not None
-        else _EXECPROFILE_REPO_ROOT / data["adjudication_basis"]["source_file"]
+        else _resolve_repo_contained_path(
+            data["adjudication_basis"]["source_file"],
+            repo_root=_EXECPROFILE_REPO_ROOT,
+            field="adjudication_basis.source_file",
+            context="load_pinned_execution_profile_manifest()",
+        )
     )
     if not effective_adjudication_path.is_file():
         raise Run9ValidationError(
@@ -15294,10 +15408,17 @@ def load_pinned_execution_profile_manifest(
     # runtime()` が担う。
     render_commit_measurement = data["additional_measurements"]["render_code_commit"]
     if render_commit_measurement["status"] == "MEASURED":
+        # 第11巡指摘21対応: `file` の解決自体も repo-containment guard を
+        # 経由させる（adjudication_basis.source_file と同型の穴）。
         effective_render_code_path = (
             render_code_path
             if render_code_path is not None
-            else _EXECPROFILE_REPO_ROOT / render_commit_measurement["file"]
+            else _resolve_repo_contained_path(
+                render_commit_measurement["file"],
+                repo_root=_EXECPROFILE_REPO_ROOT,
+                field="additional_measurements.render_code_commit.file",
+                context="load_pinned_execution_profile_manifest()",
+            )
         )
         if not effective_render_code_path.is_file():
             raise Run9ValidationError(
