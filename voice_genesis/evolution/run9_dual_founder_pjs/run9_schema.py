@@ -10622,6 +10622,33 @@ def load_pinned_dataset_split_manifest(
         ない。あわせて `row_counts` 合計と再構成 row_order の総件数の
         一致も独立チェックする（per-split 一致が通れば数学的に自明だが、
         fail-closed の多層防御として残す）
+    (9) **per-split digest 実体照合**（PR #325 第3巡 Fix 4 で追加 —
+        Fix 1/3 と同族の最終掃討）: practice manifest の
+        `training_split_sha256`/`validation_split_sha256`/
+        `sealed_holdout_sha256`（`validate_practice_split_manifest()` は
+        64hex 形状しか検査しない）を、対応する `row_ids.{training,
+        validation,sealed_holdout}` から `_compute_canonical_pin_
+        sha256()`（builder が呼ぶのと同一の共有プリミティブ、Fix 1 と
+        同じ import 方針・drift 不存在の論拠）で個別に再計算し、宣言値と
+        一致しない場合 raise する。
+
+        **同族ファミリーの終端宣言**: practice manifest が宣言する hash
+        系フィールドは `row_order_sha256` / `training_split_sha256` /
+        `validation_split_sha256` / `sealed_holdout_sha256` /
+        `pjs_source_archive_sha256` / `expanded_corpus_identity_sha256`
+        の6種。うち前4種は本関数が repo 内データ（`row_ids`）から再計算
+        照合済み（Fix 1/4）。残る2種（`pjs_source_archive_sha256` =
+        PJS コーパス配布 zip 全体の sha256、`expanded_corpus_identity_
+        sha256` = 展開後コーパスの識別 hash）は対象実体が PJS 公開配布物
+        （zip・展開コーパス、数百MB規模）であり repo 内に存在しない
+        （README.md「再現レシピ」節が記す取得手順でのみ入手可能）ため、
+        本関数（および repo 内のいかなる機構）からは再計算不能——これは
+        本関数の脅威モデルの範囲外であり、この2欄の正しさの検証は
+        「取得時に `sha256sum -c` で確認する」という取得手順側の職務
+        （README.md 再現レシピが担保）である。**repo 内で再計算可能な
+        宣言 hash は本関数がすべて再計算照合済みであり、本ファミリーの
+        指摘はここで終端する**——同型の新しい未照合転記が今後見つかった
+        場合のみ再開する。
 
     戻り値は検証済み dataset split manifest dict。
     """
@@ -10782,6 +10809,40 @@ def load_pinned_dataset_split_manifest(
     # 関数オブジェクトであるため「別実装による drift」の余地が構造的に
     # 存在しない（コピー実装ではなく同一関数の共有呼び出し）。
     validate_practice_split_manifest(practice_data)
+
+    # PR #325 第3巡 Codex bot レビュー指摘 Fix 4（P2, 採用 — Fix 1/3 と
+    # 同族: practice manifest 内の per-split digest 3つが 64hex 形状検査
+    # のみで再計算されていない新経路）: `validate_practice_split_
+    # manifest()` は `training_split_sha256`/`validation_split_sha256`/
+    # `sealed_holdout_sha256` を `_require_manifest_hash_fields()` 経由で
+    # 64hex 文字列であることしか検査しない（`_PRACTICE_MANIFEST_SHA256_
+    # KEYS` 参照）——row_order_sha256 と同じ「宣言値が内部的に stale なま
+    # ま repin される」経路がこの3欄にも独立に存在する。builder
+    # （`practice_split_builder.py:256-258`、read-only 確認済み）は
+    # `training_split_sha256 = _canonical_song_list_sha256(split
+    # ["training"])`（validation/sealed_holdout も同型、対象は連結列では
+    # なく各 split の row_ids リストそのもの）と定義しており、Fix 1 と
+    # 同一の共有プリミティブ `_compute_canonical_pin_sha256()` を各 split
+    # 単独へ適用するだけで済む（Fix 1 の docstring が既に述べた import
+    # 方針・drift 不存在の論拠をそのまま踏襲——別実装ではなく同一関数の
+    # 追加呼び出し）。
+    _PRACTICE_SPLIT_DIGEST_FIELD_BY_NAME: Dict[str, str] = {
+        "training": "training_split_sha256",
+        "validation": "validation_split_sha256",
+        "sealed_holdout": "sealed_holdout_sha256",
+    }
+    for split_name, digest_field in _PRACTICE_SPLIT_DIGEST_FIELD_BY_NAME.items():
+        declared_digest = practice_data.get(digest_field)
+        recomputed_digest = _compute_canonical_pin_sha256(
+            list(practice_data["row_ids"][split_name])
+        )
+        if recomputed_digest != declared_digest:
+            raise Run9ValidationError(
+                f"load_pinned_dataset_split_manifest(): practice manifest の {digest_field} 宣言値 "
+                f"({declared_digest!r}) が row_ids.{split_name} から再計算した digest "
+                f"({recomputed_digest!r}) と一致しない — 宣言値が内部的に stale（practice split の "
+                "再生成後に repin されずに残った可能性）である証拠として fail-closed で拒否する"
+            )
 
     # PR #325 第2巡 Codex bot レビュー指摘 Fix 3（P2, 採用 — Fix 1 と
     # 同族: 転記値が実体と未照合のまま四者一致の外に残っていた新経路）:

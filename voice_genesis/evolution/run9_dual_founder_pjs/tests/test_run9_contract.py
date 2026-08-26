@@ -12037,11 +12037,17 @@ def test_pin2_load_pinned_dataset_split_manifest_rejects_stale_declared_row_orde
     更新する——「宣言値同士は全員一致しているが、宣言値自体が実体と食い
     違っている」という、Fix 1 以前の三者一致だけでは検出できなかった
     経路を再現する）。row-order 再計算チェックがこの食い違いを
-    fail-closed で検出することを確認する。"""
+    fail-closed で検出することを確認する。
+
+    PR #325 第3巡 Fix 4 追随: `training_split_sha256`（per-split digest）
+    は入れ替え後の順序へ正しく追随させる（stale にしない）——Fix 4 の
+    per-split チェックが先に発火して Fix 1 の検出力を覆い隠さないよう
+    分離する。"""
     practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
     tampered_practice = copy.deepcopy(practice_data)
     training = tampered_practice["row_ids"]["training"]
     training[0], training[1] = training[1], training[0]
+    tampered_practice["training_split_sha256"] = m._compute_canonical_pin_sha256(list(training))
     # row_order_sha256 declared value is deliberately left unchanged (stale) —
     # this is the exact scenario Fix 1 targets.
     tampered_practice_path = tmp_path / "practice_audio_split_manifest.json"
@@ -12105,10 +12111,18 @@ def _pin2r3_build_tampered_fixture_with_dropped_training_song(
     Fix 3 が検出できるかを分離検証するため）。`update_row_counts=True`
     のときは `song_splits.row_counts.training` も 69 へ追随させる正例
     （row_counts が実体に追随していれば受理される）、`False` のときは
-    70/15/15 のまま stale に残す負例（Fix 3 が拒否すべきケース）。"""
+    70/15/15 のまま stale に残す負例（Fix 3 が拒否すべきケース）。
+
+    PR #325 第3巡 Fix 4 追随: `training_split_sha256`（per-split digest）
+    も新しい `row_ids.training` から再計算して更新する——これを更新しない
+    と Fix 4 のチェックがこの fixture 内で先に発火し、Fix 3 の検出力を
+    分離できなくなる。"""
     practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
     tampered_practice = copy.deepcopy(practice_data)
     tampered_practice["row_ids"]["training"].pop(0)
+    tampered_practice["training_split_sha256"] = m._compute_canonical_pin_sha256(
+        list(tampered_practice["row_ids"]["training"])
+    )
     new_row_order = (
         tampered_practice["row_ids"]["training"]
         + tampered_practice["row_ids"]["validation"]
@@ -12219,11 +12233,22 @@ def test_pin2r3_fix3_rejects_song_moved_between_splits_with_stale_counts(
     sealed_holdout へ移動（除去ではなく再配分）しても総件数 100 は不変の
     ため Fix 3 の合計チェック単体では検出できないが、per-split
     （training=69/sealed_holdout=16 の実体 vs 70/15 の stale 転記）の
-    不一致は検出されることを確認する。"""
+    不一致は検出されることを確認する。
+
+    PR #325 第3巡 Fix 4 追随: `training_split_sha256`/`sealed_holdout_
+    sha256`（per-split digest、移動元・移動先の両方）を新しい row_ids
+    へ正しく追随させる——Fix 4 が先に発火して Fix 3 の検出力を覆い隠さ
+    ないよう分離する。"""
     practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
     tampered_practice = copy.deepcopy(practice_data)
     moved_song = tampered_practice["row_ids"]["training"].pop(0)
     tampered_practice["row_ids"]["sealed_holdout"].append(moved_song)
+    tampered_practice["training_split_sha256"] = m._compute_canonical_pin_sha256(
+        list(tampered_practice["row_ids"]["training"])
+    )
+    tampered_practice["sealed_holdout_sha256"] = m._compute_canonical_pin_sha256(
+        list(tampered_practice["row_ids"]["sealed_holdout"])
+    )
     new_row_order = (
         tampered_practice["row_ids"]["training"]
         + tampered_practice["row_ids"]["validation"]
@@ -12316,6 +12341,127 @@ def test_pin2_load_pinned_dataset_split_manifest_positive_matches_actual_data_af
         for name in ("training", "validation", "sealed_holdout")
     }
     assert loaded["song_splits"]["row_counts"] == actual_counts
+
+
+# ---------------------------------------------------------------------------
+# PR #325 第3巡 Codex bot レビュー Fix 4（P2, 採用 — Fix 1/3 と同族の
+# 最終掃討）: practice manifest の per-split digest 3つ
+# （training_split_sha256/validation_split_sha256/sealed_holdout_sha256）
+# の再計算照合。
+# ---------------------------------------------------------------------------
+
+
+def test_pin2r4_fix4_positive_recomputes_all_three_split_digests() -> None:
+    """正例回帰: 実 practice manifest の3 digest がいずれも対応する
+    row_ids から再計算した値と一致することを直接確認する（builder が
+    実際に計算するのと同じ規則 —
+    `_canonical_song_list_sha256(split[name]) ==
+    m._compute_canonical_pin_sha256(list(split[name]))` — で再現できる
+    ことの確認）。"""
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    field_by_name = {
+        "training": "training_split_sha256",
+        "validation": "validation_split_sha256",
+        "sealed_holdout": "sealed_holdout_sha256",
+    }
+    for split_name, digest_field in field_by_name.items():
+        recomputed = m._compute_canonical_pin_sha256(list(practice_data["row_ids"][split_name]))
+        assert recomputed == practice_data[digest_field]
+
+
+def test_pin2r4_fix4_positive_real_contract_still_loads() -> None:
+    m.load_pinned_dataset_split_manifest(m.load_run9_contract_from_yaml_path(m.RUN9_CONTRACT_YAML_PATH))  # noqa: E501 - 例外を投げないことの確認
+
+
+@pytest.mark.parametrize(
+    "split_name,digest_field",
+    [
+        ("training", "training_split_sha256"),
+        ("validation", "validation_split_sha256"),
+        ("sealed_holdout", "sealed_holdout_sha256"),
+    ],
+)
+def test_pin2r4_fix4_rejects_stale_per_split_digest(
+    contract: m.Run9RunContract, tmp_path: Path, split_name: str, digest_field: str,
+) -> None:
+    """必須負例（指摘が名指しした具体的攻撃シナリオ、3 digest それぞれに
+    ついて確認）: 該当 split 内で2行を入れ替え、その split の宣言 digest
+    （`{digest_field}`）だけは stale に据え置いたまま、`row_order_
+    sha256`（宣言値・contract pin・dataset manifest 転記値の四者）と
+    `practice_audio_split_manifest_sha`/`dataset_manifest_sha` はすべて
+    改竄後バイトへ揃えて更新する——Fix 1（row_order 四者一致）・Fix 3
+    （row_counts、件数は不変のため対象外）のいずれも通過するが、Fix 4 の
+    per-split digest 再計算だけがこの食い違いを検出できることを確認
+    する。"""
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    tampered_practice = copy.deepcopy(practice_data)
+    target_list = tampered_practice["row_ids"][split_name]
+    target_list[0], target_list[1] = target_list[1], target_list[0]
+    # row_order_sha256(連結) の宣言値は新しい順序へ追随させる（Fix 1 を
+    # 通過させ、Fix 4 単体の検出力を分離するため）。対象 split の
+    # digest_field は意図的に据え置く（stale、Fix 4 の負例本体）。
+    new_row_order = (
+        tampered_practice["row_ids"]["training"]
+        + tampered_practice["row_ids"]["validation"]
+        + tampered_practice["row_ids"]["sealed_holdout"]
+    )
+    new_row_order_sha = m._compute_canonical_pin_sha256(new_row_order)
+    tampered_practice["row_order_sha256"] = new_row_order_sha
+    tampered_practice_path = tmp_path / "practice_audio_split_manifest.json"
+    tampered_practice_path.write_bytes(
+        (json.dumps(tampered_practice, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_practice_sha = m.compute_file_sha256(tampered_practice_path)
+
+    tampered_dataset = copy.deepcopy(_dataset_split_manifest_data())
+    tampered_dataset["song_splits"]["practice_audio_split_manifest_sha"] = new_practice_sha
+    tampered_dataset["song_splits"]["row_order_sha256"] = new_row_order_sha
+    # row_counts unaffected by a within-split swap (lengths unchanged) —
+    # left as-is deliberately so Fix 3 does not mask the Fix 4 finding.
+    tampered_dataset_path = tmp_path / "dataset_split_manifest.json"
+    tampered_dataset_path.write_bytes(
+        (json.dumps(tampered_dataset, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_dataset_sha = m.compute_file_sha256(tampered_dataset_path)
+
+    tampered_contract_raw = copy.deepcopy(contract.raw)
+    tampered_contract_raw["practice_audio_split_manifest_sha"]["value"] = new_practice_sha
+    tampered_contract_raw["dataset_manifest_sha"]["value"] = new_dataset_sha
+    tampered_contract_raw["dataset_row_order_sha"]["value"] = new_row_order_sha
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(
+        yaml.safe_dump(tampered_contract_raw, allow_unicode=True), encoding="utf-8"
+    )
+    tampered_contract = m.load_run9_contract(tampered_contract_raw)
+    with pytest.raises(m.Run9ValidationError, match=f"{digest_field} 宣言値"):
+        m.load_pinned_dataset_split_manifest(
+            tampered_contract,
+            manifest_path=tampered_dataset_path,
+            practice_manifest_path=tampered_practice_path,
+            contract_path=tampered_yaml_path,
+        )
+
+
+def test_pin2r4_fix4_hash_family_closure_documented() -> None:
+    """終端宣言の直接確認: `load_pinned_dataset_split_manifest()` の
+    docstring が practice manifest の hash 系6フィールド全数を列挙し、
+    repo 外実体（`pjs_source_archive_sha256`/`expanded_corpus_identity_
+    sha256`）が再計算不能である境界を明記していること。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    doc_start = source.index("def load_pinned_dataset_split_manifest(")
+    doc_end = source.index('    effective_contract_path = (\n', doc_start)
+    docstring = source[doc_start:doc_end]
+    assert "同族ファミリーの終端宣言" in docstring
+    for field in (
+        "row_order_sha256", "training_split_sha256", "validation_split_sha256",
+        "sealed_holdout_sha256", "pjs_source_archive_sha256", "expanded_corpus_identity_sha256",
+    ):
+        assert field in docstring
+    assert "sha256sum -c" in docstring
 
 
 # ---------------------------------------------------------------------------
