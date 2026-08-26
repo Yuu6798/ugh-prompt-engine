@@ -11360,7 +11360,21 @@ _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 # 実測した digest）を必須とし、`NOT_OBTAINED_TARBALL_MISS` の場合は
 # 逆に禁止する（あれば「未取得なのに実測値がある」という矛盾として
 # unknown key で拒否される）——status 判別型の item shape。
-_ACOUSTIC_COMPANION_ITEM_OBTAINED_ONLY_KEYS: FrozenSet[str] = frozenset({"measured_sha256"})
+# Codex bot レビュー PR #326 第3巡指摘 Fix 7（P2, 採用, 将来汚染防止/
+# 実行不能遷移の同系整合）: 第2巡 Fix 4 は tar member 検査を companion
+# status に条件付けたが、OBTAINED 分岐は常に「この tarball 内に member が
+# 実在する」ことを要求しており、`HARNESS1_PROVISION_RECORD.md` §7 が
+# 記録する2つの解除経路（別 Drive フォルダの探索 / 再export の User
+# 裁定）——いずれも `r6_gate_materials_2026-08-20.tar.gz` 由来ではない
+# 正当な取得——を構造的に拒否してしまっていた。item ごとに
+# `acquisition_source`（closed 語彙）を必須化し、tar membership + sha
+# 整合の要求は `acquisition_source == "THIS_TARBALL"` のときのみに限定
+# する。
+_ACQUISITION_SOURCE_VOCAB: Tuple[str, ...] = ("THIS_TARBALL", "DRIVE_DIRECT", "RE_EXPORT")
+
+_ACOUSTIC_COMPANION_ITEM_OBTAINED_ONLY_KEYS: FrozenSet[str] = frozenset({
+    "measured_sha256", "acquisition_source",
+})
 _ACOUSTIC_COMPANION_ITEM_OBTAINED_REQUIRED_KEYS: FrozenSet[str] = (
     _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS | _ACOUSTIC_COMPANION_ITEM_OBTAINED_ONLY_KEYS
 )
@@ -11465,6 +11479,13 @@ def _validate_acoustic_export_companions(section: Any) -> None:
                     f"({measured_sha!r}) != expected_sha256 ({expected_sha!r}) — a mismatched "
                     "pair may never claim OBTAINED_VERIFIED_MATCH (mirrors render_asset_ledger's "
                     "VERIFIED_MATCH enforcement)"
+                )
+            acquisition_source = item["acquisition_source"]
+            if acquisition_source not in _ACQUISITION_SOURCE_VOCAB:
+                raise Run9ValidationError(
+                    f"dependency pins manifest.acoustic_export_companions.expected_items[{i}]."
+                    f"acquisition_source must be one of {_ACQUISITION_SOURCE_VOCAB!r}, got "
+                    f"{acquisition_source!r}"
                 )
     # Codex bot レビュー PR #326 第2巡指摘 Fix 6（P2, 採用）: set 等価判定
     # だけでは重複 logical_name を検出できない（例: 4種の正しい名前 + 1件の
@@ -11594,7 +11615,16 @@ def _validate_tar_gz_full_member_ledger(
                 "be updated to reflect this before PINNED (stale-miss inconsistency)"
             )
     elif companion_status == "OBTAINED_VERIFIED_MATCH":
+        # Codex bot レビュー PR #326 第3巡指摘 Fix 7（P2, 採用）: tar
+        # membership + sha 整合の要求は、その item が実際に「この
+        # tarball」から取得されたと申告している（acquisition_source ==
+        # THIS_TARBALL）ときのみ課す。DRIVE_DIRECT/RE_EXPORT 経由の正当な
+        # 取得は、このファイルの tar_gz_full_member_ledger に一切現れ
+        # なくて構わない——Fix 1 の measured_sha256 == expected_sha256
+        # 強制（`_validate_acoustic_export_companions()`）だけで十分。
         for item in companion_items:
+            if item.get("acquisition_source") != "THIS_TARBALL":
+                continue
             logical_name = item["logical_name"]
             basename = item["file"].rsplit("/", 1)[-1]
             shas_at_basename = found_basename_shas.get(basename)
@@ -11602,8 +11632,9 @@ def _validate_tar_gz_full_member_ledger(
                 raise Run9ValidationError(
                     "dependency pins manifest.tar_gz_full_member_ledger: "
                     f"acoustic_export_companions claims {logical_name!r} is "
-                    f"OBTAINED_VERIFIED_MATCH but no tar member with basename {basename!r} "
-                    "was found in tar_gz_full_member_ledger — obtained-status inconsistency"
+                    f"OBTAINED_VERIFIED_MATCH via acquisition_source=THIS_TARBALL but no tar "
+                    f"member with basename {basename!r} was found in "
+                    "tar_gz_full_member_ledger — obtained-status inconsistency"
                 )
             if item["expected_sha256"] not in shas_at_basename:
                 raise Run9ValidationError(
@@ -11756,10 +11787,23 @@ _SPEAKER_EMBED_CANDIDATE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 _SPEAKER_EMBED_D3SYNTH_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "note", "candidate_sha256", "source", "status",
 })
+# Codex bot レビュー PR #326 第3巡指摘 Fix 9（P2, 採用）: 旧実装は
+# `status.startswith("UNPINNED_CANDIDATE")` という接頭辞判定で、
+# `UNPINNED_CANDIDATE_PINNED_VERIFIED` のような typo・矛盾混成値
+# （"UNPINNED_CANDIDATE" で始まりながら "PINNED"/"VERIFIED" を含意する
+# 語を継ぎ足した値）を通過させてしまっていた——本節は閉じた status
+# 語彙として説明されており、`_SPEAKER_EMBED_CANDIDATE_STATUS_VOCAB` が
+# 既に意図する値を1つだけ定義していたにもかかわらず、実装はそれを
+# 使っていなかった。entry ごとの厳密な許容集合との完全一致へ変更する
+# （pjs/user は "UNPINNED_CANDIDATE" のみ、d3synth は
+# "UNPINNED_CANDIDATE_NOT_A_RUN9_FOUNDER" のみ——2つの語彙を混同しない）。
 _SPEAKER_EMBED_CANDIDATE_STATUS_VOCAB: Tuple[str, ...] = ("UNPINNED_CANDIDATE",)
+_SPEAKER_EMBED_D3SYNTH_STATUS_VOCAB: Tuple[str, ...] = ("UNPINNED_CANDIDATE_NOT_A_RUN9_FOUNDER",)
 
 
-def _validate_speaker_embed_candidate(entry: Any, *, field: str, required_keys: FrozenSet[str]) -> None:
+def _validate_speaker_embed_candidate(
+    entry: Any, *, field: str, required_keys: FrozenSet[str], allowed_status: Tuple[str, ...],
+) -> None:
     if not isinstance(entry, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(entry).__name__}")
     unknown = set(entry.keys()) - required_keys
@@ -11773,17 +11817,12 @@ def _validate_speaker_embed_candidate(entry: Any, *, field: str, required_keys: 
         raise Run9ValidationError(f"{field}.candidate_sha256 must be a 64hex sha256, got {sha!r}")
     _require_non_empty_str(entry["source"], field=f"{field}.source")
     status = entry["status"]
-    # fail-closed: この節の status は「UNPINNED_CANDIDATE...」語彙のみを
-    # 許容する（閉じた語彙自体が「これは pin ではない」という位置づけを
-    # machine-check する——`_SPEAKER_EMBED_CANDIDATE_STATUS_VOCAB`/
-    # `_SPEAKER_EMBED_D3SYNTH_STATUS_VOCAB` は "UNPINNED_CANDIDATE" で
-    # 始まる値のみを収録し、単純な "PINNED" 完全一致はどの語彙にも属さ
-    # ないため自動的に拒否される — 部分文字列一致は使わない、
-    # "UNPINNED_CANDIDATE" 自体が "PINNED" を部分文字列に含むため）。
-    if not isinstance(status, str) or not status.startswith("UNPINNED_CANDIDATE"):
+    if status not in allowed_status:
         raise Run9ValidationError(
-            f"{field}.status ({status!r}) must start with 'UNPINNED_CANDIDATE' — this section is "
-            "unpinned-candidate-only by design (User adjudication pending)"
+            f"{field}.status must be exactly one of {allowed_status!r}, got {status!r} — this "
+            "section is a closed status vocabulary (unpinned-candidate-only by design, User "
+            "adjudication pending); typo'd or contradictory values (e.g. a value that merely "
+            "starts with 'UNPINNED_CANDIDATE') are rejected, not pattern-matched"
         )
 
 
@@ -11814,11 +11853,13 @@ def _validate_speaker_embeddings_unpinned_candidates(section: Any) -> None:
             section[key],
             field=f"speaker_embeddings_unpinned_candidates.{key}",
             required_keys=_SPEAKER_EMBED_CANDIDATE_REQUIRED_KEYS,
+            allowed_status=_SPEAKER_EMBED_CANDIDATE_STATUS_VOCAB,
         )
     _validate_speaker_embed_candidate(
         section["d3synth_reference_only"],
         field="speaker_embeddings_unpinned_candidates.d3synth_reference_only",
         required_keys=_SPEAKER_EMBED_D3SYNTH_REQUIRED_KEYS,
+        allowed_status=_SPEAKER_EMBED_D3SYNTH_STATUS_VOCAB,
     )
     if section["pjs"]["candidate_sha256"] == section["user"]["candidate_sha256"]:
         raise Run9ValidationError(
@@ -11848,7 +11889,7 @@ _SMOKE_RENDER_COMPLETED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 })
 
 
-def _validate_smoke_render_section(section: Any) -> None:
+def _validate_smoke_render_section(section: Any, *, companions_status: str) -> None:
     field = "smoke_render"
     if not isinstance(section, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(section).__name__}")
@@ -11892,6 +11933,21 @@ def _validate_smoke_render_section(section: Any) -> None:
             section["measured_sec_per_render"], field=f"{field}.measured_sec_per_render"
         )
         _require_non_empty_str(section["render_condition"], field=f"{field}.render_condition")
+        # Codex bot レビュー PR #326 第3巡指摘 Fix 8（P2, 採用）: smoke
+        # render は acoustic_export_companions（acoustic.onnx 等4点）を
+        # 入力として要求する（gate_synth.py --acoustic-dir 経路）。
+        # companions が NOT_OBTAINED_TARBALL_MISS のまま smoke_render だけ
+        # COMPLETED を名乗るのは「存在しないと同時に主張している入力で
+        # render した」という自己矛盾——Fix 5（budget↔smoke）と同型の
+        # 結合強制。
+        if companions_status != "OBTAINED_VERIFIED_MATCH":
+            raise Run9ValidationError(
+                f"{field}.status is COMPLETED but acoustic_export_companions.status is not "
+                f"OBTAINED_VERIFIED_MATCH (got {companions_status!r}) — a completed smoke render "
+                "consumes acoustic.onnx/dsconfig.yaml/acoustic_phonemes_json/speaker_embed via "
+                "gate_synth.py --acoustic-dir; it cannot claim completion using inputs the "
+                "manifest simultaneously says are unobtained (self-contradictory pin)"
+            )
 
 
 _BUDGET_ESTIMATE_BLOCKED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
@@ -12090,7 +12146,9 @@ def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
     _validate_python_dependency_pins(data["python_dependency_pins"])
     _validate_diffsinger_render_code_commit(data["diffsinger_render_code_commit"])
     _validate_speaker_embeddings_unpinned_candidates(data["speaker_embeddings_unpinned_candidates"])
-    _validate_smoke_render_section(data["smoke_render"])
+    _validate_smoke_render_section(
+        data["smoke_render"], companions_status=data["acoustic_export_companions"]["status"],
+    )
     _validate_budget_estimate_section(data["budget_estimate"], smoke_render_section=data["smoke_render"])
 
 

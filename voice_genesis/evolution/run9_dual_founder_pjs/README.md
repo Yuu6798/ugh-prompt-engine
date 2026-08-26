@@ -959,6 +959,18 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   集合等価チェックより先に `len(list)==len(unique)` で拒否するように
   した（`render_asset_ledger` と同型）。詳細は
   `HARNESS1_PROVISION_RECORD.md` §5-2。
+  PR #326 第3巡 Codex bot レビュー3件（P2×3、採用）でさらに強化した
+  （pin 欄は引き続き PENDING、repin ではなく `RUN9_CONTRACT.yaml`
+  履歴コメントの情報記録 sha256 のみ更新）: Fix 7 OBTAINED item へ
+  `acquisition_source`（閉じた語彙 THIS_TARBALL/DRIVE_DIRECT/
+  RE_EXPORT）を必須化し、tar membership 要求を THIS_TARBALL 経路のみに
+  限定した（別 Drive フォルダ探索・再export 由来の正当な取得を拒否
+  しないように）。Fix 8 `smoke_render` COMPLETED は
+  `acoustic_export_companions.status == OBTAINED_VERIFIED_MATCH` を
+  前提条件として要求するようにした（Fix 5 budget↔smoke と同型）。
+  Fix 9 speaker candidate status を `startswith()` から厳密語彙一致へ
+  変更し typo/混成値を拒否するようにした。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-3。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

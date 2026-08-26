@@ -492,7 +492,7 @@ config_sha:
 # 「本 manifest は render/analysis 層の実測記録であり
 # `dependency_pins_sha` の完全な充足を主張しない」を明記した）、実測済み
 # の sha256（本欄 PENDING 化に伴う claim_scope/generation_note 追記後の
-# 実バイト、Fix 1-6 全対応後の最新実測値）は情報記録として保持する:
+# 実バイト、Fix 1-6 全対応後の実測値）は情報記録として保持していた:
 # "fe8e47b8cb035e8e3795c8bbf5305161985b630f9ae7659a709d6dd5092e0cf5"
 # （本欄が将来 PINNED 化される際は、学習ハーネス依存の import closure が
 # 実測・manifest へ追加された後の**新しい**バイト列の sha256 を pin する
@@ -501,6 +501,27 @@ config_sha:
 # "1d8a8f720bfd5e4999748cd766560ad33fff2d977852e2fda7b7596124539be2"、
 # 第1世代（初回 PINNED 時）
 # "3392656474b4538e9ed05bfda0d57bc7845bcca3cfa20ffaacdaa94b5fb695e1"
+#
+# 2026-08-26 情報記録更新（PR #326 第3巡 Codex bot レビュー3件、P2×3、
+# いずれも採用——将来汚染/実行不能遷移の同系整合。pin 欄自体は PENDING
+# のまま、repin ではなく情報記録の更新）: Fix 7
+# `acoustic_export_companions.expected_items` の OBTAINED item へ
+# `acquisition_source`（閉じた語彙 THIS_TARBALL/DRIVE_DIRECT/
+# RE_EXPORT）を必須化し、tar membership + sha 整合の要求を
+# `acquisition_source == THIS_TARBALL` のときのみに限定した
+# （`HARNESS1_PROVISION_RECORD.md` §7 が記録する非 tar 経路——別 Drive
+# フォルダの探索・再export——由来の正当な取得を構造的に拒否しないように
+# した）。Fix 8 `smoke_render` が COMPLETED を名乗るには
+# `acoustic_export_companions.status == OBTAINED_VERIFIED_MATCH` を
+# 前提条件として要求するようにした（Fix 5 budget↔smoke と同型の結合強制
+# ——NOT_OBTAINED のまま smoke だけ COMPLETED は「無い入力で render した」
+# 自己矛盾として拒否）。Fix 9
+# `speaker_embeddings_unpinned_candidates` の status 判定を
+# `startswith("UNPINNED_CANDIDATE")` から entry ごとの厳密語彙一致へ
+# 変更し、typo/混成値（例 `UNPINNED_CANDIDATE_PINNED_VERIFIED`）を拒否
+# するようにした。実測済みの sha256（Fix 7-9 対応後の最新実バイト）は
+# 情報記録として保持する:
+# "cb8307da0a2b14c189a58be620003a1c7a89ad6c8e1e4d0997b51ac3a8953ede"
 dependency_pins_sha:
   value: null
   status: PENDING

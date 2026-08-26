@@ -13816,25 +13816,46 @@ def test_harness1_pr326_fix1_obtained_measured_mismatch_rejected() -> None:
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
     for item in data["acoustic_export_companions"]["expected_items"]:
         item["measured_sha256"] = "0" * 64
+        item["acquisition_source"] = "THIS_TARBALL"
     with pytest.raises(m.Run9ValidationError, match="measured_sha256.*!= expected_sha256"):
         m.validate_dependency_pins_manifest(data)
 
 
-def _obtain_all_acoustic_companions(data: Dict[str, Any]) -> None:
+def _obtain_all_acoustic_companions(data: Dict[str, Any], *, acquisition_source: str = "THIS_TARBALL") -> None:
     """テストヘルパー: acoustic_export_companions を OBTAINED_VERIFIED_
-    MATCH へ遷移させ、各 item に正しい measured_sha256 を付与し、
-    Fix 4（PR #326 第2巡）が要求する対応 tar member（basename 一致 +
-    sha256 一致）を tar_gz_full_member_ledger へ追加する——正しく
-    OBTAINED を主張するには3点（item の measured_sha256・tar member の
-    存在・tar member の sha256）すべてが揃う必要がある。"""
+    MATCH へ遷移させ、各 item に正しい measured_sha256 +
+    acquisition_source（PR #326 第3巡 Fix 7、既定 THIS_TARBALL）を付与
+    する。`acquisition_source="THIS_TARBALL"` の場合のみ、Fix 4（第2巡）
+    が要求する対応 tar member（basename 一致 + sha256 一致）を
+    tar_gz_full_member_ledger へ追加する（THIS_TARBALL 以外——
+    DRIVE_DIRECT/RE_EXPORT——は tar member 無しでも正当と認められる、
+    Fix 7 の主眼）。"""
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
     for item in data["acoustic_export_companions"]["expected_items"]:
         item["measured_sha256"] = item["expected_sha256"]
-        data["tar_gz_full_member_ledger"].append({
-            "path": f"onnx_gate_40000/{item['file'].rsplit('/', 1)[-1]}",
-            "size_bytes": 1,
-            "sha256": item["expected_sha256"],
-        })
+        item["acquisition_source"] = acquisition_source
+        if acquisition_source == "THIS_TARBALL":
+            data["tar_gz_full_member_ledger"].append({
+                "path": f"onnx_gate_40000/{item['file'].rsplit('/', 1)[-1]}",
+                "size_bytes": 1,
+                "sha256": item["expected_sha256"],
+            })
+
+
+def _complete_smoke_render(
+    data: Dict[str, Any], *, measured_sec_per_render: float = 4.2,
+    render_condition: str = "CPU, ritsu, 1.0s phrase",
+) -> None:
+    """テストヘルパー: smoke_render を COMPLETED（有効な evidence 込み）
+    へ遷移させる。PR #326 第3巡 Fix 8 により acoustic_export_companions
+    が OBTAINED_VERIFIED_MATCH でなければ拒否されるため、まず
+    `_obtain_all_acoustic_companions()` を呼ぶ。"""
+    _obtain_all_acoustic_companions(data)
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": measured_sec_per_render,
+        "render_condition": render_condition,
+    }
 
 
 def test_harness1_pr326_fix1_obtained_correct_measured_hashes_accepted() -> None:
@@ -13931,12 +13952,11 @@ def test_harness1_pr326_fix2_smoke_render_completed_nonpositive_sec_rejected() -
 
 
 def test_harness1_pr326_fix2_smoke_render_completed_valid_evidence_accepted() -> None:
+    """PR #326 第3巡 Fix 8（P2, 採用）反映後: smoke_render が COMPLETED を
+    名乗るには acoustic_export_companions も OBTAINED_VERIFIED_MATCH で
+    なければならない。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    data["smoke_render"] = {
-        "status": "COMPLETED", "reason": "done",
-        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
-        "render_condition": "CPU, ritsu, 1.0s phrase",
-    }
+    _complete_smoke_render(data)
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
 
 
@@ -13968,13 +13988,11 @@ def test_harness1_pr326_fix2_budget_estimate_completed_valid_evidence_accepted()
     """PR #326 第2巡 Fix 5（P2, 採用）反映後: budget_estimate が COMPLETED
     を名乗るには smoke_render も COMPLETED でなければならず、
     estimated_total_sec は measured_sec_per_render × total_render_count
-    と一致していなければならない（2587.2 == 4.2 × 616）。"""
+    と一致していなければならない（2587.2 == 4.2 × 616）。第3巡 Fix 8 に
+    より smoke_render COMPLETED は acoustic_export_companions の
+    OBTAINED も要求する。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    data["smoke_render"] = {
-        "status": "COMPLETED", "reason": "done",
-        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
-        "render_condition": "CPU, ritsu, 1.0s phrase",
-    }
+    _complete_smoke_render(data)
     data["budget_estimate"] = {
         "status": "COMPLETED", "reason": "done",
         "total_render_count": 616, "estimated_total_sec": 2587.2,
@@ -14036,13 +14054,17 @@ def test_harness1_pr326_fix4_not_obtained_still_rejects_matching_tar_member() ->
 
 
 def test_harness1_pr326_fix4_obtained_without_tar_member_rejected() -> None:
-    """companion_status が OBTAINED_VERIFIED_MATCH なのに、対応する tar
-    member が tar_gz_full_member_ledger に存在しないと拒否される（正当な
-    取得経路の主張には実体の裏付けが要る）。"""
+    """companion_status が OBTAINED_VERIFIED_MATCH で acquisition_source
+    が THIS_TARBALL を主張しているのに、対応する tar member が
+    tar_gz_full_member_ledger に存在しないと拒否される（正当な取得経路
+    の主張には実体の裏付けが要る——PR #326 第3巡 Fix 7 で
+    acquisition_source が導入された後も、THIS_TARBALL を主張する限り
+    Fix 4 の整合検査は有効であることの回帰確認）。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
     for item in data["acoustic_export_companions"]["expected_items"]:
         item["measured_sha256"] = item["expected_sha256"]
+        item["acquisition_source"] = "THIS_TARBALL"
     with pytest.raises(m.Run9ValidationError, match="obtained-status inconsistency"):
         m.validate_dependency_pins_manifest(data)
 
@@ -14084,15 +14106,11 @@ def test_harness1_pr326_fix5_budget_completed_alone_rejected() -> None:
 
 
 def test_harness1_pr326_fix5_budget_completed_smoke_completed_but_arithmetic_mismatch_rejected() -> None:
-    """smoke_render は正しく COMPLETED でも、estimated_total_sec が
-    measured_sec_per_render × total_render_count と算術的に一致しなければ
-    拒否される（両方 present なだけでは足りない）。"""
+    """smoke_render は正しく COMPLETED（companions も OBTAINED）でも、
+    estimated_total_sec が measured_sec_per_render × total_render_count
+    と算術的に一致しなければ拒否される（両方 present なだけでは足りない）。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    data["smoke_render"] = {
-        "status": "COMPLETED", "reason": "done",
-        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
-        "render_condition": "CPU, ritsu",
-    }
+    _complete_smoke_render(data, measured_sec_per_render=4.2, render_condition="CPU, ritsu")
     data["budget_estimate"] = {
         "status": "COMPLETED", "reason": "done",
         "total_render_count": 616, "estimated_total_sec": 4.2 * 616 + 1.0,
@@ -14107,11 +14125,7 @@ def test_harness1_pr326_fix5_budget_completed_arithmetic_within_tight_tolerance_
     data = copy.deepcopy(_dependency_pins_manifest_data())
     measured = 4.2
     count = 616
-    data["smoke_render"] = {
-        "status": "COMPLETED", "reason": "done",
-        "determinism_confirmed": True, "measured_sec_per_render": measured,
-        "render_condition": "CPU, ritsu",
-    }
+    _complete_smoke_render(data, measured_sec_per_render=measured, render_condition="CPU, ritsu")
     data["budget_estimate"] = {
         "status": "COMPLETED", "reason": "done",
         "total_render_count": count, "estimated_total_sec": measured * count,
@@ -14152,3 +14166,140 @@ def test_harness1_pr326_fix3_manifest_and_code_remain_prewired() -> None:
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
     assert callable(m.load_pinned_dependency_pins_manifest)
     assert m.DEPENDENCY_PINS_MANIFEST_REQUIRED_KEYS  # 定数も撤去されていない
+
+
+# ---------------------------------------------------------------------------
+# PR #326 第3巡 Codex bot レビュー Fix 7/8/9（P2 ×3, 採用, 2026-08-26）:
+# 取得元別 tar membership 要求 / smoke↔companions 結合強制 /
+# speaker candidate status の厳密語彙化。正負テスト。
+# ---------------------------------------------------------------------------
+
+
+def test_harness1_pr326_fix7_drive_direct_obtained_without_tar_member_accepted() -> None:
+    """acquisition_source=DRIVE_DIRECT で取得した companion は、
+    tar_gz_full_member_ledger に一切現れなくても OBTAINED_VERIFIED_MATCH
+    を主張できる（HARNESS1_PROVISION_RECORD.md §7 が記録する非 tar 経路
+    ——別 Drive フォルダの探索——の正当性を machine check する）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data, acquisition_source="DRIVE_DIRECT")
+    assert not any(
+        m2["path"].endswith(item["file"].rsplit("/", 1)[-1])
+        for item in data["acoustic_export_companions"]["expected_items"]
+        for m2 in data["tar_gz_full_member_ledger"]
+    )
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix7_re_export_obtained_without_tar_member_accepted() -> None:
+    """acquisition_source=RE_EXPORT（再export 経路）も同様に tar member
+    無しで受理される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data, acquisition_source="RE_EXPORT")
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix7_this_tarball_still_requires_membership() -> None:
+    """acquisition_source=THIS_TARBALL を主張する item は、引き続き
+    tar_gz_full_member_ledger 内の対応 member を要求する（Fix 7 は
+    THIS_TARBALL 経路の既存挙動を変えない——同型テストは
+    `test_harness1_pr326_fix4_obtained_without_tar_member_rejected` が
+    既にカバーするため、ここでは acquisition_source 語彙自体の妥当性の
+    みを回帰確認する）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    for item in data["acoustic_export_companions"]["expected_items"]:
+        item["measured_sha256"] = item["expected_sha256"]
+        item["acquisition_source"] = "THIS_TARBALL"
+    with pytest.raises(m.Run9ValidationError, match="obtained-status inconsistency"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix7_acquisition_source_required_for_obtained() -> None:
+    """OBTAINED_VERIFIED_MATCH の item は acquisition_source を必須と
+    する（欠落は missing required key で拒否）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    for item in data["acoustic_export_companions"]["expected_items"]:
+        item["measured_sha256"] = item["expected_sha256"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix7_acquisition_source_forbidden_for_not_obtained() -> None:
+    """NOT_OBTAINED_TARBALL_MISS の item に acquisition_source を付与
+    すると unknown key として拒否される（measured_sha256 と同型の
+    禁止）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["expected_items"][0]["acquisition_source"] = "DRIVE_DIRECT"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix7_unknown_acquisition_source_rejected() -> None:
+    """acquisition_source が閉じた語彙 (THIS_TARBALL/DRIVE_DIRECT/
+    RE_EXPORT) 以外の値だと拒否される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data, acquisition_source="THIS_TARBALL")
+    data["acoustic_export_companions"]["expected_items"][0]["acquisition_source"] = "SOMEWHERE_ELSE"
+    with pytest.raises(m.Run9ValidationError, match="acquisition_source must be one of"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix8_smoke_completed_alone_rejected() -> None:
+    """smoke_render だけを COMPLETED へ書き換え、acoustic_export_
+    companions は NOT_OBTAINED_TARBALL_MISS のまま残す改竄は拒否される
+    （存在しないと同時に主張している入力で render したという自己矛盾）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
+        "render_condition": "CPU, ritsu",
+    }
+    assert data["acoustic_export_companions"]["status"] == "NOT_OBTAINED_TARBALL_MISS"
+    with pytest.raises(m.Run9ValidationError, match="acoustic_export_companions.status is not"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix8_smoke_completed_with_companions_obtained_accepted() -> None:
+    """companions が正しく OBTAINED_VERIFIED_MATCH であれば smoke_render
+    COMPLETED は受理される（過剰拒否でないことの確認 —
+    `_complete_smoke_render()` ヘルパー自体の回帰固定も兼ねる）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _complete_smoke_render(data)
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix9_speaker_candidate_typo_status_rejected() -> None:
+    """`UNPINNED_CANDIDATE_PINNED_VERIFIED` のような typo/混成値は、
+    startswith() 判定なら通過してしまっていたが、厳密一致では拒否される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["speaker_embeddings_unpinned_candidates"]["pjs"]["status"] = (
+        "UNPINNED_CANDIDATE_PINNED_VERIFIED"
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be exactly one of"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix9_d3synth_wrong_vocab_rejected() -> None:
+    """d3synth_reference_only に pjs/user 用の語彙
+    （"UNPINNED_CANDIDATE"）を流用すると拒否される（2つの語彙を混同
+    しないことの確認）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["speaker_embeddings_unpinned_candidates"]["d3synth_reference_only"]["status"] = (
+        "UNPINNED_CANDIDATE"
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be exactly one of"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix9_exact_vocab_values_accepted() -> None:
+    """語彙どおりの厳密値（変更なし）は引き続き通る（過剰拒否でないこと
+    の確認）。"""
+    data = _dependency_pins_manifest_data()
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+    assert data["speaker_embeddings_unpinned_candidates"]["pjs"]["status"] == "UNPINNED_CANDIDATE"
+    assert data["speaker_embeddings_unpinned_candidates"]["user"]["status"] == "UNPINNED_CANDIDATE"
+    assert (
+        data["speaker_embeddings_unpinned_candidates"]["d3synth_reference_only"]["status"]
+        == "UNPINNED_CANDIDATE_NOT_A_RUN9_FOUNDER"
+    )

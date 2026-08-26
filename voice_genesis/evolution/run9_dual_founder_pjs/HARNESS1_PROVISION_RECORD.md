@@ -300,6 +300,45 @@ BLOCKED）自体は無変更。
 既存 pin（backbone_checkpoint_sha 等）は無変更を確認済み——本ラウンドで
 状態が変わった pin 欄は `dependency_pins_sha`（PINNED→PENDING）のみ。
 
+### 5-3. PR #326 第3巡 Codex bot レビュー対応（2026-08-26、P2×3、全3件
+採用——将来汚染/実行不能遷移の同系整合）
+
+**Fix 7（P2）——取得元別の tar membership 要求**: 第2巡 Fix 4 は tar
+member 検査を companion status に条件付けたが、OBTAINED 分岐は常に
+「この tarball 内に member が実在する」ことを要求しており、本記録 §7 が
+記す2つの解除経路（別 Drive フォルダの探索・再export の User 裁定）——
+いずれも `r6_gate_materials_2026-08-20.tar.gz` 由来ではない——を構造的に
+拒否していた。対応: `acoustic_export_companions.expected_items` の
+OBTAINED item へ `acquisition_source`（閉じた語彙 `THIS_TARBALL`/
+`DRIVE_DIRECT`/`RE_EXPORT`）を必須化し、tar membership + sha 整合の
+要求は `acquisition_source == "THIS_TARBALL"` のときのみに限定した。
+`DRIVE_DIRECT`/`RE_EXPORT` は Fix 1 の `measured_sha256 ==
+expected_sha256` 強制だけで足りる。
+
+**Fix 8（P2）——smoke COMPLETED ← companions OBTAINED の結合**: Fix 5
+（budget↔smoke）と同型の欠陥——`smoke_render` が `COMPLETED` を名乗るのに
+`acoustic_export_companions.status == NOT_OBTAINED_TARBALL_MISS` のまま
+でも受理されてしまっていた（「存在しないと同時に主張している入力で
+render した」自己矛盾）。対応: `_validate_smoke_render_section()` の
+COMPLETED 分岐で `companions_status == OBTAINED_VERIFIED_MATCH` を前提
+条件として要求するようにした。
+
+**Fix 9（P2）——speaker candidate status の厳密語彙化**:
+`speaker_embeddings_unpinned_candidates` の status 判定が
+`startswith("UNPINNED_CANDIDATE")` という接頭辞判定のままで、
+`UNPINNED_CANDIDATE_PINNED_VERIFIED` のような typo/矛盾混成値を通過
+させてしまっていた（`_SPEAKER_EMBED_CANDIDATE_STATUS_VOCAB` が既に
+意図する厳密値を定義していたのに実装が使っていなかった）。対応:
+entry ごとの厳密な許容集合との完全一致へ変更した（pjs/user は
+"UNPINNED_CANDIDATE" のみ、d3synth は
+"UNPINNED_CANDIDATE_NOT_A_RUN9_FOUNDER" のみ）。
+
+pin 欄（`dependency_pins_sha`）自体は PENDING のまま——manifest バイトは
+generation_note への追記で変わったため、`RUN9_CONTRACT.yaml` の履歴
+コメントの情報記録 sha256 を更新した（repin ではない）:
+`cb8307da0a2b14c189a58be620003a1c7a89ad6c8e1e4d0997b51ac3a8953ede`。
+本 harness の実測結果自体は無変更。既存 pin は無変更を確認済み。
+
 ---
 
 ## 6. テスト・lint
