@@ -13181,7 +13181,21 @@ _REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME: str = "export_environment_lock"
 # 自体は例外的に ambient python を使ってよいが、それ以外の全 step は
 # `<この名前>/bin/python` / `<この名前>/bin/pip` の形で明示的に venv 内
 # interpreter/package manager を参照しなければならない。
-_REEXPORT_REPLAY_RECIPE_VENV_DIR: str = "venv_export_replay"
+#
+# PR #327 レビュー第8巡指摘15（P2、採用）: 名前だけの `venv_export_replay`
+# を bare 相対パスとして各 step に埋め込むと、export 実行 step が cwd を
+# export_command_cwd（DiffSinger checkout）へ変更した**後**にこの相対パス
+# を解決してしまい、実在しない venv を指す——bare-interpreter 検査（`/bin/`
+# 直前の negative lookbehind）は `<相対パス>/bin/python` の形をそのまま
+# 通過させてしまうため、この穴を検出できなかった。`_REEXPORT_REPLAY_RECIPE_
+# VENV_DIR` 自体を「cwd 非依存の絶対（`export_command_variables` の
+# `<session workdir（repo外）>` 変数起点）パス」として再定義し、venv 作成
+# step を含む全 step がこの絶対パスのみを参照することを fail-closed で
+# machine 強制する（`_REEXPORT_VENV_DIR_NAME_PATTERN` 走査 = 下記）。
+_REEXPORT_REPLAY_RECIPE_VENV_DIR_NAME: str = "venv_export_replay"
+_REEXPORT_REPLAY_RECIPE_VENV_DIR: str = (
+    f"{_REEXPORT_OUT_DIR_PLACEHOLDER}/{_REEXPORT_REPLAY_RECIPE_VENV_DIR_NAME}"
+)
 # bare `python`/`pip` 起動検出用（`<venv_dir>/bin/python` のような明示パス
 # 経由の呼び出しは negative lookbehind で除外する——`/bin/` の直後に続く
 # トークンは venv 接続済みとみなす）。
@@ -13435,6 +13449,20 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
     **前**に、`environment_versions.python` フィールド名とその pin 値を
     逐語参照する interpreter 版検証 step が存在することを fail-closed で
     machine 強制する（欠落・venv 作成 step 以降への配置のいずれも拒否）。
+
+    **replay_environment_recipe の venv パスの cwd 非依存化（PR #327 レビュー
+    第8巡指摘15対応、P2）**: export 実行 step は cwd を export_command_cwd
+    （DiffSinger checkout）へ変更した**後**に venv インタプリタパスを解決
+    するため、`venv_export_replay` を bare な相対パスのまま参照すると、
+    cwd 変更後はその相対パスが DiffSinger ディレクトリ内で解決され、実在
+    しない venv を指してしまう——replay 記録どおりの実行が不能になる穴
+    だった。上記 (ii) の bare-interpreter 検査（`/bin/` 直前の negative
+    lookbehind）は `<相対パス>/bin/python` の形をそのまま通過させてしまう
+    ため、この穴を検出できなかった。本関数は `venv_export_replay` という
+    文字列が現れる箇所すべてに、cwd 非依存の絶対パス接頭辞
+    `<session workdir（repo外）>/`（`export_command_variables` の既存
+    プレースホルダと同一、venv 作成 step 自体も対象）が前置されていること
+    を fail-closed で全数走査する——bare 相対パスのみの参照は reject する。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"reexport manifest must be an object, got {type(data).__name__}")
@@ -13784,6 +13812,39 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             "leaving the ambient interpreter to resolve export_command's bare `python` token — "
             "otherwise a replay would produce artifacts from an unpinned ambient environment"
         )
+    # fail-closed (i-b)（PR #327 レビュー第8巡指摘15、P2、採用）: export 実行
+    # step は cwd を export_command_cwd（DiffSinger checkout）へ変更した
+    # **後**に venv_python_path を解決するため、`venv_export_replay` という
+    # bare な相対パス参照が1箇所でも残っていると、その step 群では実在しない
+    # venv を指す——fail-closed (ii)（下記）の bare-interpreter 検査は
+    # `<相対パス>/bin/python` の形をそのまま通過させてしまう（`/bin/` 直前の
+    # negative lookbehind はその手前が絶対パスか相対パスかを区別しない）ため
+    # この穴を検出できなかった。ここでは `_REEXPORT_REPLAY_RECIPE_VENV_DIR_
+    # NAME`（`"venv_export_replay"`）という文字列が現れる箇所すべてが、
+    # 直前に cwd 非依存の絶対パス接頭辞 `<session workdir（repo外）>/`
+    # （`_REEXPORT_OUT_DIR_PLACEHOLDER` 起点、`_REEXPORT_REPLAY_RECIPE_
+    # VENV_DIR` が単一正本）を伴っていることを全数走査で machine 強制する
+    # ——venv 作成 step 自体も対象に含める（venv がまだ存在しないため ambient
+    # python を使うのは正当だが、作成先ディレクトリ自体は cwd 非依存の絶対
+    # パスでなければならない）。
+    _rooted_venv_prefix = f"{_REEXPORT_OUT_DIR_PLACEHOLDER}/"
+    for i, step in enumerate(replay_steps):
+        search_from = 0
+        while True:
+            idx = step.find(_REEXPORT_REPLAY_RECIPE_VENV_DIR_NAME, search_from)
+            if idx == -1:
+                break
+            prefix_start = idx - len(_rooted_venv_prefix)
+            if prefix_start < 0 or step[prefix_start:idx] != _rooted_venv_prefix:
+                raise Run9ValidationError(
+                    f"reexport manifest.replay_environment_recipe.steps[{i}] references "
+                    f"{_REEXPORT_REPLAY_RECIPE_VENV_DIR_NAME!r} without the cwd-independent "
+                    f"absolute prefix {_REEXPORT_OUT_DIR_PLACEHOLDER!r} — a bare relative venv "
+                    "path resolves inside export_command_cwd once the export step changes cwd "
+                    "there, pointing at a venv that does not exist there; every reference must "
+                    f"be the rooted path {_REEXPORT_REPLAY_RECIPE_VENV_DIR!r} — got step {step!r}"
+                )
+            search_from = idx + len(_REEXPORT_REPLAY_RECIPE_VENV_DIR_NAME)
     # fail-closed (ii): venv bootstrap 以前の step（interpreter 版検証・
     # `python -m venv ...` 自体、venv がまだ存在しないため ambient python
     # を使うのが正当——PR #327 レビュー第7巡指摘14対応で検証 step もこの

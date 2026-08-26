@@ -15901,16 +15901,71 @@ def test_harness2_reexport_manifest_replay_recipe_bare_pip_step_rejected() -> No
 
 
 def test_harness2_reexport_manifest_replay_recipe_venv_bootstrap_bare_python_allowed() -> None:
-    """venv 作成 step 自体（`python -m venv venv_export_replay`、直前の
-    interpreter 版検証 step の対象）は ambient python を使うのが正当で
-    あり、bare-interpreter 検査から除外されること（誤検知しないことの
-    回帰固定）。PR #327 第7巡指摘14対応後は steps[0] が interpreter 版
-    検証 step、steps[1] が venv 作成 step になった。"""
+    """venv 作成 step 自体（`python -m venv <session workdir（repo外）>/
+    venv_export_replay`、直前の interpreter 版検証 step の対象）は ambient
+    python を使うのが正当であり、bare-interpreter 検査から除外されること
+    （誤検知しないことの回帰固定）。PR #327 第7巡指摘14対応後は steps[0] が
+    interpreter 版検証 step、steps[1] が venv 作成 step になった。PR #327
+    第8巡指摘15対応後は venv 作成先が cwd 非依存の絶対パスへ変わった。"""
     data = _reexport_manifest_data()
     steps = data["replay_environment_recipe"]["steps"]
     assert "-m venv" in steps[1]
-    assert "python -m venv venv_export_replay" in steps[1]
+    assert "python -m venv <session workdir（repo外）>/venv_export_replay" in steps[1]
     m.validate_reexport_manifest(data)  # 例外なしの確認
+
+
+# --- PR #327 レビュー第8巡指摘15（P2, 採用）: venv パスの cwd 非依存化 ------
+
+
+def test_harness2_reexport_manifest_replay_recipe_venv_path_rooted_absolute() -> None:
+    """正常系: すべての venv_export_replay 参照が cwd 非依存の絶対パス
+    `<session workdir（repo外）>/venv_export_replay` として現れること
+    （回帰固定——bare な相対パス参照が1件も残っていないこと）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    rooted = "<session workdir（repo外）>/venv_export_replay"
+    for step in steps:
+        idx = 0
+        while True:
+            idx = step.find("venv_export_replay", idx)
+            if idx == -1:
+                break
+            assert step[: idx + len("venv_export_replay")].endswith(rooted), step
+            idx += len("venv_export_replay")
+
+
+def test_harness2_reexport_manifest_replay_recipe_bare_relative_venv_export_step_rejected() -> None:
+    """export 実行 step（cwd を export_command_cwd へ変更した後に実行される）
+    が cwd 非依存の絶対パスではなく bare な相対パス
+    `venv_export_replay/bin/python`（PR #327 レビュー第8巡指摘15の元の
+    欠陥——cwd 変更後は DiffSinger ディレクトリ内で解決され実在しない venv
+    を指す）のみを参照すると reject されること。venv_python_path 自体が
+    cwd 非依存の絶対パスへ再定義されたため、この形は既存の fail-closed (i)
+    （export_command を venv 経由で実行する step の存在強制）で reject
+    される。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    steps[-1] = steps[-1].replace(
+        "<session workdir（repo外）>/venv_export_replay/bin/python",
+        "venv_export_replay/bin/python",
+    )
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="venv interpreter path"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_bare_relative_venv_create_step_rejected() -> None:
+    """venv 作成 step 自体が bare な相対パス `venv_export_replay` で venv
+    を作成していると reject されること（venv 自体の生成先も cwd 非依存の
+    絶対パスでなければならない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    steps[1] = steps[1].replace(
+        "<session workdir（repo外）>/venv_export_replay", "venv_export_replay",
+    )
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="cwd-independent"):
+        m.validate_reexport_manifest(data)
 
 
 # --- PR #327 レビュー第7巡指摘14（P2, 採用）: venv 作成 interpreter 版検証 ---

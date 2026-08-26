@@ -678,6 +678,16 @@ config_sha:
 # は PENDING のまま、repin ではなく情報記録の更新）。実測済みの sha256
 # （本改訂後の実バイト、第7世代）は情報記録として保持する:
 #   "4d2922825deb5790c537e1238a4e0459c619a791fc845b8fbab0ec137d30f285"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第8巡指摘15、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第7世代、venv パスの cwd 非依存絶対パス化）へ追随
+# させた結果、`dependency_pins_manifest.json` 自体の実バイトが変わった。
+# 台帳の内容（render_asset_ledger 等）自体は無変更。pin 欄自体は PENDING
+# のまま、repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の
+# 実バイト、第8世代）は情報記録として保持する:
+#   "602a0987666d2207f59b9b36f2360ff4942ad3812acb453e0808bddec5141a24"
 dependency_pins_sha:
   value: null
   status: PENDING
@@ -886,8 +896,37 @@ dependency_pins_sha:
 # 変わったための repin。旧 pin 値（第5世代、PR #327 第6巡指摘12対応後）は
 # 履歴として保持する:
 #   c06c3f7eecf64ddc1357b54539fd093e0189e3405739eb6bda8a104210abf140
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第8巡指摘15、P2、採用。Claude
+# 完結ルート）: `replay_environment_recipe` の export 実行 step は cwd を
+# `export_command_cwd`（DiffSinger checkout）へ変更した**後**に venv イン
+# タプリタパスを解決するため、`venv_export_replay/bin/python` を bare な
+# 相対パスのまま参照すると、cwd 変更後はその相対パスが DiffSinger ディレ
+# クトリ内で解決され、実在しない venv を指してしまい、記録どおりの replay
+# が実行不能になる、という指摘。venv のディレクトリを cwd 非依存の絶対
+# パス `<session workdir（repo外）>/venv_export_replay`（`export_command_
+# variables` の既存プレースホルダ起点、`_REEXPORT_REPLAY_RECIPE_VENV_DIR`
+# 単一正本）として再定義し、venv 作成 step・requirements 書き出し step・
+# pip install step・export 実行 step のすべてをこの絶対パス起点の参照へ
+# 書き換えた（`export_command`/`export_command_cwd`/`export_environment_
+# lock`/`experiment_side_inputs`/`install_steps` 等、他の実測事実は1文字も
+# 変更していない）。`run9_schema.validate_reexport_manifest()` へ fail-
+# closed 検証を追加した: `replay_environment_recipe.steps` 中に
+# `venv_export_replay` という文字列が現れる箇所すべてに、直前で cwd 非依存
+# の絶対パス接頭辞 `<session workdir（repo外）>/` が前置されていることを
+# 全数走査で machine 強制する（venv 作成 step 自体も対象に含める——bare な
+# 相対パスのみの参照は reject。既存の bare-interpreter 全数走査
+# （第6巡指摘12由来、`/bin/` 直前の negative lookbehind）は `<相対パス>/
+# bin/python` の形をそのまま通過させてしまうため検出できなかった穴を、
+# 本検証が別途閉じる）。負例テスト（cwd 変更 step の後に相対 venv 参照の
+# みの export step を残す構成）を追加し、reject を確認した。上記いずれも
+# manifest の実測事実（checkpoint/exporter/artifacts/smoke render の各
+# sha256・秒数）を一切変更しない——venv パス参照の書き換えのみで実バイトが
+# 変わったための repin。旧 pin 値（第6世代、PR #327 第7巡指摘14対応後）は
+# 履歴として保持する:
+#   efe4ff2101d84b9062ac6fb34f6416db5a2277aa0324effdc684249c1c95cdb5
 reexport_manifest_sha:
-  value: "efe4ff2101d84b9062ac6fb34f6416db5a2277aa0324effdc684249c1c95cdb5"
+  value: "f244a104644ebcdcf5f44d5e3df8e17924eef4f38bb731aed8381d904bc7897f"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json
 
