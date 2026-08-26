@@ -10607,6 +10607,21 @@ def load_pinned_dataset_split_manifest(
         `row_order_sha256` が内部的に stale なまま3ファイルの pin/転記が
         揃って更新されるケースを三者一致だけでは検出できない（宣言値同士
         の一致は「宣言値が正しい」ことを証明しない）
+    (8) **row_counts 実体照合**（AC 固有、PR #325 第2巡 Fix 3 で追加 —
+        Fix 1 と同族の「転記値が実体と未照合のまま四者一致の外に残って
+        いた」経路の是正）: 本 manifest の `song_splits.row_counts`
+        （`{training, validation, sealed_holdout}` の転記件数）が、
+        practice manifest 実体の `row_ids.{training,validation,
+        sealed_holdout}` の実長と厳密一致しない場合 raise する。row_order
+        の digest 一致（(7)）は「順序が一致する」ことしか保証せず、
+        「件数の転記が実体と一致する」ことは独立に保証されないため——
+        コーパス規模/配分が変わって再生成・repin された practice split に
+        対し、新しい row_ids から再計算した row_order digest が新しい
+        宣言値・転記値と揃って一致してさえいれば、(6)/(7) だけでは
+        `row_counts` が古い 70/15/15 を転記したまま残る経路を検出でき
+        ない。あわせて `row_counts` 合計と再構成 row_order の総件数の
+        一致も独立チェックする（per-split 一致が通れば数学的に自明だが、
+        fail-closed の多層防御として残す）
 
     戻り値は検証済み dataset split manifest dict。
     """
@@ -10767,11 +10782,46 @@ def load_pinned_dataset_split_manifest(
     # 関数オブジェクトであるため「別実装による drift」の余地が構造的に
     # 存在しない（コピー実装ではなく同一関数の共有呼び出し）。
     validate_practice_split_manifest(practice_data)
+
+    # PR #325 第2巡 Codex bot レビュー指摘 Fix 3（P2, 採用 — Fix 1 と
+    # 同族: 転記値が実体と未照合のまま四者一致の外に残っていた新経路）:
+    # 従来は `song_splits.row_counts`（70/15/15 の転記値）を practice
+    # manifest の実 `row_ids` 各split長と一切照合していなかった——
+    # practice split が異なるコーパス規模/配分で将来再生成・repin された
+    # 場合、row_order_sha256 の四者一致さえ揃えば（新しい row_ids から
+    # 再計算した digest が新しい宣言値・転記値と一致してさえいれば）本
+    # manifest は古い 70/15/15 を転記したまま通過し得た——row_order の
+    # digest 一致は「順序が一致する」ことしか保証せず、「件数の転記が
+    # 実体と一致する」ことは独立に保証されない。
+    actual_split_counts = {
+        "training": len(practice_data["row_ids"]["training"]),
+        "validation": len(practice_data["row_ids"]["validation"]),
+        "sealed_holdout": len(practice_data["row_ids"]["sealed_holdout"]),
+    }
+    transcribed_row_counts = data["song_splits"]["row_counts"]
+    if actual_split_counts != dict(transcribed_row_counts):
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): song_splits.row_counts の転記値 "
+            f"({transcribed_row_counts!r}) が practice manifest 実体の row_ids 各split長 "
+            f"({actual_split_counts!r}) と一致しない — stale な転記（practice split の再生成後に "
+            "追随されなかった件数記述）は fail-closed で拒否する"
+        )
+
     reconstructed_row_order = (
         list(practice_data["row_ids"]["training"])
         + list(practice_data["row_ids"]["validation"])
         + list(practice_data["row_ids"]["sealed_holdout"])
     )
+    # 合計件数の一致（row_counts 各split値の総和 == 再計算 row_order の
+    # 入力列長）。上記 per-split 照合が通れば数学的に自明に成立するが、
+    # コーパス規模変化を「合計 100 相当」という粒度でも明示的に確認する
+    # 独立チェックとして残す（fail-closed の多層防御）。
+    if sum(transcribed_row_counts.values()) != len(reconstructed_row_order):
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): song_splits.row_counts の合計 "
+            f"({sum(transcribed_row_counts.values())}) が再構成した row_order の総件数 "
+            f"({len(reconstructed_row_order)}) と一致しない"
+        )
     recomputed_row_order_sha256 = _compute_canonical_pin_sha256(reconstructed_row_order)
     practice_row_order_sha256 = practice_data.get("row_order_sha256")
     if recomputed_row_order_sha256 != practice_row_order_sha256:
