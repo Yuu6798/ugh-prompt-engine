@@ -13212,6 +13212,21 @@ _REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER: str = "-m venv"
 # の両方を逐語で参照していなければならない（fail-closed、ハードコード値の
 # 二重管理を避けるため pin 値は manifest 実測から動的に取得する）。
 _REEXPORT_REPLAY_RECIPE_INTERPRETER_CHECK_FIELD_MARKER: str = "environment_versions.python"
+# exporter checkout 検証 step の存在確認に使うマーカー（PR #327 レビュー
+# 第9巡指摘17対応、P2）: 検証 step は git コマンド2種と、pin フィールド名
+# "exporter.revision" の両方を逐語で参照していなければならない
+# （interpreter 版検証 step と同型の意匠——ハードコード値の二重管理を避け
+# るため pin 値自体は manifest 実測（`revision`）から動的に取得する）。
+_REEXPORT_REPLAY_RECIPE_GIT_HEAD_MARKER: str = "git rev-parse HEAD"
+_REEXPORT_REPLAY_RECIPE_GIT_STATUS_MARKER: str = "git status --porcelain"
+_REEXPORT_REPLAY_RECIPE_EXPORTER_REVISION_FIELD_MARKER: str = "exporter.revision"
+# post-export 閉世界照合 step の存在確認に使うマーカー（PR #327 レビュー
+# 第9巡指摘16対応、P2）: 照合 step は artifacts の各フィールド名
+# "sha256_run1"/"bytes" の両方を逐語で参照していなければならない
+# （9アーティファクトキー全数の参照は呼び出し側で `REEXPORT_ARTIFACT_KEYS`
+# を直接走査するため、ここでは定数化しない）。
+_REEXPORT_REPLAY_RECIPE_POST_EXPORT_SHA_FIELD_MARKER: str = "sha256_run1"
+_REEXPORT_REPLAY_RECIPE_POST_EXPORT_BYTES_FIELD_MARKER: str = "bytes"
 _REEXPORT_REPRODUCIBILITY_CHECK_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "description", "all_run1_run2_identical",
 })
@@ -13463,6 +13478,38 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
     `<session workdir（repo外）>/`（`export_command_variables` の既存
     プレースホルダと同一、venv 作成 step 自体も対象）が前置されていること
     を fail-closed で全数走査する——bare 相対パスのみの参照は reject する。
+
+    **replay_environment_recipe の exporter checkout live 検証（PR #327
+    レビュー第9巡指摘17対応、P2）**: 上記の各チェックは checkpoint-side
+    入力・venv/interpreter・export 実行手順を閉じたが、供給された clone
+    の `scripts/export.py` 自体（exporter checkout）は無検証のまま実行
+    される余地が残っていた——pin 済み `exporter.revision` とは異なる
+    コード（改変済み・別 commit）から export しても、この manifest の
+    `exporter` 節（自己申告の revision/revision_matches_pin）だけでは
+    その事実を検出できない。本関数は export 実行 step の**前**に、
+    (i) `git rev-parse HEAD` の出力が `exporter.revision` の pin 値と
+    一致すること、(ii) `git status --porcelain` の出力が空であること
+    （dirty checkout 拒否）を検証する step が存在することを fail-closed
+    で machine 強制する（`exporter.revision` フィールド名とその pin 値の
+    両方を逐語参照していること、export 実行 step より厳密に前へ配置され
+    ていることの双方を要求する）。
+
+    **replay_environment_recipe の post-export 閉世界照合（PR #327
+    レビュー第9巡指摘16対応、P2）**: recipe は export 起動で終わっており、
+    生成される9アーティファクトを manifest の `artifacts.*.sha256_run1`/
+    `bytes`/`file` と照合する step を一切書いていなかった——別バイトが
+    生成されても「replay 完了」を主張できてしまう出力側の閉世界性の欠落
+    だった。本関数は export 実行 step の**後**に、`artifacts` 9エントリ
+    全数（`REEXPORT_ARTIFACT_KEYS`）を逐語参照し `sha256_run1`/`bytes`
+    照合を宣言する post-export 照合 step が存在することを fail-closed で
+    machine 強制する（欠落・export 実行 step 以前への配置のいずれも
+    拒否）。本照合が検証する対象は「この manifest が記録した再export
+    出力とのバイト一致」のみであり、歴史 pin（historical_sha256/
+    matches_historical）との一致/不一致の意味論には関与しない。
+
+    指摘16/17 により、replay recipe の閉世界性——入力（checkpoint +
+    experiment 側4点 + lock + interpreter 版）・実行体（exporter checkout
+    + venv interpreter）・出力（9 artifacts）——の全照合が本関数で閉じる。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"reexport manifest must be an object, got {type(data).__name__}")
@@ -13805,13 +13852,18 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
     # が走り unpinned 環境の生成物が作られ得た。fail-closed (i): export 実行
     # 手順が venv インタプリタパスを明示参照していることを machine 強制する。
     venv_python_path = f"{_REEXPORT_REPLAY_RECIPE_VENV_DIR}/bin/python"
-    if not any("export_command" in step and venv_python_path in step for step in replay_steps):
+    export_step_indices = [
+        i for i, step in enumerate(replay_steps)
+        if "export_command" in step and venv_python_path in step
+    ]
+    if not export_step_indices:
         raise Run9ValidationError(
             "reexport manifest.replay_environment_recipe.steps must contain a step that runs "
             f"export_command via the venv interpreter path ({venv_python_path!r}) rather than "
             "leaving the ambient interpreter to resolve export_command's bare `python` token — "
             "otherwise a replay would produce artifacts from an unpinned ambient environment"
         )
+    export_step_index = export_step_indices[0]
     # fail-closed (i-b)（PR #327 レビュー第8巡指摘15、P2、採用）: export 実行
     # step は cwd を export_command_cwd（DiffSinger checkout）へ変更した
     # **後**に venv_python_path を解決するため、`venv_export_replay` という
@@ -13871,6 +13923,63 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             "reexport manifest.replay_environment_recipe.torch_index_note must reference the "
             "PyTorch CPU wheel index (https://download.pytorch.org/whl/cpu) that "
             f"torch==2.13.0+cpu is sourced from, got {torch_index_note!r}"
+        )
+    # PR #327 レビュー第9巡指摘17（P2、採用）: replay recipe は checkpoint-side
+    # 入力の全数照合・export venv/interpreter の確定までは書いていたが、
+    # 供給された clone の `scripts/export.py` 自体（exporter checkout）を
+    # 無検証のまま実行していた——pin 済み `exporter.revision` とは異なる
+    # コード（改変済み・別 commit）から export しても、この manifest の
+    # `exporter` 節（revision/revision_matches_pin、manifest 自己申告値）
+    # だけではその事実を検出できない。export 実行 step の**前**に、
+    # (i) `git rev-parse HEAD` の出力が `exporter.revision` の pin 値と
+    # 一致すること、(ii) `git status --porcelain` の出力が空であること
+    # （dirty checkout 拒否）を検証する step が存在することを fail-closed
+    # で machine 強制する（`exporter.revision` フィールド名とその pin 値を
+    # 逐語参照していること、および export 実行 step より厳密に前に配置され
+    # ていることの両方を要求する——指摘16/17 は「replay recipe の閉世界性」
+    # ファミリーの最後の穴で、本チェックは実行体（exporter checkout）側を
+    # 閉じる）。
+    exporter_check_indices = [
+        i for i, step in enumerate(replay_steps)
+        if _REEXPORT_REPLAY_RECIPE_GIT_HEAD_MARKER in step
+        and _REEXPORT_REPLAY_RECIPE_GIT_STATUS_MARKER in step
+        and _REEXPORT_REPLAY_RECIPE_EXPORTER_REVISION_FIELD_MARKER in step
+        and revision in step
+    ]
+    if not exporter_check_indices or exporter_check_indices[0] >= export_step_index:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain an exporter "
+            f"checkout verification step (referencing {_REEXPORT_REPLAY_RECIPE_GIT_HEAD_MARKER!r} "
+            f"and {_REEXPORT_REPLAY_RECIPE_GIT_STATUS_MARKER!r}, and "
+            f"{_REEXPORT_REPLAY_RECIPE_EXPORTER_REVISION_FIELD_MARKER!r} with its pinned value "
+            f"{revision!r}) strictly before the export execution step (index "
+            f"{export_step_index}) — fail-closed guard against running scripts/export.py from "
+            "an unverified exporter checkout (wrong commit or a dirty working tree)"
+        )
+    # PR #327 レビュー第9巡指摘16（P2、採用）: replay recipe は export 実行
+    # で終わっており、生成された9アーティファクトを manifest の
+    # `artifacts.*.sha256_run1`/`bytes`/`file` と照合する post-export
+    # 照合 step を一切書いていなかった——別バイトが生成されても「replay
+    # 完了」を主張できてしまう穴だった（出力側の閉世界性が欠落）。export
+    # 実行 step の**後**に、`artifacts` 9エントリ全数
+    # （`REEXPORT_ARTIFACT_KEYS`）を逐語参照し `sha256_run1`/`bytes` 照合を
+    # 宣言する post-export 閉世界照合 step が存在することを fail-closed で
+    # machine 強制する。
+    post_export_check_indices = [
+        i for i, step in enumerate(replay_steps)
+        if all(key in step for key in REEXPORT_ARTIFACT_KEYS)
+        and _REEXPORT_REPLAY_RECIPE_POST_EXPORT_SHA_FIELD_MARKER in step
+        and _REEXPORT_REPLAY_RECIPE_POST_EXPORT_BYTES_FIELD_MARKER in step
+    ]
+    if not post_export_check_indices or post_export_check_indices[0] <= export_step_index:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a post-export "
+            f"closed-world verification step (referencing all {len(REEXPORT_ARTIFACT_KEYS)} "
+            f"artifacts keys and the {_REEXPORT_REPLAY_RECIPE_POST_EXPORT_SHA_FIELD_MARKER!r}/"
+            f"{_REEXPORT_REPLAY_RECIPE_POST_EXPORT_BYTES_FIELD_MARKER!r} fields) strictly after "
+            f"the export execution step (index {export_step_index}) — fail-closed guard against "
+            "claiming replay completion without verifying the 9 generated artifacts against the "
+            "manifest's recorded sha256/bytes"
         )
 
     artifacts = data["artifacts"]
@@ -15187,11 +15296,26 @@ def verify_execution_profile_runtime(
     `onnxruntime.__version__`・`onnxruntime.get_available_providers()`・
     `platform.machine()`・`/etc/os-release`）に対して fail-closed で照合
     する（PR #327 レビュー第3巡指摘8(b) + 第5巡指摘11対応 + 第7巡指摘13
-    対応、2026-08-26。第5巡指摘11: 旧実装は5値のうち python/onnxruntime/
-    selected_execution_provider の3値しか live probe しておらず、
-    os/architecture は manifest 記載値を無条件に信頼していた——別 OS・
-    別アーキテクチャでもパッケージ版と CPU provider さえ揃えば run gate
-    が通り、旧 execution_profile_sha の下で偽成功実験が可能だった）。
+    対応 + 第9巡指摘18対応、2026-08-26。第5巡指摘11: 旧実装は5値のうち
+    python/onnxruntime/selected_execution_provider の3値しか live probe
+    しておらず、os/architecture は manifest 記載値を無条件に信頼していた
+    ——別 OS・別アーキテクチャでもパッケージ版と CPU provider さえ揃えば
+    run gate が通り、旧 execution_profile_sha の下で偽成功実験が可能
+    だった）。
+
+    **第9巡指摘18対応（P2、2026-08-26）——available providers の完全一致
+    要求を撤去した**: 旧実装は `additional_measurements.
+    onnxruntime_available_providers.value`（歴史実測、例:
+    `["AzureExecutionProvider", "CPUExecutionProvider"]`）との live
+    `get_available_providers()` の完全一致（集合として）を要求していた
+    ——第5巡指摘11で `load_pinned_execution_profile_manifest()` 側に
+    見つかった「歴史実測を live 照合の必須要件へ転用する」のと同型の穴が
+    run gate 本体（本関数）に残存しており、Azure provider が存在しない
+    正当な CPU-only ホストを拒否していた。`additional_measurements.
+    onnxruntime_available_providers.value` は歴史実測の記録であり live
+    照合の対象ではない——live 照合対象は identity 5値（python/
+    onnxruntime/os/architecture/selected provider）+ selected provider
+    + CPU 可用性のみに限定する。
 
     **第7巡指摘13対応（P1、2026-08-26）——引数を manifest dict から
     contract へ変更した**: 旧実装は第一引数として呼び出し側供給の任意
@@ -15232,11 +15356,12 @@ def verify_execution_profile_runtime(
         `identity_semantics.runtime.python` と厳密一致すること。
     (b) `onnxruntime.__version__` が `identity_semantics.runtime.
         onnxruntime` と厳密一致すること。
-    (c) `onnxruntime.get_available_providers()` が
-        `additional_measurements.onnxruntime_available_providers.value`
-        （MEASURED のときのみ、集合として）と一致すること——GPU/CUDA
-        provider が実行時に新たに検出可能になっている（自動 upgrade の
-        兆候）場合はここで拒否する。
+    (c) `"CPUExecutionProvider"` が live `onnxruntime.
+        get_available_providers()` に含まれること（第9巡指摘18対応。
+        歴史実測 `additional_measurements.onnxruntime_available_
+        providers.value` との完全一致は要求しない——それは歴史記録で
+        あり live 照合の対象ではない。GPU/CUDA provider が available に
+        含まれること自体は拒否しない——選択企図の拒否は (d) が担う）。
     (d) 選択 provider 引数（`selected_providers`、呼び出し側が実際に
         `onnxruntime.InferenceSession(..., providers=...)` へ渡す予定の
         リスト——渡さなければ `identity_semantics.runtime.
@@ -15300,18 +15425,30 @@ def verify_execution_profile_runtime(
             f"identity_semantics.runtime.onnxruntime ({pinned_onnxruntime!r}) — 再pin が必要"
         )
 
+    # (c) fail-closed（PR #327 レビュー第9巡指摘18、P2、採用）: 歴史実測
+    # `additional_measurements.onnxruntime_available_providers.value`
+    # （例: ["AzureExecutionProvider", "CPUExecutionProvider"]）との完全
+    # 一致を要求すると、当時 Azure provider が利用可能だった環境の実測を
+    # そのまま live availability の必須要件へ転用してしまい、正当な
+    # CPU-only ホスト（Azure provider が存在しない）を拒否する——第5巡
+    # 指摘11で `load_pinned_execution_profile_manifest()` 側に見つかった
+    # 同型の穴（歴史実測を live 照合の必須要件へ転用する誤り）が run gate
+    # 本体（本関数）にも残存していた。`additional_measurements.
+    # onnxruntime_available_providers.value` は歴史実測の記録であり live
+    # 照合の対象ではない——live 照合対象は identity 5値 + selected
+    # provider + CPU 可用性のみ。ここでは「"CPUExecutionProvider" が live
+    # available に含まれること」のみを fail-closed で要求する（selected
+    # provider の pin 一致は (d) が別途強制する）。
     live_available = list(_ort.get_available_providers())
-    avail_measurement = manifest["additional_measurements"]["onnxruntime_available_providers"]
-    if avail_measurement["status"] == "MEASURED":
-        pinned_available = avail_measurement["value"]
-        if set(live_available) != set(pinned_available):
-            raise Run9ValidationError(
-                "verify_execution_profile_runtime(): live onnxruntime.get_available_providers() "
-                f"({live_available!r}) diverges from execution_profile_sha pinned "
-                f"additional_measurements.onnxruntime_available_providers.value "
-                f"({pinned_available!r}) — provider 構成が pin 後に変わった可能性があり "
-                "fail-closed で拒否する"
-            )
+    if "CPUExecutionProvider" not in live_available:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): live onnxruntime.get_available_providers() "
+            f"({live_available!r}) does not include 'CPUExecutionProvider' — RUN9 render は "
+            "CPUExecutionProvider が利用可能な環境で実行する契約であり、その可用性を "
+            "fail-closed で要求する（歴史実測 additional_measurements."
+            "onnxruntime_available_providers.value との完全一致は要求しない——それは live "
+            "照合の対象ではない歴史記録である）"
+        )
 
     # (d) 選択 provider 引数: 呼び出し側が渡さなければ pin 値の単独リスト
     # を既定として検証する（gate_synth.py が実際に InferenceSession へ渡す

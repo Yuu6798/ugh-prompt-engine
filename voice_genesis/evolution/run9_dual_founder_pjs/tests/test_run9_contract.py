@@ -15,7 +15,7 @@ import sys
 import textwrap
 import types
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pytest
 import yaml
@@ -15573,9 +15573,21 @@ def test_harness2_load_pinned_reexport_manifest_diffsinger_commit_cross_check_fa
     """(7) cross-check (b): exporter.expected_revision_per_run9_contract が
     bundle 側前方宣言 commit と食い違うと拒否される。"""
     def _mutate(data: Dict[str, Any]) -> None:
-        data["exporter"]["revision"] = "0" * 40
-        data["exporter"]["expected_revision_per_run9_contract"] = "0" * 40
+        old_revision = data["exporter"]["revision"]
+        new_revision = "0" * 40
+        data["exporter"]["revision"] = new_revision
+        data["exporter"]["expected_revision_per_run9_contract"] = new_revision
         data["exporter"]["revision_matches_pin"] = True
+        # PR #327 レビュー第9巡指摘17対応: replay_environment_recipe の
+        # exporter checkout 検証 step は exporter.revision の pin 値を
+        # 逐語参照している——この構造検証 (validate_reexport_manifest())
+        # を素通りさせ、本テストが狙う深い cross-check (b)（bundle 側
+        # 前方宣言 commit との食い違い）に到達させるため、step 内の旧
+        # revision 文字列も新値へ追随させる。
+        data["replay_environment_recipe"]["steps"] = [
+            step.replace(old_revision, new_revision)
+            for step in data["replay_environment_recipe"]["steps"]
+        ]
 
     tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
         contract, tmp_path, mutate=_mutate,
@@ -15882,7 +15894,11 @@ def test_harness2_reexport_manifest_replay_recipe_bare_python_export_step_reject
     されること。"""
     data = copy.deepcopy(_reexport_manifest_data())
     steps = data["replay_environment_recipe"]["steps"]
-    steps[-1] = steps[-1].replace("venv_export_replay/bin/python", "python")
+    export_index = next(
+        i for i, s in enumerate(steps)
+        if "export_command" in s and "venv_export_replay/bin/python" in s
+    )
+    steps[export_index] = steps[export_index].replace("venv_export_replay/bin/python", "python")
     data["replay_environment_recipe"]["steps"] = steps
     with pytest.raises(m.Run9ValidationError, match="export_command"):
         m.validate_reexport_manifest(data)
@@ -15945,7 +15961,11 @@ def test_harness2_reexport_manifest_replay_recipe_bare_relative_venv_export_step
     される。"""
     data = copy.deepcopy(_reexport_manifest_data())
     steps = data["replay_environment_recipe"]["steps"]
-    steps[-1] = steps[-1].replace(
+    export_index = next(
+        i for i, s in enumerate(steps)
+        if "export_command" in s and "venv_export_replay/bin/python" in s
+    )
+    steps[export_index] = steps[export_index].replace(
         "<session workdir（repo外）>/venv_export_replay/bin/python",
         "venv_export_replay/bin/python",
     )
@@ -16017,6 +16037,114 @@ def test_harness2_reexport_manifest_replay_recipe_interpreter_check_step_after_v
     reordered.insert(venv_create_index, check_step)
     data["replay_environment_recipe"]["steps"] = reordered
     with pytest.raises(m.Run9ValidationError, match="interpreter version verification step"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第9巡指摘16/17（P2×2, 採用）: replay recipe 閉世界性の終端 ---
+# 指摘17: exporter checkout（供給 clone の scripts/export.py）の live 検証。
+# 指摘16: export 実行後の post-export 閉世界照合（9 artifacts 全数照合）。
+# 本巡で recipe の入力（checkpoint + experiment 側4点 + lock + interpreter
+# 版）・実行体（exporter checkout + venv interpreter）・出力（9 artifacts）
+# の全照合が閉じる。
+
+
+def _export_step_index(steps: List[str]) -> int:
+    return next(
+        i for i, s in enumerate(steps)
+        if "export_command" in s and "venv_export_replay/bin/python" in s
+    )
+
+
+def test_harness2_reexport_manifest_replay_recipe_exporter_checkout_check_present() -> None:
+    """正常系: export 実行 step より前に、`git rev-parse HEAD`/
+    `git status --porcelain`/`exporter.revision`（pin 値逐語）を参照する
+    exporter checkout 検証 step が存在すること（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    revision = data["exporter"]["revision"]
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "git rev-parse HEAD" in s and "git status --porcelain" in s
+        and "exporter.revision" in s and revision in s
+    )
+    assert check_index < export_index
+
+
+def test_harness2_reexport_manifest_replay_recipe_exporter_checkout_check_missing_rejected() -> None:
+    """exporter checkout 検証 step が丸ごと欠落していると reject される
+    （PR #327 第9巡指摘17の元の欠陥: 供給 clone を無検証実行していた）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"]
+        if "git rev-parse HEAD" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="exporter checkout verification step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_exporter_checkout_check_after_export_step_rejected() -> None:
+    """exporter checkout 検証 step が export 実行 step より後に配置されて
+    いると reject される（存在するだけでは不十分——export 実行前に検証
+    されていなければ供給 clone を保護できない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    check_index = next(i for i, s in enumerate(steps) if "git rev-parse HEAD" in s)
+    assert check_index < export_index
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    reordered.append(check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="exporter checkout verification step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_post_export_check_present() -> None:
+    """正常系: export 実行 step より後に、`artifacts` 9エントリ全数と
+    `sha256_run1`/`bytes` フィールド名を参照する post-export 閉世界照合
+    step が存在すること（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if all(key in s for key in m.REEXPORT_ARTIFACT_KEYS)
+        and "sha256_run1" in s and "bytes" in s
+    )
+    assert check_index > export_index
+
+
+def test_harness2_reexport_manifest_replay_recipe_post_export_check_missing_rejected() -> None:
+    """post-export 閉世界照合 step が丸ごと欠落していると reject される
+    （PR #327 第9巡指摘16の元の欠陥: 別バイトが生成されても「replay 完了」
+    を主張できてしまっていた）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"]
+        if not all(key in s for key in m.REEXPORT_ARTIFACT_KEYS)
+    ]
+    with pytest.raises(m.Run9ValidationError, match="post-export closed-world verification step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_post_export_check_before_export_step_rejected() -> None:
+    """post-export 閉世界照合 step が export 実行 step より前に配置されて
+    いると reject される（存在するだけでは不十分——export 実行後でなければ
+    生成物を照合できない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if all(key in s for key in m.REEXPORT_ARTIFACT_KEYS)
+    )
+    assert check_index > export_index
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    reordered.insert(0, check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="post-export closed-world verification step"):
         m.validate_reexport_manifest(data)
 
 
@@ -16808,16 +16936,39 @@ def test_execprofile_verify_runtime_onnxruntime_version_mismatch_rejected(
 def test_execprofile_verify_runtime_available_providers_mismatch_rejected(
     contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """provider 不在（GPU provider が消えた等）・新規出現のいずれも
-    fail-closed で拒否される——ここでは CUDAExecutionProvider が新たに
-    観測された（自動 upgrade の兆候）ケースを確認する。"""
+    """PR #327 レビュー第9巡指摘18対応後の負例: `"CPUExecutionProvider"`
+    が live `get_available_providers()` に含まれない場合は fail-closed で
+    拒否される——ここでは CUDAExecutionProvider のみが観測され CPU
+    provider 自体が available から消えている（正当な CPU-only ホストの
+    受理とは異なり、CPU 可用性そのものが失われたケース）ことを確認する。
+    〔旧テストは歴史実測（Azure+CPU）との完全一致要求のもとで
+    CUDAExecutionProvider の新規出現自体を拒否していたが、第9巡指摘18で
+    その完全一致要求は撤去された——available に GPU provider が含まれる
+    こと自体はもはや拒否理由ではない（選択企図の拒否は (d) が担う）。〕"""
+    fake_ort = types.SimpleNamespace(
+        __version__="1.29.0",
+        get_available_providers=lambda: ["CUDAExecutionProvider"],
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    with pytest.raises(m.Run9ValidationError, match="get_available_providers"):
+        m.verify_execution_profile_runtime(contract)
+
+
+def test_execprofile_verify_runtime_available_providers_cpu_plus_cuda_accepted(
+    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #327 レビュー第9巡指摘18の直接非退行確認: CPUExecutionProvider
+    に加え CUDAExecutionProvider が live available に新規出現していても、
+    CPU 自体は available であるため受理される（歴史実測 Azure+CPU との
+    完全一致はもはや要求しない——GPU provider の available 出現自体は
+    拒否理由ではなく、選択企図の拒否のみ (d) が別途担う）。"""
     fake_ort = types.SimpleNamespace(
         __version__="1.29.0",
         get_available_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
     )
     monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
-    with pytest.raises(m.Run9ValidationError, match="get_available_providers"):
-        m.verify_execution_profile_runtime(contract)
+    result = m.verify_execution_profile_runtime(contract)
+    assert result["available_providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 
 def test_execprofile_verify_runtime_gpu_provider_selection_intent_rejected(
@@ -16840,20 +16991,20 @@ def test_execprofile_verify_runtime_cpu_only_available_accepted(
 ) -> None:
     """PR #327 レビュー第3巡指摘9と対をなす確認: live 環境が CPU-only
     （available == ["CPUExecutionProvider"] のみ）でも、pin 側の
-    `onnxruntime_available_providers.value` が同じく CPU-only であれば
-    受理される（`verify_execution_profile_runtime()` 側も strict subset
-    要件を課していないことの確認）。manifest 側の available を CPU-only
-    へ書き換えた合成データ + それに合わせた pin を持つ合成 contract で
-    検証する（本物の manifest は Azure+CPU のため、第7巡指摘13対応後は
-    `_tampered_execprofile_contract()` 経由で pin を差し替える必要が
-    ある——manifest dict を直接注入する経路はもう存在しない）。"""
+    `onnxruntime_available_providers.value` が Azure+CPU のままでも
+    受理される（第9巡指摘18対応後は歴史実測との完全一致を要求しない
+    ——「CPUExecutionProvider が live available に含まれること」のみを
+    要求するため、pin 側の値を CPU-only へ書き換える必要はもはやない。
+    本テストは合成 contract 経由の回帰確認として維持し、pin 側を
+    Azure+CPU のまま変更しない構成にした）。"""
     def _mutate(data: Dict[str, Any]) -> None:
-        avail = data["additional_measurements"]["onnxruntime_available_providers"]
-        avail["value"] = ["CPUExecutionProvider"]
-        # value を smoke_record_value（Azure+CPU）から乖離させるため、
-        # 自己整合性チェック（matches_smoke_record ==
-        # (value == smoke_record_value)）を満たすよう False へ更新する。
-        avail["matches_smoke_record"] = False
+        # 第9巡指摘18対応前は pin 側 value を CPU-only へ書き換えて
+        # `matches_smoke_record` の自己整合性を保つ必要があったが、本関数
+        # はもう pin 側 value を live 照合に使わないため、この mutate は
+        # 構造上のダミー（manifest 実体は無変更）としてのみ残す——合成
+        # contract 経由テストの配管（`_tampered_execprofile_contract()`）を
+        # 再利用するための最小差分。
+        pass
 
     tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
         contract, tmp_path, mutate=_mutate,
@@ -16866,6 +17017,25 @@ def test_execprofile_verify_runtime_cpu_only_available_accepted(
     result = m.verify_execution_profile_runtime(
         tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
     )
+    assert result["available_providers"] == ["CPUExecutionProvider"]
+
+
+def test_execprofile_verify_runtime_cpu_only_available_accepted_real_manifest(
+    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #327 レビュー第9巡指摘18の直接正例（P2、採用）: 合成 contract を
+    経由せず、本物の pin 済み manifest（`onnxruntime_available_providers.
+    value` は歴史実測どおり Azure+CPU のまま）に対し、live 環境が
+    CPU-only（available == ["CPUExecutionProvider"] のみ）でも受理される
+    ことを確認する——「CPUExecutionProvider が live available に含まれる
+    こと」のみを要求し、歴史実測との完全一致は要求しないという新契約の
+    最短経路での確認。"""
+    fake_ort = types.SimpleNamespace(
+        __version__="1.29.0",
+        get_available_providers=lambda: ["CPUExecutionProvider"],
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    result = m.verify_execution_profile_runtime(contract)
     assert result["available_providers"] == ["CPUExecutionProvider"]
 
 

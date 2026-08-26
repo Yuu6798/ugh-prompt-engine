@@ -688,6 +688,17 @@ config_sha:
 # のまま、repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の
 # 実バイト、第8世代）は情報記録として保持する:
 #   "602a0987666d2207f59b9b36f2360ff4942ad3812acb453e0808bddec5141a24"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第9巡指摘16/17、P2×2、
+# いずれも採用の連鎖更新——`acoustic_export_companions.expected_items
+# [acoustic_onnx].reexport_manifest_ref.reexport_manifest_sha256` を新
+# `reexport_manifest_sha` pin 値（第8世代、exporter checkout 検証 step +
+# post-export 閉世界照合 step の新設）へ追随させた結果、
+# `dependency_pins_manifest.json` 自体の実バイトが変わった。台帳の内容
+# （render_asset_ledger 等）自体は無変更。pin 欄自体は PENDING のまま、
+# repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の実バイト、
+# 第9世代）は情報記録として保持する:
+#   "4e2751834bb1f52d71671eabd6e4225b9350e8df09f0fbcac6b7011a5197cb77"
 dependency_pins_sha:
   value: null
   status: PENDING
@@ -925,8 +936,38 @@ dependency_pins_sha:
 # 変わったための repin。旧 pin 値（第6世代、PR #327 第7巡指摘14対応後）は
 # 履歴として保持する:
 #   efe4ff2101d84b9062ac6fb34f6416db5a2277aa0324effdc684249c1c95cdb5
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第9巡指摘16/17、P2×2、いずれも
+# 採用。Claude 完結ルート）: 本巡は「replay recipe の閉世界性」ファミリー
+# の終端巡——recipe が export 起動で終わり出力側の閉世界照合を持たず
+# （指摘16）、供給 clone の `scripts/export.py` 自体（exporter checkout）
+# を無検証実行していた（指摘17）、という残り2穴を閉じた。指摘17対応:
+# export 実行 step の**前**に、`<diffsinger_repo clone（session workdir、
+# repo外）>/DiffSinger` を cwd として (i) `git rev-parse HEAD` が
+# `exporter.revision`（"e2307b1080b00f3999702ce9017cfd75c7f862fe"）と完全
+# 一致すること、(ii) `git status --porcelain` が空であること（dirty
+# checkout 拒否）を検証し、不一致・dirty なら export_command を実行しない
+# step を新設した。指摘16対応: export 実行 step の**後**に、`<out_dir>`
+# 配下の生成物9点全数について `artifacts.*.file`/`sha256_run1`/`bytes` と
+# 全数一致することを照合する post-export 閉世界照合 step（欠落・不一致・
+# 想定外ファイルいずれも fail-closed 拒否。歴史 pin との一致/不一致の
+# 意味論には関与しない——照合対象は「この manifest が記録した再export
+# 出力とのバイト一致」のみ）を新設した。`run9_schema.
+# validate_reexport_manifest()` へ2件の fail-closed 検証を追加した:
+# (i) exporter checkout 検証 step が `git rev-parse HEAD`/`git status
+# --porcelain`/`exporter.revision`（pin 値逐語）を参照し、export 実行
+# step より厳密に前へ配置されていることの存在強制、(ii) post-export 照合
+# step が `artifacts` 9エントリ全数（`REEXPORT_ARTIFACT_KEYS`）と
+# `sha256_run1`/`bytes` フィールド名を参照し、export 実行 step より厳密に
+# 後へ配置されていることの存在強制（負例テスト各2件——step 欠落・誤った
+# 配置順——を追加、いずれも reject を確認）。`export_command`/
+# `export_command_cwd`/`export_environment_lock`/`experiment_side_inputs`/
+# `artifacts`/`exporter` 等、既存の実測事実は1文字も変更していない——新設
+# step 2件の追加のみで実バイトが変わったための repin。旧 pin 値（第7世代、
+# PR #327 第8巡指摘15対応後）は履歴として保持する:
+#   f244a104644ebcdcf5f44d5e3df8e17924eef4f38bb731aed8381d904bc7897f
 reexport_manifest_sha:
-  value: "f244a104644ebcdcf5f44d5e3df8e17924eef4f38bb731aed8381d904bc7897f"
+  value: "9ba64a662fc4683d7a6741d26c199d600a5f51ca1b58acbc98fdc351cb086545"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json
 
