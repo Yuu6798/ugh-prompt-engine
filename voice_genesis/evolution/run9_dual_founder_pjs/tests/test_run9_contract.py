@@ -16148,6 +16148,48 @@ def test_harness2_reexport_manifest_replay_recipe_post_export_check_before_expor
         m.validate_reexport_manifest(data)
 
 
+# --- PR #327 レビュー第10巡指摘19（P2, 採用）: 未定義トークン全数拒否 + ---
+# --- export 実行引数列の canonical export_command[1:] 厳密一致検証   ---
+# 本巡で bot レビュー対応の規約上限10巡に到達——「未定義トークン」
+# ファミリーの終端巡。第9巡で新設した export 実行 step / post-export 閉
+# 世界照合 step のバッククォート内に、export_command_variables.variables
+# へ未登録のトークン `<out_dir>` が紛れ込んでいた穴への対応。
+
+
+def test_harness2_reexport_manifest_replay_recipe_undefined_token_rejected() -> None:
+    """export 実行 step のバッククォート逐語コマンド内に、
+    export_command_variables.variables へ未登録の `<...>` トークンが
+    混入していると reject される（PR #327 第10巡指摘19の元の欠陥:
+    `<out_dir>` が未定義のまま残っていた）。地の文の一般的表記
+    （`artifacts.<key>.sha256_run1` 等）は走査対象外であることは
+    happy path（既存の全 harness2 系テスト）が回帰固定する。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    mutated = steps[export_index].replace("--ckpt 40000 --out", "--ckpt 40000 <out_dir> --out")
+    assert mutated != steps[export_index]
+    steps[export_index] = mutated
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="undefined token"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_export_step_argument_mismatch_rejected() -> None:
+    """export 実行 step のバッククォート逐語コマンドの引数トークン列が
+    canonical `export_command[1:]` と食い違っていると reject される
+    （interpreter 部の差し替え以外の変更は一切許容しない——1トークンの
+    値ズレも検出する）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    mutated = steps[export_index].replace("--ckpt 40000", "--ckpt 99999")
+    assert mutated != steps[export_index]
+    steps[export_index] = mutated
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="do not exactly match canonical"):
+        m.validate_reexport_manifest(data)
+
+
 # --- PR #327 レビュー第1巡指摘3: adjudication_basis 実バイト cross-check (9) ---
 
 

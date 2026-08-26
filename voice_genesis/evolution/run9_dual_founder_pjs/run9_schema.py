@@ -13227,6 +13227,30 @@ _REEXPORT_REPLAY_RECIPE_EXPORTER_REVISION_FIELD_MARKER: str = "exporter.revision
 # を直接走査するため、ここでは定数化しない）。
 _REEXPORT_REPLAY_RECIPE_POST_EXPORT_SHA_FIELD_MARKER: str = "sha256_run1"
 _REEXPORT_REPLAY_RECIPE_POST_EXPORT_BYTES_FIELD_MARKER: str = "bytes"
+# 未定義トークン検出用（PR #327 レビュー第10巡指摘19対応、P2）: `<...>`
+# 形式のプレースホルダは export_command_variables.variables に登録済みの
+# ものしか steps に現れてはならない——未定義トークン（例: 過去に混入した
+# `<out_dir>`）が shell 実行時に未置換のまま渡ると、意図しない解釈（例:
+# 入力リダイレクト）で export 前に失敗する。`<out_dir>` 個別対処ではなく
+# `<...>` トークンのファミリー全体をカテゴリカルに全数走査する。
+_REEXPORT_ANGLE_TOKEN_PATTERN = re.compile(r"<[^<>]+>")
+# export 実行 step 内のバッククォート区切りコマンド抽出用（同指摘対応）:
+# step の引数トークン列が canonical `export_command[1:]` と正確一致する
+# こと（interpreter 部のみ venv python への差し替えを許容）を機械検証する
+# ために使う。
+_REEXPORT_BACKTICK_COMMAND_PATTERN = re.compile(r"`([^`]+)`")
+
+
+def _reexport_command_tokens(command: str) -> List[str]:
+    """バッククォート区切り逐語コマンド文字列を空白区切りトークン列へ分割
+    する。`<session workdir（repo外）>` のようなプレースホルダトークン自体
+    が内部に半角スペースを含むため、単純な str.split() では途中で誤って
+    分断される——`<...>` 区間内の空白のみ一時的に置換して保護してから
+    split() し、復元する（PR #327 レビュー第10巡指摘19対応）。"""
+    protected = _REEXPORT_ANGLE_TOKEN_PATTERN.sub(
+        lambda m: m.group(0).replace(" ", "\x00"), command,
+    )
+    return [tok.replace("\x00", " ") for tok in protected.split()]
 _REEXPORT_REPRODUCIBILITY_CHECK_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "description", "all_run1_run2_identical",
 })
@@ -13510,6 +13534,25 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
     指摘16/17 により、replay recipe の閉世界性——入力（checkpoint +
     experiment 側4点 + lock + interpreter 版）・実行体（exporter checkout
     + venv interpreter）・出力（9 artifacts）——の全照合が本関数で閉じる。
+
+    **replay_environment_recipe の未定義トークン全数拒否 + 引数列一致検証
+    （PR #327 レビュー第10巡指摘19対応、P2。本巡で bot レビュー対応の規約
+    上限10巡に到達——「未定義トークン」ファミリーの終端巡）**: 第9巡で
+    新設した export 実行 step・post-export 閉世界照合 step のバッククォート
+    区切り逐語コマンド内に、`export_command_variables.variables` へ未登録
+    の `<out_dir>` というトークンが紛れ込んでいた——shell 上では未置換の
+    まま渡り、意図しない解釈（例: 入力リダイレクト）で export 前に失敗
+    する穴だった。本関数は (i) `steps` 全数のバッククォート区切りコマンド
+    （`_REEXPORT_BACKTICK_COMMAND_PATTERN` で抽出——地の文の一般的表記
+    「artifacts.<key>.sha256_run1」等は shell に渡らないため走査対象外）
+    を走査し、出現する全 `<...>` トークン（`_REEXPORT_ANGLE_TOKEN_
+    PATTERN`）が `export_command_variables.variables` の登録済みキー集合
+    に含まれることを fail-closed で全数強制する（`<out_dir>` 個別対処
+    ではなく未定義トークンのファミリー全体をカテゴリカルに閉じる）、
+    (ii) export 実行 step 内のバッククォートコマンドの引数トークン列が
+    canonical `export_command[1:]` と厳密一致することを machine 強制する
+    （interpreter 部のみ venv python パスへの差し替えを許容——それ以外の
+    1トークンでも食い違えば拒否）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"reexport manifest must be an object, got {type(data).__name__}")
@@ -13795,6 +13838,33 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
         )
     for i, step in enumerate(replay_steps):
         _require_non_empty_str(step, field=f"replay_environment_recipe.steps[{i}]")
+    # PR #327 レビュー第10巡指摘19（P2、採用）: `<...>` 形式のプレースホルダ
+    # トークンは export_command_variables.variables に登録済みのものしか
+    # steps の**逐語実行コマンド**（バッククォート区切り）に現れてはなら
+    # ない（第9巡で新設した2 step のバッククォート内に未登録の
+    # `<out_dir>` が紛れ込んでいた——shell 上では未置換のまま渡り、意図
+    # しない解釈で export 前に失敗する）。走査対象をバッククォート区切り
+    # コマンドに限定するのは、地の文（例: 「artifacts.<key>.sha256_run1」
+    # という「各キーについて」を示す一般的表記）まで誤って拒否しないため
+    # ——地の文は shell に渡らないため未定義でも実害がない。ここでは steps
+    # 全数のバッククォート区切りコマンドを走査し、出現する全 `<...>`
+    # トークンが registered variable 名の集合に含まれることを fail-closed
+    # で強制する（`<out_dir>` 個別対処ではなく未定義トークンのファミリー
+    # 全体をカテゴリカルに閉じる）。
+    _registered_command_var_names = set(variables.keys())
+    for i, step in enumerate(replay_steps):
+        for command in _REEXPORT_BACKTICK_COMMAND_PATTERN.findall(step):
+            for token in _REEXPORT_ANGLE_TOKEN_PATTERN.findall(command):
+                if token not in _registered_command_var_names:
+                    raise Run9ValidationError(
+                        f"reexport manifest.replay_environment_recipe.steps[{i}] contains a "
+                        f"backtick-delimited command referencing an undefined token {token!r} "
+                        f"that is not registered in export_command_variables.variables "
+                        f"({sorted(_registered_command_var_names)}) — every <...> placeholder "
+                        "used in a literal replay command must be a registered variable; this is "
+                        "a fail-closed categorical rejection of the undefined-token family, not "
+                        "a one-off fix for a specific token"
+                    )
     if not any("--no-deps" in step for step in replay_steps):
         raise Run9ValidationError(
             "reexport manifest.replay_environment_recipe.steps must contain a pip install step "
@@ -13864,6 +13934,45 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             "otherwise a replay would produce artifacts from an unpinned ambient environment"
         )
     export_step_index = export_step_indices[0]
+    # fail-closed (i-c)（PR #327 レビュー第10巡指摘19、P2、採用）: export 実行
+    # step が venv インタプリタパスを参照していること（上記 fail-closed
+    # (i)）だけでは、引数トークン列自体が canonical `export_command[1:]`
+    # と食い違っていないことまでは保証しない（例: 第9巡混入の未登録
+    # トークン `<out_dir>` が引数列に残っていた穴）。ここでは export 実行
+    # step 内のバッククォート区切りコマンド（venv_python_path と
+    # `scripts/export.py` の両方を含むものを一意に特定する）を抽出し、
+    # その引数トークン列（interpreter を除く）が canonical
+    # `export_command[1:]` と厳密一致することを machine 強制する
+    # （interpreter 部のみ venv python パスへの差し替えを許容——それ以外の
+    # 1トークンでも食い違えば拒否）。
+    export_step_text = replay_steps[export_step_index]
+    backtick_commands = [
+        c for c in _REEXPORT_BACKTICK_COMMAND_PATTERN.findall(export_step_text)
+        if venv_python_path in c and "scripts/export.py" in c
+    ]
+    if len(backtick_commands) != 1:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps"
+            f"[{export_step_index}] must contain exactly one backtick-delimited command "
+            f"invoking {venv_python_path!r} with scripts/export.py, found "
+            f"{len(backtick_commands)} — got step {export_step_text!r}"
+        )
+    export_command_tokens = _reexport_command_tokens(backtick_commands[0])
+    if not export_command_tokens or export_command_tokens[0] != venv_python_path:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps"
+            f"[{export_step_index}] backtick command must start with the venv interpreter path "
+            f"{venv_python_path!r}, got {export_command_tokens[:1]!r}"
+        )
+    if export_command_tokens[1:] != export_command[1:]:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps"
+            f"[{export_step_index}] backtick command argument tokens "
+            f"{export_command_tokens[1:]!r} do not exactly match canonical "
+            f"export_command[1:] {export_command[1:]!r} — only the interpreter token may be "
+            "substituted for the venv python path; every other argument token must be "
+            "byte-identical to the historical export_command record"
+        )
     # fail-closed (i-b)（PR #327 レビュー第8巡指摘15、P2、採用）: export 実行
     # step は cwd を export_command_cwd（DiffSinger checkout）へ変更した
     # **後**に venv_python_path を解決するため、`venv_export_replay` という

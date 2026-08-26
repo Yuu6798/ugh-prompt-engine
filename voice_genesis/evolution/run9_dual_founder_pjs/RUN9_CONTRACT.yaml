@@ -699,6 +699,17 @@ config_sha:
 # repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の実バイト、
 # 第9世代）は情報記録として保持する:
 #   "4e2751834bb1f52d71671eabd6e4225b9350e8df09f0fbcac6b7011a5197cb77"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第10巡指摘19、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第9世代、未定義トークン `<out_dir>` の canonical
+# トークンへの置換）へ追随させた結果、`dependency_pins_manifest.json`
+# 自体の実バイトが変わった。台帳の内容（render_asset_ledger 等）自体は
+# 無変更。pin 欄自体は PENDING のまま、repin ではなく情報記録の更新）。
+# 実測済みの sha256（本改訂後の実バイト、第10世代）は情報記録として
+# 保持する:
+#   "73dec00fbde42b6c96e057e07f9f7097ee6555e85e014789cc3dfb61bde9c2b1"
 dependency_pins_sha:
   value: null
   status: PENDING
@@ -966,8 +977,36 @@ dependency_pins_sha:
 # step 2件の追加のみで実バイトが変わったための repin。旧 pin 値（第7世代、
 # PR #327 第8巡指摘15対応後）は履歴として保持する:
 #   f244a104644ebcdcf5f44d5e3df8e17924eef4f38bb731aed8381d904bc7897f
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第10巡指摘19、P2、採用。本巡で
+# bot レビュー対応の規約上限10巡に到達——「未定義トークン」ファミリーの
+# 終端巡）: replay_environment_recipe.steps 内の export 実行 step・
+# post-export 閉世界照合 step が、export_command_variables に登録のない
+# 未定義トークン `<out_dir>` を参照しており、shell 上では未置換の
+# `<out_dir>` が入力リダイレクトと解釈されて export 前に失敗する穴を
+# 閉じた。現物確認: canonical `export_command` 自体は `<out_dir>` を含ま
+# ず、末尾は解決済みトークン `<session workdir（repo外）>/onnx_gate_
+# 40000`（`export_command[8]`）である——`<out_dir>` は歴史記録側の
+# プレースホルダではなく、第9巡で新設した2 step 内にのみ後から紛れ込んだ
+# 誤記であると確認できたため、`<out_dir>` を変数登録する側ではなく、
+# 両 step 内の全出現を登録済み canonical トークン `<session workdir（repo
+# 外）>/onnx_gate_40000`（export_command の実引数と同形）へ置換する解を
+# 採った。`run9_schema.validate_reexport_manifest()` へ2件の fail-closed
+# 検証を追加した: (i) steps 全数を走査し、`export_command_variables.
+# variables` に登録されていない `<...>` トークンが1件でも出現すれば拒否
+# する全数検証（`<out_dir>` 個別対処ではなく未定義トークンのファミリー
+# 全体をカテゴリカルに閉じる）、(ii) export 実行 step の引数トークン列が
+# canonical `export_command[1:]` と厳密一致すること（interpreter 部のみ
+# venv python への差し替えを許容）の機械検証。負例テスト2件（未定義
+# トークン混入・引数列不一致）を追加し、いずれも reject を確認した。
+# `export_command`/`export_command_cwd`/`export_environment_lock`/
+# `experiment_side_inputs`/`artifacts`/`exporter` 等、既存の実測事実は
+# 1文字も変更していない——step 内トークン置換のみで実バイトが変わった
+# ための repin。旧 pin 値（第8世代、PR #327 第9巡指摘16/17対応後）は
+# 履歴として保持する:
+#   9ba64a662fc4683d7a6741d26c199d600a5f51ca1b58acbc98fdc351cb086545
 reexport_manifest_sha:
-  value: "9ba64a662fc4683d7a6741d26c199d600a5f51ca1b58acbc98fdc351cb086545"
+  value: "a9b3d09db0ff13bb6b4175221327f58773a36821f8790ccd06aa8c0e5cea3ea2"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json
 
