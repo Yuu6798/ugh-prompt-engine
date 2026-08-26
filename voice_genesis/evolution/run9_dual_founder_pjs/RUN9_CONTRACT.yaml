@@ -721,6 +721,18 @@ config_sha:
 # repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の実バイト、
 # 第11世代）は情報記録として保持する:
 #   "e454b941b66c983f54f3622cc8fa0bd9cb809bc75a9d80d0ad090cbc6ff39070"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第16巡指摘28/29、P2×2、
+# いずれも採用の連鎖更新——`acoustic_export_companions.expected_items
+# [acoustic_onnx].reexport_manifest_ref.reexport_manifest_sha256` を新
+# `reexport_manifest_sha` pin 値（第11世代、venv 作成 step への --clear
+# 付与 + freeze/lock 全一致照合 step + export 先ディレクトリ事前空確認
+# step の新設——replay の再実行衛生・clean-slate 保証）へ追随させた結果、
+# `dependency_pins_manifest.json` 自体の実バイトが変わった。台帳の内容
+# （render_asset_ledger 等）自体は無変更。pin 欄自体は PENDING のまま、
+# repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の実バイト、
+# 第12世代）は情報記録として保持する:
+#   "90db7ccefe093c0e2244689d35539fca77f539665cef53fc212c6de3f88a7a7c"
 dependency_pins_sha:
   value: null
   status: PENDING
@@ -1048,8 +1060,47 @@ dependency_pins_sha:
 # ための repin。旧 pin 値（第9世代、PR #327 第10巡指摘19対応後）は履歴
 # として保持する:
 #   a9b3d09db0ff13bb6b4175221327f58773a36821f8790ccd06aa8c0e5cea3ea2
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第16巡指摘28/29、P2×2、いずれも
+# 採用——規約上限10巡超過後だが、3分類「将来汚染」に該当する新しい具体
+# 経路のため採用。Claude 完結ルート）: 本巡は replay の**再実行**衛生
+# （clean-slate 保証）の穴2件を閉じた——上記までの検証は初回 replay の
+# 閉世界性を閉じたが、同一 workdir での再実行（venv/出力先ディレクトリの
+# 残留）は未検証だった。指摘28: venv 作成 step が既存 venv_export_replay
+# を再利用すると、後続の `--no-deps` install は resolver 再解決のみを
+# 排除するのみで lock に無い残留パッケージを除去しない——export が
+# unrecorded 依存で走りうる。venv 作成 step のコマンドへ `--clear` を
+# 付与し（既存内容の削除を保証）、`--no-deps` install step の**後**・
+# export 実行 step の**前**に、venv の実測パッケージ集合
+# （`pip freeze --all`）が `export_environment_lock`（単一正本）と過不足
+# なく一致することを確認する freeze/lock 全一致照合 step を新設した
+# （照合コマンドを backtick 逐語で収載——manifest 自身を再 json.load し
+# `export_environment_lock` を単一正本として参照する python ワンライナー）。
+# 指摘29: 既存 `onnx_gate_40000` が残る workdir へ export すると、exporter
+# が期待ファイルを出力しそこねても前回 run の stale copy が post-export
+# 閉世界照合を偽 pass させ得る。export 実行 step の**前**に、export 先
+# ディレクトリ（`export_command` の `--out` 値そのもの）が存在しないこと
+# を確認する pre-flight step を新設した（存在すれば中止、削除はしない
+# ——手動確認へ引き継ぐ設計判断）。`run9_schema.validate_reexport_
+# manifest()` へ3件の fail-closed 検証を追加した: (a) venv 作成 step が
+# `--clear` トークンを含むことの存在強制、(b) freeze/lock 全一致照合 step
+# が `--no-deps` install step の後・export 実行 step の前に存在し
+# `export_environment_lock` を逐語参照していることの存在強制+順序強制、
+# (c) export 先ディレクトリ事前空確認 step が export 実行 step の前に
+# 存在することの存在強制+順序強制（負例テスト各複数件——`--clear` 欠落・
+# freeze 照合欠落/前方配置/後方配置・空確認欠落/後方配置——を追加、いずれも
+# reject を確認）。`export_command`/`export_command_cwd`/
+# `export_environment_lock`/`experiment_side_inputs`/`artifacts`/
+# `exporter`/`install_steps` 等、既存の実測事実は1文字も変更していない
+# ——新設 step 2件 + 既存 venv 作成 step への `--clear` 付与のみで実バイトが
+# 変わったための repin。この2点により、replay の再実行衛生（clean-slate
+# 保証）は入力・環境・実行体・出力の全面に対して閉じ、「replay recipe の
+# 閉世界性」ファミリーはここで終端する（新しい具体経路が示されない限り、
+# 本ファミリーへの追加対応は行わない）。旧 pin 値（第10世代、PR #327 第
+# 11巡指摘20対応後）は履歴として保持する:
+#   fd99519a598fd5ad19a474626d332a2f426cd8b560a925bb0ab6b34708ab0f13
 reexport_manifest_sha:
-  value: "fd99519a598fd5ad19a474626d332a2f426cd8b560a925bb0ab6b34708ab0f13"
+  value: "a2333bfa17d585a589f827c570e4e61d90ebd3993606d3443b15890f1f7bf805"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json
 

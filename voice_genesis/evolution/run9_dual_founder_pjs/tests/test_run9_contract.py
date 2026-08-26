@@ -15964,16 +15964,17 @@ def test_harness2_reexport_manifest_replay_recipe_bare_pip_step_rejected() -> No
 
 
 def test_harness2_reexport_manifest_replay_recipe_venv_bootstrap_bare_python_allowed() -> None:
-    """venv 作成 step 自体（`python -m venv <session workdir（repo外）>/
+    """venv 作成 step 自体（`python -m venv --clear <session workdir（repo外）>/
     venv_export_replay`、直前の interpreter 版検証 step の対象）は ambient
     python を使うのが正当であり、bare-interpreter 検査から除外されること
     （誤検知しないことの回帰固定）。PR #327 第7巡指摘14対応後は steps[0] が
     interpreter 版検証 step、steps[1] が venv 作成 step になった。PR #327
-    第8巡指摘15対応後は venv 作成先が cwd 非依存の絶対パスへ変わった。"""
+    第8巡指摘15対応後は venv 作成先が cwd 非依存の絶対パスへ変わった。第16巡
+    指摘28対応後は venv 作成コマンドへ --clear が付与された。"""
     data = _reexport_manifest_data()
     steps = data["replay_environment_recipe"]["steps"]
     assert "-m venv" in steps[1]
-    assert "python -m venv <session workdir（repo外）>/venv_export_replay" in steps[1]
+    assert "python -m venv --clear <session workdir（repo外）>/venv_export_replay" in steps[1]
     m.validate_reexport_manifest(data)  # 例外なしの確認
 
 
@@ -16312,6 +16313,144 @@ def test_harness2_reexport_manifest_requirements_replay_relative_reference_rejec
     steps[pip_index] = mutated
     data["replay_environment_recipe"]["steps"] = steps
     with pytest.raises(m.Run9ValidationError, match="checkout-stable rooted prefix"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第16巡指摘28/29（P2×2、採用——規約上限10巡超過後だが ---
+# --- 3分類「将来汚染」に該当する新しい具体経路）: replay の再実行衛生     ---
+# 指摘28: venv 作成 step が既存 venv_export_replay を再利用すると、
+# --no-deps install は lock に無い残留パッケージを除去しない。venv 作成
+# コマンドへ --clear を必須化し、pip install の後・export 実行の前に
+# freeze/lock 全一致照合 step を必須化する。
+# 指摘29: 既存 onnx_gate_40000 が残る workdir へ export すると、stale copy
+# が post-export 閉世界照合を偽 pass させ得る。export 実行 step の前に
+# export 先ディレクトリの事前空確認 step を必須化する。
+
+
+def test_harness2_reexport_manifest_replay_recipe_venv_create_clear_flag_present() -> None:
+    """正常系: 現行 steps の venv 作成 step が --clear を含むこと（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    venv_create_index = next(i for i, s in enumerate(steps) if "-m venv" in s)
+    assert "--clear" in steps[venv_create_index]
+
+
+def test_harness2_reexport_manifest_replay_recipe_venv_create_missing_clear_flag_rejected() -> None:
+    """venv 作成 step から --clear が欠落していると reject される（PR #327
+    第16巡指摘28-iの元の欠陥: 既存 venv_export_replay を再利用した replay
+    再実行で --no-deps が lock に無い残留パッケージを除去しない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    venv_create_index = next(i for i, s in enumerate(steps) if "-m venv" in s)
+    steps[venv_create_index] = steps[venv_create_index].replace("--clear ", "")
+    assert "--clear" not in steps[venv_create_index]
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="--clear"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_freeze_check_step_present() -> None:
+    """正常系: pip install step（--no-deps）の後・export 実行 step の前に、
+    `pip freeze --all` と `export_environment_lock` を参照する freeze/lock
+    全一致照合 step が存在すること（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    pip_index = next(i for i, s in enumerate(steps) if "--no-deps" in s)
+    export_index = _export_step_index(steps)
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "pip freeze --all" in s and "export_environment_lock" in s
+    )
+    assert pip_index < check_index < export_index
+
+
+def test_harness2_reexport_manifest_replay_recipe_freeze_check_step_missing_rejected() -> None:
+    """freeze/lock 全一致照合 step が丸ごと欠落していると reject される
+    （PR #327 第16巡指摘28-iiの元の欠陥: venv 再利用時の残留パッケージが
+    export へ進む前に検出されない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"] if "pip freeze --all" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="freeze/lock reconciliation step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_freeze_check_step_before_pip_install_rejected() -> None:
+    """freeze/lock 全一致照合 step が pip install step（--no-deps）より前に
+    配置されていると reject される（venv がまだ install 済みでない時点の
+    照合は無意味）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "pip freeze --all" in s and "export_environment_lock" in s
+    )
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    reordered.insert(0, check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="freeze/lock reconciliation step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_freeze_check_step_after_export_step_rejected() -> None:
+    """freeze/lock 全一致照合 step が export 実行 step より後に配置されて
+    いると reject される（export 実行前に検証されていなければ意味がない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "pip freeze --all" in s and "export_environment_lock" in s
+    )
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    reordered.append(check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="freeze/lock reconciliation step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_out_dir_check_step_present() -> None:
+    """正常系: export 実行 step の前に、export --out 値と `.exists()` を
+    参照する export 先ディレクトリ事前空確認 step が存在すること
+    （回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    out_arg = data["export_command"][-1]
+    check_index = next(
+        i for i, s in enumerate(steps) if out_arg in s and ".exists()" in s
+    )
+    assert check_index < export_index
+
+
+def test_harness2_reexport_manifest_replay_recipe_out_dir_check_step_missing_rejected() -> None:
+    """export 先ディレクトリ事前空確認 step が丸ごと欠落していると reject
+    される（PR #327 第16巡指摘29の元の欠陥: 既存 onnx_gate_40000 の stale
+    copy が post-export 閉世界照合を偽 pass させ得る）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"] if ".exists()" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="export-directory pre-flight step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_out_dir_check_step_after_export_step_rejected() -> None:
+    """export 先ディレクトリ事前空確認 step が export 実行 step より後に
+    配置されていると reject される（存在するだけでは不十分——export 実行前
+    でなければ stale copy を検出できない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    check_index = next(i for i, s in enumerate(steps) if ".exists()" in s)
+    assert check_index < export_index
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    reordered.append(check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="export-directory pre-flight step"):
         m.validate_reexport_manifest(data)
 
 

@@ -13293,6 +13293,21 @@ _REEXPORT_REPLAY_RECIPE_EXPORTER_REVISION_FIELD_MARKER: str = "exporter.revision
 # を直接走査するため、ここでは定数化しない）。
 _REEXPORT_REPLAY_RECIPE_POST_EXPORT_SHA_FIELD_MARKER: str = "sha256_run1"
 _REEXPORT_REPLAY_RECIPE_POST_EXPORT_BYTES_FIELD_MARKER: str = "bytes"
+# venv 作成 step の --clear 必須化に使うマーカー（PR #327 レビュー第16巡
+# 指摘28対応、P2）: 既存 venv_export_replay の再利用による残留パッケージ
+# 混入を防ぐ。
+_REEXPORT_REPLAY_RECIPE_VENV_CLEAR_MARKER: str = "--clear"
+# freeze/lock 全一致照合 step の存在確認に使うマーカー（同指摘28対応）:
+# 照合 step は `pip freeze --all` の逐語コマンドと、lock 配列の単一正本
+# フィールド名 `export_environment_lock`（`_REEXPORT_REPLAY_RECIPE_LOCK_
+# ARRAY_NAME` と同一定数を再利用）の両方を逐語で参照していなければ
+# ならない。
+_REEXPORT_REPLAY_RECIPE_FREEZE_COMMAND_MARKER: str = "pip freeze --all"
+# export 先ディレクトリ事前空確認 step の存在確認に使うマーカー（PR #327
+# レビュー第16巡指摘29対応、P2）: 照合 step は export --out 値そのもの
+# （呼び出し側で `out_arg` から動的に取得）と、存在確認を表す
+# `.exists()` 呼び出しの両方を逐語で参照していなければならない。
+_REEXPORT_REPLAY_RECIPE_OUT_DIR_EXISTS_MARKER: str = ".exists()"
 # 未定義トークン検出用（PR #327 レビュー第10巡指摘19対応、P2）: `<...>`
 # 形式のプレースホルダは export_command_variables.variables に登録済みの
 # ものしか steps に現れてはならない——未定義トークン（例: 過去に混入した
@@ -13619,6 +13634,28 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
     canonical `export_command[1:]` と厳密一致することを machine 強制する
     （interpreter 部のみ venv python パスへの差し替えを許容——それ以外の
     1トークンでも食い違えば拒否）。
+
+    **replay の再実行衛生（clean-slate 保証、PR #327 レビュー第16巡指摘
+    28/29対応、P2×2、採用——規約上限10巡超過後だが3分類「将来汚染」に
+    該当する新しい具体経路）**: 上記までの検証は初回 replay の閉世界性を
+    閉じたが、同一 workdir での**再実行**（venv/出力先ディレクトリの
+    残留）は未検証だった。指摘28: venv 作成 step が既存 `venv_export_
+    replay` を再利用すると `--no-deps` install は lock に無い残留パッケー
+    ジを除去しない——export が unrecorded 依存で走りうる。本関数は
+    (a) venv 作成 step のコマンドに `--clear` トークンが含まれること、
+    (b) `--no-deps` install step の**後**・export 実行 step の**前**に、
+    venv の実測パッケージ集合（`pip freeze --all`）が `export_environment_
+    lock`（単一正本）と過不足なく一致することを確認する検証 step が存在
+    すること、の2点を fail-closed で machine 強制する。指摘29: 既存
+    `onnx_gate_40000` が残る workdir へ export すると、exporter が期待
+    ファイルを出力しそこねても前回 run の stale copy が post-export 閉
+    世界照合を偽 pass させ得る。本関数は export 実行 step の**前**に、
+    export 先ディレクトリ（`export_command` の `--out` 値そのもの）が
+    存在しないことを確認する pre-flight step が存在することを fail-closed
+    で machine 強制する（削除の実行有無まではここでは検証しない——手動
+    確認へ委ねる設計判断）。この2点により、replay の再実行衛生（clean-
+    slate 保証）は入力・環境・実行体・出力の全面に対して閉じ、
+    「replay recipe の閉世界性」ファミリーはここで終端する。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"reexport manifest must be an object, got {type(data).__name__}")
@@ -13963,12 +14000,17 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
                             f"the repo root or an unrelated workdir — got command {command!r}"
                         )
                     search_from = idx + len(filename)
-    if not any("--no-deps" in step for step in replay_steps):
+    # PR #327 レビュー第16巡指摘28（P2、採用）の freeze/lock 照合 step 順序
+    # 検査（下記）が参照するため、--no-deps install step の index をここで
+    # 捕捉する（既存の存在確認自体は変更しない）。
+    pip_install_indices = [i for i, step in enumerate(replay_steps) if "--no-deps" in step]
+    if not pip_install_indices:
         raise Run9ValidationError(
             "reexport manifest.replay_environment_recipe.steps must contain a pip install step "
             "using --no-deps (resolver re-resolution must be excluded — the lock array is the "
             "sole version source of truth)"
         )
+    pip_install_index = pip_install_indices[0]
     if not any(
         "json.load" in step and _REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME in step
         for step in replay_steps
@@ -14011,6 +14053,22 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             f"{_REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER!r}) — fail-closed guard against creating "
             "the replay venv with an interpreter whose version was never checked against "
             "environment_versions.python"
+        )
+    # PR #327 レビュー第16巡指摘28（P2、採用）: replay 再実行時、venv 作成
+    # step が既存 venv_export_replay ディレクトリをそのまま再利用すると、
+    # 後続の --no-deps install は resolver 再解決のみを排除するのみで
+    # lock に無い残留パッケージを除去しない——export が unrecorded 依存で
+    # 走りうる。venv 作成 step のコマンドへ --clear を必須化し（既存内容の
+    # 削除を保証）、この穴を fail-closed で machine 強制する。
+    if _REEXPORT_REPLAY_RECIPE_VENV_CLEAR_MARKER not in replay_steps[venv_create_index]:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps"
+            f"[{venv_create_index}] (the venv creation step, containing "
+            f"{_REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER!r}) must include the "
+            f"{_REEXPORT_REPLAY_RECIPE_VENV_CLEAR_MARKER!r} flag — reusing an existing "
+            "venv_export_replay directory across replay attempts can leave residual packages "
+            "that a --no-deps install does not remove, letting export run with unrecorded "
+            "dependencies"
         )
     # PR #327 レビュー第6巡指摘12（P2、採用）: replay recipe が checkpoint-side
     # 入力の照合まで書いていながら、肝心の export 実行手順を一切書いておらず
@@ -14070,6 +14128,54 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             f"export_command[1:] {export_command[1:]!r} — only the interpreter token may be "
             "substituted for the venv python path; every other argument token must be "
             "byte-identical to the historical export_command record"
+        )
+    # PR #327 レビュー第16巡指摘28（P2、採用）: venv 作成 step への --clear
+    # 必須化（上記）だけでは、将来 --clear なしで誤って再実行された場合の
+    # 残留や、--clear 自体が期待通り動作しなかった場合を検出できない——
+    # pip install step（--no-deps）の**後**・export 実行 step の**前**に、
+    # venv の実測パッケージ集合（`pip freeze --all`）が export_environment_
+    # lock（単一正本）と過不足なく一致することを確認する検証 step の存在を
+    # fail-closed で machine 強制する（照合コマンドは backtick 逐語で
+    # steps 側に収載済みであること、export_environment_lock を逐語参照して
+    # いることの両方を要求する）。
+    freeze_check_indices = [
+        i for i, step in enumerate(replay_steps)
+        if _REEXPORT_REPLAY_RECIPE_FREEZE_COMMAND_MARKER in step
+        and _REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME in step
+    ]
+    if (
+        not freeze_check_indices
+        or freeze_check_indices[0] <= pip_install_index
+        or freeze_check_indices[0] >= export_step_index
+    ):
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a freeze/lock "
+            f"reconciliation step (referencing {_REEXPORT_REPLAY_RECIPE_FREEZE_COMMAND_MARKER!r} "
+            f"and {_REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME!r}) strictly after the --no-deps "
+            f"install step (index {pip_install_index}) and strictly before the export execution "
+            f"step (index {export_step_index}) — fail-closed guard against a reused "
+            "venv_export_replay directory carrying residual packages that --no-deps does not "
+            "remove, letting export run with unrecorded dependencies"
+        )
+    # PR #327 レビュー第16巡指摘29（P2、採用）: 既存 onnx_gate_40000 が残る
+    # workdir（export_command の --out 値そのもの）へ export すると、
+    # exporter が期待ファイルを出力しそこねても前回 run の stale copy が
+    # post-export 閉世界照合（下記）を偽 pass させ得る。export 実行 step の
+    # **前**に、export 先ディレクトリが存在しないことを確認する pre-flight
+    # step の存在を fail-closed で machine 強制する（out_arg 自身の逐語
+    # 参照と存在確認マーカーの両方を要求する——削除の実行有無まではここでは
+    # 検証しない、手動確認へ委ねる設計判断のため）。
+    out_dir_check_indices = [
+        i for i, step in enumerate(replay_steps)
+        if out_arg in step and _REEXPORT_REPLAY_RECIPE_OUT_DIR_EXISTS_MARKER in step
+    ]
+    if not out_dir_check_indices or out_dir_check_indices[0] >= export_step_index:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain an export-directory "
+            f"pre-flight step (referencing the export --out value {out_arg!r} and "
+            f"{_REEXPORT_REPLAY_RECIPE_OUT_DIR_EXISTS_MARKER!r}) strictly before the export "
+            f"execution step (index {export_step_index}) — fail-closed guard against a stale "
+            "prior-run output directory making the post-export closed-world check falsely pass"
         )
     # fail-closed (i-b)（PR #327 レビュー第8巡指摘15、P2、採用）: export 実行
     # step は cwd を export_command_cwd（DiffSinger checkout）へ変更した
