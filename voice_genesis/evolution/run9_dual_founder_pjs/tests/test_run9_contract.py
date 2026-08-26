@@ -12796,6 +12796,136 @@ def test_pin2r6_fix6_rejects_stale_sample_inventory_after_song_removed(
 
 
 # ---------------------------------------------------------------------------
+# PR #325 第5巡 Codex bot レビュー Fix 7（P2, 採用 — probe/seed_policy
+# loader 由来の in-process 乖離検査パターンの適用漏れ）: 本 loader が
+# 消費する contract 欄5つ全てを revalidated/disk_contract 間で照合する。
+# 「Fix 7」という名称は PR #318 系（learning recipe 型検証）の Fix 7 とは
+# 無関係の別スレッド由来——本セクションのテスト名は既存の pin2r{round}
+# 命名規約（`pin2r6` 直後）に従い区別する。
+# ---------------------------------------------------------------------------
+
+# ("linked_field_name", "raw キーパス（ネストは (親キー, 子キー) のタプル
+# で表現）") — `interventions.c1_sham_takes_per_founder` のみネスト。
+_PIN2R7_FIX7_LINKED_FIELD_RAW_PATHS: Tuple[Tuple[str, Any], ...] = (
+    ("dataset_manifest_sha", "dataset_manifest_sha"),
+    ("dataset_row_order_sha", "dataset_row_order_sha"),
+    ("practice_audio_split_manifest_sha", "practice_audio_split_manifest_sha"),
+    ("probe_manifest_sha", "probe_manifest_sha"),
+    ("c1_sham_takes_per_founder", ("interventions", "c1_sham_takes_per_founder")),
+)
+
+
+@pytest.mark.parametrize(
+    "linked_field_name,raw_path", _PIN2R7_FIX7_LINKED_FIELD_RAW_PATHS,
+)
+def test_pin2r7_fix7_rejects_in_process_divergence_on_each_linked_field(
+    contract: m.Run9RunContract, linked_field_name: str, raw_path: Any,
+) -> None:
+    """必須負例（指摘が名指しした具体的シナリオ、5欄それぞれについて
+    パラメタライズ）: 渡す contract の raw で対象欄**のみ**を改変し
+    （`dataset_manifest_sha` は他4欄のケースでは不変のまま）、他4欄が
+    自己整合していても in-process 乖離が fail-closed で拒否されることを
+    確認する——Fix 7 以前は `dataset_manifest_sha` 以外の4欄がこの防御の
+    対象外だった。"""
+    tampered = m.load_run9_contract(copy.deepcopy(contract.raw))
+    if isinstance(raw_path, tuple):
+        parent_key, child_key = raw_path
+        original_value = tampered.raw[parent_key][child_key]["value"]
+        tampered_value = "0" * 64 if isinstance(original_value, str) else 999999
+        tampered.raw[parent_key][child_key]["value"] = tampered_value
+    else:
+        tampered.raw[raw_path]["value"] = "0" * 64
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=f"the passed-in contract's {linked_field_name} pin",
+    ):
+        m.load_pinned_dataset_split_manifest(tampered)
+
+
+def test_pin2r7_fix7_positive_real_contract_unaffected(contract: m.Run9RunContract) -> None:
+    """正例回帰: 未改変の実 contract に対する呼び出しは、5欄全数の乖離
+    検査を追加した後も引き続き成功する。"""
+    m.load_pinned_dataset_split_manifest(contract)  # 例外を投げないことの確認
+
+
+def test_pin2r7_fix7_covers_exactly_the_five_fields_this_loader_consumes() -> None:
+    """Fix 7 の乖離検査対象が、本 loader が実際に消費する contract 欄
+    ちょうど5つ（`dataset_manifest_sha`/`dataset_row_order_sha`/
+    `practice_audio_split_manifest_sha`/`probe_manifest_sha`/
+    `interventions.c1_sham_takes_per_founder`）と一致することを機械
+    固定する（過不足の回帰防止）。"""
+    assert set(m._DATASET_LOADER_LINKED_PIN_ACCESSORS) == {
+        ("dataset_manifest_sha", "pin_field"),
+        ("dataset_row_order_sha", "pin_field"),
+        ("practice_audio_split_manifest_sha", "pin_field"),
+        ("probe_manifest_sha", "pin_field"),
+        ("c1_sham_takes_per_founder", "intervention_take_count_field"),
+    }
+
+
+def test_pin2r7_fix7_other_loaders_have_no_same_type_residual() -> None:
+    """同型残余点検（コーディネータ指示）: 他の `load_pinned_*` loader
+    （`load_pinned_probe_manifest`/`load_pinned_seed_policy_manifest`/
+    `load_pinned_failure_abort_criteria`/`load_pinned_measurement_spec_
+    manifest`/`load_pinned_founder_genome_document`）は、それぞれが
+    実際に消費する contract 欄が単一（`load_pinned_founder_genome_
+    document` は `founder_genome_shas.{founder_id}` の1欄のみ、他4関数
+    はそれぞれ対応する `*_sha` 欄1欄のみ）であり、既存の単一欄乖離検査
+    がその消費欄と過不足なく一致することをソース走査で機械確認する
+    ——`load_pinned_dataset_split_manifest()` が5欄を消費するにもかかわ
+    らず乖離検査を1欄にしか適用していなかったという Fix 7 と同型の欠陥
+    が、他の loader には存在しないことの確認（「残余なし」の直接検証、
+    憶測ではなくソース走査による確認）。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    single_field_loaders = {
+        "load_pinned_probe_manifest": "probe_manifest_sha",
+        "load_pinned_seed_policy_manifest": "seed_policy_sha",
+        "load_pinned_failure_abort_criteria": "failure_abort_criteria_sha",
+        "load_pinned_measurement_spec_manifest": "measurement_spec_sha",
+    }
+    # 次の**トップレベル**定義（関数/クラスいずれも、インデント無しの
+    # `def `/`class ` で始まる行）の開始位置を全て収集する——`load_
+    # pinned_founder_genome_document()` のように次の `load_pinned_*`
+    # 関数までの間に無関係な関数が多数挟まるケースがあるため、
+    # `load_pinned_` 限定のマーカーでは本文の終端を誤検出する。
+    top_level_def_markers = sorted(
+        m_.start() for m_ in re.finditer(r"\n(?:def |class )", source)
+    )
+
+    def _function_body(func_name: str) -> str:
+        start = source.index(f"def {func_name}(")
+        later_defs = [pos for pos in top_level_def_markers if pos > start]
+        end = later_defs[0] if later_defs else len(source)
+        return source[start:end]
+
+    for func_name, expected_field in single_field_loaders.items():
+        body = _function_body(func_name)
+        # disk_contract/revalidated から読む pin 欄名（`pin_field("...")`
+        # 呼び出しの引数）を全て抽出し、消費欄がちょうど1つで、それが
+        # 期待欄と一致することを確認する。
+        referenced_fields = sorted(set(re.findall(r'\.pin_field\("([^"]+)"\)', body)))
+        assert referenced_fields == [expected_field], (
+            f"{func_name}: expected to consume exactly {[expected_field]!r} via pin_field(), "
+            f"found {referenced_fields!r} — possible same-type Fix 7 gap"
+        )
+        # 乖離検査（revalidated 側の同名呼び出し）も同じ欄に対して行われ
+        # ていることを確認する（disk 側だけでなく passed 側も同一欄）。
+        assert body.count(f'.pin_field("{expected_field}")') == 2, (
+            f"{func_name}: expected exactly 2 pin_field({expected_field!r}) call sites "
+            "(disk_contract + revalidated) — divergence check may not cover the consumed field"
+        )
+
+    genome_body = _function_body("load_pinned_founder_genome_document")
+    assert "founder_genome_sha(founder_id)" in genome_body
+    assert genome_body.count("founder_genome_sha(founder_id)") == 2
+    # founder_genome_document 系関数は他の contract pin_field()/
+    # intervention_take_count_field() を読まない（domain/rights_manifest
+    # は別引数として渡され、contract からは読まない）。
+    assert ".pin_field(" not in genome_body
+    assert ".intervention_take_count_field(" not in genome_body
+
+
+# ---------------------------------------------------------------------------
 # RUN9-L0-PIN-2: learning recipe 裁定値の境界値回帰（User 裁定 2026-08-25
 # を validate_learning_recipe_manifest() が厳密強制することの直接確認 —
 # 上記 Fix 7/15/17 系の型検証テストとは別に、裁定値そのものの境界を

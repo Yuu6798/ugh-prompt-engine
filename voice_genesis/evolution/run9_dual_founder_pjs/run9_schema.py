@@ -10608,6 +10608,24 @@ def validate_dataset_split_manifest(data: Mapping[str, Any]) -> None:
     _validate_dataset_split_rule_accounting(data["design_rule_accounting"])
 
 
+# PR #325 第5巡 Codex bot レビュー指摘 Fix 7（P2, 採用）: `load_pinned_
+# dataset_split_manifest()` が消費する contract 欄の全数（5欄）を
+# 宣言する。`(field_name, accessor_method_name)` の組——
+# `accessor_method_name` は `Run9RunContract` のメソッド名（`pin_field`
+# または `intervention_take_count_field`）。モジュールレベル定数として
+# 関数外に出す理由: テスト層（`test_pin2r7_fix7_covers_exactly_the_
+# five_fields_this_loader_consumes`）が「本 loader が消費する欄の全数と
+# 過不足なく一致するか」を関数の内部実装に踏み込まず機械確認できるよう
+# にするため。
+_DATASET_LOADER_LINKED_PIN_ACCESSORS: Tuple[Tuple[str, str], ...] = (
+    ("dataset_manifest_sha", "pin_field"),
+    ("dataset_row_order_sha", "pin_field"),
+    ("practice_audio_split_manifest_sha", "pin_field"),
+    ("probe_manifest_sha", "pin_field"),
+    ("c1_sham_takes_per_founder", "intervention_take_count_field"),
+)
+
+
 def load_pinned_dataset_split_manifest(
     contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
     contract_path: Optional[Path] = None, practice_manifest_path: Optional[Path] = None,
@@ -10754,20 +10772,40 @@ def load_pinned_dataset_split_manifest(
         contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
     )
     disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
-    disk_field = disk_contract.pin_field("dataset_manifest_sha")
-
     revalidated = load_run9_contract(contract.raw)
-    passed_field = revalidated.pin_field("dataset_manifest_sha")
-    if passed_field != disk_field:
-        raise Run9ValidationError(
-            "load_pinned_dataset_split_manifest(): the passed-in contract's dataset_manifest_sha "
-            f"pin ({passed_field!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml pin "
-            f"({disk_field!r}) at {effective_contract_path} — an in-process Run9RunContract that "
-            "disagrees with the canonical on-disk file is treated as tampering evidence and rejected "
-            "fail-closed (same defense as load_pinned_probe_manifest()/load_pinned_seed_policy_"
-            "manifest())"
-        )
 
+    # PR #325 第5巡 Codex bot レビュー指摘 Fix 7（P2, 採用 — probe/
+    # seed_policy loader 由来の in-process 乖離検査パターンの適用漏れ）:
+    # 従来はこの乖離検査を `dataset_manifest_sha` 1 欄にしか適用しておら
+    # ず、本 loader が実際に消費する残り4欄（`dataset_row_order_sha`/
+    # `practice_audio_split_manifest_sha`/`probe_manifest_sha`/
+    # `interventions.c1_sham_takes_per_founder`）は下記コードで
+    # `disk_contract` からしか読まれていなかった——`dataset_manifest_sha`
+    # さえ一致していれば、渡された contract（`revalidated`）側でこれら
+    # 他4欄だけを in-process で独立に差し替えた改竄が検出されないまま
+    # 通過し得た（`disk_contract` の値を読むこと自体は正しいが、
+    # 「渡された contract がディスク正典から乖離していないか」という
+    # 乖離検査自体が5欄中1欄にしか及んでいなかった）。本 loader が消費
+    # する contract 欄の全数（5欄、`_DATASET_LOADER_LINKED_PIN_
+    # ACCESSORS` — モジュールレベル定数、テスト層からの網羅性確認用に
+    # 関数外へ出す）を `revalidated`/`disk_contract` 間で fail-closed
+    # 照合する——1欄でも乖離すれば raise する。
+    for linked_field_name, accessor_name in _DATASET_LOADER_LINKED_PIN_ACCESSORS:
+        disk_linked_field = getattr(disk_contract, accessor_name)(linked_field_name)
+        passed_linked_field = getattr(revalidated, accessor_name)(linked_field_name)
+        if passed_linked_field != disk_linked_field:
+            raise Run9ValidationError(
+                f"load_pinned_dataset_split_manifest(): the passed-in contract's "
+                f"{linked_field_name} pin ({passed_linked_field!r}) diverges from the canonical "
+                f"on-disk RUN9_CONTRACT.yaml pin ({disk_linked_field!r}) at "
+                f"{effective_contract_path} — an in-process Run9RunContract that disagrees with "
+                "the canonical on-disk file for any pin this loader consumes is treated as "
+                "tampering evidence and rejected fail-closed (same defense as load_pinned_probe_"
+                "manifest()/load_pinned_seed_policy_manifest(), now applied to every linked field "
+                "this loader reads, not just dataset_manifest_sha)"
+            )
+
+    disk_field = disk_contract.pin_field("dataset_manifest_sha")
     field = disk_field
     if not _is_field_pinned(field):
         raise Run9ValidationError(
