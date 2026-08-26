@@ -11219,14 +11219,22 @@ def test_pin1_r4_branch_write_policy_r0_bytes_is_write_boundary_not_pin() -> Non
 # 同じ理由）。
 
 
-def test_pin1_r7_failure_abort_criteria_repinned_lineage_seven_generations(
+# `test_pin1_r7_failure_abort_criteria_repinned_lineage_seven_generations`
+# （7世代版）は PR #324 第7巡の repin により超過し、下記
+# `test_pin1_r8_failure_abort_criteria_repinned_lineage_eight_generations`
+# （8世代・全履歴を包含する上位互換）へ置き換えた（重複削除、第3-6巡と
+# 同じ理由）。
+
+
+def test_pin1_r8_failure_abort_criteria_repinned_lineage_eight_generations(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """failure_abort_criteria_sha の repin 履歴7世代（RUN9-L0-PIN-1 初回
+    """failure_abort_criteria_sha の repin 履歴8世代（RUN9-L0-PIN-1 初回
     → PR #324 第1巡 Fix 1/2/3 → 第2巡 Fix 6 → 第3巡 rule 12 再降格 →
     第4巡 rule 2 の condition 強化 → 第5巡 verify_user_donor_manifest_
     complete() の path ベース署名化 → 第6巡 独立 pinned anchor への
-    接地追加）が append-only で、現在値が最新（第6巡）のものであることを
+    接地追加 → 第7巡 domain 自体の founder_genome_shas pin への束縛
+    追加）が append-only で、現在値が最新（第7巡）のものであることを
     明示的に確認する（repin 漏れの回帰防止）。"""
     round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
     round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
@@ -11235,10 +11243,12 @@ def test_pin1_r7_failure_abort_criteria_repinned_lineage_seven_generations(
     round5_value = "954b463ecfa497b732240d92c6e07a29ebecef480d97dc1f42e9108c12635a52"
     round6_value = "8f9f8c30d521b5f2048891aa17fe9c1aeeb068a1ec8007f2146d4c1ec22cf38d"
     round7_value = "9b68656d6b5cb30019376ae9848e03801e10b595b5372dca63ba6a59a9d03caf"
+    round8_value = "20c71d273993f062cf562b2097a57bfe530c54303e87287c58e98bad9876df4a"
     current = contract_raw["failure_abort_criteria_sha"]["value"]
-    assert current == round7_value
+    assert current == round8_value
     assert current not in (
         round1_value, round2_value, round3_value, round4_value, round5_value, round6_value,
+        round7_value,
     )
     assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
 
@@ -11455,6 +11465,116 @@ def test_pin1_r7_rule2_condition_documents_fourth_stage_anchor_grounding() -> No
     assert "_verify_user_anchor_matches_rights_manifest" in rule2["condition"]
     assert "anchor_hashes" in rule2["condition"]
     assert "lockstep" in rule2["condition"]
+
+
+# ---------------------------------------------------------------------------
+# PR #324 第7巡指摘（P2, 採用）: domain ファイル自体は第4段までのチェーン
+# では何とも照合されておらず、domain 側だけを改変（+ 辻褄合わせに
+# rights/ledger 側の projection も同時に偽装する「3点 lockstep」）すれば
+# (1)〜(4) を素通りし得る——domain を founder_genome_shas pin（+
+# founders/*.json 実バイト）へ束縛する第5段を追加した。
+# ---------------------------------------------------------------------------
+
+
+def test_pin1_r8_verify_user_donor_manifest_complete_still_grounds_with_fifth_stage() -> None:
+    """既存正常系は不変で通ること（第5段追加後も実データで PASS）。"""
+    flat = m.verify_user_donor_manifest_complete()
+    assert len(flat["entries"]) == len(m.USER_DONOR_CARD_IDS) == 17
+
+
+def test_pin1_r8_compute_founder_genome_id_depends_on_domain_content_digest() -> None:
+    """事実確認: `_compute_founder_genome_id()` のハッシュ入力に
+    `identity_domain.content_digest()`（`anchor_hashes` 全件を含む）が
+    含まれること（run9_schema.py:6401-6423 の実装読解の直接回帰）——
+    第5段が domain 改変を検出できる根拠。"""
+    schema_text = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert "identity_domain_content_sha256" in schema_text
+    assert "identity_domain.content_digest()" in schema_text
+
+
+def test_pin1_r8_genome_id_changed_when_anchor_computation_changed_pr320() -> None:
+    """事実確認: PR #320 で anchor 計算方式を変更した際に実際に genome_id
+    が変化した実績（`f5ea253804728b3b` → 現行 PINNED 値
+    `66f420672a154283`）が RUN9_CONTRACT.yaml に記録されていること
+    （依存が机上の理屈ではなく実測された事実であることの直接証拠）。"""
+    contract_text = (_RUN_DIR / "RUN9_CONTRACT.yaml").read_text(encoding="utf-8")
+    assert "f5ea253804728b3b" in contract_text
+    contract = m.load_run9_contract_from_yaml_path(m.RUN9_CONTRACT_YAML_PATH)
+    assert contract.founder_genome_sha("R9F-01")["value"] == m.compute_file_sha256(
+        m.founder_genome_document_path("R9F-01")
+    )
+
+
+def _write_three_point_lockstep_tamper(tmp_path: Path) -> Tuple[Path, Path, Path]:
+    """domain の `anchor_hashes["user"]` を改変し、それに辻褄を合わせて
+    rights/ledger 側の projection も同時に偽装した3点 lockstep の temp
+    ファイル3つを作る——(1)〜(4) は素通りするが、domain 自体は
+    founders/*.json の pin と食い違う状態になる。"""
+    rights = copy.deepcopy(_real_rights_manifest_loaded())
+    ledger = copy.deepcopy(_real_donor_ledger())
+    domain_raw = copy.deepcopy(json.loads(m.RUN9_IDENTITY_DOMAIN_PATH.read_text(encoding="utf-8")))
+
+    fake_sha256 = "2" * 64
+    r_entries = rights["voice_identity_rights"]["entries"]
+    card_id = r_entries[0]["card_id"]
+    r_entries[0]["sha256"] = fake_sha256
+    for entry in ledger["entries"]:
+        if entry["card_id"] == card_id:
+            entry["sha256"] = fake_sha256
+
+    # 辻褄合わせ: 偽装した rights_manifest から projection を再計算し、
+    # domain.anchor_hashes["user"] をその値へ差し替える（第4段を素通り
+    # させるための偽装）。
+    projection = m.extract_user_identity_attestation_projection(rights)
+    domain_raw["anchor_hashes"]["user"] = m._compute_canonical_pin_sha256(projection)
+
+    rights_path = tmp_path / "rights_manifest.json"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    domain_path = tmp_path / "identity_domain_run9_v1.json"
+    _write_json_bytes(rights_path, rights)
+    _write_json_bytes(ledger_path, ledger)
+    _write_json_bytes(domain_path, domain_raw)
+    return rights_path, ledger_path, domain_path
+
+
+def test_pin1_r8_three_point_lockstep_passes_stage_four_alone(tmp_path: Path) -> None:
+    """前提確認: 3点 lockstep 偽装は第4段単体（`_verify_user_anchor_
+    matches_rights_manifest`）では素通りすること（= 第5段が無ければ
+    検出できないことの直接証拠）。"""
+    rights_path, _ledger_path, domain_path = _write_three_point_lockstep_tamper(tmp_path)
+    tampered_rights = m.load_rights_manifest_json(rights_path.read_text(encoding="utf-8"))
+    tampered_domain = m.load_run9_identity_domain(domain_path)
+    assert tampered_domain.is_pinned()
+    m._verify_user_anchor_matches_rights_manifest(  # 例外を投げないことの確認（前提が成立）
+        tampered_domain, tampered_rights
+    )
+
+
+def test_pin1_r8_verify_user_donor_manifest_complete_detects_three_point_lockstep_tampering(
+    tmp_path: Path,
+) -> None:
+    """第7巡指摘の直接回帰: domain 単独改変 + rights/ledger 側の辻褄合わせ
+    偽装という3点 lockstep が、第5段の genome 再構成不一致で fail-closed
+    拒否されること。"""
+    rights_path, ledger_path, domain_path = _write_three_point_lockstep_tamper(tmp_path)
+    with pytest.raises(m.Run9ValidationError, match="does not match the canonical reconstruction"):
+        m.verify_user_donor_manifest_complete(
+            rights_manifest_path=rights_path,
+            donor_ledger_path=ledger_path,
+            identity_domain_path=domain_path,
+        )
+
+
+def test_pin1_r8_rule2_condition_documents_fifth_stage_and_trust_root_boundary() -> None:
+    """rule 2 の condition が第5段（domain の founder_genome_shas pin
+    への束縛）と信頼根の境界宣言の両方を明記していること。"""
+    data = _failure_abort_criteria_data()
+    rule2 = next(r for r in data["rules"] if r["rule_id"] == 2)
+    assert rule2["enforcement"] == "MACHINE"
+    assert "load_pinned_founder_genome_document" in rule2["condition"]
+    assert "founder_genome_shas" in rule2["condition"]
+    assert "信頼根" in rule2["condition"]
+    assert "自己参照" in rule2["condition"]
 
 
 # ---------------------------------------------------------------------------

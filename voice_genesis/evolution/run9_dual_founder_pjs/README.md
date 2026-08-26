@@ -812,6 +812,44 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json/
   domains/identity_domain_run9_v1.json は無改変（sha256 確認済み・
   domains は read-only 参照のみ）〕。
+  〔履歴: PR #324 Codex bot レビュー第7巡（2026-08-26, 1件 P2, 採用）で
+  `verify_user_donor_manifest_complete()` に第5段を追加（分類は不変・
+  MACHINE のまま）。指摘: domain ファイル自体は第4段までのチェーンでは
+  何とも照合されておらず、domain 側だけを改変（+ 辻褄合わせに
+  rights/ledger 側の projection も同時に偽装する「3点 lockstep」）すれば
+  (1)〜(4) を素通りし得る。Fable 設計判定: 指摘が示す
+  「contract-pinned founder reconstruction path」で domain を接地する。
+  事実確認: `build_founder(domain, ...)` の genome_id 計算
+  （`_compute_founder_genome_id()`、`run9_schema.py:6401-6423`）が
+  `identity_domain.content_digest()`（`anchor_hashes` 全件を含む正規形
+  ハッシュ）をハッシュ入力へ含めることを実装読解で確認。さらに PR #320
+  で anchor 計算方式を user-projection 方式へ移行した際、実際に
+  genome_id が `f5ea253804728b3b` → `66f420672a154283`（R9F-01、
+  `RUN9_CONTRACT.yaml` に記録済み）へ変化した実績が、この依存が机上の
+  理屈ではなく実測された事実であることの直接証拠。対応:
+  `verify_user_donor_manifest_complete()` に第5段を追加し、読み込んだ
+  domain を用いて `load_pinned_founder_genome_document()`（第2巡 Fix 6
+  新設の既存 production 消費経路）を R9F-01/R9F-02 の両方について
+  実行——domain 内容を `founder_genome_shas` pin（+ `founders/*.json`
+  実バイト）へ束縛する。domain の `anchor_hashes.user` を改変した temp
+  domain + それに合わせ projection を偽装した rights/ledger の3点
+  lockstep が、第4段単体では素通りするが第5段の genome 再構成不一致
+  （`build_founder()` 再構築との `to_dict()` 不一致）で fail-closed 拒否
+  されることを実測確認した（既存正常系は不変で通ることも確認済み）。
+  **信頼根の境界宣言**（この回帰ファミリーの終端として明記）: 本検証
+  チェーンの信頼根は `RUN9_CONTRACT.yaml` の pin 群である。contract
+  自体の完全性は repo 機構の外側（`branch_write_policy` による書込境界
+  宣言 + PR レビュー + discipline テスト + git 履歴）で担保される
+  宣言的信頼根であり、これ以上の repo 内機械検証は自己参照になるため
+  存在しない。`MACHINE` 分類は「信頼根 = contract pin を前提に、そこ
+  から対象実内容まで途切れない機械検証チェーンが存在する」ことを意味
+  する——「contract 自体も可変では」という指摘は、この信頼根境界の
+  再指摘であり新しい欠陥経路ではない。rule 2 の condition に第5段構成と
+  信頼根境界宣言を明記し、`failure_abort_criteria_sha` を実バイト
+  sha256 で repin（8世代目）。分類数は不変（MACHINE 1件 /
+  PROCEDURAL 19件）。seed_policy_manifest.json/measurement_spec_
+  manifest.json/founders/*.json/domains/identity_domain_run9_v1.json は
+  無改変（sha256 確認済み・domains は read-only 参照のみ）〕。
 - `measurement_spec_sha` は **PENDING のまま**（2026-08-25 RUN9-L0-PIN-1 で
   一時 PINNED 化 → 同日 PR #324 第2巡 Codex bot レビュー Fix 5（P2 ×2、
   採用）で PENDING へ復帰）。manifest 実体

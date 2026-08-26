@@ -9888,7 +9888,10 @@ RUN9_IDENTITY_DOMAIN_PATH = _THIS_DIR / "domains" / "identity_domain_run9_v1.jso
 
 
 def verify_user_donor_manifest_complete(
-    *, rights_manifest_path: Optional[Path] = None, donor_ledger_path: Optional[Path] = None,
+    *,
+    rights_manifest_path: Optional[Path] = None,
+    donor_ledger_path: Optional[Path] = None,
+    identity_domain_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """failure_abort_criteria.json rule #2（`User donor manifest
     incomplete`）の `condition` が参照する**唯一の正規消費経路**
@@ -9911,11 +9914,16 @@ def verify_user_donor_manifest_complete(
     してから3段チェーンへ渡す。**任意 Mapping を受ける互換シグネチャは
     意図的に残さない**——mapping 経由で厳密 parse をすり抜けられる穴を
     ふさぐことが本対応の目的そのものであるため、旧シグネチャの併存は
-    許容しない。`rights_manifest_path`/`donor_ledger_path` 省略時は正典
-    パス（`RIGHTS_MANIFEST_PATH`/`USER_DONOR_LEDGER_PATH`）を用いる。
+    許容しない。`rights_manifest_path`/`donor_ledger_path`/
+    `identity_domain_path` 省略時は正典パス
+    （`RIGHTS_MANIFEST_PATH`/`USER_DONOR_LEDGER_PATH`/
+    `RUN9_IDENTITY_DOMAIN_PATH`）を用いる（`identity_domain_path` の
+    override はテスト専用の穴ではなく、他2引数と同じ既存の override
+    規約——production 呼び出しは省略により凍結済み正典 domain のみを
+    消費する）。
 
-    4段の既存検証チェーンを束ねる薄いラッパー（新規検証ロジックは
-    書かない — 既存4関数の合成のみ）:
+    5段の既存検証チェーンを束ねる薄いラッパー（新規検証ロジックは
+    書かない — 既存5関数の合成のみ）:
 
     1. `validate_rights_manifest_four_layer(rights_manifest)` — 4層
        構造・閉じたキー集合・原則3式・禁止文言の completeness。
@@ -9947,12 +9955,47 @@ def verify_user_donor_manifest_complete(
        `card_id`/`duration_sec`/`sha256`/`source_sha256` を逐語で含むため、
        rights 側 entries の任意改変（lockstep 含む）は projection sha
        不一致で検出される。ledger 側は (3) の相互照合により rights に
-       束縛されるため、この第4段によりチェーン全体が独立 pinned anchor
-       へ接地する。
+       束縛される。
+    5. `load_pinned_founder_genome_document(founder_id, contract=..., domain=domain,
+       rights_manifest=rights_manifest)` を `R9F-01`/`R9F-02` の両方に対して
+       実行する——**domain 自体を founder_genome_shas pin へ束縛する**
+       （2026-08-26 Codex bot レビュー PR #324 第7巡指摘, P2, 採用:
+       (4) は rights_manifest を domain の anchor_hashes["user"] へ束縛
+       するが、domain ファイル自体は誰とも照合されておらず、domain 側
+       だけを改変（+ 辻褄合わせに rights/ledger 側の projection も
+       同時に偽装）すれば (1)〜(4) を素通りし得る、という指摘）。
+       `domain.anchor_hashes["user"]` は `build_founder()` の genome_id
+       計算に実際に依存する事実——`_compute_founder_genome_id()`
+       （run9_schema.py:6401-6423）が `identity_domain.content_digest()`
+       （`anchor_hashes` 全件を含む正規形ハッシュ）をハッシュ入力へ含める
+       ——を実装読解で確認済み。さらに PR #320 で anchor 計算方式を
+       user-projection 方式へ移行した際、実際に genome_id が
+       `f5ea253804728b3b` → `66f420672a154283`（R9F-01、
+       `RUN9_CONTRACT.yaml`/`README.md` に記録済みの実績）へ変化した
+       ことが、この依存が机上の理屈ではなく実測された事実であることの
+       直接証拠。したがって domain を用いて `founders/R9F-0x_genome.json`
+       の pin 済み実バイトへの再構成一致を強制すれば、domain 単独の
+       改変（辻褄合わせの偽装込み）は genome 再構成不一致で検出される。
+       `contract`（`RUN9_CONTRACT.yaml` の `founder_genome_shas` pin を
+       保持する `Run9RunContract`）は本関数が
+       `load_run9_contract_from_yaml_path(RUN9_CONTRACT_YAML_PATH)` で
+       都度ディスクから読み直す——外部から注入させる経路は持たない
+       （本関数自体への in-process 改竄面を増やさないため）。
+
+    **信頼根の境界宣言**（2026-08-26 PR #324 第7巡, この回帰ファミリーの
+    終端として明記する）: 本検証チェーンの信頼根は `RUN9_CONTRACT.yaml`
+    の pin 群である。contract 自体の完全性は repo 機構の外側
+    （`branch_write_policy` による書込境界宣言 + PR レビュー +
+    discipline テスト + git 履歴）で担保される宣言的信頼根であり、これ
+    以上の repo 内機械検証は自己参照になるため存在しない。`MACHINE`
+    分類は「信頼根 = contract pin を前提に、そこから対象実内容まで
+    途切れない機械検証チェーンが存在する」ことを意味する——「contract
+    自体も可変では」という指摘は、この信頼根境界の再指摘であり新しい
+    欠陥経路ではない。
 
     戻り値は (2) の flat 変換結果（呼び出し元が `entries` 等へ追加
     アクセスしたい場合のため）。harness の rights completeness 判定は
-    本関数経由のみで行うべきであり、(1)〜(3) のいずれか単独の呼び出しや、
+    本関数経由のみで行うべきであり、(1)〜(4) のいずれか単独の呼び出しや、
     本関数を経由しない直接 `json.load()` はいずれも不十分・契約違反で
     ある（probe/genome loader と同じ「唯一の正規消費経路」規約）。
     """
@@ -9985,16 +10028,29 @@ def verify_user_donor_manifest_complete(
     verify_rights_manifest_against_ledger(flat, donor_ledger)
 
     # 第4段（PR #324 第6巡指摘, P2, 採用）: 独立 pinned anchor への接地。
-    # domain ファイルは凍結済み・read-only 参照のみ（一切書き換えない）。
-    domain = load_run9_identity_domain(RUN9_IDENTITY_DOMAIN_PATH)
+    # production 呼び出し（identity_domain_path 省略）では凍結済み・
+    # read-only 参照のみの正典 domain ファイルを読む（一切書き換えない）。
+    effective_domain_path = (
+        identity_domain_path if identity_domain_path is not None else RUN9_IDENTITY_DOMAIN_PATH
+    )
+    domain = load_run9_identity_domain(effective_domain_path)
     if not domain.is_pinned():
         raise Run9ValidationError(
             "verify_user_donor_manifest_complete(): "
-            f"{RUN9_IDENTITY_DOMAIN_PATH} is not pinned (all 3 anchor_hashes and metric_space_sha "
+            f"{effective_domain_path} is not pinned (all 3 anchor_hashes and metric_space_sha "
             "must be real 64hex sha256) — the independent anchor this function's fourth stage "
             "grounds against is not established; refusing to consume rights completeness without it"
         )
     _verify_user_anchor_matches_rights_manifest(domain, rights_manifest)
+
+    # 第5段（PR #324 第7巡指摘, P2, 採用）: domain 自体を founder_genome_
+    # shas pin へ束縛する。contract は都度ディスクから読み直す（外部注入
+    # 経路は持たない）。
+    contract = load_run9_contract_from_yaml_path(RUN9_CONTRACT_YAML_PATH)
+    for founder_id in CONTRACT_FOUNDER_IDS:
+        load_pinned_founder_genome_document(
+            founder_id, contract=contract, domain=domain, rights_manifest=rights_manifest,
+        )
     return flat
 
 
