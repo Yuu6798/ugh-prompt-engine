@@ -3,10 +3,15 @@
 （起草: 2026-08-26、Claude 完結ルート — User 裁定「必要な素材はドライブに
 あるのでClaudeで完結できるはずだ。Claudeルートで作成して」（2026-08-26、
 `scratchpad/run9_user_adjudication_pin2.md` 末尾）に基づく。Design Memo =
-RUN9-L0-HARNESS-1。**コミット・push は本セッションで実施していない**——
-本記録・`inputs/dependency_pins_manifest.json`・`RUN9_CONTRACT.yaml`・
+RUN9-L0-HARNESS-1。〔履歴: フェーズ1起草時点（本節起草時）の注記——
+「コミット・push は本セッションで実施していない、本記録・
+`inputs/dependency_pins_manifest.json`・`RUN9_CONTRACT.yaml`・
 `README.md`・`run9_schema.py`・`tests/test_run9_contract.py` の変更は
-working tree 上の変更として残す）。
+working tree 上の変更として残す」だった。その後 **PR #326 としてコミット・
+push・公開済み**——本節を含む一連の変更は PR #326 のコミット履歴
+（第1巡〜第8巡の各巡対応コミット）として repo に確定している。以後の
+巡でも本記録・関連ファイルの変更は同様に PR #326 へのコミットとして
+反映される〕。
 
 workdir（repo 外、session scratchpad）:
 `scratchpad/harness_work/`（`drive/` / `url/` / `tar_gz/` / `diffsinger_repo/`）。
