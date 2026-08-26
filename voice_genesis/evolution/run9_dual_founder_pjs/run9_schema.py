@@ -15313,10 +15313,81 @@ def validate_execution_profile_manifest(data: Mapping[str, Any]) -> None:
     _require_non_empty_str(data["pin_disposition"], field="pin_disposition")
 
 
+def _cross_check_measured_source_line_text(
+    *,
+    source_file: str,
+    source_line: int,
+    source_line_text: str,
+    repo_root: Path,
+    resolved_path: Optional[Path],
+    field: str,
+    context: str,
+) -> None:
+    """`source_file`/`source_line`/`source_line_text` を伴う measured
+    provenance の実ファイル fail-closed 照合（PR #327 レビュー第14巡指摘26
+    対応、P2、採用）。
+
+    旧実装は `source_file`/`source_line`/`source_line_text` の型・非空検証
+    のみで、参照先ファイルの当該行を実 read して照合していなかった。
+    `render_code_commit.file_sha256`（全ファイル digest）が現行であること
+    は「ファイル全体が改変されていない」ことしか語らず、「この行番号が
+    この引用テキストを指す」ことは別途 machine 検証しない限り自己申告の
+    ままだった——repin 後の行ずれ（stale line）や引用テキストの捏造が、
+    digest さえ一致すれば受理されてしまう穴があった。
+
+    手順（`_resolve_repo_contained_path()` と同じ fail-closed 意匠）:
+    (a) `source_file` を `_resolve_repo_contained_path()`（絶対パス・`..`
+        traversal・symlink 脱出を拒否する containment guard）経由で解決
+        する。`resolved_path` が明示された場合はテスト用パスオーバー
+        ライドとして containment guard を経由せず直接使う（`render_code_
+        path` 等の既存オーバーライド引数と同じ規約——manifest 収載データ
+        を経由しないため本 guard の脅威モデル対象外）。
+    (b) 解決したファイルを実 read し、`source_line`（1-indexed）が範囲内
+        であることを確認する。範囲外（stale line）は fail-closed で拒否
+        する。
+    (c) 当該行を取得し、記録された `source_line_text` と一致することを
+        強制する。
+
+    正規化（現物 manifest の記録形式に合わせた最小限の設計）: 現行
+    manifest の `source_line_text` はインデント付き行（例
+    `gate_synth.py:1218` の `providers = [...]`）でも前後空白を含まない
+    strip 済み文字列として記録されている——実ファイル側の行のみ
+    `.strip()` して比較する（記録側は追加正規化しない。記録側に前後空白
+    が混入していれば、それも不一致として fail-closed で検出される）。
+    """
+    effective_path = (
+        resolved_path
+        if resolved_path is not None
+        else _resolve_repo_contained_path(
+            source_file, repo_root=repo_root, field=f"{field}.source_file", context=context,
+        )
+    )
+    if not effective_path.is_file():
+        raise Run9ValidationError(
+            f"{context}: cross-check source {effective_path} ({field}.source_file) does not exist"
+        )
+    lines = effective_path.read_text(encoding="utf-8").splitlines()
+    if source_line < 1 or source_line > len(lines):
+        raise Run9ValidationError(
+            f"{context}: {field}.source_line ({source_line!r}) is out of range for "
+            f"{effective_path} ({len(lines)} lines in the current working tree) — stale line "
+            "pointer rejected fail-closed"
+        )
+    actual_line_text = lines[source_line - 1].strip()
+    if actual_line_text != source_line_text:
+        raise Run9ValidationError(
+            f"{context}: {field}.source_line_text ({source_line_text!r}) diverges from the actual "
+            f"content of {effective_path}:{source_line} ({actual_line_text!r}) — stale or "
+            "fabricated provenance rejected fail-closed"
+        )
+
+
 def load_pinned_execution_profile_manifest(
     contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
     contract_path: Optional[Path] = None, adjudication_basis_path: Optional[Path] = None,
     render_code_path: Optional[Path] = None,
+    selected_providers_source_path: Optional[Path] = None,
+    deterministic_seed_source_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`execution_profile_sha` pin の**唯一の正規消費経路**
     （`load_pinned_reexport_manifest()` と同型の3層防御 read-once。
@@ -15345,6 +15416,23 @@ def load_pinned_execution_profile_manifest(
         runtime()` の役割であり、load 時ではなく RUN9 実行段の render
         直前に呼ぶ契約（両者を混ぜると CI マトリクス環境と RUN9 実行環境
         の分離が壊れる）。
+    (8) cross-check（PR #327 レビュー第14巡指摘26対応、P2、採用）:
+        `source_file`/`source_line`/`source_line_text` を伴う measured
+        provenance（`additional_measurements.onnxruntime_selected_
+        providers` と `additional_measurements.deterministic_seed_and_
+        thread_environment_variables.deterministic_seed`）について、
+        `_cross_check_measured_source_line_text()` で当該行の実テキスト
+        と `source_line_text` の一致を fail-closed で強制する
+        （`selected_providers_source_path`/`deterministic_seed_source_
+        path` でテスト用に上書き可能）。(7) の全ファイル digest だけでは
+        「この行番号がこの引用テキストを指す」ことまでは検証できない
+        ——repin 後の行ずれ・引用テキスト捏造を個別に検出する。
+        `onnxruntime_thread_settings.{intra,inter}_op_num_threads` は
+        `source_file`/`source_line` のみで `source_line_text` を持たない
+        （現物 manifest 確認済み）ため対象外——本 cross-check は
+        `source_line_text` を伴う項目にのみ適用される（該当項目のみで
+        ある事実は `validate_execution_profile_manifest()` の
+        `measured_required_keys` shape で machine 強制されている）。
 
     戻り値は検証済み manifest dict。
     """
@@ -15471,6 +15559,44 @@ def load_pinned_execution_profile_manifest(
                 "ない — gate_synth.py が pin 後に改変された可能性があり、fail-closed で拒否"
                 "する（provider/主要 runtime version 変更時の再pin 義務と同型の render code "
                 "版）"
+            )
+
+    # (8) cross-check（PR #327 レビュー第14巡指摘26対応、P2、採用）:
+    # source_file/source_line/source_line_text を伴う measured provenance
+    # （onnxruntime_selected_providers, deterministic_seed）の当該行を実
+    # read し、記録された source_line_text と一致することを fail-closed
+    # で強制する。(7) の全ファイル digest だけでは「この行番号がこの引用
+    # テキストを指す」ことまでは検証できない——repin 後の行ずれ・引用
+    # テキスト捏造を個別に検出する。
+    selected_measurement = data["additional_measurements"]["onnxruntime_selected_providers"]
+    if selected_measurement["status"] == "MEASURED":
+        _cross_check_measured_source_line_text(
+            source_file=selected_measurement["source_file"],
+            source_line=selected_measurement["source_line"],
+            source_line_text=selected_measurement["source_line_text"],
+            repo_root=_EXECPROFILE_REPO_ROOT,
+            resolved_path=selected_providers_source_path,
+            field="additional_measurements.onnxruntime_selected_providers",
+            context="load_pinned_execution_profile_manifest()",
+        )
+
+    seed_and_env_measurement = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]
+    if seed_and_env_measurement["status"] == "MEASURED":
+        deterministic_seed_measurement = seed_and_env_measurement["deterministic_seed"]
+        if deterministic_seed_measurement["status"] == "MEASURED":
+            _cross_check_measured_source_line_text(
+                source_file=deterministic_seed_measurement["source_file"],
+                source_line=deterministic_seed_measurement["source_line"],
+                source_line_text=deterministic_seed_measurement["source_line_text"],
+                repo_root=_EXECPROFILE_REPO_ROOT,
+                resolved_path=deterministic_seed_source_path,
+                field=(
+                    "additional_measurements.deterministic_seed_and_thread_environment_"
+                    "variables.deterministic_seed"
+                ),
+                context="load_pinned_execution_profile_manifest()",
             )
 
     return data

@@ -17302,6 +17302,187 @@ def test_execprofile_load_pinned_execution_profile_manifest_render_code_symlink_
         m.load_pinned_execution_profile_manifest(contract)
 
 
+# --- load_pinned_execution_profile_manifest(): measured source_line_text
+# cross-check (8) (PR #327 レビュー第14巡指摘26対応、P2、採用) --------------
+# 対象は source_file/source_line/source_line_text を全て持つ measured
+# 項目のみ（現物 manifest 確認済み: onnxruntime_selected_providers と
+# deterministic_seed_and_thread_environment_variables.deterministic_seed の
+# 2件。onnxruntime_thread_settings.{intra,inter}_op_num_threads は
+# source_line_text を持たないため対象外）。
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_selected_providers_source_line_text_matches_repo(
+    contract: m.Run9RunContract,
+) -> None:
+    """正例: 現行 manifest の `onnxruntime_selected_providers.
+    source_line_text` は実 repo の gate_synth.py:1218 と一致するため
+    happy path の load は成功する（cross-check (8) の既定経路確認）。"""
+    data = m.load_pinned_execution_profile_manifest(contract)
+    selected = data["additional_measurements"]["onnxruntime_selected_providers"]
+    assert selected["source_line_text"] == 'providers = ["CPUExecutionProvider"]'
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_selected_providers_source_line_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例1/3（行番号 stale）: `source_line` が別の行（1217 =
+    `so.inter_op_num_threads = 1`）を指すよう改変されると、その行の実
+    テキストが記録された `source_line_text` と食い違うため fail-closed で
+    拒否される（repin 後の行ずれ想定）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_selected_providers"]["source_line"] = 1217
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="onnxruntime_selected_providers.source_line_text"
+    ):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_selected_providers_source_line_text_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例2/3（source_line_text 改竄）: `source_line` は正しい実行
+    （1218）を指したまま `source_line_text` 自体が改竄されると
+    fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_selected_providers"]["source_line_text"] = (
+            'providers = ["TamperedExecutionProvider"]'
+        )
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="onnxruntime_selected_providers.source_line_text"
+    ):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_selected_providers_source_file_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例3/3（source_file が存在しないパス）: repo 配下ではあるが実在
+    しない相対パスへ差し替えられると fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_selected_providers"]["source_file"] = (
+            "voice_genesis/foundry/s1_gate/does_not_exist_gate_synth.py"
+        )
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_selected_providers_source_path_override_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`selected_providers_source_path` オーバーライド（`render_code_path`
+    等と同型のテスト用差し替え引数）で別ファイルを指定すると、containment
+    guard を経由せずその実ファイルの当該行に対して照合される。"""
+    fake_file = tmp_path / "gate_synth.py"
+    fake_file.write_text("\n".join(["x"] * 1220) + "\n", encoding="utf-8")
+    with pytest.raises(
+        m.Run9ValidationError, match="onnxruntime_selected_providers.source_line_text"
+    ):
+        m.load_pinned_execution_profile_manifest(
+            contract, selected_providers_source_path=fake_file,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_deterministic_seed_source_line_text_matches_repo(
+    contract: m.Run9RunContract,
+) -> None:
+    """正例: `deterministic_seed.source_line_text` は実 repo の
+    gate_synth.py:149 と一致するため happy path の load は成功する。"""
+    data = m.load_pinned_execution_profile_manifest(contract)
+    seed = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["deterministic_seed"]
+    assert seed["source_line_text"] == "SEED = 42"
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_deterministic_seed_source_line_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例1/3（行番号 stale）: deterministic_seed 側もファミリー単位で
+    掃討する。`source_line` が別の行（150 = `HEAD_FRAMES = 8`）を指すと
+    fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        seed = data["additional_measurements"][
+            "deterministic_seed_and_thread_environment_variables"
+        ]["deterministic_seed"]
+        seed["source_line"] = 150
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="deterministic_seed.source_line_text"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_deterministic_seed_source_line_text_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例2/3（source_line_text 改竄）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        seed = data["additional_measurements"][
+            "deterministic_seed_and_thread_environment_variables"
+        ]["deterministic_seed"]
+        seed["source_line_text"] = "SEED = 999"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="deterministic_seed.source_line_text"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_deterministic_seed_source_file_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例3/3（source_file が存在しないパス）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        seed = data["additional_measurements"][
+            "deterministic_seed_and_thread_environment_variables"
+        ]["deterministic_seed"]
+        seed["source_file"] = "voice_genesis/foundry/s1_gate/does_not_exist_gate_synth.py"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_deterministic_seed_source_path_override_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`deterministic_seed_source_path` オーバーライドの配線確認。"""
+    fake_file = tmp_path / "gate_synth.py"
+    fake_file.write_text("\n".join(["x"] * 200) + "\n", encoding="utf-8")
+    with pytest.raises(m.Run9ValidationError, match="deterministic_seed.source_line_text"):
+        m.load_pinned_execution_profile_manifest(
+            contract, deterministic_seed_source_path=fake_file,
+        )
+
+
 # --- verify_execution_profile_runtime(): run-gate live probe ---------------
 # (PR #327 レビュー第3巡指摘8(b) + 第7巡指摘13対応、2026-08-26)
 # `load_pinned_execution_profile_manifest()` からは意図的に分離した live
