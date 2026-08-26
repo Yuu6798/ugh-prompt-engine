@@ -1154,8 +1154,33 @@ reexport_manifest_sha:
 # から、その戻り値のみを live 照合に使う契約へ改めた——
 # `run9_schema.verify_execution_profile_runtime(contract, ...)` として
 # 呼ぶこと。manifest dict を直接注入できる公開経路はこれで存在しない。
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第15巡指摘27、P2、上限10ラウンド
+# 超過後だが3分類「将来汚染」に該当する新しい具体経路として採用。Claude
+# 完結ルート）: 第14巡 cross-check (8)（`_cross_check_measured_source_
+# line_text()`）は `source_line_text` を持つ2項目（onnxruntime_selected_
+# providers, deterministic_seed）のみを行照合の対象とし、
+# `onnxruntime_thread_settings` の intra/inter_op_num_threads（gate_
+# synth.py:1216-1217 出典、EXPLICITLY_SET）は `source_line` が正整数で
+# あることしか検証していなかった——将来 repin で cited 行が stale・無関係
+# になっても shape 検証だけでは受理されてしまい、正典 provenance が汚染
+# される穴だった。gate_synth.py の実行（`so.intra_op_num_threads = 1` /
+# `so.inter_op_num_threads = 1`）を Read で実測し、両項目へ
+# `source_line_text`（strip 済み逐語、第14巡対象2項目と同形式）を追加、
+# `run9_schema.py` 側は (a) `validate_execution_profile_manifest()` の
+# thread 設定 shape 検証へ `source_line_text`（非空 str、EXPLICITLY_SET
+# のときのみ内容検証——既存の source_file/source_line と同型分岐）を必須化
+# (b) cross-check (8) の対象を4項目へ全数化（第14巡と同じ照合ロジック、
+# `thread_settings_source_path` オーバーライドを `render_code_path` 系と
+# 同形で追加）(c) docstring の「thread_settings は構造的に対象外」記述を
+# 撤去し全数化の旨へ更新、とした。`identity_semantics`/`benchmark_
+# reference`/裁定 txt 参照は1byteも変更していない——追加は
+# `additional_measurements.onnxruntime_thread_settings` の記録形式強化
+# のみで実バイトが変わったための repin。旧 pin 値（第1世代、RUN9-
+# EXECPROFILE-1 初回 PINNED 時）は履歴として保持する:
+#   200c975967a7b34aa55d9e89a8c59ace2be850e5fd1d93a4ba4a7dbed5f06d34
 execution_profile_sha:
-  value: "200c975967a7b34aa55d9e89a8c59ace2be850e5fd1d93a4ba4a7dbed5f06d34"
+  value: "370a6332c76e19e10952f246bf8c82ba724416833489debeccbb3a00b840d7f2"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/execution_profile_manifest.json
 

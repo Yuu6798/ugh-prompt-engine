@@ -17063,6 +17063,43 @@ def test_execprofile_thread_settings_default_unspecified_requires_null_value() -
         m.validate_execution_profile_manifest(data)
 
 
+# --- PR #327 レビュー第15巡指摘27（P2、採用）: thread 設定 source_line_text
+# の shape 必須化（validate_execution_profile_manifest()） ------------------
+
+
+@pytest.mark.parametrize("sub_field", ["intra_op_num_threads", "inter_op_num_threads"])
+def test_execprofile_thread_settings_missing_source_line_text_rejected(sub_field: str) -> None:
+    """intra/inter_op_num_threads: `source_line_text` キーが欠落した shape
+    は fail-closed で拒否される（第15巡指摘27対応——旧 shape は
+    `source_file`/`source_line`/`specification_status`/`value` の4キーのみ
+    で `source_line_text` を必須としていなかった）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    del data["additional_measurements"]["onnxruntime_thread_settings"][sub_field]["source_line_text"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_execution_profile_manifest(data)
+
+
+@pytest.mark.parametrize("sub_field", ["intra_op_num_threads", "inter_op_num_threads"])
+def test_execprofile_thread_settings_empty_source_line_text_rejected(sub_field: str) -> None:
+    """intra/inter_op_num_threads: `source_line_text` が空文字列だと
+    fail-closed で拒否される（非空 str の必須化）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["onnxruntime_thread_settings"][sub_field]["source_line_text"] = ""
+    with pytest.raises(m.Run9ValidationError, match="source_line_text"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_thread_settings_source_line_text_happy_path_accepted() -> None:
+    """正例維持: 現行 manifest の thread 設定 source_line_text（gate_
+    synth.py の実 so.intra/inter_op_num_threads 代入文の逐語）は
+    validate_execution_profile_manifest() を素通りする。"""
+    data = _execprofile_manifest_data()
+    ts = data["additional_measurements"]["onnxruntime_thread_settings"]
+    assert ts["intra_op_num_threads"]["source_line_text"] == "so.intra_op_num_threads = 1"
+    assert ts["inter_op_num_threads"]["source_line_text"] == "so.inter_op_num_threads = 1"
+    m.validate_execution_profile_manifest(data)  # 例外なしの確認
+
+
 def test_execprofile_matches_smoke_record_self_check_rejected() -> None:
     """numpy_version.matches_smoke_record が実データと食い違うと拒否
     される（自己申告フィールドの in-process 再計算チェック）。"""
@@ -17481,6 +17518,141 @@ def test_execprofile_load_pinned_execution_profile_manifest_deterministic_seed_s
         m.load_pinned_execution_profile_manifest(
             contract, deterministic_seed_source_path=fake_file,
         )
+
+
+# --- load_pinned_execution_profile_manifest(): thread settings cross-check
+# (8) 全数化 (PR #327 レビュー第15巡指摘27対応、P2、上限10ラウンド超過後
+# だが3分類「将来汚染」該当の新しい具体経路として採用) -----------------------
+# 対象は onnxruntime_thread_settings.{intra,inter}_op_num_threads の2件
+# （第14巡時点は source_line_text 非搭載のため cross-check (8) 対象外
+# だったが、本巡で source_line_text を追加し編入した）。
+
+
+@pytest.mark.parametrize(
+    ("sub_field", "expected_line_text"),
+    [
+        ("intra_op_num_threads", "so.intra_op_num_threads = 1"),
+        ("inter_op_num_threads", "so.inter_op_num_threads = 1"),
+    ],
+)
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_source_line_text_matches_repo(
+    contract: m.Run9RunContract, sub_field: str, expected_line_text: str,
+) -> None:
+    """正例: 現行 manifest の thread 設定 `source_line_text` は実 repo の
+    gate_synth.py:1216/1217 と一致するため happy path の load は成功する
+    （cross-check (8) 全数化後の既定経路確認）。"""
+    data = m.load_pinned_execution_profile_manifest(contract)
+    sub = data["additional_measurements"]["onnxruntime_thread_settings"][sub_field]
+    assert sub["source_line_text"] == expected_line_text
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_source_line_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例1/3（行番号 stale）: intra_op_num_threads.source_line が別の行
+    （1217 = `so.inter_op_num_threads = 1`）を指すよう改変されると、記録
+    された source_line_text（intra 側の逐語）と食い違うため fail-closed で
+    拒否される（repin 後の行ずれ想定、第14巡と同型の掃討）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_thread_settings"]["intra_op_num_threads"][
+            "source_line"
+        ] = 1217
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="onnxruntime_thread_settings.intra_op_num_threads.source_line_text",
+    ):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_source_line_text_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例2/3（source_line_text 改竄）: `source_line` は正しい行（1217）を
+    指したまま inter_op_num_threads.source_line_text 自体が改竄されると
+    fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_thread_settings"]["inter_op_num_threads"][
+            "source_line_text"
+        ] = "so.inter_op_num_threads = 999"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="onnxruntime_thread_settings.inter_op_num_threads.source_line_text",
+    ):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_source_file_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例3/3（source_file が存在しないパス）: repo 配下ではあるが実在
+    しない相対パスへ差し替えられると fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_thread_settings"]["intra_op_num_threads"][
+            "source_file"
+        ] = "voice_genesis/foundry/s1_gate/does_not_exist_gate_synth.py"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_source_path_override_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`thread_settings_source_path` オーバーライド（`render_code_path` 等
+    と同型のテスト用差し替え引数、intra/inter 共通単一引数）で別ファイルを
+    指定すると、containment guard を経由せずその実ファイルの当該行に対して
+    照合される。"""
+    fake_file = tmp_path / "gate_synth.py"
+    fake_file.write_text("\n".join(["x"] * 1220) + "\n", encoding="utf-8")
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="onnxruntime_thread_settings.intra_op_num_threads.source_line_text",
+    ):
+        m.load_pinned_execution_profile_manifest(
+            contract, thread_settings_source_path=fake_file,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_default_unspecified_not_cross_checked(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """DEFAULT_UNSPECIFIED（value=null）の thread 設定項目は cross-check
+    (8) の対象外——`source_line`/`source_line_text` の内容検証自体を行わ
+    ない既存の shape 分岐と同型。intra を DEFAULT_UNSPECIFIED + 明らかに
+    stale な source_line_text へ改変しても load は成功する（inter は
+    EXPLICITLY_SET のまま実 repo と一致するため happy path）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        intra = data["additional_measurements"]["onnxruntime_thread_settings"]["intra_op_num_threads"]
+        intra["specification_status"] = "DEFAULT_UNSPECIFIED"
+        intra["value"] = None
+        intra["source_line_text"] = "this text is deliberately stale/fabricated"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    data = m.load_pinned_execution_profile_manifest(
+        tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+    )
+    assert data["additional_measurements"]["onnxruntime_thread_settings"]["intra_op_num_threads"][
+        "specification_status"
+    ] == "DEFAULT_UNSPECIFIED"
 
 
 # --- verify_execution_profile_runtime(): run-gate live probe ---------------

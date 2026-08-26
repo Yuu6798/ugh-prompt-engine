@@ -62,16 +62,18 @@
       "inter_op_num_threads": {
         "source_file": "voice_genesis/foundry/s1_gate/gate_synth.py",
         "source_line": 1217,
+        "source_line_text": "so.inter_op_num_threads = 1",
         "specification_status": "EXPLICITLY_SET",
         "value": 1
       },
       "intra_op_num_threads": {
         "source_file": "voice_genesis/foundry/s1_gate/gate_synth.py",
         "source_line": 1216,
+        "source_line_text": "so.intra_op_num_threads = 1",
         "specification_status": "EXPLICITLY_SET",
         "value": 1
       },
-      "method": "gate_synth.py の ort.SessionOptions() 設定箇所を Read で確認した（`so.intra_op_num_threads = 1` / `so.inter_op_num_threads = 1`）。両者とも明示的に設定されており、裁定が指す『未指定なら DEFAULT』の分岐には該当しない。",
+      "method": "gate_synth.py の ort.SessionOptions() 設定箇所を Read で確認した（`so.intra_op_num_threads = 1` / `so.inter_op_num_threads = 1`）。両者とも明示的に設定されており、裁定が指す『未指定なら DEFAULT』の分岐には該当しない。PR #327 レビュー第15巡指摘27対応（2026-08-26）: 両者へ `source_line_text`（strip 済み逐語、gate_synth.py の実ファイルから転記）を追加し、`load_pinned_execution_profile_manifest()` cross-check (8) の行照合対象へ編入した（旧実装は `onnxruntime_selected_providers`/`deterministic_seed` の2項目のみを照合し、本2項目は source_line が正整数であることしか検証していなかった——将来 repin で cited 行が stale・無関係になっても受理される穴だった）。",
       "status": "MEASURED"
     },
     "render_code_commit": {

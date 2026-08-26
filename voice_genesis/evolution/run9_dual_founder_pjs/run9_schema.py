@@ -15082,7 +15082,9 @@ def validate_execution_profile_manifest(data: Mapping[str, Any]) -> None:
             sub = thread_settings[sub_field]
             sub = _validate_execprofile_shape(
                 sub, field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}",
-                required_keys=frozenset({"specification_status", "value", "source_file", "source_line"}),
+                required_keys=frozenset({
+                    "specification_status", "value", "source_file", "source_line", "source_line_text",
+                }),
             )
             spec_status = sub["specification_status"]
             if spec_status not in ("EXPLICITLY_SET", "DEFAULT_UNSPECIFIED"):
@@ -15103,6 +15105,16 @@ def validate_execution_profile_manifest(data: Mapping[str, Any]) -> None:
                 _require_positive_int(
                     sub["source_line"],
                     field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}.source_line",
+                )
+                # PR #327 レビュー第15巡指摘27対応（P2、採用）: source_line_text
+                # （非空 str）を必須化する。旧実装は source_line が正整数である
+                # ことしか検証しておらず、cross-check (8) の行照合対象からも
+                # 本2項目（intra/inter_op_num_threads）が構造的に除外されて
+                # いた——将来 repin で cited 行が stale・無関係になっても
+                # source_line の shape だけでは検出できなかった。
+                _require_non_empty_str(
+                    sub["source_line_text"],
+                    field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}.source_line_text",
                 )
             else:
                 # DEFAULT_UNSPECIFIED（裁定「未指定なら DEFAULT と明記」）:
@@ -15388,6 +15400,7 @@ def load_pinned_execution_profile_manifest(
     render_code_path: Optional[Path] = None,
     selected_providers_source_path: Optional[Path] = None,
     deterministic_seed_source_path: Optional[Path] = None,
+    thread_settings_source_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`execution_profile_sha` pin の**唯一の正規消費経路**
     （`load_pinned_reexport_manifest()` と同型の3層防御 read-once。
@@ -15416,23 +15429,28 @@ def load_pinned_execution_profile_manifest(
         runtime()` の役割であり、load 時ではなく RUN9 実行段の render
         直前に呼ぶ契約（両者を混ぜると CI マトリクス環境と RUN9 実行環境
         の分離が壊れる）。
-    (8) cross-check（PR #327 レビュー第14巡指摘26対応、P2、採用）:
+    (8) cross-check（PR #327 レビュー第14巡指摘26対応・第15巡指摘27対応
+        （全数化）、P2、採用）:
         `source_file`/`source_line`/`source_line_text` を伴う measured
-        provenance（`additional_measurements.onnxruntime_selected_
-        providers` と `additional_measurements.deterministic_seed_and_
-        thread_environment_variables.deterministic_seed`）について、
-        `_cross_check_measured_source_line_text()` で当該行の実テキスト
-        と `source_line_text` の一致を fail-closed で強制する
-        （`selected_providers_source_path`/`deterministic_seed_source_
-        path` でテスト用に上書き可能）。(7) の全ファイル digest だけでは
+        provenance について、`_cross_check_measured_source_line_text()` で
+        当該行の実テキストと `source_line_text` の一致を fail-closed で
+        強制する。対象は4項目——`additional_measurements.onnxruntime_
+        selected_providers`・`additional_measurements.deterministic_seed_
+        and_thread_environment_variables.deterministic_seed`（第14巡導入）
+        に加え、`additional_measurements.onnxruntime_thread_settings.
+        {intra,inter}_op_num_threads`（第15巡指摘27で編入。旧実装は
+        `source_line` が正整数であることしか検証しておらず、cited 行が
+        stale・無関係になっても shape 検証だけでは受理されてしまう穴が
+        あった——`source_line_text` を追加し本 cross-check の対象へ含める
+        ことで塞いだ）。上書きは `selected_providers_source_path`/
+        `deterministic_seed_source_path`/`thread_settings_source_path`
+        （intra/inter 共通、いずれも gate_synth.py 参照のため単一引数で
+        足りる）でテスト用に可能。(7) の全ファイル digest だけでは
         「この行番号がこの引用テキストを指す」ことまでは検証できない
-        ——repin 後の行ずれ・引用テキスト捏造を個別に検出する。
-        `onnxruntime_thread_settings.{intra,inter}_op_num_threads` は
-        `source_file`/`source_line` のみで `source_line_text` を持たない
-        （現物 manifest 確認済み）ため対象外——本 cross-check は
-        `source_line_text` を伴う項目にのみ適用される（該当項目のみで
-        ある事実は `validate_execution_profile_manifest()` の
-        `measured_required_keys` shape で machine 強制されている）。
+        ——repin 後の行ずれ・引用テキスト捏造を個別に検出する。thread
+        settings は `specification_status == "EXPLICITLY_SET"` のときのみ
+        照合する（`DEFAULT_UNSPECIFIED` は `source_line_text` の内容検証
+        自体を行わない既存の `source_file`/`source_line` 分岐と同型）。
 
     戻り値は検証済み manifest dict。
     """
@@ -15561,13 +15579,18 @@ def load_pinned_execution_profile_manifest(
                 "版）"
             )
 
-    # (8) cross-check（PR #327 レビュー第14巡指摘26対応、P2、採用）:
-    # source_file/source_line/source_line_text を伴う measured provenance
-    # （onnxruntime_selected_providers, deterministic_seed）の当該行を実
-    # read し、記録された source_line_text と一致することを fail-closed
-    # で強制する。(7) の全ファイル digest だけでは「この行番号がこの引用
-    # テキストを指す」ことまでは検証できない——repin 後の行ずれ・引用
-    # テキスト捏造を個別に検出する。
+    # (8) cross-check（PR #327 レビュー第14巡指摘26対応・第15巡指摘27対応
+    # （全数化）、P2、採用）: source_file/source_line/source_line_text を
+    # 伴う measured provenance（onnxruntime_selected_providers,
+    # deterministic_seed, onnxruntime_thread_settings.{intra,inter}_op_
+    # num_threads の4項目）の当該行を実 read し、記録された
+    # source_line_text と一致することを fail-closed で強制する。(7) の
+    # 全ファイル digest だけでは「この行番号がこの引用テキストを指す」
+    # ことまでは検証できない——repin 後の行ずれ・引用テキスト捏造を個別に
+    # 検出する。第15巡指摘27: 旧実装は thread_settings の2項目を対象から
+    # 除外していた（source_line が正整数であることしか検証していなかった）
+    # ため、将来 repin で cited 行が stale・無関係になっても受理され得た
+    # ——本節で編入し全数照合とした。
     selected_measurement = data["additional_measurements"]["onnxruntime_selected_providers"]
     if selected_measurement["status"] == "MEASURED":
         _cross_check_measured_source_line_text(
@@ -15598,6 +15621,21 @@ def load_pinned_execution_profile_manifest(
                 ),
                 context="load_pinned_execution_profile_manifest()",
             )
+
+    thread_settings_measurement = data["additional_measurements"]["onnxruntime_thread_settings"]
+    if thread_settings_measurement["status"] == "MEASURED":
+        for sub_field in ("intra_op_num_threads", "inter_op_num_threads"):
+            sub_measurement = thread_settings_measurement[sub_field]
+            if sub_measurement["specification_status"] == "EXPLICITLY_SET":
+                _cross_check_measured_source_line_text(
+                    source_file=sub_measurement["source_file"],
+                    source_line=sub_measurement["source_line"],
+                    source_line_text=sub_measurement["source_line_text"],
+                    repo_root=_EXECPROFILE_REPO_ROOT,
+                    resolved_path=thread_settings_source_path,
+                    field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}",
+                    context="load_pinned_execution_profile_manifest()",
+                )
 
     return data
 
