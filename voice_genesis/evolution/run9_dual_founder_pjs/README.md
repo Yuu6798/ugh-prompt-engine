@@ -971,6 +971,19 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   Fix 9 speaker candidate status を `startswith()` から厳密語彙一致へ
   変更し typo/混成値を拒否するようにした。詳細は
   `HARNESS1_PROVISION_RECORD.md` §5-3。
+  PR #326 第4巡 Codex bot レビュー2件（P2×2、採用）でさらに強化した
+  （pin 欄は引き続き PENDING、repin ではなく `RUN9_CONTRACT.yaml`
+  履歴コメントの情報記録 sha256 のみ更新）: Fix 10
+  `tar_gz_full_member_ledger` が「非空の well-formed 行の任意部分集合」
+  で通過してしまう穴を、新設 `tar_gz_ledger_integrity` 節
+  （member_count/total_size_bytes の内部整合 + 独立再生成一致実測の
+  record）で閉じた——workdir に tarball が現存する間に実 tar から
+  ledger を独立再生成し、現行39行と全一致することを実測（列挙漏れが
+  現世代には存在しないことの直接証拠）。tarball が repo 外にあるため
+  load 時の完全性再検証はできないという信頼根境界を validator
+  docstring に明記した。Fix 11 `HARNESS1_PROVISION_RECORD.md` §6 を
+  「歴史値+最新値」の二層表記へ改めた。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-4。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

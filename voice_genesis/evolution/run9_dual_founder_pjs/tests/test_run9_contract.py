@@ -13560,9 +13560,7 @@ def test_harness1_tar_gz_ledger_stale_miss_consistency_fail_closed() -> None:
     NOT_OBTAINED_TARBALL_MISS のままだと fail-closed 拒否する（将来
     tar.gz が repin されて中身が変わった際の drift 検出）。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    data["tar_gz_full_member_ledger"].append(
-        {"path": "onnx_gate_40000/acoustic.onnx", "size_bytes": 1234, "sha256": "a" * 64}
-    )
+    _append_tar_member(data, path="onnx_gate_40000/acoustic.onnx", size_bytes=1234, sha256="a" * 64)
     with pytest.raises(m.Run9ValidationError, match="stale-miss inconsistency"):
         m.validate_dependency_pins_manifest(data)
 
@@ -13821,25 +13819,43 @@ def test_harness1_pr326_fix1_obtained_measured_mismatch_rejected() -> None:
         m.validate_dependency_pins_manifest(data)
 
 
+def _append_tar_member(data: Dict[str, Any], *, path: str, size_bytes: int, sha256: str) -> None:
+    """テストヘルパー: `tar_gz_full_member_ledger` へ1行追加し、PR #326
+    第4巡 Fix 10 が要求する `tar_gz_ledger_integrity` の
+    `member_count`/`total_size_bytes` 宣言を実体に追随させる（追随
+    させないと Fix 10 の len(ledger)==member_count 束縛に必ず抵触する
+    ため、`tar_gz_full_member_ledger.append()` の直接呼び出しの代わりに
+    本ヘルパーを使う）。"""
+    data["tar_gz_full_member_ledger"].append({
+        "path": path, "size_bytes": size_bytes, "sha256": sha256,
+    })
+    data["tar_gz_ledger_integrity"]["member_count"] += 1
+    data["tar_gz_ledger_integrity"]["total_size_bytes"] += size_bytes
+    # member_count_matched must equal member_count (validator invariant) —
+    # keep the synthetic reread record in lockstep with the mutated ledger.
+    data["tar_gz_ledger_integrity"]["independent_reread_verification"]["member_count_matched"] += 1
+
+
 def _obtain_all_acoustic_companions(data: Dict[str, Any], *, acquisition_source: str = "THIS_TARBALL") -> None:
     """テストヘルパー: acoustic_export_companions を OBTAINED_VERIFIED_
     MATCH へ遷移させ、各 item に正しい measured_sha256 +
     acquisition_source（PR #326 第3巡 Fix 7、既定 THIS_TARBALL）を付与
     する。`acquisition_source="THIS_TARBALL"` の場合のみ、Fix 4（第2巡）
     が要求する対応 tar member（basename 一致 + sha256 一致）を
-    tar_gz_full_member_ledger へ追加する（THIS_TARBALL 以外——
-    DRIVE_DIRECT/RE_EXPORT——は tar member 無しでも正当と認められる、
-    Fix 7 の主眼）。"""
+    `_append_tar_member()` 経由で tar_gz_full_member_ledger へ追加する
+    （THIS_TARBALL 以外——DRIVE_DIRECT/RE_EXPORT——は tar member 無しでも
+    正当と認められる、Fix 7 の主眼）。"""
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
     for item in data["acoustic_export_companions"]["expected_items"]:
         item["measured_sha256"] = item["expected_sha256"]
         item["acquisition_source"] = acquisition_source
         if acquisition_source == "THIS_TARBALL":
-            data["tar_gz_full_member_ledger"].append({
-                "path": f"onnx_gate_40000/{item['file'].rsplit('/', 1)[-1]}",
-                "size_bytes": 1,
-                "sha256": item["expected_sha256"],
-            })
+            _append_tar_member(
+                data,
+                path=f"onnx_gate_40000/{item['file'].rsplit('/', 1)[-1]}",
+                size_bytes=1,
+                sha256=item["expected_sha256"],
+            )
 
 
 def _complete_smoke_render(
@@ -14046,9 +14062,7 @@ def test_harness1_pr326_fix4_not_obtained_still_rejects_matching_tar_member() ->
     stale-miss inconsistency として拒否される（Fix 4 は分岐を追加した
     だけで、NOT_OBTAINED 側の既存挙動は不変であることの回帰確認）。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    data["tar_gz_full_member_ledger"].append(
-        {"path": "onnx_gate_40000/acoustic.onnx", "size_bytes": 1234, "sha256": "a" * 64}
-    )
+    _append_tar_member(data, path="onnx_gate_40000/acoustic.onnx", size_bytes=1234, sha256="a" * 64)
     with pytest.raises(m.Run9ValidationError, match="stale-miss inconsistency"):
         m.validate_dependency_pins_manifest(data)
 
@@ -14302,4 +14316,87 @@ def test_harness1_pr326_fix9_exact_vocab_values_accepted() -> None:
     assert (
         data["speaker_embeddings_unpinned_candidates"]["d3synth_reference_only"]["status"]
         == "UNPINNED_CANDIDATE_NOT_A_RUN9_FOUNDER"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PR #326 第4巡 Codex bot レビュー Fix 10（P2, 採用, 2026-08-26）:
+# tar member ledger の束縛強化（member_count/total_size_bytes 宣言 +
+# 独立再生成一致実測の record）。正負テスト。
+# ---------------------------------------------------------------------------
+
+
+def test_harness1_pr326_fix10_ledger_omission_rejected() -> None:
+    """well-formed な行を1件減らす（列挙漏れの模擬）だけで
+    len(ledger) != member_count となり拒否される——旧実装は「非空の
+    well-formed 行の任意部分集合」を通過させていた欠陥そのもの。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["tar_gz_full_member_ledger"] = data["tar_gz_full_member_ledger"][:-1]
+    with pytest.raises(m.Run9ValidationError, match="does not match tar_gz_ledger_integrity.member_count"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix10_total_size_mismatch_rejected() -> None:
+    """member_count は合っていても sum(size_bytes) が
+    total_size_bytes と食い違えば拒否される（1行の size_bytes だけ
+    改竄したケース）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["tar_gz_full_member_ledger"][0]["size_bytes"] += 1
+    with pytest.raises(m.Run9ValidationError, match="does not match tar_gz_ledger_integrity.total_size_bytes"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix10_archive_sha_cross_check() -> None:
+    """tar_gz_ledger_integrity.archive_sha256 が
+    acoustic_export_companions.attempted_source.actual_sha256 と乖離
+    すると拒否される（同じ tarball を指しているという manifest 内部
+    整合）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["tar_gz_ledger_integrity"]["archive_sha256"] = "f" * 64
+    with pytest.raises(m.Run9ValidationError, match="diverges from tar_gz_ledger_integrity.archive_sha256"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix10_integrity_missing_key_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    del data["tar_gz_ledger_integrity"]["generation_method"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix10_reread_result_vocab_enforced() -> None:
+    """independent_reread_verification.result は閉じた語彙
+    （現状 EXACT_MATCH のみ）——MISMATCH 等の値は拒否する（列挙漏れが
+    見つかった場合に「見つかった」と正直に record する語彙は、pin 化
+    そのものを妨げる形で別途設計する必要があり、本欄を汚染で通過させ
+    ない）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["tar_gz_ledger_integrity"]["independent_reread_verification"]["result"] = "MISMATCH"
+    with pytest.raises(m.Run9ValidationError, match="result must be one of"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix10_reread_member_count_matched_must_equal_declared() -> None:
+    """independent_reread_verification.member_count_matched が
+    member_count と食い違うと拒否される（宣言した件数と、実際に再読で
+    一致確認できた件数が別、という矛盾を許さない）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["tar_gz_ledger_integrity"]["independent_reread_verification"]["member_count_matched"] = 38
+    with pytest.raises(m.Run9ValidationError, match="must equal tar_gz_ledger_integrity.member_count"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix10_real_manifest_reread_verification_is_exact_match() -> None:
+    """本 manifest の実測台帳そのものの回帰確認: 39ファイル・
+    独立再生成一致・列挙漏れなし（本巡で実際に workdir の tarball から
+    独立再生成し、現行 ledger と全一致したことを実測した結果）。"""
+    data = _dependency_pins_manifest_data()
+    integrity = data["tar_gz_ledger_integrity"]
+    assert integrity["member_count"] == 39
+    assert len(data["tar_gz_full_member_ledger"]) == 39
+    assert sum(m2["size_bytes"] for m2 in data["tar_gz_full_member_ledger"]) == integrity["total_size_bytes"]
+    assert integrity["independent_reread_verification"]["result"] == "EXACT_MATCH"
+    assert integrity["independent_reread_verification"]["member_count_matched"] == 39
+    assert integrity["archive_sha256"] == (
+        data["acoustic_export_companions"]["attempted_source"]["actual_sha256"]
     )

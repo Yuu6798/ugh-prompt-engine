@@ -519,9 +519,30 @@ config_sha:
 # `speaker_embeddings_unpinned_candidates` の status 判定を
 # `startswith("UNPINNED_CANDIDATE")` から entry ごとの厳密語彙一致へ
 # 変更し、typo/混成値（例 `UNPINNED_CANDIDATE_PINNED_VERIFIED`）を拒否
-# するようにした。実測済みの sha256（Fix 7-9 対応後の最新実バイト）は
-# 情報記録として保持する:
+# するようにした。実測済みの sha256（Fix 7-9 対応後の実バイト）は
+# 情報記録として保持していた:
 # "cb8307da0a2b14c189a58be620003a1c7a89ad6c8e1e4d0997b51ac3a8953ede"
+#
+# 2026-08-26 情報記録更新（PR #326 第4巡 Codex bot レビュー2件、P2×2、
+# いずれも採用。pin 欄自体は PENDING のまま、repin ではなく情報記録の
+# 更新）: Fix 10 `tar_gz_full_member_ledger` が「非空の well-formed 行の
+# 任意部分集合」で通過してしまう穴（列挙漏れがあっても
+# NOT_OBTAINED_TARBALL_MISS が成立し得た）を閉じた。新設
+# `tar_gz_ledger_integrity` 節に `member_count`/`total_size_bytes`
+# （ledger 実体との内部整合を machine 強制）+ `generation_method`
+# （単一 tarfile read で構築した宣言）+
+# `independent_reread_verification`（tarball が workdir に現存する間に
+# 独立再生成し、現行39行 ledger と全一致したことの実測記録、
+# `result: EXACT_MATCH`）を必須化した。tarball 実体（25MB）は repo 外
+# にあり load 時の完全性再検証は構造的に不可能という信頼根境界を
+# `validate_dependency_pins_manifest()` docstring に正直に宣言し、
+# 担保を3層（build時単一read生成/本巡の独立再生成一致実測/将来repin時の
+# 再provisioning経路宣言）とした（再入条件: tarball 自体が将来 repo 内
+# pin として収載されたら load-time 完全束縛へ昇格）。Fix 11
+# `HARNESS1_PROVISION_RECORD.md` の検証節を「歴史値 + 最新値」の二層
+# 表記へ改めた（詳細は同ファイル参照、本欄には影響しない）。実測済みの
+# sha256（Fix 10 対応後の最新実バイト）は情報記録として保持する:
+# "e8120a77a9b49ad5aa11ab7f9a92d8ee7eea33a1accb7cdbe533a94587271404"
 dependency_pins_sha:
   value: null
   status: PENDING

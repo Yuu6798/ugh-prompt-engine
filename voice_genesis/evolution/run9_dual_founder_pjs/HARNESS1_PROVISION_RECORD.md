@@ -339,13 +339,95 @@ generation_note への追記で変わったため、`RUN9_CONTRACT.yaml` の履�
 `cb8307da0a2b14c189a58be620003a1c7a89ad6c8e1e4d0997b51ac3a8953ede`。
 本 harness の実測結果自体は無変更。既存 pin は無変更を確認済み。
 
+### 5-4. PR #326 第4巡 Codex bot レビュー対応（2026-08-26、P2×2、全2件
+採用）
+
+**Fix 10（P2）——tar member ledger の束縛強化**: 指摘の核心は正当——
+`tar_gz_full_member_ledger` は「非空の well-formed 行の任意部分集合」
+であっても validate を通過してしまい、列挙漏れ（例: acoustic.onnx の
+見落とし）があっても `NOT_OBTAINED_TARBALL_MISS` が成立し得た。ただし
+tarball 実体（25MB）は repo 外（session scratchpad）にあり、load 時の
+再読による完全性検証は CI では構造的に不可能（PIN-2 Fix 8 の corpus
+束縛と同型の境界）。対応は3段:
+
+1. 新設 `tar_gz_ledger_integrity` 節に `member_count`/`total_size_bytes`
+   （ledger 実体との内部整合を machine 強制——`len(ledger) ==
+   member_count`・`sum(size_bytes) == total_size_bytes`）+
+   `generation_method`（単一 tarfile read で ledger を構築した宣言）を
+   必須化した。
+2. **workdir に tarball が現存する今のうちに、実 tar から ledger を
+   独立再生成し、現行 manifest の39行と全一致することを実測検証した**
+   （下記）。
+3. `validate_dependency_pins_manifest()` docstring に信頼根境界を明文化
+   した: load 時の tar 再読束縛は archive が repo 外である限り不可能。
+   担保は (i) build 時の単一 read 生成 (ii) 本巡の独立再生成一致実測
+   (iii) 将来 repin 時は再 provisioning（tar sha 照合 + ledger 再生成）
+   が正規経路であり、手編集 ledger は信頼根境界外、の3層。再入条件
+   （tarball が将来 repo 内 pin として収載されたら load-time 完全束縛へ
+   昇格）も記録した。
+
+**独立再生成の実測結果**（fail-closed 原則どおり、事実をそのまま記録）:
+
+```
+tarball: scratchpad/harness_work/tar_gz/r6_gate_materials_2026-08-20.tar.gz
+tarball sha256（再確認）: bc6c6574582168e589c3e52784ae60bf2315af63777a08c9c39916778d1096cd
+  （attempted_source.actual_sha256 と一致、同一ファイルが provisioning
+  時から変化していないことを確認済み）
+独立再生成方法: tarfile.open(path, 'r:gz').getmembers() を単一 read し、
+  member.isfile() のみを対象に extractfile() で読んだバイト列から
+  sha256 を都度計算、path でソート
+再生成件数: 39 ファイル
+現行 manifest の tar_gz_full_member_ledger（39行）との突き合わせ:
+  path・size_bytes・sha256 の3フィールドすべてが39行全数で完全一致
+  （不一致 0 件）
+結論: EXACT_MATCH — 列挙漏れ（例: acoustic.onnx の見落とし）は
+  現行 manifest には存在しない。指摘が懸念したシナリオは、少なくとも
+  現世代の ledger には該当しないことを直接実証した。
+```
+
+**Fix 11（P2）——record のテスト数の更新**: `HARNESS1_PROVISION_RECORD.md`
+の §6 が旧い「1742 passed, 1 failed」のまま最終状態として読めてしまう
+矛盾を是正した。§6 を「歴史値（各巡コミット時点のスナップショット、
+不変）+ 最新値（直近コミット時点、巡ごとに更新）」の二層表記へ改め、
+本巡時点の最新値を追記した。§7 item 4 の逸脱記録（1 failed = scratchpad
+drift）も「その後解消済み（原因 = 起草側 scratchpad への追記、repo 側の
+欠陥ではなく、その後の分離作業で自然に復旧）」へ追随させた。今後の巡
+でも §6 は歴史値+最新値の二層で保つ規約を §6 冒頭に明記した。
+
+pin 欄（`dependency_pins_sha`）自体は引き続き PENDING——manifest バイトは
+`tar_gz_ledger_integrity` 節の新設で変わったため、`RUN9_CONTRACT.yaml`
+の履歴コメントの情報記録 sha256 を更新した（repin ではない）:
+`e8120a77a9b49ad5aa11ab7f9a92d8ee7eea33a1accb7cdbe533a94587271404`。
+本 harness の実測結果自体は無変更（tar.gz 全数展開結果・列挙漏れなしの
+実証は今回新たに追加された事実であり、既存の「acoustic export
+companions 未取得」という結論は変わらない）。既存 pin は無変更を確認
+済み。
+
 ---
 
 ## 6. テスト・lint
 
-- `ruff check .` — pass
+**規約（PR #326 第4巡 Codex bot レビュー Fix 11、P2、採用、2026-08-26 制定
+— 以後の巡でも本節はこの二層で保つ）**: 本節は「歴史値」（各巡コミット
+時点の実測値、その巡の Verification として当時記録したもの・以後不変）と
+「最新値」（直近コミット時点の実測値、巡が進むたびに追記・更新）の二層
+表記とする。歴史値だけを読んで最終状態と誤認しないよう、最新値を必ず
+本節末尾に明記する。
+
+- `ruff check .` — 全巡で pass
 - `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests/ tests/discipline/ -q`
-  — 1742 passed, 1 failed（唯一の失敗は §7 参照、本 harness の変更と無関係）
+  歴史値（各巡コミット時点の Verification 実測、後続巡での改善を反映
+  しない当時のスナップショット）:
+  - HARNESS-1 初回実装時点: 1742 passed, 1 failed（1件 = `test_pin2r2_
+    fix2_adjudication_source_body_byte_identical_to_scratchpad_origin`、
+    §7 item 4 参照）
+  - PR #326 第1巡（Fix 1/2）: 1760 passed, 0 failed
+  - PR #326 第2巡（Fix 3-6）: 1769 passed, 0 failed
+  - PR #326 第3巡（Fix 7-9）: 1780 passed, 0 failed
+  - **最新値（PR #326 第4巡, Fix 10/11 対応時点）: 1787 passed, 0 failed**
+    （`scratchpad/h1_r5_pytest.txt` に生出力を保存。上記1failedは第1巡
+    コミット時点で既に解消済み——原因だった scratchpad 原本と repo 収載
+    版の乖離が、その後の作業で分離・復旧された。§7 item 4 追随参照）
 
 ---
 
@@ -358,13 +440,18 @@ generation_note への追記で変わったため、`RUN9_CONTRACT.yaml` の履�
 3. **pjs/user speaker embedding が未 pin**（§1-4）— 候補 sha256 は記録
    済みだが pin 化しておらず、User 裁定を要する（af0 embedding の写像
    方式設計とあわせて後続 Memo の対象）。
-4. **pre-existing 環境ドリフト（本 harness の作業と無関係）**:
+4. **pre-existing 環境ドリフト（本 harness の作業と無関係）— その後解消
+   済み（PR #326 第4巡 Fix 11 で追随、2026-08-26）**:
    `test_pin2r2_fix2_adjudication_source_body_byte_identical_to_scratchpad_origin`
-   が本セッション開始時点（onnxruntime 導入前）から既に fail していた。
-   原因は `scratchpad/run9_user_adjudication_pin2.md` が本 Memo の準備
-   として「追加 User 裁定（2026-08-26、HARNESS 前提）」節を追記された
-   ことで、PIN-2 実装時に repo へ収載した
+   が本セッション開始時点（onnxruntime 導入前）から fail していた
+   （§6 歴史値「HARNESS-1 初回実装時点」参照）。原因は
+   `scratchpad/run9_user_adjudication_pin2.md` が本 Memo の準備として
+   「追加 User 裁定（2026-08-26、HARNESS 前提）」節を追記されたことで、
+   PIN-2 実装時に repo へ収載した
    `USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt` の内容と
-   scratchpad 原本が乖離したため。本 Memo の Scope OUT
-   （既存 inputs JSON・PIN-2 領域）のため修正していない——User/Fable へ
-   引き継ぎ事項として報告する。
+   scratchpad 原本が乖離したためだった。起草側 scratchpad への追記が
+   原因であり repo 側の欠陥ではなかったため、その後の作業（scratchpad
+   と repo 収載版の分離）で自然に復旧し、PR #326 第1巡コミット時点
+   （§6 歴史値参照）以降は fail していない——本 harness の変更で意図的
+   に修正した箇所はない（本 Memo の Scope OUT〔既存 inputs JSON・
+   PIN-2 領域〕のため）。

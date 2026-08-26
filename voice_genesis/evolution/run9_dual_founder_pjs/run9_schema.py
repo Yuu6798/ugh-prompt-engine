@@ -11212,6 +11212,7 @@ DEPENDENCY_PINS_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "render_asset_ledger",
     "acoustic_export_companions",
     "tar_gz_full_member_ledger",
+    "tar_gz_ledger_integrity",
     "python_dependency_pins",
     "diffsinger_render_code_commit",
     "speaker_embeddings_unpinned_candidates",
@@ -11534,14 +11535,108 @@ def _validate_acoustic_export_companions(section: Any) -> None:
 
 _TAR_MEMBER_REQUIRED_KEYS: FrozenSet[str] = frozenset({"path", "size_bytes", "sha256"})
 
+# Codex bot レビュー PR #326 第4巡指摘 Fix 10（P2, 採用）: 旧実装は
+# `tar_gz_full_member_ledger` が「非空の well-formed 行の任意部分集合」
+# であっても validate を通してしまい、列挙漏れ（例: acoustic.onnx の
+# 見落とし）があっても NOT_OBTAINED_TARBALL_MISS が成立し得た——tarball
+# 実体（25MB）は repo 外にあり、load 時に毎回再読して完全性を機械検証
+# することは CI では構造的に不可能（PIN-2 Fix 8 の corpus 束縛と同型の
+# 境界。詳細は `validate_dependency_pins_manifest()` docstring 参照）。
+# 代わりに、manifest 自身に「単一 tarfile read で ledger を構築した」
+# という宣言（`member_count`/`total_size_bytes`——ledger 実体との内部
+# 整合を機械強制できる最小の一次情報）+「本巡で独立再生成し現行 ledger
+# と全一致することを実測した」という証拠記録を必須化する。
+_TAR_GZ_LEDGER_INTEGRITY_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "member_count", "total_size_bytes", "archive_sha256", "generation_method",
+    "independent_reread_verification",
+})
+_TAR_GZ_REREAD_VERIFICATION_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "performed_at", "result", "member_count_matched", "note",
+})
+_TAR_GZ_REREAD_RESULT_VOCAB: Tuple[str, ...] = ("EXACT_MATCH",)
+
+
+def _validate_tar_gz_ledger_integrity(section: Any) -> None:
+    field = "tar_gz_ledger_integrity"
+    if not isinstance(section, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(section).__name__}")
+    unknown = set(section.keys()) - _TAR_GZ_LEDGER_INTEGRITY_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = _TAR_GZ_LEDGER_INTEGRITY_REQUIRED_KEYS - set(section.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    member_count = section["member_count"]
+    if isinstance(member_count, bool) or not isinstance(member_count, int) or member_count <= 0:
+        raise Run9ValidationError(f"{field}.member_count must be a positive int, got {member_count!r}")
+    total_size = section["total_size_bytes"]
+    if isinstance(total_size, bool) or not isinstance(total_size, int) or total_size <= 0:
+        raise Run9ValidationError(f"{field}.total_size_bytes must be a positive int, got {total_size!r}")
+    archive_sha = section["archive_sha256"]
+    if not isinstance(archive_sha, str) or not _SHA256_HEX_RE.match(archive_sha):
+        raise Run9ValidationError(
+            f"{field}.archive_sha256 must be a 64hex sha256, got {archive_sha!r}"
+        )
+    _require_non_empty_str(section["generation_method"], field=f"{field}.generation_method")
+    reread = section["independent_reread_verification"]
+    if not isinstance(reread, dict):
+        raise Run9ValidationError(
+            f"{field}.independent_reread_verification must be an object, got {type(reread).__name__}"
+        )
+    unknown_reread = set(reread.keys()) - _TAR_GZ_REREAD_VERIFICATION_REQUIRED_KEYS
+    if unknown_reread:
+        raise Run9ValidationError(
+            f"{field}.independent_reread_verification has unknown key(s): {sorted(unknown_reread)}"
+        )
+    missing_reread = _TAR_GZ_REREAD_VERIFICATION_REQUIRED_KEYS - set(reread.keys())
+    if missing_reread:
+        raise Run9ValidationError(
+            f"{field}.independent_reread_verification missing required key(s): "
+            f"{sorted(missing_reread)}"
+        )
+    _require_non_empty_str(
+        reread["performed_at"], field=f"{field}.independent_reread_verification.performed_at"
+    )
+    result = reread["result"]
+    if result not in _TAR_GZ_REREAD_RESULT_VOCAB:
+        raise Run9ValidationError(
+            f"{field}.independent_reread_verification.result must be one of "
+            f"{_TAR_GZ_REREAD_RESULT_VOCAB!r}, got {result!r}"
+        )
+    matched_count = reread["member_count_matched"]
+    if (
+        isinstance(matched_count, bool) or not isinstance(matched_count, int)
+        or matched_count <= 0
+    ):
+        raise Run9ValidationError(
+            f"{field}.independent_reread_verification.member_count_matched must be a positive "
+            f"int, got {matched_count!r}"
+        )
+    if matched_count != member_count:
+        raise Run9ValidationError(
+            f"{field}.independent_reread_verification.member_count_matched ({matched_count!r}) "
+            f"must equal {field}.member_count ({member_count!r}) — the independent reread must "
+            "have covered exactly the declared member set"
+        )
+    _require_non_empty_str(
+        reread["note"], field=f"{field}.independent_reread_verification.note"
+    )
+
 
 def _validate_tar_gz_full_member_ledger(
-    members: Any, *, companion_status: str, companion_items: Any,
+    members: Any, *, companion_status: str, companion_items: Any, integrity_section: Mapping[str, Any],
 ) -> None:
     if not isinstance(members, list) or not members:
         raise Run9ValidationError(
             f"dependency pins manifest.tar_gz_full_member_ledger must be a non-empty list, "
             f"got {members!r}"
+        )
+    if len(members) != integrity_section["member_count"]:
+        raise Run9ValidationError(
+            "dependency pins manifest.tar_gz_full_member_ledger: len(ledger) "
+            f"({len(members)!r}) does not match tar_gz_ledger_integrity.member_count "
+            f"({integrity_section['member_count']!r}) — the ledger must be exactly the "
+            "declared member set, not an arbitrary subset (Fix 10 binding)"
         )
     seen_paths = set()
     for i, member in enumerate(members):
@@ -11582,6 +11677,13 @@ def _validate_tar_gz_full_member_ledger(
                 f"dependency pins manifest.tar_gz_full_member_ledger[{i}].sha256 must be a "
                 f"64hex sha256, got {sha!r}"
             )
+    total_size = sum(member["size_bytes"] for member in members)
+    if total_size != integrity_section["total_size_bytes"]:
+        raise Run9ValidationError(
+            "dependency pins manifest.tar_gz_full_member_ledger: sum(size_bytes) "
+            f"({total_size!r}) does not match tar_gz_ledger_integrity.total_size_bytes "
+            f"({integrity_section['total_size_bytes']!r}) — Fix 10 binding"
+        )
     # Codex bot レビュー PR #326 第2巡指摘 Fix 4（P2, 採用）: 旧実装は
     # companion status を一切参照せず常時「basename が見つかれば拒否」
     # だったため、将来 tarball が repin されて companions を正当に含み
@@ -12081,6 +12183,41 @@ def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
     （あれば unknown key で拒否）。将来単に status 文字列を書き換える
     だけでは通過できない。bundle pin との三者一致は
     `load_pinned_dependency_pins_manifest()` cross-check (6) が担う。
+
+    Codex bot レビュー PR #326 第4巡指摘 Fix 10（P2, 採用）——
+    **信頼根境界の正直な宣言**（PIN-2 Fix 8 の corpus 束縛と同型）:
+    `tar_gz_full_member_ledger` が tarball 実体（`r6_gate_materials_
+    2026-08-20.tar.gz`、約25MB）の**完全**な列挙であることを、本関数
+    （および `load_pinned_dependency_pins_manifest()`）は load 時に
+    machine-verify できない——tarball 自体が repo 外（session
+    scratchpad）にあり、CI/消費環境には存在しないため、load 時に毎回
+    tar を開いて再読する契約は構造的に組めない。本関数が実際に強制
+    できるのは (a) `tar_gz_ledger_integrity` 節が宣言する
+    `member_count`/`total_size_bytes` と `tar_gz_full_member_ledger`
+    実体が一致すること（宣言と ledger 実体の内部整合、Fix 10 主眼）、
+    (b) その宣言が「単一 tarfile read で構築した」という
+    `generation_method` の自己申告を伴うこと、(c) `independent_reread_
+    verification` 節が「後日 tar を独立に再読し ledger と全一致した」
+    という実測結果（`result == "EXACT_MATCH"`）を record すること、の
+    3点までである——(a)-(c) はいずれも「tarball の完全な列挙である」
+    ことの**証拠**であって**証明**ではない（tar 実体が repo 外にある
+    限り、load 時点でこの証拠を再検証する機構は存在しない）。実際の
+    完全性の担保は3層で構成される: (i) **build 時**——provisioning
+    時に tarfile を単一 read してそのまま ledger を機械生成した
+    （`HARNESS1_PROVISION_RECORD.md` §1-4 参照、手作業での行追加/削除を
+    経由しない）(ii) **本巡の独立再生成一致実測**——`tar_gz_ledger_
+    integrity.independent_reread_verification` が record する、
+    workdir に tarball が現存する間に行った独立再生成と現行39行
+    ledger の全一致（列挙漏れが現世代には存在しないことの直接証拠）
+    (iii) **将来の repin 経路の宣言**——将来 tar.gz の中身が変わり
+    ledger を repin する場合、正規経路は再 provisioning（tar sha 照合
+    + ledger 再生成）のみであり、`tar_gz_full_member_ledger` の手編集
+    は信頼根境界の外にある（branch_write_policy + PR レビュー + git
+    履歴という repo 機構の外側でのみ担保される、他の宣言的信頼根と
+    同型）。**再入条件**: tarball 自体が将来 repo 内 pin として収載
+    された場合（現状は容量・Scope OUT の理由で対象外）、本関数は
+    load-time の完全束縛（毎回 tar を開いて全 member を再検証）へ
+    昇格できる——それまでは上記3層が担保の限界である。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"dependency pins manifest must be an object, got {type(data).__name__}")
@@ -12138,10 +12275,27 @@ def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
     # 発明する必要がない（発明すると到達不能コードになる）。
     _validate_acoustic_export_companions(data["acoustic_export_companions"])
 
+    _validate_tar_gz_ledger_integrity(data["tar_gz_ledger_integrity"])
+    # Fix 10 補助 cross-check: integrity 節が宣言する archive_sha256 が、
+    # acoustic_export_companions.attempted_source が実測記録した
+    # tar.gz 自身の sha256 と一致すること（同じ tarball を指している
+    # ことの manifest 内部整合、`attempted_source` は自由形式 dict だが
+    # `actual_sha256` キーがあれば照合する）。
+    attempted_source = data["acoustic_export_companions"]["attempted_source"]
+    if "actual_sha256" in attempted_source:
+        if attempted_source["actual_sha256"] != data["tar_gz_ledger_integrity"]["archive_sha256"]:
+            raise Run9ValidationError(
+                "dependency pins manifest: acoustic_export_companions.attempted_source."
+                f"actual_sha256 ({attempted_source['actual_sha256']!r}) diverges from "
+                f"tar_gz_ledger_integrity.archive_sha256 "
+                f"({data['tar_gz_ledger_integrity']['archive_sha256']!r}) — both must refer to "
+                "the same tarball"
+            )
     _validate_tar_gz_full_member_ledger(
         data["tar_gz_full_member_ledger"],
         companion_status=data["acoustic_export_companions"]["status"],
         companion_items=data["acoustic_export_companions"]["expected_items"],
+        integrity_section=data["tar_gz_ledger_integrity"],
     )
     _validate_python_dependency_pins(data["python_dependency_pins"])
     _validate_diffsinger_render_code_commit(data["diffsinger_render_code_commit"])
