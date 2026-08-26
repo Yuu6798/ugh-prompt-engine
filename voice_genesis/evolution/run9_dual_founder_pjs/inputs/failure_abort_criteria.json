@@ -139,7 +139,7 @@
       "verbatim": "provenance / code closure failure"
     },
     {
-      "checkpoint": "§22 step 9『freeze learning recipe / equal budget』— execution_profile_sha（Group C、現状 PENDING）に cost cap 数値は未凍結。数値をここで発明しない。budget 凍結後、Codex/User が超過を確認する。",
+      "checkpoint": "§22 step 9『freeze learning recipe / equal budget』— execution_profile_sha は RUN9-EXECPROFILE-1（2026-08-26、User 裁定「RUN9 User裁定 — execution_profile_sha」）で PINNED 済みだが、収載範囲は runtime identity（python/os/architecture/onnxruntime/selected_execution_provider の5値 + provider 固定規則4点）に限られ、cost cap 数値はその範囲外——inputs/execution_profile_manifest.json の benchmark_reference（smoke 実測秒数・616件概算・所要時間概算）は is_reference_only: true の参考記録であり、凍結された cost cap ではない。cost cap 数値は引き続き未凍結。数値をここで発明しない。budget 凍結後、Codex/User が超過を確認する。〔履歴: 旧記述「execution_profile_sha（Group C、現状 PENDING）」は execution_profile_sha が RUN9-EXECPROFILE-1 で PINNED 化された事実（2026-08-26）に対し stale 化していた（rule の意味論=cost cap 未凍結による PROCEDURAL 判定は不変）→ PR #327 レビュー第13巡指摘25（P2、採用）で訂正。〕",
       "enforcement": "PROCEDURAL",
       "machine_promotion_condition": "execution_profile_sha に cost cap 数値が凍結され、cost record との自動比較機構を実装した時点で MACHINE へ昇格する。",
       "rule_id": 19,

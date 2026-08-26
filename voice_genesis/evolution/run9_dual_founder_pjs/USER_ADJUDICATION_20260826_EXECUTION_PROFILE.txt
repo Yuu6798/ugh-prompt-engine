@@ -1,0 +1,86 @@
+RUN9 User裁定 — execution_profile_sha
+作成日: 2026-08-26 JST
+受領経路: User との対話（RUN9-L0-HARNESS-2 の smoke render 実測完了を受け、
+session scratchpad（scratchpad/run9_user_adjudication_execprofile.md）へ
+Fable が記録し、以後の実装・レビューが参照する正本として本ファイルへ
+repo 内収載した）
+対象: RUN9 execution_profile_sha の PINNED 化可否、runtime identity
+semantics（python/os/architecture/onnxruntime/selected_execution_
+provider）の確定、provider 固定規則、smoke benchmark 値の意味論上の扱い
+（参考記録であり identity 意味論には含めない）、execution profile
+manifest への追加実測記録項目の指定
+状態: User Adjudication（逐語・一字一句改変禁止）
+
+================================================================
+0. この文書の位置づけ
+================================================================
+
+本書は User が 2026-08-26 に下した裁定の逐語全文を repo 内へ収載した
+ものである。POR_CONCEPT_ADJUDICATION_20260824.txt /
+USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt /
+USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt と同じ前例
+（外部裁定を repo 内の凍結文書として保持し、以後の実装・レビューが
+参照する正本とする）に倣う。
+
+RUN9-L0-HARNESS-2 が新設した inputs/execution_profile_manifest.json の
+adjudication_basis、`run9_schema.validate_execution_profile_manifest()` の
+docstring、RUN9_CONTRACT.yaml の execution_profile_sha reason は、すべて
+本書の逐語からの転記であり、Claude Code が新規に発明した値ではない
+（USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt /
+USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt が是正・先取り
+した教訓——転記元が scratchpad のみだと、将来のレビュアーが「User 転記
+であって発明でない」ことを検証できない——を踏襲し本書を repo 内収載
+する）。
+
+以下は起草時の作業メモ scratchpad/run9_user_adjudication_execprofile.md の
+本文を一字一句そのまま転記する（改変禁止）。
+
+================================================================
+1. 本文（逐語、一字一句改変禁止）
+================================================================
+
+【RUN9 User裁定 — execution_profile_sha】
+
+RUN9 の実測 smoke profile として以下を承認する。
+
+runtime:
+  python: "3.11.15"
+  os: "Ubuntu 24.04.4"
+  architecture: "x86_64"
+  onnxruntime: "1.29.0"
+  selected_execution_provider: "CPUExecutionProvider"
+
+この実測環境を RUN9 の基準 execution profile とし、
+機械可読な execution_profile manifest として保存し、
+その raw byte sha256 を RUN9_CONTRACT.yaml の
+execution_profile_sha に PINNED することを承認する。
+
+重要:
+- selected_execution_provider は CPUExecutionProvider に固定する。
+- available provider の列挙と、実際に session が選択した provider を混同しない。
+- GPU/CUDA provider への自動fallback / upgradeは禁止する。
+- provider または主要runtime versionが変わる場合は、
+  同じ execution_profile_sha を使わず再pinする。
+
+smoke benchmark:
+  observed_seconds_per_item: 24.1
+  planned_item_count: 616
+  estimated_total_runtime_hours: approximately 4.12
+
+benchmark値は実行能力・費用・所要時間の参考記録であり、
+出力同一性を定義する execution profile の意味論そのものには含めない。
+マシン負荷等により速度が変わっても、それだけで再現性違反とはしない。
+
+可能であれば execution profile manifest には追加で以下を実測記録する:
+- CPU model
+- logical CPU count
+- onnxruntime available_providers
+- onnxruntime selected providers
+- intra_op_num_threads / inter_op_num_threads
+  （未指定なら DEFAULT と明記）
+- numpy version
+- soundfile version
+- render code commit
+- deterministic seed / thread environment variables
+
+これらは推測で補完せず、実測できた値のみ記録する。

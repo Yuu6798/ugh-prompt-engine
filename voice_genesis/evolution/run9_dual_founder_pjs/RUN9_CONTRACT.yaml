@@ -588,17 +588,521 @@ config_sha:
 # `determinism_confirmed: true` との自己矛盾として拒否）。実測済みの
 # sha256（Fix 14/15 対応後の最新実バイト）は情報記録として保持する:
 # "229493a911b6def9ca47523cfb0345d6066d826ec67e7ead999b098ea6dbc269"
+#
+# 2026-08-26 情報記録更新（RUN9-L0-HARNESS-2、User 裁定 2026-08-26「RUN9
+# User裁定 — acoustic export companions / speaker embeds」決定2の承認に
+# 基づく再export実行。pin 欄自体は PENDING のまま、repin ではなく情報記録
+# の更新）: Step A（historical `onnx_gate_40000/` 一式の directory/
+# archive 再探索）が Drive 全域 MISS 確定（回収不可）したため、RUN6 phase
+# B 40K checkpoint からの再export（DiffSinger commit e2307b1、torch隔離
+# venv）を実施した。`acoustic_export_companions.status` を
+# `OBTAINED_VIA_REEXPORT` へ遷移（acoustic.onnx は歴史pinと不一致のため
+# 新 status `OBTAINED_DERIVED_NEW_BYTES`——捏造して合わせていない、
+# dsconfig.yaml/phonemes.json/ritsu.emb は byte 一致のため
+# `OBTAINED_VERIFIED_MATCH` + `replay_evidence: true`）。再export成果物を
+# 用いて決定論 smoke render を独立2回実行し、同一入力2 render の WAV byte
+# 一致を実測確認した（`smoke_render.status == COMPLETED`）。実測平均秒
+# （24.101547837257385秒/件）×616件概算で `budget_estimate.status ==
+# COMPLETED`（616 は前巡基準値の踏襲概算であり本 PR で確定しない、出典
+# 注記付き）。pjs/user/d3synth の speaker embedding に replay evidence を
+# 追記したが、正式 PINNED 昇格条件（歴史4 sha との同一 directory/archive
+# 内同時実在の実測確認）は未充足のまま（Step A の Drive 全域 MISS により
+# 不成立）。詳細は `inputs/reexport_manifest.json`（`reexport_manifest_sha`
+# として新規 PINNED、下記参照）と `HARNESS2_REEXPORT_SMOKE_RECORD.md` を
+# 正とする。実測済みの sha256（本改訂後の実バイト）は情報記録として保持
+# する: "ba03e92ce8ee31ecd434b0cc6ab40928aae69123d9c450e742586b795ccf3eda"
+# （claim_scope.statement へ「の完全な充足を主張しない」の明示句を追記した
+# ことに伴う再計算値。追記前の値 "624b40ecf3d9c6f423210f73fcee6c39d7598
+# dcead2af479e4c822ea0e6ec897" は履歴として保持する）
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第1巡、指摘1の連鎖更新
+# ——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値へ追随させた結果、`dependency_pins_manifest.json`
+# 自体の実バイトが変わった。pin 欄自体は PENDING のまま、repin ではなく
+# 情報記録の更新）。実測済みの sha256（本改訂後の実バイト、第2世代）は
+# 履歴として保持する:
+#   "e94a57915064d8ec204b922b9c76aa69473fb43da9b884ef81e9aa7c55539386"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第2巡、指摘5の連鎖更新
+# ——同上と同型: `reexport_manifest_sha` の repin（`replay_environment_
+# recipe` 新設）に追随し、`acoustic_export_companions.expected_items
+# [acoustic_onnx].reexport_manifest_ref.reexport_manifest_sha256` を新
+# pin 値へ更新した結果、`dependency_pins_manifest.json` 自体の実バイトが
+# 再度変わった。pin 欄自体は PENDING のまま、repin ではなく情報記録の
+# 更新）。実測済みの sha256（本改訂後の実バイト、第3世代）は情報記録
+# として保持する:
+#   "bb2313044b3d5f9177bad4e729050a61c99e80224ad8b45c66acf515583f9f14"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第3巡指摘7、P2、採用
+# ——台帳の内部矛盾: acoustic_export_companions を再export取得済み
+# （`OBTAINED_VIA_REEXPORT`）へ遷移させた後も、
+# `speaker_embeddings_unpinned_candidates` の `note` と pjs/user の
+# `file` ラベルが「未取得」と言い続けており、同一 manifest 内で自己矛盾
+# していた。歴史的な tar.gz/Drive 回収は MISS（この事実は不変）だが、
+# 再export により derived artifact としては取得済み（byte は歴史 pin/
+# candidate 値と一致 = replay evidence）という二層区別が明示されていな
+# かった。`note`/pjs.file/user.file の文言を二層区別の記述へ改訂した
+# （歴史的 MISS の記録は削除していない、正式 PINNED 昇格条件が未充足の
+# ままであることも変更していない）。pin 欄自体は PENDING のまま、repin
+# ではなく情報記録の更新。実測済みの sha256（本改訂後の実バイト、第4
+# 世代）は情報記録として保持する:
+#   "10073d5c32e9c372fbefd36d88b3e1abfee66540fa1f89c808cc34ee9488f3ec"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第4巡指摘10、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第4世代、`experiment_side_inputs` 節新設）へ
+# 追随させた結果、`dependency_pins_manifest.json` 自体の実バイトが変わっ
+# た。台帳の内容（render_asset_ledger 等）自体は無変更。pin 欄自体は
+# PENDING のまま、repin ではなく情報記録の更新）。実測済みの sha256
+# （本改訂後の実バイト、第5世代）は情報記録として保持する:
+#   "2d8d9d815cbe2299a76920059597e364c49bf44761b33fc101915554a12b0c5d"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第6巡指摘12、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第5世代、export 実行手順の venv 明示化）へ追随さ
+# せた結果、`dependency_pins_manifest.json` 自体の実バイトが変わった。
+# 台帳の内容（render_asset_ledger 等）自体は無変更。pin 欄自体は PENDING
+# のまま、repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の
+# 実バイト、第6世代）は情報記録として保持する:
+#   "8b8dc1d9596635e262725b6b361caf05b347f8d12cc6228f08a6d355439a9da8"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第7巡指摘14、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第6世代、venv 作成 interpreter 版検証 step 新設）
+# へ追随させた結果、`dependency_pins_manifest.json` 自体の実バイトが
+# 変わった。台帳の内容（render_asset_ledger 等）自体は無変更。pin 欄自体
+# は PENDING のまま、repin ではなく情報記録の更新）。実測済みの sha256
+# （本改訂後の実バイト、第7世代）は情報記録として保持する:
+#   "4d2922825deb5790c537e1238a4e0459c619a791fc845b8fbab0ec137d30f285"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第8巡指摘15、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第7世代、venv パスの cwd 非依存絶対パス化）へ追随
+# させた結果、`dependency_pins_manifest.json` 自体の実バイトが変わった。
+# 台帳の内容（render_asset_ledger 等）自体は無変更。pin 欄自体は PENDING
+# のまま、repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の
+# 実バイト、第8世代）は情報記録として保持する:
+#   "602a0987666d2207f59b9b36f2360ff4942ad3812acb453e0808bddec5141a24"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第9巡指摘16/17、P2×2、
+# いずれも採用の連鎖更新——`acoustic_export_companions.expected_items
+# [acoustic_onnx].reexport_manifest_ref.reexport_manifest_sha256` を新
+# `reexport_manifest_sha` pin 値（第8世代、exporter checkout 検証 step +
+# post-export 閉世界照合 step の新設）へ追随させた結果、
+# `dependency_pins_manifest.json` 自体の実バイトが変わった。台帳の内容
+# （render_asset_ledger 等）自体は無変更。pin 欄自体は PENDING のまま、
+# repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の実バイト、
+# 第9世代）は情報記録として保持する:
+#   "4e2751834bb1f52d71671eabd6e4225b9350e8df09f0fbcac6b7011a5197cb77"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第10巡指摘19、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第9世代、未定義トークン `<out_dir>` の canonical
+# トークンへの置換）へ追随させた結果、`dependency_pins_manifest.json`
+# 自体の実バイトが変わった。台帳の内容（render_asset_ledger 等）自体は
+# 無変更。pin 欄自体は PENDING のまま、repin ではなく情報記録の更新）。
+# 実測済みの sha256（本改訂後の実バイト、第10世代）は情報記録として
+# 保持する:
+#   "73dec00fbde42b6c96e057e07f9f7097ee6555e85e014789cc3dfb61bde9c2b1"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第11巡指摘20、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第10世代、manifest 自身/requirements_replay.txt
+# 参照の checkout-stable 明示化）へ追随させた結果、
+# `dependency_pins_manifest.json` 自体の実バイトが変わった。台帳の内容
+# （render_asset_ledger 等）自体は無変更。pin 欄自体は PENDING のまま、
+# repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の実バイト、
+# 第11世代）は情報記録として保持する:
+#   "e454b941b66c983f54f3622cc8fa0bd9cb809bc75a9d80d0ad090cbc6ff39070"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第16巡指摘28/29、P2×2、
+# いずれも採用の連鎖更新——`acoustic_export_companions.expected_items
+# [acoustic_onnx].reexport_manifest_ref.reexport_manifest_sha256` を新
+# `reexport_manifest_sha` pin 値（第11世代、venv 作成 step への --clear
+# 付与 + freeze/lock 全一致照合 step + export 先ディレクトリ事前空確認
+# step の新設——replay の再実行衛生・clean-slate 保証）へ追随させた結果、
+# `dependency_pins_manifest.json` 自体の実バイトが変わった。台帳の内容
+# （render_asset_ledger 等）自体は無変更。pin 欄自体は PENDING のまま、
+# repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の実バイト、
+# 第12世代）は情報記録として保持する:
+#   "90db7ccefe093c0e2244689d35539fca77f539665cef53fc212c6de3f88a7a7c"
 dependency_pins_sha:
   value: null
   status: PENDING
   reason: >-
-    render/analysis 層 + 実体資産は dependency_pins_manifest.json
-    （事前配線・repo 収載済み）で実測検証済み。ただし VG-L0 学習ハーネス
-    本体の import closure が未確定（rev 0.2 の ControlProfile 決定論
-    導出では追加依存ゼロの可能性が高いが、ハーネス実装で実証されるまで
-    主張しない）。pin はハーネス実装時に closure を実測してから。
-    〔履歴: HARNESS-1 で一時 PINNED（第1-2世代）→ 第2巡 P1 指摘で
+    RUN9-L0-HARNESS-2（2026-08-26）時点: acoustic export companions は
+    checkpoint からの再export で取得済み（`acoustic_export_companions.
+    status == OBTAINED_VIA_REEXPORT`）、決定論 smoke render・CPU render
+    予算概算も実測済み（`smoke_render`/`budget_estimate` とも
+    COMPLETED）。本欄が引き続き PENDING である理由はこれら（旧来の残存
+    ブロッカーだった）ではなく、VG-L0 学習ハーネス本体（optimizer/探索
+    コード）の import closure が未確定のままであることに変わった（rev 0.2
+    の ControlProfile 決定論導出では追加依存ゼロの可能性が高いが、ハーネス
+    実装で実証されるまで主張しない）。pin はハーネス実装時に closure を
+    実測してから。
+    〔履歴: 旧 reason（HARNESS-2 実測前）——「render/analysis 層 + 実体資産
+    は dependency_pins_manifest.json で実測検証済み。ただし VG-L0 学習
+    ハーネス本体の import closure が未確定。pin はハーネス実装時に closure
+    を実測してから。」HARNESS-1 で一時 PINNED（第1-2世代）→ 第2巡 P1 指摘で
     PENDING 復帰〕
+
+# --- reexport_manifest_sha: inputs/reexport_manifest.json の実バイト
+# sha256（design_doc_sha256 と同一のファイル実バイト規約）。RUN9-L0-
+# HARNESS-2（2026-08-26, User 裁定 2026-08-26 決定2「checkpointからの
+# 再exportを承認する...生成物一式を...新しい derived runtime artifact
+# として扱い...一括 manifest 化して新規 pin する」逐語、repo 内収載
+# `USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt` 参照）で
+# PINNED 化: RUN6 phase B 40K checkpoint（`backbone_checkpoint_sha` pin と
+# 一致確認済み）を入力に、RUN9 前方宣言済み DiffSinger commit
+# （`backbone_runtime_bundle.json#run9_runtime_inputs.run9_render_code_
+# commit.commit_full` と一致確認済み）で torch 隔離 venv 内、独立2回
+# export した derived runtime artifact 一括台帳。全アーティファクトが
+# run1/run2 間で sha256 完全一致（決定論確認）。歴史 pin との一致/不一致は
+# 捏造せず正直に記録する（acoustic.onnx は不一致、dsconfig/phonemes/
+# ritsu.emb/pjs.emb/user.emb/d3synth.emb は一致——後者は replay evidence
+# として記録、historical bytes の復元とは扱わない、User 裁定2逐語）。
+# manifest は全欄実測済み・環境依存の未確定要素ゼロで実体が完結しており、
+# 偽 READY 経路（measurement_spec/dependency_pins の教訓）に該当しない。
+# `run9_schema.validate_reexport_manifest()`/`load_pinned_reexport_
+# manifest()` が消費・検証する（PIN-1/2・HARNESS-1 と同型の4段構成 +
+# backbone_checkpoint_sha/backbone_runtime_bundle_sha cross-check +
+# dependency_pins_manifest.json 側 speaker embedding candidate との
+# cross-check）。
+#
+# 情報記録（pin 欄ではない、append-only、PIN-2 前例のキー体裁踏襲）:
+# repo 収載した裁定逐語文書
+# `USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt` の実バイト
+# sha256（compute_file_sha256() 実測、2026-08-26 時点）:
+#   1806955c12ab3c002a9083929fd517e3312de9fe0eff6dc01d2b26018bb1e3ca
+# 本ファイルは CONTRACT_PIN_FIELDS へ追加しない（裁定文書自体は「値の
+# 転記元の証跡」であって RUN9 の実行前提条件そのものではないため）。
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第1巡3件、いずれも採用。Claude
+# 完結ルート）: 指摘1 export_command/export_command_cwd のプレースホルダ
+# （`<session workdir（repo外）>`/`<diffsinger_repo clone（session
+# workdir、repo外）>`）が未定義で「逐語」recipe として再実行不能だった
+# 穴を閉じた——新設 `export_command_variables` 節が各プレースホルダの
+# 定義（任意の書込可能ディレクトリでよい／pin commit を checkout した
+# DiffSinger clone）と、出力バイトがパス選択に依存しないこと（同一性
+# 検証則は raw sha256 であり、run1/run2 で実際に異なるパス
+# `reexport_out`/`reexport_out2` を用いても全9 artifacts が sha256 完全
+# 一致した——`reproducibility_check` 参照）を明記する。`export_command`
+# 自体の実測事実（何を実行したか）は不変・再実行なし（既存の独立2回
+# export sha 完全一致という実測記録を参照するのみ）。指摘2 export 依存
+# 環境の完全 lock 欠如（requirements.txt がレンジ指定のため将来の再解決
+# で transitive バージョンが変わり得る）を閉じた——export 用 venv
+# （`venv_export`）の `pip freeze --all` 実測（81パッケージ、read-only
+# 実行）を新設 `export_environment_lock`（配列、逐語）+
+# `export_environment_lock_sha256`（同配列を "\n".join()+"\n" した
+# テキストの sha256、loader が recompute 一致を machine 強制）として
+# 収載した。既存 `environment_versions`（主要サブセット）は不変のまま
+# 残す——完全 lock は `export_environment_lock` が正である。指摘3
+# （`run9_schema.py` 側、loader が `adjudication_basis.sha256` の 64hex
+# shape のみ検証し `source_file` の実バイトを照合していなかった穴）は
+# `load_pinned_reexport_manifest()` に cross-check (9) として実装した
+# （裁定 txt の実 sha256 が `adjudication_basis.sha256` と食い違えば
+# fail-closed で拒否）。上記3件はいずれも manifest の実測事実
+# （checkpoint/exporter/artifacts/smoke render の各 sha256・秒数）を
+# 一切変更しない——自己記述性の補強と新規 cross-check のみで実バイトが
+# 変わったための repin。旧 pin 値（第1世代、HARNESS-2 初回 PINNED 時）は
+# 履歴として保持する:
+#   9c6c32940f2b09361257f2331b1f19390164fdbbc5172f5fb8af889e716c5a14
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第2巡指摘5、採用。Claude 完結
+# ルート）: `export_venv_setup.install_steps`（当時実際に実行した手順の
+# 実測記録）は export_environment_lock が新規再現時に replay 手順から
+# 消費されず、requirements.txt をレンジ指定のまま再解決してしまう穴が
+# あった——`install_steps` 自体の実測事実（当時実行したコマンド逐語）は
+# 1文字も変更せず、新設 `replay_environment_recipe` 節（新規再現時の正規
+# 経路。バージョン正本は `export_environment_lock` 配列単一——別ファイルの
+# lock file は置かない。手順: venv 作成 → manifest の
+# `export_environment_lock` を requirements 形式へ機械導出する python
+# ワンライナー逐語収載 → `pip install --no-deps -r <導出ファイル>`
+# ——`--no-deps` で resolver の再解決を排除。torch==2.13.0+cpu が PyTorch
+# CPU wheel index（https://download.pytorch.org/whl/cpu）由来である旨の
+# extra-index-url 注記付き）を追加した。`install_steps` 側にも「本キーは
+# 歴史記録であり新規再現には `replay_environment_recipe` を使う」旨の
+# `historical_note`（追記キー、既存文字列値は不変）を追加した。
+# `run9_schema.validate_reexport_manifest()` が `replay_environment_
+# recipe` の shape（`lock_array_reference == "export_environment_lock"`
+# の参照宣言必須・`--no-deps` 手順の存在・python one-liner 手順の存在・
+# torch index 注記の存在）を machine 強制する。指摘6（同一巡採用、
+# `run9_schema.py` 側 `validate_reexport_manifest()` 強化）:
+# `input_checkpoint.sha256 == expected_sha256_per_run9_contract` かつ
+# `sha256_matches_pin == True`、`exporter.revision ==
+# expected_revision_per_run9_contract` かつ `revision_matches_pin ==
+# True` を直接 fail-closed 強制するようにした（旧実装は boolean の算術
+# 一貫性のみ検証しており、unpinned 入力/exporter からの derived
+# manifest を構造的に拒否していなかった——本 manifest 群は「pin 済み
+# 入力からの derived」のみを表現できる、という意味論を docstring に明記
+# した。実測値そのもの——現行 manifest の checkpoint/exporter は元々
+# pin 一致——は無変更）。上記いずれも manifest の実測事実
+# （checkpoint/exporter/artifacts/smoke render の各 sha256・秒数）を
+# 一切変更しない——新設節の追加のみで実バイトが変わったための repin。
+# 旧 pin 値（第2世代、PR #327 第1巡3件対応後）は履歴として保持する:
+#   d8af88cf0d7721ee024370da7ee9de5943c388f978eb3dab510480d12bde3ae9
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第4巡指摘10、P2、採用。Claude
+# 完結ルート）: 再 export（`scripts/export.py acoustic --exp
+# s5_run6_acoustic_v1`）は checkpoint 本体だけでなく experiment dir
+# （`checkpoints/s5_run6_acoustic_v1/`）配下の config.yaml/spk_map.json/
+# lang_map.json/dictionary-ja.txt も消費するが、旧 manifest は checkpoint
+# digest（`input_checkpoint`）しか記録しておらず、replay 時に無関係な
+# ローカル experiment ファイルが誤って消費されても全検証が通ってしまう、
+# という指摘——新設 `experiment_side_inputs` 節（checkpoint-side 入力の
+# 全数宣言 + 各 sha256 + `dependency_pins_manifest.json` pin 値との一致
+# boolean。DiffSinger ソース読解（`utils/hparams.py set_hparams()`・
+# `basics/base_exporter.py build_spk_map()/build_lang_map()`・
+# `utils/phoneme_utils.py load_phoneme_dictionary()`）+ session workdir
+# staging 実測の両方で全数根拠を収載）で閉じた。実測で4点とも
+# `dependency_pins_manifest.json#render_asset_ledger`（HARNESS-1
+# provisioning で取得・sha 照合済み）の pin 値と一致することを確認した
+# （pin 済み資産が experiment dir に staged されていた事実の実測確認、
+# 捏造ではない）。`run9_schema.validate_reexport_manifest()` は
+# `experiment_side_inputs` の shape（必須キー・64hex・
+# `sha256_matches_pin` の算術一貫性 + `sha256 ==
+# expected_sha256_per_dependency_pins` かつ `sha256_matches_pin ==
+# True` の直接強制——指摘6と同型の「pin 済み入力のみ表現可能」意味論）を
+# machine 強制する。`load_pinned_reexport_manifest()` は cross-check
+# (11) として `experiment_side_inputs.items[].sha256` と
+# `dependency_pins_manifest.json#render_asset_ledger[].actual_sha256`
+# の論理名対応での直接照合を追加した（`dependency_pins_sha` は PENDING の
+# ため cross-check (8)/(10) と同様に同ファイルを直接読む）。
+# `replay_environment_recipe.steps` へ、export 実行前に
+# `experiment_side_inputs`（+ checkpoint 本体）を staging し全数 sha256
+# 照合してから export する手順（fail-closed: 1件でも不一致なら export
+# しない）を追加した。上記いずれも manifest の実測事実
+# （checkpoint/exporter/artifacts/smoke render の各 sha256・秒数）を
+# 一切変更しない——新設節の追加のみで実バイトが変わったための repin。
+# 旧 pin 値（第3世代、PR #327 第2巡指摘5対応後）は履歴として保持する:
+#   6ce64f5c4448dc5ca3d5bb3eab0994443264897423ad61419be28c2c93c0a35c
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第6巡指摘12、P2、採用。Claude
+# 完結ルート）: `replay_environment_recipe` は checkpoint-side 入力の全数
+# 照合までは書いていたが、肝心の export 実行手順そのものを一切書いておら
+# ず、`export_command`（歴史記録の逐語、当時 venv_export を activate 済み
+# の shell 内で実行されていたため bare `python` 表記になっている）を replay
+# 時にそのまま実行すると ambient interpreter とそのパッケージで
+# `scripts/export.py` が走り、unpinned 環境の生成物が作られ得た、という
+# 指摘。`replay_environment_recipe.steps` へ export 実行手順を新設し、
+# `export_command` を `venv_export_replay/bin/python` の明示呼び出しで実行
+# すること（bare `python` を起動しないこと）を書いた。`export_venv_setup.
+# historical_note` にも、当時 venv_export を activate 済みの shell 内で
+# install_steps/export_command を実行していたため bare `pip`/`python` が
+# 結果的に venv 内 interpreter/package に解決されていた旨を追記した
+# （install_steps/export_command/export_command_cwd 自体の実測事実は1文字も
+# 変更していない——historical_note の範囲でのみ追記）。
+# `run9_schema.validate_reexport_manifest()` へ2件の fail-closed 検証を
+# 追加した: (i) export 実行 step が `export_command` と `venv_export_
+# replay/bin/python` を同時参照していることの存在強制、(ii) venv bootstrap
+# （`python -m venv venv_export_replay`、venv がまだ存在しないため ambient
+# python を使うのが正当）を除く全 step に、`venv_export_replay/bin/` を前置
+# しない bare `python`/`pip` 起動が残っていないことの全数走査（負例テスト
+# 2件——export 実行 step 欠落・bare python 混入——を追加、いずれも reject を
+# 確認）。上記いずれも manifest の実測事実（checkpoint/exporter/artifacts/
+# smoke render の各 sha256・秒数）を一切変更しない——新設 step + 追記
+# ノートのみで実バイトが変わったための repin。旧 pin 値（第4世代、PR #327
+# 第4巡指摘10対応後）は履歴として保持する:
+#   af4fb42e86b52f510c78f3f2d3442a6b7da16075fb06ede181fee6cd97789f95
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第7巡指摘14、P2、採用。Claude
+# 完結ルート）: `replay_environment_recipe` の venv 作成 step
+# （`python -m venv venv_export_replay`）が ambient `python` で実行される
+# ため、記録された 3.11.15 でない interpreter で venv 自体が作られ得た
+# （第6巡指摘12の bare-export-interpreter 指摘とは別の穴——あちらは
+# export_command 実行時の interpreter、こちらは venv 自体の生成元）。
+# `replay_environment_recipe.steps` の venv 作成 step の**前**に
+# interpreter 版検証 step（`python -c "import platform; ..."` で
+# `platform.python_version()` を実測し `environment_versions.python`
+# （"3.11.15"）と厳密一致しなければ AssertionError で中止する手順を逐語
+# 収載）を新設した。venv 作成 step 自体の文言にも「直前の step で版検証
+# 済みの、その ambient interpreter を使って作成する」旨を追記した
+# （`export_command`/`export_command_cwd`/`export_environment_lock`/
+# `experiment_side_inputs` 等、他の実測事実は1文字も変更していない）。
+# `run9_schema.validate_reexport_manifest()` へ fail-closed 検証を追加した:
+# venv 作成 step（`-m venv` を含む最初の step）より前に、
+# `environment_versions.python` フィールド名とその pin 値を逐語参照する
+# interpreter 版検証 step が存在することを machine 強制する（欠落・venv
+# 作成 step 以降への配置のいずれも reject。負例テスト2件——検証 step
+# 欠落・venv 作成より後に配置——を追加、いずれも reject を確認）。bare
+# interpreter 起動の全数走査（第6巡指摘12由来）の例外範囲を「venv 作成
+# step まで（venv 作成 step を含む）」へ一般化し、新設した検証 step も
+# その例外に含めた（検証 step 自体は venv が存在する前に ambient
+# interpreter で実行するのが正当であるため）。上記いずれも manifest の
+# 実測事実（checkpoint/exporter/artifacts/smoke render の各 sha256・秒数）
+# を一切変更しない——新設 step + 既存 step への注記追記のみで実バイトが
+# 変わったための repin。旧 pin 値（第5世代、PR #327 第6巡指摘12対応後）は
+# 履歴として保持する:
+#   c06c3f7eecf64ddc1357b54539fd093e0189e3405739eb6bda8a104210abf140
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第8巡指摘15、P2、採用。Claude
+# 完結ルート）: `replay_environment_recipe` の export 実行 step は cwd を
+# `export_command_cwd`（DiffSinger checkout）へ変更した**後**に venv イン
+# タプリタパスを解決するため、`venv_export_replay/bin/python` を bare な
+# 相対パスのまま参照すると、cwd 変更後はその相対パスが DiffSinger ディレ
+# クトリ内で解決され、実在しない venv を指してしまい、記録どおりの replay
+# が実行不能になる、という指摘。venv のディレクトリを cwd 非依存の絶対
+# パス `<session workdir（repo外）>/venv_export_replay`（`export_command_
+# variables` の既存プレースホルダ起点、`_REEXPORT_REPLAY_RECIPE_VENV_DIR`
+# 単一正本）として再定義し、venv 作成 step・requirements 書き出し step・
+# pip install step・export 実行 step のすべてをこの絶対パス起点の参照へ
+# 書き換えた（`export_command`/`export_command_cwd`/`export_environment_
+# lock`/`experiment_side_inputs`/`install_steps` 等、他の実測事実は1文字も
+# 変更していない）。`run9_schema.validate_reexport_manifest()` へ fail-
+# closed 検証を追加した: `replay_environment_recipe.steps` 中に
+# `venv_export_replay` という文字列が現れる箇所すべてに、直前で cwd 非依存
+# の絶対パス接頭辞 `<session workdir（repo外）>/` が前置されていることを
+# 全数走査で machine 強制する（venv 作成 step 自体も対象に含める——bare な
+# 相対パスのみの参照は reject。既存の bare-interpreter 全数走査
+# （第6巡指摘12由来、`/bin/` 直前の negative lookbehind）は `<相対パス>/
+# bin/python` の形をそのまま通過させてしまうため検出できなかった穴を、
+# 本検証が別途閉じる）。負例テスト（cwd 変更 step の後に相対 venv 参照の
+# みの export step を残す構成）を追加し、reject を確認した。上記いずれも
+# manifest の実測事実（checkpoint/exporter/artifacts/smoke render の各
+# sha256・秒数）を一切変更しない——venv パス参照の書き換えのみで実バイトが
+# 変わったための repin。旧 pin 値（第6世代、PR #327 第7巡指摘14対応後）は
+# 履歴として保持する:
+#   efe4ff2101d84b9062ac6fb34f6416db5a2277aa0324effdc684249c1c95cdb5
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第9巡指摘16/17、P2×2、いずれも
+# 採用。Claude 完結ルート）: 本巡は「replay recipe の閉世界性」ファミリー
+# の終端巡——recipe が export 起動で終わり出力側の閉世界照合を持たず
+# （指摘16）、供給 clone の `scripts/export.py` 自体（exporter checkout）
+# を無検証実行していた（指摘17）、という残り2穴を閉じた。指摘17対応:
+# export 実行 step の**前**に、`<diffsinger_repo clone（session workdir、
+# repo外）>/DiffSinger` を cwd として (i) `git rev-parse HEAD` が
+# `exporter.revision`（"e2307b1080b00f3999702ce9017cfd75c7f862fe"）と完全
+# 一致すること、(ii) `git status --porcelain` が空であること（dirty
+# checkout 拒否）を検証し、不一致・dirty なら export_command を実行しない
+# step を新設した。指摘16対応: export 実行 step の**後**に、`<out_dir>`
+# 配下の生成物9点全数について `artifacts.*.file`/`sha256_run1`/`bytes` と
+# 全数一致することを照合する post-export 閉世界照合 step（欠落・不一致・
+# 想定外ファイルいずれも fail-closed 拒否。歴史 pin との一致/不一致の
+# 意味論には関与しない——照合対象は「この manifest が記録した再export
+# 出力とのバイト一致」のみ）を新設した。`run9_schema.
+# validate_reexport_manifest()` へ2件の fail-closed 検証を追加した:
+# (i) exporter checkout 検証 step が `git rev-parse HEAD`/`git status
+# --porcelain`/`exporter.revision`（pin 値逐語）を参照し、export 実行
+# step より厳密に前へ配置されていることの存在強制、(ii) post-export 照合
+# step が `artifacts` 9エントリ全数（`REEXPORT_ARTIFACT_KEYS`）と
+# `sha256_run1`/`bytes` フィールド名を参照し、export 実行 step より厳密に
+# 後へ配置されていることの存在強制（負例テスト各2件——step 欠落・誤った
+# 配置順——を追加、いずれも reject を確認）。`export_command`/
+# `export_command_cwd`/`export_environment_lock`/`experiment_side_inputs`/
+# `artifacts`/`exporter` 等、既存の実測事実は1文字も変更していない——新設
+# step 2件の追加のみで実バイトが変わったための repin。旧 pin 値（第7世代、
+# PR #327 第8巡指摘15対応後）は履歴として保持する:
+#   f244a104644ebcdcf5f44d5e3df8e17924eef4f38bb731aed8381d904bc7897f
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第10巡指摘19、P2、採用。本巡で
+# bot レビュー対応の規約上限10巡に到達——「未定義トークン」ファミリーの
+# 終端巡）: replay_environment_recipe.steps 内の export 実行 step・
+# post-export 閉世界照合 step が、export_command_variables に登録のない
+# 未定義トークン `<out_dir>` を参照しており、shell 上では未置換の
+# `<out_dir>` が入力リダイレクトと解釈されて export 前に失敗する穴を
+# 閉じた。現物確認: canonical `export_command` 自体は `<out_dir>` を含ま
+# ず、末尾は解決済みトークン `<session workdir（repo外）>/onnx_gate_
+# 40000`（`export_command[8]`）である——`<out_dir>` は歴史記録側の
+# プレースホルダではなく、第9巡で新設した2 step 内にのみ後から紛れ込んだ
+# 誤記であると確認できたため、`<out_dir>` を変数登録する側ではなく、
+# 両 step 内の全出現を登録済み canonical トークン `<session workdir（repo
+# 外）>/onnx_gate_40000`（export_command の実引数と同形）へ置換する解を
+# 採った。`run9_schema.validate_reexport_manifest()` へ2件の fail-closed
+# 検証を追加した: (i) steps 全数を走査し、`export_command_variables.
+# variables` に登録されていない `<...>` トークンが1件でも出現すれば拒否
+# する全数検証（`<out_dir>` 個別対処ではなく未定義トークンのファミリー
+# 全体をカテゴリカルに閉じる）、(ii) export 実行 step の引数トークン列が
+# canonical `export_command[1:]` と厳密一致すること（interpreter 部のみ
+# venv python への差し替えを許容）の機械検証。負例テスト2件（未定義
+# トークン混入・引数列不一致）を追加し、いずれも reject を確認した。
+# `export_command`/`export_command_cwd`/`export_environment_lock`/
+# `experiment_side_inputs`/`artifacts`/`exporter` 等、既存の実測事実は
+# 1文字も変更していない——step 内トークン置換のみで実バイトが変わった
+# ための repin。旧 pin 値（第8世代、PR #327 第9巡指摘16/17対応後）は
+# 履歴として保持する:
+#   9ba64a662fc4683d7a6741d26c199d600a5f51ca1b58acbc98fdc351cb086545
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第11巡指摘20、P2。規約上限10巡
+# 超過後だが、既存「未定義トークン」ファミリー（第10巡）とは別の新しい
+# 具体経路——manifest 自身/requirements_replay.txt への**相対**参照は
+# `<...>` 形式ではないため第10巡の未定義トークン検証をすり抜けていた——
+# として3分類（将来汚染）に該当し採用）: replay_environment_recipe.steps
+# 内の lock 生成 step（本 manifest 自身を json.load して requirements_
+# replay.txt を導出する python ワンライナー）が manifest パスを相対
+# 'inputs/reexport_manifest.json' のまま参照しており、repo root や session
+# workdir から開始した clean replay は cwd 未確立のため FileNotFoundError
+# で失敗し requirements_replay.txt が作られなかった。
+# export_command_variables.variables へ新規変数 <repo checkout>（本
+# リポジトリ Yuu6798/ugh-prompt-engine の checkout ルート）を追加登録し、
+# lock 生成 step の manifest 参照を <repo checkout>/voice_genesis/
+# evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json の明示形
+# へ、生成先 requirements_replay.txt と後続 pip install -r の参照は
+# <session workdir（repo外）> 起点の明示形へ揃えた（後続 step の参照整合を
+# 確認済み）。第10巡で入れた「未定義トークン全数拒否」検証は変数追加登録
+# により自動的に整合することを確認した。`run9_schema.
+# validate_reexport_manifest()` へ新規 fail-closed 検証を追加した:
+# replay_environment_recipe.steps のバッククォートコマンド内で
+# "reexport_manifest.json"/"requirements_replay.txt" が出現する箇所
+# すべてが、それぞれの checkout-stable な rooted prefix（<repo checkout>/
+# voice_genesis/evolution/run9_dual_founder_pjs/inputs/ /
+# <session workdir（repo外）>/）を伴うことを全数走査で強制する（未登録の
+# 相対参照が backtick コマンド内に現れたら reject、負例テスト2件を追加）。
+# `export_command`/`export_command_cwd`/`export_environment_lock`/
+# `experiment_side_inputs`/`artifacts`/`exporter` 等、既存の実測事実は
+# 1文字も変更していない——step 内パス参照の明示化のみで実バイトが変わった
+# ための repin。旧 pin 値（第9世代、PR #327 第10巡指摘19対応後）は履歴
+# として保持する:
+#   a9b3d09db0ff13bb6b4175221327f58773a36821f8790ccd06aa8c0e5cea3ea2
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第16巡指摘28/29、P2×2、いずれも
+# 採用——規約上限10巡超過後だが、3分類「将来汚染」に該当する新しい具体
+# 経路のため採用。Claude 完結ルート）: 本巡は replay の**再実行**衛生
+# （clean-slate 保証）の穴2件を閉じた——上記までの検証は初回 replay の
+# 閉世界性を閉じたが、同一 workdir での再実行（venv/出力先ディレクトリの
+# 残留）は未検証だった。指摘28: venv 作成 step が既存 venv_export_replay
+# を再利用すると、後続の `--no-deps` install は resolver 再解決のみを
+# 排除するのみで lock に無い残留パッケージを除去しない——export が
+# unrecorded 依存で走りうる。venv 作成 step のコマンドへ `--clear` を
+# 付与し（既存内容の削除を保証）、`--no-deps` install step の**後**・
+# export 実行 step の**前**に、venv の実測パッケージ集合
+# （`pip freeze --all`）が `export_environment_lock`（単一正本）と過不足
+# なく一致することを確認する freeze/lock 全一致照合 step を新設した
+# （照合コマンドを backtick 逐語で収載——manifest 自身を再 json.load し
+# `export_environment_lock` を単一正本として参照する python ワンライナー）。
+# 指摘29: 既存 `onnx_gate_40000` が残る workdir へ export すると、exporter
+# が期待ファイルを出力しそこねても前回 run の stale copy が post-export
+# 閉世界照合を偽 pass させ得る。export 実行 step の**前**に、export 先
+# ディレクトリ（`export_command` の `--out` 値そのもの）が存在しないこと
+# を確認する pre-flight step を新設した（存在すれば中止、削除はしない
+# ——手動確認へ引き継ぐ設計判断）。`run9_schema.validate_reexport_
+# manifest()` へ3件の fail-closed 検証を追加した: (a) venv 作成 step が
+# `--clear` トークンを含むことの存在強制、(b) freeze/lock 全一致照合 step
+# が `--no-deps` install step の後・export 実行 step の前に存在し
+# `export_environment_lock` を逐語参照していることの存在強制+順序強制、
+# (c) export 先ディレクトリ事前空確認 step が export 実行 step の前に
+# 存在することの存在強制+順序強制（負例テスト各複数件——`--clear` 欠落・
+# freeze 照合欠落/前方配置/後方配置・空確認欠落/後方配置——を追加、いずれも
+# reject を確認）。`export_command`/`export_command_cwd`/
+# `export_environment_lock`/`experiment_side_inputs`/`artifacts`/
+# `exporter`/`install_steps` 等、既存の実測事実は1文字も変更していない
+# ——新設 step 2件 + 既存 venv 作成 step への `--clear` 付与のみで実バイトが
+# 変わったための repin。この2点により、replay の再実行衛生（clean-slate
+# 保証）は入力・環境・実行体・出力の全面に対して閉じ、「replay recipe の
+# 閉世界性」ファミリーはここで終端する（新しい具体経路が示されない限り、
+# 本ファミリーへの追加対応は行わない）。旧 pin 値（第10世代、PR #327 第
+# 11巡指摘20対応後）は履歴として保持する:
+#   fd99519a598fd5ad19a474626d332a2f426cd8b560a925bb0ab6b34708ab0f13
+reexport_manifest_sha:
+  value: "a2333bfa17d585a589f827c570e4e61d90ebd3993606d3443b15890f1f7bf805"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json
 
 # RUN9-L0-HARNESS-1（2026-08-26）追記: PINNED 化を試みたが見送った。
 # 見送り理由は「実行環境が非現実的だった」ではなく「実測そのものが
@@ -615,14 +1119,121 @@ dependency_pins_sha:
 # は参考値のみで pin/見積りの根拠にしない）。acoustic export companions
 # が別途取得できた後、smoke render を再試行して実測を得るのが次の
 # ブロッカー解消経路（HARNESS-2 以降への引き継ぎ）。
+#
+# RUN9-L0-HARNESS-2（2026-08-26）追記〔履歴〕: smoke render 実測は完了した
+# （`HARNESS2_REEXPORT_SMOKE_RECORD.md` 参照——Python/OS/kernel/arch/
+# onnxruntime/providers/render entrypoint 等の実測値一式を記録済み）。
+# ただし User 裁定4「同じ固定runtime inputsで smoke render を実測し...
+# 取得した時点で execution_profile_sha を裁定・pinする」の裁定主体は
+# User であり、実測完了 = 自動 pin ではない。推定で PINNED にしない
+# （裁定4 逐語「smoke未実測の環境値を推定でPINNEDにしない」）。当時は
+# User 裁定を待って PENDING のまま据え置いた（下記 RUN9-EXECPROFILE-1
+# 節で解消済み）。
+#
+# RUN9-EXECPROFILE-1（2026-08-26、User 裁定「RUN9 User裁定 —
+# execution_profile_sha」の承認に基づく。逐語は repo 内収載
+# `USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt` を正とする）で
+# PINNED 化: User が裁定した runtime identity 5値（python "3.11.15" /
+# os "Ubuntu 24.04.4" / architecture "x86_64" / onnxruntime "1.29.0" /
+# selected_execution_provider "CPUExecutionProvider"）+ provider 固定
+# 規則4点（CPUExecutionProvider 固定・available/selected 混同禁止・
+# GPU/CUDA 自動fallback/upgrade禁止・provider/主要runtime version変更時
+# の再pin義務）+ smoke benchmark 参考記録（`is_reference_only: true` で
+# identity 意味論から分離、616件概算の出典注記付き）+ 追加実測9項目
+# （裁定「可能であれば実測記録」節——実測できたもののみ記録し、
+# thread_environment_variables のみ smoke 実行時の一次記録が存在せず
+# `NOT_RECORDED` とした）を新設 `inputs/execution_profile_manifest.json`
+# （schema `run9-execution-profile/1.0`）へ一括 manifest 化し、その実
+# バイト sha256 を本欄へ PINNED した。`run9_schema.
+# validate_execution_profile_manifest()`/`load_pinned_execution_
+# profile_manifest()`（PIN-1/2・HARNESS-1/2 と同型の4段構成 + 裁定 txt
+# 実バイト sha256 cross-check）が消費・検証する。
+#
+# 情報記録（pin 欄ではない、append-only、PIN-2/HARNESS-2 前例のキー体裁
+# 踏襲）: repo 収載した裁定逐語文書
+# `USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt` の実バイト sha256
+# （compute_file_sha256() 実測、2026-08-26 時点）:
+#   cb56c3cd6bb14cb18251138f0c48dd209eb5995b1815019ad2d5f53451c147bf
+# 本ファイルは CONTRACT_PIN_FIELDS へ追加しない（裁定文書自体は「値の
+# 転記元の証跡」であって RUN9 の実行前提条件そのものではないため——
+# reexport_manifest_sha の前例と同じ扱い）。
+#
+# 2026-08-26 loader/verify 強化（PR #327 Codex レビュー第3巡指摘8、P1、
+# 採用——profile pin が実実行入力に結合していなかった穴。manifest 実体は
+# 無変更、run9_schema.py 側のみ強化）: 旧 `load_pinned_execution_profile_
+# manifest()` は manifest と裁定 txt しか読まず、live runtime も render
+# code 実体も照合しないため、異なる環境/改変済み gate_synth.py の下でも
+# pin 済み profile がそのまま受理され得た。(a) loader へ repo 静的な
+# render code 照合を追加した——`additional_measurements.render_code_
+# commit.file_sha256` を `voice_genesis/foundry/s1_gate/gate_synth.py` の
+# 実バイト sha256 と cross-check し、gate_synth.py が pin 後に改変されて
+# いれば fail-closed で拒否する（CI マトリクスでも決定論的に成立する
+# repo 内容のみの照合）。(b) live 環境照合（Python/onnxruntime バージョン
+# ・利用可能 provider・選択 provider 引数）は loader へ入れない——CI が
+# Python 3.11/3.12 マトリクスで走るため、load 時に live Python を照合
+# すると正当な CI が構造的に落ちる。代わりに新設
+# `run9_schema.verify_execution_profile_runtime(manifest)` へ分離した。
+# **RUN9 実行段（学習ハーネス/render 実行の run gate）は render を開始
+# する前に本関数を必ず呼ぶこと**——HARNESS-3 配線点として登録する。
+#
+# 2026-08-26 verify 強化（PR #327 Codex レビュー第5巡指摘11、P1、採用
+# ——run gate が OS/architecture を照合しない穴。manifest 実体は無変更、
+# run9_schema.py 側のみ強化）: 旧 verify_execution_profile_runtime() は
+# runtime identity 5値（python/onnxruntime/os/architecture/
+# selected_execution_provider）のうち python/onnxruntime/
+# selected_execution_provider の3値しか live probe しておらず、
+# os/architecture は manifest 記載値を無条件に信頼していたため、別 OS・
+# 別アーキテクチャ環境でもパッケージ版と CPU provider さえ揃えば run gate
+# が通り得た。platform.machine() による architecture 照合と
+# /etc/os-release 実 read による os 照合（導出規則は run9_schema.
+# _build_live_os_identity() docstring 参照）を追加し、runtime identity
+# 5値全てを live probe で fail-closed 照合する契約とした。
+#
+# 2026-08-26 verify 強化（PR #327 Codex レビュー第7巡指摘13、P1、採用
+# ——runtime 検証が pinned manifest に結合していない穴。manifest 実体は
+# 無変更、run9_schema.py/tests 側のみ強化）: 旧 verify_execution_profile_
+# runtime(manifest) は呼び出し側供給の任意 Mapping をそのまま受け取り、
+# validate も execution_profile_sha 照合も一切せず live 照合していたため、
+# HARNESS-3 run gate が再構成/改変された manifest を渡すと live ホストに
+# 合わせた値で偽成功検証が可能だった（`load_pinned_execution_profile_
+# manifest()` の全 cross-check・sha 照合を素通りできる経路が存在した）。
+# 第一引数を「load 済み contract」（`run9_schema.Run9RunContract`、他の
+# `load_pinned_*` 系関数と同じ流儀）へ変更し、関数内部で
+# `load_pinned_execution_profile_manifest(contract, ...)`（disk 正典再読込
+# ・改変検出・PINNED 確認・実在確認・実バイト sha256 一致確認・構造検証・
+# adjudication/render-code cross-check を含む全防御）を atomic に呼んで
+# から、その戻り値のみを live 照合に使う契約へ改めた——
+# `run9_schema.verify_execution_profile_runtime(contract, ...)` として
+# 呼ぶこと。manifest dict を直接注入できる公開経路はこれで存在しない。
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第15巡指摘27、P2、上限10ラウンド
+# 超過後だが3分類「将来汚染」に該当する新しい具体経路として採用。Claude
+# 完結ルート）: 第14巡 cross-check (8)（`_cross_check_measured_source_
+# line_text()`）は `source_line_text` を持つ2項目（onnxruntime_selected_
+# providers, deterministic_seed）のみを行照合の対象とし、
+# `onnxruntime_thread_settings` の intra/inter_op_num_threads（gate_
+# synth.py:1216-1217 出典、EXPLICITLY_SET）は `source_line` が正整数で
+# あることしか検証していなかった——将来 repin で cited 行が stale・無関係
+# になっても shape 検証だけでは受理されてしまい、正典 provenance が汚染
+# される穴だった。gate_synth.py の実行（`so.intra_op_num_threads = 1` /
+# `so.inter_op_num_threads = 1`）を Read で実測し、両項目へ
+# `source_line_text`（strip 済み逐語、第14巡対象2項目と同形式）を追加、
+# `run9_schema.py` 側は (a) `validate_execution_profile_manifest()` の
+# thread 設定 shape 検証へ `source_line_text`（非空 str、EXPLICITLY_SET
+# のときのみ内容検証——既存の source_file/source_line と同型分岐）を必須化
+# (b) cross-check (8) の対象を4項目へ全数化（第14巡と同じ照合ロジック、
+# `thread_settings_source_path` オーバーライドを `render_code_path` 系と
+# 同形で追加）(c) docstring の「thread_settings は構造的に対象外」記述を
+# 撤去し全数化の旨へ更新、とした。`identity_semantics`/`benchmark_
+# reference`/裁定 txt 参照は1byteも変更していない——追加は
+# `additional_measurements.onnxruntime_thread_settings` の記録形式強化
+# のみで実バイトが変わったための repin。旧 pin 値（第1世代、RUN9-
+# EXECPROFILE-1 初回 PINNED 時）は履歴として保持する:
+#   200c975967a7b34aa55d9e89a8c59ace2be850e5fd1d93a4ba4a7dbed5f06d34
 execution_profile_sha:
-  value: null
-  status: PENDING
-  reason: >-
-    学習実行環境（GPU / hardware profile）が未選定。加えて
-    RUN9-L0-HARNESS-1（2026-08-26）で判明: CPU render 実測時間が
-    acoustic export companions 未取得のため得られず、予算現実性の判定
-    材料自体が存在しない（上記コメント参照）。
+  value: "370a6332c76e19e10952f246bf8c82ba724416833489debeccbb3a00b840d7f2"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/execution_profile_manifest.json
 
 # --- seed_policy_sha: inputs/seed_policy_manifest.json の実バイト sha256
 # （design_doc_sha256 と同一のファイル実バイト規約 —
@@ -1475,7 +2086,7 @@ cost_record_sha:
 #   19件）。seed_policy_manifest.json/measurement_spec_manifest.json/
 #   founders/*.json/domains/identity_domain_run9_v1.json は無改変
 #   （sha256 確認済み・domains は read-only 参照のみ）。
-# --- PR #324 Codex bot レビュー第7巡 Fix（2026-08-26、値
+# - PR #324 Codex bot レビュー第7巡 Fix（2026-08-26、値
 #   20c71d273993f062cf562b2097a57bfe530c54303e87287c58e98bad9876df4a へ
 #   repin、P2、採用）: domain ファイル自体は第4段までのチェーンでは何とも
 #   照合されておらず、domain 側だけを改変（+ 辻褄合わせに rights/ledger
@@ -1513,8 +2124,40 @@ cost_record_sha:
 #   manifest.json/measurement_spec_manifest.json/founders/*.json/
 #   domains/identity_domain_run9_v1.json は無改変（sha256 確認済み・
 #   domains は read-only 参照のみ）。
+# --- PR #327 Codex bot レビュー第13巡指摘25（2026-08-26、値
+#   da8aee0d49a5dac58b5ddd6b6dc7959f1a15914e9a6e565a4e6851e2b6c7a527 へ
+#   repin、P2、採用——上限10ラウンド超過後だが3分類「将来汚染」（誤った
+#   現在形記述が下流の実装/記録を汚す）に該当する新しい具体経路のため
+#   採用）: execution_profile_sha を RUN9-EXECPROFILE-1（2026-08-26）で
+#   PINNED 化した結果、rule 19（cost cap exceeded）の checkpoint が
+#   引き続き「execution_profile_sha（Group C、現状 PENDING）」という
+#   現在形記述のまま stale 化し、本 failure_abort_criteria_sha pin が
+#   その偽の現在形を authenticate し続けていた——正典間矛盾の指摘。
+#   事実確認: inputs/execution_profile_manifest.json（RUN9-EXECPROFILE-1
+#   で PINNED 済み）は runtime identity 5値（python/os/architecture/
+#   onnxruntime/selected_execution_provider）+ provider 固定規則4点を
+#   収載するのみで、cost cap 数値は含まない——benchmark_reference は
+#   `is_reference_only: true` の smoke 実測参考記録であり、凍結された
+#   cost cap ではない。つまり rule 19 が指す「cost cap 数値は未凍結」と
+#   いう判定（enforcement: PROCEDURAL）自体は現在も正しく、stale なのは
+#   execution_profile_sha の pin 状態を「現状 PENDING」と述べる前提記述
+#   のみ。対応: rule 19 の checkpoint を、(a) execution_profile_sha は
+#   RUN9-EXECPROFILE-1 で PINNED 済みである事実、(b) その収載範囲は
+#   runtime identity のみで cost cap を含まないため cost cap は依然
+#   未凍結である事実、の2点を分離して記述する形へ訂正した（rule の
+#   意味論=cost cap 未凍結による PROCEDURAL 判定は不変、旧文言は
+#   〔履歴: ...〕注記として rule 19 内に保持——rule 2 の第2〜7巡
+#   前例と同型の append-only 規約）。machine_promotion_condition・
+#   enforcement・verbatim・rule_id は無改変。他 rule・他 PINNED 欄・
+#   manifest 群（reexport/dependency_pins/execution_profile/
+#   seed_policy/measurement_spec/dataset 等）は無改変（sha256
+#   確認済み）。run9_schema.py の validator は rule の `verbatim`
+#   のみを逐語照合し `checkpoint` は非空文字列であることのみを要求する
+#   構造検証のため、本訂正は validator 側の追随を要さない（確認済み）。
+#   分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。バイトが変わったため
+#   repin（9世代目）。
 failure_abort_criteria_sha:
-  value: "20c71d273993f062cf562b2097a57bfe530c54303e87287c58e98bad9876df4a"
+  value: "da8aee0d49a5dac58b5ddd6b6dc7959f1a15914e9a6e565a4e6851e2b6c7a527"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 

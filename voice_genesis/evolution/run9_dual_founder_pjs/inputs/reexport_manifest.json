@@ -1,0 +1,308 @@
+{
+  "adjudication_basis": {
+    "sha256": "1806955c12ab3c002a9083929fd517e3312de9fe0eff6dc01d2b26018bb1e3ca",
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt",
+    "summary": "User 裁定 2026-08-26 決定2（checkpoint からの再 export 承認）に基づく derived runtime artifact。historical bytes の復元とは扱わない。"
+  },
+  "artifacts": {
+    "acoustic_onnx": {
+      "bytes": 279777001,
+      "file": "s5_run6_acoustic_v1.onnx",
+      "historical_sha256": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+      "matches_historical": false,
+      "run1_run2_identical": true,
+      "sha256_run1": "cdbd779c686504cd1277bf74036e5fb334e4fcdc88ab7612f435ced7c1d6687b",
+      "sha256_run2": "cdbd779c686504cd1277bf74036e5fb334e4fcdc88ab7612f435ced7c1d6687b"
+    },
+    "d3synth_emb": {
+      "bytes": 1536,
+      "file": "s5_run6_acoustic_v1.d3synth.emb",
+      "historical_sha256": "10c3964c57a69edb072bd7c9aec36dc7e3b06e06469c5da60332bec793c1dc22",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "10c3964c57a69edb072bd7c9aec36dc7e3b06e06469c5da60332bec793c1dc22",
+      "sha256_run2": "10c3964c57a69edb072bd7c9aec36dc7e3b06e06469c5da60332bec793c1dc22"
+    },
+    "dictionary_ja_txt": {
+      "bytes": 204,
+      "file": "dictionary-ja.txt",
+      "historical_sha256": null,
+      "matches_historical": false,
+      "run1_run2_identical": true,
+      "sha256_run1": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
+      "sha256_run2": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef"
+    },
+    "dsconfig_yaml": {
+      "bytes": 775,
+      "file": "dsconfig.yaml",
+      "historical_sha256": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+      "sha256_run2": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c"
+    },
+    "languages_json": {
+      "bytes": 13,
+      "file": "s5_run6_acoustic_v1.languages.json",
+      "historical_sha256": null,
+      "matches_historical": false,
+      "run1_run2_identical": true,
+      "sha256_run1": "a51ee3aa7dafa1905b01a8c6ed2e99ebeecad0071d786493f43effd2438b2fda",
+      "sha256_run2": "a51ee3aa7dafa1905b01a8c6ed2e99ebeecad0071d786493f43effd2438b2fda"
+    },
+    "phonemes_json": {
+      "bytes": 506,
+      "file": "s5_run6_acoustic_v1.phonemes.json",
+      "historical_sha256": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
+      "sha256_run2": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8"
+    },
+    "pjs_emb": {
+      "bytes": 1536,
+      "file": "s5_run6_acoustic_v1.pjs.emb",
+      "historical_sha256": "074e09b390c207a7cf98105db549e1006d035a797d57f73e103e848bb3216015",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "074e09b390c207a7cf98105db549e1006d035a797d57f73e103e848bb3216015",
+      "sha256_run2": "074e09b390c207a7cf98105db549e1006d035a797d57f73e103e848bb3216015"
+    },
+    "ritsu_emb": {
+      "bytes": 1536,
+      "file": "s5_run6_acoustic_v1.ritsu.emb",
+      "historical_sha256": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
+      "sha256_run2": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c"
+    },
+    "user_emb": {
+      "bytes": 1536,
+      "file": "s5_run6_acoustic_v1.user.emb",
+      "historical_sha256": "588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0",
+      "sha256_run2": "588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0"
+    }
+  },
+  "environment_versions": {
+    "arch": "x86_64",
+    "device": "CPU (no GPU used for export; historical run6 export environment/device unknown)",
+    "kernel": "Linux 6.18.44-fc-v21 x86_64",
+    "lightning": "2.3.3",
+    "numpy": "1.26.4",
+    "onnx": "1.22.0",
+    "onnxsim": "v0.7.3",
+    "os": "Ubuntu 24.04.4 LTS",
+    "python": "3.11.15",
+    "torch": "2.13.0+cpu"
+  },
+  "experiment_side_inputs": {
+    "declaration": "export.py acoustic --exp s5_run6_acoustic_v1 が checkpoints/s5_run6_acoustic_v1/ から実際に読む checkpoint-side 入力の全数（checkpoint 本体 model_ckpt_steps_40000.ckpt は input_checkpoint 節で別途 pin 済みのため本節では除く）。PR #327 Codex レビュー第4巡指摘10（P2、採用——checkpoint 側 export 入力の pin 欠落。再 export は checkpoint だけでなく experiment 側の config/spk_map/lang_map/dictionary も消費するが manifest は checkpoint digest しか記録せず、replay 時に無関係なローカル experiment ファイルが消費されても全検証が通ってしまう、という指摘）への対応。",
+    "enumeration_basis": "(1) workdir 実測: session workdir の DiffSinger clone （checkpoints/s5_run6_acoustic_v1/）を find で列挙したところ config.yaml・spk_map.json・lang_map.json・dictionary-ja.txt・model_ckpt_steps_40000.ckpt の5点が staged されていた。(2) ソース読解による突合: utils/hparams.py set_hparams() は checkpoints/<exp_name>/config.yaml を ckpt_config_path として直読する（args_work_dir = 'checkpoints/'+exp_name）。basics/base_exporter.py build_spk_map()/build_lang_map() は work_dir/spk_map.json・work_dir/lang_map.json を読む。utils/phoneme_utils.py load_phoneme_dictionary() は work_dir/dictionary-<lang>.txt が存在すればそれを config.yaml 記載の dictionaries.<lang> パス（本 exp の config.yaml は /root/s4work/... という当時の絶対パスを収載しており 非可搬）より優先して読む——work_dir 側に dictionary-ja.txt が実在したため、そちらが実際に消費された。checkpoint 本体を除くこの4点が export.py --exp が消費する checkpoint-side 入力の全数である。(3) 実測 sha256 は dependency_pins_manifest.json#render_asset_ledger の backbone_config_yaml/backbone_spk_map_json/backbone_lang_map_json/backbone_dictionary_ja_txt（HARNESS-1 provisioning で取得・sha 照合済みの Drive 資産）と全数一致した（下記 items[].sha256_matches_pin 参照）——experiment dir に staged されていたのは pin 済み資産そのものであったことの実測確認。",
+    "items": {
+      "config_yaml": {
+        "expected_sha256_per_dependency_pins": "3722072045060e316ec9fee3f307412eceacf617d3b3ece7adfcbefa0f9df9d9",
+        "experiment_dir_relative_path": "config.yaml",
+        "logical_name": "backbone_config_yaml",
+        "sha256": "3722072045060e316ec9fee3f307412eceacf617d3b3ece7adfcbefa0f9df9d9",
+        "sha256_matches_pin": true
+      },
+      "dictionary_ja_txt": {
+        "expected_sha256_per_dependency_pins": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
+        "experiment_dir_relative_path": "dictionary-ja.txt",
+        "logical_name": "backbone_dictionary_ja_txt",
+        "sha256": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
+        "sha256_matches_pin": true
+      },
+      "lang_map_json": {
+        "expected_sha256_per_dependency_pins": "2a6a227ee65a49f5c30e848a4b62c5cc1817926bbdab373228e6302d2c794953",
+        "experiment_dir_relative_path": "lang_map.json",
+        "logical_name": "backbone_lang_map_json",
+        "sha256": "2a6a227ee65a49f5c30e848a4b62c5cc1817926bbdab373228e6302d2c794953",
+        "sha256_matches_pin": true
+      },
+      "spk_map_json": {
+        "expected_sha256_per_dependency_pins": "da9748fabfa721a4a789224b50fd52743628fd2396602852f2dc25c54f2e3803",
+        "experiment_dir_relative_path": "spk_map.json",
+        "logical_name": "backbone_spk_map_json",
+        "sha256": "da9748fabfa721a4a789224b50fd52743628fd2396602852f2dc25c54f2e3803",
+        "sha256_matches_pin": true
+      }
+    }
+  },
+  "export_command": [
+    "python",
+    "scripts/export.py",
+    "acoustic",
+    "--exp",
+    "s5_run6_acoustic_v1",
+    "--ckpt",
+    "40000",
+    "--out",
+    "<session workdir（repo外）>/onnx_gate_40000"
+  ],
+  "export_command_cwd": "<diffsinger_repo clone（session workdir、repo外）>/DiffSinger",
+  "export_command_variables": {
+    "path_independence_note": "出力バイトはこれらのパス選択に依存しない — 成果物の同一性検証則はパスではなく各 artifact の raw sha256 である（artifacts.*.sha256_run1/sha256_run2 参照）。実測でも run1/run2 で <out_dir> 実体（reexport_out / reexport_out2）は異なるパスだったが、全9 artifacts が sha256 完全一致した（reproducibility_check.all_run1_run2_identical: true）——このため recipe を逐語再実行する上で <out_dir>/<diffsinger_repo> の具体パス自体は再現条件ではない。再実行（replay 再検証）は本 PR では行っていない — 独立2回 export のsha 完全一致が既に実測記録済みであり、その事実（reproducibility_check）を本節が参照する。",
+    "variables": {
+      "<diffsinger_repo clone（session workdir、repo外）>": "openvpi/DiffSinger の clone 先ディレクトリ。commit e2307b1080b00f3999702ce9017cfd75c7f862fe（exporter.revision 参照）を checkout した状態で export_command_cwd（<この値>/DiffSinger）として使う。",
+      "<repo checkout>": "本リポジトリ Yuu6798/ugh-prompt-engine の checkout ルート（`git clone` した local working copy のトップディレクトリ）。manifest 自身（本ファイル）への self-contained な絶対参照に使う（例: `<repo checkout>/voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json`）——PR #327 レビュー第11巡指摘20対応: 旧 recipe は本ファイルを相対パス 'inputs/reexport_manifest.json' で json.load していたため、repo root や session workdir から replay を開始すると FileNotFoundError で失敗し requirements_replay.txt が生成できなかった。",
+      "<session workdir（repo外）>": "任意の書込可能な作業ディレクトリでよい（repo 外、session workdir 相当）。export.py --out に渡す出力先の親ディレクトリ。実測では run1 = scratchpad/harness_work/reexport_out、run2 = scratchpad/harness_work/reexport_out2 という異なる2パスを用いた（reproducibility_check 参照）。"
+    }
+  },
+  "export_environment_lock": [
+    "absl-py==2.5.0",
+    "aiohappyeyeballs==2.7.1",
+    "aiohttp==3.14.3",
+    "aiosignal==1.4.0",
+    "attrs==26.1.0",
+    "audioread==3.1.0",
+    "certifi==2026.7.22",
+    "cffi==2.1.1",
+    "charset-normalizer==3.5.1",
+    "click==8.5.0",
+    "contourpy==1.3.3",
+    "cycler==0.12.1",
+    "Cython==3.3.0",
+    "decorator==5.3.1",
+    "einops==0.8.2",
+    "filelock==3.32.3",
+    "fonttools==4.63.0",
+    "frozenlist==1.8.0",
+    "fsspec==2025.12.0",
+    "grpcio==1.83.0",
+    "h5py==3.16.0",
+    "idna==3.19",
+    "Jinja2==3.1.6",
+    "joblib==1.5.3",
+    "kiwisolver==1.5.0",
+    "libcst==1.9.0",
+    "librosa==0.9.2",
+    "lightning==2.3.3",
+    "lightning-utilities==0.15.3",
+    "llvmlite==0.49.0",
+    "Markdown==3.10.3",
+    "markdown-it-py==4.2.0",
+    "MarkupSafe==3.0.3",
+    "matplotlib==3.11.1",
+    "mdurl==0.1.2",
+    "ml_dtypes==0.5.4",
+    "MonkeyType==23.3.0",
+    "mpmath==1.3.0",
+    "multidict==6.7.1",
+    "mypy_extensions==1.1.0",
+    "narwhals==2.25.0",
+    "networkx==3.6.1",
+    "numba==0.67.0",
+    "numpy==1.26.4",
+    "onnx==1.22.0",
+    "onnxsim==0.7.3",
+    "packaging==24.2",
+    "pillow==12.3.0",
+    "pip==26.2.1",
+    "platformdirs==4.11.4",
+    "pooch==1.9.0",
+    "praat-parselmouth==0.4.3",
+    "propcache==0.5.2",
+    "protobuf==7.36.0",
+    "pycparser==3.0",
+    "Pygments==2.21.0",
+    "pyparsing==3.3.2",
+    "python-dateutil==2.9.0.post0",
+    "pytorch-lightning==2.6.5",
+    "pyworld==0.3.4",
+    "PyYAML==6.0.3",
+    "requests==2.34.2",
+    "resampy==0.4.3",
+    "rich==15.0.0",
+    "scikit-learn==1.9.0",
+    "scipy==1.17.1",
+    "setuptools==79.0.1",
+    "six==1.17.0",
+    "soundfile==0.14.0",
+    "sympy==1.14.0",
+    "tensorboard==2.21.0",
+    "tensorboard-data-server==0.7.2",
+    "tensorboardX==2.6.5",
+    "threadpoolctl==3.6.0",
+    "torch==2.13.0+cpu",
+    "torchmetrics==1.9.0",
+    "tqdm==4.70.0",
+    "typing_extensions==4.16.0",
+    "urllib3==2.7.0",
+    "Werkzeug==3.1.8",
+    "yarl==1.24.5"
+  ],
+  "export_environment_lock_sha256": "24dbd5831041ac3db3a314b65a09feeabe69d89010d1486ed669277a225580f5",
+  "export_venv_setup": {
+    "description": "torch 隔離 venv（provision.sh §6 export venv pin 準拠）。numpy<2 制約下で torch/lightning/onnx/onnxsim を DiffSinger/requirements.txt 経由で導入し、最後に numpy を 1.26.4 へ再pin（provision.sh の既知順序: requirements.txt 導入後に numpy を戻さないと 2.x へ引き上げられる）。",
+    "historical_note": "本 install_steps は当時実際に実行した手順の実測記録（historical、provision.sh §6 export venv pin 準拠の当時のコマンド逐語）であり、新規に再現する場合は本キーではなく replay_environment_recipe を使うこと（バージョン正本は export_environment_lock 配列）。当時は venv_export を activate 済みの shell 内でこれらのコマンドおよび export_command を実行していたため、install_steps の bare `pip`・export_command の bare `python` はいずれも ambient interpreter ではなく venv_export 内の interpreter/package に解決されていた（当時の shell 状態への依存であり、本キー自体は historical bytes として不変のまま——replay_environment_recipe はこの依存を解消し、venv パスを明示指定する）。",
+    "install_steps": [
+      "python -m venv venv_export",
+      "pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu",
+      "pip install -r <diffsinger_repo clone（session workdir、repo外）>/DiffSinger/requirements.txt",
+      "pip install numpy==1.26.4"
+    ]
+  },
+  "exporter": {
+    "expected_revision_per_run9_contract": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+    "repo": "openvpi/DiffSinger",
+    "revision": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+    "revision_matches_pin": true
+  },
+  "generated_at_utc": "2026-08-26T14:04:43Z",
+  "historical_comparison_summary": {
+    "acoustic_onnx": "MISMATCH（バイト非一致。ckpt/exporter commit は pin 一致確認済みだが、export 実行環境（torch/onnx/onnxsim 具体バージョン・GPU/CPU・当時のOS）は historical 側で未記録のため、環境差要因を断定できない。捏造して合わせていない）",
+    "d3synth_emb": "MATCH（byte-identical replay evidence。dependency_pins_manifest.json 収載済みの speaker_embeddings_unpinned_candidates.d3synth_reference_only.candidate_sha256 と一致）",
+    "dsconfig_yaml": "MATCH（byte-identical replay evidence）",
+    "phonemes_json": "MATCH（byte-identical replay evidence）",
+    "pjs_emb": "MATCH（byte-identical replay evidence——ただし User 裁定3の正式PINNED昇格条件（同一 directory/archive 内で4 sha 同時存在の実測確認）は Step A で archive/directory が発見できず未充足。再export による独立再現は昇格条件そのものではなく、候補値の信頼性を補強する傍証として記録する）",
+    "ritsu_emb": "MATCH（byte-identical replay evidence）",
+    "user_emb": "MATCH（byte-identical replay evidence——pjs_emb と同様、昇格条件は未充足のまま。傍証として記録）"
+  },
+  "input_checkpoint": {
+    "bytes": 556013282,
+    "expected_sha256_per_run9_contract": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+    "path": "voice_genesis/foundry/run8 系 provision.sh の pin と同一（RUN6 phase B 40K checkpoint）",
+    "sha256": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+    "sha256_matches_pin": true
+  },
+  "pin_disposition": "RUN9-L0-HARNESS-2（本ファイル収載 PR）で reexport_manifest_sha として RUN9_CONTRACT.yaml へ新規 PINNED 化された。derived runtime artifact として 扱い、historical bytes の復元とは扱わない（User 裁定2 逐語、USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt 参照）。",
+  "replay_environment_recipe": {
+    "declaration": "新規に再現する場合は install_steps（歴史記録、当時実際に実行した手順であり1文字も変更しない）ではなく本 recipe を使う。バージョン正本は export_environment_lock 配列（単一正本）——別ファイルの lock file は置かない（二重正本 drift 防止）。",
+    "lock_array_reference": "export_environment_lock",
+    "steps": [
+      "venv 作成に使う ambient interpreter の版を検証する（fail-closed）: `python -c \"import platform; v = platform.python_version(); assert v == '3.11.15', f'python version mismatch: live={v!r} pinned=environment_versions.python=3.11.15'\"` を実行する。AssertionError（非ゼロ終了）ならここで中止し、以降の step（venv 作成を含む）を一切実行しない——記録済み environment_versions.python（\"3.11.15\"）と異なる interpreter で venv を作成すると、venv 自体の生成元が unpinned になる（bare-export-interpreter 指摘とは別の穴）。",
+      "python -m venv --clear <session workdir（repo外）>/venv_export_replay（直前の step で版検証済みの、その ambient interpreter を使って作成する。venv はこの <session workdir（repo外）> プレースホルダ（`--out` の定義と同一ディレクトリ）起点の絶対パスへ作成すること——後続の export 実行 step は作業ディレクトリを <diffsinger_repo clone（session workdir、repo外）>/DiffSinger へ変更するため、venv をこの接頭辞なしの bare な相対パスで作成すると、変更後は同名の相対パスが DiffSinger ディレクトリ内で解決され、実在しない venv を指してしまう）（PR #327 レビュー第16巡指摘28対応: --clear を付与し、既存の <session workdir（repo外）>/venv_export_replay が残る workdir で replay を 再実行しても、その内容が削除されてから venv が作り直されることを保証する——付与しない場合、既存 venv 内の残留パッケージが下記 freeze/lock 全一致照合 step で検出されるまで気付かれない可能性がある）",
+      "replay recipe の本 step は旧版で本 manifest 自身（本ファイル）を相対パス 'inputs/reexport_manifest.json' のまま json.load しており、repo root や session workdir から replay を開始した clean checkout では FileNotFoundError で失敗し requirements_replay.txt が作られなかった（PR #327 レビュー第11巡指摘20対応）。manifest 参照は本 manifest の変数定義節（variables）に新規登録した <repo checkout> 起点の明示形へ、生成先 requirements_replay.txt の参照は <session workdir（repo外）> 起点の明示形へ揃える: `<session workdir（repo外）>/venv_export_replay/bin/python -c \"import json, pathlib; manifest = json.load(open('<repo checkout>/voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json', encoding='utf-8')); pathlib.Path('<session workdir（repo外）>/requirements_replay.txt').write_text('\\n'.join(manifest['export_environment_lock']) + '\\n', encoding='utf-8')\"` を実行する。",
+      "直前の step で生成した requirements_replay.txt を <session workdir（repo外）> 起点の明示形で参照して install する（同指摘20対応、生成先/参照パスの整合）: `<session workdir（repo外）>/venv_export_replay/bin/pip install --no-deps -r <session workdir（repo外）>/requirements_replay.txt --extra-index-url https://download.pytorch.org/whl/cpu` を実行する。",
+      "直前の install step（`--no-deps` 指定、`<session workdir（repo外）>/venv_export_replay/bin/pip` 経由）は resolver による transitive 依存の再解決を排除するのみであり、venv 作成 step へ --clear を付与しても （上記指摘28-i対応）、将来 --clear なしで誤って再実行された場合や --clear が期待通り 動作しなかった場合の残留パッケージまでは検出できない（PR #327 レビュー第16巡指摘28 対応、fail-closed）。export へ進む前に、venv 内の実測パッケージ集合が export_environment_lock（単一正本）と過不足なく一致することを確認する: `<session workdir（repo外）>/venv_export_replay/bin/python -c \"import json, subprocess; manifest = json.load(open('<repo checkout>/voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json', encoding='utf-8')); lock = manifest['export_environment_lock']; freeze = subprocess.run('<session workdir（repo外）>/venv_export_replay/bin/pip freeze --all', shell=True, capture_output=True, text=True, check=True).stdout.strip().split('\\n'); assert sorted(freeze) == sorted(lock), (sorted(set(freeze) - set(lock)), sorted(set(lock) - set(freeze)))\"` を実行する。sorted(実測) と sorted(export_environment_lock) の集合が1件でも食い違えば（実測にのみ存在する過剰パッケージ / lock にのみ存在する不足 パッケージのいずれも）AssertionError（非ゼロ終了）で中止し、scripts/export.py を実行しない （export 実行 step へ進まない）。",
+      "export 実行前に、以下の checkpoint-side 入力を <diffsinger_repo clone（session workdir、repo外）>/DiffSinger/checkpoints/s5_run6_acoustic_v1/ へ配置する: config.yaml / spk_map.json / lang_map.json / dictionary-ja.txt（本 manifest の experiment_side_inputs.items 参照、logical_name で dependency_pins_manifest.json#render_asset_ledger と対応）に加え checkpoint 本体 model_ckpt_steps_40000.ckpt（input_checkpoint 節参照）。",
+      "配置後、5点それぞれの実測 sha256（sha256sum 相当）を本 manifest の experiment_side_inputs.items[].sha256 および input_checkpoint.sha256 と突合する（`sha256sum -c` 相当の全数照合）。1件でも不一致なら export_command を実行しない（fail-closed）——replay 時にローカルの 無関係な experiment ファイルが誤って消費され、それでも検証が通って しまう事故を防ぐ。",
+      "export 実行の直前に、<diffsinger_repo clone（session workdir、repo外）>/DiffSinger を cwd として exporter checkout の2点を検証する（fail-closed）: (i) `git rev-parse HEAD` の出力が本 manifest の exporter.revision の pin 値（\"e2307b1080b00f3999702ce9017cfd75c7f862fe\"）と完全一致すること、(ii) `git status --porcelain` の出力が空であること（作業ツリーに未commit差分が残る dirty checkout を拒否する）。いずれか一方でも不一致・非空なら、この時点で中止し export_command を実行しない——供給された clone を無検証のまま実行すると、pin 済み exporter.revision とは異なるコード（改変済み・別 commit）が export を生成しても、この manifest の exporter 節（revision/revision_matches_pin）だけではその事実を検出できない。",
+      "export 実行の直前に、export 先ディレクトリ <session workdir（repo外）>/onnx_gate_40000（`--out` 引数値そのもの、<session workdir（repo外）> プレースホルダ起点）が存在しないことを確認する（PR #327 レビュー第16巡指摘29対応、fail-closed）——既存 onnx_gate_40000 が残る workdir へ export すると、exporter が期待ファイルを出力しそこねても前回 run の stale copy が下記 post-export 閉世界照合を偽 pass させ得るため。具体的には: `<session workdir（repo外）>/venv_export_replay/bin/python -c \"import pathlib, sys; p = pathlib.Path('<session workdir（repo外）>/onnx_gate_40000'); sys.exit('export dir already exists: ' + str(p)) if p.exists() else None\"` を実行する。存在すれば非ゼロ終了でここに中止し、scripts/export.py を実行しない（export 実行 step へ 進まない）——ディレクトリを自動削除しない（stale 内容が意図せぬものである可能性があるため、削除は手動確認へ委ねる）。下記 post-export 閉世界照合 step が照合する対象は「本 run が 新規作成した出力である」ことが本 step とセットで初めて成立する（本 step 単独では出力バイト の正しさまでは保証しないが、export 実行前に空であることを確認しているため、export 実行後に 存在するファイルは本 run が生成したものに限られる）。",
+      "検証で experiment_side_inputs.items[].sha256 と input_checkpoint.sha256 の全数一致を確認できたら export_command を実行する。export_command[0]（歴史記録の逐語トークン）は、当時 venv_export を activate 済みの shell 内で実行されていたため ambient interpreter ではなく venv 内 interpreter に解決されていた bare 表記である（詳細は export_venv_setup.historical_note 参照）。replay ではこの逐語トークンをそのまま実行せず、<session workdir（repo外）>/venv_export_replay/bin/python を明示的に呼び出すこと（bare 起動禁止・cwd 依存の相対パス禁止——ambient interpreter や、cwd を export_command_cwd へ変更した後は解決不能になる相対 venv パスで scripts/export.py が走り、unpinned または実在しない環境の生成物が作られる事故を防ぐ、fail-closed）。具体的には、export_command_cwd を cwd として `<session workdir（repo外）>/venv_export_replay/bin/python scripts/export.py acoustic --exp s5_run6_acoustic_v1 --ckpt 40000 --out <session workdir（repo外）>/onnx_gate_40000` を実行する（venv パスは <session workdir（repo外）> 起点の絶対パスのため cwd を export_command_cwd へ変更した後でも解決可能——引数トークン列は export_command[1:] と同一、export_command 自体は不変のまま参照するのみ）。",
+      "export_command 実行後、<session workdir（repo外）>/onnx_gate_40000 配下に生成された全ファイルについて、本 manifest の artifacts 9エントリ（acoustic_onnx/dsconfig_yaml/phonemes_json/languages_json/dictionary_ja_txt/ritsu_emb/pjs_emb/user_emb/d3synth_emb）の file 名・sha256_run1・bytes と全数一致することを照合する（fail-closed）: (i) 生成物のファイル名集合が artifacts.*.file の9値と完全に一致すること（欠落・想定外ファイルいずれも拒否）、(ii) 生成物それぞれの実測 sha256（sha256sum 相当）が対応する artifacts.<key>.sha256_run1 と一致すること、(iii) 生成物それぞれの実測バイト数が対応する artifacts.<key>.bytes と一致すること。1件でも欠落・不一致・想定外ファイルがあれば replay は失敗である。本照合が検証する対象は「この manifest が記録した再export 出力とのバイト一致」のみであり、歴史 pin（historical_sha256/matches_historical）との一致/不一致の意味論には関与しない——acoustic_onnx が歴史 pin と不一致のまま（matches_historical: false）であることは正しい状態であり、本照合はそれを崩さない。"
+    ],
+    "torch_index_note": "torch==2.13.0+cpu は標準 PyPI インデックスには存在しない PyTorch CPU wheel index（https://download.pytorch.org/whl/cpu）由来である。--no-deps 指定は resolver による transitive 依存の再解決のみを排除し、個々のパッケージ自体の取得先インデックス指定は別途必要なため、上記 pip install コマンドへ --extra-index-url https://download.pytorch.org/whl/cpu を明示している。"
+  },
+  "reproducibility_check": {
+    "all_run1_run2_identical": true,
+    "description": "同一 checkpoint に対し export.py を独立に2回実行（session workdir 内の reexport_out / reexport_out2、いずれも repo 外）。全アーティファクト（acoustic.onnx 含む）が run1/run2 間で sha256 完全一致——本環境内では export は決定論的である（非決定論ではなく、環境差が historical との 不一致の原因である可能性を示唆する所見。断定はしない）。"
+  },
+  "schema": "run9-reexport-manifest/1.0",
+  "smoke_render_cross_check": {
+    "avg_sec_per_render": 24.101547837257385,
+    "budget_count_provenance_note": "616 という render 総数は前巡の返信・過去記録で言及されてきた基準値をそのまま踏襲した概算であり、本 PR で新たに確定した値ではない（内訳: learning/search loop 512 + birth probe 24 + C0/C1 80 = 616、固定評価分は未確定のため除く。HARNESS1_PROVISION_RECORD.md §4 参照）。",
+    "budget_estimate_616_renders_sec": 14846.55346775055,
+    "description": "本 export 成果物（acoustic.onnx へエイリアス済みの s5_run6_acoustic_v1.onnx 一式）を用いて gate_synth.py run --skip-export --acoustic-dir を2回独立実行し、同一入力2 render の WAV byte 一致を確認した。詳細は HARNESS2_REEXPORT_SMOKE_RECORD.md。",
+    "determinism_confirmed": true,
+    "render1_total_elapsed_sec": 23.482061624526978,
+    "render1_wav_sha256": "c7e1dcdfb7139d490dc19347c21dad5f9966764182cb6ee7e0124ad8fedd379e",
+    "render2_total_elapsed_sec": 24.721034049987793,
+    "render2_wav_sha256": "c7e1dcdfb7139d490dc19347c21dad5f9966764182cb6ee7e0124ad8fedd379e"
+  }
+}

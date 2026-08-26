@@ -13,8 +13,9 @@ import json
 import re
 import sys
 import textwrap
+import types
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 import yaml
@@ -10521,6 +10522,62 @@ def _dependency_pins_manifest_data() -> Dict[str, Any]:
     return m._loads_strict_json(m.DEPENDENCY_PINS_MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
+def _legacy_dependency_pins_manifest_data() -> Dict[str, Any]:
+    """RUN9-L0-HARNESS-2 以前の `NOT_OBTAINED_TARBALL_MISS`/`BLOCKED` shape
+    を独立に再構築したテスト専用フィクスチャ。実データの
+    `inputs/dependency_pins_manifest.json` は HARNESS-2 で
+    `acoustic_export_companions.status == OBTAINED_VIA_REEXPORT` /
+    `smoke_render.status == COMPLETED` / `budget_estimate.status ==
+    COMPLETED` へ恒久遷移した——MISS/BLOCKED 経路の validator shape
+    自体は非退行のまま残っている（AC「既存 status の shape 検証非退行」）
+    ことを単体テストするため、本ヘルパーで独立に MISS/BLOCKED shape を
+    合成する（値そのものが RUN9 の実測事実であることは主張しない——
+    render_asset_ledger/python_dependency_pins/diffsinger_render_code_
+    commit/tar_gz_*/claim_scope/speaker_embeddings_unpinned_candidates は
+    HARNESS-2 で shape 変更していないため実データをそのまま流用する）。
+    """
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    # basename は実データの旧 shape（HARNESS-1 時点）と同一にする——複数の
+    # テストが "acoustic.onnx"/"dsconfig.yaml" 等の basename をハード
+    # コードして tar member との一致/不一致を検証するため。
+    _legacy_companion_files = {
+        "acoustic_onnx": "onnx_gate_40000/acoustic.onnx",
+        "acoustic_dsconfig_yaml": "onnx_gate_40000/dsconfig.yaml",
+        "acoustic_phonemes_json": "onnx_gate_40000/s5_run6_acoustic_v1.phonemes.json",
+        "speaker_embed_ritsu": "onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb",
+    }
+    data["acoustic_export_companions"] = {
+        "status": "NOT_OBTAINED_TARBALL_MISS",
+        "expected_items": [
+            {
+                "logical_name": name,
+                "file": _legacy_companion_files[name],
+                "expected_sha256": "a" * 64,
+            }
+            for name in sorted(m._DEPENDENCY_ACOUSTIC_COMPANION_BUNDLE_PATHS)
+        ],
+        "attempted_source": {"description": "legacy test fixture (pre-HARNESS-2 shape)"},
+        "indirect_provenance_found": {},
+        "run_execution_manifest_search": {},
+        "verdict": "MISS — legacy test fixture",
+        "fail_closed_disposition": "legacy test fixture — not attempted beyond this point",
+    }
+    data["smoke_render"] = {
+        "status": "BLOCKED",
+        "reason": "legacy test fixture — acoustic export companions not obtained",
+        "blocked_by": "acoustic_export_companions.status == NOT_OBTAINED_TARBALL_MISS",
+        "not_attempted_reason_is_missing_input_not_failure": True,
+    }
+    data["budget_estimate"] = {
+        "status": "BLOCKED",
+        "reason": "legacy test fixture — smoke_render not completed",
+        "reference_only_prior_gpu_measurement_sec_per_item": [3.7, 7.6],
+        "reference_only_source": "legacy test fixture",
+        "reference_only_caveat": "legacy test fixture",
+    }
+    return data
+
+
 # ---------------------------------------------------------------------------
 # seed_policy_manifest: 正常系 + fail-closed 分岐
 # ---------------------------------------------------------------------------
@@ -10991,6 +11048,15 @@ _PIN1_LOADER_CASES = (
         "dependency_pins_sha", "load_pinned_dependency_pins_manifest",
         "DEPENDENCY_PINS_MANIFEST_PATH",
     ),
+    # RUN9-EXECPROFILE-1（2026-08-26 実装）: execution_profile_sha も
+    # probe/seed_policy と同型の4段構成（+ 本欄固有の adjudication_basis
+    # 実バイト cross-check）を持つが、汎用ケースは完全に同型のため相乗り
+    # させる。cross-check 固有の fail-closed 分岐は下記専用セクションで
+    # 別途テストする。
+    (
+        "execution_profile_sha", "load_pinned_execution_profile_manifest",
+        "EXECUTION_PROFILE_MANIFEST_PATH",
+    ),
 )
 
 # PR #324 第2巡 Fix 5（measurement_spec_sha を PENDING へ復帰）+ PR #326
@@ -11283,15 +11349,25 @@ def test_pin1_r4_branch_write_policy_r0_bytes_is_write_boundary_not_pin() -> Non
 # 同じ理由）。
 
 
-def test_pin1_r8_failure_abort_criteria_repinned_lineage_eight_generations(
+# `test_pin1_r8_failure_abort_criteria_repinned_lineage_eight_generations`
+# （8世代版）は PR #327 レビュー第13巡指摘25の repin により超過し、下記
+# `test_pr327_r13_failure_abort_criteria_repinned_lineage_nine_generations`
+# （9世代・全履歴を包含する上位互換）へ置き換えた（重複削除、第3-6巡と
+# 同じ理由）。
+
+
+def test_pr327_r13_failure_abort_criteria_repinned_lineage_nine_generations(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """failure_abort_criteria_sha の repin 履歴8世代（RUN9-L0-PIN-1 初回
+    """failure_abort_criteria_sha の repin 履歴9世代（RUN9-L0-PIN-1 初回
     → PR #324 第1巡 Fix 1/2/3 → 第2巡 Fix 6 → 第3巡 rule 12 再降格 →
     第4巡 rule 2 の condition 強化 → 第5巡 verify_user_donor_manifest_
     complete() の path ベース署名化 → 第6巡 独立 pinned anchor への
     接地追加 → 第7巡 domain 自体の founder_genome_shas pin への束縛
-    追加）が append-only で、現在値が最新（第7巡）のものであることを
+    追加 → PR #327 レビュー第13巡指摘25 で rule 19（cost cap exceeded）の
+    checkpoint が execution_profile_sha PINNED 化（RUN9-EXECPROFILE-1）を
+    反映せず stale な現在形「現状 PENDING」を残していた欠陥を訂正）が
+    append-only で、現在値が最新（PR #327 第13巡）のものであることを
     明示的に確認する（repin 漏れの回帰防止）。"""
     round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
     round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
@@ -11301,13 +11377,36 @@ def test_pin1_r8_failure_abort_criteria_repinned_lineage_eight_generations(
     round6_value = "8f9f8c30d521b5f2048891aa17fe9c1aeeb068a1ec8007f2146d4c1ec22cf38d"
     round7_value = "9b68656d6b5cb30019376ae9848e03801e10b595b5372dca63ba6a59a9d03caf"
     round8_value = "20c71d273993f062cf562b2097a57bfe530c54303e87287c58e98bad9876df4a"
+    round9_value = "da8aee0d49a5dac58b5ddd6b6dc7959f1a15914e9a6e565a4e6851e2b6c7a527"
     current = contract_raw["failure_abort_criteria_sha"]["value"]
-    assert current == round8_value
+    assert current == round9_value
     assert current not in (
         round1_value, round2_value, round3_value, round4_value, round5_value, round6_value,
-        round7_value,
+        round7_value, round8_value,
     )
     assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
+
+
+def test_pr327_r13_rule19_checkpoint_documents_pinned_identity_scope() -> None:
+    """PR #327 レビュー第13巡指摘25の直接回帰: rule 19（cost cap exceeded）
+    の checkpoint が (a) execution_profile_sha が RUN9-EXECPROFILE-1 で
+    PINNED 済みであること、(b) その収載範囲は runtime identity のみで
+    cost cap を含まないため cost cap は依然未凍結であること、の両方を
+    明記し、旧 stale 文言「Group C、現状 PENDING」を現在形の主張として
+    残していないこと（enforcement/machine_promotion_condition は不変）。"""
+    data = _failure_abort_criteria_data()
+    rule19 = next(r for r in data["rules"] if r["rule_id"] == 19)
+    assert rule19["enforcement"] == "PROCEDURAL"
+    assert rule19["verbatim"] == "cost cap exceeded"
+    assert "RUN9-EXECPROFILE-1" in rule19["checkpoint"]
+    assert "PINNED" in rule19["checkpoint"]
+    assert "cost cap 数値は引き続き未凍結" in rule19["checkpoint"]
+    assert "履歴" in rule19["checkpoint"]
+    assert "Group C、現状 PENDING" not in rule19["checkpoint"].split("〔履歴:")[0]
+    assert rule19["machine_promotion_condition"] == (
+        "execution_profile_sha に cost cap 数値が凍結され、cost record との"
+        "自動比較機構を実装した時点で MACHINE へ昇格する。"
+    )
 
 
 def test_pin1_r5_rule2_still_machine_with_updated_condition() -> None:
@@ -11680,15 +11779,18 @@ def test_pin1_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
 # RUN9-L0-HARNESS-1 で `dependency_pins_sha` を PINNED 化した際、pre-run
 # PENDING は10→9件になった（旧テスト `test_harness1_pre_run_pending_
 # count_is_nine`）。PR #326 第2巡 Fix 3（P1、採用、2026-08-26）で同欄が
-# PENDING へ差し戻されたため9件は一時的な状態に留まり、下記テストへ
-# 一本化した（重複削除、「修正からの再修正は早期に打ち切る」に沿い、
-# 単に件数を書き換えるのではなく1本化する既存規約——上記
+# PENDING へ差し戻され pre-run PENDING は9→10件へ戻った（旧テスト
+# `test_harness1_pr326_fix3_pre_run_pending_count_is_ten`）。続けて
+# RUN9-EXECPROFILE-1（2026-08-26）で `execution_profile_sha` が PINNED 化
+# され、pre-run PENDING は10→9件へ再度減少した——下記テストへ一本化した
+# （重複削除、「修正からの再修正は早期に打ち切る」に沿い、単に件数を
+# 書き換えるのではなく1本化する既存規約——上記
 # `test_pin2_pre_run_pending_count_is_ten` 直前のコメントと同型）。
-def test_harness1_pr326_fix3_pre_run_pending_count_is_ten(contract: m.Run9RunContract) -> None:
-    """PR #326 第2巡 Fix 3（P1、採用、2026-08-26）: `dependency_pins_sha`
-    を PENDING へ差し戻したことにより、pre-run PENDING 欄は9→10件へ
-    戻った（optional の human_evaluation_protocol_sha を含めると総
-    PENDING 10→11件）——README.md の記述更新（9→10/10→11）と対応する
+def test_execprofile_pre_run_pending_count_is_nine(contract: m.Run9RunContract) -> None:
+    """RUN9-EXECPROFILE-1（2026-08-26）: `execution_profile_sha` を
+    PINNED 化したことにより、pre-run PENDING 欄は10→9件へ減少した
+    （optional の human_evaluation_protocol_sha を含めると総
+    PENDING 11→10件）——README.md の記述更新（10→9/11→10）と対応する
     回帰固定。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
@@ -11700,10 +11802,11 @@ def test_harness1_pr326_fix3_pre_run_pending_count_is_ten(contract: m.Run9RunCon
         n for n in m.CONTRACT_PIN_FIELDS
         if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
     ]
-    assert len(pending) == 10
-    assert len(all_pending) == 11
+    assert len(pending) == 9
+    assert len(all_pending) == 10
     assert "dependency_pins_sha" in pending
     assert "measurement_spec_sha" in pending
+    assert "execution_profile_sha" not in pending
     assert "dataset_manifest_sha" not in pending
     assert "dataset_row_order_sha" not in pending
 
@@ -13424,6 +13527,26 @@ def test_harness1_pr326_fix3_readme_pending_count_reverted_to_ten_and_eleven() -
             )
 
 
+# RUN9-EXECPROFILE-1（2026-08-26）で `execution_profile_sha` が PINNED 化
+# されたことにより、README の残 PENDING 件数記述は9→10（総10→11）から
+# 10→9（総11→10）へ再度更新された。旧『9/10』（HARNESS-1 一時 PINNED 時点）
+# は上記テストが既に履歴ガードしているため、本テストは新たな現在値
+# （9欄/10欄）が実在すること、および直前の現在値だった10欄/11欄が
+# 履歴/解消済みマーカー配下でのみ残っていることを確認する（同じ規約の
+# 第5世代）。
+def test_execprofile_readme_pending_count_updated_to_nine_and_ten() -> None:
+    """RUN9-EXECPROFILE-1: `execution_profile_sha` の PINNED 化に伴い、
+    README の残 PENDING 件数記述は9件（総10件）へ更新された。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "pre-run 必須9欄" in readme_text
+    assert "総 PENDING 10欄" in readme_text
+    for paragraph in readme_text.split("\n\n"):
+        if "pre-run 必須10欄" in paragraph or "総 PENDING 11欄" in paragraph:
+            assert ("履歴" in paragraph) or ("解消済み" in paragraph), (
+                f"stale current-tense 10/11-count claim in paragraph: {paragraph!r}"
+            )
+
+
 def test_harness1_pr326_fix3_readme_dependency_pins_sha_pending_again() -> None:
     """`dependency_pins_sha` が PR #326 第2巡 Fix 3（P1、採用）で PENDING
     へ差し戻されたことに伴い、README の pre-run 必須欄の現行列挙に同欄が
@@ -13503,16 +13626,31 @@ def test_harness1_ledger_duplicate_logical_name_fail_closed() -> None:
         m.validate_dependency_pins_manifest(data)
 
 
-def test_harness1_acoustic_export_companions_status_is_honest_miss() -> None:
-    """本 Memo の実測結果そのものの回帰確認: tar.gz に acoustic export
-    companions が含まれていなかった事実が manifest から消えていない
-    こと。"""
+def test_harness2_acoustic_export_companions_status_is_honest_obtained_via_reexport() -> None:
+    """RUN9-L0-HARNESS-2 実測結果の回帰確認: acoustic export companions は
+    checkpoint からの再export で取得済み（`OBTAINED_VIA_REEXPORT`）——
+    acoustic.onnx は歴史値と不一致のまま `OBTAINED_DERIVED_NEW_BYTES` を
+    正直に自称し、`OBTAINED_VERIFIED_MATCH` を捏造していないことを確認
+    する（旧 HARNESS-1 時点の `NOT_OBTAINED_TARBALL_MISS` 状態を
+    引き継いだ回帰テストの後継——`test_harness1_tar_gz_ledger_stale_miss_
+    consistency_fail_closed` 等 MISS 経路の validator shape 自体は
+    `_legacy_dependency_pins_manifest_data()` で引き続き非退行確認する）。
+    """
     data = _dependency_pins_manifest_data()
-    assert data["acoustic_export_companions"]["status"] == "NOT_OBTAINED_TARBALL_MISS"
-    expected_names = {item["logical_name"] for item in data["acoustic_export_companions"]["expected_items"]}
+    assert data["acoustic_export_companions"]["status"] == "OBTAINED_VIA_REEXPORT"
+    items_by_name = {
+        item["logical_name"]: item for item in data["acoustic_export_companions"]["expected_items"]
+    }
+    expected_names = set(items_by_name)
     assert expected_names == {
         "acoustic_onnx", "acoustic_dsconfig_yaml", "acoustic_phonemes_json", "speaker_embed_ritsu",
     }
+    assert items_by_name["acoustic_onnx"]["status"] == "OBTAINED_DERIVED_NEW_BYTES"
+    assert items_by_name["acoustic_onnx"]["matches_historical"] is False
+    for name in ("acoustic_dsconfig_yaml", "acoustic_phonemes_json", "speaker_embed_ritsu"):
+        assert items_by_name[name]["status"] == "OBTAINED_VERIFIED_MATCH"
+        assert items_by_name[name]["matches_historical"] is True
+        assert items_by_name[name]["replay_evidence"] is True
 
 
 def test_harness1_ledger_and_acoustic_companion_vocabularies_are_disjoint() -> None:
@@ -13559,8 +13697,11 @@ def test_harness1_tar_gz_ledger_stale_miss_consistency_fail_closed() -> None:
     同一 digest（PR #326 第5巡 Fix 12 以降、basename だけでは足りない）が
     紛れ込んだのに acoustic_export_companions.status が
     NOT_OBTAINED_TARBALL_MISS のままだと fail-closed 拒否する（将来
-    tar.gz が repin されて中身が変わった際の drift 検出）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    tar.gz が repin されて中身が変わった際の drift 検出）。RUN9-L0-
+    HARNESS-2 で実データの companions は `OBTAINED_VIA_REEXPORT` へ恒久
+    遷移したため、MISS 経路 shape の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     expected_sha = next(
         item["expected_sha256"] for item in data["acoustic_export_companions"]["expected_items"]
         if item["logical_name"] == "acoustic_onnx"
@@ -13653,11 +13794,12 @@ def test_harness1_speaker_embed_candidates_pjs_user_identical_rejected() -> None
 
 
 @pytest.mark.parametrize("section_name", ["smoke_render", "budget_estimate"])
-def test_harness1_blocked_sections_are_honestly_blocked(section_name: str) -> None:
-    """smoke render / budget estimate はいずれも本 Memo では BLOCKED
-    （数値を捏造しない）ことの回帰確認。"""
+def test_harness2_completed_sections_are_honestly_completed(section_name: str) -> None:
+    """smoke render / budget estimate はいずれも RUN9-L0-HARNESS-2 実測
+    により COMPLETED（数値を捏造しない、実測値に基づく）ことの回帰確認
+    （旧 HARNESS-1 時点の BLOCKED 状態の後継）。"""
     data = _dependency_pins_manifest_data()
-    assert data[section_name]["status"] == "BLOCKED"
+    assert data[section_name]["status"] == "COMPLETED"
     assert data[section_name]["reason"].strip()
 
 
@@ -13779,11 +13921,21 @@ def test_harness1_pr326_fix3_dependency_pins_sha_still_pending(
     assert m.DEPENDENCY_PINS_MANIFEST_PATH.is_file()
 
 
-def test_harness1_execution_profile_sha_still_pending(contract: m.Run9RunContract) -> None:
-    """execution_profile_sha は smoke render が BLOCKED のため本 Memo では
-    PINNED 化しない（数値を捏造しない、fail-closed 判断の回帰確認）。"""
+# `test_harness1_execution_profile_sha_still_pending`（本 Memo=RUN9-L0-
+# HARNESS-1 時点で execution_profile_sha が PENDING のままであることの
+# 回帰確認）は RUN9-EXECPROFILE-1（2026-08-26）で同欄が PINNED 化された
+# ことにより恒久的に破綻する（`contract` fixture は live の disk contract
+# を指すため、旧テストは書き換えるほかない——`test_pin2_pre_run_pending_
+# count_is_ten` 系と同型の一本化規約）。下記テストへ置き換える。
+def test_execprofile_execution_profile_sha_now_pinned(contract: m.Run9RunContract) -> None:
+    """RUN9-EXECPROFILE-1（2026-08-26）: User 裁定「RUN9 User裁定 —
+    execution_profile_sha」の承認により、execution_profile_sha は
+    PENDING → PINNED へ遷移した（数値は捏造ではなく実測 manifest 実バイト
+    sha256——`test_execprofile_load_pinned_execution_profile_manifest_
+    happy_path` が実体側の検証を担う）。"""
     field = contract.pin_field("execution_profile_sha")
-    assert field["status"] == "PENDING"
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(m.EXECUTION_PROFILE_MANIFEST_PATH)
 
 
 def test_harness1_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
@@ -13813,8 +13965,10 @@ def test_harness1_pr326_fix1_status_flip_alone_is_rejected() -> None:
 def test_harness1_pr326_fix1_status_flip_with_top_level_fixed_still_rejected() -> None:
     """トップレベル（Fix 14）は正しく整合させても、expected_items に
     measured_sha256 を追加しなければ item レベルの欠落として fail-closed
-    拒否される（Fix 1 の本来の対象、Fix 14 導入後の回帰確認）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    拒否される（Fix 1 の本来の対象、Fix 14 導入後の回帰確認）。RUN9-L0-
+    HARNESS-2 で実データの companions shape が変わったため、旧 shape の
+    非退行確認には `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
     del data["acoustic_export_companions"]["verdict"]
     del data["acoustic_export_companions"]["fail_closed_disposition"]
@@ -13829,7 +13983,7 @@ def test_harness1_pr326_fix1_not_obtained_forbids_measured_sha256() -> None:
     """status が NOT_OBTAINED_TARBALL_MISS のまま measured_sha256 を item
     へ書き加える（未取得なのに実測値がある、という矛盾）と unknown key
     として拒否される。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["expected_items"][0]["measured_sha256"] = (
         data["acoustic_export_companions"]["expected_items"][0]["expected_sha256"]
     )
@@ -13840,7 +13994,7 @@ def test_harness1_pr326_fix1_not_obtained_forbids_measured_sha256() -> None:
 def test_harness1_pr326_fix1_obtained_measured_mismatch_rejected() -> None:
     """OBTAINED_VERIFIED_MATCH で measured_sha256 を付与しても、
     expected_sha256 と不一致なら拒否される。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
     del data["acoustic_export_companions"]["verdict"]
     del data["acoustic_export_companions"]["fail_closed_disposition"]
@@ -13903,13 +14057,24 @@ def _obtain_all_acoustic_companions(
     トップレベルも status 判別 shape のため、MISS narrative
     （`verdict`/`fail_closed_disposition`）を除去し `acquisition_record`
     を付与する。"""
+    # RUN9-L0-HARNESS-2: 実データの base fixture が既に `OBTAINED_VIA_
+    # REEXPORT`（item ごとの `status`/`matches_historical`/derived-only/
+    # verified-only 拡張キー付き）へ遷移済みのため、旧来の一様
+    # `OBTAINED_VERIFIED_MATCH` shape へ戻す前に、両トップレベル narrative
+    # （MISS-only/OBTAINED-only いずれも `.pop(..., None)` で安全に除去）と
+    # item 側の HARNESS-2 専用キーを掃除する。
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
-    del data["acoustic_export_companions"]["verdict"]
-    del data["acoustic_export_companions"]["fail_closed_disposition"]
+    data["acoustic_export_companions"].pop("verdict", None)
+    data["acoustic_export_companions"].pop("fail_closed_disposition", None)
     data["acoustic_export_companions"]["acquisition_record"] = {
         "acquired_at": acquired_at, "acquisition_summary": acquisition_summary,
     }
     for item in data["acoustic_export_companions"]["expected_items"]:
+        for extra_key in (
+            "status", "matches_historical", "historical_expected_sha256",
+            "reexport_manifest_ref", "replay_evidence",
+        ):
+            item.pop(extra_key, None)
         item["measured_sha256"] = item["expected_sha256"]
         item["acquisition_source"] = acquisition_source
         if acquisition_source == "THIS_TARBALL":
@@ -13951,11 +14116,23 @@ def _complete_smoke_render(
         "render_condition": render_condition,
         "render_output_sha256_first": render_output_sha256,
         "render_output_sha256_second": render_output_sha256,
+        # RUN9-L0-HARNESS-2 追加フィールド: measured_sec_per_render は
+        # render1/render2 の平均であることが machine 強制されるため、
+        # 両者を同値（= measured_sec_per_render そのもの）にして平均も
+        # 一致させる（呼び出し側は測定秒の内訳までは気にしないテストが
+        # 大半のため、既定はシンプルな同値ペアにする）。
+        "render1_total_elapsed_sec": measured_sec_per_render,
+        "render2_total_elapsed_sec": measured_sec_per_render,
+        "render_entrypoint": "gate_synth.py run --skip-export --acoustic-dir <dir> --speaker ritsu",
+        "onnxruntime_providers": ["CPUExecutionProvider"],
     }
     data["budget_estimate"] = {
         "status": "COMPLETED", "reason": "done",
         "total_render_count": total_render_count,
         "estimated_total_sec": measured_sec_per_render * total_render_count,
+        "total_render_count_provenance_note": (
+            "test fixture: total_render_count is an illustrative constant, not a claimed-final value"
+        ),
     }
 
 
@@ -14022,7 +14199,7 @@ def test_harness1_pr326_fix1_loader_measured_sha256_checked_against_bundle_direc
 
 
 def test_harness1_pr326_fix2_smoke_render_completed_with_blocked_fields_rejected() -> None:
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["smoke_render"]["status"] = "COMPLETED"  # blocked_by 等を残置したまま
     with pytest.raises(m.Run9ValidationError, match="unknown key"):
         m.validate_dependency_pins_manifest(data)
@@ -14042,6 +14219,8 @@ def test_harness1_pr326_fix2_smoke_render_completed_determinism_not_true_rejecte
         "determinism_confirmed": False, "measured_sec_per_render": 4.2,
         "render_condition": "CPU, ritsu",
         "render_output_sha256_first": "c" * 64, "render_output_sha256_second": "c" * 64,
+        "render1_total_elapsed_sec": 4.2, "render2_total_elapsed_sec": 4.2,
+        "render_entrypoint": "gate_synth.py run", "onnxruntime_providers": ["CPUExecutionProvider"],
     }
     with pytest.raises(m.Run9ValidationError, match="determinism_confirmed"):
         m.validate_dependency_pins_manifest(data)
@@ -14068,7 +14247,7 @@ def test_harness1_pr326_fix2_smoke_render_completed_valid_evidence_accepted() ->
 
 
 def test_harness1_pr326_fix2_budget_estimate_completed_with_blocked_fields_rejected() -> None:
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["budget_estimate"]["status"] = "COMPLETED"  # reference_only_* を残置したまま
     with pytest.raises(m.Run9ValidationError, match="unknown key"):
         m.validate_dependency_pins_manifest(data)
@@ -14103,6 +14282,7 @@ def test_harness1_pr326_fix2_budget_estimate_completed_valid_evidence_accepted()
     data["budget_estimate"] = {
         "status": "COMPLETED", "reason": "done",
         "total_render_count": 616, "estimated_total_sec": 2587.2,
+        "total_render_count_provenance_note": "test fixture: illustrative constant",
     }
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
 
@@ -14152,8 +14332,10 @@ def test_harness1_pr326_fix4_not_obtained_still_rejects_matching_tar_member() ->
     どおり companion basename + digest の両方が一致する tar member の
     混入は stale-miss inconsistency として拒否される（Fix 4 は分岐を
     追加しただけで、NOT_OBTAINED 側の既存挙動は Fix 12 の digest 限定化
-    後も本質的に不変であることの回帰確認）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    後も本質的に不変であることの回帰確認）。RUN9-L0-HARNESS-2 で実データの
+    companions shape が変わったため、旧 shape の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     expected_sha = next(
         item["expected_sha256"] for item in data["acoustic_export_companions"]["expected_items"]
         if item["logical_name"] == "acoustic_onnx"
@@ -14171,8 +14353,10 @@ def test_harness1_pr326_fix4_obtained_without_tar_member_rejected() -> None:
     tar_gz_full_member_ledger に存在しないと拒否される（正当な取得経路
     の主張には実体の裏付けが要る——PR #326 第3巡 Fix 7 で
     acquisition_source が導入された後も、THIS_TARBALL を主張する限り
-    Fix 4 の整合検査は有効であることの回帰確認）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    Fix 4 の整合検査は有効であることの回帰確認）。RUN9-L0-HARNESS-2 で
+    実データの companions shape が変わったため、旧 shape の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
     _mark_companions_top_level_obtained(data)
     for item in data["acoustic_export_companions"]["expected_items"]:
@@ -14208,11 +14392,14 @@ def test_harness1_pr326_fix4_obtained_with_matching_tar_member_accepted() -> Non
 def test_harness1_pr326_fix5_budget_completed_alone_rejected() -> None:
     """budget_estimate だけを COMPLETED へ書き換え、smoke_render は
     BLOCKED のまま残す改竄は拒否される（実測秒の源泉が無いまま完了を
-    主張する自己矛盾）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    主張する自己矛盾）。RUN9-L0-HARNESS-2 で実データの smoke_render は
+    COMPLETED へ恒久遷移したため、BLOCKED 前提の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["budget_estimate"] = {
         "status": "COMPLETED", "reason": "done",
         "total_render_count": 616, "estimated_total_sec": 2587.2,
+        "total_render_count_provenance_note": "test fixture: illustrative constant",
     }
     assert data["smoke_render"]["status"] == "BLOCKED"
     with pytest.raises(m.Run9ValidationError, match="smoke_render.status is not COMPLETED"):
@@ -14228,6 +14415,7 @@ def test_harness1_pr326_fix5_budget_completed_smoke_completed_but_arithmetic_mis
     data["budget_estimate"] = {
         "status": "COMPLETED", "reason": "done",
         "total_render_count": 616, "estimated_total_sec": 4.2 * 616 + 1.0,
+        "total_render_count_provenance_note": "test fixture: illustrative constant",
     }
     with pytest.raises(m.Run9ValidationError, match="does not match"):
         m.validate_dependency_pins_manifest(data)
@@ -14243,6 +14431,7 @@ def test_harness1_pr326_fix5_budget_completed_arithmetic_within_tight_tolerance_
     data["budget_estimate"] = {
         "status": "COMPLETED", "reason": "done",
         "total_render_count": count, "estimated_total_sec": measured * count,
+        "total_render_count_provenance_note": "test fixture: illustrative constant",
     }
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
 
@@ -14321,8 +14510,10 @@ def test_harness1_pr326_fix7_this_tarball_still_requires_membership() -> None:
     THIS_TARBALL 経路の既存挙動を変えない——同型テストは
     `test_harness1_pr326_fix4_obtained_without_tar_member_rejected` が
     既にカバーするため、ここでは acquisition_source 語彙自体の妥当性の
-    みを回帰確認する）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    みを回帰確認する）。RUN9-L0-HARNESS-2 で実データの companions shape が
+    変わったため、旧 shape の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
     _mark_companions_top_level_obtained(data)
     for item in data["acoustic_export_companions"]["expected_items"]:
@@ -14334,8 +14525,10 @@ def test_harness1_pr326_fix7_this_tarball_still_requires_membership() -> None:
 
 def test_harness1_pr326_fix7_acquisition_source_required_for_obtained() -> None:
     """OBTAINED_VERIFIED_MATCH の item は acquisition_source を必須と
-    する（欠落は missing required key で拒否）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    する（欠落は missing required key で拒否）。RUN9-L0-HARNESS-2 で
+    実データの companions shape が変わったため、旧 shape の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
     _mark_companions_top_level_obtained(data)
     for item in data["acoustic_export_companions"]["expected_items"]:
@@ -14347,8 +14540,10 @@ def test_harness1_pr326_fix7_acquisition_source_required_for_obtained() -> None:
 def test_harness1_pr326_fix7_acquisition_source_forbidden_for_not_obtained() -> None:
     """NOT_OBTAINED_TARBALL_MISS の item に acquisition_source を付与
     すると unknown key として拒否される（measured_sha256 と同型の
-    禁止）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    禁止）。RUN9-L0-HARNESS-2 で実データの companions は
+    OBTAINED_VIA_REEXPORT へ恒久遷移したため、NOT_OBTAINED 前提の非退行
+    確認には `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["expected_items"][0]["acquisition_source"] = "DRIVE_DIRECT"
     with pytest.raises(m.Run9ValidationError, match="unknown key"):
         m.validate_dependency_pins_manifest(data)
@@ -14367,13 +14562,18 @@ def test_harness1_pr326_fix7_unknown_acquisition_source_rejected() -> None:
 def test_harness1_pr326_fix8_smoke_completed_alone_rejected() -> None:
     """smoke_render だけを COMPLETED へ書き換え、acoustic_export_
     companions は NOT_OBTAINED_TARBALL_MISS のまま残す改竄は拒否される
-    （存在しないと同時に主張している入力で render したという自己矛盾）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    （存在しないと同時に主張している入力で render したという自己矛盾）。
+    RUN9-L0-HARNESS-2 で実データの companions は OBTAINED_VIA_REEXPORT へ
+    恒久遷移したため、NOT_OBTAINED 前提の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["smoke_render"] = {
         "status": "COMPLETED", "reason": "done",
         "determinism_confirmed": True, "measured_sec_per_render": 4.2,
         "render_condition": "CPU, ritsu",
         "render_output_sha256_first": "c" * 64, "render_output_sha256_second": "c" * 64,
+        "render1_total_elapsed_sec": 4.2, "render2_total_elapsed_sec": 4.2,
+        "render_entrypoint": "gate_synth.py run", "onnxruntime_providers": ["CPUExecutionProvider"],
     }
     assert data["acoustic_export_companions"]["status"] == "NOT_OBTAINED_TARBALL_MISS"
     with pytest.raises(m.Run9ValidationError, match="acoustic_export_companions.status is not"):
@@ -14400,8 +14600,12 @@ def test_harness1_pr326_fix8_smoke_completed_with_companions_obtained_accepted()
 def test_harness1_pr326_fix18_stale_blocked_after_companions_obtained_rejected() -> None:
     """companions を OBTAINED_VERIFIED_MATCH へ遷移させても smoke_render
     を missing-input BLOCKED のまま残す改竄は拒否される（Fix 8 の逆方向
-    ——「取得済み」と「入力欠落で BLOCKED」の同時主張は自己矛盾）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    ——「取得済み」と「入力欠落で BLOCKED」の同時主張は自己矛盾）。
+    RUN9-L0-HARNESS-2 で実データは companions/smoke とも既に整合済み
+    （OBTAINED_VIA_REEXPORT/COMPLETED）へ恒久遷移したため、この「片方
+    だけ遷移させた stale 状態」の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     _obtain_all_acoustic_companions(data)
     assert data["smoke_render"]["status"] == "BLOCKED"
     with pytest.raises(m.Run9ValidationError, match="status is BLOCKED \\(missing-input\\)"):
@@ -14412,19 +14616,23 @@ def test_harness1_pr326_fix18_error_message_states_reentry_condition() -> None:
     """拒否メッセージ自体に、将来 HARNESS-2 で中間状態が必要になっても
     新しい status 値を先取り発明しないという再入条件（PIN-1 以来の規律）
     が記録されていることの確認。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     _obtain_all_acoustic_companions(data)
     with pytest.raises(m.Run9ValidationError, match="design_revision"):
         m.validate_dependency_pins_manifest(data)
 
 
-def test_harness1_pr326_fix18_current_real_data_both_missing_blocked_accepted() -> None:
-    """現行実データ（companions NOT_OBTAINED_TARBALL_MISS + smoke_render
-    missing-input BLOCKED、両方 MISS/BLOCKED）は引き続き受理される（過剰
-    拒否でないことの確認）。"""
+def test_harness2_current_real_data_all_obtained_and_completed_accepted() -> None:
+    """現行実データ（companions OBTAINED_VIA_REEXPORT + smoke_render/
+    budget_estimate とも COMPLETED、三者とも整合済み）は引き続き受理
+    される（過剰拒否でないことの確認。旧 HARNESS-1 時点の
+    `test_harness1_pr326_fix18_current_real_data_both_missing_blocked_
+    accepted`/`test_harness1_pr326_fix20_current_real_data_both_blocked_
+    accepted` の後継——現行実データはもはや MISS/BLOCKED ではない）。"""
     data = _dependency_pins_manifest_data()
-    assert data["acoustic_export_companions"]["status"] == "NOT_OBTAINED_TARBALL_MISS"
-    assert data["smoke_render"]["status"] == "BLOCKED"
+    assert data["acoustic_export_companions"]["status"] == "OBTAINED_VIA_REEXPORT"
+    assert data["smoke_render"]["status"] == "COMPLETED"
+    assert data["budget_estimate"]["status"] == "COMPLETED"
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
 
 
@@ -14450,14 +14658,18 @@ def test_harness1_pr326_fix20_stale_budget_blocked_after_smoke_completed_rejecte
     """smoke_render を COMPLETED へ遷移させても budget_estimate を
     reference-only BLOCKED のまま残す改竄は拒否される（Fix 18 の対——
     「実測が存在する」と「実測欠如を理由に BLOCKED」の同時主張は
-    自己矛盾）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    自己矛盾）。RUN9-L0-HARNESS-2 で実データは三者とも整合済みへ恒久
+    遷移したため、この「片方だけ遷移させた stale 状態」の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     _obtain_all_acoustic_companions(data)
     data["smoke_render"] = {
         "status": "COMPLETED", "reason": "done",
         "determinism_confirmed": True, "measured_sec_per_render": 4.2,
         "render_condition": "CPU, ritsu",
         "render_output_sha256_first": "c" * 64, "render_output_sha256_second": "c" * 64,
+        "render1_total_elapsed_sec": 4.2, "render2_total_elapsed_sec": 4.2,
+        "render_entrypoint": "gate_synth.py run", "onnxruntime_providers": ["CPUExecutionProvider"],
     }
     assert data["budget_estimate"]["status"] == "BLOCKED"
     with pytest.raises(
@@ -14469,26 +14681,18 @@ def test_harness1_pr326_fix20_stale_budget_blocked_after_smoke_completed_rejecte
 def test_harness1_pr326_fix20_error_message_states_reentry_condition() -> None:
     """拒否メッセージ自体に、Fix 18 と同型の再入条件（新 status を先取り
     発明しない）が記録されていることの確認。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     _obtain_all_acoustic_companions(data)
     data["smoke_render"] = {
         "status": "COMPLETED", "reason": "done",
         "determinism_confirmed": True, "measured_sec_per_render": 4.2,
         "render_condition": "CPU, ritsu",
         "render_output_sha256_first": "c" * 64, "render_output_sha256_second": "c" * 64,
+        "render1_total_elapsed_sec": 4.2, "render2_total_elapsed_sec": 4.2,
+        "render_entrypoint": "gate_synth.py run", "onnxruntime_providers": ["CPUExecutionProvider"],
     }
     with pytest.raises(m.Run9ValidationError, match="design_revision"):
         m.validate_dependency_pins_manifest(data)
-
-
-def test_harness1_pr326_fix20_current_real_data_both_blocked_accepted() -> None:
-    """現行実データ（smoke_render BLOCKED + budget_estimate reference-only
-    BLOCKED、両方 BLOCKED）は引き続き受理される（過剰拒否でないことの
-    確認）。"""
-    data = _dependency_pins_manifest_data()
-    assert data["smoke_render"]["status"] == "BLOCKED"
-    assert data["budget_estimate"]["status"] == "BLOCKED"
-    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
 
 
 def test_harness1_pr326_fix20_smoke_and_budget_both_completed_accepted() -> None:
@@ -14507,32 +14711,41 @@ def test_harness1_pr326_fix18_fix20_three_way_coupling_is_closed() -> None:
     （OBTAINED/COMPLETED 方向 = Fix 5/8、BLOCKED 残置方向 = Fix 18/20）
     で閉じ、相互矛盾する状態組が構造的に表現不能になったことの回帰
     固定——4つの整合済み状態組み合わせをすべて受理し、片方だけ更新した
-    非整合な中間状態をすべて拒否することを一括確認する。"""
-    # 整合1: 3セクションとも「未取得/未実行」（現行実データそのまま）。
-    consistent_all_blocked = _dependency_pins_manifest_data()
+    非整合な中間状態をすべて拒否することを一括確認する。RUN9-L0-
+    HARNESS-2 で実データは三者とも整合済み（OBTAINED_VIA_REEXPORT/
+    COMPLETED）へ恒久遷移したため、「未取得/未実行」側の整合状態・
+    非整合な中間状態の合成には `_legacy_dependency_pins_manifest_data()`
+    を base に使う。"""
+    # 整合1: 3セクションとも「未取得/未実行」（旧 HARNESS-1 時点の実データ
+    # shape、legacy fixture として独立に維持）。
+    consistent_all_blocked = _legacy_dependency_pins_manifest_data()
     m.validate_dependency_pins_manifest(consistent_all_blocked)  # 例外なしの確認
 
-    # 整合2: 3セクションとも「取得済み/完了」。
-    consistent_all_completed = copy.deepcopy(_dependency_pins_manifest_data())
-    _complete_smoke_render(consistent_all_completed)
+    # 整合2: 3セクションとも「取得済み/完了」（現行実データそのまま）。
+    consistent_all_completed = _dependency_pins_manifest_data()
+    assert consistent_all_completed["acoustic_export_companions"]["status"] == "OBTAINED_VIA_REEXPORT"
+    assert consistent_all_completed["smoke_render"]["status"] == "COMPLETED"
+    assert consistent_all_completed["budget_estimate"]["status"] == "COMPLETED"
     m.validate_dependency_pins_manifest(consistent_all_completed)  # 例外なしの確認
 
     # 非整合1: companions だけ OBTAINED、smoke/budget は BLOCKED のまま
     # （Fix 18 が拒否）。
-    stale_smoke_blocked = copy.deepcopy(_dependency_pins_manifest_data())
+    stale_smoke_blocked = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     _obtain_all_acoustic_companions(stale_smoke_blocked)
     with pytest.raises(m.Run9ValidationError, match="status is BLOCKED \\(missing-input\\)"):
         m.validate_dependency_pins_manifest(stale_smoke_blocked)
 
     # 非整合2: companions/smoke は COMPLETED、budget だけ BLOCKED のまま
     # （Fix 20 が拒否）。
-    stale_budget_blocked = copy.deepcopy(_dependency_pins_manifest_data())
+    stale_budget_blocked = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     _obtain_all_acoustic_companions(stale_budget_blocked)
     stale_budget_blocked["smoke_render"] = {
         "status": "COMPLETED", "reason": "done",
         "determinism_confirmed": True, "measured_sec_per_render": 4.2,
         "render_condition": "CPU, ritsu",
         "render_output_sha256_first": "c" * 64, "render_output_sha256_second": "c" * 64,
+        "render1_total_elapsed_sec": 4.2, "render2_total_elapsed_sec": 4.2,
+        "render_entrypoint": "gate_synth.py run", "onnxruntime_providers": ["CPUExecutionProvider"],
     }
     assert stale_budget_blocked["budget_estimate"]["status"] == "BLOCKED"
     with pytest.raises(
@@ -14743,8 +14956,11 @@ def test_harness1_pr326_fix12_same_basename_different_digest_not_flagged() -> No
 def test_harness1_pr326_fix12_same_basename_same_digest_still_flagged() -> None:
     """basename + digest の両方が一致する member が混入した場合は、
     引き続き stale-miss inconsistency として拒否される（Fix 12 は
-    matching 条件を絞っただけで、真の矛盾検出能力は失っていない）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    matching 条件を絞っただけで、真の矛盾検出能力は失っていない）。
+    RUN9-L0-HARNESS-2 で実データの companions は OBTAINED_VIA_REEXPORT へ
+    恒久遷移したため、NOT_OBTAINED 前提の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     expected_sha = next(
         item["expected_sha256"] for item in data["acoustic_export_companions"]["expected_items"]
         if item["logical_name"] == "acoustic_dsconfig_yaml"
@@ -14872,8 +15088,10 @@ def test_harness1_pr326_fix14_obtained_with_stale_miss_narrative_rejected() -> N
 
 def test_harness1_pr326_fix14_obtained_missing_acquisition_record_rejected() -> None:
     """MISS narrative を正しく除去しても、acquisition_record を付与
-    しなければ missing required key で拒否される。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    しなければ missing required key で拒否される。RUN9-L0-HARNESS-2 で
+    実データの companions shape が変わったため、旧 shape の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
     del data["acoustic_export_companions"]["verdict"]
     del data["acoustic_export_companions"]["fail_closed_disposition"]
@@ -14897,8 +15115,11 @@ def test_harness1_pr326_fix14_obtained_correctly_shaped_accepted() -> None:
 
 def test_harness1_pr326_fix14_not_obtained_forbids_acquisition_record() -> None:
     """NOT_OBTAINED_TARBALL_MISS のまま acquisition_record を付与すると
-    unknown key として拒否される（MISS/OBTAINED 語彙の disjoint 性）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    unknown key として拒否される（MISS/OBTAINED 語彙の disjoint 性）。
+    RUN9-L0-HARNESS-2 で実データの companions は OBTAINED_VIA_REEXPORT へ
+    恒久遷移したため、NOT_OBTAINED 前提の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["acquisition_record"] = {
         "acquired_at": "2026-08-27", "acquisition_summary": "x",
     }
@@ -14907,7 +15128,10 @@ def test_harness1_pr326_fix14_not_obtained_forbids_acquisition_record() -> None:
 
 
 def test_harness1_pr326_fix14_verdict_must_start_with_miss() -> None:
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+    """RUN9-L0-HARNESS-2 で実データの companions は OBTAINED_VIA_REEXPORT
+    へ恒久遷移したため、`verdict`（MISS-only フィールド）の非退行確認には
+    `_legacy_dependency_pins_manifest_data()` を使う。"""
+    data = copy.deepcopy(_legacy_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["verdict"] = "everything is fine, nothing to see here"
     with pytest.raises(m.Run9ValidationError, match="verdict must start with 'MISS'"):
         m.validate_dependency_pins_manifest(data)
@@ -14945,6 +15169,8 @@ def test_harness1_pr326_fix15_smoke_completed_mismatched_output_hashes_rejected(
         "determinism_confirmed": True, "measured_sec_per_render": 4.2,
         "render_condition": "CPU, ritsu",
         "render_output_sha256_first": "a" * 64, "render_output_sha256_second": "b" * 64,
+        "render1_total_elapsed_sec": 4.2, "render2_total_elapsed_sec": 4.2,
+        "render_entrypoint": "gate_synth.py run", "onnxruntime_providers": ["CPUExecutionProvider"],
     }
     with pytest.raises(m.Run9ValidationError, match="contradicts.*determinism_confirmed"):
         m.validate_dependency_pins_manifest(data)
@@ -14968,6 +15194,2998 @@ def test_harness1_pr326_fix15_output_hash_shape_enforced() -> None:
         "determinism_confirmed": True, "measured_sec_per_render": 4.2,
         "render_condition": "CPU, ritsu",
         "render_output_sha256_first": "not-a-hash", "render_output_sha256_second": "not-a-hash",
+        "render1_total_elapsed_sec": 4.2, "render2_total_elapsed_sec": 4.2,
+        "render_entrypoint": "gate_synth.py run", "onnxruntime_providers": ["CPUExecutionProvider"],
     }
     with pytest.raises(m.Run9ValidationError, match="render_output_sha256_first must be a 64hex sha256"):
         m.validate_dependency_pins_manifest(data)
+
+
+# ---------------------------------------------------------------------------
+# RUN9-L0-HARNESS-2: reexport_manifest / companions・smoke・budget 状態遷移
+# （User 裁定 2026-08-26「RUN9 User裁定 — acoustic export companions /
+# speaker embeds」に基づく checkpoint 再export・決定論 smoke render 実測）
+# ---------------------------------------------------------------------------
+
+HARNESS2_ADJUDICATION_PATH = (
+    _RUN_DIR / "USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt"
+)
+
+
+def _reexport_manifest_data() -> Dict[str, Any]:
+    return m._loads_strict_json(m.REEXPORT_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _canonical_json_bytes(data: Dict[str, Any]) -> bytes:
+    return (json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
+# --- 裁定文書の repo 収載（PIN-2 前例と同型） -------------------------------
+
+
+def test_harness2_adjudication_source_file_exists() -> None:
+    assert HARNESS2_ADJUDICATION_PATH.is_file()
+
+
+def test_harness2_adjudication_source_contains_verbatim_values() -> None:
+    """凍結した各値（historical pin 4点・checkpoint sha・DiffSinger commit・
+    pjs/user emb 候補値）が、repo 内収載した裁定文書の本文に一字一句
+    そのまま存在すること（grep 照合——「User 転記であって発明でない」こと
+    を機械検証する）。"""
+    text = HARNESS2_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    for value in (
+        "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
+        "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
+        "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+        "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+        "074e09b390c207a7cf98105db549e1006d035a797d57f73e103e848bb3216015",
+        "588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0",
+    ):
+        assert value in text, f"missing verbatim value: {value!r}"
+
+
+def test_harness2_adjudication_source_body_byte_identical_to_scratchpad_origin() -> None:
+    """本文（【RUN9 User裁定 — acoustic export companions / speaker
+    embeds】以降）が起草時の作業メモ
+    scratchpad/run9_user_adjudication_harness2.md と一字一句改変なしで
+    一致すること（改変禁止の直接確認、PIN-2 前例と同型——scratchpad
+    ファイルが本セッション後に存在しない環境では skip）。"""
+    scratchpad_path = Path(
+        "/tmp/claude-0/-home-user-ugh-prompt-engine/"
+        "e505c1c2-c4ad-588b-a1b2-258051a522de/scratchpad/"
+        "run9_user_adjudication_harness2.md"
+    )
+    if not scratchpad_path.is_file():
+        pytest.skip("scratchpad origin file not present in this environment")
+    origin_body = scratchpad_path.read_text(encoding="utf-8")
+    origin_body = "【RUN9 User裁定" + origin_body.split("【RUN9 User裁定", 1)[1]
+    committed_text = HARNESS2_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    committed_body = "【RUN9 User裁定" + committed_text.split("【RUN9 User裁定", 1)[1]
+    assert committed_body == origin_body
+
+
+def test_harness2_contract_records_adjudication_source_sha256_as_comment() -> None:
+    """RUN9_CONTRACT.yaml が
+    USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt の実測
+    sha256 を情報コメントとして記録していること（新 pin 欄は作らない設計
+    判断——CONTRACT_PIN_FIELDS には含まれないことも確認する）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    actual_sha = m.compute_file_sha256(HARNESS2_ADJUDICATION_PATH)
+    assert actual_sha in contract_text
+    assert (
+        "USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt"
+        not in m.CONTRACT_PIN_FIELDS
+    )
+
+
+# --- reexport_manifest_sha 新規 PINNED -------------------------------------
+
+
+def test_harness2_reexport_manifest_sha_in_contract_pin_fields() -> None:
+    assert "reexport_manifest_sha" in m.CONTRACT_PIN_FIELDS
+
+
+def test_harness2_reexport_manifest_sha_pinned_and_matches_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["reexport_manifest_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(m.REEXPORT_MANIFEST_PATH)
+
+
+def test_harness2_reexport_manifest_pinning_does_not_affect_pending_set(
+    contract: m.Run9RunContract,
+) -> None:
+    """reexport_manifest_sha は新規追加の PINNED 欄であり、既存 PENDING
+    集合に影響しないこと〔履歴: 起草当時は pre-run 必須10欄・総 PENDING
+    11欄だったが、RUN9-EXECPROFILE-1（2026-08-26）で execution_profile_sha
+    も PINNED 化されたため、現在は下記のとおり pre-run 必須9欄・総
+    PENDING 10欄——`test_execprofile_pre_run_pending_count_is_nine` と
+    同一の期待値〕。"""
+    excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
+    pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
+    pending = [n for n in pre_run_fields if not m._is_field_pinned(contract.pin_field(n))]
+    all_pending = [
+        n for n in m.CONTRACT_PIN_FIELDS
+        if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(contract.pin_field(n))
+    ]
+    assert "reexport_manifest_sha" not in pending
+    assert "reexport_manifest_sha" not in all_pending
+    assert len(pending) == 9
+    assert len(all_pending) == 10
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+# --- reserialization byte 一致（新規2ファイルとも） -------------------------
+
+
+def test_harness2_reexport_manifest_reserializes_byte_identical() -> None:
+    raw = m.REEXPORT_MANIFEST_PATH.read_bytes()
+    data = m._loads_strict_json(raw.decode("utf-8"))
+    assert _canonical_json_bytes(data) == raw
+
+
+def test_harness2_dependency_pins_manifest_reserializes_byte_identical() -> None:
+    raw = m.DEPENDENCY_PINS_MANIFEST_PATH.read_bytes()
+    data = m._loads_strict_json(raw.decode("utf-8"))
+    assert _canonical_json_bytes(data) == raw
+
+
+# --- validate_reexport_manifest(): 正常系 -----------------------------------
+
+
+def test_harness2_reexport_manifest_validates() -> None:
+    m.validate_reexport_manifest(_reexport_manifest_data())  # 例外なしの確認
+
+
+def test_harness2_reexport_manifest_schema_field() -> None:
+    data = _reexport_manifest_data()
+    assert data["schema"] == "run9-reexport-manifest/1.0" == m.SCHEMA_REEXPORT_MANIFEST
+
+
+def test_harness2_reexport_manifest_unknown_top_level_key_fail_closed() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["unexpected"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_missing_top_level_key_fail_closed() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    del data["artifacts"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_reexport_manifest(data)
+
+
+# --- fail-closed (a): input_checkpoint sha vs contract pin (internal consistency) ---
+
+
+def test_harness2_reexport_manifest_checkpoint_matches_pin_flag_forged_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["input_checkpoint"]["sha256_matches_pin"] = False
+    with pytest.raises(m.Run9ValidationError, match="sha256_matches_pin"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_checkpoint_sha_shape_enforced() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["input_checkpoint"]["sha256"] = "not-a-hash"
+    with pytest.raises(m.Run9ValidationError, match="64hex"):
+        m.validate_reexport_manifest(data)
+
+
+# --- fail-closed (d)（PR #327 レビュー第2巡指摘6）: input_checkpoint は
+# pin 済み入力からの derived のみを表現できる（直接強制、算術一貫性のみ
+# ではない） -----------------------------------------------------------
+
+
+def test_harness2_reexport_manifest_checkpoint_unpinned_actual_rejected() -> None:
+    """actual sha256 を改竄し、sha256_matches_pin も算術的に整合する False
+    へ追随させても（旧実装はこの組合せを受理し得た）、直接強制により
+    fail-closed で拒否される——unpinned checkpoint からの derived
+    manifest はカテゴリカルに拒否される。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["input_checkpoint"]["sha256"] = "7" * 64
+    data["input_checkpoint"]["sha256_matches_pin"] = False
+    with pytest.raises(m.Run9ValidationError, match="input_checkpoint"):
+        m.validate_reexport_manifest(data)
+
+
+# --- fail-closed (b): exporter.revision vs contract pin (internal consistency) ---
+
+
+def test_harness2_reexport_manifest_exporter_matches_pin_flag_forged_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["exporter"]["revision_matches_pin"] = False
+    with pytest.raises(m.Run9ValidationError, match="revision_matches_pin"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_exporter_revision_shape_enforced() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["exporter"]["revision"] = "not-a-git-sha"
+    with pytest.raises(m.Run9ValidationError, match="40hex"):
+        m.validate_reexport_manifest(data)
+
+
+# --- fail-closed (e)（PR #327 レビュー第2巡指摘6）: exporter は pin 済み
+# revision からの derived のみを表現できる（input_checkpoint (d) と同型の
+# 直接強制） -------------------------------------------------------------
+
+
+def test_harness2_reexport_manifest_exporter_unpinned_actual_rejected() -> None:
+    """actual revision を改竄し、revision_matches_pin も算術的に整合する
+    False へ追随させても（旧実装はこの組合せを受理し得た）、直接強制に
+    より fail-closed で拒否される——unpinned exporter revision からの
+    derived manifest はカテゴリカルに拒否される。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["exporter"]["revision"] = "7" * 40
+    data["exporter"]["revision_matches_pin"] = False
+    with pytest.raises(m.Run9ValidationError, match="exporter"):
+        m.validate_reexport_manifest(data)
+
+
+# --- fail-closed (c): matches_historical の in-process 再計算一致 ----------
+
+
+def test_harness2_reexport_manifest_matches_historical_null_historical_forces_false() -> None:
+    """historical_sha256 が null の artifact（languages_json）は
+    matches_historical: false を強制する。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    assert data["artifacts"]["languages_json"]["historical_sha256"] is None
+    data["artifacts"]["languages_json"]["matches_historical"] = True
+    with pytest.raises(m.Run9ValidationError, match="matches_historical"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_matches_historical_recompute_mismatch_rejected() -> None:
+    """historical_sha256 が非null で実際に一致している artifact
+    （dsconfig_yaml）に matches_historical: false を捏造しても拒否される。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["artifacts"]["dsconfig_yaml"]["matches_historical"] = False
+    with pytest.raises(m.Run9ValidationError, match="matches_historical"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_acoustic_onnx_matches_historical_frozen_false() -> None:
+    """(g) acoustic_onnx.matches_historical == false の逐語保持: true への
+    書き換えは、たとえ sha256_run1 も historical_sha256 に一致するよう
+    同時に改竄しても拒否される（frozen-fact ガードは独立に効く）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["artifacts"]["acoustic_onnx"]["sha256_run1"] = data["artifacts"]["acoustic_onnx"][
+        "historical_sha256"
+    ]
+    data["artifacts"]["acoustic_onnx"]["sha256_run2"] = data["artifacts"]["acoustic_onnx"][
+        "historical_sha256"
+    ]
+    data["artifacts"]["acoustic_onnx"]["matches_historical"] = True
+    with pytest.raises(m.Run9ValidationError, match="frozen fact"):
+        m.validate_reexport_manifest(data)
+
+
+# --- fail-closed (d): run1_run2_identical の in-process 再計算一致 --------
+
+
+def test_harness2_reexport_manifest_run1_run2_identical_forged_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["artifacts"]["acoustic_onnx"]["run1_run2_identical"] = False
+    with pytest.raises(m.Run9ValidationError, match="run1_run2_identical"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_artifact_sha_shape_enforced() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["artifacts"]["acoustic_onnx"]["sha256_run1"] = "not-a-hash"
+    with pytest.raises(m.Run9ValidationError, match="64hex"):
+        m.validate_reexport_manifest(data)
+
+
+# --- fail-closed (e): reproducibility_check.all_run1_run2_identical == AND ---
+
+
+def test_harness2_reexport_manifest_all_run1_run2_identical_forged_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["reproducibility_check"]["all_run1_run2_identical"] = False
+    with pytest.raises(m.Run9ValidationError, match="all_run1_run2_identical"):
+        m.validate_reexport_manifest(data)
+
+
+# --- fail-closed (f): smoke wav sha 一致 == determinism_confirmed ----------
+
+
+def test_harness2_reexport_manifest_smoke_determinism_confirmed_forged_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["smoke_render_cross_check"]["determinism_confirmed"] = False
+    with pytest.raises(m.Run9ValidationError, match="determinism_confirmed"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_smoke_avg_sec_arithmetic_mismatch_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["smoke_render_cross_check"]["avg_sec_per_render"] = 99.9
+    with pytest.raises(m.Run9ValidationError, match="avg_sec_per_render"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_smoke_budget_estimate_arithmetic_mismatch_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["smoke_render_cross_check"]["budget_estimate_616_renders_sec"] = 1.0
+    with pytest.raises(m.Run9ValidationError, match="budget_estimate_616_renders_sec"):
+        m.validate_reexport_manifest(data)
+
+
+# --- artifacts 9点固定・historical_comparison_summary ----------------------
+
+
+def test_harness2_reexport_manifest_artifacts_registers_exactly_nine_keys() -> None:
+    data = _reexport_manifest_data()
+    assert set(data["artifacts"].keys()) == m.REEXPORT_ARTIFACT_KEYS
+    assert len(m.REEXPORT_ARTIFACT_KEYS) == 9
+
+
+def test_harness2_reexport_manifest_artifacts_missing_key_fail_closed() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    del data["artifacts"]["d3synth_emb"]
+    with pytest.raises(m.Run9ValidationError, match="must register exactly"):
+        m.validate_reexport_manifest(data)
+
+
+# --- fail-closed (h)（PR #327 レビュー第12巡指摘22、P2、採用）:
+# artifacts.*.file の全数一意性 -----------------------------------------
+
+
+def test_harness2_reexport_manifest_artifacts_duplicate_file_rejected() -> None:
+    """9エントリのうち2論理 key が同一 `file` 値を指すと、実際には8出力
+    しかないのに9 artifacts を主張できてしまう穴（第12巡指摘22）——`file`
+    値の全数一意性を fail-closed で強制する非退行確認。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["artifacts"]["pjs_emb"]["file"] = data["artifacts"]["ritsu_emb"]["file"]
+    with pytest.raises(m.Run9ValidationError, match="must be unique"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_historical_comparison_summary_unknown_key_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["historical_comparison_summary"]["not_a_real_artifact"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="outside the artifacts vocabulary"):
+        m.validate_reexport_manifest(data)
+
+
+# --- load_pinned_reexport_manifest(): 3層防御 read-once + cross-checks -----
+
+
+def test_harness2_load_pinned_reexport_manifest_happy_path(contract: m.Run9RunContract) -> None:
+    data = m.load_pinned_reexport_manifest(contract)
+    assert data["schema"] == m.SCHEMA_REEXPORT_MANIFEST
+
+
+def test_harness2_load_pinned_reexport_manifest_stale_file_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """pin 値と一致しない実バイトは fail-closed 拒否される（stale/改変
+    検出）。"""
+    tampered_path = tmp_path / "reexport_manifest.json"
+    tampered_data = copy.deepcopy(_reexport_manifest_data())
+    tampered_data["generated_at_utc"] = "2099-01-01T00:00:00Z"
+    tampered_path.write_bytes(_canonical_json_bytes(tampered_data))
+    with pytest.raises(m.Run9ValidationError, match="stale"):
+        m.load_pinned_reexport_manifest(contract, manifest_path=tampered_path)
+
+
+def _tampered_reexport_contract(
+    contract: m.Run9RunContract, tmp_path: Path, *, mutate,
+) -> Tuple[m.Run9RunContract, Path, Path]:
+    """reexport_manifest.json の内容を `mutate` で改変し、その実バイト
+    sha256 で `reexport_manifest_sha` pin を差し替えた合成 contract +
+    manifest ファイル + contract ファイルを用意するテストヘルパー
+    （`_tampered_contract_with_dependency_pins_sha_pinned()` と同型）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    mutate(data)
+    manifest_bytes = _canonical_json_bytes(data)
+    manifest_path = tmp_path / "reexport_manifest.json"
+    manifest_path.write_bytes(manifest_bytes)
+    import hashlib as _hashlib
+    manifest_sha = _hashlib.sha256(manifest_bytes).hexdigest()
+    tampered_raw = copy.deepcopy(contract.raw)
+    tampered_raw["reexport_manifest_sha"] = {"value": manifest_sha, "status": "PINNED"}
+    tampered_contract_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_contract_path.write_text(yaml.safe_dump(tampered_raw, allow_unicode=True), encoding="utf-8")
+    return m.load_run9_contract(tampered_raw), manifest_path, tampered_contract_path
+
+
+def test_harness2_load_pinned_reexport_manifest_checkpoint_cross_check_fail_closed(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(6) cross-check (a): input_checkpoint.expected_sha256_per_run9_
+    contract が backbone_checkpoint_sha pin と食い違うと拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["input_checkpoint"]["sha256"] = "0" * 64
+        data["input_checkpoint"]["expected_sha256_per_run9_contract"] = "0" * 64
+        data["input_checkpoint"]["sha256_matches_pin"] = True
+
+    tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="backbone_checkpoint_sha"):
+        m.load_pinned_reexport_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_diffsinger_commit_cross_check_fail_closed(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(7) cross-check (b): exporter.expected_revision_per_run9_contract が
+    bundle 側前方宣言 commit と食い違うと拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        old_revision = data["exporter"]["revision"]
+        new_revision = "0" * 40
+        data["exporter"]["revision"] = new_revision
+        data["exporter"]["expected_revision_per_run9_contract"] = new_revision
+        data["exporter"]["revision_matches_pin"] = True
+        # PR #327 レビュー第9巡指摘17対応: replay_environment_recipe の
+        # exporter checkout 検証 step は exporter.revision の pin 値を
+        # 逐語参照している——この構造検証 (validate_reexport_manifest())
+        # を素通りさせ、本テストが狙う深い cross-check (b)（bundle 側
+        # 前方宣言 commit との食い違い）に到達させるため、step 内の旧
+        # revision 文字列も新値へ追随させる。
+        data["replay_environment_recipe"]["steps"] = [
+            step.replace(old_revision, new_revision)
+            for step in data["replay_environment_recipe"]["steps"]
+        ]
+
+    tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="run9_render_code_commit"):
+        m.load_pinned_reexport_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_speaker_embed_cross_check_fail_closed(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(8) cross-check (h): artifacts.pjs_emb.sha256_run1 が
+    dependency_pins_manifest.json の speaker_embeddings_unpinned_
+    candidates.pjs.candidate_sha256 と食い違うと拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["artifacts"]["pjs_emb"]["sha256_run1"] = "1" * 64
+        data["artifacts"]["pjs_emb"]["sha256_run2"] = "1" * 64
+        data["artifacts"]["pjs_emb"]["run1_run2_identical"] = True
+        data["artifacts"]["pjs_emb"]["matches_historical"] = False
+
+    tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="speaker_embeddings_unpinned_candidates"):
+        m.load_pinned_reexport_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+# --- PR #327 レビュー第2巡指摘4: acoustic export companions 4点の cross-check (10) ---
+
+
+def _dependency_pins_manifest_data() -> Dict[str, Any]:
+    return m._loads_strict_json(m.DEPENDENCY_PINS_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _tampered_dependency_pins_manifest_path(tmp_path: Path, *, mutate) -> Path:
+    """`dependency_pins_manifest.json` の内容を `mutate` で改変した合成
+    ファイルを用意するテストヘルパー（`load_pinned_reexport_manifest()` の
+    `dependency_pins_manifest_path` は正典 pin 経由ではなく直接ファイルを
+    読むため、pin 差し替えは不要——ファイルを差し替えるだけでよい）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    mutate(data)
+    path = tmp_path / "dependency_pins_manifest.json"
+    path.write_bytes(_canonical_json_bytes(data))
+    return path
+
+
+@pytest.mark.parametrize(
+    "artifact_key,logical_name",
+    [
+        ("acoustic_onnx", "acoustic_onnx"),
+        ("dsconfig_yaml", "acoustic_dsconfig_yaml"),
+        ("phonemes_json", "acoustic_phonemes_json"),
+        ("ritsu_emb", "speaker_embed_ritsu"),
+    ],
+)
+def test_harness2_load_pinned_reexport_manifest_companion_cross_check_fail_closed(
+    contract: m.Run9RunContract, tmp_path: Path, artifact_key: str, logical_name: str,
+) -> None:
+    """(10) cross-check (j)（PR #327 レビュー第2巡指摘4）: acoustic export
+    companions 4点それぞれについて、dependency_pins_manifest.json 側
+    measured_sha256 を改竄すると（reexport_manifest.json 側
+    artifacts.{key}.sha256_run1 と食い違うと）fail-closed で拒否される
+    ——companion 別に4件とも独立に照合されることを確認する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        for item in data["acoustic_export_companions"]["expected_items"]:
+            if item["logical_name"] == logical_name:
+                item["measured_sha256"] = "9" * 64
+                return
+        raise AssertionError(f"logical_name {logical_name!r} not found in fixture")
+
+    tampered_dep_path = _tampered_dependency_pins_manifest_path(tmp_path, mutate=_mutate)
+    with pytest.raises(m.Run9ValidationError, match=f"artifacts.{artifact_key}.sha256_run1"):
+        m.load_pinned_reexport_manifest(
+            contract, dependency_pins_manifest_path=tampered_dep_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_companion_missing_from_dependency_pins_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(10) cross-check (j): dependency_pins_manifest.json 側に対応する
+    logical_name の companion item 自体が存在しない場合も fail-closed で
+    拒否される（measured_sha256 の食い違いだけでなく、参照先の欠落も
+    検出する）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["acoustic_export_companions"]["expected_items"] = [
+            item
+            for item in data["acoustic_export_companions"]["expected_items"]
+            if item["logical_name"] != "speaker_embed_ritsu"
+        ]
+
+    tampered_dep_path = _tampered_dependency_pins_manifest_path(tmp_path, mutate=_mutate)
+    with pytest.raises(m.Run9ValidationError, match="does not declare"):
+        m.load_pinned_reexport_manifest(
+            contract, dependency_pins_manifest_path=tampered_dep_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_companion_cross_check_reexport_side_tampered(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(10) cross-check (j): reexport_manifest.json 側 artifacts.ritsu_emb.
+    sha256_run1 を改竄しても（dependency_pins_manifest.json 側は正典の
+    ままでも）食い違いは fail-closed で拒否される（「どちらか一方の sha を
+    改竄」の反対側も machine 強制されることの確認）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["artifacts"]["ritsu_emb"]["sha256_run1"] = "8" * 64
+        data["artifacts"]["ritsu_emb"]["sha256_run2"] = "8" * 64
+        data["artifacts"]["ritsu_emb"]["run1_run2_identical"] = True
+        data["artifacts"]["ritsu_emb"]["matches_historical"] = False
+        data["artifacts"]["ritsu_emb"]["historical_sha256"] = None
+
+    tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="artifacts.ritsu_emb.sha256_run1"):
+        m.load_pinned_reexport_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+# --- PR #327 レビュー第1巡指摘1: export_command_variables (self-contained recipe) ---
+
+
+def test_harness2_reexport_manifest_export_command_variables_registers_placeholders() -> None:
+    data = _reexport_manifest_data()
+    variables = data["export_command_variables"]["variables"]
+    assert set(variables.keys()) == m._REEXPORT_COMMAND_VARIABLE_NAMES
+    assert len(variables) == 3
+    for var_def in variables.values():
+        assert isinstance(var_def, str) and var_def.strip()
+    assert data["export_command_variables"]["path_independence_note"].strip()
+
+
+def test_harness2_reexport_manifest_export_command_variables_unknown_key_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_command_variables"]["variables"]["<extra>"] = "unexpected"
+    with pytest.raises(m.Run9ValidationError, match="must register exactly"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_export_command_variables_missing_placeholder_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    del data["export_command_variables"]["variables"][m._REEXPORT_OUT_DIR_PLACEHOLDER]
+    with pytest.raises(m.Run9ValidationError, match="must register exactly"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_export_command_variables_out_dir_mismatch_rejected() -> None:
+    """out_dir プレースホルダの定義があっても、実際の export_command の
+    最終トークンがそれで始まっていなければ拒否される（定義と実コマンドの
+    乖離を machine 強制で防ぐ）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_command"][-1] = "/some/unrelated/path/onnx_gate_40000"
+    with pytest.raises(m.Run9ValidationError, match="out_dir placeholder"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_export_command_variables_diffsinger_repo_mismatch_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_command_cwd"] = "/some/unrelated/DiffSinger"
+    with pytest.raises(m.Run9ValidationError, match="diffsinger_repo placeholder"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第1巡指摘2: export_environment_lock (完全 pip freeze) ---
+
+
+def test_harness2_reexport_manifest_export_environment_lock_sha_matches() -> None:
+    data = _reexport_manifest_data()
+    lock = data["export_environment_lock"]
+    assert isinstance(lock, list) and len(lock) > 0
+    import hashlib as _hashlib
+    expected = _hashlib.sha256(("\n".join(lock) + "\n").encode("utf-8")).hexdigest()
+    assert data["export_environment_lock_sha256"] == expected
+
+
+def test_harness2_reexport_manifest_export_environment_lock_sha_mismatch_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_environment_lock"][0] = "tampered-package==0.0.0"
+    with pytest.raises(m.Run9ValidationError, match="export_environment_lock_sha256"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_export_environment_lock_empty_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_environment_lock"] = []
+    with pytest.raises(m.Run9ValidationError, match="non-empty list"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_export_environment_lock_sha256_shape_enforced() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_environment_lock_sha256"] = "not-a-hash"
+    with pytest.raises(m.Run9ValidationError, match="64hex"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第2巡指摘5: replay_environment_recipe / historical_note ---
+
+
+def test_harness2_reexport_manifest_venv_setup_historical_note_present() -> None:
+    data = _reexport_manifest_data()
+    assert "replay_environment_recipe" in data["export_venv_setup"]["historical_note"]
+
+
+def test_harness2_reexport_manifest_venv_setup_historical_note_missing_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    del data["export_venv_setup"]["historical_note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_venv_setup_historical_note_must_reference_recipe() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_venv_setup"]["historical_note"] = "this note forgot to name the new key"
+    with pytest.raises(m.Run9ValidationError, match="replay_environment_recipe"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_install_steps_unchanged_by_replay_recipe_addition() -> None:
+    """`install_steps`（歴史記録、当時実際に実行した手順）自体の4行は
+    replay_environment_recipe 新設によって1文字も変更されていないこと
+    の回帰固定。"""
+    data = _reexport_manifest_data()
+    assert data["export_venv_setup"]["install_steps"] == [
+        "python -m venv venv_export",
+        "pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu",
+        "pip install -r <diffsinger_repo clone（session workdir、repo外）>/DiffSinger/requirements.txt",
+        "pip install numpy==1.26.4",
+    ]
+
+
+def test_harness2_reexport_manifest_replay_recipe_lock_array_reference_must_match() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["lock_array_reference"] = "some_other_array"
+    with pytest.raises(m.Run9ValidationError, match="lock_array_reference"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_missing_no_deps_step_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s.replace("--no-deps", "") for s in data["replay_environment_recipe"]["steps"]
+    ]
+    with pytest.raises(m.Run9ValidationError, match="--no-deps"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_missing_oneliner_step_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"] if "json.load" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="one-liner"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_torch_index_note_must_reference_cpu_index() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["torch_index_note"] = "torch is on PyPI, no index needed"
+    with pytest.raises(m.Run9ValidationError, match="download.pytorch.org/whl/cpu"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_missing_replay_environment_recipe_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    del data["replay_environment_recipe"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第6巡指摘12（P2, 採用）: export 実行 step の venv 明示化 ---
+
+
+def test_harness2_reexport_manifest_replay_recipe_export_step_references_venv_python() -> None:
+    """正常系: 現行 steps に export_command を venv_export_replay/bin/python
+    経由で実行する step が存在すること（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    assert any(
+        "export_command" in s and "venv_export_replay/bin/python" in s for s in steps
+    )
+
+
+def test_harness2_reexport_manifest_replay_recipe_missing_export_step_rejected() -> None:
+    """export_command を venv 経由で実行する step 自体が存在しない（旧欠陥
+    状態）と reject されること。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"] if "export_command" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="export_command"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_bare_python_export_step_rejected() -> None:
+    """export 実行 step が venv_export_replay/bin/python ではなく bare
+    `python` を呼ぶ（PR #327 レビュー第6巡指摘12の元の欠陥）と reject
+    されること。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = next(
+        i for i, s in enumerate(steps)
+        if "export_command" in s and "venv_export_replay/bin/python" in s
+    )
+    steps[export_index] = steps[export_index].replace("venv_export_replay/bin/python", "python")
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="export_command"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_bare_pip_step_rejected() -> None:
+    """venv bootstrap（`python -m venv ...`）以外の step に bare `pip`
+    起動が混入すると reject されること。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        *data["replay_environment_recipe"]["steps"],
+        "pip install something-else",
+    ]
+    with pytest.raises(m.Run9ValidationError, match="bare `pip`"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_venv_bootstrap_bare_python_allowed() -> None:
+    """venv 作成 step 自体（`python -m venv --clear <session workdir（repo外）>/
+    venv_export_replay`、直前の interpreter 版検証 step の対象）は ambient
+    python を使うのが正当であり、bare-interpreter 検査から除外されること
+    （誤検知しないことの回帰固定）。PR #327 第7巡指摘14対応後は steps[0] が
+    interpreter 版検証 step、steps[1] が venv 作成 step になった。PR #327
+    第8巡指摘15対応後は venv 作成先が cwd 非依存の絶対パスへ変わった。第16巡
+    指摘28対応後は venv 作成コマンドへ --clear が付与された。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    assert "-m venv" in steps[1]
+    assert "python -m venv --clear <session workdir（repo外）>/venv_export_replay" in steps[1]
+    m.validate_reexport_manifest(data)  # 例外なしの確認
+
+
+# --- PR #327 レビュー第8巡指摘15（P2, 採用）: venv パスの cwd 非依存化 ------
+
+
+def test_harness2_reexport_manifest_replay_recipe_venv_path_rooted_absolute() -> None:
+    """正常系: すべての venv_export_replay 参照が cwd 非依存の絶対パス
+    `<session workdir（repo外）>/venv_export_replay` として現れること
+    （回帰固定——bare な相対パス参照が1件も残っていないこと）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    rooted = "<session workdir（repo外）>/venv_export_replay"
+    for step in steps:
+        idx = 0
+        while True:
+            idx = step.find("venv_export_replay", idx)
+            if idx == -1:
+                break
+            assert step[: idx + len("venv_export_replay")].endswith(rooted), step
+            idx += len("venv_export_replay")
+
+
+def test_harness2_reexport_manifest_replay_recipe_bare_relative_venv_export_step_rejected() -> None:
+    """export 実行 step（cwd を export_command_cwd へ変更した後に実行される）
+    が cwd 非依存の絶対パスではなく bare な相対パス
+    `venv_export_replay/bin/python`（PR #327 レビュー第8巡指摘15の元の
+    欠陥——cwd 変更後は DiffSinger ディレクトリ内で解決され実在しない venv
+    を指す）のみを参照すると reject されること。venv_python_path 自体が
+    cwd 非依存の絶対パスへ再定義されたため、この形は既存の fail-closed (i)
+    （export_command を venv 経由で実行する step の存在強制）で reject
+    される。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = next(
+        i for i, s in enumerate(steps)
+        if "export_command" in s and "venv_export_replay/bin/python" in s
+    )
+    steps[export_index] = steps[export_index].replace(
+        "<session workdir（repo外）>/venv_export_replay/bin/python",
+        "venv_export_replay/bin/python",
+    )
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="venv interpreter path"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_bare_relative_venv_create_step_rejected() -> None:
+    """venv 作成 step 自体が bare な相対パス `venv_export_replay` で venv
+    を作成していると reject されること（venv 自体の生成先も cwd 非依存の
+    絶対パスでなければならない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    steps[1] = steps[1].replace(
+        "<session workdir（repo外）>/venv_export_replay", "venv_export_replay",
+    )
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="cwd-independent"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第7巡指摘14（P2, 採用）: venv 作成 interpreter 版検証 ---
+
+
+def test_harness2_reexport_manifest_replay_recipe_interpreter_check_step_present() -> None:
+    """正常系: venv 作成 step より前に、`environment_versions.python` の
+    pin 値（"3.11.15"）を逐語参照する interpreter 版検証 step が存在する
+    こと（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    venv_create_index = next(i for i, s in enumerate(steps) if "-m venv" in s)
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "environment_versions.python" in s and "3.11.15" in s
+    )
+    assert check_index < venv_create_index
+
+
+def test_harness2_reexport_manifest_replay_recipe_interpreter_check_step_missing_rejected() -> None:
+    """interpreter 版検証 step が丸ごと欠落していると reject される
+    （PR #327 第7巡指摘13の元の欠陥: venv がどの interpreter から作られた
+    か検証されないまま）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"]
+        if "environment_versions.python" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="interpreter version verification step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_interpreter_check_step_after_venv_create_rejected() -> None:
+    """interpreter 版検証 step が venv 作成 step より後に配置されている
+    と reject される（存在するだけでは不十分——venv 作成前に実行されて
+    いなければ venv の生成元を保護できない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "environment_versions.python" in s and "3.11.15" in s
+    )
+    venv_create_index = next(i for i, s in enumerate(steps) if "-m venv" in s)
+    assert check_index < venv_create_index
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    # venv 作成 step の直後（元の check_index を除去した分インデックスが
+    # 1つ詰まっているため venv_create_index の位置）へ挿入し直す。
+    reordered.insert(venv_create_index, check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="interpreter version verification step"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第9巡指摘16/17（P2×2, 採用）: replay recipe 閉世界性の終端 ---
+# 指摘17: exporter checkout（供給 clone の scripts/export.py）の live 検証。
+# 指摘16: export 実行後の post-export 閉世界照合（9 artifacts 全数照合）。
+# 本巡で recipe の入力（checkpoint + experiment 側4点 + lock + interpreter
+# 版）・実行体（exporter checkout + venv interpreter）・出力（9 artifacts）
+# の全照合が閉じる。
+
+
+def _export_step_index(steps: List[str]) -> int:
+    return next(
+        i for i, s in enumerate(steps)
+        if "export_command" in s and "venv_export_replay/bin/python" in s
+    )
+
+
+def test_harness2_reexport_manifest_replay_recipe_exporter_checkout_check_present() -> None:
+    """正常系: export 実行 step より前に、`git rev-parse HEAD`/
+    `git status --porcelain`/`exporter.revision`（pin 値逐語）を参照する
+    exporter checkout 検証 step が存在すること（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    revision = data["exporter"]["revision"]
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "git rev-parse HEAD" in s and "git status --porcelain" in s
+        and "exporter.revision" in s and revision in s
+    )
+    assert check_index < export_index
+
+
+def test_harness2_reexport_manifest_replay_recipe_exporter_checkout_check_missing_rejected() -> None:
+    """exporter checkout 検証 step が丸ごと欠落していると reject される
+    （PR #327 第9巡指摘17の元の欠陥: 供給 clone を無検証実行していた）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"]
+        if "git rev-parse HEAD" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="exporter checkout verification step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_exporter_checkout_check_after_export_step_rejected() -> None:
+    """exporter checkout 検証 step が export 実行 step より後に配置されて
+    いると reject される（存在するだけでは不十分——export 実行前に検証
+    されていなければ供給 clone を保護できない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    check_index = next(i for i, s in enumerate(steps) if "git rev-parse HEAD" in s)
+    assert check_index < export_index
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    reordered.append(check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="exporter checkout verification step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_post_export_check_present() -> None:
+    """正常系: export 実行 step より後に、`artifacts` 9エントリ全数と
+    `sha256_run1`/`bytes` フィールド名を参照する post-export 閉世界照合
+    step が存在すること（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if all(key in s for key in m.REEXPORT_ARTIFACT_KEYS)
+        and "sha256_run1" in s and "bytes" in s
+    )
+    assert check_index > export_index
+
+
+def test_harness2_reexport_manifest_replay_recipe_post_export_check_missing_rejected() -> None:
+    """post-export 閉世界照合 step が丸ごと欠落していると reject される
+    （PR #327 第9巡指摘16の元の欠陥: 別バイトが生成されても「replay 完了」
+    を主張できてしまっていた）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"]
+        if not all(key in s for key in m.REEXPORT_ARTIFACT_KEYS)
+    ]
+    with pytest.raises(m.Run9ValidationError, match="post-export closed-world verification step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_post_export_check_before_export_step_rejected() -> None:
+    """post-export 閉世界照合 step が export 実行 step より前に配置されて
+    いると reject される（存在するだけでは不十分——export 実行後でなければ
+    生成物を照合できない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if all(key in s for key in m.REEXPORT_ARTIFACT_KEYS)
+    )
+    assert check_index > export_index
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    reordered.insert(0, check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="post-export closed-world verification step"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第10巡指摘19（P2, 採用）: 未定義トークン全数拒否 + ---
+# --- export 実行引数列の canonical export_command[1:] 厳密一致検証   ---
+# 本巡で bot レビュー対応の規約上限10巡に到達——「未定義トークン」
+# ファミリーの終端巡。第9巡で新設した export 実行 step / post-export 閉
+# 世界照合 step のバッククォート内に、export_command_variables.variables
+# へ未登録のトークン `<out_dir>` が紛れ込んでいた穴への対応。
+
+
+def test_harness2_reexport_manifest_replay_recipe_undefined_token_rejected() -> None:
+    """export 実行 step のバッククォート逐語コマンド内に、
+    export_command_variables.variables へ未登録の `<...>` トークンが
+    混入していると reject される（PR #327 第10巡指摘19の元の欠陥:
+    `<out_dir>` が未定義のまま残っていた）。地の文の一般的表記
+    （`artifacts.<key>.sha256_run1` 等）は走査対象外であることは
+    happy path（既存の全 harness2 系テスト）が回帰固定する。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    mutated = steps[export_index].replace("--ckpt 40000 --out", "--ckpt 40000 <out_dir> --out")
+    assert mutated != steps[export_index]
+    steps[export_index] = mutated
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="undefined token"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_export_step_argument_mismatch_rejected() -> None:
+    """export 実行 step のバッククォート逐語コマンドの引数トークン列が
+    canonical `export_command[1:]` と食い違っていると reject される
+    （interpreter 部の差し替え以外の変更は一切許容しない——1トークンの
+    値ズレも検出する）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    mutated = steps[export_index].replace("--ckpt 40000", "--ckpt 99999")
+    assert mutated != steps[export_index]
+    steps[export_index] = mutated
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="do not exactly match canonical"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第11巡指摘20（P2。規約上限10巡超過後だが、既存
+# 「未定義トークン」ファミリー（第10巡）とは別の新しい具体経路——manifest
+# 自身/requirements_replay.txt への**相対**参照は `<...>` 形式ではないため
+# 第10巡の未定義トークン検証をすり抜けていた——として3分類（将来汚染）に
+# 該当し採用）: lock 生成 step が manifest 自身を相対パス
+# 'inputs/reexport_manifest.json' のまま json.load しており、repo root や
+# workdir から開始した clean replay が FileNotFoundError で落ちる穴。
+# `<repo checkout>` 変数を新規登録し、manifest 自身/requirements_replay.txt
+# への参照をそれぞれ checkout-stable な rooted prefix へ揃えた。
+
+
+def test_harness2_reexport_manifest_repo_checkout_variable_registered() -> None:
+    """新規登録変数 <repo checkout> が『本リポジトリ Yuu6798/ugh-prompt-engine
+    の checkout ルート』を指す定義文であることを固定する。"""
+    data = _reexport_manifest_data()
+    variables = data["export_command_variables"]["variables"]
+    assert m._REEXPORT_REPO_CHECKOUT_PLACEHOLDER in variables
+    assert "Yuu6798/ugh-prompt-engine" in variables[m._REEXPORT_REPO_CHECKOUT_PLACEHOLDER]
+
+
+def test_harness2_reexport_manifest_lock_step_manifest_reference_rooted() -> None:
+    """正常系: lock 生成 step のバッククォートコマンドが manifest 自身への
+    参照を rooted prefix <repo checkout>/voice_genesis/evolution/
+    run9_dual_founder_pjs/inputs/ 付きで持つこと（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    lock_index = next(
+        i for i, s in enumerate(steps) if "json.load" in s and "export_environment_lock" in s
+    )
+    rooted = (
+        "<repo checkout>/voice_genesis/evolution/run9_dual_founder_pjs/inputs/"
+        "reexport_manifest.json"
+    )
+    backtick_commands = m._REEXPORT_BACKTICK_COMMAND_PATTERN.findall(steps[lock_index])
+    assert len(backtick_commands) == 1
+    assert rooted in backtick_commands[0]
+    assert "'inputs/reexport_manifest.json'" not in backtick_commands[0]
+
+
+def test_harness2_reexport_manifest_lock_step_manifest_relative_reference_rejected() -> None:
+    """lock 生成 step のバッククォートコマンド内で reexport_manifest.json
+    への参照が rooted prefix を伴わない（旧版のような裸の相対パス）と
+    reject される（PR #327 レビュー第11巡指摘20の元の欠陥: repo root/
+    workdir から開始した clean replay が FileNotFoundError で落ちていた）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    lock_index = next(
+        i for i, s in enumerate(steps) if "json.load" in s and "export_environment_lock" in s
+    )
+    rooted = (
+        "<repo checkout>/voice_genesis/evolution/run9_dual_founder_pjs/inputs/"
+        "reexport_manifest.json"
+    )
+    mutated = steps[lock_index].replace(rooted, "inputs/reexport_manifest.json")
+    assert mutated != steps[lock_index]
+    steps[lock_index] = mutated
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="checkout-stable rooted prefix"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_requirements_replay_relative_reference_rejected() -> None:
+    """pip install step のバッククォートコマンド内で requirements_replay.txt
+    への参照が rooted prefix <session workdir（repo外）>/ を伴わない
+    （裸の相対パス）と reject される。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    pip_index = next(i for i, s in enumerate(steps) if "pip install --no-deps" in s)
+    rooted = "<session workdir（repo外）>/requirements_replay.txt"
+    assert steps[pip_index].count(rooted) == 1
+    mutated = steps[pip_index].replace(rooted, "requirements_replay.txt", 1)
+    assert mutated != steps[pip_index]
+    steps[pip_index] = mutated
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="checkout-stable rooted prefix"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第16巡指摘28/29（P2×2、採用——規約上限10巡超過後だが ---
+# --- 3分類「将来汚染」に該当する新しい具体経路）: replay の再実行衛生     ---
+# 指摘28: venv 作成 step が既存 venv_export_replay を再利用すると、
+# --no-deps install は lock に無い残留パッケージを除去しない。venv 作成
+# コマンドへ --clear を必須化し、pip install の後・export 実行の前に
+# freeze/lock 全一致照合 step を必須化する。
+# 指摘29: 既存 onnx_gate_40000 が残る workdir へ export すると、stale copy
+# が post-export 閉世界照合を偽 pass させ得る。export 実行 step の前に
+# export 先ディレクトリの事前空確認 step を必須化する。
+
+
+def test_harness2_reexport_manifest_replay_recipe_venv_create_clear_flag_present() -> None:
+    """正常系: 現行 steps の venv 作成 step が --clear を含むこと（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    venv_create_index = next(i for i, s in enumerate(steps) if "-m venv" in s)
+    assert "--clear" in steps[venv_create_index]
+
+
+def test_harness2_reexport_manifest_replay_recipe_venv_create_missing_clear_flag_rejected() -> None:
+    """venv 作成 step から --clear が欠落していると reject される（PR #327
+    第16巡指摘28-iの元の欠陥: 既存 venv_export_replay を再利用した replay
+    再実行で --no-deps が lock に無い残留パッケージを除去しない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    venv_create_index = next(i for i, s in enumerate(steps) if "-m venv" in s)
+    steps[venv_create_index] = steps[venv_create_index].replace("--clear ", "")
+    assert "--clear" not in steps[venv_create_index]
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="--clear"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_freeze_check_step_present() -> None:
+    """正常系: pip install step（--no-deps）の後・export 実行 step の前に、
+    `pip freeze --all` と `export_environment_lock` を参照する freeze/lock
+    全一致照合 step が存在すること（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    pip_index = next(i for i, s in enumerate(steps) if "--no-deps" in s)
+    export_index = _export_step_index(steps)
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "pip freeze --all" in s and "export_environment_lock" in s
+    )
+    assert pip_index < check_index < export_index
+
+
+def test_harness2_reexport_manifest_replay_recipe_freeze_check_step_missing_rejected() -> None:
+    """freeze/lock 全一致照合 step が丸ごと欠落していると reject される
+    （PR #327 第16巡指摘28-iiの元の欠陥: venv 再利用時の残留パッケージが
+    export へ進む前に検出されない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"] if "pip freeze --all" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="freeze/lock reconciliation step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_freeze_check_step_before_pip_install_rejected() -> None:
+    """freeze/lock 全一致照合 step が pip install step（--no-deps）より前に
+    配置されていると reject される（venv がまだ install 済みでない時点の
+    照合は無意味）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "pip freeze --all" in s and "export_environment_lock" in s
+    )
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    reordered.insert(0, check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="freeze/lock reconciliation step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_freeze_check_step_after_export_step_rejected() -> None:
+    """freeze/lock 全一致照合 step が export 実行 step より後に配置されて
+    いると reject される（export 実行前に検証されていなければ意味がない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    check_index = next(
+        i for i, s in enumerate(steps)
+        if "pip freeze --all" in s and "export_environment_lock" in s
+    )
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    reordered.append(check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="freeze/lock reconciliation step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_out_dir_check_step_present() -> None:
+    """正常系: export 実行 step の前に、export --out 値と `.exists()` を
+    参照する export 先ディレクトリ事前空確認 step が存在すること
+    （回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    out_arg = data["export_command"][-1]
+    check_index = next(
+        i for i, s in enumerate(steps) if out_arg in s and ".exists()" in s
+    )
+    assert check_index < export_index
+
+
+def test_harness2_reexport_manifest_replay_recipe_out_dir_check_step_missing_rejected() -> None:
+    """export 先ディレクトリ事前空確認 step が丸ごと欠落していると reject
+    される（PR #327 第16巡指摘29の元の欠陥: 既存 onnx_gate_40000 の stale
+    copy が post-export 閉世界照合を偽 pass させ得る）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"] if ".exists()" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="export-directory pre-flight step"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_out_dir_check_step_after_export_step_rejected() -> None:
+    """export 先ディレクトリ事前空確認 step が export 実行 step より後に
+    配置されていると reject される（存在するだけでは不十分——export 実行前
+    でなければ stale copy を検出できない）。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    export_index = _export_step_index(steps)
+    check_index = next(i for i, s in enumerate(steps) if ".exists()" in s)
+    assert check_index < export_index
+    reordered = list(steps)
+    check_step = reordered.pop(check_index)
+    reordered.append(check_step)
+    data["replay_environment_recipe"]["steps"] = reordered
+    with pytest.raises(m.Run9ValidationError, match="export-directory pre-flight step"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第1巡指摘3: adjudication_basis 実バイト cross-check (9) ---
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_source_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(9) cross-check (i): adjudication_basis.source_file の実バイトが
+    改変されていると（sha256 が adjudication_basis.sha256 と食い違うと）
+    fail-closed で拒否される——裁定 txt の事後編集を検出する。"""
+    tampered_path = tmp_path / "USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt"
+    tampered_path.write_bytes(HARNESS2_ADJUDICATION_PATH.read_bytes() + b"\ntampered\n")
+    with pytest.raises(m.Run9ValidationError, match="adjudication_basis.sha256"):
+        m.load_pinned_reexport_manifest(contract, adjudication_basis_path=tampered_path)
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_manifest_sha_forged_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(9) cross-check (i): manifest 側 adjudication_basis.sha256 を実
+    バイトと異なる値へ改竄しても、実 read + 再計算で fail-closed 拒否
+    される（source_file 自体は改変しない）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["sha256"] = "0" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="adjudication_basis.sha256"):
+        m.load_pinned_reexport_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_source_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    missing_path = tmp_path / "does_not_exist.txt"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_reexport_manifest(contract, adjudication_basis_path=missing_path)
+
+
+# --- PR #327 レビュー第11巡指摘21（P2、採用）: adjudication_basis.source_
+# file の join 解決が絶対パス・`../` traversal・symlink 脱出を containment
+# check なしで受理し、digest さえ一致すれば checkout 外のファイルでも正典
+# provenance として通ってしまっていた。`_resolve_repo_contained_path()`
+# （lexical 検証 + resolved 検証の二重 fail-closed）を新設し、reexport
+# manifest の adjudication_basis / execution profile loader の裁定 txt
+# パス / render_code パス解決という同型の解決点すべてへ適用する（ファミリー
+# 掃討）。テスト用パスオーバーライド引数（`adjudication_basis_path`/
+# `render_code_path`）は検証対象外のまま——既存テストは `tmp_path` 配下の
+# 絶対パスをオーバーライドへ渡す流儀のため、オーバーライドまで検証対象に
+# 含めると壊れる（`_resolve_repo_contained_path()` docstring に設計判断を
+# 明記）。
+
+
+def test_resolve_repo_contained_path_absolute_rejected(tmp_path: Path) -> None:
+    """(i) lexical 検証: 絶対パスは即座に拒否される。"""
+    with pytest.raises(m.Run9ValidationError, match="must be a repo-relative path"):
+        m._resolve_repo_contained_path(
+            str(tmp_path / "escaped.txt"), repo_root=tmp_path, field="x.y", context="test",
+        )
+
+
+def test_resolve_repo_contained_path_traversal_rejected(tmp_path: Path) -> None:
+    """(i) lexical 検証: `..` 成分を含む相対パスは即座に拒否される。"""
+    with pytest.raises(m.Run9ValidationError, match="must not contain '\\.\\.'"):
+        m._resolve_repo_contained_path(
+            "../escaped.txt", repo_root=tmp_path, field="x.y", context="test",
+        )
+
+
+def test_resolve_repo_contained_path_symlink_escape_rejected(tmp_path: Path) -> None:
+    """(ii) resolved 検証: lexical には repo 配下に見える相対パスでも、
+    symlink 経由で repo 外を指していれば resolve() 後の実体パスで拒否
+    される。"""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    outside_target = tmp_path / "outside.txt"
+    outside_target.write_text("outside\n", encoding="utf-8")
+    link = repo_root / "escape_link.txt"
+    link.symlink_to(outside_target)
+    with pytest.raises(m.Run9ValidationError, match="escapes the repo root"):
+        m._resolve_repo_contained_path(
+            "escape_link.txt", repo_root=repo_root, field="x.y", context="test",
+        )
+
+
+def test_resolve_repo_contained_path_legitimate_relative_resolves(tmp_path: Path) -> None:
+    """正常系: repo 配下に実在する正当な相対パスは resolve() された絶対
+    パスを返す（回帰固定——containment guard が正当な参照まで拒否しない
+    こと）。"""
+    repo_root = tmp_path / "repo"
+    (repo_root / "sub").mkdir(parents=True)
+    target = repo_root / "sub" / "file.txt"
+    target.write_text("ok\n", encoding="utf-8")
+    resolved = m._resolve_repo_contained_path(
+        "sub/file.txt", repo_root=repo_root, field="x.y", context="test",
+    )
+    assert resolved == target.resolve()
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_source_absolute_path_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """適用点1/3（reexport manifest）: adjudication_basis.source_file が
+    絶対パスだと containment guard で拒否される（digest 自体は本物の裁定
+    txt を指すため一致し得るが、絶対パスというだけで fail-closed 拒否）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["source_file"] = str(HARNESS2_ADJUDICATION_PATH)
+
+    tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be a repo-relative path"):
+        m.load_pinned_reexport_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_source_traversal_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """適用点1/3（reexport manifest）: `../` traversal を含む source_file
+    は containment guard で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["source_file"] = "../" * 6 + "etc/passwd"
+
+    tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must not contain '\\.\\.'"):
+        m.load_pinned_reexport_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_adjudication_source_symlink_escape_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """適用点1/3（reexport manifest）: lexical には repo 配下に見える
+    相対 source_file でも、実体が symlink 経由で repo 外を指していれば
+    拒否される。実リポジトリへは一切書き込まない——`_REEXPORT_REPO_ROOT`
+    を隔離 tmp_path へ monkeypatch し、その配下にのみ symlink を作る。"""
+    fake_repo_root = tmp_path / "fake_repo"
+    rel = _reexport_manifest_data()["adjudication_basis"]["source_file"]
+    link_path = fake_repo_root / rel
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    outside_target = tmp_path / "outside_adjudication.txt"
+    outside_target.write_text("outside\n", encoding="utf-8")
+    link_path.symlink_to(outside_target)
+    monkeypatch.setattr(m, "_REEXPORT_REPO_ROOT", fake_repo_root)
+    with pytest.raises(m.Run9ValidationError, match="escapes the repo root"):
+        m.load_pinned_reexport_manifest(contract)
+
+
+# --- 新 status OBTAINED_DERIVED_NEW_BYTES / OBTAINED_VIA_REEXPORT 判別 shape ---
+
+
+def test_harness2_dependency_pins_derived_new_bytes_status_in_vocab() -> None:
+    assert "OBTAINED_DERIVED_NEW_BYTES" in m._ACOUSTIC_COMPANION_ITEM_STATUS_VOCAB
+    assert "OBTAINED_VIA_REEXPORT" in m._ACOUSTIC_COMPANIONS_STATUS_VOCAB
+
+
+def test_harness2_dependency_pins_acoustic_onnx_matches_historical_forged_true_rejected() -> None:
+    """companions 実データの acoustic.onnx は matches_historical=false が
+    frozen fact——true への書き換えは（sha256 を同時に細工しても）拒否
+    される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    item = next(
+        i for i in data["acoustic_export_companions"]["expected_items"]
+        if i["logical_name"] == "acoustic_onnx"
+    )
+    item["measured_sha256"] = item["expected_sha256"]
+    item["historical_expected_sha256"] = item["expected_sha256"]
+    item["matches_historical"] = True
+    with pytest.raises(m.Run9ValidationError, match="frozen fact"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness2_dependency_pins_derived_item_wrong_acquisition_source_rejected() -> None:
+    """OBTAINED_VIA_REEXPORT 配下の item は acquisition_source ==
+    'RE_EXPORT' を強制する（THIS_TARBALL/DRIVE_DIRECT は拒否）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    item = next(
+        i for i in data["acoustic_export_companions"]["expected_items"]
+        if i["logical_name"] == "acoustic_dsconfig_yaml"
+    )
+    item["acquisition_source"] = "THIS_TARBALL"
+    with pytest.raises(m.Run9ValidationError, match="acquisition_source must be 'RE_EXPORT'"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness2_dependency_pins_derived_item_unknown_status_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    item = next(
+        i for i in data["acoustic_export_companions"]["expected_items"]
+        if i["logical_name"] == "acoustic_onnx"
+    )
+    item["status"] = "MADE_UP_STATUS"
+    with pytest.raises(m.Run9ValidationError, match="expected_items\\[.\\]\\.status must be one of"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness2_dependency_pins_verified_item_missing_replay_evidence_rejected() -> None:
+    """OBTAINED_VERIFIED_MATCH（reexport 経由）の item は replay_evidence
+    を必須とする。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    item = next(
+        i for i in data["acoustic_export_companions"]["expected_items"]
+        if i["logical_name"] == "acoustic_dsconfig_yaml"
+    )
+    del item["replay_evidence"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness2_dependency_pins_derived_item_reexport_ref_wrong_artifact_key_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    item = next(
+        i for i in data["acoustic_export_companions"]["expected_items"]
+        if i["logical_name"] == "acoustic_onnx"
+    )
+    item["reexport_manifest_ref"]["artifact_key"] = "not_acoustic_onnx"
+    with pytest.raises(m.Run9ValidationError, match="must equal this item's own logical_name"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness2_dependency_pins_derived_item_reexport_ref_stale_sha_cross_check_fail_closed(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """load 時 cross-check: reexport_manifest_ref.reexport_manifest_
+    sha256 が現行 reexport_manifest_sha pin と食い違うと拒否される
+    （stale reference の検出）。"""
+    dep_data = copy.deepcopy(_dependency_pins_manifest_data())
+    item = next(
+        i for i in dep_data["acoustic_export_companions"]["expected_items"]
+        if i["logical_name"] == "acoustic_onnx"
+    )
+    item["reexport_manifest_ref"]["reexport_manifest_sha256"] = "0" * 64
+    dep_bytes = _canonical_json_bytes(dep_data)
+    dep_path = tmp_path / "dependency_pins_manifest.json"
+    dep_path.write_bytes(dep_bytes)
+    import hashlib as _hashlib
+    dep_sha = _hashlib.sha256(dep_bytes).hexdigest()
+    tampered_raw = copy.deepcopy(contract.raw)
+    tampered_raw["dependency_pins_sha"] = {"value": dep_sha, "status": "PINNED"}
+    tampered_contract_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_contract_path.write_text(yaml.safe_dump(tampered_raw, allow_unicode=True), encoding="utf-8")
+    tampered_contract = m.load_run9_contract(tampered_raw)
+    with pytest.raises(m.Run9ValidationError, match="reexport_manifest_ref"):
+        m.load_pinned_dependency_pins_manifest(
+            tampered_contract, manifest_path=dep_path, contract_path=tampered_contract_path,
+        )
+
+
+# --- speaker_embeddings_unpinned_candidates: replay_evidence / 昇格未充足 ---
+
+
+def test_harness2_speaker_candidates_have_replay_evidence_and_unmet_note() -> None:
+    data = _dependency_pins_manifest_data()
+    for key in ("pjs", "user", "d3synth_reference_only"):
+        entry = data["speaker_embeddings_unpinned_candidates"][key]
+        assert entry["replay_evidence"] is True
+        assert entry["promotion_condition_unmet_note"].strip()
+
+
+def test_harness2_speaker_candidate_replay_evidence_false_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["speaker_embeddings_unpinned_candidates"]["pjs"]["replay_evidence"] = False
+    with pytest.raises(m.Run9ValidationError, match="replay_evidence must be the literal boolean True"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness2_speaker_candidate_missing_promotion_unmet_note_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    del data["speaker_embeddings_unpinned_candidates"]["user"]["promotion_condition_unmet_note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+# --- budget_estimate.total_render_count_provenance_note -------------------
+
+
+def test_harness2_budget_estimate_provenance_note_present_and_grep_fixed() -> None:
+    """616 件が確定値ではなく踏襲概算であることの出典注記が実データに
+    存在すること（grep 回帰固定）。"""
+    data = _dependency_pins_manifest_data()
+    note = data["budget_estimate"]["total_render_count_provenance_note"]
+    assert "616" in note
+    assert ("確定" in note) or ("概算" in note)
+
+
+def test_harness2_budget_estimate_missing_provenance_note_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    del data["budget_estimate"]["total_render_count_provenance_note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+# --- smoke_render 新規フィールド（render1/2・entrypoint・providers） ------
+
+
+def test_harness2_smoke_render_new_fields_present() -> None:
+    data = _dependency_pins_manifest_data()
+    smoke = data["smoke_render"]
+    assert smoke["render1_total_elapsed_sec"] > 0
+    assert smoke["render2_total_elapsed_sec"] > 0
+    avg = (smoke["render1_total_elapsed_sec"] + smoke["render2_total_elapsed_sec"]) / 2
+    assert smoke["measured_sec_per_render"] == pytest.approx(avg, rel=1e-9)
+    assert smoke["render_entrypoint"].strip()
+    assert smoke["onnxruntime_providers"] == ["CPUExecutionProvider"]
+
+
+def test_harness2_smoke_render_avg_arithmetic_mismatch_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["smoke_render"]["measured_sec_per_render"] = 999.0
+    with pytest.raises(m.Run9ValidationError, match="measured_sec_per_render"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness2_smoke_render_empty_providers_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["smoke_render"]["onnxruntime_providers"] = []
+    with pytest.raises(m.Run9ValidationError, match="onnxruntime_providers"):
+        m.validate_dependency_pins_manifest(data)
+
+
+# --- HARNESS2_REEXPORT_SMOKE_RECORD.md の repo 収載 -------------------------
+
+
+def test_harness2_smoke_record_file_exists() -> None:
+    assert (_RUN_DIR / "HARNESS2_REEXPORT_SMOKE_RECORD.md").is_file()
+
+
+def test_harness2_smoke_record_contains_key_measured_values() -> None:
+    text = (_RUN_DIR / "HARNESS2_REEXPORT_SMOKE_RECORD.md").read_text(encoding="utf-8")
+    assert "c7e1dcdfb7139d490dc19347c21dad5f9966764182cb6ee7e0124ad8fedd379e" in text
+    assert "24.101547837257385" in text
+    assert "CPUExecutionProvider" in text
+
+
+# --- RUN9_CONTRACT.yaml: execution_profile_sha は RUN9-EXECPROFILE-1 で --
+# --- PENDING → PINNED へ遷移した（旧テスト `test_harness2_execution_ ----
+# --- profile_sha_still_pending_after_smoke_measured` を置き換え） --------
+
+
+def test_execprofile_contract_raw_execution_profile_sha_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """RUN9-EXECPROFILE-1（2026-08-26）: User 裁定「RUN9 User裁定 —
+    execution_profile_sha」の承認により、smoke 実測完了後の PENDING 待機
+    （旧 reason「smoke 実測は完了した...User 裁定待ち」）を経て PINNED
+    へ遷移した。value は `inputs/execution_profile_manifest.json` の実
+    バイト sha256（design_doc_sha256 と同一のファイル実バイト規約）。"""
+    field = contract_raw["execution_profile_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(m.EXECUTION_PROFILE_MANIFEST_PATH)
+    assert field["source"] == (
+        "voice_genesis/evolution/run9_dual_founder_pjs/inputs/execution_profile_manifest.json"
+    )
+
+
+def test_harness2_dependency_pins_sha_still_pending_after_companions_resolved(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """companions/smoke/budget 解消後も dependency_pins_sha は学習ハーネス
+    closure 未確定を理由に PENDING のまま。"""
+    field = contract_raw["dependency_pins_sha"]
+    assert field["status"] == "PENDING"
+    assert field["value"] is None
+    assert "import closure" in field["reason"]
+
+
+# --- README.md: stale 現在形記述ゼロの grep 回帰 ---------------------------
+
+
+def test_harness2_readme_no_stale_current_tense_companions_miss_or_blocked_claim() -> None:
+    """README の各段落について、acoustic export companions への言及が
+    'MISS'/'BLOCKED' を含む場合は、同一段落内に「解消済み」または「履歴」
+    という補正マーカーを伴っていること（stale 現在形記述の防止、
+    `test_harness1_pr326_fix3_readme_pending_count_reverted_to_ten_and_
+    eleven` と同型のパターン）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    for paragraph in readme_text.split("\n\n"):
+        if "acoustic export companions" in paragraph and (
+            "MISS" in paragraph or "BLOCKED" in paragraph
+        ):
+            assert ("解消済み" in paragraph) or ("履歴" in paragraph), (
+                f"stale current-tense companions MISS/BLOCKED claim in paragraph: {paragraph!r}"
+            )
+
+
+def test_harness2_readme_references_new_artifacts() -> None:
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "reexport_manifest.json" in readme_text
+    assert "HARNESS2_REEXPORT_SMOKE_RECORD.md" in readme_text
+    assert "USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# RUN9-EXECPROFILE-1（2026-08-26）: execution_profile_manifest
+# （schema `run9-execution-profile/1.0`）+ execution_profile_sha PINNED 化。
+# User 裁定「RUN9 User裁定 — execution_profile_sha」（repo 内収載
+# USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt）に基づく。
+# ---------------------------------------------------------------------------
+
+EXECPROFILE_ADJUDICATION_PATH = (
+    _RUN_DIR / "USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt"
+)
+
+
+def _execprofile_manifest_data() -> Dict[str, Any]:
+    return m._loads_strict_json(m.EXECUTION_PROFILE_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+# --- 裁定文書の repo 収載（PIN-2/HARNESS-2 前例と同型） --------------------
+
+
+def test_execprofile_adjudication_source_file_exists() -> None:
+    assert EXECPROFILE_ADJUDICATION_PATH.is_file()
+
+
+def test_execprofile_adjudication_source_contains_verbatim_values() -> None:
+    """凍結した各値（runtime 5値・provider 固定規則の核心文言・smoke
+    benchmark 3値・追加実測9項目の箇条書き）が、repo 内収載した裁定文書の
+    本文に一字一句そのまま存在すること（grep 照合——「User 転記であって
+    発明でない」ことを機械検証する）。"""
+    text = EXECPROFILE_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    for value in (
+        '"3.11.15"', '"Ubuntu 24.04.4"', '"x86_64"', '"1.29.0"',
+        '"CPUExecutionProvider"',
+        "CPUExecutionProvider に固定する。",
+        "混同しない。",
+        "GPU/CUDA provider への自動fallback / upgradeは禁止する。",
+        "同じ execution_profile_sha を使わず再pinする。",
+        "observed_seconds_per_item: 24.1",
+        "planned_item_count: 616",
+        "estimated_total_runtime_hours: approximately 4.12",
+        "CPU model",
+        "logical CPU count",
+        "onnxruntime available_providers",
+        "onnxruntime selected providers",
+        "intra_op_num_threads / inter_op_num_threads",
+        "numpy version",
+        "soundfile version",
+        "render code commit",
+        "deterministic seed / thread environment variables",
+    ):
+        assert value in text, f"missing verbatim value: {value!r}"
+
+
+def test_execprofile_adjudication_source_body_byte_identical_to_scratchpad_origin() -> None:
+    """本文（【RUN9 User裁定 — execution_profile_sha】以降）が起草時の
+    作業メモ scratchpad/run9_user_adjudication_execprofile.md と一字一句
+    改変なしで一致すること（改変禁止の直接確認、PIN-2/HARNESS-2 前例と
+    同型——scratchpad ファイルが本セッション後に存在しない環境では
+    skip）。"""
+    scratchpad_path = Path(
+        "/tmp/claude-0/-home-user-ugh-prompt-engine/"
+        "e505c1c2-c4ad-588b-a1b2-258051a522de/scratchpad/"
+        "run9_user_adjudication_execprofile.md"
+    )
+    if not scratchpad_path.is_file():
+        pytest.skip("scratchpad origin file not present in this environment")
+    origin_body = scratchpad_path.read_text(encoding="utf-8")
+    origin_body = "【RUN9 User裁定" + origin_body.split("【RUN9 User裁定", 1)[1]
+    committed_text = EXECPROFILE_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    committed_body = "【RUN9 User裁定" + committed_text.split("【RUN9 User裁定", 1)[1]
+    assert committed_body == origin_body
+
+
+# --- validate_execution_profile_manifest(): 正常系・直列化 -----------------
+
+
+def test_execprofile_validate_real_manifest_happy_path() -> None:
+    m.validate_execution_profile_manifest(_execprofile_manifest_data())  # 例外なしの確認
+
+
+def test_execprofile_manifest_reserialization_byte_identical() -> None:
+    """`json.dumps(..., ensure_ascii=False, sort_keys=True, indent=2)` +
+    改行 で再直列化したバイト列が実ファイルのバイトと完全一致すること
+    （直列化規約の回帰固定、PIN-2/HARNESS-2 前例と同型）。"""
+    data = _execprofile_manifest_data()
+    reserialized = json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    assert reserialized.encode("utf-8") == m.EXECUTION_PROFILE_MANIFEST_PATH.read_bytes()
+
+
+def test_execprofile_manifest_schema_constant() -> None:
+    data = _execprofile_manifest_data()
+    assert data["schema"] == m.SCHEMA_EXECUTION_PROFILE_MANIFEST == "run9-execution-profile/1.0"
+
+
+# --- validate_execution_profile_manifest(): fail-closed 分岐 ---------------
+
+
+def test_execprofile_unknown_top_level_key_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["unexpected"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_missing_top_level_key_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    del data["benchmark_reference"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_execution_profile_manifest(data)
+
+
+@pytest.mark.parametrize("field", ["python", "os", "architecture", "onnxruntime", "selected_execution_provider"])
+def test_execprofile_runtime_value_tamper_rejected(field: str) -> None:
+    """(a) fail-closed: identity_semantics.runtime の5値いずれかが裁定
+    逐語と食い違うと拒否される（捏造・転記ミスの機械検出）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["identity_semantics"]["runtime"][field] = "TAMPERED"
+    with pytest.raises(m.Run9ValidationError, match="diverges from the adjudicated runtime"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_runtime_extra_key_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["identity_semantics"]["runtime"]["gpu"] = "none"
+    with pytest.raises(m.Run9ValidationError, match="diverges from the adjudicated runtime"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_provider_fixation_rule_marker_missing_rejected() -> None:
+    """(c) fail-closed: provider_fixation_rules[i] が対応するマーカー
+    文言を含まないと拒否される。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["identity_semantics"]["provider_fixation_rules"][0] = "no marker phrase here"
+    with pytest.raises(m.Run9ValidationError, match="adjudicated marker phrase"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_provider_fixation_rules_wrong_count_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["identity_semantics"]["provider_fixation_rules"] = data["identity_semantics"][
+        "provider_fixation_rules"
+    ][:3]
+    with pytest.raises(m.Run9ValidationError, match="provider_fixation_rules"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_selected_provider_value_must_match_runtime() -> None:
+    """(b) fail-closed: additional_measurements.onnxruntime_selected_
+    providers.value は [runtime.selected_execution_provider] と厳密一致
+    しなければならない（GPU provider 等の混入を拒否する）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["onnxruntime_selected_providers"]["value"] = [
+        "CUDAExecutionProvider"
+    ]
+    with pytest.raises(m.Run9ValidationError, match="onnxruntime_selected_providers.value"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_selected_provider_equal_to_cpu_only_available_accepted() -> None:
+    """(b) fail-closed 撤去確認（PR #327 レビュー第3巡指摘9対応、P2、採用）:
+    available が CPUExecutionProvider のみで観測された正当な CPU-only
+    環境では、selected（[runtime.selected_execution_provider] 固定=
+    ["CPUExecutionProvider"]）が available と同一集合になっても受理
+    される——旧実装はこの正当な組合せを『available の列挙と selected を
+    混同しない』の機械化と誤って同一視し、真部分集合（strict subset）を
+    要求して拒否していた（CPU-only 環境の正当な再pin を阻害していた）。
+    "混同しない" は selected/available が独立した measurement item
+    として存在すること + selected が固定値であることの shape で担保し、
+    値の偶然の一致自体は禁止しない。available 側を selected 単独の集合
+    （CPUExecutionProvider のみ）へ書き換えて確認する——selected 自体は
+    依然 runtime.selected_execution_provider と一致させたまま。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["onnxruntime_available_providers"]["value"] = [
+        "CPUExecutionProvider"
+    ]
+    data["additional_measurements"]["onnxruntime_available_providers"]["matches_smoke_record"] = False
+    m.validate_execution_profile_manifest(data)  # 例外なしの確認（旧実装は拒否していた）
+
+
+def test_execprofile_real_manifest_available_providers_unchanged() -> None:
+    """PR #327 レビュー第3巡指摘9対応: 実 manifest の
+    `onnxruntime_available_providers.value`（実測値、AzureExecutionProvider
+    + CPUExecutionProvider の2件）は本対応で変更していないことを確認する
+    ——validator/テストのみの修正であり、manifest 実バイトは不変。"""
+    data = _execprofile_manifest_data()
+    assert data["additional_measurements"]["onnxruntime_available_providers"]["value"] == [
+        "AzureExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    assert data["additional_measurements"]["onnxruntime_selected_providers"]["value"] == [
+        "CPUExecutionProvider"
+    ]
+
+
+def test_execprofile_selected_provider_not_subset_of_available_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["onnxruntime_selected_providers"]["value"] = [
+        "CPUExecutionProvider"
+    ]
+    data["additional_measurements"]["onnxruntime_available_providers"]["value"] = [
+        "AzureExecutionProvider"
+    ]
+    data["additional_measurements"]["onnxruntime_available_providers"]["matches_smoke_record"] = False
+    with pytest.raises(m.Run9ValidationError, match="is not a subset of"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_is_reference_only_false_rejected() -> None:
+    """(d) frozen-fact ガード: benchmark_reference.is_reference_only を
+    false 化する改竄は恒久的に拒否される（benchmark 値が identity 意味論
+    へ混入する経路を閉じる）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["benchmark_reference"]["is_reference_only"] = False
+    with pytest.raises(m.Run9ValidationError, match="is_reference_only must remain the literal boolean True"):
+        m.validate_execution_profile_manifest(data)
+
+
+@pytest.mark.parametrize(
+    "field,bad_value",
+    [
+        ("observed_seconds_per_item", 999.0),
+        ("planned_item_count", 999),
+        ("estimated_total_runtime_hours", "approximately 9.99"),
+    ],
+)
+def test_execprofile_benchmark_value_tamper_rejected(field: str, bad_value: Any) -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["benchmark_reference"][field] = bad_value
+    with pytest.raises(m.Run9ValidationError, match="diverges from the adjudicated value"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_benchmark_keys_cannot_leak_into_identity_semantics() -> None:
+    """(d) shape 分離: identity_semantics へ benchmark 系キーを追加しよう
+    とすると unknown-key として拒否される（構造的分離の直接確認）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["identity_semantics"]["observed_seconds_per_item"] = 24.1
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_not_recorded_item_with_extra_value_key_rejected() -> None:
+    """(f) 推測補完の構造的禁止: NOT_RECORDED item に value 系キーを追加
+    すると拒否される（実測できなかった事実に値をこっそり同居させる経路を
+    塞ぐ）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    thread_env = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["thread_environment_variables"]
+    assert thread_env["status"] == "NOT_RECORDED"
+    thread_env["value"] = "OMP_NUM_THREADS=1"
+    with pytest.raises(m.Run9ValidationError, match="NOT_RECORDED item must have exactly the keys"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_not_recorded_item_missing_reason_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    thread_env = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["thread_environment_variables"]
+    del thread_env["reason"]
+    with pytest.raises(m.Run9ValidationError, match="NOT_RECORDED item must have exactly the keys"):
+        m.validate_execution_profile_manifest(data)
+
+
+# --- fail-closed（PR #327 レビュー第12巡指摘23、P2、採用）:
+# thread_environment_variables MEASURED payload の実値検証 --------------
+
+
+def test_execprofile_thread_environment_variables_measured_empty_value_rejected() -> None:
+    """`thread_environment_variables` が MEASURED の場合に value が空文字列
+    でも、shape 検証（キー集合のみ）を通過してしまい証拠なしの空成功記録へ
+    昇格し得た穴（第12巡指摘23）——numpy_item/soundfile_item と同型の非空
+    検証を fail-closed で強制する非退行確認。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    thread_env = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["thread_environment_variables"]
+    assert thread_env["status"] == "NOT_RECORDED"
+    del thread_env["reason"]
+    thread_env["status"] = "MEASURED"
+    thread_env["value"] = ""
+    thread_env["method"] = "env var dump at smoke render time"
+    with pytest.raises(m.Run9ValidationError, match="thread_environment_variables.value"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_thread_environment_variables_measured_empty_method_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    thread_env = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["thread_environment_variables"]
+    assert thread_env["status"] == "NOT_RECORDED"
+    del thread_env["reason"]
+    thread_env["status"] = "MEASURED"
+    thread_env["value"] = "OMP_NUM_THREADS=1"
+    thread_env["method"] = ""
+    with pytest.raises(m.Run9ValidationError, match="thread_environment_variables.method"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_thread_environment_variables_measured_happy_path_accepted() -> None:
+    """正例: value/method がともに非空であれば MEASURED payload は受理
+    される。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    thread_env = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["thread_environment_variables"]
+    assert thread_env["status"] == "NOT_RECORDED"
+    del thread_env["reason"]
+    thread_env["status"] = "MEASURED"
+    thread_env["value"] = "OMP_NUM_THREADS=1"
+    thread_env["method"] = "env var dump at smoke render time"
+    m.validate_execution_profile_manifest(data)  # 例外なしの確認
+
+
+def test_execprofile_measurement_item_bad_status_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["cpu_model"]["status"] = "GUESSED"
+    with pytest.raises(m.Run9ValidationError, match="status must be one of"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_measured_item_missing_required_key_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    del data["additional_measurements"]["cpu_model"]["method"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_render_code_commit_smoke_file_sha_mismatch_rejected() -> None:
+    """render_code_commit: smoke_time_gate_synth_py_sha256 と file_sha256
+    が食い違うと（unchanged 主張との自己矛盾として）拒否される。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["render_code_commit"]["smoke_time_gate_synth_py_sha256"] = "0" * 64
+    with pytest.raises(m.Run9ValidationError, match="contradicts an 'unchanged since smoke' claim"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_thread_settings_default_unspecified_requires_null_value() -> None:
+    """intra/inter_op_num_threads: DEFAULT_UNSPECIFIED を名乗るなら value
+    は null でなければならない（未指定の事実を数値で偽装しない）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    intra = data["additional_measurements"]["onnxruntime_thread_settings"]["intra_op_num_threads"]
+    intra["specification_status"] = "DEFAULT_UNSPECIFIED"
+    # value はそのまま 1 (非null) に残す — 矛盾を作る。
+    with pytest.raises(m.Run9ValidationError, match="must be null when specification_status is"):
+        m.validate_execution_profile_manifest(data)
+
+
+# --- PR #327 レビュー第15巡指摘27（P2、採用）: thread 設定 source_line_text
+# の shape 必須化（validate_execution_profile_manifest()） ------------------
+
+
+@pytest.mark.parametrize("sub_field", ["intra_op_num_threads", "inter_op_num_threads"])
+def test_execprofile_thread_settings_missing_source_line_text_rejected(sub_field: str) -> None:
+    """intra/inter_op_num_threads: `source_line_text` キーが欠落した shape
+    は fail-closed で拒否される（第15巡指摘27対応——旧 shape は
+    `source_file`/`source_line`/`specification_status`/`value` の4キーのみ
+    で `source_line_text` を必須としていなかった）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    del data["additional_measurements"]["onnxruntime_thread_settings"][sub_field]["source_line_text"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_execution_profile_manifest(data)
+
+
+@pytest.mark.parametrize("sub_field", ["intra_op_num_threads", "inter_op_num_threads"])
+def test_execprofile_thread_settings_empty_source_line_text_rejected(sub_field: str) -> None:
+    """intra/inter_op_num_threads: `source_line_text` が空文字列だと
+    fail-closed で拒否される（非空 str の必須化）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["onnxruntime_thread_settings"][sub_field]["source_line_text"] = ""
+    with pytest.raises(m.Run9ValidationError, match="source_line_text"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_thread_settings_source_line_text_happy_path_accepted() -> None:
+    """正例維持: 現行 manifest の thread 設定 source_line_text（gate_
+    synth.py の実 so.intra/inter_op_num_threads 代入文の逐語）は
+    validate_execution_profile_manifest() を素通りする。"""
+    data = _execprofile_manifest_data()
+    ts = data["additional_measurements"]["onnxruntime_thread_settings"]
+    assert ts["intra_op_num_threads"]["source_line_text"] == "so.intra_op_num_threads = 1"
+    assert ts["inter_op_num_threads"]["source_line_text"] == "so.inter_op_num_threads = 1"
+    m.validate_execution_profile_manifest(data)  # 例外なしの確認
+
+
+def test_execprofile_matches_smoke_record_self_check_rejected() -> None:
+    """numpy_version.matches_smoke_record が実データと食い違うと拒否
+    される（自己申告フィールドの in-process 再計算チェック）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["numpy_version"]["matches_smoke_record"] = False
+    with pytest.raises(m.Run9ValidationError, match="matches_smoke_record"):
+        m.validate_execution_profile_manifest(data)
+
+
+# --- load_pinned_execution_profile_manifest(): 正常系・cross-check ---------
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_happy_path(
+    contract: m.Run9RunContract,
+) -> None:
+    data = m.load_pinned_execution_profile_manifest(contract)
+    assert data["schema"] == m.SCHEMA_EXECUTION_PROFILE_MANIFEST
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """cross-check: adjudication_basis.source_file の実バイトが改変され
+    ていると（sha256 が adjudication_basis.sha256 と食い違うと）
+    fail-closed で拒否される——裁定 txt の事後編集を検出する。"""
+    tampered_path = tmp_path / "USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt"
+    tampered_path.write_bytes(EXECPROFILE_ADJUDICATION_PATH.read_bytes() + b"\ntampered\n")
+    with pytest.raises(m.Run9ValidationError, match="adjudication_basis.sha256"):
+        m.load_pinned_execution_profile_manifest(contract, adjudication_basis_path=tampered_path)
+
+
+def _tampered_execprofile_contract(
+    contract: m.Run9RunContract, tmp_path: Path, *, mutate,
+) -> Tuple[m.Run9RunContract, Path, Path]:
+    """execution_profile_manifest.json の内容を `mutate` で改変し、その実
+    バイト sha256 で `execution_profile_sha` pin を差し替えた合成
+    contract + manifest ファイル + contract ファイルを用意するテスト
+    ヘルパー（`_tampered_reexport_contract()` と同型）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    mutate(data)
+    manifest_bytes = _canonical_json_bytes(data)
+    manifest_path = tmp_path / "execution_profile_manifest.json"
+    manifest_path.write_bytes(manifest_bytes)
+    import hashlib as _hashlib
+    manifest_sha = _hashlib.sha256(manifest_bytes).hexdigest()
+    tampered_raw = copy.deepcopy(contract.raw)
+    tampered_raw["execution_profile_sha"] = {"value": manifest_sha, "status": "PINNED"}
+    tampered_contract_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_contract_path.write_text(yaml.safe_dump(tampered_raw, allow_unicode=True), encoding="utf-8")
+    return m.load_run9_contract(tampered_raw), manifest_path, tampered_contract_path
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_manifest_sha_forged_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """cross-check: manifest 側 adjudication_basis.sha256 を実バイトと
+    異なる値へ改竄しても、実 read + 再計算で fail-closed 拒否される
+    （source_file 自体は改変しない）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["sha256"] = "0" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="adjudication_basis.sha256"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    missing_path = tmp_path / "does_not_exist.txt"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_execution_profile_manifest(contract, adjudication_basis_path=missing_path)
+
+
+# --- PR #327 レビュー第11巡指摘21（P2、採用）: 適用点2/3（execution profile
+# manifest, adjudication_basis） --------------------------------------------
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_absolute_path_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """絶対パスは containment guard で拒否される（digest 自体は本物の裁定
+    txt を指すため一致し得るが、絶対パスというだけで fail-closed 拒否）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["source_file"] = str(EXECPROFILE_ADJUDICATION_PATH)
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be a repo-relative path"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_traversal_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`../` traversal を含む source_file は containment guard で拒否
+    される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["source_file"] = "../" * 6 + "etc/passwd"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must not contain '\\.\\.'"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_symlink_escape_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lexical には repo 配下に見える相対 source_file でも、実体が symlink
+    経由で repo 外を指していれば拒否される。実リポジトリへは一切書き込ま
+    ない——`_EXECPROFILE_REPO_ROOT` を隔離 tmp_path へ monkeypatch し、その
+    配下にのみ symlink を作る。"""
+    fake_repo_root = tmp_path / "fake_repo"
+    rel = _execprofile_manifest_data()["adjudication_basis"]["source_file"]
+    link_path = fake_repo_root / rel
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    outside_target = tmp_path / "outside_adjudication.txt"
+    outside_target.write_text("outside\n", encoding="utf-8")
+    link_path.symlink_to(outside_target)
+    monkeypatch.setattr(m, "_EXECPROFILE_REPO_ROOT", fake_repo_root)
+    with pytest.raises(m.Run9ValidationError, match="escapes the repo root"):
+        m.load_pinned_execution_profile_manifest(contract)
+
+
+# --- load_pinned_execution_profile_manifest(): render code cross-check (7)
+# (PR #327 レビュー第3巡指摘8(a)対応、2026-08-26) -----------------------------
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_matches_repo(
+    contract: m.Run9RunContract,
+) -> None:
+    """cross-check (7) 既定経路（`render_code_path` 未指定）: 実 repo 内の
+    `voice_genesis/foundry/s1_gate/gate_synth.py` の実バイト sha256 が
+    manifest 記載の `additional_measurements.render_code_commit.
+    file_sha256` と一致するため happy path の load は成功する
+    （`_EXECPROFILE_REPO_ROOT` 相対解決の確認を兼ねる）。"""
+    data = m.load_pinned_execution_profile_manifest(contract)
+    assert data["additional_measurements"]["render_code_commit"]["file_sha256"] == (
+        "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894"
+    )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """cross-check (7): `render_code_path` が指す実ファイルのバイトが
+    manifest 記載の `file_sha256` と食い違うと fail-closed で拒否される
+    ——gate_synth.py が pin 後に改変された場合の検出（旧実装は manifest
+    と裁定 txt しか読まず、この改変を検出できなかった）。"""
+    tampered_path = tmp_path / "gate_synth.py"
+    tampered_path.write_bytes(b"# tampered gate_synth.py\n")
+    with pytest.raises(m.Run9ValidationError, match="render_code_commit.file_sha256"):
+        m.load_pinned_execution_profile_manifest(contract, render_code_path=tampered_path)
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    missing_path = tmp_path / "does_not_exist_gate_synth.py"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_execution_profile_manifest(contract, render_code_path=missing_path)
+
+
+# --- PR #327 レビュー第11巡指摘21（P2、採用）: 適用点3/3（execution profile
+# manifest, additional_measurements.render_code_commit.file） ---------------
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_absolute_path_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """絶対パスは containment guard で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        gate_synth_path = _RUN_DIR.parent.parent / "foundry" / "s1_gate" / "gate_synth.py"
+        data["additional_measurements"]["render_code_commit"]["file"] = str(gate_synth_path)
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be a repo-relative path"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_traversal_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`../` traversal を含む file は containment guard で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["render_code_commit"]["file"] = "../" * 6 + "etc/passwd"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must not contain '\\.\\.'"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_symlink_escape_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """lexical には repo 配下に見える相対 file でも、実体が symlink 経由で
+    repo 外を指していれば拒否される。cross-check (6) adjudication_basis は
+    本 monkeypatch 環境下でも (7) より先に走るため、その相対パスには実物と
+    同一バイトのコピーを正しく配置しておく（(6) 自体の検証内容ではなく、
+    (7) の symlink 検証まで到達させるための前提整備）。"""
+    exec_data = _execprofile_manifest_data()
+    fake_repo_root = tmp_path / "fake_repo"
+
+    adjudication_rel = exec_data["adjudication_basis"]["source_file"]
+    adjudication_copy = fake_repo_root / adjudication_rel
+    adjudication_copy.parent.mkdir(parents=True, exist_ok=True)
+    adjudication_copy.write_bytes(EXECPROFILE_ADJUDICATION_PATH.read_bytes())
+
+    render_code_rel = exec_data["additional_measurements"]["render_code_commit"]["file"]
+    link_path = fake_repo_root / render_code_rel
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    outside_target = tmp_path / "outside_gate_synth.py"
+    outside_target.write_text("# outside\n", encoding="utf-8")
+    link_path.symlink_to(outside_target)
+
+    monkeypatch.setattr(m, "_EXECPROFILE_REPO_ROOT", fake_repo_root)
+    with pytest.raises(m.Run9ValidationError, match="escapes the repo root"):
+        m.load_pinned_execution_profile_manifest(contract)
+
+
+# --- load_pinned_execution_profile_manifest(): measured source_line_text
+# cross-check (8) (PR #327 レビュー第14巡指摘26対応、P2、採用) --------------
+# 対象は source_file/source_line/source_line_text を全て持つ measured
+# 項目のみ（現物 manifest 確認済み: onnxruntime_selected_providers と
+# deterministic_seed_and_thread_environment_variables.deterministic_seed の
+# 2件。onnxruntime_thread_settings.{intra,inter}_op_num_threads は
+# source_line_text を持たないため対象外）。
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_selected_providers_source_line_text_matches_repo(
+    contract: m.Run9RunContract,
+) -> None:
+    """正例: 現行 manifest の `onnxruntime_selected_providers.
+    source_line_text` は実 repo の gate_synth.py:1218 と一致するため
+    happy path の load は成功する（cross-check (8) の既定経路確認）。"""
+    data = m.load_pinned_execution_profile_manifest(contract)
+    selected = data["additional_measurements"]["onnxruntime_selected_providers"]
+    assert selected["source_line_text"] == 'providers = ["CPUExecutionProvider"]'
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_selected_providers_source_line_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例1/3（行番号 stale）: `source_line` が別の行（1217 =
+    `so.inter_op_num_threads = 1`）を指すよう改変されると、その行の実
+    テキストが記録された `source_line_text` と食い違うため fail-closed で
+    拒否される（repin 後の行ずれ想定）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_selected_providers"]["source_line"] = 1217
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="onnxruntime_selected_providers.source_line_text"
+    ):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_selected_providers_source_line_text_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例2/3（source_line_text 改竄）: `source_line` は正しい実行
+    （1218）を指したまま `source_line_text` 自体が改竄されると
+    fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_selected_providers"]["source_line_text"] = (
+            'providers = ["TamperedExecutionProvider"]'
+        )
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="onnxruntime_selected_providers.source_line_text"
+    ):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_selected_providers_source_file_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例3/3（source_file が存在しないパス）: repo 配下ではあるが実在
+    しない相対パスへ差し替えられると fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_selected_providers"]["source_file"] = (
+            "voice_genesis/foundry/s1_gate/does_not_exist_gate_synth.py"
+        )
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_selected_providers_source_path_override_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`selected_providers_source_path` オーバーライド（`render_code_path`
+    等と同型のテスト用差し替え引数）で別ファイルを指定すると、containment
+    guard を経由せずその実ファイルの当該行に対して照合される。"""
+    fake_file = tmp_path / "gate_synth.py"
+    fake_file.write_text("\n".join(["x"] * 1220) + "\n", encoding="utf-8")
+    with pytest.raises(
+        m.Run9ValidationError, match="onnxruntime_selected_providers.source_line_text"
+    ):
+        m.load_pinned_execution_profile_manifest(
+            contract, selected_providers_source_path=fake_file,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_deterministic_seed_source_line_text_matches_repo(
+    contract: m.Run9RunContract,
+) -> None:
+    """正例: `deterministic_seed.source_line_text` は実 repo の
+    gate_synth.py:149 と一致するため happy path の load は成功する。"""
+    data = m.load_pinned_execution_profile_manifest(contract)
+    seed = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["deterministic_seed"]
+    assert seed["source_line_text"] == "SEED = 42"
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_deterministic_seed_source_line_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例1/3（行番号 stale）: deterministic_seed 側もファミリー単位で
+    掃討する。`source_line` が別の行（150 = `HEAD_FRAMES = 8`）を指すと
+    fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        seed = data["additional_measurements"][
+            "deterministic_seed_and_thread_environment_variables"
+        ]["deterministic_seed"]
+        seed["source_line"] = 150
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="deterministic_seed.source_line_text"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_deterministic_seed_source_line_text_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例2/3（source_line_text 改竄）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        seed = data["additional_measurements"][
+            "deterministic_seed_and_thread_environment_variables"
+        ]["deterministic_seed"]
+        seed["source_line_text"] = "SEED = 999"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="deterministic_seed.source_line_text"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_deterministic_seed_source_file_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例3/3（source_file が存在しないパス）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        seed = data["additional_measurements"][
+            "deterministic_seed_and_thread_environment_variables"
+        ]["deterministic_seed"]
+        seed["source_file"] = "voice_genesis/foundry/s1_gate/does_not_exist_gate_synth.py"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_deterministic_seed_source_path_override_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`deterministic_seed_source_path` オーバーライドの配線確認。"""
+    fake_file = tmp_path / "gate_synth.py"
+    fake_file.write_text("\n".join(["x"] * 200) + "\n", encoding="utf-8")
+    with pytest.raises(m.Run9ValidationError, match="deterministic_seed.source_line_text"):
+        m.load_pinned_execution_profile_manifest(
+            contract, deterministic_seed_source_path=fake_file,
+        )
+
+
+# --- load_pinned_execution_profile_manifest(): thread settings cross-check
+# (8) 全数化 (PR #327 レビュー第15巡指摘27対応、P2、上限10ラウンド超過後
+# だが3分類「将来汚染」該当の新しい具体経路として採用) -----------------------
+# 対象は onnxruntime_thread_settings.{intra,inter}_op_num_threads の2件
+# （第14巡時点は source_line_text 非搭載のため cross-check (8) 対象外
+# だったが、本巡で source_line_text を追加し編入した）。
+
+
+@pytest.mark.parametrize(
+    ("sub_field", "expected_line_text"),
+    [
+        ("intra_op_num_threads", "so.intra_op_num_threads = 1"),
+        ("inter_op_num_threads", "so.inter_op_num_threads = 1"),
+    ],
+)
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_source_line_text_matches_repo(
+    contract: m.Run9RunContract, sub_field: str, expected_line_text: str,
+) -> None:
+    """正例: 現行 manifest の thread 設定 `source_line_text` は実 repo の
+    gate_synth.py:1216/1217 と一致するため happy path の load は成功する
+    （cross-check (8) 全数化後の既定経路確認）。"""
+    data = m.load_pinned_execution_profile_manifest(contract)
+    sub = data["additional_measurements"]["onnxruntime_thread_settings"][sub_field]
+    assert sub["source_line_text"] == expected_line_text
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_source_line_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例1/3（行番号 stale）: intra_op_num_threads.source_line が別の行
+    （1217 = `so.inter_op_num_threads = 1`）を指すよう改変されると、記録
+    された source_line_text（intra 側の逐語）と食い違うため fail-closed で
+    拒否される（repin 後の行ずれ想定、第14巡と同型の掃討）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_thread_settings"]["intra_op_num_threads"][
+            "source_line"
+        ] = 1217
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="onnxruntime_thread_settings.intra_op_num_threads.source_line_text",
+    ):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_source_line_text_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例2/3（source_line_text 改竄）: `source_line` は正しい行（1217）を
+    指したまま inter_op_num_threads.source_line_text 自体が改竄されると
+    fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_thread_settings"]["inter_op_num_threads"][
+            "source_line_text"
+        ] = "so.inter_op_num_threads = 999"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="onnxruntime_thread_settings.inter_op_num_threads.source_line_text",
+    ):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_source_file_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """負例3/3（source_file が存在しないパス）: repo 配下ではあるが実在
+    しない相対パスへ差し替えられると fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["additional_measurements"]["onnxruntime_thread_settings"]["intra_op_num_threads"][
+            "source_file"
+        ] = "voice_genesis/foundry/s1_gate/does_not_exist_gate_synth.py"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_source_path_override_stale_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`thread_settings_source_path` オーバーライド（`render_code_path` 等
+    と同型のテスト用差し替え引数、intra/inter 共通単一引数）で別ファイルを
+    指定すると、containment guard を経由せずその実ファイルの当該行に対して
+    照合される。"""
+    fake_file = tmp_path / "gate_synth.py"
+    fake_file.write_text("\n".join(["x"] * 1220) + "\n", encoding="utf-8")
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="onnxruntime_thread_settings.intra_op_num_threads.source_line_text",
+    ):
+        m.load_pinned_execution_profile_manifest(
+            contract, thread_settings_source_path=fake_file,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_thread_settings_default_unspecified_not_cross_checked(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """DEFAULT_UNSPECIFIED（value=null）の thread 設定項目は cross-check
+    (8) の対象外——`source_line`/`source_line_text` の内容検証自体を行わ
+    ない既存の shape 分岐と同型。intra を DEFAULT_UNSPECIFIED + 明らかに
+    stale な source_line_text へ改変しても load は成功する（inter は
+    EXPLICITLY_SET のまま実 repo と一致するため happy path）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        intra = data["additional_measurements"]["onnxruntime_thread_settings"]["intra_op_num_threads"]
+        intra["specification_status"] = "DEFAULT_UNSPECIFIED"
+        intra["value"] = None
+        intra["source_line_text"] = "this text is deliberately stale/fabricated"
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    data = m.load_pinned_execution_profile_manifest(
+        tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+    )
+    assert data["additional_measurements"]["onnxruntime_thread_settings"]["intra_op_num_threads"][
+        "specification_status"
+    ] == "DEFAULT_UNSPECIFIED"
+
+
+# --- verify_execution_profile_runtime(): run-gate live probe ---------------
+# (PR #327 レビュー第3巡指摘8(b) + 第7巡指摘13対応、2026-08-26)
+# `load_pinned_execution_profile_manifest()` からは意図的に分離した live
+# 環境照合（CI マトリクス環境との構造衝突回避、詳細は関数 docstring 参照）。
+# 第7巡指摘13: 第一引数は任意 manifest dict ではなく `Run9RunContract` へ
+# 変更された——関数内部で `load_pinned_execution_profile_manifest()` の全
+# cross-check を経由した manifest のみが live 照合に使われる。manifest の
+# 中身を変えて検証したいテストは `_tampered_execprofile_contract()` で
+# 「改変 manifest ファイル + それに合わせた pin を持つ合成 contract」を
+# 経由する（manifest dict を直接注入する経路はもう存在しない）。
+#
+# CI 修正（2026-08-26）: live probe 5値（Python/onnxruntime/available
+# providers/architecture/os）は「現在実行中の環境」を測定する契約であり、
+# CI マトリクス環境（GitHub Actions hosted runner）の実測 Python patch
+# バージョンが pin（3.11.15）と乖離すると（実測: 3.11.16）、(a) の版チェッ
+# クが `verify_execution_profile_runtime()` を呼ぶテストの手前で fail-closed
+# 発火し、テストスイート側 15 件が一括で落ちた（CI ジョブ test-rest (3.11)
+# 実測。ローカル開発コンテナは pin と同一 patch バージョンだったため検出
+# 不能だった）。live Python バージョンの probe は `_live_python_version()`
+# へモジュールレベル関数として切り出し済み（検証意味論は不変）。以下の
+# テスト群は `_pin_live_probe()` ヘルパーで5値すべてを明示的に pin 値へ
+# 固定してから `verify_execution_profile_runtime()` を呼ぶことで、CI が
+# どの Python patch バージョンで走っても（3.11.x/3.12.x 問わず）決定論的に
+# 同一結果になるようにする（各テストが検証したい1値だけを意図的に pin から
+# ずらす）。
+
+_EXECPROFILE_PIN_PYTHON = "3.11.15"
+_EXECPROFILE_PIN_ONNXRUNTIME = "1.29.0"
+_EXECPROFILE_PIN_AVAILABLE_PROVIDERS = ["AzureExecutionProvider", "CPUExecutionProvider"]
+_EXECPROFILE_PIN_ARCHITECTURE = "x86_64"
+_EXECPROFILE_PIN_OS_RELEASE_TEXT = (
+    'PRETTY_NAME="Ubuntu 24.04.4 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\n'
+    'VERSION="24.04.4 LTS (Noble Numbat)"\nID=ubuntu\n'
+)
+
+
+def _pin_live_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    python: str = _EXECPROFILE_PIN_PYTHON,
+    onnxruntime_version: str = _EXECPROFILE_PIN_ONNXRUNTIME,
+    available_providers: Optional[List[str]] = None,
+    architecture: str = _EXECPROFILE_PIN_ARCHITECTURE,
+) -> Path:
+    """`verify_execution_profile_runtime()` の live probe 5値すべてを、既定
+    では execution_profile_sha pin と一致する値へ monkeypatch/ファイル差し
+    替えで固定する（CI 修正、2026-08-26）。呼び出し側はキーワード引数で
+    意図的に1値だけを pin からずらして負例を構成できる。戻り値は os-release
+    相当ファイルへのパスで、呼び出し側は `verify_execution_profile_runtime
+    (..., os_release_path=戻り値)` として明示的に渡すこと（os probe だけは
+    関数 API 上の明示引数でありモジュールグローバルではないため
+    monkeypatch 対象にならない）。"""
+    monkeypatch.setattr(m, "_live_python_version", lambda: python)
+    fake_ort = types.SimpleNamespace(
+        __version__=onnxruntime_version,
+        get_available_providers=lambda: list(
+            available_providers
+            if available_providers is not None
+            else _EXECPROFILE_PIN_AVAILABLE_PROVIDERS
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    monkeypatch.setattr(m.platform, "machine", lambda: architecture)
+    os_release_path = tmp_path / "execprofile_pinned_os_release"
+    os_release_path.write_text(_EXECPROFILE_PIN_OS_RELEASE_TEXT, encoding="utf-8")
+    return os_release_path
+
+
+def test_execprofile_verify_runtime_happy_path_pinned_live_probe(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """live probe 5値すべてを `_pin_live_probe()` で execution_profile_sha
+    pin と一致する値へ固定した、monkeypatch ベースの決定論 happy path
+    （CI 修正、2026-08-26 で `test_execprofile_verify_runtime_happy_path_
+    real_environment` を置き換え——後者は「CI ホストの実行環境が pin と
+    偶然一致すること」を前提にしており、GitHub Actions hosted runner の
+    Python patch バージョンが pin からずれると（実測: 3.11.16 vs pin
+    3.11.15）CI マトリクス上で恒真ではなくなる構造的な問題があったため削除
+    した——削除理由をここに記録する）。"""
+    os_release_path = _pin_live_probe(monkeypatch, tmp_path)
+    result = m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+    assert result == {
+        "python": "3.11.15",
+        "onnxruntime": "1.29.0",
+        "available_providers": ["AzureExecutionProvider", "CPUExecutionProvider"],
+        "selected_execution_provider": "CPUExecutionProvider",
+        "architecture": "x86_64",
+        "os": "Ubuntu 24.04.4",
+    }
+
+
+def test_execprofile_verify_runtime_manifest_injection_without_matching_pin_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """第7巡指摘13の直接非退行確認: 任意に改変した manifest ファイルを
+    `manifest_path` で指し示しても、`contract` 側の execution_profile_sha
+    pin をそれに合わせて差し替えていなければ実バイト sha256 不一致として
+    `load_pinned_execution_profile_manifest()` 側で fail-closed 拒否される
+    ——旧実装（呼び出し側供給の任意 mapping をそのまま live 照合していた）
+    で可能だった「live ホストに合わせた偽 manifest を注入して偽成功させる」
+    経路が閉じたことの確認。live 環境の実測値と一致するよう改変した
+    manifest を用意しても、pin が未更新のため拒否される。sha256 不一致で
+    `load_pinned_execution_profile_manifest()` 側が最初に発火し live probe
+    （python 版含む）には到達しないため、`_pin_live_probe()` は不要
+    （CI の live Python patch バージョンにも依存しない）。"""
+    forged = copy.deepcopy(_execprofile_manifest_data())
+    forged["identity_semantics"]["runtime"]["python"] = "9.9.9"
+    forged_path = tmp_path / "execution_profile_manifest.json"
+    forged_path.write_bytes(_canonical_json_bytes(forged))
+    with pytest.raises(m.Run9ValidationError, match="実バイト sha256"):
+        m.verify_execution_profile_runtime(contract, manifest_path=forged_path)
+
+
+def test_execprofile_verify_runtime_python_mismatch_rejected(
+    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_live_python_version()` を直接 monkeypatch する（切り出し後の probe
+    関数単体を差し替えるのが最短で、`sys.version_info` を偽クラスで再現する
+    旧テクニックはもう不要）。"""
+    monkeypatch.setattr(m, "_live_python_version", lambda: "3.12.0")
+    with pytest.raises(m.Run9ValidationError, match="live Python version"):
+        m.verify_execution_profile_runtime(contract)
+
+
+def test_execprofile_verify_runtime_python_ci_matrix_divergence_rejected(
+    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """本 CI 修正が対処した実障害の直接再現テスト（2026-08-26）: GitHub
+    Actions hosted runner の Python 3.11 マトリクスが実測 3.11.16 を提供し
+    た一方、execution_profile_sha pin は 3.11.15 のままだったため、(a) の
+    版チェックが `verify_execution_profile_runtime()` を呼ぶ全テストの手前
+    で fail-closed 発火し、テストスイート側 15 件が一括で落ちた（CI ジョブ
+    test-rest (3.11) 実測）。本テストは live Python patch バージョンが pin
+    より新しい 3.11.16 である場合に、意図どおり Run9ValidationError で
+    fail-closed 拒否されることを固定し、この障害経路自体を決定論的に
+    回帰確認する。"""
+    monkeypatch.setattr(m, "_live_python_version", lambda: "3.11.16")
+    with pytest.raises(m.Run9ValidationError, match="live Python version"):
+        m.verify_execution_profile_runtime(contract)
+
+
+def test_execprofile_verify_runtime_onnxruntime_import_failure_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """onnxruntime が import 不能な環境では fail-closed（静かに skip
+    しない）——`sys.modules["onnxruntime"] = None` は `import onnxruntime`
+    を `ModuleNotFoundError` にする標準テクニック。"""
+    os_release_path = _pin_live_probe(monkeypatch, tmp_path)
+    monkeypatch.setitem(sys.modules, "onnxruntime", None)
+    with pytest.raises(m.Run9ValidationError, match="onnxruntime を import できない"):
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_onnxruntime_version_mismatch_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    os_release_path = _pin_live_probe(monkeypatch, tmp_path, onnxruntime_version="9.9.9")
+    with pytest.raises(m.Run9ValidationError, match="live onnxruntime version"):
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_available_providers_mismatch_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #327 レビュー第9巡指摘18対応後の負例: `"CPUExecutionProvider"`
+    が live `get_available_providers()` に含まれない場合は fail-closed で
+    拒否される——ここでは CUDAExecutionProvider のみが観測され CPU
+    provider 自体が available から消えている（正当な CPU-only ホストの
+    受理とは異なり、CPU 可用性そのものが失われたケース）ことを確認する。
+    〔旧テストは歴史実測（Azure+CPU）との完全一致要求のもとで
+    CUDAExecutionProvider の新規出現自体を拒否していたが、第9巡指摘18で
+    その完全一致要求は撤去された——available に GPU provider が含まれる
+    こと自体はもはや拒否理由ではない（選択企図の拒否は (d) が担う）。〕"""
+    os_release_path = _pin_live_probe(
+        monkeypatch, tmp_path, available_providers=["CUDAExecutionProvider"],
+    )
+    with pytest.raises(m.Run9ValidationError, match="get_available_providers"):
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_available_providers_cpu_plus_cuda_accepted(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #327 レビュー第9巡指摘18の直接非退行確認: CPUExecutionProvider
+    に加え CUDAExecutionProvider が live available に新規出現していても、
+    CPU 自体は available であるため受理される（歴史実測 Azure+CPU との
+    完全一致はもはや要求しない——GPU provider の available 出現自体は
+    拒否理由ではなく、選択企図の拒否のみ (d) が別途担う）。"""
+    os_release_path = _pin_live_probe(
+        monkeypatch, tmp_path,
+        available_providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    result = m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+    assert result["available_providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_execprofile_verify_runtime_gpu_provider_selection_intent_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """呼び出し側が GPU provider を選択しようとする企図（`selected_
+    providers` 引数）は、available 側が正当でも fail-closed で拒否
+    される（GPU/CUDA 自動fallback/upgrade禁止規則の機械化）。"""
+    os_release_path = _pin_live_probe(monkeypatch, tmp_path)
+    with pytest.raises(m.Run9ValidationError, match="selected provider argument"):
+        m.verify_execution_profile_runtime(
+            contract, os_release_path=os_release_path,
+            selected_providers=["CUDAExecutionProvider"],
+        )
+
+
+def test_execprofile_verify_runtime_cpu_only_available_accepted(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #327 レビュー第3巡指摘9と対をなす確認: live 環境が CPU-only
+    （available == ["CPUExecutionProvider"] のみ）でも、pin 側の
+    `onnxruntime_available_providers.value` が Azure+CPU のままでも
+    受理される（第9巡指摘18対応後は歴史実測との完全一致を要求しない
+    ——「CPUExecutionProvider が live available に含まれること」のみを
+    要求するため、pin 側の値を CPU-only へ書き換える必要はもはやない。
+    本テストは合成 contract 経由の回帰確認として維持し、pin 側を
+    Azure+CPU のまま変更しない構成にした）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        # 第9巡指摘18対応前は pin 側 value を CPU-only へ書き換えて
+        # `matches_smoke_record` の自己整合性を保つ必要があったが、本関数
+        # はもう pin 側 value を live 照合に使わないため、この mutate は
+        # 構造上のダミー（manifest 実体は無変更）としてのみ残す——合成
+        # contract 経由テストの配管（`_tampered_execprofile_contract()`）を
+        # 再利用するための最小差分。
+        pass
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    os_release_path = _pin_live_probe(
+        monkeypatch, tmp_path, available_providers=["CPUExecutionProvider"],
+    )
+    result = m.verify_execution_profile_runtime(
+        tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        os_release_path=os_release_path,
+    )
+    assert result["available_providers"] == ["CPUExecutionProvider"]
+
+
+def test_execprofile_verify_runtime_cpu_only_available_accepted_real_manifest(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #327 レビュー第9巡指摘18の直接正例（P2、採用）: 合成 contract を
+    経由せず、本物の pin 済み manifest（`onnxruntime_available_providers.
+    value` は歴史実測どおり Azure+CPU のまま）に対し、live 環境が
+    CPU-only（available == ["CPUExecutionProvider"] のみ）でも受理される
+    ことを確認する——「CPUExecutionProvider が live available に含まれる
+    こと」のみを要求し、歴史実測との完全一致は要求しないという新契約の
+    最短経路での確認。"""
+    os_release_path = _pin_live_probe(
+        monkeypatch, tmp_path, available_providers=["CPUExecutionProvider"],
+    )
+    result = m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+    assert result["available_providers"] == ["CPUExecutionProvider"]
+
+
+# --- verify_execution_profile_runtime(): os/architecture live probe -------
+# (PR #327 レビュー第5巡指摘11対応、2026-08-26) 旧実装は runtime identity
+# 5値のうち os/architecture の2値を live probe しておらず、別 OS/別
+# アーキテクチャ環境でもパッケージ版と CPU provider さえ揃えば run gate が
+# 通り得た穴の非退行確認。以下も `_pin_live_probe()` で python/onnxruntime/
+# providers/architecture を pin へ固定してから os/architecture のみを
+# 意図的にずらす（CI 修正、2026-08-26 で python/onnxruntime/architecture の
+# 実行環境依存を解消——旧テストは os のみ override し、それ以外は実行環境
+# 実測に依存していた）。
+
+
+def test_execprofile_verify_runtime_architecture_mismatch_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    os_release_path = _pin_live_probe(monkeypatch, tmp_path, architecture="aarch64")
+    with pytest.raises(m.Run9ValidationError, match="live architecture"):
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_os_name_mismatch_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _pin_live_probe(monkeypatch, tmp_path)
+    os_release_path = tmp_path / "os-release"
+    os_release_path.write_text(
+        'NAME="Debian"\nVERSION_ID="12"\nVERSION="12.5 (bookworm)"\n', encoding="utf-8",
+    )
+    with pytest.raises(m.Run9ValidationError, match="live OS identity"):
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_os_version_mismatch_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _pin_live_probe(monkeypatch, tmp_path)
+    os_release_path = tmp_path / "os-release"
+    os_release_path.write_text(
+        'NAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION="24.04.5 LTS (Noble Numbat)"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(m.Run9ValidationError, match="live OS identity"):
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_os_release_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _pin_live_probe(monkeypatch, tmp_path)
+    missing_path = tmp_path / "does_not_exist_os_release"
+    with pytest.raises(m.Run9ValidationError, match="live OS identity を構成できない"):
+        m.verify_execution_profile_runtime(contract, os_release_path=missing_path)
+
+
+def test_execprofile_verify_runtime_os_release_name_field_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NAME フィールドが欠落した /etc/os-release は抽出不能として
+    fail-closed 拒否される。"""
+    _pin_live_probe(monkeypatch, tmp_path)
+    os_release_path = tmp_path / "os-release"
+    os_release_path.write_text('VERSION_ID="24.04"\nVERSION="24.04.4 LTS"\n', encoding="utf-8")
+    with pytest.raises(m.Run9ValidationError, match="live OS identity を構成できない"):
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_os_release_version_token_unparseable_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VERSION フィールドの先頭トークンが数字/ドットのみで構成されていない
+    場合はバージョン番号抽出不能として fail-closed 拒否される。"""
+    _pin_live_probe(monkeypatch, tmp_path)
+    os_release_path = tmp_path / "os-release"
+    os_release_path.write_text(
+        'NAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION="rolling"\n', encoding="utf-8",
+    )
+    with pytest.raises(m.Run9ValidationError, match="live OS identity を構成できない"):
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_os_architecture_positive_via_override(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """正例: `os_release_path` を実機 `/etc/os-release` と同じ形式・値で
+    差し替えても（`PRETTY_NAME`/`ID` 等の余剰フィールド込み）manifest pin
+    と一致するため happy path が成立する——os probe 経路の正例確認。
+    python/onnxruntime/providers/architecture は `_pin_live_probe()` で
+    pin 値へ固定し、os probe のみを実機同形式ファイルで検証する（CI 修正、
+    2026-08-26 で monkeypatch 対象を拡張——旧テストは python/onnxruntime/
+    architecture を実行環境依存のまま残していた）。"""
+    _pin_live_probe(monkeypatch, tmp_path)
+    os_release_path = tmp_path / "os-release"
+    os_release_path.write_text(
+        'PRETTY_NAME="Ubuntu 24.04.4 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\n'
+        'VERSION="24.04.4 LTS (Noble Numbat)"\nID=ubuntu\n',
+        encoding="utf-8",
+    )
+    result = m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
+    assert result["os"] == "Ubuntu 24.04.4"
+    assert result["architecture"] == "x86_64"
+
+
+
+# --- RUN9_CONTRACT.yaml: 既存 pin 全数不変 ----------------------------------
+
+
+def test_execprofile_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> None:
+    """RUN9-EXECPROFILE-1 は Scope IN の6ファイル（USER_ADJUDICATION_
+    20260826_EXECUTION_PROFILE.txt 新規 / inputs/execution_profile_
+    manifest.json 新規 / run9_schema.py / RUN9_CONTRACT.yaml / README.md /
+    tests/test_run9_contract.py）以外の既存 pin 済みファイルの実バイトを
+    一切変更していないこと（代表サンプル——reexport_manifest_sha/
+    seed_policy_sha/failure_abort_criteria_sha/probe_manifest_sha/
+    practice_audio_split_manifest_sha が引き続き実ファイルと一致する）。
+    `voice_genesis/foundry/s1_gate/gate_synth.py` は Read のみ（1byte も
+    変更していない）ことも合わせて確認する。"""
+    assert contract_raw["reexport_manifest_sha"]["value"] == m.compute_file_sha256(
+        m.REEXPORT_MANIFEST_PATH
+    )
+    assert contract_raw["seed_policy_sha"]["value"] == m.compute_file_sha256(
+        m.SEED_POLICY_MANIFEST_PATH
+    )
+    assert contract_raw["failure_abort_criteria_sha"]["value"] == m.compute_file_sha256(
+        m.FAILURE_ABORT_MANIFEST_PATH
+    )
+    gate_synth_path = (
+        _RUN_DIR.parent.parent / "foundry" / "s1_gate" / "gate_synth.py"
+    )
+    assert m.compute_file_sha256(gate_synth_path) == (
+        "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894"
+    )
+
+
+def test_execprofile_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
+    assert m.gate_state(contract) == "BLOCKED"

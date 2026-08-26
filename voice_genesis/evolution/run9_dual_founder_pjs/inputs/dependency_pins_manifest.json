@@ -1,5 +1,9 @@
 {
   "acoustic_export_companions": {
+    "acquisition_record": {
+      "acquired_at": "2026-08-26",
+      "acquisition_summary": "RUN6 phase B 40K checkpoint（6a28d744...）から DiffSinger commit e2307b1080b00f3999702ce9017cfd75c7f862fe・torch隔離venvを用いて再export（User裁定2026-08-26決定2）。詳細はinputs/reexport_manifest.json参照。"
+    },
     "attempted_source": {
       "acquisition_method": "gdown",
       "actual_sha256": "bc6c6574582168e589c3e52784ae60bf2315af63777a08c9c39916778d1096cd",
@@ -9,27 +13,50 @@
     },
     "expected_items": [
       {
+        "acquisition_source": "RE_EXPORT",
         "expected_sha256": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
         "file": "onnx_gate_40000/acoustic.onnx",
-        "logical_name": "acoustic_onnx"
+        "historical_expected_sha256": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "logical_name": "acoustic_onnx",
+        "matches_historical": false,
+        "measured_sha256": "cdbd779c686504cd1277bf74036e5fb334e4fcdc88ab7612f435ced7c1d6687b",
+        "reexport_manifest_ref": {
+          "artifact_key": "acoustic_onnx",
+          "reexport_manifest_sha256": "a2333bfa17d585a589f827c570e4e61d90ebd3993606d3443b15890f1f7bf805"
+        },
+        "status": "OBTAINED_DERIVED_NEW_BYTES"
       },
       {
+        "acquisition_source": "RE_EXPORT",
         "expected_sha256": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
         "file": "onnx_gate_40000/dsconfig.yaml",
-        "logical_name": "acoustic_dsconfig_yaml"
+        "logical_name": "acoustic_dsconfig_yaml",
+        "matches_historical": true,
+        "measured_sha256": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "replay_evidence": true,
+        "status": "OBTAINED_VERIFIED_MATCH"
       },
       {
+        "acquisition_source": "RE_EXPORT",
         "expected_sha256": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
         "file": "onnx_gate_40000/s5_run6_acoustic_v1.phonemes.json",
-        "logical_name": "acoustic_phonemes_json"
+        "logical_name": "acoustic_phonemes_json",
+        "matches_historical": true,
+        "measured_sha256": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
+        "replay_evidence": true,
+        "status": "OBTAINED_VERIFIED_MATCH"
       },
       {
+        "acquisition_source": "RE_EXPORT",
         "expected_sha256": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
         "file": "onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb",
-        "logical_name": "speaker_embed_ritsu"
+        "logical_name": "speaker_embed_ritsu",
+        "matches_historical": true,
+        "measured_sha256": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
+        "replay_evidence": true,
+        "status": "OBTAINED_VERIFIED_MATCH"
       }
     ],
-    "fail_closed_disposition": "Design Memo RUN9-L0-HARNESS-1 の Risk 節が事前に規定した分岐（tar.gz の中身がハズレの場合は事実を記録して停止し報告する。export 再実行や代替調達には進まない）に従い、本 harness では acoustic export companions の再取得・再export を試みない。再export には DiffSinger のscripts/export.py 実行に torch/lightning/onnx/onnxsim（numpy<2 隔離 venv）が必要であり、本 Memo の AllowedDependencies（onnxruntime==1.29.0 のみ）の範囲外でもある——技術的にも許可された依存の範囲内では実施不能。",
     "indirect_provenance_found": {
       "also_cross_confirms": {
         "canon_linguistic_onnx": "match",
@@ -47,18 +74,14 @@
       "description": "run6 Drive フォルダの run_execution_manifest.json（fileId 1J6LI1SlIGrkfb7FvUeLDs6S_y3hoGRs6）を検索したが、checkpoint_hashes / dataset_hashes / material_hashes /tensorboard_hashes のいずれにも acoustic.onnx やspeaker embedding の hash は記録されていなかった（この manifest は run6 の学習実行記録であり、後日のacoustic export 成果物は範囲外）。",
       "found": false
     },
-    "status": "NOT_OBTAINED_TARBALL_MISS",
-    "verdict": "MISS — 展開した39ファイル（tar_gz_full_member_ledger 参照）のいずれも acoustic.onnx / dsconfig.yaml / s5_run6_acoustic_v1.phonemes.json / *.emb ではない。内容は gate_synth.py の実行成果物（wav 出力・gate_synth_summary.json・ラウドネス正規化コピー・ABC 試聴セット）であり、acoustic export companions 自体は含まれていない。"
+    "status": "OBTAINED_VIA_REEXPORT"
   },
   "budget_estimate": {
-    "reason": "smoke_render が BLOCKED のため、render 1件あたりの実測秒が存在しない。実測なしに『現実的/非現実的』を判定すると数字を捏造することになるため判定を行わない。過去記録（voice_genesis/foundry/results_s7/probe_0b_groups/run6_ritsu.json）の render_elapsed_sec 3.7〜7.6秒/件は当時の実行環境（RunPod GPU pod, RTX 3090）での計測である可能性が高く（当時の実行プロバイダは記録に明記なし）、本 CPU-only 環境の実測値としては使えない——参考値としてのみ記載し、pin/見積りの根拠にはしない。",
-    "reference_only_caveat": "実行プロバイダ(CPU/GPU)がこの記録自体に明記されていない。当時の環境(RunPod RTX 3090)からGPU実行だった可能性が高い。",
-    "reference_only_prior_gpu_measurement_sec_per_item": [
-      3.7,
-      7.6
-    ],
-    "reference_only_source": "voice_genesis/foundry/results_s7/probe_0b_groups/run6_ritsu.json",
-    "status": "BLOCKED"
+    "estimated_total_sec": 14846.55346775055,
+    "reason": "smoke_render実測平均（24.101547837257385秒/件）に総render数概算（616件）を乗じた見積り。",
+    "status": "COMPLETED",
+    "total_render_count": 616,
+    "total_render_count_provenance_note": "616 という総render数は前巡の返信・過去記録で言及されてきた基準値をそのまま踏襲した概算であり、本PRで新たに確定した値ではない（内訳: learning/search loop 512 + birth probe 24 + C0/C1 80 = 616、固定評価分は未確定のため除く。HARNESS1_PROVISION_RECORD.md §4参照）。"
   },
   "claim_scope": {
     "historical_pinned_generations": {
@@ -76,8 +99,8 @@
       ],
       "note": "本欄は2026-08-26 に一時的に PINNED 化された時期があった（第1世代: PR #326 第1巡 Fix 1/2 対応時に新規 PINNED 化、第2世代: 同巡内での repin）。同日中の PR #326 第2巡 Fix 3（P1、採用）により、その PINNED 化自体が過大だったと判明し（本欄 statement が述べる理由により）PENDING へ差し戻された。以下の2世代の sha256 は RUN9_CONTRACT.yaml のコメントに履歴として append-only 保持されている一次情報の転記であり、本欄はその要約にすぎない——現在の状態は上記 statement のとおりPENDING である。"
     },
-    "rationale": "本 repo の既存 pin 群（backbone_runtime_bundle_sha 等）が確立した規約 — 『manifest が PINNED であることはファイル自身のバイト同一性と、文書内で明示的に確定と記した節の確定のみを主張し、文書に含まれるが確定していない節はstatus で正直に示す』— をそのまま踏襲する。",
-    "statement": "`dependency_pins_sha`（RUN9_CONTRACT.yaml）は現在 PENDING である（contract value: null、`load_pinned_dependency_pins_manifest()` は「not PINNED」として消費を拒否する）。本 manifest 自身が独立に主張するのは (a) 本ファイルのバイト同一性と (b) 以下の各節に記載した実測値・照合結果・欠落事実そのものの正確な記録、の2点のみであり、この2点の記録は `dependency_pins_sha` の pin 状態（PENDING/PINNEDいずれであっても）と独立して真である。本欄が PENDING である理由は本 manifest が render/analysis 層（python_dependency_pins 9件）と実体資産（render_asset_ledger・tar.gz 全数展開・DiffSinger commit）の実測記録に留まり、`dependency_pins_sha` の完全な充足——VG-L0学習ハーネス本体（optimizer/探索コード）の import closure を含む依存全体の確定——を主張しないためである（PIN-1 measurement_spec_shaと同型の理由。学習ハーネス自体の依存が未実測のまま本欄を PINNEDにすると、gate_state() が「全実行依存が確定した」証拠として誤って扱ってしまう）。**主張しないこと**: acoustic export companions（acoustic.onnx / dsconfig.yaml / acoustic_phonemes_json / ritsu.emb）が取得済みであること（`acoustic_export_companions` 節が示すとおり未取得のまま）、pjs/user speaker embedding が正しい値として確定していること（`speaker_embeddings_unpinned_candidates` 節の値は候補であり pin ではない）、決定論 smoke render が実行されたこと（`smoke_render` 節の status は BLOCKED）、CPU render 予算見積りが実測に基づくこと（`budget_estimate` 節の status は BLOCKED）。"
+    "rationale": "本 repo の既存 pin 群（backbone_runtime_bundle_sha 等）が確立した規約 — 『manifest が PINNED であることはファイル自身のバイト同一性と、文書内で明示的に確定と記した節の確定のみを主張し、文書に含まれるが確定していない節は status で正直に示す』— をそのまま踏襲する。RUN9-L0-HARNESS-2で確定した節（companions/smoke/budget）はそのように status を遷移させ、未確定のまま残る節（学習ハーネス本体の依存closure）は claim対象から明示的に除外する。",
+    "statement": "`dependency_pins_sha`（RUN9_CONTRACT.yaml）は現在 PENDING である（contract value: null、`load_pinned_dependency_pins_manifest()` は「not PINNED」として消費を拒否する）。本 manifest 自身が独立に主張するのは (a) 本ファイルのバイト同一性と (b) 以下の各節に記載した実測値・照合結果の正確な記録、の2点のみであり、この2点の記録は `dependency_pins_sha` の pin 状態（PENDING/PINNEDいずれであっても）と独立して真である。RUN9-L0-HARNESS-2（本改訂）により acoustic export companions は checkpoint からの再export（User裁定2026-08-26決定2）で取得済み（`acoustic_export_companions.status == OBTAINED_VIA_REEXPORT`——acoustic.onnx は歴史値と不一致のため `OBTAINED_DERIVED_NEW_BYTES`、dsconfig/phonemes/ritsu.embは byte一致のため `OBTAINED_VERIFIED_MATCH`）、決定論smoke render（`smoke_render.status == COMPLETED`）・CPU render予算概算（`budget_estimate.status == COMPLETED`）も実測済みとなった。本欄が引き続き PENDING である理由はこれら（旧来の残存ブロッカーだった）ではなく、VG-L0学習ハーネス本体（optimizer/探索コード）の import closure が未確定のままであることに変わったため（PIN-1 measurement_spec_shaと同型の理由。学習ハーネス自体の依存が未実測のまま本欄を PINNEDにすると、gate_state() が「全実行依存が確定した」証拠として誤って扱ってしまう）——本 manifest は `dependency_pins_sha` の完全な充足を主張しない。**主張しないこと**: pjs/user speaker embeddingが正式PINNED昇格条件（歴史4 shaとの同一directory/archive内同時実在の実測確認）を充足していること（`speaker_embeddings_unpinned_candidates`節の値はreplay evidence付き候補のままであり pin ではない）、VG-L0学習ハーネス本体の依存closureが確定していること。"
   },
   "diffsinger_render_code_commit": {
     "clone_method": "git clone https://github.com/openvpi/DiffSinger.git && git checkout e2307b1",
@@ -88,7 +111,7 @@
     "status": "VERIFIED_MATCH"
   },
   "generated_at": "2026-08-26",
-  "generation_note": "RUN9-L0-HARNESS-1（Design Memo, Claude 完結ルート、User 裁定 2026-08-26「必要な素材はドライブにあるのでClaudeで完結できるはずだ。Claudeルートで作成して」）の provisioning 実行で得た実測台帳。取得は provision.sh 前例（.part staging -> sha256一致でのみ確定名へリネームする冪等 fail-closed 方式）を踏襲した。workdir は repo 外の session scratchpad (scratchpad/harness_work/) — 実資産バイナリは本 repo に一切コミットしていない。 [PR #326 第1巡 Codex bot レビュー 2件（P2×2、2026-08-26、いずれも採用——将来汚染防止: 将来の repin が証拠なしで成功状態を主張できる validator の穴）を受け、validate_dependency_pins_manifest() を status 判別型 shape へ強化した（内容は無変更、validator/loaderのみ強化）。Fix 1: acoustic_export_companions.expected_items は status が OBTAINED_VERIFIED_MATCH のときのみ measured_sha256（実測 digest、expected_sha256 と厳密一致必須）を要求し、NOT_OBTAINED_TARBALL_MISS のときは禁止する（status 文字列の書き換えだけでは通過できない）。loader 側はmeasured_sha256 と backbone_runtime_bundle.json 側 pin 値の直接比較（三者一致の第3辺）も追加した。Fix 2: smoke_render/budget_estimate を BLOCKED/COMPLETED 専用の disjoint な必須キー集合へ分離した——COMPLETED は blocked 専用フィールド（blocked_by 等）を禁止し、実測フィールド（smoke: determinism_confirmed=True・measured_sec_per_render 正の有限数値・render_condition／budget: total_render_count 正の整数・estimated_total_sec 正の有限数値）を必須化した。本 harness の実測結果自体（tar.gz MISS・smoke render BLOCKED・budget estimate BLOCKED）は無変更のまま——両セクションとも引き続き BLOCKED shape で妥当。] [PR #326 第2巡 Codex bot レビュー 4件（P1×1・P2×3、2026-08-26、いずれも採用）を受けさらに強化した（実測結果は無変更）。Fix 3（P1、RUN9_CONTRACT.yaml 側）: dependency_pins_sha を PENDING へ復帰——本 manifest 単体では学習ハーネス本体の依存 closure を確定しないため（詳細は claim_scope 追記参照）。Fix 4: _validate_tar_gz_full_member_ledger() を acoustic_export_companions.status に条件付けした——NOT_OBTAINED のときのみ従来どおり「companion basename が見つかれば矛盾」を拒否し、OBTAINED_VERIFIED_MATCH のときは逆に「見つからない・sha が不一致なら矛盾」という整合検査へ切り替える（将来 tarball から正当取得した場合の遷移を可能にする）。Fix 5: budget_estimate が COMPLETED を名乗るには smoke_render もCOMPLETED でなければならない（smoke が BLOCKED のまま budget だけCOMPLETED は自己矛盾として拒否）。加えて estimated_total_sec === measured_sec_per_render × total_render_count を math.isclose（rel_tol=1e-9、厳しめ）で検証する。Fix 6: acoustic_export_companions.expected_items の重複 logical_name を、集合等価チェックより先に len(list)==len(unique)で拒否する（render_asset_ledger と同型）。] [PR #326 第3巡 Codex bot レビュー 3件（P2×3、2026-08-26、いずれも採用——将来汚染/実行不能遷移の同系整合）をさらに受けた（実測結果は無変更）。Fix 7: acoustic_export_companions.expected_items の OBTAINED item へacquisition_source（閉じた語彙 THIS_TARBALL/DRIVE_DIRECT/RE_EXPORT）を必須化した。tar membership + sha 整合の要求は acquisition_source==THIS_TARBALL のときのみに限定し、HARNESS1_PROVISION_RECORD.md が記録する非 tar 経路（別 Drive フォルダの探索・再export）由来の正当な取得を構造的に拒否しないようにした。Fix 8: smoke_render が COMPLETED を名乗るには acoustic_export_companions.status == OBTAINED_VERIFIED_MATCH を前提条件として要求するようにした（NOT_OBTAINED のまま smoke だけCOMPLETED は「無い入力で render した」自己矛盾として拒否）。Fix 9: speaker_embeddings_unpinned_candidates の status 判定を startswith() から entry ごとの厳密語彙一致（pjs/user は UNPINNED_CANDIDATE のみ、d3synth は UNPINNED_CANDIDATE_NOT_A_RUN9_FOUNDER のみ）へ変更し、typo/混成値（例 UNPINNED_CANDIDATE_PINNED_VERIFIED）を拒否するようにした。] [PR #326 第4巡 Codex bot レビュー Fix 10（P2, 採用）: 新設した tar_gz_ledger_integrity 節（member_count/total_size_bytes の宣言 + 独立再生成一致実測の record）により、tar_gz_full_member_ledger が「非空の well-formed 行の任意部分集合」で通過してしまう穴を閉じた（len(ledger)==member_count と sum(size_bytes)==total_size_bytes をmachine 強制）。tarball 実体が repo 外にあるため load 時の完全性再検証はできないという境界を validate_dependency_pins_manifest() docstring に明記し、担保を3層（build時単一read生成/本巡の独立再生成一致実測/将来repin時の再provisioning経路宣言）として正直に宣言した。実測結果（39ファイル、列挙漏れなし）自体は無変更。] [PR #326 第5巡 Codex bot レビュー2件（P2×2、2026-08-26、いずれも採用）をさらに受けた（実測結果は無変更）。Fix 12: NOT_OBTAINED_TARBALL_MISS 側の tar member 矛盾判定を「basename 一致 かつ sha256 == expected_sha256」の両立時のみに限定した（旧実装は basename 一致だけで発火しており、将来のtarball に同名別バイトの無関係ファイルが混入すると正直な MISS記録が偽ブロックされ得た）。Fix 13: claim_scope.statement を「現在 PENDING である」ことを主表明として書き出す文へ全面改訂した（旧文は PINNED 前提で書き出され、PENDING への訂正が末尾追記に留まっていた）。旧PINNED 世代（第1-2世代）への言及は新設フィールドclaim_scope.historical_pinned_generations（明示的な historical節）へ分離した。validator は statement の先頭付近に PENDING主表明マーカーが存在することを機械強制する。] [PR #326 第6巡 Codex bot レビュー2件（P2×2、2026-08-26、いずれも採用——将来汚染: status 判別の未完部分）をさらに受けた（実測結果は無変更）。Fix 14: acoustic_export_companions のトップレベルも item と同型のstatus 判別 shape へ拡張した——NOT_OBTAINED_TARBALL_MISS のときのみMISS narrative（verdict/fail_closed_disposition）を必須化し、OBTAINED_VERIFIED_MATCH のときはそれらを禁止する代わりに取得証跡acquisition_record（acquired_at/acquisition_summary）を必須化した（旧実装は status を書き換えても MISS narrative が残置可能で、「取得済み」と「未取得」を同時に主張できてしまっていた）。Fix 15: smoke_render の COMPLETED shape へ render_output_sha256_first/render_output_sha256_second（同一入力2回の render 出力それぞれの sha256）を必須化し、両者の厳密一致を機械強制した（determinism_confirmed=true を宣言するだけで監査可能な証拠なしに決定論確認を主張できてしまっていた欠陥への対応。不一致は determinism_confirmed=True という主張自体と矛盾するため拒否する）。]",
+  "generation_note": "RUN9-L0-HARNESS-1（Design Memo, Claude 完結ルート、User 裁定 2026-08-26「必要な素材はドライブにあるのでClaudeで完結できるはずだ。Claudeルートで作成して」）の provisioning 実行で得た実測台帳。取得は provision.sh 前例（.part staging -> sha256一致でのみ確定名へリネームする冪等 fail-closed 方式）を踏襲した。workdir は repo 外の session scratchpad (scratchpad/harness_work/) — 実資産バイナリは本 repo に一切コミットしていない。 [PR #326 第1巡 Codex bot レビュー 2件（P2×2、2026-08-26、いずれも採用——将来汚染防止: 将来の repin が証拠なしで成功状態を主張できる validator の穴）を受け、validate_dependency_pins_manifest() を status 判別型 shape へ強化した（内容は無変更、validator/loaderのみ強化）。Fix 1: acoustic_export_companions.expected_items は status が OBTAINED_VERIFIED_MATCH のときのみ measured_sha256（実測 digest、expected_sha256 と厳密一致必須）を要求し、NOT_OBTAINED_TARBALL_MISS のときは禁止する（status 文字列の書き換えだけでは通過できない）。loader 側はmeasured_sha256 と backbone_runtime_bundle.json 側 pin 値の直接比較（三者一致の第3辺）も追加した。Fix 2: smoke_render/budget_estimate を BLOCKED/COMPLETED 専用の disjoint な必須キー集合へ分離した——COMPLETED は blocked 専用フィールド（blocked_by 等）を禁止し、実測フィールド（smoke: determinism_confirmed=True・measured_sec_per_render 正の有限数値・render_condition／budget: total_render_count 正の整数・estimated_total_sec 正の有限数値）を必須化した。本 harness の実測結果自体（tar.gz MISS・smoke render BLOCKED・budget estimate BLOCKED）は無変更のまま——両セクションとも引き続き BLOCKED shape で妥当。] [PR #326 第2巡 Codex bot レビュー 4件（P1×1・P2×3、2026-08-26、いずれも採用）を受けさらに強化した（実測結果は無変更）。Fix 3（P1、RUN9_CONTRACT.yaml 側）: dependency_pins_sha を PENDING へ復帰——本 manifest 単体では学習ハーネス本体の依存 closure を確定しないため（詳細は claim_scope 追記参照）。Fix 4: _validate_tar_gz_full_member_ledger() を acoustic_export_companions.status に条件付けした——NOT_OBTAINED のときのみ従来どおり「companion basename が見つかれば矛盾」を拒否し、OBTAINED_VERIFIED_MATCH のときは逆に「見つからない・sha が不一致なら矛盾」という整合検査へ切り替える（将来 tarball から正当取得した場合の遷移を可能にする）。Fix 5: budget_estimate が COMPLETED を名乗るには smoke_render もCOMPLETED でなければならない（smoke が BLOCKED のまま budget だけCOMPLETED は自己矛盾として拒否）。加えて estimated_total_sec === measured_sec_per_render × total_render_count を math.isclose（rel_tol=1e-9、厳しめ）で検証する。Fix 6: acoustic_export_companions.expected_items の重複 logical_name を、集合等価チェックより先に len(list)==len(unique)で拒否する（render_asset_ledger と同型）。] [PR #326 第3巡 Codex bot レビュー 3件（P2×3、2026-08-26、いずれも採用——将来汚染/実行不能遷移の同系整合）をさらに受けた（実測結果は無変更）。Fix 7: acoustic_export_companions.expected_items の OBTAINED item へacquisition_source（閉じた語彙 THIS_TARBALL/DRIVE_DIRECT/RE_EXPORT）を必須化した。tar membership + sha 整合の要求は acquisition_source==THIS_TARBALL のときのみに限定し、HARNESS1_PROVISION_RECORD.md が記録する非 tar 経路（別 Drive フォルダの探索・再export）由来の正当な取得を構造的に拒否しないようにした。Fix 8: smoke_render が COMPLETED を名乗るには acoustic_export_companions.status == OBTAINED_VERIFIED_MATCH を前提条件として要求するようにした（NOT_OBTAINED のまま smoke だけCOMPLETED は「無い入力で render した」自己矛盾として拒否）。Fix 9: speaker_embeddings_unpinned_candidates の status 判定を startswith() から entry ごとの厳密語彙一致（pjs/user は UNPINNED_CANDIDATE のみ、d3synth は UNPINNED_CANDIDATE_NOT_A_RUN9_FOUNDER のみ）へ変更し、typo/混成値（例 UNPINNED_CANDIDATE_PINNED_VERIFIED）を拒否するようにした。] [PR #326 第4巡 Codex bot レビュー Fix 10（P2, 採用）: 新設した tar_gz_ledger_integrity 節（member_count/total_size_bytes の宣言 + 独立再生成一致実測の record）により、tar_gz_full_member_ledger が「非空の well-formed 行の任意部分集合」で通過してしまう穴を閉じた（len(ledger)==member_count と sum(size_bytes)==total_size_bytes をmachine 強制）。tarball 実体が repo 外にあるため load 時の完全性再検証はできないという境界を validate_dependency_pins_manifest() docstring に明記し、担保を3層（build時単一read生成/本巡の独立再生成一致実測/将来repin時の再provisioning経路宣言）として正直に宣言した。実測結果（39ファイル、列挙漏れなし）自体は無変更。] [PR #326 第5巡 Codex bot レビュー2件（P2×2、2026-08-26、いずれも採用）をさらに受けた（実測結果は無変更）。Fix 12: NOT_OBTAINED_TARBALL_MISS 側の tar member 矛盾判定を「basename 一致 かつ sha256 == expected_sha256」の両立時のみに限定した（旧実装は basename 一致だけで発火しており、将来のtarball に同名別バイトの無関係ファイルが混入すると正直な MISS記録が偽ブロックされ得た）。Fix 13: claim_scope.statement を「現在 PENDING である」ことを主表明として書き出す文へ全面改訂した（旧文は PINNED 前提で書き出され、PENDING への訂正が末尾追記に留まっていた）。旧PINNED 世代（第1-2世代）への言及は新設フィールドclaim_scope.historical_pinned_generations（明示的な historical節）へ分離した。validator は statement の先頭付近に PENDING主表明マーカーが存在することを機械強制する。] [PR #326 第6巡 Codex bot レビュー2件（P2×2、2026-08-26、いずれも採用——将来汚染: status 判別の未完部分）をさらに受けた（実測結果は無変更）。Fix 14: acoustic_export_companions のトップレベルも item と同型のstatus 判別 shape へ拡張した——NOT_OBTAINED_TARBALL_MISS のときのみMISS narrative（verdict/fail_closed_disposition）を必須化し、OBTAINED_VERIFIED_MATCH のときはそれらを禁止する代わりに取得証跡acquisition_record（acquired_at/acquisition_summary）を必須化した（旧実装は status を書き換えても MISS narrative が残置可能で、「取得済み」と「未取得」を同時に主張できてしまっていた）。Fix 15: smoke_render の COMPLETED shape へ render_output_sha256_first/render_output_sha256_second（同一入力2回の render 出力それぞれの sha256）を必須化し、両者の厳密一致を機械強制した（determinism_confirmed=true を宣言するだけで監査可能な証拠なしに決定論確認を主張できてしまっていた欠陥への対応。不一致は determinism_confirmed=True という主張自体と矛盾するため拒否する）。] [RUN9-L0-HARNESS-2（2026-08-26, Design Memo RUN9-L0-HARNESS-2, User裁定2026-08-26「RUN9 User裁定 — acoustic export companions / speaker embeds」）: acoustic export companions は Step A（historical `onnx_gate_40000/` 一式のdirectory/archive再探索）が Drive全域MISS確定（回収不可）したため、User裁定2の承認に基づき RUN6 phase B 40K checkpoint からの再export（DiffSinger commit e2307b1、torch隔離venv）を実施した。acoustic.onnx は歴史pinと不一致（`OBTAINED_DERIVED_NEW_BYTES`、捏造して合わせていない）、dsconfig.yaml/phonemes.json/ritsu.embは byte一致（`OBTAINED_VERIFIED_MATCH` + `replay_evidence: true`）。詳細は inputs/reexport_manifest.json（`reexport_manifest_sha` として新規PINNED）参照。再export成果物を用いてdeterministic smoke render（gate_synth.py --skip-export、独立2回実行）を実測し、同一入力2 render の WAV byte 一致を確認した（`smoke_render.status == COMPLETED`）。実測平均秒×616件概算で `budget_estimate.status == COMPLETED`（616は前巡基準値の踏襲概算であり本PRで確定しない、出典注記付き）。pjs/user/d3synthのspeaker embeddingにreplay evidenceを追記したが、正式PINNED昇格条件（歴史4 shaとの同一directory/archive内同時実在の実測確認）は未充足のまま（Step AのDrive全域MISSにより不成立）。`dependency_pins_sha`自体はVG-L0学習ハーネス本体のimport closure未確定のためPENDING維持——本改訂は情報記録sha256の更新（repinではない）。] [PR #327 第3巡 Codex bot レビュー指摘7（P2、採用——台帳の内部矛盾: companions を再export取得済み（OBTAINED_VIA_REEXPORT）へ遷移させた後も speaker_embeddings_unpinned_candidates の note/pjs・userの file ラベルが「未取得」と言い続けていた自己矛盾）を受けた（実測結果は無変更）。note と pjs/user.file を、歴史的 tar.gz/Drive 回収は MISS（不変の事実）と、再exportによる derived artifact としての取得済み（byte は歴史 candidate 値と一致 = replay evidence）とを明示的に区別する 二層記述へ改訂した。正式 PINNED 昇格条件（歴史4 sha との同一 directory/archive 内同時実在の実測確認）が引き続き未充足であることは変更していない——文言更新のみで実測事実は無変更。]",
   "python_dependency_pins": [
     {
       "observed_version": "3.11.15",
@@ -290,30 +313,45 @@
   ],
   "schema": "run9-dependency-pins/1.0",
   "smoke_render": {
-    "blocked_by": "acoustic_export_companions.status == NOT_OBTAINED_TARBALL_MISS",
-    "not_attempted_reason_is_missing_input_not_failure": true,
-    "reason": "gate_synth.py の --speaker ritsu render には acoustic.onnx（+ dsconfig.yaml / acoustic_phonemes_json / speaker_embedのいずれか一致する形式）が必須（gate_synth.py --acoustic-dir経路）。tar.gz から取得できず、また新規 export はDiffSinger scripts/export.py 経由で torch を要し（provision.sh §6 の隔離 export venv 相当）、本 Memo のAllowed Dependencies（onnxruntime==1.29.0 のみ）の範囲外のため実施しない。fail-closed: 決定論確認・CPU実測時間のいずれも本 Memo では取得できなかった（数値を捏造しない）。",
-    "status": "BLOCKED"
+    "determinism_confirmed": true,
+    "measured_sec_per_render": 24.101547837257385,
+    "onnxruntime_providers": [
+      "CPUExecutionProvider"
+    ],
+    "reason": "RUN9-L0-HARNESS-2 再export成果物（acoustic.onnx等4点）を用いて gate_synth.py run --skip-export --acoustic-dir を独立2回実行し、同一入力2 render の WAV byte 一致を実測確認した。詳細は HARNESS2_REEXPORT_SMOKE_RECORD.md参照。",
+    "render1_total_elapsed_sec": 23.482061624526978,
+    "render2_total_elapsed_sec": 24.721034049987793,
+    "render_condition": "CPU only (CPUExecutionProvider固定), speaker=ritsu, song=sakura, notes-limit=6, canon-model-dir=NamineRitsu_DiffSinger, vocoder-dir=nsf_hifigan",
+    "render_entrypoint": "python3 voice_genesis/foundry/s1_gate/gate_synth.py run --skip-export --acoustic-dir <workdir>/reexport_out/onnx_gate_40000 --canon-model-dir <workdir>/url/extracted_ds/NamineRitsu_DiffSinger --vocoder-dir <workdir>/url/extracted_voc --out-dir <workdir>/smoke_render{1,2} --song sakura --notes-limit 6 --speaker ritsu",
+    "render_output_sha256_first": "c7e1dcdfb7139d490dc19347c21dad5f9966764182cb6ee7e0124ad8fedd379e",
+    "render_output_sha256_second": "c7e1dcdfb7139d490dc19347c21dad5f9966764182cb6ee7e0124ad8fedd379e",
+    "status": "COMPLETED"
   },
   "speaker_embeddings_unpinned_candidates": {
     "d3synth_reference_only": {
       "candidate_sha256": "10c3964c57a69edb072bd7c9aec36dc7e3b06e06469c5da60332bec793c1dc22",
       "note": "RUN9 の対象話者ではないが tar.gz に同型記録があったため参考記録する（af0/pjs/user/ritsu のいずれでもない合成教師）。",
+      "promotion_condition_unmet_note": "d3synthはRUN9対象話者ではないため正式pin化の対象外——参考記録としてreplay evidenceのみ追記する（昇格条件の適用対象外）。",
+      "replay_evidence": true,
       "source": "tar_gz:out_d3synth/step_40000/gate_synth_summary.json#input_sha256.speaker_embed",
       "status": "UNPINNED_CANDIDATE_NOT_A_RUN9_FOUNDER"
     },
-    "note": "repo に sha256 pin が存在しない話者 embedding。以下はr6_gate_materials tar.gz 内 gate_synth_summary.json のinput_sha256.speaker_embed から得た実測 candidate 値（gate_synth.py 実行時の single-read hash 記録）であり、**pin ではない**（本 manifest はこれらを PINNED として扱わない — User 裁定待ち）。実体の .emb ファイルはtar.gz にもDriveの他探索にも見つかっていない（acoustic_export_companions 節参照、speaker_embed_ritsuも同様に未取得）。",
+    "note": "repo に sha256 pin が存在しない話者 embedding。以下はr6_gate_materials tar.gz 内 gate_synth_summary.json のinput_sha256.speaker_embed から得た実測 candidate 値（gate_synth.py 実行時の single-read hash 記録）であり、**pin ではない**（本 manifest はこれらを PINNED として扱わない — User 裁定待ち）。二層区別（PR #327 第3巡指摘7対応で明記）: (1) 歴史的取得——r6_gate_materials tar.gz 展開物および Drive 他探索のいずれにも、pjs/user/ritsu いずれの .emb 実体ファイルも見つかっていない（この歴史的 MISS の事実は不変。acoustic_export_companions 節参照）。(2) 再export由来の derived artifact 取得——RUN9-L0-HARNESS-2 の checkpoint 再exportにより、ritsu は acoustic_export_companions.expected_items[speaker_embed_ritsu] として derived artifact を取得済み（byte が歴史 pin と一致 = OBTAINED_VERIFIED_MATCH）。pjs/user も reexport_manifest.json#artifacts.{pjs_emb,user_emb} として derived artifact を同様に取得済みであり、byte は本節の candidate_sha256 と一致した（replay_evidence: true の根拠）。ただし (1)/(2) は別概念であり、(2) の独立再現は正式 PINNED 昇格条件（User裁定3: 歴史4 sha と同一 directory/archive 内での同時実在の実測確認）そのものではない——各 entry の promotion_condition_unmet_note のとおり、昇格条件は Step A の Drive 全域 MISS により引き続き未充足のまま。",
     "pjs": {
       "candidate_sha256": "074e09b390c207a7cf98105db549e1006d035a797d57f73e103e848bb3216015",
       "candidate_sha256_first16": "074e09b390c207a7",
-      "file": "onnx_gate_40000/s5_run6_acoustic_v1.pjs.emb (未取得)",
+      "file": "onnx_gate_40000/s5_run6_acoustic_v1.pjs.emb（この歴史的 directory/archive 内パスでは MISS = 未取得のまま——不変の事実。RUN9-L0-HARNESS-2 の checkpoint 再exportでは reexport_manifest.json#artifacts.pjs_emb として derived artifact を別途取得済み、byte は本 candidate_sha256 と一致 = replay evidence。正式PINNED昇格条件は未充足のまま、詳細は promotion_condition_unmet_note 参照）",
+      "promotion_condition_unmet_note": "正式PINNED昇格条件（User裁定3: 歴史4 sha (aaaff716.../a7da75f5.../5071e165.../ce4b87b9...) と同一directory/archive内で同時実在することの実測確認）は未充足のまま——Step Aでは同一directory/archiveそのものが発見できず、再exportによる独立再現は昇格条件そのものではなく候補値の信頼性を補強する傍証として記録するのみ。",
+      "replay_evidence": true,
       "source": "tar_gz:out_pjs/step_40000/gate_synth_summary.json#input_sha256.speaker_embed",
       "status": "UNPINNED_CANDIDATE"
     },
     "user": {
       "candidate_sha256": "588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0",
       "candidate_sha256_first16": "588913b74d6c16e0",
-      "file": "onnx_gate_40000/s5_run6_acoustic_v1.user.emb (未取得)",
+      "file": "onnx_gate_40000/s5_run6_acoustic_v1.user.emb（この歴史的 directory/archive 内パスでは MISS = 未取得のまま——不変の事実。RUN9-L0-HARNESS-2 の checkpoint 再exportでは reexport_manifest.json#artifacts.user_emb として derived artifact を別途取得済み、byte は本 candidate_sha256 と一致 = replay evidence。正式PINNED昇格条件は未充足のまま、詳細は promotion_condition_unmet_note 参照）",
+      "promotion_condition_unmet_note": "正式PINNED昇格条件（User裁定3: 歴史4 sha (aaaff716.../a7da75f5.../5071e165.../ce4b87b9...) と同一directory/archive内で同時実在することの実測確認）は未充足のまま——Step Aでは同一directory/archiveそのものが発見できず、再exportによる独立再現は昇格条件そのものではなく候補値の信頼性を補強する傍証として記録するのみ。",
+      "replay_evidence": true,
       "source": "tar_gz:out_user/step_40000/gate_synth_summary.json#input_sha256.speaker_embed",
       "status": "UNPINNED_CANDIDATE"
     }

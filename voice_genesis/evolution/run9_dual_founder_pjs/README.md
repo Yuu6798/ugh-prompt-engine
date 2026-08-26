@@ -899,15 +899,18 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   が一時的に PINNED 化され、残 PENDING は pre-run 必須9欄
   （総 PENDING 10欄）へ減少したが、PR #326 第2巡 Codex bot レビュー
   Fix 3（P1、採用）により同欄は PENDING へ差し戻され、残 PENDING は
-  下記のとおり pre-run 必須10欄（総 PENDING 11欄）へ戻った——下記
-  「解消済み（RUN9-L0-HARNESS-1, 2026-08-26）」節参照〕（`attempt_id`/
+  pre-run 必須10欄（総 PENDING 11欄）へ戻った——下記
+  「解消済み（RUN9-L0-HARNESS-1, 2026-08-26）」節参照〕。続けて
+  RUN9-EXECPROFILE-1（2026-08-26）で `execution_profile_sha` が
+  PINNED 化され、残 PENDING は下記のとおり pre-run 必須9欄
+  （総 PENDING 10欄）へ減少した——下記
+  「解消済み（RUN9-EXECPROFILE-1, 2026-08-26）」節参照（`attempt_id`/
   `repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
-  `execution_profile_sha`/`expected_speaker_map_sha`/
-  `education_technique_lesson_manifest_sha`/`learning_recipe_sha`/
-  `measurement_spec_sha`/`hypothesis_algebra_sha` の pre-run 必須10欄が
-  引き続き PENDING のため（optional の `human_evaluation_protocol_sha` を
-  含めると総 PENDING 11欄）——`tests/test_run9_contract.py` の回帰テストで
-  機械確認済み）。
+  `expected_speaker_map_sha`/`education_technique_lesson_manifest_sha`/
+  `learning_recipe_sha`/`measurement_spec_sha`/`hypothesis_algebra_sha` の
+  pre-run 必須9欄が引き続き PENDING のため（optional の
+  `human_evaluation_protocol_sha` を含めると総 PENDING 10欄）——
+  `tests/test_run9_contract.py` の回帰テストで機械確認済み）。
 
 **解消済み（RUN9-L0-HARNESS-1, 2026-08-26）**:
 - `dependency_pins_sha` 未 pin →
@@ -919,12 +922,17 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   `r6_gate_materials_2026-08-20.tar.gz` の acoustic export companions
   4点（acoustic.onnx/dsconfig.yaml/acoustic_phonemes_json/
   speaker_embed(ritsu)）——展開した39ファイル全数を検査したが含まれて
-  おらず（MISS、`acoustic_export_companions` 節）、fail-closed 原則に
-  従い再export・代替調達へは進んでいない。pjs/user speaker embedding は
-  候補 sha256 のみ記録し pin 化していない（`speaker_embeddings_
-  unpinned_candidates` 節、User 裁定待ち）。決定論 smoke render・CPU
-  render 予算見積りはいずれも acoustic export companions 未取得により
-  `BLOCKED`（`smoke_render`/`budget_estimate` 節、数値を捏造しない）。
+  おらず（MISS、`acoustic_export_companions` 節）、本 HARNESS-1 の
+  Allowed Dependencies 範囲では再export・代替調達へは進まなかった
+  〔この acoustic export companions の MISS 状態・pjs/user speaker
+  embedding 未 pin・smoke render/budget estimate の BLOCKED は
+  **RUN9-L0-HARNESS-2（2026-08-26）で解消済み**——下記
+  「解消済み（RUN9-L0-HARNESS-2, 2026-08-26）」節参照〕。当時: pjs/user
+  speaker embedding は候補 sha256 のみ記録し pin 化していなかった
+  （`speaker_embeddings_unpinned_candidates` 節、User 裁定待ち）。決定論
+  smoke render・CPU render 予算見積りはいずれも acoustic export
+  companions 未取得により `BLOCKED` だった
+  （`smoke_render`/`budget_estimate` 節、数値を捏造しない）。
   詳細な取得経路・全照合結果・tar.gz 全数展開ログは
   [`HARNESS1_PROVISION_RECORD.md`](./HARNESS1_PROVISION_RECORD.md) を正とする。
   PR #326 第1巡 Codex bot レビュー2件（P2×2、採用）により
@@ -1035,6 +1043,101 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   COMPLETED 方向 = Fix 5/8、BLOCKED 残置方向 = Fix 18/20）で閉じた
   ——相互矛盾する状態組は構造的に表現不能になった。詳細は
   `HARNESS1_PROVISION_RECORD.md` §5-10。
+
+**解消済み（RUN9-L0-HARNESS-2, 2026-08-26）**:
+- acoustic export companions MISS →
+  User 裁定「RUN9 User裁定 — acoustic export companions / speaker
+  embeds」（2026-08-26、repo 内収載
+  [`USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt`](./USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt)）
+  決定2の承認に基づき、Step A（historical `onnx_gate_40000/` 一式の
+  Drive 全域再探索）が MISS 確定した後、RUN6 phase B 40K checkpoint から
+  DiffSinger commit `e2307b1080b00f3999702ce9017cfd75c7f862fe`・torch隔離
+  venv で checkpoint 再export を実行した。生成物一式（acoustic ONNX /
+  dsconfig / phonemes.json / languages.json / dictionary-ja.txt / 全
+  speaker .emb・export command・環境バージョン・exporter commit・input
+  checkpoint sha・output raw sha256）を一括 manifest 化し、新設
+  [`inputs/reexport_manifest.json`](./inputs/reexport_manifest.json)
+  （schema `run9-reexport-manifest/1.0`）として `reexport_manifest_sha`
+  へ新規 PINNED 化した。全9アーティファクトが独立2回の export で
+  sha256 完全一致（決定論確認）。歴史 pin との一致/不一致は正直に記録:
+  acoustic.onnx は不一致（`OBTAINED_DERIVED_NEW_BYTES`、新 status——捏造
+  して合わせていない）、dsconfig.yaml/phonemes.json/ritsu.emb は byte
+  一致（`OBTAINED_VERIFIED_MATCH` + `replay_evidence: true`、historical
+  bytes の復元とは扱わない）。
+  `inputs/dependency_pins_manifest.json#acoustic_export_companions` を
+  新 status `OBTAINED_VIA_REEXPORT` へ遷移した。
+- pjs.emb/user.emb 未 pin →
+  正式 PINNED 昇格条件（User 裁定3: 歴史4 sha と同一 directory/archive
+  内で同時実在することの実測確認）は依然未充足（Step A の Drive 全域
+  MISS により archive 自体が発見できなかったため）。再export による
+  byte 一致は replay evidence として `speaker_embeddings_unpinned_
+  candidates.{pjs,user,d3synth_reference_only}` へ追記したが、昇格条件
+  そのものは書き換えていない——`promotion_condition_unmet_note`
+  （machine 強制）が未充足を明示する。
+- smoke render / budget estimate BLOCKED →
+  再export成果物を用いた決定論 smoke render を独立2回実行し、同一入力2
+  render の WAV byte 一致（`c7e1dcdfb7139d490dc19347c21dad5f9966764182cb6ee7e0124ad8fedd379e`
+  両者一致）を実測確認した——`smoke_render.status == COMPLETED`。実測
+  平均秒（24.101547837257385秒/件）×616件概算（616は前巡基準値の踏襲
+  概算であり本 PR で確定しない、出典注記付き）で
+  `budget_estimate.status == COMPLETED`。詳細は
+  [`HARNESS2_REEXPORT_SMOKE_RECORD.md`](./HARNESS2_REEXPORT_SMOKE_RECORD.md)
+  を正とする。
+- `execution_profile_sha` は smoke 実測が完了したが、User 裁定4の裁定
+  主体は User 自身であり実測完了 = 自動 pin ではないため、当時は**引き続き
+  PENDING**（推定で PINNED にしない、裁定4逐語）とした〔履歴: 本欄自体は
+  **RUN9-EXECPROFILE-1（2026-08-26）で解消済み**——下記
+  「解消済み（RUN9-EXECPROFILE-1, 2026-08-26）」節参照〕。実測環境値一式
+  （Python/OS/kernel/arch/onnxruntime/providers/render entrypoint）は
+  `HARNESS2_REEXPORT_SMOKE_RECORD.md` §4 に記録済みだった。
+- `dependency_pins_sha` は上記いずれの解消にも関わらず**引き続き
+  PENDING**——本欄の残る律速は VG-L0 学習ハーネス本体（optimizer/探索
+  コード）の import closure 未確定のみ（PIN-1 `measurement_spec_sha` と
+  同型の理由）。af0 写像・learning recipe 残5キー・execution config・
+  education builder は HARNESS-3 以降の Design Memo へ引き継ぐ。
+
+**解消済み（RUN9-EXECPROFILE-1, 2026-08-26）**:
+- `execution_profile_sha` 未 pin →
+  User 裁定「RUN9 User裁定 — execution_profile_sha」（2026-08-26、repo 内
+  収載
+  [`USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt`](./USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt)）
+  の承認に基づき、runtime identity 5値（python "3.11.15" / os
+  "Ubuntu 24.04.4" / architecture "x86_64" / onnxruntime "1.29.0" /
+  selected_execution_provider "CPUExecutionProvider"）+ provider 固定
+  規則4点（CPUExecutionProvider 固定・available/selected 混同禁止・
+  GPU/CUDA 自動fallback/upgrade禁止・provider/主要runtime version変更時
+  の再pin義務）+ smoke benchmark 参考記録（`is_reference_only: true` で
+  identity 意味論から構造的に分離、616件概算の出典注記付き）+ 追加実測
+  9項目（裁定「可能であれば実測記録」節——CPU model/logical CPU count/
+  onnxruntime available・selected providers/intra・inter_op_num_threads/
+  numpy・soundfile version/render code commit/deterministic seed・
+  thread environment variables）を一括 manifest 化し、新設
+  [`inputs/execution_profile_manifest.json`](./inputs/execution_profile_manifest.json)
+  （schema `run9-execution-profile/1.0`）として `execution_profile_sha`
+  へ新規 PINNED 化した。追加実測9項目のうち `thread_environment_
+  variables` のみ smoke 実行時に明示設定した環境変数の一次記録が存在
+  せず `NOT_RECORDED`（推測補完はしていない）——他8項目はいずれも
+  `MEASURED`（onnxruntime available_providers/numpy/soundfile version は
+  smoke 実測記録との一致を確認済み、render code commit は smoke 実行時点
+  の repo HEAD（一次記録 `gate_synth_summary.json#input_sha256.
+  repo_git_head`）以降 `gate_synth.py` へ改変コミットが無いことを
+  sha256 一致で確認済み）。PR #327 第3巡指摘8対応（2026-08-26）:
+  `load_pinned_execution_profile_manifest()` へ render code（gate_synth.py
+  実体）の repo 静的 sha256 cross-check を追加し、live 環境
+  （Python/onnxruntime バージョン・provider）の照合は別関数
+  `verify_execution_profile_runtime()` へ分離した——**HARNESS-3 以降で
+  学習ハーネス/render 実行の run gate を配線する際は、render を開始する
+  前に必ず `verify_execution_profile_runtime()` を呼ぶこと**（load 時
+  ではなく実行時照合である理由は CI マトリクス環境との分離、詳細は
+  `RUN9_CONTRACT.yaml#execution_profile_sha` コメント参照）。PR #327 第7巡
+  指摘13対応（2026-08-26）: `verify_execution_profile_runtime()` の第一
+  引数を任意 manifest dict から load 済み `Run9RunContract` へ変更し、
+  関数内部で `load_pinned_execution_profile_manifest(contract, ...)`
+  （全 cross-check・execution_profile_sha 実バイト sha256 照合込み）を
+  atomic に呼んでから live 照合するよう配線した——run gate が
+  validate/sha 照合を経ていない任意 manifest を渡して live ホストに
+  合わせた値で偽成功検証する経路を閉じた（manifest dict を直接注入する
+  公開経路は存在しない）。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

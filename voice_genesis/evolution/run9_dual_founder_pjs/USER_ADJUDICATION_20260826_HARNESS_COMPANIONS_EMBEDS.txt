@@ -1,0 +1,141 @@
+RUN9 User裁定 — acoustic export companions / speaker embeds
+作成日: 2026-08-26 JST
+受領経路: User との対話（Design Memo RUN9-L0-HARNESS-2 起草に先立ち、
+session scratchpad（scratchpad/run9_user_adjudication_harness2.md）へ
+Fable が記録し、以後の実装・レビューが参照する正本として本ファイルへ
+repo 内収載した）
+対象: RUN9-L0-HARNESS-1（PR #326）で MISS 確定した acoustic export
+companions（acoustic.onnx / dsconfig.yaml / s5_run6_acoustic_v1.
+phonemes.json / s5_run6_acoustic_v1.ritsu.emb）の回収・再export可否、
+pjs.emb / user.emb の正式 PINNED 昇格条件、execution_profile_sha の
+裁定タイミング
+状態: User Adjudication（逐語・一字一句改変禁止）
+
+================================================================
+0. この文書の位置づけ
+================================================================
+
+本書は User が 2026-08-26 に下した裁定の逐語全文を repo 内へ収載した
+ものである。POR_CONCEPT_ADJUDICATION_20260824.txt /
+USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt と同じ前例
+（外部裁定を repo 内の凍結文書として保持し、以後の実装・レビューが
+参照する正本とする）に倣う。
+
+RUN9-L0-HARNESS-2 が新設した inputs/reexport_manifest.json の
+adjudication_basis、`run9_schema.validate_reexport_manifest()` /
+`validate_dependency_pins_manifest()` の docstring、
+RUN9_CONTRACT.yaml の reexport_manifest_sha reason は、すべて本書の
+逐語からの転記であり、Claude Code が新規に発明した値ではない
+（USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt が是正した
+Codex bot レビュー PR #325 第1巡指摘 Fix 2, P2 と同型の教訓——転記元が
+scratchpad のみだと、将来のレビュアーが「User 転記であって発明でない」
+ことを検証できない——を先取りして本書を repo 内収載する）。
+
+以下は起草時の作業メモ scratchpad/run9_user_adjudication_harness2.md の
+本文を一字一句そのまま転記する（改変禁止）。
+
+================================================================
+1. 本文（逐語、一字一句改変禁止）
+================================================================
+
+【RUN9 User裁定 — acoustic export companions / speaker embeds】
+
+1. acoustic export companions の回収
+
+まず既存 r6_gate_materials / archive から、
+historical RUN6 export directory
+`onnx_gate_40000/`
+の完全な実体回収を試みる。
+
+historical set の同一性確認には最低限、既存 pin と以下が一致することを要求する。
+
+acoustic.onnx
+  aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706
+
+dsconfig.yaml
+  a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c
+
+s5_run6_acoustic_v1.phonemes.json
+  5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8
+
+s5_run6_acoustic_v1.ritsu.emb
+  ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c
+
+これらが同一 directory/archive 内で確認できれば、
+historical export companions recovered とする。
+
+
+2. historical実体を回収できない場合
+
+checkpoint からの再 export を承認する。
+
+ただし再 export は
+「失われた historical bytes を復元した」
+とは扱わない。
+
+RUN6 phase B 40K checkpoint
+6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a
+
+を入力として、
+RUN9で前方宣言済みの DiffSinger commit
+e2307b1080b00f3999702ce9017cfd75c7f862fe
+を使い、
+torch 隔離 venv 内で新規 export する。
+
+この場合、生成物一式を
+RUN9_REEXPORT_FROM_RUN6_CKPT
+等の新しい derived runtime artifact として扱い、
+
+- acoustic ONNX
+- dsconfig
+- phonemes.json
+- 全 speaker .emb
+- export command
+- Python / torch / dependency versions
+- exporter commit
+- input checkpoint sha
+- output file raw sha256
+
+を一括 manifest 化して新規 pin する。
+
+旧 historical hash と一致しなくても捏造して合わせない。
+一致した場合は replay evidence として記録する。
+
+
+3. pjs.emb / user.emb
+
+以下の候補値は正式 pin 候補として採用してよい。
+
+pjs.emb
+074e09b390c207a7cf98105db549e1006d035a797d57f73e103e848bb3216015
+
+user.emb
+588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0
+
+ただし正式 PINNED 昇格条件は、
+これらが上記 historical `onnx_gate_40000/` 一式と
+同一 directory/archive に存在することを実測確認すること。
+
+tar.gz 内で
+aaaff716... / a7da75f5... / 5071e165... / ce4b87b9...
+の既存4 pinと同時に存在し、
+pjs/user .emb が上記shaと一致するなら、そのまま正式 pin する。
+
+この2値自体については既存RUN6 probe記録にも同じ値が存在するため、
+値の信頼性には独立した傍証がある。
+
+
+4. execution_profile_sha
+
+現時点では裁定しない。
+
+historical companions の回収、
+または checkpoint からの再 export が完了した後、
+
+同じ固定runtime inputsで smoke render を実測し、
+実際に使用した Python / OS / architecture /
+onnxruntime / providers / torch / dependency /
+render entrypoint 等を取得した時点で
+execution_profile_sha を裁定・pinする。
+
+smoke未実測の環境値を推定でPINNEDにしない。

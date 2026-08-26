@@ -1,0 +1,133 @@
+{
+  "additional_measurements": {
+    "cpu_model": {
+      "method": "`lscpu` 実行（本 session 環境。RUN9-L0-HARNESS-2 smoke render と同一 session/コンテナ環境内での実測——別環境からの転記ではない）。Model name: 行を転記した。",
+      "status": "MEASURED",
+      "value": "Intel(R) Xeon(R) Processor @ 2.10GHz"
+    },
+    "deterministic_seed_and_thread_environment_variables": {
+      "deterministic_seed": {
+        "consumption_note": "smoke 実測記録（scratchpad/harness_work/smoke_render{1,2}/gate_synth_summary.json#sampling_params.seed / gate_sakura_ritsu_n6_record.json#seed）も 42 で一致した。RUN9_CONTRACT.yaml#seed_policy_sha が別途 PINNED 済みの gate_synth_runtime_seed=42（gate_synth.py:149 SEED、消費点 ort.set_seed/record[\"seed\"] は gate_synth.py:1213-1214）と同一の値・同一の宣言箇所であり、本欄は独立に再確認したのみで新規事実ではない。performance_seed=909001/learning_seed=909002（seed_policy_manifest.json）は RUN9 学習側の別 seed であり、gate_synth.py には出現しない（grep で不在確認済み）——本欄が指す『deterministic seed』は render entrypoint が実消費する SEED=42 のみを指す。",
+        "declaration_form": "in-code declaration",
+        "source_file": "voice_genesis/foundry/s1_gate/gate_synth.py",
+        "source_line": 149,
+        "source_line_text": "SEED = 42",
+        "status": "MEASURED",
+        "value": 42
+      },
+      "status": "MEASURED",
+      "thread_environment_variables": {
+        "reason": "smoke 実行時に明示設定した環境変数（OMP_NUM_THREADS 等）の記録が、一次ソース（scratchpad/harness2_smoke_record.md、および scratchpad/harness_work/smoke_render{1,2}/ 配下の gate_synth_summary.json・gate_sakura_ritsu_n6_record.json）のいずれにも存在しない。現在の session 環境変数を smoke 実行時の値として代用することは推測補完にあたるため行わない。",
+        "status": "NOT_RECORDED"
+      }
+    },
+    "logical_cpu_count": {
+      "method": "`nproc` 実行（cpu_model と同一 session 環境での実測）。",
+      "status": "MEASURED",
+      "value": 4
+    },
+    "numpy_version": {
+      "matches_smoke_record": true,
+      "method": "`python3 -c \"import numpy; print(numpy.__version__)\"`（render 側 system python3、venv 不使用、本 session で実行——`sys.prefix == sys.base_prefix == \"/usr\"` で system interpreter であることも確認済み）。",
+      "smoke_record_source": "HARNESS2_REEXPORT_SMOKE_RECORD.md 環境値節。",
+      "smoke_record_value": "2.4.6",
+      "status": "MEASURED",
+      "value": "2.4.6"
+    },
+    "onnxruntime_available_providers": {
+      "matches_smoke_record": true,
+      "method": "`python3 -c \"import onnxruntime; print(onnxruntime.get_available_providers())\"` を本 session で実行。",
+      "smoke_record_source": "HARNESS2_REEXPORT_SMOKE_RECORD.md 環境値節（scratchpad/harness2_smoke_record.md 転記元）。",
+      "smoke_record_value": [
+        "AzureExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "status": "MEASURED",
+      "value": [
+        "AzureExecutionProvider",
+        "CPUExecutionProvider"
+      ]
+    },
+    "onnxruntime_selected_providers": {
+      "method": "voice_genesis/foundry/s1_gate/gate_synth.py の実ソースを Read で確認した（ハードコードされた providers リスト、InferenceSession へ渡す実引数）。",
+      "source_file": "voice_genesis/foundry/s1_gate/gate_synth.py",
+      "source_line": 1218,
+      "source_line_text": "providers = [\"CPUExecutionProvider\"]",
+      "status": "MEASURED",
+      "value": [
+        "CPUExecutionProvider"
+      ]
+    },
+    "onnxruntime_thread_settings": {
+      "inter_op_num_threads": {
+        "source_file": "voice_genesis/foundry/s1_gate/gate_synth.py",
+        "source_line": 1217,
+        "source_line_text": "so.inter_op_num_threads = 1",
+        "specification_status": "EXPLICITLY_SET",
+        "value": 1
+      },
+      "intra_op_num_threads": {
+        "source_file": "voice_genesis/foundry/s1_gate/gate_synth.py",
+        "source_line": 1216,
+        "source_line_text": "so.intra_op_num_threads = 1",
+        "specification_status": "EXPLICITLY_SET",
+        "value": 1
+      },
+      "method": "gate_synth.py の ort.SessionOptions() 設定箇所を Read で確認した（`so.intra_op_num_threads = 1` / `so.inter_op_num_threads = 1`）。両者とも明示的に設定されており、裁定が指す『未指定なら DEFAULT』の分岐には該当しない。PR #327 レビュー第15巡指摘27対応（2026-08-26）: 両者へ `source_line_text`（strip 済み逐語、gate_synth.py の実ファイルから転記）を追加し、`load_pinned_execution_profile_manifest()` cross-check (8) の行照合対象へ編入した（旧実装は `onnxruntime_selected_providers`/`deterministic_seed` の2項目のみを照合し、本2項目は source_line が正整数であることしか検証していなかった——将来 repin で cited 行が stale・無関係になっても受理される穴だった）。",
+      "status": "MEASURED"
+    },
+    "render_code_commit": {
+      "file": "voice_genesis/foundry/s1_gate/gate_synth.py",
+      "file_sha256": "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894",
+      "file_sha256_method": "sha256sum（本 session、現行 repo working tree の実バイト、本 PR は同ファイルを1byteも変更していない）。",
+      "last_modifying_commit": "386a7faca0ad94eb066b4b71b17a2f8ed02612e7",
+      "last_modifying_commit_date_utc": "2026-08-21T18:41:59+00:00",
+      "last_modifying_commit_method": "`git log --oneline -- voice_genesis/foundry/s1_gate/gate_synth.py` の最新1件（本 session、現行 repo）。",
+      "smoke_time_gate_synth_py_sha256": "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894",
+      "smoke_time_gate_synth_py_sha256_source": "同上 gate_synth_summary.json#input_sha256.gate_synth_py（load-time hash + pre-publish re-hash belt、gate_synth.py 自身の provenance ledger）。",
+      "smoke_time_repo_head_commit": "d7c66f8c14cf0b6b8495946fc7fcac54fe9d19e4",
+      "smoke_time_repo_head_source": "一次記録 scratchpad/harness_work/smoke_render1/gate_synth_summary.json#input_sha256.repo_git_head（gate_synth.py 自身が smoke render 実行時に記録した ugh-prompt-engine repo の git HEAD、review #264 R24 由来の provenance ledger）。",
+      "status": "MEASURED",
+      "unchanged_verification_method": "smoke_time_repo_head_commit（d7c66f8c）時点の gate_synth.py 内容を本 session 内で `git show d7c66f8c...:voice_genesis/foundry/s1_gate/gate_synth.py | sha256sum` により再計算し、smoke_time_gate_synth_py_sha256 および file_sha256（現行 working tree の実バイト）の3者が完全一致することを確認した。加えて last_modifying_commit（386a7fac、2026-08-21）が smoke_time_repo_head_commit（d7c66f8c、2026-08-26 以前）の祖先であることを `git merge-base --is-ancestor` で確認した——smoke 実行時点から現在に至るまで gate_synth.py への改変コミットは存在しない。"
+    },
+    "soundfile_version": {
+      "matches_smoke_record": true,
+      "method": "`python3 -c \"import soundfile; print(soundfile.__version__)\"`（render 側 system python3、本 session で実行）。",
+      "smoke_record_source": "HARNESS2_REEXPORT_SMOKE_RECORD.md 環境値節。",
+      "smoke_record_value": "0.14.0",
+      "status": "MEASURED",
+      "value": "0.14.0"
+    }
+  },
+  "adjudication_basis": {
+    "sha256": "cb56c3cd6bb14cb18251138f0c48dd209eb5995b1815019ad2d5f53451c147bf",
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt",
+    "summary": "User 裁定 2026-08-26【RUN9 User裁定 — execution_profile_sha】に基づく実測 execution profile manifest。runtime identity 5値・provider 固定規則4点・smoke benchmark 参考記録・追加実測9項目を収載する。"
+  },
+  "benchmark_reference": {
+    "estimated_total_runtime_hours": "approximately 4.12",
+    "is_reference_only": true,
+    "note": "benchmark値は実行能力・費用・所要時間の参考記録であり、出力同一性を定義する execution profile の意味論そのものには含めない。マシン負荷等により速度が変わっても、それだけで再現性違反とはしない。",
+    "observed_seconds_per_item": 24.1,
+    "planned_item_count": 616,
+    "planned_item_count_provenance_note": "616 は前巡の返信・過去記録で言及されてきた基準値をそのまま踏襲した概算であり、本 manifest で新たに確定した値ではない（inputs/dependency_pins_manifest.json#budget_estimate.total_render_count_provenance_note / inputs/reexport_manifest.json#smoke_render_cross_check.budget_count_provenance_note と同旨の出典注記）。"
+  },
+  "generated_at_utc": "2026-08-26T17:06:48Z",
+  "identity_semantics": {
+    "provider_fixation_rules": [
+      "selected_execution_provider は CPUExecutionProvider に固定する。",
+      "available provider の列挙と、実際に session が選択した provider を混同しない。",
+      "GPU/CUDA provider への自動fallback / upgradeは禁止する。",
+      "provider または主要runtime versionが変わる場合は、同じ execution_profile_sha を使わず再pinする。"
+    ],
+    "runtime": {
+      "architecture": "x86_64",
+      "onnxruntime": "1.29.0",
+      "os": "Ubuntu 24.04.4",
+      "python": "3.11.15",
+      "selected_execution_provider": "CPUExecutionProvider"
+    }
+  },
+  "pin_disposition": "RUN9-EXECPROFILE-1（2026-08-26、User 裁定「RUN9 User裁定 — execution_profile_sha」の承認に基づく）で execution_profile_sha として RUN9_CONTRACT.yaml へ新規 PINNED 化された。identity_semantics（runtime 5値 + provider 固定規則4点）が出力同一性を定義する意味論であり、benchmark_reference（smoke 実測秒数・616件概算・所要時間概算）は参考記録として意味論から構造的に分離する（is_reference_only: true）。additional_measurements は実測できた値のみを記録し、thread_environment_variables のみ smoke 実行時の一次記録が存在しないため NOT_RECORDED とした（推測補完はしていない）。",
+  "schema": "run9-execution-profile/1.0"
+}

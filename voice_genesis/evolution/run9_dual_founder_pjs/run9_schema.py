@@ -24,6 +24,7 @@ import hashlib
 import importlib.util
 import json
 import math
+import platform
 import re
 import sys
 import types
@@ -6982,6 +6983,20 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     "dataset_row_order_sha",
     "config_sha",
     "dependency_pins_sha",
+    # RUN9-L0-HARNESS-2 で追加: inputs/reexport_manifest.json（RUN6 phase B
+    # 40K checkpoint からの derived runtime artifact 一括 manifest、User 裁定
+    # 2026-08-26 決定2）自体の実 sha256（design_doc_sha256 と同一のファイル
+    # 実バイト規約）。dependency_pins_sha とは独立の欄——本欄は再export
+    # 実測台帳そのものの凍結のみを主張し、学習ハーネス本体の依存 closure
+    # （dependency_pins_sha が引き続き PENDING である理由）には関与しない。
+    "reexport_manifest_sha",
+    # RUN9-EXECPROFILE-1 で追加: inputs/execution_profile_manifest.json（User
+    # 裁定 2026-08-26【RUN9 User裁定 — execution_profile_sha】が承認した
+    # runtime identity 5値 + provider 固定規則4点 + smoke benchmark 参考記録
+    # + 追加実測9項目の一括 manifest）自体の実 sha256（design_doc_sha256 と
+    # 同一のファイル実バイト規約）。dependency_pins_sha とは独立の欄——本欄が
+    # 凍結するのは execution profile identity のみであり、学習ハーネス本体の
+    # 依存 closure には関与しない。
     "execution_profile_sha",
     "seed_policy_sha",
     "expected_speaker_map_sha",
@@ -11380,6 +11395,50 @@ _ACOUSTIC_COMPANION_ITEM_OBTAINED_REQUIRED_KEYS: FrozenSet[str] = (
     _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS | _ACOUSTIC_COMPANION_ITEM_OBTAINED_ONLY_KEYS
 )
 
+# RUN9-L0-HARNESS-2（2026-08-26, User 裁定 2026-08-26 決定2）: checkpoint
+# からの再 export で得た companions は item ごとに歴史値と一致するか
+# しないかが割れる（acoustic.onnx は不一致・dsconfig/phonemes/ritsu.emb は
+# 一致）——旧 `OBTAINED_VERIFIED_MATCH` top-level status は「全item が
+# 一致」を機械強制していたため、この混在状態を正直に表現できなかった
+# （不一致のまま VERIFIED_MATCH を名乗らせると捏造になり、逆に全item を
+# 一致必須のまま扱うと不一致の実測事実を記録できない）。新設 top-level
+# status `OBTAINED_VIA_REEXPORT` は item ごとに独立した `status`
+# （`OBTAINED_VERIFIED_MATCH` / `OBTAINED_DERIVED_NEW_BYTES`）を持たせる
+# 判別 shape とし、各 item の実測 sha と歴史値の一致/不一致を machine
+# 強制で正直に記録する（設計判断2/3、Design Memo RUN9-L0-HARNESS-2）。
+_ACOUSTIC_COMPANION_ITEM_STATUS_VOCAB: Tuple[str, ...] = (
+    "OBTAINED_VERIFIED_MATCH", "OBTAINED_DERIVED_NEW_BYTES",
+)
+_ACOUSTIC_COMPANION_ITEM_REEXPORT_COMMON_KEYS: FrozenSet[str] = (
+    _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS
+    | frozenset({"measured_sha256", "acquisition_source", "status", "matches_historical"})
+)
+# OBTAINED_DERIVED_NEW_BYTES 専用: 歴史 pin 値の保持（`expected_sha256` は
+# bundle cross-check の対象のまま不変——歴史値の保持先はこちらではなく
+# 従来通り `expected_sha256` 自体。`historical_expected_sha256` は
+# 「歴史値との不一致を正直に自称する」ための二重記録であり、
+# `expected_sha256` と厳密一致することを validator が machine 強制する）
+# + reexport manifest 側の当該 artifact への参照。
+_ACOUSTIC_COMPANION_ITEM_DERIVED_ONLY_KEYS: FrozenSet[str] = frozenset({
+    "historical_expected_sha256", "reexport_manifest_ref",
+})
+_ACOUSTIC_COMPANION_ITEM_DERIVED_KEYS: FrozenSet[str] = (
+    _ACOUSTIC_COMPANION_ITEM_REEXPORT_COMMON_KEYS | _ACOUSTIC_COMPANION_ITEM_DERIVED_ONLY_KEYS
+)
+# OBTAINED_VERIFIED_MATCH（reexport 経由）専用: byte 一致は実測事実として
+# 正当だが「historical bytes の復元」とは扱わない旨を replay_evidence で
+# 明示する（User 裁定2 逐語）。
+_ACOUSTIC_COMPANION_ITEM_REEXPORT_VERIFIED_ONLY_KEYS: FrozenSet[str] = frozenset({
+    "replay_evidence",
+})
+_ACOUSTIC_COMPANION_ITEM_REEXPORT_VERIFIED_KEYS: FrozenSet[str] = (
+    _ACOUSTIC_COMPANION_ITEM_REEXPORT_COMMON_KEYS
+    | _ACOUSTIC_COMPANION_ITEM_REEXPORT_VERIFIED_ONLY_KEYS
+)
+_ACOUSTIC_COMPANION_REEXPORT_MANIFEST_REF_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "artifact_key", "reexport_manifest_sha256",
+})
+
 # Codex bot レビュー PR #326 第6巡指摘 Fix 14（P2, 採用, 将来汚染:
 # status 判別の未完部分）: item レベルの shape は Fix 1/7 で status
 # 判別化済みだったが、トップレベルの narrative フィールド
@@ -11416,8 +11475,112 @@ _ACOUSTIC_COMPANIONS_ACQUISITION_RECORD_REQUIRED_KEYS: FrozenSet[str] = frozense
 })
 
 _ACOUSTIC_COMPANIONS_STATUS_VOCAB: Tuple[str, ...] = (
-    "NOT_OBTAINED_TARBALL_MISS", "OBTAINED_VERIFIED_MATCH",
+    "NOT_OBTAINED_TARBALL_MISS", "OBTAINED_VERIFIED_MATCH", "OBTAINED_VIA_REEXPORT",
 )
+
+
+def _validate_reexport_acoustic_companion_item(item: Mapping[str, Any], *, index: int) -> None:
+    """`OBTAINED_VIA_REEXPORT`（RUN9-L0-HARNESS-2）配下の item 1件を検証
+    する。item 自身の `status`（`OBTAINED_VERIFIED_MATCH`/
+    `OBTAINED_DERIVED_NEW_BYTES`）ごとに分岐し、User 裁定2026-08-26
+    決定2「旧historical hashと一致しなくても捏造して合わせない。一致した
+    場合はreplay evidenceとして記録する」を machine 強制する。
+    """
+    field = f"acoustic_export_companions.expected_items[{index}]"
+    item_status = item["status"]
+    expected_sha = item["expected_sha256"]
+    measured_sha = item["measured_sha256"]
+    if not isinstance(measured_sha, str) or not _SHA256_HEX_RE.match(measured_sha):
+        raise Run9ValidationError(
+            f"{field}.measured_sha256 must be a 64hex sha256, got {measured_sha!r}"
+        )
+    acquisition_source = item["acquisition_source"]
+    if acquisition_source != "RE_EXPORT":
+        raise Run9ValidationError(
+            f"{field}.acquisition_source must be 'RE_EXPORT' under section status "
+            f"OBTAINED_VIA_REEXPORT, got {acquisition_source!r}"
+        )
+    matches_historical = item["matches_historical"]
+    if not isinstance(matches_historical, bool):
+        raise Run9ValidationError(
+            f"{field}.matches_historical must be a bool, got {matches_historical!r}"
+        )
+    # (c) fail-closed: matches_historical は自己申告ではなく measured_sha256
+    # == expected_sha256 の in-process 再計算と一致しなければならない
+    # （捏造・転記ミスの機械検出）。
+    computed_match = measured_sha == expected_sha
+    if matches_historical != computed_match:
+        raise Run9ValidationError(
+            f"{field}.matches_historical ({matches_historical!r}) diverges from the in-process "
+            f"recomputation of (measured_sha256 == expected_sha256), which is {computed_match!r} "
+            "— a fabricated or stale matches_historical claim is rejected fail-closed"
+        )
+    if item_status == "OBTAINED_DERIVED_NEW_BYTES":
+        # (g) acoustic_onnx.matches_historical == false の逐語保持: true への
+        # 書き換えは拒否する（実測事実の凍結）。
+        if matches_historical is not False:
+            raise Run9ValidationError(
+                f"{field}.matches_historical must be the literal boolean False when status is "
+                "OBTAINED_DERIVED_NEW_BYTES — a byte match would mean this item should instead "
+                "claim OBTAINED_VERIFIED_MATCH; True is never accepted here (frozen fact, User "
+                "adjudication 2026-08-26)"
+            )
+        historical_expected = item["historical_expected_sha256"]
+        if not isinstance(historical_expected, str) or not _SHA256_HEX_RE.match(historical_expected):
+            raise Run9ValidationError(
+                f"{field}.historical_expected_sha256 must be a 64hex sha256, got "
+                f"{historical_expected!r}"
+            )
+        if historical_expected != expected_sha:
+            raise Run9ValidationError(
+                f"{field}.historical_expected_sha256 ({historical_expected!r}) must equal "
+                f"expected_sha256 ({expected_sha!r}) — both name the same frozen historical pin "
+                "value and must not diverge"
+            )
+        ref = item["reexport_manifest_ref"]
+        if not isinstance(ref, dict):
+            raise Run9ValidationError(
+                f"{field}.reexport_manifest_ref must be an object, got {type(ref).__name__}"
+            )
+        unknown_ref = set(ref.keys()) - _ACOUSTIC_COMPANION_REEXPORT_MANIFEST_REF_REQUIRED_KEYS
+        if unknown_ref:
+            raise Run9ValidationError(
+                f"{field}.reexport_manifest_ref has unknown key(s): {sorted(unknown_ref)}"
+            )
+        missing_ref = _ACOUSTIC_COMPANION_REEXPORT_MANIFEST_REF_REQUIRED_KEYS - set(ref.keys())
+        if missing_ref:
+            raise Run9ValidationError(
+                f"{field}.reexport_manifest_ref missing required key(s): {sorted(missing_ref)}"
+            )
+        artifact_key = _require_non_empty_str(
+            ref["artifact_key"], field=f"{field}.reexport_manifest_ref.artifact_key"
+        )
+        if artifact_key != item["logical_name"]:
+            raise Run9ValidationError(
+                f"{field}.reexport_manifest_ref.artifact_key ({artifact_key!r}) must equal this "
+                f"item's own logical_name ({item['logical_name']!r})"
+            )
+        reexport_sha = ref["reexport_manifest_sha256"]
+        if not isinstance(reexport_sha, str) or not _SHA256_HEX_RE.match(reexport_sha):
+            raise Run9ValidationError(
+                f"{field}.reexport_manifest_ref.reexport_manifest_sha256 must be a 64hex "
+                f"sha256, got {reexport_sha!r}"
+            )
+    else:  # OBTAINED_VERIFIED_MATCH
+        if matches_historical is not True:
+            raise Run9ValidationError(
+                f"{field}.matches_historical must be the literal boolean True when status is "
+                "OBTAINED_VERIFIED_MATCH (byte match is the entire basis of this status)"
+            )
+        replay_evidence = item["replay_evidence"]
+        if replay_evidence is not True:
+            raise Run9ValidationError(
+                f"{field}.replay_evidence must be the literal boolean True — a byte match "
+                "obtained via re-export is recorded as replay evidence, not as recovery of the "
+                "original historical bytes (User adjudication 2026-08-26 decision 2, verbatim: "
+                "旧historical hashと一致しなくても捏造して合わせない。一致した場合はreplay "
+                "evidenceとして記録する)"
+            )
 
 
 def _validate_acoustic_export_companions(section: Any) -> None:
@@ -11458,10 +11621,17 @@ def _validate_acoustic_export_companions(section: Any) -> None:
     # status 判別型 shape（Fix 1）: OBTAINED のときのみ item ごとに
     # `measured_sha256` を必須化し、NOT_OBTAINED のときは逆に禁止する
     # （禁止は許可キー集合から外すだけで、unknown key チェックが自動的に
-    # 「未取得なのに実測値がある」矛盾を拒否する）。
+    # 「未取得なのに実測値がある」矛盾を拒否する）。RUN9-L0-HARNESS-2:
+    # `OBTAINED_VIA_REEXPORT` のときは item ごとの shape が item 自身の
+    # `status`（`OBTAINED_VERIFIED_MATCH`/`OBTAINED_DERIVED_NEW_BYTES`）に
+    # よって分岐するため、top-level status だけでは一意に決まらない
+    # ——ループ内で item ごとに再判定する（`item_allowed_keys` を
+    # ループ外で一括計算する旧方式は使えない）。
     if status == "OBTAINED_VERIFIED_MATCH":
         item_allowed_keys = _ACOUSTIC_COMPANION_ITEM_OBTAINED_REQUIRED_KEYS
         item_required_keys = _ACOUSTIC_COMPANION_ITEM_OBTAINED_REQUIRED_KEYS
+    elif status == "OBTAINED_VIA_REEXPORT":
+        item_allowed_keys = item_required_keys = None  # per-item（下記ループ内）
     else:
         item_allowed_keys = _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS
         item_required_keys = _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS
@@ -11472,12 +11642,26 @@ def _validate_acoustic_export_companions(section: Any) -> None:
                 f"dependency pins manifest.acoustic_export_companions.expected_items[{i}] must "
                 f"be an object, got {type(item).__name__}"
             )
+        if status == "OBTAINED_VIA_REEXPORT":
+            item_status = item.get("status")
+            if item_status not in _ACOUSTIC_COMPANION_ITEM_STATUS_VOCAB:
+                raise Run9ValidationError(
+                    f"dependency pins manifest.acoustic_export_companions.expected_items[{i}]."
+                    f"status must be one of {_ACOUSTIC_COMPANION_ITEM_STATUS_VOCAB!r} when the "
+                    f"section status is OBTAINED_VIA_REEXPORT, got {item_status!r}"
+                )
+            item_allowed_keys = item_required_keys = (
+                _ACOUSTIC_COMPANION_ITEM_DERIVED_KEYS
+                if item_status == "OBTAINED_DERIVED_NEW_BYTES"
+                else _ACOUSTIC_COMPANION_ITEM_REEXPORT_VERIFIED_KEYS
+            )
         unknown_item = set(item.keys()) - item_allowed_keys
         if unknown_item:
             raise Run9ValidationError(
                 f"dependency pins manifest.acoustic_export_companions.expected_items[{i}] has "
                 f"unknown key(s) for status {status!r}: {sorted(unknown_item)} (measured_sha256 "
-                "is only permitted — and required — when status is OBTAINED_VERIFIED_MATCH)"
+                "is only permitted — and required — when status is OBTAINED_VERIFIED_MATCH or "
+                "OBTAINED_VIA_REEXPORT)"
             )
         missing_item = item_required_keys - set(item.keys())
         if missing_item:
@@ -11522,6 +11706,8 @@ def _validate_acoustic_export_companions(section: Any) -> None:
                     f"acquisition_source must be one of {_ACQUISITION_SOURCE_VOCAB!r}, got "
                     f"{acquisition_source!r}"
                 )
+        elif status == "OBTAINED_VIA_REEXPORT":
+            _validate_reexport_acoustic_companion_item(item, index=i)
     # Codex bot レビュー PR #326 第2巡指摘 Fix 6（P2, 採用）: set 等価判定
     # だけでは重複 logical_name を検出できない（例: 4種の正しい名前 + 1件の
     # 重複で計5件でも `set(seen_names)` は4件に潰れ、直後の集合等価チェック
@@ -11798,7 +11984,7 @@ def _validate_tar_gz_full_member_ledger(
                     "acoustic_export_companions.status must be updated to reflect this before "
                     "PINNED (stale-miss inconsistency)"
                 )
-    elif companion_status == "OBTAINED_VERIFIED_MATCH":
+    elif companion_status in ("OBTAINED_VERIFIED_MATCH", "OBTAINED_VIA_REEXPORT"):
         # Codex bot レビュー PR #326 第3巡指摘 Fix 7（P2, 採用）: tar
         # membership + sha 整合の要求は、その item が実際に「この
         # tarball」から取得されたと申告している（acquisition_source ==
@@ -11806,6 +11992,11 @@ def _validate_tar_gz_full_member_ledger(
         # 取得は、このファイルの tar_gz_full_member_ledger に一切現れ
         # なくて構わない——Fix 1 の measured_sha256 == expected_sha256
         # 強制（`_validate_acoustic_export_companions()`）だけで十分。
+        # RUN9-L0-HARNESS-2（`OBTAINED_VIA_REEXPORT`）: 全 item が
+        # `acquisition_source == "RE_EXPORT"` を強制されるため
+        # （`_validate_reexport_acoustic_companion_item()`）、本ループは
+        # 構造的に no-op になる——tar 由来ではない取得経路は tar member の
+        # 有無を問わない、という Fix 7 の設計をそのまま再利用する。
         for item in companion_items:
             if item.get("acquisition_source") != "THIS_TARBALL":
                 continue
@@ -11965,11 +12156,20 @@ def _validate_diffsinger_render_code_commit(section: Any) -> None:
         )
 
 
+# RUN9-L0-HARNESS-2 で追加: `replay_evidence`（再export で byte 一致した
+# ことの独立傍証、User 裁定3「この2値自体については既存RUN6 probe記録に
+# も同じ値が存在するため、値の信頼性には独立した傍証がある」）+
+# `promotion_condition_unmet_note`（正式 PINNED 昇格条件——歴史4 sha との
+# 同一 directory/archive 内同時実在の実測確認——が未充足のままであることの
+# 明示。傍証の追記が暗黙の昇格と誤読されないための必須注記）。両欄とも
+# pjs/user/d3synth 全 candidate 共通で必須化する。
 _SPEAKER_EMBED_CANDIDATE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "file", "candidate_sha256", "candidate_sha256_first16", "source", "status",
+    "replay_evidence", "promotion_condition_unmet_note",
 })
 _SPEAKER_EMBED_D3SYNTH_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "note", "candidate_sha256", "source", "status",
+    "replay_evidence", "promotion_condition_unmet_note",
 })
 # Codex bot レビュー PR #326 第3巡指摘 Fix 9（P2, 採用）: 旧実装は
 # `status.startswith("UNPINNED_CANDIDATE")` という接頭辞判定で、
@@ -12017,6 +12217,17 @@ def _validate_speaker_embed_candidate(
         _require_non_empty_str(entry["file"], field=f"{field}.file")
     if "note" in required_keys:
         _require_non_empty_str(entry["note"], field=f"{field}.note")
+    # RUN9-L0-HARNESS-2: replay_evidence は「独立傍証がある」ことの機械
+    # 表明（literal True 固定——false を許すと「傍証がない」候補と区別が
+    # つかなくなる。傍証がない場合は本欄自体を manifest から省く設計）。
+    replay_evidence = entry["replay_evidence"]
+    if replay_evidence is not True:
+        raise Run9ValidationError(
+            f"{field}.replay_evidence must be the literal boolean True, got {replay_evidence!r}"
+        )
+    _require_non_empty_str(
+        entry["promotion_condition_unmet_note"], field=f"{field}.promotion_condition_unmet_note"
+    )
     status = entry["status"]
     if status not in allowed_status:
         raise Run9ValidationError(
@@ -12099,7 +12310,16 @@ _SMOKE_RENDER_BLOCKED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 _SMOKE_RENDER_COMPLETED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "status", "reason", "determinism_confirmed", "measured_sec_per_render", "render_condition",
     "render_output_sha256_first", "render_output_sha256_second",
+    # RUN9-L0-HARNESS-2 追加: 実測秒の内訳（独立2回それぞれの実測、
+    # `measured_sec_per_render` はこの2値の平均であることを machine
+    # 強制する）+ render entrypoint 逐語 + onnxruntime providers 実測
+    # （execution_profile_sha 裁定材料、User 裁定4「実際に使用した...
+    # onnxruntime/providers...を取得した時点で execution_profile_sha を
+    # 裁定・pinする」に対応する記録）。
+    "render1_total_elapsed_sec", "render2_total_elapsed_sec",
+    "render_entrypoint", "onnxruntime_providers",
 })
+_SMOKE_RENDER_TOTAL_SEC_REL_TOL: float = 1e-9
 
 
 def _validate_smoke_render_section(section: Any, *, companions_status: str) -> None:
@@ -12164,10 +12384,38 @@ def _validate_smoke_render_section(section: Any, *, companions_status: str) -> N
                 f"COMPLETED (a completed smoke render must have actually confirmed determinism, "
                 f"not merely claimed it), got {section['determinism_confirmed']!r}"
             )
-        _require_positive_finite_number(
+        measured_sec_per_render = _require_positive_finite_number(
             section["measured_sec_per_render"], field=f"{field}.measured_sec_per_render"
         )
         _require_non_empty_str(section["render_condition"], field=f"{field}.render_condition")
+        render1_sec = _require_positive_finite_number(
+            section["render1_total_elapsed_sec"], field=f"{field}.render1_total_elapsed_sec"
+        )
+        render2_sec = _require_positive_finite_number(
+            section["render2_total_elapsed_sec"], field=f"{field}.render2_total_elapsed_sec"
+        )
+        expected_avg = (render1_sec + render2_sec) / 2
+        if not math.isclose(
+            measured_sec_per_render, expected_avg, rel_tol=_SMOKE_RENDER_TOTAL_SEC_REL_TOL,
+        ):
+            raise Run9ValidationError(
+                f"{field}.measured_sec_per_render ({measured_sec_per_render!r}) must equal the "
+                f"average of render1_total_elapsed_sec/render2_total_elapsed_sec "
+                f"({render1_sec!r}, {render2_sec!r} -> {expected_avg!r}, "
+                f"rel_tol={_SMOKE_RENDER_TOTAL_SEC_REL_TOL!r})"
+            )
+        _require_non_empty_str(section["render_entrypoint"], field=f"{field}.render_entrypoint")
+        providers = section["onnxruntime_providers"]
+        if not isinstance(providers, list) or not providers:
+            raise Run9ValidationError(
+                f"{field}.onnxruntime_providers must be a non-empty list, got {providers!r}"
+            )
+        for provider in providers:
+            if not isinstance(provider, str) or not provider.strip():
+                raise Run9ValidationError(
+                    f"{field}.onnxruntime_providers entries must be non-empty strings, got "
+                    f"{provider!r}"
+                )
         first_hash = section["render_output_sha256_first"]
         second_hash = section["render_output_sha256_second"]
         if not isinstance(first_hash, str) or not _SHA256_HEX_RE.match(first_hash):
@@ -12192,13 +12440,14 @@ def _validate_smoke_render_section(section: Any, *, companions_status: str) -> N
         # COMPLETED を名乗るのは「存在しないと同時に主張している入力で
         # render した」という自己矛盾——Fix 5（budget↔smoke）と同型の
         # 結合強制。
-        if companions_status != "OBTAINED_VERIFIED_MATCH":
+        if companions_status not in ("OBTAINED_VERIFIED_MATCH", "OBTAINED_VIA_REEXPORT"):
             raise Run9ValidationError(
                 f"{field}.status is COMPLETED but acoustic_export_companions.status is not "
-                f"OBTAINED_VERIFIED_MATCH (got {companions_status!r}) — a completed smoke render "
-                "consumes acoustic.onnx/dsconfig.yaml/acoustic_phonemes_json/speaker_embed via "
-                "gate_synth.py --acoustic-dir; it cannot claim completion using inputs the "
-                "manifest simultaneously says are unobtained (self-contradictory pin)"
+                f"OBTAINED_VERIFIED_MATCH or OBTAINED_VIA_REEXPORT (got {companions_status!r}) — "
+                "a completed smoke render consumes acoustic.onnx/dsconfig.yaml/"
+                "acoustic_phonemes_json/speaker_embed via gate_synth.py --acoustic-dir; it "
+                "cannot claim completion using inputs the manifest simultaneously says are "
+                "unobtained (self-contradictory pin)"
             )
 
 
@@ -12208,6 +12457,11 @@ _BUDGET_ESTIMATE_BLOCKED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 })
 _BUDGET_ESTIMATE_COMPLETED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "status", "reason", "total_render_count", "estimated_total_sec",
+    # RUN9-L0-HARNESS-2 追加: `total_render_count`（616）が本 PR で新たに
+    # 確定した値ではなく、前巡の返信・過去記録で言及されてきた基準値の
+    # 踏襲概算であることの出典注記を必須化する（設計判断8、確定値化の
+    # 誤読を防ぐ）。
+    "total_render_count_provenance_note",
 })
 
 
@@ -12324,6 +12578,10 @@ def _validate_budget_estimate_section(section: Any, *, smoke_render_section: Any
                 f"rel_tol={_BUDGET_ESTIMATE_TOTAL_SEC_REL_TOL!r}) — the two completed sections "
                 "must be arithmetically consistent, not merely both present"
             )
+        _require_non_empty_str(
+            section["total_render_count_provenance_note"],
+            field=f"{field}.total_render_count_provenance_note",
+        )
 
 
 # Codex bot レビュー PR #326 第5巡指摘 Fix 13（P2, 採用）: PR #326 第2巡
@@ -12590,6 +12848,41 @@ def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
     _validate_budget_estimate_section(data["budget_estimate"], smoke_render_section=data["smoke_render"])
 
 
+def _read_pinned_reexport_manifest_bytes(
+    disk_contract: Run9RunContract,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """`reexport_manifest_sha` pin の実バイトを読み・検証し、(parsed
+    manifest dict, pin field dict) を返す軽量 helper。
+    `load_pinned_dependency_pins_manifest()` の
+    `OBTAINED_DERIVED_NEW_BYTES` cross-check（AC(h)相当）が使う——
+    `load_pinned_reexport_manifest()` の3層防御を、既に呼び出し元が
+    読み込み済みの `disk_contract` を再利用する形で簡約した内部専用版
+    （read-once 契約は維持: digest と parse は同一バッファから導出する）。
+    """
+    field = disk_contract.pin_field("reexport_manifest_sha")
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_dependency_pins_manifest(): an acoustic_export_companions item claims "
+            "OBTAINED_DERIVED_NEW_BYTES, which requires reexport_manifest_sha to be PINNED, but "
+            f"it is not (status={field.get('status')!r})"
+        )
+    if not REEXPORT_MANIFEST_PATH.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_dependency_pins_manifest(): {REEXPORT_MANIFEST_PATH} does not exist"
+        )
+    buf = REEXPORT_MANIFEST_PATH.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != field["value"]:
+        raise Run9ValidationError(
+            f"load_pinned_dependency_pins_manifest(): {REEXPORT_MANIFEST_PATH} の実バイト sha256 "
+            f"({actual_sha!r}) が reexport_manifest_sha の pin 値 ({field['value']!r}) と一致し"
+            "ない — stale/改変された manifest は fail-closed で拒否する"
+        )
+    data = _loads_strict_json(buf.decode("utf-8"))
+    validate_reexport_manifest(data)
+    return data, field
+
+
 def load_pinned_dependency_pins_manifest(
     contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
     contract_path: Optional[Path] = None, bundle_path: Optional[Path] = None,
@@ -12728,13 +13021,49 @@ def load_pinned_dependency_pins_manifest(
         # 強制済みだが、measured_sha256 と bundle 値の一致は推移律頼み
         # だった（validate() を経由しない直接呼び出しがあれば推移律が
         # 効かない）。ここで明示的に三者目を直接照合する。
-        if "measured_sha256" in item and item["measured_sha256"] != bundle_value:
+        # RUN9-L0-HARNESS-2: `status == OBTAINED_DERIVED_NEW_BYTES` の
+        # item（現状 acoustic_onnx のみ）は、bundle 値（歴史 pin）と
+        # measured_sha256 が一致 **しない** ことこそが実測事実であり
+        # （User 裁定2「旧historical hashと一致しなくても捏造して合わせ
+        # ない」）、この三者一致チェックの対象から意図的に除外する——
+        # 除外した分の担保は下記の reexport_manifest.json cross-check が
+        # 別途行う。
+        if (
+            "measured_sha256" in item
+            and item.get("status") != "OBTAINED_DERIVED_NEW_BYTES"
+            and item["measured_sha256"] != bundle_value
+        ):
             raise Run9ValidationError(
                 "load_pinned_dependency_pins_manifest(): acoustic_export_companions."
                 f"expected_items[{logical_name!r}].measured_sha256 ({item['measured_sha256']!r}) "
                 f"diverges from backbone_runtime_bundle.json#{'.'.join(bundle_path_tuple)} "
                 f"({bundle_value!r}) — three-way cross-check fail-closed"
             )
+        if item.get("status") == "OBTAINED_DERIVED_NEW_BYTES":
+            # (h) の同型 cross-check: derived item の measured_sha256 が
+            # reexport_manifest.json（reexport_manifest_sha pin で改変検出
+            # 済み）の当該 artifact の実測値と一致すること。ref 自体が
+            # 名指す pin 値も現行 pin と一致することを確認する（stale ref
+            # の検出）。
+            reexport_data, reexport_field = _read_pinned_reexport_manifest_bytes(disk_contract)
+            ref = item["reexport_manifest_ref"]
+            if ref["reexport_manifest_sha256"] != reexport_field["value"]:
+                raise Run9ValidationError(
+                    "load_pinned_dependency_pins_manifest(): acoustic_export_companions."
+                    f"expected_items[{logical_name!r}].reexport_manifest_ref."
+                    f"reexport_manifest_sha256 ({ref['reexport_manifest_sha256']!r}) diverges "
+                    f"from the current reexport_manifest_sha pin ({reexport_field['value']!r}) "
+                    "— stale reference, fail-closed"
+                )
+            reexport_artifact = reexport_data["artifacts"].get(logical_name)
+            if reexport_artifact is None or item["measured_sha256"] != reexport_artifact["sha256_run1"]:
+                raise Run9ValidationError(
+                    "load_pinned_dependency_pins_manifest(): acoustic_export_companions."
+                    f"expected_items[{logical_name!r}].measured_sha256 "
+                    f"({item['measured_sha256']!r}) diverges from "
+                    f"inputs/reexport_manifest.json#artifacts.{logical_name}.sha256_run1 "
+                    f"({(reexport_artifact or {}).get('sha256_run1')!r}) — cross-check fail-closed"
+                )
 
     commit_section = data["diffsinger_render_code_commit"]
     bundle_commit = _bundle_get(
@@ -12749,3 +13078,2985 @@ def load_pinned_dependency_pins_manifest(
         )
 
     return data
+
+
+# ===== reexport_manifest (RUN9-L0-HARNESS-2) ================================
+#
+# User 裁定 2026-08-26 決定2（`USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_
+# EMBEDS.txt` 参照）に基づく、RUN6 phase B 40K checkpoint からの derived
+# runtime artifact 一括 manifest。PIN-1/2・HARNESS-1 で確立した4段構成
+# （手書き JSON manifest + validate_*() + REQUIRED_KEYS + read-once loader）
+# をここでも踏襲する。
+
+SCHEMA_REEXPORT_MANIFEST = "run9-reexport-manifest/1.0"
+
+REEXPORT_MANIFEST_PATH = _THIS_DIR / "inputs" / "reexport_manifest.json"
+
+# repo ルート（`run9_dual_founder_pjs` -> `evolution` -> `voice_genesis` ->
+# repo root の3階層上）。`adjudication_basis.source_file` は repo ルート
+# 相対パスとして manifest に収載されているため、cross-check (9) の実バイト
+# 照合に使う（load_pinned_reexport_manifest() 参照、PR #327 レビュー指摘3
+# 対応）。
+_REEXPORT_REPO_ROOT = _THIS_DIR.parent.parent.parent
+
+
+def _resolve_repo_contained_path(
+    relative: str, *, repo_root: Path, field: str, context: str,
+) -> Path:
+    """manifest 収載の repo 相対パス文字列を `repo_root` 配下限定で解決する
+    fail-closed ヘルパー（PR #327 レビュー第11巡指摘21対応、P2、採用）。
+
+    旧実装は `repo_root / relative` を無条件で join しており、digest（sha256
+    cross-check）さえ一致すれば絶対パス・`../` traversal・symlink 脱出でも
+    checkout 外のファイルが正典 provenance として通ってしまっていた。ここで
+    二重の fail-closed 検証を行う: (i) lexical 検証——`relative` 自体が絶対
+    パスであること、または `..` 成分を含むことを解決前に拒否する。(ii)
+    resolved 検証——`Path.resolve()` 後の実体パスが `repo_root` 配下にある
+    ことを `is_relative_to()` で強制する（symlink 脱出は resolve() が実体
+    パスへ展開するためここで捕捉される）。
+
+    `load_pinned_reexport_manifest()`/`load_pinned_execution_profile_
+    manifest()` の adjudication_basis.source_file・
+    additional_measurements.render_code_commit.file という同型の解決点
+    すべてに適用する（ファミリー掃討）。テスト用パスオーバーライド引数
+    （`adjudication_basis_path`/`render_code_path`）は呼び出し側が明示的に
+    指定した絶対パスであり、本関数の検証対象には含めない——オーバーライドは
+    manifest 収載データを経由しないため、この containment guard が守る脅威
+    モデル（manifest 内の攻撃者/事故由来の相対パス文字列）の対象外である
+    （既存テストが `tmp_path` 配下の絶対パスをオーバーライドへ渡す流儀を
+    踏襲し、壊さない）。
+    """
+    if Path(relative).is_absolute():
+        raise Run9ValidationError(
+            f"{context}: {field} must be a repo-relative path, got an absolute path {relative!r} "
+            "— rejected fail-closed (repo-containment guard)"
+        )
+    if ".." in Path(relative).parts:
+        raise Run9ValidationError(
+            f"{context}: {field} must not contain '..' path traversal components, got "
+            f"{relative!r} — rejected fail-closed (repo-containment guard)"
+        )
+    resolved_root = repo_root.resolve()
+    candidate = (repo_root / relative).resolve()
+    if not candidate.is_relative_to(resolved_root):
+        raise Run9ValidationError(
+            f"{context}: {field} ({relative!r}) resolves to {candidate} which escapes the repo "
+            f"root {resolved_root} (e.g. via a symlink) — rejected fail-closed "
+            "(repo-containment guard)"
+        )
+    return candidate
+
+
+REEXPORT_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "schema", "generated_at_utc", "adjudication_basis", "input_checkpoint", "exporter",
+    "experiment_side_inputs", "export_command", "export_command_cwd",
+    "export_command_variables", "export_venv_setup", "environment_versions",
+    "export_environment_lock", "export_environment_lock_sha256", "reproducibility_check",
+    "artifacts", "historical_comparison_summary", "smoke_render_cross_check",
+    "pin_disposition", "replay_environment_recipe",
+})
+
+_REEXPORT_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "source_file", "sha256", "summary",
+})
+# export_command の `--out` 値 / export_command_cwd が実際に前置きとして
+# 使っているプレースホルダ文字列（PR #327 レビュー指摘1: これらが manifest
+# 内で未定義だったため「逐語」recipe として再実行不能という指摘への対応。
+# `export_command`/`export_command_cwd` 自体（実測事実=何を実行したか）は
+# 改変しない——`export_command_variables` はその上に定義を足すだけ）。
+_REEXPORT_OUT_DIR_PLACEHOLDER = "<session workdir（repo外）>"
+_REEXPORT_DIFFSINGER_REPO_PLACEHOLDER = "<diffsinger_repo clone（session workdir、repo外）>"
+# PR #327 レビュー第11巡指摘20（P2、採用）: lock 生成 step（本 manifest
+# 自身を json.load して requirements_replay.txt を導出する python ワン
+# ライナー）が manifest パスを相対 'inputs/reexport_manifest.json' のまま
+# 参照しており、repo root や session workdir から開始した clean replay は
+# cwd 未確立のため FileNotFoundError で失敗していた。本 manifest 自身への
+# checkout-stable な明示参照に使う変数を追加登録する。
+_REEXPORT_REPO_CHECKOUT_PLACEHOLDER = "<repo checkout>"
+_REEXPORT_COMMAND_VARIABLES_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "variables", "path_independence_note",
+})
+_REEXPORT_COMMAND_VARIABLE_NAMES: FrozenSet[str] = frozenset({
+    _REEXPORT_OUT_DIR_PLACEHOLDER, _REEXPORT_DIFFSINGER_REPO_PLACEHOLDER,
+    _REEXPORT_REPO_CHECKOUT_PLACEHOLDER,
+})
+# 同指摘20対応: manifest 自身（reexport_manifest.json）への参照、および
+# 生成される requirements_replay.txt への参照は、backtick 逐語コマンド内
+# ではこの rooted prefix を必ず伴うことを machine 強制する（相対参照は
+# categorical に拒否——`<out_dir>` 系の未定義トークン検証と同型の意匠）。
+_REEXPORT_MANIFEST_FILENAME = "reexport_manifest.json"
+_REEXPORT_ROOTED_MANIFEST_DIR = (
+    f"{_REEXPORT_REPO_CHECKOUT_PLACEHOLDER}/voice_genesis/evolution/run9_dual_founder_pjs/inputs/"
+)
+_REEXPORT_REQUIREMENTS_REPLAY_FILENAME = "requirements_replay.txt"
+_REEXPORT_ROOTED_REQUIREMENTS_REPLAY_DIR = f"{_REEXPORT_OUT_DIR_PLACEHOLDER}/"
+_REEXPORT_INPUT_CHECKPOINT_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "path", "sha256", "expected_sha256_per_run9_contract", "sha256_matches_pin", "bytes",
+})
+_REEXPORT_EXPORTER_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "repo", "revision", "expected_revision_per_run9_contract", "revision_matches_pin",
+})
+# experiment_side_inputs（PR #327 レビュー第4巡指摘10対応）: `export.py
+# --exp` は checkpoint 本体だけでなく experiment dir
+# （`checkpoints/<exp_name>/`）配下の config.yaml/spk_map.json/
+# lang_map.json/dictionary-<lang>.txt も消費する。旧 manifest は
+# checkpoint digest（`input_checkpoint`）しか記録しておらず、replay 時に
+# 無関係なローカル experiment ファイルが誤って消費されても全検証が通って
+# しまう穴があった——本節がその checkpoint-side 入力の全数を宣言する。
+_REEXPORT_EXPERIMENT_SIDE_INPUTS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "declaration", "enumeration_basis", "items",
+})
+_REEXPORT_EXPERIMENT_SIDE_INPUT_ITEM_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "logical_name", "experiment_dir_relative_path", "sha256",
+    "expected_sha256_per_dependency_pins", "sha256_matches_pin",
+})
+# DiffSinger ソース読解（`utils/hparams.py set_hparams()`・`basics/
+# base_exporter.py build_spk_map()/build_lang_map()`・`utils/
+# phoneme_utils.py load_phoneme_dictionary()`）+ session workdir staging
+# 実測で確定した checkpoint-side 入力の全数（checkpoint 本体を除く4点、
+# 固定）。
+REEXPORT_EXPERIMENT_SIDE_INPUT_KEYS: FrozenSet[str] = frozenset({
+    "config_yaml", "spk_map_json", "lang_map_json", "dictionary_ja_txt",
+})
+# experiment_side_inputs.items[key].logical_name は
+# dependency_pins_manifest.json#render_asset_ledger[].logical_name と対応
+# 付けて `load_pinned_reexport_manifest()` cross-check (11) で照合する
+# ——この辞書がその対応表の唯一の正本（他ではハードコードしない）。
+_REEXPORT_EXPERIMENT_SIDE_INPUT_LOGICAL_NAME_MAP: Dict[str, str] = {
+    "config_yaml": "backbone_config_yaml",
+    "spk_map_json": "backbone_spk_map_json",
+    "lang_map_json": "backbone_lang_map_json",
+    "dictionary_ja_txt": "backbone_dictionary_ja_txt",
+}
+_REEXPORT_EXPORT_VENV_SETUP_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "description", "install_steps", "historical_note",
+})
+# replay_environment_recipe（PR #327 レビュー第2巡指摘5対応）: `install_steps`
+# は当時実際に実行した手順の実測記録として1文字も変更しない——新規再現時の
+# 正規経路は本節（`lock_array_reference` が名指す `export_environment_lock`
+# 配列が唯一のバージョン正本、別ファイルの lock file は置かない）。
+_REEXPORT_REPLAY_RECIPE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "declaration", "lock_array_reference", "steps", "torch_index_note",
+})
+# lock_array_reference が指す唯一の正本配列名（fail-closed: この文字列以外
+# は受理しない——将来 export_environment_lock 以外の配列を勝手に正本と
+# 詐称できないようにする）。
+_REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME: str = "export_environment_lock"
+# replay_environment_recipe が bootstrap する venv のディレクトリ名（PR #327
+# レビュー第6巡指摘12対応）。venv 作成 step（`python -m venv <この名前>`）
+# 自体は例外的に ambient python を使ってよいが、それ以外の全 step は
+# `<この名前>/bin/python` / `<この名前>/bin/pip` の形で明示的に venv 内
+# interpreter/package manager を参照しなければならない。
+#
+# PR #327 レビュー第8巡指摘15（P2、採用）: 名前だけの `venv_export_replay`
+# を bare 相対パスとして各 step に埋め込むと、export 実行 step が cwd を
+# export_command_cwd（DiffSinger checkout）へ変更した**後**にこの相対パス
+# を解決してしまい、実在しない venv を指す——bare-interpreter 検査（`/bin/`
+# 直前の negative lookbehind）は `<相対パス>/bin/python` の形をそのまま
+# 通過させてしまうため、この穴を検出できなかった。`_REEXPORT_REPLAY_RECIPE_
+# VENV_DIR` 自体を「cwd 非依存の絶対（`export_command_variables` の
+# `<session workdir（repo外）>` 変数起点）パス」として再定義し、venv 作成
+# step を含む全 step がこの絶対パスのみを参照することを fail-closed で
+# machine 強制する（`_REEXPORT_VENV_DIR_NAME_PATTERN` 走査 = 下記）。
+_REEXPORT_REPLAY_RECIPE_VENV_DIR_NAME: str = "venv_export_replay"
+_REEXPORT_REPLAY_RECIPE_VENV_DIR: str = (
+    f"{_REEXPORT_OUT_DIR_PLACEHOLDER}/{_REEXPORT_REPLAY_RECIPE_VENV_DIR_NAME}"
+)
+# bare `python`/`pip` 起動検出用（`<venv_dir>/bin/python` のような明示パス
+# 経由の呼び出しは negative lookbehind で除外する——`/bin/` の直後に続く
+# トークンは venv 接続済みとみなす）。
+_REEXPORT_BARE_INTERPRETER_PATTERN = re.compile(r"(?<!/bin/)\b(python|pip)\b")
+# venv 作成 step 検出マーカー（PR #327 レビュー第7巡指摘14対応、P2）。この
+# step の**前**に interpreter 版検証 step が存在しなければならない——venv
+# 作成に使う interpreter が ambient のままだと、記録された
+# `environment_versions.python` と異なる版で venv 自体が作られ得る
+# （第6巡指摘12の bare-export-interpreter 指摘とは別の穴: あちらは
+# export_command 実行時の interpreter、こちらは venv 自体の生成元）。
+_REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER: str = "-m venv"
+# interpreter 版検証 step の存在確認に使うマーカー: 検証 step は pin
+# フィールド名 "environment_versions.python" と、その実測 pin 値（文字列）
+# の両方を逐語で参照していなければならない（fail-closed、ハードコード値の
+# 二重管理を避けるため pin 値は manifest 実測から動的に取得する）。
+_REEXPORT_REPLAY_RECIPE_INTERPRETER_CHECK_FIELD_MARKER: str = "environment_versions.python"
+# exporter checkout 検証 step の存在確認に使うマーカー（PR #327 レビュー
+# 第9巡指摘17対応、P2）: 検証 step は git コマンド2種と、pin フィールド名
+# "exporter.revision" の両方を逐語で参照していなければならない
+# （interpreter 版検証 step と同型の意匠——ハードコード値の二重管理を避け
+# るため pin 値自体は manifest 実測（`revision`）から動的に取得する）。
+_REEXPORT_REPLAY_RECIPE_GIT_HEAD_MARKER: str = "git rev-parse HEAD"
+_REEXPORT_REPLAY_RECIPE_GIT_STATUS_MARKER: str = "git status --porcelain"
+_REEXPORT_REPLAY_RECIPE_EXPORTER_REVISION_FIELD_MARKER: str = "exporter.revision"
+# post-export 閉世界照合 step の存在確認に使うマーカー（PR #327 レビュー
+# 第9巡指摘16対応、P2）: 照合 step は artifacts の各フィールド名
+# "sha256_run1"/"bytes" の両方を逐語で参照していなければならない
+# （9アーティファクトキー全数の参照は呼び出し側で `REEXPORT_ARTIFACT_KEYS`
+# を直接走査するため、ここでは定数化しない）。
+_REEXPORT_REPLAY_RECIPE_POST_EXPORT_SHA_FIELD_MARKER: str = "sha256_run1"
+_REEXPORT_REPLAY_RECIPE_POST_EXPORT_BYTES_FIELD_MARKER: str = "bytes"
+# venv 作成 step の --clear 必須化に使うマーカー（PR #327 レビュー第16巡
+# 指摘28対応、P2）: 既存 venv_export_replay の再利用による残留パッケージ
+# 混入を防ぐ。
+_REEXPORT_REPLAY_RECIPE_VENV_CLEAR_MARKER: str = "--clear"
+# freeze/lock 全一致照合 step の存在確認に使うマーカー（同指摘28対応）:
+# 照合 step は `pip freeze --all` の逐語コマンドと、lock 配列の単一正本
+# フィールド名 `export_environment_lock`（`_REEXPORT_REPLAY_RECIPE_LOCK_
+# ARRAY_NAME` と同一定数を再利用）の両方を逐語で参照していなければ
+# ならない。
+_REEXPORT_REPLAY_RECIPE_FREEZE_COMMAND_MARKER: str = "pip freeze --all"
+# export 先ディレクトリ事前空確認 step の存在確認に使うマーカー（PR #327
+# レビュー第16巡指摘29対応、P2）: 照合 step は export --out 値そのもの
+# （呼び出し側で `out_arg` から動的に取得）と、存在確認を表す
+# `.exists()` 呼び出しの両方を逐語で参照していなければならない。
+_REEXPORT_REPLAY_RECIPE_OUT_DIR_EXISTS_MARKER: str = ".exists()"
+# 未定義トークン検出用（PR #327 レビュー第10巡指摘19対応、P2）: `<...>`
+# 形式のプレースホルダは export_command_variables.variables に登録済みの
+# ものしか steps に現れてはならない——未定義トークン（例: 過去に混入した
+# `<out_dir>`）が shell 実行時に未置換のまま渡ると、意図しない解釈（例:
+# 入力リダイレクト）で export 前に失敗する。`<out_dir>` 個別対処ではなく
+# `<...>` トークンのファミリー全体をカテゴリカルに全数走査する。
+_REEXPORT_ANGLE_TOKEN_PATTERN = re.compile(r"<[^<>]+>")
+# export 実行 step 内のバッククォート区切りコマンド抽出用（同指摘対応）:
+# step の引数トークン列が canonical `export_command[1:]` と正確一致する
+# こと（interpreter 部のみ venv python への差し替えを許容）を機械検証する
+# ために使う。
+_REEXPORT_BACKTICK_COMMAND_PATTERN = re.compile(r"`([^`]+)`")
+
+
+def _reexport_command_tokens(command: str) -> List[str]:
+    """バッククォート区切り逐語コマンド文字列を空白区切りトークン列へ分割
+    する。`<session workdir（repo外）>` のようなプレースホルダトークン自体
+    が内部に半角スペースを含むため、単純な str.split() では途中で誤って
+    分断される——`<...>` 区間内の空白のみ一時的に置換して保護してから
+    split() し、復元する（PR #327 レビュー第10巡指摘19対応）。"""
+    protected = _REEXPORT_ANGLE_TOKEN_PATTERN.sub(
+        lambda m: m.group(0).replace(" ", "\x00"), command,
+    )
+    return [tok.replace("\x00", " ") for tok in protected.split()]
+_REEXPORT_REPRODUCIBILITY_CHECK_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "description", "all_run1_run2_identical",
+})
+_REEXPORT_ARTIFACT_ENTRY_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "file", "sha256_run1", "sha256_run2", "bytes", "run1_run2_identical",
+    "historical_sha256", "matches_historical",
+})
+# 9点固定（User 裁定2 逐語: acoustic ONNX / dsconfig / phonemes.json / 全
+# speaker .emb + languages.json/dictionary-ja.txt は export.py が実際に
+# 生成する companion 一式として実測時に判明した追加2点）。
+REEXPORT_ARTIFACT_KEYS: FrozenSet[str] = frozenset({
+    "acoustic_onnx", "dsconfig_yaml", "phonemes_json", "languages_json", "dictionary_ja_txt",
+    "ritsu_emb", "pjs_emb", "user_emb", "d3synth_emb",
+})
+_REEXPORT_SMOKE_CROSS_CHECK_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "description", "render1_wav_sha256", "render2_wav_sha256", "determinism_confirmed",
+    "render1_total_elapsed_sec", "render2_total_elapsed_sec", "avg_sec_per_render",
+    "budget_estimate_616_renders_sec", "budget_count_provenance_note",
+})
+# 616 は「前巡の返信・過去記録で言及されてきた基準値の踏襲概算」であり
+# 本 manifest で新たに確定した値ではない（設計判断8）。budget_estimate_
+# 616_renders_sec の算術検算にのみ使う内部定数——CONTRACT_PIN_FIELDS 等の
+# 正式 pin ではない。
+_REEXPORT_BUDGET_RENDER_COUNT: int = 616
+_REEXPORT_SEC_REL_TOL: float = 1e-9
+
+
+def _validate_reexport_shape(
+    obj: Any, *, field: str, required_keys: FrozenSet[str],
+) -> Dict[str, Any]:
+    if not isinstance(obj, dict):
+        raise Run9ValidationError(f"reexport manifest.{field} must be an object, got {type(obj).__name__}")
+    unknown = set(obj.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"reexport manifest.{field} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(obj.keys())
+    if missing:
+        raise Run9ValidationError(f"reexport manifest.{field} missing required key(s): {sorted(missing)}")
+    return obj
+
+
+def _validate_reexport_artifact_entry(entry: Any, *, key: str) -> Dict[str, Any]:
+    field = f"artifacts.{key}"
+    entry = _validate_reexport_shape(
+        entry, field=field, required_keys=_REEXPORT_ARTIFACT_ENTRY_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(entry["file"], field=f"{field}.file")
+    sha1 = entry["sha256_run1"]
+    sha2 = entry["sha256_run2"]
+    if not isinstance(sha1, str) or not _SHA256_HEX_RE.match(sha1):
+        raise Run9ValidationError(f"reexport manifest.{field}.sha256_run1 must be a 64hex sha256, got {sha1!r}")
+    if not isinstance(sha2, str) or not _SHA256_HEX_RE.match(sha2):
+        raise Run9ValidationError(f"reexport manifest.{field}.sha256_run2 must be a 64hex sha256, got {sha2!r}")
+    _require_positive_int(entry["bytes"], field=f"{field}.bytes")
+    run1_run2_identical = entry["run1_run2_identical"]
+    if not isinstance(run1_run2_identical, bool):
+        raise Run9ValidationError(f"reexport manifest.{field}.run1_run2_identical must be a bool, got {run1_run2_identical!r}")
+    # (d) fail-closed: 自己申告ではなく sha256_run1 == sha256_run2 の
+    # in-process 再計算と一致しなければならない。
+    if run1_run2_identical != (sha1 == sha2):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.run1_run2_identical ({run1_run2_identical!r}) diverges "
+            f"from the in-process recomputation (sha256_run1 == sha256_run2), which is "
+            f"{sha1 == sha2!r}"
+        )
+    historical_sha = entry["historical_sha256"]
+    if historical_sha is not None and (
+        not isinstance(historical_sha, str) or not _SHA256_HEX_RE.match(historical_sha)
+    ):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.historical_sha256 must be null or a 64hex sha256, got "
+            f"{historical_sha!r}"
+        )
+    matches_historical = entry["matches_historical"]
+    if not isinstance(matches_historical, bool):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.matches_historical must be a bool, got "
+            f"{matches_historical!r}"
+        )
+    # (c) fail-closed: historical_sha256 が null の artifact は
+    # matches_historical: false を強制する（比較対象が存在しないのに
+    # true を名乗ることはできない）。null でなければ sha256_run1 ==
+    # historical_sha256 の in-process 再計算と一致しなければならない
+    # （捏造・転記ミスの機械検出）。
+    if historical_sha is None:
+        expected_match = False
+    else:
+        expected_match = sha1 == historical_sha
+    if matches_historical != expected_match:
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.matches_historical ({matches_historical!r}) diverges "
+            f"from the in-process recomputation, which is {expected_match!r} (historical_sha256="
+            f"{historical_sha!r})"
+        )
+    # (g) acoustic_onnx.matches_historical == false の逐語保持: この
+    # artifact に限り true への書き換えを恒久的に拒否する（実測事実の
+    # 凍結。上の (c) 再計算と実データ上は同じ帰結になるが、本チェックは
+    # データが将来入れ替わっても false を強制する独立の frozen-fact
+    # ガードである）。
+    if key == "acoustic_onnx" and matches_historical is not False:
+        raise Run9ValidationError(
+            "reexport manifest.artifacts.acoustic_onnx.matches_historical must remain the "
+            "literal boolean False — this is a frozen fact (re-exported acoustic.onnx bytes do "
+            "not match the historical RUN6 pin; User adjudication 2026-08-26 decision 2 forbids "
+            f"fabricating a match), got {matches_historical!r}"
+        )
+    return entry
+
+
+def _validate_reexport_experiment_side_input_entry(entry: Any, *, key: str) -> Dict[str, Any]:
+    field = f"experiment_side_inputs.items.{key}"
+    entry = _validate_reexport_shape(
+        entry, field=field, required_keys=_REEXPORT_EXPERIMENT_SIDE_INPUT_ITEM_REQUIRED_KEYS,
+    )
+    expected_logical_name = _REEXPORT_EXPERIMENT_SIDE_INPUT_LOGICAL_NAME_MAP[key]
+    logical_name = entry["logical_name"]
+    if logical_name != expected_logical_name:
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.logical_name must be exactly "
+            f"{expected_logical_name!r} (the dependency_pins_manifest.json#render_asset_ledger "
+            f"cross-check key for this item), got {logical_name!r}"
+        )
+    _require_non_empty_str(
+        entry["experiment_dir_relative_path"], field=f"{field}.experiment_dir_relative_path",
+    )
+    sha = entry["sha256"]
+    if not isinstance(sha, str) or not _SHA256_HEX_RE.match(sha):
+        raise Run9ValidationError(f"reexport manifest.{field}.sha256 must be a 64hex sha256, got {sha!r}")
+    expected_sha = entry["expected_sha256_per_dependency_pins"]
+    if not isinstance(expected_sha, str) or not _SHA256_HEX_RE.match(expected_sha):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.expected_sha256_per_dependency_pins must be a 64hex "
+            f"sha256, got {expected_sha!r}"
+        )
+    matches_pin = entry["sha256_matches_pin"]
+    if not isinstance(matches_pin, bool):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.sha256_matches_pin must be a bool, got {matches_pin!r}"
+        )
+    # 算術一貫性: 自己申告フラグは in-process 再計算（sha256 ==
+    # expected_sha256_per_dependency_pins）と一致しなければならない。
+    if matches_pin != (sha == expected_sha):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.sha256_matches_pin ({matches_pin!r}) diverges from the "
+            f"in-process recomputation (sha256 == expected_sha256_per_dependency_pins), which is "
+            f"{(sha == expected_sha)!r}"
+        )
+    # fail-closed（第2巡指摘6と同型の「pin 済み入力のみ表現可能」意味論）:
+    # 算術的には自己整合だが実際には unpinned な experiment-side 入力から
+    # derive された manifest（sha256_matches_pin: false かつ実際に不一致）
+    # をカテゴリカルに拒否する——sha256 と pin 値の直接一致、かつ
+    # sha256_matches_pin が literal True であることをここで機械強制する。
+    if sha != expected_sha or matches_pin is not True:
+        raise Run9ValidationError(
+            f"reexport manifest.{field}: sha256 ({sha!r}) must equal "
+            f"expected_sha256_per_dependency_pins ({expected_sha!r}) and sha256_matches_pin must "
+            f"be the literal boolean True ({matches_pin!r} given) — this schema can only "
+            "represent experiment-side inputs derived from a dependency_pins_manifest-pinned "
+            "asset; an entry whose experiment-side input does not match the canonical pin is "
+            "categorically rejected fail-closed"
+        )
+    return entry
+
+
+def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
+    """reexport manifest（`run9-reexport-manifest/1.0`）の構造を検証する
+    （RUN9-L0-HARNESS-2）。RUN6 phase B 40K checkpoint から DiffSinger
+    commit `e2307b1080b00f3999702ce9017cfd75c7f862fe` を使い独立に2回
+    export した derived runtime artifact 一括台帳——acoustic ONNX /
+    dsconfig / phonemes.json / languages.json / dictionary-ja.txt / 全
+    speaker .emb（ritsu/pjs/user/d3synth）の9点それぞれについて、run1/
+    run2 の byte 一致（決定論確認）と歴史 pin との一致/不一致を正直に
+    記録する（User 裁定2026-08-26決定2: 「旧historical hashと一致しなく
+    ても捏造して合わせない。一致した場合はreplay evidenceとして記録
+    する」）。
+
+    fail-closed 原則（PIN-1/2・HARNESS-1 の同型パターンをここでも適用）:
+    自己申告フィールド（`run1_run2_identical`/`matches_historical`/
+    `reproducibility_check.all_run1_run2_identical`/
+    `smoke_render_cross_check.determinism_confirmed`）はすべて対応する
+    一次データの in-process 再計算と一致することを machine 強制する
+    ——捏造・転記ミスは fail-closed で拒否される。`artifacts.acoustic_onnx.
+    matches_historical` は追加で恒久的に `False` を強制する frozen-fact
+    ガード（true への書き換えはデータに関わらず拒否）。contract pin
+    （backbone checkpoint / DiffSinger commit）の実バイトとの一致確認
+    （disk 上の正典 pin 値そのものとの照合）は本関数では行わない（一次
+    データが未 load のため）——`load_pinned_reexport_manifest()` の
+    cross-check (a)/(b) が担う。
+
+    **本 manifest schema の意味論（PR #327 レビュー第2巡指摘6対応）**:
+    本関数は `input_checkpoint.sha256 == expected_sha256_per_run9_contract`
+    かつ `sha256_matches_pin == True`、`exporter.revision ==
+    expected_revision_per_run9_contract` かつ `revision_matches_pin ==
+    True` を直接 fail-closed 強制する（(d)/(e)）。旧実装は
+    `sha256_matches_pin`/`revision_matches_pin` boolean の算術一貫性
+    （フラグが自己申告の再計算と食い違っていないか）のみを検証しており、
+    「算術的には自己整合だが実際には unpinned な入力/exporter から
+    derive された」manifest（例: `sha256_matches_pin: false` かつ実際に
+    `sha256 != expected_sha256_per_run9_contract`）を受理し得た——本
+    manifest schema は **「pin 済み入力からの derived artifact」のみ**
+    を表現できるものと意味論を固定し、unpinned 入力/exporter からの
+    derived manifest はカテゴリカルに拒否する。
+
+    **experiment_side_inputs（PR #327 レビュー第4巡指摘10対応）**: 再export
+    は checkpoint 本体だけでなく experiment dir 配下の config.yaml/
+    spk_map.json/lang_map.json/dictionary-ja.txt も消費するが、旧 schema は
+    checkpoint digest しか表現できなかった（replay 時に無関係なローカル
+    experiment ファイルが誤って消費されても全検証が通ってしまう穴）。本
+    節はその checkpoint-side 入力の全数を宣言し、`input_checkpoint`/
+    `exporter` と同型の「pin 済み入力のみ表現可能」意味論（sha256 と pin
+    値の直接一致 + フラグの literal True 強制）で各エントリを検証する。
+    `dependency_pins_manifest.json` 側との実 pin 値照合は
+    `load_pinned_reexport_manifest()` の cross-check (11) が担う（一次
+    データが未 load のため本関数では行わない）。
+
+    **replay_environment_recipe の export 実行 step（PR #327 レビュー第6巡
+    指摘12対応）**: `export_command`（歴史記録、当時 venv_export を
+    activate 済みの shell 内で実行されていたため bare `python` 表記）を
+    replay 時にそのまま実行すると ambient interpreter とそのパッケージで
+    `scripts/export.py` が走り unpinned 環境の生成物が作られ得た。本関数は
+    (i) `steps` に `export_command` を `venv_export_replay/bin/python`
+    経由で実行する step が存在すること、(ii) venv bootstrap
+    （`python -m venv venv_export_replay`）を除く全 step に、
+    `venv_export_replay/bin/` を前置しない bare `python`/`pip` 起動が
+    残っていないこと、の2点を fail-closed で machine 強制する。
+
+    **replay_environment_recipe の venv 作成 interpreter 版検証（PR #327
+    レビュー第7巡指摘14対応、P2）**: 上記 (ii) の例外規定（venv 作成 step
+    自体は ambient python を使ってよい）は、その ambient interpreter が
+    記録された `environment_versions.python`（"3.11.15"）と同じ版である
+    ことを何も保証していなかった——venv 自体が unpinned interpreter から
+    作られ得る穴（第6巡指摘12の bare-export-interpreter 指摘とは別物:
+    あちらは export_command 実行時の interpreter、こちらは venv 自体の
+    生成元）。本関数は venv 作成 step（`-m venv` を含む最初の step）の
+    **前**に、`environment_versions.python` フィールド名とその pin 値を
+    逐語参照する interpreter 版検証 step が存在することを fail-closed で
+    machine 強制する（欠落・venv 作成 step 以降への配置のいずれも拒否）。
+
+    **replay_environment_recipe の venv パスの cwd 非依存化（PR #327 レビュー
+    第8巡指摘15対応、P2）**: export 実行 step は cwd を export_command_cwd
+    （DiffSinger checkout）へ変更した**後**に venv インタプリタパスを解決
+    するため、`venv_export_replay` を bare な相対パスのまま参照すると、
+    cwd 変更後はその相対パスが DiffSinger ディレクトリ内で解決され、実在
+    しない venv を指してしまう——replay 記録どおりの実行が不能になる穴
+    だった。上記 (ii) の bare-interpreter 検査（`/bin/` 直前の negative
+    lookbehind）は `<相対パス>/bin/python` の形をそのまま通過させてしまう
+    ため、この穴を検出できなかった。本関数は `venv_export_replay` という
+    文字列が現れる箇所すべてに、cwd 非依存の絶対パス接頭辞
+    `<session workdir（repo外）>/`（`export_command_variables` の既存
+    プレースホルダと同一、venv 作成 step 自体も対象）が前置されていること
+    を fail-closed で全数走査する——bare 相対パスのみの参照は reject する。
+
+    **replay_environment_recipe の exporter checkout live 検証（PR #327
+    レビュー第9巡指摘17対応、P2）**: 上記の各チェックは checkpoint-side
+    入力・venv/interpreter・export 実行手順を閉じたが、供給された clone
+    の `scripts/export.py` 自体（exporter checkout）は無検証のまま実行
+    される余地が残っていた——pin 済み `exporter.revision` とは異なる
+    コード（改変済み・別 commit）から export しても、この manifest の
+    `exporter` 節（自己申告の revision/revision_matches_pin）だけでは
+    その事実を検出できない。本関数は export 実行 step の**前**に、
+    (i) `git rev-parse HEAD` の出力が `exporter.revision` の pin 値と
+    一致すること、(ii) `git status --porcelain` の出力が空であること
+    （dirty checkout 拒否）を検証する step が存在することを fail-closed
+    で machine 強制する（`exporter.revision` フィールド名とその pin 値の
+    両方を逐語参照していること、export 実行 step より厳密に前へ配置され
+    ていることの双方を要求する）。
+
+    **replay_environment_recipe の post-export 閉世界照合（PR #327
+    レビュー第9巡指摘16対応、P2）**: recipe は export 起動で終わっており、
+    生成される9アーティファクトを manifest の `artifacts.*.sha256_run1`/
+    `bytes`/`file` と照合する step を一切書いていなかった——別バイトが
+    生成されても「replay 完了」を主張できてしまう出力側の閉世界性の欠落
+    だった。本関数は export 実行 step の**後**に、`artifacts` 9エントリ
+    全数（`REEXPORT_ARTIFACT_KEYS`）を逐語参照し `sha256_run1`/`bytes`
+    照合を宣言する post-export 照合 step が存在することを fail-closed で
+    machine 強制する（欠落・export 実行 step 以前への配置のいずれも
+    拒否）。本照合が検証する対象は「この manifest が記録した再export
+    出力とのバイト一致」のみであり、歴史 pin（historical_sha256/
+    matches_historical）との一致/不一致の意味論には関与しない。
+
+    指摘16/17 により、replay recipe の閉世界性——入力（checkpoint +
+    experiment 側4点 + lock + interpreter 版）・実行体（exporter checkout
+    + venv interpreter）・出力（9 artifacts）——の全照合が本関数で閉じる。
+
+    **replay_environment_recipe の未定義トークン全数拒否 + 引数列一致検証
+    （PR #327 レビュー第10巡指摘19対応、P2。本巡で bot レビュー対応の規約
+    上限10巡に到達——「未定義トークン」ファミリーの終端巡）**: 第9巡で
+    新設した export 実行 step・post-export 閉世界照合 step のバッククォート
+    区切り逐語コマンド内に、`export_command_variables.variables` へ未登録
+    の `<out_dir>` というトークンが紛れ込んでいた——shell 上では未置換の
+    まま渡り、意図しない解釈（例: 入力リダイレクト）で export 前に失敗
+    する穴だった。本関数は (i) `steps` 全数のバッククォート区切りコマンド
+    （`_REEXPORT_BACKTICK_COMMAND_PATTERN` で抽出——地の文の一般的表記
+    「artifacts.<key>.sha256_run1」等は shell に渡らないため走査対象外）
+    を走査し、出現する全 `<...>` トークン（`_REEXPORT_ANGLE_TOKEN_
+    PATTERN`）が `export_command_variables.variables` の登録済みキー集合
+    に含まれることを fail-closed で全数強制する（`<out_dir>` 個別対処
+    ではなく未定義トークンのファミリー全体をカテゴリカルに閉じる）、
+    (ii) export 実行 step 内のバッククォートコマンドの引数トークン列が
+    canonical `export_command[1:]` と厳密一致することを machine 強制する
+    （interpreter 部のみ venv python パスへの差し替えを許容——それ以外の
+    1トークンでも食い違えば拒否）。
+
+    **replay の再実行衛生（clean-slate 保証、PR #327 レビュー第16巡指摘
+    28/29対応、P2×2、採用——規約上限10巡超過後だが3分類「将来汚染」に
+    該当する新しい具体経路）**: 上記までの検証は初回 replay の閉世界性を
+    閉じたが、同一 workdir での**再実行**（venv/出力先ディレクトリの
+    残留）は未検証だった。指摘28: venv 作成 step が既存 `venv_export_
+    replay` を再利用すると `--no-deps` install は lock に無い残留パッケー
+    ジを除去しない——export が unrecorded 依存で走りうる。本関数は
+    (a) venv 作成 step のコマンドに `--clear` トークンが含まれること、
+    (b) `--no-deps` install step の**後**・export 実行 step の**前**に、
+    venv の実測パッケージ集合（`pip freeze --all`）が `export_environment_
+    lock`（単一正本）と過不足なく一致することを確認する検証 step が存在
+    すること、の2点を fail-closed で machine 強制する。指摘29: 既存
+    `onnx_gate_40000` が残る workdir へ export すると、exporter が期待
+    ファイルを出力しそこねても前回 run の stale copy が post-export 閉
+    世界照合を偽 pass させ得る。本関数は export 実行 step の**前**に、
+    export 先ディレクトリ（`export_command` の `--out` 値そのもの）が
+    存在しないことを確認する pre-flight step が存在することを fail-closed
+    で machine 強制する（削除の実行有無まではここでは検証しない——手動
+    確認へ委ねる設計判断）。この2点により、replay の再実行衛生（clean-
+    slate 保証）は入力・環境・実行体・出力の全面に対して閉じ、
+    「replay recipe の閉世界性」ファミリーはここで終端する。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"reexport manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - REEXPORT_MANIFEST_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"reexport manifest has unknown key(s): {sorted(unknown)}")
+    missing = REEXPORT_MANIFEST_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"reexport manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_REEXPORT_MANIFEST:
+        raise Run9ValidationError(
+            f"reexport manifest.schema must be exactly {SCHEMA_REEXPORT_MANIFEST!r}, got {schema!r}"
+        )
+    _require_non_empty_str(data["generated_at_utc"], field="generated_at_utc")
+
+    basis = _validate_reexport_shape(
+        data["adjudication_basis"], field="adjudication_basis",
+        required_keys=_REEXPORT_ADJUDICATION_BASIS_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(basis["source_file"], field="adjudication_basis.source_file")
+    basis_sha = basis["sha256"]
+    if not isinstance(basis_sha, str) or not _SHA256_HEX_RE.match(basis_sha):
+        raise Run9ValidationError(
+            f"reexport manifest.adjudication_basis.sha256 must be a 64hex sha256, got {basis_sha!r}"
+        )
+    _require_non_empty_str(basis["summary"], field="adjudication_basis.summary")
+
+    checkpoint = _validate_reexport_shape(
+        data["input_checkpoint"], field="input_checkpoint",
+        required_keys=_REEXPORT_INPUT_CHECKPOINT_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(checkpoint["path"], field="input_checkpoint.path")
+    ckpt_sha = checkpoint["sha256"]
+    ckpt_expected = checkpoint["expected_sha256_per_run9_contract"]
+    if not isinstance(ckpt_sha, str) or not _SHA256_HEX_RE.match(ckpt_sha):
+        raise Run9ValidationError(
+            f"reexport manifest.input_checkpoint.sha256 must be a 64hex sha256, got {ckpt_sha!r}"
+        )
+    if not isinstance(ckpt_expected, str) or not _SHA256_HEX_RE.match(ckpt_expected):
+        raise Run9ValidationError(
+            "reexport manifest.input_checkpoint.expected_sha256_per_run9_contract must be a "
+            f"64hex sha256, got {ckpt_expected!r}"
+        )
+    ckpt_matches = checkpoint["sha256_matches_pin"]
+    if not isinstance(ckpt_matches, bool):
+        raise Run9ValidationError(
+            f"reexport manifest.input_checkpoint.sha256_matches_pin must be a bool, got {ckpt_matches!r}"
+        )
+    if ckpt_matches != (ckpt_sha == ckpt_expected):
+        raise Run9ValidationError(
+            f"reexport manifest.input_checkpoint.sha256_matches_pin ({ckpt_matches!r}) diverges "
+            f"from the in-process recomputation (sha256 == expected_sha256_per_run9_contract), "
+            f"which is {(ckpt_sha == ckpt_expected)!r}"
+        )
+    # (d) fail-closed（PR #327 レビュー第2巡指摘6対応）: この schema は
+    # 「pin 済み入力からの derived artifact」のみを表現できる——旧実装は
+    # boolean の算術一貫性（sha256_matches_pin == (sha256 ==
+    # expected_sha256_per_run9_contract)）しか強制しておらず、
+    # sha256 != expected_sha256_per_run9_contract かつ
+    # sha256_matches_pin: false という「算術的には自己整合だが unpinned
+    # 入力から derive された」manifest も受理し得た。actual sha と正典
+    # pin 値の**直接**一致（かつ matches フラグが literal True であること）
+    # をここで機械強制し、unpinned 入力からの derived manifest をカテゴリ
+    # カルに拒否する。
+    if ckpt_sha != ckpt_expected or ckpt_matches is not True:
+        raise Run9ValidationError(
+            f"reexport manifest.input_checkpoint: sha256 ({ckpt_sha!r}) must equal "
+            f"expected_sha256_per_run9_contract ({ckpt_expected!r}) and sha256_matches_pin must "
+            f"be the literal boolean True ({ckpt_matches!r} given) — this manifest schema can "
+            "only represent artifacts derived from a pinned input checkpoint; a manifest whose "
+            "checkpoint does not match the canonical pin is categorically rejected fail-closed"
+        )
+    _require_positive_int(checkpoint["bytes"], field="input_checkpoint.bytes")
+
+    exporter = _validate_reexport_shape(
+        data["exporter"], field="exporter", required_keys=_REEXPORT_EXPORTER_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(exporter["repo"], field="exporter.repo")
+    revision = exporter["revision"]
+    revision_expected = exporter["expected_revision_per_run9_contract"]
+    if not isinstance(revision, str) or not _GIT_SHA_RE.match(revision):
+        raise Run9ValidationError(
+            f"reexport manifest.exporter.revision must be a 40hex git sha, got {revision!r}"
+        )
+    if not isinstance(revision_expected, str) or not _GIT_SHA_RE.match(revision_expected):
+        raise Run9ValidationError(
+            "reexport manifest.exporter.expected_revision_per_run9_contract must be a 40hex git "
+            f"sha, got {revision_expected!r}"
+        )
+    revision_matches = exporter["revision_matches_pin"]
+    if not isinstance(revision_matches, bool):
+        raise Run9ValidationError(
+            f"reexport manifest.exporter.revision_matches_pin must be a bool, got {revision_matches!r}"
+        )
+    if revision_matches != (revision == revision_expected):
+        raise Run9ValidationError(
+            f"reexport manifest.exporter.revision_matches_pin ({revision_matches!r}) diverges "
+            f"from the in-process recomputation (revision == expected_revision_per_run9_"
+            f"contract), which is {(revision == revision_expected)!r}"
+        )
+    # (e) fail-closed（PR #327 レビュー第2巡指摘6対応、input_checkpoint (d)
+    # と同型）: exporter revision も pin 一致を直接強制する——unpinned
+    # exporter revision からの derived manifest をカテゴリカルに拒否する。
+    if revision != revision_expected or revision_matches is not True:
+        raise Run9ValidationError(
+            f"reexport manifest.exporter: revision ({revision!r}) must equal "
+            f"expected_revision_per_run9_contract ({revision_expected!r}) and "
+            f"revision_matches_pin must be the literal boolean True ({revision_matches!r} given) "
+            "— this manifest schema can only represent artifacts derived from a pinned exporter "
+            "revision; a manifest whose exporter does not match the canonical pin is "
+            "categorically rejected fail-closed"
+        )
+
+    # experiment_side_inputs（PR #327 レビュー第4巡指摘10対応）: checkpoint
+    # 本体を除く checkpoint-side 入力（config.yaml/spk_map.json/
+    # lang_map.json/dictionary-ja.txt）の全数宣言 + 各 pin 一致。
+    experiment_side_inputs = _validate_reexport_shape(
+        data["experiment_side_inputs"], field="experiment_side_inputs",
+        required_keys=_REEXPORT_EXPERIMENT_SIDE_INPUTS_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(
+        experiment_side_inputs["declaration"], field="experiment_side_inputs.declaration",
+    )
+    _require_non_empty_str(
+        experiment_side_inputs["enumeration_basis"], field="experiment_side_inputs.enumeration_basis",
+    )
+    experiment_items = experiment_side_inputs["items"]
+    if not isinstance(experiment_items, dict):
+        raise Run9ValidationError(
+            "reexport manifest.experiment_side_inputs.items must be an object, got "
+            f"{type(experiment_items).__name__}"
+        )
+    if set(experiment_items.keys()) != REEXPORT_EXPERIMENT_SIDE_INPUT_KEYS:
+        raise Run9ValidationError(
+            "reexport manifest.experiment_side_inputs.items must register exactly the key set "
+            f"{sorted(REEXPORT_EXPERIMENT_SIDE_INPUT_KEYS)}, got {sorted(experiment_items.keys())}"
+        )
+    for item_key in REEXPORT_EXPERIMENT_SIDE_INPUT_KEYS:
+        _validate_reexport_experiment_side_input_entry(experiment_items[item_key], key=item_key)
+
+    export_command = data["export_command"]
+    if not isinstance(export_command, list) or not export_command:
+        raise Run9ValidationError(
+            f"reexport manifest.export_command must be a non-empty list, got {export_command!r}"
+        )
+    for i, token in enumerate(export_command):
+        _require_non_empty_str(token, field=f"export_command[{i}]")
+    _require_non_empty_str(data["export_command_cwd"], field="export_command_cwd")
+
+    # export_command_variables（PR #327 レビュー指摘1対応）: export_command
+    # の `--out` 値・export_command_cwd が使うプレースホルダ2点を自己記述
+    # 定義し、self-contained な「逐語」recipe として再実行可能にする。
+    command_vars = _validate_reexport_shape(
+        data["export_command_variables"], field="export_command_variables",
+        required_keys=_REEXPORT_COMMAND_VARIABLES_REQUIRED_KEYS,
+    )
+    variables = command_vars["variables"]
+    if not isinstance(variables, dict):
+        raise Run9ValidationError(
+            f"reexport manifest.export_command_variables.variables must be an object, got "
+            f"{type(variables).__name__}"
+        )
+    if set(variables.keys()) != _REEXPORT_COMMAND_VARIABLE_NAMES:
+        raise Run9ValidationError(
+            "reexport manifest.export_command_variables.variables must register exactly "
+            f"{sorted(_REEXPORT_COMMAND_VARIABLE_NAMES)}, got {sorted(variables.keys())}"
+        )
+    for var_name, var_def in variables.items():
+        _require_non_empty_str(var_def, field=f"export_command_variables.variables[{var_name!r}]")
+    _require_non_empty_str(
+        command_vars["path_independence_note"], field="export_command_variables.path_independence_note"
+    )
+    # fail-closed: プレースホルダの定義が、実際に export_command/
+    # export_command_cwd が使っている文字列と食い違っていないこと
+    # （定義だけ足して実コマンドと乖離する事故を machine 強制で防ぐ）。
+    out_arg = export_command[-1]
+    if not out_arg.startswith(_REEXPORT_OUT_DIR_PLACEHOLDER):
+        raise Run9ValidationError(
+            "reexport manifest.export_command_variables: out_dir placeholder "
+            f"{_REEXPORT_OUT_DIR_PLACEHOLDER!r} does not prefix export_command's last token "
+            f"({out_arg!r}) — variable definitions must match the literal command"
+        )
+    cwd_value = data["export_command_cwd"]
+    if not cwd_value.startswith(_REEXPORT_DIFFSINGER_REPO_PLACEHOLDER):
+        raise Run9ValidationError(
+            "reexport manifest.export_command_variables: diffsinger_repo placeholder "
+            f"{_REEXPORT_DIFFSINGER_REPO_PLACEHOLDER!r} does not prefix export_command_cwd "
+            f"({cwd_value!r}) — variable definitions must match the literal command"
+        )
+
+    venv_setup = _validate_reexport_shape(
+        data["export_venv_setup"], field="export_venv_setup",
+        required_keys=_REEXPORT_EXPORT_VENV_SETUP_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(venv_setup["description"], field="export_venv_setup.description")
+    install_steps = venv_setup["install_steps"]
+    if not isinstance(install_steps, list) or not install_steps:
+        raise Run9ValidationError(
+            "reexport manifest.export_venv_setup.install_steps must be a non-empty list, got "
+            f"{install_steps!r}"
+        )
+    for i, step in enumerate(install_steps):
+        _require_non_empty_str(step, field=f"export_venv_setup.install_steps[{i}]")
+    # historical_note（PR #327 レビュー第2巡指摘5対応）: `install_steps` は
+    # 当時実際に実行した手順の実測記録（historical）であり、新規再現には
+    # `replay_environment_recipe` を使うべきことを明記する追記キー——
+    # `install_steps` 自体の既存文字列値は変更しない。
+    historical_note = _require_non_empty_str(
+        venv_setup["historical_note"], field="export_venv_setup.historical_note",
+    )
+    if "replay_environment_recipe" not in historical_note:
+        raise Run9ValidationError(
+            "reexport manifest.export_venv_setup.historical_note must reference "
+            f"'replay_environment_recipe' by name, got {historical_note!r}"
+        )
+
+    env_versions = data["environment_versions"]
+    if not isinstance(env_versions, dict) or not env_versions:
+        raise Run9ValidationError(
+            f"reexport manifest.environment_versions must be a non-empty object, got {env_versions!r}"
+        )
+    for env_key, env_value in env_versions.items():
+        if not isinstance(env_key, str) or not env_key.strip():
+            raise Run9ValidationError(
+                f"reexport manifest.environment_versions has a non-string/empty key: {env_key!r}"
+            )
+        _require_non_empty_str(env_value, field=f"environment_versions[{env_key!r}]")
+
+    # export_environment_lock（PR #327 レビュー指摘2対応）: DiffSinger
+    # requirements.txt がレンジ指定のため、`environment_versions`（主要
+    # サブセット）だけでは将来の再解決で transitive 依存が変わり異なる
+    # ONNX bytes になり得る、という指摘への対応——export 用 venv の
+    # `pip freeze --all` 全文を逐語収載し、fail-closed で自己整合性
+    # （sha256 recompute 一致）を machine 強制する。
+    env_lock = data["export_environment_lock"]
+    if not isinstance(env_lock, list) or not env_lock:
+        raise Run9ValidationError(
+            f"reexport manifest.export_environment_lock must be a non-empty list, got {env_lock!r}"
+        )
+    for i, line in enumerate(env_lock):
+        _require_non_empty_str(line, field=f"export_environment_lock[{i}]")
+    env_lock_sha = data["export_environment_lock_sha256"]
+    if not isinstance(env_lock_sha, str) or not _SHA256_HEX_RE.match(env_lock_sha):
+        raise Run9ValidationError(
+            "reexport manifest.export_environment_lock_sha256 must be a 64hex sha256, got "
+            f"{env_lock_sha!r}"
+        )
+    # (i) fail-closed: 自己申告ではなく export_environment_lock 全文
+    # （"\n".join(...) + "\n" — `pip freeze --all` の実際の標準出力形式）の
+    # in-process 再計算と一致しなければならない。
+    expected_lock_sha = hashlib.sha256(("\n".join(env_lock) + "\n").encode("utf-8")).hexdigest()
+    if env_lock_sha != expected_lock_sha:
+        raise Run9ValidationError(
+            f"reexport manifest.export_environment_lock_sha256 ({env_lock_sha!r}) diverges from "
+            f"the in-process recomputation over export_environment_lock "
+            f"(\"\\n\".join(...) + \"\\n\"), which is {expected_lock_sha!r}"
+        )
+
+    # replay_environment_recipe（PR #327 レビュー第2巡指摘5対応）: 新規
+    # 再現の正規経路——`install_steps`（歴史記録、上で不変のまま検証済み）
+    # の代わりに使う。`lock_array_reference` は本 recipe が唯一のバージョン
+    # 正本として参照する配列名を machine 強制で宣言させる（別ファイルの
+    # lock file を勝手に持ち込めないようにする、二重正本 drift 防止）。
+    replay_recipe = _validate_reexport_shape(
+        data["replay_environment_recipe"], field="replay_environment_recipe",
+        required_keys=_REEXPORT_REPLAY_RECIPE_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(replay_recipe["declaration"], field="replay_environment_recipe.declaration")
+    lock_array_reference = replay_recipe["lock_array_reference"]
+    if lock_array_reference != _REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.lock_array_reference must be exactly "
+            f"{_REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME!r} (the single source-of-truth version "
+            f"array), got {lock_array_reference!r}"
+        )
+    replay_steps = replay_recipe["steps"]
+    if not isinstance(replay_steps, list) or not replay_steps:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must be a non-empty list, got "
+            f"{replay_steps!r}"
+        )
+    for i, step in enumerate(replay_steps):
+        _require_non_empty_str(step, field=f"replay_environment_recipe.steps[{i}]")
+    # PR #327 レビュー第10巡指摘19（P2、採用）: `<...>` 形式のプレースホルダ
+    # トークンは export_command_variables.variables に登録済みのものしか
+    # steps の**逐語実行コマンド**（バッククォート区切り）に現れてはなら
+    # ない（第9巡で新設した2 step のバッククォート内に未登録の
+    # `<out_dir>` が紛れ込んでいた——shell 上では未置換のまま渡り、意図
+    # しない解釈で export 前に失敗する）。走査対象をバッククォート区切り
+    # コマンドに限定するのは、地の文（例: 「artifacts.<key>.sha256_run1」
+    # という「各キーについて」を示す一般的表記）まで誤って拒否しないため
+    # ——地の文は shell に渡らないため未定義でも実害がない。ここでは steps
+    # 全数のバッククォート区切りコマンドを走査し、出現する全 `<...>`
+    # トークンが registered variable 名の集合に含まれることを fail-closed
+    # で強制する（`<out_dir>` 個別対処ではなく未定義トークンのファミリー
+    # 全体をカテゴリカルに閉じる）。
+    _registered_command_var_names = set(variables.keys())
+    for i, step in enumerate(replay_steps):
+        for command in _REEXPORT_BACKTICK_COMMAND_PATTERN.findall(step):
+            for token in _REEXPORT_ANGLE_TOKEN_PATTERN.findall(command):
+                if token not in _registered_command_var_names:
+                    raise Run9ValidationError(
+                        f"reexport manifest.replay_environment_recipe.steps[{i}] contains a "
+                        f"backtick-delimited command referencing an undefined token {token!r} "
+                        f"that is not registered in export_command_variables.variables "
+                        f"({sorted(_registered_command_var_names)}) — every <...> placeholder "
+                        "used in a literal replay command must be a registered variable; this is "
+                        "a fail-closed categorical rejection of the undefined-token family, not "
+                        "a one-off fix for a specific token"
+                    )
+    # PR #327 レビュー第11巡指摘20（P2、採用）: 未定義トークン検証（上記）
+    # とは別の穴——manifest 自身（`reexport_manifest.json`）や生成物
+    # （`requirements_replay.txt`）を指す**相対**参照は `<...>` 形式では
+    # ないため上の検証をすり抜ける。ここでは backtick 逐語コマンド内に
+    # 出現するこの2つのファイル名それぞれについて、直前に checkout-stable
+    # な rooted prefix（`<repo checkout>/voice_genesis/evolution/
+    # run9_dual_founder_pjs/inputs/` / `<session workdir（repo外）>/`）を
+    # 伴っていることを全数走査で fail-closed 強制する（cwd 未確立のまま
+    # 相対パスで開くと repo root/workdir から開始した clean replay が
+    # FileNotFoundError で落ちる事故を防ぐ——`<out_dir>` 系の未定義トークン
+    # 検証と同型の「ファミリー全体をカテゴリカルに閉じる」意匠）。
+    for filename, rooted_prefix in (
+        (_REEXPORT_MANIFEST_FILENAME, _REEXPORT_ROOTED_MANIFEST_DIR),
+        (_REEXPORT_REQUIREMENTS_REPLAY_FILENAME, _REEXPORT_ROOTED_REQUIREMENTS_REPLAY_DIR),
+    ):
+        for i, step in enumerate(replay_steps):
+            for command in _REEXPORT_BACKTICK_COMMAND_PATTERN.findall(step):
+                search_from = 0
+                while True:
+                    idx = command.find(filename, search_from)
+                    if idx == -1:
+                        break
+                    prefix_start = idx - len(rooted_prefix)
+                    if prefix_start < 0 or command[prefix_start:idx] != rooted_prefix:
+                        raise Run9ValidationError(
+                            f"reexport manifest.replay_environment_recipe.steps[{i}] contains a "
+                            f"backtick-delimited command referencing {filename!r} without the "
+                            f"checkout-stable rooted prefix {rooted_prefix!r} — a bare relative "
+                            "reference fails with FileNotFoundError when replay is started from "
+                            f"the repo root or an unrelated workdir — got command {command!r}"
+                        )
+                    search_from = idx + len(filename)
+    # PR #327 レビュー第16巡指摘28（P2、採用）の freeze/lock 照合 step 順序
+    # 検査（下記）が参照するため、--no-deps install step の index をここで
+    # 捕捉する（既存の存在確認自体は変更しない）。
+    pip_install_indices = [i for i, step in enumerate(replay_steps) if "--no-deps" in step]
+    if not pip_install_indices:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a pip install step "
+            "using --no-deps (resolver re-resolution must be excluded — the lock array is the "
+            "sole version source of truth)"
+        )
+    pip_install_index = pip_install_indices[0]
+    if not any(
+        "json.load" in step and _REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME in step
+        for step in replay_steps
+    ):
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a verbatim python "
+            f"one-liner that json.load()s the manifest and derives a requirements file from "
+            f"{_REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME!r}"
+        )
+    # PR #327 レビュー第7巡指摘14（P2、採用）: replay recipe の venv 作成
+    # step が ambient `python` で実行されるため、記録された 3.11.15 でない
+    # interpreter で venv が作られ得た（第6巡指摘12の bare-export-
+    # interpreter 指摘とは別の穴——venv 自体の生成元が unpinned）。venv
+    # 作成 step の**前**に interpreter 版検証 step（記録済み
+    # `environment_versions.python` の pin 値を逐語参照する）が存在する
+    # ことを fail-closed で machine 強制する。
+    venv_create_indices = [
+        i for i, step in enumerate(replay_steps)
+        if _REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER in step
+    ]
+    if not venv_create_indices:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a venv creation step "
+            f"(containing {_REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER!r})"
+        )
+    venv_create_index = venv_create_indices[0]
+    pinned_python_version = env_versions.get("python")
+    interpreter_check_indices = [
+        i for i, step in enumerate(replay_steps)
+        if _REEXPORT_REPLAY_RECIPE_INTERPRETER_CHECK_FIELD_MARKER in step
+        and isinstance(pinned_python_version, str)
+        and pinned_python_version in step
+    ]
+    if not interpreter_check_indices or interpreter_check_indices[0] >= venv_create_index:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain an interpreter "
+            f"version verification step (referencing {_REEXPORT_REPLAY_RECIPE_INTERPRETER_CHECK_FIELD_MARKER!r} "
+            f"and its pinned value {pinned_python_version!r}) strictly before the venv creation "
+            f"step (index {venv_create_index}, containing "
+            f"{_REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER!r}) — fail-closed guard against creating "
+            "the replay venv with an interpreter whose version was never checked against "
+            "environment_versions.python"
+        )
+    # PR #327 レビュー第16巡指摘28（P2、採用）: replay 再実行時、venv 作成
+    # step が既存 venv_export_replay ディレクトリをそのまま再利用すると、
+    # 後続の --no-deps install は resolver 再解決のみを排除するのみで
+    # lock に無い残留パッケージを除去しない——export が unrecorded 依存で
+    # 走りうる。venv 作成 step のコマンドへ --clear を必須化し（既存内容の
+    # 削除を保証）、この穴を fail-closed で machine 強制する。
+    if _REEXPORT_REPLAY_RECIPE_VENV_CLEAR_MARKER not in replay_steps[venv_create_index]:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps"
+            f"[{venv_create_index}] (the venv creation step, containing "
+            f"{_REEXPORT_REPLAY_RECIPE_VENV_CREATE_MARKER!r}) must include the "
+            f"{_REEXPORT_REPLAY_RECIPE_VENV_CLEAR_MARKER!r} flag — reusing an existing "
+            "venv_export_replay directory across replay attempts can leave residual packages "
+            "that a --no-deps install does not remove, letting export run with unrecorded "
+            "dependencies"
+        )
+    # PR #327 レビュー第6巡指摘12（P2、採用）: replay recipe が checkpoint-side
+    # 入力の照合まで書いていながら、肝心の export 実行手順を一切書いておらず
+    # （黙示的に export_command を bare token のまま実行させる余地が残ってい
+    # た）、export_command[0] は歴史記録の逐語 bare `python` であるため、その
+    # まま実行すると ambient interpreter とそのパッケージで scripts/export.py
+    # が走り unpinned 環境の生成物が作られ得た。fail-closed (i): export 実行
+    # 手順が venv インタプリタパスを明示参照していることを machine 強制する。
+    venv_python_path = f"{_REEXPORT_REPLAY_RECIPE_VENV_DIR}/bin/python"
+    export_step_indices = [
+        i for i, step in enumerate(replay_steps)
+        if "export_command" in step and venv_python_path in step
+    ]
+    if not export_step_indices:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a step that runs "
+            f"export_command via the venv interpreter path ({venv_python_path!r}) rather than "
+            "leaving the ambient interpreter to resolve export_command's bare `python` token — "
+            "otherwise a replay would produce artifacts from an unpinned ambient environment"
+        )
+    export_step_index = export_step_indices[0]
+    # fail-closed (i-c)（PR #327 レビュー第10巡指摘19、P2、採用）: export 実行
+    # step が venv インタプリタパスを参照していること（上記 fail-closed
+    # (i)）だけでは、引数トークン列自体が canonical `export_command[1:]`
+    # と食い違っていないことまでは保証しない（例: 第9巡混入の未登録
+    # トークン `<out_dir>` が引数列に残っていた穴）。ここでは export 実行
+    # step 内のバッククォート区切りコマンド（venv_python_path と
+    # `scripts/export.py` の両方を含むものを一意に特定する）を抽出し、
+    # その引数トークン列（interpreter を除く）が canonical
+    # `export_command[1:]` と厳密一致することを machine 強制する
+    # （interpreter 部のみ venv python パスへの差し替えを許容——それ以外の
+    # 1トークンでも食い違えば拒否）。
+    export_step_text = replay_steps[export_step_index]
+    backtick_commands = [
+        c for c in _REEXPORT_BACKTICK_COMMAND_PATTERN.findall(export_step_text)
+        if venv_python_path in c and "scripts/export.py" in c
+    ]
+    if len(backtick_commands) != 1:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps"
+            f"[{export_step_index}] must contain exactly one backtick-delimited command "
+            f"invoking {venv_python_path!r} with scripts/export.py, found "
+            f"{len(backtick_commands)} — got step {export_step_text!r}"
+        )
+    export_command_tokens = _reexport_command_tokens(backtick_commands[0])
+    if not export_command_tokens or export_command_tokens[0] != venv_python_path:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps"
+            f"[{export_step_index}] backtick command must start with the venv interpreter path "
+            f"{venv_python_path!r}, got {export_command_tokens[:1]!r}"
+        )
+    if export_command_tokens[1:] != export_command[1:]:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps"
+            f"[{export_step_index}] backtick command argument tokens "
+            f"{export_command_tokens[1:]!r} do not exactly match canonical "
+            f"export_command[1:] {export_command[1:]!r} — only the interpreter token may be "
+            "substituted for the venv python path; every other argument token must be "
+            "byte-identical to the historical export_command record"
+        )
+    # PR #327 レビュー第16巡指摘28（P2、採用）: venv 作成 step への --clear
+    # 必須化（上記）だけでは、将来 --clear なしで誤って再実行された場合の
+    # 残留や、--clear 自体が期待通り動作しなかった場合を検出できない——
+    # pip install step（--no-deps）の**後**・export 実行 step の**前**に、
+    # venv の実測パッケージ集合（`pip freeze --all`）が export_environment_
+    # lock（単一正本）と過不足なく一致することを確認する検証 step の存在を
+    # fail-closed で machine 強制する（照合コマンドは backtick 逐語で
+    # steps 側に収載済みであること、export_environment_lock を逐語参照して
+    # いることの両方を要求する）。
+    freeze_check_indices = [
+        i for i, step in enumerate(replay_steps)
+        if _REEXPORT_REPLAY_RECIPE_FREEZE_COMMAND_MARKER in step
+        and _REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME in step
+    ]
+    if (
+        not freeze_check_indices
+        or freeze_check_indices[0] <= pip_install_index
+        or freeze_check_indices[0] >= export_step_index
+    ):
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a freeze/lock "
+            f"reconciliation step (referencing {_REEXPORT_REPLAY_RECIPE_FREEZE_COMMAND_MARKER!r} "
+            f"and {_REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME!r}) strictly after the --no-deps "
+            f"install step (index {pip_install_index}) and strictly before the export execution "
+            f"step (index {export_step_index}) — fail-closed guard against a reused "
+            "venv_export_replay directory carrying residual packages that --no-deps does not "
+            "remove, letting export run with unrecorded dependencies"
+        )
+    # PR #327 レビュー第16巡指摘29（P2、採用）: 既存 onnx_gate_40000 が残る
+    # workdir（export_command の --out 値そのもの）へ export すると、
+    # exporter が期待ファイルを出力しそこねても前回 run の stale copy が
+    # post-export 閉世界照合（下記）を偽 pass させ得る。export 実行 step の
+    # **前**に、export 先ディレクトリが存在しないことを確認する pre-flight
+    # step の存在を fail-closed で machine 強制する（out_arg 自身の逐語
+    # 参照と存在確認マーカーの両方を要求する——削除の実行有無まではここでは
+    # 検証しない、手動確認へ委ねる設計判断のため）。
+    out_dir_check_indices = [
+        i for i, step in enumerate(replay_steps)
+        if out_arg in step and _REEXPORT_REPLAY_RECIPE_OUT_DIR_EXISTS_MARKER in step
+    ]
+    if not out_dir_check_indices or out_dir_check_indices[0] >= export_step_index:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain an export-directory "
+            f"pre-flight step (referencing the export --out value {out_arg!r} and "
+            f"{_REEXPORT_REPLAY_RECIPE_OUT_DIR_EXISTS_MARKER!r}) strictly before the export "
+            f"execution step (index {export_step_index}) — fail-closed guard against a stale "
+            "prior-run output directory making the post-export closed-world check falsely pass"
+        )
+    # fail-closed (i-b)（PR #327 レビュー第8巡指摘15、P2、採用）: export 実行
+    # step は cwd を export_command_cwd（DiffSinger checkout）へ変更した
+    # **後**に venv_python_path を解決するため、`venv_export_replay` という
+    # bare な相対パス参照が1箇所でも残っていると、その step 群では実在しない
+    # venv を指す——fail-closed (ii)（下記）の bare-interpreter 検査は
+    # `<相対パス>/bin/python` の形をそのまま通過させてしまう（`/bin/` 直前の
+    # negative lookbehind はその手前が絶対パスか相対パスかを区別しない）ため
+    # この穴を検出できなかった。ここでは `_REEXPORT_REPLAY_RECIPE_VENV_DIR_
+    # NAME`（`"venv_export_replay"`）という文字列が現れる箇所すべてが、
+    # 直前に cwd 非依存の絶対パス接頭辞 `<session workdir（repo外）>/`
+    # （`_REEXPORT_OUT_DIR_PLACEHOLDER` 起点、`_REEXPORT_REPLAY_RECIPE_
+    # VENV_DIR` が単一正本）を伴っていることを全数走査で machine 強制する
+    # ——venv 作成 step 自体も対象に含める（venv がまだ存在しないため ambient
+    # python を使うのは正当だが、作成先ディレクトリ自体は cwd 非依存の絶対
+    # パスでなければならない）。
+    _rooted_venv_prefix = f"{_REEXPORT_OUT_DIR_PLACEHOLDER}/"
+    for i, step in enumerate(replay_steps):
+        search_from = 0
+        while True:
+            idx = step.find(_REEXPORT_REPLAY_RECIPE_VENV_DIR_NAME, search_from)
+            if idx == -1:
+                break
+            prefix_start = idx - len(_rooted_venv_prefix)
+            if prefix_start < 0 or step[prefix_start:idx] != _rooted_venv_prefix:
+                raise Run9ValidationError(
+                    f"reexport manifest.replay_environment_recipe.steps[{i}] references "
+                    f"{_REEXPORT_REPLAY_RECIPE_VENV_DIR_NAME!r} without the cwd-independent "
+                    f"absolute prefix {_REEXPORT_OUT_DIR_PLACEHOLDER!r} — a bare relative venv "
+                    "path resolves inside export_command_cwd once the export step changes cwd "
+                    "there, pointing at a venv that does not exist there; every reference must "
+                    f"be the rooted path {_REEXPORT_REPLAY_RECIPE_VENV_DIR!r} — got step {step!r}"
+                )
+            search_from = idx + len(_REEXPORT_REPLAY_RECIPE_VENV_DIR_NAME)
+    # fail-closed (ii): venv bootstrap 以前の step（interpreter 版検証・
+    # `python -m venv ...` 自体、venv がまだ存在しないため ambient python
+    # を使うのが正当——PR #327 レビュー第7巡指摘14対応で検証 step もこの
+    # 例外に含める）を除く全 step で、bare `python`/`pip` 起動
+    # （venv_export_replay/bin/ を前置しない裸呼び出し）が残っていないこと
+    # を全数走査する（「venv 接続が曖昧な step を全数解消」の machine
+    # 強制——目視レビューでの見落としに依存しない）。
+    for i, step in enumerate(replay_steps):
+        if i <= venv_create_index:
+            continue
+        match = _REEXPORT_BARE_INTERPRETER_PATTERN.search(step)
+        if match:
+            raise Run9ValidationError(
+                f"reexport manifest.replay_environment_recipe.steps[{i}] invokes a bare "
+                f"`{match.group(1)}` (ambient interpreter/package manager) instead of the "
+                f"explicit {_REEXPORT_REPLAY_RECIPE_VENV_DIR}/bin/{match.group(1)} path — "
+                f"got step {step!r}"
+            )
+    torch_index_note = _require_non_empty_str(
+        replay_recipe["torch_index_note"], field="replay_environment_recipe.torch_index_note",
+    )
+    if "download.pytorch.org/whl/cpu" not in torch_index_note:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.torch_index_note must reference the "
+            "PyTorch CPU wheel index (https://download.pytorch.org/whl/cpu) that "
+            f"torch==2.13.0+cpu is sourced from, got {torch_index_note!r}"
+        )
+    # PR #327 レビュー第9巡指摘17（P2、採用）: replay recipe は checkpoint-side
+    # 入力の全数照合・export venv/interpreter の確定までは書いていたが、
+    # 供給された clone の `scripts/export.py` 自体（exporter checkout）を
+    # 無検証のまま実行していた——pin 済み `exporter.revision` とは異なる
+    # コード（改変済み・別 commit）から export しても、この manifest の
+    # `exporter` 節（revision/revision_matches_pin、manifest 自己申告値）
+    # だけではその事実を検出できない。export 実行 step の**前**に、
+    # (i) `git rev-parse HEAD` の出力が `exporter.revision` の pin 値と
+    # 一致すること、(ii) `git status --porcelain` の出力が空であること
+    # （dirty checkout 拒否）を検証する step が存在することを fail-closed
+    # で machine 強制する（`exporter.revision` フィールド名とその pin 値を
+    # 逐語参照していること、および export 実行 step より厳密に前に配置され
+    # ていることの両方を要求する——指摘16/17 は「replay recipe の閉世界性」
+    # ファミリーの最後の穴で、本チェックは実行体（exporter checkout）側を
+    # 閉じる）。
+    exporter_check_indices = [
+        i for i, step in enumerate(replay_steps)
+        if _REEXPORT_REPLAY_RECIPE_GIT_HEAD_MARKER in step
+        and _REEXPORT_REPLAY_RECIPE_GIT_STATUS_MARKER in step
+        and _REEXPORT_REPLAY_RECIPE_EXPORTER_REVISION_FIELD_MARKER in step
+        and revision in step
+    ]
+    if not exporter_check_indices or exporter_check_indices[0] >= export_step_index:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain an exporter "
+            f"checkout verification step (referencing {_REEXPORT_REPLAY_RECIPE_GIT_HEAD_MARKER!r} "
+            f"and {_REEXPORT_REPLAY_RECIPE_GIT_STATUS_MARKER!r}, and "
+            f"{_REEXPORT_REPLAY_RECIPE_EXPORTER_REVISION_FIELD_MARKER!r} with its pinned value "
+            f"{revision!r}) strictly before the export execution step (index "
+            f"{export_step_index}) — fail-closed guard against running scripts/export.py from "
+            "an unverified exporter checkout (wrong commit or a dirty working tree)"
+        )
+    # PR #327 レビュー第9巡指摘16（P2、採用）: replay recipe は export 実行
+    # で終わっており、生成された9アーティファクトを manifest の
+    # `artifacts.*.sha256_run1`/`bytes`/`file` と照合する post-export
+    # 照合 step を一切書いていなかった——別バイトが生成されても「replay
+    # 完了」を主張できてしまう穴だった（出力側の閉世界性が欠落）。export
+    # 実行 step の**後**に、`artifacts` 9エントリ全数
+    # （`REEXPORT_ARTIFACT_KEYS`）を逐語参照し `sha256_run1`/`bytes` 照合を
+    # 宣言する post-export 閉世界照合 step が存在することを fail-closed で
+    # machine 強制する。
+    post_export_check_indices = [
+        i for i, step in enumerate(replay_steps)
+        if all(key in step for key in REEXPORT_ARTIFACT_KEYS)
+        and _REEXPORT_REPLAY_RECIPE_POST_EXPORT_SHA_FIELD_MARKER in step
+        and _REEXPORT_REPLAY_RECIPE_POST_EXPORT_BYTES_FIELD_MARKER in step
+    ]
+    if not post_export_check_indices or post_export_check_indices[0] <= export_step_index:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a post-export "
+            f"closed-world verification step (referencing all {len(REEXPORT_ARTIFACT_KEYS)} "
+            f"artifacts keys and the {_REEXPORT_REPLAY_RECIPE_POST_EXPORT_SHA_FIELD_MARKER!r}/"
+            f"{_REEXPORT_REPLAY_RECIPE_POST_EXPORT_BYTES_FIELD_MARKER!r} fields) strictly after "
+            f"the export execution step (index {export_step_index}) — fail-closed guard against "
+            "claiming replay completion without verifying the 9 generated artifacts against the "
+            "manifest's recorded sha256/bytes"
+        )
+
+    artifacts = data["artifacts"]
+    if not isinstance(artifacts, dict):
+        raise Run9ValidationError(f"reexport manifest.artifacts must be an object, got {type(artifacts).__name__}")
+    if set(artifacts.keys()) != REEXPORT_ARTIFACT_KEYS:
+        raise Run9ValidationError(
+            f"reexport manifest.artifacts must register exactly the key set "
+            f"{sorted(REEXPORT_ARTIFACT_KEYS)}, got {sorted(artifacts.keys())}"
+        )
+    validated_artifacts: Dict[str, Dict[str, Any]] = {}
+    for key in REEXPORT_ARTIFACT_KEYS:
+        validated_artifacts[key] = _validate_reexport_artifact_entry(artifacts[key], key=key)
+
+    # PR #327 レビュー第12巡指摘22（P2、採用）: 9エントリの `file` 値の
+    # 一意性を検証していなかった——将来の re-export が2論理 entry を同一
+    # ファイルへ alias すると、実際には8出力しかないのに9 artifacts を
+    # 主張する manifest が構造検証を通過し得た（file 値の重複は「同じ
+    # バイト列を2つの論理名で二重計上している」ことを意味し、9点の実体的
+    # 独立性という manifest の前提が崩れる）。file 値の全数一意性を
+    # fail-closed で強制する。
+    files_by_value: Dict[str, List[str]] = {}
+    for key, entry in validated_artifacts.items():
+        files_by_value.setdefault(entry["file"], []).append(key)
+    duplicate_files = {
+        file_value: keys for file_value, keys in files_by_value.items() if len(keys) > 1
+    }
+    if duplicate_files:
+        raise Run9ValidationError(
+            "reexport manifest.artifacts.*.file values must be unique across all "
+            f"{len(REEXPORT_ARTIFACT_KEYS)} artifacts — found duplicate file value(s) shared by "
+            f"multiple artifact keys: {duplicate_files!r} (a shared file value means 2 logical "
+            "artifacts alias the same on-disk bytes, which would let a manifest claim "
+            f"{len(REEXPORT_ARTIFACT_KEYS)} artifacts while only fewer distinct files were "
+            "actually produced)"
+        )
+
+    reproducibility = _validate_reexport_shape(
+        data["reproducibility_check"], field="reproducibility_check",
+        required_keys=_REEXPORT_REPRODUCIBILITY_CHECK_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(reproducibility["description"], field="reproducibility_check.description")
+    all_identical = reproducibility["all_run1_run2_identical"]
+    if not isinstance(all_identical, bool):
+        raise Run9ValidationError(
+            f"reexport manifest.reproducibility_check.all_run1_run2_identical must be a bool, "
+            f"got {all_identical!r}"
+        )
+    # (e) fail-closed: 自己申告ではなく artifacts 全数の run1_run2_identical
+    # の AND という in-process 再計算と一致しなければならない。
+    computed_all_identical = all(
+        entry["run1_run2_identical"] for entry in validated_artifacts.values()
+    )
+    if all_identical != computed_all_identical:
+        raise Run9ValidationError(
+            f"reexport manifest.reproducibility_check.all_run1_run2_identical ({all_identical!r}) "
+            f"diverges from the in-process recomputation (AND of all artifacts' "
+            f"run1_run2_identical), which is {computed_all_identical!r}"
+        )
+
+    historical_summary = data["historical_comparison_summary"]
+    if not isinstance(historical_summary, dict):
+        raise Run9ValidationError(
+            "reexport manifest.historical_comparison_summary must be an object, got "
+            f"{type(historical_summary).__name__}"
+        )
+    unknown_summary_keys = set(historical_summary.keys()) - REEXPORT_ARTIFACT_KEYS
+    if unknown_summary_keys:
+        raise Run9ValidationError(
+            "reexport manifest.historical_comparison_summary has key(s) outside the artifacts "
+            f"vocabulary: {sorted(unknown_summary_keys)}"
+        )
+    for summary_key, summary_value in historical_summary.items():
+        _require_non_empty_str(summary_value, field=f"historical_comparison_summary[{summary_key!r}]")
+
+    smoke = _validate_reexport_shape(
+        data["smoke_render_cross_check"], field="smoke_render_cross_check",
+        required_keys=_REEXPORT_SMOKE_CROSS_CHECK_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(smoke["description"], field="smoke_render_cross_check.description")
+    render1_wav = smoke["render1_wav_sha256"]
+    render2_wav = smoke["render2_wav_sha256"]
+    if not isinstance(render1_wav, str) or not _SHA256_HEX_RE.match(render1_wav):
+        raise Run9ValidationError(
+            "reexport manifest.smoke_render_cross_check.render1_wav_sha256 must be a 64hex "
+            f"sha256, got {render1_wav!r}"
+        )
+    if not isinstance(render2_wav, str) or not _SHA256_HEX_RE.match(render2_wav):
+        raise Run9ValidationError(
+            "reexport manifest.smoke_render_cross_check.render2_wav_sha256 must be a 64hex "
+            f"sha256, got {render2_wav!r}"
+        )
+    determinism_confirmed = smoke["determinism_confirmed"]
+    if not isinstance(determinism_confirmed, bool):
+        raise Run9ValidationError(
+            "reexport manifest.smoke_render_cross_check.determinism_confirmed must be a bool, "
+            f"got {determinism_confirmed!r}"
+        )
+    # (f) fail-closed: 自己申告ではなく render1/render2 wav sha256 の一致
+    # という in-process 再計算と一致しなければならない。
+    if determinism_confirmed != (render1_wav == render2_wav):
+        raise Run9ValidationError(
+            "reexport manifest.smoke_render_cross_check.determinism_confirmed "
+            f"({determinism_confirmed!r}) diverges from the in-process recomputation "
+            f"(render1_wav_sha256 == render2_wav_sha256), which is "
+            f"{(render1_wav == render2_wav)!r}"
+        )
+    render1_sec = _require_positive_finite_number(
+        smoke["render1_total_elapsed_sec"], field="smoke_render_cross_check.render1_total_elapsed_sec"
+    )
+    render2_sec = _require_positive_finite_number(
+        smoke["render2_total_elapsed_sec"], field="smoke_render_cross_check.render2_total_elapsed_sec"
+    )
+    avg_sec = _require_positive_finite_number(
+        smoke["avg_sec_per_render"], field="smoke_render_cross_check.avg_sec_per_render"
+    )
+    expected_avg = (render1_sec + render2_sec) / 2
+    if not math.isclose(avg_sec, expected_avg, rel_tol=_REEXPORT_SEC_REL_TOL):
+        raise Run9ValidationError(
+            f"reexport manifest.smoke_render_cross_check.avg_sec_per_render ({avg_sec!r}) must "
+            f"equal the average of render1_total_elapsed_sec/render2_total_elapsed_sec "
+            f"({render1_sec!r}, {render2_sec!r} -> {expected_avg!r}, rel_tol="
+            f"{_REEXPORT_SEC_REL_TOL!r})"
+        )
+    budget_sec = _require_positive_finite_number(
+        smoke["budget_estimate_616_renders_sec"],
+        field="smoke_render_cross_check.budget_estimate_616_renders_sec",
+    )
+    expected_budget = avg_sec * _REEXPORT_BUDGET_RENDER_COUNT
+    if not math.isclose(budget_sec, expected_budget, rel_tol=_REEXPORT_SEC_REL_TOL):
+        raise Run9ValidationError(
+            f"reexport manifest.smoke_render_cross_check.budget_estimate_616_renders_sec "
+            f"({budget_sec!r}) must equal avg_sec_per_render × {_REEXPORT_BUDGET_RENDER_COUNT} "
+            f"({avg_sec!r} × {_REEXPORT_BUDGET_RENDER_COUNT} = {expected_budget!r}, rel_tol="
+            f"{_REEXPORT_SEC_REL_TOL!r})"
+        )
+    _require_non_empty_str(
+        smoke["budget_count_provenance_note"], field="smoke_render_cross_check.budget_count_provenance_note"
+    )
+
+    _require_non_empty_str(data["pin_disposition"], field="pin_disposition")
+
+
+def load_pinned_reexport_manifest(
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None, bundle_path: Optional[Path] = None,
+    dependency_pins_manifest_path: Optional[Path] = None,
+    adjudication_basis_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`reexport_manifest_sha` pin の**唯一の正規消費経路**
+    （`load_pinned_dependency_pins_manifest()` と同型の3層防御 read-once。
+    RUN9-L0-HARNESS-2）。
+
+    手順（いずれかで fail-closed）:
+    (1)-(5) 他の `load_pinned_*` 関数と同型（disk 正典再読込・改変検出、
+        PINNED 確認、実在確認、実バイト sha256 一致確認、
+        `validate_reexport_manifest()` 全構造検証）
+    (6) cross-check (a): `input_checkpoint.expected_sha256_per_run9_contract`
+        が `backbone_checkpoint_sha` pin 値と一致すること
+    (7) cross-check (b): `exporter.expected_revision_per_run9_contract` が
+        `backbone_runtime_bundle.json#run9_runtime_inputs.
+        run9_render_code_commit.commit_full`（前方宣言）と一致すること
+        （`backbone_runtime_bundle_sha` pin で改変検出済みのバイトを読む）
+    (8) cross-check (h): `artifacts.{pjs_emb,user_emb,d3synth_emb}.
+        sha256_run1` が `inputs/dependency_pins_manifest.json` の
+        `speaker_embeddings_unpinned_candidates.{pjs,user,
+        d3synth_reference_only}.candidate_sha256` と一致すること
+        （`dependency_pins_sha` は引き続き PENDING のため、この cross-check
+        は同ファイルを直接読む——PINNED 経由の `load_pinned_dependency_
+        pins_manifest()` は呼ばない。読んだバイトへの改変検出は本 cross-
+        check の対象外——それは `dependency_pins_sha` が将来 PINNED 化
+        された時点で担保される）。
+    (9) cross-check (i)（PR #327 レビュー指摘3対応）:
+        `adjudication_basis.source_file` の実バイト sha256 を実測し、
+        `adjudication_basis.sha256` と一致することを machine 強制する
+        ——旧実装は 64hex 形式のみ検証しており、裁定 txt が後で編集されて
+        も旧 provenance を受理し得た穴を閉じる。`source_file` は repo
+        ルート相対パスとして manifest に収載されているため
+        `_REEXPORT_REPO_ROOT`（`run9_dual_founder_pjs` の3階層上）で解決
+        する（`adjudication_basis_path` を渡せばテスト用に上書き可能）。
+    (10) cross-check (j)（PR #327 レビュー第2巡指摘4対応）: acoustic export
+        companions 4点（`acoustic_onnx`/`dsconfig_yaml`/`phonemes_json`/
+        `ritsu_emb`）それぞれの `artifacts.{key}.sha256_run1` が、
+        `inputs/dependency_pins_manifest.json` の
+        `acoustic_export_companions.expected_items[].measured_sha256`
+        （`logical_name` で対応付け）と一致すること——旧実装は cross-check
+        (8) で speaker embedding candidate 3件（pjs/user/d3synth）のみを
+        照合しており、companions 4点は両 manifest 間で digest 照合され
+        ないまま load が成功し得た（`dependency_pins_sha` は PENDING の
+        ため、cross-check (8) と同様に同ファイルを直接読む）。
+    (11) cross-check (k)（PR #327 レビュー第4巡指摘10対応）:
+        `experiment_side_inputs.items[].sha256` それぞれが、
+        `inputs/dependency_pins_manifest.json` の
+        `render_asset_ledger[].actual_sha256`（`logical_name` で対応付け）
+        と一致すること——checkpoint 側 export 入力（config.yaml/
+        spk_map.json/lang_map.json/dictionary-ja.txt）の pin 欠落を閉じる
+        （`dependency_pins_sha` は PENDING のため、cross-check (8)/(10)
+        と同様に同ファイルを直接読む。`dep_data` は (8) で既に read-once
+        済みのバッファから parse 済みであり、ここで再読込はしない）。
+
+    戻り値は検証済み manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("reexport_manifest_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("reexport_manifest_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): the passed-in contract's reexport_manifest_sha "
+            f"pin ({passed_field!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml pin "
+            f"({disk_field!r}) at {effective_contract_path} — treated as tampering evidence and "
+            "rejected fail-closed (same defense as load_pinned_dependency_pins_manifest())"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): reexport_manifest_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned reexport manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else REEXPORT_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): pinned reexport manifest source {path} does not "
+            "exist — this function is the sole canonical access path (direct json.load() "
+            "elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml reexport_manifest_sha の pin 値 ({pinned_sha!r}) と一致しない "
+            "— stale または改変された manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_reexport_manifest(data)
+
+    # (6) cross-check (a): backbone checkpoint pin との一致。
+    ckpt_field = disk_contract.pin_field("backbone_checkpoint_sha")
+    if not _is_field_pinned(ckpt_field):
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): cross-check requires backbone_checkpoint_sha to "
+            f"be PINNED, but it is not (status={ckpt_field.get('status')!r})"
+        )
+    if data["input_checkpoint"]["expected_sha256_per_run9_contract"] != ckpt_field["value"]:
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): input_checkpoint.expected_sha256_per_run9_contract "
+            f"({data['input_checkpoint']['expected_sha256_per_run9_contract']!r}) diverges from "
+            f"backbone_checkpoint_sha pin ({ckpt_field['value']!r}) — cross-check fail-closed"
+        )
+
+    # (7) cross-check (b): DiffSinger commit 前方宣言（bundle 側）との一致。
+    effective_bundle_path = bundle_path if bundle_path is not None else BACKBONE_RUNTIME_BUNDLE_PATH
+    bundle_field = disk_contract.pin_field("backbone_runtime_bundle_sha")
+    if not _is_field_pinned(bundle_field):
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): cross-check requires backbone_runtime_bundle_sha "
+            f"to be PINNED, but it is not (status={bundle_field.get('status')!r})"
+        )
+    if not effective_bundle_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): cross-check source {effective_bundle_path} does "
+            "not exist"
+        )
+    bundle_buf = effective_bundle_path.read_bytes()
+    bundle_actual_sha = hashlib.sha256(bundle_buf).hexdigest()
+    if bundle_actual_sha != bundle_field["value"]:
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): {effective_bundle_path} の実バイト sha256 "
+            f"({bundle_actual_sha!r}) が backbone_runtime_bundle_sha pin 値 "
+            f"({bundle_field['value']!r}) と一致しない — stale/改変された bundle は cross-check "
+            "の一次ソースとして使わない（fail-closed）"
+        )
+    bundle_data = _loads_strict_json(bundle_buf.decode("utf-8"))
+    bundle_commit = _bundle_get(
+        bundle_data, "run9_runtime_inputs", "run9_render_code_commit", "commit_full"
+    )
+    if data["exporter"]["expected_revision_per_run9_contract"] != bundle_commit:
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): exporter.expected_revision_per_run9_contract "
+            f"({data['exporter']['expected_revision_per_run9_contract']!r}) diverges from "
+            f"backbone_runtime_bundle.json#run9_runtime_inputs.run9_render_code_commit."
+            f"commit_full ({bundle_commit!r}) — cross-check fail-closed"
+        )
+
+    # (8) cross-check (h): pjs/user/d3synth speaker embedding の sha が
+    # dependency_pins manifest 側の candidate_sha256 と相互一致すること
+    # （`dependency_pins_sha` は PENDING のため直接ファイルを読む——PINNED
+    # 経由の loader は使わない）。
+    effective_dep_path = (
+        dependency_pins_manifest_path
+        if dependency_pins_manifest_path is not None
+        else DEPENDENCY_PINS_MANIFEST_PATH
+    )
+    if not effective_dep_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): cross-check source {effective_dep_path} does not "
+            "exist"
+        )
+    dep_data = _loads_strict_json(effective_dep_path.read_text(encoding="utf-8"))
+    speaker_candidates = dep_data.get("speaker_embeddings_unpinned_candidates", {})
+    _REEXPORT_SPEAKER_CANDIDATE_MAP = {
+        "pjs_emb": ("pjs", "candidate_sha256"),
+        "user_emb": ("user", "candidate_sha256"),
+        "d3synth_emb": ("d3synth_reference_only", "candidate_sha256"),
+    }
+    for artifact_key, (candidate_key, sha_key) in _REEXPORT_SPEAKER_CANDIDATE_MAP.items():
+        candidate_entry = speaker_candidates.get(candidate_key, {})
+        candidate_sha = candidate_entry.get(sha_key)
+        artifact_sha = data["artifacts"][artifact_key]["sha256_run1"]
+        if candidate_sha != artifact_sha:
+            raise Run9ValidationError(
+                f"load_pinned_reexport_manifest(): artifacts.{artifact_key}.sha256_run1 "
+                f"({artifact_sha!r}) diverges from dependency_pins_manifest.json#"
+                f"speaker_embeddings_unpinned_candidates.{candidate_key}.{sha_key} "
+                f"({candidate_sha!r}) — cross-check fail-closed"
+            )
+
+    # (9) cross-check (i): adjudication_basis.source_file の実バイト
+    # sha256 が adjudication_basis.sha256 と一致すること（PR #327 レビュー
+    # 指摘3対応）。旧実装は 64hex 形式のみ検証しており、裁定 txt が後で
+    # 編集されても旧 provenance を fail-open で受理し得た——実 read + 実
+    # sha256 再計算による fail-closed 照合を追加する。第11巡指摘21対応:
+    # `source_file` の解決自体も repo-containment guard
+    # （`_resolve_repo_contained_path()`）を経由させ、絶対パス・`../`
+    # traversal・symlink 脱出を digest 一致とは無関係に拒否する。
+    effective_adjudication_path = (
+        adjudication_basis_path
+        if adjudication_basis_path is not None
+        else _resolve_repo_contained_path(
+            data["adjudication_basis"]["source_file"],
+            repo_root=_REEXPORT_REPO_ROOT,
+            field="adjudication_basis.source_file",
+            context="load_pinned_reexport_manifest()",
+        )
+    )
+    if not effective_adjudication_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): cross-check source {effective_adjudication_path} "
+            "(adjudication_basis.source_file) does not exist"
+        )
+    adjudication_actual_sha = hashlib.sha256(effective_adjudication_path.read_bytes()).hexdigest()
+    adjudication_pinned_sha = data["adjudication_basis"]["sha256"]
+    if adjudication_actual_sha != adjudication_pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): {effective_adjudication_path} の実バイト sha256 "
+            f"({adjudication_actual_sha!r}) が adjudication_basis.sha256 pin 値 "
+            f"({adjudication_pinned_sha!r}) と一致しない — 裁定文書の改変を fail-closed で "
+            "拒否する"
+        )
+
+    # (10) cross-check (j): acoustic export companions 4点の sha256_run1 が
+    # dependency_pins_manifest.json 側 measured_sha256 と一致すること
+    # （PR #327 レビュー第2巡指摘4）。`dep_data` は (8) で既に read-once 済み
+    # のバッファから parse 済みであり、ここで再読込はしない。
+    _REEXPORT_COMPANION_LOGICAL_NAME_MAP = {
+        "acoustic_onnx": "acoustic_onnx",
+        "dsconfig_yaml": "acoustic_dsconfig_yaml",
+        "phonemes_json": "acoustic_phonemes_json",
+        "ritsu_emb": "speaker_embed_ritsu",
+    }
+    companion_items_by_name = {
+        item["logical_name"]: item
+        for item in dep_data.get("acoustic_export_companions", {}).get("expected_items", [])
+    }
+    for artifact_key, logical_name in _REEXPORT_COMPANION_LOGICAL_NAME_MAP.items():
+        companion_item = companion_items_by_name.get(logical_name)
+        if companion_item is None:
+            raise Run9ValidationError(
+                f"load_pinned_reexport_manifest(): {effective_dep_path} does not declare "
+                "acoustic_export_companions.expected_items[].logical_name == "
+                f"{logical_name!r} (needed to cross-check artifacts.{artifact_key})"
+            )
+        companion_measured_sha = companion_item.get("measured_sha256")
+        artifact_sha = data["artifacts"][artifact_key]["sha256_run1"]
+        if companion_measured_sha != artifact_sha:
+            raise Run9ValidationError(
+                f"load_pinned_reexport_manifest(): artifacts.{artifact_key}.sha256_run1 "
+                f"({artifact_sha!r}) diverges from dependency_pins_manifest.json#"
+                f"acoustic_export_companions.expected_items[logical_name={logical_name!r}]."
+                f"measured_sha256 ({companion_measured_sha!r}) — cross-check fail-closed"
+            )
+
+    # (11) cross-check (k): experiment_side_inputs 4点（checkpoint-side
+    # export 入力）の sha256 が dependency_pins_manifest.json 側
+    # render_asset_ledger の actual_sha256 と一致すること（PR #327 レビュー
+    # 第4巡指摘10）。`dep_data` は (8)/(10) で既に read-once 済みのバッファ
+    # から parse 済みであり、ここで再読込はしない。
+    render_ledger_by_logical_name = {
+        entry.get("logical_name"): entry for entry in dep_data.get("render_asset_ledger", [])
+    }
+    for item_key, logical_name in _REEXPORT_EXPERIMENT_SIDE_INPUT_LOGICAL_NAME_MAP.items():
+        ledger_entry = render_ledger_by_logical_name.get(logical_name)
+        if ledger_entry is None:
+            raise Run9ValidationError(
+                f"load_pinned_reexport_manifest(): {effective_dep_path} does not declare "
+                f"render_asset_ledger[].logical_name == {logical_name!r} (needed to cross-check "
+                f"experiment_side_inputs.items.{item_key})"
+            )
+        ledger_sha = ledger_entry.get("actual_sha256")
+        item_sha = data["experiment_side_inputs"]["items"][item_key]["sha256"]
+        if ledger_sha != item_sha:
+            raise Run9ValidationError(
+                f"load_pinned_reexport_manifest(): experiment_side_inputs.items.{item_key}."
+                f"sha256 ({item_sha!r}) diverges from dependency_pins_manifest.json#"
+                f"render_asset_ledger[logical_name={logical_name!r}].actual_sha256 "
+                f"({ledger_sha!r}) — cross-check fail-closed"
+            )
+
+    return data
+
+
+# ===== execution_profile_manifest (RUN9-EXECPROFILE-1) ======================
+#
+# User 裁定 2026-08-26【RUN9 User裁定 — execution_profile_sha】（repo 内収載
+# `USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt` 参照）に基づく、RUN9 の
+# 基準 execution profile 一括 manifest。PIN-1/2・HARNESS-1/2 で確立した4段
+# 構成（手書き JSON manifest + validate_*() + REQUIRED_KEYS + read-once
+# loader）をここでも踏襲する。
+#
+# 裁定が定義する意味論は2層に分離される（裁定逐語「benchmark値は...意味論
+# そのものには含めない」）:
+#   - identity_semantics: 出力同一性を定義する runtime 5値 + provider 固定
+#     規則4点。ここが変われば execution_profile_sha は再pinが必要。
+#   - benchmark_reference: 参考記録（実行速度・予算概算）。`is_reference_
+#     only: true` で凍結し、identity_semantics とは構造的に分離する
+#     （キー集合が重ならない——benchmark 系キーが identity_semantics へ
+#     混入することは shape 自体で不可能）。
+# additional_measurements は裁定が「可能であれば」追加実測を要求した9項目
+# （CPU model / logical CPU count / onnxruntime available_providers /
+# onnxruntime selected providers / intra・inter_op_num_threads / numpy
+# version / soundfile version / render code commit / deterministic seed・
+# thread environment variables）。推測補完は構造的に禁止する——
+# `status: "NOT_RECORDED"` の item は `value` 系キーを一切持てない shape
+# とし、実測できなかった事実を正直に記録する（本 manifest 実測時点では
+# thread_environment_variables のみ NOT_RECORDED）。
+
+SCHEMA_EXECUTION_PROFILE_MANIFEST = "run9-execution-profile/1.0"
+
+EXECUTION_PROFILE_MANIFEST_PATH = _THIS_DIR / "inputs" / "execution_profile_manifest.json"
+
+# reexport manifest と同じ規約（`_REEXPORT_REPO_ROOT` 参照）: repo ルートは
+# `run9_dual_founder_pjs` -> `evolution` -> `voice_genesis` -> repo root の
+# 3階層上。`adjudication_basis.source_file` は repo ルート相対パスとして
+# manifest に収載する。
+_EXECPROFILE_REPO_ROOT = _THIS_DIR.parent.parent.parent
+
+EXECUTION_PROFILE_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "schema", "generated_at_utc", "adjudication_basis", "identity_semantics",
+    "benchmark_reference", "additional_measurements", "pin_disposition",
+})
+
+_EXECPROFILE_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "source_file", "sha256", "summary",
+})
+
+_EXECPROFILE_IDENTITY_SEMANTICS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "runtime", "provider_fixation_rules",
+})
+
+# 裁定 runtime 5値（逐語、`USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt`
+# 本文節参照）。identity_semantics.runtime はこの辞書と厳密一致しなければ
+# ならない——キー集合・値とも改変を fail-closed で拒否する。
+EXECPROFILE_ADJUDICATED_RUNTIME: Dict[str, str] = {
+    "python": "3.11.15",
+    "os": "Ubuntu 24.04.4",
+    "architecture": "x86_64",
+    "onnxruntime": "1.29.0",
+    "selected_execution_provider": "CPUExecutionProvider",
+}
+
+# provider 固定規則4点（裁定「重要:」節、逐語の要旨マーカー——各 rule 文字列
+# が該当インデックスのマーカーを含むことを machine 強制する）。
+_EXECPROFILE_PROVIDER_RULE_MARKERS: Tuple[str, ...] = (
+    "CPUExecutionProvider に固定",
+    "混同しない",
+    "自動fallback",
+    "再pinする",
+)
+
+_EXECPROFILE_BENCHMARK_REFERENCE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "observed_seconds_per_item", "planned_item_count", "estimated_total_runtime_hours",
+    "note", "is_reference_only", "planned_item_count_provenance_note",
+})
+
+# 裁定逐語（benchmark 節）: observed_seconds_per_item=24.1 /
+# planned_item_count=616 / estimated_total_runtime_hours は
+# "approximately 4.12"（自由記述文字列——裁定が数値ではなく "approximately"
+# 付きの近似表現として与えているため、文字列型のまま凍結する）。
+_EXECPROFILE_ADJUDICATED_OBSERVED_SEC: float = 24.1
+_EXECPROFILE_ADJUDICATED_PLANNED_COUNT: int = 616
+_EXECPROFILE_ADJUDICATED_ESTIMATED_HOURS_TEXT: str = "approximately 4.12"
+
+# additional_measurements の閉じた9キー語彙（裁定「可能であれば...以下を
+# 実測記録する」の9 bullet と1:1対応。intra/inter_op_num_threads は1
+# bullet・deterministic seed/thread environment variables も1 bullet
+# として裁定原文が束ねているため、本 schema でもそれぞれ1 item として扱う）。
+EXECPROFILE_ADDITIONAL_MEASUREMENT_KEYS: FrozenSet[str] = frozenset({
+    "cpu_model", "logical_cpu_count", "onnxruntime_available_providers",
+    "onnxruntime_selected_providers", "onnxruntime_thread_settings",
+    "numpy_version", "soundfile_version", "render_code_commit",
+    "deterministic_seed_and_thread_environment_variables",
+})
+
+_EXECPROFILE_MEASUREMENT_STATUSES: Tuple[str, str] = ("MEASURED", "NOT_RECORDED")
+
+# NOT_RECORDED item が許容する唯一のキー集合（(f) 推測補完の構造的禁止:
+# value 系キーとの同居を禁止する——status/reason の2キーのみ）。
+_EXECPROFILE_NOT_RECORDED_ALLOWED_KEYS: FrozenSet[str] = frozenset({"status", "reason"})
+
+
+def _validate_execprofile_shape(
+    obj: Any, *, field: str, required_keys: FrozenSet[str],
+) -> Dict[str, Any]:
+    if not isinstance(obj, dict):
+        raise Run9ValidationError(f"execution profile manifest.{field} must be an object, got {type(obj).__name__}")
+    unknown = set(obj.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"execution profile manifest.{field} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(obj.keys())
+    if missing:
+        raise Run9ValidationError(f"execution profile manifest.{field} missing required key(s): {sorted(missing)}")
+    return obj
+
+
+def _validate_execprofile_not_recorded_item(item: Mapping[str, Any], *, field: str) -> None:
+    """(f) NOT_RECORDED item の構造的禁則: `value`/`method`/その他の実測系
+    キーを一切持てない——`status`/`reason` の2キーのみ許容する。これにより
+    「実測できなかったことにして値だけこっそり載せる」経路を shape レベルで
+    塞ぐ。"""
+    if set(item.keys()) != _EXECPROFILE_NOT_RECORDED_ALLOWED_KEYS:
+        raise Run9ValidationError(
+            f"execution profile manifest.{field}: NOT_RECORDED item must have exactly the keys "
+            f"{sorted(_EXECPROFILE_NOT_RECORDED_ALLOWED_KEYS)} (no value/measurement fields "
+            f"permitted alongside NOT_RECORDED — fabrication guard), got {sorted(item.keys())}"
+        )
+    _require_non_empty_str(item["reason"], field=f"{field}.reason")
+
+
+def _validate_execprofile_measured_item(
+    item: Mapping[str, Any], *, field: str, required_keys: FrozenSet[str],
+) -> Dict[str, Any]:
+    if not isinstance(item, dict):
+        raise Run9ValidationError(f"execution profile manifest.{field} must be an object, got {type(item).__name__}")
+    unknown = set(item.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"execution profile manifest.{field} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(item.keys())
+    if missing:
+        raise Run9ValidationError(f"execution profile manifest.{field} missing required key(s): {sorted(missing)}")
+    return item
+
+
+def _validate_execprofile_measurement_item(
+    item: Any, *, field: str, measured_required_keys: FrozenSet[str],
+) -> Dict[str, Any]:
+    """status 判別 shape（MEASURED/NOT_RECORDED）の共通検証。MEASURED は
+    `measured_required_keys`（`status` を含む）を厳密に満たし、NOT_RECORDED
+    は `status`/`reason` の2キーのみを許容する（(f) 推測補完の構造的禁止）。
+    """
+    if not isinstance(item, dict):
+        raise Run9ValidationError(f"execution profile manifest.{field} must be an object, got {type(item).__name__}")
+    status = item.get("status")
+    if status not in _EXECPROFILE_MEASUREMENT_STATUSES:
+        raise Run9ValidationError(
+            f"execution profile manifest.{field}.status must be one of "
+            f"{_EXECPROFILE_MEASUREMENT_STATUSES}, got {status!r}"
+        )
+    if status == "NOT_RECORDED":
+        _validate_execprofile_not_recorded_item(item, field=field)
+        return item
+    return _validate_execprofile_measured_item(item, field=field, required_keys=measured_required_keys)
+
+
+def validate_execution_profile_manifest(data: Mapping[str, Any]) -> None:
+    """execution profile manifest（`run9-execution-profile/1.0`）の構造を
+    検証する（RUN9-EXECPROFILE-1）。User 裁定 2026-08-26【RUN9 User裁定 —
+    execution_profile_sha】が承認した RUN9 基準 execution profile を機械
+    可読に凍結する——runtime identity 5値 + provider 固定規則4点
+    （`identity_semantics`）、smoke benchmark 参考記録
+    （`benchmark_reference`、`is_reference_only: true` で意味論から分離）、
+    追加実測9項目（`additional_measurements`、推測補完は構造的に禁止）。
+
+    fail-closed 原則（PIN-1/2・HARNESS-1/2 の同型パターンをここでも適用）:
+    (a) `identity_semantics.runtime` は `EXECPROFILE_ADJUDICATED_RUNTIME`
+        （裁定逐語の5値）と辞書として厳密一致しなければならない。
+    (b) `selected_execution_provider` は文字列 "CPUExecutionProvider" 固定
+        （`identity_semantics.runtime` 側、および (a) により
+        `additional_measurements.onnxruntime_selected_providers.value` との
+        cross-check は本関数内で行う——両者が食い違えば拒否する）。
+        `onnxruntime_selected_providers.value` は
+        `onnxruntime_available_providers.value` の**部分集合**であること
+        を要求する（PR #327 レビュー第3巡指摘9対応、2026-08-26: 旧実装は
+        両者が完全に同一集合になることも拒否する**真**部分集合要件だった
+        が、これは available == ["CPUExecutionProvider"] のみという正当な
+        CPU-only 環境の profile を構造的に拒否し、再pin を阻害していた。
+        "available の列挙と selected を混同しない" は「両者は独立に実測・
+        記録された別概念である」ことの要求であり、`onnxruntime_available_
+        providers`/`onnxruntime_selected_providers` が独立した
+        measurement item として各々の provenance（method/source_file 等）
+        を持つ shape と、selected が `EXECPROFILE_ADJUDICATED_RUNTIME`
+        固定値であることの強制とで担保する——値の偶然の一致は禁止しない）。
+    (c) `identity_semantics.provider_fixation_rules` はちょうど4件の文字列
+        で、各要素が対応する `_EXECPROFILE_PROVIDER_RULE_MARKERS` の
+        マーカー文言を含むこと。
+    (d) `identity_semantics`/`benchmark_reference` はキー集合が重ならない
+        閉じた shape（`EXECUTION_PROFILE_MANIFEST_REQUIRED_KEYS` により
+        トップレベルで強制済み）——`benchmark_reference.is_reference_only`
+        は恒久的にリテラル `True` を要求する frozen-fact ガード。
+    (e) 裁定 txt（`adjudication_basis.source_file`）の実 read → sha256
+        実計算 → manifest 記載 sha256 との照合は `load_pinned_execution_
+        profile_manifest()` 側の cross-check が担う（本関数は一次データ
+        未 load のため 64hex shape のみ検証する）。
+    (f) `additional_measurements` の各 item は `status` 判別 shape
+        （MEASURED/NOT_RECORDED）——NOT_RECORDED item は `status`/`reason`
+        の2キーのみ許容し、実測値フィールドとの同居を shape で禁止する
+        （推測補完の構造的禁止）。
+    (g) contract 側 `execution_profile_sha` と manifest 実バイトの一致は
+        `load_pinned_execution_profile_manifest()` が担う（本関数は
+        contract を参照しない）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"execution profile manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - EXECUTION_PROFILE_MANIFEST_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"execution profile manifest has unknown key(s): {sorted(unknown)}")
+    missing = EXECUTION_PROFILE_MANIFEST_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"execution profile manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_EXECUTION_PROFILE_MANIFEST:
+        raise Run9ValidationError(
+            f"execution profile manifest.schema must be exactly {SCHEMA_EXECUTION_PROFILE_MANIFEST!r}, "
+            f"got {schema!r}"
+        )
+    _require_non_empty_str(data["generated_at_utc"], field="generated_at_utc")
+
+    basis = _validate_execprofile_shape(
+        data["adjudication_basis"], field="adjudication_basis",
+        required_keys=_EXECPROFILE_ADJUDICATION_BASIS_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(basis["source_file"], field="adjudication_basis.source_file")
+    basis_sha = basis["sha256"]
+    if not isinstance(basis_sha, str) or not _SHA256_HEX_RE.match(basis_sha):
+        raise Run9ValidationError(
+            f"execution profile manifest.adjudication_basis.sha256 must be a 64hex sha256, got "
+            f"{basis_sha!r}"
+        )
+    _require_non_empty_str(basis["summary"], field="adjudication_basis.summary")
+
+    # --- identity_semantics ---------------------------------------------
+    identity = _validate_execprofile_shape(
+        data["identity_semantics"], field="identity_semantics",
+        required_keys=_EXECPROFILE_IDENTITY_SEMANTICS_REQUIRED_KEYS,
+    )
+    runtime = identity["runtime"]
+    if not isinstance(runtime, dict):
+        raise Run9ValidationError(
+            f"execution profile manifest.identity_semantics.runtime must be an object, got "
+            f"{type(runtime).__name__}"
+        )
+    # (a) fail-closed: 裁定逐語5値との厳密一致（キー集合・値とも）。
+    if runtime != EXECPROFILE_ADJUDICATED_RUNTIME:
+        raise Run9ValidationError(
+            "execution profile manifest.identity_semantics.runtime diverges from the adjudicated "
+            f"runtime (EXECPROFILE_ADJUDICATED_RUNTIME={EXECPROFILE_ADJUDICATED_RUNTIME!r}), got "
+            f"{runtime!r}"
+        )
+    rules = identity["provider_fixation_rules"]
+    if not isinstance(rules, list) or len(rules) != len(_EXECPROFILE_PROVIDER_RULE_MARKERS):
+        raise Run9ValidationError(
+            "execution profile manifest.identity_semantics.provider_fixation_rules must be a "
+            f"list of exactly {len(_EXECPROFILE_PROVIDER_RULE_MARKERS)} strings, got {rules!r}"
+        )
+    for i, (rule_text, marker) in enumerate(zip(rules, _EXECPROFILE_PROVIDER_RULE_MARKERS)):
+        _require_non_empty_str(rule_text, field=f"identity_semantics.provider_fixation_rules[{i}]")
+        if marker not in rule_text:
+            raise Run9ValidationError(
+                f"execution profile manifest.identity_semantics.provider_fixation_rules[{i}] must "
+                f"contain the adjudicated marker phrase {marker!r}, got {rule_text!r}"
+            )
+
+    # --- benchmark_reference ---------------------------------------------
+    benchmark = _validate_execprofile_shape(
+        data["benchmark_reference"], field="benchmark_reference",
+        required_keys=_EXECPROFILE_BENCHMARK_REFERENCE_REQUIRED_KEYS,
+    )
+    observed_sec = benchmark["observed_seconds_per_item"]
+    if not isinstance(observed_sec, (int, float)) or isinstance(observed_sec, bool):
+        raise Run9ValidationError(
+            "execution profile manifest.benchmark_reference.observed_seconds_per_item must be a "
+            f"number, got {observed_sec!r}"
+        )
+    if not math.isclose(float(observed_sec), _EXECPROFILE_ADJUDICATED_OBSERVED_SEC, rel_tol=1e-9):
+        raise Run9ValidationError(
+            "execution profile manifest.benchmark_reference.observed_seconds_per_item "
+            f"({observed_sec!r}) diverges from the adjudicated value "
+            f"({_EXECPROFILE_ADJUDICATED_OBSERVED_SEC!r})"
+        )
+    planned_count = benchmark["planned_item_count"]
+    if planned_count != _EXECPROFILE_ADJUDICATED_PLANNED_COUNT:
+        raise Run9ValidationError(
+            "execution profile manifest.benchmark_reference.planned_item_count "
+            f"({planned_count!r}) diverges from the adjudicated value "
+            f"({_EXECPROFILE_ADJUDICATED_PLANNED_COUNT!r})"
+        )
+    estimated_hours = benchmark["estimated_total_runtime_hours"]
+    if estimated_hours != _EXECPROFILE_ADJUDICATED_ESTIMATED_HOURS_TEXT:
+        raise Run9ValidationError(
+            "execution profile manifest.benchmark_reference.estimated_total_runtime_hours "
+            f"({estimated_hours!r}) diverges from the adjudicated value "
+            f"({_EXECPROFILE_ADJUDICATED_ESTIMATED_HOURS_TEXT!r})"
+        )
+    _require_non_empty_str(benchmark["note"], field="benchmark_reference.note")
+    is_reference_only = benchmark["is_reference_only"]
+    # (d) frozen-fact ガード: リテラル True のみ許容する（false 化 = 恒久
+    # 禁止 — benchmark 値が identity 意味論へ混入する経路を閉じる）。
+    if is_reference_only is not True:
+        raise Run9ValidationError(
+            "execution profile manifest.benchmark_reference.is_reference_only must remain the "
+            f"literal boolean True (frozen fact — benchmark values must never be promoted into "
+            f"identity semantics), got {is_reference_only!r}"
+        )
+    _require_non_empty_str(
+        benchmark["planned_item_count_provenance_note"],
+        field="benchmark_reference.planned_item_count_provenance_note",
+    )
+
+    # --- additional_measurements -------------------------------------------
+    measurements = data["additional_measurements"]
+    if not isinstance(measurements, dict):
+        raise Run9ValidationError(
+            f"execution profile manifest.additional_measurements must be an object, got "
+            f"{type(measurements).__name__}"
+        )
+    if set(measurements.keys()) != EXECPROFILE_ADDITIONAL_MEASUREMENT_KEYS:
+        raise Run9ValidationError(
+            "execution profile manifest.additional_measurements must register exactly the key "
+            f"set {sorted(EXECPROFILE_ADDITIONAL_MEASUREMENT_KEYS)}, got "
+            f"{sorted(measurements.keys())}"
+        )
+
+    cpu_model = _validate_execprofile_measurement_item(
+        measurements["cpu_model"], field="additional_measurements.cpu_model",
+        measured_required_keys=frozenset({"status", "value", "method"}),
+    )
+    if cpu_model["status"] == "MEASURED":
+        _require_non_empty_str(cpu_model["value"], field="additional_measurements.cpu_model.value")
+        _require_non_empty_str(cpu_model["method"], field="additional_measurements.cpu_model.method")
+
+    logical_cpu_count = _validate_execprofile_measurement_item(
+        measurements["logical_cpu_count"], field="additional_measurements.logical_cpu_count",
+        measured_required_keys=frozenset({"status", "value", "method"}),
+    )
+    if logical_cpu_count["status"] == "MEASURED":
+        _require_positive_int(
+            logical_cpu_count["value"], field="additional_measurements.logical_cpu_count.value"
+        )
+        _require_non_empty_str(
+            logical_cpu_count["method"], field="additional_measurements.logical_cpu_count.method"
+        )
+
+    avail = _validate_execprofile_measurement_item(
+        measurements["onnxruntime_available_providers"],
+        field="additional_measurements.onnxruntime_available_providers",
+        measured_required_keys=frozenset({
+            "status", "value", "method", "matches_smoke_record", "smoke_record_value",
+            "smoke_record_source",
+        }),
+    )
+    avail_value: Optional[list] = None
+    if avail["status"] == "MEASURED":
+        avail_value = avail["value"]
+        if not isinstance(avail_value, list) or not avail_value or not all(
+            isinstance(p, str) and p.strip() for p in avail_value
+        ):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.onnxruntime_available_"
+                f"providers.value must be a non-empty list of non-empty strings, got {avail_value!r}"
+            )
+        _require_non_empty_str(
+            avail["method"], field="additional_measurements.onnxruntime_available_providers.method"
+        )
+        matches_smoke = avail["matches_smoke_record"]
+        smoke_value = avail["smoke_record_value"]
+        if not isinstance(matches_smoke, bool):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.onnxruntime_available_"
+                f"providers.matches_smoke_record must be a bool, got {matches_smoke!r}"
+            )
+        if matches_smoke != (avail_value == smoke_value):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.onnxruntime_available_"
+                f"providers.matches_smoke_record ({matches_smoke!r}) diverges from the "
+                f"in-process recomputation (value == smoke_record_value), which is "
+                f"{(avail_value == smoke_value)!r}"
+            )
+        _require_non_empty_str(
+            avail["smoke_record_source"],
+            field="additional_measurements.onnxruntime_available_providers.smoke_record_source",
+        )
+
+    selected = _validate_execprofile_measurement_item(
+        measurements["onnxruntime_selected_providers"],
+        field="additional_measurements.onnxruntime_selected_providers",
+        measured_required_keys=frozenset({
+            "status", "value", "method", "source_file", "source_line", "source_line_text",
+        }),
+    )
+    selected_value: Optional[list] = None
+    if selected["status"] == "MEASURED":
+        selected_value = selected["value"]
+        if not isinstance(selected_value, list) or not selected_value or not all(
+            isinstance(p, str) and p.strip() for p in selected_value
+        ):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.onnxruntime_selected_"
+                f"providers.value must be a non-empty list of non-empty strings, got {selected_value!r}"
+            )
+        _require_non_empty_str(
+            selected["method"], field="additional_measurements.onnxruntime_selected_providers.method"
+        )
+        _require_non_empty_str(
+            selected["source_file"],
+            field="additional_measurements.onnxruntime_selected_providers.source_file",
+        )
+        _require_positive_int(
+            selected["source_line"],
+            field="additional_measurements.onnxruntime_selected_providers.source_line",
+        )
+        _require_non_empty_str(
+            selected["source_line_text"],
+            field="additional_measurements.onnxruntime_selected_providers.source_line_text",
+        )
+        # (b) fail-closed: selected は [runtime.selected_execution_provider]
+        # と厳密一致（"CPUExecutionProvider" 固定の機械化）。
+        if selected_value != [EXECPROFILE_ADJUDICATED_RUNTIME["selected_execution_provider"]]:
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.onnxruntime_selected_"
+                f"providers.value must equal "
+                f"[{EXECPROFILE_ADJUDICATED_RUNTIME['selected_execution_provider']!r}], got "
+                f"{selected_value!r}"
+            )
+        # (b) fail-closed: selected は available の部分集合でなければ
+        # ならない（selected に available が観測していない provider が
+        # 混入していないことの機械化）。PR #327 レビュー第3巡指摘9
+        # （P2、採用）: 旧実装はここで selected_set == avail_set も拒否
+        # していたが、これは CPU-only 環境（available ==
+        # ["CPUExecutionProvider"] のみ）という正当な実測を構造的に拒否
+        # し、再pin を阻害していた——"available の列挙と selected を混同
+        # しない" という裁定は「両者は独立に実測・記録された別概念であ
+        # る」ことの要求であって「値が偶然一致してはならない」という要求
+        # ではない。混同禁止は below の shape（`onnxruntime_available_
+        # providers` と `onnxruntime_selected_providers` が独立した
+        # measurement item として存在し、各々が自分自身の method/
+        # source_file 等の provenance を持つこと）と、selected が
+        # `EXECPROFILE_ADJUDICATED_RUNTIME["selected_execution_provider"]`
+        # 固定値であることの強制（直上のチェック）で担保する——値の一致
+        # 自体を禁止しない。
+        if avail_value is not None:
+            selected_set = set(selected_value)
+            avail_set = set(avail_value)
+            if not selected_set.issubset(avail_set):
+                raise Run9ValidationError(
+                    "execution profile manifest.additional_measurements.onnxruntime_selected_"
+                    f"providers.value ({selected_value!r}) is not a subset of onnxruntime_"
+                    f"available_providers.value ({avail_value!r})"
+                )
+
+    thread_settings = _validate_execprofile_measurement_item(
+        measurements["onnxruntime_thread_settings"],
+        field="additional_measurements.onnxruntime_thread_settings",
+        measured_required_keys=frozenset({
+            "status", "intra_op_num_threads", "inter_op_num_threads", "method",
+        }),
+    )
+    if thread_settings["status"] == "MEASURED":
+        for sub_field in ("intra_op_num_threads", "inter_op_num_threads"):
+            sub = thread_settings[sub_field]
+            sub = _validate_execprofile_shape(
+                sub, field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}",
+                required_keys=frozenset({
+                    "specification_status", "value", "source_file", "source_line", "source_line_text",
+                }),
+            )
+            spec_status = sub["specification_status"]
+            if spec_status not in ("EXPLICITLY_SET", "DEFAULT_UNSPECIFIED"):
+                raise Run9ValidationError(
+                    f"execution profile manifest.additional_measurements.onnxruntime_thread_"
+                    f"settings.{sub_field}.specification_status must be 'EXPLICITLY_SET' or "
+                    f"'DEFAULT_UNSPECIFIED', got {spec_status!r}"
+                )
+            if spec_status == "EXPLICITLY_SET":
+                _require_positive_int(
+                    sub["value"],
+                    field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}.value",
+                )
+                _require_non_empty_str(
+                    sub["source_file"],
+                    field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}.source_file",
+                )
+                _require_positive_int(
+                    sub["source_line"],
+                    field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}.source_line",
+                )
+                # PR #327 レビュー第15巡指摘27対応（P2、採用）: source_line_text
+                # （非空 str）を必須化する。旧実装は source_line が正整数である
+                # ことしか検証しておらず、cross-check (8) の行照合対象からも
+                # 本2項目（intra/inter_op_num_threads）が構造的に除外されて
+                # いた——将来 repin で cited 行が stale・無関係になっても
+                # source_line の shape だけでは検出できなかった。
+                _require_non_empty_str(
+                    sub["source_line_text"],
+                    field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}.source_line_text",
+                )
+            else:
+                # DEFAULT_UNSPECIFIED（裁定「未指定なら DEFAULT と明記」）:
+                # value は null 固定——未指定の事実を数値で偽装しない。
+                if sub["value"] is not None:
+                    raise Run9ValidationError(
+                        "execution profile manifest.additional_measurements.onnxruntime_thread_"
+                        f"settings.{sub_field}.value must be null when specification_status is "
+                        f"DEFAULT_UNSPECIFIED, got {sub['value']!r}"
+                    )
+        _require_non_empty_str(
+            thread_settings["method"], field="additional_measurements.onnxruntime_thread_settings.method"
+        )
+
+    numpy_item = _validate_execprofile_measurement_item(
+        measurements["numpy_version"], field="additional_measurements.numpy_version",
+        measured_required_keys=frozenset({
+            "status", "value", "method", "matches_smoke_record", "smoke_record_value",
+            "smoke_record_source",
+        }),
+    )
+    if numpy_item["status"] == "MEASURED":
+        _require_non_empty_str(numpy_item["value"], field="additional_measurements.numpy_version.value")
+        _require_non_empty_str(numpy_item["method"], field="additional_measurements.numpy_version.method")
+        matches = numpy_item["matches_smoke_record"]
+        if not isinstance(matches, bool):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.numpy_version."
+                f"matches_smoke_record must be a bool, got {matches!r}"
+            )
+        if matches != (numpy_item["value"] == numpy_item["smoke_record_value"]):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.numpy_version."
+                f"matches_smoke_record ({matches!r}) diverges from the in-process recomputation "
+                f"(value == smoke_record_value), which is "
+                f"{(numpy_item['value'] == numpy_item['smoke_record_value'])!r}"
+            )
+        _require_non_empty_str(
+            numpy_item["smoke_record_source"],
+            field="additional_measurements.numpy_version.smoke_record_source",
+        )
+
+    soundfile_item = _validate_execprofile_measurement_item(
+        measurements["soundfile_version"], field="additional_measurements.soundfile_version",
+        measured_required_keys=frozenset({
+            "status", "value", "method", "matches_smoke_record", "smoke_record_value",
+            "smoke_record_source",
+        }),
+    )
+    if soundfile_item["status"] == "MEASURED":
+        _require_non_empty_str(
+            soundfile_item["value"], field="additional_measurements.soundfile_version.value"
+        )
+        _require_non_empty_str(
+            soundfile_item["method"], field="additional_measurements.soundfile_version.method"
+        )
+        matches = soundfile_item["matches_smoke_record"]
+        if not isinstance(matches, bool):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.soundfile_version."
+                f"matches_smoke_record must be a bool, got {matches!r}"
+            )
+        if matches != (soundfile_item["value"] == soundfile_item["smoke_record_value"]):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.soundfile_version."
+                f"matches_smoke_record ({matches!r}) diverges from the in-process recomputation "
+                f"(value == smoke_record_value), which is "
+                f"{(soundfile_item['value'] == soundfile_item['smoke_record_value'])!r}"
+            )
+        _require_non_empty_str(
+            soundfile_item["smoke_record_source"],
+            field="additional_measurements.soundfile_version.smoke_record_source",
+        )
+
+    render_commit = _validate_execprofile_measurement_item(
+        measurements["render_code_commit"], field="additional_measurements.render_code_commit",
+        measured_required_keys=frozenset({
+            "status", "file", "file_sha256", "file_sha256_method", "last_modifying_commit",
+            "last_modifying_commit_date_utc", "last_modifying_commit_method",
+            "smoke_time_repo_head_commit", "smoke_time_repo_head_source",
+            "smoke_time_gate_synth_py_sha256", "smoke_time_gate_synth_py_sha256_source",
+            "unchanged_verification_method",
+        }),
+    )
+    if render_commit["status"] == "MEASURED":
+        _require_non_empty_str(render_commit["file"], field="additional_measurements.render_code_commit.file")
+        file_sha = render_commit["file_sha256"]
+        if not isinstance(file_sha, str) or not _SHA256_HEX_RE.match(file_sha):
+            raise Run9ValidationError(
+                f"execution profile manifest.additional_measurements.render_code_commit.file_sha256 "
+                f"must be a 64hex sha256, got {file_sha!r}"
+            )
+        _require_non_empty_str(
+            render_commit["file_sha256_method"],
+            field="additional_measurements.render_code_commit.file_sha256_method",
+        )
+        last_commit = render_commit["last_modifying_commit"]
+        if not isinstance(last_commit, str) or not _GIT_SHA_RE.match(last_commit):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.render_code_commit."
+                f"last_modifying_commit must be a 40hex git sha, got {last_commit!r}"
+            )
+        _require_non_empty_str(
+            render_commit["last_modifying_commit_date_utc"],
+            field="additional_measurements.render_code_commit.last_modifying_commit_date_utc",
+        )
+        _require_non_empty_str(
+            render_commit["last_modifying_commit_method"],
+            field="additional_measurements.render_code_commit.last_modifying_commit_method",
+        )
+        smoke_head = render_commit["smoke_time_repo_head_commit"]
+        if not isinstance(smoke_head, str) or not _GIT_SHA_RE.match(smoke_head):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.render_code_commit."
+                f"smoke_time_repo_head_commit must be a 40hex git sha, got {smoke_head!r}"
+            )
+        _require_non_empty_str(
+            render_commit["smoke_time_repo_head_source"],
+            field="additional_measurements.render_code_commit.smoke_time_repo_head_source",
+        )
+        smoke_file_sha = render_commit["smoke_time_gate_synth_py_sha256"]
+        if not isinstance(smoke_file_sha, str) or not _SHA256_HEX_RE.match(smoke_file_sha):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.render_code_commit."
+                f"smoke_time_gate_synth_py_sha256 must be a 64hex sha256, got {smoke_file_sha!r}"
+            )
+        _require_non_empty_str(
+            render_commit["smoke_time_gate_synth_py_sha256_source"],
+            field="additional_measurements.render_code_commit.smoke_time_gate_synth_py_sha256_source",
+        )
+        _require_non_empty_str(
+            render_commit["unchanged_verification_method"],
+            field="additional_measurements.render_code_commit.unchanged_verification_method",
+        )
+        # fail-closed: smoke 実行時点のファイル sha256 と現行 working tree
+        # の sha256 が一致することを machine 強制する（不一致は
+        # unchanged_verification_method の主張と自己矛盾するため拒否）。
+        if smoke_file_sha != file_sha:
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.render_code_commit: "
+                f"smoke_time_gate_synth_py_sha256 ({smoke_file_sha!r}) diverges from file_sha256 "
+                f"({file_sha!r}) — this contradicts an 'unchanged since smoke' claim and is "
+                "rejected fail-closed"
+            )
+
+    seed_and_env = _validate_execprofile_measurement_item(
+        measurements["deterministic_seed_and_thread_environment_variables"],
+        field="additional_measurements.deterministic_seed_and_thread_environment_variables",
+        measured_required_keys=frozenset({
+            "status", "deterministic_seed", "thread_environment_variables",
+        }),
+    )
+    if seed_and_env["status"] == "MEASURED":
+        seed_field_prefix = (
+            "additional_measurements.deterministic_seed_and_thread_environment_variables"
+        )
+        seed_item = _validate_execprofile_measurement_item(
+            seed_and_env["deterministic_seed"], field=f"{seed_field_prefix}.deterministic_seed",
+            measured_required_keys=frozenset({
+                "status", "value", "declaration_form", "source_file", "source_line",
+                "source_line_text", "consumption_note",
+            }),
+        )
+        if seed_item["status"] == "MEASURED":
+            _require_positive_int(
+                seed_item["value"], field=f"{seed_field_prefix}.deterministic_seed.value"
+            )
+            if seed_item["declaration_form"] != "in-code declaration":
+                raise Run9ValidationError(
+                    f"execution profile manifest.{seed_field_prefix}.deterministic_seed."
+                    f"declaration_form must be exactly 'in-code declaration', got "
+                    f"{seed_item['declaration_form']!r}"
+                )
+            _require_non_empty_str(
+                seed_item["source_file"], field=f"{seed_field_prefix}.deterministic_seed.source_file"
+            )
+            _require_positive_int(
+                seed_item["source_line"], field=f"{seed_field_prefix}.deterministic_seed.source_line"
+            )
+            _require_non_empty_str(
+                seed_item["source_line_text"],
+                field=f"{seed_field_prefix}.deterministic_seed.source_line_text",
+            )
+            _require_non_empty_str(
+                seed_item["consumption_note"],
+                field=f"{seed_field_prefix}.deterministic_seed.consumption_note",
+            )
+        # thread_environment_variables は NOT_RECORDED を許容する独立
+        # sub-item（(f) と同じ status 判別 shape）。
+        thread_env_item = _validate_execprofile_measurement_item(
+            seed_and_env["thread_environment_variables"],
+            field=f"{seed_field_prefix}.thread_environment_variables",
+            measured_required_keys=frozenset({"status", "value", "method"}),
+        )
+        # PR #327 レビュー第12巡指摘23（P2、採用）: MEASURED の場合に
+        # value/method が空文字列でも `_validate_execprofile_measured_item`
+        # の shape 検証（キー集合のみ）を通過してしまい、証拠なしの空
+        # 成功記録へ昇格し得た——numpy_item/soundfile_item と同型の実値
+        # 検証（非空・型検証）を追加する。
+        if thread_env_item["status"] == "MEASURED":
+            _require_non_empty_str(
+                thread_env_item["value"], field=f"{seed_field_prefix}.thread_environment_variables.value"
+            )
+            _require_non_empty_str(
+                thread_env_item["method"], field=f"{seed_field_prefix}.thread_environment_variables.method"
+            )
+
+    _require_non_empty_str(data["pin_disposition"], field="pin_disposition")
+
+
+def _cross_check_measured_source_line_text(
+    *,
+    source_file: str,
+    source_line: int,
+    source_line_text: str,
+    repo_root: Path,
+    resolved_path: Optional[Path],
+    field: str,
+    context: str,
+) -> None:
+    """`source_file`/`source_line`/`source_line_text` を伴う measured
+    provenance の実ファイル fail-closed 照合（PR #327 レビュー第14巡指摘26
+    対応、P2、採用）。
+
+    旧実装は `source_file`/`source_line`/`source_line_text` の型・非空検証
+    のみで、参照先ファイルの当該行を実 read して照合していなかった。
+    `render_code_commit.file_sha256`（全ファイル digest）が現行であること
+    は「ファイル全体が改変されていない」ことしか語らず、「この行番号が
+    この引用テキストを指す」ことは別途 machine 検証しない限り自己申告の
+    ままだった——repin 後の行ずれ（stale line）や引用テキストの捏造が、
+    digest さえ一致すれば受理されてしまう穴があった。
+
+    手順（`_resolve_repo_contained_path()` と同じ fail-closed 意匠）:
+    (a) `source_file` を `_resolve_repo_contained_path()`（絶対パス・`..`
+        traversal・symlink 脱出を拒否する containment guard）経由で解決
+        する。`resolved_path` が明示された場合はテスト用パスオーバー
+        ライドとして containment guard を経由せず直接使う（`render_code_
+        path` 等の既存オーバーライド引数と同じ規約——manifest 収載データ
+        を経由しないため本 guard の脅威モデル対象外）。
+    (b) 解決したファイルを実 read し、`source_line`（1-indexed）が範囲内
+        であることを確認する。範囲外（stale line）は fail-closed で拒否
+        する。
+    (c) 当該行を取得し、記録された `source_line_text` と一致することを
+        強制する。
+
+    正規化（現物 manifest の記録形式に合わせた最小限の設計）: 現行
+    manifest の `source_line_text` はインデント付き行（例
+    `gate_synth.py:1218` の `providers = [...]`）でも前後空白を含まない
+    strip 済み文字列として記録されている——実ファイル側の行のみ
+    `.strip()` して比較する（記録側は追加正規化しない。記録側に前後空白
+    が混入していれば、それも不一致として fail-closed で検出される）。
+    """
+    effective_path = (
+        resolved_path
+        if resolved_path is not None
+        else _resolve_repo_contained_path(
+            source_file, repo_root=repo_root, field=f"{field}.source_file", context=context,
+        )
+    )
+    if not effective_path.is_file():
+        raise Run9ValidationError(
+            f"{context}: cross-check source {effective_path} ({field}.source_file) does not exist"
+        )
+    lines = effective_path.read_text(encoding="utf-8").splitlines()
+    if source_line < 1 or source_line > len(lines):
+        raise Run9ValidationError(
+            f"{context}: {field}.source_line ({source_line!r}) is out of range for "
+            f"{effective_path} ({len(lines)} lines in the current working tree) — stale line "
+            "pointer rejected fail-closed"
+        )
+    actual_line_text = lines[source_line - 1].strip()
+    if actual_line_text != source_line_text:
+        raise Run9ValidationError(
+            f"{context}: {field}.source_line_text ({source_line_text!r}) diverges from the actual "
+            f"content of {effective_path}:{source_line} ({actual_line_text!r}) — stale or "
+            "fabricated provenance rejected fail-closed"
+        )
+
+
+def load_pinned_execution_profile_manifest(
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None, adjudication_basis_path: Optional[Path] = None,
+    render_code_path: Optional[Path] = None,
+    selected_providers_source_path: Optional[Path] = None,
+    deterministic_seed_source_path: Optional[Path] = None,
+    thread_settings_source_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`execution_profile_sha` pin の**唯一の正規消費経路**
+    （`load_pinned_reexport_manifest()` と同型の3層防御 read-once。
+    RUN9-EXECPROFILE-1）。
+
+    手順（いずれかで fail-closed）:
+    (1)-(5) 他の `load_pinned_*` 関数と同型（disk 正典再読込・改変検出、
+        PINNED 確認、実在確認、実バイト sha256 一致確認、
+        `validate_execution_profile_manifest()` 全構造検証）
+    (6) cross-check: `adjudication_basis.source_file` の実バイト sha256 を
+        実測し、`adjudication_basis.sha256` と一致することを machine 強制
+        する（`load_pinned_reexport_manifest()` cross-check (9) と同型）。
+    (7) cross-check（PR #327 レビュー第3巡指摘8(a)対応、2026-08-26）:
+        `additional_measurements.render_code_commit` が MEASURED のとき、
+        `file_sha256` を repo 内の実ファイル（`voice_genesis/foundry/
+        s1_gate/gate_synth.py`、`render_code_path` でテスト用に上書き
+        可能）の実バイト sha256 と照合し、fail-closed で一致を強制する。
+        旧実装は manifest と裁定 txt しか読まず render code 実体を照合し
+        ていなかったため、gate_synth.py が改変された後でも pin 済み
+        profile がそのまま受理され得た——"provider または主要 runtime
+        version が変わる場合は...再pinする" という裁定の意味論を render
+        code へも機械化する。これは repo 内容のみで完結する**静的**照合
+        であり、CI（Python 3.11/3.12 マトリクス）でも決定論的に成立する。
+        live 環境（実行中の Python/onnxruntime バージョンや provider）の
+        照合はここでは行わない——それは `verify_execution_profile_
+        runtime()` の役割であり、load 時ではなく RUN9 実行段の render
+        直前に呼ぶ契約（両者を混ぜると CI マトリクス環境と RUN9 実行環境
+        の分離が壊れる）。
+    (8) cross-check（PR #327 レビュー第14巡指摘26対応・第15巡指摘27対応
+        （全数化）、P2、採用）:
+        `source_file`/`source_line`/`source_line_text` を伴う measured
+        provenance について、`_cross_check_measured_source_line_text()` で
+        当該行の実テキストと `source_line_text` の一致を fail-closed で
+        強制する。対象は4項目——`additional_measurements.onnxruntime_
+        selected_providers`・`additional_measurements.deterministic_seed_
+        and_thread_environment_variables.deterministic_seed`（第14巡導入）
+        に加え、`additional_measurements.onnxruntime_thread_settings.
+        {intra,inter}_op_num_threads`（第15巡指摘27で編入。旧実装は
+        `source_line` が正整数であることしか検証しておらず、cited 行が
+        stale・無関係になっても shape 検証だけでは受理されてしまう穴が
+        あった——`source_line_text` を追加し本 cross-check の対象へ含める
+        ことで塞いだ）。上書きは `selected_providers_source_path`/
+        `deterministic_seed_source_path`/`thread_settings_source_path`
+        （intra/inter 共通、いずれも gate_synth.py 参照のため単一引数で
+        足りる）でテスト用に可能。(7) の全ファイル digest だけでは
+        「この行番号がこの引用テキストを指す」ことまでは検証できない
+        ——repin 後の行ずれ・引用テキスト捏造を個別に検出する。thread
+        settings は `specification_status == "EXPLICITLY_SET"` のときのみ
+        照合する（`DEFAULT_UNSPECIFIED` は `source_line_text` の内容検証
+        自体を行わない既存の `source_file`/`source_line` 分岐と同型）。
+
+    戻り値は検証済み manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("execution_profile_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("execution_profile_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_execution_profile_manifest(): the passed-in contract's "
+            f"execution_profile_sha pin ({passed_field!r}) diverges from the canonical on-disk "
+            f"RUN9_CONTRACT.yaml pin ({disk_field!r}) at {effective_contract_path} — treated as "
+            "tampering evidence and rejected fail-closed (same defense as "
+            "load_pinned_reexport_manifest())"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_execution_profile_manifest(): execution_profile_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned execution "
+            "profile manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else EXECUTION_PROFILE_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_execution_profile_manifest(): pinned execution profile manifest source "
+            f"{path} does not exist — this function is the sole canonical access path (direct "
+            "json.load() elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_execution_profile_manifest(): {path} の実バイト sha256 ({actual_sha!r}) "
+            f"が RUN9_CONTRACT.yaml execution_profile_sha の pin 値 ({pinned_sha!r}) と一致しない "
+            "— stale または改変された manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_execution_profile_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_execution_profile_manifest(data)
+
+    # (6) cross-check: adjudication_basis.source_file の実バイト sha256 が
+    # adjudication_basis.sha256 と一致すること（裁定文書の改変を fail-closed
+    # で拒否する）。第11巡指摘21対応: `source_file` の解決自体も
+    # repo-containment guard（`_resolve_repo_contained_path()`）を経由さ
+    # せ、絶対パス・`../` traversal・symlink 脱出を digest 一致とは無関係
+    # に拒否する。
+    effective_adjudication_path = (
+        adjudication_basis_path
+        if adjudication_basis_path is not None
+        else _resolve_repo_contained_path(
+            data["adjudication_basis"]["source_file"],
+            repo_root=_EXECPROFILE_REPO_ROOT,
+            field="adjudication_basis.source_file",
+            context="load_pinned_execution_profile_manifest()",
+        )
+    )
+    if not effective_adjudication_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_execution_profile_manifest(): cross-check source "
+            f"{effective_adjudication_path} (adjudication_basis.source_file) does not exist"
+        )
+    adjudication_actual_sha = hashlib.sha256(effective_adjudication_path.read_bytes()).hexdigest()
+    adjudication_pinned_sha = data["adjudication_basis"]["sha256"]
+    if adjudication_actual_sha != adjudication_pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_execution_profile_manifest(): {effective_adjudication_path} の実バイト "
+            f"sha256 ({adjudication_actual_sha!r}) が adjudication_basis.sha256 pin 値 "
+            f"({adjudication_pinned_sha!r}) と一致しない — 裁定文書の改変を fail-closed で "
+            "拒否する"
+        )
+
+    # (7) cross-check: additional_measurements.render_code_commit が
+    # MEASURED のとき、file_sha256 を repo 内の実ファイル（gate_synth.py）
+    # の実バイト sha256 と照合する（PR #327 レビュー第3巡指摘8(a)対応）。
+    # 旧実装は manifest 記載の file_sha256 を内部整合（smoke_time_
+    # gate_synth_py_sha256 との一致）のみ検証しており、render code の実体
+    # そのものとは一度も照合していなかった——gate_synth.py が改変されて
+    # いても、smoke_time 側の記録さえ一致していれば load は成功してい
+    # た。ここで実 read + 実 sha256 再計算による fail-closed 照合を追加
+    # する。CI マトリクス環境非依存の repo 静的照合（git working tree の
+    # 実バイトのみ参照）であり、live 環境照合（Python/onnxruntime バー
+    # ジョン・provider）は含まない——それは `verify_execution_profile_
+    # runtime()` が担う。
+    render_commit_measurement = data["additional_measurements"]["render_code_commit"]
+    if render_commit_measurement["status"] == "MEASURED":
+        # 第11巡指摘21対応: `file` の解決自体も repo-containment guard を
+        # 経由させる（adjudication_basis.source_file と同型の穴）。
+        effective_render_code_path = (
+            render_code_path
+            if render_code_path is not None
+            else _resolve_repo_contained_path(
+                render_commit_measurement["file"],
+                repo_root=_EXECPROFILE_REPO_ROOT,
+                field="additional_measurements.render_code_commit.file",
+                context="load_pinned_execution_profile_manifest()",
+            )
+        )
+        if not effective_render_code_path.is_file():
+            raise Run9ValidationError(
+                f"load_pinned_execution_profile_manifest(): cross-check source "
+                f"{effective_render_code_path} (additional_measurements.render_code_commit."
+                "file) does not exist"
+            )
+        render_code_actual_sha = hashlib.sha256(effective_render_code_path.read_bytes()).hexdigest()
+        render_code_pinned_sha = render_commit_measurement["file_sha256"]
+        if render_code_actual_sha != render_code_pinned_sha:
+            raise Run9ValidationError(
+                f"load_pinned_execution_profile_manifest(): {effective_render_code_path} の実"
+                f"バイト sha256 ({render_code_actual_sha!r}) が additional_measurements."
+                f"render_code_commit.file_sha256 pin 値 ({render_code_pinned_sha!r}) と一致し"
+                "ない — gate_synth.py が pin 後に改変された可能性があり、fail-closed で拒否"
+                "する（provider/主要 runtime version 変更時の再pin 義務と同型の render code "
+                "版）"
+            )
+
+    # (8) cross-check（PR #327 レビュー第14巡指摘26対応・第15巡指摘27対応
+    # （全数化）、P2、採用）: source_file/source_line/source_line_text を
+    # 伴う measured provenance（onnxruntime_selected_providers,
+    # deterministic_seed, onnxruntime_thread_settings.{intra,inter}_op_
+    # num_threads の4項目）の当該行を実 read し、記録された
+    # source_line_text と一致することを fail-closed で強制する。(7) の
+    # 全ファイル digest だけでは「この行番号がこの引用テキストを指す」
+    # ことまでは検証できない——repin 後の行ずれ・引用テキスト捏造を個別に
+    # 検出する。第15巡指摘27: 旧実装は thread_settings の2項目を対象から
+    # 除外していた（source_line が正整数であることしか検証していなかった）
+    # ため、将来 repin で cited 行が stale・無関係になっても受理され得た
+    # ——本節で編入し全数照合とした。
+    selected_measurement = data["additional_measurements"]["onnxruntime_selected_providers"]
+    if selected_measurement["status"] == "MEASURED":
+        _cross_check_measured_source_line_text(
+            source_file=selected_measurement["source_file"],
+            source_line=selected_measurement["source_line"],
+            source_line_text=selected_measurement["source_line_text"],
+            repo_root=_EXECPROFILE_REPO_ROOT,
+            resolved_path=selected_providers_source_path,
+            field="additional_measurements.onnxruntime_selected_providers",
+            context="load_pinned_execution_profile_manifest()",
+        )
+
+    seed_and_env_measurement = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]
+    if seed_and_env_measurement["status"] == "MEASURED":
+        deterministic_seed_measurement = seed_and_env_measurement["deterministic_seed"]
+        if deterministic_seed_measurement["status"] == "MEASURED":
+            _cross_check_measured_source_line_text(
+                source_file=deterministic_seed_measurement["source_file"],
+                source_line=deterministic_seed_measurement["source_line"],
+                source_line_text=deterministic_seed_measurement["source_line_text"],
+                repo_root=_EXECPROFILE_REPO_ROOT,
+                resolved_path=deterministic_seed_source_path,
+                field=(
+                    "additional_measurements.deterministic_seed_and_thread_environment_"
+                    "variables.deterministic_seed"
+                ),
+                context="load_pinned_execution_profile_manifest()",
+            )
+
+    thread_settings_measurement = data["additional_measurements"]["onnxruntime_thread_settings"]
+    if thread_settings_measurement["status"] == "MEASURED":
+        for sub_field in ("intra_op_num_threads", "inter_op_num_threads"):
+            sub_measurement = thread_settings_measurement[sub_field]
+            if sub_measurement["specification_status"] == "EXPLICITLY_SET":
+                _cross_check_measured_source_line_text(
+                    source_file=sub_measurement["source_file"],
+                    source_line=sub_measurement["source_line"],
+                    source_line_text=sub_measurement["source_line_text"],
+                    repo_root=_EXECPROFILE_REPO_ROOT,
+                    resolved_path=thread_settings_source_path,
+                    field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}",
+                    context="load_pinned_execution_profile_manifest()",
+                )
+
+    return data
+
+
+# `/etc/os-release` の `VERSION` フィールド（例: "24.04.4 LTS (Noble Numbat)"）
+# 先頭トークンが数字とドットのみで構成されていることを確認する正規表現
+# （`_build_live_os_identity()` 専用、PR #327 レビュー第5巡指摘11対応）。
+_OS_RELEASE_VERSION_TOKEN_RE = re.compile(r"^\d+(?:\.\d+)*$")
+
+_DEFAULT_OS_RELEASE_PATH = Path("/etc/os-release")
+
+
+def _parse_os_release_text(text: str) -> Dict[str, str]:
+    """`/etc/os-release`（`KEY=VALUE` 形式、値は shell クォート可）の中身を
+    dict へ変換する。空行・`#` コメント行・`=` を含まない行は無視する。
+    値を囲むシングル/ダブルクォートは剥がす（`os-release(5)` の記法）。
+    """
+    fields: Dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        fields[key] = value
+    return fields
+
+
+def _build_live_os_identity(os_release_path: Optional[Path] = None) -> str:
+    """`/etc/os-release` の実 read から、execution_profile_sha manifest の
+    `identity_semantics.runtime.os` pin 値（"NAME MAJOR.MINOR.PATCH" 形式、
+    実例 "Ubuntu 24.04.4"）と厳密比較可能な文字列を構成する（PR #327
+    レビュー第5巡指摘11対応）。
+
+    **導出規則**（実物の `/etc/os-release` を Read して確認済み: Ubuntu
+    24.04.4 の実機では `NAME="Ubuntu"` / `VERSION_ID="24.04"` /
+    `VERSION="24.04.4 LTS (Noble Numbat)"`）:
+    (1) `NAME` フィールドを取得する（例: "Ubuntu"）。
+    (2) `VERSION_ID` はマイナーバージョンまでしか保持しない（"24.04"）ため
+        patch 版番号（"24.04.4"）を再現できない。そこで `VERSION`
+        フィールド（例: "24.04.4 LTS (Noble Numbat)"）の先頭空白区切り
+        トークンをバージョン番号として抽出する。
+    (3) 抽出したトークンが数字とドットのみで構成されること
+        （`_OS_RELEASE_VERSION_TOKEN_RE`）を確認する。
+    (4) `f"{NAME} {version_token}"` を組み立てて返す——manifest pin と
+        同じ "NAME MAJOR.MINOR.PATCH" 形式になる。
+
+    `/etc/os-release` が存在しない・`NAME`/`VERSION` フィールドが欠落・
+    バージョントークンが抽出/検証できない場合はいずれも `ValueError` を
+    送出する（呼び出し側 `verify_execution_profile_runtime()` で
+    `Run9ValidationError` として fail-closed に変換する——「照合できない」
+    を「pass した」と混同しない）。
+    """
+    path = os_release_path if os_release_path is not None else _DEFAULT_OS_RELEASE_PATH
+    if not path.is_file():
+        raise ValueError(f"{path} が存在しない")
+    fields = _parse_os_release_text(path.read_text(encoding="utf-8"))
+    name = fields.get("NAME")
+    if not name:
+        raise ValueError(f"{path} に NAME フィールドがない")
+    version = fields.get("VERSION")
+    if not version:
+        raise ValueError(f"{path} に VERSION フィールドがない")
+    version_tokens = version.split()
+    version_token = version_tokens[0] if version_tokens else ""
+    if not _OS_RELEASE_VERSION_TOKEN_RE.match(version_token):
+        raise ValueError(
+            f"{path} の VERSION フィールド ({version!r}) の先頭トークン "
+            f"({version_token!r}) からバージョン番号を抽出できない（数字とドットのみで"
+            "構成されている必要がある）"
+        )
+    return f"{name} {version_token}"
+
+
+def _live_python_version() -> str:
+    """live 実行環境の Python バージョンを `"{major}.{minor}.{micro}"` 形式で
+    組み立てて返す probe 関数（`verify_execution_profile_runtime()` 専用、
+    PR #327 CI 修正対応、2026-08-26）。
+
+    `sys.version` のフリーテキスト解析はせず `sys.version_info` から直接
+    組み立てる（旧実装の意味論を1字も変えず、`verify_execution_profile_
+    runtime()` 本体からモジュールレベル関数へ切り出しただけ）。切り出しの
+    目的はテスト側が本関数単体を monkeypatch できるようにすることで、CI が
+    どの Python patch バージョン（例: 3.11.15 の pin に対し CI ホストが
+    3.11.16 等）で走っても、live probe を検証するテスト群を決定論化できる
+    ようにする。"""
+    return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+
+def verify_execution_profile_runtime(
+    contract: Run9RunContract, *, selected_providers: Optional[List[str]] = None,
+    os_release_path: Optional[Path] = None,
+    manifest_path: Optional[Path] = None, contract_path: Optional[Path] = None,
+    adjudication_basis_path: Optional[Path] = None, render_code_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`execution_profile_sha` pin が記述する runtime identity 5値
+    （python/onnxruntime/os/architecture/selected_execution_provider）
+    を、**現在実行中の live 環境**（`sys.version_info`・
+    `onnxruntime.__version__`・`onnxruntime.get_available_providers()`・
+    `platform.machine()`・`/etc/os-release`）に対して fail-closed で照合
+    する（PR #327 レビュー第3巡指摘8(b) + 第5巡指摘11対応 + 第7巡指摘13
+    対応 + 第9巡指摘18対応、2026-08-26。第5巡指摘11: 旧実装は5値のうち
+    python/onnxruntime/selected_execution_provider の3値しか live probe
+    しておらず、os/architecture は manifest 記載値を無条件に信頼していた
+    ——別 OS・別アーキテクチャでもパッケージ版と CPU provider さえ揃えば
+    run gate が通り、旧 execution_profile_sha の下で偽成功実験が可能
+    だった）。
+
+    **第9巡指摘18対応（P2、2026-08-26）——available providers の完全一致
+    要求を撤去した**: 旧実装は `additional_measurements.
+    onnxruntime_available_providers.value`（歴史実測、例:
+    `["AzureExecutionProvider", "CPUExecutionProvider"]`）との live
+    `get_available_providers()` の完全一致（集合として）を要求していた
+    ——第5巡指摘11で `load_pinned_execution_profile_manifest()` 側に
+    見つかった「歴史実測を live 照合の必須要件へ転用する」のと同型の穴が
+    run gate 本体（本関数）に残存しており、Azure provider が存在しない
+    正当な CPU-only ホストを拒否していた。`additional_measurements.
+    onnxruntime_available_providers.value` は歴史実測の記録であり live
+    照合の対象ではない——live 照合対象は identity 5値（python/
+    onnxruntime/os/architecture/selected provider）+ selected provider
+    + CPU 可用性のみに限定する。
+
+    **第7巡指摘13対応（P1、2026-08-26）——引数を manifest dict から
+    contract へ変更した**: 旧実装は第一引数として呼び出し側供給の任意
+    `Mapping[str, Any]` を受け取り、それを一切 validate も
+    execution_profile_sha 照合もせずそのまま live 照合に使っていた。
+    これは HARNESS-3 run gate が再構成/改変された manifest を渡すと、
+    live ホストに合わせた値で偽成功検証が成立してしまう穴だった
+    （`load_pinned_execution_profile_manifest()` の全 cross-check・sha
+    照合を素通りできる経路が存在した）。本関数は第一引数を「load 済み
+    `Run9RunContract`」（他の `load_pinned_*` 系関数と同じ流儀）へ変更し、
+    関数内部で `load_pinned_execution_profile_manifest(contract, ...)`
+    （disk 正典再読込・改変検出・PINNED 確認・実在確認・実バイト sha256
+    一致確認・構造検証・adjudication/render-code cross-check を含む全防御）
+    を atomic に呼んでから、その戻り値のみを live 照合に使う。manifest
+    dict を直接注入できる公開経路はこれで存在しない
+    （`manifest_path`/`contract_path`/`adjudication_basis_path`/
+    `render_code_path` はテスト用のパス上書き引数であり、実バイトは
+    引き続き実 read + sha256 再計算で照合される——`load_pinned_
+    execution_profile_manifest()` の read-once 3層防御と同型）。
+
+    **契約——RUN9 実行段（学習ハーネス/render 実行の run gate）は render を
+    開始する前に本関数を必ず呼ぶこと。** `load_pinned_execution_profile_
+    manifest()` 自体は live 照合を行わない（load 時ではなく実行時照合で
+    ある理由: `load_pinned_execution_profile_manifest()` は CI が Python
+    3.11/3.12 マトリクスで実行するテストスイートからも呼ばれる——load 時に
+    live Python/onnxruntime バージョンを照合すると、3.12 環境で走る正当な
+    CI が「pin は 3.11.15 なのに live は 3.12」という理由で構造的に落ちる。
+    RUN9 実行環境と CI マトリクス環境は意味的に別物であり、live 照合は
+    実際に render を実行する段——本関数の呼び出し点——に分離する。本関数が
+    内部で呼ぶ pinned load 自体は毎回 disk 正典を再読込するため、この
+    分離は変わらず維持される）。
+
+    照合内容（6項目、`identity_semantics.runtime`/`identity_semantics.
+    provider_fixation_rules` に対する fail-closed 判定。manifest は
+    `load_pinned_execution_profile_manifest(contract, ...)` の戻り値の
+    みを用いる）:
+    (a) `sys.version_info` から組み立てた `"{major}.{minor}.{micro}"` が
+        `identity_semantics.runtime.python` と厳密一致すること。
+    (b) `onnxruntime.__version__` が `identity_semantics.runtime.
+        onnxruntime` と厳密一致すること。
+    (c) `"CPUExecutionProvider"` が live `onnxruntime.
+        get_available_providers()` に含まれること（第9巡指摘18対応。
+        歴史実測 `additional_measurements.onnxruntime_available_
+        providers.value` との完全一致は要求しない——それは歴史記録で
+        あり live 照合の対象ではない。GPU/CUDA provider が available に
+        含まれること自体は拒否しない——選択企図の拒否は (d) が担う）。
+    (d) 選択 provider 引数（`selected_providers`、呼び出し側が実際に
+        `onnxruntime.InferenceSession(..., providers=...)` へ渡す予定の
+        リスト——渡さなければ `identity_semantics.runtime.
+        selected_execution_provider` の単独リストを既定値として検証）が
+        `["CPUExecutionProvider"]` と厳密一致すること（GPU provider
+        選択企図を fail-closed で拒否する）。
+    (e) `platform.machine()` が `identity_semantics.runtime.architecture`
+        と厳密一致すること（別アーキテクチャ環境での偽成功実験を防ぐ、
+        PR #327 レビュー第5巡指摘11対応）。
+    (f) `/etc/os-release`（`os_release_path` でテスト用に上書き可能。既定
+        `/etc/os-release`）から `_build_live_os_identity()` で構成した
+        文字列が `identity_semantics.runtime.os` と厳密一致すること
+        （導出規則は `_build_live_os_identity()` docstring 参照。PR #327
+        レビュー第5巡指摘11対応）。`/etc/os-release` が存在しない・
+        解析不能・バージョン抽出不能な場合も fail-closed（例外送出）。
+
+    onnxruntime が import 不能な環境、または `/etc/os-release` が読めない
+    /解析できない環境では fail-closed（例外を送出、静かに skip しない）
+    ——「照合できなかった」を「pass した」と混同しない。
+
+    戻り値は live probe 実測値の dict（`python`/`onnxruntime`/
+    `available_providers`/`selected_execution_provider`/`architecture`/
+    `os` の6キー）——呼び出し側が render 実行ログへ転記できるようにする。
+    """
+    manifest = load_pinned_execution_profile_manifest(
+        contract, manifest_path=manifest_path, contract_path=contract_path,
+        adjudication_basis_path=adjudication_basis_path, render_code_path=render_code_path,
+    )
+    runtime = manifest["identity_semantics"]["runtime"]
+
+    # (a) Python バージョン: sys.version_info ベースで組み立てる（sys.
+    # version 文字列のフリーテキスト解析はしない）。probe 自体は
+    # `_live_python_version()` へ切り出し済み（CI 修正、2026-08-26——テスト
+    # 側が monkeypatch でき、CI ホストの Python patch バージョンが pin と
+    # 乖離してもテストを決定論化できる）。
+    live_python = _live_python_version()
+    pinned_python = runtime["python"]
+    if live_python != pinned_python:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): live Python version "
+            f"({live_python!r}) diverges from execution_profile_sha pinned "
+            f"identity_semantics.runtime.python ({pinned_python!r}) — provider または主要 "
+            "runtime version が変わる場合は同じ execution_profile_sha を使わず再pinする、と "
+            "いう裁定の provider_fixation_rules を Python にも適用し、fail-closed で拒否する"
+        )
+
+    # (b)/(c) onnxruntime: import 不能なら fail-closed（skip しない）。
+    try:
+        import onnxruntime as _ort  # 実行時 live probe 専用の遅延 import
+    except Exception as exc:  # pragma: no cover - 環境依存の defensive fail-closed
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): onnxruntime を import できない "
+            f"({exc!r}) — live 環境照合ができない状態を『pass』として扱うことはできないため "
+            "fail-closed で拒否する（RUN9 実行段は onnxruntime import 可能な環境で render "
+            "する契約）"
+        ) from exc
+
+    live_onnxruntime = _ort.__version__
+    pinned_onnxruntime = runtime["onnxruntime"]
+    if live_onnxruntime != pinned_onnxruntime:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): live onnxruntime version "
+            f"({live_onnxruntime!r}) diverges from execution_profile_sha pinned "
+            f"identity_semantics.runtime.onnxruntime ({pinned_onnxruntime!r}) — 再pin が必要"
+        )
+
+    # (c) fail-closed（PR #327 レビュー第9巡指摘18、P2、採用）: 歴史実測
+    # `additional_measurements.onnxruntime_available_providers.value`
+    # （例: ["AzureExecutionProvider", "CPUExecutionProvider"]）との完全
+    # 一致を要求すると、当時 Azure provider が利用可能だった環境の実測を
+    # そのまま live availability の必須要件へ転用してしまい、正当な
+    # CPU-only ホスト（Azure provider が存在しない）を拒否する——第5巡
+    # 指摘11で `load_pinned_execution_profile_manifest()` 側に見つかった
+    # 同型の穴（歴史実測を live 照合の必須要件へ転用する誤り）が run gate
+    # 本体（本関数）にも残存していた。`additional_measurements.
+    # onnxruntime_available_providers.value` は歴史実測の記録であり live
+    # 照合の対象ではない——live 照合対象は identity 5値 + selected
+    # provider + CPU 可用性のみ。ここでは「"CPUExecutionProvider" が live
+    # available に含まれること」のみを fail-closed で要求する（selected
+    # provider の pin 一致は (d) が別途強制する）。
+    live_available = list(_ort.get_available_providers())
+    if "CPUExecutionProvider" not in live_available:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): live onnxruntime.get_available_providers() "
+            f"({live_available!r}) does not include 'CPUExecutionProvider' — RUN9 render は "
+            "CPUExecutionProvider が利用可能な環境で実行する契約であり、その可用性を "
+            "fail-closed で要求する（歴史実測 additional_measurements."
+            "onnxruntime_available_providers.value との完全一致は要求しない——それは live "
+            "照合の対象ではない歴史記録である）"
+        )
+
+    # (d) 選択 provider 引数: 呼び出し側が渡さなければ pin 値の単独リスト
+    # を既定として検証する（gate_synth.py が実際に InferenceSession へ渡す
+    # 引数と同じ値であることの確認は呼び出し側の責務——本関数はその引数を
+    # 受け取って fail-closed 判定するのみ）。
+    effective_selected = (
+        selected_providers
+        if selected_providers is not None
+        else [runtime["selected_execution_provider"]]
+    )
+    if effective_selected != ["CPUExecutionProvider"]:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): selected provider argument "
+            f"({effective_selected!r}) must be exactly ['CPUExecutionProvider'] — GPU/CUDA "
+            "provider への自動fallback/upgradeを禁止する、という execution_profile_sha "
+            "provider_fixation_rules を fail-closed で強制する"
+        )
+
+    # (e) architecture: platform.machine() の実測値を pin 値と厳密一致で
+    # 照合する（PR #327 レビュー第5巡指摘11対応）。
+    live_architecture = platform.machine()
+    pinned_architecture = runtime["architecture"]
+    if live_architecture != pinned_architecture:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): live architecture "
+            f"(platform.machine()={live_architecture!r}) diverges from execution_profile_sha "
+            f"pinned identity_semantics.runtime.architecture ({pinned_architecture!r}) — 別"
+            "アーキテクチャ環境での実行を fail-closed で拒否する"
+        )
+
+    # (f) os: /etc/os-release を実 read し、_build_live_os_identity() で
+    # manifest pin 形式へ組み立てた文字列を厳密一致で照合する（PR #327
+    # レビュー第5巡指摘11対応）。/etc/os-release が読めない・解析できない
+    # 場合は _build_live_os_identity() が ValueError を送出する——ここで
+    # Run9ValidationError へ変換し fail-closed とする（skip しない）。
+    try:
+        live_os = _build_live_os_identity(os_release_path)
+    except ValueError as exc:
+        raise Run9ValidationError(
+            f"verify_execution_profile_runtime(): live OS identity を構成できない ({exc}) — "
+            "照合できない状態を『pass』として扱うことはできないため fail-closed で拒否する"
+        ) from exc
+    pinned_os = runtime["os"]
+    if live_os != pinned_os:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): live OS identity "
+            f"({live_os!r}) diverges from execution_profile_sha pinned identity_semantics."
+            f"runtime.os ({pinned_os!r}) — 別 OS 環境での実行を fail-closed で拒否する"
+        )
+
+    return {
+        "python": live_python,
+        "onnxruntime": live_onnxruntime,
+        "available_providers": live_available,
+        "selected_execution_provider": effective_selected[0],
+        "architecture": live_architecture,
+        "os": live_os,
+    }
