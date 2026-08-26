@@ -1062,8 +1062,41 @@ cost_record_sha:
 #   時）に MACHINE へ昇格」を記録した。結果 MACHINE 1件（#2）/
 #   PROCEDURAL 19件。seed_policy_manifest.json/measurement_spec_
 #   manifest.json/founders/*.json は無改変（sha256 確認済み）。
+# - PR #324 Codex bot レビュー第4巡 Fix（2026-08-25、値
+#   954b463ecfa497b732240d92c6e07a29ebecef480d97dc1f42e9108c12635a52 へ
+#   repin、P1、採用）: rule 2（User donor manifest incomplete）の
+#   condition が `validate_rights_manifest_four_layer()` のみを参照する
+#   が、同関数は自身のコメント（run9_schema.py:9871-9874）が明記する
+#   とおり entries（donor card の実内容）検証を
+#   `extract_voice_identity_rights_layer()` +
+#   `verify_rights_manifest_against_ledger()` へ委譲しており、空
+#   entries・donor 欠落・重複・hash 改変は単独関数では検出されない、
+#   という指摘（同族の新経路: 部分検証関数の単独参照による MACHINE
+#   過大主張）。事実確認: (a) `verify_rights_manifest_against_ledger()`
+#   は entries の card_id 集合が凍結 `USER_DONOR_CARD_IDS`（UC-001〜
+#   UC-017 の17件、User 裁定4で凍結）と過不足なく一致し、両側の重複
+#   拒否、`donor_ledger` の実測値と card_id ごとに
+#   source_sha256/sha256/duration_sec が一致することまで検証する
+#   実装済みの完全な内容検証関数であることを実装読解で確認。
+#   `extract_voice_identity_rights_layer()` は内部で
+#   `validate_rights_manifest_four_layer()` を再実行したうえで legacy
+#   flat 構造へ変換するアダプタであることを確認。(b) 検証対象
+#   `inputs/rights_manifest.json`（実在・User attestation 済み）+
+#   `voice_genesis/foundry/recording_kit/user_donor_ledger.json`
+#   （実在）に対しチェーン全体を実行し、17 entries で PASS することを
+#   実測確認。さらに空 entries・重複 card_id・hash 改変の3つの負例で
+#   チェーンが fail-closed で拒否することも実行確認した。完全チェーン
+#   で (a) 実装済み (b) 実内容検査（凍結 ledger との全数照合）が成立
+#   すると判定し、rule 2 は MACHINE を維持。新しい検証ロジックは書かず、
+#   既存3関数を束ねる薄い canonical ラッパー
+#   `run9_schema.verify_user_donor_manifest_complete(rights_manifest,
+#   donor_ledger)`（probe/genome loader と同じ「唯一の正規消費経路」
+#   規約）を新設し、rule 2 の condition をこの関数参照へ更新した。
+#   分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。
+#   seed_policy_manifest.json/measurement_spec_manifest.json/
+#   founders/*.json は無改変（sha256 確認済み）。
 failure_abort_criteria_sha:
-  value: "3ef4edf25b93a6c996d50b38f6348b567f2eee44f22540a8aca8593786b3f6d1"
+  value: "954b463ecfa497b732240d92c6e07a29ebecef480d97dc1f42e9108c12635a52"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 

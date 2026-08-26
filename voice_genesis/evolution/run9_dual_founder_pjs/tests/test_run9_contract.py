@@ -11198,21 +11198,88 @@ def test_pin1_r4_branch_write_policy_r0_bytes_is_write_boundary_not_pin() -> Non
     assert "r0_bytes" in m.BRANCH_IMMUTABLE_ARTIFACTS
 
 
-def test_pin1_r4_failure_abort_criteria_repinned_lineage_four_generations(
+# `test_pin1_r4_failure_abort_criteria_repinned_lineage_four_generations`
+# （4世代版）は PR #324 第4巡の repin により超過し、下記
+# `test_pin1_r5_failure_abort_criteria_repinned_lineage_five_generations`
+# （5世代・全履歴を包含する上位互換）へ置き換えた（重複削除、第3巡と
+# 同じ理由）。
+
+
+def test_pin1_r5_failure_abort_criteria_repinned_lineage_five_generations(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """failure_abort_criteria_sha の repin 履歴4世代（RUN9-L0-PIN-1 初回
-    → PR #324 第1巡 Fix 1/2/3 → 第2巡 Fix 6 → 第3巡 rule 12 再降格）が
-    append-only で、現在値が最新（第3巡）のものであることを明示的に
-    確認する（repin 漏れの回帰防止）。"""
+    """failure_abort_criteria_sha の repin 履歴5世代（RUN9-L0-PIN-1 初回
+    → PR #324 第1巡 Fix 1/2/3 → 第2巡 Fix 6 → 第3巡 rule 12 再降格 →
+    第4巡 rule 2 の condition 強化）が append-only で、現在値が最新
+    （第4巡）のものであることを明示的に確認する（repin 漏れの回帰
+    防止）。"""
     round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
     round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
     round3_value = "6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44"
     round4_value = "3ef4edf25b93a6c996d50b38f6348b567f2eee44f22540a8aca8593786b3f6d1"
+    round5_value = "954b463ecfa497b732240d92c6e07a29ebecef480d97dc1f42e9108c12635a52"
     current = contract_raw["failure_abort_criteria_sha"]["value"]
-    assert current == round4_value
-    assert current not in (round1_value, round2_value, round3_value)
+    assert current == round5_value
+    assert current not in (round1_value, round2_value, round3_value, round4_value)
     assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
+
+
+def test_pin1_r5_rule2_still_machine_with_updated_condition() -> None:
+    """PR #324 第4巡指摘の直接回帰: rule 2 は MACHINE のまま
+    （分類は不変）、condition が新設した
+    `verify_user_donor_manifest_complete` を参照していること。"""
+    data = _failure_abort_criteria_data()
+    rule2 = next(r for r in data["rules"] if r["rule_id"] == 2)
+    assert rule2["enforcement"] == "MACHINE"
+    assert "verify_user_donor_manifest_complete" in rule2["condition"]
+    assert "USER_DONOR_CARD_IDS" in rule2["condition"]
+
+
+def _real_donor_ledger() -> Dict[str, Any]:
+    ledger_path = _RUN_DIR.parent.parent / "foundry" / "recording_kit" / "user_donor_ledger.json"
+    return m.load_user_donor_ledger_json(ledger_path.read_text(encoding="utf-8"))
+
+
+def _real_rights_manifest_loaded() -> Dict[str, Any]:
+    return m.load_rights_manifest_json(RIGHTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def test_pin1_r5_verify_user_donor_manifest_complete_happy_path() -> None:
+    flat = m.verify_user_donor_manifest_complete(_real_rights_manifest_loaded(), _real_donor_ledger())
+    assert len(flat["entries"]) == len(m.USER_DONOR_CARD_IDS) == 17
+
+
+def test_pin1_r5_verify_user_donor_manifest_complete_detects_empty_entries() -> None:
+    rights = copy.deepcopy(_real_rights_manifest_loaded())
+    rights["voice_identity_rights"]["entries"] = []
+    with pytest.raises(m.Run9ValidationError, match="does not exactly match"):
+        m.verify_user_donor_manifest_complete(rights, _real_donor_ledger())
+
+
+def test_pin1_r5_verify_user_donor_manifest_complete_detects_duplicate_card_id() -> None:
+    rights = copy.deepcopy(_real_rights_manifest_loaded())
+    entries = rights["voice_identity_rights"]["entries"]
+    entries[1]["card_id"] = entries[0]["card_id"]
+    with pytest.raises(m.Run9ValidationError, match="duplicate card_id"):
+        m.verify_user_donor_manifest_complete(rights, _real_donor_ledger())
+
+
+def test_pin1_r5_verify_user_donor_manifest_complete_detects_hash_tampering() -> None:
+    rights = copy.deepcopy(_real_rights_manifest_loaded())
+    rights["voice_identity_rights"]["entries"][0]["sha256"] = "0" * 64
+    with pytest.raises(m.Run9ValidationError, match="does not match donor_ledger"):
+        m.verify_user_donor_manifest_complete(rights, _real_donor_ledger())
+
+
+def test_pin1_r5_verify_user_donor_manifest_complete_rejects_missing_other_layer() -> None:
+    """`extract_voice_identity_rights_layer()` 経由の (1) 再実行により、
+    他層（performance_rights 等）が欠落した4層文書は
+    voice_identity_rights 単独が妥当でも拒否されること（既存の Fix 14
+    是正の維持確認）。"""
+    rights = copy.deepcopy(_real_rights_manifest_loaded())
+    del rights["performance_rights"]
+    with pytest.raises(m.Run9ValidationError):
+        m.verify_user_donor_manifest_complete(rights, _real_donor_ledger())
 
 
 # ---------------------------------------------------------------------------

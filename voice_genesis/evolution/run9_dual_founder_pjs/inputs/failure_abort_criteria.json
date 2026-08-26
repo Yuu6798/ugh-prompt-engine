@@ -21,7 +21,7 @@
       "verbatim": "donor/teacher rights unresolved"
     },
     {
-      "condition": "inputs/rights_manifest.json（実在・2026-08-25 User attestation 済みの実データ）の必須構造充足を validate_rights_manifest_four_layer()（run9_schema.py:9552-、既存 pin 済み validator）が fail-closed 検証する。本 validator は自己境界宣言として『実体（provenance の個別値が事実として正しいか）は R9-G1 tooling の職務のまま——本関数は構造・閉じたキー集合...まで検証する』（run9_schema.py:9554-9555, 9564-9565）と明記するが、rule #2 の 『incomplete』は文書自体の構造的完全性（必須キー・型・閉じた語彙の充足）を指すため対象内 ——外部事実の真偽（rights がそもそも解決済みか）を問う rule #1 とは別軸であり、rule #1 は PROCEDURAL のまま分離する（2026-08-25 Codex bot レビュー PR #324 第1巡 Fix 1 の is_pinned() 同型欠陥を rule #2 にも機械的に適用した結果、rule #2 は『文書自体の構造』を検査する点で is_pinned()（外部アーティファクトの形状のみ）とは性質が異なると判定——2026-08-25 監査で 生存確認）。2026-08-25 User attestation 実行により現状 PASS。",
+      "condition": "run9_schema.verify_user_donor_manifest_complete(rights_manifest, donor_ledger)（2026-08-25 Codex bot レビュー PR #324 第4巡指摘, P1, 採用で新設した唯一の正規消費経路）が 3段の既存検証チェーンを束ねて実行する: (1) validate_rights_manifest_four_layer() — 4層構造・閉じたキー集合の completeness、(2) extract_voice_identity_rights_layer() — voice_identity_rights 層を legacy flat 構造へ 変換（内部で (1) を再実行し他層の欠落を拒否）、(3) verify_rights_manifest_against_ledger() — entries が凍結 USER_DONOR_CARD_IDS （UC-001〜UC-017 の17件、User 裁定4で凍結）と過不足なく一致し、voice_genesis/foundry/recording_kit/user_donor_ledger.json の実測値と card_id ごとに source_sha256/sha256/duration_sec が一致することを検証する。実測確認済み: inputs/rights_manifest.json（実在・2026-08-25 User attestation 済み）に対しチェーン全体が PASS し、空 entries・重複 card_id・hash 改変のいずれも fail-closed で検出することを直接実行で 確認した（旧 condition は (1) 単独参照のみで、同関数の docstring/9871-9874行のコメントが 明記するとおり entries の実内容検証を (2)(3) へ委譲しており、単独では空 entries・donor 欠落・重複・hash 改変を検出できなかった）。",
       "enforcement": "MACHINE",
       "rule_id": 2,
       "verbatim": "User donor manifest incomplete"

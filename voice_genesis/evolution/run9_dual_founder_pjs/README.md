@@ -735,6 +735,35 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   `failure_abort_criteria_sha` を実バイト sha256 で repin（4世代目）。
   seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json
   は無改変（sha256 確認済み）〕。
+  〔履歴: PR #324 Codex bot レビュー第4巡（2026-08-25, 1件 P1, 採用）で
+  rule 2 の condition を強化（分類は不変・MACHINE のまま）。指摘: rule 2
+  の condition が `validate_rights_manifest_four_layer()` のみを参照する
+  が、同関数は自身のコメント（`run9_schema.py:9871-9874`）が明記する
+  とおり entries（donor card の実内容）検証を
+  `extract_voice_identity_rights_layer()` +
+  `verify_rights_manifest_against_ledger()` へ委譲しており、空
+  entries・donor 欠落・重複・hash 改変は単独関数では検出されない
+  （rule 3/4/6/12 と同族の「部分検証関数の単独参照による MACHINE 過大
+  主張」の新経路）。事実確認: (a) `verify_rights_manifest_against_
+  ledger()` は entries の card_id 集合が凍結 `USER_DONOR_CARD_IDS`
+  （UC-001〜UC-017 の17件、User 裁定4で凍結）と過不足なく一致し、両側の
+  重複拒否、`donor_ledger` の実測値と card_id ごとに
+  source_sha256/sha256/duration_sec が一致することまで検証する実装済み
+  の完全な内容検証関数と確認。(b) `inputs/rights_manifest.json`（実在・
+  User attestation 済み）+
+  `voice_genesis/foundry/recording_kit/user_donor_ledger.json`（実在）
+  に対しチェーン全体を実行し17 entries で PASS、かつ空 entries・重複
+  card_id・hash 改変の3負例で fail-closed 拒否することを実測確認した。
+  完全チェーンで (a) 実装済み・(b) 実内容検査（凍結 ledger との全数
+  照合）が成立すると判定し MACHINE を維持——新しい検証ロジックは書かず、
+  既存3関数を束ねる薄い canonical ラッパー
+  `run9_schema.verify_user_donor_manifest_complete(rights_manifest,
+  donor_ledger)`（probe/genome loader と同じ「唯一の正規消費経路」規約）
+  を新設し、rule 2 の condition をこの関数参照へ更新した。
+  `failure_abort_criteria_sha` を実バイト sha256 で repin（5世代目）。
+  分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。
+  seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json
+  は無改変（sha256 確認済み）〕。
 - `measurement_spec_sha` は **PENDING のまま**（2026-08-25 RUN9-L0-PIN-1 で
   一時 PINNED 化 → 同日 PR #324 第2巡 Codex bot レビュー Fix 5（P2 ×2、
   採用）で PENDING へ復帰）。manifest 実体

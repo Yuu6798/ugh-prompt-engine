@@ -9874,6 +9874,45 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
     # （層越境の実体検証は本関数の責務外）。
 
 
+def verify_user_donor_manifest_complete(
+    rights_manifest: Mapping[str, Any], donor_ledger: Mapping[str, Any]
+) -> Dict[str, Any]:
+    """failure_abort_criteria.json rule #2（`User donor manifest
+    incomplete`）の `condition` が参照する**唯一の正規消費経路**
+    （2026-08-25 Codex bot レビュー PR #324 第4巡指摘, P1, 採用 — 旧
+    condition は `validate_rights_manifest_four_layer()` のみを参照して
+    いたが、同関数は自身の docstring/9871-9874行のコメントが明記する
+    とおり `entries`（donor card の実内容）の検証を意図的に本関数チェーン
+    へ委譲しており、単独では空 entries・donor 欠落・重複・hash 改変を
+    検出できなかった）。
+
+    3段の既存検証チェーンを束ねる薄いラッパー（新規検証ロジックは
+    書かない — 既存3関数の合成のみ）:
+
+    1. `validate_rights_manifest_four_layer(rights_manifest)` — 4層
+       構造・閉じたキー集合・原則3式・禁止文言の completeness。
+    2. `extract_voice_identity_rights_layer(rights_manifest)` —
+       `voice_identity_rights` 層を legacy flat 構造へ変換する（内部で
+       (1) を再実行し、他の必須層が静かに欠落したまま抽出されることを
+       防ぐ）。
+    3. `verify_rights_manifest_against_ledger(flat, donor_ledger)` —
+       `entries` が凍結 `USER_DONOR_CARD_IDS`（UC-001〜UC-017 の17件、
+       User 裁定4で凍結）と過不足なく一致し、`donor_ledger` の実測値と
+       card_id ごとに `source_sha256`/`sha256`/`duration_sec` が一致
+       することを検証する（空 entries・donor 欠落・重複・hash 改変は
+       いずれもここで検出される）。
+
+    戻り値は (2) の flat 変換結果（呼び出し元が `entries` 等へ追加
+    アクセスしたい場合のため）。harness の rights completeness 判定は
+    本関数経由のみで行うべきであり、(1) 単独の呼び出しでは不十分
+    （probe/genome loader と同じ「唯一の正規消費経路」規約）。
+    """
+    validate_rights_manifest_four_layer(rights_manifest)
+    flat = extract_voice_identity_rights_layer(rights_manifest)
+    verify_rights_manifest_against_ledger(flat, donor_ledger)
+    return flat
+
+
 # ---------------------------------------------------------------------------
 # rev 0.4（DESIGN_RUN9_REVISION_0.4.md、`RUN9_CONTRACT.yaml` 新設トップ
 # レベル欄 `performance_source`）: 2026-08-25 User 追加裁定「確認メモ /
