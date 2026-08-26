@@ -565,6 +565,29 @@ config_sha:
 # 強制する——文末への追記だけでは通らない。実測済みの sha256（Fix 12/13
 # 対応後の最新実バイト）は情報記録として保持する:
 # "06426625792af6649f7b479110cb0c89f7f25205d13664d79398f43e1eea883d"
+#
+# 2026-08-26 情報記録更新（PR #326 第6巡 Codex bot レビュー2件、P2×2、
+# いずれも採用。pin 欄自体は PENDING のまま、repin ではなく情報記録の
+# 更新）: Fix 14 `acoustic_export_companions` のトップレベル narrative
+# フィールド（`verdict`/`fail_closed_disposition`/`acquisition_record`）
+# が item レベル（Fix 1/7）と独立に自由記述のまま残っており、
+# `status: OBTAINED_VERIFIED_MATCH` でも MISS 系の `verdict`/
+# `fail_closed_disposition` が残置可能だった穴を閉じた。トップレベルを
+# status 判別 shape へ改めた——`NOT_OBTAINED_TARBALL_MISS` 側は `verdict`
+# （`MISS` 始まり必須）+ `fail_closed_disposition` を必須化・
+# `acquisition_record` を禁止、OBTAINED 側は `acquisition_record`
+# （`acquired_at`/`acquisition_summary` の2キーのみ）を必須化・MISS 系
+# 2フィールドを禁止する相互排他 shape とし、`_validate_acoustic_export_
+# companions()` が unknown-key/missing-key の両方向を機械強制する。
+# Fix 15 `smoke_render` の COMPLETED が `determinism_confirmed: true` +
+# 実測秒 + 条件文の自己申告だけで成立し、record が定義する「同一入力
+# 2 render の WAV byte 一致」を裏付ける監査可能な証拠（出力 sha256）を
+# 要求していなかった穴を閉じた。COMPLETED shape へ
+# `render_output_sha256_first`/`render_output_sha256_second`（64hex）を
+# 必須化し、validator が両者の厳密一致を機械強制する（不一致は
+# `determinism_confirmed: true` との自己矛盾として拒否）。実測済みの
+# sha256（Fix 14/15 対応後の最新実バイト）は情報記録として保持する:
+# "229493a911b6def9ca47523cfb0345d6066d826ec67e7ead999b098ea6dbc269"
 dependency_pins_sha:
   value: null
   status: PENDING

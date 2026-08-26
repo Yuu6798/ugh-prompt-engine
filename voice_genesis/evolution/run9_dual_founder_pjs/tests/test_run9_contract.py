@@ -13794,10 +13794,28 @@ def test_harness1_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
 
 def test_harness1_pr326_fix1_status_flip_alone_is_rejected() -> None:
     """acoustic_export_companions.status を OBTAINED_VERIFIED_MATCH へ
-    書き換えるだけ（expected_items に measured_sha256 を追加しない）の
-    改竄は、各 item の measured_sha256 欠落として fail-closed 拒否される。"""
+    書き換えるだけ（トップレベルの MISS narrative も expected_items の
+    measured_sha256 も一切追加しない）の改竄は fail-closed 拒否される
+    ——PR #326 第6巡 Fix 14 により、まずトップレベルの MISS-only
+    フィールド（verdict/fail_closed_disposition）残置が unknown key と
+    して先に拒否される。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix1_status_flip_with_top_level_fixed_still_rejected() -> None:
+    """トップレベル（Fix 14）は正しく整合させても、expected_items に
+    measured_sha256 を追加しなければ item レベルの欠落として fail-closed
+    拒否される（Fix 1 の本来の対象、Fix 14 導入後の回帰確認）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    del data["acoustic_export_companions"]["verdict"]
+    del data["acoustic_export_companions"]["fail_closed_disposition"]
+    data["acoustic_export_companions"]["acquisition_record"] = {
+        "acquired_at": "2026-08-27", "acquisition_summary": "x",
+    }
     with pytest.raises(m.Run9ValidationError, match="missing required key.*measured_sha256|measured_sha256"):
         m.validate_dependency_pins_manifest(data)
 
@@ -13819,6 +13837,11 @@ def test_harness1_pr326_fix1_obtained_measured_mismatch_rejected() -> None:
     expected_sha256 と不一致なら拒否される。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    del data["acoustic_export_companions"]["verdict"]
+    del data["acoustic_export_companions"]["fail_closed_disposition"]
+    data["acoustic_export_companions"]["acquisition_record"] = {
+        "acquired_at": "2026-08-27", "acquisition_summary": "x",
+    }
     for item in data["acoustic_export_companions"]["expected_items"]:
         item["measured_sha256"] = "0" * 64
         item["acquisition_source"] = "THIS_TARBALL"
@@ -13843,7 +13866,27 @@ def _append_tar_member(data: Dict[str, Any], *, path: str, size_bytes: int, sha2
     data["tar_gz_ledger_integrity"]["independent_reread_verification"]["member_count_matched"] += 1
 
 
-def _obtain_all_acoustic_companions(data: Dict[str, Any], *, acquisition_source: str = "THIS_TARBALL") -> None:
+def _mark_companions_top_level_obtained(
+    data: Dict[str, Any], *, acquired_at: str = "2026-08-27",
+    acquisition_summary: str = "test fixture acquisition",
+) -> None:
+    """テストヘルパー: acoustic_export_companions のトップレベル
+    narrative を OBTAINED shape（PR #326 第6巡 Fix 14）へ揃える——status
+    自体・expected_items 側の遷移は呼び出し側の責務のまま（本ヘルパーは
+    トップレベルの MISS-only フィールド除去 + acquisition_record 付与
+    のみを担う、`_obtain_all_acoustic_companions()` が status/items まで
+    含めて丸ごと遷移させるのとは対象範囲が異なる）。"""
+    data["acoustic_export_companions"].pop("verdict", None)
+    data["acoustic_export_companions"].pop("fail_closed_disposition", None)
+    data["acoustic_export_companions"]["acquisition_record"] = {
+        "acquired_at": acquired_at, "acquisition_summary": acquisition_summary,
+    }
+
+
+def _obtain_all_acoustic_companions(
+    data: Dict[str, Any], *, acquisition_source: str = "THIS_TARBALL",
+    acquired_at: str = "2026-08-27", acquisition_summary: str = "test fixture acquisition",
+) -> None:
     """テストヘルパー: acoustic_export_companions を OBTAINED_VERIFIED_
     MATCH へ遷移させ、各 item に正しい measured_sha256 +
     acquisition_source（PR #326 第3巡 Fix 7、既定 THIS_TARBALL）を付与
@@ -13851,8 +13894,16 @@ def _obtain_all_acoustic_companions(data: Dict[str, Any], *, acquisition_source:
     が要求する対応 tar member（basename 一致 + sha256 一致）を
     `_append_tar_member()` 経由で tar_gz_full_member_ledger へ追加する
     （THIS_TARBALL 以外——DRIVE_DIRECT/RE_EXPORT——は tar member 無しでも
-    正当と認められる、Fix 7 の主眼）。"""
+    正当と認められる、Fix 7 の主眼）。PR #326 第6巡 Fix 14 により
+    トップレベルも status 判別 shape のため、MISS narrative
+    （`verdict`/`fail_closed_disposition`）を除去し `acquisition_record`
+    を付与する。"""
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    del data["acoustic_export_companions"]["verdict"]
+    del data["acoustic_export_companions"]["fail_closed_disposition"]
+    data["acoustic_export_companions"]["acquisition_record"] = {
+        "acquired_at": acquired_at, "acquisition_summary": acquisition_summary,
+    }
     for item in data["acoustic_export_companions"]["expected_items"]:
         item["measured_sha256"] = item["expected_sha256"]
         item["acquisition_source"] = acquisition_source
@@ -13868,16 +13919,20 @@ def _obtain_all_acoustic_companions(data: Dict[str, Any], *, acquisition_source:
 def _complete_smoke_render(
     data: Dict[str, Any], *, measured_sec_per_render: float = 4.2,
     render_condition: str = "CPU, ritsu, 1.0s phrase",
+    render_output_sha256: str = "c" * 64,
 ) -> None:
     """テストヘルパー: smoke_render を COMPLETED（有効な evidence 込み）
     へ遷移させる。PR #326 第3巡 Fix 8 により acoustic_export_companions
     が OBTAINED_VERIFIED_MATCH でなければ拒否されるため、まず
-    `_obtain_all_acoustic_companions()` を呼ぶ。"""
+    `_obtain_all_acoustic_companions()` を呼ぶ。PR #326 第6巡 Fix 15 に
+    より同一入力2回の render 出力 sha256（一致必須）も付与する。"""
     _obtain_all_acoustic_companions(data)
     data["smoke_render"] = {
         "status": "COMPLETED", "reason": "done",
         "determinism_confirmed": True, "measured_sec_per_render": measured_sec_per_render,
         "render_condition": render_condition,
+        "render_output_sha256_first": render_output_sha256,
+        "render_output_sha256_second": render_output_sha256,
     }
 
 
@@ -13958,6 +14013,7 @@ def test_harness1_pr326_fix2_smoke_render_completed_determinism_not_true_rejecte
         "status": "COMPLETED", "reason": "done",
         "determinism_confirmed": False, "measured_sec_per_render": 4.2,
         "render_condition": "CPU, ritsu",
+        "render_output_sha256_first": "c" * 64, "render_output_sha256_second": "c" * 64,
     }
     with pytest.raises(m.Run9ValidationError, match="determinism_confirmed"):
         m.validate_dependency_pins_manifest(data)
@@ -14090,6 +14146,7 @@ def test_harness1_pr326_fix4_obtained_without_tar_member_rejected() -> None:
     Fix 4 の整合検査は有効であることの回帰確認）。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    _mark_companions_top_level_obtained(data)
     for item in data["acoustic_export_companions"]["expected_items"]:
         item["measured_sha256"] = item["expected_sha256"]
         item["acquisition_source"] = "THIS_TARBALL"
@@ -14235,6 +14292,7 @@ def test_harness1_pr326_fix7_this_tarball_still_requires_membership() -> None:
     みを回帰確認する）。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    _mark_companions_top_level_obtained(data)
     for item in data["acoustic_export_companions"]["expected_items"]:
         item["measured_sha256"] = item["expected_sha256"]
         item["acquisition_source"] = "THIS_TARBALL"
@@ -14247,6 +14305,7 @@ def test_harness1_pr326_fix7_acquisition_source_required_for_obtained() -> None:
     する（欠落は missing required key で拒否）。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    _mark_companions_top_level_obtained(data)
     for item in data["acoustic_export_companions"]["expected_items"]:
         item["measured_sha256"] = item["expected_sha256"]
     with pytest.raises(m.Run9ValidationError, match="missing required key"):
@@ -14282,6 +14341,7 @@ def test_harness1_pr326_fix8_smoke_completed_alone_rejected() -> None:
         "status": "COMPLETED", "reason": "done",
         "determinism_confirmed": True, "measured_sec_per_render": 4.2,
         "render_condition": "CPU, ritsu",
+        "render_output_sha256_first": "c" * 64, "render_output_sha256_second": "c" * 64,
     }
     assert data["acoustic_export_companions"]["status"] == "NOT_OBTAINED_TARBALL_MISS"
     with pytest.raises(m.Run9ValidationError, match="acoustic_export_companions.status is not"):
@@ -14542,3 +14602,125 @@ def test_harness1_pr326_fix13_claim_scope_without_historical_field_still_valid()
     data = copy.deepcopy(_dependency_pins_manifest_data())
     del data["claim_scope"]["historical_pinned_generations"]
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #326 第6巡 Codex bot レビュー Fix 14/15（P2 ×2, 採用, 2026-08-26）:
+# companions トップレベルの status 判別 shape 化 / smoke 決定論の出力
+# hash 証拠必須化。正負テスト。
+# ---------------------------------------------------------------------------
+
+
+def test_harness1_pr326_fix14_obtained_with_stale_miss_narrative_rejected() -> None:
+    """status を OBTAINED_VERIFIED_MATCH へ正しく遷移させても、トップ
+    レベルの MISS narrative（verdict/fail_closed_disposition）を残置
+    したままだと拒否される——「取得済み」と「未取得」の同時主張を防ぐ。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    for item in data["acoustic_export_companions"]["expected_items"]:
+        item["measured_sha256"] = item["expected_sha256"]
+        item["acquisition_source"] = "DRIVE_DIRECT"
+    # verdict/fail_closed_disposition をあえて残置（acquisition_record は付与しない）
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix14_obtained_missing_acquisition_record_rejected() -> None:
+    """MISS narrative を正しく除去しても、acquisition_record を付与
+    しなければ missing required key で拒否される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    del data["acoustic_export_companions"]["verdict"]
+    del data["acoustic_export_companions"]["fail_closed_disposition"]
+    for item in data["acoustic_export_companions"]["expected_items"]:
+        item["measured_sha256"] = item["expected_sha256"]
+        item["acquisition_source"] = "DRIVE_DIRECT"
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix14_obtained_correctly_shaped_accepted() -> None:
+    """トップレベル・item レベルとも正しく OBTAINED shape へ揃えれば
+    受理される（`_obtain_all_acoustic_companions()` ヘルパー自体の
+    回帰固定も兼ねる、過剰拒否でないことの確認）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data, acquisition_source="DRIVE_DIRECT")
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix14_not_obtained_forbids_acquisition_record() -> None:
+    """NOT_OBTAINED_TARBALL_MISS のまま acquisition_record を付与すると
+    unknown key として拒否される（MISS/OBTAINED 語彙の disjoint 性）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["acquisition_record"] = {
+        "acquired_at": "2026-08-27", "acquisition_summary": "x",
+    }
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix14_verdict_must_start_with_miss() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["verdict"] = "everything is fine, nothing to see here"
+    with pytest.raises(m.Run9ValidationError, match="verdict must start with 'MISS'"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix14_acquisition_record_unknown_key_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data)
+    data["acoustic_export_companions"]["acquisition_record"]["extra_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="acquisition_record has unknown key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix15_smoke_completed_missing_output_hashes_rejected() -> None:
+    """determinism_confirmed=True + 実測秒 + 条件文だけでは、出力 hash
+    2件が無いと COMPLETED を名乗れない。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data)
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
+        "render_condition": "CPU, ritsu",
+    }
+    with pytest.raises(m.Run9ValidationError, match="missing required key.*render_output_sha256"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix15_smoke_completed_mismatched_output_hashes_rejected() -> None:
+    """2回の render 出力 sha256 が食い違うと、determinism_confirmed=True
+    という主張自体と矛盾するとして拒否される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data)
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
+        "render_condition": "CPU, ritsu",
+        "render_output_sha256_first": "a" * 64, "render_output_sha256_second": "b" * 64,
+    }
+    with pytest.raises(m.Run9ValidationError, match="contradicts.*determinism_confirmed"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix15_smoke_completed_matching_output_hashes_accepted() -> None:
+    """2回の render 出力 sha256 が一致していれば受理される（過剰拒否で
+    ないことの確認、`_complete_smoke_render()` ヘルパー自体の回帰固定も
+    兼ねる）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _complete_smoke_render(data)
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix15_output_hash_shape_enforced() -> None:
+    """render_output_sha256_first/second は64hex 形状を要求する。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data)
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
+        "render_condition": "CPU, ritsu",
+        "render_output_sha256_first": "not-a-hash", "render_output_sha256_second": "not-a-hash",
+    }
+    with pytest.raises(m.Run9ValidationError, match="render_output_sha256_first must be a 64hex sha256"):
+        m.validate_dependency_pins_manifest(data)

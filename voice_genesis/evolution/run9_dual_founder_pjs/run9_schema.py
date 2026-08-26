@@ -11380,10 +11380,39 @@ _ACOUSTIC_COMPANION_ITEM_OBTAINED_REQUIRED_KEYS: FrozenSet[str] = (
     _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS | _ACOUSTIC_COMPANION_ITEM_OBTAINED_ONLY_KEYS
 )
 
-_ACOUSTIC_COMPANIONS_TOP_KEYS: FrozenSet[str] = frozenset({
-    "status", "expected_items", "attempted_source", "verdict",
+# Codex bot レビュー PR #326 第6巡指摘 Fix 14（P2, 採用, 将来汚染:
+# status 判別の未完部分）: item レベルの shape は Fix 1/7 で status
+# 判別化済みだったが、トップレベルの narrative フィールド
+# （`verdict`/`fail_closed_disposition`）は status に依らず常に必須の
+# ままだったため、status を `OBTAINED_VERIFIED_MATCH` へ書き換えても
+# `verdict: "MISS — ..."` や「取得を試みなかった」という
+# `fail_closed_disposition` が残置可能だった——「取得済み」と「未取得」を
+# 同一 manifest 内で同時に主張できてしまう矛盾。トップレベルも item と
+# 同型の status 判別 shape へ拡張する: 常に共通の investigation-record
+# フィールド（`attempted_source`/`indirect_provenance_found`/
+# `run_execution_manifest_search` — status に関わらず「何を調べたか」の
+# 記録として意味を持つ）に加え、`NOT_OBTAINED_TARBALL_MISS` のときのみ
+# MISS narrative（`verdict`/`fail_closed_disposition`）を必須化し、
+# `OBTAINED_VERIFIED_MATCH` のときはそれらを禁止する代わりに取得証跡
+# `acquisition_record`（取得日 `acquired_at` + 取得経路要約
+# `acquisition_summary` の最小2フィールド、既存 item レベルの
+# `acquisition_source` 語彙と整合的に一言要約する）を必須化する。
+_ACOUSTIC_COMPANIONS_COMMON_KEYS: FrozenSet[str] = frozenset({
+    "status", "expected_items", "attempted_source",
     "indirect_provenance_found", "run_execution_manifest_search",
-    "fail_closed_disposition",
+})
+_ACOUSTIC_COMPANIONS_MISS_ONLY_KEYS: FrozenSet[str] = frozenset({
+    "verdict", "fail_closed_disposition",
+})
+_ACOUSTIC_COMPANIONS_OBTAINED_ONLY_KEYS: FrozenSet[str] = frozenset({"acquisition_record"})
+_ACOUSTIC_COMPANIONS_MISS_KEYS: FrozenSet[str] = (
+    _ACOUSTIC_COMPANIONS_COMMON_KEYS | _ACOUSTIC_COMPANIONS_MISS_ONLY_KEYS
+)
+_ACOUSTIC_COMPANIONS_OBTAINED_KEYS: FrozenSet[str] = (
+    _ACOUSTIC_COMPANIONS_COMMON_KEYS | _ACOUSTIC_COMPANIONS_OBTAINED_ONLY_KEYS
+)
+_ACOUSTIC_COMPANIONS_ACQUISITION_RECORD_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "acquired_at", "acquisition_summary",
 })
 
 _ACOUSTIC_COMPANIONS_STATUS_VOCAB: Tuple[str, ...] = (
@@ -11397,23 +11426,28 @@ def _validate_acoustic_export_companions(section: Any) -> None:
             f"dependency pins manifest.acoustic_export_companions must be an object, "
             f"got {type(section).__name__}"
         )
-    unknown = set(section.keys()) - _ACOUSTIC_COMPANIONS_TOP_KEYS
-    if unknown:
-        raise Run9ValidationError(
-            f"dependency pins manifest.acoustic_export_companions has unknown key(s): "
-            f"{sorted(unknown)}"
-        )
-    missing = _ACOUSTIC_COMPANIONS_TOP_KEYS - set(section.keys())
-    if missing:
-        raise Run9ValidationError(
-            f"dependency pins manifest.acoustic_export_companions missing required key(s): "
-            f"{sorted(missing)}"
-        )
-    status = section["status"]
+    status = section.get("status")
     if status not in _ACOUSTIC_COMPANIONS_STATUS_VOCAB:
         raise Run9ValidationError(
             f"dependency pins manifest.acoustic_export_companions.status must be one of "
             f"{_ACOUSTIC_COMPANIONS_STATUS_VOCAB!r}, got {status!r}"
+        )
+    top_keys = (
+        _ACOUSTIC_COMPANIONS_MISS_KEYS if status == "NOT_OBTAINED_TARBALL_MISS"
+        else _ACOUSTIC_COMPANIONS_OBTAINED_KEYS
+    )
+    unknown = set(section.keys()) - top_keys
+    if unknown:
+        raise Run9ValidationError(
+            f"dependency pins manifest.acoustic_export_companions has unknown key(s) for status "
+            f"{status!r}: {sorted(unknown)} (MISS-only and OBTAINED-only top-level fields are "
+            "disjoint — a section may not mix them, Fix 14)"
+        )
+    missing = top_keys - set(section.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"dependency pins manifest.acoustic_export_companions missing required key(s) for "
+            f"status {status!r}: {sorted(missing)}"
         )
     items = section["expected_items"]
     if not isinstance(items, list) or not items:
@@ -11510,12 +11544,6 @@ def _validate_acoustic_export_companions(section: Any) -> None:
             "dependency pins manifest.acoustic_export_companions.attempted_source must be a "
             f"non-empty object, got {section['attempted_source']!r}"
         )
-    _require_non_empty_str(
-        section["verdict"], field="acoustic_export_companions.verdict"
-    )
-    _require_non_empty_str(
-        section["fail_closed_disposition"], field="acoustic_export_companions.fail_closed_disposition"
-    )
     if not isinstance(section["indirect_provenance_found"], dict):
         raise Run9ValidationError(
             "dependency pins manifest.acoustic_export_companions.indirect_provenance_found must "
@@ -11525,6 +11553,46 @@ def _validate_acoustic_export_companions(section: Any) -> None:
         raise Run9ValidationError(
             "dependency pins manifest.acoustic_export_companions.run_execution_manifest_search "
             f"must be an object, got {section['run_execution_manifest_search']!r}"
+        )
+    if status == "NOT_OBTAINED_TARBALL_MISS":
+        verdict = _require_non_empty_str(
+            section["verdict"], field="acoustic_export_companions.verdict"
+        )
+        if not verdict.startswith("MISS"):
+            raise Run9ValidationError(
+                "dependency pins manifest.acoustic_export_companions.verdict must start with "
+                f"'MISS' when status is NOT_OBTAINED_TARBALL_MISS, got {verdict!r}"
+            )
+        _require_non_empty_str(
+            section["fail_closed_disposition"],
+            field="acoustic_export_companions.fail_closed_disposition",
+        )
+    else:  # OBTAINED_VERIFIED_MATCH
+        record = section["acquisition_record"]
+        if not isinstance(record, dict):
+            raise Run9ValidationError(
+                "dependency pins manifest.acoustic_export_companions.acquisition_record must be "
+                f"an object, got {type(record).__name__}"
+            )
+        unknown_record = set(record.keys()) - _ACOUSTIC_COMPANIONS_ACQUISITION_RECORD_REQUIRED_KEYS
+        if unknown_record:
+            raise Run9ValidationError(
+                "dependency pins manifest.acoustic_export_companions.acquisition_record has "
+                f"unknown key(s): {sorted(unknown_record)}"
+            )
+        missing_record = _ACOUSTIC_COMPANIONS_ACQUISITION_RECORD_REQUIRED_KEYS - set(record.keys())
+        if missing_record:
+            raise Run9ValidationError(
+                "dependency pins manifest.acoustic_export_companions.acquisition_record missing "
+                f"required key(s): {sorted(missing_record)}"
+            )
+        _require_non_empty_str(
+            record["acquired_at"],
+            field="acoustic_export_companions.acquisition_record.acquired_at",
+        )
+        _require_non_empty_str(
+            record["acquisition_summary"],
+            field="acoustic_export_companions.acquisition_record.acquisition_summary",
         )
     # status == NOT_OBTAINED_TARBALL_MISS の場合、render_asset_ledger 側に
     # これら4点を VERIFIED_MATCH として重複計上してはならない（fail-closed
@@ -12000,8 +12068,20 @@ _STATUS_DISCRIMINATED_VOCAB: Tuple[str, ...] = ("BLOCKED", "COMPLETED")
 _SMOKE_RENDER_BLOCKED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "status", "blocked_by", "reason", "not_attempted_reason_is_missing_input_not_failure",
 })
+# Codex bot レビュー PR #326 第6巡指摘 Fix 15（P2, 採用, 将来汚染:
+# status 判別の未完部分）: `determinism_confirmed: true` + 実測秒 +
+# 条件文だけで COMPLETED が成立し、record が定義する「同一入力2回
+# render の WAV byte 一致」という監査可能な証拠（出力 sha256）が一切
+# 要求されていなかった——将来 repin が determinism_confirmed=True を
+# 単に書き換えるだけで、実際に2回 render して比較した証拠なしに
+# 「決定論を確認した」を主張できてしまっていた。COMPLETED shape へ
+# `render_output_sha256_first`/`render_output_sha256_second`（同一入力
+# 2回の render 出力それぞれの sha256）を必須化し、両者の厳密一致を
+# 機械強制する——不一致は「determinism_confirmed=True」という主張自体と
+# 矛盾するため拒否する。
 _SMOKE_RENDER_COMPLETED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "status", "reason", "determinism_confirmed", "measured_sec_per_render", "render_condition",
+    "render_output_sha256_first", "render_output_sha256_second",
 })
 
 
@@ -12049,6 +12129,23 @@ def _validate_smoke_render_section(section: Any, *, companions_status: str) -> N
             section["measured_sec_per_render"], field=f"{field}.measured_sec_per_render"
         )
         _require_non_empty_str(section["render_condition"], field=f"{field}.render_condition")
+        first_hash = section["render_output_sha256_first"]
+        second_hash = section["render_output_sha256_second"]
+        if not isinstance(first_hash, str) or not _SHA256_HEX_RE.match(first_hash):
+            raise Run9ValidationError(
+                f"{field}.render_output_sha256_first must be a 64hex sha256, got {first_hash!r}"
+            )
+        if not isinstance(second_hash, str) or not _SHA256_HEX_RE.match(second_hash):
+            raise Run9ValidationError(
+                f"{field}.render_output_sha256_second must be a 64hex sha256, got {second_hash!r}"
+            )
+        if first_hash != second_hash:
+            raise Run9ValidationError(
+                f"{field}.render_output_sha256_first ({first_hash!r}) != "
+                f"{field}.render_output_sha256_second ({second_hash!r}) — this contradicts "
+                f"{field}.determinism_confirmed=True (two same-input renders must produce "
+                "byte-identical output; a mismatch means determinism was not actually confirmed)"
+            )
         # Codex bot レビュー PR #326 第3巡指摘 Fix 8（P2, 採用）: smoke
         # render は acoustic_export_companions（acoustic.onnx 等4点）を
         # 入力として要求する（gate_synth.py --acoustic-dir 経路）。

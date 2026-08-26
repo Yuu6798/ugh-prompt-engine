@@ -995,6 +995,18 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   （第1-2世代）への言及を新設フィールド
   `claim_scope.historical_pinned_generations` へ分離した。詳細は
   `HARNESS1_PROVISION_RECORD.md` §5-5。
+  PR #326 第6巡 Codex bot レビュー2件（P2×2、採用）でさらに強化した
+  （pin 欄は引き続き PENDING、repin ではなく `RUN9_CONTRACT.yaml`
+  履歴コメントの情報記録 sha256 のみ更新）: Fix 14
+  `acoustic_export_companions` のトップレベル narrative フィールド
+  （`verdict`/`fail_closed_disposition`/`acquisition_record`）を item
+  レベル（Fix 1/7）と同じ status 判別 shape 化し、
+  `OBTAINED_VERIFIED_MATCH` でも MISS narrative が残置可能だった穴を
+  閉じた。Fix 15 `smoke_render` の COMPLETED に
+  `render_output_sha256_first`/`render_output_sha256_second`（64hex・
+  厳密一致を機械強制）を必須化し、`determinism_confirmed: true` が
+  監査可能な出力 hash 証拠を伴わずに主張できていた穴を閉じた。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-6。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

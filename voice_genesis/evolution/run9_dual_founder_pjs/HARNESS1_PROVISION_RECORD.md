@@ -441,6 +441,56 @@ pin 欄（`dependency_pins_sha`）自体は引き続き PENDING——manifest �
 
 ---
 
+### 5-6. PR #326 第6巡 Codex bot レビュー対応（2026-08-26、P2×2、全2件
+採用）
+
+**Fix 14（P2）——companions トップレベルの status 判別 shape 化**: 指摘は
+正当——item レベルの `expected_items` は Fix 1/7 で
+status（OBTAINED/NOT_OBTAINED）判別 shape 化済みだったが、
+`acoustic_export_companions` セクションのトップレベル narrative
+フィールド（`verdict`/`fail_closed_disposition`/`acquisition_record`）は
+自由記述のまま残っており、`status: OBTAINED_VERIFIED_MATCH` でも
+`verdict: "MISS..."` や未取得を示す `fail_closed_disposition` が
+残置可能だった（逆方向の混成——`NOT_OBTAINED` なのに取得証跡が残る
+——も同様に可能）。対応: トップレベルを status 判別 shape へ改めた——
+`NOT_OBTAINED_TARBALL_MISS` 側は `verdict`（`MISS` 始まり必須、非空）+
+`fail_closed_disposition`（非空）を必須化・`acquisition_record` を禁止、
+OBTAINED 側は `acquisition_record`（`acquired_at`/`acquisition_summary`
+の2キーのみ、共に非空文字列）を必須化・MISS 系2フィールドを禁止する
+相互排他 shape とした。`_validate_acoustic_export_companions()` が
+status を先に読み、対応する必須キー集合との unknown-key/missing-key
+両方向を機械強制する。テストヘルパー `_obtain_all_acoustic_companions()`
+をトップレベルも整合させる形へ更新し、新設ヘルパー
+`_mark_companions_top_level_obtained()` を追加した。負例（status だけ
+OBTAINED で MISS narrative 残置、逆方向混成）拒否・正例（整合 shape）
+受理のテストを追加した。
+
+**Fix 15（P2）——smoke 決定論の出力 hash 証拠必須化**: 指摘は正当——
+`smoke_render` の COMPLETED は `determinism_confirmed: true` + 実測秒 +
+条件文の自己申告だけで成立しており、record が定義する「同一入力
+2 render の WAV byte 一致」を裏付ける監査可能な証拠（出力の sha256 等）
+が要求されていなかった——`determinism_confirmed` は語れるが検証不能な
+主張のままだった。対応: COMPLETED shape に
+`render_output_sha256_first`/`render_output_sha256_second`（64hex）を
+必須化し、validator が両者の厳密一致を機械強制する（不一致は
+`determinism_confirmed: true` との自己矛盾として拒否）。テストヘルパー
+`_complete_smoke_render()` を追随させ、負例（hash 欠落・不一致）拒否
+テストを追加した。
+
+両 Fix とも、既存の7テストが新 shape 前提とずれて failing になったため
+（`_obtain_all_acoustic_companions()`/`_complete_smoke_render()` を直接
+使わず個別に fixture を組み立てていたテスト）、個別に shape 追随
+させた上で、新規10テストを追加した（targeted subset:
+139 passed, 1219 deselected）。
+
+pin 欄（`dependency_pins_sha`）自体は引き続き PENDING——manifest バイトは
+`generation_note` への Fix 14/15 追記で変わったため、`RUN9_CONTRACT.yaml`
+の履歴コメントの情報記録 sha256 を更新した（repin ではない）:
+`229493a911b6def9ca47523cfb0345d6066d826ec67e7ead999b098ea6dbc269`。
+本 harness の実測結果自体は無変更。既存 pin は無変更を確認済み。
+
+---
+
 ## 6. テスト・lint
 
 **規約（PR #326 第4巡 Codex bot レビュー Fix 11、P2、採用、2026-08-26 制定
@@ -461,8 +511,9 @@ pin 欄（`dependency_pins_sha`）自体は引き続き PENDING——manifest �
   - PR #326 第2巡（Fix 3-6）: 1769 passed, 0 failed
   - PR #326 第3巡（Fix 7-9）: 1780 passed, 0 failed
   - PR #326 第4巡（Fix 10/11）: 1787 passed, 0 failed
-  - **最新値（PR #326 第5巡, Fix 12/13 対応時点）: 1798 passed, 0 failed**
-    （`scratchpad/h1_r6_pytest.txt` に生出力を保存。上記1failedは第1巡
+  - PR #326 第5巡（Fix 12/13）: 1798 passed, 0 failed
+  - **最新値（PR #326 第6巡, Fix 14/15 対応時点）: 1809 passed, 0 failed**
+    （`scratchpad/h1_r7_pytest.txt` に生出力を保存。上記1failedは第1巡
     コミット時点で既に解消済み——原因だった scratchpad 原本と repo 収載
     版の乖離が、その後の作業で分離・復旧された。§7 item 4 追随参照）
 
