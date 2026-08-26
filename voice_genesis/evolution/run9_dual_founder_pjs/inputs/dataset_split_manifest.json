@@ -1,0 +1,74 @@
+{
+  "design_rule_accounting": {
+    "rule_1": {
+      "note": "song 単位の分割であり、隣接 segment を跨いだ分割は構造的に発生しない（1 song = 1 row、utterance 単位への細分は本 corpus に存在しない）。",
+      "satisfied_by": "inputs/practice_audio_split_manifest.json（song 単位の split。row_ids.{training,validation,sealed_holdout} は互いに素であることを run9_schema._require_disjoint_row_id_sets() が fail-closed 検証する）",
+      "status": "STRUCTURALLY_PINNED",
+      "verbatim": "splitはsong / utterance単位。隣接segmentを別splitへ分けない。"
+    },
+    "rule_2": {
+      "note": "既 PINNED の practice manifest 自身がこの境界を宣言済み（近似重複検出アルゴリズムは未実装であり、100曲が相異なる楽曲であるという前提のみに依拠する）。本 manifest はこの既存の境界宣言を追認するのみで、新規の重複検出機構は発明しない。",
+      "satisfied_by": "inputs/practice_audio_split_manifest.json note フィールド（逐語）: \"PJS 100 曲は相異なる楽曲であり近似重複検出は未実装（RUN9-BIRTH-PREP-1 §B、境界宣言）。\"",
+      "status": "BOUNDARY_DECLARED",
+      "verbatim": "同じlyrics・score fragmentの近似重複を跨がせない。"
+    },
+    "rule_3": {
+      "note": "音響 inventory sidecar（practice_split_builder.build_acoustic_inventory_sidecar()、pitch range・.lab 由来の phrase 数/音素クラス）は environment-dependent float の懸念があるため、実 PJS practice split 実行（README.md 「解消済み（実 PJS practice split 実行, 2026-08-25）」節）で生成を見送り済み——advisory・契約 pin 対象外のまま（PR #321 review でこの sidecar builder が導入され、PR #323 review 3巡でこの見送りの scoped 例外が是正・確定した経緯を継承する）。数値を本 manifest で新規に発明しない。",
+      "satisfied_by": "N/A — 未記録",
+      "status": "NOT_RECORDED",
+      "verbatim": "pitch range、phrase length、phoneme classを記録する。"
+    },
+    "rule_4": {
+      "note": "holdout の使用順序制約は VG-L0 学習ハーネス本体（未実装）が runtime で守るべき手続き規律であり、本 manifest の静的宣言では強制できない。存在しない機構を発明せず、正直に PROCEDURAL のまま据え置く。",
+      "satisfied_by": "inputs/failure_abort_criteria.json rules[rule_id=13] verbatim \"holdout leakage\"（PINNED）が概念的に近接するが、checkpoint freeze 後という順序制約そのものを機械検証する専用機構は本 PR 時点で存在しない",
+      "status": "PROCEDURAL_NOT_MACHINE_ENFORCED",
+      "verbatim": "holdoutは学習checkpoint freeze後にのみrender/evaluateする。"
+    },
+    "rule_5": {
+      "note": "同一 split manifest を二体 Founder 双方へ同一バイト・同一順序で提示することを schema レベルで強制済み。",
+      "satisfied_by": "inputs/practice_audio_split_manifest.json identical_bytes_and_order_across_founders: true（PRACTICE_MANIFEST_REQUIRED_KEYS の bool True 必須欄、run9_schema.validate_practice_split_manifest() が fail-closed 検証）",
+      "status": "STRUCTURALLY_PINNED",
+      "verbatim": "Founder別にsplitを変えない。"
+    },
+    "rule_6": {
+      "note": "row order の hash は既 PINNED practice manifest に実在し、本 PR がそれを契約欄 dataset_row_order_sha として写像・PINNED 化した。",
+      "satisfied_by": "inputs/practice_audio_split_manifest.json row_order_sha256（PINNED実体）+ RUN9_CONTRACT.yaml dataset_row_order_sha（本 PR で PINNED 化。三者一致は run9_schema.load_pinned_dataset_split_manifest() が照合）",
+      "status": "STRUCTURALLY_PINNED",
+      "verbatim": "row orderをhashする。"
+    },
+    "rule_7": {
+      "note": "実 PJS 音源・展開物は repo 配下へ一切コミットしていない（README.md「解消済み（実 PJS practice split 実行, 2026-08-25）」節: 作業は session scratchpad 限定）という運用上の事実は記録されているが、これを継続的に強制する schema/validator は本 PR 時点で存在しない。正直に PROCEDURAL のまま据え置く。",
+      "satisfied_by": "N/A — repo 内に machine 強制機構なし",
+      "status": "PROCEDURAL_NOT_MACHINE_ENFORCED",
+      "verbatim": "PJS raw audioはSource Quarantine内に留める。"
+    }
+  },
+  "identity_probe": {
+    "design_vocabulary_citation": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §12 Dataset Split（574-595行の5分割語彙ブロック、582行目、逐語）: \"IDENTITY PROBE\"",
+    "design_vocabulary_note": "DESIGN §12 は IDENTITY PROBE を PJS song 単位の4分割目として規定するが、既 PINNED の practice_audio_split_manifest.json は PJS 100曲全数を TRAIN/VALIDATION/SEALED_HOLDOUT の3分割で排他的に使い切っており、独立した4分割目を新たに確保する余地が構造的に存在しない。DESIGN §12 が IDENTITY PROBE に求める役割（Founder間・条件間の identity 比較の基準点の提供）は、既 PINNED の evaluation/probe_manifest.json P0 cell（PJS song から派生しない、独自に authored された score fragment）が既に担っている。この対応は本 manifest が新規に決定するものではなく、既 PINNED 正典（probe_manifest.json）が既に下していた設計決定を、DESIGN §12 の IDENTITY PROBE という語彙のもとで追認するものである。P4 の role が PJS song ベースの identity probe を明示的に不採用とした理由（採譜負担 + sealed-holdout 非開封規律との衝突）は、IDENTITY PROBE を PJS song split として実装しないことの隣接する根拠として引用する。NEGATIVE / SHAM CONTROL split（DESIGN §12 5分割目）も同型の未決点であり、negative_sham_control 節で同様に扱う。",
+    "implementation": "evaluation/probe_manifest.json probes[probe_id=\"P0\"]（title \"Neutral Identity Probe\"、cell_id \"P0-NEUTRAL-SAKURA-FRAGMENT\"）",
+    "implementation_class": "NON_SONG_SPLIT",
+    "pjs_song_based_probe_non_adoption_citation": "voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json probes[probe_id=\"P4\"].role（786行、逐語の一部）: \"PJS楽曲の採譜は不採用とする（採譜作業が必要な上、sealed-holdout非開封規律と衝突するため）。\"",
+    "probe_manifest_sha": "c6c4b862e775ce99e579ba8e4574453ae86048fa801c9b4e1265743021475534"
+  },
+  "negative_sham_control": {
+    "c1_sham_takes_per_founder": 20,
+    "design_vocabulary_citation": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §12 Dataset Split（574-595行の5分割語彙ブロック、583行目、逐語）: \"NEGATIVE / SHAM CONTROL\"",
+    "design_vocabulary_note": "DESIGN §12 は NEGATIVE / SHAM CONTROL を PJS song 単位の5分割目として規定するが、既 PINNED の practice_audio_split_manifest.json は PJS 100曲全数を3分割で使い切っており、独立した5分割目を新たに確保する余地が構造的に存在しない。DESIGN §12 が NEGATIVE / SHAM CONTROL に求める役割（介入なしの対照条件の確保）は、既 PINNED の RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder（C1 = ZERO_CONTROLPROFILE_SHAM 条件、P0 cell 上で founder 1体あたり n=20 takes を render）が既に担っている。この対応も本 manifest が新規に決定するものではなく、既 PINNED 正典（RUN9_CONTRACT.yaml / probe_manifest.json revision_bridge）が既に下していた設計決定を、DESIGN §12 の NEGATIVE / SHAM CONTROL という語彙のもとで追認するものである。",
+    "implementation": "RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder（PINNED, value=20, C1 = ZERO_CONTROLPROFILE_SHAM 条件）—— evaluation/probe_manifest.json revision_bridge.c1_sham_takes.description（878行、逐語）: \"P0 cell + ZERO_CONTROLPROFILE_SHAM条件でのrender。RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder（PINNED、founder 1体あたりn=20）本。\"",
+    "implementation_class": "NON_SONG_SPLIT"
+  },
+  "schema": "run9-dataset-split-manifest/1.0",
+  "song_splits": {
+    "canonical_source": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json",
+    "canonical_source_schema": "run9-practice-audio-split-manifest/1.0",
+    "practice_audio_split_manifest_sha": "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6",
+    "row_counts": {
+      "sealed_holdout": 15,
+      "training": 70,
+      "validation": 15
+    },
+    "row_ids_and_sample_inventory_note": "row_ids（training/validation/sealed_holdout の song id 列）・sample_inventory（順序付き song id 列）は本 manifest では重複再掲しない——正本は canonical_source が指す practice_audio_split_manifest.json のみ（evaluation/probe_manifest.json measurement_boundary.scope_statement の『本manifestが定義するのは何を鳴らすか…のみ』という重複定義しない規律を踏襲する）。",
+    "row_order_sha256": "6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a"
+  }
+}

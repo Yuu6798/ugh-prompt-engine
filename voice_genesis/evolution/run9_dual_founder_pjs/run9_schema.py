@@ -1482,6 +1482,41 @@ _LEARNING_RECIPE_EQUAL_CONDITION_STR_KEYS: Tuple[str, ...] = (
 
 _LEARNING_RECIPE_ARMS: Tuple[str, str] = ("practice_recipe", "education_recipe")
 
+# RUN9-L0-PIN-2（Design Memo, User 裁定 2026-08-25 — 逐語一次ソースは
+# `USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt`（本ディレクトリ
+# 同梱、POR_CONCEPT_ADJUDICATION_20260824.txt と同型の repo 内収載裁定
+# 文書。Codex bot レビュー PR #325 第1巡指摘 Fix 2, P2, 採用: 起草時の
+# 転記元は repo に無い作業メモだけであり将来のレビュアーが「User 転記
+# であって発明でない」ことを検証できない、という指摘を受けて repo 内
+# ファイルへ本転記元を差し替えた）: PRACTICE_FROM_AUDIO/
+# TRANSFER_TECHNIQUE 両枝の `trial_count`/
+# `render_budget`/`stopping_rule` を裁定値へ厳密固定する
+# （`equal_budget_within_arm` は既に `_validate_learning_recipe_arm()` が
+# bool True 厳密一致で強制済み — 4キーで裁定済み、PoR §8 の9項目のうち
+# 残り5キーは値の中身が未確定のまま VG-L0 ハーネス実装時の build 対象）。
+# 値そのものは本 PR が新規に決定するものではなく、User 裁定からの転記
+# である。
+#
+# 裁定の逐語（要点、docstring にも再掲）:
+# - trial_count: 32（PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE 共通）
+# - render_budget: 128（1 Founder あたり logical_render_units、PRACTICE_
+#   FROM_AUDIO/TRANSFER_TECHNIQUE 共通）
+# - stopping_rule: "FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP"
+#   （gain 成立・非成立を理由に途中終了しない。32 trials を原則最後まで
+#   消化する。rights/provenance 違反・immutable 領域への書込企図・
+#   非有限値・renderer/runtime failure・contract 違反等の Hard Failure
+#   のみ途中停止を許す。NO_GAIN は停止理由ではなく科学結果として記録する）
+# - logical_render_unit の定義: 1 Founder について、凍結済み評価単位1件の
+#   音声 render を1回要求すること。cache hit でも1 unit として計上する。
+#   128 units は learning/search loop 専用とし、Birth baseline/C0/C1/
+#   validation/sealed holdout の固定評価 render は別予算とする。同一
+#   attempt 内で結果を見て trial_count/render_budget を追加してはならない
+#   ——不足と判断した場合は現 attempt を凍結し、新 design_revision で
+#   予算を再裁定する。
+LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT: int = 32
+LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET: float = 128.0
+LEARNING_RECIPE_ADJUDICATED_STOPPING_RULE: str = "FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP"
+
 
 def _require_non_empty_str(value: Any, *, field: str) -> str:
     """空文字列・非文字列を拒否する（Codex bot レビュー PR #318 第2巡
@@ -1571,6 +1606,35 @@ def _validate_learning_recipe_arm(arm: Any, *, arm_name: str) -> None:
     _require_positive_finite_number(
         arm["render_budget"], field=f"learning recipe manifest.{arm_name}.render_budget"
     )
+    # RUN9-L0-PIN-2（User 裁定 2026-08-25）: trial_count/render_budget/
+    # stopping_rule の裁定値への厳密固定。上記2関数は「実行可能な形」
+    # までの型検証（Fix 7/15）であり、ここからは「実行可能な値のうち
+    # どれを採るか」という User 裁定そのものの機械強制——型検証を通過した
+    # 上で、裁定値と厳密不一致なら fail-closed 拒否する。render_budget は
+    # 元の値（int/float いずれか）のまま比較する（128 と 128.0 はいずれも
+    # 裁定値と等価 — Python の数値等価規約どおり）。
+    if arm["trial_count"] != LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT:
+        raise Run9ValidationError(
+            f"learning recipe manifest.{arm_name}.trial_count must be exactly "
+            f"{LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT!r} (User 裁定 2026-08-25 — "
+            f"RUN9-L0-PIN-2, both arms share the same adjudicated budget), got "
+            f"{arm['trial_count']!r}"
+        )
+    if arm["render_budget"] != LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET:
+        raise Run9ValidationError(
+            f"learning recipe manifest.{arm_name}.render_budget must be exactly "
+            f"{LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET!r} logical_render_units per Founder "
+            f"(User 裁定 2026-08-25 — RUN9-L0-PIN-2, learning/search loop budget only — Birth "
+            f"baseline/C0/C1/validation/sealed holdout render are a separate budget), got "
+            f"{arm['render_budget']!r}"
+        )
+    if arm["stopping_rule"] != LEARNING_RECIPE_ADJUDICATED_STOPPING_RULE:
+        raise Run9ValidationError(
+            f"learning recipe manifest.{arm_name}.stopping_rule must be exactly "
+            f"{LEARNING_RECIPE_ADJUDICATED_STOPPING_RULE!r} (User 裁定 2026-08-25 — "
+            f"RUN9-L0-PIN-2 — gain 成立/非成立を理由に途中終了しない。NO_GAIN は科学結果), got "
+            f"{arm['stopping_rule']!r}"
+        )
     # rev 0.3 改訂E「公平性（PoR §8）」節の残り5共通条件（Codex bot レビュー
     # PR #318 第5巡 Fix 17 採用 — `_LEARNING_RECIPE_ARM_KEYS` docstring
     # 参照）。stopping_rule と同じ「非空文字列」までの機械検証（具体的な
@@ -1587,17 +1651,48 @@ def validate_learning_recipe_manifest(data: Mapping[str, Any]) -> None:
     CONTROL は学習 step を実行しないため recipe を持たない — PoR §4 の
     CONTROL 定義と整合）+ 共通 `seed`（`LEARNING_SEED` = 909002 固定）+
     各枝内の二体等予算宣言（`equal_budget_within_arm: true` 必須）を検証
-    する。`stopping_rule`/`trial_count`/`render_budget` は具体的な語彙・
-    数値そのものまでは固定しないが、「実行可能な形」であることは
-    fail-closed で強制する（非空文字列 / 正の有限数値 — Codex bot レビュー
-    PR #318 第2巡 Fix 7 採用。PINNED 事前配線が本 validator をそのまま
-    呼ぶため、READY 昇格時点で実行不能な予算が凍結される事故を防ぐ）。
+    する。`stopping_rule`/`trial_count`/`render_budget` は「実行可能な
+    形」であることをまず fail-closed で強制し（非空文字列 / 正の有限
+    数値 — Codex bot レビュー PR #318 第2巡 Fix 7 採用。PINNED 事前配線が
+    本 validator をそのまま呼ぶため、READY 昇格時点で実行不能な予算が
+    凍結される事故を防ぐ）、そのうえで RUN9-L0-PIN-2（User 裁定
+    2026-08-25）により両枝共通の裁定値へ厳密固定する
+    （`LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT`=32 /
+    `LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET`=128
+    logical_render_units per Founder /
+    `LEARNING_RECIPE_ADJUDICATED_STOPPING_RULE`=
+    "FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP"）。
+
+    User 裁定 2026-08-25 の逐語（要点。全文は repo 内収載の
+    `USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt`）:
+    - R9F-01/R9F-02 には各 arm 内で完全に同一の予算・候補生成規則・探索
+      空間・評価器・停止規則を適用する。PRACTICE と EDUCATION 間について
+      も本 RUN9 では探索機会を揃えるため同じ trial/render 予算を採用する
+      （ただし入力情報境界の非対称性は実験変数として維持する）。
+    - stopping_rule の意味論: gain 成立・非成立を理由に途中終了しない。
+      32 trials を原則最後まで消化する。rights/provenance 違反・
+      immutable 領域への書込企図・非有限値・renderer/runtime failure・
+      contract 違反等の Hard Failure のみ途中停止を許す。NO_GAIN は停止
+      理由ではなく科学結果として記録する。
+    - render_budget（logical_render_unit）の定義: 1 Founder について、
+      凍結済み評価単位1件の音声 render を1回要求すること。cache hit でも
+      1 unit として計上する。128 units は learning/search loop 専用とし、
+      Birth baseline/C0/C1/validation/sealed holdout の固定評価 render は
+      別予算とする。同一 attempt 内で結果を見て trial_count/render_budget
+      を追加してはならない——不足と判断した場合は現 attempt を凍結し、
+      新 design_revision で予算を再裁定する。
 
     `search_space`/`candidate_generation`/`evaluator`/`compute_budget`/
-    `data_binding` の5キーも同様に非空文字列を必須とする（Codex bot
-    レビュー PR #318 第5巡 Fix 17 採用、rev 0.3 改訂E「公平性（PoR §8）」
-    節が定める枝内二体等条件9項目のうち、Fix 7/15 で未カバーだった残り
-    5項目を機械検証可能フィールドとして追加）。各枝 recipe は
+    `data_binding` の5キーは rev 0.3 改訂E のラベルのみが存在し中身は
+    未確定のため、本 PR でも「非空文字列」までの検証に留める（VG-L0
+    ハーネス実装時の build 対象のまま — evaluator は loss_channels 5種
+    〔relative_f0/duration_ratio/normalized_energy/attack_timing/
+    phrase_end_timing〕を再利用できる可能性が高いが正式な組み込みは
+    未決、data_binding は本 PR で PINNED 化される dataset_manifest_sha へ
+    従属する — Codex bot レビュー PR #318 第5巡 Fix 17 採用、rev 0.3
+    改訂E「公平性（PoR §8）」節が定める枝内二体等条件9項目のうち、
+    Fix 7/15 で未カバーだった残り5項目を機械検証可能フィールドとして
+    追加した由来）。各枝 recipe は
     `practice_recipe`/`education_recipe` それぞれ単一の object として
     定義され、その1つの object が該当枝の二体 Founder 双方へ共通適用
     される構造そのものが等条件を保証する（founder 別の値を持つ余地が
@@ -10111,3 +10206,978 @@ def validate_performance_source_block(data: Mapping[str, Any]) -> None:
                 "Voice Source ≠ Performance Source ≠ Performance Author separation "
                 "(2026-08-25 User 追加裁定 指示1)"
             )
+
+
+# ---------------------------------------------------------------------------
+# RUN9-L0-PIN-2（Design Memo, 2026-08-26）: dataset split manifest —
+# `dataset_manifest_sha`/`dataset_row_order_sha` の2欄を PINNED 化する。
+# probe_manifest（PR #322）/ PIN-1 の3欄（seed_policy/failure_abort/
+# measurement_spec）と同じ4段構成（schema 自己宣言 → REQUIRED_KEYS +
+# validate_*() → 実バイト sha256 で PINNED → load_pinned_*() read-once
+# アンカー）を踏襲する。本 manifest は「DESIGN §12 の5分割語彙を既存
+# PINNED 機構へ写像する会計文書」であり、全内容が既 PINNED 値の転記・
+# 参照と凍結文書の逐語引用のみ——環境依存要素ゼロ、実音源アクセス不要
+# （PIN-1 と同型の machine 非依存の宣言凍結）。
+#
+# 信頼根境界宣言（PIN-1 `verify_user_donor_manifest_complete()` の
+# docstring と同一の境界を本節でも踏襲する）: 本節の consumer 関数
+# （`load_pinned_dataset_split_manifest()`）が保証するのは、ディスク上の
+# 正典 `RUN9_CONTRACT.yaml` / `dataset_split_manifest.json` /
+# `practice_audio_split_manifest.json` の組に対する fail-closed 照合まで
+# である。`RUN9_CONTRACT.yaml` の pin 群自体が RUN9 の信頼根であり、
+# それ自体の完全性は repo 機構の外側（branch_write_policy による書込
+# 境界宣言 + PR レビュー + discipline テスト + git 履歴）で担保される
+# 宣言的信頼根であって、本節を含むいかなる消費関数もその根を証明しない。
+# ---------------------------------------------------------------------------
+
+SCHEMA_DATASET_SPLIT_MANIFEST = "run9-dataset-split-manifest/1.0"
+
+DATASET_SPLIT_MANIFEST_PATH = _THIS_DIR / "inputs" / "dataset_split_manifest.json"
+
+_DATASET_SPLIT_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "song_splits", "identity_probe", "negative_sham_control",
+    "design_rule_accounting",
+})
+
+_DATASET_SPLIT_SONG_SPLITS_KEYS: FrozenSet[str] = frozenset({
+    "canonical_source", "canonical_source_schema", "practice_audio_split_manifest_sha",
+    "row_order_sha256", "row_counts", "row_ids_and_sample_inventory_note",
+})
+
+_DATASET_SPLIT_IDENTITY_PROBE_KEYS: FrozenSet[str] = frozenset({
+    "implementation_class", "implementation", "probe_manifest_sha",
+    "design_vocabulary_citation", "pjs_song_based_probe_non_adoption_citation",
+    "design_vocabulary_note",
+})
+
+_DATASET_SPLIT_NEGATIVE_SHAM_KEYS: FrozenSet[str] = frozenset({
+    "implementation_class", "implementation", "c1_sham_takes_per_founder",
+    "design_vocabulary_citation", "design_vocabulary_note",
+})
+
+# NON_SONG_SPLIT: identity_probe/negative_sham_control のいずれも PJS song
+# 単位の独立 split としては実装されておらず（既 PINNED practice split が
+# 100曲全数を3分割で使い切っている——`dataset_split_manifest.json`
+# `*.design_vocabulary_note` 参照）、既存 PINNED 機構（probe_manifest.json
+# P0 cell / interventions.c1_sham_takes_per_founder）が代わりにその役割を
+# 担うという実装区分を機械可読に宣言する語彙。現時点でこれ以外の値は
+# 存在しない（将来 PJS song ベースの独立 split を実装する場合は新しい
+# implementation_class 語彙を追加したうえで repin する）。
+_DATASET_SPLIT_IMPLEMENTATION_CLASS = "NON_SONG_SPLIT"
+
+_DATASET_SPLIT_RULE_IDS: Tuple[str, ...] = tuple(f"rule_{i}" for i in range(1, 8))
+
+_DATASET_SPLIT_RULE_KEYS: FrozenSet[str] = frozenset({
+    "verbatim", "status", "satisfied_by", "note",
+})
+
+# DESIGN §12（574-595行）規則1-7 の各項目が、どの PINNED 機構によって
+# 満たされるかの正直な会計。4区分のみを許容する閉じた語彙:
+# - STRUCTURALLY_PINNED: 既 PINNED manifest/validator が構造的に強制する
+# - BOUNDARY_DECLARED: 既 PINNED 正典自身が「未実装」と境界宣言済みの前提
+#   にのみ依拠する（新規検出機構は発明しない）
+# - PROCEDURAL_NOT_MACHINE_ENFORCED: runtime の手続き規律であり、本 PR
+#   時点で machine 強制する専用機構が存在しない（存在しない機構を発明
+#   しない）
+# - NOT_RECORDED: 規則3（pitch range/phrase length/phoneme class）専用。
+#   音響 inventory sidecar は advisory・環境依存 float のため生成を見送り
+#   済み（PR #321/#323 review、README.md「解消済み（実 PJS practice
+#   split 実行, 2026-08-25）」節）——数値を本 PR で新規発明しない。
+_DATASET_SPLIT_RULE_STATUS_VOCAB: FrozenSet[str] = frozenset({
+    "STRUCTURALLY_PINNED", "BOUNDARY_DECLARED", "PROCEDURAL_NOT_MACHINE_ENFORCED",
+    "NOT_RECORDED",
+})
+
+# DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §12（574-595行）
+# 規則1-7の逐語（順序込み、rule_id = "rule_{1..7}"、一次ソースからの転記）。
+_DATASET_SPLIT_RULE_VERBATIM: Mapping[str, str] = types.MappingProxyType({
+    "rule_1": "splitはsong / utterance単位。隣接segmentを別splitへ分けない。",
+    "rule_2": "同じlyrics・score fragmentの近似重複を跨がせない。",
+    "rule_3": "pitch range、phrase length、phoneme classを記録する。",
+    "rule_4": "holdoutは学習checkpoint freeze後にのみrender/evaluateする。",
+    "rule_5": "Founder別にsplitを変えない。",
+    "rule_6": "row orderをhashする。",
+    "rule_7": "PJS raw audioはSource Quarantine内に留める。",
+})
+
+# 転記された既 PINNED 値との整合を取るための凍結アンカー（一次ソースから
+# の逐語転記、孫引き禁止 — Design Memo RUN9-L0-PIN-2 遵守）。
+# `load_pinned_dataset_split_manifest()` はこれらに加え、都度ディスクから
+# 再読込した `RUN9_CONTRACT.yaml` の実 PINNED 値とも突き合わせる
+# （下記 cross-manifest 三者一致）——本定数は構造検証
+# （`validate_dataset_split_manifest()`）側の一次防御を担う。
+_DATASET_SPLIT_EXPECTED_CANONICAL_SOURCE = (
+    "voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json"
+)
+_DATASET_SPLIT_EXPECTED_ROW_COUNTS: Mapping[str, int] = types.MappingProxyType({
+    "training": 70, "validation": 15, "sealed_holdout": 15,
+})
+
+# PR #325 第7巡 Fix 8: `practice_split_builder._enumerate_pjs_song_ids()`
+# （read-only 確認済み、`practice_split_builder.py:111-135`）の song_id
+# 列挙規約——`song_id = lab_path.stem`、glob パターン `pjs*/pjs*.lab` の
+# 対象は現行 PJS 100曲コーパスでは常に3桁ゼロ埋め（`pjs001`〜`pjs100`）。
+# load-time sanity 検査（束縛ではない、docstring (12) 参照）専用の
+# フォーマット規約であり、corpus 実体との真の束縛はここでは行わない。
+_PIN2_PRACTICE_SONG_ID_RE = re.compile(r"^pjs\d{3}$")
+
+
+def _validate_dataset_split_song_splits(data: Any) -> None:
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"dataset split manifest.song_splits must be an object, got {type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _DATASET_SPLIT_SONG_SPLITS_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"dataset split manifest.song_splits has unknown key(s): {sorted(unknown)}"
+        )
+    missing = _DATASET_SPLIT_SONG_SPLITS_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"dataset split manifest.song_splits missing required key(s): {sorted(missing)}"
+        )
+    if data["canonical_source"] != _DATASET_SPLIT_EXPECTED_CANONICAL_SOURCE:
+        raise Run9ValidationError(
+            "dataset split manifest.song_splits.canonical_source must be exactly "
+            f"{_DATASET_SPLIT_EXPECTED_CANONICAL_SOURCE!r}, got {data['canonical_source']!r}"
+        )
+    if data["canonical_source_schema"] != SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST:
+        raise Run9ValidationError(
+            "dataset split manifest.song_splits.canonical_source_schema must be exactly "
+            f"{SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST!r}, got {data['canonical_source_schema']!r}"
+        )
+    _require_manifest_sha256_hex(
+        data["practice_audio_split_manifest_sha"],
+        manifest_kind="dataset split manifest.song_splits",
+        field="practice_audio_split_manifest_sha",
+    )
+    _require_manifest_sha256_hex(
+        data["row_order_sha256"],
+        manifest_kind="dataset split manifest.song_splits",
+        field="row_order_sha256",
+    )
+    row_counts = data["row_counts"]
+    if not isinstance(row_counts, dict) or dict(row_counts) != dict(_DATASET_SPLIT_EXPECTED_ROW_COUNTS):
+        raise Run9ValidationError(
+            "dataset split manifest.song_splits.row_counts must be exactly "
+            f"{dict(_DATASET_SPLIT_EXPECTED_ROW_COUNTS)!r} (practice_audio_split_manifest.json の "
+            f"70/15/15 の転記), got {row_counts!r}"
+        )
+    _require_non_empty_str(
+        data["row_ids_and_sample_inventory_note"],
+        field="dataset split manifest.song_splits.row_ids_and_sample_inventory_note",
+    )
+
+
+def _validate_dataset_split_identity_probe(data: Any) -> None:
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"dataset split manifest.identity_probe must be an object, got {type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _DATASET_SPLIT_IDENTITY_PROBE_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"dataset split manifest.identity_probe has unknown key(s): {sorted(unknown)}"
+        )
+    missing = _DATASET_SPLIT_IDENTITY_PROBE_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"dataset split manifest.identity_probe missing required key(s): {sorted(missing)}"
+        )
+    if data["implementation_class"] != _DATASET_SPLIT_IMPLEMENTATION_CLASS:
+        raise Run9ValidationError(
+            "dataset split manifest.identity_probe.implementation_class must be exactly "
+            f"{_DATASET_SPLIT_IMPLEMENTATION_CLASS!r}, got {data['implementation_class']!r}"
+        )
+    _require_non_empty_str(
+        data["implementation"], field="dataset split manifest.identity_probe.implementation"
+    )
+    _require_manifest_sha256_hex(
+        data["probe_manifest_sha"],
+        manifest_kind="dataset split manifest.identity_probe",
+        field="probe_manifest_sha",
+    )
+    for field_name in ("design_vocabulary_citation", "pjs_song_based_probe_non_adoption_citation",
+                       "design_vocabulary_note"):
+        _require_non_empty_str(
+            data[field_name], field=f"dataset split manifest.identity_probe.{field_name}"
+        )
+
+
+def _validate_dataset_split_negative_sham_control(data: Any) -> None:
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"dataset split manifest.negative_sham_control must be an object, got "
+            f"{type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _DATASET_SPLIT_NEGATIVE_SHAM_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"dataset split manifest.negative_sham_control has unknown key(s): {sorted(unknown)}"
+        )
+    missing = _DATASET_SPLIT_NEGATIVE_SHAM_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"dataset split manifest.negative_sham_control missing required key(s): {sorted(missing)}"
+        )
+    if data["implementation_class"] != _DATASET_SPLIT_IMPLEMENTATION_CLASS:
+        raise Run9ValidationError(
+            "dataset split manifest.negative_sham_control.implementation_class must be exactly "
+            f"{_DATASET_SPLIT_IMPLEMENTATION_CLASS!r}, got {data['implementation_class']!r}"
+        )
+    _require_non_empty_str(
+        data["implementation"], field="dataset split manifest.negative_sham_control.implementation"
+    )
+    c1_takes = data["c1_sham_takes_per_founder"]
+    if isinstance(c1_takes, bool) or not isinstance(c1_takes, int) or c1_takes != 20:
+        raise Run9ValidationError(
+            "dataset split manifest.negative_sham_control.c1_sham_takes_per_founder must be the "
+            f"exact int 20 (RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder の転記), got "
+            f"{c1_takes!r}"
+        )
+    for field_name in ("design_vocabulary_citation", "design_vocabulary_note"):
+        _require_non_empty_str(
+            data[field_name], field=f"dataset split manifest.negative_sham_control.{field_name}"
+        )
+
+
+def _validate_dataset_split_rule_accounting(data: Any) -> None:
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"dataset split manifest.design_rule_accounting must be an object, got "
+            f"{type(data).__name__}"
+        )
+    unknown = set(data.keys()) - set(_DATASET_SPLIT_RULE_IDS)
+    if unknown:
+        raise Run9ValidationError(
+            f"dataset split manifest.design_rule_accounting has unknown key(s): {sorted(unknown)}"
+        )
+    missing = set(_DATASET_SPLIT_RULE_IDS) - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"dataset split manifest.design_rule_accounting missing required key(s): {sorted(missing)}"
+        )
+    for rule_id in _DATASET_SPLIT_RULE_IDS:
+        rule = data[rule_id]
+        if not isinstance(rule, dict):
+            raise Run9ValidationError(
+                f"dataset split manifest.design_rule_accounting.{rule_id} must be an object, got "
+                f"{type(rule).__name__}"
+            )
+        unknown_rule_keys = set(rule.keys()) - _DATASET_SPLIT_RULE_KEYS
+        if unknown_rule_keys:
+            raise Run9ValidationError(
+                f"dataset split manifest.design_rule_accounting.{rule_id} has unknown key(s): "
+                f"{sorted(unknown_rule_keys)}"
+            )
+        missing_rule_keys = _DATASET_SPLIT_RULE_KEYS - set(rule.keys())
+        if missing_rule_keys:
+            raise Run9ValidationError(
+                f"dataset split manifest.design_rule_accounting.{rule_id} missing required key(s): "
+                f"{sorted(missing_rule_keys)}"
+            )
+        if rule["verbatim"] != _DATASET_SPLIT_RULE_VERBATIM[rule_id]:
+            raise Run9ValidationError(
+                f"dataset split manifest.design_rule_accounting.{rule_id}.verbatim must be exactly "
+                f"{_DATASET_SPLIT_RULE_VERBATIM[rule_id]!r} (DESIGN_RUN9 §12 574-595行の逐語転記), "
+                f"got {rule['verbatim']!r}"
+            )
+        status = rule["status"]
+        if status not in _DATASET_SPLIT_RULE_STATUS_VOCAB:
+            raise Run9ValidationError(
+                f"dataset split manifest.design_rule_accounting.{rule_id}.status must be one of "
+                f"{sorted(_DATASET_SPLIT_RULE_STATUS_VOCAB)}, got {status!r}"
+            )
+        _require_non_empty_str(
+            rule["satisfied_by"],
+            field=f"dataset split manifest.design_rule_accounting.{rule_id}.satisfied_by",
+        )
+        _require_non_empty_str(
+            rule["note"], field=f"dataset split manifest.design_rule_accounting.{rule_id}.note"
+        )
+    # 規則3（pitch range/phrase length/phoneme class の記録）は正直な
+    # NOT_RECORDED 会計を Design Memo RUN9-L0-PIN-2 が明示的に要求する
+    # （音響 inventory sidecar は advisory・環境依存 float のため生成見送り
+    # 済み——数値を発明しない）。
+    if data["rule_3"]["status"] != "NOT_RECORDED":
+        raise Run9ValidationError(
+            "dataset split manifest.design_rule_accounting.rule_3.status must be exactly "
+            f"'NOT_RECORDED' (pitch range/phrase length/phoneme class の記録は未実装 — 数値を "
+            f"発明しない honest accounting, Design Memo RUN9-L0-PIN-2), got {data['rule_3']['status']!r}"
+        )
+
+
+# PR #325 第4巡 Codex bot レビュー指摘 Fix 5（P2, 採用）: `practice_split_
+# builder.assign_split()`（read-only 確認済み、`practice_split_builder.py:
+# 144-190`）の決定論割当規則を、標準ライブラリのみで局所再実装する。
+#
+# **本 PR で唯一の「独立再実装」ケースであることの明示**: Fix 1/3/4 は
+# いずれも `_compute_canonical_pin_sha256()` という既存の共有プリミティブ
+# を builder 側と同一の関数オブジェクトとして呼ぶだけで済み、drift の
+# 余地が構造的に存在しなかった。本関数はそれとは異なり、builder の
+# `_song_score()`/`assign_split()` が実装するランキング・スライス規則
+# そのものを再実装する——builder からの import は選べない: (a)
+# `practice_split_builder.py` は `import numpy as np` をトップレベルに
+# 持ち、`run9_schema.py` の標準ライブラリ + PyYAML のみという依存方針
+# （Allowed Dependencies: なし）を壊す、(b) `practice_split_builder` は
+# 既に `import run9_schema as m` しており逆方向 import は循環 import に
+# なる（Fix 1 と同じ制約）。したがって規則の**再計算不能な共有プリミティブ
+# が存在しない**唯一のケースとして、局所再実装 + drift 検出テスト
+# （builder の実出力と本関数の出力を実データ・合成 N で突き合わせる）で
+# 対応する。
+#
+# 規則の逐語転記（User 裁定 2026-08-25、`practice_split_builder.py:145-190`
+# より一次ソースを直接確認）:
+# - `score(song_id) = sha256(f"{song_id}|{LEARNING_SEED}".encode("utf-8"))
+#   .hexdigest()`
+# - `ranked = sorted(ids, key=lambda sid: (score(sid), sid))`（同値タイ
+#   ブレークは song_id 自身の辞書順）
+# - `n_val = floor(N*0.15)` / `n_holdout = floor(N*0.15)` /
+#   `n_train = N - n_val - n_holdout`（RUN9-BIRTH-PREP-1 §B 裁定逐語）
+# - `training = ranked[:n_train]` / `validation = ranked[n_train:
+#   n_train+n_val]` / `sealed_holdout = ranked[n_train+n_val:]`
+def _expected_practice_split_assignment(song_ids: List[str]) -> Dict[str, List[str]]:
+    """`practice_split_builder.assign_split()` と厳密に同一の決定論割当を
+    stdlib（`hashlib`/`math`/`sorted`）のみで再現する。呼び出し元
+    （`load_pinned_dataset_split_manifest()`）は既に `validate_practice_
+    split_manifest()` を通した `row_ids` の和集合（重複無し・disjoint
+    保証済み）を渡すため、本関数自体は重複検査を行わない——builder の
+    `assign_split()` が行う空リスト/小規模 N の fail-closed ガードも、
+    load 経路では常に N=100（既 PINNED practice split の実corpus規模）
+    が渡るため必須ではないが、`assign_split()` の契約を偽らないよう
+    同一の整合性を保つ最小の防御として `song_ids` が空なら拒否する。
+    """
+    if not song_ids:
+        raise Run9ValidationError(
+            "_expected_practice_split_assignment(): song_ids must be non-empty"
+        )
+    ranked = sorted(
+        song_ids,
+        key=lambda sid: (hashlib.sha256(f"{sid}|{LEARNING_SEED}".encode("utf-8")).hexdigest(), sid),
+    )
+    n = len(ranked)
+    n_val = math.floor(n * 0.15)
+    n_holdout = math.floor(n * 0.15)
+    n_train = n - n_val - n_holdout
+    return {
+        "training": ranked[:n_train],
+        "validation": ranked[n_train : n_train + n_val],
+        "sealed_holdout": ranked[n_train + n_val :],
+    }
+
+
+def validate_dataset_split_manifest(data: Mapping[str, Any]) -> None:
+    """dataset split manifest（`run9-dataset-split-manifest/1.0`）の構造を
+    検証する。DESIGN_RUN9 §12（574-595行）の5分割語彙
+    （TRAIN/VALIDATION/SEALED HOLDOUT/IDENTITY PROBE/NEGATIVE・SHAM
+    CONTROL）を既存 PINNED 機構へ写像する会計文書——`song_splits` 節は
+    TRAIN/VALIDATION/SEALED HOLDOUT が既 PINNED `practice_audio_split_
+    manifest.json` を正本とすることを宣言（row_ids/sample_inventory は
+    重複再掲せず、`practice_audio_split_manifest_sha`/`row_order_sha256`
+    の転記のみ）、`identity_probe`/`negative_sham_control` 節は IDENTITY
+    PROBE/NEGATIVE・SHAM CONTROL が PJS song ベースの独立 split としては
+    実装されておらず（既 PINNED practice split が PJS 100曲全数を3分割で
+    使い切っているため新規4/5分割目を確保する余地が構造的に存在しない）、
+    代わりに既 PINNED の `evaluation/probe_manifest.json` P0 cell /
+    `RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder` がそれぞれ
+    の役割を担うという `NON_SONG_SPLIT` 実装区分を宣言する
+    （`design_vocabulary_note` にこの追認の位置づけを明記）。
+    `design_rule_accounting` 節は DESIGN §12 規則1-7それぞれについて、
+    どの PINNED 機構が満たすか（あるいは満たさないか）を正直に会計する
+    （規則3 pitch range/phrase length/phoneme class の記録は
+    `NOT_RECORDED` 固定 — 音響 inventory sidecar は advisory・環境依存
+    float のため生成を見送り済みであり、数値を本 manifest で新規に発明
+    しない）。
+
+    新しい数値・写像・探索空間は一切発明しない——全フィールドが既 PINNED
+    値の転記・参照、または凍結文書（DESIGN_RUN9/probe_manifest.json/
+    practice_audio_split_manifest.json）の逐語引用のみで構成される。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"dataset split manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - _DATASET_SPLIT_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"dataset split manifest has unknown key(s): {sorted(unknown)}")
+    missing = _DATASET_SPLIT_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"dataset split manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_DATASET_SPLIT_MANIFEST:
+        raise Run9ValidationError(
+            f"dataset split manifest.schema must be exactly {SCHEMA_DATASET_SPLIT_MANIFEST!r}, "
+            f"got {schema!r}"
+        )
+
+    _validate_dataset_split_song_splits(data["song_splits"])
+    _validate_dataset_split_identity_probe(data["identity_probe"])
+    _validate_dataset_split_negative_sham_control(data["negative_sham_control"])
+    _validate_dataset_split_rule_accounting(data["design_rule_accounting"])
+
+
+# PR #325 第5巡 Codex bot レビュー指摘 Fix 7（P2, 採用）: `load_pinned_
+# dataset_split_manifest()` が消費する contract 欄の全数（5欄）を
+# 宣言する。`(field_name, accessor_method_name)` の組——
+# `accessor_method_name` は `Run9RunContract` のメソッド名（`pin_field`
+# または `intervention_take_count_field`）。モジュールレベル定数として
+# 関数外に出す理由: テスト層（`test_pin2r7_fix7_covers_exactly_the_
+# five_fields_this_loader_consumes`）が「本 loader が消費する欄の全数と
+# 過不足なく一致するか」を関数の内部実装に踏み込まず機械確認できるよう
+# にするため。
+_DATASET_LOADER_LINKED_PIN_ACCESSORS: Tuple[Tuple[str, str], ...] = (
+    ("dataset_manifest_sha", "pin_field"),
+    ("dataset_row_order_sha", "pin_field"),
+    ("practice_audio_split_manifest_sha", "pin_field"),
+    ("probe_manifest_sha", "pin_field"),
+    ("c1_sham_takes_per_founder", "intervention_take_count_field"),
+)
+
+
+def load_pinned_dataset_split_manifest(
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None, practice_manifest_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`dataset_manifest_sha`/`dataset_row_order_sha` pin の**唯一の正規
+    消費経路**（`load_pinned_probe_manifest()`/`load_pinned_seed_policy_
+    manifest()` と同型の3層防御 read-once。RUN9-L0-PIN-2）。
+
+    **信頼根境界宣言**（PIN-1 `verify_user_donor_manifest_complete()` の
+    docstring と同一の境界を踏襲する）: 本関数が保証するのは、ディスク上
+    の正典 `RUN9_CONTRACT.yaml` / `dataset_split_manifest.json` /
+    `practice_audio_split_manifest.json` の組に対する fail-closed 照合
+    までである。`RUN9_CONTRACT.yaml` の pin 群自体が RUN9 の信頼根であり、
+    本関数を含むいかなる消費関数もその根を証明しない（信頼根の完全性は
+    repo 機構の外側——branch_write_policy による書込境界宣言 + PR レビュー
+    + discipline テスト + git 履歴——で担保される宣言的信頼根であり、
+    これ以上の repo 内機械検証は自己参照になるため存在しない）。
+
+    手順（いずれかで fail-closed）:
+    (1) ディスク上の正典 `RUN9_CONTRACT.yaml`（`contract_path` 省略時は
+        `RUN9_CONTRACT_YAML_PATH`）を都度再読込し、渡された `contract` の
+        再検証済み `dataset_manifest_sha` pin 値と一致することを確認する
+        （in-process 改変・ディスク正典乖離の双方を検出——probe/seed_policy
+        と同型）
+    (2) `dataset_manifest_sha` pin 欄が PINNED であること
+    (3) `manifest_path`（省略時は `DATASET_SPLIT_MANIFEST_PATH`）の実在
+    (4) 実バイトの raw sha256 が pin 値と厳密一致すること（stale/改変を
+        検出。digest と parse は `path.read_bytes()` の同一バッファから
+        導出する read-once 契約 — TOCTOU 対策）
+    (5) JSON parse + `validate_dataset_split_manifest()` 全検証
+    (6) **cross-manifest 三者一致**（本関数固有、probe/seed_policy には
+        無い追加防御）: 本 manifest が転記する
+        `song_splits.practice_audio_split_manifest_sha` /
+        `identity_probe.probe_manifest_sha` /
+        `negative_sham_control.c1_sham_takes_per_founder` の3値が、
+        ディスク正典 `RUN9_CONTRACT.yaml` の対応する既 PINNED 値
+        （`practice_audio_split_manifest_sha`/`probe_manifest_sha`/
+        `interventions.c1_sham_takes_per_founder`）と厳密一致しない場合
+        raise する——`validate_dataset_split_manifest()` は書き込み時点の
+        凍結定数（`_DATASET_SPLIT_EXPECTED_*`）としか照合しないため、
+        将来これら3欄のいずれかが再 pin（repin）された後に本 manifest の
+        転記が追随されないまま残る「静かな陳腐化」を、消費時点でディスク
+        正典と突き合わせることで検出する
+    (7) **dataset_row_order_sha 四者一致**（AC 固有、PR #325 第1巡 Fix 1
+        で三者一致から拡張）: `dataset_row_order_sha` pin 値 /
+        `practice_audio_split_manifest.json` 実体の `row_order_sha256`
+        宣言フィールド値（practice manifest 自体は
+        `practice_audio_split_manifest_sha` pin との read-once sha256
+        照合で stale/改変検出したバイトから読む）/ 本 manifest の転記値
+        （`song_splits.row_order_sha256`）/ **`row_ids.{training,
+        validation,sealed_holdout}` の rank 順連結から `_compute_
+        canonical_pin_sha256()`（`practice_split_builder._canonical_
+        song_list_sha256()` が呼ぶのと同一の共有プリミティブ）で再計算
+        した digest** の4者が一致しない場合 raise する——再計算チェックが
+        無いと、practice split が将来再生成・repin された際に宣言値
+        `row_order_sha256` が内部的に stale なまま3ファイルの pin/転記が
+        揃って更新されるケースを三者一致だけでは検出できない（宣言値同士
+        の一致は「宣言値が正しい」ことを証明しない）
+    (8) **row_counts 実体照合**（AC 固有、PR #325 第2巡 Fix 3 で追加 —
+        Fix 1 と同族の「転記値が実体と未照合のまま四者一致の外に残って
+        いた」経路の是正）: 本 manifest の `song_splits.row_counts`
+        （`{training, validation, sealed_holdout}` の転記件数）が、
+        practice manifest 実体の `row_ids.{training,validation,
+        sealed_holdout}` の実長と厳密一致しない場合 raise する。row_order
+        の digest 一致（(7)）は「順序が一致する」ことしか保証せず、
+        「件数の転記が実体と一致する」ことは独立に保証されないため——
+        コーパス規模/配分が変わって再生成・repin された practice split に
+        対し、新しい row_ids から再計算した row_order digest が新しい
+        宣言値・転記値と揃って一致してさえいれば、(6)/(7) だけでは
+        `row_counts` が古い 70/15/15 を転記したまま残る経路を検出でき
+        ない。あわせて `row_counts` 合計と再構成 row_order の総件数の
+        一致も独立チェックする（per-split 一致が通れば数学的に自明だが、
+        fail-closed の多層防御として残す）
+    (9) **per-split digest 実体照合**（PR #325 第3巡 Fix 4 で追加 —
+        Fix 1/3 と同族の最終掃討）: practice manifest の
+        `training_split_sha256`/`validation_split_sha256`/
+        `sealed_holdout_sha256`（`validate_practice_split_manifest()` は
+        64hex 形状しか検査しない）を、対応する `row_ids.{training,
+        validation,sealed_holdout}` から `_compute_canonical_pin_
+        sha256()`（builder が呼ぶのと同一の共有プリミティブ、Fix 1 と
+        同じ import 方針・drift 不存在の論拠）で個別に再計算し、宣言値と
+        一致しない場合 raise する。
+
+        **同族ファミリーの終端宣言**: practice manifest が宣言する hash
+        系フィールドは `row_order_sha256` / `training_split_sha256` /
+        `validation_split_sha256` / `sealed_holdout_sha256` /
+        `pjs_source_archive_sha256` / `expanded_corpus_identity_sha256`
+        の6種。うち前4種は本関数が repo 内データ（`row_ids`）から再計算
+        照合済み（Fix 1/4）。残る2種（`pjs_source_archive_sha256` =
+        PJS コーパス配布 zip 全体の sha256、`expanded_corpus_identity_
+        sha256` = 展開後コーパスの識別 hash）は対象実体が PJS 公開配布物
+        （zip・展開コーパス、数百MB規模）であり repo 内に存在しない
+        （README.md「再現レシピ」節が記す取得手順でのみ入手可能）ため、
+        本関数（および repo 内のいかなる機構）からは再計算不能——これは
+        本関数の脅威モデルの範囲外であり、この2欄の正しさの検証は
+        「取得時に `sha256sum -c` で確認する」という取得手順側の職務
+        （README.md 再現レシピが担保）である。〔履歴: 本節は Fix 4 時点で
+        「本ファミリーの指摘はここで終端する」と宣言したが、PR #325 第4巡
+        Fix 5/6（下記 (10)/(11)）でさらに2件の未照合経路（決定論割当・
+        sample_inventory）が見つかり、家族の完結は下記 (11) 末尾の宣言へ
+        更新された〕
+    (10) **決定論割当の再導出照合**（PR #325 第4巡 Fix 5 で追加 —
+        Fix 1/3/4 と同族の最終層）: 上記 (6)/(7)/(9) は practice manifest
+        内の宣言 hash・件数が「その row_ids 自身」に対して内部一致する
+        ことしか検証しない——ID 和集合を保ったまま2曲を split 間で交換
+        し、交換後の状態に合わせて全 digest・件数・row_order を「正直に」
+        揃え直した改竄は (6)/(7)/(9) を全て通過し得る。`row_ids.
+        {training,validation,sealed_holdout}` の和集合から
+        `_expected_practice_split_assignment()`（`practice_split_
+        builder.assign_split()` の決定論規則——`score(song_id) =
+        sha256(f"{song_id}|{LEARNING_SEED}")` 昇順ランキング → 70/15/15
+        スライス、User 裁定 2026-08-25——を stdlib のみで局所再実装。
+        builder からの import は numpy 依存・循環 import のため不可能
+        （Fix 1 と同じ制約）——本 PR で唯一の「独立再実装」ケース、
+        drift 検出はテスト層で builder 実出力との突き合わせにより保証
+        する）で期待割当を再導出し、3リストそれぞれが順序込みで厳密
+        一致しない場合 raise する。
+    (11) **sample_inventory 再構成照合**（PR #325 第4巡 Fix 6 で追加）:
+        `validate_practice_split_manifest()` は `sample_inventory` を
+        非空・重複無しとしてしか検証しない——builder が実際に生成する
+        `f"{rank:04d}|{split}|{song_id}"`（rank は row_order 全体での
+        0始まり通し番号）という中身までは検証しない。上記 (10) で確定
+        した row_ids から re-derive した `reconstructed_row_order` を
+        用いて期待 inventory を再構成し、宣言値と順序込み完全一致しない
+        場合 raise する。
+
+        〔履歴: 本節は Fix 6 時点で「ID 和集合自体は `expanded_corpus_
+        identity_sha256` に構造的に束縛される」ため「本ファミリーの
+        指摘はここで構造的に完結する」と宣言したが、PR #325 第7巡
+        Fix 8（P2, 採用 — 正直性是正）指摘: `expanded_corpus_identity_
+        sha256` は本関数内では 64hex 形状検査しかされておらず、ID 和
+        集合との照合機構は本関数（load 時）には存在しない——「構造的に
+        束縛される」という表現は、load 時の機械検証ではなく下記 (12) が
+        正確に述べる3層（build 時/取得時/独立再現）の話を、あたかも
+        本関数自身が検証しているかのように書いてしまっていた不正確な
+        記述だった。是正後の正確な宣言は下記 (12) 末尾を参照〕
+    (12) **ID 和集合と canonical corpus の束縛境界の正直な宣言**（PR
+        #325 第7巡 Fix 8 で追加・上記 (11) の宣言を精密化）: ID 和集合
+        が「真に canonical corpus（実 PJS 100曲）由来である」ことの
+        束縛は、**load 時の機械検証ではなく**次の3層で担保される
+        （corpus 実体は repo 外に存在し、本関数は repo 内データのみで
+        検証する設計のため、load 時にこの束縛を検証する機構を発明
+        しない——第3巡 Fix 4 で宣言済みの取得時検証境界と同じ理由）:
+
+        (i) **build 時** — `build_practice_split_manifest()`
+        （`practice_split_builder.py:198`）が corpus 実体から
+        `_enumerate_pjs_song_ids()`（同:111-135）で song_id を列挙する
+        （`song_id = lab_path.stem`、対応する `pjsNNN_song.wav` が存在
+        する `.lab` に限る——同:133 `song_ids.append(lab_path.stem)`）。
+        `identity_hash != expected_corpus_identity` の fail-closed 照合
+        （同:235-241）を通過しなければ manifest 生成自体が失敗するため、
+        corpus_root 実体に存在しない song_id を宣言へ追加することは
+        構造的にできない。
+        (ii) **取得時** — README.md「再現レシピ」節が `sha256sum -c -`
+        で PJS ソース zip（`PJS_SOURCE_ARCHIVE_SHA256`）・展開後コーパス
+        （`EXPANDED_CORPUS_IDENTITY_SHA256`）を照合する。
+        (iii) **独立再現** — 同レシピで manifest バイトを再生成し、
+        `practice_audio_split_manifest_sha` pin と一致することを確認
+        （PR #323 で実際に実施・二重実証済み）。
+
+        **load 時に本関数が repo 内データのみから機械検証できるのは
+        「宣言された和集合が凍結規則・inventory・全 digest と自己整合
+        すること」（Fix 1-7）までであり、和集合が真に canonical corpus
+        由来かどうか自体は load 時には検証不能**——これは束縛ではなく
+        **sanity**（ID 形式 `^pjs\d{3}$` + 件数一致、下記実装参照）として
+        正直に区別する。`build_practice_split_manifest()` を経由しない
+        手作業での `row_ids` 改竄（指摘のシナリオ: 100 ID のうち1件を
+        任意 ID へ置換 + 全 pin/digest/inventory を自己整合させて更新）
+        は、この sanity 検査（ID 形式・件数）だけでは検出できない場合が
+        ある——形式が `pjsNNN` に一致し件数も変わらない置換（例:
+        既存の別 song_id との入れ替え）は、本関数の脅威モデルの外に
+        ある（`practice_audio_split_manifest.json` 自体をサンクション
+        された `build_practice_split_manifest()` 経由でなく直接改変する
+        攻撃者に対しては、いかなる in-process/load-time 検証も強制
+        不能——PIN-1 `load_pinned_seed_policy_manifest()` 等が既に宣言
+        する信頼根境界と同型。真の防御は PR レビュー + `branch_write_
+        policy` + git 履歴という repo 機構の外側にある）。
+
+        **再入条件**（`failure_abort_criteria.json`
+        `machine_promotion_condition` と同型の語彙）: canonical corpus
+        の song ID inventory（ID 列そのもの）が将来 repo 内 pin として
+        収載された場合、本 sanity 検査は load-time の和集合照合（真の
+        束縛）へ昇格する。
+
+    戻り値は検証済み dataset split manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    revalidated = load_run9_contract(contract.raw)
+
+    # PR #325 第5巡 Codex bot レビュー指摘 Fix 7（P2, 採用 — probe/
+    # seed_policy loader 由来の in-process 乖離検査パターンの適用漏れ）:
+    # 従来はこの乖離検査を `dataset_manifest_sha` 1 欄にしか適用しておら
+    # ず、本 loader が実際に消費する残り4欄（`dataset_row_order_sha`/
+    # `practice_audio_split_manifest_sha`/`probe_manifest_sha`/
+    # `interventions.c1_sham_takes_per_founder`）は下記コードで
+    # `disk_contract` からしか読まれていなかった——`dataset_manifest_sha`
+    # さえ一致していれば、渡された contract（`revalidated`）側でこれら
+    # 他4欄だけを in-process で独立に差し替えた改竄が検出されないまま
+    # 通過し得た（`disk_contract` の値を読むこと自体は正しいが、
+    # 「渡された contract がディスク正典から乖離していないか」という
+    # 乖離検査自体が5欄中1欄にしか及んでいなかった）。本 loader が消費
+    # する contract 欄の全数（5欄、`_DATASET_LOADER_LINKED_PIN_
+    # ACCESSORS` — モジュールレベル定数、テスト層からの網羅性確認用に
+    # 関数外へ出す）を `revalidated`/`disk_contract` 間で fail-closed
+    # 照合する——1欄でも乖離すれば raise する。
+    for linked_field_name, accessor_name in _DATASET_LOADER_LINKED_PIN_ACCESSORS:
+        disk_linked_field = getattr(disk_contract, accessor_name)(linked_field_name)
+        passed_linked_field = getattr(revalidated, accessor_name)(linked_field_name)
+        if passed_linked_field != disk_linked_field:
+            raise Run9ValidationError(
+                f"load_pinned_dataset_split_manifest(): the passed-in contract's "
+                f"{linked_field_name} pin ({passed_linked_field!r}) diverges from the canonical "
+                f"on-disk RUN9_CONTRACT.yaml pin ({disk_linked_field!r}) at "
+                f"{effective_contract_path} — an in-process Run9RunContract that disagrees with "
+                "the canonical on-disk file for any pin this loader consumes is treated as "
+                "tampering evidence and rejected fail-closed (same defense as load_pinned_probe_"
+                "manifest()/load_pinned_seed_policy_manifest(), now applied to every linked field "
+                "this loader reads, not just dataset_manifest_sha)"
+            )
+
+    disk_field = disk_contract.pin_field("dataset_manifest_sha")
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): dataset_manifest_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned dataset split manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else DATASET_SPLIT_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_dataset_split_manifest(): pinned dataset split manifest source {path} does "
+            "not exist — this function is the sole canonical access path (direct json.load() "
+            "elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（probe/seed_policy と同型のTOCTOU対策）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_dataset_split_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml dataset_manifest_sha の pin 値 ({pinned_sha!r}) と一致しない — "
+            "stale または改変された manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_dataset_split_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_dataset_split_manifest(data)
+
+    # cross-manifest 三者一致: 転記された既 PINNED 値がディスク正典と乖離していないか。
+    practice_field = disk_contract.pin_field("practice_audio_split_manifest_sha")
+    if not _is_field_pinned(practice_field):
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): practice_audio_split_manifest_sha is not PINNED "
+            "on the canonical contract — song_splits reference cannot be cross-verified"
+        )
+    transcribed_practice_sha = data["song_splits"]["practice_audio_split_manifest_sha"]
+    if transcribed_practice_sha != practice_field["value"]:
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): song_splits.practice_audio_split_manifest_sha "
+            f"transcribed in {path} ({transcribed_practice_sha!r}) diverges from the canonical "
+            f"RUN9_CONTRACT.yaml practice_audio_split_manifest_sha pin ({practice_field['value']!r}) "
+            "— stale transcription after a repin is treated as fail-closed evidence, not silently "
+            "accepted"
+        )
+
+    probe_field = disk_contract.pin_field("probe_manifest_sha")
+    if not _is_field_pinned(probe_field):
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): probe_manifest_sha is not PINNED on the "
+            "canonical contract — identity_probe reference cannot be cross-verified"
+        )
+    transcribed_probe_sha = data["identity_probe"]["probe_manifest_sha"]
+    if transcribed_probe_sha != probe_field["value"]:
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): identity_probe.probe_manifest_sha transcribed in "
+            f"{path} ({transcribed_probe_sha!r}) diverges from the canonical RUN9_CONTRACT.yaml "
+            f"probe_manifest_sha pin ({probe_field['value']!r})"
+        )
+
+    c1_field = disk_contract.intervention_take_count_field("c1_sham_takes_per_founder")
+    if not _is_field_pinned(c1_field):
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): interventions.c1_sham_takes_per_founder is not "
+            "PINNED on the canonical contract — negative_sham_control reference cannot be "
+            "cross-verified"
+        )
+    transcribed_c1_takes = data["negative_sham_control"]["c1_sham_takes_per_founder"]
+    if transcribed_c1_takes != c1_field["value"]:
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): negative_sham_control.c1_sham_takes_per_founder "
+            f"transcribed in {path} ({transcribed_c1_takes!r}) diverges from the canonical "
+            f"RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder pin ({c1_field['value']!r})"
+        )
+
+    # dataset_row_order_sha 三者一致（AC固有）。
+    row_order_field = disk_contract.pin_field("dataset_row_order_sha")
+    if not _is_field_pinned(row_order_field):
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): dataset_row_order_sha is not PINNED on the "
+            "canonical contract"
+        )
+    practice_manifest_effective_path = (
+        practice_manifest_path if practice_manifest_path is not None else PRACTICE_MANIFEST_PATH
+    )
+    if not practice_manifest_effective_path.is_file():
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): pinned practice audio split manifest source "
+            f"{practice_manifest_effective_path} does not exist — fail-closed"
+        )
+    practice_buf = practice_manifest_effective_path.read_bytes()
+    practice_actual_sha = hashlib.sha256(practice_buf).hexdigest()
+    if practice_actual_sha != practice_field["value"]:
+        raise Run9ValidationError(
+            f"load_pinned_dataset_split_manifest(): {practice_manifest_effective_path} の実バイト "
+            f"sha256 ({practice_actual_sha!r}) が RUN9_CONTRACT.yaml practice_audio_split_manifest_"
+            f"sha の pin 値 ({practice_field['value']!r}) と一致しない — stale または改変された "
+            "practice manifest は fail-closed で拒否する"
+        )
+    try:
+        practice_data = _loads_strict_json(practice_buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_dataset_split_manifest(): practice manifest JSON parse に失敗した: {exc}"
+        ) from exc
+    # PR #325 第1巡 Codex bot レビュー指摘 Fix 1（P2, 採用）: 従来はここで
+    # practice_data の宣言値 `row_order_sha256` を読むだけで、実際の順序列
+    # から digest を再計算していなかった——practice split が将来再生成・
+    # repin された際、宣言値が内部的に stale なまま3ファイルの pin/転記が
+    # 揃って更新されていれば、三者一致チェックは偽の成功を返し得た。
+    # `validate_practice_split_manifest()` で構造を確定検証したうえで、
+    # `row_ids.{training,validation,sealed_holdout}` の連結（builder の
+    # `assign_split()` が返す rank 順 row_order と同じ順序 — training を
+    # 先頭に、validation、sealed_holdout の順に連結したものが rank 順
+    # 全体列に一致する。`practice_split_builder.assign_split()`：
+    # `ranked[:n_train]`=training/`ranked[n_train:n_train+n_val]`=
+    # validation/`ranked[n_train+n_val:]`=sealed_holdout であり row_order
+    # 自体が `ranked` そのものであるため、この3スライスを同順で連結すれば
+    # 元の rank 順列に厳密復元できる）から、builder が実際に呼ぶのと**同一
+    # の共有プリミティブ** `_compute_canonical_pin_sha256()`
+    # （`practice_split_builder._canonical_song_list_sha256()` はこの関数
+    # への薄いラッパーに過ぎない——`practice_split_builder.py:277-282`
+    # 参照、read-only 確認済み）で digest を再計算する。builder を import
+    # するのではなくこの共有プリミティブを直接呼ぶ設計とした理由:
+    # (a) `practice_split_builder.py` は `import numpy as np` を
+    # トップレベルに持ち、`run9_schema.py` は標準ライブラリ + PyYAML
+    # のみを依存とする方針（Allowed Dependencies: なし）を壊す、
+    # (b) `practice_split_builder` は既に `import run9_schema as m` して
+    # おり（sibling import 規約）、逆方向 import は循環 import になる。
+    # `_compute_canonical_pin_sha256()` は builder 自身が呼ぶのと全く同じ
+    # 関数オブジェクトであるため「別実装による drift」の余地が構造的に
+    # 存在しない（コピー実装ではなく同一関数の共有呼び出し）。
+    validate_practice_split_manifest(practice_data)
+
+    # PR #325 第3巡 Codex bot レビュー指摘 Fix 4（P2, 採用 — Fix 1/3 と
+    # 同族: practice manifest 内の per-split digest 3つが 64hex 形状検査
+    # のみで再計算されていない新経路）: `validate_practice_split_
+    # manifest()` は `training_split_sha256`/`validation_split_sha256`/
+    # `sealed_holdout_sha256` を `_require_manifest_hash_fields()` 経由で
+    # 64hex 文字列であることしか検査しない（`_PRACTICE_MANIFEST_SHA256_
+    # KEYS` 参照）——row_order_sha256 と同じ「宣言値が内部的に stale なま
+    # ま repin される」経路がこの3欄にも独立に存在する。builder
+    # （`practice_split_builder.py:256-258`、read-only 確認済み）は
+    # `training_split_sha256 = _canonical_song_list_sha256(split
+    # ["training"])`（validation/sealed_holdout も同型、対象は連結列では
+    # なく各 split の row_ids リストそのもの）と定義しており、Fix 1 と
+    # 同一の共有プリミティブ `_compute_canonical_pin_sha256()` を各 split
+    # 単独へ適用するだけで済む（Fix 1 の docstring が既に述べた import
+    # 方針・drift 不存在の論拠をそのまま踏襲——別実装ではなく同一関数の
+    # 追加呼び出し）。
+    _PRACTICE_SPLIT_DIGEST_FIELD_BY_NAME: Dict[str, str] = {
+        "training": "training_split_sha256",
+        "validation": "validation_split_sha256",
+        "sealed_holdout": "sealed_holdout_sha256",
+    }
+    for split_name, digest_field in _PRACTICE_SPLIT_DIGEST_FIELD_BY_NAME.items():
+        declared_digest = practice_data.get(digest_field)
+        recomputed_digest = _compute_canonical_pin_sha256(
+            list(practice_data["row_ids"][split_name])
+        )
+        if recomputed_digest != declared_digest:
+            raise Run9ValidationError(
+                f"load_pinned_dataset_split_manifest(): practice manifest の {digest_field} 宣言値 "
+                f"({declared_digest!r}) が row_ids.{split_name} から再計算した digest "
+                f"({recomputed_digest!r}) と一致しない — 宣言値が内部的に stale（practice split の "
+                "再生成後に repin されずに残った可能性）である証拠として fail-closed で拒否する"
+            )
+
+    # PR #325 第2巡 Codex bot レビュー指摘 Fix 3（P2, 採用 — Fix 1 と
+    # 同族: 転記値が実体と未照合のまま四者一致の外に残っていた新経路）:
+    # 従来は `song_splits.row_counts`（70/15/15 の転記値）を practice
+    # manifest の実 `row_ids` 各split長と一切照合していなかった——
+    # practice split が異なるコーパス規模/配分で将来再生成・repin された
+    # 場合、row_order_sha256 の四者一致さえ揃えば（新しい row_ids から
+    # 再計算した digest が新しい宣言値・転記値と一致してさえいれば）本
+    # manifest は古い 70/15/15 を転記したまま通過し得た——row_order の
+    # digest 一致は「順序が一致する」ことしか保証せず、「件数の転記が
+    # 実体と一致する」ことは独立に保証されない。
+    actual_split_counts = {
+        "training": len(practice_data["row_ids"]["training"]),
+        "validation": len(practice_data["row_ids"]["validation"]),
+        "sealed_holdout": len(practice_data["row_ids"]["sealed_holdout"]),
+    }
+    transcribed_row_counts = data["song_splits"]["row_counts"]
+    if actual_split_counts != dict(transcribed_row_counts):
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): song_splits.row_counts の転記値 "
+            f"({transcribed_row_counts!r}) が practice manifest 実体の row_ids 各split長 "
+            f"({actual_split_counts!r}) と一致しない — stale な転記（practice split の再生成後に "
+            "追随されなかった件数記述）は fail-closed で拒否する"
+        )
+
+    reconstructed_row_order = (
+        list(practice_data["row_ids"]["training"])
+        + list(practice_data["row_ids"]["validation"])
+        + list(practice_data["row_ids"]["sealed_holdout"])
+    )
+    # 合計件数の一致（row_counts 各split値の総和 == 再計算 row_order の
+    # 入力列長）。上記 per-split 照合が通れば数学的に自明に成立するが、
+    # コーパス規模変化を「合計 100 相当」という粒度でも明示的に確認する
+    # 独立チェックとして残す（fail-closed の多層防御）。
+    if sum(transcribed_row_counts.values()) != len(reconstructed_row_order):
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): song_splits.row_counts の合計 "
+            f"({sum(transcribed_row_counts.values())}) が再構成した row_order の総件数 "
+            f"({len(reconstructed_row_order)}) と一致しない"
+        )
+    recomputed_row_order_sha256 = _compute_canonical_pin_sha256(reconstructed_row_order)
+    practice_row_order_sha256 = practice_data.get("row_order_sha256")
+    if recomputed_row_order_sha256 != practice_row_order_sha256:
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): practice manifest の row_order_sha256 宣言値 "
+            f"({practice_row_order_sha256!r}) が row_ids（training+validation+sealed_holdout の "
+            f"rank 順連結）から再計算した digest ({recomputed_row_order_sha256!r}) と一致しない — "
+            "宣言値が内部的に stale（practice split の再生成後に repin されずに残った可能性）である "
+            "証拠として fail-closed で拒否する"
+        )
+    transcribed_row_order_sha256 = data["song_splits"]["row_order_sha256"]
+    if not (
+        row_order_field["value"]
+        == practice_row_order_sha256
+        == transcribed_row_order_sha256
+        == recomputed_row_order_sha256
+    ):
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): dataset_row_order_sha 不一致 — contract "
+            f"pin={row_order_field['value']!r}, practice manifest 宣言値="
+            f"{practice_row_order_sha256!r}, dataset manifest 転記 song_splits.row_order_sha256="
+            f"{transcribed_row_order_sha256!r}, row_ids からの再計算値="
+            f"{recomputed_row_order_sha256!r}"
+        )
+
+    # PR #325 第7巡 Codex bot レビュー指摘 Fix 8（P2, 採用 — 正直性是正）:
+    # docstring (12) が正直に区別するとおり、これは束縛（binding）では
+    # なく sanity 検査——ID 和集合が真に canonical corpus 由来であること
+    # の検証ではなく、明らかに規約外な値（`_enumerate_pjs_song_ids()` の
+    # 列挙規約に反する形式・現行 pin 世代の canonical N と異なる件数）を
+    # 弾く最低限の防御に過ぎない。重複無しは Fix 4 までの
+    # `validate_practice_split_manifest()`（`_require_disjoint_row_id_
+    # sets()`）が既に強制済みのためここでは再検査しない。
+    invalid_format_song_ids = sorted(
+        song_id for song_id in reconstructed_row_order
+        if not _PIN2_PRACTICE_SONG_ID_RE.match(song_id)
+    )
+    if invalid_format_song_ids:
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): row_ids の和集合に "
+            "_enumerate_pjs_song_ids() の列挙規約（song_id は .lab ファイルの stem、"
+            f"^pjs\\d{{3}}$ 形式）に反する ID がある（sanity 検査——corpus 実体との真の束縛では "
+            f"ない。真の束縛は build_practice_split_manifest() の identity 照合が担う）: "
+            f"{invalid_format_song_ids!r}"
+        )
+    _expected_song_count = sum(_DATASET_SPLIT_EXPECTED_ROW_COUNTS.values())
+    if len(reconstructed_row_order) != _expected_song_count:
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): row_ids の和集合の件数 "
+            f"({len(reconstructed_row_order)}) が現行 pin 世代の canonical N "
+            f"({_expected_song_count}) と一致しない（sanity 検査）"
+        )
+
+    # PR #325 第4巡 Codex bot レビュー指摘 Fix 5（P2, 採用 — Fix 1/3/4 と
+    # 同族の最終層）: ここまでの Fix 1/3/4 は practice manifest 内の宣言
+    # hash・件数が「その row_ids 自身」に対して内部一致することしか検証
+    # しない——row_ids 3リストの中身そのものが決定論規則
+    # （`_expected_practice_split_assignment()`）に従った「あり得る」
+    # 割当であることまでは検証していなかった。ID 和集合を全て正しく
+    # 保ったまま2曲を split 間で交換し、交換後の状態に合わせて全 digest・
+    # 件数・row_order を「正直に」揃え直した改竄は、Fix 1/3/4 の全チェック
+    # を通過し得る——row_ids 自体が凍結規則からの逸脱であることは、
+    # 規則を再実行して初めて検出できる。`row_ids.{training,validation,
+    # sealed_holdout}` の和集合（Fix 4 までの検証で重複無し・disjoint な
+    # 分割であることは確定済み）から `_expected_practice_split_
+    # assignment()` で期待割当を再導出し、3リストそれぞれが順序込みで
+    # 厳密一致することを要求する。
+    expected_assignment = _expected_practice_split_assignment(reconstructed_row_order)
+    for split_name in ("training", "validation", "sealed_holdout"):
+        declared_split_list = list(practice_data["row_ids"][split_name])
+        if declared_split_list != expected_assignment[split_name]:
+            raise Run9ValidationError(
+                f"load_pinned_dataset_split_manifest(): practice manifest の row_ids.{split_name} "
+                f"（{declared_split_list!r}）が、ID 和集合から凍結規則（score(song_id) = "
+                "sha256(f\"{song_id}|{LEARNING_SEED}\") 昇順ランキング → 70/15/15 スライス、User 裁定 "
+                f"2026-08-25）で再導出した期待割当（{expected_assignment[split_name]!r}）と一致しない "
+                "— 全 digest/件数/row_order が自己整合していても、決定論規則が実際に生成し得ない割当は "
+                "fail-closed で拒否する"
+            )
+
+    # PR #325 第4巡 Codex bot レビュー指摘 Fix 6（P2, 採用）: `validate_
+    # practice_split_manifest()` は `sample_inventory` を非空・重複無し
+    # としてしか検証しない——builder（`practice_split_builder.py:249-250`、
+    # read-only 確認済み）が実際に生成する `f"{rank:04d}|{split}|
+    # {song_id}"`（rank は row_order 全体での0始まり通し番号、0埋め4桁）
+    # という中身までは検証していなかった。曲除去等で row_ids が更新されて
+    # も sample_inventory が追随しなければ、削除済み曲や誤った split
+    # ラベルを含む陳腐化した canonical inventory が pin を通過し得る。
+    # 上記 Fix 5 で確定した `reconstructed_row_order`（training→
+    # validation→sealed_holdout の rank 順連結、Fix 1 参照）から
+    # split_of_song を導出し、期待 inventory を再構成して順序込み完全
+    # 一致を要求する。
+    split_of_song: Dict[str, str] = {}
+    for split_name in ("training", "validation", "sealed_holdout"):
+        for song_id in practice_data["row_ids"][split_name]:
+            split_of_song[song_id] = split_name
+    expected_sample_inventory = [
+        f"{rank:04d}|{split_of_song[song_id]}|{song_id}"
+        for rank, song_id in enumerate(reconstructed_row_order)
+    ]
+    declared_sample_inventory = list(practice_data.get("sample_inventory", []))
+    if expected_sample_inventory != declared_sample_inventory:
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): practice manifest の sample_inventory 宣言値が、"
+            "row_ids から再構成した期待 inventory（rank|split|song_id 形式、rank は row_order 全体で"
+            "の0始まり通し番号）と順序込みで一致しない — row_ids 更新後に inventory が追随しなかった "
+            "陳腐化を fail-closed で拒否する"
+        )
+
+    return data

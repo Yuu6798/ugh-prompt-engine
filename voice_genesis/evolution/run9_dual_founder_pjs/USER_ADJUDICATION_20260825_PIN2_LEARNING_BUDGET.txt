@@ -1,0 +1,105 @@
+RUN9 User裁定 — PIN-2 前提（learning recipe 予算・config_sha 定義）
+作成日: 2026-08-25 JST
+受領経路: User との対話（Design Memo RUN9-L0-PIN-2 起草に先立ち、
+session scratchpad（scratchpad/run9_user_adjudication_pin2.md）へ
+Fable が記録し、以後の実装・レビューが参照する正本として本ファイルへ
+repo 内収載した）
+対象: RUN9_CONTRACT.yaml の learning_recipe_sha / config_sha の reason、
+run9_schema.validate_learning_recipe_manifest() が機械強制する
+trial_count / render_budget / stopping_rule の3値
+状態: User Adjudication（逐語・一字一句改変禁止）
+
+================================================================
+0. この文書の位置づけ
+================================================================
+
+本書は User が 2026-08-25 に下した裁定の逐語全文を repo 内へ収載した
+ものである。POR_CONCEPT_ADJUDICATION_20260824.txt と同じ前例
+（外部裁定を repo 内の凍結文書として保持し、以後の実装・レビューが
+参照する正本とする）に倣う。
+
+RUN9-L0-PIN-2（PR #325）が validate_learning_recipe_manifest() へ
+機械強制として組み込んだ trial_count=32 / render_budget=128
+logical_render_units per Founder / stopping_rule=
+"FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP" の3値、および
+config_sha の定義訂正（config_sha ≠ learning_recipe_sha、対象は
+inputs/run9_execution_config.yaml）は、すべて本書の逐語からの転記で
+あり、Claude Code が新規に発明した値ではない
+（Codex bot レビュー PR #325 第1巡指摘 Fix 2, P2, 採用 —
+転記元の scratchpad ファイルが repo に存在せず、将来のレビュアーが
+「User 転記であって発明でない」ことを検証できないという指摘への
+是正。以後 run9_schema.py の docstring・RUN9_CONTRACT.yaml の
+learning_recipe_sha/config_sha reason は本ファイルを一次引用元として
+参照する）。
+
+以下は起草時の作業メモ scratchpad/run9_user_adjudication_pin2.md の
+本文を一字一句そのまま転記する（改変禁止）。
+
+================================================================
+1. 本文（逐語、一字一句改変禁止）
+================================================================
+
+【RUN9 User裁定 — PIN-2 前提】
+
+1. config_sha の意味
+
+config_sha は learning_recipe_sha と同一ファイルを指さない。
+
+learning_recipe_sha:
+PRACTICE_FROM_AUDIO / TRANSFER_TECHNIQUE の学習・探索手続きそのものを
+凍結する正本。
+
+config_sha:
+RUN9 の実行時配線を確定する runtime orchestration config
+`inputs/run9_execution_config.yaml` の raw byte sha256 とする。
+
+execution config は各既存 pin / manifest / recipe を参照して束ねる。
+trial_count、render_budget、stopping_rule 等の学習意味論を
+config側で重複定義してはならない。
+
+
+2. learning recipe 初期予算
+
+PRACTICE_FROM_AUDIO:
+  trial_count: 32
+  render_budget: 128 logical_render_units per Founder
+
+TRANSFER_TECHNIQUE:
+  trial_count: 32
+  render_budget: 128 logical_render_units per Founder
+
+R9F-01 / R9F-02には各arm内で完全に同一の予算・候補生成規則・
+探索空間・評価器・停止規則を適用する。
+
+PRACTICEとEDUCATION間についても本RUN9では探索機会を揃えるため
+同じtrial/render予算を採用する。
+ただし入力情報境界の非対称性は実験変数として維持する。
+
+
+3. stopping rule
+
+FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP
+
+gain成立・非成立を理由に途中終了しない。
+32 trialsを原則最後まで消化する。
+
+rights/provenance違反、immutable領域への書込企図、
+非有限値、renderer/runtime failure、contract違反等の
+Hard Failureのみ途中停止を許す。
+
+NO_GAINは停止理由ではなく科学結果として記録する。
+
+
+4. render_budget の単位
+
+1 logical_render_unit =
+1 Founderについて、凍結済み評価単位1件の音声renderを1回要求すること。
+
+cache hitでも1 unitとして計上する。
+
+128 unitsはlearning/search loop専用とし、
+Birth baseline / C0 / C1 / validation / sealed holdout の
+固定評価renderは別予算とする。
+
+同一attempt内で結果を見てtrial_countまたはrender_budgetを追加してはならない。
+不足と判断した場合は現attemptを凍結し、新design revisionで予算を再裁定する。

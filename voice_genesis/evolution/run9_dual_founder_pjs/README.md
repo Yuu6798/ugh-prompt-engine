@@ -890,14 +890,78 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   `PENDING` マーカーを要求する——`measurement_spec_sha` を PINNED にすると
   この既存 PINNED 正典と矛盾した状態になる。是正は pin を PENDING へ
   戻すことのみで解消し、probe manifest / `gate_state()` 本体は無改変〕
-- **`gate_state()` は依然 `BLOCKED`**（`attempt_id`/`repository_commit_sha`/
-  `dataset_manifest_sha`/`dataset_row_order_sha`/`config_sha`/
-  `dependency_pins_sha`/`execution_profile_sha`/`expected_speaker_map_sha`/
+- **`gate_state()` は依然 `BLOCKED`**〔履歴: RUN9-L0-PIN-1 直後は
+  `dataset_manifest_sha`/`dataset_row_order_sha` を含む pre-run 必須12欄が
+  PENDING（optional 込み総 PENDING 13欄）だったが、RUN9-L0-PIN-2
+  （2026-08-26）で dataset_manifest_sha/dataset_row_order_sha の2欄が
+  PINNED 化され、残 PENDING は下記のとおり10欄（総11欄）へ減少した——
+  下記「解消済み（RUN9-L0-PIN-2, 2026-08-26）」節参照〕（`attempt_id`/
+  `repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
+  `execution_profile_sha`/`expected_speaker_map_sha`/
   `education_technique_lesson_manifest_sha`/`learning_recipe_sha`/
-  `measurement_spec_sha`/`hypothesis_algebra_sha` の pre-run 必須12欄が
+  `measurement_spec_sha`/`hypothesis_algebra_sha` の pre-run 必須10欄が
   引き続き PENDING のため（optional の `human_evaluation_protocol_sha` を
-  含めると総 PENDING 13欄）——`tests/test_run9_contract.py` の回帰テストで
+  含めると総 PENDING 11欄）——`tests/test_run9_contract.py` の回帰テストで
   機械確認済み）。
+
+**解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
+- ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →
+  [`inputs/dataset_split_manifest.json`](./inputs/dataset_split_manifest.json)
+  （schema `run9-dataset-split-manifest/1.0`）を新設した——DESIGN_RUN9
+  §12（574-595行）の5分割語彙（TRAIN/VALIDATION/SEALED HOLDOUT/IDENTITY
+  PROBE/NEGATIVE・SHAM CONTROL）を既存 PINNED 機構へ写像する会計文書。
+  `song_splits` 節は TRAIN/VALIDATION/SEALED HOLDOUT が既 PINNED
+  `practice_audio_split_manifest.json`（training 70/validation 15/
+  sealed_holdout 15）を正本のまま参照する宣言のみ（row_ids/
+  sample_inventory は重複再掲しない）。`identity_probe`/
+  `negative_sham_control` 節は IDENTITY PROBE/NEGATIVE・SHAM CONTROL が
+  PJS song ベースの独立 split としては実装されていないこと（既 PINNED
+  practice split が PJS 100曲全数を3分割で使い切っており、新規4/5分割目
+  を確保する余地が構造的に存在しない）を正直に会計したうえで、代わりに
+  既 PINNED の `evaluation/probe_manifest.json` P0 cell（Neutral Identity
+  Probe）/ `RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder`
+  （C1 = ZERO_CONTROLPROFILE_SHAM 条件、20 takes）がそれぞれの役割を
+  既に担っているという `NON_SONG_SPLIT` 実装区分を宣言する（既 PINNED
+  正典の既存決定を DESIGN §12 語彙のもとで追認するのみ、新規 split・
+  新規 probe は発明しない）。`design_rule_accounting` 節は DESIGN §12
+  規則1-7それぞれをどの PINNED 機構が満たすかを対応表として収載し、
+  規則3（pitch range/phrase length/phoneme class の記録）は
+  `NOT_RECORDED` のまま正直に会計する——音響 inventory sidecar
+  （`build_acoustic_inventory_sidecar()`）は advisory・環境依存 float の
+  ため生成を見送り済み（PR #321 review でこの sidecar builder が導入
+  され、PR #323 review 第3巡でこの見送りの scoped 例外が是正・確定した
+  経緯を継承 — 上記「解消済み（実 PJS practice split 実行, 2026-08-25）」
+  節参照）であり、数値を本 PR で新規に発明しない。
+  `run9_schema.validate_dataset_split_manifest()`（構造検証）+
+  `load_pinned_dataset_split_manifest()`（probe manifest と同型の3層
+  防御 read-once + 本欄固有の cross-manifest 三者一致——転記された
+  practice sha/probe manifest sha/c1 take 数がディスク正典
+  `RUN9_CONTRACT.yaml` の各 PINNED 値と一致しない場合 fail-closed 拒否）
+  を新設し、`RUN9_CONTRACT.yaml` `dataset_manifest_sha` を同ファイルの
+  実バイト sha256 で **PINNED** 化した。`dataset_row_order_sha` は
+  `practice_audio_split_manifest.json` の `row_order_sha256` と同値で
+  **PINNED** 化し、「contract pin == practice manifest 実体の
+  row_order_sha256 == dataset split manifest 内の転記値」の三者一致を
+  `load_pinned_dataset_split_manifest()` が消費時点で fail-closed 照合
+  する。
+- ~~`learning_recipe_sha` の trial_count/render_budget/stopping_rule が
+  未確定~~（一部解消——manifest 実体の生成自体は VG-L0 ハーネス実装待ちの
+  ため本欄は引き続き `PENDING`）→ User 裁定 2026-08-25（trial_count=32・
+  render_budget=128 logical_render_units per Founder・stopping_rule=
+  `FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP`・両 arm 共通予算）を
+  `run9_schema.validate_learning_recipe_manifest()`
+  （`_validate_learning_recipe_arm()`）へ機械強制として組み込んだ——
+  `_LEARNING_RECIPE_ARM_KEYS` 9キーのうち4キー
+  （`equal_budget_within_arm`/`trial_count`/`render_budget`/
+  `stopping_rule`）は裁定値が確定し validator が fail-closed 強制する。
+  残る5キー（`search_space`/`candidate_generation`/`evaluator`/
+  `compute_budget`/`data_binding`）は rev 0.3 改訂8のまま VG-L0 ハーネス
+  Memo（RUN9-L0-HARNESS-1）の設計対象。`RUN9_CONTRACT.yaml`
+  `learning_recipe_sha`/`expected_speaker_map_sha`/`config_sha` の reason
+  も、旧文言の混同・誤記（config_sha と learning_recipe_sha の混同、
+  expected_speaker_map_sha が af0 の backbone 側構造的ギャップに触れて
+  いなかった点）を是正した（旧文言は〔履歴〕として保持、repin 履歴は
+  append-only）。
 
 **再現レシピ（逐語・実行可能、Codex bot レビュー PR #323 第5巡指摘, P2,
 採用, Fix 5）**: fresh checkout の読者が上記 PINNED バイトを実際に再生成
@@ -1282,7 +1346,16 @@ pin 済みバイトを実際に作った実装を特定・再実行できない�
    `run9_schema.PRACTICE_MANIFEST_REQUIRED_KEYS`/
    `EDUCATION_MANIFEST_REQUIRED_KEYS`/`validate_practice_split_
    manifest()`/`validate_education_lesson_manifest()`/
-   `validate_learning_recipe_manifest()` が凍結済み。
+   `validate_learning_recipe_manifest()` が凍結済み。RUN9-L0-PIN-2
+   （2026-08-26, User 裁定 2026-08-25）で `_LEARNING_RECIPE_ARM_KEYS` 9キー
+   のうち4キー（`equal_budget_within_arm`/`trial_count`=32/
+   `render_budget`=128 logical_render_units per Founder/`stopping_rule`=
+   `FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP`）の値が確定し
+   validator が fail-closed 機械強制するようになった——残る5キー
+   （`search_space`/`candidate_generation`/`evaluator`/`compute_budget`/
+   `data_binding`）は VG-L0 ハーネス Memo（RUN9-L0-HARNESS-1）の設計対象
+   のまま。manifest 実体の生成（build）自体は引き続き VG-L0 ハーネス
+   実装待ちのため、本欄は `PENDING` のまま不変。
 4. **education builder 未実装 / practice builder は実 PJS 実行まで完了**
    （RUN9-BIRTH-PREP-1 で配線 → 2026-08-25 実 PJS 実行で更新）: 情報境界
    （`run9_schema.PRACTICE_FORBIDDEN_INPUTS` /
