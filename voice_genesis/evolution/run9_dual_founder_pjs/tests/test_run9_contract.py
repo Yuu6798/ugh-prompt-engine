@@ -13555,12 +13555,19 @@ def test_harness1_tar_gz_ledger_nonempty_and_well_formed() -> None:
 
 
 def test_harness1_tar_gz_ledger_stale_miss_consistency_fail_closed() -> None:
-    """tar member ledger に acoustic export companion と同名 basename が
+    """tar member ledger に acoustic export companion と同名 basename +
+    同一 digest（PR #326 第5巡 Fix 12 以降、basename だけでは足りない）が
     紛れ込んだのに acoustic_export_companions.status が
     NOT_OBTAINED_TARBALL_MISS のままだと fail-closed 拒否する（将来
     tar.gz が repin されて中身が変わった際の drift 検出）。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    _append_tar_member(data, path="onnx_gate_40000/acoustic.onnx", size_bytes=1234, sha256="a" * 64)
+    expected_sha = next(
+        item["expected_sha256"] for item in data["acoustic_export_companions"]["expected_items"]
+        if item["logical_name"] == "acoustic_onnx"
+    )
+    _append_tar_member(
+        data, path="onnx_gate_40000/acoustic.onnx", size_bytes=1234, sha256=expected_sha,
+    )
     with pytest.raises(m.Run9ValidationError, match="stale-miss inconsistency"):
         m.validate_dependency_pins_manifest(data)
 
@@ -14058,11 +14065,18 @@ def test_harness1_pr326_fix6_duplicate_with_all_four_names_still_rejected() -> N
 
 def test_harness1_pr326_fix4_not_obtained_still_rejects_matching_tar_member() -> None:
     """companion_status が NOT_OBTAINED_TARBALL_MISS のままなら、旧来
-    どおり companion basename と一致する tar member の混入は
-    stale-miss inconsistency として拒否される（Fix 4 は分岐を追加した
-    だけで、NOT_OBTAINED 側の既存挙動は不変であることの回帰確認）。"""
+    どおり companion basename + digest の両方が一致する tar member の
+    混入は stale-miss inconsistency として拒否される（Fix 4 は分岐を
+    追加しただけで、NOT_OBTAINED 側の既存挙動は Fix 12 の digest 限定化
+    後も本質的に不変であることの回帰確認）。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    _append_tar_member(data, path="onnx_gate_40000/acoustic.onnx", size_bytes=1234, sha256="a" * 64)
+    expected_sha = next(
+        item["expected_sha256"] for item in data["acoustic_export_companions"]["expected_items"]
+        if item["logical_name"] == "acoustic_onnx"
+    )
+    _append_tar_member(
+        data, path="onnx_gate_40000/acoustic.onnx", size_bytes=1234, sha256=expected_sha,
+    )
     with pytest.raises(m.Run9ValidationError, match="stale-miss inconsistency"):
         m.validate_dependency_pins_manifest(data)
 
@@ -14400,3 +14414,131 @@ def test_harness1_pr326_fix10_real_manifest_reread_verification_is_exact_match()
     assert integrity["archive_sha256"] == (
         data["acoustic_export_companions"]["attempted_source"]["actual_sha256"]
     )
+
+
+# ---------------------------------------------------------------------------
+# PR #326 第5巡 Codex bot レビュー Fix 12/13（P2 ×2, 採用, 2026-08-26）:
+# MISS 矛盾判定を digest 一致に限定 / claim_scope の PENDING 主表明化。
+# 正負テスト。
+# ---------------------------------------------------------------------------
+
+
+def test_harness1_pr326_fix12_same_basename_different_digest_not_flagged() -> None:
+    """companion basename と同名だが digest が異なる（＝無関係の別
+    ファイル）tar member が混入しても NOT_OBTAINED_TARBALL_MISS は
+    受理される（旧実装は basename だけで矛盾を発火させ、この正当な
+    ケースを偽ブロックしていた）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _append_tar_member(
+        data, path="onnx_gate_40000/acoustic.onnx", size_bytes=999, sha256="9" * 64,
+    )
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix12_same_basename_same_digest_still_flagged() -> None:
+    """basename + digest の両方が一致する member が混入した場合は、
+    引き続き stale-miss inconsistency として拒否される（Fix 12 は
+    matching 条件を絞っただけで、真の矛盾検出能力は失っていない）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    expected_sha = next(
+        item["expected_sha256"] for item in data["acoustic_export_companions"]["expected_items"]
+        if item["logical_name"] == "acoustic_dsconfig_yaml"
+    )
+    _append_tar_member(
+        data, path="onnx_gate_40000/dsconfig.yaml", size_bytes=42, sha256=expected_sha,
+    )
+    with pytest.raises(m.Run9ValidationError, match="stale-miss inconsistency"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix12_multiple_unrelated_same_basename_members_not_flagged() -> None:
+    """同名 basename の無関係ファイルが複数混入しても（いずれも digest
+    不一致）拒否されない（found_basename_shas がリストで複数値を保持
+    する経路の回帰確認）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _append_tar_member(
+        data, path="a/acoustic.onnx", size_bytes=10, sha256="1" * 64,
+    )
+    _append_tar_member(
+        data, path="b/acoustic.onnx", size_bytes=20, sha256="2" * 64,
+    )
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix13_claim_scope_statement_leads_with_pending() -> None:
+    """claim_scope.statement が PENDING 主表明マーカーを先頭付近
+    （80文字以内）に持つことの回帰確認（実測台帳そのもの）。"""
+    data = _dependency_pins_manifest_data()
+    statement = data["claim_scope"]["statement"]
+    offset = statement.find(m._CLAIM_SCOPE_PENDING_MARKER)
+    assert 0 <= offset <= m._CLAIM_SCOPE_PENDING_MARKER_MAX_OFFSET
+
+
+def test_harness1_pr326_fix13_pending_marker_missing_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["claim_scope"]["statement"] = "この manifest は完全に信頼できる。"
+    with pytest.raises(m.Run9ValidationError, match="must state the current PENDING status"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix13_pending_marker_buried_at_end_rejected() -> None:
+    """PENDING マーカーが末尾遠くに追記されただけ（旧実装の症状そのもの
+    ——先頭は PINNED 前提の文言）だと拒否される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["claim_scope"]["statement"] = (
+        "本 manifest が PINNED 判定を通じて主張するのは、以下の記録が"
+        "すべて正確であるという2点のみである。" + " " * 60 +
+        "追記: 実は現在 PENDING である。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="must state the current PENDING status"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix13_historical_generations_separated() -> None:
+    """旧 PINNED 世代（第1-2世代）への言及が、statement 本文ではなく
+    独立フィールド historical_pinned_generations に分離されていること。"""
+    data = _dependency_pins_manifest_data()
+    historical = data["claim_scope"]["historical_pinned_generations"]
+    generations = historical["generations"]
+    assert {g["generation"] for g in generations} == {1, 2}
+    for g in generations:
+        assert g["status_at_time"] == "PINNED"
+        assert m._SHA256_HEX_RE.match(g["sha256"])
+    # statement 本文自体に第1-2世代への言及（「第1世代」等）が残っていない
+    # こと——分離が名目だけでないことの確認。
+    assert "第1世代" not in data["claim_scope"]["statement"]
+    assert "第2世代" not in data["claim_scope"]["statement"]
+
+
+def test_harness1_pr326_fix13_claim_scope_unknown_key_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["claim_scope"]["unexpected_field"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix13_historical_generations_duplicate_number_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    gens = data["claim_scope"]["historical_pinned_generations"]["generations"]
+    dup = copy.deepcopy(gens[0])
+    dup["generation"] = gens[1]["generation"]
+    data["claim_scope"]["historical_pinned_generations"]["generations"].append(dup)
+    with pytest.raises(m.Run9ValidationError, match="duplicate generation"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix13_historical_generations_bad_status_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["claim_scope"]["historical_pinned_generations"]["generations"][0]["status_at_time"] = (
+        "PENDING"
+    )
+    with pytest.raises(m.Run9ValidationError, match="status_at_time must be one of"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix13_claim_scope_without_historical_field_still_valid() -> None:
+    """historical_pinned_generations は optional——省略しても statement/
+    rationale さえ揃っていれば通る（過剰拒否でないことの確認）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    del data["claim_scope"]["historical_pinned_generations"]
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認

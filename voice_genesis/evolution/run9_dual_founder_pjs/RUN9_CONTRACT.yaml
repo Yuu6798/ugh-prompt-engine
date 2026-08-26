@@ -541,8 +541,30 @@ config_sha:
 # pin として収載されたら load-time 完全束縛へ昇格）。Fix 11
 # `HARNESS1_PROVISION_RECORD.md` の検証節を「歴史値 + 最新値」の二層
 # 表記へ改めた（詳細は同ファイル参照、本欄には影響しない）。実測済みの
-# sha256（Fix 10 対応後の最新実バイト）は情報記録として保持する:
+# sha256（Fix 10 対応後の実バイト）は情報記録として保持していた:
 # "e8120a77a9b49ad5aa11ab7f9a92d8ee7eea33a1accb7cdbe533a94587271404"
+#
+# 2026-08-26 情報記録更新（PR #326 第5巡 Codex bot レビュー2件、P2×2、
+# いずれも採用。pin 欄自体は PENDING のまま、repin ではなく情報記録の
+# 更新）: Fix 12 `NOT_OBTAINED_TARBALL_MISS` 側の tar member 矛盾判定を
+# 「basename 一致 かつ sha256 == expected_sha256」の両立時のみに限定
+# した（旧実装は basename 一致だけで発火しており、将来の tarball に
+# 同名だが別バイトの無関係ファイル——例: 別由来の dsconfig.yaml——が
+# 混入すると、正直な NOT_OBTAINED_TARBALL_MISS 記録が偽ブロックされ
+# 得た）。Fix 13 `inputs/dependency_pins_manifest.json` の
+# `claim_scope.statement` を全面改訂した——旧文は「本 manifest が
+# PINNED 判定を通じて主張するのは...」という PINNED 前提の書き出しの
+# まま残っており、`dependency_pins_sha` の PENDING 差し戻し（本欄
+# 2026-08-26 記載の第2巡 Fix 3）後の訂正が文末への追記に留まっていた
+# ため、偽の完了主張が先頭に居座っていた。新 statement は「
+# `dependency_pins_sha` は現在 PENDING である」ことを主表明として書き
+# 出す文へ改め、旧 PINNED 世代（第1-2世代）への言及は新設フィールド
+# `claim_scope.historical_pinned_generations`（明示的な historical 節）
+# へ分離した。validator（`_validate_claim_scope()`）は PENDING 主表明
+# マーカーが statement の先頭付近（80文字以内）に存在することを機械
+# 強制する——文末への追記だけでは通らない。実測済みの sha256（Fix 12/13
+# 対応後の最新実バイト）は情報記録として保持する:
+# "06426625792af6649f7b479110cb0c89f7f25205d13664d79398f43e1eea883d"
 dependency_pins_sha:
   value: null
   status: PENDING

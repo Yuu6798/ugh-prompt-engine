@@ -403,6 +403,42 @@ pin 欄（`dependency_pins_sha`）自体は引き続き PENDING——manifest �
 companions 未取得」という結論は変わらない）。既存 pin は無変更を確認
 済み。
 
+### 5-5. PR #326 第5巡 Codex bot レビュー対応（2026-08-26、P2×2、全2件
+採用）
+
+**Fix 12（P2）——MISS 矛盾判定を digest 一致に限定**: 指摘は正当——
+`NOT_OBTAINED_TARBALL_MISS` の矛盾検出が basename 一致だけで発火して
+いたため、将来の tarball に同名だが別バイトの無関係ファイル（例: 別
+由来の `dsconfig.yaml`）が混入すると、正直な MISS 記録が偽ブロック
+されうる欠陥だった。対応: 矛盾判定を「basename 一致 かつ sha256 ==
+expected_sha256」の両立時のみに限定した——各 companion item は既に
+`expected_sha256` を保持しているため、identity（basename）と
+digest（sha256）の両方が一致して初めて「この companion が実は tarball
+内に存在した」証拠になる。basename のみ一致し digest が異なる member
+は record 上、追加の注記を要しない単なる無関係ファイルとして扱う
+（`tar_gz_full_member_ledger` 自体がその member 自身の sha256 を既に
+記録しているため）——この設計判断を `validate_dependency_pins_
+manifest()` docstring に明記した。
+
+**Fix 13（P2）——claim_scope の PINNED 残存文言の是正**: 指摘は正当——
+PR #326 第2巡 Fix 3 で `dependency_pins_sha` が PENDING へ差し戻された
+後も、`claim_scope.statement` は「本 manifest が...PINNED 判定を通じて
+主張するのは...」という PINNED 前提の書き出しのまま残り、訂正は文末
+への追記に留まっていた。対応: statement を「`dependency_pins_sha` は
+現在 PENDING である」ことを主表明として書き出す文へ全面改訂し、旧
+PINNED 世代（第1-2世代）への言及を新設フィールド
+`claim_scope.historical_pinned_generations`（明示的な historical 節、
+statement/rationale とは別フィールド）へ分離した。新設
+`_validate_claim_scope()` が PENDING 主表明マーカー（`"は現在 PENDING
+である"`）が statement の先頭80文字以内に存在することを機械強制する
+——文末への追記だけでは通らない。
+
+pin 欄（`dependency_pins_sha`）自体は引き続き PENDING——manifest バイトは
+`claim_scope` の全面改訂で変わったため、`RUN9_CONTRACT.yaml` の履歴
+コメントの情報記録 sha256 を更新した（repin ではない）:
+`06426625792af6649f7b479110cb0c89f7f25205d13664d79398f43e1eea883d`。
+本 harness の実測結果自体は無変更。既存 pin は無変更を確認済み。
+
 ---
 
 ## 6. テスト・lint
@@ -424,8 +460,9 @@ companions 未取得」という結論は変わらない）。既存 pin は無�
   - PR #326 第1巡（Fix 1/2）: 1760 passed, 0 failed
   - PR #326 第2巡（Fix 3-6）: 1769 passed, 0 failed
   - PR #326 第3巡（Fix 7-9）: 1780 passed, 0 failed
-  - **最新値（PR #326 第4巡, Fix 10/11 対応時点）: 1787 passed, 0 failed**
-    （`scratchpad/h1_r5_pytest.txt` に生出力を保存。上記1failedは第1巡
+  - PR #326 第4巡（Fix 10/11）: 1787 passed, 0 failed
+  - **最新値（PR #326 第5巡, Fix 12/13 対応時点）: 1798 passed, 0 failed**
+    （`scratchpad/h1_r6_pytest.txt` に生出力を保存。上記1failedは第1巡
     コミット時点で既に解消済み——原因だった scratchpad 原本と repo 収載
     版の乖離が、その後の作業で分離・復旧された。§7 item 4 追随参照）
 

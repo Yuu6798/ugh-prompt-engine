@@ -11705,17 +11705,31 @@ def _validate_tar_gz_full_member_ledger(
         found_basename_shas.setdefault(basename, []).append(member["sha256"])
 
     if companion_status == "NOT_OBTAINED_TARBALL_MISS":
-        _companion_basenames = {
-            item["file"].rsplit("/", 1)[-1] for item in companion_items
-        }
-        overlap = _companion_basenames & set(found_basename_shas)
-        if overlap:
-            raise Run9ValidationError(
-                "dependency pins manifest.tar_gz_full_member_ledger contains member(s) whose "
-                f"basename matches an acoustic export companion the manifest otherwise claims "
-                f"is NOT_OBTAINED: {sorted(overlap)} — acoustic_export_companions.status must "
-                "be updated to reflect this before PINNED (stale-miss inconsistency)"
-            )
+        # Codex bot レビュー PR #326 第5巡指摘 Fix 12（P2, 採用）: 旧実装は
+        # basename の一致だけで矛盾を発火させていたため、将来の tarball に
+        # 同名だが別バイトの無関係ファイル（例: 別由来の dsconfig.yaml）が
+        # 混入すると、正直な NOT_OBTAINED_TARBALL_MISS 記録が偽ブロック
+        # されてしまっていた。矛盾判定は「basename 一致 かつ sha256 ==
+        # expected_sha256」の両立時のみに限定する——各 companion item は
+        # 既に expected_sha256 を保持しているため、identity（basename）と
+        # digest（sha256）の両方が一致して初めて「この companion が実は
+        # tarball 内に存在した」ことの証拠になる。basename だけ一致し
+        # digest が異なる member は無関係ファイルとして扱い、record 上の
+        # 注記は不要（tar_gz_full_member_ledger 自体がその member の
+        # sha256 を既に記録しており、それ以上の注記を要する状態ではない
+        # ——単に「たまたま同名の別ファイル」という平凡な事実である）。
+        for item in companion_items:
+            basename = item["file"].rsplit("/", 1)[-1]
+            shas_at_basename = found_basename_shas.get(basename, [])
+            if item["expected_sha256"] in shas_at_basename:
+                raise Run9ValidationError(
+                    "dependency pins manifest.tar_gz_full_member_ledger contains a member whose "
+                    f"basename ({basename!r}) AND sha256 both match acoustic export companion "
+                    f"{item['logical_name']!r} ({item['expected_sha256']!r}) — the manifest "
+                    "otherwise claims this companion is NOT_OBTAINED; "
+                    "acoustic_export_companions.status must be updated to reflect this before "
+                    "PINNED (stale-miss inconsistency)"
+                )
     elif companion_status == "OBTAINED_VERIFIED_MATCH":
         # Codex bot レビュー PR #326 第3巡指摘 Fix 7（P2, 採用）: tar
         # membership + sha 整合の要求は、その item が実際に「この
@@ -12153,6 +12167,109 @@ def _validate_budget_estimate_section(section: Any, *, smoke_render_section: Any
             )
 
 
+# Codex bot レビュー PR #326 第5巡指摘 Fix 13（P2, 採用）: PR #326 第2巡
+# Fix 3 で `dependency_pins_sha` が PENDING へ差し戻された後も、
+# `claim_scope.statement` は「本 manifest が...PINNED 判定を通じて主張
+# するのは...」という PINNED 前提の書き出しのまま残り、是正は末尾への
+# 追記（`[PR #326 第2巡...]` ブロック）に留まっていた——偽の完了主張が
+# 文頭に居座り、consumer が先頭だけ読んで PINNED だと誤認しうる状態
+# だった。statement は「現在 PENDING である」ことを主表明として書き出す
+# ように改め、旧 PINNED 世代（第1-2世代）への言及は
+# `historical_pinned_generations`（明示的な historical 節、statement/
+# rationale とは別フィールド）へ分離する。validator は statement が
+# PENDING 主表明マーカーを**先頭付近**（文頭からの偽 PINNED 主張の
+# 再発を防ぐため、末尾への追記では満たせない位置）に持つことを機械
+# 強制する。
+_CLAIM_SCOPE_PENDING_MARKER: str = "は現在 PENDING である"
+_CLAIM_SCOPE_PENDING_MARKER_MAX_OFFSET: int = 80
+
+_CLAIM_SCOPE_REQUIRED_KEYS: FrozenSet[str] = frozenset({"statement", "rationale"})
+_CLAIM_SCOPE_OPTIONAL_KEYS: FrozenSet[str] = frozenset({"historical_pinned_generations"})
+_CLAIM_SCOPE_ALLOWED_KEYS: FrozenSet[str] = _CLAIM_SCOPE_REQUIRED_KEYS | _CLAIM_SCOPE_OPTIONAL_KEYS
+
+_HISTORICAL_GENERATION_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "generation", "sha256", "status_at_time",
+})
+_HISTORICAL_GENERATION_STATUS_VOCAB: Tuple[str, ...] = ("PINNED",)
+
+
+def _validate_claim_scope(claim_scope: Any) -> None:
+    field = "claim_scope"
+    if not isinstance(claim_scope, dict):
+        raise Run9ValidationError(f"dependency pins manifest.{field} must be an object, got {type(claim_scope).__name__}")
+    unknown = set(claim_scope.keys()) - _CLAIM_SCOPE_ALLOWED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"dependency pins manifest.{field} has unknown key(s): {sorted(unknown)}")
+    missing = _CLAIM_SCOPE_REQUIRED_KEYS - set(claim_scope.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"dependency pins manifest.{field} missing required key(s): {sorted(missing)}"
+        )
+    statement = _require_non_empty_str(claim_scope["statement"], field=f"{field}.statement")
+    _require_non_empty_str(claim_scope["rationale"], field=f"{field}.rationale")
+
+    # Fix 13: PENDING 主表明マーカーが statement の先頭付近に存在する
+    # ことを機械強制する（末尾への追記では通らない——偽の PINNED 主張が
+    # 文頭に居座る状態の再発を防ぐ）。
+    marker_offset = statement.find(_CLAIM_SCOPE_PENDING_MARKER)
+    if marker_offset == -1 or marker_offset > _CLAIM_SCOPE_PENDING_MARKER_MAX_OFFSET:
+        raise Run9ValidationError(
+            f"dependency pins manifest.{field}.statement must state the current PENDING status "
+            f"(marker {_CLAIM_SCOPE_PENDING_MARKER!r}) within the first "
+            f"{_CLAIM_SCOPE_PENDING_MARKER_MAX_OFFSET} characters — a correction appended only "
+            f"at the end (found at offset {marker_offset!r}) leaves a false completion claim as "
+            "the primary statement (PR #326 第5巡 Fix 13)"
+        )
+
+    if "historical_pinned_generations" in claim_scope:
+        historical = claim_scope["historical_pinned_generations"]
+        if not isinstance(historical, dict) or {"note", "generations"} > set(historical.keys()):
+            raise Run9ValidationError(
+                f"dependency pins manifest.{field}.historical_pinned_generations must be an "
+                f"object with at least {{'note', 'generations'}}, got {historical!r}"
+            )
+        _require_non_empty_str(
+            historical["note"], field=f"{field}.historical_pinned_generations.note"
+        )
+        generations = historical["generations"]
+        if not isinstance(generations, list) or not generations:
+            raise Run9ValidationError(
+                f"dependency pins manifest.{field}.historical_pinned_generations.generations "
+                f"must be a non-empty list, got {generations!r}"
+            )
+        seen_numbers = []
+        for i, gen in enumerate(generations):
+            gen_field = f"{field}.historical_pinned_generations.generations[{i}]"
+            if not isinstance(gen, dict):
+                raise Run9ValidationError(f"{gen_field} must be an object, got {type(gen).__name__}")
+            unknown_gen = set(gen.keys()) - _HISTORICAL_GENERATION_REQUIRED_KEYS
+            if unknown_gen:
+                raise Run9ValidationError(f"{gen_field} has unknown key(s): {sorted(unknown_gen)}")
+            missing_gen = _HISTORICAL_GENERATION_REQUIRED_KEYS - set(gen.keys())
+            if missing_gen:
+                raise Run9ValidationError(f"{gen_field} missing required key(s): {sorted(missing_gen)}")
+            gen_number = gen["generation"]
+            if isinstance(gen_number, bool) or not isinstance(gen_number, int) or gen_number <= 0:
+                raise Run9ValidationError(
+                    f"{gen_field}.generation must be a positive int, got {gen_number!r}"
+                )
+            seen_numbers.append(gen_number)
+            sha = gen["sha256"]
+            if not isinstance(sha, str) or not _SHA256_HEX_RE.match(sha):
+                raise Run9ValidationError(f"{gen_field}.sha256 must be a 64hex sha256, got {sha!r}")
+            status_at_time = gen["status_at_time"]
+            if status_at_time not in _HISTORICAL_GENERATION_STATUS_VOCAB:
+                raise Run9ValidationError(
+                    f"{gen_field}.status_at_time must be one of "
+                    f"{_HISTORICAL_GENERATION_STATUS_VOCAB!r}, got {status_at_time!r}"
+                )
+        if len(seen_numbers) != len(set(seen_numbers)):
+            raise Run9ValidationError(
+                f"{field}.historical_pinned_generations.generations has duplicate generation "
+                f"number(s): {seen_numbers!r}"
+            )
+
+
 def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
     """dependency pins manifest（`run9-dependency-pins/1.0`）の構造を検証
     する（RUN9-L0-HARNESS-1）。VG-L0 render 資産 provisioning の実測台帳
@@ -12218,6 +12335,21 @@ def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
     された場合（現状は容量・Scope OUT の理由で対象外）、本関数は
     load-time の完全束縛（毎回 tar を開いて全 member を再検証）へ
     昇格できる——それまでは上記3層が担保の限界である。
+
+    Codex bot レビュー PR #326 第5巡指摘 Fix 12（P2, 採用）:
+    `NOT_OBTAINED_TARBALL_MISS` 側の矛盾判定は「member の basename が
+    companion のファイル名と一致し、かつ sha256 が companion の
+    `expected_sha256` と一致する」の両立時のみに限定する（Fix 10 以前は
+    basename 一致だけで発火していた）。将来の tarball に同名だが別バイト
+    の無関係ファイル（例: 別由来の `dsconfig.yaml`）が含まれていても、
+    正直な `NOT_OBTAINED_TARBALL_MISS` 記録を偽ブロックしない——各
+    companion item は既に `expected_sha256` を保持しているため、
+    identity（basename）だけでなく digest（sha256）も一致して初めて
+    「この companion が実は tarball 内に存在した」ことの証拠になる。
+    basename のみ一致し digest が異なる member は record 上、追加の注記
+    を要しない単なる無関係ファイルとして扱う（`tar_gz_full_member_ledger`
+    自体がその member 自身の sha256 を既に記録しているため、それ以上の
+    特別な注記は発明しない）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"dependency pins manifest must be an object, got {type(data).__name__}")
@@ -12236,14 +12368,7 @@ def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
         )
     _require_non_empty_str(data["generated_at"], field="generated_at")
     _require_non_empty_str(data["generation_note"], field="generation_note")
-    claim_scope = data["claim_scope"]
-    if not isinstance(claim_scope, dict) or not {"statement", "rationale"} <= set(claim_scope.keys()):
-        raise Run9ValidationError(
-            "dependency pins manifest.claim_scope must be an object with at least "
-            f"{{'statement', 'rationale'}}, got {claim_scope!r}"
-        )
-    _require_non_empty_str(claim_scope["statement"], field="claim_scope.statement")
-    _require_non_empty_str(claim_scope["rationale"], field="claim_scope.rationale")
+    _validate_claim_scope(data["claim_scope"])
 
     ledger = data["render_asset_ledger"]
     if not isinstance(ledger, list) or not ledger:

@@ -984,6 +984,17 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   docstring に明記した。Fix 11 `HARNESS1_PROVISION_RECORD.md` §6 を
   「歴史値+最新値」の二層表記へ改めた。詳細は
   `HARNESS1_PROVISION_RECORD.md` §5-4。
+  PR #326 第5巡 Codex bot レビュー2件（P2×2、採用）でさらに強化した
+  （pin 欄は引き続き PENDING、repin ではなく `RUN9_CONTRACT.yaml`
+  履歴コメントの情報記録 sha256 のみ更新）: Fix 12
+  `NOT_OBTAINED_TARBALL_MISS` の tar member 矛盾判定を「basename 一致
+  かつ sha256 == expected_sha256」の両立時のみに限定し、同名別バイトの
+  無関係ファイルによる偽ブロックを防いだ。Fix 13
+  `claim_scope.statement` を「`dependency_pins_sha` は現在 PENDING
+  である」ことを主表明として書き出す文へ全面改訂し、旧 PINNED 世代
+  （第1-2世代）への言及を新設フィールド
+  `claim_scope.historical_pinned_generations` へ分離した。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-5。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →
