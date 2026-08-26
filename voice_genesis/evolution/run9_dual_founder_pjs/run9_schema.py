@@ -13176,6 +13176,16 @@ _REEXPORT_REPLAY_RECIPE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 # は受理しない——将来 export_environment_lock 以外の配列を勝手に正本と
 # 詐称できないようにする）。
 _REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME: str = "export_environment_lock"
+# replay_environment_recipe が bootstrap する venv のディレクトリ名（PR #327
+# レビュー第6巡指摘12対応）。venv 作成 step（`python -m venv <この名前>`）
+# 自体は例外的に ambient python を使ってよいが、それ以外の全 step は
+# `<この名前>/bin/python` / `<この名前>/bin/pip` の形で明示的に venv 内
+# interpreter/package manager を参照しなければならない。
+_REEXPORT_REPLAY_RECIPE_VENV_DIR: str = "venv_export_replay"
+# bare `python`/`pip` 起動検出用（`<venv_dir>/bin/python` のような明示パス
+# 経由の呼び出しは negative lookbehind で除外する——`/bin/` の直後に続く
+# トークンは venv 接続済みとみなす）。
+_REEXPORT_BARE_INTERPRETER_PATTERN = re.compile(r"(?<!/bin/)\b(python|pip)\b")
 _REEXPORT_REPRODUCIBILITY_CHECK_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "description", "all_run1_run2_identical",
 })
@@ -13390,6 +13400,17 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
     `dependency_pins_manifest.json` 側との実 pin 値照合は
     `load_pinned_reexport_manifest()` の cross-check (11) が担う（一次
     データが未 load のため本関数では行わない）。
+
+    **replay_environment_recipe の export 実行 step（PR #327 レビュー第6巡
+    指摘12対応）**: `export_command`（歴史記録、当時 venv_export を
+    activate 済みの shell 内で実行されていたため bare `python` 表記）を
+    replay 時にそのまま実行すると ambient interpreter とそのパッケージで
+    `scripts/export.py` が走り unpinned 環境の生成物が作られ得た。本関数は
+    (i) `steps` に `export_command` を `venv_export_replay/bin/python`
+    経由で実行する step が存在すること、(ii) venv bootstrap
+    （`python -m venv venv_export_replay`）を除く全 step に、
+    `venv_export_replay/bin/` を前置しない bare `python`/`pip` 起動が
+    残っていないこと、の2点を fail-closed で machine 強制する。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"reexport manifest must be an object, got {type(data).__name__}")
@@ -13690,6 +13711,37 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             f"one-liner that json.load()s the manifest and derives a requirements file from "
             f"{_REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME!r}"
         )
+    # PR #327 レビュー第6巡指摘12（P2、採用）: replay recipe が checkpoint-side
+    # 入力の照合まで書いていながら、肝心の export 実行手順を一切書いておらず
+    # （黙示的に export_command を bare token のまま実行させる余地が残ってい
+    # た）、export_command[0] は歴史記録の逐語 bare `python` であるため、その
+    # まま実行すると ambient interpreter とそのパッケージで scripts/export.py
+    # が走り unpinned 環境の生成物が作られ得た。fail-closed (i): export 実行
+    # 手順が venv インタプリタパスを明示参照していることを machine 強制する。
+    venv_python_path = f"{_REEXPORT_REPLAY_RECIPE_VENV_DIR}/bin/python"
+    if not any("export_command" in step and venv_python_path in step for step in replay_steps):
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a step that runs "
+            f"export_command via the venv interpreter path ({venv_python_path!r}) rather than "
+            "leaving the ambient interpreter to resolve export_command's bare `python` token — "
+            "otherwise a replay would produce artifacts from an unpinned ambient environment"
+        )
+    # fail-closed (ii): venv bootstrap（`python -m venv ...`、venv がまだ存在
+    # しないため ambient python を使うのが正当）を除く全 step で、bare
+    # `python`/`pip` 起動（venv_export_replay/bin/ を前置しない裸呼び出し）が
+    # 残っていないことを全数走査する（「venv 接続が曖昧な step を全数解消」の
+    # machine 強制——目視レビューでの見落としに依存しない）。
+    for i, step in enumerate(replay_steps):
+        if "-m venv" in step:
+            continue
+        match = _REEXPORT_BARE_INTERPRETER_PATTERN.search(step)
+        if match:
+            raise Run9ValidationError(
+                f"reexport manifest.replay_environment_recipe.steps[{i}] invokes a bare "
+                f"`{match.group(1)}` (ambient interpreter/package manager) instead of the "
+                f"explicit {_REEXPORT_REPLAY_RECIPE_VENV_DIR}/bin/{match.group(1)} path — "
+                f"got step {step!r}"
+            )
     torch_index_note = _require_non_empty_str(
         replay_recipe["torch_index_note"], field="replay_environment_recipe.torch_index_note",
     )

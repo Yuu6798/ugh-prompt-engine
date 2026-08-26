@@ -238,7 +238,7 @@
   "export_environment_lock_sha256": "24dbd5831041ac3db3a314b65a09feeabe69d89010d1486ed669277a225580f5",
   "export_venv_setup": {
     "description": "torch 隔離 venv（provision.sh §6 export venv pin 準拠）。numpy<2 制約下で torch/lightning/onnx/onnxsim を DiffSinger/requirements.txt 経由で導入し、最後に numpy を 1.26.4 へ再pin（provision.sh の既知順序: requirements.txt 導入後に numpy を戻さないと 2.x へ引き上げられる）。",
-    "historical_note": "本 install_steps は当時実際に実行した手順の実測記録（historical、provision.sh §6 export venv pin 準拠の当時のコマンド逐語）であり、新規に再現する場合は本キーではなく replay_environment_recipe を使うこと（バージョン正本は export_environment_lock 配列）。",
+    "historical_note": "本 install_steps は当時実際に実行した手順の実測記録（historical、provision.sh §6 export venv pin 準拠の当時のコマンド逐語）であり、新規に再現する場合は本キーではなく replay_environment_recipe を使うこと（バージョン正本は export_environment_lock 配列）。当時は venv_export を activate 済みの shell 内でこれらのコマンドおよび export_command を実行していたため、install_steps の bare `pip`・export_command の bare `python` はいずれも ambient interpreter ではなく venv_export 内の interpreter/package に解決されていた（当時の shell 状態への依存であり、本キー自体は historical bytes として不変のまま——replay_environment_recipe はこの依存を解消し、venv パスを明示指定する）。",
     "install_steps": [
       "python -m venv venv_export",
       "pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu",
@@ -278,7 +278,8 @@
       "venv_export_replay/bin/python -c \"import json, pathlib; manifest = json.load(open('inputs/reexport_manifest.json', encoding='utf-8')); pathlib.Path('requirements_replay.txt').write_text('\\n'.join(manifest['export_environment_lock']) + '\\n', encoding='utf-8')\"",
       "venv_export_replay/bin/pip install --no-deps -r requirements_replay.txt --extra-index-url https://download.pytorch.org/whl/cpu",
       "export 実行前に、以下の checkpoint-side 入力を <diffsinger_repo clone（session workdir、repo外）>/DiffSinger/checkpoints/s5_run6_acoustic_v1/ へ配置する: config.yaml / spk_map.json / lang_map.json / dictionary-ja.txt（本 manifest の experiment_side_inputs.items 参照、logical_name で dependency_pins_manifest.json#render_asset_ledger と対応）に加え checkpoint 本体 model_ckpt_steps_40000.ckpt（input_checkpoint 節参照）。",
-      "配置後、5点それぞれの実測 sha256（sha256sum 相当）を本 manifest の experiment_side_inputs.items[].sha256 および input_checkpoint.sha256 と突合する（`sha256sum -c` 相当の全数照合）。1件でも不一致なら export_command を実行しない（fail-closed）——replay 時にローカルの 無関係な experiment ファイルが誤って消費され、それでも検証が通って しまう事故を防ぐ。"
+      "配置後、5点それぞれの実測 sha256（sha256sum 相当）を本 manifest の experiment_side_inputs.items[].sha256 および input_checkpoint.sha256 と突合する（`sha256sum -c` 相当の全数照合）。1件でも不一致なら export_command を実行しない（fail-closed）——replay 時にローカルの 無関係な experiment ファイルが誤って消費され、それでも検証が通って しまう事故を防ぐ。",
+      "検証で experiment_side_inputs.items[].sha256 と input_checkpoint.sha256 の全数一致を確認できたら export_command を実行する。export_command[0]（歴史記録の逐語トークン）は、当時 venv_export を activate 済みの shell 内で実行されていたため ambient interpreter ではなく venv 内 interpreter に解決されていた bare 表記である（詳細は export_venv_setup.historical_note 参照）。replay ではこの逐語トークンをそのまま実行せず、venv_export_replay/bin/python を明示的に呼び出すこと（bare 起動禁止——ambient interpreter とそのパッケージで scripts/export.py が走り、unpinned 環境の生成物が作られる事故を防ぐ、fail-closed）。具体的には、export_command_cwd を cwd として `venv_export_replay/bin/python scripts/export.py acoustic --exp s5_run6_acoustic_v1 --ckpt 40000 --out <out_dir>` を実行する（引数トークン列は export_command[1:] と同一、export_command 自体は不変のまま参照するのみ）。"
     ],
     "torch_index_note": "torch==2.13.0+cpu は標準 PyPI インデックスには存在しない PyTorch CPU wheel index（https://download.pytorch.org/whl/cpu）由来である。--no-deps 指定は resolver による transitive 依存の再解決のみを排除し、個々のパッケージ自体の取得先インデックス指定は別途必要なため、上記 pip install コマンドへ --extra-index-url https://download.pytorch.org/whl/cpu を明示している。"
   },

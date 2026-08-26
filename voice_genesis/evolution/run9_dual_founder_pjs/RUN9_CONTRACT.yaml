@@ -658,6 +658,16 @@ config_sha:
 # PENDING のまま、repin ではなく情報記録の更新）。実測済みの sha256
 # （本改訂後の実バイト、第5世代）は情報記録として保持する:
 #   "2d8d9d815cbe2299a76920059597e364c49bf44761b33fc101915554a12b0c5d"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第6巡指摘12、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第5世代、export 実行手順の venv 明示化）へ追随さ
+# せた結果、`dependency_pins_manifest.json` 自体の実バイトが変わった。
+# 台帳の内容（render_asset_ledger 等）自体は無変更。pin 欄自体は PENDING
+# のまま、repin ではなく情報記録の更新）。実測済みの sha256（本改訂後の
+# 実バイト、第6世代）は情報記録として保持する:
+#   "8b8dc1d9596635e262725b6b361caf05b347f8d12cc6228f08a6d355439a9da8"
 dependency_pins_sha:
   value: null
   status: PENDING
@@ -808,8 +818,36 @@ dependency_pins_sha:
 # 一切変更しない——新設節の追加のみで実バイトが変わったための repin。
 # 旧 pin 値（第3世代、PR #327 第2巡指摘5対応後）は履歴として保持する:
 #   6ce64f5c4448dc5ca3d5bb3eab0994443264897423ad61419be28c2c93c0a35c
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第6巡指摘12、P2、採用。Claude
+# 完結ルート）: `replay_environment_recipe` は checkpoint-side 入力の全数
+# 照合までは書いていたが、肝心の export 実行手順そのものを一切書いておら
+# ず、`export_command`（歴史記録の逐語、当時 venv_export を activate 済み
+# の shell 内で実行されていたため bare `python` 表記になっている）を replay
+# 時にそのまま実行すると ambient interpreter とそのパッケージで
+# `scripts/export.py` が走り、unpinned 環境の生成物が作られ得た、という
+# 指摘。`replay_environment_recipe.steps` へ export 実行手順を新設し、
+# `export_command` を `venv_export_replay/bin/python` の明示呼び出しで実行
+# すること（bare `python` を起動しないこと）を書いた。`export_venv_setup.
+# historical_note` にも、当時 venv_export を activate 済みの shell 内で
+# install_steps/export_command を実行していたため bare `pip`/`python` が
+# 結果的に venv 内 interpreter/package に解決されていた旨を追記した
+# （install_steps/export_command/export_command_cwd 自体の実測事実は1文字も
+# 変更していない——historical_note の範囲でのみ追記）。
+# `run9_schema.validate_reexport_manifest()` へ2件の fail-closed 検証を
+# 追加した: (i) export 実行 step が `export_command` と `venv_export_
+# replay/bin/python` を同時参照していることの存在強制、(ii) venv bootstrap
+# （`python -m venv venv_export_replay`、venv がまだ存在しないため ambient
+# python を使うのが正当）を除く全 step に、`venv_export_replay/bin/` を前置
+# しない bare `python`/`pip` 起動が残っていないことの全数走査（負例テスト
+# 2件——export 実行 step 欠落・bare python 混入——を追加、いずれも reject を
+# 確認）。上記いずれも manifest の実測事実（checkpoint/exporter/artifacts/
+# smoke render の各 sha256・秒数）を一切変更しない——新設 step + 追記
+# ノートのみで実バイトが変わったための repin。旧 pin 値（第4世代、PR #327
+# 第4巡指摘10対応後）は履歴として保持する:
+#   af4fb42e86b52f510c78f3f2d3442a6b7da16075fb06ede181fee6cd97789f95
 reexport_manifest_sha:
-  value: "af4fb42e86b52f510c78f3f2d3442a6b7da16075fb06ede181fee6cd97789f95"
+  value: "c06c3f7eecf64ddc1357b54539fd093e0189e3405739eb6bda8a104210abf140"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json
 

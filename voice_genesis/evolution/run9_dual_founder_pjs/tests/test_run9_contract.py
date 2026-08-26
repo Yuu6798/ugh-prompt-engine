@@ -15852,6 +15852,63 @@ def test_harness2_reexport_manifest_missing_replay_environment_recipe_rejected()
         m.validate_reexport_manifest(data)
 
 
+# --- PR #327 レビュー第6巡指摘12（P2, 採用）: export 実行 step の venv 明示化 ---
+
+
+def test_harness2_reexport_manifest_replay_recipe_export_step_references_venv_python() -> None:
+    """正常系: 現行 steps に export_command を venv_export_replay/bin/python
+    経由で実行する step が存在すること（回帰固定）。"""
+    data = _reexport_manifest_data()
+    steps = data["replay_environment_recipe"]["steps"]
+    assert any(
+        "export_command" in s and "venv_export_replay/bin/python" in s for s in steps
+    )
+
+
+def test_harness2_reexport_manifest_replay_recipe_missing_export_step_rejected() -> None:
+    """export_command を venv 経由で実行する step 自体が存在しない（旧欠陥
+    状態）と reject されること。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"] if "export_command" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="export_command"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_bare_python_export_step_rejected() -> None:
+    """export 実行 step が venv_export_replay/bin/python ではなく bare
+    `python` を呼ぶ（PR #327 レビュー第6巡指摘12の元の欠陥）と reject
+    されること。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    steps = data["replay_environment_recipe"]["steps"]
+    steps[-1] = steps[-1].replace("venv_export_replay/bin/python", "python")
+    data["replay_environment_recipe"]["steps"] = steps
+    with pytest.raises(m.Run9ValidationError, match="export_command"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_bare_pip_step_rejected() -> None:
+    """venv bootstrap（`python -m venv ...`）以外の step に bare `pip`
+    起動が混入すると reject されること。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        *data["replay_environment_recipe"]["steps"],
+        "pip install something-else",
+    ]
+    with pytest.raises(m.Run9ValidationError, match="bare `pip`"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_venv_bootstrap_bare_python_allowed() -> None:
+    """venv 作成 step 自体（`python -m venv venv_export_replay`）は
+    ambient python を使うのが正当であり、bare-interpreter 検査から除外
+    されること（誤検知しないことの回帰固定）。"""
+    data = _reexport_manifest_data()
+    assert data["replay_environment_recipe"]["steps"][0] == "python -m venv venv_export_replay"
+    m.validate_reexport_manifest(data)  # 例外なしの確認
+
+
 # --- PR #327 レビュー第1巡指摘3: adjudication_basis 実バイト cross-check (9) ---
 
 
