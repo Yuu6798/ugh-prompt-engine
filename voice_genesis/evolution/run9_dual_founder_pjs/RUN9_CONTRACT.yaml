@@ -620,9 +620,19 @@ config_sha:
 # reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
 # manifest_sha` pin 値へ追随させた結果、`dependency_pins_manifest.json`
 # 自体の実バイトが変わった。pin 欄自体は PENDING のまま、repin ではなく
-# 情報記録の更新）。実測済みの sha256（本改訂後の実バイト）は情報記録
-# として保持する:
+# 情報記録の更新）。実測済みの sha256（本改訂後の実バイト、第2世代）は
+# 履歴として保持する:
 #   "e94a57915064d8ec204b922b9c76aa69473fb43da9b884ef81e9aa7c55539386"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第2巡、指摘5の連鎖更新
+# ——同上と同型: `reexport_manifest_sha` の repin（`replay_environment_
+# recipe` 新設）に追随し、`acoustic_export_companions.expected_items
+# [acoustic_onnx].reexport_manifest_ref.reexport_manifest_sha256` を新
+# pin 値へ更新した結果、`dependency_pins_manifest.json` 自体の実バイトが
+# 再度変わった。pin 欄自体は PENDING のまま、repin ではなく情報記録の
+# 更新）。実測済みの sha256（本改訂後の実バイト、第3世代）は情報記録
+# として保持する:
+#   "bb2313044b3d5f9177bad4e729050a61c99e80224ad8b45c66acf515583f9f14"
 dependency_pins_sha:
   value: null
   status: PENDING
@@ -704,8 +714,42 @@ dependency_pins_sha:
 # 変わったための repin。旧 pin 値（第1世代、HARNESS-2 初回 PINNED 時）は
 # 履歴として保持する:
 #   9c6c32940f2b09361257f2331b1f19390164fdbbc5172f5fb8af889e716c5a14
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第2巡指摘5、採用。Claude 完結
+# ルート）: `export_venv_setup.install_steps`（当時実際に実行した手順の
+# 実測記録）は export_environment_lock が新規再現時に replay 手順から
+# 消費されず、requirements.txt をレンジ指定のまま再解決してしまう穴が
+# あった——`install_steps` 自体の実測事実（当時実行したコマンド逐語）は
+# 1文字も変更せず、新設 `replay_environment_recipe` 節（新規再現時の正規
+# 経路。バージョン正本は `export_environment_lock` 配列単一——別ファイルの
+# lock file は置かない。手順: venv 作成 → manifest の
+# `export_environment_lock` を requirements 形式へ機械導出する python
+# ワンライナー逐語収載 → `pip install --no-deps -r <導出ファイル>`
+# ——`--no-deps` で resolver の再解決を排除。torch==2.13.0+cpu が PyTorch
+# CPU wheel index（https://download.pytorch.org/whl/cpu）由来である旨の
+# extra-index-url 注記付き）を追加した。`install_steps` 側にも「本キーは
+# 歴史記録であり新規再現には `replay_environment_recipe` を使う」旨の
+# `historical_note`（追記キー、既存文字列値は不変）を追加した。
+# `run9_schema.validate_reexport_manifest()` が `replay_environment_
+# recipe` の shape（`lock_array_reference == "export_environment_lock"`
+# の参照宣言必須・`--no-deps` 手順の存在・python one-liner 手順の存在・
+# torch index 注記の存在）を machine 強制する。指摘6（同一巡採用、
+# `run9_schema.py` 側 `validate_reexport_manifest()` 強化）:
+# `input_checkpoint.sha256 == expected_sha256_per_run9_contract` かつ
+# `sha256_matches_pin == True`、`exporter.revision ==
+# expected_revision_per_run9_contract` かつ `revision_matches_pin ==
+# True` を直接 fail-closed 強制するようにした（旧実装は boolean の算術
+# 一貫性のみ検証しており、unpinned 入力/exporter からの derived
+# manifest を構造的に拒否していなかった——本 manifest 群は「pin 済み
+# 入力からの derived」のみを表現できる、という意味論を docstring に明記
+# した。実測値そのもの——現行 manifest の checkpoint/exporter は元々
+# pin 一致——は無変更）。上記いずれも manifest の実測事実
+# （checkpoint/exporter/artifacts/smoke render の各 sha256・秒数）を
+# 一切変更しない——新設節の追加のみで実バイトが変わったための repin。
+# 旧 pin 値（第2世代、PR #327 第1巡3件対応後）は履歴として保持する:
+#   d8af88cf0d7721ee024370da7ee9de5943c388f978eb3dab510480d12bde3ae9
 reexport_manifest_sha:
-  value: "d8af88cf0d7721ee024370da7ee9de5943c388f978eb3dab510480d12bde3ae9"
+  value: "6ce64f5c4448dc5ca3d5bb3eab0994443264897423ad61419be28c2c93c0a35c"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json
 

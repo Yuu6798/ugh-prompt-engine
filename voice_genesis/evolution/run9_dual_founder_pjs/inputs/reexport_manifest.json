@@ -204,6 +204,7 @@
   "export_environment_lock_sha256": "24dbd5831041ac3db3a314b65a09feeabe69d89010d1486ed669277a225580f5",
   "export_venv_setup": {
     "description": "torch 隔離 venv（provision.sh §6 export venv pin 準拠）。numpy<2 制約下で torch/lightning/onnx/onnxsim を DiffSinger/requirements.txt 経由で導入し、最後に numpy を 1.26.4 へ再pin（provision.sh の既知順序: requirements.txt 導入後に numpy を戻さないと 2.x へ引き上げられる）。",
+    "historical_note": "本 install_steps は当時実際に実行した手順の実測記録（historical、provision.sh §6 export venv pin 準拠の当時のコマンド逐語）であり、新規に再現する場合は本キーではなく replay_environment_recipe を使うこと（バージョン正本は export_environment_lock 配列）。",
     "install_steps": [
       "python -m venv venv_export",
       "pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu",
@@ -235,6 +236,16 @@
     "sha256_matches_pin": true
   },
   "pin_disposition": "RUN9-L0-HARNESS-2（本ファイル収載 PR）で reexport_manifest_sha として RUN9_CONTRACT.yaml へ新規 PINNED 化された。derived runtime artifact として 扱い、historical bytes の復元とは扱わない（User 裁定2 逐語、USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt 参照）。",
+  "replay_environment_recipe": {
+    "declaration": "新規に再現する場合は install_steps（歴史記録、当時実際に実行した手順であり1文字も変更しない）ではなく本 recipe を使う。バージョン正本は export_environment_lock 配列（単一正本）——別ファイルの lock file は置かない（二重正本 drift 防止）。",
+    "lock_array_reference": "export_environment_lock",
+    "steps": [
+      "python -m venv venv_export_replay",
+      "venv_export_replay/bin/python -c \"import json, pathlib; manifest = json.load(open('inputs/reexport_manifest.json', encoding='utf-8')); pathlib.Path('requirements_replay.txt').write_text('\\n'.join(manifest['export_environment_lock']) + '\\n', encoding='utf-8')\"",
+      "venv_export_replay/bin/pip install --no-deps -r requirements_replay.txt --extra-index-url https://download.pytorch.org/whl/cpu"
+    ],
+    "torch_index_note": "torch==2.13.0+cpu は標準 PyPI インデックスには存在しない PyTorch CPU wheel index（https://download.pytorch.org/whl/cpu）由来である。--no-deps 指定は resolver による transitive 依存の再解決のみを排除し、個々のパッケージ自体の取得先インデックス指定は別途必要なため、上記 pip install コマンドへ --extra-index-url https://download.pytorch.org/whl/cpu を明示している。"
+  },
   "reproducibility_check": {
     "all_run1_run2_identical": true,
     "description": "同一 checkpoint に対し export.py を独立に2回実行（session workdir 内の reexport_out / reexport_out2、いずれも repo 外）。全アーティファクト（acoustic.onnx 含む）が run1/run2 間で sha256 完全一致——本環境内では export は決定論的である（非決定論ではなく、環境差が historical との 不一致の原因である可能性を示唆する所見。断定はしない）。"

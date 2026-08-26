@@ -13103,7 +13103,7 @@ REEXPORT_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "export_command", "export_command_cwd", "export_command_variables", "export_venv_setup",
     "environment_versions", "export_environment_lock", "export_environment_lock_sha256",
     "reproducibility_check", "artifacts", "historical_comparison_summary",
-    "smoke_render_cross_check", "pin_disposition",
+    "smoke_render_cross_check", "pin_disposition", "replay_environment_recipe",
 })
 
 _REEXPORT_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
@@ -13129,8 +13129,19 @@ _REEXPORT_EXPORTER_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "repo", "revision", "expected_revision_per_run9_contract", "revision_matches_pin",
 })
 _REEXPORT_EXPORT_VENV_SETUP_REQUIRED_KEYS: FrozenSet[str] = frozenset({
-    "description", "install_steps",
+    "description", "install_steps", "historical_note",
 })
+# replay_environment_recipe（PR #327 レビュー第2巡指摘5対応）: `install_steps`
+# は当時実際に実行した手順の実測記録として1文字も変更しない——新規再現時の
+# 正規経路は本節（`lock_array_reference` が名指す `export_environment_lock`
+# 配列が唯一のバージョン正本、別ファイルの lock file は置かない）。
+_REEXPORT_REPLAY_RECIPE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "declaration", "lock_array_reference", "steps", "torch_index_note",
+})
+# lock_array_reference が指す唯一の正本配列名（fail-closed: この文字列以外
+# は受理しない——将来 export_environment_lock 以外の配列を勝手に正本と
+# 詐称できないようにする）。
+_REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME: str = "export_environment_lock"
 _REEXPORT_REPRODUCIBILITY_CHECK_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "description", "all_run1_run2_identical",
 })
@@ -13260,9 +13271,24 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
     ——捏造・転記ミスは fail-closed で拒否される。`artifacts.acoustic_onnx.
     matches_historical` は追加で恒久的に `False` を強制する frozen-fact
     ガード（true への書き換えはデータに関わらず拒否）。contract pin
-    （backbone checkpoint / DiffSinger commit）との一致確認は本関数では
-    行わない（一次データが未 load のため）——`load_pinned_reexport_
-    manifest()` の cross-check (a)/(b) が担う。
+    （backbone checkpoint / DiffSinger commit）の実バイトとの一致確認
+    （disk 上の正典 pin 値そのものとの照合）は本関数では行わない（一次
+    データが未 load のため）——`load_pinned_reexport_manifest()` の
+    cross-check (a)/(b) が担う。
+
+    **本 manifest schema の意味論（PR #327 レビュー第2巡指摘6対応）**:
+    本関数は `input_checkpoint.sha256 == expected_sha256_per_run9_contract`
+    かつ `sha256_matches_pin == True`、`exporter.revision ==
+    expected_revision_per_run9_contract` かつ `revision_matches_pin ==
+    True` を直接 fail-closed 強制する（(d)/(e)）。旧実装は
+    `sha256_matches_pin`/`revision_matches_pin` boolean の算術一貫性
+    （フラグが自己申告の再計算と食い違っていないか）のみを検証しており、
+    「算術的には自己整合だが実際には unpinned な入力/exporter から
+    derive された」manifest（例: `sha256_matches_pin: false` かつ実際に
+    `sha256 != expected_sha256_per_run9_contract`）を受理し得た——本
+    manifest schema は **「pin 済み入力からの derived artifact」のみ**
+    を表現できるものと意味論を固定し、unpinned 入力/exporter からの
+    derived manifest はカテゴリカルに拒否する。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"reexport manifest must be an object, got {type(data).__name__}")
@@ -13319,6 +13345,24 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             f"from the in-process recomputation (sha256 == expected_sha256_per_run9_contract), "
             f"which is {(ckpt_sha == ckpt_expected)!r}"
         )
+    # (d) fail-closed（PR #327 レビュー第2巡指摘6対応）: この schema は
+    # 「pin 済み入力からの derived artifact」のみを表現できる——旧実装は
+    # boolean の算術一貫性（sha256_matches_pin == (sha256 ==
+    # expected_sha256_per_run9_contract)）しか強制しておらず、
+    # sha256 != expected_sha256_per_run9_contract かつ
+    # sha256_matches_pin: false という「算術的には自己整合だが unpinned
+    # 入力から derive された」manifest も受理し得た。actual sha と正典
+    # pin 値の**直接**一致（かつ matches フラグが literal True であること）
+    # をここで機械強制し、unpinned 入力からの derived manifest をカテゴリ
+    # カルに拒否する。
+    if ckpt_sha != ckpt_expected or ckpt_matches is not True:
+        raise Run9ValidationError(
+            f"reexport manifest.input_checkpoint: sha256 ({ckpt_sha!r}) must equal "
+            f"expected_sha256_per_run9_contract ({ckpt_expected!r}) and sha256_matches_pin must "
+            f"be the literal boolean True ({ckpt_matches!r} given) — this manifest schema can "
+            "only represent artifacts derived from a pinned input checkpoint; a manifest whose "
+            "checkpoint does not match the canonical pin is categorically rejected fail-closed"
+        )
     _require_positive_int(checkpoint["bytes"], field="input_checkpoint.bytes")
 
     exporter = _validate_reexport_shape(
@@ -13346,6 +13390,18 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             f"reexport manifest.exporter.revision_matches_pin ({revision_matches!r}) diverges "
             f"from the in-process recomputation (revision == expected_revision_per_run9_"
             f"contract), which is {(revision == revision_expected)!r}"
+        )
+    # (e) fail-closed（PR #327 レビュー第2巡指摘6対応、input_checkpoint (d)
+    # と同型）: exporter revision も pin 一致を直接強制する——unpinned
+    # exporter revision からの derived manifest をカテゴリカルに拒否する。
+    if revision != revision_expected or revision_matches is not True:
+        raise Run9ValidationError(
+            f"reexport manifest.exporter: revision ({revision!r}) must equal "
+            f"expected_revision_per_run9_contract ({revision_expected!r}) and "
+            f"revision_matches_pin must be the literal boolean True ({revision_matches!r} given) "
+            "— this manifest schema can only represent artifacts derived from a pinned exporter "
+            "revision; a manifest whose exporter does not match the canonical pin is "
+            "categorically rejected fail-closed"
         )
 
     export_command = data["export_command"]
@@ -13411,6 +13467,18 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
         )
     for i, step in enumerate(install_steps):
         _require_non_empty_str(step, field=f"export_venv_setup.install_steps[{i}]")
+    # historical_note（PR #327 レビュー第2巡指摘5対応）: `install_steps` は
+    # 当時実際に実行した手順の実測記録（historical）であり、新規再現には
+    # `replay_environment_recipe` を使うべきことを明記する追記キー——
+    # `install_steps` 自体の既存文字列値は変更しない。
+    historical_note = _require_non_empty_str(
+        venv_setup["historical_note"], field="export_venv_setup.historical_note",
+    )
+    if "replay_environment_recipe" not in historical_note:
+        raise Run9ValidationError(
+            "reexport manifest.export_venv_setup.historical_note must reference "
+            f"'replay_environment_recipe' by name, got {historical_note!r}"
+        )
 
     env_versions = data["environment_versions"]
     if not isinstance(env_versions, dict) or not env_versions:
@@ -13452,6 +13520,56 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             f"reexport manifest.export_environment_lock_sha256 ({env_lock_sha!r}) diverges from "
             f"the in-process recomputation over export_environment_lock "
             f"(\"\\n\".join(...) + \"\\n\"), which is {expected_lock_sha!r}"
+        )
+
+    # replay_environment_recipe（PR #327 レビュー第2巡指摘5対応）: 新規
+    # 再現の正規経路——`install_steps`（歴史記録、上で不変のまま検証済み）
+    # の代わりに使う。`lock_array_reference` は本 recipe が唯一のバージョン
+    # 正本として参照する配列名を machine 強制で宣言させる（別ファイルの
+    # lock file を勝手に持ち込めないようにする、二重正本 drift 防止）。
+    replay_recipe = _validate_reexport_shape(
+        data["replay_environment_recipe"], field="replay_environment_recipe",
+        required_keys=_REEXPORT_REPLAY_RECIPE_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(replay_recipe["declaration"], field="replay_environment_recipe.declaration")
+    lock_array_reference = replay_recipe["lock_array_reference"]
+    if lock_array_reference != _REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.lock_array_reference must be exactly "
+            f"{_REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME!r} (the single source-of-truth version "
+            f"array), got {lock_array_reference!r}"
+        )
+    replay_steps = replay_recipe["steps"]
+    if not isinstance(replay_steps, list) or not replay_steps:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must be a non-empty list, got "
+            f"{replay_steps!r}"
+        )
+    for i, step in enumerate(replay_steps):
+        _require_non_empty_str(step, field=f"replay_environment_recipe.steps[{i}]")
+    if not any("--no-deps" in step for step in replay_steps):
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a pip install step "
+            "using --no-deps (resolver re-resolution must be excluded — the lock array is the "
+            "sole version source of truth)"
+        )
+    if not any(
+        "json.load" in step and _REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME in step
+        for step in replay_steps
+    ):
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.steps must contain a verbatim python "
+            f"one-liner that json.load()s the manifest and derives a requirements file from "
+            f"{_REEXPORT_REPLAY_RECIPE_LOCK_ARRAY_NAME!r}"
+        )
+    torch_index_note = _require_non_empty_str(
+        replay_recipe["torch_index_note"], field="replay_environment_recipe.torch_index_note",
+    )
+    if "download.pytorch.org/whl/cpu" not in torch_index_note:
+        raise Run9ValidationError(
+            "reexport manifest.replay_environment_recipe.torch_index_note must reference the "
+            "PyTorch CPU wheel index (https://download.pytorch.org/whl/cpu) that "
+            f"torch==2.13.0+cpu is sourced from, got {torch_index_note!r}"
         )
 
     artifacts = data["artifacts"]
@@ -13609,6 +13727,16 @@ def load_pinned_reexport_manifest(
         ルート相対パスとして manifest に収載されているため
         `_REEXPORT_REPO_ROOT`（`run9_dual_founder_pjs` の3階層上）で解決
         する（`adjudication_basis_path` を渡せばテスト用に上書き可能）。
+    (10) cross-check (j)（PR #327 レビュー第2巡指摘4対応）: acoustic export
+        companions 4点（`acoustic_onnx`/`dsconfig_yaml`/`phonemes_json`/
+        `ritsu_emb`）それぞれの `artifacts.{key}.sha256_run1` が、
+        `inputs/dependency_pins_manifest.json` の
+        `acoustic_export_companions.expected_items[].measured_sha256`
+        （`logical_name` で対応付け）と一致すること——旧実装は cross-check
+        (8) で speaker embedding candidate 3件（pjs/user/d3synth）のみを
+        照合しており、companions 4点は両 manifest 間で digest 照合され
+        ないまま load が成功し得た（`dependency_pins_sha` は PENDING の
+        ため、cross-check (8) と同様に同ファイルを直接読む）。
 
     戻り値は検証済み manifest dict。
     """
@@ -13765,6 +13893,38 @@ def load_pinned_reexport_manifest(
             f"({adjudication_pinned_sha!r}) と一致しない — 裁定文書の改変を fail-closed で "
             "拒否する"
         )
+
+    # (10) cross-check (j): acoustic export companions 4点の sha256_run1 が
+    # dependency_pins_manifest.json 側 measured_sha256 と一致すること
+    # （PR #327 レビュー第2巡指摘4）。`dep_data` は (8) で既に read-once 済み
+    # のバッファから parse 済みであり、ここで再読込はしない。
+    _REEXPORT_COMPANION_LOGICAL_NAME_MAP = {
+        "acoustic_onnx": "acoustic_onnx",
+        "dsconfig_yaml": "acoustic_dsconfig_yaml",
+        "phonemes_json": "acoustic_phonemes_json",
+        "ritsu_emb": "speaker_embed_ritsu",
+    }
+    companion_items_by_name = {
+        item["logical_name"]: item
+        for item in dep_data.get("acoustic_export_companions", {}).get("expected_items", [])
+    }
+    for artifact_key, logical_name in _REEXPORT_COMPANION_LOGICAL_NAME_MAP.items():
+        companion_item = companion_items_by_name.get(logical_name)
+        if companion_item is None:
+            raise Run9ValidationError(
+                f"load_pinned_reexport_manifest(): {effective_dep_path} does not declare "
+                "acoustic_export_companions.expected_items[].logical_name == "
+                f"{logical_name!r} (needed to cross-check artifacts.{artifact_key})"
+            )
+        companion_measured_sha = companion_item.get("measured_sha256")
+        artifact_sha = data["artifacts"][artifact_key]["sha256_run1"]
+        if companion_measured_sha != artifact_sha:
+            raise Run9ValidationError(
+                f"load_pinned_reexport_manifest(): artifacts.{artifact_key}.sha256_run1 "
+                f"({artifact_sha!r}) diverges from dependency_pins_manifest.json#"
+                f"acoustic_export_companions.expected_items[logical_name={logical_name!r}]."
+                f"measured_sha256 ({companion_measured_sha!r}) — cross-check fail-closed"
+            )
 
     return data
 

@@ -15342,6 +15342,23 @@ def test_harness2_reexport_manifest_checkpoint_sha_shape_enforced() -> None:
         m.validate_reexport_manifest(data)
 
 
+# --- fail-closed (d)（PR #327 レビュー第2巡指摘6）: input_checkpoint は
+# pin 済み入力からの derived のみを表現できる（直接強制、算術一貫性のみ
+# ではない） -----------------------------------------------------------
+
+
+def test_harness2_reexport_manifest_checkpoint_unpinned_actual_rejected() -> None:
+    """actual sha256 を改竄し、sha256_matches_pin も算術的に整合する False
+    へ追随させても（旧実装はこの組合せを受理し得た）、直接強制により
+    fail-closed で拒否される——unpinned checkpoint からの derived
+    manifest はカテゴリカルに拒否される。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["input_checkpoint"]["sha256"] = "7" * 64
+    data["input_checkpoint"]["sha256_matches_pin"] = False
+    with pytest.raises(m.Run9ValidationError, match="input_checkpoint"):
+        m.validate_reexport_manifest(data)
+
+
 # --- fail-closed (b): exporter.revision vs contract pin (internal consistency) ---
 
 
@@ -15356,6 +15373,23 @@ def test_harness2_reexport_manifest_exporter_revision_shape_enforced() -> None:
     data = copy.deepcopy(_reexport_manifest_data())
     data["exporter"]["revision"] = "not-a-git-sha"
     with pytest.raises(m.Run9ValidationError, match="40hex"):
+        m.validate_reexport_manifest(data)
+
+
+# --- fail-closed (e)（PR #327 レビュー第2巡指摘6）: exporter は pin 済み
+# revision からの derived のみを表現できる（input_checkpoint (d) と同型の
+# 直接強制） -------------------------------------------------------------
+
+
+def test_harness2_reexport_manifest_exporter_unpinned_actual_rejected() -> None:
+    """actual revision を改竄し、revision_matches_pin も算術的に整合する
+    False へ追随させても（旧実装はこの組合せを受理し得た）、直接強制に
+    より fail-closed で拒否される——unpinned exporter revision からの
+    derived manifest はカテゴリカルに拒否される。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["exporter"]["revision"] = "7" * 40
+    data["exporter"]["revision_matches_pin"] = False
+    with pytest.raises(m.Run9ValidationError, match="exporter"):
         m.validate_reexport_manifest(data)
 
 
@@ -15572,6 +15606,100 @@ def test_harness2_load_pinned_reexport_manifest_speaker_embed_cross_check_fail_c
         )
 
 
+# --- PR #327 レビュー第2巡指摘4: acoustic export companions 4点の cross-check (10) ---
+
+
+def _dependency_pins_manifest_data() -> Dict[str, Any]:
+    return m._loads_strict_json(m.DEPENDENCY_PINS_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _tampered_dependency_pins_manifest_path(tmp_path: Path, *, mutate) -> Path:
+    """`dependency_pins_manifest.json` の内容を `mutate` で改変した合成
+    ファイルを用意するテストヘルパー（`load_pinned_reexport_manifest()` の
+    `dependency_pins_manifest_path` は正典 pin 経由ではなく直接ファイルを
+    読むため、pin 差し替えは不要——ファイルを差し替えるだけでよい）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    mutate(data)
+    path = tmp_path / "dependency_pins_manifest.json"
+    path.write_bytes(_canonical_json_bytes(data))
+    return path
+
+
+@pytest.mark.parametrize(
+    "artifact_key,logical_name",
+    [
+        ("acoustic_onnx", "acoustic_onnx"),
+        ("dsconfig_yaml", "acoustic_dsconfig_yaml"),
+        ("phonemes_json", "acoustic_phonemes_json"),
+        ("ritsu_emb", "speaker_embed_ritsu"),
+    ],
+)
+def test_harness2_load_pinned_reexport_manifest_companion_cross_check_fail_closed(
+    contract: m.Run9RunContract, tmp_path: Path, artifact_key: str, logical_name: str,
+) -> None:
+    """(10) cross-check (j)（PR #327 レビュー第2巡指摘4）: acoustic export
+    companions 4点それぞれについて、dependency_pins_manifest.json 側
+    measured_sha256 を改竄すると（reexport_manifest.json 側
+    artifacts.{key}.sha256_run1 と食い違うと）fail-closed で拒否される
+    ——companion 別に4件とも独立に照合されることを確認する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        for item in data["acoustic_export_companions"]["expected_items"]:
+            if item["logical_name"] == logical_name:
+                item["measured_sha256"] = "9" * 64
+                return
+        raise AssertionError(f"logical_name {logical_name!r} not found in fixture")
+
+    tampered_dep_path = _tampered_dependency_pins_manifest_path(tmp_path, mutate=_mutate)
+    with pytest.raises(m.Run9ValidationError, match=f"artifacts.{artifact_key}.sha256_run1"):
+        m.load_pinned_reexport_manifest(
+            contract, dependency_pins_manifest_path=tampered_dep_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_companion_missing_from_dependency_pins_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(10) cross-check (j): dependency_pins_manifest.json 側に対応する
+    logical_name の companion item 自体が存在しない場合も fail-closed で
+    拒否される（measured_sha256 の食い違いだけでなく、参照先の欠落も
+    検出する）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["acoustic_export_companions"]["expected_items"] = [
+            item
+            for item in data["acoustic_export_companions"]["expected_items"]
+            if item["logical_name"] != "speaker_embed_ritsu"
+        ]
+
+    tampered_dep_path = _tampered_dependency_pins_manifest_path(tmp_path, mutate=_mutate)
+    with pytest.raises(m.Run9ValidationError, match="does not declare"):
+        m.load_pinned_reexport_manifest(
+            contract, dependency_pins_manifest_path=tampered_dep_path,
+        )
+
+
+def test_harness2_load_pinned_reexport_manifest_companion_cross_check_reexport_side_tampered(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(10) cross-check (j): reexport_manifest.json 側 artifacts.ritsu_emb.
+    sha256_run1 を改竄しても（dependency_pins_manifest.json 側は正典の
+    ままでも）食い違いは fail-closed で拒否される（「どちらか一方の sha を
+    改竄」の反対側も machine 強制されることの確認）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["artifacts"]["ritsu_emb"]["sha256_run1"] = "8" * 64
+        data["artifacts"]["ritsu_emb"]["sha256_run2"] = "8" * 64
+        data["artifacts"]["ritsu_emb"]["run1_run2_identical"] = True
+        data["artifacts"]["ritsu_emb"]["matches_historical"] = False
+        data["artifacts"]["ritsu_emb"]["historical_sha256"] = None
+
+    tampered_contract, manifest_path, contract_path = _tampered_reexport_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="artifacts.ritsu_emb.sha256_run1"):
+        m.load_pinned_reexport_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
 # --- PR #327 レビュー第1巡指摘1: export_command_variables (self-contained recipe) ---
 
 
@@ -15646,6 +15774,80 @@ def test_harness2_reexport_manifest_export_environment_lock_sha256_shape_enforce
     data = copy.deepcopy(_reexport_manifest_data())
     data["export_environment_lock_sha256"] = "not-a-hash"
     with pytest.raises(m.Run9ValidationError, match="64hex"):
+        m.validate_reexport_manifest(data)
+
+
+# --- PR #327 レビュー第2巡指摘5: replay_environment_recipe / historical_note ---
+
+
+def test_harness2_reexport_manifest_venv_setup_historical_note_present() -> None:
+    data = _reexport_manifest_data()
+    assert "replay_environment_recipe" in data["export_venv_setup"]["historical_note"]
+
+
+def test_harness2_reexport_manifest_venv_setup_historical_note_missing_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    del data["export_venv_setup"]["historical_note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_venv_setup_historical_note_must_reference_recipe() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["export_venv_setup"]["historical_note"] = "this note forgot to name the new key"
+    with pytest.raises(m.Run9ValidationError, match="replay_environment_recipe"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_install_steps_unchanged_by_replay_recipe_addition() -> None:
+    """`install_steps`（歴史記録、当時実際に実行した手順）自体の4行は
+    replay_environment_recipe 新設によって1文字も変更されていないこと
+    の回帰固定。"""
+    data = _reexport_manifest_data()
+    assert data["export_venv_setup"]["install_steps"] == [
+        "python -m venv venv_export",
+        "pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu",
+        "pip install -r <diffsinger_repo clone（session workdir、repo外）>/DiffSinger/requirements.txt",
+        "pip install numpy==1.26.4",
+    ]
+
+
+def test_harness2_reexport_manifest_replay_recipe_lock_array_reference_must_match() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["lock_array_reference"] = "some_other_array"
+    with pytest.raises(m.Run9ValidationError, match="lock_array_reference"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_missing_no_deps_step_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s.replace("--no-deps", "") for s in data["replay_environment_recipe"]["steps"]
+    ]
+    with pytest.raises(m.Run9ValidationError, match="--no-deps"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_missing_oneliner_step_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["steps"] = [
+        s for s in data["replay_environment_recipe"]["steps"] if "json.load" not in s
+    ]
+    with pytest.raises(m.Run9ValidationError, match="one-liner"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_replay_recipe_torch_index_note_must_reference_cpu_index() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["replay_environment_recipe"]["torch_index_note"] = "torch is on PyPI, no index needed"
+    with pytest.raises(m.Run9ValidationError, match="download.pytorch.org/whl/cpu"):
+        m.validate_reexport_manifest(data)
+
+
+def test_harness2_reexport_manifest_missing_replay_environment_recipe_rejected() -> None:
+    data = copy.deepcopy(_reexport_manifest_data())
+    del data["replay_environment_recipe"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
         m.validate_reexport_manifest(data)
 
 
