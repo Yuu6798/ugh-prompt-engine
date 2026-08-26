@@ -786,6 +786,32 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   （6世代目）。分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。
   seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json
   は無改変（sha256 確認済み）〕。
+  〔履歴: PR #324 Codex bot レビュー第6巡（2026-08-26, 1件 P2, 採用）で
+  `verify_user_donor_manifest_complete()` に第4段を追加（分類は不変・
+  MACHINE のまま）。指摘: rights/ledger 両ファイルの lockstep 改変
+  （同一 entry の値を両側**同値**で書き換える）は既存3段チェーンの
+  相互照合だけでは検出不能で、独立 pin への anchor が欠けている（同族の
+  新経路）。Fable 設計判定: 独立 pin は既に存在する — PR #320 で確立した
+  user anchor（`extract_user_identity_attestation_projection(rights_
+  manifest)` の正規直列化 sha256 が `domains/identity_domain_run9_v1.json`
+  （`is_pinned()==True`）の `anchor_hashes["user"]` として PINNED 済み）。
+  projection は entries 全件の card_id/duration_sec/sha256/source_sha256
+  を逐語で含むため、rights 側 entries の任意改変（lockstep 含む）は
+  projection sha 不一致で検出される。対応:
+  `verify_user_donor_manifest_complete()` に第4段
+  `_verify_user_anchor_matches_rights_manifest(domain, rights_manifest)`
+  を追加——既存の消費点検証関数（`build_founder()` が genome_id 構築時に
+  用いるのと同一関数、grep で配線済みを確認し車輪の再発明はしていない）
+  を再利用した。domain ファイルは凍結済み・read-only 参照のみ（一切
+  書き換えていない）。lockstep 改変（rights/ledger 同一 entry の sha256
+  を両側同値で書き換えた temp ファイルペア）が第4段の anchor 不一致で
+  fail-closed 拒否されることをテストで実測確認し、既存正常系は不変で
+  通ることも確認した。rule 2 の condition に4段構成と anchor 接地の
+  設計を明記し、`failure_abort_criteria_sha` を実バイト sha256 で repin
+  （7世代目）。分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。
+  seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json/
+  domains/identity_domain_run9_v1.json は無改変（sha256 確認済み・
+  domains は read-only 参照のみ）〕。
 - `measurement_spec_sha` は **PENDING のまま**（2026-08-25 RUN9-L0-PIN-1 で
   一時 PINNED 化 → 同日 PR #324 第2巡 Codex bot レビュー Fix 5（P2 ×2、
   採用）で PENDING へ復帰）。manifest 実体

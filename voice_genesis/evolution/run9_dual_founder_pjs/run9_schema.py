@@ -9880,6 +9880,11 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
 # 配下（既存の donor 台帳の実体配置、8327-8328行のコメント参照）。
 RIGHTS_MANIFEST_PATH = _THIS_DIR / "inputs" / "rights_manifest.json"
 USER_DONOR_LEDGER_PATH = _THIS_DIR.parent.parent / "foundry" / "recording_kit" / "user_donor_ledger.json"
+# 2026-08-26 Codex bot レビュー PR #324 第6巡指摘（P2, 採用）で新設:
+# `verify_user_donor_manifest_complete()` 第4段が読む、凍結済み domain
+# ファイル（`is_pinned() == True`、read-only 参照のみ — 本 pin 実装では
+# 一切書き換えない）の規約パス。
+RUN9_IDENTITY_DOMAIN_PATH = _THIS_DIR / "domains" / "identity_domain_run9_v1.json"
 
 
 def verify_user_donor_manifest_complete(
@@ -9909,8 +9914,8 @@ def verify_user_donor_manifest_complete(
     許容しない。`rights_manifest_path`/`donor_ledger_path` 省略時は正典
     パス（`RIGHTS_MANIFEST_PATH`/`USER_DONOR_LEDGER_PATH`）を用いる。
 
-    3段の既存検証チェーンを束ねる薄いラッパー（新規検証ロジックは
-    書かない — 既存3関数の合成のみ）:
+    4段の既存検証チェーンを束ねる薄いラッパー（新規検証ロジックは
+    書かない — 既存4関数の合成のみ）:
 
     1. `validate_rights_manifest_four_layer(rights_manifest)` — 4層
        構造・閉じたキー集合・原則3式・禁止文言の completeness。
@@ -9924,12 +9929,32 @@ def verify_user_donor_manifest_complete(
        card_id ごとに `source_sha256`/`sha256`/`duration_sec` が一致
        することを検証する（空 entries・donor 欠落・重複・hash 改変は
        いずれもここで検出される）。
+    4. `_verify_user_anchor_matches_rights_manifest(domain, rights_manifest)`
+       — **独立 pinned anchor への接地**（2026-08-26 Codex bot レビュー
+       PR #324 第6巡指摘, P2, 採用: rights/ledger 両ファイルの lockstep
+       改変——同一 entry の `sha256` 等を両側**同値**で書き換える——は
+       (1)〜(3) の相互照合だけでは検出不能で、独立 pin への anchor が
+       欠けている、という指摘）。`domains/identity_domain_run9_v1.json`
+       （凍結済み・`is_pinned() == True`・read-only 参照のみ、本 PR では
+       一切書き換えない）をディスクから厳密 parse で読み、(1) を通過した
+       `rights_manifest` から `extract_user_identity_attestation_
+       projection()` を再計算した正規形 sha256 が、domain の
+       `anchor_hashes["user"]`（PR #320 で確立済みの独立 pin）と厳密
+       一致することを検証する（既存の消費点検証関数
+       `_verify_user_anchor_matches_rights_manifest()` — `build_founder()`
+       が genome_id 構築時に用いるのと同一関数 — を再利用し、新規実装は
+       しない）。projection は entries 全件の
+       `card_id`/`duration_sec`/`sha256`/`source_sha256` を逐語で含むため、
+       rights 側 entries の任意改変（lockstep 含む）は projection sha
+       不一致で検出される。ledger 側は (3) の相互照合により rights に
+       束縛されるため、この第4段によりチェーン全体が独立 pinned anchor
+       へ接地する。
 
     戻り値は (2) の flat 変換結果（呼び出し元が `entries` 等へ追加
     アクセスしたい場合のため）。harness の rights completeness 判定は
-    本関数経由のみで行うべきであり、(1) 単独の呼び出しや、本関数を
-    経由しない直接 `json.load()` はいずれも不十分・契約違反である
-    （probe/genome loader と同じ「唯一の正規消費経路」規約）。
+    本関数経由のみで行うべきであり、(1)〜(3) のいずれか単独の呼び出しや、
+    本関数を経由しない直接 `json.load()` はいずれも不十分・契約違反で
+    ある（probe/genome loader と同じ「唯一の正規消費経路」規約）。
     """
     effective_rights_path = (
         rights_manifest_path if rights_manifest_path is not None else RIGHTS_MANIFEST_PATH
@@ -9958,6 +9983,18 @@ def verify_user_donor_manifest_complete(
     validate_rights_manifest_four_layer(rights_manifest)
     flat = extract_voice_identity_rights_layer(rights_manifest)
     verify_rights_manifest_against_ledger(flat, donor_ledger)
+
+    # 第4段（PR #324 第6巡指摘, P2, 採用）: 独立 pinned anchor への接地。
+    # domain ファイルは凍結済み・read-only 参照のみ（一切書き換えない）。
+    domain = load_run9_identity_domain(RUN9_IDENTITY_DOMAIN_PATH)
+    if not domain.is_pinned():
+        raise Run9ValidationError(
+            "verify_user_donor_manifest_complete(): "
+            f"{RUN9_IDENTITY_DOMAIN_PATH} is not pinned (all 3 anchor_hashes and metric_space_sha "
+            "must be real 64hex sha256) — the independent anchor this function's fourth stage "
+            "grounds against is not established; refusing to consume rights completeness without it"
+        )
+    _verify_user_anchor_matches_rights_manifest(domain, rights_manifest)
     return flat
 
 

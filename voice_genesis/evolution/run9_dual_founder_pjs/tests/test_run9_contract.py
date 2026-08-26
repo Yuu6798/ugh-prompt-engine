@@ -14,7 +14,7 @@ import re
 import sys
 import textwrap
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import pytest
 import yaml
@@ -11212,24 +11212,34 @@ def test_pin1_r4_branch_write_policy_r0_bytes_is_write_boundary_not_pin() -> Non
 # 同じ理由）。
 
 
-def test_pin1_r6_failure_abort_criteria_repinned_lineage_six_generations(
+# `test_pin1_r6_failure_abort_criteria_repinned_lineage_six_generations`
+# （6世代版）は PR #324 第6巡の repin により超過し、下記
+# `test_pin1_r7_failure_abort_criteria_repinned_lineage_seven_generations`
+# （7世代・全履歴を包含する上位互換）へ置き換えた（重複削除、第3-5巡と
+# 同じ理由）。
+
+
+def test_pin1_r7_failure_abort_criteria_repinned_lineage_seven_generations(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """failure_abort_criteria_sha の repin 履歴6世代（RUN9-L0-PIN-1 初回
+    """failure_abort_criteria_sha の repin 履歴7世代（RUN9-L0-PIN-1 初回
     → PR #324 第1巡 Fix 1/2/3 → 第2巡 Fix 6 → 第3巡 rule 12 再降格 →
     第4巡 rule 2 の condition 強化 → 第5巡 verify_user_donor_manifest_
-    complete() の path ベース署名化）が append-only で、現在値が最新
-    （第5巡）のものであることを明示的に確認する（repin 漏れの回帰
-    防止）。"""
+    complete() の path ベース署名化 → 第6巡 独立 pinned anchor への
+    接地追加）が append-only で、現在値が最新（第6巡）のものであることを
+    明示的に確認する（repin 漏れの回帰防止）。"""
     round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
     round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
     round3_value = "6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44"
     round4_value = "3ef4edf25b93a6c996d50b38f6348b567f2eee44f22540a8aca8593786b3f6d1"
     round5_value = "954b463ecfa497b732240d92c6e07a29ebecef480d97dc1f42e9108c12635a52"
     round6_value = "8f9f8c30d521b5f2048891aa17fe9c1aeeb068a1ec8007f2146d4c1ec22cf38d"
+    round7_value = "9b68656d6b5cb30019376ae9848e03801e10b595b5372dca63ba6a59a9d03caf"
     current = contract_raw["failure_abort_criteria_sha"]["value"]
-    assert current == round6_value
-    assert current not in (round1_value, round2_value, round3_value, round4_value, round5_value)
+    assert current == round7_value
+    assert current not in (
+        round1_value, round2_value, round3_value, round4_value, round5_value, round6_value,
+    )
     assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
 
 
@@ -11367,6 +11377,84 @@ def test_pin1_r6_verify_user_donor_manifest_complete_has_no_mapping_signature() 
         m.verify_user_donor_manifest_complete(  # type: ignore[call-arg, misc]
             _real_rights_manifest_loaded(), _real_donor_ledger()
         )
+
+
+# ---------------------------------------------------------------------------
+# PR #324 第6巡指摘（P2, 採用）: rights/ledger 両ファイルの lockstep 改変
+# （同一 entry の値を両側**同値**で書き換える）は (1)〜(3) の相互照合だけ
+# では検出できない——独立 pinned anchor（PR #320 で確立済みの user
+# identity-attestation projection、domains/identity_domain_run9_v1.json
+# anchor_hashes["user"]）への接地を第4段として追加した。
+# ---------------------------------------------------------------------------
+
+
+def test_pin1_r7_verify_user_donor_manifest_complete_still_grounds_to_real_domain_anchor() -> None:
+    """既存正常系は不変で通ること（第4段追加後も実データで PASS）。"""
+    flat = m.verify_user_donor_manifest_complete()
+    assert len(flat["entries"]) == len(m.USER_DONOR_CARD_IDS) == 17
+
+
+def test_pin1_r7_run9_identity_domain_path_is_pinned_and_matches_known_anchor() -> None:
+    """事実確認: 独立 pin（domain の anchor_hashes["user"]）が実在し
+    PINNED であることの直接確認（Fable 設計判定の前提）。"""
+    domain = m.load_run9_identity_domain(m.RUN9_IDENTITY_DOMAIN_PATH)
+    assert domain.is_pinned()
+    assert domain.anchor_hashes["user"] == (
+        "8569705be318d672d5f77ba955054a76d446664bb0883850a69c1fc35a55e804"
+    )
+
+
+def _write_lockstep_tampered_pair(
+    tmp_path: Path, *, fake_sha256: str = "1" * 64
+) -> Tuple[Path, Path]:
+    """rights と ledger の同一 card_id entry の `sha256` を両側**同値**で
+    書き換えた temp ファイルペアを作る（(3) の相互照合だけでは検出
+    できない lockstep 改変）。"""
+    rights = copy.deepcopy(_real_rights_manifest_loaded())
+    ledger = copy.deepcopy(_real_donor_ledger())
+    r_entries = rights["voice_identity_rights"]["entries"]
+    card_id = r_entries[0]["card_id"]
+    r_entries[0]["sha256"] = fake_sha256
+    for entry in ledger["entries"]:
+        if entry["card_id"] == card_id:
+            entry["sha256"] = fake_sha256
+    rights_path = tmp_path / "rights_manifest.json"
+    ledger_path = tmp_path / "user_donor_ledger.json"
+    _write_json_bytes(rights_path, rights)
+    _write_json_bytes(ledger_path, ledger)
+    return rights_path, ledger_path
+
+
+def test_pin1_r7_verify_user_donor_manifest_complete_detects_lockstep_tampering(
+    tmp_path: Path,
+) -> None:
+    """第6巡指摘の直接回帰: (1)〜(3) の相互照合だけでは通ってしまう
+    lockstep 改変（rights/ledger 同一 entry の sha256 を両側同値で
+    書き換え）が、第4段の独立 pinned anchor 不一致で fail-closed 拒否
+    されること。"""
+    rights_path, ledger_path = _write_lockstep_tampered_pair(tmp_path)
+    # (3) の相互照合は素通りする前提（rights/ledger が合意しているため）
+    # ことを確認してから、本関数全体が第4段で拒否することを確認する。
+    tampered_rights = m.load_rights_manifest_json(rights_path.read_text(encoding="utf-8"))
+    tampered_ledger = m.load_user_donor_ledger_json(ledger_path.read_text(encoding="utf-8"))
+    flat = m.extract_voice_identity_rights_layer(tampered_rights)
+    m.verify_rights_manifest_against_ledger(flat, tampered_ledger)  # (3) 単体は PASS する前提の確認
+
+    with pytest.raises(m.Run9ValidationError, match="projection hash does not match"):
+        m.verify_user_donor_manifest_complete(
+            rights_manifest_path=rights_path, donor_ledger_path=ledger_path
+        )
+
+
+def test_pin1_r7_rule2_condition_documents_fourth_stage_anchor_grounding() -> None:
+    """rule 2 の condition が第4段（`_verify_user_anchor_matches_rights_
+    manifest`・独立 pin への接地）を明記していること。"""
+    data = _failure_abort_criteria_data()
+    rule2 = next(r for r in data["rules"] if r["rule_id"] == 2)
+    assert rule2["enforcement"] == "MACHINE"
+    assert "_verify_user_anchor_matches_rights_manifest" in rule2["condition"]
+    assert "anchor_hashes" in rule2["condition"]
+    assert "lockstep" in rule2["condition"]
 
 
 # ---------------------------------------------------------------------------
