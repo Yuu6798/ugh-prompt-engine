@@ -36,6 +36,9 @@ REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.4.md"
 REVISION_0_2_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
 REVISION_0_3_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.3.md"
 POR_ADJUDICATION_PATH = _RUN_DIR / "POR_CONCEPT_ADJUDICATION_20260824.txt"
+PIN2_USER_ADJUDICATION_PATH = (
+    _RUN_DIR / "USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt"
+)
 DERIVED_DESIGN_CHANGES_PATH = _RUN_DIR / "DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt"
 POR_UPLOAD_SOURCE_PATH = Path(
     "/root/.claude/uploads/e505c1c2-c4ad-588b-a1b2-258051a522de/"
@@ -11998,9 +12001,86 @@ def test_pin2_load_pinned_dataset_split_manifest_detects_row_order_sha_drift(
         yaml.safe_dump(tampered_contract_raw, allow_unicode=True), encoding="utf-8"
     )
     tampered_contract = m.load_run9_contract(tampered_contract_raw)
-    with pytest.raises(m.Run9ValidationError, match="dataset_row_order_sha 三者不一致"):
+    with pytest.raises(m.Run9ValidationError, match="dataset_row_order_sha 不一致"):
         m.load_pinned_dataset_split_manifest(
             tampered_contract, manifest_path=tampered_path, contract_path=tampered_yaml_path,
+        )
+
+
+def test_pin2_load_pinned_dataset_split_manifest_recomputes_row_order_from_row_ids(
+    contract: m.Run9RunContract,
+) -> None:
+    """PR #325 第1巡 Codex bot レビュー Fix 1（P2, 採用）: 正例回帰——
+    実 contract に対する呼び出しは `row_ids.{training,validation,
+    sealed_holdout}` の rank 順連結から再計算した digest と、practice
+    manifest の宣言値 `row_order_sha256` が実際に一致することを確認する
+    （実データに対する再計算パスが実際に機能することの直接確認）。"""
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    reconstructed = (
+        practice_data["row_ids"]["training"]
+        + practice_data["row_ids"]["validation"]
+        + practice_data["row_ids"]["sealed_holdout"]
+    )
+    assert m._compute_canonical_pin_sha256(reconstructed) == practice_data["row_order_sha256"]
+    m.load_pinned_dataset_split_manifest(contract)  # 例外を投げないことの確認
+
+
+def test_pin2_load_pinned_dataset_split_manifest_rejects_stale_declared_row_order_after_row_swap(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """必須負例（PR #325 第1巡 Codex bot レビュー Fix 1, P2, 採用）: 指摘が
+    名指しした具体的攻撃シナリオ——practice manifest の `row_ids.training`
+    内で2行を入れ替え、宣言値 `row_order_sha256` は据え置いたまま（stale）
+    repin をシミュレートする（practice_audio_split_manifest_sha /
+    dataset_manifest_sha / dataset_row_order_sha の contract pin 値、
+    および dataset manifest の転記値はすべてこの改竄後バイトへ揃えて
+    更新する——「宣言値同士は全員一致しているが、宣言値自体が実体と食い
+    違っている」という、Fix 1 以前の三者一致だけでは検出できなかった
+    経路を再現する）。row-order 再計算チェックがこの食い違いを
+    fail-closed で検出することを確認する。"""
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    tampered_practice = copy.deepcopy(practice_data)
+    training = tampered_practice["row_ids"]["training"]
+    training[0], training[1] = training[1], training[0]
+    # row_order_sha256 declared value is deliberately left unchanged (stale) —
+    # this is the exact scenario Fix 1 targets.
+    tampered_practice_path = tmp_path / "practice_audio_split_manifest.json"
+    tampered_practice_path.write_bytes(
+        (json.dumps(tampered_practice, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_practice_sha = m.compute_file_sha256(tampered_practice_path)
+
+    dataset_data = _dataset_split_manifest_data()
+    tampered_dataset = copy.deepcopy(dataset_data)
+    tampered_dataset["song_splits"]["practice_audio_split_manifest_sha"] = new_practice_sha
+    # row_order_sha256 transcription also left unchanged — faithfully carries
+    # forward the (stale) declared value, exactly as a careless repin would.
+    tampered_dataset_path = tmp_path / "dataset_split_manifest.json"
+    tampered_dataset_path.write_bytes(
+        (json.dumps(tampered_dataset, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_dataset_sha = m.compute_file_sha256(tampered_dataset_path)
+
+    tampered_contract_raw = copy.deepcopy(contract.raw)
+    tampered_contract_raw["practice_audio_split_manifest_sha"]["value"] = new_practice_sha
+    tampered_contract_raw["dataset_manifest_sha"]["value"] = new_dataset_sha
+    # dataset_row_order_sha pin is also left unchanged — matches the stale
+    # declared/transcribed value everywhere except the actual row order.
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(
+        yaml.safe_dump(tampered_contract_raw, allow_unicode=True), encoding="utf-8"
+    )
+    tampered_contract = m.load_run9_contract(tampered_contract_raw)
+    with pytest.raises(m.Run9ValidationError, match="row_order_sha256 宣言値"):
+        m.load_pinned_dataset_split_manifest(
+            tampered_contract,
+            manifest_path=tampered_dataset_path,
+            practice_manifest_path=tampered_practice_path,
+            contract_path=tampered_yaml_path,
         )
 
 
@@ -12102,6 +12182,81 @@ def test_pin2_expected_speaker_map_sha_reason_states_af0_gap(
     reason = contract_raw["expected_speaker_map_sha"]["reason"]
     assert "ritsu, pjs, user, d3synth, amitaro" in reason
     assert contract_raw["expected_speaker_map_sha"]["status"] == "PENDING"
+
+
+# ---------------------------------------------------------------------------
+# PR #325 第1巡 Codex bot レビュー Fix 2（P2, 採用）: User 裁定
+# 2026-08-25 の逐語一次ソースを scratchpad から repo 内収載
+# （USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt、
+# POR_CONCEPT_ADJUDICATION_20260824.txt と同型の前例）へ差し替えた。
+# ---------------------------------------------------------------------------
+
+
+def test_pin2r2_fix2_adjudication_source_file_exists() -> None:
+    assert PIN2_USER_ADJUDICATION_PATH.is_file()
+
+
+def test_pin2r2_fix2_adjudication_source_contains_verbatim_three_values() -> None:
+    """凍結した3値（trial_count/render_budget/stopping_rule）が、repo 内
+    収載した裁定文書の本文に一字一句そのまま存在すること（grep 照合 —
+    「User 転記であって発明でない」ことを機械検証する）。"""
+    text = PIN2_USER_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    assert "trial_count: 32" in text
+    assert "render_budget: 128 logical_render_units per Founder" in text
+    assert "FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP" in text
+    assert (
+        "config_sha は learning_recipe_sha と同一ファイルを指さない。" in text
+    )
+    assert "`inputs/run9_execution_config.yaml` の raw byte sha256 とする。" in text
+
+
+def test_pin2r2_fix2_adjudication_source_body_byte_identical_to_scratchpad_origin() -> None:
+    """本文（【RUN9 User裁定 — PIN-2 前提】以降）が起草時の作業メモ
+    scratchpad/run9_user_adjudication_pin2.md と一字一句改変なしで
+    一致すること（改変禁止の直接確認）。scratchpad ファイルが本セッション
+    後に存在しない環境（fresh checkout 等）ではこの照合自体ができない
+    ため、存在する場合のみ実行する（存在しない場合は repo 内収載ファイル
+    自体の実在・grep 照合で足りるとみなし skip）。"""
+    scratchpad_path = Path(
+        "/tmp/claude-0/-home-user-ugh-prompt-engine/"
+        "e505c1c2-c4ad-588b-a1b2-258051a522de/scratchpad/"
+        "run9_user_adjudication_pin2.md"
+    )
+    if not scratchpad_path.is_file():
+        pytest.skip("scratchpad origin file not present in this environment")
+    origin_body = scratchpad_path.read_text(encoding="utf-8")
+    origin_body = "【RUN9 User裁定" + origin_body.split("【RUN9 User裁定", 1)[1]
+    committed_text = PIN2_USER_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    committed_body = "【RUN9 User裁定" + committed_text.split("【RUN9 User裁定", 1)[1]
+    assert committed_body == origin_body
+
+
+def test_pin2r2_fix2_contract_records_adjudication_source_sha256_as_comment() -> None:
+    """RUN9_CONTRACT.yaml が USER_ADJUDICATION_20260825_PIN2_LEARNING_
+    BUDGET.txt の実測 sha256 を append-only 情報コメントとして記録して
+    いること（新 pin 欄は作らない設計判断——CONTRACT_PIN_FIELDS には
+    含まれないことも確認する）。"""
+    contract_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    actual_sha = m.compute_file_sha256(PIN2_USER_ADJUDICATION_PATH)
+    assert actual_sha in contract_text
+    assert "USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt" not in m.CONTRACT_PIN_FIELDS
+    assert "user_adjudication" not in {f.lower() for f in m.CONTRACT_PIN_FIELDS}
+
+
+def test_pin2r2_fix2_learning_recipe_and_config_reason_cite_committed_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    for field_name in ("learning_recipe_sha", "config_sha"):
+        reason = contract_raw[field_name]["reason"]
+        assert "USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt" in reason, (
+            f"{field_name}.reason should cite the committed adjudication source"
+        )
+
+
+def test_pin2r2_fix2_run9_schema_docstrings_cite_committed_file() -> None:
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert "USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt" in source
+    assert "scratchpad/run9_user_adjudication_pin2.md" not in source
 
 
 def test_pin1_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> None:

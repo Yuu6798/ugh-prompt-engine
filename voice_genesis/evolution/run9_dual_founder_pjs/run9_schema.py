@@ -1482,9 +1482,14 @@ _LEARNING_RECIPE_EQUAL_CONDITION_STR_KEYS: Tuple[str, ...] = (
 
 _LEARNING_RECIPE_ARMS: Tuple[str, str] = ("practice_recipe", "education_recipe")
 
-# RUN9-L0-PIN-2（Design Memo, User 裁定 2026-08-25 — 逐語は
-# scratchpad/run9_user_adjudication_pin2.md、本モジュールへの転記元）:
-# PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE 両枝の `trial_count`/
+# RUN9-L0-PIN-2（Design Memo, User 裁定 2026-08-25 — 逐語一次ソースは
+# `USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt`（本ディレクトリ
+# 同梱、POR_CONCEPT_ADJUDICATION_20260824.txt と同型の repo 内収載裁定
+# 文書。Codex bot レビュー PR #325 第1巡指摘 Fix 2, P2, 採用: 起草時の
+# 転記元は repo に無い作業メモだけであり将来のレビュアーが「User 転記
+# であって発明でない」ことを検証できない、という指摘を受けて repo 内
+# ファイルへ本転記元を差し替えた）: PRACTICE_FROM_AUDIO/
+# TRANSFER_TECHNIQUE 両枝の `trial_count`/
 # `render_budget`/`stopping_rule` を裁定値へ厳密固定する
 # （`equal_budget_within_arm` は既に `_validate_learning_recipe_arm()` が
 # bool True 厳密一致で強制済み — 4キーで裁定済み、PoR §8 の9項目のうち
@@ -1658,8 +1663,8 @@ def validate_learning_recipe_manifest(data: Mapping[str, Any]) -> None:
     `LEARNING_RECIPE_ADJUDICATED_STOPPING_RULE`=
     "FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP"）。
 
-    User 裁定 2026-08-25 の逐語（要点。全文は
-    scratchpad/run9_user_adjudication_pin2.md）:
+    User 裁定 2026-08-25 の逐語（要点。全文は repo 内収載の
+    `USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt`）:
     - R9F-01/R9F-02 には各 arm 内で完全に同一の予算・候補生成規則・探索
       空間・評価器・停止規則を適用する。PRACTICE と EDUCATION 間について
       も本 RUN9 では探索機会を揃えるため同じ trial/render 予算を採用する
@@ -10587,12 +10592,21 @@ def load_pinned_dataset_split_manifest(
         将来これら3欄のいずれかが再 pin（repin）された後に本 manifest の
         転記が追随されないまま残る「静かな陳腐化」を、消費時点でディスク
         正典と突き合わせることで検出する
-    (7) **dataset_row_order_sha 三者一致**（AC 固有）: `dataset_row_order_
-        sha` pin 値 / `practice_audio_split_manifest.json` 実体の
-        `row_order_sha256` フィールド値（practice manifest 自体は
+    (7) **dataset_row_order_sha 四者一致**（AC 固有、PR #325 第1巡 Fix 1
+        で三者一致から拡張）: `dataset_row_order_sha` pin 値 /
+        `practice_audio_split_manifest.json` 実体の `row_order_sha256`
+        宣言フィールド値（practice manifest 自体は
         `practice_audio_split_manifest_sha` pin との read-once sha256
         照合で stale/改変検出したバイトから読む）/ 本 manifest の転記値
-        （`song_splits.row_order_sha256`）の3者が一致しない場合 raise する
+        （`song_splits.row_order_sha256`）/ **`row_ids.{training,
+        validation,sealed_holdout}` の rank 順連結から `_compute_
+        canonical_pin_sha256()`（`practice_split_builder._canonical_
+        song_list_sha256()` が呼ぶのと同一の共有プリミティブ）で再計算
+        した digest** の4者が一致しない場合 raise する——再計算チェックが
+        無いと、practice split が将来再生成・repin された際に宣言値
+        `row_order_sha256` が内部的に stale なまま3ファイルの pin/転記が
+        揃って更新されるケースを三者一致だけでは検出できない（宣言値同士
+        の一致は「宣言値が正しい」ことを証明しない）
 
     戻り値は検証済み dataset split manifest dict。
     """
@@ -10725,16 +10739,62 @@ def load_pinned_dataset_split_manifest(
         raise Run9ValidationError(
             f"load_pinned_dataset_split_manifest(): practice manifest JSON parse に失敗した: {exc}"
         ) from exc
+    # PR #325 第1巡 Codex bot レビュー指摘 Fix 1（P2, 採用）: 従来はここで
+    # practice_data の宣言値 `row_order_sha256` を読むだけで、実際の順序列
+    # から digest を再計算していなかった——practice split が将来再生成・
+    # repin された際、宣言値が内部的に stale なまま3ファイルの pin/転記が
+    # 揃って更新されていれば、三者一致チェックは偽の成功を返し得た。
+    # `validate_practice_split_manifest()` で構造を確定検証したうえで、
+    # `row_ids.{training,validation,sealed_holdout}` の連結（builder の
+    # `assign_split()` が返す rank 順 row_order と同じ順序 — training を
+    # 先頭に、validation、sealed_holdout の順に連結したものが rank 順
+    # 全体列に一致する。`practice_split_builder.assign_split()`：
+    # `ranked[:n_train]`=training/`ranked[n_train:n_train+n_val]`=
+    # validation/`ranked[n_train+n_val:]`=sealed_holdout であり row_order
+    # 自体が `ranked` そのものであるため、この3スライスを同順で連結すれば
+    # 元の rank 順列に厳密復元できる）から、builder が実際に呼ぶのと**同一
+    # の共有プリミティブ** `_compute_canonical_pin_sha256()`
+    # （`practice_split_builder._canonical_song_list_sha256()` はこの関数
+    # への薄いラッパーに過ぎない——`practice_split_builder.py:277-282`
+    # 参照、read-only 確認済み）で digest を再計算する。builder を import
+    # するのではなくこの共有プリミティブを直接呼ぶ設計とした理由:
+    # (a) `practice_split_builder.py` は `import numpy as np` を
+    # トップレベルに持ち、`run9_schema.py` は標準ライブラリ + PyYAML
+    # のみを依存とする方針（Allowed Dependencies: なし）を壊す、
+    # (b) `practice_split_builder` は既に `import run9_schema as m` して
+    # おり（sibling import 規約）、逆方向 import は循環 import になる。
+    # `_compute_canonical_pin_sha256()` は builder 自身が呼ぶのと全く同じ
+    # 関数オブジェクトであるため「別実装による drift」の余地が構造的に
+    # 存在しない（コピー実装ではなく同一関数の共有呼び出し）。
+    validate_practice_split_manifest(practice_data)
+    reconstructed_row_order = (
+        list(practice_data["row_ids"]["training"])
+        + list(practice_data["row_ids"]["validation"])
+        + list(practice_data["row_ids"]["sealed_holdout"])
+    )
+    recomputed_row_order_sha256 = _compute_canonical_pin_sha256(reconstructed_row_order)
     practice_row_order_sha256 = practice_data.get("row_order_sha256")
+    if recomputed_row_order_sha256 != practice_row_order_sha256:
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): practice manifest の row_order_sha256 宣言値 "
+            f"({practice_row_order_sha256!r}) が row_ids（training+validation+sealed_holdout の "
+            f"rank 順連結）から再計算した digest ({recomputed_row_order_sha256!r}) と一致しない — "
+            "宣言値が内部的に stale（practice split の再生成後に repin されずに残った可能性）である "
+            "証拠として fail-closed で拒否する"
+        )
     transcribed_row_order_sha256 = data["song_splits"]["row_order_sha256"]
     if not (
-        row_order_field["value"] == practice_row_order_sha256 == transcribed_row_order_sha256
+        row_order_field["value"]
+        == practice_row_order_sha256
+        == transcribed_row_order_sha256
+        == recomputed_row_order_sha256
     ):
         raise Run9ValidationError(
-            "load_pinned_dataset_split_manifest(): dataset_row_order_sha 三者不一致 — contract "
-            f"pin={row_order_field['value']!r}, practice manifest row_order_sha256="
+            "load_pinned_dataset_split_manifest(): dataset_row_order_sha 不一致 — contract "
+            f"pin={row_order_field['value']!r}, practice manifest 宣言値="
             f"{practice_row_order_sha256!r}, dataset manifest 転記 song_splits.row_order_sha256="
-            f"{transcribed_row_order_sha256!r}"
+            f"{transcribed_row_order_sha256!r}, row_ids からの再計算値="
+            f"{recomputed_row_order_sha256!r}"
         )
 
     return data

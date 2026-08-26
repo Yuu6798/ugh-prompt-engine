@@ -390,8 +390,8 @@ config_sha:
     sha 等）を参照して束ねるだけであり、trial_count/render_budget/
     stopping_rule 等の学習意味論を config 側で重複定義してはならない
     （evaluation/probe_manifest.json measurement_boundary の「重複定義
-    しない」規律と同型 — User 裁定 2026-08-25 逐語、
-    scratchpad/run9_user_adjudication_pin2.md 節1）。build（実ファイル
+    しない」規律と同型 — User 裁定 2026-08-25 逐語、repo 内収載
+    USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt 節1）。build（実ファイル
     生成・pin）は VG-L0 学習ハーネスの実行段構成が確定する実装時（最終
     組み立て欄——本欄が束ねる対象の多くが先に PINNED 済みである必要が
     あるため）。schema・manifest は本 PR で作らない（実行段構成の設計
@@ -692,12 +692,27 @@ branch_write_policy_sha:
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/branch_write_policy.json
 
+# --- 情報記録（pin 欄ではない、append-only）: RUN9-L0-PIN-2（PR #325 第1巡
+# Codex bot レビュー指摘 Fix 2, P2, 採用）でリポジトリへ収載した
+# USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt（User 裁定
+# 2026-08-25 の逐語全文、learning_recipe_sha/config_sha reason が引用する
+# 一次ソース）の実バイト sha256（compute_file_sha256() 実測、
+# 2026-08-26 時点）:
+#   2aab0ceb3f3db7188d941d015b903948c5689ec683ba6e6ea90c605cc5f22b71
+# 本ファイルは CONTRACT_PIN_FIELDS へ追加しない（契約 schema の凍結面を
+# 広げない設計判断 — 裁定文書自体は「値の転記元の証跡」であって RUN9 の
+# 実行前提条件そのものではないため、pin 昇格対象にはしない。値が改訂
+# されたらこのコメントの sha256 のみ書き換え、旧値は履歴として保持する）。
 learning_recipe_sha:
   value: null
   status: PENDING
   reason: >-
-    RUN9-L0-PIN-2（2026-08-26, User 裁定 2026-08-25）: `_LEARNING_RECIPE_
-    ARM_KEYS` 9キーのうち4キー（`equal_budget_within_arm`/`trial_count`/
+    RUN9-L0-PIN-2（2026-08-26, User 裁定 2026-08-25 — 逐語一次ソースは
+    repo 内収載 USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt。
+    Codex bot レビュー PR #325 第1巡指摘 Fix 2, P2, 採用: 転記元が
+    scratchpad のみで repo 不在だったため、POR_CONCEPT_ADJUDICATION_
+    20260824.txt と同型の repo 内収載文書へ差し替えた）:
+    `_LEARNING_RECIPE_ARM_KEYS` 9キーのうち4キー（`equal_budget_within_arm`/`trial_count`/
     `render_budget`/`stopping_rule`）は User 裁定で値が確定し、
     `run9_schema.validate_learning_recipe_manifest()`
     （`_validate_learning_recipe_arm()`）が両 arm（practice_recipe/
