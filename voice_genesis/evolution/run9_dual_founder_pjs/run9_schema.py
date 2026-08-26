@@ -11352,6 +11352,19 @@ _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "logical_name", "file", "expected_sha256",
 })
 
+# Codex bot レビュー PR #326 第1巡指摘 Fix 1（P2, 採用, 将来汚染防止）:
+# 旧実装は `expected_items` の shape を status に依らず一定にしており、
+# 将来 status を `OBTAINED_VERIFIED_MATCH` へ書き換えるだけで validator
+# を通過できた（実測 digest の存在も一致も要求していなかった）。
+# `OBTAINED_VERIFIED_MATCH` の場合のみ `measured_sha256`（実取得時に
+# 実測した digest）を必須とし、`NOT_OBTAINED_TARBALL_MISS` の場合は
+# 逆に禁止する（あれば「未取得なのに実測値がある」という矛盾として
+# unknown key で拒否される）——status 判別型の item shape。
+_ACOUSTIC_COMPANION_ITEM_OBTAINED_ONLY_KEYS: FrozenSet[str] = frozenset({"measured_sha256"})
+_ACOUSTIC_COMPANION_ITEM_OBTAINED_REQUIRED_KEYS: FrozenSet[str] = (
+    _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS | _ACOUSTIC_COMPANION_ITEM_OBTAINED_ONLY_KEYS
+)
+
 _ACOUSTIC_COMPANIONS_TOP_KEYS: FrozenSet[str] = frozenset({
     "status", "expected_items", "attempted_source", "verdict",
     "indirect_provenance_found", "run_execution_manifest_search",
@@ -11393,6 +11406,16 @@ def _validate_acoustic_export_companions(section: Any) -> None:
             "dependency pins manifest.acoustic_export_companions.expected_items must be a "
             f"non-empty list, got {items!r}"
         )
+    # status 判別型 shape（Fix 1）: OBTAINED のときのみ item ごとに
+    # `measured_sha256` を必須化し、NOT_OBTAINED のときは逆に禁止する
+    # （禁止は許可キー集合から外すだけで、unknown key チェックが自動的に
+    # 「未取得なのに実測値がある」矛盾を拒否する）。
+    if status == "OBTAINED_VERIFIED_MATCH":
+        item_allowed_keys = _ACOUSTIC_COMPANION_ITEM_OBTAINED_REQUIRED_KEYS
+        item_required_keys = _ACOUSTIC_COMPANION_ITEM_OBTAINED_REQUIRED_KEYS
+    else:
+        item_allowed_keys = _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS
+        item_required_keys = _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS
     seen_names = []
     for i, item in enumerate(items):
         if not isinstance(item, dict):
@@ -11400,17 +11423,18 @@ def _validate_acoustic_export_companions(section: Any) -> None:
                 f"dependency pins manifest.acoustic_export_companions.expected_items[{i}] must "
                 f"be an object, got {type(item).__name__}"
             )
-        unknown_item = set(item.keys()) - _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS
+        unknown_item = set(item.keys()) - item_allowed_keys
         if unknown_item:
             raise Run9ValidationError(
                 f"dependency pins manifest.acoustic_export_companions.expected_items[{i}] has "
-                f"unknown key(s): {sorted(unknown_item)}"
+                f"unknown key(s) for status {status!r}: {sorted(unknown_item)} (measured_sha256 "
+                "is only permitted — and required — when status is OBTAINED_VERIFIED_MATCH)"
             )
-        missing_item = _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS - set(item.keys())
+        missing_item = item_required_keys - set(item.keys())
         if missing_item:
             raise Run9ValidationError(
                 f"dependency pins manifest.acoustic_export_companions.expected_items[{i}] "
-                f"missing required key(s): {sorted(missing_item)}"
+                f"missing required key(s) for status {status!r}: {sorted(missing_item)}"
             )
         seen_names.append(
             _require_non_empty_str(
@@ -11427,6 +11451,21 @@ def _validate_acoustic_export_companions(section: Any) -> None:
                 f"dependency pins manifest.acoustic_export_companions.expected_items[{i}]."
                 f"expected_sha256 must be a 64hex sha256, got {expected_sha!r}"
             )
+        if status == "OBTAINED_VERIFIED_MATCH":
+            measured_sha = item["measured_sha256"]
+            if not isinstance(measured_sha, str) or not _SHA256_HEX_RE.match(measured_sha):
+                raise Run9ValidationError(
+                    f"dependency pins manifest.acoustic_export_companions.expected_items[{i}]."
+                    f"measured_sha256 must be a 64hex sha256, got {measured_sha!r}"
+                )
+            if measured_sha != expected_sha:
+                raise Run9ValidationError(
+                    f"dependency pins manifest.acoustic_export_companions.expected_items[{i}] "
+                    f"declares status OBTAINED_VERIFIED_MATCH but measured_sha256 "
+                    f"({measured_sha!r}) != expected_sha256 ({expected_sha!r}) — a mismatched "
+                    "pair may never claim OBTAINED_VERIFIED_MATCH (mirrors render_asset_ledger's "
+                    "VERIFIED_MATCH enforcement)"
+                )
     if set(seen_names) != set(_DEPENDENCY_ACOUSTIC_COMPANION_BUNDLE_PATHS):
         raise Run9ValidationError(
             "dependency pins manifest.acoustic_export_companions.expected_items must register "
@@ -11739,35 +11778,135 @@ def _validate_speaker_embeddings_unpinned_candidates(section: Any) -> None:
         )
 
 
-_BLOCKED_SECTION_STATUS_VOCAB: Tuple[str, ...] = ("BLOCKED", "COMPLETED")
+# Codex bot レビュー PR #326 第1巡指摘 Fix 2（P2, 採用, 将来汚染防止）:
+# 旧実装（`_validate_blocked_or_completed_section()`、単一 required_keys
+# を BLOCKED/COMPLETED 共通で強制）は、将来 status を `COMPLETED` へ
+# 書き換えても `blocked_by`/`not_attempted_reason_is_missing_input_
+# not_failure` 等の BLOCKED 専用フィールドが残置可能で、かつ
+# COMPLETED が本来必須とすべき実測フィールド（決定論確認・実測秒・
+# 見積数値）の shape を一切要求していなかった。`smoke_render`/
+# `budget_estimate` をそれぞれ専用の status 判別型 validator へ分離し、
+# BLOCKED/COMPLETED の必須キー集合を disjoint に固定する（closed
+# vocabulary、`set(...) - required_keys` の unknown-key チェックが
+# 「両方の shape を跨いだ残置フィールド」を機械的に拒否する）。
+_STATUS_DISCRIMINATED_VOCAB: Tuple[str, ...] = ("BLOCKED", "COMPLETED")
 
-
-def _validate_blocked_or_completed_section(
-    section: Any, *, field: str, required_keys: FrozenSet[str]
-) -> None:
-    if not isinstance(section, dict):
-        raise Run9ValidationError(f"{field} must be an object, got {type(section).__name__}")
-    unknown = set(section.keys()) - required_keys
-    if unknown:
-        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
-    missing = required_keys - set(section.keys())
-    if missing:
-        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
-    status = section["status"]
-    if status not in _BLOCKED_SECTION_STATUS_VOCAB:
-        raise Run9ValidationError(
-            f"{field}.status must be one of {_BLOCKED_SECTION_STATUS_VOCAB!r}, got {status!r}"
-        )
-    _require_non_empty_str(section["reason"], field=f"{field}.reason")
-
-
-_SMOKE_RENDER_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+_SMOKE_RENDER_BLOCKED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "status", "blocked_by", "reason", "not_attempted_reason_is_missing_input_not_failure",
 })
-_BUDGET_ESTIMATE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+_SMOKE_RENDER_COMPLETED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "status", "reason", "determinism_confirmed", "measured_sec_per_render", "render_condition",
+})
+
+
+def _validate_smoke_render_section(section: Any) -> None:
+    field = "smoke_render"
+    if not isinstance(section, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(section).__name__}")
+    status = section.get("status")
+    if status == "BLOCKED":
+        required_keys = _SMOKE_RENDER_BLOCKED_REQUIRED_KEYS
+    elif status == "COMPLETED":
+        required_keys = _SMOKE_RENDER_COMPLETED_REQUIRED_KEYS
+    else:
+        raise Run9ValidationError(
+            f"{field}.status must be one of {_STATUS_DISCRIMINATED_VOCAB!r}, got {status!r}"
+        )
+    unknown = set(section.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(
+            f"{field} has unknown key(s) for status {status!r}: {sorted(unknown)} (BLOCKED-only "
+            "and COMPLETED-only fields are disjoint — a section may not mix them)"
+        )
+    missing = required_keys - set(section.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"{field} missing required key(s) for status {status!r}: {sorted(missing)}"
+        )
+    _require_non_empty_str(section["reason"], field=f"{field}.reason")
+    if status == "BLOCKED":
+        _require_non_empty_str(section["blocked_by"], field=f"{field}.blocked_by")
+        not_attempted = section["not_attempted_reason_is_missing_input_not_failure"]
+        if not isinstance(not_attempted, bool):
+            raise Run9ValidationError(
+                f"{field}.not_attempted_reason_is_missing_input_not_failure must be a bool, "
+                f"got {not_attempted!r}"
+            )
+    else:  # COMPLETED
+        if section["determinism_confirmed"] is not True:
+            raise Run9ValidationError(
+                f"{field}.determinism_confirmed must be the literal boolean True when status is "
+                f"COMPLETED (a completed smoke render must have actually confirmed determinism, "
+                f"not merely claimed it), got {section['determinism_confirmed']!r}"
+            )
+        _require_positive_finite_number(
+            section["measured_sec_per_render"], field=f"{field}.measured_sec_per_render"
+        )
+        _require_non_empty_str(section["render_condition"], field=f"{field}.render_condition")
+
+
+_BUDGET_ESTIMATE_BLOCKED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "status", "reason", "reference_only_prior_gpu_measurement_sec_per_item",
     "reference_only_source", "reference_only_caveat",
 })
+_BUDGET_ESTIMATE_COMPLETED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "status", "reason", "total_render_count", "estimated_total_sec",
+})
+
+
+def _validate_budget_estimate_section(section: Any) -> None:
+    field = "budget_estimate"
+    if not isinstance(section, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(section).__name__}")
+    status = section.get("status")
+    if status == "BLOCKED":
+        required_keys = _BUDGET_ESTIMATE_BLOCKED_REQUIRED_KEYS
+    elif status == "COMPLETED":
+        required_keys = _BUDGET_ESTIMATE_COMPLETED_REQUIRED_KEYS
+    else:
+        raise Run9ValidationError(
+            f"{field}.status must be one of {_STATUS_DISCRIMINATED_VOCAB!r}, got {status!r}"
+        )
+    unknown = set(section.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(
+            f"{field} has unknown key(s) for status {status!r}: {sorted(unknown)} (BLOCKED-only "
+            "and COMPLETED-only fields are disjoint — a section may not mix them)"
+        )
+    missing = required_keys - set(section.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"{field} missing required key(s) for status {status!r}: {sorted(missing)}"
+        )
+    _require_non_empty_str(section["reason"], field=f"{field}.reason")
+    if status == "BLOCKED":
+        reference_sec = section["reference_only_prior_gpu_measurement_sec_per_item"]
+        if not isinstance(reference_sec, list) or not reference_sec:
+            raise Run9ValidationError(
+                f"{field}.reference_only_prior_gpu_measurement_sec_per_item must be a non-empty "
+                f"list, got {reference_sec!r}"
+            )
+        for value in reference_sec:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise Run9ValidationError(
+                    f"{field}.reference_only_prior_gpu_measurement_sec_per_item entries must be "
+                    f"numbers (bool rejected), got {value!r}"
+                )
+        _require_non_empty_str(
+            section["reference_only_source"], field=f"{field}.reference_only_source"
+        )
+        _require_non_empty_str(
+            section["reference_only_caveat"], field=f"{field}.reference_only_caveat"
+        )
+    else:  # COMPLETED
+        total_count = section["total_render_count"]
+        if isinstance(total_count, bool) or not isinstance(total_count, int) or total_count <= 0:
+            raise Run9ValidationError(
+                f"{field}.total_render_count must be a positive int, got {total_count!r}"
+            )
+        _require_positive_finite_number(
+            section["estimated_total_sec"], field=f"{field}.estimated_total_sec"
+        )
 
 
 def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
@@ -11791,6 +11930,15 @@ def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
     しない。`speaker_embeddings_unpinned_candidates` は status 語彙が
     "UNPINNED_CANDIDATE" で始まる値のみを許容し、未確定候補という
     位置づけを構造的に保つ。
+
+    Codex bot レビュー PR #326 第1巡指摘 Fix 1（P2, 採用）:
+    `acoustic_export_companions.expected_items` は status 判別型 shape——
+    `OBTAINED_VERIFIED_MATCH` の item は `measured_sha256`（実測 digest）
+    を必須とし `expected_sha256` との厳密一致を強制する。
+    `NOT_OBTAINED_TARBALL_MISS` の item は `measured_sha256` を禁止する
+    （あれば unknown key で拒否）。将来単に status 文字列を書き換える
+    だけでは通過できない。bundle pin との三者一致は
+    `load_pinned_dependency_pins_manifest()` cross-check (6) が担う。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"dependency pins manifest must be an object, got {type(data).__name__}")
@@ -11852,12 +12000,8 @@ def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
     _validate_python_dependency_pins(data["python_dependency_pins"])
     _validate_diffsinger_render_code_commit(data["diffsinger_render_code_commit"])
     _validate_speaker_embeddings_unpinned_candidates(data["speaker_embeddings_unpinned_candidates"])
-    _validate_blocked_or_completed_section(
-        data["smoke_render"], field="smoke_render", required_keys=_SMOKE_RENDER_REQUIRED_KEYS
-    )
-    _validate_blocked_or_completed_section(
-        data["budget_estimate"], field="budget_estimate", required_keys=_BUDGET_ESTIMATE_REQUIRED_KEYS
-    )
+    _validate_smoke_render_section(data["smoke_render"])
+    _validate_budget_estimate_section(data["budget_estimate"])
 
 
 def load_pinned_dependency_pins_manifest(
@@ -11991,6 +12135,19 @@ def load_pinned_dependency_pins_manifest(
                 f"expected_items[{logical_name!r}].expected_sha256 ({item['expected_sha256']!r}) "
                 f"diverges from backbone_runtime_bundle.json#{'.'.join(bundle_path_tuple)} "
                 f"({bundle_value!r}) — cross-check fail-closed"
+            )
+        # Fix 1（PR #326 第1巡, P2, 採用）三者一致の第3辺: `validate_
+        # dependency_pins_manifest()` は measured_sha256 == expected_sha256
+        # を、直上の分岐は expected_sha256 == bundle 値を、それぞれ独立に
+        # 強制済みだが、measured_sha256 と bundle 値の一致は推移律頼み
+        # だった（validate() を経由しない直接呼び出しがあれば推移律が
+        # 効かない）。ここで明示的に三者目を直接照合する。
+        if "measured_sha256" in item and item["measured_sha256"] != bundle_value:
+            raise Run9ValidationError(
+                "load_pinned_dependency_pins_manifest(): acoustic_export_companions."
+                f"expected_items[{logical_name!r}].measured_sha256 ({item['measured_sha256']!r}) "
+                f"diverges from backbone_runtime_bundle.json#{'.'.join(bundle_path_tuple)} "
+                f"({bundle_value!r}) — three-way cross-check fail-closed"
             )
 
     commit_section = data["diffsinger_render_code_commit"]

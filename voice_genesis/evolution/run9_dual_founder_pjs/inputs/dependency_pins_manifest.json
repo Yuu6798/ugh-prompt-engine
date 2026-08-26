@@ -73,7 +73,7 @@
     "status": "VERIFIED_MATCH"
   },
   "generated_at": "2026-08-26",
-  "generation_note": "RUN9-L0-HARNESS-1（Design Memo, Claude 完結ルート、User 裁定 2026-08-26「必要な素材はドライブにあるのでClaudeで完結できるはずだ。Claudeルートで作成して」）の provisioning 実行で得た実測台帳。取得は provision.sh 前例（.part staging -> sha256一致でのみ確定名へリネームする冪等 fail-closed 方式）を踏襲した。workdir は repo 外の session scratchpad (scratchpad/harness_work/) — 実資産バイナリは本 repo に一切コミットしていない。",
+  "generation_note": "RUN9-L0-HARNESS-1（Design Memo, Claude 完結ルート、User 裁定 2026-08-26「必要な素材はドライブにあるのでClaudeで完結できるはずだ。Claudeルートで作成して」）の provisioning 実行で得た実測台帳。取得は provision.sh 前例（.part staging -> sha256一致でのみ確定名へリネームする冪等 fail-closed 方式）を踏襲した。workdir は repo 外の session scratchpad (scratchpad/harness_work/) — 実資産バイナリは本 repo に一切コミットしていない。 [PR #326 第1巡 Codex bot レビュー 2件（P2×2、2026-08-26、いずれも採用——将来汚染防止: 将来の repin が証拠なしで成功状態を主張できる validator の穴）を受け、validate_dependency_pins_manifest() を status 判別型 shape へ強化した（内容は無変更、validator/loaderのみ強化）。Fix 1: acoustic_export_companions.expected_items は status が OBTAINED_VERIFIED_MATCH のときのみ measured_sha256（実測 digest、expected_sha256 と厳密一致必須）を要求し、NOT_OBTAINED_TARBALL_MISS のときは禁止する（status 文字列の書き換えだけでは通過できない）。loader 側はmeasured_sha256 と backbone_runtime_bundle.json 側 pin 値の直接比較（三者一致の第3辺）も追加した。Fix 2: smoke_render/budget_estimate を BLOCKED/COMPLETED 専用の disjoint な必須キー集合へ分離した——COMPLETED は blocked 専用フィールド（blocked_by 等）を禁止し、実測フィールド（smoke: determinism_confirmed=True・measured_sec_per_render 正の有限数値・render_condition／budget: total_render_count 正の整数・estimated_total_sec 正の有限数値）を必須化した。本 harness の実測結果自体（tar.gz MISS・smoke render BLOCKED・budget estimate BLOCKED）は無変更のまま——両セクションとも引き続き BLOCKED shape で妥当。]",
   "python_dependency_pins": [
     {
       "observed_version": "3.11.15",

@@ -925,6 +925,12 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   `BLOCKED`（`smoke_render`/`budget_estimate` 節、数値を捏造しない）。
   詳細な取得経路・全照合結果・tar.gz 全数展開ログは
   [`HARNESS1_PROVISION_RECORD.md`](./HARNESS1_PROVISION_RECORD.md) を正とする。
+  PR #326 第1巡 Codex bot レビュー2件（P2×2、採用）により
+  `validate_dependency_pins_manifest()` を status 判別型 shape へ強化し
+  （`acoustic_export_companions`/`smoke_render`/`budget_estimate` が
+  status 文字列の書き換えだけで成功状態を主張できない machine check を
+  追加）、`dependency_pins_sha` を第2世代へ repin した（実測結果自体は
+  無変更、詳細は `HARNESS1_PROVISION_RECORD.md` §5-1）。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

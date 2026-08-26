@@ -13699,3 +13699,187 @@ def test_harness1_execution_profile_sha_still_pending(contract: m.Run9RunContrac
 
 def test_harness1_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
     assert m.gate_state(contract) == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# PR #326 第1巡 Codex bot レビュー Fix 1/Fix 2（P2 ×2, 採用, 2026-08-26）:
+# status 判別型 shape の負例テスト（将来汚染防止 — status 文字列の書き換え
+# だけでは validator を通過できないことの回帰固定）。
+# ---------------------------------------------------------------------------
+
+
+def test_harness1_pr326_fix1_status_flip_alone_is_rejected() -> None:
+    """acoustic_export_companions.status を OBTAINED_VERIFIED_MATCH へ
+    書き換えるだけ（expected_items に measured_sha256 を追加しない）の
+    改竄は、各 item の measured_sha256 欠落として fail-closed 拒否される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    with pytest.raises(m.Run9ValidationError, match="missing required key.*measured_sha256|measured_sha256"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix1_not_obtained_forbids_measured_sha256() -> None:
+    """status が NOT_OBTAINED_TARBALL_MISS のまま measured_sha256 を item
+    へ書き加える（未取得なのに実測値がある、という矛盾）と unknown key
+    として拒否される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["expected_items"][0]["measured_sha256"] = (
+        data["acoustic_export_companions"]["expected_items"][0]["expected_sha256"]
+    )
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix1_obtained_measured_mismatch_rejected() -> None:
+    """OBTAINED_VERIFIED_MATCH で measured_sha256 を付与しても、
+    expected_sha256 と不一致なら拒否される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    for item in data["acoustic_export_companions"]["expected_items"]:
+        item["measured_sha256"] = "0" * 64
+    with pytest.raises(m.Run9ValidationError, match="measured_sha256.*!= expected_sha256"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix1_obtained_correct_measured_hashes_accepted() -> None:
+    """正しい measured_sha256（expected_sha256 と一致）を全 item に付与
+    すれば OBTAINED_VERIFIED_MATCH は validate を通る（過剰拒否でない
+    ことの確認）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    for item in data["acoustic_export_companions"]["expected_items"]:
+        item["measured_sha256"] = item["expected_sha256"]
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix1_loader_accepts_correctly_obtained_companions(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """expected_sha256 と一致する measured_sha256 を全 item に付与した
+    OBTAINED_VERIFIED_MATCH manifest が、`load_pinned_dependency_pins_
+    manifest()` の全段（validate + bundle cross-check 含む三者一致）を
+    通って正常に読み込めること（過剰拒否でないことの確認、正常系）。"""
+    manifest_data = copy.deepcopy(_dependency_pins_manifest_data())
+    manifest_data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    for item in manifest_data["acoustic_export_companions"]["expected_items"]:
+        item["measured_sha256"] = item["expected_sha256"]
+    manifest_text = json.dumps(manifest_data, sort_keys=True, ensure_ascii=False, indent=2) + "\n"
+    manifest_path = tmp_path / "dependency_pins_manifest.json"
+    manifest_path.write_bytes(manifest_text.encode("utf-8"))
+
+    # contract の dependency_pins_sha を、この改変後 manifest のバイトへ
+    # 一時的に付け替えた合成 contract を用意する（disk 正典との乖離検査を
+    # 迂回するため、tmp_path 側に RUN9_CONTRACT.yaml も複製する）。
+    tampered_raw = copy.deepcopy(contract.raw)
+    tampered_raw["dependency_pins_sha"]["value"] = m.compute_file_sha256(manifest_path)
+    tampered_contract_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_contract_path.write_text(yaml.safe_dump(tampered_raw, allow_unicode=True), encoding="utf-8")
+    tampered_contract = m.load_run9_contract(tampered_raw)
+
+    data = m.load_pinned_dependency_pins_manifest(
+        tampered_contract, manifest_path=manifest_path, contract_path=tampered_contract_path,
+    )
+    assert data["acoustic_export_companions"]["status"] == "OBTAINED_VERIFIED_MATCH"
+
+
+def test_harness1_pr326_fix1_loader_measured_sha256_checked_against_bundle_directly() -> None:
+    """loader 内の三者一致（測定値 vs bundle）は、`validate_dependency_
+    pins_manifest()` が強制する measured==expected と、loader 自身の
+    expected==bundle チェックから数学的に導かれる（現行データではこの
+    行の raise 分岐へ到達しうる独立した改竄経路が存在しない——
+    `bundle_value` を1回だけ算出しどちらの比較にも使い回す実装のため）。
+    本テストはその推移律を明示的に確認する形で回帰固定し、コード自体が
+    3値（measured/expected/bundle）を直接比較する行を持つこと
+    （将来 `expected` 比較だけが削除されても `measured` 比較が独立に
+    生き残ること）をソース走査で確認する——将来の実装変更で三者目の
+    比較行自体が誤って削除されないための最終防衛線。"""
+    source = inspect.getsource(m.load_pinned_dependency_pins_manifest)
+    assert 'item["measured_sha256"] != bundle_value' in source
+    assert "three-way cross-check" in source
+
+
+def test_harness1_pr326_fix2_smoke_render_completed_with_blocked_fields_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["smoke_render"]["status"] = "COMPLETED"  # blocked_by 等を残置したまま
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix2_smoke_render_completed_missing_evidence_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["smoke_render"] = {"status": "COMPLETED", "reason": "done"}
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix2_smoke_render_completed_determinism_not_true_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": False, "measured_sec_per_render": 4.2,
+        "render_condition": "CPU, ritsu",
+    }
+    with pytest.raises(m.Run9ValidationError, match="determinism_confirmed"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix2_smoke_render_completed_nonpositive_sec_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": 0,
+        "render_condition": "CPU, ritsu",
+    }
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix2_smoke_render_completed_valid_evidence_accepted() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
+        "render_condition": "CPU, ritsu, 1.0s phrase",
+    }
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix2_budget_estimate_completed_with_blocked_fields_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["budget_estimate"]["status"] = "COMPLETED"  # reference_only_* を残置したまま
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix2_budget_estimate_completed_missing_evidence_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["budget_estimate"] = {"status": "COMPLETED", "reason": "done"}
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix2_budget_estimate_completed_nonpositive_count_rejected() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["budget_estimate"] = {
+        "status": "COMPLETED", "reason": "done",
+        "total_render_count": 0, "estimated_total_sec": 100.0,
+    }
+    with pytest.raises(m.Run9ValidationError, match="total_render_count"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix2_budget_estimate_completed_valid_evidence_accepted() -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["budget_estimate"] = {
+        "status": "COMPLETED", "reason": "done",
+        "total_render_count": 616, "estimated_total_sec": 2587.2,
+    }
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+@pytest.mark.parametrize("section_name", ["smoke_render", "budget_estimate"])
+def test_harness1_pr326_fix2_unknown_status_rejected(section_name: str) -> None:
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data[section_name]["status"] = "IN_PROGRESS"
+    with pytest.raises(m.Run9ValidationError, match="status must be one of"):
+        m.validate_dependency_pins_manifest(data)

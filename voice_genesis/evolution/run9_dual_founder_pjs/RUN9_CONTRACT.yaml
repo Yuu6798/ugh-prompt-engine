@@ -446,8 +446,30 @@ config_sha:
 # 両欄は独立であり、下記参照）。VG-L0 学習ハーネス自体の依存関係 pin
 # （Python パッケージ・PyTorch 等のバージョン固定）が未確定のため、
 # 本欄全体としてはまだ PENDING だった〕
+#
+# 2026-08-26 repin（PR #326 第1巡 Codex bot レビュー2件、P2×2、いずれも
+# 採用——将来汚染: 将来の repin が証拠なしで成功状態を主張できる
+# validator の穴）: `run9_schema.validate_dependency_pins_manifest()` を
+# status 判別型 shape へ強化した（manifest 自体の実測結果——tar.gz MISS・
+# smoke render BLOCKED・budget estimate BLOCKED——は無変更、validator/
+# loader の強化と `generation_note` への追記のみでバイトが変わったため
+# repin）。Fix 1: `acoustic_export_companions.expected_items` は status
+# が `OBTAINED_VERIFIED_MATCH` のときのみ `measured_sha256`（実測 digest、
+# `expected_sha256` と厳密一致必須）を要求し、
+# `NOT_OBTAINED_TARBALL_MISS` のときは禁止する——旧実装は status 文字列を
+# 書き換えるだけで通過できた。`load_pinned_dependency_pins_manifest()`
+# 側は `measured_sha256` と `backbone_runtime_bundle.json` 側 pin 値の
+# 直接比較（三者一致の第3辺）も追加した。Fix 2:
+# `smoke_render`/`budget_estimate` を BLOCKED/COMPLETED 専用の disjoint
+# な必須キー集合へ分離した——COMPLETED は blocked 専用フィールド
+# （`blocked_by` 等）を禁止し、実測フィールド（smoke:
+# `determinism_confirmed`=True・`measured_sec_per_render` 正の有限数値・
+# `render_condition`／budget: `total_render_count` 正の整数・
+# `estimated_total_sec` 正の有限数値）を必須化した。直前の値（履歴として
+# append-only 保持）:
+# "3392656474b4538e9ed05bfda0d57bc7845bcca3cfa20ffaacdaa94b5fb695e1"
 dependency_pins_sha:
-  value: "3392656474b4538e9ed05bfda0d57bc7845bcca3cfa20ffaacdaa94b5fb695e1"
+  value: "1d8a8f720bfd5e4999748cd766560ad33fff2d977852e2fda7b7596124539be2"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/dependency_pins_manifest.json
 

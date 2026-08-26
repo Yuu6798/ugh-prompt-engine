@@ -207,14 +207,39 @@ PINNED 化判断に用いる。
 
 `inputs/dependency_pins_manifest.json`（schema `run9-dependency-pins/1.0`）
 を新設し、`RUN9_CONTRACT.yaml dependency_pins_sha` を実バイト sha256
-`3392656474b4538e9ed05bfda0d57bc7845bcca3cfa20ffaacdaa94b5fb695e1` で
-PINNED 化した。`run9_schema.py` に
+`3392656474b4538e9ed05bfda0d57bc7845bcca3cfa20ffaacdaa94b5fb695e1`（第1世代）
+で PINNED 化した。`run9_schema.py` に
 `validate_dependency_pins_manifest()` / `DEPENDENCY_PINS_MANIFEST_REQUIRED_KEYS`
 / `load_pinned_dependency_pins_manifest()`（probe/seed_policy と同型の
 4段構成 + `backbone_runtime_bundle.json` との cross-check）を追加した。
 `execution_profile_sha` は §3/§4 の理由により PENDING を維持する。
 
 `gate_state()` は依然 `BLOCKED`（pre-run PENDING 9欄）。
+
+### 5-1. PR #326 第1巡 Codex bot レビュー対応（2026-08-26、repin 第2世代）
+
+Codex bot 指摘2件（P2×2、いずれも採用——将来汚染: 将来の repin が証拠なしで
+成功状態を主張できる validator の穴）を受け、validator を status 判別型
+shape へ強化した（実測結果自体は無変更、`generation_note` へ対応記録を
+追記したため manifest バイトが変わり repin）。
+
+- **Fix 1**（`acoustic_export_companions`）: `expected_items` は status が
+  `OBTAINED_VERIFIED_MATCH` のときのみ `measured_sha256`（実測 digest）を
+  必須化し、`expected_sha256` との厳密一致を強制する。
+  `NOT_OBTAINED_TARBALL_MISS` のときは `measured_sha256` を禁止する
+  （unknown key で拒否）。旧実装は status 文字列を書き換えるだけで
+  validator を通過できた。loader 側も `measured_sha256` と bundle pin 値
+  の直接照合（三者一致の第3辺）を追加した。
+- **Fix 2**（`smoke_render`/`budget_estimate`）: BLOCKED/COMPLETED を
+  disjoint な必須キー集合へ分離した。COMPLETED は blocked 専用フィールド
+  （`blocked_by` 等）を禁止し、実測フィールド（smoke:
+  `determinism_confirmed`=True・`measured_sec_per_render`（正の有限数値）・
+  `render_condition`／budget: `total_render_count`（正の整数）・
+  `estimated_total_sec`（正の有限数値））を必須化した。
+
+新 sha256（第2世代）: `1d8a8f720bfd5e4999748cd766560ad33fff2d977852e2fda7b7596124539be2`。
+本 harness の実測（tar.gz MISS・smoke render BLOCKED・budget estimate
+BLOCKED）自体は無変更——両セクションとも引き続き BLOCKED shape で妥当。
 
 ---
 
