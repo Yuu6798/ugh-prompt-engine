@@ -11466,6 +11466,17 @@ def _validate_acoustic_export_companions(section: Any) -> None:
                     "pair may never claim OBTAINED_VERIFIED_MATCH (mirrors render_asset_ledger's "
                     "VERIFIED_MATCH enforcement)"
                 )
+    # Codex bot レビュー PR #326 第2巡指摘 Fix 6（P2, 採用）: set 等価判定
+    # だけでは重複 logical_name を検出できない（例: 4種の正しい名前 + 1件の
+    # 重複で計5件でも `set(seen_names)` は4件に潰れ、直後の集合等価チェック
+    # を通過してしまう）。`render_asset_ledger` と同型の
+    # `len(list) == len(unique)` 事前チェックを、集合等価チェックより先に
+    # 強制する。
+    if len(seen_names) != len(set(seen_names)):
+        raise Run9ValidationError(
+            "dependency pins manifest.acoustic_export_companions.expected_items has duplicate "
+            f"logical_name(s): {seen_names!r}"
+        )
     if set(seen_names) != set(_DEPENDENCY_ACOUSTIC_COMPANION_BUNDLE_PATHS):
         raise Run9ValidationError(
             "dependency pins manifest.acoustic_export_companions.expected_items must register "
@@ -11503,7 +11514,9 @@ def _validate_acoustic_export_companions(section: Any) -> None:
 _TAR_MEMBER_REQUIRED_KEYS: FrozenSet[str] = frozenset({"path", "size_bytes", "sha256"})
 
 
-def _validate_tar_gz_full_member_ledger(members: Any) -> None:
+def _validate_tar_gz_full_member_ledger(
+    members: Any, *, companion_status: str, companion_items: Any,
+) -> None:
     if not isinstance(members, list) or not members:
         raise Run9ValidationError(
             f"dependency pins manifest.tar_gz_full_member_ledger must be a non-empty list, "
@@ -11548,24 +11561,60 @@ def _validate_tar_gz_full_member_ledger(members: Any) -> None:
                 f"dependency pins manifest.tar_gz_full_member_ledger[{i}].sha256 must be a "
                 f"64hex sha256, got {sha!r}"
             )
-    # fail-closed: これら4点のいずれかが tar member として実在してしまって
-    # いたら（本 harness 実測ではNOT_OBTAINEDだったが、将来 repin されて
-    # tar.gz の中身が変わった場合の drift 検出）acoustic_export_companions
-    # の status は OBTAINED_VERIFIED_MATCH へ更新されているべき——ここでは
-    # 経路名（basename）の単純一致で楽観的に検出できる範囲のみ警告的に
-    # 拒否する。
-    _companion_basenames = {
-        "acoustic.onnx", "dsconfig.yaml", "s5_run6_acoustic_v1.phonemes.json",
-        "s5_run6_acoustic_v1.ritsu.emb",
-    }
-    found_basenames = {p.rsplit("/", 1)[-1] for p in seen_paths}
-    overlap = _companion_basenames & found_basenames
-    if overlap:
+    # Codex bot レビュー PR #326 第2巡指摘 Fix 4（P2, 採用）: 旧実装は
+    # companion status を一切参照せず常時「basename が見つかれば拒否」
+    # だったため、将来 tarball が repin されて companions を正当に含み
+    # `acoustic_export_companions.status` が `OBTAINED_VERIFIED_MATCH` へ
+    # 正しく更新された場合でも、この関数だけは構造的に必ず raise し続け
+    # （tar 由来 companions を「取得できた」と認める経路が存在しない）、
+    # エラーメッセージ自身が要求する遷移を不可能にしていた。
+    # companion_status で分岐する: NOT_OBTAINED のときは旧来どおり
+    # 「見つかったら矛盾」と拒否する（stale-miss inconsistency）。
+    # OBTAINED のときは逆に「見つからなければ矛盾」（対応する tar member
+    # が無いのに OBTAINED を名乗っている）+ 見つかった場合は sha256 の
+    # 整合性検査（tar member 実測値と expected_sha256 の一致）を行う。
+    found_basename_shas: Dict[str, List[str]] = {}
+    for path in seen_paths:
+        basename = path.rsplit("/", 1)[-1]
+        found_basename_shas.setdefault(basename, [])
+    for member in members:
+        basename = member["path"].rsplit("/", 1)[-1]
+        found_basename_shas.setdefault(basename, []).append(member["sha256"])
+
+    if companion_status == "NOT_OBTAINED_TARBALL_MISS":
+        _companion_basenames = {
+            item["file"].rsplit("/", 1)[-1] for item in companion_items
+        }
+        overlap = _companion_basenames & set(found_basename_shas)
+        if overlap:
+            raise Run9ValidationError(
+                "dependency pins manifest.tar_gz_full_member_ledger contains member(s) whose "
+                f"basename matches an acoustic export companion the manifest otherwise claims "
+                f"is NOT_OBTAINED: {sorted(overlap)} — acoustic_export_companions.status must "
+                "be updated to reflect this before PINNED (stale-miss inconsistency)"
+            )
+    elif companion_status == "OBTAINED_VERIFIED_MATCH":
+        for item in companion_items:
+            logical_name = item["logical_name"]
+            basename = item["file"].rsplit("/", 1)[-1]
+            shas_at_basename = found_basename_shas.get(basename)
+            if not shas_at_basename:
+                raise Run9ValidationError(
+                    "dependency pins manifest.tar_gz_full_member_ledger: "
+                    f"acoustic_export_companions claims {logical_name!r} is "
+                    f"OBTAINED_VERIFIED_MATCH but no tar member with basename {basename!r} "
+                    "was found in tar_gz_full_member_ledger — obtained-status inconsistency"
+                )
+            if item["expected_sha256"] not in shas_at_basename:
+                raise Run9ValidationError(
+                    "dependency pins manifest.tar_gz_full_member_ledger: tar member(s) with "
+                    f"basename {basename!r} have sha256 {sorted(shas_at_basename)!r}, none of "
+                    f"which match acoustic_export_companions {logical_name!r} expected_sha256 "
+                    f"({item['expected_sha256']!r}) — obtained-status inconsistency"
+                )
+    else:  # pragma: no cover - defensive; caller already validated companion_status vocabulary
         raise Run9ValidationError(
-            "dependency pins manifest.tar_gz_full_member_ledger contains member(s) whose "
-            f"basename matches an acoustic export companion the manifest otherwise claims is "
-            f"NOT_OBTAINED: {sorted(overlap)} — acoustic_export_companions.status must be "
-            "updated to reflect this before PINNED (stale-miss inconsistency)"
+            f"_validate_tar_gz_full_member_ledger(): unrecognized companion_status {companion_status!r}"
         )
 
 
@@ -11854,7 +11903,15 @@ _BUDGET_ESTIMATE_COMPLETED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 })
 
 
-def _validate_budget_estimate_section(section: Any) -> None:
+# Codex bot レビュー PR #326 第2巡指摘 Fix 5（P2, 採用）: budget_estimate
+# の許容誤差（`estimated_total_sec` と `measured_sec_per_render ×
+# total_render_count` の一致判定）。厳しめに固定する——見積り計算の
+# ロジック誤り（別の乗数を使った、丸め誤りがある等）を検出することが
+# 目的であり、意図的な概算・切り捨てを許容する緩い閾値にはしない。
+_BUDGET_ESTIMATE_TOTAL_SEC_REL_TOL: float = 1e-9
+
+
+def _validate_budget_estimate_section(section: Any, *, smoke_render_section: Any) -> None:
     field = "budget_estimate"
     if not isinstance(section, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(section).__name__}")
@@ -11904,9 +11961,38 @@ def _validate_budget_estimate_section(section: Any) -> None:
             raise Run9ValidationError(
                 f"{field}.total_render_count must be a positive int, got {total_count!r}"
             )
-        _require_positive_finite_number(
+        estimated_total_sec = _require_positive_finite_number(
             section["estimated_total_sec"], field=f"{field}.estimated_total_sec"
         )
+        # Codex bot レビュー PR #326 第2巡指摘 Fix 5（P2, 採用）: budget が
+        # 「render 1件あたりの実測秒 × 総件数」から導出される正典な記録で
+        # ある以上、その実測秒の源泉である smoke_render が COMPLETED
+        # （実測済み）でない状態で budget だけ COMPLETED を名乗るのは
+        # 自己矛盾——smoke が BLOCKED のまま budget が実測済みを主張する
+        # ことはできない。
+        if (
+            not isinstance(smoke_render_section, dict)
+            or smoke_render_section.get("status") != "COMPLETED"
+        ):
+            raise Run9ValidationError(
+                f"{field}.status is COMPLETED but smoke_render.status is not COMPLETED "
+                f"(got {smoke_render_section.get('status') if isinstance(smoke_render_section, dict) else smoke_render_section!r}) "
+                "— a completed budget estimate is derived from a completed smoke render's "
+                "measured_sec_per_render; a budget cannot be COMPLETED while its source "
+                "measurement is still BLOCKED (self-contradictory pin)"
+            )
+        measured_sec_per_render = smoke_render_section["measured_sec_per_render"]
+        expected_total_sec = measured_sec_per_render * total_count
+        if not math.isclose(
+            estimated_total_sec, expected_total_sec, rel_tol=_BUDGET_ESTIMATE_TOTAL_SEC_REL_TOL,
+        ):
+            raise Run9ValidationError(
+                f"{field}.estimated_total_sec ({estimated_total_sec!r}) does not match "
+                f"smoke_render.measured_sec_per_render × {field}.total_render_count "
+                f"({measured_sec_per_render!r} × {total_count!r} = {expected_total_sec!r}, "
+                f"rel_tol={_BUDGET_ESTIMATE_TOTAL_SEC_REL_TOL!r}) — the two completed sections "
+                "must be arithmetically consistent, not merely both present"
+            )
 
 
 def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
@@ -11996,12 +12082,16 @@ def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
     # 発明する必要がない（発明すると到達不能コードになる）。
     _validate_acoustic_export_companions(data["acoustic_export_companions"])
 
-    _validate_tar_gz_full_member_ledger(data["tar_gz_full_member_ledger"])
+    _validate_tar_gz_full_member_ledger(
+        data["tar_gz_full_member_ledger"],
+        companion_status=data["acoustic_export_companions"]["status"],
+        companion_items=data["acoustic_export_companions"]["expected_items"],
+    )
     _validate_python_dependency_pins(data["python_dependency_pins"])
     _validate_diffsinger_render_code_commit(data["diffsinger_render_code_commit"])
     _validate_speaker_embeddings_unpinned_candidates(data["speaker_embeddings_unpinned_candidates"])
     _validate_smoke_render_section(data["smoke_render"])
-    _validate_budget_estimate_section(data["budget_estimate"])
+    _validate_budget_estimate_section(data["budget_estimate"], smoke_render_section=data["smoke_render"])
 
 
 def load_pinned_dependency_pins_manifest(

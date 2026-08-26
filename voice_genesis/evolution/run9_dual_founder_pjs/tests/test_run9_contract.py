@@ -10993,16 +10993,22 @@ _PIN1_LOADER_CASES = (
     ),
 )
 
-# PR #324 第2巡 Fix 5（measurement_spec_sha を PENDING へ復帰）後、実際に
-# 現在 PINNED なのは seed_policy_sha/failure_abort_criteria_sha の2欄のみ。
-# 「PINNED な artifact に対する loader の正常系/改竄検出」を検証するテスト
-# 群はこの2欄のみを対象とする（measurement_spec_sha 側の対応する期待は
-# 専用テスト `test_pin1_r3_load_pinned_measurement_spec_manifest_raises_pending`
-# が別途カバーする）。`_PIN1_LOADER_CASES`（3欄）は
+# PR #324 第2巡 Fix 5（measurement_spec_sha を PENDING へ復帰）+ PR #326
+# 第2巡 Fix 3（dependency_pins_sha を PENDING へ復帰、P1、同型の理由
+# ——render/analysis 層のみの manifest で学習ハーネス本体の依存 closure
+# 未確定のまま PINNED にすると gate_state() の偽 READY 経路を開く）後、
+# 実際に現在 PINNED なのは seed_policy_sha/failure_abort_criteria_sha の
+# 2欄のみ。「PINNED な artifact に対する loader の正常系/改竄検出」を
+# 検証するテスト群はこの2欄のみを対象とする（measurement_spec_sha/
+# dependency_pins_sha 側の対応する期待はそれぞれ専用テスト
+# `test_pin1_r3_load_pinned_measurement_spec_manifest_raises_pending`/
+# `test_harness1_pr326_fix3_load_pinned_dependency_pins_manifest_raises_pending`
+# が別途カバーする）。`_PIN1_LOADER_CASES`（4欄）は
 # `test_pin1_load_pinned_manifest_rejects_when_not_pinned` のように現在の
 # 実 pin 状態に依存しない合成テストでのみ引き続き使う。
 _PIN1_PINNED_LOADER_CASES = tuple(
-    case for case in _PIN1_LOADER_CASES if case[0] != "measurement_spec_sha"
+    case for case in _PIN1_LOADER_CASES
+    if case[0] not in ("measurement_spec_sha", "dependency_pins_sha")
 )
 
 
@@ -11671,23 +11677,35 @@ def test_pin1_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
 # 打ち切る」に沿い、単に件数を書き換えるのではなく1本化した）。
 
 
-def test_harness1_pre_run_pending_count_is_nine(contract: m.Run9RunContract) -> None:
-    """RUN9-L0-HARNESS-1（dependency_pins_sha を PINNED 化、2026-08-26）後の
-    pre-run PENDING 欄は10→9件（optional の human_evaluation_protocol_sha
-    を含めると総 PENDING 11→10件）——README.md の記述更新（10→9/11→10）と
-    対応する回帰固定。〔履歴: RUN9-L0-PIN-2 直後は12→10件/13→11件
-    だった（旧テスト名 test_pin2_pre_run_pending_count_is_ten）〕"""
+# RUN9-L0-HARNESS-1 で `dependency_pins_sha` を PINNED 化した際、pre-run
+# PENDING は10→9件になった（旧テスト `test_harness1_pre_run_pending_
+# count_is_nine`）。PR #326 第2巡 Fix 3（P1、採用、2026-08-26）で同欄が
+# PENDING へ差し戻されたため9件は一時的な状態に留まり、下記テストへ
+# 一本化した（重複削除、「修正からの再修正は早期に打ち切る」に沿い、
+# 単に件数を書き換えるのではなく1本化する既存規約——上記
+# `test_pin2_pre_run_pending_count_is_ten` 直前のコメントと同型）。
+def test_harness1_pr326_fix3_pre_run_pending_count_is_ten(contract: m.Run9RunContract) -> None:
+    """PR #326 第2巡 Fix 3（P1、採用、2026-08-26）: `dependency_pins_sha`
+    を PENDING へ差し戻したことにより、pre-run PENDING 欄は9→10件へ
+    戻った（optional の human_evaluation_protocol_sha を含めると総
+    PENDING 10→11件）——README.md の記述更新（9→10/10→11）と対応する
+    回帰固定。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
     pending = [
         n for n in pre_run_fields if not m._is_field_pinned(revalidated.pin_field(n))
     ]
-    assert len(pending) == 9
+    all_pending = [
+        n for n in m.CONTRACT_PIN_FIELDS
+        if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
+    ]
+    assert len(pending) == 10
+    assert len(all_pending) == 11
+    assert "dependency_pins_sha" in pending
     assert "measurement_spec_sha" in pending
     assert "dataset_manifest_sha" not in pending
     assert "dataset_row_order_sha" not in pending
-    assert "dependency_pins_sha" not in pending
 
 
 def test_pin2_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> None:
@@ -13383,32 +13401,41 @@ def test_pin2_readme_pending_count_updated_to_ten_and_eleven() -> None:
     # 現在形残存チェックは下記の新規テストが担当する）。
 
 
-def test_harness1_readme_pending_count_updated_to_nine_and_ten() -> None:
-    """RUN9-L0-HARNESS-1: 残 PENDING 件数の記述を10→9（総11→10）へ更新
-    したことの確認（`dependency_pins_sha` PINNED 化）。旧い『10→11』時点の
-    件数記述はもはや現在形の主張として残っていない（履歴/解消済み マーカー
-    配下の言及のみ許容 — 同じ規約の第3世代）。"""
+# RUN9-L0-HARNESS-1 で `dependency_pins_sha` を PINNED 化した際、README の
+# 記述は10→9（総11→10）へ更新された（旧テスト
+# `test_harness1_readme_pending_count_updated_to_nine_and_ten`）。PR #326
+# 第2巡 Fix 3（P1、採用、2026-08-26）で同欄が PENDING へ差し戻されたため
+# 9/10 は一時的な状態に留まり、下記テストへ一本化した（重複削除、
+# `test_pin2_readme_pending_count_updated_to_ten_and_eleven` 直前の
+# コメントと同型の既存規約）。
+def test_harness1_pr326_fix3_readme_pending_count_reverted_to_ten_and_eleven() -> None:
+    """PR #326 第2巡 Fix 3（P1、採用、2026-08-26）: `dependency_pins_sha`
+    の PENDING 差し戻しに伴い、README の残 PENDING 件数記述は9→10
+    （総10→11）へ戻った。一時的だった『9→10』時点の件数記述はもはや
+    現在形の主張として残っていない（履歴/解消済み マーカー配下の言及の
+    み許容 — 同じ規約の第4世代）。"""
     readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
-    assert "pre-run 必須9欄" in readme_text
-    assert "総 PENDING 10欄" in readme_text
+    assert "pre-run 必須10欄" in readme_text
+    assert "総 PENDING 11欄" in readme_text
     for paragraph in readme_text.split("\n\n"):
-        if "pre-run 必須10欄" in paragraph or "総 PENDING 11欄" in paragraph:
+        if "pre-run 必須9欄" in paragraph or "総 PENDING 10欄" in paragraph:
             assert ("履歴" in paragraph) or ("解消済み" in paragraph), (
-                f"stale current-tense 10/11-count claim in paragraph: {paragraph!r}"
+                f"stale current-tense 9/10-count claim in paragraph: {paragraph!r}"
             )
 
 
-def test_harness1_readme_dependency_pins_sha_no_longer_claimed_pending() -> None:
-    """`dependency_pins_sha` を含む pre-run 必須欄の現行列挙から同欄が
-    除去されていること（PINNED 化後も列挙に残る stale claim の防止 —
-    `test_pin2_readme_dataset_manifest_sha_no_longer_claimed_pending` と
-    同型）。"""
+def test_harness1_pr326_fix3_readme_dependency_pins_sha_pending_again() -> None:
+    """`dependency_pins_sha` が PR #326 第2巡 Fix 3（P1、採用）で PENDING
+    へ差し戻されたことに伴い、README の pre-run 必須欄の現行列挙に同欄が
+    再び含まれていること（PINNED 化時に一時的に除去されていたが、
+    PENDING 復帰後は他の PENDING 欄と同列で列挙されているべき —
+    `test_pin2_readme_dataset_manifest_sha_no_longer_claimed_pending` の
+    逆方向チェック）。"""
     readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
-    for line in readme_text.splitlines():
-        if "`config_sha`/" in line and "`dependency_pins_sha`" in line:
-            raise AssertionError(
-                f"stale enumeration still lists dependency_pins_sha as pending: {line!r}"
-            )
+    found = any(
+        "`config_sha`/`dependency_pins_sha`" in line for line in readme_text.splitlines()
+    )
+    assert found, "README no longer lists dependency_pins_sha in the pending enumeration"
 
 
 def test_pin2_readme_dataset_manifest_sha_no_longer_claimed_pending() -> None:
@@ -13635,10 +13662,47 @@ def test_harness1_blocked_section_bad_status_fail_closed(section_name: str) -> N
 # --- load_pinned_dependency_pins_manifest(): bundle cross-check ------------
 
 
-def test_harness1_load_pinned_dependency_pins_manifest_happy_path(
+def test_harness1_pr326_fix3_load_pinned_dependency_pins_manifest_raises_pending(
     contract: m.Run9RunContract,
 ) -> None:
-    data = m.load_pinned_dependency_pins_manifest(contract)
+    """PR #326 第2巡 Fix 3（P1, 採用）: `dependency_pins_sha` は PENDING へ
+    差し戻されたため、現行の実 contract に対して呼ぶと必ず『not PINNED』
+    で fail-closed 拒否する（`test_pin1_r3_load_pinned_measurement_spec_
+    manifest_raises_pending` と同型 — manifest/validator/loader 自体は
+    事前配線のまま残置しつつ、pin されていない artifact を消費させない）。"""
+    with pytest.raises(m.Run9ValidationError, match="not PINNED"):
+        m.load_pinned_dependency_pins_manifest(contract)
+
+
+def _tampered_contract_with_dependency_pins_sha_pinned(
+    contract: m.Run9RunContract, tmp_path: Path, *, value: str, suffix: str = "",
+) -> Tuple[m.Run9RunContract, Path]:
+    """`dependency_pins_sha` を強制的に PINNED（指定した value）へ書き
+    換えた合成 contract + その disk 正典コピーを用意する（PR #326 第2巡
+    Fix 3 で本欄が PENDING へ差し戻された後も、cross-check 等 PINNED
+    前提のロジック自体は生きていることをテストするための共通ヘルパー）。"""
+    tampered_raw = copy.deepcopy(contract.raw)
+    tampered_raw["dependency_pins_sha"] = {"value": value, "status": "PINNED"}
+    tampered_contract_path = tmp_path / f"RUN9_CONTRACT{suffix}.yaml"
+    tampered_contract_path.write_text(yaml.safe_dump(tampered_raw, allow_unicode=True), encoding="utf-8")
+    return m.load_run9_contract(tampered_raw), tampered_contract_path
+
+
+def test_harness1_load_pinned_dependency_pins_manifest_happy_path_with_forced_pin(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`dependency_pins_sha` を（テスト内で）PINNED へ強制した合成
+    contract を使えば、loader は現行 manifest を正常に読み込める
+    ——manifest/validator/loader 自体の正常系は本欄の contract 上の
+    PENDING/PINNED 状態と独立に機能することの確認（`_PIN1_LOADER_CASES`
+    が測る「pin 欄が PINNED でなければ拒否する」層とは別の層）。"""
+    real_value = m.compute_file_sha256(m.DEPENDENCY_PINS_MANIFEST_PATH)
+    tampered_contract, tampered_contract_path = _tampered_contract_with_dependency_pins_sha_pinned(
+        contract, tmp_path, value=real_value, suffix="1",
+    )
+    data = m.load_pinned_dependency_pins_manifest(
+        tampered_contract, contract_path=tampered_contract_path,
+    )
     assert data["schema"] == m.SCHEMA_DEPENDENCY_PINS_MANIFEST
 
 
@@ -13647,7 +13711,10 @@ def test_harness1_load_pinned_dependency_pins_manifest_detects_ledger_bundle_dri
 ) -> None:
     """render_asset_ledger の expected_sha256 が
     backbone_runtime_bundle.json の対応する pin 値と乖離していると
-    cross-check (6) が fail-closed 拒否する。"""
+    cross-check (6) が fail-closed 拒否する（`dependency_pins_sha` を
+    テスト内で PINNED 強制した合成 contract 経由 — 本欄が PR #326 第2巡
+    Fix 3 で PENDING へ差し戻された後も、この cross-check ロジック自体は
+    生きていることの確認）。"""
     tampered = copy.deepcopy(_dependency_pins_manifest_data())
     tampered["render_asset_ledger"][0]["expected_sha256"] = "f" * 64
     tampered["render_asset_ledger"][0]["actual_sha256"] = "f" * 64
@@ -13660,8 +13727,14 @@ def test_harness1_load_pinned_dependency_pins_manifest_detects_ledger_bundle_dri
     # ここでは cross-check 経路そのものをコード経由（validate 済みデータを
     # 直接 loader 内部相当で突き合わせる）で検証する代わりに、
     # 実運用と同じ経路（pin 値との不一致で fail-closed）を素直に確認する。
+    real_value = m.compute_file_sha256(m.DEPENDENCY_PINS_MANIFEST_PATH)
+    tampered_contract, tampered_contract_path = _tampered_contract_with_dependency_pins_sha_pinned(
+        contract, tmp_path, value=real_value, suffix="2",
+    )
     with pytest.raises(m.Run9ValidationError, match="実バイト sha256"):
-        m.load_pinned_dependency_pins_manifest(contract, manifest_path=tampered_path)
+        m.load_pinned_dependency_pins_manifest(
+            tampered_contract, manifest_path=tampered_path, contract_path=tampered_contract_path,
+        )
 
 
 def test_harness1_bundle_get_missing_path_fail_closed() -> None:
@@ -13682,12 +13755,18 @@ def test_harness1_dependency_ledger_bundle_paths_cover_all_ledger_entries() -> N
         assert bundle_value == entry["expected_sha256"] == entry["actual_sha256"]
 
 
-def test_harness1_dependency_pins_sha_pinned_and_matches_manifest_bytes(
+def test_harness1_pr326_fix3_dependency_pins_sha_still_pending(
     contract: m.Run9RunContract,
 ) -> None:
+    """PR #326 第2巡 Fix 3（P1, 採用）: `dependency_pins_sha` は VG-L0
+    学習ハーネス本体の import closure が未確定のため PENDING（数値を
+    捏造しない、fail-closed 判断の回帰確認 — `execution_profile_sha` と
+    同型）。manifest 実体は repo に残置されたまま（render/analysis 層の
+    実測記録として）であることも併せて確認する。"""
     field = contract.pin_field("dependency_pins_sha")
-    assert field["status"] == "PINNED"
-    assert field["value"] == m.compute_file_sha256(m.DEPENDENCY_PINS_MANIFEST_PATH)
+    assert field["status"] == "PENDING"
+    assert field["value"] is None
+    assert m.DEPENDENCY_PINS_MANIFEST_PATH.is_file()
 
 
 def test_harness1_execution_profile_sha_still_pending(contract: m.Run9RunContract) -> None:
@@ -13741,14 +13820,29 @@ def test_harness1_pr326_fix1_obtained_measured_mismatch_rejected() -> None:
         m.validate_dependency_pins_manifest(data)
 
 
-def test_harness1_pr326_fix1_obtained_correct_measured_hashes_accepted() -> None:
-    """正しい measured_sha256（expected_sha256 と一致）を全 item に付与
-    すれば OBTAINED_VERIFIED_MATCH は validate を通る（過剰拒否でない
-    ことの確認）。"""
-    data = copy.deepcopy(_dependency_pins_manifest_data())
+def _obtain_all_acoustic_companions(data: Dict[str, Any]) -> None:
+    """テストヘルパー: acoustic_export_companions を OBTAINED_VERIFIED_
+    MATCH へ遷移させ、各 item に正しい measured_sha256 を付与し、
+    Fix 4（PR #326 第2巡）が要求する対応 tar member（basename 一致 +
+    sha256 一致）を tar_gz_full_member_ledger へ追加する——正しく
+    OBTAINED を主張するには3点（item の measured_sha256・tar member の
+    存在・tar member の sha256）すべてが揃う必要がある。"""
     data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
     for item in data["acoustic_export_companions"]["expected_items"]:
         item["measured_sha256"] = item["expected_sha256"]
+        data["tar_gz_full_member_ledger"].append({
+            "path": f"onnx_gate_40000/{item['file'].rsplit('/', 1)[-1]}",
+            "size_bytes": 1,
+            "sha256": item["expected_sha256"],
+        })
+
+
+def test_harness1_pr326_fix1_obtained_correct_measured_hashes_accepted() -> None:
+    """正しい measured_sha256（expected_sha256 と一致）+ 対応する tar
+    member を全 item に付与すれば OBTAINED_VERIFIED_MATCH は validate を
+    通る（過剰拒否でないことの確認）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data)
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
 
 
@@ -13760,18 +13854,20 @@ def test_harness1_pr326_fix1_loader_accepts_correctly_obtained_companions(
     manifest()` の全段（validate + bundle cross-check 含む三者一致）を
     通って正常に読み込めること（過剰拒否でないことの確認、正常系）。"""
     manifest_data = copy.deepcopy(_dependency_pins_manifest_data())
-    manifest_data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
-    for item in manifest_data["acoustic_export_companions"]["expected_items"]:
-        item["measured_sha256"] = item["expected_sha256"]
+    _obtain_all_acoustic_companions(manifest_data)
     manifest_text = json.dumps(manifest_data, sort_keys=True, ensure_ascii=False, indent=2) + "\n"
     manifest_path = tmp_path / "dependency_pins_manifest.json"
     manifest_path.write_bytes(manifest_text.encode("utf-8"))
 
     # contract の dependency_pins_sha を、この改変後 manifest のバイトへ
-    # 一時的に付け替えた合成 contract を用意する（disk 正典との乖離検査を
-    # 迂回するため、tmp_path 側に RUN9_CONTRACT.yaml も複製する）。
+    # 一時的に付け替えた合成 contract を用意する（PR #326 第2巡 Fix 3 で
+    # 本欄は disk 正典上 PENDING のため、status も PINNED へ強制する——
+    # disk 正典との乖離検査を迂回するため、tmp_path 側に
+    # RUN9_CONTRACT.yaml も複製する）。
     tampered_raw = copy.deepcopy(contract.raw)
-    tampered_raw["dependency_pins_sha"]["value"] = m.compute_file_sha256(manifest_path)
+    tampered_raw["dependency_pins_sha"] = {
+        "value": m.compute_file_sha256(manifest_path), "status": "PINNED",
+    }
     tampered_contract_path = tmp_path / "RUN9_CONTRACT.yaml"
     tampered_contract_path.write_text(yaml.safe_dump(tampered_raw, allow_unicode=True), encoding="utf-8")
     tampered_contract = m.load_run9_contract(tampered_raw)
@@ -13869,7 +13965,16 @@ def test_harness1_pr326_fix2_budget_estimate_completed_nonpositive_count_rejecte
 
 
 def test_harness1_pr326_fix2_budget_estimate_completed_valid_evidence_accepted() -> None:
+    """PR #326 第2巡 Fix 5（P2, 採用）反映後: budget_estimate が COMPLETED
+    を名乗るには smoke_render も COMPLETED でなければならず、
+    estimated_total_sec は measured_sec_per_render × total_render_count
+    と一致していなければならない（2587.2 == 4.2 × 616）。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
+        "render_condition": "CPU, ritsu, 1.0s phrase",
+    }
     data["budget_estimate"] = {
         "status": "COMPLETED", "reason": "done",
         "total_render_count": 616, "estimated_total_sec": 2587.2,
@@ -13883,3 +13988,167 @@ def test_harness1_pr326_fix2_unknown_status_rejected(section_name: str) -> None:
     data[section_name]["status"] = "IN_PROGRESS"
     with pytest.raises(m.Run9ValidationError, match="status must be one of"):
         m.validate_dependency_pins_manifest(data)
+
+
+# ---------------------------------------------------------------------------
+# PR #326 第2巡 Codex bot レビュー Fix 4/5/6（P2 ×3, 採用, 2026-08-26）:
+# tar member 検査の status 連動化 / budget↔smoke 結合強制 / companions の
+# 重複 logical_name 拒否。負例テスト（将来汚染防止の回帰固定）。
+# ---------------------------------------------------------------------------
+
+
+def test_harness1_pr326_fix6_duplicate_companion_logical_name_rejected() -> None:
+    """4種の正しい logical_name + 1件の重複（計5件）は、旧実装では
+    `set()` 等価判定に潰されて通過してしまっていた——長さ一致の事前
+    チェックで拒否されることを確認する。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    dup = copy.deepcopy(data["acoustic_export_companions"]["expected_items"][0])
+    data["acoustic_export_companions"]["expected_items"].append(dup)
+    with pytest.raises(m.Run9ValidationError, match="duplicate logical_name"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix6_duplicate_with_all_four_names_still_rejected() -> None:
+    """重複を除いた集合は4件の正しい logical_name をちょうど満たすため、
+    旧実装の `set(seen_names) == set(...)` チェックだけでは通過してしまう
+    ケースを明示的に再現する（4件 + 1件の重複 = 5件、set は4件に潰れる）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    items = data["acoustic_export_companions"]["expected_items"]
+    assert len(items) == 4
+    items.append(copy.deepcopy(items[0]))
+    assert len(items) == 5
+    assert len({i["logical_name"] for i in items}) == 4  # set 単独では検出不能なことの前提確認
+    with pytest.raises(m.Run9ValidationError, match="duplicate logical_name"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix4_not_obtained_still_rejects_matching_tar_member() -> None:
+    """companion_status が NOT_OBTAINED_TARBALL_MISS のままなら、旧来
+    どおり companion basename と一致する tar member の混入は
+    stale-miss inconsistency として拒否される（Fix 4 は分岐を追加した
+    だけで、NOT_OBTAINED 側の既存挙動は不変であることの回帰確認）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["tar_gz_full_member_ledger"].append(
+        {"path": "onnx_gate_40000/acoustic.onnx", "size_bytes": 1234, "sha256": "a" * 64}
+    )
+    with pytest.raises(m.Run9ValidationError, match="stale-miss inconsistency"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix4_obtained_without_tar_member_rejected() -> None:
+    """companion_status が OBTAINED_VERIFIED_MATCH なのに、対応する tar
+    member が tar_gz_full_member_ledger に存在しないと拒否される（正当な
+    取得経路の主張には実体の裏付けが要る）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["acoustic_export_companions"]["status"] = "OBTAINED_VERIFIED_MATCH"
+    for item in data["acoustic_export_companions"]["expected_items"]:
+        item["measured_sha256"] = item["expected_sha256"]
+    with pytest.raises(m.Run9ValidationError, match="obtained-status inconsistency"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix4_obtained_with_mismatched_tar_member_sha_rejected() -> None:
+    """companion_status が OBTAINED_VERIFIED_MATCH で対応する basename の
+    tar member はあるが、sha256 が expected と一致しないと拒否される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data)
+    for member in data["tar_gz_full_member_ledger"]:
+        if member["path"].endswith("acoustic.onnx"):
+            member["sha256"] = "9" * 64
+    with pytest.raises(m.Run9ValidationError, match="obtained-status inconsistency"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix4_obtained_with_matching_tar_member_accepted() -> None:
+    """companion_status が OBTAINED_VERIFIED_MATCH で、対応する tar
+    member（basename一致・sha256一致）が揃っていれば通る（過剰拒否で
+    ないことの確認 — `_obtain_all_acoustic_companions()` ヘルパー自体の
+    回帰固定も兼ねる）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data)
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix5_budget_completed_alone_rejected() -> None:
+    """budget_estimate だけを COMPLETED へ書き換え、smoke_render は
+    BLOCKED のまま残す改竄は拒否される（実測秒の源泉が無いまま完了を
+    主張する自己矛盾）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["budget_estimate"] = {
+        "status": "COMPLETED", "reason": "done",
+        "total_render_count": 616, "estimated_total_sec": 2587.2,
+    }
+    assert data["smoke_render"]["status"] == "BLOCKED"
+    with pytest.raises(m.Run9ValidationError, match="smoke_render.status is not COMPLETED"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix5_budget_completed_smoke_completed_but_arithmetic_mismatch_rejected() -> None:
+    """smoke_render は正しく COMPLETED でも、estimated_total_sec が
+    measured_sec_per_render × total_render_count と算術的に一致しなければ
+    拒否される（両方 present なだけでは足りない）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
+        "render_condition": "CPU, ritsu",
+    }
+    data["budget_estimate"] = {
+        "status": "COMPLETED", "reason": "done",
+        "total_render_count": 616, "estimated_total_sec": 4.2 * 616 + 1.0,
+    }
+    with pytest.raises(m.Run9ValidationError, match="does not match"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix5_budget_completed_arithmetic_within_tight_tolerance_accepted() -> None:
+    """rel_tol=1e-9 という厳しめの許容誤差の範囲内（浮動小数点演算の丸め
+    程度）なら受理される（過剰拒否でないことの確認）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    measured = 4.2
+    count = 616
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": measured,
+        "render_condition": "CPU, ritsu",
+    }
+    data["budget_estimate"] = {
+        "status": "COMPLETED", "reason": "done",
+        "total_render_count": count, "estimated_total_sec": measured * count,
+    }
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix5_rel_tol_is_tight() -> None:
+    """許容誤差 `_BUDGET_ESTIMATE_TOTAL_SEC_REL_TOL` が「厳しめ」（緩い
+    概算を通してしまわない水準）であることの回帰固定 —— 1e-6 以下。"""
+    assert m._BUDGET_ESTIMATE_TOTAL_SEC_REL_TOL <= 1e-6
+
+
+# ---------------------------------------------------------------------------
+# PR #326 第2巡 Codex bot レビュー Fix 3（P1, 採用, 2026-08-26）:
+# dependency_pins_sha を PENDING へ差し戻したことの回帰固定。
+# ---------------------------------------------------------------------------
+
+
+def test_harness1_pr326_fix3_claim_scope_states_incomplete_dependency_coverage() -> None:
+    """manifest 自身の claim_scope が「render/analysis 層の実測記録であり
+    dependency_pins_sha の完全な充足を主張しない」ことを明記していること
+    （contract 側 pin の narrowing ではなく manifest 自身の正直な自己
+    申告であることの確認）。"""
+    data = _dependency_pins_manifest_data()
+    statement = data["claim_scope"]["statement"]
+    assert "の完全な充足" in statement
+    assert "を主張しない" in statement
+
+
+def test_harness1_pr326_fix3_manifest_and_code_remain_prewired() -> None:
+    """PIN-1 measurement_spec と同型の運用: pin 欄は PENDING でも
+    manifest 実体・validator・loader は撤去されず、validate/load とも
+    呼び出し可能なまま残置されていること（validate は無条件で通る、
+    load は forced-PINNED contract 経由でのみ通ることは別テストが
+    確認済み）。"""
+    data = _dependency_pins_manifest_data()
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+    assert callable(m.load_pinned_dependency_pins_manifest)
+    assert m.DEPENDENCY_PINS_MANIFEST_REQUIRED_KEYS  # 定数も撤去されていない

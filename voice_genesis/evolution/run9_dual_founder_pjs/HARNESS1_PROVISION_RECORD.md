@@ -241,6 +241,65 @@ shape へ強化した（実測結果自体は無変更、`generation_note` へ�
 本 harness の実測（tar.gz MISS・smoke render BLOCKED・budget estimate
 BLOCKED）自体は無変更——両セクションとも引き続き BLOCKED shape で妥当。
 
+### 5-2. PR #326 第2巡 Codex bot レビュー対応（2026-08-26、P1×1・P2×3、
+全4件採用）
+
+**Fix 3（P1、`RUN9_CONTRACT.yaml` 側）——`dependency_pins_sha` を PENDING
+へ差し戻し**: 指摘は正当だった。第1-2世代の PINNED 化は過大——本 manifest
+は render/analysis 層9パッケージ（`python_dependency_pins`）のみを検証
+対象としており、これで `dependency_pins_sha` を PINNED にすると、VG-L0
+学習ハーネス本体（optimizer/探索コード）の import closure が未確定の
+ままでも `gate_state()` が「全実行依存が確定した」証拠として誤って扱って
+しまう（`measurement_spec_sha` が RUN9-L0-PIN-1 で同型の理由により
+PENDING へ復帰した前例と同型）。対応: `value: null` / `status: PENDING`
+へ戻し、reason を正直に更新した（「render/analysis 層 + 実体資産は
+実測検証済み。ただし学習ハーネス本体の import closure が未確定。pin は
+ハーネス実装時に closure を実測してから」）。manifest 実体・validator・
+loader は撤去せず残置（PENDING の間 loader が「not PINNED」で raise する
+のが正しい挙動——`measurement_spec_sha` と同型のテストへ追随した）。
+manifest 自身の `claim_scope` に「本 manifest は render/analysis 層の
+実測記録であり `dependency_pins_sha` の完全な充足を主張しない」ことを
+明記した。残 pre-run PENDING は9→10へ戻った（正直な会計、README 追随）。
+
+**Fix 4（P2）——tar member 検査の status 連動化**:
+`_validate_tar_gz_full_member_ledger()` が companion section の status を
+一切参照せず常時 raise していたため、将来 tarball が repin されて
+companions を正当に含み status が `OBTAINED_VERIFIED_MATCH` へ正しく
+更新された場合でも、この関数だけは構造的に必ず raise し続け、エラー
+メッセージ自身が要求する遷移が不可能だった。対応: `companion_status`/
+`companion_items` を引数として受け取るよう拡張し、
+`NOT_OBTAINED_TARBALL_MISS` のときのみ従来どおり「companion basename が
+見つかれば矛盾」を拒否、`OBTAINED_VERIFIED_MATCH` のときは逆に「対応する
+tar member が見つからない・sha256 が不一致なら矛盾」という整合検査へ
+切り替えた。
+
+**Fix 5（P2）——budget↔smoke の結合強制**: `budget_estimate` が
+`COMPLETED` を名乗るには `smoke_render` も `COMPLETED` でなければ
+ならないという前提が machine check されておらず、smoke が `BLOCKED` の
+まま budget だけ独立に `COMPLETED` へ repin できてしまっていた。対応:
+budget の COMPLETED 分岐で smoke_render.status == COMPLETED を要求し、
+`estimated_total_sec` が `measured_sec_per_render × total_render_count`
+と `math.isclose`（`rel_tol=1e-9`、意図的に厳しめ——概算・切り捨てを
+通さず計算ロジック誤りを検出する）で一致することを検証するようにした。
+
+**Fix 6（P2）——companions の重複 logical_name 拒否**:
+`acoustic_export_companions.expected_items` の集合等価判定
+（`set(seen_names) == set(expected)`）は重複を潰すため、4種の正しい
+logical_name + 1件の重複（計5件）が通過してしまっていた
+（`render_asset_ledger` には既にあった `len(list)==len(unique)` の
+事前チェックが本節には無かった）。対応: 同型の重複チェックを集合等価
+チェックより先に追加した。
+
+manifest バイトはさらに変わった（claim_scope への追記 + Fix 3-6 対応
+記録を generation_note へ追記、pin 欄自体は PENDING のため repin ではなく
+情報記録として最新実測 sha256 を `RUN9_CONTRACT.yaml` の履歴コメントへ
+残した）: `fe8e47b8cb035e8e3795c8bbf5305161985b630f9ae7659a709d6dd5092e0cf5`。
+本 harness の実測（tar.gz MISS・smoke render BLOCKED・budget estimate
+BLOCKED）自体は無変更。
+
+既存 pin（backbone_checkpoint_sha 等）は無変更を確認済み——本ラウンドで
+状態が変わった pin 欄は `dependency_pins_sha`（PINNED→PENDING）のみ。
+
 ---
 
 ## 6. テスト・lint

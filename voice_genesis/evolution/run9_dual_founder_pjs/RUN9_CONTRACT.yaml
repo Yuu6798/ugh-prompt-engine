@@ -465,13 +465,53 @@ config_sha:
 # （`blocked_by` 等）を禁止し、実測フィールド（smoke:
 # `determinism_confirmed`=True・`measured_sec_per_render` 正の有限数値・
 # `render_condition`／budget: `total_render_count` 正の整数・
-# `estimated_total_sec` 正の有限数値）を必須化した。直前の値（履歴として
-# append-only 保持）:
+# `estimated_total_sec` 正の有限数値）を必須化した。
+#
+# 2026-08-26 PENDING 復帰（PR #326 第2巡 Codex bot レビュー Fix 3、P1、
+# 採用）: 上記2回の PINNED（第1-2世代）は過大だった。指摘は正当——本欄の
+# 従来 reason は学習ハーネス自体の依存（PyTorch 等）を残る律速に挙げて
+# いたにもかかわらず、`dependency_pins_manifest.json` は
+# render/analysis 9パッケージ（`python_dependency_pins`）のみを検証対象
+# としており、これで本欄を PINNED にすると `gate_state()` が「全実行
+# 依存が確定した」証拠として扱ってしまう——ハーネス実装後に未 pin の
+# 学習依存（optimizer/探索が要する追加パッケージ）で動く偽 READY 経路を
+# 開く（RUN9-L0-PIN-1 で `measurement_spec_sha` が同型の理由で PENDING
+# へ復帰した前例と同型）。`claim_scope` による証明範囲の限定（narrowing）
+# では hard-gate 欄の意味論そのものを弱めてしまうため採用しない——
+# 「不完全な pin を narrow に PINNED」ではなく「完全になるまで PENDING」
+# を選ぶ。値を null・status を PENDING へ戻した（下記 reason 欄）。
+# manifest 実体（`inputs/dependency_pins_manifest.json`）・validator
+# （`validate_dependency_pins_manifest()`）・loader
+# （`load_pinned_dependency_pins_manifest()`）は撤去しない（PIN-1
+# `measurement_spec` と同型の「事前配線を残しつつ pin 欄だけ PENDING」
+# 運用）——PENDING の間、loader が「not PINNED」で raise するのが正しい
+# 挙動であり、そのように `tests/test_run9_contract.py` を追随させた
+# （`test_harness1_dependency_pins_sha_pinned_and_matches_manifest_bytes`
+# 等の PINNED 前提テストを PENDING 前提へ改訂）。manifest 自体は
+# render/analysis 層の実測記録として repo に残置し（`claim_scope` に
+# 「本 manifest は render/analysis 層の実測記録であり
+# `dependency_pins_sha` の完全な充足を主張しない」を明記した）、実測済み
+# の sha256（本欄 PENDING 化に伴う claim_scope/generation_note 追記後の
+# 実バイト、Fix 1-6 全対応後の最新実測値）は情報記録として保持する:
+# "fe8e47b8cb035e8e3795c8bbf5305161985b630f9ae7659a709d6dd5092e0cf5"
+# （本欄が将来 PINNED 化される際は、学習ハーネス依存の import closure が
+# 実測・manifest へ追加された後の**新しい**バイト列の sha256 を pin する
+# ——上記の値をそのまま転記しない）。過去の PINNED 値（履歴として
+# append-only 保持）: 第2世代（Fix 1/2 対応後）
+# "1d8a8f720bfd5e4999748cd766560ad33fff2d977852e2fda7b7596124539be2"、
+# 第1世代（初回 PINNED 時）
 # "3392656474b4538e9ed05bfda0d57bc7845bcca3cfa20ffaacdaa94b5fb695e1"
 dependency_pins_sha:
-  value: "1d8a8f720bfd5e4999748cd766560ad33fff2d977852e2fda7b7596124539be2"
-  status: PINNED
-  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/dependency_pins_manifest.json
+  value: null
+  status: PENDING
+  reason: >-
+    render/analysis 層 + 実体資産は dependency_pins_manifest.json
+    （事前配線・repo 収載済み）で実測検証済み。ただし VG-L0 学習ハーネス
+    本体の import closure が未確定（rev 0.2 の ControlProfile 決定論
+    導出では追加依存ゼロの可能性が高いが、ハーネス実装で実証されるまで
+    主張しない）。pin はハーネス実装時に closure を実測してから。
+    〔履歴: HARNESS-1 で一時 PINNED（第1-2世代）→ 第2巡 P1 指摘で
+    PENDING 復帰〕
 
 # RUN9-L0-HARNESS-1（2026-08-26）追記: PINNED 化を試みたが見送った。
 # 見送り理由は「実行環境が非現実的だった」ではなく「実測そのものが

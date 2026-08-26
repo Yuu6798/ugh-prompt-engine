@@ -896,19 +896,21 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   （2026-08-26）で dataset_manifest_sha/dataset_row_order_sha の2欄が
   PINNED 化され、残 PENDING は pre-run 必須10欄（総 PENDING 11欄）へ
   減少した。続けて RUN9-L0-HARNESS-1（2026-08-26）で `dependency_pins_sha`
-  が PINNED 化され、残 PENDING は下記のとおり pre-run 必須9欄
-  （総 PENDING 10欄）へ減少した——下記「解消済み
-  （RUN9-L0-HARNESS-1, 2026-08-26）」節参照〕（`attempt_id`/
-  `repository_commit_sha`/`config_sha`/
+  が一時的に PINNED 化され、残 PENDING は pre-run 必須9欄
+  （総 PENDING 10欄）へ減少したが、PR #326 第2巡 Codex bot レビュー
+  Fix 3（P1、採用）により同欄は PENDING へ差し戻され、残 PENDING は
+  下記のとおり pre-run 必須10欄（総 PENDING 11欄）へ戻った——下記
+  「解消済み（RUN9-L0-HARNESS-1, 2026-08-26）」節参照〕（`attempt_id`/
+  `repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
   `execution_profile_sha`/`expected_speaker_map_sha`/
   `education_technique_lesson_manifest_sha`/`learning_recipe_sha`/
-  `measurement_spec_sha`/`hypothesis_algebra_sha` の pre-run 必須9欄が
+  `measurement_spec_sha`/`hypothesis_algebra_sha` の pre-run 必須10欄が
   引き続き PENDING のため（optional の `human_evaluation_protocol_sha` を
-  含めると総 PENDING 10欄）——`tests/test_run9_contract.py` の回帰テストで
+  含めると総 PENDING 11欄）——`tests/test_run9_contract.py` の回帰テストで
   機械確認済み）。
 
 **解消済み（RUN9-L0-HARNESS-1, 2026-08-26）**:
-- ~~`dependency_pins_sha` 未 pin~~ →
+- `dependency_pins_sha` 未 pin →
   [`inputs/dependency_pins_manifest.json`](./inputs/dependency_pins_manifest.json)
   （schema `run9-dependency-pins/1.0`）を新設した——VG-L0 render 資産
   provisioning の実測台帳（Drive/URL 取得資産12点の sha256 全数
@@ -931,6 +933,32 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   status 文字列の書き換えだけで成功状態を主張できない machine check を
   追加）、`dependency_pins_sha` を第2世代へ repin した（実測結果自体は
   無変更、詳細は `HARNESS1_PROVISION_RECORD.md` §5-1）。
+  **PENDING 差し戻し（PR #326 第2巡 Fix 3、P1、採用、2026-08-26）**:
+  上記2回の PINNED（第1-2世代）は過大だった——manifest は
+  render/analysis 層9パッケージのみを検証対象としており、これで
+  `dependency_pins_sha` を PINNED にすると VG-L0 学習ハーネス本体
+  （optimizer/探索コード）の依存 closure 未確定のまま `gate_state()`
+  が「全実行依存が確定した」証拠として誤認する経路を開く
+  （`measurement_spec_sha` が RUN9-L0-PIN-1 で同型の理由により PENDING
+  へ復帰した前例と同型）。value を null・status を PENDING へ戻し、
+  manifest 自身の `claim_scope` に「render/analysis 層の実測記録であり
+  `dependency_pins_sha` の完全な充足を主張しない」ことを明記した
+  （manifest 実体・validator・loader は撤去せず残置——`measurement_
+  spec_sha` と同型の「事前配線を残しつつ pin 欄だけ PENDING」運用）。
+  同巡でさらに3件対応（いずれも P2、実測結果は無変更）: Fix 4
+  `_validate_tar_gz_full_member_ledger()` を companion status に条件付け
+  （NOT_OBTAINED のときのみ従来どおり拒否、OBTAINED のときは逆に
+  「tar member が無い・sha 不一致なら拒否」という整合検査へ切替、
+  将来 tarball から正当取得した場合の遷移を可能にした）。Fix 5
+  `budget_estimate` の COMPLETED は `smoke_render` も COMPLETED である
+  ことを前提条件として要求し（BLOCKED のまま budget だけ完了主張は
+  自己矛盾として拒否）、`estimated_total_sec ==
+  measured_sec_per_render × total_render_count` を `math.isclose`
+  （rel_tol=1e-9、厳しめ）で検証するようにした。Fix 6
+  `acoustic_export_companions.expected_items` の重複 `logical_name` を
+  集合等価チェックより先に `len(list)==len(unique)` で拒否するように
+  した（`render_asset_ledger` と同型）。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-2。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →
