@@ -1,0 +1,163 @@
+{
+  "adjudication_basis": {
+    "sha256": "1806955c12ab3c002a9083929fd517e3312de9fe0eff6dc01d2b26018bb1e3ca",
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt",
+    "summary": "User 裁定 2026-08-26 決定2（checkpoint からの再 export 承認）に基づく derived runtime artifact。historical bytes の復元とは扱わない。"
+  },
+  "artifacts": {
+    "acoustic_onnx": {
+      "bytes": 279777001,
+      "file": "s5_run6_acoustic_v1.onnx",
+      "historical_sha256": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+      "matches_historical": false,
+      "run1_run2_identical": true,
+      "sha256_run1": "cdbd779c686504cd1277bf74036e5fb334e4fcdc88ab7612f435ced7c1d6687b",
+      "sha256_run2": "cdbd779c686504cd1277bf74036e5fb334e4fcdc88ab7612f435ced7c1d6687b"
+    },
+    "d3synth_emb": {
+      "bytes": 1536,
+      "file": "s5_run6_acoustic_v1.d3synth.emb",
+      "historical_sha256": "10c3964c57a69edb072bd7c9aec36dc7e3b06e06469c5da60332bec793c1dc22",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "10c3964c57a69edb072bd7c9aec36dc7e3b06e06469c5da60332bec793c1dc22",
+      "sha256_run2": "10c3964c57a69edb072bd7c9aec36dc7e3b06e06469c5da60332bec793c1dc22"
+    },
+    "dictionary_ja_txt": {
+      "bytes": 204,
+      "file": "dictionary-ja.txt",
+      "historical_sha256": null,
+      "matches_historical": false,
+      "run1_run2_identical": true,
+      "sha256_run1": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
+      "sha256_run2": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef"
+    },
+    "dsconfig_yaml": {
+      "bytes": 775,
+      "file": "dsconfig.yaml",
+      "historical_sha256": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+      "sha256_run2": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c"
+    },
+    "languages_json": {
+      "bytes": 13,
+      "file": "s5_run6_acoustic_v1.languages.json",
+      "historical_sha256": null,
+      "matches_historical": false,
+      "run1_run2_identical": true,
+      "sha256_run1": "a51ee3aa7dafa1905b01a8c6ed2e99ebeecad0071d786493f43effd2438b2fda",
+      "sha256_run2": "a51ee3aa7dafa1905b01a8c6ed2e99ebeecad0071d786493f43effd2438b2fda"
+    },
+    "phonemes_json": {
+      "bytes": 506,
+      "file": "s5_run6_acoustic_v1.phonemes.json",
+      "historical_sha256": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
+      "sha256_run2": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8"
+    },
+    "pjs_emb": {
+      "bytes": 1536,
+      "file": "s5_run6_acoustic_v1.pjs.emb",
+      "historical_sha256": "074e09b390c207a7cf98105db549e1006d035a797d57f73e103e848bb3216015",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "074e09b390c207a7cf98105db549e1006d035a797d57f73e103e848bb3216015",
+      "sha256_run2": "074e09b390c207a7cf98105db549e1006d035a797d57f73e103e848bb3216015"
+    },
+    "ritsu_emb": {
+      "bytes": 1536,
+      "file": "s5_run6_acoustic_v1.ritsu.emb",
+      "historical_sha256": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
+      "sha256_run2": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c"
+    },
+    "user_emb": {
+      "bytes": 1536,
+      "file": "s5_run6_acoustic_v1.user.emb",
+      "historical_sha256": "588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0",
+      "matches_historical": true,
+      "run1_run2_identical": true,
+      "sha256_run1": "588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0",
+      "sha256_run2": "588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0"
+    }
+  },
+  "environment_versions": {
+    "arch": "x86_64",
+    "device": "CPU (no GPU used for export; historical run6 export environment/device unknown)",
+    "kernel": "Linux 6.18.44-fc-v21 x86_64",
+    "lightning": "2.3.3",
+    "numpy": "1.26.4",
+    "onnx": "1.22.0",
+    "onnxsim": "v0.7.3",
+    "os": "Ubuntu 24.04.4 LTS",
+    "python": "3.11.15",
+    "torch": "2.13.0+cpu"
+  },
+  "export_command": [
+    "python",
+    "scripts/export.py",
+    "acoustic",
+    "--exp",
+    "s5_run6_acoustic_v1",
+    "--ckpt",
+    "40000",
+    "--out",
+    "<session workdir（repo外）>/onnx_gate_40000"
+  ],
+  "export_command_cwd": "<diffsinger_repo clone（session workdir、repo外）>/DiffSinger",
+  "export_venv_setup": {
+    "description": "torch 隔離 venv（provision.sh §6 export venv pin 準拠）。numpy<2 制約下で torch/lightning/onnx/onnxsim を DiffSinger/requirements.txt 経由で導入し、最後に numpy を 1.26.4 へ再pin（provision.sh の既知順序: requirements.txt 導入後に numpy を戻さないと 2.x へ引き上げられる）。",
+    "install_steps": [
+      "python -m venv venv_export",
+      "pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cpu",
+      "pip install -r <diffsinger_repo clone（session workdir、repo外）>/DiffSinger/requirements.txt",
+      "pip install numpy==1.26.4"
+    ]
+  },
+  "exporter": {
+    "expected_revision_per_run9_contract": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+    "repo": "openvpi/DiffSinger",
+    "revision": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+    "revision_matches_pin": true
+  },
+  "generated_at_utc": "2026-08-26T14:04:43Z",
+  "historical_comparison_summary": {
+    "acoustic_onnx": "MISMATCH（バイト非一致。ckpt/exporter commit は pin 一致確認済みだが、export 実行環境（torch/onnx/onnxsim 具体バージョン・GPU/CPU・当時のOS）は historical 側で未記録のため、環境差要因を断定できない。捏造して合わせていない）",
+    "d3synth_emb": "MATCH（byte-identical replay evidence。dependency_pins_manifest.json 収載済みの speaker_embeddings_unpinned_candidates.d3synth_reference_only.candidate_sha256 と一致）",
+    "dsconfig_yaml": "MATCH（byte-identical replay evidence）",
+    "phonemes_json": "MATCH（byte-identical replay evidence）",
+    "pjs_emb": "MATCH（byte-identical replay evidence——ただし User 裁定3の正式PINNED昇格条件（同一 directory/archive 内で4 sha 同時存在の実測確認）は Step A で archive/directory が発見できず未充足。再export による独立再現は昇格条件そのものではなく、候補値の信頼性を補強する傍証として記録する）",
+    "ritsu_emb": "MATCH（byte-identical replay evidence）",
+    "user_emb": "MATCH（byte-identical replay evidence——pjs_emb と同様、昇格条件は未充足のまま。傍証として記録）"
+  },
+  "input_checkpoint": {
+    "bytes": 556013282,
+    "expected_sha256_per_run9_contract": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+    "path": "voice_genesis/foundry/run8 系 provision.sh の pin と同一（RUN6 phase B 40K checkpoint）",
+    "sha256": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+    "sha256_matches_pin": true
+  },
+  "pin_disposition": "RUN9-L0-HARNESS-2（本ファイル収載 PR）で reexport_manifest_sha として RUN9_CONTRACT.yaml へ新規 PINNED 化された。derived runtime artifact として 扱い、historical bytes の復元とは扱わない（User 裁定2 逐語、USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt 参照）。",
+  "reproducibility_check": {
+    "all_run1_run2_identical": true,
+    "description": "同一 checkpoint に対し export.py を独立に2回実行（session workdir 内の reexport_out / reexport_out2、いずれも repo 外）。全アーティファクト（acoustic.onnx 含む）が run1/run2 間で sha256 完全一致——本環境内では export は決定論的である（非決定論ではなく、環境差が historical との 不一致の原因である可能性を示唆する所見。断定はしない）。"
+  },
+  "schema": "run9-reexport-manifest/1.0",
+  "smoke_render_cross_check": {
+    "avg_sec_per_render": 24.101547837257385,
+    "budget_count_provenance_note": "616 という render 総数は前巡の返信・過去記録で言及されてきた基準値をそのまま踏襲した概算であり、本 PR で新たに確定した値ではない（内訳: learning/search loop 512 + birth probe 24 + C0/C1 80 = 616、固定評価分は未確定のため除く。HARNESS1_PROVISION_RECORD.md §4 参照）。",
+    "budget_estimate_616_renders_sec": 14846.55346775055,
+    "description": "本 export 成果物（acoustic.onnx へエイリアス済みの s5_run6_acoustic_v1.onnx 一式）を用いて gate_synth.py run --skip-export --acoustic-dir を2回独立実行し、同一入力2 render の WAV byte 一致を確認した。詳細は HARNESS2_REEXPORT_SMOKE_RECORD.md。",
+    "determinism_confirmed": true,
+    "render1_total_elapsed_sec": 23.482061624526978,
+    "render1_wav_sha256": "c7e1dcdfb7139d490dc19347c21dad5f9966764182cb6ee7e0124ad8fedd379e",
+    "render2_total_elapsed_sec": 24.721034049987793,
+    "render2_wav_sha256": "c7e1dcdfb7139d490dc19347c21dad5f9966764182cb6ee7e0124ad8fedd379e"
+  }
+}

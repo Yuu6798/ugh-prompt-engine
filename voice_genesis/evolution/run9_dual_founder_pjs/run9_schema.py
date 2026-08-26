@@ -6982,6 +6982,13 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     "dataset_row_order_sha",
     "config_sha",
     "dependency_pins_sha",
+    # RUN9-L0-HARNESS-2 で追加: inputs/reexport_manifest.json（RUN6 phase B
+    # 40K checkpoint からの derived runtime artifact 一括 manifest、User 裁定
+    # 2026-08-26 決定2）自体の実 sha256（design_doc_sha256 と同一のファイル
+    # 実バイト規約）。dependency_pins_sha とは独立の欄——本欄は再export
+    # 実測台帳そのものの凍結のみを主張し、学習ハーネス本体の依存 closure
+    # （dependency_pins_sha が引き続き PENDING である理由）には関与しない。
+    "reexport_manifest_sha",
     "execution_profile_sha",
     "seed_policy_sha",
     "expected_speaker_map_sha",
@@ -11380,6 +11387,50 @@ _ACOUSTIC_COMPANION_ITEM_OBTAINED_REQUIRED_KEYS: FrozenSet[str] = (
     _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS | _ACOUSTIC_COMPANION_ITEM_OBTAINED_ONLY_KEYS
 )
 
+# RUN9-L0-HARNESS-2（2026-08-26, User 裁定 2026-08-26 決定2）: checkpoint
+# からの再 export で得た companions は item ごとに歴史値と一致するか
+# しないかが割れる（acoustic.onnx は不一致・dsconfig/phonemes/ritsu.emb は
+# 一致）——旧 `OBTAINED_VERIFIED_MATCH` top-level status は「全item が
+# 一致」を機械強制していたため、この混在状態を正直に表現できなかった
+# （不一致のまま VERIFIED_MATCH を名乗らせると捏造になり、逆に全item を
+# 一致必須のまま扱うと不一致の実測事実を記録できない）。新設 top-level
+# status `OBTAINED_VIA_REEXPORT` は item ごとに独立した `status`
+# （`OBTAINED_VERIFIED_MATCH` / `OBTAINED_DERIVED_NEW_BYTES`）を持たせる
+# 判別 shape とし、各 item の実測 sha と歴史値の一致/不一致を machine
+# 強制で正直に記録する（設計判断2/3、Design Memo RUN9-L0-HARNESS-2）。
+_ACOUSTIC_COMPANION_ITEM_STATUS_VOCAB: Tuple[str, ...] = (
+    "OBTAINED_VERIFIED_MATCH", "OBTAINED_DERIVED_NEW_BYTES",
+)
+_ACOUSTIC_COMPANION_ITEM_REEXPORT_COMMON_KEYS: FrozenSet[str] = (
+    _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS
+    | frozenset({"measured_sha256", "acquisition_source", "status", "matches_historical"})
+)
+# OBTAINED_DERIVED_NEW_BYTES 専用: 歴史 pin 値の保持（`expected_sha256` は
+# bundle cross-check の対象のまま不変——歴史値の保持先はこちらではなく
+# 従来通り `expected_sha256` 自体。`historical_expected_sha256` は
+# 「歴史値との不一致を正直に自称する」ための二重記録であり、
+# `expected_sha256` と厳密一致することを validator が machine 強制する）
+# + reexport manifest 側の当該 artifact への参照。
+_ACOUSTIC_COMPANION_ITEM_DERIVED_ONLY_KEYS: FrozenSet[str] = frozenset({
+    "historical_expected_sha256", "reexport_manifest_ref",
+})
+_ACOUSTIC_COMPANION_ITEM_DERIVED_KEYS: FrozenSet[str] = (
+    _ACOUSTIC_COMPANION_ITEM_REEXPORT_COMMON_KEYS | _ACOUSTIC_COMPANION_ITEM_DERIVED_ONLY_KEYS
+)
+# OBTAINED_VERIFIED_MATCH（reexport 経由）専用: byte 一致は実測事実として
+# 正当だが「historical bytes の復元」とは扱わない旨を replay_evidence で
+# 明示する（User 裁定2 逐語）。
+_ACOUSTIC_COMPANION_ITEM_REEXPORT_VERIFIED_ONLY_KEYS: FrozenSet[str] = frozenset({
+    "replay_evidence",
+})
+_ACOUSTIC_COMPANION_ITEM_REEXPORT_VERIFIED_KEYS: FrozenSet[str] = (
+    _ACOUSTIC_COMPANION_ITEM_REEXPORT_COMMON_KEYS
+    | _ACOUSTIC_COMPANION_ITEM_REEXPORT_VERIFIED_ONLY_KEYS
+)
+_ACOUSTIC_COMPANION_REEXPORT_MANIFEST_REF_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "artifact_key", "reexport_manifest_sha256",
+})
+
 # Codex bot レビュー PR #326 第6巡指摘 Fix 14（P2, 採用, 将来汚染:
 # status 判別の未完部分）: item レベルの shape は Fix 1/7 で status
 # 判別化済みだったが、トップレベルの narrative フィールド
@@ -11416,8 +11467,112 @@ _ACOUSTIC_COMPANIONS_ACQUISITION_RECORD_REQUIRED_KEYS: FrozenSet[str] = frozense
 })
 
 _ACOUSTIC_COMPANIONS_STATUS_VOCAB: Tuple[str, ...] = (
-    "NOT_OBTAINED_TARBALL_MISS", "OBTAINED_VERIFIED_MATCH",
+    "NOT_OBTAINED_TARBALL_MISS", "OBTAINED_VERIFIED_MATCH", "OBTAINED_VIA_REEXPORT",
 )
+
+
+def _validate_reexport_acoustic_companion_item(item: Mapping[str, Any], *, index: int) -> None:
+    """`OBTAINED_VIA_REEXPORT`（RUN9-L0-HARNESS-2）配下の item 1件を検証
+    する。item 自身の `status`（`OBTAINED_VERIFIED_MATCH`/
+    `OBTAINED_DERIVED_NEW_BYTES`）ごとに分岐し、User 裁定2026-08-26
+    決定2「旧historical hashと一致しなくても捏造して合わせない。一致した
+    場合はreplay evidenceとして記録する」を machine 強制する。
+    """
+    field = f"acoustic_export_companions.expected_items[{index}]"
+    item_status = item["status"]
+    expected_sha = item["expected_sha256"]
+    measured_sha = item["measured_sha256"]
+    if not isinstance(measured_sha, str) or not _SHA256_HEX_RE.match(measured_sha):
+        raise Run9ValidationError(
+            f"{field}.measured_sha256 must be a 64hex sha256, got {measured_sha!r}"
+        )
+    acquisition_source = item["acquisition_source"]
+    if acquisition_source != "RE_EXPORT":
+        raise Run9ValidationError(
+            f"{field}.acquisition_source must be 'RE_EXPORT' under section status "
+            f"OBTAINED_VIA_REEXPORT, got {acquisition_source!r}"
+        )
+    matches_historical = item["matches_historical"]
+    if not isinstance(matches_historical, bool):
+        raise Run9ValidationError(
+            f"{field}.matches_historical must be a bool, got {matches_historical!r}"
+        )
+    # (c) fail-closed: matches_historical は自己申告ではなく measured_sha256
+    # == expected_sha256 の in-process 再計算と一致しなければならない
+    # （捏造・転記ミスの機械検出）。
+    computed_match = measured_sha == expected_sha
+    if matches_historical != computed_match:
+        raise Run9ValidationError(
+            f"{field}.matches_historical ({matches_historical!r}) diverges from the in-process "
+            f"recomputation of (measured_sha256 == expected_sha256), which is {computed_match!r} "
+            "— a fabricated or stale matches_historical claim is rejected fail-closed"
+        )
+    if item_status == "OBTAINED_DERIVED_NEW_BYTES":
+        # (g) acoustic_onnx.matches_historical == false の逐語保持: true への
+        # 書き換えは拒否する（実測事実の凍結）。
+        if matches_historical is not False:
+            raise Run9ValidationError(
+                f"{field}.matches_historical must be the literal boolean False when status is "
+                "OBTAINED_DERIVED_NEW_BYTES — a byte match would mean this item should instead "
+                "claim OBTAINED_VERIFIED_MATCH; True is never accepted here (frozen fact, User "
+                "adjudication 2026-08-26)"
+            )
+        historical_expected = item["historical_expected_sha256"]
+        if not isinstance(historical_expected, str) or not _SHA256_HEX_RE.match(historical_expected):
+            raise Run9ValidationError(
+                f"{field}.historical_expected_sha256 must be a 64hex sha256, got "
+                f"{historical_expected!r}"
+            )
+        if historical_expected != expected_sha:
+            raise Run9ValidationError(
+                f"{field}.historical_expected_sha256 ({historical_expected!r}) must equal "
+                f"expected_sha256 ({expected_sha!r}) — both name the same frozen historical pin "
+                "value and must not diverge"
+            )
+        ref = item["reexport_manifest_ref"]
+        if not isinstance(ref, dict):
+            raise Run9ValidationError(
+                f"{field}.reexport_manifest_ref must be an object, got {type(ref).__name__}"
+            )
+        unknown_ref = set(ref.keys()) - _ACOUSTIC_COMPANION_REEXPORT_MANIFEST_REF_REQUIRED_KEYS
+        if unknown_ref:
+            raise Run9ValidationError(
+                f"{field}.reexport_manifest_ref has unknown key(s): {sorted(unknown_ref)}"
+            )
+        missing_ref = _ACOUSTIC_COMPANION_REEXPORT_MANIFEST_REF_REQUIRED_KEYS - set(ref.keys())
+        if missing_ref:
+            raise Run9ValidationError(
+                f"{field}.reexport_manifest_ref missing required key(s): {sorted(missing_ref)}"
+            )
+        artifact_key = _require_non_empty_str(
+            ref["artifact_key"], field=f"{field}.reexport_manifest_ref.artifact_key"
+        )
+        if artifact_key != item["logical_name"]:
+            raise Run9ValidationError(
+                f"{field}.reexport_manifest_ref.artifact_key ({artifact_key!r}) must equal this "
+                f"item's own logical_name ({item['logical_name']!r})"
+            )
+        reexport_sha = ref["reexport_manifest_sha256"]
+        if not isinstance(reexport_sha, str) or not _SHA256_HEX_RE.match(reexport_sha):
+            raise Run9ValidationError(
+                f"{field}.reexport_manifest_ref.reexport_manifest_sha256 must be a 64hex "
+                f"sha256, got {reexport_sha!r}"
+            )
+    else:  # OBTAINED_VERIFIED_MATCH
+        if matches_historical is not True:
+            raise Run9ValidationError(
+                f"{field}.matches_historical must be the literal boolean True when status is "
+                "OBTAINED_VERIFIED_MATCH (byte match is the entire basis of this status)"
+            )
+        replay_evidence = item["replay_evidence"]
+        if replay_evidence is not True:
+            raise Run9ValidationError(
+                f"{field}.replay_evidence must be the literal boolean True — a byte match "
+                "obtained via re-export is recorded as replay evidence, not as recovery of the "
+                "original historical bytes (User adjudication 2026-08-26 decision 2, verbatim: "
+                "旧historical hashと一致しなくても捏造して合わせない。一致した場合はreplay "
+                "evidenceとして記録する)"
+            )
 
 
 def _validate_acoustic_export_companions(section: Any) -> None:
@@ -11458,10 +11613,17 @@ def _validate_acoustic_export_companions(section: Any) -> None:
     # status 判別型 shape（Fix 1）: OBTAINED のときのみ item ごとに
     # `measured_sha256` を必須化し、NOT_OBTAINED のときは逆に禁止する
     # （禁止は許可キー集合から外すだけで、unknown key チェックが自動的に
-    # 「未取得なのに実測値がある」矛盾を拒否する）。
+    # 「未取得なのに実測値がある」矛盾を拒否する）。RUN9-L0-HARNESS-2:
+    # `OBTAINED_VIA_REEXPORT` のときは item ごとの shape が item 自身の
+    # `status`（`OBTAINED_VERIFIED_MATCH`/`OBTAINED_DERIVED_NEW_BYTES`）に
+    # よって分岐するため、top-level status だけでは一意に決まらない
+    # ——ループ内で item ごとに再判定する（`item_allowed_keys` を
+    # ループ外で一括計算する旧方式は使えない）。
     if status == "OBTAINED_VERIFIED_MATCH":
         item_allowed_keys = _ACOUSTIC_COMPANION_ITEM_OBTAINED_REQUIRED_KEYS
         item_required_keys = _ACOUSTIC_COMPANION_ITEM_OBTAINED_REQUIRED_KEYS
+    elif status == "OBTAINED_VIA_REEXPORT":
+        item_allowed_keys = item_required_keys = None  # per-item（下記ループ内）
     else:
         item_allowed_keys = _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS
         item_required_keys = _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS
@@ -11472,12 +11634,26 @@ def _validate_acoustic_export_companions(section: Any) -> None:
                 f"dependency pins manifest.acoustic_export_companions.expected_items[{i}] must "
                 f"be an object, got {type(item).__name__}"
             )
+        if status == "OBTAINED_VIA_REEXPORT":
+            item_status = item.get("status")
+            if item_status not in _ACOUSTIC_COMPANION_ITEM_STATUS_VOCAB:
+                raise Run9ValidationError(
+                    f"dependency pins manifest.acoustic_export_companions.expected_items[{i}]."
+                    f"status must be one of {_ACOUSTIC_COMPANION_ITEM_STATUS_VOCAB!r} when the "
+                    f"section status is OBTAINED_VIA_REEXPORT, got {item_status!r}"
+                )
+            item_allowed_keys = item_required_keys = (
+                _ACOUSTIC_COMPANION_ITEM_DERIVED_KEYS
+                if item_status == "OBTAINED_DERIVED_NEW_BYTES"
+                else _ACOUSTIC_COMPANION_ITEM_REEXPORT_VERIFIED_KEYS
+            )
         unknown_item = set(item.keys()) - item_allowed_keys
         if unknown_item:
             raise Run9ValidationError(
                 f"dependency pins manifest.acoustic_export_companions.expected_items[{i}] has "
                 f"unknown key(s) for status {status!r}: {sorted(unknown_item)} (measured_sha256 "
-                "is only permitted — and required — when status is OBTAINED_VERIFIED_MATCH)"
+                "is only permitted — and required — when status is OBTAINED_VERIFIED_MATCH or "
+                "OBTAINED_VIA_REEXPORT)"
             )
         missing_item = item_required_keys - set(item.keys())
         if missing_item:
@@ -11522,6 +11698,8 @@ def _validate_acoustic_export_companions(section: Any) -> None:
                     f"acquisition_source must be one of {_ACQUISITION_SOURCE_VOCAB!r}, got "
                     f"{acquisition_source!r}"
                 )
+        elif status == "OBTAINED_VIA_REEXPORT":
+            _validate_reexport_acoustic_companion_item(item, index=i)
     # Codex bot レビュー PR #326 第2巡指摘 Fix 6（P2, 採用）: set 等価判定
     # だけでは重複 logical_name を検出できない（例: 4種の正しい名前 + 1件の
     # 重複で計5件でも `set(seen_names)` は4件に潰れ、直後の集合等価チェック
@@ -11798,7 +11976,7 @@ def _validate_tar_gz_full_member_ledger(
                     "acoustic_export_companions.status must be updated to reflect this before "
                     "PINNED (stale-miss inconsistency)"
                 )
-    elif companion_status == "OBTAINED_VERIFIED_MATCH":
+    elif companion_status in ("OBTAINED_VERIFIED_MATCH", "OBTAINED_VIA_REEXPORT"):
         # Codex bot レビュー PR #326 第3巡指摘 Fix 7（P2, 採用）: tar
         # membership + sha 整合の要求は、その item が実際に「この
         # tarball」から取得されたと申告している（acquisition_source ==
@@ -11806,6 +11984,11 @@ def _validate_tar_gz_full_member_ledger(
         # 取得は、このファイルの tar_gz_full_member_ledger に一切現れ
         # なくて構わない——Fix 1 の measured_sha256 == expected_sha256
         # 強制（`_validate_acoustic_export_companions()`）だけで十分。
+        # RUN9-L0-HARNESS-2（`OBTAINED_VIA_REEXPORT`）: 全 item が
+        # `acquisition_source == "RE_EXPORT"` を強制されるため
+        # （`_validate_reexport_acoustic_companion_item()`）、本ループは
+        # 構造的に no-op になる——tar 由来ではない取得経路は tar member の
+        # 有無を問わない、という Fix 7 の設計をそのまま再利用する。
         for item in companion_items:
             if item.get("acquisition_source") != "THIS_TARBALL":
                 continue
@@ -11965,11 +12148,20 @@ def _validate_diffsinger_render_code_commit(section: Any) -> None:
         )
 
 
+# RUN9-L0-HARNESS-2 で追加: `replay_evidence`（再export で byte 一致した
+# ことの独立傍証、User 裁定3「この2値自体については既存RUN6 probe記録に
+# も同じ値が存在するため、値の信頼性には独立した傍証がある」）+
+# `promotion_condition_unmet_note`（正式 PINNED 昇格条件——歴史4 sha との
+# 同一 directory/archive 内同時実在の実測確認——が未充足のままであることの
+# 明示。傍証の追記が暗黙の昇格と誤読されないための必須注記）。両欄とも
+# pjs/user/d3synth 全 candidate 共通で必須化する。
 _SPEAKER_EMBED_CANDIDATE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "file", "candidate_sha256", "candidate_sha256_first16", "source", "status",
+    "replay_evidence", "promotion_condition_unmet_note",
 })
 _SPEAKER_EMBED_D3SYNTH_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "note", "candidate_sha256", "source", "status",
+    "replay_evidence", "promotion_condition_unmet_note",
 })
 # Codex bot レビュー PR #326 第3巡指摘 Fix 9（P2, 採用）: 旧実装は
 # `status.startswith("UNPINNED_CANDIDATE")` という接頭辞判定で、
@@ -12017,6 +12209,17 @@ def _validate_speaker_embed_candidate(
         _require_non_empty_str(entry["file"], field=f"{field}.file")
     if "note" in required_keys:
         _require_non_empty_str(entry["note"], field=f"{field}.note")
+    # RUN9-L0-HARNESS-2: replay_evidence は「独立傍証がある」ことの機械
+    # 表明（literal True 固定——false を許すと「傍証がない」候補と区別が
+    # つかなくなる。傍証がない場合は本欄自体を manifest から省く設計）。
+    replay_evidence = entry["replay_evidence"]
+    if replay_evidence is not True:
+        raise Run9ValidationError(
+            f"{field}.replay_evidence must be the literal boolean True, got {replay_evidence!r}"
+        )
+    _require_non_empty_str(
+        entry["promotion_condition_unmet_note"], field=f"{field}.promotion_condition_unmet_note"
+    )
     status = entry["status"]
     if status not in allowed_status:
         raise Run9ValidationError(
@@ -12099,7 +12302,16 @@ _SMOKE_RENDER_BLOCKED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 _SMOKE_RENDER_COMPLETED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "status", "reason", "determinism_confirmed", "measured_sec_per_render", "render_condition",
     "render_output_sha256_first", "render_output_sha256_second",
+    # RUN9-L0-HARNESS-2 追加: 実測秒の内訳（独立2回それぞれの実測、
+    # `measured_sec_per_render` はこの2値の平均であることを machine
+    # 強制する）+ render entrypoint 逐語 + onnxruntime providers 実測
+    # （execution_profile_sha 裁定材料、User 裁定4「実際に使用した...
+    # onnxruntime/providers...を取得した時点で execution_profile_sha を
+    # 裁定・pinする」に対応する記録）。
+    "render1_total_elapsed_sec", "render2_total_elapsed_sec",
+    "render_entrypoint", "onnxruntime_providers",
 })
+_SMOKE_RENDER_TOTAL_SEC_REL_TOL: float = 1e-9
 
 
 def _validate_smoke_render_section(section: Any, *, companions_status: str) -> None:
@@ -12164,10 +12376,38 @@ def _validate_smoke_render_section(section: Any, *, companions_status: str) -> N
                 f"COMPLETED (a completed smoke render must have actually confirmed determinism, "
                 f"not merely claimed it), got {section['determinism_confirmed']!r}"
             )
-        _require_positive_finite_number(
+        measured_sec_per_render = _require_positive_finite_number(
             section["measured_sec_per_render"], field=f"{field}.measured_sec_per_render"
         )
         _require_non_empty_str(section["render_condition"], field=f"{field}.render_condition")
+        render1_sec = _require_positive_finite_number(
+            section["render1_total_elapsed_sec"], field=f"{field}.render1_total_elapsed_sec"
+        )
+        render2_sec = _require_positive_finite_number(
+            section["render2_total_elapsed_sec"], field=f"{field}.render2_total_elapsed_sec"
+        )
+        expected_avg = (render1_sec + render2_sec) / 2
+        if not math.isclose(
+            measured_sec_per_render, expected_avg, rel_tol=_SMOKE_RENDER_TOTAL_SEC_REL_TOL,
+        ):
+            raise Run9ValidationError(
+                f"{field}.measured_sec_per_render ({measured_sec_per_render!r}) must equal the "
+                f"average of render1_total_elapsed_sec/render2_total_elapsed_sec "
+                f"({render1_sec!r}, {render2_sec!r} -> {expected_avg!r}, "
+                f"rel_tol={_SMOKE_RENDER_TOTAL_SEC_REL_TOL!r})"
+            )
+        _require_non_empty_str(section["render_entrypoint"], field=f"{field}.render_entrypoint")
+        providers = section["onnxruntime_providers"]
+        if not isinstance(providers, list) or not providers:
+            raise Run9ValidationError(
+                f"{field}.onnxruntime_providers must be a non-empty list, got {providers!r}"
+            )
+        for provider in providers:
+            if not isinstance(provider, str) or not provider.strip():
+                raise Run9ValidationError(
+                    f"{field}.onnxruntime_providers entries must be non-empty strings, got "
+                    f"{provider!r}"
+                )
         first_hash = section["render_output_sha256_first"]
         second_hash = section["render_output_sha256_second"]
         if not isinstance(first_hash, str) or not _SHA256_HEX_RE.match(first_hash):
@@ -12192,13 +12432,14 @@ def _validate_smoke_render_section(section: Any, *, companions_status: str) -> N
         # COMPLETED を名乗るのは「存在しないと同時に主張している入力で
         # render した」という自己矛盾——Fix 5（budget↔smoke）と同型の
         # 結合強制。
-        if companions_status != "OBTAINED_VERIFIED_MATCH":
+        if companions_status not in ("OBTAINED_VERIFIED_MATCH", "OBTAINED_VIA_REEXPORT"):
             raise Run9ValidationError(
                 f"{field}.status is COMPLETED but acoustic_export_companions.status is not "
-                f"OBTAINED_VERIFIED_MATCH (got {companions_status!r}) — a completed smoke render "
-                "consumes acoustic.onnx/dsconfig.yaml/acoustic_phonemes_json/speaker_embed via "
-                "gate_synth.py --acoustic-dir; it cannot claim completion using inputs the "
-                "manifest simultaneously says are unobtained (self-contradictory pin)"
+                f"OBTAINED_VERIFIED_MATCH or OBTAINED_VIA_REEXPORT (got {companions_status!r}) — "
+                "a completed smoke render consumes acoustic.onnx/dsconfig.yaml/"
+                "acoustic_phonemes_json/speaker_embed via gate_synth.py --acoustic-dir; it "
+                "cannot claim completion using inputs the manifest simultaneously says are "
+                "unobtained (self-contradictory pin)"
             )
 
 
@@ -12208,6 +12449,11 @@ _BUDGET_ESTIMATE_BLOCKED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 })
 _BUDGET_ESTIMATE_COMPLETED_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "status", "reason", "total_render_count", "estimated_total_sec",
+    # RUN9-L0-HARNESS-2 追加: `total_render_count`（616）が本 PR で新たに
+    # 確定した値ではなく、前巡の返信・過去記録で言及されてきた基準値の
+    # 踏襲概算であることの出典注記を必須化する（設計判断8、確定値化の
+    # 誤読を防ぐ）。
+    "total_render_count_provenance_note",
 })
 
 
@@ -12324,6 +12570,10 @@ def _validate_budget_estimate_section(section: Any, *, smoke_render_section: Any
                 f"rel_tol={_BUDGET_ESTIMATE_TOTAL_SEC_REL_TOL!r}) — the two completed sections "
                 "must be arithmetically consistent, not merely both present"
             )
+        _require_non_empty_str(
+            section["total_render_count_provenance_note"],
+            field=f"{field}.total_render_count_provenance_note",
+        )
 
 
 # Codex bot レビュー PR #326 第5巡指摘 Fix 13（P2, 採用）: PR #326 第2巡
@@ -12590,6 +12840,41 @@ def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
     _validate_budget_estimate_section(data["budget_estimate"], smoke_render_section=data["smoke_render"])
 
 
+def _read_pinned_reexport_manifest_bytes(
+    disk_contract: Run9RunContract,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """`reexport_manifest_sha` pin の実バイトを読み・検証し、(parsed
+    manifest dict, pin field dict) を返す軽量 helper。
+    `load_pinned_dependency_pins_manifest()` の
+    `OBTAINED_DERIVED_NEW_BYTES` cross-check（AC(h)相当）が使う——
+    `load_pinned_reexport_manifest()` の3層防御を、既に呼び出し元が
+    読み込み済みの `disk_contract` を再利用する形で簡約した内部専用版
+    （read-once 契約は維持: digest と parse は同一バッファから導出する）。
+    """
+    field = disk_contract.pin_field("reexport_manifest_sha")
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_dependency_pins_manifest(): an acoustic_export_companions item claims "
+            "OBTAINED_DERIVED_NEW_BYTES, which requires reexport_manifest_sha to be PINNED, but "
+            f"it is not (status={field.get('status')!r})"
+        )
+    if not REEXPORT_MANIFEST_PATH.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_dependency_pins_manifest(): {REEXPORT_MANIFEST_PATH} does not exist"
+        )
+    buf = REEXPORT_MANIFEST_PATH.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != field["value"]:
+        raise Run9ValidationError(
+            f"load_pinned_dependency_pins_manifest(): {REEXPORT_MANIFEST_PATH} の実バイト sha256 "
+            f"({actual_sha!r}) が reexport_manifest_sha の pin 値 ({field['value']!r}) と一致し"
+            "ない — stale/改変された manifest は fail-closed で拒否する"
+        )
+    data = _loads_strict_json(buf.decode("utf-8"))
+    validate_reexport_manifest(data)
+    return data, field
+
+
 def load_pinned_dependency_pins_manifest(
     contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
     contract_path: Optional[Path] = None, bundle_path: Optional[Path] = None,
@@ -12728,13 +13013,49 @@ def load_pinned_dependency_pins_manifest(
         # 強制済みだが、measured_sha256 と bundle 値の一致は推移律頼み
         # だった（validate() を経由しない直接呼び出しがあれば推移律が
         # 効かない）。ここで明示的に三者目を直接照合する。
-        if "measured_sha256" in item and item["measured_sha256"] != bundle_value:
+        # RUN9-L0-HARNESS-2: `status == OBTAINED_DERIVED_NEW_BYTES` の
+        # item（現状 acoustic_onnx のみ）は、bundle 値（歴史 pin）と
+        # measured_sha256 が一致 **しない** ことこそが実測事実であり
+        # （User 裁定2「旧historical hashと一致しなくても捏造して合わせ
+        # ない」）、この三者一致チェックの対象から意図的に除外する——
+        # 除外した分の担保は下記の reexport_manifest.json cross-check が
+        # 別途行う。
+        if (
+            "measured_sha256" in item
+            and item.get("status") != "OBTAINED_DERIVED_NEW_BYTES"
+            and item["measured_sha256"] != bundle_value
+        ):
             raise Run9ValidationError(
                 "load_pinned_dependency_pins_manifest(): acoustic_export_companions."
                 f"expected_items[{logical_name!r}].measured_sha256 ({item['measured_sha256']!r}) "
                 f"diverges from backbone_runtime_bundle.json#{'.'.join(bundle_path_tuple)} "
                 f"({bundle_value!r}) — three-way cross-check fail-closed"
             )
+        if item.get("status") == "OBTAINED_DERIVED_NEW_BYTES":
+            # (h) の同型 cross-check: derived item の measured_sha256 が
+            # reexport_manifest.json（reexport_manifest_sha pin で改変検出
+            # 済み）の当該 artifact の実測値と一致すること。ref 自体が
+            # 名指す pin 値も現行 pin と一致することを確認する（stale ref
+            # の検出）。
+            reexport_data, reexport_field = _read_pinned_reexport_manifest_bytes(disk_contract)
+            ref = item["reexport_manifest_ref"]
+            if ref["reexport_manifest_sha256"] != reexport_field["value"]:
+                raise Run9ValidationError(
+                    "load_pinned_dependency_pins_manifest(): acoustic_export_companions."
+                    f"expected_items[{logical_name!r}].reexport_manifest_ref."
+                    f"reexport_manifest_sha256 ({ref['reexport_manifest_sha256']!r}) diverges "
+                    f"from the current reexport_manifest_sha pin ({reexport_field['value']!r}) "
+                    "— stale reference, fail-closed"
+                )
+            reexport_artifact = reexport_data["artifacts"].get(logical_name)
+            if reexport_artifact is None or item["measured_sha256"] != reexport_artifact["sha256_run1"]:
+                raise Run9ValidationError(
+                    "load_pinned_dependency_pins_manifest(): acoustic_export_companions."
+                    f"expected_items[{logical_name!r}].measured_sha256 "
+                    f"({item['measured_sha256']!r}) diverges from "
+                    f"inputs/reexport_manifest.json#artifacts.{logical_name}.sha256_run1 "
+                    f"({(reexport_artifact or {}).get('sha256_run1')!r}) — cross-check fail-closed"
+                )
 
     commit_section = data["diffsinger_render_code_commit"]
     bundle_commit = _bundle_get(
@@ -12747,5 +13068,569 @@ def load_pinned_dependency_pins_manifest(
             f"backbone_runtime_bundle.json#run9_runtime_inputs.run9_render_code_commit."
             f"commit_full ({bundle_commit!r}) — cross-check fail-closed"
         )
+
+    return data
+
+
+# ===== reexport_manifest (RUN9-L0-HARNESS-2) ================================
+#
+# User 裁定 2026-08-26 決定2（`USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_
+# EMBEDS.txt` 参照）に基づく、RUN6 phase B 40K checkpoint からの derived
+# runtime artifact 一括 manifest。PIN-1/2・HARNESS-1 で確立した4段構成
+# （手書き JSON manifest + validate_*() + REQUIRED_KEYS + read-once loader）
+# をここでも踏襲する。
+
+SCHEMA_REEXPORT_MANIFEST = "run9-reexport-manifest/1.0"
+
+REEXPORT_MANIFEST_PATH = _THIS_DIR / "inputs" / "reexport_manifest.json"
+
+REEXPORT_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "schema", "generated_at_utc", "adjudication_basis", "input_checkpoint", "exporter",
+    "export_command", "export_command_cwd", "export_venv_setup", "environment_versions",
+    "reproducibility_check", "artifacts", "historical_comparison_summary",
+    "smoke_render_cross_check", "pin_disposition",
+})
+
+_REEXPORT_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "source_file", "sha256", "summary",
+})
+_REEXPORT_INPUT_CHECKPOINT_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "path", "sha256", "expected_sha256_per_run9_contract", "sha256_matches_pin", "bytes",
+})
+_REEXPORT_EXPORTER_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "repo", "revision", "expected_revision_per_run9_contract", "revision_matches_pin",
+})
+_REEXPORT_EXPORT_VENV_SETUP_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "description", "install_steps",
+})
+_REEXPORT_REPRODUCIBILITY_CHECK_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "description", "all_run1_run2_identical",
+})
+_REEXPORT_ARTIFACT_ENTRY_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "file", "sha256_run1", "sha256_run2", "bytes", "run1_run2_identical",
+    "historical_sha256", "matches_historical",
+})
+# 9点固定（User 裁定2 逐語: acoustic ONNX / dsconfig / phonemes.json / 全
+# speaker .emb + languages.json/dictionary-ja.txt は export.py が実際に
+# 生成する companion 一式として実測時に判明した追加2点）。
+REEXPORT_ARTIFACT_KEYS: FrozenSet[str] = frozenset({
+    "acoustic_onnx", "dsconfig_yaml", "phonemes_json", "languages_json", "dictionary_ja_txt",
+    "ritsu_emb", "pjs_emb", "user_emb", "d3synth_emb",
+})
+_REEXPORT_SMOKE_CROSS_CHECK_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "description", "render1_wav_sha256", "render2_wav_sha256", "determinism_confirmed",
+    "render1_total_elapsed_sec", "render2_total_elapsed_sec", "avg_sec_per_render",
+    "budget_estimate_616_renders_sec", "budget_count_provenance_note",
+})
+# 616 は「前巡の返信・過去記録で言及されてきた基準値の踏襲概算」であり
+# 本 manifest で新たに確定した値ではない（設計判断8）。budget_estimate_
+# 616_renders_sec の算術検算にのみ使う内部定数——CONTRACT_PIN_FIELDS 等の
+# 正式 pin ではない。
+_REEXPORT_BUDGET_RENDER_COUNT: int = 616
+_REEXPORT_SEC_REL_TOL: float = 1e-9
+
+
+def _validate_reexport_shape(
+    obj: Any, *, field: str, required_keys: FrozenSet[str],
+) -> Dict[str, Any]:
+    if not isinstance(obj, dict):
+        raise Run9ValidationError(f"reexport manifest.{field} must be an object, got {type(obj).__name__}")
+    unknown = set(obj.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"reexport manifest.{field} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(obj.keys())
+    if missing:
+        raise Run9ValidationError(f"reexport manifest.{field} missing required key(s): {sorted(missing)}")
+    return obj
+
+
+def _validate_reexport_artifact_entry(entry: Any, *, key: str) -> Dict[str, Any]:
+    field = f"artifacts.{key}"
+    entry = _validate_reexport_shape(
+        entry, field=field, required_keys=_REEXPORT_ARTIFACT_ENTRY_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(entry["file"], field=f"{field}.file")
+    sha1 = entry["sha256_run1"]
+    sha2 = entry["sha256_run2"]
+    if not isinstance(sha1, str) or not _SHA256_HEX_RE.match(sha1):
+        raise Run9ValidationError(f"reexport manifest.{field}.sha256_run1 must be a 64hex sha256, got {sha1!r}")
+    if not isinstance(sha2, str) or not _SHA256_HEX_RE.match(sha2):
+        raise Run9ValidationError(f"reexport manifest.{field}.sha256_run2 must be a 64hex sha256, got {sha2!r}")
+    _require_positive_int(entry["bytes"], field=f"{field}.bytes")
+    run1_run2_identical = entry["run1_run2_identical"]
+    if not isinstance(run1_run2_identical, bool):
+        raise Run9ValidationError(f"reexport manifest.{field}.run1_run2_identical must be a bool, got {run1_run2_identical!r}")
+    # (d) fail-closed: 自己申告ではなく sha256_run1 == sha256_run2 の
+    # in-process 再計算と一致しなければならない。
+    if run1_run2_identical != (sha1 == sha2):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.run1_run2_identical ({run1_run2_identical!r}) diverges "
+            f"from the in-process recomputation (sha256_run1 == sha256_run2), which is "
+            f"{sha1 == sha2!r}"
+        )
+    historical_sha = entry["historical_sha256"]
+    if historical_sha is not None and (
+        not isinstance(historical_sha, str) or not _SHA256_HEX_RE.match(historical_sha)
+    ):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.historical_sha256 must be null or a 64hex sha256, got "
+            f"{historical_sha!r}"
+        )
+    matches_historical = entry["matches_historical"]
+    if not isinstance(matches_historical, bool):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.matches_historical must be a bool, got "
+            f"{matches_historical!r}"
+        )
+    # (c) fail-closed: historical_sha256 が null の artifact は
+    # matches_historical: false を強制する（比較対象が存在しないのに
+    # true を名乗ることはできない）。null でなければ sha256_run1 ==
+    # historical_sha256 の in-process 再計算と一致しなければならない
+    # （捏造・転記ミスの機械検出）。
+    if historical_sha is None:
+        expected_match = False
+    else:
+        expected_match = sha1 == historical_sha
+    if matches_historical != expected_match:
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.matches_historical ({matches_historical!r}) diverges "
+            f"from the in-process recomputation, which is {expected_match!r} (historical_sha256="
+            f"{historical_sha!r})"
+        )
+    # (g) acoustic_onnx.matches_historical == false の逐語保持: この
+    # artifact に限り true への書き換えを恒久的に拒否する（実測事実の
+    # 凍結。上の (c) 再計算と実データ上は同じ帰結になるが、本チェックは
+    # データが将来入れ替わっても false を強制する独立の frozen-fact
+    # ガードである）。
+    if key == "acoustic_onnx" and matches_historical is not False:
+        raise Run9ValidationError(
+            "reexport manifest.artifacts.acoustic_onnx.matches_historical must remain the "
+            "literal boolean False — this is a frozen fact (re-exported acoustic.onnx bytes do "
+            "not match the historical RUN6 pin; User adjudication 2026-08-26 decision 2 forbids "
+            f"fabricating a match), got {matches_historical!r}"
+        )
+    return entry
+
+
+def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
+    """reexport manifest（`run9-reexport-manifest/1.0`）の構造を検証する
+    （RUN9-L0-HARNESS-2）。RUN6 phase B 40K checkpoint から DiffSinger
+    commit `e2307b1080b00f3999702ce9017cfd75c7f862fe` を使い独立に2回
+    export した derived runtime artifact 一括台帳——acoustic ONNX /
+    dsconfig / phonemes.json / languages.json / dictionary-ja.txt / 全
+    speaker .emb（ritsu/pjs/user/d3synth）の9点それぞれについて、run1/
+    run2 の byte 一致（決定論確認）と歴史 pin との一致/不一致を正直に
+    記録する（User 裁定2026-08-26決定2: 「旧historical hashと一致しなく
+    ても捏造して合わせない。一致した場合はreplay evidenceとして記録
+    する」）。
+
+    fail-closed 原則（PIN-1/2・HARNESS-1 の同型パターンをここでも適用）:
+    自己申告フィールド（`run1_run2_identical`/`matches_historical`/
+    `reproducibility_check.all_run1_run2_identical`/
+    `smoke_render_cross_check.determinism_confirmed`）はすべて対応する
+    一次データの in-process 再計算と一致することを machine 強制する
+    ——捏造・転記ミスは fail-closed で拒否される。`artifacts.acoustic_onnx.
+    matches_historical` は追加で恒久的に `False` を強制する frozen-fact
+    ガード（true への書き換えはデータに関わらず拒否）。contract pin
+    （backbone checkpoint / DiffSinger commit）との一致確認は本関数では
+    行わない（一次データが未 load のため）——`load_pinned_reexport_
+    manifest()` の cross-check (a)/(b) が担う。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"reexport manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - REEXPORT_MANIFEST_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"reexport manifest has unknown key(s): {sorted(unknown)}")
+    missing = REEXPORT_MANIFEST_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"reexport manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_REEXPORT_MANIFEST:
+        raise Run9ValidationError(
+            f"reexport manifest.schema must be exactly {SCHEMA_REEXPORT_MANIFEST!r}, got {schema!r}"
+        )
+    _require_non_empty_str(data["generated_at_utc"], field="generated_at_utc")
+
+    basis = _validate_reexport_shape(
+        data["adjudication_basis"], field="adjudication_basis",
+        required_keys=_REEXPORT_ADJUDICATION_BASIS_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(basis["source_file"], field="adjudication_basis.source_file")
+    basis_sha = basis["sha256"]
+    if not isinstance(basis_sha, str) or not _SHA256_HEX_RE.match(basis_sha):
+        raise Run9ValidationError(
+            f"reexport manifest.adjudication_basis.sha256 must be a 64hex sha256, got {basis_sha!r}"
+        )
+    _require_non_empty_str(basis["summary"], field="adjudication_basis.summary")
+
+    checkpoint = _validate_reexport_shape(
+        data["input_checkpoint"], field="input_checkpoint",
+        required_keys=_REEXPORT_INPUT_CHECKPOINT_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(checkpoint["path"], field="input_checkpoint.path")
+    ckpt_sha = checkpoint["sha256"]
+    ckpt_expected = checkpoint["expected_sha256_per_run9_contract"]
+    if not isinstance(ckpt_sha, str) or not _SHA256_HEX_RE.match(ckpt_sha):
+        raise Run9ValidationError(
+            f"reexport manifest.input_checkpoint.sha256 must be a 64hex sha256, got {ckpt_sha!r}"
+        )
+    if not isinstance(ckpt_expected, str) or not _SHA256_HEX_RE.match(ckpt_expected):
+        raise Run9ValidationError(
+            "reexport manifest.input_checkpoint.expected_sha256_per_run9_contract must be a "
+            f"64hex sha256, got {ckpt_expected!r}"
+        )
+    ckpt_matches = checkpoint["sha256_matches_pin"]
+    if not isinstance(ckpt_matches, bool):
+        raise Run9ValidationError(
+            f"reexport manifest.input_checkpoint.sha256_matches_pin must be a bool, got {ckpt_matches!r}"
+        )
+    if ckpt_matches != (ckpt_sha == ckpt_expected):
+        raise Run9ValidationError(
+            f"reexport manifest.input_checkpoint.sha256_matches_pin ({ckpt_matches!r}) diverges "
+            f"from the in-process recomputation (sha256 == expected_sha256_per_run9_contract), "
+            f"which is {(ckpt_sha == ckpt_expected)!r}"
+        )
+    _require_positive_int(checkpoint["bytes"], field="input_checkpoint.bytes")
+
+    exporter = _validate_reexport_shape(
+        data["exporter"], field="exporter", required_keys=_REEXPORT_EXPORTER_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(exporter["repo"], field="exporter.repo")
+    revision = exporter["revision"]
+    revision_expected = exporter["expected_revision_per_run9_contract"]
+    if not isinstance(revision, str) or not _GIT_SHA_RE.match(revision):
+        raise Run9ValidationError(
+            f"reexport manifest.exporter.revision must be a 40hex git sha, got {revision!r}"
+        )
+    if not isinstance(revision_expected, str) or not _GIT_SHA_RE.match(revision_expected):
+        raise Run9ValidationError(
+            "reexport manifest.exporter.expected_revision_per_run9_contract must be a 40hex git "
+            f"sha, got {revision_expected!r}"
+        )
+    revision_matches = exporter["revision_matches_pin"]
+    if not isinstance(revision_matches, bool):
+        raise Run9ValidationError(
+            f"reexport manifest.exporter.revision_matches_pin must be a bool, got {revision_matches!r}"
+        )
+    if revision_matches != (revision == revision_expected):
+        raise Run9ValidationError(
+            f"reexport manifest.exporter.revision_matches_pin ({revision_matches!r}) diverges "
+            f"from the in-process recomputation (revision == expected_revision_per_run9_"
+            f"contract), which is {(revision == revision_expected)!r}"
+        )
+
+    export_command = data["export_command"]
+    if not isinstance(export_command, list) or not export_command:
+        raise Run9ValidationError(
+            f"reexport manifest.export_command must be a non-empty list, got {export_command!r}"
+        )
+    for i, token in enumerate(export_command):
+        _require_non_empty_str(token, field=f"export_command[{i}]")
+    _require_non_empty_str(data["export_command_cwd"], field="export_command_cwd")
+
+    venv_setup = _validate_reexport_shape(
+        data["export_venv_setup"], field="export_venv_setup",
+        required_keys=_REEXPORT_EXPORT_VENV_SETUP_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(venv_setup["description"], field="export_venv_setup.description")
+    install_steps = venv_setup["install_steps"]
+    if not isinstance(install_steps, list) or not install_steps:
+        raise Run9ValidationError(
+            "reexport manifest.export_venv_setup.install_steps must be a non-empty list, got "
+            f"{install_steps!r}"
+        )
+    for i, step in enumerate(install_steps):
+        _require_non_empty_str(step, field=f"export_venv_setup.install_steps[{i}]")
+
+    env_versions = data["environment_versions"]
+    if not isinstance(env_versions, dict) or not env_versions:
+        raise Run9ValidationError(
+            f"reexport manifest.environment_versions must be a non-empty object, got {env_versions!r}"
+        )
+    for env_key, env_value in env_versions.items():
+        if not isinstance(env_key, str) or not env_key.strip():
+            raise Run9ValidationError(
+                f"reexport manifest.environment_versions has a non-string/empty key: {env_key!r}"
+            )
+        _require_non_empty_str(env_value, field=f"environment_versions[{env_key!r}]")
+
+    artifacts = data["artifacts"]
+    if not isinstance(artifacts, dict):
+        raise Run9ValidationError(f"reexport manifest.artifacts must be an object, got {type(artifacts).__name__}")
+    if set(artifacts.keys()) != REEXPORT_ARTIFACT_KEYS:
+        raise Run9ValidationError(
+            f"reexport manifest.artifacts must register exactly the key set "
+            f"{sorted(REEXPORT_ARTIFACT_KEYS)}, got {sorted(artifacts.keys())}"
+        )
+    validated_artifacts: Dict[str, Dict[str, Any]] = {}
+    for key in REEXPORT_ARTIFACT_KEYS:
+        validated_artifacts[key] = _validate_reexport_artifact_entry(artifacts[key], key=key)
+
+    reproducibility = _validate_reexport_shape(
+        data["reproducibility_check"], field="reproducibility_check",
+        required_keys=_REEXPORT_REPRODUCIBILITY_CHECK_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(reproducibility["description"], field="reproducibility_check.description")
+    all_identical = reproducibility["all_run1_run2_identical"]
+    if not isinstance(all_identical, bool):
+        raise Run9ValidationError(
+            f"reexport manifest.reproducibility_check.all_run1_run2_identical must be a bool, "
+            f"got {all_identical!r}"
+        )
+    # (e) fail-closed: 自己申告ではなく artifacts 全数の run1_run2_identical
+    # の AND という in-process 再計算と一致しなければならない。
+    computed_all_identical = all(
+        entry["run1_run2_identical"] for entry in validated_artifacts.values()
+    )
+    if all_identical != computed_all_identical:
+        raise Run9ValidationError(
+            f"reexport manifest.reproducibility_check.all_run1_run2_identical ({all_identical!r}) "
+            f"diverges from the in-process recomputation (AND of all artifacts' "
+            f"run1_run2_identical), which is {computed_all_identical!r}"
+        )
+
+    historical_summary = data["historical_comparison_summary"]
+    if not isinstance(historical_summary, dict):
+        raise Run9ValidationError(
+            "reexport manifest.historical_comparison_summary must be an object, got "
+            f"{type(historical_summary).__name__}"
+        )
+    unknown_summary_keys = set(historical_summary.keys()) - REEXPORT_ARTIFACT_KEYS
+    if unknown_summary_keys:
+        raise Run9ValidationError(
+            "reexport manifest.historical_comparison_summary has key(s) outside the artifacts "
+            f"vocabulary: {sorted(unknown_summary_keys)}"
+        )
+    for summary_key, summary_value in historical_summary.items():
+        _require_non_empty_str(summary_value, field=f"historical_comparison_summary[{summary_key!r}]")
+
+    smoke = _validate_reexport_shape(
+        data["smoke_render_cross_check"], field="smoke_render_cross_check",
+        required_keys=_REEXPORT_SMOKE_CROSS_CHECK_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(smoke["description"], field="smoke_render_cross_check.description")
+    render1_wav = smoke["render1_wav_sha256"]
+    render2_wav = smoke["render2_wav_sha256"]
+    if not isinstance(render1_wav, str) or not _SHA256_HEX_RE.match(render1_wav):
+        raise Run9ValidationError(
+            "reexport manifest.smoke_render_cross_check.render1_wav_sha256 must be a 64hex "
+            f"sha256, got {render1_wav!r}"
+        )
+    if not isinstance(render2_wav, str) or not _SHA256_HEX_RE.match(render2_wav):
+        raise Run9ValidationError(
+            "reexport manifest.smoke_render_cross_check.render2_wav_sha256 must be a 64hex "
+            f"sha256, got {render2_wav!r}"
+        )
+    determinism_confirmed = smoke["determinism_confirmed"]
+    if not isinstance(determinism_confirmed, bool):
+        raise Run9ValidationError(
+            "reexport manifest.smoke_render_cross_check.determinism_confirmed must be a bool, "
+            f"got {determinism_confirmed!r}"
+        )
+    # (f) fail-closed: 自己申告ではなく render1/render2 wav sha256 の一致
+    # という in-process 再計算と一致しなければならない。
+    if determinism_confirmed != (render1_wav == render2_wav):
+        raise Run9ValidationError(
+            "reexport manifest.smoke_render_cross_check.determinism_confirmed "
+            f"({determinism_confirmed!r}) diverges from the in-process recomputation "
+            f"(render1_wav_sha256 == render2_wav_sha256), which is "
+            f"{(render1_wav == render2_wav)!r}"
+        )
+    render1_sec = _require_positive_finite_number(
+        smoke["render1_total_elapsed_sec"], field="smoke_render_cross_check.render1_total_elapsed_sec"
+    )
+    render2_sec = _require_positive_finite_number(
+        smoke["render2_total_elapsed_sec"], field="smoke_render_cross_check.render2_total_elapsed_sec"
+    )
+    avg_sec = _require_positive_finite_number(
+        smoke["avg_sec_per_render"], field="smoke_render_cross_check.avg_sec_per_render"
+    )
+    expected_avg = (render1_sec + render2_sec) / 2
+    if not math.isclose(avg_sec, expected_avg, rel_tol=_REEXPORT_SEC_REL_TOL):
+        raise Run9ValidationError(
+            f"reexport manifest.smoke_render_cross_check.avg_sec_per_render ({avg_sec!r}) must "
+            f"equal the average of render1_total_elapsed_sec/render2_total_elapsed_sec "
+            f"({render1_sec!r}, {render2_sec!r} -> {expected_avg!r}, rel_tol="
+            f"{_REEXPORT_SEC_REL_TOL!r})"
+        )
+    budget_sec = _require_positive_finite_number(
+        smoke["budget_estimate_616_renders_sec"],
+        field="smoke_render_cross_check.budget_estimate_616_renders_sec",
+    )
+    expected_budget = avg_sec * _REEXPORT_BUDGET_RENDER_COUNT
+    if not math.isclose(budget_sec, expected_budget, rel_tol=_REEXPORT_SEC_REL_TOL):
+        raise Run9ValidationError(
+            f"reexport manifest.smoke_render_cross_check.budget_estimate_616_renders_sec "
+            f"({budget_sec!r}) must equal avg_sec_per_render × {_REEXPORT_BUDGET_RENDER_COUNT} "
+            f"({avg_sec!r} × {_REEXPORT_BUDGET_RENDER_COUNT} = {expected_budget!r}, rel_tol="
+            f"{_REEXPORT_SEC_REL_TOL!r})"
+        )
+    _require_non_empty_str(
+        smoke["budget_count_provenance_note"], field="smoke_render_cross_check.budget_count_provenance_note"
+    )
+
+    _require_non_empty_str(data["pin_disposition"], field="pin_disposition")
+
+
+def load_pinned_reexport_manifest(
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None, bundle_path: Optional[Path] = None,
+    dependency_pins_manifest_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`reexport_manifest_sha` pin の**唯一の正規消費経路**
+    （`load_pinned_dependency_pins_manifest()` と同型の3層防御 read-once。
+    RUN9-L0-HARNESS-2）。
+
+    手順（いずれかで fail-closed）:
+    (1)-(5) 他の `load_pinned_*` 関数と同型（disk 正典再読込・改変検出、
+        PINNED 確認、実在確認、実バイト sha256 一致確認、
+        `validate_reexport_manifest()` 全構造検証）
+    (6) cross-check (a): `input_checkpoint.expected_sha256_per_run9_contract`
+        が `backbone_checkpoint_sha` pin 値と一致すること
+    (7) cross-check (b): `exporter.expected_revision_per_run9_contract` が
+        `backbone_runtime_bundle.json#run9_runtime_inputs.
+        run9_render_code_commit.commit_full`（前方宣言）と一致すること
+        （`backbone_runtime_bundle_sha` pin で改変検出済みのバイトを読む）
+    (8) cross-check (h): `artifacts.{pjs_emb,user_emb,d3synth_emb}.
+        sha256_run1` が `inputs/dependency_pins_manifest.json` の
+        `speaker_embeddings_unpinned_candidates.{pjs,user,
+        d3synth_reference_only}.candidate_sha256` と一致すること
+        （`dependency_pins_sha` は引き続き PENDING のため、この cross-check
+        は同ファイルを直接読む——PINNED 経由の `load_pinned_dependency_
+        pins_manifest()` は呼ばない。読んだバイトへの改変検出は本 cross-
+        check の対象外——それは `dependency_pins_sha` が将来 PINNED 化
+        された時点で担保される）。
+
+    戻り値は検証済み manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("reexport_manifest_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("reexport_manifest_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): the passed-in contract's reexport_manifest_sha "
+            f"pin ({passed_field!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml pin "
+            f"({disk_field!r}) at {effective_contract_path} — treated as tampering evidence and "
+            "rejected fail-closed (same defense as load_pinned_dependency_pins_manifest())"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): reexport_manifest_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned reexport manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else REEXPORT_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): pinned reexport manifest source {path} does not "
+            "exist — this function is the sole canonical access path (direct json.load() "
+            "elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml reexport_manifest_sha の pin 値 ({pinned_sha!r}) と一致しない "
+            "— stale または改変された manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_reexport_manifest(data)
+
+    # (6) cross-check (a): backbone checkpoint pin との一致。
+    ckpt_field = disk_contract.pin_field("backbone_checkpoint_sha")
+    if not _is_field_pinned(ckpt_field):
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): cross-check requires backbone_checkpoint_sha to "
+            f"be PINNED, but it is not (status={ckpt_field.get('status')!r})"
+        )
+    if data["input_checkpoint"]["expected_sha256_per_run9_contract"] != ckpt_field["value"]:
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): input_checkpoint.expected_sha256_per_run9_contract "
+            f"({data['input_checkpoint']['expected_sha256_per_run9_contract']!r}) diverges from "
+            f"backbone_checkpoint_sha pin ({ckpt_field['value']!r}) — cross-check fail-closed"
+        )
+
+    # (7) cross-check (b): DiffSinger commit 前方宣言（bundle 側）との一致。
+    effective_bundle_path = bundle_path if bundle_path is not None else BACKBONE_RUNTIME_BUNDLE_PATH
+    bundle_field = disk_contract.pin_field("backbone_runtime_bundle_sha")
+    if not _is_field_pinned(bundle_field):
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): cross-check requires backbone_runtime_bundle_sha "
+            f"to be PINNED, but it is not (status={bundle_field.get('status')!r})"
+        )
+    if not effective_bundle_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): cross-check source {effective_bundle_path} does "
+            "not exist"
+        )
+    bundle_buf = effective_bundle_path.read_bytes()
+    bundle_actual_sha = hashlib.sha256(bundle_buf).hexdigest()
+    if bundle_actual_sha != bundle_field["value"]:
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): {effective_bundle_path} の実バイト sha256 "
+            f"({bundle_actual_sha!r}) が backbone_runtime_bundle_sha pin 値 "
+            f"({bundle_field['value']!r}) と一致しない — stale/改変された bundle は cross-check "
+            "の一次ソースとして使わない（fail-closed）"
+        )
+    bundle_data = _loads_strict_json(bundle_buf.decode("utf-8"))
+    bundle_commit = _bundle_get(
+        bundle_data, "run9_runtime_inputs", "run9_render_code_commit", "commit_full"
+    )
+    if data["exporter"]["expected_revision_per_run9_contract"] != bundle_commit:
+        raise Run9ValidationError(
+            "load_pinned_reexport_manifest(): exporter.expected_revision_per_run9_contract "
+            f"({data['exporter']['expected_revision_per_run9_contract']!r}) diverges from "
+            f"backbone_runtime_bundle.json#run9_runtime_inputs.run9_render_code_commit."
+            f"commit_full ({bundle_commit!r}) — cross-check fail-closed"
+        )
+
+    # (8) cross-check (h): pjs/user/d3synth speaker embedding の sha が
+    # dependency_pins manifest 側の candidate_sha256 と相互一致すること
+    # （`dependency_pins_sha` は PENDING のため直接ファイルを読む——PINNED
+    # 経由の loader は使わない）。
+    effective_dep_path = (
+        dependency_pins_manifest_path
+        if dependency_pins_manifest_path is not None
+        else DEPENDENCY_PINS_MANIFEST_PATH
+    )
+    if not effective_dep_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_reexport_manifest(): cross-check source {effective_dep_path} does not "
+            "exist"
+        )
+    dep_data = _loads_strict_json(effective_dep_path.read_text(encoding="utf-8"))
+    speaker_candidates = dep_data.get("speaker_embeddings_unpinned_candidates", {})
+    _REEXPORT_SPEAKER_CANDIDATE_MAP = {
+        "pjs_emb": ("pjs", "candidate_sha256"),
+        "user_emb": ("user", "candidate_sha256"),
+        "d3synth_emb": ("d3synth_reference_only", "candidate_sha256"),
+    }
+    for artifact_key, (candidate_key, sha_key) in _REEXPORT_SPEAKER_CANDIDATE_MAP.items():
+        candidate_entry = speaker_candidates.get(candidate_key, {})
+        candidate_sha = candidate_entry.get(sha_key)
+        artifact_sha = data["artifacts"][artifact_key]["sha256_run1"]
+        if candidate_sha != artifact_sha:
+            raise Run9ValidationError(
+                f"load_pinned_reexport_manifest(): artifacts.{artifact_key}.sha256_run1 "
+                f"({artifact_sha!r}) diverges from dependency_pins_manifest.json#"
+                f"speaker_embeddings_unpinned_candidates.{candidate_key}.{sha_key} "
+                f"({candidate_sha!r}) — cross-check fail-closed"
+            )
 
     return data
