@@ -13640,8 +13640,13 @@ def test_harness1_speaker_embed_candidate_pinned_status_rejected() -> None:
 
 def test_harness1_speaker_embed_candidates_pjs_user_identical_rejected() -> None:
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    data["speaker_embeddings_unpinned_candidates"]["user"]["candidate_sha256"] = (
-        data["speaker_embeddings_unpinned_candidates"]["pjs"]["candidate_sha256"]
+    pjs_sha = data["speaker_embeddings_unpinned_candidates"]["pjs"]["candidate_sha256"]
+    data["speaker_embeddings_unpinned_candidates"]["user"]["candidate_sha256"] = pjs_sha
+    # Fix 16 (PR #326 第7巡) の first16 整合検証が先に発火しないよう、
+    # first16 も揃える（本テストの意図は pjs==user 一致検出であり、
+    # first16 矛盾検出ではない）。
+    data["speaker_embeddings_unpinned_candidates"]["user"]["candidate_sha256_first16"] = (
+        pjs_sha[:16]
     )
     with pytest.raises(m.Run9ValidationError, match="must differ"):
         m.validate_dependency_pins_manifest(data)
@@ -14391,6 +14396,67 @@ def test_harness1_pr326_fix9_exact_vocab_values_accepted() -> None:
         data["speaker_embeddings_unpinned_candidates"]["d3synth_reference_only"]["status"]
         == "UNPINNED_CANDIDATE_NOT_A_RUN9_FOUNDER"
     )
+
+
+# ---------------------------------------------------------------------------
+# PR #326 第7巡 Codex bot レビュー Fix 16（P2, 採用, 2026-08-26）:
+# `_validate_speaker_embed_candidate()` を全必須フィールド検証へ強化
+# （candidate_sha256_first16 の機械照合・file/note の非空検証）。正負
+# テスト。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("entry_key", ["pjs", "user"])
+def test_harness1_pr326_fix16_first16_mismatch_rejected(entry_key: str) -> None:
+    """`candidate_sha256_first16` が `candidate_sha256` の先頭16文字と
+    矛盾する（typo・手打ちミス等）と拒否される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["speaker_embeddings_unpinned_candidates"][entry_key]["candidate_sha256_first16"] = (
+        "0000000000000000"
+    )
+    with pytest.raises(m.Run9ValidationError, match="candidate_sha256_first16 must equal"):
+        m.validate_dependency_pins_manifest(data)
+
+
+@pytest.mark.parametrize("entry_key", ["pjs", "user"])
+def test_harness1_pr326_fix16_file_empty_rejected(entry_key: str) -> None:
+    """`file` が空文字だと拒否される。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["speaker_embeddings_unpinned_candidates"][entry_key]["file"] = ""
+    with pytest.raises(m.Run9ValidationError, match="\\.file"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix16_d3synth_note_empty_rejected() -> None:
+    """d3synth entry の `note` が空文字だと拒否される（section 全体の
+    `note` とは別フィールドであることの確認）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["speaker_embeddings_unpinned_candidates"]["d3synth_reference_only"]["note"] = ""
+    with pytest.raises(m.Run9ValidationError, match="\\.note"):
+        m.validate_dependency_pins_manifest(data)
+
+
+@pytest.mark.parametrize("entry_key", ["pjs", "user", "d3synth_reference_only"])
+def test_harness1_pr326_fix16_unknown_key_rejected(entry_key: str) -> None:
+    """entry ごとの許容キー集合が閉じていることの確認（未知キーは拒否
+    される）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    data["speaker_embeddings_unpinned_candidates"][entry_key]["unexpected_extra_key"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix16_real_data_accepted() -> None:
+    """現行実データ（first16 が実際に candidate_sha256 の先頭16文字と
+    一致・file/note が非空）は新検証を通過することの確認（過剰拒否で
+    ないこと）。"""
+    data = _dependency_pins_manifest_data()
+    candidates = data["speaker_embeddings_unpinned_candidates"]
+    for key in ("pjs", "user"):
+        assert candidates[key]["candidate_sha256_first16"] == candidates[key]["candidate_sha256"][:16]
+        assert candidates[key]["file"]
+    assert candidates["d3synth_reference_only"]["note"]
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
 
 
 # ---------------------------------------------------------------------------

@@ -1007,6 +1007,14 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   厳密一致を機械強制）を必須化し、`determinism_confirmed: true` が
   監査可能な出力 hash 証拠を伴わずに主張できていた穴を閉じた。詳細は
   `HARNESS1_PROVISION_RECORD.md` §5-6。
+  PR #326 第7巡 Codex bot レビュー1件（P2×1、採用）でさらに強化した
+  （manifest 実データに矛盾なし、修正・sha256 更新は不要だった）:
+  Fix 16 `_validate_speaker_embed_candidate()` を全必須フィールド検証へ
+  強化し、`candidate_sha256_first16`（pjs/user）が `candidate_sha256` の
+  先頭16文字と実際に一致するかの機械照合、`file`（pjs/user）/`note`
+  （d3synth）の非空検証を追加した——値の整合検証漏れ（矛盾した短縮
+  digest や空文字列が通過しうる穴）を閉じた。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-7。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

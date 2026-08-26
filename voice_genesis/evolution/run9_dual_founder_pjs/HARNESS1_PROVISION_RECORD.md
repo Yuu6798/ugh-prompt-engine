@@ -491,6 +491,43 @@ pin 欄（`dependency_pins_sha`）自体は引き続き PENDING——manifest �
 
 ---
 
+### 5-7. PR #326 第7巡 Codex bot レビュー対応（2026-08-26、P2×1、採用）
+
+**Fix 16（P2）——speaker-candidate 全必須フィールド検証の強化**: 指摘は
+正当——`_validate_speaker_embed_candidate()` は required_keys の
+存在（unknown/missing key）チェックのみで、値そのものの整合は
+`candidate_sha256`（64hex 形式）と `source`（非空）と `status`（閉じた
+語彙、Fix 9）しか検証していなかった。`candidate_sha256_first16`
+（pjs/user のみ）が `candidate_sha256` の先頭16文字と実際に一致するかの
+機械照合、`file`（pjs/user）/`note`（d3synth、section 全体の `note` とは
+別フィールド）の非空検証が漏れており、矛盾した短縮 digest や空文字列でも
+通過しうる状態だった——User 裁定の判断材料となる候補記録の整合検証漏れ
+（将来汚染）。対応: `required_keys` に `candidate_sha256_first16` が
+含まれる entry（pjs/user）では `candidate_sha256_first16 ==
+candidate_sha256[:16]` を機械照合し、不一致を拒否するとともに `file` の
+非空文字列検証を追加した。`required_keys` に `note` が含まれる entry
+（d3synth）では `note` の非空文字列検証を追加した。entry ごとの許容キー
+集合を閉じる unknown-key 拒否は既存実装で対応済みであることを確認した
+（変更不要）。正負テストを追加した: first16 矛盾（pjs/user 各）の拒否、
+file 空（pjs/user 各）の拒否、d3synth note 空の拒否、未知キー（pjs/user/
+d3synth 各）の拒否、現行実データが新検証を通過することの確認（過剰拒否
+でないこと）。既存の `test_harness1_speaker_embed_candidates_pjs_user_
+identical_rejected` は user の `candidate_sha256` だけを書き換えて
+`candidate_sha256_first16` を揃えていなかったため、Fix 16 の first16
+矛盾検出が pjs==user 一致検出より先に発火するようになった——本テストの
+意図（pjs==user 一致検出）を保つよう `candidate_sha256_first16` も
+揃える形へ追随させた。
+
+【付随】manifest 実データ（`inputs/dependency_pins_manifest.json`）を
+新検証で再検証した結果、pjs/user の `candidate_sha256_first16` は
+`candidate_sha256` の先頭16文字と実際に一致しており、`file`/`note` も
+非空だった——**manifest 側に矛盾はなく、修正・情報 sha256 更新は不要**
+だった（sha256 は前巡から無変更: `229493a911b6def9ca47523cfb0345d6066
+d826ec67e7ead999b098ea6dbc269`）。`dependency_pins_sha` は引き続き
+PENDING。既存 pin は無変更を確認済み。
+
+---
+
 ## 6. テスト・lint
 
 **規約（PR #326 第4巡 Codex bot レビュー Fix 11、P2、採用、2026-08-26 制定
@@ -512,8 +549,9 @@ pin 欄（`dependency_pins_sha`）自体は引き続き PENDING——manifest �
   - PR #326 第3巡（Fix 7-9）: 1780 passed, 0 failed
   - PR #326 第4巡（Fix 10/11）: 1787 passed, 0 failed
   - PR #326 第5巡（Fix 12/13）: 1798 passed, 0 failed
-  - **最新値（PR #326 第6巡, Fix 14/15 対応時点）: 1809 passed, 0 failed**
-    （`scratchpad/h1_r7_pytest.txt` に生出力を保存。上記1failedは第1巡
+  - PR #326 第6巡（Fix 14/15）: 1809 passed, 0 failed
+  - **最新値（PR #326 第7巡, Fix 16 対応時点）: 1818 passed, 0 failed**
+    （`scratchpad/h1_r8_pytest.txt` に生出力を保存。上記1failedは第1巡
     コミット時点で既に解消済み——原因だった scratchpad 原本と repo 収載
     版の乖離が、その後の作業で分離・復旧された。§7 item 4 追随参照）
 

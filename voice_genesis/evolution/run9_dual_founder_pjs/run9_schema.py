@@ -12000,6 +12000,23 @@ def _validate_speaker_embed_candidate(
     if not isinstance(sha, str) or not _SHA256_HEX_RE.match(sha):
         raise Run9ValidationError(f"{field}.candidate_sha256 must be a 64hex sha256, got {sha!r}")
     _require_non_empty_str(entry["source"], field=f"{field}.source")
+    # Codex bot レビュー PR #326 第7巡指摘 Fix 16（P2, 採用, 将来汚染防止,
+    # 2026-08-26）: 旧実装は required_keys の存在チェックのみで、
+    # `candidate_sha256_first16`（pjs/user）が `candidate_sha256` の先頭16
+    # 文字と実際に一致するかを機械照合しておらず、`file`（pjs/user）/
+    # `note`（d3synth）が非空文字列かも検証していなかった——値そのものが
+    # 空文字や矛盾した短縮 digest でも通過し、User 裁定の判断材料となる
+    # 候補記録の整合性が保証されていなかった。
+    if "candidate_sha256_first16" in required_keys:
+        first16 = entry["candidate_sha256_first16"]
+        if not isinstance(first16, str) or first16 != sha[:16]:
+            raise Run9ValidationError(
+                f"{field}.candidate_sha256_first16 must equal candidate_sha256[:16] "
+                f"({sha[:16]!r}), got {first16!r}"
+            )
+        _require_non_empty_str(entry["file"], field=f"{field}.file")
+    if "note" in required_keys:
+        _require_non_empty_str(entry["note"], field=f"{field}.note")
     status = entry["status"]
     if status not in allowed_status:
         raise Run9ValidationError(
