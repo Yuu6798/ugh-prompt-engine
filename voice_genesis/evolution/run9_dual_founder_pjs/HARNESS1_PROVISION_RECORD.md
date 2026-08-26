@@ -533,6 +533,105 @@ PENDING。既存 pin は無変更を確認済み。
 
 ---
 
+### 5-8. PR #326 第8巡 Codex bot レビュー対応（2026-08-26、P2×1、採用）
+
+**Fix 17（P2）——正典 record の虚偽化した状態主張の是正**: 指摘は正当
+——本 record 冒頭の「コミット・push は本セッションで実施していない、
+working tree 上の変更として残す」という記述は、本 record 自体が PR #326
+としてコミットされた時点で虚偽になっていた。対応: 冒頭の記述を〔履歴:
+フェーズ1起草時点の注記だった。その後 PR #326 としてコミット・push・
+公開済み〕という historical 文脈への書き換えへ改めた（本節冒頭の記述
+参照）。同種の「未コミット」現在形主張が他に残っていないか grep で
+掃討し、他の残置がないことを確認した（`HARNESS1_PROVISION_RECORD.md`
+の別行にある「実資産バイナリは一切 repo にコミットしていない」は
+workdir バイナリについての恒常的に真な別種の記述であり対象外）。
+本 Fix は record のテキストのみの是正であり、manifest/validator/pin の
+変更は無い。詳細は本 record 冒頭の記述自体を参照（本節では冒頭を直接
+書き換えたため、専用の対応本文は割愛する）。
+
+---
+
+### 5-9. PR #326 第9巡 Codex bot レビュー対応（2026-08-26、P2×1、採用）
+
+**Fix 18（P2）——smoke_render の BLOCKED↔companions 逆方向結合**: 指摘は
+正当——`_validate_smoke_render_section()` の BLOCKED 分岐は
+`companions_status` を一切参照しておらず、companions が
+`OBTAINED_VERIFIED_MATCH` へ遷移しても、`blocked_by`/`not_attempted_
+reason_is_missing_input_not_failure` が companions 未取得を主張し続ける
+smoke_render がそのまま validate を通過していた——Fix 8（COMPLETED 方向
+の結合）の逆方向が未結合のままだった。対応: BLOCKED 分岐に
+`companions_status != "NOT_OBTAINED_TARBALL_MISS"` の場合の拒否を追加
+した。新 status は先取り発明せず、拒否メッセージに再入条件（将来
+中間状態が必要になっても design_revision で追加すること）を明記した
+（RUN9-L0-PIN-1 以来の規律）。budget_estimate の BLOCKED 分岐も点検した
+が、budget は smoke への言及を自由記述の `reason` にしか持たず、構造化
+フィールドでの結合対象が存在しなかったため、この時点では対応不要と
+判断した（後述 5-10・Fix 20 で異なる種類の穴が発見され対応することに
+なる）。既存テスト fixture（companions だけ OBTAINED にするもの6件）を
+smoke 側も整合させる形へ追随させ、テストヘルパー `_complete_smoke_
+render()` に `acquisition_source` 引数を追加した。正負テストを4件
+追加した。manifest 実データは companions NOT_OBTAINED・smoke BLOCKED の
+まま整合しており、矛盾なし・修正不要だった（sha256 前巡から無変更）。
+
+---
+
+### 5-10. PR #326 第10巡 Codex bot レビュー対応（2026-08-26、P2×2、
+全2件採用——本巡で規約上限10巡に到達）
+
+**Fix 19（P2）——record 二層規約（§6）の最新値更新漏れの是正 + 再発
+防止**: 指摘は正当——第9巡（Fix 18、1822 passed）の実測値が §6 の
+最新値へ未反映のまま第10巡へ持ち越されており、§6 自体が定める「歴史値
++ 最新値の二層表記」規約に本 record 自身が違反していた。対応: §6 に
+第7巡・第8巡・第9巡の履歴行を追加し（第8巡は docs のみの是正のため
+件数不変と明記）、最新値を本巡（第10巡、Fix 19/20 対応時点）の実測値
+1827 passed, 0 failed へ更新した。**再発防止**として、§6 冒頭の規約
+段落に「本節の最新値を当該巡の実測値へ更新したか」を各巡フェーズ1の
+コミット前チェックリスト項目として明示する一文を追記した——実装・
+テスト追加が完了しても本節の更新を忘れた状態でのコミットはフェーズ1
+未完了として扱う。あわせて、5-8/5-9 で欠落していた §5-N 個別サブ
+セクションを本節と併せて追補した（5-8 は record 冒頭の直接書き換えで
+対応済みだったため専用本文を割愛していた旨、5-9 は budget 側点検で
+その時点では穴なしと判断していた旨を明記——後者は本巡 Fix 20 で異なる
+種類の穴が見つかったことと矛盾しない、詳細は Fix 20 本文参照）。
+
+**Fix 20（P2）——budget_estimate の BLOCKED↔smoke 逆方向結合（Fix 18の
+対）**: 指摘は正当——`_validate_budget_estimate_section()` の BLOCKED
+分岐は smoke_render_section を COMPLETED 分岐（Fix 5）でしか照合して
+おらず、smoke が実際に COMPLETED（実測秒あり）へ遷移した後も budget が
+「実測が無いため BLOCKED」という reference-only shape を主張し続ける
+状態が validate を通過していた——「実測が存在するのに実測欠如を理由に
+BLOCKED」という自己矛盾。5-9 時点の点検では budget の BLOCKED shape に
+smoke への構造化フィールドでの結合が存在しないと判断していたが、本巡の
+指摘は「結合フィールドを新設せよ」ではなく「既に validator が受け取って
+いる `smoke_render_section` 引数を BLOCKED 分岐でも参照せよ」という、
+より軽量な対応で閉じられる種類の穴だった（5-9 の判断自体は誤りではない
+——5-9 は「新しい構造化フィールドの新設」を不要と判断したのであり、
+既存引数の未活用は別種の指摘）。対応: BLOCKED 分岐に
+`smoke_render_section.get("status") == "COMPLETED"` の場合の拒否を追加
+した。Fix 18 と同型で、新 status は先取り発明せず、拒否メッセージに
+再入条件を明記した。テストヘルパー `_complete_smoke_render()` を
+budget_estimate も同時 COMPLETED（算術整合、`total_render_count=616`
+既定）へ揃える形へ拡張した（これに伴い companions だけ OBTAINED から
+smoke も COMPLETED にする既存10件のテスト fixture が影響を受けたが、
+ヘルパー自体の拡張で吸収され個別修正は不要だった）。正負テストを5件
+追加した——うち1件は companions↔smoke↔budget の3セクション間の状態
+結合が全方向（OBTAINED/COMPLETED 方向 = Fix 5/8、BLOCKED 残置方向 =
+Fix 18/20）で閉じ、相互矛盾する状態組が構造的に表現不能になったことを
+一括で回帰固定するテスト。
+
+manifest 実データは smoke_render BLOCKED・budget_estimate BLOCKED の
+まま整合しており、矛盾なし・修正不要だった（sha256 前巡から無変更:
+`229493a911b6def9ca47523cfb0345d6066d826ec67e7ead999b098ea6dbc269`）。
+`dependency_pins_sha` は引き続き PENDING。既存 pin は無変更を確認済み。
+
+**本巡で規約上限10巡に到達**（`CLAUDE.md`「bot レビュー対応の運用」
+節: 上限10ラウンド、超えたら未対応分を境界宣言にまとめ User へ渡す）。
+以後は 2026-08-21 User 裁定の3分類（実コード被害/将来汚染/致命的バグ）
+の新しい具体経路のみ採用し、逓減領域（同型の穴の言い換えや、既に閉じた
+結合の別表現での再指摘等）は境界宣言で打ち切る。
+
+---
+
 ## 6. テスト・lint
 
 **規約（PR #326 第4巡 Codex bot レビュー Fix 11、P2、採用、2026-08-26 制定
@@ -540,7 +639,13 @@ PENDING。既存 pin は無変更を確認済み。
 時点の実測値、その巡の Verification として当時記録したもの・以後不変）と
 「最新値」（直近コミット時点の実測値、巡が進むたびに追記・更新）の二層
 表記とする。歴史値だけを読んで最終状態と誤認しないよう、最新値を必ず
-本節末尾に明記する。
+本節末尾に明記する。**再発防止（PR #326 第10巡 Codex bot レビュー Fix
+19、P2、採用、2026-08-26 追記）**: 第9巡（Fix 18、1822 passed）の実測値が
+本節の最新値へ反映されないまま第10巡へ持ち越された（本規約自体の
+違反）実例を受け、「本節の最新値を当該巡の実測値へ更新したか」を
+**各巡フェーズ1のコミット前チェックリスト項目**として明示する——実装・
+テスト追加が完了しても、本節の更新を忘れた状態でのコミットは
+フェーズ1未完了として扱う。
 
 - `ruff check .` — 全巡で pass
 - `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests/ tests/discipline/ -q`
@@ -555,8 +660,12 @@ PENDING。既存 pin は無変更を確認済み。
   - PR #326 第4巡（Fix 10/11）: 1787 passed, 0 failed
   - PR #326 第5巡（Fix 12/13）: 1798 passed, 0 failed
   - PR #326 第6巡（Fix 14/15）: 1809 passed, 0 failed
-  - **最新値（PR #326 第7巡, Fix 16 対応時点）: 1818 passed, 0 failed**
-    （`scratchpad/h1_r8_pytest.txt` に生出力を保存。上記1failedは第1巡
+  - PR #326 第7巡（Fix 16）: 1818 passed, 0 failed
+  - PR #326 第8巡（Fix 17、docs のみの是正のため件数不変）: 1818 passed,
+    0 failed
+  - PR #326 第9巡（Fix 18）: 1822 passed, 0 failed
+  - **最新値（PR #326 第10巡, Fix 19/20 対応時点）: 1827 passed, 0 failed**
+    （`scratchpad/h1_r11_pytest.txt` に生出力を保存。上記1failedは第1巡
     コミット時点で既に解消済み——原因だった scratchpad 原本と repo 収載
     版の乖離が、その後の作業で分離・復旧された。§7 item 4 追随参照）
 

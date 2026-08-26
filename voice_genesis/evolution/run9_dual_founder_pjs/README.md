@@ -1015,6 +1015,26 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   （d3synth）の非空検証を追加した——値の整合検証漏れ（矛盾した短縮
   digest や空文字列が通過しうる穴）を閉じた。詳細は
   `HARNESS1_PROVISION_RECORD.md` §5-7。
+  PR #326 第8巡 Codex bot レビュー1件（P2×1、採用）: Fix 17 本 README が
+  参照する `HARNESS1_PROVISION_RECORD.md` 冒頭の「未コミット」現在形
+  主張が、record 自体のコミット後に虚偽化していた問題を is historical
+  context への書き換えで是正した（record/validator のみの変更）。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-8。
+  PR #326 第9巡 Codex bot レビュー1件（P2×1、採用）: Fix 18
+  `smoke_render` の BLOCKED 分岐に companions_status との整合を追加し、
+  companions が実は OBTAINED_VERIFIED_MATCH なのに smoke_render が
+  missing-input BLOCKED を主張し続ける逆方向の矛盾（Fix 8 の逆方向の
+  未結合）を閉じた。詳細は `HARNESS1_PROVISION_RECORD.md` §5-9。
+  PR #326 第10巡 Codex bot レビュー2件（P2×2、採用——本巡で規約上限
+  10巡に到達）でさらに強化した（manifest 実データに矛盾なし、修正・
+  sha256 更新は不要だった）: Fix 19 `HARNESS1_PROVISION_RECORD.md` §6の
+  二層規約（歴史値+最新値）自体の最新値更新漏れを是正し、再発防止の
+  チェックリスト項目を規約文へ追記した。Fix 20 `budget_estimate` の
+  BLOCKED 分岐にも smoke_render.status との整合を追加し（Fix 18 の対）、
+  companions↔smoke↔budget の3セクション間の状態結合を全方向（OBTAINED/
+  COMPLETED 方向 = Fix 5/8、BLOCKED 残置方向 = Fix 18/20）で閉じた
+  ——相互矛盾する状態組は構造的に表現不能になった。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-10。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

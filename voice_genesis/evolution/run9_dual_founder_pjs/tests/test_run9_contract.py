@@ -13926,6 +13926,7 @@ def _complete_smoke_render(
     render_condition: str = "CPU, ritsu, 1.0s phrase",
     render_output_sha256: str = "c" * 64,
     acquisition_source: str = "THIS_TARBALL",
+    total_render_count: int = 616,
 ) -> None:
     """テストヘルパー: smoke_render を COMPLETED（有効な evidence 込み）
     へ遷移させる。PR #326 第3巡 Fix 8 により acoustic_export_companions
@@ -13937,7 +13938,12 @@ def _complete_smoke_render(
     経路テストが companions を OBTAINED にしつつ smoke も同時に COMPLETED
     へ揃える必要があるため——第9巡 Fix 18 で smoke BLOCKED は companions
     NOT_OBTAINED を要求するようになったため、companions だけ OBTAINED に
-    する既存テストは smoke も揃えないと通らなくなった）。"""
+    する既存テストは smoke も揃えないと通らなくなった）。PR #326 第10巡
+    Fix 20 により、smoke_render.status == COMPLETED のときに
+    budget_estimate が BLOCKED のまま残ると自己矛盾で拒否されるように
+    なったため、budget_estimate も同時に COMPLETED（算術整合）へ揃える
+    （`estimated_total_sec == measured_sec_per_render × total_render_count`
+    を厳密一致させる、Fix 5 の許容誤差要件を満たす）。"""
     _obtain_all_acoustic_companions(data, acquisition_source=acquisition_source)
     data["smoke_render"] = {
         "status": "COMPLETED", "reason": "done",
@@ -13945,6 +13951,11 @@ def _complete_smoke_render(
         "render_condition": render_condition,
         "render_output_sha256_first": render_output_sha256,
         "render_output_sha256_second": render_output_sha256,
+    }
+    data["budget_estimate"] = {
+        "status": "COMPLETED", "reason": "done",
+        "total_render_count": total_render_count,
+        "estimated_total_sec": measured_sec_per_render * total_render_count,
     }
 
 
@@ -14424,6 +14435,110 @@ def test_harness1_pr326_fix18_companions_obtained_and_smoke_completed_accepted()
     data = copy.deepcopy(_dependency_pins_manifest_data())
     _complete_smoke_render(data)
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #326 第10巡 Codex bot レビュー Fix 20（P2, 採用, 2026-08-26, 将来汚染:
+# Fix 18 の対）: `budget_estimate` の BLOCKED shape は smoke_render が
+# 実際に BLOCKED（実測秒が存在しない）のときのみ許容される——smoke が
+# COMPLETED（実測秒あり）なのに budget が実測欠如を理由に BLOCKED を
+# 主張し続けるのは自己矛盾。正負テスト。
+# ---------------------------------------------------------------------------
+
+
+def test_harness1_pr326_fix20_stale_budget_blocked_after_smoke_completed_rejected() -> None:
+    """smoke_render を COMPLETED へ遷移させても budget_estimate を
+    reference-only BLOCKED のまま残す改竄は拒否される（Fix 18 の対——
+    「実測が存在する」と「実測欠如を理由に BLOCKED」の同時主張は
+    自己矛盾）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data)
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
+        "render_condition": "CPU, ritsu",
+        "render_output_sha256_first": "c" * 64, "render_output_sha256_second": "c" * 64,
+    }
+    assert data["budget_estimate"]["status"] == "BLOCKED"
+    with pytest.raises(
+        m.Run9ValidationError, match="status is BLOCKED \\(citing absent measurement\\)"
+    ):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix20_error_message_states_reentry_condition() -> None:
+    """拒否メッセージ自体に、Fix 18 と同型の再入条件（新 status を先取り
+    発明しない）が記録されていることの確認。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data)
+    data["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
+        "render_condition": "CPU, ritsu",
+        "render_output_sha256_first": "c" * 64, "render_output_sha256_second": "c" * 64,
+    }
+    with pytest.raises(m.Run9ValidationError, match="design_revision"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix20_current_real_data_both_blocked_accepted() -> None:
+    """現行実データ（smoke_render BLOCKED + budget_estimate reference-only
+    BLOCKED、両方 BLOCKED）は引き続き受理される（過剰拒否でないことの
+    確認）。"""
+    data = _dependency_pins_manifest_data()
+    assert data["smoke_render"]["status"] == "BLOCKED"
+    assert data["budget_estimate"]["status"] == "BLOCKED"
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix20_smoke_and_budget_both_completed_accepted() -> None:
+    """smoke_render COMPLETED + budget_estimate COMPLETED（算術整合、
+    両方揃って一貫）は引き続き受理される（`_complete_smoke_render()`
+    ヘルパーが budget も同時 COMPLETED へ揃えるようになったことの回帰
+    固定も兼ねる）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _complete_smoke_render(data)
+    assert data["budget_estimate"]["status"] == "COMPLETED"
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix18_fix20_three_way_coupling_is_closed() -> None:
+    """companions↔smoke↔budget の3セクション間の状態結合が全方向
+    （OBTAINED/COMPLETED 方向 = Fix 5/8、BLOCKED 残置方向 = Fix 18/20）
+    で閉じ、相互矛盾する状態組が構造的に表現不能になったことの回帰
+    固定——4つの整合済み状態組み合わせをすべて受理し、片方だけ更新した
+    非整合な中間状態をすべて拒否することを一括確認する。"""
+    # 整合1: 3セクションとも「未取得/未実行」（現行実データそのまま）。
+    consistent_all_blocked = _dependency_pins_manifest_data()
+    m.validate_dependency_pins_manifest(consistent_all_blocked)  # 例外なしの確認
+
+    # 整合2: 3セクションとも「取得済み/完了」。
+    consistent_all_completed = copy.deepcopy(_dependency_pins_manifest_data())
+    _complete_smoke_render(consistent_all_completed)
+    m.validate_dependency_pins_manifest(consistent_all_completed)  # 例外なしの確認
+
+    # 非整合1: companions だけ OBTAINED、smoke/budget は BLOCKED のまま
+    # （Fix 18 が拒否）。
+    stale_smoke_blocked = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(stale_smoke_blocked)
+    with pytest.raises(m.Run9ValidationError, match="status is BLOCKED \\(missing-input\\)"):
+        m.validate_dependency_pins_manifest(stale_smoke_blocked)
+
+    # 非整合2: companions/smoke は COMPLETED、budget だけ BLOCKED のまま
+    # （Fix 20 が拒否）。
+    stale_budget_blocked = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(stale_budget_blocked)
+    stale_budget_blocked["smoke_render"] = {
+        "status": "COMPLETED", "reason": "done",
+        "determinism_confirmed": True, "measured_sec_per_render": 4.2,
+        "render_condition": "CPU, ritsu",
+        "render_output_sha256_first": "c" * 64, "render_output_sha256_second": "c" * 64,
+    }
+    assert stale_budget_blocked["budget_estimate"]["status"] == "BLOCKED"
+    with pytest.raises(
+        m.Run9ValidationError, match="status is BLOCKED \\(citing absent measurement\\)"
+    ):
+        m.validate_dependency_pins_manifest(stale_budget_blocked)
 
 
 def test_harness1_pr326_fix9_speaker_candidate_typo_status_rejected() -> None:

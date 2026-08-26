@@ -12263,6 +12263,29 @@ def _validate_budget_estimate_section(section: Any, *, smoke_render_section: Any
         _require_non_empty_str(
             section["reference_only_caveat"], field=f"{field}.reference_only_caveat"
         )
+        # Codex bot レビュー PR #326 第10巡指摘 Fix 20（P2, 採用, 将来汚染:
+        # Fix 18 の対）: `budget_estimate` の BLOCKED shape は「render 1件
+        # あたりの実測秒が smoke_render 未完了のため存在しない」ことを前提に
+        # reference-only 値のみを記録する（`reason` に明記）。旧実装は
+        # `smoke_render_section` を COMPLETED 分岐でしか照合しておらず、
+        # smoke が実際には COMPLETED（実測秒あり）へ遷移した後も budget が
+        # BLOCKED（実測欠如を理由に）を主張し続ける状態が通過していた
+        # ——「実測が存在するのに実測欠如を理由に BLOCKED」という自己矛盾。
+        if (
+            isinstance(smoke_render_section, dict)
+            and smoke_render_section.get("status") == "COMPLETED"
+        ):
+            raise Run9ValidationError(
+                f"{field}.status is BLOCKED (citing absent measurement) but smoke_render.status "
+                "is COMPLETED — a completed smoke render has already produced "
+                "measured_sec_per_render, so budget_estimate cannot simultaneously claim no "
+                "measurement exists to derive an estimate from (self-contradictory pin). "
+                "再入条件: 将来 HARNESS-2 で「smoke は完了したが budget 算出は未実施/保留」と"
+                "いう中間状態を表す必要が生じても、本 validator はここで新しい status 値を"
+                "先取りして発明しない（RUN9-L0-PIN-1 以来の規律、Fix 18 と同型）——その場合は "
+                "budget_estimate を COMPLETED にするか、design_revision で専用の shape を"
+                "追加すること"
+            )
     else:  # COMPLETED
         total_count = section["total_render_count"]
         if isinstance(total_count, bool) or not isinstance(total_count, int) or total_count <= 0:
