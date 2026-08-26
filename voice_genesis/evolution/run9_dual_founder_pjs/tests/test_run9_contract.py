@@ -11349,15 +11349,25 @@ def test_pin1_r4_branch_write_policy_r0_bytes_is_write_boundary_not_pin() -> Non
 # 同じ理由）。
 
 
-def test_pin1_r8_failure_abort_criteria_repinned_lineage_eight_generations(
+# `test_pin1_r8_failure_abort_criteria_repinned_lineage_eight_generations`
+# （8世代版）は PR #327 レビュー第13巡指摘25の repin により超過し、下記
+# `test_pr327_r13_failure_abort_criteria_repinned_lineage_nine_generations`
+# （9世代・全履歴を包含する上位互換）へ置き換えた（重複削除、第3-6巡と
+# 同じ理由）。
+
+
+def test_pr327_r13_failure_abort_criteria_repinned_lineage_nine_generations(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """failure_abort_criteria_sha の repin 履歴8世代（RUN9-L0-PIN-1 初回
+    """failure_abort_criteria_sha の repin 履歴9世代（RUN9-L0-PIN-1 初回
     → PR #324 第1巡 Fix 1/2/3 → 第2巡 Fix 6 → 第3巡 rule 12 再降格 →
     第4巡 rule 2 の condition 強化 → 第5巡 verify_user_donor_manifest_
     complete() の path ベース署名化 → 第6巡 独立 pinned anchor への
     接地追加 → 第7巡 domain 自体の founder_genome_shas pin への束縛
-    追加）が append-only で、現在値が最新（第7巡）のものであることを
+    追加 → PR #327 レビュー第13巡指摘25 で rule 19（cost cap exceeded）の
+    checkpoint が execution_profile_sha PINNED 化（RUN9-EXECPROFILE-1）を
+    反映せず stale な現在形「現状 PENDING」を残していた欠陥を訂正）が
+    append-only で、現在値が最新（PR #327 第13巡）のものであることを
     明示的に確認する（repin 漏れの回帰防止）。"""
     round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
     round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
@@ -11367,13 +11377,36 @@ def test_pin1_r8_failure_abort_criteria_repinned_lineage_eight_generations(
     round6_value = "8f9f8c30d521b5f2048891aa17fe9c1aeeb068a1ec8007f2146d4c1ec22cf38d"
     round7_value = "9b68656d6b5cb30019376ae9848e03801e10b595b5372dca63ba6a59a9d03caf"
     round8_value = "20c71d273993f062cf562b2097a57bfe530c54303e87287c58e98bad9876df4a"
+    round9_value = "da8aee0d49a5dac58b5ddd6b6dc7959f1a15914e9a6e565a4e6851e2b6c7a527"
     current = contract_raw["failure_abort_criteria_sha"]["value"]
-    assert current == round8_value
+    assert current == round9_value
     assert current not in (
         round1_value, round2_value, round3_value, round4_value, round5_value, round6_value,
-        round7_value,
+        round7_value, round8_value,
     )
     assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
+
+
+def test_pr327_r13_rule19_checkpoint_documents_pinned_identity_scope() -> None:
+    """PR #327 レビュー第13巡指摘25の直接回帰: rule 19（cost cap exceeded）
+    の checkpoint が (a) execution_profile_sha が RUN9-EXECPROFILE-1 で
+    PINNED 済みであること、(b) その収載範囲は runtime identity のみで
+    cost cap を含まないため cost cap は依然未凍結であること、の両方を
+    明記し、旧 stale 文言「Group C、現状 PENDING」を現在形の主張として
+    残していないこと（enforcement/machine_promotion_condition は不変）。"""
+    data = _failure_abort_criteria_data()
+    rule19 = next(r for r in data["rules"] if r["rule_id"] == 19)
+    assert rule19["enforcement"] == "PROCEDURAL"
+    assert rule19["verbatim"] == "cost cap exceeded"
+    assert "RUN9-EXECPROFILE-1" in rule19["checkpoint"]
+    assert "PINNED" in rule19["checkpoint"]
+    assert "cost cap 数値は引き続き未凍結" in rule19["checkpoint"]
+    assert "履歴" in rule19["checkpoint"]
+    assert "Group C、現状 PENDING" not in rule19["checkpoint"].split("〔履歴:")[0]
+    assert rule19["machine_promotion_condition"] == (
+        "execution_profile_sha に cost cap 数値が凍結され、cost record との"
+        "自動比較機構を実装した時点で MACHINE へ昇格する。"
+    )
 
 
 def test_pin1_r5_rule2_still_machine_with_updated_condition() -> None:

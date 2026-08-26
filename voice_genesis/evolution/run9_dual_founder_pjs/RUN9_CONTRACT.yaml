@@ -2010,7 +2010,7 @@ cost_record_sha:
 #   19件）。seed_policy_manifest.json/measurement_spec_manifest.json/
 #   founders/*.json/domains/identity_domain_run9_v1.json は無改変
 #   （sha256 確認済み・domains は read-only 参照のみ）。
-# --- PR #324 Codex bot レビュー第7巡 Fix（2026-08-26、値
+# - PR #324 Codex bot レビュー第7巡 Fix（2026-08-26、値
 #   20c71d273993f062cf562b2097a57bfe530c54303e87287c58e98bad9876df4a へ
 #   repin、P2、採用）: domain ファイル自体は第4段までのチェーンでは何とも
 #   照合されておらず、domain 側だけを改変（+ 辻褄合わせに rights/ledger
@@ -2048,8 +2048,40 @@ cost_record_sha:
 #   manifest.json/measurement_spec_manifest.json/founders/*.json/
 #   domains/identity_domain_run9_v1.json は無改変（sha256 確認済み・
 #   domains は read-only 参照のみ）。
+# --- PR #327 Codex bot レビュー第13巡指摘25（2026-08-26、値
+#   da8aee0d49a5dac58b5ddd6b6dc7959f1a15914e9a6e565a4e6851e2b6c7a527 へ
+#   repin、P2、採用——上限10ラウンド超過後だが3分類「将来汚染」（誤った
+#   現在形記述が下流の実装/記録を汚す）に該当する新しい具体経路のため
+#   採用）: execution_profile_sha を RUN9-EXECPROFILE-1（2026-08-26）で
+#   PINNED 化した結果、rule 19（cost cap exceeded）の checkpoint が
+#   引き続き「execution_profile_sha（Group C、現状 PENDING）」という
+#   現在形記述のまま stale 化し、本 failure_abort_criteria_sha pin が
+#   その偽の現在形を authenticate し続けていた——正典間矛盾の指摘。
+#   事実確認: inputs/execution_profile_manifest.json（RUN9-EXECPROFILE-1
+#   で PINNED 済み）は runtime identity 5値（python/os/architecture/
+#   onnxruntime/selected_execution_provider）+ provider 固定規則4点を
+#   収載するのみで、cost cap 数値は含まない——benchmark_reference は
+#   `is_reference_only: true` の smoke 実測参考記録であり、凍結された
+#   cost cap ではない。つまり rule 19 が指す「cost cap 数値は未凍結」と
+#   いう判定（enforcement: PROCEDURAL）自体は現在も正しく、stale なのは
+#   execution_profile_sha の pin 状態を「現状 PENDING」と述べる前提記述
+#   のみ。対応: rule 19 の checkpoint を、(a) execution_profile_sha は
+#   RUN9-EXECPROFILE-1 で PINNED 済みである事実、(b) その収載範囲は
+#   runtime identity のみで cost cap を含まないため cost cap は依然
+#   未凍結である事実、の2点を分離して記述する形へ訂正した（rule の
+#   意味論=cost cap 未凍結による PROCEDURAL 判定は不変、旧文言は
+#   〔履歴: ...〕注記として rule 19 内に保持——rule 2 の第2〜7巡
+#   前例と同型の append-only 規約）。machine_promotion_condition・
+#   enforcement・verbatim・rule_id は無改変。他 rule・他 PINNED 欄・
+#   manifest 群（reexport/dependency_pins/execution_profile/
+#   seed_policy/measurement_spec/dataset 等）は無改変（sha256
+#   確認済み）。run9_schema.py の validator は rule の `verbatim`
+#   のみを逐語照合し `checkpoint` は非空文字列であることのみを要求する
+#   構造検証のため、本訂正は validator 側の追随を要さない（確認済み）。
+#   分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。バイトが変わったため
+#   repin（9世代目）。
 failure_abort_criteria_sha:
-  value: "20c71d273993f062cf562b2097a57bfe530c54303e87287c58e98bad9876df4a"
+  value: "da8aee0d49a5dac58b5ddd6b6dc7959f1a15914e9a6e565a4e6851e2b6c7a527"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 
