@@ -764,6 +764,28 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。
   seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json
   は無改変（sha256 確認済み）〕。
+  〔履歴: PR #324 Codex bot レビュー第5巡（2026-08-26, 1件 P2, 採用）で
+  `verify_user_donor_manifest_complete()`（第4巡新設）の署名を強化
+  （分類は不変・MACHINE のまま）。指摘: 同関数は Mapping を直接受け取る
+  署名のままだったため、呼び出し元が生の `json.loads()`（重複キー
+  last-key-wins）で読み込んだ曖昧な dict を渡せてしまい、正規消費経路
+  でありながら厳密 parse を強制していなかった（同族の新経路: 正規消費
+  経路が厳密 parse を強制せず、通常 `json.loads` の重複キー黙殺で曖昧
+  manifest が MACHINE を通過し得る）。対応: 署名を path ベースへ変更
+  `verify_user_donor_manifest_complete(*, rights_manifest_path=None,
+  donor_ledger_path=None)`（省略時は新設した正典パス
+  `RIGHTS_MANIFEST_PATH`/`USER_DONOR_LEDGER_PATH` を既定）。内部で自ら
+  ファイルを read-once で読み、`load_rights_manifest_json()`/
+  `load_user_donor_ledger_json()`（重複キー拒否の既存厳密 parser）で
+  parse してから3段チェーンへ渡す。任意 Mapping を受ける互換シグネチャ
+  は意図的に残さない（穴をふさぐことが対応の目的そのものであるため）。
+  手書きの重複キー JSON バイト列（rights/ledger 双方）が fail-closed で
+  拒否されることをテストで確認した。rule 2 の condition 記述が旧署名
+  （位置引数）を引いていたため新署名（path ベース、省略時デフォルト）へ
+  追随し、`failure_abort_criteria_sha` を実バイト sha256 で repin
+  （6世代目）。分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。
+  seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json
+  は無改変（sha256 確認済み）〕。
 - `measurement_spec_sha` は **PENDING のまま**（2026-08-25 RUN9-L0-PIN-1 で
   一時 PINNED 化 → 同日 PR #324 第2巡 Codex bot レビュー Fix 5（P2 ×2、
   採用）で PENDING へ復帰）。manifest 実体

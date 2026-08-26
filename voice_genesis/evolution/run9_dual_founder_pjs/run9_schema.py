@@ -9874,8 +9874,16 @@ def validate_rights_manifest_four_layer(data: Mapping[str, Any]) -> None:
     # （層越境の実体検証は本関数の責務外）。
 
 
+# 規約パス（`PRACTICE_MANIFEST_PATH` 等と同じ命名規約 — schema から機械的に
+# 導出せず、リポジトリ内の固定配置として凍結する）。`USER_DONOR_LEDGER_PATH`
+# は run9_dual_founder_pjs 配下ではなく voice_genesis/foundry/recording_kit/
+# 配下（既存の donor 台帳の実体配置、8327-8328行のコメント参照）。
+RIGHTS_MANIFEST_PATH = _THIS_DIR / "inputs" / "rights_manifest.json"
+USER_DONOR_LEDGER_PATH = _THIS_DIR.parent.parent / "foundry" / "recording_kit" / "user_donor_ledger.json"
+
+
 def verify_user_donor_manifest_complete(
-    rights_manifest: Mapping[str, Any], donor_ledger: Mapping[str, Any]
+    *, rights_manifest_path: Optional[Path] = None, donor_ledger_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """failure_abort_criteria.json rule #2（`User donor manifest
     incomplete`）の `condition` が参照する**唯一の正規消費経路**
@@ -9885,6 +9893,21 @@ def verify_user_donor_manifest_complete(
     とおり `entries`（donor card の実内容）の検証を意図的に本関数チェーン
     へ委譲しており、単独では空 entries・donor 欠落・重複・hash 改変を
     検出できなかった）。
+
+    **署名は path ベース**（2026-08-25 同 PR 第5巡指摘, P2, 採用で
+    Mapping 受け取り版から変更）: 旧署名は呼び出し元が生の `json.loads()`
+    （重複キー last-key-wins）で読み込んだ曖昧な dict をそのまま渡せて
+    しまい、正規消費経路でありながら厳密 parse を強制していなかった
+    （手編集で `card_id`/`sha256` 等を同一 entry 内に重複記入した
+    `rights_manifest.json` が「たまたま期待値に潰れた」まま本関数へ到達し
+    MACHINE 判定を通過し得た）。本関数は自らファイルを1回だけ読み
+    （read-once）、`load_rights_manifest_json()`/`load_user_donor_ledger_
+    json()`（本ファイル8355-8385行、重複キー拒否の厳密 parser）で parse
+    してから3段チェーンへ渡す。**任意 Mapping を受ける互換シグネチャは
+    意図的に残さない**——mapping 経由で厳密 parse をすり抜けられる穴を
+    ふさぐことが本対応の目的そのものであるため、旧シグネチャの併存は
+    許容しない。`rights_manifest_path`/`donor_ledger_path` 省略時は正典
+    パス（`RIGHTS_MANIFEST_PATH`/`USER_DONOR_LEDGER_PATH`）を用いる。
 
     3段の既存検証チェーンを束ねる薄いラッパー（新規検証ロジックは
     書かない — 既存3関数の合成のみ）:
@@ -9904,9 +9927,34 @@ def verify_user_donor_manifest_complete(
 
     戻り値は (2) の flat 変換結果（呼び出し元が `entries` 等へ追加
     アクセスしたい場合のため）。harness の rights completeness 判定は
-    本関数経由のみで行うべきであり、(1) 単独の呼び出しでは不十分
+    本関数経由のみで行うべきであり、(1) 単独の呼び出しや、本関数を
+    経由しない直接 `json.load()` はいずれも不十分・契約違反である
     （probe/genome loader と同じ「唯一の正規消費経路」規約）。
     """
+    effective_rights_path = (
+        rights_manifest_path if rights_manifest_path is not None else RIGHTS_MANIFEST_PATH
+    )
+    effective_ledger_path = (
+        donor_ledger_path if donor_ledger_path is not None else USER_DONOR_LEDGER_PATH
+    )
+    if not effective_rights_path.is_file():
+        raise Run9ValidationError(
+            f"verify_user_donor_manifest_complete(): rights manifest source "
+            f"{effective_rights_path} does not exist — this function is the sole canonical "
+            "access path (direct json.load() elsewhere is a contract violation); a missing "
+            "file is fail-closed"
+        )
+    if not effective_ledger_path.is_file():
+        raise Run9ValidationError(
+            f"verify_user_donor_manifest_complete(): donor ledger source "
+            f"{effective_ledger_path} does not exist — this function is the sole canonical "
+            "access path; a missing file is fail-closed"
+        )
+    # read-once: 各ファイルを1回だけ読み、厳密 parser（重複キー拒否）へ
+    # そのまま渡す。
+    rights_manifest = load_rights_manifest_json(effective_rights_path.read_text(encoding="utf-8"))
+    donor_ledger = load_user_donor_ledger_json(effective_ledger_path.read_text(encoding="utf-8"))
+
     validate_rights_manifest_four_layer(rights_manifest)
     flat = extract_voice_identity_rights_layer(rights_manifest)
     verify_rights_manifest_against_ledger(flat, donor_ledger)

@@ -1095,8 +1095,32 @@ cost_record_sha:
 #   分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。
 #   seed_policy_manifest.json/measurement_spec_manifest.json/
 #   founders/*.json は無改変（sha256 確認済み）。
+# - PR #324 Codex bot レビュー第5巡 Fix（2026-08-26、値
+#   8f9f8c30d521b5f2048891aa17fe9c1aeeb068a1ec8007f2146d4c1ec22cf38d へ
+#   repin、P2、採用）: `verify_user_donor_manifest_complete()`（第4巡で
+#   新設）が Mapping を直接受け取る署名のままだったため、呼び出し元が
+#   生の json.loads()（重複キー last-key-wins）で読み込んだ曖昧な dict
+#   を渡せてしまい、正規消費経路でありながら厳密 parse を強制していない
+#   欠陥の指摘（同族の新経路: 正規消費経路が厳密 parse を強制せず、
+#   通常 json.loads の重複キー黙殺で曖昧 manifest が MACHINE を通過し
+#   得る）。対応: 署名を path ベースへ変更
+#   `verify_user_donor_manifest_complete(*, rights_manifest_path=None,
+#   donor_ledger_path=None)`（省略時は正典パス
+#   RIGHTS_MANIFEST_PATH/USER_DONOR_LEDGER_PATH を新設して既定）。内部で
+#   自らファイルを read-once で読み、load_rights_manifest_json()/
+#   load_user_donor_ledger_json()（重複キー拒否の既存厳密 parser）で
+#   parse してから3段チェーンへ渡す。任意 Mapping を受ける互換シグネ
+#   チャは意図的に残さない（穴をふさぐことが対応の目的そのものである
+#   ため）。手書きの重複キー JSON バイト列（rights/ledger 双方）が
+#   fail-closed で拒否されることをテストで確認した。rule 2 の condition
+#   記述が旧署名（位置引数 rights_manifest, donor_ledger）を引いていた
+#   ため、新署名（path ベース、省略時デフォルト）を反映する形へ追随
+#   した——バイトが変わったため repin（6世代目）。分類数は不変
+#   （MACHINE 1件 / PROCEDURAL 19件）。seed_policy_manifest.json/
+#   measurement_spec_manifest.json/founders/*.json は無改変（sha256
+#   確認済み）。
 failure_abort_criteria_sha:
-  value: "954b463ecfa497b732240d92c6e07a29ebecef480d97dc1f42e9108c12635a52"
+  value: "8f9f8c30d521b5f2048891aa17fe9c1aeeb068a1ec8007f2146d4c1ec22cf38d"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 
