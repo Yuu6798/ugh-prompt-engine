@@ -11181,3 +11181,828 @@ def load_pinned_dataset_split_manifest(
         )
 
     return data
+
+
+# ===== dependency_pins manifest (RUN9-L0-HARNESS-1) =========================
+#
+# `dependency_pins_sha`（RUN9_CONTRACT.yaml）が pin する
+# `inputs/dependency_pins_manifest.json`（schema `run9-dependency-pins/1.0`）
+# の構造検証・唯一の正規消費経路。probe/seed_policy 前例と同型の4段構成
+# （schema 自己宣言 → REQUIRED_KEYS + `validate_dependency_pins_manifest()`
+# → `load_pinned_dependency_pins_manifest()` read-once 3層防御 → PINNED 化）
+# を踏襲する。本 manifest は VG-L0 render 資産 provisioning の実測台帳
+# であり、DESIGN §22 step 1「verify repository / dependency pins」を
+# 実測で完遂する（Design Memo RUN9-L0-HARNESS-1）。
+
+SCHEMA_DEPENDENCY_PINS_MANIFEST = "run9-dependency-pins/1.0"
+
+DEPENDENCY_PINS_MANIFEST_PATH = _THIS_DIR / "inputs" / "dependency_pins_manifest.json"
+
+# cross-check (6) が読む一次ソース。本 manifest 自体は
+# `backbone_runtime_bundle_sha` を pin しない（別欄が既に pin 済み）ため、
+# ここでは実バイトを都度再読込・再ハッシュして `backbone_runtime_bundle_sha`
+# pin と照合したうえで中身を読む（stale/改変を検出）。
+BACKBONE_RUNTIME_BUNDLE_PATH = _THIS_DIR / "inputs" / "backbone_runtime_bundle.json"
+
+DEPENDENCY_PINS_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "schema",
+    "generated_at",
+    "generation_note",
+    "claim_scope",
+    "render_asset_ledger",
+    "acoustic_export_companions",
+    "tar_gz_full_member_ledger",
+    "python_dependency_pins",
+    "diffsinger_render_code_commit",
+    "speaker_embeddings_unpinned_candidates",
+    "smoke_render",
+    "budget_estimate",
+})
+
+_DEPENDENCY_LEDGER_ENTRY_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "logical_name", "file", "acquisition", "expected_sha256", "actual_sha256",
+    "actual_size_bytes", "status",
+})
+
+_DEPENDENCY_LEDGER_STATUS_VOCAB: Tuple[str, ...] = ("VERIFIED_MATCH",)
+
+# render_asset_ledger の logical_name -> backbone_runtime_bundle.json 内の
+# 対応する pin 値へのアクセサ（cross-check (6) が使う）。マッピングを
+# 関数外の定数として宣言することで、テスト層が網羅性
+# （render_asset_ledger の全 logical_name がここに存在すること）を機械
+# 確認できるようにする（`_DATASET_LOADER_LINKED_PIN_ACCESSORS` と同じ
+# 設計動機）。
+def _bundle_get(bundle: Mapping[str, Any], *path: str) -> Any:
+    node: Any = bundle
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            raise Run9ValidationError(
+                f"load_pinned_dependency_pins_manifest(): backbone_runtime_bundle.json は "
+                f"期待するキー経路 {path!r} を持たない（{key!r} が欠落）"
+            )
+        node = node[key]
+    return node
+
+
+_DEPENDENCY_LEDGER_BUNDLE_PATHS: Dict[str, Tuple[str, ...]] = {
+    "backbone_checkpoint": ("run9_runtime_inputs", "checkpoint_sha256", "value"),
+    "backbone_config_yaml": ("run9_runtime_inputs", "config_sha256", "value"),
+    "backbone_spk_map_json": ("run9_runtime_inputs", "speaker_map_sha256", "value"),
+    "backbone_lang_map_json": ("run9_runtime_inputs", "language_map_sha256", "value"),
+    "backbone_dictionary_ja_txt": ("run9_runtime_inputs", "phoneme_map_sha256", "value"),
+    "vocoder_source_archive": ("run9_runtime_inputs", "vocoder", "source_archive_sha256", "value"),
+    "vocoder_runtime_onnx": ("run9_runtime_inputs", "vocoder", "runtime_onnx_sha256", "value"),
+    "canon_distribution_zip": (
+        "run9_runtime_inputs", "canon_model_assets", "source_distribution", "sha256",
+    ),
+    "canon_linguistic_onnx": (
+        "run9_runtime_inputs", "canon_model_assets", "assets", "linguistic_onnx", "value",
+    ),
+    "canon_variance_duration_onnx": (
+        "run9_runtime_inputs", "canon_model_assets", "assets", "variance_duration_onnx", "value",
+    ),
+    "canon_variance_pitch_onnx": (
+        "run9_runtime_inputs", "canon_model_assets", "assets", "variance_pitch_onnx", "value",
+    ),
+    "canon_phonemes_txt": (
+        "run9_runtime_inputs", "canon_model_assets", "assets", "phonemes_txt", "value",
+    ),
+}
+
+# acoustic_export_companions.expected_items の logical_name -> bundle path
+# （未取得のため actual_sha256 との照合はできないが、expected_sha256 の
+# 転記元は cross-check する）。
+_DEPENDENCY_ACOUSTIC_COMPANION_BUNDLE_PATHS: Dict[str, Tuple[str, ...]] = {
+    "acoustic_onnx": ("run9_runtime_inputs", "acoustic_onnx_sha256", "value"),
+    "acoustic_dsconfig_yaml": (
+        "run9_runtime_inputs", "canon_model_assets", "acoustic_export_companions",
+        "dsconfig_yaml", "value",
+    ),
+    "acoustic_phonemes_json": (
+        "run9_runtime_inputs", "canon_model_assets", "acoustic_export_companions",
+        "acoustic_phonemes_json", "value",
+    ),
+    "speaker_embed_ritsu": (
+        "run9_runtime_inputs", "canon_model_assets", "acoustic_export_companions",
+        "speaker_embed", "value",
+    ),
+}
+
+
+def _validate_dependency_ledger_entry(entry: Any, *, index: int) -> None:
+    if not isinstance(entry, dict):
+        raise Run9ValidationError(
+            f"dependency pins manifest.render_asset_ledger[{index}] must be an object, "
+            f"got {type(entry).__name__}"
+        )
+    unknown = set(entry.keys()) - _DEPENDENCY_LEDGER_ENTRY_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"dependency pins manifest.render_asset_ledger[{index}] has unknown key(s): "
+            f"{sorted(unknown)}"
+        )
+    missing = _DEPENDENCY_LEDGER_ENTRY_REQUIRED_KEYS - set(entry.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"dependency pins manifest.render_asset_ledger[{index}] missing required key(s): "
+            f"{sorted(missing)}"
+        )
+    logical_name = _require_non_empty_str(
+        entry["logical_name"], field=f"render_asset_ledger[{index}].logical_name"
+    )
+    _require_non_empty_str(entry["file"], field=f"render_asset_ledger[{index}].file")
+    if not isinstance(entry["acquisition"], dict) or not entry["acquisition"]:
+        raise Run9ValidationError(
+            f"dependency pins manifest.render_asset_ledger[{index}].acquisition must be a "
+            f"non-empty object, got {entry['acquisition']!r}"
+        )
+    expected_sha = entry["expected_sha256"]
+    actual_sha = entry["actual_sha256"]
+    if not isinstance(expected_sha, str) or not _SHA256_HEX_RE.match(expected_sha):
+        raise Run9ValidationError(
+            f"dependency pins manifest.render_asset_ledger[{index}].expected_sha256 must be a "
+            f"64hex sha256, got {expected_sha!r}"
+        )
+    if not isinstance(actual_sha, str) or not _SHA256_HEX_RE.match(actual_sha):
+        raise Run9ValidationError(
+            f"dependency pins manifest.render_asset_ledger[{index}].actual_sha256 must be a "
+            f"64hex sha256, got {actual_sha!r}"
+        )
+    status = entry["status"]
+    if status not in _DEPENDENCY_LEDGER_STATUS_VOCAB:
+        raise Run9ValidationError(
+            f"dependency pins manifest.render_asset_ledger[{index}].status must be one of "
+            f"{_DEPENDENCY_LEDGER_STATUS_VOCAB!r}, got {status!r}"
+        )
+    if status == "VERIFIED_MATCH" and expected_sha != actual_sha:
+        raise Run9ValidationError(
+            f"dependency pins manifest.render_asset_ledger[{index}] ({logical_name!r}) declares "
+            f"status VERIFIED_MATCH but expected_sha256 ({expected_sha!r}) != actual_sha256 "
+            f"({actual_sha!r}) — a mismatched pair may never claim VERIFIED_MATCH"
+        )
+    size = entry["actual_size_bytes"]
+    if size is not None and (isinstance(size, bool) or not isinstance(size, int) or size <= 0):
+        raise Run9ValidationError(
+            f"dependency pins manifest.render_asset_ledger[{index}].actual_size_bytes must be "
+            f"null or a positive int, got {size!r}"
+        )
+
+
+_ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "logical_name", "file", "expected_sha256",
+})
+
+_ACOUSTIC_COMPANIONS_TOP_KEYS: FrozenSet[str] = frozenset({
+    "status", "expected_items", "attempted_source", "verdict",
+    "indirect_provenance_found", "run_execution_manifest_search",
+    "fail_closed_disposition",
+})
+
+_ACOUSTIC_COMPANIONS_STATUS_VOCAB: Tuple[str, ...] = (
+    "NOT_OBTAINED_TARBALL_MISS", "OBTAINED_VERIFIED_MATCH",
+)
+
+
+def _validate_acoustic_export_companions(section: Any) -> None:
+    if not isinstance(section, dict):
+        raise Run9ValidationError(
+            f"dependency pins manifest.acoustic_export_companions must be an object, "
+            f"got {type(section).__name__}"
+        )
+    unknown = set(section.keys()) - _ACOUSTIC_COMPANIONS_TOP_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"dependency pins manifest.acoustic_export_companions has unknown key(s): "
+            f"{sorted(unknown)}"
+        )
+    missing = _ACOUSTIC_COMPANIONS_TOP_KEYS - set(section.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"dependency pins manifest.acoustic_export_companions missing required key(s): "
+            f"{sorted(missing)}"
+        )
+    status = section["status"]
+    if status not in _ACOUSTIC_COMPANIONS_STATUS_VOCAB:
+        raise Run9ValidationError(
+            f"dependency pins manifest.acoustic_export_companions.status must be one of "
+            f"{_ACOUSTIC_COMPANIONS_STATUS_VOCAB!r}, got {status!r}"
+        )
+    items = section["expected_items"]
+    if not isinstance(items, list) or not items:
+        raise Run9ValidationError(
+            "dependency pins manifest.acoustic_export_companions.expected_items must be a "
+            f"non-empty list, got {items!r}"
+        )
+    seen_names = []
+    for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise Run9ValidationError(
+                f"dependency pins manifest.acoustic_export_companions.expected_items[{i}] must "
+                f"be an object, got {type(item).__name__}"
+            )
+        unknown_item = set(item.keys()) - _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS
+        if unknown_item:
+            raise Run9ValidationError(
+                f"dependency pins manifest.acoustic_export_companions.expected_items[{i}] has "
+                f"unknown key(s): {sorted(unknown_item)}"
+            )
+        missing_item = _ACOUSTIC_COMPANION_ITEM_REQUIRED_KEYS - set(item.keys())
+        if missing_item:
+            raise Run9ValidationError(
+                f"dependency pins manifest.acoustic_export_companions.expected_items[{i}] "
+                f"missing required key(s): {sorted(missing_item)}"
+            )
+        seen_names.append(
+            _require_non_empty_str(
+                item["logical_name"],
+                field=f"acoustic_export_companions.expected_items[{i}].logical_name",
+            )
+        )
+        _require_non_empty_str(
+            item["file"], field=f"acoustic_export_companions.expected_items[{i}].file"
+        )
+        expected_sha = item["expected_sha256"]
+        if not isinstance(expected_sha, str) or not _SHA256_HEX_RE.match(expected_sha):
+            raise Run9ValidationError(
+                f"dependency pins manifest.acoustic_export_companions.expected_items[{i}]."
+                f"expected_sha256 must be a 64hex sha256, got {expected_sha!r}"
+            )
+    if set(seen_names) != set(_DEPENDENCY_ACOUSTIC_COMPANION_BUNDLE_PATHS):
+        raise Run9ValidationError(
+            "dependency pins manifest.acoustic_export_companions.expected_items must register "
+            f"exactly the logical_name set {sorted(_DEPENDENCY_ACOUSTIC_COMPANION_BUNDLE_PATHS)}, "
+            f"got {sorted(seen_names)}"
+        )
+    if not isinstance(section["attempted_source"], dict) or not section["attempted_source"]:
+        raise Run9ValidationError(
+            "dependency pins manifest.acoustic_export_companions.attempted_source must be a "
+            f"non-empty object, got {section['attempted_source']!r}"
+        )
+    _require_non_empty_str(
+        section["verdict"], field="acoustic_export_companions.verdict"
+    )
+    _require_non_empty_str(
+        section["fail_closed_disposition"], field="acoustic_export_companions.fail_closed_disposition"
+    )
+    if not isinstance(section["indirect_provenance_found"], dict):
+        raise Run9ValidationError(
+            "dependency pins manifest.acoustic_export_companions.indirect_provenance_found must "
+            f"be an object, got {section['indirect_provenance_found']!r}"
+        )
+    if not isinstance(section["run_execution_manifest_search"], dict):
+        raise Run9ValidationError(
+            "dependency pins manifest.acoustic_export_companions.run_execution_manifest_search "
+            f"must be an object, got {section['run_execution_manifest_search']!r}"
+        )
+    # status == NOT_OBTAINED_TARBALL_MISS の場合、render_asset_ledger 側に
+    # これら4点を VERIFIED_MATCH として重複計上してはならない（fail-closed
+    # な正直性——「未取得」と「取得済み」を1つの manifest 内で矛盾させない）。
+    # この不変条件は validate_dependency_pins_manifest() 本体で
+    # render_asset_ledger との突き合わせにより検証する。
+
+
+_TAR_MEMBER_REQUIRED_KEYS: FrozenSet[str] = frozenset({"path", "size_bytes", "sha256"})
+
+
+def _validate_tar_gz_full_member_ledger(members: Any) -> None:
+    if not isinstance(members, list) or not members:
+        raise Run9ValidationError(
+            f"dependency pins manifest.tar_gz_full_member_ledger must be a non-empty list, "
+            f"got {members!r}"
+        )
+    seen_paths = set()
+    for i, member in enumerate(members):
+        if not isinstance(member, dict):
+            raise Run9ValidationError(
+                f"dependency pins manifest.tar_gz_full_member_ledger[{i}] must be an object, "
+                f"got {type(member).__name__}"
+            )
+        unknown = set(member.keys()) - _TAR_MEMBER_REQUIRED_KEYS
+        if unknown:
+            raise Run9ValidationError(
+                f"dependency pins manifest.tar_gz_full_member_ledger[{i}] has unknown key(s): "
+                f"{sorted(unknown)}"
+            )
+        missing = _TAR_MEMBER_REQUIRED_KEYS - set(member.keys())
+        if missing:
+            raise Run9ValidationError(
+                f"dependency pins manifest.tar_gz_full_member_ledger[{i}] missing required "
+                f"key(s): {sorted(missing)}"
+            )
+        path = _require_non_empty_str(
+            member["path"], field=f"tar_gz_full_member_ledger[{i}].path"
+        )
+        if path in seen_paths:
+            raise Run9ValidationError(
+                f"dependency pins manifest.tar_gz_full_member_ledger has duplicate path {path!r}"
+            )
+        seen_paths.add(path)
+        size = member["size_bytes"]
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            raise Run9ValidationError(
+                f"dependency pins manifest.tar_gz_full_member_ledger[{i}].size_bytes must be a "
+                f"positive int, got {size!r}"
+            )
+        sha = member["sha256"]
+        if not isinstance(sha, str) or not _SHA256_HEX_RE.match(sha):
+            raise Run9ValidationError(
+                f"dependency pins manifest.tar_gz_full_member_ledger[{i}].sha256 must be a "
+                f"64hex sha256, got {sha!r}"
+            )
+    # fail-closed: これら4点のいずれかが tar member として実在してしまって
+    # いたら（本 harness 実測ではNOT_OBTAINEDだったが、将来 repin されて
+    # tar.gz の中身が変わった場合の drift 検出）acoustic_export_companions
+    # の status は OBTAINED_VERIFIED_MATCH へ更新されているべき——ここでは
+    # 経路名（basename）の単純一致で楽観的に検出できる範囲のみ警告的に
+    # 拒否する。
+    _companion_basenames = {
+        "acoustic.onnx", "dsconfig.yaml", "s5_run6_acoustic_v1.phonemes.json",
+        "s5_run6_acoustic_v1.ritsu.emb",
+    }
+    found_basenames = {p.rsplit("/", 1)[-1] for p in seen_paths}
+    overlap = _companion_basenames & found_basenames
+    if overlap:
+        raise Run9ValidationError(
+            "dependency pins manifest.tar_gz_full_member_ledger contains member(s) whose "
+            f"basename matches an acoustic export companion the manifest otherwise claims is "
+            f"NOT_OBTAINED: {sorted(overlap)} — acoustic_export_companions.status must be "
+            "updated to reflect this before PINNED (stale-miss inconsistency)"
+        )
+
+
+_PYTHON_DEP_ENTRY_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "package", "pin_version", "observed_version", "status",
+})
+_PYTHON_DEP_STATUS_VOCAB: Tuple[str, ...] = ("MATCH",)
+_PYTHON_DEP_OPTIONAL_KEYS: FrozenSet[str] = frozenset({"installed_by_this_memo", "note"})
+
+
+def _validate_python_dependency_pins(entries: Any) -> None:
+    if not isinstance(entries, list) or not entries:
+        raise Run9ValidationError(
+            f"dependency pins manifest.python_dependency_pins must be a non-empty list, "
+            f"got {entries!r}"
+        )
+    seen_packages = []
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise Run9ValidationError(
+                f"dependency pins manifest.python_dependency_pins[{i}] must be an object, "
+                f"got {type(entry).__name__}"
+            )
+        allowed = _PYTHON_DEP_ENTRY_REQUIRED_KEYS | _PYTHON_DEP_OPTIONAL_KEYS
+        unknown = set(entry.keys()) - allowed
+        if unknown:
+            raise Run9ValidationError(
+                f"dependency pins manifest.python_dependency_pins[{i}] has unknown key(s): "
+                f"{sorted(unknown)}"
+            )
+        missing = _PYTHON_DEP_ENTRY_REQUIRED_KEYS - set(entry.keys())
+        if missing:
+            raise Run9ValidationError(
+                f"dependency pins manifest.python_dependency_pins[{i}] missing required "
+                f"key(s): {sorted(missing)}"
+            )
+        package = _require_non_empty_str(
+            entry["package"], field=f"python_dependency_pins[{i}].package"
+        )
+        seen_packages.append(package)
+        pin_version = _require_non_empty_str(
+            entry["pin_version"], field=f"python_dependency_pins[{i}].pin_version"
+        )
+        observed_version = _require_non_empty_str(
+            entry["observed_version"], field=f"python_dependency_pins[{i}].observed_version"
+        )
+        status = entry["status"]
+        if status not in _PYTHON_DEP_STATUS_VOCAB:
+            raise Run9ValidationError(
+                f"dependency pins manifest.python_dependency_pins[{i}].status must be one of "
+                f"{_PYTHON_DEP_STATUS_VOCAB!r}, got {status!r}"
+            )
+        if status == "MATCH" and pin_version != observed_version:
+            raise Run9ValidationError(
+                f"dependency pins manifest.python_dependency_pins[{i}] ({package!r}) declares "
+                f"status MATCH but pin_version ({pin_version!r}) != observed_version "
+                f"({observed_version!r})"
+            )
+    if len(seen_packages) != len(set(seen_packages)):
+        raise Run9ValidationError(
+            f"dependency pins manifest.python_dependency_pins has duplicate package name(s): "
+            f"{seen_packages!r}"
+        )
+    # RENDER_STACK_PIN/ANALYSIS_STACK_PIN の全数を機械強制する
+    # （provision.sh §4/§5 逐語 + gate_synth.py が実消費する onnxruntime）。
+    expected_packages = {
+        "python", "numpy", "librosa", "numba", "scipy", "soundfile", "PyYAML",
+        "pyloudnorm", "onnxruntime",
+    }
+    if set(seen_packages) != expected_packages:
+        raise Run9ValidationError(
+            "dependency pins manifest.python_dependency_pins must register exactly "
+            f"{sorted(expected_packages)} (RENDER_STACK_PIN + ANALYSIS_STACK_PIN, provision.sh "
+            f"§4/§5), got {sorted(seen_packages)}"
+        )
+
+
+_COMMIT_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "repo", "pin_commit_full", "pin_source", "cloned_commit_full", "clone_method", "status",
+})
+_COMMIT_STATUS_VOCAB: Tuple[str, ...] = ("VERIFIED_MATCH",)
+_GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _validate_diffsinger_render_code_commit(section: Any) -> None:
+    if not isinstance(section, dict):
+        raise Run9ValidationError(
+            f"dependency pins manifest.diffsinger_render_code_commit must be an object, "
+            f"got {type(section).__name__}"
+        )
+    unknown = set(section.keys()) - _COMMIT_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(
+            f"dependency pins manifest.diffsinger_render_code_commit has unknown key(s): "
+            f"{sorted(unknown)}"
+        )
+    missing = _COMMIT_REQUIRED_KEYS - set(section.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"dependency pins manifest.diffsinger_render_code_commit missing required key(s): "
+            f"{sorted(missing)}"
+        )
+    _require_non_empty_str(section["repo"], field="diffsinger_render_code_commit.repo")
+    pin_commit = section["pin_commit_full"]
+    cloned_commit = section["cloned_commit_full"]
+    if not isinstance(pin_commit, str) or not _GIT_SHA_RE.match(pin_commit):
+        raise Run9ValidationError(
+            f"dependency pins manifest.diffsinger_render_code_commit.pin_commit_full must be a "
+            f"40hex git sha, got {pin_commit!r}"
+        )
+    if not isinstance(cloned_commit, str) or not _GIT_SHA_RE.match(cloned_commit):
+        raise Run9ValidationError(
+            f"dependency pins manifest.diffsinger_render_code_commit.cloned_commit_full must be "
+            f"a 40hex git sha, got {cloned_commit!r}"
+        )
+    _require_non_empty_str(
+        section["pin_source"], field="diffsinger_render_code_commit.pin_source"
+    )
+    _require_non_empty_str(
+        section["clone_method"], field="diffsinger_render_code_commit.clone_method"
+    )
+    status = section["status"]
+    if status not in _COMMIT_STATUS_VOCAB:
+        raise Run9ValidationError(
+            f"dependency pins manifest.diffsinger_render_code_commit.status must be one of "
+            f"{_COMMIT_STATUS_VOCAB!r}, got {status!r}"
+        )
+    if status == "VERIFIED_MATCH" and pin_commit != cloned_commit:
+        raise Run9ValidationError(
+            "dependency pins manifest.diffsinger_render_code_commit declares status "
+            f"VERIFIED_MATCH but pin_commit_full ({pin_commit!r}) != cloned_commit_full "
+            f"({cloned_commit!r})"
+        )
+
+
+_SPEAKER_EMBED_CANDIDATE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "file", "candidate_sha256", "candidate_sha256_first16", "source", "status",
+})
+_SPEAKER_EMBED_D3SYNTH_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "note", "candidate_sha256", "source", "status",
+})
+_SPEAKER_EMBED_CANDIDATE_STATUS_VOCAB: Tuple[str, ...] = ("UNPINNED_CANDIDATE",)
+
+
+def _validate_speaker_embed_candidate(entry: Any, *, field: str, required_keys: FrozenSet[str]) -> None:
+    if not isinstance(entry, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(entry).__name__}")
+    unknown = set(entry.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(entry.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    sha = entry["candidate_sha256"]
+    if not isinstance(sha, str) or not _SHA256_HEX_RE.match(sha):
+        raise Run9ValidationError(f"{field}.candidate_sha256 must be a 64hex sha256, got {sha!r}")
+    _require_non_empty_str(entry["source"], field=f"{field}.source")
+    status = entry["status"]
+    # fail-closed: この節の status は「UNPINNED_CANDIDATE...」語彙のみを
+    # 許容する（閉じた語彙自体が「これは pin ではない」という位置づけを
+    # machine-check する——`_SPEAKER_EMBED_CANDIDATE_STATUS_VOCAB`/
+    # `_SPEAKER_EMBED_D3SYNTH_STATUS_VOCAB` は "UNPINNED_CANDIDATE" で
+    # 始まる値のみを収録し、単純な "PINNED" 完全一致はどの語彙にも属さ
+    # ないため自動的に拒否される — 部分文字列一致は使わない、
+    # "UNPINNED_CANDIDATE" 自体が "PINNED" を部分文字列に含むため）。
+    if not isinstance(status, str) or not status.startswith("UNPINNED_CANDIDATE"):
+        raise Run9ValidationError(
+            f"{field}.status ({status!r}) must start with 'UNPINNED_CANDIDATE' — this section is "
+            "unpinned-candidate-only by design (User adjudication pending)"
+        )
+
+
+def _validate_speaker_embeddings_unpinned_candidates(section: Any) -> None:
+    if not isinstance(section, dict):
+        raise Run9ValidationError(
+            f"dependency pins manifest.speaker_embeddings_unpinned_candidates must be an "
+            f"object, got {type(section).__name__}"
+        )
+    expected_keys = frozenset({"note", "pjs", "user", "d3synth_reference_only"})
+    unknown = set(section.keys()) - expected_keys
+    if unknown:
+        raise Run9ValidationError(
+            f"dependency pins manifest.speaker_embeddings_unpinned_candidates has unknown "
+            f"key(s): {sorted(unknown)}"
+        )
+    missing = expected_keys - set(section.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"dependency pins manifest.speaker_embeddings_unpinned_candidates missing required "
+            f"key(s): {sorted(missing)}"
+        )
+    _require_non_empty_str(
+        section["note"], field="speaker_embeddings_unpinned_candidates.note"
+    )
+    for key in ("pjs", "user"):
+        _validate_speaker_embed_candidate(
+            section[key],
+            field=f"speaker_embeddings_unpinned_candidates.{key}",
+            required_keys=_SPEAKER_EMBED_CANDIDATE_REQUIRED_KEYS,
+        )
+    _validate_speaker_embed_candidate(
+        section["d3synth_reference_only"],
+        field="speaker_embeddings_unpinned_candidates.d3synth_reference_only",
+        required_keys=_SPEAKER_EMBED_D3SYNTH_REQUIRED_KEYS,
+    )
+    if section["pjs"]["candidate_sha256"] == section["user"]["candidate_sha256"]:
+        raise Run9ValidationError(
+            "dependency pins manifest.speaker_embeddings_unpinned_candidates: pjs and user "
+            "candidate_sha256 must differ (they are distinct speaker embeddings)"
+        )
+
+
+_BLOCKED_SECTION_STATUS_VOCAB: Tuple[str, ...] = ("BLOCKED", "COMPLETED")
+
+
+def _validate_blocked_or_completed_section(
+    section: Any, *, field: str, required_keys: FrozenSet[str]
+) -> None:
+    if not isinstance(section, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(section).__name__}")
+    unknown = set(section.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(section.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    status = section["status"]
+    if status not in _BLOCKED_SECTION_STATUS_VOCAB:
+        raise Run9ValidationError(
+            f"{field}.status must be one of {_BLOCKED_SECTION_STATUS_VOCAB!r}, got {status!r}"
+        )
+    _require_non_empty_str(section["reason"], field=f"{field}.reason")
+
+
+_SMOKE_RENDER_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "status", "blocked_by", "reason", "not_attempted_reason_is_missing_input_not_failure",
+})
+_BUDGET_ESTIMATE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "status", "reason", "reference_only_prior_gpu_measurement_sec_per_item",
+    "reference_only_source", "reference_only_caveat",
+})
+
+
+def validate_dependency_pins_manifest(data: Mapping[str, Any]) -> None:
+    """dependency pins manifest（`run9-dependency-pins/1.0`）の構造を検証
+    する（RUN9-L0-HARNESS-1）。VG-L0 render 資産 provisioning の実測台帳
+    ——Drive/URL 取得資産の sha256 照合結果・r6_gate_materials.tar.gz の
+    全数展開結果（acoustic export companions 4点は MISS と正直に記録）・
+    Python 依存 pin の実測一致・DiffSinger commit 照合・pjs/user speaker
+    embedding の未 pin candidate・smoke render/budget estimate が
+    BLOCKED であることの正直な記録、を1つの schema にまとめる。
+
+    fail-closed 原則: `render_asset_ledger` の各エントリは
+    `status == VERIFIED_MATCH` を宣言する場合 `expected_sha256 ==
+    actual_sha256` を機械強制する（不一致のまま VERIFIED_MATCH を名乗る
+    ことはできない）。`render_asset_ledger` の logical_name 語彙
+    （`_DEPENDENCY_LEDGER_BUNDLE_PATHS`、12件）と
+    `acoustic_export_companions.expected_items` の logical_name 語彙
+    （`_DEPENDENCY_ACOUSTIC_COMPANION_BUNDLE_PATHS`、4件）は定数レベルで
+    disjoint に固定されており、未取得の acoustic export companions が
+    ledger 側で VERIFIED_MATCH として二重計上される経路は構造的に存在
+    しない。`speaker_embeddings_unpinned_candidates` は status 語彙が
+    "UNPINNED_CANDIDATE" で始まる値のみを許容し、未確定候補という
+    位置づけを構造的に保つ。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"dependency pins manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - DEPENDENCY_PINS_MANIFEST_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"dependency pins manifest has unknown key(s): {sorted(unknown)}")
+    missing = DEPENDENCY_PINS_MANIFEST_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"dependency pins manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_DEPENDENCY_PINS_MANIFEST:
+        raise Run9ValidationError(
+            f"dependency pins manifest.schema must be exactly {SCHEMA_DEPENDENCY_PINS_MANIFEST!r}, "
+            f"got {schema!r}"
+        )
+    _require_non_empty_str(data["generated_at"], field="generated_at")
+    _require_non_empty_str(data["generation_note"], field="generation_note")
+    claim_scope = data["claim_scope"]
+    if not isinstance(claim_scope, dict) or not {"statement", "rationale"} <= set(claim_scope.keys()):
+        raise Run9ValidationError(
+            "dependency pins manifest.claim_scope must be an object with at least "
+            f"{{'statement', 'rationale'}}, got {claim_scope!r}"
+        )
+    _require_non_empty_str(claim_scope["statement"], field="claim_scope.statement")
+    _require_non_empty_str(claim_scope["rationale"], field="claim_scope.rationale")
+
+    ledger = data["render_asset_ledger"]
+    if not isinstance(ledger, list) or not ledger:
+        raise Run9ValidationError(
+            f"dependency pins manifest.render_asset_ledger must be a non-empty list, got {ledger!r}"
+        )
+    ledger_names = []
+    for i, entry in enumerate(ledger):
+        _validate_dependency_ledger_entry(entry, index=i)
+        ledger_names.append(entry["logical_name"])
+    if len(ledger_names) != len(set(ledger_names)):
+        raise Run9ValidationError(
+            f"dependency pins manifest.render_asset_ledger has duplicate logical_name(s): {ledger_names!r}"
+        )
+    if set(ledger_names) != set(_DEPENDENCY_LEDGER_BUNDLE_PATHS):
+        raise Run9ValidationError(
+            "dependency pins manifest.render_asset_ledger must register exactly the "
+            f"logical_name set {sorted(_DEPENDENCY_LEDGER_BUNDLE_PATHS)}, got {sorted(ledger_names)}"
+        )
+
+    # 「acoustic export companions が未取得と render_asset_ledger の両方で
+    # 主張される」という二重主張は、構造的に既に不可能である:
+    # render_asset_ledger は上の集合等価チェックで `_DEPENDENCY_LEDGER_
+    # BUNDLE_PATHS`（12件、acoustic export companions のいずれも含まない）
+    # のみを許容し、`_validate_acoustic_export_companions()` は
+    # `expected_items` を `_DEPENDENCY_ACOUSTIC_COMPANION_BUNDLE_PATHS`
+    # （4件、上記12件と disjoint）に固定する——2つの語彙が交わらないよう
+    # 定数レベルで分離されているため、実行時の重複計上チェックを別途
+    # 発明する必要がない（発明すると到達不能コードになる）。
+    _validate_acoustic_export_companions(data["acoustic_export_companions"])
+
+    _validate_tar_gz_full_member_ledger(data["tar_gz_full_member_ledger"])
+    _validate_python_dependency_pins(data["python_dependency_pins"])
+    _validate_diffsinger_render_code_commit(data["diffsinger_render_code_commit"])
+    _validate_speaker_embeddings_unpinned_candidates(data["speaker_embeddings_unpinned_candidates"])
+    _validate_blocked_or_completed_section(
+        data["smoke_render"], field="smoke_render", required_keys=_SMOKE_RENDER_REQUIRED_KEYS
+    )
+    _validate_blocked_or_completed_section(
+        data["budget_estimate"], field="budget_estimate", required_keys=_BUDGET_ESTIMATE_REQUIRED_KEYS
+    )
+
+
+def load_pinned_dependency_pins_manifest(
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None, bundle_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`dependency_pins_sha` pin の**唯一の正規消費経路**
+    （`load_pinned_seed_policy_manifest()`/`load_pinned_probe_manifest()`
+    と同型の3層防御 read-once。RUN9-L0-HARNESS-1）。
+
+    手順（いずれかで fail-closed）:
+    (1) ディスク上の正典 `RUN9_CONTRACT.yaml`（`contract_path` 省略時は
+        `RUN9_CONTRACT_YAML_PATH`）を都度再読込し、渡された `contract` の
+        再検証済み `dependency_pins_sha` pin 値と一致することを確認する
+        （in-process 改変・ディスク正典乖離の双方を検出）
+    (2) `dependency_pins_sha` pin 欄が PINNED であること
+    (3) `manifest_path`（省略時は `DEPENDENCY_PINS_MANIFEST_PATH`）の実在
+    (4) 実バイトの raw sha256 が pin 値と厳密一致すること（stale/改変を
+        検出。digest と parse は同一バッファから導出する read-once
+        契約 — TOCTOU 対策）
+    (5) JSON parse + `validate_dependency_pins_manifest()` 全構造検証
+    (6) **台帳の期待sha と backbone_runtime_bundle.json 既存 pin の
+        cross-check**（本関数固有）: `render_asset_ledger` の各
+        `expected_sha256` と `acoustic_export_companions.expected_items`
+        の各 `expected_sha256` が、`backbone_runtime_bundle.json`
+        （`bundle_path` 省略時は `BACKBONE_RUNTIME_BUNDLE_PATH`。実バイトを
+        都度再読込し `backbone_runtime_bundle_sha` pin と照合してから
+        JSON parse する）の対応する pin 値と厳密一致しない場合 raise
+        する——本 manifest が転記した期待値が、bundle 側の一次 pin から
+        静かに乖離（bundle 側が将来 repin されたのに本 manifest が
+        追随しなかった、等）していないかを消費時点で検出する。
+        `diffsinger_render_code_commit.pin_commit_full` も同様に
+        `run9_render_code_commit.commit_full` と照合する。
+
+    戻り値は検証済み manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("dependency_pins_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("dependency_pins_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_dependency_pins_manifest(): the passed-in contract's "
+            f"dependency_pins_sha pin ({passed_field!r}) diverges from the canonical on-disk "
+            f"RUN9_CONTRACT.yaml pin ({disk_field!r}) at {effective_contract_path} — treated as "
+            "tampering evidence and rejected fail-closed (same defense as load_pinned_seed_"
+            "policy_manifest()/load_pinned_probe_manifest())"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_dependency_pins_manifest(): dependency_pins_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned dependency "
+            "pins manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else DEPENDENCY_PINS_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_dependency_pins_manifest(): pinned dependency pins manifest source "
+            f"{path} does not exist — this function is the sole canonical access path (direct "
+            "json.load() elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_dependency_pins_manifest(): {path} の実バイト sha256 ({actual_sha!r}) "
+            f"が RUN9_CONTRACT.yaml dependency_pins_sha の pin 値 ({pinned_sha!r}) と一致しない "
+            "— stale または改変された manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_dependency_pins_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_dependency_pins_manifest(data)
+
+    # (6) cross-check: bundle 側一次 pin との照合。
+    effective_bundle_path = bundle_path if bundle_path is not None else BACKBONE_RUNTIME_BUNDLE_PATH
+    bundle_field = disk_contract.pin_field("backbone_runtime_bundle_sha")
+    if not _is_field_pinned(bundle_field):
+        raise Run9ValidationError(
+            "load_pinned_dependency_pins_manifest(): cross-check requires "
+            "backbone_runtime_bundle_sha to be PINNED, but it is not "
+            f"(status={bundle_field.get('status')!r})"
+        )
+    if not effective_bundle_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_dependency_pins_manifest(): cross-check source {effective_bundle_path} "
+            "does not exist"
+        )
+    bundle_buf = effective_bundle_path.read_bytes()
+    bundle_actual_sha = hashlib.sha256(bundle_buf).hexdigest()
+    if bundle_actual_sha != bundle_field["value"]:
+        raise Run9ValidationError(
+            f"load_pinned_dependency_pins_manifest(): {effective_bundle_path} の実バイト sha256 "
+            f"({bundle_actual_sha!r}) が backbone_runtime_bundle_sha pin 値 "
+            f"({bundle_field['value']!r}) と一致しない — stale/改変された bundle は cross-check "
+            "の一次ソースとして使わない（fail-closed）"
+        )
+    bundle_data = _loads_strict_json(bundle_buf.decode("utf-8"))
+
+    for entry in data["render_asset_ledger"]:
+        logical_name = entry["logical_name"]
+        bundle_path_tuple = _DEPENDENCY_LEDGER_BUNDLE_PATHS[logical_name]
+        bundle_value = _bundle_get(bundle_data, *bundle_path_tuple)
+        if bundle_value != entry["expected_sha256"]:
+            raise Run9ValidationError(
+                f"load_pinned_dependency_pins_manifest(): render_asset_ledger[{logical_name!r}]."
+                f"expected_sha256 ({entry['expected_sha256']!r}) diverges from "
+                f"backbone_runtime_bundle.json#{'.'.join(bundle_path_tuple)} "
+                f"({bundle_value!r}) — cross-check fail-closed"
+            )
+
+    for item in data["acoustic_export_companions"]["expected_items"]:
+        logical_name = item["logical_name"]
+        bundle_path_tuple = _DEPENDENCY_ACOUSTIC_COMPANION_BUNDLE_PATHS[logical_name]
+        bundle_value = _bundle_get(bundle_data, *bundle_path_tuple)
+        if bundle_value != item["expected_sha256"]:
+            raise Run9ValidationError(
+                "load_pinned_dependency_pins_manifest(): acoustic_export_companions."
+                f"expected_items[{logical_name!r}].expected_sha256 ({item['expected_sha256']!r}) "
+                f"diverges from backbone_runtime_bundle.json#{'.'.join(bundle_path_tuple)} "
+                f"({bundle_value!r}) — cross-check fail-closed"
+            )
+
+    commit_section = data["diffsinger_render_code_commit"]
+    bundle_commit = _bundle_get(
+        bundle_data, "run9_runtime_inputs", "run9_render_code_commit", "commit_full"
+    )
+    if bundle_commit != commit_section["pin_commit_full"]:
+        raise Run9ValidationError(
+            "load_pinned_dependency_pins_manifest(): diffsinger_render_code_commit."
+            f"pin_commit_full ({commit_section['pin_commit_full']!r}) diverges from "
+            f"backbone_runtime_bundle.json#run9_runtime_inputs.run9_render_code_commit."
+            f"commit_full ({bundle_commit!r}) — cross-check fail-closed"
+        )
+
+    return data

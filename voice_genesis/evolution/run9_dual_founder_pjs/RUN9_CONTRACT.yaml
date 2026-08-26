@@ -403,24 +403,77 @@ config_sha:
     Performance ControlProfile へ変更 — DESIGN_RUN9_REVISION_0.2.md 参照。
     ハーネス未実装であることは変わらない）だった〕
 
+# RUN9-L0-HARNESS-1（2026-08-26, User 裁定 2026-08-26「必要な素材は
+# ドライブにあるのでClaudeで完結できるはずだ。Claudeルートで作成して」）
+# で PINNED 化: Drive/URL 経由で render 資産一式を取得し全数 sha256 照合
+# （backbone checkpoint/config/spk_map/lang_map/dict の5点、vocoder
+# 配布archive+展開onnx、canon distribution zip+展開onnx4点+phonemes.txt
+# の計12点が VERIFIED_MATCH）、DiffSinger repo を pin commit
+# e2307b1080b00f3999702ce9017cfd75c7f862fe へ checkout・rev-parse 一致
+# 確認、RENDER_STACK_PIN/ANALYSIS_STACK_PIN 全9パッケージの実測バージョン
+# 一致（onnxruntime==1.29.0 を本 Memo で新規 pip install）を確認した。
+# 唯一の未達成: r6_gate_materials_2026-08-20.tar.gz（Drive fileId
+# 1D3R51BeseDYvFvk3voDg9oaSYvW-kxoA、有力候補として調査で特定済み）を
+# 実際に取得・展開（39ファイル全数 sha256 台帳化）したが、acoustic
+# export companions（acoustic.onnx/dsconfig.yaml/acoustic_phonemes_json/
+# speaker_embed(ritsu)）はいずれも含まれていなかった（MISS、Design Memo
+# Risk 節が事前規定した fail-closed 分岐どおり——事実を記録して停止し、
+# export 再実行や代替調達には進んでいない。再export は
+# torch/lightning/onnx/onnxsim を要し本 Memo の Allowed Dependencies
+# 範囲外）。tar 内 gate_synth_summary.json（out_ritsu 等4話者分）が
+# これら4点の実行時 hash を独立に記録しており、repo 側 pin と全数一致
+# することも確認した（間接的 provenance、pin の代替にはしない）。
+# pjs/user speaker embedding は同 summary から候補 sha256 を実測記録した
+# が pin 化していない（User 裁定待ち、manifest
+# `speaker_embeddings_unpinned_candidates` 節）。本欄が PINNED であること
+# の claim scope は manifest 自身の `claim_scope` 節が正——ファイルの
+# バイト同一性と、文書内で「確定」と記した節（render_asset_ledger の
+# VERIFIED_MATCH 12件・python_dependency_pins 9件・diffsinger commit・
+# tar.gz 全数展開結果そのもの）の確定のみを主張し、acoustic export
+# companions の取得・pjs/user emb の確定・smoke render の実施・CPU 予算
+# 実測のいずれも主張しない（`acoustic_export_companions`/
+# `speaker_embeddings_unpinned_candidates`/`smoke_render`/
+# `budget_estimate` の各 status が正直にそれを示す）。詳細は
+# `HARNESS1_PROVISION_RECORD.md` を正とする。
+#
+# 〔履歴: 旧 PENDING 理由——
+# Backbone checkpoint 本体は backbone_checkpoint_sha として PINNED 済み。
+# backbone_runtime_bundle_sha も、RUN9 が今後の render に使用する commit
+# の前方宣言 `run9_render_code_commit`（status: DECLARED_FOR_RUN9）の
+# 確定を根拠に PINNED 済み（bundle 内 `render_code_commit` は RUN6 の
+# 歴史的 export provenance record として INFERRED_UNCONFIRMED のまま
+# ——歴史的事実は遡って attest しない、2026-08-25 User 追加裁定①。
+# 両欄は独立であり、下記参照）。VG-L0 学習ハーネス自体の依存関係 pin
+# （Python パッケージ・PyTorch 等のバージョン固定）が未確定のため、
+# 本欄全体としてはまだ PENDING だった〕
 dependency_pins_sha:
-  value: null
-  status: PENDING
-  reason: >-
-    Backbone checkpoint 本体は backbone_checkpoint_sha として PINNED 済み。
-    backbone_runtime_bundle_sha も、RUN9 が今後の render に使用する commit
-    の前方宣言 `run9_render_code_commit`（status: DECLARED_FOR_RUN9）の
-    確定を根拠に PINNED 済み（bundle 内 `render_code_commit` は RUN6 の
-    歴史的 export provenance record として INFERRED_UNCONFIRMED のまま
-    ——歴史的事実は遡って attest しない、2026-08-25 User 追加裁定①。
-    両欄は独立であり、下記参照）。VG-L0 学習ハーネス自体の依存関係 pin
-    （Python パッケージ・PyTorch 等のバージョン固定）が未確定のため、
-    本欄全体としてはまだ PENDING。
+  value: "3392656474b4538e9ed05bfda0d57bc7845bcca3cfa20ffaacdaa94b5fb695e1"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/dependency_pins_manifest.json
 
+# RUN9-L0-HARNESS-1（2026-08-26）追記: PINNED 化を試みたが見送った。
+# 見送り理由は「実行環境が非現実的だった」ではなく「実測そのものが
+# できなかった」——決定論 smoke render（gate_synth.py --speaker ritsu）
+# には acoustic.onnx 等 acoustic export companions 4点が必須だが、有力
+# 候補だった r6_gate_materials.tar.gz にこれらが含まれていなかった
+# （dependency_pins_manifest.json `acoustic_export_companions` 節、
+# MISS）。fail-closed 原則（Design Memo Risk 節）に従い再export・代替
+# 調達には進んでいないため、CPU render 1件あたりの実測秒が存在しない。
+# 実測なしに「現実的/非現実的」を判定すると数字を捏造することになる
+# ため、本欄は PENDING を維持する（`dependency_pins_manifest.json`
+# `budget_estimate`/`smoke_render` 節に判断材料を記録済み——過去の GPU
+# 環境実測 3.7〜7.6秒/件（results_s7/probe_0b_groups/run6_ritsu.json）
+# は参考値のみで pin/見積りの根拠にしない）。acoustic export companions
+# が別途取得できた後、smoke render を再試行して実測を得るのが次の
+# ブロッカー解消経路（HARNESS-2 以降への引き継ぎ）。
 execution_profile_sha:
   value: null
   status: PENDING
-  reason: 学習実行環境（GPU / hardware profile）が未選定。
+  reason: >-
+    学習実行環境（GPU / hardware profile）が未選定。加えて
+    RUN9-L0-HARNESS-1（2026-08-26）で判明: CPU render 実測時間が
+    acoustic export companions 未取得のため得られず、予算現実性の判定
+    材料自体が存在しない（上記コメント参照）。
 
 # --- seed_policy_sha: inputs/seed_policy_manifest.json の実バイト sha256
 # （design_doc_sha256 と同一のファイル実バイト規約 —

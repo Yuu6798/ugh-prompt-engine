@@ -894,15 +894,37 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   `dataset_manifest_sha`/`dataset_row_order_sha` を含む pre-run 必須12欄が
   PENDING（optional 込み総 PENDING 13欄）だったが、RUN9-L0-PIN-2
   （2026-08-26）で dataset_manifest_sha/dataset_row_order_sha の2欄が
-  PINNED 化され、残 PENDING は下記のとおり10欄（総11欄）へ減少した——
-  下記「解消済み（RUN9-L0-PIN-2, 2026-08-26）」節参照〕（`attempt_id`/
-  `repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
+  PINNED 化され、残 PENDING は pre-run 必須10欄（総 PENDING 11欄）へ
+  減少した。続けて RUN9-L0-HARNESS-1（2026-08-26）で `dependency_pins_sha`
+  が PINNED 化され、残 PENDING は下記のとおり pre-run 必須9欄
+  （総 PENDING 10欄）へ減少した——下記「解消済み
+  （RUN9-L0-HARNESS-1, 2026-08-26）」節参照〕（`attempt_id`/
+  `repository_commit_sha`/`config_sha`/
   `execution_profile_sha`/`expected_speaker_map_sha`/
   `education_technique_lesson_manifest_sha`/`learning_recipe_sha`/
-  `measurement_spec_sha`/`hypothesis_algebra_sha` の pre-run 必須10欄が
+  `measurement_spec_sha`/`hypothesis_algebra_sha` の pre-run 必須9欄が
   引き続き PENDING のため（optional の `human_evaluation_protocol_sha` を
-  含めると総 PENDING 11欄）——`tests/test_run9_contract.py` の回帰テストで
+  含めると総 PENDING 10欄）——`tests/test_run9_contract.py` の回帰テストで
   機械確認済み）。
+
+**解消済み（RUN9-L0-HARNESS-1, 2026-08-26）**:
+- ~~`dependency_pins_sha` 未 pin~~ →
+  [`inputs/dependency_pins_manifest.json`](./inputs/dependency_pins_manifest.json)
+  （schema `run9-dependency-pins/1.0`）を新設した——VG-L0 render 資産
+  provisioning の実測台帳（Drive/URL 取得資産12点の sha256 全数
+  VERIFIED_MATCH・DiffSinger commit 一致・Python 依存 RENDER_STACK_PIN/
+  ANALYSIS_STACK_PIN 全9パッケージ実測一致）。唯一の未達成は
+  `r6_gate_materials_2026-08-20.tar.gz` の acoustic export companions
+  4点（acoustic.onnx/dsconfig.yaml/acoustic_phonemes_json/
+  speaker_embed(ritsu)）——展開した39ファイル全数を検査したが含まれて
+  おらず（MISS、`acoustic_export_companions` 節）、fail-closed 原則に
+  従い再export・代替調達へは進んでいない。pjs/user speaker embedding は
+  候補 sha256 のみ記録し pin 化していない（`speaker_embeddings_
+  unpinned_candidates` 節、User 裁定待ち）。決定論 smoke render・CPU
+  render 予算見積りはいずれも acoustic export companions 未取得により
+  `BLOCKED`（`smoke_render`/`budget_estimate` 節、数値を捏造しない）。
+  詳細な取得経路・全照合結果・tar.gz 全数展開ログは
+  [`HARNESS1_PROVISION_RECORD.md`](./HARNESS1_PROVISION_RECORD.md) を正とする。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

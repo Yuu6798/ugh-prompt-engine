@@ -1,0 +1,503 @@
+{
+  "acoustic_export_companions": {
+    "attempted_source": {
+      "acquisition_method": "gdown",
+      "actual_sha256": "bc6c6574582168e589c3e52784ae60bf2315af63777a08c9c39916778d1096cd",
+      "actual_size_bytes": 26206427,
+      "description": "r6_gate_materials_2026-08-20.tar.gz — インベントリ調査（scratchpad/harness_assets_inventory.md §2-3）が「acousticexport companions を内包する可能性が高いが未実証」とした唯一の有力候補。実際に取得・展開して検証した。",
+      "drive_file_id": "1D3R51BeseDYvFvk3voDg9oaSYvW-kxoA"
+    },
+    "expected_items": [
+      {
+        "expected_sha256": "aaaff716db116cf3b78b981d4bf5fa6e6ab414988995b25ba43ddc47f0f38706",
+        "file": "onnx_gate_40000/acoustic.onnx",
+        "logical_name": "acoustic_onnx"
+      },
+      {
+        "expected_sha256": "a7da75f5c403bd347f108ded6ea6925df6260dae83cf72877c5b19018443899c",
+        "file": "onnx_gate_40000/dsconfig.yaml",
+        "logical_name": "acoustic_dsconfig_yaml"
+      },
+      {
+        "expected_sha256": "5071e1654c4572d90011a49959b97467b6bed5ecf08c203b71b9aff4b02807a8",
+        "file": "onnx_gate_40000/s5_run6_acoustic_v1.phonemes.json",
+        "logical_name": "acoustic_phonemes_json"
+      },
+      {
+        "expected_sha256": "ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c",
+        "file": "onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb",
+        "logical_name": "speaker_embed_ritsu"
+      }
+    ],
+    "fail_closed_disposition": "Design Memo RUN9-L0-HARNESS-1 の Risk 節が事前に規定した分岐（tar.gz の中身がハズレの場合は事実を記録して停止し報告する。export 再実行や代替調達には進まない）に従い、本 harness では acoustic export companions の再取得・再export を試みない。再export には DiffSinger のscripts/export.py 実行に torch/lightning/onnx/onnxsim（numpy<2 隔離 venv）が必要であり、本 Memo の AllowedDependencies（onnxruntime==1.29.0 のみ）の範囲外でもある——技術的にも許可された依存の範囲内では実施不能。",
+    "indirect_provenance_found": {
+      "also_cross_confirms": {
+        "canon_linguistic_onnx": "match",
+        "canon_phonemes_txt": "match",
+        "canon_variance_dur_onnx": "match",
+        "canon_variance_pitch_onnx": "match",
+        "diffsinger_repo_git_head (out_ritsu only)": "match (e2307b1080b00f3999702ce9017cfd75c7f862fe)",
+        "vocoder_onnx": "match"
+      },
+      "checked_against": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/backbone_runtime_bundle.json#run9_runtime_inputs.canon_model_assets.acoustic_export_companions",
+      "description": "tar 内 out_ritsu/step_40000/gate_synth_summary.json のinput_sha256 節が、acoustic export companions 4点のsha256 をそのものとして記録している（gate_synth.py実行時に実際に読み込んだバイト列の single-read hash —gate_synth.py の provenance 機構、tar 内input_sha256_provenance_method 節参照）。これはファイル実体ではなく実行時ログの記録に過ぎないが、repo 側 backbone_runtime_bundle.json の pin 値と全数一致することを独立ソースとして確認した（照合結果のみを記録、pin の代替にはしない）。",
+      "matched_all_four_companions": true
+    },
+    "run_execution_manifest_search": {
+      "description": "run6 Drive フォルダの run_execution_manifest.json（fileId 1J6LI1SlIGrkfb7FvUeLDs6S_y3hoGRs6）を検索したが、checkpoint_hashes / dataset_hashes / material_hashes /tensorboard_hashes のいずれにも acoustic.onnx やspeaker embedding の hash は記録されていなかった（この manifest は run6 の学習実行記録であり、後日のacoustic export 成果物は範囲外）。",
+      "found": false
+    },
+    "status": "NOT_OBTAINED_TARBALL_MISS",
+    "verdict": "MISS — 展開した39ファイル（tar_gz_full_member_ledger 参照）のいずれも acoustic.onnx / dsconfig.yaml / s5_run6_acoustic_v1.phonemes.json / *.emb ではない。内容は gate_synth.py の実行成果物（wav 出力・gate_synth_summary.json・ラウドネス正規化コピー・ABC 試聴セット）であり、acoustic export companions 自体は含まれていない。"
+  },
+  "budget_estimate": {
+    "reason": "smoke_render が BLOCKED のため、render 1件あたりの実測秒が存在しない。実測なしに『現実的/非現実的』を判定すると数字を捏造することになるため判定を行わない。過去記録（voice_genesis/foundry/results_s7/probe_0b_groups/run6_ritsu.json）の render_elapsed_sec 3.7〜7.6秒/件は当時の実行環境（RunPod GPU pod, RTX 3090）での計測である可能性が高く（当時の実行プロバイダは記録に明記なし）、本 CPU-only 環境の実測値としては使えない——参考値としてのみ記載し、pin/見積りの根拠にはしない。",
+    "reference_only_caveat": "実行プロバイダ(CPU/GPU)がこの記録自体に明記されていない。当時の環境(RunPod RTX 3090)からGPU実行だった可能性が高い。",
+    "reference_only_prior_gpu_measurement_sec_per_item": [
+      3.7,
+      7.6
+    ],
+    "reference_only_source": "voice_genesis/foundry/results_s7/probe_0b_groups/run6_ritsu.json",
+    "status": "BLOCKED"
+  },
+  "claim_scope": {
+    "rationale": "本 repo の既存 pin 群（backbone_runtime_bundle_sha 等）が確立した規約 — 『manifest が PINNED であることはファイル自身のバイト同一性と、文書内で明示的に確定と記した節の確定のみを主張し、文書に含まれるが確定していない節はstatus で正直に示す』— をそのまま踏襲する。",
+    "statement": "本 manifest が `dependency_pins_sha`（RUN9_CONTRACT.yaml）の PINNED 判定を通じて主張するのは (a) 本ファイルのバイト同一性と (b) 以下の各節に記載した実測値・照合結果・欠落事実そのものの正確な記録、の2点のみである。**主張しないこと**: acoustic export companions（acoustic.onnx / dsconfig.yaml / acoustic_phonemes_json / ritsu.emb）が取得済みであること（`acoustic_export_companions` 節が示すとおり未取得のまま）、pjs/user speaker embedding が正しい値として確定していること（`speaker_embeddings_unpinned_candidates` 節の値は候補であり pin ではない）、決定論 smoke render が実行されたこと（`smoke_render` 節の status は BLOCKED）、CPU render 予算見積りが実測に基づくこと（`budget_estimate` 節の status は BLOCKED）。"
+  },
+  "diffsinger_render_code_commit": {
+    "clone_method": "git clone https://github.com/openvpi/DiffSinger.git && git checkout e2307b1",
+    "cloned_commit_full": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+    "pin_commit_full": "e2307b1080b00f3999702ce9017cfd75c7f862fe",
+    "pin_source": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/backbone_runtime_bundle.json#run9_runtime_inputs.run9_render_code_commit (status DECLARED_FOR_RUN9)",
+    "repo": "openvpi/DiffSinger",
+    "status": "VERIFIED_MATCH"
+  },
+  "generated_at": "2026-08-26",
+  "generation_note": "RUN9-L0-HARNESS-1（Design Memo, Claude 完結ルート、User 裁定 2026-08-26「必要な素材はドライブにあるのでClaudeで完結できるはずだ。Claudeルートで作成して」）の provisioning 実行で得た実測台帳。取得は provision.sh 前例（.part staging -> sha256一致でのみ確定名へリネームする冪等 fail-closed 方式）を踏襲した。workdir は repo 外の session scratchpad (scratchpad/harness_work/) — 実資産バイナリは本 repo に一切コミットしていない。",
+  "python_dependency_pins": [
+    {
+      "observed_version": "3.11.15",
+      "package": "python",
+      "pin_version": "3.11.15",
+      "status": "MATCH"
+    },
+    {
+      "observed_version": "2.4.6",
+      "package": "numpy",
+      "pin_version": "2.4.6",
+      "status": "MATCH"
+    },
+    {
+      "observed_version": "0.11.0",
+      "package": "librosa",
+      "pin_version": "0.11.0",
+      "status": "MATCH"
+    },
+    {
+      "observed_version": "0.66.0",
+      "package": "numba",
+      "pin_version": "0.66.0",
+      "status": "MATCH"
+    },
+    {
+      "observed_version": "1.17.1",
+      "package": "scipy",
+      "pin_version": "1.17.1",
+      "status": "MATCH"
+    },
+    {
+      "observed_version": "0.14.0",
+      "package": "soundfile",
+      "pin_version": "0.14.0",
+      "status": "MATCH"
+    },
+    {
+      "observed_version": "6.0.1",
+      "package": "PyYAML",
+      "pin_version": "6.0.1",
+      "status": "MATCH"
+    },
+    {
+      "observed_version": "0.2.0",
+      "package": "pyloudnorm",
+      "pin_version": "0.2.0",
+      "status": "MATCH"
+    },
+    {
+      "installed_by_this_memo": true,
+      "note": "pip install onnxruntime==1.29.0（pyproject.toml へは追加しない — RENDER_STACK_PIN 専用スタック、provision.sh §4/§5 逐語）。",
+      "observed_version": "1.29.0",
+      "package": "onnxruntime",
+      "pin_version": "1.29.0",
+      "status": "MATCH"
+    }
+  ],
+  "render_asset_ledger": [
+    {
+      "acquisition": {
+        "drive_file_id": "1Tm0dxUl_mv6A8-SNO1C72zsdAO8oNHzo",
+        "method": "gdown"
+      },
+      "actual_sha256": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+      "actual_size_bytes": 556013282,
+      "expected_sha256": "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a",
+      "file": "phase_b/checkpoints/model_ckpt_steps_40000.ckpt",
+      "logical_name": "backbone_checkpoint",
+      "status": "VERIFIED_MATCH"
+    },
+    {
+      "acquisition": {
+        "drive_file_id": "1xeo_m5X3LrcDdPlpsc6sL8kAxjUN_IwQ",
+        "method": "gdown"
+      },
+      "actual_sha256": "3722072045060e316ec9fee3f307412eceacf617d3b3ece7adfcbefa0f9df9d9",
+      "actual_size_bytes": 4521,
+      "expected_sha256": "3722072045060e316ec9fee3f307412eceacf617d3b3ece7adfcbefa0f9df9d9",
+      "file": "run6_bundle/config.yaml",
+      "logical_name": "backbone_config_yaml",
+      "status": "VERIFIED_MATCH"
+    },
+    {
+      "acquisition": {
+        "drive_file_id": "1FaS83o-QJmjwmPRYzKUyp9FxX0_dYS7K",
+        "method": "gdown"
+      },
+      "actual_sha256": "da9748fabfa721a4a789224b50fd52743628fd2396602852f2dc25c54f2e3803",
+      "actual_size_bytes": 47,
+      "expected_sha256": "da9748fabfa721a4a789224b50fd52743628fd2396602852f2dc25c54f2e3803",
+      "file": "run6_bundle/spk_map.json",
+      "logical_name": "backbone_spk_map_json",
+      "status": "VERIFIED_MATCH"
+    },
+    {
+      "acquisition": {
+        "drive_file_id": "1oGfu5qS-Ll0EsgzMCZZWqXCLBamz5wWH",
+        "method": "gdown"
+      },
+      "actual_sha256": "2a6a227ee65a49f5c30e848a4b62c5cc1817926bbdab373228e6302d2c794953",
+      "actual_size_bytes": 9,
+      "expected_sha256": "2a6a227ee65a49f5c30e848a4b62c5cc1817926bbdab373228e6302d2c794953",
+      "file": "run6_bundle/lang_map.json",
+      "logical_name": "backbone_lang_map_json",
+      "status": "VERIFIED_MATCH"
+    },
+    {
+      "acquisition": {
+        "drive_file_id": "1zpxVqbN8SiLqp9qA0WcWfrg0s0C55RhP",
+        "method": "gdown"
+      },
+      "actual_sha256": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
+      "actual_size_bytes": 204,
+      "expected_sha256": "b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef",
+      "file": "run6_bundle/dictionary-ja.txt",
+      "logical_name": "backbone_dictionary_ja_txt",
+      "status": "VERIFIED_MATCH"
+    },
+    {
+      "acquisition": {
+        "method": "curl -L",
+        "url": "https://github.com/xunmengshe/OpenUtau/releases/download/0.0.0.0/nsf_hifigan.oudep"
+      },
+      "actual_sha256": "e22f84009804da2e5916e7a2000f4c30278148796376e49368ec5ff8f9f58830",
+      "actual_size_bytes": 52847838,
+      "expected_sha256": "e22f84009804da2e5916e7a2000f4c30278148796376e49368ec5ff8f9f58830",
+      "file": "nsf_hifigan.oudep",
+      "logical_name": "vocoder_source_archive",
+      "status": "VERIFIED_MATCH"
+    },
+    {
+      "acquisition": {
+        "method": "zip extraction of vocoder_source_archive"
+      },
+      "actual_sha256": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
+      "actual_size_bytes": null,
+      "expected_sha256": "a3e26672a8c655e3faf65f31cb4339a7fbca7758ba86be9af89e03dced7c3fa4",
+      "file": "vocoder_onnx/nsf_hifigan.onnx (extracted from nsf_hifigan.oudep)",
+      "logical_name": "vocoder_runtime_onnx",
+      "status": "VERIFIED_MATCH"
+    },
+    {
+      "acquisition": {
+        "method": "curl -L",
+        "url": "https://www.canon-voice.com/voice/NamineRitsu_DiffSinger.zip"
+      },
+      "actual_sha256": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
+      "actual_size_bytes": 421940274,
+      "expected_sha256": "5c7b8c328180ea2971f71d89b3a675b2adfc91772664ae28cbb5915385f42530",
+      "file": "NamineRitsu_DiffSinger.zip",
+      "logical_name": "canon_distribution_zip",
+      "status": "VERIFIED_MATCH"
+    },
+    {
+      "acquisition": {
+        "method": "zip extraction of canon_distribution_zip"
+      },
+      "actual_sha256": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+      "actual_size_bytes": null,
+      "expected_sha256": "1c9ec9f67277a2ba4b9c3f815150251ed7d87ad54eed3e22f8d85dbda74705b6",
+      "file": "NamineRitsu_DiffSinger/linguistic.onnx",
+      "logical_name": "canon_linguistic_onnx",
+      "status": "VERIFIED_MATCH"
+    },
+    {
+      "acquisition": {
+        "method": "zip extraction of canon_distribution_zip"
+      },
+      "actual_sha256": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+      "actual_size_bytes": null,
+      "expected_sha256": "11bbfad5c489a57e05bd6ed7e239b3fce913a6b644d9281ae152126563a3d288",
+      "file": "NamineRitsu_DiffSinger/dsdur/dur.onnx",
+      "logical_name": "canon_variance_duration_onnx",
+      "status": "VERIFIED_MATCH"
+    },
+    {
+      "acquisition": {
+        "method": "zip extraction of canon_distribution_zip"
+      },
+      "actual_sha256": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+      "actual_size_bytes": null,
+      "expected_sha256": "e361ad13053c4b49331a44296148bb33396092f57ca477ceed60e59cdbdfb3b9",
+      "file": "NamineRitsu_DiffSinger/dspitch/pitch.onnx",
+      "logical_name": "canon_variance_pitch_onnx",
+      "status": "VERIFIED_MATCH"
+    },
+    {
+      "acquisition": {
+        "method": "zip extraction of canon_distribution_zip"
+      },
+      "actual_sha256": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb",
+      "actual_size_bytes": null,
+      "expected_sha256": "1489af3c4806ad2cfc10e663ec27a1bf7c6bf0d6f9a047263948c5cbe36eebfb",
+      "file": "NamineRitsu_DiffSinger/phonemes.txt",
+      "logical_name": "canon_phonemes_txt",
+      "status": "VERIFIED_MATCH"
+    }
+  ],
+  "schema": "run9-dependency-pins/1.0",
+  "smoke_render": {
+    "blocked_by": "acoustic_export_companions.status == NOT_OBTAINED_TARBALL_MISS",
+    "not_attempted_reason_is_missing_input_not_failure": true,
+    "reason": "gate_synth.py の --speaker ritsu render には acoustic.onnx（+ dsconfig.yaml / acoustic_phonemes_json / speaker_embedのいずれか一致する形式）が必須（gate_synth.py --acoustic-dir経路）。tar.gz から取得できず、また新規 export はDiffSinger scripts/export.py 経由で torch を要し（provision.sh §6 の隔離 export venv 相当）、本 Memo のAllowed Dependencies（onnxruntime==1.29.0 のみ）の範囲外のため実施しない。fail-closed: 決定論確認・CPU実測時間のいずれも本 Memo では取得できなかった（数値を捏造しない）。",
+    "status": "BLOCKED"
+  },
+  "speaker_embeddings_unpinned_candidates": {
+    "d3synth_reference_only": {
+      "candidate_sha256": "10c3964c57a69edb072bd7c9aec36dc7e3b06e06469c5da60332bec793c1dc22",
+      "note": "RUN9 の対象話者ではないが tar.gz に同型記録があったため参考記録する（af0/pjs/user/ritsu のいずれでもない合成教師）。",
+      "source": "tar_gz:out_d3synth/step_40000/gate_synth_summary.json#input_sha256.speaker_embed",
+      "status": "UNPINNED_CANDIDATE_NOT_A_RUN9_FOUNDER"
+    },
+    "note": "repo に sha256 pin が存在しない話者 embedding。以下はr6_gate_materials tar.gz 内 gate_synth_summary.json のinput_sha256.speaker_embed から得た実測 candidate 値（gate_synth.py 実行時の single-read hash 記録）であり、**pin ではない**（本 manifest はこれらを PINNED として扱わない — User 裁定待ち）。実体の .emb ファイルはtar.gz にもDriveの他探索にも見つかっていない（acoustic_export_companions 節参照、speaker_embed_ritsuも同様に未取得）。",
+    "pjs": {
+      "candidate_sha256": "074e09b390c207a7cf98105db549e1006d035a797d57f73e103e848bb3216015",
+      "candidate_sha256_first16": "074e09b390c207a7",
+      "file": "onnx_gate_40000/s5_run6_acoustic_v1.pjs.emb (未取得)",
+      "source": "tar_gz:out_pjs/step_40000/gate_synth_summary.json#input_sha256.speaker_embed",
+      "status": "UNPINNED_CANDIDATE"
+    },
+    "user": {
+      "candidate_sha256": "588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0",
+      "candidate_sha256_first16": "588913b74d6c16e0",
+      "file": "onnx_gate_40000/s5_run6_acoustic_v1.user.emb (未取得)",
+      "source": "tar_gz:out_user/step_40000/gate_synth_summary.json#input_sha256.speaker_embed",
+      "status": "UNPINNED_CANDIDATE"
+    }
+  },
+  "tar_gz_full_member_ledger": [
+    {
+      "path": "deliver/listen/loudness_report.json",
+      "sha256": "99f0e6e6b3387d579b4e9490bd9d2ed97991a374b44693180735221aebbf1ee9",
+      "size_bytes": 1125
+    },
+    {
+      "path": "deliver/listen/run6_gate_sakura_d3synth.lufs-22.5.wav",
+      "sha256": "197fda6d750576a88508d812e7aa638539e452062cac6c8155079fd3c876179e",
+      "size_bytes": 2079788
+    },
+    {
+      "path": "deliver/listen/run6_gate_sakura_pjs.lufs-22.5.wav",
+      "sha256": "a487d82365f091bd5ca1091aaf2aeab1f291f40837ca15a5230c91ed71ca4a32",
+      "size_bytes": 2079788
+    },
+    {
+      "path": "deliver/listen/run6_gate_sakura_ritsu.lufs-22.5.wav",
+      "sha256": "90c1f8c228a27de6fef34b2077d44432cbe05bbf2f2a81e9e2667bd6a55cc9bc",
+      "size_bytes": 2079788
+    },
+    {
+      "path": "deliver/listen/run6_gate_sakura_user.lufs-22.5.wav",
+      "sha256": "50db0e2d4777196b8878b4319927afee2b3290685eebf287aedf5c1f08c546d6",
+      "size_bytes": 2079788
+    },
+    {
+      "path": "deliver/listen/run6_gate_umi_d3synth.lufs-22.5.wav",
+      "sha256": "581252948371c5dba9ed8e8f1a9d3abdda4dbc22d71960cd96eeffe40609756f",
+      "size_bytes": 980012
+    },
+    {
+      "path": "deliver/listen/run6_gate_umi_pjs.lufs-22.5.wav",
+      "sha256": "bc971315bc073c4ab266eb20850f1fb0bd92ce5bb327dc4e6c3bfe348dbc078f",
+      "size_bytes": 980012
+    },
+    {
+      "path": "deliver/listen/run6_gate_umi_ritsu.lufs-22.5.wav",
+      "sha256": "8d5754f825f829879149031219e22a02c31f75ea2afd6b97939bdc6876f81243",
+      "size_bytes": 980012
+    },
+    {
+      "path": "deliver/listen/run6_gate_umi_user.lufs-22.5.wav",
+      "sha256": "3acd1a64418af685a6413bcdeadb89937005ad3317eab8f1a3150ee6d7dc1ab4",
+      "size_bytes": 980012
+    },
+    {
+      "path": "deliver/raw/run6_gate_sakura_d3synth.wav",
+      "sha256": "d964ac526173fd4db98f47c3a05cccd2f62a6d2586614b12c7a7efa4da7aae46",
+      "size_bytes": 2079788
+    },
+    {
+      "path": "deliver/raw/run6_gate_sakura_pjs.wav",
+      "sha256": "b918739f5b8e5779aaa531a7d8611cd664df8ec311cac8681c7e6ce147abd6ab",
+      "size_bytes": 2079788
+    },
+    {
+      "path": "deliver/raw/run6_gate_sakura_ritsu.wav",
+      "sha256": "374abb006cc39c1950f6a1d6b8beef41a99d9ae48a457b63f8710c45753363d6",
+      "size_bytes": 2079788
+    },
+    {
+      "path": "deliver/raw/run6_gate_sakura_user.wav",
+      "sha256": "4befe8626d3c45a49a1f7b24130774459095be40e5cb6a8e6f0e6381159e7419",
+      "size_bytes": 2079788
+    },
+    {
+      "path": "deliver/raw/run6_gate_umi_d3synth.wav",
+      "sha256": "ad5c9dfcc3d2485d29b5ab7eababfad182088f09178c0c77e77eadf3a9dfbb7f",
+      "size_bytes": 980012
+    },
+    {
+      "path": "deliver/raw/run6_gate_umi_pjs.wav",
+      "sha256": "a58ac64cfc2f242b85e14a4037099d8619c51144a6ec7a98c2c63cf4e4d31a56",
+      "size_bytes": 980012
+    },
+    {
+      "path": "deliver/raw/run6_gate_umi_ritsu.wav",
+      "sha256": "144e05156760fd29ed0cb861ed88e9a9ca4c29e5fe14dbd24b38174aef94621a",
+      "size_bytes": 980012
+    },
+    {
+      "path": "deliver/raw/run6_gate_umi_user.wav",
+      "sha256": "1c1207735f8520c68cbe08d579913a40d2a9cff09ab0ba7a3c13edeeff7f9460",
+      "size_bytes": 980012
+    },
+    {
+      "path": "deliver_abc/abc_manifest.json",
+      "sha256": "80c3a949ea0190352b29f6212e297479cec7554a03311cb62b9bf456efac20c7",
+      "size_bytes": 1619
+    },
+    {
+      "path": "deliver_abc/segA_pjs.wav",
+      "sha256": "716775277a7982f945677f889c9bc10e9718282d3ef765325f4c017171cbda4f",
+      "size_bytes": 441044
+    },
+    {
+      "path": "deliver_abc/segA_ritsu.wav",
+      "sha256": "30ba1d8662aa9af8316dc8d7c3d687dd7cf99817f728f96bc709a9e11c74f6b2",
+      "size_bytes": 441044
+    },
+    {
+      "path": "deliver_abc/segA_user.wav",
+      "sha256": "754670d4f28783d3de360632ee7ea1738c2326de1d64e08d8b1a904447f51279",
+      "size_bytes": 441044
+    },
+    {
+      "path": "deliver_abc/segB_pjs.wav",
+      "sha256": "35ecba852cf693f4d94f1efaf378b16583d3127752a74332e38a3a4953c1031b",
+      "size_bytes": 441044
+    },
+    {
+      "path": "deliver_abc/segB_ritsu.wav",
+      "sha256": "5c5469a67dc541a461a2afcc675d9074435cf02d4960281ea3acf7e0667320f6",
+      "size_bytes": 441044
+    },
+    {
+      "path": "deliver_abc/segB_user.wav",
+      "sha256": "25a89f154d269601977db849a639c1d8ef35d97a6e174c0675d58c1ce44e523a",
+      "size_bytes": 441044
+    },
+    {
+      "path": "deliver_abc/segC_pjs.wav",
+      "sha256": "5fc61d8f6502fe9d0cbbb706fe5e9fd56097fbb06c8de069f483946290354946",
+      "size_bytes": 441044
+    },
+    {
+      "path": "deliver_abc/segC_ritsu.wav",
+      "sha256": "9516e45ac9e4571159bd6cebb6dbfec80c03bf0914a4c5ff50912319180beed9",
+      "size_bytes": 441044
+    },
+    {
+      "path": "deliver_abc/segC_user.wav",
+      "sha256": "77ff96c727567e337ce94f7eaf16789723240e9b37850431d7602404747bb1c9",
+      "size_bytes": 441044
+    },
+    {
+      "path": "deliver_abc_concat/segA_ritsu-pjs-user.wav",
+      "sha256": "100e12868972eaf11aeb37d773621b0d82fb24d078c116580c2dc7123d6e3ed3",
+      "size_bytes": 1446520
+    },
+    {
+      "path": "deliver_abc_concat/segB_ritsu-pjs-user.wav",
+      "sha256": "c5133e9fd7bb93133590dba53d1c2b3688889b6a0950cb7cdbdc2c8b5f8ae7f8",
+      "size_bytes": 1446520
+    },
+    {
+      "path": "deliver_abc_concat/segC_ritsu-pjs-user.wav",
+      "sha256": "6db9a0c350a678519cdd532dd2ec747ddeb20088798ad307888337c3a95ab4b2",
+      "size_bytes": 1446520
+    },
+    {
+      "path": "make_abc_concat.py",
+      "sha256": "49cdaa901b527a53bd11eeed4c68637a3a36cd6fc626c65b90a8502c900e7d0f",
+      "size_bytes": 765
+    },
+    {
+      "path": "make_abc_set.py",
+      "sha256": "198409b151123910400a1ed67567c4cd3ad3ec3349298946f74f2f2b583eeb59",
+      "size_bytes": 2985
+    },
+    {
+      "path": "make_listen_copies.py",
+      "sha256": "8846febfa52c7531130e990d10a0827a141509af6b8c5c6b2ff5a1ea70e8cf9f",
+      "size_bytes": 1573
+    },
+    {
+      "path": "out_d3synth/step_40000/gate_synth_summary.json",
+      "sha256": "702ca31f2ddd08d8c2b5a27f5b70c18dfde3906ddf33dc02b40d582fcb008e73",
+      "size_bytes": 6785
+    },
+    {
+      "path": "out_pjs/step_40000/gate_synth_summary.json",
+      "sha256": "93cc39f44749d854994c173518917041be378861fa638cdff92ce29ea43c2809",
+      "size_bytes": 6757
+    },
+    {
+      "path": "out_ritsu/step_40000/gate_synth_summary.json",
+      "sha256": "a50907cb0ac02bc79382d5bf53cc9fc90c159268af5a02ec738690e25050e4e2",
+      "size_bytes": 7264
+    },
+    {
+      "path": "out_user/step_40000/gate_synth_summary.json",
+      "sha256": "ddd2f5fdf6097d61dabe9c03f61c35c43af88210605208dcf4f0c28aa3265e52",
+      "size_bytes": 6763
+    },
+    {
+      "path": "synth_rest.log",
+      "sha256": "76a327761203161483a7b43dbda333fd07c8de863d334de70a2a672609bfdac0",
+      "size_bytes": 2083
+    },
+    {
+      "path": "synth_ritsu.log",
+      "sha256": "811ec0e50ab83368bce525d34234699f85e4d722a9edcefd65dc125767ba54dc",
+      "size_bytes": 56192
+    }
+  ]
+}
