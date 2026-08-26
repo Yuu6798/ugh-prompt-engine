@@ -1121,7 +1121,15 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   smoke 実測記録との一致を確認済み、render code commit は smoke 実行時点
   の repo HEAD（一次記録 `gate_synth_summary.json#input_sha256.
   repo_git_head`）以降 `gate_synth.py` へ改変コミットが無いことを
-  sha256 一致で確認済み）。
+  sha256 一致で確認済み）。PR #327 第3巡指摘8対応（2026-08-26）:
+  `load_pinned_execution_profile_manifest()` へ render code（gate_synth.py
+  実体）の repo 静的 sha256 cross-check を追加し、live 環境
+  （Python/onnxruntime バージョン・provider）の照合は別関数
+  `verify_execution_profile_runtime()` へ分離した——**HARNESS-3 以降で
+  学習ハーネス/render 実行の run gate を配線する際は、render を開始する
+  前に必ず `verify_execution_profile_runtime()` を呼ぶこと**（load 時
+  ではなく実行時照合である理由は CI マトリクス環境との分離、詳細は
+  `RUN9_CONTRACT.yaml#execution_profile_sha` コメント参照）。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

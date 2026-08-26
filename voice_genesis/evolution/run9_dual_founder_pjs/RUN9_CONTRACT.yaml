@@ -633,6 +633,21 @@ config_sha:
 # 更新）。実測済みの sha256（本改訂後の実バイト、第3世代）は情報記録
 # として保持する:
 #   "bb2313044b3d5f9177bad4e729050a61c99e80224ad8b45c66acf515583f9f14"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第3巡指摘7、P2、採用
+# ——台帳の内部矛盾: acoustic_export_companions を再export取得済み
+# （`OBTAINED_VIA_REEXPORT`）へ遷移させた後も、
+# `speaker_embeddings_unpinned_candidates` の `note` と pjs/user の
+# `file` ラベルが「未取得」と言い続けており、同一 manifest 内で自己矛盾
+# していた。歴史的な tar.gz/Drive 回収は MISS（この事実は不変）だが、
+# 再export により derived artifact としては取得済み（byte は歴史 pin/
+# candidate 値と一致 = replay evidence）という二層区別が明示されていな
+# かった。`note`/pjs.file/user.file の文言を二層区別の記述へ改訂した
+# （歴史的 MISS の記録は削除していない、正式 PINNED 昇格条件が未充足の
+# ままであることも変更していない）。pin 欄自体は PENDING のまま、repin
+# ではなく情報記録の更新。実測済みの sha256（本改訂後の実バイト、第4
+# 世代）は情報記録として保持する:
+#   "10073d5c32e9c372fbefd36d88b3e1abfee66540fa1f89c808cc34ee9488f3ec"
 dependency_pins_sha:
   value: null
   status: PENDING
@@ -806,6 +821,24 @@ reexport_manifest_sha:
 # 本ファイルは CONTRACT_PIN_FIELDS へ追加しない（裁定文書自体は「値の
 # 転記元の証跡」であって RUN9 の実行前提条件そのものではないため——
 # reexport_manifest_sha の前例と同じ扱い）。
+#
+# 2026-08-26 loader/verify 強化（PR #327 Codex レビュー第3巡指摘8、P1、
+# 採用——profile pin が実実行入力に結合していなかった穴。manifest 実体は
+# 無変更、run9_schema.py 側のみ強化）: 旧 `load_pinned_execution_profile_
+# manifest()` は manifest と裁定 txt しか読まず、live runtime も render
+# code 実体も照合しないため、異なる環境/改変済み gate_synth.py の下でも
+# pin 済み profile がそのまま受理され得た。(a) loader へ repo 静的な
+# render code 照合を追加した——`additional_measurements.render_code_
+# commit.file_sha256` を `voice_genesis/foundry/s1_gate/gate_synth.py` の
+# 実バイト sha256 と cross-check し、gate_synth.py が pin 後に改変されて
+# いれば fail-closed で拒否する（CI マトリクスでも決定論的に成立する
+# repo 内容のみの照合）。(b) live 環境照合（Python/onnxruntime バージョン
+# ・利用可能 provider・選択 provider 引数）は loader へ入れない——CI が
+# Python 3.11/3.12 マトリクスで走るため、load 時に live Python を照合
+# すると正当な CI が構造的に落ちる。代わりに新設
+# `run9_schema.verify_execution_profile_runtime(manifest)` へ分離した。
+# **RUN9 実行段（学習ハーネス/render 実行の run gate）は render を開始
+# する前に本関数を必ず呼ぶこと**——HARNESS-3 配線点として登録する。
 execution_profile_sha:
   value: "200c975967a7b34aa55d9e89a8c59ace2be850e5fd1d93a4ba4a7dbed5f06d34"
   status: PINNED

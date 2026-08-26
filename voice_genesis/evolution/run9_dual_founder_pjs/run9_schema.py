@@ -14108,11 +14108,17 @@ def validate_execution_profile_manifest(data: Mapping[str, Any]) -> None:
         `additional_measurements.onnxruntime_selected_providers.value` との
         cross-check は本関数内で行う——両者が食い違えば拒否する）。
         `onnxruntime_selected_providers.value` は
-        `onnxruntime_available_providers.value` の**真部分集合を含む部分
-        集合**であることを要求し、かつ両者が完全に同一集合になることを
-        拒否する（"available の列挙と selected を混同しない" の機械化——
-        selected を available のコピーとして書いてしまう事故を構造的に
-        防ぐ）。
+        `onnxruntime_available_providers.value` の**部分集合**であること
+        を要求する（PR #327 レビュー第3巡指摘9対応、2026-08-26: 旧実装は
+        両者が完全に同一集合になることも拒否する**真**部分集合要件だった
+        が、これは available == ["CPUExecutionProvider"] のみという正当な
+        CPU-only 環境の profile を構造的に拒否し、再pin を阻害していた。
+        "available の列挙と selected を混同しない" は「両者は独立に実測・
+        記録された別概念である」ことの要求であり、`onnxruntime_available_
+        providers`/`onnxruntime_selected_providers` が独立した
+        measurement item として各々の provenance（method/source_file 等）
+        を持つ shape と、selected が `EXECPROFILE_ADJUDICATED_RUNTIME`
+        固定値であることの強制とで担保する——値の偶然の一致は禁止しない）。
     (c) `identity_semantics.provider_fixation_rules` はちょうど4件の文字列
         で、各要素が対応する `_EXECPROFILE_PROVIDER_RULE_MARKERS` の
         マーカー文言を含むこと。
@@ -14355,11 +14361,22 @@ def validate_execution_profile_manifest(data: Mapping[str, Any]) -> None:
                 f"[{EXECPROFILE_ADJUDICATED_RUNTIME['selected_execution_provider']!r}], got "
                 f"{selected_value!r}"
             )
-        # (b) fail-closed: selected と available の混同禁止——selected は
-        # available の真部分集合でなければならない（selected == available
-        # を拒否する。available が selected 単独のみで観測された場合、
-        # provider 混同の検証はできないため、available 側が selected を
-        # 真に上回っていることを要求する）。
+        # (b) fail-closed: selected は available の部分集合でなければ
+        # ならない（selected に available が観測していない provider が
+        # 混入していないことの機械化）。PR #327 レビュー第3巡指摘9
+        # （P2、採用）: 旧実装はここで selected_set == avail_set も拒否
+        # していたが、これは CPU-only 環境（available ==
+        # ["CPUExecutionProvider"] のみ）という正当な実測を構造的に拒否
+        # し、再pin を阻害していた——"available の列挙と selected を混同
+        # しない" という裁定は「両者は独立に実測・記録された別概念であ
+        # る」ことの要求であって「値が偶然一致してはならない」という要求
+        # ではない。混同禁止は below の shape（`onnxruntime_available_
+        # providers` と `onnxruntime_selected_providers` が独立した
+        # measurement item として存在し、各々が自分自身の method/
+        # source_file 等の provenance を持つこと）と、selected が
+        # `EXECPROFILE_ADJUDICATED_RUNTIME["selected_execution_provider"]`
+        # 固定値であることの強制（直上のチェック）で担保する——値の一致
+        # 自体を禁止しない。
         if avail_value is not None:
             selected_set = set(selected_value)
             avail_set = set(avail_value)
@@ -14368,13 +14385,6 @@ def validate_execution_profile_manifest(data: Mapping[str, Any]) -> None:
                     "execution profile manifest.additional_measurements.onnxruntime_selected_"
                     f"providers.value ({selected_value!r}) is not a subset of onnxruntime_"
                     f"available_providers.value ({avail_value!r})"
-                )
-            if selected_set == avail_set:
-                raise Run9ValidationError(
-                    "execution profile manifest.additional_measurements.onnxruntime_selected_"
-                    "providers.value must not equal the full onnxruntime_available_providers "
-                    "enumeration — conflating 'available' with 'selected' is the exact mistake "
-                    f"the adjudication forbids (both are {selected_value!r})"
                 )
 
     thread_settings = _validate_execprofile_measurement_item(
@@ -14611,6 +14621,7 @@ def validate_execution_profile_manifest(data: Mapping[str, Any]) -> None:
 def load_pinned_execution_profile_manifest(
     contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
     contract_path: Optional[Path] = None, adjudication_basis_path: Optional[Path] = None,
+    render_code_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`execution_profile_sha` pin の**唯一の正規消費経路**
     （`load_pinned_reexport_manifest()` と同型の3層防御 read-once。
@@ -14623,6 +14634,22 @@ def load_pinned_execution_profile_manifest(
     (6) cross-check: `adjudication_basis.source_file` の実バイト sha256 を
         実測し、`adjudication_basis.sha256` と一致することを machine 強制
         する（`load_pinned_reexport_manifest()` cross-check (9) と同型）。
+    (7) cross-check（PR #327 レビュー第3巡指摘8(a)対応、2026-08-26）:
+        `additional_measurements.render_code_commit` が MEASURED のとき、
+        `file_sha256` を repo 内の実ファイル（`voice_genesis/foundry/
+        s1_gate/gate_synth.py`、`render_code_path` でテスト用に上書き
+        可能）の実バイト sha256 と照合し、fail-closed で一致を強制する。
+        旧実装は manifest と裁定 txt しか読まず render code 実体を照合し
+        ていなかったため、gate_synth.py が改変された後でも pin 済み
+        profile がそのまま受理され得た——"provider または主要 runtime
+        version が変わる場合は...再pinする" という裁定の意味論を render
+        code へも機械化する。これは repo 内容のみで完結する**静的**照合
+        であり、CI（Python 3.11/3.12 マトリクス）でも決定論的に成立する。
+        live 環境（実行中の Python/onnxruntime バージョンや provider）の
+        照合はここでは行わない——それは `verify_execution_profile_
+        runtime()` の役割であり、load 時ではなく RUN9 実行段の render
+        直前に呼ぶ契約（両者を混ぜると CI マトリクス環境と RUN9 実行環境
+        の分離が壊れる）。
 
     戻り値は検証済み manifest dict。
     """
@@ -14699,4 +14726,157 @@ def load_pinned_execution_profile_manifest(
             "拒否する"
         )
 
+    # (7) cross-check: additional_measurements.render_code_commit が
+    # MEASURED のとき、file_sha256 を repo 内の実ファイル（gate_synth.py）
+    # の実バイト sha256 と照合する（PR #327 レビュー第3巡指摘8(a)対応）。
+    # 旧実装は manifest 記載の file_sha256 を内部整合（smoke_time_
+    # gate_synth_py_sha256 との一致）のみ検証しており、render code の実体
+    # そのものとは一度も照合していなかった——gate_synth.py が改変されて
+    # いても、smoke_time 側の記録さえ一致していれば load は成功してい
+    # た。ここで実 read + 実 sha256 再計算による fail-closed 照合を追加
+    # する。CI マトリクス環境非依存の repo 静的照合（git working tree の
+    # 実バイトのみ参照）であり、live 環境照合（Python/onnxruntime バー
+    # ジョン・provider）は含まない——それは `verify_execution_profile_
+    # runtime()` が担う。
+    render_commit_measurement = data["additional_measurements"]["render_code_commit"]
+    if render_commit_measurement["status"] == "MEASURED":
+        effective_render_code_path = (
+            render_code_path
+            if render_code_path is not None
+            else _EXECPROFILE_REPO_ROOT / render_commit_measurement["file"]
+        )
+        if not effective_render_code_path.is_file():
+            raise Run9ValidationError(
+                f"load_pinned_execution_profile_manifest(): cross-check source "
+                f"{effective_render_code_path} (additional_measurements.render_code_commit."
+                "file) does not exist"
+            )
+        render_code_actual_sha = hashlib.sha256(effective_render_code_path.read_bytes()).hexdigest()
+        render_code_pinned_sha = render_commit_measurement["file_sha256"]
+        if render_code_actual_sha != render_code_pinned_sha:
+            raise Run9ValidationError(
+                f"load_pinned_execution_profile_manifest(): {effective_render_code_path} の実"
+                f"バイト sha256 ({render_code_actual_sha!r}) が additional_measurements."
+                f"render_code_commit.file_sha256 pin 値 ({render_code_pinned_sha!r}) と一致し"
+                "ない — gate_synth.py が pin 後に改変された可能性があり、fail-closed で拒否"
+                "する（provider/主要 runtime version 変更時の再pin 義務と同型の render code "
+                "版）"
+            )
+
     return data
+
+
+def verify_execution_profile_runtime(
+    manifest: Mapping[str, Any], *, selected_providers: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """`execution_profile_sha` pin が記述する runtime identity を、**現在
+    実行中の live 環境**（`sys.version_info`・`onnxruntime.__version__`・
+    `onnxruntime.get_available_providers()`）に対して fail-closed で照合
+    する（PR #327 レビュー第3巡指摘8(b)対応、2026-08-26）。
+
+    **契約——RUN9 実行段（学習ハーネス/render 実行の run gate）は render を
+    開始する前に本関数を必ず呼ぶこと。** `load_pinned_execution_profile_
+    manifest()` はこの照合を行わない（load 時ではなく実行時照合である
+    理由: `load_pinned_execution_profile_manifest()` は CI が Python
+    3.11/3.12 マトリクスで実行するテストスイートからも呼ばれる——load 時に
+    live Python/onnxruntime バージョンを照合すると、3.12 環境で走る正当な
+    CI が「pin は 3.11.15 なのに live は 3.12」という理由で構造的に落ちる。
+    RUN9 実行環境と CI マトリクス環境は意味的に別物であり、live 照合は
+    実際に render を実行する段——本関数の呼び出し点——に分離する）。
+
+    照合内容（4項目、`identity_semantics.runtime`/`identity_semantics.
+    provider_fixation_rules` に対する fail-closed 判定）:
+    (a) `sys.version_info` から組み立てた `"{major}.{minor}.{micro}"` が
+        `identity_semantics.runtime.python` と厳密一致すること。
+    (b) `onnxruntime.__version__` が `identity_semantics.runtime.
+        onnxruntime` と厳密一致すること。
+    (c) `onnxruntime.get_available_providers()` が
+        `additional_measurements.onnxruntime_available_providers.value`
+        （MEASURED のときのみ、集合として）と一致すること——GPU/CUDA
+        provider が実行時に新たに検出可能になっている（自動 upgrade の
+        兆候）場合はここで拒否する。
+    (d) 選択 provider 引数（`selected_providers`、呼び出し側が実際に
+        `onnxruntime.InferenceSession(..., providers=...)` へ渡す予定の
+        リスト——渡さなければ `identity_semantics.runtime.
+        selected_execution_provider` の単独リストを既定値として検証）が
+        `["CPUExecutionProvider"]` と厳密一致すること（GPU provider
+        選択企図を fail-closed で拒否する）。
+
+    onnxruntime が import 不能な環境では fail-closed（例外を送出、静かに
+    skip しない）——「照合できなかった」を「pass した」と混同しない。
+
+    戻り値は live probe 実測値の dict（`python`/`onnxruntime`/
+    `available_providers`/`selected_execution_provider` の4キー）——呼び
+    出し側が render 実行ログへ転記できるようにする。
+    """
+    runtime = manifest["identity_semantics"]["runtime"]
+
+    # (a) Python バージョン: sys.version_info ベースで組み立てる（sys.
+    # version 文字列のフリーテキスト解析はしない）。
+    live_python = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    pinned_python = runtime["python"]
+    if live_python != pinned_python:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): live Python version "
+            f"({live_python!r}) diverges from execution_profile_sha pinned "
+            f"identity_semantics.runtime.python ({pinned_python!r}) — provider または主要 "
+            "runtime version が変わる場合は同じ execution_profile_sha を使わず再pinする、と "
+            "いう裁定の provider_fixation_rules を Python にも適用し、fail-closed で拒否する"
+        )
+
+    # (b)/(c) onnxruntime: import 不能なら fail-closed（skip しない）。
+    try:
+        import onnxruntime as _ort  # 実行時 live probe 専用の遅延 import
+    except Exception as exc:  # pragma: no cover - 環境依存の defensive fail-closed
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): onnxruntime を import できない "
+            f"({exc!r}) — live 環境照合ができない状態を『pass』として扱うことはできないため "
+            "fail-closed で拒否する（RUN9 実行段は onnxruntime import 可能な環境で render "
+            "する契約）"
+        ) from exc
+
+    live_onnxruntime = _ort.__version__
+    pinned_onnxruntime = runtime["onnxruntime"]
+    if live_onnxruntime != pinned_onnxruntime:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): live onnxruntime version "
+            f"({live_onnxruntime!r}) diverges from execution_profile_sha pinned "
+            f"identity_semantics.runtime.onnxruntime ({pinned_onnxruntime!r}) — 再pin が必要"
+        )
+
+    live_available = list(_ort.get_available_providers())
+    avail_measurement = manifest["additional_measurements"]["onnxruntime_available_providers"]
+    if avail_measurement["status"] == "MEASURED":
+        pinned_available = avail_measurement["value"]
+        if set(live_available) != set(pinned_available):
+            raise Run9ValidationError(
+                "verify_execution_profile_runtime(): live onnxruntime.get_available_providers() "
+                f"({live_available!r}) diverges from execution_profile_sha pinned "
+                f"additional_measurements.onnxruntime_available_providers.value "
+                f"({pinned_available!r}) — provider 構成が pin 後に変わった可能性があり "
+                "fail-closed で拒否する"
+            )
+
+    # (d) 選択 provider 引数: 呼び出し側が渡さなければ pin 値の単独リスト
+    # を既定として検証する（gate_synth.py が実際に InferenceSession へ渡す
+    # 引数と同じ値であることの確認は呼び出し側の責務——本関数はその引数を
+    # 受け取って fail-closed 判定するのみ）。
+    effective_selected = (
+        selected_providers
+        if selected_providers is not None
+        else [runtime["selected_execution_provider"]]
+    )
+    if effective_selected != ["CPUExecutionProvider"]:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): selected provider argument "
+            f"({effective_selected!r}) must be exactly ['CPUExecutionProvider'] — GPU/CUDA "
+            "provider への自動fallback/upgradeを禁止する、という execution_profile_sha "
+            "provider_fixation_rules を fail-closed で強制する"
+        )
+
+    return {
+        "python": live_python,
+        "onnxruntime": live_onnxruntime,
+        "available_providers": live_available,
+        "selected_execution_provider": effective_selected[0],
+    }

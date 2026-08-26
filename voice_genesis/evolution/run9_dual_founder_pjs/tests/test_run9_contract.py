@@ -13,6 +13,7 @@ import json
 import re
 import sys
 import textwrap
+import types
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -16293,19 +16294,40 @@ def test_execprofile_selected_provider_value_must_match_runtime() -> None:
         m.validate_execution_profile_manifest(data)
 
 
-def test_execprofile_selected_provider_conflated_with_available_rejected() -> None:
-    """(b) fail-closed: selected が available の全列挙と同一集合になると
-    拒否される（"available の列挙と selected を混同しない" の機械化）。
-    available 側を selected 単独の集合へ書き換えることでこの条件を作る
-    ——selected 自体は依然 runtime.selected_execution_provider と一致
-    させたまま。"""
+def test_execprofile_selected_provider_equal_to_cpu_only_available_accepted() -> None:
+    """(b) fail-closed 撤去確認（PR #327 レビュー第3巡指摘9対応、P2、採用）:
+    available が CPUExecutionProvider のみで観測された正当な CPU-only
+    環境では、selected（[runtime.selected_execution_provider] 固定=
+    ["CPUExecutionProvider"]）が available と同一集合になっても受理
+    される——旧実装はこの正当な組合せを『available の列挙と selected を
+    混同しない』の機械化と誤って同一視し、真部分集合（strict subset）を
+    要求して拒否していた（CPU-only 環境の正当な再pin を阻害していた）。
+    "混同しない" は selected/available が独立した measurement item
+    として存在すること + selected が固定値であることの shape で担保し、
+    値の偶然の一致自体は禁止しない。available 側を selected 単独の集合
+    （CPUExecutionProvider のみ）へ書き換えて確認する——selected 自体は
+    依然 runtime.selected_execution_provider と一致させたまま。"""
     data = copy.deepcopy(_execprofile_manifest_data())
     data["additional_measurements"]["onnxruntime_available_providers"]["value"] = [
         "CPUExecutionProvider"
     ]
     data["additional_measurements"]["onnxruntime_available_providers"]["matches_smoke_record"] = False
-    with pytest.raises(m.Run9ValidationError, match="must not equal the full onnxruntime_available_providers"):
-        m.validate_execution_profile_manifest(data)
+    m.validate_execution_profile_manifest(data)  # 例外なしの確認（旧実装は拒否していた）
+
+
+def test_execprofile_real_manifest_available_providers_unchanged() -> None:
+    """PR #327 レビュー第3巡指摘9対応: 実 manifest の
+    `onnxruntime_available_providers.value`（実測値、AzureExecutionProvider
+    + CPUExecutionProvider の2件）は本対応で変更していないことを確認する
+    ——validator/テストのみの修正であり、manifest 実バイトは不変。"""
+    data = _execprofile_manifest_data()
+    assert data["additional_measurements"]["onnxruntime_available_providers"]["value"] == [
+        "AzureExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+    assert data["additional_measurements"]["onnxruntime_selected_providers"]["value"] == [
+        "CPUExecutionProvider"
+    ]
 
 
 def test_execprofile_selected_provider_not_subset_of_available_rejected() -> None:
@@ -16489,6 +16511,161 @@ def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_
     missing_path = tmp_path / "does_not_exist.txt"
     with pytest.raises(m.Run9ValidationError, match="does not exist"):
         m.load_pinned_execution_profile_manifest(contract, adjudication_basis_path=missing_path)
+
+
+# --- load_pinned_execution_profile_manifest(): render code cross-check (7)
+# (PR #327 レビュー第3巡指摘8(a)対応、2026-08-26) -----------------------------
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_matches_repo(
+    contract: m.Run9RunContract,
+) -> None:
+    """cross-check (7) 既定経路（`render_code_path` 未指定）: 実 repo 内の
+    `voice_genesis/foundry/s1_gate/gate_synth.py` の実バイト sha256 が
+    manifest 記載の `additional_measurements.render_code_commit.
+    file_sha256` と一致するため happy path の load は成功する
+    （`_EXECPROFILE_REPO_ROOT` 相対解決の確認を兼ねる）。"""
+    data = m.load_pinned_execution_profile_manifest(contract)
+    assert data["additional_measurements"]["render_code_commit"]["file_sha256"] == (
+        "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894"
+    )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """cross-check (7): `render_code_path` が指す実ファイルのバイトが
+    manifest 記載の `file_sha256` と食い違うと fail-closed で拒否される
+    ——gate_synth.py が pin 後に改変された場合の検出（旧実装は manifest
+    と裁定 txt しか読まず、この改変を検出できなかった）。"""
+    tampered_path = tmp_path / "gate_synth.py"
+    tampered_path.write_bytes(b"# tampered gate_synth.py\n")
+    with pytest.raises(m.Run9ValidationError, match="render_code_commit.file_sha256"):
+        m.load_pinned_execution_profile_manifest(contract, render_code_path=tampered_path)
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_render_code_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    missing_path = tmp_path / "does_not_exist_gate_synth.py"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_execution_profile_manifest(contract, render_code_path=missing_path)
+
+
+# --- verify_execution_profile_runtime(): run-gate live probe ---------------
+# (PR #327 レビュー第3巡指摘8(b)対応、2026-08-26) `load_pinned_execution_
+# profile_manifest()` からは意図的に分離した live 環境照合（CI マトリクス
+# 環境との構造衝突回避、詳細は関数 docstring 参照）。
+
+
+def test_execprofile_verify_runtime_happy_path_real_environment() -> None:
+    """本 session の実行環境自体が execution_profile_sha pin と一致する
+    （Python 3.11.15 / onnxruntime 1.29.0 / available_providers に
+    AzureExecutionProvider・CPUExecutionProvider を含む）ため、monkeypatch
+    なしで happy path を実測確認できる。"""
+    manifest = _execprofile_manifest_data()
+    result = m.verify_execution_profile_runtime(manifest)
+    assert result == {
+        "python": "3.11.15",
+        "onnxruntime": "1.29.0",
+        "available_providers": ["AzureExecutionProvider", "CPUExecutionProvider"],
+        "selected_execution_provider": "CPUExecutionProvider",
+    }
+
+
+def test_execprofile_verify_runtime_python_mismatch_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _execprofile_manifest_data()
+
+    class _FakeVersionInfo:
+        major = 3
+        minor = 12
+        micro = 0
+
+    monkeypatch.setattr(m.sys, "version_info", _FakeVersionInfo())
+    with pytest.raises(m.Run9ValidationError, match="live Python version"):
+        m.verify_execution_profile_runtime(manifest)
+
+
+def test_execprofile_verify_runtime_onnxruntime_import_failure_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """onnxruntime が import 不能な環境では fail-closed（静かに skip
+    しない）——`sys.modules["onnxruntime"] = None` は `import onnxruntime`
+    を `ModuleNotFoundError` にする標準テクニック。"""
+    manifest = _execprofile_manifest_data()
+    monkeypatch.setitem(sys.modules, "onnxruntime", None)
+    with pytest.raises(m.Run9ValidationError, match="onnxruntime を import できない"):
+        m.verify_execution_profile_runtime(manifest)
+
+
+def test_execprofile_verify_runtime_onnxruntime_version_mismatch_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _execprofile_manifest_data()
+    fake_ort = types.SimpleNamespace(
+        __version__="9.9.9",
+        get_available_providers=lambda: ["AzureExecutionProvider", "CPUExecutionProvider"],
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    with pytest.raises(m.Run9ValidationError, match="live onnxruntime version"):
+        m.verify_execution_profile_runtime(manifest)
+
+
+def test_execprofile_verify_runtime_available_providers_mismatch_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """provider 不在（GPU provider が消えた等）・新規出現のいずれも
+    fail-closed で拒否される——ここでは CUDAExecutionProvider が新たに
+    観測された（自動 upgrade の兆候）ケースを確認する。"""
+    manifest = _execprofile_manifest_data()
+    fake_ort = types.SimpleNamespace(
+        __version__="1.29.0",
+        get_available_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    with pytest.raises(m.Run9ValidationError, match="get_available_providers"):
+        m.verify_execution_profile_runtime(manifest)
+
+
+def test_execprofile_verify_runtime_gpu_provider_selection_intent_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """呼び出し側が GPU provider を選択しようとする企図（`selected_
+    providers` 引数）は、available 側が正当でも fail-closed で拒否
+    される（GPU/CUDA 自動fallback/upgrade禁止規則の機械化）。"""
+    manifest = _execprofile_manifest_data()
+    fake_ort = types.SimpleNamespace(
+        __version__="1.29.0",
+        get_available_providers=lambda: ["AzureExecutionProvider", "CPUExecutionProvider"],
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    with pytest.raises(m.Run9ValidationError, match="selected provider argument"):
+        m.verify_execution_profile_runtime(manifest, selected_providers=["CUDAExecutionProvider"])
+
+
+def test_execprofile_verify_runtime_cpu_only_available_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #327 レビュー第3巡指摘9と対をなす確認: live 環境が CPU-only
+    （available == ["CPUExecutionProvider"] のみ）でも、pin 側の
+    `onnxruntime_available_providers.value` が同じく CPU-only であれば
+    受理される（`verify_execution_profile_runtime()` 側も strict subset
+    要件を課していないことの確認）。manifest 側の available を CPU-only
+    へ書き換えた合成データで検証する（本物の manifest は Azure+CPU の
+    ため）。"""
+    manifest = copy.deepcopy(_execprofile_manifest_data())
+    manifest["additional_measurements"]["onnxruntime_available_providers"]["value"] = [
+        "CPUExecutionProvider"
+    ]
+    fake_ort = types.SimpleNamespace(
+        __version__="1.29.0",
+        get_available_providers=lambda: ["CPUExecutionProvider"],
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    result = m.verify_execution_profile_runtime(manifest)
+    assert result["available_providers"] == ["CPUExecutionProvider"]
 
 
 # --- RUN9_CONTRACT.yaml: 既存 pin 全数不変 ----------------------------------
