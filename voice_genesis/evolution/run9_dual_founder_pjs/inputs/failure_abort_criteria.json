@@ -1,0 +1,157 @@
+{
+  "classification_policy": "MACHINE の要件は2条件の AND（2026-08-25 Codex bot レビュー PR #324 第1巡 Fix 1/2/3 + ファミリー全数監査の教訓を明文化 — 3件の指摘 + 追加4件の自主監査により当初 MACHINE 10件中 8件が本基準を満たさず PROCEDURAL へ再分類された）: (a) condition が参照する検証機構が repo に 実装済みであること（コードとして存在するだけでなく、検証対象となる実データも存在すること —— validator コードはあっても対象 manifest が未生成なら『空振り』であり不可）、かつ (b) その 機構が対象の**実内容**を検査すること（宣言フラグの True/False 検査・保存済みハッシュ文字列の 形状検査・未生成 manifest への validator 参照は、いずれも実内容検査に該当せず不可 — 実際に 外部アーティファクトを読み直して再ハッシュする、またはトップレベル定義（R9-G 系列）が要求する 実測プロパティを直接判定する場合のみ実内容検査とみなす）。両方を満たさない項目は PROCEDURAL に倒す（迷えば PROCEDURAL — 偽 MACHINE 化が最悪ケース）。deferred_threshold_ref （Design Memo RUN9-L0-PIN-1 由来）は、上記2条件を満たす既存の実装済み計算機構が校正待ちの 数値閾値のみを欠く場合に限り許可する——検証機構そのものが未実装の場合（hypothesis_algebra_sha の schema/validator 自体が Group D で存在しない等）は deferred_threshold_ref による MACHINE 分類も不可とし、machine_promotion_condition を伴う PROCEDURAL とする。全 PROCEDURAL 項目は checkpoint（§22 のどの step で誰が判定するか）に加え machine_promotion_condition（将来 MACHINE へ昇格するために必要な実装/データ）を宣言する。",
+  "post_stop_prohibitions": {
+    "escape_hatch_verbatim": "修正が必要ならExperiment IDはRUN9のまま、design_revisionを上げ、旧attemptをappend-only履歴として残す。",
+    "items": [
+      "new weights",
+      "new teacher",
+      "new Founder",
+      "new metric threshold",
+      "new Lesson channel",
+      "new optimizer search"
+    ],
+    "scope_note_verbatim": "停止後に同じattempt内で、new weights / new teacher / new Founder / new metric threshold / new Lesson channel / new optimizer search を追加しない。"
+  },
+  "rules": [
+    {
+      "checkpoint": "§22 step 2『verify donor and teacher rights / manifests』— Codex/User が rights_manifest.json の attestation/consent_status を人間判断で確認する。個別構造欄の機械検証は rule #2 が別途カバーするが、権利関係『unresolved』の総合判定（外部事実の真偽）自体は機械単独で閉じない。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "rights_manifest.json の provenance 実体（performer/composer/owner 等）を外部事実と照合する R9-G1 content verifier tooling が実装された時点で MACHINE へ昇格を検討する。",
+      "rule_id": 1,
+      "verbatim": "donor/teacher rights unresolved"
+    },
+    {
+      "condition": "run9_schema.verify_user_donor_manifest_complete(*, rights_manifest_path=None, donor_ledger_path=None, identity_domain_path=None)（2026-08-25 PR #324 第4巡指摘, P1, 採用で新設 → 第5巡指摘, P2, 採用で path ベース署名へ変更 → 第6巡指摘, P2, 採用で独立 pinned anchor への接地を追加 → 第7巡指摘, P2, 採用で domain 自体の founder_genome_shas pin への束縛を追加した唯一の正規消費経路）が、自らファイルを read-once で読み厳密 parse したのち、5段の既存検証チェーンを実行する: (1) validate_rights_manifest_four_layer() — 4層構造の completeness、(2) extract_voice_identity_rights_layer() — legacy flat 構造への変換、(3) verify_rights_manifest_against_ledger() — entries が凍結 USER_DONOR_CARD_IDS （UC-001〜UC-017 の17件）と過不足なく一致し donor_ledger の実測値と一致することを検証、(4) _verify_user_anchor_matches_rights_manifest(domain, rights_manifest) — domains/identity_domain_run9_v1.json（is_pinned()==True）の anchor_hashes['user']（PR #320 確立済みの独立 pin）へ rights 側 entries を接地、(5) load_pinned_founder_genome_document(founder_id, contract=..., domain=domain, rights_manifest=rights_manifest) を R9F-01/R9F-02 の両方に対して実行 — domain 自体を founder_genome_shas pin（+ founders/*.json 実バイト）へ束縛する。domain.anchor_hashes['user'] は build_founder() の genome_id 計算（_compute_founder_genome_id() が identity_domain.content_digest() ＝ anchor_hashes 全件を含む正規形ハッシュをハッシュ入力へ 含める、run9_schema.py:6401-6423）に実際に依存する——PR #320 で anchor 計算方式を 変更した際に実際に genome_id が f5ea253804728b3b から現行 PINNED 値 66f420672a154283（R9F-01）へ変化した実績（RUN9_CONTRACT.yaml/README.md 記録済み）が この依存の直接証拠。domain 単独改変（+ 辻褄合わせに rights/ledger 側の projection も 同時に偽装する3点 lockstep）は、この第5段の genome 再構成不一致で fail-closed 検出される ことを実測確認済み（第4段単体では素通りすることも合わせて確認済み）。【信頼根の境界宣言】本検証チェーンの信頼根は RUN9_CONTRACT.yaml の pin 群である。contract 自体の完全性は repo 機構の外側（branch_write_policy による書込境界宣言 + PR レビュー + discipline テスト + git 履歴）で担保される宣言的信頼根であり、これ以上の repo 内機械検証は自己参照になるため存在しない。MACHINE 分類は『信頼根 = contract pin を前提に、そこから対象実内容まで途切れない機械検証チェーンが存在する』ことを意味する——『contract 自体も可変では』という指摘は、この信頼根境界の再指摘であり新しい欠陥経路ではない。任意 Mapping を受ける互換シグネチャは意図的に残していない。",
+      "enforcement": "MACHINE",
+      "rule_id": 2,
+      "verbatim": "User donor manifest incomplete"
+    },
+    {
+      "checkpoint": "§22 step 1『verify repository / dependency pins』/ step 3『build run9 Identity Domain』— Codex/User が anchor artifact（AF0/Ritsu/User の実バイト）と inputs/identity_metric_space.json の実内容を、domain が保持する保存済みハッシュ文字列と 手動で突合する。is_pinned()/content_digest()（run9_schema.py:961-993）は保存済み値が 64hex に見えるかどうかの形状検査と、その保存済み文字列自体の再ハッシュに留まり、参照先の 実アーティファクトを読み直して再ハッシュすることはしない（run9_schema.py:1260-1263 が 『実内容検証は R9-G1 tooling の職務』と明記— 2026-08-25 Codex bot レビュー PR #324 第1巡 Fix 1 採用）。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "R9-G1 content verifier（anchor artifact / identity_metric_space.json の実バイトを読み直して 再ハッシュし、domain 保存値と比較する機構）が実装された時点で MACHINE へ昇格する（Codex bot レビュー PR #324 第1巡 Fix 1 の指摘どおり）。",
+      "rule_id": 3,
+      "verbatim": "anchor metric/model space mismatch"
+    },
+    {
+      "checkpoint": "§22 step 8『build and freeze PJS Lesson』— Codex/User が pin 済み lesson バイトを直接 確認する。validate_education_lesson_manifest() の excludes_identity_and_trait_donor_info 検査（run9_schema.py:3257-3264）はフィールドが文字どおり True であることのみを検査し、manifest が指す実 lesson バイトの中身は一切検査しない——DESIGN_RUN9 §一次定義 R9-G7 TEACHER_IDENTITY_EXCLUSION（同 999-1001行、逐語:『PJS Identity情報がGenome、Identity target、spk_embed target、禁止lossへ混入していない。』）が要求する内容検証より弱い （2026-08-25 Codex bot レビュー PR #324 第1巡 Fix 2 採用）。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "lesson バイトの実内容（PJS speaker/identity 情報の混入有無）を検査する content/provenance verifier が実装された時点で MACHINE へ昇格する（Codex bot レビュー PR #324 第1巡 Fix 2 の 指摘どおり。R9-G7 逐語の充足を検査対象とする）。",
+      "rule_id": 4,
+      "verbatim": "PJS identity channel contamination"
+    },
+    {
+      "checkpoint": "§22 step 4『generate R9F-01:r0 and R9F-02:r0』/ step 5『render PCM Birth Probes』— R9-G3 TRI_CROSSOVER_DETERMINISM（DESIGN_RUN9 983-985行、逐語:『同一anchor・weight・operatorから同一Genome ID / SingerStateが生成される。』）のうち、Genome ID 側は tests/test_run9_contract.py:292 test_item14_genome_id_deterministic_same_input が build_founder() を同一入力で2回呼び genome_id 完全一致を機械検証済み（既存・実内容検査 — _tri_crossover_run9() は乱数不使用の純関数）。しかし SingerState 側（DESIGN §10.1 Birth Protocol の Genome→Voice ID発行→SingerState r0 ステップ、backbone checkpoint 適用後の render 決定論）を検査する既存機構は repo に存在しない（VG-L0 学習ハーネス/birth probe render 未実装、grep 確認: 該当なし）。rule の verbatim は TRI_CROSSOVER 全体（R9-G3 の Genome ID / SingerState 両方）を指すため、Genome ID 側のみの部分的な機械検証を rule 全体の MACHINE 根拠として主張しない（2026-08-25 監査、Fix 1-3 と同型の『部分/形状のみ検査を 全体保証として主張しない』原則を適用）。Codex/User が §22 step 4-5 で両側を確認する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "SingerState 側（birth probe render の同一入力2回実行 byte 一致）を検査する機構を実装した 時点で MACHINE へ昇格する（Genome ID 側は test_item14_genome_id_deterministic_same_input で 既に機械検証済みのまま維持）。",
+      "rule_id": 5,
+      "verbatim": "TRI_CROSSOVER non-deterministic"
+    },
+    {
+      "checkpoint": "§22 step 5『render PCM Birth Probes』/ step 6『freeze Birth Baseline』— R9-G4 DUAL_BIRTH_VIABILITY（DESIGN_RUN9 987-989行、逐語:『二体とも最低発声、artifact、replay、provenanceを満たす。』）の一次定義である4特性（最低発声=phonation / artifact / replay / provenance）を実検査する機構は grep 確認の結果 repo に存在しない（`BIRTH_OUTCOMES` は ESTABLISHED/NOT_ESTABLISHED の結果語彙の enum に過ぎず判定ロジックを持たない。run9_schema.py 全体に phonation/artifact/replay/provenance の viability 判定関数は 未実装）。identity_metric_space.json calibration.validity_gates（C1/positive/negative reference gate）は identity 校正有効性の別軸判定であり、R9-G4 の4特性とは異なる （2026-08-25 Codex bot レビュー PR #324 第1巡 Fix 3 採用 — rule 6 を calibration.validity_gates ではなく R9-G4 の4特性へ再束縛）。Codex/User が §22 step 5-6 で4特性を人間判定する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "R9-G4 の4特性（phonation/artifact/replay/provenance）それぞれを実測から判定する viability checker が実装された時点で MACHINE へ昇格する（Codex bot レビュー PR #324 第1巡 Fix 3 の 指摘どおり）。",
+      "rule_id": 6,
+      "verbatim": "one or both Founders fail viability"
+    },
+    {
+      "checkpoint": "§22 step 7『adjudicate Birth Identity Separation』（逐語）— identity_metric_space.json の distance/calibration evidence を用いた Codex/User の人間判定。単一閾値による PASS/FAIL 化はしない（confuser_control.evaluation と同じ evidence-only 規律を踏襲）。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "identity_metric_space.json の distance/calibration evidence から Birth Identity separation を単一閾値で自動判定する設計変更（現状は §22 step 7『adjudicate』の逐語どおり人間判定を意図的に 維持）が承認されない限り MACHINE 昇格は想定しない。",
+      "rule_id": 7,
+      "verbatim": "Birth Identity separation not established"
+    },
+    {
+      "checkpoint": "§22 step 8『build and freeze PJS Lesson』— validate_education_lesson_manifest()（既存 pin 済み validator コード自体は実装済み）は education_technique_lesson_manifest_sha が引き続き PENDING（EDUCATION builder 未実装、Group B）のため実行対象となる実 manifest データが存在しない——検証コードはあっても検査する実内容が無い『空振り』状態であり、rule 4 （#4）と同族の欠陥（2026-08-25 Codex bot レビュー PR #324 のファミリー全数監査で判明。validator が実データを持たない場合は『(a) 実装済み・(b) 実内容検査』の(b)を満たさない）。Codex/User が §22 step 8 で lesson freeze 可否を確認する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "EDUCATION builder（Technique extractor / Lesson builder）が実装され inputs/education_technique_lesson_manifest.json が実体生成された時点で、validate_education_lesson_manifest() が実データに対して意味のある検証を行えるようになる （ただし #4 是正と同様、bool 宣言検査に留まる限り内容検証機構の実装も別途必要）。",
+      "rule_id": 8,
+      "verbatim": "PJS Lesson cannot be frozen"
+    },
+    {
+      "checkpoint": "§22 step 9〜10 の境界 — README.md 残存ブロッカー(2) が列挙する ControlProfile Entry Gate 残要件（calibrated Identity audit route / learning replay harness / rights-clean curriculum / fixed compute budget / frozen recipe / rollback path）は 既存の機械 gate 機構を持たず、Codex/User が個別に確認する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "ControlProfile Entry Gate の残要件（calibrated Identity audit route / learning replay harness / rights-clean curriculum / fixed compute budget / frozen recipe / rollback path）を機械判定する gate 関数が実装された時点で MACHINE へ昇格する。",
+      "rule_id": 9,
+      "verbatim": "Adapter Entry Gate not satisfied"
+    },
+    {
+      "checkpoint": "§22 step 9『freeze learning recipe / equal budget』— validate_learning_recipe_manifest()（既存 pin 済み validator コード自体は実装済み）は learning_recipe_sha が引き続き PENDING （VG-L0 ハーネス未実装、Group B）のため実行対象となる実 manifest データが存在しない —— #8 と同族の『検証コードはあるが実データが無い空振り』欠陥（2026-08-25 ファミリー全数監査で 判明）。Codex/User が §22 step 9 で equal budget 保証を確認する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "VG-L0 ハーネスの learning recipe builder が実装され inputs/learning_recipe_manifest.json が実体生成された時点で、validate_learning_recipe_manifest() が実データに対して意味のある検証を行えるようになる。",
+      "rule_id": 10,
+      "verbatim": "equal budget cannot be guaranteed"
+    },
+    {
+      "checkpoint": "§22 step 10〜12（execute LEARN_PERFORMANCE / freeze Adapter checkpoints）— VG-L0 学習ハーネス未実装のため isnan/isinf・checkpoint 整合性照合に相当する機械検査は repo に存在しない（既存 pin 済み機構なし。grep 確認済み — 迷えば PROCEDURAL の原則を適用）。ハーネス実装時に新設する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "training loop 側に isnan/isinf 検査 + checkpoint 整合性照合を実装した時点で MACHINE へ昇格する（VG-L0 学習ハーネス実装時）。",
+      "rule_id": 11,
+      "verbatim": "training NaN / checkpoint corruption"
+    },
+    {
+      "checkpoint": "§22 step 4『generate R9F-01:r0 and R9F-02:r0』/ step 6『freeze Birth Baseline』— rule 12 の verbatim『r0 or frozen Genome changed』は二本柱（genome 文書 / r0 state）の AND で構成される。genome 文書側は run9_schema.load_pinned_founder_genome_document() （既存 pin 済み production 消費経路 — founders/R9F-0x_genome.json の raw sha256 照合 + founder_genome_from_dict() による builder 再構築照合）で機械検証可能（2026-08-25 Codex bot レビュー PR #324 第2巡 Fix 6 で新設済み）。しかし r0 state 側は DESIGN_RUN9 §24 推奨ディレクトリ（1257-1258行）が言及する founders/R9F-0x_r0_state.json が repo に実在しない（grep 確認: 該当ファイルなし、step 4-5 の r0 生成・Birth Baseline freeze が未実行のため）。branch_write_policy.json の immutable_artifacts に `r0_bytes` が列挙されているのは書込境界ポリシー宣言（validate_branch_write() が書込境界を強制する対象カテゴリの宣言）であり、r0 state ファイル実体の sha256 を pin する契約欄ではない（RUN9_CONTRACT.yaml に r0 state 専用の pin 欄は存在しない、grep 確認済み）。r0 state 側を検証する pin/consumption-time verifier が存在しない以上、rule 全体としては MACHINE を名乗れず PROCEDURAL とする（2026-08-25 Codex bot レビュー PR #324 第3巡指摘, P1, 採用 — genome 半分のみの機械検証を rule 全体の MACHINE 根拠として主張しない、rule 5 の Genome ID/SingerState 分割と同型の判断）。Codex/User が §22 step 4/6 で r0 state（生成された場合はその実体）の不変性を確認する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "founders/R9F-0x_r0_state.json（Birth Baseline の r0 state）が実際に生成され、RUN9_CONTRACT.yaml に専用の pin 欄が新設され、load_pinned_founder_r0_state()相当の production 消費時 verifier（raw sha256 照合 + 可能なら内容検証）が実装された時点で、genome 文書側と合わせて rule 全体を MACHINE へ昇格する（VG-L0 ハーネス / birth probe freeze 実装時）。",
+      "rule_id": 12,
+      "verbatim": "r0 or frozen Genome changed"
+    },
+    {
+      "checkpoint": "§22 step 14『open sealed holdout』— sealed holdout は学習完了後にのみ開封する手続き規律（PoR §12）であり、開封タイミング自体を機械強制する既存ランタイム機構は repo に存在しない（practice_audio_split_manifest.json の sealed_holdout_sha256 は分割の byte-hash 分離のみ保証し、実行時アクセス制御は保証しない）。Codex/User が開封タイミングを確認する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "sealed holdout への実行時アクセス制御（開封タイミングを機械強制するランタイム機構）を実装した時点で MACHINE へ昇格する。",
+      "rule_id": 13,
+      "verbatim": "holdout leakage"
+    },
+    {
+      "checkpoint": "§22 step 16『identity/leakage/developmental evaluation』— §18.1 Target Skill Gain（DESIGN_RUN9 927-931行、逐語式: LCB_95(Δtarget,i) > δtarget、『δtargetはpositive/negative controlから凍結する』）の LCB_95 比較式自体は DESIGN doc に定義されているが、対応する 実装（validate_hypothesis_algebra_manifest 相当・δtarget 校正ロジック）は repo に存在しない （grep 確認: hypothesis_algebra_sha は schema 文字列・REQUIRED_KEYS・validator のいずれも 未定義、Group D）。#8/#10 と同じ『実装済みでない』欠陥のため、deferred_threshold_ref による MACHINE 分類は取り下げる（2026-08-25 ファミリー全数監査 — #14/#16 は #8/#10 より実装状況が さらに手前の段階であり、同じ基準を機械的に適用すれば同様に PROCEDURAL）。Codex/User が §22 step 16 で mandatory metric degeneracy を判定する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "hypothesis_algebra_sha の schema/validator（§18.1 δtarget 校正ロジック含む）が実装され、positive/negative control からの実測校正が完了した時点で MACHINE へ昇格する。",
+      "rule_id": 14,
+      "verbatim": "mandatory metric degeneracy without audit fallback"
+    },
+    {
+      "checkpoint": "§22 step 16『identity/leakage/developmental evaluation』— identity_metric_space.json confuser_control.evaluation は『総合スコア化・閾値によるPASS/FAIL化はしない』と明記する（同ファイル逐語）。d_pjs(r) の系統的減少 evidence を Codex/User が判定する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "confuser_control.evaluation に閾値ベースの判定を新設する設計変更（現状は evidence-only を 意図的に維持——本 repo の軸別 evidence 規律、PoR §13/§27 item 40）が承認されない限り MACHINE 昇格は想定しない。",
+      "rule_id": 15,
+      "verbatim": "PJS Identity leakage after all preregistered candidates"
+    },
+    {
+      "checkpoint": "§22 step 16『identity/leakage/developmental evaluation』— §18.2 Non-Inferiority（DESIGN_RUN9 933-939行、逐語式: LCB_95(Δk,i) >= -εk、対象軸に Identity を含む）の LCB_95 比較式自体は DESIGN doc に定義されているが、εk 校正ロジック・比較実装は repo に 存在しない（grep 確認: hypothesis_algebra_sha は #14 と同一の未実装欄、Group D）。identity_metric_space.json calibration.decision_rule の theta_cal(F) 比較（既存・実装済み・実内容検査）とは別軸の非対象軸マージン判定であり、theta_cal(F) の存在を根拠に本 rule を MACHINE とは主張しない（2026-08-25 ファミリー全数監査 — #14 と同型の理由で PROCEDURAL）。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "hypothesis_algebra_sha の schema/validator（§18.2 εk 校正ロジック含む）が実装され、positive/negative control からの実測校正が完了した時点で MACHINE へ昇格する。",
+      "rule_id": 16,
+      "verbatim": "Identity drift beyond non-inferiority"
+    },
+    {
+      "checkpoint": "§22 step 17『deterministic replay』— VG-L0 学習ハーネス未実装のため replay 実行機構自体が repo に存在しない（既存 pin 済み機構なし）。ハーネス実装時に新設する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "VG-L0 学習ハーネスに deterministic replay 実行機構（同一入力2回実行 byte 一致照合）を実装した時点で MACHINE へ昇格する。",
+      "rule_id": 17,
+      "verbatim": "learning replay failure"
+    },
+    {
+      "checkpoint": "§22 step 1『verify repository / dependency pins』/ step 19『provenance and atomic publication』— repository_commit_sha/dependency_pins_sha（いずれも Group C、現状 PENDING）が pin された後、Codex/User が sha 一致を確認する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "repository_commit_sha/dependency_pins_sha が PINNED 化され、raw sha 再照合を行う機構を実装した時点で MACHINE へ昇格する。",
+      "rule_id": 18,
+      "verbatim": "provenance / code closure failure"
+    },
+    {
+      "checkpoint": "§22 step 9『freeze learning recipe / equal budget』— execution_profile_sha（Group C、現状 PENDING）に cost cap 数値は未凍結。数値をここで発明しない。budget 凍結後、Codex/User が超過を確認する。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "execution_profile_sha に cost cap 数値が凍結され、cost record との自動比較機構を実装した時点で MACHINE へ昇格する。",
+      "rule_id": 19,
+      "verbatim": "cost cap exceeded"
+    },
+    {
+      "checkpoint": "§22 step 10〜11『execute LEARN_PERFORMANCE』— learning_recipe.search_space/candidate_generation（Group B、現状 PENDING）の枯渇判定は探索実行時の Codex/User 判断。既存の自動枯渇検出機構なし。",
+      "enforcement": "PROCEDURAL",
+      "machine_promotion_condition": "learning_recipe.search_space/candidate_generation の実体が確定し、探索空間の網羅性を機械判定する機構を実装した時点で MACHINE へ昇格する。",
+      "rule_id": 20,
+      "verbatim": "candidate class exhausted"
+    }
+  ],
+  "schema": "run9-failure-abort-criteria/1.0"
+}

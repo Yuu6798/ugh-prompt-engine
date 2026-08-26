@@ -1,0 +1,36 @@
+{
+  "schema": "run9-seed-policy/1.0",
+  "seeds": [
+    {
+      "consumption_point": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §9.2/§9.3（370-408行）performance_seed フィールド / run9_schema.py:118 SHARED_PERFORMANCE_SEED = 909001",
+      "independent_from": [
+        "learning_seed",
+        "gate_synth_runtime_seed"
+      ],
+      "role": "genome/ControlProfile policy seed（R9F-01・R9F-02 共通固定値）。gate_synth の ONNX runtime 乱数 seed（gate_synth_runtime_seed）とは別軸で独立する（RUN9_CONTRACT.yaml 655-657行付近の精密化コメントと同旨）。",
+      "seed_id": "performance_seed",
+      "value": 909001
+    },
+    {
+      "consumption_point": "run9_schema.py:119 LEARNING_SEED = 909002",
+      "independent_from": [
+        "performance_seed",
+        "gate_synth_runtime_seed"
+      ],
+      "role": "learning_recipe.seed（PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE 共通固定値）",
+      "seed_id": "learning_seed",
+      "value": 909002
+    },
+    {
+      "consumption_point": "gate_synth.py:149 SEED = 42 / gate_synth.py:1213 ort.set_seed(SEED) / gate_synth.py:1214 record[\"seed\"] = SEED",
+      "independent_from": [
+        "performance_seed",
+        "learning_seed"
+      ],
+      "role": "宣言 harness gate_synth.py::run_pipeline が実消費・記録する ONNX runtime 乱数 seed。run_pipeline は seed 引数を持たず、自身のハードコード定数を消費する（RUN9_CONTRACT.yaml 712-722行 PR #322 第1巡 Fix 1 の逐語事実と同旨）。",
+      "seed_id": "gate_synth_runtime_seed",
+      "value": 42
+    }
+  ],
+  "unregistered_seed_prohibition": "VG-L0 ハーネスは本 manifest に未登録の乱数 seed を消費してはならない。新しい seed の追加は design_revision の昇格 + 本 manifest の更新 + seed_policy_sha の repin を先行条件とする（fail-closed）。"
+}

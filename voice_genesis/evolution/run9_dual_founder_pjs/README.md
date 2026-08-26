@@ -586,8 +586,15 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   negative_reference/pjs_reference は新規 render 不要）/
   `measurement_boundary`（「どう測るか」は本 manifest の対象外という
   境界明文 — identity 軸は `inputs/identity_metric_space.json`
-  正本、development/generalization 軸は `measurement_spec_sha`（別欄、
-  引き続き PENDING）が別途凍結）/ `prohibitions`（render 後の cell・
+  正本、development/generalization 軸は `measurement_spec_sha`（別欄）が
+  別途凍結。〔履歴: 当時 PENDING → RUN9-L0-PIN-1（2026-08-25）で identity
+  軸の extractor カタログを PINNED 化・development/generalization 軸は
+  VG-L0 ハーネス実装待ちとして NOT_YET_IMPLEMENTED を明示保留 → 同日 PR
+  #324 第2巡 Codex bot レビュー Fix 5（偽 READY 経路 + 本 measurement_
+  boundary 節自身との正典矛盾の指摘、採用）で `measurement_spec_sha` は
+  PENDING へ復帰。manifest 実体・validator・loader は撤去せず事前配線の
+  まま残置、下記「解消済み（RUN9-L0-PIN-1）」節参照〕）/ `prohibitions`
+  （render 後の cell・
   水準追加禁止・結果を見た後の probe 変更禁止・測定仕様の変更を本
   manifest で行わない、の3禁則 + render 不能 cell の是正 repin はこの
   禁則の対象外という区別）の閉じたトップレベル構造。P0 cell は
@@ -601,11 +608,16 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   した。`tests/test_run9_probe_manifest.py` が構造検証・実ファイル sha
   照合・P0 逐語照合（`score.py` を直接 import して note 列を突き合わせ）・
   P4 heldout_independence・P5 域・負例群を検証する。**`gate_state()` は
-  依然 `BLOCKED`**（`dataset_manifest_sha`/`learning_recipe_sha`/
+  依然 `BLOCKED`**（当時 `dataset_manifest_sha`/`learning_recipe_sha`/
   `measurement_spec_sha`/`hypothesis_algebra_sha` 等 VG-L0 ハーネス関連
   欄が PENDING のままのため——回帰テスト
   `test_gate_state_still_blocked_after_probe_manifest_sha_pinned` で
-  機械確認済み）。
+  機械確認済み。〔履歴: `measurement_spec_sha` はその後 RUN9-L0-PIN-1
+  （2026-08-25、下記「解消済み」節参照）で identity 軸を PINNED 化した
+  — `gate_state()` は残る欄（下記「残存」節参照）のため引き続き
+  `BLOCKED`。さらにその後 PR #324 第2巡 Codex bot レビュー（同日、Fix 5）
+  の指摘により PENDING へ復帰した（下記「解消済み（RUN9-L0-PIN-1）」節の
+  対応する箇条を参照）〕）。
 
 **解消済み（実 PJS practice split 実行, 2026-08-25）**:
 - ~~practice split の実 PJS コーパスに対する実行未実施~~ → PJS corpus
@@ -638,6 +650,254 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   セッション（2026-08-25）で直接承認・実行指示した scoped 例外である旨、
   および成立条件（公開配布物 + sha 完全一致検証）を下記「次フェーズ」節
   へ明記した〕。詳細・成立条件・権限の出所は下記「次フェーズ」節参照。
+
+**解消済み（RUN9-L0-PIN-1, 2026-08-25）**:
+- ~~`seed_policy_sha` 未 pin~~ → [`inputs/seed_policy_manifest.json`](./inputs/seed_policy_manifest.json)
+  （schema `run9-seed-policy/1.0`）を新規起草し、RUN9 が現に消費する3つの
+  独立した乱数 seed（`performance_seed` = 909001 = DESIGN_RUN9 §9.2/§9.3の
+  凍結値 / `learning_seed` = 909002 = `run9_schema.py:119 LEARNING_SEED` /
+  `gate_synth_runtime_seed` = 42 = `gate_synth.py:149 SEED`、消費点
+  `ort.set_seed`/`record["seed"]` は `gate_synth.py:1213-1214`）を role・
+  消費点(file:line)・他 seed からの独立宣言込みで全数登録した。
+  `run9_schema.validate_seed_policy_manifest()` が未知 seed_id・欠落・
+  値不一致を fail-closed 拒否し、`load_pinned_seed_policy_manifest()`
+  （probe manifest と同型の3層防御・read-once 消費関数）を新設した。
+  `RUN9_CONTRACT.yaml` `seed_policy_sha` を manifest 実バイトの sha256 で
+  **PINNED** 化した。
+- ~~`failure_abort_criteria_sha` 未 pin~~ → [`inputs/failure_abort_criteria.json`](./inputs/failure_abort_criteria.json)
+  （schema `run9-failure-abort-criteria/1.0`）に DESIGN_RUN9 §30 Stop Rules
+  の20項目を逐語収載し、各項目を `enforcement: MACHINE`/`PROCEDURAL`
+  へ分類した（初回 PINNED 時点は MACHINE 10 / PROCEDURAL 10）。§30 末尾の
+  停止後救済禁止6項目（new weights/new teacher/new Founder/new metric
+  threshold/new Lesson channel/new optimizer search）も逐語収載した。
+  `run9_schema.validate_failure_abort_criteria()`（rule_id 1..20 の厳密
+  連番 + 逐語一致 + enforcement 語彙の fail-closed 検証）+
+  `load_pinned_failure_abort_criteria()` を新設し、`RUN9_CONTRACT.yaml`
+  `failure_abort_criteria_sha` を **PINNED** 化した。
+  〔履歴: PR #324 Codex bot レビュー第1巡（2026-08-25, 全3件 P1, 採用）で
+  MACHINE 10件中3件（#3 anchor metric/model space mismatch — `is_pinned()`/
+  `content_digest()` は保存済みハッシュの形状/再ハッシュのみで参照先の実
+  アーティファクトを再検証しない / #4 PJS identity channel contamination —
+  `excludes_identity_and_trait_donor_info` の bool True 検査は宣言検査で
+  lesson バイトの内容検査ではない / #6 one or both Founders fail
+  viability — R9-G4 DUAL_BIRTH_VIABILITY の一次定義4特性
+  《phonation/artifact/replay/provenance》ではなく識別校正ゲートへ誤束縛
+  していた）に偽 MACHINE 化欠陥が判明し PROCEDURAL へ再分類。同一基準での
+  残り MACHINE 全7件（#2/#5/#8/#10/#12/#14/#16）のファミリー全数監査で
+  #5（Genome ID 側のみ機械検証済みで SingerState 側は未検証）/#8・#10
+  （validator コードは実装済みだが対応 manifest 実体が PENDING で実データ
+  なし）/#14・#16（hypothesis_algebra_sha 自体が schema/validator 未実装
+  で deferred_threshold_ref も維持不能）も PROCEDURAL へ移行し、#2（rights
+  manifest 構造完全性検査）と #12（founder_genome_shas raw sha 全体照合）
+  のみ MACHINE で生存。最終 MACHINE 2件 / PROCEDURAL 18件（全 PROCEDURAL
+  項目に `machine_promotion_condition` を新設・付与。#12 はその後 PR #324
+  第3巡でさらに PROCEDURAL へ再降格——下記第3巡履歴参照）。
+  `failure_abort_criteria_sha` を実バイト sha256 で repin
+  （`RUN9_CONTRACT.yaml` に append-only 履歴コメント記録）〕。
+  〔履歴: PR #324 Codex bot レビュー第2巡（2026-08-25, 4件, 全て採用）で
+  さらに2件対応。Fix 4（P2）: `tests/test_pin1_seed_policy_manifest_
+  values_match_frozen_sources` が `run9_schema._SEED_POLICY_EXPECTED_
+  VALUE` と同じリテラル `42` を重複主張するだけで `gate_synth.py` の実
+  `SEED` を読んでいなかった指摘——`gate_synth.py` のソーステキストから
+  `SEED = <int>` 代入を正規表現で抽出し（複数マッチ・マッチ0件は
+  fail-closed）manifest 値・期待定数と三者照合する形へ強化、
+  `performance_seed`=909001 も DESIGN §9 の逐語行実在 grep で追加照合した
+  （`gate_synth.py`/DESIGN doc 自体は read-only のまま）。Fix 6（P1）:
+  rule 12（r0 or frozen Genome changed）の raw sha 照合機構が test module
+  にしか存在せず production 消費経路が無い指摘——降格ではなく機構の
+  実体化で対応: `run9_schema.load_pinned_founder_genome_document(
+  founder_id, *, contract, domain, rights_manifest)` を probe manifest と
+  同型の3層防御 + `founder_genome_from_dict()` による実内容検証（builder
+  再構築照合）で新設し、rule 12 の condition をこの関数参照へ更新して
+  MACHINE を維持した。`failure_abort_criteria_sha` を再度実バイト sha256
+  で repin（`RUN9_CONTRACT.yaml` に append-only 履歴コメント記録、3世代
+  目）。founders/*.json は byte 不変（実測確認済み）。Fix 5（P2 ×2）は
+  下記 `measurement_spec_sha` 箇条の履歴を参照〕。
+  〔履歴: PR #324 Codex bot レビュー第3巡（2026-08-25, 1件 P1, 採用）で
+  rule 12 をさらに PROCEDURAL へ再降格。指摘: rule 12 の verbatim「r0 or
+  frozen Genome changed」は genome 文書 / r0 state の二本柱の AND であり、
+  第2巡 Fix 6 の `load_pinned_founder_genome_document()` は genome 文書側
+  のみを検証する——r0 state 側（DESIGN §24 推奨ディレクトリが言及する
+  `founders/R9F-0x_r0_state.json`）の消費時検証機構が無いまま MACHINE を
+  名乗る部分保証の過大主張だった。事実確認: (a)
+  `founders/R9F-0x_r0_state.json` は repo に実在しない（`founders/` 配下
+  は genome.json 2件のみ）(b) `RUN9_CONTRACT.yaml` に r0 state 専用の pin
+  欄は存在しない (c) `branch_write_policy.json` `immutable_artifacts` の
+  `r0_bytes` は書込境界ポリシー宣言であり pin 契約欄ではない。r0 state
+  ファイル・pin 先のいずれも存在しないため、存在しない pin を発明せず
+  正直に PROCEDURAL へ降格した（genome 半分のみの機械検証を rule 全体の
+  MACHINE 根拠として主張しない、rule 5 の Genome ID/SingerState 分割と
+  同型の判断）。checkpoint に「genome 半分は
+  `load_pinned_founder_genome_document()` で機械検証可能」と明記しつつ、
+  `machine_promotion_condition` に「r0 state の pin + 消費時 verifier 実装
+  時（VG-L0 ハーネス / birth probe freeze 時）に MACHINE へ昇格」を記録
+  した。結果 MACHINE 1件（#2）/ PROCEDURAL 19件。
+  `failure_abort_criteria_sha` を実バイト sha256 で repin（4世代目）。
+  seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json
+  は無改変（sha256 確認済み）〕。
+  〔履歴: PR #324 Codex bot レビュー第4巡（2026-08-25, 1件 P1, 採用）で
+  rule 2 の condition を強化（分類は不変・MACHINE のまま）。指摘: rule 2
+  の condition が `validate_rights_manifest_four_layer()` のみを参照する
+  が、同関数は自身のコメント（`run9_schema.py:9871-9874`）が明記する
+  とおり entries（donor card の実内容）検証を
+  `extract_voice_identity_rights_layer()` +
+  `verify_rights_manifest_against_ledger()` へ委譲しており、空
+  entries・donor 欠落・重複・hash 改変は単独関数では検出されない
+  （rule 3/4/6/12 と同族の「部分検証関数の単独参照による MACHINE 過大
+  主張」の新経路）。事実確認: (a) `verify_rights_manifest_against_
+  ledger()` は entries の card_id 集合が凍結 `USER_DONOR_CARD_IDS`
+  （UC-001〜UC-017 の17件、User 裁定4で凍結）と過不足なく一致し、両側の
+  重複拒否、`donor_ledger` の実測値と card_id ごとに
+  source_sha256/sha256/duration_sec が一致することまで検証する実装済み
+  の完全な内容検証関数と確認。(b) `inputs/rights_manifest.json`（実在・
+  User attestation 済み）+
+  `voice_genesis/foundry/recording_kit/user_donor_ledger.json`（実在）
+  に対しチェーン全体を実行し17 entries で PASS、かつ空 entries・重複
+  card_id・hash 改変の3負例で fail-closed 拒否することを実測確認した。
+  完全チェーンで (a) 実装済み・(b) 実内容検査（凍結 ledger との全数
+  照合）が成立すると判定し MACHINE を維持——新しい検証ロジックは書かず、
+  既存3関数を束ねる薄い canonical ラッパー
+  `run9_schema.verify_user_donor_manifest_complete(rights_manifest,
+  donor_ledger)`（probe/genome loader と同じ「唯一の正規消費経路」規約）
+  を新設し、rule 2 の condition をこの関数参照へ更新した。
+  `failure_abort_criteria_sha` を実バイト sha256 で repin（5世代目）。
+  分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。
+  seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json
+  は無改変（sha256 確認済み）〕。
+  〔履歴: PR #324 Codex bot レビュー第5巡（2026-08-26, 1件 P2, 採用）で
+  `verify_user_donor_manifest_complete()`（第4巡新設）の署名を強化
+  （分類は不変・MACHINE のまま）。指摘: 同関数は Mapping を直接受け取る
+  署名のままだったため、呼び出し元が生の `json.loads()`（重複キー
+  last-key-wins）で読み込んだ曖昧な dict を渡せてしまい、正規消費経路
+  でありながら厳密 parse を強制していなかった（同族の新経路: 正規消費
+  経路が厳密 parse を強制せず、通常 `json.loads` の重複キー黙殺で曖昧
+  manifest が MACHINE を通過し得る）。対応: 署名を path ベースへ変更
+  `verify_user_donor_manifest_complete(*, rights_manifest_path=None,
+  donor_ledger_path=None)`（省略時は新設した正典パス
+  `RIGHTS_MANIFEST_PATH`/`USER_DONOR_LEDGER_PATH` を既定）。内部で自ら
+  ファイルを read-once で読み、`load_rights_manifest_json()`/
+  `load_user_donor_ledger_json()`（重複キー拒否の既存厳密 parser）で
+  parse してから3段チェーンへ渡す。任意 Mapping を受ける互換シグネチャ
+  は意図的に残さない（穴をふさぐことが対応の目的そのものであるため）。
+  手書きの重複キー JSON バイト列（rights/ledger 双方）が fail-closed で
+  拒否されることをテストで確認した。rule 2 の condition 記述が旧署名
+  （位置引数）を引いていたため新署名（path ベース、省略時デフォルト）へ
+  追随し、`failure_abort_criteria_sha` を実バイト sha256 で repin
+  （6世代目）。分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。
+  seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json
+  は無改変（sha256 確認済み）〕。
+  〔履歴: PR #324 Codex bot レビュー第6巡（2026-08-26, 1件 P2, 採用）で
+  `verify_user_donor_manifest_complete()` に第4段を追加（分類は不変・
+  MACHINE のまま）。指摘: rights/ledger 両ファイルの lockstep 改変
+  （同一 entry の値を両側**同値**で書き換える）は既存3段チェーンの
+  相互照合だけでは検出不能で、独立 pin への anchor が欠けている（同族の
+  新経路）。Fable 設計判定: 独立 pin は既に存在する — PR #320 で確立した
+  user anchor（`extract_user_identity_attestation_projection(rights_
+  manifest)` の正規直列化 sha256 が `domains/identity_domain_run9_v1.json`
+  （`is_pinned()==True`）の `anchor_hashes["user"]` として PINNED 済み）。
+  projection は entries 全件の card_id/duration_sec/sha256/source_sha256
+  を逐語で含むため、rights 側 entries の任意改変（lockstep 含む）は
+  projection sha 不一致で検出される。対応:
+  `verify_user_donor_manifest_complete()` に第4段
+  `_verify_user_anchor_matches_rights_manifest(domain, rights_manifest)`
+  を追加——既存の消費点検証関数（`build_founder()` が genome_id 構築時に
+  用いるのと同一関数、grep で配線済みを確認し車輪の再発明はしていない）
+  を再利用した。domain ファイルは凍結済み・read-only 参照のみ（一切
+  書き換えていない）。lockstep 改変（rights/ledger 同一 entry の sha256
+  を両側同値で書き換えた temp ファイルペア）が第4段の anchor 不一致で
+  fail-closed 拒否されることをテストで実測確認し、既存正常系は不変で
+  通ることも確認した。rule 2 の condition に4段構成と anchor 接地の
+  設計を明記し、`failure_abort_criteria_sha` を実バイト sha256 で repin
+  （7世代目）。分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。
+  seed_policy_manifest.json/measurement_spec_manifest.json/founders/*.json/
+  domains/identity_domain_run9_v1.json は無改変（sha256 確認済み・
+  domains は read-only 参照のみ）〕。
+  〔履歴: PR #324 Codex bot レビュー第7巡（2026-08-26, 1件 P2, 採用）で
+  `verify_user_donor_manifest_complete()` に第5段を追加（分類は不変・
+  MACHINE のまま）。指摘: domain ファイル自体は第4段までのチェーンでは
+  何とも照合されておらず、domain 側だけを改変（+ 辻褄合わせに
+  rights/ledger 側の projection も同時に偽装する「3点 lockstep」）すれば
+  (1)〜(4) を素通りし得る。Fable 設計判定: 指摘が示す
+  「contract-pinned founder reconstruction path」で domain を接地する。
+  事実確認: `build_founder(domain, ...)` の genome_id 計算
+  （`_compute_founder_genome_id()`、`run9_schema.py:6401-6423`）が
+  `identity_domain.content_digest()`（`anchor_hashes` 全件を含む正規形
+  ハッシュ）をハッシュ入力へ含めることを実装読解で確認。さらに PR #320
+  で anchor 計算方式を user-projection 方式へ移行した際、実際に
+  genome_id が `f5ea253804728b3b` → `66f420672a154283`（R9F-01、
+  `RUN9_CONTRACT.yaml` に記録済み）へ変化した実績が、この依存が机上の
+  理屈ではなく実測された事実であることの直接証拠。対応:
+  `verify_user_donor_manifest_complete()` に第5段を追加し、読み込んだ
+  domain を用いて `load_pinned_founder_genome_document()`（第2巡 Fix 6
+  新設の既存 production 消費経路）を R9F-01/R9F-02 の両方について
+  実行——domain 内容を `founder_genome_shas` pin（+ `founders/*.json`
+  実バイト）へ束縛する。domain の `anchor_hashes.user` を改変した temp
+  domain + それに合わせ projection を偽装した rights/ledger の3点
+  lockstep が、第4段単体では素通りするが第5段の genome 再構成不一致
+  （`build_founder()` 再構築との `to_dict()` 不一致）で fail-closed 拒否
+  されることを実測確認した（既存正常系は不変で通ることも確認済み）。
+  **信頼根の境界宣言**（この回帰ファミリーの終端として明記）: 本検証
+  チェーンの信頼根は `RUN9_CONTRACT.yaml` の pin 群である。contract
+  自体の完全性は repo 機構の外側（`branch_write_policy` による書込境界
+  宣言 + PR レビュー + discipline テスト + git 履歴）で担保される
+  宣言的信頼根であり、これ以上の repo 内機械検証は自己参照になるため
+  存在しない。`MACHINE` 分類は「信頼根 = contract pin を前提に、そこ
+  から対象実内容まで途切れない機械検証チェーンが存在する」ことを意味
+  する——「contract 自体も可変では」という指摘は、この信頼根境界の
+  再指摘であり新しい欠陥経路ではない。rule 2 の condition に第5段構成と
+  信頼根境界宣言を明記し、`failure_abort_criteria_sha` を実バイト
+  sha256 で repin（8世代目）。分類数は不変（MACHINE 1件 /
+  PROCEDURAL 19件）。seed_policy_manifest.json/measurement_spec_
+  manifest.json/founders/*.json/domains/identity_domain_run9_v1.json は
+  無改変（sha256 確認済み・domains は read-only 参照のみ）〕。
+- `measurement_spec_sha` は **PENDING のまま**（2026-08-25 RUN9-L0-PIN-1 で
+  一時 PINNED 化 → 同日 PR #324 第2巡 Codex bot レビュー Fix 5（P2 ×2、
+  採用）で PENDING へ復帰）。manifest 実体
+  [`inputs/measurement_spec_manifest.json`](./inputs/measurement_spec_manifest.json)
+  （schema `run9-measurement-spec/1.0`）・`run9_schema.validate_
+  measurement_spec_manifest()`・`load_pinned_measurement_spec_manifest()`
+  は事前配線のまま撤去せず残置する。測定仕様は identity 軸と
+  development/generalization 軸の2つに分かれる
+  （`evaluation/probe_manifest.json#measurement_boundary` が明文化する
+  既存の境界、本 manifest はこれを変更しない）。identity 軸は
+  revision_bridge の7 metric-path（PINNED 済み `probe_manifest_sha` 側）
+  それぞれについて、extractor（WORLD/pyworld、
+  `voice_genesis/foundry/adapter/donor_bank.py:190-196
+  analyze_donor_world()` — grep で実在確認済み）+ normalization
+  （`level_normalization`）の参照カタログを凍結済み（式・閾値そのものは
+  `inputs/identity_metric_space.json` を正本のまま重複定義しない）。
+  development/generalization 軸（P4/P5、DESIGN_RUN9 §16.3
+  DevelopmentalVector の9指標 + §14 C4 GENERALIZED_GAIN）は対応する
+  extractor が VG-L0 学習ハーネス未実装のため repo に実在せず（grep 確認:
+  pitch_gain/voicing_gain/duration_gain/energy_contour_gain/attack_gain/
+  phrase_end_gain/lyrics_delta/artifact_delta/identity_delta/
+  GENERALIZED_GAIN のいずれも `*.py` 実装なし——コメント・テスト文字列中
+  の言及のみ）、閉じた metric 名の語彙のみを `NOT_YET_IMPLEMENTED` として
+  正直に凍結（manifest 自身の自己申告）してある。
+  〔履歴: PR #324 第2巡で判明した2件の欠陥により PENDING へ復帰した——
+  (1) **偽 READY 経路**: P4/P5 の9 extractor が repo に不在のまま
+  `measurement_spec_sha` を PINNED にすると、残り必須欄が埋まった瞬間
+  `gate_state()` が本欄を「満たされた」ものとして READY へ算入してしまう
+  （nested `development_generalization_axis.status ==
+  "NOT_YET_IMPLEMENTED"` を `gate_state()` は見ない——pin の shape 判定
+  のみという既存の意図的な層分離のため）。(2) **probe manifest 正典
+  矛盾**: 同時に PINNED 済みの
+  [`evaluation/probe_manifest.json`](./evaluation/probe_manifest.json) が
+  `measurement_boundary.scope_statement`/
+  `development_generalization_axis_source` の両方で「`measurement_spec_
+  sha` は PENDING」と正典宣言しており、`run9_schema.py` の
+  `validate_probe_manifest()` も同ファイルの記述検証で literal
+  `PENDING` マーカーを要求する——`measurement_spec_sha` を PINNED にすると
+  この既存 PINNED 正典と矛盾した状態になる。是正は pin を PENDING へ
+  戻すことのみで解消し、probe manifest / `gate_state()` 本体は無改変〕
+- **`gate_state()` は依然 `BLOCKED`**（`attempt_id`/`repository_commit_sha`/
+  `dataset_manifest_sha`/`dataset_row_order_sha`/`config_sha`/
+  `dependency_pins_sha`/`execution_profile_sha`/`expected_speaker_map_sha`/
+  `education_technique_lesson_manifest_sha`/`learning_recipe_sha`/
+  `measurement_spec_sha`/`hypothesis_algebra_sha` の pre-run 必須12欄が
+  引き続き PENDING のため（optional の `human_evaluation_protocol_sha` を
+  含めると総 PENDING 13欄）——`tests/test_run9_contract.py` の回帰テストで
+  機械確認済み）。
 
 **再現レシピ（逐語・実行可能、Codex bot レビュー PR #323 第5巡指摘, P2,
 採用, Fix 5）**: fresh checkout の読者が上記 PINNED バイトを実際に再生成
