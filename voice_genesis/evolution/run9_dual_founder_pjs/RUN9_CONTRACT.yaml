@@ -648,6 +648,16 @@ config_sha:
 # ではなく情報記録の更新。実測済みの sha256（本改訂後の実バイト、第4
 # 世代）は情報記録として保持する:
 #   "10073d5c32e9c372fbefd36d88b3e1abfee66540fa1f89c808cc34ee9488f3ec"
+#
+# 2026-08-26 情報記録更新（PR #327 Codex レビュー第4巡指摘10、P2、採用の
+# 連鎖更新——`acoustic_export_companions.expected_items[acoustic_onnx].
+# reexport_manifest_ref.reexport_manifest_sha256` を新 `reexport_
+# manifest_sha` pin 値（第4世代、`experiment_side_inputs` 節新設）へ
+# 追随させた結果、`dependency_pins_manifest.json` 自体の実バイトが変わっ
+# た。台帳の内容（render_asset_ledger 等）自体は無変更。pin 欄自体は
+# PENDING のまま、repin ではなく情報記録の更新）。実測済みの sha256
+# （本改訂後の実バイト、第5世代）は情報記録として保持する:
+#   "2d8d9d815cbe2299a76920059597e364c49bf44761b33fc101915554a12b0c5d"
 dependency_pins_sha:
   value: null
   status: PENDING
@@ -763,8 +773,43 @@ dependency_pins_sha:
 # 一切変更しない——新設節の追加のみで実バイトが変わったための repin。
 # 旧 pin 値（第2世代、PR #327 第1巡3件対応後）は履歴として保持する:
 #   d8af88cf0d7721ee024370da7ee9de5943c388f978eb3dab510480d12bde3ae9
+#
+# 2026-08-26 repin（PR #327 Codex レビュー第4巡指摘10、P2、採用。Claude
+# 完結ルート）: 再 export（`scripts/export.py acoustic --exp
+# s5_run6_acoustic_v1`）は checkpoint 本体だけでなく experiment dir
+# （`checkpoints/s5_run6_acoustic_v1/`）配下の config.yaml/spk_map.json/
+# lang_map.json/dictionary-ja.txt も消費するが、旧 manifest は checkpoint
+# digest（`input_checkpoint`）しか記録しておらず、replay 時に無関係な
+# ローカル experiment ファイルが誤って消費されても全検証が通ってしまう、
+# という指摘——新設 `experiment_side_inputs` 節（checkpoint-side 入力の
+# 全数宣言 + 各 sha256 + `dependency_pins_manifest.json` pin 値との一致
+# boolean。DiffSinger ソース読解（`utils/hparams.py set_hparams()`・
+# `basics/base_exporter.py build_spk_map()/build_lang_map()`・
+# `utils/phoneme_utils.py load_phoneme_dictionary()`）+ session workdir
+# staging 実測の両方で全数根拠を収載）で閉じた。実測で4点とも
+# `dependency_pins_manifest.json#render_asset_ledger`（HARNESS-1
+# provisioning で取得・sha 照合済み）の pin 値と一致することを確認した
+# （pin 済み資産が experiment dir に staged されていた事実の実測確認、
+# 捏造ではない）。`run9_schema.validate_reexport_manifest()` は
+# `experiment_side_inputs` の shape（必須キー・64hex・
+# `sha256_matches_pin` の算術一貫性 + `sha256 ==
+# expected_sha256_per_dependency_pins` かつ `sha256_matches_pin ==
+# True` の直接強制——指摘6と同型の「pin 済み入力のみ表現可能」意味論）を
+# machine 強制する。`load_pinned_reexport_manifest()` は cross-check
+# (11) として `experiment_side_inputs.items[].sha256` と
+# `dependency_pins_manifest.json#render_asset_ledger[].actual_sha256`
+# の論理名対応での直接照合を追加した（`dependency_pins_sha` は PENDING の
+# ため cross-check (8)/(10) と同様に同ファイルを直接読む）。
+# `replay_environment_recipe.steps` へ、export 実行前に
+# `experiment_side_inputs`（+ checkpoint 本体）を staging し全数 sha256
+# 照合してから export する手順（fail-closed: 1件でも不一致なら export
+# しない）を追加した。上記いずれも manifest の実測事実
+# （checkpoint/exporter/artifacts/smoke render の各 sha256・秒数）を
+# 一切変更しない——新設節の追加のみで実バイトが変わったための repin。
+# 旧 pin 値（第3世代、PR #327 第2巡指摘5対応後）は履歴として保持する:
+#   6ce64f5c4448dc5ca3d5bb3eab0994443264897423ad61419be28c2c93c0a35c
 reexport_manifest_sha:
-  value: "6ce64f5c4448dc5ca3d5bb3eab0994443264897423ad61419be28c2c93c0a35c"
+  value: "af4fb42e86b52f510c78f3f2d3442a6b7da16075fb06ede181fee6cd97789f95"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/reexport_manifest.json
 

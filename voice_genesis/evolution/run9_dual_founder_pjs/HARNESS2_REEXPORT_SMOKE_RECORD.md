@@ -362,3 +362,54 @@ User 裁定待ち」へ更新済み）。
 - repo（`/home/user/ugh-prompt-engine`）側のファイルは、本記録が repo
   収載される PR 以前は一切変更していない（実行フェーズ自体は
   `git status --porcelain` で変更ゼロを確認済み）。
+
+---
+
+## 6. experiment_side_inputs 実測記録（PR #327 Codex レビュー第4巡指摘10対応）
+
+指摘: 再export（`scripts/export.py acoustic --exp s5_run6_acoustic_v1`）は
+checkpoint 本体だけでなく experiment 側の設定・写像ファイル群（config.yaml/
+spk_map.json/lang_map.json/dictionary-ja.txt）も消費するが、
+`inputs/reexport_manifest.json` は checkpoint digest（`input_checkpoint`）
+しか記録しておらず、replay 時に無関係なローカル experiment ファイルが
+消費されても全検証が通ってしまう、というもの。
+
+**workdir staging 実測**（session workdir の DiffSinger clone、
+`checkpoints/s5_run6_acoustic_v1/`）:
+
+| ファイル | sha256 (実測) | dependency_pins_manifest.json#render_asset_ledger の pin 値 | 一致 |
+|---|---|---|---|
+| `config.yaml` | `3722072045060e316ec9fee3f307412eceacf617d3b3ece7adfcbefa0f9df9d9` | `backbone_config_yaml` | 一致 |
+| `spk_map.json` | `da9748fabfa721a4a789224b50fd52743628fd2396602852f2dc25c54f2e3803` | `backbone_spk_map_json` | 一致 |
+| `lang_map.json` | `2a6a227ee65a49f5c30e848a4b62c5cc1817926bbdab373228e6302d2c794953` | `backbone_lang_map_json` | 一致 |
+| `dictionary-ja.txt` | `b8ea0d99fcf60e82319cc84b162d9e1b4d5ce1146cfa1c6291e025fbb8be14ef` | `backbone_dictionary_ja_txt` | 一致 |
+| `model_ckpt_steps_40000.ckpt` | `6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a` | `backbone_checkpoint`（`input_checkpoint` 節で別途 pin 済み） | 一致 |
+
+4点全て（checkpoint 本体を除く）が HARNESS-1 provisioning で取得・sha 照合
+済みの Drive 資産（`render_asset_ledger`）の pin 値と完全一致した——
+experiment dir に staged されていたのは pin 済み資産そのものであった
+ことの実測確認であり、無関係な experiment ファイルが混入していたわけ
+ではない。
+
+**列挙の全数性の根拠**（DiffSinger ソース読解）: `utils/hparams.py
+set_hparams()` は `checkpoints/<exp_name>/config.yaml`
+（`ckpt_config_path`）を直読する。`basics/base_exporter.py
+build_spk_map()`/`build_lang_map()` は `work_dir/spk_map.json`・
+`work_dir/lang_map.json` を読む。`utils/phoneme_utils.py
+load_phoneme_dictionary()` は `work_dir/dictionary-<lang>.txt` が存在
+すればそれを config.yaml 記載の `dictionaries.<lang>` パス（本 exp の
+config.yaml は `/root/s4work/s4_data/run5_raw/dict.txt` という当時の
+非可搬な絶対パスを収載している）より優先して読む——work_dir 側に
+`dictionary-ja.txt` が実在したため、実際にはそちらが消費された。
+checkpoint 本体を除くこの4点が `export.py --exp` が消費する
+checkpoint-side 入力の全数である。
+
+対応: `inputs/reexport_manifest.json` へ `experiment_side_inputs` 節
+（上記4点の論理名・experiment dir 内相対パス・実測 sha256・pin 一致
+boolean 一括収載）を新設し、`replay_environment_recipe.steps` へ export
+実行前の staging + `sha256sum -c` 相当の全数照合手順（fail-closed）を
+追加した。`run9_schema.validate_reexport_manifest()`/
+`load_pinned_reexport_manifest()`（cross-check (11)）が machine 強制
+する。`reexport_manifest_sha`（第4世代）・
+`dependency_pins_manifest.json` 実バイト（`reexport_manifest_ref` 追随）
+も連鎖更新した——`RUN9_CONTRACT.yaml` 参照。

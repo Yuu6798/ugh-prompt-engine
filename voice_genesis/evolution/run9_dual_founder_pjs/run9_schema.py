@@ -13100,10 +13100,11 @@ _REEXPORT_REPO_ROOT = _THIS_DIR.parent.parent.parent
 
 REEXPORT_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "schema", "generated_at_utc", "adjudication_basis", "input_checkpoint", "exporter",
-    "export_command", "export_command_cwd", "export_command_variables", "export_venv_setup",
-    "environment_versions", "export_environment_lock", "export_environment_lock_sha256",
-    "reproducibility_check", "artifacts", "historical_comparison_summary",
-    "smoke_render_cross_check", "pin_disposition", "replay_environment_recipe",
+    "experiment_side_inputs", "export_command", "export_command_cwd",
+    "export_command_variables", "export_venv_setup", "environment_versions",
+    "export_environment_lock", "export_environment_lock_sha256", "reproducibility_check",
+    "artifacts", "historical_comparison_summary", "smoke_render_cross_check",
+    "pin_disposition", "replay_environment_recipe",
 })
 
 _REEXPORT_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
@@ -13128,6 +13129,38 @@ _REEXPORT_INPUT_CHECKPOINT_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 _REEXPORT_EXPORTER_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "repo", "revision", "expected_revision_per_run9_contract", "revision_matches_pin",
 })
+# experiment_side_inputs（PR #327 レビュー第4巡指摘10対応）: `export.py
+# --exp` は checkpoint 本体だけでなく experiment dir
+# （`checkpoints/<exp_name>/`）配下の config.yaml/spk_map.json/
+# lang_map.json/dictionary-<lang>.txt も消費する。旧 manifest は
+# checkpoint digest（`input_checkpoint`）しか記録しておらず、replay 時に
+# 無関係なローカル experiment ファイルが誤って消費されても全検証が通って
+# しまう穴があった——本節がその checkpoint-side 入力の全数を宣言する。
+_REEXPORT_EXPERIMENT_SIDE_INPUTS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "declaration", "enumeration_basis", "items",
+})
+_REEXPORT_EXPERIMENT_SIDE_INPUT_ITEM_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "logical_name", "experiment_dir_relative_path", "sha256",
+    "expected_sha256_per_dependency_pins", "sha256_matches_pin",
+})
+# DiffSinger ソース読解（`utils/hparams.py set_hparams()`・`basics/
+# base_exporter.py build_spk_map()/build_lang_map()`・`utils/
+# phoneme_utils.py load_phoneme_dictionary()`）+ session workdir staging
+# 実測で確定した checkpoint-side 入力の全数（checkpoint 本体を除く4点、
+# 固定）。
+REEXPORT_EXPERIMENT_SIDE_INPUT_KEYS: FrozenSet[str] = frozenset({
+    "config_yaml", "spk_map_json", "lang_map_json", "dictionary_ja_txt",
+})
+# experiment_side_inputs.items[key].logical_name は
+# dependency_pins_manifest.json#render_asset_ledger[].logical_name と対応
+# 付けて `load_pinned_reexport_manifest()` cross-check (11) で照合する
+# ——この辞書がその対応表の唯一の正本（他ではハードコードしない）。
+_REEXPORT_EXPERIMENT_SIDE_INPUT_LOGICAL_NAME_MAP: Dict[str, str] = {
+    "config_yaml": "backbone_config_yaml",
+    "spk_map_json": "backbone_spk_map_json",
+    "lang_map_json": "backbone_lang_map_json",
+    "dictionary_ja_txt": "backbone_dictionary_ja_txt",
+}
 _REEXPORT_EXPORT_VENV_SETUP_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "description", "install_steps", "historical_note",
 })
@@ -13251,6 +13284,61 @@ def _validate_reexport_artifact_entry(entry: Any, *, key: str) -> Dict[str, Any]
     return entry
 
 
+def _validate_reexport_experiment_side_input_entry(entry: Any, *, key: str) -> Dict[str, Any]:
+    field = f"experiment_side_inputs.items.{key}"
+    entry = _validate_reexport_shape(
+        entry, field=field, required_keys=_REEXPORT_EXPERIMENT_SIDE_INPUT_ITEM_REQUIRED_KEYS,
+    )
+    expected_logical_name = _REEXPORT_EXPERIMENT_SIDE_INPUT_LOGICAL_NAME_MAP[key]
+    logical_name = entry["logical_name"]
+    if logical_name != expected_logical_name:
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.logical_name must be exactly "
+            f"{expected_logical_name!r} (the dependency_pins_manifest.json#render_asset_ledger "
+            f"cross-check key for this item), got {logical_name!r}"
+        )
+    _require_non_empty_str(
+        entry["experiment_dir_relative_path"], field=f"{field}.experiment_dir_relative_path",
+    )
+    sha = entry["sha256"]
+    if not isinstance(sha, str) or not _SHA256_HEX_RE.match(sha):
+        raise Run9ValidationError(f"reexport manifest.{field}.sha256 must be a 64hex sha256, got {sha!r}")
+    expected_sha = entry["expected_sha256_per_dependency_pins"]
+    if not isinstance(expected_sha, str) or not _SHA256_HEX_RE.match(expected_sha):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.expected_sha256_per_dependency_pins must be a 64hex "
+            f"sha256, got {expected_sha!r}"
+        )
+    matches_pin = entry["sha256_matches_pin"]
+    if not isinstance(matches_pin, bool):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.sha256_matches_pin must be a bool, got {matches_pin!r}"
+        )
+    # 算術一貫性: 自己申告フラグは in-process 再計算（sha256 ==
+    # expected_sha256_per_dependency_pins）と一致しなければならない。
+    if matches_pin != (sha == expected_sha):
+        raise Run9ValidationError(
+            f"reexport manifest.{field}.sha256_matches_pin ({matches_pin!r}) diverges from the "
+            f"in-process recomputation (sha256 == expected_sha256_per_dependency_pins), which is "
+            f"{(sha == expected_sha)!r}"
+        )
+    # fail-closed（第2巡指摘6と同型の「pin 済み入力のみ表現可能」意味論）:
+    # 算術的には自己整合だが実際には unpinned な experiment-side 入力から
+    # derive された manifest（sha256_matches_pin: false かつ実際に不一致）
+    # をカテゴリカルに拒否する——sha256 と pin 値の直接一致、かつ
+    # sha256_matches_pin が literal True であることをここで機械強制する。
+    if sha != expected_sha or matches_pin is not True:
+        raise Run9ValidationError(
+            f"reexport manifest.{field}: sha256 ({sha!r}) must equal "
+            f"expected_sha256_per_dependency_pins ({expected_sha!r}) and sha256_matches_pin must "
+            f"be the literal boolean True ({matches_pin!r} given) — this schema can only "
+            "represent experiment-side inputs derived from a dependency_pins_manifest-pinned "
+            "asset; an entry whose experiment-side input does not match the canonical pin is "
+            "categorically rejected fail-closed"
+        )
+    return entry
+
+
 def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
     """reexport manifest（`run9-reexport-manifest/1.0`）の構造を検証する
     （RUN9-L0-HARNESS-2）。RUN6 phase B 40K checkpoint から DiffSinger
@@ -13289,6 +13377,18 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
     manifest schema は **「pin 済み入力からの derived artifact」のみ**
     を表現できるものと意味論を固定し、unpinned 入力/exporter からの
     derived manifest はカテゴリカルに拒否する。
+
+    **experiment_side_inputs（PR #327 レビュー第4巡指摘10対応）**: 再export
+    は checkpoint 本体だけでなく experiment dir 配下の config.yaml/
+    spk_map.json/lang_map.json/dictionary-ja.txt も消費するが、旧 schema は
+    checkpoint digest しか表現できなかった（replay 時に無関係なローカル
+    experiment ファイルが誤って消費されても全検証が通ってしまう穴）。本
+    節はその checkpoint-side 入力の全数を宣言し、`input_checkpoint`/
+    `exporter` と同型の「pin 済み入力のみ表現可能」意味論（sha256 と pin
+    値の直接一致 + フラグの literal True 強制）で各エントリを検証する。
+    `dependency_pins_manifest.json` 側との実 pin 値照合は
+    `load_pinned_reexport_manifest()` の cross-check (11) が担う（一次
+    データが未 load のため本関数では行わない）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"reexport manifest must be an object, got {type(data).__name__}")
@@ -13403,6 +13503,33 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
             "revision; a manifest whose exporter does not match the canonical pin is "
             "categorically rejected fail-closed"
         )
+
+    # experiment_side_inputs（PR #327 レビュー第4巡指摘10対応）: checkpoint
+    # 本体を除く checkpoint-side 入力（config.yaml/spk_map.json/
+    # lang_map.json/dictionary-ja.txt）の全数宣言 + 各 pin 一致。
+    experiment_side_inputs = _validate_reexport_shape(
+        data["experiment_side_inputs"], field="experiment_side_inputs",
+        required_keys=_REEXPORT_EXPERIMENT_SIDE_INPUTS_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(
+        experiment_side_inputs["declaration"], field="experiment_side_inputs.declaration",
+    )
+    _require_non_empty_str(
+        experiment_side_inputs["enumeration_basis"], field="experiment_side_inputs.enumeration_basis",
+    )
+    experiment_items = experiment_side_inputs["items"]
+    if not isinstance(experiment_items, dict):
+        raise Run9ValidationError(
+            "reexport manifest.experiment_side_inputs.items must be an object, got "
+            f"{type(experiment_items).__name__}"
+        )
+    if set(experiment_items.keys()) != REEXPORT_EXPERIMENT_SIDE_INPUT_KEYS:
+        raise Run9ValidationError(
+            "reexport manifest.experiment_side_inputs.items must register exactly the key set "
+            f"{sorted(REEXPORT_EXPERIMENT_SIDE_INPUT_KEYS)}, got {sorted(experiment_items.keys())}"
+        )
+    for item_key in REEXPORT_EXPERIMENT_SIDE_INPUT_KEYS:
+        _validate_reexport_experiment_side_input_entry(experiment_items[item_key], key=item_key)
 
     export_command = data["export_command"]
     if not isinstance(export_command, list) or not export_command:
@@ -13737,6 +13864,15 @@ def load_pinned_reexport_manifest(
         照合しており、companions 4点は両 manifest 間で digest 照合され
         ないまま load が成功し得た（`dependency_pins_sha` は PENDING の
         ため、cross-check (8) と同様に同ファイルを直接読む）。
+    (11) cross-check (k)（PR #327 レビュー第4巡指摘10対応）:
+        `experiment_side_inputs.items[].sha256` それぞれが、
+        `inputs/dependency_pins_manifest.json` の
+        `render_asset_ledger[].actual_sha256`（`logical_name` で対応付け）
+        と一致すること——checkpoint 側 export 入力（config.yaml/
+        spk_map.json/lang_map.json/dictionary-ja.txt）の pin 欠落を閉じる
+        （`dependency_pins_sha` は PENDING のため、cross-check (8)/(10)
+        と同様に同ファイルを直接読む。`dep_data` は (8) で既に read-once
+        済みのバッファから parse 済みであり、ここで再読込はしない）。
 
     戻り値は検証済み manifest dict。
     """
@@ -13924,6 +14060,32 @@ def load_pinned_reexport_manifest(
                 f"({artifact_sha!r}) diverges from dependency_pins_manifest.json#"
                 f"acoustic_export_companions.expected_items[logical_name={logical_name!r}]."
                 f"measured_sha256 ({companion_measured_sha!r}) — cross-check fail-closed"
+            )
+
+    # (11) cross-check (k): experiment_side_inputs 4点（checkpoint-side
+    # export 入力）の sha256 が dependency_pins_manifest.json 側
+    # render_asset_ledger の actual_sha256 と一致すること（PR #327 レビュー
+    # 第4巡指摘10）。`dep_data` は (8)/(10) で既に read-once 済みのバッファ
+    # から parse 済みであり、ここで再読込はしない。
+    render_ledger_by_logical_name = {
+        entry.get("logical_name"): entry for entry in dep_data.get("render_asset_ledger", [])
+    }
+    for item_key, logical_name in _REEXPORT_EXPERIMENT_SIDE_INPUT_LOGICAL_NAME_MAP.items():
+        ledger_entry = render_ledger_by_logical_name.get(logical_name)
+        if ledger_entry is None:
+            raise Run9ValidationError(
+                f"load_pinned_reexport_manifest(): {effective_dep_path} does not declare "
+                f"render_asset_ledger[].logical_name == {logical_name!r} (needed to cross-check "
+                f"experiment_side_inputs.items.{item_key})"
+            )
+        ledger_sha = ledger_entry.get("actual_sha256")
+        item_sha = data["experiment_side_inputs"]["items"][item_key]["sha256"]
+        if ledger_sha != item_sha:
+            raise Run9ValidationError(
+                f"load_pinned_reexport_manifest(): experiment_side_inputs.items.{item_key}."
+                f"sha256 ({item_sha!r}) diverges from dependency_pins_manifest.json#"
+                f"render_asset_ledger[logical_name={logical_name!r}].actual_sha256 "
+                f"({ledger_sha!r}) — cross-check fail-closed"
             )
 
     return data
