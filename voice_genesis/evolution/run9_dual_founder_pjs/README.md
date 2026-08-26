@@ -894,8 +894,13 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   `dataset_manifest_sha`/`dataset_row_order_sha` を含む pre-run 必須12欄が
   PENDING（optional 込み総 PENDING 13欄）だったが、RUN9-L0-PIN-2
   （2026-08-26）で dataset_manifest_sha/dataset_row_order_sha の2欄が
-  PINNED 化され、残 PENDING は下記のとおり10欄（総11欄）へ減少した——
-  下記「解消済み（RUN9-L0-PIN-2, 2026-08-26）」節参照〕（`attempt_id`/
+  PINNED 化され、残 PENDING は pre-run 必須10欄（総 PENDING 11欄）へ
+  減少した。続けて RUN9-L0-HARNESS-1（2026-08-26）で `dependency_pins_sha`
+  が一時的に PINNED 化され、残 PENDING は pre-run 必須9欄
+  （総 PENDING 10欄）へ減少したが、PR #326 第2巡 Codex bot レビュー
+  Fix 3（P1、採用）により同欄は PENDING へ差し戻され、残 PENDING は
+  下記のとおり pre-run 必須10欄（総 PENDING 11欄）へ戻った——下記
+  「解消済み（RUN9-L0-HARNESS-1, 2026-08-26）」節参照〕（`attempt_id`/
   `repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
   `execution_profile_sha`/`expected_speaker_map_sha`/
   `education_technique_lesson_manifest_sha`/`learning_recipe_sha`/
@@ -903,6 +908,133 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   引き続き PENDING のため（optional の `human_evaluation_protocol_sha` を
   含めると総 PENDING 11欄）——`tests/test_run9_contract.py` の回帰テストで
   機械確認済み）。
+
+**解消済み（RUN9-L0-HARNESS-1, 2026-08-26）**:
+- `dependency_pins_sha` 未 pin →
+  [`inputs/dependency_pins_manifest.json`](./inputs/dependency_pins_manifest.json)
+  （schema `run9-dependency-pins/1.0`）を新設した——VG-L0 render 資産
+  provisioning の実測台帳（Drive/URL 取得資産12点の sha256 全数
+  VERIFIED_MATCH・DiffSinger commit 一致・Python 依存 RENDER_STACK_PIN/
+  ANALYSIS_STACK_PIN 全9パッケージ実測一致）。唯一の未達成は
+  `r6_gate_materials_2026-08-20.tar.gz` の acoustic export companions
+  4点（acoustic.onnx/dsconfig.yaml/acoustic_phonemes_json/
+  speaker_embed(ritsu)）——展開した39ファイル全数を検査したが含まれて
+  おらず（MISS、`acoustic_export_companions` 節）、fail-closed 原則に
+  従い再export・代替調達へは進んでいない。pjs/user speaker embedding は
+  候補 sha256 のみ記録し pin 化していない（`speaker_embeddings_
+  unpinned_candidates` 節、User 裁定待ち）。決定論 smoke render・CPU
+  render 予算見積りはいずれも acoustic export companions 未取得により
+  `BLOCKED`（`smoke_render`/`budget_estimate` 節、数値を捏造しない）。
+  詳細な取得経路・全照合結果・tar.gz 全数展開ログは
+  [`HARNESS1_PROVISION_RECORD.md`](./HARNESS1_PROVISION_RECORD.md) を正とする。
+  PR #326 第1巡 Codex bot レビュー2件（P2×2、採用）により
+  `validate_dependency_pins_manifest()` を status 判別型 shape へ強化し
+  （`acoustic_export_companions`/`smoke_render`/`budget_estimate` が
+  status 文字列の書き換えだけで成功状態を主張できない machine check を
+  追加）、`dependency_pins_sha` を第2世代へ repin した（実測結果自体は
+  無変更、詳細は `HARNESS1_PROVISION_RECORD.md` §5-1）。
+  **PENDING 差し戻し（PR #326 第2巡 Fix 3、P1、採用、2026-08-26）**:
+  上記2回の PINNED（第1-2世代）は過大だった——manifest は
+  render/analysis 層9パッケージのみを検証対象としており、これで
+  `dependency_pins_sha` を PINNED にすると VG-L0 学習ハーネス本体
+  （optimizer/探索コード）の依存 closure 未確定のまま `gate_state()`
+  が「全実行依存が確定した」証拠として誤認する経路を開く
+  （`measurement_spec_sha` が RUN9-L0-PIN-1 で同型の理由により PENDING
+  へ復帰した前例と同型）。value を null・status を PENDING へ戻し、
+  manifest 自身の `claim_scope` に「render/analysis 層の実測記録であり
+  `dependency_pins_sha` の完全な充足を主張しない」ことを明記した
+  （manifest 実体・validator・loader は撤去せず残置——`measurement_
+  spec_sha` と同型の「事前配線を残しつつ pin 欄だけ PENDING」運用）。
+  同巡でさらに3件対応（いずれも P2、実測結果は無変更）: Fix 4
+  `_validate_tar_gz_full_member_ledger()` を companion status に条件付け
+  （NOT_OBTAINED のときのみ従来どおり拒否、OBTAINED のときは逆に
+  「tar member が無い・sha 不一致なら拒否」という整合検査へ切替、
+  将来 tarball から正当取得した場合の遷移を可能にした）。Fix 5
+  `budget_estimate` の COMPLETED は `smoke_render` も COMPLETED である
+  ことを前提条件として要求し（BLOCKED のまま budget だけ完了主張は
+  自己矛盾として拒否）、`estimated_total_sec ==
+  measured_sec_per_render × total_render_count` を `math.isclose`
+  （rel_tol=1e-9、厳しめ）で検証するようにした。Fix 6
+  `acoustic_export_companions.expected_items` の重複 `logical_name` を
+  集合等価チェックより先に `len(list)==len(unique)` で拒否するように
+  した（`render_asset_ledger` と同型）。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-2。
+  PR #326 第3巡 Codex bot レビュー3件（P2×3、採用）でさらに強化した
+  （pin 欄は引き続き PENDING、repin ではなく `RUN9_CONTRACT.yaml`
+  履歴コメントの情報記録 sha256 のみ更新）: Fix 7 OBTAINED item へ
+  `acquisition_source`（閉じた語彙 THIS_TARBALL/DRIVE_DIRECT/
+  RE_EXPORT）を必須化し、tar membership 要求を THIS_TARBALL 経路のみに
+  限定した（別 Drive フォルダ探索・再export 由来の正当な取得を拒否
+  しないように）。Fix 8 `smoke_render` COMPLETED は
+  `acoustic_export_companions.status == OBTAINED_VERIFIED_MATCH` を
+  前提条件として要求するようにした（Fix 5 budget↔smoke と同型）。
+  Fix 9 speaker candidate status を `startswith()` から厳密語彙一致へ
+  変更し typo/混成値を拒否するようにした。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-3。
+  PR #326 第4巡 Codex bot レビュー2件（P2×2、採用）でさらに強化した
+  （pin 欄は引き続き PENDING、repin ではなく `RUN9_CONTRACT.yaml`
+  履歴コメントの情報記録 sha256 のみ更新）: Fix 10
+  `tar_gz_full_member_ledger` が「非空の well-formed 行の任意部分集合」
+  で通過してしまう穴を、新設 `tar_gz_ledger_integrity` 節
+  （member_count/total_size_bytes の内部整合 + 独立再生成一致実測の
+  record）で閉じた——workdir に tarball が現存する間に実 tar から
+  ledger を独立再生成し、現行39行と全一致することを実測（列挙漏れが
+  現世代には存在しないことの直接証拠）。tarball が repo 外にあるため
+  load 時の完全性再検証はできないという信頼根境界を validator
+  docstring に明記した。Fix 11 `HARNESS1_PROVISION_RECORD.md` §6 を
+  「歴史値+最新値」の二層表記へ改めた。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-4。
+  PR #326 第5巡 Codex bot レビュー2件（P2×2、採用）でさらに強化した
+  （pin 欄は引き続き PENDING、repin ではなく `RUN9_CONTRACT.yaml`
+  履歴コメントの情報記録 sha256 のみ更新）: Fix 12
+  `NOT_OBTAINED_TARBALL_MISS` の tar member 矛盾判定を「basename 一致
+  かつ sha256 == expected_sha256」の両立時のみに限定し、同名別バイトの
+  無関係ファイルによる偽ブロックを防いだ。Fix 13
+  `claim_scope.statement` を「`dependency_pins_sha` は現在 PENDING
+  である」ことを主表明として書き出す文へ全面改訂し、旧 PINNED 世代
+  （第1-2世代）への言及を新設フィールド
+  `claim_scope.historical_pinned_generations` へ分離した。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-5。
+  PR #326 第6巡 Codex bot レビュー2件（P2×2、採用）でさらに強化した
+  （pin 欄は引き続き PENDING、repin ではなく `RUN9_CONTRACT.yaml`
+  履歴コメントの情報記録 sha256 のみ更新）: Fix 14
+  `acoustic_export_companions` のトップレベル narrative フィールド
+  （`verdict`/`fail_closed_disposition`/`acquisition_record`）を item
+  レベル（Fix 1/7）と同じ status 判別 shape 化し、
+  `OBTAINED_VERIFIED_MATCH` でも MISS narrative が残置可能だった穴を
+  閉じた。Fix 15 `smoke_render` の COMPLETED に
+  `render_output_sha256_first`/`render_output_sha256_second`（64hex・
+  厳密一致を機械強制）を必須化し、`determinism_confirmed: true` が
+  監査可能な出力 hash 証拠を伴わずに主張できていた穴を閉じた。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-6。
+  PR #326 第7巡 Codex bot レビュー1件（P2×1、採用）でさらに強化した
+  （manifest 実データに矛盾なし、修正・sha256 更新は不要だった）:
+  Fix 16 `_validate_speaker_embed_candidate()` を全必須フィールド検証へ
+  強化し、`candidate_sha256_first16`（pjs/user）が `candidate_sha256` の
+  先頭16文字と実際に一致するかの機械照合、`file`（pjs/user）/`note`
+  （d3synth）の非空検証を追加した——値の整合検証漏れ（矛盾した短縮
+  digest や空文字列が通過しうる穴）を閉じた。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-7。
+  PR #326 第8巡 Codex bot レビュー1件（P2×1、採用）: Fix 17 本 README が
+  参照する `HARNESS1_PROVISION_RECORD.md` 冒頭の「未コミット」現在形
+  主張が、record 自体のコミット後に虚偽化していた問題を is historical
+  context への書き換えで是正した（record/validator のみの変更）。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-8。
+  PR #326 第9巡 Codex bot レビュー1件（P2×1、採用）: Fix 18
+  `smoke_render` の BLOCKED 分岐に companions_status との整合を追加し、
+  companions が実は OBTAINED_VERIFIED_MATCH なのに smoke_render が
+  missing-input BLOCKED を主張し続ける逆方向の矛盾（Fix 8 の逆方向の
+  未結合）を閉じた。詳細は `HARNESS1_PROVISION_RECORD.md` §5-9。
+  PR #326 第10巡 Codex bot レビュー2件（P2×2、採用——本巡で規約上限
+  10巡に到達）でさらに強化した（manifest 実データに矛盾なし、修正・
+  sha256 更新は不要だった）: Fix 19 `HARNESS1_PROVISION_RECORD.md` §6の
+  二層規約（歴史値+最新値）自体の最新値更新漏れを是正し、再発防止の
+  チェックリスト項目を規約文へ追記した。Fix 20 `budget_estimate` の
+  BLOCKED 分岐にも smoke_render.status との整合を追加し（Fix 18 の対）、
+  companions↔smoke↔budget の3セクション間の状態結合を全方向（OBTAINED/
+  COMPLETED 方向 = Fix 5/8、BLOCKED 残置方向 = Fix 18/20）で閉じた
+  ——相互矛盾する状態組は構造的に表現不能になった。詳細は
+  `HARNESS1_PROVISION_RECORD.md` §5-10。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

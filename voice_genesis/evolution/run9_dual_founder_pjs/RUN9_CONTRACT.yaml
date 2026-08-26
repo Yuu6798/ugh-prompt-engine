@@ -403,24 +403,226 @@ config_sha:
     Performance ControlProfile へ変更 — DESIGN_RUN9_REVISION_0.2.md 参照。
     ハーネス未実装であることは変わらない）だった〕
 
+# RUN9-L0-HARNESS-1（2026-08-26, User 裁定 2026-08-26「必要な素材は
+# ドライブにあるのでClaudeで完結できるはずだ。Claudeルートで作成して」）
+# で PINNED 化: Drive/URL 経由で render 資産一式を取得し全数 sha256 照合
+# （backbone checkpoint/config/spk_map/lang_map/dict の5点、vocoder
+# 配布archive+展開onnx、canon distribution zip+展開onnx4点+phonemes.txt
+# の計12点が VERIFIED_MATCH）、DiffSinger repo を pin commit
+# e2307b1080b00f3999702ce9017cfd75c7f862fe へ checkout・rev-parse 一致
+# 確認、RENDER_STACK_PIN/ANALYSIS_STACK_PIN 全9パッケージの実測バージョン
+# 一致（onnxruntime==1.29.0 を本 Memo で新規 pip install）を確認した。
+# 唯一の未達成: r6_gate_materials_2026-08-20.tar.gz（Drive fileId
+# 1D3R51BeseDYvFvk3voDg9oaSYvW-kxoA、有力候補として調査で特定済み）を
+# 実際に取得・展開（39ファイル全数 sha256 台帳化）したが、acoustic
+# export companions（acoustic.onnx/dsconfig.yaml/acoustic_phonemes_json/
+# speaker_embed(ritsu)）はいずれも含まれていなかった（MISS、Design Memo
+# Risk 節が事前規定した fail-closed 分岐どおり——事実を記録して停止し、
+# export 再実行や代替調達には進んでいない。再export は
+# torch/lightning/onnx/onnxsim を要し本 Memo の Allowed Dependencies
+# 範囲外）。tar 内 gate_synth_summary.json（out_ritsu 等4話者分）が
+# これら4点の実行時 hash を独立に記録しており、repo 側 pin と全数一致
+# することも確認した（間接的 provenance、pin の代替にはしない）。
+# pjs/user speaker embedding は同 summary から候補 sha256 を実測記録した
+# が pin 化していない（User 裁定待ち、manifest
+# `speaker_embeddings_unpinned_candidates` 節）。本欄が PINNED であること
+# の claim scope は manifest 自身の `claim_scope` 節が正——ファイルの
+# バイト同一性と、文書内で「確定」と記した節（render_asset_ledger の
+# VERIFIED_MATCH 12件・python_dependency_pins 9件・diffsinger commit・
+# tar.gz 全数展開結果そのもの）の確定のみを主張し、acoustic export
+# companions の取得・pjs/user emb の確定・smoke render の実施・CPU 予算
+# 実測のいずれも主張しない（`acoustic_export_companions`/
+# `speaker_embeddings_unpinned_candidates`/`smoke_render`/
+# `budget_estimate` の各 status が正直にそれを示す）。詳細は
+# `HARNESS1_PROVISION_RECORD.md` を正とする。
+#
+# 〔履歴: 旧 PENDING 理由——
+# Backbone checkpoint 本体は backbone_checkpoint_sha として PINNED 済み。
+# backbone_runtime_bundle_sha も、RUN9 が今後の render に使用する commit
+# の前方宣言 `run9_render_code_commit`（status: DECLARED_FOR_RUN9）の
+# 確定を根拠に PINNED 済み（bundle 内 `render_code_commit` は RUN6 の
+# 歴史的 export provenance record として INFERRED_UNCONFIRMED のまま
+# ——歴史的事実は遡って attest しない、2026-08-25 User 追加裁定①。
+# 両欄は独立であり、下記参照）。VG-L0 学習ハーネス自体の依存関係 pin
+# （Python パッケージ・PyTorch 等のバージョン固定）が未確定のため、
+# 本欄全体としてはまだ PENDING だった〕
+#
+# 2026-08-26 repin（PR #326 第1巡 Codex bot レビュー2件、P2×2、いずれも
+# 採用——将来汚染: 将来の repin が証拠なしで成功状態を主張できる
+# validator の穴）: `run9_schema.validate_dependency_pins_manifest()` を
+# status 判別型 shape へ強化した（manifest 自体の実測結果——tar.gz MISS・
+# smoke render BLOCKED・budget estimate BLOCKED——は無変更、validator/
+# loader の強化と `generation_note` への追記のみでバイトが変わったため
+# repin）。Fix 1: `acoustic_export_companions.expected_items` は status
+# が `OBTAINED_VERIFIED_MATCH` のときのみ `measured_sha256`（実測 digest、
+# `expected_sha256` と厳密一致必須）を要求し、
+# `NOT_OBTAINED_TARBALL_MISS` のときは禁止する——旧実装は status 文字列を
+# 書き換えるだけで通過できた。`load_pinned_dependency_pins_manifest()`
+# 側は `measured_sha256` と `backbone_runtime_bundle.json` 側 pin 値の
+# 直接比較（三者一致の第3辺）も追加した。Fix 2:
+# `smoke_render`/`budget_estimate` を BLOCKED/COMPLETED 専用の disjoint
+# な必須キー集合へ分離した——COMPLETED は blocked 専用フィールド
+# （`blocked_by` 等）を禁止し、実測フィールド（smoke:
+# `determinism_confirmed`=True・`measured_sec_per_render` 正の有限数値・
+# `render_condition`／budget: `total_render_count` 正の整数・
+# `estimated_total_sec` 正の有限数値）を必須化した。
+#
+# 2026-08-26 PENDING 復帰（PR #326 第2巡 Codex bot レビュー Fix 3、P1、
+# 採用）: 上記2回の PINNED（第1-2世代）は過大だった。指摘は正当——本欄の
+# 従来 reason は学習ハーネス自体の依存（PyTorch 等）を残る律速に挙げて
+# いたにもかかわらず、`dependency_pins_manifest.json` は
+# render/analysis 9パッケージ（`python_dependency_pins`）のみを検証対象
+# としており、これで本欄を PINNED にすると `gate_state()` が「全実行
+# 依存が確定した」証拠として扱ってしまう——ハーネス実装後に未 pin の
+# 学習依存（optimizer/探索が要する追加パッケージ）で動く偽 READY 経路を
+# 開く（RUN9-L0-PIN-1 で `measurement_spec_sha` が同型の理由で PENDING
+# へ復帰した前例と同型）。`claim_scope` による証明範囲の限定（narrowing）
+# では hard-gate 欄の意味論そのものを弱めてしまうため採用しない——
+# 「不完全な pin を narrow に PINNED」ではなく「完全になるまで PENDING」
+# を選ぶ。値を null・status を PENDING へ戻した（下記 reason 欄）。
+# manifest 実体（`inputs/dependency_pins_manifest.json`）・validator
+# （`validate_dependency_pins_manifest()`）・loader
+# （`load_pinned_dependency_pins_manifest()`）は撤去しない（PIN-1
+# `measurement_spec` と同型の「事前配線を残しつつ pin 欄だけ PENDING」
+# 運用）——PENDING の間、loader が「not PINNED」で raise するのが正しい
+# 挙動であり、そのように `tests/test_run9_contract.py` を追随させた
+# （`test_harness1_dependency_pins_sha_pinned_and_matches_manifest_bytes`
+# 等の PINNED 前提テストを PENDING 前提へ改訂）。manifest 自体は
+# render/analysis 層の実測記録として repo に残置し（`claim_scope` に
+# 「本 manifest は render/analysis 層の実測記録であり
+# `dependency_pins_sha` の完全な充足を主張しない」を明記した）、実測済み
+# の sha256（本欄 PENDING 化に伴う claim_scope/generation_note 追記後の
+# 実バイト、Fix 1-6 全対応後の実測値）は情報記録として保持していた:
+# "fe8e47b8cb035e8e3795c8bbf5305161985b630f9ae7659a709d6dd5092e0cf5"
+# （本欄が将来 PINNED 化される際は、学習ハーネス依存の import closure が
+# 実測・manifest へ追加された後の**新しい**バイト列の sha256 を pin する
+# ——上記の値をそのまま転記しない）。過去の PINNED 値（履歴として
+# append-only 保持）: 第2世代（Fix 1/2 対応後）
+# "1d8a8f720bfd5e4999748cd766560ad33fff2d977852e2fda7b7596124539be2"、
+# 第1世代（初回 PINNED 時）
+# "3392656474b4538e9ed05bfda0d57bc7845bcca3cfa20ffaacdaa94b5fb695e1"
+#
+# 2026-08-26 情報記録更新（PR #326 第3巡 Codex bot レビュー3件、P2×3、
+# いずれも採用——将来汚染/実行不能遷移の同系整合。pin 欄自体は PENDING
+# のまま、repin ではなく情報記録の更新）: Fix 7
+# `acoustic_export_companions.expected_items` の OBTAINED item へ
+# `acquisition_source`（閉じた語彙 THIS_TARBALL/DRIVE_DIRECT/
+# RE_EXPORT）を必須化し、tar membership + sha 整合の要求を
+# `acquisition_source == THIS_TARBALL` のときのみに限定した
+# （`HARNESS1_PROVISION_RECORD.md` §7 が記録する非 tar 経路——別 Drive
+# フォルダの探索・再export——由来の正当な取得を構造的に拒否しないように
+# した）。Fix 8 `smoke_render` が COMPLETED を名乗るには
+# `acoustic_export_companions.status == OBTAINED_VERIFIED_MATCH` を
+# 前提条件として要求するようにした（Fix 5 budget↔smoke と同型の結合強制
+# ——NOT_OBTAINED のまま smoke だけ COMPLETED は「無い入力で render した」
+# 自己矛盾として拒否）。Fix 9
+# `speaker_embeddings_unpinned_candidates` の status 判定を
+# `startswith("UNPINNED_CANDIDATE")` から entry ごとの厳密語彙一致へ
+# 変更し、typo/混成値（例 `UNPINNED_CANDIDATE_PINNED_VERIFIED`）を拒否
+# するようにした。実測済みの sha256（Fix 7-9 対応後の実バイト）は
+# 情報記録として保持していた:
+# "cb8307da0a2b14c189a58be620003a1c7a89ad6c8e1e4d0997b51ac3a8953ede"
+#
+# 2026-08-26 情報記録更新（PR #326 第4巡 Codex bot レビュー2件、P2×2、
+# いずれも採用。pin 欄自体は PENDING のまま、repin ではなく情報記録の
+# 更新）: Fix 10 `tar_gz_full_member_ledger` が「非空の well-formed 行の
+# 任意部分集合」で通過してしまう穴（列挙漏れがあっても
+# NOT_OBTAINED_TARBALL_MISS が成立し得た）を閉じた。新設
+# `tar_gz_ledger_integrity` 節に `member_count`/`total_size_bytes`
+# （ledger 実体との内部整合を machine 強制）+ `generation_method`
+# （単一 tarfile read で構築した宣言）+
+# `independent_reread_verification`（tarball が workdir に現存する間に
+# 独立再生成し、現行39行 ledger と全一致したことの実測記録、
+# `result: EXACT_MATCH`）を必須化した。tarball 実体（25MB）は repo 外
+# にあり load 時の完全性再検証は構造的に不可能という信頼根境界を
+# `validate_dependency_pins_manifest()` docstring に正直に宣言し、
+# 担保を3層（build時単一read生成/本巡の独立再生成一致実測/将来repin時の
+# 再provisioning経路宣言）とした（再入条件: tarball 自体が将来 repo 内
+# pin として収載されたら load-time 完全束縛へ昇格）。Fix 11
+# `HARNESS1_PROVISION_RECORD.md` の検証節を「歴史値 + 最新値」の二層
+# 表記へ改めた（詳細は同ファイル参照、本欄には影響しない）。実測済みの
+# sha256（Fix 10 対応後の実バイト）は情報記録として保持していた:
+# "e8120a77a9b49ad5aa11ab7f9a92d8ee7eea33a1accb7cdbe533a94587271404"
+#
+# 2026-08-26 情報記録更新（PR #326 第5巡 Codex bot レビュー2件、P2×2、
+# いずれも採用。pin 欄自体は PENDING のまま、repin ではなく情報記録の
+# 更新）: Fix 12 `NOT_OBTAINED_TARBALL_MISS` 側の tar member 矛盾判定を
+# 「basename 一致 かつ sha256 == expected_sha256」の両立時のみに限定
+# した（旧実装は basename 一致だけで発火しており、将来の tarball に
+# 同名だが別バイトの無関係ファイル——例: 別由来の dsconfig.yaml——が
+# 混入すると、正直な NOT_OBTAINED_TARBALL_MISS 記録が偽ブロックされ
+# 得た）。Fix 13 `inputs/dependency_pins_manifest.json` の
+# `claim_scope.statement` を全面改訂した——旧文は「本 manifest が
+# PINNED 判定を通じて主張するのは...」という PINNED 前提の書き出しの
+# まま残っており、`dependency_pins_sha` の PENDING 差し戻し（本欄
+# 2026-08-26 記載の第2巡 Fix 3）後の訂正が文末への追記に留まっていた
+# ため、偽の完了主張が先頭に居座っていた。新 statement は「
+# `dependency_pins_sha` は現在 PENDING である」ことを主表明として書き
+# 出す文へ改め、旧 PINNED 世代（第1-2世代）への言及は新設フィールド
+# `claim_scope.historical_pinned_generations`（明示的な historical 節）
+# へ分離した。validator（`_validate_claim_scope()`）は PENDING 主表明
+# マーカーが statement の先頭付近（80文字以内）に存在することを機械
+# 強制する——文末への追記だけでは通らない。実測済みの sha256（Fix 12/13
+# 対応後の最新実バイト）は情報記録として保持する:
+# "06426625792af6649f7b479110cb0c89f7f25205d13664d79398f43e1eea883d"
+#
+# 2026-08-26 情報記録更新（PR #326 第6巡 Codex bot レビュー2件、P2×2、
+# いずれも採用。pin 欄自体は PENDING のまま、repin ではなく情報記録の
+# 更新）: Fix 14 `acoustic_export_companions` のトップレベル narrative
+# フィールド（`verdict`/`fail_closed_disposition`/`acquisition_record`）
+# が item レベル（Fix 1/7）と独立に自由記述のまま残っており、
+# `status: OBTAINED_VERIFIED_MATCH` でも MISS 系の `verdict`/
+# `fail_closed_disposition` が残置可能だった穴を閉じた。トップレベルを
+# status 判別 shape へ改めた——`NOT_OBTAINED_TARBALL_MISS` 側は `verdict`
+# （`MISS` 始まり必須）+ `fail_closed_disposition` を必須化・
+# `acquisition_record` を禁止、OBTAINED 側は `acquisition_record`
+# （`acquired_at`/`acquisition_summary` の2キーのみ）を必須化・MISS 系
+# 2フィールドを禁止する相互排他 shape とし、`_validate_acoustic_export_
+# companions()` が unknown-key/missing-key の両方向を機械強制する。
+# Fix 15 `smoke_render` の COMPLETED が `determinism_confirmed: true` +
+# 実測秒 + 条件文の自己申告だけで成立し、record が定義する「同一入力
+# 2 render の WAV byte 一致」を裏付ける監査可能な証拠（出力 sha256）を
+# 要求していなかった穴を閉じた。COMPLETED shape へ
+# `render_output_sha256_first`/`render_output_sha256_second`（64hex）を
+# 必須化し、validator が両者の厳密一致を機械強制する（不一致は
+# `determinism_confirmed: true` との自己矛盾として拒否）。実測済みの
+# sha256（Fix 14/15 対応後の最新実バイト）は情報記録として保持する:
+# "229493a911b6def9ca47523cfb0345d6066d826ec67e7ead999b098ea6dbc269"
 dependency_pins_sha:
   value: null
   status: PENDING
   reason: >-
-    Backbone checkpoint 本体は backbone_checkpoint_sha として PINNED 済み。
-    backbone_runtime_bundle_sha も、RUN9 が今後の render に使用する commit
-    の前方宣言 `run9_render_code_commit`（status: DECLARED_FOR_RUN9）の
-    確定を根拠に PINNED 済み（bundle 内 `render_code_commit` は RUN6 の
-    歴史的 export provenance record として INFERRED_UNCONFIRMED のまま
-    ——歴史的事実は遡って attest しない、2026-08-25 User 追加裁定①。
-    両欄は独立であり、下記参照）。VG-L0 学習ハーネス自体の依存関係 pin
-    （Python パッケージ・PyTorch 等のバージョン固定）が未確定のため、
-    本欄全体としてはまだ PENDING。
+    render/analysis 層 + 実体資産は dependency_pins_manifest.json
+    （事前配線・repo 収載済み）で実測検証済み。ただし VG-L0 学習ハーネス
+    本体の import closure が未確定（rev 0.2 の ControlProfile 決定論
+    導出では追加依存ゼロの可能性が高いが、ハーネス実装で実証されるまで
+    主張しない）。pin はハーネス実装時に closure を実測してから。
+    〔履歴: HARNESS-1 で一時 PINNED（第1-2世代）→ 第2巡 P1 指摘で
+    PENDING 復帰〕
 
+# RUN9-L0-HARNESS-1（2026-08-26）追記: PINNED 化を試みたが見送った。
+# 見送り理由は「実行環境が非現実的だった」ではなく「実測そのものが
+# できなかった」——決定論 smoke render（gate_synth.py --speaker ritsu）
+# には acoustic.onnx 等 acoustic export companions 4点が必須だが、有力
+# 候補だった r6_gate_materials.tar.gz にこれらが含まれていなかった
+# （dependency_pins_manifest.json `acoustic_export_companions` 節、
+# MISS）。fail-closed 原則（Design Memo Risk 節）に従い再export・代替
+# 調達には進んでいないため、CPU render 1件あたりの実測秒が存在しない。
+# 実測なしに「現実的/非現実的」を判定すると数字を捏造することになる
+# ため、本欄は PENDING を維持する（`dependency_pins_manifest.json`
+# `budget_estimate`/`smoke_render` 節に判断材料を記録済み——過去の GPU
+# 環境実測 3.7〜7.6秒/件（results_s7/probe_0b_groups/run6_ritsu.json）
+# は参考値のみで pin/見積りの根拠にしない）。acoustic export companions
+# が別途取得できた後、smoke render を再試行して実測を得るのが次の
+# ブロッカー解消経路（HARNESS-2 以降への引き継ぎ）。
 execution_profile_sha:
   value: null
   status: PENDING
-  reason: 学習実行環境（GPU / hardware profile）が未選定。
+  reason: >-
+    学習実行環境（GPU / hardware profile）が未選定。加えて
+    RUN9-L0-HARNESS-1（2026-08-26）で判明: CPU render 実測時間が
+    acoustic export companions 未取得のため得られず、予算現実性の判定
+    材料自体が存在しない（上記コメント参照）。
 
 # --- seed_policy_sha: inputs/seed_policy_manifest.json の実バイト sha256
 # （design_doc_sha256 と同一のファイル実バイト規約 —
