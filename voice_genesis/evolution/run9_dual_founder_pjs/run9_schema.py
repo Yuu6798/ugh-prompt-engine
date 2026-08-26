@@ -14201,6 +14201,29 @@ def validate_reexport_manifest(data: Mapping[str, Any]) -> None:
     for key in REEXPORT_ARTIFACT_KEYS:
         validated_artifacts[key] = _validate_reexport_artifact_entry(artifacts[key], key=key)
 
+    # PR #327 レビュー第12巡指摘22（P2、採用）: 9エントリの `file` 値の
+    # 一意性を検証していなかった——将来の re-export が2論理 entry を同一
+    # ファイルへ alias すると、実際には8出力しかないのに9 artifacts を
+    # 主張する manifest が構造検証を通過し得た（file 値の重複は「同じ
+    # バイト列を2つの論理名で二重計上している」ことを意味し、9点の実体的
+    # 独立性という manifest の前提が崩れる）。file 値の全数一意性を
+    # fail-closed で強制する。
+    files_by_value: Dict[str, List[str]] = {}
+    for key, entry in validated_artifacts.items():
+        files_by_value.setdefault(entry["file"], []).append(key)
+    duplicate_files = {
+        file_value: keys for file_value, keys in files_by_value.items() if len(keys) > 1
+    }
+    if duplicate_files:
+        raise Run9ValidationError(
+            "reexport manifest.artifacts.*.file values must be unique across all "
+            f"{len(REEXPORT_ARTIFACT_KEYS)} artifacts — found duplicate file value(s) shared by "
+            f"multiple artifact keys: {duplicate_files!r} (a shared file value means 2 logical "
+            "artifacts alias the same on-disk bytes, which would let a manifest claim "
+            f"{len(REEXPORT_ARTIFACT_KEYS)} artifacts while only fewer distinct files were "
+            "actually produced)"
+        )
+
     reproducibility = _validate_reexport_shape(
         data["reproducibility_check"], field="reproducibility_check",
         required_keys=_REEXPORT_REPRODUCIBILITY_CHECK_REQUIRED_KEYS,
@@ -15269,11 +15292,23 @@ def validate_execution_profile_manifest(data: Mapping[str, Any]) -> None:
             )
         # thread_environment_variables は NOT_RECORDED を許容する独立
         # sub-item（(f) と同じ status 判別 shape）。
-        _validate_execprofile_measurement_item(
+        thread_env_item = _validate_execprofile_measurement_item(
             seed_and_env["thread_environment_variables"],
             field=f"{seed_field_prefix}.thread_environment_variables",
             measured_required_keys=frozenset({"status", "value", "method"}),
         )
+        # PR #327 レビュー第12巡指摘23（P2、採用）: MEASURED の場合に
+        # value/method が空文字列でも `_validate_execprofile_measured_item`
+        # の shape 検証（キー集合のみ）を通過してしまい、証拠なしの空
+        # 成功記録へ昇格し得た——numpy_item/soundfile_item と同型の実値
+        # 検証（非空・型検証）を追加する。
+        if thread_env_item["status"] == "MEASURED":
+            _require_non_empty_str(
+                thread_env_item["value"], field=f"{seed_field_prefix}.thread_environment_variables.value"
+            )
+            _require_non_empty_str(
+                thread_env_item["method"], field=f"{seed_field_prefix}.thread_environment_variables.method"
+            )
 
     _require_non_empty_str(data["pin_disposition"], field="pin_disposition")
 
@@ -15514,6 +15549,21 @@ def _build_live_os_identity(os_release_path: Optional[Path] = None) -> str:
     return f"{name} {version_token}"
 
 
+def _live_python_version() -> str:
+    """live 実行環境の Python バージョンを `"{major}.{minor}.{micro}"` 形式で
+    組み立てて返す probe 関数（`verify_execution_profile_runtime()` 専用、
+    PR #327 CI 修正対応、2026-08-26）。
+
+    `sys.version` のフリーテキスト解析はせず `sys.version_info` から直接
+    組み立てる（旧実装の意味論を1字も変えず、`verify_execution_profile_
+    runtime()` 本体からモジュールレベル関数へ切り出しただけ）。切り出しの
+    目的はテスト側が本関数単体を monkeypatch できるようにすることで、CI が
+    どの Python patch バージョン（例: 3.11.15 の pin に対し CI ホストが
+    3.11.16 等）で走っても、live probe を検証するテスト群を決定論化できる
+    ようにする。"""
+    return f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+
 def verify_execution_profile_runtime(
     contract: Run9RunContract, *, selected_providers: Optional[List[str]] = None,
     os_release_path: Optional[Path] = None,
@@ -15623,8 +15673,11 @@ def verify_execution_profile_runtime(
     runtime = manifest["identity_semantics"]["runtime"]
 
     # (a) Python バージョン: sys.version_info ベースで組み立てる（sys.
-    # version 文字列のフリーテキスト解析はしない）。
-    live_python = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    # version 文字列のフリーテキスト解析はしない）。probe 自体は
+    # `_live_python_version()` へ切り出し済み（CI 修正、2026-08-26——テスト
+    # 側が monkeypatch でき、CI ホストの Python patch バージョンが pin と
+    # 乖離してもテストを決定論化できる）。
+    live_python = _live_python_version()
     pinned_python = runtime["python"]
     if live_python != pinned_python:
         raise Run9ValidationError(

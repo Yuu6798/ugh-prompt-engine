@@ -15,7 +15,7 @@ import sys
 import textwrap
 import types
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 import yaml
@@ -15499,6 +15499,20 @@ def test_harness2_reexport_manifest_artifacts_missing_key_fail_closed() -> None:
         m.validate_reexport_manifest(data)
 
 
+# --- fail-closed (h)（PR #327 レビュー第12巡指摘22、P2、採用）:
+# artifacts.*.file の全数一意性 -----------------------------------------
+
+
+def test_harness2_reexport_manifest_artifacts_duplicate_file_rejected() -> None:
+    """9エントリのうち2論理 key が同一 `file` 値を指すと、実際には8出力
+    しかないのに9 artifacts を主張できてしまう穴（第12巡指摘22）——`file`
+    値の全数一意性を fail-closed で強制する非退行確認。"""
+    data = copy.deepcopy(_reexport_manifest_data())
+    data["artifacts"]["pjs_emb"]["file"] = data["artifacts"]["ritsu_emb"]["file"]
+    with pytest.raises(m.Run9ValidationError, match="must be unique"):
+        m.validate_reexport_manifest(data)
+
+
 def test_harness2_reexport_manifest_historical_comparison_summary_unknown_key_rejected() -> None:
     data = copy.deepcopy(_reexport_manifest_data())
     data["historical_comparison_summary"]["not_a_real_artifact"] = "x"
@@ -16931,6 +16945,57 @@ def test_execprofile_not_recorded_item_missing_reason_rejected() -> None:
         m.validate_execution_profile_manifest(data)
 
 
+# --- fail-closed（PR #327 レビュー第12巡指摘23、P2、採用）:
+# thread_environment_variables MEASURED payload の実値検証 --------------
+
+
+def test_execprofile_thread_environment_variables_measured_empty_value_rejected() -> None:
+    """`thread_environment_variables` が MEASURED の場合に value が空文字列
+    でも、shape 検証（キー集合のみ）を通過してしまい証拠なしの空成功記録へ
+    昇格し得た穴（第12巡指摘23）——numpy_item/soundfile_item と同型の非空
+    検証を fail-closed で強制する非退行確認。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    thread_env = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["thread_environment_variables"]
+    assert thread_env["status"] == "NOT_RECORDED"
+    del thread_env["reason"]
+    thread_env["status"] = "MEASURED"
+    thread_env["value"] = ""
+    thread_env["method"] = "env var dump at smoke render time"
+    with pytest.raises(m.Run9ValidationError, match="thread_environment_variables.value"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_thread_environment_variables_measured_empty_method_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    thread_env = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["thread_environment_variables"]
+    assert thread_env["status"] == "NOT_RECORDED"
+    del thread_env["reason"]
+    thread_env["status"] = "MEASURED"
+    thread_env["value"] = "OMP_NUM_THREADS=1"
+    thread_env["method"] = ""
+    with pytest.raises(m.Run9ValidationError, match="thread_environment_variables.method"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_thread_environment_variables_measured_happy_path_accepted() -> None:
+    """正例: value/method がともに非空であれば MEASURED payload は受理
+    される。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    thread_env = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["thread_environment_variables"]
+    assert thread_env["status"] == "NOT_RECORDED"
+    del thread_env["reason"]
+    thread_env["status"] = "MEASURED"
+    thread_env["value"] = "OMP_NUM_THREADS=1"
+    thread_env["method"] = "env var dump at smoke render time"
+    m.validate_execution_profile_manifest(data)  # 例外なしの確認
+
+
 def test_execprofile_measurement_item_bad_status_rejected() -> None:
     data = copy.deepcopy(_execprofile_manifest_data())
     data["additional_measurements"]["cpu_model"]["status"] = "GUESSED"
@@ -17214,16 +17279,78 @@ def test_execprofile_load_pinned_execution_profile_manifest_render_code_symlink_
 # 中身を変えて検証したいテストは `_tampered_execprofile_contract()` で
 # 「改変 manifest ファイル + それに合わせた pin を持つ合成 contract」を
 # 経由する（manifest dict を直接注入する経路はもう存在しない）。
+#
+# CI 修正（2026-08-26）: live probe 5値（Python/onnxruntime/available
+# providers/architecture/os）は「現在実行中の環境」を測定する契約であり、
+# CI マトリクス環境（GitHub Actions hosted runner）の実測 Python patch
+# バージョンが pin（3.11.15）と乖離すると（実測: 3.11.16）、(a) の版チェッ
+# クが `verify_execution_profile_runtime()` を呼ぶテストの手前で fail-closed
+# 発火し、テストスイート側 15 件が一括で落ちた（CI ジョブ test-rest (3.11)
+# 実測。ローカル開発コンテナは pin と同一 patch バージョンだったため検出
+# 不能だった）。live Python バージョンの probe は `_live_python_version()`
+# へモジュールレベル関数として切り出し済み（検証意味論は不変）。以下の
+# テスト群は `_pin_live_probe()` ヘルパーで5値すべてを明示的に pin 値へ
+# 固定してから `verify_execution_profile_runtime()` を呼ぶことで、CI が
+# どの Python patch バージョンで走っても（3.11.x/3.12.x 問わず）決定論的に
+# 同一結果になるようにする（各テストが検証したい1値だけを意図的に pin から
+# ずらす）。
+
+_EXECPROFILE_PIN_PYTHON = "3.11.15"
+_EXECPROFILE_PIN_ONNXRUNTIME = "1.29.0"
+_EXECPROFILE_PIN_AVAILABLE_PROVIDERS = ["AzureExecutionProvider", "CPUExecutionProvider"]
+_EXECPROFILE_PIN_ARCHITECTURE = "x86_64"
+_EXECPROFILE_PIN_OS_RELEASE_TEXT = (
+    'PRETTY_NAME="Ubuntu 24.04.4 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\n'
+    'VERSION="24.04.4 LTS (Noble Numbat)"\nID=ubuntu\n'
+)
 
 
-def test_execprofile_verify_runtime_happy_path_real_environment(
-    contract: m.Run9RunContract,
+def _pin_live_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    python: str = _EXECPROFILE_PIN_PYTHON,
+    onnxruntime_version: str = _EXECPROFILE_PIN_ONNXRUNTIME,
+    available_providers: Optional[List[str]] = None,
+    architecture: str = _EXECPROFILE_PIN_ARCHITECTURE,
+) -> Path:
+    """`verify_execution_profile_runtime()` の live probe 5値すべてを、既定
+    では execution_profile_sha pin と一致する値へ monkeypatch/ファイル差し
+    替えで固定する（CI 修正、2026-08-26）。呼び出し側はキーワード引数で
+    意図的に1値だけを pin からずらして負例を構成できる。戻り値は os-release
+    相当ファイルへのパスで、呼び出し側は `verify_execution_profile_runtime
+    (..., os_release_path=戻り値)` として明示的に渡すこと（os probe だけは
+    関数 API 上の明示引数でありモジュールグローバルではないため
+    monkeypatch 対象にならない）。"""
+    monkeypatch.setattr(m, "_live_python_version", lambda: python)
+    fake_ort = types.SimpleNamespace(
+        __version__=onnxruntime_version,
+        get_available_providers=lambda: list(
+            available_providers
+            if available_providers is not None
+            else _EXECPROFILE_PIN_AVAILABLE_PROVIDERS
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    monkeypatch.setattr(m.platform, "machine", lambda: architecture)
+    os_release_path = tmp_path / "execprofile_pinned_os_release"
+    os_release_path.write_text(_EXECPROFILE_PIN_OS_RELEASE_TEXT, encoding="utf-8")
+    return os_release_path
+
+
+def test_execprofile_verify_runtime_happy_path_pinned_live_probe(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """本 session の実行環境自体が execution_profile_sha pin と一致する
-    （Python 3.11.15 / onnxruntime 1.29.0 / available_providers に
-    AzureExecutionProvider・CPUExecutionProvider を含む）ため、monkeypatch
-    なしで happy path を実測確認できる。"""
-    result = m.verify_execution_profile_runtime(contract)
+    """live probe 5値すべてを `_pin_live_probe()` で execution_profile_sha
+    pin と一致する値へ固定した、monkeypatch ベースの決定論 happy path
+    （CI 修正、2026-08-26 で `test_execprofile_verify_runtime_happy_path_
+    real_environment` を置き換え——後者は「CI ホストの実行環境が pin と
+    偶然一致すること」を前提にしており、GitHub Actions hosted runner の
+    Python patch バージョンが pin からずれると（実測: 3.11.16 vs pin
+    3.11.15）CI マトリクス上で恒真ではなくなる構造的な問題があったため削除
+    した——削除理由をここに記録する）。"""
+    os_release_path = _pin_live_probe(monkeypatch, tmp_path)
+    result = m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
     assert result == {
         "python": "3.11.15",
         "onnxruntime": "1.29.0",
@@ -17244,7 +17371,10 @@ def test_execprofile_verify_runtime_manifest_injection_without_matching_pin_reje
     ——旧実装（呼び出し側供給の任意 mapping をそのまま live 照合していた）
     で可能だった「live ホストに合わせた偽 manifest を注入して偽成功させる」
     経路が閉じたことの確認。live 環境の実測値と一致するよう改変した
-    manifest を用意しても、pin が未更新のため拒否される。"""
+    manifest を用意しても、pin が未更新のため拒否される。sha256 不一致で
+    `load_pinned_execution_profile_manifest()` 側が最初に発火し live probe
+    （python 版含む）には到達しないため、`_pin_live_probe()` は不要
+    （CI の live Python patch バージョンにも依存しない）。"""
     forged = copy.deepcopy(_execprofile_manifest_data())
     forged["identity_semantics"]["runtime"]["python"] = "9.9.9"
     forged_path = tmp_path / "execution_profile_manifest.json"
@@ -17256,41 +17386,53 @@ def test_execprofile_verify_runtime_manifest_injection_without_matching_pin_reje
 def test_execprofile_verify_runtime_python_mismatch_rejected(
     contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _FakeVersionInfo:
-        major = 3
-        minor = 12
-        micro = 0
+    """`_live_python_version()` を直接 monkeypatch する（切り出し後の probe
+    関数単体を差し替えるのが最短で、`sys.version_info` を偽クラスで再現する
+    旧テクニックはもう不要）。"""
+    monkeypatch.setattr(m, "_live_python_version", lambda: "3.12.0")
+    with pytest.raises(m.Run9ValidationError, match="live Python version"):
+        m.verify_execution_profile_runtime(contract)
 
-    monkeypatch.setattr(m.sys, "version_info", _FakeVersionInfo())
+
+def test_execprofile_verify_runtime_python_ci_matrix_divergence_rejected(
+    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """本 CI 修正が対処した実障害の直接再現テスト（2026-08-26）: GitHub
+    Actions hosted runner の Python 3.11 マトリクスが実測 3.11.16 を提供し
+    た一方、execution_profile_sha pin は 3.11.15 のままだったため、(a) の
+    版チェックが `verify_execution_profile_runtime()` を呼ぶ全テストの手前
+    で fail-closed 発火し、テストスイート側 15 件が一括で落ちた（CI ジョブ
+    test-rest (3.11) 実測）。本テストは live Python patch バージョンが pin
+    より新しい 3.11.16 である場合に、意図どおり Run9ValidationError で
+    fail-closed 拒否されることを固定し、この障害経路自体を決定論的に
+    回帰確認する。"""
+    monkeypatch.setattr(m, "_live_python_version", lambda: "3.11.16")
     with pytest.raises(m.Run9ValidationError, match="live Python version"):
         m.verify_execution_profile_runtime(contract)
 
 
 def test_execprofile_verify_runtime_onnxruntime_import_failure_rejected(
-    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """onnxruntime が import 不能な環境では fail-closed（静かに skip
     しない）——`sys.modules["onnxruntime"] = None` は `import onnxruntime`
     を `ModuleNotFoundError` にする標準テクニック。"""
+    os_release_path = _pin_live_probe(monkeypatch, tmp_path)
     monkeypatch.setitem(sys.modules, "onnxruntime", None)
     with pytest.raises(m.Run9ValidationError, match="onnxruntime を import できない"):
-        m.verify_execution_profile_runtime(contract)
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
 
 
 def test_execprofile_verify_runtime_onnxruntime_version_mismatch_rejected(
-    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_ort = types.SimpleNamespace(
-        __version__="9.9.9",
-        get_available_providers=lambda: ["AzureExecutionProvider", "CPUExecutionProvider"],
-    )
-    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    os_release_path = _pin_live_probe(monkeypatch, tmp_path, onnxruntime_version="9.9.9")
     with pytest.raises(m.Run9ValidationError, match="live onnxruntime version"):
-        m.verify_execution_profile_runtime(contract)
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
 
 
 def test_execprofile_verify_runtime_available_providers_mismatch_rejected(
-    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """PR #327 レビュー第9巡指摘18対応後の負例: `"CPUExecutionProvider"`
     が live `get_available_providers()` に含まれない場合は fail-closed で
@@ -17301,45 +17443,41 @@ def test_execprofile_verify_runtime_available_providers_mismatch_rejected(
     CUDAExecutionProvider の新規出現自体を拒否していたが、第9巡指摘18で
     その完全一致要求は撤去された——available に GPU provider が含まれる
     こと自体はもはや拒否理由ではない（選択企図の拒否は (d) が担う）。〕"""
-    fake_ort = types.SimpleNamespace(
-        __version__="1.29.0",
-        get_available_providers=lambda: ["CUDAExecutionProvider"],
+    os_release_path = _pin_live_probe(
+        monkeypatch, tmp_path, available_providers=["CUDAExecutionProvider"],
     )
-    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
     with pytest.raises(m.Run9ValidationError, match="get_available_providers"):
-        m.verify_execution_profile_runtime(contract)
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
 
 
 def test_execprofile_verify_runtime_available_providers_cpu_plus_cuda_accepted(
-    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """PR #327 レビュー第9巡指摘18の直接非退行確認: CPUExecutionProvider
     に加え CUDAExecutionProvider が live available に新規出現していても、
     CPU 自体は available であるため受理される（歴史実測 Azure+CPU との
     完全一致はもはや要求しない——GPU provider の available 出現自体は
     拒否理由ではなく、選択企図の拒否のみ (d) が別途担う）。"""
-    fake_ort = types.SimpleNamespace(
-        __version__="1.29.0",
-        get_available_providers=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    os_release_path = _pin_live_probe(
+        monkeypatch, tmp_path,
+        available_providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
     )
-    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
-    result = m.verify_execution_profile_runtime(contract)
+    result = m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
     assert result["available_providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 
 def test_execprofile_verify_runtime_gpu_provider_selection_intent_rejected(
-    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """呼び出し側が GPU provider を選択しようとする企図（`selected_
     providers` 引数）は、available 側が正当でも fail-closed で拒否
     される（GPU/CUDA 自動fallback/upgrade禁止規則の機械化）。"""
-    fake_ort = types.SimpleNamespace(
-        __version__="1.29.0",
-        get_available_providers=lambda: ["AzureExecutionProvider", "CPUExecutionProvider"],
-    )
-    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+    os_release_path = _pin_live_probe(monkeypatch, tmp_path)
     with pytest.raises(m.Run9ValidationError, match="selected provider argument"):
-        m.verify_execution_profile_runtime(contract, selected_providers=["CUDAExecutionProvider"])
+        m.verify_execution_profile_runtime(
+            contract, os_release_path=os_release_path,
+            selected_providers=["CUDAExecutionProvider"],
+        )
 
 
 def test_execprofile_verify_runtime_cpu_only_available_accepted(
@@ -17365,19 +17503,18 @@ def test_execprofile_verify_runtime_cpu_only_available_accepted(
     tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
         contract, tmp_path, mutate=_mutate,
     )
-    fake_ort = types.SimpleNamespace(
-        __version__="1.29.0",
-        get_available_providers=lambda: ["CPUExecutionProvider"],
+    os_release_path = _pin_live_probe(
+        monkeypatch, tmp_path, available_providers=["CPUExecutionProvider"],
     )
-    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
     result = m.verify_execution_profile_runtime(
         tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        os_release_path=os_release_path,
     )
     assert result["available_providers"] == ["CPUExecutionProvider"]
 
 
 def test_execprofile_verify_runtime_cpu_only_available_accepted_real_manifest(
-    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """PR #327 レビュー第9巡指摘18の直接正例（P2、採用）: 合成 contract を
     経由せず、本物の pin 済み manifest（`onnxruntime_available_providers.
@@ -17386,12 +17523,10 @@ def test_execprofile_verify_runtime_cpu_only_available_accepted_real_manifest(
     ことを確認する——「CPUExecutionProvider が live available に含まれる
     こと」のみを要求し、歴史実測との完全一致は要求しないという新契約の
     最短経路での確認。"""
-    fake_ort = types.SimpleNamespace(
-        __version__="1.29.0",
-        get_available_providers=lambda: ["CPUExecutionProvider"],
+    os_release_path = _pin_live_probe(
+        monkeypatch, tmp_path, available_providers=["CPUExecutionProvider"],
     )
-    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
-    result = m.verify_execution_profile_runtime(contract)
+    result = m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
     assert result["available_providers"] == ["CPUExecutionProvider"]
 
 
@@ -17399,20 +17534,25 @@ def test_execprofile_verify_runtime_cpu_only_available_accepted_real_manifest(
 # (PR #327 レビュー第5巡指摘11対応、2026-08-26) 旧実装は runtime identity
 # 5値のうち os/architecture の2値を live probe しておらず、別 OS/別
 # アーキテクチャ環境でもパッケージ版と CPU provider さえ揃えば run gate が
-# 通り得た穴の非退行確認。
+# 通り得た穴の非退行確認。以下も `_pin_live_probe()` で python/onnxruntime/
+# providers/architecture を pin へ固定してから os/architecture のみを
+# 意図的にずらす（CI 修正、2026-08-26 で python/onnxruntime/architecture の
+# 実行環境依存を解消——旧テストは os のみ override し、それ以外は実行環境
+# 実測に依存していた）。
 
 
 def test_execprofile_verify_runtime_architecture_mismatch_rejected(
-    contract: m.Run9RunContract, monkeypatch: pytest.MonkeyPatch,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(m.platform, "machine", lambda: "aarch64")
+    os_release_path = _pin_live_probe(monkeypatch, tmp_path, architecture="aarch64")
     with pytest.raises(m.Run9ValidationError, match="live architecture"):
-        m.verify_execution_profile_runtime(contract)
+        m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
 
 
 def test_execprofile_verify_runtime_os_name_mismatch_rejected(
-    contract: m.Run9RunContract, tmp_path: Path,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _pin_live_probe(monkeypatch, tmp_path)
     os_release_path = tmp_path / "os-release"
     os_release_path.write_text(
         'NAME="Debian"\nVERSION_ID="12"\nVERSION="12.5 (bookworm)"\n', encoding="utf-8",
@@ -17422,8 +17562,9 @@ def test_execprofile_verify_runtime_os_name_mismatch_rejected(
 
 
 def test_execprofile_verify_runtime_os_version_mismatch_rejected(
-    contract: m.Run9RunContract, tmp_path: Path,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _pin_live_probe(monkeypatch, tmp_path)
     os_release_path = tmp_path / "os-release"
     os_release_path.write_text(
         'NAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION="24.04.5 LTS (Noble Numbat)"\n',
@@ -17434,18 +17575,20 @@ def test_execprofile_verify_runtime_os_version_mismatch_rejected(
 
 
 def test_execprofile_verify_runtime_os_release_missing_rejected(
-    contract: m.Run9RunContract, tmp_path: Path,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _pin_live_probe(monkeypatch, tmp_path)
     missing_path = tmp_path / "does_not_exist_os_release"
     with pytest.raises(m.Run9ValidationError, match="live OS identity を構成できない"):
         m.verify_execution_profile_runtime(contract, os_release_path=missing_path)
 
 
 def test_execprofile_verify_runtime_os_release_name_field_missing_rejected(
-    contract: m.Run9RunContract, tmp_path: Path,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """NAME フィールドが欠落した /etc/os-release は抽出不能として
     fail-closed 拒否される。"""
+    _pin_live_probe(monkeypatch, tmp_path)
     os_release_path = tmp_path / "os-release"
     os_release_path.write_text('VERSION_ID="24.04"\nVERSION="24.04.4 LTS"\n', encoding="utf-8")
     with pytest.raises(m.Run9ValidationError, match="live OS identity を構成できない"):
@@ -17453,10 +17596,11 @@ def test_execprofile_verify_runtime_os_release_name_field_missing_rejected(
 
 
 def test_execprofile_verify_runtime_os_release_version_token_unparseable_rejected(
-    contract: m.Run9RunContract, tmp_path: Path,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """VERSION フィールドの先頭トークンが数字/ドットのみで構成されていない
     場合はバージョン番号抽出不能として fail-closed 拒否される。"""
+    _pin_live_probe(monkeypatch, tmp_path)
     os_release_path = tmp_path / "os-release"
     os_release_path.write_text(
         'NAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION="rolling"\n', encoding="utf-8",
@@ -17466,12 +17610,16 @@ def test_execprofile_verify_runtime_os_release_version_token_unparseable_rejecte
 
 
 def test_execprofile_verify_runtime_os_architecture_positive_via_override(
-    contract: m.Run9RunContract, tmp_path: Path,
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """正例: `os_release_path` を実機 `/etc/os-release` と同じ形式・値で
     差し替えても（`PRETTY_NAME`/`ID` 等の余剰フィールド込み）manifest pin
-    と一致するため happy path が成立する——os probe 経路の正例確認
-    （実環境自体が pin と一致するため monkeypatch なしで確認できる）。"""
+    と一致するため happy path が成立する——os probe 経路の正例確認。
+    python/onnxruntime/providers/architecture は `_pin_live_probe()` で
+    pin 値へ固定し、os probe のみを実機同形式ファイルで検証する（CI 修正、
+    2026-08-26 で monkeypatch 対象を拡張——旧テストは python/onnxruntime/
+    architecture を実行環境依存のまま残していた）。"""
+    _pin_live_probe(monkeypatch, tmp_path)
     os_release_path = tmp_path / "os-release"
     os_release_path.write_text(
         'PRETTY_NAME="Ubuntu 24.04.4 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\n'
@@ -17481,6 +17629,7 @@ def test_execprofile_verify_runtime_os_architecture_positive_via_override(
     result = m.verify_execution_profile_runtime(contract, os_release_path=os_release_path)
     assert result["os"] == "Ubuntu 24.04.4"
     assert result["architecture"] == "x86_64"
+
 
 
 # --- RUN9_CONTRACT.yaml: 既存 pin 全数不変 ----------------------------------
