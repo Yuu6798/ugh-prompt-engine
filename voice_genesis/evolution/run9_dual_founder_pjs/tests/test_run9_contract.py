@@ -5075,12 +5075,19 @@ def _valid_learning_recipe_arm() -> Dict[str, Any]:
     二体等条件のうち、Fix 7/15 で未カバーだった残り5項目
     （search_space/candidate_generation/evaluator/compute_budget/
     data_binding）を追加。値そのものの語彙・形式は VG-L0 ハーネス実装時の
-    build 対象のまま、ここでは「非空文字列」の最小例。"""
+    build 対象のまま、ここでは「非空文字列」の最小例。
+
+    RUN9-L0-PIN-2（User 裁定 2026-08-25）更新: stopping_rule/trial_count/
+    render_budget はもはや任意のプレースホルダ値を許容しない——
+    `m.LEARNING_RECIPE_ADJUDICATED_*` の裁定値へ厳密固定された
+    （`m.validate_learning_recipe_manifest()` が fail-closed 強制する）。
+    旧プレースホルダ値（`"fixed_trial_count"`/`100`/`100`）はもはや
+    valid ではないため、本 fixture も裁定値へ更新する。"""
     return {
         "equal_budget_within_arm": True,
-        "stopping_rule": "fixed_trial_count",
-        "trial_count": 100,
-        "render_budget": 100,
+        "stopping_rule": m.LEARNING_RECIPE_ADJUDICATED_STOPPING_RULE,
+        "trial_count": m.LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT,
+        "render_budget": m.LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET,
         "search_space": "placeholder_search_space_v0",
         "candidate_generation": "placeholder_candidate_generation_v0",
         "evaluator": "placeholder_evaluator_v0",
@@ -5180,9 +5187,16 @@ def test_fix7_valid_arm_with_float_render_budget_accepted() -> None:
     許容する設計であることの確認）。trial_count の float 受理は Fix 15 で
     廃止された — 旧テスト名が主張していた `trial_count = 100.0` の受理は
     もはや成立しない（下記 Fix 15 セクションの負例で 100.0 相当の
-    `2.0` が拒否されることを確認する）。"""
+    `2.0` が拒否されることを確認する）。
+
+    RUN9-L0-PIN-2（User 裁定 2026-08-25）更新: render_budget は任意の
+    正の有限値ではなく裁定値 128 へ厳密固定されたため、旧テストが使って
+    いた `50.5` はもはや valid ではない。裁定値と数値として等価な
+    `128.0`（float 型）を用いて「型は float でも裁定値と数値等価なら
+    受理される」ことを確認する形へ更新した（bool を除く数値型許容という
+    Fix 7 の設計自体は不変）。"""
     manifest = _valid_learning_recipe_manifest()
-    manifest["practice_recipe"]["render_budget"] = 50.5
+    manifest["practice_recipe"]["render_budget"] = 128.0
     m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認
 
 
@@ -5294,10 +5308,16 @@ def test_fix15_trial_count_rejects_non_strict_int_values(arm_name: str, bad_valu
 def test_fix15_trial_count_accepts_positive_int() -> None:
     """正例（Fix 15）: 厳密な正の int である trial_count は引き続き
     受理される（既存 fixture `_valid_learning_recipe_arm()` も
-    `trial_count: 100`（int）を使用しており、Fix 15 適用後も無変更で
-    通ることを確認する）。"""
+    厳密 int を使用しており、Fix 15 適用後も無変更で通ることを確認
+    する）。
+
+    RUN9-L0-PIN-2（User 裁定 2026-08-25）更新: trial_count は任意の正の
+    int ではなく裁定値 32 へ厳密固定されたため、旧テストが使っていた
+    `100` はもはや valid ではない——fixture 既定値（裁定値 32）をそのまま
+    使う形へ更新した（型検証（厳密 int・bool 拒否）自体の非退行確認と
+    いう本テストの目的は不変）。"""
     manifest = _valid_learning_recipe_manifest()
-    manifest["practice_recipe"]["trial_count"] = 100
+    assert manifest["practice_recipe"]["trial_count"] == m.LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT
     m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認
 
 
@@ -10490,6 +10510,10 @@ def _measurement_spec_manifest_data() -> Dict[str, Any]:
     return m._loads_strict_json(m.MEASUREMENT_SPEC_MANIFEST_PATH.read_text(encoding="utf-8"))
 
 
+def _dataset_split_manifest_data() -> Dict[str, Any]:
+    return m._loads_strict_json(m.DATASET_SPLIT_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
 # ---------------------------------------------------------------------------
 # seed_policy_manifest: 正常系 + fail-closed 分岐
 # ---------------------------------------------------------------------------
@@ -10939,6 +10963,18 @@ _PIN1_LOADER_CASES = (
     (
         "measurement_spec_sha", "load_pinned_measurement_spec_manifest",
         "MEASUREMENT_SPEC_MANIFEST_PATH",
+    ),
+    # RUN9-L0-PIN-2（2026-08-26 実装）: dataset_manifest_sha は probe/
+    # seed_policy と同型の4段構成に加え本欄固有の cross-manifest 三者
+    # 一致を持つが、汎用ケース（PINNED 確認・in-process 改竄検出・
+    # manifest バイト改竄検出・欠落ファイル検出・PENDING 時拒否）は
+    # 完全に同型のため本 parametrize へ相乗りさせる（重複テスト新設を
+    # 避ける）。dataset_split_manifest.json 固有の cross-manifest 三者
+    # 一致（practice/probe/c1 take drift）・dataset_row_order_sha 三者
+    # 一致は下記専用セクションで別途テストする。
+    (
+        "dataset_manifest_sha", "load_pinned_dataset_split_manifest",
+        "DATASET_SPLIT_MANIFEST_PATH",
     ),
 )
 
@@ -11613,19 +11649,459 @@ def test_pin1_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
     assert m.gate_state(contract) == "BLOCKED"
 
 
-def test_pin1_r3_pre_run_pending_count_is_twelve(contract: m.Run9RunContract) -> None:
-    """PR #324 第2巡 Fix 5（measurement_spec_sha を PENDING へ復帰）後の
-    pre-run PENDING 欄は12件（optional の human_evaluation_protocol_sha を
-    含めると総 PENDING 13件）——README.md の記述更新（12→13）と対応する
-    回帰固定。"""
+# `test_pin1_r3_pre_run_pending_count_is_twelve`（12件版）は RUN9-L0-PIN-2
+# （dataset_manifest_sha/dataset_row_order_sha の2欄 PINNED 化）により
+# 超過し、下記 `test_pin2_pre_run_pending_count_is_ten`（10件・全履歴を
+# 包含する上位互換）へ置き換えた（重複削除、「修正からの再修正は早期に
+# 打ち切る」に沿い、単に件数を書き換えるのではなく1本化した）。
+
+
+def test_pin2_pre_run_pending_count_is_ten(contract: m.Run9RunContract) -> None:
+    """RUN9-L0-PIN-2（dataset_manifest_sha/dataset_row_order_sha の2欄を
+    PINNED 化、2026-08-26）後の pre-run PENDING 欄は12→10件（optional の
+    human_evaluation_protocol_sha を含めると総 PENDING 13→11件）——
+    README.md の記述更新（12→10/13→11）と対応する回帰固定。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
     pending = [
         n for n in pre_run_fields if not m._is_field_pinned(revalidated.pin_field(n))
     ]
-    assert len(pending) == 12
+    assert len(pending) == 10
     assert "measurement_spec_sha" in pending
+    assert "dataset_manifest_sha" not in pending
+    assert "dataset_row_order_sha" not in pending
+
+
+def test_pin2_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> None:
+    """RUN9-L0-PIN-2 は Scope IN の5ファイル
+    （inputs/dataset_split_manifest.json 新規 / run9_schema.py /
+    RUN9_CONTRACT.yaml / README.md / tests/test_run9_contract.py）以外の
+    既存 pin 済みファイルの実バイトを一切変更していないこと（代表サンプル
+    ——probe_manifest_sha/practice_audio_split_manifest_sha/seed_policy_sha/
+    failure_abort_criteria_sha が引き続き実ファイルと一致する）。"""
+    for pin_name, path_const_name in (
+        ("probe_manifest_sha", "PROBE_MANIFEST_PATH"),
+        ("practice_audio_split_manifest_sha", "PRACTICE_MANIFEST_PATH"),
+        ("seed_policy_sha", "SEED_POLICY_MANIFEST_PATH"),
+        ("failure_abort_criteria_sha", "FAILURE_ABORT_MANIFEST_PATH"),
+    ):
+        field = contract_raw[pin_name]
+        assert field["status"] == "PINNED"
+        assert field["value"] == m.compute_file_sha256(getattr(m, path_const_name)), (
+            f"{pin_name} diverged from its pinned file — RUN9-L0-PIN-2 must not touch it"
+        )
+
+
+# ---------------------------------------------------------------------------
+# RUN9-L0-PIN-2: dataset split manifest（`run9-dataset-split-manifest/1.0`）
+# — 正常系 + validate_dataset_split_manifest() fail-closed 全分岐 +
+# load_pinned_dataset_split_manifest() 本欄固有の cross-manifest 三者一致
+# + dataset_row_order_sha 三者一致 + learning recipe 裁定値の境界値回帰。
+# 汎用 PINNED loader ケース（正常系・in-process 改竄・manifest バイト
+# 改竄・欠落ファイル・PENDING 時拒否）は上記 `_PIN1_LOADER_CASES` へ相乗り
+# 済み（重複テスト新設を避ける）。
+# ---------------------------------------------------------------------------
+
+
+def test_pin2_dataset_split_manifest_valid_passes() -> None:
+    m.validate_dataset_split_manifest(_dataset_split_manifest_data())  # 例外を投げないことの確認
+
+
+def test_pin2_dataset_manifest_sha_is_pinned_and_matches_actual_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["dataset_manifest_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(m.DATASET_SPLIT_MANIFEST_PATH)
+    assert field["value"] == (
+        "ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448"
+    )
+
+
+def test_pin2_dataset_row_order_sha_is_pinned_and_matches_practice_manifest(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """`dataset_row_order_sha` は practice manifest の `row_order_sha256`
+    と同値で PINNED 化されている（DESIGN §12 規則6の写像。新規計算では
+    ない）。"""
+    field = contract_raw["dataset_row_order_sha"]
+    assert field["status"] == "PINNED"
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert field["value"] == practice_data["row_order_sha256"]
+    assert field["value"] == (
+        "6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a"
+    )
+
+
+@pytest.mark.parametrize("missing_key", sorted(m._DATASET_SPLIT_TOP_LEVEL_KEYS))
+def test_pin2_dataset_split_manifest_missing_top_level_key_rejected(missing_key: str) -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    del data[missing_key]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_dataset_split_manifest_unknown_top_level_key_rejected() -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["unexpected_extra_key"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_dataset_split_manifest_wrong_schema_rejected() -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["schema"] = "run9-dataset-split-manifest/0.9"
+    with pytest.raises(m.Run9ValidationError, match="schema must be exactly"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_song_splits_wrong_canonical_source_rejected() -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["song_splits"]["canonical_source"] = "some/other/path.json"
+    with pytest.raises(m.Run9ValidationError, match="canonical_source must be exactly"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_song_splits_wrong_canonical_source_schema_rejected() -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["song_splits"]["canonical_source_schema"] = "run9-practice-audio-split-manifest/0.9"
+    with pytest.raises(m.Run9ValidationError, match="canonical_source_schema must be exactly"):
+        m.validate_dataset_split_manifest(data)
+
+
+@pytest.mark.parametrize("bad_sha", [None, "", "not-hex", "a" * 63, "A" * 64, 12345])
+def test_pin2_song_splits_bad_practice_sha_rejected(bad_sha: Any) -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["song_splits"]["practice_audio_split_manifest_sha"] = bad_sha
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_dataset_split_manifest(data)
+
+
+@pytest.mark.parametrize("bad_sha", [None, "", "not-hex", "b" * 63])
+def test_pin2_song_splits_bad_row_order_sha256_rejected(bad_sha: Any) -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["song_splits"]["row_order_sha256"] = bad_sha
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_dataset_split_manifest(data)
+
+
+@pytest.mark.parametrize(
+    "bad_counts",
+    [
+        {"training": 71, "validation": 15, "sealed_holdout": 15},
+        {"training": 70, "validation": 15},
+        {},
+    ],
+)
+def test_pin2_song_splits_wrong_row_counts_rejected(bad_counts: Dict[str, int]) -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["song_splits"]["row_counts"] = bad_counts
+    with pytest.raises(m.Run9ValidationError, match="row_counts must be exactly"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_identity_probe_wrong_implementation_class_rejected() -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["identity_probe"]["implementation_class"] = "SONG_SPLIT"
+    with pytest.raises(m.Run9ValidationError, match="implementation_class must be exactly"):
+        m.validate_dataset_split_manifest(data)
+
+
+@pytest.mark.parametrize("bad_sha", [None, "", "not-hex", "c" * 63])
+def test_pin2_identity_probe_bad_probe_manifest_sha_rejected(bad_sha: Any) -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["identity_probe"]["probe_manifest_sha"] = bad_sha
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_dataset_split_manifest(data)
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["design_vocabulary_citation", "pjs_song_based_probe_non_adoption_citation", "design_vocabulary_note"],
+)
+def test_pin2_identity_probe_missing_citation_field_rejected(field_name: str) -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    del data["identity_probe"][field_name]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_negative_sham_control_wrong_implementation_class_rejected() -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["negative_sham_control"]["implementation_class"] = "SONG_SPLIT"
+    with pytest.raises(m.Run9ValidationError, match="implementation_class must be exactly"):
+        m.validate_dataset_split_manifest(data)
+
+
+@pytest.mark.parametrize("bad_value", [19, 21, True, 20.0, "20", None])
+def test_pin2_negative_sham_control_wrong_c1_takes_rejected(bad_value: Any) -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["negative_sham_control"]["c1_sham_takes_per_founder"] = bad_value
+    with pytest.raises(m.Run9ValidationError, match="c1_sham_takes_per_founder must be"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_design_rule_accounting_missing_rule_rejected() -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    del data["design_rule_accounting"]["rule_4"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_design_rule_accounting_unknown_rule_rejected() -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["design_rule_accounting"]["rule_8"] = dict(data["design_rule_accounting"]["rule_1"])
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_design_rule_accounting_wrong_verbatim_rejected() -> None:
+    """規則の verbatim は DESIGN_RUN9 §12 一次ソースからの逐語転記のため、
+    改変（要約・意訳含む）は fail-closed 拒否する。"""
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["design_rule_accounting"]["rule_1"]["verbatim"] = "song単位でsplitする（要約）"
+    with pytest.raises(m.Run9ValidationError, match="verbatim must be exactly"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_design_rule_accounting_unknown_status_rejected() -> None:
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["design_rule_accounting"]["rule_1"]["status"] = "PROBABLY_FINE"
+    with pytest.raises(m.Run9ValidationError, match="status must be one of"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_design_rule_accounting_rule3_must_stay_not_recorded() -> None:
+    """規則3（pitch range/phrase length/phoneme class の記録）は数値を
+    発明しない正直な会計として `NOT_RECORDED` 固定を Design Memo
+    RUN9-L0-PIN-2 が明示的に要求する——他のステータス（音響 inventory
+    sidecar を生成していないにもかかわらず `STRUCTURALLY_PINNED` を
+    僭称する等）は fail-closed 拒否する。"""
+    data = copy.deepcopy(_dataset_split_manifest_data())
+    data["design_rule_accounting"]["rule_3"]["status"] = "STRUCTURALLY_PINNED"
+    with pytest.raises(m.Run9ValidationError, match="rule_3.status must be exactly"):
+        m.validate_dataset_split_manifest(data)
+
+
+def test_pin2_design_rule_accounting_all_seven_rules_present_with_honest_statuses() -> None:
+    """正例回帰: 実 manifest は規則1-7を過不足なく登録し、規則3のみ
+    `NOT_RECORDED`、他は `STRUCTURALLY_PINNED`/`BOUNDARY_DECLARED`/
+    `PROCEDURAL_NOT_MACHINE_ENFORCED` のいずれかであること（発明された
+    虚偽の `STRUCTURALLY_PINNED` 全数主張になっていないことの確認）。"""
+    data = _dataset_split_manifest_data()
+    rules = data["design_rule_accounting"]
+    assert set(rules.keys()) == set(m._DATASET_SPLIT_RULE_IDS)
+    assert rules["rule_3"]["status"] == "NOT_RECORDED"
+    non_structurally_pinned = {
+        rule_id for rule_id, rule in rules.items() if rule["status"] != "STRUCTURALLY_PINNED"
+    }
+    # 規則2(BOUNDARY_DECLARED)・規則3(NOT_RECORDED)・規則4/7
+    # (PROCEDURAL_NOT_MACHINE_ENFORCED) の4件は非 STRUCTURALLY_PINNED —
+    # 全数を機械保証済みと偽らない正直な会計であることの確認。
+    assert non_structurally_pinned == {"rule_2", "rule_3", "rule_4", "rule_7"}
+
+
+def test_pin2_load_pinned_dataset_split_manifest_detects_practice_sha_drift(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """cross-manifest 三者一致（本欄固有の追加防御）: 転記された
+    `song_splits.practice_audio_split_manifest_sha` がディスク正典
+    `RUN9_CONTRACT.yaml` の `practice_audio_split_manifest_sha` pin 値と
+    一致しなければ fail-closed 拒否する（`validate_dataset_split_
+    manifest()` 単体では検出できない「将来の repin に本 manifest の転記が
+    追随していない」経路を、消費時点でディスク正典と突き合わせて検出する
+    ——docstring 記載の意図そのものの直接確認）。"""
+    tampered_data = copy.deepcopy(_dataset_split_manifest_data())
+    tampered_data["song_splits"]["practice_audio_split_manifest_sha"] = "0" * 64
+    tampered_path = tmp_path / "dataset_split_manifest.json"
+    serialized = json.dumps(tampered_data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    tampered_path.write_bytes(serialized.encode("utf-8"))
+    # dataset_manifest_sha pin をこの改変後バイトに合わせて差し替えた
+    # tampered contract を用意する（本テストの狙いは byte-tamper 検出では
+    # なく、あくまで cross-manifest sha 不一致の検出）。
+    tampered_contract_raw = copy.deepcopy(contract.raw)
+    tampered_contract_raw["dataset_manifest_sha"]["value"] = m.compute_file_sha256(tampered_path)
+    tampered_contract_raw["dataset_manifest_sha"]["status"] = "PINNED"
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(
+        yaml.safe_dump(tampered_contract_raw, allow_unicode=True), encoding="utf-8"
+    )
+    tampered_contract = m.load_run9_contract(tampered_contract_raw)
+    with pytest.raises(m.Run9ValidationError, match="practice_audio_split_manifest_sha"):
+        m.load_pinned_dataset_split_manifest(
+            tampered_contract, manifest_path=tampered_path, contract_path=tampered_yaml_path,
+        )
+
+
+def test_pin2_load_pinned_dataset_split_manifest_detects_probe_sha_drift(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    tampered_data = copy.deepcopy(_dataset_split_manifest_data())
+    tampered_data["identity_probe"]["probe_manifest_sha"] = "1" * 64
+    tampered_path = tmp_path / "dataset_split_manifest.json"
+    serialized = json.dumps(tampered_data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    tampered_path.write_bytes(serialized.encode("utf-8"))
+    tampered_contract_raw = copy.deepcopy(contract.raw)
+    tampered_contract_raw["dataset_manifest_sha"]["value"] = m.compute_file_sha256(tampered_path)
+    tampered_contract_raw["dataset_manifest_sha"]["status"] = "PINNED"
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(
+        yaml.safe_dump(tampered_contract_raw, allow_unicode=True), encoding="utf-8"
+    )
+    tampered_contract = m.load_run9_contract(tampered_contract_raw)
+    with pytest.raises(m.Run9ValidationError, match="probe_manifest_sha"):
+        m.load_pinned_dataset_split_manifest(
+            tampered_contract, manifest_path=tampered_path, contract_path=tampered_yaml_path,
+        )
+
+
+def test_pin2_load_pinned_dataset_split_manifest_detects_c1_takes_drift(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    tampered_data = copy.deepcopy(_dataset_split_manifest_data())
+    tampered_data["negative_sham_control"]["c1_sham_takes_per_founder"] = 99
+    tampered_path = tmp_path / "dataset_split_manifest.json"
+    serialized = json.dumps(tampered_data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    tampered_path.write_bytes(serialized.encode("utf-8"))
+    tampered_contract_raw = copy.deepcopy(contract.raw)
+    tampered_contract_raw["dataset_manifest_sha"]["value"] = m.compute_file_sha256(tampered_path)
+    tampered_contract_raw["dataset_manifest_sha"]["status"] = "PINNED"
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(
+        yaml.safe_dump(tampered_contract_raw, allow_unicode=True), encoding="utf-8"
+    )
+    tampered_contract = m.load_run9_contract(tampered_contract_raw)
+    with pytest.raises(m.Run9ValidationError, match="c1_sham_takes_per_founder"):
+        m.load_pinned_dataset_split_manifest(
+            tampered_contract, manifest_path=tampered_path, contract_path=tampered_yaml_path,
+        )
+
+
+def test_pin2_load_pinned_dataset_split_manifest_detects_row_order_sha_drift(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """dataset_row_order_sha 三者一致（AC 固有）: 本 manifest の転記値
+    （`song_splits.row_order_sha256`）が practice manifest 実体の
+    `row_order_sha256` と食い違えば fail-closed 拒否する（contract pin 側
+    は不変のまま、転記だけが陳腐化した経路の検出）。"""
+    tampered_data = copy.deepcopy(_dataset_split_manifest_data())
+    tampered_data["song_splits"]["row_order_sha256"] = "2" * 64
+    tampered_path = tmp_path / "dataset_split_manifest.json"
+    serialized = json.dumps(tampered_data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    tampered_path.write_bytes(serialized.encode("utf-8"))
+    tampered_contract_raw = copy.deepcopy(contract.raw)
+    tampered_contract_raw["dataset_manifest_sha"]["value"] = m.compute_file_sha256(tampered_path)
+    tampered_contract_raw["dataset_manifest_sha"]["status"] = "PINNED"
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(
+        yaml.safe_dump(tampered_contract_raw, allow_unicode=True), encoding="utf-8"
+    )
+    tampered_contract = m.load_run9_contract(tampered_contract_raw)
+    with pytest.raises(m.Run9ValidationError, match="dataset_row_order_sha 三者不一致"):
+        m.load_pinned_dataset_split_manifest(
+            tampered_contract, manifest_path=tampered_path, contract_path=tampered_yaml_path,
+        )
+
+
+def test_pin2_load_pinned_dataset_split_manifest_positive_matches_actual_data(
+    contract: m.Run9RunContract,
+) -> None:
+    """正常系（回帰）: 実 contract に対する `load_pinned_dataset_split_
+    manifest()` は実ファイルと byte-identical な内容を返す。"""
+    loaded = m.load_pinned_dataset_split_manifest(contract)
+    assert loaded == _dataset_split_manifest_data()
+
+
+# ---------------------------------------------------------------------------
+# RUN9-L0-PIN-2: learning recipe 裁定値の境界値回帰（User 裁定 2026-08-25
+# を validate_learning_recipe_manifest() が厳密強制することの直接確認 —
+# 上記 Fix 7/15/17 系の型検証テストとは別に、裁定値そのものの境界を
+# 明示的にカバーする）。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_trial_count", [31, 33])
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_pin2_learning_recipe_trial_count_off_by_one_rejected(
+    arm_name: str, bad_trial_count: int,
+) -> None:
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["trial_count"] = bad_trial_count
+    with pytest.raises(m.Run9ValidationError, match="trial_count must be exactly 32"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize("bad_render_budget", [127, 129])
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_pin2_learning_recipe_render_budget_off_by_one_rejected(
+    arm_name: str, bad_render_budget: int,
+) -> None:
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["render_budget"] = bad_render_budget
+    with pytest.raises(m.Run9ValidationError, match="render_budget must be exactly 128"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    "bad_stopping_rule",
+    ["FIXED_BUDGET_32_TRIALS", "fixed_budget_32_trials_no_success_early_stop", "EARLY_STOP_ON_GAIN"],
+)
+@pytest.mark.parametrize("arm_name", ["practice_recipe", "education_recipe"])
+def test_pin2_learning_recipe_wrong_stopping_rule_rejected(
+    arm_name: str, bad_stopping_rule: str,
+) -> None:
+    manifest = _valid_learning_recipe_manifest()
+    manifest[arm_name]["stopping_rule"] = bad_stopping_rule
+    with pytest.raises(m.Run9ValidationError, match="stopping_rule must be exactly"):
+        m.validate_learning_recipe_manifest(manifest)
+
+
+def test_pin2_learning_recipe_adjudicated_values_exactly_pass() -> None:
+    """正例（境界ちょうど）: trial_count=32・render_budget=128・
+    stopping_rule=裁定値 のとき validate は例外を投げない（fixture 既定値
+    がすでに裁定値のため、本テストは裁定値そのものを明示して再確認する
+    回帰）。"""
+    manifest = _valid_learning_recipe_manifest()
+    for arm_name in ("practice_recipe", "education_recipe"):
+        manifest[arm_name]["trial_count"] = 32
+        manifest[arm_name]["render_budget"] = 128
+        manifest[arm_name]["stopping_rule"] = "FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP"
+    m.validate_learning_recipe_manifest(manifest)  # 例外を投げないことの確認
+
+
+def test_pin2_learning_recipe_reason_states_adjudicated_values(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """learning_recipe_sha の reason が User 裁定の出典と3つの機械強制値を
+    明記していること。"""
+    reason = contract_raw["learning_recipe_sha"]["reason"]
+    assert "User 裁定 2026-08-25" in reason
+    assert "trial_count == 32" in reason
+    assert "render_budget == 128" in reason
+    assert "FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP" in reason
+
+
+def test_pin2_config_sha_reason_distinguishes_from_learning_recipe(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """config_sha の reason が learning_recipe_sha との混同を是正し、
+    run9_execution_config.yaml を対象と明記していること（User 裁定
+    2026-08-25）。"""
+    reason = contract_raw["config_sha"]["reason"]
+    assert "config_sha は learning_recipe_sha と同一ファイルを指さない" in reason
+    assert "inputs/run9_execution_config.yaml" in reason
+    assert contract_raw["config_sha"]["status"] == "PENDING"
+
+
+def test_pin2_expected_speaker_map_sha_reason_states_af0_gap(
+    contract_raw: Dict[str, Any],
+) -> None:
+    """expected_speaker_map_sha の reason が af0 の gate_synth.py --speaker
+    choices 非対応という構造的ギャップを明記していること。"""
+    reason = contract_raw["expected_speaker_map_sha"]["reason"]
+    assert "ritsu, pjs, user, d3synth, amitaro" in reason
+    assert contract_raw["expected_speaker_map_sha"]["status"] == "PENDING"
 
 
 def test_pin1_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> None:
@@ -11679,6 +12155,7 @@ def test_pin1_r3_measurement_spec_manifest_file_byte_unchanged_despite_pending_p
         ("SEED_POLICY_MANIFEST_PATH", "_seed_policy_manifest_data"),
         ("FAILURE_ABORT_MANIFEST_PATH", "_failure_abort_criteria_data"),
         ("MEASUREMENT_SPEC_MANIFEST_PATH", "_measurement_spec_manifest_data"),
+        ("DATASET_SPLIT_MANIFEST_PATH", "_dataset_split_manifest_data"),
     ],
 )
 def test_pin1_manifest_reserializes_to_identical_bytes(path_const_name: str, loader: str) -> None:
@@ -11722,3 +12199,36 @@ def test_pin1_r3_readme_measurement_spec_pending_count_updated() -> None:
     assert "13" in readme_text
     for stale in ("残 PENDING 12件", "PENDING 件数 12", "残る12件"):
         assert stale not in readme_text
+
+
+def test_pin2_readme_pending_count_updated_to_ten_and_eleven() -> None:
+    """RUN9-L0-PIN-2: 残 PENDING 件数の記述を12→10（総13→11）へ更新
+    したことの確認。旧い『12→13』時点の件数記述はもはや現在形の主張として
+    残っていない（`gate_state()` bullet 内の〔履歴: ...〕マーカー配下の
+    言及のみが許容される — `test_pin1_readme_has_no_stale_present_tense_
+    pending_claims` と同じ 履歴/解消済み/取消線 許容規約）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "pre-run 必須10欄" in readme_text
+    assert "総 PENDING 11欄" in readme_text
+    # 12/13欄の言及は段落単位（空行区切り）で 履歴/解消済み マーカーの
+    # 有無を判定する——bullet が折り返して物理行が分かれるため、
+    # `test_pin1_readme_has_no_stale_present_tense_pending_claims` の per-line
+    # 判定はここでは使えない（該当マーカーと数値が別の物理行にある）。
+    for paragraph in readme_text.split("\n\n"):
+        if "pre-run 必須12欄" in paragraph or "総 PENDING 13欄" in paragraph:
+            assert ("履歴" in paragraph) or ("解消済み" in paragraph), (
+                f"stale current-tense 12/13-count claim in paragraph: {paragraph!r}"
+            )
+
+
+def test_pin2_readme_dataset_manifest_sha_no_longer_claimed_pending() -> None:
+    """`dataset_manifest_sha`/`dataset_row_order_sha` を含む pre-run 必須
+    欄の現行列挙から両欄が除去されていること（PINNED 化後も列挙に残る
+    stale claim の防止）。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    for line in readme_text.splitlines():
+        if "`dataset_manifest_sha`/`dataset_row_order_sha`/`config_sha`" in line:
+            raise AssertionError(
+                f"stale enumeration still lists dataset_manifest_sha/dataset_row_order_sha as "
+                f"pending alongside config_sha: {line!r}"
+            )

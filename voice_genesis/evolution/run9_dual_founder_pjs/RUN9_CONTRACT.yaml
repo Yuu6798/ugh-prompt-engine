@@ -298,10 +298,39 @@ repository_commit_sha:
   status: PENDING
   reason: 本学習開始直前に固定する commit sha が未確定（Phase 0 スキャフォールド段階）。
 
+# --- dataset_manifest_sha: inputs/dataset_split_manifest.json の実バイト
+# sha256（design_doc_sha256 と同一のファイル実バイト規約 —
+# run9_schema.compute_file_sha256() 参照）。RUN9-L0-PIN-2（2026-08-26 実装）
+# で PINNED 化: DESIGN_RUN9 §12（574-595行）の5分割語彙を既存 PINNED 機構
+# へ写像する会計文書として新設した。TRAIN/VALIDATION/SEALED HOLDOUT は
+# 既 PINNED practice_audio_split_manifest_sha（fd060008...）を正本のまま
+# 参照するのみ（row_ids/sample_inventory は重複再掲しない）。IDENTITY
+# PROBE/NEGATIVE・SHAM CONTROL は PJS song ベースの独立 split としては
+# 実装されておらず（既 PINNED practice split が PJS 100曲全数を3分割で
+# 使い切っているため新規4/5分割目を確保する余地が構造的に存在しない）、
+# 代わりに既 PINNED の evaluation/probe_manifest.json P0 cell（Neutral
+# Identity Probe）/ 本 contract interventions.c1_sham_takes_per_founder
+# （C1 = ZERO_CONTROLPROFILE_SHAM 条件）がそれぞれの役割を担うという
+# NON_SONG_SPLIT 実装区分を宣言する（既 PINNED 正典の既存決定を DESIGN
+# §12 語彙のもとで追認するのみ、新規 split・新規 probe は発明しない）。
+# design_rule_accounting 節は DESIGN §12 規則1-7それぞれをどの PINNED
+# 機構が満たすかを正直に会計し、規則3（pitch range/phrase length/
+# phoneme class の記録）は NOT_RECORDED のまま——音響 inventory sidecar
+# は advisory・環境依存 float のため生成を見送り済みであり数値を発明
+# しない（PR #321 review でこの sidecar builder が導入され、PR #323
+# review 第3巡でこの見送りの scoped 例外が是正・確定した、下記
+# practice_audio_split_manifest_sha 欄「実 PJS practice split 実行」節
+# 参照）。run9_schema.validate_dataset_split_manifest()/load_pinned_
+# dataset_split_manifest()（probe manifest と同型の3層防御 read-once +
+# 本欄固有の cross-manifest 三者一致——転記された practice sha/probe
+# manifest sha/c1 take 数がディスク正典 RUN9_CONTRACT.yaml の各 PINNED
+# 値と一致しない場合 fail-closed 拒否する）が検証・消費する。
 dataset_manifest_sha:
-  value: null
-  status: PENDING
+  value: "ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/dataset_split_manifest.json
   reason: >-
+    〔履歴: 旧 PENDING 理由（RUN9-L0-PIN-2 で解消済み）——
     TRAIN/VALIDATION/SEALED HOLDOUT/IDENTITY PROBE split の manifest が未確定。
     rights manifest は起草済み（inputs/rights_manifest.json、schema
     run9-rights-manifest/2.0 — voice_identity_rights/performance_rights/
@@ -324,21 +353,55 @@ dataset_manifest_sha:
     anchor_hashes.user も PINNED 済み（本欄冒頭コメント「2026-08-25 User
     attestation 実行」節参照）。本欄の残る律速は User rights attest では
     なく、TRAIN/VALIDATION/SEALED HOLDOUT/IDENTITY PROBE split manifest
-    自体の生成（VG-L0 学習ハーネス実装待ち、残存ブロッカー(2)）のみ。
+    自体の生成（VG-L0 学習ハーネス実装待ち、残存ブロッカー(2)）のみ
+    だった〕
 
+# --- dataset_row_order_sha: practice_audio_split_manifest.json の
+# row_order_sha256 と同値。RUN9-L0-PIN-2（2026-08-26 実装）で PINNED 化:
+# DESIGN_RUN9 §12 規則6「row orderをhashする。」が要求する row order hash
+# は既 PINNED practice manifest に実在し（row_order_sha256、
+# sample_inventory 100要素の順序を表す）、本欄はそれを写像するのみ——新規
+# 計算は行わない。run9_schema.load_pinned_dataset_split_manifest() が
+# 「本欄の pin 値 == practice manifest 実体の row_order_sha256 == dataset
+# split manifest 内の転記値（song_splits.row_order_sha256）」の三者一致を
+# 消費時点で fail-closed 照合する。
 dataset_row_order_sha:
-  value: null
-  status: PENDING
-  reason: dataset_manifest_sha が未確定のため row order も未確定（同一律速）。
+  value: "6b8435bcf006e9dc90bd5272671da84ee7c82baaaad497ea2926a811e6e9d45a"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json
+  reason: >-
+    〔履歴: 旧 PENDING 理由（RUN9-L0-PIN-2 で解消済み）——
+    dataset_manifest_sha が未確定のため row order も未確定（同一律速）だった〕
 
 config_sha:
   value: null
   status: PENDING
   reason: >-
+    RUN9-L0-PIN-2（2026-08-26, User 裁定 2026-08-25）で reason 訂正:
+    config_sha は learning_recipe_sha と同一ファイルを指さない
+    （旧文言は両者を混同していた——下記〔履歴〕参照）。対象は
+    inputs/run9_execution_config.yaml（現時点で repo に不在）の raw byte
+    sha256 とする——RUN9 の実行時配線を確定する runtime orchestration
+    config であり、各既存 pin/manifest/recipe（backbone_runtime_bundle_
+    sha / repository_commit_sha / dataset_manifest_sha / dataset_row_
+    order_sha / expected_speaker_map_sha / learning_recipe_sha /
+    dependency_pins_sha / execution_profile_sha / probe_manifest_sha /
+    branch_write_policy_sha / seed_policy_sha / failure_abort_criteria_
+    sha 等）を参照して束ねるだけであり、trial_count/render_budget/
+    stopping_rule 等の学習意味論を config 側で重複定義してはならない
+    （evaluation/probe_manifest.json measurement_boundary の「重複定義
+    しない」規律と同型 — User 裁定 2026-08-25 逐語、
+    scratchpad/run9_user_adjudication_pin2.md 節1）。build（実ファイル
+    生成・pin）は VG-L0 学習ハーネスの実行段構成が確定する実装時（最終
+    組み立て欄——本欄が束ねる対象の多くが先に PINNED 済みである必要が
+    あるため）。schema・manifest は本 PR で作らない（実行段構成の設計
+    判断先取り禁止）。
+    〔履歴: 旧 PENDING 理由（config_sha と learning_recipe_sha を混同
+    していた誤記、RUN9-L0-PIN-2 の User 裁定で是正済み）——
     学習 config（learning_recipe.yaml 等）未作成。VG-L0 学習ハーネス未実装
     （書き込み先は改訂1で Performance Adapter から Founder 別 versioned
     Performance ControlProfile へ変更 — DESIGN_RUN9_REVISION_0.2.md 参照。
-    ハーネス未実装であることは変わらない）。
+    ハーネス未実装であることは変わらない）だった〕
 
 dependency_pins_sha:
   value: null
@@ -379,6 +442,23 @@ expected_speaker_map_sha:
   value: null
   status: PENDING
   reason: >-
+    RUN9-L0-PIN-2（2026-08-26）で reason 訂正: anchor pin の充足だけでなく、
+    af0 が gate_synth.py --speaker の choices
+    {ritsu, pjs, user, d3synth, amitaro} に存在しない構造的ギャップが
+    本欄の真の律速であることを明記する。DESIGN §9.1 の加重合成
+    I_child = Normalize(w_A・I_AF0 + w_R・I_Ritsu + w_U・I_User) を
+    spk_embed へ実現する機構も gate_synth.py に存在しない（実消費箇所
+    gate_synth.py:1330-1372 は `--speaker <name>` の名前ベースで acoustic
+    ディレクトリ内の `*.<name>.emb` を読み込む離散選択のみで、加重和・
+    補間等の合成処理は無い。choices 宣言は gate_synth.py:2599-2604）。
+    af0 側の backbone embedding をどう用意するか（新規生成/別の render
+    経路/af0 は spk_embed を経由しない設計に倒す等）の設計判断、および
+    af0/ritsu/user 座標 → backbone speaker embedding/id への写像方式の
+    設計は VG-L0 ハーネス Memo（RUN9-L0-HARNESS-1）へ登録する——写像方式が
+    未決のまま schema/validator を事前配線しない（先取り禁止）。
+    〔履歴: 旧 PENDING 理由（anchor pin 充足のみを律速として記述しており、
+    af0 の backbone 側構造的ギャップに触れていなかった、RUN9-L0-PIN-2 で
+    是正済み）——
     2026-08-25 User attestation 実行により、af0 / ritsu に加え user の
     anchor hash も domains/identity_domain_run9_v1.json で PINNED 済みと
     なった（本欄冒頭コメント「2026-08-25 User attestation 実行」節参照）
@@ -387,7 +467,7 @@ expected_speaker_map_sha:
     なのは anchor pin 自体ではなく、speaker map manifest 実体（RUN9 の
     3 Founder 座標と backbone speaker embedding/id との対応表）そのものが
     まだ生成・pin 対象として存在しないため（専用 schema・生成手続きは
-    VG-L0 学習ハーネス実装時に確定する、残存ブロッカー(2)）。
+    VG-L0 学習ハーネス実装時に確定する、残存ブロッカー(2)）だった〕
 
 backbone_checkpoint_sha:
   value: "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a"
@@ -616,6 +696,37 @@ learning_recipe_sha:
   value: null
   status: PENDING
   reason: >-
+    RUN9-L0-PIN-2（2026-08-26, User 裁定 2026-08-25）: `_LEARNING_RECIPE_
+    ARM_KEYS` 9キーのうち4キー（`equal_budget_within_arm`/`trial_count`/
+    `render_budget`/`stopping_rule`）は User 裁定で値が確定し、
+    `run9_schema.validate_learning_recipe_manifest()`
+    （`_validate_learning_recipe_arm()`）が両 arm（practice_recipe/
+    education_recipe）共通で機械強制する: `trial_count == 32` /
+    `render_budget == 128`（1 Founder あたり logical_render_units）/
+    `stopping_rule == "FIXED_BUDGET_32_TRIALS_NO_SUCCESS_EARLY_STOP"`
+    （gain 成立・非成立を理由に途中終了しない。32 trials を原則最後まで
+    消化する。rights/provenance 違反・immutable 領域への書込企図・
+    非有限値・renderer/runtime failure・contract 違反等の Hard Failure
+    のみ途中停止を許す。NO_GAIN は停止理由ではなく科学結果として記録
+    する。logical_render_unit の定義: 1 Founder について凍結済み評価
+    単位1件の音声 render を1回要求すること、cache hit も1 unit として
+    計上する。128 units は learning/search loop 専用とし、Birth
+    baseline/C0/C1/validation/sealed holdout の固定評価 render は別予算
+    とする。同一 attempt 内で結果を見て予算を追加してはならない——不足
+    と判断した場合は現 attempt を凍結し、新 design_revision で再裁定
+    する）/ `equal_budget_within_arm == True`（既存）。残る5キー
+    （`search_space`/`candidate_generation`/`evaluator`/`compute_budget`/
+    `data_binding`）は rev 0.3 改訂8「具体スキーマは VG-L0 ハーネス実装時
+    に確定」に従い、ハーネス Memo（RUN9-L0-HARNESS-1）の設計対象のまま
+    ——`evaluator` は凍結済み `loss_channels` 5種（relative_f0/
+    duration_ratio/normalized_energy/attack_timing/phrase_end_timing、
+    DESIGN §13.3）を再利用できる可能性が高いが正式な組み込みは未決、
+    `data_binding` は本 PR で PINNED 化された `dataset_manifest_sha` へ
+    従属する（値の形式は sha参照か記述文字列か等、未決）。manifest 実体
+    の生成（build）は上記4キーの機械強制を含め VG-L0 ハーネス実装時の
+    build 対象のまま——本欄は引き続き PENDING。
+    〔履歴: 旧 reason（User 裁定前、4キーの値は build 時に確定するとして
+    いた）——
     learning_recipe.yaml 未作成。VG-L0 学習ハーネス未実装（書き込み先は
     改訂1で Performance ControlProfile へ変更済み）。rev 0.3 改訂Aにより
     PRACTICE_FROM_AUDIO（自律差分抽出・自律探索の recipe）と
@@ -637,7 +748,7 @@ learning_recipe_sha:
     （`inputs/learning_recipe_manifest.json`）に凍結済み・PINNED 時照合
     はテスト層へ事前配線済み（`tests/test_run9_contract.py`）。停止規則・
     試行回数・render 予算の具体値と manifest 実体の生成は VG-L0 ハーネス
-    実装時の build 対象のため、本欄は引き続き PENDING。
+    実装時の build 対象のため、本欄は引き続き PENDING だった〕
 
 # RUN9-PROBE-1（本改訂）: DESIGN_RUN9 §15 Probe Set (P0-P5) の実体
 # manifest を `evaluation/probe_manifest.json`（`evaluation/` 初出）へ
