@@ -12135,6 +12135,28 @@ def _validate_smoke_render_section(section: Any, *, companions_status: str) -> N
                 f"{field}.not_attempted_reason_is_missing_input_not_failure must be a bool, "
                 f"got {not_attempted!r}"
             )
+        # Codex bot レビュー PR #326 第9巡指摘 Fix 18（P2, 採用, 将来汚染:
+        # Fix 8 の逆方向の未結合）: `smoke_render` の唯一設計されている
+        # BLOCKED 理由は acoustic_export_companions 未取得（missing-input）
+        # であり、`blocked_by`/`not_attempted_reason_is_missing_input_
+        # not_failure` はその主張を担う。旧実装は COMPLETED 側でのみ
+        # companions_status を照合していた（Fix 8）ため、逆方向
+        # ——companions が実は OBTAINED_VERIFIED_MATCH なのに smoke_render
+        # が missing-input BLOCKED を主張し続ける——矛盾が未結合のままだった
+        # （「取得済み」と「入力欠落で BLOCKED」の同時主張が可能だった）。
+        if companions_status != "NOT_OBTAINED_TARBALL_MISS":
+            raise Run9ValidationError(
+                f"{field}.status is BLOCKED (missing-input) but acoustic_export_companions."
+                f"status is {companions_status!r} (not NOT_OBTAINED_TARBALL_MISS) — a BLOCKED "
+                "smoke render whose blocked_by/not_attempted_reason_is_missing_input_not_"
+                "failure claim missing acoustic companions cannot coexist with a companions "
+                "section that says those companions were obtained (self-contradictory pin). "
+                "再入条件: 将来 HARNESS-2 で「companions は取得済みだが render は未実行/"
+                "失敗」という中間状態を表す必要が生じても、本 validator はここで新しい "
+                "status 値を先取りして発明しない（RUN9-L0-PIN-1 以来の規律）——その場合は "
+                "smoke_render を COMPLETED にするか、design_revision で専用の shape を "
+                "追加すること"
+            )
     else:  # COMPLETED
         if section["determinism_confirmed"] is not True:
             raise Run9ValidationError(

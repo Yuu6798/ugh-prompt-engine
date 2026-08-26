@@ -13925,13 +13925,20 @@ def _complete_smoke_render(
     data: Dict[str, Any], *, measured_sec_per_render: float = 4.2,
     render_condition: str = "CPU, ritsu, 1.0s phrase",
     render_output_sha256: str = "c" * 64,
+    acquisition_source: str = "THIS_TARBALL",
 ) -> None:
     """テストヘルパー: smoke_render を COMPLETED（有効な evidence 込み）
     へ遷移させる。PR #326 第3巡 Fix 8 により acoustic_export_companions
     が OBTAINED_VERIFIED_MATCH でなければ拒否されるため、まず
     `_obtain_all_acoustic_companions()` を呼ぶ。PR #326 第6巡 Fix 15 に
-    より同一入力2回の render 出力 sha256（一致必須）も付与する。"""
-    _obtain_all_acoustic_companions(data)
+    より同一入力2回の render 出力 sha256（一致必須）も付与する。
+    `acquisition_source` は `_obtain_all_acoustic_companions()` へそのまま
+    渡す（既定 THIS_TARBALL、PR #326 第7巡以降の DRIVE_DIRECT/RE_EXPORT
+    経路テストが companions を OBTAINED にしつつ smoke も同時に COMPLETED
+    へ揃える必要があるため——第9巡 Fix 18 で smoke BLOCKED は companions
+    NOT_OBTAINED を要求するようになったため、companions だけ OBTAINED に
+    する既存テストは smoke も揃えないと通らなくなった）。"""
+    _obtain_all_acoustic_companions(data, acquisition_source=acquisition_source)
     data["smoke_render"] = {
         "status": "COMPLETED", "reason": "done",
         "determinism_confirmed": True, "measured_sec_per_render": measured_sec_per_render,
@@ -13944,9 +13951,12 @@ def _complete_smoke_render(
 def test_harness1_pr326_fix1_obtained_correct_measured_hashes_accepted() -> None:
     """正しい measured_sha256（expected_sha256 と一致）+ 対応する tar
     member を全 item に付与すれば OBTAINED_VERIFIED_MATCH は validate を
-    通る（過剰拒否でないことの確認）。"""
+    通る（過剰拒否でないことの確認）。PR #326 第9巡 Fix 18 により、
+    companions OBTAINED のまま smoke_render を BLOCKED（missing-input）に
+    残すと自己矛盾で拒否されるため、`_complete_smoke_render()` で smoke
+    側も揃える。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    _obtain_all_acoustic_companions(data)
+    _complete_smoke_render(data)
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
 
 
@@ -13956,9 +13966,11 @@ def test_harness1_pr326_fix1_loader_accepts_correctly_obtained_companions(
     """expected_sha256 と一致する measured_sha256 を全 item に付与した
     OBTAINED_VERIFIED_MATCH manifest が、`load_pinned_dependency_pins_
     manifest()` の全段（validate + bundle cross-check 含む三者一致）を
-    通って正常に読み込めること（過剰拒否でないことの確認、正常系）。"""
+    通って正常に読み込めること（過剰拒否でないことの確認、正常系）。
+    PR #326 第9巡 Fix 18 により smoke_render も揃える必要があるため
+    `_complete_smoke_render()` を使う。"""
     manifest_data = copy.deepcopy(_dependency_pins_manifest_data())
-    _obtain_all_acoustic_companions(manifest_data)
+    _complete_smoke_render(manifest_data)
     manifest_text = json.dumps(manifest_data, sort_keys=True, ensure_ascii=False, indent=2) + "\n"
     manifest_path = tmp_path / "dependency_pins_manifest.json"
     manifest_path.write_bytes(manifest_text.encode("utf-8"))
@@ -14175,9 +14187,10 @@ def test_harness1_pr326_fix4_obtained_with_matching_tar_member_accepted() -> Non
     """companion_status が OBTAINED_VERIFIED_MATCH で、対応する tar
     member（basename一致・sha256一致）が揃っていれば通る（過剰拒否で
     ないことの確認 — `_obtain_all_acoustic_companions()` ヘルパー自体の
-    回帰固定も兼ねる）。"""
+    回帰固定も兼ねる）。PR #326 第9巡 Fix 18 により smoke_render も
+    揃える必要があるため `_complete_smoke_render()` を使う。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    _obtain_all_acoustic_companions(data)
+    _complete_smoke_render(data)
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
 
 
@@ -14269,9 +14282,11 @@ def test_harness1_pr326_fix7_drive_direct_obtained_without_tar_member_accepted()
     """acquisition_source=DRIVE_DIRECT で取得した companion は、
     tar_gz_full_member_ledger に一切現れなくても OBTAINED_VERIFIED_MATCH
     を主張できる（HARNESS1_PROVISION_RECORD.md §7 が記録する非 tar 経路
-    ——別 Drive フォルダの探索——の正当性を machine check する）。"""
+    ——別 Drive フォルダの探索——の正当性を machine check する）。
+    PR #326 第9巡 Fix 18 により smoke_render も揃える必要があるため
+    `_complete_smoke_render()` を使う。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    _obtain_all_acoustic_companions(data, acquisition_source="DRIVE_DIRECT")
+    _complete_smoke_render(data, acquisition_source="DRIVE_DIRECT")
     assert not any(
         m2["path"].endswith(item["file"].rsplit("/", 1)[-1])
         for item in data["acoustic_export_companions"]["expected_items"]
@@ -14282,9 +14297,10 @@ def test_harness1_pr326_fix7_drive_direct_obtained_without_tar_member_accepted()
 
 def test_harness1_pr326_fix7_re_export_obtained_without_tar_member_accepted() -> None:
     """acquisition_source=RE_EXPORT（再export 経路）も同様に tar member
-    無しで受理される。"""
+    無しで受理される。PR #326 第9巡 Fix 18 により smoke_render も揃える
+    必要があるため `_complete_smoke_render()` を使う。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    _obtain_all_acoustic_companions(data, acquisition_source="RE_EXPORT")
+    _complete_smoke_render(data, acquisition_source="RE_EXPORT")
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
 
 
@@ -14357,6 +14373,54 @@ def test_harness1_pr326_fix8_smoke_completed_with_companions_obtained_accepted()
     """companions が正しく OBTAINED_VERIFIED_MATCH であれば smoke_render
     COMPLETED は受理される（過剰拒否でないことの確認 —
     `_complete_smoke_render()` ヘルパー自体の回帰固定も兼ねる）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _complete_smoke_render(data)
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+# ---------------------------------------------------------------------------
+# PR #326 第9巡 Codex bot レビュー Fix 18（P2, 採用, 2026-08-26, 将来汚染:
+# Fix 8 の逆方向の未結合）: `smoke_render` の missing-input BLOCKED shape
+# は companions が実際に NOT_OBTAINED_TARBALL_MISS のときのみ許容される。
+# 正負テスト。
+# ---------------------------------------------------------------------------
+
+
+def test_harness1_pr326_fix18_stale_blocked_after_companions_obtained_rejected() -> None:
+    """companions を OBTAINED_VERIFIED_MATCH へ遷移させても smoke_render
+    を missing-input BLOCKED のまま残す改竄は拒否される（Fix 8 の逆方向
+    ——「取得済み」と「入力欠落で BLOCKED」の同時主張は自己矛盾）。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data)
+    assert data["smoke_render"]["status"] == "BLOCKED"
+    with pytest.raises(m.Run9ValidationError, match="status is BLOCKED \\(missing-input\\)"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix18_error_message_states_reentry_condition() -> None:
+    """拒否メッセージ自体に、将来 HARNESS-2 で中間状態が必要になっても
+    新しい status 値を先取り発明しないという再入条件（PIN-1 以来の規律）
+    が記録されていることの確認。"""
+    data = copy.deepcopy(_dependency_pins_manifest_data())
+    _obtain_all_acoustic_companions(data)
+    with pytest.raises(m.Run9ValidationError, match="design_revision"):
+        m.validate_dependency_pins_manifest(data)
+
+
+def test_harness1_pr326_fix18_current_real_data_both_missing_blocked_accepted() -> None:
+    """現行実データ（companions NOT_OBTAINED_TARBALL_MISS + smoke_render
+    missing-input BLOCKED、両方 MISS/BLOCKED）は引き続き受理される（過剰
+    拒否でないことの確認）。"""
+    data = _dependency_pins_manifest_data()
+    assert data["acoustic_export_companions"]["status"] == "NOT_OBTAINED_TARBALL_MISS"
+    assert data["smoke_render"]["status"] == "BLOCKED"
+    m.validate_dependency_pins_manifest(data)  # 例外なしの確認
+
+
+def test_harness1_pr326_fix18_companions_obtained_and_smoke_completed_accepted() -> None:
+    """companions OBTAINED + smoke_render COMPLETED（両方揃って一貫）は
+    引き続き受理される（Fix 8 の正方向・Fix 18 の負方向のいずれの拒否
+    条件にも該当しないことの確認）。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
     _complete_smoke_render(data)
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
@@ -14708,9 +14772,11 @@ def test_harness1_pr326_fix14_obtained_missing_acquisition_record_rejected() -> 
 def test_harness1_pr326_fix14_obtained_correctly_shaped_accepted() -> None:
     """トップレベル・item レベルとも正しく OBTAINED shape へ揃えれば
     受理される（`_obtain_all_acoustic_companions()` ヘルパー自体の
-    回帰固定も兼ねる、過剰拒否でないことの確認）。"""
+    回帰固定も兼ねる、過剰拒否でないことの確認）。PR #326 第9巡 Fix 18
+    により smoke_render も揃える必要があるため `_complete_smoke_render()`
+    を使う。"""
     data = copy.deepcopy(_dependency_pins_manifest_data())
-    _obtain_all_acoustic_companions(data, acquisition_source="DRIVE_DIRECT")
+    _complete_smoke_render(data, acquisition_source="DRIVE_DIRECT")
     m.validate_dependency_pins_manifest(data)  # 例外なしの確認
 
 
