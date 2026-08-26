@@ -725,29 +725,47 @@ reexport_manifest_sha:
 # が別途取得できた後、smoke render を再試行して実測を得るのが次の
 # ブロッカー解消経路（HARNESS-2 以降への引き継ぎ）。
 #
-# RUN9-L0-HARNESS-2（2026-08-26）追記: smoke render 実測は完了した
+# RUN9-L0-HARNESS-2（2026-08-26）追記〔履歴〕: smoke render 実測は完了した
 # （`HARNESS2_REEXPORT_SMOKE_RECORD.md` 参照——Python/OS/kernel/arch/
 # onnxruntime/providers/render entrypoint 等の実測値一式を記録済み）。
 # ただし User 裁定4「同じ固定runtime inputsで smoke render を実測し...
 # 取得した時点で execution_profile_sha を裁定・pinする」の裁定主体は
 # User であり、実測完了 = 自動 pin ではない。推定で PINNED にしない
-# （裁定4 逐語「smoke未実測の環境値を推定でPINNEDにしない」）。本欄は
-# User 裁定を待って PINNED 化する。
+# （裁定4 逐語「smoke未実測の環境値を推定でPINNEDにしない」）。当時は
+# User 裁定を待って PENDING のまま据え置いた（下記 RUN9-EXECPROFILE-1
+# 節で解消済み）。
+#
+# RUN9-EXECPROFILE-1（2026-08-26、User 裁定「RUN9 User裁定 —
+# execution_profile_sha」の承認に基づく。逐語は repo 内収載
+# `USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt` を正とする）で
+# PINNED 化: User が裁定した runtime identity 5値（python "3.11.15" /
+# os "Ubuntu 24.04.4" / architecture "x86_64" / onnxruntime "1.29.0" /
+# selected_execution_provider "CPUExecutionProvider"）+ provider 固定
+# 規則4点（CPUExecutionProvider 固定・available/selected 混同禁止・
+# GPU/CUDA 自動fallback/upgrade禁止・provider/主要runtime version変更時
+# の再pin義務）+ smoke benchmark 参考記録（`is_reference_only: true` で
+# identity 意味論から分離、616件概算の出典注記付き）+ 追加実測9項目
+# （裁定「可能であれば実測記録」節——実測できたもののみ記録し、
+# thread_environment_variables のみ smoke 実行時の一次記録が存在せず
+# `NOT_RECORDED` とした）を新設 `inputs/execution_profile_manifest.json`
+# （schema `run9-execution-profile/1.0`）へ一括 manifest 化し、その実
+# バイト sha256 を本欄へ PINNED した。`run9_schema.
+# validate_execution_profile_manifest()`/`load_pinned_execution_
+# profile_manifest()`（PIN-1/2・HARNESS-1/2 と同型の4段構成 + 裁定 txt
+# 実バイト sha256 cross-check）が消費・検証する。
+#
+# 情報記録（pin 欄ではない、append-only、PIN-2/HARNESS-2 前例のキー体裁
+# 踏襲）: repo 収載した裁定逐語文書
+# `USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt` の実バイト sha256
+# （compute_file_sha256() 実測、2026-08-26 時点）:
+#   cb56c3cd6bb14cb18251138f0c48dd209eb5995b1815019ad2d5f53451c147bf
+# 本ファイルは CONTRACT_PIN_FIELDS へ追加しない（裁定文書自体は「値の
+# 転記元の証跡」であって RUN9 の実行前提条件そのものではないため——
+# reexport_manifest_sha の前例と同じ扱い）。
 execution_profile_sha:
-  value: null
-  status: PENDING
-  reason: >-
-    smoke 実測は完了した（実測値一式は HARNESS2_REEXPORT_SMOKE_RECORD.md
-    参照: Python 3.11.15 / Ubuntu 24.04.4 LTS / Linux 6.18.44-fc-v21
-    x86_64 / onnxruntime 1.29.0 / providers ["CPUExecutionProvider"] /
-    render entrypoint = gate_synth.py run 逐語）。User 裁定待ち——裁定4は
-    「実測を取得した時点で execution_profile_sha を裁定・pinする」と
-    User 自身の裁定行為を要求しており、実測完了そのものが pin を意味
-    しない。推定で PINNED にしない（裁定4 逐語）。
-    〔履歴: 旧 reason（HARNESS-2 実測前）——「学習実行環境（GPU /
-    hardware profile）が未選定。加えて RUN9-L0-HARNESS-1（2026-08-26）で
-    判明: CPU render 実測時間が acoustic export companions 未取得のため
-    得られず、予算現実性の判定材料自体が存在しない（上記コメント参照）。」〕
+  value: "200c975967a7b34aa55d9e89a8c59ace2be850e5fd1d93a4ba4a7dbed5f06d34"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/execution_profile_manifest.json
 
 # --- seed_policy_sha: inputs/seed_policy_manifest.json の実バイト sha256
 # （design_doc_sha256 と同一のファイル実バイト規約 —

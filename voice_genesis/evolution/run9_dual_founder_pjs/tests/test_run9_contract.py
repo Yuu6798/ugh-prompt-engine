@@ -11047,6 +11047,15 @@ _PIN1_LOADER_CASES = (
         "dependency_pins_sha", "load_pinned_dependency_pins_manifest",
         "DEPENDENCY_PINS_MANIFEST_PATH",
     ),
+    # RUN9-EXECPROFILE-1（2026-08-26 実装）: execution_profile_sha も
+    # probe/seed_policy と同型の4段構成（+ 本欄固有の adjudication_basis
+    # 実バイト cross-check）を持つが、汎用ケースは完全に同型のため相乗り
+    # させる。cross-check 固有の fail-closed 分岐は下記専用セクションで
+    # 別途テストする。
+    (
+        "execution_profile_sha", "load_pinned_execution_profile_manifest",
+        "EXECUTION_PROFILE_MANIFEST_PATH",
+    ),
 )
 
 # PR #324 第2巡 Fix 5（measurement_spec_sha を PENDING へ復帰）+ PR #326
@@ -11736,15 +11745,18 @@ def test_pin1_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
 # RUN9-L0-HARNESS-1 で `dependency_pins_sha` を PINNED 化した際、pre-run
 # PENDING は10→9件になった（旧テスト `test_harness1_pre_run_pending_
 # count_is_nine`）。PR #326 第2巡 Fix 3（P1、採用、2026-08-26）で同欄が
-# PENDING へ差し戻されたため9件は一時的な状態に留まり、下記テストへ
-# 一本化した（重複削除、「修正からの再修正は早期に打ち切る」に沿い、
-# 単に件数を書き換えるのではなく1本化する既存規約——上記
+# PENDING へ差し戻され pre-run PENDING は9→10件へ戻った（旧テスト
+# `test_harness1_pr326_fix3_pre_run_pending_count_is_ten`）。続けて
+# RUN9-EXECPROFILE-1（2026-08-26）で `execution_profile_sha` が PINNED 化
+# され、pre-run PENDING は10→9件へ再度減少した——下記テストへ一本化した
+# （重複削除、「修正からの再修正は早期に打ち切る」に沿い、単に件数を
+# 書き換えるのではなく1本化する既存規約——上記
 # `test_pin2_pre_run_pending_count_is_ten` 直前のコメントと同型）。
-def test_harness1_pr326_fix3_pre_run_pending_count_is_ten(contract: m.Run9RunContract) -> None:
-    """PR #326 第2巡 Fix 3（P1、採用、2026-08-26）: `dependency_pins_sha`
-    を PENDING へ差し戻したことにより、pre-run PENDING 欄は9→10件へ
-    戻った（optional の human_evaluation_protocol_sha を含めると総
-    PENDING 10→11件）——README.md の記述更新（9→10/10→11）と対応する
+def test_execprofile_pre_run_pending_count_is_nine(contract: m.Run9RunContract) -> None:
+    """RUN9-EXECPROFILE-1（2026-08-26）: `execution_profile_sha` を
+    PINNED 化したことにより、pre-run PENDING 欄は10→9件へ減少した
+    （optional の human_evaluation_protocol_sha を含めると総
+    PENDING 11→10件）——README.md の記述更新（10→9/11→10）と対応する
     回帰固定。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
@@ -11756,10 +11768,11 @@ def test_harness1_pr326_fix3_pre_run_pending_count_is_ten(contract: m.Run9RunCon
         n for n in m.CONTRACT_PIN_FIELDS
         if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
     ]
-    assert len(pending) == 10
-    assert len(all_pending) == 11
+    assert len(pending) == 9
+    assert len(all_pending) == 10
     assert "dependency_pins_sha" in pending
     assert "measurement_spec_sha" in pending
+    assert "execution_profile_sha" not in pending
     assert "dataset_manifest_sha" not in pending
     assert "dataset_row_order_sha" not in pending
 
@@ -13480,6 +13493,26 @@ def test_harness1_pr326_fix3_readme_pending_count_reverted_to_ten_and_eleven() -
             )
 
 
+# RUN9-EXECPROFILE-1（2026-08-26）で `execution_profile_sha` が PINNED 化
+# されたことにより、README の残 PENDING 件数記述は9→10（総10→11）から
+# 10→9（総11→10）へ再度更新された。旧『9/10』（HARNESS-1 一時 PINNED 時点）
+# は上記テストが既に履歴ガードしているため、本テストは新たな現在値
+# （9欄/10欄）が実在すること、および直前の現在値だった10欄/11欄が
+# 履歴/解消済みマーカー配下でのみ残っていることを確認する（同じ規約の
+# 第5世代）。
+def test_execprofile_readme_pending_count_updated_to_nine_and_ten() -> None:
+    """RUN9-EXECPROFILE-1: `execution_profile_sha` の PINNED 化に伴い、
+    README の残 PENDING 件数記述は9件（総10件）へ更新された。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "pre-run 必須9欄" in readme_text
+    assert "総 PENDING 10欄" in readme_text
+    for paragraph in readme_text.split("\n\n"):
+        if "pre-run 必須10欄" in paragraph or "総 PENDING 11欄" in paragraph:
+            assert ("履歴" in paragraph) or ("解消済み" in paragraph), (
+                f"stale current-tense 10/11-count claim in paragraph: {paragraph!r}"
+            )
+
+
 def test_harness1_pr326_fix3_readme_dependency_pins_sha_pending_again() -> None:
     """`dependency_pins_sha` が PR #326 第2巡 Fix 3（P1、採用）で PENDING
     へ差し戻されたことに伴い、README の pre-run 必須欄の現行列挙に同欄が
@@ -13854,11 +13887,21 @@ def test_harness1_pr326_fix3_dependency_pins_sha_still_pending(
     assert m.DEPENDENCY_PINS_MANIFEST_PATH.is_file()
 
 
-def test_harness1_execution_profile_sha_still_pending(contract: m.Run9RunContract) -> None:
-    """execution_profile_sha は smoke render が BLOCKED のため本 Memo では
-    PINNED 化しない（数値を捏造しない、fail-closed 判断の回帰確認）。"""
+# `test_harness1_execution_profile_sha_still_pending`（本 Memo=RUN9-L0-
+# HARNESS-1 時点で execution_profile_sha が PENDING のままであることの
+# 回帰確認）は RUN9-EXECPROFILE-1（2026-08-26）で同欄が PINNED 化された
+# ことにより恒久的に破綻する（`contract` fixture は live の disk contract
+# を指すため、旧テストは書き換えるほかない——`test_pin2_pre_run_pending_
+# count_is_ten` 系と同型の一本化規約）。下記テストへ置き換える。
+def test_execprofile_execution_profile_sha_now_pinned(contract: m.Run9RunContract) -> None:
+    """RUN9-EXECPROFILE-1（2026-08-26）: User 裁定「RUN9 User裁定 —
+    execution_profile_sha」の承認により、execution_profile_sha は
+    PENDING → PINNED へ遷移した（数値は捏造ではなく実測 manifest 実バイト
+    sha256——`test_execprofile_load_pinned_execution_profile_manifest_
+    happy_path` が実体側の検証を担う）。"""
     field = contract.pin_field("execution_profile_sha")
-    assert field["status"] == "PENDING"
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(m.EXECUTION_PROFILE_MANIFEST_PATH)
 
 
 def test_harness1_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
@@ -15222,7 +15265,11 @@ def test_harness2_reexport_manifest_pinning_does_not_affect_pending_set(
     contract: m.Run9RunContract,
 ) -> None:
     """reexport_manifest_sha は新規追加の PINNED 欄であり、既存 PENDING
-    集合（pre-run 必須10欄・総 PENDING 11欄）に影響しないこと。"""
+    集合に影響しないこと〔履歴: 起草当時は pre-run 必須10欄・総 PENDING
+    11欄だったが、RUN9-EXECPROFILE-1（2026-08-26）で execution_profile_sha
+    も PINNED 化されたため、現在は下記のとおり pre-run 必須9欄・総
+    PENDING 10欄——`test_execprofile_pre_run_pending_count_is_nine` と
+    同一の期待値〕。"""
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
     pending = [n for n in pre_run_fields if not m._is_field_pinned(contract.pin_field(n))]
@@ -15232,8 +15279,8 @@ def test_harness2_reexport_manifest_pinning_does_not_affect_pending_set(
     ]
     assert "reexport_manifest_sha" not in pending
     assert "reexport_manifest_sha" not in all_pending
-    assert len(pending) == 10
-    assert len(all_pending) == 11
+    assert len(pending) == 9
+    assert len(all_pending) == 10
     assert m.gate_state(contract) == "BLOCKED"
 
 
@@ -15829,18 +15876,25 @@ def test_harness2_smoke_record_contains_key_measured_values() -> None:
     assert "CPUExecutionProvider" in text
 
 
-# --- RUN9_CONTRACT.yaml: execution_profile_sha は引き続き PENDING ---------
+# --- RUN9_CONTRACT.yaml: execution_profile_sha は RUN9-EXECPROFILE-1 で --
+# --- PENDING → PINNED へ遷移した（旧テスト `test_harness2_execution_ ----
+# --- profile_sha_still_pending_after_smoke_measured` を置き換え） --------
 
 
-def test_harness2_execution_profile_sha_still_pending_after_smoke_measured(
+def test_execprofile_contract_raw_execution_profile_sha_pinned(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """smoke 実測完了後も、User 裁定が下るまで execution_profile_sha は
-    PENDING のまま（推定で PINNED にしない、裁定4逐語）。"""
+    """RUN9-EXECPROFILE-1（2026-08-26）: User 裁定「RUN9 User裁定 —
+    execution_profile_sha」の承認により、smoke 実測完了後の PENDING 待機
+    （旧 reason「smoke 実測は完了した...User 裁定待ち」）を経て PINNED
+    へ遷移した。value は `inputs/execution_profile_manifest.json` の実
+    バイト sha256（design_doc_sha256 と同一のファイル実バイト規約）。"""
     field = contract_raw["execution_profile_sha"]
-    assert field["status"] == "PENDING"
-    assert field["value"] is None
-    assert "smoke 実測は完了した" in field["reason"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(m.EXECUTION_PROFILE_MANIFEST_PATH)
+    assert field["source"] == (
+        "voice_genesis/evolution/run9_dual_founder_pjs/inputs/execution_profile_manifest.json"
+    )
 
 
 def test_harness2_dependency_pins_sha_still_pending_after_companions_resolved(
@@ -15878,3 +15932,392 @@ def test_harness2_readme_references_new_artifacts() -> None:
     assert "reexport_manifest.json" in readme_text
     assert "HARNESS2_REEXPORT_SMOKE_RECORD.md" in readme_text
     assert "USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt" in readme_text
+
+
+# ---------------------------------------------------------------------------
+# RUN9-EXECPROFILE-1（2026-08-26）: execution_profile_manifest
+# （schema `run9-execution-profile/1.0`）+ execution_profile_sha PINNED 化。
+# User 裁定「RUN9 User裁定 — execution_profile_sha」（repo 内収載
+# USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt）に基づく。
+# ---------------------------------------------------------------------------
+
+EXECPROFILE_ADJUDICATION_PATH = (
+    _RUN_DIR / "USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt"
+)
+
+
+def _execprofile_manifest_data() -> Dict[str, Any]:
+    return m._loads_strict_json(m.EXECUTION_PROFILE_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+# --- 裁定文書の repo 収載（PIN-2/HARNESS-2 前例と同型） --------------------
+
+
+def test_execprofile_adjudication_source_file_exists() -> None:
+    assert EXECPROFILE_ADJUDICATION_PATH.is_file()
+
+
+def test_execprofile_adjudication_source_contains_verbatim_values() -> None:
+    """凍結した各値（runtime 5値・provider 固定規則の核心文言・smoke
+    benchmark 3値・追加実測9項目の箇条書き）が、repo 内収載した裁定文書の
+    本文に一字一句そのまま存在すること（grep 照合——「User 転記であって
+    発明でない」ことを機械検証する）。"""
+    text = EXECPROFILE_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    for value in (
+        '"3.11.15"', '"Ubuntu 24.04.4"', '"x86_64"', '"1.29.0"',
+        '"CPUExecutionProvider"',
+        "CPUExecutionProvider に固定する。",
+        "混同しない。",
+        "GPU/CUDA provider への自動fallback / upgradeは禁止する。",
+        "同じ execution_profile_sha を使わず再pinする。",
+        "observed_seconds_per_item: 24.1",
+        "planned_item_count: 616",
+        "estimated_total_runtime_hours: approximately 4.12",
+        "CPU model",
+        "logical CPU count",
+        "onnxruntime available_providers",
+        "onnxruntime selected providers",
+        "intra_op_num_threads / inter_op_num_threads",
+        "numpy version",
+        "soundfile version",
+        "render code commit",
+        "deterministic seed / thread environment variables",
+    ):
+        assert value in text, f"missing verbatim value: {value!r}"
+
+
+def test_execprofile_adjudication_source_body_byte_identical_to_scratchpad_origin() -> None:
+    """本文（【RUN9 User裁定 — execution_profile_sha】以降）が起草時の
+    作業メモ scratchpad/run9_user_adjudication_execprofile.md と一字一句
+    改変なしで一致すること（改変禁止の直接確認、PIN-2/HARNESS-2 前例と
+    同型——scratchpad ファイルが本セッション後に存在しない環境では
+    skip）。"""
+    scratchpad_path = Path(
+        "/tmp/claude-0/-home-user-ugh-prompt-engine/"
+        "e505c1c2-c4ad-588b-a1b2-258051a522de/scratchpad/"
+        "run9_user_adjudication_execprofile.md"
+    )
+    if not scratchpad_path.is_file():
+        pytest.skip("scratchpad origin file not present in this environment")
+    origin_body = scratchpad_path.read_text(encoding="utf-8")
+    origin_body = "【RUN9 User裁定" + origin_body.split("【RUN9 User裁定", 1)[1]
+    committed_text = EXECPROFILE_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    committed_body = "【RUN9 User裁定" + committed_text.split("【RUN9 User裁定", 1)[1]
+    assert committed_body == origin_body
+
+
+# --- validate_execution_profile_manifest(): 正常系・直列化 -----------------
+
+
+def test_execprofile_validate_real_manifest_happy_path() -> None:
+    m.validate_execution_profile_manifest(_execprofile_manifest_data())  # 例外なしの確認
+
+
+def test_execprofile_manifest_reserialization_byte_identical() -> None:
+    """`json.dumps(..., ensure_ascii=False, sort_keys=True, indent=2)` +
+    改行 で再直列化したバイト列が実ファイルのバイトと完全一致すること
+    （直列化規約の回帰固定、PIN-2/HARNESS-2 前例と同型）。"""
+    data = _execprofile_manifest_data()
+    reserialized = json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    assert reserialized.encode("utf-8") == m.EXECUTION_PROFILE_MANIFEST_PATH.read_bytes()
+
+
+def test_execprofile_manifest_schema_constant() -> None:
+    data = _execprofile_manifest_data()
+    assert data["schema"] == m.SCHEMA_EXECUTION_PROFILE_MANIFEST == "run9-execution-profile/1.0"
+
+
+# --- validate_execution_profile_manifest(): fail-closed 分岐 ---------------
+
+
+def test_execprofile_unknown_top_level_key_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["unexpected"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_missing_top_level_key_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    del data["benchmark_reference"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_execution_profile_manifest(data)
+
+
+@pytest.mark.parametrize("field", ["python", "os", "architecture", "onnxruntime", "selected_execution_provider"])
+def test_execprofile_runtime_value_tamper_rejected(field: str) -> None:
+    """(a) fail-closed: identity_semantics.runtime の5値いずれかが裁定
+    逐語と食い違うと拒否される（捏造・転記ミスの機械検出）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["identity_semantics"]["runtime"][field] = "TAMPERED"
+    with pytest.raises(m.Run9ValidationError, match="diverges from the adjudicated runtime"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_runtime_extra_key_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["identity_semantics"]["runtime"]["gpu"] = "none"
+    with pytest.raises(m.Run9ValidationError, match="diverges from the adjudicated runtime"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_provider_fixation_rule_marker_missing_rejected() -> None:
+    """(c) fail-closed: provider_fixation_rules[i] が対応するマーカー
+    文言を含まないと拒否される。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["identity_semantics"]["provider_fixation_rules"][0] = "no marker phrase here"
+    with pytest.raises(m.Run9ValidationError, match="adjudicated marker phrase"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_provider_fixation_rules_wrong_count_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["identity_semantics"]["provider_fixation_rules"] = data["identity_semantics"][
+        "provider_fixation_rules"
+    ][:3]
+    with pytest.raises(m.Run9ValidationError, match="provider_fixation_rules"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_selected_provider_value_must_match_runtime() -> None:
+    """(b) fail-closed: additional_measurements.onnxruntime_selected_
+    providers.value は [runtime.selected_execution_provider] と厳密一致
+    しなければならない（GPU provider 等の混入を拒否する）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["onnxruntime_selected_providers"]["value"] = [
+        "CUDAExecutionProvider"
+    ]
+    with pytest.raises(m.Run9ValidationError, match="onnxruntime_selected_providers.value"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_selected_provider_conflated_with_available_rejected() -> None:
+    """(b) fail-closed: selected が available の全列挙と同一集合になると
+    拒否される（"available の列挙と selected を混同しない" の機械化）。
+    available 側を selected 単独の集合へ書き換えることでこの条件を作る
+    ——selected 自体は依然 runtime.selected_execution_provider と一致
+    させたまま。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["onnxruntime_available_providers"]["value"] = [
+        "CPUExecutionProvider"
+    ]
+    data["additional_measurements"]["onnxruntime_available_providers"]["matches_smoke_record"] = False
+    with pytest.raises(m.Run9ValidationError, match="must not equal the full onnxruntime_available_providers"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_selected_provider_not_subset_of_available_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["onnxruntime_selected_providers"]["value"] = [
+        "CPUExecutionProvider"
+    ]
+    data["additional_measurements"]["onnxruntime_available_providers"]["value"] = [
+        "AzureExecutionProvider"
+    ]
+    data["additional_measurements"]["onnxruntime_available_providers"]["matches_smoke_record"] = False
+    with pytest.raises(m.Run9ValidationError, match="is not a subset of"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_is_reference_only_false_rejected() -> None:
+    """(d) frozen-fact ガード: benchmark_reference.is_reference_only を
+    false 化する改竄は恒久的に拒否される（benchmark 値が identity 意味論
+    へ混入する経路を閉じる）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["benchmark_reference"]["is_reference_only"] = False
+    with pytest.raises(m.Run9ValidationError, match="is_reference_only must remain the literal boolean True"):
+        m.validate_execution_profile_manifest(data)
+
+
+@pytest.mark.parametrize(
+    "field,bad_value",
+    [
+        ("observed_seconds_per_item", 999.0),
+        ("planned_item_count", 999),
+        ("estimated_total_runtime_hours", "approximately 9.99"),
+    ],
+)
+def test_execprofile_benchmark_value_tamper_rejected(field: str, bad_value: Any) -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["benchmark_reference"][field] = bad_value
+    with pytest.raises(m.Run9ValidationError, match="diverges from the adjudicated value"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_benchmark_keys_cannot_leak_into_identity_semantics() -> None:
+    """(d) shape 分離: identity_semantics へ benchmark 系キーを追加しよう
+    とすると unknown-key として拒否される（構造的分離の直接確認）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["identity_semantics"]["observed_seconds_per_item"] = 24.1
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_not_recorded_item_with_extra_value_key_rejected() -> None:
+    """(f) 推測補完の構造的禁止: NOT_RECORDED item に value 系キーを追加
+    すると拒否される（実測できなかった事実に値をこっそり同居させる経路を
+    塞ぐ）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    thread_env = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["thread_environment_variables"]
+    assert thread_env["status"] == "NOT_RECORDED"
+    thread_env["value"] = "OMP_NUM_THREADS=1"
+    with pytest.raises(m.Run9ValidationError, match="NOT_RECORDED item must have exactly the keys"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_not_recorded_item_missing_reason_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    thread_env = data["additional_measurements"][
+        "deterministic_seed_and_thread_environment_variables"
+    ]["thread_environment_variables"]
+    del thread_env["reason"]
+    with pytest.raises(m.Run9ValidationError, match="NOT_RECORDED item must have exactly the keys"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_measurement_item_bad_status_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["cpu_model"]["status"] = "GUESSED"
+    with pytest.raises(m.Run9ValidationError, match="status must be one of"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_measured_item_missing_required_key_rejected() -> None:
+    data = copy.deepcopy(_execprofile_manifest_data())
+    del data["additional_measurements"]["cpu_model"]["method"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_render_code_commit_smoke_file_sha_mismatch_rejected() -> None:
+    """render_code_commit: smoke_time_gate_synth_py_sha256 と file_sha256
+    が食い違うと（unchanged 主張との自己矛盾として）拒否される。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["render_code_commit"]["smoke_time_gate_synth_py_sha256"] = "0" * 64
+    with pytest.raises(m.Run9ValidationError, match="contradicts an 'unchanged since smoke' claim"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_thread_settings_default_unspecified_requires_null_value() -> None:
+    """intra/inter_op_num_threads: DEFAULT_UNSPECIFIED を名乗るなら value
+    は null でなければならない（未指定の事実を数値で偽装しない）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    intra = data["additional_measurements"]["onnxruntime_thread_settings"]["intra_op_num_threads"]
+    intra["specification_status"] = "DEFAULT_UNSPECIFIED"
+    # value はそのまま 1 (非null) に残す — 矛盾を作る。
+    with pytest.raises(m.Run9ValidationError, match="must be null when specification_status is"):
+        m.validate_execution_profile_manifest(data)
+
+
+def test_execprofile_matches_smoke_record_self_check_rejected() -> None:
+    """numpy_version.matches_smoke_record が実データと食い違うと拒否
+    される（自己申告フィールドの in-process 再計算チェック）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    data["additional_measurements"]["numpy_version"]["matches_smoke_record"] = False
+    with pytest.raises(m.Run9ValidationError, match="matches_smoke_record"):
+        m.validate_execution_profile_manifest(data)
+
+
+# --- load_pinned_execution_profile_manifest(): 正常系・cross-check ---------
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_happy_path(
+    contract: m.Run9RunContract,
+) -> None:
+    data = m.load_pinned_execution_profile_manifest(contract)
+    assert data["schema"] == m.SCHEMA_EXECUTION_PROFILE_MANIFEST
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """cross-check: adjudication_basis.source_file の実バイトが改変され
+    ていると（sha256 が adjudication_basis.sha256 と食い違うと）
+    fail-closed で拒否される——裁定 txt の事後編集を検出する。"""
+    tampered_path = tmp_path / "USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt"
+    tampered_path.write_bytes(EXECPROFILE_ADJUDICATION_PATH.read_bytes() + b"\ntampered\n")
+    with pytest.raises(m.Run9ValidationError, match="adjudication_basis.sha256"):
+        m.load_pinned_execution_profile_manifest(contract, adjudication_basis_path=tampered_path)
+
+
+def _tampered_execprofile_contract(
+    contract: m.Run9RunContract, tmp_path: Path, *, mutate,
+) -> Tuple[m.Run9RunContract, Path, Path]:
+    """execution_profile_manifest.json の内容を `mutate` で改変し、その実
+    バイト sha256 で `execution_profile_sha` pin を差し替えた合成
+    contract + manifest ファイル + contract ファイルを用意するテスト
+    ヘルパー（`_tampered_reexport_contract()` と同型）。"""
+    data = copy.deepcopy(_execprofile_manifest_data())
+    mutate(data)
+    manifest_bytes = _canonical_json_bytes(data)
+    manifest_path = tmp_path / "execution_profile_manifest.json"
+    manifest_path.write_bytes(manifest_bytes)
+    import hashlib as _hashlib
+    manifest_sha = _hashlib.sha256(manifest_bytes).hexdigest()
+    tampered_raw = copy.deepcopy(contract.raw)
+    tampered_raw["execution_profile_sha"] = {"value": manifest_sha, "status": "PINNED"}
+    tampered_contract_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_contract_path.write_text(yaml.safe_dump(tampered_raw, allow_unicode=True), encoding="utf-8")
+    return m.load_run9_contract(tampered_raw), manifest_path, tampered_contract_path
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_manifest_sha_forged_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """cross-check: manifest 側 adjudication_basis.sha256 を実バイトと
+    異なる値へ改竄しても、実 read + 再計算で fail-closed 拒否される
+    （source_file 自体は改変しない）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["sha256"] = "0" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_execprofile_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="adjudication_basis.sha256"):
+        m.load_pinned_execution_profile_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_execprofile_load_pinned_execution_profile_manifest_adjudication_source_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    missing_path = tmp_path / "does_not_exist.txt"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_execution_profile_manifest(contract, adjudication_basis_path=missing_path)
+
+
+# --- RUN9_CONTRACT.yaml: 既存 pin 全数不変 ----------------------------------
+
+
+def test_execprofile_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> None:
+    """RUN9-EXECPROFILE-1 は Scope IN の6ファイル（USER_ADJUDICATION_
+    20260826_EXECUTION_PROFILE.txt 新規 / inputs/execution_profile_
+    manifest.json 新規 / run9_schema.py / RUN9_CONTRACT.yaml / README.md /
+    tests/test_run9_contract.py）以外の既存 pin 済みファイルの実バイトを
+    一切変更していないこと（代表サンプル——reexport_manifest_sha/
+    seed_policy_sha/failure_abort_criteria_sha/probe_manifest_sha/
+    practice_audio_split_manifest_sha が引き続き実ファイルと一致する）。
+    `voice_genesis/foundry/s1_gate/gate_synth.py` は Read のみ（1byte も
+    変更していない）ことも合わせて確認する。"""
+    assert contract_raw["reexport_manifest_sha"]["value"] == m.compute_file_sha256(
+        m.REEXPORT_MANIFEST_PATH
+    )
+    assert contract_raw["seed_policy_sha"]["value"] == m.compute_file_sha256(
+        m.SEED_POLICY_MANIFEST_PATH
+    )
+    assert contract_raw["failure_abort_criteria_sha"]["value"] == m.compute_file_sha256(
+        m.FAILURE_ABORT_MANIFEST_PATH
+    )
+    gate_synth_path = (
+        _RUN_DIR.parent.parent / "foundry" / "s1_gate" / "gate_synth.py"
+    )
+    assert m.compute_file_sha256(gate_synth_path) == (
+        "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894"
+    )
+
+
+def test_execprofile_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
+    assert m.gate_state(contract) == "BLOCKED"

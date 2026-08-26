@@ -6989,6 +6989,13 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     # 実測台帳そのものの凍結のみを主張し、学習ハーネス本体の依存 closure
     # （dependency_pins_sha が引き続き PENDING である理由）には関与しない。
     "reexport_manifest_sha",
+    # RUN9-EXECPROFILE-1 で追加: inputs/execution_profile_manifest.json（User
+    # 裁定 2026-08-26【RUN9 User裁定 — execution_profile_sha】が承認した
+    # runtime identity 5値 + provider 固定規則4点 + smoke benchmark 参考記録
+    # + 追加実測9項目の一括 manifest）自体の実 sha256（design_doc_sha256 と
+    # 同一のファイル実バイト規約）。dependency_pins_sha とは独立の欄——本欄が
+    # 凍結するのは execution profile identity のみであり、学習ハーネス本体の
+    # 依存 closure には関与しない。
     "execution_profile_sha",
     "seed_policy_sha",
     "expected_speaker_map_sha",
@@ -13755,6 +13762,779 @@ def load_pinned_reexport_manifest(
         raise Run9ValidationError(
             f"load_pinned_reexport_manifest(): {effective_adjudication_path} の実バイト sha256 "
             f"({adjudication_actual_sha!r}) が adjudication_basis.sha256 pin 値 "
+            f"({adjudication_pinned_sha!r}) と一致しない — 裁定文書の改変を fail-closed で "
+            "拒否する"
+        )
+
+    return data
+
+
+# ===== execution_profile_manifest (RUN9-EXECPROFILE-1) ======================
+#
+# User 裁定 2026-08-26【RUN9 User裁定 — execution_profile_sha】（repo 内収載
+# `USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt` 参照）に基づく、RUN9 の
+# 基準 execution profile 一括 manifest。PIN-1/2・HARNESS-1/2 で確立した4段
+# 構成（手書き JSON manifest + validate_*() + REQUIRED_KEYS + read-once
+# loader）をここでも踏襲する。
+#
+# 裁定が定義する意味論は2層に分離される（裁定逐語「benchmark値は...意味論
+# そのものには含めない」）:
+#   - identity_semantics: 出力同一性を定義する runtime 5値 + provider 固定
+#     規則4点。ここが変われば execution_profile_sha は再pinが必要。
+#   - benchmark_reference: 参考記録（実行速度・予算概算）。`is_reference_
+#     only: true` で凍結し、identity_semantics とは構造的に分離する
+#     （キー集合が重ならない——benchmark 系キーが identity_semantics へ
+#     混入することは shape 自体で不可能）。
+# additional_measurements は裁定が「可能であれば」追加実測を要求した9項目
+# （CPU model / logical CPU count / onnxruntime available_providers /
+# onnxruntime selected providers / intra・inter_op_num_threads / numpy
+# version / soundfile version / render code commit / deterministic seed・
+# thread environment variables）。推測補完は構造的に禁止する——
+# `status: "NOT_RECORDED"` の item は `value` 系キーを一切持てない shape
+# とし、実測できなかった事実を正直に記録する（本 manifest 実測時点では
+# thread_environment_variables のみ NOT_RECORDED）。
+
+SCHEMA_EXECUTION_PROFILE_MANIFEST = "run9-execution-profile/1.0"
+
+EXECUTION_PROFILE_MANIFEST_PATH = _THIS_DIR / "inputs" / "execution_profile_manifest.json"
+
+# reexport manifest と同じ規約（`_REEXPORT_REPO_ROOT` 参照）: repo ルートは
+# `run9_dual_founder_pjs` -> `evolution` -> `voice_genesis` -> repo root の
+# 3階層上。`adjudication_basis.source_file` は repo ルート相対パスとして
+# manifest に収載する。
+_EXECPROFILE_REPO_ROOT = _THIS_DIR.parent.parent.parent
+
+EXECUTION_PROFILE_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "schema", "generated_at_utc", "adjudication_basis", "identity_semantics",
+    "benchmark_reference", "additional_measurements", "pin_disposition",
+})
+
+_EXECPROFILE_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "source_file", "sha256", "summary",
+})
+
+_EXECPROFILE_IDENTITY_SEMANTICS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "runtime", "provider_fixation_rules",
+})
+
+# 裁定 runtime 5値（逐語、`USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt`
+# 本文節参照）。identity_semantics.runtime はこの辞書と厳密一致しなければ
+# ならない——キー集合・値とも改変を fail-closed で拒否する。
+EXECPROFILE_ADJUDICATED_RUNTIME: Dict[str, str] = {
+    "python": "3.11.15",
+    "os": "Ubuntu 24.04.4",
+    "architecture": "x86_64",
+    "onnxruntime": "1.29.0",
+    "selected_execution_provider": "CPUExecutionProvider",
+}
+
+# provider 固定規則4点（裁定「重要:」節、逐語の要旨マーカー——各 rule 文字列
+# が該当インデックスのマーカーを含むことを machine 強制する）。
+_EXECPROFILE_PROVIDER_RULE_MARKERS: Tuple[str, ...] = (
+    "CPUExecutionProvider に固定",
+    "混同しない",
+    "自動fallback",
+    "再pinする",
+)
+
+_EXECPROFILE_BENCHMARK_REFERENCE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "observed_seconds_per_item", "planned_item_count", "estimated_total_runtime_hours",
+    "note", "is_reference_only", "planned_item_count_provenance_note",
+})
+
+# 裁定逐語（benchmark 節）: observed_seconds_per_item=24.1 /
+# planned_item_count=616 / estimated_total_runtime_hours は
+# "approximately 4.12"（自由記述文字列——裁定が数値ではなく "approximately"
+# 付きの近似表現として与えているため、文字列型のまま凍結する）。
+_EXECPROFILE_ADJUDICATED_OBSERVED_SEC: float = 24.1
+_EXECPROFILE_ADJUDICATED_PLANNED_COUNT: int = 616
+_EXECPROFILE_ADJUDICATED_ESTIMATED_HOURS_TEXT: str = "approximately 4.12"
+
+# additional_measurements の閉じた9キー語彙（裁定「可能であれば...以下を
+# 実測記録する」の9 bullet と1:1対応。intra/inter_op_num_threads は1
+# bullet・deterministic seed/thread environment variables も1 bullet
+# として裁定原文が束ねているため、本 schema でもそれぞれ1 item として扱う）。
+EXECPROFILE_ADDITIONAL_MEASUREMENT_KEYS: FrozenSet[str] = frozenset({
+    "cpu_model", "logical_cpu_count", "onnxruntime_available_providers",
+    "onnxruntime_selected_providers", "onnxruntime_thread_settings",
+    "numpy_version", "soundfile_version", "render_code_commit",
+    "deterministic_seed_and_thread_environment_variables",
+})
+
+_EXECPROFILE_MEASUREMENT_STATUSES: Tuple[str, str] = ("MEASURED", "NOT_RECORDED")
+
+# NOT_RECORDED item が許容する唯一のキー集合（(f) 推測補完の構造的禁止:
+# value 系キーとの同居を禁止する——status/reason の2キーのみ）。
+_EXECPROFILE_NOT_RECORDED_ALLOWED_KEYS: FrozenSet[str] = frozenset({"status", "reason"})
+
+
+def _validate_execprofile_shape(
+    obj: Any, *, field: str, required_keys: FrozenSet[str],
+) -> Dict[str, Any]:
+    if not isinstance(obj, dict):
+        raise Run9ValidationError(f"execution profile manifest.{field} must be an object, got {type(obj).__name__}")
+    unknown = set(obj.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"execution profile manifest.{field} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(obj.keys())
+    if missing:
+        raise Run9ValidationError(f"execution profile manifest.{field} missing required key(s): {sorted(missing)}")
+    return obj
+
+
+def _validate_execprofile_not_recorded_item(item: Mapping[str, Any], *, field: str) -> None:
+    """(f) NOT_RECORDED item の構造的禁則: `value`/`method`/その他の実測系
+    キーを一切持てない——`status`/`reason` の2キーのみ許容する。これにより
+    「実測できなかったことにして値だけこっそり載せる」経路を shape レベルで
+    塞ぐ。"""
+    if set(item.keys()) != _EXECPROFILE_NOT_RECORDED_ALLOWED_KEYS:
+        raise Run9ValidationError(
+            f"execution profile manifest.{field}: NOT_RECORDED item must have exactly the keys "
+            f"{sorted(_EXECPROFILE_NOT_RECORDED_ALLOWED_KEYS)} (no value/measurement fields "
+            f"permitted alongside NOT_RECORDED — fabrication guard), got {sorted(item.keys())}"
+        )
+    _require_non_empty_str(item["reason"], field=f"{field}.reason")
+
+
+def _validate_execprofile_measured_item(
+    item: Mapping[str, Any], *, field: str, required_keys: FrozenSet[str],
+) -> Dict[str, Any]:
+    if not isinstance(item, dict):
+        raise Run9ValidationError(f"execution profile manifest.{field} must be an object, got {type(item).__name__}")
+    unknown = set(item.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"execution profile manifest.{field} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(item.keys())
+    if missing:
+        raise Run9ValidationError(f"execution profile manifest.{field} missing required key(s): {sorted(missing)}")
+    return item
+
+
+def _validate_execprofile_measurement_item(
+    item: Any, *, field: str, measured_required_keys: FrozenSet[str],
+) -> Dict[str, Any]:
+    """status 判別 shape（MEASURED/NOT_RECORDED）の共通検証。MEASURED は
+    `measured_required_keys`（`status` を含む）を厳密に満たし、NOT_RECORDED
+    は `status`/`reason` の2キーのみを許容する（(f) 推測補完の構造的禁止）。
+    """
+    if not isinstance(item, dict):
+        raise Run9ValidationError(f"execution profile manifest.{field} must be an object, got {type(item).__name__}")
+    status = item.get("status")
+    if status not in _EXECPROFILE_MEASUREMENT_STATUSES:
+        raise Run9ValidationError(
+            f"execution profile manifest.{field}.status must be one of "
+            f"{_EXECPROFILE_MEASUREMENT_STATUSES}, got {status!r}"
+        )
+    if status == "NOT_RECORDED":
+        _validate_execprofile_not_recorded_item(item, field=field)
+        return item
+    return _validate_execprofile_measured_item(item, field=field, required_keys=measured_required_keys)
+
+
+def validate_execution_profile_manifest(data: Mapping[str, Any]) -> None:
+    """execution profile manifest（`run9-execution-profile/1.0`）の構造を
+    検証する（RUN9-EXECPROFILE-1）。User 裁定 2026-08-26【RUN9 User裁定 —
+    execution_profile_sha】が承認した RUN9 基準 execution profile を機械
+    可読に凍結する——runtime identity 5値 + provider 固定規則4点
+    （`identity_semantics`）、smoke benchmark 参考記録
+    （`benchmark_reference`、`is_reference_only: true` で意味論から分離）、
+    追加実測9項目（`additional_measurements`、推測補完は構造的に禁止）。
+
+    fail-closed 原則（PIN-1/2・HARNESS-1/2 の同型パターンをここでも適用）:
+    (a) `identity_semantics.runtime` は `EXECPROFILE_ADJUDICATED_RUNTIME`
+        （裁定逐語の5値）と辞書として厳密一致しなければならない。
+    (b) `selected_execution_provider` は文字列 "CPUExecutionProvider" 固定
+        （`identity_semantics.runtime` 側、および (a) により
+        `additional_measurements.onnxruntime_selected_providers.value` との
+        cross-check は本関数内で行う——両者が食い違えば拒否する）。
+        `onnxruntime_selected_providers.value` は
+        `onnxruntime_available_providers.value` の**真部分集合を含む部分
+        集合**であることを要求し、かつ両者が完全に同一集合になることを
+        拒否する（"available の列挙と selected を混同しない" の機械化——
+        selected を available のコピーとして書いてしまう事故を構造的に
+        防ぐ）。
+    (c) `identity_semantics.provider_fixation_rules` はちょうど4件の文字列
+        で、各要素が対応する `_EXECPROFILE_PROVIDER_RULE_MARKERS` の
+        マーカー文言を含むこと。
+    (d) `identity_semantics`/`benchmark_reference` はキー集合が重ならない
+        閉じた shape（`EXECUTION_PROFILE_MANIFEST_REQUIRED_KEYS` により
+        トップレベルで強制済み）——`benchmark_reference.is_reference_only`
+        は恒久的にリテラル `True` を要求する frozen-fact ガード。
+    (e) 裁定 txt（`adjudication_basis.source_file`）の実 read → sha256
+        実計算 → manifest 記載 sha256 との照合は `load_pinned_execution_
+        profile_manifest()` 側の cross-check が担う（本関数は一次データ
+        未 load のため 64hex shape のみ検証する）。
+    (f) `additional_measurements` の各 item は `status` 判別 shape
+        （MEASURED/NOT_RECORDED）——NOT_RECORDED item は `status`/`reason`
+        の2キーのみ許容し、実測値フィールドとの同居を shape で禁止する
+        （推測補完の構造的禁止）。
+    (g) contract 側 `execution_profile_sha` と manifest 実バイトの一致は
+        `load_pinned_execution_profile_manifest()` が担う（本関数は
+        contract を参照しない）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"execution profile manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - EXECUTION_PROFILE_MANIFEST_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"execution profile manifest has unknown key(s): {sorted(unknown)}")
+    missing = EXECUTION_PROFILE_MANIFEST_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"execution profile manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_EXECUTION_PROFILE_MANIFEST:
+        raise Run9ValidationError(
+            f"execution profile manifest.schema must be exactly {SCHEMA_EXECUTION_PROFILE_MANIFEST!r}, "
+            f"got {schema!r}"
+        )
+    _require_non_empty_str(data["generated_at_utc"], field="generated_at_utc")
+
+    basis = _validate_execprofile_shape(
+        data["adjudication_basis"], field="adjudication_basis",
+        required_keys=_EXECPROFILE_ADJUDICATION_BASIS_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(basis["source_file"], field="adjudication_basis.source_file")
+    basis_sha = basis["sha256"]
+    if not isinstance(basis_sha, str) or not _SHA256_HEX_RE.match(basis_sha):
+        raise Run9ValidationError(
+            f"execution profile manifest.adjudication_basis.sha256 must be a 64hex sha256, got "
+            f"{basis_sha!r}"
+        )
+    _require_non_empty_str(basis["summary"], field="adjudication_basis.summary")
+
+    # --- identity_semantics ---------------------------------------------
+    identity = _validate_execprofile_shape(
+        data["identity_semantics"], field="identity_semantics",
+        required_keys=_EXECPROFILE_IDENTITY_SEMANTICS_REQUIRED_KEYS,
+    )
+    runtime = identity["runtime"]
+    if not isinstance(runtime, dict):
+        raise Run9ValidationError(
+            f"execution profile manifest.identity_semantics.runtime must be an object, got "
+            f"{type(runtime).__name__}"
+        )
+    # (a) fail-closed: 裁定逐語5値との厳密一致（キー集合・値とも）。
+    if runtime != EXECPROFILE_ADJUDICATED_RUNTIME:
+        raise Run9ValidationError(
+            "execution profile manifest.identity_semantics.runtime diverges from the adjudicated "
+            f"runtime (EXECPROFILE_ADJUDICATED_RUNTIME={EXECPROFILE_ADJUDICATED_RUNTIME!r}), got "
+            f"{runtime!r}"
+        )
+    rules = identity["provider_fixation_rules"]
+    if not isinstance(rules, list) or len(rules) != len(_EXECPROFILE_PROVIDER_RULE_MARKERS):
+        raise Run9ValidationError(
+            "execution profile manifest.identity_semantics.provider_fixation_rules must be a "
+            f"list of exactly {len(_EXECPROFILE_PROVIDER_RULE_MARKERS)} strings, got {rules!r}"
+        )
+    for i, (rule_text, marker) in enumerate(zip(rules, _EXECPROFILE_PROVIDER_RULE_MARKERS)):
+        _require_non_empty_str(rule_text, field=f"identity_semantics.provider_fixation_rules[{i}]")
+        if marker not in rule_text:
+            raise Run9ValidationError(
+                f"execution profile manifest.identity_semantics.provider_fixation_rules[{i}] must "
+                f"contain the adjudicated marker phrase {marker!r}, got {rule_text!r}"
+            )
+
+    # --- benchmark_reference ---------------------------------------------
+    benchmark = _validate_execprofile_shape(
+        data["benchmark_reference"], field="benchmark_reference",
+        required_keys=_EXECPROFILE_BENCHMARK_REFERENCE_REQUIRED_KEYS,
+    )
+    observed_sec = benchmark["observed_seconds_per_item"]
+    if not isinstance(observed_sec, (int, float)) or isinstance(observed_sec, bool):
+        raise Run9ValidationError(
+            "execution profile manifest.benchmark_reference.observed_seconds_per_item must be a "
+            f"number, got {observed_sec!r}"
+        )
+    if not math.isclose(float(observed_sec), _EXECPROFILE_ADJUDICATED_OBSERVED_SEC, rel_tol=1e-9):
+        raise Run9ValidationError(
+            "execution profile manifest.benchmark_reference.observed_seconds_per_item "
+            f"({observed_sec!r}) diverges from the adjudicated value "
+            f"({_EXECPROFILE_ADJUDICATED_OBSERVED_SEC!r})"
+        )
+    planned_count = benchmark["planned_item_count"]
+    if planned_count != _EXECPROFILE_ADJUDICATED_PLANNED_COUNT:
+        raise Run9ValidationError(
+            "execution profile manifest.benchmark_reference.planned_item_count "
+            f"({planned_count!r}) diverges from the adjudicated value "
+            f"({_EXECPROFILE_ADJUDICATED_PLANNED_COUNT!r})"
+        )
+    estimated_hours = benchmark["estimated_total_runtime_hours"]
+    if estimated_hours != _EXECPROFILE_ADJUDICATED_ESTIMATED_HOURS_TEXT:
+        raise Run9ValidationError(
+            "execution profile manifest.benchmark_reference.estimated_total_runtime_hours "
+            f"({estimated_hours!r}) diverges from the adjudicated value "
+            f"({_EXECPROFILE_ADJUDICATED_ESTIMATED_HOURS_TEXT!r})"
+        )
+    _require_non_empty_str(benchmark["note"], field="benchmark_reference.note")
+    is_reference_only = benchmark["is_reference_only"]
+    # (d) frozen-fact ガード: リテラル True のみ許容する（false 化 = 恒久
+    # 禁止 — benchmark 値が identity 意味論へ混入する経路を閉じる）。
+    if is_reference_only is not True:
+        raise Run9ValidationError(
+            "execution profile manifest.benchmark_reference.is_reference_only must remain the "
+            f"literal boolean True (frozen fact — benchmark values must never be promoted into "
+            f"identity semantics), got {is_reference_only!r}"
+        )
+    _require_non_empty_str(
+        benchmark["planned_item_count_provenance_note"],
+        field="benchmark_reference.planned_item_count_provenance_note",
+    )
+
+    # --- additional_measurements -------------------------------------------
+    measurements = data["additional_measurements"]
+    if not isinstance(measurements, dict):
+        raise Run9ValidationError(
+            f"execution profile manifest.additional_measurements must be an object, got "
+            f"{type(measurements).__name__}"
+        )
+    if set(measurements.keys()) != EXECPROFILE_ADDITIONAL_MEASUREMENT_KEYS:
+        raise Run9ValidationError(
+            "execution profile manifest.additional_measurements must register exactly the key "
+            f"set {sorted(EXECPROFILE_ADDITIONAL_MEASUREMENT_KEYS)}, got "
+            f"{sorted(measurements.keys())}"
+        )
+
+    cpu_model = _validate_execprofile_measurement_item(
+        measurements["cpu_model"], field="additional_measurements.cpu_model",
+        measured_required_keys=frozenset({"status", "value", "method"}),
+    )
+    if cpu_model["status"] == "MEASURED":
+        _require_non_empty_str(cpu_model["value"], field="additional_measurements.cpu_model.value")
+        _require_non_empty_str(cpu_model["method"], field="additional_measurements.cpu_model.method")
+
+    logical_cpu_count = _validate_execprofile_measurement_item(
+        measurements["logical_cpu_count"], field="additional_measurements.logical_cpu_count",
+        measured_required_keys=frozenset({"status", "value", "method"}),
+    )
+    if logical_cpu_count["status"] == "MEASURED":
+        _require_positive_int(
+            logical_cpu_count["value"], field="additional_measurements.logical_cpu_count.value"
+        )
+        _require_non_empty_str(
+            logical_cpu_count["method"], field="additional_measurements.logical_cpu_count.method"
+        )
+
+    avail = _validate_execprofile_measurement_item(
+        measurements["onnxruntime_available_providers"],
+        field="additional_measurements.onnxruntime_available_providers",
+        measured_required_keys=frozenset({
+            "status", "value", "method", "matches_smoke_record", "smoke_record_value",
+            "smoke_record_source",
+        }),
+    )
+    avail_value: Optional[list] = None
+    if avail["status"] == "MEASURED":
+        avail_value = avail["value"]
+        if not isinstance(avail_value, list) or not avail_value or not all(
+            isinstance(p, str) and p.strip() for p in avail_value
+        ):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.onnxruntime_available_"
+                f"providers.value must be a non-empty list of non-empty strings, got {avail_value!r}"
+            )
+        _require_non_empty_str(
+            avail["method"], field="additional_measurements.onnxruntime_available_providers.method"
+        )
+        matches_smoke = avail["matches_smoke_record"]
+        smoke_value = avail["smoke_record_value"]
+        if not isinstance(matches_smoke, bool):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.onnxruntime_available_"
+                f"providers.matches_smoke_record must be a bool, got {matches_smoke!r}"
+            )
+        if matches_smoke != (avail_value == smoke_value):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.onnxruntime_available_"
+                f"providers.matches_smoke_record ({matches_smoke!r}) diverges from the "
+                f"in-process recomputation (value == smoke_record_value), which is "
+                f"{(avail_value == smoke_value)!r}"
+            )
+        _require_non_empty_str(
+            avail["smoke_record_source"],
+            field="additional_measurements.onnxruntime_available_providers.smoke_record_source",
+        )
+
+    selected = _validate_execprofile_measurement_item(
+        measurements["onnxruntime_selected_providers"],
+        field="additional_measurements.onnxruntime_selected_providers",
+        measured_required_keys=frozenset({
+            "status", "value", "method", "source_file", "source_line", "source_line_text",
+        }),
+    )
+    selected_value: Optional[list] = None
+    if selected["status"] == "MEASURED":
+        selected_value = selected["value"]
+        if not isinstance(selected_value, list) or not selected_value or not all(
+            isinstance(p, str) and p.strip() for p in selected_value
+        ):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.onnxruntime_selected_"
+                f"providers.value must be a non-empty list of non-empty strings, got {selected_value!r}"
+            )
+        _require_non_empty_str(
+            selected["method"], field="additional_measurements.onnxruntime_selected_providers.method"
+        )
+        _require_non_empty_str(
+            selected["source_file"],
+            field="additional_measurements.onnxruntime_selected_providers.source_file",
+        )
+        _require_positive_int(
+            selected["source_line"],
+            field="additional_measurements.onnxruntime_selected_providers.source_line",
+        )
+        _require_non_empty_str(
+            selected["source_line_text"],
+            field="additional_measurements.onnxruntime_selected_providers.source_line_text",
+        )
+        # (b) fail-closed: selected は [runtime.selected_execution_provider]
+        # と厳密一致（"CPUExecutionProvider" 固定の機械化）。
+        if selected_value != [EXECPROFILE_ADJUDICATED_RUNTIME["selected_execution_provider"]]:
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.onnxruntime_selected_"
+                f"providers.value must equal "
+                f"[{EXECPROFILE_ADJUDICATED_RUNTIME['selected_execution_provider']!r}], got "
+                f"{selected_value!r}"
+            )
+        # (b) fail-closed: selected と available の混同禁止——selected は
+        # available の真部分集合でなければならない（selected == available
+        # を拒否する。available が selected 単独のみで観測された場合、
+        # provider 混同の検証はできないため、available 側が selected を
+        # 真に上回っていることを要求する）。
+        if avail_value is not None:
+            selected_set = set(selected_value)
+            avail_set = set(avail_value)
+            if not selected_set.issubset(avail_set):
+                raise Run9ValidationError(
+                    "execution profile manifest.additional_measurements.onnxruntime_selected_"
+                    f"providers.value ({selected_value!r}) is not a subset of onnxruntime_"
+                    f"available_providers.value ({avail_value!r})"
+                )
+            if selected_set == avail_set:
+                raise Run9ValidationError(
+                    "execution profile manifest.additional_measurements.onnxruntime_selected_"
+                    "providers.value must not equal the full onnxruntime_available_providers "
+                    "enumeration — conflating 'available' with 'selected' is the exact mistake "
+                    f"the adjudication forbids (both are {selected_value!r})"
+                )
+
+    thread_settings = _validate_execprofile_measurement_item(
+        measurements["onnxruntime_thread_settings"],
+        field="additional_measurements.onnxruntime_thread_settings",
+        measured_required_keys=frozenset({
+            "status", "intra_op_num_threads", "inter_op_num_threads", "method",
+        }),
+    )
+    if thread_settings["status"] == "MEASURED":
+        for sub_field in ("intra_op_num_threads", "inter_op_num_threads"):
+            sub = thread_settings[sub_field]
+            sub = _validate_execprofile_shape(
+                sub, field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}",
+                required_keys=frozenset({"specification_status", "value", "source_file", "source_line"}),
+            )
+            spec_status = sub["specification_status"]
+            if spec_status not in ("EXPLICITLY_SET", "DEFAULT_UNSPECIFIED"):
+                raise Run9ValidationError(
+                    f"execution profile manifest.additional_measurements.onnxruntime_thread_"
+                    f"settings.{sub_field}.specification_status must be 'EXPLICITLY_SET' or "
+                    f"'DEFAULT_UNSPECIFIED', got {spec_status!r}"
+                )
+            if spec_status == "EXPLICITLY_SET":
+                _require_positive_int(
+                    sub["value"],
+                    field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}.value",
+                )
+                _require_non_empty_str(
+                    sub["source_file"],
+                    field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}.source_file",
+                )
+                _require_positive_int(
+                    sub["source_line"],
+                    field=f"additional_measurements.onnxruntime_thread_settings.{sub_field}.source_line",
+                )
+            else:
+                # DEFAULT_UNSPECIFIED（裁定「未指定なら DEFAULT と明記」）:
+                # value は null 固定——未指定の事実を数値で偽装しない。
+                if sub["value"] is not None:
+                    raise Run9ValidationError(
+                        "execution profile manifest.additional_measurements.onnxruntime_thread_"
+                        f"settings.{sub_field}.value must be null when specification_status is "
+                        f"DEFAULT_UNSPECIFIED, got {sub['value']!r}"
+                    )
+        _require_non_empty_str(
+            thread_settings["method"], field="additional_measurements.onnxruntime_thread_settings.method"
+        )
+
+    numpy_item = _validate_execprofile_measurement_item(
+        measurements["numpy_version"], field="additional_measurements.numpy_version",
+        measured_required_keys=frozenset({
+            "status", "value", "method", "matches_smoke_record", "smoke_record_value",
+            "smoke_record_source",
+        }),
+    )
+    if numpy_item["status"] == "MEASURED":
+        _require_non_empty_str(numpy_item["value"], field="additional_measurements.numpy_version.value")
+        _require_non_empty_str(numpy_item["method"], field="additional_measurements.numpy_version.method")
+        matches = numpy_item["matches_smoke_record"]
+        if not isinstance(matches, bool):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.numpy_version."
+                f"matches_smoke_record must be a bool, got {matches!r}"
+            )
+        if matches != (numpy_item["value"] == numpy_item["smoke_record_value"]):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.numpy_version."
+                f"matches_smoke_record ({matches!r}) diverges from the in-process recomputation "
+                f"(value == smoke_record_value), which is "
+                f"{(numpy_item['value'] == numpy_item['smoke_record_value'])!r}"
+            )
+        _require_non_empty_str(
+            numpy_item["smoke_record_source"],
+            field="additional_measurements.numpy_version.smoke_record_source",
+        )
+
+    soundfile_item = _validate_execprofile_measurement_item(
+        measurements["soundfile_version"], field="additional_measurements.soundfile_version",
+        measured_required_keys=frozenset({
+            "status", "value", "method", "matches_smoke_record", "smoke_record_value",
+            "smoke_record_source",
+        }),
+    )
+    if soundfile_item["status"] == "MEASURED":
+        _require_non_empty_str(
+            soundfile_item["value"], field="additional_measurements.soundfile_version.value"
+        )
+        _require_non_empty_str(
+            soundfile_item["method"], field="additional_measurements.soundfile_version.method"
+        )
+        matches = soundfile_item["matches_smoke_record"]
+        if not isinstance(matches, bool):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.soundfile_version."
+                f"matches_smoke_record must be a bool, got {matches!r}"
+            )
+        if matches != (soundfile_item["value"] == soundfile_item["smoke_record_value"]):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.soundfile_version."
+                f"matches_smoke_record ({matches!r}) diverges from the in-process recomputation "
+                f"(value == smoke_record_value), which is "
+                f"{(soundfile_item['value'] == soundfile_item['smoke_record_value'])!r}"
+            )
+        _require_non_empty_str(
+            soundfile_item["smoke_record_source"],
+            field="additional_measurements.soundfile_version.smoke_record_source",
+        )
+
+    render_commit = _validate_execprofile_measurement_item(
+        measurements["render_code_commit"], field="additional_measurements.render_code_commit",
+        measured_required_keys=frozenset({
+            "status", "file", "file_sha256", "file_sha256_method", "last_modifying_commit",
+            "last_modifying_commit_date_utc", "last_modifying_commit_method",
+            "smoke_time_repo_head_commit", "smoke_time_repo_head_source",
+            "smoke_time_gate_synth_py_sha256", "smoke_time_gate_synth_py_sha256_source",
+            "unchanged_verification_method",
+        }),
+    )
+    if render_commit["status"] == "MEASURED":
+        _require_non_empty_str(render_commit["file"], field="additional_measurements.render_code_commit.file")
+        file_sha = render_commit["file_sha256"]
+        if not isinstance(file_sha, str) or not _SHA256_HEX_RE.match(file_sha):
+            raise Run9ValidationError(
+                f"execution profile manifest.additional_measurements.render_code_commit.file_sha256 "
+                f"must be a 64hex sha256, got {file_sha!r}"
+            )
+        _require_non_empty_str(
+            render_commit["file_sha256_method"],
+            field="additional_measurements.render_code_commit.file_sha256_method",
+        )
+        last_commit = render_commit["last_modifying_commit"]
+        if not isinstance(last_commit, str) or not _GIT_SHA_RE.match(last_commit):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.render_code_commit."
+                f"last_modifying_commit must be a 40hex git sha, got {last_commit!r}"
+            )
+        _require_non_empty_str(
+            render_commit["last_modifying_commit_date_utc"],
+            field="additional_measurements.render_code_commit.last_modifying_commit_date_utc",
+        )
+        _require_non_empty_str(
+            render_commit["last_modifying_commit_method"],
+            field="additional_measurements.render_code_commit.last_modifying_commit_method",
+        )
+        smoke_head = render_commit["smoke_time_repo_head_commit"]
+        if not isinstance(smoke_head, str) or not _GIT_SHA_RE.match(smoke_head):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.render_code_commit."
+                f"smoke_time_repo_head_commit must be a 40hex git sha, got {smoke_head!r}"
+            )
+        _require_non_empty_str(
+            render_commit["smoke_time_repo_head_source"],
+            field="additional_measurements.render_code_commit.smoke_time_repo_head_source",
+        )
+        smoke_file_sha = render_commit["smoke_time_gate_synth_py_sha256"]
+        if not isinstance(smoke_file_sha, str) or not _SHA256_HEX_RE.match(smoke_file_sha):
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.render_code_commit."
+                f"smoke_time_gate_synth_py_sha256 must be a 64hex sha256, got {smoke_file_sha!r}"
+            )
+        _require_non_empty_str(
+            render_commit["smoke_time_gate_synth_py_sha256_source"],
+            field="additional_measurements.render_code_commit.smoke_time_gate_synth_py_sha256_source",
+        )
+        _require_non_empty_str(
+            render_commit["unchanged_verification_method"],
+            field="additional_measurements.render_code_commit.unchanged_verification_method",
+        )
+        # fail-closed: smoke 実行時点のファイル sha256 と現行 working tree
+        # の sha256 が一致することを machine 強制する（不一致は
+        # unchanged_verification_method の主張と自己矛盾するため拒否）。
+        if smoke_file_sha != file_sha:
+            raise Run9ValidationError(
+                "execution profile manifest.additional_measurements.render_code_commit: "
+                f"smoke_time_gate_synth_py_sha256 ({smoke_file_sha!r}) diverges from file_sha256 "
+                f"({file_sha!r}) — this contradicts an 'unchanged since smoke' claim and is "
+                "rejected fail-closed"
+            )
+
+    seed_and_env = _validate_execprofile_measurement_item(
+        measurements["deterministic_seed_and_thread_environment_variables"],
+        field="additional_measurements.deterministic_seed_and_thread_environment_variables",
+        measured_required_keys=frozenset({
+            "status", "deterministic_seed", "thread_environment_variables",
+        }),
+    )
+    if seed_and_env["status"] == "MEASURED":
+        seed_field_prefix = (
+            "additional_measurements.deterministic_seed_and_thread_environment_variables"
+        )
+        seed_item = _validate_execprofile_measurement_item(
+            seed_and_env["deterministic_seed"], field=f"{seed_field_prefix}.deterministic_seed",
+            measured_required_keys=frozenset({
+                "status", "value", "declaration_form", "source_file", "source_line",
+                "source_line_text", "consumption_note",
+            }),
+        )
+        if seed_item["status"] == "MEASURED":
+            _require_positive_int(
+                seed_item["value"], field=f"{seed_field_prefix}.deterministic_seed.value"
+            )
+            if seed_item["declaration_form"] != "in-code declaration":
+                raise Run9ValidationError(
+                    f"execution profile manifest.{seed_field_prefix}.deterministic_seed."
+                    f"declaration_form must be exactly 'in-code declaration', got "
+                    f"{seed_item['declaration_form']!r}"
+                )
+            _require_non_empty_str(
+                seed_item["source_file"], field=f"{seed_field_prefix}.deterministic_seed.source_file"
+            )
+            _require_positive_int(
+                seed_item["source_line"], field=f"{seed_field_prefix}.deterministic_seed.source_line"
+            )
+            _require_non_empty_str(
+                seed_item["source_line_text"],
+                field=f"{seed_field_prefix}.deterministic_seed.source_line_text",
+            )
+            _require_non_empty_str(
+                seed_item["consumption_note"],
+                field=f"{seed_field_prefix}.deterministic_seed.consumption_note",
+            )
+        # thread_environment_variables は NOT_RECORDED を許容する独立
+        # sub-item（(f) と同じ status 判別 shape）。
+        _validate_execprofile_measurement_item(
+            seed_and_env["thread_environment_variables"],
+            field=f"{seed_field_prefix}.thread_environment_variables",
+            measured_required_keys=frozenset({"status", "value", "method"}),
+        )
+
+    _require_non_empty_str(data["pin_disposition"], field="pin_disposition")
+
+
+def load_pinned_execution_profile_manifest(
+    contract: Run9RunContract, *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None, adjudication_basis_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`execution_profile_sha` pin の**唯一の正規消費経路**
+    （`load_pinned_reexport_manifest()` と同型の3層防御 read-once。
+    RUN9-EXECPROFILE-1）。
+
+    手順（いずれかで fail-closed）:
+    (1)-(5) 他の `load_pinned_*` 関数と同型（disk 正典再読込・改変検出、
+        PINNED 確認、実在確認、実バイト sha256 一致確認、
+        `validate_execution_profile_manifest()` 全構造検証）
+    (6) cross-check: `adjudication_basis.source_file` の実バイト sha256 を
+        実測し、`adjudication_basis.sha256` と一致することを machine 強制
+        する（`load_pinned_reexport_manifest()` cross-check (9) と同型）。
+
+    戻り値は検証済み manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("execution_profile_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("execution_profile_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_execution_profile_manifest(): the passed-in contract's "
+            f"execution_profile_sha pin ({passed_field!r}) diverges from the canonical on-disk "
+            f"RUN9_CONTRACT.yaml pin ({disk_field!r}) at {effective_contract_path} — treated as "
+            "tampering evidence and rejected fail-closed (same defense as "
+            "load_pinned_reexport_manifest())"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_execution_profile_manifest(): execution_profile_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned execution "
+            "profile manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else EXECUTION_PROFILE_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_execution_profile_manifest(): pinned execution profile manifest source "
+            f"{path} does not exist — this function is the sole canonical access path (direct "
+            "json.load() elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_execution_profile_manifest(): {path} の実バイト sha256 ({actual_sha!r}) "
+            f"が RUN9_CONTRACT.yaml execution_profile_sha の pin 値 ({pinned_sha!r}) と一致しない "
+            "— stale または改変された manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_execution_profile_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_execution_profile_manifest(data)
+
+    # (6) cross-check: adjudication_basis.source_file の実バイト sha256 が
+    # adjudication_basis.sha256 と一致すること（裁定文書の改変を fail-closed
+    # で拒否する）。
+    effective_adjudication_path = (
+        adjudication_basis_path
+        if adjudication_basis_path is not None
+        else _EXECPROFILE_REPO_ROOT / data["adjudication_basis"]["source_file"]
+    )
+    if not effective_adjudication_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_execution_profile_manifest(): cross-check source "
+            f"{effective_adjudication_path} (adjudication_basis.source_file) does not exist"
+        )
+    adjudication_actual_sha = hashlib.sha256(effective_adjudication_path.read_bytes()).hexdigest()
+    adjudication_pinned_sha = data["adjudication_basis"]["sha256"]
+    if adjudication_actual_sha != adjudication_pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_execution_profile_manifest(): {effective_adjudication_path} の実バイト "
+            f"sha256 ({adjudication_actual_sha!r}) が adjudication_basis.sha256 pin 値 "
             f"({adjudication_pinned_sha!r}) と一致しない — 裁定文書の改変を fail-closed で "
             "拒否する"
         )

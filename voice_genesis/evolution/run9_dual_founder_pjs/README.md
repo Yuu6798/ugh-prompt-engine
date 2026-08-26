@@ -899,15 +899,18 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   が一時的に PINNED 化され、残 PENDING は pre-run 必須9欄
   （総 PENDING 10欄）へ減少したが、PR #326 第2巡 Codex bot レビュー
   Fix 3（P1、採用）により同欄は PENDING へ差し戻され、残 PENDING は
-  下記のとおり pre-run 必須10欄（総 PENDING 11欄）へ戻った——下記
-  「解消済み（RUN9-L0-HARNESS-1, 2026-08-26）」節参照〕（`attempt_id`/
+  pre-run 必須10欄（総 PENDING 11欄）へ戻った——下記
+  「解消済み（RUN9-L0-HARNESS-1, 2026-08-26）」節参照〕。続けて
+  RUN9-EXECPROFILE-1（2026-08-26）で `execution_profile_sha` が
+  PINNED 化され、残 PENDING は下記のとおり pre-run 必須9欄
+  （総 PENDING 10欄）へ減少した——下記
+  「解消済み（RUN9-EXECPROFILE-1, 2026-08-26）」節参照（`attempt_id`/
   `repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
-  `execution_profile_sha`/`expected_speaker_map_sha`/
-  `education_technique_lesson_manifest_sha`/`learning_recipe_sha`/
-  `measurement_spec_sha`/`hypothesis_algebra_sha` の pre-run 必須10欄が
-  引き続き PENDING のため（optional の `human_evaluation_protocol_sha` を
-  含めると総 PENDING 11欄）——`tests/test_run9_contract.py` の回帰テストで
-  機械確認済み）。
+  `expected_speaker_map_sha`/`education_technique_lesson_manifest_sha`/
+  `learning_recipe_sha`/`measurement_spec_sha`/`hypothesis_algebra_sha` の
+  pre-run 必須9欄が引き続き PENDING のため（optional の
+  `human_evaluation_protocol_sha` を含めると総 PENDING 10欄）——
+  `tests/test_run9_contract.py` の回帰テストで機械確認済み）。
 
 **解消済み（RUN9-L0-HARNESS-1, 2026-08-26）**:
 - `dependency_pins_sha` 未 pin →
@@ -1081,15 +1084,44 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   [`HARNESS2_REEXPORT_SMOKE_RECORD.md`](./HARNESS2_REEXPORT_SMOKE_RECORD.md)
   を正とする。
 - `execution_profile_sha` は smoke 実測が完了したが、User 裁定4の裁定
-  主体は User 自身であり実測完了 = 自動 pin ではないため、**引き続き
-  PENDING**（推定で PINNED にしない、裁定4逐語）。実測環境値一式
+  主体は User 自身であり実測完了 = 自動 pin ではないため、当時は**引き続き
+  PENDING**（推定で PINNED にしない、裁定4逐語）とした〔履歴: 本欄自体は
+  **RUN9-EXECPROFILE-1（2026-08-26）で解消済み**——下記
+  「解消済み（RUN9-EXECPROFILE-1, 2026-08-26）」節参照〕。実測環境値一式
   （Python/OS/kernel/arch/onnxruntime/providers/render entrypoint）は
-  `HARNESS2_REEXPORT_SMOKE_RECORD.md` §4 に記録済み——User 裁定待ち。
+  `HARNESS2_REEXPORT_SMOKE_RECORD.md` §4 に記録済みだった。
 - `dependency_pins_sha` は上記いずれの解消にも関わらず**引き続き
   PENDING**——本欄の残る律速は VG-L0 学習ハーネス本体（optimizer/探索
   コード）の import closure 未確定のみ（PIN-1 `measurement_spec_sha` と
   同型の理由）。af0 写像・learning recipe 残5キー・execution config・
   education builder は HARNESS-3 以降の Design Memo へ引き継ぐ。
+
+**解消済み（RUN9-EXECPROFILE-1, 2026-08-26）**:
+- `execution_profile_sha` 未 pin →
+  User 裁定「RUN9 User裁定 — execution_profile_sha」（2026-08-26、repo 内
+  収載
+  [`USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt`](./USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt)）
+  の承認に基づき、runtime identity 5値（python "3.11.15" / os
+  "Ubuntu 24.04.4" / architecture "x86_64" / onnxruntime "1.29.0" /
+  selected_execution_provider "CPUExecutionProvider"）+ provider 固定
+  規則4点（CPUExecutionProvider 固定・available/selected 混同禁止・
+  GPU/CUDA 自動fallback/upgrade禁止・provider/主要runtime version変更時
+  の再pin義務）+ smoke benchmark 参考記録（`is_reference_only: true` で
+  identity 意味論から構造的に分離、616件概算の出典注記付き）+ 追加実測
+  9項目（裁定「可能であれば実測記録」節——CPU model/logical CPU count/
+  onnxruntime available・selected providers/intra・inter_op_num_threads/
+  numpy・soundfile version/render code commit/deterministic seed・
+  thread environment variables）を一括 manifest 化し、新設
+  [`inputs/execution_profile_manifest.json`](./inputs/execution_profile_manifest.json)
+  （schema `run9-execution-profile/1.0`）として `execution_profile_sha`
+  へ新規 PINNED 化した。追加実測9項目のうち `thread_environment_
+  variables` のみ smoke 実行時に明示設定した環境変数の一次記録が存在
+  せず `NOT_RECORDED`（推測補完はしていない）——他8項目はいずれも
+  `MEASURED`（onnxruntime available_providers/numpy/soundfile version は
+  smoke 実測記録との一致を確認済み、render code commit は smoke 実行時点
+  の repo HEAD（一次記録 `gate_synth_summary.json#input_sha256.
+  repo_git_head`）以降 `gate_synth.py` へ改変コミットが無いことを
+  sha256 一致で確認済み）。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →
