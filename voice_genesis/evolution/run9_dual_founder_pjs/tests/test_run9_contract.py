@@ -12196,34 +12196,114 @@ def test_pin2r3_fix3_rejects_stale_row_counts_after_practice_song_removed(
 def test_pin2r3_fix3_accepts_when_row_counts_correctly_tracks_dropped_song(
     contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """正例回帰（Fix 3 の逆方向確認）: 同じ1曲除去シナリオでも
-    `song_splits.row_counts.training` を 69 へ正しく追随させれば
-    Fix 3 の件数照合自体は通過する——Fix 3 が「件数が変わった」こと自体
-    を拒否するのではなく、「転記が実体に追随していない」ことのみを拒否
-    する設計であることの確認。
+    """正例回帰（Fix 3 の逆方向確認、PR #325 第4巡 Fix 5 導入後に更新）:
+    同じ「1曲除去」シナリオでも、`row_counts` だけでなく row_ids 自体を
+    決定論規則（`_expected_practice_split_assignment()`、Fix 5）へ正しく
+    再導出すれば受理される——Fix 3 が「件数が変わった」こと自体を拒否
+    するのではなく「転記が実体に追随していない」ことのみを拒否する設計
+    であることの確認。
+
+    PR #325 第4巡 Fix 5 導入前の旧テストは、単純に `row_ids.training`
+    から先頭1件を pop するだけの「truncation」を『件数が実体に追随した
+    正しい repin』とみなしていたが、これは決定論規則
+    （score 昇順ランキング → 70/15/15 スライス）が実際に N=99 で生成する
+    割当（floor(99*0.15)=14 により 71/14/14、かつ全 song のランキング
+    順位も再計算される）とは一致しない——Fix 5 はまさにこの種の「件数・
+    digest は自己整合的だが決定論規則には従わない」割当を拒否する
+    ため、旧テストの fixture は Fix 5 導入後は正しく reject されるように
+    なった（=`test_pin2r3_fix3_rejects_stale_row_counts_after_practice_
+    song_removed` 等、他の Fix 3 負例テストの土台となる helper
+    `_pin2r3_build_tampered_fixture_with_dropped_training_song` は「負例
+    fixture」としては引き続き妥当——row_counts 単体の食い違いを Fix 3 が
+    先に検出するため Fix 5 まで到達しない。問題になるのは「正例として
+    受理されるべき」という主張だけであり、本テストはその主張を N=99 の
+    真に妥当な決定論割当へ差し替えて修正する）。
 
     `validate_dataset_split_manifest()` は `row_counts` を書き込み時点の
     凍結定数 `_DATASET_SPLIT_EXPECTED_ROW_COUNTS`（70/15/15）とも別途
-    厳密照合する（RUN9-L0-PIN-2 第1巡の既存構造検証、Fix 3 とは独立の
-    層）ため、本テストのみ `monkeypatch` でこの定数を69/15/15へ一時
-    上書きし、Fix 3 の動的照合（practice manifest 実体との一致）を
-    静的定数照合から分離して検証する。"""
+    厳密照合する（RUN9-L0-PIN-2 第1巡の既存構造検証、Fix 3/5 とは独立の
+    層）ため、本テストのみ `monkeypatch` でこの定数を N=99 の正しい
+    71/14/14 へ一時上書きし、動的照合を静的定数照合から分離して検証
+    する。"""
     monkeypatch.setattr(
         m, "_DATASET_SPLIT_EXPECTED_ROW_COUNTS",
-        {"training": 69, "validation": 15, "sealed_holdout": 15},
+        {"training": 71, "validation": 14, "sealed_holdout": 14},
     )
-    (
-        tampered_contract, tampered_dataset_path, tampered_practice_path, tampered_yaml_path,
-    ) = _pin2r3_build_tampered_fixture_with_dropped_training_song(
-        contract, tmp_path, update_row_counts=True,
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    all_ids = (
+        list(practice_data["row_ids"]["training"])
+        + list(practice_data["row_ids"]["validation"])
+        + list(practice_data["row_ids"]["sealed_holdout"])
     )
+    remaining_ids = [sid for sid in all_ids if sid != practice_data["row_ids"]["training"][0]]
+    new_assignment = m._expected_practice_split_assignment(remaining_ids)
+    assert {name: len(v) for name, v in new_assignment.items()} == {
+        "training": 71, "validation": 14, "sealed_holdout": 14,
+    }
+
+    tampered_practice = copy.deepcopy(practice_data)
+    tampered_practice["row_ids"] = new_assignment
+    for split_name, digest_field in (
+        ("training", "training_split_sha256"),
+        ("validation", "validation_split_sha256"),
+        ("sealed_holdout", "sealed_holdout_sha256"),
+    ):
+        tampered_practice[digest_field] = m._compute_canonical_pin_sha256(
+            list(new_assignment[split_name])
+        )
+    new_row_order = (
+        new_assignment["training"] + new_assignment["validation"] + new_assignment["sealed_holdout"]
+    )
+    new_row_order_sha = m._compute_canonical_pin_sha256(new_row_order)
+    tampered_practice["row_order_sha256"] = new_row_order_sha
+    split_of_song = {
+        sid: split_name for split_name in ("training", "validation", "sealed_holdout")
+        for sid in new_assignment[split_name]
+    }
+    tampered_practice["sample_inventory"] = [
+        f"{rank:04d}|{split_of_song[sid]}|{sid}" for rank, sid in enumerate(new_row_order)
+    ]
+    tampered_practice_path = tmp_path / "practice_audio_split_manifest.json"
+    tampered_practice_path.write_bytes(
+        (json.dumps(tampered_practice, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_practice_sha = m.compute_file_sha256(tampered_practice_path)
+
+    tampered_dataset = copy.deepcopy(_dataset_split_manifest_data())
+    tampered_dataset["song_splits"]["practice_audio_split_manifest_sha"] = new_practice_sha
+    tampered_dataset["song_splits"]["row_order_sha256"] = new_row_order_sha
+    tampered_dataset["song_splits"]["row_counts"] = {
+        "training": 71, "validation": 14, "sealed_holdout": 14,
+    }
+    tampered_dataset_path = tmp_path / "dataset_split_manifest.json"
+    tampered_dataset_path.write_bytes(
+        (json.dumps(tampered_dataset, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_dataset_sha = m.compute_file_sha256(tampered_dataset_path)
+
+    tampered_contract_raw = copy.deepcopy(contract.raw)
+    tampered_contract_raw["practice_audio_split_manifest_sha"]["value"] = new_practice_sha
+    tampered_contract_raw["dataset_manifest_sha"]["value"] = new_dataset_sha
+    tampered_contract_raw["dataset_row_order_sha"]["value"] = new_row_order_sha
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(
+        yaml.safe_dump(tampered_contract_raw, allow_unicode=True), encoding="utf-8"
+    )
+    tampered_contract = m.load_run9_contract(tampered_contract_raw)
+
     loaded = m.load_pinned_dataset_split_manifest(
         tampered_contract,
         manifest_path=tampered_dataset_path,
         practice_manifest_path=tampered_practice_path,
         contract_path=tampered_yaml_path,
     )
-    assert loaded["song_splits"]["row_counts"]["training"] == 69
+    assert loaded["song_splits"]["row_counts"] == {
+        "training": 71, "validation": 14, "sealed_holdout": 14,
+    }
 
 
 def test_pin2r3_fix3_rejects_song_moved_between_splits_with_stale_counts(
@@ -12462,6 +12542,257 @@ def test_pin2r4_fix4_hash_family_closure_documented() -> None:
     ):
         assert field in docstring
     assert "sha256sum -c" in docstring
+
+
+# ---------------------------------------------------------------------------
+# PR #325 第4巡 Codex bot レビュー Fix 5/6（P2 ×2, 採用 — Fix 1/3/4 と
+# 同族の最終層）: 決定論割当の再導出照合（Fix 5）+ sample_inventory の
+# 再構成照合（Fix 6）。
+# ---------------------------------------------------------------------------
+
+
+def test_pin2r5_fix5_drift_detection_against_builder_real_and_synthetic() -> None:
+    """必須テスト（コーディネータ指示: builder の assign_split() 実出力と
+    schema 側再実装の一致を実データ + 合成 N で照合する drift 検出テスト
+    を必ず追加）。テスト層は `practice_split_builder`（numpy 依存）を
+    import してよい——制約は `run9_schema.py` 本体側のみ。実
+    `practice_audio_split_manifest.json`（N=100）+ 合成 N（fail-closed
+    ガードに抵触しない N=7 から N=137 まで複数点）で、
+    `run9_schema._expected_practice_split_assignment()` と
+    `practice_split_builder.assign_split()` の training/validation/
+    sealed_holdout 3リストが完全一致することを確認する。"""
+    import practice_split_builder as psb  # noqa: PLC0415 - test-local, numpy 依存を隔離
+
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    real_ids = (
+        list(practice_data["row_ids"]["training"])
+        + list(practice_data["row_ids"]["validation"])
+        + list(practice_data["row_ids"]["sealed_holdout"])
+    )
+    id_sets = [real_ids] + [
+        [f"synthetic_song_{i:05d}" for i in range(n)] for n in (7, 8, 15, 20, 33, 99, 100, 137, 251)
+    ]
+    for ids in id_sets:
+        schema_result = m._expected_practice_split_assignment(list(ids))
+        builder_result = psb.assign_split(list(ids))
+        for split_name in ("training", "validation", "sealed_holdout"):
+            assert schema_result[split_name] == builder_result[split_name], (
+                f"drift detected for N={len(ids)}, split={split_name!r}"
+            )
+
+
+def test_pin2r5_fix5_rejects_small_n_empty_split() -> None:
+    """builder の `assign_split()` は N<=6 で「いずれかの split が空になる」
+    ため fail-closed 拒否する（`practice_split_builder.py` 逐語確認済み）。
+    schema 側再実装も同じ N で raise することを確認する（完全な等価性の
+    負例側の確認 — 空リストのみ明示的にガードしている本関数の docstring
+    どおり、N=0 で拒否されることの直接確認）。"""
+    with pytest.raises(m.Run9ValidationError, match="song_ids must be non-empty"):
+        m._expected_practice_split_assignment([])
+
+
+def test_pin2r5_fix5_positive_real_contract_matches_expected_assignment(
+    contract: m.Run9RunContract,
+) -> None:
+    """正例回帰: 実 contract に対する呼び出しは引き続き成功し、実
+    practice manifest の row_ids が決定論規則の期待割当と一致すること
+    （load 経路が実際に Fix 5 を通過していることの直接確認）。"""
+    loaded = m.load_pinned_dataset_split_manifest(contract)
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    all_ids = (
+        list(practice_data["row_ids"]["training"])
+        + list(practice_data["row_ids"]["validation"])
+        + list(practice_data["row_ids"]["sealed_holdout"])
+    )
+    expected = m._expected_practice_split_assignment(all_ids)
+    for split_name in ("training", "validation", "sealed_holdout"):
+        assert practice_data["row_ids"][split_name] == expected[split_name]
+    assert loaded["schema"] == m.SCHEMA_DATASET_SPLIT_MANIFEST
+
+
+def test_pin2r5_fix5_rejects_two_songs_swapped_between_splits_with_all_digests_consistent(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """必須負例（指摘が名指しした具体的攻撃シナリオ）: `row_ids.training`
+    と `row_ids.validation` それぞれから1曲を選んで交換する（ID 和集合・
+    総件数は完全に不変）。その状態に合わせて `training_split_sha256`/
+    `validation_split_sha256`/`row_order_sha256`（宣言値・contract pin・
+    dataset manifest 転記値の四者）はすべて「正直に」再計算・更新する
+    （Fix 1/3/4 を全て通過させる構成——row_counts も 70/15/15 のまま
+    不変のため Fix 3 も無関係に通過する）。決定論規則
+    （score 昇順ランキング → スライス）はこの交換後の割当を生成し得ない
+    ため、Fix 5 の再導出照合のみがこれを検出できることを確認する。"""
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    tampered_practice = copy.deepcopy(practice_data)
+    swapped_out_training = tampered_practice["row_ids"]["training"][0]
+    swapped_out_validation = tampered_practice["row_ids"]["validation"][0]
+    tampered_practice["row_ids"]["training"][0] = swapped_out_validation
+    tampered_practice["row_ids"]["validation"][0] = swapped_out_training
+    tampered_practice["training_split_sha256"] = m._compute_canonical_pin_sha256(
+        list(tampered_practice["row_ids"]["training"])
+    )
+    tampered_practice["validation_split_sha256"] = m._compute_canonical_pin_sha256(
+        list(tampered_practice["row_ids"]["validation"])
+    )
+    new_row_order = (
+        tampered_practice["row_ids"]["training"]
+        + tampered_practice["row_ids"]["validation"]
+        + tampered_practice["row_ids"]["sealed_holdout"]
+    )
+    new_row_order_sha = m._compute_canonical_pin_sha256(new_row_order)
+    tampered_practice["row_order_sha256"] = new_row_order_sha
+    # sample_inventory も rank|split|song_id の再構成規則に合わせて正直に
+    # 更新する（Fix 6 が先に発火しないよう分離する必要は無い——Fix 5 が
+    # Fix 6 より先に実行されるため本来は不要だが、意図の一貫性のため
+    # 更新しておく）。
+    split_of_song = {
+        sid: split_name for split_name in ("training", "validation", "sealed_holdout")
+        for sid in tampered_practice["row_ids"][split_name]
+    }
+    tampered_practice["sample_inventory"] = [
+        f"{rank:04d}|{split_of_song[sid]}|{sid}" for rank, sid in enumerate(new_row_order)
+    ]
+    tampered_practice_path = tmp_path / "practice_audio_split_manifest.json"
+    tampered_practice_path.write_bytes(
+        (json.dumps(tampered_practice, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_practice_sha = m.compute_file_sha256(tampered_practice_path)
+
+    tampered_dataset = copy.deepcopy(_dataset_split_manifest_data())
+    tampered_dataset["song_splits"]["practice_audio_split_manifest_sha"] = new_practice_sha
+    tampered_dataset["song_splits"]["row_order_sha256"] = new_row_order_sha
+    # row_counts unaffected by a 1-for-1 swap (70/15/15 unchanged).
+    tampered_dataset_path = tmp_path / "dataset_split_manifest.json"
+    tampered_dataset_path.write_bytes(
+        (json.dumps(tampered_dataset, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_dataset_sha = m.compute_file_sha256(tampered_dataset_path)
+
+    tampered_contract_raw = copy.deepcopy(contract.raw)
+    tampered_contract_raw["practice_audio_split_manifest_sha"]["value"] = new_practice_sha
+    tampered_contract_raw["dataset_manifest_sha"]["value"] = new_dataset_sha
+    tampered_contract_raw["dataset_row_order_sha"]["value"] = new_row_order_sha
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(
+        yaml.safe_dump(tampered_contract_raw, allow_unicode=True), encoding="utf-8"
+    )
+    tampered_contract = m.load_run9_contract(tampered_contract_raw)
+    with pytest.raises(m.Run9ValidationError, match="凍結規則"):
+        m.load_pinned_dataset_split_manifest(
+            tampered_contract,
+            manifest_path=tampered_dataset_path,
+            practice_manifest_path=tampered_practice_path,
+            contract_path=tampered_yaml_path,
+        )
+
+
+def test_pin2r6_fix6_positive_real_contract_matches_expected_inventory(
+    contract: m.Run9RunContract,
+) -> None:
+    """正例回帰: 実 practice manifest の `sample_inventory` が row_ids
+    から再構成した期待 inventory（`rank|split|song_id` 形式、rank は
+    row_order 全体での0始まり通し番号）と順序込みで一致することを直接
+    確認する。"""
+    m.load_pinned_dataset_split_manifest(contract)  # 例外を投げないことの確認
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    row_order = (
+        list(practice_data["row_ids"]["training"])
+        + list(practice_data["row_ids"]["validation"])
+        + list(practice_data["row_ids"]["sealed_holdout"])
+    )
+    split_of_song = {
+        sid: split_name for split_name in ("training", "validation", "sealed_holdout")
+        for sid in practice_data["row_ids"][split_name]
+    }
+    expected_inventory = [
+        f"{rank:04d}|{split_of_song[sid]}|{sid}" for rank, sid in enumerate(row_order)
+    ]
+    assert practice_data["sample_inventory"] == expected_inventory
+
+
+def test_pin2r6_fix6_rejects_stale_sample_inventory_after_song_removed(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """必須負例（指摘が名指しした具体的攻撃シナリオ、Fix 5 と同型の1曲
+    除去 fixture を再利用）: N=99 への正しい決定論再割当（row_ids/
+    digest/row_counts/row_order はすべて正しく更新——Fix 1/3/4/5 を全て
+    通過する構成）を行うが、`sample_inventory` だけは旧 N=100 のリスト
+    のまま更新しない——曲除去後に inventory が追随しなかった経路を
+    再現し、Fix 6 の再構成照合のみがこれを検出できることを確認する。"""
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    stale_sample_inventory = list(practice_data["sample_inventory"])
+    all_ids = (
+        list(practice_data["row_ids"]["training"])
+        + list(practice_data["row_ids"]["validation"])
+        + list(practice_data["row_ids"]["sealed_holdout"])
+    )
+    remaining_ids = [sid for sid in all_ids if sid != practice_data["row_ids"]["training"][0]]
+    new_assignment = m._expected_practice_split_assignment(remaining_ids)
+
+    tampered_practice = copy.deepcopy(practice_data)
+    tampered_practice["row_ids"] = new_assignment
+    for split_name, digest_field in (
+        ("training", "training_split_sha256"),
+        ("validation", "validation_split_sha256"),
+        ("sealed_holdout", "sealed_holdout_sha256"),
+    ):
+        tampered_practice[digest_field] = m._compute_canonical_pin_sha256(
+            list(new_assignment[split_name])
+        )
+    new_row_order = (
+        new_assignment["training"] + new_assignment["validation"] + new_assignment["sealed_holdout"]
+    )
+    new_row_order_sha = m._compute_canonical_pin_sha256(new_row_order)
+    tampered_practice["row_order_sha256"] = new_row_order_sha
+    # sample_inventory left stale (still the old N=100 list) — this is the
+    # Fix 6 negative case itself.
+    tampered_practice["sample_inventory"] = stale_sample_inventory
+    tampered_practice_path = tmp_path / "practice_audio_split_manifest.json"
+    tampered_practice_path.write_bytes(
+        (json.dumps(tampered_practice, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_practice_sha = m.compute_file_sha256(tampered_practice_path)
+
+    tampered_dataset = copy.deepcopy(_dataset_split_manifest_data())
+    tampered_dataset["song_splits"]["practice_audio_split_manifest_sha"] = new_practice_sha
+    tampered_dataset["song_splits"]["row_order_sha256"] = new_row_order_sha
+    tampered_dataset["song_splits"]["row_counts"] = {
+        "training": 71, "validation": 14, "sealed_holdout": 14,
+    }
+    tampered_dataset_path = tmp_path / "dataset_split_manifest.json"
+    tampered_dataset_path.write_bytes(
+        (json.dumps(tampered_dataset, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_dataset_sha = m.compute_file_sha256(tampered_dataset_path)
+
+    tampered_contract_raw = copy.deepcopy(contract.raw)
+    tampered_contract_raw["practice_audio_split_manifest_sha"]["value"] = new_practice_sha
+    tampered_contract_raw["dataset_manifest_sha"]["value"] = new_dataset_sha
+    tampered_contract_raw["dataset_row_order_sha"]["value"] = new_row_order_sha
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(
+        yaml.safe_dump(tampered_contract_raw, allow_unicode=True), encoding="utf-8"
+    )
+    tampered_contract = m.load_run9_contract(tampered_contract_raw)
+    monkeypatch.setattr(
+        m, "_DATASET_SPLIT_EXPECTED_ROW_COUNTS",
+        {"training": 71, "validation": 14, "sealed_holdout": 14},
+    )
+    with pytest.raises(m.Run9ValidationError, match="sample_inventory"):
+        m.load_pinned_dataset_split_manifest(
+            tampered_contract,
+            manifest_path=tampered_dataset_path,
+            practice_manifest_path=tampered_practice_path,
+            contract_path=tampered_yaml_path,
+        )
 
 
 # ---------------------------------------------------------------------------

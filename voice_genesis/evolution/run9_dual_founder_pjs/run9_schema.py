@@ -10500,6 +10500,65 @@ def _validate_dataset_split_rule_accounting(data: Any) -> None:
         )
 
 
+# PR #325 第4巡 Codex bot レビュー指摘 Fix 5（P2, 採用）: `practice_split_
+# builder.assign_split()`（read-only 確認済み、`practice_split_builder.py:
+# 144-190`）の決定論割当規則を、標準ライブラリのみで局所再実装する。
+#
+# **本 PR で唯一の「独立再実装」ケースであることの明示**: Fix 1/3/4 は
+# いずれも `_compute_canonical_pin_sha256()` という既存の共有プリミティブ
+# を builder 側と同一の関数オブジェクトとして呼ぶだけで済み、drift の
+# 余地が構造的に存在しなかった。本関数はそれとは異なり、builder の
+# `_song_score()`/`assign_split()` が実装するランキング・スライス規則
+# そのものを再実装する——builder からの import は選べない: (a)
+# `practice_split_builder.py` は `import numpy as np` をトップレベルに
+# 持ち、`run9_schema.py` の標準ライブラリ + PyYAML のみという依存方針
+# （Allowed Dependencies: なし）を壊す、(b) `practice_split_builder` は
+# 既に `import run9_schema as m` しており逆方向 import は循環 import に
+# なる（Fix 1 と同じ制約）。したがって規則の**再計算不能な共有プリミティブ
+# が存在しない**唯一のケースとして、局所再実装 + drift 検出テスト
+# （builder の実出力と本関数の出力を実データ・合成 N で突き合わせる）で
+# 対応する。
+#
+# 規則の逐語転記（User 裁定 2026-08-25、`practice_split_builder.py:145-190`
+# より一次ソースを直接確認）:
+# - `score(song_id) = sha256(f"{song_id}|{LEARNING_SEED}".encode("utf-8"))
+#   .hexdigest()`
+# - `ranked = sorted(ids, key=lambda sid: (score(sid), sid))`（同値タイ
+#   ブレークは song_id 自身の辞書順）
+# - `n_val = floor(N*0.15)` / `n_holdout = floor(N*0.15)` /
+#   `n_train = N - n_val - n_holdout`（RUN9-BIRTH-PREP-1 §B 裁定逐語）
+# - `training = ranked[:n_train]` / `validation = ranked[n_train:
+#   n_train+n_val]` / `sealed_holdout = ranked[n_train+n_val:]`
+def _expected_practice_split_assignment(song_ids: List[str]) -> Dict[str, List[str]]:
+    """`practice_split_builder.assign_split()` と厳密に同一の決定論割当を
+    stdlib（`hashlib`/`math`/`sorted`）のみで再現する。呼び出し元
+    （`load_pinned_dataset_split_manifest()`）は既に `validate_practice_
+    split_manifest()` を通した `row_ids` の和集合（重複無し・disjoint
+    保証済み）を渡すため、本関数自体は重複検査を行わない——builder の
+    `assign_split()` が行う空リスト/小規模 N の fail-closed ガードも、
+    load 経路では常に N=100（既 PINNED practice split の実corpus規模）
+    が渡るため必須ではないが、`assign_split()` の契約を偽らないよう
+    同一の整合性を保つ最小の防御として `song_ids` が空なら拒否する。
+    """
+    if not song_ids:
+        raise Run9ValidationError(
+            "_expected_practice_split_assignment(): song_ids must be non-empty"
+        )
+    ranked = sorted(
+        song_ids,
+        key=lambda sid: (hashlib.sha256(f"{sid}|{LEARNING_SEED}".encode("utf-8")).hexdigest(), sid),
+    )
+    n = len(ranked)
+    n_val = math.floor(n * 0.15)
+    n_holdout = math.floor(n * 0.15)
+    n_train = n - n_val - n_holdout
+    return {
+        "training": ranked[:n_train],
+        "validation": ranked[n_train : n_train + n_val],
+        "sealed_holdout": ranked[n_train + n_val :],
+    }
+
+
 def validate_dataset_split_manifest(data: Mapping[str, Any]) -> None:
     """dataset split manifest（`run9-dataset-split-manifest/1.0`）の構造を
     検証する。DESIGN_RUN9 §12（574-595行）の5分割語彙
@@ -10645,10 +10704,49 @@ def load_pinned_dataset_split_manifest(
         本関数（および repo 内のいかなる機構）からは再計算不能——これは
         本関数の脅威モデルの範囲外であり、この2欄の正しさの検証は
         「取得時に `sha256sum -c` で確認する」という取得手順側の職務
-        （README.md 再現レシピが担保）である。**repo 内で再計算可能な
-        宣言 hash は本関数がすべて再計算照合済みであり、本ファミリーの
-        指摘はここで終端する**——同型の新しい未照合転記が今後見つかった
-        場合のみ再開する。
+        （README.md 再現レシピが担保）である。〔履歴: 本節は Fix 4 時点で
+        「本ファミリーの指摘はここで終端する」と宣言したが、PR #325 第4巡
+        Fix 5/6（下記 (10)/(11)）でさらに2件の未照合経路（決定論割当・
+        sample_inventory）が見つかり、家族の完結は下記 (11) 末尾の宣言へ
+        更新された〕
+    (10) **決定論割当の再導出照合**（PR #325 第4巡 Fix 5 で追加 —
+        Fix 1/3/4 と同族の最終層）: 上記 (6)/(7)/(9) は practice manifest
+        内の宣言 hash・件数が「その row_ids 自身」に対して内部一致する
+        ことしか検証しない——ID 和集合を保ったまま2曲を split 間で交換
+        し、交換後の状態に合わせて全 digest・件数・row_order を「正直に」
+        揃え直した改竄は (6)/(7)/(9) を全て通過し得る。`row_ids.
+        {training,validation,sealed_holdout}` の和集合から
+        `_expected_practice_split_assignment()`（`practice_split_
+        builder.assign_split()` の決定論規則——`score(song_id) =
+        sha256(f"{song_id}|{LEARNING_SEED}")` 昇順ランキング → 70/15/15
+        スライス、User 裁定 2026-08-25——を stdlib のみで局所再実装。
+        builder からの import は numpy 依存・循環 import のため不可能
+        （Fix 1 と同じ制約）——本 PR で唯一の「独立再実装」ケース、
+        drift 検出はテスト層で builder 実出力との突き合わせにより保証
+        する）で期待割当を再導出し、3リストそれぞれが順序込みで厳密
+        一致しない場合 raise する。
+    (11) **sample_inventory 再構成照合**（PR #325 第4巡 Fix 6 で追加）:
+        `validate_practice_split_manifest()` は `sample_inventory` を
+        非空・重複無しとしてしか検証しない——builder が実際に生成する
+        `f"{rank:04d}|{split}|{song_id}"`（rank は row_order 全体での
+        0始まり通し番号）という中身までは検証しない。上記 (10) で確定
+        した row_ids から re-derive した `reconstructed_row_order` を
+        用いて期待 inventory を再構成し、宣言値と順序込み完全一致しない
+        場合 raise する。
+
+        **同族ファミリーの完結宣言**（(9) の履歴宣言を更新）: Fix 5 に
+        より、本関数は「ID 和集合 + 凍結規則」から split 内容全体
+        （割当・順序・inventory・全 digest）を repo 内データのみから
+        再導出して照合する構成に到達した。以後、この検証チェーンを
+        欺く改竄は ID 和集合自体（`row_ids` が含む song_id の集合）を
+        変更するほかなく、それは `expanded_corpus_identity_sha256`
+        （展開後コーパスの識別 hash——本 docstring 上記の通り repo 外
+        実体への束縛であり、取得時 `sha256sum -c` 検証が担保する境界）
+        に構造的に束縛される。**repo 内で再導出可能な検証はこれで完全
+        被覆されており、本ファミリーの指摘はここで構造的に完結する**
+        ——ID 和集合自体の出所（`expanded_corpus_identity_sha256`/
+        `pjs_source_archive_sha256`）に踏み込む新しい指摘が来た場合のみ
+        再開する。
 
     戻り値は検証済み dataset split manifest dict。
     """
@@ -10906,6 +11004,62 @@ def load_pinned_dataset_split_manifest(
             f"{practice_row_order_sha256!r}, dataset manifest 転記 song_splits.row_order_sha256="
             f"{transcribed_row_order_sha256!r}, row_ids からの再計算値="
             f"{recomputed_row_order_sha256!r}"
+        )
+
+    # PR #325 第4巡 Codex bot レビュー指摘 Fix 5（P2, 採用 — Fix 1/3/4 と
+    # 同族の最終層）: ここまでの Fix 1/3/4 は practice manifest 内の宣言
+    # hash・件数が「その row_ids 自身」に対して内部一致することしか検証
+    # しない——row_ids 3リストの中身そのものが決定論規則
+    # （`_expected_practice_split_assignment()`）に従った「あり得る」
+    # 割当であることまでは検証していなかった。ID 和集合を全て正しく
+    # 保ったまま2曲を split 間で交換し、交換後の状態に合わせて全 digest・
+    # 件数・row_order を「正直に」揃え直した改竄は、Fix 1/3/4 の全チェック
+    # を通過し得る——row_ids 自体が凍結規則からの逸脱であることは、
+    # 規則を再実行して初めて検出できる。`row_ids.{training,validation,
+    # sealed_holdout}` の和集合（Fix 4 までの検証で重複無し・disjoint な
+    # 分割であることは確定済み）から `_expected_practice_split_
+    # assignment()` で期待割当を再導出し、3リストそれぞれが順序込みで
+    # 厳密一致することを要求する。
+    expected_assignment = _expected_practice_split_assignment(reconstructed_row_order)
+    for split_name in ("training", "validation", "sealed_holdout"):
+        declared_split_list = list(practice_data["row_ids"][split_name])
+        if declared_split_list != expected_assignment[split_name]:
+            raise Run9ValidationError(
+                f"load_pinned_dataset_split_manifest(): practice manifest の row_ids.{split_name} "
+                f"（{declared_split_list!r}）が、ID 和集合から凍結規則（score(song_id) = "
+                "sha256(f\"{song_id}|{LEARNING_SEED}\") 昇順ランキング → 70/15/15 スライス、User 裁定 "
+                f"2026-08-25）で再導出した期待割当（{expected_assignment[split_name]!r}）と一致しない "
+                "— 全 digest/件数/row_order が自己整合していても、決定論規則が実際に生成し得ない割当は "
+                "fail-closed で拒否する"
+            )
+
+    # PR #325 第4巡 Codex bot レビュー指摘 Fix 6（P2, 採用）: `validate_
+    # practice_split_manifest()` は `sample_inventory` を非空・重複無し
+    # としてしか検証しない——builder（`practice_split_builder.py:249-250`、
+    # read-only 確認済み）が実際に生成する `f"{rank:04d}|{split}|
+    # {song_id}"`（rank は row_order 全体での0始まり通し番号、0埋め4桁）
+    # という中身までは検証していなかった。曲除去等で row_ids が更新されて
+    # も sample_inventory が追随しなければ、削除済み曲や誤った split
+    # ラベルを含む陳腐化した canonical inventory が pin を通過し得る。
+    # 上記 Fix 5 で確定した `reconstructed_row_order`（training→
+    # validation→sealed_holdout の rank 順連結、Fix 1 参照）から
+    # split_of_song を導出し、期待 inventory を再構成して順序込み完全
+    # 一致を要求する。
+    split_of_song: Dict[str, str] = {}
+    for split_name in ("training", "validation", "sealed_holdout"):
+        for song_id in practice_data["row_ids"][split_name]:
+            split_of_song[song_id] = split_name
+    expected_sample_inventory = [
+        f"{rank:04d}|{split_of_song[song_id]}|{song_id}"
+        for rank, song_id in enumerate(reconstructed_row_order)
+    ]
+    declared_sample_inventory = list(practice_data.get("sample_inventory", []))
+    if expected_sample_inventory != declared_sample_inventory:
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): practice manifest の sample_inventory 宣言値が、"
+            "row_ids から再構成した期待 inventory（rank|split|song_id 形式、rank は row_order 全体で"
+            "の0始まり通し番号）と順序込みで一致しない — row_ids 更新後に inventory が追随しなかった "
+            "陳腐化を fail-closed で拒否する"
         )
 
     return data
