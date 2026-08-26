@@ -16570,6 +16570,8 @@ def test_execprofile_verify_runtime_happy_path_real_environment() -> None:
         "onnxruntime": "1.29.0",
         "available_providers": ["AzureExecutionProvider", "CPUExecutionProvider"],
         "selected_execution_provider": "CPUExecutionProvider",
+        "architecture": "x86_64",
+        "os": "Ubuntu 24.04.4",
     }
 
 
@@ -16666,6 +16668,95 @@ def test_execprofile_verify_runtime_cpu_only_available_accepted(
     monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
     result = m.verify_execution_profile_runtime(manifest)
     assert result["available_providers"] == ["CPUExecutionProvider"]
+
+
+# --- verify_execution_profile_runtime(): os/architecture live probe -------
+# (PR #327 レビュー第5巡指摘11対応、2026-08-26) 旧実装は runtime identity
+# 5値のうち os/architecture の2値を live probe しておらず、別 OS/別
+# アーキテクチャ環境でもパッケージ版と CPU provider さえ揃えば run gate が
+# 通り得た穴の非退行確認。
+
+
+def test_execprofile_verify_runtime_architecture_mismatch_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _execprofile_manifest_data()
+    monkeypatch.setattr(m.platform, "machine", lambda: "aarch64")
+    with pytest.raises(m.Run9ValidationError, match="live architecture"):
+        m.verify_execution_profile_runtime(manifest)
+
+
+def test_execprofile_verify_runtime_os_name_mismatch_rejected(tmp_path: Path) -> None:
+    manifest = _execprofile_manifest_data()
+    os_release_path = tmp_path / "os-release"
+    os_release_path.write_text(
+        'NAME="Debian"\nVERSION_ID="12"\nVERSION="12.5 (bookworm)"\n', encoding="utf-8",
+    )
+    with pytest.raises(m.Run9ValidationError, match="live OS identity"):
+        m.verify_execution_profile_runtime(manifest, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_os_version_mismatch_rejected(tmp_path: Path) -> None:
+    manifest = _execprofile_manifest_data()
+    os_release_path = tmp_path / "os-release"
+    os_release_path.write_text(
+        'NAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION="24.04.5 LTS (Noble Numbat)"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(m.Run9ValidationError, match="live OS identity"):
+        m.verify_execution_profile_runtime(manifest, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_os_release_missing_rejected(tmp_path: Path) -> None:
+    manifest = _execprofile_manifest_data()
+    missing_path = tmp_path / "does_not_exist_os_release"
+    with pytest.raises(m.Run9ValidationError, match="live OS identity を構成できない"):
+        m.verify_execution_profile_runtime(manifest, os_release_path=missing_path)
+
+
+def test_execprofile_verify_runtime_os_release_name_field_missing_rejected(
+    tmp_path: Path,
+) -> None:
+    """NAME フィールドが欠落した /etc/os-release は抽出不能として
+    fail-closed 拒否される。"""
+    manifest = _execprofile_manifest_data()
+    os_release_path = tmp_path / "os-release"
+    os_release_path.write_text('VERSION_ID="24.04"\nVERSION="24.04.4 LTS"\n', encoding="utf-8")
+    with pytest.raises(m.Run9ValidationError, match="live OS identity を構成できない"):
+        m.verify_execution_profile_runtime(manifest, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_os_release_version_token_unparseable_rejected(
+    tmp_path: Path,
+) -> None:
+    """VERSION フィールドの先頭トークンが数字/ドットのみで構成されていない
+    場合はバージョン番号抽出不能として fail-closed 拒否される。"""
+    manifest = _execprofile_manifest_data()
+    os_release_path = tmp_path / "os-release"
+    os_release_path.write_text(
+        'NAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION="rolling"\n', encoding="utf-8",
+    )
+    with pytest.raises(m.Run9ValidationError, match="live OS identity を構成できない"):
+        m.verify_execution_profile_runtime(manifest, os_release_path=os_release_path)
+
+
+def test_execprofile_verify_runtime_os_architecture_positive_via_override(
+    tmp_path: Path,
+) -> None:
+    """正例: `os_release_path` を実機 `/etc/os-release` と同じ形式・値で
+    差し替えても（`PRETTY_NAME`/`ID` 等の余剰フィールド込み）manifest pin
+    と一致するため happy path が成立する——os probe 経路の正例確認
+    （実環境自体が pin と一致するため monkeypatch なしで確認できる）。"""
+    manifest = _execprofile_manifest_data()
+    os_release_path = tmp_path / "os-release"
+    os_release_path.write_text(
+        'PRETTY_NAME="Ubuntu 24.04.4 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\n'
+        'VERSION="24.04.4 LTS (Noble Numbat)"\nID=ubuntu\n',
+        encoding="utf-8",
+    )
+    result = m.verify_execution_profile_runtime(manifest, os_release_path=os_release_path)
+    assert result["os"] == "Ubuntu 24.04.4"
+    assert result["architecture"] == "x86_64"
 
 
 # --- RUN9_CONTRACT.yaml: 既存 pin 全数不変 ----------------------------------

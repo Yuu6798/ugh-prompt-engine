@@ -24,6 +24,7 @@ import hashlib
 import importlib.util
 import json
 import math
+import platform
 import re
 import sys
 import types
@@ -14928,13 +14929,94 @@ def load_pinned_execution_profile_manifest(
     return data
 
 
+# `/etc/os-release` の `VERSION` フィールド（例: "24.04.4 LTS (Noble Numbat)"）
+# 先頭トークンが数字とドットのみで構成されていることを確認する正規表現
+# （`_build_live_os_identity()` 専用、PR #327 レビュー第5巡指摘11対応）。
+_OS_RELEASE_VERSION_TOKEN_RE = re.compile(r"^\d+(?:\.\d+)*$")
+
+_DEFAULT_OS_RELEASE_PATH = Path("/etc/os-release")
+
+
+def _parse_os_release_text(text: str) -> Dict[str, str]:
+    """`/etc/os-release`（`KEY=VALUE` 形式、値は shell クォート可）の中身を
+    dict へ変換する。空行・`#` コメント行・`=` を含まない行は無視する。
+    値を囲むシングル/ダブルクォートは剥がす（`os-release(5)` の記法）。
+    """
+    fields: Dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        fields[key] = value
+    return fields
+
+
+def _build_live_os_identity(os_release_path: Optional[Path] = None) -> str:
+    """`/etc/os-release` の実 read から、execution_profile_sha manifest の
+    `identity_semantics.runtime.os` pin 値（"NAME MAJOR.MINOR.PATCH" 形式、
+    実例 "Ubuntu 24.04.4"）と厳密比較可能な文字列を構成する（PR #327
+    レビュー第5巡指摘11対応）。
+
+    **導出規則**（実物の `/etc/os-release` を Read して確認済み: Ubuntu
+    24.04.4 の実機では `NAME="Ubuntu"` / `VERSION_ID="24.04"` /
+    `VERSION="24.04.4 LTS (Noble Numbat)"`）:
+    (1) `NAME` フィールドを取得する（例: "Ubuntu"）。
+    (2) `VERSION_ID` はマイナーバージョンまでしか保持しない（"24.04"）ため
+        patch 版番号（"24.04.4"）を再現できない。そこで `VERSION`
+        フィールド（例: "24.04.4 LTS (Noble Numbat)"）の先頭空白区切り
+        トークンをバージョン番号として抽出する。
+    (3) 抽出したトークンが数字とドットのみで構成されること
+        （`_OS_RELEASE_VERSION_TOKEN_RE`）を確認する。
+    (4) `f"{NAME} {version_token}"` を組み立てて返す——manifest pin と
+        同じ "NAME MAJOR.MINOR.PATCH" 形式になる。
+
+    `/etc/os-release` が存在しない・`NAME`/`VERSION` フィールドが欠落・
+    バージョントークンが抽出/検証できない場合はいずれも `ValueError` を
+    送出する（呼び出し側 `verify_execution_profile_runtime()` で
+    `Run9ValidationError` として fail-closed に変換する——「照合できない」
+    を「pass した」と混同しない）。
+    """
+    path = os_release_path if os_release_path is not None else _DEFAULT_OS_RELEASE_PATH
+    if not path.is_file():
+        raise ValueError(f"{path} が存在しない")
+    fields = _parse_os_release_text(path.read_text(encoding="utf-8"))
+    name = fields.get("NAME")
+    if not name:
+        raise ValueError(f"{path} に NAME フィールドがない")
+    version = fields.get("VERSION")
+    if not version:
+        raise ValueError(f"{path} に VERSION フィールドがない")
+    version_tokens = version.split()
+    version_token = version_tokens[0] if version_tokens else ""
+    if not _OS_RELEASE_VERSION_TOKEN_RE.match(version_token):
+        raise ValueError(
+            f"{path} の VERSION フィールド ({version!r}) の先頭トークン "
+            f"({version_token!r}) からバージョン番号を抽出できない（数字とドットのみで"
+            "構成されている必要がある）"
+        )
+    return f"{name} {version_token}"
+
+
 def verify_execution_profile_runtime(
     manifest: Mapping[str, Any], *, selected_providers: Optional[List[str]] = None,
+    os_release_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
-    """`execution_profile_sha` pin が記述する runtime identity を、**現在
-    実行中の live 環境**（`sys.version_info`・`onnxruntime.__version__`・
-    `onnxruntime.get_available_providers()`）に対して fail-closed で照合
-    する（PR #327 レビュー第3巡指摘8(b)対応、2026-08-26）。
+    """`execution_profile_sha` pin が記述する runtime identity 5値
+    （python/onnxruntime/os/architecture/selected_execution_provider）
+    を、**現在実行中の live 環境**（`sys.version_info`・
+    `onnxruntime.__version__`・`onnxruntime.get_available_providers()`・
+    `platform.machine()`・`/etc/os-release`）に対して fail-closed で照合
+    する（PR #327 レビュー第3巡指摘8(b) + 第5巡指摘11対応、2026-08-26。
+    第5巡指摘11: 旧実装は5値のうち python/onnxruntime/
+    selected_execution_provider の3値しか live probe しておらず、
+    os/architecture は manifest 記載値を無条件に信頼していた——別 OS・
+    別アーキテクチャでもパッケージ版と CPU provider さえ揃えば run gate
+    が通り、旧 execution_profile_sha の下で偽成功実験が可能だった）。
 
     **契約——RUN9 実行段（学習ハーネス/render 実行の run gate）は render を
     開始する前に本関数を必ず呼ぶこと。** `load_pinned_execution_profile_
@@ -14946,7 +15028,7 @@ def verify_execution_profile_runtime(
     RUN9 実行環境と CI マトリクス環境は意味的に別物であり、live 照合は
     実際に render を実行する段——本関数の呼び出し点——に分離する）。
 
-    照合内容（4項目、`identity_semantics.runtime`/`identity_semantics.
+    照合内容（6項目、`identity_semantics.runtime`/`identity_semantics.
     provider_fixation_rules` に対する fail-closed 判定）:
     (a) `sys.version_info` から組み立てた `"{major}.{minor}.{micro}"` が
         `identity_semantics.runtime.python` と厳密一致すること。
@@ -14963,13 +15045,23 @@ def verify_execution_profile_runtime(
         selected_execution_provider` の単独リストを既定値として検証）が
         `["CPUExecutionProvider"]` と厳密一致すること（GPU provider
         選択企図を fail-closed で拒否する）。
+    (e) `platform.machine()` が `identity_semantics.runtime.architecture`
+        と厳密一致すること（別アーキテクチャ環境での偽成功実験を防ぐ、
+        PR #327 レビュー第5巡指摘11対応）。
+    (f) `/etc/os-release`（`os_release_path` でテスト用に上書き可能。既定
+        `/etc/os-release`）から `_build_live_os_identity()` で構成した
+        文字列が `identity_semantics.runtime.os` と厳密一致すること
+        （導出規則は `_build_live_os_identity()` docstring 参照。PR #327
+        レビュー第5巡指摘11対応）。`/etc/os-release` が存在しない・
+        解析不能・バージョン抽出不能な場合も fail-closed（例外送出）。
 
-    onnxruntime が import 不能な環境では fail-closed（例外を送出、静かに
-    skip しない）——「照合できなかった」を「pass した」と混同しない。
+    onnxruntime が import 不能な環境、または `/etc/os-release` が読めない
+    /解析できない環境では fail-closed（例外を送出、静かに skip しない）
+    ——「照合できなかった」を「pass した」と混同しない。
 
     戻り値は live probe 実測値の dict（`python`/`onnxruntime`/
-    `available_providers`/`selected_execution_provider` の4キー）——呼び
-    出し側が render 実行ログへ転記できるようにする。
+    `available_providers`/`selected_execution_provider`/`architecture`/
+    `os` の6キー）——呼び出し側が render 実行ログへ転記できるようにする。
     """
     runtime = manifest["identity_semantics"]["runtime"]
 
@@ -15036,9 +15128,43 @@ def verify_execution_profile_runtime(
             "provider_fixation_rules を fail-closed で強制する"
         )
 
+    # (e) architecture: platform.machine() の実測値を pin 値と厳密一致で
+    # 照合する（PR #327 レビュー第5巡指摘11対応）。
+    live_architecture = platform.machine()
+    pinned_architecture = runtime["architecture"]
+    if live_architecture != pinned_architecture:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): live architecture "
+            f"(platform.machine()={live_architecture!r}) diverges from execution_profile_sha "
+            f"pinned identity_semantics.runtime.architecture ({pinned_architecture!r}) — 別"
+            "アーキテクチャ環境での実行を fail-closed で拒否する"
+        )
+
+    # (f) os: /etc/os-release を実 read し、_build_live_os_identity() で
+    # manifest pin 形式へ組み立てた文字列を厳密一致で照合する（PR #327
+    # レビュー第5巡指摘11対応）。/etc/os-release が読めない・解析できない
+    # 場合は _build_live_os_identity() が ValueError を送出する——ここで
+    # Run9ValidationError へ変換し fail-closed とする（skip しない）。
+    try:
+        live_os = _build_live_os_identity(os_release_path)
+    except ValueError as exc:
+        raise Run9ValidationError(
+            f"verify_execution_profile_runtime(): live OS identity を構成できない ({exc}) — "
+            "照合できない状態を『pass』として扱うことはできないため fail-closed で拒否する"
+        ) from exc
+    pinned_os = runtime["os"]
+    if live_os != pinned_os:
+        raise Run9ValidationError(
+            "verify_execution_profile_runtime(): live OS identity "
+            f"({live_os!r}) diverges from execution_profile_sha pinned identity_semantics."
+            f"runtime.os ({pinned_os!r}) — 別 OS 環境での実行を fail-closed で拒否する"
+        )
+
     return {
         "python": live_python,
         "onnxruntime": live_onnxruntime,
         "available_providers": live_available,
         "selected_execution_provider": effective_selected[0],
+        "architecture": live_architecture,
+        "os": live_os,
     }

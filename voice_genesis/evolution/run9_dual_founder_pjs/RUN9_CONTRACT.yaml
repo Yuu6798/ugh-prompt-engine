@@ -884,6 +884,19 @@ reexport_manifest_sha:
 # `run9_schema.verify_execution_profile_runtime(manifest)` へ分離した。
 # **RUN9 実行段（学習ハーネス/render 実行の run gate）は render を開始
 # する前に本関数を必ず呼ぶこと**——HARNESS-3 配線点として登録する。
+#
+# 2026-08-26 verify 強化（PR #327 Codex レビュー第5巡指摘11、P1、採用
+# ——run gate が OS/architecture を照合しない穴。manifest 実体は無変更、
+# run9_schema.py 側のみ強化）: 旧 verify_execution_profile_runtime() は
+# runtime identity 5値（python/onnxruntime/os/architecture/
+# selected_execution_provider）のうち python/onnxruntime/
+# selected_execution_provider の3値しか live probe しておらず、
+# os/architecture は manifest 記載値を無条件に信頼していたため、別 OS・
+# 別アーキテクチャ環境でもパッケージ版と CPU provider さえ揃えば run gate
+# が通り得た。platform.machine() による architecture 照合と
+# /etc/os-release 実 read による os 照合（導出規則は run9_schema.
+# _build_live_os_identity() docstring 参照）を追加し、runtime identity
+# 5値全てを live probe で fail-closed 照合する契約とした。
 execution_profile_sha:
   value: "200c975967a7b34aa55d9e89a8c59ace2be850e5fd1d93a4ba4a7dbed5f06d34"
   status: PINNED
