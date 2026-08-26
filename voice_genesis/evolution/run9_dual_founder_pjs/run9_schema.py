@@ -10313,6 +10313,14 @@ _DATASET_SPLIT_EXPECTED_ROW_COUNTS: Mapping[str, int] = types.MappingProxyType({
     "training": 70, "validation": 15, "sealed_holdout": 15,
 })
 
+# PR #325 第7巡 Fix 8: `practice_split_builder._enumerate_pjs_song_ids()`
+# （read-only 確認済み、`practice_split_builder.py:111-135`）の song_id
+# 列挙規約——`song_id = lab_path.stem`、glob パターン `pjs*/pjs*.lab` の
+# 対象は現行 PJS 100曲コーパスでは常に3桁ゼロ埋め（`pjs001`〜`pjs100`）。
+# load-time sanity 検査（束縛ではない、docstring (12) 参照）専用の
+# フォーマット規約であり、corpus 実体との真の束縛はここでは行わない。
+_PIN2_PRACTICE_SONG_ID_RE = re.compile(r"^pjs\d{3}$")
+
 
 def _validate_dataset_split_song_splits(data: Any) -> None:
     if not isinstance(data, dict):
@@ -10752,19 +10760,63 @@ def load_pinned_dataset_split_manifest(
         用いて期待 inventory を再構成し、宣言値と順序込み完全一致しない
         場合 raise する。
 
-        **同族ファミリーの完結宣言**（(9) の履歴宣言を更新）: Fix 5 に
-        より、本関数は「ID 和集合 + 凍結規則」から split 内容全体
-        （割当・順序・inventory・全 digest）を repo 内データのみから
-        再導出して照合する構成に到達した。以後、この検証チェーンを
-        欺く改竄は ID 和集合自体（`row_ids` が含む song_id の集合）を
-        変更するほかなく、それは `expanded_corpus_identity_sha256`
-        （展開後コーパスの識別 hash——本 docstring 上記の通り repo 外
-        実体への束縛であり、取得時 `sha256sum -c` 検証が担保する境界）
-        に構造的に束縛される。**repo 内で再導出可能な検証はこれで完全
-        被覆されており、本ファミリーの指摘はここで構造的に完結する**
-        ——ID 和集合自体の出所（`expanded_corpus_identity_sha256`/
-        `pjs_source_archive_sha256`）に踏み込む新しい指摘が来た場合のみ
-        再開する。
+        〔履歴: 本節は Fix 6 時点で「ID 和集合自体は `expanded_corpus_
+        identity_sha256` に構造的に束縛される」ため「本ファミリーの
+        指摘はここで構造的に完結する」と宣言したが、PR #325 第7巡
+        Fix 8（P2, 採用 — 正直性是正）指摘: `expanded_corpus_identity_
+        sha256` は本関数内では 64hex 形状検査しかされておらず、ID 和
+        集合との照合機構は本関数（load 時）には存在しない——「構造的に
+        束縛される」という表現は、load 時の機械検証ではなく下記 (12) が
+        正確に述べる3層（build 時/取得時/独立再現）の話を、あたかも
+        本関数自身が検証しているかのように書いてしまっていた不正確な
+        記述だった。是正後の正確な宣言は下記 (12) 末尾を参照〕
+    (12) **ID 和集合と canonical corpus の束縛境界の正直な宣言**（PR
+        #325 第7巡 Fix 8 で追加・上記 (11) の宣言を精密化）: ID 和集合
+        が「真に canonical corpus（実 PJS 100曲）由来である」ことの
+        束縛は、**load 時の機械検証ではなく**次の3層で担保される
+        （corpus 実体は repo 外に存在し、本関数は repo 内データのみで
+        検証する設計のため、load 時にこの束縛を検証する機構を発明
+        しない——第3巡 Fix 4 で宣言済みの取得時検証境界と同じ理由）:
+
+        (i) **build 時** — `build_practice_split_manifest()`
+        （`practice_split_builder.py:198`）が corpus 実体から
+        `_enumerate_pjs_song_ids()`（同:111-135）で song_id を列挙する
+        （`song_id = lab_path.stem`、対応する `pjsNNN_song.wav` が存在
+        する `.lab` に限る——同:133 `song_ids.append(lab_path.stem)`）。
+        `identity_hash != expected_corpus_identity` の fail-closed 照合
+        （同:235-241）を通過しなければ manifest 生成自体が失敗するため、
+        corpus_root 実体に存在しない song_id を宣言へ追加することは
+        構造的にできない。
+        (ii) **取得時** — README.md「再現レシピ」節が `sha256sum -c -`
+        で PJS ソース zip（`PJS_SOURCE_ARCHIVE_SHA256`）・展開後コーパス
+        （`EXPANDED_CORPUS_IDENTITY_SHA256`）を照合する。
+        (iii) **独立再現** — 同レシピで manifest バイトを再生成し、
+        `practice_audio_split_manifest_sha` pin と一致することを確認
+        （PR #323 で実際に実施・二重実証済み）。
+
+        **load 時に本関数が repo 内データのみから機械検証できるのは
+        「宣言された和集合が凍結規則・inventory・全 digest と自己整合
+        すること」（Fix 1-7）までであり、和集合が真に canonical corpus
+        由来かどうか自体は load 時には検証不能**——これは束縛ではなく
+        **sanity**（ID 形式 `^pjs\d{3}$` + 件数一致、下記実装参照）として
+        正直に区別する。`build_practice_split_manifest()` を経由しない
+        手作業での `row_ids` 改竄（指摘のシナリオ: 100 ID のうち1件を
+        任意 ID へ置換 + 全 pin/digest/inventory を自己整合させて更新）
+        は、この sanity 検査（ID 形式・件数）だけでは検出できない場合が
+        ある——形式が `pjsNNN` に一致し件数も変わらない置換（例:
+        既存の別 song_id との入れ替え）は、本関数の脅威モデルの外に
+        ある（`practice_audio_split_manifest.json` 自体をサンクション
+        された `build_practice_split_manifest()` 経由でなく直接改変する
+        攻撃者に対しては、いかなる in-process/load-time 検証も強制
+        不能——PIN-1 `load_pinned_seed_policy_manifest()` 等が既に宣言
+        する信頼根境界と同型。真の防御は PR レビュー + `branch_write_
+        policy` + git 履歴という repo 機構の外側にある）。
+
+        **再入条件**（`failure_abort_criteria.json`
+        `machine_promotion_condition` と同型の語彙）: canonical corpus
+        の song ID inventory（ID 列そのもの）が将来 repo 内 pin として
+        収載された場合、本 sanity 検査は load-time の和集合照合（真の
+        束縛）へ昇格する。
 
     戻り値は検証済み dataset split manifest dict。
     """
@@ -11042,6 +11094,34 @@ def load_pinned_dataset_split_manifest(
             f"{practice_row_order_sha256!r}, dataset manifest 転記 song_splits.row_order_sha256="
             f"{transcribed_row_order_sha256!r}, row_ids からの再計算値="
             f"{recomputed_row_order_sha256!r}"
+        )
+
+    # PR #325 第7巡 Codex bot レビュー指摘 Fix 8（P2, 採用 — 正直性是正）:
+    # docstring (12) が正直に区別するとおり、これは束縛（binding）では
+    # なく sanity 検査——ID 和集合が真に canonical corpus 由来であること
+    # の検証ではなく、明らかに規約外な値（`_enumerate_pjs_song_ids()` の
+    # 列挙規約に反する形式・現行 pin 世代の canonical N と異なる件数）を
+    # 弾く最低限の防御に過ぎない。重複無しは Fix 4 までの
+    # `validate_practice_split_manifest()`（`_require_disjoint_row_id_
+    # sets()`）が既に強制済みのためここでは再検査しない。
+    invalid_format_song_ids = sorted(
+        song_id for song_id in reconstructed_row_order
+        if not _PIN2_PRACTICE_SONG_ID_RE.match(song_id)
+    )
+    if invalid_format_song_ids:
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): row_ids の和集合に "
+            "_enumerate_pjs_song_ids() の列挙規約（song_id は .lab ファイルの stem、"
+            f"^pjs\\d{{3}}$ 形式）に反する ID がある（sanity 検査——corpus 実体との真の束縛では "
+            f"ない。真の束縛は build_practice_split_manifest() の identity 照合が担う）: "
+            f"{invalid_format_song_ids!r}"
+        )
+    _expected_song_count = sum(_DATASET_SPLIT_EXPECTED_ROW_COUNTS.values())
+    if len(reconstructed_row_order) != _expected_song_count:
+        raise Run9ValidationError(
+            "load_pinned_dataset_split_manifest(): row_ids の和集合の件数 "
+            f"({len(reconstructed_row_order)}) が現行 pin 世代の canonical N "
+            f"({_expected_song_count}) と一致しない（sanity 検査）"
         )
 
     # PR #325 第4巡 Codex bot レビュー指摘 Fix 5（P2, 採用 — Fix 1/3/4 と

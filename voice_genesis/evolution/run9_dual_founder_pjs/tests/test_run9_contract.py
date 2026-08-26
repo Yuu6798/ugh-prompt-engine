@@ -12926,6 +12926,162 @@ def test_pin2r7_fix7_other_loaders_have_no_same_type_residual() -> None:
 
 
 # ---------------------------------------------------------------------------
+# PR #325 第7巡 Codex bot レビュー Fix 8（P2, 採用 — 正直性是正）: ID
+# 和集合が canonical corpus 由来であることの「束縛」は load 時には
+# 検証不能——正直に「sanity」（ID 形式 + 件数）へ格下げし、真の束縛は
+# build 時/取得時/独立再現の3層（docstring (12)）が担うことを明記した。
+# ---------------------------------------------------------------------------
+
+
+def test_pin2r8_fix8_positive_real_contract_satisfies_sanity_checks(
+    contract: m.Run9RunContract,
+) -> None:
+    """正例回帰: 実 contract は ID 形式（`^pjs\\d{3}$`）・件数（現行
+    canonical N）の両 sanity 検査を満たし、引き続き成功する。"""
+    loaded = m.load_pinned_dataset_split_manifest(contract)
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    all_ids = (
+        list(practice_data["row_ids"]["training"])
+        + list(practice_data["row_ids"]["validation"])
+        + list(practice_data["row_ids"]["sealed_holdout"])
+    )
+    assert all(m._PIN2_PRACTICE_SONG_ID_RE.match(sid) for sid in all_ids)
+    assert len(all_ids) == sum(m._DATASET_SPLIT_EXPECTED_ROW_COUNTS.values())
+    assert loaded["schema"] == m.SCHEMA_DATASET_SPLIT_MANIFEST
+
+
+def test_pin2r8_fix8_rejects_id_substituted_with_invalid_format(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """必須負例（指摘のシナリオの一形態——1 ID 置換 + 全 pin/digest/
+    inventory を自己整合させた改竄）: `row_ids.training[0]` を
+    `_enumerate_pjs_song_ids()` の列挙規約（`^pjs\\d{3}$`）に反する ID
+    へ置換し、`training_split_sha256`/`row_order_sha256`（宣言値・
+    contract pin・dataset manifest 転記値の四者）/`sample_inventory` は
+    すべて「正直に」再計算・更新する——Fix 1/3/4/6 を全て通過する構成
+    （件数は不変のため Fix 3/新設の件数 sanity も無関係に通過、Fix 5 の
+    決定論割当再導出へ到達する前に本 sanity 検査が先に発火することを
+    確認する）。"""
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    tampered_practice = copy.deepcopy(practice_data)
+    tampered_practice["row_ids"]["training"][0] = "not-a-valid-song-id"
+    tampered_practice["training_split_sha256"] = m._compute_canonical_pin_sha256(
+        list(tampered_practice["row_ids"]["training"])
+    )
+    new_row_order = (
+        tampered_practice["row_ids"]["training"]
+        + tampered_practice["row_ids"]["validation"]
+        + tampered_practice["row_ids"]["sealed_holdout"]
+    )
+    new_row_order_sha = m._compute_canonical_pin_sha256(new_row_order)
+    tampered_practice["row_order_sha256"] = new_row_order_sha
+    split_of_song = {
+        sid: split_name for split_name in ("training", "validation", "sealed_holdout")
+        for sid in tampered_practice["row_ids"][split_name]
+    }
+    tampered_practice["sample_inventory"] = [
+        f"{rank:04d}|{split_of_song[sid]}|{sid}" for rank, sid in enumerate(new_row_order)
+    ]
+    tampered_practice_path = tmp_path / "practice_audio_split_manifest.json"
+    tampered_practice_path.write_bytes(
+        (json.dumps(tampered_practice, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_practice_sha = m.compute_file_sha256(tampered_practice_path)
+
+    tampered_dataset = copy.deepcopy(_dataset_split_manifest_data())
+    tampered_dataset["song_splits"]["practice_audio_split_manifest_sha"] = new_practice_sha
+    tampered_dataset["song_splits"]["row_order_sha256"] = new_row_order_sha
+    # row_counts unaffected by a 1-for-1 substitution (70/15/15 unchanged).
+    tampered_dataset_path = tmp_path / "dataset_split_manifest.json"
+    tampered_dataset_path.write_bytes(
+        (json.dumps(tampered_dataset, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
+            "utf-8"
+        )
+    )
+    new_dataset_sha = m.compute_file_sha256(tampered_dataset_path)
+
+    tampered_contract_raw = copy.deepcopy(contract.raw)
+    tampered_contract_raw["practice_audio_split_manifest_sha"]["value"] = new_practice_sha
+    tampered_contract_raw["dataset_manifest_sha"]["value"] = new_dataset_sha
+    tampered_contract_raw["dataset_row_order_sha"]["value"] = new_row_order_sha
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(
+        yaml.safe_dump(tampered_contract_raw, allow_unicode=True), encoding="utf-8"
+    )
+    tampered_contract = m.load_run9_contract(tampered_contract_raw)
+    with pytest.raises(m.Run9ValidationError, match="列挙規約"):
+        m.load_pinned_dataset_split_manifest(
+            tampered_contract,
+            manifest_path=tampered_dataset_path,
+            practice_manifest_path=tampered_practice_path,
+            contract_path=tampered_yaml_path,
+        )
+
+
+def test_pin2r8_fix8_song_id_regex_matches_real_ids_and_rejects_variants() -> None:
+    """`_PIN2_PRACTICE_SONG_ID_RE`（`^pjs\\d{3}$`）が実データ全ID
+    （`pjs001`〜`pjs100` 相当）に一致し、隣接する変種
+    （桁数違い・大文字・接尾辞付き）を拒否することを直接確認する。"""
+    practice_data = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    all_ids = (
+        list(practice_data["row_ids"]["training"])
+        + list(practice_data["row_ids"]["validation"])
+        + list(practice_data["row_ids"]["sealed_holdout"])
+    )
+    for sid in all_ids:
+        assert m._PIN2_PRACTICE_SONG_ID_RE.match(sid), sid
+    for bad in ("pjs1", "pjs0001", "PJS001", "pjs001x", "pjs-01", "xpjs001"):
+        assert not m._PIN2_PRACTICE_SONG_ID_RE.match(bad), bad
+
+
+def test_pin2r8_fix8_count_sanity_check_present_as_defense_in_depth() -> None:
+    """件数 sanity 検査（`len(reconstructed_row_order) != sum(
+    _DATASET_SPLIT_EXPECTED_ROW_COUNTS.values())`）の直接確認。
+
+    境界宣言: 本チェックは現行コードパス上では他チェック
+    （`validate_dataset_split_manifest()` の row_counts 静的照合 + Fix 3
+    の row_counts 実体照合）により、到達時点で数学的に自明に成立する
+    ことが既に保証されている——Fix 3 自身の合計チェックと同型の、意図的
+    な多層防御（fail-closed defense in depth）である。ソース上の存在と
+    docstring への明記をここで固定し、独立した runtime 到達可能性までは
+    主張しない（誠実な境界宣言——実行不可能な負例を捏造しない）。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    func_start = source.index("def load_pinned_dataset_split_manifest(")
+    later_def_positions = [
+        m_.start() for m_ in re.finditer(r"\ndef ", source) if m_.start() > func_start
+    ]
+    func_end = later_def_positions[0] if later_def_positions else len(source)
+    body = source[func_start:func_end]
+    assert "canonical N" in body
+    assert "_DATASET_SPLIT_EXPECTED_ROW_COUNTS.values()" in body
+    doc_end = source.index('    effective_contract_path = (\n', func_start)
+    docstring = source[func_start:doc_end]
+    assert "束縛ではなく" in docstring
+    assert "sanity" in docstring
+    assert "再入条件" in docstring
+    assert "machine_promotion_condition" in docstring
+
+
+def test_pin2r8_fix8_docstring_cites_three_binding_layers_and_stale_history() -> None:
+    """docstring が3層構造（build時/取得時/独立再現）と、第4-6巡時点の
+    不正確な「構造的に束縛される」宣言が履歴として保持されていることを
+    確認する。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    func_start = source.index("def load_pinned_dataset_split_manifest(")
+    doc_end = source.index('    effective_contract_path = (\n', func_start)
+    docstring = source[func_start:doc_end]
+    assert "build 時" in docstring
+    assert "取得時" in docstring
+    assert "独立再現" in docstring
+    assert "build_practice_split_manifest()" in docstring
+    assert "practice_split_builder.py:198" in docstring
+    assert "〔履歴:" in docstring
+    assert "正直性是正" in docstring
+
+
+# ---------------------------------------------------------------------------
 # RUN9-L0-PIN-2: learning recipe 裁定値の境界値回帰（User 裁定 2026-08-25
 # を validate_learning_recipe_manifest() が厳密強制することの直接確認 —
 # 上記 Fix 7/15/17 系の型検証テストとは別に、裁定値そのものの境界を
