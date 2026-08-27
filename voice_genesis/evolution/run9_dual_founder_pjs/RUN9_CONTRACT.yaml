@@ -1976,8 +1976,42 @@ founder_genome_shas:
 # 完了することも実測で確認した。旧値（第8世代、第7巡対応時点）は履歴として
 # 保持する:
 #   a356c5bc1073a04c824479cb6ea1a66534f61b699103a2bc0083c5b7b7a8d16c
+#
+# 〔第10世代 repin, 2026-08-27, PR #329 第9巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用2件、いずれも P1。どちらも第9世代 repin（§19 Fix
+# 21「backup/staging 名の決定論化」）が導入した退行の是正——決定論名化
+# 自体の狙いは誤りではなかったが、その生成方式に新たな穴が残っていた）。
+# (1) 固定 staging 名を並行 publish する2プロセスが共有し、片方が他方の
+# staging バイトを黙って差し替えて偽成功（hash A を報告しつつ実体は B を
+# publish）し得た穴を、`_atomic_write_bytes()` の staging 生成を
+# `os.open(..., O_CREAT|O_EXCL|O_NOFOLLOW, 0o644)` の排他生成へ変更して
+# 閉鎖（採用1, P1）——決定論名は維持し、既存 staging は `EEXIST` で
+# fail-closed 拒否する。(2) `--out` の staging/backup 派生パス
+# （`<out>.h3b-staging`/`<out>.h3b-backup`）自体が保護ファイルへの
+# symlink/hardlink である場合の alias 追従を、(1) の `O_EXCL` が構造的に
+# 閉鎖することを確認したうえで、`_require_out_does_not_alias_protected_
+# paths()` の preflight 検査対象を `--out` 本体からその2派生パスへも
+# 拡張し、より早い段階で明確な理由とともに拒否できるようにした（採用2,
+# P1）。バンドル直列化バイト列・出力 JSON の直列化式・抽出式・
+# アラインメント規則はいずれも無変更——検証・公開経路のみの変更（詳細は
+# `HARNESS3B_EDUCATION_LESSON_RECORD.md` §20 参照）。builder バイト変更
+# （新値 = 29073816199d559a03c9bb5f69d0a2d513acdd862f93dfe9c22f741e55f8f519）
+# と `builder_provenance.detail_record_sha256`（§20 の pytest 全 pass 件数
+# 追記後の最終実測記録 raw sha256 =
+# 46569fc88a76110897e3c5f399cb70c032e54eda1b59117140f2a726fbffed00）を
+# 更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。system python3（pyworld 0.3.5 導入済み）による repo builder
+# 再現実行（run13、`--allow-unpinned`）で training/validation バンドルとも
+# 既 pin（run1〜run12）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、検証・公開経路のみの
+# 変更）。repin 完了後、`--allow-unpinned` を付けずに独立14回目として
+# 再実行し、`pinned_manifest_check: "PASS"`（同一 sha256）で正常完了する
+# ことも実測で確認した。旧値（第9世代、第8巡対応時点）は履歴として
+# 保持する:
+#   8ee423cbbcbaf5b9eddfc3ae424011f39aad30141dbb4b7d8e60f45d4cd8dccd
 education_technique_lesson_manifest_sha:
-  value: "8ee423cbbcbaf5b9eddfc3ae424011f39aad30141dbb4b7d8e60f45d4cd8dccd"
+  value: "88386a1eae0e2e32adf0e563eafe6e8b9ccf4bbaa653c31f3cd319bb8e1e4586"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-

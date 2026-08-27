@@ -1645,3 +1645,154 @@ run1〜run11 と同一 sha256）で正常完了することを実測で確認し
 - freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜7巡と
   同じ理由——repo builder の identity は manifest 側 `builder_provenance`
   が別途担う）。
+
+## 20. PR #329 Codex bot レビュー第9巡対応 + run13（2026-08-27）
+
+Claude 完結ルート（フェーズ1: 実装 + 検証 + 返信起草。git commit/push は
+別フェーズ）。Fable 採否判定 = 採用2件（いずれも P1）。**どちらも第8巡
+（§19 Fix 21「backup/staging 名の決定論化」）が導入した退行の是正で
+あり、正直にそう記録する**——決定論名化そのものの狙い（回復手順の
+追跡可能性）は誤りではなかったが、その生成方式（無条件 truncate 上書き）
+に新たな穴が残っていた。**抽出式・アラインメント規則・直列化・バンドル
+内容は無変更**（変更は検証・公開経路のみ、第1〜8巡と同じ不変条件）。
+
+### Fix 22（採用1, P1）: 固定 staging 名の並行 publish 競合 — O_EXCL 排他
+生成への是正
+
+§19 Fix 21 は backup/staging 名を `<final-name>.h3b-backup`/`<final-name>.
+h3b-staging` の決定論的固定名へ変更したが、staging の**生成方式**自体は
+`open(tmp_path, "wb")` の無条件 truncate 上書きのままだった。固定名 **かつ**
+無条件上書きの組み合わせは、同一最終 path（`training_path`/
+`validation_path`）へ**同時に publish しようとする2プロセス**が同一の
+固定 staging 名を共有する、という §19 時点で未検討だった新規の穴を生んで
+いた: プロセス A が staging へ書き切って fsync した直後、`os.replace()`
+する前にプロセス B が同じ staging 名へ `open(tmp_path, "wb")` して A の
+staging バイトを B のバイトで差し替え得る——A はその後 A 自身が書いた
+はずのバイトの sha256 を「publish 成功」として報告しながら、実際に
+`os.replace()` されて最終名に現れるのは B のバイトである、という偽成功
+（hash A を報告しつつ実体は B を publish）が発生し得た。
+
+- `_atomic_write_bytes()` の staging 生成を `os.open(tmp_path, os.O_CREAT
+  | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o644)` の**排他生成**へ
+  変更した。既存の staging（並行 publish の相手が埋めたもの・前回中断の
+  残骸のいずれであれ）は `FileExistsError`（`errno.EEXIST`）で fail-closed
+  拒否され、staging も backup も rename も一切行われない——stale backup
+  検出（§19）と同型のエラーメッセージ体裁（何が残っているか・3通りの
+  原因候補・回復手順への参照）を採用した。
+- 決定論名（`<final-name>.h3b-staging`）は維持する——§19 の回復手順文書
+  （中断点ごとの状態表）と整合させるため、名前自体は変えない。排他生成
+  により「同名を複数の書き手が静かに共有する」経路そのものが構造的に
+  消滅したことを `_atomic_write_bytes()`/`_staging_path_for()` の
+  docstring に明記した。
+- `publish_bundle_pair()` docstring の手動回復手順表（§19 由来）の
+  # 1 行（両 staging 書き込み完了前）を是正した——§19 時点の記述
+  「stale backup なし → 通常どおり成功」は本節の変更後は誤りになる
+  （leftover `*.h3b-staging` は次回呼び出しで `O_EXCL` により fail-closed
+  停止するようになった）ため、表を実際の挙動へ追随させた。回復コマンド
+  も「任意（rm すれば戻るが必須ではない）」から「次回成功の必須条件と
+  して rm する」へ訂正した。
+- テスト（新設）: (c) 通常ファイルが staging 名に事前配置されたケース
+  （並行 publish/残骸のシミュレーション）で `EEXIST` fail-closed +
+  既存 staging バイト無傷を確認、`publish_bundle_pair()` 経由の並行
+  publish シミュレーション（training 側 staging を先に埋めてから
+  `publish_bundle_pair()` を呼び、fail-closed + 最終名/backup とも
+  一切生成されないことを確認）、排他生成へ変更後も staging 名が事前に
+  存在しない通常経路が引き続き成功することの回帰確認。
+
+### Fix 23（採用2, P1）: staging パス自体の alias 追従 — preflight の
+検査対象拡張
+
+既存の `<output>.h3b-staging`（または `<output>.h3b-backup`）が保護
+ファイルへの symlink/hardlink である場合、旧 `open(tmp_path, "wb")` は
+symlink を追従し、または hardlink 越しに同一 inode の実バイトを書き
+換えるため、保護対象入力（split manifest・contract・consumed-inputs
+pin・spec・freeze record・pinned education lesson manifest cross-check
+closure 等）を truncate し得た。`_require_out_does_not_alias_protected_
+paths()`（第4巡新設の preflight、`--out` 本体のみを保護集合と照合）は
+`--out` の**派生パス**（staging/backup 名）自体をこれまで一切検査
+対象に含めていなかった——`--out` 本体が無害でも、攻撃者が
+`<out>.h3b-staging`/`<out>.h3b-backup` という派生名の側へ事前に保護
+ファイルへの symlink/hardlink を配置しておけば、この preflight は
+素通りしてしまう構造的な穴があった。
+
+- Fix 22 の `O_EXCL|O_NOFOLLOW` 排他生成は、既存の staging directory
+  entry が symlink/hardlink いずれの alias であっても「path が既に
+  存在する」というだけで拒否する（POSIX `open(2)`: `O_CREAT|O_EXCL` は
+  symlink の場合その指す先に一切関わらず `EEXIST` で失敗する）ため、
+  この alias 追従を書き込み時点で構造的に閉鎖することを確認した——
+  `_atomic_write_bytes()` docstring に POSIX 意味論の根拠を明記した
+  （symlink/hardlink いずれの alias 種別も「既存の同名 staging への
+  open」という単一の失敗モードに帰着する）。
+- その上で、`_resolve_output_alias_conflict()` の保護衝突 preflight の
+  検査対象に **`--out` の staging/backup 派生パス**（`_staging_path_for(
+  out_path)`/`_backup_path_for(out_path)`）も含めるよう
+  `_require_out_does_not_alias_protected_paths()` を拡張した——`--out`
+  本体だけでなく派生名が保護ファイルと衝突・alias するケースを、実際の
+  書き込み（Fix 22 の `O_EXCL` 拒否という最終防衛線）へ到達する**前**の
+  より早い段階で、明確な理由（どの候補パス・どの保護ファイルと衝突
+  したか）とともに拒否できるようにした（`extract-song`/`assemble`/
+  `probe-header` の3コマンドが共有する preflight）。
+- テスト（新設）: (a) 保護ファイルへの symlink を staging 名へ事前配置
+  → `_atomic_write_bytes()` が拒否 + 保護ファイル無傷（`O_EXCL` 単体での
+  構造的閉鎖の直接証跡）、(b) 同 hardlink → 同様に拒否 + 無傷、(d) 派生
+  パス preflight（`_require_out_does_not_alias_protected_paths()`）の
+  直接単体テスト——staging 派生パス側の alias（symlink）・backup 派生
+  パス側の alias（hardlink）それぞれを独立に確認し、`--out` 本体側の
+  既存契約（第4巡以来）が拡張後も引き続き機能することの回帰確認も
+  追加した。
+
+### 連鎖更新
+
+builder バイト変更（新値 = 下記参照）+ 本節追記に伴い、`inputs/
+education_technique_lesson_manifest.json` の `builder_provenance.
+builder_sha256`/`detail_record_sha256` を更新し、manifest raw sha256 が
+変わったため `RUN9_CONTRACT.yaml` の `education_technique_lesson_
+manifest_sha` を第10世代へ repin した（旧値 = 第9世代、第8巡対応時点の
+値。履歴は本記録 §12/§13/§14/§15/§16/§17/§18/§19 参照）。
+`pjs_consumed_inputs_manifest_sha`（`inputs/pjs_consumed_inputs_sha256.
+json`）は本節の変更で一切触れていないため無変更（本節はいずれの消費
+入力の実バイト・pin 値にも影響しない、検証・公開経路のみの変更）。
+
+### run13: repo builder（第9巡対応後）による再現実行（独立13回目）
+
+system python3（本セッションの system python3、pyworld 0.3.5 を含む
+依存関係が揃った環境）で、修正後の repo builder を workdir 展開済み
+corpus（`expanded/PJS_corpus_ver1.1`）に対し `build` サブコマンドで
+実行した。
+
+```
+$ python3 education_lesson_builder.py build \
+    --corpus-root <workdir>/expanded/PJS_corpus_ver1.1 \
+    --out-dir <workdir>/run13 \
+    --allow-unpinned
+```
+
+| バンドル | 既 pin（run1〜run12） | run13 sha256 | 一致 |
+|---|---|---|---|
+| training | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | **PASS** |
+| validation | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | **PASS** |
+
+run13 は本節の2修正（staging 排他生成 + preflight 派生パス検査拡張）が
+いずれも検証・公開経路のみに閉じており、抽出式・アラインメント・直列化・
+バンドル内容に一切影響しないことの実測証跡である——run13 は
+`--allow-unpinned` で実行した（manifest 側 `builder_provenance.
+builder_sha256`/`detail_record_sha256` を本節の builder バイト変更・本
+記録追記後の値へまだ repin していない時点での実測取得のため）。repin
+完了後、`--allow-unpinned` を付けずに（＝ CLI からは正典パスのみが使わ
+れる通常経路で）本コマンドを独立14回目として再実行し、
+`pinned_manifest_check: "PASS"`（training/validation とも run1〜run13 と
+同一 sha256）で正常完了することを実測で確認した——本節の変更が既存の
+再現実行手順に一切影響しないことの直接証跡である。
+
+### 検証結果
+
+- `ruff check .`: clean
+- `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`:
+  本節（builder_provenance.builder_sha256/detail_record_sha256 の repo
+  収載値更新、`education_technique_lesson_manifest_sha` の10世代目 repin
+  を含む）最終稿確定後に全 pass（2287 passed）。repin 後の完全正典実行
+  （`--allow-unpinned` なし、run14 相当）で `pinned_manifest_check:
+  "PASS"` を実測確認済み（本節末尾参照）。
+- freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜8巡と
+  同じ理由——repo builder の identity は manifest 側 `builder_provenance`
+  が別途担う）。

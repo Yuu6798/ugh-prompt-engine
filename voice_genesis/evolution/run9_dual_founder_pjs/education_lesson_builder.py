@@ -119,6 +119,7 @@ publish されない——`--contract-path`/`--split-manifest` のように「�
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import io
 import json
@@ -1509,7 +1510,16 @@ def _staging_path_for(path: Path) -> Path:
     死んだ場合、staging の残骸がランダム名で残り、後から見てもどの
     公開試行の残骸かファイル名からは特定できなかった。固定名にすることで
     `path` ごとに常に同一の staging ファイルへ収束する（複数世代の残骸が
-    同時に積み上がることもない）。"""
+    同時に積み上がることもない）。
+
+    **PR #329 第9巡レビュー指摘（採用1, P1）**: この固定名は
+    `_atomic_write_bytes()` により `os.open(..., O_CREAT | O_EXCL |
+    O_NOFOLLOW, ...)` で**排他生成**される——本関数はパス文字列を返す
+    だけで生成自体は行わないが、返されたパスへの実際の生成が「同名を
+    複数の書き手が無条件に共有できる」方式であってはならない、という
+    契約は `_atomic_write_bytes()` docstring が担う（第8巡時点は無条件
+    truncate 上書きだったため、同一最終 path への並行 publish が
+    staging を共有し得る退行があった）。"""
     return path.parent / f"{path.name}{_STAGING_SUFFIX}"
 
 
@@ -1535,21 +1545,99 @@ def _atomic_write_bytes(path: Path, data: bytes) -> Path:
     staging ファイル名は PR #329 第8巡レビュー指摘（限定採用, P1）により
     `tempfile.mkstemp()` のランダム名から `_staging_path_for(path)` の
     固定名へ変更した（理由は `_staging_path_for()` docstring 参照）。
-    `open(tmp_path, "wb")` は既存の同名残骸があれば truncate して上書き
-    する——staging ファイル自体は最終名へ `os.replace()` されるまで何の
-    契約も持たない使い捨ての中間物であり、残骸をそのまま上書きしても
-    データ損失は起きない（`path` の既存実バイトとは無関係）。
 
-    失敗時（`BaseException` 含む）は staging ファイルを best-effort で
-    削除してから re-raise する — `path` の既存実バイトには一切触れない。
-    複数バンドルの staging をすべて済ませてから `os.replace()` を一括
-    実行することで、呼び出し側は複数ファイルの atomic ペア公開を構築
-    できる（`publish_bundle_pair()` 参照）。
+    ### PR #329 第9巡レビュー指摘（採用1, P1）: 排他生成（O_EXCL）への
+    是正——第8巡の固定名化が導入した退行
+
+    第8巡は staging 名を固定名にしたが、生成自体は `open(tmp_path, "wb")`
+    のままだった——これは既存の同名残骸を無条件に truncate して上書きする
+    （Python の `"wb"` モードは既存ファイルへの追従込みの open、O_CREAT
+    のみで O_EXCL を伴わない）。固定名 **かつ** 無条件上書きの組み合わせは、
+    同一最終 path（`path`）へ **同時に publish しようとする2プロセス**が
+    同一の固定 staging 名を共有する、という第8巡未検討の新規の穴を生んだ:
+    プロセス A が staging へ書き切って fsync した直後、`os.replace()` する
+    前にプロセス B が同じ staging 名へ `open(tmp_path, "wb")` して**A の
+    staging バイトを B のバイトで差し替え**得る——A はその後 A 自身が書いた
+    はずのバイトの sha256（実際には既に B のバイトに置換されている）を
+    「成功」として報告しながら、実際に `os.replace()` で publish される
+    のは B のバイトである、という偽成功（hash A を報告しつつ B を publish）
+    が発生し得た。「決定論的固定名」自体が悪いのではなく（回復手順の追跡
+    可能性という第8巡の狙いは維持する価値がある）、固定名を**複数の
+    書き手が無条件に共有できてしまう**生成方式が問題だった。
+
+    本節は `open(tmp_path, "wb")` を `os.open(tmp_path, os.O_CREAT |
+    os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o644)` による**排他生成**へ
+    変更する——`tmp_path` が既に存在する場合（並行 publish の相手が
+    埋めた staging・前回中断の残骸のいずれであれ）、`open()` は無条件
+    上書きせず `FileExistsError`（`errno.EEXIST`）で失敗する。これにより
+    「同名の staging を複数の書き手が静かに共有する」という経路自体が
+    構造的に消滅する——2プロセスが同一 staging 名を奪い合う場合、片方が
+    必ず fail-closed で停止し、生き残った側だけが自身の書いたバイトを
+    確実に publish する（先着 1 プロセスの成功を後着プロセスが破壊する
+    ことはない）。
+
+    **POSIX 意味論の明記（`O_NOFOLLOW` の位置づけ）**: `O_CREAT|O_EXCL`
+    は `tmp_path` が symlink である場合、その symlink の指す先が存在
+    するか・何を指すかに一切関わらず、symlink という directory entry
+    **自体の存在だけ**で `EEXIST` 失敗する（POSIX `open(2)`: "If O_CREAT
+    and O_EXCL are set, and path names a symbolic link, open() shall fail
+    and set errno to [EEXIST], regardless of the contents of the symbolic
+    link"）——したがって `O_EXCL` 単体でも「既存 staging 名への symlink
+    追従」は原理的に起こり得ない。それでも本実装は `O_NOFOLLOW` を明示的に
+    併用する——(a) 意図を実装上も自己文書化する、(b) 将来 `O_EXCL` の
+    条件分岐だけが誤って外れる改修が入っても、symlink 追従だけは
+    `O_NOFOLLOW` が単独で防ぎ続ける、という縮退防止の2目的による。
+    既存ハードリンク（同一 inode を指す独立ディレクトリエントリ）も
+    `tmp_path` という名前自体が既に存在する以上 `O_EXCL` で等しく拒否
+    される——symlink/hardlink いずれの alias 種別も、既存の同名 staging
+    への open という単一の失敗モードに帰着する。
+
+    fail-closed 時のエラーメッセージは、原因が (a) 並行 publish の
+    競合、(b) 前回中断の残骸、(c) 保護ファイルへの symlink/hardlink alias
+    のいずれであっても人手で切り分けられるよう、3種の可能性を列挙し
+    `publish_bundle_pair()` docstring の手動回復手順表と
+    `HARNESS3B_EDUCATION_LESSON_RECORD.md` §19/§20 を参照するよう案内する
+    （stale backup 検出のエラーメッセージと同型の体裁 —
+    `publish_bundle_pair()` 冒頭の stale backup チェック参照）。
+
+    失敗時（`BaseException` 含む）は、**本呼び出しが実際に staging
+    ファイルを新規生成できた場合に限り**（= 排他生成が成功した後の
+    書き込み/fsync 失敗）、staging ファイルを best-effort で削除してから
+    re-raise する — `EEXIST` で拒否した場合は他プロセス/前回中断が残した
+    ファイルには一切触れない（削除もしない）。`path` の既存実バイトは
+    いずれの経路でも一切変更しない。複数バンドルの staging をすべて
+    済ませてから `os.replace()` を一括実行することで、呼び出し側は複数
+    ファイルの atomic ペア公開を構築できる（`publish_bundle_pair()`
+    参照）。
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = _staging_path_for(path)
     try:
-        with open(tmp_path, "wb") as f:
+        fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o644)
+    except OSError as exc:
+        if exc.errno in (errno.EEXIST, errno.ELOOP):
+            raise RuntimeError(
+                "_atomic_write_bytes(): staging file already exists and will not be reused or "
+                f"overwritten (fail-closed): {tmp_path}. This means one of: (a) another "
+                "publish_bundle_pair()/write_bundle_bytes() call for the same output path is "
+                "concurrently in flight and sharing this deterministic staging name — sharing a "
+                "fixed staging name across concurrent publishers used to let one process silently "
+                "overwrite another's already-staged bytes before either published, producing a "
+                "false-success report (hash of one process's bytes reported as published while the "
+                "other process's bytes are what actually got published; PR #329 第9巡レビュー指摘, "
+                "採用1, P1); (b) a previous publish was interrupted before completing (SIGKILL / "
+                "power loss / OOM kill / process crash) and left this staging file behind; or (c) "
+                "the path was pre-placed as a symlink/hardlink aliasing a protected file. Refusing "
+                "to proceed rather than silently sharing, following, or truncating it. If you have "
+                "confirmed no concurrent publish is genuinely in flight and this is stale debris "
+                "from an interrupted run, inspect its contents and remove it manually before "
+                "retrying — see publish_bundle_pair() docstring's manual recovery table and "
+                "HARNESS3B_EDUCATION_LESSON_RECORD.md §19/§20 for the state table and recovery "
+                "commands."
+            ) from exc
+        raise
+    try:
+        with os.fdopen(fd, "wb") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
@@ -1769,7 +1857,7 @@ def publish_bundle_pair(
 
     | # | 中断のタイミング | 観測される状態 | 次回呼び出し | 回復コマンド |
     |---|---|---|---|---|
-    | 1 | 両 staging 書き込み完了前 | `training_path`/`validation_path` とも無傷。`*.h3b-staging` が最大2本残ることがある。backup は一切存在しない | stale backup なし → 通常どおり成功 | 任意（`*.h3b-staging` を `rm` すれば残骸なしに戻るが、次回実行時に上書きされるため必須ではない） |
+    | 1 | 両 staging 書き込み完了前 | `training_path`/`validation_path` とも無傷。`*.h3b-staging` が最大2本残ることがある。backup は一切存在しない | stale backup なし、しかし **fail-closed 停止**（第9巡採用1: `_atomic_write_bytes()` が leftover `*.h3b-staging` を `O_EXCL` で検出。第8巡時点は無条件 truncate で静かに成功していたが、それ自体が並行 publish 間の偽成功を許す穴だったため第9巡で是正——本表は退行の是正後の挙動） | leftover `*.h3b-staging` を `rm` してから再実行する（第9巡以降は次回成功の必須条件——中身を確認せず消してよい: 前回試行の未完成書き込みで、いずれの最終名にも一度も rename されていない使い捨て中間物） |
     | 2 | training の `_backup_existing()` 完了後、validation の `_backup_existing()` 完了前 | `training_path` が消え `training_path.h3b-backup` に旧世代あり。`validation_path` は無傷。staging 2本とも存在 | **fail-closed 停止**（training 側 stale backup 検出） | `mv training_path.h3b-backup training_path` で旧世代を復元してから builder を再実行する |
     | 3 | 両 `_backup_existing()` 完了後、training の `os.replace(tmp, path)` 前 | 両 `*.h3b-backup` とも存在。`training_path`/`validation_path` とも消えている。staging 2本とも存在 | **fail-closed 停止** | 両方とも `mv <name>.h3b-backup <name>` で復元してから builder を再実行する |
     | 4 | training の replace 完了後、validation の replace 前 | `training_path` は新世代。`training_path.h3b-backup` に旧世代が残ったまま（未破棄）。`validation_path` は消えたまま（旧世代は `validation_path.h3b-backup`）——**新世代 training + 欠落 validation という混合状態** | **fail-closed 停止** | 推奨: 両方 backup から復元して完全ロールバック（`mv training_path.h3b-backup training_path` / `mv validation_path.h3b-backup validation_path`）してから builder を再実行する。上級者向け（非推奨）: `training_path` の sha256 が `inputs/education_technique_lesson_manifest.json` の pin 値と一致することを確認できる場合に限り、`training_path.h3b-backup` を削除し、`validation_path.h3b-staging` を `validation_path` へ手動 `mv` してから `validation_path.h3b-backup` を削除する |
@@ -1779,8 +1867,53 @@ def publish_bundle_pair(
     stale backup のフルパスを列挙する——# 2-5 の切り分けは「どちらの
     backup が存在するか」「`training_path`/`validation_path` が存在
     するか」「sha256 が pin 値と一致するか」を人手で確認すれば一意に
-    判別できる。詳細記録は `HARNESS3B_EDUCATION_LESSON_RECORD.md` §19
+    判別できる。詳細記録は `HARNESS3B_EDUCATION_LESSON_RECORD.md` §19/§20
     を正とする。
+
+    ### PR #329 第9巡レビュー指摘（採用1, P1）: 固定 staging 名の並行
+    publish 競合 — 第8巡の決定論名化が導入した退行の是正
+
+    上記の stale **backup** 検出（`_backup_path_for()` の存在確認）は
+    「同一プロセスの publish 試行が中断された」ケースを扱うが、
+    **staging** 側の生成方式自体は第8巡でも `open(tmp_path, "wb")` の
+    無条件上書きのままだった——固定名にしたことで「同一最終 path へ同時に
+    publish しようとする**別プロセス**が同一の固定 staging 名を共有し、
+    片方が他方の staging バイトを黙って差し替える」という第8巡時点で
+    未検討だった新規の穴が生まれていた（決定論名化そのものではなく、
+    それを複数の書き手が無条件に共有できる生成方式が原因——正直に言えば
+    第8巡の修正が導入した退行である）。具体的には: プロセス A が staging
+    へ書き切って fsync した直後、`os.replace()` する前にプロセス B が同じ
+    staging 名へ `open(..., "wb")` して A の staging バイトを B のバイト
+    で truncate-and-replace し得た——A はその後「hash A を publish した」
+    と報告するが、実際に `os.replace()` されて最終名へ現れるのは B の
+    バイトである、という偽成功が発生し得た。
+
+    本節は `_atomic_write_bytes()` の staging 生成を `os.open(tmp_path,
+    os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o644)` の
+    **排他生成**へ変更する（詳細な理由・POSIX 意味論の根拠は
+    `_atomic_write_bytes()` docstring 参照）。決定論名は維持する
+    （第8巡の回復手順文書と整合させるため）——排他生成により「同名を
+    複数の書き手が静かに共有する」経路そのものが消える: 既存の staging
+    （並行 publish の相手が埋めたもの・前回中断の残骸のいずれであれ）は
+    `FileExistsError` で fail-closed 拒否され、staging も backup も rename
+    も一切行われない。上記の手動回復手順表（# 1 行）はこの是正後の挙動を
+    反映済み。
+
+    同一の排他生成は、既存の `<output>.h3b-staging` が保護ファイルへの
+    symlink/hardlink の場合の alias 追従（`open("wb")` が symlink を
+    追従し、または hardlink 越しに同一 inode の保護対象実バイトを
+    truncate する経路）も構造的に閉鎖する——`O_EXCL` は symlink/hardlink
+    いずれの既存 directory entry も「存在する」という理由だけで拒否し、
+    その指す先を一切 open しない（`_atomic_write_bytes()` docstring の
+    POSIX 意味論の節参照）。加えて `_require_out_does_not_alias_protected_
+    paths()`（preflight、`_resolve_output_alias_conflict()` 経由）が
+    `--out` 本体だけでなく `--out` の staging/backup 派生パス
+    （`_staging_path_for(out_path)`/`_backup_path_for(out_path)`）自体も
+    保護集合との alias 照合対象に含めるよう拡張されている——実際の書き込み
+    前に、派生名が保護ファイルと衝突・alias するケースをより早い段階で
+    明確なエラーメッセージとともに拒否する（`_atomic_write_bytes()` の
+    `O_EXCL` 拒否は最終防衛線として引き続き機能する。詳細は
+    `_require_out_does_not_alias_protected_paths()` docstring 参照）。
     """
     training_backup_path = _backup_path_for(training_path)
     validation_backup_path = _backup_path_for(validation_path)
@@ -1795,7 +1928,7 @@ def publish_bundle_pair(
             "Refusing to proceed (fail-closed) rather than silently overwriting "
             "a backup that may still be needed to recover the last known-good "
             "generation. See the publish_bundle_pair() docstring's manual "
-            "recovery table and HARNESS3B_EDUCATION_LESSON_RECORD.md §19 "
+            "recovery table and HARNESS3B_EDUCATION_LESSON_RECORD.md §19/§20 "
             "for the state table and recovery commands."
         )
 
@@ -2201,23 +2334,46 @@ def _resolve_output_alias_conflict(
 def _require_out_does_not_alias_protected_paths(
     out_path: Path, protected_paths: Sequence[Path], *, context: str,
 ) -> None:
-    """`out_path` が `protected_paths`（当該曲の消費3入力・split
-    manifest・contract・consumed-inputs pin ファイル・spec 等、コマンドが
-    これから読む/読んだ全入力）のいずれとも同一実体でないことを、
-    **読み取り前の preflight として** 検証する（PR #329 第4巡レビュー
-    指摘, P1, 採用対応）。1件でも衝突すれば `ExtractorStopError` で即座に
-    拒否し、以降の読み取り・decode・書き込みは一切実行しない——`--out` が
-    corpus 入力や pin 済み manifest を指す（直接指定・symlink 経由の
-    alias いずれも）ことで、抽出後の JSON 書き込みが pin 済み入力を
-    破壊する経路を書き込み前に閉じる。"""
-    conflict = _resolve_output_alias_conflict(out_path, protected_paths)
-    if conflict is not None:
-        raise ExtractorStopError(
-            f"{context}: --out ({out_path}) resolves to the same file as a protected input path "
-            f"({conflict}), resolved={out_path.resolve()}, lexical={_lexical_absolute_path(out_path)} "
-            "— fail-closed 拒否（pin 済み corpus 入力・split manifest・contract・consumed-inputs "
-            "pin ファイル等への破壊的書き込みは、直接指定・symlink 経由の alias いずれも拒否する）"
-        )
+    """`out_path` **とその staging/backup 派生パス**が `protected_paths`
+    （当該曲の消費3入力・split manifest・contract・consumed-inputs pin
+    ファイル・spec 等、コマンドがこれから読む/読んだ全入力）のいずれとも
+    同一実体でないことを、**読み取り前の preflight として** 検証する
+    （PR #329 第4巡レビュー指摘, P1, 採用対応）。1件でも衝突すれば
+    `ExtractorStopError` で即座に拒否し、以降の読み取り・decode・書き込み
+    は一切実行しない——`--out` が corpus 入力や pin 済み manifest を指す
+    （直接指定・symlink 経由の alias いずれも）ことで、抽出後の JSON
+    書き込みが pin 済み入力を破壊する経路を書き込み前に閉じる。
+
+    **PR #329 第9巡レビュー指摘（採用2, P1）で拡張**: 実際の書き込みは
+    `out_path` 自体ではなく `write_bundle_bytes()`/`_atomic_write_bytes()`
+    が生成する **`_staging_path_for(out_path)`**（`<out>.h3b-staging`。
+    `publish_bundle_pair()` 経由の場合はさらに `_backup_path_for(out_path)`
+    = `<out>.h3b-backup` も）へ実際に触れる——`out_path` 本体だけを
+    protected_paths と照合しても、攻撃者が `<out>.h3b-staging`/`<out>.
+    h3b-backup` という**派生名の側**へ事前に保護ファイルへの symlink/
+    hardlink を配置しておけば、この preflight は `out_path` 自体には
+    衝突がないため素通りしてしまう（実際の破壊は `_atomic_write_bytes()`
+    の `O_EXCL` 排他生成が最終防衛線として拒否するが、そこに到達する前の
+    より早い段階で明確な理由とともに拒否できることが望ましい）。本関数は
+    `out_path` 本体に加え、その2つの派生パスも独立の候補として
+    `_resolve_output_alias_conflict()` へ渡し、いずれか1つでも
+    `protected_paths` のいずれかと衝突すれば拒否する。"""
+    candidates: Tuple[Tuple[str, Path], ...] = (
+        ("--out", out_path),
+        ("--out staging 派生パス (_staging_path_for)", _staging_path_for(out_path)),
+        ("--out backup 派生パス (_backup_path_for)", _backup_path_for(out_path)),
+    )
+    for candidate_label, candidate_path in candidates:
+        conflict = _resolve_output_alias_conflict(candidate_path, protected_paths)
+        if conflict is not None:
+            raise ExtractorStopError(
+                f"{context}: {candidate_label} ({candidate_path}) resolves to the same file as a "
+                f"protected input path ({conflict}), resolved={candidate_path.resolve()}, "
+                f"lexical={_lexical_absolute_path(candidate_path)} — fail-closed 拒否（pin 済み "
+                "corpus 入力・split manifest・contract・consumed-inputs pin ファイル等への破壊的"
+                "書き込みは、--out 本体・その staging/backup 派生パスいずれも、直接指定・symlink/"
+                "hardlink 経由の alias いずれも拒否する）"
+            )
 
 
 def _pinned_education_lesson_manifest_cross_check_paths(*, contract_path: Path) -> List[Path]:

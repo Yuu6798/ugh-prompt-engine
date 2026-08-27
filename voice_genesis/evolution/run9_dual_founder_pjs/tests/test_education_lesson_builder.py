@@ -1743,6 +1743,176 @@ def test_harness3b_publish_bundle_pair_stale_backup_error_names_both_paths(
 
 
 # ---------------------------------------------------------------------------
+# PR #329 第9巡 Codex bot レビュー対応（採用2件、いずれも P1、第8巡の
+# 決定論固定名化が導入した退行の是正）:
+#   採用1: `_atomic_write_bytes()` の staging 生成を O_EXCL|O_NOFOLLOW の
+#          排他生成へ変更——固定名を並行 publish が黙って共有する経路を
+#          閉鎖する。
+#   採用2: `_require_out_does_not_alias_protected_paths()` の preflight を
+#          `--out` 本体に加えその staging/backup 派生パスへも拡張する。
+# ---------------------------------------------------------------------------
+
+
+def test_harness3b_atomic_write_bytes_rejects_preexisting_plain_staging_file(
+    tmp_path: Path,
+) -> None:
+    """(c) 通常ファイルが staging 名に事前配置されている場合（並行 publish
+    または前回中断の残骸のシミュレーション）: `_atomic_write_bytes()` は
+    無条件 truncate 上書きせず `RuntimeError`（EEXIST 由来）で fail-closed
+    停止する。既存の staging バイトも書き込み先の `path` も無傷のまま
+    残る。"""
+    path = tmp_path / "training_bundle.json"
+    staging = tmp_path / "training_bundle.json.h3b-staging"
+    staging.write_bytes(b'{"gen":"someone-elses-in-flight-staging"}\n')
+
+    with pytest.raises(RuntimeError, match="staging file already exists"):
+        elb._atomic_write_bytes(path, b'{"gen":"mine"}\n')  # noqa: SLF001
+
+    # the pre-existing staging bytes are untouched (not silently replaced),
+    # and the final path was never created/touched.
+    assert staging.read_bytes() == b'{"gen":"someone-elses-in-flight-staging"}\n'
+    assert not path.exists()
+
+
+def test_harness3b_atomic_write_bytes_rejects_symlink_at_staging_name_to_protected_file(
+    tmp_path: Path,
+) -> None:
+    """(a) 保護ファイルへの symlink が staging 名に事前配置されている場合:
+    `_atomic_write_bytes()` は symlink を追従して保護ファイルを truncate
+    せず、`O_EXCL|O_NOFOLLOW` により fail-closed で拒否する。保護ファイル
+    の実バイトは無傷のまま残る。"""
+    protected = tmp_path / "protected_input.json"
+    protected.write_bytes(b'{"protected":"do-not-touch"}\n')
+    path = tmp_path / "training_bundle.json"
+    staging = tmp_path / "training_bundle.json.h3b-staging"
+    staging.symlink_to(protected)
+
+    with pytest.raises(RuntimeError, match="staging file already exists"):
+        elb._atomic_write_bytes(path, b'{"gen":"attacker-controlled"}\n')  # noqa: SLF001
+
+    assert protected.read_bytes() == b'{"protected":"do-not-touch"}\n'
+    assert not path.exists()
+
+
+def test_harness3b_atomic_write_bytes_rejects_hardlink_at_staging_name_to_protected_file(
+    tmp_path: Path,
+) -> None:
+    """(b) 保護ファイルへの既存ハードリンクが staging 名に事前配置されて
+    いる場合: symlink とは異なり同一 inode を指す独立ディレクトリエント
+    リだが、`O_EXCL` は「path が既に存在する」ことのみで拒否するため
+    hardlink であっても等しく fail-closed で拒否される。保護ファイルの
+    実バイトは無傷のまま残る。"""
+    protected = tmp_path / "protected_input.json"
+    protected.write_bytes(b'{"protected":"do-not-touch"}\n')
+    path = tmp_path / "training_bundle.json"
+    staging = tmp_path / "training_bundle.json.h3b-staging"
+    os.link(protected, staging)
+
+    with pytest.raises(RuntimeError, match="staging file already exists"):
+        elb._atomic_write_bytes(path, b'{"gen":"attacker-controlled"}\n')  # noqa: SLF001
+
+    assert protected.read_bytes() == b'{"protected":"do-not-touch"}\n'
+    assert staging.read_bytes() == b'{"protected":"do-not-touch"}\n'
+    assert not path.exists()
+
+
+def test_harness3b_atomic_write_bytes_succeeds_when_no_staging_debris(tmp_path: Path) -> None:
+    """回帰確認: staging 名が事前に何も存在しない通常経路は、排他生成へ
+    変更した後も引き続き成功する（`_staging_path_for()` と同じ固定名で
+    生成し、`path` 自体は生成しない）。"""
+    path = tmp_path / "assembled.json"
+    tmp = elb._atomic_write_bytes(path, b'{"gen":"new"}\n')  # noqa: SLF001
+    assert tmp == tmp_path / "assembled.json.h3b-staging"
+    assert tmp.read_bytes() == b'{"gen":"new"}\n'
+    assert not path.exists()
+
+
+def test_harness3b_publish_bundle_pair_concurrent_staging_collision_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """並行 publish シミュレーション: プロセス B が先に training 側の
+    staging を埋めた（fsync 済みだが未 replace）状態を模擬してから、
+    プロセス A に相当する `publish_bundle_pair()` 呼び出しを行う——A は
+    B の staging を黙って上書きせず fail-closed で停止し、いずれの
+    最終名・stale backup も一切生成しない（第8巡時点は無条件 truncate で
+    A が B の staging を差し替えて publish し得た——本テストはその退行が
+    是正されたことの直接証跡）。"""
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+    concurrent_staging = tmp_path / "training_bundle.json.h3b-staging"
+    concurrent_staging.write_bytes(b'{"gen":"concurrent-process-B-in-flight"}\n')
+
+    with pytest.raises(RuntimeError, match="staging file already exists"):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"process-A"}\n',
+            validation_path, b'{"gen":"process-A"}\n',
+        )
+
+    # process B's in-flight staging bytes were not overwritten by A, and
+    # neither final path nor any backup was created by A.
+    assert concurrent_staging.read_bytes() == b'{"gen":"concurrent-process-B-in-flight"}\n'
+    assert not training_path.exists()
+    assert not validation_path.exists()
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p != concurrent_staging)
+    assert leftovers == []
+
+
+def test_harness3b_require_out_does_not_alias_protected_paths_checks_staging_derivative(
+    tmp_path: Path,
+) -> None:
+    """(d) 派生パス preflight の直接単体テスト: `--out` 自体は無害でも、
+    その `_staging_path_for(out_path)`（`<out>.h3b-staging`）が symlink 経由
+    で保護ファイルと同一実体を指す場合、`_require_out_does_not_alias_
+    protected_paths()` は書き込み前に `ExtractorStopError` で拒否する。"""
+    protected = tmp_path / "protected_input.json"
+    protected.write_bytes(b"protected-bytes")
+    out_path = tmp_path / "out.json"  # out 本体は無害・未存在
+    staging_alias = tmp_path / "out.json.h3b-staging"
+    staging_alias.symlink_to(protected)
+
+    with pytest.raises(elb.ExtractorStopError, match="staging"):
+        elb._require_out_does_not_alias_protected_paths(  # noqa: SLF001
+            out_path, [protected], context="test-context",
+        )
+    assert protected.read_bytes() == b"protected-bytes"
+
+
+def test_harness3b_require_out_does_not_alias_protected_paths_checks_backup_derivative(
+    tmp_path: Path,
+) -> None:
+    """同上、`_backup_path_for(out_path)`（`<out>.h3b-backup`）側の派生
+    パスが保護ファイルへの既存ハードリンクである場合も同様に拒否される
+    ——symlink/hardlink いずれの alias 種別も派生パス preflight の対象。"""
+    protected = tmp_path / "protected_input.json"
+    protected.write_bytes(b"protected-bytes")
+    out_path = tmp_path / "out.json"  # out 本体は無害・未存在
+    backup_alias = tmp_path / "out.json.h3b-backup"
+    os.link(protected, backup_alias)
+
+    with pytest.raises(elb.ExtractorStopError, match="backup"):
+        elb._require_out_does_not_alias_protected_paths(  # noqa: SLF001
+            out_path, [protected], context="test-context",
+        )
+    assert protected.read_bytes() == b"protected-bytes"
+    assert backup_alias.read_bytes() == b"protected-bytes"
+
+
+def test_harness3b_require_out_does_not_alias_protected_paths_out_itself_still_checked(
+    tmp_path: Path,
+) -> None:
+    """回帰確認: 派生パスの追加検査を導入した後も、`--out` 本体が保護
+    ファイルと直接 alias するケース（第4巡以来の既存契約）は引き続き
+    拒否される。"""
+    protected = tmp_path / "protected_input.json"
+    protected.write_bytes(b"protected-bytes")
+
+    with pytest.raises(elb.ExtractorStopError, match="--out"):
+        elb._require_out_does_not_alias_protected_paths(  # noqa: SLF001
+            protected, [protected], context="test-context",
+        )
+
+
+# ---------------------------------------------------------------------------
 # PR #329 第2巡 Codex bot レビュー対応: run_build() の pinned education
 # manifest 照合（P1、採用）。実コーパスなしで `_require_bundle_bytes_
 # match_pinned_manifest()` を単体検証する（`_tampered_education_manifest_
