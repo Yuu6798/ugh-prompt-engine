@@ -2011,7 +2011,7 @@ founder_genome_shas:
 # 保持する:
 #   8ee423cbbcbaf5b9eddfc3ae424011f39aad30141dbb4b7d8e60f45d4cd8dccd
 education_technique_lesson_manifest_sha:
-  value: "88386a1eae0e2e32adf0e563eafe6e8b9ccf4bbaa653c31f3cd319bb8e1e4586"
+  value: "fc01f413e3d92a679d7ace81aae7ffbcf97714ededb8de28211971efb5321b2c"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-
@@ -2067,7 +2067,16 @@ education_technique_lesson_manifest_sha:
     記述が `audio_repo_contained: false` と矛盾し、外部再取得・User 承認
     という前提を欠いていたため不正確だった。PR #329 第8巡レビュー指摘,
     採用, P2〕）。詳細記録は HARNESS3B_EDUCATION_LESSON_RECORD.md を正と
-    する。
+    する。第11世代 repin（PR #329 第10巡レビュー対応、採用2件・いずれも
+    P2）: Fix 24（「sealed_holdout の row_ids はいかなるコードパスにも
+    現れない」という従来の強すぎる記述を「件数検証・3集合非交差検証の
+    ためにのみ読まれ、決して列挙/decode/特徴抽出/出力には使われない」
+    へ是正）+ Fix 25（builder cross-check をロード時点捕捉値
+    `_BUILDER_SOURCE_SHA256_AT_LOAD` へ束縛し、ディスク実バイトとの
+    両方照合で「ロード後の差し替え」と「ロード時点から pin 不一致」を
+    区別する）。抽出式・アラインメント・直列化・バンドル内容は無変更
+    （builder バイト・detail record バイトの変更のみ、run15 で既存
+    バンドル pin との byte 一致を確認済み）。詳細 = 本記録 §21。
     〔履歴: 旧 reason（PENDING 時点）—「PJS 由来 Technique lesson 抽出
     （Technique extractor / Lesson builder、PoR §3.3。VG-L0 学習ハーネス
     相当の feature extractor）が未実装。改訂3（DESIGN_RUN9_REVISION_0.2.md）

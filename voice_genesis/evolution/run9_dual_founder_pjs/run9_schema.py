@@ -17302,6 +17302,7 @@ def load_pinned_education_lesson_manifest(
     *,
     manifest_path: Optional[Path] = None,
     contract_path: Optional[Path] = None,
+    loaded_builder_sha256: Optional[str] = None,
 ) -> Dict[str, Any]:
     """`education_technique_lesson_manifest_sha` pin の**唯一の正規消費
     経路**（`load_pinned_speaker_map_manifest()` と同型）。
@@ -17327,7 +17328,9 @@ def load_pinned_education_lesson_manifest(
         強制する（裁定文書の改変を fail-closed で拒否する）。
     (6) cross-check (b): `builder_provenance.repo_relative_path`
         （`education_lesson_builder.py`）の実バイト sha256 が
-        `builder_provenance.builder_sha256` と一致することを強制する。
+        `builder_provenance.builder_sha256` と一致することを強制する
+        （PR #329 第10巡レビュー指摘2, P2, 採用対応で挙動を拡張——下記
+        `loaded_builder_sha256` 引数の説明を参照）。
     (7) cross-check (c): `builder_provenance.spec_repo_relative_path`
         （`HARNESS3B_EXTRACTOR_SPEC.md`）の実バイト sha256 が
         `builder_provenance.spec_sha256` と一致することを強制する。
@@ -17363,6 +17366,47 @@ def load_pinned_education_lesson_manifest(
     rights 制約により repo に収載しない——本関数はそれらの存在を要求せず、
     sha256 pin 値の検証のみを行う（供給時にこの pin と実バイトを照合する
     のは呼び出し側の責務）。
+
+    **`loaded_builder_sha256`（PR #329 第10巡レビュー指摘2, P2, 採用
+    対応）**: `education_lesson_builder.py` が自身の import 時に捕捉した
+    自己ソース sha256（`education_lesson_builder._BUILDER_SOURCE_SHA256_
+    AT_LOAD`）を呼び出し元が渡すための省略可能引数。従来 cross-check (b)
+    は publish 直前にディスク上の `education_lesson_builder.py` を毎回
+    再 `read_bytes()` して pin 照合するのみだった——長時間の build
+    プロセス中に（本モジュールが import 済みで実行され続けた後で）
+    checkout 上のファイルが差し替えられても、publish 時点でディスク
+    バイトが pin 値へ戻っていれば cross-check は PASS してしまい、実際に
+    ロードされ実行され続けたコード（差し替え後の別バイト列）が pin
+    検証を経ずに publish される穴があった（逆に、正当にロード済みの pin
+    一致バイト列を publish 直前にのみ一時的に差し替えて偽 FAIL を起こす
+    ことも同型に可能だった）。
+
+    `loaded_builder_sha256` が渡された場合、cross-check (b) はディスク
+    再 hash と load 時捕捉値の**両方**を pin 値と照合し、不一致の種別を
+    区別する:
+      - load 時捕捉値が pin と不一致 → 「実際に実行され続けたコードが
+        そもそも pin と一致しない」（最も重大——ディスクが後で pin 一致
+        バイトへ戻っていても関係なく拒否する）。
+      - load 時捕捉値は pin と一致するが、ディスク実バイトが load 時
+        捕捉値と不一致 → 「ロード後に checkout 上のファイルが差し替え
+        られた」（実行中のコード自体は正しいが、ディスク状態が不審な
+        変化の証跡であるため fail-closed で拒否する）。
+      - 両方一致 → PASS。
+    省略時（`None`、既定値）は従来どおりディスク実バイトのみを pin 値と
+    照合する（後方互換——`education_lesson_builder.py` を経由しない直接
+    呼び出しやテスト層の単体呼び出しでこの引数を渡さない場合に相当）。
+
+    **正直な残存窓（境界宣言）**: (i) import 前（プロセス起動〜本モジュール
+    の最初の import 実行までの間）にファイルが差し替えられた場合、
+    `_BUILDER_SOURCE_SHA256_AT_LOAD` の捕捉自体が既に差し替え後バイトを
+    読む——この窓は本機構では閉じない。(ii) `.pyc` 経由ロード時、実行中の
+    バイトコードとここで比較するソースバイトが理論上乖離し得る（通常の
+    CPython import 経路では `.py` mtime 変化で自動再コンパイルされるため
+    実務上は稀だが、機構としては未検証）。両窓とも運用（fresh checkout
+    からの起動・`.pyc` キャッシュの明示的無効化）で緩和する対象であり、
+    本機構が構造的に閉じるものではない（詳細 = `education_lesson_
+    builder.py` の `_BUILDER_SOURCE_SHA256_AT_LOAD` docstring と同型の
+    境界宣言）。
 
     戻り値は検証済み manifest dict。
     """
@@ -17439,12 +17483,64 @@ def load_pinned_education_lesson_manifest(
             f"({adjudication_pinned_sha!r}) と一致しない — 裁定文書の改変を fail-closed で拒否する"
         )
 
-    # (6)-(10) cross-check (b)-(f): builder_provenance 5点（builder 本体・
-    # spec・freeze record 現行・freeze record superseded・detail record）
-    # の実バイト sha256 照合。
     bp = data["builder_provenance"]
+
+    # (6) cross-check (b): builder 本体（education_lesson_builder.py）の
+    # 実バイト sha256 照合——PR #329 第10巡レビュー指摘2（P2、採用対応）で
+    # `loaded_builder_sha256` が渡された場合は load 時捕捉値との照合を
+    # 追加する（詳細・脅威モデル = 本関数 docstring の該当節）。builder
+    # 以外の4点（spec/freeze record 現行/superseded/detail record）は
+    # 「実行中のコード」ではなく静的な添付文書であるため、従来どおり
+    # ディスク再 hash のみで照合する（下記ループへ）。
+    builder_resolved = _resolve_repo_contained_path(
+        bp["repo_relative_path"],
+        repo_root=_EDUCATION_LESSON_REPO_ROOT,
+        field="builder_provenance.repo_relative_path",
+        context="load_pinned_education_lesson_manifest()",
+    )
+    if not builder_resolved.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): cross-check source {builder_resolved} "
+            "(builder_provenance.repo_relative_path) does not exist"
+        )
+    builder_actual_disk_sha = hashlib.sha256(builder_resolved.read_bytes()).hexdigest()
+    builder_expected_sha = bp["builder_sha256"]
+    if loaded_builder_sha256 is None:
+        # 後方互換経路（既定）: ディスク実バイトのみを pin 値と照合する。
+        if builder_actual_disk_sha != builder_expected_sha:
+            raise Run9ValidationError(
+                f"load_pinned_education_lesson_manifest(): {builder_resolved} の実バイト sha256 "
+                f"({builder_actual_disk_sha!r}) が builder_provenance.builder_sha256 pin 値 "
+                f"({builder_expected_sha!r}) と一致しない — 改変を fail-closed で拒否する"
+            )
+    else:
+        # PR #329 第10巡レビュー指摘2（P2、採用対応）: builder pin をロード
+        # 済みコードへ束縛する。load 時捕捉値・ディスク実バイトの両方を
+        # pin と照合し、不一致の種別を区別する（docstring 参照）。
+        if loaded_builder_sha256 != builder_expected_sha:
+            raise Run9ValidationError(
+                "load_pinned_education_lesson_manifest(): education_lesson_builder.py の"
+                f"ロード時点捕捉 sha256 ({loaded_builder_sha256!r}) が "
+                f"builder_provenance.builder_sha256 pin 値 ({builder_expected_sha!r}) と一致しない "
+                "— 実際にロードされ実行され続けたコードが pin と一致しない（ディスク上の現在の "
+                f"バイト列 [{builder_actual_disk_sha!r}] が pin と一致するか否かに関わらず拒否 "
+                "する）— fail-closed"
+            )
+        if builder_actual_disk_sha != loaded_builder_sha256:
+            raise Run9ValidationError(
+                f"load_pinned_education_lesson_manifest(): {builder_resolved} の実バイト sha256 "
+                f"({builder_actual_disk_sha!r}) が education_lesson_builder.py のロード時点捕捉 "
+                f"sha256 ({loaded_builder_sha256!r}, pin={builder_expected_sha!r} と一致) と一致 "
+                "しない — ロード後に checkout 上のファイルが差し替えられた証跡として fail-closed "
+                "で拒否する（実行中のコード自体は pin と一致しているが、ディスク上の現在のバイト列 "
+                "は別物である）"
+            )
+        # load 時捕捉値・ディスク実バイトともに pin と一致 -> PASS。
+
+    # (7)-(10) cross-check (c)-(f): spec・freeze record 現行・freeze record
+    # superseded・detail record の実バイト sha256 照合（静的添付文書、
+    # ディスク再 hash のみ）。
     _cross_check_pairs = (
-        ("repo_relative_path", "builder_sha256", "builder_provenance.builder_sha256"),
         ("spec_repo_relative_path", "spec_sha256", "builder_provenance.spec_sha256"),
         (
             "freeze_record_repo_relative_path", "freeze_record_sha256",

@@ -49,16 +49,23 @@ manifest.json` の `builder_provenance.builder_sha256`
 する）で引き続き機械強制される。
 
 禁止事項（HARNESS-3b spec §7・裁定 §2 逐語、継続）:
-  - sealed_holdout row_ids はいかなるコードパスにも現れない —
-    `load_training_validation_ids()` は split manifest の
-    `row_ids.training`/`row_ids.validation` のみを読み、
-    `row_ids.sealed_holdout` は一切参照しない（PR #329 第1巡レビュー
-    指摘1, P1, 採用対応で `run9_schema.load_pinned_practice_split_
-    manifest()` 経由の pin 検証を追加してからも不変——sealed_holdout は
-    3集合非交差検証にのみ間接的に関与し、training/validation の抽出
-    対象集合には決して現れない）。`extract-song` CLI も同じ frozen
-    training∪validation 集合外の song_id（sealed_holdout 含む）を
-    decode 前に拒否する。
+  - **sealed_holdout の row_ids は件数検証・3集合非交差検証（cardinality/
+    disjointness verification）のためにのみ読まれ、列挙して WAV/lab/
+    musicxml を decode する・特徴抽出する・lesson を生成する・出力へ
+    含める、といった用途には一切使われない**（PR #329 第10巡レビュー
+    指摘1, P2, 採用対応で「いかなるコードパスにも現れない」という従来の
+    強すぎる記述を是正——`load_training_validation_ids()` は
+    `run9_schema.load_pinned_practice_split_manifest()`（3集合非交差
+    検証を含む）経由で split manifest を読む際、`row_ids.sealed_holdout`
+    を件数検証（`_PRACTICE_SPLIT_EXPECTED_COUNTS` 参照）のために実際に
+    読む——このため「一切参照しない」は不正確だった）。件数/非交差検証を
+    通過した後、`load_training_validation_ids()` の戻り値
+    `FrozenSplitPins` には training/validation のみが格納され、
+    sealed_holdout の row_ids は呼び出し元へ一切伝播しない（下記
+    `FrozenSplitPins` 定義参照）——**sealed_holdout row_ids に触れる
+    コードは本ファイル中この1関数のみ**であり、その用途は件数検証の
+    みである。`extract-song` CLI も同じ frozen training∪validation
+    集合外の song_id（sealed_holdout 含む）を decode 前に拒否する。
   - advisory 6 channel（vibrato/breath_placement/release_persistence/
     terminal_mel_persistence/HNR/vowel_drift）のコードパスを実装しない。
   - corpus 統計正規化を実装しない（energy_envelope は per-phrase 自己
@@ -166,6 +173,49 @@ except ModuleNotFoundError:
     PYWORLD_AVAILABLE = False
 
 _THIS_DIR = Path(__file__).resolve().parent
+
+# PR #329 第10巡レビュー指摘2（P2、採用対応）: builder pin をロード済み
+# コードへ束縛する。従来 `run9_schema.load_pinned_education_lesson_
+# manifest()` の builder cross-check (b) は publish 直前にディスク上の
+# 本ファイルを毎回再 `read_bytes()` して `builder_provenance.
+# builder_sha256` pin と照合するのみだった——長時間の build プロセス中に
+# （本モジュールが import 済みで実行され続けた後で）checkout 上のこの
+# ファイルが差し替えられても、publish 時点でディスクバイトが pin 値へ
+# 戻っていれば cross-check は PASS してしまい、実際にロードされ実行され
+# 続けたコード（差し替え後の別バイト列）が pin 検証を経ずに publish
+# される穴があった（逆に、正当にロード済みの pin 一致バイト列を publish
+# 直前にのみ一時的に差し替えて偽 FAIL を起こすことも同型に可能だった）。
+#
+# 対応: import 時（モジュールロード時、この行が実行される瞬間）に本
+# ファイル自身を1回 `read_bytes()` して digest を捕捉し、モジュール
+# ロード時点のスナップショットとして固定する。この後どれだけ長く
+# プロセスが走り続けても、以後ディスク上のファイルがどう書き換わっても、
+# この定数の値自体は変わらない（"photograph" 性 — module reload なしに
+# ディスク書き換えが本定数へ影響することはない）。publish 経路
+# （`_require_bundle_bytes_match_pinned_manifest()`/`_require_single_
+# split_bundle_bytes_match_pinned_manifest()`）はこの捕捉値を
+# `run9_schema.load_pinned_education_lesson_manifest(...,
+# loaded_builder_sha256=_BUILDER_SOURCE_SHA256_AT_LOAD)` として渡す——
+# run9_schema 側は pin 値との比較を「ロード時捕捉値」基準で行い、
+# ディスク実バイトとも別途照合して、不一致の種別（ロード後のディスク
+# 差し替え vs ロード時点で既に pin と不一致）をエラーメッセージで区別
+# する（詳細 = `run9_schema.load_pinned_education_lesson_manifest()`
+# docstring の `loaded_builder_sha256` 節）。
+#
+# **正直な残存窓（Python/CPython の限界、境界宣言）**:
+#   (i) import 前（プロセス起動〜本モジュールの最初の import 実行
+#       までの間）にファイルが差し替えられた場合、この捕捉自体が既に
+#       差し替え後バイトを読む——この窓は本機構では閉じない。
+#   (ii) `.pyc` 経由ロード（コンパイル済みキャッシュ）時、実行中の
+#       バイトコードとここで `read_bytes()` する `.py` ソースが理論上
+#       乖離し得る（通常の CPython import 経路では `.py` の mtime 変化
+#       で自動再コンパイルされるため実務上は稀だが、本機構がこれを
+#       機械的に検証・排除しているわけではない）。
+# 両窓とも運用（fresh checkout からの起動・`.pyc` キャッシュの明示的
+# 無効化）で緩和する対象であり、本モジュールのランタイム機構が構造的に
+# 閉じるものではない——`FrozenSplitPins`/`ConsumedInputPins` の直接構築に
+# 関する境界宣言（本ファイル冒頭「Opaque pin-verified types」節）と同型。
+_BUILDER_SOURCE_SHA256_AT_LOAD = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 # ---------------------------------------------------------------------------
 # repo-relative default paths (workdir 版は全て CLI 必須引数の絶対パスだった
@@ -337,8 +387,11 @@ class FreezeCheckError(ExtractorStopError):
 class FrozenSplitPins:
     """`load_training_validation_ids()`（canonical loader）のみが構築する
     べき不透明型。pin 検証済み training/validation row_id 集合を保持する
-    （`row_ids.sealed_holdout` はこの型に一切現れない——`load_training_
-    validation_ids()` が既に切り落として渡す）。
+    （`row_ids.sealed_holdout` はこの**型**には一切現れない——
+    `load_training_validation_ids()` は split manifest から件数/非交差
+    検証のために sealed_holdout の row_ids を一度読むが、検証後にそれを
+    切り落とし、本型のフィールドとしては保持しないため、本型を経由する
+    以降のいかなるコードにも sealed_holdout row_ids は伝播しない）。
 
     `__iter__` は `(training_ids, validation_ids)` の2-tuple を返す —
     既存の `training_ids, validation_ids = load_training_validation_ids()`
@@ -399,11 +452,17 @@ def sha256_of_file(path: Path) -> str:
 
 
 def sha256_of_self() -> str:
-    """本 builder 自身の実バイト sha256。freeze_selfcheck() のゲートには
-    使わない（モジュール docstring「freeze_selfcheck() の意味論変更」参照
-    — 本 builder 自身の identity は `inputs/education_technique_lesson_
-    manifest.json` の `builder_provenance.builder_sha256` が別途担う）。
-    レポート出力用の informational な値としてのみ提供する。"""
+    """本 builder 自身の実バイト sha256。**呼び出し時点**でディスクを
+    再 `read_bytes()` する（モジュールロード時点で固定される
+    `_BUILDER_SOURCE_SHA256_AT_LOAD` とは異なる——本関数は毎回ディスクの
+    "今" を読む informational なユーティリティであり、publish 前 pin
+    照合には使わない）。freeze_selfcheck() のゲートには使わない
+    （モジュール docstring「freeze_selfcheck() の意味論変更」参照 —
+    本 builder 自身の identity は `inputs/education_technique_lesson_
+    manifest.json` の `builder_provenance.builder_sha256` が別途担い、
+    その照合（cross-check (b)）は `_BUILDER_SOURCE_SHA256_AT_LOAD` を
+    使う——下記参照）。レポート出力用の informational な値としてのみ
+    提供する。"""
     return sha256_of_file(Path(__file__).resolve())
 
 
@@ -1967,10 +2026,18 @@ def publish_bundle_pair(
 
 
 # ---------------------------------------------------------------------------
-# split manifest reading (row_ids.training / row_ids.validation ONLY —
-# row_ids.sealed_holdout is never accessed by this function or any other
-# code path in this file, per spec §7 / 裁定 §2). PR #329 第1巡レビュー
-# 指摘1（P1、採用対応）: `run9_schema.load_pinned_practice_split_
+# split manifest reading. row_ids.training / row_ids.validation は抽出対象
+# の選定に使う。row_ids.sealed_holdout は本ファイル中、直下の
+# `load_training_validation_ids()` 内でのみ読まれる——目的は件数検証
+# （`_PRACTICE_SPLIT_EXPECTED_COUNTS` との照合）と、その内部で呼ぶ
+# `run9_schema.load_pinned_practice_split_manifest()` が行う3集合非交差
+# 検証のみであり、列挙して WAV/lab/musicxml を decode する・特徴抽出する
+# ・出力へ含める、といった用途には一切使われない（PR #329 第10巡レビュー
+# 指摘1, P2, 採用対応で「いかなるコードパスにも現れない」という従来の
+# 強すぎる記述を是正——sealed_holdout の row_ids はここで実際に**読む**。
+# 「現れない」のは検証後の戻り値 `FrozenSplitPins` 以降のみ、下記
+# `FrozenSplitPins` 定義参照）。per spec §7 / 裁定 §2。PR #329 第1巡
+# レビュー指摘1（P1、採用対応）: `run9_schema.load_pinned_practice_split_
 # manifest()` 経由でのみ manifest を読む（RUN9_CONTRACT.yaml
 # practice_audio_split_manifest_sha pin との read-once sha256 照合 +
 # `validate_practice_split_manifest()` の3集合非交差検証）。
@@ -2749,8 +2816,13 @@ def _require_bundle_bytes_match_pinned_manifest(
         contract_path if contract_path is not None else run9_schema.RUN9_CONTRACT_YAML_PATH
     )
     edu_contract = run9_schema.load_run9_contract_from_yaml_path(effective_contract_path)
+    # PR #329 第10巡レビュー指摘2（P2、採用対応）: builder cross-check (b)
+    # をロード時点捕捉値へ束縛する（`_BUILDER_SOURCE_SHA256_AT_LOAD`
+    # docstring・`run9_schema.load_pinned_education_lesson_manifest()`
+    # docstring 参照）。
     edu_manifest = run9_schema.load_pinned_education_lesson_manifest(
         edu_contract, manifest_path=manifest_path, contract_path=effective_contract_path,
+        loaded_builder_sha256=_BUILDER_SOURCE_SHA256_AT_LOAD,
     )
     expected_training_sha = edu_manifest["training_technique_lesson_sha256"]
     expected_validation_sha = edu_manifest["validation_technique_lesson_sha256"]
@@ -2803,8 +2875,13 @@ def _require_single_split_bundle_bytes_match_pinned_manifest(
         contract_path if contract_path is not None else run9_schema.RUN9_CONTRACT_YAML_PATH
     )
     edu_contract = run9_schema.load_run9_contract_from_yaml_path(effective_contract_path)
+    # PR #329 第10巡レビュー指摘2（P2、採用対応）: builder cross-check (b)
+    # をロード時点捕捉値へ束縛する（`_BUILDER_SOURCE_SHA256_AT_LOAD`
+    # docstring・`run9_schema.load_pinned_education_lesson_manifest()`
+    # docstring 参照）。
     edu_manifest = run9_schema.load_pinned_education_lesson_manifest(
         edu_contract, manifest_path=manifest_path, contract_path=effective_contract_path,
+        loaded_builder_sha256=_BUILDER_SOURCE_SHA256_AT_LOAD,
     )
     key = "training_technique_lesson_sha256" if split == "training" else "validation_technique_lesson_sha256"
     expected_sha256 = edu_manifest[key]

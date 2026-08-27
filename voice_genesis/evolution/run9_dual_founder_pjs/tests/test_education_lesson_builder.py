@@ -274,6 +274,145 @@ def re_escape_dot(text: str) -> str:
     return text.replace(".", r"\.")
 
 
+# ---------------------------------------------------------------------------
+# PR #329 第10巡レビュー指摘2（P2、採用対応）: builder pin をロード済み
+# コードへ束縛する — `education_lesson_builder._BUILDER_SOURCE_SHA256_
+# AT_LOAD`（モジュールロード時点の捕捉値）+
+# `run9_schema.load_pinned_education_lesson_manifest(..., loaded_
+# builder_sha256=...)`（load 時捕捉値・ディスク実バイトの両方を pin と
+# 照合し不一致の種別を区別する）のテスト。
+# ---------------------------------------------------------------------------
+
+
+def test_harness3b_builder_source_sha256_at_load_matches_module_file_bytes() -> None:
+    """`_BUILDER_SOURCE_SHA256_AT_LOAD` は import 時に捕捉した本ファイル
+    自身の実バイト sha256 であり、`sha256_of_self()`（呼び出し時点で
+    毎回再 read する informational ユーティリティ）とは異なる仕組みで
+    ある——通常運用（テスト実行中に本ファイルがディスク上で書き換わって
+    いない状態）では両者の値は一致する、という基本的な健全性を確認す
+    る。"""
+    assert elb._BUILDER_SOURCE_SHA256_AT_LOAD == hashlib.sha256(  # noqa: SLF001
+        Path(elb.__file__).resolve().read_bytes()
+    ).hexdigest()
+    assert elb._BUILDER_SOURCE_SHA256_AT_LOAD == elb.sha256_of_self()  # noqa: SLF001
+
+
+def test_harness3b_builder_source_sha256_at_load_is_photograph_not_live_read(
+    tmp_path: Path,
+) -> None:
+    """`_BUILDER_SOURCE_SHA256_AT_LOAD` はロード時点のスナップショット
+    であり、ロード後のディスク書き換えには一切追従しない（"photograph"
+    性）ことを、実ファイルとは独立の一時コピーへの動的 import で確認
+    する（実リポジトリの `education_lesson_builder.py` 自体を書き換える
+    テストは危険なため、コピーへの import で代替する——コピーも本モジュール
+    と同一のトップレベルコード（`_BUILDER_SOURCE_SHA256_AT_LOAD =
+    hashlib.sha256(Path(__file__).read_bytes()).hexdigest()`）を実行する
+    ため、検証対象の機構は同一）。"""
+    import importlib.util
+
+    copy_path = tmp_path / "education_lesson_builder_photograph_copy.py"
+    original_bytes = Path(elb.__file__).resolve().read_bytes()
+    copy_path.write_bytes(original_bytes)
+    expected_sha = hashlib.sha256(original_bytes).hexdigest()
+
+    module_name = "education_lesson_builder_photograph_copy"
+    spec = importlib.util.spec_from_file_location(module_name, copy_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+        assert module._BUILDER_SOURCE_SHA256_AT_LOAD == expected_sha  # noqa: SLF001
+
+        # ロード後にディスク上のコピーを書き換えても、既にロード済みの
+        # モジュール属性の値は変化しない（module reload なしにディスク
+        # 書き換えが本定数へ影響することはない）。
+        copy_path.write_bytes(original_bytes + b"\n# tampered after load\n")
+        assert hashlib.sha256(copy_path.read_bytes()).hexdigest() != expected_sha
+        assert module._BUILDER_SOURCE_SHA256_AT_LOAD == expected_sha  # noqa: SLF001
+    finally:
+        sys.modules.pop(module_name, None)
+
+
+def test_harness3b_load_pinned_education_lesson_manifest_loaded_sha_mismatch_from_start_rejected(
+    contract: m.Run9RunContract,
+) -> None:
+    """`loaded_builder_sha256` が pin と最初から一致しない場合（実際に
+    ロードされ実行され続けたコードそのものが pin と違う）を拒否する
+    ことを確認する——本テストは実ファイルのディスクバイトには一切触れ
+    ない（ディスクは常に pin と一致したままでも、ロード時捕捉値の不一致
+    だけで独立して拒否されることの直接証跡）。"""
+    with pytest.raises(m.Run9ValidationError, match="ロード時点捕捉"):
+        m.load_pinned_education_lesson_manifest(
+            contract, loaded_builder_sha256="0" * 64,
+        )
+
+
+def test_harness3b_load_pinned_education_lesson_manifest_loaded_sha_used_over_stale_disk_pin(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """publish 照合が実際に「ロード時点捕捉値」を pin 比較の基準として
+    使っていることの monkeypatch 証跡: builder_provenance.builder_sha256
+    pin を任意の合成値へ差し替え、`loaded_builder_sha256` にその同じ
+    合成値を渡した場合——ディスク上の実際の `education_lesson_
+    builder.py` の実バイトは pin 値と一致しないままだが——cross-check
+    (b) はまずロード時捕捉値と pin の一致を確認して先へ進み、続いて
+    ディスク実バイトとロード時捕捉値の不一致（ロード後の差し替え相当）
+    を検出する、という2段階の挙動を経由することを確認する（両エラー
+    メッセージがそれぞれの段階に固有の文言を含むことで、単純な「disk
+    hash が pin と違う」旧経路ではなく新しい2段階経路を通ったことを
+    区別する）。"""
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["builder_provenance"]["builder_sha256"] = "1" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_education_manifest_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    # ロード時捕捉値 = pin 値（"1"*64）と一致させる——ディスク実バイトは
+    # 実ファイルのままなので pin とは一致しない。もし実装が誤って
+    # ディスク実バイトのみを見ていれば、このケースは「ロード後の差し替え」
+    # 文言ではなく単純な pin 不一致で失敗するはず。
+    with pytest.raises(m.Run9ValidationError, match="ロード後に checkout 上のファイルが差し替え"):
+        m.load_pinned_education_lesson_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+            loaded_builder_sha256="1" * 64,
+        )
+
+
+def test_harness3b_load_pinned_education_lesson_manifest_loaded_and_disk_both_match_pin_passes(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """load 時捕捉値・ディスク実バイトの両方が pin 値と一致するケースは
+    PASS することを確認する（`builder_provenance.repo_relative_path` を
+    repo 内の一時 fixture ファイルへ差し替え、そのファイルの実バイトへ
+    pin/loaded_builder_sha256 の両方を合わせる——実際の
+    `education_lesson_builder.py` 自体は書き換えない）。"""
+    fixture_rel_path = (
+        "voice_genesis/evolution/run9_dual_founder_pjs/"
+        "_tmp_h3b_loaded_disk_both_match_fixture.bin"
+    )
+    fixture_abs_path = elb._THIS_DIR / "_tmp_h3b_loaded_disk_both_match_fixture.bin"  # noqa: SLF001
+    fixture_bytes = b"loaded-and-disk-both-match-pin-v1\n"
+    fixture_abs_path.write_bytes(fixture_bytes)
+    fixture_sha = hashlib.sha256(fixture_bytes).hexdigest()
+    try:
+        def _mutate(data: Dict[str, Any]) -> None:
+            data["builder_provenance"]["repo_relative_path"] = fixture_rel_path
+            data["builder_provenance"]["builder_sha256"] = fixture_sha
+
+        tampered_contract, manifest_path, contract_path = _tampered_education_manifest_contract(
+            contract, tmp_path, mutate=_mutate,
+        )
+        data = m.load_pinned_education_lesson_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+            loaded_builder_sha256=fixture_sha,
+        )  # must not raise
+        assert data["schema"] == m.SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST
+    finally:
+        fixture_abs_path.unlink(missing_ok=True)
+
+
 def test_harness3b_builder_provenance_repo_relative_path_absolute_rejected(
     contract: m.Run9RunContract, tmp_path: Path,
 ) -> None:

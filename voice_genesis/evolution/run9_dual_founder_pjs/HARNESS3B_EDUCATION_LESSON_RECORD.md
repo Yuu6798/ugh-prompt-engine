@@ -185,12 +185,22 @@ workdir `education_lesson_extractor.py` の履歴的 sha256（`ba972ba7...`、
 `run9_schema.load_pinned_education_lesson_manifest()` が実バイト sha256
 と照合する（下記 §9）。
 
-sealed_holdout row_ids はいかなるコードパスにも現れない
-（`load_training_validation_ids()` は `row_ids.training`/
-`row_ids.validation` のみ参照）。advisory 6 channel のコードパスは実装
-していない。corpus 統計正規化は実装していない。librosa import なし、
-svp_rpe/voice_genesis の実装モジュール import なし（定数は Read による
-転記のみ）。
+sealed_holdout の row_ids は件数検証・3集合非交差検証（cardinality/
+disjointness verification）のためにのみ読まれ、列挙して WAV/lab/
+musicxml を decode する・特徴抽出する・lesson を生成する・出力へ含める、
+といった用途には一切使われない（PR #329 第10巡レビュー指摘1, P2, 採用
+対応で「いかなるコードパスにも現れない」という従来の記述を是正——
+`load_training_validation_ids()` は `run9_schema.load_pinned_practice_
+split_manifest()`（3集合非交差検証を含む）経由で split manifest を読む
+際、`row_ids.sealed_holdout` を件数検証のために実際に読む。件数/非交差
+検証を通過した後、戻り値 `FrozenSplitPins` には `row_ids.training`/
+`row_ids.validation` のみが格納され、sealed_holdout の row_ids は呼び
+出し元へ一切伝播しない——sealed_holdout row_ids に触れるコードは
+`education_lesson_builder.py` 中この1関数のみであり、その用途は件数/
+非交差検証のみである）。advisory 6 channel のコードパスは実装していない。
+corpus 統計正規化は実装していない。librosa import なし、svp_rpe/
+voice_genesis の実装モジュール import なし（定数は Read による転記の
+み）。
 
 **pyworld のオプショナル import 化**（パス解決・CLI 化に付随する適応、
 抽出式は無変更）: 本リポジトリの標準テスト/lint 環境には pyworld が
@@ -261,9 +271,21 @@ repo への書き込みは一切なし（この検証は Read-only 実行）。
 ## 10. 禁止事項の遵守確認
 
 - sealed_holdout 15 曲: `education_lesson_extractor.py`（workdir 版）/
-  `education_lesson_builder.py`（repo canonical builder）/
+  `education_lesson_builder.py`（repo canonical builder、本節記述時点）/
   `run_batch_extract.py` のどのコードパスにも sealed_holdout の row_id は
   現れない。decode/特徴抽出/lesson 生成/試聴は一切行っていない。
+  **【第10巡追記・是正】**: 本節は §12（Fix 1、第1巡レビュー対応）が
+  `load_training_validation_ids()` へ件数検証（`_PRACTICE_SPLIT_EXPECTED_
+  COUNTS`、training/validation/sealed_holdout の3集合カウントを split
+  manifest 実体から機械強制）を導入する**前**の baseline 時点の記述で
+  あり、その時点では文字通り正確だった。Fix 1 以降（現行実装）は
+  sealed_holdout の row_ids を件数検証・3集合非交差検証のためにのみ
+  読む——decode/特徴抽出/lesson 生成/出力に使うことは変わらず一切ない
+  が、「どのコードパスにも row_id が現れない」という本行の記述は Fix 1
+  以降の現行実装とは一致しない（PR #329 第10巡レビュー指摘1, P2, 採用
+  対応。正確な現行の記述 = `education_lesson_builder.py` module
+  docstring「禁止事項」節、および上記「sealed_holdout row_ids は
+  ...」段落参照。過去の記録を書き換えず、この追記のみで正直に訂正する）。
 - advisory 6 channel（vibrato/breath_placement/release_persistence/
   terminal_mel_persistence/HNR/vowel_drift）のコードパスは実装していない。
 - corpus 統計正規化は実装していない（energy_envelope は per-phrase 自己
@@ -1796,3 +1818,193 @@ builder_sha256`/`detail_record_sha256` を本節の builder バイト変更・�
 - freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜8巡と
   同じ理由——repo builder の identity は manifest 側 `builder_provenance`
   が別途担う）。
+
+## 21. PR #329 Codex bot レビュー第10巡対応 + run15（2026-08-27）
+
+Claude 完結ルート（フェーズ1: 実装 + 検証 + 返信起草。git commit/push は
+別フェーズ）。Fable 採否判定 = 採用2件（いずれも P2）。**抽出式・
+アラインメント規則・直列化・バンドル内容は無変更**（変更は正直な記述の
+是正 + 検証経路のみ、第1〜9巡と同じ不変条件）。**本巡でレビュー対応の
+上限10巡に到達した——以後は同一領域の指摘に対し、CLAUDE.md「bot レビュー
+対応の運用」節の3分類（実コード被害/将来汚染・致命的バグ）に該当する
+新しい具体的な経路を示す指摘のみを採用し、他は境界宣言で止める運用へ
+移行する**（本節末尾も参照）。
+
+### Fix 24（採用1, P2）: 「sealed ID は一切読まれない」主張の正直是正
+
+`load_training_validation_ids()`（`education_lesson_builder.py`）は
+split manifest の件数検証（training 70 / validation 15 / sealed_holdout
+15）のために `row_ids.sealed_holdout` を実際に読んでいた（
+`_PRACTICE_SPLIT_EXPECTED_COUNTS` との照合、第1巡 Fix 1 で導入済み）に
+もかかわらず、module docstring・当該関数上部コメント・
+`FrozenSplitPins` docstring・本記録 §0/§10 の一部が「sealed_holdout の
+row_ids はいかなるコードパスにも現れない」「一切参照しない」という、
+実装より強い保証を謳っていた。
+
+- `education_lesson_builder.py`: module docstring「禁止事項」節・
+  `load_training_validation_ids()` 直前のセクションコメント・
+  `FrozenSplitPins` docstring の3箇所を、「sealed_holdout の row_ids は
+  件数検証・3集合非交差検証（cardinality/disjointness verification）の
+  ためにのみ読まれ、列挙して decode/特徴抽出/lesson 生成/出力へ含める、
+  といった用途には一切使われない」という正確な記述へ是正した。あわせて
+  「sealed_holdout row_ids に触れるコードは本ファイル中この1関数のみ」
+  であることを明記し、件数検証を読む箇所が構造的に単一関数へ隔離済み
+  であることを宣言した（`load_training_validation_ids()` は元々この
+  検証専用の関数であり、追加のコード分割は不要だった）。
+- `run9_schema.py`（連鎖）: `_require_disjoint_row_id_sets()`（3集合
+  非交差検証）と `load_pinned_dataset_split_manifest()` の per-split
+  digest 照合節も、sealed_holdout の row_ids を件数/hash 再計算のために
+  読む——いずれも既存実装時点で単機能の小関数へ既に隔離されており（前者
+  は disjoint 検証専用、後者は dataset split manifest の digest 照合
+  専用）、構造変更は不要と判断した（Fable 設計判定: 「可能なら構造も
+  明確化」は既に構造的に満たされている箇所への追加リファクタは、
+  17,000行超の共有モジュールへの不要な変更面積を増やすだけでリスクに
+  見合わないため見送り、境界宣言として記録するのみに留める）。
+- `HARNESS3B_EDUCATION_LESSON_RECORD.md`: §0 の記述（「完全性hash・ID
+  確認以外一切処理していない」）はもともと正確（件数/ID確認自体が
+  sealed_holdout を読むことを前提とした記述）だったため無変更。§10
+  （「どのコードパスにも sealed_holdout の row_id は現れない」）は
+  Fix 1（§12、第1巡）で件数検証読み取りが導入される**前**の baseline
+  時点の記述として文字通り正確だったが、現行実装とは一致しないため、
+  過去の記録を書き換えずに追記で正直に訂正した（§10 該当行末尾参照）。
+- grep 監査（`sealed`・「いかなるコードパスにも現れない」・「一切参照
+  しない」等の同型主張文字列）で `education_lesson_builder.py`/
+  `HARNESS3B_EDUCATION_LESSON_RECORD.md`/`README.md`/`run9_schema.py`/
+  `HARNESS3B_EXTRACTOR_SPEC.md` を全数掃討した。`HARNESS3B_EXTRACTOR_
+  SPEC.md`（凍結 pin 対象、§7「sealed の row_ids はコードパス上、列挙に
+  入らない」）はスコープが「対象列挙」に限定された記述であり元々正確
+  だったため無変更（この spec ファイルを変更すると `spec_sha256` の
+  freeze record 連鎖 repin が必要になり本巡の範囲を超えるため、実害の
+  ない箇所への変更は見送った）。`README.md` の該当箇所（件数の言及・
+  「完全性hash・ID確認以外の処理を一切行っていない」）はいずれも
+  §0 と同型の正確な記述であり無変更。
+- 新設ユニットテストなし（本 Fix は記述の是正のみで、機械強制対象の
+  挙動そのものに変更はない——`_PRACTICE_SPLIT_EXPECTED_COUNTS` の件数
+  機械強制自体は既存テストで既に被覆済み）。
+
+### Fix 25（採用2, P2）: builder pin をロード済みコードへ束縛
+
+`run9_schema.load_pinned_education_lesson_manifest()` の cross-check
+(b)（`builder_provenance.builder_sha256` 照合）は従来、publish 直前に
+ディスク上の `education_lesson_builder.py` を毎回再 `read_bytes()` する
+のみだった。長時間の build プロセス中に（本モジュールが import 済みで
+実行され続けた後で）checkout 上のこのファイルが差し替えられても、
+publish 時点でディスクバイトが pin 値へ戻っていれば cross-check は
+PASS してしまい、実際にロードされ実行され続けたコード（差し替え後の
+別バイト列）が pin 検証を経ずに publish される穴があった（逆に、正当に
+ロード済みの pin 一致バイト列を publish 直前にのみ一時的に差し替えて
+偽 FAIL を起こすことも同型に可能だった）。
+
+- `education_lesson_builder.py` に module-level 定数
+  `_BUILDER_SOURCE_SHA256_AT_LOAD = hashlib.sha256(Path(__file__).
+  read_bytes()).hexdigest()` を新設した——import 時（モジュールロード
+  時点）に1回だけ本ファイル自身を read し、以後プロセスが生きている
+  限り値が変わらない "photograph" として固定する。既存の
+  `sha256_of_self()`（呼び出し時点で毎回ディスクを再読む informational
+  ユーティリティ）とは意味論が異なることを両者の docstring に明記した。
+- `run9_schema.load_pinned_education_lesson_manifest()` に省略可能
+  引数 `loaded_builder_sha256: Optional[str] = None` を新設した。渡さ
+  れた場合、cross-check (b) はロード時捕捉値・ディスク実バイトの
+  **両方**を pin 値と照合し、不一致の種別を区別する:
+  (i) ロード時捕捉値が pin と不一致 → 実際に実行され続けたコードが
+  そもそも pin と一致しない（最重大——ディスクが後で pin 一致バイトへ
+  戻っていても関係なく拒否）。(ii) ロード時捕捉値は pin と一致するが
+  ディスク実バイトが load 時捕捉値と不一致 → ロード後に checkout 上の
+  ファイルが差し替えられた証跡として拒否。(iii) 両方一致 → PASS。
+  引数省略時（`None`、既定）は従来どおりディスク実バイトのみで照合する
+  ——後方互換（テスト層の単体呼び出し等）。
+- `education_lesson_builder.py` の publish 呼び出し2箇所
+  （`_require_bundle_bytes_match_pinned_manifest()`（`run_build()` 用）
+  ・`_require_single_split_bundle_bytes_match_pinned_manifest()`
+  （`assemble` 用））を `loaded_builder_sha256=_BUILDER_SOURCE_SHA256_
+  AT_LOAD` を渡すよう更新した。
+- **正直な残存窓（境界宣言、両 docstring に明記）**: (i) import 前
+  （プロセス起動〜本モジュールの最初の import 実行までの間）にファイル
+  が差し替えられた場合、捕捉自体が既に差し替え後バイトを読む——この窓は
+  本機構では閉じない。(ii) `.pyc` 経由ロード時、実行中のバイトコードと
+  ここで比較するソースバイトが理論上乖離し得る（通常の CPython import
+  経路では `.py` の mtime 変化で自動再コンパイルされるため実務上は稀
+  だが、本機構がこれを機械的に検証・排除しているわけではない）。両窓
+  とも運用（fresh checkout からの起動・`.pyc` キャッシュの明示的無効化）
+  で緩和する対象であり、本機構が構造的に閉じるものではない。
+- 新設ユニットテスト（5件、`tests/test_education_lesson_builder.py`）:
+  (a) `_BUILDER_SOURCE_SHA256_AT_LOAD` が本ファイル実バイトの sha256と
+  一致する健全性確認、(b) 独立コピーへの動的 import で "photograph" 性
+  （ロード後のディスク書き換えに追従しないこと）を確認、(c)
+  `loaded_builder_sha256` が pin と最初から不一致な場合の拒否、(d)
+  pin と `loaded_builder_sha256` を一致させた合成値のもとで実ディスク
+  （実ファイル）が食い違う場合に「ロード後の差し替え」文言で拒否される
+  （2段階検証の monkeypatch 証跡）、(e) `builder_provenance.repo_
+  relative_path` を repo 内一時 fixture へ差し替え、load 時捕捉値・
+  ディスク実バイトの両方を pin と一致させたケースが PASS することを
+  確認。
+
+### 連鎖更新
+
+builder バイト変更（Fix 24 のコメント是正 + Fix 25 の
+`_BUILDER_SOURCE_SHA256_AT_LOAD` 新設・呼び出し2箇所更新）+ 本節追記に
+伴い、`inputs/education_technique_lesson_manifest.json` の
+`builder_provenance.builder_sha256`/`detail_record_sha256` を更新し、
+manifest raw sha256 が変わったため `RUN9_CONTRACT.yaml` の
+`education_technique_lesson_manifest_sha` を第11世代へ repin した
+（旧値 = 第10世代、第9巡対応時点の値。履歴は本記録 §12/§13/§14/§15/
+§16/§17/§18/§19/§20 参照）。`run9_schema.py` の
+`load_pinned_education_lesson_manifest()` シグネチャ拡張（`loaded_
+builder_sha256` 追加）は cross-check (b) の**呼び出し方**を変えるのみ
+で、抽出ロジック・manifest/contract の他フィールドには一切影響しない。
+`pjs_consumed_inputs_manifest_sha` は本節の変更で一切触れていないため
+無変更。
+
+### run15: repo builder（第10巡対応後）による再現実行（独立15回目）
+
+system python3（本セッションの system python3、pyworld 0.3.5 を含む
+依存関係が揃った環境）で、修正後の repo builder を workdir 展開済み
+corpus（`expanded/PJS_corpus_ver1.1`）に対し `build` サブコマンドで
+実行した。
+
+```
+$ python3 education_lesson_builder.py build \
+    --corpus-root <workdir>/expanded/PJS_corpus_ver1.1 \
+    --out-dir <workdir>/run15 \
+    --allow-unpinned
+```
+
+| バンドル | 既 pin（run1〜run14） | run15 sha256 | 一致 |
+|---|---|---|---|
+| training | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | **PASS** |
+| validation | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | **PASS** |
+
+run15 は本節の2修正（Fix 24 の記述是正 + Fix 25 の builder pin ロード
+時束縛）がいずれも記述/検証・公開経路のみに閉じており、抽出式・
+アラインメント・直列化・バンドル内容に一切影響しないことの実測証跡
+である——run15 は `--allow-unpinned` で実行した（manifest 側
+`builder_provenance.builder_sha256`/`detail_record_sha256` を本節の
+builder バイト変更・本記録追記後の値へまだ repin していない時点での
+実測取得のため）。repin 完了後、`--allow-unpinned` を付けずに（＝ CLI
+からは正典パスのみが使われる通常経路で）本コマンドを独立16回目として
+再実行し、`pinned_manifest_check: "PASS"`（training/validation とも
+run1〜run15 と同一 sha256）で正常完了することを実測で確認した（下記
+「検証結果」参照）——本節の変更が既存の再現実行手順に一切影響しない
+ことの直接証跡である。
+
+### 検証結果
+
+- `ruff check .`: clean
+- `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`:
+  本節（builder_provenance.builder_sha256/detail_record_sha256 の repo
+  収載値更新、`education_technique_lesson_manifest_sha` の11世代目 repin
+  を含む）最終稿確定後に全 pass。repin 後の完全正典実行（`--allow-
+  unpinned` なし、run16 相当）で `pinned_manifest_check: "PASS"` を実測
+  確認済み。
+- freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜9巡と
+  同じ理由——repo builder の identity は manifest 側 `builder_provenance`
+  が別途担う）。
+
+### 第10巡到達に伴う運用の切り替え（境界宣言）
+
+CLAUDE.md「bot レビュー対応の運用」節が定める上限10巡に本巡で到達した。
+以後、同一領域（本ファイル・`run9_schema.py` の当該関数群）への新規
+レビュー指摘は、3分類（実コード被害/将来汚染・致命的バグ）に該当する
+新しい具体的な経路を示すものに限り採用し、それ以外は境界宣言で止める
+運用へ移行する——本記録・PR タイムラインへの記載をもって運用切り替えの
+記録とする。
