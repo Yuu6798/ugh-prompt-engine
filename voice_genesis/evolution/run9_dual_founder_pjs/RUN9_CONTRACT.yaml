@@ -1814,8 +1814,27 @@ founder_genome_shas:
 # 内容は無変更——検証・公開経路のみの変更）。旧値（第2世代、第1巡対応
 # 時点）は履歴として保持する:
 #   5dc503a3728cd9620c18394998dabd5338460f73b85ccde5e96faeeccc032f6f
+#
+# 〔第4世代 repin, 2026-08-27, PR #329 第3巡 Codex bot レビュー対応〕:
+# assemble 重複ID拒否・extract_song の生 mapping 信頼閉鎖（FrozenSplitPins/
+# ConsumedInputPins 不透明型の導入）・TOCTOU 閉鎖（wav/lab/musicxml 各
+# 1回 read_bytes()）・publish_bundle_pair() backup 段の保護 try 内包・
+# assemble 単独出力の atomic 化・probe-header の凍結 split ゲートの6件を
+# 実装（いずれも P1×4/P2×2、`HARNESS3B_EDUCATION_LESSON_RECORD.md` §14
+# 参照）。builder バイト変更（新値
+# = 9a007b7543523b99d3689a4fa40383a35497422f7784050b1ca8b8d1d34e53c1）と
+# `builder_provenance.detail_record_sha256`（§14 追記後の実測記録 raw
+# sha256 = e84b23dde43bd51f15c741209e889ebdc4478b54001803b26050a64b876bd8c3）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。venv_h3b の python3 による repo builder 再現実行（run6、
+# `--allow-unpinned`）で training/validation バンドルとも既 pin
+# （run1〜run5）と byte 完全一致することを実測で確認済み（`cmp` で差分0
+# ——抽出式・アラインメント・直列化・バンドル内容は無変更、検証・公開
+# 経路のみの変更）。旧値（第3世代、第2巡対応時点）は履歴として保持する:
+#   08aa92aff93d042f1c1436cddc1732a82e726f0b078236dcc19f713ee20ba65d
 education_technique_lesson_manifest_sha:
-  value: "08aa92aff93d042f1c1436cddc1732a82e726f0b078236dcc19f713ee20ba65d"
+  value: "e30bb8e51031c423c58ff0e8e83cf90d9a81abf4da10a6c3aa372a506d4f1a33"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-

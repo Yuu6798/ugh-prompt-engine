@@ -512,6 +512,45 @@ def test_harness3b_write_bundle_json_is_deterministic_serialization() -> None:
     assert text1 == text2
 
 
+def test_harness3b_write_bundle_json_is_atomic_happy_path(tmp_path: Path) -> None:
+    """PR #329 第3巡レビュー指摘5（P2、採用対応）: `write_bundle_json()`
+    は `Path.write_bytes()` の直書きではなく `_atomic_write_bytes()` +
+    `os.replace()` を使う——正常系では従来どおり最終バイト列が書かれ、
+    staging の残骸が残らないことを確認する。"""
+    out_path = tmp_path / "assembled.json"
+    bundle = elb.assemble_bundle("training", ["pjs997"], [_synthetic_song("pjs997")], "d" * 64)
+    elb.write_bundle_json(bundle, out_path)
+    assert out_path.read_bytes() == elb._serialize_bundle_json(bundle)  # noqa: SLF001
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p != out_path)
+    assert leftovers == []
+
+
+def test_harness3b_write_bundle_json_failure_injection_leaves_old_artifact_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`write_bundle_json()` の書き込み途中失敗注入回帰テスト（PR #329
+    第3巡レビュー指摘5, P2, 採用対応の必須テスト）: staging 段
+    （`_atomic_write_bytes()`）を monkeypatch で失敗させると、旧世代
+    artifact が無傷のまま残り、staging の残骸も残らないことを確認する
+    ——`assemble` サブコマンドの単本出力が書き込み途中の失敗で破損した
+    部分書き込みバイト列に上書きされないことの直接証跡。"""
+    out_path = tmp_path / "assembled.json"
+    out_path.write_bytes(b'{"gen":"old"}\n')
+
+    def _boom(path: Path, data: bytes) -> Path:  # noqa: ARG001
+        raise RuntimeError("synthetic assemble staging failure")
+
+    monkeypatch.setattr(elb, "_atomic_write_bytes", _boom)
+
+    bundle = elb.assemble_bundle("training", ["pjs997"], [_synthetic_song("pjs997")], "d" * 64)
+    with pytest.raises(RuntimeError, match="synthetic assemble staging failure"):
+        elb.write_bundle_json(bundle, out_path)
+
+    assert out_path.read_bytes() == b'{"gen":"old"}\n'
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p != out_path)
+    assert leftovers == []
+
+
 # ---------------------------------------------------------------------------
 # freeze_selfcheck(): spec sha256 照合のみ（extractor 自己照合を行わない
 # 意味論変更 — education_lesson_builder.py モジュール docstring 参照）
@@ -542,19 +581,44 @@ def test_harness3b_freeze_selfcheck_rejects_missing_freeze_record(tmp_path: Path
 
 
 def test_harness3b_load_training_validation_ids_excludes_sealed_holdout() -> None:
-    training_ids, validation_ids = elb.load_training_validation_ids(
+    """`load_training_validation_ids()` は `FrozenSplitPins`（PR #329 第3巡
+    レビュー指摘2, P1, 採用対応で新設された不透明型）を返す ——
+    `__iter__` により `training_ids, validation_ids = ...` の unpack 慣用句
+    は引き続き成立する。"""
+    frozen_split_pins = elb.load_training_validation_ids(
         m.PRACTICE_MANIFEST_PATH,
     )
+    assert isinstance(frozen_split_pins, elb.FrozenSplitPins)
+    training_ids, validation_ids = frozen_split_pins
     assert len(training_ids) == 70
     assert len(validation_ids) == 15
-    assert training_ids == sorted(training_ids)
-    assert validation_ids == sorted(validation_ids)
+    assert list(training_ids) == sorted(training_ids)
+    assert list(validation_ids) == sorted(validation_ids)
     assert set(training_ids).isdisjoint(validation_ids)
+    assert frozen_split_pins.frozen_allowed_ids == tuple(sorted(set(training_ids) | set(validation_ids)))
     # sealed_holdout row_ids never enter this function's return value.
     split_manifest = json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
     sealed = set(split_manifest["row_ids"]["sealed_holdout"])
     assert sealed.isdisjoint(training_ids)
     assert sealed.isdisjoint(validation_ids)
+
+
+def test_harness3b_frozen_split_pins_rejects_raw_types_in_extract_song(tmp_path: Path) -> None:
+    """`extract_song()` は `FrozenSplitPins`/`ConsumedInputPins` 以外の生
+    list/dict を受理しない（PR #329 第3巡レビュー指摘2, P1, 採用対応の
+    isinstance ゲート）。"""
+    with pytest.raises(elb.ExtractorStopError, match="must be a FrozenSplitPins instance"):
+        elb.extract_song(
+            tmp_path / "pjs001", "pjs001",
+            frozen_split_pins=["pjs001"],  # type: ignore[arg-type]
+            consumed_inputs_pins=elb.ConsumedInputPins(pins={}),
+        )
+    with pytest.raises(elb.ExtractorStopError, match="must be a ConsumedInputPins instance"):
+        elb.extract_song(
+            tmp_path / "pjs001", "pjs001",
+            frozen_split_pins=elb.FrozenSplitPins(training_ids=("pjs001",), validation_ids=()),
+            consumed_inputs_pins={},  # type: ignore[arg-type]
+        )
 
 
 def test_harness3b_load_training_validation_ids_uses_pinned_default_manifest() -> None:
@@ -687,6 +751,53 @@ def test_harness3b_extract_song_cli_rejects_arbitrary_song_id(tmp_path: Path) ->
     ])
     assert rc == 2
     assert not out_path.exists()
+
+
+def test_harness3b_probe_header_cli_rejects_sealed_holdout_song_id_before_opening_wav(
+    tmp_path: Path,
+) -> None:
+    """PR #329 第3巡レビュー指摘6（P2、採用対応、凍結 split ゲート）:
+    `probe-header --song-ids` に sealed_holdout の song_id が1件でも含まれ
+    ていれば、対応する WAV が一切存在しなくても（＝WAV を open する前に）
+    decode/処理前に拒否される（裁定 §2「sealed は完全性 hash と ID 確認
+    以外の処理禁止」の遵守——header probe も「処理」に含まれる）。凍結集合
+    内の他の song_id も、sealed ID が1件混入していれば道連れで全件拒否
+    される（部分的に open してから拒否、という中途半端な状態を作らない）。
+    """
+    split_manifest = _practice_manifest_data()
+    sealed_id = sorted(split_manifest["row_ids"]["sealed_holdout"])[0]
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    out_path = tmp_path / "out.json"
+    rc = elb.main([
+        "probe-header",
+        "--corpus-root", str(tmp_path),  # empty — no WAV files present at all
+        "--song-ids", training_ids[0], sealed_id,
+        "--out", str(out_path),
+    ])
+    assert rc == 2
+    assert not out_path.exists()
+
+
+def test_harness3b_probe_header_direct_call_gate_raises_before_read_wav_fmt_header(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_cmd_probe_header()` のゲートが `read_wav_fmt_header()`（WAV を
+    open する箇所）より前に効くことを、同関数を monkeypatch して「呼ばれ
+    たら失敗させる」ことで直接確認する。"""
+
+    def _boom(path: Path) -> Dict[str, Any]:  # pragma: no cover - must not run
+        raise AssertionError("read_wav_fmt_header() must not be called for a rejected song_id batch")
+
+    monkeypatch.setattr(elb, "read_wav_fmt_header", _boom)
+    split_manifest = _practice_manifest_data()
+    sealed_id = sorted(split_manifest["row_ids"]["sealed_holdout"])[0]
+    out_path = tmp_path / "out.json"
+    args = argparse.Namespace(
+        corpus_root=str(tmp_path), song_ids=[sealed_id], split_manifest=None,
+        contract_path=None, out=str(out_path),
+    )
+    with pytest.raises(elb.ExtractorStopError, match="not a member of the pinned"):
+        elb._cmd_probe_header(args)  # noqa: SLF001
 
 
 def test_harness3b_extract_song_direct_call_gate_raises_before_extract_song() -> None:
@@ -918,6 +1029,42 @@ def test_harness3b_assemble_cli_rejects_validation_ids_under_training_split(
     assert not out_path.exists()
 
 
+def test_harness3b_assemble_cli_rejects_duplicate_song_id_in_frozen_training_request(
+    tmp_path: Path,
+) -> None:
+    """PR #329 第3巡レビュー指摘1（P1、採用対応）: 凍結 training 集合の
+    全 ID + 重複1件（凍結集合内の既存 ID をもう1回列挙）を渡すと、
+    `_require_exact_frozen_split_membership()`（内部で `set()` 化するため
+    重複を検出できない）より前に `_require_no_duplicate_song_ids()` が
+    拒否する——中間物ディレクトリが空でも decode/読み込み前に拒否される
+    ことを確認する。"""
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    requested = training_ids + [training_ids[0]]  # exact frozen set + 1 duplicate
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(requested), encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path),  # empty — no <id>.json present
+        "--out", str(out_path),
+    ])
+    assert rc == 2
+    assert not out_path.exists()
+
+
+def test_harness3b_require_no_duplicate_song_ids_rejects_duplicates() -> None:
+    with pytest.raises(elb.ExtractorStopError, match=r"duplicate song_id\(s\).*\['pjs001'\]"):
+        elb._require_no_duplicate_song_ids(  # noqa: SLF001
+            ["pjs001", "pjs002", "pjs001"], context="assemble",
+        )
+
+
+def test_harness3b_require_no_duplicate_song_ids_happy_path_does_not_raise() -> None:
+    elb._require_no_duplicate_song_ids(["pjs001", "pjs002"], context="assemble")  # noqa: SLF001
+
+
 def test_harness3b_require_exact_frozen_split_membership_error_reports_both_sides() -> None:
     """`_require_exact_frozen_split_membership()` のエラーメッセージが
     missing/unexpected の両方を報告することを直接確認する。"""
@@ -949,8 +1096,8 @@ def test_harness3b_extract_song_direct_call_rejects_id_outside_frozen_split(
     with pytest.raises(elb.ExtractorStopError, match="not a member of the pinned"):
         elb.extract_song(
             tmp_path / "pjs999_not_a_real_song", "pjs999_not_a_real_song",
-            frozen_allowed_ids=["pjs001", "pjs002"],
-            consumed_inputs_pins={},
+            frozen_split_pins=elb.FrozenSplitPins(training_ids=("pjs001", "pjs002"), validation_ids=()),
+            consumed_inputs_pins=elb.ConsumedInputPins(pins={}),
         )
 
 
@@ -966,7 +1113,9 @@ def test_harness3b_extract_song_direct_call_rejects_missing_consumed_input_pin_e
     (song_dir / "pjs001.musicxml").write_bytes(b"x")
     with pytest.raises(elb.ExtractorStopError, match="no pinned consumed-input"):
         elb.extract_song(
-            song_dir, "pjs001", frozen_allowed_ids=["pjs001"], consumed_inputs_pins={},
+            song_dir, "pjs001",
+            frozen_split_pins=elb.FrozenSplitPins(training_ids=("pjs001",), validation_ids=()),
+            consumed_inputs_pins=elb.ConsumedInputPins(pins={}),
         )
 
 
@@ -974,8 +1123,9 @@ def test_harness3b_extract_song_direct_call_rejects_consumed_input_byte_mismatch
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """消費3入力（lab/musicxml/wav）のいずれかの実バイトが pin と一致し
-    なければ decode 前に拒否される——`check_wav_header_or_stop()`
-    （decode 本体側の最初のステップ）を monkeypatch して、呼ばれたら
+    なければ decode 前に拒否される——`check_wav_header_or_stop_bytes()`
+    （decode 本体側の最初のステップ、PR #329 第3巡レビュー指摘3, P2,
+    採用対応で read-once bytes 版へ移行）を monkeypatch して、呼ばれたら
     失敗させることで「pin 照合より先に decode へ到達しない」ことを直接
     確認する。"""
     song_dir = tmp_path / "pjs001"
@@ -983,18 +1133,21 @@ def test_harness3b_extract_song_direct_call_rejects_consumed_input_byte_mismatch
     (song_dir / "pjs001_song.wav").write_bytes(b"tampered-wav-bytes")
     (song_dir / "pjs001.lab").write_bytes(b"tampered-lab-bytes")
     (song_dir / "pjs001.musicxml").write_bytes(b"tampered-musicxml-bytes")
-    consumed_inputs_pins = {
+    consumed_inputs_pins = elb.ConsumedInputPins(pins={
         "pjs001": {"lab_sha256": "0" * 64, "musicxml_sha256": "0" * 64, "wav_sha256": "0" * 64},
-    }
+    })
 
     def _boom(*_args: Any, **_kwargs: Any) -> Any:  # pragma: no cover - must not run
-        raise AssertionError("check_wav_header_or_stop() must not run before the consumed-input pin check passes")
+        raise AssertionError(
+            "check_wav_header_or_stop_bytes() must not run before the consumed-input pin check passes"
+        )
 
-    monkeypatch.setattr(elb, "check_wav_header_or_stop", _boom)
+    monkeypatch.setattr(elb, "check_wav_header_or_stop_bytes", _boom)
     with pytest.raises(elb.ExtractorStopError, match="実バイト sha256"):
         elb.extract_song(
             song_dir, "pjs001",
-            frozen_allowed_ids=["pjs001"], consumed_inputs_pins=consumed_inputs_pins,
+            frozen_split_pins=elb.FrozenSplitPins(training_ids=("pjs001",), validation_ids=()),
+            consumed_inputs_pins=consumed_inputs_pins,
         )
 
 
@@ -1012,23 +1165,75 @@ def test_harness3b_extract_song_direct_call_musicxml_only_tamper_rejected(
     (song_dir / "pjs001_song.wav").write_bytes(wav_bytes)
     (song_dir / "pjs001.lab").write_bytes(lab_bytes)
     (song_dir / "pjs001.musicxml").write_bytes(xml_bytes_tampered)
-    consumed_inputs_pins = {
+    consumed_inputs_pins = elb.ConsumedInputPins(pins={
         "pjs001": {
             "lab_sha256": hashlib.sha256(lab_bytes).hexdigest(),
             "musicxml_sha256": hashlib.sha256(b"real-musicxml-bytes").hexdigest(),
             "wav_sha256": hashlib.sha256(wav_bytes).hexdigest(),
         },
-    }
+    })
 
     def _boom(*_args: Any, **_kwargs: Any) -> Any:  # pragma: no cover - must not run
-        raise AssertionError("check_wav_header_or_stop() must not run before the consumed-input pin check passes")
+        raise AssertionError(
+            "check_wav_header_or_stop_bytes() must not run before the consumed-input pin check passes"
+        )
 
-    monkeypatch.setattr(elb, "check_wav_header_or_stop", _boom)
+    monkeypatch.setattr(elb, "check_wav_header_or_stop_bytes", _boom)
     with pytest.raises(elb.ExtractorStopError, match="musicxml_sha256"):
         elb.extract_song(
             song_dir, "pjs001",
-            frozen_allowed_ids=["pjs001"], consumed_inputs_pins=consumed_inputs_pins,
+            frozen_split_pins=elb.FrozenSplitPins(training_ids=("pjs001",), validation_ids=()),
+            consumed_inputs_pins=consumed_inputs_pins,
         )
+
+
+def test_harness3b_extract_song_reads_each_consumed_input_file_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #329 第3巡レビュー指摘3（P2、採用対応、TOCTOU 閉鎖）: `extract_
+    song()` は wav/lab/musicxml をそれぞれ `Path.read_bytes()` で1回だけ
+    読む——`Path.read_bytes` をラップして呼び出し回数をファイル単位で
+    数え、いずれも高々1回であることを直接確認する（count_mismatch 経路
+    ——decode まで到達しない最短経路——で確認: wav decode を経由しない分、
+    「1回」の主張がより厳密になる）。"""
+    song_dir = tmp_path / "pjs001"
+    song_dir.mkdir()
+    wav_bytes = b"minimal-wav-bytes"
+    lab_bytes = b"0 100 a\n"
+    xml_bytes = b"<score-partwise/>"
+    (song_dir / "pjs001_song.wav").write_bytes(wav_bytes)
+    (song_dir / "pjs001.lab").write_bytes(lab_bytes)
+    (song_dir / "pjs001.musicxml").write_bytes(xml_bytes)
+    consumed_inputs_pins = elb.ConsumedInputPins(pins={
+        "pjs001": {
+            "lab_sha256": hashlib.sha256(lab_bytes).hexdigest(),
+            "musicxml_sha256": hashlib.sha256(xml_bytes).hexdigest(),
+            "wav_sha256": hashlib.sha256(wav_bytes).hexdigest(),
+        },
+    })
+
+    call_counts: Dict[str, int] = {}
+    real_read_bytes = Path.read_bytes
+
+    def _counting_read_bytes(self: Path) -> bytes:
+        call_counts[self.name] = call_counts.get(self.name, 0) + 1
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _counting_read_bytes)
+
+    # wav header is deliberately invalid (not RIFF/WAVE), so extract_song()
+    # stops at check_wav_header_or_stop_bytes() — before any further wav
+    # decode — while still exercising exactly the read-once path for all
+    # three consumed inputs (sha match happens first, then header check).
+    with pytest.raises(elb.WavHeaderError, match="not a RIFF/WAVE file"):
+        elb.extract_song(
+            song_dir, "pjs001",
+            frozen_split_pins=elb.FrozenSplitPins(training_ids=("pjs001",), validation_ids=()),
+            consumed_inputs_pins=consumed_inputs_pins,
+        )
+    assert call_counts.get("pjs001_song.wav") == 1
+    assert call_counts.get("pjs001.lab") == 1
+    assert call_counts.get("pjs001.musicxml") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1163,6 +1368,50 @@ def test_harness3b_publish_bundle_pair_second_rename_failure_no_prior_generation
     assert not training_path.exists()
     assert not validation_path.exists()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_harness3b_publish_bundle_pair_second_backup_failure_restores_first_and_leaves_no_debris(
+    tmp_path: Path,
+) -> None:
+    """PR #329 第3巡レビュー指摘4（P1、採用対応）: `_backup_existing()`
+    の2回の呼び出し自体が2連 `os.replace()` と同一の `BaseException`
+    ロールバック/cleanup トランザクションに含まれることを、`os.replace()`
+    そのものではなく「2本目（validation）の退避（backup）」が失敗する
+    経路で確認する——`validation_path` が通常ファイルでなくディレクトリ
+    であるケース（`os.replace(directory, existing_file)` は構造的に失敗
+    する）。1本目（training）は既に backup 名へ退避成功済みの状態で
+    2本目の退避が失敗するため、旧実装（退避2回が `try` の外側）ではこの
+    経路がロールバックを一切経由せず「training の最終名が一時的に欠落」
+    したまま例外が伝播していた。
+
+    期待する最終状態:
+      - `training_path` は公開前と同一バイトのまま存在する（backup から
+        の復元、または一度も動かされていない、いずれかの観測結果として
+        「無傷」）。
+      - `validation_path` は公開前と同じくディレクトリのまま存在する
+        （触れられない）。
+      - どちらの staging ファイルも `_backup_existing()` が作った空
+        プレースホルダも残らない（「残骸なし」）。
+    """
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+    training_path.write_bytes(b'{"gen":"old-training"}\n')
+    validation_path.mkdir()  # structural anomaly: not a regular file
+
+    with pytest.raises(NotADirectoryError):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+
+    # training is untouched (rolled back to its pre-publish bytes).
+    assert training_path.is_file()
+    assert training_path.read_bytes() == b'{"gen":"old-training"}\n'
+    # validation is untouched (still the pre-existing directory).
+    assert validation_path.is_dir()
+    # no debris: exactly training_path (file) + validation_path (dir) remain.
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p not in (training_path, validation_path))
+    assert leftovers == []
 
 
 # ---------------------------------------------------------------------------

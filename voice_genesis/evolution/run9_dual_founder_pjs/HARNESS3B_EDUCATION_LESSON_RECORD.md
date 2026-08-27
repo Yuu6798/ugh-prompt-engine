@@ -609,3 +609,216 @@ run3 と一致、run4 とも一致確認済み）が run5 とも一致したこ�
 - freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1巡と同じ
   理由——repo builder の identity は manifest 側 `builder_provenance` が
   別途担う）。
+
+## 14. PR #329 Codex bot レビュー第3巡対応 + run6（2026-08-27）
+
+Claude 完結ルート（フェーズ1: 実装 + 検証 + 返信起草。git commit/push は
+別フェーズ）。採用済み指摘6件（いずれも Fable 設計判定済み、P1×4/P2×2）。
+**抽出式・アラインメント規則・直列化・バンドル内容は無変更**（変更は
+検証・公開経路のみ、第1巡/第2巡と同じ不変条件）。
+
+### Fix 7（指摘1, P1）: assemble 重複 ID 拒否
+
+`--song-ids-json` から読み込んだリストは、`_require_exact_frozen_split_
+membership()` 内部で `set(song_ids)` へ変換されるため、重複した song_id
+を検出できなかった——凍結 training 集合と（重複を除けば）完全一致する
+リストであっても、`assemble_bundle()` の `ordered_songs = [songs_by_id[sid]
+for sid in song_ids_sorted]` は `song_ids_sorted` の重複をそのまま辿るため、
+同一曲が2回以上 bundle の `"songs"` 配列へ混入し得た。
+
+- 新設 `_require_no_duplicate_song_ids()`: `set()` 化するいかなる検証より
+  前に呼び、重複があれば `ExtractorStopError`（重複した song_id を列挙）
+  で中間物読み込み前に拒否する。`_cmd_assemble()` が `song_ids_sorted =
+  sorted(song_ids)` する前に本関数を通す。
+- 新設ユニットテスト: 凍結 training 全70件 + 重複1件（凍結集合内の既存
+  ID をもう1回列挙）を渡した CLI 経路が拒否されること、`_require_no_
+  duplicate_song_ids()` の直接単体テスト（エラー内容・happy path）。
+
+### Fix 8（指摘2, P1）: extract_song の生 mapping 信頼の閉鎖
+
+`extract_song()` は `frozen_allowed_ids: Sequence[str]`/`consumed_inputs_
+pins: Mapping[str, Mapping[str, str]]` という生の型を受理していたため、
+値がどこから来たか（`load_training_validation_ids()`/`load_consumed_
+inputs_pins()` という pin 検証済み canonical loader を経由したものか、
+呼び出し元が自作した未検証の list/dict か）を関数自身が区別できなかった。
+
+- 新設 `FrozenSplitPins`/`ConsumedInputPins`（frozen dataclass）:
+  `load_training_validation_ids()`/`load_consumed_inputs_pins()` の戻り値
+  専用の不透明型。前者は `training_ids`/`validation_ids`（tuple）と
+  `frozen_allowed_ids` プロパティ（training∪validation の昇順集合）を
+  保持し、既存の `training_ids, validation_ids = load_training_validation_
+  ids(...)` という unpack 慣用句を維持するため `__iter__` を実装する。
+  後者は per-song consumed-input sha256 辞書を `types.MappingProxyType`
+  の入れ子へ変換して保持する（`__post_init__` で防御的コピー）。
+- `extract_song()` のシグネチャを `frozen_split_pins: FrozenSplitPins`/
+  `consumed_inputs_pins: ConsumedInputPins` へ変更し、関数冒頭で
+  isinstance 検査を行う——生の list/set/tuple/dict は `ExtractorStopError`
+  で拒否する。`run_build()`/`_cmd_extract_song()`/`_cmd_assemble()`/
+  `_cmd_probe_header()`（Fix 12 参照）全て追随。
+- **正直な宣言（Python の限界）**: Python は private な直接構築を完全には
+  防げない——呼び出し元が `FrozenSplitPins(training_ids=(...),
+  validation_ids=(...))` を悪意を持って直接構築すれば、isinstance 検査は
+  通ってしまう。本ゲートが機械強制するのは「repo 内の全コードパスが
+  canonical loader を経由する」という構造的規約であり、Python の型
+  システムによる封印ではない——この境界は両型の定義コメントと本関数の
+  docstring に明記した。
+- 新設ユニットテスト: `extract_song()` へ生 list/生 dict を渡すと
+  isinstance ゲートで拒否されること（2件）。既存の `extract_song()`
+  直接呼び出しテスト群（第2巡新設）は `FrozenSplitPins`/`ConsumedInputPins`
+  を構築して渡す形へ追随。
+
+### Fix 9（指摘3, P2）: TOCTOU 閉鎖（1回読み取り原則）
+
+`extract_song()` は wav/lab/musicxml の各ファイルを複数回 open していた
+（例: wav は consumed-input sha 照合で1回、`check_wav_header_or_stop()`
+のヘッダ probe で2回目、`load_wav_24bit_mono_48k()` の decode で3回目）
+——sha 照合に使ったバイト列と、その後 parse/decode されるバイト列が、
+理論上は異なる読み取り時点のものになり得た（TOCTOU）。
+
+- wav: `_parse_wav_fmt_from_buffer()`/`_parse_wav_fmt_and_data_from_
+  buffer()`（新設、`io.BytesIO` ベース）+ `check_wav_header_or_stop_
+  bytes()`/`load_wav_24bit_mono_48k_bytes()`（新設）。
+- lab: `_parse_lab_text()`（新設、既存ロジックを text 引数へ分離）+
+  `parse_lab_bytes()`（新設、`buf.decode("utf-8")` してから解析）。
+- musicxml: `_parse_musicxml_root()`（新設、既存ロジックを root 引数へ
+  分離）+ `parse_musicxml_bytes()`（新設、`ET.fromstring(buf)`）。
+- 既存の path ベース関数（`read_wav_fmt_header()`/`check_wav_header_or_
+  stop()`/`load_wav_24bit_mono_48k()`/`parse_lab_file()`/`parse_
+  musicxml()`）は全て「1回 `read_bytes()` してから bytes 版へ委譲する」
+  薄いラッパへ変更した——単体呼び出し互換を維持しつつ、`extract_song()`
+  だけが特別扱いされる構成を避けた。`read_wav_fmt_header()` のみ例外
+  ——`probe-header` 専用の「data チャンクを読まないストリーミング skip」
+  という異なる要件を持つため元の実装のまま維持する。
+- `extract_song()`: `wav_path.read_bytes()`/`lab_path.read_bytes()`/
+  `xml_path.read_bytes()` をそれぞれ1回だけ実行し、`_require_consumed_
+  input_bytes_match_bytes()`（新設、path 引数を bytes 引数へ置換した
+  リネーム版）でその同一バッファに対して sha 照合してから、同じバッファ
+  を `check_wav_header_or_stop_bytes()`/`parse_lab_bytes()`/`parse_
+  musicxml_bytes()`/`load_wav_24bit_mono_48k_bytes()` へ渡す——ファイル
+  再 open を完全に排除する（`speaker_map_builder.py` の verified
+  self-exec dispatch が採る read-once パターンと同型）。
+- 新設ユニットテスト: `Path.read_bytes` をラップして呼び出し回数を
+  ファイル単位で数え、wav/lab/musicxml のいずれも高々1回であることを
+  直接確認（count_mismatch 相当の最短経路で確認）。既存の
+  `check_wav_header_or_stop()` monkeypatch テスト（第2巡新設）は
+  `check_wav_header_or_stop_bytes()` へ追随。
+
+### Fix 10（指摘4, P1）: publish_bundle_pair backup 段の保護 try 内包
+
+第2巡修正（Fix 4）は2連 `os.replace()` 自体は同一トランザクションへ
+含めたが、公開直前の `_backup_existing()` 呼び出し2回自体は `try` の
+**外側**にあった——1本目（training）の退避成功直後に2本目（validation）
+の退避が失敗する経路（例: `validation_path` が通常ファイルでなく
+ディレクトリで `os.replace()` が構造的に失敗するケース）で、training は
+既に backup 名へ rename 済み（＝最終名が一時的に欠落した状態）にも
+かかわらず、その例外がロールバックを一切経由せず `publish_bundle_
+pair()` の外へそのまま伝播していた。
+
+- `publish_bundle_pair()`: `training_backup`/`validation_backup` を
+  `try` の外側で `None` 初期化してから、退避2回 + rename2回の**4操作
+  すべて**を同一の `try`/`except BaseException` トランザクションへ含める
+  よう変更。失敗時は両方の最終名を `_rollback_to_backup()` でロール
+  バックし、両 staging も破棄してから re-raise する。
+- `_backup_existing()` 自体: `mkstemp()` が作る空プレースホルダを
+  `os.replace()` 失敗時に best-effort で削除するよう変更——旧実装は
+  この空プレースホルダが孤児として残置され得た（「残骸なし」契約を
+  `_backup_existing()` 自身の中間生成物についても満たすため）。
+- 失敗注入テスト（新設）: `validation_path` をディレクトリとして事前に
+  作成し、`publish_bundle_pair()` を呼ぶと `NotADirectoryError` を送出
+  すること、かつ最終状態が「training は公開前バイトのまま無傷 /
+  validation はディレクトリのまま無傷 / staging・backup の残骸なし」で
+  あることを直接確認する。
+
+### Fix 11（指摘5, P2）: assemble 単独出力の atomic 化
+
+`write_bundle_json()`（`assemble` サブコマンド専用の単本バンドル出力）
+は `Path(path).write_bytes()` の直書きだった——書き込み途中の失敗
+（ディスク枯渇・プロセス kill 等）で、旧世代 artifact が破損した部分
+書き込みバイト列で上書きされ得た。
+
+- `write_bundle_json()`: `_atomic_write_bytes()`（`publish_bundle_pair()`
+  と共有する staging+fsync ヘルパー）+ `os.replace()` を使う構成へ
+  変更。staging 段の失敗時は旧世代 artifact の実バイトに一切触れない。
+- 失敗注入テスト（新設）: `_atomic_write_bytes()` を monkeypatch して
+  書き込み途中失敗を注入すると、旧 artifact が無傷のまま残り staging の
+  残骸も残らないことを確認する。
+
+### Fix 12（指摘6, P2）: probe-header の凍結 split ゲート
+
+`probe-header` サブコマンドは「メタデータのみ・decode なし」だが、WAV
+ファイルを1バイトでも open する処理そのものが 裁定 §2「sealed は完全性
+hash と ID 確認以外の処理禁止」に抵触し得た——`--song-ids` に
+sealed_holdout の song_id を渡すと、旧実装は凍結 split 照合なしで
+その WAV ヘッダをそのまま probe していた。
+
+- `_cmd_probe_header()`: いずれの WAV も open する前に `load_training_
+  validation_ids()` で凍結 split をロードし、`_require_song_ids_within_
+  frozen_split()` で `--song-ids` 全件が凍結 training∪validation に
+  属することを検証する（全件一括拒否——一部だけ open してから拒否、と
+  いう中途半端な状態を作らない）。`probe-header` に `--split-manifest`/
+  `--contract-path` を新設（既定は正典パス）。
+- 新設ユニットテスト: sealed_holdout の song_id を含む `--song-ids`
+  （凍結集合内の他の ID と併せて）を渡した CLI 経路が、対応する WAV が
+  一切存在しなくても拒否されること、`read_wav_fmt_header()` を
+  monkeypatch して「呼ばれたら失敗」にすることでゲートが WAV open より
+  前に効くことを直接確認するテスト。
+
+### 連鎖更新
+
+builder バイト変更（新値
+`9a007b7543523b99d3689a4fa40383a35497422f7784050b1ca8b8d1d34e53c1`）
++ 本節追記に伴い、`inputs/education_technique_lesson_manifest.json` の
+`builder_provenance.builder_sha256`/`detail_record_sha256` を更新し、
+manifest raw sha256 が変わったため `RUN9_CONTRACT.yaml` の
+`education_technique_lesson_manifest_sha` を第4世代へ repin した（旧値
+= 第3世代、第2巡対応時点の値。履歴は本記録 §12/§13 参照）。
+`pjs_consumed_inputs_manifest_sha`（`inputs/pjs_consumed_inputs_
+sha256.json`）は本節の変更で一切触れていないため無変更（本節はいずれの
+消費入力の実バイト・pin 値にも影響しない、検証・公開経路のみの変更）。
+
+### run6: repo builder（第3巡対応後）による再現実行（独立6回目）
+
+venv_h3b の python3 で、修正後の repo builder を workdir 展開済み corpus
+（`expanded/PJS_corpus_ver1.1`）に対し `build` サブコマンドで実行した。
+freeze record・spec・split manifest・contract・consumed-inputs manifest
+はいずれも repo 収載の既定パス（CLI 引数省略、デフォルト値のまま）。
+
+```
+$ python3 education_lesson_builder.py build \
+    --corpus-root <workdir>/expanded/PJS_corpus_ver1.1 \
+    --out-dir <workdir>/run6 \
+    --allow-unpinned
+```
+
+```
+real 4m21.945s
+```
+
+| バンドル | 既 pin（run1〜run5） | run6 sha256 | 一致 |
+|---|---|---|---|
+| training | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | **PASS** |
+| validation | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | **PASS** |
+
+`cmp run1/training_bundle.json run6/training_bundle.json` / `cmp
+run1/validation_bundle.json run6/validation_bundle.json` ともに差分0
+（完全一致）を確認済み。
+run6 は本節の6修正がいずれも検証・公開経路（TOCTOU 閉鎖・atomic 化・
+凍結 split ゲート強化）のみに閉じており、抽出式・アラインメント・
+直列化・バンドル内容に一切影響しないことの実測証跡である——run6 は
+`--allow-unpinned` で実行した（manifest 側 `builder_provenance.
+builder_sha256` を本節の builder バイト変更後の値へまだ repin していない
+時点での実測取得のため）。repin 完了後、`_require_bundle_bytes_match_
+pinned_manifest()` を run6 の実測 sha に対して直接呼び出し、例外を投げ
+ないこと（＝ canonical path 上で Fix 5（第2巡）のゲートが引き続き正しく
+機能すること）を確認済み。
+
+### 検証結果
+
+- `ruff check .`: clean
+- `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`:
+  本節（builder_provenance.builder_sha256/detail_record_sha256 の repo
+  収載値更新、`education_technique_lesson_manifest_sha` の4世代目 repin
+  を含む）最終稿確定後に全 PASS（2236 件）。
+- freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1巡/第2巡と
+  同じ理由——repo builder の identity は manifest 側 `builder_provenance`
+  が別途担う）。

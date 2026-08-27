@@ -80,15 +80,17 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import struct
 import sys
 import tempfile
+import types
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.signal import resample_poly
@@ -247,6 +249,88 @@ class FreezeCheckError(ExtractorStopError):
 
 
 # ---------------------------------------------------------------------------
+# Opaque pin-verified types (PR #329 第3巡レビュー指摘2, P1, 採用対応):
+# `extract_song()` が生の Sequence[str]/Mapping を受理する限り、その値が
+# `load_training_validation_ids()`/`load_consumed_inputs_pins()`（RUN9_
+# CONTRACT.yaml pin との read-once sha256 照合を経由する canonical loader）
+# を通ったものか、呼び出し元が自作した未検証の list/dict かを `extract_
+# song()` 自身は区別できなかった——CLI（`_cmd_extract_song`/`_cmd_build`）
+# はゲート済み値を渡すが、別スクリプトからの直接 import 呼び出しは無検証
+# の集合をそのまま渡せてしまう構造的な穴があった。
+#
+# `FrozenSplitPins`/`ConsumedInputPins` は上記2関数の戻り値専用の不透明型
+# として新設する。`extract_song()` は isinstance 検査でこの型のみを受理し、
+# 生の list/set/tuple/dict は `ExtractorStopError` で拒否する。
+#
+# **正直な宣言（Python の限界）**: Python は private な直接構築を完全には
+# 防げない —— 呼び出し元が `FrozenSplitPins(training_ids=(...),
+# validation_ids=(...))` を悪意を持って直接構築すれば、isinstance 検査は
+# 通ってしまう（Python にはコンストラクタを呼び出し元ごとに制限する言語
+# 機構が無い）。本ゲートが機械強制するのは「repo 内の**全**コードパスが
+# `load_training_validation_ids()`/`load_consumed_inputs_pins()`（そして
+# その内部で `run9_schema.load_pinned_practice_split_manifest()`/`load_
+# pinned_consumed_inputs_manifest()` の pin/構造検証）を経由する」という
+# **構造的規約**であり、Python の型システムによる封印ではない —— 境界は
+# 「本ファイル内で `FrozenSplitPins(`/`ConsumedInputPins(` を直接呼び出す
+# のはこの2つの canonical loader のみである」ことをレビュー・grep 監査で
+# 目視確認できる、という前提の上に立つ。
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FrozenSplitPins:
+    """`load_training_validation_ids()`（canonical loader）のみが構築する
+    べき不透明型。pin 検証済み training/validation row_id 集合を保持する
+    （`row_ids.sealed_holdout` はこの型に一切現れない——`load_training_
+    validation_ids()` が既に切り落として渡す）。
+
+    `__iter__` は `(training_ids, validation_ids)` の2-tuple を返す —
+    既存の `training_ids, validation_ids = load_training_validation_ids()`
+    という呼び出し慣用句をそのまま維持するための互換シム（本来の値の
+    出処追跡は isinstance 検査で行う——unpack 後の生 tuple は
+    `extract_song()` の直接引数としては受理されない、下記 `frozen_
+    allowed_ids` 経由の使用のみが正規経路）。
+    """
+
+    training_ids: Tuple[str, ...]
+    validation_ids: Tuple[str, ...]
+
+    def __iter__(self) -> Iterator[Tuple[str, ...]]:
+        return iter((self.training_ids, self.validation_ids))
+
+    @property
+    def frozen_allowed_ids(self) -> Tuple[str, ...]:
+        """training ∪ validation（昇順・重複排除済み）。"""
+        return tuple(sorted(set(self.training_ids) | set(self.validation_ids)))
+
+
+@dataclass(frozen=True)
+class ConsumedInputPins:
+    """`load_consumed_inputs_pins()`（canonical loader）のみが構築するべき
+    不透明型。pin 検証済み per-song consumed-input sha256 辞書
+    （`{song_id: {"lab_sha256": ..., "musicxml_sha256": ..., "wav_sha256":
+    ...}}`）を保持する。設計意図・Python 境界の宣言はモジュール冒頭の
+    コメント（`FrozenSplitPins` 直前）と同型。
+
+    `__post_init__` で内部辞書を `types.MappingProxyType` の入れ子へ
+    変換し、コンストラクタへ渡された生 dict への外部からの参照越し変更が
+    格納後の値へ波及しないようにする（frozen dataclass はフィールドの
+    再代入は禁止するが、参照先オブジェクトの可変性までは保証しないため）。
+    """
+
+    pins: Mapping[str, Mapping[str, str]]
+
+    def __post_init__(self) -> None:
+        frozen_pins = types.MappingProxyType(
+            {song_id: types.MappingProxyType(dict(entry)) for song_id, entry in self.pins.items()}
+        )
+        object.__setattr__(self, "pins", frozen_pins)
+
+    def get(self, song_id: str) -> Optional[Mapping[str, str]]:
+        return self.pins.get(song_id)
+
+
+# ---------------------------------------------------------------------------
 # sha256 helpers
 # ---------------------------------------------------------------------------
 
@@ -335,12 +419,13 @@ def read_wav_fmt_header(path: Path) -> Dict[str, Any]:
         return fmt
 
 
-def check_wav_header_or_stop(path: Path) -> Dict[str, Any]:
-    """spec v1.1 §2-1: RIFF PCM を検査し 24-bit/mono/48000Hz を要求。不一致は即停止。"""
-    hdr = read_wav_fmt_header(path)
+def _validate_wav_fmt_or_stop(hdr: Dict[str, Any], label: str) -> Dict[str, Any]:
+    """spec v1.1 §2-1: RIFF PCM を検査し 24-bit/mono/48000Hz を要求。不一致は
+    即停止（`hdr` は既にパース済みの fmt dict — `check_wav_header_or_stop()`/
+    `check_wav_header_or_stop_bytes()` が共有する検証本体）。"""
     if hdr["audio_format"] != REQUIRED_AUDIO_FORMAT_PCM:
         raise WavHeaderError(
-            f"{path}: audio_format={hdr['audio_format']} (expected PCM={REQUIRED_AUDIO_FORMAT_PCM})"
+            f"{label}: audio_format={hdr['audio_format']} (expected PCM={REQUIRED_AUDIO_FORMAT_PCM})"
         )
     mismatches = []
     if hdr["channels"] != REQUIRED_CHANNELS:
@@ -350,67 +435,133 @@ def check_wav_header_or_stop(path: Path) -> Dict[str, Any]:
     if hdr["bits_per_sample"] != REQUIRED_BITS_PER_SAMPLE:
         mismatches.append(f"bits_per_sample={hdr['bits_per_sample']} (required {REQUIRED_BITS_PER_SAMPLE})")
     if mismatches:
-        raise WavHeaderError(f"{path}: WAV header mismatch — " + "; ".join(mismatches))
+        raise WavHeaderError(f"{label}: WAV header mismatch — " + "; ".join(mismatches))
     return hdr
 
 
+def check_wav_header_or_stop(path: Path) -> Dict[str, Any]:
+    """path ベース版（`probe-header` 系ユーティリティ・既存呼び出し互換
+    用、`read_wav_fmt_header()` のストリーミング skip 読みをそのまま使う
+    — 1ファイル1回呼び出しの独立ユーティリティであり、read-once-then-
+    decode の TOCTOU 対象ではない）。`extract_song()` は代わりに
+    `check_wav_header_or_stop_bytes()` を使う（下記参照）。"""
+    return _validate_wav_fmt_or_stop(read_wav_fmt_header(path), str(path))
+
+
+def check_wav_header_or_stop_bytes(buf: bytes, label: str) -> Dict[str, Any]:
+    """spec v1.1 §2-1 の検証を、既に read_bytes() 済みの `buf`（wav 全バイト）
+    に対して行う（PR #329 第3巡レビュー指摘3, P2, 採用対応: TOCTOU 閉鎖）。
+    `extract_song()` はファイルを1回だけ read_bytes() した同一バッファを
+    本関数と `load_wav_24bit_mono_48k_bytes()` の両方へ渡すことで、
+    sha256 照合・ヘッダ検証・decode の全段がファイル再 open なしに同一
+    バイト列に対して行われることを保証する（`speaker_map_builder.py`
+    verified self-exec dispatch の read-once パターンと同型）。"""
+    return _validate_wav_fmt_or_stop(_parse_wav_fmt_from_buffer(buf, label), label)
+
+
+def _parse_wav_fmt_from_buffer(buf: bytes, label: str) -> Dict[str, Any]:
+    """`buf`（read_bytes() 済み wav 全バイト）から RIFF/fmt チャンクのみを
+    解析する。`read_wav_fmt_header()`（probe-header 専用、data チャンク
+    本体を読まないストリーミング skip 版）とは独立の実装 — こちらは
+    `check_wav_header_or_stop_bytes()`/`_parse_wav_fmt_and_data_from_buffer()`
+    が共有する read-once 前提のヘルパー。"""
+    fh = io.BytesIO(buf)
+    riff = fh.read(12)
+    if len(riff) < 12 or riff[0:4] != b"RIFF" or riff[8:12] != b"WAVE":
+        raise WavHeaderError(f"{label}: not a RIFF/WAVE file (header={riff!r})")
+    fmt: Optional[Dict[str, Any]] = None
+    data_size: Optional[int] = None
+    while True:
+        hdr = fh.read(8)
+        if len(hdr) < 8:
+            break
+        chunk_id = hdr[0:4]
+        chunk_size = struct.unpack("<I", hdr[4:8])[0]
+        if chunk_id == b"fmt ":
+            fmt_bytes = fh.read(chunk_size)
+            if len(fmt_bytes) < 16:
+                raise WavHeaderError(f"{label}: fmt chunk too short ({len(fmt_bytes)} bytes)")
+            (audio_format, nch, sr, byte_rate, block_align, bits) = struct.unpack(
+                "<HHIIHH", fmt_bytes[:16]
+            )
+            fmt = dict(
+                audio_format=audio_format, channels=nch, sample_rate=sr,
+                byte_rate=byte_rate, block_align=block_align, bits_per_sample=bits,
+            )
+            if chunk_size % 2:
+                fh.read(1)
+        elif chunk_id == b"data":
+            data_size = chunk_size
+            fh.seek(chunk_size + (chunk_size % 2), 1)
+        else:
+            fh.seek(chunk_size + (chunk_size % 2), 1)
+    if fmt is None:
+        raise WavHeaderError(f"{label}: no fmt chunk found")
+    fmt["data_chunk_size"] = data_size
+    fmt["path"] = label
+    return fmt
+
+
+def _parse_wav_fmt_and_data_from_buffer(buf: bytes, label: str) -> Tuple[Dict[str, Any], bytes]:
+    """`buf`（read_bytes() 済み wav 全バイト）から fmt チャンク**と** data
+    チャンクの実バイトの両方を解析する（decode 直前の read-once ヘルパー
+    — PR #329 第3巡レビュー指摘3, P2, 採用対応）。"""
+    fh = io.BytesIO(buf)
+    riff = fh.read(12)
+    if len(riff) < 12 or riff[0:4] != b"RIFF" or riff[8:12] != b"WAVE":
+        raise WavHeaderError(f"{label}: not a RIFF/WAVE file (header={riff!r})")
+    fmt: Optional[Dict[str, Any]] = None
+    data_bytes: Optional[bytes] = None
+    while True:
+        hdr = fh.read(8)
+        if len(hdr) < 8:
+            break
+        chunk_id = hdr[0:4]
+        chunk_size = struct.unpack("<I", hdr[4:8])[0]
+        if chunk_id == b"fmt ":
+            fmt_bytes = fh.read(chunk_size)
+            (audio_format, nch, sr, byte_rate, block_align, bits) = struct.unpack(
+                "<HHIIHH", fmt_bytes[:16]
+            )
+            fmt = dict(audio_format=audio_format, channels=nch, sample_rate=sr,
+                       byte_rate=byte_rate, block_align=block_align, bits_per_sample=bits)
+            if chunk_size % 2:
+                fh.read(1)
+        elif chunk_id == b"data":
+            data_bytes = fh.read(chunk_size)
+            if chunk_size % 2:
+                fh.read(1)
+        else:
+            fh.seek(chunk_size + (chunk_size % 2), 1)
+    if fmt is None or data_bytes is None:
+        raise WavHeaderError(f"{label}: missing fmt or data chunk")
+    return fmt, data_bytes
+
+
 def _read_wav_fmt_and_data(path: Path) -> Tuple[Dict[str, Any], bytes]:
-    """Read the fmt chunk AND the data chunk's raw bytes (this is the
-    decode-adjacent read — only called after check_wav_header_or_stop() has
-    already passed for this exact file)."""
-    with open(path, "rb") as fh:
-        riff = fh.read(12)
-        if len(riff) < 12 or riff[0:4] != b"RIFF" or riff[8:12] != b"WAVE":
-            raise WavHeaderError(f"{path}: not a RIFF/WAVE file (header={riff!r})")
-        fmt: Optional[Dict[str, Any]] = None
-        data_bytes: Optional[bytes] = None
-        while True:
-            hdr = fh.read(8)
-            if len(hdr) < 8:
-                break
-            chunk_id = hdr[0:4]
-            chunk_size = struct.unpack("<I", hdr[4:8])[0]
-            if chunk_id == b"fmt ":
-                fmt_bytes = fh.read(chunk_size)
-                (audio_format, nch, sr, byte_rate, block_align, bits) = struct.unpack(
-                    "<HHIIHH", fmt_bytes[:16]
-                )
-                fmt = dict(audio_format=audio_format, channels=nch, sample_rate=sr,
-                           byte_rate=byte_rate, block_align=block_align, bits_per_sample=bits)
-                if chunk_size % 2:
-                    fh.read(1)
-            elif chunk_id == b"data":
-                data_bytes = fh.read(chunk_size)
-                if chunk_size % 2:
-                    fh.read(1)
-            else:
-                fh.seek(chunk_size + (chunk_size % 2), 1)
-        if fmt is None or data_bytes is None:
-            raise WavHeaderError(f"{path}: missing fmt or data chunk")
-        return fmt, data_bytes
+    """path ベース版（既存の単体呼び出し互換用）。1回 `read_bytes()` して
+    bytes 版 `_parse_wav_fmt_and_data_from_buffer()` へ委譲する。"""
+    buf = path.read_bytes()
+    return _parse_wav_fmt_and_data_from_buffer(buf, str(path))
 
 
-def load_wav_24bit_mono_48k(path: Path) -> np.ndarray:
-    """Decode PCM samples. Only ever called AFTER check_wav_header_or_stop()
-    has passed for this exact file.
-
-    spec v1.1 §2-1 pinned manual 24-bit byte decode (library-dependent
-    24-bit WAV decoding is avoided as ambiguous):
+def _decode_wav_24bit_from_fmt_and_data(fmt: Dict[str, Any], data_bytes: bytes, label: str) -> np.ndarray:
+    """spec v1.1 §2-1 pinned manual 24-bit byte decode（library-dependent
+    24-bit WAV decoding is avoided as ambiguous）:
       - data bytes reshaped to (-1, 3) via np.frombuffer(..., dtype=uint8)
       - v = b0 | (b1<<8) | (b2<<16), little-endian, assembled as int32
       - v >= 2**23 -> v -= 2**24 (two's-complement sign extension)
       - x = v.astype(float64) / 8388608.0  (2**23; value range [-1, 1))
     """
-    fmt, data_bytes = _read_wav_fmt_and_data(path)
     if fmt["bits_per_sample"] != REQUIRED_BITS_PER_SAMPLE or fmt["channels"] != REQUIRED_CHANNELS \
             or fmt["sample_rate"] != REQUIRED_SAMPLE_RATE or fmt["audio_format"] != REQUIRED_AUDIO_FORMAT_PCM:
-        # Should be unreachable if check_wav_header_or_stop() was called first.
-        raise WavHeaderError(f"{path}: fmt chunk disagrees with prior header probe: {fmt}")
+        # Should be unreachable if check_wav_header_or_stop{,_bytes}() was called first.
+        raise WavHeaderError(f"{label}: fmt chunk disagrees with prior header probe: {fmt}")
 
     raw = np.frombuffer(data_bytes, dtype=np.uint8)
     n_samples = len(raw) // 3
     if n_samples * 3 != len(raw):
-        raise WavHeaderError(f"{path}: data chunk size {len(raw)} is not a multiple of 3 bytes (24-bit mono)")
+        raise WavHeaderError(f"{label}: data chunk size {len(raw)} is not a multiple of 3 bytes (24-bit mono)")
     raw = raw[: n_samples * 3].reshape(-1, 3)
     b0 = raw[:, 0].astype(np.int32)
     b1 = raw[:, 1].astype(np.int32)
@@ -419,6 +570,24 @@ def load_wav_24bit_mono_48k(path: Path) -> np.ndarray:
     v = np.where(v >= (1 << 23), v - (1 << 24), v)
     x = v.astype(np.float64) / 8388608.0  # 2**23
     return x
+
+
+def load_wav_24bit_mono_48k_bytes(buf: bytes, label: str) -> np.ndarray:
+    """Decode PCM samples from an already-read `buf`. Only ever called AFTER
+    `check_wav_header_or_stop_bytes()` has passed for this exact `buf`
+    (PR #329 第3巡レビュー指摘3, P2, 採用対応: `extract_song()` はこの
+    関数へ header 検証と同じ `buf` を渡すことでファイル再 open を排除
+    する)。"""
+    fmt, data_bytes = _parse_wav_fmt_and_data_from_buffer(buf, label)
+    return _decode_wav_24bit_from_fmt_and_data(fmt, data_bytes, label)
+
+
+def load_wav_24bit_mono_48k(path: Path) -> np.ndarray:
+    """path ベース版（既存の単体呼び出し互換用）。1回 `read_bytes()` して
+    bytes 版 `load_wav_24bit_mono_48k_bytes()` へ委譲する。Only ever called
+    AFTER check_wav_header_or_stop() has passed for this exact file."""
+    buf = path.read_bytes()
+    return load_wav_24bit_mono_48k_bytes(buf, str(path))
 
 
 def resample_to_44100(x48k: np.ndarray) -> np.ndarray:
@@ -457,20 +626,34 @@ class LabPhoneme:
     phoneme: str
 
 
-def parse_lab_file(path: Path) -> List[LabPhoneme]:
-    text = path.read_text(encoding="utf-8")
+def _parse_lab_text(text: str, label: str) -> List[LabPhoneme]:
     out: List[LabPhoneme] = []
     for line in text.splitlines():
         parts = line.split()
         if not parts:
             continue
         if len(parts) != 3:
-            raise LabError(f"{path}: malformed .lab line (expected 3 columns): {line!r}")
+            raise LabError(f"{label}: malformed .lab line (expected 3 columns): {line!r}")
         start_raw, end_raw, phoneme = parts
         out.append(LabPhoneme(int(start_raw) * LAB_TIME_UNIT_S, int(end_raw) * LAB_TIME_UNIT_S, phoneme))
     if not out:
-        raise LabError(f"{path}: empty .lab file")
+        raise LabError(f"{label}: empty .lab file")
     return out
+
+
+def parse_lab_bytes(buf: bytes, label: str) -> List[LabPhoneme]:
+    """`buf`（read_bytes() 済み .lab 全バイト）を text へ decode してから
+    解析する（PR #329 第3巡レビュー指摘3, P2, 採用対応: TOCTOU 閉鎖 —
+    `extract_song()` は sha256 照合に使ったのと同一の `buf` をそのまま
+    渡す。ファイル再 open を排除）。"""
+    return _parse_lab_text(buf.decode("utf-8"), label)
+
+
+def parse_lab_file(path: Path) -> List[LabPhoneme]:
+    """path ベース版（既存の単体呼び出し互換用）。1回 `read_bytes()` して
+    bytes 版 `parse_lab_bytes()` へ委譲する。"""
+    buf = path.read_bytes()
+    return parse_lab_bytes(buf, str(path))
 
 
 @dataclass(frozen=True)
@@ -577,21 +760,20 @@ class RawNote:
     order_index: int
 
 
-def parse_musicxml(path: Path) -> Tuple[List[Tuple[float, float]], List[RawNote]]:
-    """Returns (tempo_events, raw_notes). tempo_events = list of
-    (beat_position, tempo_bpm) in document-encounter order. raw_notes in
-    document order with a shared cursor (beat_onset) computed by walking
-    <note>/<backup>/<forward> sequentially regardless of <voice> — this is
-    standard MusicXML cursor semantics, not an invention (verified against
+def _parse_musicxml_root(root: ET.Element, label: str) -> Tuple[List[Tuple[float, float]], List[RawNote]]:
+    """Returns (tempo_events, raw_notes) from an already-parsed `<score-
+    partwise>` root element. tempo_events = list of (beat_position,
+    tempo_bpm) in document-encounter order. raw_notes in document order
+    with a shared cursor (beat_onset) computed by walking <note>/<backup>/
+    <forward> sequentially regardless of <voice> — this is standard
+    MusicXML cursor semantics, not an invention (verified against
     pjs064's backup=48/forward=21+3+18 passage, which reconciles exactly
     under this rule)."""
-    tree = ET.parse(path)
-    root = tree.getroot()
     if root.tag != "score-partwise":
-        raise MusicXmlError(f"{path}: unsupported root <{root.tag}> (expected score-partwise)")
+        raise MusicXmlError(f"{label}: unsupported root <{root.tag}> (expected score-partwise)")
     parts = root.findall("part")
     if len(parts) != 1:
-        raise MusicXmlError(f"{path}: expected exactly 1 <part>, found {len(parts)}")
+        raise MusicXmlError(f"{label}: expected exactly 1 <part>, found {len(parts)}")
     part = parts[0]
 
     divisions: Optional[float] = None
@@ -614,27 +796,27 @@ def parse_musicxml(path: Path) -> Tuple[List[Tuple[float, float]], List[RawNote]
             elif tag == "backup":
                 dur_el = child.find("duration")
                 if dur_el is None:
-                    raise MusicXmlError(f"{path}: <backup> missing <duration>")
+                    raise MusicXmlError(f"{label}: <backup> missing <duration>")
                 if divisions is None:
-                    raise MusicXmlError(f"{path}: <backup> before <divisions> known")
+                    raise MusicXmlError(f"{label}: <backup> before <divisions> known")
                 beat_cursor -= float(dur_el.text) / divisions
             elif tag == "forward":
                 dur_el = child.find("duration")
                 if dur_el is None:
-                    raise MusicXmlError(f"{path}: <forward> missing <duration>")
+                    raise MusicXmlError(f"{label}: <forward> missing <duration>")
                 if divisions is None:
-                    raise MusicXmlError(f"{path}: <forward> before <divisions> known")
+                    raise MusicXmlError(f"{label}: <forward> before <divisions> known")
                 beat_cursor += float(dur_el.text) / divisions
             elif tag == "note":
                 if child.find("grace") is not None:
-                    raise MusicXmlError(f"{path}: <grace> note — not covered by spec, stop")
+                    raise MusicXmlError(f"{label}: <grace> note — not covered by spec, stop")
                 if child.find("chord") is not None:
-                    raise MusicXmlError(f"{path}: <chord> note — not covered by spec, stop")
+                    raise MusicXmlError(f"{label}: <chord> note — not covered by spec, stop")
                 dur_el = child.find("duration")
                 if dur_el is None:
-                    raise MusicXmlError(f"{path}: <note> missing <duration>")
+                    raise MusicXmlError(f"{label}: <note> missing <duration>")
                 if divisions is None:
-                    raise MusicXmlError(f"{path}: <note> before <divisions> known")
+                    raise MusicXmlError(f"{label}: <note> before <divisions> known")
                 beat_duration = float(dur_el.text) / divisions
                 voice_el = child.find("voice")
                 voice = voice_el.text if voice_el is not None else "1"
@@ -643,11 +825,11 @@ def parse_musicxml(path: Path) -> Tuple[List[Tuple[float, float]], List[RawNote]
                 if not is_rest:
                     pitch_el = child.find("pitch")
                     if pitch_el is None:
-                        raise MusicXmlError(f"{path}: non-rest <note> missing <pitch> (unpitched unsupported)")
+                        raise MusicXmlError(f"{label}: non-rest <note> missing <pitch> (unpitched unsupported)")
                     step_el = pitch_el.find("step")
                     octave_el = pitch_el.find("octave")
                     if step_el is None or octave_el is None:
-                        raise MusicXmlError(f"{path}: <pitch> missing step/octave")
+                        raise MusicXmlError(f"{label}: <pitch> missing step/octave")
                     pitch_step = step_el.text
                     alter_el = pitch_el.find("alter")
                     pitch_alter = int(alter_el.text) if alter_el is not None else 0
@@ -670,8 +852,27 @@ def parse_musicxml(path: Path) -> Tuple[List[Tuple[float, float]], List[RawNote]
             # other tags (print, barline, harmony, sound w/o tempo, ...) ignored deliberately.
 
     if not tempo_events:
-        raise MusicXmlError(f"{path}: no <sound tempo=...> found anywhere — tempo must not be invented, stop")
+        raise MusicXmlError(f"{label}: no <sound tempo=...> found anywhere — tempo must not be invented, stop")
     return tempo_events, raw_notes
+
+
+def parse_musicxml_bytes(buf: bytes, label: str) -> Tuple[List[Tuple[float, float]], List[RawNote]]:
+    """`buf`（read_bytes() 済み .musicxml 全バイト）を `xml.etree.ElementTree.
+    fromstring()` で直接パースする（PR #329 第3巡レビュー指摘3, P2, 採用
+    対応: TOCTOU 閉鎖 — `extract_song()` は sha256 照合に使ったのと同一の
+    `buf` をそのまま渡す。ファイル再 open を排除）。"""
+    try:
+        root = ET.fromstring(buf)
+    except ET.ParseError as exc:
+        raise MusicXmlError(f"{label}: XML parse error: {exc}") from exc
+    return _parse_musicxml_root(root, label)
+
+
+def parse_musicxml(path: Path) -> Tuple[List[Tuple[float, float]], List[RawNote]]:
+    """path ベース版（既存の単体呼び出し互換用）。1回 `read_bytes()` して
+    bytes 版 `parse_musicxml_bytes()` へ委譲する。"""
+    buf = path.read_bytes()
+    return parse_musicxml_bytes(buf, str(path))
 
 
 def build_tempo_segments(tempo_events: Sequence[Tuple[float, float]]) -> List[Tuple[float, float]]:
@@ -954,15 +1155,15 @@ def extract_song(
     song_dir: Path,
     song_id: str,
     *,
-    frozen_allowed_ids: Sequence[str],
-    consumed_inputs_pins: Mapping[str, Mapping[str, str]],
+    frozen_split_pins: FrozenSplitPins,
+    consumed_inputs_pins: ConsumedInputPins,
 ) -> Dict[str, Any]:
     """Extract one song. Only decodes audio if the WAV header check passes.
     Returns a per-song intermediate dict (see bundle assembly for full
     schema); on count_mismatch, channels are recorded as not_extracted with
     a reason, per spec §3 (this is NOT a stop condition by itself).
 
-    `frozen_allowed_ids`/`consumed_inputs_pins` は必須 keyword-only 引数
+    `frozen_split_pins`/`consumed_inputs_pins` は必須 keyword-only 引数
     （PR #329 第2巡レビュー指摘「Enforce the frozen split in the assemble
     command」, P1, 採用対応）: 旧実装はこれらのゲートを `run_build()`/
     `_cmd_extract_song()` などの**呼び出し元だけ**が持っており、ゲートを
@@ -971,24 +1172,56 @@ def extract_song(
     自身に内蔵することで、どの経路から呼ばれても decode/抽出前に必ず
     (1) `song_id` が凍結済み training∪validation に属すること、(2) 消費
     3入力（lab/musicxml/wav）の実バイトが pin と一致することを検証する。
+
+    `frozen_split_pins`/`consumed_inputs_pins` は生の Sequence[str]/Mapping
+    ではなく `FrozenSplitPins`/`ConsumedInputPins`（`load_training_
+    validation_ids()`/`load_consumed_inputs_pins()` canonical loader のみが
+    構築するべき不透明型）を要求する（PR #329 第3巡レビュー指摘2, P1,
+    採用対応）。isinstance 検査で拒否する境界の Python 上の限界は両型の
+    定義コメント（モジュール中盤）を参照。
     """
-    _require_song_ids_within_frozen_split([song_id], frozen_allowed_ids, context="extract_song")
+    if not isinstance(frozen_split_pins, FrozenSplitPins):
+        raise ExtractorStopError(
+            "extract_song(): frozen_split_pins must be a FrozenSplitPins instance produced by "
+            "load_training_validation_ids() (the canonical pin-verified loader) — a raw "
+            f"list/set/tuple is rejected fail-closed (got {type(frozen_split_pins).__name__})"
+        )
+    if not isinstance(consumed_inputs_pins, ConsumedInputPins):
+        raise ExtractorStopError(
+            "extract_song(): consumed_inputs_pins must be a ConsumedInputPins instance produced "
+            "by load_consumed_inputs_pins() (the canonical pin-verified loader) — a raw dict is "
+            f"rejected fail-closed (got {type(consumed_inputs_pins).__name__})"
+        )
+    _require_song_ids_within_frozen_split(
+        [song_id], frozen_split_pins.frozen_allowed_ids, context="extract_song",
+    )
     wav_path = song_dir / f"{song_id}_song.wav"
     lab_path = song_dir / f"{song_id}.lab"
     xml_path = song_dir / f"{song_id}.musicxml"
     for p in (wav_path, lab_path, xml_path):
         if not p.exists():
             raise ExtractorStopError(f"{song_id}: required input missing: {p}")
-    _require_consumed_input_bytes_match(
-        song_id, wav_path, lab_path, xml_path, consumed_inputs_pins, context="extract_song",
+
+    # PR #329 第3巡レビュー指摘3（P2、採用対応）: 各ファイルを1回だけ
+    # `read_bytes()` し、その同一バイト列に対して sha 照合 → parse/decode
+    # の両方を行う（ファイル再 open の排除・TOCTOU 閉鎖 —
+    # `speaker_map_builder.py` verified self-exec dispatch と同型の
+    # read-once パターン）。
+    wav_buf = wav_path.read_bytes()
+    lab_buf = lab_path.read_bytes()
+    xml_buf = xml_path.read_bytes()
+    _require_consumed_input_bytes_match_bytes(
+        song_id, wav_buf, lab_buf, xml_buf, consumed_inputs_pins, context="extract_song",
     )
 
-    wav_header = check_wav_header_or_stop(wav_path)  # STOPS the whole run on mismatch (raises)
+    # STOPS the whole run on mismatch (raises) — validated against wav_buf,
+    # the exact same bytes decode()d below.
+    wav_header = check_wav_header_or_stop_bytes(wav_buf, str(wav_path))
 
-    phonemes = parse_lab_file(lab_path)
+    phonemes = parse_lab_bytes(lab_buf, str(lab_path))
     lab_morae = group_lab_to_morae_with_phrases(phonemes)
 
-    tempo_events, raw_notes = parse_musicxml(xml_path)
+    tempo_events, raw_notes = parse_musicxml_bytes(xml_buf, str(xml_path))
     tempo_segments = build_tempo_segments(tempo_events)
     merged_score_morae = merge_score_morae(raw_notes, str(xml_path))
     score_morae = finalize_score_morae(merged_score_morae, tempo_segments, str(xml_path))
@@ -1013,7 +1246,7 @@ def extract_song(
         }
         return song_out
 
-    x48k = load_wav_24bit_mono_48k(wav_path)
+    x48k = load_wav_24bit_mono_48k_bytes(wav_buf, str(wav_path))
     x44k = resample_to_44100(x48k)
     f0, temporal_positions = compute_world_f0(x44k)
 
@@ -1160,10 +1393,28 @@ def _serialize_bundle_json(obj: Dict[str, Any]) -> bytes:
 
 
 def write_bundle_json(obj: Dict[str, Any], path: Path) -> None:
-    """単本バンドルの非 atomic 書き込み（`assemble` サブコマンド専用 —
+    """単本バンドルの atomic 書き込み（`assemble` サブコマンド専用 —
     training/validation を対にして公開する `build` サブコマンドは atomic
-    ペア公開が必要なため `publish_bundle_pair()` を使う、下記参照）。"""
-    Path(path).write_bytes(_serialize_bundle_json(obj))
+    ペア公開が必要なため `publish_bundle_pair()` を使う、下記参照）。
+
+    PR #329 第3巡レビュー指摘5（P2、採用対応）: 旧実装は `Path(path).
+    write_bytes()` の直書きで、書き込み途中の失敗（ディスク枯渇・
+    プロセス kill 等）で旧世代 artifact が破損した部分書き込みバイト列で
+    上書きされ得た。`_atomic_write_bytes()`（`publish_bundle_pair()` が
+    使うのと同じ staging+fsync ヘルパー）で同一ディレクトリ内の一意な
+    staging ファイルへ書き切ってから `os.replace()` する構成へ変更する
+    ——`path` の既存実バイトは最後の一括 rename までは一切変更されない
+    ため、staging 段の失敗時は旧世代 artifact が無傷のまま残る。"""
+    path = Path(path)
+    tmp_path = _atomic_write_bytes(path, _serialize_bundle_json(obj))
+    try:
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> Path:
@@ -1202,13 +1453,29 @@ def _backup_existing(path: Path) -> Optional[Path]:
     `os.replace()`（rename、同一ファイルシステム内であれば atomic）で
     退避し、その backup パスを返す。存在しなければ `None` を返す
     （`publish_bundle_pair()` のロールバック用スナップショット。PR #329
-    第2巡レビュー指摘2-2, P1, 採用対応）。"""
+    第2巡レビュー指摘2-2, P1, 採用対応）。
+
+    `mkstemp()` は退避先の空プレースホルダファイルを作成してから
+    `os.replace()` する構成のため、その後の `os.replace()` 自体が失敗
+    （PR #329 第3巡レビュー指摘4, P1, 採用対応 — 例: `path` がディレクトリ
+    で rename が構造的に失敗するケース）すると、空プレースホルダだけが
+    孤児として残置され得た。`os.replace()` の失敗時は、この関数自身が
+    作った空プレースホルダを best-effort で削除してから re-raise する
+    ——`publish_bundle_pair()` 側のロールバックが「残骸なし」を達成する
+    ためには、本関数自身が自分の中間生成物の後始末をする必要がある。"""
     if not path.exists():
         return None
     fd, backup_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".prevgen.tmp")
     os.close(fd)
     backup_path = Path(backup_name)
-    os.replace(path, backup_path)
+    try:
+        os.replace(path, backup_path)
+    except BaseException:
+        try:
+            backup_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
     return backup_path
 
 
@@ -1262,12 +1529,26 @@ def publish_bundle_pair(
 
     本関数は staging 完了後、公開前に両ファイルの**既存内容を
     `_backup_existing()` で退避**してから2本の `os.replace()` を実行する。
-    `BaseException` を含むいずれかの rename の失敗時は、**両方の**最終名
-    を `_rollback_to_backup()` で publish 開始前の状態（旧世代のバイト、
-    または未存在なら削除）へ復元し、残った staging ファイルも破棄した
-    うえで re-raise する —— 「training だけ新世代・validation は旧世代
-    または欠落」という混合世代が最終的に観測されることはない。両方成功
-    時は退避した backup を破棄する。
+    退避2回 + rename2回の**4操作すべてを同一の `BaseException` ロール
+    バック/cleanup トランザクションに含める**（PR #329 第3巡レビュー
+    指摘4, P1, 採用対応）——第1巡/第2巡修正では2回の `_backup_existing()`
+    呼び出し自体が `try` の**外側**にあり、1本目（training）の退避が
+    成功した直後に2本目（validation）の退避が失敗する経路（例:
+    `validation_path` が通常ファイルでなくディレクトリで `os.replace()`
+    が構造的に失敗するケース）で、training は既に backup 名へ rename
+    済み（= 最終名 `training_path` が一時的に欠落した状態）にもかかわらず、
+    その例外がロールバック処理を一切経由せず `publish_bundle_pair()` の
+    外へそのまま伝播していた——training の復元も staging（`training_tmp`/
+    `validation_tmp`）の破棄も行われず、「公開前ペアが無傷のまま残る」
+    という本関数の契約が破られる具体的な穴があった。
+    `BaseException` を含むいずれかの退避/rename の失敗時は、**両方の**
+    最終名を `_rollback_to_backup()` で publish 開始前の状態（backup が
+    取れていれば旧世代のバイトへ、取れていなければ未存在に）へ復元し、
+    残った staging ファイルも破棄したうえで re-raise する —— 「training
+    だけ新世代・validation は旧世代または欠落」という混合世代はもちろん、
+    「training だけ backup 名へ退避されたまま最終名が欠落」という部分
+    退避の窓も最終的に観測されることはない。両方成功時は退避した backup
+    を破棄する。
     """
     training_tmp = _atomic_write_bytes(training_path, training_bytes)
     try:
@@ -1279,9 +1560,11 @@ def publish_bundle_pair(
             pass
         raise
 
-    training_backup = _backup_existing(training_path)
-    validation_backup = _backup_existing(validation_path)
+    training_backup: Optional[Path] = None
+    validation_backup: Optional[Path] = None
     try:
+        training_backup = _backup_existing(training_path)
+        validation_backup = _backup_existing(validation_path)
         os.replace(training_tmp, training_path)
         os.replace(validation_tmp, validation_path)
     except BaseException:
@@ -1318,8 +1601,14 @@ def load_training_validation_ids(
     split_manifest_path: Optional[Path] = None,
     *,
     contract_path: Optional[Path] = None,
-) -> Tuple[List[str], List[str]]:
-    """training/validation row_ids を pin 検証済みで読む。
+) -> FrozenSplitPins:
+    """training/validation row_ids を pin 検証済みで読み、`FrozenSplitPins`
+    （canonical loader 専用の不透明型、PR #329 第3巡レビュー指摘2, P1,
+    採用対応）として返す。`training_ids, validation_ids = load_training_
+    validation_ids(...)` という既存の unpack 慣用句は `FrozenSplitPins.
+    __iter__` により引き続き成立する——`extract_song()` へ渡す際は
+    unpack せず本関数の戻り値をそのまま `frozen_split_pins=` へ渡すこと
+    （unpack 後の生 tuple は isinstance 検査で拒否される）。
 
     旧実装は `split_manifest_path` が指す任意の JSON を無検証で
     `json.loads()` していたため、(a) sealed ID が training/validation へ
@@ -1364,22 +1653,24 @@ def load_training_validation_ids(
             f"{_PRACTICE_SPLIT_EXPECTED_COUNTS} (PJS corpus ver1.1 100-song fixed split, 裁定 §1), "
             f"got {actual_counts} — stop, no partial/renegotiated split accepted"
         )
-    return training_ids, validation_ids
+    return FrozenSplitPins(training_ids=tuple(training_ids), validation_ids=tuple(validation_ids))
 
 
 def load_consumed_inputs_pins(
     consumed_inputs_manifest_path: Optional[Path] = None,
     *,
     contract_path: Optional[Path] = None,
-) -> Dict[str, Dict[str, str]]:
-    """consumed-inputs per-file sha256 pin（pin 検証済み）を読む（PR #329
-    第2巡レビュー指摘2-4, P1, 採用対応）。`load_training_validation_ids()`
-    と同型: `run9_schema.load_pinned_consumed_inputs_manifest()`（`RUN9_
-    CONTRACT.yaml` の `pjs_consumed_inputs_manifest_sha` pin との read-once
-    sha256 照合 + `validate_pjs_consumed_inputs_manifest()` の構造/件数/
-    値整形式検証）経由でのみ manifest を読む。戻り値は `{song_id:
-    {"lab_sha256": ..., "musicxml_sha256": ..., "wav_sha256": ...}}`
-    （training70+validation15=85曲分、sealed_holdout は含まれない）。
+) -> ConsumedInputPins:
+    """consumed-inputs per-file sha256 pin（pin 検証済み）を読み、
+    `ConsumedInputPins`（canonical loader 専用の不透明型、PR #329 第3巡
+    レビュー指摘2, P1, 採用対応）として返す。`load_training_validation_
+    ids()` と同型: `run9_schema.load_pinned_consumed_inputs_manifest()`
+    （`RUN9_CONTRACT.yaml` の `pjs_consumed_inputs_manifest_sha` pin との
+    read-once sha256 照合 + `validate_pjs_consumed_inputs_manifest()` の
+    構造/件数/値整形式検証）経由でのみ manifest を読む。`ConsumedInputPins.
+    pins` は `{song_id: {"lab_sha256": ..., "musicxml_sha256": ...,
+    "wav_sha256": ...}}`（training70+validation15=85曲分、sealed_holdout
+    は含まれない）。
 
     `consumed_inputs_manifest_path`/`contract_path` を省略すると、それぞれ
     正典 `DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH`（=
@@ -1396,7 +1687,7 @@ def load_consumed_inputs_pins(
     data = run9_schema.load_pinned_consumed_inputs_manifest(
         contract, manifest_path=effective_manifest_path, contract_path=effective_contract_path,
     )
-    return data["songs"]
+    return ConsumedInputPins(pins=data["songs"])
 
 
 def _require_song_ids_within_frozen_split(
@@ -1455,19 +1746,48 @@ def _require_exact_frozen_split_membership(
         )
 
 
-def _require_consumed_input_bytes_match(
+def _require_no_duplicate_song_ids(song_ids: Sequence[str], *, context: str) -> None:
+    """`song_ids`（`--song-ids-json` から読み込んだ生リスト）に重複が無い
+    ことを、`set()` を経由するいかなる検証（`_require_exact_frozen_split_
+    membership()` を含む——同関数は内部で `set(song_ids)` へ変換するため
+    重複を検出できない）よりも前に確認する（PR #329 第3巡レビュー指摘1,
+    P1, 採用対応）。
+
+    旧実装は `song_ids_sorted = sorted(song_ids)` の時点で重複を保持した
+    まま以降の処理へ進み、`_require_exact_frozen_split_membership()` の
+    `set(song_ids)` 変換で重複が黙って吸収されていた——結果、凍結 split
+    の ID 集合と（重複を除けば）完全一致するリストであっても、
+    `assemble_bundle()` の `ordered_songs = [songs_by_id[sid] for sid in
+    song_ids_sorted]` は `song_ids_sorted` の重複をそのまま辿るため、
+    同一曲が2回以上 bundle の `"songs"` 配列へ混入し得た。
+
+    重複が1件でもあれば、中間物ファイルを1つも読む前に `ExtractorStopError`
+    で即停止する（重複した song_id を列挙する）。"""
+    seen: Dict[str, int] = {}
+    for sid in song_ids:
+        seen[sid] = seen.get(sid, 0) + 1
+    duplicates = sorted(sid for sid, count in seen.items() if count > 1)
+    if duplicates:
+        raise ExtractorStopError(
+            f"{context}: --song-ids-json contains duplicate song_id(s) (each song_id must appear "
+            f"exactly once; the frozen split membership check that follows would otherwise silently "
+            f"absorb duplicates via set()): {duplicates}"
+        )
+
+
+def _require_consumed_input_bytes_match_bytes(
     song_id: str,
-    wav_path: Path,
-    lab_path: Path,
-    xml_path: Path,
-    consumed_inputs_pins: Mapping[str, Mapping[str, str]],
+    wav_buf: bytes,
+    lab_buf: bytes,
+    xml_buf: bytes,
+    consumed_inputs_pins: "ConsumedInputPins",
     *,
     context: str,
 ) -> None:
     """`song_id` が消費する3入力（lab/musicxml/wav）の実バイト sha256 が
     `consumed_inputs_pins`（`load_consumed_inputs_pins()` が返す pin 検証
-    済み辞書）の値と一致することを decode 前に検証する（PR #329 第2巡
-    レビュー指摘2-4, P1, 採用対応）。`donor_bank_lab.py` の
+    済み `ConsumedInputPins`）の値と一致することを decode 前に検証する
+    （PR #329 第2巡レビュー指摘2-4, P1, 採用対応）。`donor_bank_lab.py` の
     `corpus_identity_hash()` は `.lab` + 対の `_song.wav` のみを被覆し
     musicxml を被覆しないため、musicxml 単体の改ざん（duration/F0 lesson
     を変え得る）が検出されない穴があった——本関数はその穴を builder 消費
@@ -1476,7 +1796,16 @@ def _require_consumed_input_bytes_match(
     （通常は `_require_song_ids_within_frozen_split()`/
     `_require_exact_frozen_split_membership()` が先に拒否するため二重
     防御）。不一致は `ExtractorStopError` で即停止し、decode は一切
-    実行しない。"""
+    実行しない。
+
+    PR #329 第3巡レビュー指摘3（P2、採用対応、TOCTOU 閉鎖）: `wav_buf`/
+    `lab_buf`/`xml_buf` は呼び出し元（`extract_song()`）が既に1回だけ
+    `read_bytes()` 済みのバッファを渡す——本関数はそのバッファから直接
+    sha256 を算出するのみで、ファイルを再 open しない（旧実装は
+    `path.read_bytes()` をここで独自に行っており、`extract_song()` が
+    その後さらに別途ファイルを開いて parse/decode する構成だったため、
+    sha 照合とその後の parse/decode が異なる読み取り時点のバイト列に
+    対して行われ得た）。"""
     pins = consumed_inputs_pins.get(song_id)
     if pins is None:
         raise ExtractorStopError(
@@ -1485,12 +1814,16 @@ def _require_consumed_input_bytes_match(
             "training/validation split are never present in this pin) — extraction is "
             "fail-closed refused without a matching pinned entry"
         )
-    for path, key in ((lab_path, "lab_sha256"), (xml_path, "musicxml_sha256"), (wav_path, "wav_sha256")):
+    for buf, key, name in (
+        (lab_buf, "lab_sha256", f"{song_id}.lab"),
+        (xml_buf, "musicxml_sha256", f"{song_id}.musicxml"),
+        (wav_buf, "wav_sha256", f"{song_id}_song.wav"),
+    ):
         expected = pins[key]
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        actual = hashlib.sha256(buf).hexdigest()
         if actual != expected:
             raise ExtractorStopError(
-                f"{context}: {song_id} {path.name} の実バイト sha256 ({actual!r}) が "
+                f"{context}: {song_id} {name} の実バイト sha256 ({actual!r}) が "
                 f"pjs_consumed_inputs_sha256.json の {key} pin 値 ({expected!r}) と一致しない — "
                 "改ざんされた corpus 入力（musicxml を含む）は decode 前に fail-closed で拒否する"
             )
@@ -1501,6 +1834,22 @@ def _require_consumed_input_bytes_match(
 # ---------------------------------------------------------------------------
 
 def _cmd_probe_header(args: argparse.Namespace) -> int:
+    # PR #329 第3巡レビュー指摘6（P2、採用対応、凍結 split ゲート）:
+    # `probe-header` は「メタデータのみ・decode なし」であっても、WAV
+    # ファイルを1バイトでも open する処理そのものが 裁定 §2「sealed は
+    # 完全性 hash と ID 確認以外の処理禁止」に抵触し得る——本コマンドは
+    # ID 確認そのもの（audio_format/channels/sample_rate/bits_per_sample
+    # の適合可否の報告）を目的とするが、`--song-ids` に sealed_holdout や
+    # 凍結 training∪validation split 外の song_id が1件でも含まれていれば、
+    # いずれの WAV も open する前に全件一括で拒否する（他のゲートと同型:
+    # 一部だけ open してから拒否、という中途半端な状態を作らない）。
+    split_manifest_path = Path(args.split_manifest) if args.split_manifest else None
+    contract_path = Path(args.contract_path) if args.contract_path else None
+    frozen_split_pins = load_training_validation_ids(split_manifest_path, contract_path=contract_path)
+    _require_song_ids_within_frozen_split(
+        args.song_ids, frozen_split_pins.frozen_allowed_ids, context="probe-header",
+    )
+
     out = {}
     for song_id in args.song_ids:
         wav_path = Path(args.corpus_root) / song_id / f"{song_id}_song.wav"
@@ -1533,11 +1882,12 @@ def _cmd_extract_song(args: argparse.Namespace) -> int:
     # 外の song_id は decode 前に fail-closed で拒否する。
     split_manifest_path = Path(args.split_manifest) if args.split_manifest else None
     contract_path = Path(args.contract_path) if args.contract_path else None
-    training_ids, validation_ids = load_training_validation_ids(
+    frozen_split_pins = load_training_validation_ids(
         split_manifest_path, contract_path=contract_path,
     )
-    frozen_allowed_ids = sorted(set(training_ids) | set(validation_ids))
-    _require_song_ids_within_frozen_split([args.song_id], frozen_allowed_ids, context="extract-song")
+    _require_song_ids_within_frozen_split(
+        [args.song_id], frozen_split_pins.frozen_allowed_ids, context="extract-song",
+    )
     # PR #329 第2巡レビュー指摘2-4（P1、採用対応）: 消費3入力（lab/
     # musicxml/wav）の実バイト sha256 を decode 前に照合する。
     consumed_inputs_manifest_path = (
@@ -1549,7 +1899,7 @@ def _cmd_extract_song(args: argparse.Namespace) -> int:
     song_dir = Path(args.corpus_root) / args.song_id
     result = extract_song(
         song_dir, args.song_id,
-        frozen_allowed_ids=frozen_allowed_ids, consumed_inputs_pins=consumed_inputs_pins,
+        frozen_split_pins=frozen_split_pins, consumed_inputs_pins=consumed_inputs_pins,
     )
     Path(args.out).write_text(json.dumps(result, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
     print(f"extract-song {args.song_id}: alignment_status={result['alignment_status']}", file=sys.stderr)
@@ -1564,12 +1914,22 @@ def _cmd_assemble(args: argparse.Namespace) -> int:
     # ・欠落・過剰・未知 ID いずれも）は decode/読み込み前に拒否する。
     split_manifest_path = Path(args.split_manifest) if args.split_manifest else None
     contract_path = Path(args.contract_path) if args.contract_path else None
-    training_ids, validation_ids = load_training_validation_ids(
+    frozen_split_pins = load_training_validation_ids(
         split_manifest_path, contract_path=contract_path,
     )
-    expected_ids = training_ids if args.split == "training" else validation_ids
+    expected_ids = (
+        frozen_split_pins.training_ids if args.split == "training" else frozen_split_pins.validation_ids
+    )
 
     song_ids = json.loads(Path(args.song_ids_json).read_text(encoding="utf-8"))
+    # PR #329 第3巡レビュー指摘1（P1、採用対応）: `--song-ids-json` の
+    # set 化（`_require_exact_frozen_split_membership()` 内部の `set(
+    # song_ids)`）より前に重複を明示検出して拒否する——set 化は重複を
+    # 黙って吸収するため、旧実装は凍結 split と重複除けば完全一致する
+    # リストであっても、`assemble_bundle()` の `ordered_songs` 生成が
+    # `song_ids_sorted` の重複をそのまま辿ることで、同一曲が2回以上
+    # bundle の `"songs"` 配列へ混入し得た。
+    _require_no_duplicate_song_ids(song_ids, context="assemble")
     song_ids_sorted = sorted(song_ids)
     _require_exact_frozen_split_membership(
         song_ids_sorted, expected_ids, split=args.split, context="assemble",
@@ -1690,12 +2050,22 @@ def run_build(
     out_dir.mkdir(parents=True, exist_ok=True)
     freeze_selfcheck(freeze_record_path, spec_path)
 
+    # unpack（`FrozenSplitPins.__iter__` 経由——テスト層が monkeypatch で
+    # 生 tuple を返す簡易 stub を注入するケースとも互換）してから自前で
+    # `FrozenSplitPins` を再構築する。こうすることで `load_training_
+    # validation_ids()` の実際の戻り値の型に関わらず、`extract_song()` へ
+    # 渡す値は常に本物の `FrozenSplitPins` になる（PR #329 第3巡レビュー
+    # 指摘2, P1, 採用対応）。
     training_ids, validation_ids = load_training_validation_ids(
         split_manifest_path, contract_path=contract_path,
     )
-    frozen_allowed_ids = sorted(set(training_ids) | set(validation_ids))
+    frozen_split_pins = FrozenSplitPins(
+        training_ids=tuple(training_ids), validation_ids=tuple(validation_ids),
+    )
     all_ids = sorted(set(training_ids) | set(validation_ids))
-    _require_song_ids_within_frozen_split(all_ids, frozen_allowed_ids, context="run_build")
+    _require_song_ids_within_frozen_split(
+        all_ids, frozen_split_pins.frozen_allowed_ids, context="run_build",
+    )
 
     consumed_inputs_pins = load_consumed_inputs_pins(
         consumed_inputs_manifest_path, contract_path=contract_path,
@@ -1705,7 +2075,7 @@ def run_build(
     for song_id in all_ids:
         songs_by_id[song_id] = extract_song(
             corpus_root / song_id, song_id,
-            frozen_allowed_ids=frozen_allowed_ids, consumed_inputs_pins=consumed_inputs_pins,
+            frozen_split_pins=frozen_split_pins, consumed_inputs_pins=consumed_inputs_pins,
         )
 
     spec_sha256 = sha256_of_file(spec_path)
@@ -1776,6 +2146,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("probe-header", help="metadata-only WAV header probe (no decode)")
     p.add_argument("--corpus-root", required=True)
     p.add_argument("--song-ids", nargs="+", required=True)
+    p.add_argument(
+        "--split-manifest", default=None,
+        help=f"default: {DEFAULT_SPLIT_MANIFEST_PATH} (pin-verified against RUN9_CONTRACT.yaml "
+        "practice_audio_split_manifest_sha — every --song-ids entry must be a member of its "
+        "training/validation row_ids; sealed_holdout song_ids are rejected before any WAV is "
+        "opened, per 裁定 §2)",
+    )
+    p.add_argument("--contract-path", default=None, help="default: RUN9_CONTRACT.yaml (repo canonical)")
     p.add_argument("--out", required=True)
     p.set_defaults(func=_cmd_probe_header)
 
