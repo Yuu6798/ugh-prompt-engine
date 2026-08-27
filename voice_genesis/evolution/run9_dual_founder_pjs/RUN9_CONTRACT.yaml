@@ -2171,8 +2171,17 @@ pjs_consumed_inputs_manifest_sha:
 # （裁定txt/detail record実バイト照合、catalog↔score_axis_transform.py
 # 変換器の実行時整合——range/quantization境界値の受理と境界外値の拒否を
 # 実際に変換器へ通して確認）を fail-closed で強制する。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第1巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂。`provenance.detail_record.
+# sha256` が参照する `HARNESS3C_AXIS_FEASIBILITY_RECORD.md` に第1巡対応
+# 追記節を新設したことに伴い同ファイルの実バイト sha256 が変わり、5
+# manifest 共通の `_h3c_cross_check_adjudication_and_detail_record()` が
+# 要求する detail_record.sha256 参照値を追随更新した——この参照値変更
+# 自体が本ファイルの実バイトを変えるため、cascade として値を再計算した
+# （旧値 7440b9993a5466e9ff89b1d899c9815b2bcca95046e806107bdc025dbc52b2b3
+# は履歴として append-only 保持）。
 score_axis_catalog_sha:
-  value: "7440b9993a5466e9ff89b1d899c9815b2bcca95046e806107bdc025dbc52b2b3"
+  value: "05d2da6c52673ef11de13014cd1b722a4f2864b7084adf1ddc20a273041c1b3d"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/score_axis_catalog_v1.json
 
@@ -2190,8 +2199,27 @@ score_axis_catalog_sha:
 # detail record実バイト照合、calibration値のLOSS_EVALUATOR_CALIBRATION_
 # SCALE_V1定数との一致、channel対応表のTECHNIQUE_LESSON_CHANNEL_
 # VOCABULARY_MAP一致）を fail-closed で強制する。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第1巡指摘2、P1、採用対応。
+# Claude 完結ルート）: missing_policy.not_measurable_definition を、
+# 「いずれかの channel が eligible == 0 の candidate は当該 candidate を
+# NOT_SCORABLE と記録し、candidate selection（best 更新の比較対象）から
+# 除外する」定義へ改訂した——旧定義（欠測 channel は aggregate から除外し
+# 残 channel の等重み再正規化をしない = 欠測分を加点も減点もしないゼロ
+# 補完相当の扱い）は、最小化目的の下では正の loss 項の欠落がゼロ補完と
+# 同値になり、部分計測 candidate が完全計測 candidate に勝ち得る欠陥
+# だった。全 candidate が NOT_SCORABLE の trial の扱い（そのまま記録し
+# best 更新なしで次 trial へ進む、render 予算は消費済みとして計上する）
+# も定義に含め、本改訂が学習開始前の spec 是正であり DESIGN_RUN9_TRI_
+# DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §11.4 Freeze Rule（学習開始後の
+# lesson 変更禁止）には抵触しない旨を spec_correction_note として追記した
+# ことに伴い、値を再計算した。さらに `HARNESS3C_AXIS_FEASIBILITY_RECORD.
+# md` へ第1巡対応追記節を新設したことに伴う `provenance.detail_record.
+# sha256` 参照値の追随更新（score_axis_catalog_sha の repin note と同型の
+# cascade）も同一 repin に含める（旧値
+# bcfc510a8b234207fb87766f0e682df21f1986b9ed0fcd58b032697c3314e682 は
+# 履歴として append-only 保持）。
 loss_evaluator_spec_sha:
-  value: "bcfc510a8b234207fb87766f0e682df21f1986b9ed0fcd58b032697c3314e682"
+  value: "03119458b7a4cde45ed07faa04428617b183a105ac934cc64517c9835d2df134"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/loss_evaluator_spec_v1.json
 
@@ -2204,8 +2232,22 @@ loss_evaluator_spec_sha:
 # cross-check（裁定txt/detail record実バイト照合、seed==LEARNING_SEED、
 # trial_count×candidates_per_trial=units_per_founder_per_arm=128の整合、
 # total_units=512の整合）を fail-closed で強制する。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第1巡指摘3、P2、採用対応。
+# Claude 完結ルート）: proposal.proposal_schedule_table の trial 2-32 の
+# candidate 内訳表記が「candidate 0-1 = 近傍 / candidate 2-3 = 探査」
+# （近傍:探査 = 2:2）であり、同じ proposal 節の subsequent_trial_schedule
+# 宣言および設計正本（scratchpad/h3c_five_manifests_spec.md「近傍列挙 +
+# hash 由来の探査候補の固定比率（3:1）」）の「3:1」と矛盾していた。表を
+# 「candidate 0-2 = 近傍列挙 / candidate 3 = hash 由来の探査」（近傍:探査
+# = 3:1）へ統一し、subsequent_trial_schedule の記述と完全一致させたことに
+# 伴い、値を再計算した。さらに `HARNESS3C_AXIS_FEASIBILITY_RECORD.md` へ
+# 第1巡対応追記節を新設したことに伴う `provenance.detail_record.sha256`
+# 参照値の追随更新（score_axis_catalog_sha の repin note と同型の
+# cascade）も同一 repin に含める（旧値
+# e039b719aa7af175e139778420319f712055e6d291dc90a209a81e2b41a5636a は
+# 履歴として append-only 保持）。
 candidate_generation_spec_sha:
-  value: "e039b719aa7af175e139778420319f712055e6d291dc90a209a81e2b41a5636a"
+  value: "ed99e566c952b619ff00c3210a6a523e69ff8ed0067c51dcda171877b29131c2"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/candidate_generation_spec_v1.json
 
@@ -2219,8 +2261,15 @@ candidate_generation_spec_sha:
 # 実バイト照合、provider.execution_profile_sha_referenceが本ファイルの
 # execution_profile_sha現行PINNED値と厳密一致）を fail-closed で強制
 # する。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第1巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂。`HARNESS3C_AXIS_FEASIBILITY_
+# RECORD.md` へ第1巡対応追記節を新設したことに伴う `provenance.
+# detail_record.sha256` 参照値の追随更新のみ（score_axis_catalog_sha の
+# repin note と同型の cascade）——値を再計算した（旧値
+# 8acc17f1b703368a2f962129d3235f7c33beabfe73907e2398ede364c042eeed は
+# 履歴として append-only 保持）。
 compute_budget_manifest_sha:
-  value: "8acc17f1b703368a2f962129d3235f7c33beabfe73907e2398ede364c042eeed"
+  value: "630a82c6e15dc158d01c8c2ae15a393d8963e2cbb52a567d24a233632b163ace"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/compute_budget_manifest_v1.json
 
@@ -2235,8 +2284,19 @@ compute_budget_manifest_sha:
 # bindings 3値それぞれが本ファイルの対応する現行PINNED値と完全一致 —
 # 裁定§5「loaderはRUN9_CONTRACTの3 pin値との完全一致をfail-closedで
 # 要求する」の直接実装）を fail-closed で強制する。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第1巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（`branch_usage.practice.uses`/
+# `branch_usage.education.uses` の値自体は指摘4対応前から既に正しい
+# 厳密集合だったため manifest 側の変更は不要——`run9_schema.
+# validate_learning_data_binding_manifest()` のバリデータ強化のみで
+# manifest バイトは無変更）。`HARNESS3C_AXIS_FEASIBILITY_RECORD.md` へ
+# 第1巡対応追記節を新設したことに伴う `provenance.detail_record.sha256`
+# 参照値の追随更新のみ（score_axis_catalog_sha の repin note と同型の
+# cascade）——値を再計算した（旧値
+# 90d9157c9be29fe793fccb645a5b7f22b4d12c778787416590e55dcf8b5e9cf4 は
+# 履歴として append-only 保持）。
 learning_data_binding_manifest_sha:
-  value: "90d9157c9be29fe793fccb645a5b7f22b4d12c778787416590e55dcf8b5e9cf4"
+  value: "12158a87aca3f5c25e05bd6c126715e6c6a64cf4c436a7ddf3b672f627d77aa0"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/learning_data_binding_manifest_v1.json
 

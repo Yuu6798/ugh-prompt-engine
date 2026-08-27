@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import copy
 import math
+from collections import Counter
 from typing import Any, Dict, List, Mapping, Sequence
 
 # note spec が変換器から見て触れてよいフィールド（族 c を実装しないため
@@ -266,20 +267,45 @@ def apply_ax_d1(
     入力は変更しない）。
 
     `verify_composition_invariants()` を内部で通してから返す。
+
+    レビュー指摘（PR #331 第1巡 採用1/採用5）対応: `note_indices` の重複は
+    zero-sum 検査を素通りして同一 note への代入上書きで beat 合計保存が
+    silent に破れるため、変換前に fail-closed で拒否する。また AX-D1 は
+    凍結定義により phrase 内再配分のみを許可するため、`note_indices` が
+    単一 phrase に属することも fail-closed で検証する（phrase をまたぐ
+    global zero-sum は「phrase 内再配分」の定義違反になり得る）。
     """
     if len(note_indices) != len(deltas_beats):
         raise ScoreAxisTransformError(
             "AX-D1: note_indices と deltas_beats の長さが一致しない "
             f"({len(note_indices)} != {len(deltas_beats)})"
         )
+    index_counts = Counter(note_indices)
+    duplicates = sorted(idx for idx, count in index_counts.items() if count > 1)
+    if duplicates:
+        raise ScoreAxisTransformError(
+            f"AX-D1: note_indices に重複がある（重複 index={duplicates}）— "
+            "同一 note への複数回代入は zero-sum 検査を素通りし beat 合計保存が "
+            "silent に破れる"
+        )
     variant = copy.deepcopy(list(note_specs))
     original_durations = []
+    phrase_indices: List[Any] = []
     for idx in note_indices:
         if not (0 <= idx < len(variant)):
             raise ScoreAxisTransformError(
                 f"AX-D1: note_index {idx} out of range [0, {len(variant)})"
             )
         original_durations.append(variant[idx]["duration_beats"])
+        phrase_indices.append(variant[idx]["phrase_index"])
+    distinct_phrases = sorted(set(phrase_indices))
+    if len(distinct_phrases) > 1:
+        breakdown = list(zip(note_indices, phrase_indices))
+        raise ScoreAxisTransformError(
+            "AX-D1: note_indices が単一 phrase に属していない（note_index -> "
+            f"phrase_index 内訳={breakdown}）— AX-D1 は凍結定義により phrase 内"
+            "再配分のみを許可する（phrase をまたぐ再配分は不可）"
+        )
     validated_deltas = validate_ax_d1_delta_vector(
         original_durations, deltas_beats, catalog=catalog
     )

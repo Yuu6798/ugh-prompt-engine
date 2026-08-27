@@ -415,3 +415,62 @@ block総数166053）:
 境界ケースとして想定内の失敗であり harness の異常ではない。render 追加は
 W1b で10本ちょうど（budget「10本以内」を超過せず）。
 `validation_bundle.json` は不読了。
+
+## PR #331 Codex bot レビュー第1巡対応（2026-08-27、Claude 完結ルート）
+
+5 指摘全て Fable 採用判定（機械汚染防止領域）。実装・検証・返信起草は
+Sonnet に委譲、コミット/push は Fable が別途実行する（本追記フェーズでは
+未実施）。
+
+1. **AX-D1 重複 note index 拒否（P1）**: `score_axis_transform.apply_ax_d1()`
+   に、`note_indices` 内の重複を変換前に fail-closed 拒否するチェックを
+   追加した（`[0,0]` + delta `[0.25,-0.25]` は zero-sum 検査を通過するが、
+   同一 note への代入上書きで beat 合計保存が silent に破れるため）。
+   `ScoreAxisTransformError` を送出し、重複 index を列挙する。
+2. **欠測 channel trial の NOT_SCORABLE 化（P1）**:
+   `inputs/loss_evaluator_spec_v1.json` の `missing_policy.not_measurable_
+   definition` を、「いずれかの channel が eligible == 0 の candidate は
+   NOT_SCORABLE として candidate selection から除外する」定義へ改訂した
+   （旧定義はゼロ補完相当で部分計測 candidate が完全計測 candidate に
+   勝ち得る欠陥があった）。全 candidate が NOT_SCORABLE の trial の扱い
+   （best 更新なしで次 trial へ、render 予算は消費済み計上）も明文化し、
+   `spec_correction_note` で本改訂が学習開始前の是正であり
+   `DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md` §11.4 Freeze
+   Rule に抵触しない旨を明記した。
+3. **candidate 比率矛盾の解消（P2）**:
+   `inputs/candidate_generation_spec_v1.json` の `proposal_schedule_table`
+   （trial 2-32）を、設計正本
+   （`scratchpad/h3c_five_manifests_spec.md`「近傍列挙 + hash 由来の探査
+   候補の固定比率（3:1）」）どおり「candidate 0-2 = 近傍 / candidate 3 =
+   探査」（3:1）へ統一し、`subsequent_trial_schedule` の記述と完全一致
+   させた（旧表は候補0-1/2-3の2:2表記で「3:1」宣言と矛盾していた）。
+4. **branch uses 集合の厳密一致検証（P2）**: `run9_schema.
+   validate_learning_data_binding_manifest()` の `branch_usage.practice.
+   uses`/`branch_usage.education.uses` 検査を、単一要素の混入禁止のみの
+   検査から厳密集合一致（`practice.uses` = `{practice_audio_split_
+   manifest_sha, pjs_consumed_inputs_manifest_sha}` ちょうど、
+   `education.uses` = `{education_technique_lesson_manifest_sha}` ちょうど
+   ——空・欠落・過剰を全て拒否）へ強化した。既存の「education pin の
+   practice 混入禁止」検査はこの厳密集合一致に包含される。
+5. **AX-D1 の same-phrase 検査（P1）**: `score_axis_transform.
+   apply_ax_d1()` に、`note_indices` が単一 `phrase_index` に属することを
+   fail-closed で検証するチェックを追加した（異なる phrase 間の
+   再配分は global zero-sum は通過するが「phrase 内再配分」という凍結
+   定義に違反するため）。違反時は phrase_index の内訳を列挙するエラーを
+   送出する。
+
+**連鎖更新**: `loss_evaluator_spec_v1.json`/`candidate_generation_spec_v1.
+json` のバイト変更に伴い `RUN9_CONTRACT.yaml` の `loss_evaluator_spec_sha`
+/`candidate_generation_spec_sha` を第2世代へ repin した（旧値は
+`RUN9_CONTRACT.yaml` 側に世代履歴コメントとして append-only 保持）。
+`score_axis_transform.py` の変更は catalog 側 sha pin を持たない
+（`score_axis_catalog_v1.json` は `repo_module` へのパス参照のみで
+transformer 自体の sha は pin しない設計——`run9_schema.
+validate_score_axis_catalog_manifest()` の live import による機能的
+cross-check がフルテストスイート内で通過することで整合を確認する）ため
+repin 不要。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
+2414 件全 pass（新規テスト12件を含む: AX-D1 重複拒否1件・合計保存性質
+テスト4件・same-phrase 拒否/回帰2件、branch uses 厳密一致5件、他既存回帰）。

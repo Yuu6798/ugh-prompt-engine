@@ -510,6 +510,52 @@ def test_h3c_data_binding_education_raw_audio_exclusion_tamper_rejected() -> Non
         m.validate_learning_data_binding_manifest(data)
 
 
+# --- PR #331 第1巡 採用4: branch uses 集合の厳密一致検証 -------------------
+
+
+def test_h3c_data_binding_practice_uses_missing_element_rejected() -> None:
+    """practice.uses から必須要素が欠落したら拒否する（厳密集合一致）。"""
+    data = copy.deepcopy(_manifest_data("learning_data_binding_manifest"))
+    data["branch_usage"]["practice"]["uses"] = ["practice_audio_split_manifest_sha"]
+    with pytest.raises(m.Run9ValidationError, match="practice.uses"):
+        m.validate_learning_data_binding_manifest(data)
+
+
+def test_h3c_data_binding_practice_uses_extra_element_rejected() -> None:
+    """practice.uses に許可外の要素が混入したら拒否する（厳密集合一致 —
+    education 混入以外の任意の過剰要素も拒否対象であることを確認する）。"""
+    data = copy.deepcopy(_manifest_data("learning_data_binding_manifest"))
+    data["branch_usage"]["practice"]["uses"].append("unexpected_extra_pin_sha")
+    with pytest.raises(m.Run9ValidationError, match="practice.uses"):
+        m.validate_learning_data_binding_manifest(data)
+
+
+def test_h3c_data_binding_practice_uses_empty_rejected() -> None:
+    """practice.uses が空リストなら拒否する。"""
+    data = copy.deepcopy(_manifest_data("learning_data_binding_manifest"))
+    data["branch_usage"]["practice"]["uses"] = []
+    with pytest.raises(m.Run9ValidationError, match="practice.uses"):
+        m.validate_learning_data_binding_manifest(data)
+
+
+def test_h3c_data_binding_education_uses_missing_rejected() -> None:
+    """education.uses が欠落（None/空）したら拒否する。"""
+    data = copy.deepcopy(_manifest_data("learning_data_binding_manifest"))
+    data["branch_usage"]["education"]["uses"] = []
+    with pytest.raises(m.Run9ValidationError, match="education.uses"):
+        m.validate_learning_data_binding_manifest(data)
+
+
+def test_h3c_data_binding_education_uses_extra_element_rejected() -> None:
+    """education.uses に許可外の要素（例: practice 側 pin の混入）が
+    混入したら拒否する（既存の「education pin の practice 混入禁止」検査を
+    包含する厳密集合一致）。"""
+    data = copy.deepcopy(_manifest_data("learning_data_binding_manifest"))
+    data["branch_usage"]["education"]["uses"].append("practice_audio_split_manifest_sha")
+    with pytest.raises(m.Run9ValidationError, match="education.uses"):
+        m.validate_learning_data_binding_manifest(data)
+
+
 # =============================================================================
 # score_axis_transform.py: Composition 不変条件 + catalog 制約拒否
 # （W1b の 17 unit ケースの repo テスト化）
@@ -522,6 +568,14 @@ _BASELINE_NOTES = [
     {"kana": "さ", "midi": 64.0, "duration_beats": 1.0, "phrase_index": 0, "is_phrase_final": False},
     {"kana": "く", "midi": 64.0, "duration_beats": 1.0, "phrase_index": 0, "is_phrase_final": False},
     {"kana": "ら", "midi": 65.0, "duration_beats": 2.0, "phrase_index": 0, "is_phrase_final": True},
+]
+
+# PR #331 第1巡 採用5（same-phrase 検査）用: 2 phrase にまたがる baseline。
+_TWO_PHRASE_NOTES = [
+    {"kana": "さ", "midi": 64.0, "duration_beats": 1.0, "phrase_index": 0, "is_phrase_final": False},
+    {"kana": "く", "midi": 64.0, "duration_beats": 1.0, "phrase_index": 0, "is_phrase_final": True},
+    {"kana": "ら", "midi": 65.0, "duration_beats": 2.0, "phrase_index": 1, "is_phrase_final": False},
+    {"kana": "ん", "midi": 65.0, "duration_beats": 1.0, "phrase_index": 1, "is_phrase_final": True},
 ]
 
 
@@ -580,6 +634,67 @@ def test_h3c_apply_ax_d1_preserves_total_beats() -> None:
     assert total_after == pytest.approx(total_before)
     assert variant[1]["duration_beats"] == pytest.approx(0.75)
     assert variant[2]["duration_beats"] == pytest.approx(2.25)
+
+
+@pytest.mark.parametrize(
+    "note_indices,deltas_beats",
+    [
+        ([0, 1], [-0.25, 0.25]),
+        ([1, 0], [0.25, -0.25]),
+        ([0, 1, 2], [-0.25, 0.0, 0.25]),
+        ([2, 1, 0], [0.5, -0.25, -0.25]),
+    ],
+)
+def test_h3c_apply_ax_d1_preserves_total_beats_property(
+    note_indices: list[int], deltas_beats: list[float]
+) -> None:
+    """PR #331 第1巡 採用1 対応: 合計保存の性質テスト強化。index の重複が
+    ない複数の順序・組み合わせで、beat 合計保存が常に成り立つことを確認する
+    （重複 index による silent な保存崩れは別テストで拒否を確認する）。"""
+    variant = sat.apply_ax_d1(
+        _BASELINE_NOTES, note_indices=note_indices, deltas_beats=deltas_beats, catalog=_CATALOG,
+    )
+    total_before = sum(n["duration_beats"] for n in _BASELINE_NOTES)
+    total_after = sum(n["duration_beats"] for n in variant)
+    assert total_after == pytest.approx(total_before)
+    for idx, delta in zip(note_indices, deltas_beats):
+        expected = _BASELINE_NOTES[idx]["duration_beats"] + delta
+        assert variant[idx]["duration_beats"] == pytest.approx(expected)
+
+
+def test_h3c_apply_ax_d1_rejects_duplicate_note_indices() -> None:
+    """PR #331 第1巡 採用1: [0,0] + delta [0.25,-0.25] は zero-sum 検査を通過
+    するが、同一 note への代入上書きで実質的な beat 合計保存が破れるため
+    fail-closed で拒否されなければならない。"""
+    with pytest.raises(sat.ScoreAxisTransformError, match=r"重複"):
+        sat.apply_ax_d1(
+            _BASELINE_NOTES, note_indices=[0, 0], deltas_beats=[0.25, -0.25], catalog=_CATALOG,
+        )
+    # 拒否後も baseline は不変
+    assert _BASELINE_NOTES[0]["duration_beats"] == 1.0
+
+
+def test_h3c_apply_ax_d1_rejects_note_indices_spanning_multiple_phrases() -> None:
+    """PR #331 第1巡 採用5: note_indices が異なる phrase_index にまたがる
+    場合、global zero-sum は通過し得るが凍結定義の「phrase 内再配分」に
+    違反するため fail-closed で拒否されなければならない。"""
+    with pytest.raises(sat.ScoreAxisTransformError, match="phrase"):
+        sat.apply_ax_d1(
+            _TWO_PHRASE_NOTES, note_indices=[1, 2], deltas_beats=[-0.25, 0.25], catalog=_CATALOG,
+        )
+    # 拒否後も baseline は不変
+    assert _TWO_PHRASE_NOTES[1]["duration_beats"] == 1.0
+    assert _TWO_PHRASE_NOTES[2]["duration_beats"] == 2.0
+
+
+def test_h3c_apply_ax_d1_same_phrase_redistribution_still_accepted() -> None:
+    """採否5 の回帰確認: 単一 phrase 内の再配分は引き続き正常に受理される
+    （_TWO_PHRASE_NOTES の phrase_index=1 の 2 note 間）。"""
+    variant = sat.apply_ax_d1(
+        _TWO_PHRASE_NOTES, note_indices=[2, 3], deltas_beats=[-0.25, 0.25], catalog=_CATALOG,
+    )
+    assert variant[2]["duration_beats"] == pytest.approx(1.75)
+    assert variant[3]["duration_beats"] == pytest.approx(1.25)
 
 
 def test_h3c_apply_ax_p1_int_and_float_offset_converge_to_same_midi() -> None:

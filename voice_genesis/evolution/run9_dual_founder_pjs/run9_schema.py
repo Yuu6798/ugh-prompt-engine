@@ -18619,6 +18619,16 @@ _LEARNING_DATA_BINDING_MANIFEST_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = (
     _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS
     | frozenset({"bindings", "branch_usage", "data_binding_field_convention"})
 )
+# PR #331 レビュー第1巡 採用4: branch_usage.{practice,education}.uses の厳密集合一致
+# 検証で使う正典集合（裁定 §5「practiceは前2件を検索入力として利用し、education
+# lessonを検索中に参照しない」「educationはeducation lessonを利用し、PJS raw audio
+# をlearnerへ直接入力しない」の完全形——欠落・過剰・空を全て拒否する）。
+_LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED: FrozenSet[str] = frozenset(
+    {"practice_audio_split_manifest_sha", "pjs_consumed_inputs_manifest_sha"}
+)
+_LEARNING_DATA_BINDING_EDUCATION_USES_REQUIRED: FrozenSet[str] = frozenset(
+    {"education_technique_lesson_manifest_sha"}
+)
 
 
 def validate_learning_data_binding_manifest(data: Mapping[str, Any]) -> None:
@@ -18658,11 +18668,31 @@ def validate_learning_data_binding_manifest(data: Mapping[str, Any]) -> None:
     branch_usage = data["branch_usage"]
     practice = branch_usage.get("practice", {})
     education = branch_usage.get("education", {})
-    if "education_technique_lesson_manifest_sha" in practice.get("uses", []):
+    practice_uses = practice.get("uses")
+    if (
+        not isinstance(practice_uses, list)
+        or len(practice_uses) != len(_LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED)
+        or set(practice_uses) != _LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED
+    ):
         raise Run9ValidationError(
-            "learning data binding manifest.branch_usage.practice.uses must not include "
-            "education_technique_lesson_manifest_sha（裁定 §5「educationlessonを検索中に参照しな"
-            "い」）"
+            "learning data binding manifest.branch_usage.practice.uses must be exactly "
+            f"{sorted(_LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED)}（裁定 §5「practiceは前2件を"
+            "検索入力として利用し、education lessonを検索中に参照しない」— 欠落・過剰・空・"
+            "education_technique_lesson_manifest_sha の混入を全て拒否する厳密集合一致）, got "
+            f"{sorted(practice_uses) if isinstance(practice_uses, list) else type(practice_uses).__name__}"
+        )
+    education_uses = education.get("uses")
+    if (
+        not isinstance(education_uses, list)
+        or len(education_uses) != len(_LEARNING_DATA_BINDING_EDUCATION_USES_REQUIRED)
+        or set(education_uses) != _LEARNING_DATA_BINDING_EDUCATION_USES_REQUIRED
+    ):
+        raise Run9ValidationError(
+            "learning data binding manifest.branch_usage.education.uses must be exactly "
+            f"{sorted(_LEARNING_DATA_BINDING_EDUCATION_USES_REQUIRED)}（裁定 §5「educationは"
+            "education lessonを利用し、PJS raw audioをlearnerへ直接入力しない」— 欠落・過剰・空を"
+            "全て拒否する厳密集合一致）, got "
+            f"{sorted(education_uses) if isinstance(education_uses, list) else type(education_uses).__name__}"
         )
     if education.get("excludes_raw_audio_direct_input") is not True:
         raise Run9ValidationError(

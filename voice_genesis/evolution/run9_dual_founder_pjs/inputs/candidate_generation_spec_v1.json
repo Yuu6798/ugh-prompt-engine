@@ -22,9 +22,8 @@
     "proposal_schedule_table": [
       {"trial_index": 1, "candidate_index": 0, "rule": "identity (all axes = 0, baseline)"},
       {"trial_index": 1, "candidate_index": "1..3", "rule": "hash-derived exploratory candidates (digest -> grid index)"},
-      {"trial_index": "2..32", "candidate_index": "0", "rule": "current-best neighborhood: nearest deterministic +-1 quantization step candidate not yet evaluated"},
-      {"trial_index": "2..32", "candidate_index": "1", "rule": "current-best neighborhood: second nearest deterministic +-1 quantization step candidate"},
-      {"trial_index": "2..32", "candidate_index": "2..3", "rule": "hash-derived exploratory candidates (digest -> grid index), fixed 3:1 exploration:neighborhood ratio across the 4 candidates of the trial"}
+      {"trial_index": "2..32", "candidate_index": "0..2", "rule": "current-best neighborhood: nearest, second-nearest, third-nearest deterministic +-1 quantization step candidates not yet evaluated"},
+      {"trial_index": "2..32", "candidate_index": "3", "rule": "hash-derived exploratory candidate (digest -> grid index), fixed 3:1 neighborhood:exploration ratio across the 4 candidates of the trial"}
     ]
   },
   "selection": {
@@ -54,7 +53,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "023c3e1d42e2ff5f2ab02712e1ab519b25e8f35c6d2e767275ccb3674cacb102",
+      "sha256": "9f437925fbdbfdd09f864f9dd29ac611e4f4f36ec0f76e0ab49a445c8e86ed54",
       "note": "本 spec の proposal/selection/boundary 処理が動作する探索空間（AX-P1/AX-D1 グリッド）の実効性・量子化制約の実測根拠"
     }
   }

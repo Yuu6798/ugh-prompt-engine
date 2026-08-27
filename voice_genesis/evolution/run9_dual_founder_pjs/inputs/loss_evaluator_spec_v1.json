@@ -142,8 +142,9 @@
   "missing_policy": {
     "zero_fill_prohibited": true,
     "eligible_count_required_per_channel": true,
-    "not_measurable_definition": "eligible 0 の channel は aggregate から除外し残 channel の等重み再正規化はしない（重み変更 = 意味論変更）。eligible 0 が生じた trial は当該 channel を NOT_MEASURABLE と記録し、search objective は測定可能 channel の 1/5 重み和（欠測分は加点も減点もしない）として定義を凍結する。",
-    "count_mismatch_not_extracted_handling": "count_mismatch / not_extracted はゼロ補完せず、channel ごとの eligible 件数を trial 記録に必須収載する"
+    "not_measurable_definition": "いずれかの channel が eligible == 0 の candidate は当該 candidate を NOT_SCORABLE と記録する。いずれかの channel が eligible == 0 の trial（= trial 内の全 candidate のうち少なくとも1つが NOT_SCORABLE な channel を持つ trial ではなく、当該 candidate 自身）は NOT_SCORABLE として candidate selection（best 更新の比較対象）から除外する — 部分計測の candidate が完全計測の candidate に勝ち得た旧定義（欠測 channel を加点も減点もしないゼロ補完相当の扱い）の欠陥を是正する。除外の事実（NOT_SCORABLE フラグ）と channel 別 eligible 件数を trial 記録へ必須収載する（ゼロ補完禁止・eligible 記録の裁定 §2 要件は維持）。trial 内の全 candidate が NOT_SCORABLE の場合、当該 trial はそのまま記録し best 更新なしで次 trial へ進む（当該 trial の render 予算は消費済みとして計上する — reseed・予算追加はしない）。",
+    "count_mismatch_not_extracted_handling": "count_mismatch / not_extracted はゼロ補完せず、channel ごとの eligible 件数を trial 記録に必須収載する",
+    "spec_correction_note": "本改訂（PR #331 レビュー第1巡 採用2、2026-08-27）は学習開始前の spec 是正であり、DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §11.4 Freeze Rule（'lesson freeze -> learning start -> no lesson modification'）が禁じる学習開始後の変更には該当しない。"
   },
   "actor_boundary": {
     "practice": "PRACTICE 枝はこの evaluator を PJS raw audio + founder 自己 render にのみ適用する。education lesson / precomputed teacher feature の入力を禁止する。",
@@ -157,7 +158,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "023c3e1d42e2ff5f2ab02712e1ab519b25e8f35c6d2e767275ccb3674cacb102",
+      "sha256": "9f437925fbdbfdd09f864f9dd29ac611e4f4f36ec0f76e0ab49a445c8e86ed54",
       "summary": "W1b Task3: training バンドル（sha256照合供給）68曲の5 channel母標準偏差実測。relative_f0/normalized_energyの標本粒度は両案（frame/mora,phrase）を実測しFable判定（frame採用）を記録。独立2プロセス実行で完全一致（決定論確認済み）。"
     },
     "training_bundle_input": {
