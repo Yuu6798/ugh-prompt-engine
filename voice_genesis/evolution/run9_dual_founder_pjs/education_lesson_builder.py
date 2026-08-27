@@ -1449,11 +1449,24 @@ def _serialize_bundle_json(obj: Dict[str, Any]) -> bytes:
 
 
 def write_bundle_bytes(data: bytes, path: Path) -> None:
-    """既に直列化済みのバンドルバイト列 `data` を `path` へ atomic に
-    書き込む（`write_bundle_json()` の実体。`assemble` サブコマンドが
-    pinned manifest 照合用に sha256 を先に計算した同一バイト列をそのまま
-    書き込めるよう、直列化とファイル書き込みを分離する——PR #329 第4巡
-    レビュー指摘, P1, 採用対応。二重直列化を避ける）。
+    """既に直列化済みのバイト列 `data` を `path` へ atomic に書き込む
+    （`write_bundle_json()` の実体。`assemble` サブコマンドが pinned
+    manifest 照合用に sha256 を先に計算した同一バイト列をそのまま書き
+    込めるよう、直列化とファイル書き込みを分離する——PR #329 第4巡レビュー
+    指摘, P1, 採用対応。二重直列化を避ける）。
+
+    `extract-song`/`probe-header` サブコマンド（`_cmd_extract_song()`/
+    `_cmd_probe_header()`）も自身の直列化バイト列を本関数へ渡して出力
+    JSON を書く（PR #329 第7巡レビュー指摘, 採用2, P2）——「バンドル」
+    出力に限らず、本 builder の全出力コマンドが共有する唯一の atomic 書き
+    込み経路である（名称は歴史的経緯だが、汎用の atomic bytes writer と
+    して機能する）。
+
+    PR #329 第7巡レビュー指摘の名称に関する注記: 関数名は `assemble` 由来
+    の "bundle" を残すが、機能上は「直列化済みバイト列を1本 atomic に
+    書く」以上の意味を持たない汎用ヘルパーである（新規呼び出し元を追加
+    する際にリネームは不要——既存の3コマンドすべてがこの関数を共有する
+    現状が「単一実装」の維持そのものであるため）。
 
     PR #329 第3巡レビュー指摘5（P2、採用対応）: 旧実装は `Path(path).
     write_bytes()` の直書きで、書き込み途中の失敗（ディスク枯渇・
@@ -2008,13 +2021,66 @@ def _lexical_absolute_path(path: Path) -> Path:
     return Path(os.path.abspath(os.fspath(path)))
 
 
+def _hardlink_alias_conflict(
+    out_path: Path, protected_paths: Sequence[Path],
+) -> Optional[Path]:
+    """`out_path` が既存ファイルで、かつ `protected_paths` のいずれかと
+    同一 inode（`os.path.samefile()` = 内部で `st_dev`/`st_ino` を比較）で
+    あれば、その protected path を返す（PR #329 第7巡レビュー指摘, P1,
+    採用対応）。
+
+    `_resolve_output_alias_conflict()` の (a)(b) はどちらも「パス文字列」
+    または「symlink 解決後のパス」を比較するが、`out_path` が protected
+    path への**既存ハードリンク**（別名の独立ディレクトリエントリが同一
+    inode を指す、`os.link()`/`ln` で作成可能）である場合はどちらの比較
+    軸でも検出できない——ハードリンクは symlink と異なり「別パスへの
+    参照」ではなく、複数のディレクトリエントリが同一 inode を対等に指す
+    構造そのものであるため、パス文字列比較や `resolve()`（symlink
+    追跡のみでハードリンクは追跡対象外）では原理的に見分けが付かない。
+    それにもかかわらず `_cmd_extract_song()`/`_cmd_probe_header()` の
+    `write_text()`（truncate オープン）はハードリンク越しに同じ inode の
+    実バイトを書き換えるため、`--out` が保護ファイルへの既存ハードリンク
+    であれば lexical/resolved 比較をすり抜けて保護入力が破壊され得た。
+
+    stat 失敗時の規約（安全側に倒す。曖昧な規約を残さないための明文化）:
+    - `out_path` の存在確認（`Path.exists()`）自体が `OSError` で失敗する
+      場合（権限拒否等、`ENOENT` 系以外）は `out_path` を「存在しない
+      （＝これから新規作成される）」として扱い、hardlink 照合を丸ごと
+      スキップする——存在しない/確認不能なパスはいずれの inode も指さない
+      ため、`write_text()` がハードリンク越しに何かを破壊する経路はそも
+      そも存在しない。
+    - 個々の `protected` の存在確認が失敗する場合は、その protected 単体
+      を「照合対象外（確認できないものへ既存ハードリンクは張れない）」
+      としてスキップし、他の protected との照合は継続する
+      （1件の確認不能で全件の照合を諦めない）。
+    """
+    try:
+        out_exists = out_path.exists()
+    except OSError:
+        out_exists = False
+    if not out_exists:
+        return None
+    for protected in protected_paths:
+        try:
+            if not protected.exists():
+                continue
+            if os.path.samefile(out_path, protected):
+                return protected
+        except OSError:
+            continue
+    return None
+
+
 def _resolve_output_alias_conflict(
     out_path: Path, protected_paths: Sequence[Path],
 ) -> Optional[Path]:
     """`out_path` が `protected_paths` のいずれかと (a) 同一実体（symlink
-    経由の alias 含む、`Path.resolve()` 比較）または (b) 同一 lexical 絶対
-    パス（symlink 未解決、`os.path.abspath()` 比較）であれば、その
-    protected path を返す（衝突でなければ `None`）。
+    経由の alias 含む、`Path.resolve()` 比較）、(b) 同一 lexical 絶対パス
+    （symlink 未解決、`os.path.abspath()` 比較）、または (c) 同一 inode
+    （既存ハードリンクによる alias、`os.path.samefile()` 比較——PR #329
+    第7巡レビュー指摘, P1, 採用対応。詳細は `_hardlink_alias_conflict()`
+    docstring 参照）であれば、その protected path を返す（衝突でなければ
+    `None`）。
 
     3つの出力コマンド（`_cmd_extract_song`/`_cmd_assemble`/
     `_cmd_probe_header`）が共有する alias 判定ロジックの単一実装
@@ -2027,7 +2093,7 @@ def _resolve_output_alias_conflict(
             return protected
         if out_resolved == protected.resolve():
             return protected
-    return None
+    return _hardlink_alias_conflict(out_path, protected_paths)
 
 
 def _require_out_does_not_alias_protected_paths(
@@ -2249,7 +2315,24 @@ def _cmd_probe_header(args: argparse.Namespace) -> int:
             }
         except WavHeaderError as e:
             out[song_id] = {"error": str(e)}
-    Path(args.out).write_text(json.dumps(out, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+    # PR #329 第7巡レビュー指摘（採用2, P2）: 旧実装は `Path.write_text()`
+    # の直書きで、truncate オープン後の書き込み途中失敗（ディスク枯渇・
+    # プロセス kill 等）で `--out` が既存の有効な中間物を指していた場合
+    # それを破壊し得た。`write_bundle_bytes()`（`_atomic_write_bytes()` +
+    # `os.replace()`、`assemble` サブコマンドと共有する同一 staging 経路）
+    # へ統一する——直列化は1回のみ（`_atomic_write_bytes` 呼び出し前に
+    # bytes 化）。`os.replace()` は最終名への rename に先立って target の
+    # 既存ディレクトリエントリ（＝ハードリンクなら該当エントリ）を単に
+    # 置き換える（unlink+link ではなく rename）ため、`--out` が保護
+    # ファイルへの既存ハードリンクであっても他のハードリンクエントリ
+    # （保護ファイル自身の本来のパス）が指す inode の実バイトには一切
+    # 触れない——本ステップ自体が採用1の hardlink alias 拒否
+    # （`_hardlink_alias_conflict()`）を補完する多層防御であることに注意
+    # （alias 拒否が preflight で先に効くため通常この経路には到達しないが、
+    # 万一 preflight をすり抜けても `os.replace()` の rename 意味論により
+    # 保護ファイルの実体は破壊されない）。
+    out_bytes = (json.dumps(out, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+    write_bundle_bytes(out_bytes, Path(args.out))
     n_match = sum(1 for v in out.values() if v.get("matches_requirement"))
     print(f"probe-header: {n_match}/{len(out)} match required 24-bit/mono/48000Hz header", file=sys.stderr)
     return 0
@@ -2286,7 +2369,13 @@ def _cmd_extract_song(args: argparse.Namespace) -> int:
         song_dir, args.song_id,
         frozen_split_pins=frozen_split_pins, consumed_inputs_pins=consumed_inputs_pins,
     )
-    Path(args.out).write_text(json.dumps(result, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    # PR #329 第7巡レビュー指摘（採用2, P2）: `_cmd_probe_header()` と同型
+    # ——`write_bundle_bytes()` の atomic staging+replace 経路へ統一する
+    # （直列化は1回のみ。`os.replace()` の rename 意味論が採用1の
+    # hardlink alias 拒否を補完する多層防御である旨は同関数側コメント
+    # 参照）。
+    result_bytes = (json.dumps(result, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+    write_bundle_bytes(result_bytes, Path(args.out))
     print(f"extract-song {args.song_id}: alignment_status={result['alignment_status']}", file=sys.stderr)
     return 0
 

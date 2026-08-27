@@ -15,9 +15,9 @@
     "total_songs": 85
   },
   "builder_provenance": {
-    "builder_sha256": "57899deeeb9360477d1a0f4adceb288815bf5cebf0cbf0d87d6514f1399fae7e",
+    "builder_sha256": "8b3a9de1f147fa64cc04c1acc197de20a84c0ea82f24401ddee607724f534e7b",
     "detail_record_repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3B_EDUCATION_LESSON_RECORD.md",
-    "detail_record_sha256": "c0392adb76bee4e2422222c12eaa6648ef3d1da9bb8ec63ab2826ef7e9c91cbb",
+    "detail_record_sha256": "e88d6e423012daf6002d92083a38e19c320ac97f042b08561b524ac1a9a1c5d3",
     "freeze_record_repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/h3b_freeze_record.json",
     "freeze_record_sha256": "e8e3dd1d6ea78495392d8de8a8f8a8083b50cf5d76b7b02b4980882d947d0d10",
     "logical_name": "education_lesson_builder",

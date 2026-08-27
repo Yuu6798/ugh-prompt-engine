@@ -552,6 +552,92 @@ def test_harness3b_write_bundle_json_failure_injection_leaves_old_artifact_intac
 
 
 # ---------------------------------------------------------------------------
+# PR #329 第7巡レビュー指摘（採用2, P2）: `_cmd_extract_song()`/`_cmd_probe_
+# header()` の出力書き込みを `Path.write_text()` の直書きから
+# `write_bundle_bytes()`（`_atomic_write_bytes()` + `os.replace()`）経由へ
+# 統一——`assemble` サブコマンド（上記 `test_harness3b_write_bundle_json_
+# failure_injection_leaves_old_artifact_intact`）と同型の失敗注入回帰
+# テストを両コマンドに対して追加する。`_atomic_write_bytes()` を monkeypatch
+# で失敗させ、旧世代の中間物 JSON が無傷のまま残り、staging の残骸も
+# 残らないことを確認する。`main()` は `RuntimeError` を捕捉しない
+# （`ExtractorStopError`/`Run9ValidationError` のみ捕捉）ため、`elb.main()`
+# 経由ではなく `_cmd_extract_song()`/`_cmd_probe_header()` を直接呼び出す。
+# ---------------------------------------------------------------------------
+
+
+def test_harness3b_extract_song_cli_write_failure_injection_leaves_old_intermediate_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_cmd_extract_song()` の出力書き込み失敗注入回帰テスト（PR #329
+    第7巡レビュー指摘, 採用2, P2）: `extract_song()` 本体（decode）は
+    monkeypatch で固定結果を返させ、`write_bundle_bytes()` 内部の
+    `_atomic_write_bytes()` staging 段だけを失敗させる——旧世代の中間物
+    JSON が無傷のまま残り、staging の残骸も残らないことを確認する。"""
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    song_id = training_ids[0]
+    out_path = tmp_path / "intermediate.json"
+    out_path.write_bytes(b'{"gen":"old"}\n')
+
+    def _fake_extract_song(
+        song_dir: Path, sid: str, *, frozen_split_pins: Any, consumed_inputs_pins: Any,
+    ) -> Dict[str, Any]:  # noqa: ARG001
+        return {"song_id": sid, "alignment_status": "ok"}
+
+    monkeypatch.setattr(elb, "extract_song", _fake_extract_song)
+
+    def _boom(path: Path, data: bytes) -> Path:  # noqa: ARG001
+        raise RuntimeError("synthetic extract-song staging failure")
+
+    monkeypatch.setattr(elb, "_atomic_write_bytes", _boom)
+
+    args = argparse.Namespace(
+        corpus_root=str(tmp_path), song_id=song_id,
+        freeze_record=str(elb.DEFAULT_FREEZE_RECORD_PATH), spec_path=str(elb.DEFAULT_SPEC_PATH),
+        out=str(out_path),
+    )
+    with pytest.raises(RuntimeError, match="synthetic extract-song staging failure"):
+        elb._cmd_extract_song(args)  # noqa: SLF001
+
+    assert out_path.read_bytes() == b'{"gen":"old"}\n'
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p != out_path and p.name != song_id)
+    assert leftovers == []
+
+
+def test_harness3b_probe_header_cli_write_failure_injection_leaves_old_output_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_cmd_probe_header()` の出力書き込み失敗注入回帰テスト（PR #329
+    第7巡レビュー指摘, 採用2, P2）: 対象 WAV は実ファイル（`read_wav_fmt_
+    header()` を素通しし、書き込みステップまで正常に到達させる——欠落
+    WAV だと `open()` の `FileNotFoundError` は `WavHeaderError` へラップ
+    されず本テストの意図する書き込み経路まで到達しない）を用意し、
+    `_atomic_write_bytes()` staging 段だけを失敗させる——旧世代の出力
+    JSON が無傷のまま残り、staging の残骸も残らないことを確認する。"""
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    song_id = training_ids[0]
+    song_dir = tmp_path / song_id
+    song_dir.mkdir()
+    wav_path = song_dir / f"{song_id}_song.wav"
+    wav_path.write_bytes(b"pretend-wav-bytes")
+    out_path = tmp_path / "header.json"
+    out_path.write_bytes(b'{"gen":"old"}\n')
+
+    def _boom(path: Path, data: bytes) -> Path:  # noqa: ARG001
+        raise RuntimeError("synthetic probe-header staging failure")
+
+    monkeypatch.setattr(elb, "_atomic_write_bytes", _boom)
+
+    args = argparse.Namespace(corpus_root=str(tmp_path), song_ids=[song_id], out=str(out_path))
+    with pytest.raises(RuntimeError, match="synthetic probe-header staging failure"):
+        elb._cmd_probe_header(args)  # noqa: SLF001
+
+    assert out_path.read_bytes() == b'{"gen":"old"}\n'
+    assert wav_path.read_bytes() == b"pretend-wav-bytes"
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p != out_path and p.name != song_id)
+    assert leftovers == []
+
+
+# ---------------------------------------------------------------------------
 # freeze_selfcheck(): spec sha256 照合のみ（extractor 自己照合を行わない
 # 意味論変更 — education_lesson_builder.py モジュール docstring 参照）
 # ---------------------------------------------------------------------------
@@ -1790,6 +1876,102 @@ def test_harness3b_extract_song_cli_rejects_out_aliasing_corpus_wav_via_symlink(
     ])
     assert rc == 2
     assert wav_path.read_bytes() == b"pretend-wav-bytes"
+
+
+def test_harness3b_extract_song_cli_rejects_out_aliasing_corpus_wav_via_hardlink(
+    tmp_path: Path,
+) -> None:
+    """PR #329 第7巡レビュー指摘（採用1, P1）: `--out` が対象曲の WAV への
+    **既存ハードリンク**（symlink ではなく、同一 inode を指す独立した
+    ディレクトリエントリ）を指す場合も、decode/書き込み前に拒否され、
+    corpus 入力の実バイトは無傷のまま残る。ハードリンクは symlink と違い
+    `Path.resolve()` で追跡されるパス参照ではない（複数ディレクトリ
+    エントリが同一 inode を対等に指す構造そのもの）ため、旧実装の
+    lexical/resolved パス比較だけでは検出できなかった alias 種別
+    ——`os.path.samefile()` による inode 単位の照合（`_hardlink_alias_
+    conflict()`）で検出する。"""
+    song_id = "pjs001"
+    song_dir = tmp_path / song_id
+    song_dir.mkdir()
+    wav_path = song_dir / f"{song_id}_song.wav"
+    wav_path.write_bytes(b"pretend-wav-bytes")
+    hardlink_out = tmp_path / "hardlink_out.json"
+    os.link(wav_path, hardlink_out)
+    rc = elb.main([
+        "extract-song",
+        "--corpus-root", str(tmp_path),
+        "--song-id", song_id,
+        "--out", str(hardlink_out),
+    ])
+    assert rc == 2
+    assert wav_path.read_bytes() == b"pretend-wav-bytes"
+    assert hardlink_out.read_bytes() == b"pretend-wav-bytes"
+
+
+def test_harness3b_probe_header_cli_rejects_out_aliasing_corpus_wav_via_hardlink(
+    tmp_path: Path,
+) -> None:
+    """PR #329 第7巡レビュー指摘（採用1, P1）: `probe-header` 版の同型
+    ケース——`--out` が対象曲の WAV への既存ハードリンクを指す場合も、
+    いずれの WAV も open する前に拒否される。"""
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    song_id = training_ids[0]
+    song_dir = tmp_path / song_id
+    song_dir.mkdir()
+    wav_path = song_dir / f"{song_id}_song.wav"
+    wav_path.write_bytes(b"pretend-wav-bytes")
+    hardlink_out = tmp_path / "hardlink_out.json"
+    os.link(wav_path, hardlink_out)
+    rc = elb.main([
+        "probe-header",
+        "--corpus-root", str(tmp_path),
+        "--song-ids", song_id,
+        "--out", str(hardlink_out),
+    ])
+    assert rc == 2
+    assert wav_path.read_bytes() == b"pretend-wav-bytes"
+    assert hardlink_out.read_bytes() == b"pretend-wav-bytes"
+
+
+def test_harness3b_resolve_output_alias_conflict_hardlink_stat_failure_policy(
+    tmp_path: Path,
+) -> None:
+    """`_hardlink_alias_conflict()` の stat 失敗規約を直接単体で確認する
+    （PR #329 第7巡レビュー指摘, 採用1, P1）:
+    (1) `out_path` が存在しなければ hardlink 照合はスキップされ `None`
+        （＝これから新規作成されるファイルは何の inode も指さない）。
+    (2) `protected` の一部が存在しなくても、他の existing protected との
+        照合は継続される（1件の不在で全件スキップしない）。
+    (3) 実際にハードリンクされている場合は同一 inode として検出される。
+    """
+    protected_a = tmp_path / "protected_a.bin"
+    protected_a.write_bytes(b"a")
+    missing_protected = tmp_path / "does_not_exist.bin"
+    out_new = tmp_path / "new_out.json"  # not created — brand-new output path
+
+    # (1) out_path 未存在 → hardlink 照合スキップ、lexical/resolved も
+    #     不一致なので全体として None。
+    assert elb._resolve_output_alias_conflict(  # noqa: SLF001
+        out_new, [protected_a, missing_protected],
+    ) is None
+
+    # (2)+(3) out が protected_a への既存ハードリンクなら、missing_
+    #     protected が先に照合されて存在しなくても protected_a との一致で
+    #     検出される（走査順に依存しないことの確認として両順序を試す）。
+    hardlinked_out = tmp_path / "hardlinked_out.json"
+    os.link(protected_a, hardlinked_out)
+    assert elb._resolve_output_alias_conflict(  # noqa: SLF001
+        hardlinked_out, [missing_protected, protected_a],
+    ) == protected_a
+    assert elb._resolve_output_alias_conflict(  # noqa: SLF001
+        hardlinked_out, [protected_a, missing_protected],
+    ) == protected_a
+
+    # missing_protected 単体との照合では衝突なし（存在しないファイルへの
+    # ハードリンクはあり得ない）。
+    assert elb._resolve_output_alias_conflict(  # noqa: SLF001
+        hardlinked_out, [missing_protected],
+    ) is None
 
 
 def test_harness3b_extract_song_cli_rejects_out_aliasing_split_manifest(tmp_path: Path) -> None:

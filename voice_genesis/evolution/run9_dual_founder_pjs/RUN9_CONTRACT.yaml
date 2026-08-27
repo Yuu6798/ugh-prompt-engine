@@ -1911,8 +1911,38 @@ founder_genome_shas:
 # 実測で確認した——本巡の CLI 変更が既存の再現実行手順に一切影響しない
 # ことの直接証跡。旧値（第6世代、第5巡対応時点）は履歴として保持する:
 #   9fa271aeceb63a21d8e2bd523b0d630580b6afcad87ed91f6dede9e4cce46949
+#
+# 〔第8世代 repin, 2026-08-27, PR #329 第7巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用2件、P1 + P2）。(1) `_resolve_output_alias_
+# conflict()` の lexical/resolved 二重パス比較では検出できない alias
+# 種別——`--out` が保護ファイルへの**既存ハードリンク**（同一 inode を
+# 対等に指す独立ディレクトリエントリ、symlink と異なりパス比較では
+# 原理的に検出不能）を指すケースを、`os.path.samefile()`（st_dev/st_ino
+# 比較）による `_hardlink_alias_conflict()` を新設して閉鎖（P1）。
+# (2) `_cmd_extract_song()`/`_cmd_probe_header()` の出力書き込みを
+# `Path.write_text()` の直書きから `write_bundle_bytes()`（`_atomic_
+# write_bytes()` + `os.replace()`、`assemble` と共有する staging 経路）
+# へ統一し、書き込み途中失敗（ディスク枯渇・プロセス kill 等）による
+# 旧世代中間物の破損を防止（P2。`os.replace()` の rename 意味論が (1) を
+# 補完する多層防御である旨も併記。`HARNESS3B_EDUCATION_LESSON_RECORD.md`
+# §18 参照）。バンドル直列化バイト列・出力 JSON の直列化式はいずれも
+# 無変更——検証・公開経路のみの変更。builder バイト変更（新値
+# = 8b3a9de1f147fa64cc04c1acc197de20a84c0ea82f24401ddee607724f534e7b）と
+# `builder_provenance.detail_record_sha256`（§18 追記後の実測記録 raw
+# sha256 = e88d6e423012daf6002d92083a38e19c320ac97f042b08561b524ac1a9a1c5d3）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。system python3（pyworld 0.3.5 導入済み）による repo builder
+# 再現実行（run10、`--allow-unpinned`）で training/validation バンドルとも
+# 既 pin（run1〜run9）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、検証・公開経路のみの
+# 変更）。repin 完了後、`--allow-unpinned` を付けずに独立11回目として
+# 再実行し、`pinned_manifest_check: "PASS"`（同一 sha256）で正常完了する
+# ことも実測で確認した。旧値（第7世代、第6巡対応時点）は履歴として
+# 保持する:
+#   2901af1fc3f56035f5f0dce94dbd75e1bcd0e3e39cb87c807ec88eb54d198802
 education_technique_lesson_manifest_sha:
-  value: "2901af1fc3f56035f5f0dce94dbd75e1bcd0e3e39cb87c807ec88eb54d198802"
+  value: "a356c5bc1073a04c824479cb6ea1a66534f61b699103a2bc0083c5b7b7a8d16c"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-

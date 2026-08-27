@@ -1338,3 +1338,140 @@ repin 完了後、`--allow-unpinned` を付けずに（＝ CLI からは
 - freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜5巡と
   同じ理由——repo builder の identity は manifest 側 `builder_provenance`
   が別途担う）。
+
+## 18. PR #329 Codex bot レビュー第7巡対応 + run10（2026-08-27）
+
+Claude 完結ルート（フェーズ1: 実装 + 検証 + 返信起草。git commit/push は
+別フェーズ）。Fable 採否判定 = 採用2件（P1 + P2）。**抽出式・アラインメント
+規則・直列化・バンドル内容は無変更**（変更は検証・公開経路のみで、
+第1〜6巡と同じ不変条件）。
+
+### Fix 18（採用1, P1）: ハードリンク alias の検出
+
+`_resolve_output_alias_conflict()`（第4巡 Fix 13）は (a) `Path.resolve()`
+（symlink 解決込みの絶対化）と (b) `os.path.abspath()`（symlink 未解決の
+lexical 絶対化）の二重パス比較で `--out` の alias を検出していたが、
+`--out` が保護ファイル（対象曲の消費3入力・split manifest・contract・
+consumed-inputs pin・pinned education manifest cross-check closure 等）
+への**既存ハードリンク**（`os.link()`/`ln` で作成可能、別名の独立
+ディレクトリエントリが同一 inode を対等に指す構造）を指す場合、
+どちらの比較軸でも検出できなかった——ハードリンクは symlink と異なり
+「別パスへの参照」ではないため、パス文字列比較や `resolve()`（symlink
+追跡のみでハードリンク自体は追跡対象外の概念）では原理的に見分けが
+付かない。それにもかかわらず `_cmd_extract_song()`/`_cmd_probe_header()`
+の（修正前の）`write_text()`（truncate オープン）はハードリンク越しに
+同じ inode の実バイトを書き換えるため、`--out` が保護ファイルへの既存
+ハードリンクであれば preflight をすり抜けて保護入力を破壊し得た。
+
+- `_hardlink_alias_conflict()` を新設し、`_resolve_output_alias_conflict()`
+  の (a)(b) いずれとも不一致だった場合のフォールバックとして呼ぶ——
+  `out_path` が既存ファイルなら、`protected_paths` の各既存ファイルと
+  `os.path.samefile()`（内部で `st_dev`/`st_ino` を比較）で inode 単位の
+  同一性を照合し、一致すればその protected path を返す。
+- stat 失敗時の規約を明文化: `out_path` の存在確認自体が失敗する場合は
+  「存在しない（＝これから新規作成される）」として hardlink 照合を丸ごと
+  スキップする（存在しない/確認不能なパスはいずれの inode も指さない
+  ため、`write_text()` がハードリンク越しに何かを破壊する経路はそもそも
+  存在しない）。個々の `protected` の存在確認が失敗する場合は、その
+  protected 単体を照合対象外としてスキップし、他の protected との照合は
+  継続する（1件の確認不能で全件の照合を諦めない）。
+- 新設テスト: `extract-song`/`probe-header` それぞれで、対象曲 WAV への
+  既存ハードリンクを `--out` に渡すと decode/書き込み前に拒否され、
+  ハードリンク元・先とも実バイトが無傷のまま残ることを CLI 経由で直接
+  確認。加えて `_resolve_output_alias_conflict()` の単体テストで、
+  stat 失敗規約（`out_path` 未存在時のスキップ、`protected` の一部
+  不在時の継続照合）を直接確認する。
+
+### Fix 19（採用2, P2）: extract-song/probe-header 中間物出力の atomic 化
+
+`_cmd_extract_song()`/`_cmd_probe_header()` の出力書き込みは
+`Path(args.out).write_text()` の直書き（truncate オープン）のままだった
+——`assemble` サブコマンド（第3巡 Fix 11、`write_bundle_json()`/
+`write_bundle_bytes()` 経由）とは異なり atomic 化されておらず、`--out`
+が既存の有効な中間物 JSON を指す場合、`write_text()` の truncate
+オープン後の書き込み途中失敗（ディスク枯渇・プロセス kill 等）で旧世代
+中間物が破損した部分書き込みバイト列で上書きされ得た。
+
+- `_cmd_extract_song()`/`_cmd_probe_header()`: 直列化バイト列を1回だけ
+  組み立て、`write_bundle_bytes()`（`_atomic_write_bytes()` の staging+
+  fsync + `os.replace()`、3コマンドすべてが共有する唯一の atomic 書き
+  込み経路）へ渡す構成へ変更。バイト列自体（`indent=2` の probe-header
+  出力／compact 区切りなしの extract-song 出力）は無変更——書き込み経路
+  のみの変更。
+- `write_bundle_bytes()` の docstring を更新し、「バンドル」出力に限らず
+  本 builder の全出力コマンドが共有する汎用 atomic bytes writer である
+  旨を明記（関数名は `assemble` 由来の "bundle" を残すが、新規呼び出し
+  元追加時のリネームは不要——3コマンドすべてが単一実装を共有する現状が
+  「単一実装の維持」そのものであるため）。
+- `os.replace()` の rename 意味論が Fix 18 を補完する多層防御である旨を
+  両呼び出し箇所へコメントで明記——`os.replace()` は最終名への rename に
+  先立って target の既存ディレクトリエントリを置き換える（unlink+link
+  ではなく rename）ため、万一 Fix 18 の preflight をすり抜けても、
+  `--out` が保護ファイルへの既存ハードリンクである限り他のハードリンク
+  エントリ（保護ファイル自身の本来のパス）が指す inode の実バイトには
+  一切触れない。
+- 失敗注入テスト（新設）: `extract_song()` 本体（decode）を monkeypatch
+  で固定結果に差し替えたうえで `_atomic_write_bytes()` を monkeypatch で
+  失敗させると、`extract-song`/`probe-header` いずれも旧世代の中間物
+  JSON が無傷のまま残り、staging の残骸も残らないことを確認する
+  （`assemble`/`write_bundle_json()` の既存失敗注入テストと同型）。
+
+### 連鎖更新
+
+builder バイト変更（新値
+`8b3a9de1f147fa64cc04c1acc197de20a84c0ea82f24401ddee607724f534e7b`）
++ 本節追記に伴い、`inputs/education_technique_lesson_manifest.json` の
+`builder_provenance.builder_sha256`/`detail_record_sha256` を更新し、
+manifest raw sha256 が変わったため `RUN9_CONTRACT.yaml` の
+`education_technique_lesson_manifest_sha` を第8世代へ repin した（旧値
+= 第7世代、第6巡対応時点の値。履歴は本記録 §12/§13/§14/§15/§16/§17
+参照）。`pjs_consumed_inputs_manifest_sha`（`inputs/pjs_consumed_inputs_
+sha256.json`）は本節の変更で一切触れていないため無変更（本節はいずれの
+消費入力の実バイト・pin 値にも影響しない、検証・公開経路のみの変更）。
+
+### run10: repo builder（第7巡対応後）による再現実行（独立10回目）
+
+system python3（本セッションの system python3、pyworld 0.3.5 を含む
+依存関係が揃った環境）で、修正後の repo builder を workdir 展開済み
+corpus（`expanded/PJS_corpus_ver1.1`）に対し `build` サブコマンドで
+実行した。freeze record・spec・split manifest・contract・
+consumed-inputs manifest はいずれも repo 収載の既定パス（CLI からは
+これらを上書きする手段自体が存在しない——常に正典パス、第6巡 Fix 17）。
+
+```
+$ python3 education_lesson_builder.py build \
+    --corpus-root <workdir>/expanded/PJS_corpus_ver1.1 \
+    --out-dir <workdir>/pr329_round7_run10_out \
+    --allow-unpinned
+```
+
+```
+real 4m50.046s
+```
+
+| バンドル | 既 pin（run1〜run9） | run10 sha256 | 一致 |
+|---|---|---|---|
+| training | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | **PASS** |
+| validation | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | **PASS** |
+
+run10 は本節の2修正（ハードリンク alias 拒否・中間物出力の atomic 化）
+がいずれも検証・公開経路のみに閉じており、抽出式・アラインメント・
+直列化・バンドル内容に一切影響しないことの実測証跡である——run10 は
+`--allow-unpinned` で実行した（manifest 側 `builder_provenance.
+builder_sha256` を本節の builder バイト変更後の値へまだ repin していない
+時点での実測取得のため）。repin 完了後、`--allow-unpinned` を付けずに
+（＝ CLI からは正典パスのみが使われる通常経路で）本コマンドを独立11回目
+として再実行し、`pinned_manifest_check: "PASS"`（training/validation
+とも run1〜run10 と同一 sha256）で正常完了することを実測で確認した
+——本節の変更が既存の再現実行手順に一切影響しないことの直接証跡である。
+
+### 検証結果
+
+- `ruff check .`: clean
+- `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`:
+  本節（builder_provenance.builder_sha256/detail_record_sha256 の repo
+  収載値更新、`education_technique_lesson_manifest_sha` の8世代目 repin
+  を含む）最終稿確定後に全 PASS。
+- freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜6巡と
+  同じ理由——repo builder の identity は manifest 側 `builder_provenance`
+  が別途担う）。
