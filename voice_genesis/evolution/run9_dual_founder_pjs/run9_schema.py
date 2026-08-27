@@ -4464,6 +4464,25 @@ _P5_MIDI_HIGH = 90
 # PINNED になった時点で実施すべき検証手続き（`verification_procedure`）
 # (d) 未検証のまま held-out として消費（GENERALIZED_GAIN 評価等）しては
 # ならないという禁止宣言（`consumption_prohibition`）を機械強制する。
+# 〔履歴注記 2026-08-27（Codex bot レビュー PR #329 第5巡指摘3, P2, 限定
+# 採用）: RUN9-L0-HARNESS-3b により `education_technique_lesson_manifest_
+# sha` も PINNED 化され、上記〔履歴〕注記の「`education_technique_lesson_
+# manifest_sha` が依然 PENDING のため分離検証は引き続き実行不能」は
+# stale になった——`_P5_DEFERRED_VERIFICATION_BLOCKED_BY` の2欄要件は
+# ともに充足された。しかし実際の分離検証（P5 のフレーズ/音域と実学習
+# 素材の実体の照合）を行う extractor/harness は依然として repo に実在
+# しない——development/generalization 軸（P4/P5、GENERALIZED_GAIN を
+# 含む）の extractor は VG-L0 学習ハーネス未実装のため存在せず
+# （`measurement_spec_sha` は development_generalization_axis について
+# 引き続き PENDING）、2 pin 欄が揃っただけでは検証は実行できない。した
+# がって分離検証は依然実行不能のまま——ただし阻害要因は「2 pin 欄の
+# PENDING」から「VG-L0 学習ハーネス実装（development/generalization 軸
+# extractor 実装）待ち」へ移った。再入条件: `measurement_spec_sha` の
+# development_generalization_axis 節が PINNED 化された時点（= VG-L0
+# 学習ハーネス実装により GENERALIZED_GAIN/development 軸 extractor が
+# 実装された時点）で本検証を実装・実行する。`P5_DEFERRED_VERIFICATION_
+# STATUS` は変更しない——検証不能な主張を凍結しない Fix 14/18 規約の
+# まま〕。
 # ---------------------------------------------------------------------------
 _P5_DEFERRED_VERIFICATION_KEY = "deferred_verification"
 _P5_DEFERRED_VERIFICATION_KEYS: FrozenSet[str] = frozenset(
@@ -4487,6 +4506,22 @@ P5_DEFERRED_VERIFICATION_STATUS = "TRAINING_DISTRIBUTION_SEPARATION_NOT_YET_VERI
 # `education_technique_lesson_manifest_sha` の PINNED 化のみ（両欄が
 # 揃わないと検証不能な設計のまま——値そのものではなく欄名の集合を凍結
 # する。値は RUN9_CONTRACT.yaml 側が別途 pin する）。
+# 〔履歴注記 2026-08-27（Codex bot レビュー PR #329 第5巡指摘3, P2, 限定
+# 採用）: RUN9-L0-HARNESS-3b により `education_technique_lesson_manifest_
+# sha` が PINNED 化され、上記「実際に分離検証を実行可能にするのは
+# education_technique_lesson_manifest_sha の PINNED 化のみ（両欄が揃う
+# こと）」という条件文自体は充足された——`_P5_DEFERRED_VERIFICATION_
+# BLOCKED_BY` の2欄はともに PINNED。ただし「両欄が揃えば検証を実行
+# できる」という含意は誤りだったと判明した: 実際の分離検証（P5 の kana/
+# pitch_midi 実値と実学習素材の実体との照合）を行う extractor/harness
+# 自体が repo に実在しない（development/generalization 軸の extractor は
+# VG-L0 学習ハーネス未実装のため不在——`measurement_spec_sha` は
+# development_generalization_axis について引き続き PENDING）。したがって
+# 検証は依然実行不能——本欄（`_P5_DEFERRED_VERIFICATION_BLOCKED_BY`）と
+# `evaluation/probe_manifest.json` の `blocked_by` 凍結集合はいずれも
+# 変更しない（発行時点の凍結記録であり、事後の PINNED 化で欄名列挙を
+# 更新する設計ではない——上記と同じ規約）。再入条件は本ファイル上方の
+# Fix 32 コメントブロック内 2026-08-27 履歴注記を参照〕。
 _P5_DEFERRED_VERIFICATION_BLOCKED_BY: FrozenSet[str] = frozenset(
     {"practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha"}
 )
@@ -5481,7 +5516,21 @@ def _validate_p5_deferred_verification(value: Any, *, field: str) -> None:
     事前登録」規約で、未検証のまま held-out として消費されないことを
     機械強制する（`practice_audio_split_manifest_sha`/
     `education_technique_lesson_manifest_sha` がいずれも PINNED になる
-    まで、この分離検証は実行不能——検証不能な主張を凍結しない）。"""
+    まで、この分離検証は実行不能——検証不能な主張を凍結しない）。
+
+    〔履歴注記 2026-08-27（Codex bot レビュー PR #329 第5巡指摘3, P2, 限定
+    採用）: RUN9-L0-HARNESS-3b により上記2欄はいずれも PINNED 化された
+    （`_P5_DEFERRED_VERIFICATION_BLOCKED_BY` 要件は充足済み）。しかし
+    実際の分離検証（P5 の kana/pitch_midi 実値と実学習素材の実体との
+    照合）を行う extractor/harness は依然 repo に実在しない
+    （development/generalization 軸の extractor は VG-L0 学習ハーネス
+    未実装のため不在——`measurement_spec_sha` は development_
+    generalization_axis について引き続き PENDING）。したがって
+    `P5_DEFERRED_VERIFICATION_STATUS` は変更せず、本 validator の検証
+    内容（構造・マーカーの fail-closed 検証）も変更しない——2 pin 欄が
+    揃っただけでは実行できない旨の詳細は本ファイル上方の
+    `_P5_DEFERRED_VERIFICATION_BLOCKED_BY` コメント（2026-08-27 履歴
+    注記）を参照。〕"""
     if not isinstance(value, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
     unknown = set(value.keys()) - _P5_DEFERRED_VERIFICATION_KEYS

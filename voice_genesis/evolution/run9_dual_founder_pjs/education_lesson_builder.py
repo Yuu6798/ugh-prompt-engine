@@ -139,6 +139,22 @@ DEFAULT_FREEZE_RECORD_PATH = _THIS_DIR / "inputs" / "h3b_freeze_record.json"
 # = run9_schema.PJS_CONSUMED_INPUTS_MANIFEST_PATH と同一パス）。
 DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH = _THIS_DIR / "inputs" / "pjs_consumed_inputs_sha256.json"
 
+# PR #329 第5巡レビュー指摘2（P1、採用対応）: `load_pinned_education_lesson_
+# manifest()`（run9_schema.py）が manifest 本体に加え cross-check として
+# 実バイト照合する残り5点——このモジュール自身の builder 本体・裁定 txt・
+# freeze record 2本（現行 + superseded）・実測記録（detail record）。
+# `--out` の alias preflight 保護集合（`_pinned_education_lesson_manifest_
+# cross_check_paths()`）が使う。パスは manifest 側 `builder_provenance`/
+# `adjudication_basis` の repo-relative 値と同一実体を指す（本モジュール
+# 冒頭の repo-relative 既定値と同型の静的宣言——manifest を読まずに
+# preflight 集合を組み立てる必要があるため、動的解決ではなく既知の固定
+# パスとして宣言する）。
+DEFAULT_EDUCATION_MANIFEST_PATH = run9_schema.EDUCATION_MANIFEST_PATH
+_THIS_MODULE_PATH = Path(__file__).resolve()
+DEFAULT_ADJUDICATION_BASIS_PATH = _THIS_DIR / "USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt"
+DEFAULT_SUPERSEDED_FREEZE_RECORD_PATH = _THIS_DIR / "inputs" / "h3b_freeze_record.superseded.1.json"
+DEFAULT_DETAIL_RECORD_PATH = _THIS_DIR / "HARNESS3B_EDUCATION_LESSON_RECORD.md"
+
 # ---------------------------------------------------------------------------
 # Constants transcribed BY READ (not import) from repo, per spec Step 1 / §2.
 # ---------------------------------------------------------------------------
@@ -1489,29 +1505,78 @@ def _backup_existing(path: Path) -> Optional[Path]:
     return backup_path
 
 
-def _rollback_to_backup(path: Path, backup: Optional[Path]) -> None:
-    """`publish_bundle_pair()` の失敗時ロールバック: `backup` があれば
-    `path` へ戻す（旧世代の復元、`_backup_existing()` の逆操作）。
-    `backup` が `None`（= publish 開始前は `path` が存在しなかった）なら、
-    途中まで置換された可能性のある `path` を削除する（新世代のみが部分的
-    にでも観測される窓を閉じる）。いずれも best-effort（`OSError` は
-    握りつぶす —— ロールバック自体の失敗で本来の例外を握りつぶさない
-    ため、呼び出し側が元の例外を re-raise する）。"""
+@dataclass(frozen=True)
+class _BackupOutcome:
+    """`_backup_existing()` の呼び出し結果を表す状態表現（PR #329 第5巡
+    レビュー指摘1, P1, 採用対応）。
+
+    旧実装は「`training_backup`/`validation_backup` 変数への代入結果」
+    そのものを唯一の状態表現とし、`Optional[Path]` の `None` に
+    「backup 未着手」「backup 失敗（source 未移動）」「旧世代なし
+    （source は元々存在せず、当然 backup も取れない）」という互いに
+    区別すべき3状態を暗黙に重ね合わせていた。`_backup_existing()` が
+    `os.replace()` 自体の失敗で例外を送出すると、呼び出し側の代入
+    (`training_backup = _backup_existing(training_path)`) は完了せず
+    変数は初期値 `None` のまま残る——これは「旧世代なし」と区別が
+    つかない。結果として `_rollback_to_backup()` は「backup 失敗
+    （= 元のファイルは一切動いていない）」を「旧世代なし」と誤解釈し、
+    無傷で残っている旧公開ファイルを誤って `unlink()` していた
+    （1本目 backup 失敗 → 旧2本とも削除、2本目 backup 失敗 → 旧
+    validation を削除）。
+
+    本状態オブジェクトは4状態を明示的に区別する:
+
+    - `moved=False, backup_path=None`: backup **未着手 または失敗**
+      （source は元の場所から一切動いていない = rollback は `path` に
+      一切触れてはならない）。`_BackupOutcome` 変数はこの値で初期化
+      してから `_backup_existing()` を呼び出す構成にすることで、
+      呼び出しが例外で失敗して代入が完了しなくても状態は「未着手/
+      失敗」のまま安全側に倒れる（初期値と「失敗」の状態表現が同一
+      なので、代入未完了そのものが正しい状態を表す）。
+    - `moved=True, backup_path=<path>`: backup **完了**（source は
+      `backup_path` へ移動済み = rollback は `backup_path` から `path`
+      へ復元する）。
+    - `moved=True, backup_path=None`: backup **完了かつ旧世代なし**
+      （publish 開始前に `path` が存在しなかった = rollback は `path`
+      を unlink して部分公開を消す）。
+    """
+
+    moved: bool
+    backup_path: Optional[Path]
+
+
+_BACKUP_NOT_ATTEMPTED = _BackupOutcome(moved=False, backup_path=None)
+
+
+def _rollback_to_backup(path: Path, outcome: _BackupOutcome) -> None:
+    """`publish_bundle_pair()` の失敗時ロールバック: `outcome.moved` が
+    `False`（backup 未着手 or backup 失敗 = `path` は元の場所から一切
+    動いていない）なら `path` には一切触れない。`outcome.moved` が
+    `True` かつ `outcome.backup_path` があれば、そこから `path` へ戻す
+    （旧世代の復元、`_backup_existing()` の逆操作）。`outcome.moved` が
+    `True` かつ `outcome.backup_path` が `None`（= publish 開始前は
+    `path` が存在しなかった）なら、途中まで置換された可能性のある
+    `path` を削除する（新世代のみが部分的にでも観測される窓を閉じる）。
+    いずれも best-effort（`OSError` は握りつぶす —— ロールバック自体の
+    失敗で本来の例外を握りつぶさないため、呼び出し側が元の例外を
+    re-raise する）。"""
+    if not outcome.moved:
+        return
     try:
-        if backup is not None:
-            os.replace(backup, path)
+        if outcome.backup_path is not None:
+            os.replace(outcome.backup_path, path)
         else:
             path.unlink(missing_ok=True)
     except OSError:
         pass
 
 
-def _discard_backup(backup: Optional[Path]) -> None:
+def _discard_backup(outcome: _BackupOutcome) -> None:
     """publish 成功時、もう不要になった旧世代 backup を破棄する
     （best-effort）。"""
-    if backup is not None:
+    if outcome.backup_path is not None:
         try:
-            backup.unlink(missing_ok=True)
+            outcome.backup_path.unlink(missing_ok=True)
         except OSError:
             pass
 
@@ -1559,6 +1624,25 @@ def publish_bundle_pair(
     「training だけ backup 名へ退避されたまま最終名が欠落」という部分
     退避の窓も最終的に観測されることはない。両方成功時は退避した backup
     を破棄する。
+
+    第5巡レビュー指摘1（P1、採用対応）——上記の `training_backup`/
+    `validation_backup` を素の `Optional[Path]` で保持する構成には、
+    さらに別の穴があった: `_backup_existing()` 自身が（`os.replace()`
+    自体の失敗で）例外を送出すると、呼び出し側の代入
+    (`training_backup = _backup_existing(training_path)`) は完了せず
+    変数は初期値 `None` のまま残る——これは「publish 開始前に旧世代が
+    存在しなかった」ケースと区別がつかない。結果として `_rollback_to_
+    backup()` は「backup 失敗（source は元の場所から一切動いていない）」
+    を「旧世代なし」と誤解釈し、無傷で残っている旧公開ファイルを誤って
+    `unlink()` していた（1本目の backup 失敗で旧2本とも削除、2本目の
+    backup 失敗で旧 validation を削除——いずれも「触れてはならない
+    ファイルを触れない」という本関数の契約に反する）。本関数は
+    `_BackupOutcome`（`moved`/`backup_path` を持つ状態オブジェクト）を
+    `_BACKUP_NOT_ATTEMPTED`（= `moved=False`）で初期化してから
+    `_backup_existing()` を呼び出す構成にすることで、呼び出しが例外で
+    失敗して代入が完了しなくても状態は「未着手/失敗」のまま安全側に
+    倒れ、`_rollback_to_backup()` は `moved=True`（= backup 完了、
+    source は実際に動いている）のときのみ `path` に触れる。
     """
     training_tmp = _atomic_write_bytes(training_path, training_bytes)
     try:
@@ -1570,16 +1654,16 @@ def publish_bundle_pair(
             pass
         raise
 
-    training_backup: Optional[Path] = None
-    validation_backup: Optional[Path] = None
+    training_outcome: _BackupOutcome = _BACKUP_NOT_ATTEMPTED
+    validation_outcome: _BackupOutcome = _BACKUP_NOT_ATTEMPTED
     try:
-        training_backup = _backup_existing(training_path)
-        validation_backup = _backup_existing(validation_path)
+        training_outcome = _BackupOutcome(moved=True, backup_path=_backup_existing(training_path))
+        validation_outcome = _BackupOutcome(moved=True, backup_path=_backup_existing(validation_path))
         os.replace(training_tmp, training_path)
         os.replace(validation_tmp, validation_path)
     except BaseException:
-        _rollback_to_backup(training_path, training_backup)
-        _rollback_to_backup(validation_path, validation_backup)
+        _rollback_to_backup(training_path, training_outcome)
+        _rollback_to_backup(validation_path, validation_outcome)
         try:
             training_tmp.unlink(missing_ok=True)
         except OSError:
@@ -1590,8 +1674,8 @@ def publish_bundle_pair(
             pass
         raise
     else:
-        _discard_backup(training_backup)
-        _discard_backup(validation_backup)
+        _discard_backup(training_outcome)
+        _discard_backup(validation_outcome)
 
 
 # ---------------------------------------------------------------------------
@@ -1910,10 +1994,69 @@ def _require_out_does_not_alias_protected_paths(
         )
 
 
+def _pinned_education_lesson_manifest_cross_check_paths(*, contract_path: Path) -> List[Path]:
+    """`run9_schema.load_pinned_education_lesson_manifest()` が manifest
+    本体 + cross-check として実バイト照合する入力 closure 全体（PR #329
+    第5巡レビュー指摘2, P1, 採用対応）。
+
+    `assemble`（`_require_single_split_bundle_bytes_match_pinned_
+    manifest()` 経由）と `run_build()`（`_require_bundle_bytes_match_
+    pinned_manifest()` 経由）は、この closure に属するファイルを publish
+    前の pinned 検証で実際に読む。旧実装はこの closure を alias preflight
+    の保護集合から丸ごと欠落させており、例えば `--out inputs/education_
+    technique_lesson_manifest.json` を指定すると、検証自体は改変前の
+    manifest バイトに対して成功したうえで、直後の `write_bundle_bytes()`
+    がその同じ manifest ファイルを新規バンドルの JSON で上書きし、
+    「検証成功」を返しながら pin 済み manifest を破壊し得た
+    （builder / 裁定 txt / freeze record 2本 / detail record /
+    consumed-inputs pin のいずれを `--out` に指定しても同型の破壊が
+    起き得た）。
+
+    `extract-song`/`probe-header` は現時点でこの closure を自身の検証
+    経路として読まないが、将来の `--out` 誤指定でこれらの pin 済み
+    provenance ファイルを破壊しないよう、`assemble` と同じ保護集合へ
+    一貫して含める——「コマンドが読む全入力 = 保護集合」の対応が漏れない
+    よう、保護パス集合の構築をこのヘルパ1箇所へ集約する。
+
+    closure（`load_pinned_education_lesson_manifest()` の cross-check
+    (a)-(f)/(j) が実バイト照合する全ファイル + manifest 本体 +
+    RUN9_CONTRACT.yaml）:
+      - manifest 本体: `inputs/education_technique_lesson_manifest.json`
+      - cross-check (a): 裁定文書 `USER_ADJUDICATION_20260827_PJS_LESSON_
+        FREEZE.txt`
+      - cross-check (b): builder 本体 `education_lesson_builder.py`
+        （このモジュール自身）
+      - cross-check (c): spec `HARNESS3B_EXTRACTOR_SPEC.md`
+      - cross-check (d): freeze record 現行 `inputs/h3b_freeze_record.json`
+      - cross-check (e): freeze record superseded `inputs/h3b_freeze_
+        record.superseded.1.json`
+      - cross-check (f): 実測記録 `HARNESS3B_EDUCATION_LESSON_RECORD.md`
+      - cross-check (j): consumed-inputs pin `inputs/pjs_consumed_inputs_
+        sha256.json`
+      - `RUN9_CONTRACT.yaml`（呼び出し側の実効 `contract_path` ——
+        `load_pinned_education_lesson_manifest()` 自身が disk 正典を
+        都度再読込する対象）
+    """
+    return [
+        DEFAULT_EDUCATION_MANIFEST_PATH,
+        DEFAULT_ADJUDICATION_BASIS_PATH,
+        _THIS_MODULE_PATH,
+        DEFAULT_SPEC_PATH,
+        DEFAULT_FREEZE_RECORD_PATH,
+        DEFAULT_SUPERSEDED_FREEZE_RECORD_PATH,
+        DEFAULT_DETAIL_RECORD_PATH,
+        DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH,
+        contract_path,
+    ]
+
+
 def _extract_song_protected_paths(args: argparse.Namespace) -> List[Path]:
     """`extract-song` が読む全入力パス（当該曲の消費3入力 + split
     manifest + contract + consumed-inputs pin ファイル + freeze record +
-    spec）。`--out` の alias preflight 対象集合。
+    spec + pinned education lesson manifest cross-check closure（第5巡
+    レビュー指摘2, P1, 採用対応。本コマンド自身は現時点でこの closure を
+    読まないが、破壊防止のため一貫して保護する）。`--out` の alias
+    preflight 対象集合。
 
     `getattr(..., None)` 経由で読む（`Namespace.attr` の直接参照ではなく）
     ——実 CLI（argparse）は全属性を必ず設定するが、テスト層が直接構築する
@@ -1944,23 +2087,36 @@ def _extract_song_protected_paths(args: argparse.Namespace) -> List[Path]:
         consumed_inputs_manifest_path,
         freeze_record_path,
         spec_path,
+        *_pinned_education_lesson_manifest_cross_check_paths(contract_path=contract_path),
     ]
 
 
 def _probe_header_protected_paths(args: argparse.Namespace) -> List[Path]:
     """`probe-header` が読む全入力パス（各 `--song-ids` の WAV + split
-    manifest + contract）。`--out` の alias preflight 対象集合。"""
+    manifest + contract + pinned education lesson manifest cross-check
+    closure（第5巡レビュー指摘2, P1, 採用対応。本コマンド自身は現時点で
+    この closure を読まないが、破壊防止のため一貫して保護する））。
+    `--out` の alias preflight 対象集合。"""
     split_manifest_path = Path(args.split_manifest) if args.split_manifest else DEFAULT_SPLIT_MANIFEST_PATH
     contract_path = Path(args.contract_path) if args.contract_path else run9_schema.RUN9_CONTRACT_YAML_PATH
     paths: List[Path] = [split_manifest_path, contract_path]
     for song_id in args.song_ids:
         paths.append(Path(args.corpus_root) / song_id / f"{song_id}_song.wav")
+    paths.extend(_pinned_education_lesson_manifest_cross_check_paths(contract_path=contract_path))
     return paths
 
 
 def _assemble_protected_paths(args: argparse.Namespace, song_ids_sorted: Sequence[str]) -> List[Path]:
     """`assemble` が読む全入力パス（spec + split manifest + contract +
-    `--song-ids-json` + 選択 split の全中間物 JSON）。`--out` の alias
+    `--song-ids-json` + 選択 split の全中間物 JSON + pinned education
+    lesson manifest cross-check closure）。第5巡レビュー指摘2（P1、採用
+    対応）: `--allow-unpinned` でない限り本コマンドは publish 前に
+    `_require_single_split_bundle_bytes_match_pinned_manifest()` 経由で
+    manifest 本体と cross-check closure（builder/裁定 txt/freeze record
+    2本/detail record/consumed-inputs pin）を実際に読む——旧実装はこの
+    closure を保護集合から欠落させており、`--out` がその closure 内の
+    いずれかと同一実体を指すと、検証成功後の `write_bundle_bytes()` が
+    その pin 済みファイルをバンドル JSON で上書きし得た。`--out` の alias
     preflight 対象集合。`song_ids_sorted` は凍結 split 厳密一致検証を
     通過済みの確定リストを渡すこと（検証前の生リストを渡すと、まだ
     正規化されていない song_id から中間物パスを構築してしまう）。"""
@@ -1969,6 +2125,7 @@ def _assemble_protected_paths(args: argparse.Namespace, song_ids_sorted: Sequenc
     spec_path = Path(args.spec_path) if args.spec_path else DEFAULT_SPEC_PATH
     paths: List[Path] = [spec_path, split_manifest_path, contract_path, Path(args.song_ids_json)]
     paths.extend(Path(args.intermediates_dir) / f"{sid}.json" for sid in song_ids_sorted)
+    paths.extend(_pinned_education_lesson_manifest_cross_check_paths(contract_path=contract_path))
     return paths
 
 

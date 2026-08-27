@@ -1008,3 +1008,189 @@ assemble の pinned manifest 照合）のみに閉じており、抽出式・
 - freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜3巡と
   同じ理由——repo builder の identity は manifest 側 `builder_provenance`
   が別途担う）。
+
+## 16. PR #329 Codex bot レビュー第5巡対応 + run8（2026-08-27）
+
+Claude 完結ルート（フェーズ1: 実装 + 検証 + 返信起草。git commit/push は
+別フェーズ）。Fable 採否判定 = 採用2件（いずれも P1）/ 限定採用1件（P2、
+境界宣言 + 記録是正、実装なし）。**抽出式・アラインメント規則・
+直列化・バンドル内容は無変更**（変更は検証・公開経路のみ、第1〜4巡と
+同じ不変条件）。
+
+### Fix 15（採用1, P1）: `publish_bundle_pair()` の backup 失敗と「旧世代
+なし」の混同
+
+`_backup_existing()` が2連 `os.replace()` 前の退避（path → backup 名）
+自体に失敗すると、`training_backup`/`validation_backup` への代入が完了
+せず変数は初期値 `None` のまま残る——これは「publish 開始前に旧世代が
+存在しなかった」ケースと `_rollback_to_backup()` から見て区別がつかず、
+無傷で残っている旧公開ファイルを誤って `unlink()` していた（1本目
+backup 失敗で旧2本とも削除、2本目 backup 失敗で旧 validation を削除）。
+第3巡で追加した失敗注入テスト（`..._second_backup_failure_restores_
+first_and_leaves_no_debris`）はディレクトリ異常系を使っており、
+`unlink()` が `IsADirectoryError` で失敗して握りつぶされるため、たまたま
+この欠陥を検出できていなかった。
+
+- 新設 `_BackupOutcome`（frozen dataclass、`moved: bool` /
+  `backup_path: Optional[Path]`）: 「backup 未着手/失敗（source 未移動）」
+  「backup 完了（source 移動済み）」「backup 完了かつ旧世代なし」の3状態
+  を明示的に区別する。`_BACKUP_NOT_ATTEMPTED`（`moved=False`）で初期化
+  してから `_backup_existing()` の戻り値を包む構成にすることで、呼び
+  出しが例外で失敗して代入が完了しなくても状態は「未着手/失敗」のまま
+  安全側に倒れる。
+- `_rollback_to_backup()`: `outcome.moved` が `False` のときは `path` に
+  一切触れない。`True` かつ `backup_path` があれば復元、`True` かつ
+  `backup_path` が `None` なら部分公開を削除する（旧来の意味論を
+  `moved=True` の場合にのみ限定）。
+- `publish_bundle_pair()`: `training_backup`/`validation_backup`
+  （素の `Optional[Path]`）を `training_outcome`/`validation_outcome`
+  （`_BackupOutcome`）へ置き換えた。
+- 失敗注入回帰テスト2件（通常ファイルを対象、`_backup_existing()` 内部の
+  `os.replace(path, backup_path)` 自体を monkeypatch で失敗させる）:
+  1本目 backup 失敗 / 2本目 backup 失敗、いずれも旧公開ペアが両方無傷で
+  残ることを確認する。**現行バグを再現するテストを先に書いて FAIL を
+  確認してから修正で PASS にする手順**を踏んだ——修正前コードに対して
+  実行し、1本目失敗テストは training/validation とも `FileNotFoundError`
+  （削除された）で FAIL、2本目失敗テストは validation が削除されて FAIL
+  することを確認済み。
+
+### Fix 16（採用2, P1）: assemble の保護集合に検証器の入力 closure を含める
+
+`--out inputs/education_technique_lesson_manifest.json` 等で、第4巡新設
+の pinned 検証器（`assemble` の `_require_single_split_bundle_bytes_
+match_pinned_manifest()` / `run_build()` の `_require_bundle_bytes_
+match_pinned_manifest()`）が実際に読む manifest 本体 + cross-check
+closure（builder 本体・裁定 txt・freeze record 現行/superseded・detail
+record・consumed-inputs pin・contract）が alias preflight の保護集合から
+丸ごと欠落しており、検証成功後（改変前バイトに対する検証は通過する）に
+`write_bundle_bytes()` がその pin 済みファイルをバンドル JSON で上書き
+し、「検証成功」を返しながら pin 済み provenance を破壊し得た。
+
+- 新設定数（`run9_schema.EDUCATION_MANIFEST_PATH` 参照 + builder 自身の
+  `Path(__file__).resolve()` + 4新設定数）: `DEFAULT_EDUCATION_MANIFEST_
+  PATH` / `_THIS_MODULE_PATH` / `DEFAULT_ADJUDICATION_BASIS_PATH` /
+  `DEFAULT_SUPERSEDED_FREEZE_RECORD_PATH` / `DEFAULT_DETAIL_RECORD_PATH`。
+- 新設 `_pinned_education_lesson_manifest_cross_check_paths(*,
+  contract_path)`: `load_pinned_education_lesson_manifest()` の
+  cross-check closure 全体（manifest 本体 + 裁定 txt + builder 本体 +
+  spec + freeze record 現行/superseded + detail record + consumed-inputs
+  pin + contract）を1箇所へ集約して返す共有ヘルパ。
+- `_extract_song_protected_paths()`/`_probe_header_protected_paths()`/
+  `_assemble_protected_paths()` の3関数すべてに上記ヘルパの戻り値を
+  合流させた——`extract-song`/`probe-header` は現時点でこの closure を
+  自身の検証経路として読まないが、将来の `--out` 誤指定でこれらの pin
+  済み provenance ファイルを破壊しないよう一貫して保護する（「コマンド
+  が読む全入力 = 保護集合」の対応漏れを構造的に防ぐ）。
+- 新設テスト: `assemble --out` = education manifest 本体 / 裁定 txt /
+  freeze record（現行）の3ファイルへの直接指定がいずれも拒否され、対象
+  ファイルの実バイトが無傷のまま残ることを確認する CLI レベルテスト
+  （`--intermediates-dir` に実在しない中間物を指定——alias preflight が
+  中間物読み取りより前に実行されるため、preflight が正しく拒否する限り
+  実リポジトリファイルへ書き込むことはなく、preflight が拒否し損なって
+  も後続の中間物読み取りが `FileNotFoundError` で先に失敗するため実
+  ファイル破壊のリスクなしに検証できる）。加えて `_extract_song_
+  protected_paths()`/`_probe_header_protected_paths()` が closure 全体を
+  含むことを直接確認する単体テスト2件。
+
+### 限定採用1（P2、境界宣言 + 記録是正、実装なし）: P5 training-distribution
+separation 記録の stale 是正
+
+グラウンディング: `evaluation/probe_manifest.json` の P5 cell
+`deferred_verification` ブロック（`blocked_by`:
+`practice_audio_split_manifest_sha`/`education_technique_lesson_
+manifest_sha`）と `run9_schema.py` の `_P5_DEFERRED_VERIFICATION_
+BLOCKED_BY` 周辺コメント/`_validate_p5_deferred_verification()`
+docstring を読解した。RUN9_CONTRACT.yaml を確認すると、
+`education_technique_lesson_manifest_sha` は HARNESS-3b（本記録）で既に
+PINNED 化されており、`practice_audio_split_manifest_sha` も既 PINNED
+——`blocked_by` の2欄要件はともに充足済みであることを確認した。
+
+しかし、実際の分離検証手続き（P5 cell の kana/pitch_midi 実値と実学習
+素材の実体を照合する extractor/harness）は、今ある成果物（education
+manifest / lesson バンドル sha / split manifest 等の sha pin）だけでは
+機械的に実行できない——P5 の検証が要求するのは note レベルの実体照合
+だが、education lesson manifest が pin するのは音響特徴チャンネル
+（relative F0 contour 等）の sha256 のみで note レベル content は
+（rights 制約により）repo に一切収載されておらず、development/
+generalization 軸（P4/P5、GENERALIZED_GAIN を含む）の extractor 自体が
+VG-L0 学習ハーネス未実装のため repo に実在しない（`measurement_spec_
+sha` は development_generalization_axis について引き続き PENDING、
+README.md 該当節・`inputs/measurement_spec_manifest.json` scope_note が
+既に正直に記録済み）。したがって本件は「学習フェーズの成果物等、未存在
+の入力を要する場合」に該当すると Fable が設計判定し、**status
+（`TRAINING_DISTRIBUTION_SEPARATION_NOT_YET_VERIFIABLE`）は変更せず**、
+stale になった理由文のみを contract/schema コメントの該当箇所で正直に
+更新した。
+
+- `RUN9_CONTRACT.yaml`（`education_technique_lesson_manifest_sha` 欄
+  上方、Fix 32 repin コメントブロック）: append-only 規約で新規履歴注記
+  （2026-08-27）を追記——両 pin 欄が PINNED 化された事実 + それでも
+  extractor 不在のため検証は依然実行不能である旨 + 再入条件
+  （`measurement_spec_sha` の development_generalization_axis 節が
+  PINNED 化される時点 = VG-L0 学習ハーネス実装時点）を明記。
+- `run9_schema.py`: `_P5_MIDI_LOW`/`_P5_MIDI_HIGH` 直後の Fix 32 コメント
+  ブロック・`_P5_DEFERRED_VERIFICATION_BLOCKED_BY` 直前のコメント・
+  `_validate_p5_deferred_verification()` docstring の3箇所に同内容の
+  履歴注記（append-only）を追記。検証ロジック（`_validate_p5_deferred_
+  verification()` の実装本体）・`_P5_DEFERRED_VERIFICATION_BLOCKED_BY`
+  の値・`P5_DEFERRED_VERIFICATION_STATUS` の値はいずれも無変更。
+- `evaluation/probe_manifest.json` 自体は改変していない（`probe_
+  manifest_sha` PINNED・凍結境界。`blocked_by` 凍結集合も既存設計
+  （発行時点凍結・自動解除なし）どおり不変）。
+
+このスレッドは resolve しない（限定採用は境界宣言を付けて残置する運用
+= `AGENTS.md` §3-3 と同じ扱い）。
+
+### 連鎖更新
+
+builder バイト変更（新値
+`816f765e6aa707ca5f1363c566b0980cbcfc5f6559950070a4d3e71732e3ca12`）
++ 本節追記に伴い、`inputs/education_technique_lesson_manifest.json` の
+`builder_provenance.builder_sha256`/`detail_record_sha256` を更新し、
+manifest raw sha256 が変わったため `RUN9_CONTRACT.yaml` の
+`education_technique_lesson_manifest_sha` を第6世代へ repin した（旧値
+= 第5世代、第4巡対応時点の値。履歴は本記録 §12/§13/§14/§15 参照）。
+`pjs_consumed_inputs_manifest_sha`（`inputs/pjs_consumed_inputs_
+sha256.json`）は本節の変更で一切触れていないため無変更（本節はいずれの
+消費入力の実バイト・pin 値にも影響しない、検証・公開経路のみの変更）。
+
+### run8: repo builder（第5巡対応後）による再現実行（独立8回目）
+
+python3（本セッションの system python3、pyworld 0.3.5 を含む依存関係が
+揃った環境）で、修正後の repo builder を workdir 展開済み corpus
+（`expanded/PJS_corpus_ver1.1`）に対し `build` サブコマンドで実行した。
+freeze record・spec・split manifest・contract・consumed-inputs manifest
+はいずれも repo 収載の既定パス（CLI 引数省略、デフォルト値のまま）。
+
+```
+$ python3 education_lesson_builder.py build \
+    --corpus-root <workdir>/expanded/PJS_corpus_ver1.1 \
+    --out-dir <workdir>/pr329_round5_build_out \
+    --allow-unpinned
+```
+
+| バンドル | 既 pin（run1〜run7） | run8 sha256 | 一致 |
+|---|---|---|---|
+| training | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | **PASS** |
+| validation | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | **PASS** |
+
+run8 は本節の Fix 15/16 がいずれも検証・公開経路（`publish_bundle_
+pair()` のロールバック状態表現・alias preflight 保護集合）のみに閉じて
+おり、抽出式・アラインメント・直列化・バンドル内容に一切影響しないこと
+の実測証跡である——run8 は `--allow-unpinned` で実行した（manifest 側
+`builder_provenance.builder_sha256` を本節の builder バイト変更後の値へ
+まだ repin していない時点での実測取得のため）。repin 完了後、
+`_require_bundle_bytes_match_pinned_manifest()` を run8 の実測 sha に
+対して直接呼び出し、例外を投げないこと（＝ canonical path 上で Fix 5
+（第2巡）のゲートが引き続き正しく機能すること）を確認済み。
+
+### 検証結果
+
+- `ruff check .`: clean
+- `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`:
+  本節（builder_provenance.builder_sha256/detail_record_sha256 の repo
+  収載値更新、`education_technique_lesson_manifest_sha` の6世代目 repin
+  を含む）最終稿確定後に全 PASS。
+- freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜4巡と
+  同じ理由——repo builder の identity は manifest 側 `builder_provenance`
+  が別途担う）。

@@ -1855,8 +1855,34 @@ founder_genome_shas:
 # アラインメント・直列化・バンドル内容は無変更、検証・公開経路のみの
 # 変更）。旧値（第4世代、第3巡対応時点）は履歴として保持する:
 #   e30bb8e51031c423c58ff0e8e83cf90d9a81abf4da10a6c3aa372a506d4f1a33
+#
+# 〔第6世代 repin, 2026-08-27, PR #329 第5巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用2/限定採用1）。`publish_bundle_pair()` の backup
+# 失敗と「旧世代なし」の混同是正（`_BackupOutcome` 状態オブジェクト新設）
+# + assemble/extract-song/probe-header の保護集合へ pinned education
+# manifest 検証器の入力 closure（manifest 本体・裁定 txt・builder 本体・
+# spec・freeze record 現行/superseded・detail record・consumed-inputs
+# pin・contract）を追加、の2件を実装（いずれも P1、
+# `HARNESS3B_EDUCATION_LESSON_RECORD.md` §16 参照）。限定採用1件（P2、
+# P5 training-distribution separation 記録の stale 是正）は
+# `evaluation/probe_manifest.json`・本欄の値・`_P5_DEFERRED_VERIFICATION_
+# BLOCKED_BY`（run9_schema.py）のいずれも変更せず、stale になった理由
+# コメントのみを本欄上方（Fix 32 repin コメントブロック）と
+# run9_schema.py 側へ追記した（§16「限定採用1」参照——検証の捏造・
+# status の空フリップは行っていない）。builder バイト変更（新値
+# = 816f765e6aa707ca5f1363c566b0980cbcfc5f6559950070a4d3e71732e3ca12）と
+# `builder_provenance.detail_record_sha256`（§16 追記後の実測記録 raw
+# sha256 = 85d19bf1299b33ab3c9e6093227723361dc3d6f211819683a944b48999001445）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。system python3（pyworld 0.3.5 導入済み）による repo builder
+# 再現実行（run8、`--allow-unpinned`）で training/validation バンドルとも
+# 既 pin（run1〜run7）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、検証・公開経路のみの
+# 変更）。旧値（第5世代、第4巡対応時点）は履歴として保持する:
+#   f7c3ac9ca1679b7307d09ef750c3709146759586e9fa2e3df5827a56c286a9d7
 education_technique_lesson_manifest_sha:
-  value: "f7c3ac9ca1679b7307d09ef750c3709146759586e9fa2e3df5827a56c286a9d7"
+  value: "9fa271aeceb63a21d8e2bd523b0d630580b6afcad87ed91f6dede9e4cce46949"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-
@@ -2295,6 +2321,29 @@ learning_recipe_sha:
 # manifest_sha は引き続き PENDING のため、P5 分離検証が実行不能である
 # という結論自体は現在も変わらない（practice 単独の PINNED 化では
 # `_P5_DEFERRED_VERIFICATION_BLOCKED_BY` の2欄要件を満たさない）〕。
+# 〔履歴注記 2026-08-27（Codex bot レビュー PR #329 第5巡指摘3, P2, 限定
+# 採用）: RUN9-L0-HARNESS-3b（本ファイル education_technique_lesson_
+# manifest_sha 欄参照）により education_technique_lesson_manifest_sha も
+# PINNED 化された——`_P5_DEFERRED_VERIFICATION_BLOCKED_BY` の2欄要件
+# （practice_audio_split_manifest_sha + education_technique_lesson_
+# manifest_sha）はともに充足された。しかし P5 のフレーズ/音域（kana・
+# pitch_midi の実値）と実学習素材の実体を照合する実際の検証手続き
+# （extractor/harness）は依然として repo に実在しない——development/
+# generalization 軸（P4/P5、GENERALIZED_GAIN を含む）の extractor は
+# VG-L0 学習ハーネス未実装のため存在せず（measurement_spec_sha は
+# development_generalization_axis について引き続き PENDING、本ファイル
+# 該当欄・README.md 該当節参照）、この2 pin 欄が揃っただけでは検証は
+# 実行できない。したがって P5 分離検証は依然実行不能のまま——ただし
+# 阻害要因は「2 pin 欄の PENDING」から「VG-L0 学習ハーネス実装
+# （development/generalization 軸 extractor 実装）待ち」へ移った。再入
+# 条件: measurement_spec_sha の development_generalization_axis 節が
+# PINNED 化された時点（= VG-L0 学習ハーネス実装により GENERALIZED_GAIN/
+# development 軸 extractor が実装された時点）で本検証を実装・実行する。
+# `deferred_verification.status`（`TRAINING_DISTRIBUTION_SEPARATION_
+# NOT_YET_VERIFIABLE`）は変更しない——検証不能な主張を凍結しない Fix
+# 14/18 規約のまま。`evaluation/probe_manifest.json` 自体（`blocked_by`
+# 凍結集合含む）は凍結境界のため改変しない——本注記は RUN9_CONTRACT.yaml
+# 側のみの追記である〕。
 # P5 の role 文言を検証済み事実（他 probe の使用域の外周・
 # baseline domain 内であること）へ限定し、P5 probe レベルへ機械可読
 # ブロック `deferred_verification`（status/blocked_by/verification_

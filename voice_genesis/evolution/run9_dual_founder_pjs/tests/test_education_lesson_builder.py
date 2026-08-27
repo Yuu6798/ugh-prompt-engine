@@ -1370,6 +1370,105 @@ def test_harness3b_publish_bundle_pair_second_rename_failure_no_prior_generation
     assert list(tmp_path.iterdir()) == []
 
 
+# ---------------------------------------------------------------------------
+# PR #329 第5巡 Codex bot レビュー対応: `_backup_existing()` の失敗（=
+# source が元の場所から一切動いていない）と「旧世代なし」の混同（P1、
+# 採用）。第3巡の `..._second_backup_failure_restores_first_and_leaves_
+# no_debris` はディレクトリ異常系を使っており、`_rollback_to_backup()`
+# が誤って呼ぶ `path.unlink()` が `IsADirectoryError`（OSError のサブ
+# クラス）で失敗して握りつぶされるため、たまたまバグが顕在化しなかった
+# ——本節は通常ファイルを対象に `_backup_existing()` 内部の
+# `os.replace(path, backup_path)` そのものを monkeypatch で失敗させ、
+# `unlink()` が実際に成功してしまう経路（= バグが顕在化する経路）で
+# 「旧公開ペアが両方無傷で残る」ことを確認する。
+# ---------------------------------------------------------------------------
+
+
+def test_harness3b_publish_bundle_pair_first_backup_failure_leaves_old_generation_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """失敗注入回帰テスト（PR #329 第5巡レビュー指摘1 必須テスト）:
+    `_backup_existing(training_path)` 内部の `os.replace(path,
+    backup_path)` 自体が失敗する（= training_path はまだ元の場所から
+    一切動いていない）経路で、`_rollback_to_backup()` が `training_
+    backup` の未代入（= 旧実装では `None` のまま）を「旧世代なし」と
+    誤解釈して、無傷で残っている旧 training_path を誤って unlink
+    **しない**ことを確認する。旧実装ではこの経路で training/validation
+    両方の旧公開ファイルが削除されていた——validation は一度も
+    `_backup_existing()` すら呼ばれていないにもかかわらず、である
+    （training 側の代入未完了により `validation_backup` も初期値
+    `None` のまま同じ誤解釈でロールバックされるため）。"""
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+    training_path.write_bytes(b'{"gen":"old-training"}\n')
+    validation_path.write_bytes(b'{"gen":"old-validation"}\n')
+
+    real_os_replace = os.replace
+
+    def _boom(src: Any, dst: Any) -> Any:
+        if Path(src) == training_path and str(dst).endswith(".prevgen.tmp"):
+            raise RuntimeError("synthetic training backup failure")
+        return real_os_replace(src, dst)
+
+    monkeypatch.setattr(elb.os, "replace", _boom)
+
+    with pytest.raises(RuntimeError, match="synthetic training backup failure"):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+
+    # both old-generation files survive untouched: training was never
+    # moved (its own backup rename is what failed) and validation was
+    # never even reached.
+    assert training_path.read_bytes() == b'{"gen":"old-training"}\n'
+    assert validation_path.read_bytes() == b'{"gen":"old-validation"}\n'
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p not in (training_path, validation_path))
+    assert leftovers == []
+
+
+def test_harness3b_publish_bundle_pair_second_backup_failure_leaves_old_generation_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """失敗注入回帰テスト（PR #329 第5巡レビュー指摘1 必須テスト）:
+    1本目（training）の backup 退避は成功したうえで、2本目
+    （validation）の `_backup_existing()` 内部の `os.replace(path,
+    backup_path)` 自体が失敗する（= validation_path はまだ元の場所
+    から一切動いていない）経路。旧実装では `validation_backup` の
+    未代入（= `None` のまま）を「旧世代なし」と誤解釈し、無傷で残って
+    いる旧 validation_path を実際に `unlink()` で削除していた
+    （通常ファイルを対象にしているため `unlink()` が成功してしまい、
+    第3巡のディレクトリ異常系テストとは異なり実際にバグが顕在化する
+    経路——第3巡テストは `IsADirectoryError` が握りつぶされて偶然
+    バグを検出できていなかった）。"""
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+    training_path.write_bytes(b'{"gen":"old-training"}\n')
+    validation_path.write_bytes(b'{"gen":"old-validation"}\n')
+
+    real_os_replace = os.replace
+
+    def _boom(src: Any, dst: Any) -> Any:
+        if Path(src) == validation_path and str(dst).endswith(".prevgen.tmp"):
+            raise RuntimeError("synthetic validation backup failure")
+        return real_os_replace(src, dst)
+
+    monkeypatch.setattr(elb.os, "replace", _boom)
+
+    with pytest.raises(RuntimeError, match="synthetic validation backup failure"):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+
+    # training is restored from its backup; validation was never moved
+    # and must be left untouched — not unlinked.
+    assert training_path.read_bytes() == b'{"gen":"old-training"}\n'
+    assert validation_path.read_bytes() == b'{"gen":"old-validation"}\n'
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p not in (training_path, validation_path))
+    assert leftovers == []
+
+
 def test_harness3b_publish_bundle_pair_second_backup_failure_restores_first_and_leaves_no_debris(
     tmp_path: Path,
 ) -> None:
@@ -1752,6 +1851,124 @@ def test_harness3b_assemble_cli_rejects_out_aliasing_intermediate_json(tmp_path:
     ])
     assert rc == 2
     assert json.loads(intermediate_path.read_text(encoding="utf-8"))["sentinel"] == "do-not-overwrite"
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第5巡 Codex bot レビュー対応（採用1件, P1）:
+#   assemble/extract-song/probe-header の保護パス集合に、pinned education
+#   lesson manifest 検証が実際に読む cross-check closure（manifest 本体 +
+#   builder/裁定 txt/freeze record 2本/detail record/consumed-inputs pin）
+#   を追加する。旧実装ではこの closure が保護集合から丸ごと欠落しており、
+#   `--out inputs/education_technique_lesson_manifest.json` 等を指定すると
+#   検証成功後に `write_bundle_bytes()` がその pin 済みファイルをバンドル
+#   JSON で上書きし得た。
+#
+# 以下のテストは `--out` に実リポジトリの pin 済みファイルを直接指定する
+# ——alias preflight は `_cmd_assemble` 内で split membership 検証の直後、
+# 中間物 JSON を1つも読む前に実行されるため、preflight が正しく拒否する
+# 限り本テストが実リポジトリファイルへ書き込むことは無い。preflight が
+# もし拒否し損なっても、`--intermediates-dir` には実在しない中間物 JSON
+# しか無いため、後続の読み取りが `FileNotFoundError` で先に失敗し、
+# `write_bundle_bytes()` へは到達しない（実ファイル破壊のリスクなしに
+# 「保護されているか」を検証できる構成）。
+# ---------------------------------------------------------------------------
+
+
+def test_harness3b_assemble_cli_rejects_out_aliasing_pinned_education_manifest(
+    tmp_path: Path,
+) -> None:
+    """`--out` が pin 済み education lesson manifest 本体
+    （`inputs/education_technique_lesson_manifest.json`）を直接指す場合、
+    中間物を1つも読む前に拒否され、manifest の実バイトは無傷のまま残る。"""
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(training_ids), encoding="utf-8")
+    before = elb.DEFAULT_EDUCATION_MANIFEST_PATH.read_bytes()
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path / "does_not_exist"),
+        "--out", str(elb.DEFAULT_EDUCATION_MANIFEST_PATH),
+    ])
+    assert rc == 2
+    assert elb.DEFAULT_EDUCATION_MANIFEST_PATH.read_bytes() == before
+
+
+def test_harness3b_assemble_cli_rejects_out_aliasing_adjudication_basis(tmp_path: Path) -> None:
+    """`--out` が裁定文書
+    （`USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt`、pinned education
+    lesson manifest の cross-check (a) 対象）を直接指す場合も同様に拒否
+    される。"""
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(training_ids), encoding="utf-8")
+    before = elb.DEFAULT_ADJUDICATION_BASIS_PATH.read_bytes()
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path / "does_not_exist"),
+        "--out", str(elb.DEFAULT_ADJUDICATION_BASIS_PATH),
+    ])
+    assert rc == 2
+    assert elb.DEFAULT_ADJUDICATION_BASIS_PATH.read_bytes() == before
+
+
+def test_harness3b_assemble_cli_rejects_out_aliasing_freeze_record(tmp_path: Path) -> None:
+    """`--out` が freeze record（`inputs/h3b_freeze_record.json`、pinned
+    education lesson manifest の cross-check (d) 対象）を直接指す場合も
+    同様に拒否される。"""
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(training_ids), encoding="utf-8")
+    before = elb.DEFAULT_FREEZE_RECORD_PATH.read_bytes()
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path / "does_not_exist"),
+        "--out", str(elb.DEFAULT_FREEZE_RECORD_PATH),
+    ])
+    assert rc == 2
+    assert elb.DEFAULT_FREEZE_RECORD_PATH.read_bytes() == before
+
+
+def test_harness3b_extract_song_protected_paths_include_pinned_education_manifest_closure(
+) -> None:
+    """`_extract_song_protected_paths()` が pinned education lesson
+    manifest cross-check closure 全体（manifest 本体・裁定 txt・builder
+    本体・spec・freeze record 現行/superseded・detail record・
+    consumed-inputs pin）を含むことを直接確認する（第5巡レビュー指摘2、
+    採用対応。extract-song 自身はこの closure を読まないが、保護集合への
+    一貫した包含を保証する構造であることの直接証跡）。"""
+    args = argparse.Namespace(
+        corpus_root="/tmp/does-not-matter", song_id="pjs001",
+        split_manifest=None, contract_path=None, consumed_inputs_manifest=None,
+        freeze_record=None, spec_path=None,
+    )
+    protected = elb._extract_song_protected_paths(args)  # noqa: SLF001
+    assert elb.DEFAULT_EDUCATION_MANIFEST_PATH in protected
+    assert elb.DEFAULT_ADJUDICATION_BASIS_PATH in protected
+    assert elb._THIS_MODULE_PATH in protected  # noqa: SLF001
+    assert elb.DEFAULT_SUPERSEDED_FREEZE_RECORD_PATH in protected
+    assert elb.DEFAULT_DETAIL_RECORD_PATH in protected
+
+
+def test_harness3b_probe_header_protected_paths_include_pinned_education_manifest_closure(
+) -> None:
+    """同上、`_probe_header_protected_paths()` 版（第5巡レビュー指摘2、
+    採用対応）。"""
+    args = argparse.Namespace(
+        corpus_root="/tmp/does-not-matter", song_ids=["pjs001"],
+        split_manifest=None, contract_path=None,
+    )
+    protected = elb._probe_header_protected_paths(args)  # noqa: SLF001
+    assert elb.DEFAULT_EDUCATION_MANIFEST_PATH in protected
+    assert elb.DEFAULT_ADJUDICATION_BASIS_PATH in protected
+    assert elb._THIS_MODULE_PATH in protected  # noqa: SLF001
+    assert elb.DEFAULT_SUPERSEDED_FREEZE_RECORD_PATH in protected
+    assert elb.DEFAULT_DETAIL_RECORD_PATH in protected
 
 
 def test_harness3b_require_single_split_bundle_bytes_match_pinned_manifest_happy_path(
