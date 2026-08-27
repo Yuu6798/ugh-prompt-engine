@@ -477,9 +477,123 @@ $ python3 speaker_map_builder.py --founder R9F-02 \
 - `speaker_map_builder.py`: `_atomic_write_bytes()` を新設し `main()` の
   `write_bytes()` 直接呼び出しを置き換え。
 
+## 追記: PR #328 Codex レビュー第4巡指摘9（P1、採用）対応 —
+## canonical loader 経由化 + builder 自己照合の新設（2026-08-27、Claude 完結ルート）
+
+第3巡対応後の `speaker_map_builder.py` に対し、第4巡で以下1件（P1）が
+指摘された（採用・Fable 確定方針）。
+
+- **指摘9（P1）**: builder CLI は manifest の**内部構造検証のみ**
+  （`load_local_speaker_map_manifest()` が `inputs/speaker_map_manifest.
+  json` を直接 `json.load()`）で完結しており、(i) manifest 実バイトが
+  `RUN9_CONTRACT.yaml` の `expected_speaker_map_sha` pin と一致するか、
+  (ii) 実行中の builder 自身が `builder_provenance.builder_sha256` と
+  一致するか、のいずれも確認せずに同じ untrusted ファイル内の期待値
+  どうしを比較して `reproduced: true` を報告し得た——改変された
+  manifest + 入力 + 期待値の組で偽の再現成功が印字される穴があった。
+
+### 対応
+
+builder の manifest 読み込みを新設 `load_canonical_speaker_map_manifest()`
+（`speaker_map_builder.py`）経由へ置き換えた。同関数は
+`run9_schema.load_run9_contract_from_yaml_path()`/`load_run9_identity_
+domain()`/`load_rights_manifest_json()` で contract/domain/rights_
+manifest を正典パスから厳密 parse で読み、`run9_schema.load_pinned_
+speaker_map_manifest()`（`expected_speaker_map_sha` pin の唯一の正規
+消費経路——manifest 実バイト pin 一致・発行済み Founder Genome・
+reexport_manifest・execution_profile_manifest・gate_synth.py 実ファイル
+との全 cross-check を fail-closed で強制する）へ渡す。manifest への直接
+`json.load()` 経路（旧 `load_local_speaker_map_manifest()`）は builder
+から削除した。`synthesize()` の `manifest=None`（CLI 既定経路）は本関数を
+呼ぶ——`main()` 自体への変更は不要だった（例外伝播経路が既に
+`m.Run9ValidationError` を捕捉していたため）。
+
+さらに builder 自身の自己照合を追加した: `load_pinned_speaker_map_
+manifest()` の cross-check (j) は `builder_provenance.repo_relative_path`
+を repo-containment guard 経由で解決した実ファイルの sha256 を照合する
+が、これに加えて **実際に実行中のこの builder ファイル**（既定
+`Path(__file__).resolve()`、`running_builder_path` はテスト専用の
+override 引数）の実バイト sha256 を manifest の `builder_provenance.
+builder_sha256` と直接照合し、不一致なら synthesis 前に fail-closed で
+拒否する（「pin 済み builder 以外での再現主張」を構造的に禁止する）。
+
+**鶏卵性の解消手順**（Fable 確定方針の指示どおり）: builder のコード
+確定 → 実バイト sha256 実測（`34b2106b558cb3407dc6159d939b588f6c190f56
+039710c04f6a11fb072f30ba`）→ `inputs/speaker_map_manifest.json`
+`builder_provenance.builder_sha256` 更新 → manifest 実バイト sha256 実測
+（`43e68fde685d55a190e6fab0caa18381bdc2e31456558287f2b0d176df2c3167`）→
+`RUN9_CONTRACT.yaml` `expected_speaker_map_sha` 第5世代 repin、の順で
+直列に実施し、`load_canonical_speaker_map_manifest()`（自己照合込み）が
+実 repo pin 済みデータに対して例外なく通過することを実測確認した。
+
+負例テスト（`tests/test_speaker_map_builder.py` へ追加）:
+
+- (a) manifest 改変（内部整合は保ったまま、実ファイル末尾へ改行1byte
+  追加）→ `manifest_path` override 経由で渡すと、改変後の実バイト
+  sha256 が contract pin と食い違うため fail-closed で拒否される
+  （`test_load_canonical_speaker_map_manifest_tampered_manifest_
+  contract_pin_mismatch_rejected`）。
+- (b) builder バイト改変（実ファイルのコピーへ1byte追加）→
+  `running_builder_path` override 経由で渡すと、manifest/contract 側は
+  本物のまま（cross-check (j) は通過する）にもかかわらず、自己照合が
+  fail-closed で拒否する（`test_load_canonical_speaker_map_manifest_
+  builder_self_check_tampered_rejected`）——cross-check (j) と自己照合が
+  独立した防御であることの直接証拠。
+- (c) 正常系: `load_canonical_speaker_map_manifest()`/`synthesize()` の
+  `manifest=None` 既定経路が、実 repo pin 済み manifest に対して例外なく
+  canonical 経路を完走すること（`test_load_canonical_speaker_map_
+  manifest_happy_path_real_repo_data`/`test_synthesize_default_manifest_
+  none_uses_canonical_loader_real_repo_data`）。
+
+### builder 再現実測（両 founder）— 新 canonical CLI 経路での再実行
+
+本対応は `synthesize()` の合成ロジック（`w_r * ritsu_vec + w_u *
+user_vec` の式・演算順序・dtype 処理）を一切変更していない——変更対象は
+manifest 取得経路（`load_local_speaker_map_manifest()` →
+`load_canonical_speaker_map_manifest()`）と builder 自己照合の新設のみ。
+
+第5世代 repin（builder 確定 → builder sha 実測 → manifest 更新 →
+contract repin の順で鶏卵性を解消）後、workdir 現存の実 ritsu/user emb
+（`reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.{ritsu,user}.emb`、
+入力 sha256 = `ce4b87b9...`/`588913b7...`、reexport manifest pin と一致）
+に対し、**新 canonical CLI 経路（contract load → 全 cross-check + builder
+自己照合 → 合成）で両 founder の再現実測を再実行し、いずれも
+`reproduced: true`（出力 sha256 が manifest pin `fc7b73fd...`/
+`0a681a2c...` と完全一致・exit 0）を確認した**。canonical loader の統合
+動作（全 cross-check + 自己照合）は実 repo pin 済み manifest に対する
+自動テストでも例外なく通過することを確認済み（上記「対応」節）。
+
+### manifest/contract への反映
+
+- `inputs/speaker_map_manifest.json`: `builder_provenance.builder_sha256`
+  を `speaker_map_builder.py` の新しい実バイト sha256
+  （`34b2106b558cb3407dc6159d939b588f6c190f56039710c04f6a11fb072f30ba`）へ
+  更新。既存の founder 実測値（合成 embedding sha256・render sha256・
+  秒数・`pre_pin_verification_summary` 6点・重み式そのもの）は一切変更
+  していない。
+- `RUN9_CONTRACT.yaml` `expected_speaker_map_sha`: manifest 実バイトが
+  変わったため第5世代へ repin（
+  `43e68fde685d55a190e6fab0caa18381bdc2e31456558287f2b0d176df2c3167`。
+  旧値 = 第4世代、`6a6d6e2fe5737bcc2847c66e9420e42c818a682630feb140860
+  951195fd227cd` は履歴として contract コメントに保持）。
+- `speaker_map_builder.py`: `load_local_speaker_map_manifest()` を削除し
+  `load_canonical_speaker_map_manifest()`（contract/domain/rights_
+  manifest 経由の全 cross-check + builder 自己照合）を新設。
+  `synthesize()` の `manifest=None` 既定経路をこの新関数へ切り替え。
+  `run9_schema.py`/`inputs/speaker_map_manifest.json`/`RUN9_CONTRACT.
+  yaml` への変更なし（cross-check (j) は既存実装をそのまま再利用）。
+
 ## 逸脱・停止事由
 
-なし。検証6点すべて PASS、repo ファイル変更ゼロ、`gate_synth.py` は
-read-only 実行のみ。上記追記の builder 再現実測も両 founder とも PASS。
-第2巡対応後の再確認実測も両 founder とも PASS（出力 sha256 不変）。
-第3巡対応後の再確認実測も両 founder とも PASS（出力 sha256 不変）。
+**第1〜3巡分**: なし。検証6点すべて PASS、repo ファイル変更ゼロ、
+`gate_synth.py` は read-only 実行のみ。上記追記の builder 再現実測も両
+founder とも PASS。第2巡対応後の再確認実測も両 founder とも PASS（出力
+sha256 不変）。第3巡対応後の再確認実測も両 founder とも PASS（出力
+sha256 不変）。
+
+**第4巡分（指摘9）**: なし。実装エージェントが一時「実 emb 不在のため
+再現実測を再実行できない」と報告したが、これは探索誤りであり（実 emb は
+session workdir に現存）、最終検分時に新 canonical CLI 経路で両 founder の
+再現実測を再実行し `reproduced: true` を確認済み（上記節参照）。合成
+ロジック自体・両 founder の実測出力 sha256 は本対応で変更していない。
+ruff/pytest は全件 PASS。

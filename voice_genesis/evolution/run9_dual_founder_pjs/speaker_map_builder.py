@@ -56,11 +56,21 @@ L2正規化・摂動・ランダム成分・重み調整は一切行わない（
        `_atomic_write_bytes()`。svp_rpe 側の `utils/atomic_io` 集約実装と
        同型だが、本 run9 系は svp_rpe を import しない独立構成のため builder
        内へ自足させた最小実装）。
-本 builder は `RUN9_CONTRACT.yaml` の `expected_speaker_map_sha` pin との
-実バイト照合は行わない（それは `load_pinned_speaker_map_manifest()` の
-責務——本 builder は checkout 直後の fixture 再現に特化した軽量ツールで
-あり、contract/domain/rights_manifest の完全な取り回しは要求しない、
-`practice_split_builder.py` と同じ責務分離）。
+  (v)  manifest は `load_canonical_speaker_map_manifest()`（本 builder CLI
+       の**唯一の**正規 manifest 取得経路。`synthesize()` の
+       `manifest=None`（CLI 既定経路）から呼ばれる）を経由してのみ読む
+       ——`run9_schema.load_pinned_speaker_map_manifest()` で (a) manifest
+       実バイトが `RUN9_CONTRACT.yaml` の `expected_speaker_map_sha` pin
+       と一致すること、(b) 発行済み Founder Genome・reexport/execution_
+       profile 等との全 cross-check、に加え (c) **実行中の builder 自身**
+       （`Path(__file__)` の実バイト sha256）が manifest の
+       `builder_provenance.builder_sha256` と一致することを synthesis
+       前に fail-closed で強制する（PR #328 Codex レビュー第4巡指摘9、
+       P1、採用対応——旧実装 `load_local_speaker_map_manifest()` は
+       manifest の**内部構造検証のみ**を行い、同じ untrusted ファイル内の
+       期待値どうしを比較していたため、改変された manifest + 入力 +
+       期待値の組で偽の `reproduced: true` を印字できる穴があった。
+       manifest への直接 `json.load()` 経路は CLI から排除した）。
 
 出力: 384-dim float32 raw バイナリ（`.tobytes()`、既存 emb と同形式）。
 emb バイナリ自体は repo にコミットしない（rights 制約、session workdir /
@@ -88,15 +98,104 @@ def _sha256_bytes(b: bytes) -> str:
     return hashlib.sha256(b).hexdigest()
 
 
-def load_local_speaker_map_manifest() -> Dict[str, Any]:
-    """repo 内 `inputs/speaker_map_manifest.json` を読み、
-    `run9_schema.validate_speaker_map_manifest()` で自己整合を検証してから
-    返す（fail-closed — 壊れた/改竄された manifest からは合成しない）。
+def load_canonical_speaker_map_manifest(
+    *,
+    contract_path: Optional[Path] = None,
+    manifest_path: Optional[Path] = None,
+    rights_manifest_path: Optional[Path] = None,
+    identity_domain_path: Optional[Path] = None,
+    adjudication_basis_path: Optional[Path] = None,
+    gate_synth_py_path: Optional[Path] = None,
+    running_builder_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """本 builder CLI が speaker map manifest を得る**唯一の**正規経路
+    （PR #328 Codex レビュー第4巡指摘9、P1、採用対応）。
+
+    旧 `load_local_speaker_map_manifest()`（本関数の前身、削除済み）は
+    `inputs/speaker_map_manifest.json` を直接 `json.load()` し、
+    `run9_schema.validate_speaker_map_manifest()` による**内部構造検証
+    のみ**を行っていた——manifest 実バイトが `RUN9_CONTRACT.yaml` の
+    `expected_speaker_map_sha` pin と一致するかは確認せず、`synthesize()`
+    は同じ untrusted ファイル内が自己申告する
+    `synthesized_embedding.sha256` を「期待値」として比較していた。この
+    ため manifest・入力 emb・期待 sha256 の3点をまとめて改変すれば、
+    builder は改変後の組同士が一致する偽の `reproduced: true` を印字
+    できた（本指摘の核心）。
+
+    本関数は `run9_schema.load_run9_contract_from_yaml_path()` で contract
+    を、`run9_schema.load_run9_identity_domain()` で identity domain を、
+    `run9_schema.load_rights_manifest_json()` で rights manifest をそれぞれ
+    正典パスから厳密 parse で読み、`run9_schema.load_pinned_speaker_map_
+    manifest()`（`expected_speaker_map_sha` pin の唯一の正規消費経路——
+    manifest 実バイトの pin 一致、発行済み Founder Genome・reexport_
+    manifest・execution_profile_manifest・gate_synth.py 実ファイルとの
+    全 cross-check を fail-closed で強制する）へ渡す。
+
+    **さらに builder 自身の自己照合**（Fable 確定対応方針 手順2）:
+    `load_pinned_speaker_map_manifest()` の cross-check (j) は
+    `builder_provenance.repo_relative_path` を repo-containment guard
+    経由で解決した実ファイルの sha256 を照合するが、本関数は加えて
+    **実際に実行中のこの builder ファイル**（既定 `Path(__file__).
+    resolve()`、`running_builder_path` はテスト専用の override）の実バイト
+    sha256 を manifest の `builder_provenance.builder_sha256` と直接照合
+    する——実行中コードとの乖離を synthesis 前に fail-closed で拒否する
+    ことで「pin 済み builder 以外での再現主張」を構造的に禁止する。
+
+    `contract_path`/`manifest_path`/`rights_manifest_path`/
+    `identity_domain_path`/`adjudication_basis_path`/`gate_synth_py_path`/
+    `running_builder_path` はいずれもテスト専用の override 引数——
+    production 呼び出し（全省略）は repo 相対の正典パスのみを消費する
+    （他の `load_pinned_*` 系と同じ override 規約）。
     """
-    data = m._loads_strict_json(  # noqa: SLF001 - sibling module, see module docstring
-        m.SPEAKER_MAP_MANIFEST_PATH.read_text(encoding="utf-8")
+    effective_contract_path = (
+        contract_path if contract_path is not None else m.RUN9_CONTRACT_YAML_PATH
     )
-    m.validate_speaker_map_manifest(data)
+    effective_rights_manifest_path = (
+        rights_manifest_path if rights_manifest_path is not None else m.RIGHTS_MANIFEST_PATH
+    )
+    effective_identity_domain_path = (
+        identity_domain_path if identity_domain_path is not None else m.RUN9_IDENTITY_DOMAIN_PATH
+    )
+    if not effective_rights_manifest_path.is_file():
+        raise m.Run9ValidationError(
+            "speaker_map_builder.load_canonical_speaker_map_manifest(): rights manifest source "
+            f"{effective_rights_manifest_path} does not exist"
+        )
+
+    contract = m.load_run9_contract_from_yaml_path(effective_contract_path)
+    domain = m.load_run9_identity_domain(effective_identity_domain_path)
+    rights_manifest = m.load_rights_manifest_json(
+        effective_rights_manifest_path.read_text(encoding="utf-8")
+    )
+
+    data = m.load_pinned_speaker_map_manifest(
+        contract,
+        domain=domain,
+        rights_manifest=rights_manifest,
+        manifest_path=manifest_path,
+        contract_path=effective_contract_path,
+        adjudication_basis_path=adjudication_basis_path,
+        gate_synth_py_path=gate_synth_py_path,
+    )
+
+    effective_running_builder_path = (
+        running_builder_path if running_builder_path is not None else Path(__file__).resolve()
+    )
+    if not effective_running_builder_path.is_file():
+        raise m.Run9ValidationError(
+            "speaker_map_builder.load_canonical_speaker_map_manifest(): self-check source "
+            f"{effective_running_builder_path} (実行中の builder) does not exist"
+        )
+    running_builder_sha = _sha256_bytes(effective_running_builder_path.read_bytes())
+    pinned_builder_sha = data["builder_provenance"]["builder_sha256"]
+    if running_builder_sha != pinned_builder_sha:
+        raise m.Run9ValidationError(
+            "speaker_map_builder.load_canonical_speaker_map_manifest(): 実行中の builder "
+            f"（{effective_running_builder_path}）の実バイト sha256 ({running_builder_sha!r}) が "
+            f"manifest の builder_provenance.builder_sha256 pin 値 ({pinned_builder_sha!r}) と "
+            "一致しない — pin 済み builder 以外での再現主張を synthesis 前に fail-closed で "
+            "拒否する（PR #328 Codex レビュー第4巡指摘9、P1、採用対応）"
+        )
     return data
 
 
@@ -108,16 +207,21 @@ def synthesize(
     manifest: Optional[Dict[str, Any]] = None,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """`founder_id` 指定 + ritsu/user emb ファイルパスから合成 embedding を
-    決定論的に再構築する純関数。`manifest` を省略すると
-    `load_local_speaker_map_manifest()` で repo 内 pin 済み manifest を
-    読む（テストは合成 manifest を明示的に渡せる）。
+    決定論的に再構築する。`manifest` を省略すると（CLI 既定経路）
+    `load_canonical_speaker_map_manifest()` で contract pin・builder 自己
+    照合を含む全 cross-check 済みの manifest を読む（テストは合成
+    manifest を明示的に渡すことでこの重い canonical 経路を bypass できる
+    ——`manifest` 引数はテスト専用の穴ではなく、`synthesize()` 自体を
+    純粋な数値検証関数として単体テストするための既存の穴あき設計を
+    そのまま維持する。CLI からは常に `manifest=None` で呼ばれ、
+    canonical 経路を必ず通る）。
 
     戻り値は `(synth, report)`——`report` は入力/出力 sha256・使用した
     重み式・再現成否を含む機械可読レポート（`synth_speaker_map.py`
     workdir 原本のレポート形式を踏襲）。fail-closed 違反はすべて
     `run9_schema.Run9ValidationError` を送出する（部分出力を書かない）。
     """
-    data = manifest if manifest is not None else load_local_speaker_map_manifest()
+    data = manifest if manifest is not None else load_canonical_speaker_map_manifest()
     if founder_id not in m.CONTRACT_FOUNDER_IDS:
         raise m.Run9ValidationError(
             f"speaker_map_builder.synthesize(): unknown founder_id {founder_id!r}, "

@@ -5,7 +5,7 @@
     "summary": "User 裁定 2026-08-26 AF0 runtime mapping（方式A採用）。RUN9 構造 Genome は af0/ritsu/user 三点 Identity Domain を保持するが、byte-verified な AF0 speaker embedding が現行 RUN6 Backbone に存在しないため、runtime render では ritsu/user 成分のみを再正規化して線形合成する。"
   },
   "builder_provenance": {
-    "builder_sha256": "4d23893e6783e8f457b8174a145141de46ba0893e0e4f79b0f704612935cc717",
+    "builder_sha256": "34b2106b558cb3407dc6159d939b588f6c190f56039710c04f6a11fb072f30ba",
     "logical_name": "speaker_map_builder",
     "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/speaker_map_builder.py"
   },

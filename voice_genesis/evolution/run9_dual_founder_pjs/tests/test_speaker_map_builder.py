@@ -225,19 +225,85 @@ def test_synthesize_output_sha_mismatch_rejected(tmp_path: Path) -> None:
         smb.synthesize("R9F-01", ritsu_path, user_path, manifest=manifest)
 
 
-# --- load_local_speaker_map_manifest(): 実 repo manifest との統合 -----------
+# --- load_canonical_speaker_map_manifest(): 唯一の正規経路（builder 自己 --
+# --- 照合含む）（PR #328 Codex レビュー第4巡指摘9、P1、採用） --------------
+#
+# 旧 `load_local_speaker_map_manifest()`（削除済み）は repo 内 manifest を
+# 直接 `json.load()` し `validate_speaker_map_manifest()` による内部構造
+# 検証のみを行っていた——manifest 実バイトが `RUN9_CONTRACT.yaml` の
+# `expected_speaker_map_sha` pin と一致するか、実行中の builder 自身が
+# `builder_provenance.builder_sha256` と一致するかは確認していなかった
+# （改変された manifest + 入力 + 期待値の組で偽の `reproduced: true` を
+# 印字できる穴——本指摘の核心）。以下は新設 `load_canonical_speaker_map_
+# manifest()` の統合確認 + 指摘9 負例2系統。
 
 
-def test_load_local_speaker_map_manifest_validates_real_repo_manifest() -> None:
-    """`load_local_speaker_map_manifest()` は repo 内の実 pin 済み
-    manifest を読み、`validate_speaker_map_manifest()` を自己適用して
-    例外なく返す（builder が実際に消費する経路の統合確認）。"""
-    data = smb.load_local_speaker_map_manifest()
+def test_load_canonical_speaker_map_manifest_happy_path_real_repo_data() -> None:
+    """repo 内の実 pin 済み manifest を、contract/domain/rights_manifest
+    経由の全 cross-check + builder 自己照合を通して例外なく返す（builder
+    CLI が実際に消費する経路の統合確認）。"""
+    data = smb.load_canonical_speaker_map_manifest()
     assert data["schema"] == m.SCHEMA_SPEAKER_MAP
     assert "builder_provenance" in data
     assert data["builder_provenance"]["repo_relative_path"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/speaker_map_builder.py"
     )
+
+
+def test_load_canonical_speaker_map_manifest_tampered_manifest_contract_pin_mismatch_rejected(
+    tmp_path: Path,
+) -> None:
+    """指摘9 負例(a): manifest の内部整合は保ったまま実バイトだけを改変
+    すると（末尾改行1バイト追加——JSON構造上は無害）、改変後の実バイト
+    sha256 が `RUN9_CONTRACT.yaml` の `expected_speaker_map_sha` pin と
+    食い違うため canonical loader が fail-closed で拒否する（manifest の
+    内部構造だけを見ていた旧経路の穴の直接反証）。"""
+    real_bytes = m.SPEAKER_MAP_MANIFEST_PATH.read_bytes()
+    tampered_path = tmp_path / "speaker_map_manifest.json"
+    tampered_path.write_bytes(real_bytes + b"\n")
+    with pytest.raises(m.Run9ValidationError, match="実バイト sha256"):
+        smb.load_canonical_speaker_map_manifest(manifest_path=tampered_path)
+
+
+def test_load_canonical_speaker_map_manifest_builder_self_check_tampered_rejected(
+    tmp_path: Path,
+) -> None:
+    """指摘9 負例(b): 実行中の builder ファイルのコピーへ1byte追加した
+    ものを `running_builder_path` として渡すと（manifest/contract 側は
+    本物のまま——`load_pinned_speaker_map_manifest()` の cross-check (j)
+    は repo 内の本物の `speaker_map_builder.py` と照合するため、そちらは
+    通過する）、本関数が追加する builder 自己照合が fail-closed で拒否
+    する（cross-check (j) と自己照合が独立した防御であることの直接
+    証拠——鶏卵性: builder バイト自体を変える対応で builder_sha256 が
+    変わるため、テストは実行中ファイルの改変ではなく `running_builder_
+    path` override で「実行中コードが pin と乖離した」状態を模擬する）。"""
+    real_builder_path = _RUN_DIR / "speaker_map_builder.py"
+    tampered_copy = tmp_path / "speaker_map_builder_tampered_copy.py"
+    tampered_copy.write_bytes(real_builder_path.read_bytes() + b"\n# tampered\n")
+    with pytest.raises(m.Run9ValidationError, match="builder_provenance.builder_sha256"):
+        smb.load_canonical_speaker_map_manifest(running_builder_path=tampered_copy)
+
+
+def test_load_canonical_speaker_map_manifest_missing_rights_manifest_rejected(
+    tmp_path: Path,
+) -> None:
+    missing_path = tmp_path / "does_not_exist_rights.json"
+    with pytest.raises(m.Run9ValidationError, match="rights manifest source"):
+        smb.load_canonical_speaker_map_manifest(rights_manifest_path=missing_path)
+
+
+def test_synthesize_default_manifest_none_uses_canonical_loader_real_repo_data() -> None:
+    """`synthesize()` の `manifest` 省略（CLI 既定経路）が
+    `load_canonical_speaker_map_manifest()` を実際に経由することの統合
+    確認——未知 founder_id を渡し、canonical 経路が正常に manifest を
+    取得した**後**の `synthesize()` 内バリデーションで拒否されることを
+    もって、canonical loader が正常に通過したことの間接証拠とする（emb
+    ファイル自体は rights 制約により repo 非同梱のため、正常合成までは
+    本テストの範囲外——`load_local_speaker_map_manifest()` 由来の弱い
+    経路ではなく `load_canonical_speaker_map_manifest()` が実際に呼ばれて
+    いることの回帰防止が目的）。"""
+    with pytest.raises(m.Run9ValidationError, match="unknown founder_id"):
+        smb.synthesize("R9F-99", Path("/dev/null"), Path("/dev/null"))
 
 
 # --- _check_out_does_not_alias_inputs(): --out 入力破壊ガード -----------------

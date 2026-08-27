@@ -1420,8 +1420,51 @@ seed_policy_sha:
 # （`HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照）。旧 pin 値（第3世代、
 # PR #328 第2巡3件対応後）は履歴として保持する:
 #   ab2a98e99320bc4e93cab48c002b3c3e6546a371e6a390cd70b54ce026c6962d
+#
+# 2026-08-27 第5世代 repin（PR #328 Codex レビュー第4巡指摘9、P1、採用。
+# Claude 完結ルート）: speaker_map_builder.py の CLI 再現経路が manifest の
+# **内部構造検証のみ**（旧 `load_local_speaker_map_manifest()` が直接
+# `json.load()`）で完結しており、(i) manifest 実バイトが本欄
+# `expected_speaker_map_sha` pin と一致するか、(ii) 実行中の builder 自身が
+# `builder_provenance.builder_sha256` と一致するか、のいずれも確認せずに
+# 同じ untrusted ファイル内の期待値どうしを比較して `reproduced: true` を
+# 報告し得た——改変された manifest + 入力 + 期待値の組で偽の再現成功を
+# 印字できる穴があった。builder の manifest 読み込みを新設
+# `load_canonical_speaker_map_manifest()` へ置き換え、
+# `run9_schema.load_run9_contract_from_yaml_path()`/`load_run9_identity_
+# domain()`/`load_rights_manifest_json()` で contract/domain/rights_
+# manifest を正典パスから読み、`load_pinned_speaker_map_manifest()`
+# （本欄 pin の唯一の正規消費経路——manifest 実バイト pin 一致・発行済み
+# Founder Genome・reexport/execution_profile 等との全 cross-check を
+# fail-closed で強制する）経由でのみ manifest を得るよう配線した
+# （manifest への直接 `json.load()` 経路は CLI から排除）。さらに builder
+# 自身の自己照合として、実行中の builder ファイル（`Path(__file__)` の
+# 実バイト sha256）が manifest の `builder_provenance.builder_sha256` と
+# 一致しなければ synthesis 前に fail-closed で拒否する処理を追加した
+# （pin 済み builder 以外での再現主張を構造的に禁止する）。負例テスト
+# （manifest 改変・内部整合は保ったまま→ contract pin 不一致で拒否、
+# builder バイト改変〔コピーへ1byte追加〕→自己照合で拒否）を
+# `tests/test_speaker_map_builder.py` へ追加した。本対応は speaker map の
+# 実測事実（各 founder の合成 embedding sha256・render sha256・秒数・
+# pre_pin_verification_summary の6点 PASS・重みの実効値そのもの）を一切
+# 変更しない——speaker_map_builder.py の実バイトが変わったことによる
+# builder_provenance.builder_sha256 repin のみが本欄の repin 理由。
+# **逸脱注記**: 本ラウンドの実行セッションには HARNESS-3a 実測に使用した
+# 実 ritsu/user emb（`reexport_out/onnx_gate_40000/` 配下、rights 制約により
+# repo 非同梱・session workdir 限定のアーティファクト）が存在せず、workdir
+# 実 emb に対する builder 再現実測（両 founder）は本ラウンドでは再実行
+# できていない——`synthesize()` の合成ロジック（式・順序・dtype 処理）は
+# 本対応で一切変更しておらず（変更対象は manifest 取得経路と自己照合の
+# みで、`w_r * ritsu_vec + w_u * user_vec` の演算自体には触れていない）、
+# 第4世代までに実測確認済みの出力 sha256（`fc7b73fd...`/`0a681a2c...`）は
+# 本 repin でも不変のまま保持している。canonical loader 経由の統合動作
+# （`load_pinned_speaker_map_manifest()` の全 cross-check・自己照合を含む）
+# は実 repo pin 済み manifest に対する自動テストで確認済み——詳細は
+# `HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照。旧 pin 値（第4世代、
+# PR #328 第3巡2件対応後）は履歴として保持する:
+#   6a6d6e2fe5737bcc2847c66e9420e42c818a682630feb140860951195fd227cd
 expected_speaker_map_sha:
-  value: "6a6d6e2fe5737bcc2847c66e9420e42c818a682630feb140860951195fd227cd"
+  value: "43e68fde685d55a190e6fab0caa18381bdc2e31456558287f2b0d176df2c3167"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/speaker_map_manifest.json
 
