@@ -1728,6 +1728,80 @@ pin 済みバイトを実際に作った実装を特定・再実行できない�
    両枝を実際に呼び出して音声処理・特徴抽出・探索を行う学習ループ本体は
    未着手。
 
+**解消済み（RUN9-L0-HARNESS-3c 第1PR, 2026-08-27）**:
+- `learning_recipe_sha` 残5キー（`search_space`/`evaluator`/
+  `candidate_generation`/`compute_budget`/`data_binding`）未確定 →
+  User 裁定「RUN9 User裁定 — Learning Recipe 残5キー」（2026-08-27、repo
+  内収載
+  [`USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt`](./USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt)）
+  の承認に基づき、5キーそれぞれを実体化する manifest を新設し
+  **PINNED** 化した:
+  - [`inputs/score_axis_catalog_v1.json`](./inputs/score_axis_catalog_v1.json)
+    （schema `run9-score-axis-catalog/1.0`）— search_space。Composition
+    を変更しない score 変換層3軸系のうち、note単位の音高偏差（AX-P1
+    `note_pitch_offset_semitones`、range [-2.0,+2.0]半音・0.5刻み）と
+    phrase内の拍・音価配分（AX-D1 `phrase_duration_redistribution_
+    beats`、0.25 beat刻み・合計0・min 0.25 beat）は fixture/smoke render
+    実測（後述 W1/W1b）で実効性を確認し凍結。phrase境界制御は
+    `gate_synth.py::_NoteWithMs` が `phrase_index`/`is_phrase_final` を
+    コピーしない配線ギャップにより `NOT_EXPRESSIBLE_ON_CURRENT_WIRING`
+    と宣言（軸なし。新規注入点の追加は新 design revision を要する）。
+  - [`inputs/loss_evaluator_spec_v1.json`](./inputs/loss_evaluator_spec_v1.json)
+    （schema `run9-loss-evaluator-spec/1.0`）— evaluator。5 mandatory
+    channel（relative_f0/duration_ratio/normalized_energy/attack_timing/
+    phrase_end_timing）を全測定し各 1/5 重み。calibration_scale は
+    training 68曲（aligned）から母標準偏差（ddof=0, float64, 丸めなし）を
+    実測。relative_f0/normalized_energy は標本粒度（frame vs
+    mora/phrase）が構造上曖昧だったため両案を実測し、W1b Task3 時点では
+    Fableがframe粒度を採用していたが、PR #331 第6巡で
+    `residual_correspondence` を aligned mora 単位へ凍結した結果
+    frame 採用の前提が成立しなくなり、mora 粒度（sample_unit: mora /
+    adopted_v2: true）へ切替済み（不採用となった旧案の値・標本数は
+    manifest 内 derivation 欄に経緯付きで併記）。equal-weight aggregateは
+    candidate selection 用 search objective に限定し最終科学判定は5
+    channel個別値を維持、count_mismatch/not_extractedはゼロ補完しない。
+  - [`inputs/candidate_generation_spec_v1.json`](./inputs/candidate_generation_spec_v1.json)
+    （schema `run9-candidate-generation-spec/1.0`）— candidate_generation。
+    learning seed 909002 による hash-based 決定論探索
+    （`sha256(f"{seed}:{arm}:{founder}:{trial}:{candidate}")`）、
+    32 trials×4 candidates=128 logical render units/Founder/arm、
+    reseed・予算追加・range拡張・random fallback を禁止。
+  - [`inputs/compute_budget_manifest_v1.json`](./inputs/compute_budget_manifest_v1.json)
+    （schema `run9-compute-budget/1.0`）— compute_budget。
+    CPUExecutionProvider 固定・GPU自動fallback禁止、trial_count=32/
+    render_budget=128 の既裁定を参照のみで束縛、学習探索予算合計512
+    logical render units（固定評価renderは別予算）、実測秒数は
+    benchmark reference限定。
+  - [`inputs/learning_data_binding_manifest_v1.json`](./inputs/learning_data_binding_manifest_v1.json)
+    （schema `run9-learning-data-binding/1.0`）— data_binding。
+    `practice_audio_split_manifest_sha`/`pjs_consumed_inputs_manifest_
+    sha`/`education_technique_lesson_manifest_sha` の3 pinを束ね、
+    practice/education 双方の枝別利用制限（practiceはeducation lesson
+    を検索中に参照しない／educationはPJS raw audioをlearnerへ直接入力
+    しない）を宣言。
+
+  `run9_schema.py` に5対の `validate_*()`/`load_pinned_*()` を新設し、
+  他の `load_pinned_*` 系と同型の3層防御（ディスク正典再読込アンカー・
+  in-process contract 改変検出・read-once 実バイト sha256 照合）に加え、
+  manifest 別 cross-check（catalog↔`score_axis_transform.py`変換器の
+  実行時整合／calibration値の `LOSS_EVALUATOR_CALIBRATION_SCALE_V1`
+  定数一致／seed==`LEARNING_SEED`(909002)・32×4=128整合／
+  `execution_profile_sha` 参照値の contract 一致／data binding 3 pin の
+  contract 完全一致）を fail-closed で強制する。score 変換器本体は新設
+  [`score_axis_transform.py`](./score_axis_transform.py)（catalog 消費・
+  Composition 不変条件〔note数・kana列・許可フィールド外書込〕の機械
+  検証を内蔵、族 c のコードパスは実装しない）。実測根拠（W1: score変換
+  プロトタイプ+11 variant render実測、3軸実効性の結論。W1b: AX-P1/AX-D1
+  未検証格子点render+変換器レベルunit検証17ケース+calibration scale
+  実測）は
+  [`HARNESS3C_AXIS_FEASIBILITY_RECORD.md`](./HARNESS3C_AXIS_FEASIBILITY_RECORD.md)
+  を正とする。裁定 §6 PIN 条件（5 manifest 凍結まで `learning_recipe_
+  sha` を PINNED にしない）はこれで充足したが、`learning_recipe_sha`
+  自体（5 manifest を束ねた枝別 recipe manifest 実体の build）はこの PR
+  の対象外であり引き続き `PENDING`（pre-run PENDING 件数は5欄追加でも
+  7件のまま不変——新規5欄はいずれも本 PR で PINNED のため）。次 PR で
+  `learning_recipe_sha` 本体の build・学習ループ骨格を扱う。
+
 ## 次フェーズ（machine-dependent）
 
 Phase 3 で machine-independent な設計・schema・contract・validator は

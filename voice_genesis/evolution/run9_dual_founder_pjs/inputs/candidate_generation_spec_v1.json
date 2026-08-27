@@ -1,0 +1,105 @@
+{
+  "schema": "run9-candidate-generation-spec/1.0",
+  "seed": 909002,
+  "seed_reference_note": "この値は run9_schema.LEARNING_SEED と厳密一致することを load_pinned_candidate_generation_spec_manifest() が fail-closed で強制する",
+  "structure": {
+    "trial_count": 32,
+    "candidates_per_trial": 4,
+    "units_per_founder_per_arm": 128,
+    "units_per_founder_per_arm_formula": "trial_count * candidates_per_trial = 32 * 4 = 128",
+    "founders": 2,
+    "arms": 2,
+    "total_units": 512,
+    "total_units_formula": "units_per_founder_per_arm * founders * arms = 128 * 2 * 2 = 512",
+    "adjudicated_reference": "trial_count/units_per_founder_per_arm はここで再定義せず、既裁定値（RUN9-L0-PIN-2、learning_recipe manifest 側の trial_count==32/render_budget==128、run9_schema.LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT/LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET）への参照であり、本 spec が値の権威ではない"
+  },
+  "run_precondition": {
+    "minimum_candidate_space": "run 開始前の前提条件として、Founder-local な候補列 L（proposal.candidate_ordering が定める正準候補列。対象 score の note 構成・phrase 構成に依存し実行時に構築される）の有効非恒等候補数 |L| が、全提案スロット数（structure.units_per_founder_per_arm）から trial1_candidate0_rule の恒等スロット1件を除いた必要最小値以上であることを要求する。|L| がこの最小値を下回る場合、run を開始せず fail-closed で停止する（代替挙動の発明・予算追加・結果を見た range 拡張のいずれも行わない — undersized な L のまま run を完走させると、NOT_PROPOSABLE の頻発により render 数が契約（units_per_founder_per_arm = 128 units/Founder/arm）を下回ったまま完走し得るため、run 前の検査で構造的に締め出す）。参照実装: candidate_proposal.require_sufficient_candidate_space()",
+    "required_minimum_formula": "required_minimum = structure.units_per_founder_per_arm - 1（= 127。128 提案スロットから trial1_candidate0_rule の恒等スロット1件を除いた、L から充足すべき非恒等候補スロット数）"
+  },
+  "proposal": {
+    "rng_independence": "ライブラリ RNG 非依存の hash-based 決定論生成",
+    "digest_formula": "digest = sha256(UTF-8(f\"{seed}:{arm}:{founder_id}:{trial}:{candidate}\"))",
+    "digest_encoding": "UTF-8",
+    "digest_to_candidate_mapping": "digest の先頭8バイトを big-endian uint64 として解釈した値 u を idx = u mod len(L) で candidate_ordering.canonical_list（L）の索引へ写像し、L[idx] を候補とする。詳細な手続き（プロービング・近傍列挙）は exploratory_candidate_rule / neighborhood_candidate_rule が定義する",
+    "reservation_semantics": "trial 内の候補提案は candidate_index 0 -> 1 -> 2 -> 3 の逐次順で行い、各候補は提案された時点で（render/評価の結果を待たず）予約集合（reserved set）へ加える。近傍列挙（neighborhood_candidate_rule）・探査規則の線形プロービング（exploratory_candidate_rule.probing_rule）とも、この予約集合（過去 trial で評価済みの候補 ∪ 当該 trial 内で既に提案済みの候補、= proposed-or-evaluated）をスキップ対象とする——exploratory_candidate_rule.probing_rule 中の「評価済み」・neighborhood_candidate_rule 中の「未評価」はいずれも本 reservation_semantics が定める予約集合を指す（重複回避が評価済みのみを見ると、batch 提案と逐次提案で trace が分岐し得るため）。同一 trial 内で candidate 0..3 を一括で計算する実装（batch）と、各候補を提案の都度 render/評価してから次候補を計算する実装（逐次）は、この予約集合の定義により常に同一の候補列を生成する——提案順序が evaluation の完了を待たないため、digest 由来の探査候補が同一 trial 内の既提案候補と衝突しても線形プロービングで次候補へ進み、batch/逐次いずれでも結果が一致する。参照実装: candidate_proposal.propose_trial_candidates()",
+    "trial1_candidate0_rule": "trial 1 の candidate 0 は恒等（全軸オフセット/デルタ = 0、= baseline）を必ず含める",
+    "subsequent_trial_schedule": "trial 1 以降は「現 best の近傍（値キー ±1/±2 量子化ステップ + 隣接 index キーの優先順位リストから未評価の先頭3件、幾何的端点・評価済み枯渇いずれの理由の不足分も探査規則で決定論的に補充）」の決定論近傍列挙と hash 由来の探査候補を固定比率 3:1 で混合する。詳細は neighborhood_candidate_rule/exploratory_candidate_rule が定義する",
+    "proposal_schedule_table": [
+      {"trial_index": 1, "candidate_index": 0, "rule": "identity (all axes = 0, baseline)"},
+      {"trial_index": 1, "candidate_index": "1..3", "rule": "hash-derived exploratory candidates (digest -> grid index)"},
+      {"trial_index": "2..32", "candidate_index": "0..2", "rule": "current-best neighborhood: first 3 not-yet-evaluated candidates from the frozen priority list (value key +-1/+-2 quantization steps, then adjacent index key); unfilled slots (from geometric endpoints or evaluated-exhaustion of the priority list) are backfilled deterministically by the exploration rule, and the actual per-trial neighborhood/exploration/NOT_PROPOSABLE mix is recorded in the trial log"},
+      {"trial_index": "2..32", "candidate_index": "3", "rule": "hash-derived exploratory candidate (digest -> grid index), fixed 3:1 neighborhood:exploration ratio across the 4 candidates of the trial"}
+    ],
+    "candidate_ordering": {
+      "definition": "正準候補列 L: 有効な単一軸候補（AX-P1 の note_pitch_offset_semitones 単独変位、AX-D1 の phrase_duration_redistribution_beats 単独変位）の全列挙を、下記 total_order の辞書順で凍結した列。恒等候補（全軸 0）は単一軸候補ではないため L の要素ではなく、trial1_candidate0_rule が別途規定する",
+      "ax_p1": {
+        "tuple": ["axis_id = \"AX-P1\"", "note_index（対象 score の note 総数にわたり昇順）", "offset（昇順）"],
+        "offset_domain": [-2.0, -1.5, -1.0, -0.5, 0.5, 1.0, 1.5, 2.0],
+        "offset_domain_note": "score_axis_catalog_v1.json axes.AX-P1（range_semitones=[-2.0,2.0]・quantization_step_semitones=0.5・grid_values_count_per_note=9）から 0 を除いた 8 値。0 は単一軸候補としては非変換（恒等と区別がつかない）ため除外する",
+        "note_index_domain": "0..(対象 score の note 総数-1) 昇順",
+        "catalog_cross_check_note": "offset_domain の8値は score_axis_catalog_v1.json axes.AX-P1.range_semitones/quantization_step_semitones から機械導出した値の逐語複製である。run9_schema.load_pinned_candidate_generation_spec_manifest() が pinned score_axis_catalog manifest をロードし、candidate_proposal.ax_p1_offset_domain_from_catalog() 経由で catalog から独立に再導出した値と本 offset_domain を cross-check する（不一致は fail-closed）。catalog が repin されてこれらの値が変わった場合、本 spec 側も同期して repin しなければならない"
+      },
+      "ax_d1": {
+        "tuple": ["axis_id = \"AX-D1\"", "phrase_index（昇順）", "note index ペア (i, j)（同一 phrase 内、i 昇順→j 昇順、i != j）", "delta（昇順）"],
+        "delta_domain": "+0.25 刻み（score_axis_catalog_v1.json axes.AX-D1 quantization_step_beats）で、note i（delta を失う側）の変換後 duration が min_duration_beats（0.25）以上を保つ最大値まで。すなわち delta ∈ {0.25, 0.50, …, floor((duration_beats[i] - 0.25) / 0.25) * 0.25} で、この集合が空（duration_beats[i] < 0.5）の場合その (i, j) ペアは L に候補を持たない",
+        "delta_semantics": "delta は note i から note j へ移す量（note i の duration_beats から delta を引き、note j の duration_beats へ delta を足す）。sum(delta)=0 は i,j の2値のみで自動的に満たされる。ordered pair (i, j) と (j, i) は異なる候補として区別する（前者は i が失い j が得る、後者はその逆）",
+        "quantization_step_beats": 0.25,
+        "min_duration_beats": 0.25,
+        "catalog_cross_check_note": "quantization_step_beats/min_duration_beats はいずれも score_axis_catalog_v1.json axes.AX-D1 の同名値の逐語複製である。run9_schema.load_pinned_candidate_generation_spec_manifest() が pinned score_axis_catalog manifest をロードし、この2値を catalog 側の axes.AX-D1.quantization_step_beats/min_duration_beats と cross-check する（不一致は fail-closed）。catalog が repin されてこれらの値が変わった場合、本 spec 側も同期して repin しなければならない"
+      },
+      "total_order": "タプル比較 (axis_id, 第2キー, 第3キー, …) の辞書順（Python の tuple 比較と同一意味論: 先頭要素から順に比較し、最初に異なる要素で大小を確定する）。axis_id は文字列比較のため \"AX-D1\" < \"AX-P1\"（'D' < 'P'）となり、AX-D1 候補群が AX-P1 候補群より先に列挙される"
+    },
+    "exploratory_candidate_rule": {
+      "applies_to": "(a) trial 1 の candidate 1..3、および trial 2..32 の candidate 3（proposal_schedule_table の hash-derived exploratory 行すべて）。(b) trial 2..32 の candidate 0..2 のうち、neighborhood_candidate_rule.shortfall_handling が定める近傍優先順位リストの不足分バックフィル、または同 no_best_handling が定める NO_BEST（current_best 不在）時の candidate 0..3 全枠充当として適用が要求される近傍スロット（PR #331 Codex bot レビュー第12巡指摘、P1、採用: 第11巡新設の no_best_handling / 既存 shortfall_handling が candidate 0..2 のバックフィルを要求する一方、本 applies_to が (a) のみに限定していた spec 内矛盾を是正）。(a)(b) いずれのスロットも digest はスロットごとに {trial}:{candidate}（candidate は実際の candidate_index であり、(b) でも 3 へ差し替えない）を差し替えて独立に計算し、reservation_semantics が定める予約集合（proposed-or-evaluated）に対する probing_rule の線形プロービング・重複棄却は (a)(b) いずれのスロットにも同一に適用する",
+      "digest_bytes": "digest_formula で得た digest（sha256、32 バイト）の先頭8バイトを取り出す",
+      "byte_to_integer": "先頭8バイトを big-endian（最上位バイトが先頭）・符号なし整数として解釈し uint64 値 u を得る",
+      "index_formula": "idx = u mod len(L)（len(L) は candidate_ordering.canonical_list の要素数）",
+      "initial_pick": "L[idx] を候補とする",
+      "probing_rule": "L[idx] が既に同一 (seed, arm, founder_id) の探索内で評価済み、または適用時に catalog 制約（range/quantization/min-duration/重複 note index/phrase 越境）に違反する無効候補である場合、idx+1, idx+2, …（各ステップ mod len(L)）の順に決定論線形プロービングし、未評価かつ有効な最初の候補を採用する",
+      "exhaustion_handling": "L の全 len(L) 件を線形プロービングして未評価かつ有効な候補が1件も見つからない場合、当該 candidate スロットは NOT_PROPOSABLE として記録する（架空の候補を発明しない、reseed・range 拡張・random fallback のいずれも行わない）"
+    },
+    "neighborhood_candidate_rule": {
+      "applies_to": "trial 2..32 の candidate 0..2（3件）",
+      "current_best_definition": "直前 trial 終了時点までに評価され NOT_SCORABLE でない candidate 群のうち selection.objective を最小化する候補。best 更新は trial 境界でのみ確定し、同一 trial 内の候補間の評価順は近傍算出に影響しない。trial 2 の直前 = trial 1 終了時点の最良候補（trial 1 は恒等候補 + hash-derived exploratory 3件の既定構成を維持し、この4件の中から選ぶ）。ただし直前 trial までに一度も scorable な candidate が確定していない場合（trial 1 の恒等候補を含む全4候補が NOT_SCORABLE だった場合を含む）、current_best は不在（no_best_handling 参照）であり恒等ではない",
+      "current_best_may_be_identity": "trial 1 の最良候補が恒等候補（全軸 0）である場合を含む。恒等は L の要素ではないため、この場合の近傍は identity_neighbor_rule に従う。恒等自体が NOT_SCORABLE で best になり得なかった場合は current_best_may_be_identity の対象外であり no_best_handling が適用される——恒等は「best が不在」と等価ではない",
+      "no_best_handling": "trial 1 の恒等候補を含む全4候補が NOT_SCORABLE の場合（missing_policy「trial 内の全 candidate が NOT_SCORABLE の場合、当該 trial はそのまま記録し best 更新なしで次 trial へ進む」参照）、または最初に scorable な candidate が確定するまでの以降の trial でも同様に一度も scorable な candidate が無い場合、current_best は candidate_proposal.NO_BEST（IDENTITY=None とは別個のセンチネル）とする——None は「恒等が正当な best として確定している」ことを表す積極的な値であり、best が一度も確定していない消極的な状態と混同してはならない（PR #331 Codex bot レビュー第11巡指摘2、P1、採用: 旧仕様はこの区別を持たず、None の多義性により架空の恒等近傍が生成され得る欠陥があった）。current_best が NO_BEST の trial では、neighborhood_candidate_rule の近傍3スロットは構造的に全欠（shortfall = 3 全枠）となり、candidate 0..3 の4枠すべてを exploratory_candidate_rule（探査ストリーム、hash 系列。適用範囲は exploratory_candidate_rule.applies_to (b) が定める）で決定論的に充当する。恒等候補の暗黙の再提案はしない——恒等は trial1_candidate0_rule が定める trial 1 candidate 0 の1回のみで、NO_BEST から自動的に恒等へ復帰することはない。この trial の理由 \"NO_SCORABLE_BEST\" を探索 trace（practice_actor_binding.trace_storage が定める trial log）へ必須記録する。参照実装: candidate_proposal.NO_BEST（`candidate_proposal.neighbors_of()` は NO_BEST を渡されると空リストを返す）。selection.no_scorable_candidate_terminal_state と接続する（32 trial 終了時点まで NO_BEST が続いた場合の run 終端状態）",
+      "neighbor_value_perturbation": "現 best が L の要素（単一軸候補、best B = (axis, index キー, 値キー v)）である場合、以下の優先順位リストを順に評価し、catalog 制約内で有効・L に存在・（同一 (seed, arm, founder_id) の探索内で）未評価のもののみを候補として採用する（PR #331 Codex bot レビュー第3巡指摘1「Make the scheduled neighborhood ratio achievable」、P1、採用: 旧定義は index キー固定・値キー ±1 量子化ステップの2方向のみで、非恒等 best の近傍が最大2件しか存在せず trial 2-32 の近傍3枠を構造的に満たせなかった）: (1) 値キー v + 1 量子化ステップ、(2) 値キー v - 1 量子化ステップ、(3) 値キー v + 2 量子化ステップ、(4) 値キー v - 2 量子化ステップ、(5) 同 axis・同値キー v で index キーが candidate_ordering の total_order 上 1 つ前の候補（AX-P1: note_index - 1／AX-D1: (phrase_index, (i, j)) の L 内 distinct index キー列で1つ前）、(6) 同 axis・同値キー v で index キーが total_order 上 1 つ後の候補。値が offset_domain/delta_domain の範囲外、または該当する (index キー, 値キー) の組が L に存在しない場合、その項目は単に列挙対象から除く",
+      "identity_neighbor_rule": "現 best が恒等候補の場合、近傍候補集合 = L のうち恒等（全軸 0）からちょうど 1 量子化ステップの候補、すなわち AX-P1 は offset ∈ {-0.5, +0.5} の全 note_index 分、AX-D1 は delta = 0.25 の全 (phrase_index, (i, j)) 分。この定義は neighbor_value_perturbation の優先順位リスト項目 (1)(2)（値キーを ±1 量子化ステップ変化させる）を、値キーの初期値が全 index キーについて 0 である恒等ベクトルへ、単一の index キーに限定せず全 index キーに対して適用した結果であり、新規のルールを導入するものではない（項目 (3)(4) の ±2 ステップおよび項目 (5)(6) の隣接 index キーは、恒等には基準となる単一 index キーが存在しないため適用しない——恒等の近傍数は項目(1)(2)の全 index キー適用だけで通常3件を十分に上回るため、この不適用が3枠達成可能性を損なうことはない）",
+      "enumeration_order": "現 best が L の要素の場合、neighbor_value_perturbation の優先順位リスト (1)→(6) の順に評価し、有効・L に存在・未評価の候補を先頭から3件採用する（L の total_order による並べ替えではなく、この優先順位そのものが列挙順である）。現 best が恒等の場合は identity_neighbor_rule で定まった候補集合を candidate_ordering の total_order（L と同じ辞書順）で列挙し、先頭から3件採用する",
+      "shortfall_handling": "未評価かつ有効な近傍候補が3件未満の場合、不足分は exploratory_candidate_rule の手順（不足している candidate index のスロットごとに digest を計算。適用範囲は exploratory_candidate_rule.applies_to (b) が定める）で補充する。3:1 は「近傍優先3スロット + 探査1スロット」の決定論スロットテンプレートであり、trial 内 candidate 数は常に4で固定だが、近傍スロットが3件埋まらない場合は残りスロットを探査規則が決定論的に補充する。shortfall（近傍優先順位リストが3件に満たないこと）の発生源は2つあり、いずれも本規則の対象である: (a) 幾何的端点 — 値キー v が offset_domain/delta_domain の端かつ index キーが L 内の該当 axis distinct index キー列の端（1つ前/後が存在しない、または存在しても該当 (index キー, v) の組が L に存在しない）ため、優先順位リスト6項目のうち catalog 制約内で有効な項目自体が3件に満たない場合。(b) 評価済み枯渇 — current best が内部領域（値キー・index キーのいずれも端でない）で優先順位リスト6項目のうち3件以上が catalog 制約内で本来有効であっても、それらが同一 (seed, arm, founder_id) の探索内で既に評価済みのため、未評価の残数が3件に満たない場合（内部領域の best でも起こり得る——旧改訂が「端点の場合に限られる」と述べていたのは誤りで、evaluated フィルタ後の枯渇を見落としていた）。3:1 という宣言比率と、shortfall により実際に生じる近傍/探査/NOT_PROPOSABLE の内訳が乖離し得ることを隠さないため、各 trial の実際の内訳（candidate 0..3 それぞれが近傍・探査・NOT_PROPOSABLE のいずれで充足されたか）を探索 trace（practice_actor_binding.trace_storage が定める trial log）へ必須記録する"
+    }
+  },
+  "selection": {
+    "objective": "loss_evaluator_spec_v1 の aggregate（candidate_selection_search_objective_only スコープ）を最小化する候補を選ぶ",
+    "tie_break": "tie-break キーは (objective, candidate_ordinal) の全順序で決定論的に一意の勝者を選ぶ（objective が同値の場合 candidate_ordinal の小さい方が勝つ）。candidate_ordinal(候補) の定義: 候補が恒等候補（全軸オフセット/デルタ = 0、trial1_candidate0_rule の baseline）の場合 candidate_ordinal = -1。候補が非恒等候補 c（candidate_ordering が定める正準候補列 L の要素、単一軸候補）の場合 candidate_ordinal(c) = c が L（既に凍結済みの total_order — AX-D1 群が先、タプル辞書順）において占めるインデックス（0始まり）。この定義は恒等・AX-P1・AX-D1 の全候補型を単一整数キーで被覆し、座標順・表現・恒等候補の位置に関する曖昧性を排除する実行可能な全順序を与える（PR #331 Codex bot レビュー第4巡指摘2、P1、採用: 旧定義「(objective, 軸ベクトルの辞書順)」は座標順・表現・恒等候補の位置が未定義だった）。参照実装: candidate_proposal.candidate_ordinal()",
+    "no_scorable_candidate_terminal_state": "32 trial（trial 1..32）を通じて一度も scorable な candidate が確定しなかった場合（全 trial で NOT_SCORABLE が続き neighborhood_candidate_rule.no_best_handling の NO_BEST 状態が最終 trial まで解消しなかった場合）、当該 Founder/arm の run は終端状態 NO_SCORABLE_CANDIDATE として記録する。勝者なし（selection による best 選出を行わない）・暗黙の恒等候補採用なし（恒等が NOT_SCORABLE だった事実をそのまま維持し、恒等へのフォールバックで穴埋めしない）を凍結する——偽成功経路（実際には何も学習できていない run を、恒等を勝者としたかのように記録する経路）を構造的に排除するため。当該 Founder/arm の学習結果は NO_SCORABLE_CANDIDATE の事実をそのまま正直に記録する（reseed・予算追加・range 拡張のいずれも行わない、prohibited と同型の制約）。loss_evaluator_spec_v1.json の missing_policy.not_measurable_definition（candidate 単位・trial 単位の NOT_SCORABLE 規則）と接続する上位の run 終端規則である（PR #331 Codex bot レビュー第11巡指摘2、P1、採用）"
+  },
+  "boundary_handling": {
+    "out_of_range": "clamp せず棄却して次の決定論候補へ進む（clamp は同一候補の重複を生み探索を歪めるため）",
+    "duplicate": "重複候補も棄却し次候補へ進む"
+  },
+  "prohibited": [
+    "reseed",
+    "予算追加",
+    "結果を見た range 拡張",
+    "random fallback"
+  ],
+  "practice_actor_binding": {
+    "target_selection": "Founder-local actor 内で実行する",
+    "difference_estimation": "Founder-local actor 内で実行する",
+    "trace_storage": "全探索 trace を practice_trace（既存 schema）+ 本 spec 準拠の trial log に保存する"
+  },
+  "adjudication_basis": {
+    "sha256": "18b467dd0340aeb3e05b26a14bfdb986c502e39a222668ccddd1f396dab1aa31",
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt",
+    "summary": "User 裁定 2026-08-27（Learning Recipe 残5キー）§3 candidate_generation: learning seed 909002による決定論探索を採用し、32 trials×4 candidates=128 logical render units per Founder/armとし、同じgenerator規則・axis catalog・proposal schedule・tie-break・boundary処理を二体へ適用する。reseed・予算追加・結果を見たrange拡張・random fallbackを禁止する。PRACTICEのtarget selection・difference estimationはFounder-local actor内で実行し、全探索traceを保存する。"
+  },
+  "provenance": {
+    "detail_record": {
+      "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
+      "sha256": "b85906f8ec0c59f60b6a410cf97a757ec3f6f6c4d47e4f6bf4bd425f03217d55",
+      "note": "本 spec の proposal/selection/boundary 処理が動作する探索空間（AX-P1/AX-D1 グリッド）の実効性・量子化制約の実測根拠"
+    }
+  }
+}

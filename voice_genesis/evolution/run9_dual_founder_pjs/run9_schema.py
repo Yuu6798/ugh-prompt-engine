@@ -1421,6 +1421,53 @@ EDUCATION_MANIFEST_PATH = _THIS_DIR / "inputs" / "education_technique_lesson_man
 PJS_CONSUMED_INPUTS_MANIFEST_PATH = _THIS_DIR / "inputs" / "pjs_consumed_inputs_sha256.json"
 
 # ---------------------------------------------------------------------------
+# RUN9-L0-HARNESS-3c: learning_recipe manifest 残5キー（search_space/
+# evaluator/candidate_generation/compute_budget/data_binding）を実体化する
+# 5 manifest（User 裁定「RUN9 User裁定 — Learning Recipe 残5キー」§1-§5）。
+# §6 PIN 条件: 本5 manifest が実体化・検証・SHA凍結されるまで
+# `learning_recipe_sha` は PENDING のまま。
+# ---------------------------------------------------------------------------
+
+SCHEMA_SCORE_AXIS_CATALOG = "run9-score-axis-catalog/1.0"
+SCHEMA_LOSS_EVALUATOR_SPEC = "run9-loss-evaluator-spec/1.0"
+SCHEMA_CANDIDATE_GENERATION_SPEC = "run9-candidate-generation-spec/1.0"
+SCHEMA_COMPUTE_BUDGET_MANIFEST = "run9-compute-budget/1.0"
+SCHEMA_LEARNING_DATA_BINDING_MANIFEST = "run9-learning-data-binding/1.0"
+
+SCORE_AXIS_CATALOG_PATH = _THIS_DIR / "inputs" / "score_axis_catalog_v1.json"
+LOSS_EVALUATOR_SPEC_PATH = _THIS_DIR / "inputs" / "loss_evaluator_spec_v1.json"
+CANDIDATE_GENERATION_SPEC_PATH = _THIS_DIR / "inputs" / "candidate_generation_spec_v1.json"
+COMPUTE_BUDGET_MANIFEST_PATH = _THIS_DIR / "inputs" / "compute_budget_manifest_v1.json"
+LEARNING_DATA_BINDING_MANIFEST_PATH = (
+    _THIS_DIR / "inputs" / "learning_data_binding_manifest_v1.json"
+)
+H3C_ADJUDICATION_PATH = _THIS_DIR / "USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt"
+H3C_DETAIL_RECORD_PATH = _THIS_DIR / "HARNESS3C_AXIS_FEASIBILITY_RECORD.md"
+
+# loss_evaluator_spec_v1 の calibration_scale の frozen 正本（W1b Task3実測、
+# HARNESS3C_AXIS_FEASIBILITY_RECORD.md 第2部 Task3 + PR #331 第6巡追加実測。
+# training 68曲・ddof=0・float64・丸めなし全桁）。`validate_loss_evaluator_
+# spec_manifest()` は manifest 内 channel ごとの calibration_scale.value が
+# この定数と厳密一致することを強制する——「loss spec の calibration 値と
+# channel 対応表の定数一致」（TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP と
+# 同じ「schema 定数を正本とし manifest 側の値をそれへ照合する」ファミリー
+# 掃討パターン）。
+# relative_f0/normalized_energy は v1（99bb670b）時点では frame 粒度（案A）
+# を Fable が採用していたが、PR #331 第6巡で residual_correspondence が
+# frame 対応関係を aligned mora 単位集約へ凍結したことにより「scale の
+# 粒度 = loss に入る原子残差標本の粒度」の原則を適用し直し、mora 粒度
+# （relative_f0 は W1b Task3 実測済みの案B、normalized_energy は第6巡で
+# 追加実測した案C）へ切替した（不採用となった frame/phrase 粒度値は
+# manifest 側 derivation 欄に経緯付きで参考併記）。
+LOSS_EVALUATOR_CALIBRATION_SCALE_V1: Dict[str, float] = {
+    "relative_f0": 20.185403077101824,
+    "duration_ratio": 0.26757779133213067,
+    "normalized_energy": 0.1571927766940749,
+    "attack_timing": 0.046215471651767655,
+    "phrase_end_timing": 0.04277885307503042,
+}
+
+# ---------------------------------------------------------------------------
 # RUN9-L0-HARNESS-3b: technique lesson bundle（`education_lesson_builder.py`
 # が生成する training/validation バンドルの schema 識別子）+ 三系統語彙
 # 対応表（HARNESS3B_EXTRACTOR_SPEC.md §1 の凍結対象表を機械可読へ写した
@@ -7140,6 +7187,19 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     # 完全被覆で閉じる（`validate_pjs_consumed_inputs_manifest()`/
     # `load_pinned_consumed_inputs_manifest()` 参照）。
     "pjs_consumed_inputs_manifest_sha",
+    # RUN9-L0-HARNESS-3c で追加（User 裁定「RUN9 User裁定 — Learning
+    # Recipe 残5キー」§1-§6）: learning_recipe manifest 残5キーを実体化する
+    # 5 manifest 自体の実バイト sha256（design_doc_sha256 と同一のファイル
+    # 実バイト規約）。§6 PIN 条件どおり、この5欄が全て PINNED になるまで
+    # `learning_recipe_sha` は PENDING のまま——本5欄自体は本 PR で内容が
+    # 確定するため PINNED（`validate_score_axis_catalog_manifest()` 等 +
+    # `load_pinned_score_axis_catalog_manifest()` 等が全構造・cross-check
+    # を fail-closed で強制する）。
+    "score_axis_catalog_sha",
+    "loss_evaluator_spec_sha",
+    "candidate_generation_spec_sha",
+    "compute_budget_manifest_sha",
+    "learning_data_binding_manifest_sha",
     # rev 0.3 新設（User 外部レビュー PR #317 P1-1 採用）: 枝別書込境界
     # policy manifest（`inputs/branch_write_policy.json`）自体の実
     # sha256。本 PR でファイル内容を確定するため PINNED（本欄自体は
@@ -17828,4 +17888,1935 @@ def load_pinned_consumed_inputs_manifest(
             f"load_pinned_consumed_inputs_manifest(): JSON parse に失敗した: {exc}"
         ) from exc
     validate_pjs_consumed_inputs_manifest(data)
+    return data
+
+
+# =============================================================================
+# RUN9-L0-HARNESS-3c: 5 manifest（score_axis_catalog_v1 / loss_evaluator_
+# spec_v1 / candidate_generation_spec_v1 / compute_budget_manifest_v1 /
+# learning_data_binding_manifest_v1）の validate_*()/load_pinned_*()。
+# 全5関数とも他の `load_pinned_*` 系と同型の3層防御
+# （ディスク正典再読込アンカー・in-process contract 改変検出・read-once
+# 実バイト sha256 照合）+ 本節共通の adjudication/detail-record cross-check
+# + manifest 別の追加 cross-check を持つ。
+# =============================================================================
+
+_H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"schema", "adjudication_basis", "provenance"}
+)
+
+
+def _h3c_cross_check_adjudication_and_detail_record(
+    data: Mapping[str, Any], *, manifest_kind: str
+) -> None:
+    """5 manifest 共通の cross-check（`load_pinned_education_lesson_
+    manifest()` cross-check (a) と同型）: `adjudication_basis.source_file`
+    （`USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt`）と
+    `provenance.detail_record.repo_relative_path`
+    （`HARNESS3C_AXIS_FEASIBILITY_RECORD.md`）の実バイト sha256 が、それぞれ
+    manifest 内の宣言値と一致することを fail-closed で強制する（裁定文書・
+    実測記録の改変を拒否する）。
+    """
+    adjudication_basis = data["adjudication_basis"]
+    adjudication_resolved = _resolve_repo_contained_path(
+        adjudication_basis["source_file"],
+        repo_root=_EDUCATION_LESSON_REPO_ROOT,
+        field="adjudication_basis.source_file",
+        context=manifest_kind,
+    )
+    if not adjudication_resolved.is_file():
+        raise Run9ValidationError(
+            f"{manifest_kind}: cross-check source {adjudication_resolved} "
+            "(adjudication_basis.source_file) does not exist"
+        )
+    adjudication_actual = hashlib.sha256(adjudication_resolved.read_bytes()).hexdigest()
+    adjudication_pinned = adjudication_basis["sha256"]
+    if adjudication_actual != adjudication_pinned:
+        raise Run9ValidationError(
+            f"{manifest_kind}: {adjudication_resolved} の実バイト sha256 ({adjudication_actual!r}) "
+            f"が adjudication_basis.sha256 pin 値 ({adjudication_pinned!r}) と一致しない — 裁定文書の"
+            "改変を fail-closed で拒否する"
+        )
+
+    detail_record = data["provenance"]["detail_record"]
+    detail_resolved = _resolve_repo_contained_path(
+        detail_record["repo_relative_path"],
+        repo_root=_EDUCATION_LESSON_REPO_ROOT,
+        field="provenance.detail_record.repo_relative_path",
+        context=manifest_kind,
+    )
+    if not detail_resolved.is_file():
+        raise Run9ValidationError(
+            f"{manifest_kind}: cross-check source {detail_resolved} "
+            "(provenance.detail_record.repo_relative_path) does not exist"
+        )
+    detail_actual = hashlib.sha256(detail_resolved.read_bytes()).hexdigest()
+    detail_pinned = detail_record["sha256"]
+    if detail_actual != detail_pinned:
+        raise Run9ValidationError(
+            f"{manifest_kind}: {detail_resolved} の実バイト sha256 ({detail_actual!r}) が "
+            f"provenance.detail_record.sha256 pin 値 ({detail_pinned!r}) と一致しない — W1/W1b 実測"
+            "記録の改変を fail-closed で拒否する"
+        )
+
+
+def _h3c_load_pinned_common(
+    *,
+    contract: "Run9RunContract",
+    pin_name: str,
+    manifest_path: Optional[Path],
+    contract_path: Optional[Path],
+    default_path: Path,
+    fn_label: str,
+) -> Dict[str, Any]:
+    """5 manifest 共通の3層防御（ディスク正典再読込アンカー・in-process
+    contract 改変検出・read-once 実バイト sha256 照合・JSON parse）を行い、
+    parse 済み dict を返す（schema 別 validate/cross-check は呼び出し側の
+    責務）。`load_pinned_practice_split_manifest()` 等と同一の防御構造を
+    5関数で重複させないための共通実装。
+    """
+    effective_contract_path = contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field(pin_name)
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field(pin_name)
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            f"{fn_label}(): the passed-in contract's {pin_name} pin ({passed_field!r}) diverges "
+            f"from the canonical on-disk RUN9_CONTRACT.yaml pin ({disk_field!r}) at "
+            f"{effective_contract_path} — treated as tampering evidence and rejected fail-closed"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            f"{fn_label}(): {pin_name} is not PINNED (status={field.get('status')!r}) — refusing "
+            "to consume an unpinned manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else default_path
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"{fn_label}(): pinned manifest source {path} does not exist — this function is the "
+            "sole canonical access path (direct json.load() elsewhere is a contract violation); a "
+            "missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（TOCTOU 対策）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"{fn_label}(): {path} の実バイト sha256 ({actual_sha!r}) が RUN9_CONTRACT.yaml "
+            f"{pin_name} の pin 値 ({pinned_sha!r}) と一致しない — stale・改ざんされた manifest は "
+            "fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(f"{fn_label}(): JSON parse に失敗した: {exc}") from exc
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 1. score_axis_catalog_v1
+# ---------------------------------------------------------------------------
+
+_SCORE_AXIS_CATALOG_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = (
+    _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS
+    | frozenset({"composition_invariants", "axes", "transformer_binding"})
+)
+_SCORE_AXIS_IDS: FrozenSet[str] = frozenset({"AX-P1", "AX-D1", "phrase_boundary_control"})
+
+
+def validate_score_axis_catalog_manifest(data: Mapping[str, Any]) -> None:
+    """`score_axis_catalog_v1.json` の構造・値整形式を検証する（裁定
+    「RUN9 User裁定 — Learning Recipe 残5キー」§1: Compositionを変更しない
+    score変換層3軸系への限定）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"score axis catalog manifest must be an object, got {type(data).__name__}")
+    schema = data.get("schema")
+    if schema != SCHEMA_SCORE_AXIS_CATALOG:
+        raise Run9ValidationError(
+            f"score axis catalog manifest schema must be exactly {SCHEMA_SCORE_AXIS_CATALOG!r}, "
+            f"got {schema!r}"
+        )
+    missing = _SCORE_AXIS_CATALOG_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"score axis catalog manifest missing required key(s): {sorted(missing)}")
+    axes = data["axes"]
+    if not isinstance(axes, dict) or set(axes.keys()) != _SCORE_AXIS_IDS:
+        raise Run9ValidationError(
+            f"score axis catalog manifest.axes must have exactly keys {sorted(_SCORE_AXIS_IDS)}, "
+            f"got {sorted(axes.keys()) if isinstance(axes, dict) else type(axes).__name__}"
+        )
+
+    ax_p1 = axes["AX-P1"]
+    if ax_p1.get("mutable_fields") != ["midi"]:
+        raise Run9ValidationError(
+            f"score axis catalog manifest.axes.AX-P1.mutable_fields must be exactly ['midi'], got "
+            f"{ax_p1.get('mutable_fields')!r}"
+        )
+    lo, hi = ax_p1.get("range_semitones", [None, None])
+    if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)) or not (lo < hi):
+        raise Run9ValidationError(
+            f"score axis catalog manifest.axes.AX-P1.range_semitones must be a [lo, hi] pair with "
+            f"lo < hi, got {ax_p1.get('range_semitones')!r}"
+        )
+    step_p1 = ax_p1.get("quantization_step_semitones")
+    if not isinstance(step_p1, (int, float)) or step_p1 <= 0:
+        raise Run9ValidationError(
+            "score axis catalog manifest.axes.AX-P1.quantization_step_semitones must be a "
+            f"positive number, got {step_p1!r}"
+        )
+
+    ax_d1 = axes["AX-D1"]
+    if ax_d1.get("mutable_fields") != ["duration_beats"]:
+        raise Run9ValidationError(
+            "score axis catalog manifest.axes.AX-D1.mutable_fields must be exactly "
+            f"['duration_beats'], got {ax_d1.get('mutable_fields')!r}"
+        )
+    step_d1 = ax_d1.get("quantization_step_beats")
+    if not isinstance(step_d1, (int, float)) or step_d1 <= 0:
+        raise Run9ValidationError(
+            "score axis catalog manifest.axes.AX-D1.quantization_step_beats must be a positive "
+            f"number, got {step_d1!r}"
+        )
+    min_dur = ax_d1.get("min_duration_beats")
+    if not isinstance(min_dur, (int, float)) or min_dur <= 0:
+        raise Run9ValidationError(
+            f"score axis catalog manifest.axes.AX-D1.min_duration_beats must be a positive number, "
+            f"got {min_dur!r}"
+        )
+
+    family_c = axes["phrase_boundary_control"]
+    if family_c.get("status") != "NOT_EXPRESSIBLE_ON_CURRENT_WIRING":
+        raise Run9ValidationError(
+            "score axis catalog manifest.axes.phrase_boundary_control.status must be exactly "
+            f"'NOT_EXPRESSIBLE_ON_CURRENT_WIRING', got {family_c.get('status')!r} — W1 実測が "
+            "gate_synth._NoteWithMs の配線ギャップを確認した以上、族 c を実効な軸として宣言しては "
+            "ならない"
+        )
+    if family_c.get("axes") != []:
+        raise Run9ValidationError(
+            "score axis catalog manifest.axes.phrase_boundary_control.axes must be an empty list "
+            f"(NOT_EXPRESSIBLE_ON_CURRENT_WIRING declares no expressible axis), got "
+            f"{family_c.get('axes')!r}"
+        )
+
+
+def load_pinned_score_axis_catalog_manifest(
+    contract: "Run9RunContract",
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`score_axis_catalog_sha` pin の**唯一の正規消費経路**（他の
+    `load_pinned_*` 系と同型の3層防御 + read-once 契約）。
+
+    cross-check: (a) 裁定 txt / detail record の実バイト sha256 照合
+    （`_h3c_cross_check_adjudication_and_detail_record()`）。(b) catalog↔
+    変換器の整合: `score_axis_transform.py`（本 harness の score 変換器）へ
+    本 manifest の catalog dict を実際に渡し、range/quantization の境界値が
+    受理され境界外値が `CatalogRejected` で拒否されることを実行時に確認する
+    ——静的な shape 検証だけでなく、凍結した catalog 値が実際に変換器を
+    通して機能することの実測的な裏付けを取る。`score_axis_transform` は
+    `run9_schema` に依存しない一方向消費のため、ここでの import は
+    モジュールレベルではなく本関数内のローカル import に留める（本モジュール
+    冒頭の「他の run9 sibling モジュールを import しない」方針を、恒常的な
+    モジュールレベル依存としては崩さない）。
+    """
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="score_axis_catalog_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=SCORE_AXIS_CATALOG_PATH,
+        fn_label="load_pinned_score_axis_catalog_manifest",
+    )
+    validate_score_axis_catalog_manifest(data)
+    _h3c_cross_check_adjudication_and_detail_record(
+        data, manifest_kind="load_pinned_score_axis_catalog_manifest"
+    )
+
+    import score_axis_transform as _sat  # ローカル import（docstring 参照）
+
+    baseline_notes = [
+        {"kana": "さ", "midi": 64.0, "duration_beats": 1.0, "phrase_index": 0, "is_phrase_final": False},
+        {"kana": "く", "midi": 64.0, "duration_beats": 1.0, "phrase_index": 0, "is_phrase_final": False},
+        {"kana": "ら", "midi": 65.0, "duration_beats": 2.0, "phrase_index": 0, "is_phrase_final": True},
+    ]
+    lo, hi = data["axes"]["AX-P1"]["range_semitones"]
+    step_p1 = data["axes"]["AX-P1"]["quantization_step_semitones"]
+    try:
+        _sat.apply_ax_p1(baseline_notes, note_index=2, offset_semitones=lo, catalog=data)
+        _sat.apply_ax_p1(baseline_notes, note_index=2, offset_semitones=hi, catalog=data)
+    except _sat.ScoreAxisTransformError as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            "load_pinned_score_axis_catalog_manifest(): catalog↔変換器整合チェック失敗 — "
+            f"AX-P1 の range 境界値 [{lo}, {hi}] が score_axis_transform.apply_ax_p1() で受理され"
+            f"なかった: {exc}"
+        ) from exc
+    try:
+        _sat.apply_ax_p1(baseline_notes, note_index=2, offset_semitones=hi + step_p1, catalog=data)
+    except _sat.CatalogRejected:
+        pass
+    else:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            "load_pinned_score_axis_catalog_manifest(): catalog↔変換器整合チェック失敗 — AX-P1 の "
+            f"range 外オフセット {hi + step_p1} が score_axis_transform.apply_ax_p1() に拒否されな"
+            "かった"
+        )
+
+    step_d1 = data["axes"]["AX-D1"]["quantization_step_beats"]
+    min_dur = data["axes"]["AX-D1"]["min_duration_beats"]
+    try:
+        _sat.apply_ax_d1(
+            baseline_notes, note_indices=[0, 1], deltas_beats=[step_d1, -step_d1], catalog=data
+        )
+    except _sat.ScoreAxisTransformError as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            "load_pinned_score_axis_catalog_manifest(): catalog↔変換器整合チェック失敗 — AX-D1 の "
+            f"quantization_step_beats={step_d1} 相当の delta が score_axis_transform.apply_ax_d1() "
+            f"で受理されなかった: {exc}"
+        ) from exc
+    boundary_delta = min_dur - baseline_notes[0]["duration_beats"]
+    try:
+        _sat.apply_ax_d1(
+            baseline_notes, note_indices=[0, 1], deltas_beats=[boundary_delta, -boundary_delta],
+            catalog=data,
+        )
+    except _sat.ScoreAxisTransformError as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            "load_pinned_score_axis_catalog_manifest(): catalog↔変換器整合チェック失敗 — AX-D1 の "
+            f"min_duration_beats={min_dur} ちょうど境界の delta が score_axis_transform.apply_ax_d1"
+            f"() で受理されなかった: {exc}"
+        ) from exc
+    over_boundary_delta = boundary_delta - step_d1
+    try:
+        _sat.apply_ax_d1(
+            baseline_notes, note_indices=[0, 1], deltas_beats=[over_boundary_delta, -over_boundary_delta],
+            catalog=data,
+        )
+    except _sat.CatalogRejected:
+        pass
+    else:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            "load_pinned_score_axis_catalog_manifest(): catalog↔変換器整合チェック失敗 — AX-D1 の "
+            f"min_duration_beats={min_dur} を下回る delta が score_axis_transform.apply_ax_d1() に"
+            "拒否されなかった"
+        )
+
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 2. loss_evaluator_spec_v1
+# ---------------------------------------------------------------------------
+
+_LOSS_EVALUATOR_CHANNEL_NAMES: FrozenSet[str] = frozenset(LOSS_EVALUATOR_CALIBRATION_SCALE_V1.keys())
+_LOSS_EVALUATOR_SPEC_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS | frozenset(
+    {
+        "channels",
+        "residual_extraction_spec",
+        "aggregate_scope",
+        "aggregate_formula",
+        "missing_policy",
+        "actor_boundary",
+        "residual_correspondence",
+        "reference_source",
+    }
+)
+
+# missing_policy.not_measurable_definition の凍結文言（PR #331 Codex bot
+# レビュー第1巡指摘2、P1、採用対応で是正した candidate 単位 NOT_SCORABLE
+# 定義の逐語）: 第3巡指摘2「Validate the corrected NOT_SCORABLE policy」
+# （P2、採用）が指摘するとおり、`zero_fill_prohibited`/
+# `eligible_count_required_per_channel` の2 boolean だけでは repin で本
+# 文言を旧「部分 channel 採点」定義へ差し戻しても検出できない。この
+# 定数との逐語一致検査で repin 改変を fail-closed 拒否する。
+_LOSS_EVALUATOR_EXPECTED_NOT_MEASURABLE_DEFINITION = (
+    "いずれかの channel が eligible == 0 の candidate は当該 candidate を NOT_SCORABLE と記録する。"
+    "いずれかの channel が eligible == 0 の trial（= trial 内の全 candidate のうち少なくとも1つが "
+    "NOT_SCORABLE な channel を持つ trial ではなく、当該 candidate 自身）は NOT_SCORABLE として "
+    "candidate selection（best 更新の比較対象）から除外する — 部分計測の candidate が完全計測の "
+    "candidate に勝ち得た旧定義（欠測 channel を加点も減点もしないゼロ補完相当の扱い）の欠陥を是正する。"
+    "除外の事実（NOT_SCORABLE フラグ）と channel 別 eligible 件数を trial 記録へ必須収載する"
+    "（ゼロ補完禁止・eligible 記録の裁定 §2 要件は維持）。trial 内の全 candidate が NOT_SCORABLE の"
+    "場合、当該 trial はそのまま記録し best 更新なしで次 trial へ進む（当該 trial の render 予算は"
+    "消費済みとして計上する — reseed・予算追加はしない）。"
+)
+
+# actor_boundary.practice/education の凍結文言（PR #331 Codex bot レビュー
+# 第3巡指摘3「Enforce the evaluator actor boundary」、P2、採用対応）:
+# PRACTICE は raw audio から Founder 自身が抽出した特徴にのみこの
+# evaluator を適用し education lesson / precomputed teacher feature の
+# 入力を禁止する、EDUCATION は凍結 lesson を比較対象に使う、という枝別
+# 境界を逐語一致で強制する。トップレベルキーの存在検査のみでは repin で
+# 空文字列・欠落・「education lesson を入力可」への緩和文言が通過し得た。
+_LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_PRACTICE = (
+    "PRACTICE 枝はこの evaluator を PJS raw audio + founder 自己 render にのみ適用する。"
+    "education lesson / precomputed teacher feature の入力を禁止する。"
+)
+_LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION = "EDUCATION 枝は凍結 lesson を比較対象に使用する。"
+
+# residual_correspondence の凍結文言（PR #331 Codex bot レビュー第6巡指摘1、
+# P1、採用対応）: lesson 側 contour と render 側 contour は frame 数が一般に
+# 一致しない（AX-D1 の duration 再配分では保証的に不一致）ため frame
+# elementwise の RMS は未定義だった。対応の単位を aligned mora へ凍結し、
+# channel ごとの集約規則（relative_f0/normalized_energy は mora 区間内の
+# 算術平均、他3 channel は恒等）を逐語一致で強制する——repin で
+# warping/リサンプリング/truncation 等の未凍結手法へ差し替わることを
+# fail-closed で拒否する。
+_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_DEFINITION_NOTE = (
+    "lesson側contourとrender側contourはframe数が一般に一致しない（AX-D1のduration再配分では保証的に不一致）"
+    "ため、frame elementwiseのRMSは未定義だった。対応の単位をaligned moraへ凍結する。1:1のmoraアラインメントは"
+    "両側で既知——lesson側はHARNESS-3bの.lab×musicxmlアラインメント、render側はrenderに入力したscoreのnote"
+    "区間そのもの（score変換はnote数・順序を不変に保つためmora対応は恒等）。warping・リサンプリング・"
+    "truncationはいずれも不採用（発明しない）。"
+)
+_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_UNIT = "aligned mora"
+_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_RESIDUAL_FORMULA = (
+    "per_channel_aggregationの規則を両側へ適用したmora単位スカラー列の差のRMS。両側のmora数は恒等対応で"
+    "常に一致する——一致しない場合は実装エラーとしてfail-closed停止し、比較を続行しない。"
+)
+_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_PER_CHANNEL: Dict[str, str] = {
+    "relative_f0": (
+        "mora区間内のvoiced frameの算術平均（float64）。voiced frameが両側いずれかでゼロのmoraは当該"
+        "channelの比較から除外し、除外数をeligible会計へ記録する（missing_policyと接続）。"
+    ),
+    "normalized_energy": (
+        "(a) 構造検査: aligned mora数の両側完全一致（residual_formulaのfail-closed規則を維持——一致しない"
+        "場合は実装エラーとして比較を続行しない）。(b) channel固有eligibility: phrase正規化"
+        "（residual_extraction_spec.energy_normalization、phrase単位で先に適用）後、mora区間内の"
+        "block-RMS値の算術平均でmora単位に集約する。ただしlesson側・render側の双方にenergy blockが1件以上"
+        "存在するmoraのみeligibleとする（ペア除外——relative_f0のvoiced frameペア規則と同型）。lesson側・"
+        "render側いずれか一方でもenergy blockが0件のmoraは当該channelの比較から除外し、除外moraのindex"
+        "列挙をtrial記録へ必須収載する。eligible件数はこのペア除外後の件数を指す"
+        "（missing_policy.not_measurable_definitionと接続——eligible==0のcandidateはNOT_SCORABLEとして"
+        "記録される）。"
+    ),
+    "duration_ratio": "恒等——値がバンドル内で既にmora単位のスカラーのため対応規則は不要。",
+    "attack_timing": "恒等——値がバンドル内で既にmora単位のスカラーのため対応規則は不要。",
+    "phrase_end_timing": (
+        "恒等——値がバンドル内で既にphrase単位のスカラーのため、mora単位ではなくphrase単位のまま比較する。"
+    ),
+}
+
+# reference_source の凍結文言（PR #331 Codex bot レビュー第6巡指摘2、P1、
+# 採用対応）: 全 channel の residual_definition が旧「lesson 対 render」で
+# PRACTICE の lesson 禁止（actor_boundary.practice）と矛盾していたのを
+# 是正——比較対象を枝別に凍結する（EDUCATION=凍結 lesson bundle、
+# PRACTICE=Founder-local actor が raw audio から同一抽出式で自己抽出、
+# precomputed teacher feature 供給は禁止）。residual 式・対応/集約規則・
+# calibration_scale・重みは両枝共通である旨も逐語で強制する。
+_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_EDUCATION = (
+    "EDUCATION枝: 凍結済みTechnique lesson bundleの値（sha pin供給）。"
+)
+_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_PRACTICE = (
+    "PRACTICE枝: Founder-local actorがPJS training raw audio（PRACTICE_ALLOWED_DATA_INPUTSの"
+    "pjs_training_audio）から同一の抽出式（HARNESS-3b spec v1.1と同式）で抽出したreference特徴。"
+    "precomputed teacher featureの供給は引き続き禁止する——抽出という行為がFounder側で実行されることが要件"
+    "（式の共有はPoR §3.2「同じfeature extractorコードを利用すること自体は禁止しない」"
+    "〔run9_schema.pyのPRACTICE_REQUIRED_AUTONOMOUS_OPERATIONSコメント〕によりactor制約と両立する）。"
+)
+_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_COMMON = (
+    "residual式・対応/集約規則（residual_correspondence）・calibration_scale・重みは両枝共通——比較の等価性を"
+    "保つ。channelごとの比較対象定義はこのreference_sourceのみが枝で分岐する。actor_boundary節"
+    "（practice/education）と相互参照。"
+)
+
+# aggregate_formula の実行可能な式の凍結（PR #331 Codex bot レビュー第10巡
+# 指摘1、P1、採用対応）: aggregate の使用範囲（search objective 限定、
+# aggregate_scope）は第1巡以前から凍結済みだったが、channel RMS・
+# calibration_scale・weight を「どう結合するか」の式そのものは未凍結
+# だったため実装ごとに異なる best が生じ得た。
+# search_objective(candidate) = Σ_{c∈measurable} weight_c ×
+# (residual_RMS_c / calibration_scale_c.value) を逐語凍結し、measurable
+# の定義（missing_policy の NOT_SCORABLE 規則優先）・各項の定義（weight_c
+# = 0.2 固定・residual_RMS_c = residual_correspondence 節の残差 RMS・
+# calibration_scale_c.value = 凍結済み値）・dtype（float64）・加算順序
+# （channels 配列の記載順で固定、浮動小数点の結合順まで決定論化）・
+# selection.tie_break（(objective, candidate_ordinal)）との接続を
+# 逐語一致検査で強制する——repin で結合式が未凍結の別式へ差し替わることを
+# fail-closed で拒否する。
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_FORMULA = (
+    "search_objective(candidate) = Σ_{c∈measurable} weight_c × "
+    "( residual_RMS_c / calibration_scale_c.value )"
+)
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_MEASURABLE_DEFINITION = (
+    "measurable = 当該candidateでeligible > 0のchannel集合。"
+    "missing_policy.not_measurable_definitionのNOT_SCORABLE規則が優先する"
+    "——いずれかのchannelがeligible == 0ならcandidate自体が"
+    "NOT_SCORABLEとして記録され、本式はその候補に"
+    "ついて評価されない（missing_policy参照）。"
+)
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_TERM_DEFINITIONS: Dict[str, str] = {
+    "weight_c": (
+        "0.2（全channel固定・裁定§2「正規化後の固定"
+        "重みを各1/5とする」により既凍結。channels[]."
+        "weight参照）。"
+    ),
+    "residual_RMS_c": (
+        "residual_correspondence節が定義するchannel cの残差 RMS"
+        "（対応・集約規則を両側へ適用したスカ"
+        "ラー列の差のRMS。relative_f0/normalized_energy/duration_ratio/"
+        "attack_timingはmora単位、phrase_end_timingはphrase単位——"
+        "residual_correspondence.residual_formula/per_channel_aggregation参照）。"
+    ),
+    "calibration_scale_c.value": (
+        "channels[name=c].calibration_scale.value（training splitのみから決定論的"
+        "導出済み、凍結済み値）。"
+    ),
+}
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_DTYPE = "float64"
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_SUMMATION_ORDER = (
+    "channels配列の記載順（relative_f0, duration_ratio, normalized_energy, "
+    "attack_timing, phrase_end_timing）で固定する。加算順序も"
+    "含めて浮動小数点の結合誤差を決定論化し、"
+    "実装ごとのtotal差異を排除する。"
+)
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_OBJECTIVE_DIRECTION = (
+    "search_objectiveは最小化目的。candidate_generation_spec_v1.jsonの"
+    "selection.objectiveが本式の値を指し、selection.tie_break"
+    "（(objective, candidate_ordinal)の実行可能な全順序）と"
+    "接続する——aggregate_scope（candidate_selection_search_objective_only"
+    "に限定）の下でのみ評価され、最終科学"
+    "判定には用いない（final_scientific_judgment_note参照）。"
+)
+
+
+def _validate_loss_evaluator_aggregate_formula(aggregate_formula: Mapping[str, Any]) -> None:
+    """`aggregate_formula` 節の実行可能な式の逐語凍結検査（PR #331 第10巡
+    指摘1、P1、採用の実装）。channel RMS・calibration_scale・weight の
+    結合式が repin で未凍結の別式へ差し替わることを fail-closed で拒否する。
+    """
+    if not isinstance(aggregate_formula, dict):
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula must be an object, got "
+            f"{type(aggregate_formula).__name__}"
+        )
+    formula = aggregate_formula.get("formula")
+    if formula != _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_FORMULA:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.formula diverges from the pinned "
+            f"search_objective formula — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_FORMULA!r}, got {formula!r}"
+        )
+    measurable_definition = aggregate_formula.get("measurable_definition")
+    if measurable_definition != _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_MEASURABLE_DEFINITION:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.measurable_definition diverges from "
+            f"the pinned NOT_SCORABLE-first definition — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_MEASURABLE_DEFINITION!r}, got "
+            f"{measurable_definition!r}"
+        )
+    term_definitions = aggregate_formula.get("term_definitions")
+    if not isinstance(term_definitions, dict):
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.term_definitions must be an object, "
+            f"got {type(term_definitions).__name__}"
+        )
+    for term_name, expected_definition in _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_TERM_DEFINITIONS.items():
+        actual_definition = term_definitions.get(term_name)
+        if actual_definition != expected_definition:
+            raise Run9ValidationError(
+                "loss evaluator spec manifest.aggregate_formula.term_definitions"
+                f"[{term_name!r}] diverges from the pinned term definition — expected exactly "
+                f"{expected_definition!r}, got {actual_definition!r}"
+            )
+    dtype = aggregate_formula.get("dtype")
+    if dtype != _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_DTYPE:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.dtype must be exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_DTYPE!r}, got {dtype!r}"
+        )
+    summation_order = aggregate_formula.get("summation_order")
+    if summation_order != _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_SUMMATION_ORDER:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.summation_order diverges from the "
+            f"pinned fixed channel-array order — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_SUMMATION_ORDER!r}, got "
+            f"{summation_order!r}"
+        )
+    objective_direction = aggregate_formula.get("objective_direction")
+    if objective_direction != _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_OBJECTIVE_DIRECTION:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.objective_direction diverges from "
+            f"the pinned minimization/tie_break cross-reference — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_OBJECTIVE_DIRECTION!r}, got "
+            f"{objective_direction!r}"
+        )
+
+
+def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
+    """`loss_evaluator_spec_v1.json` の構造・値整形式を検証する（裁定 §2:
+    5 mandatory channel・training-only calibration・aggregate は
+    candidate_selection 限定・missing policy 非ゼロ補完・actor 境界）。
+
+    cross-check: (a) 5 channel の name 集合が
+    `LOSS_EVALUATOR_CALIBRATION_SCALE_V1` の key 集合と厳密一致する。(b) 各
+    channel の `calibration_scale.value` が `LOSS_EVALUATOR_CALIBRATION_
+    SCALE_V1[name]` と厳密一致する（「loss spec の calibration 値と channel
+    対応表の定数一致」）。(c) 各 channel の
+    `spec_13_3_name`/`lesson_bundle_extracted_trait`/`education_allowed_
+    channel` が `TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP` の対応行と一致
+    する。(d) `missing_policy.not_measurable_definition` が candidate 単位
+    NOT_SCORABLE 定義（PR #331 第1巡採用2 是正文言）と逐語一致する（第3巡
+    指摘2、P2、採用）。(e) `actor_boundary.practice`/`.education` が
+    PRACTICE/EDUCATION 枝の境界文言と逐語一致する（第3巡指摘3、P2、採用）。
+    (f) `residual_correspondence`（frame 対応関係 = aligned mora への凍結、
+    channel 別集約規則）が凍結文言と逐語一致する（第6巡指摘1、P1、採用）。
+    (g) `reference_source`（枝別比較対象の凍結）が凍結文言と逐語一致する
+    （第6巡指摘2、P1、採用）。(h) `aggregate_formula`（channel RMS・
+    calibration_scale・weight を結合する実行可能な search_objective 式の
+    凍結）が凍結文言と逐語一致する（第10巡指摘1、P1、採用）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"loss evaluator spec manifest must be an object, got {type(data).__name__}")
+    schema = data.get("schema")
+    if schema != SCHEMA_LOSS_EVALUATOR_SPEC:
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest schema must be exactly {SCHEMA_LOSS_EVALUATOR_SPEC!r}, "
+            f"got {schema!r}"
+        )
+    missing = _LOSS_EVALUATOR_SPEC_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"loss evaluator spec manifest missing required key(s): {sorted(missing)}")
+    channels = data["channels"]
+    if not isinstance(channels, list) or len(channels) != 5:
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest.channels must be a list of exactly 5 entries, got "
+            f"{len(channels) if isinstance(channels, list) else type(channels).__name__}"
+        )
+    names = {c.get("name") for c in channels}
+    if names != _LOSS_EVALUATOR_CHANNEL_NAMES:
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest.channels names must be exactly "
+            f"{sorted(_LOSS_EVALUATOR_CHANNEL_NAMES)}, got {sorted(n for n in names if n)}"
+        )
+    vocab_by_physical: Dict[str, Mapping[str, str]] = {
+        row["physical_channel"]: row for row in TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP
+    }
+    total_weight = 0.0
+    for channel in channels:
+        name = channel["name"]
+        weight = channel.get("weight")
+        if weight != 0.2:
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].weight must be exactly 0.2 "
+                f"(1/5, 裁定 §2「正規化後の固定重みを各1/5とする」), got {weight!r}"
+            )
+        total_weight += weight
+        calibration = channel.get("calibration_scale")
+        if not isinstance(calibration, dict):
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].calibration_scale must be "
+                f"an object, got {type(calibration).__name__}"
+            )
+        value = calibration.get("value")
+        expected_value = LOSS_EVALUATOR_CALIBRATION_SCALE_V1[name]
+        if value != expected_value:
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].calibration_scale.value "
+                f"({value!r}) diverges from the pinned schema constant "
+                f"LOSS_EVALUATOR_CALIBRATION_SCALE_V1[{name!r}] ({expected_value!r}) — calibration "
+                "の改変・ドリフトを fail-closed で拒否する"
+            )
+        spec_13_3_name = channel.get("spec_13_3_name")
+        vocab_row = vocab_by_physical.get(spec_13_3_name)
+        if vocab_row is None:
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].spec_13_3_name "
+                f"({spec_13_3_name!r}) does not match any TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP "
+                "physical_channel row"
+            )
+        education_allowed = channel.get("education_allowed_channel")
+        if education_allowed != vocab_row["education_allowed_channel"]:
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].education_allowed_channel "
+                f"({education_allowed!r}) diverges from TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP "
+                f"({vocab_row['education_allowed_channel']!r})"
+            )
+        lesson_trait = channel.get("lesson_bundle_extracted_trait")
+        vocab_trait = vocab_row["extracted_trait"]
+        if not (isinstance(lesson_trait, str) and (lesson_trait == vocab_trait or lesson_trait.startswith(vocab_trait + "."))):
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].lesson_bundle_extracted_"
+                f"trait ({lesson_trait!r}) does not match or extend TECHNIQUE_LESSON_CHANNEL_"
+                f"VOCABULARY_MAP extracted_trait ({vocab_trait!r})"
+            )
+    if abs(total_weight - 1.0) > 1e-9:
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest.channels weights must sum to 1.0, got {total_weight!r}"
+        )
+    if data["aggregate_scope"] != "candidate_selection_search_objective_only":
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_scope must be exactly "
+            f"'candidate_selection_search_objective_only', got {data['aggregate_scope']!r}"
+        )
+    _validate_loss_evaluator_aggregate_formula(data["aggregate_formula"])
+    missing_policy = data["missing_policy"]
+    if missing_policy.get("zero_fill_prohibited") is not True:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.missing_policy.zero_fill_prohibited must be exactly True "
+            "(裁定 §2「count_mismatch / not_extractedをゼロ補完せず」)"
+        )
+    if missing_policy.get("eligible_count_required_per_channel") is not True:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.missing_policy.eligible_count_required_per_channel must "
+            "be exactly True"
+        )
+    not_measurable_definition = missing_policy.get("not_measurable_definition")
+    if not_measurable_definition != _LOSS_EVALUATOR_EXPECTED_NOT_MEASURABLE_DEFINITION:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.missing_policy.not_measurable_definition diverges from "
+            f"the pinned candidate-level NOT_SCORABLE definition — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_NOT_MEASURABLE_DEFINITION!r}, got "
+            f"{not_measurable_definition!r} (PR #331 第1巡採用2 是正文言への repin 復元強制、"
+            "旧「部分 channel 採点」文言への差し戻しを fail-closed で拒否する)"
+        )
+
+    actor_boundary = data["actor_boundary"]
+    if not isinstance(actor_boundary, dict):
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest.actor_boundary must be an object, got "
+            f"{type(actor_boundary).__name__}"
+        )
+    actor_boundary_practice = actor_boundary.get("practice")
+    if actor_boundary_practice != _LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_PRACTICE:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.actor_boundary.practice diverges from the pinned "
+            f"PRACTICE branch boundary — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_PRACTICE!r}, got {actor_boundary_practice!r} "
+            "(education lesson / precomputed teacher feature 入力禁止の緩和・空・欠落を fail-closed "
+            "で拒否する)"
+        )
+    actor_boundary_education = actor_boundary.get("education")
+    if actor_boundary_education != _LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.actor_boundary.education diverges from the pinned "
+            f"EDUCATION branch boundary — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION!r}, got {actor_boundary_education!r}"
+        )
+
+    residual_correspondence = data["residual_correspondence"]
+    if not isinstance(residual_correspondence, dict):
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.residual_correspondence must be an object, got "
+            f"{type(residual_correspondence).__name__}"
+        )
+    definition_note = residual_correspondence.get("definition_note")
+    if definition_note != _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_DEFINITION_NOTE:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.residual_correspondence.definition_note diverges from "
+            f"the pinned frame→mora correspondence freeze — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_DEFINITION_NOTE!r}, got "
+            f"{definition_note!r} (PR #331 第6巡採用1、warping/resampling/truncation 等の未凍結手法への"
+            "差し替えを fail-closed で拒否する)"
+        )
+    correspondence_unit = residual_correspondence.get("unit")
+    if correspondence_unit != _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_UNIT:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.residual_correspondence.unit must be exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_UNIT!r}, got {correspondence_unit!r}"
+        )
+    residual_formula = residual_correspondence.get("residual_formula")
+    if residual_formula != _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_RESIDUAL_FORMULA:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.residual_correspondence.residual_formula diverges from "
+            f"the pinned mora-unit residual definition — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_RESIDUAL_FORMULA!r}, got "
+            f"{residual_formula!r}"
+        )
+    per_channel_aggregation = residual_correspondence.get("per_channel_aggregation")
+    if not isinstance(per_channel_aggregation, dict):
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.residual_correspondence.per_channel_aggregation must be "
+            f"an object, got {type(per_channel_aggregation).__name__}"
+        )
+    for channel_name, expected_rule in _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_PER_CHANNEL.items():
+        actual_rule = per_channel_aggregation.get(channel_name)
+        if actual_rule != expected_rule:
+            raise Run9ValidationError(
+                "loss evaluator spec manifest.residual_correspondence.per_channel_aggregation"
+                f"[{channel_name!r}] diverges from the pinned aggregation rule — expected exactly "
+                f"{expected_rule!r}, got {actual_rule!r}"
+            )
+
+    reference_source = data["reference_source"]
+    if not isinstance(reference_source, dict):
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest.reference_source must be an object, got "
+            f"{type(reference_source).__name__}"
+        )
+    reference_source_education = reference_source.get("education")
+    if reference_source_education != _LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_EDUCATION:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.reference_source.education diverges from the pinned "
+            f"EDUCATION reference source — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_EDUCATION!r}, got "
+            f"{reference_source_education!r}"
+        )
+    reference_source_practice = reference_source.get("practice")
+    if reference_source_practice != _LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_PRACTICE:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.reference_source.practice diverges from the pinned "
+            f"PRACTICE reference source — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_PRACTICE!r}, got "
+            f"{reference_source_practice!r} (education lesson / precomputed teacher feature への"
+            "緩和を fail-closed で拒否する)"
+        )
+    reference_source_common = reference_source.get("common")
+    if reference_source_common != _LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_COMMON:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.reference_source.common diverges from the pinned "
+            f"cross-branch invariance statement — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_COMMON!r}, got {reference_source_common!r}"
+        )
+
+
+def load_pinned_loss_evaluator_spec_manifest(
+    contract: "Run9RunContract",
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`loss_evaluator_spec_sha` pin の**唯一の正規消費経路**（他の
+    `load_pinned_*` 系と同型の3層防御 + read-once 契約 + 裁定/detail-record
+    cross-check）。"""
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="loss_evaluator_spec_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=LOSS_EVALUATOR_SPEC_PATH,
+        fn_label="load_pinned_loss_evaluator_spec_manifest",
+    )
+    validate_loss_evaluator_spec_manifest(data)
+    _h3c_cross_check_adjudication_and_detail_record(
+        data, manifest_kind="load_pinned_loss_evaluator_spec_manifest"
+    )
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 3. candidate_generation_spec_v1
+# ---------------------------------------------------------------------------
+
+_CANDIDATE_GENERATION_SPEC_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS | frozenset(
+    {
+        "seed",
+        "structure",
+        "run_precondition",
+        "proposal",
+        "selection",
+        "boundary_handling",
+        "prohibited",
+        "practice_actor_binding",
+    }
+)
+_CANDIDATE_GENERATION_PROHIBITED_REQUIRED: FrozenSet[str] = frozenset(
+    {"reseed", "予算追加", "結果を見た range 拡張", "random fallback"}
+)
+
+# proposal.proposal_schedule_table の凍結形状（PR #331 Codex bot レビュー
+# 第2巡指摘2、P2、採用）: trial 1 = 恒等候補(candidate 0) + hash-derived
+# exploratory 3件(candidate 1..3)、trial 2-32 = neighborhood 3件
+# (candidate 0..2) + exploratory 1件(candidate 3) の 3:1 被覆。repin で
+# 恒等候補脱落・比率復元（2:2 等）が起きても、この定数との deep equality
+# 比較により fail-closed で拒否する。trial 2-32 candidate 0..2 の rule
+# 文言は第3巡指摘1（P1「Make the scheduled neighborhood ratio
+# achievable」、採用）で近傍優先順位リスト（値キー ±1/±2 量子化ステップ
+# → 隣接 index キー）を反映する文言へ改訂し、第4巡指摘1（P2「shortfall
+# 主張の正直是正」、採用）でさらに「端点のみ探査規則フォールバック」という
+# 偽の主張（内部領域の best でも優先順位候補が評価済み枯渇すれば shortfall
+# は起こり得る）を除き、不足スロットは幾何的端点・評価済み枯渇いずれの
+# 理由でも探査規則が決定論的に補充し、実際の内訳を trial log へ必須記録
+# する旨の文言へ改訂した（`candidate_proposal.neighbors_of()`/
+# `select_neighborhood_candidates()` の実装と同期させる）。
+_CANDIDATE_GENERATION_EXPECTED_PROPOSAL_SCHEDULE_TABLE: Tuple[Dict[str, Any], ...] = (
+    {"trial_index": 1, "candidate_index": 0, "rule": "identity (all axes = 0, baseline)"},
+    {
+        "trial_index": 1,
+        "candidate_index": "1..3",
+        "rule": "hash-derived exploratory candidates (digest -> grid index)",
+    },
+    {
+        "trial_index": "2..32",
+        "candidate_index": "0..2",
+        "rule": (
+            "current-best neighborhood: first 3 not-yet-evaluated candidates from the "
+            "frozen priority list (value key +-1/+-2 quantization steps, then adjacent "
+            "index key); unfilled slots (from geometric endpoints or evaluated-exhaustion "
+            "of the priority list) are backfilled deterministically by the exploration "
+            "rule, and the actual per-trial neighborhood/exploration/NOT_PROPOSABLE mix "
+            "is recorded in the trial log"
+        ),
+    },
+    {
+        "trial_index": "2..32",
+        "candidate_index": "3",
+        "rule": (
+            "hash-derived exploratory candidate (digest -> grid index), fixed 3:1 "
+            "neighborhood:exploration ratio across the 4 candidates of the trial"
+        ),
+    },
+)
+
+# digest 写像規則の必須キー（PR #331 第2巡指摘1「Specify the complete
+# digest-to-candidate mapping」の凍結を、第2巡指摘2「Enforce the corrected
+# proposal schedule in the validator」で検証対象にする）: テンプレート
+# 文字列（digest_formula/digest_encoding）・エンディアン規則
+# （exploratory_candidate_rule.byte_to_integer）・プロービング規則
+# （exploratory_candidate_rule.probing_rule）を、生成器実装が選べる余地の
+# ない厳密一致で強制する。
+_CANDIDATE_GENERATION_EXPECTED_DIGEST_FORMULA = (
+    'digest = sha256(UTF-8(f"{seed}:{arm}:{founder_id}:{trial}:{candidate}"))'
+)
+_CANDIDATE_GENERATION_EXPECTED_DIGEST_ENCODING = "UTF-8"
+_CANDIDATE_GENERATION_EXPECTED_BYTE_TO_INTEGER = (
+    "先頭8バイトを big-endian（最上位バイトが先頭）・符号なし整数として解釈し uint64 値 u を得る"
+)
+_CANDIDATE_GENERATION_EXPECTED_PROBING_RULE = (
+    "L[idx] が既に同一 (seed, arm, founder_id) の探索内で評価済み、または適用時に catalog 制約"
+    "（range/quantization/min-duration/重複 note index/phrase 越境）に違反する無効候補である場合、"
+    "idx+1, idx+2, …（各ステップ mod len(L)）の順に決定論線形プロービングし、未評価かつ有効な最初の"
+    "候補を採用する"
+)
+_CANDIDATE_GENERATION_EXPECTED_INDEX_FORMULA = (
+    "idx = u mod len(L)（len(L) は candidate_ordering.canonical_list の要素数）"
+)
+_CANDIDATE_GENERATION_CANDIDATE_ORDERING_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"definition", "ax_p1", "ax_d1", "total_order"}
+)
+# ax_p1/ax_d1 サブキー必須検査（PR #331 第8巡指摘3、P2、採用）: 旧
+# validator は candidate_ordering の直下キーの存在のみを検査しており、
+# ax_p1.offset_domain/ax_d1.quantization_step_beats/min_duration_beats
+# の値そのものは一切検査対象外だった。本節でサブキーの存在・型を検査し、
+# 実際の catalog 値との cross-check は `load_pinned_candidate_generation_
+# spec_manifest()` 側（pinned catalog へのアクセスを要する）で行う。
+_CANDIDATE_GENERATION_AX_P1_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"tuple", "offset_domain", "offset_domain_note", "note_index_domain", "catalog_cross_check_note"}
+)
+_CANDIDATE_GENERATION_AX_D1_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {
+        "tuple",
+        "delta_domain",
+        "delta_semantics",
+        "quantization_step_beats",
+        "min_duration_beats",
+        "catalog_cross_check_note",
+    }
+)
+_CANDIDATE_GENERATION_EXPLORATORY_RULE_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {
+        "applies_to",
+        "digest_bytes",
+        "byte_to_integer",
+        "index_formula",
+        "initial_pick",
+        "probing_rule",
+        "exhaustion_handling",
+    }
+)
+_CANDIDATE_GENERATION_NEIGHBORHOOD_RULE_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {
+        "applies_to",
+        "current_best_definition",
+        "current_best_may_be_identity",
+        "no_best_handling",
+        "neighbor_value_perturbation",
+        "identity_neighbor_rule",
+        "enumeration_order",
+        "shortfall_handling",
+    }
+)
+
+# neighborhood_candidate_rule.current_best_definition/current_best_may_be_identity/
+# no_best_handling の逐語凍結（PR #331 Codex bot レビュー第11巡指摘2、P1、採用）:
+# best 不在（NO_BEST）と恒等 best（None）の混同を防ぐための区別を凍結する。
+_CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_DEFINITION = (
+    '直前 trial 終了時点までに評価され NOT_SCORABLE でない candidate 群のうち selection.objective を最小化する候補。best 更新は trial 境界でのみ確定し、同一 trial 内の候補間の評価順は近傍算出に影響しない。trial 2 の直前 = trial 1 終了時点の最良候補（trial 1 は恒等候補 + hash-derived exploratory 3件の既定構成を維持し、この4件の中から選ぶ）。ただし直前 trial までに一度も scorable な candidate が確定していない場合（trial 1 の恒等候補を含む全4候補が NOT_SCORABLE だった場合を含む）、current_best は不在（no_best_handling 参照）であり恒等ではない'
+)
+_CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_MAY_BE_IDENTITY = (
+    'trial 1 の最良候補が恒等候補（全軸 0）である場合を含む。恒等は L の要素ではないため、この場合の近傍は identity_neighbor_rule に従う。恒等自体が NOT_SCORABLE で best になり得なかった場合は current_best_may_be_identity の対象外であり no_best_handling が適用される——恒等は「best が不在」と等価ではない'
+)
+_CANDIDATE_GENERATION_EXPECTED_NO_BEST_HANDLING = (
+    'trial 1 の恒等候補を含む全4候補が NOT_SCORABLE の場合（missing_policy「trial 内の全 candidate が NOT_SCORABLE の場合、当該 trial はそのまま記録し best 更新なしで次 trial へ進む」参照）、または最初に scorable な candidate が確定するまでの以降の trial でも同様に一度も scorable な candidate が無い場合、current_best は candidate_proposal.NO_BEST（IDENTITY=None とは別個のセンチネル）とする——None は「恒等が正当な best として確定している」ことを表す積極的な値であり、best が一度も確定していない消極的な状態と混同してはならない（PR #331 Codex bot レビュー第11巡指摘2、P1、採用: 旧仕様はこの区別を持たず、None の多義性により架空の恒等近傍が生成され得る欠陥があった）。current_best が NO_BEST の trial では、neighborhood_candidate_rule の近傍3スロットは構造的に全欠（shortfall = 3 全枠）となり、candidate 0..3 の4枠すべてを exploratory_candidate_rule（探査ストリーム、hash 系列。適用範囲は exploratory_candidate_rule.applies_to (b) が定める）で決定論的に充当する。恒等候補の暗黙の再提案はしない——恒等は trial1_candidate0_rule が定める trial 1 candidate 0 の1回のみで、NO_BEST から自動的に恒等へ復帰することはない。この trial の理由 "NO_SCORABLE_BEST" を探索 trace（practice_actor_binding.trace_storage が定める trial log）へ必須記録する。参照実装: candidate_proposal.NO_BEST（`candidate_proposal.neighbors_of()` は NO_BEST を渡されると空リストを返す）。selection.no_scorable_candidate_terminal_state と接続する（32 trial 終了時点まで NO_BEST が続いた場合の run 終端状態）'
+)
+
+# `exploratory_candidate_rule.applies_to` の逐語凍結（PR #331 Codex bot
+# レビュー第12巡指摘、P1、採用）: 第11巡新設の `no_best_handling` と
+# 既存の `shortfall_handling` はいずれも trial 2..32 の candidate 0..2 の
+# バックフィルを `exploratory_candidate_rule` へ要求するが、旧 `applies_to`
+# は「trial 1 の candidate 1..3、および trial 2..32 の candidate 3」にしか
+# 触れておらず、この適用範囲を宣言する節自体が両規則と矛盾していた
+# （spec 内矛盾＝致命的バグ、実コードは candidate_proposal.
+# propose_trial_candidates() がバックフィル時に candidate_index を 3 へ
+# 差し替えず実際の 0..2 のまま渡すため、正しい実装と矛盾する適用範囲宣言
+# だけが誤っていた）。(a) 正規スロット + (b) バックフィルスロットの2項
+# 列挙へ改訂し、repin で (b) が脱落しても fail-closed で拒否する。
+_CANDIDATE_GENERATION_EXPECTED_EXPLORATORY_APPLIES_TO = (
+    '(a) trial 1 の candidate 1..3、および trial 2..32 の candidate 3（proposal_schedule_table の hash-derived exploratory 行すべて）。(b) trial 2..32 の candidate 0..2 のうち、neighborhood_candidate_rule.shortfall_handling が定める近傍優先順位リストの不足分バックフィル、または同 no_best_handling が定める NO_BEST（current_best 不在）時の candidate 0..3 全枠充当として適用が要求される近傍スロット（PR #331 Codex bot レビュー第12巡指摘、P1、採用: 第11巡新設の no_best_handling / 既存 shortfall_handling が candidate 0..2 のバックフィルを要求する一方、本 applies_to が (a) のみに限定していた spec 内矛盾を是正）。(a)(b) いずれのスロットも digest はスロットごとに {trial}:{candidate}（candidate は実際の candidate_index であり、(b) でも 3 へ差し替えない）を差し替えて独立に計算し、reservation_semantics が定める予約集合（proposed-or-evaluated）に対する probing_rule の線形プロービング・重複棄却は (a)(b) いずれのスロットにも同一に適用する'
+)
+
+# `neighborhood_candidate_rule.shortfall_handling` の逐語凍結（PR #331
+# Codex bot レビュー第12巡指摘、P1、採用の一環）: exploratory_candidate_
+# rule.applies_to (b) への相互参照を追記した新文言を repin で落とせない
+# ようにする（双方向参照: applies_to (b) → shortfall_handling/no_best_
+# handling、shortfall_handling/no_best_handling → applies_to (b)）。
+_CANDIDATE_GENERATION_EXPECTED_SHORTFALL_HANDLING = (
+    '未評価かつ有効な近傍候補が3件未満の場合、不足分は exploratory_candidate_rule の手順（不足している candidate index のスロットごとに digest を計算。適用範囲は exploratory_candidate_rule.applies_to (b) が定める）で補充する。3:1 は「近傍優先3スロット + 探査1スロット」の決定論スロットテンプレートであり、trial 内 candidate 数は常に4で固定だが、近傍スロットが3件埋まらない場合は残りスロットを探査規則が決定論的に補充する。shortfall（近傍優先順位リストが3件に満たないこと）の発生源は2つあり、いずれも本規則の対象である: (a) 幾何的端点 — 値キー v が offset_domain/delta_domain の端かつ index キーが L 内の該当 axis distinct index キー列の端（1つ前/後が存在しない、または存在しても該当 (index キー, v) の組が L に存在しない）ため、優先順位リスト6項目のうち catalog 制約内で有効な項目自体が3件に満たない場合。(b) 評価済み枯渇 — current best が内部領域（値キー・index キーのいずれも端でない）で優先順位リスト6項目のうち3件以上が catalog 制約内で本来有効であっても、それらが同一 (seed, arm, founder_id) の探索内で既に評価済みのため、未評価の残数が3件に満たない場合（内部領域の best でも起こり得る——旧改訂が「端点の場合に限られる」と述べていたのは誤りで、evaluated フィルタ後の枯渇を見落としていた）。3:1 という宣言比率と、shortfall により実際に生じる近傍/探査/NOT_PROPOSABLE の内訳が乖離し得ることを隠さないため、各 trial の実際の内訳（candidate 0..3 それぞれが近傍・探査・NOT_PROPOSABLE のいずれで充足されたか）を探索 trace（practice_actor_binding.trace_storage が定める trial log）へ必須記録する'
+)
+
+# selection.no_scorable_candidate_terminal_state の逐語凍結（PR #331 第11巡指摘2、
+# P1、採用）: 32 trial 終了時点まで scorable な candidate が一つも無かった場合の
+# run 終端状態。勝者なし・暗黙の恒等採用なしを凍結する。
+_CANDIDATE_GENERATION_EXPECTED_NO_SCORABLE_CANDIDATE_TERMINAL_STATE = (
+    '32 trial（trial 1..32）を通じて一度も scorable な candidate が確定しなかった場合（全 trial で NOT_SCORABLE が続き neighborhood_candidate_rule.no_best_handling の NO_BEST 状態が最終 trial まで解消しなかった場合）、当該 Founder/arm の run は終端状態 NO_SCORABLE_CANDIDATE として記録する。勝者なし（selection による best 選出を行わない）・暗黙の恒等候補採用なし（恒等が NOT_SCORABLE だった事実をそのまま維持し、恒等へのフォールバックで穴埋めしない）を凍結する——偽成功経路（実際には何も学習できていない run を、恒等を勝者としたかのように記録する経路）を構造的に排除するため。当該 Founder/arm の学習結果は NO_SCORABLE_CANDIDATE の事実をそのまま正直に記録する（reseed・予算追加・range 拡張のいずれも行わない、prohibited と同型の制約）。loss_evaluator_spec_v1.json の missing_policy.not_measurable_definition（candidate 単位・trial 単位の NOT_SCORABLE 規則）と接続する上位の run 終端規則である（PR #331 Codex bot レビュー第11巡指摘2、P1、採用）'
+)
+_CANDIDATE_GENERATION_PROPOSAL_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {
+        "rng_independence",
+        "digest_formula",
+        "digest_encoding",
+        "digest_to_candidate_mapping",
+        "reservation_semantics",
+        "trial1_candidate0_rule",
+        "subsequent_trial_schedule",
+        "proposal_schedule_table",
+        "candidate_ordering",
+        "exploratory_candidate_rule",
+        "neighborhood_candidate_rule",
+    }
+)
+
+# `proposal.reservation_semantics` の逐語凍結（PR #331 Codex bot レビュー
+# 第8巡指摘2、P1、採用）: 重複回避が「評価済み」のみを見ると batch 提案と
+# 逐次提案で trace が分岐し得た欠落を埋める。trial 内の提案は
+# candidate_index 0->1->2->3 の逐次順で行い、各候補は提案された時点で
+# （render/評価を待たず）予約集合（proposed-or-evaluated）へ入る。参照
+# 実装: `candidate_proposal.propose_trial_candidates()`。
+_CANDIDATE_GENERATION_EXPECTED_RESERVATION_SEMANTICS = (
+    "trial 内の候補提案は candidate_index 0 -> 1 -> 2 -> 3 の逐次順で行い、各候補は提案された"
+    "時点で（render/評価の結果を待たず）予約集合（reserved set）へ加える。近傍列挙"
+    "（neighborhood_candidate_rule）・探査規則の線形プロービング（exploratory_candidate_rule."
+    "probing_rule）とも、この予約集合（過去 trial で評価済みの候補 ∪ 当該 trial 内で既に"
+    "提案済みの候補、= proposed-or-evaluated）をスキップ対象とする——exploratory_candidate_"
+    "rule.probing_rule 中の「評価済み」・neighborhood_candidate_rule 中の「未評価」はいずれも"
+    "本 reservation_semantics が定める予約集合を指す（重複回避が評価済みのみを見ると、batch "
+    "提案と逐次提案で trace が分岐し得るため）。同一 trial 内で candidate 0..3 を一括で計算する"
+    "実装（batch）と、各候補を提案の都度 render/評価してから次候補を計算する実装（逐次）は、この"
+    "予約集合の定義により常に同一の候補列を生成する——提案順序が evaluation の完了を待たないため、"
+    "digest 由来の探査候補が同一 trial 内の既提案候補と衝突しても線形プロービングで次候補へ進み、"
+    "batch/逐次いずれでも結果が一致する。参照実装: candidate_proposal.propose_trial_candidates()"
+)
+
+# `run_precondition` の逐語凍結（PR #331 Codex bot レビュー第8巡指摘1、
+# P2、採用）: undersized L の run 前拒否ゲート。参照実装:
+# `candidate_proposal.require_sufficient_candidate_space()`。
+_CANDIDATE_GENERATION_RUN_PRECONDITION_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"minimum_candidate_space", "required_minimum_formula"}
+)
+_CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_MINIMUM_CANDIDATE_SPACE = (
+    "run 開始前の前提条件として、Founder-local な候補列 L（proposal.candidate_ordering が"
+    "定める正準候補列。対象 score の note 構成・phrase 構成に依存し実行時に構築される）の"
+    "有効非恒等候補数 |L| が、全提案スロット数（structure.units_per_founder_per_arm）から "
+    "trial1_candidate0_rule の恒等スロット1件を除いた必要最小値以上であることを要求する。"
+    "|L| がこの最小値を下回る場合、run を開始せず fail-closed で停止する（代替挙動の発明・"
+    "予算追加・結果を見た range 拡張のいずれも行わない — undersized な L のまま run を完走"
+    "させると、NOT_PROPOSABLE の頻発により render 数が契約（units_per_founder_per_arm = 128 "
+    "units/Founder/arm）を下回ったまま完走し得るため、run 前の検査で構造的に締め出す）。"
+    "参照実装: candidate_proposal.require_sufficient_candidate_space()"
+)
+_CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_REQUIRED_MINIMUM_FORMULA = (
+    "required_minimum = structure.units_per_founder_per_arm - 1（= 127。128 提案スロットから "
+    "trial1_candidate0_rule の恒等スロット1件を除いた、L から充足すべき非恒等候補スロット数）"
+)
+
+# selection.tie_break の実行可能な全順序凍結（PR #331 Codex bot レビュー
+# 第4巡指摘2、P1、採用）: 旧定義「(objective, 軸ベクトルの辞書順)」は
+# 座標順・表現・恒等候補の位置が未定義だったため、`candidate_ordinal`
+# ベースの tie-break キー `(objective, candidate_ordinal)` へ置換凍結した
+# （恒等候補=-1、非恒等候補=candidate_ordering が定める L 内インデックス。
+# 参照実装 `candidate_proposal.candidate_ordinal()`）。旧定義以前は
+# `selection` 節がそもそも validator の検査対象外だった欠落も本改訂で
+# 埋めた。
+_CANDIDATE_GENERATION_SELECTION_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"objective", "tie_break", "no_scorable_candidate_terminal_state"}
+)
+_CANDIDATE_GENERATION_EXPECTED_TIE_BREAK = (
+    "tie-break キーは (objective, candidate_ordinal) の全順序で決定論的に一意の勝者を選ぶ"
+    "（objective が同値の場合 candidate_ordinal の小さい方が勝つ）。candidate_ordinal(候補) "
+    "の定義: 候補が恒等候補（全軸オフセット/デルタ = 0、trial1_candidate0_rule の baseline）"
+    "の場合 candidate_ordinal = -1。候補が非恒等候補 c（candidate_ordering が定める正準候補列 "
+    "L の要素、単一軸候補）の場合 candidate_ordinal(c) = c が L（既に凍結済みの total_order — "
+    "AX-D1 群が先、タプル辞書順）において占めるインデックス（0始まり）。この定義は恒等・AX-P1・"
+    "AX-D1 の全候補型を単一整数キーで被覆し、座標順・表現・恒等候補の位置に関する曖昧性を排除する"
+    "実行可能な全順序を与える（PR #331 Codex bot レビュー第4巡指摘2、P1、採用: 旧定義"
+    "「(objective, 軸ベクトルの辞書順)」は座標順・表現・恒等候補の位置が未定義だった）。"
+    "参照実装: candidate_proposal.candidate_ordinal()"
+)
+
+# `practice_actor_binding` 節の逐語凍結（PR #331 Codex bot レビュー第9巡
+# 指摘1、P2、採用）: 旧版はこの節がトップレベル必須キーとしてのみ検査
+# されており中身は無検査だったため、repin で空洞化したり
+# target_selection/difference_estimation が Founder-local actor 外へ
+# 移動する緩和文言に置き換わっても検出できなかった欠落を埋める。裁定
+# §3「PRACTICEのtarget selection・difference estimationはFounder-local
+# actor内で実行し、全探索traceを保存する」の機械表現を逐語一致で強制
+# する。
+_CANDIDATE_GENERATION_PRACTICE_ACTOR_BINDING_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"target_selection", "difference_estimation", "trace_storage"}
+)
+_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TARGET_SELECTION = (
+    "Founder-local actor 内で実行する"
+)
+_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_DIFFERENCE_ESTIMATION = (
+    "Founder-local actor 内で実行する"
+)
+_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TRACE_STORAGE = (
+    "全探索 trace を practice_trace（既存 schema）+ 本 spec 準拠の trial log に保存する"
+)
+
+
+def _validate_candidate_generation_proposal_schedule(
+    proposal: Mapping[str, Any], *, structure: Mapping[str, Any]
+) -> None:
+    """`proposal` 節の byte レベル凍結（PR #331 第2巡指摘1、P1、採用）が
+    実際に検証対象になっていることを保証する（同指摘2、P2、採用の実装）。
+
+    repin で恒等候補脱落・比率復元（2:2 等）が起きても fail-closed で
+    拒否する: proposal_schedule_table の完全形状一致 + digest 写像規則の
+    必須キー（テンプレート文字列・エンディアン・プロービング規則）の
+    存在と値一致 + 32×4=128 整合の再確認。
+    """
+    if not isinstance(proposal, dict):
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.proposal must be an object, "
+            f"got {type(proposal).__name__}"
+        )
+    missing = _CANDIDATE_GENERATION_PROPOSAL_TOP_LEVEL_REQUIRED_KEYS - set(proposal.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.proposal missing required key(s): "
+            f"{sorted(missing)}"
+        )
+
+    if proposal["digest_formula"] != _CANDIDATE_GENERATION_EXPECTED_DIGEST_FORMULA:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.digest_formula must equal "
+            f"{_CANDIDATE_GENERATION_EXPECTED_DIGEST_FORMULA!r} exactly, got "
+            f"{proposal['digest_formula']!r}"
+        )
+    if proposal["digest_encoding"] != _CANDIDATE_GENERATION_EXPECTED_DIGEST_ENCODING:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.digest_encoding must equal "
+            f"{_CANDIDATE_GENERATION_EXPECTED_DIGEST_ENCODING!r} exactly, got "
+            f"{proposal['digest_encoding']!r}"
+        )
+    if proposal["reservation_semantics"] != _CANDIDATE_GENERATION_EXPECTED_RESERVATION_SEMANTICS:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.reservation_semantics must equal "
+            f"{_CANDIDATE_GENERATION_EXPECTED_RESERVATION_SEMANTICS!r} exactly, got "
+            f"{proposal['reservation_semantics']!r}"
+        )
+
+    schedule_table = proposal["proposal_schedule_table"]
+    if list(schedule_table) != list(_CANDIDATE_GENERATION_EXPECTED_PROPOSAL_SCHEDULE_TABLE):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.proposal_schedule_table must equal "
+            "the frozen trial1=identity+3-exploratory / trial2-32=3-neighborhood+1-exploratory "
+            f"(3:1) shape exactly, got {schedule_table!r}"
+        )
+
+    candidate_ordering = proposal["candidate_ordering"]
+    if not isinstance(candidate_ordering, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering must be an object, "
+            f"got {type(candidate_ordering).__name__}"
+        )
+    missing_ordering = _CANDIDATE_GENERATION_CANDIDATE_ORDERING_REQUIRED_KEYS - set(
+        candidate_ordering.keys()
+    )
+    if missing_ordering:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering missing required "
+            f"key(s): {sorted(missing_ordering)}"
+        )
+    total_order = candidate_ordering["total_order"]
+    if not isinstance(total_order, str) or "AX-D1" not in total_order or "AX-P1" not in total_order:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.total_order must "
+            f"name both axis_id values (AX-D1/AX-P1) it orders, got {total_order!r}"
+        )
+
+    # ax_p1/ax_d1 サブキー存在・型検査（PR #331 第8巡指摘3、P2、採用）:
+    # 実際の catalog 値との cross-check は load_pinned_candidate_generation_
+    # spec_manifest() 側（pinned catalog へのアクセスを要する）で行う。
+    ax_p1 = candidate_ordering["ax_p1"]
+    if not isinstance(ax_p1, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_p1 must be an "
+            f"object, got {type(ax_p1).__name__}"
+        )
+    missing_ax_p1 = _CANDIDATE_GENERATION_AX_P1_REQUIRED_KEYS - set(ax_p1.keys())
+    if missing_ax_p1:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_p1 missing "
+            f"required key(s): {sorted(missing_ax_p1)}"
+        )
+    offset_domain = ax_p1["offset_domain"]
+    if not isinstance(offset_domain, list) or not offset_domain or not all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in offset_domain
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_p1.offset_domain "
+            f"must be a non-empty list of numbers, got {offset_domain!r}"
+        )
+
+    ax_d1 = candidate_ordering["ax_d1"]
+    if not isinstance(ax_d1, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_d1 must be an "
+            f"object, got {type(ax_d1).__name__}"
+        )
+    missing_ax_d1 = _CANDIDATE_GENERATION_AX_D1_REQUIRED_KEYS - set(ax_d1.keys())
+    if missing_ax_d1:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_d1 missing "
+            f"required key(s): {sorted(missing_ax_d1)}"
+        )
+    step_d1 = ax_d1["quantization_step_beats"]
+    if not isinstance(step_d1, (int, float)) or isinstance(step_d1, bool) or step_d1 <= 0:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_d1."
+            f"quantization_step_beats must be a positive number, got {step_d1!r}"
+        )
+    min_dur_d1 = ax_d1["min_duration_beats"]
+    if not isinstance(min_dur_d1, (int, float)) or isinstance(min_dur_d1, bool) or min_dur_d1 <= 0:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_d1."
+            f"min_duration_beats must be a positive number, got {min_dur_d1!r}"
+        )
+
+    exploratory = proposal["exploratory_candidate_rule"]
+    if not isinstance(exploratory, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule must be an "
+            f"object, got {type(exploratory).__name__}"
+        )
+    missing_exploratory = _CANDIDATE_GENERATION_EXPLORATORY_RULE_REQUIRED_KEYS - set(
+        exploratory.keys()
+    )
+    if missing_exploratory:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule missing "
+            f"required key(s): {sorted(missing_exploratory)}"
+        )
+    if exploratory["byte_to_integer"] != _CANDIDATE_GENERATION_EXPECTED_BYTE_TO_INTEGER:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule."
+            f"byte_to_integer must equal {_CANDIDATE_GENERATION_EXPECTED_BYTE_TO_INTEGER!r} "
+            f"exactly, got {exploratory['byte_to_integer']!r}"
+        )
+    if exploratory["index_formula"] != _CANDIDATE_GENERATION_EXPECTED_INDEX_FORMULA:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule."
+            f"index_formula must equal {_CANDIDATE_GENERATION_EXPECTED_INDEX_FORMULA!r} "
+            f"exactly, got {exploratory['index_formula']!r}"
+        )
+    if exploratory["probing_rule"] != _CANDIDATE_GENERATION_EXPECTED_PROBING_RULE:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule."
+            f"probing_rule must equal {_CANDIDATE_GENERATION_EXPECTED_PROBING_RULE!r} "
+            f"exactly, got {exploratory['probing_rule']!r}"
+        )
+    if "NOT_PROPOSABLE" not in exploratory["exhaustion_handling"]:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule."
+            "exhaustion_handling must record the NOT_PROPOSABLE outcome, got "
+            f"{exploratory['exhaustion_handling']!r}"
+        )
+    # applies_to の逐語凍結検査（PR #331 第12巡指摘、P1、採用）: 旧文言
+    # 「trial 1 の candidate 1..3、および trial 2..32 の candidate 3」への
+    # 改ざん（= no_best_handling/shortfall_handling が要求する candidate
+    # 0..2 バックフィルの適用範囲宣言の脱落）を fail-closed で拒否する。
+    if exploratory["applies_to"] != _CANDIDATE_GENERATION_EXPECTED_EXPLORATORY_APPLIES_TO:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule."
+            "applies_to diverges from the pinned (a)+(b) freeze — expected exactly "
+            f"{_CANDIDATE_GENERATION_EXPECTED_EXPLORATORY_APPLIES_TO!r}, got "
+            f"{exploratory['applies_to']!r} (PR #331 第12巡、P1、採用: no_best_handling/"
+            "shortfall_handling が要求する candidate 0..2 バックフィルの適用範囲を "
+            "applies_to からも宣言する)"
+        )
+
+    neighborhood = proposal["neighborhood_candidate_rule"]
+    if not isinstance(neighborhood, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule must be an "
+            f"object, got {type(neighborhood).__name__}"
+        )
+    missing_neighborhood = _CANDIDATE_GENERATION_NEIGHBORHOOD_RULE_REQUIRED_KEYS - set(
+        neighborhood.keys()
+    )
+    if missing_neighborhood:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule missing "
+            f"required key(s): {sorted(missing_neighborhood)}"
+        )
+    # current_best_definition/current_best_may_be_identity/no_best_handling の逐語凍結
+    # 検査（PR #331 第11巡指摘2、P1、採用）: best 不在（NO_BEST）と恒等 best（None）の
+    # 混同を防ぐ区別が repin で失われないことを保証する。
+    if neighborhood["current_best_definition"] != _CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_DEFINITION:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule."
+            "current_best_definition diverges from the pinned NO_BEST-aware definition — expected "
+            f"exactly {_CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_DEFINITION!r}, got "
+            f"{neighborhood['current_best_definition']!r}"
+        )
+    if (
+        neighborhood["current_best_may_be_identity"]
+        != _CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_MAY_BE_IDENTITY
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule."
+            "current_best_may_be_identity diverges from the pinned definition — expected exactly "
+            f"{_CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_MAY_BE_IDENTITY!r}, got "
+            f"{neighborhood['current_best_may_be_identity']!r}"
+        )
+    if neighborhood["no_best_handling"] != _CANDIDATE_GENERATION_EXPECTED_NO_BEST_HANDLING:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule."
+            "no_best_handling diverges from the pinned NO_BEST freeze — expected exactly "
+            f"{_CANDIDATE_GENERATION_EXPECTED_NO_BEST_HANDLING!r}, got "
+            f"{neighborhood['no_best_handling']!r} (PR #331 第11巡指摘2、P1、採用: best 不在と恒等 "
+            "best の混同を防ぐ区別を凍結する)"
+        )
+    # shortfall_handling の逐語凍結検査（PR #331 第12巡指摘、P1、採用）:
+    # exploratory_candidate_rule.applies_to (b) への相互参照を落とした
+    # 旧文言への改ざんを fail-closed で拒否する（双方向参照の一方）。
+    if neighborhood["shortfall_handling"] != _CANDIDATE_GENERATION_EXPECTED_SHORTFALL_HANDLING:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule."
+            "shortfall_handling diverges from the pinned applies_to cross-reference freeze — "
+            f"expected exactly {_CANDIDATE_GENERATION_EXPECTED_SHORTFALL_HANDLING!r}, got "
+            f"{neighborhood['shortfall_handling']!r} (PR #331 第12巡、P1、採用)"
+        )
+
+    # 32×4=128 整合の再確認（structure 節の既存検査と独立に、proposal 節が
+    # 記述する trial1(1+3) / trial2-32((3+1)*31) の候補内訳からも導出して
+    # 一致することを cross-check する）。
+    trial_count = structure["trial_count"]
+    candidates_per_trial = structure["candidates_per_trial"]
+    proposal_derived_units = 4 + (trial_count - 1) * candidates_per_trial
+    if proposal_derived_units != trial_count * candidates_per_trial:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal: trial1(1 identity + 3 exploratory) + "
+            f"trial2-{trial_count}(3 neighborhood + 1 exploratory each) = "
+            f"{proposal_derived_units!r} must equal structure.trial_count*candidates_per_trial "
+            f"({trial_count * candidates_per_trial!r})"
+        )
+
+
+def _validate_candidate_generation_run_precondition(
+    run_precondition: Mapping[str, Any], *, structure: Mapping[str, Any]
+) -> None:
+    """`run_precondition` 節の逐語凍結検査（PR #331 第8巡指摘1、P2、
+    採用）: undersized L の run 前拒否ゲートが spec 上に凍結されている
+    ことを保証する。参照実装: `candidate_proposal.require_sufficient_
+    candidate_space()`。"""
+    if not isinstance(run_precondition, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.run_precondition must be an object, got "
+            f"{type(run_precondition).__name__}"
+        )
+    missing = _CANDIDATE_GENERATION_RUN_PRECONDITION_REQUIRED_KEYS - set(run_precondition.keys())
+    if missing:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.run_precondition missing required key(s): "
+            f"{sorted(missing)}"
+        )
+    if (
+        run_precondition["minimum_candidate_space"]
+        != _CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_MINIMUM_CANDIDATE_SPACE
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.run_precondition.minimum_candidate_space must "
+            f"equal {_CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_MINIMUM_CANDIDATE_SPACE!r} "
+            f"exactly, got {run_precondition['minimum_candidate_space']!r}"
+        )
+    if (
+        run_precondition["required_minimum_formula"]
+        != _CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_REQUIRED_MINIMUM_FORMULA
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.run_precondition.required_minimum_formula must "
+            f"equal {_CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_REQUIRED_MINIMUM_FORMULA!r} "
+            f"exactly, got {run_precondition['required_minimum_formula']!r}"
+        )
+    # structure との cross-check: required_minimum = units_per_founder_per_arm - 1 == 127。
+    units_per_founder_per_arm = structure["units_per_founder_per_arm"]
+    if units_per_founder_per_arm - 1 != 127:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.run_precondition: structure."
+            f"units_per_founder_per_arm ({units_per_founder_per_arm!r}) - 1 must equal 127 "
+            "(the frozen required_minimum), got a mismatch — this indicates structure and "
+            "run_precondition have drifted apart"
+        )
+
+
+def _validate_candidate_generation_selection(selection: Mapping[str, Any]) -> None:
+    """`selection` 節の tie_break 全順序凍結検査（PR #331 第4巡指摘2、P1、
+    採用の実装）。旧版は `selection` 節がトップレベル必須キーとしてのみ
+    検査されており中身は一切検証されていなかった欠落も併せて埋める。
+    """
+    if not isinstance(selection, dict):
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.selection must be an object, "
+            f"got {type(selection).__name__}"
+        )
+    missing = _CANDIDATE_GENERATION_SELECTION_REQUIRED_KEYS - set(selection.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.selection missing required key(s): "
+            f"{sorted(missing)}"
+        )
+    if selection["tie_break"] != _CANDIDATE_GENERATION_EXPECTED_TIE_BREAK:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.selection.tie_break must equal "
+            f"{_CANDIDATE_GENERATION_EXPECTED_TIE_BREAK!r} exactly, got "
+            f"{selection['tie_break']!r}"
+        )
+    # no_scorable_candidate_terminal_state の逐語凍結検査（PR #331 第11巡指摘2、P1、
+    # 採用）: 32 trial 終了時点まで scorable な candidate が一つも無かった場合の
+    # run 終端状態（勝者なし・暗黙の恒等採用なし）が repin で失われないことを保証する。
+    if (
+        selection["no_scorable_candidate_terminal_state"]
+        != _CANDIDATE_GENERATION_EXPECTED_NO_SCORABLE_CANDIDATE_TERMINAL_STATE
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.selection.no_scorable_candidate_terminal_state "
+            "diverges from the pinned NO_SCORABLE_CANDIDATE terminal-state freeze — expected "
+            f"exactly {_CANDIDATE_GENERATION_EXPECTED_NO_SCORABLE_CANDIDATE_TERMINAL_STATE!r}, "
+            f"got {selection['no_scorable_candidate_terminal_state']!r} (PR #331 第11巡指摘2、"
+            "P1、採用: 勝者なし・暗黙の恒等採用なしを凍結し偽成功経路を排除する)"
+        )
+
+
+def _validate_candidate_generation_practice_actor_binding(
+    practice_actor_binding: Mapping[str, Any]
+) -> None:
+    """`practice_actor_binding` 節の逐語凍結検査（PR #331 第9巡指摘1、P2、
+    採用）。旧版はこの節がトップレベル必須キーとしてのみ検査されており
+    中身は一切検証されていなかった欠落を埋める——repin で空洞化したり、
+    target_selection/difference_estimation が Founder-local actor 外へ
+    移動する緩和文言に置き換わっても、旧版はこれを検出できなかった。
+    """
+    if not isinstance(practice_actor_binding, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.practice_actor_binding must be an object, "
+            f"got {type(practice_actor_binding).__name__}"
+        )
+    missing = _CANDIDATE_GENERATION_PRACTICE_ACTOR_BINDING_REQUIRED_KEYS - set(
+        practice_actor_binding.keys()
+    )
+    if missing:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.practice_actor_binding missing required "
+            f"key(s): {sorted(missing)}"
+        )
+    if (
+        practice_actor_binding["target_selection"]
+        != _CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TARGET_SELECTION
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.practice_actor_binding.target_selection must "
+            f"equal {_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TARGET_SELECTION!r} "
+            f"exactly (裁定 §3 逐語), got {practice_actor_binding['target_selection']!r}"
+        )
+    if (
+        practice_actor_binding["difference_estimation"]
+        != _CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_DIFFERENCE_ESTIMATION
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.practice_actor_binding.difference_estimation "
+            "must equal "
+            f"{_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_DIFFERENCE_ESTIMATION!r} "
+            f"exactly (裁定 §3 逐語), got "
+            f"{practice_actor_binding['difference_estimation']!r}"
+        )
+    if (
+        practice_actor_binding["trace_storage"]
+        != _CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TRACE_STORAGE
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.practice_actor_binding.trace_storage must "
+            f"equal {_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TRACE_STORAGE!r} "
+            f"exactly, got {practice_actor_binding['trace_storage']!r}"
+        )
+
+
+def validate_candidate_generation_spec_manifest(data: Mapping[str, Any]) -> None:
+    """`candidate_generation_spec_v1.json` の構造・値整形式を検証する
+    （裁定 §3: seed 909002・32 trials×4 candidates=128 units/Founder/arm・
+    reseed/予算追加/range拡張/random fallback 禁止）。
+
+    cross-check: `seed == run9_schema.LEARNING_SEED (909002)`、
+    `structure.trial_count * structure.candidates_per_trial ==
+    structure.units_per_founder_per_arm`、`units_per_founder_per_arm ==
+    LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET (128)`、`trial_count ==
+    LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT (32)`、`total_units ==
+    units_per_founder_per_arm * founders * arms == 512`。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"candidate generation spec manifest must be an object, got {type(data).__name__}"
+        )
+    schema = data.get("schema")
+    if schema != SCHEMA_CANDIDATE_GENERATION_SPEC:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest schema must be exactly "
+            f"{SCHEMA_CANDIDATE_GENERATION_SPEC!r}, got {schema!r}"
+        )
+    missing = _CANDIDATE_GENERATION_SPEC_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest missing required key(s): {sorted(missing)}"
+        )
+    seed = data["seed"]
+    if not isinstance(seed, int) or isinstance(seed, bool) or seed != LEARNING_SEED:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.seed must be the exact int {LEARNING_SEED!r}, "
+            f"got {seed!r}"
+        )
+    structure = data["structure"]
+    trial_count = structure.get("trial_count")
+    candidates_per_trial = structure.get("candidates_per_trial")
+    units_per_founder_per_arm = structure.get("units_per_founder_per_arm")
+    founders = structure.get("founders")
+    arms = structure.get("arms")
+    total_units = structure.get("total_units")
+    if trial_count != LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure.trial_count must equal "
+            f"LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT ({LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT!r}), "
+            f"got {trial_count!r}"
+        )
+    if not isinstance(candidates_per_trial, int) or candidates_per_trial != 4:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure.candidates_per_trial must be exactly 4, "
+            f"got {candidates_per_trial!r}"
+        )
+    if trial_count * candidates_per_trial != units_per_founder_per_arm:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure: trial_count * candidates_per_trial "
+            f"({trial_count * candidates_per_trial!r}) != units_per_founder_per_arm "
+            f"({units_per_founder_per_arm!r})"
+        )
+    if units_per_founder_per_arm != LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure.units_per_founder_per_arm must equal "
+            f"LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET "
+            f"({LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET!r}), got {units_per_founder_per_arm!r}"
+        )
+    if founders != 2 or arms != 2:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure.founders/arms must both be exactly 2, "
+            f"got founders={founders!r} arms={arms!r}"
+        )
+    if total_units != units_per_founder_per_arm * founders * arms:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure.total_units must equal "
+            f"units_per_founder_per_arm*founders*arms ({units_per_founder_per_arm * founders * arms!r}), "
+            f"got {total_units!r}"
+        )
+    if total_units != 512:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.structure.total_units must be exactly 512 "
+            f"(裁定 §4「学習探索予算は合計512 logical render units」), got {total_units!r}"
+        )
+    prohibited = set(data["prohibited"])
+    missing_prohibited = _CANDIDATE_GENERATION_PROHIBITED_REQUIRED - prohibited
+    if missing_prohibited:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.prohibited must include all of "
+            f"{sorted(_CANDIDATE_GENERATION_PROHIBITED_REQUIRED)} (裁定 §3 逐語), missing "
+            f"{sorted(missing_prohibited)}"
+        )
+    _validate_candidate_generation_run_precondition(data["run_precondition"], structure=structure)
+    _validate_candidate_generation_proposal_schedule(data["proposal"], structure=structure)
+    _validate_candidate_generation_selection(data["selection"])
+    _validate_candidate_generation_practice_actor_binding(data["practice_actor_binding"])
+
+
+def _candidate_generation_cross_check_axis_catalog(
+    data: Mapping[str, Any], *, contract: "Run9RunContract", contract_path: Optional[Path],
+) -> None:
+    """spec 内のリテラル domain/step/min-duration 値（`proposal.
+    candidate_ordering.ax_p1.offset_domain`/`ax_d1.quantization_step_beats`/
+    `ax_d1.min_duration_beats`）を pinned score_axis_catalog manifest の
+    対応値と cross-check する（PR #331 第8巡指摘3、P2、採用: catalog が
+    正当な理由で repin されて値が変わっても、これらのリテラル記述は
+    追随せず旧値のまま両 loader を通過し得た欠落を埋める）。
+
+    catalog 側は本関数内で `load_pinned_score_axis_catalog_manifest()`
+    （score_axis_catalog_sha pin の唯一の正規消費経路）経由でロードする
+    ——直接 json.load() しない。`contract_path` は候補生成 spec 側の呼び
+    出しと同一のものを渡す（tampered-contract テストで両 pin の由来を
+    一致させるため）。offset_domain の導出は `candidate_proposal.
+    ax_p1_offset_domain_from_catalog()`（単一情報源）経由で行い、
+    run9_schema 側で計算式を複製しない。
+    """
+    catalog = load_pinned_score_axis_catalog_manifest(contract, contract_path=contract_path)
+
+    import candidate_proposal as _cp  # ローカル import（score_axis_transform と同型の方針）
+
+    expected_offset_domain = list(_cp.ax_p1_offset_domain_from_catalog(catalog))
+    actual_offset_domain = list(data["proposal"]["candidate_ordering"]["ax_p1"]["offset_domain"])
+    if actual_offset_domain != expected_offset_domain:
+        raise Run9ValidationError(
+            "load_pinned_candidate_generation_spec_manifest(): catalog↔spec 整合チェック失敗 — "
+            f"proposal.candidate_ordering.ax_p1.offset_domain ({actual_offset_domain!r}) が "
+            "pinned score_axis_catalog manifest から独立に導出した値 "
+            f"({expected_offset_domain!r}) と一致しない — catalog が repin されたのに spec 側の"
+            "リテラル記述が追随していない"
+        )
+
+    catalog_step_d1 = catalog["axes"]["AX-D1"]["quantization_step_beats"]
+    spec_step_d1 = data["proposal"]["candidate_ordering"]["ax_d1"]["quantization_step_beats"]
+    if spec_step_d1 != catalog_step_d1:
+        raise Run9ValidationError(
+            "load_pinned_candidate_generation_spec_manifest(): catalog↔spec 整合チェック失敗 — "
+            f"proposal.candidate_ordering.ax_d1.quantization_step_beats ({spec_step_d1!r}) が "
+            "pinned score_axis_catalog manifest の axes.AX-D1.quantization_step_beats "
+            f"({catalog_step_d1!r}) と一致しない"
+        )
+
+    catalog_min_dur_d1 = catalog["axes"]["AX-D1"]["min_duration_beats"]
+    spec_min_dur_d1 = data["proposal"]["candidate_ordering"]["ax_d1"]["min_duration_beats"]
+    if spec_min_dur_d1 != catalog_min_dur_d1:
+        raise Run9ValidationError(
+            "load_pinned_candidate_generation_spec_manifest(): catalog↔spec 整合チェック失敗 — "
+            f"proposal.candidate_ordering.ax_d1.min_duration_beats ({spec_min_dur_d1!r}) が "
+            "pinned score_axis_catalog manifest の axes.AX-D1.min_duration_beats "
+            f"({catalog_min_dur_d1!r}) と一致しない"
+        )
+
+
+def load_pinned_candidate_generation_spec_manifest(
+    contract: "Run9RunContract",
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`candidate_generation_spec_sha` pin の**唯一の正規消費経路**（他の
+    `load_pinned_*` 系と同型の3層防御 + read-once 契約 + 裁定/detail-record
+    cross-check + catalog↔spec リテラル値 cross-check）。
+
+    cross-check: (a) 裁定 txt / detail record の実バイト sha256 照合
+    （`_h3c_cross_check_adjudication_and_detail_record()`）。(b) spec 内の
+    リテラル domain/step/min-duration 値（ax_p1.offset_domain/ax_d1.
+    quantization_step_beats/ax_d1.min_duration_beats）を pinned
+    score_axis_catalog manifest の対応値と cross-check する
+    （`_candidate_generation_cross_check_axis_catalog()`、PR #331 第8巡
+    指摘3、P2、採用）。
+    """
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="candidate_generation_spec_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=CANDIDATE_GENERATION_SPEC_PATH,
+        fn_label="load_pinned_candidate_generation_spec_manifest",
+    )
+    validate_candidate_generation_spec_manifest(data)
+    _h3c_cross_check_adjudication_and_detail_record(
+        data, manifest_kind="load_pinned_candidate_generation_spec_manifest"
+    )
+    _candidate_generation_cross_check_axis_catalog(data, contract=contract, contract_path=contract_path)
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 4. compute_budget_manifest_v1
+# ---------------------------------------------------------------------------
+
+_COMPUTE_BUDGET_MANIFEST_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS | frozenset(
+    {"provider", "budget_binding", "total_search_budget", "fixed_evaluation_render_budget", "wall_clock"}
+)
+
+
+def validate_compute_budget_manifest(data: Mapping[str, Any]) -> None:
+    """`compute_budget_manifest_v1.json` の構造・値整形式を検証する（裁定
+    §4: CPUExecutionProvider固定・GPU自動fallback禁止・trial_count=32/
+    render_budget=128束縛・合計512・固定評価renderは別予算・wall_clockは
+    非終了条件）。execution_profile_sha との contract 一致 cross-check は
+    `load_pinned_compute_budget_manifest()` 側（contract を要する）で行う。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"compute budget manifest must be an object, got {type(data).__name__}")
+    schema = data.get("schema")
+    if schema != SCHEMA_COMPUTE_BUDGET_MANIFEST:
+        raise Run9ValidationError(
+            f"compute budget manifest schema must be exactly {SCHEMA_COMPUTE_BUDGET_MANIFEST!r}, "
+            f"got {schema!r}"
+        )
+    missing = _COMPUTE_BUDGET_MANIFEST_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"compute budget manifest missing required key(s): {sorted(missing)}")
+    provider = data["provider"]
+    if provider.get("selected_execution_provider") != "CPUExecutionProvider":
+        raise Run9ValidationError(
+            "compute budget manifest.provider.selected_execution_provider must be exactly "
+            f"'CPUExecutionProvider', got {provider.get('selected_execution_provider')!r}"
+        )
+    if provider.get("auto_fallback_prohibited") is not True:
+        raise Run9ValidationError(
+            "compute budget manifest.provider.auto_fallback_prohibited must be exactly True"
+        )
+    sha_ref = provider.get("execution_profile_sha_reference", {}).get("value")
+    _require_manifest_sha256_hex(
+        sha_ref, manifest_kind="compute budget manifest",
+        field="provider.execution_profile_sha_reference.value",
+    )
+    budget_binding = data["budget_binding"]
+    trial_count_ref = budget_binding.get("trial_count_ref", {}).get("value")
+    render_budget_ref = budget_binding.get("render_budget_ref", {}).get("value")
+    if trial_count_ref != LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT:
+        raise Run9ValidationError(
+            "compute budget manifest.budget_binding.trial_count_ref.value must equal "
+            f"LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT ({LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT!r}), "
+            f"got {trial_count_ref!r}"
+        )
+    if render_budget_ref != LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET:
+        raise Run9ValidationError(
+            "compute budget manifest.budget_binding.render_budget_ref.value must equal "
+            f"LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET "
+            f"({LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET!r}), got {render_budget_ref!r}"
+        )
+    total_search_budget = data["total_search_budget"].get("value")
+    if total_search_budget != render_budget_ref * 2 * 2:
+        raise Run9ValidationError(
+            "compute budget manifest.total_search_budget.value must equal render_budget_ref*2*2 "
+            f"({render_budget_ref * 2 * 2!r}), got {total_search_budget!r}"
+        )
+    if total_search_budget != 512:
+        raise Run9ValidationError(
+            f"compute budget manifest.total_search_budget.value must be exactly 512, got "
+            f"{total_search_budget!r}"
+        )
+    if data["fixed_evaluation_render_budget"].get("separate_from_search_budget") is not True:
+        raise Run9ValidationError(
+            "compute budget manifest.fixed_evaluation_render_budget.separate_from_search_budget "
+            "must be exactly True (裁定 §4「固定評価renderは別予算とする」)"
+        )
+    wall_clock = data["wall_clock"]
+    if wall_clock.get("is_reference_only") is not True or wall_clock.get("scientific_termination_condition") is not False:
+        raise Run9ValidationError(
+            "compute budget manifest.wall_clock must declare is_reference_only=True and "
+            "scientific_termination_condition=False (裁定 §4「実測秒数はbenchmarkであり、科学的"
+            "終了条件にはしない」)"
+        )
+
+
+def load_pinned_compute_budget_manifest(
+    contract: "Run9RunContract",
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`compute_budget_manifest_sha` pin の**唯一の正規消費経路**（他の
+    `load_pinned_*` 系と同型の3層防御 + read-once 契約 + 裁定/detail-record
+    cross-check）。
+
+    cross-check: `provider.execution_profile_sha_reference.value` が
+    ディスク正典 `RUN9_CONTRACT.yaml` の現行 `execution_profile_sha` PINNED
+    値と厳密一致することを fail-closed で強制する（「compute budget の
+    execution_profile_sha 参照値と contract 一致」）——別々に repin された
+    execution_profile と compute_budget が黙って乖離することを防ぐ。
+    """
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="compute_budget_manifest_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=COMPUTE_BUDGET_MANIFEST_PATH,
+        fn_label="load_pinned_compute_budget_manifest",
+    )
+    validate_compute_budget_manifest(data)
+    _h3c_cross_check_adjudication_and_detail_record(
+        data, manifest_kind="load_pinned_compute_budget_manifest"
+    )
+    effective_contract_path = contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    execution_profile_field = disk_contract.pin_field("execution_profile_sha")
+    if not _is_field_pinned(execution_profile_field):
+        raise Run9ValidationError(
+            "load_pinned_compute_budget_manifest(): RUN9_CONTRACT.yaml execution_profile_sha is "
+            f"not PINNED (status={execution_profile_field.get('status')!r}) — compute budget "
+            "manifest references a pin that is not itself pinned"
+        )
+    manifest_ref = data["provider"]["execution_profile_sha_reference"]["value"]
+    contract_value = execution_profile_field["value"]
+    if manifest_ref != contract_value:
+        raise Run9ValidationError(
+            "load_pinned_compute_budget_manifest(): provider.execution_profile_sha_reference.value "
+            f"({manifest_ref!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml "
+            f"execution_profile_sha PINNED value ({contract_value!r}) — fail-closed rejection"
+        )
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 5. learning_data_binding_manifest_v1
+# ---------------------------------------------------------------------------
+
+_LEARNING_DATA_BINDING_PIN_NAMES: Tuple[str, str, str] = (
+    "practice_audio_split_manifest_sha",
+    "pjs_consumed_inputs_manifest_sha",
+    "education_technique_lesson_manifest_sha",
+)
+_LEARNING_DATA_BINDING_MANIFEST_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = (
+    _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS
+    | frozenset({"bindings", "branch_usage", "data_binding_field_convention"})
+)
+# PR #331 レビュー第1巡 採用4: branch_usage.{practice,education}.uses の厳密集合一致
+# 検証で使う正典集合（裁定 §5「practiceは前2件を検索入力として利用し、education
+# lessonを検索中に参照しない」「educationはeducation lessonを利用し、PJS raw audio
+# をlearnerへ直接入力しない」の完全形——欠落・過剰・空を全て拒否する）。
+_LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED: FrozenSet[str] = frozenset(
+    {"practice_audio_split_manifest_sha", "pjs_consumed_inputs_manifest_sha"}
+)
+_LEARNING_DATA_BINDING_EDUCATION_USES_REQUIRED: FrozenSet[str] = frozenset(
+    {"education_technique_lesson_manifest_sha"}
+)
+
+
+def validate_learning_data_binding_manifest(data: Mapping[str, Any]) -> None:
+    """`learning_data_binding_manifest_v1.json` の構造・値整形式を検証
+    する（裁定 §5: 3 pin を束ねる manifest・枝別利用制限・data_binding
+    フィールドの参照規約）。3 pin 値の contract との完全一致 cross-check は
+    `load_pinned_learning_data_binding_manifest()` 側（contract を要する）
+    で行う。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"learning data binding manifest must be an object, got {type(data).__name__}"
+        )
+    schema = data.get("schema")
+    if schema != SCHEMA_LEARNING_DATA_BINDING_MANIFEST:
+        raise Run9ValidationError(
+            f"learning data binding manifest schema must be exactly "
+            f"{SCHEMA_LEARNING_DATA_BINDING_MANIFEST!r}, got {schema!r}"
+        )
+    missing = _LEARNING_DATA_BINDING_MANIFEST_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"learning data binding manifest missing required key(s): {sorted(missing)}"
+        )
+    bindings = data["bindings"]
+    if not isinstance(bindings, dict) or set(bindings.keys()) != set(_LEARNING_DATA_BINDING_PIN_NAMES):
+        raise Run9ValidationError(
+            f"learning data binding manifest.bindings must have exactly keys "
+            f"{sorted(_LEARNING_DATA_BINDING_PIN_NAMES)}, got "
+            f"{sorted(bindings.keys()) if isinstance(bindings, dict) else type(bindings).__name__}"
+        )
+    for pin_name in _LEARNING_DATA_BINDING_PIN_NAMES:
+        _require_manifest_sha256_hex(
+            bindings[pin_name], manifest_kind="learning data binding manifest",
+            field=f"bindings.{pin_name}",
+        )
+    branch_usage = data["branch_usage"]
+    practice = branch_usage.get("practice", {})
+    education = branch_usage.get("education", {})
+    practice_uses = practice.get("uses")
+    if (
+        not isinstance(practice_uses, list)
+        or len(practice_uses) != len(_LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED)
+        or set(practice_uses) != _LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED
+    ):
+        raise Run9ValidationError(
+            "learning data binding manifest.branch_usage.practice.uses must be exactly "
+            f"{sorted(_LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED)}（裁定 §5「practiceは前2件を"
+            "検索入力として利用し、education lessonを検索中に参照しない」— 欠落・過剰・空・"
+            "education_technique_lesson_manifest_sha の混入を全て拒否する厳密集合一致）, got "
+            f"{sorted(practice_uses) if isinstance(practice_uses, list) else type(practice_uses).__name__}"
+        )
+    education_uses = education.get("uses")
+    if (
+        not isinstance(education_uses, list)
+        or len(education_uses) != len(_LEARNING_DATA_BINDING_EDUCATION_USES_REQUIRED)
+        or set(education_uses) != _LEARNING_DATA_BINDING_EDUCATION_USES_REQUIRED
+    ):
+        raise Run9ValidationError(
+            "learning data binding manifest.branch_usage.education.uses must be exactly "
+            f"{sorted(_LEARNING_DATA_BINDING_EDUCATION_USES_REQUIRED)}（裁定 §5「educationは"
+            "education lessonを利用し、PJS raw audioをlearnerへ直接入力しない」— 欠落・過剰・空を"
+            "全て拒否する厳密集合一致）, got "
+            f"{sorted(education_uses) if isinstance(education_uses, list) else type(education_uses).__name__}"
+        )
+    if education.get("excludes_raw_audio_direct_input") is not True:
+        raise Run9ValidationError(
+            "learning data binding manifest.branch_usage.education.excludes_raw_audio_direct_"
+            "input must be exactly True（裁定 §5「PJS raw audioをlearnerへ直接入力しない」）"
+        )
+    if data["data_binding_field_convention"].get("format") != "sha256:<64hex>":
+        raise Run9ValidationError(
+            "learning data binding manifest.data_binding_field_convention.format must be exactly "
+            f"'sha256:<64hex>', got {data['data_binding_field_convention'].get('format')!r}"
+        )
+
+
+def load_pinned_learning_data_binding_manifest(
+    contract: "Run9RunContract",
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`learning_data_binding_manifest_sha` pin の**唯一の正規消費経路**
+    （他の `load_pinned_*` 系と同型の3層防御 + read-once 契約 + 裁定/
+    detail-record cross-check）。
+
+    cross-check: `bindings` の3 pin 値それぞれが、ディスク正典
+    `RUN9_CONTRACT.yaml` の対応する現行 PINNED 値と完全一致することを
+    fail-closed で強制する（「data binding の 3 pin 完全一致 fail-closed」
+    ——裁定 §5「loaderはRUN9_CONTRACTの3 pin値との完全一致をfail-closedで
+    要求する」の直接実装）。
+    """
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="learning_data_binding_manifest_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=LEARNING_DATA_BINDING_MANIFEST_PATH,
+        fn_label="load_pinned_learning_data_binding_manifest",
+    )
+    validate_learning_data_binding_manifest(data)
+    _h3c_cross_check_adjudication_and_detail_record(
+        data, manifest_kind="load_pinned_learning_data_binding_manifest"
+    )
+    effective_contract_path = contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    for pin_name in _LEARNING_DATA_BINDING_PIN_NAMES:
+        bound_field = disk_contract.pin_field(pin_name)
+        if not _is_field_pinned(bound_field):
+            raise Run9ValidationError(
+                f"load_pinned_learning_data_binding_manifest(): RUN9_CONTRACT.yaml {pin_name} is "
+                f"not PINNED (status={bound_field.get('status')!r}) — data binding manifest "
+                "references a pin that is not itself pinned"
+            )
+        manifest_value = data["bindings"][pin_name]
+        contract_value = bound_field["value"]
+        if manifest_value != contract_value:
+            raise Run9ValidationError(
+                f"load_pinned_learning_data_binding_manifest(): bindings.{pin_name} "
+                f"({manifest_value!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml "
+                f"{pin_name} PINNED value ({contract_value!r}) — fail-closed rejection (裁定 §5)"
+            )
     return data

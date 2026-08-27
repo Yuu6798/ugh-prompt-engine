@@ -1,0 +1,60 @@
+{
+  "schema": "run9-compute-budget/1.0",
+  "provider": {
+    "selected_execution_provider": "CPUExecutionProvider",
+    "auto_fallback_prohibited": true,
+    "binding_note": "identity_semantics.provider_fixation_rules（execution_profile_manifest.json）と同文言で束縛する: 'selected_execution_provider は CPUExecutionProvider に固定する' / 'GPU/CUDA provider への自動fallback/upgradeは禁止する'",
+    "execution_profile_sha_reference": {
+      "value": "370a6332c76e19e10952f246bf8c82ba724416833489debeccbb3a00b840d7f2",
+      "cross_check_note": "load_pinned_compute_budget_manifest() はこの値が RUN9_CONTRACT.yaml execution_profile_sha の現行 PINNED 値と厳密一致することを fail-closed で強制する（別々に repin された execution_profile と compute_budget が黙って乖離することを防ぐ）"
+    }
+  },
+  "budget_binding": {
+    "trial_count_ref": {
+      "value": 32,
+      "source": "既裁定（RUN9-L0-PIN-2、learning_recipe manifest 側の trial_count 欄、run9_schema.LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT）への参照であり、本 manifest は再定義しない"
+    },
+    "render_budget_ref": {
+      "value": 128,
+      "source": "既裁定（RUN9-L0-PIN-2、learning_recipe manifest 側の render_budget 欄、run9_schema.LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET）への参照であり、本 manifest は再定義しない。1 Founder あたり logical_render_units。"
+    }
+  },
+  "total_search_budget": {
+    "value": 512,
+    "unit": "logical_render_units",
+    "formula": "render_budget_ref(128) * founders(2) * arms(2) = 512",
+    "scope": "学習探索（PRACTICE_FROM_AUDIO/TRANSFER_TECHNIQUE 両枝の candidate_generation_spec_v1 に基づく探索）専用予算"
+  },
+  "fixed_evaluation_render_budget": {
+    "separate_from_search_budget": true,
+    "includes": [
+      "Birth baseline",
+      "C0",
+      "C1",
+      "validation",
+      "sealed holdout post-unseal"
+    ],
+    "note": "固定評価render（上記5種）は学習探索予算512 logical render unitsに含めない別予算とする"
+  },
+  "wall_clock": {
+    "role": "benchmark_reference_only",
+    "is_reference_only": true,
+    "scientific_termination_condition": false,
+    "note": "実測秒数はbenchmarkであり、科学的終了条件にはしない（execution_profile.json の benchmark_reference 分離と同型の扱い）"
+  },
+  "adjudication_basis": {
+    "sha256": "18b467dd0340aeb3e05b26a14bfdb986c502e39a222668ccddd1f396dab1aa31",
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt",
+    "summary": "User 裁定 2026-08-27（Learning Recipe 残5キー）§4 compute_budget: CPUExecutionProviderのみを使用しGPU/providerへの自動fallbackを禁止する。execution_profile_shaと、trial_count=32/render_budget=128の既裁定を束縛する。学習探索予算は合計512 logical render units。固定評価renderは別予算とする。実測秒数はbenchmarkであり、科学的終了条件にはしない。"
+  },
+  "provenance": {
+    "detail_record": {
+      "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
+      "sha256": "b85906f8ec0c59f60b6a410cf97a757ec3f6f6c4d47e4f6bf4bd425f03217d55"
+    },
+    "execution_profile_manifest": {
+      "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/execution_profile_manifest.json",
+      "note": "identity_semantics.provider_fixation_rules の一次ソース。本 manifest はその文言・値を参照するのみで重複定義しない。"
+    }
+  }
+}

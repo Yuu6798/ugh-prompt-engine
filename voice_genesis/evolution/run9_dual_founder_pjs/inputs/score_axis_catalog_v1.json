@@ -1,0 +1,78 @@
+{
+  "schema": "run9-score-axis-catalog/1.0",
+  "composition_invariants": {
+    "note_count": "unchanged by any axis in this catalog",
+    "note_order": "unchanged by any axis in this catalog",
+    "lyrics_phoneme_sequence": "unchanged (kana/mora sequence, and therefore mora.onset/vowel/is_long_vowel_mark) by any axis in this catalog",
+    "composition_body": "unchanged except the fields each axis below lists under mutable_fields",
+    "machine_verification": "score_axis_transform.verify_composition_invariants() enforces note-count/kana-sequence/mutable-fields-only fail-closed on every apply_ax_*() call; this is the repo-quality integration of the workdir verify_invariants() that all 11+5 W1/W1b variants passed"
+  },
+  "axes": {
+    "AX-P1": {
+      "axis_id": "AX-P1",
+      "name": "note_pitch_offset_semitones",
+      "family": "a",
+      "family_description": "note単位の音高偏差",
+      "unit": "semitones (per-note float offset added to ScoreNote.midi)",
+      "transform": "midi' = midi + offset",
+      "mutable_fields": ["midi"],
+      "range_semitones": [-2.0, 2.0],
+      "quantization_step_semitones": 0.5,
+      "grid_values_count_per_note": 9,
+      "prohibited_values": ["NaN", "inf", "-inf"],
+      "semantics_disclosure": {
+        "stage1_duration_predictor": "gate_synth.py Stage1 casts note midi to int64 (np.array([ph_midi1], dtype=np.int64) at gate_synth.py:1151,1264,1277) -- fractional offsets are truncated at this stage; NaN raises ValueError('cannot convert float NaN to integer') (observed exit_code=1, HARNESS3C_AXIS_FEASIBILITY_RECORD.md 第1部Step3 pitch_nan)",
+        "stage2_pitch_predictor": "gate_synth.py Stage2 keeps midi as float32 (np.array([note_midi2], dtype=np.float32) at gate_synth.py:1309,1320) and applies it continuously to the pitch contour -- int and float offsets both render successfully and both differ from baseline",
+        "evidence_source": "HARNESS3C_AXIS_FEASIBILITY_RECORD.md 第1部 Step1/Step4、第2部 Task1"
+      },
+      "boundary_behavior": "NaN causes a Stage1 ValueError render failure (pitch_nan, exit_code=1); the +-2.0 range boundary values render successfully and byte-deterministically (pitch_minus2 / pitch_offset_minus_2_0, W1+W1b)",
+      "grid_coverage": "7 of 9 grid points (-2.0,-1.5,-0.5,0,+0.5,+1.0,+1.5) directly render-verified across W1+W1b; -1.0/+2.0 not directly rendered but covered by the same unconditional linear-addition transform verified at every other grid point (HARNESS3C_AXIS_FEASIBILITY_RECORD.md 第2部 Task1)"
+    },
+    "AX-D1": {
+      "axis_id": "AX-D1",
+      "name": "phrase_duration_redistribution_beats",
+      "family": "b",
+      "family_description": "phrase内の拍・音価配分",
+      "unit": "beats (per-note float delta vector within a phrase, applied to ScoreNote.duration_beats)",
+      "transform": "duration_beats'_i = duration_beats_i + delta_i for each note i touched within a phrase, subject to sum(delta_i) == 0",
+      "mutable_fields": ["duration_beats"],
+      "quantization_step_beats": 0.25,
+      "sum_constraint": "sum(deltas) must equal 0 (beat-level Composition preservation within the touched notes)",
+      "min_duration_beats": 0.25,
+      "prohibited_values": ["NaN", "inf", "-inf"],
+      "quantization_disclosure": "gate_synth.py quantizes duration to frames (frame_ms = 1000*hop_size/sample_rate ~= 11.60998ms, gate_synth.py:321-322,1152,1235-1237), independently per note via round() -- the sum of per-note beats is preserved exactly by this axis's sum constraint, but the sum of the resulting rounded frame counts is NOT guaranteed to be preserved. Observed: dur_float_redist (W1, 0.5-beat grid) and both dur_quarter_redist/dur_min_boundary (W1b, 0.25-beat grid) all lost exactly 1 frame (~11.60998ms) of total wav_duration_sec relative to baseline (HARNESS3C_AXIS_FEASIBILITY_RECORD.md 量子化の実測考察 + 第2部 Task2)",
+      "boundary_behavior": "post-transform duration == 0.25 beat (this axis's min_duration_beats) renders successfully (dur_min_boundary, W1b); duration == 0 beat (below this axis's minimum, W1 dur_zero) does not crash gate_synth either (frames_from_ms clamps to max(...,0)) but is rejected by this axis's own min_duration_beats constraint at the transform layer -- i.e. gate_synth's tolerance is wider than this catalog's declared floor, and the catalog floor is what the transform enforces"
+    },
+    "phrase_boundary_control": {
+      "axis_id": null,
+      "name": "phrase_boundary_control",
+      "family": "c",
+      "family_description": "phrase境界制御",
+      "status": "NOT_EXPRESSIBLE_ON_CURRENT_WIRING",
+      "axes": [],
+      "evidence": {
+        "static": "gate_synth.py::_NoteWithMs.__init__ copies only midi/mora/_dur_ms from ScoreNote -- phrase_index and is_phrase_final are never copied ('grep -c phrase_index|is_phrase_final voice_genesis/foundry/s1_gate/gate_synth.py' = 0, static analysis confirmed). Pre-existing note of the same gap: voice_genesis/evolution/probes/vgl0_control_axis_probe.py:40-45.",
+        "empirical": "phrase_c1 (is_phrase_final False->True on a mid-phrase note) and phrase_c2 (all 6 notes' phrase_index collapsed to 0) both rendered wav byte-for-byte identical to baseline",
+        "detail_record": "HARNESS3C_AXIS_FEASIBILITY_RECORD.md 第1部 Step1/Step3/Step4"
+      },
+      "reactivation_requirement": "配線追加（_NoteWithMs 拡張 + run_pipeline 側の消費）= 新規注入点の導入であり、新 design revision を要する（裁定 §1 逐語: '3軸以外の追加、Composition不変条件の緩和、新規注入点の導入は新design revisionを必要とする'）"
+    }
+  },
+  "transformer_binding": {
+    "repo_module": "voice_genesis/evolution/run9_dual_founder_pjs/score_axis_transform.py",
+    "consumption_contract": "score_axis_transform.apply_ax_p1()/apply_ax_d1() take this catalog dict as their `catalog` argument and read range/quantization/min-duration from it at call time -- the constraint values are not hardcoded in the transformer, so a future re-freeze of this catalog changes transformer behavior without a transformer code change",
+    "family_c_note": "score_axis_transform.py implements no code path for phrase_boundary_control -- see MUTABLE_NOTE_FIELDS in that module and this axis's evidence above"
+  },
+  "adjudication_basis": {
+    "sha256": "18b467dd0340aeb3e05b26a14bfdb986c502e39a222668ccddd1f396dab1aa31",
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt",
+    "summary": "User 裁定 2026-08-27（Learning Recipe 残5キー）§1 search_space: RUN9 v1の探索空間をComposition非破壊のscore変換層3軸系（note単位の音高偏差/phrase内の拍・音価配分/phrase境界制御）へ限定。axis catalogはPJS validationやFounder学習結果を使わないfixture/smoke検証後に凍結し、凍結までlearning_recipe_shaをPENDINGとする。3軸以外の追加・Composition不変条件の緩和・新規注入点の導入は新design revisionを要する。"
+  },
+  "provenance": {
+    "detail_record": {
+      "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
+      "sha256": "b85906f8ec0c59f60b6a410cf97a757ec3f6f6c4d47e4f6bf4bd425f03217d55",
+      "summary": "W1（score変換プロトタイプ+11 variant render実測、3軸実効性の結論）とW1b（AX-P1/AX-D1未検証格子点render実測+変換器レベルunit検証17ケース+calibration scale実測）を統合したaxis feasibility実測記録。repo改変ゼロ（git status --porcelain空、gate_synth.py sha256不変）で全作業をsession workdir隔離して実施した。"
+    }
+  }
+}
