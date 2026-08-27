@@ -1403,6 +1403,8 @@ def validate_branch_write_policy_manifest(data: Mapping[str, Any]) -> None:
 
 SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST = "run9-practice-audio-split-manifest/1.0"
 SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST = "run9-education-technique-lesson-manifest/1.0"
+# PR #329 第2巡レビュー指摘2-4（P1、採用）新設。
+SCHEMA_PJS_CONSUMED_INPUTS_MANIFEST = "run9-pjs-consumed-inputs-sha256/1.0"
 
 # rev 0.3（Codex bot レビュー第6巡 Fix A 部分採用）: manifest 実ファイルの
 # 規約パス。`practice_audio_split_manifest_sha` /
@@ -1415,6 +1417,8 @@ SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST = "run9-education-technique-lesson-ma
 # して凍結する。
 PRACTICE_MANIFEST_PATH = _THIS_DIR / "inputs" / "practice_audio_split_manifest.json"
 EDUCATION_MANIFEST_PATH = _THIS_DIR / "inputs" / "education_technique_lesson_manifest.json"
+# PR #329 第2巡レビュー指摘2-4（P1、採用）新設: 同じ命名規約。
+PJS_CONSUMED_INPUTS_MANIFEST_PATH = _THIS_DIR / "inputs" / "pjs_consumed_inputs_sha256.json"
 
 # ---------------------------------------------------------------------------
 # RUN9-L0-HARNESS-3b: technique lesson bundle（`education_lesson_builder.py`
@@ -7076,6 +7080,17 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     # PINNED で証拠づける（`validate_practice_split_manifest()` が中身の
     # 最低要件を検証する）。
     "practice_audio_split_manifest_sha",
+    # PR #329 第2巡レビュー指摘2-4（P1、採用）新設: `education_lesson_
+    # builder.py` の `extract_song()` が実際に消費する3入力（pjsNNN.lab /
+    # pjsNNN.musicxml / pjsNNN_song.wav、training70+validation15=85曲分
+    # =255ファイル）の per-file sha256 pin
+    # （`inputs/pjs_consumed_inputs_sha256.json`）自体の実バイト sha256。
+    # `donor_bank_lab.py` の `corpus_identity_hash()` は `.lab` + 対の
+    # `_song.wav` のみを被覆し musicxml を被覆しないため、musicxml 単体の
+    # 改ざんが検出されない穴があった——本欄はその穴を builder 消費入力3種の
+    # 完全被覆で閉じる（`validate_pjs_consumed_inputs_manifest()`/
+    # `load_pinned_consumed_inputs_manifest()` 参照）。
+    "pjs_consumed_inputs_manifest_sha",
     # rev 0.3 新設（User 外部レビュー PR #317 P1-1 採用）: 枝別書込境界
     # policy manifest（`inputs/branch_write_policy.json`）自体の実
     # sha256。本 PR でファイル内容を確定するため PINNED（本欄自体は
@@ -17472,4 +17487,200 @@ def load_pinned_education_lesson_manifest(
                 "claim is not machine-verified"
             )
 
+    # (14) cross-check (j)（PR #329 第2巡レビュー指摘2-4, P1, 採用対応）:
+    # `corpus_provenance.consumed_inputs_manifest_repo_relative_path`
+    # （`inputs/pjs_consumed_inputs_sha256.json` — extract_song() が実際に
+    # 消費する3入力の per-file sha256 pin）の実バイト sha256 が
+    # `corpus_provenance.consumed_inputs_manifest_sha256` と一致することを
+    # 強制する。この manifest 自体は `pjs_consumed_inputs_manifest_sha`
+    # pin 経由の `load_pinned_consumed_inputs_manifest()` が別途、抽出前の
+    # gate として直接消費する——本 cross-check は「この education lesson
+    # manifest がどの consumed-inputs pin バイトを前提として生成された
+    # か」の来歴を machine 強制するもので、抽出時ゲートとは独立の証跡。
+    corpus_provenance = data["corpus_provenance"]
+    consumed_inputs_resolved = _resolve_repo_contained_path(
+        corpus_provenance["consumed_inputs_manifest_repo_relative_path"],
+        repo_root=_EDUCATION_LESSON_REPO_ROOT,
+        field="corpus_provenance.consumed_inputs_manifest_repo_relative_path",
+        context="load_pinned_education_lesson_manifest()",
+    )
+    if not consumed_inputs_resolved.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): cross-check source {consumed_inputs_resolved} "
+            "(corpus_provenance.consumed_inputs_manifest_repo_relative_path) does not exist"
+        )
+    consumed_inputs_actual_sha = hashlib.sha256(consumed_inputs_resolved.read_bytes()).hexdigest()
+    consumed_inputs_pinned_sha = corpus_provenance["consumed_inputs_manifest_sha256"]
+    if consumed_inputs_actual_sha != consumed_inputs_pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): {consumed_inputs_resolved} の実バイト "
+            f"sha256 ({consumed_inputs_actual_sha!r}) が corpus_provenance.consumed_inputs_"
+            f"manifest_sha256 pin 値 ({consumed_inputs_pinned_sha!r}) と一致しない — musicxml を "
+            "含む消費3入力 pin の改変を fail-closed で拒否する"
+        )
+
+    return data
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第2巡レビュー指摘2-4（P1、採用）新設: `inputs/pjs_consumed_
+# inputs_sha256.json`（`education_lesson_builder.py` の `extract_song()`
+# が実際に消費する3入力 — pjsNNN.lab / pjsNNN.musicxml / pjsNNN_song.wav
+# — の per-file sha256 pin、training70+validation15=85曲×3ファイル=255件）
+# の schema 検証 + `pjs_consumed_inputs_manifest_sha` pin の唯一の正規
+# 消費経路（`load_pinned_practice_split_manifest()` と同型の3層防御・
+# read-once 契約）。
+#
+# `donor_bank_lab.py` の `corpus_identity_hash()` は `.lab` + 対の
+# `_song.wav` のみを被覆し musicxml を被覆しない——本 manifest はその穴を
+# builder 消費入力3種の完全被覆で閉じる。sealed_holdout(15曲)は builder が
+# いかなる経路でも一切消費しないため対象外（`sealed_holdout_excluded`
+# フィールドで明示宣言、欠落ではなく意図的非対象）。
+# ---------------------------------------------------------------------------
+
+_CONSUMED_INPUTS_FILE_KINDS: Tuple[str, str, str] = ("lab_sha256", "musicxml_sha256", "wav_sha256")
+
+
+def validate_pjs_consumed_inputs_manifest(data: Mapping[str, Any]) -> None:
+    """`pjs_consumed_inputs_sha256.json` の構造・件数・値整形式を検証
+    する。`validate_practice_split_manifest()` と対の構造 — `schema` が
+    `SCHEMA_PJS_CONSUMED_INPUTS_MANIFEST` と厳密一致しない入力は拒否
+    する。"""
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"pjs consumed inputs manifest must be an object, got {type(data).__name__}"
+        )
+    schema = data.get("schema")
+    if schema != SCHEMA_PJS_CONSUMED_INPUTS_MANIFEST:
+        raise Run9ValidationError(
+            f"pjs consumed inputs manifest schema must be exactly "
+            f"{SCHEMA_PJS_CONSUMED_INPUTS_MANIFEST!r}, got {schema!r} (a manifest declaring a "
+            "different or missing schema must not be treated as the consumed-inputs pin)"
+        )
+    if data.get("sealed_holdout_excluded") is not True:
+        raise Run9ValidationError(
+            "pjs consumed inputs manifest.sealed_holdout_excluded must be exactly True — the "
+            "sealed_holdout 15 songs must never appear in this pin (builder never consumes them)"
+        )
+    song_count = data.get("song_count")
+    if song_count != 85:
+        raise Run9ValidationError(
+            f"pjs consumed inputs manifest.song_count must be exactly 85 (training 70 + "
+            f"validation 15, 裁定 §1), got {song_count!r}"
+        )
+    kinds = data.get("consumed_file_kinds_per_song")
+    if kinds != list(_CONSUMED_INPUTS_FILE_KINDS):
+        raise Run9ValidationError(
+            "pjs consumed inputs manifest.consumed_file_kinds_per_song must be exactly "
+            f"{list(_CONSUMED_INPUTS_FILE_KINDS)!r}, got {kinds!r}"
+        )
+    songs = data.get("songs")
+    if not isinstance(songs, dict):
+        raise Run9ValidationError(
+            f"pjs consumed inputs manifest.songs must be an object, got {type(songs).__name__}"
+        )
+    if len(songs) != 85:
+        raise Run9ValidationError(
+            f"pjs consumed inputs manifest.songs must have exactly 85 entries, got {len(songs)}"
+        )
+    for song_id, entry in songs.items():
+        if not isinstance(song_id, str) or not song_id:
+            raise Run9ValidationError(
+                f"pjs consumed inputs manifest.songs key must be a non-empty string, got {song_id!r}"
+            )
+        if not isinstance(entry, dict) or set(entry.keys()) != set(_CONSUMED_INPUTS_FILE_KINDS):
+            raise Run9ValidationError(
+                f"pjs consumed inputs manifest.songs.{song_id!r} must be an object with exactly "
+                f"keys {sorted(_CONSUMED_INPUTS_FILE_KINDS)}, got "
+                f"{sorted(entry.keys()) if isinstance(entry, dict) else type(entry).__name__}"
+            )
+        for kind in _CONSUMED_INPUTS_FILE_KINDS:
+            value = entry[kind]
+            if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
+                raise Run9ValidationError(
+                    f"pjs consumed inputs manifest.songs.{song_id!r}.{kind} must be 64 lowercase "
+                    f"hex characters (sha256), got {value!r}"
+                )
+
+
+def load_pinned_consumed_inputs_manifest(
+    contract: Run9RunContract,
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`pjs_consumed_inputs_manifest_sha` pin の**唯一の正規消費経路**
+    （`load_pinned_practice_split_manifest()` と同型の3層防御・read-once
+    契約）。
+
+    **消費契約（事前登録）**: `education_lesson_builder.py` の
+    consumed-inputs pin 消費はこの関数経由のみで行わなければならない ——
+    `inputs/pjs_consumed_inputs_sha256.json` への直接 `json.load()` は
+    契約違反である。
+
+    手順（いずれかで fail-closed、他の `load_pinned_*` 系と同型）:
+    (1) disk 正典 `RUN9_CONTRACT.yaml` を都度再読込し、渡された
+        `contract` の `pjs_consumed_inputs_manifest_sha` pin が disk 正典
+        と乖離していないか照合する（改変検出）。
+    (2) 当該 pin が PINNED であることを確認する。
+    (3) manifest 実ファイルの実バイト sha256 が pin 値と一致することを
+        read-once（同一バッファから digest と parse の両方を導出）で
+        確認する。
+    (4) `validate_pjs_consumed_inputs_manifest()` で manifest 本体の構造・
+        件数（85曲×3ファイル）・値整形式（64hex）を検証する。
+
+    戻り値は検証済み manifest dict（`data["songs"]` が
+    `{song_id: {"lab_sha256": ..., "musicxml_sha256": ..., "wav_sha256":
+    ...}}` の per-song pin 辞書 — 呼び出し側 `education_lesson_builder.
+    load_consumed_inputs_pins()` がこれを抽出する）。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("pjs_consumed_inputs_manifest_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("pjs_consumed_inputs_manifest_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_consumed_inputs_manifest(): the passed-in contract's "
+            f"pjs_consumed_inputs_manifest_sha pin ({passed_field!r}) diverges from the canonical "
+            f"on-disk RUN9_CONTRACT.yaml pin ({disk_field!r}) at {effective_contract_path} — "
+            "treated as tampering evidence and rejected fail-closed"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_consumed_inputs_manifest(): pjs_consumed_inputs_manifest_sha is not "
+            f"PINNED (status={field.get('status')!r}) — refusing to consume an unpinned "
+            "consumed-inputs manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else PJS_CONSUMED_INPUTS_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_consumed_inputs_manifest(): pinned consumed-inputs manifest source {path} "
+            "does not exist — this function is the sole canonical access path (direct json.load() "
+            "elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（TOCTOU 対策）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_consumed_inputs_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml pjs_consumed_inputs_manifest_sha の pin 値 ({pinned_sha!r}) と "
+            "一致しない — stale・改ざんされた consumed-inputs pin は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_consumed_inputs_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_pjs_consumed_inputs_manifest(data)
     return data

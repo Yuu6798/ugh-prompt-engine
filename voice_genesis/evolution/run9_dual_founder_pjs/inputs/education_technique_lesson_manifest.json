@@ -15,9 +15,9 @@
     "total_songs": 85
   },
   "builder_provenance": {
-    "builder_sha256": "d93fc17b2f10b2e0ec6d240027875d22a748f9b508de9a5233144a78b52799d9",
+    "builder_sha256": "a6b99a7ba42f7d09f29395bc5fea1ef89a479555492ab5a537fba9fd26af8a27",
     "detail_record_repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3B_EDUCATION_LESSON_RECORD.md",
-    "detail_record_sha256": "8f82597f05257ad90a71f5298598620f4c3ba12464707c52d0a30c3ba7e780fd",
+    "detail_record_sha256": "e8c470c6bd6d6df26a38389e44dc070d9918f8f45f20f83ec95d68e418292901",
     "freeze_record_repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/h3b_freeze_record.json",
     "freeze_record_sha256": "e8e3dd1d6ea78495392d8de8a8f8a8083b50cf5d76b7b02b4980882d947d0d10",
     "logical_name": "education_lesson_builder",
@@ -56,6 +56,8 @@
   ],
   "corpus_provenance": {
     "audio_repo_contained": false,
+    "consumed_inputs_manifest_repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/pjs_consumed_inputs_sha256.json",
+    "consumed_inputs_manifest_sha256": "4e61deae223844bbabf110be309c0a2179d9cd68c272a0dafb9e062d19f6e8b0",
     "expanded_corpus_identity_sha256": "9905cec08fbaf43fa545400498a7908ef28567e8f60a5ba005fb2e00d526f996",
     "note": "実 PJS 音源・展開物・バンドル実体ファイルはいずれも repo 非収載（rights 制約、session workdir 限定）。",
     "pjs_source_archive_sha256": "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca",

@@ -16,9 +16,10 @@ import ast
 import copy
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pytest
 import yaml
@@ -819,3 +820,581 @@ def test_harness3b_publish_bundle_pair_failure_injection_no_prior_generation(
     assert not training_path.exists()
     assert not validation_path.exists()
     assert list(tmp_path.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第2巡 Codex bot レビュー対応: assemble コマンドの凍結 split 強制
+# （P1、採用）。中間物を1つも読む前に、要求 ID 集合が選択 split（training
+# 70件/validation 15件）と厳密集合一致することを検証する。
+# ---------------------------------------------------------------------------
+
+
+def _practice_split_ids() -> Tuple[List[str], List[str], List[str]]:
+    data = _practice_manifest_data()
+    return (
+        sorted(data["row_ids"]["training"]),
+        sorted(data["row_ids"]["validation"]),
+        sorted(data["row_ids"]["sealed_holdout"]),
+    )
+
+
+def test_harness3b_assemble_cli_rejects_sealed_id_mixed_into_training_request(
+    tmp_path: Path,
+) -> None:
+    """sealed_holdout の1件が training 要求リストへ紛れ込んだ場合（凍結
+    training の1件と差し替え）、中間物ディレクトリが空でも decode/読み込み
+    前に拒否される。"""
+    training_ids, _validation_ids, sealed_ids = _practice_split_ids()
+    requested = training_ids[:-1] + [sealed_ids[0]]
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(requested), encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path),  # empty — no <id>.json present
+        "--out", str(out_path),
+    ])
+    assert rc == 2
+    assert not out_path.exists()
+
+
+def test_harness3b_assemble_cli_rejects_incomplete_training_request(tmp_path: Path) -> None:
+    """凍結 training 集合から1件欠落したリストは拒否される（過不足なしの
+    厳密集合一致——部分集合では READY 化しない）。"""
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    requested = training_ids[:-1]
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(requested), encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path),
+        "--out", str(out_path),
+    ])
+    assert rc == 2
+    assert not out_path.exists()
+
+
+def test_harness3b_assemble_cli_rejects_unknown_extra_id(tmp_path: Path) -> None:
+    """凍結 training 集合に加えて凍結集合外の未知 ID を1件追加したリストは
+    拒否される（過剰指定の拒否）。"""
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    requested = training_ids + ["pjs999_not_a_real_song"]
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(requested), encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path),
+        "--out", str(out_path),
+    ])
+    assert rc == 2
+    assert not out_path.exists()
+
+
+def test_harness3b_assemble_cli_rejects_validation_ids_under_training_split(
+    tmp_path: Path,
+) -> None:
+    """training/validation の取り違え（--split training に validation の
+    凍結 ID 集合を渡す）も拒否される。"""
+    _training_ids, validation_ids, _sealed_ids = _practice_split_ids()
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(validation_ids), encoding="utf-8")
+    out_path = tmp_path / "out.json"
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path),
+        "--out", str(out_path),
+    ])
+    assert rc == 2
+    assert not out_path.exists()
+
+
+def test_harness3b_require_exact_frozen_split_membership_error_reports_both_sides() -> None:
+    """`_require_exact_frozen_split_membership()` のエラーメッセージが
+    missing/unexpected の両方を報告することを直接確認する。"""
+    with pytest.raises(elb.ExtractorStopError, match=r"missing=\['pjs002'\].*unexpected=\['pjs003'\]"):
+        elb._require_exact_frozen_split_membership(  # noqa: SLF001
+            ["pjs001", "pjs003"], ["pjs001", "pjs002"], split="training", context="assemble",
+        )
+
+
+def test_harness3b_require_exact_frozen_split_membership_happy_path_does_not_raise() -> None:
+    elb._require_exact_frozen_split_membership(  # noqa: SLF001
+        ["pjs002", "pjs001"], ["pjs001", "pjs002"], split="training", context="assemble",
+    )
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第2巡 Codex bot レビュー対応: extract_song() 本体へのゲート内蔵
+# （P1、採用）。CLI だけでなく関数本体が直接呼び出されても、決定前に
+# 拒否することを合成データで確認する。
+# ---------------------------------------------------------------------------
+
+
+def test_harness3b_extract_song_direct_call_rejects_id_outside_frozen_split(
+    tmp_path: Path,
+) -> None:
+    """凍結集合外の song_id を直接 `extract_song()` へ渡すと、対応する
+    corpus ディレクトリが一切存在しなくても（＝ファイルアクセス前に）
+    拒否される。"""
+    with pytest.raises(elb.ExtractorStopError, match="not a member of the pinned"):
+        elb.extract_song(
+            tmp_path / "pjs999_not_a_real_song", "pjs999_not_a_real_song",
+            frozen_allowed_ids=["pjs001", "pjs002"],
+            consumed_inputs_pins={},
+        )
+
+
+def test_harness3b_extract_song_direct_call_rejects_missing_consumed_input_pin_entry(
+    tmp_path: Path,
+) -> None:
+    """`song_id` が凍結集合内でも、`consumed_inputs_pins` に対応エントリが
+    無ければ decode 前に拒否される（pin ファイルの穴に対する二重防御）。"""
+    song_dir = tmp_path / "pjs001"
+    song_dir.mkdir()
+    (song_dir / "pjs001_song.wav").write_bytes(b"x")
+    (song_dir / "pjs001.lab").write_bytes(b"x")
+    (song_dir / "pjs001.musicxml").write_bytes(b"x")
+    with pytest.raises(elb.ExtractorStopError, match="no pinned consumed-input"):
+        elb.extract_song(
+            song_dir, "pjs001", frozen_allowed_ids=["pjs001"], consumed_inputs_pins={},
+        )
+
+
+def test_harness3b_extract_song_direct_call_rejects_consumed_input_byte_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """消費3入力（lab/musicxml/wav）のいずれかの実バイトが pin と一致し
+    なければ decode 前に拒否される——`check_wav_header_or_stop()`
+    （decode 本体側の最初のステップ）を monkeypatch して、呼ばれたら
+    失敗させることで「pin 照合より先に decode へ到達しない」ことを直接
+    確認する。"""
+    song_dir = tmp_path / "pjs001"
+    song_dir.mkdir()
+    (song_dir / "pjs001_song.wav").write_bytes(b"tampered-wav-bytes")
+    (song_dir / "pjs001.lab").write_bytes(b"tampered-lab-bytes")
+    (song_dir / "pjs001.musicxml").write_bytes(b"tampered-musicxml-bytes")
+    consumed_inputs_pins = {
+        "pjs001": {"lab_sha256": "0" * 64, "musicxml_sha256": "0" * 64, "wav_sha256": "0" * 64},
+    }
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:  # pragma: no cover - must not run
+        raise AssertionError("check_wav_header_or_stop() must not run before the consumed-input pin check passes")
+
+    monkeypatch.setattr(elb, "check_wav_header_or_stop", _boom)
+    with pytest.raises(elb.ExtractorStopError, match="実バイト sha256"):
+        elb.extract_song(
+            song_dir, "pjs001",
+            frozen_allowed_ids=["pjs001"], consumed_inputs_pins=consumed_inputs_pins,
+        )
+
+
+def test_harness3b_extract_song_direct_call_musicxml_only_tamper_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """musicxml だけが改ざんされ lab/wav は pin と一致するケース ——
+    `corpus_identity_hash()` が被覆しない具体的な穴を本 pin が閉じている
+    ことの直接証跡。"""
+    song_dir = tmp_path / "pjs001"
+    song_dir.mkdir()
+    wav_bytes = b"real-wav-bytes"
+    lab_bytes = b"real-lab-bytes"
+    xml_bytes_tampered = b"tampered-musicxml-bytes"
+    (song_dir / "pjs001_song.wav").write_bytes(wav_bytes)
+    (song_dir / "pjs001.lab").write_bytes(lab_bytes)
+    (song_dir / "pjs001.musicxml").write_bytes(xml_bytes_tampered)
+    consumed_inputs_pins = {
+        "pjs001": {
+            "lab_sha256": hashlib.sha256(lab_bytes).hexdigest(),
+            "musicxml_sha256": hashlib.sha256(b"real-musicxml-bytes").hexdigest(),
+            "wav_sha256": hashlib.sha256(wav_bytes).hexdigest(),
+        },
+    }
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:  # pragma: no cover - must not run
+        raise AssertionError("check_wav_header_or_stop() must not run before the consumed-input pin check passes")
+
+    monkeypatch.setattr(elb, "check_wav_header_or_stop", _boom)
+    with pytest.raises(elb.ExtractorStopError, match="musicxml_sha256"):
+        elb.extract_song(
+            song_dir, "pjs001",
+            frozen_allowed_ids=["pjs001"], consumed_inputs_pins=consumed_inputs_pins,
+        )
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第2巡 Codex bot レビュー対応: publish_bundle_pair() の2連
+# os.replace() 自体の失敗注入（P1、採用）。第1巡修正は staging の失敗の
+# みを扱っており、rename（os.replace）自体の失敗は旧世代を復元しなかった
+# ——本節は rename 1本目/2本目それぞれの失敗を注入し、いずれも最終状態が
+# 「旧世代ペア無傷 + 残骸なし」であることを確認する。
+# ---------------------------------------------------------------------------
+
+
+def test_harness3b_publish_bundle_pair_first_rename_failure_restores_old_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+    training_path.write_bytes(b'{"gen":"old-training"}\n')
+    validation_path.write_bytes(b'{"gen":"old-validation"}\n')
+
+    real_os_replace = os.replace
+    # 「1回だけ失敗し、以降は成功する」一時的失敗をシミュレートする——
+    # rollback 自身も training_path 宛の os.replace() を使う（backup から
+    # の復元）ため、常時失敗にするとロールバック自体も失敗してしまい
+    # 「publish 側の rename 失敗」と「ロールバックの検証」を分離できない。
+    calls = {"count": 0}
+
+    def _boom(src: Any, dst: Any) -> Any:
+        if Path(dst) == training_path and calls["count"] == 0:
+            calls["count"] += 1
+            raise RuntimeError("synthetic training rename failure")
+        return real_os_replace(src, dst)
+
+    monkeypatch.setattr(elb.os, "replace", _boom)
+
+    with pytest.raises(RuntimeError, match="synthetic training rename failure"):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+
+    assert training_path.read_bytes() == b'{"gen":"old-training"}\n'
+    assert validation_path.read_bytes() == b'{"gen":"old-validation"}\n'
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p not in (training_path, validation_path))
+    assert leftovers == []
+
+
+def test_harness3b_publish_bundle_pair_second_rename_failure_restores_old_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """1本目（training）の rename が成功した後に2本目（validation）が
+    失敗するケース——training だけ新世代・validation は旧世代/欠落という
+    混合ペアが観測されないことの直接証跡。"""
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+    training_path.write_bytes(b'{"gen":"old-training"}\n')
+    validation_path.write_bytes(b'{"gen":"old-validation"}\n')
+
+    real_os_replace = os.replace
+    # 「1回だけ失敗し、以降は成功する」一時的失敗をシミュレートする——
+    # rollback 自身も validation_path 宛の os.replace() を使う（backup
+    # からの復元）ため、常時失敗にするとロールバック自体も失敗してしまい
+    # 「publish 側の rename 失敗」と「ロールバックの検証」を分離できない。
+    calls = {"count": 0}
+
+    def _boom(src: Any, dst: Any) -> Any:
+        if Path(dst) == validation_path and calls["count"] == 0:
+            calls["count"] += 1
+            raise RuntimeError("synthetic validation rename failure")
+        return real_os_replace(src, dst)
+
+    monkeypatch.setattr(elb.os, "replace", _boom)
+
+    with pytest.raises(RuntimeError, match="synthetic validation rename failure"):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+
+    assert training_path.read_bytes() == b'{"gen":"old-training"}\n'
+    assert validation_path.read_bytes() == b'{"gen":"old-validation"}\n'
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p not in (training_path, validation_path))
+    assert leftovers == []
+
+
+def test_harness3b_publish_bundle_pair_first_rename_failure_no_prior_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+
+    real_os_replace = os.replace
+
+    def _boom(src: Any, dst: Any) -> Any:
+        if Path(dst) == training_path:
+            raise RuntimeError("synthetic training rename failure")
+        return real_os_replace(src, dst)
+
+    monkeypatch.setattr(elb.os, "replace", _boom)
+
+    with pytest.raises(RuntimeError, match="synthetic training rename failure"):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+
+    assert not training_path.exists()
+    assert not validation_path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_harness3b_publish_bundle_pair_second_rename_failure_no_prior_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+
+    real_os_replace = os.replace
+
+    def _boom(src: Any, dst: Any) -> Any:
+        if Path(dst) == validation_path:
+            raise RuntimeError("synthetic validation rename failure")
+        return real_os_replace(src, dst)
+
+    monkeypatch.setattr(elb.os, "replace", _boom)
+
+    with pytest.raises(RuntimeError, match="synthetic validation rename failure"):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+
+    assert not training_path.exists()
+    assert not validation_path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第2巡 Codex bot レビュー対応: run_build() の pinned education
+# manifest 照合（P1、採用）。実コーパスなしで `_require_bundle_bytes_
+# match_pinned_manifest()` を単体検証する（`_tampered_education_manifest_
+# contract()` で改変済み合成 manifest + contract を注入）。
+# ---------------------------------------------------------------------------
+
+
+def test_harness3b_require_bundle_bytes_match_pinned_manifest_happy_path(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    fake_training_bytes = b'{"synthetic":"training"}\n'
+    fake_validation_bytes = b'{"synthetic":"validation"}\n'
+    training_sha = hashlib.sha256(fake_training_bytes).hexdigest()
+    validation_sha = hashlib.sha256(fake_validation_bytes).hexdigest()
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["training_technique_lesson_sha256"] = training_sha
+        data["validation_technique_lesson_sha256"] = validation_sha
+        for run_key in ("run1_sha256", "run2_sha256", "run3_sha256"):
+            data["determinism_evidence"]["training"][run_key] = training_sha
+            data["determinism_evidence"]["validation"][run_key] = validation_sha
+
+    _tampered_contract, manifest_path, contract_path = _tampered_education_manifest_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    elb._require_bundle_bytes_match_pinned_manifest(  # noqa: SLF001
+        training_sha, validation_sha, contract_path=contract_path, manifest_path=manifest_path,
+    )  # must not raise
+
+
+def test_harness3b_require_bundle_bytes_match_pinned_manifest_rejects_mismatch(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    pinned_training_sha = "a" * 64
+    pinned_validation_sha = "b" * 64
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["training_technique_lesson_sha256"] = pinned_training_sha
+        data["validation_technique_lesson_sha256"] = pinned_validation_sha
+        for run_key in ("run1_sha256", "run2_sha256", "run3_sha256"):
+            data["determinism_evidence"]["training"][run_key] = pinned_training_sha
+            data["determinism_evidence"]["validation"][run_key] = pinned_validation_sha
+
+    _tampered_contract, manifest_path, contract_path = _tampered_education_manifest_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    actual_training_sha = hashlib.sha256(b"drifted-training-bytes").hexdigest()
+    actual_validation_sha = pinned_validation_sha  # only training drifts
+    with pytest.raises(elb.ExtractorStopError, match="do not match the pinned education lesson"):
+        elb._require_bundle_bytes_match_pinned_manifest(  # noqa: SLF001
+            actual_training_sha, actual_validation_sha,
+            contract_path=contract_path, manifest_path=manifest_path,
+        )
+
+
+def test_harness3b_run_build_allow_unpinned_skips_pinned_manifest_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """`allow_unpinned=True` のとき `_require_bundle_bytes_match_pinned_
+    manifest()` が一切呼ばれないことを直接確認する（monkeypatch で
+    「呼ばれたら失敗」にする）——真の意味でのバイパス経路であることの
+    証跡。実コーパスを使わず `extract_song()`/`freeze_selfcheck()` を
+    monkeypatch で置き換え、`publish_bundle_pair()` の実装だけ確認する。
+    """
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:  # pragma: no cover - must not run
+        raise AssertionError("_require_bundle_bytes_match_pinned_manifest() must not run when allow_unpinned=True")
+
+    monkeypatch.setattr(elb, "_require_bundle_bytes_match_pinned_manifest", _boom)
+    monkeypatch.setattr(elb, "freeze_selfcheck", lambda *a, **k: {"metric_version": "stub"})
+
+    training_ids = ["pjs001"]
+    validation_ids = ["pjs002"]
+
+    def _fake_load_training_validation_ids(*_a: Any, **_k: Any) -> Tuple[List[str], List[str]]:
+        return training_ids, validation_ids
+
+    monkeypatch.setattr(elb, "load_training_validation_ids", _fake_load_training_validation_ids)
+    monkeypatch.setattr(elb, "load_consumed_inputs_pins", lambda *a, **k: {})
+
+    def _fake_extract_song(song_dir: Path, song_id: str, **_kwargs: Any) -> Dict[str, Any]:
+        return _synthetic_song(song_id)
+
+    monkeypatch.setattr(elb, "extract_song", _fake_extract_song)
+    monkeypatch.setattr(elb, "sha256_of_file", lambda p: "d" * 64)
+
+    out_dir = tmp_path / "out"
+    result = elb.run_build(
+        corpus_root=tmp_path / "corpus",
+        out_dir=out_dir,
+        allow_unpinned=True,
+    )
+    assert result["pinned_manifest_check"] == "SKIPPED_UNPINNED"
+    assert (out_dir / "training_bundle.json").exists()
+    assert (out_dir / "validation_bundle.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第2巡 Codex bot レビュー対応: musicxml を含む消費3入力の per-file
+# sha256 pin（`pjs_consumed_inputs_sha256.json`）の schema/loader（P1、
+# 採用）。
+# ---------------------------------------------------------------------------
+
+
+def _consumed_inputs_manifest_data() -> Dict[str, Any]:
+    return json.loads(m.PJS_CONSUMED_INPUTS_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def test_harness3b_consumed_inputs_manifest_covers_exactly_85_songs_and_excludes_sealed() -> None:
+    data = _consumed_inputs_manifest_data()
+    assert data["schema"] == m.SCHEMA_PJS_CONSUMED_INPUTS_MANIFEST
+    assert data["sealed_holdout_excluded"] is True
+    assert data["song_count"] == 85
+    assert len(data["songs"]) == 85
+    training_ids, validation_ids, sealed_ids = _practice_split_ids()
+    assert set(data["songs"]) == set(training_ids) | set(validation_ids)
+    assert set(data["songs"]).isdisjoint(sealed_ids)
+
+
+def test_harness3b_validate_pjs_consumed_inputs_manifest_passes_on_real_manifest() -> None:
+    data = _consumed_inputs_manifest_data()
+    m.validate_pjs_consumed_inputs_manifest(data)  # must not raise
+
+
+def test_harness3b_load_pinned_consumed_inputs_manifest_happy_path(
+    contract: m.Run9RunContract,
+) -> None:
+    data = m.load_pinned_consumed_inputs_manifest(contract)
+    assert len(data["songs"]) == 85
+    assert set(data["songs"]["pjs001"].keys()) == {"lab_sha256", "musicxml_sha256", "wav_sha256"}
+
+
+def test_harness3b_load_pinned_consumed_inputs_manifest_rejects_byte_tampering(
+    tmp_path: Path,
+) -> None:
+    tampered_path = tmp_path / "pjs_consumed_inputs_sha256.json"
+    tampered_path.write_bytes(m.PJS_CONSUMED_INPUTS_MANIFEST_PATH.read_bytes() + b"\n")
+    with pytest.raises(m.Run9ValidationError, match="実バイト sha256"):
+        elb.load_consumed_inputs_pins(tampered_path)
+
+
+def _tampered_consumed_inputs_manifest_contract(
+    contract: m.Run9RunContract, tmp_path: Path, *, mutate,
+) -> Tuple[Path, Path]:
+    data = copy.deepcopy(_consumed_inputs_manifest_data())
+    mutate(data)
+    manifest_bytes = _canonical_json_bytes(data)
+    manifest_path = tmp_path / "pjs_consumed_inputs_sha256.json"
+    manifest_path.write_bytes(manifest_bytes)
+    manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+    tampered_raw = copy.deepcopy(contract.raw)
+    tampered_raw["pjs_consumed_inputs_manifest_sha"] = {"value": manifest_sha, "status": "PINNED"}
+    tampered_contract_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_contract_path.write_text(yaml.safe_dump(tampered_raw, allow_unicode=True), encoding="utf-8")
+    return manifest_path, tampered_contract_path
+
+
+def test_harness3b_consumed_inputs_manifest_rejects_single_song_sha_tampering(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """pin ファイル側の1曲1ファイルの sha を改ざんしても構造検証は通る
+    （値整形式は正しいまま）——実際の突合は builder 側
+    `_require_consumed_input_bytes_match()` の責務であることの確認
+    （構造検証と実バイト照合は別レイヤ）。"""
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        any_song = next(iter(data["songs"]))
+        data["songs"][any_song]["musicxml_sha256"] = "f" * 64
+
+    manifest_path, contract_path = _tampered_consumed_inputs_manifest_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    tampered_contract = m.load_run9_contract_from_yaml_path(contract_path)
+    data = m.load_pinned_consumed_inputs_manifest(
+        tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+    )  # must not raise — structurally valid (still 64hex)
+    assert len(data["songs"]) == 85
+
+
+def test_harness3b_consumed_inputs_manifest_rejects_wrong_song_count(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    def _mutate(data: Dict[str, Any]) -> None:
+        any_song = next(iter(data["songs"]))
+        del data["songs"][any_song]
+        data["song_count"] = 84
+
+    manifest_path, contract_path = _tampered_consumed_inputs_manifest_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    tampered_contract = m.load_run9_contract_from_yaml_path(contract_path)
+    with pytest.raises(m.Run9ValidationError, match="song_count must be exactly 85"):
+        m.load_pinned_consumed_inputs_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness3b_consumed_inputs_manifest_rejects_sealed_holdout_excluded_false(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["sealed_holdout_excluded"] = False
+
+    manifest_path, contract_path = _tampered_consumed_inputs_manifest_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    tampered_contract = m.load_run9_contract_from_yaml_path(contract_path)
+    with pytest.raises(m.Run9ValidationError, match="sealed_holdout_excluded must be exactly True"):
+        m.load_pinned_consumed_inputs_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness3b_education_manifest_corpus_provenance_cross_check_rejects_tampered_pin(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """education manifest の `corpus_provenance.consumed_inputs_manifest_
+    sha256` が実ファイルと一致しなければ `load_pinned_education_lesson_
+    manifest()` が拒否することを確認する（PR #329 第2巡レビュー指摘2-4
+    採用対応の cross-check、新設）。"""
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["corpus_provenance"]["consumed_inputs_manifest_sha256"] = "0" * 64
+
+    _tampered_contract, manifest_path, contract_path = _tampered_education_manifest_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    tampered_contract = m.load_run9_contract_from_yaml_path(contract_path)
+    with pytest.raises(m.Run9ValidationError, match="consumed_inputs_manifest_sha256"):
+        m.load_pinned_education_lesson_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )

@@ -425,3 +425,187 @@ run3 と一致）が run4 とも一致したことで、**検証・公開経路�
 - freeze record（`inputs/h3b_freeze_record.json`）: 無変更（workdir
   extractor の凍結記録であり、repo builder の identity は manifest 側
   `builder_provenance` が別途担う確立設計——本フェーズでも変更していない）。
+
+---
+
+## 13. PR #329 Codex bot レビュー第2巡対応 + run5（2026-08-27）
+
+Claude 完結ルート（フェーズ1: 実装 + 検証 + 返信起草。git commit/push は
+別フェーズ）。採用済み指摘4件（いずれも P1、Fable 設計判定済み）。**抽出
+式・アラインメント規則・直列化・バンドル内容は無変更**（変更は検証・公開
+経路のみ、第1巡と同じ不変条件）。
+
+### Fix 3（指摘「Enforce the frozen split in the assemble command」）: assemble 経路の凍結 split 強制
+
+第1巡修正は `run_build()`/`extract-song` CLI にゲートを追加したが、
+`assemble` サブコマンドは任意の ID リストと中間ディレクトリを凍結 split
+照合なしで受け付けたままだった——ゲートを持たない直接 `extract_song()`
+API 呼び出し等で生成された sealed 中間物を、任意の ID リストとともに
+training/validation バンドルへ梱包し得る具体的経路が残っていた。
+
+- `_cmd_assemble()`: 中間物を1つも読む前に `load_training_validation_ids()`
+  で凍結 split をロードし、要求 ID 集合（`--song-ids-json`）が選択 split
+  （`--split`）の凍結 ID 集合（training なら70件、validation なら15件）
+  と**厳密集合一致**することを新設 `_require_exact_frozen_split_
+  membership()` で検証。不一致（sealed 混入・欠落・過剰・training/
+  validation 取り違えのいずれも）は `ExtractorStopError` で中間物読み込み
+  前に拒否する。`assemble` に `--split-manifest`/`--contract-path` を新設
+  （既定は正典パス）。
+- `extract_song()` 本体へゲートを内蔵: 関数シグネチャに必須 keyword-only
+  引数 `frozen_allowed_ids`/`consumed_inputs_pins` を追加し、関数内部で
+  membership を検証してから decode/読み込みに進む構造へ変更（「CLI だけが
+  ゲートを持ち、直接 API 呼び出しは素通り」という穴の閉鎖）。
+  `run_build()`/`_cmd_extract_song()` を全て追随。
+- 既存の `_require_song_ids_within_frozen_split()`（第1巡新設の部分集合
+  検証ヘルパ）はそのまま維持し（`run_build()`/`extract_song()` 内の防御的
+  再確認に使用）、`assemble` 専用の厳密集合一致は新設ヘルパへ分離した
+  （意味論が異なるため——部分集合検証と完全一致検証を1つの関数へ混ぜない）。
+- 新設ユニットテスト（8件）: assemble への sealed ID 混入リスト拒否、
+  欠落リスト拒否、過剰（未知 ID）リスト拒否、training/validation 取り違え
+  拒否、`_require_exact_frozen_split_membership()` の直接単体テスト（エラー
+  内容・happy path）、`extract_song()` 直接呼び出しで集合外 ID が decode
+  前に拒否されること（合成データ）、`extract_song()` 直接呼び出しで
+  consumed-input pin 未登録 ID が拒否されること。
+
+### Fix 4（指摘2-2）: `publish_bundle_pair()` の2連 `os.replace()` 自体の atomic 化
+
+第1巡修正は staging（`_atomic_write_bytes()`）の失敗のみを扱っており、
+2本の `os.replace()` 自体は依然として atomic なペアではなかった——
+training の rename 成功後に validation の rename が失敗すると、新世代
+training + 旧世代（または欠落）validation という同型の混合世代が観測され
+得た上、validation の staging ファイルも残置され得た。
+
+- `_backup_existing()`（同一ディレクトリ内の一意な backup 名へ既存ファイル
+  を `os.replace()` で退避）+ `_rollback_to_backup()`（backup があれば
+  復元、無ければ削除）+ `_discard_backup()`（成功時に backup 破棄）を新設。
+- `publish_bundle_pair()`: staging 完了後、公開前に training/validation
+  両方の既存内容を `_backup_existing()` で退避してから2本の `os.replace()`
+  を実行する。`BaseException` を含むいずれかの rename の失敗時は、
+  **両方の**最終名を publish 開始前の状態（旧世代のバイト、または未存在
+  なら削除）へロールバックし、残った staging ファイルも破棄したうえで
+  re-raise する。両方成功時は退避した backup を破棄する。
+- 失敗注入回帰テスト4件: rename 1本目（training）失敗×旧世代あり/なし、
+  rename 2本目（validation）失敗×旧世代あり/なし——いずれも最終状態が
+  「旧世代ペア無傷（または両方欠落）+ staging/backup 残骸なし」であること
+  を確認。
+
+### Fix 5（指摘2-3）: `run_build()` の pinned education manifest 照合
+
+旧実装は `run_build()` が pinned education manifest を一切ロード・照合せ
+ず、依存挙動のドリフト（例: 別ビルドの scipy/pyworld が異なる float を
+生成）が起きても両バンドルを publish して成功終了し得た——「正準の再現
+手段」として案内されているコマンドが、下流消費者が拒否すべき非正準
+artifact を成功として報告する経路だった。
+
+- 新設 `_require_bundle_bytes_match_pinned_manifest()`: 生成した
+  training/validation バンドルバイトの sha256 を `load_pinned_education_
+  lesson_manifest()` の `training_technique_lesson_sha256`/`validation_
+  technique_lesson_sha256` と照合し、不一致なら publish 前（staging 破棄
+  済み）に `ExtractorStopError` で拒否する（実測 sha を両方表示）。
+- `run_build()`/`build` CLI に `--allow-unpinned` を新設（既定 off）:
+  将来「同一 design revision 下での新規 attempt 再生成」を意図的に行う
+  ためのエスケープハッチ。使用時は出力が UNPINNED（manifest が repin
+  されるまで非正準）である旨を stderr へ明示する。
+- 新設ユニットテスト3件: 照合成功（happy path、合成 manifest+バイト）、
+  不一致拒否、`--allow-unpinned` が本チェック自体を一切呼ばないことの
+  直接証跡（monkeypatch で「呼ばれたら失敗」にして確認）。
+
+### Fix 6（指摘2-4）: musicxml を含む消費3入力の per-file sha256 pin
+
+`donor_bank_lab.py` の `corpus_identity_hash()` は `.lab` + 対の
+`_song.wav` のみを被覆し、builder がもう1つ消費する musicxml を被覆しな
+い——musicxml 単体の改ざん（duration/F0 lesson を変え得る）が、既存の
+corpus identity pin では検出されない穴だった。
+
+- `inputs/pjs_consumed_inputs_sha256.json`（新設）: training(70) +
+  validation(15) = 85曲 × 3ファイル（`pjsNNN.lab`/`pjsNNN.musicxml`/
+  `pjsNNN_song.wav`）= 255件の per-file sha256 pin。sealed_holdout(15曲)
+  は builder が一切消費しないため対象外（`sealed_holdout_excluded: true`
+  で明示宣言）。値は workdir の検証済み expanded corpus（zip sha 検証 +
+  `expanded_corpus_identity_sha256` 照合 PASS 済み）を実測し、E1
+  inventory（`e1_inventory.json`、zip 展開直後の実測607件）と突合して
+  二重確認した（255ファイル全件、両者完全一致）。
+- `run9_schema.py`: `validate_pjs_consumed_inputs_manifest()`（schema・
+  件数85・値整形式64hex 検証）+ `load_pinned_consumed_inputs_manifest()`
+  （`pjs_consumed_inputs_manifest_sha` pin 経由の唯一の正規消費経路、他の
+  `load_pinned_*` と同型の3層防御）を新設。`CONTRACT_PIN_FIELDS` へ
+  `pjs_consumed_inputs_manifest_sha` を追加し `RUN9_CONTRACT.yaml` で
+  PINNED 化。
+- `education_lesson_builder.py`: `load_consumed_inputs_pins()`（新設
+  loader ラッパ）+ `_require_consumed_input_bytes_match()`（song_id の
+  lab/musicxml/wav 実バイト sha256 を pin と照合、decode 前に fail-closed）
+  を新設し、`extract_song()` 内部（`run_build()`/`extract-song` CLI 双方
+  の経路）で decode（`check_wav_header_or_stop()`）より前に強制する。
+- `education_technique_lesson_manifest.json` の既存 `corpus_provenance`
+  ブロックへ `consumed_inputs_manifest_repo_relative_path`/
+  `consumed_inputs_manifest_sha256` を追加し、`load_pinned_education_
+  lesson_manifest()` の cross-check (14) として組み込んだ（この pin
+  ファイル自体の来歴を education manifest 側からも machine 強制する）。
+- 新設ユニットテスト: consumed-inputs manifest の85曲被覆・sealed 非包含
+  確認、schema 検証、loader happy path、pin 改ざん（バイト tampering・
+  song_count 不正・sealed_holdout_excluded=false）拒否、education manifest
+  側 cross-check（consumed_inputs_manifest_sha256 改ざん）拒否、
+  `extract_song()` 直接呼び出しで消費入力バイト不一致（musicxml 単体
+  改ざんのケースを含む）が decode 前に拒否されることの直接証跡
+  （`check_wav_header_or_stop()` を monkeypatch して「呼ばれたら失敗」に
+  して確認）。
+
+### 連鎖更新
+
+builder バイト変更（新値 `a6b99a7ba42f7d09f29395bc5fea1ef89a479555492ab5a537fba9fd26af8a27`）
++ 本節追記に伴い、`inputs/education_technique_lesson_manifest.json` の
+`builder_provenance.builder_sha256`/`detail_record_sha256` を更新し、
+manifest raw sha256 が変わったため `RUN9_CONTRACT.yaml` の
+`education_technique_lesson_manifest_sha` を第3世代へ repin した（旧値
+= 第2世代、第1巡対応時点の値。履歴は本記録 §12 参照）。新設
+`pjs_consumed_inputs_manifest_sha` pin は本節で PINNED 化した独立の新規
+欄（第2巡指摘2-4対応、上記 Fix 6 参照）。
+
+### run5: repo builder（第2巡対応後）による再現実行（独立5回目）
+
+venv_h3b の python3 で、修正後の repo builder を workdir 展開済み corpus
+（`expanded/PJS_corpus_ver1.1`）に対し `build` サブコマンドで実行した。
+freeze record・spec・split manifest・contract・consumed-inputs manifest
+はいずれも repo 収載の既定パス（CLI 引数省略、デフォルト値のまま）。
+
+```
+$ python3 education_lesson_builder.py build \
+    --corpus-root <workdir>/expanded/PJS_corpus_ver1.1 \
+    --out-dir <workdir>/run5
+```
+
+```
+real 4m24.927s
+```
+
+| バンドル | 既 pin（run1〜run4） | run5 sha256 | 一致 | pinned_manifest_check |
+|---|---|---|---|---|
+| training | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | **PASS** | `PASS` |
+| validation | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | **PASS** | `PASS` |
+
+`cmp run1/training_bundle.json run5/training_bundle.json` / `cmp
+run1/validation_bundle.json run5/validation_bundle.json` ともに差分 0
+（完全一致）を確認済み。run5 は `--allow-unpinned` を付けずデフォルト
+経路で実行した——`run_build()` 内で `_require_bundle_bytes_match_pinned_
+manifest()`（Fix 5）が自動的に走り、`pinned_manifest_check` の値
+（実行結果 dict の該当欄）が上表の値を返したことで、Fix 5 のゲートが
+実運用の canonical path 上で実際に機能していることの直接証跡となる。
+
+`training_technique_lesson_sha256`/`validation_technique_lesson_sha256`
+（既 PINNED、determinism_evidence.{training,validation} の run1==run2==
+run3 と一致、run4 とも一致確認済み）が run5 とも一致したことで、**本
+フェーズの4修正（assemble ゲート・rename rollback・pinned manifest
+照合・consumed-inputs pin）が抽出式・アラインメント・直列化・バンドル
+内容に一切影響を与えていないことを実測で確認した**——不変条件が満たされ
+ている。
+
+### 検証結果
+
+- `ruff check .`: clean
+- `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`:
+  本節（builder_provenance.builder_sha256/detail_record_sha256 の repo
+  収載値更新、`pjs_consumed_inputs_manifest_sha` の3世代目 repin を含む）
+  最終稿確定後に全 PASS（2226 件）。
+- freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1巡と同じ
+  理由——repo builder の identity は manifest 側 `builder_provenance` が
+  別途担う）。

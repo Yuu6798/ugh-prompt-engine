@@ -1797,8 +1797,25 @@ founder_genome_shas:
 # 実測記録 raw sha256）を更新し、manifest raw sha256 が変わったため
 # 本欄を repin した。旧値（第1世代、PINNED 化時点）は履歴として保持する:
 #   c181036167a8e3fd003307565f77bf441bb649e6b0e1579ff104790a686b7cfa
+#
+# 〔第3世代 repin, 2026-08-27, PR #329 第2巡 Codex bot レビュー対応〕:
+# assemble ゲート強制・publish_bundle_pair() rename 自体の atomic 化・
+# run_build() の pinned manifest 照合・musicxml を含む消費3入力 sha256
+# pin の4件を実装（`HARNESS3B_EDUCATION_LESSON_RECORD.md` §13 参照）。
+# builder バイト変更（新値
+# = a6b99a7ba42f7d09f29395bc5fea1ef89a479555492ab5a537fba9fd26af8a27）と
+# `builder_provenance.detail_record_sha256`（§13 追記後の実測記録 raw
+# sha256）+ `corpus_provenance.consumed_inputs_manifest_sha256`
+# （新設 `inputs/pjs_consumed_inputs_sha256.json` への参照）を更新し、
+# manifest raw sha256 が変わったため本欄を repin した。venv_h3b の
+# python3 による repo builder 再現実行（run5、`--allow-unpinned`）で
+# training/validation バンドルとも既 pin（run1〜run4）と byte 完全一致
+# することを実測で確認済み（抽出式・アラインメント・直列化・バンドル
+# 内容は無変更——検証・公開経路のみの変更）。旧値（第2世代、第1巡対応
+# 時点）は履歴として保持する:
+#   5dc503a3728cd9620c18394998dabd5338460f73b85ccde5e96faeeccc032f6f
 education_technique_lesson_manifest_sha:
-  value: "5dc503a3728cd9620c18394998dabd5338460f73b85ccde5e96faeeccc032f6f"
+  value: "08aa92aff93d042f1c1436cddc1732a82e726f0b078236dcc19f713ee20ba65d"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-
@@ -1892,6 +1909,28 @@ practice_audio_split_manifest_sha:
   value: "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json
+
+# --- pjs_consumed_inputs_manifest_sha: PR #329 第2巡 Codex bot レビュー
+# 指摘2-4（P1、採用）で新設。`education_lesson_builder.py` の
+# `extract_song()` が実際に消費する3入力（pjsNNN.lab / pjsNNN.musicxml /
+# pjsNNN_song.wav、training70+validation15=85曲×3ファイル=255件）の
+# per-file sha256 pin（`inputs/pjs_consumed_inputs_sha256.json`）自体の
+# 実バイト sha256。`donor_bank_lab.py` の `corpus_identity_hash()` は
+# `.lab` + 対の `_song.wav` のみを被覆し musicxml を被覆しないため、
+# musicxml 単体の改ざんが検出されない穴があった——本欄はその穴を builder
+# 消費入力3種の完全被覆で閉じる。値は workdir の検証済み expanded corpus
+# （zip sha 検証 + expanded_corpus_identity_sha256 照合 PASS 済み）を
+# 実測し、E1 inventory（`e1_inventory.json`、607ファイル、zip 展開直後の
+# 実測値）と突合して二重確認した255ファイル分の sha256（両者完全一致）。
+# `run9_schema.validate_pjs_consumed_inputs_manifest()`/
+# `load_pinned_consumed_inputs_manifest()` が唯一の正規消費経路
+# （`practice_audio_split_manifest_sha` と同型の3層防御）。sealed_holdout
+# 15曲は builder がいかなる経路でも一切消費しないため対象外
+# （`sealed_holdout_excluded: true` で明示宣言）。
+pjs_consumed_inputs_manifest_sha:
+  value: "4e61deae223844bbabf110be309c0a2179d9cd68c272a0dafb9e062d19f6e8b0"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/pjs_consumed_inputs_sha256.json
 
 # --- branch_write_policy_sha: inputs/branch_write_policy.json の実バイト
 # sha256（PINNED — 本 PR で内容確定。User 外部レビュー PR #317 P1-1

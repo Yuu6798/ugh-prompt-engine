@@ -88,7 +88,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.signal import resample_poly
@@ -132,6 +132,10 @@ _THIS_DIR = Path(__file__).resolve().parent
 DEFAULT_SPLIT_MANIFEST_PATH = _THIS_DIR / "inputs" / "practice_audio_split_manifest.json"
 DEFAULT_SPEC_PATH = _THIS_DIR / "HARNESS3B_EXTRACTOR_SPEC.md"
 DEFAULT_FREEZE_RECORD_PATH = _THIS_DIR / "inputs" / "h3b_freeze_record.json"
+# PR #329 第2巡レビュー指摘2-4（P1、採用）新設: extract_song() が消費前に
+# 実バイト照合する per-file sha256 pin（inputs/pjs_consumed_inputs_sha256.json
+# = run9_schema.PJS_CONSUMED_INPUTS_MANIFEST_PATH と同一パス）。
+DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH = _THIS_DIR / "inputs" / "pjs_consumed_inputs_sha256.json"
 
 # ---------------------------------------------------------------------------
 # Constants transcribed BY READ (not import) from repo, per spec Step 1 / §2.
@@ -946,17 +950,38 @@ def compute_phrase_end_timing(lab_morae: List[LabMora], score_morae: List[ScoreM
 # Per-song extraction driver
 # ---------------------------------------------------------------------------
 
-def extract_song(song_dir: Path, song_id: str) -> Dict[str, Any]:
+def extract_song(
+    song_dir: Path,
+    song_id: str,
+    *,
+    frozen_allowed_ids: Sequence[str],
+    consumed_inputs_pins: Mapping[str, Mapping[str, str]],
+) -> Dict[str, Any]:
     """Extract one song. Only decodes audio if the WAV header check passes.
     Returns a per-song intermediate dict (see bundle assembly for full
     schema); on count_mismatch, channels are recorded as not_extracted with
-    a reason, per spec §3 (this is NOT a stop condition by itself)."""
+    a reason, per spec §3 (this is NOT a stop condition by itself).
+
+    `frozen_allowed_ids`/`consumed_inputs_pins` は必須 keyword-only 引数
+    （PR #329 第2巡レビュー指摘「Enforce the frozen split in the assemble
+    command」, P1, 採用対応）: 旧実装はこれらのゲートを `run_build()`/
+    `_cmd_extract_song()` などの**呼び出し元だけ**が持っており、ゲートを
+    持たない直接 `extract_song()` API 呼び出し（例: 別スクリプトからの
+    import）は素通りして sealed 中間物を生成し得た。本関数はゲートを
+    自身に内蔵することで、どの経路から呼ばれても decode/抽出前に必ず
+    (1) `song_id` が凍結済み training∪validation に属すること、(2) 消費
+    3入力（lab/musicxml/wav）の実バイトが pin と一致することを検証する。
+    """
+    _require_song_ids_within_frozen_split([song_id], frozen_allowed_ids, context="extract_song")
     wav_path = song_dir / f"{song_id}_song.wav"
     lab_path = song_dir / f"{song_id}.lab"
     xml_path = song_dir / f"{song_id}.musicxml"
     for p in (wav_path, lab_path, xml_path):
         if not p.exists():
             raise ExtractorStopError(f"{song_id}: required input missing: {p}")
+    _require_consumed_input_bytes_match(
+        song_id, wav_path, lab_path, xml_path, consumed_inputs_pins, context="extract_song",
+    )
 
     wav_header = check_wav_header_or_stop(wav_path)  # STOPS the whole run on mismatch (raises)
 
@@ -1172,24 +1197,77 @@ def _atomic_write_bytes(path: Path, data: bytes) -> Path:
     return tmp_path
 
 
+def _backup_existing(path: Path) -> Optional[Path]:
+    """`path` に既存ファイルがあれば同一ディレクトリ内の一意な backup 名へ
+    `os.replace()`（rename、同一ファイルシステム内であれば atomic）で
+    退避し、その backup パスを返す。存在しなければ `None` を返す
+    （`publish_bundle_pair()` のロールバック用スナップショット。PR #329
+    第2巡レビュー指摘2-2, P1, 採用対応）。"""
+    if not path.exists():
+        return None
+    fd, backup_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".prevgen.tmp")
+    os.close(fd)
+    backup_path = Path(backup_name)
+    os.replace(path, backup_path)
+    return backup_path
+
+
+def _rollback_to_backup(path: Path, backup: Optional[Path]) -> None:
+    """`publish_bundle_pair()` の失敗時ロールバック: `backup` があれば
+    `path` へ戻す（旧世代の復元、`_backup_existing()` の逆操作）。
+    `backup` が `None`（= publish 開始前は `path` が存在しなかった）なら、
+    途中まで置換された可能性のある `path` を削除する（新世代のみが部分的
+    にでも観測される窓を閉じる）。いずれも best-effort（`OSError` は
+    握りつぶす —— ロールバック自体の失敗で本来の例外を握りつぶさない
+    ため、呼び出し側が元の例外を re-raise する）。"""
+    try:
+        if backup is not None:
+            os.replace(backup, path)
+        else:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _discard_backup(backup: Optional[Path]) -> None:
+    """publish 成功時、もう不要になった旧世代 backup を破棄する
+    （best-effort）。"""
+    if backup is not None:
+        try:
+            backup.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def publish_bundle_pair(
     training_path: Path, training_bytes: bytes, validation_path: Path, validation_bytes: bytes,
 ) -> None:
     """training/validation バンドル2本を atomic ペアとして公開する
-    （PR #329 第1巡レビュー指摘2, P1, 採用対応）。
+    （PR #329 第1巡レビュー指摘2 + 第2巡レビュー指摘2-2、いずれも P1、
+    採用対応）。
 
     旧実装は `write_bundle_json(training_bundle, training_out)` の後に
     `write_bundle_json(validation_bundle, validation_out)` を実行して
     おり、training の書き込み成功後に validation の書き込みが失敗すると
     「新世代 training + 旧世代（または欠落）validation」という混合世代
-    ペアが最終出力ディレクトリに観測され得た。
+    ペアが最終出力ディレクトリに観測され得た（第1巡指摘2）。
 
-    本関数は2本とも staging（`_atomic_write_bytes()`、同一ディレクトリ内
-    の一意な一時名）へ書き切ってから、**両方の staging が成功した場合に
-    限り** それぞれの最終名へ `os.replace()` する。training の staging が
-    成功し validation の staging が失敗した場合は training の staging も
-    破棄し、**どちらの最終名も書き換えない** —— 旧世代（存在すれば）は
-    無傷のまま残り、混合世代ペアが観測される窓を構造的に閉じる。
+    第1巡修正は2本とも staging（`_atomic_write_bytes()`）へ書き切って
+    から両方成功時のみ `os.replace()` する構成にしたが、**2本の
+    `os.replace()` 自体**は依然として atomic なペアではなかった——
+    training の rename 成功後に validation の rename が失敗すると、
+    新世代 training + 旧世代（または欠落）validation という同型の混合
+    世代が観測され得た上、validation の staging ファイルも残置され得た
+    （第2巡指摘2-2、新鮮な証跡）。
+
+    本関数は staging 完了後、公開前に両ファイルの**既存内容を
+    `_backup_existing()` で退避**してから2本の `os.replace()` を実行する。
+    `BaseException` を含むいずれかの rename の失敗時は、**両方の**最終名
+    を `_rollback_to_backup()` で publish 開始前の状態（旧世代のバイト、
+    または未存在なら削除）へ復元し、残った staging ファイルも破棄した
+    うえで re-raise する —— 「training だけ新世代・validation は旧世代
+    または欠落」という混合世代が最終的に観測されることはない。両方成功
+    時は退避した backup を破棄する。
     """
     training_tmp = _atomic_write_bytes(training_path, training_bytes)
     try:
@@ -1200,8 +1278,27 @@ def publish_bundle_pair(
         except OSError:
             pass
         raise
-    os.replace(training_tmp, training_path)
-    os.replace(validation_tmp, validation_path)
+
+    training_backup = _backup_existing(training_path)
+    validation_backup = _backup_existing(validation_path)
+    try:
+        os.replace(training_tmp, training_path)
+        os.replace(validation_tmp, validation_path)
+    except BaseException:
+        _rollback_to_backup(training_path, training_backup)
+        _rollback_to_backup(validation_path, validation_backup)
+        try:
+            training_tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            validation_tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    else:
+        _discard_backup(training_backup)
+        _discard_backup(validation_backup)
 
 
 # ---------------------------------------------------------------------------
@@ -1270,6 +1367,38 @@ def load_training_validation_ids(
     return training_ids, validation_ids
 
 
+def load_consumed_inputs_pins(
+    consumed_inputs_manifest_path: Optional[Path] = None,
+    *,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Dict[str, str]]:
+    """consumed-inputs per-file sha256 pin（pin 検証済み）を読む（PR #329
+    第2巡レビュー指摘2-4, P1, 採用対応）。`load_training_validation_ids()`
+    と同型: `run9_schema.load_pinned_consumed_inputs_manifest()`（`RUN9_
+    CONTRACT.yaml` の `pjs_consumed_inputs_manifest_sha` pin との read-once
+    sha256 照合 + `validate_pjs_consumed_inputs_manifest()` の構造/件数/
+    値整形式検証）経由でのみ manifest を読む。戻り値は `{song_id:
+    {"lab_sha256": ..., "musicxml_sha256": ..., "wav_sha256": ...}}`
+    （training70+validation15=85曲分、sealed_holdout は含まれない）。
+
+    `consumed_inputs_manifest_path`/`contract_path` を省略すると、それぞれ
+    正典 `DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH`（=
+    `inputs/pjs_consumed_inputs_sha256.json`）/
+    `run9_schema.RUN9_CONTRACT_YAML_PATH` を使う。
+    """
+    effective_manifest_path = (
+        consumed_inputs_manifest_path
+        if consumed_inputs_manifest_path is not None
+        else DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH
+    )
+    effective_contract_path = contract_path if contract_path is not None else run9_schema.RUN9_CONTRACT_YAML_PATH
+    contract = run9_schema.load_run9_contract_from_yaml_path(effective_contract_path)
+    data = run9_schema.load_pinned_consumed_inputs_manifest(
+        contract, manifest_path=effective_manifest_path, contract_path=effective_contract_path,
+    )
+    return data["songs"]
+
+
 def _require_song_ids_within_frozen_split(
     song_ids: Sequence[str], allowed_ids: Sequence[str], *, context: str,
 ) -> None:
@@ -1279,7 +1408,10 @@ def _require_song_ids_within_frozen_split(
     1件でもあれば `ExtractorStopError` で即停止し、decode/抽出は一切
     実行しない——`run_build()`/`extract-song` CLI の両方がこのゲートを
     共有する単一実装（別々に実装すると将来どちらか一方だけが改修されて
-    判定が食い違う穴を防ぐ）。"""
+    判定が食い違う穴を防ぐ）。`extract_song()` 自身もこのゲートを内蔵
+    する（PR #329 第2巡レビュー指摘「assemble を強化する」対応 —
+    「CLI だけがゲートを持ち、直接 API 呼び出しは素通り」という穴を
+    関数本体側で閉じる）。"""
     allowed = set(allowed_ids)
     offenders = sorted(set(song_ids) - allowed)
     if offenders:
@@ -1288,6 +1420,80 @@ def _require_song_ids_within_frozen_split(
             f"(sealed_holdout song_ids — and any id outside the frozen split — are rejected "
             f"fail-closed before decode/extraction): {offenders}"
         )
+
+
+def _require_exact_frozen_split_membership(
+    song_ids: Sequence[str], expected_ids: Sequence[str], *, split: str, context: str,
+) -> None:
+    """`song_ids` が凍結済み `split`（"training"/"validation"）の ID 集合と
+    **厳密に一致**することを検証する（PR #329 第2巡レビュー指摘「Enforce
+    the frozen split in the assemble command」, P1, 採用対応）。
+
+    `_require_song_ids_within_frozen_split()` は「song_ids ⊆ training∪
+    validation」という部分集合検証のみを行う——`assemble` サブコマンドが
+    要求する「song_ids == 選択 split の凍結 ID 集合」という厳密集合一致
+    までは強制しないため、(a) sealed_holdout ID の混入、(b) 凍結集合からの
+    欠落、(c) 凍結集合を超える過剰指定、(d) training/validation の
+    取り違え（例: --split training で validation の一部だけを渡す）の
+    いずれも通り得た——ゲートを持たない直接 `extract_song()` API 呼び出し
+    等で生成された sealed 中間物が、任意の ID リストとともに training/
+    validation バンドルへ梱包され得る具体的経路だった。
+
+    不一致（上記いずれか1件でも）があれば、中間物ファイルを1つも読む前に
+    `ExtractorStopError` で即停止する。"""
+    requested = set(song_ids)
+    expected = set(expected_ids)
+    missing = sorted(expected - requested)
+    unexpected = sorted(requested - expected)
+    if missing or unexpected:
+        raise ExtractorStopError(
+            f"{context}: requested song_ids do not exactly match the pinned frozen {split!r} "
+            f"split (missing={missing}, unexpected={unexpected} — 'unexpected' includes any "
+            "sealed_holdout id, any id from the other split, or any unknown id; assemble accepts "
+            "only the full, exact frozen ID set for the declared --split, verified before reading "
+            "any intermediates)"
+        )
+
+
+def _require_consumed_input_bytes_match(
+    song_id: str,
+    wav_path: Path,
+    lab_path: Path,
+    xml_path: Path,
+    consumed_inputs_pins: Mapping[str, Mapping[str, str]],
+    *,
+    context: str,
+) -> None:
+    """`song_id` が消費する3入力（lab/musicxml/wav）の実バイト sha256 が
+    `consumed_inputs_pins`（`load_consumed_inputs_pins()` が返す pin 検証
+    済み辞書）の値と一致することを decode 前に検証する（PR #329 第2巡
+    レビュー指摘2-4, P1, 採用対応）。`donor_bank_lab.py` の
+    `corpus_identity_hash()` は `.lab` + 対の `_song.wav` のみを被覆し
+    musicxml を被覆しないため、musicxml 単体の改ざん（duration/F0 lesson
+    を変え得る）が検出されない穴があった——本関数はその穴を builder 消費
+    入力3種の完全被覆で閉じる。pin に song_id のエントリが無い場合
+    （sealed_holdout や凍結集合外の id）も同じく fail-closed で拒否する
+    （通常は `_require_song_ids_within_frozen_split()`/
+    `_require_exact_frozen_split_membership()` が先に拒否するため二重
+    防御）。不一致は `ExtractorStopError` で即停止し、decode は一切
+    実行しない。"""
+    pins = consumed_inputs_pins.get(song_id)
+    if pins is None:
+        raise ExtractorStopError(
+            f"{context}: {song_id} has no pinned consumed-input sha256 entry in "
+            "pjs_consumed_inputs_sha256.json (sealed_holdout ids and any id outside the frozen "
+            "training/validation split are never present in this pin) — extraction is "
+            "fail-closed refused without a matching pinned entry"
+        )
+    for path, key in ((lab_path, "lab_sha256"), (xml_path, "musicxml_sha256"), (wav_path, "wav_sha256")):
+        expected = pins[key]
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected:
+            raise ExtractorStopError(
+                f"{context}: {song_id} {path.name} の実バイト sha256 ({actual!r}) が "
+                f"pjs_consumed_inputs_sha256.json の {key} pin 値 ({expected!r}) と一致しない — "
+                "改ざんされた corpus 入力（musicxml を含む）は decode 前に fail-closed で拒否する"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1330,19 +1536,45 @@ def _cmd_extract_song(args: argparse.Namespace) -> int:
     training_ids, validation_ids = load_training_validation_ids(
         split_manifest_path, contract_path=contract_path,
     )
-    _require_song_ids_within_frozen_split(
-        [args.song_id], sorted(set(training_ids) | set(validation_ids)), context="extract-song",
+    frozen_allowed_ids = sorted(set(training_ids) | set(validation_ids))
+    _require_song_ids_within_frozen_split([args.song_id], frozen_allowed_ids, context="extract-song")
+    # PR #329 第2巡レビュー指摘2-4（P1、採用対応）: 消費3入力（lab/
+    # musicxml/wav）の実バイト sha256 を decode 前に照合する。
+    consumed_inputs_manifest_path = (
+        Path(args.consumed_inputs_manifest) if args.consumed_inputs_manifest else None
+    )
+    consumed_inputs_pins = load_consumed_inputs_pins(
+        consumed_inputs_manifest_path, contract_path=contract_path,
     )
     song_dir = Path(args.corpus_root) / args.song_id
-    result = extract_song(song_dir, args.song_id)
+    result = extract_song(
+        song_dir, args.song_id,
+        frozen_allowed_ids=frozen_allowed_ids, consumed_inputs_pins=consumed_inputs_pins,
+    )
     Path(args.out).write_text(json.dumps(result, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
     print(f"extract-song {args.song_id}: alignment_status={result['alignment_status']}", file=sys.stderr)
     return 0
 
 
 def _cmd_assemble(args: argparse.Namespace) -> int:
+    # PR #329 第2巡レビュー指摘「Enforce the frozen split in the assemble
+    # command」（P1、採用対応）: 中間物を1つも読む前に凍結 split をロード
+    # し、要求 ID 集合が選択 split（training なら凍結70件、validation
+    # なら凍結15件）と厳密集合一致することを検証する。不一致（sealed 混入
+    # ・欠落・過剰・未知 ID いずれも）は decode/読み込み前に拒否する。
+    split_manifest_path = Path(args.split_manifest) if args.split_manifest else None
+    contract_path = Path(args.contract_path) if args.contract_path else None
+    training_ids, validation_ids = load_training_validation_ids(
+        split_manifest_path, contract_path=contract_path,
+    )
+    expected_ids = training_ids if args.split == "training" else validation_ids
+
     song_ids = json.loads(Path(args.song_ids_json).read_text(encoding="utf-8"))
     song_ids_sorted = sorted(song_ids)
+    _require_exact_frozen_split_membership(
+        song_ids_sorted, expected_ids, split=args.split, context="assemble",
+    )
+
     songs = []
     for sid in song_ids_sorted:
         songs.append(json.loads((Path(args.intermediates_dir) / f"{sid}.json").read_text(encoding="utf-8")))
@@ -1353,6 +1585,66 @@ def _cmd_assemble(args: argparse.Namespace) -> int:
     return 0
 
 
+def _require_bundle_bytes_match_pinned_manifest(
+    actual_training_sha: str,
+    actual_validation_sha: str,
+    *,
+    contract_path: Optional[Path],
+    manifest_path: Optional[Path] = None,
+) -> None:
+    """生成した training/validation バンドルバイトの sha256 が pinned
+    education lesson manifest の `training_technique_lesson_sha256`/
+    `validation_technique_lesson_sha256` と一致することを publish 前に
+    検証する（PR #329 第2巡レビュー指摘2-3, P1, 採用対応）。
+
+    旧実装の `run_build()` は pinned education manifest を一切ロード・
+    照合せず、依存挙動のドリフト（例: 別ビルドの scipy/pyworld が異なる
+    float を生成）が起きても両バンドルを publish して成功終了し得た——
+    「正準の再現手段」として案内されているコマンドが、下流消費者が拒否
+    すべき非正準 artifact を成功として報告する経路だった。
+
+    `run_build(..., allow_unpinned=False)`（既定）からのみ呼ばれる。
+    `education_lesson_builder.py` 自身の実装ロジック（module docstring
+    「svp_rpe/voice_genesis の実装モジュールを import しない」の対象）
+    ではなく検証経路の話であるため、`run9_schema.load_pinned_education_
+    lesson_manifest()`（唯一の正規消費経路、5点の builder_provenance
+    cross-check を含む）を呼ぶ——このため本関数の呼び出しには repo 収載の
+    `education_lesson_builder.py` 自身の実バイトが manifest の
+    `builder_provenance.builder_sha256` pin と一致していることが前提
+    となる（通常運用では常に成立: builder バイトを変更したら manifest
+    側の同 pin を追随更新する連鎖更新規約——本 PR 自身もこの規約に従う）。
+    不一致は `ExtractorStopError` で publish 前に拒否する（実測 sha を
+    両方表示）。`manifest_path` は通常 CLI からは渡されない（正典
+    `EDUCATION_MANIFEST_PATH` を使う——education manifest はユーザー
+    差し替え対象ではない）が、テスト層が改ざん済み合成 manifest を注入
+    できるよう省略可能な引数として残す。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else run9_schema.RUN9_CONTRACT_YAML_PATH
+    )
+    edu_contract = run9_schema.load_run9_contract_from_yaml_path(effective_contract_path)
+    edu_manifest = run9_schema.load_pinned_education_lesson_manifest(
+        edu_contract, manifest_path=manifest_path, contract_path=effective_contract_path,
+    )
+    expected_training_sha = edu_manifest["training_technique_lesson_sha256"]
+    expected_validation_sha = edu_manifest["validation_technique_lesson_sha256"]
+    mismatches = []
+    if actual_training_sha != expected_training_sha:
+        mismatches.append(("training", actual_training_sha, expected_training_sha))
+    if actual_validation_sha != expected_validation_sha:
+        mismatches.append(("validation", actual_validation_sha, expected_validation_sha))
+    if mismatches:
+        raise ExtractorStopError(
+            "run_build(): generated bundle bytes do not match the pinned education lesson "
+            "manifest's training_technique_lesson_sha256/validation_technique_lesson_sha256 "
+            f"— publish is blocked fail-closed (staging discarded): mismatches(split, actual, "
+            f"expected)={mismatches!r}. Pass --allow-unpinned for a deliberate new-attempt "
+            "regeneration under the same design revision; the output is then UNPINNED "
+            "(non-canonical) until inputs/education_technique_lesson_manifest.json is repinned "
+            "to match."
+        )
+
+
 def run_build(
     *,
     corpus_root: Path,
@@ -1361,20 +1653,39 @@ def run_build(
     spec_path: Path = DEFAULT_SPEC_PATH,
     split_manifest_path: Optional[Path] = None,
     contract_path: Optional[Path] = None,
+    consumed_inputs_manifest_path: Optional[Path] = None,
+    allow_unpinned: bool = False,
 ) -> Dict[str, Any]:
     """`run_batch_extract.py`（workdir 版）のバッチドライバロジックを
     path-resolved 引数の関数として統合したもの。freeze self-check → 全曲
-    抽出（song_id 昇順） → training/validation バンドル組立、の順序は
-    workdir 版から一切変更していない。row_ids の取得元は pin 検証済みの
-    `load_training_validation_ids()`（row_ids.sealed_holdout 非参照、spec
-    §7 継続。PR #329 第1巡レビュー指摘1 対応で pin 検証を追加）。抽出直前
-    に対象 song_id 全数が凍結済み training∪validation に属することを
-    `_require_song_ids_within_frozen_split()` で再確認する（構成上
-    `all_ids` は既にその集合から導出されているため冗長だが、指摘1の
-    「run_build()/extract-song とも抽出前に検証」を明示的な防御として
-    満たす）。バンドル2本は `publish_bundle_pair()` で atomic ペア公開する
-    （PR #329 第1巡レビュー指摘2, P1, 採用対応）。戻り値は run_log 相当の
-    機械可読サマリ。
+    抽出（song_id 昇順） → training/validation バンドル組立 → pinned
+    education manifest 照合 → atomic ペア公開、の順序。row_ids の取得元は
+    pin 検証済みの `load_training_validation_ids()`（row_ids.sealed_
+    holdout 非参照、spec §7 継続。PR #329 第1巡レビュー指摘1 対応で pin
+    検証を追加）。抽出直前に対象 song_id 全数が凍結済み training∪
+    validation に属することを `_require_song_ids_within_frozen_split()`
+    で再確認する（構成上 `all_ids` は既にその集合から導出されているため
+    冗長だが、指摘1の「run_build()/extract-song とも抽出前に検証」を
+    明示的な防御として満たす。`extract_song()` 自身も同じゲートを内蔵
+    する——第2巡レビュー指摘, P1, 採用対応）。各曲の decode 前に消費3入力
+    （lab/musicxml/wav）の実バイトを `consumed_inputs_pins` と照合する
+    （PR #329 第2巡レビュー指摘2-4, P1, 採用対応）。
+
+    バンドル2本を直列化した後、`allow_unpinned=False`（既定）なら
+    publish 前に生成バイトの sha256 を `load_pinned_education_lesson_
+    manifest()` の `training_technique_lesson_sha256`/`validation_
+    technique_lesson_sha256` と照合し、不一致なら publish せず非ゼロ終了
+    する（PR #329 第2巡レビュー指摘2-3, P1, 採用対応）——`run_build()` は
+    「正準の再現手段」として案内されているにもかかわらず、依存挙動の
+    ドリフト（例: 別ビルドの scipy/pyworld）で生じた非正準バイトを検知
+    せずに成功終了し得た穴を閉じる。`allow_unpinned=True` は将来「同一
+    design revision 下での新規 attempt 再生成」を意図的に行うための
+    エスケープハッチで、既定 off。使用時は出力が UNPINNED（manifest が
+    repin されるまで非正準）である旨を stderr へ明示する。
+
+    バンドル2本は `publish_bundle_pair()` で atomic ペア公開する（PR #329
+    第1巡レビュー指摘2 + 第2巡レビュー指摘2-2, いずれも P1, 採用対応）。
+    戻り値は run_log 相当の機械可読サマリ。
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     freeze_selfcheck(freeze_record_path, spec_path)
@@ -1386,9 +1697,16 @@ def run_build(
     all_ids = sorted(set(training_ids) | set(validation_ids))
     _require_song_ids_within_frozen_split(all_ids, frozen_allowed_ids, context="run_build")
 
+    consumed_inputs_pins = load_consumed_inputs_pins(
+        consumed_inputs_manifest_path, contract_path=contract_path,
+    )
+
     songs_by_id: Dict[str, Dict[str, Any]] = {}
     for song_id in all_ids:
-        songs_by_id[song_id] = extract_song(corpus_root / song_id, song_id)
+        songs_by_id[song_id] = extract_song(
+            corpus_root / song_id, song_id,
+            frozen_allowed_ids=frozen_allowed_ids, consumed_inputs_pins=consumed_inputs_pins,
+        )
 
     spec_sha256 = sha256_of_file(spec_path)
     training_bundle = assemble_bundle(
@@ -1397,22 +1715,40 @@ def run_build(
     validation_bundle = assemble_bundle(
         "validation", validation_ids, [songs_by_id[sid] for sid in validation_ids], spec_sha256,
     )
+    training_bytes = _serialize_bundle_json(training_bundle)
+    validation_bytes = _serialize_bundle_json(validation_bundle)
+    actual_training_sha = hashlib.sha256(training_bytes).hexdigest()
+    actual_validation_sha = hashlib.sha256(validation_bytes).hexdigest()
+
+    pinned_manifest_check = "SKIPPED_UNPINNED"
+    if not allow_unpinned:
+        _require_bundle_bytes_match_pinned_manifest(
+            actual_training_sha, actual_validation_sha, contract_path=contract_path,
+        )
+        pinned_manifest_check = "PASS"
+    else:
+        print(
+            "run_build(): --allow-unpinned set — skipping pinned-manifest hash cross-check; "
+            "output is UNPINNED and non-canonical until "
+            "inputs/education_technique_lesson_manifest.json is repinned to match these bytes "
+            f"(actual training sha256={actual_training_sha!r}, "
+            f"validation sha256={actual_validation_sha!r})",
+            file=sys.stderr,
+        )
+
     training_out = out_dir / "training_bundle.json"
     validation_out = out_dir / "validation_bundle.json"
-    publish_bundle_pair(
-        training_out, _serialize_bundle_json(training_bundle),
-        validation_out, _serialize_bundle_json(validation_bundle),
-    )
+    publish_bundle_pair(training_out, training_bytes, validation_out, validation_bytes)
 
     return {
         "training_bundle": {
-            "path": str(training_out), "sha256": sha256_of_file(training_out),
-            "song_count": len(training_ids),
+            "path": str(training_out), "sha256": actual_training_sha, "song_count": len(training_ids),
         },
         "validation_bundle": {
-            "path": str(validation_out), "sha256": sha256_of_file(validation_out),
+            "path": str(validation_out), "sha256": actual_validation_sha,
             "song_count": len(validation_ids),
         },
+        "pinned_manifest_check": pinned_manifest_check,
     }
 
 
@@ -1424,6 +1760,10 @@ def _cmd_build(args: argparse.Namespace) -> int:
         spec_path=Path(args.spec_path) if args.spec_path else DEFAULT_SPEC_PATH,
         split_manifest_path=Path(args.split_manifest) if args.split_manifest else None,
         contract_path=Path(args.contract_path) if args.contract_path else None,
+        consumed_inputs_manifest_path=(
+            Path(args.consumed_inputs_manifest) if args.consumed_inputs_manifest else None
+        ),
+        allow_unpinned=bool(args.allow_unpinned),
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
@@ -1451,6 +1791,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         "row_ids; sealed_holdout song_ids are rejected)",
     )
     p.add_argument("--contract-path", default=None, help="default: RUN9_CONTRACT.yaml (repo canonical)")
+    p.add_argument(
+        "--consumed-inputs-manifest", default=None,
+        help=f"default: {DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH} (pin-verified against RUN9_"
+        "CONTRACT.yaml pjs_consumed_inputs_manifest_sha — --song-id's lab/musicxml/wav actual "
+        "bytes must match this pin's sha256, verified before decode)",
+    )
     p.add_argument("--out", required=True)
     p.set_defaults(func=_cmd_extract_song)
 
@@ -1459,6 +1805,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--song-ids-json", required=True)
     p.add_argument("--intermediates-dir", required=True)
     p.add_argument("--spec-path", default=str(DEFAULT_SPEC_PATH))
+    p.add_argument(
+        "--split-manifest", default=None,
+        help=f"default: {DEFAULT_SPLIT_MANIFEST_PATH} (pin-verified against RUN9_CONTRACT.yaml "
+        "practice_audio_split_manifest_sha — --song-ids-json must exactly equal the frozen "
+        "training/validation ID set for --split; sealed_holdout/missing/extra/unknown ids are "
+        "rejected before reading any intermediates)",
+    )
+    p.add_argument("--contract-path", default=None, help="default: RUN9_CONTRACT.yaml (repo canonical)")
     p.add_argument("--out", required=True)
     p.set_defaults(func=_cmd_assemble)
 
@@ -1469,6 +1823,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--spec-path", default=None, help=f"default: {DEFAULT_SPEC_PATH}")
     p.add_argument("--split-manifest", default=None, help=f"default: {DEFAULT_SPLIT_MANIFEST_PATH}")
     p.add_argument("--contract-path", default=None, help="default: RUN9_CONTRACT.yaml (repo canonical)")
+    p.add_argument(
+        "--consumed-inputs-manifest", default=None,
+        help=f"default: {DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH} (pin-verified; each song's lab/"
+        "musicxml/wav actual bytes must match before decode)",
+    )
+    p.add_argument(
+        "--allow-unpinned", action="store_true",
+        help="skip the pinned education-lesson-manifest hash cross-check before publish (default "
+        "off — the produced bundles are then UNPINNED/non-canonical until "
+        "inputs/education_technique_lesson_manifest.json is repinned to match; intended only for "
+        "a deliberate new-attempt regeneration under the same design revision)",
+    )
     p.set_defaults(func=_cmd_build)
 
     args = parser.parse_args(argv)
