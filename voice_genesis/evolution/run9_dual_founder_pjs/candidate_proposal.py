@@ -33,6 +33,25 @@ tie_break` の旧定義「(objective, 軸ベクトルの辞書順)」は座標�
 候補=L 内インデックス）ベースの tie-break キー `(objective,
 candidate_ordinal)` へ置換凍結した。
 
+第5巡指摘1（P2「proposal 定数の pinned catalog への束縛」、採用）: 旧実装は
+AX-P1/AX-D1 の domain・quantization step・min-duration を本モジュール内に
+ハードコード定数（`AX_P1_OFFSET_DOMAIN`/`AX_P1_QUANTIZATION_STEP`/
+`AX_D1_QUANTIZATION_STEP`/`AX_D1_MIN_DURATION_BEATS`）として持っており、
+`score_axis_catalog_v1.json`（catalog）が正当な理由で repin されて値が
+変わっても、これらの定数は追随せず旧値のまま漂流し得た——`run9_schema.py`
+の cross-check は `score_axis_transform` 側の consumption 経路
+（`apply_ax_p1()`/`apply_ax_d1()`）が catalog 値を正しく使うことしか
+検証しておらず、本モジュールのハードコード定数までは照合していなかった。
+本巡でハードコード定数を全廃し、`score_axis_transform.py` と同型の
+catalog 消費規約（呼び出し側が `catalog: Mapping[str, Any]` を都度渡す。
+本番経路では `run9_schema.load_pinned_score_axis_catalog_manifest()` の
+戻り値、テストでは `score_axis_catalog_v1.json` を直接読んだ実データ辞書
+を注入する）へ置換した。L 構築（`build_ax_p1_ordering()`/
+`build_ax_d1_ordering()`/`build_candidate_ordering()`）・近傍列挙
+（`neighbors_of()`/`select_neighborhood_candidates()`）のいずれも catalog
+から値を都度導出し、単一情報源（catalog）が正であることを構造的に保証
+する。
+
 **スコープ境界**: 本モジュールは spec の「候補列 L の構築」「digest→候補の
 写像」「近傍列挙」という *決定論的で generator 非依存な部分* のみを実装
 する。実際の探索ループ（PRACTICE actor 内での候補適用・render・loss
@@ -42,25 +61,18 @@ candidate_ordinal)` へ置換凍結した。
 可能にするための正本実装として提供する。
 
 **catalog 消費**: offset/delta の量子化刻み・range・min-duration は
-`score_axis_catalog_v1.json` の値をハードコードした定数として持つ
-（AX-P1: range=[-2.0,2.0]・step=0.5、AX-D1: step=0.25・min_duration=0.25 —
-`inputs/candidate_generation_spec_v1.json` `proposal.candidate_ordering` が
-これらの値を逐語で凍結しており、catalog 側の値と一致することは
-`run9_schema.py` の cross-check が別途保証する）。
+ハードコードせず、呼び出し側が渡す `catalog`（`score_axis_catalog_v1.json`
+と同型の dict、`score_axis_transform.apply_ax_p1()`/`apply_ax_d1()` が
+受け取るものと同一）から都度読む（`_ax_p1_offset_domain()`/
+`_ax_p1_quantization_step()`/`_ax_d1_quantization_step()`/
+`_ax_d1_min_duration_beats()`）。catalog が改訂されて凍結し直された場合、
+本モジュールを変更せずに新しい値が反映される——`score_axis_transform.py`
+冒頭 docstring が述べる設計方針と同一。
 """
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
-
-# AX-P1: 0 除外の8グリッド値（score_axis_catalog_v1.json axes.AX-P1
-# range_semitones=[-2.0,2.0] / quantization_step_semitones=0.5 から、0
-# を除いた値。0 は単一軸候補としては非変換であり L に含めない）。
-AX_P1_OFFSET_DOMAIN: Tuple[float, ...] = (-2.0, -1.5, -1.0, -0.5, 0.5, 1.0, 1.5, 2.0)
-
-AX_P1_QUANTIZATION_STEP = 0.5
-AX_D1_QUANTIZATION_STEP = 0.25
-AX_D1_MIN_DURATION_BEATS = 0.25
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 # L の要素型: AX-P1 = ("AX-P1", note_index, offset)
 #             AX-D1 = ("AX-D1", phrase_index, (i, j), delta)
@@ -74,15 +86,62 @@ def _round_grid(value: float, *, ndigits: int = 10) -> float:
     return round(value, ndigits)
 
 
-def build_ax_p1_ordering(note_count: int) -> List[Candidate]:
+# ---------------------------------------------------------------------------
+# catalog 消費ヘルパー（第5巡指摘1、P2、採用: ハードコード定数を廃し
+# catalog dict から都度導出する。`score_axis_transform._ax_p1_constraints()`
+# / `_ax_d1_constraints()` と同型）
+# ---------------------------------------------------------------------------
+
+
+def _ax_p1_constraints(catalog: Mapping[str, Any]) -> Mapping[str, Any]:
+    return catalog["axes"]["AX-P1"]
+
+
+def _ax_d1_constraints(catalog: Mapping[str, Any]) -> Mapping[str, Any]:
+    return catalog["axes"]["AX-D1"]
+
+
+def _ax_p1_quantization_step(catalog: Mapping[str, Any]) -> float:
+    return _ax_p1_constraints(catalog)["quantization_step_semitones"]
+
+
+def _ax_d1_quantization_step(catalog: Mapping[str, Any]) -> float:
+    return _ax_d1_constraints(catalog)["quantization_step_beats"]
+
+
+def _ax_d1_min_duration_beats(catalog: Mapping[str, Any]) -> float:
+    return _ax_d1_constraints(catalog)["min_duration_beats"]
+
+
+def _ax_p1_offset_domain(catalog: Mapping[str, Any]) -> Tuple[float, ...]:
+    """AX-P1 の 0 除外グリッド値を catalog の `range_semitones` /
+    `quantization_step_semitones` から導出する（`candidate_generation_
+    spec_v1.json` `proposal.candidate_ordering.ax_p1.offset_domain_note`
+    の逐語手続き: 0 は単一軸候補としては非変換であり L に含めない）。"""
+    constraints = _ax_p1_constraints(catalog)
+    lo, hi = constraints["range_semitones"]
+    step = constraints["quantization_step_semitones"]
+    n_steps = round((hi - lo) / step)
+    values = []
+    for i in range(n_steps + 1):
+        v = _round_grid(lo + i * step)
+        if abs(v) > 1e-9:
+            values.append(v)
+    return tuple(values)
+
+
+def build_ax_p1_ordering(note_count: int, *, catalog: Mapping[str, Any]) -> List[Candidate]:
     """AX-P1 の単一軸候補を `(axis_id, note_index, offset)` の辞書順
-    （note_index 昇順 → offset 昇順）で列挙する。"""
+    （note_index 昇順 → offset 昇順）で列挙する。offset domain は
+    `catalog`（`score_axis_catalog_v1.json` と同型の dict）から導出する。
+    """
     if note_count < 0:
         raise ValueError(f"note_count must be >= 0, got {note_count}")
+    offset_domain = _ax_p1_offset_domain(catalog)
     return [
         ("AX-P1", note_index, offset)
         for note_index in range(note_count)
-        for offset in AX_P1_OFFSET_DOMAIN
+        for offset in offset_domain
     ]
 
 
@@ -90,18 +149,21 @@ def build_ax_d1_ordering(
     phrase_of_note: Sequence[int],
     original_duration_beats: Sequence[float],
     *,
-    quantization_step_beats: float = AX_D1_QUANTIZATION_STEP,
-    min_duration_beats: float = AX_D1_MIN_DURATION_BEATS,
+    catalog: Mapping[str, Any],
 ) -> List[Candidate]:
     """AX-D1 の単一軸候補を `(axis_id, phrase_index, (i, j), delta)` の
     辞書順（phrase_index 昇順 → i 昇順 → j 昇順 → delta 昇順）で列挙する。
 
     delta は note i（失う側）から note j（得る側）への移動量。delta の
     上限は「note i の変換後 duration が min_duration_beats 以上」を満たす
-    最大の量子化格子値（0.25 刻み）。この上限を満たす delta が存在しない
-    （original_duration_beats[i] < 2 * min_duration_beats の場合など）
-    (i, j) ペアは候補を生まない。
+    最大の量子化格子値（`catalog` の `quantization_step_beats` 刻み）。
+    この上限を満たす delta が存在しない（original_duration_beats[i] <
+    2 * min_duration_beats の場合など）(i, j) ペアは候補を生まない。
+    `quantization_step_beats`/`min_duration_beats` はいずれも `catalog`
+    （`score_axis_catalog_v1.json` と同型の dict）から導出する。
     """
+    quantization_step_beats = _ax_d1_quantization_step(catalog)
+    min_duration_beats = _ax_d1_min_duration_beats(catalog)
     if len(phrase_of_note) != len(original_duration_beats):
         raise ValueError(
             "phrase_of_note と original_duration_beats の長さが一致しない "
@@ -133,20 +195,22 @@ def build_candidate_ordering(
     note_count: int,
     phrase_of_note: Sequence[int],
     original_duration_beats: Sequence[float],
-    quantization_step_beats: float = AX_D1_QUANTIZATION_STEP,
-    min_duration_beats: float = AX_D1_MIN_DURATION_BEATS,
+    catalog: Mapping[str, Any],
 ) -> List[Candidate]:
     """正準候補列 L（`candidate_generation_spec_v1.json`
     `proposal.candidate_ordering` の凍結定義）を、total_order（タプル
     比較の辞書順。axis_id 文字列比較で "AX-D1" < "AX-P1" のため AX-D1 群が
-    先に並ぶ）で構築する。"""
+    先に並ぶ）で構築する。offset/delta の domain・quantization step・
+    min-duration はすべて `catalog`（`score_axis_catalog_v1.json` と同型の
+    dict。本番経路では `run9_schema.
+    load_pinned_score_axis_catalog_manifest()` の戻り値を渡す）から導出し、
+    本モジュール内にハードコードしない（第5巡指摘1、P2、採用）。"""
     ax_d1 = build_ax_d1_ordering(
         phrase_of_note,
         original_duration_beats,
-        quantization_step_beats=quantization_step_beats,
-        min_duration_beats=min_duration_beats,
+        catalog=catalog,
     )
-    ax_p1 = build_ax_p1_ordering(note_count)
+    ax_p1 = build_ax_p1_ordering(note_count, catalog=catalog)
     ordering = ax_d1 + ax_p1
     ordering.sort()
     return ordering
@@ -249,9 +313,16 @@ def _sorted_index_keys(all_candidates: Sequence[Candidate], axis_id: str) -> Lis
     return sorted(keys)
 
 
-def neighbors_of(current_best: Optional[Candidate], all_candidates: Sequence[Candidate]) -> List[Candidate]:
+def neighbors_of(
+    current_best: Optional[Candidate],
+    all_candidates: Sequence[Candidate],
+    *,
+    catalog: Mapping[str, Any],
+) -> List[Candidate]:
     """`neighborhood_candidate_rule` の `neighbor_value_perturbation` /
-    `identity_neighbor_rule` の逐語実装。
+    `identity_neighbor_rule` の逐語実装。量子化ステップは `catalog`
+    （`score_axis_catalog_v1.json` と同型の dict）から都度導出する
+    （ハードコードしない、第5巡指摘1、P2、採用）。
 
     現 best が L の要素（単一軸候補）の場合、以下の優先順位リストを順に
     評価し、L に存在し（catalog 制約を満たし）かつ未 dedup の候補を集める
@@ -288,6 +359,8 @@ def neighbors_of(current_best: Optional[Candidate], all_candidates: Sequence[Can
     integration は既存挙動を変更しない。
     """
     candidate_set = set(all_candidates)
+    ax_p1_step = _ax_p1_quantization_step(catalog)
+    ax_d1_step = _ax_d1_quantization_step(catalog)
 
     if current_best is None:
         # identity_neighbor_rule: 恒等からちょうど1量子化ステップの候補
@@ -297,11 +370,11 @@ def neighbors_of(current_best: Optional[Candidate], all_candidates: Sequence[Can
         for cand in all_candidates:
             if cand[0] == "AX-P1":
                 _, _note_index, offset = cand
-                if abs(abs(offset) - AX_P1_QUANTIZATION_STEP) < 1e-9:
+                if abs(abs(offset) - ax_p1_step) < 1e-9:
                     neighbors.append(cand)
             elif cand[0] == "AX-D1":
                 _, _phrase_index, _pair, delta = cand
-                if abs(delta - AX_D1_QUANTIZATION_STEP) < 1e-9:
+                if abs(delta - ax_d1_step) < 1e-9:
                     neighbors.append(cand)
         neighbors.sort()
         return neighbors
@@ -310,7 +383,7 @@ def neighbors_of(current_best: Optional[Candidate], all_candidates: Sequence[Can
     if axis_id not in ("AX-P1", "AX-D1"):
         raise ValueError(f"unknown axis_id in current_best: {axis_id!r}")
 
-    step = AX_P1_QUANTIZATION_STEP if axis_id == "AX-P1" else AX_D1_QUANTIZATION_STEP
+    step = ax_p1_step if axis_id == "AX-P1" else ax_d1_step
     index_key = _index_key(current_best)
     value = _value_key(current_best)
 
@@ -368,6 +441,7 @@ def select_neighborhood_candidates(
     all_candidates: Sequence[Candidate],
     *,
     is_evaluated: Callable[[Candidate], bool],
+    catalog: Mapping[str, Any],
     limit: int = 3,
 ) -> List[Candidate]:
     """`enumeration_order` の逐語実装: `neighbors_of()` が返す優先順位順
@@ -386,6 +460,6 @@ def select_neighborhood_candidates(
     `shortfall_handling` により、幾何的端点・評価済み枯渇いずれの理由の
     不足分も呼び出し側が `select_exploratory_candidate()` で補充する
     （本関数は補充を行わない）。"""
-    neighbors = neighbors_of(current_best, all_candidates)
+    neighbors = neighbors_of(current_best, all_candidates, catalog=catalog)
     selected = [cand for cand in neighbors if not is_evaluated(cand)]
     return selected[:limit]

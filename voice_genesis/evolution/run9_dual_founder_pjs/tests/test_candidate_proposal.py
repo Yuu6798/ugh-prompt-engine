@@ -5,9 +5,19 @@
 PR #331 Codex bot レビュー第2巡指摘1（P1、採用）の検証: 同一入力から
 同一候補列が再現すること・L が仕様どおりの辞書順であること・線形
 プロービングが決定論的に境界まで動作することを確認する。
+
+PR #331 Codex bot レビュー第5巡指摘1（P2「proposal 定数の pinned catalog
+への束縛」、採用）: `candidate_proposal.py` の L 構築・近傍列挙はハード
+コード定数を持たず、呼び出し側が渡す `catalog` dict から都度値を導出する
+（`score_axis_transform.py` と同型の規約）。本ファイルは
+`score_axis_catalog_v1.json`（本 harness の pinned catalog 実体）を直接
+読んだ実データ辞書を注入して決定論性テストを回す
+（`tests/test_h3c_learning_recipe_manifests.py::_manifest_data()` と同型の
+パターン）。
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -17,6 +27,15 @@ if str(_RUN_DIR) not in sys.path:
     sys.path.insert(0, str(_RUN_DIR))
 
 import candidate_proposal as cp  # noqa: E402
+
+# pinned catalog 実データ（`run9_schema.SCORE_AXIS_CATALOG_PATH` と同一
+# ファイルを直接読む。pin 検証・cross-check 込みのフル load は
+# `run9_schema.load_pinned_score_axis_catalog_manifest()` が別途担う —
+# 本ファイルは candidate_proposal.py の catalog 消費ロジックのみを高速に
+# 検査するため、実バイトを直接注入する）。
+CATALOG = json.loads(
+    (_RUN_DIR / "inputs" / "score_axis_catalog_v1.json").read_text(encoding="utf-8")
+)
 
 # ---------------------------------------------------------------------------
 # 固定 fixture: 1 phrase 3 note の小さな score（AX-D1 の (i,j) ペア列挙を
@@ -33,6 +52,7 @@ def _build_l():
         note_count=NOTE_COUNT,
         phrase_of_note=PHRASE_OF_NOTE,
         original_duration_beats=ORIGINAL_DURATION_BEATS,
+        catalog=CATALOG,
     )
 
 
@@ -61,11 +81,31 @@ def test_candidate_ordering_ax_d1_precedes_ax_p1() -> None:
     assert all(a == "AX-P1" for a in axis_ids[first_p1:])
 
 
+# AX-P1 offset domain の期待値（`score_axis_catalog_v1.json` axes.AX-P1
+# range_semitones=[-2.0,2.0]・quantization_step_semitones=0.5 から 0 を
+# 除いた8値。`candidate_generation_spec_v1.json`
+# `proposal.candidate_ordering.ax_p1.offset_domain` の逐語と一致する——
+# catalog 実データから独立に定義し、`candidate_proposal.py` 側の導出結果
+# と突き合わせる（実装と同じ計算式をテストが再実装するトートロジーを
+# 避けるため、pinned catalog の現行値をここへ literal で書く）。
+EXPECTED_AX_P1_OFFSET_DOMAIN = (-2.0, -1.5, -1.0, -0.5, 0.5, 1.0, 1.5, 2.0)
+
+
+def test_catalog_ax_p1_matches_expected_offset_domain_fixture() -> None:
+    # CATALOG（repo 収載の pinned catalog 実データ）が本ファイルの
+    # EXPECTED_AX_P1_OFFSET_DOMAIN 前提と一致することを確認する
+    # （catalog が repin されて range/step が変わればこのテストが検出する）。
+    axis = CATALOG["axes"]["AX-P1"]
+    lo, hi = axis["range_semitones"]
+    step = axis["quantization_step_semitones"]
+    assert (lo, hi, step) == (-2.0, 2.0, 0.5)
+
+
 def test_candidate_ordering_ax_p1_excludes_zero_offset() -> None:
     ordering = _build_l()
     ax_p1_offsets = {c[2] for c in ordering if c[0] == "AX-P1"}
     assert 0.0 not in ax_p1_offsets
-    assert ax_p1_offsets == set(cp.AX_P1_OFFSET_DOMAIN)
+    assert ax_p1_offsets == set(EXPECTED_AX_P1_OFFSET_DOMAIN)
 
 
 def test_candidate_ordering_ax_p1_note_index_ascending_then_offset_ascending() -> None:
@@ -74,7 +114,7 @@ def test_candidate_ordering_ax_p1_note_index_ascending_then_offset_ascending() -
     expected = [
         ("AX-P1", note_index, offset)
         for note_index in range(NOTE_COUNT)
-        for offset in cp.AX_P1_OFFSET_DOMAIN
+        for offset in EXPECTED_AX_P1_OFFSET_DOMAIN
     ]
     assert ax_p1 == expected
 
@@ -106,9 +146,64 @@ def test_candidate_ordering_ax_d1_pair_direction_distinct() -> None:
 
 def test_candidate_ordering_empty_note_count_yields_no_ax_p1() -> None:
     ordering = cp.build_candidate_ordering(
-        note_count=0, phrase_of_note=[], original_duration_beats=[]
+        note_count=0, phrase_of_note=[], original_duration_beats=[], catalog=CATALOG
     )
     assert ordering == []
+
+
+# ---------------------------------------------------------------------------
+# 1b. catalog 値改変が L へ反映されること（PR #331 第5巡指摘1、P2、採用の
+# 直接テスト: L 構築はハードコード定数からではなく catalog 引数から都度
+# 導出するため、catalog の range/step を改変すれば L の内容が追随する）。
+# ---------------------------------------------------------------------------
+
+
+def test_build_candidate_ordering_reflects_narrowed_ax_p1_catalog() -> None:
+    narrowed = json.loads(json.dumps(CATALOG))
+    narrowed["axes"]["AX-P1"]["range_semitones"] = [-1.0, 1.0]
+    ordering_default = cp.build_candidate_ordering(
+        note_count=NOTE_COUNT,
+        phrase_of_note=PHRASE_OF_NOTE,
+        original_duration_beats=ORIGINAL_DURATION_BEATS,
+        catalog=CATALOG,
+    )
+    ordering_narrowed = cp.build_candidate_ordering(
+        note_count=NOTE_COUNT,
+        phrase_of_note=PHRASE_OF_NOTE,
+        original_duration_beats=ORIGINAL_DURATION_BEATS,
+        catalog=narrowed,
+    )
+    default_offsets = {c[2] for c in ordering_default if c[0] == "AX-P1"}
+    narrowed_offsets = {c[2] for c in ordering_narrowed if c[0] == "AX-P1"}
+    assert default_offsets == set(EXPECTED_AX_P1_OFFSET_DOMAIN)
+    assert narrowed_offsets == {-1.0, -0.5, 0.5, 1.0}
+    assert narrowed_offsets < default_offsets
+
+
+def test_build_candidate_ordering_reflects_widened_ax_d1_min_duration_catalog() -> None:
+    stricter = json.loads(json.dumps(CATALOG))
+    stricter["axes"]["AX-D1"]["min_duration_beats"] = 0.75
+    ordering_default = cp.build_candidate_ordering(
+        note_count=NOTE_COUNT,
+        phrase_of_note=PHRASE_OF_NOTE,
+        original_duration_beats=ORIGINAL_DURATION_BEATS,
+        catalog=CATALOG,
+    )
+    ordering_stricter = cp.build_candidate_ordering(
+        note_count=NOTE_COUNT,
+        phrase_of_note=PHRASE_OF_NOTE,
+        original_duration_beats=ORIGINAL_DURATION_BEATS,
+        catalog=stricter,
+    )
+    # デフォルト catalog（min_duration=0.25）では note 0 (duration=1.0)
+    # donor の delta が最大 0.75 まで存在する。min_duration を 0.75 へ
+    # 引き上げると donor 側の余地が (1.0-0.75)=0.25 分のみに縮小する。
+    default_max_delta = max(
+        c[3] for c in ordering_default if c[0] == "AX-D1" and c[2] == (0, 1)
+    )
+    stricter_deltas = [c[3] for c in ordering_stricter if c[0] == "AX-D1" and c[2] == (0, 1)]
+    assert default_max_delta == 0.75
+    assert stricter_deltas == [0.25]
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +352,7 @@ def test_select_exploratory_candidate_empty_list_returns_none() -> None:
 
 def test_neighbors_of_identity_returns_one_step_candidates_only() -> None:
     ordering = _build_l()
-    neighbors = cp.neighbors_of(None, ordering)
+    neighbors = cp.neighbors_of(None, ordering, catalog=CATALOG)
     for cand in neighbors:
         if cand[0] == "AX-P1":
             assert abs(abs(cand[2]) - 0.5) < 1e-9
@@ -269,8 +364,8 @@ def test_neighbors_of_identity_returns_one_step_candidates_only() -> None:
 def test_neighbors_of_deterministic_across_two_calls() -> None:
     ordering = _build_l()
     current_best = ("AX-P1", 1, 1.0)
-    n1 = cp.neighbors_of(current_best, ordering)
-    n2 = cp.neighbors_of(current_best, ordering)
+    n1 = cp.neighbors_of(current_best, ordering, catalog=CATALOG)
+    n2 = cp.neighbors_of(current_best, ordering, catalog=CATALOG)
     assert n1 == n2
 
 
@@ -281,7 +376,7 @@ def test_neighbors_of_ax_p1_interior_yields_priority_ordered_value_and_index_nei
     # 同値候補2件が優先順位どおりに列挙される。
     ordering = _build_l()
     current_best = ("AX-P1", 1, 1.0)
-    neighbors = cp.neighbors_of(current_best, ordering)
+    neighbors = cp.neighbors_of(current_best, ordering, catalog=CATALOG)
     assert neighbors == [
         ("AX-P1", 1, 1.5),
         ("AX-P1", 1, 0.5),
@@ -297,7 +392,7 @@ def test_neighbors_of_ax_p1_range_boundary_alone_still_achieves_three() -> None:
     # 内部領域では3:1 が構造的に達成可能という本改訂の要点を示す。
     ordering = _build_l()
     current_best = ("AX-P1", 1, 2.0)
-    neighbors = cp.neighbors_of(current_best, ordering)
+    neighbors = cp.neighbors_of(current_best, ordering, catalog=CATALOG)
     assert neighbors == [
         ("AX-P1", 1, 1.5),
         ("AX-P1", 1, 1.0),
@@ -305,7 +400,7 @@ def test_neighbors_of_ax_p1_range_boundary_alone_still_achieves_three() -> None:
         ("AX-P1", 2, 2.0),
     ]
     selected = cp.select_neighborhood_candidates(
-        current_best, ordering, is_evaluated=lambda c: False, limit=3
+        current_best, ordering, is_evaluated=lambda c: False, catalog=CATALOG, limit=3
     )
     assert len(selected) == 3
 
@@ -316,7 +411,7 @@ def test_neighbors_of_ax_p1_index_boundary_alone_still_achieves_three() -> None:
     # index=-1 が存在しないため item5 のみ欠けるが item6 が補う）。
     ordering = _build_l()
     current_best = ("AX-P1", 0, 1.0)
-    neighbors = cp.neighbors_of(current_best, ordering)
+    neighbors = cp.neighbors_of(current_best, ordering, catalog=CATALOG)
     assert neighbors == [
         ("AX-P1", 0, 1.5),
         ("AX-P1", 0, 0.5),
@@ -324,7 +419,7 @@ def test_neighbors_of_ax_p1_index_boundary_alone_still_achieves_three() -> None:
         ("AX-P1", 1, 1.0),
     ]
     selected = cp.select_neighborhood_candidates(
-        current_best, ordering, is_evaluated=lambda c: False, limit=3
+        current_best, ordering, is_evaluated=lambda c: False, catalog=CATALOG, limit=3
     )
     assert len(selected) == 3
 
@@ -334,14 +429,14 @@ def test_neighbors_of_ax_p1_double_endpoint_shortfall() -> None:
     # 揃う場合のみ、優先順位リスト6項目を尽くしても3件に満たない
     # （item5/6 は index±1 が存在せず不適用、item1/3 は range 外）。
     single_note_ordering = cp.build_candidate_ordering(
-        note_count=1, phrase_of_note=[0], original_duration_beats=[1.0]
+        note_count=1, phrase_of_note=[0], original_duration_beats=[1.0], catalog=CATALOG
     )
     current_best = ("AX-P1", 0, 2.0)
-    neighbors = cp.neighbors_of(current_best, single_note_ordering)
+    neighbors = cp.neighbors_of(current_best, single_note_ordering, catalog=CATALOG)
     assert neighbors == [("AX-P1", 0, 1.5), ("AX-P1", 0, 1.0)]
     assert len(neighbors) < 3
     selected = cp.select_neighborhood_candidates(
-        current_best, single_note_ordering, is_evaluated=lambda c: False, limit=3
+        current_best, single_note_ordering, is_evaluated=lambda c: False, catalog=CATALOG, limit=3
     )
     assert len(selected) == 2  # shortfall: 呼び出し側が exploratory 規則で1件補充する
 
@@ -351,7 +446,7 @@ def test_neighbors_of_ax_d1_candidate_are_adjacent_grid_values() -> None:
     # 値キー±1ステップの2件を補い、3件ちょうどに達する。
     ordering = _build_l()
     current_best = ("AX-D1", 0, (0, 1), 0.5)
-    neighbors = cp.neighbors_of(current_best, ordering)
+    neighbors = cp.neighbors_of(current_best, ordering, catalog=CATALOG)
     assert neighbors == [
         ("AX-D1", 0, (0, 1), 0.75),
         ("AX-D1", 0, (0, 1), 0.25),
@@ -365,7 +460,7 @@ def test_neighbors_of_ax_d1_boundary_at_minimum_delta() -> None:
     # と合わせて3件ちょうどを構成する。
     ordering = _build_l()
     current_best = ("AX-D1", 0, (0, 1), 0.25)
-    neighbors = cp.neighbors_of(current_best, ordering)
+    neighbors = cp.neighbors_of(current_best, ordering, catalog=CATALOG)
     assert neighbors == [
         ("AX-D1", 0, (0, 1), 0.5),
         ("AX-D1", 0, (0, 1), 0.75),
@@ -380,15 +475,15 @@ def test_neighbors_of_ax_d1_sole_pair_double_endpoint_shortfall() -> None:
     # index キー側（隣接 index キーが存在しない）のいずれも候補を持たず、
     # 近傍0件のまま全滅する（探査規則が3件全てを補充する）。
     sole_pair_ordering = cp.build_candidate_ordering(
-        note_count=2, phrase_of_note=[0, 0], original_duration_beats=[0.5, 0.25]
+        note_count=2, phrase_of_note=[0, 0], original_duration_beats=[0.5, 0.25], catalog=CATALOG
     )
     ax_d1_only = [c for c in sole_pair_ordering if c[0] == "AX-D1"]
     assert ax_d1_only == [("AX-D1", 0, (0, 1), 0.25)]
     current_best = ("AX-D1", 0, (0, 1), 0.25)
-    neighbors = cp.neighbors_of(current_best, sole_pair_ordering)
+    neighbors = cp.neighbors_of(current_best, sole_pair_ordering, catalog=CATALOG)
     assert neighbors == []
     selected = cp.select_neighborhood_candidates(
-        current_best, sole_pair_ordering, is_evaluated=lambda c: False, limit=3
+        current_best, sole_pair_ordering, is_evaluated=lambda c: False, catalog=CATALOG, limit=3
     )
     assert selected == []
 
@@ -397,7 +492,7 @@ def test_select_neighborhood_candidates_limits_to_three_and_skips_evaluated() ->
     ordering = _build_l()
     evaluated = {("AX-P1", 0, 0.5)}
     selected = cp.select_neighborhood_candidates(
-        None, ordering, is_evaluated=lambda c: c in evaluated, limit=3
+        None, ordering, is_evaluated=lambda c: c in evaluated, catalog=CATALOG, limit=3
     )
     assert len(selected) <= 3
     assert all(c not in evaluated for c in selected)
@@ -410,7 +505,7 @@ def test_select_neighborhood_candidates_non_identity_best_achieves_three_neighbo
     ordering = _build_l()
     current_best = ("AX-P1", 1, 1.0)
     selected = cp.select_neighborhood_candidates(
-        current_best, ordering, is_evaluated=lambda c: False, limit=3
+        current_best, ordering, is_evaluated=lambda c: False, catalog=CATALOG, limit=3
     )
     assert len(selected) == 3
     assert selected == [
@@ -424,11 +519,11 @@ def test_select_neighborhood_candidates_shortfall_when_all_evaluated() -> None:
     ordering = _build_l()
     current_best = ("AX-P1", 1, 1.0)
     selected_none_evaluated = cp.select_neighborhood_candidates(
-        current_best, ordering, is_evaluated=lambda c: False, limit=3
+        current_best, ordering, is_evaluated=lambda c: False, catalog=CATALOG, limit=3
     )
     assert len(selected_none_evaluated) == 3
     selected_all_evaluated = cp.select_neighborhood_candidates(
-        current_best, ordering, is_evaluated=lambda c: True, limit=3
+        current_best, ordering, is_evaluated=lambda c: True, catalog=CATALOG, limit=3
     )
     assert selected_all_evaluated == []
 

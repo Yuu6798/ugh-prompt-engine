@@ -718,3 +718,80 @@ RECORD.md` 自体の実バイト sha256 変更により、5 manifest 共通の
 2474 件全 pass（第3巡時点の2464件から+10件: `candidate_proposal.py`
 `candidate_ordinal()`/tie-break 決定的勝者テスト7件、validator
 `selection.tie_break` 逐語一致拒否テスト3件、他既存回帰）。
+
+## PR #331 Codex bot レビュー第5巡対応（2026-08-27、Claude 完結ルート）
+
+2 指摘全て Fable 採用判定（機械汚染防止領域）。実装・検証・返信起草は
+Sonnet に委譲、コミット/push は Fable が別途実行する（本追記フェーズでは
+未実施）。
+
+1. **proposal 定数の pinned catalog への束縛（P2）**:
+   `candidate_proposal.py` は AX-P1/AX-D1 の offset domain・quantization
+   step・min-duration を本モジュール内にハードコード定数
+   （`AX_P1_OFFSET_DOMAIN`/`AX_P1_QUANTIZATION_STEP`/
+   `AX_D1_QUANTIZATION_STEP`/`AX_D1_MIN_DURATION_BEATS`）として持っており、
+   `score_axis_catalog_v1.json`（catalog）が正当な理由で repin されて
+   range/step の値が変わっても、これらの定数は追随せず旧値のまま漂流し
+   得た。`run9_schema.load_pinned_score_axis_catalog_manifest()` の
+   catalog↔変換器 cross-check は `score_axis_transform.apply_ax_p1()`/
+   `apply_ax_d1()` が catalog 値を正しく消費することしか検証しておらず、
+   `candidate_proposal.py` 側のハードコード定数までは照合していなかった
+   ——単一情報源（catalog）が正であるべき箇所に、参照実装だけが追随しない
+   第2の情報源が存在していた。
+   - ハードコード定数を全廃し、`score_axis_transform.py` と同型の catalog
+     消費規約（`build_ax_p1_ordering()`/`build_ax_d1_ordering()`/
+     `build_candidate_ordering()`/`neighbors_of()`/
+     `select_neighborhood_candidates()` がいずれも `catalog: Mapping[str,
+     Any]` を必須キーワード引数として受け取り、offset domain・
+     quantization step・min-duration を都度 catalog から導出する）へ
+     置換した。本番経路では呼び出し側が `run9_schema.
+     load_pinned_score_axis_catalog_manifest()` の戻り値を渡す。
+   - **テスト**: `tests/test_candidate_proposal.py` に catalog 実データ
+     （`score_axis_catalog_v1.json` を直接読んだ辞書、pin 検証は経由しない
+     ——`test_h3c_learning_recipe_manifests.py::_manifest_data()` と同型の
+     軽量パターン）を注入する `CATALOG` fixture を新設し、既存テスト全件を
+     `catalog=CATALOG` を渡す形へ追随させた。さらに catalog の
+     range/step/min-duration を改変すると L（候補列）の内容が実際に追随
+     することを直接検証するテスト2件（AX-P1 range 縮小 → offset domain
+     縮小、AX-D1 min-duration 引き上げ → donor 側 delta 上限縮小）を追加
+     した。
+2. **schedule summary の stale「±1 のみ」文の是正（P2）**:
+   `inputs/candidate_generation_spec_v1.json` トップレベル
+   `proposal.subsequent_trial_schedule` に、第3巡で `neighborhood_
+   candidate_rule.neighbor_value_perturbation` を値キー ±1/±2 量子化
+   ステップ + 隣接 index キーの6項目優先順位リストへ拡張する前の
+   「現 best の近傍 ± 1 量子化ステップ」という stale 文言が残存しており、
+   詳細凍結規則（`neighbor_value_perturbation`/`proposal_schedule_table`
+   trial 2-32 行）と矛盾していた。`run9_schema.
+   _CANDIDATE_GENERATION_PROPOSAL_TOP_LEVEL_REQUIRED_KEYS` は
+   `subsequent_trial_schedule` をキー存在としてのみ検査しており（文言の
+   逐語一致検査は無い）、この矛盾は validator を素通りしていた。
+   - `subsequent_trial_schedule` を「値キー ±1/±2 量子化ステップ + 隣接
+     index キーの優先順位リストから未評価の先頭3件、幾何的端点・評価済み
+     枯渇いずれの理由の不足分も探査規則で決定論的に補充」する旨へ改訂し、
+     詳細は `neighborhood_candidate_rule`/`exploratory_candidate_rule` が
+     定める旨を明記した。
+   - spec 全体を grep 掃討し、同種の stale「±1 のみ」文が他に残存しない
+     ことを確認した（`neighbor_value_perturbation`/`identity_neighbor_
+     rule` 内の「旧定義は±1のみだった」という記述は、いずれも第3-4巡が
+     是正した旧状態を指す歴史的記述であり、現在の規則を誤って主張する
+     stale 文ではない）。`run9_schema.py` は `subsequent_trial_schedule`
+     の中身を逐語一致検査していないため、本改訂に伴う validator 定数の
+     追随更新は不要だった。
+
+**連鎖更新**: `inputs/candidate_generation_spec_v1.json` のバイト変更に
+伴い `RUN9_CONTRACT.yaml` の `candidate_generation_spec_sha` を第6世代へ
+repin した。さらに本節を新設したことに伴う `HARNESS3C_AXIS_FEASIBILITY_
+RECORD.md` 自体の実バイト sha256 変更により、5 manifest 共通の
+`provenance.detail_record.sha256` 参照値が全て追随更新となるため、
+5 manifest 全て（`score_axis_catalog_sha`/`loss_evaluator_spec_sha`/
+`candidate_generation_spec_sha`/`compute_budget_manifest_sha`/
+`learning_data_binding_manifest_sha`）を第1-4巡と同型の cascade repin
+した（旧値は `RUN9_CONTRACT.yaml` 側に世代履歴コメントとして append-only
+保持）。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
+2477 件全 pass（第4巡時点の2474件から+3件: `candidate_proposal.py` catalog
+消費テスト3件〔offset domain fixture 整合1件・catalog 改変反映2件〕、他
+既存回帰）。

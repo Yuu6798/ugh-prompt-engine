@@ -19,7 +19,7 @@
     "digest_encoding": "UTF-8",
     "digest_to_candidate_mapping": "digest の先頭8バイトを big-endian uint64 として解釈した値 u を idx = u mod len(L) で candidate_ordering.canonical_list（L）の索引へ写像し、L[idx] を候補とする。詳細な手続き（プロービング・近傍列挙）は exploratory_candidate_rule / neighborhood_candidate_rule が定義する",
     "trial1_candidate0_rule": "trial 1 の candidate 0 は恒等（全軸オフセット/デルタ = 0、= baseline）を必ず含める",
-    "subsequent_trial_schedule": "trial 1 以降は「現 best の近傍 ± 1 量子化ステップ」の決定論近傍列挙と hash 由来の探査候補を固定比率 3:1 で混合する",
+    "subsequent_trial_schedule": "trial 1 以降は「現 best の近傍（値キー ±1/±2 量子化ステップ + 隣接 index キーの優先順位リストから未評価の先頭3件、幾何的端点・評価済み枯渇いずれの理由の不足分も探査規則で決定論的に補充）」の決定論近傍列挙と hash 由来の探査候補を固定比率 3:1 で混合する。詳細は neighborhood_candidate_rule/exploratory_candidate_rule が定義する",
     "proposal_schedule_table": [
       {"trial_index": 1, "candidate_index": 0, "rule": "identity (all axes = 0, baseline)"},
       {"trial_index": 1, "candidate_index": "1..3", "rule": "hash-derived exploratory candidates (digest -> grid index)"},
@@ -87,7 +87,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "6957c4bceedb580d8e073319877abb1814311f2611d0a9cbed5b7c3f2928bb75",
+      "sha256": "bebf702f1466b642bb719a98bcfb48509e81eb1db436d045965147037362fc72",
       "note": "本 spec の proposal/selection/boundary 処理が動作する探索空間（AX-P1/AX-D1 グリッド）の実効性・量子化制約の実測根拠"
     }
   }

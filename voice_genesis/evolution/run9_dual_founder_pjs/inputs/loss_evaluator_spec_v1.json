@@ -158,7 +158,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "6957c4bceedb580d8e073319877abb1814311f2611d0a9cbed5b7c3f2928bb75",
+      "sha256": "bebf702f1466b642bb719a98bcfb48509e81eb1db436d045965147037362fc72",
       "summary": "W1b Task3: training バンドル（sha256照合供給）68曲の5 channel母標準偏差実測。relative_f0/normalized_energyの標本粒度は両案（frame/mora,phrase）を実測しFable判定（frame採用）を記録。独立2プロセス実行で完全一致（決定論確認済み）。"
     },
     "training_bundle_input": {
