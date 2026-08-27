@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（196 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（210 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -225,3 +225,25 @@ evidence 節の形状契約は、**DESIGN_RUN10 が節ごとに明示してい�
 先取りして発明しないためであり、深化は measurement 層の実装 PR で
 `_EVIDENCE_SECTION_SHAPE` を拡張して行う。同一領域 3 巡（AGENTS.md §3-4）に
 達したため、本 PR ではこの境界で終端する。
+
+### 第 4 巡（P1×4 / P2×1、全件採用）
+
+第 3 巡で置いた境界宣言は「evidence 節の**内側の深さ**」に関するもので、今回の
+5 件はいずれも別軸のため採用した。
+
+1. **§16 enum が宣言だけで未適用** — `GENERATIVE_STATUS` を一度も使っておらず、
+   `synthesis_status: NOT_A_REAL_STATUS` のまま生成互換の成立を記録できた。
+   `assert_generative_entry()` を新設し、§15.5 の
+   AQUEST_ONLY_CANDIDATE → NOT_SYNTHESIS_ELIGIBLE 拘束も同時に強制する。
+2. **`MEASUREMENT_OVERFIT_DETECTED` に evidence 要求が無かった** — 最小の
+   BLOCKED 文書だけで Outcome C を名乗れた。あわせて「成立側 outcome」
+   （`_ESTABLISHED_OUTCOMES`）と「evidence 要求表」（`_EVIDENCE_FOR_OUTCOME`）を
+   分離した。overfit は成立の主張ではなく有効な否定的診断であり、
+   BLOCKED でも成り立つが evidence は要る、という二つの性質を両立させるため。
+3. **台帳の TOCTOU 窓** — hash した後に読み直していたため、構造量と canonical
+   4 点さえ保てば残りの payload 集合をすり替えられた。`read_and_verify_ledger()`
+   が 1 回だけ読み、そのバッファを hash して同じバッファを parse する。
+4. **claim ceiling の語彙が未凍結** — 任意の非空文字列を許していたため
+   `performance_claim: C2` が通った。§5.3 の凍結値と完全一致を要求する。
+5. **inventory の非 atomic write** — 追跡中の正典を in-place truncate していた。
+   リポジトリの atomic write 集約実装（`svp_rpe.utils.atomic_io`）へ委譲する。

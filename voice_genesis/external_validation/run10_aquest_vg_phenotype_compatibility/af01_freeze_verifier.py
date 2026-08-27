@@ -30,6 +30,7 @@ bundle 実体（音声）はリポジトリへ置かない — 参照するの�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -146,34 +147,57 @@ def render_payload_ledger(entries: Mapping[str, str]) -> bytes:
 
 def load_pinned_ledger(path: Path | str | None = None) -> Dict[str, str]:
     """同梱の凍結台帳を読み、自身の sha256 も検証してから返す。"""
-    ledger_path = Path(path) if path is not None else PINNED_LEDGER_PATH
-    report = verify_ledger_bytes(ledger_path)
-    if not report.passed:
+    report, entries = read_and_verify_ledger(path)
+    if entries is None:
         raise Af01LedgerError(f"凍結台帳の sha256 が一致しない: {report.to_json()}")
-    return parse_payload_ledger(ledger_path.read_text(encoding="utf-8"))
+    return entries
+
+
+def read_and_verify_ledger(
+    ledger_path: Path | str | None = None,
+) -> Tuple[Af01VerificationReport, Optional[Dict[str, str]]]:
+    """台帳を **1 回だけ読み**、そのバイトを hash し、同じバッファを parse する。
+
+    hash した後で読み直すと、その間に差し替えられた台帳を検証済みとして
+    扱う窓ができる（構造量と canonical 4 点さえ保てば残りの payload 集合を
+    すり替えられる — PR #330 Codex 第 4 巡 P1 / AGENTS.md「hash した bytes と
+    実行された bytes の間に cache の窓が無いか」）。
+
+    戻り値の entries は verdict が PASS のときだけ非 None。
+    """
+    path = Path(ledger_path) if ledger_path is not None else PINNED_LEDGER_PATH
+    expected = AF01_FROZEN_HASHES["af01_payload_ledger_sha256"]
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return (
+            Af01VerificationReport(
+                verdict=VERDICT_UNAVAILABLE,
+                checks={"payload_ledger_present": "FAIL"},
+                missing=[str(path)],
+            ),
+            None,
+        )
+    actual = hashlib.sha256(raw).hexdigest()
+    if actual != expected:
+        return (
+            Af01VerificationReport(
+                verdict=VERDICT_DRIFT,
+                checks={"payload_ledger_sha256": "FAIL"},
+                mismatches=[f"payload_ledger_sha256: expected={expected} actual={actual}"],
+            ),
+            None,
+        )
+    entries = parse_payload_ledger(raw.decode("utf-8"))
+    return (
+        Af01VerificationReport(verdict=VERDICT_PASS, checks={"payload_ledger_sha256": "PASS"}),
+        entries,
+    )
 
 
 def verify_ledger_bytes(ledger_path: Path | str | None = None) -> Af01VerificationReport:
     """台帳ファイル自身の実バイト sha256 を凍結値と照合する（bundle 不要）。"""
-    path = Path(ledger_path) if ledger_path is not None else PINNED_LEDGER_PATH
-    expected = AF01_FROZEN_HASHES["af01_payload_ledger_sha256"]
-    if not path.is_file():
-        return Af01VerificationReport(
-            verdict=VERDICT_UNAVAILABLE,
-            checks={"payload_ledger_present": "FAIL"},
-            missing=[str(path)],
-        )
-    actual = compute_file_sha256(path)
-    if actual != expected:
-        return Af01VerificationReport(
-            verdict=VERDICT_DRIFT,
-            checks={"payload_ledger_sha256": "FAIL"},
-            mismatches=[f"payload_ledger_sha256: expected={expected} actual={actual}"],
-        )
-    return Af01VerificationReport(
-        verdict=VERDICT_PASS,
-        checks={"payload_ledger_sha256": "PASS"},
-    )
+    return read_and_verify_ledger(ledger_path)[0]
 
 
 def check_ledger_structure(entries: Mapping[str, str]) -> Tuple[Dict[str, str], List[str]]:
@@ -245,11 +269,10 @@ def verify_bundle(
         )
 
     source = Path(ledger_path) if ledger_path is not None else (root / "PAYLOAD_SHA256SUMS.txt")
-    ledger_report = verify_ledger_bytes(source)
-    if not ledger_report.passed:
+    ledger_report, entries = read_and_verify_ledger(source)
+    if entries is None:
         return ledger_report
 
-    entries = parse_payload_ledger(source.read_text(encoding="utf-8"))
     checks, problems = check_ledger_structure(entries)
     checks["payload_ledger_sha256"] = "PASS"
 
@@ -320,10 +343,9 @@ def verify_deterministic_replay(
         )
 
     ledger_source = root / "PAYLOAD_SHA256SUMS.txt"
-    ledger_report = verify_ledger_bytes(ledger_source)
-    if not ledger_report.passed:
+    ledger_report, frozen = read_and_verify_ledger(ledger_source)
+    if frozen is None:
         return ledger_report
-    frozen = parse_payload_ledger(ledger_source.read_text(encoding="utf-8"))
 
     # generator を **起動する前に** 実バイトを認証する。台帳だけ検証して
     # bundle 側の generator をそのまま実行すると、drift を検出するはずの
@@ -449,9 +471,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         parser.error("--replay には --bundle-root が必要（bundle なしで手順 7 は成立しない）")
 
     if args.bundle_root is None:
-        report = verify_ledger_bytes()
-        if report.passed:
-            entries = parse_payload_ledger(PINNED_LEDGER_PATH.read_text(encoding="utf-8"))
+        report, entries = read_and_verify_ledger()
+        if entries is not None:
             checks, problems = check_ledger_structure(entries)
             checks["payload_ledger_sha256"] = "PASS"
             report = Af01VerificationReport(

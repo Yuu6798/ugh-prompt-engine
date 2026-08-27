@@ -209,13 +209,7 @@ def test_deterministic_replay_detects_generator_drift(tmp_path: Path, monkeypatc
     root = _authenticated_replay_bundle(
         tmp_path, body, {"C4/a.wav": hashlib.sha256(b"frozen").hexdigest()}
     )
-    monkeypatch.setattr(
-        v,
-        "verify_ledger_bytes",
-        lambda path=None: v.Af01VerificationReport(
-            verdict=v.VERDICT_PASS, checks={"payload_ledger_sha256": "PASS"}
-        ),
-    )
+    _pass_ledger_gate(monkeypatch, root)
     monkeypatch.setitem(
         m.AF01_FROZEN_HASHES,
         "af01_generator_sha256",
@@ -243,13 +237,7 @@ def test_deterministic_replay_passes_when_payload_is_identical(
     root = _authenticated_replay_bundle(
         tmp_path, body, {"C4/a.wav": hashlib.sha256(b"frozen").hexdigest()}
     )
-    monkeypatch.setattr(
-        v,
-        "verify_ledger_bytes",
-        lambda path=None: v.Af01VerificationReport(
-            verdict=v.VERDICT_PASS, checks={"payload_ledger_sha256": "PASS"}
-        ),
-    )
+    _pass_ledger_gate(monkeypatch, root)
     monkeypatch.setitem(
         m.AF01_FROZEN_HASHES,
         "af01_generator_sha256",
@@ -286,14 +274,24 @@ def _replay_bundle(tmp_path: Path, generator_body: str, ledger: dict) -> Path:
     return root
 
 
-def _pass_ledger_gate(monkeypatch) -> None:
-    monkeypatch.setattr(
-        v,
-        "verify_ledger_bytes",
-        lambda path=None: v.Af01VerificationReport(
-            verdict=v.VERDICT_PASS, checks={"payload_ledger_sha256": "PASS"}
-        ),
-    )
+def _pass_ledger_gate(monkeypatch, root: Path) -> None:
+    """凍結 sha 検査だけを肩代わりし、entries は実バイトから parse させる。
+
+    `read_and_verify_ledger()` は台帳を 1 回だけ読み、hash と parse を同じ
+    バッファで行う（TOCTOU 窓の閉塞 — PR #330 Codex 第 4 巡 P1）。
+    """
+    ledger = root / "PAYLOAD_SHA256SUMS.txt"
+
+    def _fake(path=None):
+        entries = v.parse_payload_ledger(Path(path or ledger).read_text(encoding="utf-8"))
+        return (
+            v.Af01VerificationReport(
+                verdict=v.VERDICT_PASS, checks={"payload_ledger_sha256": "PASS"}
+            ),
+            entries,
+        )
+
+    monkeypatch.setattr(v, "read_and_verify_ledger", _fake)
 
 
 def test_replay_refuses_to_execute_a_drifted_generator(tmp_path: Path, monkeypatch) -> None:
@@ -309,7 +307,7 @@ def test_replay_refuses_to_execute_a_drifted_generator(tmp_path: Path, monkeypat
         "generator_AF01_SF1.py": m.AF01_FROZEN_HASHES["af01_generator_sha256"],
     }
     root = _replay_bundle(tmp_path, body, ledger)
-    _pass_ledger_gate(monkeypatch)
+    _pass_ledger_gate(monkeypatch, root)
 
     report = v.verify_deterministic_replay(root)
     assert report.verdict == v.VERDICT_DRIFT
@@ -324,7 +322,7 @@ def test_replay_refuses_when_ledger_generator_sha_disagrees_with_pin(
     sentinel = tmp_path / "executed"
     body = f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n"
     root = _replay_bundle(tmp_path, body, {"generator_AF01_SF1.py": "0" * 64})
-    _pass_ledger_gate(monkeypatch)
+    _pass_ledger_gate(monkeypatch, root)
 
     report = v.verify_deterministic_replay(root)
     assert report.verdict == v.VERDICT_DRIFT
@@ -337,7 +335,7 @@ def test_replay_refuses_when_generator_is_absent_from_ledger(
 ) -> None:
     """台帳に generator が載っていない bundle は実行しない。"""
     root = _replay_bundle(tmp_path, "pass\n", {"C4/a.wav": "0" * 64})
-    _pass_ledger_gate(monkeypatch)
+    _pass_ledger_gate(monkeypatch, root)
     report = v.verify_deterministic_replay(root)
     assert report.verdict == v.VERDICT_DRIFT
     assert report.checks["generator_in_ledger"] == "FAIL"
@@ -355,7 +353,7 @@ def test_replay_detects_generator_self_mutation(tmp_path: Path, monkeypatch) -> 
     (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(
         v.render_payload_ledger({"generator_AF01_SF1.py": digest})
     )
-    _pass_ledger_gate(monkeypatch)
+    _pass_ledger_gate(monkeypatch, root)
     monkeypatch.setitem(m.AF01_FROZEN_HASHES, "af01_generator_sha256", digest)
 
     report = v.verify_deterministic_replay(root)
@@ -381,13 +379,7 @@ def test_replay_reports_unreproduced_payload_as_drift(tmp_path: Path, monkeypatc
         body,
         {"a.txt": hashlib.sha256(b"x").hexdigest(), "b.txt": "0" * 64},
     )
-    monkeypatch.setattr(
-        v,
-        "verify_ledger_bytes",
-        lambda path=None: v.Af01VerificationReport(
-            verdict=v.VERDICT_PASS, checks={"payload_ledger_sha256": "PASS"}
-        ),
-    )
+    _pass_ledger_gate(monkeypatch, root)
     monkeypatch.setitem(
         m.AF01_FROZEN_HASHES,
         "af01_generator_sha256",
@@ -426,3 +418,70 @@ def test_cli_replay_runs_bundle_verification_first(tmp_path: Path, monkeypatch) 
     monkeypatch.setattr(v, "verify_deterministic_replay", fake_replay)
     assert v.main(["--bundle-root", str(tmp_path), "--replay"]) == 1
     assert calls == ["bundle"], "bundle 照合が落ちたら replay へ進んではならない"
+
+
+# --- 第 4 巡: 台帳の read-once（PR #330 Codex 第 4 巡 P1） -----------------
+
+
+def test_ledger_is_read_once_for_hash_and_parse(tmp_path: Path, monkeypatch) -> None:
+    """hash したバイトと parse するバイトが同一であること。
+
+    hash 後に読み直すと、その間に差し替えられた台帳を検証済みとして扱う窓が
+    できる。`read_and_verify_ledger()` が実ファイルを 1 回しか読まないことを
+    読み取り回数で確認する。
+    """
+    ledger = tmp_path / "PAYLOAD_SHA256SUMS.txt"
+    entries = {"C4/a.wav": hashlib.sha256(b"x").hexdigest()}
+    raw = v.render_payload_ledger(entries)
+    ledger.write_bytes(raw)
+    monkeypatch.setitem(
+        m.AF01_FROZEN_HASHES,
+        "af01_payload_ledger_sha256",
+        hashlib.sha256(raw).hexdigest(),
+    )
+
+    reads: list[str] = []
+    original = Path.read_bytes
+
+    def counting_read_bytes(self):
+        if self == ledger:
+            reads.append("read")
+        return original(self)
+
+    monkeypatch.setattr(Path, "read_bytes", counting_read_bytes)
+    report, parsed = v.read_and_verify_ledger(ledger)
+    assert report.verdict == v.VERDICT_PASS
+    assert parsed == entries
+    assert len(reads) == 1, f"台帳を {len(reads)} 回読んでいる（read-once 契約違反）"
+
+
+def test_read_and_verify_ledger_returns_no_entries_on_drift(tmp_path: Path) -> None:
+    """凍結 sha が合わない台帳の entries を呼び出し側へ渡さない。"""
+    ledger = tmp_path / "PAYLOAD_SHA256SUMS.txt"
+    ledger.write_bytes(v.render_payload_ledger({"a.wav": "0" * 64}))
+    report, parsed = v.read_and_verify_ledger(ledger)
+    assert report.verdict == v.VERDICT_DRIFT
+    assert parsed is None
+
+
+def test_verify_bundle_rejects_symlink_escaping_the_root(tmp_path: Path, monkeypatch) -> None:
+    """§29 手順 6: bundle 外へ出る symlink を hash 前に拒否する。
+
+    外部ファイルへの symlink を並べた薄いディレクトリが「完全な bundle」として
+    通ってはならない（PR #330 Codex 第 3 巡 P2）。
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    payload = outside / "a.wav"
+    payload.write_bytes(b"frozen")
+
+    root = tmp_path / "bundle"
+    (root / "C4").mkdir(parents=True)
+    (root / "C4" / "a.wav").symlink_to(payload)
+    entries = {"C4/a.wav": hashlib.sha256(b"frozen").hexdigest()}
+    (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(v.render_payload_ledger(entries))
+    _pass_ledger_gate(monkeypatch, root)
+
+    report = v.verify_bundle(root)
+    assert report.verdict == v.VERDICT_DRIFT
+    assert report.checks["payload_contained_in_bundle"] == "FAIL"

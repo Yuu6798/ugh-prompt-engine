@@ -157,14 +157,19 @@ SCIENTIFIC_OUTCOMES: Tuple[str, ...] = (
 )
 
 # §5.3: claim_strength_target は scalar へ圧縮しない（ベクトルのまま保存）。
-CLAIM_STRENGTH_KEYS: Tuple[str, ...] = (
-    "measurement_compatibility_claim",
-    "external_schema_validity_claim",
-    "trait_identity_equivalence_claim",
-    "performance_claim",
-    "transfer_or_reconstruction_claim",
-    "generative_trait_compatibility_claim",
-)
+# 値も §5.3 の凍結語彙そのもので固定する — 任意の非空文字列を許すと
+# `performance_claim: C2`（§6 で対象外と定めた軸）や `C999` のような
+# 無意味な値で R10-G0 が開く（PR #330 Codex 第 4 巡 P1）。
+CLAIM_STRENGTH_TARGET: Dict[str, str] = {
+    "measurement_compatibility_claim": "C2",
+    "external_schema_validity_claim": "C1-C2",
+    "trait_identity_equivalence_claim": "C0",
+    "performance_claim": "C0",
+    "transfer_or_reconstruction_claim": "C0",
+    "generative_trait_compatibility_claim": "C1-C2",
+}
+
+CLAIM_STRENGTH_KEYS: Tuple[str, ...] = tuple(CLAIM_STRENGTH_TARGET)
 
 # §14.5 / §27「`total_score`フィールドは禁止」。同義の圧縮スカラも塞ぐ。
 FORBIDDEN_RESULT_FIELDS: Tuple[str, ...] = (
@@ -625,9 +630,12 @@ def _validate_claim_strength(obj: Any) -> None:
             f"claim_strength_target: {sorted(CLAIM_STRENGTH_KEYS)} のみ許容"
             f"（実際 {sorted(mapping)}）"
         )
-    for key, value in mapping.items():
-        if not isinstance(value, str) or not value:
-            raise Run10ContractError(f"claim_strength_target.{key}: 非空の文字列が必要")
+    for key, expected in CLAIM_STRENGTH_TARGET.items():
+        if mapping[key] != expected:
+            raise Run10ContractError(
+                f"claim_strength_target.{key}: §5.3 の凍結値 {expected!r} でなければならない"
+                f"（実際 {mapping[key]!r}）"
+            )
 
 
 def load_run10_contract(path: Path | str) -> Run10Contract:
@@ -717,9 +725,32 @@ def validate_results_document(doc: Any) -> None:
     _validate_results_evidence(mapping, verdict, entry, outcomes)
 
 
-# 成功側 outcome ごとに要求する evidence 節（閉世界契約。AGENTS.md「回収・検収系の
+# 「比較地図・生成互換が成立した」と主張する側の outcome（閉世界）。
+# protocol_verdict が BLOCKED / FAILED のときに名乗れない集合であり、
+# compatibility_matrix の per-entry evidence を要求する集合でもある。
+#
+# `MEASUREMENT_OVERFIT_DETECTED` はここに**含めない**。§12.6 / §22.2 により
+# これは「成立の主張」ではなく有効な否定的診断であり、protocol_verdict が
+# BLOCKED でも成立し得る。ただし evidence を伴う結論であることに変わりはない
+# ため、下の evidence 表には登録する（PR #330 Codex 第 4 巡 P1）。
+_ESTABLISHED_OUTCOMES: Tuple[str, ...] = (
+    "COMPATIBILITY_MAP_ESTABLISHED",
+    "PARTIAL_COMPATIBILITY_MAP",
+    "SCHEMA_GAP_IDENTIFIED",
+    "GENERATIVE_COMPATIBILITY_ESTABLISHED",
+    "MEASUREMENT_ONLY_COMPATIBILITY",
+    "NO_STABLE_CROSS_SYSTEM_MAPPING",
+)
+
+# outcome ごとに要求する evidence 節（閉世界契約。AGENTS.md「回収・検収系の
 # 成功条件は閉世界契約で書く」）。実行時データから要求集合を導出しない。
 _EVIDENCE_FOR_OUTCOME: Dict[str, Tuple[str, ...]] = {
+    # §12.6 / §22.2 Outcome C: overfit の検出自体が evidence を伴う結論であり、
+    # データ無しで名乗れる中立な未完状態ではない。
+    "MEASUREMENT_OVERFIT_DETECTED": (
+        "external_calibration",
+        "replay",
+    ),
     "COMPATIBILITY_MAP_ESTABLISHED": (
         "external_calibration",
         "decision_rules",
@@ -894,8 +925,8 @@ def _validate_results_evidence(
                 "phase_b_entry=ENTER の PASS",
             )
     else:
-        # BLOCKED / FAILED で成功側 outcome を名乗らせない（§22.1 / §22.2）。
-        established = [o for o in outcomes if o in _EVIDENCE_FOR_OUTCOME]
+        # BLOCKED / FAILED で成立側 outcome を名乗らせない（§22.1 / §22.2）。
+        established = [o for o in outcomes if o in _ESTABLISHED_OUTCOMES]
         if established:
             raise Run10ContractError(
                 f"results: protocol_verdict={verdict} で成功側 outcome {established} は名乗れない"
@@ -917,7 +948,7 @@ def _validate_results_evidence(
         )
 
     matrix = mapping.get("compatibility_matrix")
-    established = any(outcome in _EVIDENCE_FOR_OUTCOME for outcome in outcomes)
+    established = any(outcome in _ESTABLISHED_OUTCOMES for outcome in outcomes)
     if isinstance(matrix, Mapping):
         for trait_id, entry_doc in matrix.items():
             assert_compatibility_entry(str(trait_id), entry_doc)
@@ -934,6 +965,11 @@ def _validate_results_evidence(
                     f"compatibility_matrix.{trait_id}: 成功側 outcome には"
                     f" {_COMPATIBILITY_ENTRY_REQUIRED} が必要（欠落 {lacking}）"
                 )
+
+    generative = mapping.get("generative_compatibility_matrix")
+    if isinstance(generative, Mapping):
+        for trait_id, entry_doc in generative.items():
+            assert_generative_entry(str(trait_id), entry_doc)
 
     synthesis = mapping.get("synthesis_validation")
     if isinstance(synthesis, Mapping) and synthesis:
@@ -971,6 +1007,34 @@ def assert_compatibility_entry(trait_id: str, entry: Any) -> None:
     if status == "AQUEST_ONLY_CANDIDATE" and mapping.get("phase_b_eligible") is True:
         raise Run10ContractError(
             f"{trait_id}: AQUEST_ONLY_CANDIDATE は phase_b_eligible にできない（§15.5 / §17）"
+        )
+
+
+def assert_generative_entry(trait_id: str, entry: Any) -> None:
+    """§16 / §20.3: GenerativeCompatibilityMatrix の 1 行を検証する。
+
+    `GENERATIVE_STATUS` が宣言だけされて一度も適用されていなかったため、
+    `synthesis_status: NOT_A_REAL_STATUS` のような無効分類のまま生成互換の
+    成立を記録できた（PR #330 Codex 第 4 巡 P1）。
+    """
+    mapping = _require_mapping(f"generative_compatibility_matrix.{trait_id}", entry)
+    status = mapping.get("synthesis_status")
+    if status not in GENERATIVE_STATUS:
+        raise Run10ContractError(
+            f"{trait_id}.synthesis_status: 未知の値 {status!r}（§16 が唯一の正規 enum）"
+        )
+    measurement_status = mapping.get("measurement_status")
+    if measurement_status is not None and measurement_status not in COMPATIBILITY_STATUS:
+        raise Run10ContractError(
+            f"{trait_id}.measurement_status: 未知の値 {measurement_status!r}（§15）"
+        )
+    entry_state = mapping.get("phase_b_entry")
+    if entry_state is not None and entry_state not in PHASE_B_ENTRY_STATES + ("NOT_ELIGIBLE",):
+        raise Run10ContractError(f"{trait_id}.phase_b_entry: 未知の値 {entry_state!r}")
+    # §15.5 / §21 R10-G18: AQUEST_ONLY_CANDIDATE は Phase B の対象外。
+    if measurement_status == "AQUEST_ONLY_CANDIDATE" and status != "NOT_SYNTHESIS_ELIGIBLE":
+        raise Run10ContractError(
+            f"{trait_id}: AQUEST_ONLY_CANDIDATE は NOT_SYNTHESIS_ELIGIBLE 以外になれない"
         )
 
 

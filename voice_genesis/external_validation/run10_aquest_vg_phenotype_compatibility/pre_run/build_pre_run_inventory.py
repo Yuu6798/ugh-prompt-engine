@@ -49,6 +49,8 @@ from af01_freeze_verifier import (  # noqa: E402
     verify_bundle,
     verify_ledger_bytes,
 )
+from svp_rpe.utils.atomic_io import atomic_write_bytes  # noqa: E402
+
 from run10_schema import (  # noqa: E402
     AF01_ALIAS_COUNT,
     AF01_E0_CALIBRATION_CASES,
@@ -379,7 +381,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     payload = canonical_json_bytes(inventory)
-    Path(args.out).write_bytes(payload)
+    # 既定の出力先は追跡中の正典 `pre_run/inventory.json` である。in-place の
+    # truncate だと中断・容量不足で前の有効な inventory を壊して部分成果物を
+    # 残す（PR #330 Codex 第 4 巡 P2）。リポジトリの atomic write 集約実装
+    # （CLAUDE.md「atomic write 集約」— src/svp_rpe/utils/atomic_io.py）へ委譲する。
+    atomic_write_bytes(Path(args.out), payload)
     print(payload.decode("utf-8"))
     return 0 if inventory["gate_state"] == "COMPLETE" else 1
 

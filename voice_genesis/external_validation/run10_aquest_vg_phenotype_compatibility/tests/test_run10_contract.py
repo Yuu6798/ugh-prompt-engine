@@ -617,7 +617,7 @@ def test_generative_outcome_requires_phase_b_entry() -> None:
     """§16: GENERATIVE_COMPATIBILITY_ESTABLISHED は phase_b_entry=ENTER が前提。"""
     doc = _passing_results()
     doc["scientific_outcome"] = ["GENERATIVE_COMPATIBILITY_ESTABLISHED"]
-    doc["generative_compatibility_matrix"] = {"F1_F2_F3": {"synthesis_status": "x"}}
+    doc["generative_compatibility_matrix"] = {"F1_F2_F3": {"synthesis_status": "GENERATIVELY_COMPATIBLE"}}
     doc["synthesis_validation"] = {
         "controls": {"G_null": {}, "G_target": {}, "G_inverse": {}},
         "construction_meter": {"m": "PASS"},
@@ -676,7 +676,7 @@ def test_phase_b_entry_requires_g15_in_the_gate_ledger() -> None:
     doc = _passing_results()
     doc["phase_b_entry"] = "ENTER"
     doc["scientific_outcome"] = ["GENERATIVE_COMPATIBILITY_ESTABLISHED"]
-    doc["generative_compatibility_matrix"] = {"F1_F2_F3": {"synthesis_status": "x"}}
+    doc["generative_compatibility_matrix"] = {"F1_F2_F3": {"synthesis_status": "GENERATIVELY_COMPATIBLE"}}
     doc["synthesis_validation"] = {
         "controls": {"G_null": {"n": 1}, "G_target": {"n": 1}, "G_inverse": {"n": 1}},
         "construction_meter": {"m": "PASS"},
@@ -770,7 +770,7 @@ def test_all_phase_b_derived_outcomes_require_enter(entry_state: str) -> None:
         doc = _passing_results()
         doc["phase_b_entry"] = entry_state
         doc["scientific_outcome"] = [outcome]
-        doc["generative_compatibility_matrix"] = {"F1_F2_F3": {"synthesis_status": "x"}}
+        doc["generative_compatibility_matrix"] = {"F1_F2_F3": {"synthesis_status": "GENERATIVELY_COMPATIBLE"}}
         doc["synthesis_validation"] = {
             "controls": {"G_null": {"n": 1}, "G_target": {"n": 1}, "G_inverse": {"n": 1}},
             "construction_meter": {"m": "PASS"},
@@ -778,3 +778,103 @@ def test_all_phase_b_derived_outcomes_require_enter(entry_state: str) -> None:
         }
         with pytest.raises(m.Run10ContractError, match="phase_b_entry=ENTER"):
             m.validate_results_document(doc)
+
+
+# --- 第 4 巡: §16 enum / overfit evidence / claim 語彙 ---------------------
+
+
+def test_generative_matrix_entries_are_enum_validated() -> None:
+    """§16 / §20.3: GENERATIVE_STATUS が宣言だけで未適用だった穴を塞ぐ。"""
+    m.assert_generative_entry("F1", {"synthesis_status": "GENERATIVELY_PARTIAL"})
+    with pytest.raises(m.Run10ContractError, match="未知の値"):
+        m.assert_generative_entry("F1", {"synthesis_status": "NOT_A_REAL_STATUS"})
+
+
+def test_generative_matrix_is_validated_inside_results() -> None:
+    """results 経由でも §16 の enum 規律が効く（PR #330 Codex 第 4 巡 P1）。"""
+    doc = _passing_results()
+    doc["phase_b_entry"] = "ENTER"
+    doc["scientific_outcome"] = ["GENERATIVE_COMPATIBILITY_ESTABLISHED"]
+    doc["hard_gates"].update({gate_id: "PASS" for gate_id, _ in m.PHASE_B_GATES})
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "PASS"
+    doc["synthesis_validation"] = {
+        "controls": {"G_null": {"n": 1}, "G_target": {"n": 1}, "G_inverse": {"n": 1}},
+        "construction_meter": {"m": "PASS"},
+        "confirmation_meter": {"m2": "PASS"},
+    }
+    doc["generative_compatibility_matrix"] = {"F1": {"synthesis_status": "NOT_A_REAL_STATUS"}}
+    with pytest.raises(m.Run10ContractError, match="未知の値"):
+        m.validate_results_document(doc)
+
+
+def test_aquest_only_candidate_cannot_be_synthesis_eligible_in_generative_matrix() -> None:
+    """§15.5 / §21 R10-G18: schema 拡張候補を生成対象へ格上げさせない。"""
+    with pytest.raises(m.Run10ContractError, match="NOT_SYNTHESIS_ELIGIBLE"):
+        m.assert_generative_entry(
+            "AQUEST_X01",
+            {
+                "measurement_status": "AQUEST_ONLY_CANDIDATE",
+                "synthesis_status": "GENERATIVELY_COMPATIBLE",
+            },
+        )
+
+
+def test_measurement_overfit_detected_requires_evidence() -> None:
+    """§12.6 / §22.2 Outcome C: overfit 検出はデータ無しで名乗れない。"""
+    doc = _minimal_results()
+    doc["scientific_outcome"] = ["MEASUREMENT_OVERFIT_DETECTED"]
+    with pytest.raises(m.Run10ContractError, match="external_calibration"):
+        m.validate_results_document(doc)
+
+
+def test_measurement_overfit_detected_is_allowed_under_blocked_verdict() -> None:
+    """overfit は成立主張ではなく有効な否定的診断であり BLOCKED でも成り立つ。
+
+    成功側 outcome の集合（`_ESTABLISHED_OUTCOMES`）と evidence 要求表
+    （`_EVIDENCE_FOR_OUTCOME`）を分離した理由がこれである。
+    """
+    doc = _minimal_results()
+    doc["scientific_outcome"] = ["MEASUREMENT_OVERFIT_DETECTED"]
+    doc["external_calibration"] = {
+        "e0_parameter_recovery": {"01_f1_low": {"abs_error": 900.0}},
+        "meter_calibration_status": {"F1_F2_F3": "UNCALIBRATED"},
+        "measurement_overfit_signal": True,
+    }
+    doc["replay"] = {
+        "same_process": "PASS",
+        "cross_process": "PASS",
+        "feature_json_sha": "d" * 64,
+    }
+    m.validate_results_document(doc)
+
+
+def test_established_outcomes_are_separate_from_the_evidence_table() -> None:
+    """overfit は evidence を要求されるが成立側 outcome ではない。"""
+    assert "MEASUREMENT_OVERFIT_DETECTED" in m._EVIDENCE_FOR_OUTCOME
+    assert "MEASUREMENT_OVERFIT_DETECTED" not in m._ESTABLISHED_OUTCOMES
+
+
+@pytest.mark.parametrize(
+    "key, bad",
+    [
+        ("performance_claim", "C2"),
+        ("trait_identity_equivalence_claim", "C999"),
+        ("measurement_compatibility_claim", "C3"),
+        ("transfer_or_reconstruction_claim", "C1"),
+    ],
+)
+def test_claim_strength_vocabulary_is_frozen(
+    contract_doc: Dict[str, Any], key: str, bad: str
+) -> None:
+    """§5.3: 任意の非空文字列を許すと主張の天井が意味を失う。"""
+    doc = copy.deepcopy(contract_doc)
+    doc["claim_strength_target"][key] = bad
+    with pytest.raises(m.Run10ContractError, match=key):
+        m.parse_run10_contract(doc)
+
+
+def test_claim_strength_ceilings_match_design() -> None:
+    """§5.3 の C0 軸（Performance / Identity 等価 / 移植）が凍結されている。"""
+    assert m.CLAIM_STRENGTH_TARGET["performance_claim"] == "C0"
+    assert m.CLAIM_STRENGTH_TARGET["trait_identity_equivalence_claim"] == "C0"
+    assert m.CLAIM_STRENGTH_TARGET["transfer_or_reconstruction_claim"] == "C0"
