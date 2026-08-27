@@ -284,3 +284,144 @@ run1/run2/run3 × 2 = 6 本）は rights 制約により repo 非収載——sha
 みを本記録・manifest へ pin する（reexport emb と同型の session-artifact
 扱い。repo canonical builder + repo 収載 corpus 由来ファイルにより決定論
 的に再導出可能）。
+
+## 12. PR #329 Codex bot レビュー第1巡対応 + run4（2026-08-27）
+
+Claude 完結ルート（フェーズ1: 実装 + 検証 + 返信起草。git commit/push は
+別フェーズ）。採用済み指摘2件（いずれも P1、Fable 設計判定済み）。**抽出
+式・アラインメント規則・直列化・バンドル内容は無変更**（変更は検証・公開
+経路のみ）。
+
+### Fix 1（指摘1）: sealed-holdout 境界の builder 側機械強制
+
+旧実装は `--split-manifest`/`extract-song --song-id` が任意パス・任意
+song_id を無検証で受け付けており、(a) sealed ID が row_ids.training/
+validation へ混入した split manifest、(b) 構造が壊れた manifest、
+(c) 件数が固定分割（70/15/15）と食い違う manifest のいずれを渡しても
+decode/抽出へそのまま進む経路があった。
+
+- `run9_schema.py` に `load_pinned_practice_split_manifest()` を新設
+  （`load_pinned_speaker_map_manifest()`/`load_pinned_education_lesson_
+  manifest()` と同型の3層防御・read-once 契約）: `RUN9_CONTRACT.yaml`
+  の `practice_audio_split_manifest_sha` pin との実バイト sha256 照合 +
+  `validate_practice_split_manifest()`（3集合非交差検証、既存）。
+- `education_lesson_builder.py` に `run9_schema` sibling import を追加
+  （mora を指すローカル変数 `m` と衝突するためエイリアスなし）。
+  `load_training_validation_ids()` を上記 loader 経由へ全面書き換え、
+  training=70/validation=15/sealed_holdout=15 の件数を追加で機械強制
+  （`_PRACTICE_SPLIT_EXPECTED_COUNTS`）。
+- `run_build()`/`_cmd_extract_song()` とも、対象 song_id が凍結済み
+  training∪validation に属することを decode/抽出前に
+  `_require_song_ids_within_frozen_split()`（両者共有の単一実装）で検証
+  し、集合外（sealed_holdout 含む）は `ExtractorStopError` で即停止する。
+  `extract-song` CLI に `--split-manifest`/`--contract-path` を新設
+  （`build` は既存の `--split-manifest` に加え `--contract-path` を新設）。
+  `main()` の例外捕捉を `run9_schema.Run9ValidationError` にも拡張
+  （終了コード2、"STOP:" 表示は `ExtractorStopError` と同一）。
+- 新設ユニットテスト（`tests/test_education_lesson_builder.py`）: sealed
+  ID が training/validation いずれかへ混入した split manifest の拒否
+  （2件）、件数不一致 manifest の拒否、`extract-song` CLI が
+  sealed_holdout song_id / 任意 song_id を拒否（2件、実コーパス不要）、
+  `_cmd_extract_song()` のゲートが `extract_song()`（decode 本体）より
+  前に効くことの直接証跡（monkeypatch で `extract_song()` 呼び出し自体を
+  検知）、改ざん（pin 不一致）manifest の拒否、存在しない manifest パス
+  の拒否——計8件。
+
+### Fix 2（指摘2）: バンドル2本の atomic ペア公開
+
+旧実装は `write_bundle_json(training_bundle, training_out)` の後に
+`write_bundle_json(validation_bundle, validation_out)` を実行しており、
+training 書き込み成功後に validation 書き込みが失敗すると混合世代ペアが
+最終出力ディレクトリに観測され得た。
+
+- `_atomic_write_bytes()`（`speaker_map_builder._atomic_write_bytes()`
+  と同型の staging+fsync パターン、run9 系は svp_rpe 側 `utils/
+  atomic_io` を import しない独立構成のため同型の最小実装を自足）+
+  `publish_bundle_pair()` を新設: training/validation の両方を同一
+  ディレクトリ内の staging ファイルへ書き切ってから、**両方成功した
+  場合に限り** それぞれの最終名へ `os.replace()` する。training の
+  staging/replace が先行し validation の staging が失敗した場合、
+  training の staging も破棄し、**どちらの最終名も書き換えない**。
+- `run_build()` は `write_bundle_json()` 2回呼び出しを `publish_bundle_
+  pair()` 1回へ置換（直列化本体は `_serialize_bundle_json()` へ共通化、
+  `write_bundle_json()` 自体は非 atomic 単本書き込みとして `assemble`
+  サブコマンド用に維持——ペア公開の対象ではないため）。
+- 失敗注入回帰テスト3件: (i) 旧世代が存在する状態で validation staging
+  を monkeypatch で失敗させ、training/validation とも旧世代のまま無傷で
+  残ることを確認、(ii) 旧世代が存在しない（初回 build）状態で同じ失敗を
+  注入し、最終出力ディレクトリに training_bundle.json/validation_
+  bundle.json のいずれも現れないことを確認、(iii) 正常系（両方成功時の
+  byte-exact 書き込み・staging 残骸なし）。
+
+### 副次的変更: pyyaml が builder の新規依存に
+
+`run9_schema.py` はモジュール冒頭で `import yaml`（PyYAML、本体必須
+依存）を無条件実行するため、`education_lesson_builder.py` が
+`run9_schema` を import するようになった結果、`education_lesson_
+builder.py` を実行するには pyyaml が必要になった（抽出処理そのもの
+——decode/WORLD F0/musicxml パース等——には無関係、split-manifest/
+contract 検証にのみ使う）。venv_h3b には未インストールだったため
+`pip install pyyaml`（6.0.3、PyPI キャッシュ済みホイール、追加の外部
+取得なし）で追加した。`extraction_dependency_pins`（numpy/scipy/
+pyworld/python のバージョン pin、抽出数式が消費する依存のみを対象）は
+無変更のまま——pyyaml は抽出数式を一切消費しない。
+
+repo 収載 builder の実バイト sha256（更新後）:
+```
+d93fc17b2f10b2e0ec6d240027875d22a748f9b508de9a5233144a78b52799d9
+```
+（旧値 `550eda93cf9e1cbd9f95a2525db03cda73d753d63e4df79003d0757acef4e8ae`
+は履歴として本記録 §7 に残置する。`inputs/education_technique_lesson_
+manifest.json` の `builder_provenance.builder_sha256` をこの新値へ更新
+した——`run9_schema.load_pinned_education_lesson_manifest()` cross-check
+(b) が実バイトと照合するため。連鎖して manifest raw sha256 も変わり、
+`RUN9_CONTRACT.yaml` の `education_technique_lesson_manifest_sha` を
+第2世代へ repin した）。
+
+### run4: repo builder（第1巡対応後）による再現実行（独立4回目）
+
+venv_h3b の python3（`pip install pyyaml` 追加後）で、修正後の repo
+builder を workdir 展開済み corpus（`expanded/PJS_corpus_ver1.1`）に対し
+`build` サブコマンドで実行した。freeze record・spec・split manifest・
+contract はいずれも repo 収載の既定パス（CLI 引数省略、デフォルト値の
+まま）。
+
+```
+$ python3 education_lesson_builder.py build \
+    --corpus-root <workdir>/expanded/PJS_corpus_ver1.1 \
+    --out-dir <workdir>/run4
+```
+
+```
+real 4m20.736s
+```
+
+| バンドル | 既 pin（run1/run2/run3） | run4 sha256 | 一致 |
+|---|---|---|---|
+| training | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | **PASS** |
+| validation | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | **PASS** |
+
+`cmp run1/training_bundle.json run4/training_bundle.json` / `cmp
+run1/validation_bundle.json run4/validation_bundle.json` ともに差分 0
+（完全一致）を確認済み。
+
+`training_technique_lesson_sha256`/`validation_technique_lesson_sha256`
+（既 PINNED、determinism_evidence.{training,validation} の run1==run2==
+run3 と一致）が run4 とも一致したことで、**検証・公開経路の変更（Fix
+1/Fix 2）が抽出式・アラインメント・直列化・バンドル内容に一切影響を
+与えていないことを実測で確認した**——本フェーズの不変条件が満たされて
+いる。
+
+### 検証結果
+
+- `ruff check .`: clean
+- `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`:
+  本節（builder_provenance.builder_sha256 の repo 収載値更新）を含む本
+  ファイル最終稿確定後に全 PASS（2191 件、`test_harness3b_load_pinned_
+  education_lesson_manifest_happy_path` 等 builder_sha256 cross-check
+  依存の10件を含む——本節確定前の中間実行では builder.py のバイトが
+  未更新の manifest と食い違い意図通り FAIL していたことを確認済み、
+  fail-closed 機構が実際に機能している直接証跡）。
+- freeze record（`inputs/h3b_freeze_record.json`）: 無変更（workdir
+  extractor の凍結記録であり、repo builder の identity は manifest 側
+  `builder_provenance` が別途担う確立設計——本フェーズでも変更していない）。

@@ -1774,8 +1774,31 @@ founder_genome_shas:
 # `run9_schema.validate_education_lesson_manifest()` /
 # `validate_practice_split_manifest()` が manifest 本体の `schema` 欄
 # 自己宣言で担う）。両者は別対象であり本欄1つに統合しない。
+# 2026-08-27 repin（第2世代。PR #329 Codex bot レビュー第1巡指摘1/2、
+# いずれも P1、採用対応。Claude 完結ルート、フェーズ1）:
+# `education_lesson_builder.py` へ2件の fail-closed 強化を実装した——
+# (1) sealed-holdout 境界の builder 側機械強制: `--split-manifest`/
+# `extract-song --song-id` が任意パス・任意 song_id を無検証で受け付け
+# ていた穴を閉じ、`run9_schema.load_pinned_practice_split_manifest()`
+# （新設、他の `load_pinned_*` と同型の3層防御）経由でのみ split
+# manifest を消費し、training=70/validation=15/sealed_holdout=15 の
+# 件数を機械強制、対象 song_id が凍結済み training∪validation に
+# 属することを decode/抽出前に検証する。(2) バンドル2本の atomic ペア
+# 公開: training/validation を staging へ書き切ってから両方成功時のみ
+# `os.replace()` する `publish_bundle_pair()` を新設し、片方の書き込み
+# 失敗で混合世代ペアが観測される窓を閉じた。**抽出式・アラインメント・
+# 直列化・バンドル内容は無変更**（検証・公開経路のみの変更）——venv_h3b
+# の python3 による repo builder 再現実行（run4）で training/validation
+# バンドルとも既 pin（run1/run2/run3）と byte 完全一致することを実測で
+# 確認済み（詳細 = `HARNESS3B_EDUCATION_LESSON_RECORD.md` §12）。builder
+# バイト変更に伴い manifest の `builder_provenance.builder_sha256`（新値
+# = d93fc17b2f10b2e0ec6d240027875d22a748f9b508de9a5233144a78b52799d9）と
+# `builder_provenance.detail_record_sha256`（§12 追記後の
+# 実測記録 raw sha256）を更新し、manifest raw sha256 が変わったため
+# 本欄を repin した。旧値（第1世代、PINNED 化時点）は履歴として保持する:
+#   c181036167a8e3fd003307565f77bf441bb649e6b0e1579ff104790a686b7cfa
 education_technique_lesson_manifest_sha:
-  value: "c181036167a8e3fd003307565f77bf441bb649e6b0e1579ff104790a686b7cfa"
+  value: "5dc503a3728cd9620c18394998dabd5338460f73b85ccde5e96faeeccc032f6f"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-

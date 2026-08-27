@@ -50,16 +50,26 @@ manifest.json` の `builder_provenance.builder_sha256`
 
 禁止事項（HARNESS-3b spec §7・裁定 §2 逐語、継続）:
   - sealed_holdout row_ids はいかなるコードパスにも現れない —
-    `_load_split_ids()` は split manifest の `row_ids.training`/
-    `row_ids.validation` のみを読み、`row_ids.sealed_holdout` は一切
-    参照しない。
+    `load_training_validation_ids()` は split manifest の
+    `row_ids.training`/`row_ids.validation` のみを読み、
+    `row_ids.sealed_holdout` は一切参照しない（PR #329 第1巡レビュー
+    指摘1, P1, 採用対応で `run9_schema.load_pinned_practice_split_
+    manifest()` 経由の pin 検証を追加してからも不変——sealed_holdout は
+    3集合非交差検証にのみ間接的に関与し、training/validation の抽出
+    対象集合には決して現れない）。`extract-song` CLI も同じ frozen
+    training∪validation 集合外の song_id（sealed_holdout 含む）を
+    decode 前に拒否する。
   - advisory 6 channel（vibrato/breath_placement/release_persistence/
     terminal_mel_persistence/HNR/vowel_drift）のコードパスを実装しない。
   - corpus 統計正規化を実装しない（energy_envelope は per-phrase 自己
     正規化のみ）。
-  - stdlib + numpy + scipy + pyworld のみに依存する。librosa import なし。
-    svp_rpe / voice_genesis の実装モジュールを import しない（定数は Read
-    による転記のみ、下記 FRAME_PERIOD_MS 参照）。
+  - stdlib + numpy + scipy + pyworld のみに依存する（抽出ロジック本体）。
+    librosa import なし。抽出式が消費する定数は svp_rpe / voice_genesis
+    の実装モジュールを import せず Read による転記のみで得る（下記
+    FRAME_PERIOD_MS 参照）。`run9_schema`（run9 系 sibling モジュール、
+    抽出ロジックではなく split-manifest/contract 検証専用）のみ例外的に
+    import する（PR #329 第1巡レビュー指摘1 対応、`practice_split_
+    builder.py`/`speaker_map_builder.py` と同じ sibling import 前例）。
 
 出力: training/validation 各1本の JSON バンドル（`run9-technique-lesson-
 bundle/1.0`）。バンドル実体ファイル自体は repo にコミットしない（rights
@@ -71,8 +81,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import struct
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,6 +92,18 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.signal import resample_poly
+
+import run9_schema  # noqa: E402  (sibling import — repo-wide run9_* convention;
+# PR #329 第1巡レビュー指摘1, P1, 採用対応で新設: sealed-holdout 境界の機械
+# 強制には RUN9_CONTRACT.yaml の practice_audio_split_manifest_sha pin と
+# `run9_schema.validate_practice_split_manifest()` が要る。これは抽出式・
+# アラインメント・直列化のロジック（module docstring「svp_rpe/voice_genesis
+# の実装モジュールを import しない」の対象）ではなく検証・公開経路の話であり、
+# `practice_split_builder.py`/`speaker_map_builder.py` が既に採用している
+# run9_schema sibling import の前例に倣う（両ファイルは `import run9_schema
+# as m` だが、本ファイルは mora を指すローカル変数 `m` を全域で多用するため
+# エイリアスなしで import する——`ruff` F402 "Import shadowed by loop
+# variable" 回避）。
 
 # pyworld is an optional dependency of this builder (repo-wide convention,
 # CLAUDE.md "Error Handling": try/except ModuleNotFoundError -> flag, then
@@ -159,10 +183,13 @@ SENTINEL_UNRESOLVED_EXTERNAL = "<UNRESOLVED_EXTERNAL>"
 
 # spec §1 三系統対応表 (channel_vocabulary_map source of truth). Kept in sync
 # with run9_schema.TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP by test coverage
-# (this file does not import run9_schema, per the module docstring's
-# no-svp_rpe/voice_genesis-import constraint interpreted broadly for sibling
-# run9 modules too — the two copies are compared byte-for-content in
-# tests/test_education_lesson_builder.py).
+# — this literal is intentionally NOT derived from `m.TECHNIQUE_LESSON_
+# CHANNEL_VOCABULARY_MAP` at import time (the two copies are compared
+# byte-for-content in tests/test_education_lesson_builder.py instead). This
+# file DOES import run9_schema now (see top-of-file import, PR #329 第1巡
+# レビュー指摘1 対応) for split-manifest pin validation — that import is
+# unrelated to this constant, which stays an independent literal per the
+# module docstring's extraction-logic self-containment goal.
 CHANNEL_VOCABULARY_MAP = [
     {
         "physical_channel": "relative F0 contour",
@@ -1098,23 +1125,169 @@ def assemble_bundle(split: str, song_ids_sorted: Sequence[str], songs: Sequence[
     }
 
 
+def _serialize_bundle_json(obj: Dict[str, Any]) -> bytes:
+    """spec §5 の直列化式（`json.dumps(obj, ensure_ascii=False, sort_keys=True,
+    separators=(",", ":")) + "\\n"`、UTF-8）を bytes で返す。`write_bundle_
+    json()`（非 atomic・単本書き込み）と `publish_bundle_pair()`（atomic・
+    2本組書き込み）が共有する唯一の直列化実装 — 呼び出し経路が違っても
+    バンドルの実バイトが一致することを保証する。"""
+    return (json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
 def write_bundle_json(obj: Dict[str, Any], path: Path) -> None:
-    text = json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
-    path.write_text(text, encoding="utf-8")
+    """単本バンドルの非 atomic 書き込み（`assemble` サブコマンド専用 —
+    training/validation を対にして公開する `build` サブコマンドは atomic
+    ペア公開が必要なため `publish_bundle_pair()` を使う、下記参照）。"""
+    Path(path).write_bytes(_serialize_bundle_json(obj))
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> Path:
+    """`data` を `path` と同一ディレクトリ内の一意な staging ファイルへ
+    書き切り fsync する（`path` 自体には一切触れない —— 最終名への
+    `os.replace()` は呼び出し側の責務）。`speaker_map_builder._atomic_
+    write_bytes()` と同型の staging+fsync パターン（run9 系は svp_rpe 側の
+    `utils/atomic_io` を import しない独立構成のため、同型の最小実装を
+    本 builder 内へ自足させる。PR #329 第1巡レビュー指摘2, P1, 採用対応）。
+
+    失敗時（`BaseException` 含む）は staging ファイルを best-effort で
+    削除してから re-raise する — `path` の既存実バイトには一切触れない。
+    複数バンドルの staging をすべて済ませてから `os.replace()` を一括
+    実行することで、呼び出し側は複数ファイルの atomic ペア公開を構築
+    できる（`publish_bundle_pair()` 参照）。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+    except BaseException:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return tmp_path
+
+
+def publish_bundle_pair(
+    training_path: Path, training_bytes: bytes, validation_path: Path, validation_bytes: bytes,
+) -> None:
+    """training/validation バンドル2本を atomic ペアとして公開する
+    （PR #329 第1巡レビュー指摘2, P1, 採用対応）。
+
+    旧実装は `write_bundle_json(training_bundle, training_out)` の後に
+    `write_bundle_json(validation_bundle, validation_out)` を実行して
+    おり、training の書き込み成功後に validation の書き込みが失敗すると
+    「新世代 training + 旧世代（または欠落）validation」という混合世代
+    ペアが最終出力ディレクトリに観測され得た。
+
+    本関数は2本とも staging（`_atomic_write_bytes()`、同一ディレクトリ内
+    の一意な一時名）へ書き切ってから、**両方の staging が成功した場合に
+    限り** それぞれの最終名へ `os.replace()` する。training の staging が
+    成功し validation の staging が失敗した場合は training の staging も
+    破棄し、**どちらの最終名も書き換えない** —— 旧世代（存在すれば）は
+    無傷のまま残り、混合世代ペアが観測される窓を構造的に閉じる。
+    """
+    training_tmp = _atomic_write_bytes(training_path, training_bytes)
+    try:
+        validation_tmp = _atomic_write_bytes(validation_path, validation_bytes)
+    except BaseException:
+        try:
+            training_tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    os.replace(training_tmp, training_path)
+    os.replace(validation_tmp, validation_path)
 
 
 # ---------------------------------------------------------------------------
 # split manifest reading (row_ids.training / row_ids.validation ONLY —
 # row_ids.sealed_holdout is never accessed by this function or any other
-# code path in this file, per spec §7 / 裁定 §2).
+# code path in this file, per spec §7 / 裁定 §2). PR #329 第1巡レビュー
+# 指摘1（P1、採用対応）: `run9_schema.load_pinned_practice_split_
+# manifest()` 経由でのみ manifest を読む（RUN9_CONTRACT.yaml
+# practice_audio_split_manifest_sha pin との read-once sha256 照合 +
+# `validate_practice_split_manifest()` の3集合非交差検証）。
 # ---------------------------------------------------------------------------
 
-def load_training_validation_ids(split_manifest_path: Path) -> Tuple[List[str], List[str]]:
-    data = json.loads(split_manifest_path.read_text(encoding="utf-8"))
+_PRACTICE_SPLIT_EXPECTED_COUNTS = {"training": 70, "validation": 15, "sealed_holdout": 15}
+
+
+def load_training_validation_ids(
+    split_manifest_path: Optional[Path] = None,
+    *,
+    contract_path: Optional[Path] = None,
+) -> Tuple[List[str], List[str]]:
+    """training/validation row_ids を pin 検証済みで読む。
+
+    旧実装は `split_manifest_path` が指す任意の JSON を無検証で
+    `json.loads()` していたため、(a) sealed ID が training/validation へ
+    混入した manifest、(b) 構造が壊れた manifest、(c) 件数が PJS corpus
+    ver1.1 の固定分割（training 70 / validation 15 / sealed_holdout 15,
+    裁定 §1）と食い違う manifest のいずれを渡されても、そのまま
+    decode/抽出へ進んでしまう穴があった（PR #329 第1巡レビュー指摘1,
+    P1, 採用対応）。
+
+    本関数は `run9_schema.load_pinned_practice_split_manifest()`（`RUN9_
+    CONTRACT.yaml` の `practice_audio_split_manifest_sha` pin との
+    read-once sha256 照合 + `validate_practice_split_manifest()` の構造/
+    3集合非交差検証、他の `load_pinned_*` 系と同型の3層防御）経由での
+    み manifest を読む —— `split_manifest_path` が pin 値と byte-identical
+    でない限り fail-closed で拒否するため、sealed ID 混入・改ざん
+    manifest を別パスへ差し替えて渡す迂回は成立しない。読み込み後、
+    training/validation/sealed_holdout の件数を機械強制する。
+
+    `split_manifest_path`/`contract_path` を省略すると、それぞれ正典
+    `DEFAULT_SPLIT_MANIFEST_PATH`（= `inputs/practice_audio_split_
+    manifest.json`）/ `run9_schema.RUN9_CONTRACT_YAML_PATH` を使う。
+    """
+    effective_manifest_path = (
+        split_manifest_path if split_manifest_path is not None else DEFAULT_SPLIT_MANIFEST_PATH
+    )
+    effective_contract_path = contract_path if contract_path is not None else run9_schema.RUN9_CONTRACT_YAML_PATH
+    contract = run9_schema.load_run9_contract_from_yaml_path(effective_contract_path)
+    data = run9_schema.load_pinned_practice_split_manifest(
+        contract, manifest_path=effective_manifest_path, contract_path=effective_contract_path,
+    )
     row_ids = data["row_ids"]
     training_ids = sorted(row_ids["training"])
     validation_ids = sorted(row_ids["validation"])
+    sealed_holdout_ids = row_ids["sealed_holdout"]
+    actual_counts = {
+        "training": len(training_ids), "validation": len(validation_ids),
+        "sealed_holdout": len(sealed_holdout_ids),
+    }
+    if actual_counts != _PRACTICE_SPLIT_EXPECTED_COUNTS:
+        raise ExtractorStopError(
+            "load_training_validation_ids(): split manifest row_ids counts must be exactly "
+            f"{_PRACTICE_SPLIT_EXPECTED_COUNTS} (PJS corpus ver1.1 100-song fixed split, 裁定 §1), "
+            f"got {actual_counts} — stop, no partial/renegotiated split accepted"
+        )
     return training_ids, validation_ids
+
+
+def _require_song_ids_within_frozen_split(
+    song_ids: Sequence[str], allowed_ids: Sequence[str], *, context: str,
+) -> None:
+    """`song_ids` の全要素が凍結済み `allowed_ids`（= training ∪
+    validation）に属することを decode/抽出前に検証する（PR #329 第1巡
+    レビュー指摘1, P1, 採用対応）。集合外の id（sealed_holdout を含む）が
+    1件でもあれば `ExtractorStopError` で即停止し、decode/抽出は一切
+    実行しない——`run_build()`/`extract-song` CLI の両方がこのゲートを
+    共有する単一実装（別々に実装すると将来どちらか一方だけが改修されて
+    判定が食い違う穴を防ぐ）。"""
+    allowed = set(allowed_ids)
+    offenders = sorted(set(song_ids) - allowed)
+    if offenders:
+        raise ExtractorStopError(
+            f"{context}: song_id(s) not a member of the pinned training ∪ validation split "
+            f"(sealed_holdout song_ids — and any id outside the frozen split — are rejected "
+            f"fail-closed before decode/extraction): {offenders}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1148,6 +1321,18 @@ def _cmd_probe_header(args: argparse.Namespace) -> int:
 
 def _cmd_extract_song(args: argparse.Namespace) -> int:
     freeze_selfcheck(Path(args.freeze_record), Path(args.spec_path))
+    # PR #329 第1巡レビュー指摘1（P1、採用対応）: `--song-id` に sealed_
+    # holdout や split manifest に一切現れない任意 ID を渡しても、旧実装は
+    # そのまま decode/抽出へ進んでいた。凍結済み training∪validation 集合
+    # 外の song_id は decode 前に fail-closed で拒否する。
+    split_manifest_path = Path(args.split_manifest) if args.split_manifest else None
+    contract_path = Path(args.contract_path) if args.contract_path else None
+    training_ids, validation_ids = load_training_validation_ids(
+        split_manifest_path, contract_path=contract_path,
+    )
+    _require_song_ids_within_frozen_split(
+        [args.song_id], sorted(set(training_ids) | set(validation_ids)), context="extract-song",
+    )
     song_dir = Path(args.corpus_root) / args.song_id
     result = extract_song(song_dir, args.song_id)
     Path(args.out).write_text(json.dumps(result, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
@@ -1174,20 +1359,32 @@ def run_build(
     out_dir: Path,
     freeze_record_path: Path = DEFAULT_FREEZE_RECORD_PATH,
     spec_path: Path = DEFAULT_SPEC_PATH,
-    split_manifest_path: Path = DEFAULT_SPLIT_MANIFEST_PATH,
+    split_manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`run_batch_extract.py`（workdir 版）のバッチドライバロジックを
     path-resolved 引数の関数として統合したもの。freeze self-check → 全曲
     抽出（song_id 昇順） → training/validation バンドル組立、の順序は
-    workdir 版から一切変更していない。row_ids の取得元は
+    workdir 版から一切変更していない。row_ids の取得元は pin 検証済みの
     `load_training_validation_ids()`（row_ids.sealed_holdout 非参照、spec
-    §7 継続）。戻り値は run_log 相当の機械可読サマリ。
+    §7 継続。PR #329 第1巡レビュー指摘1 対応で pin 検証を追加）。抽出直前
+    に対象 song_id 全数が凍結済み training∪validation に属することを
+    `_require_song_ids_within_frozen_split()` で再確認する（構成上
+    `all_ids` は既にその集合から導出されているため冗長だが、指摘1の
+    「run_build()/extract-song とも抽出前に検証」を明示的な防御として
+    満たす）。バンドル2本は `publish_bundle_pair()` で atomic ペア公開する
+    （PR #329 第1巡レビュー指摘2, P1, 採用対応）。戻り値は run_log 相当の
+    機械可読サマリ。
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     freeze_selfcheck(freeze_record_path, spec_path)
 
-    training_ids, validation_ids = load_training_validation_ids(split_manifest_path)
+    training_ids, validation_ids = load_training_validation_ids(
+        split_manifest_path, contract_path=contract_path,
+    )
+    frozen_allowed_ids = sorted(set(training_ids) | set(validation_ids))
     all_ids = sorted(set(training_ids) | set(validation_ids))
+    _require_song_ids_within_frozen_split(all_ids, frozen_allowed_ids, context="run_build")
 
     songs_by_id: Dict[str, Dict[str, Any]] = {}
     for song_id in all_ids:
@@ -1202,8 +1399,10 @@ def run_build(
     )
     training_out = out_dir / "training_bundle.json"
     validation_out = out_dir / "validation_bundle.json"
-    write_bundle_json(training_bundle, training_out)
-    write_bundle_json(validation_bundle, validation_out)
+    publish_bundle_pair(
+        training_out, _serialize_bundle_json(training_bundle),
+        validation_out, _serialize_bundle_json(validation_bundle),
+    )
 
     return {
         "training_bundle": {
@@ -1223,7 +1422,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
         out_dir=Path(args.out_dir),
         freeze_record_path=Path(args.freeze_record) if args.freeze_record else DEFAULT_FREEZE_RECORD_PATH,
         spec_path=Path(args.spec_path) if args.spec_path else DEFAULT_SPEC_PATH,
-        split_manifest_path=Path(args.split_manifest) if args.split_manifest else DEFAULT_SPLIT_MANIFEST_PATH,
+        split_manifest_path=Path(args.split_manifest) if args.split_manifest else None,
+        contract_path=Path(args.contract_path) if args.contract_path else None,
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0
@@ -1244,6 +1444,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--song-id", required=True)
     p.add_argument("--freeze-record", default=str(DEFAULT_FREEZE_RECORD_PATH))
     p.add_argument("--spec-path", default=str(DEFAULT_SPEC_PATH))
+    p.add_argument(
+        "--split-manifest", default=None,
+        help=f"default: {DEFAULT_SPLIT_MANIFEST_PATH} (pin-verified against RUN9_CONTRACT.yaml "
+        "practice_audio_split_manifest_sha — --song-id must be a member of its training/validation "
+        "row_ids; sealed_holdout song_ids are rejected)",
+    )
+    p.add_argument("--contract-path", default=None, help="default: RUN9_CONTRACT.yaml (repo canonical)")
     p.add_argument("--out", required=True)
     p.set_defaults(func=_cmd_extract_song)
 
@@ -1261,12 +1468,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--freeze-record", default=None, help=f"default: {DEFAULT_FREEZE_RECORD_PATH}")
     p.add_argument("--spec-path", default=None, help=f"default: {DEFAULT_SPEC_PATH}")
     p.add_argument("--split-manifest", default=None, help=f"default: {DEFAULT_SPLIT_MANIFEST_PATH}")
+    p.add_argument("--contract-path", default=None, help="default: RUN9_CONTRACT.yaml (repo canonical)")
     p.set_defaults(func=_cmd_build)
 
     args = parser.parse_args(argv)
     try:
         return args.func(args)
     except ExtractorStopError as e:
+        print(f"STOP: {type(e).__name__}: {e}", file=sys.stderr)
+        return 2
+    except run9_schema.Run9ValidationError as e:
+        # PR #329 第1巡レビュー指摘1（P1、採用対応）: split manifest の
+        # pin/構造検証は `run9_schema.Run9ValidationError` を送出する
+        # （`ExtractorStopError` 系とは別階層）——CLI としては同じ「STOP」
+        # 扱いで終了コード2にする。
         print(f"STOP: {type(e).__name__}: {e}", file=sys.stderr)
         return 2
 

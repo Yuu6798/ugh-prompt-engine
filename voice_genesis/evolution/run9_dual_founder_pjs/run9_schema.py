@@ -17131,6 +17131,100 @@ def load_pinned_speaker_map_manifest(
 
 
 # ---------------------------------------------------------------------------
+# RUN9-L0-HARNESS-3b 第1巡 Codex bot レビュー対応（PR #329 指摘1、P1、
+# 採用）: practice_audio_split_manifest_sha pin の唯一の正規消費経路
+# （`load_pinned_speaker_map_manifest()`/`load_pinned_education_lesson_
+# manifest()` と同型の3層防御・read-once 契約）。sealed-holdout 境界を
+# consumer 側（education_lesson_builder.py）へ machine 強制するための足場
+# ——旧実装は `--split-manifest`/`extract-song` が任意パス・任意 song_id を
+# 無検証で受け付けていた。
+# ---------------------------------------------------------------------------
+
+
+def load_pinned_practice_split_manifest(
+    contract: Run9RunContract,
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`practice_audio_split_manifest_sha` pin の**唯一の正規消費経路**。
+
+    **消費契約（事前登録）**: `education_lesson_builder.py` の practice
+    split manifest 消費はこの関数経由のみで行わなければならない ——
+    `--split-manifest` が指す任意パスへの直接 `json.load()` は契約違反
+    である。
+
+    手順（いずれかで fail-closed、他の `load_pinned_*` 系と同型）:
+    (1) disk 正典 `RUN9_CONTRACT.yaml` を都度再読込し、渡された
+        `contract` の `practice_audio_split_manifest_sha` pin が disk 正典
+        と乖離していないか照合する（改変検出）。
+    (2) 当該 pin が PINNED であることを確認する。
+    (3) manifest 実ファイルの実バイト sha256 が pin 値と一致することを
+        read-once（同一バッファから digest と parse の両方を導出）で確認
+        する——`manifest_path` が任意パスを指していても、この pin と
+        byte-identical でない限り拒否する（sealed ID 混入・改ざん
+        manifest の fail-closed 拒否）。
+    (4) `validate_practice_split_manifest()` で manifest 本体の構造・
+        training/validation/sealed_holdout 3集合の非交差（`_require_
+        disjoint_row_id_sets()`）を検証する。
+
+    戻り値は検証済み manifest dict（training/validation/sealed_holdout の
+    件数検証・sealed_holdout の切り落としは呼び出し側
+    `education_lesson_builder.load_training_validation_ids()` の責務）。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("practice_audio_split_manifest_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("practice_audio_split_manifest_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_practice_split_manifest(): the passed-in contract's "
+            f"practice_audio_split_manifest_sha pin ({passed_field!r}) diverges from the canonical "
+            f"on-disk RUN9_CONTRACT.yaml pin ({disk_field!r}) at {effective_contract_path} — "
+            "treated as tampering evidence and rejected fail-closed"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_practice_split_manifest(): practice_audio_split_manifest_sha is not "
+            f"PINNED (status={field.get('status')!r}) — refusing to consume an unpinned practice "
+            "split manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else PRACTICE_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_practice_split_manifest(): pinned practice split manifest source {path} "
+            "does not exist — this function is the sole canonical access path (direct json.load() "
+            "elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（TOCTOU 対策）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_practice_split_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml practice_audio_split_manifest_sha の pin 値 ({pinned_sha!r}) と "
+            "一致しない — stale・改ざん・sealed ID 混入 manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_practice_split_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_practice_split_manifest(data)
+    return data
+
+
+# ---------------------------------------------------------------------------
 # RUN9-L0-HARNESS-3b: education_technique_lesson_manifest_sha pin の唯一の
 # 正規消費経路（`load_pinned_speaker_map_manifest()` と同型の3層防御・
 # read-once 契約）。

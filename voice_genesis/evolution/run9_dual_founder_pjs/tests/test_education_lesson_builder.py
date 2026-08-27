@@ -11,6 +11,7 @@ RECORD.md` 参照。実データに対する抽出・byte 再現性実測は ses
 """
 from __future__ import annotations
 
+import argparse
 import ast
 import copy
 import hashlib
@@ -553,3 +554,268 @@ def test_harness3b_load_training_validation_ids_excludes_sealed_holdout() -> Non
     sealed = set(split_manifest["row_ids"]["sealed_holdout"])
     assert sealed.isdisjoint(training_ids)
     assert sealed.isdisjoint(validation_ids)
+
+
+def test_harness3b_load_training_validation_ids_uses_pinned_default_manifest() -> None:
+    """`split_manifest_path` 省略時は `DEFAULT_SPLIT_MANIFEST_PATH`（=
+    正典 `inputs/practice_audio_split_manifest.json`）を pin 検証込みで
+    読む（PR #329 第1巡レビュー指摘1 対応後の既定動作）。"""
+    training_ids, validation_ids = elb.load_training_validation_ids()
+    assert len(training_ids) == 70
+    assert len(validation_ids) == 15
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第1巡 Codex bot レビュー対応: sealed-holdout 境界の builder 側
+# 機械強制（指摘1, P1, 採用）。
+#
+# 3系統のテスト:
+#  (A) sealed ID が row_ids.training へ混入した split manifest を拒否
+#  (B) sealed_holdout の song_id を直接 `extract-song` へ渡しても拒否
+#      （decode/抽出前に停止する——実コーパスなしで検証可能）
+#  (C) 改ざんされた（pin と実バイト sha256 が一致しない）split manifest
+#      を拒否
+# ---------------------------------------------------------------------------
+
+
+def _practice_manifest_data() -> Dict[str, Any]:
+    return json.loads(m.PRACTICE_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _tampered_practice_manifest_contract(
+    tmp_path: Path, *, mutate,
+) -> Tuple[Path, Path]:
+    """`practice_audio_split_manifest.json` の内容を `mutate` で改変し、
+    その実バイト sha256 で `practice_audio_split_manifest_sha` pin を
+    差し替えた合成 manifest ファイル + contract ファイルを用意する
+    （`_tampered_education_manifest_contract()` と同型のテストヘルパー。
+    こちらは manifest 側の内容検証——`validate_practice_split_manifest()`
+    ——を経由させたいテストのためのもので、`load_pinned_practice_split_
+    manifest()` の「in-process contract tampering」自体の検出は
+    `run9_schema` 側の責務であり、本ファイルでは重複テストしない）。
+    戻り値は (tampered manifest path, tampered contract path)。"""
+    data = copy.deepcopy(_practice_manifest_data())
+    mutate(data)
+    manifest_bytes = _canonical_json_bytes(data)
+    manifest_path = tmp_path / "practice_audio_split_manifest.json"
+    manifest_path.write_bytes(manifest_bytes)
+    manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+    contract_raw_data = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    tampered_raw = copy.deepcopy(contract_raw_data)
+    tampered_raw["practice_audio_split_manifest_sha"] = {
+        "value": manifest_sha, "status": "PINNED",
+    }
+    tampered_contract_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_contract_path.write_text(yaml.safe_dump(tampered_raw, allow_unicode=True), encoding="utf-8")
+    return manifest_path, tampered_contract_path
+
+
+def test_harness3b_split_manifest_sealed_id_injected_into_training_rejected(
+    tmp_path: Path,
+) -> None:
+    """(A) sealed_holdout の row_id が row_ids.training へ混入した split
+    manifest は、たとえ pin 値をその改変後バイトへ差し替えても
+    `validate_practice_split_manifest()`（3集合非交差検証）が fail-closed
+    で拒否する——`--split-manifest` に任意ファイルを渡す迂回では
+    sealed-holdout 境界を突破できないことの確認。"""
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        sealed_id = sorted(data["row_ids"]["sealed_holdout"])[0]
+        data["row_ids"]["training"] = sorted(data["row_ids"]["training"] + [sealed_id])
+
+    manifest_path, contract_path = _tampered_practice_manifest_contract(tmp_path, mutate=_mutate)
+    with pytest.raises(m.Run9ValidationError, match="sealed_holdout overlaps training"):
+        elb.load_training_validation_ids(manifest_path, contract_path=contract_path)
+
+
+def test_harness3b_split_manifest_sealed_id_injected_into_validation_rejected(
+    tmp_path: Path,
+) -> None:
+    """(A) の validation 側対称ケース。"""
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        sealed_id = sorted(data["row_ids"]["sealed_holdout"])[0]
+        data["row_ids"]["validation"] = sorted(data["row_ids"]["validation"] + [sealed_id])
+
+    manifest_path, contract_path = _tampered_practice_manifest_contract(tmp_path, mutate=_mutate)
+    with pytest.raises(m.Run9ValidationError, match="sealed_holdout overlaps validation"):
+        elb.load_training_validation_ids(manifest_path, contract_path=contract_path)
+
+
+def test_harness3b_split_manifest_count_mismatch_rejected(tmp_path: Path) -> None:
+    """(A) 派生ケース: 3集合が非交差のままでも、training=70/validation=15/
+    sealed_holdout=15 の固定件数（裁定 §1）と食い違う split manifest は
+    `load_training_validation_ids()` 自身が拒否する。"""
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        moved = data["row_ids"]["training"].pop()
+        data["row_ids"]["validation"] = sorted(data["row_ids"]["validation"] + [moved])
+
+    manifest_path, contract_path = _tampered_practice_manifest_contract(tmp_path, mutate=_mutate)
+    with pytest.raises(elb.ExtractorStopError, match="row_ids counts must be exactly"):
+        elb.load_training_validation_ids(manifest_path, contract_path=contract_path)
+
+
+def test_harness3b_extract_song_cli_rejects_sealed_holdout_song_id(tmp_path: Path) -> None:
+    """(B) `extract-song --song-id <sealed_holdout id>` は、対応する
+    WAV/lab/musicxml が一切存在しなくても（=実コーパス不要で検証可能）、
+    decode/抽出前に `ExtractorStopError` で fail-closed 拒否される
+    （main() の終了コード2 経路）。"""
+    split_manifest = _practice_manifest_data()
+    sealed_id = sorted(split_manifest["row_ids"]["sealed_holdout"])[0]
+    out_path = tmp_path / "out.json"
+    rc = elb.main([
+        "extract-song",
+        "--corpus-root", str(tmp_path),
+        "--song-id", sealed_id,
+        "--out", str(out_path),
+    ])
+    assert rc == 2
+    assert not out_path.exists()
+
+
+def test_harness3b_extract_song_cli_rejects_arbitrary_song_id(tmp_path: Path) -> None:
+    """(B) 派生ケース: split manifest のいずれの集合にも属さない任意の
+    song_id も同じ経路で拒否される。"""
+    out_path = tmp_path / "out.json"
+    rc = elb.main([
+        "extract-song",
+        "--corpus-root", str(tmp_path),
+        "--song-id", "pjs999_not_a_real_song",
+        "--out", str(out_path),
+    ])
+    assert rc == 2
+    assert not out_path.exists()
+
+
+def test_harness3b_extract_song_direct_call_gate_raises_before_extract_song() -> None:
+    """`_cmd_extract_song()` のゲートが `extract_song()`（decode/抽出本体）
+    より前に効くことを、`elb.extract_song` を monkeypatch して「呼ばれたら
+    失敗させる」ことで確認する（sealed_holdout 拒否時に一切 decode へ
+    到達しないことの直接証跡）。"""
+
+    def _boom(song_dir: Path, song_id: str) -> Dict[str, Any]:  # pragma: no cover - must not run
+        raise AssertionError("extract_song() must not be called for a rejected song_id")
+
+    original = elb.extract_song
+    elb.extract_song = _boom  # type: ignore[assignment]
+    try:
+        split_manifest = _practice_manifest_data()
+        sealed_id = sorted(split_manifest["row_ids"]["sealed_holdout"])[0]
+        args = argparse.Namespace(
+            corpus_root="/nonexistent",
+            song_id=sealed_id,
+            freeze_record=str(m.EDUCATION_LESSON_FREEZE_RECORD_PATH),
+            spec_path=str(m.EDUCATION_LESSON_SPEC_PATH),
+            split_manifest=None,
+            contract_path=None,
+            out="/nonexistent/out.json",
+        )
+        with pytest.raises(elb.ExtractorStopError, match="not a member of the pinned"):
+            elb._cmd_extract_song(args)  # noqa: SLF001
+    finally:
+        elb.extract_song = original  # type: ignore[assignment]
+
+
+def test_harness3b_split_manifest_byte_tampering_rejected(tmp_path: Path) -> None:
+    """(C) `--split-manifest` へ渡したファイルの実バイトが `RUN9_
+    CONTRACT.yaml` の `practice_audio_split_manifest_sha` pin 値と一致
+    しなければ、内容が構造的に正しくても fail-closed で拒否される。"""
+    tampered_path = tmp_path / "practice_audio_split_manifest.json"
+    tampered_path.write_bytes(m.PRACTICE_MANIFEST_PATH.read_bytes() + b"\n")
+    with pytest.raises(m.Run9ValidationError, match="実バイト sha256"):
+        elb.load_training_validation_ids(tampered_path)
+
+
+def test_harness3b_split_manifest_missing_file_rejected(tmp_path: Path) -> None:
+    """(C) 派生ケース: `--split-manifest` が存在しないパスを指す場合も
+    fail-closed で拒否される（direct json.load() 迂回の再現形の1つ）。"""
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        elb.load_training_validation_ids(tmp_path / "does_not_exist.json")
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第1巡 Codex bot レビュー対応: バンドル2本の atomic ペア公開
+# （指摘2, P1, 採用）。
+# ---------------------------------------------------------------------------
+
+
+def test_harness3b_publish_bundle_pair_happy_path(tmp_path: Path) -> None:
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+    training_bytes = b'{"gen":"new-training"}\n'
+    validation_bytes = b'{"gen":"new-validation"}\n'
+    elb.publish_bundle_pair(training_path, training_bytes, validation_path, validation_bytes)
+    assert training_path.read_bytes() == training_bytes
+    assert validation_path.read_bytes() == validation_bytes
+    # no staging leftovers
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p not in (training_path, validation_path))
+    assert leftovers == []
+
+
+def test_harness3b_publish_bundle_pair_failure_injection_leaves_old_generation_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """失敗注入回帰テスト（PR #329 第1巡レビュー指摘2 必須テスト）:
+    validation 側の staging 書き込みを monkeypatch で失敗させると、
+    training 側も含めどちらの最終名も置換されず、旧世代（存在すれば）が
+    そのまま残ることを確認する——「新世代 training だけが現れる」混合
+    世代ペアが観測されないことの直接証跡。"""
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+    training_path.write_bytes(b'{"gen":"old-training"}\n')
+    validation_path.write_bytes(b'{"gen":"old-validation"}\n')
+
+    real_atomic_write_bytes = elb._atomic_write_bytes  # noqa: SLF001
+
+    def _boom(path: Path, data: bytes) -> Path:
+        if path.name == "validation_bundle.json":
+            raise RuntimeError("synthetic validation staging failure")
+        return real_atomic_write_bytes(path, data)
+
+    monkeypatch.setattr(elb, "_atomic_write_bytes", _boom)
+
+    with pytest.raises(RuntimeError, match="synthetic validation staging failure"):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+
+    # old generation survives untouched on BOTH sides — no new-gen training
+    # appears while validation is stale/missing.
+    assert training_path.read_bytes() == b'{"gen":"old-training"}\n'
+    assert validation_path.read_bytes() == b'{"gen":"old-validation"}\n'
+    # no staging leftovers (training staging was cleaned up after the
+    # validation staging failure).
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p not in (training_path, validation_path))
+    assert leftovers == []
+
+
+def test_harness3b_publish_bundle_pair_failure_injection_no_prior_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同上、旧世代が一切存在しない（初回 build）場合: 失敗後、最終出力
+    ディレクトリに training_bundle.json/validation_bundle.json のいずれも
+    現れないことを確認する（「新世代 training だけが現れる」を明示的に
+    否定する）。"""
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+
+    real_atomic_write_bytes = elb._atomic_write_bytes  # noqa: SLF001
+
+    def _boom(path: Path, data: bytes) -> Path:
+        if path.name == "validation_bundle.json":
+            raise RuntimeError("synthetic validation staging failure")
+        return real_atomic_write_bytes(path, data)
+
+    monkeypatch.setattr(elb, "_atomic_write_bytes", _boom)
+
+    with pytest.raises(RuntimeError, match="synthetic validation staging failure"):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+
+    assert not training_path.exists()
+    assert not validation_path.exists()
+    assert list(tmp_path.iterdir()) == []
