@@ -18437,8 +18437,13 @@ _CANDIDATE_GENERATION_PROHIBITED_REQUIRED: FrozenSet[str] = frozenset(
 # 比較により fail-closed で拒否する。trial 2-32 candidate 0..2 の rule
 # 文言は第3巡指摘1（P1「Make the scheduled neighborhood ratio
 # achievable」、採用）で近傍優先順位リスト（値キー ±1/±2 量子化ステップ
-# → 隣接 index キー、端点のみ探査規則フォールバック）を反映する文言へ
-# 改訂した（`candidate_proposal.neighbors_of()` の実装と同期させる）。
+# → 隣接 index キー）を反映する文言へ改訂し、第4巡指摘1（P2「shortfall
+# 主張の正直是正」、採用）でさらに「端点のみ探査規則フォールバック」という
+# 偽の主張（内部領域の best でも優先順位候補が評価済み枯渇すれば shortfall
+# は起こり得る）を除き、不足スロットは幾何的端点・評価済み枯渇いずれの
+# 理由でも探査規則が決定論的に補充し、実際の内訳を trial log へ必須記録
+# する旨の文言へ改訂した（`candidate_proposal.neighbors_of()`/
+# `select_neighborhood_candidates()` の実装と同期させる）。
 _CANDIDATE_GENERATION_EXPECTED_PROPOSAL_SCHEDULE_TABLE: Tuple[Dict[str, Any], ...] = (
     {"trial_index": 1, "candidate_index": 0, "rule": "identity (all axes = 0, baseline)"},
     {
@@ -18452,7 +18457,10 @@ _CANDIDATE_GENERATION_EXPECTED_PROPOSAL_SCHEDULE_TABLE: Tuple[Dict[str, Any], ..
         "rule": (
             "current-best neighborhood: first 3 not-yet-evaluated candidates from the "
             "frozen priority list (value key +-1/+-2 quantization steps, then adjacent "
-            "index key), exploratory shortfall at boundary current-bests only"
+            "index key); unfilled slots (from geometric endpoints or evaluated-exhaustion "
+            "of the priority list) are backfilled deterministically by the exploration "
+            "rule, and the actual per-trial neighborhood/exploration/NOT_PROPOSABLE mix "
+            "is recorded in the trial log"
         ),
     },
     {
@@ -18526,6 +18534,30 @@ _CANDIDATE_GENERATION_PROPOSAL_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = frozens
         "exploratory_candidate_rule",
         "neighborhood_candidate_rule",
     }
+)
+
+# selection.tie_break の実行可能な全順序凍結（PR #331 Codex bot レビュー
+# 第4巡指摘2、P1、採用）: 旧定義「(objective, 軸ベクトルの辞書順)」は
+# 座標順・表現・恒等候補の位置が未定義だったため、`candidate_ordinal`
+# ベースの tie-break キー `(objective, candidate_ordinal)` へ置換凍結した
+# （恒等候補=-1、非恒等候補=candidate_ordering が定める L 内インデックス。
+# 参照実装 `candidate_proposal.candidate_ordinal()`）。旧定義以前は
+# `selection` 節がそもそも validator の検査対象外だった欠落も本改訂で
+# 埋めた。
+_CANDIDATE_GENERATION_SELECTION_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"objective", "tie_break"}
+)
+_CANDIDATE_GENERATION_EXPECTED_TIE_BREAK = (
+    "tie-break キーは (objective, candidate_ordinal) の全順序で決定論的に一意の勝者を選ぶ"
+    "（objective が同値の場合 candidate_ordinal の小さい方が勝つ）。candidate_ordinal(候補) "
+    "の定義: 候補が恒等候補（全軸オフセット/デルタ = 0、trial1_candidate0_rule の baseline）"
+    "の場合 candidate_ordinal = -1。候補が非恒等候補 c（candidate_ordering が定める正準候補列 "
+    "L の要素、単一軸候補）の場合 candidate_ordinal(c) = c が L（既に凍結済みの total_order — "
+    "AX-D1 群が先、タプル辞書順）において占めるインデックス（0始まり）。この定義は恒等・AX-P1・"
+    "AX-D1 の全候補型を単一整数キーで被覆し、座標順・表現・恒等候補の位置に関する曖昧性を排除する"
+    "実行可能な全順序を与える（PR #331 Codex bot レビュー第4巡指摘2、P1、採用: 旧定義"
+    "「(objective, 軸ベクトルの辞書順)」は座標順・表現・恒等候補の位置が未定義だった）。"
+    "参照実装: candidate_proposal.candidate_ordinal()"
 )
 
 
@@ -18663,6 +18695,30 @@ def _validate_candidate_generation_proposal_schedule(
         )
 
 
+def _validate_candidate_generation_selection(selection: Mapping[str, Any]) -> None:
+    """`selection` 節の tie_break 全順序凍結検査（PR #331 第4巡指摘2、P1、
+    採用の実装）。旧版は `selection` 節がトップレベル必須キーとしてのみ
+    検査されており中身は一切検証されていなかった欠落も併せて埋める。
+    """
+    if not isinstance(selection, dict):
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.selection must be an object, "
+            f"got {type(selection).__name__}"
+        )
+    missing = _CANDIDATE_GENERATION_SELECTION_REQUIRED_KEYS - set(selection.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.selection missing required key(s): "
+            f"{sorted(missing)}"
+        )
+    if selection["tie_break"] != _CANDIDATE_GENERATION_EXPECTED_TIE_BREAK:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.selection.tie_break must equal "
+            f"{_CANDIDATE_GENERATION_EXPECTED_TIE_BREAK!r} exactly, got "
+            f"{selection['tie_break']!r}"
+        )
+
+
 def validate_candidate_generation_spec_manifest(data: Mapping[str, Any]) -> None:
     """`candidate_generation_spec_v1.json` の構造・値整形式を検証する
     （裁定 §3: seed 909002・32 trials×4 candidates=128 units/Founder/arm・
@@ -18751,6 +18807,7 @@ def validate_candidate_generation_spec_manifest(data: Mapping[str, Any]) -> None
             f"{sorted(missing_prohibited)}"
         )
     _validate_candidate_generation_proposal_schedule(data["proposal"], structure=structure)
+    _validate_candidate_generation_selection(data["selection"])
 
 
 def load_pinned_candidate_generation_spec_manifest(

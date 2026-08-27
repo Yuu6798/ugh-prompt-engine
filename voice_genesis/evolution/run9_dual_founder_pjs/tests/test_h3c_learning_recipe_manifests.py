@@ -579,6 +579,32 @@ def test_h3c_candidate_generation_proposal_valid_manifest_passes() -> None:
     m.validate_candidate_generation_spec_manifest(data)
 
 
+# --- PR #331 第4巡指摘2（P1、採用）: selection.tie_break の実行可能な全
+# 順序凍結の validator 検査。旧版は selection 節の中身を一切検査していな
+# かった欠落を埋めたテスト。
+
+
+def test_h3c_candidate_generation_selection_tie_break_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["selection"]["tie_break"] = "(objective, 軸ベクトルの辞書順) の全順序で決定論的に一意の勝者を選ぶ"
+    with pytest.raises(m.Run9ValidationError, match="tie_break"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_selection_missing_tie_break_key_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["selection"]["tie_break"]
+    with pytest.raises(m.Run9ValidationError, match="selection"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_selection_not_object_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["selection"] = "not an object"
+    with pytest.raises(m.Run9ValidationError, match="selection"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
 # ---------------------------------------------------------------------------
 # 4. compute_budget_manifest_v1 固有
 # ---------------------------------------------------------------------------

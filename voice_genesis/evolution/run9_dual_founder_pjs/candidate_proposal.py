@@ -13,8 +13,25 @@ digest-to-candidate mapping」、採用）。`inputs/candidate_generation_spec_v
 （凍結 3:1 比率の3枠）を満たせず、trial 2-32 の近傍3枠が構造的に達成不能
 だった。値キー ±1/±2 量子化ステップ + 隣接 index キー（L 順で1つ前/後）の
 優先順位リストへ拡張し、内部領域（range 端でも index 端でもない current
-best）で3件以上の近傍候補が構造的に存在するようにした（端点でのみ
-shortfall が起こり、探査規則で補充する）。
+best）で3件以上の近傍候補が構造的に存在するようにした。
+
+第4巡指摘1（P2「shortfall 主張の正直是正」、採用）: 上段落と第3巡時点の
+spec が述べていた「shortfall は端点の場合に限られる」は偽——優先順位
+リスト6項目のうち3件以上が catalog 制約内で有効な内部領域の best でも、
+それらが既に評価済み（`select_neighborhood_candidates()` の `is_evaluated`
+フィルタ後）であれば3件に満たない shortfall が起こり得る
+（`tests/test_candidate_proposal.py::test_select_neighborhood_candidates_
+shortfall_when_all_evaluated` が実証）。3:1 は「近傍優先3スロット + 探査
+1スロット」の決定論スロットテンプレートであり、近傍スロットが埋まらない
+場合は探査規則で決定論的に補充される。各 trial の実際の内訳（近傍/探査/
+NOT_PROPOSABLE）は探索 trace に必須記録する——宣言比率と実測内訳の乖離を
+隠さない会計。
+
+第4巡指摘2（P1「tie-break の実行可能な全順序凍結」、採用）: `selection.
+tie_break` の旧定義「(objective, 軸ベクトルの辞書順)」は座標順・表現・
+恒等候補の位置が未定義だったため、`candidate_ordinal()`（恒等=-1、非恒等
+候補=L 内インデックス）ベースの tie-break キー `(objective,
+candidate_ordinal)` へ置換凍結した。
 
 **スコープ境界**: 本モジュールは spec の「候補列 L の構築」「digest→候補の
 写像」「近傍列挙」という *決定論的で generator 非依存な部分* のみを実装
@@ -321,6 +338,31 @@ def neighbors_of(current_best: Optional[Candidate], all_candidates: Sequence[Can
     return priority
 
 
+def candidate_ordinal(candidate: Optional[Candidate], all_candidates: Sequence[Candidate]) -> int:
+    """`selection.tie_break` が凍結する tie-break キー第2要素
+    （candidate_ordinal）の逐語実装（PR #331 Codex bot レビュー第4巡指摘2、
+    P1、採用: 旧 tie_break「(objective, 軸ベクトルの辞書順)」は座標順・
+    表現・恒等候補の位置が未定義だったため、実行可能な全順序へ置換凍結
+    した）。
+
+    候補が恒等（None、trial1_candidate0_rule の baseline）の場合 -1 を
+    返す——L のどの要素のインデックス（0以上）よりも小さいため、tie_break
+    では常に恒等が勝つ。候補が非恒等（`all_candidates`＝L、
+    `build_candidate_ordering()` が返す凍結済み total_order の要素）の
+    場合、L 内でのインデックス（0始まり）を返す。恒等・AX-P1・AX-D1 の
+    全候補型を単一整数キーで被覆する。
+    """
+    if candidate is None:
+        return -1
+    for idx, cand in enumerate(all_candidates):
+        if cand == candidate:
+            return idx
+    raise ValueError(
+        f"candidate_ordinal(): candidate {candidate!r} not found in all_candidates (L) — "
+        "candidate_ordinal is only defined for the identity candidate (None) or members of L"
+    )
+
+
 def select_neighborhood_candidates(
     current_best: Optional[Candidate],
     all_candidates: Sequence[Candidate],
@@ -331,10 +373,19 @@ def select_neighborhood_candidates(
     """`enumeration_order` の逐語実装: `neighbors_of()` が返す優先順位順
     （値キー +-1/+-2 量子化ステップ → 隣接 index キー、恒等 best では
     `identity_neighbor_rule` の L 辞書順）の近傍候補集合から、未評価の
-    ものを先頭から `limit` 件返す（内部領域では構造的に3件以上存在する
-    ——端点でのみ3件未満の不足分は `shortfall_handling` により呼び出し側
-    が `select_exploratory_candidate()` で補充する。本関数は補充を行わ
-    ない）。"""
+    ものを先頭から `limit` 件返す。`neighbors_of()` の生の出力は内部領域
+    （range 端でも index 端でもない current best）では構造的に3件以上
+    存在するが、本関数はさらに `is_evaluated` で未評価フィルタするため、
+    内部領域の best でも既評価候補が優先順位リストの上位を占めていれば
+    3件未満に減り得る（PR #331 Codex bot レビュー第4巡指摘1「shortfall
+    主張の正直是正」、P2、採用: 旧 docstring は「端点でのみ3件未満」と
+    述べていたが、これは `neighbors_of()` の生出力にのみ当てはまる主張
+    であり、本関数の実際の返り値（評価済みフィルタ後）には当てはまらない
+    ——`test_select_neighborhood_candidates_shortfall_when_all_evaluated`
+    が内部領域の best でも全評価済みなら0件になることを実証している）。
+    `shortfall_handling` により、幾何的端点・評価済み枯渇いずれの理由の
+    不足分も呼び出し側が `select_exploratory_candidate()` で補充する
+    （本関数は補充を行わない）。"""
     neighbors = neighbors_of(current_best, all_candidates)
     selected = [cand for cand in neighbors if not is_evaluated(cand)]
     return selected[:limit]

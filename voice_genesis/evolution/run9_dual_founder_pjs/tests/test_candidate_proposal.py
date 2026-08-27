@@ -431,3 +431,72 @@ def test_select_neighborhood_candidates_shortfall_when_all_evaluated() -> None:
         current_best, ordering, is_evaluated=lambda c: True, limit=3
     )
     assert selected_all_evaluated == []
+
+
+# ---------------------------------------------------------------------------
+# 5. candidate_ordinal / tie-break の全順序
+#
+# PR #331 Codex bot レビュー第4巡指摘2（P1「tie-break の実行可能な全順序
+# 凍結」、採用）: 旧 tie_break「(objective, 軸ベクトルの辞書順)」は座標順・
+# 表現・恒等候補の位置が未定義だった。`candidate_ordinal()`（恒等=-1、
+# 非恒等候補=L 内インデックス）を tie-break キーの第2要素として凍結した。
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_ordinal_identity_is_minus_one() -> None:
+    ordering = _build_l()
+    assert cp.candidate_ordinal(None, ordering) == -1
+
+
+def test_candidate_ordinal_matches_l_index_for_every_non_identity_candidate() -> None:
+    ordering = _build_l()
+    for expected_idx, cand in enumerate(ordering):
+        assert cp.candidate_ordinal(cand, ordering) == expected_idx
+
+
+def test_candidate_ordinal_deterministic_across_two_calls() -> None:
+    ordering = _build_l()
+    cand = ordering[5]
+    assert cp.candidate_ordinal(cand, ordering) == cp.candidate_ordinal(cand, ordering)
+
+
+def test_candidate_ordinal_raises_for_candidate_not_in_l() -> None:
+    ordering = _build_l()
+    bogus = ("AX-P1", 999, 0.5)
+    try:
+        cp.candidate_ordinal(bogus, ordering)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for a candidate absent from L")
+
+
+def test_tie_break_identity_beats_any_non_identity_at_equal_objective() -> None:
+    # 恒等候補（ordinal=-1）は L のどの要素（ordinal>=0）よりも tie-break で
+    # 常に勝つ。
+    ordering = _build_l()
+    non_identity = ordering[-1]
+    identity_key = (0.5, cp.candidate_ordinal(None, ordering))
+    non_identity_key = (0.5, cp.candidate_ordinal(non_identity, ordering))
+    assert identity_key < non_identity_key
+
+
+def test_tie_break_ax_d1_beats_ax_p1_at_equal_objective() -> None:
+    # L の total_order で "AX-D1" < "AX-P1" のため AX-D1 群は常に AX-P1 群
+    # より小さい ordinal を持ち、同 objective では AX-D1 側が tie-break で
+    # 勝つ。
+    ordering = _build_l()
+    ax_d1_cand = next(c for c in ordering if c[0] == "AX-D1")
+    ax_p1_cand = next(c for c in ordering if c[0] == "AX-P1")
+    key_d1 = (1.0, cp.candidate_ordinal(ax_d1_cand, ordering))
+    key_p1 = (1.0, cp.candidate_ordinal(ax_p1_cand, ordering))
+    assert key_d1 < key_p1
+
+
+def test_tie_break_earlier_l_position_wins_within_same_axis_at_equal_objective() -> None:
+    ordering = _build_l()
+    ax_p1_candidates = [c for c in ordering if c[0] == "AX-P1"]
+    first, second = ax_p1_candidates[0], ax_p1_candidates[1]
+    key_first = (2.0, cp.candidate_ordinal(first, ordering))
+    key_second = (2.0, cp.candidate_ordinal(second, ordering))
+    assert key_first < key_second

@@ -628,3 +628,93 @@ sha`/`candidate_generation_spec_sha`/`compute_budget_manifest_sha`/
 優先順位リストの決定論・内部領域3件達成・端点 shortfall テスト、
 validator の `not_measurable_definition`/`actor_boundary` 逐語一致拒否
 テスト、他既存回帰）。
+
+## PR #331 Codex bot レビュー第4巡対応（2026-08-27、Claude 完結ルート）
+
+2 指摘全て Fable 採用判定（機械汚染防止領域）。実装・検証・返信起草は
+Sonnet に委譲、コミット/push は Fable が別途実行する（本追記フェーズでは
+未実施）。
+
+1. **shortfall 主張の正直是正（P2）**:
+   第3巡で `inputs/candidate_generation_spec_v1.json`
+   `proposal.neighborhood_candidate_rule.shortfall_handling` に書いた
+   「shortfall は値キー・index キーの両方が同時に端という端点の場合に
+   限られる」という主張は偽だった。優先順位リスト6項目のうち3件以上が
+   catalog 制約内で有効な**内部領域**の current best でも、それらが
+   同一 (seed, arm, founder_id) の探索内で既に評価済みであれば
+   `select_neighborhood_candidates()` の `is_evaluated` フィルタ後に
+   3件未満へ減る——既存テスト
+   `test_select_neighborhood_candidates_shortfall_when_all_evaluated`
+   （第3巡で追加済み）がこれを直接実証していたにもかかわらず、
+   spec 文言・validator 定数・参照実装 docstring はいずれも「端点のみ」
+   という誤った不変条件を主張したままだった（参照実装が凍結表を構造的に
+   不可能にしていたことを認めた第3巡と同種の正直是正）。
+   - `shortfall_handling` を、shortfall の発生源が (a) 幾何的端点（値キー
+     が domain 端かつ index キーが L 内の該当 axis 列の端）と (b) 評価済み
+     枯渇（内部領域の best でも優先順位候補が同一探索内で既に評価済みの
+     ため未評価残数が3件未満になる）の**両方**であると認める定義へ
+     置換した。3:1 は「近傍優先3スロット + 探査1スロット」の決定論
+     スロットテンプレートであり、trial 内 candidate 数は常に4だが、近傍
+     スロットが埋まらない場合は理由を問わず探査規則が決定論的に補充する
+     ——宣言比率と実測内訳の乖離を隠さないため、各 trial の実際の内訳
+     （candidate 0..3 それぞれが近傍・探査・NOT_PROPOSABLE のいずれで
+     充足されたか）を探索 trace（`practice_actor_binding.trace_storage`
+     が定める trial log）へ必須記録する旨を明記した。
+   - `proposal_schedule_table`（trial 2-32 candidate 0..2）の rule 文言
+     から「exploratory shortfall at boundary current-bests only」という
+     同じ誤った不変条件を除き、幾何的端点・評価済み枯渇いずれの理由でも
+     決定論的に探査規則がバックフィルし、実際の内訳を trial log へ記録
+     する旨の文言へ改訂した。`run9_schema.
+     _CANDIDATE_GENERATION_EXPECTED_PROPOSAL_SCHEDULE_TABLE` を逐語で
+     追随更新した。
+   - 参照実装 `candidate_proposal.py` の `select_neighborhood_candidates()`
+     docstring（同じ「端点でのみ3件未満」という誤った主張の発生源の一つ）
+     を、`neighbors_of()` の生出力（catalog 制約内で有効な候補集合。
+     こちらは実際に端点限定で3件未満になるという主張は正しい——
+     `is_evaluated` フィルタを未適用のため）と、本関数が返す評価済み
+     フィルタ後の実際の結果（内部領域の best でも評価済み枯渇で3件未満に
+     なり得る）を明確に区別する記述へ改めた。モジュール冒頭の docstring
+     にも本巡の是正内容を追記した。
+2. **tie-break の実行可能な全順序凍結（P1）**:
+   `selection.tie_break` の旧定義「(objective, 軸ベクトルの辞書順)」は
+   座標順・表現・恒等候補の位置が未定義であり、実行可能な全順序ではな
+   かった（`selection` 節はそもそも validator の検査対象外でもあった —
+   トップレベル必須キーとしてのみ存在確認され中身は無検査だった）。
+   - tie-break キーを **(objective, candidate_ordinal)** へ置換凍結した。
+     `candidate_ordinal(候補)`: 恒等候補（`trial1_candidate0_rule` の
+     baseline）は `-1`。非恒等候補 c（`candidate_ordering` が定める正準
+     候補列 L の要素）は c が L（既に凍結済みの total_order — AX-D1 群が
+     先、タプル辞書順）において占めるインデックス（0始まり）。同
+     objective なら candidate_ordinal の小さい方が勝つ。恒等・AX-P1・
+     AX-D1 の全候補型を単一整数キーで被覆する実行可能な定義。
+   - 参照実装 `candidate_proposal.candidate_ordinal()` を新設した
+     （恒等=-1、非恒等候補は `all_candidates`＝L 内の線形探索で位置を
+     返し、L に存在しない候補は `ValueError` で拒否する）。
+   - `run9_schema.py` に `_validate_candidate_generation_selection()` を
+     新設し、`validate_candidate_generation_spec_manifest()` から呼び出す
+     配線を追加した——`selection` 節の中身が一切検査されていなかった
+     欠落（`objective`/`tie_break` 必須キー検査 + `tie_break` の逐語一致
+     検査）を埋めた。
+   - **テスト**: `candidate_ordinal()` の恒等=-1・非恒等=L内インデックス
+     一致・決定論性・L 非所属候補の拒否、および tie-break 決定的勝者
+     テスト（同 objective の恒等 vs 非恒等・AX-D1 vs AX-P1・L 内前後）を
+     `tests/test_candidate_proposal.py` に追加した。`selection.tie_break`
+     の逐語一致拒否・`selection` 節欠落キー拒否・非object拒否テストを
+     `tests/test_h3c_learning_recipe_manifests.py` に追加した。
+
+**連鎖更新**: `inputs/candidate_generation_spec_v1.json` のバイト変更に
+伴い `RUN9_CONTRACT.yaml` の `candidate_generation_spec_sha` を第5世代へ
+repin した。さらに本節を新設したことに伴う `HARNESS3C_AXIS_FEASIBILITY_
+RECORD.md` 自体の実バイト sha256 変更により、5 manifest 共通の
+`provenance.detail_record.sha256` 参照値が全て追随更新となるため、
+5 manifest 全て（`score_axis_catalog_sha`/`loss_evaluator_spec_sha`/
+`candidate_generation_spec_sha`/`compute_budget_manifest_sha`/
+`learning_data_binding_manifest_sha`）を第1-3巡と同型の cascade repin
+した（旧値は `RUN9_CONTRACT.yaml` 側に世代履歴コメントとして append-only
+保持）。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
+2474 件全 pass（第3巡時点の2464件から+10件: `candidate_proposal.py`
+`candidate_ordinal()`/tie-break 決定的勝者テスト7件、validator
+`selection.tie_break` 逐語一致拒否テスト3件、他既存回帰）。

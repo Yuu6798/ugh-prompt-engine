@@ -31,7 +31,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "fa703c13ed012d5a45127d4eaa57134ba2eb96470aaa88529b3805e772f617c0",
+      "sha256": "6957c4bceedb580d8e073319877abb1814311f2611d0a9cbed5b7c3f2928bb75",
       "note": "本 manifest 自体は W1/W1b 実測を直接参照しない（束ねる3 pinの由来はそれぞれ HARNESS3A/HARNESS3B/PR #329 の既存 record）が、本 manifest が属する RUN9-L0-HARNESS-3c フェーズの一部としてこの record を provenance に収載する"
     }
   }
