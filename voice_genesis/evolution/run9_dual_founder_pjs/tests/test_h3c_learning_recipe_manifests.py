@@ -449,6 +449,104 @@ def test_h3c_loss_evaluator_actor_boundary_missing_top_level_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 2b. loss_evaluator_spec_v1: residual_correspondence / reference_source
+# （PR #331 第6巡指摘1・2、P1/P1、採用対応）
+# ---------------------------------------------------------------------------
+
+
+def test_h3c_loss_evaluator_residual_correspondence_matches_frozen_constants() -> None:
+    data = _manifest_data("loss_evaluator_spec")
+    correspondence = data["residual_correspondence"]
+    assert (
+        correspondence["definition_note"]
+        == m._LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_DEFINITION_NOTE
+    )
+    assert correspondence["unit"] == m._LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_UNIT
+    assert (
+        correspondence["residual_formula"]
+        == m._LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_RESIDUAL_FORMULA
+    )
+    for channel_name, expected_rule in m._LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_PER_CHANNEL.items():
+        assert correspondence["per_channel_aggregation"][channel_name] == expected_rule
+
+
+def test_h3c_loss_evaluator_residual_correspondence_missing_top_level_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    del data["residual_correspondence"]
+    with pytest.raises(m.Run9ValidationError, match="residual_correspondence"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_residual_correspondence_unit_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["residual_correspondence"]["unit"] = "frame"
+    with pytest.raises(m.Run9ValidationError, match="residual_correspondence.unit"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_residual_correspondence_per_channel_tamper_rejected() -> None:
+    # レビュー原文が挙げる具体的な汚染経路: 未凍結の warping/リサンプリング
+    # 手法へ差し替え。
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["residual_correspondence"]["per_channel_aggregation"]["relative_f0"] = (
+        "frame 数を線形リサンプリングで揃えてから elementwise 差分を取る"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match=r"per_channel_aggregation\['relative_f0'\]"
+    ):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_residual_correspondence_residual_formula_missing_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    del data["residual_correspondence"]["residual_formula"]
+    with pytest.raises(m.Run9ValidationError, match="residual_correspondence.residual_formula"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_reference_source_matches_frozen_constants() -> None:
+    data = _manifest_data("loss_evaluator_spec")
+    reference_source = data["reference_source"]
+    assert reference_source["education"] == m._LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_EDUCATION
+    assert reference_source["practice"] == m._LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_PRACTICE
+    assert reference_source["common"] == m._LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_COMMON
+
+
+def test_h3c_loss_evaluator_reference_source_missing_top_level_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    del data["reference_source"]
+    with pytest.raises(m.Run9ValidationError, match="reference_source"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_reference_source_practice_permits_education_lesson_rejected() -> None:
+    # レビュー原文が挙げる具体的な汚染経路: PRACTICE の reference_source に
+    # education lesson / precomputed teacher feature の入力を許す緩和文言
+    # へ改変。
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["reference_source"]["practice"] = (
+        "PRACTICE枝: 凍結済みTechnique lesson bundleの値をprecomputed teacher featureとして"
+        "そのまま利用してよい。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="reference_source.practice"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_reference_source_education_missing_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    del data["reference_source"]["education"]
+    with pytest.raises(m.Run9ValidationError, match="reference_source.education"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_reference_source_common_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["reference_source"]["common"] = "calibration_scale は枝ごとに独立に定める。"
+    with pytest.raises(m.Run9ValidationError, match="reference_source.common"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+# ---------------------------------------------------------------------------
 # 3. candidate_generation_spec_v1 固有
 # ---------------------------------------------------------------------------
 

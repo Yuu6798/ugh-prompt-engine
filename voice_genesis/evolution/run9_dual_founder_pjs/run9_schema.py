@@ -1445,18 +1445,24 @@ H3C_ADJUDICATION_PATH = _THIS_DIR / "USER_ADJUDICATION_20260827_LEARNING_RECIPE_
 H3C_DETAIL_RECORD_PATH = _THIS_DIR / "HARNESS3C_AXIS_FEASIBILITY_RECORD.md"
 
 # loss_evaluator_spec_v1 の calibration_scale の frozen 正本（W1b Task3実測、
-# HARNESS3C_AXIS_FEASIBILITY_RECORD.md 第2部 Task3。training 68曲・ddof=0・
-# float64・丸めなし全桁）。`validate_loss_evaluator_spec_manifest()` は
-# manifest 内 channel ごとの calibration_scale.value がこの定数と厳密一致
-# することを強制する——「loss spec の calibration 値と channel 対応表の
-# 定数一致」（TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP と同じ「schema 定数を
-# 正本とし manifest 側の値をそれへ照合する」ファミリー掃討パターン）。
-# relative_f0/normalized_energy は frame粒度（案A）を Fable が採用した値
-# （案Bの mora/phrase粒度値は manifest 側 derivation 欄に参考併記のみ）。
+# HARNESS3C_AXIS_FEASIBILITY_RECORD.md 第2部 Task3 + PR #331 第6巡追加実測。
+# training 68曲・ddof=0・float64・丸めなし全桁）。`validate_loss_evaluator_
+# spec_manifest()` は manifest 内 channel ごとの calibration_scale.value が
+# この定数と厳密一致することを強制する——「loss spec の calibration 値と
+# channel 対応表の定数一致」（TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP と
+# 同じ「schema 定数を正本とし manifest 側の値をそれへ照合する」ファミリー
+# 掃討パターン）。
+# relative_f0/normalized_energy は v1（99bb670b）時点では frame 粒度（案A）
+# を Fable が採用していたが、PR #331 第6巡で residual_correspondence が
+# frame 対応関係を aligned mora 単位集約へ凍結したことにより「scale の
+# 粒度 = loss に入る原子残差標本の粒度」の原則を適用し直し、mora 粒度
+# （relative_f0 は W1b Task3 実測済みの案B、normalized_energy は第6巡で
+# 追加実測した案C）へ切替した（不採用となった frame/phrase 粒度値は
+# manifest 側 derivation 欄に経緯付きで参考併記）。
 LOSS_EVALUATOR_CALIBRATION_SCALE_V1: Dict[str, float] = {
-    "relative_f0": 28.68858178404701,
+    "relative_f0": 20.185403077101824,
     "duration_ratio": 0.26757779133213067,
-    "normalized_energy": 0.22003129791359613,
+    "normalized_energy": 0.1571927766940749,
     "attack_timing": 0.046215471651767655,
     "phrase_end_timing": 0.04277885307503042,
 }
@@ -18213,7 +18219,15 @@ def load_pinned_score_axis_catalog_manifest(
 
 _LOSS_EVALUATOR_CHANNEL_NAMES: FrozenSet[str] = frozenset(LOSS_EVALUATOR_CALIBRATION_SCALE_V1.keys())
 _LOSS_EVALUATOR_SPEC_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS | frozenset(
-    {"channels", "residual_extraction_spec", "aggregate_scope", "missing_policy", "actor_boundary"}
+    {
+        "channels",
+        "residual_extraction_spec",
+        "aggregate_scope",
+        "missing_policy",
+        "actor_boundary",
+        "residual_correspondence",
+        "reference_source",
+    }
 )
 
 # missing_policy.not_measurable_definition の凍結文言（PR #331 Codex bot
@@ -18248,6 +18262,65 @@ _LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_PRACTICE = (
 )
 _LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION = "EDUCATION 枝は凍結 lesson を比較対象に使用する。"
 
+# residual_correspondence の凍結文言（PR #331 Codex bot レビュー第6巡指摘1、
+# P1、採用対応）: lesson 側 contour と render 側 contour は frame 数が一般に
+# 一致しない（AX-D1 の duration 再配分では保証的に不一致）ため frame
+# elementwise の RMS は未定義だった。対応の単位を aligned mora へ凍結し、
+# channel ごとの集約規則（relative_f0/normalized_energy は mora 区間内の
+# 算術平均、他3 channel は恒等）を逐語一致で強制する——repin で
+# warping/リサンプリング/truncation 等の未凍結手法へ差し替わることを
+# fail-closed で拒否する。
+_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_DEFINITION_NOTE = (
+    "lesson側contourとrender側contourはframe数が一般に一致しない（AX-D1のduration再配分では保証的に不一致）"
+    "ため、frame elementwiseのRMSは未定義だった。対応の単位をaligned moraへ凍結する。1:1のmoraアラインメントは"
+    "両側で既知——lesson側はHARNESS-3bの.lab×musicxmlアラインメント、render側はrenderに入力したscoreのnote"
+    "区間そのもの（score変換はnote数・順序を不変に保つためmora対応は恒等）。warping・リサンプリング・"
+    "truncationはいずれも不採用（発明しない）。"
+)
+_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_UNIT = "aligned mora"
+_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_RESIDUAL_FORMULA = (
+    "per_channel_aggregationの規則を両側へ適用したmora単位スカラー列の差のRMS。両側のmora数は恒等対応で"
+    "常に一致する——一致しない場合は実装エラーとしてfail-closed停止し、比較を続行しない。"
+)
+_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_PER_CHANNEL: Dict[str, str] = {
+    "relative_f0": (
+        "mora区間内のvoiced frameの算術平均（float64）。voiced frameが両側いずれかでゼロのmoraは当該"
+        "channelの比較から除外し、除外数をeligible会計へ記録する（missing_policyと接続）。"
+    ),
+    "normalized_energy": (
+        "phrase正規化（residual_extraction_spec.energy_normalization、phrase単位で先に適用）後、mora区間内の"
+        "block-RMS値の算術平均。"
+    ),
+    "duration_ratio": "恒等——値がバンドル内で既にmora単位のスカラーのため対応規則は不要。",
+    "attack_timing": "恒等——値がバンドル内で既にmora単位のスカラーのため対応規則は不要。",
+    "phrase_end_timing": (
+        "恒等——値がバンドル内で既にphrase単位のスカラーのため、mora単位ではなくphrase単位のまま比較する。"
+    ),
+}
+
+# reference_source の凍結文言（PR #331 Codex bot レビュー第6巡指摘2、P1、
+# 採用対応）: 全 channel の residual_definition が旧「lesson 対 render」で
+# PRACTICE の lesson 禁止（actor_boundary.practice）と矛盾していたのを
+# 是正——比較対象を枝別に凍結する（EDUCATION=凍結 lesson bundle、
+# PRACTICE=Founder-local actor が raw audio から同一抽出式で自己抽出、
+# precomputed teacher feature 供給は禁止）。residual 式・対応/集約規則・
+# calibration_scale・重みは両枝共通である旨も逐語で強制する。
+_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_EDUCATION = (
+    "EDUCATION枝: 凍結済みTechnique lesson bundleの値（sha pin供給）。"
+)
+_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_PRACTICE = (
+    "PRACTICE枝: Founder-local actorがPJS training raw audio（PRACTICE_ALLOWED_DATA_INPUTSの"
+    "pjs_training_audio）から同一の抽出式（HARNESS-3b spec v1.1と同式）で抽出したreference特徴。"
+    "precomputed teacher featureの供給は引き続き禁止する——抽出という行為がFounder側で実行されることが要件"
+    "（式の共有はPoR §3.2「同じfeature extractorコードを利用すること自体は禁止しない」"
+    "〔run9_schema.pyのPRACTICE_REQUIRED_AUTONOMOUS_OPERATIONSコメント〕によりactor制約と両立する）。"
+)
+_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_COMMON = (
+    "residual式・対応/集約規則（residual_correspondence）・calibration_scale・重みは両枝共通——比較の等価性を"
+    "保つ。channelごとの比較対象定義はこのreference_sourceのみが枝で分岐する。actor_boundary節"
+    "（practice/education）と相互参照。"
+)
+
 
 def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
     """`loss_evaluator_spec_v1.json` の構造・値整形式を検証する（裁定 §2:
@@ -18265,6 +18338,10 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
     NOT_SCORABLE 定義（PR #331 第1巡採用2 是正文言）と逐語一致する（第3巡
     指摘2、P2、採用）。(e) `actor_boundary.practice`/`.education` が
     PRACTICE/EDUCATION 枝の境界文言と逐語一致する（第3巡指摘3、P2、採用）。
+    (f) `residual_correspondence`（frame 対応関係 = aligned mora への凍結、
+    channel 別集約規則）が凍結文言と逐語一致する（第6巡指摘1、P1、採用）。
+    (g) `reference_source`（枝別比較対象の凍結）が凍結文言と逐語一致する
+    （第6巡指摘2、P1、採用）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"loss evaluator spec manifest must be an object, got {type(data).__name__}")
@@ -18391,6 +18468,81 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
             "loss evaluator spec manifest.actor_boundary.education diverges from the pinned "
             f"EDUCATION branch boundary — expected exactly "
             f"{_LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION!r}, got {actor_boundary_education!r}"
+        )
+
+    residual_correspondence = data["residual_correspondence"]
+    if not isinstance(residual_correspondence, dict):
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.residual_correspondence must be an object, got "
+            f"{type(residual_correspondence).__name__}"
+        )
+    definition_note = residual_correspondence.get("definition_note")
+    if definition_note != _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_DEFINITION_NOTE:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.residual_correspondence.definition_note diverges from "
+            f"the pinned frame→mora correspondence freeze — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_DEFINITION_NOTE!r}, got "
+            f"{definition_note!r} (PR #331 第6巡採用1、warping/resampling/truncation 等の未凍結手法への"
+            "差し替えを fail-closed で拒否する)"
+        )
+    correspondence_unit = residual_correspondence.get("unit")
+    if correspondence_unit != _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_UNIT:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.residual_correspondence.unit must be exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_UNIT!r}, got {correspondence_unit!r}"
+        )
+    residual_formula = residual_correspondence.get("residual_formula")
+    if residual_formula != _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_RESIDUAL_FORMULA:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.residual_correspondence.residual_formula diverges from "
+            f"the pinned mora-unit residual definition — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_RESIDUAL_FORMULA!r}, got "
+            f"{residual_formula!r}"
+        )
+    per_channel_aggregation = residual_correspondence.get("per_channel_aggregation")
+    if not isinstance(per_channel_aggregation, dict):
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.residual_correspondence.per_channel_aggregation must be "
+            f"an object, got {type(per_channel_aggregation).__name__}"
+        )
+    for channel_name, expected_rule in _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_PER_CHANNEL.items():
+        actual_rule = per_channel_aggregation.get(channel_name)
+        if actual_rule != expected_rule:
+            raise Run9ValidationError(
+                "loss evaluator spec manifest.residual_correspondence.per_channel_aggregation"
+                f"[{channel_name!r}] diverges from the pinned aggregation rule — expected exactly "
+                f"{expected_rule!r}, got {actual_rule!r}"
+            )
+
+    reference_source = data["reference_source"]
+    if not isinstance(reference_source, dict):
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest.reference_source must be an object, got "
+            f"{type(reference_source).__name__}"
+        )
+    reference_source_education = reference_source.get("education")
+    if reference_source_education != _LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_EDUCATION:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.reference_source.education diverges from the pinned "
+            f"EDUCATION reference source — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_EDUCATION!r}, got "
+            f"{reference_source_education!r}"
+        )
+    reference_source_practice = reference_source.get("practice")
+    if reference_source_practice != _LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_PRACTICE:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.reference_source.practice diverges from the pinned "
+            f"PRACTICE reference source — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_PRACTICE!r}, got "
+            f"{reference_source_practice!r} (education lesson / precomputed teacher feature への"
+            "緩和を fail-closed で拒否する)"
+        )
+    reference_source_common = reference_source.get("common")
+    if reference_source_common != _LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_COMMON:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.reference_source.common diverges from the pinned "
+            f"cross-branch invariance statement — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_COMMON!r}, got {reference_source_common!r}"
         )
 
 

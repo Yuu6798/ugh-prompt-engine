@@ -87,7 +87,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "bebf702f1466b642bb719a98bcfb48509e81eb1db436d045965147037362fc72",
+      "sha256": "efdc09d9e955a4fe7e4f0a59a2f9e87dcbaac0aac85fe09688b8f76c17654275",
       "note": "本 spec の proposal/selection/boundary 処理が動作する探索空間（AX-P1/AX-D1 グリッド）の実効性・量子化制約の実測根拠"
     }
   }

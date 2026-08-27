@@ -6,11 +6,11 @@
       "spec_13_3_name": "relative F0 contour",
       "lesson_bundle_extracted_trait": "relative_F0",
       "education_allowed_channel": "pitch_trajectory",
-      "residual_definition": "voiced フレームの lesson 対 render の残差差分の RMS（value_hz、voiced==true のみ、unvoiced はゼロ補完せず除外）",
+      "residual_definition": "reference_source（枝別: education=凍結lesson / practice=Founder抽出、reference_source参照）対renderの残差のRMS。対応/集約規則はresidual_correspondence.per_channel_aggregation.relative_f0（mora区間内voiced frameの算術平均、value_hz、float64）を適用し、voiced frameが両側いずれかでゼロのmoraは当該channelの比較から除外して除外数をeligible会計へ記録する。",
       "calibration_scale": {
-        "value": 28.68858178404701,
-        "sample_unit": "frame",
-        "n_samples": 160501,
+        "value": 20.185403077101824,
+        "sample_unit": "mora",
+        "n_samples": 2746,
         "decision_needed_was": true,
         "derivation": {
           "formula": "population_std = numpy.std(values, ddof=0) over eligible=aligned 68 training songs, float64, no rounding",
@@ -19,18 +19,22 @@
             "n_samples": 160501,
             "population_std": 28.68858178404701,
             "mean": -0.9890442489423432,
-            "rationale": "バンドルの生データ粒度そのもの。voiced frame 1件 = 1標本。unvoiced frame(value_hz=null) はゼロ補完せずに除外。"
+            "rationale": "バンドルの生データ粒度そのもの。voiced frame 1件 = 1標本。unvoiced frame(value_hz=null) はゼロ補完せずに除外。v1(99bb670b)で採用されていたが、PR #331第6巡でresidual_correspondenceがmora単位集約へ凍結されたことによりv2で不採用へ転じた。",
+            "adopted_v1": true,
+            "adopted_v2": false
           },
           "option_b_mora_pool": {
             "sample_unit": "mora",
             "n_samples": 2746,
             "population_std": 20.185403077101824,
             "mean": -1.688564980473217,
-            "rationale": "duration_ratio/attack_timingと単位を揃え、mora内のframe値を平均してmora代表値1件を1標本とする。voiced frame 0件のmora(実測2件/2748件)はゼロ補完せず除外。",
-            "adopted": false
+            "rationale": "duration_ratio/attack_timingと単位を揃え、mora内のframe値を平均してmora代表値1件を1標本とする。voiced frame 0件のmora(実測2件/2748件)はゼロ補完せず除外。W1b Task3で実測済みだったがv1では不採用（lessonに存在しない新規導出統計のため）。residual_correspondenceのmora集約凍結（PR #331第6巡）によりこの新規導出統計こそがloss原子標本粒度となったためv2で採用へ転じた。",
+            "adopted_v1": false,
+            "adopted_v2": true
           },
-          "fable_decision": "2026-08-27, option A (frame pool) adopted",
-          "decision_rationale": "scale の粒度 = 当該 channel の loss に入る原子残差標本の粒度。relative_f0 は lesson が frame 契約の contour を保持し loss も frame 単位比較のため frame プール（案A）を採用する — mora平均集約（案B）は lesson に存在しない新規導出統計を挟むため不採用。"
+          "fable_decision_v1": "2026-08-27, option A (frame pool) adopted (99bb670b、residual_correspondence凍結前)",
+          "fable_decision_v2": "2026-08-27, PR #331第6巡: option B (mora pool) へ切替",
+          "decision_rationale": "scale の粒度 = 当該 channel の loss に入る原子残差標本の粒度（本原則は v1/v2 で不変）。v1 (99bb670b) 時点では residual_correspondence が未凍結で「loss も frame 単位比較」を前提としていたため frame プール（案A）を採用していた。PR #331 第6巡で residual_correspondence を aligned mora 単位へ凍結した結果、loss に入る原子残差標本の粒度は mora となり、v1 の前提（frame 単位比較）が事実として成立しなくなった。同じ粒度原則をそのまま適用し、mora プール（案B、W1b Task3で実測済み・値は不変）へ切替える——frame プール維持の方が本原則に違反するため。"
         }
       },
       "weight": 0.2
@@ -40,7 +44,7 @@
       "spec_13_3_name": "note/mora duration ratio",
       "lesson_bundle_extracted_trait": "duration_ratio",
       "education_allowed_channel": "phoneme_note_duration_relation",
-      "residual_definition": "mora単位の lesson 対 render の duration_ratio 残差の RMS",
+      "residual_definition": "reference_source対renderのmora単位duration_ratio残差のRMS。対応規則は恒等（residual_correspondence.per_channel_aggregation.duration_ratio参照）。",
       "calibration_scale": {
         "value": 0.26757779133213067,
         "sample_unit": "mora",
@@ -49,7 +53,8 @@
         "derivation": {
           "formula": "population_std = numpy.std(values, ddof=0) over eligible=aligned 68 training songs, float64, no rounding",
           "rationale": "値がバンドル内で既にmora単位のスカラー（1 mora = 1 value）。集約前の生値そのものが1標本のため標本単位の設計判断は不要。",
-          "mean": 1.0266980782881285
+          "mean": 1.0266980782881285,
+          "mora_correspondence_note": "PR #331第6巡のresidual_correspondence（frame対応関係のmora単位集約凍結）は本channelの比較粒度（既にmora単位）を変えないため、calibration_scaleの値・sample_unitは変更不要——W1b Task3値のまま整合する。"
         }
       },
       "weight": 0.2
@@ -59,11 +64,11 @@
       "spec_13_3_name": "phrase-normalized energy envelope",
       "lesson_bundle_extracted_trait": "energy_envelope",
       "education_allowed_channel": "dynamics_energy_trajectory",
-      "residual_definition": "numpy RMS per-phrase 正規化後の block(frame) 単位 lesson 対 render 残差の RMS",
+      "residual_definition": "numpy RMS per-phrase正規化後、residual_correspondence.per_channel_aggregation.normalized_energy（mora区間内block-RMS値の算術平均）でmora単位に集約したblock値のreference_source対render残差のRMS。",
       "calibration_scale": {
-        "value": 0.22003129791359613,
-        "sample_unit": "frame",
-        "n_samples": 166053,
+        "value": 0.1571927766940749,
+        "sample_unit": "mora",
+        "n_samples": 2747,
         "decision_needed_was": true,
         "derivation": {
           "formula": "population_std = numpy.std(values, ddof=0) over eligible=aligned 68 training songs, float64, no rounding",
@@ -72,18 +77,31 @@
             "n_samples": 166053,
             "population_std": 0.22003129791359613,
             "mean": 0.35856642997423976,
-            "rationale": "バンドルの生データ粒度そのもの。block 1件 = 1標本。欠損0件。"
+            "rationale": "バンドルの生データ粒度そのもの。block 1件 = 1標本。欠損0件。v1(99bb670b)で採用されていたが、PR #331第6巡でresidual_correspondenceがmora単位集約へ凍結されたことによりv2で不採用へ転じた。",
+            "adopted_v1": true,
+            "adopted_v2": false
           },
           "option_b_phrase_pool": {
             "sample_unit": "phrase",
             "n_samples": 201,
             "population_std": 0.08926916409743947,
             "mean": 0.38747662785282244,
-            "rationale": "phrase_end_timingと単位を揃え、phrase内のblock値を平均してphrase代表値1件を1標本とする。zero-block phraseは実測0件。",
-            "adopted": false
+            "rationale": "phrase_end_timingと単位を揃え、phrase内のblock値を平均してphrase代表値1件を1標本とする。zero-block phraseは実測0件。W1b Task3で実測済みだが、mora単位ではなくphrase単位のためresidual_correspondenceのmora集約とも粒度が一致せず、v1・v2いずれでも不採用。",
+            "adopted_v1": false,
+            "adopted_v2": false
           },
-          "fable_decision": "2026-08-27, option A (frame pool) adopted",
-          "decision_rationale": "scale の粒度 = 当該 channel の loss に入る原子残差標本の粒度。normalized_energy は lesson が frame 契約の contour を保持し loss も frame 単位比較のため frame プール（案A）を採用する — phrase平均集約（案B）は lesson に存在しない新規導出統計を挟むため不採用。"
+          "option_c_mora_pool": {
+            "sample_unit": "mora",
+            "n_samples": 2747,
+            "population_std": 0.1571927766940749,
+            "mean": 0.343244778448749,
+            "rationale": "W1b Task3では未実測（frame/phraseの2案のみ実測済み）。PR #331第6巡でresidual_correspondence.per_channel_aggregation.normalized_energy（phrase正規化後のblock-RMS値をmora区間内で算術平均）どおりに追加実測: training_bundle.json（raw sha256=6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da照合、使用前に一致確認）のenergy_envelope.phrases[].blocks[].value（既にextractorがphrase内max正規化を適用済みの値、音声デコード・RMS再計算は行わない）を、education_lesson_extractor.pyのparse_lab_file/group_lab_to_morae_with_phrases（.lab再パースのみ、独立reimplementationはimportしてそのまま使用）で得た各moraの[t0,t1)区間へblock開始時刻t_sで振り分け、mora単位に算術平均して1mora=1標本としてプールした。block総数はW1b Task3のframeプール母数166053件と完全一致（同一block母集団からの集計であることを確認）。mora区間内にblockが1件も入らなかったmora1件（pjs096 phrase_index=0 mora_index=1、全2748件中）はゼロ補完せず除外し2747件がeligible。energy_mora_calibration_probe.py（session workdir限定、repo非収載）を独立2回のpython3プロセス起動で実行し出力JSONのsha256が完全一致することを確認（決定論成立）。",
+            "adopted_v1": false,
+            "adopted_v2": true
+          },
+          "fable_decision_v1": "2026-08-27, option A (frame pool) adopted (99bb670b、residual_correspondence凍結前)",
+          "fable_decision_v2": "2026-08-27, PR #331第6巡: option C (mora pool、追加実測) へ切替",
+          "decision_rationale": "scale の粒度 = 当該 channel の loss に入る原子残差標本の粒度（本原則は v1/v2 で不変）。v1 (99bb670b) 時点では residual_correspondence が未凍結で「loss も frame 単位比較」を前提としていたため frame プール（案A）を採用していた。PR #331 第6巡で residual_correspondence を aligned mora 単位へ凍結した結果、loss に入る原子残差標本の粒度は mora となり、v1 の前提（frame 単位比較）が事実として成立しなくなった。mora プールは W1b Task3 では未実測だったため第6巡で追加実測し（案C）、同じ粒度原則をそのまま適用してこれへ切替える——frame プール維持の方が本原則に違反するため。"
         }
       },
       "weight": 0.2
@@ -93,7 +111,7 @@
       "spec_13_3_name": "attack timing",
       "lesson_bundle_extracted_trait": "onset_offset.attack_timing",
       "education_allowed_channel": "timing",
-      "residual_definition": "mora単位の lesson 対 render の attack timing (WORLD harvest FP=5.0 導出、.lab相当のnote境界はrender入力scoreから決定論導出) 残差の RMS",
+      "residual_definition": "reference_source対renderのmora単位attack timing (WORLD harvest FP=5.0 導出、.lab相当のnote境界はrender入力scoreから決定論導出) 残差のRMS。対応規則は恒等（residual_correspondence.per_channel_aggregation.attack_timing参照）。",
       "calibration_scale": {
         "value": 0.046215471651767655,
         "sample_unit": "mora",
@@ -102,7 +120,8 @@
         "derivation": {
           "formula": "population_std = numpy.std(values, ddof=0) over eligible=aligned 68 training songs, float64, no rounding",
           "rationale": "値がバンドル内で既にmora単位のスカラー。集約前の生値そのものが1標本のため標本単位の設計判断は不要。",
-          "mean": 0.007203579777563855
+          "mean": 0.007203579777563855,
+          "mora_correspondence_note": "PR #331第6巡のresidual_correspondence（frame対応関係のmora単位集約凍結）は本channelの比較粒度（既にmora単位）を変えないため、calibration_scaleの値・sample_unitは変更不要——W1b Task3値のまま整合する。"
         }
       },
       "weight": 0.2
@@ -112,7 +131,7 @@
       "spec_13_3_name": "phrase-end timing",
       "lesson_bundle_extracted_trait": "onset_offset.phrase_end_timing",
       "education_allowed_channel": "phrase_end_control",
-      "residual_definition": "phrase単位の lesson 対 render の phrase-end timing 残差の RMS",
+      "residual_definition": "reference_source対renderのphrase単位phrase-end timing残差のRMS。対応規則は恒等——mora単位ではなくphrase単位のまま比較する（residual_correspondence.per_channel_aggregation.phrase_end_timing参照）。",
       "calibration_scale": {
         "value": 0.04277885307503042,
         "sample_unit": "phrase",
@@ -121,7 +140,8 @@
         "derivation": {
           "formula": "population_std = numpy.std(values, ddof=0) over eligible=aligned 68 training songs, float64, no rounding",
           "rationale": "値がバンドル内で既にphrase単位のスカラー。集約前の生値そのものが1標本のため標本単位の設計判断は不要。",
-          "mean": 0.06490550525415459
+          "mean": 0.06490550525415459,
+          "mora_correspondence_note": "PR #331第6巡のresidual_correspondence（frame対応関係のmora単位集約凍結）は本channelの対応規則が恒等——mora単位ではなくphrase単位のまま比較する——であるため、calibration_scaleの値・sample_unitは変更不要。W1b Task3値のまま整合する。"
         }
       },
       "weight": 0.2
@@ -129,6 +149,23 @@
   ],
   "channel_vocabulary_map_cross_check": {
     "note": "各 channel の spec_13_3_name/lesson_bundle_extracted_trait/education_allowed_channel は run9_schema.TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP（HARNESS3B 正本）の対応する行と一致することを load_pinned_loss_evaluator_spec_manifest() が cross-check する（attack_timing/phrase_end_timing はいずれも extracted_trait='onset_offset' の親キーを共有し、lesson_bundle_extracted_trait 側でのみ .attack_timing/.phrase_end_timing のサブフィールドを明示する）"
+  },
+  "residual_correspondence": {
+    "definition_note": "lesson側contourとrender側contourはframe数が一般に一致しない（AX-D1のduration再配分では保証的に不一致）ため、frame elementwiseのRMSは未定義だった。対応の単位をaligned moraへ凍結する。1:1のmoraアラインメントは両側で既知——lesson側はHARNESS-3bの.lab×musicxmlアラインメント、render側はrenderに入力したscoreのnote区間そのもの（score変換はnote数・順序を不変に保つためmora対応は恒等）。warping・リサンプリング・truncationはいずれも不採用（発明しない）。",
+    "unit": "aligned mora",
+    "residual_formula": "per_channel_aggregationの規則を両側へ適用したmora単位スカラー列の差のRMS。両側のmora数は恒等対応で常に一致する——一致しない場合は実装エラーとしてfail-closed停止し、比較を続行しない。",
+    "per_channel_aggregation": {
+      "relative_f0": "mora区間内のvoiced frameの算術平均（float64）。voiced frameが両側いずれかでゼロのmoraは当該channelの比較から除外し、除外数をeligible会計へ記録する（missing_policyと接続）。",
+      "normalized_energy": "phrase正規化（residual_extraction_spec.energy_normalization、phrase単位で先に適用）後、mora区間内のblock-RMS値の算術平均。",
+      "duration_ratio": "恒等——値がバンドル内で既にmora単位のスカラーのため対応規則は不要。",
+      "attack_timing": "恒等——値がバンドル内で既にmora単位のスカラーのため対応規則は不要。",
+      "phrase_end_timing": "恒等——値がバンドル内で既にphrase単位のスカラーのため、mora単位ではなくphrase単位のまま比較する。"
+    }
+  },
+  "reference_source": {
+    "education": "EDUCATION枝: 凍結済みTechnique lesson bundleの値（sha pin供給）。",
+    "practice": "PRACTICE枝: Founder-local actorがPJS training raw audio（PRACTICE_ALLOWED_DATA_INPUTSのpjs_training_audio）から同一の抽出式（HARNESS-3b spec v1.1と同式）で抽出したreference特徴。precomputed teacher featureの供給は引き続き禁止する——抽出という行為がFounder側で実行されることが要件（式の共有はPoR §3.2「同じfeature extractorコードを利用すること自体は禁止しない」〔run9_schema.pyのPRACTICE_REQUIRED_AUTONOMOUS_OPERATIONSコメント〕によりactor制約と両立する）。",
+    "common": "residual式・対応/集約規則（residual_correspondence）・calibration_scale・重みは両枝共通——比較の等価性を保つ。channelごとの比較対象定義はこのreference_sourceのみが枝で分岐する。actor_boundary節（practice/education）と相互参照。"
   },
   "residual_extraction_spec": {
     "input": "render 出力（gate_synth WAV、44100Hz native — ヘッダ実測値を本節に記載し fail-closed 検査する。sample_rate_hz: 44100, encoding: PCM）",
@@ -158,7 +195,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "bebf702f1466b642bb719a98bcfb48509e81eb1db436d045965147037362fc72",
+      "sha256": "efdc09d9e955a4fe7e4f0a59a2f9e87dcbaac0aac85fe09688b8f76c17654275",
       "summary": "W1b Task3: training バンドル（sha256照合供給）68曲の5 channel母標準偏差実測。relative_f0/normalized_energyの標本粒度は両案（frame/mora,phrase）を実測しFable判定（frame採用）を記録。独立2プロセス実行で完全一致（決定論確認済み）。"
     },
     "training_bundle_input": {

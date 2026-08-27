@@ -795,3 +795,129 @@ RECORD.md` 自体の実バイト sha256 変更により、5 manifest 共通の
 2477 件全 pass（第4巡時点の2474件から+3件: `candidate_proposal.py` catalog
 消費テスト3件〔offset domain fixture 整合1件・catalog 改変反映2件〕、他
 既存回帰）。
+
+## PR #331 Codex bot レビュー第6巡対応（2026-08-27、Claude 完結ルート）
+
+2 指摘全て Fable 採用判定（P1×2、機械汚染防止領域）。実装・検証・返信起草は
+Sonnet に委譲、コミット/push は Fable が別途実行する（本追記フェーズでは
+未実施）。
+
+1. **frame 対応関係の凍結（mora 単位集約、P1）**: lesson 側 contour と
+   render 側 contour は frame 数が一般に一致しない（AX-D1 の duration
+   再配分では保証的に不一致）ため、`residual_definition` が暗黙に前提と
+   していた frame elementwise の RMS は未定義だった。新設トップレベル
+   `residual_correspondence` に対応の単位を aligned mora へ凍結し
+   （1:1 mora アラインメントは lesson 側 = HARNESS-3b の .lab×musicxml
+   アラインメント、render 側 = render 入力 score の note 区間そのもの
+   〔score 変換は note 数・順序を不変に保つため mora 対応は恒等〕で両側
+   既知）、channel 別集約規則（`per_channel_aggregation`）を明記した:
+   `relative_f0` は mora 区間内 voiced frame の算術平均（float64、voiced
+   frame が両側いずれかでゼロの mora は除外し除外数を eligible 会計へ
+   記録）、`normalized_energy` は phrase 正規化後の mora 区間内 block-RMS
+   の算術平均、`duration_ratio`/`attack_timing`/`phrase_end_timing` は
+   既に mora/phrase 単位スカラーのため対応規則は恒等。残差は
+   `residual_formula` で「対応の単位=aligned mora の channel 別集約後、
+   mora 単位スカラー列の差の RMS。両側 mora 数は恒等対応で常に一致——
+   不一致時は実装エラーとして fail-closed 停止し比較を続行しない」旨を
+   凍結した。warping・リサンプリング・truncation はいずれも不採用（発明
+   しない）と明記した。5 channel の `residual_definition` を本節参照へ
+   書き換えた。`run9_schema.validate_loss_evaluator_spec_manifest()` へ
+   `residual_correspondence` の逐語一致検査（definition_note/unit/
+   residual_formula/per_channel_aggregation 5件）を新設した。
+   - **内部整合性の懸念（一次実装時に検出）と Fable 判定による解消**:
+     `channels[relative_f0/normalized_energy].calibration_scale.
+     derivation.decision_rationale`（99bb670b で確定、本 PR 以前からの
+     既存フリーズ文言）は「scale の粒度 = 当該 channel の loss に入る
+     原子残差標本の粒度」という原則のもと、「loss も frame 単位比較の
+     ため frame プール（案A）を採用する — mora/phrase平均集約（案B）は
+     lesson に存在しない新規導出統計を挟むため不採用」と明記していた。
+     本節の mora 対応凍結は、まさにこの「新規導出統計」（mora 区間内の
+     算術平均）を loss へ入る残差の原子単位として採用するものであり、
+     `decision_rationale` が案Aを選んだ理由（「loss も frame 単位比較」）
+     を事実として否定する内部矛盾が生じた。**Fable 判定（2026-08-27、
+     第6巡内継続）**: 同じ decision_rationale が掲げる原則（「scale の
+     粒度 = loss に入る原子残差標本の粒度」）が正であり、本節の mora
+     集約凍結後は frame プール維持の方が原理違反——両 channel とも
+     mora 粒度へ切替する。
+     - `relative_f0`: W1b Task3 で実測済みの mora プール値
+       （population_std=20.185403077101824, mean=-1.688564980473217,
+       n=2746、voiced frame 0件の mora 2件/2748件は除外済み）へ
+       calibration_scale を repin。derivation に v1（frame プール
+       28.68858178404701採用、99bb670b 時点）→ 第6巡切替の経緯・
+       両案の値・切替理由を正直に併記した。
+     - `normalized_energy`: W1b Task3 で実測されていたのは frame プール
+       （採用、166053件）と phrase プール（不採用参考、201件）の2案のみ
+       で、mora プールは未実測だった。本節で追加実測: training バンドル
+       （`harness_work/h3b/run1/training_bundle.json`、使用前に raw
+       sha256 = `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da`
+       照合——一致確認済み）から、第6巡凍結の集約規則（phrase 正規化
+       〔extractor 側で phrase 内 max 正規化として実装済み・block 値に
+       既に反映済み〕を先に適用した block-RMS 値の mora 区間内算術平均）
+       どおりに、各 mora の [t0, t1) 区間（`education_lesson_extractor.
+       py` の `parse_lab_file`/`group_lab_to_morae_with_phrases` を
+       import して .lab 再パースで取得——音声デコード・RMS 再計算は
+       行わず、bundle に既に保存済みの block 値をそのまま使用）に入る
+       block（t_s が半開区間内）を振り分けて mora 単位スカラー列を構成、
+       母標準偏差（ddof=0, numpy float64, 丸めなし）を算出した:
+       population_std=0.1571927766940749, mean=0.343244778448749,
+       n=2747（68 曲・全2748 mora 中、mora 区間内に block が1件も
+       入らなかった mora が1件——pjs096 phrase_index=0 mora_index=1
+       ——のみ除外。block 総数166053件は W1b Task3 の frame プール母数と
+       完全一致——同一の block 母集団から集計していることを確認済み）。
+       `energy_mora_calibration_probe.py`（session workdir 限定、repo
+       非収載）を独立2回の `python3` プロセス起動で実行し、出力 JSON の
+       sha256 が完全一致することを確認済み（決定論成立）。derivation に
+       frame（採用済みだった旧値, n=166053）・phrase（不採用参考,
+       n=201）・mora（新規実測・今回採用, n=2747）の三案を併記し、選定
+       理由（同じ decision_rationale の粒度原則）を明記した。
+     - 残り3 channel（duration_ratio/attack_timing/phrase_end_timing）は
+       元々 mora/phrase 単位スカラーで対応規則が恒等（本節1本文冒頭
+       参照）——mora 対応凍結は既存の比較粒度を変えないため、W1b Task3
+       の値（変更なし）のまま整合する。各 channel の calibration_scale.
+       derivation に「mora 対応凍結による影響なし・値変更不要」の旨を
+       追記した。
+     - `run9_schema.LOSS_EVALUATOR_CALIBRATION_SCALE_V1` の `relative_f0`/
+       `normalized_energy` 値を上記の新採用値へ更新し、
+       `test_h3c_loss_evaluator_calibration_matches_frozen_constant` 等
+       既存テストが新値との一致を検証する形で追随した。
+2. **枝別 reference_source の凍結（P1）**: 全 channel の
+   `residual_definition` が旧「lesson 対 render」表記で、
+   `actor_boundary.practice`（education lesson / precomputed teacher
+   feature の入力禁止）と矛盾していた。新設トップレベル
+   `reference_source` に比較対象を枝別凍結した: `education` = 凍結済み
+   Technique lesson bundle の値（sha pin 供給）、`practice` =
+   Founder-local actor が PJS training raw audio
+   （`PRACTICE_ALLOWED_DATA_INPUTS.pjs_training_audio`）から同一の抽出式
+   （HARNESS-3b spec v1.1 と同式）で抽出した reference 特徴
+   （precomputed teacher feature の供給は引き続き禁止——抽出という行為が
+   Founder 側で実行されることが要件。式の共有自体は PoR §3.2
+   「同じ feature extractor コードを利用すること自体は禁止しない」
+   〔`run9_schema.PRACTICE_REQUIRED_AUTONOMOUS_OPERATIONS` コメント〕に
+   より actor 制約と両立）。`common` に residual 式・対応/集約規則
+   （採用1）・calibration_scale・重みは両枝共通である旨、および
+   `actor_boundary` 節との相互参照を明記した。5 channel の
+   `residual_definition` を「reference_source 対 render の残差の RMS」へ
+   書き換えた（`actor_boundary.practice`/`.education` 自体の凍結文言は
+   第3巡で逐語一致検査済みのため無改訂）。
+   `run9_schema.validate_loss_evaluator_spec_manifest()` へ
+   `reference_source` の逐語一致検査（education/practice/common 3件）を
+   新設した。PoR §3.2 の当該一文は `DESIGN_RUN9_REVISION_0.3.md` にも
+   同旨の記載があり（「『同じ feature extractor コードを利用する』こと
+   自体は禁止しない」）、actor 制約との両立に矛盾はない。
+
+**連鎖更新**: `inputs/loss_evaluator_spec_v1.json` のバイト変更に伴い
+`RUN9_CONTRACT.yaml` の `loss_evaluator_spec_sha` を第7世代へ repin した。
+さらに本節を新設したことに伴う `HARNESS3C_AXIS_FEASIBILITY_RECORD.md`
+自体の実バイト sha256 変更により、5 manifest 共通の
+`provenance.detail_record.sha256` 参照値が全て追随更新となるため、
+5 manifest 全て（`score_axis_catalog_sha`/`loss_evaluator_spec_sha`/
+`candidate_generation_spec_sha`/`compute_budget_manifest_sha`/
+`learning_data_binding_manifest_sha`）を第1-5巡と同型の cascade repin
+した（旧値は `RUN9_CONTRACT.yaml` 側に世代履歴コメントとして append-only
+保持）。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
+2487 件全 pass（第5巡時点の2477件から+10件: `residual_correspondence`/
+`reference_source` 逐語一致検査10件〔正常系2件・欠落/改変拒否8件〕、他
+既存回帰）。

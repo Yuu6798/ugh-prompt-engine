@@ -2214,8 +2214,16 @@ pjs_consumed_inputs_manifest_sha:
 # 再計算した（旧値
 # 1f4955fe260e0bb2b00ffd6e41bda233be59948d592d76a7b91688d0a2c02fd3 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第6巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第6巡指摘は loss_evaluator_
+# spec_v1.json を対象としている）。`HARNESS3C_AXIS_FEASIBILITY_RECORD.md`
+# へ第6巡対応追記節を新設したことに伴う `provenance.detail_record.sha256`
+# 参照値の追随更新のみ（score_axis_catalog_sha の repin note と同型の
+# cascade）——値を再計算した（旧値
+# 55a1f33e2438c67c0176c48dcfc4b75da7afeac3acd87ef2bc41321a338f08fa は
+# 履歴として append-only 保持）。
 score_axis_catalog_sha:
-  value: "55a1f33e2438c67c0176c48dcfc4b75da7afeac3acd87ef2bc41321a338f08fa"
+  value: "659a1dd1cc92b7c5f95de9350f388c4707d9d1b35c9876d2f07722fa145ade8f"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/score_axis_catalog_v1.json
 
@@ -2288,8 +2296,57 @@ score_axis_catalog_sha:
 # 同型の cascade）——値を再計算した（旧値
 # f179ed2e4ca6fad29a030ec4f9ecbb75886ab0d24e5e28cfb7e8dd9970062b7e は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第6巡指摘1・2、P1/P1、採用
+# 対応。Claude 完結ルート）:
+# 指摘1（frame 対応関係の凍結、mora 単位集約）: lesson 側 contour と
+# render 側 contour は frame 数が一般に一致しない（AX-D1 の duration
+# 再配分では保証的に不一致）ため frame elementwise の RMS は未定義
+# だった。新設トップレベル `residual_correspondence` に対応の単位を
+# aligned mora へ凍結し（1:1 mora アラインメントは両側で既知）、channel
+# 別集約規則（relative_f0/normalized_energy は mora 区間内算術平均、他
+# 3 channel は恒等）を明記し、warping・リサンプリング・truncation は不採用
+# と明記した。5 channel の `residual_definition` を本節参照へ書き換えた。
+# **内部整合性の懸念と Fable 判定による解消**: `channels[relative_f0/
+# normalized_energy].calibration_scale.derivation.decision_rationale`
+# （99bb670b で確定、本巡以前からの既存フリーズ文言）は「loss も frame
+# 単位比較のため frame プール（案A）を採用する — mora/phrase平均集約
+# （案B）は...新規導出統計を挟むため不採用」と明記しており、本 repin の
+# mora 対応凍結はまさにこの「新規導出統計」を loss へ入る残差の原子単位
+# として採用するため、decision_rationale が案Aを選んだ理由を事実として
+# 否定する内部整合性の緊張が生じた。Fable 判定（2026-08-27、第6巡内
+# 継続）: 同じ decision_rationale の原則（「scale の粒度 = loss に入る
+# 原子残差標本の粒度」）が正であり、mora 集約凍結後は frame プール維持の
+# 方が原理違反——両 channel とも mora 粒度へ切替する。relative_f0 は
+# W1b Task3 実測済みの mora プール値（20.185403077101824, n=2746）へ
+# repin、normalized_energy は W1b Task3 で mora 粒度が未実測だったため
+# training_bundle.json（raw sha256 照合済み）+ .lab 再パースで追加実測
+# した mora プール値（0.1571927766940749, n=2747、独立2プロセスで決定論
+# 確認済み）へ repin した。両 channel とも derivation に v1→v2 の切替
+# 経緯・不採用値・理由を正直に併記し、`run9_schema.LOSS_EVALUATOR_
+# CALIBRATION_SCALE_V1` の対応する値も同時に更新した（残り3 channel は
+# 元々 mora/phrase 単位スカラーで対応規則が恒等のため値変更不要、
+# derivation にその旨を追記）。詳細:
+# `HARNESS3C_AXIS_FEASIBILITY_RECORD.md` 第6巡対応節。
+# 指摘2（枝別 reference_source の凍結）: 全 channel の
+# `residual_definition` が旧「lesson 対 render」表記で `actor_boundary.
+# practice`（education lesson / precomputed teacher feature の入力禁止）
+# と矛盾していたのを是正。新設トップレベル `reference_source` に
+# education（凍結 lesson bundle）/practice（Founder-local actor が raw
+# audio から同一抽出式で自己抽出、precomputed teacher feature 供給禁止）
+# を枝別凍結し、residual 式・対応/集約規則・calibration_scale・重みは
+# 両枝共通である旨を明記した。5 channel の `residual_definition` を
+# 「reference_source 対 render の残差の RMS」へ書き換えた。
+# `run9_schema.validate_loss_evaluator_spec_manifest()` へ
+# `residual_correspondence`/`reference_source` の逐語一致検査を新設した。
+# これらのバイト変更に伴い値を再計算した。さらに `HARNESS3C_AXIS_
+# FEASIBILITY_RECORD.md` へ第6巡対応追記節を新設したことに伴う
+# `provenance.detail_record.sha256` 参照値の追随更新（score_axis_
+# catalog_sha の repin note と同型の cascade）も同一 repin に含める
+# （旧値
+# 6433b03093ac8e8d6fa89bd0d74b6c540f9c1e8b6c4ed633c4dae194d23b65d5 は
+# 履歴として append-only 保持）。
 loss_evaluator_spec_sha:
-  value: "6433b03093ac8e8d6fa89bd0d74b6c540f9c1e8b6c4ed633c4dae194d23b65d5"
+  value: "aa27e181a4f6031f726a91599c2339cc2a49b8b4a883e02bea4fa5868d03be15"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/loss_evaluator_spec_v1.json
 
@@ -2415,8 +2472,16 @@ loss_evaluator_spec_sha:
 # 同一 repin に含める（旧値
 # 735b8e878e3978199224f8a0597f5f763a764d48ba27358d5aad6f2db67d5944 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第6巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第6巡指摘は loss_evaluator_
+# spec_v1.json を対象としている）。`HARNESS3C_AXIS_FEASIBILITY_RECORD.md`
+# へ第6巡対応追記節を新設したことに伴う `provenance.detail_record.sha256`
+# 参照値の追随更新のみ（score_axis_catalog_sha の repin note と同型の
+# cascade）——値を再計算した（旧値
+# 229b66b738f65a4e9f28cb10e9b0112711e04c1969fb3e678897a011345f9d68 は
+# 履歴として append-only 保持）。
 candidate_generation_spec_sha:
-  value: "229b66b738f65a4e9f28cb10e9b0112711e04c1969fb3e678897a011345f9d68"
+  value: "070a27f6cc4bcc9d497e0e3a847f7d9f76b21d2fb1f51d665625d935ff523238"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/candidate_generation_spec_v1.json
 
@@ -2469,8 +2534,16 @@ candidate_generation_spec_sha:
 # repin note と同型の cascade）——値を再計算した（旧値
 # cab1d49d6572d8ceb82cc7b276d62d592280c2ac041955bab312069d737aee12 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第6巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第6巡指摘は loss_evaluator_
+# spec_v1.json を対象としている）。`HARNESS3C_AXIS_FEASIBILITY_RECORD.md`
+# へ第6巡対応追記節を新設したことに伴う `provenance.detail_record.sha256`
+# 参照値の追随更新のみ（score_axis_catalog_sha の repin note と同型の
+# cascade）——値を再計算した（旧値
+# 0f322aa7f5676761b893349afec150dfcb11e4cc3988c1aafaa0be0591ba3555 は
+# 履歴として append-only 保持）。
 compute_budget_manifest_sha:
-  value: "0f322aa7f5676761b893349afec150dfcb11e4cc3988c1aafaa0be0591ba3555"
+  value: "a09aa41530963db30c32b6235667ba123cd85d4dcab7a459a7968f74efe3a66f"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/compute_budget_manifest_v1.json
 
@@ -2532,8 +2605,16 @@ compute_budget_manifest_sha:
 # 再計算した（旧値
 # 39d4b8e42e505d36909b5c119725fa59e099c119757488285f3556fddb91d436 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第6巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第6巡指摘は loss_evaluator_
+# spec_v1.json を対象としている）。`HARNESS3C_AXIS_FEASIBILITY_RECORD.md`
+# へ第6巡対応追記節を新設したことに伴う `provenance.detail_record.sha256`
+# 参照値の追随更新のみ（score_axis_catalog_sha の repin note と同型の
+# cascade）——値を再計算した（旧値
+# a3a0c4e384c220c3f508d4dd36120ba90d516215954153d698a80ca3b8817a23 は
+# 履歴として append-only 保持）。
 learning_data_binding_manifest_sha:
-  value: "a3a0c4e384c220c3f508d4dd36120ba90d516215954153d698a80ca3b8817a23"
+  value: "8a620a042d83b0fde44b6e8b1cb2a8b59234bb6dca4c9d550c2d7b07bca6dd2f"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/learning_data_binding_manifest_v1.json
 
