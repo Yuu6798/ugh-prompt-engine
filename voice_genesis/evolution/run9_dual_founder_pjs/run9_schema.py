@@ -18216,6 +18216,38 @@ _LOSS_EVALUATOR_SPEC_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = _H3C_COMMON_TOP_L
     {"channels", "residual_extraction_spec", "aggregate_scope", "missing_policy", "actor_boundary"}
 )
 
+# missing_policy.not_measurable_definition の凍結文言（PR #331 Codex bot
+# レビュー第1巡指摘2、P1、採用対応で是正した candidate 単位 NOT_SCORABLE
+# 定義の逐語）: 第3巡指摘2「Validate the corrected NOT_SCORABLE policy」
+# （P2、採用）が指摘するとおり、`zero_fill_prohibited`/
+# `eligible_count_required_per_channel` の2 boolean だけでは repin で本
+# 文言を旧「部分 channel 採点」定義へ差し戻しても検出できない。この
+# 定数との逐語一致検査で repin 改変を fail-closed 拒否する。
+_LOSS_EVALUATOR_EXPECTED_NOT_MEASURABLE_DEFINITION = (
+    "いずれかの channel が eligible == 0 の candidate は当該 candidate を NOT_SCORABLE と記録する。"
+    "いずれかの channel が eligible == 0 の trial（= trial 内の全 candidate のうち少なくとも1つが "
+    "NOT_SCORABLE な channel を持つ trial ではなく、当該 candidate 自身）は NOT_SCORABLE として "
+    "candidate selection（best 更新の比較対象）から除外する — 部分計測の candidate が完全計測の "
+    "candidate に勝ち得た旧定義（欠測 channel を加点も減点もしないゼロ補完相当の扱い）の欠陥を是正する。"
+    "除外の事実（NOT_SCORABLE フラグ）と channel 別 eligible 件数を trial 記録へ必須収載する"
+    "（ゼロ補完禁止・eligible 記録の裁定 §2 要件は維持）。trial 内の全 candidate が NOT_SCORABLE の"
+    "場合、当該 trial はそのまま記録し best 更新なしで次 trial へ進む（当該 trial の render 予算は"
+    "消費済みとして計上する — reseed・予算追加はしない）。"
+)
+
+# actor_boundary.practice/education の凍結文言（PR #331 Codex bot レビュー
+# 第3巡指摘3「Enforce the evaluator actor boundary」、P2、採用対応）:
+# PRACTICE は raw audio から Founder 自身が抽出した特徴にのみこの
+# evaluator を適用し education lesson / precomputed teacher feature の
+# 入力を禁止する、EDUCATION は凍結 lesson を比較対象に使う、という枝別
+# 境界を逐語一致で強制する。トップレベルキーの存在検査のみでは repin で
+# 空文字列・欠落・「education lesson を入力可」への緩和文言が通過し得た。
+_LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_PRACTICE = (
+    "PRACTICE 枝はこの evaluator を PJS raw audio + founder 自己 render にのみ適用する。"
+    "education lesson / precomputed teacher feature の入力を禁止する。"
+)
+_LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION = "EDUCATION 枝は凍結 lesson を比較対象に使用する。"
+
 
 def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
     """`loss_evaluator_spec_v1.json` の構造・値整形式を検証する（裁定 §2:
@@ -18229,7 +18261,10 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
     対応表の定数一致」）。(c) 各 channel の
     `spec_13_3_name`/`lesson_bundle_extracted_trait`/`education_allowed_
     channel` が `TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP` の対応行と一致
-    する。
+    する。(d) `missing_policy.not_measurable_definition` が candidate 単位
+    NOT_SCORABLE 定義（PR #331 第1巡採用2 是正文言）と逐語一致する（第3巡
+    指摘2、P2、採用）。(e) `actor_boundary.practice`/`.education` が
+    PRACTICE/EDUCATION 枝の境界文言と逐語一致する（第3巡指摘3、P2、採用）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"loss evaluator spec manifest must be an object, got {type(data).__name__}")
@@ -18325,6 +18360,38 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
             "loss evaluator spec manifest.missing_policy.eligible_count_required_per_channel must "
             "be exactly True"
         )
+    not_measurable_definition = missing_policy.get("not_measurable_definition")
+    if not_measurable_definition != _LOSS_EVALUATOR_EXPECTED_NOT_MEASURABLE_DEFINITION:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.missing_policy.not_measurable_definition diverges from "
+            f"the pinned candidate-level NOT_SCORABLE definition — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_NOT_MEASURABLE_DEFINITION!r}, got "
+            f"{not_measurable_definition!r} (PR #331 第1巡採用2 是正文言への repin 復元強制、"
+            "旧「部分 channel 採点」文言への差し戻しを fail-closed で拒否する)"
+        )
+
+    actor_boundary = data["actor_boundary"]
+    if not isinstance(actor_boundary, dict):
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest.actor_boundary must be an object, got "
+            f"{type(actor_boundary).__name__}"
+        )
+    actor_boundary_practice = actor_boundary.get("practice")
+    if actor_boundary_practice != _LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_PRACTICE:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.actor_boundary.practice diverges from the pinned "
+            f"PRACTICE branch boundary — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_PRACTICE!r}, got {actor_boundary_practice!r} "
+            "(education lesson / precomputed teacher feature 入力禁止の緩和・空・欠落を fail-closed "
+            "で拒否する)"
+        )
+    actor_boundary_education = actor_boundary.get("education")
+    if actor_boundary_education != _LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.actor_boundary.education diverges from the pinned "
+            f"EDUCATION branch boundary — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION!r}, got {actor_boundary_education!r}"
+        )
 
 
 def load_pinned_loss_evaluator_spec_manifest(
@@ -18367,7 +18434,11 @@ _CANDIDATE_GENERATION_PROHIBITED_REQUIRED: FrozenSet[str] = frozenset(
 # exploratory 3件(candidate 1..3)、trial 2-32 = neighborhood 3件
 # (candidate 0..2) + exploratory 1件(candidate 3) の 3:1 被覆。repin で
 # 恒等候補脱落・比率復元（2:2 等）が起きても、この定数との deep equality
-# 比較により fail-closed で拒否する。
+# 比較により fail-closed で拒否する。trial 2-32 candidate 0..2 の rule
+# 文言は第3巡指摘1（P1「Make the scheduled neighborhood ratio
+# achievable」、採用）で近傍優先順位リスト（値キー ±1/±2 量子化ステップ
+# → 隣接 index キー、端点のみ探査規則フォールバック）を反映する文言へ
+# 改訂した（`candidate_proposal.neighbors_of()` の実装と同期させる）。
 _CANDIDATE_GENERATION_EXPECTED_PROPOSAL_SCHEDULE_TABLE: Tuple[Dict[str, Any], ...] = (
     {"trial_index": 1, "candidate_index": 0, "rule": "identity (all axes = 0, baseline)"},
     {
@@ -18379,8 +18450,9 @@ _CANDIDATE_GENERATION_EXPECTED_PROPOSAL_SCHEDULE_TABLE: Tuple[Dict[str, Any], ..
         "trial_index": "2..32",
         "candidate_index": "0..2",
         "rule": (
-            "current-best neighborhood: nearest, second-nearest, third-nearest "
-            "deterministic +-1 quantization step candidates not yet evaluated"
+            "current-best neighborhood: first 3 not-yet-evaluated candidates from the "
+            "frozen priority list (value key +-1/+-2 quantization steps, then adjacent "
+            "index key), exploratory shortfall at boundary current-bests only"
         ),
     },
     {

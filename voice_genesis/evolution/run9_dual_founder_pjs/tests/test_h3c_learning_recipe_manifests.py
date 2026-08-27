@@ -373,6 +373,81 @@ def test_h3c_loss_evaluator_zero_fill_tamper_rejected() -> None:
         m.validate_loss_evaluator_spec_manifest(data)
 
 
+def test_h3c_loss_evaluator_not_measurable_definition_matches_frozen_constant() -> None:
+    data = _manifest_data("loss_evaluator_spec")
+    assert (
+        data["missing_policy"]["not_measurable_definition"]
+        == m._LOSS_EVALUATOR_EXPECTED_NOT_MEASURABLE_DEFINITION
+    )
+
+
+def test_h3c_loss_evaluator_not_measurable_definition_reverted_to_old_wording_rejected() -> None:
+    # PR #331 第3巡指摘2（P2、採用）: 是正済み candidate 単位 NOT_SCORABLE
+    # 文言が、旧「部分 channel 採点」文言へ repin で差し戻されても
+    # zero_fill_prohibited/eligible_count_required_per_channel の2
+    # boolean だけでは検出できなかった欠陥を閉じる。
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["missing_policy"]["not_measurable_definition"] = (
+        "欠測 channel は aggregate から除外し、残る channel の等重み再正規化は行わない"
+        "（欠測分を加点も減点もしない）。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="not_measurable_definition"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_not_measurable_definition_missing_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    del data["missing_policy"]["not_measurable_definition"]
+    with pytest.raises(m.Run9ValidationError, match="not_measurable_definition"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_actor_boundary_matches_frozen_constants() -> None:
+    data = _manifest_data("loss_evaluator_spec")
+    assert data["actor_boundary"]["practice"] == m._LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_PRACTICE
+    assert data["actor_boundary"]["education"] == m._LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION
+
+
+def test_h3c_loss_evaluator_actor_boundary_practice_empty_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["actor_boundary"]["practice"] = ""
+    with pytest.raises(m.Run9ValidationError, match="actor_boundary.practice"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_actor_boundary_practice_missing_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    del data["actor_boundary"]["practice"]
+    with pytest.raises(m.Run9ValidationError, match="actor_boundary.practice"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_actor_boundary_practice_permits_education_lesson_rejected() -> None:
+    # レビュー原文が挙げる具体的な汚染経路: PRACTICE に education lesson /
+    # precomputed teacher feature の入力を許す緩和文言へ改変。
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["actor_boundary"]["practice"] = (
+        "PRACTICE 枝はこの evaluator を PJS raw audio + founder 自己 render に加え、"
+        "education lesson / precomputed teacher feature の入力も許可する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="actor_boundary.practice"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_actor_boundary_education_missing_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    del data["actor_boundary"]["education"]
+    with pytest.raises(m.Run9ValidationError, match="actor_boundary.education"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_actor_boundary_missing_top_level_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    del data["actor_boundary"]
+    with pytest.raises(m.Run9ValidationError, match="actor_boundary"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
 # ---------------------------------------------------------------------------
 # 3. candidate_generation_spec_v1 固有
 # ---------------------------------------------------------------------------

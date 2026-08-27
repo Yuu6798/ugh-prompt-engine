@@ -246,6 +246,12 @@ def test_select_exploratory_candidate_empty_list_returns_none() -> None:
 
 # ---------------------------------------------------------------------------
 # 4. 近傍候補列挙
+#
+# PR #331 Codex bot レビュー第3巡指摘1（P1「Make the scheduled neighborhood
+# ratio achievable」、採用）: `neighbors_of()` を値キー ±1/±2 量子化ステップ
+# + 隣接 index キー（L 順で1つ前/後）の優先順位リストへ拡張した。以下は
+# その決定論性・内部領域での3件達成可能性・端点（range端+index端）での
+# shortfall の直接テスト。
 # ---------------------------------------------------------------------------
 
 
@@ -260,32 +266,131 @@ def test_neighbors_of_identity_returns_one_step_candidates_only() -> None:
     assert neighbors == sorted(neighbors)
 
 
-def test_neighbors_of_ax_p1_candidate_are_adjacent_grid_values() -> None:
+def test_neighbors_of_deterministic_across_two_calls() -> None:
+    ordering = _build_l()
+    current_best = ("AX-P1", 1, 1.0)
+    n1 = cp.neighbors_of(current_best, ordering)
+    n2 = cp.neighbors_of(current_best, ordering)
+    assert n1 == n2
+
+
+def test_neighbors_of_ax_p1_interior_yields_priority_ordered_value_and_index_neighbors() -> None:
+    # note_index=1（3-note fixture の中央、index 端ではない）・v=1.0
+    # （domain 内部、range 端ではない）: 値キー±1/±2ステップの3件
+    # （1.5/0.5/2.0。-1.0 側は 0.0 で domain 除外）+ 隣接 note_index 0/2 の
+    # 同値候補2件が優先順位どおりに列挙される。
+    ordering = _build_l()
+    current_best = ("AX-P1", 1, 1.0)
+    neighbors = cp.neighbors_of(current_best, ordering)
+    assert neighbors == [
+        ("AX-P1", 1, 1.5),
+        ("AX-P1", 1, 0.5),
+        ("AX-P1", 1, 2.0),
+        ("AX-P1", 0, 1.0),
+        ("AX-P1", 2, 1.0),
+    ]
+
+
+def test_neighbors_of_ax_p1_range_boundary_alone_still_achieves_three() -> None:
+    # v=2.0（range 上端）だが note_index=1 は index 端ではないため、値キー
+    # 側の不足（+2.5/+3.0 は range 外）を隣接 index キーの同値候補が補い、
+    # 内部領域では3:1 が構造的に達成可能という本改訂の要点を示す。
+    ordering = _build_l()
+    current_best = ("AX-P1", 1, 2.0)
+    neighbors = cp.neighbors_of(current_best, ordering)
+    assert neighbors == [
+        ("AX-P1", 1, 1.5),
+        ("AX-P1", 1, 1.0),
+        ("AX-P1", 0, 2.0),
+        ("AX-P1", 2, 2.0),
+    ]
+    selected = cp.select_neighborhood_candidates(
+        current_best, ordering, is_evaluated=lambda c: False, limit=3
+    )
+    assert len(selected) == 3
+
+
+def test_neighbors_of_ax_p1_index_boundary_alone_still_achieves_three() -> None:
+    # note_index=0（index 端）だが v=1.0 は range 端ではないため、値キー側
+    # の±1/±2ステップだけで3件が確保できる（隣接 index キー側の不足は
+    # index=-1 が存在しないため item5 のみ欠けるが item6 が補う）。
     ordering = _build_l()
     current_best = ("AX-P1", 0, 1.0)
     neighbors = cp.neighbors_of(current_best, ordering)
-    assert set(neighbors) == {("AX-P1", 0, 0.5), ("AX-P1", 0, 1.5)}
+    assert neighbors == [
+        ("AX-P1", 0, 1.5),
+        ("AX-P1", 0, 0.5),
+        ("AX-P1", 0, 2.0),
+        ("AX-P1", 1, 1.0),
+    ]
+    selected = cp.select_neighborhood_candidates(
+        current_best, ordering, is_evaluated=lambda c: False, limit=3
+    )
+    assert len(selected) == 3
 
 
-def test_neighbors_of_ax_p1_boundary_has_single_neighbor() -> None:
-    ordering = _build_l()
-    current_best = ("AX-P1", 0, 2.0)  # range 上端: +2.5 は L に存在しない
-    neighbors = cp.neighbors_of(current_best, ordering)
-    assert neighbors == [("AX-P1", 0, 1.5)]
+def test_neighbors_of_ax_p1_double_endpoint_shortfall() -> None:
+    # 端点の例外: note_count=1（index 端）かつ v=2.0（range 端）が同時に
+    # 揃う場合のみ、優先順位リスト6項目を尽くしても3件に満たない
+    # （item5/6 は index±1 が存在せず不適用、item1/3 は range 外）。
+    single_note_ordering = cp.build_candidate_ordering(
+        note_count=1, phrase_of_note=[0], original_duration_beats=[1.0]
+    )
+    current_best = ("AX-P1", 0, 2.0)
+    neighbors = cp.neighbors_of(current_best, single_note_ordering)
+    assert neighbors == [("AX-P1", 0, 1.5), ("AX-P1", 0, 1.0)]
+    assert len(neighbors) < 3
+    selected = cp.select_neighborhood_candidates(
+        current_best, single_note_ordering, is_evaluated=lambda c: False, limit=3
+    )
+    assert len(selected) == 2  # shortfall: 呼び出し側が exploratory 規則で1件補充する
 
 
 def test_neighbors_of_ax_d1_candidate_are_adjacent_grid_values() -> None:
+    # 隣接 index キー（(0,(0,2))）の同値候補が優先順位リスト項目6として
+    # 値キー±1ステップの2件を補い、3件ちょうどに達する。
     ordering = _build_l()
     current_best = ("AX-D1", 0, (0, 1), 0.5)
     neighbors = cp.neighbors_of(current_best, ordering)
-    assert set(neighbors) == {("AX-D1", 0, (0, 1), 0.25), ("AX-D1", 0, (0, 1), 0.75)}
+    assert neighbors == [
+        ("AX-D1", 0, (0, 1), 0.75),
+        ("AX-D1", 0, (0, 1), 0.25),
+        ("AX-D1", 0, (0, 2), 0.5),
+    ]
 
 
 def test_neighbors_of_ax_d1_boundary_at_minimum_delta() -> None:
+    # delta=0.25（domain 最小、-0.25 側は 0 で L に存在しない）でも、隣接
+    # index キー (0,(0,2)) の同値候補（item6）が値キー+1ステップ（item1）
+    # と合わせて3件ちょうどを構成する。
     ordering = _build_l()
-    current_best = ("AX-D1", 0, (0, 1), 0.25)  # -0.25 側は 0 = L に存在しない
+    current_best = ("AX-D1", 0, (0, 1), 0.25)
     neighbors = cp.neighbors_of(current_best, ordering)
-    assert neighbors == [("AX-D1", 0, (0, 1), 0.5)]
+    assert neighbors == [
+        ("AX-D1", 0, (0, 1), 0.5),
+        ("AX-D1", 0, (0, 1), 0.75),
+        ("AX-D1", 0, (0, 2), 0.25),
+    ]
+
+
+def test_neighbors_of_ax_d1_sole_pair_double_endpoint_shortfall() -> None:
+    # 端点の例外（AX-D1 版）: フレーズが2note のみで L 内 AX-D1 候補が
+    # 唯一の (donor, receiver) ペア1件しか存在しない場合、値キー側
+    # （±1/±2ステップとも donor の min-duration 上限を超え無効）・
+    # index キー側（隣接 index キーが存在しない）のいずれも候補を持たず、
+    # 近傍0件のまま全滅する（探査規則が3件全てを補充する）。
+    sole_pair_ordering = cp.build_candidate_ordering(
+        note_count=2, phrase_of_note=[0, 0], original_duration_beats=[0.5, 0.25]
+    )
+    ax_d1_only = [c for c in sole_pair_ordering if c[0] == "AX-D1"]
+    assert ax_d1_only == [("AX-D1", 0, (0, 1), 0.25)]
+    current_best = ("AX-D1", 0, (0, 1), 0.25)
+    neighbors = cp.neighbors_of(current_best, sole_pair_ordering)
+    assert neighbors == []
+    selected = cp.select_neighborhood_candidates(
+        current_best, sole_pair_ordering, is_evaluated=lambda c: False, limit=3
+    )
+    assert selected == []
 
 
 def test_select_neighborhood_candidates_limits_to_three_and_skips_evaluated() -> None:
@@ -299,13 +404,29 @@ def test_select_neighborhood_candidates_limits_to_three_and_skips_evaluated() ->
     assert selected == sorted(selected)
 
 
+def test_select_neighborhood_candidates_non_identity_best_achieves_three_neighbors() -> None:
+    # PR #331 第3巡指摘1の直接テスト: 内部領域の非恒等 best は近傍3枠を
+    # 構造的に満たす（旧実装は最大2件までしか満たせなかった）。
+    ordering = _build_l()
+    current_best = ("AX-P1", 1, 1.0)
+    selected = cp.select_neighborhood_candidates(
+        current_best, ordering, is_evaluated=lambda c: False, limit=3
+    )
+    assert len(selected) == 3
+    assert selected == [
+        ("AX-P1", 1, 1.5),
+        ("AX-P1", 1, 0.5),
+        ("AX-P1", 1, 2.0),
+    ]
+
+
 def test_select_neighborhood_candidates_shortfall_when_all_evaluated() -> None:
     ordering = _build_l()
-    current_best = ("AX-P1", 0, 2.0)  # 単一近傍のみ存在
+    current_best = ("AX-P1", 1, 1.0)
     selected_none_evaluated = cp.select_neighborhood_candidates(
         current_best, ordering, is_evaluated=lambda c: False, limit=3
     )
-    assert selected_none_evaluated == [("AX-P1", 0, 1.5)]
+    assert len(selected_none_evaluated) == 3
     selected_all_evaluated = cp.select_neighborhood_candidates(
         current_best, ordering, is_evaluated=lambda c: True, limit=3
     )

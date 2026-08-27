@@ -50,7 +50,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "54ba4fa0caa1d02a1eac25530dc7d20ce7ee274a03370d2d5fb6274d16a05c6b"
+      "sha256": "fa703c13ed012d5a45127d4eaa57134ba2eb96470aaa88529b3805e772f617c0"
     },
     "execution_profile_manifest": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/execution_profile_manifest.json",

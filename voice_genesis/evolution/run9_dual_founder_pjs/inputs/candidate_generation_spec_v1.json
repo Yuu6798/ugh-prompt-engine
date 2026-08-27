@@ -23,7 +23,7 @@
     "proposal_schedule_table": [
       {"trial_index": 1, "candidate_index": 0, "rule": "identity (all axes = 0, baseline)"},
       {"trial_index": 1, "candidate_index": "1..3", "rule": "hash-derived exploratory candidates (digest -> grid index)"},
-      {"trial_index": "2..32", "candidate_index": "0..2", "rule": "current-best neighborhood: nearest, second-nearest, third-nearest deterministic +-1 quantization step candidates not yet evaluated"},
+      {"trial_index": "2..32", "candidate_index": "0..2", "rule": "current-best neighborhood: first 3 not-yet-evaluated candidates from the frozen priority list (value key +-1/+-2 quantization steps, then adjacent index key), exploratory shortfall at boundary current-bests only"},
       {"trial_index": "2..32", "candidate_index": "3", "rule": "hash-derived exploratory candidate (digest -> grid index), fixed 3:1 neighborhood:exploration ratio across the 4 candidates of the trial"}
     ],
     "candidate_ordering": {
@@ -54,10 +54,10 @@
       "applies_to": "trial 2..32 の candidate 0..2（3件）",
       "current_best_definition": "直前 trial 終了時点までに評価され NOT_SCORABLE でない candidate 群のうち selection.objective を最小化する候補。best 更新は trial 境界でのみ確定し、同一 trial 内の候補間の評価順は近傍算出に影響しない。trial 2 の直前 = trial 1 終了時点の最良候補（trial 1 は恒等候補 + hash-derived exploratory 3件の既定構成を維持し、この4件の中から選ぶ）",
       "current_best_may_be_identity": "trial 1 の最良候補が恒等候補（全軸 0）である場合を含む。恒等は L の要素ではないため、この場合の近傍は identity_neighbor_rule に従う",
-      "neighbor_value_perturbation": "現 best が L の要素（単一軸候補）である場合、近傍候補は current best と同一の index キー（AX-P1: 同一 note_index／AX-D1: 同一 phrase_index かつ同一 (i, j)）を保ちつつ、値キー（AX-P1: offset／AX-D1: delta）のみを 1 量子化ステップ（AX-P1: ±0.5／AX-D1: ±0.25）変化させた候補とする。変化後の値が offset_domain/delta_domain の範囲外、または L に存在しない（例: AX-D1 で delta を 0.25 から -0.25 側へ動かすと 0 に達し L の要素でなくなる）場合、その方向の近傍は存在しないものとして単に列挙対象から除く",
-      "identity_neighbor_rule": "現 best が恒等候補の場合、近傍候補集合 = L のうち恒等（全軸 0）からちょうど 1 量子化ステップの候補、すなわち AX-P1 は offset ∈ {-0.5, +0.5} の全 note_index 分、AX-D1 は delta = 0.25 の全 (phrase_index, (i, j)) 分。この定義は neighbor_value_perturbation のルール（値キーを ±1 量子化ステップ変化させる）を、値キーの初期値が 0 である恒等ベクトルへそのまま適用した結果であり、新規のルールを導入するものではない",
-      "enumeration_order": "上記で定まった近傍候補集合を candidate_ordering の total_order（L と同じ辞書順）で列挙し、まだ評価されていない候補を先頭から3件採用する",
-      "shortfall_handling": "未評価の近傍候補が3件未満の場合、不足分は exploratory_candidate_rule の手順（不足している candidate index のスロットごとに digest を計算）で補充する"
+      "neighbor_value_perturbation": "現 best が L の要素（単一軸候補、best B = (axis, index キー, 値キー v)）である場合、以下の優先順位リストを順に評価し、catalog 制約内で有効・L に存在・（同一 (seed, arm, founder_id) の探索内で）未評価のもののみを候補として採用する（PR #331 Codex bot レビュー第3巡指摘1「Make the scheduled neighborhood ratio achievable」、P1、採用: 旧定義は index キー固定・値キー ±1 量子化ステップの2方向のみで、非恒等 best の近傍が最大2件しか存在せず trial 2-32 の近傍3枠を構造的に満たせなかった）: (1) 値キー v + 1 量子化ステップ、(2) 値キー v - 1 量子化ステップ、(3) 値キー v + 2 量子化ステップ、(4) 値キー v - 2 量子化ステップ、(5) 同 axis・同値キー v で index キーが candidate_ordering の total_order 上 1 つ前の候補（AX-P1: note_index - 1／AX-D1: (phrase_index, (i, j)) の L 内 distinct index キー列で1つ前）、(6) 同 axis・同値キー v で index キーが total_order 上 1 つ後の候補。値が offset_domain/delta_domain の範囲外、または該当する (index キー, 値キー) の組が L に存在しない場合、その項目は単に列挙対象から除く",
+      "identity_neighbor_rule": "現 best が恒等候補の場合、近傍候補集合 = L のうち恒等（全軸 0）からちょうど 1 量子化ステップの候補、すなわち AX-P1 は offset ∈ {-0.5, +0.5} の全 note_index 分、AX-D1 は delta = 0.25 の全 (phrase_index, (i, j)) 分。この定義は neighbor_value_perturbation の優先順位リスト項目 (1)(2)（値キーを ±1 量子化ステップ変化させる）を、値キーの初期値が全 index キーについて 0 である恒等ベクトルへ、単一の index キーに限定せず全 index キーに対して適用した結果であり、新規のルールを導入するものではない（項目 (3)(4) の ±2 ステップおよび項目 (5)(6) の隣接 index キーは、恒等には基準となる単一 index キーが存在しないため適用しない——恒等の近傍数は項目(1)(2)の全 index キー適用だけで通常3件を十分に上回るため、この不適用が3枠達成可能性を損なうことはない）",
+      "enumeration_order": "現 best が L の要素の場合、neighbor_value_perturbation の優先順位リスト (1)→(6) の順に評価し、有効・L に存在・未評価の候補を先頭から3件採用する（L の total_order による並べ替えではなく、この優先順位そのものが列挙順である）。現 best が恒等の場合は identity_neighbor_rule で定まった候補集合を candidate_ordering の total_order（L と同じ辞書順）で列挙し、先頭から3件採用する",
+      "shortfall_handling": "未評価の近傍候補が3件未満の場合、不足分は exploratory_candidate_rule の手順（不足している candidate index のスロットごとに digest を計算）で補充する。neighbor_value_perturbation の優先順位リスト (1)-(6) を導入した結果、この shortfall は「値キー v が offset_domain/delta_domain の端かつ index キーが L 内の該当 axis distinct index キー列の端（1つ前/後が存在しない、または存在しても該当 (index キー, v) の組が L に存在しない）」という端点の場合に限られる——値キーまたは index キーの少なくとも一方が内部領域にある current best では、優先順位リスト6項目のうち3件以上が構造的に有効になる（内部領域では3:1 比率が構造的に達成可能というのが本改訂の要点であり、端点でのみ探査規則へフォールバックする例外を認める）"
     }
   },
   "selection": {
@@ -87,7 +87,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "54ba4fa0caa1d02a1eac25530dc7d20ce7ee274a03370d2d5fb6274d16a05c6b",
+      "sha256": "fa703c13ed012d5a45127d4eaa57134ba2eb96470aaa88529b3805e772f617c0",
       "note": "本 spec の proposal/selection/boundary 処理が動作する探索空間（AX-P1/AX-D1 グリッド）の実効性・量子化制約の実測根拠"
     }
   }

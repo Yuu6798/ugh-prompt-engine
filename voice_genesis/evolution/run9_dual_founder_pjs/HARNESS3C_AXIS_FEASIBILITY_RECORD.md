@@ -542,3 +542,89 @@ RECORD.md` 自体の実バイト sha256 変更により、5 manifest 共通の
 2450 件全 pass（新規テスト36件を含む: `candidate_proposal.py` 参照実装の
 決定論・辞書順・プロービング境界テスト26件、validator 形状拒否/回帰
 テスト10件、他既存回帰）。
+
+## PR #331 Codex bot レビュー第3巡対応（2026-08-27、Claude 完結ルート）
+
+3 指摘全て Fable 採用判定（機械汚染防止領域）。実装・検証・返信起草は
+Sonnet に委譲、コミット/push は Fable が別途実行する（本追記フェーズでは
+未実施）。
+
+1. **近傍 3:1 の構造的達成可能化（P1）**:
+   旧 `neighborhood_candidate_rule.neighbor_value_perturbation` および
+   参照実装 `candidate_proposal.neighbors_of()` は、現 best の index キー
+   を固定したまま値キーを ±1 量子化ステップした2候補のみを近傍として
+   いた。非恒等 best では最大2件しか近傍枠（凍結 3:1 比率の3枠）を
+   満たせず、trial 2-32 の近傍3枠が構造的に達成不能という欠陥だった
+   （**参照実装が凍結表を構造的に不可能にしていた**ことを正直に認める
+   ——第2巡で「値キー±1量子化ステップ」と定義した時点で、この構造的
+   不足は数学的に自明だった）。
+   - `inputs/candidate_generation_spec_v1.json` `proposal.
+     neighborhood_candidate_rule.neighbor_value_perturbation` を、近傍
+     候補の優先順位リストへ改訂した: best B = (axis, index キー, 値キー
+     v) に対し (1) v+1量子化ステップ (2) v-1量子化ステップ (3) v+2量子化
+     ステップ (4) v-2量子化ステップ (5) 同 axis・同値キーで index キーが
+     L 順で1つ前の候補 (6) 同 axis・同値キーで index キーが L 順で1つ後
+     の候補、の順に評価し、catalog 制約内で有効・L に存在・未評価の
+     ものを列挙する。先頭3件を近傍枠に採用し、6件を尽くしても3件に
+     満たない場合（値キーが domain 端かつ index キーが L 内の該当 axis
+     distinct index キー列の端という**端点の場合に限る**）のみ探査規則
+     で補充する。内部領域では3:1 が構造的に達成可能になったことが
+     本修正の要点であり、`shortfall_handling` にこの端点限定の例外を
+     明記した。`identity_neighbor_rule`（恒等 best の近傍）は既存定義
+     （値キー初期値0を全 index キーに適用した結果）を上記優先順位リスト
+     の項目(1)(2)の一般化として整合する形へ記述を統合した（挙動は不変
+     ——恒等の近傍数は通常3件を十分上回るため）。`proposal_schedule_table`
+     の trial 2-32 candidate 0..2 の rule 文言も新定義に合わせて改訂した。
+   - 参照実装 `candidate_proposal.neighbors_of()` を同一の優先順位リスト
+     へ書き換えた（`_index_key()`/`_value_key()`/`_make_candidate()`/
+     `_sorted_index_keys()` を新設し、L 内の distinct index キー列から
+     隣接キーを導出する）。
+   - **検証**: 決定論性テスト（同一入力→同一近傍列を2回計算一致で確認）
+     + 非恒等 best が内部領域（値キー・index キーいずれも端でない）で
+     優先順位どおり5件（うち先頭3件を近傍枠採用）を得ることの直接テスト
+     + 値キー端点のみ・index キー端点のみでは依然3件を達成できること
+     （どちらか一方のみの端点では shortfall が起きない）の分離テスト
+     + range端とindex端が同時に揃う真の端点で2件（AX-P1）・唯一ペアで
+     0件（AX-D1）に shortfall することの直接テストを
+     `tests/test_candidate_proposal.py` に追加した（既存の
+     `test_neighbors_of_ax_p1_boundary_has_single_neighbor`/
+     `test_neighbors_of_ax_d1_boundary_at_minimum_delta` 等、旧「単一
+     近傍」を正としていたテストは新定義下での正しい期待値へ更新した）。
+2. **NOT_SCORABLE 政策の validator 形状強制（P2）**:
+   `run9_schema.validate_loss_evaluator_spec_manifest()` は
+   `missing_policy.zero_fill_prohibited`/`eligible_count_required_per_
+   channel` の2 boolean のみを検査しており、第1巡で是正した
+   `not_measurable_definition`（candidate 単位 NOT_SCORABLE + selection
+   除外 + 全 NOT_SCORABLE trial の扱い）の文言そのものは一切検査して
+   いなかった。repin で旧「部分 channel 採点」文言へ差し戻されても
+   通過し得る欠陥だった。凍結定数
+   `_LOSS_EVALUATOR_EXPECTED_NOT_MEASURABLE_DEFINITION` を新設し、
+   逐語一致で検査するよう改めた（不一致・欠落を fail-closed で拒否）。
+3. **actor_boundary の厳密検証（P2）**:
+   同 validator は `actor_boundary` をトップレベル必須キーとしてのみ
+   検査しており、`practice`/`education` の中身（PRACTICE = raw audio
+   から Founder 自身が抽出・education lesson / precomputed teacher
+   feature の入力禁止／EDUCATION = 凍結 lesson 使用）は一切検査して
+   いなかった。空・欠落・緩和文言（education lesson を PRACTICE へ
+   許可する等）が repin で通過し得る欠陥だった。凍結定数
+   `_LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_PRACTICE`/`_EDUCATION` を
+   新設し、逐語一致で検査するよう改めた。
+
+**連鎖更新**: `inputs/candidate_generation_spec_v1.json` のバイト変更に
+伴い `RUN9_CONTRACT.yaml` の `candidate_generation_spec_sha` を第4世代へ
+repin した（指摘2・3は `loss_evaluator_spec_v1.json` の内容自体を変更せず
+validator 強化のみ）。さらに本節を新設したことに伴う
+`HARNESS3C_AXIS_FEASIBILITY_RECORD.md` 自体の実バイト sha256 変更により、
+5 manifest 共通の `provenance.detail_record.sha256` 参照値が全て追随更新と
+なるため、5 manifest 全て（`score_axis_catalog_sha`/`loss_evaluator_spec_
+sha`/`candidate_generation_spec_sha`/`compute_budget_manifest_sha`/
+`learning_data_binding_manifest_sha`）を第1/2巡と同型の cascade repin した
+（旧値は `RUN9_CONTRACT.yaml` 側に世代履歴コメントとして append-only
+保持）。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
+2464 件全 pass（第2巡時点の2450件から+14件: `candidate_proposal.py` 近傍
+優先順位リストの決定論・内部領域3件達成・端点 shortfall テスト、
+validator の `not_measurable_definition`/`actor_boundary` 逐語一致拒否
+テスト、他既存回帰）。

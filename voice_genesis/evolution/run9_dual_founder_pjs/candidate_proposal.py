@@ -7,6 +7,15 @@ digest-to-candidate mapping」、採用）。`inputs/candidate_generation_spec_v
 `proposal` 節が凍結する、digest のどのバイトが軸・note/phrase・delta/offset
 値を選ぶか、および「近傍」の全順序を、実装が選べる余地なく機械的に再現する。
 
+第3巡指摘1（P1「Make the scheduled neighborhood ratio achievable」、採用）
+の追随修正を含む: 旧 `neighbors_of()` は現 best の値キーを ±1 量子化ステップ
+した2候補のみを近傍として返しており、非恒等 best では最大2件しか近傍枠
+（凍結 3:1 比率の3枠）を満たせず、trial 2-32 の近傍3枠が構造的に達成不能
+だった。値キー ±1/±2 量子化ステップ + 隣接 index キー（L 順で1つ前/後）の
+優先順位リストへ拡張し、内部領域（range 端でも index 端でもない current
+best）で3件以上の近傍候補が構造的に存在するようにした（端点でのみ
+shortfall が起こり、探査規則で補充する）。
+
 **スコープ境界**: 本モジュールは spec の「候補列 L の構築」「digest→候補の
 写像」「近傍列挙」という *決定論的で generator 非依存な部分* のみを実装
 する。実際の探索ループ（PRACTICE actor 内での候補適用・render・loss
@@ -25,7 +34,7 @@ digest-to-candidate mapping」、採用）。`inputs/candidate_generation_spec_v
 from __future__ import annotations
 
 import hashlib
-from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 # AX-P1: 0 除外の8グリッド値（score_axis_catalog_v1.json axes.AX-P1
 # range_semitones=[-2.0,2.0] / quantization_step_semitones=0.5 から、0
@@ -186,16 +195,88 @@ def select_exploratory_candidate(
 IDENTITY: None = None
 
 
+def _index_key(candidate: Candidate) -> Union[int, Tuple[int, Tuple[int, int]]]:
+    """候補から index キー（AX-P1: note_index／AX-D1: (phrase_index, (i, j))）
+    を取り出す。"""
+    if candidate[0] == "AX-P1":
+        return candidate[1]  # type: ignore[return-value]
+    if candidate[0] == "AX-D1":
+        return (candidate[1], candidate[2])  # type: ignore[return-value]
+    raise ValueError(f"unknown axis_id in candidate: {candidate[0]!r}")
+
+
+def _value_key(candidate: Candidate) -> float:
+    """候補から値キー（AX-P1: offset／AX-D1: delta）を取り出す。"""
+    if candidate[0] == "AX-P1":
+        return candidate[2]  # type: ignore[return-value]
+    if candidate[0] == "AX-D1":
+        return candidate[3]  # type: ignore[return-value]
+    raise ValueError(f"unknown axis_id in candidate: {candidate[0]!r}")
+
+
+def _make_candidate(axis_id: str, index_key: Any, value: float) -> Candidate:
+    """axis_id + index キー + 値キーから候補タプルを再構成する。"""
+    if axis_id == "AX-P1":
+        return ("AX-P1", index_key, value)
+    if axis_id == "AX-D1":
+        phrase_index, pair = index_key
+        return ("AX-D1", phrase_index, pair, value)
+    raise ValueError(f"unknown axis_id: {axis_id!r}")
+
+
+def _sorted_index_keys(all_candidates: Sequence[Candidate], axis_id: str) -> List[Any]:
+    """L 内の指定 axis の distinct index キーを、L の total_order に沿う
+    昇順（AX-P1: note_index 昇順／AX-D1: (phrase_index, (i, j)) 昇順）で
+    返す。"""
+    keys = {_index_key(cand) for cand in all_candidates if cand[0] == axis_id}
+    return sorted(keys)
+
+
 def neighbors_of(current_best: Optional[Candidate], all_candidates: Sequence[Candidate]) -> List[Candidate]:
     """`neighborhood_candidate_rule` の `neighbor_value_perturbation` /
-    `identity_neighbor_rule` の逐語実装: 現 best からちょうど1量子化ステップ
-    だけ値キーが異なる L の要素を、L と同じ辞書順で返す（存在しない値は
-    単に含めない）。"""
+    `identity_neighbor_rule` の逐語実装。
+
+    現 best が L の要素（単一軸候補）の場合、以下の優先順位リストを順に
+    評価し、L に存在し（catalog 制約を満たし）かつ未 dedup の候補を集める
+    （呼び出し側 `select_neighborhood_candidates()` が未評価フィルタと
+    limit=3 の先頭切り出しを行う）:
+
+    1. 値キー v + 1 量子化ステップ
+    2. 値キー v - 1 量子化ステップ
+    3. 値キー v + 2 量子化ステップ
+    4. 値キー v - 2 量子化ステップ
+    5. 同 axis・同値キーで index キーが L 順で1つ前の候補
+    6. 同 axis・同値キーで index キーが L 順で1つ後の候補
+
+    この優先順位リストにより、内部領域（range 端でも index 端でもない
+    current best）では常に3件以上の近傍候補が構造的に存在する
+    （PR #331 Codex bot レビュー第3巡「Make the scheduled neighborhood
+    ratio achievable」、P1、採用: 旧実装は ±1 量子化ステップの2方向のみ
+    しか近傍候補を持たず、非恒等 best では最大2件しか近傍枠を満たせず
+    凍結 3:1 比率が構造的に達成不能だった）。値キーが range/domain の
+    端かつ index キーが列の端（同一値キーの前後 index が存在しない、
+    または存在しても L に無い）という**端点の場合に限り**3件未満の
+    shortfall が起こり得る——これは `shortfall_handling` が定める例外
+    であり、探査規則で補充する。
+
+    現 best が恒等（None）の場合は `identity_neighbor_rule` に従う:
+    値キーの初期値は（全 index キーについて）0 であるため、優先順位
+    リストの項目1・2（値キー ±1 量子化ステップ）を全 index キーに対して
+    適用した結果が近傍候補集合となる（AX-D1 の値キーは正数のみが domain
+    のため項目2 相当は L に存在せず自動的に除かれる——0.25 のみが残る)。
+    項目3・4（±2 量子化ステップ）は恒等では新規のルールを持ち込まず、
+    項目5・6（隣接 index キー）は基準となる単一 index キーが恒等には
+    存在しないため意味を持たず適用しない。恒等の近傍候補数は通常
+    note_count / phrase 構成に対して3件を大きく上回るため、この
+    integration は既存挙動を変更しない。
+    """
     candidate_set = set(all_candidates)
-    neighbors: List[Candidate] = []
 
     if current_best is None:
-        # identity_neighbor_rule: 恒等からちょうど1量子化ステップの候補。
+        # identity_neighbor_rule: 恒等からちょうど1量子化ステップの候補
+        # （全 index キー分）。優先順位リストの項目1・2 を、値キー初期値
+        # 0 のベクトルへ全 index キーに対して適用した結果に等しい。
+        neighbors: List[Candidate] = []
         for cand in all_candidates:
             if cand[0] == "AX-P1":
                 _, _note_index, offset = cand
@@ -209,23 +290,35 @@ def neighbors_of(current_best: Optional[Candidate], all_candidates: Sequence[Can
         return neighbors
 
     axis_id = current_best[0]
-    if axis_id == "AX-P1":
-        _, note_index, offset = current_best
-        for step in (-AX_P1_QUANTIZATION_STEP, AX_P1_QUANTIZATION_STEP):
-            cand = ("AX-P1", note_index, _round_grid(offset + step))
-            if cand in candidate_set:
-                neighbors.append(cand)
-    elif axis_id == "AX-D1":
-        _, phrase_index, pair, delta = current_best
-        for step in (-AX_D1_QUANTIZATION_STEP, AX_D1_QUANTIZATION_STEP):
-            cand = ("AX-D1", phrase_index, pair, _round_grid(delta + step))
-            if cand in candidate_set:
-                neighbors.append(cand)
-    else:
+    if axis_id not in ("AX-P1", "AX-D1"):
         raise ValueError(f"unknown axis_id in current_best: {axis_id!r}")
 
-    neighbors.sort()
-    return neighbors
+    step = AX_P1_QUANTIZATION_STEP if axis_id == "AX-P1" else AX_D1_QUANTIZATION_STEP
+    index_key = _index_key(current_best)
+    value = _value_key(current_best)
+
+    priority: List[Candidate] = []
+    seen = set()
+
+    def _try_add(cand: Candidate) -> None:
+        if cand in candidate_set and cand not in seen:
+            seen.add(cand)
+            priority.append(cand)
+
+    # 項目1-4: 値キー +-1/+-2 量子化ステップ（同一 index キー）。
+    for multiplier in (1, -1, 2, -2):
+        _try_add(_make_candidate(axis_id, index_key, _round_grid(value + multiplier * step)))
+
+    # 項目5-6: 同値キー・隣接 index キー（L 順で1つ前/後）。
+    index_keys = _sorted_index_keys(all_candidates, axis_id)
+    if index_key in index_keys:
+        pos = index_keys.index(index_key)
+        if pos > 0:
+            _try_add(_make_candidate(axis_id, index_keys[pos - 1], value))
+        if pos < len(index_keys) - 1:
+            _try_add(_make_candidate(axis_id, index_keys[pos + 1], value))
+
+    return priority
 
 
 def select_neighborhood_candidates(
@@ -235,10 +328,13 @@ def select_neighborhood_candidates(
     is_evaluated: Callable[[Candidate], bool],
     limit: int = 3,
 ) -> List[Candidate]:
-    """`enumeration_order` の逐語実装: 近傍候補集合を L の辞書順で列挙し、
-    未評価のものを先頭から `limit` 件返す（3件未満の不足分は
-    `shortfall_handling` により呼び出し側が `select_exploratory_candidate()`
-    で補充する——本関数は補充を行わない）。"""
+    """`enumeration_order` の逐語実装: `neighbors_of()` が返す優先順位順
+    （値キー +-1/+-2 量子化ステップ → 隣接 index キー、恒等 best では
+    `identity_neighbor_rule` の L 辞書順）の近傍候補集合から、未評価の
+    ものを先頭から `limit` 件返す（内部領域では構造的に3件以上存在する
+    ——端点でのみ3件未満の不足分は `shortfall_handling` により呼び出し側
+    が `select_exploratory_candidate()` で補充する。本関数は補充を行わ
+    ない）。"""
     neighbors = neighbors_of(current_best, all_candidates)
     selected = [cand for cand in neighbors if not is_evaluated(cand)]
     return selected[:limit]
