@@ -125,7 +125,6 @@ import json
 import os
 import struct
 import sys
-import tempfile
 import types
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -1496,13 +1495,50 @@ def write_bundle_json(obj: Dict[str, Any], path: Path) -> None:
     write_bundle_bytes(_serialize_bundle_json(obj), Path(path))
 
 
+_STAGING_SUFFIX = ".h3b-staging"
+_BACKUP_SUFFIX = ".h3b-backup"
+
+
+def _staging_path_for(path: Path) -> Path:
+    """`path` の最終公開先に対応する **決定論的固定名** の staging ファイル
+    パスを返す（`<final-name>.h3b-staging`。PR #329 第8巡レビュー指摘,
+    限定採用, P1）。
+
+    旧実装は `tempfile.mkstemp()` によるランダム名だった——正常系では
+    問題にならないが、SIGKILL/電源断でプロセスが `except` を一切経由せず
+    死んだ場合、staging の残骸がランダム名で残り、後から見てもどの
+    公開試行の残骸かファイル名からは特定できなかった。固定名にすることで
+    `path` ごとに常に同一の staging ファイルへ収束する（複数世代の残骸が
+    同時に積み上がることもない）。"""
+    return path.parent / f"{path.name}{_STAGING_SUFFIX}"
+
+
+def _backup_path_for(path: Path) -> Path:
+    """`path` の最終公開先に対応する **決定論的固定名** の backup ファイル
+    パスを返す（`<final-name>.h3b-backup`）。`_staging_path_for()` と同じ
+    理由（PR #329 第8巡レビュー指摘, 限定採用, P1）。`publish_bundle_
+    pair()` はこのパスが publish 開始前に既に存在する場合、前回 publish
+    が完了前に中断された痕跡として fail-closed 停止する（`publish_
+    bundle_pair()` docstring の「stale backup 検出」節参照）。"""
+    return path.parent / f"{path.name}{_BACKUP_SUFFIX}"
+
+
 def _atomic_write_bytes(path: Path, data: bytes) -> Path:
-    """`data` を `path` と同一ディレクトリ内の一意な staging ファイルへ
-    書き切り fsync する（`path` 自体には一切触れない —— 最終名への
-    `os.replace()` は呼び出し側の責務）。`speaker_map_builder._atomic_
-    write_bytes()` と同型の staging+fsync パターン（run9 系は svp_rpe 側の
-    `utils/atomic_io` を import しない独立構成のため、同型の最小実装を
-    本 builder 内へ自足させる。PR #329 第1巡レビュー指摘2, P1, 採用対応）。
+    """`data` を `path` と同一ディレクトリ内の **決定論的固定名**
+    （`_staging_path_for(path)`）の staging ファイルへ書き切り fsync する
+    （`path` 自体には一切触れない —— 最終名への `os.replace()` は呼び出し
+    側の責務）。`speaker_map_builder._atomic_write_bytes()` と同型の
+    staging+fsync パターン（run9 系は svp_rpe 側の `utils/atomic_io` を
+    import しない独立構成のため、同型の最小実装を本 builder 内へ自足
+    させる。PR #329 第1巡レビュー指摘2, P1, 採用対応）。
+
+    staging ファイル名は PR #329 第8巡レビュー指摘（限定採用, P1）により
+    `tempfile.mkstemp()` のランダム名から `_staging_path_for(path)` の
+    固定名へ変更した（理由は `_staging_path_for()` docstring 参照）。
+    `open(tmp_path, "wb")` は既存の同名残骸があれば truncate して上書き
+    する——staging ファイル自体は最終名へ `os.replace()` されるまで何の
+    契約も持たない使い捨ての中間物であり、残骸をそのまま上書きしても
+    データ損失は起きない（`path` の既存実バイトとは無関係）。
 
     失敗時（`BaseException` 含む）は staging ファイルを best-effort で
     削除してから re-raise する — `path` の既存実バイトには一切触れない。
@@ -1511,10 +1547,9 @@ def _atomic_write_bytes(path: Path, data: bytes) -> Path:
     できる（`publish_bundle_pair()` 参照）。
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-    tmp_path = Path(tmp_name)
+    tmp_path = _staging_path_for(path)
     try:
-        with os.fdopen(fd, "wb") as f:
+        with open(tmp_path, "wb") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
@@ -1528,33 +1563,41 @@ def _atomic_write_bytes(path: Path, data: bytes) -> Path:
 
 
 def _backup_existing(path: Path) -> Optional[Path]:
-    """`path` に既存ファイルがあれば同一ディレクトリ内の一意な backup 名へ
+    """`path` に既存ファイルがあれば **決定論的固定名**
+    （`_backup_path_for(path)`、`<final-name>.h3b-backup`）へ
     `os.replace()`（rename、同一ファイルシステム内であれば atomic）で
     退避し、その backup パスを返す。存在しなければ `None` を返す
     （`publish_bundle_pair()` のロールバック用スナップショット。PR #329
     第2巡レビュー指摘2-2, P1, 採用対応）。
 
-    `mkstemp()` は退避先の空プレースホルダファイルを作成してから
-    `os.replace()` する構成のため、その後の `os.replace()` 自体が失敗
-    （PR #329 第3巡レビュー指摘4, P1, 採用対応 — 例: `path` がディレクトリ
-    で rename が構造的に失敗するケース）すると、空プレースホルダだけが
-    孤児として残置され得た。`os.replace()` の失敗時は、この関数自身が
-    作った空プレースホルダを best-effort で削除してから re-raise する
-    ——`publish_bundle_pair()` 側のロールバックが「残骸なし」を達成する
-    ためには、本関数自身が自分の中間生成物の後始末をする必要がある。"""
+    PR #329 第8巡レビュー指摘（限定採用, P1）: backup 名を `tempfile.
+    mkstemp()` のランダム名から `_backup_path_for()` の決定論的固定名へ
+    変更した。旧実装は `mkstemp()` が退避先の空プレースホルダファイルを
+    作成してから `os.replace()` する構成のため、その後の `os.replace()`
+    自体が失敗（第3巡レビュー指摘4, P1, 採用対応 — 例: `path` が
+    ディレクトリで rename が構造的に失敗するケース）すると、空
+    プレースホルダだけが孤児として残置され得た（本関数自身が best-effort
+    で削除して対応していた）。決定論名では `os.replace(path,
+    backup_path)` が事前のプレースホルダ作成を経由せず `path` を直接
+    `backup_path` へ rename するだけになったため、この孤児化経路自体が
+    構造的に消滅した（POSIX の `rename(2)` は target の事前存在を要求
+    せず、成功/失敗いずれの場合も部分状態を残さない——失敗時は `path`
+    が動いていないことが保証され、cleanup 自体が不要になった）。
+
+    決定論名にしたことで生じる新しい呼び出し側の責務: 本関数を呼ぶ
+    **前** に `_backup_path_for(path)` が既に存在していないことを
+    呼び出し元が確認しなければならない——既に存在する場合、それは前回
+    publish が完了前に中断された痕跡であり（`publish_bundle_pair()` の
+    「stale backup 検出」節参照）、本関数がそのまま `os.replace()` すると
+    前回の backup（まだ検証・復元されていない可能性がある旧世代）を
+    無条件に上書きして消してしまう。この事前確認は `publish_bundle_
+    pair()` が呼び出し前に fail-closed で行う契約であり、本関数自身は
+    「`_backup_path_for(path)` が空いている」という呼び出し元の保証に
+    依存する。"""
     if not path.exists():
         return None
-    fd, backup_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".prevgen.tmp")
-    os.close(fd)
-    backup_path = Path(backup_name)
-    try:
-        os.replace(path, backup_path)
-    except BaseException:
-        try:
-            backup_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
+    backup_path = _backup_path_for(path)
+    os.replace(path, backup_path)
     return backup_path
 
 
@@ -1696,7 +1739,66 @@ def publish_bundle_pair(
     失敗して代入が完了しなくても状態は「未着手/失敗」のまま安全側に
     倒れ、`_rollback_to_backup()` は `moved=True`（= backup 完了、
     source は実際に動いている）のときのみ `path` に触れる。
+
+    ### PR #329 第8巡レビュー指摘（限定採用, P1）: stale backup の
+    fail-closed 検出 + backup/staging 名の決定論化
+
+    上記のロールバック機構は `except BaseException` を経由できる失敗
+    （通常の例外、`KeyboardInterrupt` 等）にはすべて対応するが、
+    **プロセスが `except` を一切経由せず死ぬケース**（SIGKILL・電源断・
+    OOM killer）には原理的に対応できない——ロールバックのコード自体が
+    実行されないためである。第7巡までの `_backup_existing()`/
+    `_atomic_write_bytes()` はいずれも `tempfile.mkstemp()` のランダム名
+    を使っていたため、この種の中断で staging/backup の残骸が残っても
+    「どの公開試行の、どの段階の残骸か」をファイル名から特定できず、
+    手動回復の起点にならなかった。
+
+    本節は backup 名・staging 名を決定論的固定名（`_backup_path_for()`/
+    `_staging_path_for()` — `<final-name>.h3b-backup`/`<final-name>.
+    h3b-staging`）へ変更し、**publish 開始前に `_backup_path_for(training_
+    path)`/`_backup_path_for(validation_path)` のいずれかが既に存在する
+    場合は「前回 publish が完了前に中断された痕跡」として、staging も
+    backup も rename も一切行わず fail-closed で `RuntimeError` を送出
+    する**。世代ディレクトリ + 単一ポインタ切替への再設計（POSIX では
+    2ファイルの同時 rename が不可能なため出力レイアウト契約の変更を
+    要する）は本 PR の範囲外として見送り、決定論名 + stale 検出 + 以下の
+    手動回復手順の文書化のみを採用する（Fable 設計判定、境界宣言）。
+
+    **手動回復手順（中断点ごとの状態表）**——`_backup_path_for(p)` を
+    `p.h3b-backup`、`_staging_path_for(p)` を `p.h3b-staging` と略記する:
+
+    | # | 中断のタイミング | 観測される状態 | 次回呼び出し | 回復コマンド |
+    |---|---|---|---|---|
+    | 1 | 両 staging 書き込み完了前 | `training_path`/`validation_path` とも無傷。`*.h3b-staging` が最大2本残ることがある。backup は一切存在しない | stale backup なし → 通常どおり成功 | 任意（`*.h3b-staging` を `rm` すれば残骸なしに戻るが、次回実行時に上書きされるため必須ではない） |
+    | 2 | training の `_backup_existing()` 完了後、validation の `_backup_existing()` 完了前 | `training_path` が消え `training_path.h3b-backup` に旧世代あり。`validation_path` は無傷。staging 2本とも存在 | **fail-closed 停止**（training 側 stale backup 検出） | `mv training_path.h3b-backup training_path` で旧世代を復元してから builder を再実行する |
+    | 3 | 両 `_backup_existing()` 完了後、training の `os.replace(tmp, path)` 前 | 両 `*.h3b-backup` とも存在。`training_path`/`validation_path` とも消えている。staging 2本とも存在 | **fail-closed 停止** | 両方とも `mv <name>.h3b-backup <name>` で復元してから builder を再実行する |
+    | 4 | training の replace 完了後、validation の replace 前 | `training_path` は新世代。`training_path.h3b-backup` に旧世代が残ったまま（未破棄）。`validation_path` は消えたまま（旧世代は `validation_path.h3b-backup`）——**新世代 training + 欠落 validation という混合状態** | **fail-closed 停止** | 推奨: 両方 backup から復元して完全ロールバック（`mv training_path.h3b-backup training_path` / `mv validation_path.h3b-backup validation_path`）してから builder を再実行する。上級者向け（非推奨）: `training_path` の sha256 が `inputs/education_technique_lesson_manifest.json` の pin 値と一致することを確認できる場合に限り、`training_path.h3b-backup` を削除し、`validation_path.h3b-staging` を `validation_path` へ手動 `mv` してから `validation_path.h3b-backup` を削除する |
+    | 5 | 両 replace 完了後、`_discard_backup()` 実行前 | `training_path`/`validation_path` とも新世代（正しい最終状態）。`*.h3b-backup` 2本は不要だが残っている | **fail-closed 停止**（実害なし） | 両 backup の sha256 が既知の旧世代と一致することを確認したうえで `rm *.h3b-backup` ×2 |
+
+    いずれの状態でも fail-closed 停止時のエラーメッセージが該当する
+    stale backup のフルパスを列挙する——# 2-5 の切り分けは「どちらの
+    backup が存在するか」「`training_path`/`validation_path` が存在
+    するか」「sha256 が pin 値と一致するか」を人手で確認すれば一意に
+    判別できる。詳細記録は `HARNESS3B_EDUCATION_LESSON_RECORD.md` §19
+    を正とする。
     """
+    training_backup_path = _backup_path_for(training_path)
+    validation_backup_path = _backup_path_for(validation_path)
+    stale_backups = [p for p in (training_backup_path, validation_backup_path) if p.exists()]
+    if stale_backups:
+        stale_list = ", ".join(str(p) for p in stale_backups)
+        raise RuntimeError(
+            "publish_bundle_pair(): stale backup file(s) found before publish "
+            f"start: {stale_list}. This means a previous publish_bundle_pair() "
+            "call was interrupted before completing (SIGKILL / power loss / "
+            "OOM kill / process crash) and left backup(s) behind undiscarded. "
+            "Refusing to proceed (fail-closed) rather than silently overwriting "
+            "a backup that may still be needed to recover the last known-good "
+            "generation. See the publish_bundle_pair() docstring's manual "
+            "recovery table and HARNESS3B_EDUCATION_LESSON_RECORD.md §19 "
+            "for the state table and recovery commands."
+        )
+
     training_tmp = _atomic_write_bytes(training_path, training_bytes)
     try:
         validation_tmp = _atomic_write_bytes(validation_path, validation_bytes)

@@ -49,9 +49,16 @@ byte 一致 → schema 検証 4/4 PASS。FAIL なし。**
   bundle/1.0`）。**バンドル実体ファイルは rights 制約により repo に
   コミットしない**（実 PJS 音源からの derived artifact）——本記録が保持
   するのは sha256 という証跡のみで、`inputs/education_technique_lesson_
-  manifest.json` へ pin する。バンドルは本 builder を使い決定論的に
-  いつでも再導出できる（session-artifact 扱い、reexport emb と同型の
-  会計方針）。
+  manifest.json` へ pin する。`corpus_provenance.audio_repo_contained:
+  false` が宣言するとおり、消費入力3点（wav/lab/musicxml）・展開済み
+  corpus・バンドル実体はいずれも repo 非収載——バンドルは本 builder が
+  repo 内で決定論的だが、fresh checkout からの再導出には **外部 PJS
+  corpus ver1.1 の再取得**（zip sha256 の厳密一致 → 展開後
+  `expanded_corpus_identity_sha256` 照合の fail-closed 手順、per-file
+  消費入力 pin との照合込み）と、User の scoped 承認（裁定 §1、
+  session-scoped）が前提として必要（session-artifact 扱い、reexport emb
+  と同型の会計方針。PR #329 第8巡レビュー指摘, 採用, P2 — 旧記述「いつでも
+  再導出できる」は上記の外部再取得前提を欠いており不正確だった）。
 
 ## 1. E1（偵察）— 2 点 PASS
 
@@ -282,8 +289,12 @@ repo への書き込みは一切なし（この検証は Read-only 実行）。
 バンドル実体ファイル（training_bundle.json / validation_bundle.json、
 run1/run2/run3 × 2 = 6 本）は rights 制約により repo 非収載——sha256 の
 みを本記録・manifest へ pin する（reexport emb と同型の session-artifact
-扱い。repo canonical builder + repo 収載 corpus 由来ファイルにより決定論
-的に再導出可能）。
+扱い。`corpus_provenance.audio_repo_contained: false` が宣言するとおり
+音源・展開物も repo 非収載であり、fresh checkout からの再導出には repo
+canonical builder + **外部 PJS corpus ver1.1 の再取得**（zip sha256 の
+厳密一致 → 展開後 identity 照合の fail-closed 手順）と User の
+scoped 承認（裁定 §1）が前提として必要——§0 と同じ訂正、PR #329 第8巡
+レビュー指摘, 採用, P2）。
 
 ## 12. PR #329 Codex bot レビュー第1巡対応 + run4（2026-08-27）
 
@@ -1473,5 +1484,164 @@ builder_sha256` を本節の builder バイト変更後の値へまだ repin し
   収載値更新、`education_technique_lesson_manifest_sha` の8世代目 repin
   を含む）最終稿確定後に全 PASS。
 - freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜6巡と
+  同じ理由——repo builder の identity は manifest 側 `builder_provenance`
+  が別途担う）。
+
+## 19. PR #329 Codex bot レビュー第8巡対応 + run11（2026-08-27）
+
+Claude 完結ルート（フェーズ1: 実装 + 検証 + 返信起草。git commit/push は
+別フェーズ）。Fable 採否判定 = 採用1件（P2）+ 限定採用1件（P1、crash-atomic
+指摘 — backup 名決定論化 + 回復手順文書化のみ採用、世代ディレクトリ再設計
+は境界宣言で見送り）。**抽出式・アラインメント規則・直列化・バンドル
+内容は無変更**（変更は検証・公開経路のみ、第1〜7巡と同じ不変条件）。
+
+### Fix 20（採用, P2）: 「repo 内で再導出可能」主張の是正（正直会計）
+
+`RUN9_CONTRACT.yaml` の `education_technique_lesson_manifest_sha` reason
+（および本記録 §0/§11・`README.md` の同型記述）が「repo canonical
+builder + repo 収載 corpus 由来ファイルにより決定論的に再導出可能」と
+述べていたが、`inputs/education_technique_lesson_manifest.json` の
+`corpus_provenance.audio_repo_contained` 自身が `false` を宣言していると
+おり、消費入力3点（wav/lab/musicxml）・展開済み corpus・バンドル実体は
+いずれも repo 非収載——「repo 収載 corpus」という記述はこの宣言と直接
+矛盾していた。fresh checkout からの再導出には、repo canonical builder に
+加えて **外部 PJS corpus ver1.1 の再取得**（zip sha256 `683c0025…` の
+厳密一致 → plain unzip → 展開後 `expanded_corpus_identity_sha256`
+`9905cec0…` 照合という fail-closed 手順、per-file 消費入力 pin との照合
+込み）と、User の scoped 承認（裁定 §1 は明示的に session-scoped の承認
+であり、無条件の恒久許可ではない）が前提として必要——この2条件を欠いた
+状態では「決定論的に再導出可能」という主張自体は成り立たない（builder
+自体は決定論的であっても、その入力である外部音源の取得経路が省略されて
+いた）。
+
+- `RUN9_CONTRACT.yaml` の当該 reason 文言を訂正し、旧文言を同一
+  コメント内へ引用形式で保持した（本ファイル §「〔第9世代 repin〕」
+  コメント参照。reason 本文の直接訂正であり、append-only 履歴規約に
+  従い旧世代の pin 値自体は既存の履歴コメントとして別途保持されている
+  ため、本文訂正は新たな repin を要する——builder バイト変更（下記
+  Fix 21）と合わせて第9世代 repin とした）。
+- `README.md` の同型記述（バンドル実体ファイル節）を同期是正。
+- 本記録 §0（対象・入力・出力）・§11（成果物一覧）の同型記述を同期
+  是正——grep で「再導出」「regenerat」を確認し、上記2箇所が該当する
+  全数であることを確認した（他ファイルの「再導出」ヒットは founder
+  genome の再正規化重み計算等、無関係な既存記述であることを個別に
+  確認済み）。
+
+### Fix 21（限定採用, P1）: crash-atomic 指摘 — backup/staging 名の決定論化
++ stale backup の fail-closed 検出 + 手動回復手順の文書化
+
+`publish_bundle_pair()`（第1〜5巡で段階的に強化してきた atomic ペア
+公開 + ロールバック機構）は `except BaseException` を経由できる失敗には
+すべて対応済みだったが、**プロセスが `except` を一切経由せず死ぬケース**
+（SIGKILL・電源断・OOM killer）には原理的に対応できない——ロールバック
+のコード自体が実行されないためである。加えて `_backup_existing()`/
+`_atomic_write_bytes()` はいずれも `tempfile.mkstemp()` によるランダム名
+を使っており、この種の中断で staging/backup の残骸が残っても「どの公開
+試行の、どの段階の残骸か」をファイル名から特定できず、手動回復の起点に
+ならなかった。
+
+- **採用部分**: backup 名を `<final-name>.h3b-backup`、staging 名を
+  `<final-name>.h3b-staging` という決定論的固定名へ変更（`_backup_
+  path_for()`/`_staging_path_for()` 新設）。決定論名にしたことで、
+  `_backup_existing()` はもはや `mkstemp()` による空プレースホルダの
+  事前作成を経由せず `os.replace(path, backup_path)` を直接試みる
+  構成になり、第3巡指摘4が対応したプレースホルダ孤児化経路自体が構造的
+  に消滅した（rename(2) は target の事前存在を要求せず、成功/失敗いずれ
+  でも部分状態を残さない）。
+- `publish_bundle_pair()` は staging/backup/rename いずれの操作も行う
+  **前**に、`_backup_path_for(training_path)`/`_backup_path_for(
+  validation_path)` のいずれかが既に存在するかを確認する——存在すれば
+  「前回 publish が完了前に中断された痕跡」として fail-closed で
+  `RuntimeError` を送出し、一切の書き込みを行わずに拒否する（stale
+  backup を無条件に上書き・消失させない）。
+- **手動回復手順**（`publish_bundle_pair()` docstring に文書化。中断点
+  ごとの状態表、`p.h3b-backup`/`p.h3b-staging` と略記）:
+
+  | # | 中断のタイミング | 観測される状態 | 次回呼び出し | 回復コマンド |
+  |---|---|---|---|---|
+  | 1 | 両 staging 書き込み完了前 | `training_path`/`validation_path` とも無傷。`*.h3b-staging` が最大2本残ることがある。backup は一切存在しない | stale backup なし → 通常どおり成功 | 任意（`*.h3b-staging` を `rm` すれば残骸なしに戻るが、次回実行時に上書きされるため必須ではない） |
+  | 2 | training の `_backup_existing()` 完了後、validation の同完了前 | `training_path` が消え `training_path.h3b-backup` に旧世代あり。`validation_path` は無傷。staging 2本とも存在 | **fail-closed 停止**（training 側 stale backup 検出） | `mv training_path.h3b-backup training_path` で旧世代を復元してから builder を再実行する |
+  | 3 | 両 `_backup_existing()` 完了後、training の `os.replace(tmp, path)` 前 | 両 `*.h3b-backup` とも存在。`training_path`/`validation_path` とも消えている。staging 2本とも存在 | **fail-closed 停止** | 両方とも `mv <name>.h3b-backup <name>` で復元してから builder を再実行する |
+  | 4 | training の replace 完了後、validation の replace 前 | `training_path` は新世代。`training_path.h3b-backup` に旧世代が残ったまま。`validation_path` は消えたまま（旧世代は `validation_path.h3b-backup`）——新世代 training + 欠落 validation という混合状態 | **fail-closed 停止** | 推奨: 両方 backup から復元して完全ロールバックしてから builder を再実行する。上級者向け（非推奨）: `training_path` の sha256 が pin 値と一致することを確認できる場合に限り、`training_path.h3b-backup` を削除し `validation_path.h3b-staging` を手動 `mv` で完成させてから `validation_path.h3b-backup` を削除する |
+  | 5 | 両 replace 完了後、`_discard_backup()` 実行前 | 両ファイルとも新世代（正しい最終状態）。`*.h3b-backup` 2本は不要だが残っている | **fail-closed 停止**（実害なし） | 両 backup の sha256 が既知の旧世代と一致することを確認したうえで `rm *.h3b-backup` ×2 |
+
+- **見送り部分（境界宣言）**: 世代ディレクトリ + 単一ポインタ切替への
+  再設計。理由: ① POSIX で2ファイルの同時 rename は不可能であり、単一
+  切替には出力レイアウト契約（`--out-dir` 直下の固定2ファイル名を
+  消費・再現手順が参照）の変更を要する——本 PR の範囲を超える設計変更。
+  ② 混合ペアは下流で成功として消費され得ない——消費は `load_pinned_
+  education_lesson_manifest()` の sha 照合 fail-closed が強制し、部分/
+  混合状態は検証で即検出される。③ 旧バイトは決定論 backup 名の下に
+  保全され消失しない（採用部分で回復手順まで文書化済み）。再開条件:
+  出力レイアウト契約の改版を伴う設計 revision で再検討。
+- テスト（新設）: `_backup_path_for()`/`_staging_path_for()` の決定論性
+  直接確認、`_backup_existing()`/`_atomic_write_bytes()` が実際に固定名
+  を使うことの確認、training/validation 双方の stale backup 単体検出 +
+  fail-closed（一切書き込みなし・既存ファイル無傷）、エラーメッセージが
+  両方のフルパスを列挙することの確認。既存の失敗注入テスト群（第2〜5巡）
+  は決定論名前提へ追随（`.prevgen.tmp` → `.h3b-backup` のマッチ文字列
+  更新。第3巡のディレクトリ構造異常系テストは、決定論名によって
+  「ディレクトリの backup rename が自然に失敗する」という旧前提が崩れた
+  ため、monkeypatch による明示的失敗注入へ書き換えた——POSIX の
+  rename(2) は空ディレクトリを未存在の target 名へ rename することを
+  許可するため、`mkstemp()` プレースホルダ衝突という偶発的失敗経路が
+  決定論名では発生しなくなったことによる）。
+
+### 連鎖更新
+
+builder バイト変更（新値 = 下記参照）+ reason 文言訂正（Fix 20）+ 本節
+追記に伴い、`inputs/education_technique_lesson_manifest.json` の
+`builder_provenance.builder_sha256`/`detail_record_sha256` を更新し、
+manifest raw sha256 が変わったため `RUN9_CONTRACT.yaml` の
+`education_technique_lesson_manifest_sha` を第9世代へ repin した
+（旧値 = 第8世代、第7巡対応時点の値。履歴は本記録 §12/§13/§14/§15/
+§16/§17/§18 参照）。`pjs_consumed_inputs_manifest_sha`（`inputs/pjs_
+consumed_inputs_sha256.json`）は本節の変更で一切触れていないため無変更
+（本節はいずれの消費入力の実バイト・pin 値にも影響しない、検証・公開
+経路 + reason 文言のみの変更）。
+
+### run11: repo builder（第8巡対応後）による再現実行（独立11回目）
+
+system python3（本セッションの system python3、pyworld 0.3.5 を含む
+依存関係が揃った環境）で、修正後の repo builder を workdir 展開済み
+corpus（`expanded/PJS_corpus_ver1.1`）に対し `build` サブコマンドで
+実行した。
+
+```
+$ python3 education_lesson_builder.py build \
+    --corpus-root <workdir>/expanded/PJS_corpus_ver1.1 \
+    --out-dir <workdir>/run11 \
+    --allow-unpinned
+```
+
+```
+real	4m24.944s
+```
+
+| バンドル | 既 pin（run1〜run10） | run11 sha256 | 一致 |
+|---|---|---|---|
+| training | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | **PASS** |
+| validation | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | **PASS** |
+
+run11 は本節の2修正（backup/staging 名の決定論化 + stale backup 検出・
+reason 文言訂正）がいずれも検証・公開経路 + ドキュメント記述のみに閉じて
+おり、抽出式・アラインメント・直列化・バンドル内容に一切影響しないことの
+実測証跡である——run11 は `--allow-unpinned` で実行した（manifest 側
+`builder_provenance.builder_sha256`/`detail_record_sha256` を本節の
+builder バイト変更・本記録追記後の値へまだ repin していない時点での
+実測取得のため）。repin 完了後、`--allow-unpinned` を付けずに（＝ CLI
+からは正典パスのみが使われる通常経路で）本コマンドを独立12回目として
+再実行し、`pinned_manifest_check: "PASS"`（training/validation とも
+run1〜run11 と同一 sha256）で正常完了することを実測で確認した——本節の
+変更が既存の再現実行手順に一切影響しないことの直接証跡である。
+
+### 検証結果
+
+- `ruff check .`: clean
+- `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`:
+  本節（builder_provenance.builder_sha256/detail_record_sha256 の repo
+  収載値更新、`education_technique_lesson_manifest_sha` の9世代目 repin
+  を含む）最終稿確定後に全 pass（2279 passed）。
+- freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜7巡と
   同じ理由——repo builder の identity は manifest 側 `builder_provenance`
   が別途担う）。

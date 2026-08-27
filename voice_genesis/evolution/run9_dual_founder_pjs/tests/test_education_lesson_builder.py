@@ -1489,7 +1489,7 @@ def test_harness3b_publish_bundle_pair_first_backup_failure_leaves_old_generatio
     real_os_replace = os.replace
 
     def _boom(src: Any, dst: Any) -> Any:
-        if Path(src) == training_path and str(dst).endswith(".prevgen.tmp"):
+        if Path(src) == training_path and str(dst).endswith(".h3b-backup"):
             raise RuntimeError("synthetic training backup failure")
         return real_os_replace(src, dst)
 
@@ -1532,7 +1532,7 @@ def test_harness3b_publish_bundle_pair_second_backup_failure_leaves_old_generati
     real_os_replace = os.replace
 
     def _boom(src: Any, dst: Any) -> Any:
-        if Path(src) == validation_path and str(dst).endswith(".prevgen.tmp"):
+        if Path(src) == validation_path and str(dst).endswith(".h3b-backup"):
             raise RuntimeError("synthetic validation backup failure")
         return real_os_replace(src, dst)
 
@@ -1553,18 +1553,32 @@ def test_harness3b_publish_bundle_pair_second_backup_failure_leaves_old_generati
 
 
 def test_harness3b_publish_bundle_pair_second_backup_failure_restores_first_and_leaves_no_debris(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """PR #329 第3巡レビュー指摘4（P1、採用対応）: `_backup_existing()`
     の2回の呼び出し自体が2連 `os.replace()` と同一の `BaseException`
     ロールバック/cleanup トランザクションに含まれることを、`os.replace()`
     そのものではなく「2本目（validation）の退避（backup）」が失敗する
-    経路で確認する——`validation_path` が通常ファイルでなくディレクトリ
-    であるケース（`os.replace(directory, existing_file)` は構造的に失敗
-    する）。1本目（training）は既に backup 名へ退避成功済みの状態で
-    2本目の退避が失敗するため、旧実装（退避2回が `try` の外側）ではこの
-    経路がロールバックを一切経由せず「training の最終名が一時的に欠落」
-    したまま例外が伝播していた。
+    経路で確認する。1本目（training）は既に backup 名へ退避成功済みの
+    状態で2本目の退避が失敗するため、旧実装（退避2回が `try` の外側）
+    ではこの経路がロールバックを一切経由せず「training の最終名が
+    一時的に欠落」したまま例外が伝播していた。
+
+    `validation_path` を通常ファイルでなくディレクトリ（構造異常系）に
+    したうえで検証する——PR #329 第8巡レビュー指摘（限定採用, P1）で
+    backup 名を決定論的固定名へ変更した結果、ディレクトリの `os.replace()`
+    先（`_backup_path_for()`）が未存在なら POSIX の rename 意味論上その
+    まま成功してしまい（旧実装は `mkstemp()` が作る空プレースホルダに
+    ディレクトリを rename しようとして構造的に必ず失敗していたが、
+    決定論名はプレースホルダを事前作成しないためこの偶発的失敗経路が
+    消滅した）、「2本目の退避が自然に失敗する」という前提が成り立たなく
+    なった。そのため本テストは validation 側の `_backup_existing()`
+    内部の `os.replace()` を monkeypatch で明示的に失敗させる（round5
+    の失敗注入と同型）——それでもなお `validation_path` がディレクトリの
+    ままであることを保ち、ロールバック側が `path.unlink()`（ディレクトリ
+    に対しては `IsADirectoryError`、`OSError` のサブクラス）を誤って
+    呼ばないこと（`_BackupOutcome.moved=False` のときは `path` に一切
+    触れない、という round5 の契約）を引き続き確認する。
 
     期待する最終状態:
       - `training_path` は公開前と同一バイトのまま存在する（backup から
@@ -1572,15 +1586,23 @@ def test_harness3b_publish_bundle_pair_second_backup_failure_restores_first_and_
         「無傷」）。
       - `validation_path` は公開前と同じくディレクトリのまま存在する
         （触れられない）。
-      - どちらの staging ファイルも `_backup_existing()` が作った空
-        プレースホルダも残らない（「残骸なし」）。
+      - どちらの staging ファイルも残らない（「残骸なし」）。
     """
     training_path = tmp_path / "training_bundle.json"
     validation_path = tmp_path / "validation_bundle.json"
     training_path.write_bytes(b'{"gen":"old-training"}\n')
     validation_path.mkdir()  # structural anomaly: not a regular file
 
-    with pytest.raises(NotADirectoryError):
+    real_os_replace = os.replace
+
+    def _boom(src: Any, dst: Any) -> Any:
+        if Path(src) == validation_path and str(dst).endswith(".h3b-backup"):
+            raise RuntimeError("synthetic validation backup failure (directory anomaly)")
+        return real_os_replace(src, dst)
+
+    monkeypatch.setattr(elb.os, "replace", _boom)
+
+    with pytest.raises(RuntimeError, match="synthetic validation backup failure"):
         elb.publish_bundle_pair(
             training_path, b'{"gen":"new-training"}\n',
             validation_path, b'{"gen":"new-validation"}\n',
@@ -1594,6 +1616,130 @@ def test_harness3b_publish_bundle_pair_second_backup_failure_restores_first_and_
     # no debris: exactly training_path (file) + validation_path (dir) remain.
     leftovers = sorted(p.name for p in tmp_path.iterdir() if p not in (training_path, validation_path))
     assert leftovers == []
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第8巡 Codex bot レビュー対応（限定採用, P1）: backup/staging 名の
+# 決定論化 + publish 開始前の stale backup 検出（fail-closed）。世代
+# ディレクトリ + 単一ポインタ切替への再設計は境界宣言で見送り、決定論名 +
+# stale 検出 + 手動回復手順の文書化のみを採用（HARNESS3B_EDUCATION_LESSON_
+# RECORD.md §19 参照）。
+# ---------------------------------------------------------------------------
+
+
+def test_harness3b_backup_and_staging_paths_are_deterministic(tmp_path: Path) -> None:
+    """`_backup_path_for()`/`_staging_path_for()` が `tempfile.mkstemp()`
+    のランダム名ではなく、`path` から一意に導出される固定名を返すことを
+    直接確認する——同一 `path` に対して呼び出すたびに常に同じ名前になる
+    （プロセス再起動を挟んでも変わらない、という契約の直接証跡）。"""
+    path = tmp_path / "training_bundle.json"
+    assert elb._backup_path_for(path) == tmp_path / "training_bundle.json.h3b-backup"  # noqa: SLF001
+    assert elb._staging_path_for(path) == tmp_path / "training_bundle.json.h3b-staging"  # noqa: SLF001
+    # repeated calls (simulating repeated process invocations) agree.
+    assert elb._backup_path_for(path) == elb._backup_path_for(path)  # noqa: SLF001
+    assert elb._staging_path_for(path) == elb._staging_path_for(path)  # noqa: SLF001
+
+
+def test_harness3b_backup_existing_uses_deterministic_name(tmp_path: Path) -> None:
+    """`_backup_existing()` が実際に `_backup_path_for()` と同じ固定名へ
+    退避することを直接確認する。"""
+    path = tmp_path / "validation_bundle.json"
+    path.write_bytes(b'{"gen":"old"}\n')
+    backup_path = elb._backup_existing(path)  # noqa: SLF001
+    assert backup_path == tmp_path / "validation_bundle.json.h3b-backup"
+    assert backup_path is not None and backup_path.read_bytes() == b'{"gen":"old"}\n'
+    assert not path.exists()
+
+
+def test_harness3b_atomic_write_bytes_uses_deterministic_staging_name(tmp_path: Path) -> None:
+    """`_atomic_write_bytes()` の staging ファイルが `_staging_path_for()`
+    と同じ固定名で、書き込み完了後に呼び出し元が `os.replace()` するまで
+    `path` には一切触れないことを直接確認する。"""
+    path = tmp_path / "assembled.json"
+    tmp = elb._atomic_write_bytes(path, b'{"gen":"new"}\n')  # noqa: SLF001
+    assert tmp == tmp_path / "assembled.json.h3b-staging"
+    assert tmp.read_bytes() == b'{"gen":"new"}\n'
+    assert not path.exists()
+
+
+def test_harness3b_publish_bundle_pair_stale_training_backup_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """前回 publish が完了前に中断され `training_bundle.json.h3b-backup`
+    が残置された状態を模擬する——次回 `publish_bundle_pair()` はこれを
+    stale backup として検出し、staging/backup/rename いずれの操作も
+    一切行わず fail-closed で拒否すること、かつ既存ファイル（現行の
+    training/validation・stale backup とも）が無傷のまま残ることを
+    確認する。"""
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+    training_path.write_bytes(b'{"gen":"current-training"}\n')
+    validation_path.write_bytes(b'{"gen":"current-validation"}\n')
+    stale_backup = tmp_path / "training_bundle.json.h3b-backup"
+    stale_backup.write_bytes(b'{"gen":"stale-backup-from-interrupted-publish"}\n')
+
+    with pytest.raises(RuntimeError, match="stale backup"):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+
+    # nothing was touched: current finals unchanged, stale backup unchanged,
+    # and no staging files were created (the check runs before any write).
+    assert training_path.read_bytes() == b'{"gen":"current-training"}\n'
+    assert validation_path.read_bytes() == b'{"gen":"current-validation"}\n'
+    assert stale_backup.read_bytes() == b'{"gen":"stale-backup-from-interrupted-publish"}\n'
+    leftovers = sorted(
+        p.name for p in tmp_path.iterdir()
+        if p not in (training_path, validation_path, stale_backup)
+    )
+    assert leftovers == []
+
+
+def test_harness3b_publish_bundle_pair_stale_validation_backup_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """同上、validation 側の stale backup を検出するケース——最終ファイル
+    が一切存在しない（初回 build 相当）状態でも stale backup 単体で
+    fail-closed 停止することを確認する。"""
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+    stale_backup = tmp_path / "validation_bundle.json.h3b-backup"
+    stale_backup.write_bytes(b'{"gen":"stale-backup-from-interrupted-publish"}\n')
+
+    with pytest.raises(RuntimeError, match="stale backup"):
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+
+    assert not training_path.exists()
+    assert not validation_path.exists()
+    assert stale_backup.read_bytes() == b'{"gen":"stale-backup-from-interrupted-publish"}\n'
+    leftovers = sorted(p.name for p in tmp_path.iterdir() if p not in (stale_backup,))
+    assert leftovers == []
+
+
+def test_harness3b_publish_bundle_pair_stale_backup_error_names_both_paths(
+    tmp_path: Path,
+) -> None:
+    """training/validation 双方に stale backup が残置されている場合、
+    エラーメッセージが両方のフルパスを列挙することを確認する（手動回復
+    時にどのファイルを確認すべきか一目で分かることの直接証跡）。"""
+    training_path = tmp_path / "training_bundle.json"
+    validation_path = tmp_path / "validation_bundle.json"
+    training_stale = tmp_path / "training_bundle.json.h3b-backup"
+    validation_stale = tmp_path / "validation_bundle.json.h3b-backup"
+    training_stale.write_bytes(b'{"gen":"stale-training"}\n')
+    validation_stale.write_bytes(b'{"gen":"stale-validation"}\n')
+
+    with pytest.raises(RuntimeError) as excinfo:
+        elb.publish_bundle_pair(
+            training_path, b'{"gen":"new-training"}\n',
+            validation_path, b'{"gen":"new-validation"}\n',
+        )
+    assert str(training_stale) in str(excinfo.value)
+    assert str(validation_stale) in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------

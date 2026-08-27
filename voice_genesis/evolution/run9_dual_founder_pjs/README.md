@@ -1246,8 +1246,13 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   の run1==run2==run3 一致を fail-closed で強制する。バンドル実体ファイル
   （training_bundle.json/validation_bundle.json）は rights 制約により
   repo に収載していない——sha256 のみを pin する（reexport emb と同型の
-  session-artifact 扱い。repo canonical builder + repo 収載 corpus 由来
-  ファイルにより決定論的に再導出可能）。詳細は
+  session-artifact 扱い。`corpus_provenance.audio_repo_contained: false`
+  が宣言するとおり、消費入力の wav/lab/musicxml・展開済み corpus・
+  バンドル実体はいずれも repo 非収載——repo canonical builder + **外部
+  PJS corpus ver1.1 の再取得**（zip sha256 の厳密一致 → 展開後
+  `expanded_corpus_identity_sha256` 照合の fail-closed 手順、かつ
+  per-file 消費入力 pin との照合を経て、User の scoped 承認〔裁定 §1、
+  session-scoped〕を前提に）決定論的に再導出可能）。詳細は
   [`HARNESS3B_EDUCATION_LESSON_RECORD.md`](./HARNESS3B_EDUCATION_LESSON_RECORD.md)
   を正とする。design_revision は本改訂で変更していない（0.5 のまま —
   channel 意味論・抽出法・正規化法を変更していないため）。

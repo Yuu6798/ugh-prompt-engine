@@ -1941,8 +1941,43 @@ founder_genome_shas:
 # ことも実測で確認した。旧値（第7世代、第6巡対応時点）は履歴として
 # 保持する:
 #   2901af1fc3f56035f5f0dce94dbd75e1bcd0e3e39cb87c807ec88eb54d198802
+#
+# 〔第9世代 repin, 2026-08-27, PR #329 第8巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用1件 P2 + 限定採用1件 P1）。(1) reason 本文の「repo
+# canonical builder + repo 収載 corpus 由来ファイルにより決定論的に
+# 再導出可能」という記述を訂正（P2、採用）——manifest 自身の
+# `corpus_provenance.audio_repo_contained: false` 宣言と矛盾しており、
+# 外部 PJS corpus ver1.1 の再取得（zip sha256 厳密一致 → 展開後 identity
+# 照合の fail-closed 手順）と User の scoped 承認（裁定 §1）という前提を
+# 欠いていた。旧文言は本欄 reason 本文中に引用形式で保持する。README.md /
+# HARNESS3B_EDUCATION_LESSON_RECORD.md §0/§11 の同型記述も同期是正した
+# （grep で「再導出」「regenerat」の全ヒットを確認済み、他ファイルの
+# ヒットは無関係な既存記述）。(2) `publish_bundle_pair()` の crash-atomic
+# 指摘のうち、backup/staging 名の決定論化（`tempfile.mkstemp()` の
+# ランダム名 → `<final-name>.h3b-backup`/`<final-name>.h3b-staging` の
+# 固定名）+ publish 開始前の stale backup fail-closed 検出 + 手動回復
+# 手順の文書化のみを採用し（限定採用, P1）、世代ディレクトリ + 単一
+# ポインタ切替への再設計は POSIX の2ファイル同時 rename 不可能性・出力
+# レイアウト契約変更の範囲超過を理由に境界宣言で見送った
+# （`HARNESS3B_EDUCATION_LESSON_RECORD.md` §19 参照）。バンドル直列化
+# バイト列・出力 JSON の直列化式・抽出式・アラインメント規則はいずれも
+# 無変更——検証・公開経路 + reason 文言のみの変更。builder バイト変更
+# （新値 = 6428c78611969f0fb9e17b64b4ac7f7376b07e8a055e5565eff29d9de6435247）
+# と `builder_provenance.detail_record_sha256`（§19 追記後の実測記録 raw
+# sha256 = e78c2f5535d7810e18bf29936046bc6ebc518c301b2214bba9dfa483429da0c0）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。system python3（pyworld 0.3.5 導入済み）による repo builder
+# 再現実行（run11、`--allow-unpinned`）で training/validation バンドルとも
+# 既 pin（run1〜run10）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、検証・公開経路 + reason
+# 文言のみの変更）。repin 完了後、`--allow-unpinned` を付けずに独立12回目
+# として再実行し、`pinned_manifest_check: "PASS"`（同一 sha256）で正常
+# 完了することも実測で確認した。旧値（第8世代、第7巡対応時点）は履歴として
+# 保持する:
+#   a356c5bc1073a04c824479cb6ea1a66534f61b699103a2bc0083c5b7b7a8d16c
 education_technique_lesson_manifest_sha:
-  value: "a356c5bc1073a04c824479cb6ea1a66534f61b699103a2bc0083c5b7b7a8d16c"
+  value: "8ee423cbbcbaf5b9eddfc3ae424011f39aad30141dbb4b7d8e60f45d4cd8dccd"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-
@@ -1985,9 +2020,20 @@ education_technique_lesson_manifest_sha:
     経由のみで行う契約（他の `load_pinned_*` 系と同じ規約）。バンドル実体
     ファイル（training_bundle.json/validation_bundle.json）は rights
     制約により repo に収載していない——sha256 のみを本欄・manifest へ pin
-    する（reexport emb と同型の session-artifact 扱い。repo canonical
-    builder + repo 収載 corpus 由来ファイルにより決定論的に再導出可能）。
-    詳細記録は HARNESS3B_EDUCATION_LESSON_RECORD.md を正とする。
+    する（reexport emb と同型の session-artifact 扱い。
+    `corpus_provenance.audio_repo_contained: false` が宣言するとおり
+    消費入力3点（wav/lab/musicxml）・展開済み corpus・バンドル実体は
+    いずれも repo 非収載——fresh checkout からの再導出には repo canonical
+    builder に加え **外部 PJS corpus ver1.1 の再取得**（zip sha256 の
+    厳密一致 → 展開後 `expanded_corpus_identity_sha256` 照合の fail-closed
+    手順、per-file 消費入力 pin との照合込み）と、User の scoped 承認
+    （裁定 §1、session-scoped）が前提として必要——第9世代 repin で訂正
+    〔旧文言（第8世代まで）:「repo canonical builder + repo 収載 corpus
+    由来ファイルにより決定論的に再導出可能」。「repo 収載 corpus」という
+    記述が `audio_repo_contained: false` と矛盾し、外部再取得・User 承認
+    という前提を欠いていたため不正確だった。PR #329 第8巡レビュー指摘,
+    採用, P2〕）。詳細記録は HARNESS3B_EDUCATION_LESSON_RECORD.md を正と
+    する。
     〔履歴: 旧 reason（PENDING 時点）—「PJS 由来 Technique lesson 抽出
     （Technique extractor / Lesson builder、PoR §3.3。VG-L0 学習ハーネス
     相当の feature extractor）が未実装。改訂3（DESIGN_RUN9_REVISION_0.2.md）
