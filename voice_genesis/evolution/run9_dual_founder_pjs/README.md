@@ -193,7 +193,9 @@ PR #317 head `71eeccadf3f1f7ee49d9cc90763ced8a506abc67` に対する User 本人
    だった。〔履歴: 「両方 PENDING のまま」→ `practice_audio_split_
    manifest_sha` は 2026-08-25 実 PJS 実行で **PINNED** 化済み（下記
    「解消済み（実 PJS practice split 実行, 2026-08-25）」節参照）。
-   `education_technique_lesson_manifest_sha` は引き続き PENDING〕）。
+   `education_technique_lesson_manifest_sha` は引き続き PENDING → 2026-08-27
+   RUN9-L0-HARNESS-3b で **PINNED** 化済み（下記「RUN9-L0-HARNESS-3b」節
+   参照）〕）。
    manifest 最低要件は `PRACTICE_MANIFEST_REQUIRED_KEYS`/
    `EDUCATION_MANIFEST_REQUIRED_KEYS` + `validate_practice_split_
    manifest()`/`validate_education_lesson_manifest()`（schema 欄の
@@ -911,14 +913,16 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   （総 PENDING 10欄）へ減少した——下記
   「解消済み（RUN9-EXECPROFILE-1, 2026-08-26）」節参照。続けて
   RUN9-L0-HARNESS-3a（2026-08-26）で `expected_speaker_map_sha` が
-  PINNED 化され、残 PENDING は下記のとおり pre-run 必須8欄
-  （総 PENDING 9欄）へ減少した——下記
-  「解消済み（RUN9-L0-HARNESS-3a, 2026-08-26）」節参照（`attempt_id`/
+  PINNED 化され、残 PENDING は pre-run 必須8欄（総 PENDING 9欄）へ
+  減少した——下記「解消済み（RUN9-L0-HARNESS-3a, 2026-08-26）」節参照。
+  続けて RUN9-L0-HARNESS-3b（2026-08-27）で `education_technique_lesson_
+  manifest_sha` が PINNED 化され、残 PENDING は下記のとおり pre-run
+  必須7欄（総 PENDING 8欄）へ減少した——下記
+  「解消済み（RUN9-L0-HARNESS-3b, 2026-08-27）」節参照（`attempt_id`/
   `repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
-  `education_technique_lesson_manifest_sha`/`learning_recipe_sha`/
-  `measurement_spec_sha`/`hypothesis_algebra_sha` の
-  pre-run 必須8欄が引き続き PENDING のため（optional の
-  `human_evaluation_protocol_sha` を含めると総 PENDING 9欄）——
+  `learning_recipe_sha`/`measurement_spec_sha`/`hypothesis_algebra_sha` の
+  pre-run 必須7欄が引き続き PENDING のため（optional の
+  `human_evaluation_protocol_sha` を含めると総 PENDING 8欄）——
   `tests/test_run9_contract.py` の回帰テストで機械確認済み）。
 
 **解消済み（RUN9-L0-HARNESS-1, 2026-08-26）**:
@@ -1199,6 +1203,54 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   実行は本 PR に含まない**（別途実行）。方式Bは将来の AF0 acoustic
   realization 用の別 revision/別 Run へ、方式Cは Genome 座標の意味を
   render 層で失うため不採用——いずれも本改訂では実装しない。
+
+**解消済み（RUN9-L0-HARNESS-3b, 2026-08-27）**:
+- `education_technique_lesson_manifest_sha` 未 pin →
+  User 裁定「RUN9 User裁定 — PJS再取得およびLesson Channel Freeze」
+  （2026-08-27、repo 内収載
+  [`USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt`](./USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt)）
+  の承認に基づき PJS corpus ver1.1 を session-scoped で再取得し（raw zip
+  sha256 / expanded corpus identity sha256 とも裁定の要求値と厳密一致、
+  E1 実測 PASS）、裁定 §4 が確定した RUN9 v1 Lesson channel 5件
+  （relative F0 contour / note-mora duration ratio / phrase-normalized
+  energy envelope / attack timing / phrase-end timing。advisory 6
+  channel は不採用）を、凍結済み
+  [`HARNESS3B_EXTRACTOR_SPEC.md`](./HARNESS3B_EXTRACTOR_SPEC.md)（v1.1）
+  の literal 実装として抽出した。spec v1（16-bit WAV 仮定）は E2 ヘッダ
+  実測（85/85 曲が実際は24-bit）により fail-closed で正しく停止し
+  （旧 freeze record は破棄せず
+  [`inputs/h3b_freeze_record.superseded.1.json`](./inputs/h3b_freeze_record.superseded.1.json)
+  として保存）、24-bit へ spec を訂正した v1.1 で
+  [`inputs/h3b_freeze_record.json`](./inputs/h3b_freeze_record.json) を
+  再凍結してから抽出を実行した（音響 decode は v1 下で一度も実行されて
+  いないため「凍結が抽出に先行」の不変条件は保たれている——channel 意味論・
+  抽出法・正規化法は無変更のため裁定 §5 の design revision 事項には
+  該当しない）。抽出は独立 2 回（session workdir）+ 新設した repo
+  canonical builder [`education_lesson_builder.py`](./education_lesson_builder.py)
+  による独立 3 回目（run3）の計 3 回とも training/validation バンドルが
+  byte-level で完全一致した。training 内 pjs008/pjs064 の2曲は
+  score/annotation モーラ数不一致（count_mismatch）で全 channel
+  not_extracted とし、補間・推測は行っていない（aligned 83曲 +
+  count_mismatch 2曲 = 合計85曲 = training 70 + validation 15、裁定 §1
+  と一致）。sealed_holdout 15曲は完全性 hash・ID確認以外の処理を一切
+  行っていない。smoke 完遂を受けて `education_technique_lesson_manifest_
+  sha` を新設
+  [`inputs/education_technique_lesson_manifest.json`](./inputs/education_technique_lesson_manifest.json)
+  （schema `run9-education-technique-lesson-manifest/1.0`）の raw byte
+  sha256 で `PINNED` 化した。`run9_schema.validate_education_lesson_
+  manifest()`/`load_pinned_education_lesson_manifest()` が manifest 単体
+  の構造検証に加え、裁定 txt・builder 本体・spec・freeze record（現行 +
+  superseded）・詳細記録の実バイト sha256 照合、三系統語彙対応表
+  （`TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP`）との一致、
+  `alignment_accounting` の内部整合（合計85曲）、`determinism_evidence`
+  の run1==run2==run3 一致を fail-closed で強制する。バンドル実体ファイル
+  （training_bundle.json/validation_bundle.json）は rights 制約により
+  repo に収載していない——sha256 のみを pin する（reexport emb と同型の
+  session-artifact 扱い。repo canonical builder + repo 収載 corpus 由来
+  ファイルにより決定論的に再導出可能）。詳細は
+  [`HARNESS3B_EDUCATION_LESSON_RECORD.md`](./HARNESS3B_EDUCATION_LESSON_RECORD.md)
+  を正とする。design_revision は本改訂で変更していない（0.5 のまま —
+  channel 意味論・抽出法・正規化法を変更していないため）。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

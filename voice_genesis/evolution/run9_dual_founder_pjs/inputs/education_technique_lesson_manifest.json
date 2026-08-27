@@ -1,0 +1,100 @@
+{
+  "adjudication_basis": {
+    "sha256": "a6eec22ac9a857d5db9f97130d515158038dc862d781380266eeb078f7a16c61",
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt",
+    "summary": "User 裁定 2026-08-27（PJS再取得およびLesson Channel Freeze）。PJS corpus ver1.1のsession-scoped再取得とTechnique抽出を承認、training 70/validation 15のみ抽出許可（sealed_holdout 15曲は完全性hash・ID確認のみ）、RUN9 v1 Lesson channelを5件（relative F0 contour / note-mora duration ratio / phrase-normalized energy envelope / attack timing / phrase-end timing）に 限定しadvisory 6 channelを不採用、Rights Gateとの非連動を明記。"
+  },
+  "alignment_accounting": {
+    "aligned_count": 83,
+    "count_mismatch_count": 2,
+    "count_mismatch_song_ids": [
+      "pjs008",
+      "pjs064"
+    ],
+    "no_interpolation_performed": true,
+    "total_songs": 85
+  },
+  "builder_provenance": {
+    "builder_sha256": "550eda93cf9e1cbd9f95a2525db03cda73d753d63e4df79003d0757acef4e8ae",
+    "detail_record_repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3B_EDUCATION_LESSON_RECORD.md",
+    "detail_record_sha256": "d702725d77a9083473ce09bb798626c9e55202d614e7342faa09ca1889183cf4",
+    "freeze_record_repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/h3b_freeze_record.json",
+    "freeze_record_sha256": "e8e3dd1d6ea78495392d8de8a8f8a8083b50cf5d76b7b02b4980882d947d0d10",
+    "logical_name": "education_lesson_builder",
+    "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/education_lesson_builder.py",
+    "spec_repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3B_EXTRACTOR_SPEC.md",
+    "spec_sha256": "8f78ccdb275a9acca6b08ec75535d26863bb0464c6e23150829146339f2ff39c",
+    "superseded_freeze_record_repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/h3b_freeze_record.superseded.1.json",
+    "superseded_freeze_record_sha256": "ec16e64774b14b6109fa70a5f0864f6c5e59e155a022d0304b01455808c14cf3"
+  },
+  "channel_vocabulary_map": [
+    {
+      "education_allowed_channel": "pitch_trajectory",
+      "extracted_trait": "relative_F0",
+      "physical_channel": "relative F0 contour"
+    },
+    {
+      "education_allowed_channel": "phoneme_note_duration_relation",
+      "extracted_trait": "duration_ratio",
+      "physical_channel": "note/mora duration ratio"
+    },
+    {
+      "education_allowed_channel": "dynamics_energy_trajectory",
+      "extracted_trait": "energy_envelope",
+      "physical_channel": "phrase-normalized energy envelope"
+    },
+    {
+      "education_allowed_channel": "timing",
+      "extracted_trait": "onset_offset",
+      "physical_channel": "attack timing"
+    },
+    {
+      "education_allowed_channel": "phrase_end_control",
+      "extracted_trait": "onset_offset",
+      "physical_channel": "phrase-end timing"
+    }
+  ],
+  "corpus_provenance": {
+    "audio_repo_contained": false,
+    "expanded_corpus_identity_sha256": "9905cec08fbaf43fa545400498a7908ef28567e8f60a5ba005fb2e00d526f996",
+    "note": "実 PJS 音源・展開物・バンドル実体ファイルはいずれも repo 非収載（rights 制約、session workdir 限定）。",
+    "pjs_source_archive_sha256": "683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca",
+    "split_manifest_repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json",
+    "split_manifest_sha256": "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6"
+  },
+  "determinism_evidence": {
+    "training": {
+      "all_match": true,
+      "run1_sha256": "6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da",
+      "run2_sha256": "6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da",
+      "run3_sha256": "6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da"
+    },
+    "validation": {
+      "all_match": true,
+      "run1_sha256": "b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522",
+      "run2_sha256": "b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522",
+      "run3_sha256": "b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522"
+    }
+  },
+  "excludes_identity_and_trait_donor_info": true,
+  "extraction_dependency_pins": {
+    "frame_period_ms": 5.0,
+    "frame_period_ms_source": "voice_genesis/foundry/adapter/donor_bank.py:34 `FRAME_PERIOD_MS = 5.0`（Read で転記、import はしていない）。",
+    "numpy": "1.26.4",
+    "python": "3.11.15",
+    "pyworld": "0.3.5",
+    "scipy": "1.17.1",
+    "venv_isolated": true
+  },
+  "identical_lesson_bytes_across_founders": true,
+  "rights_status": {
+    "declaration": "本承認はPJS取得・解析作業へのscoped承認であり、外部権利者のattestation、未解決provenanceの確定、R9-G1 Rights Gate waiverを意味しない。Technique artifactは技術的に生成・hash凍結できるが、rights-cleanまたはlearning-eligibleとは、既存Rights Gateが別途成立するまで宣言しない（裁定§3逐語）。",
+    "gate_dependency": "R9-G1 Rights Gate（本 manifest の PINNED 化はこの Gate の成立を意味しない）",
+    "learning_eligible_declared": false,
+    "rights_clean_declared": false
+  },
+  "schema": "run9-education-technique-lesson-manifest/1.0",
+  "sealed_holdout_technique_release_policy": "RELEASE_AFTER_TRAINING_COMPLETE",
+  "training_technique_lesson_sha256": "6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da",
+  "validation_technique_lesson_sha256": "b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522"
+}

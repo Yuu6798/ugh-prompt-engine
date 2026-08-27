@@ -1417,6 +1417,60 @@ PRACTICE_MANIFEST_PATH = _THIS_DIR / "inputs" / "practice_audio_split_manifest.j
 EDUCATION_MANIFEST_PATH = _THIS_DIR / "inputs" / "education_technique_lesson_manifest.json"
 
 # ---------------------------------------------------------------------------
+# RUN9-L0-HARNESS-3b: technique lesson bundle（`education_lesson_builder.py`
+# が生成する training/validation バンドルの schema 識別子）+ 三系統語彙
+# 対応表（HARNESS3B_EXTRACTOR_SPEC.md §1 の凍結対象表を機械可読へ写した
+# 正本）。`education_technique_lesson_manifest.json` の `channel_vocabulary_
+# map` および `education_lesson_builder.py` の `CHANNEL_VOCABULARY_MAP` は、
+# いずれも本定数と内容一致することをテスト層が強制する
+# （`tests/test_education_lesson_builder.py`）— 3ファイルへ分散した同一表が
+# 将来ドリフトしないためのファミリー掃討。
+# ---------------------------------------------------------------------------
+
+SCHEMA_TECHNIQUE_LESSON_BUNDLE = "run9-technique-lesson-bundle/1.0"
+
+TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP: Tuple[Dict[str, str], ...] = (
+    {
+        "physical_channel": "relative F0 contour",
+        "extracted_trait": "relative_F0",
+        "education_allowed_channel": "pitch_trajectory",
+    },
+    {
+        "physical_channel": "note/mora duration ratio",
+        "extracted_trait": "duration_ratio",
+        "education_allowed_channel": "phoneme_note_duration_relation",
+    },
+    {
+        "physical_channel": "phrase-normalized energy envelope",
+        "extracted_trait": "energy_envelope",
+        "education_allowed_channel": "dynamics_energy_trajectory",
+    },
+    {
+        "physical_channel": "attack timing",
+        "extracted_trait": "onset_offset",
+        "education_allowed_channel": "timing",
+    },
+    {
+        "physical_channel": "phrase-end timing",
+        "extracted_trait": "onset_offset",
+        "education_allowed_channel": "phrase_end_control",
+    },
+)
+
+# 規約パス（`EDUCATION_MANIFEST_PATH` 等と同じ命名規約 — schema から機械的
+# に導出せず、リポジトリ内の固定配置として凍結する）。
+EDUCATION_LESSON_BUILDER_PATH = _THIS_DIR / "education_lesson_builder.py"
+EDUCATION_LESSON_SPEC_PATH = _THIS_DIR / "HARNESS3B_EXTRACTOR_SPEC.md"
+EDUCATION_LESSON_FREEZE_RECORD_PATH = _THIS_DIR / "inputs" / "h3b_freeze_record.json"
+EDUCATION_LESSON_SUPERSEDED_FREEZE_RECORD_PATH = (
+    _THIS_DIR / "inputs" / "h3b_freeze_record.superseded.1.json"
+)
+EDUCATION_LESSON_ADJUDICATION_PATH = (
+    _THIS_DIR / "USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt"
+)
+EDUCATION_LESSON_DETAIL_RECORD_PATH = _THIS_DIR / "HARNESS3B_EDUCATION_LESSON_RECORD.md"
+
+# ---------------------------------------------------------------------------
 # learning recipe manifest（RUN9 Phase 3 item 3）: rev 0.3 の枝別原則
 # （DESIGN_RUN9_REVISION_0.3.md 改訂A・Codex bot レビュー第6巡 Fix B 是正
 # 後の learning_recipe_sha reason）を機械可読な構造として凍結する。
@@ -17072,5 +17126,256 @@ def load_pinned_speaker_map_manifest(
             f"pin 値 ({detail_record_pinned_sha!r}) と一致しない — 実測記録の改変（6点 PASS 主張と "
             "証拠文書の乖離）を fail-closed で拒否する（PR #328 レビュー第8巡指摘17対応）"
         )
+
+    return data
+
+
+# ---------------------------------------------------------------------------
+# RUN9-L0-HARNESS-3b: education_technique_lesson_manifest_sha pin の唯一の
+# 正規消費経路（`load_pinned_speaker_map_manifest()` と同型の3層防御・
+# read-once 契約）。
+# ---------------------------------------------------------------------------
+
+_EDUCATION_LESSON_REPO_ROOT = _THIS_DIR.parent.parent.parent
+
+
+def load_pinned_education_lesson_manifest(
+    contract: Run9RunContract,
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`education_technique_lesson_manifest_sha` pin の**唯一の正規消費
+    経路**（`load_pinned_speaker_map_manifest()` と同型）。
+
+    **消費契約（事前登録）**: harness の education lesson manifest 消費は
+    この関数経由のみで行わなければならない — `inputs/education_technique_
+    lesson_manifest.json` への直接 `json.load()` は契約違反である。
+
+    手順（いずれかで fail-closed）:
+    (1) disk 正典 `RUN9_CONTRACT.yaml` を都度再読込し、渡された `contract`
+        の `education_technique_lesson_manifest_sha` pin が disk 正典と
+        乖離していないか照合する（改変検出、他の `load_pinned_*` と同型）。
+    (2) 当該 pin が PINNED であることを確認する。
+    (3) manifest 実ファイルの実バイト sha256 が pin 値と一致することを
+        read-once（同一バッファから digest と parse の両方を導出）で
+        確認する。
+    (4) `validate_education_lesson_manifest()` で manifest 本体の構造・
+        `sealed_holdout_technique_release_policy` 語彙・founder 分岐構造
+        非混入を検証する。
+    (5) cross-check (a): `adjudication_basis.source_file`
+        （`USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt`）の実バイト
+        sha256 が `adjudication_basis.sha256` と一致することを machine
+        強制する（裁定文書の改変を fail-closed で拒否する）。
+    (6) cross-check (b): `builder_provenance.repo_relative_path`
+        （`education_lesson_builder.py`）の実バイト sha256 が
+        `builder_provenance.builder_sha256` と一致することを強制する。
+    (7) cross-check (c): `builder_provenance.spec_repo_relative_path`
+        （`HARNESS3B_EXTRACTOR_SPEC.md`）の実バイト sha256 が
+        `builder_provenance.spec_sha256` と一致することを強制する。
+    (8) cross-check (d): `builder_provenance.freeze_record_repo_relative_
+        path`（`inputs/h3b_freeze_record.json`）の実バイト sha256 が
+        `builder_provenance.freeze_record_sha256` と一致することを強制
+        する。
+    (9) cross-check (e): `builder_provenance.superseded_freeze_record_
+        repo_relative_path`（`inputs/h3b_freeze_record.superseded.1.json`、
+        v1 停止時点の破棄せず保存した旧 freeze record）の実バイト sha256
+        が `builder_provenance.superseded_freeze_record_sha256` と一致
+        することを強制する（v1→v1.1 訂正の正直会計を、旧 record を破棄
+        させないことで machine 強制する）。
+    (10) cross-check (f): `builder_provenance.detail_record_repo_relative_
+        path`（`HARNESS3B_EDUCATION_LESSON_RECORD.md`）の実バイト sha256
+        が `builder_provenance.detail_record_sha256` と一致することを
+        強制する（実測記録の改変を fail-closed で拒否する）。
+    (11) cross-check (g): manifest の `channel_vocabulary_map` が
+        `TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP`（本モジュールの schema
+        定数、正本）と完全一致することを強制する — 三系統語彙対応表が
+        manifest 側で改変・ドリフトしていないことの machine 強制。
+    (12) cross-check (h): `alignment_accounting` の内部整合
+        （`aligned_count + count_mismatch_count == total_songs == 85`、
+        `len(count_mismatch_song_ids) == count_mismatch_count`）を強制
+        する（裁定 §1: training 70 + validation 15 = 85 曲のみが対象）。
+    (13) cross-check (i): `determinism_evidence.{training,validation}` の
+        `run1_sha256 == run2_sha256 == run3_sha256` が、それぞれ
+        `training_technique_lesson_sha256`/`validation_technique_lesson_
+        sha256` とも一致することを強制する（独立 3 回実行の byte 一致を
+        machine 強制する）。
+
+    バンドル実体ファイル（training_bundle.json/validation_bundle.json）は
+    rights 制約により repo に収載しない——本関数はそれらの存在を要求せず、
+    sha256 pin 値の検証のみを行う（供給時にこの pin と実バイトを照合する
+    のは呼び出し側の責務）。
+
+    戻り値は検証済み manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("education_technique_lesson_manifest_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("education_technique_lesson_manifest_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_education_lesson_manifest(): the passed-in contract's "
+            f"education_technique_lesson_manifest_sha pin ({passed_field!r}) diverges from the "
+            f"canonical on-disk RUN9_CONTRACT.yaml pin ({disk_field!r}) at {effective_contract_path} "
+            "— treated as tampering evidence and rejected fail-closed"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_education_lesson_manifest(): education_technique_lesson_manifest_sha is "
+            f"not PINNED (status={field.get('status')!r}) — refusing to consume an unpinned "
+            "education lesson manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else EDUCATION_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): pinned education lesson manifest source "
+            f"{path} does not exist — this function is the sole canonical access path (direct "
+            "json.load() elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（TOCTOU 対策）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): {path} の実バイト sha256 ({actual_sha!r}) "
+            f"が RUN9_CONTRACT.yaml education_technique_lesson_manifest_sha の pin 値 "
+            f"({pinned_sha!r}) と一致しない — stale または改変された manifest は fail-closed で "
+            "拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_education_lesson_manifest(data)
+
+    # (5) cross-check (a): adjudication_basis.source_file の実バイト sha256。
+    adjudication_basis = data["adjudication_basis"]
+    effective_adjudication_path = _resolve_repo_contained_path(
+        adjudication_basis["source_file"],
+        repo_root=_EDUCATION_LESSON_REPO_ROOT,
+        field="adjudication_basis.source_file",
+        context="load_pinned_education_lesson_manifest()",
+    )
+    if not effective_adjudication_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): cross-check source "
+            f"{effective_adjudication_path} (adjudication_basis.source_file) does not exist"
+        )
+    adjudication_actual_sha = hashlib.sha256(effective_adjudication_path.read_bytes()).hexdigest()
+    adjudication_pinned_sha = adjudication_basis["sha256"]
+    if adjudication_actual_sha != adjudication_pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): {effective_adjudication_path} の実バイト "
+            f"sha256 ({adjudication_actual_sha!r}) が adjudication_basis.sha256 pin 値 "
+            f"({adjudication_pinned_sha!r}) と一致しない — 裁定文書の改変を fail-closed で拒否する"
+        )
+
+    # (6)-(10) cross-check (b)-(f): builder_provenance 5点（builder 本体・
+    # spec・freeze record 現行・freeze record superseded・detail record）
+    # の実バイト sha256 照合。
+    bp = data["builder_provenance"]
+    _cross_check_pairs = (
+        ("repo_relative_path", "builder_sha256", "builder_provenance.builder_sha256"),
+        ("spec_repo_relative_path", "spec_sha256", "builder_provenance.spec_sha256"),
+        (
+            "freeze_record_repo_relative_path", "freeze_record_sha256",
+            "builder_provenance.freeze_record_sha256",
+        ),
+        (
+            "superseded_freeze_record_repo_relative_path", "superseded_freeze_record_sha256",
+            "builder_provenance.superseded_freeze_record_sha256",
+        ),
+        (
+            "detail_record_repo_relative_path", "detail_record_sha256",
+            "builder_provenance.detail_record_sha256",
+        ),
+    )
+    for path_key, sha_key, label in _cross_check_pairs:
+        resolved = _resolve_repo_contained_path(
+            bp[path_key],
+            repo_root=_EDUCATION_LESSON_REPO_ROOT,
+            field=f"builder_provenance.{path_key}",
+            context="load_pinned_education_lesson_manifest()",
+        )
+        if not resolved.is_file():
+            raise Run9ValidationError(
+                f"load_pinned_education_lesson_manifest(): cross-check source {resolved} "
+                f"(builder_provenance.{path_key}) does not exist"
+            )
+        actual = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        expected = bp[sha_key]
+        if actual != expected:
+            raise Run9ValidationError(
+                f"load_pinned_education_lesson_manifest(): {resolved} の実バイト sha256 "
+                f"({actual!r}) が {label} pin 値 ({expected!r}) と一致しない — 改変を fail-closed "
+                "で拒否する"
+            )
+
+    # (11) cross-check (g): channel_vocabulary_map が schema 定数と完全一致。
+    manifest_vocab_map = data["channel_vocabulary_map"]
+    schema_vocab_map = list(TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP)
+    if manifest_vocab_map != schema_vocab_map:
+        raise Run9ValidationError(
+            "load_pinned_education_lesson_manifest(): channel_vocabulary_map "
+            f"({manifest_vocab_map!r}) diverges from the pinned schema constant "
+            f"TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP ({schema_vocab_map!r}) — 三系統語彙対応表の "
+            "改変・ドリフトを fail-closed で拒否する"
+        )
+
+    # (12) cross-check (h): alignment_accounting の内部整合（合計85曲）。
+    accounting = data["alignment_accounting"]
+    total_songs = accounting["total_songs"]
+    aligned_count = accounting["aligned_count"]
+    count_mismatch_count = accounting["count_mismatch_count"]
+    count_mismatch_song_ids = accounting["count_mismatch_song_ids"]
+    if total_songs != 85:
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): alignment_accounting.total_songs "
+            f"({total_songs!r}) must be exactly 85 (training 70 + validation 15, 裁定 §1)"
+        )
+    if aligned_count + count_mismatch_count != total_songs:
+        raise Run9ValidationError(
+            "load_pinned_education_lesson_manifest(): alignment_accounting.aligned_count "
+            f"({aligned_count!r}) + count_mismatch_count ({count_mismatch_count!r}) != "
+            f"total_songs ({total_songs!r})"
+        )
+    if len(count_mismatch_song_ids) != count_mismatch_count:
+        raise Run9ValidationError(
+            "load_pinned_education_lesson_manifest(): "
+            f"len(alignment_accounting.count_mismatch_song_ids)={len(count_mismatch_song_ids)!r} "
+            f"!= alignment_accounting.count_mismatch_count={count_mismatch_count!r}"
+        )
+
+    # (13) cross-check (i): determinism_evidence の run1==run2==run3 と
+    # トップレベル training/validation の *_technique_lesson_sha256 との一致。
+    determinism = data["determinism_evidence"]
+    _determinism_pairs = (
+        ("training", "training_technique_lesson_sha256"),
+        ("validation", "validation_technique_lesson_sha256"),
+    )
+    for split_key, top_level_key in _determinism_pairs:
+        split_evidence = determinism[split_key]
+        run_shas = (
+            split_evidence["run1_sha256"], split_evidence["run2_sha256"], split_evidence["run3_sha256"],
+        )
+        top_level_sha = data[top_level_key]
+        if len(set(run_shas)) != 1 or run_shas[0] != top_level_sha:
+            raise Run9ValidationError(
+                f"load_pinned_education_lesson_manifest(): determinism_evidence.{split_key} run1/"
+                f"run2/run3 sha256 ({run_shas!r}) do not all match each other and "
+                f"{top_level_key} ({top_level_sha!r}) — independent-reproduction byte-determinism "
+                "claim is not machine-verified"
+            )
 
     return data

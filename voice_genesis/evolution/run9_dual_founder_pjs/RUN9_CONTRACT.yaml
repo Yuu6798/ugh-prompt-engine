@@ -1775,21 +1775,64 @@ founder_genome_shas:
 # `validate_practice_split_manifest()` が manifest 本体の `schema` 欄
 # 自己宣言で担う）。両者は別対象であり本欄1つに統合しない。
 education_technique_lesson_manifest_sha:
-  value: null
-  status: PENDING
+  value: "c181036167a8e3fd003307565f77bf441bb649e6b0e1579ff104790a686b7cfa"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-
-    PJS 由来 Technique lesson 抽出（Technique extractor / Lesson builder、
-    PoR §3.3。VG-L0 学習ハーネス相当の feature extractor）が未実装。
-    改訂3（DESIGN_RUN9_REVISION_0.2.md）で Lesson manifest の生成・pin
-    方針は明確化済み（PJS の source_archive_sha256 /
-    expanded_corpus_identity_sha256 とは別の、RUN9 が実消費する Lesson
-    manifest を Lesson build 時に生成しその sha256 を本欄へ pin する）が、
-    Lesson build 自体はまだ実行されていない。manifest 本体は
-    `run9_schema.SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST`
-    （`run9-education-technique-lesson-manifest/1.0`）を自己宣言し、
-    `EDUCATION_MANIFEST_REQUIRED_KEYS` の最低要件（training/validation/
-    sealed-holdout lesson・donor 情報排除証拠・二体同一 bytes 証拠）を
-    満たさなければならない。
+    RUN9-L0-HARNESS-3b（2026-08-27, User 裁定「RUN9 User裁定 — PJS再取得
+    およびLesson Channel Freeze」逐語、repo 内収載
+    USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt 参照）で PINNED 化:
+    裁定 §1 の承認に基づき PJS corpus ver1.1 を session-scoped で再取得
+    （raw zip sha256 / expanded corpus identity sha256 とも裁定の要求値と
+    厳密一致、E1 実測 PASS）、裁定 §4 が確定した RUN9 v1 Lesson channel 5件
+    （relative F0 contour / note-mora duration ratio / phrase-normalized
+    energy envelope / attack timing / phrase-end timing。advisory 6
+    channel は不採用）を、凍結済み HARNESS3B_EXTRACTOR_SPEC.md（v1.1、
+    spec_sha256 = 8f78ccdb...）の literal 実装として抽出した。v1 spec
+    （16-bit WAV 仮定）は E2 ヘッダ実測（85/85 曲が実際は24-bit）により
+    fail-closed で正しく停止し（旧 freeze record は破棄せず
+    inputs/h3b_freeze_record.superseded.1.json として保存）、24-bit へ
+    spec を訂正した v1.1 で再凍結してから抽出を実行した（音響 decode は
+    v1 下で一度も実行されていないため「凍結が抽出に先行」の不変条件は
+    保たれている）。抽出は独立 2 回（session workdir、run1/run2）+ repo
+    canonical builder による独立 3 回目（run3、education_lesson_
+    builder.py）の計 3 回とも training/validation バンドルが byte-level
+    で完全一致した（sha256: training =
+    6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da,
+    validation =
+    b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522）。
+    training 内 pjs008/pjs064 の2曲は score/annotation モーラ数不一致
+    （count_mismatch）で全 channel not_extracted とし、補間・推測は行って
+    いない（aligned 83曲 / count_mismatch 2曲 = 合計85曲、裁定 §1 の
+    training 70 + validation 15 と一致）。sealed_holdout 15曲は完全性
+    hash・ID確認以外の処理を一切行っていない。本欄が PINNED する
+    `inputs/education_technique_lesson_manifest.json`（schema
+    `run9-education-technique-lesson-manifest/1.0`）は
+    `run9_schema.validate_education_lesson_manifest()`/`load_pinned_
+    education_lesson_manifest()` が全構造・cross-check（裁定 txt 実バイト
+    照合、builder/spec/freeze record 現行・superseded/detail record の
+    実バイト sha256 照合、三系統語彙対応表の schema 定数との一致、
+    alignment_accounting の内部整合、determinism_evidence の
+    run1==run2==run3 一致）を fail-closed で強制する——harness の education
+    lesson manifest 消費は `load_pinned_education_lesson_manifest()`
+    経由のみで行う契約（他の `load_pinned_*` 系と同じ規約）。バンドル実体
+    ファイル（training_bundle.json/validation_bundle.json）は rights
+    制約により repo に収載していない——sha256 のみを本欄・manifest へ pin
+    する（reexport emb と同型の session-artifact 扱い。repo canonical
+    builder + repo 収載 corpus 由来ファイルにより決定論的に再導出可能）。
+    詳細記録は HARNESS3B_EDUCATION_LESSON_RECORD.md を正とする。
+    〔履歴: 旧 reason（PENDING 時点）—「PJS 由来 Technique lesson 抽出
+    （Technique extractor / Lesson builder、PoR §3.3。VG-L0 学習ハーネス
+    相当の feature extractor）が未実装。改訂3（DESIGN_RUN9_REVISION_0.2.md）
+    で Lesson manifest の生成・pin 方針は明確化済み（PJS の
+    source_archive_sha256 / expanded_corpus_identity_sha256 とは別の、
+    RUN9 が実消費する Lesson manifest を Lesson build 時に生成しその
+    sha256 を本欄へ pin する）が、Lesson build 自体はまだ実行されていない。
+    manifest 本体は `run9_schema.SCHEMA_EDUCATION_TECHNIQUE_LESSON_
+    MANIFEST`（`run9-education-technique-lesson-manifest/1.0`）を自己宣言
+    し、`EDUCATION_MANIFEST_REQUIRED_KEYS` の最低要件（training/
+    validation/sealed-holdout lesson・donor 情報排除証拠・二体同一 bytes
+    証拠）を満たさなければならない。」〕
 
 # 2026-08-25 実 PJS 公開配布物から生成（zip sha 検証 → plain unzip → corpus
 # identity 照合 → builder 決定論分割）: PJS corpus ver1.1 zip
@@ -2493,8 +2536,19 @@ cost_record_sha:
 #   構造検証のため、本訂正は validator 側の追随を要さない（確認済み）。
 #   分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。バイトが変わったため
 #   repin（9世代目）。
+# - RUN9-L0-HARNESS-3b（2026-08-27、値
+#   ead64d2fd7896728b1fc7070c90d7a5b2d8bb17740e21c4056a5210a081cf98b へ
+#   repin）: rule 8（§22 step 8『build and freeze PJS Lesson』）の
+#   `checkpoint`/`machine_promotion_condition` が「education_technique_
+#   lesson_manifest_sha は引き続き PENDING（EDUCATION builder 未実装）」
+#   という stale な言及を残していた——本改訂で
+#   education_technique_lesson_manifest_sha が PINNED 化された（本ファイル
+#   上部の同欄参照）ため、rule 8 のテキストを解消済みへ更新した（旧文言は
+#   〔履歴〕として rule 本文内に保持、削除しない）。rule_id/enforcement/
+#   verbatim は無改変。分類数・他 rule は無改変（sha256 確認済み）。
+#   バイトが変わったため repin（10世代目）。
 failure_abort_criteria_sha:
-  value: "da8aee0d49a5dac58b5ddd6b6dc7959f1a15914e9a6e565a4e6851e2b6c7a527"
+  value: "ead64d2fd7896728b1fc7070c90d7a5b2d8bb17740e21c4056a5210a081cf98b"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 
