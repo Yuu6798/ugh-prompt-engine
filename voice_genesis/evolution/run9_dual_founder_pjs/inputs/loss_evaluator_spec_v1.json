@@ -207,7 +207,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "5bfb8140e27ed248f265bbdc8e59824c63b46ea1f7952c7085cc3404a25ac4b2",
+      "sha256": "aa28ba04b6ac9f988eb78e4aa6078c40a415720526a0668d7404ac1c5f143c43",
       "summary": "W1b Task3: training バンドル（sha256照合供給）68曲の5 channel母標準偏差実測。relative_f0/normalized_energyの標本粒度は両案（frame/mora,phrase）を実測し、W1b Task3時点ではFable判定（frame採用）を記録していたが、PR #331第6巡でresidual_correspondenceがaligned mora単位集約へ凍結された結果frame採用の前提が成立しなくなり、mora粒度採用（sample_unit: mora / adopted_v2: true）へ切替済み（第6巡追記節・本file同梱channels[].calibration_scale.derivation参照）。独立2プロセス実行で完全一致（決定論確認済み）。"
     },
     "training_bundle_input": {

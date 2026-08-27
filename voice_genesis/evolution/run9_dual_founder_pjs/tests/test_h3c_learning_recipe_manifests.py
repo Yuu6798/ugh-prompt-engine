@@ -791,6 +791,36 @@ def test_h3c_candidate_generation_proposal_valid_manifest_passes() -> None:
     m.validate_candidate_generation_spec_manifest(data)
 
 
+# --- PR #331 第12巡指摘（P1、採用）: exploratory_candidate_rule.applies_to
+# が no_best_handling/shortfall_handling の candidate 0..2 バックフィル
+# 要求と矛盾していた旧文言（trial 2..32 の candidate 3 限定）への改ざんを
+# fail-closed で拒否する。shortfall_handling 側の applies_to 相互参照
+# 脱落も同様に拒否する（双方向参照）。
+
+
+def test_h3c_candidate_generation_exploratory_applies_to_narrowed_to_candidate3_only_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    # 第11巡以前の旧文言（no_best_handling/shortfall_handling が要求する
+    # candidate 0..2 バックフィルの適用範囲宣言が欠落した状態）への改ざんを模す。
+    data["proposal"]["exploratory_candidate_rule"]["applies_to"] = (
+        "trial 1 の candidate 1..3、および trial 2..32 の candidate 3"
+        "（proposal_schedule_table の hash-derived exploratory 行すべて。"
+        "digest はスロットごとに {trial}:{candidate} を差し替えて独立に計算する）"
+    )
+    with pytest.raises(m.Run9ValidationError, match="applies_to"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_shortfall_handling_applies_to_cross_reference_dropped_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["proposal"]["neighborhood_candidate_rule"]["shortfall_handling"] = (
+        "未評価かつ有効な近傍候補が3件未満の場合、不足分は exploratory_candidate_rule の手順"
+        "（不足している candidate index のスロットごとに digest を計算）で補充する。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="shortfall_handling"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
 # --- PR #331 第4巡指摘2（P1、採用）: selection.tie_break の実行可能な全
 # 順序凍結の validator 検査。旧版は selection 節の中身を一切検査していな
 # かった欠落を埋めたテスト。

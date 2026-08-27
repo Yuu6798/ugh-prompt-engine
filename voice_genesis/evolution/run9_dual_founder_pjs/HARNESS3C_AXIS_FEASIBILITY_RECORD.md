@@ -1243,3 +1243,77 @@ spec_sha` を repin した。さらに本節を新設したことに伴う
 `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q
 --tb=short` 全 pass（新設検査・参照実装テストの追加分だけ第10巡から件数
 増）。
+
+## PR #331 Codex bot レビュー第12巡対応（2026-08-27、Claude 完結ルート）
+
+指摘1件、P1、Fable 採用判定（致命的バグ = 第11巡改訂が導入した spec 内
+矛盾）。上限10巡（`AGENTS.md` §3-4／CLAUDE.md「上限10ラウンド」）到達後の
+指摘だが、CLAUDE.md「打ち切りは3分類を上書きしない」（新しい具体経路を
+示す指摘は巡数に依らず採用）に該当するため採用する。実装・検証・返信
+起草は Sonnet に委譲、コミット/push は Fable が別途実行する（本追記
+フェーズでは未実施）。
+
+1. **exploratory_candidate_rule.applies_to の適用範囲宣言の是正（P1）**:
+   第11巡で `neighborhood_candidate_rule.no_best_handling` を新設した際、
+   NO_BEST（current_best 不在）の trial では「candidate 0..3 の4枠すべて
+   を exploratory_candidate_rule で決定論的に充当する」と規定したが、同じ
+   `proposal.exploratory_candidate_rule.applies_to` は第1巡以来「trial 1
+   の candidate 1..3、および trial 2..32 の candidate 3」にしか触れて
+   おらず、trial 2..32 の candidate 0..2 への適用（NO_BEST 時の全欠
+   バックフィルに加え、第3/4巡で凍結済みの `shortfall_handling` が定める
+   近傍優先順位リスト不足分の通常バックフィルも同様）を宣言していな
+   かった——適用範囲を宣言する節自体が、それを呼び出す2つの規則
+   （`no_best_handling`/`shortfall_handling`）と矛盾する spec 内矛盾
+   だった。参照実装 `candidate_proposal.propose_trial_candidates()` を
+   実読し、shortfall 発生時（`candidate_index` が 0..2 のいずれかで近傍
+   キューが尽きた場合）に `select_exploratory_candidate()` を**実際の
+   `candidate_index`（0/1/2）のまま**呼び出しており 3 へ差し替えていない
+   ことを確認した——正しいのは実装側で、`applies_to` の適用範囲宣言だけ
+   が誤って狭かった。`applies_to` を (a) 正規スロット（trial 1
+   candidate 1..3・trial 2..32 candidate 3）+ (b) `shortfall_handling`/
+   `no_best_handling` がバックフィルを要求する近傍スロット（trial 2..32
+   candidate 0..2）の2項列挙へ逐語改訂し、(a)(b) いずれのスロットにも
+   `reservation_semantics` が定める予約集合・`probing_rule` の線形
+   プロービング・重複棄却が同一適用される旨を明記した。双方向参照として
+   `no_best_handling`（既存の「exploratory_candidate_rule（探査ストリーム、
+   hash 系列）」の直後）と `shortfall_handling`（既存の「exploratory_
+   candidate_rule の手順」の直後）にもそれぞれ `exploratory_candidate_
+   rule.applies_to (b) が定める` の一句を追記した。`run9_schema.py` へ
+   `_CANDIDATE_GENERATION_EXPECTED_EXPLORATORY_APPLIES_TO`/
+   `_CANDIDATE_GENERATION_EXPECTED_SHORTFALL_HANDLING` を新設し、
+   `validate_candidate_generation_spec_manifest()` に
+   `exploratory_candidate_rule.applies_to`/`neighborhood_candidate_rule.
+   shortfall_handling` の逐語一致検査を追加した（旧版はいずれも必須
+   キーの存在のみを検査し中身は無検査だった欠落を埋める）。
+   `tests/test_h3c_learning_recipe_manifests.py` へ
+   `test_h3c_candidate_generation_exploratory_applies_to_narrowed_to_
+   candidate3_only_rejected`（旧・矛盾していた狭い文言への改ざん拒否）・
+   `test_h3c_candidate_generation_shortfall_handling_applies_to_cross_
+   reference_dropped_rejected`（相互参照を落とした shortfall_handling
+   への改ざん拒否）を新設した。`tests/test_candidate_proposal.py` の
+   既存 `test_propose_trial_candidates_shortfall_backfilled_by_
+   exploratory`／`test_propose_trial_candidates_no_best_backfills_all_
+   four_via_exploratory` が、参照実装 `candidate_proposal.py` の shortfall
+   バックフィル挙動（candidate 0..2 スロットが exploratory ストリームで
+   充当される）を既に実測確認済みであり、本巡の spec 文言改訂はこの
+   既存実装挙動と整合したことを確認した（実装側の変更は無し）。
+
+**連鎖更新**: `inputs/candidate_generation_spec_v1.json` のバイト変更に
+伴い `RUN9_CONTRACT.yaml` の `candidate_generation_spec_sha` を repin
+した。さらに本節を新設したことに伴う `HARNESS3C_AXIS_FEASIBILITY_
+RECORD.md` 自体の実バイト sha256 変更により、5 manifest 共通の
+`provenance.detail_record.sha256` 参照値が全て追随更新となるため、5
+manifest 全て（`score_axis_catalog_sha`/`loss_evaluator_spec_sha`/
+`candidate_generation_spec_sha`/`compute_budget_manifest_sha`/
+`learning_data_binding_manifest_sha`）を第1-11巡と同型の cascade repin
+した（旧値は `RUN9_CONTRACT.yaml` 側に世代履歴コメントとして
+append-only 保持）。`score_axis_catalog_v1.json`/`loss_evaluator_spec_
+v1.json`/`compute_budget_manifest_v1.json`/`learning_data_binding_
+manifest_v1.json` 自体の内容（`provenance.detail_record.sha256` 以外）
+は本巡で無改訂。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q
+--tb=short` 2552 件全 pass（第11巡時点の2550件から+2件: `applies_to`/
+`shortfall_handling` 逐語一致検査の改ざん拒否テスト2件、他は repin 反映
+後の既存回帰）。

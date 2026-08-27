@@ -18846,7 +18846,31 @@ _CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_MAY_BE_IDENTITY = (
     'trial 1 の最良候補が恒等候補（全軸 0）である場合を含む。恒等は L の要素ではないため、この場合の近傍は identity_neighbor_rule に従う。恒等自体が NOT_SCORABLE で best になり得なかった場合は current_best_may_be_identity の対象外であり no_best_handling が適用される——恒等は「best が不在」と等価ではない'
 )
 _CANDIDATE_GENERATION_EXPECTED_NO_BEST_HANDLING = (
-    'trial 1 の恒等候補を含む全4候補が NOT_SCORABLE の場合（missing_policy「trial 内の全 candidate が NOT_SCORABLE の場合、当該 trial はそのまま記録し best 更新なしで次 trial へ進む」参照）、または最初に scorable な candidate が確定するまでの以降の trial でも同様に一度も scorable な candidate が無い場合、current_best は candidate_proposal.NO_BEST（IDENTITY=None とは別個のセンチネル）とする——None は「恒等が正当な best として確定している」ことを表す積極的な値であり、best が一度も確定していない消極的な状態と混同してはならない（PR #331 Codex bot レビュー第11巡指摘2、P1、採用: 旧仕様はこの区別を持たず、None の多義性により架空の恒等近傍が生成され得る欠陥があった）。current_best が NO_BEST の trial では、neighborhood_candidate_rule の近傍3スロットは構造的に全欠（shortfall = 3 全枠）となり、candidate 0..3 の4枠すべてを exploratory_candidate_rule（探査ストリーム、hash 系列）で決定論的に充当する。恒等候補の暗黙の再提案はしない——恒等は trial1_candidate0_rule が定める trial 1 candidate 0 の1回のみで、NO_BEST から自動的に恒等へ復帰することはない。この trial の理由 "NO_SCORABLE_BEST" を探索 trace（practice_actor_binding.trace_storage が定める trial log）へ必須記録する。参照実装: candidate_proposal.NO_BEST（`candidate_proposal.neighbors_of()` は NO_BEST を渡されると空リストを返す）。selection.no_scorable_candidate_terminal_state と接続する（32 trial 終了時点まで NO_BEST が続いた場合の run 終端状態）'
+    'trial 1 の恒等候補を含む全4候補が NOT_SCORABLE の場合（missing_policy「trial 内の全 candidate が NOT_SCORABLE の場合、当該 trial はそのまま記録し best 更新なしで次 trial へ進む」参照）、または最初に scorable な candidate が確定するまでの以降の trial でも同様に一度も scorable な candidate が無い場合、current_best は candidate_proposal.NO_BEST（IDENTITY=None とは別個のセンチネル）とする——None は「恒等が正当な best として確定している」ことを表す積極的な値であり、best が一度も確定していない消極的な状態と混同してはならない（PR #331 Codex bot レビュー第11巡指摘2、P1、採用: 旧仕様はこの区別を持たず、None の多義性により架空の恒等近傍が生成され得る欠陥があった）。current_best が NO_BEST の trial では、neighborhood_candidate_rule の近傍3スロットは構造的に全欠（shortfall = 3 全枠）となり、candidate 0..3 の4枠すべてを exploratory_candidate_rule（探査ストリーム、hash 系列。適用範囲は exploratory_candidate_rule.applies_to (b) が定める）で決定論的に充当する。恒等候補の暗黙の再提案はしない——恒等は trial1_candidate0_rule が定める trial 1 candidate 0 の1回のみで、NO_BEST から自動的に恒等へ復帰することはない。この trial の理由 "NO_SCORABLE_BEST" を探索 trace（practice_actor_binding.trace_storage が定める trial log）へ必須記録する。参照実装: candidate_proposal.NO_BEST（`candidate_proposal.neighbors_of()` は NO_BEST を渡されると空リストを返す）。selection.no_scorable_candidate_terminal_state と接続する（32 trial 終了時点まで NO_BEST が続いた場合の run 終端状態）'
+)
+
+# `exploratory_candidate_rule.applies_to` の逐語凍結（PR #331 Codex bot
+# レビュー第12巡指摘、P1、採用）: 第11巡新設の `no_best_handling` と
+# 既存の `shortfall_handling` はいずれも trial 2..32 の candidate 0..2 の
+# バックフィルを `exploratory_candidate_rule` へ要求するが、旧 `applies_to`
+# は「trial 1 の candidate 1..3、および trial 2..32 の candidate 3」にしか
+# 触れておらず、この適用範囲を宣言する節自体が両規則と矛盾していた
+# （spec 内矛盾＝致命的バグ、実コードは candidate_proposal.
+# propose_trial_candidates() がバックフィル時に candidate_index を 3 へ
+# 差し替えず実際の 0..2 のまま渡すため、正しい実装と矛盾する適用範囲宣言
+# だけが誤っていた）。(a) 正規スロット + (b) バックフィルスロットの2項
+# 列挙へ改訂し、repin で (b) が脱落しても fail-closed で拒否する。
+_CANDIDATE_GENERATION_EXPECTED_EXPLORATORY_APPLIES_TO = (
+    '(a) trial 1 の candidate 1..3、および trial 2..32 の candidate 3（proposal_schedule_table の hash-derived exploratory 行すべて）。(b) trial 2..32 の candidate 0..2 のうち、neighborhood_candidate_rule.shortfall_handling が定める近傍優先順位リストの不足分バックフィル、または同 no_best_handling が定める NO_BEST（current_best 不在）時の candidate 0..3 全枠充当として適用が要求される近傍スロット（PR #331 Codex bot レビュー第12巡指摘、P1、採用: 第11巡新設の no_best_handling / 既存 shortfall_handling が candidate 0..2 のバックフィルを要求する一方、本 applies_to が (a) のみに限定していた spec 内矛盾を是正）。(a)(b) いずれのスロットも digest はスロットごとに {trial}:{candidate}（candidate は実際の candidate_index であり、(b) でも 3 へ差し替えない）を差し替えて独立に計算し、reservation_semantics が定める予約集合（proposed-or-evaluated）に対する probing_rule の線形プロービング・重複棄却は (a)(b) いずれのスロットにも同一に適用する'
+)
+
+# `neighborhood_candidate_rule.shortfall_handling` の逐語凍結（PR #331
+# Codex bot レビュー第12巡指摘、P1、採用の一環）: exploratory_candidate_
+# rule.applies_to (b) への相互参照を追記した新文言を repin で落とせない
+# ようにする（双方向参照: applies_to (b) → shortfall_handling/no_best_
+# handling、shortfall_handling/no_best_handling → applies_to (b)）。
+_CANDIDATE_GENERATION_EXPECTED_SHORTFALL_HANDLING = (
+    '未評価かつ有効な近傍候補が3件未満の場合、不足分は exploratory_candidate_rule の手順（不足している candidate index のスロットごとに digest を計算。適用範囲は exploratory_candidate_rule.applies_to (b) が定める）で補充する。3:1 は「近傍優先3スロット + 探査1スロット」の決定論スロットテンプレートであり、trial 内 candidate 数は常に4で固定だが、近傍スロットが3件埋まらない場合は残りスロットを探査規則が決定論的に補充する。shortfall（近傍優先順位リストが3件に満たないこと）の発生源は2つあり、いずれも本規則の対象である: (a) 幾何的端点 — 値キー v が offset_domain/delta_domain の端かつ index キーが L 内の該当 axis distinct index キー列の端（1つ前/後が存在しない、または存在しても該当 (index キー, v) の組が L に存在しない）ため、優先順位リスト6項目のうち catalog 制約内で有効な項目自体が3件に満たない場合。(b) 評価済み枯渇 — current best が内部領域（値キー・index キーのいずれも端でない）で優先順位リスト6項目のうち3件以上が catalog 制約内で本来有効であっても、それらが同一 (seed, arm, founder_id) の探索内で既に評価済みのため、未評価の残数が3件に満たない場合（内部領域の best でも起こり得る——旧改訂が「端点の場合に限られる」と述べていたのは誤りで、evaluated フィルタ後の枯渇を見落としていた）。3:1 という宣言比率と、shortfall により実際に生じる近傍/探査/NOT_PROPOSABLE の内訳が乖離し得ることを隠さないため、各 trial の実際の内訳（candidate 0..3 それぞれが近傍・探査・NOT_PROPOSABLE のいずれで充足されたか）を探索 trace（practice_actor_binding.trace_storage が定める trial log）へ必須記録する'
 )
 
 # selection.no_scorable_candidate_terminal_state の逐語凍結（PR #331 第11巡指摘2、
@@ -19118,6 +19142,19 @@ def _validate_candidate_generation_proposal_schedule(
             "exhaustion_handling must record the NOT_PROPOSABLE outcome, got "
             f"{exploratory['exhaustion_handling']!r}"
         )
+    # applies_to の逐語凍結検査（PR #331 第12巡指摘、P1、採用）: 旧文言
+    # 「trial 1 の candidate 1..3、および trial 2..32 の candidate 3」への
+    # 改ざん（= no_best_handling/shortfall_handling が要求する candidate
+    # 0..2 バックフィルの適用範囲宣言の脱落）を fail-closed で拒否する。
+    if exploratory["applies_to"] != _CANDIDATE_GENERATION_EXPECTED_EXPLORATORY_APPLIES_TO:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule."
+            "applies_to diverges from the pinned (a)+(b) freeze — expected exactly "
+            f"{_CANDIDATE_GENERATION_EXPECTED_EXPLORATORY_APPLIES_TO!r}, got "
+            f"{exploratory['applies_to']!r} (PR #331 第12巡、P1、採用: no_best_handling/"
+            "shortfall_handling が要求する candidate 0..2 バックフィルの適用範囲を "
+            "applies_to からも宣言する)"
+        )
 
     neighborhood = proposal["neighborhood_candidate_rule"]
     if not isinstance(neighborhood, dict):
@@ -19160,6 +19197,16 @@ def _validate_candidate_generation_proposal_schedule(
             f"{_CANDIDATE_GENERATION_EXPECTED_NO_BEST_HANDLING!r}, got "
             f"{neighborhood['no_best_handling']!r} (PR #331 第11巡指摘2、P1、採用: best 不在と恒等 "
             "best の混同を防ぐ区別を凍結する)"
+        )
+    # shortfall_handling の逐語凍結検査（PR #331 第12巡指摘、P1、採用）:
+    # exploratory_candidate_rule.applies_to (b) への相互参照を落とした
+    # 旧文言への改ざんを fail-closed で拒否する（双方向参照の一方）。
+    if neighborhood["shortfall_handling"] != _CANDIDATE_GENERATION_EXPECTED_SHORTFALL_HANDLING:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule."
+            "shortfall_handling diverges from the pinned applies_to cross-reference freeze — "
+            f"expected exactly {_CANDIDATE_GENERATION_EXPECTED_SHORTFALL_HANDLING!r}, got "
+            f"{neighborhood['shortfall_handling']!r} (PR #331 第12巡、P1、採用)"
         )
 
     # 32×4=128 整合の再確認（structure 節の既存検査と独立に、proposal 節が
