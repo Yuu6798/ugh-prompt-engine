@@ -1112,3 +1112,79 @@ def test_skip_records_g15_without_requiring_it_to_pass() -> None:
     doc["hard_gates"] = {gate_id: "PASS" for gate_id, _ in m.PHASE_A_CORE_GATES}
     doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "SKIP"
     m.validate_results_document(doc)
+
+
+# --- 第 10 巡: evidence 値の整合 / G15 と entry の一対一束縛 -------------
+
+
+@pytest.mark.parametrize("field", ["same_process", "cross_process"])
+def test_failed_replay_cannot_support_an_established_outcome(field: str) -> None:
+    """§21 R10-G14: 再現できていない replay を添えて成立を主張させない。
+
+    欄の実在だけを見ていたため `same_process: FAIL` が通っていた
+    （PR #330 Codex 第 10 巡 P1）。
+    """
+    doc = _passing_results()
+    doc["replay"][field] = "FAIL"
+    with pytest.raises(m.Run10ContractError, match=field):
+        m.validate_results_document(doc)
+
+
+def test_replay_required_values_are_enumerated() -> None:
+    """値まで固定する evidence 欄が閉世界表に列挙されている。"""
+    assert m._EVIDENCE_FIELD_REQUIRED_VALUES[("replay", "same_process")] == ("PASS",)
+    assert m._EVIDENCE_FIELD_REQUIRED_VALUES[("replay", "cross_process")] == ("PASS",)
+
+
+@pytest.mark.parametrize("bogus", ["FABRICATED", None, "ENTER", "FAIL"])
+def test_g15_verdict_must_match_the_entry_state(bogus: Any) -> None:
+    """§20.4 / §21 R10-G15: 裁定を表していない値で SKIP を正典化させない。
+
+    第 9 巡では実在だけを要求したため、`R10-G15: FABRICATED` や null が通った
+    （PR #330 Codex 第 10 巡 P1）。
+    """
+    doc = _passing_results()
+    doc["phase_b_entry"] = "SKIP"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED", "PHASE_B_NOT_ENTERED"]
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = bogus
+    with pytest.raises(m.Run10ContractError, match="R10-G15"):
+        m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize(
+    "entry, verdict", [("ENTER", "PASS"), ("SKIP", "SKIP"), ("BLOCKED", "BLOCKED")]
+)
+def test_every_entry_state_has_a_matching_g15_verdict(entry: str, verdict: str) -> None:
+    """Entry 状態と G15 の値が一対一で対応している（掃討の被覆）。"""
+    assert m._G15_VERDICT_FOR_ENTRY[entry] == verdict
+
+
+def test_pass_cannot_leave_the_entry_adjudication_unreached() -> None:
+    """§29 手順 35: Phase A PASS なら Entry 裁定は必ず一度行われている。"""
+    doc = _passing_results()
+    doc["phase_b_entry"] = "NOT_REACHED"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED"]
+    with pytest.raises(m.Run10ContractError, match="phase_b_entry"):
+        m.validate_results_document(doc)
+
+
+def test_enter_requires_g15_pass() -> None:
+    """ENTER のときは G15 の値まで PASS を要求する。"""
+    doc = _passing_results()
+    doc["phase_b_entry"] = "ENTER"
+    doc["scientific_outcome"] = ["GENERATIVE_COMPATIBILITY_ESTABLISHED"]
+    doc["hard_gates"].update({gate_id: "PASS" for gate_id, _ in m.PHASE_B_GATES})
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "SKIP"
+    doc["generative_compatibility_matrix"] = {
+        "F1_F2_F3": {"synthesis_status": "GENERATIVELY_COMPATIBLE"}
+    }
+    doc["synthesis_validation"] = {
+        "controls": {"G_null": {"n": 1}, "G_target": {"n": 1}, "G_inverse": {"n": 1}},
+        "construction_meter": {"m": "PASS"},
+        "confirmation_meter": {"m2": "PASS"},
+    }
+    with pytest.raises(m.Run10ContractError, match="R10-G15"):
+        m.validate_results_document(doc)
+
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "PASS"
+    m.validate_results_document(doc)

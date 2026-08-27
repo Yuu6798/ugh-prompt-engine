@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（247 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（259 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -353,3 +353,32 @@ G15 を要求せよ」だが、**値まで PASS を要求してはならない**
 不成立なら `PHASE_B_ENTRY=SKIP` となり、§22.1 はそれでも Protocol PASS を認めて
 いる。値の PASS を要求すると SKIP が原理的に記録できなくなるため、要求するのは
 **裁定結果の実在**であって PASS ではない、とした。
+
+### 第 10 巡（P1×2、全件採用）— **レビュー上限に到達・ここで打ち切り**
+
+1. **replay の値が結論を否定できた** — 欄の実在だけを見ていたため
+   `replay: {same_process: FAIL, cross_process: FAIL}` を添えたまま比較地図の
+   成立を記録できた。§21 R10-G14 は Phase A PASS の要件として same-process /
+   cross-process 双方の再現を求めている。値まで固定する欄を
+   `_EVIDENCE_FIELD_REQUIRED_VALUES` に閉世界で列挙した。
+2. **R10-G15 の値が裁定を表していなくても通った** — 第 9 巡で実在だけを要求した
+   結果、`R10-G15: FABRICATED` や null が通っていた。§20.4 の Entry 状態と
+   Gate 台帳の値を一対一で束縛する（ENTER→PASS / SKIP→SKIP / BLOCKED→BLOCKED）。
+   あわせて `protocol_verdict: PASS` で `phase_b_entry: NOT_REACHED`（裁定が
+   行われていない状態）も拒否する。
+
+## レビュー打ち切り（CLAUDE.md 上限 10 巡）
+
+bot レビューは 10 巡・計 33 件で上限に達した。**採用 32 / 見送り 1**。
+見送りは第 8 巡の generator TOCTOU のみで、脅威モデル境界として
+`af01_freeze_verifier.py` docstring に明文化し、当該スレッドは resolve せず残置した。
+
+置いた境界宣言は 5 件:
+
+| 領域 | 境界 | 再入条件 |
+|---|---|---|
+| evidence 検証の深さ | 設計が節ごとに明示する固定欄まで。欄の内側の値域・単位・数値妥当性は検証しない | §11 measurement family と §14.6 の実装 |
+| outcome 組み合わせ | 設計本文から一意に矛盾と読める対のみ拒否 | 許容組み合わせの束を設計が定義したとき |
+| 整合検証の範囲 | outcome と Run 全体の状態量まで。trait 単位の値と outcome の整合は検証しない | §14.6 判定則の数値 freeze |
+| 脅威モデル | 受動的ドリフトの tamper-evidence。同一ユーザ権限の能動的攻撃者は境界外 | multi-tenant / 共有ユーザ環境での実行 |
+| replay 除外集合 | generator ソース 1 件のみ。それ以外の除外は実測の裏付けと明示登録を要する | bundle 実測で非出力 payload が判明したとき |

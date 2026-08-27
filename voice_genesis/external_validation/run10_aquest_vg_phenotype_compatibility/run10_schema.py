@@ -849,6 +849,24 @@ _EVIDENCE_SECTION_SHAPE: Dict[str, Tuple[str, ...]] = {
     "synthesis_validation": ("controls", "construction_meter", "confirmation_meter"),
 }
 
+# evidence 欄のうち、**値まで**固定されるもの（閉世界）。欄の実在だけを見ると
+# `replay: {same_process: FAIL, cross_process: FAIL}` を添えたまま比較地図の
+# 成立を記録できる（PR #330 Codex 第 10 巡 P1）。§21 R10-G14 は Phase A PASS の
+# 要件として same-process / cross-process 双方の再現を求めている。
+_EVIDENCE_FIELD_REQUIRED_VALUES: Dict[Tuple[str, str], Tuple[str, ...]] = {
+    ("replay", "same_process"): ("PASS",),
+    ("replay", "cross_process"): ("PASS",),
+}
+
+# §20.4 / §21 R10-G15: Entry 裁定の結果と phase_b_entry は一対一で対応する。
+# 実在だけを見ると `R10-G15: FABRICATED` や null が通り、裁定を表していない
+# 値で SKIP を正典化できる（PR #330 Codex 第 10 巡 P1）。
+_G15_VERDICT_FOR_ENTRY: Dict[str, str] = {
+    "ENTER": "PASS",
+    "SKIP": "SKIP",
+    "BLOCKED": "BLOCKED",
+}
+
 # §15.1 / §20.1: 成功側 outcome で compatibility_matrix の各エントリが持つべき欄。
 _COMPATIBILITY_ENTRY_REQUIRED: Tuple[str, ...] = ("status", "support", "calibration", "holdout")
 
@@ -894,6 +912,14 @@ def _require_nonempty_section(mapping: Mapping[str, Any], name: str, why: str) -
             f"results.{name}: {why} に必要な欄が無い/空: {missing}"
             f"（設計が明示する固定欄。placeholder mapping では成立しない）"
         )
+    # 欄の実在だけでなく、値が結論を否定していないこと。
+    for key in required:
+        allowed = _EVIDENCE_FIELD_REQUIRED_VALUES.get((name, key))
+        if allowed is not None and section.get(key) not in allowed:
+            raise Run10ContractError(
+                f"results.{name}.{key}: {why} には {list(allowed)} が必要"
+                f"（実際 {section.get(key)!r}）— evidence が結論を否定してはならない"
+            )
 
 
 def _validate_gate_ledger(mapping: Mapping[str, Any], gate_ids: Tuple[str, ...], why: str) -> None:
@@ -1031,13 +1057,33 @@ def _validate_outcome_consistency(
             )
 
 
-def _require_gate_present(mapping: Mapping[str, Any], gate_id: str, why: str) -> None:
-    """Gate 台帳に当該 Gate の裁定結果が実在すること（値は問わない）。"""
+def _require_entry_adjudication(mapping: Mapping[str, Any], entry: str, why: str) -> None:
+    """R10-G15 の裁定結果が実在し、`phase_b_entry` と一対一で対応すること。
+
+    実在だけを要求すると `R10-G15: FABRICATED` や null が通り、実際の裁定を
+    表していない値で SKIP を正典化できる（PR #330 Codex 第 10 巡 P1）。
+    一方で値を一律 PASS に固定してもいけない — §22.1 は SKIP のまま
+    Protocol PASS を認めており、SKIP 経路が記録できなくなる。
+    そこで §20.4 の Entry 状態と Gate 台帳の値を一対一で束縛する。
+    """
+    gate_id = PHASE_B_ENTRY_GATE[0]
     ledger = mapping.get("hard_gates")
     if not isinstance(ledger, Mapping) or gate_id not in ledger:
         raise Run10ContractError(
             f"results.hard_gates: {why} には {gate_id} の裁定結果が必要"
             "（ENTER / SKIP のいずれでも裁定は一度行われる — §29 手順 35）"
+        )
+    if entry not in _G15_VERDICT_FOR_ENTRY:
+        raise Run10ContractError(
+            f"results: {why} で phase_b_entry={entry!r} は成立しない"
+            f"（§29 手順 35 により Entry 裁定は必ず一度行われる。"
+            f" 許容 {sorted(_G15_VERDICT_FOR_ENTRY)}）"
+        )
+    expected = _G15_VERDICT_FOR_ENTRY[entry]
+    if ledger[gate_id] != expected:
+        raise Run10ContractError(
+            f"results.hard_gates.{gate_id}: phase_b_entry={entry} なら {expected!r}"
+            f" でなければならない（実際 {ledger[gate_id]!r}）— §20.4 / §21 R10-G15"
         )
 
 
@@ -1067,7 +1113,7 @@ def _validate_results_evidence(
         # ただし R10-G15 の値まで PASS を要求してはならない。§21 R10-G15 の
         # 条件が不成立なら PHASE_B_ENTRY=SKIP となり、§22.1 はそれでも
         # Protocol PASS を認めている。値の PASS を要求するのは ENTER のときだけ。
-        _require_gate_present(mapping, PHASE_B_ENTRY_GATE[0], "protocol_verdict=PASS")
+        _require_entry_adjudication(mapping, entry, "protocol_verdict=PASS")
         if entry == "ENTER":
             # R10-G15 PHASE_B_ENTRY は Phase B を authorize する Gate そのもの
             # であり、要求集合から落とせない（PR #330 Codex 第 2 巡 P1）。
