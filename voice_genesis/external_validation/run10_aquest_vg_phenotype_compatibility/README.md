@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（238 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（247 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -330,3 +330,26 @@ python インタプリタの差し替え・LD_PRELOAD・ptrace・検証器自体
 **再入条件**: RUN10 の検証を multi-tenant / 共有ユーザ環境で実行する運用へ
 変わった場合は本境界が無効になり、子プロセスを pathname ではなく認証済み
 buffer 自体（stdin 経由、または inode を掴んだ fd 経由）へ束縛する実装へ改める。
+
+### 第 9 巡（P1×3、全件採用）
+
+1. **設計文書 hash が契約欄でなかった** — 契約は題名しか持たず、`DESIGN_DOC_SHA256`
+   は YAML コメント（= parse 時に捨てられる）にしかなかった。同題名で差し替えられた
+   Drive 文書と区別できず、どの v0.4 が gate と erratum を供給したか証明できない。
+   `design_doc_sha256` を必須構造欄にし、`verify_design_document()` で手元の文書を
+   実バイト照合できるようにした。設計文書は repo に置かない（§2.2）ため、これが
+   唯一の来歴束縛である。
+2. **決定論的 replay が独立の必須項目でなかった** — `--af01-bundle-root` を渡すと
+   手順 6 のバイト照合だけで `af01_complete_bundle` を PRESENT にしており、
+   凍結 generator が payload を再生成できない参照の上で R10-G2 が COMPLETE に
+   なり得た。`af01_deterministic_replay` を独立項目として新設し、未実行は
+   UNRESOLVED かつ blocking で残す（`--af01-replay` で実行）。
+3. **R10-G15 を ENTER のときだけ要求していた** — §29 手順 35 の Entry 裁定は
+   ENTER でも SKIP でも一度行われる。裁定 Gate の実在を PASS の要件にしないと、
+   裁定を経ていない SKIP を正典化できた。
+
+3 について 1 点、指摘の字義から離れた判断をした。指摘は「every passing result で
+G15 を要求せよ」だが、**値まで PASS を要求してはならない**。§21 R10-G15 の条件が
+不成立なら `PHASE_B_ENTRY=SKIP` となり、§22.1 はそれでも Protocol PASS を認めて
+いる。値の PASS を要求すると SKIP が原理的に記録できなくなるため、要求するのは
+**裁定結果の実在**であって PASS ではない、とした。

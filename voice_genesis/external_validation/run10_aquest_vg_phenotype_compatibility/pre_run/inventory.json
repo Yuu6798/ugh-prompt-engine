@@ -2,6 +2,7 @@
   "blocking_items": [
     "af01_complete_bundle",
     "af01_freeze_registration",
+    "af01_deterministic_replay",
     "aquest_voicebank_files",
     "a0_recorded_pitch_inventory",
     "evolution_theory_reference",
@@ -34,6 +35,12 @@
       "blocking": true,
       "detail": "FREEZE_REGISTRATION.json の実体照合は bundle 取得後に行う。",
       "item_id": "af01_freeze_registration",
+      "state": "UNRESOLVED"
+    },
+    {
+      "blocking": true,
+      "detail": "§29 手順 7 の決定論的 payload replay は bundle 取得後に行う。",
+      "item_id": "af01_deterministic_replay",
       "state": "UNRESOLVED"
     },
     {

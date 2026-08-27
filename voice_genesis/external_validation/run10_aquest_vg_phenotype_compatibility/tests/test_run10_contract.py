@@ -528,6 +528,9 @@ def _passing_results() -> Dict[str, Any]:
     doc["phase_b_entry"] = "SKIP"
     doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED"]
     doc["hard_gates"] = {gate_id: "PASS" for gate_id, _ in m.PHASE_A_CORE_GATES}
+    # §29 手順 35: Entry の裁定は ENTER / SKIP のいずれでも一度行われるため、
+    # PASS の結果文書には R10-G15 の裁定結果が実在する。
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "SKIP"
     doc["external_calibration"] = {
         "e0_parameter_recovery": {"01_f1_low": {"abs_error": 12.0}},
         "meter_calibration_status": {"F1_F2_F3": "CALIBRATED_EXTERNAL"},
@@ -1052,4 +1055,60 @@ def test_overfit_with_failing_g7_is_recorded_as_blocked() -> None:
         "cross_process": "PASS",
         "feature_json_sha": "d" * 64,
     }
+    m.validate_results_document(doc)
+
+
+# --- 第 9 巡: 設計文書 hash の契約束縛 / G15 の実在 -----------------------
+
+
+def test_contract_binds_the_design_document_hash(contract_doc: Dict[str, Any]) -> None:
+    """§2.2: 設計文書は repo に置かないため、sha256 が唯一の来歴束縛である。"""
+    assert contract_doc["design_doc_sha256"] == m.DESIGN_DOC_SHA256
+    bad = copy.deepcopy(contract_doc)
+    bad["design_doc_sha256"] = "0" * 64
+    with pytest.raises(m.Run10ContractError, match="design_doc_sha256"):
+        m.parse_run10_contract(bad)
+
+
+def test_missing_design_doc_hash_fails_closed(contract_doc: Dict[str, Any]) -> None:
+    """題名だけで同題名の差し替えと区別できる、という誤りを塞ぐ。"""
+    bad = copy.deepcopy(contract_doc)
+    del bad["design_doc_sha256"]
+    with pytest.raises(m.Run10ContractError, match="構造欄が無い"):
+        m.parse_run10_contract(bad)
+
+
+def test_verify_design_document_checks_real_bytes(tmp_path: Path) -> None:
+    """手元の設計文書が凍結 sha と一致するかを実バイトで確かめられる。"""
+    target = tmp_path / m.DESIGN_DOC_TITLE
+    target.write_bytes(b"not the design document")
+    assert m.verify_design_document(target) is False
+    assert m.verify_design_document(tmp_path / "absent.md") is False
+
+
+def test_pass_requires_the_phase_b_entry_adjudication_to_exist() -> None:
+    """§29 手順 35: Entry の裁定は ENTER でも SKIP でも一度行われる。
+
+    G15 を ENTER のときだけ要求していたため、裁定を経ていない SKIP を
+    正典化できた（PR #330 Codex 第 9 巡 P1）。
+    """
+    doc = _passing_results()
+    doc["phase_b_entry"] = "SKIP"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED", "PHASE_B_NOT_ENTERED"]
+    doc["hard_gates"] = {gate_id: "PASS" for gate_id, _ in m.PHASE_A_CORE_GATES}
+    with pytest.raises(m.Run10ContractError, match="R10-G15"):
+        m.validate_results_document(doc)
+
+
+def test_skip_records_g15_without_requiring_it_to_pass() -> None:
+    """§21 R10-G15 / §22.1: 条件不成立の SKIP でも Protocol PASS は成立する。
+
+    G15 の**値**まで PASS を要求すると SKIP が原理的に記録できなくなる。
+    要求するのは裁定結果の実在であって PASS ではない。
+    """
+    doc = _passing_results()
+    doc["phase_b_entry"] = "SKIP"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED", "PHASE_B_NOT_ENTERED"]
+    doc["hard_gates"] = {gate_id: "PASS" for gate_id, _ in m.PHASE_A_CORE_GATES}
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "SKIP"
     m.validate_results_document(doc)

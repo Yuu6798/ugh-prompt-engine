@@ -28,6 +28,9 @@ run_id: RUN10
 experiment_id: VG-R10-AQUEST-VG-PHENOTYPE-COMPATIBILITY
 design_revision: "0.4"
 design_doc: VoiceGenesis_RUN10_AQUEST_VG_Phenotype_Compatibility_Audit_v0.4.md
+# 題名だけでは同題名の差し替えと区別できないため、実バイト sha256 を契約欄として持つ。
+# 設計文書は本リポジトリへ置かない（§2.2）ので、これが唯一の来歴束縛である。
+design_doc_sha256: cc05f0254aa1ee4a7302edac847a3d07d2fd385f115865185bcfe1343a350957
 
 performance_analysis: OUT_OF_SCOPE
 identity_copy: PROHIBITED

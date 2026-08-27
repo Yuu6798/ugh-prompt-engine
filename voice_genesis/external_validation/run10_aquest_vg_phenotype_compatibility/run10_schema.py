@@ -383,6 +383,7 @@ STRUCTURAL_FIELDS: Tuple[str, ...] = (
     "experiment_id",
     "design_revision",
     "design_doc",
+    "design_doc_sha256",
     "staged_intervention",
     "supersedes",
     "cost_cap",
@@ -551,6 +552,14 @@ def _validate_structure(doc: Mapping[str, Any]) -> None:
     if doc["design_doc"] != DESIGN_DOC_TITLE:
         raise Run10ContractError(
             f"design_doc: {DESIGN_DOC_TITLE!r} でなければならない（実際 {doc['design_doc']!r}）"
+        )
+    # 題名だけでは、同じ題名で差し替えられた Drive 文書と区別できない。
+    # 設計文書は本リポジトリへ置かない（§2.2）ので、実バイト sha256 を契約欄
+    # として持つことが唯一の来歴束縛である（PR #330 Codex 第 9 巡 P1）。
+    if doc["design_doc_sha256"] != DESIGN_DOC_SHA256:
+        raise Run10ContractError(
+            f"design_doc_sha256: 凍結値 {DESIGN_DOC_SHA256} でなければならない"
+            f"（実際 {doc['design_doc_sha256']!r}）"
         )
 
     for key, expected_hash in AF01_FROZEN_HASHES.items():
@@ -1022,6 +1031,16 @@ def _validate_outcome_consistency(
             )
 
 
+def _require_gate_present(mapping: Mapping[str, Any], gate_id: str, why: str) -> None:
+    """Gate 台帳に当該 Gate の裁定結果が実在すること（値は問わない）。"""
+    ledger = mapping.get("hard_gates")
+    if not isinstance(ledger, Mapping) or gate_id not in ledger:
+        raise Run10ContractError(
+            f"results.hard_gates: {why} には {gate_id} の裁定結果が必要"
+            "（ENTER / SKIP のいずれでも裁定は一度行われる — §29 手順 35）"
+        )
+
+
 def _validate_results_evidence(
     mapping: Mapping[str, Any],
     verdict: str,
@@ -1040,6 +1059,15 @@ def _validate_results_evidence(
 
     if verdict == "PASS":
         _validate_gate_ledger(mapping, PHASE_A_GATE_IDS, "protocol_verdict=PASS")
+        # §29 手順 35「adjudicate PHASE_B_ENTRY exactly once」/ §23
+        # phase_b_entry_result_sha: Entry の裁定は ENTER でも SKIP でも一度だけ
+        # 行われる。裁定 Gate の実在を PASS の要件にしないと、裁定を経ていない
+        # SKIP を正典化できる（PR #330 Codex 第 9 巡 P1）。
+        #
+        # ただし R10-G15 の値まで PASS を要求してはならない。§21 R10-G15 の
+        # 条件が不成立なら PHASE_B_ENTRY=SKIP となり、§22.1 はそれでも
+        # Protocol PASS を認めている。値の PASS を要求するのは ENTER のときだけ。
+        _require_gate_present(mapping, PHASE_B_ENTRY_GATE[0], "protocol_verdict=PASS")
         if entry == "ENTER":
             # R10-G15 PHASE_B_ENTRY は Phase B を authorize する Gate そのもの
             # であり、要求集合から落とせない（PR #330 Codex 第 2 巡 P1）。
@@ -1154,6 +1182,19 @@ def assert_generative_entry(trait_id: str, entry: Any) -> None:
 # ---------------------------------------------------------------------------
 # 補助
 # ---------------------------------------------------------------------------
+
+
+def verify_design_document(path: Path | str) -> bool:
+    """手元に置いた設計文書の実バイトが凍結 sha256 と一致するか。
+
+    設計文書はリポジトリへ commit しない（§2.2）ため、本関数は「Drive から
+    private ストレージへ取得した文書が、契約の pin と同一である」ことを
+    実行時に確かめるための入口である。文書が無い場合は `False`。
+    """
+    target = Path(path)
+    if not target.is_file():
+        return False
+    return compute_file_sha256(target) == DESIGN_DOC_SHA256
 
 
 def compute_file_sha256(path: Path | str) -> str:

@@ -210,3 +210,77 @@ def test_unparsable_registration_is_rejected(tmp_path: Path) -> None:
     assert inv._check_freeze_registration(path)[0] == inv.ABSENT
     path.write_text("[]", encoding="utf-8")
     assert inv._check_freeze_registration(path)[0] == inv.ABSENT
+
+
+# --- 第 9 巡: 決定論的 replay は独立の blocking 項目 -----------------------
+
+
+def test_replay_is_a_separate_blocking_item_without_bundle() -> None:
+    """§29 手順 7 は手順 6 と独立の必須項目として残る。"""
+    items = _items(inv.build_inventory())
+    item = items["af01_deterministic_replay"]
+    assert item["state"] == inv.UNRESOLVED
+    assert item["blocking"] is True
+
+
+def test_bundle_presence_alone_does_not_clear_replay(tmp_path: Path, monkeypatch) -> None:
+    """bundle 実体があるだけで手順 7 を済ませたことにしない。
+
+    ここを非 blocking にすると、凍結 generator が payload を再生成できない
+    参照の上で R10-G2 が COMPLETE になり得た（PR #330 Codex 第 9 巡 P1）。
+    """
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    monkeypatch.setattr(
+        inv,
+        "verify_bundle",
+        lambda root, ledger_path=None: _fake_report("PASS", {"payload_files_sha256": "PASS"}),
+    )
+    items = _items(inv.build_inventory(af01_bundle_root=bundle))
+    assert items["af01_deterministic_replay"]["state"] == inv.UNRESOLVED
+    assert items["af01_deterministic_replay"]["blocking"] is True
+    assert "--af01-replay" in items["af01_deterministic_replay"]["detail"]
+
+
+def _fake_report(verdict: str, checks: dict):
+    import af01_freeze_verifier as v
+
+    return v.Af01VerificationReport(verdict=verdict, checks=checks)
+
+
+def test_replay_failure_blocks_the_gate(tmp_path: Path, monkeypatch) -> None:
+    """replay が DRIFT なら R10-G2 を塞ぐ。"""
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    monkeypatch.setattr(
+        inv,
+        "verify_bundle",
+        lambda root, ledger_path=None: _fake_report("PASS", {}),
+    )
+    monkeypatch.setattr(
+        inv,
+        "verify_deterministic_replay",
+        lambda root: _fake_report("AF01_INPUT_DRIFT", {"deterministic_payload_replay": "FAIL"}),
+    )
+    items = _items(inv.build_inventory(af01_bundle_root=bundle, af01_replay=True))
+    assert items["af01_deterministic_replay"]["state"] == inv.ABSENT
+    assert items["af01_deterministic_replay"]["blocking"] is True
+
+
+def test_replay_pass_clears_the_item(tmp_path: Path, monkeypatch) -> None:
+    """replay が PASS なら当該項目は解消する（常時 blocking の張りぼてでない）。"""
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    monkeypatch.setattr(
+        inv,
+        "verify_bundle",
+        lambda root, ledger_path=None: _fake_report("PASS", {}),
+    )
+    monkeypatch.setattr(
+        inv,
+        "verify_deterministic_replay",
+        lambda root: _fake_report("PASS", {"deterministic_payload_replay": "PASS"}),
+    )
+    items = _items(inv.build_inventory(af01_bundle_root=bundle, af01_replay=True))
+    assert items["af01_deterministic_replay"]["state"] == inv.PRESENT
+    assert items["af01_deterministic_replay"]["blocking"] is False

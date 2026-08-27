@@ -48,6 +48,7 @@ from af01_freeze_verifier import (  # noqa: E402
     containment_violation,
     parse_payload_ledger,
     verify_bundle,
+    verify_deterministic_replay,
     verify_ledger_bytes,
 )
 from svp_rpe.utils.atomic_io import atomic_write_bytes  # noqa: E402
@@ -102,7 +103,10 @@ def _repo_root() -> Path:
     return _RUN10_DIR.parents[2]
 
 
-def inventory_af01(bundle_root: Optional[Path]) -> List[InventoryItem]:
+def inventory_af01(
+    bundle_root: Optional[Path],
+    run_replay: bool = False,
+) -> List[InventoryItem]:
     """AF01 v1.0 関連項目（§29 手順 6 の第 1 段を含む）。"""
     items: List[InventoryItem] = []
 
@@ -159,6 +163,14 @@ def inventory_af01(bundle_root: Optional[Path]) -> List[InventoryItem]:
                 blocking=True,
             )
         )
+        items.append(
+            InventoryItem(
+                item_id="af01_deterministic_replay",
+                state=UNRESOLVED,
+                detail="§29 手順 7 の決定論的 payload replay は bundle 取得後に行う。",
+                blocking=True,
+            )
+        )
         return items
 
     bundle_report = verify_bundle(bundle_root)
@@ -170,6 +182,34 @@ def inventory_af01(bundle_root: Optional[Path]) -> List[InventoryItem]:
             blocking=not bundle_report.passed,
         )
     )
+    # §29 手順 7 は手順 6 と独立の必須項目である。bundle 実体があるだけで
+    # `af01_complete_bundle` を PRESENT にして終わると、凍結 generator が
+    # payload を再生成できない参照の上で R10-G2 が COMPLETE になり得る
+    # （PR #330 Codex 第 9 巡 P1）。replay は generator を実行するため既定では
+    # 走らせず、未実行は UNRESOLVED かつ blocking として残す。
+    if not run_replay:
+        items.append(
+            InventoryItem(
+                item_id="af01_deterministic_replay",
+                state=UNRESOLVED,
+                detail=(
+                    "§29 手順 7 未実行。`build_pre_run_inventory.py --af01-replay` で"
+                    "決定論的 payload replay を実行するまで R10-G2 を塞ぐ。"
+                ),
+                blocking=True,
+            )
+        )
+    else:
+        replay_report = verify_deterministic_replay(bundle_root)
+        items.append(
+            InventoryItem(
+                item_id="af01_deterministic_replay",
+                state=PRESENT if replay_report.passed else ABSENT,
+                detail=f"verdict={replay_report.verdict} checks={replay_report.checks}",
+                blocking=not replay_report.passed,
+            )
+        )
+
     registration = Path(bundle_root) / "FREEZE_REGISTRATION.json"
     # bundle 外の JSON への symlink を「必須登録あり」と数えない（第 6 巡 P2）。
     breach = containment_violation(Path(bundle_root), "FREEZE_REGISTRATION.json")
@@ -340,11 +380,12 @@ def build_inventory(
     af01_bundle_root: Optional[Path] = None,
     aquest_voicebank_root: Optional[Path] = None,
     repo: Optional[Path] = None,
+    af01_replay: bool = False,
 ) -> Dict[str, object]:
     """R10-G2 inventory 文書を組み立てる。"""
     root = repo if repo is not None else _repo_root()
     items = (
-        inventory_af01(af01_bundle_root)
+        inventory_af01(af01_bundle_root, run_replay=af01_replay)
         + inventory_aquest(aquest_voicebank_root)
         + inventory_repository(root)
     )
@@ -369,6 +410,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="RUN10 Pre-Run Inventory（§29 手順 3）")
     parser.add_argument("--af01-bundle-root", default=None, help="AF01 v1.0 bundle 展開先。")
     parser.add_argument(
+        "--af01-replay",
+        action="store_true",
+        help="§29 手順 7 の決定論的 payload replay を実行する（--af01-bundle-root 必須）。",
+    )
+    parser.add_argument(
         "--aquest-voicebank-root",
         default=None,
         help="A0 = AquesTalk 由来 UTAU デフォルト音声のルート（private ストレージ）。",
@@ -380,11 +426,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.af01_replay and args.af01_bundle_root is None:
+        parser.error("--af01-replay には --af01-bundle-root が必要")
     inventory = build_inventory(
         af01_bundle_root=Path(args.af01_bundle_root) if args.af01_bundle_root else None,
         aquest_voicebank_root=(
             Path(args.aquest_voicebank_root) if args.aquest_voicebank_root else None
         ),
+        af01_replay=args.af01_replay,
     )
     payload = canonical_json_bytes(inventory)
     # 既定の出力先は追跡中の正典 `pre_run/inventory.json` である。in-place の
