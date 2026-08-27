@@ -725,11 +725,7 @@ def validate_results_document(doc: Any) -> None:
         if item not in SCIENTIFIC_OUTCOMES:
             raise Run10ContractError(f"results.scientific_outcome: 未知の値 {item!r}")
 
-    rights = _require_mapping("results.rights", mapping.get("rights"))
-    if rights.get("private_only") is not True:
-        raise Run10ContractError("results.rights.private_only は true 固定")
-    if rights.get("third_party_distribution") is not False:
-        raise Run10ContractError("results.rights.third_party_distribution は false 固定")
+    _validate_results_rights(mapping.get("rights"))
 
     _validate_results_evidence(mapping, verdict, entry, outcomes)
 
@@ -1030,6 +1026,14 @@ def _validate_outcome_consistency(
         if isinstance(calibration, Mapping)
         else None
     )
+    # 以降の規則はすべて `signal is True` で判定する。`1` のような非 bool の
+    # truthy 値はどの規則にも掛からず、overfit 信号を立てたまま成立側 outcome と
+    # R10-G7 PASS を記録できてしまう（PR #330 Codex 第 12 巡 P1）。
+    if signal is not None and not isinstance(signal, bool):
+        raise Run10ContractError(
+            "results.external_calibration.measurement_overfit_signal は真偽値でなければ"
+            f"ならない（実際 {type(signal).__name__}: {signal!r}）"
+        )
 
     # 規則 3: overfit を結論にするなら、その信号が実際に立っていること（§12.6）。
     if "MEASUREMENT_OVERFIT_DETECTED" in outcomes and signal is not True:
@@ -1061,6 +1065,46 @@ def _validate_outcome_consistency(
             raise Run10ContractError(
                 f"results: measurement_overfit_signal=true のまま {established} は名乗れない"
                 "（§12.6 / §21 R10-G7 — 外的妥当性が確立していない）"
+            )
+
+
+# §2.2 の権利境界を results 側で閉世界に固定する。必須 2 欄だけを見ていると、
+# `private_only: true` と同時に `public_audio_release: true` のような禁止された
+# 公開モードを宣言した正典結果が通る（PR #330 Codex 第 12 巡 P1）。
+RESULTS_RIGHTS_REQUIRED: Dict[str, bool] = {
+    "private_only": True,
+    "third_party_distribution": False,
+}
+
+# 記載してよい追加欄と、その固定値（すべて prohibited 側）。
+RESULTS_RIGHTS_OPTIONAL: Dict[str, bool] = {
+    "public_audio_release": False,
+    "public_model_release": False,
+    "public_synthesis_system_release": False,
+    "external_listener_panel": False,
+}
+
+
+def _validate_results_rights(obj: Any) -> None:
+    """§2.2 / §27: rights 節の閉世界形状。未知欄と矛盾する宣言を拒否する。"""
+    rights = _require_mapping("results.rights", obj)
+    allowed = set(RESULTS_RIGHTS_REQUIRED) | set(RESULTS_RIGHTS_OPTIONAL)
+    unknown = set(rights) - allowed
+    if unknown:
+        raise Run10ContractError(
+            f"results.rights: 未知の欄 {sorted(unknown)}（許容 {sorted(allowed)}）"
+        )
+    for key, expected in RESULTS_RIGHTS_REQUIRED.items():
+        if rights.get(key) is not expected:
+            raise Run10ContractError(
+                f"results.rights.{key} は {str(expected).lower()} 固定"
+                f"（実際 {rights.get(key)!r}）"
+            )
+    for key, expected in RESULTS_RIGHTS_OPTIONAL.items():
+        if key in rights and rights[key] is not expected:
+            raise Run10ContractError(
+                f"results.rights.{key}: §2.2 は prohibited と定めている"
+                f"（{str(expected).lower()} 固定。実際 {rights[key]!r}）"
             )
 
 

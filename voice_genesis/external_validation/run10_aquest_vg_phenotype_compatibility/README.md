@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（264 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（274 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -399,3 +399,17 @@ CLAUDE.md は「打ち切りは 3 分類を上書きしない（新しい具体�
 
 打ち切り宣言そのものは維持する。以降も、3 分類（実コード被害 / 将来汚染 /
 致命的バグ）に該当する新規経路のみ対応し、それ以外は境界宣言で止める。
+
+### 第 12 巡（P1×2 / P2×1）— 3 分類該当のため採用
+
+1. **rights 節が閉世界形状でなかった** — 必須 2 欄しか見ていなかったため、
+   `private_only: true` と同時に `public_audio_release: true` を宣言した正典結果が
+   通った。R10-PUB-1 で User が裁定した境界そのものを結果文書側で骨抜きにできる。
+   禁止側 4 欄を含む閉世界形状にし、未知欄も拒否する。
+2. **overfit 信号が非 bool でも通った** — 整合規則 3/4/5 はすべて `signal is True`
+   で判定するため、`measurement_overfit_signal: 1` はどの規則にも掛からず、
+   信号を立てたまま成立側 outcome と `R10-G7: PASS` を記録できた。真偽値を要求する。
+3. **A0 presence が `character.txt` を要求していなかった** — §7.1 は
+   character.txt SHA256 を必須 pin に挙げており、未取得メッセージにも
+   rights_manifest にも同じ 3 点が書いてあるのに、presence 判定は WAV と oto.ini
+   だけを見ていた。不完全な voicebank のまま R10-G2 が COMPLETE になり得た。

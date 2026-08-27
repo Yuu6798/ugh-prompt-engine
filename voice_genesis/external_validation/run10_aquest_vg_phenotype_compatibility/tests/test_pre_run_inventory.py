@@ -71,6 +71,7 @@ def test_a0_raw_unit_count_is_recorded_when_voicebank_present(tmp_path: Path) ->
     for name in ("a.wav", "i.wav", "ka.wav"):
         (root / name).write_bytes(b"RIFF")
     (root / "oto.ini").write_text("", encoding="utf-8")
+    (root / "character.txt").write_text("name=x", encoding="utf-8")
     items = _items(inv.build_inventory(aquest_voicebank_root=root))
     assert items["aquest_voicebank_files"]["state"] == inv.PRESENT
     assert "raw WAV 3 件" in items["aquest_voicebank_files"]["detail"]
@@ -284,3 +285,26 @@ def test_replay_pass_clears_the_item(tmp_path: Path, monkeypatch) -> None:
     items = _items(inv.build_inventory(af01_bundle_root=bundle, af01_replay=True))
     assert items["af01_deterministic_replay"]["state"] == inv.PRESENT
     assert items["af01_deterministic_replay"]["blocking"] is False
+
+
+# --- 第 12 巡: A0 presence は §7.1 の必須 3 点を要求する -----------------
+
+
+@pytest.mark.parametrize("missing", ["oto.ini", "character.txt"])
+def test_incomplete_voicebank_is_not_present(tmp_path: Path, missing: str) -> None:
+    """§7.1: WAV と oto.ini だけで PRESENT にしない（character.txt も必須 pin）。
+
+    不完全な voicebank のまま R10-G2 が COMPLETE になり得た
+    （PR #330 Codex 第 12 巡 P2）。
+    """
+    root = tmp_path / "voicebank"
+    root.mkdir()
+    (root / "a.wav").write_bytes(b"RIFF")
+    for name in ("oto.ini", "character.txt"):
+        if name != missing:
+            (root / name).write_text("x", encoding="utf-8")
+    items = _items(inv.build_inventory(aquest_voicebank_root=root))
+    item = items["aquest_voicebank_files"]
+    assert item["state"] == inv.ABSENT
+    assert item["blocking"] is True
+    assert "必須 3 点" in item["detail"]

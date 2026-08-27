@@ -1222,3 +1222,58 @@ def test_blocked_entry_is_recorded_under_a_blocked_verdict() -> None:
     doc["phase_b_entry"] = "BLOCKED"
     doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
     m.validate_results_document(doc)
+
+
+# --- 第 12 巡: rights の閉世界形状 / overfit 信号の型 --------------------
+
+
+def test_rights_rejects_contradictory_publication_modes() -> None:
+    """§2.2: private_only を宣言しながら禁止された公開モードを許可させない。"""
+    doc = _passing_results()
+    doc["rights"] = {
+        "private_only": True,
+        "third_party_distribution": False,
+        "public_audio_release": True,
+    }
+    with pytest.raises(m.Run10ContractError, match="public_audio_release"):
+        m.validate_results_document(doc)
+
+
+def test_rights_rejects_unknown_keys() -> None:
+    """rights 節は閉世界形状（未知欄で境界を骨抜きにさせない）。"""
+    doc = _passing_results()
+    doc["rights"] = {
+        "private_only": True,
+        "third_party_distribution": False,
+        "public_dataset_release": True,
+    }
+    with pytest.raises(m.Run10ContractError, match="未知の欄"):
+        m.validate_results_document(doc)
+
+
+def test_rights_accepts_explicit_prohibited_declarations() -> None:
+    """禁止側を明示的に false と宣言するのは正当（偽陽性の確認）。"""
+    doc = _passing_results()
+    doc["rights"] = {
+        "private_only": True,
+        "third_party_distribution": False,
+        "public_audio_release": False,
+        "public_model_release": False,
+        "public_synthesis_system_release": False,
+        "external_listener_panel": False,
+    }
+    m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize("bogus", [1, 0, "true", "TRUE", []])
+def test_overfit_signal_must_be_boolean(bogus: Any) -> None:
+    """非 bool の truthy 値が全整合規則を素通りする経路を塞ぐ。
+
+    規則 3/4/5 はすべて `signal is True` で判定するため、`1` はどの規則にも
+    掛からず overfit 信号を立てたまま成立側 outcome と R10-G7 PASS を記録できた
+    （PR #330 Codex 第 12 巡 P1）。
+    """
+    doc = _passing_results()
+    doc["external_calibration"]["measurement_overfit_signal"] = bogus
+    with pytest.raises(m.Run10ContractError, match="真偽値"):
+        m.validate_results_document(doc)

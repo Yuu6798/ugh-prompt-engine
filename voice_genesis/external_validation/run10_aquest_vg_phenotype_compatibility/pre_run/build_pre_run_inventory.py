@@ -311,7 +311,11 @@ def inventory_aquest(voicebank_root: Optional[Path]) -> List[InventoryItem]:
     wavs = sorted(p for p in root.rglob("*.wav") if p.is_file())
     oto = sorted(p for p in root.rglob("oto.ini") if p.is_file())
     character = sorted(p for p in root.rglob("character.txt") if p.is_file())
-    present = bool(wavs) and bool(oto)
+    # §7.1 は character.txt SHA256 を必須 pin に挙げており、本関数の未取得
+    # メッセージも rights_manifest も同じ 3 点を required と書いている。
+    # WAV と oto.ini だけで PRESENT にすると、不完全な voicebank のまま
+    # R10-G2 が COMPLETE になり得る（PR #330 Codex 第 12 巡 P2）。
+    present = bool(wavs) and bool(oto) and bool(character)
     return [
         InventoryItem(
             item_id="aquest_voicebank_files",
@@ -319,6 +323,7 @@ def inventory_aquest(voicebank_root: Optional[Path]) -> List[InventoryItem]:
             detail=(
                 f"raw WAV {len(wavs)} 件 / oto.ini {len(oto)} 件 / character.txt "
                 f"{len(character)} 件"
+                + ("" if present else "（§7.1 必須 3 点のいずれかが欠けている）")
             ),
             blocking=not present,
         ),
