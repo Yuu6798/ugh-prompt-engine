@@ -1,7 +1,7 @@
 {
   "schema": "voicegenesis-run10-private-storage-policy/0.1",
   "run_id": "RUN10",
-  "status": "DRAFT_NOT_FROZEN",
+  "status": "ADJUDICATED_STAGING_ROOT_PENDING",
   "blocking_question": {
     "id": "R10-PUB-1",
     "severity": "STOP_RULE_CANDIDATE",
@@ -11,12 +11,14 @@
     ],
     "statement": "本 RUN10 実装ツリーが置かれているリポジトリ Yuu6798/ugh-prompt-engine は public である。DESIGN_RUN10 §2.2 は分析表・集計値・設計文書について「本Runでは公開しない」と規定しており、§26 は publication_scope を PRIVATE_ONLY と定める。public リポジトリへの commit は公開に等しいため、どこまでを repository へ置いてよいかは §33 の User 裁定事項である。",
     "adjudicator": "User",
-    "adjudication": "PENDING",
-    "interim_disposition": "FAIL_CLOSED_MINIMUM",
-    "interim_rationale": "裁定が下りるまでの間、リポジトリへ置くのは AQUEST 由来資産・音声・モデル・blind map・測定値・集計表・設計文書本文を一切含まない実装コードと契約 YAML のみとする。private カテゴリの混入は private_boundary.py と tests/test_private_output_boundary.py が機械的に阻止する。"
+    "adjudication": "APPROVED_CODE_ONLY_PUBLIC",
+    "interim_disposition": "ADOPTED_AS_STANDING_POLICY",
+    "interim_rationale": "本方針は裁定により暫定でなくなった。private カテゴリの混入は private_boundary.py と tests/test_private_output_boundary.py が機械的に阻止し続ける。",
+    "adjudicated_at": "2026-08-27",
+    "adjudication_record": "User 裁定 2026-08-27（本セッション内、選択肢 1 を採用）: 「実装コードのみ public で継続」。暫定運用 FAIL_CLOSED_MINIMUM をそのまま正式運用へ昇格する。AQUEST 由来資産・音声・モデル・blind map・測定値・集計表・設計文書本文は public リポジトリへ置かず Drive 側 private に留める。"
   },
   "repository_allowed": {
-    "note": "public リポジトリへ commit してよいカテゴリ（暫定）。",
+    "note": "public リポジトリへ commit してよいカテゴリ（User 裁定 2026-08-27 により確定）。",
     "categories": [
       "implementation code (measurement harness / contract loader / guards)",
       "RUN10_CONTRACT.yaml (machine contract; not the design document)",
@@ -47,5 +49,11 @@
     "path": "results/",
     "gitignore": "*\n!.gitignore",
     "note": "§26 により results/ は private bundle。.gitignore 以外を commit しない。"
+  },
+  "residual_unresolved": {
+    "note": "R10-PUB-1 は裁定済みだが、private_storage_policy_sha を PINNED 化するには private staging root の実体確定（private_staging.root）が残っている。",
+    "items": [
+      "private_staging.root"
+    ]
   }
 }

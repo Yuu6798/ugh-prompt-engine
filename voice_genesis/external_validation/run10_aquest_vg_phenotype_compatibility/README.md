@@ -31,22 +31,16 @@ Source / Identity 形質体系と測定器を同じ条件で適用したとき�
 実行前に `SUPERSEDED_BEFORE_EXECUTION`（設計 §1.2、`RUN10_CONTRACT.yaml`
 の `supersedes`）。同じ `RUN10` として併走させてはならない。
 
-## 公開境界の未裁定事項（R10-PUB-1）
+## 公開境界（R10-PUB-1）— User 裁定済み 2026-08-27
 
 | | |
 |---|---|
 | 争点 | RUN10 実装ツリーが置かれた本リポジトリは **public** である。設計 §2.2 / §26 は `publication_scope: PRIVATE_ONLY` を要求する。 |
 | 関係する Stop Rule | §32-2（private-only storage cannot be guaranteed）/ §32-16（public upload detected） |
 | 裁定者 | User（§33） |
-| 現状 | **PENDING** |
-| 暫定運用 | `FAIL_CLOSED_MINIMUM` — AQUEST 由来資産・音声・モデル・blind map・測定値・集計表・設計文書本文を一切含まない実装コードと契約 YAML のみを置く。`private_boundary.py` が機械強制する。 |
-
-裁定が必要な選択肢（いずれも設計改訂ではなく運用裁定）:
-
-1. RUN10 の実装コードは public リポジトリで運用し、private カテゴリ
-   （音源・測定値・集計表・設計文書）だけを Drive 側 private に置く（現行の暫定運用）。
-2. RUN10 一式を private リポジトリ／private ストレージへ移し、本リポジトリには何も置かない。
-3. 分析表・集計値・設計文書の公開可否を AQUEST へ別途照会してから決める（§2.2 の明示手順）。
+| 裁定 | **`APPROVED_CODE_ONLY_PUBLIC`**（2026-08-27）— 「実装コードのみ public で継続」 |
+| 常設方針 | AQUEST 由来資産・音声・モデル・blind map・測定値・集計表・設計文書本文は public リポジトリへ置かず Drive 側 private に留める。public に置くのは実装コード・契約 YAML・AF01 ハッシュ台帳・測定値を含まない構造 manifest のみ。`private_boundary.py` が機械強制する。 |
+| 残件 | §26 private staging root の実体が未確定のため `private_storage_policy_sha` は依然 PENDING（`residual_unresolved`）。 |
 
 機械可読な正本は `inputs/private_storage_policy.json` の `blocking_question`。
 
@@ -55,7 +49,7 @@ Source / Identity 形質体系と測定器を同じ条件で適用したとき�
 | Gate | 状態 | 理由 |
 |---|---|---|
 | R10-G0 `RUN_CONTRACT_COMPLETE` | **BLOCKED** | Core pin 欄に PENDING が残る |
-| R10-G1 `RIGHTS_AND_PRIVATE_BOUNDARY` | **BLOCKED** | R10-PUB-1 が User 未裁定 / AQUEST 回答アーカイブ未固定 |
+| R10-G1 `RIGHTS_AND_PRIVATE_BOUNDARY` | **BLOCKED** | R10-PUB-1 は裁定済み。AQUEST 回答アーカイブ未固定 / private staging root 未確定 |
 | R10-G2 `PRE_RUN_INVENTORY_COMPLETE` | **BLOCKED** | A0 未取得 / AF01 bundle 実体未取得 / meter 未実装 |
 | R10-G3 以降 | 未到達 | — |
 
@@ -119,9 +113,9 @@ run10_aquest_vg_phenotype_compatibility/
 
 | 手順 | 内容 | 律速 |
 |---|---|---|
-| 0 | v0.4 承認と Core Run Contract freeze | **User 裁定**（R10-PUB-1 / cost cap） |
+| 0 | v0.4 承認と Core Run Contract freeze | **User 裁定**（cost cap 4 欄。R10-PUB-1 は裁定済み） |
 | 1 | AQUEST 回答と権利境界の archive/pin | User（原文の private archive 化） |
-| 2 | repository / dependencies / private storage の検証 | **完了**（R10-PUB-1 として争点を明示） |
+| 2 | repository / dependencies / private storage の検証 | **完了**（R10-PUB-1 = 裁定済み。staging root のみ残件） |
 | 3 | Pre-Run Inventory 実行 | **実装済み**（結果は BLOCKED） |
 | 4 | A0 voicebank の inventory と hash | **User 供給待ち**（machine-dependent） |
 | 5 | Evolution Theory 参照の解決 | v0.3 本体がリポジトリ内に不在 |

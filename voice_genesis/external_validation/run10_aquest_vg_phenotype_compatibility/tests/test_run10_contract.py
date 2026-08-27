@@ -55,8 +55,8 @@ def _fully_pinned(doc: Dict[str, Any]) -> Dict[str, Any]:
 def test_contract_parses_and_reports_true_gate_state(contract: m.Run10Contract) -> None:
     """§28-1: R10-G0 は Core 欄が全て pin 済みのときだけ PASS になる。
 
-    現時点の contract は A0 未取得・公開境界未裁定のため BLOCKED であることを
-    そのまま検証する（捏造して PASS にしない）。
+    現時点の contract は A0 未取得・measurement 層未実装のため BLOCKED である
+    ことをそのまま検証する（捏造して PASS にしない）。
     """
     assert contract.gate_r10_g0() == "BLOCKED"
     missing = contract.missing("CORE")
@@ -175,23 +175,34 @@ def test_rights_manifest_declares_full_boundary() -> None:
     }
 
 
-def test_private_storage_policy_records_unadjudicated_public_repo_question() -> None:
-    """§28-6 / §32-2: public リポジトリ問題が未裁定として明示されている。
+def test_private_storage_policy_records_public_repo_adjudication() -> None:
+    """§28-6 / §32-2: R10-PUB-1 の裁定が日付つきで記録されている。
 
-    これは「解決済み」と書けない項目である。裁定は §33 により User に属する。
+    User 裁定 2026-08-27 = 「実装コードのみ public で継続」。裁定は §33 により
+    User に属し、実装側が勝手に「解決済み」と書ける項目ではない。
     """
     import json
 
     doc = json.loads(PRIVATE_POLICY_PATH.read_text(encoding="utf-8"))
     question = doc["blocking_question"]
-    assert question["adjudication"] == "PENDING"
     assert question["adjudicator"] == "User"
-    assert question["interim_disposition"] == "FAIL_CLOSED_MINIMUM"
-    assert doc["private_staging"]["verified"] is False
+    assert question["adjudication"] == "APPROVED_CODE_ONLY_PUBLIC"
+    assert question["adjudicated_at"] == "2026-08-27"
+    assert question["interim_disposition"] == "ADOPTED_AS_STANDING_POLICY"
+    assert "設計文書本文" in question["adjudication_record"]
 
 
 def test_private_storage_policy_pin_is_not_frozen(contract: m.Run10Contract) -> None:
-    """§32-2: 裁定前に private_storage_policy_sha を PINNED にしてはならない。"""
+    """§32-2: staging root が未確定の間は private_storage_policy_sha を PINNED にしない。
+
+    R10-PUB-1 の裁定は下りたが、§26 private staging root の実体が未確定である
+    以上、方針文書は凍結できない（残件は `residual_unresolved`）。
+    """
+    import json
+
+    doc = json.loads(PRIVATE_POLICY_PATH.read_text(encoding="utf-8"))
+    assert doc["private_staging"]["verified"] is False
+    assert doc["residual_unresolved"]["items"] == ["private_staging.root"]
     assert contract.pin("private_storage_policy_sha").status == "PENDING"
 
 
