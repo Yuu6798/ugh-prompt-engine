@@ -1508,3 +1508,98 @@ def test_non_pass_verdicts_do_not_require_a_complete_ledger() -> None:
     doc["protocol_verdict"] = "BLOCKED"
     doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
     m.validate_results_document(doc)
+
+
+# --- 第 19 巡: 行の閉世界 / G15 束縛の全 verdict 化（第 19 巡 P1×2）---------
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("identity_copy", "ALLOWED"),
+        ("performance_analysis", "IN_SCOPE"),
+        ("scope", "PUBLIC"),
+        ("surprise", True),
+    ],
+)
+def test_compatibility_entry_rejects_unknown_fields(field: str, value: Any) -> None:
+    """行に機械可読な対立宣言を足せない（§27 top-level と同型の閉世界）。
+
+    top-level が identity_copy=PROHIBITED を宣言していても、trait 単位で
+    ALLOWED を足した正典結果が通っていた（PR #330 Codex 第 19 巡 P1）。
+    """
+    doc = _passing_results()
+    doc["compatibility_matrix"]["F1_F2_F3"][field] = value
+    with pytest.raises(m.Run10ContractError, match="未知の欄"):
+        m.validate_results_document(doc)
+
+
+def test_compatibility_entry_total_score_hits_the_dedicated_rule() -> None:
+    """`total_score` は §14.5 の専用規則が先に捕まえる（閉世界と二重に塞ぐ）。"""
+    doc = _passing_results()
+    doc["compatibility_matrix"]["F1_F2_F3"]["total_score"] = 0.9
+    with pytest.raises(m.Run10ContractError, match="単一スコア欄は禁止"):
+        m.validate_results_document(doc)
+    assert "total_score" not in m.COMPATIBILITY_ENTRY_ALLOWED_FIELDS
+
+
+def test_compatibility_entry_allows_its_declared_fields() -> None:
+    """許容欄は通す（偽陽性の確認）。"""
+    doc = _passing_results()
+    doc["compatibility_matrix"]["F1_F2_F3"].update(
+        family_alias="formant_family",
+        trait_value_equivalence=m.TRAIT_VALUE_EQUIVALENCE[0],
+        phase_b_eligible=True,
+        notes="観測メモ",
+    )
+    m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize("verdict", ["FAILED", "BLOCKED"])
+def test_entry_and_g15_must_agree_for_every_verdict(verdict: str) -> None:
+    """失敗した Run の台帳でも Entry 裁定と G15 は食い違えない。
+
+    第 10/11 巡の束縛は PASS 経路にしか掛かっていなかったため、
+    FAILED + entry=ENTER + G15=SKIP が通っていた（第 19 巡 P1）。
+    """
+    doc = _minimal_results()
+    doc["protocol_verdict"] = verdict
+    doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
+    doc["phase_b_entry"] = "ENTER"
+    doc["hard_gates"] = {"R10-G15": "SKIP"}
+    with pytest.raises(m.Run10ContractError, match="R10-G15"):
+        m.validate_results_document(doc)
+
+
+def test_blocked_entry_cannot_record_a_passing_adjudication() -> None:
+    """entry=BLOCKED は裁定未解決であり G15 PASS と両立しない。"""
+    doc = _minimal_results()
+    doc["protocol_verdict"] = "BLOCKED"
+    doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
+    doc["phase_b_entry"] = "BLOCKED"
+    doc["hard_gates"] = {"R10-G15": "PASS"}
+    with pytest.raises(m.Run10ContractError, match="R10-G15"):
+        m.validate_results_document(doc)
+
+
+def test_entered_phase_b_always_needs_an_adjudication() -> None:
+    """entry=ENTER なら verdict に依らず裁定 Gate が台帳に在る。"""
+    doc = _minimal_results()
+    doc["protocol_verdict"] = "FAILED"
+    doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
+    doc["phase_b_entry"] = "ENTER"
+    with pytest.raises(m.Run10ContractError, match="裁定結果が必要"):
+        m.validate_results_document(doc)
+
+
+def test_not_reached_entry_pairs_with_not_reached_gate() -> None:
+    """未到達の Entry では裁定 Gate も未実行（第 15 巡の語彙と揃う）。"""
+    doc = _minimal_results()
+    doc["protocol_verdict"] = "BLOCKED"
+    doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
+    doc["phase_b_entry"] = "NOT_REACHED"
+    doc["hard_gates"] = {"R10-G15": "NOT_REACHED"}
+    m.validate_results_document(doc)
+    doc["hard_gates"] = {"R10-G15": "PASS"}
+    with pytest.raises(m.Run10ContractError, match="R10-G15"):
+        m.validate_results_document(doc)

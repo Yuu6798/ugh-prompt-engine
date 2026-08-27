@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（333 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（344 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -548,3 +548,21 @@ PRESENT / 非 blocking になる。本体はリポジトリに載せない（Use
 ため、実体バイトの照合は `--evolution-theory-path` を渡したときの**追加検査**と
 した — 必須にすると本体を commit しない限り永久に解決不能になるからである。
 渡されたのに一致しない場合は同名の別内容 = 来歴汚染として UNRESOLVED へ落とす。
+
+### 第 19 巡（P1×2）
+
+1. **compatibility_matrix の行が開いていた** — 選んだキーだけ読んで残りを素通し
+   していたため、行に `identity_copy: ALLOWED` のような機械可読な対立宣言を
+   足せた。top-level は `identity_copy: PROHIBITED` を宣言しているのに trait 単位
+   では許可した正典結果になる。`COMPATIBILITY_ENTRY_ALLOWED_FIELDS` で行を
+   閉世界にした。第 13 巡（staged_intervention / results top-level）と同型で、
+   **行レベルだけが残っていた**。
+2. **G15 と Entry の束縛が PASS 経路にしか掛かっていなかった** — 第 10/11 巡の
+   一対一束縛は `verdict == "PASS"` の分岐の中だったため、
+   `FAILED` + `phase_b_entry: ENTER` + `R10-G15: SKIP` や
+   `BLOCKED` + entry `BLOCKED` + `R10-G15: PASS` が通った。失敗した Run の台帳でも、
+   Entry 裁定と Gate の値が食い違った記録を正典にしてはならない。
+   `_validate_entry_ledger_consistency()` を verdict 分岐の**前**で無条件に呼び、
+   (a) 記録された G15 は Entry 状態と一対一、(b) `ENTER` を名乗るなら裁定 Gate が
+   台帳に在る、の 2 つを全 verdict へ効かせた。`NOT_REACHED` も対応表に加えて
+   第 15 巡の未実行語彙と揃えた。

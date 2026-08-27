@@ -915,6 +915,9 @@ _G15_VERDICT_FOR_ENTRY: Dict[str, str] = {
     "ENTER": "PASS",
     "SKIP": "SKIP",
     "BLOCKED": "BLOCKED",
+    # Entry へ到達しなかった Run では、裁定 Gate も走っていない
+    # （第 15 巡の未実行語彙と揃える）。
+    "NOT_REACHED": "NOT_REACHED",
 }
 
 # `protocol_verdict: PASS` と両立する Entry 状態。§22.1 が明示する例外は
@@ -926,6 +929,22 @@ _ENTRY_STATES_COMPATIBLE_WITH_PASS: Tuple[str, ...] = ("ENTER", "SKIP")
 
 # §15.1 / §20.1: 成功側 outcome で compatibility_matrix の各エントリが持つべき欄。
 _COMPATIBILITY_ENTRY_REQUIRED: Tuple[str, ...] = ("status", "support", "calibration", "holdout")
+
+# compatibility_matrix の 1 行が持てる欄（閉世界）。選んだキーだけ読んで残りを
+# 素通しすると、`identity_copy: ALLOWED` のような対立宣言を行に足せる —
+# top-level は identity_copy=PROHIBITED を宣言しているのに、trait 単位では
+# 許可した正典結果になる（PR #330 Codex 第 19 巡 P1。第 13 巡の
+# staged_intervention / results top-level と同型で、行レベルが残っていた）。
+COMPATIBILITY_ENTRY_ALLOWED_FIELDS: Tuple[str, ...] = (
+    "status",
+    "support",
+    "calibration",
+    "holdout",
+    "family_alias",
+    "trait_value_equivalence",
+    "phase_b_eligible",
+    "notes",
+)
 
 # §21: Phase A PASS は R10-G0..G14 の全 PASS を要求する。
 PHASE_A_GATE_IDS: Tuple[str, ...] = tuple(gate_id for gate_id, _ in PHASE_A_CORE_GATES)
@@ -1232,6 +1251,38 @@ def _validate_hard_gates_shape(mapping: Mapping[str, Any], entry: str) -> None:
             )
 
 
+def _validate_entry_ledger_consistency(mapping: Mapping[str, Any], entry: str) -> None:
+    """`phase_b_entry` と R10-G15 の対応を **verdict に依らず**強制する。
+
+    第 10/11 巡の束縛は PASS 経路にしか掛かっていなかったため、
+    `protocol_verdict: FAILED` + `phase_b_entry: ENTER` + `R10-G15: SKIP` や
+    `BLOCKED` + entry `BLOCKED` + `R10-G15: PASS` が通った
+    （PR #330 Codex 第 19 巡 P1）。失敗した Run の台帳でも、Entry 裁定と
+    Gate の値が食い違った記録を正典にしてはならない。
+    """
+    gate_id = PHASE_B_ENTRY_GATE[0]
+    ledger = mapping.get("hard_gates")
+    recorded = ledger.get(gate_id) if isinstance(ledger, Mapping) else None
+    has_gate = isinstance(ledger, Mapping) and gate_id in ledger
+
+    # Phase B へ入ったと言うなら、それを authorize した裁定が台帳に在る。
+    if entry == "ENTER" and not has_gate:
+        raise Run10ContractError(
+            f"results.hard_gates: phase_b_entry=ENTER には {gate_id} の裁定結果が必要"
+            "（§29 手順 35 — Phase B を authorize した Gate そのもの）"
+        )
+
+    if not has_gate:
+        return
+
+    expected = _G15_VERDICT_FOR_ENTRY.get(entry)
+    if expected is not None and recorded != expected:
+        raise Run10ContractError(
+            f"results.hard_gates.{gate_id}: phase_b_entry={entry} なら {expected!r}"
+            f" でなければならない（実際 {recorded!r}）— §20.4 / §21 R10-G15"
+        )
+
+
 def _require_entry_adjudication(mapping: Mapping[str, Any], entry: str, why: str) -> None:
     """R10-G15 の裁定結果が実在し、`phase_b_entry` と一対一で対応すること。
 
@@ -1278,6 +1329,8 @@ def _validate_results_evidence(
     # outcome 同士・outcome と Run 状態量の矛盾は evidence の充足より先に見る
     # （矛盾した結論に対して「evidence が足りない」と報告するのは誤導になる）。
     _validate_outcome_consistency(mapping, entry, outcomes)
+    # Entry 裁定と Gate 台帳の対応は verdict に依らず成り立つ（第 19 巡 P1）。
+    _validate_entry_ledger_consistency(mapping, entry)
 
     if verdict == "PASS":
         # 正典 PASS の Gate 台帳は **R10-G0..G22 を欠かさず**載せる。未知キーだけを
@@ -1372,6 +1425,13 @@ def _require_boolean_field(name: str, value: Any) -> None:
 def assert_compatibility_entry(trait_id: str, entry: Any) -> None:
     """§15 / §15.10: family alias が正規 status を上書きしないことを強制する。"""
     mapping = _require_mapping(f"compatibility_matrix.{trait_id}", entry)
+    unknown = set(mapping) - set(COMPATIBILITY_ENTRY_ALLOWED_FIELDS)
+    if unknown:
+        raise Run10ContractError(
+            f"compatibility_matrix.{trait_id}: 未知の欄 {sorted(unknown)}"
+            f"（許容 {sorted(COMPATIBILITY_ENTRY_ALLOWED_FIELDS)}）— 行に機械可読な"
+            "対立宣言を足せないよう閉世界にしている"
+        )
     status = mapping.get("status")
     if status not in COMPATIBILITY_STATUS:
         raise Run10ContractError(f"{trait_id}.status: 未知の値 {status!r}（§15 が唯一の正規 enum）")
