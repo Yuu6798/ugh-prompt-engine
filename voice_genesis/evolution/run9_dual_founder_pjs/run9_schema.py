@@ -18223,6 +18223,7 @@ _LOSS_EVALUATOR_SPEC_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = _H3C_COMMON_TOP_L
         "channels",
         "residual_extraction_spec",
         "aggregate_scope",
+        "aggregate_formula",
         "missing_policy",
         "actor_boundary",
         "residual_correspondence",
@@ -18321,6 +18322,128 @@ _LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_COMMON = (
     "（practice/education）と相互参照。"
 )
 
+# aggregate_formula の実行可能な式の凍結（PR #331 Codex bot レビュー第10巡
+# 指摘1、P1、採用対応）: aggregate の使用範囲（search objective 限定、
+# aggregate_scope）は第1巡以前から凍結済みだったが、channel RMS・
+# calibration_scale・weight を「どう結合するか」の式そのものは未凍結
+# だったため実装ごとに異なる best が生じ得た。
+# search_objective(candidate) = Σ_{c∈measurable} weight_c ×
+# (residual_RMS_c / calibration_scale_c.value) を逐語凍結し、measurable
+# の定義（missing_policy の NOT_SCORABLE 規則優先）・各項の定義（weight_c
+# = 0.2 固定・residual_RMS_c = residual_correspondence 節の残差 RMS・
+# calibration_scale_c.value = 凍結済み値）・dtype（float64）・加算順序
+# （channels 配列の記載順で固定、浮動小数点の結合順まで決定論化）・
+# selection.tie_break（(objective, candidate_ordinal)）との接続を
+# 逐語一致検査で強制する——repin で結合式が未凍結の別式へ差し替わることを
+# fail-closed で拒否する。
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_FORMULA = (
+    "search_objective(candidate) = Σ_{c∈measurable} weight_c × "
+    "( residual_RMS_c / calibration_scale_c.value )"
+)
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_MEASURABLE_DEFINITION = (
+    "measurable = 当該candidateでeligible > 0のchannel集合。"
+    "missing_policy.not_measurable_definitionのNOT_SCORABLE規則が優先する"
+    "——いずれかのchannelがeligible == 0ならcandidate自体が"
+    "NOT_SCORABLEとして記録され、本式はその候補に"
+    "ついて評価されない（missing_policy参照）。"
+)
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_TERM_DEFINITIONS: Dict[str, str] = {
+    "weight_c": (
+        "0.2（全channel固定・裁定§2「正規化後の固定"
+        "重みを各1/5とする」により既凍結。channels[]."
+        "weight参照）。"
+    ),
+    "residual_RMS_c": (
+        "residual_correspondence節が定義するchannel cの残差 RMS"
+        "（対応・集約規則を両側へ適用したスカ"
+        "ラー列の差のRMS。relative_f0/normalized_energy/duration_ratio/"
+        "attack_timingはmora単位、phrase_end_timingはphrase単位——"
+        "residual_correspondence.residual_formula/per_channel_aggregation参照）。"
+    ),
+    "calibration_scale_c.value": (
+        "channels[name=c].calibration_scale.value（training splitのみから決定論的"
+        "導出済み、凍結済み値）。"
+    ),
+}
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_DTYPE = "float64"
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_SUMMATION_ORDER = (
+    "channels配列の記載順（relative_f0, duration_ratio, normalized_energy, "
+    "attack_timing, phrase_end_timing）で固定する。加算順序も"
+    "含めて浮動小数点の結合誤差を決定論化し、"
+    "実装ごとのtotal差異を排除する。"
+)
+_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_OBJECTIVE_DIRECTION = (
+    "search_objectiveは最小化目的。candidate_generation_spec_v1.jsonの"
+    "selection.objectiveが本式の値を指し、selection.tie_break"
+    "（(objective, candidate_ordinal)の実行可能な全順序）と"
+    "接続する——aggregate_scope（candidate_selection_search_objective_only"
+    "に限定）の下でのみ評価され、最終科学"
+    "判定には用いない（final_scientific_judgment_note参照）。"
+)
+
+
+def _validate_loss_evaluator_aggregate_formula(aggregate_formula: Mapping[str, Any]) -> None:
+    """`aggregate_formula` 節の実行可能な式の逐語凍結検査（PR #331 第10巡
+    指摘1、P1、採用の実装）。channel RMS・calibration_scale・weight の
+    結合式が repin で未凍結の別式へ差し替わることを fail-closed で拒否する。
+    """
+    if not isinstance(aggregate_formula, dict):
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula must be an object, got "
+            f"{type(aggregate_formula).__name__}"
+        )
+    formula = aggregate_formula.get("formula")
+    if formula != _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_FORMULA:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.formula diverges from the pinned "
+            f"search_objective formula — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_FORMULA!r}, got {formula!r}"
+        )
+    measurable_definition = aggregate_formula.get("measurable_definition")
+    if measurable_definition != _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_MEASURABLE_DEFINITION:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.measurable_definition diverges from "
+            f"the pinned NOT_SCORABLE-first definition — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_MEASURABLE_DEFINITION!r}, got "
+            f"{measurable_definition!r}"
+        )
+    term_definitions = aggregate_formula.get("term_definitions")
+    if not isinstance(term_definitions, dict):
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.term_definitions must be an object, "
+            f"got {type(term_definitions).__name__}"
+        )
+    for term_name, expected_definition in _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_TERM_DEFINITIONS.items():
+        actual_definition = term_definitions.get(term_name)
+        if actual_definition != expected_definition:
+            raise Run9ValidationError(
+                "loss evaluator spec manifest.aggregate_formula.term_definitions"
+                f"[{term_name!r}] diverges from the pinned term definition — expected exactly "
+                f"{expected_definition!r}, got {actual_definition!r}"
+            )
+    dtype = aggregate_formula.get("dtype")
+    if dtype != _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_DTYPE:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.dtype must be exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_DTYPE!r}, got {dtype!r}"
+        )
+    summation_order = aggregate_formula.get("summation_order")
+    if summation_order != _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_SUMMATION_ORDER:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.summation_order diverges from the "
+            f"pinned fixed channel-array order — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_SUMMATION_ORDER!r}, got "
+            f"{summation_order!r}"
+        )
+    objective_direction = aggregate_formula.get("objective_direction")
+    if objective_direction != _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_OBJECTIVE_DIRECTION:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_formula.objective_direction diverges from "
+            f"the pinned minimization/tie_break cross-reference — expected exactly "
+            f"{_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_OBJECTIVE_DIRECTION!r}, got "
+            f"{objective_direction!r}"
+        )
+
 
 def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
     """`loss_evaluator_spec_v1.json` の構造・値整形式を検証する（裁定 §2:
@@ -18341,7 +18464,9 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
     (f) `residual_correspondence`（frame 対応関係 = aligned mora への凍結、
     channel 別集約規則）が凍結文言と逐語一致する（第6巡指摘1、P1、採用）。
     (g) `reference_source`（枝別比較対象の凍結）が凍結文言と逐語一致する
-    （第6巡指摘2、P1、採用）。
+    （第6巡指摘2、P1、採用）。(h) `aggregate_formula`（channel RMS・
+    calibration_scale・weight を結合する実行可能な search_objective 式の
+    凍結）が凍結文言と逐語一致する（第10巡指摘1、P1、採用）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"loss evaluator spec manifest must be an object, got {type(data).__name__}")
@@ -18426,6 +18551,7 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
             "loss evaluator spec manifest.aggregate_scope must be exactly "
             f"'candidate_selection_search_objective_only', got {data['aggregate_scope']!r}"
         )
+    _validate_loss_evaluator_aggregate_formula(data["aggregate_formula"])
     missing_policy = data["missing_policy"]
     if missing_policy.get("zero_fill_prohibited") is not True:
         raise Run9ValidationError(

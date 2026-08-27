@@ -71,7 +71,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "1c166bb15734e98b3e755a55b6fa54e47a78d155c7dea30d9065c275b058c70e",
+      "sha256": "47b6f996eff0e70206e187ba7ed60b8102f4d6c51de7f3cf3d447175aabd495c",
       "summary": "W1（score変換プロトタイプ+11 variant render実測、3軸実効性の結論）とW1b（AX-P1/AX-D1未検証格子点render実測+変換器レベルunit検証17ケース+calibration scale実測）を統合したaxis feasibility実測記録。repo改変ゼロ（git status --porcelain空、gate_synth.py sha256不変）で全作業をsession workdir隔離して実施した。"
     }
   }

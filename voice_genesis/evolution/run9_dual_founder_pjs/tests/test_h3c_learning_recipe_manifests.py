@@ -547,6 +547,104 @@ def test_h3c_loss_evaluator_reference_source_common_tamper_rejected() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 2c. loss_evaluator_spec_v1: aggregate_formula
+# （PR #331 第10巡指摘1、P1、採用対応）
+# ---------------------------------------------------------------------------
+
+
+def test_h3c_loss_evaluator_aggregate_formula_matches_frozen_constants() -> None:
+    data = _manifest_data("loss_evaluator_spec")
+    aggregate_formula = data["aggregate_formula"]
+    assert aggregate_formula["formula"] == m._LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_FORMULA
+    assert (
+        aggregate_formula["measurable_definition"]
+        == m._LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_MEASURABLE_DEFINITION
+    )
+    for term_name, expected in m._LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_TERM_DEFINITIONS.items():
+        assert aggregate_formula["term_definitions"][term_name] == expected
+    assert aggregate_formula["dtype"] == m._LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_DTYPE
+    assert (
+        aggregate_formula["summation_order"]
+        == m._LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_SUMMATION_ORDER
+    )
+    assert (
+        aggregate_formula["objective_direction"]
+        == m._LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_OBJECTIVE_DIRECTION
+    )
+
+
+def test_h3c_loss_evaluator_aggregate_formula_missing_top_level_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    del data["aggregate_formula"]
+    with pytest.raises(m.Run9ValidationError, match="aggregate_formula"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_aggregate_formula_scale_division_dropped_rejected() -> None:
+    # レビュー原文が挙げる具体的な汚染経路: calibration_scale による正規化
+    # （省略形）を落とした別式への差し替え。
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["aggregate_formula"]["formula"] = (
+        "search_objective(candidate) = Σ_{c∈measurable} weight_c × residual_RMS_c"
+    )
+    with pytest.raises(m.Run9ValidationError, match="aggregate_formula.formula"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_aggregate_formula_measurable_definition_tamper_rejected() -> None:
+    # レビュー原文が挙げる具体的な汚染経路: NOT_SCORABLE 優先を外し、欠測
+    # channel を単純にスキップする（部分計測を許す）定義への緩和。
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["aggregate_formula"]["measurable_definition"] = (
+        "measurable = eligible > 0 のchannel集合。NOT_SCORABLE規則との優先関係は問わない。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="measurable_definition"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_aggregate_formula_weight_term_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["aggregate_formula"]["term_definitions"]["weight_c"] = "channelごとに可変とする。"
+    with pytest.raises(m.Run9ValidationError, match=r"term_definitions\['weight_c'\]"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_aggregate_formula_term_definition_missing_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    del data["aggregate_formula"]["term_definitions"]["residual_RMS_c"]
+    with pytest.raises(m.Run9ValidationError, match=r"term_definitions\['residual_RMS_c'\]"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_aggregate_formula_dtype_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["aggregate_formula"]["dtype"] = "float32"
+    with pytest.raises(m.Run9ValidationError, match="aggregate_formula.dtype"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_aggregate_formula_summation_order_missing_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    del data["aggregate_formula"]["summation_order"]
+    with pytest.raises(m.Run9ValidationError, match="aggregate_formula.summation_order"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_aggregate_formula_objective_direction_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["aggregate_formula"]["objective_direction"] = "search_objectiveは最大化目的。"
+    with pytest.raises(m.Run9ValidationError, match="aggregate_formula.objective_direction"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+def test_h3c_loss_evaluator_aggregate_formula_not_object_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["aggregate_formula"] = "search_objective = weighted sum"
+    with pytest.raises(m.Run9ValidationError, match="aggregate_formula must be an object"):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
+# ---------------------------------------------------------------------------
 # 3. candidate_generation_spec_v1 固有
 # ---------------------------------------------------------------------------
 

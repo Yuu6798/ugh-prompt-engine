@@ -1074,3 +1074,64 @@ manifest_v1.json` 自体の内容（`provenance.detail_record.sha256` 以外）
 **検証**: `ruff check .` clean（リポジトリ全体）。
 `pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
 全 pass（新設検査・参照実装テストの追加分だけ第7巡から件数増）。
+
+## PR #331 Codex bot レビュー第10巡対応（2026-08-27、Claude 完結ルート）
+
+指摘1件、P1、Fable 採用判定（機械汚染防止領域）。実装・検証・返信起草は
+Sonnet に委譲、コミット/push は Fable が別途実行する（本追記フェーズでは
+未実施）。
+
+1. **aggregate loss の実行可能な結合式の凍結（P1）**: `aggregate_scope`
+   （aggregate の使用範囲を candidate selection 用 search objective に
+   限定する旨）は第1巡以前から凍結済みだったが、channel RMS・
+   calibration_scale・weight を「どう結合するか」の式そのものは未凍結
+   だったため、実装ごとに異なる best が生じ得た。新設トップレベル
+   `aggregate_formula` に実行可能な式を逐語凍結した:
+   `search_objective(candidate) = Σ_{c∈measurable} weight_c ×
+   (residual_RMS_c / calibration_scale_c.value)`。`measurable` は
+   当該 candidate で eligible > 0 の channel 集合とし、
+   `missing_policy.not_measurable_definition` の候補単位 NOT_SCORABLE
+   規則が優先する（いずれかの channel が eligible == 0 なら candidate
+   自体が NOT_SCORABLE として記録され、本式はその候補について評価
+   されない）旨を明記して両節を相互参照させた。各項の定義:
+   `weight_c` = 0.2（全 channel 固定、裁定 §2「正規化後の固定重みを
+   各 1/5 とする」により既凍結、`channels[].weight` 参照）、
+   `residual_RMS_c` = `residual_correspondence` 節が定義する channel c
+   の残差 RMS（relative_f0/normalized_energy/duration_ratio/
+   attack_timing は mora 単位、phrase_end_timing のみ phrase 単位、
+   `residual_correspondence.residual_formula`/`per_channel_aggregation`
+   参照）、`calibration_scale_c.value` = 当該 channel の
+   `calibration_scale.value`（training split のみから決定論導出済み、
+   凍結済み値）。演算は `dtype: float64`、加算順序は `channels` 配列の
+   記載順（relative_f0, duration_ratio, normalized_energy,
+   attack_timing, phrase_end_timing）で固定し、浮動小数点の結合順まで
+   決定論化した（`summation_order`）。`objective_direction` に
+   search_objective が最小化目的であること、
+   `candidate_generation_spec_v1.json` の `selection.objective`/
+   `selection.tie_break`（`(objective, candidate_ordinal)`）との接続、
+   `aggregate_scope`/`final_scientific_judgment_note` との相互参照を
+   明記した。`run9_schema.validate_loss_evaluator_spec_manifest()` へ
+   `_validate_loss_evaluator_aggregate_formula()` を新設し、
+   `aggregate_formula` の逐語一致検査（formula・measurable_definition・
+   term_definitions 3件・dtype・summation_order・objective_direction）
+   を追加した——calibration_scale による正規化を落とした省略形など
+   未凍結の別式への repin 差し替えを fail-closed で拒否する。
+
+**連鎖更新**: `inputs/loss_evaluator_spec_v1.json` のバイト変更に伴い
+`RUN9_CONTRACT.yaml` の `loss_evaluator_spec_sha` を repin した。さらに
+本節を新設したことに伴う `HARNESS3C_AXIS_FEASIBILITY_RECORD.md` 自体の
+実バイト sha256 変更により、5 manifest 共通の `provenance.
+detail_record.sha256` 参照値が全て追随更新となるため、5 manifest 全て
+（`score_axis_catalog_sha`/`loss_evaluator_spec_sha`/
+`candidate_generation_spec_sha`/`compute_budget_manifest_sha`/
+`learning_data_binding_manifest_sha`）を第1-8巡と同型の cascade repin
+した（旧値は `RUN9_CONTRACT.yaml` 側に世代履歴コメントとして
+append-only 保持）。`score_axis_catalog_v1.json`/`candidate_generation_
+spec_v1.json`/`compute_budget_manifest_v1.json`/`learning_data_binding_
+manifest_v1.json` 自体の内容（`provenance.detail_record.sha256` 以外）
+は本巡で無改訂。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
+2542 件全 pass（第9巡時点の2532件から+10件: `aggregate_formula` 逐語一致
+検査10件〔正常系1件・欠落/改変拒否9件〕、他既存回帰）。

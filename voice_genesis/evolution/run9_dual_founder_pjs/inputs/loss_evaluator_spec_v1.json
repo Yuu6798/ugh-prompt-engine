@@ -176,6 +176,18 @@
   },
   "aggregate_scope": "candidate_selection_search_objective_only",
   "final_scientific_judgment_note": "equal-weight aggregateはcandidate selection用search objectiveに限定し、最終科学判定は5 channel個別値を維持する（裁定 §2 逐語）",
+  "aggregate_formula": {
+    "formula": "search_objective(candidate) = Σ_{c∈measurable} weight_c × ( residual_RMS_c / calibration_scale_c.value )",
+    "measurable_definition": "measurable = 当該candidateでeligible > 0のchannel集合。missing_policy.not_measurable_definitionのNOT_SCORABLE規則が優先する——いずれかのchannelがeligible == 0ならcandidate自体がNOT_SCORABLEとして記録され、本式はその候補について評価されない（missing_policy参照）。",
+    "term_definitions": {
+      "weight_c": "0.2（全channel固定・裁定§2「正規化後の固定重みを各1/5とする」により既凍結。channels[].weight参照）。",
+      "residual_RMS_c": "residual_correspondence節が定義するchannel cの残差 RMS（対応・集約規則を両側へ適用したスカラー列の差のRMS。relative_f0/normalized_energy/duration_ratio/attack_timingはmora単位、phrase_end_timingはphrase単位——residual_correspondence.residual_formula/per_channel_aggregation参照）。",
+      "calibration_scale_c.value": "channels[name=c].calibration_scale.value（training splitのみから決定論的導出済み、凍結済み値）。"
+    },
+    "dtype": "float64",
+    "summation_order": "channels配列の記載順（relative_f0, duration_ratio, normalized_energy, attack_timing, phrase_end_timing）で固定する。加算順序も含めて浮動小数点の結合誤差を決定論化し、実装ごとのtotal差異を排除する。",
+    "objective_direction": "search_objectiveは最小化目的。candidate_generation_spec_v1.jsonのselection.objectiveが本式の値を指し、selection.tie_break（(objective, candidate_ordinal)の実行可能な全順序）と接続する——aggregate_scope（candidate_selection_search_objective_onlyに限定）の下でのみ評価され、最終科学判定には用いない（final_scientific_judgment_note参照）。"
+  },
   "missing_policy": {
     "zero_fill_prohibited": true,
     "eligible_count_required_per_channel": true,
@@ -195,7 +207,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "1c166bb15734e98b3e755a55b6fa54e47a78d155c7dea30d9065c275b058c70e",
+      "sha256": "47b6f996eff0e70206e187ba7ed60b8102f4d6c51de7f3cf3d447175aabd495c",
       "summary": "W1b Task3: training バンドル（sha256照合供給）68曲の5 channel母標準偏差実測。relative_f0/normalized_energyの標本粒度は両案（frame/mora,phrase）を実測し、W1b Task3時点ではFable判定（frame採用）を記録していたが、PR #331第6巡でresidual_correspondenceがaligned mora単位集約へ凍結された結果frame採用の前提が成立しなくなり、mora粒度採用（sample_unit: mora / adopted_v2: true）へ切替済み（第6巡追記節・本file同梱channels[].calibration_scale.derivation参照）。独立2プロセス実行で完全一致（決定論確認済み）。"
     },
     "training_bundle_input": {
