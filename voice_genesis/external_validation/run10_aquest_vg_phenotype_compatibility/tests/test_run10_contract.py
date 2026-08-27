@@ -531,6 +531,11 @@ def _passing_results() -> Dict[str, Any]:
     # §29 手順 35: Entry の裁定は ENTER / SKIP のいずれでも一度行われるため、
     # PASS の結果文書には R10-G15 の裁定結果が実在する。
     doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "SKIP"
+    # 走らなかった Phase B Gate は**省略でなく** NOT_REACHED と記録する
+    # （PR #330 Codex 第 17 巡 P1: 省略は沈黙であって記録ではない）。
+    doc["hard_gates"].update(
+        {gate_id: m.GATE_NOT_EXECUTED for gate_id, _ in m.PHASE_B_GATES}
+    )
     doc["external_calibration"] = {
         "e0_parameter_recovery": {"01_f1_low": {"abs_error": 12.0}},
         "meter_calibration_status": {"F1_F2_F3": "CALIBRATED_EXTERNAL"},
@@ -605,7 +610,7 @@ def test_pass_requires_all_phase_a_gates_passing() -> None:
         m.validate_results_document(doc)
     doc = _passing_results()
     del doc["hard_gates"]["R10-G12"]
-    with pytest.raises(m.Run10ContractError, match="必要な Gate が無い"):
+    with pytest.raises(m.Run10ContractError, match="Gate が欠けている"):
         m.validate_results_document(doc)
 
 
@@ -1111,6 +1116,9 @@ def test_skip_records_g15_without_requiring_it_to_pass() -> None:
     doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED", "PHASE_B_NOT_ENTERED"]
     doc["hard_gates"] = {gate_id: "PASS" for gate_id, _ in m.PHASE_A_CORE_GATES}
     doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "SKIP"
+    doc["hard_gates"].update(
+        {gate_id: m.GATE_NOT_EXECUTED for gate_id, _ in m.PHASE_B_GATES}
+    )
     m.validate_results_document(doc)
 
 
@@ -1466,3 +1474,35 @@ def test_all_gate_ids_covers_every_registered_gate() -> None:
     assert m.ALL_GATE_IDS == registered
     assert len(set(m.ALL_GATE_IDS)) == len(m.ALL_GATE_IDS)
     assert m.GATE_NOT_EXECUTED in m.GATE_VERDICTS
+
+
+# --- 第 17 巡: 台帳の欠落（PR #330 Codex 第 17 巡 P1） ----------------------
+
+
+@pytest.mark.parametrize("gate_id", ["R10-G16", "R10-G19", "R10-G22"])
+def test_skipped_phase_b_gates_cannot_be_omitted(gate_id: str) -> None:
+    """走らなかった Gate を**省略**して消せない。
+
+    第 15 巡はキー集合を上からしか閉じていなかったため、
+    「NOT_REACHED と書く」規律は書かずに済ませれば空文化した。
+    省略は沈黙であって、走らなかったことの記録ではない。
+    """
+    doc = _passing_results()
+    del doc["hard_gates"][gate_id]
+    with pytest.raises(m.Run10ContractError, match="Gate が欠けている"):
+        m.validate_results_document(doc)
+
+
+def test_pass_ledger_must_carry_every_gate_id() -> None:
+    """正典 PASS の台帳は R10-G0..G22 を全数載せる。"""
+    doc = _passing_results()
+    assert set(doc["hard_gates"]) == set(m.ALL_GATE_IDS)
+    m.validate_results_document(doc)
+
+
+def test_non_pass_verdicts_do_not_require_a_complete_ledger() -> None:
+    """BLOCKED は途中で止まった Run であり、全数台帳を要求しない（偽陽性の確認）。"""
+    doc = _minimal_results()
+    doc["protocol_verdict"] = "BLOCKED"
+    doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
+    m.validate_results_document(doc)

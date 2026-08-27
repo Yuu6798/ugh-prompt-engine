@@ -46,10 +46,9 @@ from af01_freeze_verifier import (  # noqa: E402
     PINNED_LEDGER_PATH,
     check_ledger_structure,
     containment_violation,
-    parse_payload_ledger,
+    read_and_verify_ledger,
     verify_bundle,
     verify_deterministic_replay,
-    verify_ledger_bytes,
 )
 from svp_rpe.utils.atomic_io import atomic_write_bytes  # noqa: E402
 
@@ -131,7 +130,12 @@ def inventory_af01(
     """AF01 v1.0 関連項目（§29 手順 6 の第 1 段を含む）。"""
     items: List[InventoryItem] = []
 
-    ledger_report = verify_ledger_bytes(PINNED_LEDGER_PATH)
+    # 台帳は **1 回だけ読む**。hash した後で parse のために読み直すと、その間に
+    # 差し替えられた台帳から `af01_ledger_structure` を導きながら
+    # `af01_payload_sha256sums` は元バイトを「認証済み」と書く、内部矛盾した
+    # 正典 inventory を作れる（PR #330 Codex 第 17 巡 P1）。
+    # `read_and_verify_ledger()` は同じバッファを hash して parse する。
+    ledger_report, ledger_entries = read_and_verify_ledger(PINNED_LEDGER_PATH)
     items.append(
         InventoryItem(
             item_id="af01_payload_sha256sums",
@@ -145,9 +149,8 @@ def inventory_af01(
         )
     )
 
-    if ledger_report.passed:
-        entries = parse_payload_ledger(PINNED_LEDGER_PATH.read_text(encoding="utf-8"))
-        checks, problems = check_ledger_structure(entries)
+    if ledger_report.passed and ledger_entries is not None:
+        checks, problems = check_ledger_structure(ledger_entries)
         failed = [name for name, state in checks.items() if state != "PASS"]
         items.append(
             InventoryItem(

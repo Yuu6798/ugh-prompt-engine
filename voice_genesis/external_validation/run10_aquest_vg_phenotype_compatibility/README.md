@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（324 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（329 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -493,3 +493,22 @@ inventory は commit されるため、private ストレージの構成をその
 なる（§2.2 / §26）。この裁定は AQUEST 由来資産（UTAU デフォルト音源は個人・非公開
 でのみ分析／抽出／合成が許諾される）に対する姿勢を、VG 側の設計文書へも保守的に
 適用したものである。
+
+### 第 17 巡（P1×2）
+
+1. **inventory 側の台帳が二度読みだった** — `inventory_af01()` は
+   `verify_ledger_bytes()` で認証した後、parse のために `PINNED_LEDGER_PATH` を
+   読み直していた。二読の間に差し替えられると、`af01_payload_sha256sums` は元
+   バイトを「認証済み」と書きながら `af01_ledger_structure` は別バイトから
+   導かれる、内部矛盾した正典 inventory ができる。第 4 巡で導入済みの単一読み
+   ヘルパ `read_and_verify_ledger()` へ寄せた（同じバッファを hash して parse）。
+2. **走らなかった Gate を「省略」で消せた** — 第 15 巡は「未実行は `NOT_REACHED`
+   と書く」と定めたが、キー集合を**上からしか**閉じていなかったため、その Gate を
+   台帳に書かなければ同じ結果になった。省略と NOT_REACHED は別物である —
+   前者は「何も言っていない」であって、走らなかったことの記録ではない。
+   正典 PASS の台帳に R10-G0..G22 の**全数**を要求する
+   （`_require_complete_gate_ledger`）。BLOCKED / FAILED は途中で止まった Run
+   なので全数を要求しない。
+
+2 は第 15 巡の同型で、閉世界の**向き**の取りこぼしだった。上（未知キーの排除）は
+閉じていたが下（必須キーの充足）が開いていた。

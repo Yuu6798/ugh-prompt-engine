@@ -1174,6 +1174,25 @@ def _validate_results_rights(obj: Any) -> None:
             )
 
 
+def _require_complete_gate_ledger(mapping: Mapping[str, Any], why: str) -> None:
+    """Gate 台帳が R10-G0..G22 を 1 つも欠かさず載せていること。
+
+    第 15 巡は「未実行の Gate は `NOT_REACHED` と書く」と定めたが、キー集合を
+    上からしか閉じていなかったため、その Gate を**省略**すれば同じ結果になった
+    （PR #330 Codex 第 17 巡 P1）。省略と NOT_REACHED は別物である —
+    前者は「何も言っていない」であり、走らなかったことの記録ではない。
+    """
+    ledger = mapping.get("hard_gates")
+    if not isinstance(ledger, Mapping) or not ledger:
+        raise Run10ContractError(f"results.hard_gates: {why} には Gate 台帳が必要")
+    missing = [gate_id for gate_id in ALL_GATE_IDS if gate_id not in ledger]
+    if missing:
+        raise Run10ContractError(
+            f"results.hard_gates: {why} の台帳に Gate が欠けている: {missing}"
+            f"（走らなかった Gate は省略でなく {GATE_NOT_EXECUTED} と記録する。§21）"
+        )
+
+
 def _validate_hard_gates_shape(mapping: Mapping[str, Any], entry: str) -> None:
     """Gate 台帳のキー集合・値語彙・未実行状態を閉世界で検査する。
 
@@ -1261,6 +1280,11 @@ def _validate_results_evidence(
     _validate_outcome_consistency(mapping, entry, outcomes)
 
     if verdict == "PASS":
+        # 正典 PASS の Gate 台帳は **R10-G0..G22 を欠かさず**載せる。未知キーだけを
+        # 閉じても、走らなかった Gate を**書かない**ことで消せてしまい、第 15 巡が
+        # 「未実行は NOT_REACHED と書く」と定めた記録規律が空文化する
+        # （PR #330 Codex 第 17 巡 P1）。欠落は沈黙であり、沈黙は記録ではない。
+        _require_complete_gate_ledger(mapping, "protocol_verdict=PASS")
         _validate_gate_ledger(mapping, PHASE_A_GATE_IDS, "protocol_verdict=PASS")
         # §29 手順 35「adjudicate PHASE_B_ENTRY exactly once」/ §23
         # phase_b_entry_result_sha: Entry の裁定は ENTER でも SKIP でも一度だけ
