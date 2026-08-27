@@ -970,6 +970,10 @@ _G15_VERDICT_FOR_ENTRY: Dict[str, str] = {
 # ENTER/SKIP/BLOCKED 写像が新たに到達可能にした経路）。
 _ENTRY_STATES_COMPATIBLE_WITH_PASS: Tuple[str, ...] = ("ENTER", "SKIP")
 
+# §29 手順 35: Entry 裁定が「行われた」ことを意味する状態。これらは verdict に
+# 依らず R10-G15 の記録を要求する。到達しなかった NOT_REACHED だけが例外。
+_ENTRY_STATES_REQUIRING_ADJUDICATION: Tuple[str, ...] = ("ENTER", "SKIP", "BLOCKED")
+
 # §15.1 / §20.1: 成功側 outcome で compatibility_matrix の各エントリが持つべき欄。
 _COMPATIBILITY_ENTRY_REQUIRED: Tuple[str, ...] = ("status", "support", "calibration", "holdout")
 
@@ -1317,11 +1321,16 @@ def _validate_entry_ledger_consistency(mapping: Mapping[str, Any], entry: str) -
     recorded = ledger.get(gate_id) if isinstance(ledger, Mapping) else None
     has_gate = isinstance(ledger, Mapping) and gate_id in ledger
 
-    # Phase B へ入ったと言うなら、それを authorize した裁定が台帳に在る。
-    if entry == "ENTER" and not has_gate:
+    # 裁定が行われたと言うなら、その結果が台帳に在る。ENTER だけを縛ると
+    # `SKIP` + `hard_gates` 欠落が通り、「一度だけ行った裁定」を主張しながら
+    # その Gate 記録を消せる（PR #330 Codex 第 22 巡 P1）。§29 手順 35 の
+    # 裁定は ENTER / SKIP / BLOCKED のいずれでも「行われた」ことを意味し、
+    # 記録が無くてよいのは Entry へ到達しなかった NOT_REACHED だけである。
+    if entry in _ENTRY_STATES_REQUIRING_ADJUDICATION and not has_gate:
         raise Run10ContractError(
-            f"results.hard_gates: phase_b_entry=ENTER には {gate_id} の裁定結果が必要"
-            "（§29 手順 35 — Phase B を authorize した Gate そのもの）"
+            f"results.hard_gates: phase_b_entry={entry} には {gate_id} の裁定結果が必要"
+            "（§29 手順 35 — 裁定は一度だけ行われ、その結果は台帳に残る。"
+            f"記録を省けるのは {GATE_NOT_EXECUTED} の Entry だけ）"
         )
 
     if not has_gate:

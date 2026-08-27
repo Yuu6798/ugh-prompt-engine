@@ -50,7 +50,7 @@ Source / Identity 形質体系と測定器を同じ条件で適用したとき�
 |---|---|---|
 | R10-G0 `RUN_CONTRACT_COMPLETE` | **BLOCKED** | Core pin 欄に PENDING が残る（§31 cost cap 4 欄を含む） |
 | R10-G1 `RIGHTS_AND_PRIVATE_BOUNDARY` | **BLOCKED** | R10-PUB-1 は裁定済み。AQUEST 回答アーカイブ未固定 / private staging root 未確定 |
-| R10-G2 `PRE_RUN_INVENTORY_COMPLETE` | **BLOCKED** | A0 未取得 / AF01 bundle 実体未取得 / meter 未実装 |
+| R10-G2 `PRE_RUN_INVENTORY_COMPLETE` | **BLOCKED** | 設計文書の実体未照合 / A0 未取得 / AF01 bundle 実体未取得 / meter 未実装 |
 | R10-G3 以降 | 未到達 | — |
 
 `pre_run/inventory.json` が機械可読な正本（`gate_state: BLOCKED`）。
@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（358 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（367 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -608,3 +608,23 @@ User 裁定による**意図的な不在**であり、参照は契約 pin で既
 `test_readme_step5_agrees_with_the_contract_pin` と
 `test_readme_step5_matches_the_inventory_state` で**表と機械状態の同期をテストで
 固定**した。どちらへ動かしても片方だけ古いままにはできない。
+
+### 第 22 巡（P1×2）
+
+1. **設計文書の実体照合がどの検収経路にも繋がっていなかった** —
+   `verify_design_document()` はテストからしか呼ばれておらず、契約ローダは
+   YAML の宣言と定数の digest を突き合わせるだけだった。同じ digest を 2 箇所で
+   照合しても、**その digest の文書が実在すること**は何も証明しない。Core pin が
+   埋まれば「どの設計を実行したか」が未証明のまま R10-G0 が PASS し得た。
+
+   R10-G0 は §21 の定義どおり「Run Contract の pin 充足」のままにし、実体照合は
+   **R10-G2 の実在確認に blocking 項目 `design_document_bytes` として追加**した
+   （`--design-doc-path`）。どちらの Gate も開かない限り測定は始まらないので、
+   設計が未証明のまま Run が進む経路は残らない。照合対象のパス文字列は
+   inventory に記録しない（§2.2 / §26 — inventory は commit される）。
+2. **裁定済み Entry が R10-G15 の記録を消せた** — 第 19 巡は `ENTER` だけを
+   縛ったため、`SKIP` + `hard_gates` 欠落が通り、「一度だけ行った裁定」を
+   主張しながらその Gate 記録を消せた。§29 手順 35 の裁定は ENTER / SKIP /
+   BLOCKED のいずれでも「行われた」ことを意味するので、記録を省けるのは
+   Entry へ到達しなかった `NOT_REACHED` だけである
+   （`_ENTRY_STATES_REQUIRING_ADJUDICATION`）。

@@ -549,3 +549,55 @@ def test_readme_step5_matches_the_inventory_state() -> None:
     row = _procedure_row("5")
     assert ("完了" in row) == (item["state"] == inv.PRESENT)
     assert ("完了" in row) == (item["blocking"] is False)
+
+
+# --- 第 22 巡: 設計文書の実体照合を検収経路へ繋ぐ（第 22 巡 P1）-------------
+
+
+def test_design_document_is_blocking_until_verified() -> None:
+    """契約 YAML の宣言だけでは「どの設計を実行したか」を証明しない。
+
+    `verify_design_document()` はテストからしか呼ばれておらず、どの検収経路にも
+    繋がっていなかった（PR #330 Codex 第 22 巡 P1）。R10-G2 の実在確認項目に
+    して、照合されるまで Run を塞ぐ。
+    """
+    item = inv._check_design_document(None)
+    assert item.state == inv.UNRESOLVED
+    assert item.blocking is True
+    items = _items(inv.build_inventory())
+    assert items["design_document_bytes"]["blocking"] is True
+
+
+def test_design_document_mismatch_blocks(tmp_path: Path) -> None:
+    """凍結 pin と違うバイトを掴んだら塞ぐ（同名の別 revision を実行しない）。"""
+    body = tmp_path / m.DESIGN_DOC_TITLE
+    body.write_text("v0.3 の本文", encoding="utf-8")
+    item = inv._check_design_document(body)
+    assert item.state == inv.ABSENT
+    assert item.blocking is True
+    assert m.DESIGN_DOC_SHA256 in item.detail
+
+
+def test_design_document_match_resolves(tmp_path: Path, monkeypatch) -> None:
+    """実バイトが凍結 pin と一致したときだけ解決する（偽陰性でないことの確認）。"""
+    body_bytes = b"canonical design v0.4"
+    monkeypatch.setattr(
+        inv, "verify_design_document", lambda path: Path(path).read_bytes() == body_bytes
+    )
+    body = tmp_path / m.DESIGN_DOC_TITLE
+    body.write_bytes(body_bytes)
+    item = inv._check_design_document(body)
+    assert item.state == inv.PRESENT
+    assert item.blocking is False
+
+
+def test_design_document_path_is_never_recorded(tmp_path: Path) -> None:
+    """照合対象のパス文字列を inventory へ書かない（§2.2 / §26）。"""
+    secret = tmp_path / "very" / "private"
+    secret.mkdir(parents=True)
+    body = secret / m.DESIGN_DOC_TITLE
+    body.write_text("x", encoding="utf-8")
+    for path in (body, secret / "missing.md"):
+        item = inv._check_design_document(path)
+        assert "very" not in item.detail
+        assert str(secret) not in item.detail

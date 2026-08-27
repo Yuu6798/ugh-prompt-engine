@@ -1226,11 +1226,16 @@ def test_entry_states_compatible_with_pass_are_enumerated() -> None:
 
 
 def test_blocked_entry_is_recorded_under_a_blocked_verdict() -> None:
-    """裁定が BLOCKED なら protocol_verdict も PASS 以外になる（記録自体は可能）。"""
+    """裁定が BLOCKED なら protocol_verdict も PASS 以外になる（記録自体は可能）。
+
+    第 22 巡以降、BLOCKED も「裁定は行われた（が解決しなかった）」状態なので
+    R10-G15 の記録を伴う。
+    """
     doc = _minimal_results()
     doc["protocol_verdict"] = "BLOCKED"
     doc["phase_b_entry"] = "BLOCKED"
     doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
+    doc["hard_gates"] = {"R10-G15": "BLOCKED"}
     m.validate_results_document(doc)
 
 
@@ -1725,3 +1730,37 @@ def test_evidence_sections_are_all_classified() -> None:
             assert m._EVIDENCE_SECTION_SHAPE[name], f"{name}: SHAPE なのに欄が空"
         else:
             assert m._EVIDENCE_SECTION_SHAPE[name] == (), f"{name}: INDEX に固定欄は持てない"
+
+
+# --- 第 22 巡: 裁定記録の消去（第 22 巡 P1） --------------------------------
+
+
+@pytest.mark.parametrize("entry", ["ENTER", "SKIP", "BLOCKED"])
+def test_adjudicated_entry_cannot_erase_its_gate(entry: str) -> None:
+    """裁定が行われた状態は R10-G15 の記録を伴う。
+
+    第 19 巡は ENTER だけを縛ったため、`SKIP` + `hard_gates` 欠落が通り、
+    「一度だけ行った裁定」を主張しながらその Gate 記録を消せた。
+    """
+    doc = _minimal_results()
+    doc["protocol_verdict"] = "FAILED"
+    doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
+    doc["phase_b_entry"] = entry
+    with pytest.raises(m.Run10ContractError, match="裁定結果が必要"):
+        m.validate_results_document(doc)
+
+
+def test_not_reached_entry_may_omit_the_gate() -> None:
+    """Entry へ到達しなかった Run だけが記録を省ける（偽陽性の確認）。"""
+    doc = _minimal_results()
+    doc["protocol_verdict"] = "BLOCKED"
+    doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
+    doc["phase_b_entry"] = "NOT_REACHED"
+    m.validate_results_document(doc)
+
+
+def test_adjudication_requirement_covers_every_decided_state() -> None:
+    """裁定済み状態の集合が Entry 語彙から NOT_REACHED を除いた全数であること。"""
+    assert set(m._ENTRY_STATES_REQUIRING_ADJUDICATION) == (
+        set(m.PHASE_B_ENTRY_STATES) - {m.GATE_NOT_EXECUTED}
+    )

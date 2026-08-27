@@ -59,9 +59,12 @@ from run10_schema import (  # noqa: E402
     AF01_PITCHES,
     AF01_UNIT_FILE_COUNT,
     Run10ContractError,
+    DESIGN_DOC_SHA256,
+    DESIGN_DOC_TITLE,
     canonical_json_bytes,
     compute_file_sha256,
     load_run10_contract,
+    verify_design_document,
 )
 
 PRESENT = "PRESENT"
@@ -398,6 +401,68 @@ def inventory_aquest(voicebank_root: Optional[Path]) -> List[InventoryItem]:
     ]
 
 
+def _check_design_document(body_path: Optional[Path] = None) -> InventoryItem:
+    """§29 手順 1/2: 実行される設計文書の実バイトが凍結 pin と一致すること。
+
+    設計文書はリポジトリに置かない（§2.2）ため、契約 YAML に書かれた
+    `design_doc_sha256` は「宣言」でしかない。宣言と同じ digest を定数と
+    突き合わせても、**その digest の文書が実在すること**は何も証明しない
+    （PR #330 Codex 第 22 巡 P1: `verify_design_document()` がテストからしか
+    呼ばれておらず、どの検収経路にも繋がっていなかった）。
+
+    R10-G0 は §21 の定義どおり「Run Contract の pin 充足」のままにし、
+    **実体照合はここ（R10-G2 の実在確認）で blocking 項目として要求する**。
+    どちらの Gate も開かない限り測定は始まらないので、「どの設計を実行したか」
+    が証明されないまま Run が進む経路は残らない。
+
+    渡されたパス文字列は記録しない（§2.2 / §26 — inventory は commit される）。
+    """
+    if body_path is None:
+        return InventoryItem(
+            item_id="design_document_bytes",
+            state=UNRESOLVED,
+            detail=(
+                f"正本設計 {DESIGN_DOC_TITLE!r} の実体が未照合"
+                "（--design-doc-path 未指定）。本文書はリポジトリに載せないため"
+                "（§2.2）、実行される文書が凍結 pin と同一であることは実行時に"
+                "しか確かめられない。契約 YAML の宣言だけでは実在を証明しない。"
+            ),
+            blocking=True,
+        )
+
+    body = Path(body_path)
+    if not body.is_file():
+        return InventoryItem(
+            item_id="design_document_bytes",
+            state=ABSENT,
+            detail="設計文書の照合対象として指定されたパスにファイルが無い。",
+            blocking=True,
+        )
+
+    if verify_design_document(body):
+        return InventoryItem(
+            item_id="design_document_bytes",
+            state=PRESENT,
+            detail=(
+                f"正本設計 {DESIGN_DOC_TITLE!r} の実バイト sha256 が凍結 pin"
+                f" {DESIGN_DOC_SHA256} と一致（§29 手順 1/2）。"
+                "本文書は private storage 側にあり commit しない。"
+            ),
+            blocking=False,
+        )
+
+    return InventoryItem(
+        item_id="design_document_bytes",
+        state=ABSENT,
+        detail=(
+            "設計文書の実バイト sha256 が凍結 pin と一致しない"
+            f"（expected={DESIGN_DOC_SHA256} actual={compute_file_sha256(body)}）。"
+            "どの設計を実行しているのかが確定しないため測定を始めない（§32 Stop Rule）。"
+        ),
+        blocking=True,
+    )
+
+
 def _evolution_theory_pin(contract_path: Optional[Path] = None) -> Tuple[Optional[str], str]:
     """契約から Evolution Theory 正典の凍結 sha256 を解決する。
 
@@ -508,9 +573,11 @@ def inventory_repository(
     repo: Path,
     evolution_theory_path: Optional[Path] = None,
     contract_path: Optional[Path] = None,
+    design_doc_path: Optional[Path] = None,
 ) -> List[InventoryItem]:
-    """リポジトリ側の参照解決（§29 手順 2/5）。"""
+    """リポジトリ側の参照解決（§29 手順 1/2/5）。"""
     items = [
+        _check_design_document(design_doc_path),
         _check_evolution_theory(repo, evolution_theory_path, contract_path),
         InventoryItem(
             item_id="meter_implementation",
@@ -542,13 +609,14 @@ def build_inventory(
     af01_replay: bool = False,
     evolution_theory_path: Optional[Path] = None,
     contract_path: Optional[Path] = None,
+    design_doc_path: Optional[Path] = None,
 ) -> Dict[str, object]:
     """R10-G2 inventory 文書を組み立てる。"""
     root = repo if repo is not None else _repo_root()
     items = (
         inventory_af01(af01_bundle_root, run_replay=af01_replay)
         + inventory_aquest(aquest_voicebank_root)
-        + inventory_repository(root, evolution_theory_path, contract_path)
+        + inventory_repository(root, evolution_theory_path, contract_path, design_doc_path)
     )
     blocking = [item for item in items if item.blocking]
     return {
@@ -581,6 +649,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="A0 = AquesTalk 由来 UTAU デフォルト音声のルート（private ストレージ）。",
     )
     parser.add_argument(
+        "--design-doc-path",
+        default=None,
+        help=(
+            "正本設計文書（private ストレージ）の実体パス。実バイト sha256 を"
+            "凍結 pin と照合する。指定したパス文字列は inventory.json に記録しない。"
+        ),
+    )
+    parser.add_argument(
         "--evolution-theory-path",
         default=None,
         help=(
@@ -606,6 +682,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         af01_replay=args.af01_replay,
         evolution_theory_path=(
             Path(args.evolution_theory_path) if args.evolution_theory_path else None
+        ),
+        design_doc_path=(
+            Path(args.design_doc_path) if args.design_doc_path else None
         ),
     )
     payload = canonical_json_bytes(inventory)

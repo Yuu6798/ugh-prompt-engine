@@ -5,6 +5,7 @@
     "af01_deterministic_replay",
     "aquest_voicebank_files",
     "a0_recorded_pitch_inventory",
+    "design_document_bytes",
     "meter_implementation",
     "v1_generation_route"
   ],
@@ -52,6 +53,12 @@
       "blocking": true,
       "detail": "A0 voicebank root が未指定または不在。§7.1 の必須 pin（voicebank version / file order / all WAV SHA256 / oto.ini / character.txt）を確定できない。§32 Stop Rule 3 の状態。",
       "item_id": "a0_recorded_pitch_inventory",
+      "state": "UNRESOLVED"
+    },
+    {
+      "blocking": true,
+      "detail": "正本設計 'VoiceGenesis_RUN10_AQUEST_VG_Phenotype_Compatibility_Audit_v0.4.md' の実体が未照合（--design-doc-path 未指定）。本文書はリポジトリに載せないため（§2.2）、実行される文書が凍結 pin と同一であることは実行時にしか確かめられない。契約 YAML の宣言だけでは実在を証明しない。",
+      "item_id": "design_document_bytes",
       "state": "UNRESOLVED"
     },
     {
