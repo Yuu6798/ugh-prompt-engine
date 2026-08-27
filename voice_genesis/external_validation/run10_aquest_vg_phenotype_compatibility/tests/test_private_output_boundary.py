@@ -195,3 +195,31 @@ def test_every_tracked_data_file_is_explicitly_listed() -> None:
     ]
     assert data, "追跡中の構造 manifest が 1 件も無いのは想定外"
     assert set(data) <= set(pb.PUBLISHABLE_DATA_FILES)
+
+
+# --- 第 2 巡: suffix bypass（PR #330 Codex 第 2 巡 P1） --------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "corpus/a0/oto.ini",
+        "corpus/a0/OTO.INI",
+        "inputs/oto.ini",
+        "corpus/a0/character.txt",
+        "corpus/a0/prefix.map",
+    ],
+)
+def test_voicebank_metadata_is_never_publishable(path: str) -> None:
+    """§7.1 / §24: voicebank メタデータは拡張子 allowlist を素通りしない。
+
+    第 1 巡の allowlist 反転で `.ini` を一律公開可にしたため `oto.ini` が
+    通っていた（allowlist 化そのものが作った穴）。
+    """
+    assert pb.classify_violation(f"{pb.RUN10_TREE}/{path}") is not None
+
+
+def test_ini_and_cfg_are_not_globally_publishable() -> None:
+    """拡張子 allowlist に `.ini` / `.cfg` を入れない（同型再発の防止）。"""
+    assert ".ini" not in pb.PUBLISHABLE_SUFFIXES
+    assert ".cfg" not in pb.PUBLISHABLE_SUFFIXES

@@ -18,8 +18,10 @@
    §7.3 の構造量（75 unit WAV = 25 alias × 3 pitch、9 E0 fixture、6 aggregate
    probe）を満たし、canonical 4 点（spec / generator / manifest / C4 Body）が
    凍結値と一致するか。
-3. `verify_deterministic_replay()` — 同梱 generator を再実行し、再生成
-   payload から導いた台帳が凍結台帳と同一かどうか（§29 手順 7）。
+3. `verify_deterministic_replay()` — 同梱 generator を **実行前に認証してから**
+   再実行し、再生成 payload が凍結台帳と同一かどうか（§29 手順 7）。
+   CLI の `--replay` は `--bundle-root` を必須とし、手順 6（bundle 実体照合）を
+   通過した場合にのみ手順 7 へ進む。
 
 AF01 は AQUEST 由来資産を一切含まない VoiceGenesis 側の source-free 素体で
 あるため（§7.3）、本モジュールが扱うのは公開境界の外側ではない。ただし
@@ -421,10 +423,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--replay",
         action="store_true",
-        help="§29 手順 7 の決定論的 payload replay も実行する（--bundle-root が必要）。",
+        help="§29 手順 7 の決定論的 payload replay も実行する（--bundle-root 必須）。",
     )
     parser.add_argument("--json-out", default=None, help="検証レポートの書き出し先。")
     args = parser.parse_args(argv)
+
+    if args.replay and args.bundle_root is None:
+        # `--replay` を bundle なしで受理して exit 0 を返すと、自動化が
+        # §29 手順 7 を「成功」として記録できてしまう（PR #330 Codex 第 2 巡 P2）。
+        parser.error("--replay には --bundle-root が必要（bundle なしで手順 7 は成立しない）")
 
     if args.bundle_root is None:
         report = verify_ledger_bytes()
@@ -438,7 +445,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 mismatches=problems,
             )
     elif args.replay:
-        report = verify_deterministic_replay(args.bundle_root)
+        # replay は bundle 実体照合の**後**に走らせる（手順 6 → 手順 7 の順序）。
+        report = verify_bundle(args.bundle_root)
+        if report.passed:
+            replay = verify_deterministic_replay(args.bundle_root)
+            report = Af01VerificationReport(
+                verdict=replay.verdict,
+                checks={**report.checks, **replay.checks},
+                mismatches=report.mismatches + replay.mismatches,
+                missing=report.missing + replay.missing,
+                unexpected=report.unexpected + replay.unexpected,
+            )
     else:
         report = verify_bundle(args.bundle_root)
 

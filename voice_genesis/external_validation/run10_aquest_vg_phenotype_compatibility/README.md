@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（158 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（177 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -178,3 +178,21 @@ generative_trait_compatibility_claim: C1-C2
    いた。schema / 凍結ハッシュ / 構造量の宣言を凍結値と照合する。
 7. **cost cap を R10-G0 の対象へ** — cap が PENDING のまま G0 が PASS すると上限なしで
    課金作業を開始できた（§31 / §32 Stop Rule 20）。
+
+### 第 2 巡（P1×3 / P2×2、全件採用）
+
+うち 2 件は第 1 巡の修正が新たに作った穴である。
+
+1. **`.ini` の suffix bypass** — allowlist 反転時に `.ini` を一律公開可にしたため、
+   AQUEST voicebank の `oto.ini` が素通りしていた。`.ini` / `.cfg` を拡張子
+   allowlist から外し、`oto.ini` / `character.txt` / `prefix.map` /
+   `readme.txt` を常時 private 扱いにした。
+2. **evidence 節がスカラを受理** — 「空でなければよい」判定だったため
+   `compatibility_matrix: placeholder` が通り、mapping でないためエントリ検証も
+   飛んでいた。evidence は**非空 mapping** を要求する。
+3. **R10-G15 が要求 Gate 集合から欠落** — Phase B を authorize する Gate 自体を
+   落としたまま `GENERATIVE_COMPATIBILITY_ESTABLISHED` を名乗れた。
+4. **`--replay` が bundle 無しで exit 0** — 自動化が §29 手順 7 を「成功」として
+   記録できた。`--bundle-root` を必須にし、手順 6 を通過した場合にのみ手順 7 へ進む。
+5. **非有限 cost cap** — YAML の `.inf` は `<= 0` を通り抜け、`.nan` はあらゆる
+   順序比較が False になるため、有限の上限なしに R10-G0 が開いた。`math.isfinite` を要求する。

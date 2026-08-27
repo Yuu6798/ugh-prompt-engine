@@ -629,3 +629,59 @@ def test_compatibility_matrix_entries_are_validated_inside_results() -> None:
     doc["compatibility_matrix"] = {"X": {"status": "MOSTLY_COMPATIBLE"}}
     with pytest.raises(m.Run10ContractError, match="未知の値"):
         m.validate_results_document(doc)
+
+
+# --- 第 2 巡: evidence の型契約 / R10-G15 / 非有限 cost cap ----------------
+
+
+@pytest.mark.parametrize("placeholder", ["placeholder", 1, 1.5, True, ["x"], ("x",)])
+def test_evidence_sections_reject_non_mapping_placeholders(placeholder: Any) -> None:
+    """スカラや list を evidence として受理しない（PR #330 Codex 第 2 巡 P1）。
+
+    「空でなければよい」だと `compatibility_matrix: placeholder` が通り、
+    mapping でないためエントリ検証も飛んでいた。
+    """
+    doc = _passing_results()
+    doc["compatibility_matrix"] = placeholder
+    with pytest.raises(m.Run10ContractError, match="compatibility_matrix"):
+        m.validate_results_document(doc)
+
+
+def test_phase_b_entry_requires_g15_in_the_gate_ledger() -> None:
+    """§21 R10-G15: Phase B を authorize する Gate を要求集合から落とさない。"""
+    doc = _passing_results()
+    doc["phase_b_entry"] = "ENTER"
+    doc["scientific_outcome"] = ["GENERATIVE_COMPATIBILITY_ESTABLISHED"]
+    doc["generative_compatibility_matrix"] = {"F1_F2_F3": {"synthesis_status": "x"}}
+    doc["synthesis_validation"] = {
+        "controls": {"G_null": {"n": 1}, "G_target": {"n": 1}, "G_inverse": {"n": 1}},
+        "construction_meter": {"m": "PASS"},
+        "confirmation_meter": {"m2": "PASS"},
+    }
+    doc["hard_gates"] = {gate_id: "PASS" for gate_id, _ in m.PHASE_A_CORE_GATES}
+    doc["hard_gates"].update({gate_id: "PASS" for gate_id, _ in m.PHASE_B_GATES})
+    # R10-G15 だけ欠落させる。
+    with pytest.raises(m.Run10ContractError, match="R10-G15"):
+        m.validate_results_document(doc)
+
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "PASS"
+    m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_cost_cap_rejects_non_finite_values(value: float) -> None:
+    """§31 / §32-20: `.inf` / `.nan` で「有限の上限なし」の G0 開放を作らない。
+
+    inf は `<= 0` を通り抜け、NaN はあらゆる順序比較が False になるため、
+    素朴な正値判定を素通りしていた（PR #330 Codex 第 2 巡 P2）。
+    """
+    with pytest.raises(m.Run10ContractError, match="有限かつ正の数"):
+        m._validate_pin_value("cost_cap.cpu_hours_max", value)
+
+
+def test_cost_cap_non_finite_blocks_gate_g0(contract_doc: Dict[str, Any]) -> None:
+    """contract 経由でも非有限 cap を拒否する（YAML の `.inf` 表記を含む）。"""
+    filled = _fully_pinned(contract_doc)
+    filled["cost_cap"]["cpu_hours_max"] = {"value": float("inf"), "status": "PINNED"}
+    with pytest.raises(m.Run10ContractError, match="有限かつ正の数"):
+        m.parse_run10_contract(filled)

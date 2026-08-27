@@ -95,14 +95,27 @@ RESULTS_ALLOWLIST: Tuple[str, ...] = (".gitignore",)
 # **公開してよいものを列挙し、それ以外はすべて拒否する**方式へ反転する。
 
 # どこに置いても公開してよい拡張子（実装コード・契約・文書）。
+#
+# `.ini` は**入れてはならない**: AQUEST voicebank の `oto.ini` は §7.1 が pin を
+# 要求する private な voicebank メタデータであり、拡張子で一律に公開可にすると
+# `corpus/a0/oto.ini` が素通りする（PR #330 Codex 第 2 巡 P1 — 第 1 巡の
+# allowlist 反転が新たに作った穴）。`.cfg` も同型のリスクがあり、現時点で
+# 必要がないため入れない。設定ファイルを公開したくなったら
+# `PUBLISHABLE_DATA_FILES` へパス単位で明示登録する。
 PUBLISHABLE_SUFFIXES: Tuple[str, ...] = (
     ".py",
     ".md",
     ".yaml",
     ".yml",
     ".toml",
-    ".cfg",
-    ".ini",
+)
+
+# 拡張子が公開可でも、この名前は常に private 扱いにする（voicebank メタデータ）。
+ALWAYS_PRIVATE_NAMES: Tuple[str, ...] = (
+    "oto.ini",
+    "character.txt",
+    "readme.txt",
+    "prefix.map",
 )
 
 # 拡張子を持たない、または特殊なファイル名で公開してよいもの。
@@ -182,6 +195,9 @@ def classify_violation(relative_path: str) -> str | None:
         return f"private 実体資産の拡張子 {path.suffix}（§24 — 音声/render/モデルは commit しない）"
 
     lowered = name.lower()
+    if lowered in ALWAYS_PRIVATE_NAMES:
+        return f"voicebank メタデータは commit しない（§7.1 / §24）: {name}"
+
     for marker in PRIVATE_NAME_MARKERS:
         if marker in lowered:
             return f"private カテゴリのファイル名マーカー {marker!r}（§19 / §26）"

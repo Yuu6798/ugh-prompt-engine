@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -266,8 +267,16 @@ def _validate_pin_value(name: str, value: Any) -> None:
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise Run10ContractError(f"{name}: 正の整数が必要（実際 {value!r}）")
     elif kind == "positive_number":
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-            raise Run10ContractError(f"{name}: 正の数が必要（実際 {value!r}）")
+        # YAML の `.inf` / `.nan` は float である。inf は `<= 0` を通り抜け、
+        # NaN はあらゆる順序比較が False になるため、素朴な正値判定を素通りして
+        # 「有限の上限なしに R10-G0 が開く」（PR #330 Codex 第 2 巡 P2）。
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise Run10ContractError(f"{name}: 有限かつ正の数が必要（実際 {value!r}）")
     else:  # pragma: no cover - _pin_value_format が網羅する
         raise Run10ContractError(f"{name}: 未知の値形式 {kind!r}")
 
@@ -762,10 +771,21 @@ PHASE_B_GATE_IDS: Tuple[str, ...] = tuple(gate_id for gate_id, _ in PHASE_B_GATE
 
 
 def _require_nonempty_section(mapping: Mapping[str, Any], name: str, why: str) -> None:
+    """evidence 節が**非空の mapping** であることを要求する。
+
+    「空でなければよい」では `compatibility_matrix: placeholder` のような
+    スカラが通り、しかも mapping でないためエントリ検証も飛ぶ
+    （PR #330 Codex 第 2 巡 P1 — 第 1 巡で入れた検査の型が緩かった）。
+    """
     section = mapping.get(name)
     if section is None:
         raise Run10ContractError(f"results.{name}: {why} には本節が必要（欠落）")
-    if isinstance(section, (Mapping, list, str)) and len(section) == 0:
+    if not isinstance(section, Mapping):
+        raise Run10ContractError(
+            f"results.{name}: {why} の evidence は mapping でなければならない"
+            f"（実際 {type(section).__name__}）"
+        )
+    if not section:
         raise Run10ContractError(f"results.{name}: {why} には本節が必要（空）")
 
 
@@ -799,8 +819,12 @@ def _validate_results_evidence(
     if verdict == "PASS":
         _validate_gate_ledger(mapping, PHASE_A_GATE_IDS, "protocol_verdict=PASS")
         if entry == "ENTER":
+            # R10-G15 PHASE_B_ENTRY は Phase B を authorize する Gate そのもの
+            # であり、要求集合から落とせない（PR #330 Codex 第 2 巡 P1）。
             _validate_gate_ledger(
-                mapping, PHASE_A_GATE_IDS + PHASE_B_GATE_IDS, "phase_b_entry=ENTER の PASS"
+                mapping,
+                PHASE_A_GATE_IDS + (PHASE_B_ENTRY_GATE[0],) + PHASE_B_GATE_IDS,
+                "phase_b_entry=ENTER の PASS",
             )
     else:
         # BLOCKED / FAILED で成功側 outcome を名乗らせない（§22.1 / §22.2）。

@@ -396,3 +396,33 @@ def test_replay_reports_unreproduced_payload_as_drift(tmp_path: Path, monkeypatc
     report = v.verify_deterministic_replay(root)
     assert report.verdict == v.VERDICT_DRIFT
     assert report.missing == ["b.txt"]
+
+
+# --- 第 2 巡: CLI の --replay 契約（PR #330 Codex 第 2 巡 P2） -------------
+
+
+def test_cli_replay_without_bundle_root_is_rejected() -> None:
+    """bundle なしの `--replay` を exit 0 で受理しない（手順 7 の偽成功を防ぐ）。"""
+    with pytest.raises(SystemExit) as excinfo:
+        v.main(["--replay"])
+    assert excinfo.value.code == 2
+
+
+def test_cli_replay_runs_bundle_verification_first(tmp_path: Path, monkeypatch) -> None:
+    """`--replay` は手順 6（bundle 実体照合）を通過した場合にのみ手順 7 へ進む。"""
+    calls: list[str] = []
+
+    def fake_verify_bundle(root, ledger_path=None):
+        calls.append("bundle")
+        return v.Af01VerificationReport(
+            verdict=v.VERDICT_DRIFT, checks={"payload_files_sha256": "FAIL"}
+        )
+
+    def fake_replay(root, python_executable=None, timeout_s=1800):
+        calls.append("replay")
+        return v.Af01VerificationReport(verdict=v.VERDICT_PASS)
+
+    monkeypatch.setattr(v, "verify_bundle", fake_verify_bundle)
+    monkeypatch.setattr(v, "verify_deterministic_replay", fake_replay)
+    assert v.main(["--bundle-root", str(tmp_path), "--replay"]) == 1
+    assert calls == ["bundle"], "bundle 照合が落ちたら replay へ進んではならない"
