@@ -91,6 +91,17 @@ L2正規化・摂動・ランダム成分・重み調整は一切行わない（
        は解消不能——repo 機構（branch_write_policy + PR レビュー +
        contract pin）を信頼根とする（`run9_schema.py` の各
        `load_pinned_*` 関数が持つ信頼根境界宣言と同型）。
+  (vii) **正常系の repo コミット可能なテスト**（PR #328 Codex レビュー第
+       7巡指摘14、P1、採用対応）: (i)/(ii) の cross-check (8) は
+       `inputs/reexport_manifest.json` の実 emb sha256 pin（rights 制約で
+       repo 非同梱の実バイナリの digest）と `input_embeddings` の一致を
+       強制するため、canonical loader 経由では実 emb バイナリなしに正常系
+       （`reproduced: true`）へ到達できない。`main()` の `manifest_
+       override`（テスト専用 kwarg、CLI フラグ非公開）は canonical loader
+       呼び出しのみを省略し、self-exec 照合 (a)/(b)・compile/exec
+       dispatch (c)・隔離名前空間の本物の `synthesize()` は tmp_path 完結
+       の自己整合フィクスチャに対して実際に実行する——`tests/test_
+       speaker_map_builder.py` 参照。
 
 出力: 384-dim float32 raw バイナリ（`.tobytes()`、既存 emb と同形式）。
 emb バイナリ自体は repo にコミットしない（rights 制約、session workdir /
@@ -482,6 +493,7 @@ def main(
     identity_domain_path: Optional[Path] = None,
     adjudication_basis_path: Optional[Path] = None,
     gate_synth_py_path: Optional[Path] = None,
+    manifest_override: Optional[Dict[str, Any]] = None,
 ) -> int:
     """CLI エントリポイント。**verified self-exec dispatch**（PR #328
     Codex レビュー第6巡指摘13、P1、採用・Fable 確定対応方針）で処理を
@@ -521,6 +533,25 @@ def main(
     `adjudication_basis_path`/`gate_synth_py_path` はいずれもテスト専用
     の override 引数——production 呼び出し（全省略）は repo 相対の正典
     パスのみを消費する。
+
+    `manifest_override`（テスト専用、PR #328 Codex レビュー第7巡指摘14、
+    P1、採用対応で新設）: 指定すると `load_canonical_speaker_map_
+    manifest()` 呼び出し自体を省略し、渡した dict をそのまま (b)/(c) の
+    `data` として使う。**必要な理由**: `load_pinned_speaker_map_
+    manifest()` の cross-check (8)（`founders.<id>.input_embeddings` が
+    `inputs/reexport_manifest.json` の実 emb sha256 pin と一致すること）
+    は repo 内の実在パス（`REEXPORT_MANIFEST_PATH`、override 引数なし）
+    にのみ照合するため、この cross-check を経由する限り正常系
+    （`reproduced: true`）の到達には実 ritsu/user emb バイナリが要る——
+    しかしそのバイナリは rights 制約により repo にコミットできない
+    （モジュール docstring 参照）。一方 (a)/(b) の self-exec 照合と (c) の
+    compile/exec dispatch 自体は `data` の出所（canonical loader か
+    override か）に依存しない独立した防御であり、`manifest_override` は
+    その2つ + 隔離名前空間の本物の `synthesize()` を、tmp_path で完結する
+    自己整合フィクスチャに対して実際に実行させるための穴——`argparse` の
+    CLI フラグとしては公開しない（production 呼び出しからは到達不能、
+    テストの直接キーワード引数経由でのみ使う）。省略時（`None`）の挙動は
+    従来と完全に同一（`load_canonical_speaker_map_manifest()` を経由）。
     """
     args = _build_argument_parser().parse_args(argv)
 
@@ -538,18 +569,21 @@ def main(
     # compile・exec する。パスを再読込しない（TOCTOU 対策の核心）。
     source_bytes = effective_running_builder_path.read_bytes()
 
-    try:
-        data = load_canonical_speaker_map_manifest(
-            contract_path=contract_path,
-            manifest_path=manifest_path,
-            rights_manifest_path=rights_manifest_path,
-            identity_domain_path=identity_domain_path,
-            adjudication_basis_path=adjudication_basis_path,
-            gate_synth_py_path=gate_synth_py_path,
-        )
-    except m.Run9ValidationError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
+    if manifest_override is not None:
+        data = manifest_override
+    else:
+        try:
+            data = load_canonical_speaker_map_manifest(
+                contract_path=contract_path,
+                manifest_path=manifest_path,
+                rights_manifest_path=rights_manifest_path,
+                identity_domain_path=identity_domain_path,
+                adjudication_basis_path=adjudication_basis_path,
+                gate_synth_py_path=gate_synth_py_path,
+            )
+        except m.Run9ValidationError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
 
     # (b) 照合に使う sha256 は (a) で読んだ同一バッファから導出する。
     actual_sha = _sha256_bytes(source_bytes)

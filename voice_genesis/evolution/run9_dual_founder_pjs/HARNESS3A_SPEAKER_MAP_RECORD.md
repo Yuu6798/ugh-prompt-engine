@@ -725,6 +725,98 @@ exit 0）を確認した**。canonical loader・cross-check (b) の profile_labe
   source()`/`_execute_cli()`/`_build_argument_parser()` を新設）へ再構成
   （指摘13対応）。
 
+## 追記: PR #328 Codex レビュー第7巡指摘14（採用）対応 —
+## verified self-exec dispatch 正常系 end-to-end テストの新設
+## （2026-08-27、Claude 完結ルート）
+
+第6世代 repin 後の `tests/test_speaker_map_builder.py` に対し、第7巡で
+以下1件（P1）が指摘された（採用・Fable 確定方針）。
+
+- **指摘14（P1）**: 「正常系」テストの実体は `/dev/null` 入力で exit 1
+  （拒否経路）を assert するのみで、真の成功系（`reproduced: true`）は
+  `_execute_cli()` へ fake 関数を直接注入して検証していた——`main()` 自身
+  の canonical loading・source-pin 照合（self-exec 照合）・compile/exec
+  dispatch は一切経由しないため、これらのいずれかが全拒否に回帰しても
+  テストスイートが green のままという穴があった。
+
+### 対応
+
+`main()` を実際に呼び出し、self-exec 照合 → compile/exec dispatch →
+隔離名前空間の本物の `synthesize()`、という production 経路を実際に
+踏破して exit 0・`reproduced: true` に到達する正常系 end-to-end テストを
+新設した（`test_main_verified_self_exec_dispatch_happy_path_synthetic_
+fixture_reproduced_true`）。
+
+**オーバーライド追加の要否**: 必要と判断した。`load_pinned_speaker_map_
+manifest()` の cross-check (8) は `founders.<id>.input_embeddings` が
+`inputs/reexport_manifest.json`（override 引数なし、常に repo 内実パス）
+の実 emb sha256 pin と一致することを machine 強制するため、canonical
+loader を経由する限り、正常系（`reproduced: true`）の到達には rights 制約
+で repo 非同梱の実 ritsu/user emb バイナリが要る——`contract_path`/
+`manifest_path` 等の既存 override 引数をどう組み合わせても
+`load_pinned_reexport_manifest()` 呼び出し自体が `RUN9_CONTRACT_YAML_
+PATH`/`REEXPORT_MANIFEST_PATH`（いずれも `run9_schema.py` 内で固定、
+override 引数なし）を必ず経由するため回避できない（`run9_schema.py` は
+本指摘のスコープ外——変更していない）。このため `main()` へテスト専用
+kwarg `manifest_override`（`argparse` の CLI フラグとしては非公開）を
+新設し、指定時のみ `load_canonical_speaker_map_manifest()` 呼び出しを
+省略して渡した dict をそのまま使う——(a)/(b) の self-exec 照合と (c) の
+compile/exec dispatch は `data` の出所に依存しない独立した防御のため、
+tmp_path 完結の自己整合フィクスチャに対しても両方とも実際に実行される。
+省略時（`None`、production 経路）の挙動は従来と完全に同一。
+
+新テストは (1) tmp_path 上に固定小ベクトルの fake ritsu/user emb
+（384-dim float32）を書き出し、(2) 実行時点の `speaker_map_builder.py`
+実バイトから動的に `builder_sha256` を計算し（ハードコード値ではなく
+`Path.read_bytes()` + `sha256()` で実測——将来 builder が再度改変されても
+このテスト自体は追随不要）、(3) `run9_schema._evaluate_closed_weight_
+expr()` で独立に評価した重みで期待合成ベクトル・期待 sha256 を事前計算し、
+(4) これらを収載した最小限の自己整合 `manifest_override` dict を構築して
+`main()` を実際に呼び出す。`rc == 0`・stdout JSON の `reproduced: true`・
+`--out` 実書き込みバイトが期待合成ベクトルと完全一致、を assert する。
+
+**検出力の確認**: 既存の TOCTOU 負例テスト
+（`test_main_verified_self_exec_dispatch_bypasses_monkeypatched_module_
+attribute`）は `smb.synthesize`（モジュール属性）改変が実処理に影響
+しないことを rc==1 側で確認済み——新テストはその対称（rc==0 側）を
+実際の隔離名前空間 `synthesize()` 呼び出しで確認するため、self-exec
+dispatch が「常に拒否する」方向へ壊れた回帰（例: 隔離名前空間の
+`synthesize` 取得や `_execute_cli` への配線が誤って例外を握り潰し常に
+`rc=1` を返すよう変質する等）を新テストの `rc == 0` assert が直接検出
+できる。
+
+### manifest/contract への反映
+
+- `speaker_map_builder.py`: `main()` へテスト専用 kwarg `manifest_
+  override`（`Optional[Dict[str, Any]]`、既定 `None`）を新設。指定時は
+  `load_canonical_speaker_map_manifest()` 呼び出しを省略する以外の挙動
+  （self-exec 照合・compile/exec dispatch・`_execute_cli()` 配線）は
+  一切変更していない。
+- `inputs/speaker_map_manifest.json`: `builder_provenance.builder_sha256`
+  を `speaker_map_builder.py` の新しい実バイト sha256
+  （`52b8c36a6b0fa64f8612d9d2585e167a9fba35f0a21abcb871b81ffb70b34079`）へ
+  更新。既存の founder 実測値（合成 embedding sha256・render sha256・
+  秒数・`pre_pin_verification_summary` 6点・重み式そのもの・
+  `profile_label`）は一切変更していない。
+- `RUN9_CONTRACT.yaml` `expected_speaker_map_sha`: manifest 実バイトが
+  変わったため第7世代へ repin（
+  `97bb0b46427d3fd886083f02431d3cf7643508c551feab7677ba3b76f3a2ab68`。
+  旧値 = 第6世代、`31eca739390feae363d0ec8a1a2e9a8b653c9106327e02fe30a17
+  c606f9ed099` は履歴として contract コメントに保持）。
+- `run9_schema.py`: 変更なし（本指摘のスコープ外——cross-check (8) の
+  実装はそのまま）。
+
+### builder 再現実測（両 founder）— 第7世代 repin 後の CLI 再実行
+
+`manifest_override` 追加後の `speaker_map_builder.py`（`--founder`
+フラグ経由の通常 CLI、`manifest_override` は不使用）を、workdir 現存の
+実 ritsu/user emb（`reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.
+{ritsu,user}.emb`、入力 sha256 = `ce4b87b9...`/`588913b7...`、reexport
+manifest pin と一致）に対し両 founder で再実行し、いずれも
+`reproduced: true`（出力 sha256 が manifest pin `fc7b73fd...`/
+`0a681a2c...` と完全一致・exit 0）を再確認した——`manifest_override` の
+新設は production 経路（省略時）の挙動に一切影響しないことの直接証拠。
+
 ## 逸脱・停止事由
 
 **第1〜3巡分**: なし。検証6点すべて PASS、repo ファイル変更ゼロ、
@@ -744,4 +836,9 @@ verified self-exec dispatch 経由の両 founder 再現実測）すべて PASS�
 ロジック自体・両 founder の実測出力 sha256 は本対応で変更していない
 （変更対象は builder 自己照合の実装方式と cross-check (b) の
 profile_label 追加のみ）。
+
+**第7巡分（指摘14）**: なし。検証（`ruff check .`/対象テスト全件/
+`manifest_override` 追加後の CLI 経由の両 founder 再現実測）すべて PASS。
+合成ロジック自体・両 founder の実測出力 sha256 は本対応で変更していない
+（変更対象は `main()` へのテスト専用 kwarg 追加のみ）。
 ruff/pytest は全件 PASS。

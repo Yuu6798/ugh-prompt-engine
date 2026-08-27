@@ -10,6 +10,7 @@ manifest dict のみを用いる。**実 ritsu/user emb バイナリは repo へ
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -617,6 +618,84 @@ def test_main_verified_self_exec_dispatch_real_repo_data_unknown_founder_rejecte
     `synthesize()` 側の fail-closed 分岐を直接検証する）。"""
     argv = ["--founder", "R9F-01", "--ritsu-emb", "/dev/null", "--user-emb", "/dev/null"]
     assert smb.main(argv) == 1
+
+
+# --- main(): 正常系 end-to-end（PR #328 Codex レビュー第7巡指摘14、P1、 ---
+# --- 採用・Fable 確定対応方針）--------------------------------------------
+#
+# 上記の拒否系テストは `main()` の canonical loading・self-exec 照合・
+# compile/exec dispatch を実際に経由するが、いずれも rc==1（fail-closed
+# 拒否経路）しか確認しない。旧来の唯一の「正常系」テスト
+# （`test_execute_cli_writes_atomically_via_out_flag`）は `main()` 自体を
+# 呼ばず `_execute_cli()` へ fake 関数を直接注入していたため、`main()` の
+# canonical loading・source-pin 照合（self-exec 照合）・compile/exec
+# dispatch のいずれかが全拒否に回帰してもテストスイートが green のまま
+# という穴があった（本指摘の核心）。
+#
+# `load_pinned_speaker_map_manifest()` の cross-check (8) は
+# `founders.<id>.input_embeddings` が `inputs/reexport_manifest.json`
+# （`run9_schema.py` 内で固定・override 引数なし）の実 emb sha256 pin と
+# 一致することを machine 強制するため、canonical loader を経由する限り
+# 正常系（`reproduced: true`）の到達には rights 制約で repo 非同梱の実
+# ritsu/user emb バイナリが要る。このため `main()` へテスト専用 kwarg
+# `manifest_override`（`argparse` の CLI フラグとしては非公開）を新設し、
+# 指定時は `load_canonical_speaker_map_manifest()` 呼び出しのみを省略する
+# ——self-exec 照合 (a)/(b) と compile/exec dispatch (c) は `data` の出所
+# に依存しない独立した防御のため、tmp_path 完結の自己整合フィクスチャに
+# 対しても実際に実行される（`speaker_map_builder.py` docstring 契約
+# (vii) 参照）。
+
+
+def test_main_verified_self_exec_dispatch_happy_path_synthetic_fixture_reproduced_true(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """正常系 end-to-end: `main()` を実際に呼び出し、self-exec 照合
+    （実行中の `speaker_map_builder.py` の実バイト sha256 と
+    `manifest_override["builder_provenance"]["builder_sha256"]` の一致）
+    → compile/exec dispatch（隔離名前空間の構築）→ 隔離名前空間の本物の
+    `synthesize()` による検証、という production 経路を実際に踏破して
+    exit 0・`reproduced: true` に到達することを確認する。
+
+    `builder_sha256` は実行時点の `speaker_map_builder.py` を実際に読んで
+    動的に計算する（ハードコード値ではない——builder が将来改変されても
+    本テスト自体は追随不要で、self-exec 照合が実際に機能していることの
+    直接証拠でもある）。ritsu/user emb は固定小ベクトルの合成データ
+    （`_synthetic_manifest_and_inputs()` と同型の構築規約）、期待合成
+    ベクトル/sha256 は `run9_schema._evaluate_closed_weight_expr()` で
+    独立に評価した重みから事前計算する——builder 内部実装への依存を避けた
+    直接の数値証拠。"""
+    real_builder_path = _RUN_DIR / "speaker_map_builder.py"
+    builder_sha256 = _sha256(real_builder_path.read_bytes())
+
+    ritsu_vec = np.full(_DIM, 2.0, dtype=np.float32)
+    user_vec = np.full(_DIM, 4.0, dtype=np.float32)
+    manifest_override, ritsu_path, user_path, expected_synth = _synthetic_manifest_and_inputs(
+        tmp_path, ritsu_vec=ritsu_vec, user_vec=user_vec,
+        w_ritsu_expr="0.75", w_user_expr="0.25",
+    )
+    manifest_override["builder_provenance"] = {"builder_sha256": builder_sha256}
+    expected_sha = _sha256(expected_synth.tobytes())
+
+    out_path = tmp_path / "out.emb"
+    argv = [
+        "--founder", "R9F-01",
+        "--ritsu-emb", str(ritsu_path),
+        "--user-emb", str(user_path),
+        "--out", str(out_path),
+    ]
+    rc = smb.main(argv, manifest_override=manifest_override)
+    assert rc == 0
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    # self-exec 照合・canonical loading の代替経路・compile/exec dispatch
+    # を実際に経由した本物の synthesize() が返した report であること
+    # （forged ではない）の直接証拠。
+    assert report["reproduced"] is True
+    assert report["out_sha256"] == expected_sha
+    assert report["expected_sha256_per_manifest"] == expected_sha
+    # --out 実書き込みバイトが期待合成ベクトルと完全一致すること。
+    assert out_path.read_bytes() == expected_synth.tobytes()
 
 
 def test_main_verified_self_exec_dispatch_source_bytes_mismatch_rejected(

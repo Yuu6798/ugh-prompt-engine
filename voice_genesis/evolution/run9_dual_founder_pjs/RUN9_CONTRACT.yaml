@@ -1508,8 +1508,37 @@ seed_policy_sha:
 # RECORD.md` 追記記録参照）。旧 pin 値（第5世代、PR #328 第4巡指摘9対応後）
 # は履歴として保持する:
 #   43e68fde685d55a190e6fab0caa18381bdc2e31456558287f2b0d176df2c3167
+#
+# 2026-08-27 第7世代 repin（PR #328 Codex レビュー第7巡指摘14、P1、採用。
+# Claude 完結ルート）: 旧「正常系」テストは `main()` を素通りし
+# `_execute_cli()` へ fake 関数を直接注入していたため、`main()` の
+# canonical loading・self-exec 照合（source_bytes と `builder_provenance.
+# builder_sha256` の一致）・compile/exec dispatch のいずれかが全拒否に
+# 回帰してもテストスイートが green のまま気付けない穴があった。
+# `load_pinned_speaker_map_manifest()` の cross-check (8) は
+# `inputs/reexport_manifest.json` の実 emb sha256 pin（rights 制約により
+# repo 非同梱の実バイナリの digest）と `input_embeddings` の一致を強制
+# するため、canonical loader を経由する限り正常系（`reproduced: true`）を
+# 実 emb バイナリなしに repo コミット可能な形で再現することはできない
+# ——`main()` へテスト専用 kwarg `manifest_override`（CLI フラグとしては
+# 非公開、canonical loader 呼び出しのみを省略する）を新設し、self-exec
+# 照合・compile/exec dispatch・隔離名前空間の本物の `synthesize()` は
+# tmp_path 完結の自己整合フィクスチャに対して実際に実行させる正常系
+# end-to-end テストを `tests/test_speaker_map_builder.py` へ追加した
+# （`main()` を直接呼び exit 0・`reproduced: true`・出力 emb バイト一致を
+# assert する）。本対応は speaker map の実測事実（各 founder の合成
+# embedding sha256・render sha256・秒数・pre_pin_verification_summary の
+# 6点 PASS・重みの実効値そのもの）を一切変更しない——speaker_map_
+# builder.py の実バイトが変わったことによる builder_provenance.
+# builder_sha256 repin のみが本欄の repin 理由。builder 再現実測を
+# workdir 現存の実 emb（`reexport_out/onnx_gate_40000/`）に対し新
+# `manifest_override` 追加後の CLI で再実行し、両 founder の出力 sha256
+# （`fc7b73fd...`/`0a681a2c...`）が pin 値と不変のまま一致することを
+# 再確認済み（`HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照）。旧 pin 値
+# （第6世代、PR #328 第6巡指摘13対応後）は履歴として保持する:
+#   31eca739390feae363d0ec8a1a2e9a8b653c9106327e02fe30a17c606f9ed099
 expected_speaker_map_sha:
-  value: "31eca739390feae363d0ec8a1a2e9a8b653c9106327e02fe30a17c606f9ed099"
+  value: "97bb0b46427d3fd886083f02431d3cf7643508c551feab7677ba3b76f3a2ab68"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/speaker_map_manifest.json
 
