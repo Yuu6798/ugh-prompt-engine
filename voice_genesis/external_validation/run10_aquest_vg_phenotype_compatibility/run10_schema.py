@@ -121,6 +121,12 @@ COMPATIBILITY_STATUS: Tuple[str, ...] = (
     "UNCALIBRATED",
 )
 
+# §16: 生成互換が「成立した」と読める status（Phase B を実際に回した行に限る）。
+GENERATIVE_SUCCESS_STATUS: Tuple[str, ...] = (
+    "GENERATIVELY_COMPATIBLE",
+    "GENERATIVELY_PARTIAL",
+)
+
 GENERATIVE_STATUS: Tuple[str, ...] = (
     "GENERATIVELY_COMPATIBLE",
     "GENERATIVELY_PARTIAL",
@@ -1439,8 +1445,15 @@ def _validate_results_evidence(
             if not isinstance(entry_doc, Mapping):  # pragma: no cover - 上で送出済み
                 continue
             # §15.1 / §20.1: status だけの行で比較地図成立を主張させない。
+            # `is None` だけを見ると `support: []` / `calibration: ""` /
+            # `holdout: {}` が「在る」と数えられ、per-trait evidence が空の
+            # まま比較地図の成立を主張できる（PR #330 Codex 第 23 巡 P1）。
+            # 第 5 巡で導入した `_is_absent_evidence()`（0 や false は在るもの
+            # として扱い、空コンテナだけを不在とする）をここにも適用する。
             lacking = [
-                key for key in _COMPATIBILITY_ENTRY_REQUIRED if entry_doc.get(key) is None
+                key
+                for key in _COMPATIBILITY_ENTRY_REQUIRED
+                if _is_absent_evidence(entry_doc, key)
             ]
             if lacking:
                 raise Run10ContractError(
@@ -1573,6 +1586,18 @@ def assert_generative_entry(trait_id: str, entry: Any) -> None:
         raise Run10ContractError(
             f"{trait_id}: AQUEST_ONLY_CANDIDATE は NOT_SYNTHESIS_ELIGIBLE 以外になれない"
         )
+    # 行の Phase B 実行状態と生成成否の整合（PR #330 Codex 第 23 巡 P1）。
+    # 行状態を enum とだけ照合していたため、`synthesis_status:
+    # GENERATIVELY_COMPATIBLE` と `phase_b_entry: SKIP` を同時に載せられた —
+    # 「この形質は Phase B を回していない」と「生成互換が成立した」を同じ行が
+    # 主張する自己矛盾である。生成側の成立は Phase B を実際に回した行にしか
+    # 起こり得ない。
+    if status in GENERATIVE_SUCCESS_STATUS and entry_state is not None:
+        if entry_state != "ENTER":
+            raise Run10ContractError(
+                f"{trait_id}: synthesis_status={status} は phase_b_entry=ENTER の行"
+                f"でしか成立しない（実際 {entry_state!r}）— §16 / §20.3"
+            )
 
 
 # ---------------------------------------------------------------------------

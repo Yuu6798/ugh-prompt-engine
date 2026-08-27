@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（367 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（395 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -628,3 +628,19 @@ User 裁定による**意図的な不在**であり、参照は契約 pin で既
    BLOCKED のいずれでも「行われた」ことを意味するので、記録を省けるのは
    Entry へ到達しなかった `NOT_REACHED` だけである
    （`_ENTRY_STATES_REQUIRING_ADJUDICATION`）。
+
+### 第 23 巡（P1×2）
+
+1. **空コンテナを「evidence が在る」と数えていた** — 成功側 outcome での
+   per-trait 必須欄を `is None` だけで見ていたため、`support: []` /
+   `calibration: ""` / `holdout: {}` が通り、evidence が空のまま比較地図の
+   成立を主張できた。第 5 巡で導入済みの `_is_absent_evidence()`（0 や false は
+   在るものとして扱い、空コンテナだけを不在とする）をここにも適用した。
+   第 22 巡の `verify_design_document()` と同型で、**ヘルパは在るのに
+   適用されていない**箇所だった。
+2. **生成行が自己矛盾を載せられた** — 行の `phase_b_entry` を enum とだけ
+   照合していたため、`synthesis_status: GENERATIVELY_COMPATIBLE` と
+   `phase_b_entry: SKIP` を同じ行が同時に主張できた（「この形質は Phase B を
+   回していない」と「生成互換が成立した」）。生成側の成立は Phase B を実際に
+   回した行にしか起こり得ないので、`GENERATIVE_SUCCESS_STATUS` の行は
+   `ENTER` を要求する。不成立側の行は回していない状態を記録できる。

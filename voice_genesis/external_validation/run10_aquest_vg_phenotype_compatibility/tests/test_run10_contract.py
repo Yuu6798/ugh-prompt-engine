@@ -1764,3 +1764,81 @@ def test_adjudication_requirement_covers_every_decided_state() -> None:
     assert set(m._ENTRY_STATES_REQUIRING_ADJUDICATION) == (
         set(m.PHASE_B_ENTRY_STATES) - {m.GATE_NOT_EXECUTED}
     )
+
+
+# --- 第 23 巡: 空 evidence / 生成行の自己整合（第 23 巡 P1×2）--------------
+
+
+@pytest.mark.parametrize("key", ["support", "calibration", "holdout"])
+@pytest.mark.parametrize("empty", [[], "", {}, None])
+def test_compatibility_row_rejects_empty_evidence(key: str, empty: Any) -> None:
+    """空コンテナを「evidence が在る」と数えない。
+
+    `is None` だけを見ていたため `support: []` / `calibration: ""` /
+    `holdout: {}` が通り、per-trait evidence が空のまま比較地図の成立を
+    主張できた（PR #330 Codex 第 23 巡 P1）。
+    """
+    doc = _passing_results()
+    doc["compatibility_matrix"]["F1_F2_F3"][key] = empty
+    with pytest.raises(m.Run10ContractError, match="成功側 outcome には"):
+        m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize("falsy", [0, 0.0, False])
+def test_compatibility_row_keeps_meaningful_zero(falsy: Any) -> None:
+    """0 / false は意味のある測定値であり、不在と混同しない（偽陽性の確認）。"""
+    doc = _passing_results()
+    doc["compatibility_matrix"]["F1_F2_F3"]["holdout"] = falsy
+    m.validate_results_document(doc)
+
+
+def _generative_doc() -> Dict[str, Any]:
+    doc = _passing_results()
+    doc["phase_b_entry"] = "ENTER"
+    doc["scientific_outcome"] = ["GENERATIVE_COMPATIBILITY_ESTABLISHED"]
+    doc["hard_gates"].update({gate_id: "PASS" for gate_id, _ in m.PHASE_B_GATES})
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "PASS"
+    doc["synthesis_validation"] = {
+        "controls": {"G_null": {"n": 1}, "G_target": {"n": 1}, "G_inverse": {"n": 1}},
+        "construction_meter": {"m": "PASS"},
+        "confirmation_meter": {"m2": "PASS"},
+    }
+    return doc
+
+
+@pytest.mark.parametrize("status", ["GENERATIVELY_COMPATIBLE", "GENERATIVELY_PARTIAL"])
+@pytest.mark.parametrize("row_entry", ["SKIP", "BLOCKED", "NOT_REACHED", "NOT_ELIGIBLE"])
+def test_generative_success_row_requires_entered_phase_b(status: str, row_entry: str) -> None:
+    """「Phase B を回していない」と「生成互換が成立した」を同じ行が言えない。"""
+    doc = _generative_doc()
+    doc["generative_compatibility_matrix"] = {
+        "F1_F2_F3": {"synthesis_status": status, "phase_b_entry": row_entry}
+    }
+    with pytest.raises(m.Run10ContractError, match="phase_b_entry=ENTER の行"):
+        m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize("status", ["GENERATIVELY_COMPATIBLE", "GENERATIVELY_PARTIAL"])
+def test_generative_success_row_with_enter_passes(status: str) -> None:
+    """ENTER を記録した行は通る（偽陽性の確認）。"""
+    doc = _generative_doc()
+    doc["generative_compatibility_matrix"] = {
+        "F1_F2_F3": {"synthesis_status": status, "phase_b_entry": "ENTER"}
+    }
+    m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize("status", ["NOT_SYNTHESIS_ELIGIBLE", "NOT_EVALUABLE"])
+def test_non_success_rows_may_record_a_skipped_entry(status: str) -> None:
+    """不成立側の行は Phase B を回していない状態を記録できる。"""
+    doc = _generative_doc()
+    doc["generative_compatibility_matrix"] = {
+        "F1_F2_F3": {"synthesis_status": "GENERATIVELY_COMPATIBLE", "phase_b_entry": "ENTER"},
+        "F4_OTHER": {"synthesis_status": status, "phase_b_entry": "NOT_ELIGIBLE"},
+    }
+    m.validate_results_document(doc)
+
+
+def test_generative_success_status_is_a_declared_subset() -> None:
+    """成立側 status の集合が §16 の enum の部分集合であること。"""
+    assert set(m.GENERATIVE_SUCCESS_STATUS) < set(m.GENERATIVE_STATUS)
