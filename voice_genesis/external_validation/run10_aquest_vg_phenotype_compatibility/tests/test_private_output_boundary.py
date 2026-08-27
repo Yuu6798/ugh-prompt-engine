@@ -175,23 +175,49 @@ def test_future_output_directories_are_denied_by_allowlist(path: str) -> None:
         "measurement/extract_features.py",
         "calibration/validate_meters.py",
         "evaluation/adjudicate_run10.py",
-        "calibration/measurement_decision_spec.yaml",
-        "synthesis_validation/phase_b_entry_spec.yaml",
+        "synthesis_validation/generate_g_null_target_inverse.py",
         "corpus/README_PRIVATE_ASSET_BOUNDARY.md",
     ],
 )
-def test_implementation_files_in_future_directories_are_allowed(path: str) -> None:
-    """コード・契約・文書は将来ディレクトリでも通す（偽陽性で運用不能にしない）。"""
+def test_implementation_code_in_future_directories_is_allowed(path: str) -> None:
+    """実装コードと列挙済み文書は将来ディレクトリでも通す（偽陽性で運用不能にしない）。"""
     assert pb.classify_violation(f"{pb.RUN10_TREE}/{path}") is None
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "measurement/compatibility_matrix.yaml",
+        "calibration/raw_values.yml",
+        "evaluation/aggregate_table.md",
+        "aggregate_table.md",
+        "calibration/measurement_decision_spec.yaml",
+        "synthesis_validation/phase_b_entry_spec.yaml",
+    ],
+)
+def test_non_code_requires_explicit_path_enumeration(path: str) -> None:
+    """コード以外は拡張子では通さない（PR #330 Codex 第 3 巡 P1）。
+
+    `.md` / `.yaml` を拡張子で一律許可すると `evaluation/aggregate_table.md` や
+    `measurement/compatibility_matrix.yaml` がツリーのどこにでも置けた。
+    公開が必要な契約・仕様は PUBLISHABLE_DATA_FILES へ 1 行足して初めて通る。
+    """
+    assert pb.classify_violation(f"{pb.RUN10_TREE}/{path}") is not None
+
+
+def test_only_code_is_publishable_by_suffix() -> None:
+    """拡張子だけで公開可になるのは実装コードのみ（同型再発の防止）。"""
+    assert pb.PUBLISHABLE_SUFFIXES == (".py",)
+
+
 def test_every_tracked_data_file_is_explicitly_listed() -> None:
-    """公開中の JSON / TXT が allowlist に明示登録されている（暗黙許可を作らない）。"""
+    """追跡中の非コードファイルがすべて allowlist に明示登録されている。"""
     tracked = pb.git_tracked_files(pb.repo_root())
     data = [
         pb._tree_relative(t)
         for t in tracked
-        if Path(t).suffix.lower() in (".json", ".txt", ".csv", ".tsv")
+        if Path(t).suffix.lower() not in pb.PUBLISHABLE_SUFFIXES
+        and Path(t).name not in pb.PUBLISHABLE_NAMES
     ]
     assert data, "追跡中の構造 manifest が 1 件も無いのは想定外"
     assert set(data) <= set(pb.PUBLISHABLE_DATA_FILES)

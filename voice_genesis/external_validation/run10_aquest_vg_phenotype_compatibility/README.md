@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（177 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（196 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -196,3 +196,32 @@ generative_trait_compatibility_claim: C1-C2
    記録できた。`--bundle-root` を必須にし、手順 6 を通過した場合にのみ手順 7 へ進む。
 5. **非有限 cost cap** — YAML の `.inf` は `<= 0` を通り抜け、`.nan` はあらゆる
    順序比較が False になるため、有限の上限なしに R10-G0 が開いた。`math.isfinite` を要求する。
+
+### 第 3 巡（P1×3 / P2×1、全件採用 + ファミリー終端宣言）
+
+1. **公開境界を「コード以外はパス列挙」へ最終化** — 第 2 巡で `.ini` を外したが、
+   `.md` / `.yaml` は拡張子で一律許可のままだったため
+   `evaluation/aggregate_table.md` や `measurement/compatibility_matrix.yaml` が
+   ツリーのどこにでも置けた。拡張子だけで公開可になるのは `.py` のみとし、
+   それ以外は `PUBLISHABLE_DATA_FILES` へのパス単位列挙を必須にした。
+   **この方式変更で suffix bypass のファミリーを終端する。**
+2. **evidence 節の形状契約** — 非空 mapping であるだけでは `{"placeholder": true}` が
+   通っていた。設計が節ごとに明示する固定欄（§7.6/§12.5 の E0 回収と overfit 信号、
+   §14.6 の 4 欄、§18 の ΔA/ΔV/D_output、§14.2 の replay 3 欄）を要求し、
+   `compatibility_matrix` の各行にも §15.1/§20.1 の `support` / `calibration` /
+   `holdout` を要求する。
+3. **Phase B 由来 outcome の不変条件** — `GENERATIVE_COMPATIBILITY_ESTABLISHED` だけを
+   `phase_b_entry=ENTER` に縛っていたため、`MEASUREMENT_ONLY_COMPATIBILITY`（§16.3）を
+   SKIP のまま名乗れた。synthesis 由来の結論を一括で縛る。
+4. **bundle 外への symlink** — 外部ファイルへの symlink を並べた薄いディレクトリが
+   「完全な AF01 bundle」として通り得た。台帳パスの字句検査と解決後の
+   containment を hash 前に要求する。
+
+#### 境界宣言 — evidence 検証の深さ
+
+evidence 節の形状契約は、**DESIGN_RUN10 が節ごとに明示している欄まで**を要求する。
+各欄の内側の値域・単位・数値妥当性は、§11 measurement family と §14.6
+`measurement_decision_spec` が実装されるまで検証しない。存在しない測定契約を
+先取りして発明しないためであり、深化は measurement 層の実装 PR で
+`_EVIDENCE_SECTION_SHAPE` を拡張して行う。同一領域 3 巡（AGENTS.md §3-4）に
+達したため、本 PR ではこの境界で終端する。

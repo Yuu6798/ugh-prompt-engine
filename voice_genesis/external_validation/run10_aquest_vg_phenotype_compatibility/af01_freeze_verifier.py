@@ -255,16 +255,31 @@ def verify_bundle(
 
     missing: List[str] = []
     mismatches: List[str] = []
+    escaping: List[str] = []
+    resolved_root = root.resolve()
     for relative, expected in sorted(entries.items()):
         target = root / relative
+        # bundle の外を指す symlink を辿って hash すると、外部ファイルへの
+        # symlink を並べた薄いディレクトリが「完全な AF01 bundle」として
+        # 通ってしまう（PR #330 Codex 第 3 巡 P2）。payload バイトが bundle に
+        # 含まれていることを、字句上と解決後の両方で要求する。
+        if ".." in Path(relative).parts or Path(relative).is_absolute():
+            escaping.append(f"{relative}: 台帳のパスが bundle 外を指す字句を含む")
+            continue
         if not target.is_file():
             missing.append(relative)
+            continue
+        resolved = target.resolve()
+        if resolved_root not in resolved.parents:
+            escaping.append(f"{relative}: 解決後 {resolved} が bundle root の外")
             continue
         actual = compute_file_sha256(target)
         if actual != expected:
             mismatches.append(f"{relative}: expected={expected} actual={actual}")
     checks["payload_files_present"] = "PASS" if not missing else "FAIL"
     checks["payload_files_sha256"] = "PASS" if not mismatches else "FAIL"
+    checks["payload_contained_in_bundle"] = "PASS" if not escaping else "FAIL"
+    mismatches.extend(escaping)
 
     known = set(entries) | set(LEDGER_EXCLUDED_NAMES)
     unexpected = sorted(
@@ -274,7 +289,7 @@ def verify_bundle(
     )
     checks["no_unledgered_payload"] = "PASS" if not unexpected else "FAIL"
 
-    failed = problems or missing or mismatches or unexpected
+    failed = problems or missing or mismatches or unexpected or escaping
     return Af01VerificationReport(
         verdict=VERDICT_DRIFT if failed else VERDICT_PASS,
         checks=checks,

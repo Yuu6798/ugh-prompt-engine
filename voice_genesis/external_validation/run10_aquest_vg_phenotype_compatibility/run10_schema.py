@@ -765,9 +765,66 @@ _EVIDENCE_FOR_OUTCOME: Dict[str, Tuple[str, ...]] = {
     ),
 }
 
+# §16: Phase B が走らなければ出ない outcome。
+PHASE_B_DERIVED_OUTCOMES: Tuple[str, ...] = (
+    "GENERATIVE_COMPATIBILITY_ESTABLISHED",
+    "MEASUREMENT_ONLY_COMPATIBILITY",
+)
+
+# evidence 節の**形状契約**（閉世界）。節が非空 mapping であるだけでは
+# `{"placeholder": true}` が通り、実体のない成功を記録できる
+# （PR #330 Codex 第 1〜3 巡が同一領域で 3 度露出させた）。各節に設計が
+# 명示する固定欄を要求してファミリーを終端させる。
+#
+# 【境界宣言】本表は DESIGN_RUN10 が節ごとに明示している欄までを要求する。
+# 各欄の**内側**の値域・単位・数値妥当性は、§11 measurement family と
+# §14.6 measurement_decision_spec が実装されるまで検証しない（存在しない
+# 測定契約を先取りして発明しないため）。measurement 層の実装 PR で
+# `_EVIDENCE_SECTION_SHAPE` を深める。
+_EVIDENCE_SECTION_SHAPE: Dict[str, Tuple[str, ...]] = {
+    # §7.6 / §12.3 / §12.5 / §12.6: E0 独立校正の回収結果と overfit 信号。
+    "external_calibration": (
+        "e0_parameter_recovery",
+        "meter_calibration_status",
+        "measurement_overfit_signal",
+    ),
+    # §14.6 measurement_decision_spec.yaml が本測定前に freeze する欄。
+    "decision_rules": (
+        "minimum_support",
+        "calibration",
+        "equivalence",
+        "context_persistence",
+    ),
+    # §18.1 / §18.2 / §18.3。
+    "path_effects": ("delta_a_path", "delta_v_path", "d_output"),
+    # §14.2 / §28-84 / §28-85 / §28-86。
+    "replay": ("same_process", "cross_process", "feature_json_sha"),
+    # §20.3: 測定互換と生成互換を別列で保存する。
+    "generative_compatibility_matrix": (),
+    # §17 の候補登録簿。
+    "novel_trait_candidates": (),
+    # §20.2。
+    "difference_map": (),
+    "compatibility_matrix": (),
+    "synthesis_validation": ("controls", "construction_meter", "confirmation_meter"),
+}
+
+# §15.1 / §20.1: 成功側 outcome で compatibility_matrix の各エントリが持つべき欄。
+_COMPATIBILITY_ENTRY_REQUIRED: Tuple[str, ...] = ("status", "support", "calibration", "holdout")
+
 # §21: Phase A PASS は R10-G0..G14 の全 PASS を要求する。
 PHASE_A_GATE_IDS: Tuple[str, ...] = tuple(gate_id for gate_id, _ in PHASE_A_CORE_GATES)
 PHASE_B_GATE_IDS: Tuple[str, ...] = tuple(gate_id for gate_id, _ in PHASE_B_GATES)
+
+
+def _is_absent_evidence(section: Mapping[str, Any], key: str) -> bool:
+    """evidence の欄が実質的に不在か（false / 0 を不在と混同しない）。"""
+    if key not in section:
+        return True
+    value = section[key]
+    if value is None:
+        return True
+    return isinstance(value, (Mapping, list, str)) and len(value) == 0
 
 
 def _require_nonempty_section(mapping: Mapping[str, Any], name: str, why: str) -> None:
@@ -787,6 +844,16 @@ def _require_nonempty_section(mapping: Mapping[str, Any], name: str, why: str) -
         )
     if not section:
         raise Run10ContractError(f"results.{name}: {why} には本節が必要（空）")
+    required = _EVIDENCE_SECTION_SHAPE.get(name, ())
+    # 真偽値で判定しない: `measurement_overfit_signal: false` は正当な値であり、
+    # 欠落と混同してはならない。要求するのは「キーが在り、null でなく、
+    # 空の mapping / list / str でないこと」。
+    missing = [key for key in required if _is_absent_evidence(section, key)]
+    if missing:
+        raise Run10ContractError(
+            f"results.{name}: {why} に必要な欄が無い/空: {missing}"
+            f"（設計が明示する固定欄。placeholder mapping では成立しない）"
+        )
 
 
 def _validate_gate_ledger(mapping: Mapping[str, Any], gate_ids: Tuple[str, ...], why: str) -> None:
@@ -838,15 +905,35 @@ def _validate_results_evidence(
         for section in _EVIDENCE_FOR_OUTCOME.get(outcome, ()):
             _require_nonempty_section(mapping, section, outcome)
 
-    if "GENERATIVE_COMPATIBILITY_ESTABLISHED" in outcomes and entry != "ENTER":
+    # §16: synthesis 由来の結論はすべて Phase B が走った場合にしか出ない。
+    # GENERATIVE_COMPATIBILITY_ESTABLISHED だけを縛ると、
+    # MEASUREMENT_ONLY_COMPATIBILITY（§16.3）を SKIP / NOT_REACHED のまま
+    # 名乗れてしまう（PR #330 Codex 第 3 巡 P1）。
+    named = [o for o in outcomes if o in PHASE_B_DERIVED_OUTCOMES]
+    if named and entry != "ENTER":
         raise Run10ContractError(
-            "results: GENERATIVE_COMPATIBILITY_ESTABLISHED は phase_b_entry=ENTER が前提（§16）"
+            f"results: {named} は phase_b_entry=ENTER が前提（§16）。"
+            f" 実際の phase_b_entry={entry!r}"
         )
 
     matrix = mapping.get("compatibility_matrix")
+    established = any(outcome in _EVIDENCE_FOR_OUTCOME for outcome in outcomes)
     if isinstance(matrix, Mapping):
         for trait_id, entry_doc in matrix.items():
             assert_compatibility_entry(str(trait_id), entry_doc)
+            if not established:
+                continue
+            if not isinstance(entry_doc, Mapping):  # pragma: no cover - 上で送出済み
+                continue
+            # §15.1 / §20.1: status だけの行で比較地図成立を主張させない。
+            lacking = [
+                key for key in _COMPATIBILITY_ENTRY_REQUIRED if entry_doc.get(key) is None
+            ]
+            if lacking:
+                raise Run10ContractError(
+                    f"compatibility_matrix.{trait_id}: 成功側 outcome には"
+                    f" {_COMPATIBILITY_ENTRY_REQUIRED} が必要（欠落 {lacking}）"
+                )
 
     synthesis = mapping.get("synthesis_validation")
     if isinstance(synthesis, Mapping) and synthesis:

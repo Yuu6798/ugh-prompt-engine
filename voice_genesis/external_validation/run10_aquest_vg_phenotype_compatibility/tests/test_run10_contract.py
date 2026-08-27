@@ -527,12 +527,36 @@ def _passing_results() -> Dict[str, Any]:
     doc["phase_b_entry"] = "SKIP"
     doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED"]
     doc["hard_gates"] = {gate_id: "PASS" for gate_id, _ in m.PHASE_A_CORE_GATES}
-    doc["external_calibration"] = {"E0": "PASS"}
-    doc["decision_rules"] = {"F1_F2_F3": {"noise_floor": 1.0}}
-    doc["compatibility_matrix"] = {"F1_F2_F3": {"status": "DIRECT_COMPATIBLE"}}
+    doc["external_calibration"] = {
+        "e0_parameter_recovery": {"01_f1_low": {"abs_error": 12.0}},
+        "meter_calibration_status": {"F1_F2_F3": "CALIBRATED_EXTERNAL"},
+        "measurement_overfit_signal": False,
+    }
+    doc["decision_rules"] = {
+        "minimum_support": {"phoneme_contexts": 5},
+        "calibration": {"noise_floor": 1.0, "minimum_detectable_effect": 2.0},
+        "equivalence": {"method": "TOST", "margin_lower": -1.0, "margin_upper": 1.0},
+        "context_persistence": {"direction_agreement_ratio": 0.8},
+    }
+    doc["compatibility_matrix"] = {
+        "F1_F2_F3": {
+            "status": "DIRECT_COMPATIBLE",
+            "support": {"phoneme_contexts": 5},
+            "calibration": "CALIBRATED_EXTERNAL",
+            "holdout": "PASS",
+        }
+    }
     doc["difference_map"] = {"F1_F2_F3": {"effect": 0.1}}
-    doc["path_effects"] = {"delta_a_path": {}, "delta_v_path": {}}
-    doc["replay"] = {"same_process": "PASS", "cross_process": "PASS"}
+    doc["path_effects"] = {
+        "delta_a_path": {"F1_F2_F3": 0.2},
+        "delta_v_path": {"F1_F2_F3": 0.1},
+        "d_output": {"F1_F2_F3": 0.3},
+    }
+    doc["replay"] = {
+        "same_process": "PASS",
+        "cross_process": "PASS",
+        "feature_json_sha": "c" * 64,
+    }
     return doc
 
 
@@ -685,3 +709,72 @@ def test_cost_cap_non_finite_blocks_gate_g0(contract_doc: Dict[str, Any]) -> Non
     filled["cost_cap"]["cpu_hours_max"] = {"value": float("inf"), "status": "PINNED"}
     with pytest.raises(m.Run10ContractError, match="有限かつ正の数"):
         m.parse_run10_contract(filled)
+
+
+# --- 第 3 巡: evidence 形状契約 / Phase B outcome 不変条件 -----------------
+
+
+@pytest.mark.parametrize(
+    "section, key",
+    [
+        ("external_calibration", "e0_parameter_recovery"),
+        ("external_calibration", "meter_calibration_status"),
+        ("decision_rules", "minimum_support"),
+        ("decision_rules", "equivalence"),
+        ("path_effects", "delta_a_path"),
+        ("path_effects", "d_output"),
+        ("replay", "same_process"),
+        ("replay", "feature_json_sha"),
+    ],
+)
+def test_evidence_sections_require_design_specified_fields(section: str, key: str) -> None:
+    """非空 mapping であるだけでは成立しない（PR #330 Codex 第 3 巡 P1）。
+
+    `{"placeholder": true}` のような中身のない mapping で成功側 outcome を
+    名乗れないよう、設計が節ごとに明示する固定欄を要求する。
+    """
+    doc = _passing_results()
+    del doc[section][key]
+    with pytest.raises(m.Run10ContractError, match=key):
+        m.validate_results_document(doc)
+
+
+def test_placeholder_mapping_is_rejected_for_every_shaped_section() -> None:
+    """全 shaped 節が placeholder mapping を拒否する（ファミリー全数掃討）。"""
+    for section, required in m._EVIDENCE_SECTION_SHAPE.items():
+        if not required:
+            continue
+        doc = _passing_results()
+        doc[section] = {"placeholder": True}
+        with pytest.raises(m.Run10ContractError, match=section):
+            m.validate_results_document(doc)
+
+
+def test_compatibility_matrix_entry_needs_support_and_holdout() -> None:
+    """§15.1 / §20.1: status だけの行で比較地図成立を主張させない。"""
+    doc = _passing_results()
+    doc["compatibility_matrix"] = {"F1_F2_F3": {"status": "DIRECT_COMPATIBLE"}}
+    with pytest.raises(m.Run10ContractError, match="support"):
+        m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize("entry_state", ["SKIP", "BLOCKED", "NOT_REACHED"])
+def test_all_phase_b_derived_outcomes_require_enter(entry_state: str) -> None:
+    """§16: synthesis 由来の結論は Phase B が走った場合にしか出ない。
+
+    GENERATIVE_COMPATIBILITY_ESTABLISHED だけを縛ると
+    MEASUREMENT_ONLY_COMPATIBILITY が SKIP のまま通っていた
+    （PR #330 Codex 第 3 巡 P1）。
+    """
+    for outcome in m.PHASE_B_DERIVED_OUTCOMES:
+        doc = _passing_results()
+        doc["phase_b_entry"] = entry_state
+        doc["scientific_outcome"] = [outcome]
+        doc["generative_compatibility_matrix"] = {"F1_F2_F3": {"synthesis_status": "x"}}
+        doc["synthesis_validation"] = {
+            "controls": {"G_null": {"n": 1}, "G_target": {"n": 1}, "G_inverse": {"n": 1}},
+            "construction_meter": {"m": "PASS"},
+            "confirmation_meter": {"m2": "PASS"},
+        }
+        with pytest.raises(m.Run10ContractError, match="phase_b_entry=ENTER"):
+            m.validate_results_document(doc)

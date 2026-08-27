@@ -94,39 +94,25 @@ RESULTS_ALLOWLIST: Tuple[str, ...] = (".gitignore",)
 # AGENTS.md「回収・検収系の成功条件は閉世界契約で書く」に従い、
 # **公開してよいものを列挙し、それ以外はすべて拒否する**方式へ反転する。
 
-# どこに置いても公開してよい拡張子（実装コード・契約・文書）。
-#
-# `.ini` は**入れてはならない**: AQUEST voicebank の `oto.ini` は §7.1 が pin を
-# 要求する private な voicebank メタデータであり、拡張子で一律に公開可にすると
-# `corpus/a0/oto.ini` が素通りする（PR #330 Codex 第 2 巡 P1 — 第 1 巡の
-# allowlist 反転が新たに作った穴）。`.cfg` も同型のリスクがあり、現時点で
-# 必要がないため入れない。設定ファイルを公開したくなったら
-# `PUBLISHABLE_DATA_FILES` へパス単位で明示登録する。
-PUBLISHABLE_SUFFIXES: Tuple[str, ...] = (
-    ".py",
-    ".md",
-    ".yaml",
-    ".yml",
-    ".toml",
-)
-
-# 拡張子が公開可でも、この名前は常に private 扱いにする（voicebank メタデータ）。
-ALWAYS_PRIVATE_NAMES: Tuple[str, ...] = (
-    "oto.ini",
-    "character.txt",
-    "readme.txt",
-    "prefix.map",
-)
+# 拡張子だけで公開可を決めてよいのは**実装コード**のみ。`.md` / `.yaml` を
+# 拡張子で一律許可すると `evaluation/aggregate_table.md` や
+# `measurement/compatibility_matrix.yaml` が RUN10 ツリーのどこにでも置けてしまう
+# （PR #330 Codex 第 2 巡で `.ini`、第 3 巡で `.md` / `.yaml` が同型で露出した）。
+# 同型の再発を止めるため、**コード以外はパス単位で列挙する**方式へ最終化する。
+PUBLISHABLE_SUFFIXES: Tuple[str, ...] = (".py",)
 
 # 拡張子を持たない、または特殊なファイル名で公開してよいもの。
 PUBLISHABLE_NAMES: Tuple[str, ...] = (
-    ".gitignore",
     ".gitkeep",
 )
 
-# JSON / TXT は「測定値・集計表」になり得るため、置ける場所と名前を閉世界で限定する。
-# 新しい構造 manifest を公開したくなったら、ここへ明示的に足すこと（fail-closed）。
+# コード以外で公開してよいツリー相対パスの**閉世界列挙**。
+# 新しい文書・契約・構造 manifest を公開したくなったら、ここへ 1 行足す。
+# 足さない限り commit できない（fail-closed）のが本方式の要点である。
 PUBLISHABLE_DATA_FILES: Tuple[str, ...] = (
+    "README.md",
+    "RUN10_CONTRACT.yaml",
+    "results/.gitignore",
     "inputs/af01_payload_sha256sums.txt",
     "inputs/rights_manifest.json",
     "inputs/private_storage_policy.json",
@@ -138,6 +124,15 @@ PUBLISHABLE_DATA_FILES: Tuple[str, ...] = (
     "pre_run/aquest_pitch_inventory.json",
     "pre_run/vg_reference_inventory.json",
     "pre_run/dependency_presence_report.json",
+    "corpus/README_PRIVATE_ASSET_BOUNDARY.md",
+)
+
+# 拡張子が公開可でも、この名前は常に private 扱いにする（voicebank メタデータ）。
+ALWAYS_PRIVATE_NAMES: Tuple[str, ...] = (
+    "oto.ini",
+    "character.txt",
+    "readme.txt",
+    "prefix.map",
 )
 
 
@@ -219,8 +214,8 @@ def classify_violation(relative_path: str) -> str | None:
         return None
     return (
         f"公開 allowlist に無い（§2.2 測定値・集計表の非公開）。"
-        f" 構造 manifest として公開が必要なら private_boundary.PUBLISHABLE_DATA_FILES"
-        f" へ明示登録すること: {inside}"
+        f" 実装コード以外はパス単位で列挙する方式のため、公開が必要なら"
+        f" private_boundary.PUBLISHABLE_DATA_FILES へ明示登録すること: {inside}"
     )
 
 
