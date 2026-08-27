@@ -95,7 +95,7 @@ run10_aquest_vg_phenotype_compatibility/
 ├── inputs/
 │   ├── af01_payload_sha256sums.txt   # AF01 v1.0 凍結台帳（実バイト同一）
 │   ├── rights_manifest.json          # §2.2 権利境界（DRAFT_NOT_FROZEN）
-│   └── private_storage_policy.json   # R10-PUB-1 を含む保管方針（DRAFT_NOT_FROZEN）
+│   └── private_storage_policy.json   # 保管方針（R10-PUB-1 裁定済／staging root 残件）
 ├── pre_run/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
