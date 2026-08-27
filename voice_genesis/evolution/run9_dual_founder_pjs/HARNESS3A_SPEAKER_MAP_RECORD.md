@@ -580,8 +580,9 @@ contract repin の順で鶏卵性を解消）後、workdir 現存の実 ritsu/us
   `load_canonical_speaker_map_manifest()`（contract/domain/rights_
   manifest 経由の全 cross-check + builder 自己照合）を新設。
   `synthesize()` の `manifest=None` 既定経路をこの新関数へ切り替え。
-  `run9_schema.py`/`inputs/speaker_map_manifest.json`/`RUN9_CONTRACT.
-  yaml` への変更なし（cross-check (j) は既存実装をそのまま再利用）。
+  `run9_schema.py` への変更なし（cross-check (j) は既存実装を再利用）。
+  manifest（`builder_provenance` 更新）と contract（第5世代 repin）は
+  本節冒頭に記録のとおり変更済み——schema/cross-check の追加変更はない。
 
 ## 逸脱・停止事由
 

@@ -1449,17 +1449,24 @@ seed_policy_sha:
 # pre_pin_verification_summary の6点 PASS・重みの実効値そのもの）を一切
 # 変更しない——speaker_map_builder.py の実バイトが変わったことによる
 # builder_provenance.builder_sha256 repin のみが本欄の repin 理由。
-# **逸脱注記**: 本ラウンドの実行セッションには HARNESS-3a 実測に使用した
-# 実 ritsu/user emb（`reexport_out/onnx_gate_40000/` 配下、rights 制約により
-# repo 非同梱・session workdir 限定のアーティファクト）が存在せず、workdir
-# 実 emb に対する builder 再現実測（両 founder）は本ラウンドでは再実行
-# できていない——`synthesize()` の合成ロジック（式・順序・dtype 処理）は
-# 本対応で一切変更しておらず（変更対象は manifest 取得経路と自己照合の
-# みで、`w_r * ritsu_vec + w_u * user_vec` の演算自体には触れていない）、
-# 第4世代までに実測確認済みの出力 sha256（`fc7b73fd...`/`0a681a2c...`）は
-# 本 repin でも不変のまま保持している。canonical loader 経由の統合動作
-# （`load_pinned_speaker_map_manifest()` の全 cross-check・自己照合を含む）
-# は実 repo pin 済み manifest に対する自動テストで確認済み——詳細は
+# **逸脱注記〔訂正済み・履歴〕**: 実装中、一時「本ラウンドの実行セッション
+# には HARNESS-3a 実測に使用した実 ritsu/user emb（`reexport_out/
+# onnx_gate_40000/` 配下、rights 制約により repo 非同梱・session workdir
+# 限定のアーティファクト）が存在せず、workdir 実 emb に対する builder
+# 再現実測（両 founder）は本ラウンドでは再実行できていない」と報告された
+# が、これは探索誤りであり（実 emb は session workdir に現存）、最終検分
+# で訂正した——新 canonical CLI 経路（contract load → 全 cross-check +
+# builder 自己照合 → 合成）で両 founder の再現実測を再実行し、いずれも
+# `reproduced: true`（出力 sha256 が manifest pin `fc7b73fd...`/
+# `0a681a2c...` と完全一致・exit 0）を確認済み。経緯は
+# `HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照。`synthesize()` の
+# 合成ロジック（式・順序・dtype 処理）は本対応で一切変更しておらず
+# （変更対象は manifest 取得経路と自己照合のみで、`w_r * ritsu_vec +
+# w_u * user_vec` の演算自体には触れていない）、第4世代までに実測確認
+# 済みの出力 sha256（`fc7b73fd...`/`0a681a2c...`）は本 repin でも不変の
+# まま保持している。canonical loader 経由の統合動作（`load_pinned_
+# speaker_map_manifest()` の全 cross-check・自己照合を含む）は実 repo
+# pin 済み manifest に対する自動テストで確認済み——詳細は
 # `HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照。旧 pin 値（第4世代、
 # PR #328 第3巡2件対応後）は履歴として保持する:
 #   6a6d6e2fe5737bcc2847c66e9420e42c818a682630feb140860951195fd227cd
