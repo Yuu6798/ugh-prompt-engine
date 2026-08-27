@@ -176,11 +176,15 @@ def test_future_output_directories_are_denied_by_allowlist(path: str) -> None:
         "calibration/validate_meters.py",
         "evaluation/adjudicate_run10.py",
         "synthesis_validation/generate_g_null_target_inverse.py",
-        "corpus/README_PRIVATE_ASSET_BOUNDARY.md",
     ],
 )
 def test_implementation_code_in_future_directories_is_allowed(path: str) -> None:
-    """実装コードと列挙済み文書は将来ディレクトリでも通す（偽陽性で運用不能にしない）。"""
+    """実装コードは将来ディレクトリでも通す（偽陽性で運用不能にしない）。
+
+    コード以外は「実在してから 1 行足す」方式なので、未作成の文書は
+    ここに載せない（第 15 巡で `corpus/README_PRIVATE_ASSET_BOUNDARY.md` の
+    投機的登録を撤去した）。
+    """
     assert pb.classify_violation(f"{pb.RUN10_TREE}/{path}") is None
 
 
@@ -249,3 +253,31 @@ def test_ini_and_cfg_are_not_globally_publishable() -> None:
     """拡張子 allowlist に `.ini` / `.cfg` を入れない（同型再発の防止）。"""
     assert ".ini" not in pb.PUBLISHABLE_SUFFIXES
     assert ".cfg" not in pb.PUBLISHABLE_SUFFIXES
+
+
+# --- 第 15 巡: 投機的な事前登録の禁止（PR #330 Codex 第 15 巡 P1） ----------
+
+
+def test_allowlist_has_no_speculative_entries() -> None:
+    """`PUBLISHABLE_DATA_FILES` は実在ファイルだけで構成される。
+
+    将来作る予定のファイル名を先回りで登録すると、中身を見ないまま公開を
+    事前承認することになる。実例: `pre_run/aquest_pitch_inventory.json` は
+    §9.4 の収録ピッチ inventory（raw-unit F0 推定 = §2.2 が非公開と定める
+    測定成果物）だったが allowlist に載っており、作られた瞬間に素通しだった。
+    """
+    tree = pb.repo_root() / pb.RUN10_TREE
+    missing = [rel for rel in pb.PUBLISHABLE_DATA_FILES if not (tree / rel).is_file()]
+    assert not missing, (
+        f"未作成のファイルが allowlist に登録されている: {missing}"
+        "（実在してから中身を確認して 1 行足すこと）"
+    )
+
+
+def test_pitch_inventory_is_not_pre_authorized() -> None:
+    """§9.4 の収録ピッチ inventory は測定成果物であり公開 allowlist に載せない。"""
+    assert "pre_run/aquest_pitch_inventory.json" not in pb.PUBLISHABLE_DATA_FILES
+    assert (
+        pb.classify_violation(f"{pb.RUN10_TREE}/pre_run/aquest_pitch_inventory.json")
+        is not None
+    )

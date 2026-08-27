@@ -931,6 +931,17 @@ _COMPATIBILITY_ENTRY_REQUIRED: Tuple[str, ...] = ("status", "support", "calibrat
 PHASE_A_GATE_IDS: Tuple[str, ...] = tuple(gate_id for gate_id, _ in PHASE_A_CORE_GATES)
 PHASE_B_GATE_IDS: Tuple[str, ...] = tuple(gate_id for gate_id, _ in PHASE_B_GATES)
 
+ALL_GATE_IDS: Tuple[str, ...] = (
+    PHASE_A_GATE_IDS + (PHASE_B_ENTRY_GATE[0],) + PHASE_B_GATE_IDS
+)
+
+# Gate 台帳が取り得る値（閉世界）。`PASS` だけを拒否対象にすると、走っていない
+# Phase で `FAIL` や `FABRICATED` を宣言できてしまう（PR #330 Codex 第 15 巡 P1）。
+GATE_VERDICTS: Tuple[str, ...] = ("PASS", "FAIL", "BLOCKED", "SKIP", "NOT_REACHED")
+
+# Phase B へ入らなかった Run における R10-G16..G22 の指定状態。
+GATE_NOT_EXECUTED = "NOT_REACHED"
+
 
 def _is_absent_evidence(section: Mapping[str, Any], key: str) -> bool:
     """evidence の欄が実質的に不在か（false / 0 を不在と混同しない）。"""
@@ -1074,20 +1085,8 @@ def _validate_outcome_consistency(
             "results: PHASE_B_NOT_ENTERED は phase_b_entry=ENTER と両立しない（§22.2）"
         )
 
-    # 規則 2b: Phase B へ入っていないのに、その実行 Gate が PASS を主張できない。
-    # §21 は R10-G16..G22 を「PHASE_B_ENTRY = ENTER 時のみ必須」と規定しており、
-    # 入らなかった Run で PASS を記録するのは走っていない Gate の偽の合格である
-    # （PR #330 Codex 第 14 巡 P1）。
-    if entry != "ENTER":
-        ledger = mapping.get("hard_gates")
-        if isinstance(ledger, Mapping):
-            passing = [gate_id for gate_id in PHASE_B_GATE_IDS if ledger.get(gate_id) == "PASS"]
-            if passing:
-                raise Run10ContractError(
-                    f"results.hard_gates: phase_b_entry={entry} で {passing} が PASS を"
-                    "主張している（§21: R10-G16..G22 は ENTER 時のみ必須。"
-                    "入らなかった Run で走っていない Gate を合格にしない）"
-                )
+    # 規則 2b: Gate 台帳の閉世界検査と、走っていない Phase の指定状態。
+    _validate_hard_gates_shape(mapping, entry)
 
     calibration = mapping.get("external_calibration")
     signal = (
@@ -1172,6 +1171,45 @@ def _validate_results_rights(obj: Any) -> None:
             raise Run10ContractError(
                 f"results.rights.{key}: §2.2 は prohibited と定めている"
                 f"（{str(expected).lower()} 固定。実際 {rights[key]!r}）"
+            )
+
+
+def _validate_hard_gates_shape(mapping: Mapping[str, Any], entry: str) -> None:
+    """Gate 台帳のキー集合・値語彙・未実行状態を閉世界で検査する。
+
+    第 14 巡では「PASS を拒否する」だけだったため、走っていない Phase で
+    `R10-G16: FAIL` や `FABRICATED` を宣言でき、未知の Gate ID も素通りした
+    （PR #330 Codex 第 15 巡 P1）。台帳そのものを閉世界にする。
+    """
+    ledger = mapping.get("hard_gates")
+    if ledger is None:
+        return
+    if not isinstance(ledger, Mapping):
+        raise Run10ContractError(
+            f"results.hard_gates は mapping でなければならない（実際 {type(ledger).__name__}）"
+        )
+    unknown = set(ledger) - set(ALL_GATE_IDS)
+    if unknown:
+        raise Run10ContractError(
+            f"results.hard_gates: 未知の Gate ID {sorted(unknown)}（§21 は R10-G0..G22）"
+        )
+    bad = {gate_id: value for gate_id, value in ledger.items() if value not in GATE_VERDICTS}
+    if bad:
+        raise Run10ContractError(
+            f"results.hard_gates: 未知の判定値 {bad}（許容 {list(GATE_VERDICTS)}）"
+        )
+    if entry != "ENTER":
+        # §21: R10-G16..G22 は ENTER 時のみ必須。走らなかった Gate は
+        # 合格も不合格も宣言できない — 指定の未実行状態だけが正当である。
+        wrong = {
+            gate_id: ledger[gate_id]
+            for gate_id in PHASE_B_GATE_IDS
+            if gate_id in ledger and ledger[gate_id] != GATE_NOT_EXECUTED
+        }
+        if wrong:
+            raise Run10ContractError(
+                f"results.hard_gates: phase_b_entry={entry} で {wrong} が宣言されている"
+                f"（走っていない Gate は {GATE_NOT_EXECUTED} のみ。§21）"
             )
 
 

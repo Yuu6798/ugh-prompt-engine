@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（301 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（315 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -449,3 +449,23 @@ CLAUDE.md は「打ち切りは 3 分類を上書きしない（新しい具体�
 「全数掃討」は契約・results 検証に限った話であり、登録ファイル検証は含まれて
 いなかった。3 についても、真偽値欄の型検査を `_require_boolean_field()` へ
 一本化し、第 12 巡の対象（overfit 信号）も同ヘルパへ寄せた。
+
+### 第 15 巡（P1×2）
+
+1. **Gate 台帳そのものが閉世界でなかった** — 第 14 巡の規則 2b は
+   「走っていない Phase B Gate の `PASS`」だけを拒否したため、`R10-G16: FAIL` や
+   `R10-G16: FABRICATED` は素通りし、`R10-G99` のような未知の Gate ID も通った。
+   走っていない Gate で不合格を名乗るのは「実施したが落ちた」の偽装であり、
+   合格の偽装と同じ重さで §21 の台帳を汚す。`_validate_hard_gates_shape()` で
+   **キー集合（R10-G0..G22）・判定値語彙・未実行状態**の三つを同時に閉じた。
+   ENTER 時は Gate の値を拘束しない（走った Phase では FAIL も正当な観測）。
+2. **公開 allowlist に投機的な事前登録があった** — `pre_run/aquest_pitch_inventory.json`
+   を「将来作る予定」で登録していたが、§9.4 の収録ピッチ inventory は
+   raw-unit F0 推定を含む**測定成果物**であり §2.2 が非公開と定めるカテゴリだった。
+   中身を見ないまま公開を事前承認した状態で、作られた瞬間に CI が素通しする。
+   allowlist を**実在ファイルだけ**に切り詰め、`test_allowlist_has_no_speculative_entries`
+   が「実在してから 1 行足す」規律を機械強制する。
+
+1 は第 13/14 巡の「開いたキー集合」ファミリーの再発である。前 2 巡で閉じたのは
+検証対象 mapping のキー集合であって、**値の語彙**ではなかった。今回は台帳の
+キー・値・状態の三面を同時に閉じたので、Gate 台帳としての開口部は残っていない。

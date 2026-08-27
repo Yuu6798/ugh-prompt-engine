@@ -107,8 +107,17 @@ PUBLISHABLE_NAMES: Tuple[str, ...] = (
 )
 
 # コード以外で公開してよいツリー相対パスの**閉世界列挙**。
-# 新しい文書・契約・構造 manifest を公開したくなったら、ここへ 1 行足す。
-# 足さない限り commit できない（fail-closed）のが本方式の要点である。
+#
+# ここには **実在し、中身を確認済みのファイルだけ**を載せる。将来作る予定の
+# ファイル名を先回りで登録してはならない — 中身を見ないまま公開を事前承認する
+# ことになり、実際に作られたものが測定値を含んでいても CI が素通しする。
+# 実例: `pre_run/aquest_pitch_inventory.json` を投機的に登録していたが、§9.4 の
+# 収録ピッチ inventory は raw-unit F0 推定を含む**測定成果物**であり、
+# §2.2 が非公開と定めるカテゴリだった（PR #330 Codex 第 15 巡 P1）。
+#
+# 新しい文書・契約・構造 manifest を公開する必要が出たら、**そのファイルを
+# 作ってから**中身を確認して 1 行足す。足さない限り commit できない。
+# `test_allowlist_has_no_speculative_entries` がこの規律を機械強制する。
 PUBLISHABLE_DATA_FILES: Tuple[str, ...] = (
     "README.md",
     "RUN10_CONTRACT.yaml",
@@ -116,15 +125,7 @@ PUBLISHABLE_DATA_FILES: Tuple[str, ...] = (
     "inputs/af01_payload_sha256sums.txt",
     "inputs/rights_manifest.json",
     "inputs/private_storage_policy.json",
-    "inputs/dependency_pins.json",
-    "inputs/aquest_voicebank_manifest.json",
-    "inputs/vg_reference_manifest.json",
-    "inputs/neutral_carrier_manifest.json",
     "pre_run/inventory.json",
-    "pre_run/aquest_pitch_inventory.json",
-    "pre_run/vg_reference_inventory.json",
-    "pre_run/dependency_presence_report.json",
-    "corpus/README_PRIVATE_ASSET_BOUNDARY.md",
 )
 
 # 拡張子が公開可でも、この名前は常に private 扱いにする（voicebank メタデータ）。

@@ -1402,3 +1402,67 @@ def test_boolean_semantics_fields_share_one_validator() -> None:
     m._require_boolean_field("x", False)
     with pytest.raises(m.Run10ContractError, match="真偽値"):
         m._require_boolean_field("x", 1)
+
+
+# --- 第 15 巡: Gate 台帳の閉世界化（PR #330 Codex 第 15 巡 P1） -------------
+
+
+def test_unknown_gate_id_is_rejected() -> None:
+    """§21 は R10-G0..G22 を規定する。台帳のキー集合を閉じる。"""
+    doc = _passing_results()
+    doc["hard_gates"]["R10-G99"] = "PASS"
+    with pytest.raises(m.Run10ContractError, match="未知の Gate ID"):
+        m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize("bogus", ["FABRICATED", "ok", "pass", True, None, 1])
+def test_gate_verdict_vocabulary_is_closed(bogus: Any) -> None:
+    """判定値も閉世界。語彙外の値で Gate 状態を捏造できない。"""
+    doc = _passing_results()
+    doc["hard_gates"]["R10-G3"] = bogus
+    with pytest.raises(m.Run10ContractError, match="未知の判定値"):
+        m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize("verdict", ["FAIL", "BLOCKED", "SKIP", "PASS"])
+def test_phase_b_gates_cannot_be_declared_without_entering(verdict: str) -> None:
+    """走っていない Phase B Gate は合格も不合格も宣言できない。
+
+    第 14 巡は `== "PASS"` だけを拒否したため `R10-G16: FAIL` が通っていた。
+    未実行 Run で不合格を名乗るのは「実施したが落ちた」の偽装であり、
+    §21 の Gate 台帳としては PASS の偽装と同じ重さの汚染である。
+    """
+    doc = _passing_results()
+    doc["phase_b_entry"] = "SKIP"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED", "PHASE_B_NOT_ENTERED"]
+    doc["hard_gates"]["R10-G16"] = verdict
+    with pytest.raises(m.Run10ContractError, match="走っていない Gate"):
+        m.validate_results_document(doc)
+
+
+def test_phase_b_gates_are_free_when_entered() -> None:
+    """ENTER 時は Phase B Gate の値を拘束しない（偽陽性の確認）。
+
+    実際に走った Phase の Gate は PASS も FAIL も正当な観測結果である。
+    第 15 巡の閉世界化が縛るのは「走っていない Gate の宣言」だけであること。
+    """
+    doc = _passing_results()
+    doc["protocol_verdict"] = "FAILED"
+    doc["phase_b_entry"] = "ENTER"
+    doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "PASS"
+    doc["hard_gates"].update({gate_id: "PASS" for gate_id, _ in m.PHASE_B_GATES})
+    doc["hard_gates"]["R10-G16"] = "FAIL"
+    m.validate_results_document(doc)
+
+
+def test_all_gate_ids_covers_every_registered_gate() -> None:
+    """ALL_GATE_IDS が Gate 台帳（Phase A + Entry + Phase B）の全数であること。"""
+    registered = (
+        tuple(g for g, _ in m.PHASE_A_CORE_GATES)
+        + (m.PHASE_B_ENTRY_GATE[0],)
+        + tuple(g for g, _ in m.PHASE_B_GATES)
+    )
+    assert m.ALL_GATE_IDS == registered
+    assert len(set(m.ALL_GATE_IDS)) == len(m.ALL_GATE_IDS)
+    assert m.GATE_NOT_EXECUTED in m.GATE_VERDICTS
