@@ -18784,6 +18784,27 @@ _CANDIDATE_GENERATION_EXPECTED_TIE_BREAK = (
     "参照実装: candidate_proposal.candidate_ordinal()"
 )
 
+# `practice_actor_binding` 節の逐語凍結（PR #331 Codex bot レビュー第9巡
+# 指摘1、P2、採用）: 旧版はこの節がトップレベル必須キーとしてのみ検査
+# されており中身は無検査だったため、repin で空洞化したり
+# target_selection/difference_estimation が Founder-local actor 外へ
+# 移動する緩和文言に置き換わっても検出できなかった欠落を埋める。裁定
+# §3「PRACTICEのtarget selection・difference estimationはFounder-local
+# actor内で実行し、全探索traceを保存する」の機械表現を逐語一致で強制
+# する。
+_CANDIDATE_GENERATION_PRACTICE_ACTOR_BINDING_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"target_selection", "difference_estimation", "trace_storage"}
+)
+_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TARGET_SELECTION = (
+    "Founder-local actor 内で実行する"
+)
+_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_DIFFERENCE_ESTIMATION = (
+    "Founder-local actor 内で実行する"
+)
+_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TRACE_STORAGE = (
+    "全探索 trace を practice_trace（既存 schema）+ 本 spec 準拠の trial log に保存する"
+)
+
 
 def _validate_candidate_generation_proposal_schedule(
     proposal: Mapping[str, Any], *, structure: Mapping[str, Any]
@@ -19045,6 +19066,59 @@ def _validate_candidate_generation_selection(selection: Mapping[str, Any]) -> No
         )
 
 
+def _validate_candidate_generation_practice_actor_binding(
+    practice_actor_binding: Mapping[str, Any]
+) -> None:
+    """`practice_actor_binding` 節の逐語凍結検査（PR #331 第9巡指摘1、P2、
+    採用）。旧版はこの節がトップレベル必須キーとしてのみ検査されており
+    中身は一切検証されていなかった欠落を埋める——repin で空洞化したり、
+    target_selection/difference_estimation が Founder-local actor 外へ
+    移動する緩和文言に置き換わっても、旧版はこれを検出できなかった。
+    """
+    if not isinstance(practice_actor_binding, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.practice_actor_binding must be an object, "
+            f"got {type(practice_actor_binding).__name__}"
+        )
+    missing = _CANDIDATE_GENERATION_PRACTICE_ACTOR_BINDING_REQUIRED_KEYS - set(
+        practice_actor_binding.keys()
+    )
+    if missing:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.practice_actor_binding missing required "
+            f"key(s): {sorted(missing)}"
+        )
+    if (
+        practice_actor_binding["target_selection"]
+        != _CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TARGET_SELECTION
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.practice_actor_binding.target_selection must "
+            f"equal {_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TARGET_SELECTION!r} "
+            f"exactly (裁定 §3 逐語), got {practice_actor_binding['target_selection']!r}"
+        )
+    if (
+        practice_actor_binding["difference_estimation"]
+        != _CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_DIFFERENCE_ESTIMATION
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.practice_actor_binding.difference_estimation "
+            "must equal "
+            f"{_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_DIFFERENCE_ESTIMATION!r} "
+            f"exactly (裁定 §3 逐語), got "
+            f"{practice_actor_binding['difference_estimation']!r}"
+        )
+    if (
+        practice_actor_binding["trace_storage"]
+        != _CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TRACE_STORAGE
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.practice_actor_binding.trace_storage must "
+            f"equal {_CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TRACE_STORAGE!r} "
+            f"exactly, got {practice_actor_binding['trace_storage']!r}"
+        )
+
+
 def validate_candidate_generation_spec_manifest(data: Mapping[str, Any]) -> None:
     """`candidate_generation_spec_v1.json` の構造・値整形式を検証する
     （裁定 §3: seed 909002・32 trials×4 candidates=128 units/Founder/arm・
@@ -19135,6 +19209,7 @@ def validate_candidate_generation_spec_manifest(data: Mapping[str, Any]) -> None
     _validate_candidate_generation_run_precondition(data["run_precondition"], structure=structure)
     _validate_candidate_generation_proposal_schedule(data["proposal"], structure=structure)
     _validate_candidate_generation_selection(data["selection"])
+    _validate_candidate_generation_practice_actor_binding(data["practice_actor_binding"])
 
 
 def _candidate_generation_cross_check_axis_catalog(

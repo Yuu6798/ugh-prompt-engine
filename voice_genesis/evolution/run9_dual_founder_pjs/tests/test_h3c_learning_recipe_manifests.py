@@ -904,6 +904,95 @@ def test_h3c_candidate_generation_catalog_cross_check_catches_stale_min_duration
         )
 
 
+# --- PR #331 第9巡指摘1（P2「practice_actor_binding の内容検証」、採用）:
+# 旧版は practice_actor_binding 節がトップレベル必須キーとしてのみ検査
+# されており中身は無検査だった欠落を埋めたテスト。
+
+
+def test_h3c_candidate_generation_practice_actor_binding_present_and_matches_frozen_constants() -> None:
+    data = _manifest_data("candidate_generation_spec")
+    practice_actor_binding = data["practice_actor_binding"]
+    assert (
+        practice_actor_binding["target_selection"]
+        == m._CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TARGET_SELECTION
+    )
+    assert (
+        practice_actor_binding["difference_estimation"]
+        == m._CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_DIFFERENCE_ESTIMATION
+    )
+    assert (
+        practice_actor_binding["trace_storage"]
+        == m._CANDIDATE_GENERATION_EXPECTED_PRACTICE_ACTOR_BINDING_TRACE_STORAGE
+    )
+
+
+def test_h3c_candidate_generation_missing_practice_actor_binding_top_level_key_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["practice_actor_binding"]
+    with pytest.raises(m.Run9ValidationError, match="practice_actor_binding"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_practice_actor_binding_not_object_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["practice_actor_binding"] = "not an object"
+    with pytest.raises(m.Run9ValidationError, match="practice_actor_binding"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_practice_actor_binding_hollowed_out_rejected() -> None:
+    # repin で中身が空洞化した状況を模す（値を空文字列に）。
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["practice_actor_binding"]["target_selection"] = ""
+    data["practice_actor_binding"]["difference_estimation"] = ""
+    with pytest.raises(m.Run9ValidationError, match="target_selection"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_practice_actor_binding_missing_target_selection_key_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["practice_actor_binding"]["target_selection"]
+    with pytest.raises(m.Run9ValidationError, match="practice_actor_binding"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_practice_actor_binding_missing_difference_estimation_key_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["practice_actor_binding"]["difference_estimation"]
+    with pytest.raises(m.Run9ValidationError, match="practice_actor_binding"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_practice_actor_binding_missing_trace_storage_key_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["practice_actor_binding"]["trace_storage"]
+    with pytest.raises(m.Run9ValidationError, match="practice_actor_binding"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_practice_actor_binding_target_selection_tamper_rejected() -> None:
+    # target_selection/difference_estimation が Founder-local actor 外へ
+    # 移動する緩和文言に置き換わっても拒否されることを確認する。
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["practice_actor_binding"]["target_selection"] = "外部選択を許可する"
+    with pytest.raises(m.Run9ValidationError, match="target_selection"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_practice_actor_binding_difference_estimation_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["practice_actor_binding"]["difference_estimation"] = "外部選択を許可する"
+    with pytest.raises(m.Run9ValidationError, match="difference_estimation"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_practice_actor_binding_trace_storage_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["practice_actor_binding"]["trace_storage"] = "trace は保存しない"
+    with pytest.raises(m.Run9ValidationError, match="trace_storage"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
 # ---------------------------------------------------------------------------
 # 4. compute_budget_manifest_v1 固有
 # ---------------------------------------------------------------------------
