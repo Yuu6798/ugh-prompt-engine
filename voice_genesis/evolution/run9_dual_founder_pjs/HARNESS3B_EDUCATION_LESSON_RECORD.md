@@ -1194,3 +1194,147 @@ pair()` のロールバック状態表現・alias preflight 保護集合）の�
 - freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜4巡と
   同じ理由——repo builder の identity は manifest 側 `builder_provenance`
   が別途担う）。
+
+## 17. PR #329 Codex bot レビュー第6巡対応 + run9（2026-08-27）
+
+Claude 完結ルート（フェーズ1: 実装 + 検証 + 返信起草。git commit/push は
+別フェーズ）。Fable 採否判定 = 採用1件（P1）。**抽出式・アラインメント
+規則・直列化・バンドル内容は無変更**（変更は CLI 引数解析・検証経路の
+みで、第1〜5巡と同じ不変条件）。
+
+### Fix 17（採用, P1）: CLI の split/contract/pin 参照を repo 正典へ固定
+
+`education_lesson_builder.py` の公開 CLI が `--contract-path`（および
+`--split-manifest`/`extract-song`・`build` の `--consumed-inputs-
+manifest`）を受け取っていたため、呼び出し元が contract のコピーを改変
+（sealed ID を training へ移した split を repin + 対応する
+consumed-inputs pin を用意）して渡すと、`load_training_validation_ids()`/
+`load_consumed_inputs_pins()` はいずれも `run9_schema.load_pinned_*()`
+経由の pin 検証を実行するが、その検証基準自体（`RUN9_CONTRACT.yaml`）を
+呼び出し元が差し替えられるため両 loader が代替 contract に対して
+検証 PASS してしまい、sealed WAV が decode され得た——**コード記述なしの
+CLI 操作だけで凍結境界を再定義できる**公開経路だった。第1〜5巡の対策
+（sealed_holdout 非参照・pin 検証・TOCTOU 閉鎖・alias 拒否・原子的
+公開）はいずれも「pin 検証を通ったか」を問うものであり、「pin 検証の
+基準そのものが差し替え可能」という本穴の脅威モデルには対処していな
+かった。
+
+- `main()` の全4サブコマンド（`probe-header`/`extract-song`/`assemble`/
+  `build`）から `--contract-path`/`--split-manifest`/`--consumed-inputs-
+  manifest` を撤去した。CLI 経路は常に repo 正典パス（`_THIS_DIR` 起点の
+  `RUN9_CONTRACT.yaml`/`inputs/practice_audio_split_manifest.json`/
+  `inputs/pjs_consumed_inputs_sha256.json`）へ固定される——
+  `_cmd_probe_header()`/`_cmd_extract_song()`/`_cmd_assemble()`/
+  `_cmd_build()` は `load_training_validation_ids()`/
+  `load_consumed_inputs_pins()`/`run_build()` へ常に `None`（各関数の
+  既定値 = 正典パス）を渡す。
+- `_probe_header_protected_paths()`/`_extract_song_protected_paths()`/
+  `_assemble_protected_paths()`（`--out` alias preflight の保護対象パス
+  ビルダー、第4〜5巡 Fix 13/16）も `args` からの split-manifest/
+  contract-path override 読み取りを撤去し、保護対象を正典定数
+  （`DEFAULT_SPLIT_MANIFEST_PATH`/`run9_schema.RUN9_CONTRACT_YAML_PATH`/
+  `DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH`）で固定した。
+- パス引数は下位ライブラリ関数（`load_training_validation_ids()`/
+  `load_consumed_inputs_pins()`）のシグネチャにはテスト分離目的
+  （改ざん済み合成 manifest を注入する pytest fixture）でのみ残す。この
+  層（repo 内から直接 import して呼び出すプロセス内 Python 呼び出し）に
+  対する脅威モデルは、ランタイム検証ではなくコードレビュー/CI 層（grep
+  監査・PR レビュー・discipline テスト）で防御する対象であり、
+  `FrozenSplitPins`/`ConsumedInputPins` の直接構築に関する境界宣言
+  （builder 冒頭「Opaque pin-verified types」節、第3巡 Fix 8）と同型の
+  境界宣言として両関数の docstring に明記した。
+- `--corpus-root`/`--out`/`--intermediates-dir`/`--out-dir` 等、音源・
+  出力の場所指定は CLI に残した（撤去しない）——これらは境界を再定義
+  できない非対称: 生成されたバンドルバイトは publish 前に
+  `training_technique_lesson_sha256`/`validation_technique_lesson_sha256`
+  pin と実バイト一致するまで `_require_bundle_bytes_match_pinned_
+  manifest()`/`_require_single_split_bundle_bytes_match_pinned_
+  manifest()` が fail-closed で拒否する（`--allow-unpinned` 未指定時）
+  ため、コーパス・中間物の置き場所をどう指定しても pin と byte-identical
+  な正準出力しか publish されない——「検証そのものの基準」を差し替えら
+  れる `--contract-path`/`--split-manifest` とは性質が異なる。
+  `--freeze-record`/`--spec-path`（`extract-song`/`build` に残存）も
+  同型の非対称——`freeze_selfcheck()` は渡された spec の実バイト sha256
+  を freeze record 自身が保持する `spec_sha256` と自己照合するのみで
+  外部基準を持たず、最終的にバンドルバイトが pin と一致しない限り
+  publish されないため、差し替えても「検証そのものの基準」の再定義には
+  ならない。
+- 新設テスト:
+  - (a) 4サブコマンド × 撤去した3オプション（該当する組み合わせのみ）で
+    CLI が argparse の「unrecognized arguments」で拒否し、終了コード2で
+    `SystemExit` することの直接確認（`main()` の `try/except` より前段の
+    argparse 自身のエラー経路であることの証跡）。
+  - (b) `probe-header`/`extract-song`/`assemble`/`build` の CLI 経路が
+    `load_training_validation_ids()` を常に `(None, contract_path=None)`
+    で呼ぶことの直接証跡（下位 loader を monkeypatch で呼び出し引数を
+    観測——短絡させて実 corpus I/O を伴わずに検証）。`extract-song`/
+    `build` については同様に `load_consumed_inputs_pins()` も常に
+    `(None, contract_path=None)` で呼ぶことを確認する。
+  - `_probe_header_protected_paths()`/`_extract_song_protected_paths()`
+    の cross-check closure 包含テスト（第5巡新設）は、撤去された CLI
+    属性を `args` から除いた最小 Namespace で引き続き PASS することを
+    確認した（保護対象が正典定数へ固定されたため属性自体が不要になった
+    ことの直接証跡）。
+
+### 連鎖更新
+
+builder バイト変更（新値
+`57899deeeb9360477d1a0f4adceb288815bf5cebf0cbf0d87d6514f1399fae7e`）
++ 本節追記に伴い、`inputs/education_technique_lesson_manifest.json` の
+`builder_provenance.builder_sha256`/`detail_record_sha256` を更新し、
+manifest raw sha256 が変わったため `RUN9_CONTRACT.yaml` の
+`education_technique_lesson_manifest_sha` を第7世代へ repin した（旧値
+= 第6世代、第5巡対応時点の値。履歴は本記録 §12/§13/§14/§15/§16 参照）。
+`pjs_consumed_inputs_manifest_sha`（`inputs/pjs_consumed_inputs_
+sha256.json`）は本節の変更で一切触れていないため無変更（本節はいずれの
+消費入力の実バイト・pin 値にも影響しない、CLI 引数解析・検証経路のみの
+変更）。
+
+### run9: repo builder（第6巡対応後）による再現実行（独立9回目）
+
+system python3（本セッションの system python3、pyworld 0.3.5 を含む
+依存関係が揃った環境）で、修正後の repo builder を workdir 展開済み
+corpus（`expanded/PJS_corpus_ver1.1`）に対し `build` サブコマンドで
+実行した。freeze record・spec・split manifest・contract・
+consumed-inputs manifest はいずれも repo 収載の既定パス（本巡の変更に
+より CLI からはこれらを上書きする手段自体が存在しない——常に正典パス）。
+
+```
+$ python3 education_lesson_builder.py build \
+    --corpus-root <workdir>/expanded/PJS_corpus_ver1.1 \
+    --out-dir <workdir>/pr329_round6_build_out \
+    --allow-unpinned
+```
+
+| バンドル | 既 pin（run1〜run8） | run9 sha256 | 一致 |
+|---|---|---|---|
+| training | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | **PASS** |
+| validation | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | **PASS** |
+
+run9 は本節の Fix 17 が CLI 引数解析・検証経路のみに閉じており、
+抽出式・アラインメント・直列化・バンドル内容に一切影響しないことの
+実測証跡である——run9 は `--allow-unpinned` で実行した（manifest 側
+`builder_provenance.builder_sha256` を本節の builder バイト変更後の値へ
+まだ repin していない時点での実測取得のため）。repin 完了後、
+`_require_bundle_bytes_match_pinned_manifest()` を run9 の実測 sha に
+対して直接呼び出し、例外を投げないこと（＝ canonical path 上で Fix 5
+（第2巡）のゲートが引き続き正しく機能すること）を確認済み。
+
+repin 完了後、`--allow-unpinned` を付けずに（＝ CLI からは
+`--split-manifest`/`--contract-path`/`--consumed-inputs-manifest` の
+いずれも渡す手段が存在しない、正典パスのみが使われる状態で）本
+コマンドを独立10回目として再実行し、`pinned_manifest_check: "PASS"`
+（training/validation とも run1〜run9 と同一 sha256）で正常完了する
+ことを実測で確認した——本節の CLI 変更が既存の再現実行手順に一切影響
+しないことの直接証跡である。
+
+### 検証結果
+
+- `ruff check .`: clean
+- `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`:
+  本節（builder_provenance.builder_sha256/detail_record_sha256 の repo
+  収載値更新、`education_technique_lesson_manifest_sha` の7世代目 repin
+  を含む）最終稿確定後に全 PASS。
+- freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜5巡と
+  同じ理由——repo builder の identity は manifest 側 `builder_provenance`
+  が別途担う）。

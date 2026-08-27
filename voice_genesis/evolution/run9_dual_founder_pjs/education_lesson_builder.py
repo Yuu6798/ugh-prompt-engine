@@ -75,6 +75,46 @@ manifest.json` の `builder_provenance.builder_sha256`
 bundle/1.0`）。バンドル実体ファイル自体は repo にコミットしない（rights
 制約 — 実 PJS 音源からの derived artifact のため。sha256 のみ
 `inputs/education_technique_lesson_manifest.json` へ pin する）。
+
+**公開 CLI の split/contract/pin 参照は repo 正典へ固定（PR #329 第6巡
+レビュー指摘, P1, 採用対応）**: `main()` の全サブコマンド
+（`probe-header`/`extract-song`/`assemble`/`build`）は `--contract-path`/
+`--split-manifest`/`--consumed-inputs-manifest` を CLI 引数として一切
+公開しない——公開していた旧実装は、呼び出し元が contract のコピーを
+改変（sealed ID を training へ移した split を repin + 対応する
+consumed-inputs pin を用意）して渡すだけで、コード記述なしの CLI 操作
+のみで両 loader が代替 contract に対して検証 PASS し sealed WAV を decode
+し得る穴だった。CLI 経由では常に repo 正典パス（モジュール位置
+`_THIS_DIR` 起点の `RUN9_CONTRACT.yaml`/`inputs/practice_audio_split_
+manifest.json`/`inputs/pjs_consumed_inputs_sha256.json`）に固定する
+——`_cmd_probe_header()`/`_cmd_extract_song()`/`_cmd_build()` は
+`load_training_validation_ids()`/`load_consumed_inputs_pins()` へ常に
+`None`（各関数の既定値 = 正典パス）を渡す。`_probe_header_protected_
+paths()`/`_extract_song_protected_paths()` も同様に `args` からの
+override 読み取りを撤去し、保護対象パスを正典定数で固定した。
+
+これらパス引数は `load_training_validation_ids()`/
+`load_consumed_inputs_pins()`（および `_require_single_split_bundle_
+bytes_match_pinned_manifest()`/`run_build()` 等の検証ヘルパ群）自身の
+関数シグネチャにはテスト分離目的で残す（改ざん済み合成 manifest を
+注入する pytest fixture が必要とする）。この層（CLI を経由しない、
+repo 内から直接 import して呼び出すプロセス内 Python 呼び出し）に
+対する脅威モデルは、ランタイム検証ではなくコードレビュー/CI 層
+（grep 監査・PR レビュー・discipline テスト）で防御する対象である
+——`FrozenSplitPins`/`ConsumedInputPins` の直接構築に関する境界宣言
+（本ファイル冒頭「Opaque pin-verified types」節）と同型の第4巡境界
+宣言に属する。
+
+`--corpus-root`/`--out`/`--intermediates-dir` 等、音源・出力の場所指定
+は CLI に残す（撤去しない）——これらは境界を再定義できない: 生成された
+バンドルバイトは publish 前に `training_technique_lesson_sha256`/
+`validation_technique_lesson_sha256` pin と実バイト一致するまで
+`_require_bundle_bytes_match_pinned_manifest()`/`_require_single_split_
+bundle_bytes_match_pinned_manifest()` が fail-closed で拒否する
+（`--allow-unpinned` 未指定時）ため、`--corpus-root`/`--intermediates-dir`
+にどのようなファイルを置いても、pin と byte-identical な正準出力しか
+publish されない——`--contract-path`/`--split-manifest` のように「検証
+そのものの基準」を差し替えられる経路とは非対称。
 """
 from __future__ import annotations
 
@@ -1724,6 +1764,18 @@ def load_training_validation_ids(
     `split_manifest_path`/`contract_path` を省略すると、それぞれ正典
     `DEFAULT_SPLIT_MANIFEST_PATH`（= `inputs/practice_audio_split_
     manifest.json`）/ `run9_schema.RUN9_CONTRACT_YAML_PATH` を使う。
+
+    **CLI からは呼び出せない（PR #329 第6巡レビュー指摘, P1, 採用対応）**:
+    公開 CLI（`main()` の全サブコマンド）は `split_manifest_path`/
+    `contract_path` を上書きする手段を一切公開しない——常に `None`（=
+    正典パス）で本関数を呼ぶ。これらの引数はテスト分離目的
+    （改ざん済み合成 manifest を注入する pytest fixture）でのみ残る。
+    本関数を repo 内から直接 import して任意パスを渡すプロセス内 Python
+    呼び出しに対する脅威モデルは、ランタイム検証ではなくコードレビュー/
+    CI 層（grep 監査・PR レビュー・discipline テスト）で防御する対象で
+    あり、本関数自身の責務ではない——`FrozenSplitPins`/`ConsumedInputPins`
+    の直接構築に関する境界宣言（本ファイル冒頭「Opaque pin-verified
+    types」節）と同型の第4巡境界宣言に属する。
     """
     effective_manifest_path = (
         split_manifest_path if split_manifest_path is not None else DEFAULT_SPLIT_MANIFEST_PATH
@@ -1770,6 +1822,12 @@ def load_consumed_inputs_pins(
     正典 `DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH`（=
     `inputs/pjs_consumed_inputs_sha256.json`）/
     `run9_schema.RUN9_CONTRACT_YAML_PATH` を使う。
+
+    **CLI からは呼び出せない（PR #329 第6巡レビュー指摘, P1, 採用対応）**:
+    `load_training_validation_ids()` の同名節と同型——公開 CLI は本関数の
+    パス引数を上書きする手段を公開せず、常に `None`（= 正典パス）で
+    呼ぶ。テスト分離目的でのみ引数を残し、プロセス内直接呼び出しの脅威
+    モデルはコードレビュー/CI 層が担う第4巡境界宣言に属する。
     """
     effective_manifest_path = (
         consumed_inputs_manifest_path
@@ -2058,22 +2116,23 @@ def _extract_song_protected_paths(args: argparse.Namespace) -> List[Path]:
     読まないが、破壊防止のため一貫して保護する）。`--out` の alias
     preflight 対象集合。
 
-    `getattr(..., None)` 経由で読む（`Namespace.attr` の直接参照ではなく）
-    ——実 CLI（argparse）は全属性を必ず設定するが、テスト層が直接構築する
-    最小 `argparse.Namespace`（他の属性のみを設定した fixture）に対しても
-    `AttributeError` ではなく「未指定 = 既定値」として振る舞う方が、
-    本関数を preflight 目的で単体呼び出しする側にとって安全。"""
+    PR #329 第6巡レビュー指摘（P1、採用対応）: `extract-song` はもう split
+    manifest/contract/consumed-inputs pin のパスを CLI から受け取らない
+    ——保護対象は常に repo 正典パス（`DEFAULT_SPLIT_MANIFEST_PATH`/
+    `run9_schema.RUN9_CONTRACT_YAML_PATH`/`DEFAULT_CONSUMED_INPUTS_
+    MANIFEST_PATH`）で固定する（`args` からの override 読み取りは撤去）。
+    `freeze_record`/`spec_path` はモジュール docstring「公開 CLI の
+    split/contract/pin 参照は repo 正典へ固定」の非対称の理由どおり CLI
+    に残るため、引き続き `getattr(..., None)` 経由で読む（`Namespace.attr` の
+    直接参照ではなく）——実 CLI（argparse）は全属性を必ず設定するが、
+    テスト層が直接構築する最小 `argparse.Namespace`（他の属性のみを設定
+    した fixture）に対しても `AttributeError` ではなく「未指定 = 既定値」
+    として振る舞う方が、本関数を preflight 目的で単体呼び出しする側に
+    とって安全。"""
     song_dir = Path(args.corpus_root) / args.song_id
-    raw_split_manifest = getattr(args, "split_manifest", None)
-    split_manifest_path = Path(raw_split_manifest) if raw_split_manifest else DEFAULT_SPLIT_MANIFEST_PATH
-    raw_contract_path = getattr(args, "contract_path", None)
-    contract_path = Path(raw_contract_path) if raw_contract_path else run9_schema.RUN9_CONTRACT_YAML_PATH
-    raw_consumed_inputs_manifest = getattr(args, "consumed_inputs_manifest", None)
-    consumed_inputs_manifest_path = (
-        Path(raw_consumed_inputs_manifest)
-        if raw_consumed_inputs_manifest
-        else DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH
-    )
+    split_manifest_path = DEFAULT_SPLIT_MANIFEST_PATH
+    contract_path = run9_schema.RUN9_CONTRACT_YAML_PATH
+    consumed_inputs_manifest_path = DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH
     raw_freeze_record = getattr(args, "freeze_record", None)
     freeze_record_path = Path(raw_freeze_record) if raw_freeze_record else DEFAULT_FREEZE_RECORD_PATH
     raw_spec_path = getattr(args, "spec_path", None)
@@ -2096,9 +2155,15 @@ def _probe_header_protected_paths(args: argparse.Namespace) -> List[Path]:
     manifest + contract + pinned education lesson manifest cross-check
     closure（第5巡レビュー指摘2, P1, 採用対応。本コマンド自身は現時点で
     この closure を読まないが、破壊防止のため一貫して保護する））。
-    `--out` の alias preflight 対象集合。"""
-    split_manifest_path = Path(args.split_manifest) if args.split_manifest else DEFAULT_SPLIT_MANIFEST_PATH
-    contract_path = Path(args.contract_path) if args.contract_path else run9_schema.RUN9_CONTRACT_YAML_PATH
+    `--out` の alias preflight 対象集合。
+
+    PR #329 第6巡レビュー指摘（P1、採用対応）: `probe-header` はもう
+    split manifest/contract のパスを CLI から受け取らない——保護対象は
+    常に repo 正典パス（`DEFAULT_SPLIT_MANIFEST_PATH`/`run9_schema.
+    RUN9_CONTRACT_YAML_PATH`）で固定する（`args` からの override 読み取り
+    は撤去）。"""
+    split_manifest_path = DEFAULT_SPLIT_MANIFEST_PATH
+    contract_path = run9_schema.RUN9_CONTRACT_YAML_PATH
     paths: List[Path] = [split_manifest_path, contract_path]
     for song_id in args.song_ids:
         paths.append(Path(args.corpus_root) / song_id / f"{song_id}_song.wav")
@@ -2119,9 +2184,16 @@ def _assemble_protected_paths(args: argparse.Namespace, song_ids_sorted: Sequenc
     その pin 済みファイルをバンドル JSON で上書きし得た。`--out` の alias
     preflight 対象集合。`song_ids_sorted` は凍結 split 厳密一致検証を
     通過済みの確定リストを渡すこと（検証前の生リストを渡すと、まだ
-    正規化されていない song_id から中間物パスを構築してしまう）。"""
-    split_manifest_path = Path(args.split_manifest) if args.split_manifest else DEFAULT_SPLIT_MANIFEST_PATH
-    contract_path = Path(args.contract_path) if args.contract_path else run9_schema.RUN9_CONTRACT_YAML_PATH
+    正規化されていない song_id から中間物パスを構築してしまう）。
+
+    PR #329 第6巡レビュー指摘（P1、採用対応）: `assemble` はもう split
+    manifest/contract のパスを CLI から受け取らない——保護対象は常に
+    repo 正典パス（`DEFAULT_SPLIT_MANIFEST_PATH`/`run9_schema.RUN9_
+    CONTRACT_YAML_PATH`）で固定する（`args` からの override 読み取りは
+    撤去。`spec_path` は CLI に残るため引き続き `args.spec_path` から
+    読む）。"""
+    split_manifest_path = DEFAULT_SPLIT_MANIFEST_PATH
+    contract_path = run9_schema.RUN9_CONTRACT_YAML_PATH
     spec_path = Path(args.spec_path) if args.spec_path else DEFAULT_SPEC_PATH
     paths: List[Path] = [spec_path, split_manifest_path, contract_path, Path(args.song_ids_json)]
     paths.extend(Path(args.intermediates_dir) / f"{sid}.json" for sid in song_ids_sorted)
@@ -2143,9 +2215,12 @@ def _cmd_probe_header(args: argparse.Namespace) -> int:
     # 凍結 training∪validation split 外の song_id が1件でも含まれていれば、
     # いずれの WAV も open する前に全件一括で拒否する（他のゲートと同型:
     # 一部だけ open してから拒否、という中途半端な状態を作らない）。
-    split_manifest_path = Path(args.split_manifest) if args.split_manifest else None
-    contract_path = Path(args.contract_path) if args.contract_path else None
-    frozen_split_pins = load_training_validation_ids(split_manifest_path, contract_path=contract_path)
+    # PR #329 第6巡レビュー指摘（P1、採用対応）: `probe-header` はもう
+    # split manifest/contract のパスを CLI から受け取らない——常に repo
+    # 正典パス（`None` = `load_training_validation_ids()` の既定値
+    # `DEFAULT_SPLIT_MANIFEST_PATH`/`run9_schema.RUN9_CONTRACT_YAML_PATH`）
+    # で解決させる。
+    frozen_split_pins = load_training_validation_ids(None, contract_path=None)
     _require_song_ids_within_frozen_split(
         args.song_ids, frozen_split_pins.frozen_allowed_ids, context="probe-header",
     )
@@ -2195,22 +2270,17 @@ def _cmd_extract_song(args: argparse.Namespace) -> int:
     # holdout や split manifest に一切現れない任意 ID を渡しても、旧実装は
     # そのまま decode/抽出へ進んでいた。凍結済み training∪validation 集合
     # 外の song_id は decode 前に fail-closed で拒否する。
-    split_manifest_path = Path(args.split_manifest) if args.split_manifest else None
-    contract_path = Path(args.contract_path) if args.contract_path else None
-    frozen_split_pins = load_training_validation_ids(
-        split_manifest_path, contract_path=contract_path,
-    )
+    # PR #329 第6巡レビュー指摘（P1、採用対応）: `extract-song` はもう
+    # split manifest/contract/consumed-inputs pin のパスを CLI から受け
+    # 取らない——常に repo 正典パス（`None` = 各 loader の既定値）で解決
+    # させる。
+    frozen_split_pins = load_training_validation_ids(None, contract_path=None)
     _require_song_ids_within_frozen_split(
         [args.song_id], frozen_split_pins.frozen_allowed_ids, context="extract-song",
     )
     # PR #329 第2巡レビュー指摘2-4（P1、採用対応）: 消費3入力（lab/
     # musicxml/wav）の実バイト sha256 を decode 前に照合する。
-    consumed_inputs_manifest_path = (
-        Path(args.consumed_inputs_manifest) if args.consumed_inputs_manifest else None
-    )
-    consumed_inputs_pins = load_consumed_inputs_pins(
-        consumed_inputs_manifest_path, contract_path=contract_path,
-    )
+    consumed_inputs_pins = load_consumed_inputs_pins(None, contract_path=None)
     song_dir = Path(args.corpus_root) / args.song_id
     result = extract_song(
         song_dir, args.song_id,
@@ -2227,11 +2297,11 @@ def _cmd_assemble(args: argparse.Namespace) -> int:
     # し、要求 ID 集合が選択 split（training なら凍結70件、validation
     # なら凍結15件）と厳密集合一致することを検証する。不一致（sealed 混入
     # ・欠落・過剰・未知 ID いずれも）は decode/読み込み前に拒否する。
-    split_manifest_path = Path(args.split_manifest) if args.split_manifest else None
-    contract_path = Path(args.contract_path) if args.contract_path else None
-    frozen_split_pins = load_training_validation_ids(
-        split_manifest_path, contract_path=contract_path,
-    )
+    # PR #329 第6巡レビュー指摘（P1、採用対応）: `assemble` はもう split
+    # manifest/contract のパスを CLI から受け取らない——常に repo 正典
+    # パス（`None` = `load_training_validation_ids()` の既定値）で解決
+    # させる。
+    frozen_split_pins = load_training_validation_ids(None, contract_path=None)
     expected_ids = (
         frozen_split_pins.training_ids if args.split == "training" else frozen_split_pins.validation_ids
     )
@@ -2273,7 +2343,7 @@ def _cmd_assemble(args: argparse.Namespace) -> int:
     pinned_manifest_check = "SKIPPED_UNPINNED"
     if not args.allow_unpinned:
         _require_single_split_bundle_bytes_match_pinned_manifest(
-            args.split, actual_sha256, contract_path=contract_path,
+            args.split, actual_sha256, contract_path=None,
         )
         pinned_manifest_check = "PASS"
     else:
@@ -2520,16 +2590,20 @@ def run_build(
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
+    # PR #329 第6巡レビュー指摘（P1、採用対応）: `build` はもう split
+    # manifest/contract/consumed-inputs pin のパスを CLI から受け取らない
+    # ——`split_manifest_path`/`contract_path`/`consumed_inputs_manifest_path`
+    # を明示的に省略（`None`）して `run_build()` へ渡すことで、常に repo
+    # 正典パス（`DEFAULT_SPLIT_MANIFEST_PATH`/`run9_schema.RUN9_CONTRACT_
+    # YAML_PATH`/`DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH`）で解決させる。
     result = run_build(
         corpus_root=Path(args.corpus_root),
         out_dir=Path(args.out_dir),
         freeze_record_path=Path(args.freeze_record) if args.freeze_record else DEFAULT_FREEZE_RECORD_PATH,
         spec_path=Path(args.spec_path) if args.spec_path else DEFAULT_SPEC_PATH,
-        split_manifest_path=Path(args.split_manifest) if args.split_manifest else None,
-        contract_path=Path(args.contract_path) if args.contract_path else None,
-        consumed_inputs_manifest_path=(
-            Path(args.consumed_inputs_manifest) if args.consumed_inputs_manifest else None
-        ),
+        split_manifest_path=None,
+        contract_path=None,
+        consumed_inputs_manifest_path=None,
         allow_unpinned=bool(args.allow_unpinned),
     )
     print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -2543,14 +2617,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("probe-header", help="metadata-only WAV header probe (no decode)")
     p.add_argument("--corpus-root", required=True)
     p.add_argument("--song-ids", nargs="+", required=True)
-    p.add_argument(
-        "--split-manifest", default=None,
-        help=f"default: {DEFAULT_SPLIT_MANIFEST_PATH} (pin-verified against RUN9_CONTRACT.yaml "
-        "practice_audio_split_manifest_sha — every --song-ids entry must be a member of its "
-        "training/validation row_ids; sealed_holdout song_ids are rejected before any WAV is "
-        "opened, per 裁定 §2)",
-    )
-    p.add_argument("--contract-path", default=None, help="default: RUN9_CONTRACT.yaml (repo canonical)")
     p.add_argument("--out", required=True)
     p.set_defaults(func=_cmd_probe_header)
 
@@ -2559,19 +2625,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--song-id", required=True)
     p.add_argument("--freeze-record", default=str(DEFAULT_FREEZE_RECORD_PATH))
     p.add_argument("--spec-path", default=str(DEFAULT_SPEC_PATH))
-    p.add_argument(
-        "--split-manifest", default=None,
-        help=f"default: {DEFAULT_SPLIT_MANIFEST_PATH} (pin-verified against RUN9_CONTRACT.yaml "
-        "practice_audio_split_manifest_sha — --song-id must be a member of its training/validation "
-        "row_ids; sealed_holdout song_ids are rejected)",
-    )
-    p.add_argument("--contract-path", default=None, help="default: RUN9_CONTRACT.yaml (repo canonical)")
-    p.add_argument(
-        "--consumed-inputs-manifest", default=None,
-        help=f"default: {DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH} (pin-verified against RUN9_"
-        "CONTRACT.yaml pjs_consumed_inputs_manifest_sha — --song-id's lab/musicxml/wav actual "
-        "bytes must match this pin's sha256, verified before decode)",
-    )
     p.add_argument("--out", required=True)
     p.set_defaults(func=_cmd_extract_song)
 
@@ -2580,14 +2633,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--song-ids-json", required=True)
     p.add_argument("--intermediates-dir", required=True)
     p.add_argument("--spec-path", default=str(DEFAULT_SPEC_PATH))
-    p.add_argument(
-        "--split-manifest", default=None,
-        help=f"default: {DEFAULT_SPLIT_MANIFEST_PATH} (pin-verified against RUN9_CONTRACT.yaml "
-        "practice_audio_split_manifest_sha — --song-ids-json must exactly equal the frozen "
-        "training/validation ID set for --split; sealed_holdout/missing/extra/unknown ids are "
-        "rejected before reading any intermediates)",
-    )
-    p.add_argument("--contract-path", default=None, help="default: RUN9_CONTRACT.yaml (repo canonical)")
     p.add_argument("--out", required=True)
     p.add_argument(
         "--allow-unpinned", action="store_true",
@@ -2603,13 +2648,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--out-dir", required=True, help="output directory for training_bundle.json / validation_bundle.json")
     p.add_argument("--freeze-record", default=None, help=f"default: {DEFAULT_FREEZE_RECORD_PATH}")
     p.add_argument("--spec-path", default=None, help=f"default: {DEFAULT_SPEC_PATH}")
-    p.add_argument("--split-manifest", default=None, help=f"default: {DEFAULT_SPLIT_MANIFEST_PATH}")
-    p.add_argument("--contract-path", default=None, help="default: RUN9_CONTRACT.yaml (repo canonical)")
-    p.add_argument(
-        "--consumed-inputs-manifest", default=None,
-        help=f"default: {DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH} (pin-verified; each song's lab/"
-        "musicxml/wav actual bytes must match before decode)",
-    )
     p.add_argument(
         "--allow-unpinned", action="store_true",
         help="skip the pinned education-lesson-manifest hash cross-check before publish (default "

@@ -1881,8 +1881,38 @@ founder_genome_shas:
 # アラインメント・直列化・バンドル内容は無変更、検証・公開経路のみの
 # 変更）。旧値（第5世代、第4巡対応時点）は履歴として保持する:
 #   f7c3ac9ca1679b7307d09ef750c3709146759586e9fa2e3df5827a56c286a9d7
+#
+# 〔第7世代 repin, 2026-08-27, PR #329 第6巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用1、P1）。公開 CLI の `--contract-path`/
+# `--split-manifest`/`--consumed-inputs-manifest` を `probe-header`/
+# `extract-song`/`assemble`/`build` の全サブコマンドから撤去し、CLI 経路
+# は常に repo 正典パスへ固定した——旧実装は呼び出し元が contract の
+# コピーを改変（sealed ID を training へ移した split を repin + 対応する
+# consumed-inputs pin を用意）して渡すだけで、コード記述なしの CLI 操作
+# のみで両 loader が代替 contract に対して検証 PASS し sealed WAV が
+# decode され得た（`HARNESS3B_EDUCATION_LESSON_RECORD.md` §17 参照）。
+# パス引数は `load_training_validation_ids()`/`load_consumed_inputs_
+# pins()` のシグネチャにはテスト分離目的でのみ残し、プロセス内直接
+# 呼び出しの脅威モデルはコードレビュー/CI 層が担う境界宣言とした。
+# builder バイト変更（新値
+# = 57899deeeb9360477d1a0f4adceb288815bf5cebf0cbf0d87d6514f1399fae7e）と
+# `builder_provenance.detail_record_sha256`（§17 追記後の実測記録 raw
+# sha256 = c0392adb76bee4e2422222c12eaa6648ef3d1da9bb8ec63ab2826ef7e9c91cbb）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。system python3（pyworld 0.3.5 導入済み）による repo builder
+# 再現実行（run9、`--allow-unpinned`）で training/validation バンドルとも
+# 既 pin（run1〜run8）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、CLI 引数解析・検証経路
+# のみの変更）。repin 完了後、`--allow-unpinned` を付けずに（CLI からは
+# `--split-manifest`/`--contract-path`/`--consumed-inputs-manifest` の
+# いずれも渡す手段が存在しない状態で）独立10回目として再実行し、
+# `pinned_manifest_check: "PASS"`（同一 sha256）で正常完了することも
+# 実測で確認した——本巡の CLI 変更が既存の再現実行手順に一切影響しない
+# ことの直接証跡。旧値（第6世代、第5巡対応時点）は履歴として保持する:
+#   9fa271aeceb63a21d8e2bd523b0d630580b6afcad87ed91f6dede9e4cce46949
 education_technique_lesson_manifest_sha:
-  value: "9fa271aeceb63a21d8e2bd523b0d630580b6afcad87ed91f6dede9e4cce46949"
+  value: "2901af1fc3f56035f5f0dce94dbd75e1bcd0e3e39cb87c807ec88eb54d198802"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-

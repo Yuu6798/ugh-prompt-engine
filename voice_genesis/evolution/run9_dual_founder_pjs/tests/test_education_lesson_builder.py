@@ -793,8 +793,7 @@ def test_harness3b_probe_header_direct_call_gate_raises_before_read_wav_fmt_head
     sealed_id = sorted(split_manifest["row_ids"]["sealed_holdout"])[0]
     out_path = tmp_path / "out.json"
     args = argparse.Namespace(
-        corpus_root=str(tmp_path), song_ids=[sealed_id], split_manifest=None,
-        contract_path=None, out=str(out_path),
+        corpus_root=str(tmp_path), song_ids=[sealed_id], out=str(out_path),
     )
     with pytest.raises(elb.ExtractorStopError, match="not a member of the pinned"):
         elb._cmd_probe_header(args)  # noqa: SLF001
@@ -819,8 +818,6 @@ def test_harness3b_extract_song_direct_call_gate_raises_before_extract_song() ->
             song_id=sealed_id,
             freeze_record=str(m.EDUCATION_LESSON_FREEZE_RECORD_PATH),
             spec_path=str(m.EDUCATION_LESSON_SPEC_PATH),
-            split_manifest=None,
-            contract_path=None,
             out="/nonexistent/out.json",
         )
         with pytest.raises(elb.ExtractorStopError, match="not a member of the pinned"):
@@ -1796,21 +1793,24 @@ def test_harness3b_extract_song_cli_rejects_out_aliasing_corpus_wav_via_symlink(
 
 
 def test_harness3b_extract_song_cli_rejects_out_aliasing_split_manifest(tmp_path: Path) -> None:
-    """`--out` が消費3入力に限らず、`--split-manifest` として渡した
-    ファイルと同一実体を指す場合も拒否される（保護対象集合が corpus 入力
-    だけでなく split manifest/contract/consumed-inputs pin/freeze
-    record/spec にも及ぶことの直接証跡）。"""
-    custom_split_manifest = tmp_path / "custom_split_manifest.json"
-    custom_split_manifest.write_bytes(m.PRACTICE_MANIFEST_PATH.read_bytes())
+    """`--out` が消費3入力に限らず、repo 正典 split manifest
+    （`elb.DEFAULT_SPLIT_MANIFEST_PATH`）と同一実体を指す場合も拒否される
+    （保護対象集合が corpus 入力だけでなく split manifest/contract/
+    consumed-inputs pin/freeze record/spec にも及ぶことの直接証跡）。
+    PR #329 第6巡レビュー指摘（P1、採用対応）により `extract-song` は
+    `--split-manifest` を CLI から受け付けなくなった——CLI は常に repo
+    正典 split manifest を読むため、保護対象も常にその実ファイルである
+    ことを直接指定して確認する（`inputs/education_technique_lesson_
+    manifest.json`/裁定 txt/freeze record を直接指す既存テストと同型）。
+    """
     rc = elb.main([
         "extract-song",
         "--corpus-root", str(tmp_path),
         "--song-id", "pjs001",
-        "--split-manifest", str(custom_split_manifest),
-        "--out", str(custom_split_manifest),
+        "--out", str(elb.DEFAULT_SPLIT_MANIFEST_PATH),
     ])
     assert rc == 2
-    assert custom_split_manifest.read_bytes() == m.PRACTICE_MANIFEST_PATH.read_bytes()
+    assert elb.DEFAULT_SPLIT_MANIFEST_PATH.read_bytes() == m.PRACTICE_MANIFEST_PATH.read_bytes()
 
 
 def test_harness3b_probe_header_cli_rejects_out_aliasing_corpus_wav(tmp_path: Path) -> None:
@@ -1941,10 +1941,12 @@ def test_harness3b_extract_song_protected_paths_include_pinned_education_manifes
     本体・spec・freeze record 現行/superseded・detail record・
     consumed-inputs pin）を含むことを直接確認する（第5巡レビュー指摘2、
     採用対応。extract-song 自身はこの closure を読まないが、保護集合への
-    一貫した包含を保証する構造であることの直接証跡）。"""
+    一貫した包含を保証する構造であることの直接証跡）。PR #329 第6巡
+    レビュー指摘（P1、採用対応）以降 `split_manifest`/`contract_path`/
+    `consumed_inputs_manifest` は CLI 属性として存在しない（保護対象は
+    常に repo 正典パスへ固定済み）ため、`args` には含めない。"""
     args = argparse.Namespace(
         corpus_root="/tmp/does-not-matter", song_id="pjs001",
-        split_manifest=None, contract_path=None, consumed_inputs_manifest=None,
         freeze_record=None, spec_path=None,
     )
     protected = elb._extract_song_protected_paths(args)  # noqa: SLF001
@@ -1958,11 +1960,11 @@ def test_harness3b_extract_song_protected_paths_include_pinned_education_manifes
 def test_harness3b_probe_header_protected_paths_include_pinned_education_manifest_closure(
 ) -> None:
     """同上、`_probe_header_protected_paths()` 版（第5巡レビュー指摘2、
-    採用対応）。"""
-    args = argparse.Namespace(
-        corpus_root="/tmp/does-not-matter", song_ids=["pjs001"],
-        split_manifest=None, contract_path=None,
-    )
+    採用対応）。PR #329 第6巡レビュー指摘（P1、採用対応）以降
+    `split_manifest`/`contract_path` は CLI 属性として存在しない
+    （保護対象は常に repo 正典パスへ固定済み）ため、`args` には含めない。
+    """
+    args = argparse.Namespace(corpus_root="/tmp/does-not-matter", song_ids=["pjs001"])
     protected = elb._probe_header_protected_paths(args)  # noqa: SLF001
     assert elb.DEFAULT_EDUCATION_MANIFEST_PATH in protected
     assert elb.DEFAULT_ADJUDICATION_BASIS_PATH in protected
@@ -2080,3 +2082,203 @@ def test_harness3b_assemble_cli_allow_unpinned_skips_pinned_manifest_check(
     ])
     assert rc == 0
     assert out_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第6巡 Codex bot レビュー対応（採用1件, P1）: 公開 CLI の
+# split/contract/pin 参照を repo 正典へ固定する——`probe-header`/
+# `extract-song`/`assemble`/`build` の全サブコマンドから `--contract-path`/
+# `--split-manifest`/`--consumed-inputs-manifest` を撤去し、CLI 経路は常に
+# repo 正典パスで検証させる（呼び出し元が contract のコピーを改変して渡す
+# ことで凍結境界を再定義できた穴を閉じる）。以下2グループのテスト:
+#   (a) CLI がこれらのオプションを一切受け付けないこと（argparse エラー）
+#   (b) CLI 経路が実際に repo 正典パスで検証していることの直接証跡
+#       （下位 loader を monkeypatch で観測——呼び出し引数が常に `None`
+#       = 正典パスであることを確認する）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("argv", "removed_flag"),
+    [
+        (
+            ["probe-header", "--corpus-root", "/tmp", "--song-ids", "pjs001", "--out", "/tmp/out.json"],
+            "--contract-path",
+        ),
+        (
+            ["probe-header", "--corpus-root", "/tmp", "--song-ids", "pjs001", "--out", "/tmp/out.json"],
+            "--split-manifest",
+        ),
+        (
+            ["extract-song", "--corpus-root", "/tmp", "--song-id", "pjs001", "--out", "/tmp/out.json"],
+            "--contract-path",
+        ),
+        (
+            ["extract-song", "--corpus-root", "/tmp", "--song-id", "pjs001", "--out", "/tmp/out.json"],
+            "--split-manifest",
+        ),
+        (
+            ["extract-song", "--corpus-root", "/tmp", "--song-id", "pjs001", "--out", "/tmp/out.json"],
+            "--consumed-inputs-manifest",
+        ),
+        (
+            [
+                "assemble", "--split", "training", "--song-ids-json", "/tmp/s.json",
+                "--intermediates-dir", "/tmp", "--out", "/tmp/out.json",
+            ],
+            "--contract-path",
+        ),
+        (
+            [
+                "assemble", "--split", "training", "--song-ids-json", "/tmp/s.json",
+                "--intermediates-dir", "/tmp", "--out", "/tmp/out.json",
+            ],
+            "--split-manifest",
+        ),
+        (["build", "--corpus-root", "/tmp", "--out-dir", "/tmp/out"], "--contract-path"),
+        (["build", "--corpus-root", "/tmp", "--out-dir", "/tmp/out"], "--split-manifest"),
+        (["build", "--corpus-root", "/tmp", "--out-dir", "/tmp/out"], "--consumed-inputs-manifest"),
+    ],
+)
+def test_harness3b_cli_rejects_removed_contract_split_pin_path_options(
+    argv: List[str], removed_flag: str, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """(a) `--contract-path`/`--split-manifest`/`--consumed-inputs-manifest`
+    は `probe-header`/`extract-song`/`assemble`/`build` のいずれの
+    サブコマンドからも撤去されている——渡すと argparse が「unrecognized
+    arguments」で拒否し、終了コード2で `SystemExit` する（`main()` の
+    `try/except`（`ExtractorStopError`/`Run9ValidationError` のみを捕捉）
+    より前段の argparse 自身のエラー経路であり、コード記述なしの CLI
+    操作で contract/split-manifest/consumed-inputs pin の参照先を差し
+    替える迂回が構造的に成立しないことの直接証跡）。"""
+    full_argv = argv + [removed_flag, "/tmp/does-not-matter"]
+    with pytest.raises(SystemExit) as excinfo:
+        elb.main(full_argv)
+    assert excinfo.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "unrecognized arguments" in stderr
+    assert removed_flag in stderr
+
+
+def _spy_and_short_circuit(
+    monkeypatch: pytest.MonkeyPatch, target: Any, name: str, calls: List[Tuple[Tuple[Any, ...], Dict[str, Any]]],
+) -> None:
+    """`target.name` を、呼び出し引数を `calls` へ記録したうえで
+    `ExtractorStopError` を送出して短絡させるスパイへ差し替える——本体
+    ロジック（実 corpus 読み取り・decode）へ一切到達させずに「CLI が
+    どの引数でこの loader を呼んだか」だけを観測するためのヘルパー。"""
+
+    def _spy(*args: Any, **kwargs: Any) -> Any:
+        calls.append((args, kwargs))
+        raise elb.ExtractorStopError(f"{name}() spy short-circuit for CLI wiring test")
+
+    monkeypatch.setattr(target, name, _spy)
+
+
+def test_harness3b_probe_header_cli_calls_load_training_validation_ids_with_canonical_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(b) `probe-header` CLI 経路は `load_training_validation_ids()` を
+    常に `(None, contract_path=None)`（= repo 正典パスへ解決される既定値）
+    で呼ぶ——`--split-manifest`/`--contract-path` で差し替える手段が
+    存在しないことの直接証跡。"""
+    calls: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+    _spy_and_short_circuit(monkeypatch, elb, "load_training_validation_ids", calls)
+    rc = elb.main([
+        "probe-header",
+        "--corpus-root", str(tmp_path),
+        "--song-ids", "pjs001",
+        "--out", str(tmp_path / "out.json"),
+    ])
+    assert rc == 2
+    assert calls == [((None,), {"contract_path": None})]
+
+
+def test_harness3b_extract_song_cli_calls_load_training_validation_ids_with_canonical_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(b) 同上、`extract-song` 版。"""
+    calls: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+    _spy_and_short_circuit(monkeypatch, elb, "load_training_validation_ids", calls)
+    rc = elb.main([
+        "extract-song",
+        "--corpus-root", str(tmp_path),
+        "--song-id", "pjs001",
+        "--out", str(tmp_path / "out.json"),
+    ])
+    assert rc == 2
+    assert calls == [((None,), {"contract_path": None})]
+
+
+def test_harness3b_assemble_cli_calls_load_training_validation_ids_with_canonical_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(b) 同上、`assemble` 版。"""
+    calls: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+    _spy_and_short_circuit(monkeypatch, elb, "load_training_validation_ids", calls)
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(["pjs001"]), encoding="utf-8")
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path),
+        "--out", str(tmp_path / "out.json"),
+    ])
+    assert rc == 2
+    assert calls == [((None,), {"contract_path": None})]
+
+
+def test_harness3b_build_cli_calls_load_training_validation_ids_with_canonical_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(b) 同上、`build` 版。"""
+    calls: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+    _spy_and_short_circuit(monkeypatch, elb, "load_training_validation_ids", calls)
+    out_dir = tmp_path / "out"
+    rc = elb.main([
+        "build",
+        "--corpus-root", str(tmp_path / "corpus"),
+        "--out-dir", str(out_dir),
+    ])
+    assert rc == 2
+    assert calls == [((None,), {"contract_path": None})]
+
+
+def test_harness3b_extract_song_cli_calls_load_consumed_inputs_pins_with_canonical_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(b) `extract-song` CLI 経路は `load_consumed_inputs_pins()` も
+    常に `(None, contract_path=None)` で呼ぶ——`--consumed-inputs-manifest`
+    で差し替える手段が存在しないことの直接証跡。`load_training_
+    validation_ids()` は monkeypatch せず実行させる（正典 split で
+    `--song-id` を検証させ、`load_consumed_inputs_pins()` まで到達させる
+    ため）。"""
+    calls: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+    _spy_and_short_circuit(monkeypatch, elb, "load_consumed_inputs_pins", calls)
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    rc = elb.main([
+        "extract-song",
+        "--corpus-root", str(tmp_path),
+        "--song-id", training_ids[0],
+        "--out", str(tmp_path / "out.json"),
+    ])
+    assert rc == 2
+    assert calls == [((None,), {"contract_path": None})]
+
+
+def test_harness3b_build_cli_calls_load_consumed_inputs_pins_with_canonical_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """(b) 同上、`build` 版（`load_training_validation_ids()` は実行させ、
+    `load_consumed_inputs_pins()` まで到達させる）。"""
+    calls: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
+    _spy_and_short_circuit(monkeypatch, elb, "load_consumed_inputs_pins", calls)
+    out_dir = tmp_path / "out"
+    rc = elb.main([
+        "build",
+        "--corpus-root", str(tmp_path / "corpus"),
+        "--out-dir", str(out_dir),
+    ])
+    assert rc == 2
+    assert calls == [((None,), {"contract_path": None})]
