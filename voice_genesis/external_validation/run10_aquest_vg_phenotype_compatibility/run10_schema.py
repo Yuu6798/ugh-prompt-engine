@@ -574,22 +574,40 @@ def _validate_structure(doc: Mapping[str, Any]) -> None:
     _validate_claim_strength(doc["claim_strength_target"])
 
 
+# staged_intervention の入れ子も閉世界にする。外側のキー集合だけ閉じて内側を
+# `get()` で拾うと、`phase_a.activation: INTERVENTIONAL` や
+# `phase_a.identity_copy: ALLOWED` のような機械可読欄を足した契約が通り、
+# 非介入・Identity 除外の不変条件と矛盾したまま R10-G0 が PASS になり得る
+# （PR #330 Codex 第 13 巡 P1）。
+STAGED_INTERVENTION_SHAPE: Dict[str, Tuple[str, ...]] = {
+    "phase_a": ("description", "changed_edge"),
+    "phase_b": ("activation", "description", "changed_edge"),
+}
+
+
 def _validate_staged_intervention(obj: Any) -> None:
     """§23 staged_intervention。Phase A は無介入、Phase B は条件付き。"""
     mapping = _require_mapping("staged_intervention", obj)
-    if set(mapping) != {"phase_a", "phase_b"}:
+    if set(mapping) != set(STAGED_INTERVENTION_SHAPE):
         raise Run10ContractError(
             f"staged_intervention: phase_a / phase_b のみ許容（実際 {sorted(mapping)}）"
         )
-    phase_a = _require_mapping("staged_intervention.phase_a", mapping["phase_a"])
-    if phase_a.get("changed_edge") != "NONE_OBSERVATIONAL_AUDIT":
+    for phase, allowed in STAGED_INTERVENTION_SHAPE.items():
+        nested = _require_mapping(f"staged_intervention.{phase}", mapping[phase])
+        if set(nested) != set(allowed):
+            raise Run10ContractError(
+                f"staged_intervention.{phase}: {sorted(allowed)} のみ許容"
+                f"（実際 {sorted(nested)}）"
+            )
+    phase_a = mapping["phase_a"]
+    if phase_a["changed_edge"] != "NONE_OBSERVATIONAL_AUDIT":
         raise Run10ContractError(
             "staged_intervention.phase_a.changed_edge は NONE_OBSERVATIONAL_AUDIT 固定"
         )
-    phase_b = _require_mapping("staged_intervention.phase_b", mapping["phase_b"])
-    if phase_b.get("activation") != "CONDITIONAL":
+    phase_b = mapping["phase_b"]
+    if phase_b["activation"] != "CONDITIONAL":
         raise Run10ContractError("staged_intervention.phase_b.activation は CONDITIONAL 固定")
-    if phase_b.get("changed_edge") != "SYNTHESIS_VALIDATION":
+    if phase_b["changed_edge"] != "SYNTHESIS_VALIDATION":
         raise Run10ContractError(
             "staged_intervention.phase_b.changed_edge は SYNTHESIS_VALIDATION 固定"
         )
@@ -673,6 +691,33 @@ def parse_run10_contract(doc: Any) -> Run10Contract:
 # ---------------------------------------------------------------------------
 
 
+# §27 が列挙する results の欄（閉世界）。ここに無い欄は commit させない。
+RESULTS_ALLOWED_FIELDS: Tuple[str, ...] = (
+    "schema",
+    "run_id",
+    "experiment_id",
+    "design_revision",
+    "scope",
+    "cohorts",
+    "performance_analysis",
+    "identity_copy",
+    "protocol_verdict",
+    "phase_b_entry",
+    "scientific_outcome",
+    "external_calibration",
+    "decision_rules",
+    "compatibility_matrix",
+    "difference_map",
+    "path_effects",
+    "novel_trait_candidates",
+    "generative_compatibility_matrix",
+    "synthesis_validation",
+    "hard_gates",
+    "replay",
+    "rights",
+)
+
+
 def assert_no_forbidden_score_field(doc: Any, path: str = "$") -> None:
     """§14.5 / §27: TotalScore 系の圧縮スカラを再帰的に拒否する。"""
     if isinstance(doc, Mapping):
@@ -691,6 +736,15 @@ def validate_results_document(doc: Any) -> None:
     """`run10_results.json` の最小 schema（§27）を fail-closed で検証する。"""
     mapping = _require_mapping("results", doc)
     assert_no_forbidden_score_field(mapping)
+
+    # top-level のキー集合も閉じる。開いたままだと `publication_scope: PUBLIC` や
+    # `public_dataset_release: true` のような対立する機械可読宣言を、必須の
+    # private 宣言と同居させたまま正典結果にできる（PR #330 Codex 第 13 巡 P1）。
+    unknown = set(mapping) - set(RESULTS_ALLOWED_FIELDS)
+    if unknown:
+        raise Run10ContractError(
+            f"results: 未知の欄 {sorted(unknown)}（許容 {sorted(RESULTS_ALLOWED_FIELDS)}）"
+        )
 
     if mapping.get("schema") != SCHEMA_RESULTS:
         raise Run10ContractError(f"results.schema は {SCHEMA_RESULTS} 固定")

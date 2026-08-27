@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（274 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（286 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -413,3 +413,19 @@ CLAUDE.md は「打ち切りは 3 分類を上書きしない（新しい具体�
    character.txt SHA256 を必須 pin に挙げており、未取得メッセージにも
    rights_manifest にも同じ 3 点が書いてあるのに、presence 判定は WAV と oto.ini
    だけを見ていた。不完全な voicebank のまま R10-G2 が COMPLETE になり得た。
+
+### 第 13 巡（P1×2）— 「開いたキー集合」ファミリーの終端
+
+第 12 巡（rights 節）と同型が 2 巡続いたため、検証で扱う mapping の開口部を
+一括で閉じてファミリーを終端した。
+
+1. **`staged_intervention` の入れ子が開いていた** — 外側のキー集合だけ閉じて
+   内側を `get()` で拾っていたため、`phase_a.activation: INTERVENTIONAL` や
+   `phase_a.identity_copy: ALLOWED` を足した契約が通り、非介入・Identity 除外の
+   不変条件と矛盾したまま R10-G0 が PASS になり得た。
+2. **results の top-level キー集合が開いていた** — `publication_scope: PUBLIC` や
+   `public_dataset_release: true` のような対立する機械可読宣言を、必須の
+   private 宣言と同居させたまま正典結果にできた。§27 が列挙する 22 欄の
+   閉世界 allowlist にした。
+
+`test_no_validated_mapping_is_left_open` が閉世界表の存在をテストで固定する。

@@ -1277,3 +1277,80 @@ def test_overfit_signal_must_be_boolean(bogus: Any) -> None:
     doc["external_calibration"]["measurement_overfit_signal"] = bogus
     with pytest.raises(m.Run10ContractError, match="真偽値"):
         m.validate_results_document(doc)
+
+
+# --- 第 13 巡: 開いたキー集合の全数掃討 -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "phase, extra, value",
+    [
+        ("phase_a", "activation", "INTERVENTIONAL"),
+        ("phase_a", "identity_copy", "ALLOWED"),
+        ("phase_b", "identity_copy", "ALLOWED"),
+        ("phase_b", "performance_analysis", "PRIMARY"),
+    ],
+)
+def test_staged_intervention_nested_shapes_are_closed(
+    contract_doc: Dict[str, Any], phase: str, extra: str, value: str
+) -> None:
+    """§23: 入れ子へ機械可読欄を足して不変条件と矛盾させられない。
+
+    外側のキー集合だけ閉じて内側を `get()` で拾っていたため、
+    `phase_a.activation: INTERVENTIONAL` のような欄を足した契約が通り、
+    R10-G0 が PASS になり得た（PR #330 Codex 第 13 巡 P1）。
+    """
+    bad = copy.deepcopy(contract_doc)
+    bad["staged_intervention"][phase][extra] = value
+    with pytest.raises(m.Run10ContractError, match=phase):
+        m.parse_run10_contract(bad)
+
+
+@pytest.mark.parametrize("phase, missing", [("phase_a", "description"), ("phase_b", "activation")])
+def test_staged_intervention_nested_shapes_require_all_fields(
+    contract_doc: Dict[str, Any], phase: str, missing: str
+) -> None:
+    """入れ子の欄欠落も拒否する（閉世界は両方向）。"""
+    bad = copy.deepcopy(contract_doc)
+    del bad["staged_intervention"][phase][missing]
+    with pytest.raises(m.Run10ContractError, match=phase):
+        m.parse_run10_contract(bad)
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("publication_scope", "PUBLIC"),
+        ("public_dataset_release", True),
+        ("total_score_note", "x"),
+        ("extra", 1),
+    ],
+)
+def test_results_top_level_keys_are_closed(field: str, value: Any) -> None:
+    """§27: 対立する機械可読宣言を必須の private 宣言と同居させられない。"""
+    doc = _passing_results()
+    doc[field] = value
+    with pytest.raises(m.Run10ContractError):
+        m.validate_results_document(doc)
+
+
+def test_results_allowed_fields_cover_the_minimal_schema() -> None:
+    """§27 最小 schema の欄がすべて allowlist に入っている（偽陽性の防止）。"""
+    for field in _minimal_results():
+        assert field in m.RESULTS_ALLOWED_FIELDS
+    for field in _passing_results():
+        assert field in m.RESULTS_ALLOWED_FIELDS
+
+
+def test_no_validated_mapping_is_left_open() -> None:
+    """契約・結果の検証で扱う mapping に開いたキー集合が残っていない。
+
+    第 12 巡（rights）・第 13 巡（staged_intervention 入れ子 / results top-level）と
+    同型が 2 巡続いたため、閉世界表の存在をテストで固定してファミリーを終端する。
+    """
+    assert set(m.STAGED_INTERVENTION_SHAPE) == {"phase_a", "phase_b"}
+    assert m.RESULTS_ALLOWED_FIELDS
+    assert m.RESULTS_RIGHTS_REQUIRED and m.RESULTS_RIGHTS_OPTIONAL
+    assert m.ALLOWED_TOP_LEVEL_FIELDS
+    assert m.COST_CAP_FIELDS
+    assert m.CLAIM_STRENGTH_KEYS
