@@ -902,14 +902,18 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   pre-run 必須10欄（総 PENDING 11欄）へ戻った——下記
   「解消済み（RUN9-L0-HARNESS-1, 2026-08-26）」節参照〕。続けて
   RUN9-EXECPROFILE-1（2026-08-26）で `execution_profile_sha` が
-  PINNED 化され、残 PENDING は下記のとおり pre-run 必須9欄
+  PINNED 化され、残 PENDING は pre-run 必須9欄
   （総 PENDING 10欄）へ減少した——下記
-  「解消済み（RUN9-EXECPROFILE-1, 2026-08-26）」節参照（`attempt_id`/
+  「解消済み（RUN9-EXECPROFILE-1, 2026-08-26）」節参照。続けて
+  RUN9-L0-HARNESS-3a（2026-08-26）で `expected_speaker_map_sha` が
+  PINNED 化され、残 PENDING は下記のとおり pre-run 必須8欄
+  （総 PENDING 9欄）へ減少した——下記
+  「解消済み（RUN9-L0-HARNESS-3a, 2026-08-26）」節参照（`attempt_id`/
   `repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
-  `expected_speaker_map_sha`/`education_technique_lesson_manifest_sha`/
-  `learning_recipe_sha`/`measurement_spec_sha`/`hypothesis_algebra_sha` の
-  pre-run 必須9欄が引き続き PENDING のため（optional の
-  `human_evaluation_protocol_sha` を含めると総 PENDING 10欄）——
+  `education_technique_lesson_manifest_sha`/`learning_recipe_sha`/
+  `measurement_spec_sha`/`hypothesis_algebra_sha` の
+  pre-run 必須8欄が引き続き PENDING のため（optional の
+  `human_evaluation_protocol_sha` を含めると総 PENDING 9欄）——
   `tests/test_run9_contract.py` の回帰テストで機械確認済み）。
 
 **解消済み（RUN9-L0-HARNESS-1, 2026-08-26）**:
@@ -1138,6 +1142,58 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   validate/sha 照合を経ていない任意 manifest を渡して live ホストに
   合わせた値で偽成功検証する経路を閉じた（manifest dict を直接注入する
   公開経路は存在しない）。
+
+**解消済み（RUN9-L0-HARNESS-3a, 2026-08-26）**:
+- `expected_speaker_map_sha` 未 pin →
+  User 裁定「RUN9 User裁定 — AF0 runtime mapping」（2026-08-26、repo 内
+  収載
+  [`USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt`](./USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt)）
+  の承認に基づき方式Aを採用した——RUN9 構造 Genome は af0/ritsu/user
+  三点 Identity Domain を従来どおり保持するが、現行 RUN6 Backbone には
+  byte-verified な AF0 speaker embedding が存在しないため、runtime
+  render では実現可能な ritsu/user 成分だけを再正規化（R9F-01: ritsu
+  0.75/user 0.25、R9F-02: ritsu 1/3/user 2/3）して float32 単純加重和で
+  線形合成する。L2正規化・摂動・ランダム成分・試聴後の重み調整は恒久禁止。
+  AF0 成分は構造 Genome には存在するが runtime では音響的に実現されない
+  ——この事実と unrealized mass（= 各 founder の `coords_raw.af0`）を
+  新設 [`inputs/speaker_map_manifest.json`](./inputs/speaker_map_manifest.json)
+  （schema `run9-speaker-map/1.0`）へ明記した。本方式は三親音響交配の
+  成立を意味せず、AF0音響形質の継承・AF0-dominant音声・AF0成分に起因する
+  学習能力差のいずれも主張しない（manifest `declaration_af0_not_
+  realized` へ逐語収載）。
+  pin 前検証6点（入力hash照合・384-dim float32有限性・生成embeddingの
+  byte決定論・二体embeddingの相異・smoke render成立・render replay決定論）
+  を実測し全て PASS（詳細は
+  [`HARNESS3A_SPEAKER_MAP_RECORD.md`](./HARNESS3A_SPEAKER_MAP_RECORD.md)
+  を正とする）——`gate_synth.py` を `--speaker ritsu` の供給経路ラベル
+  越しに合成 embedding を配置する隔離コピー方式で、両 founder それぞれ
+  独立2回 render し、WAV sha256 が run1/run2 で完全一致することを確認
+  済み。smoke PASS を受けて `expected_speaker_map_sha` を manifest の raw
+  byte sha256 で `PINNED` 化した。`run9_schema.validate_speaker_map_
+  manifest()`/`load_pinned_speaker_map_manifest()` が manifest 単体の
+  構造検証に加え、両 founder の `coords_raw` と発行済み Founder Genome
+  document（`load_pinned_founder_genome_document()`）との一致、
+  再正規化重みの機械再導出（`struct.pack('>f', ...)` による float32 hex/
+  repr 再計算）、`unrealized_mass.value == coords_raw.af0`、入力
+  embedding sha と `reexport_manifest.json` pin との cross-manifest
+  照合、`pre_pin_verification_summary` 6点 PASS の個別フラグ整合、禁止
+  4項目・非主張逐語の存在、裁定 txt の実バイト照合を fail-closed で
+  強制する。design revision は本裁定により 0.5 へ凍結された
+  （[`DESIGN_RUN9_REVISION_0.5.md`](./DESIGN_RUN9_REVISION_0.5.md)）。
+  裁定逐語「design_revisionを0.5へ上げ」に従い、**契約レベルの
+  `design_revision`（`RUN9_CONTRACT.yaml` トップレベル欄・
+  `run9_schema.DESIGN_REVISION` 定数・`design_revision_doc_sha256` pin）
+  を本 PR 内で実際に 0.4 → 0.5 へ昇格した**（rev 0.2 → 0.3 → 0.4 の過去
+  改訂と同じ手順。本改訂の初版はこの契約レベル昇格を「本 PR のスコープ
+  外」として据え置いていたが、Fable レビューにより、指示書チェックリスト
+  漏れが原因の据え置きは採用しないとの判定を受け、同一 PR 内で昇格を
+  実施した——経緯は本 README「設計判断の記録」節参照）。
+  裁定は続けて「その後、Birth Identity Separation Gateを別途実行する。
+  二体分離が成立しない場合はNOT_ESTABLISHEDとして凍結し、同attempt内で
+  重み変更または方式Bへの自動昇格を行わない」と定めており、**Gate 自体の
+  実行は本 PR に含まない**（別途実行）。方式Bは将来の AF0 acoustic
+  realization 用の別 revision/別 Run へ、方式Cは Genome 座標の意味を
+  render 層で失うため不採用——いずれも本改訂では実装しない。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →
@@ -1765,6 +1821,40 @@ Selection Pressure Routing）が欠落していた。設計書は byte-pin 済�
 生成器（Suno/MusicGen）ごとの `grip_class` 自己記述ブロックであり、RUN9
 側は VoiceGenesis Founder の Performance 制御パラメータの版付き集合。
 `DESIGN_RUN9_REVISION_0.2.md` 改訂1に明記済み。
+
+**`DESIGN_RUN9_REVISION_0.5.md` 発行と契約レベル `design_revision`
+昇格の経緯（RUN9-L0-HARNESS-3a, 2026-08-26）**:
+
+- User 裁定「RUN9 User裁定 — AF0 runtime mapping」は逐語「design_
+  revisionを0.5へ上げ」と述べており、rev 0.2→0.3→0.4 の過去改訂はいずれも
+  文書発行と契約レベル昇格（`design_revision` フィールド + `DESIGN_
+  REVISION` 定数 + `design_revision_doc_sha256` pin の repoint）を同時に
+  行っていた。
+- 本改訂の**初版**は、実装チェックリスト（item 5/6/8）がこの契約レベル
+  昇格を明示的には列挙しておらず、`RUN9_CONTRACT.yaml` の指示も「既存
+  pin 全数 byte 不変」（`design_revision_doc_sha256` を含む）を明記して
+  いたことから、契約レベルの `design_revision` 昇格を「本 PR のスコープ
+  外」として据え置き、`DESIGN_RUN9_REVISION_0.5.md` を情報記録のみの
+  凍結文書として発行していた（`tests/test_run9_contract.py`
+  （本 PR 時点で 18000 行超）に `REVISION_DOC_PATH`/現行値アサーション等
+  の契約レベル design_revision 依存テストが多数存在し、昇格の影響範囲が
+  読めなかったための保守的判断——実装報告でこの据え置きを逸脱として
+  明記した）。
+- Fable によるレビューで、裁定逐語「design_revisionを0.5へ上げ」は User
+  裁定の直接指示であり、契約レベルの昇格は本 PR で履行すべき——指示書の
+  チェックリスト漏れが原因の据え置きは採用しない、との判定を受けた
+  （初版の逸脱報告そのものは正しい判断だったと Fable が確認）。
+- これを受け、同一 PR 内で **契約レベルの `design_revision` を実際に
+  0.4 → 0.5 へ昇格した**——`RUN9_CONTRACT.yaml` トップレベル
+  `design_revision` フィールド・`run9_schema.DESIGN_REVISION` 定数・
+  `design_revision_doc_sha256` pin（`DESIGN_RUN9_REVISION_0.5.md` の
+  実バイト sha256 へ repoint、旧 rev 0.4 doc の sha256 はコメントへ
+  履歴保持）の三箇所を同時に更新し、`tests/test_run9_contract.py` の
+  `REVISION_DOC_PATH` と契約レベル design_revision に依存する現行値
+  アサーション群（旧 "0.4" 期待値 → "0.5"、旧 revision 拒否チェーンへ
+  "0.4" を追加）を全数追随させた——ruff clean・
+  `pytest voice_genesis/evolution/run9_dual_founder_pjs/tests/
+  tests/discipline/` 全 pass を維持したまま履行した。
 
 ## ディレクトリ構成（Phase 3 時点）
 

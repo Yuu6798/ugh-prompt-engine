@@ -1,0 +1,93 @@
+RUN9 User裁定 — AF0 runtime mapping
+作成日: 2026-08-26 JST
+受領経路: User との対話（RUN9-L0-HARNESS-3a の speaker map 事前検証実測完了を
+受け、session scratchpad（scratchpad/run9_user_adjudication_af0_mapping.md）
+へ Fable が記録し、以後の実装・レビューが参照する正本として本ファイルへ
+repo 内収載した）
+対象: RUN9 speaker map manifest の合成方式（方式A/B/C の選択）、AF0成分の
+runtime 非実現の扱いと unrealized mass の明記義務、三親音響交配・AF0音響
+形質継承・AF0起因の学習能力差についての非主張、design_revision の凍結、
+発行済み Founder Genome・coords・genome_id・TRI_CROSSOVER/1.0 の不変宣言、
+speaker map pin 前の検証6点、Birth Identity Separation Gate の別途実行と
+不成立時の凍結規約
+状態: User Adjudication（逐語・一字一句改変禁止）
+
+================================================================
+0. この文書の位置づけ
+================================================================
+
+本書は User が 2026-08-26 に下した裁定の逐語全文を repo 内へ収載した
+ものである。POR_CONCEPT_ADJUDICATION_20260824.txt /
+USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt /
+USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt /
+USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt と同じ前例（外部裁定を
+repo 内の凍結文書として保持し、以後の実装・レビューが参照する正本とする）
+に倣う。
+
+RUN9-L0-HARNESS-3a が新設した inputs/speaker_map_manifest.json の
+adjudication_basis、`run9_schema.validate_speaker_map_manifest()` の
+docstring、RUN9_CONTRACT.yaml の expected_speaker_map_sha reason は、
+すべて本書の逐語からの転記であり、Claude Code が新規に発明した値ではない
+（USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt /
+USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt /
+USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt が是正・先取りした
+教訓——転記元が scratchpad のみだと、将来のレビュアーが「User 転記であって
+発明でない」ことを検証できない——を踏襲し本書を repo 内収載する）。
+
+以下は起草時の作業メモ
+scratchpad/run9_user_adjudication_af0_mapping.md の本文を一字一句そのまま
+転記する（改変禁止）。
+
+================================================================
+1. 本文（逐語、一字一句改変禁止）
+================================================================
+
+【RUN9 User裁定 — AF0 runtime mapping】
+
+方式Aを採用する。
+
+RUN9の構造Genomeは従来どおり
+af0 / ritsu / user の三点Identity Domainを保持する。
+
+ただし現行RUN6 Backboneにはbyte-verifiedなAF0 speaker embeddingが
+存在しないため、runtime renderでは実現可能な
+ritsu / user成分だけを再正規化して線形合成する。
+
+R9F-01:
+  ritsu = 0.75
+  user  = 0.25
+
+R9F-02:
+  ritsu = 1/3
+  user  = 2/3
+
+合成はfloat32の単純加重和とし、L2正規化、摂動、
+ランダム成分、試聴後の重み調整を禁止する。
+
+AF0成分は構造Genomeには存在するが、
+現行runtimeでは音響的に実現されない。
+この事実とunrealized massをspeaker map manifestへ明記する。
+
+本方式は三親音響交配の成立を意味しない。
+AF0音響形質の継承、AF0-dominant音声、
+AF0成分に起因する学習能力差を主張しない。
+
+design_revisionを0.5へ上げ、
+発行済みFounder Genome、coords、genome_id、
+TRI_CROSSOVER/1.0は変更しない。
+
+speaker map pin前に、
+入力hash照合、384-dim float32有限性、
+生成embeddingのbyte決定論、
+二体embeddingの相異、
+smoke render成立、render replay決定論を検証する。
+
+smoke PASS後にspeaker map manifestのraw byte sha256を
+expected_speaker_map_shaへPINNEDする。
+
+その後、Birth Identity Separation Gateを別途実行する。
+二体分離が成立しない場合はNOT_ESTABLISHEDとして凍結し、
+同attempt内で重み変更または方式Bへの自動昇格を行わない。
+
+方式Bは将来のAF0 acoustic realization用の別revision/別Runへ送る。
+方式CはGenome座標の意味をrender層で失うため不採用とする。

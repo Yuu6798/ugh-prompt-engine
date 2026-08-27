@@ -26,6 +26,7 @@ import json
 import math
 import platform
 import re
+import struct
 import sys
 import types
 from dataclasses import dataclass
@@ -55,13 +56,14 @@ RUN9_NORMALIZATION = "largest-component-residual"
 RUN_ID = "RUN9"
 EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
 
-# 現行 design_revision（凍結値。User 裁定 2026-08-25 =
-# DESIGN_RUN9_REVISION_0.4.md — 外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
-# `DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt` の採用）。旧 revision
-# "0.1"/"0.2"/"0.3" を宣言する contract は意図どおり拒否される — 修正が
-# 必要なら design_revision を上げ、旧 attempt を append-only 履歴として
-# 残す規約（DESIGN_RUN9 ヘッダ注記）。
-DESIGN_REVISION = "0.4"
+# 現行 design_revision（凍結値。User 裁定 2026-08-26 =
+# DESIGN_RUN9_REVISION_0.5.md — 「RUN9 User裁定 — AF0 runtime mapping」
+# `USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt` の採用。裁定逐語
+# 「design_revisionを0.5へ上げ」）。旧 revision "0.1"/"0.2"/"0.3"/"0.4" を
+# 宣言する contract は意図どおり拒否される — 修正が必要なら design_
+# revision を上げ、旧 attempt を append-only 履歴として残す規約
+# （DESIGN_RUN9 ヘッダ注記）。
+DESIGN_REVISION = "0.5"
 
 # rev 0.3（改訂A、PoR §1/§3/§4/§16）: 単一 LEARN_PERFORMANCE エッジを
 # CONTROL 無介入枝 + 二つの介入エッジ（PRACTICE_FROM_AUDIO / 稽古,
@@ -16060,3 +16062,712 @@ def verify_execution_profile_runtime(
         "architecture": live_architecture,
         "os": live_os,
     }
+
+
+# ---------------------------------------------------------------------------
+# speaker map manifest（`run9-speaker-map/1.0`、RUN9-L0-HARNESS-3a）。
+# User 裁定「RUN9 User裁定 — AF0 runtime mapping」（2026-08-26、repo 内収載
+# `USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt`）が採用した方式A
+# （af0/ritsu/user 三点 Genome を保持したまま、runtime render では
+# byte-verified な AF0 speaker embedding が存在しないため ritsu/user 成分
+# のみを再正規化して float32 単純加重和で線形合成する）を機械可読に凍結
+# する。L2正規化・摂動・ランダム成分・試聴後の重み調整は恒久禁止。AF0
+# 成分は構造 Genome には存在するが runtime では音響的に実現されない
+# ——この事実と unrealized mass を manifest へ明記する（裁定逐語）。
+# ---------------------------------------------------------------------------
+
+SCHEMA_SPEAKER_MAP = "run9-speaker-map/1.0"
+
+SPEAKER_MAP_MANIFEST_PATH = _THIS_DIR / "inputs" / "speaker_map_manifest.json"
+
+# execution_profile/reexport manifest と同じ規約: repo ルートは
+# `run9_dual_founder_pjs` -> `evolution` -> `voice_genesis` -> repo root の
+# 3階層上。`adjudication_basis.source_file` は repo ルート相対パスとして
+# manifest に収載する。
+_SPEAKER_MAP_REPO_ROOT = _THIS_DIR.parent.parent.parent
+
+SPEAKER_MAP_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "schema", "design_revision", "adjudication_basis", "declaration_af0_not_realized",
+    "synthesis_formula", "founders", "cross_founder_check", "pre_pin_verification_summary",
+    "next_step_per_adjudication", "unchanged_per_adjudication", "repo_state",
+})
+
+# 裁定が本方式を「design_revision 0.5」として凍結した（逐語「design_
+# revisionを0.5へ上げ」）。本欄は manifest 自身の自己申告値の凍結であり、
+# 契約レベルの `design_revision`（`DESIGN_REVISION` 定数・
+# `RUN9_CONTRACT.yaml` トップレベル欄）とは独立——両者の同期は
+# `DESIGN_RUN9_REVISION_0.5.md`「スコープ注記」節が明記するとおり本 PR の
+# スコープ外（別途のフォローアップ判断）。
+_SPEAKER_MAP_ADJUDICATED_DESIGN_REVISION = "0.5"
+
+_SPEAKER_MAP_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "source_file", "sha256", "summary",
+})
+
+_SPEAKER_MAP_SYNTHESIS_FORMULA_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "expression", "dtype_all_stages", "vector_load_method", "weight_cast_method",
+    "output_format", "prohibited", "prohibition_compliance",
+})
+
+# 裁定「合成はfloat32の単純加重和とし、L2正規化、摂動、ランダム成分、
+# 試聴後の重み調整を禁止する。」の4項目、ちょうど4件・この順序で凍結する
+# （`interventions.edges`/`identity_semantics.provider_fixation_rules` と
+# 同型の閉じた語彙 + 順序込み厳密一致）。
+_SPEAKER_MAP_PROHIBITED_ITEMS: Tuple[str, str, str, str] = (
+    "L2正規化", "摂動", "ランダム成分", "試聴後の重み調整",
+)
+
+# 裁定「本方式は三親音響交配の成立を意味しない。AF0音響形質の継承、
+# AF0-dominant音声、AF0成分に起因する学習能力差を主張しない。」から機械化
+# したマーカー文言。`declaration_af0_not_realized` がこれら全てを含むこと
+# を fail-closed で強制する——非主張の欠落した宣言文への repin を防ぐ。
+_SPEAKER_MAP_NON_CLAIM_MARKERS: Tuple[str, str, str, str] = (
+    "三親音響交配の成立を意味しない",
+    "AF0音響形質の継承",
+    "AF0-dominant音声",
+    "AF0成分に起因する学習能力差を主張しない",
+)
+
+# 裁定「その後、Birth Identity Separation Gateを別途実行する。二体分離が
+# 成立しない場合はNOT_ESTABLISHEDとして凍結し...」の機械化マーカー。
+_SPEAKER_MAP_NEXT_STEP_MARKER = "NOT_ESTABLISHED"
+
+_SPEAKER_MAP_FOUNDER_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "genome_id", "profile_label", "coords_raw", "unrealized_mass",
+    "renormalized_runtime_weights", "input_embeddings", "synthesized_embedding",
+    "smoke_render",
+})
+
+_SPEAKER_MAP_COORDS_RAW_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "af0", "ritsu", "user", "source",
+})
+
+_SPEAKER_MAP_UNREALIZED_MASS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "value", "derivation",
+})
+
+_SPEAKER_MAP_WEIGHTS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "w_ritsu_expr", "w_user_expr", "w_ritsu_float32_repr", "w_user_float32_repr",
+    "w_ritsu_float32_hex", "w_user_float32_hex", "derivation_check",
+})
+
+_SPEAKER_MAP_INPUT_EMBEDDINGS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "ritsu_emb_sha256", "user_emb_sha256", "pin_source", "pin_match",
+})
+
+_SPEAKER_MAP_SYNTHESIZED_EMBEDDING_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "sha256", "bytes", "dim", "dtype", "isfinite_all", "byte_determinism_confirmed",
+    "run1_sha256", "run2_sha256",
+})
+
+_SPEAKER_MAP_SMOKE_RENDER_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "supply_method", "song", "notes_limit", "run1", "run2",
+    "render_replay_determinism_confirmed",
+})
+
+_SPEAKER_MAP_SMOKE_RUN_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "wav_sha256", "total_elapsed_sec", "summary_speaker_embed_input_sha256",
+    "supply_route_verified",
+})
+
+_SPEAKER_MAP_CROSS_FOUNDER_CHECK_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "synthesized_embedding_sha256_distinct", "r9f01_sha256", "r9f02_sha256",
+})
+
+_SPEAKER_MAP_PRE_PIN_SUMMARY_KEYS: Tuple[str, str, str, str, str, str] = (
+    "1_input_hash_match", "2_synthesis_384dim_float32_finite", "3_byte_determinism",
+    "4_two_body_distinctness", "5_smoke_render_success", "6_render_replay_determinism",
+)
+
+_SPEAKER_MAP_PRE_PIN_SUMMARY_REQUIRED_KEYS: FrozenSet[str] = (
+    frozenset(_SPEAKER_MAP_PRE_PIN_SUMMARY_KEYS) | frozenset({"all_pass", "detail_record"})
+)
+
+# 裁定「発行済みFounder Genome、coords、genome_id、TRI_CROSSOVER/1.0は
+# 変更しない。」の機械化——ちょうど4件・この順序で凍結する。
+_SPEAKER_MAP_UNCHANGED_PER_ADJUDICATION: Tuple[str, str, str, str] = (
+    "発行済み Founder Genome", "coords", "genome_id", "TRI_CROSSOVER/1.0",
+)
+
+_SPEAKER_MAP_REPO_STATE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "repo_files_modified", "git_status_porcelain_empty", "gate_synth_py_execution_mode",
+    "gate_synth_py_sha256", "repo_git_head_at_measurement",
+})
+
+
+def _validate_speaker_map_shape(
+    obj: Any, *, field: str, required_keys: FrozenSet[str],
+) -> Dict[str, Any]:
+    if not isinstance(obj, dict):
+        raise Run9ValidationError(f"speaker map manifest.{field} must be an object, got {type(obj).__name__}")
+    unknown = set(obj.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"speaker map manifest.{field} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(obj.keys())
+    if missing:
+        raise Run9ValidationError(f"speaker map manifest.{field} missing required key(s): {sorted(missing)}")
+    return obj
+
+
+def _float32_hex_and_repr(value: float) -> Tuple[str, str]:
+    """`value` を float32 へ丸めた raw bytes の big-endian hex 表現と、
+    その float32 値を Python float(double) へ戻した際の `repr()` 文字列を
+    返す（`struct.pack('>f', ...)` — manifest 収載の `w_*_float32_hex`/
+    `w_*_float32_repr` と同じ導出規則、実測記録
+    `HARNESS3A_SPEAKER_MAP_RECORD.md` 検証2 節参照）。"""
+    packed = struct.pack(">f", value)
+    unpacked = struct.unpack(">f", packed)[0]
+    return packed.hex(), repr(unpacked)
+
+
+def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
+    """speaker map manifest（`run9-speaker-map/1.0`）の構造を検証する
+    （RUN9-L0-HARNESS-3a）。User 裁定「RUN9 User裁定 — AF0 runtime
+    mapping」（2026-08-26、repo 内収載 `USER_ADJUDICATION_20260826_AF0_
+    RUNTIME_MAPPING.txt`）が採用した方式Aを機械強制する。
+
+    fail-closed 原則（PIN-1/2・HARNESS-1/2/EXECPROFILE-1 の同型パターンを
+    ここでも適用）。本関数が検証するのは manifest 単体の構造・自己整合の
+    みで、以下は `load_pinned_speaker_map_manifest()` 側の cross-check が
+    担う（一次データ未 load のためここでは検証しない）:
+    (a) 裁定 txt（`adjudication_basis.source_file`）の実バイト sha256 照合
+    (b) 両 founder の `coords_raw` と、`load_pinned_founder_genome_
+        document()` で読んだ発行済み Founder Genome document の `coords`
+        との一致
+    (e) 両 founder の `input_embeddings.{ritsu,user}_emb_sha256` と
+        `load_pinned_reexport_manifest()` の `artifacts.{ritsu_emb,
+        user_emb}.sha256_run1` との cross-manifest 照合
+    (i) `RUN9_CONTRACT.yaml` `expected_speaker_map_sha` pin 値との実バイト
+        sha256 一致
+
+    本関数（manifest 単体）が検証する項目:
+    (c) `renormalized_runtime_weights` の機械再導出一致——
+        `w_ritsu = coords_raw.ritsu / (coords_raw.ritsu + coords_raw.user)`
+        （`w_user` は残差）を `struct.pack('>f', ...)` で float32 化し、
+        その big-endian hex と `repr()` 文字列が、それぞれ manifest 収載
+        の `w_*_float32_hex`/`w_*_float32_repr` と一致することを machine
+        再計算で強制する（`_float32_hex_and_repr()`）。
+    (d) `unrealized_mass.value == coords_raw.af0`（af0 成分の質量が
+        runtime 合成の外側に取り残されている事実を数値としても強制する）。
+    (f) `pre_pin_verification_summary` の6項目全てが逐語 `"PASS"` かつ
+        `all_pass is True` であること、加えて各 founder の
+        `synthesized_embedding.byte_determinism_confirmed`/`run1_sha256`/
+        `run2_sha256`（`sha256` との厳密一致）、`smoke_render.
+        render_replay_determinism_confirmed`/`run{1,2}.
+        supply_route_verified`/`run{1,2}.summary_speaker_embed_input_
+        sha256`（`synthesized_embedding.sha256` との一致）を machine
+        再計算で強制する——`pre_pin_verification_summary` の文言だけを
+        書き換えて PASS を騙る経路と、個別フラグだけを書き換える経路の
+        両方を閉じる。
+    (g) 両 founder の `synthesized_embedding.sha256` が相異すること
+        （`cross_founder_check` との自己整合も強制する）。
+    (h) `synthesis_formula.prohibited` が裁定4項目・この順序で厳密一致
+        すること、`declaration_af0_not_realized` が非主張マーカー4件を
+        全て含むこと。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"speaker map manifest must be an object, got {type(data).__name__}")
+    unknown = set(data.keys()) - SPEAKER_MAP_MANIFEST_REQUIRED_KEYS
+    if unknown:
+        raise Run9ValidationError(f"speaker map manifest has unknown key(s): {sorted(unknown)}")
+    missing = SPEAKER_MAP_MANIFEST_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"speaker map manifest missing required key(s): {sorted(missing)}")
+
+    schema = data["schema"]
+    if schema != SCHEMA_SPEAKER_MAP:
+        raise Run9ValidationError(
+            f"speaker map manifest.schema must be exactly {SCHEMA_SPEAKER_MAP!r}, got {schema!r}"
+        )
+
+    design_revision = data["design_revision"]
+    if design_revision != _SPEAKER_MAP_ADJUDICATED_DESIGN_REVISION:
+        raise Run9ValidationError(
+            "speaker map manifest.design_revision must be exactly "
+            f"{_SPEAKER_MAP_ADJUDICATED_DESIGN_REVISION!r}, got {design_revision!r}"
+        )
+
+    # --- adjudication_basis --------------------------------------------
+    basis = _validate_speaker_map_shape(
+        data["adjudication_basis"], field="adjudication_basis",
+        required_keys=_SPEAKER_MAP_ADJUDICATION_BASIS_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(basis["source_file"], field="adjudication_basis.source_file")
+    basis_sha = basis["sha256"]
+    if not isinstance(basis_sha, str) or not _SHA256_HEX_RE.match(basis_sha):
+        raise Run9ValidationError(
+            f"speaker map manifest.adjudication_basis.sha256 must be a 64hex sha256, got {basis_sha!r}"
+        )
+    _require_non_empty_str(basis["summary"], field="adjudication_basis.summary")
+
+    # --- declaration_af0_not_realized (h) -------------------------------
+    declaration = data["declaration_af0_not_realized"]
+    _require_non_empty_str(declaration, field="declaration_af0_not_realized")
+    for marker in _SPEAKER_MAP_NON_CLAIM_MARKERS:
+        if marker not in declaration:
+            raise Run9ValidationError(
+                "speaker map manifest.declaration_af0_not_realized must contain the adjudicated "
+                f"non-claim marker phrase {marker!r}, got {declaration!r}"
+            )
+
+    # --- synthesis_formula (h) -------------------------------------------
+    formula = _validate_speaker_map_shape(
+        data["synthesis_formula"], field="synthesis_formula",
+        required_keys=_SPEAKER_MAP_SYNTHESIS_FORMULA_REQUIRED_KEYS,
+    )
+    for key in (
+        "expression", "dtype_all_stages", "vector_load_method", "weight_cast_method",
+        "output_format", "prohibition_compliance",
+    ):
+        _require_non_empty_str(formula[key], field=f"synthesis_formula.{key}")
+    prohibited = formula["prohibited"]
+    if not isinstance(prohibited, list) or tuple(prohibited) != _SPEAKER_MAP_PROHIBITED_ITEMS:
+        raise Run9ValidationError(
+            "speaker map manifest.synthesis_formula.prohibited must be exactly "
+            f"{list(_SPEAKER_MAP_PROHIBITED_ITEMS)} (order included), got {prohibited!r}"
+        )
+
+    # --- founders (b の型検証部分/c/d/f/g) --------------------------------
+    founders = data["founders"]
+    if not isinstance(founders, dict) or set(founders.keys()) != set(CONTRACT_FOUNDER_IDS):
+        raise Run9ValidationError(
+            f"speaker map manifest.founders must have exactly keys {sorted(CONTRACT_FOUNDER_IDS)}, "
+            f"got {sorted(founders.keys()) if isinstance(founders, dict) else founders!r}"
+        )
+
+    synthesized_shas: Dict[str, str] = {}
+    for founder_id in CONTRACT_FOUNDER_IDS:
+        f_prefix = f"founders.{founder_id}"
+        f = _validate_speaker_map_shape(
+            founders[founder_id], field=f_prefix, required_keys=_SPEAKER_MAP_FOUNDER_REQUIRED_KEYS,
+        )
+        _require_non_empty_str(f["genome_id"], field=f"{f_prefix}.genome_id")
+        _require_non_empty_str(f["profile_label"], field=f"{f_prefix}.profile_label")
+
+        coords_raw = _validate_speaker_map_shape(
+            f["coords_raw"], field=f"{f_prefix}.coords_raw",
+            required_keys=_SPEAKER_MAP_COORDS_RAW_REQUIRED_KEYS,
+        )
+        af0 = _require_valid_coord_scalar(coords_raw["af0"], f"{f_prefix}.coords_raw.af0")
+        ritsu = _require_valid_coord_scalar(coords_raw["ritsu"], f"{f_prefix}.coords_raw.ritsu")
+        user = _require_valid_coord_scalar(coords_raw["user"], f"{f_prefix}.coords_raw.user")
+        _require_non_empty_str(coords_raw["source"], field=f"{f_prefix}.coords_raw.source")
+
+        # (d)
+        unrealized = _validate_speaker_map_shape(
+            f["unrealized_mass"], field=f"{f_prefix}.unrealized_mass",
+            required_keys=_SPEAKER_MAP_UNREALIZED_MASS_REQUIRED_KEYS,
+        )
+        unrealized_value = _require_valid_coord_scalar(
+            unrealized["value"], f"{f_prefix}.unrealized_mass.value"
+        )
+        _require_non_empty_str(unrealized["derivation"], field=f"{f_prefix}.unrealized_mass.derivation")
+        if unrealized_value != af0:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.unrealized_mass.value ({unrealized_value!r}) "
+                f"must equal {f_prefix}.coords_raw.af0 ({af0!r}) — af0 の未実現質量は af0 座標値と "
+                "厳密一致する契約（裁定「この事実とunrealized massをspeaker map manifestへ明記する」）"
+            )
+
+        # (c)
+        weights = _validate_speaker_map_shape(
+            f["renormalized_runtime_weights"], field=f"{f_prefix}.renormalized_runtime_weights",
+            required_keys=_SPEAKER_MAP_WEIGHTS_REQUIRED_KEYS,
+        )
+        for key in (
+            "w_ritsu_expr", "w_user_expr", "w_ritsu_float32_repr", "w_user_float32_repr",
+            "w_ritsu_float32_hex", "w_user_float32_hex", "derivation_check",
+        ):
+            _require_non_empty_str(weights[key], field=f"{f_prefix}.renormalized_runtime_weights.{key}")
+        denom = ritsu + user
+        if denom <= 0.0:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.coords_raw: ritsu+user must be positive to "
+                f"renormalize, got ritsu={ritsu!r} user={user!r}"
+            )
+        expected_ritsu_hex, expected_ritsu_repr = _float32_hex_and_repr(ritsu / denom)
+        expected_user_hex, expected_user_repr = _float32_hex_and_repr(user / denom)
+        if weights["w_ritsu_float32_hex"] != expected_ritsu_hex or weights["w_ritsu_float32_repr"] != expected_ritsu_repr:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.renormalized_runtime_weights: w_ritsu re-derived "
+                f"from coords_raw (ritsu/(ritsu+user)) as hex={expected_ritsu_hex!r} "
+                f"repr={expected_ritsu_repr!r} diverges from manifest values "
+                f"hex={weights['w_ritsu_float32_hex']!r} repr={weights['w_ritsu_float32_repr']!r}"
+            )
+        if weights["w_user_float32_hex"] != expected_user_hex or weights["w_user_float32_repr"] != expected_user_repr:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.renormalized_runtime_weights: w_user re-derived "
+                f"from coords_raw (user/(ritsu+user)) as hex={expected_user_hex!r} "
+                f"repr={expected_user_repr!r} diverges from manifest values "
+                f"hex={weights['w_user_float32_hex']!r} repr={weights['w_user_float32_repr']!r}"
+            )
+
+        # input_embeddings（型検証のみ——(e) cross-manifest 照合は loader 側）
+        emb = _validate_speaker_map_shape(
+            f["input_embeddings"], field=f"{f_prefix}.input_embeddings",
+            required_keys=_SPEAKER_MAP_INPUT_EMBEDDINGS_REQUIRED_KEYS,
+        )
+        for key in ("ritsu_emb_sha256", "user_emb_sha256"):
+            v = emb[key]
+            if not isinstance(v, str) or not _SHA256_HEX_RE.match(v):
+                raise Run9ValidationError(
+                    f"speaker map manifest.{f_prefix}.input_embeddings.{key} must be a 64hex "
+                    f"sha256, got {v!r}"
+                )
+        _require_non_empty_str(emb["pin_source"], field=f"{f_prefix}.input_embeddings.pin_source")
+        if emb["pin_match"] is not True:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.input_embeddings.pin_match must be the literal "
+                f"boolean True, got {emb['pin_match']!r}"
+            )
+
+        # synthesized_embedding (f)
+        synth = _validate_speaker_map_shape(
+            f["synthesized_embedding"], field=f"{f_prefix}.synthesized_embedding",
+            required_keys=_SPEAKER_MAP_SYNTHESIZED_EMBEDDING_REQUIRED_KEYS,
+        )
+        synth_sha = synth["sha256"]
+        if not isinstance(synth_sha, str) or not _SHA256_HEX_RE.match(synth_sha):
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.synthesized_embedding.sha256 must be a 64hex "
+                f"sha256, got {synth_sha!r}"
+            )
+        if synth["bytes"] != 1536:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.synthesized_embedding.bytes must be exactly "
+                f"1536 (384-dim float32), got {synth['bytes']!r}"
+            )
+        if synth["dim"] != 384:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.synthesized_embedding.dim must be exactly 384, "
+                f"got {synth['dim']!r}"
+            )
+        if synth["dtype"] != "float32":
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.synthesized_embedding.dtype must be exactly "
+                f"'float32', got {synth['dtype']!r}"
+            )
+        if synth["isfinite_all"] is not True:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.synthesized_embedding.isfinite_all must be the "
+                f"literal boolean True, got {synth['isfinite_all']!r}"
+            )
+        if synth["byte_determinism_confirmed"] is not True:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.synthesized_embedding.byte_determinism_confirmed "
+                f"must be the literal boolean True, got {synth['byte_determinism_confirmed']!r}"
+            )
+        if synth["run1_sha256"] != synth_sha or synth["run2_sha256"] != synth_sha:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.synthesized_embedding: run1_sha256/run2_sha256 "
+                f"must both equal sha256 ({synth_sha!r}) when byte_determinism_confirmed is True, "
+                f"got run1_sha256={synth['run1_sha256']!r} run2_sha256={synth['run2_sha256']!r}"
+            )
+        synthesized_shas[founder_id] = synth_sha
+
+        # smoke_render (f)
+        smoke = _validate_speaker_map_shape(
+            f["smoke_render"], field=f"{f_prefix}.smoke_render",
+            required_keys=_SPEAKER_MAP_SMOKE_RENDER_REQUIRED_KEYS,
+        )
+        _require_non_empty_str(smoke["supply_method"], field=f"{f_prefix}.smoke_render.supply_method")
+        _require_non_empty_str(smoke["song"], field=f"{f_prefix}.smoke_render.song")
+        _require_positive_int(smoke["notes_limit"], field=f"{f_prefix}.smoke_render.notes_limit")
+        if smoke["render_replay_determinism_confirmed"] is not True:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.smoke_render.render_replay_determinism_confirmed "
+                f"must be the literal boolean True, got "
+                f"{smoke['render_replay_determinism_confirmed']!r}"
+            )
+        run_shas: Dict[str, str] = {}
+        for run_key in ("run1", "run2"):
+            run = _validate_speaker_map_shape(
+                smoke[run_key], field=f"{f_prefix}.smoke_render.{run_key}",
+                required_keys=_SPEAKER_MAP_SMOKE_RUN_REQUIRED_KEYS,
+            )
+            wav_sha = run["wav_sha256"]
+            if not isinstance(wav_sha, str) or not _SHA256_HEX_RE.match(wav_sha):
+                raise Run9ValidationError(
+                    f"speaker map manifest.{f_prefix}.smoke_render.{run_key}.wav_sha256 must be a "
+                    f"64hex sha256, got {wav_sha!r}"
+                )
+            run_shas[run_key] = wav_sha
+            elapsed = run["total_elapsed_sec"]
+            if isinstance(elapsed, bool) or not isinstance(elapsed, (int, float)) or not math.isfinite(float(elapsed)) or elapsed <= 0.0:
+                raise Run9ValidationError(
+                    f"speaker map manifest.{f_prefix}.smoke_render.{run_key}.total_elapsed_sec must "
+                    f"be a finite positive number, got {elapsed!r}"
+                )
+            embed_input_sha = run["summary_speaker_embed_input_sha256"]
+            if embed_input_sha != synth_sha:
+                raise Run9ValidationError(
+                    f"speaker map manifest.{f_prefix}.smoke_render.{run_key}."
+                    f"summary_speaker_embed_input_sha256 ({embed_input_sha!r}) must equal "
+                    f"{f_prefix}.synthesized_embedding.sha256 ({synth_sha!r}) — supply route の "
+                    "実消費 embedding が合成 embedding と一致することを machine 強制する"
+                )
+            if run["supply_route_verified"] is not True:
+                raise Run9ValidationError(
+                    f"speaker map manifest.{f_prefix}.smoke_render.{run_key}.supply_route_verified "
+                    f"must be the literal boolean True, got {run['supply_route_verified']!r}"
+                )
+        if run_shas["run1"] != run_shas["run2"]:
+            raise Run9ValidationError(
+                f"speaker map manifest.{f_prefix}.smoke_render: run1/run2 wav_sha256 must be equal "
+                f"when render_replay_determinism_confirmed is True, got "
+                f"run1={run_shas['run1']!r} run2={run_shas['run2']!r}"
+            )
+
+    # --- cross_founder_check (g) ------------------------------------------
+    cfc = _validate_speaker_map_shape(
+        data["cross_founder_check"], field="cross_founder_check",
+        required_keys=_SPEAKER_MAP_CROSS_FOUNDER_CHECK_REQUIRED_KEYS,
+    )
+    distinct = cfc["synthesized_embedding_sha256_distinct"]
+    if distinct is not True:
+        raise Run9ValidationError(
+            f"speaker map manifest.cross_founder_check.synthesized_embedding_sha256_distinct must "
+            f"be the literal boolean True, got {distinct!r}"
+        )
+    r9f01_sha = cfc["r9f01_sha256"]
+    r9f02_sha = cfc["r9f02_sha256"]
+    if not isinstance(r9f01_sha, str) or not _SHA256_HEX_RE.match(r9f01_sha):
+        raise Run9ValidationError(
+            f"speaker map manifest.cross_founder_check.r9f01_sha256 must be a 64hex sha256, got "
+            f"{r9f01_sha!r}"
+        )
+    if not isinstance(r9f02_sha, str) or not _SHA256_HEX_RE.match(r9f02_sha):
+        raise Run9ValidationError(
+            f"speaker map manifest.cross_founder_check.r9f02_sha256 must be a 64hex sha256, got "
+            f"{r9f02_sha!r}"
+        )
+    if r9f01_sha != synthesized_shas["R9F-01"] or r9f02_sha != synthesized_shas["R9F-02"]:
+        raise Run9ValidationError(
+            "speaker map manifest.cross_founder_check.{r9f01_sha256,r9f02_sha256} must equal the "
+            f"corresponding founders.*.synthesized_embedding.sha256, got r9f01_sha256={r9f01_sha!r} "
+            f"r9f02_sha256={r9f02_sha!r} vs founders={synthesized_shas!r}"
+        )
+    if r9f01_sha == r9f02_sha:
+        raise Run9ValidationError(
+            "speaker map manifest.cross_founder_check: r9f01_sha256 and r9f02_sha256 must differ "
+            "(synthesized_embedding_sha256_distinct is claimed True)"
+        )
+
+    # --- pre_pin_verification_summary (f) ---------------------------------
+    summary = _validate_speaker_map_shape(
+        data["pre_pin_verification_summary"], field="pre_pin_verification_summary",
+        required_keys=_SPEAKER_MAP_PRE_PIN_SUMMARY_REQUIRED_KEYS,
+    )
+    for key in _SPEAKER_MAP_PRE_PIN_SUMMARY_KEYS:
+        if summary[key] != "PASS":
+            raise Run9ValidationError(
+                f"speaker map manifest.pre_pin_verification_summary.{key} must be the literal "
+                f"string 'PASS', got {summary[key]!r}"
+            )
+    if summary["all_pass"] is not True:
+        raise Run9ValidationError(
+            "speaker map manifest.pre_pin_verification_summary.all_pass must be the literal "
+            f"boolean True, got {summary['all_pass']!r}"
+        )
+    _require_non_empty_str(summary["detail_record"], field="pre_pin_verification_summary.detail_record")
+
+    # --- next_step_per_adjudication -----------------------------------
+    next_step = data["next_step_per_adjudication"]
+    _require_non_empty_str(next_step, field="next_step_per_adjudication")
+    if _SPEAKER_MAP_NEXT_STEP_MARKER not in next_step:
+        raise Run9ValidationError(
+            "speaker map manifest.next_step_per_adjudication must contain the adjudicated marker "
+            f"phrase {_SPEAKER_MAP_NEXT_STEP_MARKER!r} (Birth Identity Separation Gate 不成立時の "
+            f"凍結規約), got {next_step!r}"
+        )
+
+    # --- unchanged_per_adjudication ------------------------------------
+    unchanged = data["unchanged_per_adjudication"]
+    if not isinstance(unchanged, list) or tuple(unchanged) != _SPEAKER_MAP_UNCHANGED_PER_ADJUDICATION:
+        raise Run9ValidationError(
+            "speaker map manifest.unchanged_per_adjudication must be exactly "
+            f"{list(_SPEAKER_MAP_UNCHANGED_PER_ADJUDICATION)} (order included), got {unchanged!r}"
+        )
+
+    # --- repo_state ------------------------------------------------------
+    repo_state = _validate_speaker_map_shape(
+        data["repo_state"], field="repo_state", required_keys=_SPEAKER_MAP_REPO_STATE_REQUIRED_KEYS,
+    )
+    if repo_state["repo_files_modified"] is not False:
+        raise Run9ValidationError(
+            "speaker map manifest.repo_state.repo_files_modified must be the literal boolean "
+            f"False, got {repo_state['repo_files_modified']!r}"
+        )
+    if repo_state["git_status_porcelain_empty"] is not True:
+        raise Run9ValidationError(
+            "speaker map manifest.repo_state.git_status_porcelain_empty must be the literal "
+            f"boolean True, got {repo_state['git_status_porcelain_empty']!r}"
+        )
+    _require_non_empty_str(
+        repo_state["gate_synth_py_execution_mode"], field="repo_state.gate_synth_py_execution_mode"
+    )
+    gate_sha = repo_state["gate_synth_py_sha256"]
+    if not isinstance(gate_sha, str) or not _SHA256_HEX_RE.match(gate_sha):
+        raise Run9ValidationError(
+            f"speaker map manifest.repo_state.gate_synth_py_sha256 must be a 64hex sha256, got "
+            f"{gate_sha!r}"
+        )
+    repo_head = repo_state["repo_git_head_at_measurement"]
+    if not isinstance(repo_head, str) or not _GIT_SHA_RE.match(repo_head):
+        raise Run9ValidationError(
+            f"speaker map manifest.repo_state.repo_git_head_at_measurement must be a 40hex git "
+            f"sha, got {repo_head!r}"
+        )
+
+
+def load_pinned_speaker_map_manifest(
+    contract: Run9RunContract, *, domain: Run9IdentityDomain, rights_manifest: Mapping[str, Any],
+    manifest_path: Optional[Path] = None, contract_path: Optional[Path] = None,
+    adjudication_basis_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`expected_speaker_map_sha` pin の**唯一の正規消費経路**
+    （`load_pinned_execution_profile_manifest()` と同型の3層防御・
+    read-once 契約。RUN9-L0-HARNESS-3a）。
+
+    **消費契約（事前登録）**: harness の speaker map 消費はこの関数経由の
+    みで行わなければならない——`inputs/speaker_map_manifest.json` への
+    直接 `json.load()` は契約違反である。
+
+    手順（いずれかで fail-closed）:
+    (1)-(5) 他の `load_pinned_*` 関数と同型（disk 正典再読込・改変検出、
+        PINNED 確認、実在確認、実バイト sha256 一致確認（i）、
+        `validate_speaker_map_manifest()` 全構造検証）
+    (6) cross-check (a): `adjudication_basis.source_file` の実バイト
+        sha256 を実測し、`adjudication_basis.sha256` と一致することを
+        machine 強制する（裁定文書の改変を fail-closed で拒否する）。
+        `_resolve_repo_contained_path()` 経由で repo-containment guard を
+        適用する（`load_pinned_execution_profile_manifest()` cross-check
+        (6) と同型）。
+    (7) cross-check (b): 両 founder について `load_pinned_founder_genome_
+        document()`（`contract`/`domain`/`rights_manifest` を渡す——本関数
+        自身が genome document の唯一の正規消費経路を re-use する）で
+        読んだ発行済み Founder Genome document の `coords` と、manifest
+        の `founders.<id>.coords_raw` が anchor 3軸（af0/ritsu/user）
+        全てで厳密一致することを強制する——「発行済みFounder Genome、
+        coords、genome_id...は変更しない」という裁定の不変宣言を消費時
+        にも機械強制する。
+    (8) cross-check (e): `load_pinned_reexport_manifest()` で読んだ
+        `artifacts.{ritsu_emb,user_emb}.sha256_run1` と、両 founder の
+        `input_embeddings.{ritsu,user}_emb_sha256` が一致することを
+        cross-manifest で強制する（`pin_match` の自己申告だけでなく実体を
+        照合する）。
+
+    戻り値は検証済み manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("expected_speaker_map_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("expected_speaker_map_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_speaker_map_manifest(): the passed-in contract's expected_speaker_map_sha "
+            f"pin ({passed_field!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml pin "
+            f"({disk_field!r}) at {effective_contract_path} — treated as tampering evidence and "
+            "rejected fail-closed (same defense as load_pinned_execution_profile_manifest())"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_speaker_map_manifest(): expected_speaker_map_sha is not PINNED "
+            f"(status={field.get('status')!r}) — refusing to consume an unpinned speaker map "
+            "manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else SPEAKER_MAP_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_speaker_map_manifest(): pinned speaker map manifest source {path} does "
+            "not exist — this function is the sole canonical access path (direct json.load() "
+            "elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（TOCTOU 対策）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_speaker_map_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml expected_speaker_map_sha の pin 値 ({pinned_sha!r}) と一致しない "
+            "— stale または改変された manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_speaker_map_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_speaker_map_manifest(data)
+
+    # (6) cross-check (a): adjudication_basis.source_file の実バイト sha256。
+    effective_adjudication_path = (
+        adjudication_basis_path
+        if adjudication_basis_path is not None
+        else _resolve_repo_contained_path(
+            data["adjudication_basis"]["source_file"],
+            repo_root=_SPEAKER_MAP_REPO_ROOT,
+            field="adjudication_basis.source_file",
+            context="load_pinned_speaker_map_manifest()",
+        )
+    )
+    if not effective_adjudication_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_speaker_map_manifest(): cross-check source {effective_adjudication_path} "
+            "(adjudication_basis.source_file) does not exist"
+        )
+    adjudication_actual_sha = hashlib.sha256(effective_adjudication_path.read_bytes()).hexdigest()
+    adjudication_pinned_sha = data["adjudication_basis"]["sha256"]
+    if adjudication_actual_sha != adjudication_pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_speaker_map_manifest(): {effective_adjudication_path} の実バイト sha256 "
+            f"({adjudication_actual_sha!r}) が adjudication_basis.sha256 pin 値 "
+            f"({adjudication_pinned_sha!r}) と一致しない — 裁定文書の改変を fail-closed で拒否する"
+        )
+
+    # (7) cross-check (b): coords_raw と発行済み Founder Genome document の一致。
+    for founder_id in CONTRACT_FOUNDER_IDS:
+        genome = load_pinned_founder_genome_document(
+            founder_id, contract=revalidated, domain=domain, rights_manifest=rights_manifest,
+        )
+        genome_coords = genome.coords.as_dict()
+        manifest_coords_raw = data["founders"][founder_id]["coords_raw"]
+        for axis in RUN9_ANCHOR_ORDER:
+            manifest_value = float(manifest_coords_raw[axis])
+            if manifest_value != genome_coords[axis]:
+                raise Run9ValidationError(
+                    f"load_pinned_speaker_map_manifest(): founders.{founder_id}.coords_raw.{axis} "
+                    f"({manifest_value!r}) diverges from the pinned Founder Genome document's "
+                    f"coords.{axis} ({genome_coords[axis]!r}) — 発行済み Founder Genome の coords "
+                    "不変宣言を fail-closed で拒否する"
+                )
+
+    # (8) cross-check (e): input_embeddings と reexport_manifest pin の一致。
+    reexport = load_pinned_reexport_manifest(revalidated)
+    expected_ritsu_emb = reexport["artifacts"]["ritsu_emb"]["sha256_run1"]
+    expected_user_emb = reexport["artifacts"]["user_emb"]["sha256_run1"]
+    for founder_id in CONTRACT_FOUNDER_IDS:
+        emb = data["founders"][founder_id]["input_embeddings"]
+        if emb["ritsu_emb_sha256"] != expected_ritsu_emb:
+            raise Run9ValidationError(
+                f"load_pinned_speaker_map_manifest(): founders.{founder_id}.input_embeddings."
+                f"ritsu_emb_sha256 ({emb['ritsu_emb_sha256']!r}) diverges from reexport_manifest.json "
+                f"artifacts.ritsu_emb.sha256_run1 ({expected_ritsu_emb!r})"
+            )
+        if emb["user_emb_sha256"] != expected_user_emb:
+            raise Run9ValidationError(
+                f"load_pinned_speaker_map_manifest(): founders.{founder_id}.input_embeddings."
+                f"user_emb_sha256 ({emb['user_emb_sha256']!r}) diverges from reexport_manifest.json "
+                f"artifacts.user_emb.sha256_run1 ({expected_user_emb!r})"
+            )
+
+    return data
