@@ -49,6 +49,13 @@ L2正規化・摂動・ランダム成分・重み調整は一切行わない（
        書き込みせず拒否 — 検証済み入力 emb の破壊を防ぐ、PR #328 Codex
        レビュー第2巡指摘4、P1、採用対応。`_check_out_does_not_alias_
        inputs()`）。
+  (iv) `--out` への書き込みは atomic（同一ディレクトリの一意な staging
+       ファイルへ書いて fsync 後 `os.replace()` で置換）——既存の正当な
+       emb がある状態で書き込みが中断しても truncate/partial 出力を
+       残さない（PR #328 Codex レビュー第3巡指摘7、P2、採用対応。
+       `_atomic_write_bytes()`。svp_rpe 側の `utils/atomic_io` 集約実装と
+       同型だが、本 run9 系は svp_rpe を import しない独立構成のため builder
+       内へ自足させた最小実装）。
 本 builder は `RUN9_CONTRACT.yaml` の `expected_speaker_map_sha` pin との
 実バイト照合は行わない（それは `load_pinned_speaker_map_manifest()` の
 責務——本 builder は checkout 直後の fixture 再現に特化した軽量ツールで
@@ -64,7 +71,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -234,6 +243,46 @@ def _check_out_does_not_alias_inputs(
     return None
 
 
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """`path` へ `data` を atomic に書き込む（同一ディレクトリ内の一意な
+    staging ファイルへ書き、fsync で durable にしてから `os.replace()` で
+    置換する。PR #328 Codex レビュー第3巡指摘7、P2、採用対応）。
+
+    旧実装は `--out` へ直接 `Path.write_bytes()` していたため、既存の
+    正当な emb が既に置かれている状態で書き込みが中断すると
+    truncate/partial 出力が残るおそれがあった。run9 系は
+    `src/svp_rpe/utils/atomic_io`（svp_rpe パッケージ）を import しない
+    独立構成（本モジュール docstring 参照）のため、同型の最小実装を
+    builder 内へ自足させる。
+
+    失敗時（`BaseException` 含む——`KeyboardInterrupt`/`SystemExit` でも
+    staging を残さない）は staging ファイルを best-effort で削除してから
+    re-raise する。`os.replace()` 呼び出し前は `path` に一切触れないため、
+    失敗しても既存の `path` の実バイトは無傷のまま残る——本関数の
+    呼び出し元（`main()`）はこの契約を alias 拒否チェック
+    （`_check_out_does_not_alias_inputs()`）の**後**に呼ぶことで、staging
+    書き込み自体が alias 判定を迂回して検証済み入力 emb を破壊する経路を
+    構造的に持たない。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp",
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--founder", required=True, choices=sorted(m.CONTRACT_FOUNDER_IDS))
@@ -256,8 +305,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if alias_error is not None:
             print(f"ERROR: speaker_map_builder.main(): {alias_error}", file=sys.stderr)
             return 1
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_bytes(synth.tobytes())
+        _atomic_write_bytes(args.out, synth.tobytes())
         report["out_path"] = str(args.out)
 
     print(json.dumps(report, indent=2, ensure_ascii=False))

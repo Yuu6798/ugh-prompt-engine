@@ -10,9 +10,11 @@ manifest dict のみを用いる。**実 ritsu/user emb バイナリは repo へ
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
+import tempfile
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pytest
@@ -333,3 +335,185 @@ def test_main_rejects_out_aliasing_ritsu_emb_and_does_not_corrupt_input(
     assert rc == 1
     # 入力 ritsu emb の実バイトが無傷のまま残っていること（破壊されていない）。
     assert ritsu_path.read_bytes() == original_ritsu_bytes
+
+
+# --- _atomic_write_bytes(): atomic write（PR #328 Codex レビュー第3巡 -------
+# --- 指摘7、P2、採用） -------------------------------------------------------
+
+
+class _ForwardingModuleProxy:
+    """テスト用の薄いプロキシ: 委譲先モジュール（real `os`/`tempfile`）の
+    属性を素通しし、`overrides` に指定した属性だけ差し替える。
+
+    `monkeypatch.setattr(smb.os, "replace", ...)` のようにプロセス全体で
+    共有される real `os`/`tempfile` モジュールのオブジェクトを直接書き換え
+    ると、テスト境界を越えてプロセス内の他コード（pytest 自身の内部処理
+    含む）にまで影響し得る——`monkeypatch.setattr(smb, "os", proxy)` で
+    `speaker_map_builder` モジュール**内の名前束縛だけ**を差し替え、real
+    モジュールは無傷のまま保つ（monkeypatch がテスト終了時に自動で
+    元へ戻す）。"""
+
+    def __init__(self, delegate: Any, **overrides: Any) -> None:
+        self._delegate = delegate
+        self._overrides = overrides
+
+    def __getattr__(self, name: str) -> Any:
+        if name in self._overrides:
+            return self._overrides[name]
+        return getattr(self._delegate, name)
+
+
+def test_atomic_write_bytes_writes_full_content_and_no_staging_leftover(
+    tmp_path: Path,
+) -> None:
+    """正常系: 書き込んだ実バイトが目的ファイルと完全一致し、staging
+    ファイル（`.<name>.*.tmp`）が書き込み先ディレクトリに残っていないこと
+    （atomic 置換後の bytes 一致 + staging cleanup の直接証拠）。"""
+    out_path = tmp_path / "out.emb"
+    payload = b"\x01\x02\x03\x04" * 96
+    smb._atomic_write_bytes(out_path, payload)  # noqa: SLF001
+    assert out_path.read_bytes() == payload
+    leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(f".{out_path.name}.")]
+    assert leftovers == []
+
+
+def test_atomic_write_bytes_replaces_existing_file(tmp_path: Path) -> None:
+    """既存の正当な出力ファイルがある状態でも、atomic 置換後は新しい
+    バイト列に完全に置き換わること。"""
+    out_path = tmp_path / "out.emb"
+    out_path.write_bytes(b"\x00" * 4)
+    payload = b"\xff" * 8
+    smb._atomic_write_bytes(out_path, payload)  # noqa: SLF001
+    assert out_path.read_bytes() == payload
+
+
+def test_atomic_write_bytes_creates_parent_dir(tmp_path: Path) -> None:
+    """`--out` の親ディレクトリが存在しない場合でも作成した上で書き込む
+    （旧実装の `main()` が呼んでいた `mkdir(parents=True, exist_ok=True)`
+    と同じ挙動を `_atomic_write_bytes()` 自身が担う）。"""
+    out_path = tmp_path / "nested" / "dir" / "out.emb"
+    payload = b"\x09" * 16
+    smb._atomic_write_bytes(out_path, payload)  # noqa: SLF001
+    assert out_path.read_bytes() == payload
+
+
+def test_atomic_write_bytes_failure_injection_leaves_old_bytes_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """failure-injection: `os.replace()` 実行前（staging 書き込み完了後）
+    に例外を注入すると、書き込み途中の中断を模擬しつつ、既存の旧出力
+    ファイルの実バイトが無傷のまま残ることを確認する（PR #328 Codex
+    レビュー第3巡指摘7、P2、採用対応 — 非 atomic write の穴の直接反証）。
+    """
+    out_path = tmp_path / "out.emb"
+    original_bytes = b"\x11\x22\x33\x44" * 96  # 既存の正当な出力（384 bytes）。
+    out_path.write_bytes(original_bytes)
+
+    def _boom(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("injected failure before os.replace()")
+
+    monkeypatch.setattr(smb, "os", _ForwardingModuleProxy(os, replace=_boom))
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        smb._atomic_write_bytes(out_path, b"\x99" * 384)  # noqa: SLF001
+
+    # 旧出力の実バイトが無傷のまま残っていること（truncate/partial 出力なし）。
+    assert out_path.read_bytes() == original_bytes
+    # staging ファイルは best-effort で削除され、ディレクトリに残らないこと。
+    leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(f".{out_path.name}.")]
+    assert leftovers == []
+
+
+def test_atomic_write_bytes_failure_injection_during_write_leaves_old_bytes_intact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """failure-injection（書き込み処理そのものへの注入）: staging
+    ファイルへの書き込み中に例外を注入しても、`os.replace()` に到達しない
+    ため既存の旧出力ファイルは無傷のまま残る。"""
+    out_path = tmp_path / "out.emb"
+    original_bytes = b"\xaa\xbb\xcc\xdd" * 96
+    out_path.write_bytes(original_bytes)
+
+    class _BoomFile:
+        def write(self, _data: bytes) -> int:
+            raise RuntimeError("injected failure during staging write")
+
+        def __enter__(self) -> "_BoomFile":
+            return self
+
+        def __exit__(self, *_exc: Any) -> None:
+            return None
+
+    def _fake_fdopen(fd: int, mode: str) -> Any:
+        os.close(fd)
+        return _BoomFile()
+
+    monkeypatch.setattr(smb, "os", _ForwardingModuleProxy(os, fdopen=_fake_fdopen))
+
+    with pytest.raises(RuntimeError, match="injected failure during staging write"):
+        smb._atomic_write_bytes(out_path, b"\x77" * 384)  # noqa: SLF001
+
+    assert out_path.read_bytes() == original_bytes
+
+
+def test_atomic_write_bytes_staging_does_not_alias_input_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """staging ファイルのパスが `--ritsu-emb`/`--user-emb` のいずれとも
+    異なること（alias 拒否チェックが staging 書き込みでは迂回されない
+    ことの直接証拠——`_check_out_does_not_alias_inputs()` は `--out` と
+    入力2つの3パスしか比較しないため、staging ファイル自体が偶然どちらか
+    と同一パスになれば alias ガードを迂回し得る、という懸念に対する
+    反証）。"""
+    ritsu_path = tmp_path / "ritsu.emb"
+    user_path = tmp_path / "user.emb"
+    ritsu_path.write_bytes(b"\x00" * 4)
+    user_path.write_bytes(b"\x00" * 4)
+    out_path = tmp_path / "out.emb"
+
+    seen_staging_names: List[str] = []
+
+    def _tracking_mkstemp(*args: Any, **kwargs: Any) -> Any:
+        fd, name = tempfile.mkstemp(*args, **kwargs)
+        seen_staging_names.append(name)
+        return fd, name
+
+    monkeypatch.setattr(
+        smb, "tempfile", _ForwardingModuleProxy(tempfile, mkstemp=_tracking_mkstemp),
+    )
+    smb._atomic_write_bytes(out_path, b"\x42" * 384)  # noqa: SLF001
+
+    assert len(seen_staging_names) == 1
+    staging_path = Path(seen_staging_names[0])
+    assert staging_path.resolve() != ritsu_path.resolve()
+    assert staging_path.resolve() != user_path.resolve()
+
+
+def test_main_writes_atomically_via_out_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`main()` 経由の統合確認: `--out` 指定時に `_atomic_write_bytes()` が
+    実際に呼ばれ、期待バイト列がそのまま書き出されること。"""
+    ritsu_path = tmp_path / "ritsu.emb"
+    user_path = tmp_path / "user.emb"
+    out_path = tmp_path / "out.emb"
+    ritsu_path.write_bytes(b"\x00" * 384)
+    user_path.write_bytes(b"\x00" * 384)
+
+    fake_synth = np.full(smb.EMB_DIM, 7.0, dtype=np.float32)
+    fake_report: Dict[str, Any] = {"founder_id": "R9F-01", "reproduced": True}
+
+    def _fake_synthesize(founder_id: str, ritsu_emb_path: Path, user_emb_path: Path) -> Any:
+        return fake_synth, dict(fake_report)
+
+    monkeypatch.setattr(smb, "synthesize", _fake_synthesize)
+
+    argv = [
+        "--founder", "R9F-01",
+        "--ritsu-emb", str(ritsu_path),
+        "--user-emb", str(user_path),
+        "--out", str(out_path),
+    ]
+    rc = smb.main(argv)
+    assert rc == 0
+    assert out_path.read_bytes() == fake_synth.tobytes()

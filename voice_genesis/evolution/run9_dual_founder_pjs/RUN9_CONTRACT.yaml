@@ -1387,8 +1387,41 @@ seed_policy_sha:
 # builder_provenance.builder_sha256 repin のみが本欄の repin 理由。旧
 # pin 値（第2世代、PR #328 第1巡3件対応後）は履歴として保持する:
 #   3057e5bb8a1b0da1834315b953477ead98b2ab401404d4f76262bd93689070b0
+#
+# 2026-08-27 第4世代 repin（PR #328 Codex レビュー第3巡2件、いずれも採用。
+# Claude 完結ルート）: 指摘7（P2）speaker_map_builder.py の --out への
+# 書き込みが Path.write_bytes() の直接呼び出しで非 atomic だったため、
+# 既存の正当な emb がある状態で書き込みが中断すると truncate/partial
+# 出力が残る穴があった——同一ディレクトリの一意な staging ファイルへ書き、
+# fsync で durable にしてから os.replace() で atomic 置換する
+# _atomic_write_bytes() を新設し main() へ配線した（failure-injection
+# テストで書き込み途中の例外注入後も旧出力バイトが無傷で残ることを確認、
+# alias 拒否チェックとの順序整合——staging ファイルが --ritsu-emb/
+# --user-emb のいずれとも別実体であることも確認済み）。指摘8（P2）
+# `run9_schema.py` の `repo_state.gate_synth_py_sha256` は 64hex 形式のみ
+# 検証されており、実ファイル・execution profile の render_code pin の
+# どちらとも照合していなかったため、smoke WAV の provenance が実在しない
+# コードへ帰属され得る穴があった——`load_pinned_speaker_map_manifest()`
+# の cross-check (l) として (i) `voice_genesis/foundry/s1_gate/
+# gate_synth.py` の実バイト sha256 との一致、(ii)
+# `execution_profile_manifest.json`（`load_pinned_execution_profile_
+# manifest()` 経由）の `render_code_commit.file_sha256` との cross-manifest
+# 一致、の両方を追加した（負例テスト: manifest 側 sha 改竄・実ファイル
+# 相違〔オーバーライドで偽ファイル注入〕・execution profile との
+# cross-manifest 不一致、の3系統）。指摘7・8 とも speaker map の実測事実
+# （各 founder の合成 embedding sha256・render sha256・秒数・pre_pin_
+# verification_summary の6点 PASS・重みの実効値そのもの）を一切変更しない
+# ——speaker_map_builder.py の実バイトが変わったことによる
+# builder_provenance.builder_sha256 repin のみが本欄の repin 理由（指摘8は
+# run9_schema.py/tests のみの変更で manifest 実バイトを変えない）。
+# builder 再現実測を workdir 現存の実 emb（`reexport_out/onnx_gate_40000/`）
+# に対し再実行し、両 founder の出力 sha256（`fc7b73fd...`/`0a681a2c...`）
+# が pin 値と不変のまま一致することを再確認済み
+# （`HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照）。旧 pin 値（第3世代、
+# PR #328 第2巡3件対応後）は履歴として保持する:
+#   ab2a98e99320bc4e93cab48c002b3c3e6546a371e6a390cd70b54ce026c6962d
 expected_speaker_map_sha:
-  value: "ab2a98e99320bc4e93cab48c002b3c3e6546a371e6a390cd70b54ce026c6962d"
+  value: "6a6d6e2fe5737bcc2847c66e9420e42c818a682630feb140860951195fd227cd"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/speaker_map_manifest.json
 

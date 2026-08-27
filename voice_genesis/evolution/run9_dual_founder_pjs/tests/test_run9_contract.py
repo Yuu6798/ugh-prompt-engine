@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import inspect
 import json
 import re
@@ -19001,6 +19002,99 @@ def test_harness3a_load_pinned_speaker_map_manifest_builder_path_escape_rejected
         m.load_pinned_speaker_map_manifest(
             tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
             manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+# --- load_pinned_speaker_map_manifest(): repo_state.gate_synth_py_sha256 ----
+# --- cross-check (l)（PR #328 Codex レビュー第3巡指摘8、P2、採用） ----------
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_gate_synth_py_sha_manifest_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """manifest 側 sha 改竄: `repo_state.gate_synth_py_sha256` を実際の
+    `gate_synth.py` の実バイト sha256 と食い違う値へ改竄すると、loader の
+    cross-check (l)-(i) が fail-closed で拒否する（旧実装は 64hex 形式のみ
+    検証しており、この改竄を素通りさせていた）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["repo_state"]["gate_synth_py_sha256"] = "a" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="repo_state.gate_synth_py_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_gate_synth_py_real_file_diverges_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """実ファイル相違（オーバーライドで偽ファイル注入）: manifest 側の
+    `repo_state.gate_synth_py_sha256` は正規の pin 値のままでも、
+    `gate_synth_py_path` オーバーライドで内容の異なる偽 `gate_synth.py` を
+    注入すると、loader の cross-check (l)-(i) が fail-closed で拒否する。"""
+    fake_gate_synth = tmp_path / "gate_synth.py"
+    fake_gate_synth.write_bytes(b"# tampered gate_synth.py content\n")
+    with pytest.raises(m.Run9ValidationError, match="repo_state.gate_synth_py_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            gate_synth_py_path=fake_gate_synth,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_gate_synth_py_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`gate_synth_py_path` オーバーライドが存在しないファイルを指すと
+    fail-closed で拒否される。"""
+    missing_path = tmp_path / "does_not_exist_gate_synth.py"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_speaker_map_manifest(
+            contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            gate_synth_py_path=missing_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_gate_synth_py_execprofile_cross_manifest_mismatch_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """cross-manifest 不一致: `repo_state.gate_synth_py_sha256` を、実ファイル
+    （オーバーライドで注入した偽 `gate_synth.py`）の実バイト sha256 とは
+    一致させつつ（cross-check (l)-(i) は通過させる）、実際の
+    `execution_profile_manifest.json` の `render_code_commit.file_sha256`
+    （real pin 値）とは食い違わせると、loader の cross-check (l)-(ii) が
+    fail-closed で拒否する——(i) 単体では検出できない「両 manifest が独立に
+    記録した gate_synth.py の provenance の食い違い」を検出する直接証拠。
+    """
+    fake_gate_synth = tmp_path / "gate_synth.py"
+    fake_bytes = b"# a different but internally self-consistent gate_synth.py\n"
+    fake_gate_synth.write_bytes(fake_bytes)
+    fake_sha = hashlib.sha256(fake_bytes).hexdigest()
+    # 実際の execution_profile_manifest.json の render_code_commit.file_sha256
+    # （real pin 値）とは異なることを前提として確認しておく（テストの意図が
+    # 偶然の一致で無効化されないことの自己防衛）。
+    real_execprofile = m._loads_strict_json(  # noqa: SLF001 - test-only introspection
+        m.EXECUTION_PROFILE_MANIFEST_PATH.read_text(encoding="utf-8")
+    )
+    real_execprofile_sha = (
+        real_execprofile["additional_measurements"]["render_code_commit"]["file_sha256"]
+    )
+    assert fake_sha != real_execprofile_sha
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["repo_state"]["gate_synth_py_sha256"] = fake_sha
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="render_code_commit.file_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+            gate_synth_py_path=fake_gate_synth,
         )
 
 

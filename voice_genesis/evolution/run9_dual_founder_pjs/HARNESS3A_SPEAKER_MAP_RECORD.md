@@ -369,8 +369,117 @@ $ python3 speaker_map_builder.py --founder R9F-02 \
   し `main()` へ配線、`synthesize()` 内の重み評価を共有パーサ呼び出しへ
   置き換え。
 
+## 追記: PR #328 Codex レビュー第3巡2件（P2×2、いずれも採用）対応 —
+## atomic write 化 + gate_synth.py provenance cross-check 追加 +
+## fresh checkout 再現実測の再確認（2026-08-27、Claude 完結ルート）
+
+第2巡対応後の `speaker_map_builder.py`/`run9_schema.py` に対し、第3巡で
+以下2件の穴が指摘された（いずれも採用・Fable 確定方針）。
+
+- **指摘7（P2）**: `speaker_map_builder.py` の `--out` へ `Path.
+  write_bytes()` を直接呼んでおり、既存の正当な emb がある状態で書き込み
+  が中断すると truncate/partial 出力が残るおそれがあった（非 atomic
+  write）。
+- **指摘8（P2）**: `run9_schema.py` の `repo_state.gate_synth_py_sha256`
+  は 64hex 形式のみ検証されており、実ファイル・execution profile の
+  render_code pin のどちらとも照合していなかった——smoke WAV の
+  provenance が実在しないコードへ帰属され得る穴があった。
+
+### 対応
+
+- **指摘7**: 同一ディレクトリ内の一意な staging ファイルへ書き、fsync で
+  durable にしてから `os.replace()` で atomic 置換する
+  `_atomic_write_bytes()` を新設し、`main()` の `write_bytes()` 直接呼び
+  出しを置き換えた。run9 系は `src/svp_rpe/utils/atomic_io`（svp_rpe
+  パッケージ）を import しない独立構成のため（本ファイル冒頭・
+  `speaker_map_builder.py` docstring 参照）、同型の最小実装を builder 内へ
+  自足させた（`practice_split_builder.py` と同じ独立実装の前例踏襲）。
+  failure-injection テスト（`os.replace()` 直前・staging 書き込み中の
+  双方に例外を注入し、いずれも既存の旧出力バイトが無傷で残ることを確認）
+  + 正常系（atomic 置換後の bytes 一致・親ディレクトリ自動作成・staging
+  ファイルの cleanup）+ staging ファイルが `--ritsu-emb`/`--user-emb` の
+  いずれとも別実体であること（alias 拒否チェックが staging 書き込みでは
+  迂回されないことの直接証拠）を `tests/test_speaker_map_builder.py` へ
+  追加した。alias 拒否チェック（`_check_out_does_not_alias_inputs()`、
+  第2巡指摘4）は `main()` 内で `_atomic_write_bytes()` 呼び出しの**前**に
+  実行される順序を維持しており、staging ファイルの書き込み自体が
+  alias 判定を迂回する経路は存在しない。
+- **指摘8**: `load_pinned_speaker_map_manifest()` の cross-check (l) として
+  以下2点を追加した: (i) `voice_genesis/foundry/s1_gate/gate_synth.py`
+  （`GATE_SYNTH_PY_REFERENCE_PATH`、テスト用に `gate_synth_py_path` で
+  上書き可能）の実バイト sha256 を実計算し `repo_state.
+  gate_synth_py_sha256` と一致することを強制、(ii) `load_pinned_
+  execution_profile_manifest()`（同じ `contract` 経由で execution_
+  profile_sha pin の全検証込みで読む——直接 `json.load()` はしない）で
+  読んだ `additional_measurements.render_code_commit` が `MEASURED` の
+  とき、その `file_sha256` が `repo_state.gate_synth_py_sha256` と
+  cross-manifest で一致することを強制。負例テスト（manifest 側 sha 改竄→
+  拒否、実ファイル相違〔オーバーライドで偽ファイル注入〕→拒否、
+  execution profile との cross-manifest 不一致→拒否〔(i) は通過させつつ
+  (ii) のみを狙い撃ちする構成〕、オーバーライドパス欠落→拒否）を
+  `tests/test_run9_contract.py` へ追加した。
+
+### builder 再現実測の再確認（両 founder、workdir 現存の入力 emb に対して実行）
+
+指摘7対応で `speaker_map_builder.py` の実バイトが変わったため（合成
+ロジック自体は不変——`_atomic_write_bytes()` は `--out` 指定時の書き込み
+経路のみに関与し、`synthesize()` の演算には一切触れない）、builder
+再現実測を再実行し、両 founder の出力 sha256 が manifest pin 値と不変の
+まま一致することを再確認した（指摘8は `run9_schema.py`/`tests/` のみの
+変更で `speaker_map_builder.py` の実バイトには影響しない）。
+
+入力: `<session workdir（repo外）>/reexport_out/onnx_gate_40000/
+s5_run6_acoustic_v1.{ritsu,user}.emb`（上記追記と同一ファイル。実測
+sha256 は `ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c`/
+`588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0` で
+pin 値と完全一致することを再確認済み）。
+
+```
+$ python3 speaker_map_builder.py --founder R9F-01 \
+    --ritsu-emb <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb \
+    --user-emb  <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.user.emb \
+    --out <session workdir（repo外）>/repro4/r9f01.emb
+$ python3 speaker_map_builder.py --founder R9F-02 \
+    --ritsu-emb <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb \
+    --user-emb  <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.user.emb \
+    --out <session workdir（repo外）>/repro4/r9f02.emb
+```
+
+| founder | w_ritsu_expr | w_user_expr | 再構築した out_sha256 | manifest pin (`synthesized_embedding.sha256`) | 一致 |
+|---|---|---|---|---|---|
+| R9F-01 | `0.75` | `0.25` | `fc7b73fd98ef77f7caeba44761bdfe2933228cd9869bc6b27131230dade6e1e9` | `fc7b73fd98ef77f7caeba44761bdfe2933228cd9869bc6b27131230dade6e1e9` | 一致 |
+| R9F-02 | `1.0/3.0` | `2.0/3.0` | `0a681a2c419295c739f6040316412e1cc5b6d16ee496e7f58ee36c45b425c2a1` | `0a681a2c419295c739f6040316412e1cc5b6d16ee496e7f58ee36c45b425c2a1` | 一致 |
+
+**判定: PASS**（両 founder とも変わらず一致——`reproduced: true`、
+今回も `--out` 指定で atomic 置換された出力ファイルの実バイト sha256 が
+上記と完全一致することを `sha256sum` で追加確認済み。合成ロジック自体・
+重みの実効値・出力 embedding は指摘7・8の対応によって一切変化しない
+ことの直接証拠）。
+
+### manifest/contract への反映
+
+- `inputs/speaker_map_manifest.json`: `builder_provenance.builder_sha256`
+  を `speaker_map_builder.py` の新しい実バイト sha256
+  （`4d23893e6783e8f457b8174a145141de46ba0893e0e4f79b0f704612935cc717`）へ
+  更新。既存の founder 実測値（合成 embedding sha256・render sha256・
+  秒数・`pre_pin_verification_summary` 6点・重み式そのもの）は一切変更
+  していない。
+- `RUN9_CONTRACT.yaml` `expected_speaker_map_sha`: manifest 実バイトが
+  変わったため第4世代へ repin（
+  `6a6d6e2fe5737bcc2847c66e9420e42c818a682630feb140860951195fd227cd`。
+  旧値 = 第3世代、`ab2a98e99320bc4e93cab48c002b3c3e6546a371e6a390cd70b54
+  ce026c6962d` は履歴として contract コメントに保持）。
+- `run9_schema.py`: `load_pinned_speaker_map_manifest()` に cross-check
+  (l)（gate_synth.py 実ファイル + execution_profile_manifest.json との
+  cross-manifest 照合）を新設し、`gate_synth_py_path` テスト用オーバー
+  ライド引数を追加。`validate_speaker_map_manifest()`/`load_pinned_
+  speaker_map_manifest()` の docstring へ (l)/(m) を追記。
+- `speaker_map_builder.py`: `_atomic_write_bytes()` を新設し `main()` の
+  `write_bytes()` 直接呼び出しを置き換え。
+
 ## 逸脱・停止事由
 
 なし。検証6点すべて PASS、repo ファイル変更ゼロ、`gate_synth.py` は
 read-only 実行のみ。上記追記の builder 再現実測も両 founder とも PASS。
 第2巡対応後の再確認実測も両 founder とも PASS（出力 sha256 不変）。
+第3巡対応後の再確認実測も両 founder とも PASS（出力 sha256 不変）。

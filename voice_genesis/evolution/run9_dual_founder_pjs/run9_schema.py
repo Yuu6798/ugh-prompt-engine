@@ -16315,6 +16315,10 @@ def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
     (j) `builder_provenance.repo_relative_path`（`speaker_map_builder.py`）
         の実バイト sha256 と `builder_provenance.builder_sha256` との一致
         （PR #328 Codex レビュー第1巡指摘1、P1、採用対応）
+    (l) `repo_state.gate_synth_py_sha256` と (i) 実ファイル `gate_synth.py`
+        の実バイト sha256、(ii) `execution_profile_manifest.json` の
+        `render_code_commit.file_sha256` との一致（PR #328 Codex レビュー
+        第3巡指摘8、P2、採用対応）
 
     本関数（manifest 単体）が検証する項目:
     (c) `renormalized_runtime_weights` の機械再導出一致——
@@ -16348,6 +16352,8 @@ def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
         全て含むこと。
     (k) `builder_provenance` の shape（`builder_sha256` が 64hex である
         こと等）——実バイト照合自体は loader 側 (j) が行う。
+    (m) `repo_state.gate_synth_py_sha256` の shape（64hex であること）——
+        実ファイル・execution profile との照合自体は loader 側 (l) が行う。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"speaker map manifest must be an object, got {type(data).__name__}")
@@ -16748,7 +16754,7 @@ def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
 def load_pinned_speaker_map_manifest(
     contract: Run9RunContract, *, domain: Run9IdentityDomain, rights_manifest: Mapping[str, Any],
     manifest_path: Optional[Path] = None, contract_path: Optional[Path] = None,
-    adjudication_basis_path: Optional[Path] = None,
+    adjudication_basis_path: Optional[Path] = None, gate_synth_py_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`expected_speaker_map_sha` pin の**唯一の正規消費経路**
     （`load_pinned_execution_profile_manifest()` と同型の3層防御・
@@ -16791,6 +16797,23 @@ def load_pinned_speaker_map_manifest(
         （PR #328 Codex レビュー第1巡指摘1、P1、採用対応——manifest が
         自己申告する builder_sha256 と実際に repo に存在する builder の
         実バイトとの乖離を fail-closed で拒否する）。
+    (10) cross-check (l)（PR #328 Codex レビュー第3巡指摘8、P2、採用対応）:
+        `repo_state.gate_synth_py_sha256` は旧実装では 64hex 形式のみ検証
+        されており、実ファイル・execution profile の render_code pin の
+        どちらとも照合していなかった——smoke WAV の provenance が実在しない
+        コードに帰属され得る穴があった。以下2点を machine 強制する:
+        (i)  `voice_genesis/foundry/s1_gate/gate_synth.py`
+             （`GATE_SYNTH_PY_REFERENCE_PATH`、`gate_synth_py_path` でテスト
+             用に上書き可能）の実バイト sha256 を実計算し、
+             `repo_state.gate_synth_py_sha256` と一致することを強制する。
+        (ii) `load_pinned_execution_profile_manifest()`（本関数と同じ
+             `contract` 経由で execution_profile_sha pin を再検証込みで読む
+             ——`execution_profile_manifest.json` への直接 json.load() は
+             しない）で読んだ `additional_measurements.render_code_commit`
+             が `MEASURED` のとき、その `file_sha256` が
+             `repo_state.gate_synth_py_sha256` と一致することを
+             cross-manifest で強制する（両 manifest が独立に記録した
+             gate_synth.py の provenance が食い違えば拒否する）。
 
     戻り値は検証済み manifest dict。
     """
@@ -16938,5 +16961,42 @@ def load_pinned_speaker_map_manifest(
             f"({builder_actual_sha!r}) が builder_provenance.builder_sha256 pin 値 "
             f"({builder_pinned_sha!r}) と一致しない — builder の改変を fail-closed で拒否する"
         )
+
+    # (10) cross-check (l): repo_state.gate_synth_py_sha256 が (i) 実ファイルの
+    # 実バイト sha256、(ii) execution_profile_manifest.json の render_code_
+    # commit.file_sha256、の両方と一致することを machine 強制する（PR #328
+    # レビュー第3巡指摘8、P2、採用対応——旧実装は 64hex 形式のみ検証しており、
+    # smoke WAV の provenance が実在しないコードへ帰属され得た）。
+    effective_gate_synth_py_path = (
+        gate_synth_py_path if gate_synth_py_path is not None else GATE_SYNTH_PY_REFERENCE_PATH
+    )
+    if not effective_gate_synth_py_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_speaker_map_manifest(): cross-check source "
+            f"{effective_gate_synth_py_path} (gate_synth.py) does not exist"
+        )
+    gate_synth_actual_sha = hashlib.sha256(effective_gate_synth_py_path.read_bytes()).hexdigest()
+    manifest_gate_synth_sha = data["repo_state"]["gate_synth_py_sha256"]
+    if gate_synth_actual_sha != manifest_gate_synth_sha:
+        raise Run9ValidationError(
+            f"load_pinned_speaker_map_manifest(): {effective_gate_synth_py_path} の実バイト sha256 "
+            f"({gate_synth_actual_sha!r}) が speaker map manifest.repo_state.gate_synth_py_sha256 "
+            f"pin 値 ({manifest_gate_synth_sha!r}) と一致しない — gate_synth.py の改変（または "
+            "provenance の捏造）を fail-closed で拒否する"
+        )
+
+    execution_profile = load_pinned_execution_profile_manifest(revalidated)
+    execprofile_render_commit = execution_profile["additional_measurements"]["render_code_commit"]
+    if execprofile_render_commit["status"] == "MEASURED":
+        execprofile_gate_synth_sha = execprofile_render_commit["file_sha256"]
+        if execprofile_gate_synth_sha != manifest_gate_synth_sha:
+            raise Run9ValidationError(
+                "load_pinned_speaker_map_manifest(): speaker map manifest.repo_state."
+                f"gate_synth_py_sha256 ({manifest_gate_synth_sha!r}) diverges from "
+                "execution_profile_manifest.json additional_measurements.render_code_commit."
+                f"file_sha256 ({execprofile_gate_synth_sha!r}) — cross-manifest gate_synth.py "
+                "provenance の不一致を fail-closed で拒否する（smoke WAV の provenance が実在しない "
+                "コードへ帰属される穴を閉じる）"
+            )
 
     return data
