@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（259 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（264 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -382,3 +382,20 @@ bot レビューは 10 巡・計 33 件で上限に達した。**採用 32 / 見
 | 整合検証の範囲 | outcome と Run 全体の状態量まで。trait 単位の値と outcome の整合は検証しない | §14.6 判定則の数値 freeze |
 | 脅威モデル | 受動的ドリフトの tamper-evidence。同一ユーザ権限の能動的攻撃者は境界外 | multi-tenant / 共有ユーザ環境での実行 |
 | replay 除外集合 | generator ソース 1 件のみ。それ以外の除外は実測の裏付けと明示登録を要する | bundle 実測で非出力 payload が判明したとき |
+
+### 第 11 巡（P1×1 / P2×1）— 上限超過だが 3 分類該当のため採用
+
+CLAUDE.md は「打ち切りは 3 分類を上書きしない（新しい具体経路を示す指摘は巡数に
+依らず採用）」と定めており、2 件とも新規の具体経路であるため採用した。
+
+1. **PASS が BLOCKED な Entry 裁定の上に立てた** — §22.1 が PASS との両立を明示
+   しているのは `SKIP` までで、`BLOCKED`（裁定そのものが未解決）ではない。
+   第 10 巡で導入した ENTER/SKIP/BLOCKED 写像が、この経路を新たに到達可能に
+   していた（自分の修正が作った穴）。PASS と両立する Entry 状態を
+   `_ENTRY_STATES_COMPATIBLE_WITH_PASS = ("ENTER", "SKIP")` で閉世界に固定した。
+2. **`--json-out` が非 atomic** — 既存の検証レポートを in-place truncate しており、
+   中断・容量不足で前の有効な証拠を壊して部分 JSON を残した。inventory 側と同じく
+   `svp_rpe.utils.atomic_io` へ委譲した（第 4 巡 P2 と同型の残り 1 箇所）。
+
+打ち切り宣言そのものは維持する。以降も、3 分類（実コード被害 / 将来汚染 /
+致命的バグ）に該当する新規経路のみ対応し、それ以外は境界宣言で止める。

@@ -867,6 +867,13 @@ _G15_VERDICT_FOR_ENTRY: Dict[str, str] = {
     "BLOCKED": "BLOCKED",
 }
 
+# `protocol_verdict: PASS` と両立する Entry 状態。§22.1 が明示する例外は
+# 「Phase A PASS 後に PHASE_B_ENTRY = SKIP となっても PASS として完了可能」
+# であって BLOCKED ではない。BLOCKED は裁定そのものが未解決であることを表すため、
+# PASS の正典結果と両立しない（PR #330 Codex 第 11 巡 P1 — 第 10 巡で導入した
+# ENTER/SKIP/BLOCKED 写像が新たに到達可能にした経路）。
+_ENTRY_STATES_COMPATIBLE_WITH_PASS: Tuple[str, ...] = ("ENTER", "SKIP")
+
 # §15.1 / §20.1: 成功側 outcome で compatibility_matrix の各エントリが持つべき欄。
 _COMPATIBILITY_ENTRY_REQUIRED: Tuple[str, ...] = ("status", "support", "calibration", "holdout")
 
@@ -1073,11 +1080,12 @@ def _require_entry_adjudication(mapping: Mapping[str, Any], entry: str, why: str
             f"results.hard_gates: {why} には {gate_id} の裁定結果が必要"
             "（ENTER / SKIP のいずれでも裁定は一度行われる — §29 手順 35）"
         )
-    if entry not in _G15_VERDICT_FOR_ENTRY:
+    if entry not in _ENTRY_STATES_COMPATIBLE_WITH_PASS:
         raise Run10ContractError(
             f"results: {why} で phase_b_entry={entry!r} は成立しない"
-            f"（§29 手順 35 により Entry 裁定は必ず一度行われる。"
-            f" 許容 {sorted(_G15_VERDICT_FOR_ENTRY)}）"
+            f"（§29 手順 35 により Entry 裁定は必ず一度行われ、§22.1 が PASS と"
+            f" 両立を認めるのは SKIP まで。BLOCKED は裁定未解決を表す。"
+            f" 許容 {list(_ENTRY_STATES_COMPATIBLE_WITH_PASS)}）"
         )
     expected = _G15_VERDICT_FOR_ENTRY[entry]
     if ledger[gate_id] != expected:

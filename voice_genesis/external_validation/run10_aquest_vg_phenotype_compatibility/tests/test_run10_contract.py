@@ -1188,3 +1188,37 @@ def test_enter_requires_g15_pass() -> None:
 
     doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "PASS"
     m.validate_results_document(doc)
+
+
+# --- 第 11 巡: PASS と BLOCKED な Entry 裁定は両立しない ------------------
+
+
+def test_pass_cannot_stand_on_a_blocked_entry_adjudication() -> None:
+    """§22.1: PASS と両立を認められているのは SKIP まで。
+
+    第 10 巡で導入した ENTER/SKIP/BLOCKED 写像が、裁定未解決（BLOCKED）のまま
+    Protocol PASS を記録する経路を新たに到達可能にしていた
+    （PR #330 Codex 第 11 巡 P1）。
+    """
+    doc = _passing_results()
+    doc["phase_b_entry"] = "BLOCKED"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED"]
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "BLOCKED"
+    with pytest.raises(m.Run10ContractError, match="phase_b_entry"):
+        m.validate_results_document(doc)
+
+
+def test_entry_states_compatible_with_pass_are_enumerated() -> None:
+    """PASS と両立する Entry 状態が閉世界で列挙されている。"""
+    assert m._ENTRY_STATES_COMPATIBLE_WITH_PASS == ("ENTER", "SKIP")
+    assert "BLOCKED" not in m._ENTRY_STATES_COMPATIBLE_WITH_PASS
+    assert "NOT_REACHED" not in m._ENTRY_STATES_COMPATIBLE_WITH_PASS
+
+
+def test_blocked_entry_is_recorded_under_a_blocked_verdict() -> None:
+    """裁定が BLOCKED なら protocol_verdict も PASS 以外になる（記録自体は可能）。"""
+    doc = _minimal_results()
+    doc["protocol_verdict"] = "BLOCKED"
+    doc["phase_b_entry"] = "BLOCKED"
+    doc["scientific_outcome"] = ["MEASUREMENT_INSUFFICIENT"]
+    m.validate_results_document(doc)

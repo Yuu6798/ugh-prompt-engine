@@ -75,6 +75,8 @@ _THIS_DIR = Path(__file__).resolve().parent
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
+from svp_rpe.utils.atomic_io import atomic_write_bytes  # noqa: E402
+
 from run10_schema import (  # noqa: E402  (sibling import 流儀 — run9_schema.py と同型)
     AF01_AGGREGATE_PROBE_COUNT,
     AF01_ALIAS_COUNT,
@@ -584,7 +586,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     payload = json.dumps(report.to_json(), ensure_ascii=False, indent=2, sort_keys=True)
     print(payload)
     if args.json_out:
-        Path(args.json_out).write_text(payload + "\n", encoding="utf-8")
+        # 既存の検証レポートを in-place truncate すると、中断・容量不足で
+        # 前の有効な証拠を壊して部分 JSON を残す。inventory 側と同じく
+        # リポジトリの atomic write 集約実装へ委譲する（第 11 巡 P2）。
+        atomic_write_bytes(Path(args.json_out), (payload + "\n").encode("utf-8"))
     return 0 if report.passed else 1
 
 

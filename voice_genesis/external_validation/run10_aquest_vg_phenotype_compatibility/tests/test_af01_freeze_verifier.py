@@ -617,3 +617,27 @@ def test_replay_output_dir_excludes_the_executed_copy(tmp_path: Path, monkeypatc
     report = v.verify_deterministic_replay(root)
     assert report.verdict == v.VERDICT_PASS
     assert report.unexpected == []
+
+
+# --- 第 11 巡: 検証レポートの atomic publish -----------------------------
+
+
+def test_json_out_preserves_a_previous_report_on_failure(tmp_path: Path, monkeypatch) -> None:
+    """既存の検証レポートを in-place truncate しない（中断時に前の証拠を残す）。"""
+    out = tmp_path / "report.json"
+    out.write_text('{"verdict": "PREVIOUS"}\n', encoding="utf-8")
+
+    def boom(path, data):
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(v, "atomic_write_bytes", boom)
+    with pytest.raises(OSError):
+        v.main(["--json-out", str(out)])
+    assert out.read_text(encoding="utf-8") == '{"verdict": "PREVIOUS"}\n'
+
+
+def test_json_out_writes_the_report(tmp_path: Path) -> None:
+    """通常経路ではレポートが書き出される。"""
+    out = tmp_path / "report.json"
+    assert v.main(["--json-out", str(out)]) == 0
+    assert '"verdict": "PASS"' in out.read_text(encoding="utf-8")
