@@ -181,29 +181,34 @@ def test_verify_bundle_reports_unavailable_for_missing_root(tmp_path: Path) -> N
 # --- §28-22: 決定論的 replay の経路 ----------------------------------------
 
 
+def _authenticated_replay_bundle(tmp_path: Path, generator_body: str, payload: dict) -> Path:
+    """generator を台帳へ正しく載せた bundle（実行前認証を通る状態）を作る。"""
+    root = tmp_path / "bundle"
+    root.mkdir()
+    generator = root / "generator_AF01_SF1.py"
+    generator.write_text(generator_body, encoding="utf-8")
+    entries = dict(payload)
+    entries["generator_AF01_SF1.py"] = m.compute_file_sha256(generator)
+    (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(v.render_payload_ledger(entries))
+    return root
+
+
 def test_deterministic_replay_detects_generator_drift(tmp_path: Path, monkeypatch) -> None:
     """§28-22 / §29 手順 7: 再生成 payload が凍結台帳と違えば DRIFT。
 
     実 generator は bundle 側にあるため、ここでは replay 機構そのものを
     合成 generator で検証する（台帳照合の向きが正しいこと）。
     """
-    root = tmp_path / "bundle"
-    root.mkdir()
-    (root / "generator_AF01_SF1.py").write_text(
-        textwrap.dedent(
-            """
-            from pathlib import Path
-            Path("C4").mkdir(exist_ok=True)
-            Path("C4/a.wav").write_bytes(b"drifted")
-            """
-        ).strip()
-        + "\n",
-        encoding="utf-8",
+    body = textwrap.dedent(
+        """
+        from pathlib import Path
+        Path("C4").mkdir(exist_ok=True)
+        Path("C4/a.wav").write_bytes(b"drifted")
+        """
+    ).strip() + "\n"
+    root = _authenticated_replay_bundle(
+        tmp_path, body, {"C4/a.wav": hashlib.sha256(b"frozen").hexdigest()}
     )
-    entries = {"C4/a.wav": hashlib.sha256(b"frozen").hexdigest()}
-    (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(v.render_payload_ledger(entries))
-
-    # 台帳の凍結 sha 検査を通過させたうえで replay 差分だけを見る。
     monkeypatch.setattr(
         v,
         "verify_ledger_bytes",
@@ -211,8 +216,14 @@ def test_deterministic_replay_detects_generator_drift(tmp_path: Path, monkeypatc
             verdict=v.VERDICT_PASS, checks={"payload_ledger_sha256": "PASS"}
         ),
     )
+    monkeypatch.setitem(
+        m.AF01_FROZEN_HASHES,
+        "af01_generator_sha256",
+        m.compute_file_sha256(root / "generator_AF01_SF1.py"),
+    )
     report = v.verify_deterministic_replay(root)
     assert report.verdict == v.VERDICT_DRIFT
+    assert report.checks["generator_authenticated_before_run"] == "PASS"
     assert report.checks["generator_run"] == "PASS"
     assert report.checks["deterministic_payload_replay"] == "FAIL"
     assert report.mismatches
@@ -222,27 +233,27 @@ def test_deterministic_replay_passes_when_payload_is_identical(
     tmp_path: Path, monkeypatch
 ) -> None:
     """replay 機構が常時 DRIFT を返す張りぼてでないこと。"""
-    root = tmp_path / "bundle"
-    root.mkdir()
-    (root / "generator_AF01_SF1.py").write_text(
-        textwrap.dedent(
-            """
-            from pathlib import Path
-            Path("C4").mkdir(exist_ok=True)
-            Path("C4/a.wav").write_bytes(b"frozen")
-            """
-        ).strip()
-        + "\n",
-        encoding="utf-8",
+    body = textwrap.dedent(
+        """
+        from pathlib import Path
+        Path("C4").mkdir(exist_ok=True)
+        Path("C4/a.wav").write_bytes(b"frozen")
+        """
+    ).strip() + "\n"
+    root = _authenticated_replay_bundle(
+        tmp_path, body, {"C4/a.wav": hashlib.sha256(b"frozen").hexdigest()}
     )
-    entries = {"C4/a.wav": hashlib.sha256(b"frozen").hexdigest()}
-    (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(v.render_payload_ledger(entries))
     monkeypatch.setattr(
         v,
         "verify_ledger_bytes",
         lambda path=None: v.Af01VerificationReport(
             verdict=v.VERDICT_PASS, checks={"payload_ledger_sha256": "PASS"}
         ),
+    )
+    monkeypatch.setitem(
+        m.AF01_FROZEN_HASHES,
+        "af01_generator_sha256",
+        m.compute_file_sha256(root / "generator_AF01_SF1.py"),
     )
     report = v.verify_deterministic_replay(root)
     assert report.verdict == v.VERDICT_PASS
@@ -262,3 +273,126 @@ def test_cli_ledger_only_mode_passes(capsys) -> None:
     assert v.main([]) == 0
     printed = capsys.readouterr().out
     assert '"verdict": "PASS"' in printed
+
+
+# --- generator の実行前認証（PR #330 Codex 第 1 巡 P1） --------------------
+
+
+def _replay_bundle(tmp_path: Path, generator_body: str, ledger: dict) -> Path:
+    root = tmp_path / "bundle"
+    root.mkdir()
+    (root / "generator_AF01_SF1.py").write_text(generator_body, encoding="utf-8")
+    (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(v.render_payload_ledger(ledger))
+    return root
+
+
+def _pass_ledger_gate(monkeypatch) -> None:
+    monkeypatch.setattr(
+        v,
+        "verify_ledger_bytes",
+        lambda path=None: v.Af01VerificationReport(
+            verdict=v.VERDICT_PASS, checks={"payload_ledger_sha256": "PASS"}
+        ),
+    )
+
+
+def test_replay_refuses_to_execute_a_drifted_generator(tmp_path: Path, monkeypatch) -> None:
+    """台帳と実バイトが違う generator を **実行せずに** DRIFT にする。
+
+    drift を検出するはずの検証器が、drift した任意の Python を実行する経路に
+    なってはならない（AGENTS.md「hash した bytes と実行された bytes の間の窓」）。
+    """
+    sentinel = tmp_path / "executed"
+    body = f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n"
+    ledger = {
+        "C4/a.wav": hashlib.sha256(b"frozen").hexdigest(),
+        "generator_AF01_SF1.py": m.AF01_FROZEN_HASHES["af01_generator_sha256"],
+    }
+    root = _replay_bundle(tmp_path, body, ledger)
+    _pass_ledger_gate(monkeypatch)
+
+    report = v.verify_deterministic_replay(root)
+    assert report.verdict == v.VERDICT_DRIFT
+    assert report.checks["generator_authenticated_before_run"] == "FAIL"
+    assert not sentinel.exists(), "認証に失敗した generator を実行してはならない"
+
+
+def test_replay_refuses_when_ledger_generator_sha_disagrees_with_pin(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """台帳の generator sha が凍結 pin と違えば実行しない。"""
+    sentinel = tmp_path / "executed"
+    body = f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n"
+    root = _replay_bundle(tmp_path, body, {"generator_AF01_SF1.py": "0" * 64})
+    _pass_ledger_gate(monkeypatch)
+
+    report = v.verify_deterministic_replay(root)
+    assert report.verdict == v.VERDICT_DRIFT
+    assert report.checks["generator_ledger_matches_frozen_pin"] == "FAIL"
+    assert not sentinel.exists()
+
+
+def test_replay_refuses_when_generator_is_absent_from_ledger(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """台帳に generator が載っていない bundle は実行しない。"""
+    root = _replay_bundle(tmp_path, "pass\n", {"C4/a.wav": "0" * 64})
+    _pass_ledger_gate(monkeypatch)
+    report = v.verify_deterministic_replay(root)
+    assert report.verdict == v.VERDICT_DRIFT
+    assert report.checks["generator_in_ledger"] == "FAIL"
+
+
+def test_replay_detects_generator_self_mutation(tmp_path: Path, monkeypatch) -> None:
+    """実行中に自身を書き換える generator を実行後の再 hash で捕まえる。"""
+    body = (
+        "from pathlib import Path\n"
+        "import sys\n"
+        "Path(sys.argv[0]).write_text('mutated\\n')\n"
+    )
+    root = _replay_bundle(tmp_path, body, {"generator_AF01_SF1.py": "0" * 64})
+    digest = m.compute_file_sha256(root / "generator_AF01_SF1.py")
+    (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(
+        v.render_payload_ledger({"generator_AF01_SF1.py": digest})
+    )
+    _pass_ledger_gate(monkeypatch)
+    monkeypatch.setitem(m.AF01_FROZEN_HASHES, "af01_generator_sha256", digest)
+
+    report = v.verify_deterministic_replay(root)
+    assert report.verdict == v.VERDICT_DRIFT
+    assert report.checks["generator_unchanged_after_run"] == "FAIL"
+
+
+def test_replay_exclusion_set_is_closed_and_minimal() -> None:
+    """replay の除外集合が黙って広がらないよう閉世界で固定する。
+
+    除外が増えると「再生成できていないのに PASS」になる。generator 自身の
+    ソースは定義上 replay の入力であり、それ以外の除外は実測の裏付けとともに
+    明示登録することを要求する。
+    """
+    assert v.REPLAY_INPUT_ONLY_ENTRIES == ("generator_AF01_SF1.py",)
+
+
+def test_replay_reports_unreproduced_payload_as_drift(tmp_path: Path, monkeypatch) -> None:
+    """generator が台帳の一部を出力しなければ DRIFT（欠落を黙って落とさない）。"""
+    body = 'from pathlib import Path\nPath("a.txt").write_text("x")\n'
+    root = _authenticated_replay_bundle(
+        tmp_path,
+        body,
+        {"a.txt": hashlib.sha256(b"x").hexdigest(), "b.txt": "0" * 64},
+    )
+    monkeypatch.setattr(
+        v,
+        "verify_ledger_bytes",
+        lambda path=None: v.Af01VerificationReport(
+            verdict=v.VERDICT_PASS, checks={"payload_ledger_sha256": "PASS"}
+        ),
+    )
+    monkeypatch.setitem(
+        m.AF01_FROZEN_HASHES,
+        "af01_generator_sha256",
+        m.compute_file_sha256(root / "generator_AF01_SF1.py"),
+    )
+    report = v.verify_deterministic_replay(root)
+    assert report.verdict == v.VERDICT_DRIFT
+    assert report.missing == ["b.txt"]

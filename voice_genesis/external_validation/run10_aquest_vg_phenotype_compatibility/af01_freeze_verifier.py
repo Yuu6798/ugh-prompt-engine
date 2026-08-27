@@ -61,6 +61,13 @@ LEDGER_EXCLUDED_NAMES: Tuple[str, ...] = (
     "AF01_FROZEN_REGISTRATION_v1.0.md",
 )
 
+# replay で再生成対象から外す台帳エントリ（閉世界）。generator 自身のソースは
+# payload に載っているが定義上 replay の**入力**であり、生成器が自分のソースを
+# 出力することは要求できない。これ以外を黙って除外してはならない — 生成器が
+# 出力しない payload が他にあると分かった場合は、実測の裏付けとともにここへ
+# 明示登録する（黙って除外すると「再生成できていないのに PASS」になる）。
+REPLAY_INPUT_ONLY_ENTRIES: Tuple[str, ...] = ("generator_AF01_SF1.py",)
+
 # canonical 4 点（§21 R10-G2 が不一致で AF01_INPUT_DRIFT を出す対象）。
 CANONICAL_ENTRIES: Dict[str, str] = {
     "AF01.json": "af01_spec_sha256",
@@ -301,6 +308,39 @@ def verify_deterministic_replay(
         return ledger_report
     frozen = parse_payload_ledger(ledger_source.read_text(encoding="utf-8"))
 
+    # generator を **起動する前に** 実バイトを認証する。台帳だけ検証して
+    # bundle 側の generator をそのまま実行すると、drift を検出するはずの
+    # 検証器が「drift した任意の Python を実行する」経路になる
+    # （PR #330 Codex 第 1 巡 P1 / AGENTS.md「hash した bytes と実行された
+    # bytes の間に cache の窓が無いか」）。
+    expected_generator = frozen.get("generator_AF01_SF1.py")
+    if expected_generator is None:
+        return Af01VerificationReport(
+            verdict=VERDICT_DRIFT,
+            checks={"generator_in_ledger": "FAIL"},
+            mismatches=["generator_AF01_SF1.py が台帳に無い"],
+        )
+    if expected_generator != AF01_FROZEN_HASHES["af01_generator_sha256"]:
+        return Af01VerificationReport(
+            verdict=VERDICT_DRIFT,
+            checks={"generator_ledger_matches_frozen_pin": "FAIL"},
+            mismatches=[
+                f"台帳の generator sha が凍結 pin と不一致:"
+                f" ledger={expected_generator}"
+                f" pin={AF01_FROZEN_HASHES['af01_generator_sha256']}"
+            ],
+        )
+    generator_sha_before = compute_file_sha256(generator)
+    if generator_sha_before != expected_generator:
+        return Af01VerificationReport(
+            verdict=VERDICT_DRIFT,
+            checks={"generator_authenticated_before_run": "FAIL"},
+            mismatches=[
+                f"generator_AF01_SF1.py: expected={expected_generator}"
+                f" actual={generator_sha_before}（実行しない）"
+            ],
+        )
+
     with tempfile.TemporaryDirectory(prefix="af01_replay_") as tmp:
         workdir = Path(tmp)
         try:
@@ -332,17 +372,36 @@ def verify_deterministic_replay(
                 continue
             rebuilt[relative] = compute_file_sha256(produced)
 
-    missing = sorted(set(frozen) - set(rebuilt))
+    # 実行後に再 hash して mutation の窓を閉じる（実行中に自身を書き換える
+    # generator が「認証済みの bytes を実行した」と主張できないようにする）。
+    generator_sha_after = compute_file_sha256(generator)
+    if generator_sha_after != generator_sha_before:
+        return Af01VerificationReport(
+            verdict=VERDICT_DRIFT,
+            checks={
+                "generator_authenticated_before_run": "PASS",
+                "generator_unchanged_after_run": "FAIL",
+            },
+            mismatches=[
+                f"generator_AF01_SF1.py が実行中に変化した:"
+                f" before={generator_sha_before} after={generator_sha_after}"
+            ],
+        )
+
+    required = {k: v for k, v in frozen.items() if k not in REPLAY_INPUT_ONLY_ENTRIES}
+    missing = sorted(set(required) - set(rebuilt))
     unexpected = sorted(set(rebuilt) - set(frozen))
     mismatches = [
         f"{path}: frozen={frozen[path]} rebuilt={rebuilt[path]}"
-        for path in sorted(set(frozen) & set(rebuilt))
+        for path in sorted(set(required) & set(rebuilt))
         if frozen[path] != rebuilt[path]
     ]
     identical = not (missing or unexpected or mismatches)
     return Af01VerificationReport(
         verdict=VERDICT_PASS if identical else VERDICT_DRIFT,
         checks={
+            "generator_authenticated_before_run": "PASS",
+            "generator_unchanged_after_run": "PASS",
             "generator_run": "PASS",
             "deterministic_payload_replay": "PASS" if identical else "FAIL",
         },

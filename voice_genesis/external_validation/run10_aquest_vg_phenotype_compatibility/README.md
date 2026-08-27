@@ -48,7 +48,7 @@ Source / Identity 形質体系と測定器を同じ条件で適用したとき�
 
 | Gate | 状態 | 理由 |
 |---|---|---|
-| R10-G0 `RUN_CONTRACT_COMPLETE` | **BLOCKED** | Core pin 欄に PENDING が残る |
+| R10-G0 `RUN_CONTRACT_COMPLETE` | **BLOCKED** | Core pin 欄に PENDING が残る（§31 cost cap 4 欄を含む） |
 | R10-G1 `RIGHTS_AND_PRIVATE_BOUNDARY` | **BLOCKED** | R10-PUB-1 は裁定済み。AQUEST 回答アーカイブ未固定 / private staging root 未確定 |
 | R10-G2 `PRE_RUN_INVENTORY_COMPLETE` | **BLOCKED** | A0 未取得 / AF01 bundle 実体未取得 / meter 未実装 |
 | R10-G3 以降 | 未到達 | — |
@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（88 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（158 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -153,3 +153,28 @@ generative_trait_compatibility_claim: C1-C2
    本実装は章番号ではなく見出し文字列で参照する。
 
 いずれも凍結ハッシュ・Gate 集合・enum には影響しない。
+
+## レビュー由来の設計強化（PR #330 Codex 第 1 巡）
+
+自動レビュー 7 件（P1×5 / P2×2）を全件採用した。いずれも「偽成功経路 / 将来汚染」
+に該当する。
+
+1. **公開境界を閉世界 allowlist へ反転** — 拒否リストでは将来の `measurement/`
+   `calibration/` `evaluation/` に置かれる測定値・集計表が素通りしていた。
+   公開してよいものを列挙し、それ以外を拒否する方式へ変更
+   （`private_boundary.PUBLISHABLE_DATA_FILES` へ明示登録しない JSON/TXT は commit 不可）。
+2. **results の evidence 要求** — 構造だけの空文書で `protocol_verdict: PASS` +
+   `COMPATIBILITY_MAP_ESTABLISHED` を記録できた。outcome ごとに必要な evidence 節と
+   R10-G0..G14 の Gate 台帳全 PASS を要求する。
+3. **PINNED 値の形式契約** — `pinned::resampler_sha` のようなプレースホルダで
+   R10-G0 を開けた。sha256 は小文字 16 進 64 桁、`repository_commit_sha` は git object
+   形式、`minimum_generatable_traits` は正の整数、cost cap は正の数を要求する。
+4. **replay 前の generator 認証** — 台帳だけ検証して bundle 側の generator を実行して
+   いたため、drift を検出するはずの検証器が drift した任意の Python を実行する経路に
+   なっていた。実行前に実バイトを認証し、実行後に再 hash して mutation の窓を閉じる。
+5. **収録ピッチ inventory は未実施なら blocking** — 「未実施だから cross-pitch を
+   要求しない」は成立しない。単一ピッチが**確定した**場合にのみ NOT_EVALUABLE へ routing する。
+6. **`FREEZE_REGISTRATION.json` の形状検証** — 存在するだけで required item を満たして
+   いた。schema / 凍結ハッシュ / 構造量の宣言を凍結値と照合する。
+7. **cost cap を R10-G0 の対象へ** — cap が PENDING のまま G0 が PASS すると上限なしで
+   課金作業を開始できた（§31 / §32 Stop Rule 20）。

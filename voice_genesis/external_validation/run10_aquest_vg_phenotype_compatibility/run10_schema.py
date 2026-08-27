@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
@@ -213,6 +214,63 @@ PHASE_B_GATES: Tuple[Tuple[str, str], ...] = (
 
 PIN_STATUSES: Tuple[str, ...] = ("PINNED", "PENDING", "BLOCKED", "NOT_APPLICABLE")
 
+# PINNED 値の形式契約（閉世界。AGENTS.md「回収・検収系の成功条件は閉世界契約で
+# 書く」）。`_validate_pin_field()` が「非 null なら何でも PINNED」を許すと、
+# `pinned::resampler_sha` のようなプレースホルダで R10-G0 を開けてしまい、
+# 実在の成果物・依存・commit へ束縛されないまま本測定へ進める偽成功経路になる
+# （PR #330 Codex 第 1 巡 P1）。欄ごとに正の形式を要求する。
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_GIT_OBJECT_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+_ATTEMPT_ID_RE = re.compile(r"^RUN10-ATTEMPT-[0-9]{2,}$")
+
+# sha 系でない Core 欄の形式（sha 系は名前規約 `_sha` / `_sha256` で判定する）。
+NON_SHA_PIN_FORMATS: Dict[str, str] = {
+    "attempt_id": "attempt_id",
+    "repository_commit_sha": "git_object",
+    "minimum_generatable_traits": "positive_int",
+}
+
+
+def _pin_value_format(name: str) -> str:
+    """pin 欄名から要求する値形式を決める。"""
+    leaf = name.rsplit(".", 1)[-1]
+    if leaf in NON_SHA_PIN_FORMATS:
+        return NON_SHA_PIN_FORMATS[leaf]
+    if name.startswith("cost_cap."):
+        return "positive_number"
+    if leaf.endswith("_sha") or leaf.endswith("_sha256"):
+        return "sha256"
+    raise Run10ContractError(f"{name}: 値形式が未定義（閉世界契約に欄を登録すること）")
+
+
+def _validate_pin_value(name: str, value: Any) -> None:
+    """PINNED 値が欄の形式契約を満たすか（fail-closed）。"""
+    kind = _pin_value_format(name)
+    if kind == "sha256":
+        if not isinstance(value, str) or not _SHA256_RE.match(value):
+            raise Run10ContractError(
+                f"{name}: sha256 は小文字 16 進 64 桁でなければならない（実際 {value!r}）"
+            )
+    elif kind == "git_object":
+        if not isinstance(value, str) or not _GIT_OBJECT_RE.match(value):
+            raise Run10ContractError(
+                f"{name}: git object 形式（小文字 16 進 40 桁または 64 桁）が必要"
+                f"（実際 {value!r}）"
+            )
+    elif kind == "attempt_id":
+        if not isinstance(value, str) or not _ATTEMPT_ID_RE.match(value):
+            raise Run10ContractError(
+                f"{name}: RUN10-ATTEMPT-NN 形式が必要（実際 {value!r}）"
+            )
+    elif kind == "positive_int":
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise Run10ContractError(f"{name}: 正の整数が必要（実際 {value!r}）")
+    elif kind == "positive_number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise Run10ContractError(f"{name}: 正の数が必要（実際 {value!r}）")
+    else:  # pragma: no cover - _pin_value_format が網羅する
+        raise Run10ContractError(f"{name}: 未知の値形式 {kind!r}")
+
 # §23 の `<PIN>` 注記を、pin が確定しなければならない時点でグループ化する。
 # Calibration 開始前に Core、Calibration 終了後・AQUEST target 本測定開始前に
 # decision 欄を freeze する（§23 冒頭）。
@@ -329,6 +387,12 @@ COST_CAP_FIELDS: Tuple[str, ...] = (
     "render_count_max",
 )
 
+# §31 cost cap の 4 欄も R10-G0 RUN_CONTRACT_COMPLETE の対象である。
+# §23 は cost_cap を Run Contract の必須内容として並べ、§32 Stop Rule 20 は
+# cap 超過を停止条件にしている。cap が PENDING のまま G0 が PASS すると、
+# 上限なしで課金作業を開始できてしまう（PR #330 Codex 第 1 巡 P2）。
+COST_CAP_PIN_FIELDS: Tuple[str, ...] = tuple(f"cost_cap.{name}" for name in COST_CAP_FIELDS)
+
 CONTRACT_STAGES: Tuple[str, ...] = (
     "CORE",
     "AFTER_CALIBRATION",
@@ -339,7 +403,7 @@ CONTRACT_STAGES: Tuple[str, ...] = (
 )
 
 _STAGE_FIELDS: Dict[str, Tuple[str, ...]] = {
-    "CORE": CORE_PIN_FIELDS,
+    "CORE": CORE_PIN_FIELDS + COST_CAP_PIN_FIELDS,
     "AFTER_CALIBRATION": AFTER_CALIBRATION_PIN_FIELDS,
     "BEFORE_TARGET_MEASUREMENT": BEFORE_TARGET_MEASUREMENT_PIN_FIELDS,
     "AFTER_PHASE_A": AFTER_PHASE_A_PIN_FIELDS,
@@ -427,6 +491,8 @@ def _validate_pin_field(name: str, obj: Any) -> PinField:
     value = mapping["value"]
     if status == "PINNED" and value is None:
         raise Run10ContractError(f"{name}: status=PINNED なのに value が null")
+    if status == "PINNED":
+        _validate_pin_value(name, value)
     if status != "PINNED" and value is not None:
         raise Run10ContractError(
             f"{name}: status={status} なのに value が非 null（未確定値を先取りしない）"
@@ -482,7 +548,6 @@ def _validate_structure(doc: Mapping[str, Any]) -> None:
 
     _validate_staged_intervention(doc["staged_intervention"])
     _validate_supersedes(doc["supersedes"])
-    _validate_cost_cap(doc["cost_cap"])
     _validate_claim_strength(doc["claim_strength_target"])
 
 
@@ -530,15 +595,17 @@ def _validate_supersedes(obj: Any) -> None:
         )
 
 
-def _validate_cost_cap(obj: Any) -> None:
+def _validate_cost_cap(obj: Any) -> Dict[str, PinField]:
     """§31: cost cap 4 欄が存在すること（結果確認後の引き上げは同一 attempt 内禁止）。"""
     mapping = _require_mapping("cost_cap", obj)
     if set(mapping) != set(COST_CAP_FIELDS):
         raise Run10ContractError(
             f"cost_cap: {sorted(COST_CAP_FIELDS)} のみ許容（実際 {sorted(mapping)}）"
         )
-    for key in COST_CAP_FIELDS:
-        _validate_pin_field(f"cost_cap.{key}", mapping[key])
+    return {
+        f"cost_cap.{key}": _validate_pin_field(f"cost_cap.{key}", mapping[key])
+        for key in COST_CAP_FIELDS
+    }
 
 
 def _validate_claim_strength(obj: Any) -> None:
@@ -570,6 +637,8 @@ def parse_run10_contract(doc: Any) -> Run10Contract:
         if name not in mapping:
             raise Run10ContractError(f"contract に pin 欄が無い: {name}")
         pins[name] = _validate_pin_field(name, mapping[name])
+    # §31 cost cap の 4 欄も pin 欄であり、R10-G0 の対象に含める。
+    pins.update(_validate_cost_cap(mapping["cost_cap"]))
     return Run10Contract(raw=dict(mapping), pins=pins)
 
 
@@ -635,6 +704,142 @@ def validate_results_document(doc: Any) -> None:
         raise Run10ContractError("results.rights.private_only は true 固定")
     if rights.get("third_party_distribution") is not False:
         raise Run10ContractError("results.rights.third_party_distribution は false 固定")
+
+    _validate_results_evidence(mapping, verdict, entry, outcomes)
+
+
+# 成功側 outcome ごとに要求する evidence 節（閉世界契約。AGENTS.md「回収・検収系の
+# 成功条件は閉世界契約で書く」）。実行時データから要求集合を導出しない。
+_EVIDENCE_FOR_OUTCOME: Dict[str, Tuple[str, ...]] = {
+    "COMPATIBILITY_MAP_ESTABLISHED": (
+        "external_calibration",
+        "decision_rules",
+        "compatibility_matrix",
+        "difference_map",
+        "path_effects",
+        "replay",
+    ),
+    "PARTIAL_COMPATIBILITY_MAP": (
+        "external_calibration",
+        "decision_rules",
+        "compatibility_matrix",
+        "replay",
+    ),
+    "SCHEMA_GAP_IDENTIFIED": (
+        "external_calibration",
+        "decision_rules",
+        "compatibility_matrix",
+        "novel_trait_candidates",
+        "replay",
+    ),
+    "GENERATIVE_COMPATIBILITY_ESTABLISHED": (
+        "external_calibration",
+        "decision_rules",
+        "compatibility_matrix",
+        "generative_compatibility_matrix",
+        "synthesis_validation",
+        "replay",
+    ),
+    "MEASUREMENT_ONLY_COMPATIBILITY": (
+        "external_calibration",
+        "decision_rules",
+        "compatibility_matrix",
+        "generative_compatibility_matrix",
+        "synthesis_validation",
+        "replay",
+    ),
+    "NO_STABLE_CROSS_SYSTEM_MAPPING": (
+        "external_calibration",
+        "decision_rules",
+        "compatibility_matrix",
+        "replay",
+    ),
+}
+
+# §21: Phase A PASS は R10-G0..G14 の全 PASS を要求する。
+PHASE_A_GATE_IDS: Tuple[str, ...] = tuple(gate_id for gate_id, _ in PHASE_A_CORE_GATES)
+PHASE_B_GATE_IDS: Tuple[str, ...] = tuple(gate_id for gate_id, _ in PHASE_B_GATES)
+
+
+def _require_nonempty_section(mapping: Mapping[str, Any], name: str, why: str) -> None:
+    section = mapping.get(name)
+    if section is None:
+        raise Run10ContractError(f"results.{name}: {why} には本節が必要（欠落）")
+    if isinstance(section, (Mapping, list, str)) and len(section) == 0:
+        raise Run10ContractError(f"results.{name}: {why} には本節が必要（空）")
+
+
+def _validate_gate_ledger(mapping: Mapping[str, Any], gate_ids: Tuple[str, ...], why: str) -> None:
+    """`hard_gates` が要求 Gate 集合を閉世界で被覆し、全て PASS であること。"""
+    ledger = mapping.get("hard_gates")
+    if not isinstance(ledger, Mapping) or not ledger:
+        raise Run10ContractError(f"results.hard_gates: {why} には Gate 台帳が必要")
+    missing = [gate_id for gate_id in gate_ids if gate_id not in ledger]
+    if missing:
+        raise Run10ContractError(f"results.hard_gates: {why} に必要な Gate が無い: {missing}")
+    not_passed = [gate_id for gate_id in gate_ids if ledger.get(gate_id) != "PASS"]
+    if not_passed:
+        raise Run10ContractError(
+            f"results.hard_gates: {why} なのに PASS でない Gate がある: {not_passed}"
+        )
+
+
+def _validate_results_evidence(
+    mapping: Mapping[str, Any],
+    verdict: str,
+    entry: str,
+    outcomes: List[Any],
+) -> None:
+    """成功側の判定に、対応する evidence が実在することを要求する（§21 / §22 / §27）。
+
+    構造だけ整えた空文書で `protocol_verdict: PASS` +
+    `COMPATIBILITY_MAP_ESTABLISHED` を記録できると、比較地図が成立していない
+    のに成立したことにできる偽成功経路になる（PR #330 Codex 第 1 巡 P1）。
+    """
+    if verdict == "PASS":
+        _validate_gate_ledger(mapping, PHASE_A_GATE_IDS, "protocol_verdict=PASS")
+        if entry == "ENTER":
+            _validate_gate_ledger(
+                mapping, PHASE_A_GATE_IDS + PHASE_B_GATE_IDS, "phase_b_entry=ENTER の PASS"
+            )
+    else:
+        # BLOCKED / FAILED で成功側 outcome を名乗らせない（§22.1 / §22.2）。
+        established = [o for o in outcomes if o in _EVIDENCE_FOR_OUTCOME]
+        if established:
+            raise Run10ContractError(
+                f"results: protocol_verdict={verdict} で成功側 outcome {established} は名乗れない"
+            )
+
+    for outcome in outcomes:
+        for section in _EVIDENCE_FOR_OUTCOME.get(outcome, ()):
+            _require_nonempty_section(mapping, section, outcome)
+
+    if "GENERATIVE_COMPATIBILITY_ESTABLISHED" in outcomes and entry != "ENTER":
+        raise Run10ContractError(
+            "results: GENERATIVE_COMPATIBILITY_ESTABLISHED は phase_b_entry=ENTER が前提（§16）"
+        )
+
+    matrix = mapping.get("compatibility_matrix")
+    if isinstance(matrix, Mapping):
+        for trait_id, entry_doc in matrix.items():
+            assert_compatibility_entry(str(trait_id), entry_doc)
+
+    synthesis = mapping.get("synthesis_validation")
+    if isinstance(synthesis, Mapping) and synthesis:
+        controls = _require_mapping("results.synthesis_validation.controls",
+                                    synthesis.get("controls"))
+        for cohort in PHASE_B_ONLY_COHORTS:
+            if not controls.get(cohort):
+                raise Run10ContractError(
+                    f"results.synthesis_validation.controls.{cohort}: "
+                    "G_null / G_target / G_inverse の 3 対照が揃わない裁定は不可（§7.5 / §21 R10-G20）"
+                )
+        # §21 R10-G21: construction meter 単独で generative success を裁定しない。
+        if not synthesis.get("confirmation_meter"):
+            raise Run10ContractError(
+                "results.synthesis_validation.confirmation_meter: "
+                "生成に未使用の confirmation meter が無い裁定は不可（§21 R10-G21 / §32-26）"
+            )
 
 
 def assert_compatibility_entry(trait_id: str, entry: Any) -> None:

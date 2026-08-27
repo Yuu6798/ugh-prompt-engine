@@ -31,10 +31,11 @@ sha256 が凍結値と一致するか）。これは §29 手順 6 の第 1 段�
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 _THIS_DIR = Path(__file__).resolve().parent
 _RUN10_DIR = _THIS_DIR.parent
@@ -48,7 +49,14 @@ from af01_freeze_verifier import (  # noqa: E402
     verify_bundle,
     verify_ledger_bytes,
 )
-from run10_schema import canonical_json_bytes  # noqa: E402
+from run10_schema import (  # noqa: E402
+    AF01_ALIAS_COUNT,
+    AF01_E0_CALIBRATION_CASES,
+    AF01_FROZEN_HASHES,
+    AF01_PITCHES,
+    AF01_UNIT_FILE_COUNT,
+    canonical_json_bytes,
+)
 
 PRESENT = "PRESENT"
 ABSENT = "ABSENT"
@@ -160,15 +168,82 @@ def inventory_af01(bundle_root: Optional[Path]) -> List[InventoryItem]:
         )
     )
     registration = Path(bundle_root) / "FREEZE_REGISTRATION.json"
+    state, detail = _check_freeze_registration(registration)
     items.append(
         InventoryItem(
             item_id="af01_freeze_registration",
-            state=PRESENT if registration.is_file() else ABSENT,
-            detail=str(registration),
-            blocking=not registration.is_file(),
+            state=state,
+            detail=detail,
+            blocking=state != PRESENT,
         )
     )
     return items
+
+
+# FREEZE_REGISTRATION.json が宣言すべき固定値（閉世界契約）。存在するだけでは
+# required item を満たさない — 空・stale・矛盾した登録が R10-G2 を通してしまう
+# （PR #330 Codex 第 1 巡 P2 / AGENTS.md「parse 可能 ≠ 形状正しい」）。
+FREEZE_REGISTRATION_EXPECTED: Dict[str, object] = {
+    "schema": "voicegenesis-freeze-registration/1.0",
+    "voice_id": "AF01",
+    "specimen_version": "1.0",
+    "freeze_status": "FROZEN",
+    "unit_file_count": AF01_UNIT_FILE_COUNT,
+    "pitch_fixture_count": len(AF01_PITCHES),
+    "e0_calibration_cases": AF01_E0_CALIBRATION_CASES,
+    "mutation_policy": "PROHIBITED_WITHIN_RUN10",
+}
+
+
+# FREEZE_REGISTRATION.json 側のキー名 → run10_schema の凍結 pin 名。
+# 登録ファイルは `payload_ledger_sha256` / `generator_sha256` / `manifest_sha256`
+# のように `af01_` 接頭辞を持たない欄があるため、名前の一致に頼らず明示写像する。
+FREEZE_REGISTRATION_HASH_KEYS: Dict[str, str] = {
+    "payload_ledger_sha256": "af01_payload_ledger_sha256",
+    "af01_spec_sha256": "af01_spec_sha256",
+    "generator_sha256": "af01_generator_sha256",
+    "manifest_sha256": "af01_manifest_sha256",
+}
+
+
+def _check_freeze_registration(path: Path) -> Tuple[str, str]:
+    """FREEZE_REGISTRATION.json を parse して宣言内容を凍結値と照合する。"""
+    if not path.is_file():
+        return ABSENT, f"{path} が存在しない"
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return ABSENT, f"{path} を読めない/parse できない: {exc}"
+    if not isinstance(doc, dict):
+        return ABSENT, f"{path}: JSON オブジェクトでない"
+
+    problems: List[str] = []
+    for key, expected in FREEZE_REGISTRATION_EXPECTED.items():
+        if doc.get(key) != expected:
+            problems.append(f"{key}: expected={expected!r} actual={doc.get(key)!r}")
+    for doc_key, pin_key in FREEZE_REGISTRATION_HASH_KEYS.items():
+        declared = doc.get(doc_key)
+        expected_hash = AF01_FROZEN_HASHES[pin_key]
+        if declared != expected_hash:
+            problems.append(f"{doc_key}: expected={expected_hash} actual={declared!r}")
+    body = doc.get("canonical_body")
+    if not isinstance(body, dict):
+        problems.append("canonical_body が無い")
+    else:
+        if body.get("aggregate_sha256") != AF01_FROZEN_HASHES["af01_canonical_c4_sha256"]:
+            problems.append(
+                f"canonical_body.aggregate_sha256: "
+                f"expected={AF01_FROZEN_HASHES['af01_canonical_c4_sha256']} "
+                f"actual={body.get('aggregate_sha256')!r}"
+            )
+        if body.get("aggregate_file") != "AF01_all25_units_C4.wav":
+            problems.append(f"canonical_body.aggregate_file: {body.get('aggregate_file')!r}")
+        if body.get("unit_count") != AF01_ALIAS_COUNT:
+            problems.append(f"canonical_body.unit_count: {body.get('unit_count')!r}")
+
+    if problems:
+        return ABSENT, f"{path}: 宣言内容が凍結値と一致しない: {problems}"
+    return PRESENT, f"{path}: schema / 凍結ハッシュ / 構造量の宣言が凍結値と一致"
 
 
 def inventory_aquest(voicebank_root: Optional[Path]) -> List[InventoryItem]:
@@ -204,10 +279,13 @@ def inventory_aquest(voicebank_root: Optional[Path]) -> List[InventoryItem]:
             state=UNRESOLVED,
             detail=(
                 "収録ピッチ構造の判定には oto.ini マッピングと raw-unit F0 推定が要る"
-                "（§9.4）。measurement 層未実装のため未確定。"
-                "実質単一ピッチ収録なら cross-pitch persistence = NOT_EVALUABLE。"
+                "（§9.4）。measurement 層未実装のため **inventory 未実施**。"
+                "§9.4 が要求するのは inventory を実行して収録ピッチ数を確定すること"
+                "であり、未実施は R10-G2 を塞ぐ。inventory を実施した結果が実質単一"
+                "ピッチであった場合に限り cross-pitch persistence = NOT_EVALUABLE と"
+                "なり、そこで初めて非 blocking になる。"
             ),
-            blocking=False,
+            blocking=True,
         ),
     ]
 

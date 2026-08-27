@@ -18,6 +18,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _THIS_DIR = Path(__file__).resolve().parent
 _RUN_DIR = _THIS_DIR.parent
 if str(_RUN_DIR) not in sys.path:
@@ -74,19 +76,37 @@ def test_a0_raw_unit_count_is_recorded_when_voicebank_present(tmp_path: Path) ->
     assert "raw WAV 3 件" in items["aquest_voicebank_files"]["detail"]
 
 
-def test_single_pitch_a0_does_not_block_the_gate(tmp_path: Path) -> None:
-    """§28-17 / §9.4 / H4: A0 に存在しないピッチ軸を必須化しない。
+def test_unperformed_pitch_inventory_keeps_blocking(tmp_path: Path) -> None:
+    """§28-17 / §9.4: 未実施の収録ピッチ inventory は R10-G2 を塞ぎ続ける。
 
-    `a0_recorded_pitch_inventory` は blocking=False であり、単一ピッチ収録でも
-    R10-G2 を落とさない（cross-pitch persistence は NOT_EVALUABLE となる）。
+    §9.4 が要求するのは inventory を**実行して**収録ピッチ数を確定することで
+    あり、「未実施だから cross-pitch を要求しない」は成立しない。未実施を
+    非 blocking にすると、他項目が解決した時点で gate_state が COMPLETE へ
+    落ちてしまう（PR #330 Codex 第 1 巡 P1）。
+
+    単一ピッチが**確定した**場合に cross-pitch persistence = NOT_EVALUABLE と
+    なる、という routing 自体は detail に記録される。
     """
     root = tmp_path / "voicebank"
     root.mkdir()
     (root / "a.wav").write_bytes(b"RIFF")
     (root / "oto.ini").write_text("", encoding="utf-8")
     items = _items(inv.build_inventory(aquest_voicebank_root=root))
-    assert items["a0_recorded_pitch_inventory"]["blocking"] is False
-    assert "NOT_EVALUABLE" in items["a0_recorded_pitch_inventory"]["detail"]
+    item = items["a0_recorded_pitch_inventory"]
+    assert item["state"] == inv.UNRESOLVED
+    assert item["blocking"] is True
+    assert "NOT_EVALUABLE" in item["detail"]
+
+
+def test_gate_cannot_complete_while_any_required_item_is_unresolved(tmp_path: Path) -> None:
+    """未解決の required item が 1 つでも残る限り R10-G2 は COMPLETE にならない。"""
+    root = tmp_path / "voicebank"
+    root.mkdir()
+    (root / "a.wav").write_bytes(b"RIFF")
+    (root / "oto.ini").write_text("", encoding="utf-8")
+    document = inv.build_inventory(aquest_voicebank_root=root)
+    assert document["gate_state"] == "BLOCKED"
+    assert "a0_recorded_pitch_inventory" in document["blocking_items"]
 
 
 def test_evolution_theory_reference_has_explicit_state() -> None:
@@ -118,3 +138,75 @@ def test_inventory_carries_no_measured_values() -> None:
     m.assert_no_forbidden_score_field(json.loads(raw))
     for banned in ("f0_hz", "formant", "hnr", "cpp", "spectral_tilt"):
         assert banned not in raw
+
+
+# --- FREEZE_REGISTRATION.json の形状検証（PR #330 Codex 第 1 巡 P2） -------
+
+
+def _valid_registration() -> dict:
+    return {
+        "schema": "voicegenesis-freeze-registration/1.0",
+        "voice_id": "AF01",
+        "specimen_version": "1.0",
+        "freeze_status": "FROZEN",
+        "payload_ledger_sha256": m.AF01_FROZEN_HASHES["af01_payload_ledger_sha256"],
+        "af01_spec_sha256": m.AF01_FROZEN_HASHES["af01_spec_sha256"],
+        "generator_sha256": m.AF01_FROZEN_HASHES["af01_generator_sha256"],
+        "manifest_sha256": m.AF01_FROZEN_HASHES["af01_manifest_sha256"],
+        "canonical_body": {
+            "pitch": "C4",
+            "aggregate_file": "AF01_all25_units_C4.wav",
+            "aggregate_sha256": m.AF01_FROZEN_HASHES["af01_canonical_c4_sha256"],
+            "unit_directory": "C4/",
+            "unit_count": 25,
+        },
+        "pitch_fixture_count": 3,
+        "unit_file_count": 75,
+        "e0_calibration_cases": 9,
+        "mutation_policy": "PROHIBITED_WITHIN_RUN10",
+        "replacement_policy": "new version and new freeze registration required",
+    }
+
+
+def test_freeze_registration_shape_is_validated(tmp_path: Path) -> None:
+    """存在するだけでは required item を満たさない（parse 可能 ≠ 形状正しい）。
+
+    本 fixture は Drive 上の実 FREEZE_REGISTRATION.json の宣言内容をそのまま
+    写したものであり、凍結値と一致することを検査する。
+    """
+    path = tmp_path / "FREEZE_REGISTRATION.json"
+    path.write_text(json.dumps(_valid_registration()), encoding="utf-8")
+    state, detail = inv._check_freeze_registration(path)
+    assert state == inv.PRESENT, detail
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda d: d.update(freeze_status="DRAFT"),
+        lambda d: d.update(unit_file_count=74),
+        lambda d: d.update(e0_calibration_cases=8),
+        lambda d: d.update(generator_sha256="0" * 64),
+        lambda d: d["canonical_body"].update(aggregate_sha256="0" * 64),
+        lambda d: d["canonical_body"].update(unit_count=24),
+        lambda d: d.update(mutation_policy="ALLOWED"),
+        lambda d: d.pop("canonical_body"),
+    ],
+)
+def test_stale_or_contradictory_registration_is_rejected(tmp_path: Path, mutate) -> None:
+    """空・stale・矛盾した登録が R10-G2 を通らない。"""
+    doc = _valid_registration()
+    mutate(doc)
+    path = tmp_path / "FREEZE_REGISTRATION.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    state, detail = inv._check_freeze_registration(path)
+    assert state == inv.ABSENT, detail
+
+
+def test_unparsable_registration_is_rejected(tmp_path: Path) -> None:
+    """空ファイル・壊れた JSON も PRESENT にしない。"""
+    path = tmp_path / "FREEZE_REGISTRATION.json"
+    path.write_text("", encoding="utf-8")
+    assert inv._check_freeze_registration(path)[0] == inv.ABSENT
+    path.write_text("[]", encoding="utf-8")
+    assert inv._check_freeze_registration(path)[0] == inv.ABSENT

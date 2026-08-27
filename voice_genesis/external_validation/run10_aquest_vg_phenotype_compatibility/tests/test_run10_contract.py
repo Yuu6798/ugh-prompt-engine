@@ -39,11 +39,22 @@ def contract(contract_doc: Dict[str, Any]) -> m.Run10Contract:
     return m.parse_run10_contract(contract_doc)
 
 
+def _pin_value(name: str) -> Any:
+    """欄の形式契約を満たすダミー値（形式が緩んだら本 helper が壊れる）。"""
+    if name == "attempt_id":
+        return "RUN10-ATTEMPT-99"
+    if name == "repository_commit_sha":
+        return "b" * 40
+    if name == "minimum_generatable_traits":
+        return 3
+    return "a" * 64
+
+
 def _fully_pinned(doc: Dict[str, Any]) -> Dict[str, Any]:
     """全 pin 欄を PINNED にした contract を作る（gate PASS 側の検証用）。"""
     filled = copy.deepcopy(doc)
     for name in m.ALL_PIN_FIELDS:
-        filled[name] = {"value": f"pinned::{name}", "status": "PINNED"}
+        filled[name] = {"value": _pin_value(name), "status": "PINNED"}
     for name in m.COST_CAP_FIELDS:
         filled["cost_cap"][name] = {"value": 1, "status": "PINNED"}
     return filled
@@ -100,6 +111,9 @@ def test_missing_pin_field_fails_closed(contract_doc: Dict[str, Any]) -> None:
     "mutation, pattern",
     [
         ({"status": "PINNED", "value": None}, "value が null"),
+        ({"status": "PINNED", "value": "pinned::resampler_sha"}, "sha256 は小文字 16 進"),
+        ({"status": "PINNED", "value": "A" * 64}, "sha256 は小文字 16 進"),
+        ({"status": "PINNED", "value": 1}, "sha256 は小文字 16 進"),
         ({"status": "PENDING", "value": "leaked"}, "value が非 null"),
         ({"status": "MAYBE", "value": None}, "未知の status"),
         ({"status": "PENDING", "value": None}, "reason が必須"),
@@ -431,3 +445,187 @@ def test_gate_registry_matches_design() -> None:
     assert len(m.PHASE_B_GATES) == 7
     ids = [gid for gid, _ in m.PHASE_A_CORE_GATES + (m.PHASE_B_ENTRY_GATE,) + m.PHASE_B_GATES]
     assert ids == [f"R10-G{i}" for i in range(23)]
+
+
+# --- PINNED 値の形式契約（PR #330 Codex 第 1 巡 P1） ------------------------
+
+
+def test_pinned_values_require_field_specific_formats(contract_doc: Dict[str, Any]) -> None:
+    """プレースホルダ文字列で R10-G0 を開けない（実在の成果物へ束縛する）。"""
+    bad = copy.deepcopy(contract_doc)
+    for name in m.ALL_PIN_FIELDS:
+        bad[name] = {"value": f"pinned::{name}", "status": "PINNED"}
+    with pytest.raises(m.Run10ContractError):
+        m.parse_run10_contract(bad)
+
+
+@pytest.mark.parametrize(
+    "name, value, ok",
+    [
+        ("repository_commit_sha", "b" * 40, True),
+        ("repository_commit_sha", "b" * 64, True),
+        ("repository_commit_sha", "b" * 39, False),
+        ("repository_commit_sha", "main", False),
+        ("attempt_id", "RUN10-ATTEMPT-01", True),
+        ("attempt_id", "attempt-1", False),
+        ("minimum_generatable_traits", 2, True),
+        ("minimum_generatable_traits", 0, False),
+        ("minimum_generatable_traits", True, False),
+        ("minimum_generatable_traits", "2", False),
+        ("resampler_sha", "a" * 64, True),
+        ("resampler_sha", "a" * 63, False),
+        ("cost_cap.cpu_hours_max", 4, True),
+        ("cost_cap.cpu_hours_max", 0, False),
+        ("cost_cap.cpu_hours_max", -1, False),
+        ("cost_cap.cpu_hours_max", True, False),
+    ],
+)
+def test_pin_value_format_contract(name: str, value: Any, ok: bool) -> None:
+    """欄ごとの正の形式を閉世界で検査する。"""
+    if ok:
+        m._validate_pin_value(name, value)
+    else:
+        with pytest.raises(m.Run10ContractError):
+            m._validate_pin_value(name, value)
+
+
+def test_every_pin_field_has_a_declared_value_format() -> None:
+    """形式未定義の欄を残さない（閉世界契約の被覆）。"""
+    for name in m.ALL_PIN_FIELDS + m.COST_CAP_PIN_FIELDS:
+        assert m._pin_value_format(name)
+
+
+# --- cost cap を R10-G0 の対象に含める（PR #330 Codex 第 1 巡 P2） ----------
+
+
+def test_cost_cap_pins_block_gate_g0(contract_doc: Dict[str, Any]) -> None:
+    """cost cap が PENDING のまま R10-G0 を PASS させない（§31 / §32-20）。"""
+    filled = _fully_pinned(contract_doc)
+    for name in m.COST_CAP_FIELDS:
+        filled["cost_cap"][name] = {
+            "value": None,
+            "status": "PENDING",
+            "reason": "User 未裁定",
+        }
+    parsed = m.parse_run10_contract(filled)
+    assert parsed.gate_r10_g0() == "BLOCKED"
+    assert set(parsed.missing("CORE")) == set(m.COST_CAP_PIN_FIELDS)
+
+
+def test_cost_cap_pins_are_registered_as_pin_fields(contract: m.Run10Contract) -> None:
+    """cost cap 4 欄が pin 欄として登録され、現状は PENDING である。"""
+    for name in m.COST_CAP_PIN_FIELDS:
+        assert contract.pin(name).status == "PENDING"
+
+
+# --- results の evidence 要求（PR #330 Codex 第 1 巡 P1） -------------------
+
+
+def _passing_results() -> Dict[str, Any]:
+    doc = _minimal_results()
+    doc["protocol_verdict"] = "PASS"
+    doc["phase_b_entry"] = "SKIP"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED"]
+    doc["hard_gates"] = {gate_id: "PASS" for gate_id, _ in m.PHASE_A_CORE_GATES}
+    doc["external_calibration"] = {"E0": "PASS"}
+    doc["decision_rules"] = {"F1_F2_F3": {"noise_floor": 1.0}}
+    doc["compatibility_matrix"] = {"F1_F2_F3": {"status": "DIRECT_COMPATIBLE"}}
+    doc["difference_map"] = {"F1_F2_F3": {"effect": 0.1}}
+    doc["path_effects"] = {"delta_a_path": {}, "delta_v_path": {}}
+    doc["replay"] = {"same_process": "PASS", "cross_process": "PASS"}
+    return doc
+
+
+def test_established_outcome_requires_evidence() -> None:
+    """構造だけの空文書で成功側 outcome を記録できない（偽成功経路の閉塞）。"""
+    doc = _minimal_results()
+    doc["protocol_verdict"] = "PASS"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED"]
+    with pytest.raises(m.Run10ContractError, match="hard_gates"):
+        m.validate_results_document(doc)
+
+
+def test_established_outcome_with_full_evidence_validates() -> None:
+    """evidence が揃えば通る（常時拒否する張りぼてでない）。"""
+    m.validate_results_document(_passing_results())
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        "external_calibration",
+        "decision_rules",
+        "compatibility_matrix",
+        "difference_map",
+        "path_effects",
+        "replay",
+    ],
+)
+def test_each_required_evidence_section_is_enforced(section: str) -> None:
+    """要求 evidence 節を 1 つでも空にすれば拒否される。"""
+    doc = _passing_results()
+    doc[section] = {}
+    with pytest.raises(m.Run10ContractError, match=section):
+        m.validate_results_document(doc)
+
+
+def test_pass_requires_all_phase_a_gates_passing() -> None:
+    """§21 / §22.1: R10-G0..G14 の 1 つでも PASS でなければ PASS を名乗れない。"""
+    doc = _passing_results()
+    doc["hard_gates"]["R10-G7"] = "FAIL"
+    with pytest.raises(m.Run10ContractError, match="PASS でない Gate"):
+        m.validate_results_document(doc)
+    doc = _passing_results()
+    del doc["hard_gates"]["R10-G12"]
+    with pytest.raises(m.Run10ContractError, match="必要な Gate が無い"):
+        m.validate_results_document(doc)
+
+
+def test_blocked_verdict_cannot_claim_established_outcome() -> None:
+    """§22: BLOCKED / FAILED で成功側 outcome を名乗らせない。"""
+    doc = _passing_results()
+    doc["protocol_verdict"] = "BLOCKED"
+    with pytest.raises(m.Run10ContractError, match="成功側 outcome"):
+        m.validate_results_document(doc)
+
+
+def test_generative_outcome_requires_phase_b_entry() -> None:
+    """§16: GENERATIVE_COMPATIBILITY_ESTABLISHED は phase_b_entry=ENTER が前提。"""
+    doc = _passing_results()
+    doc["scientific_outcome"] = ["GENERATIVE_COMPATIBILITY_ESTABLISHED"]
+    doc["generative_compatibility_matrix"] = {"F1_F2_F3": {"synthesis_status": "x"}}
+    doc["synthesis_validation"] = {
+        "controls": {"G_null": {}, "G_target": {}, "G_inverse": {}},
+        "construction_meter": {"m": "PASS"},
+        "confirmation_meter": {"m2": "PASS"},
+    }
+    with pytest.raises(m.Run10ContractError, match="phase_b_entry=ENTER"):
+        m.validate_results_document(doc)
+
+
+def test_synthesis_validation_requires_three_controls_and_confirmation_meter() -> None:
+    """§7.5 / §21 R10-G20・G21 / §32-26: 3 対照と独立 confirmation meter を要求する。"""
+    base = _passing_results()
+    base["synthesis_validation"] = {
+        "controls": {"G_null": {"n": 1}, "G_target": {"n": 1}},
+        "construction_meter": {"m": "PASS"},
+        "confirmation_meter": {"m2": "PASS"},
+    }
+    with pytest.raises(m.Run10ContractError, match="G_inverse"):
+        m.validate_results_document(base)
+
+    base = _passing_results()
+    base["synthesis_validation"] = {
+        "controls": {"G_null": {"n": 1}, "G_target": {"n": 1}, "G_inverse": {"n": 1}},
+        "construction_meter": {"m": "PASS"},
+    }
+    with pytest.raises(m.Run10ContractError, match="confirmation_meter"):
+        m.validate_results_document(base)
+
+
+def test_compatibility_matrix_entries_are_validated_inside_results() -> None:
+    """results 経由でも §15 の enum 規律が効く。"""
+    doc = _passing_results()
+    doc["compatibility_matrix"] = {"X": {"status": "MOSTLY_COMPATIBLE"}}
+    with pytest.raises(m.Run10ContractError, match="未知の値"):
+        m.validate_results_document(doc)

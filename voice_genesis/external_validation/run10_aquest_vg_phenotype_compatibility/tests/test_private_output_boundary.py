@@ -138,3 +138,60 @@ def test_public_destinations_are_rejected(destination: str) -> None:
 def test_local_destinations_are_allowed() -> None:
     """ローカル private パスは通す。"""
     pb.assert_no_public_destination(["/mnt/private/run10", "./results/RUN10_PRIVATE"])
+
+
+# --- 閉世界 allowlist（PR #330 Codex 第 1 巡 P1） --------------------------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "measurement/compatibility_matrix.json",
+        "measurement/features_a0.json",
+        "calibration/external_calibration_results.json",
+        "evaluation/difference_map.json",
+        "evaluation/statistical_report.json",
+        "synthesis_validation/generative_compatibility_matrix.json",
+        "corpus/manifests/a1_render_manifest.json",
+        "novel_trait_candidates.json",
+        "summary.csv",
+        "aggregate_table.tsv",
+    ],
+)
+def test_future_output_directories_are_denied_by_allowlist(path: str) -> None:
+    """§24 の未作成ディレクトリが追加されても測定値・集計表は公開されない。
+
+    拒否リスト方式では拡張子もファイル名マーカーも `results/` にも当たらず
+    素通りしていた経路を、閉世界 allowlist が塞ぐ。
+    """
+    reason = pb.classify_violation(f"{pb.RUN10_TREE}/{path}")
+    assert reason is not None
+    assert "allowlist" in reason
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "measurement/extract_features.py",
+        "calibration/validate_meters.py",
+        "evaluation/adjudicate_run10.py",
+        "calibration/measurement_decision_spec.yaml",
+        "synthesis_validation/phase_b_entry_spec.yaml",
+        "corpus/README_PRIVATE_ASSET_BOUNDARY.md",
+    ],
+)
+def test_implementation_files_in_future_directories_are_allowed(path: str) -> None:
+    """コード・契約・文書は将来ディレクトリでも通す（偽陽性で運用不能にしない）。"""
+    assert pb.classify_violation(f"{pb.RUN10_TREE}/{path}") is None
+
+
+def test_every_tracked_data_file_is_explicitly_listed() -> None:
+    """公開中の JSON / TXT が allowlist に明示登録されている（暗黙許可を作らない）。"""
+    tracked = pb.git_tracked_files(pb.repo_root())
+    data = [
+        pb._tree_relative(t)
+        for t in tracked
+        if Path(t).suffix.lower() in (".json", ".txt", ".csv", ".tsv")
+    ]
+    assert data, "追跡中の構造 manifest が 1 件も無いのは想定外"
+    assert set(data) <= set(pb.PUBLISHABLE_DATA_FILES)
