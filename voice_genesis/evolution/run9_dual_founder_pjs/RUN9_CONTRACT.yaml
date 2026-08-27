@@ -1774,22 +1774,321 @@ founder_genome_shas:
 # `run9_schema.validate_education_lesson_manifest()` /
 # `validate_practice_split_manifest()` が manifest 本体の `schema` 欄
 # 自己宣言で担う）。両者は別対象であり本欄1つに統合しない。
+# 2026-08-27 repin（第2世代。PR #329 Codex bot レビュー第1巡指摘1/2、
+# いずれも P1、採用対応。Claude 完結ルート、フェーズ1）:
+# `education_lesson_builder.py` へ2件の fail-closed 強化を実装した——
+# (1) sealed-holdout 境界の builder 側機械強制: `--split-manifest`/
+# `extract-song --song-id` が任意パス・任意 song_id を無検証で受け付け
+# ていた穴を閉じ、`run9_schema.load_pinned_practice_split_manifest()`
+# （新設、他の `load_pinned_*` と同型の3層防御）経由でのみ split
+# manifest を消費し、training=70/validation=15/sealed_holdout=15 の
+# 件数を機械強制、対象 song_id が凍結済み training∪validation に
+# 属することを decode/抽出前に検証する。(2) バンドル2本の atomic ペア
+# 公開: training/validation を staging へ書き切ってから両方成功時のみ
+# `os.replace()` する `publish_bundle_pair()` を新設し、片方の書き込み
+# 失敗で混合世代ペアが観測される窓を閉じた。**抽出式・アラインメント・
+# 直列化・バンドル内容は無変更**（検証・公開経路のみの変更）——venv_h3b
+# の python3 による repo builder 再現実行（run4）で training/validation
+# バンドルとも既 pin（run1/run2/run3）と byte 完全一致することを実測で
+# 確認済み（詳細 = `HARNESS3B_EDUCATION_LESSON_RECORD.md` §12）。builder
+# バイト変更に伴い manifest の `builder_provenance.builder_sha256`（新値
+# = d93fc17b2f10b2e0ec6d240027875d22a748f9b508de9a5233144a78b52799d9）と
+# `builder_provenance.detail_record_sha256`（§12 追記後の
+# 実測記録 raw sha256）を更新し、manifest raw sha256 が変わったため
+# 本欄を repin した。旧値（第1世代、PINNED 化時点）は履歴として保持する:
+#   c181036167a8e3fd003307565f77bf441bb649e6b0e1579ff104790a686b7cfa
+#
+# 〔第3世代 repin, 2026-08-27, PR #329 第2巡 Codex bot レビュー対応〕:
+# assemble ゲート強制・publish_bundle_pair() rename 自体の atomic 化・
+# run_build() の pinned manifest 照合・musicxml を含む消費3入力 sha256
+# pin の4件を実装（`HARNESS3B_EDUCATION_LESSON_RECORD.md` §13 参照）。
+# builder バイト変更（新値
+# = a6b99a7ba42f7d09f29395bc5fea1ef89a479555492ab5a537fba9fd26af8a27）と
+# `builder_provenance.detail_record_sha256`（§13 追記後の実測記録 raw
+# sha256）+ `corpus_provenance.consumed_inputs_manifest_sha256`
+# （新設 `inputs/pjs_consumed_inputs_sha256.json` への参照）を更新し、
+# manifest raw sha256 が変わったため本欄を repin した。venv_h3b の
+# python3 による repo builder 再現実行（run5、`--allow-unpinned`）で
+# training/validation バンドルとも既 pin（run1〜run4）と byte 完全一致
+# することを実測で確認済み（抽出式・アラインメント・直列化・バンドル
+# 内容は無変更——検証・公開経路のみの変更）。旧値（第2世代、第1巡対応
+# 時点）は履歴として保持する:
+#   5dc503a3728cd9620c18394998dabd5338460f73b85ccde5e96faeeccc032f6f
+#
+# 〔第4世代 repin, 2026-08-27, PR #329 第3巡 Codex bot レビュー対応〕:
+# assemble 重複ID拒否・extract_song の生 mapping 信頼閉鎖（FrozenSplitPins/
+# ConsumedInputPins 不透明型の導入）・TOCTOU 閉鎖（wav/lab/musicxml 各
+# 1回 read_bytes()）・publish_bundle_pair() backup 段の保護 try 内包・
+# assemble 単独出力の atomic 化・probe-header の凍結 split ゲートの6件を
+# 実装（いずれも P1×4/P2×2、`HARNESS3B_EDUCATION_LESSON_RECORD.md` §14
+# 参照）。builder バイト変更（新値
+# = 9a007b7543523b99d3689a4fa40383a35497422f7784050b1ca8b8d1d34e53c1）と
+# `builder_provenance.detail_record_sha256`（§14 追記後の実測記録 raw
+# sha256 = e84b23dde43bd51f15c741209e889ebdc4478b54001803b26050a64b876bd8c3）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。venv_h3b の python3 による repo builder 再現実行（run6、
+# `--allow-unpinned`）で training/validation バンドルとも既 pin
+# （run1〜run5）と byte 完全一致することを実測で確認済み（`cmp` で差分0
+# ——抽出式・アラインメント・直列化・バンドル内容は無変更、検証・公開
+# 経路のみの変更）。旧値（第3世代、第2巡対応時点）は履歴として保持する:
+#   08aa92aff93d042f1c1436cddc1732a82e726f0b078236dcc19f713ee20ba65d
+#
+# 〔第5世代 repin, 2026-08-27, PR #329 第4巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用2/見送り1）。extract-song/assemble/probe-header の
+# `--out` corpus-alias 拒否（`_resolve_output_alias_conflict()`: lexical
+# 絶対パス + `Path.resolve()` の二重チェック）+ assemble 経路の pinned
+# education manifest 照合（`_require_single_split_bundle_bytes_match_
+# pinned_manifest()`、`--allow-unpinned` エスケープハッチ新設）の2件を
+# 実装（いずれも P1、`HARNESS3B_EDUCATION_LESSON_RECORD.md` §15 参照）。
+# 見送り1件（「extract_song 内で canonical pin をロードせよ」）は第3巡で
+# 開示済みの Python 構築可能性の再形成と判定し、実装変更せず境界宣言
+# （§15 参照）で応答した。builder バイト変更（新値
+# = 50a8d22861d7c5cc8c1e3752ee63df52ffe8176e7556c6d97c7e62857069b18d）と
+# `builder_provenance.detail_record_sha256`（§15 追記後の実測記録 raw
+# sha256 = 0a7f59b2b8af14c0a97153afaad25cf78330a574fd9fa77e16045855954495c8）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。venv_h3b の python3 による repo builder 再現実行（run7、
+# `--allow-unpinned`）で training/validation バンドルとも既 pin
+# （run1〜run6）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、検証・公開経路のみの
+# 変更）。旧値（第4世代、第3巡対応時点）は履歴として保持する:
+#   e30bb8e51031c423c58ff0e8e83cf90d9a81abf4da10a6c3aa372a506d4f1a33
+#
+# 〔第6世代 repin, 2026-08-27, PR #329 第5巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用2/限定採用1）。`publish_bundle_pair()` の backup
+# 失敗と「旧世代なし」の混同是正（`_BackupOutcome` 状態オブジェクト新設）
+# + assemble/extract-song/probe-header の保護集合へ pinned education
+# manifest 検証器の入力 closure（manifest 本体・裁定 txt・builder 本体・
+# spec・freeze record 現行/superseded・detail record・consumed-inputs
+# pin・contract）を追加、の2件を実装（いずれも P1、
+# `HARNESS3B_EDUCATION_LESSON_RECORD.md` §16 参照）。限定採用1件（P2、
+# P5 training-distribution separation 記録の stale 是正）は
+# `evaluation/probe_manifest.json`・本欄の値・`_P5_DEFERRED_VERIFICATION_
+# BLOCKED_BY`（run9_schema.py）のいずれも変更せず、stale になった理由
+# コメントのみを本欄上方（Fix 32 repin コメントブロック）と
+# run9_schema.py 側へ追記した（§16「限定採用1」参照——検証の捏造・
+# status の空フリップは行っていない）。builder バイト変更（新値
+# = 816f765e6aa707ca5f1363c566b0980cbcfc5f6559950070a4d3e71732e3ca12）と
+# `builder_provenance.detail_record_sha256`（§16 追記後の実測記録 raw
+# sha256 = 85d19bf1299b33ab3c9e6093227723361dc3d6f211819683a944b48999001445）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。system python3（pyworld 0.3.5 導入済み）による repo builder
+# 再現実行（run8、`--allow-unpinned`）で training/validation バンドルとも
+# 既 pin（run1〜run7）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、検証・公開経路のみの
+# 変更）。旧値（第5世代、第4巡対応時点）は履歴として保持する:
+#   f7c3ac9ca1679b7307d09ef750c3709146759586e9fa2e3df5827a56c286a9d7
+#
+# 〔第7世代 repin, 2026-08-27, PR #329 第6巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用1、P1）。公開 CLI の `--contract-path`/
+# `--split-manifest`/`--consumed-inputs-manifest` を `probe-header`/
+# `extract-song`/`assemble`/`build` の全サブコマンドから撤去し、CLI 経路
+# は常に repo 正典パスへ固定した——旧実装は呼び出し元が contract の
+# コピーを改変（sealed ID を training へ移した split を repin + 対応する
+# consumed-inputs pin を用意）して渡すだけで、コード記述なしの CLI 操作
+# のみで両 loader が代替 contract に対して検証 PASS し sealed WAV が
+# decode され得た（`HARNESS3B_EDUCATION_LESSON_RECORD.md` §17 参照）。
+# パス引数は `load_training_validation_ids()`/`load_consumed_inputs_
+# pins()` のシグネチャにはテスト分離目的でのみ残し、プロセス内直接
+# 呼び出しの脅威モデルはコードレビュー/CI 層が担う境界宣言とした。
+# builder バイト変更（新値
+# = 57899deeeb9360477d1a0f4adceb288815bf5cebf0cbf0d87d6514f1399fae7e）と
+# `builder_provenance.detail_record_sha256`（§17 追記後の実測記録 raw
+# sha256 = c0392adb76bee4e2422222c12eaa6648ef3d1da9bb8ec63ab2826ef7e9c91cbb）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。system python3（pyworld 0.3.5 導入済み）による repo builder
+# 再現実行（run9、`--allow-unpinned`）で training/validation バンドルとも
+# 既 pin（run1〜run8）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、CLI 引数解析・検証経路
+# のみの変更）。repin 完了後、`--allow-unpinned` を付けずに（CLI からは
+# `--split-manifest`/`--contract-path`/`--consumed-inputs-manifest` の
+# いずれも渡す手段が存在しない状態で）独立10回目として再実行し、
+# `pinned_manifest_check: "PASS"`（同一 sha256）で正常完了することも
+# 実測で確認した——本巡の CLI 変更が既存の再現実行手順に一切影響しない
+# ことの直接証跡。旧値（第6世代、第5巡対応時点）は履歴として保持する:
+#   9fa271aeceb63a21d8e2bd523b0d630580b6afcad87ed91f6dede9e4cce46949
+#
+# 〔第8世代 repin, 2026-08-27, PR #329 第7巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用2件、P1 + P2）。(1) `_resolve_output_alias_
+# conflict()` の lexical/resolved 二重パス比較では検出できない alias
+# 種別——`--out` が保護ファイルへの**既存ハードリンク**（同一 inode を
+# 対等に指す独立ディレクトリエントリ、symlink と異なりパス比較では
+# 原理的に検出不能）を指すケースを、`os.path.samefile()`（st_dev/st_ino
+# 比較）による `_hardlink_alias_conflict()` を新設して閉鎖（P1）。
+# (2) `_cmd_extract_song()`/`_cmd_probe_header()` の出力書き込みを
+# `Path.write_text()` の直書きから `write_bundle_bytes()`（`_atomic_
+# write_bytes()` + `os.replace()`、`assemble` と共有する staging 経路）
+# へ統一し、書き込み途中失敗（ディスク枯渇・プロセス kill 等）による
+# 旧世代中間物の破損を防止（P2。`os.replace()` の rename 意味論が (1) を
+# 補完する多層防御である旨も併記。`HARNESS3B_EDUCATION_LESSON_RECORD.md`
+# §18 参照）。バンドル直列化バイト列・出力 JSON の直列化式はいずれも
+# 無変更——検証・公開経路のみの変更。builder バイト変更（新値
+# = 8b3a9de1f147fa64cc04c1acc197de20a84c0ea82f24401ddee607724f534e7b）と
+# `builder_provenance.detail_record_sha256`（§18 追記後の実測記録 raw
+# sha256 = e88d6e423012daf6002d92083a38e19c320ac97f042b08561b524ac1a9a1c5d3）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。system python3（pyworld 0.3.5 導入済み）による repo builder
+# 再現実行（run10、`--allow-unpinned`）で training/validation バンドルとも
+# 既 pin（run1〜run9）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、検証・公開経路のみの
+# 変更）。repin 完了後、`--allow-unpinned` を付けずに独立11回目として
+# 再実行し、`pinned_manifest_check: "PASS"`（同一 sha256）で正常完了する
+# ことも実測で確認した。旧値（第7世代、第6巡対応時点）は履歴として
+# 保持する:
+#   2901af1fc3f56035f5f0dce94dbd75e1bcd0e3e39cb87c807ec88eb54d198802
+#
+# 〔第9世代 repin, 2026-08-27, PR #329 第8巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用1件 P2 + 限定採用1件 P1）。(1) reason 本文の「repo
+# canonical builder + repo 収載 corpus 由来ファイルにより決定論的に
+# 再導出可能」という記述を訂正（P2、採用）——manifest 自身の
+# `corpus_provenance.audio_repo_contained: false` 宣言と矛盾しており、
+# 外部 PJS corpus ver1.1 の再取得（zip sha256 厳密一致 → 展開後 identity
+# 照合の fail-closed 手順）と User の scoped 承認（裁定 §1）という前提を
+# 欠いていた。旧文言は本欄 reason 本文中に引用形式で保持する。README.md /
+# HARNESS3B_EDUCATION_LESSON_RECORD.md §0/§11 の同型記述も同期是正した
+# （grep で「再導出」「regenerat」の全ヒットを確認済み、他ファイルの
+# ヒットは無関係な既存記述）。(2) `publish_bundle_pair()` の crash-atomic
+# 指摘のうち、backup/staging 名の決定論化（`tempfile.mkstemp()` の
+# ランダム名 → `<final-name>.h3b-backup`/`<final-name>.h3b-staging` の
+# 固定名）+ publish 開始前の stale backup fail-closed 検出 + 手動回復
+# 手順の文書化のみを採用し（限定採用, P1）、世代ディレクトリ + 単一
+# ポインタ切替への再設計は POSIX の2ファイル同時 rename 不可能性・出力
+# レイアウト契約変更の範囲超過を理由に境界宣言で見送った
+# （`HARNESS3B_EDUCATION_LESSON_RECORD.md` §19 参照）。バンドル直列化
+# バイト列・出力 JSON の直列化式・抽出式・アラインメント規則はいずれも
+# 無変更——検証・公開経路 + reason 文言のみの変更。builder バイト変更
+# （新値 = 6428c78611969f0fb9e17b64b4ac7f7376b07e8a055e5565eff29d9de6435247）
+# と `builder_provenance.detail_record_sha256`（§19 追記後の実測記録 raw
+# sha256 = e78c2f5535d7810e18bf29936046bc6ebc518c301b2214bba9dfa483429da0c0）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。system python3（pyworld 0.3.5 導入済み）による repo builder
+# 再現実行（run11、`--allow-unpinned`）で training/validation バンドルとも
+# 既 pin（run1〜run10）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、検証・公開経路 + reason
+# 文言のみの変更）。repin 完了後、`--allow-unpinned` を付けずに独立12回目
+# として再実行し、`pinned_manifest_check: "PASS"`（同一 sha256）で正常
+# 完了することも実測で確認した。旧値（第8世代、第7巡対応時点）は履歴として
+# 保持する:
+#   a356c5bc1073a04c824479cb6ea1a66534f61b699103a2bc0083c5b7b7a8d16c
+#
+# 〔第10世代 repin, 2026-08-27, PR #329 第9巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用2件、いずれも P1。どちらも第9世代 repin（§19 Fix
+# 21「backup/staging 名の決定論化」）が導入した退行の是正——決定論名化
+# 自体の狙いは誤りではなかったが、その生成方式に新たな穴が残っていた）。
+# (1) 固定 staging 名を並行 publish する2プロセスが共有し、片方が他方の
+# staging バイトを黙って差し替えて偽成功（hash A を報告しつつ実体は B を
+# publish）し得た穴を、`_atomic_write_bytes()` の staging 生成を
+# `os.open(..., O_CREAT|O_EXCL|O_NOFOLLOW, 0o644)` の排他生成へ変更して
+# 閉鎖（採用1, P1）——決定論名は維持し、既存 staging は `EEXIST` で
+# fail-closed 拒否する。(2) `--out` の staging/backup 派生パス
+# （`<out>.h3b-staging`/`<out>.h3b-backup`）自体が保護ファイルへの
+# symlink/hardlink である場合の alias 追従を、(1) の `O_EXCL` が構造的に
+# 閉鎖することを確認したうえで、`_require_out_does_not_alias_protected_
+# paths()` の preflight 検査対象を `--out` 本体からその2派生パスへも
+# 拡張し、より早い段階で明確な理由とともに拒否できるようにした（採用2,
+# P1）。バンドル直列化バイト列・出力 JSON の直列化式・抽出式・
+# アラインメント規則はいずれも無変更——検証・公開経路のみの変更（詳細は
+# `HARNESS3B_EDUCATION_LESSON_RECORD.md` §20 参照）。builder バイト変更
+# （新値 = 29073816199d559a03c9bb5f69d0a2d513acdd862f93dfe9c22f741e55f8f519）
+# と `builder_provenance.detail_record_sha256`（§20 の pytest 全 pass 件数
+# 追記後の最終実測記録 raw sha256 =
+# 46569fc88a76110897e3c5f399cb70c032e54eda1b59117140f2a726fbffed00）を
+# 更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。system python3（pyworld 0.3.5 導入済み）による repo builder
+# 再現実行（run13、`--allow-unpinned`）で training/validation バンドルとも
+# 既 pin（run1〜run12）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、検証・公開経路のみの
+# 変更）。repin 完了後、`--allow-unpinned` を付けずに独立14回目として
+# 再実行し、`pinned_manifest_check: "PASS"`（同一 sha256）で正常完了する
+# ことも実測で確認した。旧値（第9世代、第8巡対応時点）は履歴として
+# 保持する:
+#   8ee423cbbcbaf5b9eddfc3ae424011f39aad30141dbb4b7d8e60f45d4cd8dccd
 education_technique_lesson_manifest_sha:
-  value: null
-  status: PENDING
+  value: "fc01f413e3d92a679d7ace81aae7ffbcf97714ededb8de28211971efb5321b2c"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-
-    PJS 由来 Technique lesson 抽出（Technique extractor / Lesson builder、
-    PoR §3.3。VG-L0 学習ハーネス相当の feature extractor）が未実装。
-    改訂3（DESIGN_RUN9_REVISION_0.2.md）で Lesson manifest の生成・pin
-    方針は明確化済み（PJS の source_archive_sha256 /
-    expanded_corpus_identity_sha256 とは別の、RUN9 が実消費する Lesson
-    manifest を Lesson build 時に生成しその sha256 を本欄へ pin する）が、
-    Lesson build 自体はまだ実行されていない。manifest 本体は
-    `run9_schema.SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST`
-    （`run9-education-technique-lesson-manifest/1.0`）を自己宣言し、
-    `EDUCATION_MANIFEST_REQUIRED_KEYS` の最低要件（training/validation/
-    sealed-holdout lesson・donor 情報排除証拠・二体同一 bytes 証拠）を
-    満たさなければならない。
+    RUN9-L0-HARNESS-3b（2026-08-27, User 裁定「RUN9 User裁定 — PJS再取得
+    およびLesson Channel Freeze」逐語、repo 内収載
+    USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt 参照）で PINNED 化:
+    裁定 §1 の承認に基づき PJS corpus ver1.1 を session-scoped で再取得
+    （raw zip sha256 / expanded corpus identity sha256 とも裁定の要求値と
+    厳密一致、E1 実測 PASS）、裁定 §4 が確定した RUN9 v1 Lesson channel 5件
+    （relative F0 contour / note-mora duration ratio / phrase-normalized
+    energy envelope / attack timing / phrase-end timing。advisory 6
+    channel は不採用）を、凍結済み HARNESS3B_EXTRACTOR_SPEC.md（v1.1、
+    spec_sha256 = 8f78ccdb...）の literal 実装として抽出した。v1 spec
+    （16-bit WAV 仮定）は E2 ヘッダ実測（85/85 曲が実際は24-bit）により
+    fail-closed で正しく停止し（旧 freeze record は破棄せず
+    inputs/h3b_freeze_record.superseded.1.json として保存）、24-bit へ
+    spec を訂正した v1.1 で再凍結してから抽出を実行した（音響 decode は
+    v1 下で一度も実行されていないため「凍結が抽出に先行」の不変条件は
+    保たれている）。抽出は独立 2 回（session workdir、run1/run2）+ repo
+    canonical builder による独立 3 回目（run3、education_lesson_
+    builder.py）の計 3 回とも training/validation バンドルが byte-level
+    で完全一致した（sha256: training =
+    6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da,
+    validation =
+    b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522）。
+    training 内 pjs008/pjs064 の2曲は score/annotation モーラ数不一致
+    （count_mismatch）で全 channel not_extracted とし、補間・推測は行って
+    いない（aligned 83曲 / count_mismatch 2曲 = 合計85曲、裁定 §1 の
+    training 70 + validation 15 と一致）。sealed_holdout 15曲は完全性
+    hash・ID確認以外の処理を一切行っていない。本欄が PINNED する
+    `inputs/education_technique_lesson_manifest.json`（schema
+    `run9-education-technique-lesson-manifest/1.0`）は
+    `run9_schema.validate_education_lesson_manifest()`/`load_pinned_
+    education_lesson_manifest()` が全構造・cross-check（裁定 txt 実バイト
+    照合、builder/spec/freeze record 現行・superseded/detail record の
+    実バイト sha256 照合、三系統語彙対応表の schema 定数との一致、
+    alignment_accounting の内部整合、determinism_evidence の
+    run1==run2==run3 一致）を fail-closed で強制する——harness の education
+    lesson manifest 消費は `load_pinned_education_lesson_manifest()`
+    経由のみで行う契約（他の `load_pinned_*` 系と同じ規約）。バンドル実体
+    ファイル（training_bundle.json/validation_bundle.json）は rights
+    制約により repo に収載していない——sha256 のみを本欄・manifest へ pin
+    する（reexport emb と同型の session-artifact 扱い。
+    `corpus_provenance.audio_repo_contained: false` が宣言するとおり
+    消費入力3点（wav/lab/musicxml）・展開済み corpus・バンドル実体は
+    いずれも repo 非収載——fresh checkout からの再導出には repo canonical
+    builder に加え **外部 PJS corpus ver1.1 の再取得**（zip sha256 の
+    厳密一致 → 展開後 `expanded_corpus_identity_sha256` 照合の fail-closed
+    手順、per-file 消費入力 pin との照合込み）と、User の scoped 承認
+    （裁定 §1、session-scoped）が前提として必要——第9世代 repin で訂正
+    〔旧文言（第8世代まで）:「repo canonical builder + repo 収載 corpus
+    由来ファイルにより決定論的に再導出可能」。「repo 収載 corpus」という
+    記述が `audio_repo_contained: false` と矛盾し、外部再取得・User 承認
+    という前提を欠いていたため不正確だった。PR #329 第8巡レビュー指摘,
+    採用, P2〕）。詳細記録は HARNESS3B_EDUCATION_LESSON_RECORD.md を正と
+    する。第11世代 repin（PR #329 第10巡レビュー対応、採用2件・いずれも
+    P2）: Fix 24（「sealed_holdout の row_ids はいかなるコードパスにも
+    現れない」という従来の強すぎる記述を「件数検証・3集合非交差検証の
+    ためにのみ読まれ、決して列挙/decode/特徴抽出/出力には使われない」
+    へ是正）+ Fix 25（builder cross-check をロード時点捕捉値
+    `_BUILDER_SOURCE_SHA256_AT_LOAD` へ束縛し、ディスク実バイトとの
+    両方照合で「ロード後の差し替え」と「ロード時点から pin 不一致」を
+    区別する）。抽出式・アラインメント・直列化・バンドル内容は無変更
+    （builder バイト・detail record バイトの変更のみ、run15 で既存
+    バンドル pin との byte 一致を確認済み）。詳細 = 本記録 §21。
+    〔履歴: 旧 reason（PENDING 時点）—「PJS 由来 Technique lesson 抽出
+    （Technique extractor / Lesson builder、PoR §3.3。VG-L0 学習ハーネス
+    相当の feature extractor）が未実装。改訂3（DESIGN_RUN9_REVISION_0.2.md）
+    で Lesson manifest の生成・pin 方針は明確化済み（PJS の
+    source_archive_sha256 / expanded_corpus_identity_sha256 とは別の、
+    RUN9 が実消費する Lesson manifest を Lesson build 時に生成しその
+    sha256 を本欄へ pin する）が、Lesson build 自体はまだ実行されていない。
+    manifest 本体は `run9_schema.SCHEMA_EDUCATION_TECHNIQUE_LESSON_
+    MANIFEST`（`run9-education-technique-lesson-manifest/1.0`）を自己宣言
+    し、`EDUCATION_MANIFEST_REQUIRED_KEYS` の最低要件（training/
+    validation/sealed-holdout lesson・donor 情報排除証拠・二体同一 bytes
+    証拠）を満たさなければならない。」〕
 
 # 2026-08-25 実 PJS 公開配布物から生成（zip sha 検証 → plain unzip → corpus
 # identity 照合 → builder 決定論分割）: PJS corpus ver1.1 zip
@@ -1826,6 +2125,28 @@ practice_audio_split_manifest_sha:
   value: "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audio_split_manifest.json
+
+# --- pjs_consumed_inputs_manifest_sha: PR #329 第2巡 Codex bot レビュー
+# 指摘2-4（P1、採用）で新設。`education_lesson_builder.py` の
+# `extract_song()` が実際に消費する3入力（pjsNNN.lab / pjsNNN.musicxml /
+# pjsNNN_song.wav、training70+validation15=85曲×3ファイル=255件）の
+# per-file sha256 pin（`inputs/pjs_consumed_inputs_sha256.json`）自体の
+# 実バイト sha256。`donor_bank_lab.py` の `corpus_identity_hash()` は
+# `.lab` + 対の `_song.wav` のみを被覆し musicxml を被覆しないため、
+# musicxml 単体の改ざんが検出されない穴があった——本欄はその穴を builder
+# 消費入力3種の完全被覆で閉じる。値は workdir の検証済み expanded corpus
+# （zip sha 検証 + expanded_corpus_identity_sha256 照合 PASS 済み）を
+# 実測し、E1 inventory（`e1_inventory.json`、607ファイル、zip 展開直後の
+# 実測値）と突合して二重確認した255ファイル分の sha256（両者完全一致）。
+# `run9_schema.validate_pjs_consumed_inputs_manifest()`/
+# `load_pinned_consumed_inputs_manifest()` が唯一の正規消費経路
+# （`practice_audio_split_manifest_sha` と同型の3層防御）。sealed_holdout
+# 15曲は builder がいかなる経路でも一切消費しないため対象外
+# （`sealed_holdout_excluded: true` で明示宣言）。
+pjs_consumed_inputs_manifest_sha:
+  value: "4e61deae223844bbabf110be309c0a2179d9cd68c272a0dafb9e062d19f6e8b0"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/pjs_consumed_inputs_sha256.json
 
 # --- branch_write_policy_sha: inputs/branch_write_policy.json の実バイト
 # sha256（PINNED — 本 PR で内容確定。User 外部レビュー PR #317 P1-1
@@ -2149,6 +2470,29 @@ learning_recipe_sha:
 # manifest_sha は引き続き PENDING のため、P5 分離検証が実行不能である
 # という結論自体は現在も変わらない（practice 単独の PINNED 化では
 # `_P5_DEFERRED_VERIFICATION_BLOCKED_BY` の2欄要件を満たさない）〕。
+# 〔履歴注記 2026-08-27（Codex bot レビュー PR #329 第5巡指摘3, P2, 限定
+# 採用）: RUN9-L0-HARNESS-3b（本ファイル education_technique_lesson_
+# manifest_sha 欄参照）により education_technique_lesson_manifest_sha も
+# PINNED 化された——`_P5_DEFERRED_VERIFICATION_BLOCKED_BY` の2欄要件
+# （practice_audio_split_manifest_sha + education_technique_lesson_
+# manifest_sha）はともに充足された。しかし P5 のフレーズ/音域（kana・
+# pitch_midi の実値）と実学習素材の実体を照合する実際の検証手続き
+# （extractor/harness）は依然として repo に実在しない——development/
+# generalization 軸（P4/P5、GENERALIZED_GAIN を含む）の extractor は
+# VG-L0 学習ハーネス未実装のため存在せず（measurement_spec_sha は
+# development_generalization_axis について引き続き PENDING、本ファイル
+# 該当欄・README.md 該当節参照）、この2 pin 欄が揃っただけでは検証は
+# 実行できない。したがって P5 分離検証は依然実行不能のまま——ただし
+# 阻害要因は「2 pin 欄の PENDING」から「VG-L0 学習ハーネス実装
+# （development/generalization 軸 extractor 実装）待ち」へ移った。再入
+# 条件: measurement_spec_sha の development_generalization_axis 節が
+# PINNED 化された時点（= VG-L0 学習ハーネス実装により GENERALIZED_GAIN/
+# development 軸 extractor が実装された時点）で本検証を実装・実行する。
+# `deferred_verification.status`（`TRAINING_DISTRIBUTION_SEPARATION_
+# NOT_YET_VERIFIABLE`）は変更しない——検証不能な主張を凍結しない Fix
+# 14/18 規約のまま。`evaluation/probe_manifest.json` 自体（`blocked_by`
+# 凍結集合含む）は凍結境界のため改変しない——本注記は RUN9_CONTRACT.yaml
+# 側のみの追記である〕。
 # P5 の role 文言を検証済み事実（他 probe の使用域の外周・
 # baseline domain 内であること）へ限定し、P5 probe レベルへ機械可読
 # ブロック `deferred_verification`（status/blocked_by/verification_
@@ -2493,8 +2837,19 @@ cost_record_sha:
 #   構造検証のため、本訂正は validator 側の追随を要さない（確認済み）。
 #   分類数は不変（MACHINE 1件 / PROCEDURAL 19件）。バイトが変わったため
 #   repin（9世代目）。
+# - RUN9-L0-HARNESS-3b（2026-08-27、値
+#   ead64d2fd7896728b1fc7070c90d7a5b2d8bb17740e21c4056a5210a081cf98b へ
+#   repin）: rule 8（§22 step 8『build and freeze PJS Lesson』）の
+#   `checkpoint`/`machine_promotion_condition` が「education_technique_
+#   lesson_manifest_sha は引き続き PENDING（EDUCATION builder 未実装）」
+#   という stale な言及を残していた——本改訂で
+#   education_technique_lesson_manifest_sha が PINNED 化された（本ファイル
+#   上部の同欄参照）ため、rule 8 のテキストを解消済みへ更新した（旧文言は
+#   〔履歴〕として rule 本文内に保持、削除しない）。rule_id/enforcement/
+#   verbatim は無改変。分類数・他 rule は無改変（sha256 確認済み）。
+#   バイトが変わったため repin（10世代目）。
 failure_abort_criteria_sha:
-  value: "da8aee0d49a5dac58b5ddd6b6dc7959f1a15914e9a6e565a4e6851e2b6c7a527"
+  value: "ead64d2fd7896728b1fc7070c90d7a5b2d8bb17740e21c4056a5210a081cf98b"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 

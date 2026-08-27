@@ -1,0 +1,138 @@
+RUN9 User裁定 — PJS再取得およびLesson Channel Freeze
+作成日: 2026-08-27 JST
+受領経路: User との対話（RUN9-L0-HARNESS-3b の Technique lesson 抽出着手に
+先立ち、session scratchpad（scratchpad/run9_user_adjudication_pjs_lesson_
+freeze.md）へ Fable が記録し、以後の実装・レビューが参照する正本として
+本ファイルへ repo 内収載した）
+対象: PJS corpus ver1.1 の session-scoped 再取得承認（zip sha / expanded
+corpus identity の厳密一致要求、workdir 限定・repo 非保存の宣言）、
+Technique 抽出許可対象（training 70 + validation 15 のみ、sealed_holdout
+15 曲への処理禁止範囲）、normalization 統計の training-only 規約、
+Rights Gate との非連動宣言（rights-clean/learning-eligible の非宣言）、
+RUN9 v1 Lesson channel の5件確定と advisory 6 channel の不採用、
+extractor spec/normalization spec/metric version/dependency/code・config
+hash の凍結規律
+状態: User Adjudication（逐語・一字一句改変禁止）
+
+================================================================
+0. この文書の位置づけ
+================================================================
+
+本書は User が 2026-08-27 に下した裁定の逐語全文を repo 内へ収載した
+ものである。POR_CONCEPT_ADJUDICATION_20260824.txt /
+USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt /
+USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt /
+USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt /
+USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt と同じ前例（外部裁定を
+repo 内の凍結文書として保持し、以後の実装・レビューが参照する正本とする）
+に倣う。
+
+RUN9-L0-HARNESS-3b が新設した inputs/education_technique_lesson_manifest.json
+の adjudication_basis / rights_status、`run9_schema.
+validate_education_lesson_manifest()` の docstring、RUN9_CONTRACT.yaml の
+education_technique_lesson_manifest_sha reason は、すべて本書の逐語からの
+転記であり、Claude Code が新規に発明した値ではない
+（USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt が踏襲した教訓——
+転記元が scratchpad のみだと、将来のレビュアーが「User 転記であって発明で
+ない」ことを検証できない——をさらに踏襲し本書を repo 内収載する）。
+
+以下は起草時の作業メモ
+scratchpad/run9_user_adjudication_pjs_lesson_freeze.md の本文を一字一句
+そのまま転記する（改変禁止。同ファイル末尾の「転記注」フッターは同ファイル
+自身の正本所在を注記する事務注記であり、User 裁定の逐語本文ではないため
+本書には含めない）。
+
+================================================================
+1. 本文（逐語、一字一句改変禁止）
+================================================================
+
+【RUN9 User裁定 — PJS再取得およびLesson Channel Freeze】
+
+1. PJS corpus再取得
+
+PJS corpus ver1.1について、Claudeによるsession-scopedな再取得と
+Technique抽出を承認する。
+
+取得物zipのraw SHA256は
+683c00253ee35a62d50de0375bb9d8e003a74338d4ce3495ac3f7ad096abc1ca
+との厳密一致を要求する。
+
+plain unzip後のexpanded corpus identityは
+9905cec08fbaf43fa545400498a7908ef28567e8f60a5ba005fb2e00d526f996
+との厳密一致を要求する。
+
+いずれかが不一致なら即時停止し、別アーカイブ、別version、
+近似データによる代替を禁止する。
+
+raw zipおよび展開済み音源はsession workdir内に限定し、
+repo・永続Drive・公開成果物へ保存しない。
+
+
+2. Split境界
+
+Technique抽出を許可するのは、凍結済みpractice splitの
+
+training 70曲
+validation 15曲
+
+のみとする。
+
+sealed_holdout 15曲については、完全性hashとID確認以外の処理を禁止する。
+音声decode、feature extraction、Lesson生成、normalization統計への混入、
+試聴、previewを行わない。
+
+normalization統計はtraining 70曲のみから算出する。
+validation 15曲にはtrainingから凍結したnormalizationを適用し、
+ControlProfile探索、candidate選択、停止判断へfeedbackしない。
+
+
+3. Rights Gateとの関係
+
+本承認はPJS取得・解析作業へのscoped承認であり、
+外部権利者のattestation、未解決provenanceの確定、
+R9-G1 Rights Gate waiverを意味しない。
+
+Technique artifactは技術的に生成・hash凍結できるが、
+rights-cleanまたはlearning-eligibleとは、
+既存Rights Gateが別途成立するまで宣言しない。
+
+
+4. RUN9 v1 Lesson channel
+
+採用channelを以下の5件に限定する。
+
+- relative F0 contour
+- note / mora duration ratio
+- phrase-normalized energy envelope
+- attack timing
+- phrase-end timing
+
+advisory / experimental channelは全て不採用とする。
+
+- vibrato rate / depth
+- breath placement
+- release persistence
+- terminal mel persistence
+- HNR trajectory
+- vowel drift
+
+不採用channelは抽出、保存、loss、評価、成功判定に使用しない。
+
+phrase-end timingはsymbolic/annotation上の終了時刻差とし、
+score境界後のrelease persistence、terminal mel、
+HNR、vowel driftを含めない。
+
+
+5. Freeze
+
+extractor spec、normalization spec、metric version、dependency、
+code/config hashを音響特徴抽出前に凍結する。
+
+学習開始後はchannelの追加・削除・再定義を禁止する。
+
+後日advisory channelを採用する場合は、
+新しいdesign revisionで再事前登録・再凍結する。
+
+仕様不一致を修正する実装バグ修正は同revisionの新attemptで可能だが、
+channel意味論、抽出法、normalization法の変更は
+実装修正ではなくdesign revision変更として扱う。

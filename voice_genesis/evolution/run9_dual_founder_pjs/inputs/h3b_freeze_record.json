@@ -1,0 +1,822 @@
+{
+  "created_order_declaration": "本 record（v1.1）記録後に初めて PJS 抽出（decode）を実行する。v1 freeze 下では decode を伴う抽出は一度も実行されていない（stop_event 参照、h3b_freeze_record.superseded.1.json）。v1.1 の extractor コード（24-bit 手動デコードを実装）についても、本 record 記録時点までは合成データのみで検証し、PJS 音源には触れていない（test_synthetic_h3b.py 実行ログ参照）。WAV ヘッダの全85曲再実測（wav_header_probe_85_v1_1.json）は metadata 読み取りのみで decode ではない。",
+  "dependencies": {
+    "install_note": "pyworld 0.3.5 は numpy>=2 と非互換（ビルド/import 時に不整合が生じ得る ため事前に numpy<2 へ pin）。venv_h3b で `pip install \"numpy<2\" scipy pyworld` を実行し、上記組合せで import + __version__ 実測 PASS を確認 （e2_measurement_report.md §1 参照）。repo 本体の環境・依存には一切触れていない（venv 完全分離）。",
+    "numpy": "1.26.4",
+    "python": "3.11.15",
+    "pyworld": "0.3.5",
+    "scipy": "1.17.1",
+    "venv_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/e505c1c2-c4ad-588b-a1b2-258051a522de/scratchpad/harness_work/h3b/venv_h3b"
+  },
+  "dependencies_reverified": {
+    "note": "v1 freeze 時と同一 venv_h3b・同一バージョンであることを再確認（依存変更なし）。",
+    "numpy": "1.26.4",
+    "python": "3.11.15",
+    "pyworld": "0.3.5",
+    "scipy": "1.17.1"
+  },
+  "extractor_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/e505c1c2-c4ad-588b-a1b2-258051a522de/scratchpad/harness_work/h3b/education_lesson_extractor.py",
+  "extractor_sha256": "ba972ba70906f9d7387fafdb314391863dae4c5d4f216b9f935254a36e8cb4f5",
+  "frame_period_ms": 5.0,
+  "frame_period_ms_source": "voice_genesis/foundry/adapter/donor_bank.py:34 `FRAME_PERIOD_MS = 5.0`（Read で転記。import はしていない。v1 から不変）。",
+  "manual_decode_correctness_check": "test_synthetic_h3b.py の項目3で、境界値・代表値（0, 1, -1, 2**23-1, -2**23, ±4194304, ±100）を手動 24-bit little-endian バイト列へエンコードした合成 WAV を load_wav_24bit_mono_48k() でデコードし、v/8388608.0 の期待値と厳密一致（np.allclose atol=0, rtol=0）することを確認済み（PASS）。",
+  "metric_version": "h3b-extractor-spec/1.1",
+  "spec_freeze_ordering_compliance": "本 freeze record（v1.1）は PJS 音源への最初の decode アクセスより前に完成させた。v1 freeze も同様に decode 前に完成しており、v1 freeze 下で decode が実行された事実は一度もない（stop_event 参照）。よって v1→v1.1 訂正を跨いでも「凍結が抽出に先行」の不変条件は破られていない。",
+  "spec_path": "/tmp/claude-0/-home-user-ugh-prompt-engine/e505c1c2-c4ad-588b-a1b2-258051a522de/scratchpad/h3b_extractor_spec_draft.md",
+  "spec_sha256": "8f78ccdb275a9acca6b08ec75535d26863bb0464c6e23150829146339f2ff39c",
+  "stop_event": {
+    "note": "v1.1 では WAV ヘッダ全85曲実測が spec 要求（24-bit）と一致（85/85 match）したため、本 record の時点では停止事由なし。v1 での停止の経緯は h3b_freeze_record.superseded.1.json の stop_event、および e2_measurement_report.md の v1 タイムラインに保持している。",
+    "occurred": false
+  },
+  "supersede_reason": "v1 (metric_version h3b-extractor-spec/1) required WAV 16-bit/mono/48000Hz (spec §2-1). E2 header measurement (metadata-only RIFF/fmt read, no decode) of all 85 training+validation pjsNNN_song.wav found the real PJS corpus is uniformly 24-bit/mono/48000Hz — 0/85 matched the v1 requirement. v1's extractor correctly fail-closed-stopped before any decode (see h3b_freeze_record.superseded.1.json stop_event and e2_measurement_report.md for the full v1 timeline). Fable design judgement (2026-08-27): the stop was correct behaviour; the 24-bit measurement is a correction to spec's physical-layer assumption, not a change to channel semantics / extraction formulas / normalization method, and therefore is NOT a design-revision matter under 裁定 §5. Spec corrected to v1.1 (§2-1 now requires 24-bit and pins an exact manual byte-decode formula); no audio was ever decoded under v1, so 'freeze precedes extraction' is preserved by re-freezing under v1.1 before any PJS decode begins.",
+  "supersedes": "h3b_freeze_record.superseded.1.json",
+  "wav_header_measured_85_songs": {
+    "pjs001": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs002": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs003": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs004": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs005": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs006": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs007": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs008": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs010": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs011": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs012": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs013": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs014": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs015": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs017": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs018": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs019": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs020": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs021": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs022": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs023": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs024": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs026": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs027": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs028": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs029": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs030": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs031": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs032": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs033": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs035": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs036": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs037": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs038": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs039": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs040": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs041": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs043": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs044": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs046": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs047": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs048": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs049": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs050": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs052": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs053": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs054": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs055": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs056": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs057": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs058": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs060": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs061": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs062": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs063": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs064": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs065": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs068": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs070": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs071": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs072": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs073": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs074": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs075": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs076": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs077": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs078": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs079": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs081": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs083": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs084": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs085": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs086": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs087": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs088": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs089": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs090": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs091": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs093": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs094": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs095": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs096": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs097": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs098": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    },
+    "pjs100": {
+      "audio_format": 1,
+      "bits_per_sample": 24,
+      "block_align": 3,
+      "byte_rate": 144000,
+      "channels": 1,
+      "matches_requirement": true,
+      "sample_rate": 48000
+    }
+  },
+  "wav_header_measured_summary": {
+    "distinct_signatures": [
+      {
+        "audio_format": 1,
+        "bits_per_sample": 24,
+        "channels": 1,
+        "count": 85,
+        "sample_rate": 48000
+      }
+    ],
+    "probe_method": "education_lesson_extractor.py probe-header サブコマンド（v1.1 コード、read_wav_fmt_header() 自体は v1 から不変）。RIFF/fmt チャンクのみを読む。",
+    "songs_matching_requirement": 85,
+    "songs_total_probed": 85
+  },
+  "wav_header_requirement": {
+    "audio_format_pcm": 1,
+    "bits_per_sample": 24,
+    "channels": 1,
+    "manual_decode_formula": "data bytes -> np.frombuffer(dtype=uint8).reshape(-1,3); v = b0 | (b1<<8) | (b2<<16) (little-endian, int32); v >= 2**23 -> v -= 2**24 (sign extend); x = v.astype(float64) / 8388608.0 (2**23, range [-1,1)).",
+    "sample_rate": 48000,
+    "source": "h3b_extractor_spec_draft.md v1.1 §2-1"
+  }
+}

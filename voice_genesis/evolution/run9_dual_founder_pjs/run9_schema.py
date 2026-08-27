@@ -1403,6 +1403,8 @@ def validate_branch_write_policy_manifest(data: Mapping[str, Any]) -> None:
 
 SCHEMA_PRACTICE_AUDIO_SPLIT_MANIFEST = "run9-practice-audio-split-manifest/1.0"
 SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST = "run9-education-technique-lesson-manifest/1.0"
+# PR #329 第2巡レビュー指摘2-4（P1、採用）新設。
+SCHEMA_PJS_CONSUMED_INPUTS_MANIFEST = "run9-pjs-consumed-inputs-sha256/1.0"
 
 # rev 0.3（Codex bot レビュー第6巡 Fix A 部分採用）: manifest 実ファイルの
 # 規約パス。`practice_audio_split_manifest_sha` /
@@ -1415,6 +1417,62 @@ SCHEMA_EDUCATION_TECHNIQUE_LESSON_MANIFEST = "run9-education-technique-lesson-ma
 # して凍結する。
 PRACTICE_MANIFEST_PATH = _THIS_DIR / "inputs" / "practice_audio_split_manifest.json"
 EDUCATION_MANIFEST_PATH = _THIS_DIR / "inputs" / "education_technique_lesson_manifest.json"
+# PR #329 第2巡レビュー指摘2-4（P1、採用）新設: 同じ命名規約。
+PJS_CONSUMED_INPUTS_MANIFEST_PATH = _THIS_DIR / "inputs" / "pjs_consumed_inputs_sha256.json"
+
+# ---------------------------------------------------------------------------
+# RUN9-L0-HARNESS-3b: technique lesson bundle（`education_lesson_builder.py`
+# が生成する training/validation バンドルの schema 識別子）+ 三系統語彙
+# 対応表（HARNESS3B_EXTRACTOR_SPEC.md §1 の凍結対象表を機械可読へ写した
+# 正本）。`education_technique_lesson_manifest.json` の `channel_vocabulary_
+# map` および `education_lesson_builder.py` の `CHANNEL_VOCABULARY_MAP` は、
+# いずれも本定数と内容一致することをテスト層が強制する
+# （`tests/test_education_lesson_builder.py`）— 3ファイルへ分散した同一表が
+# 将来ドリフトしないためのファミリー掃討。
+# ---------------------------------------------------------------------------
+
+SCHEMA_TECHNIQUE_LESSON_BUNDLE = "run9-technique-lesson-bundle/1.0"
+
+TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP: Tuple[Dict[str, str], ...] = (
+    {
+        "physical_channel": "relative F0 contour",
+        "extracted_trait": "relative_F0",
+        "education_allowed_channel": "pitch_trajectory",
+    },
+    {
+        "physical_channel": "note/mora duration ratio",
+        "extracted_trait": "duration_ratio",
+        "education_allowed_channel": "phoneme_note_duration_relation",
+    },
+    {
+        "physical_channel": "phrase-normalized energy envelope",
+        "extracted_trait": "energy_envelope",
+        "education_allowed_channel": "dynamics_energy_trajectory",
+    },
+    {
+        "physical_channel": "attack timing",
+        "extracted_trait": "onset_offset",
+        "education_allowed_channel": "timing",
+    },
+    {
+        "physical_channel": "phrase-end timing",
+        "extracted_trait": "onset_offset",
+        "education_allowed_channel": "phrase_end_control",
+    },
+)
+
+# 規約パス（`EDUCATION_MANIFEST_PATH` 等と同じ命名規約 — schema から機械的
+# に導出せず、リポジトリ内の固定配置として凍結する）。
+EDUCATION_LESSON_BUILDER_PATH = _THIS_DIR / "education_lesson_builder.py"
+EDUCATION_LESSON_SPEC_PATH = _THIS_DIR / "HARNESS3B_EXTRACTOR_SPEC.md"
+EDUCATION_LESSON_FREEZE_RECORD_PATH = _THIS_DIR / "inputs" / "h3b_freeze_record.json"
+EDUCATION_LESSON_SUPERSEDED_FREEZE_RECORD_PATH = (
+    _THIS_DIR / "inputs" / "h3b_freeze_record.superseded.1.json"
+)
+EDUCATION_LESSON_ADJUDICATION_PATH = (
+    _THIS_DIR / "USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt"
+)
+EDUCATION_LESSON_DETAIL_RECORD_PATH = _THIS_DIR / "HARNESS3B_EDUCATION_LESSON_RECORD.md"
 
 # ---------------------------------------------------------------------------
 # learning recipe manifest（RUN9 Phase 3 item 3）: rev 0.3 の枝別原則
@@ -4406,6 +4464,25 @@ _P5_MIDI_HIGH = 90
 # PINNED になった時点で実施すべき検証手続き（`verification_procedure`）
 # (d) 未検証のまま held-out として消費（GENERALIZED_GAIN 評価等）しては
 # ならないという禁止宣言（`consumption_prohibition`）を機械強制する。
+# 〔履歴注記 2026-08-27（Codex bot レビュー PR #329 第5巡指摘3, P2, 限定
+# 採用）: RUN9-L0-HARNESS-3b により `education_technique_lesson_manifest_
+# sha` も PINNED 化され、上記〔履歴〕注記の「`education_technique_lesson_
+# manifest_sha` が依然 PENDING のため分離検証は引き続き実行不能」は
+# stale になった——`_P5_DEFERRED_VERIFICATION_BLOCKED_BY` の2欄要件は
+# ともに充足された。しかし実際の分離検証（P5 のフレーズ/音域と実学習
+# 素材の実体の照合）を行う extractor/harness は依然として repo に実在
+# しない——development/generalization 軸（P4/P5、GENERALIZED_GAIN を
+# 含む）の extractor は VG-L0 学習ハーネス未実装のため存在せず
+# （`measurement_spec_sha` は development_generalization_axis について
+# 引き続き PENDING）、2 pin 欄が揃っただけでは検証は実行できない。した
+# がって分離検証は依然実行不能のまま——ただし阻害要因は「2 pin 欄の
+# PENDING」から「VG-L0 学習ハーネス実装（development/generalization 軸
+# extractor 実装）待ち」へ移った。再入条件: `measurement_spec_sha` の
+# development_generalization_axis 節が PINNED 化された時点（= VG-L0
+# 学習ハーネス実装により GENERALIZED_GAIN/development 軸 extractor が
+# 実装された時点）で本検証を実装・実行する。`P5_DEFERRED_VERIFICATION_
+# STATUS` は変更しない——検証不能な主張を凍結しない Fix 14/18 規約の
+# まま〕。
 # ---------------------------------------------------------------------------
 _P5_DEFERRED_VERIFICATION_KEY = "deferred_verification"
 _P5_DEFERRED_VERIFICATION_KEYS: FrozenSet[str] = frozenset(
@@ -4429,6 +4506,22 @@ P5_DEFERRED_VERIFICATION_STATUS = "TRAINING_DISTRIBUTION_SEPARATION_NOT_YET_VERI
 # `education_technique_lesson_manifest_sha` の PINNED 化のみ（両欄が
 # 揃わないと検証不能な設計のまま——値そのものではなく欄名の集合を凍結
 # する。値は RUN9_CONTRACT.yaml 側が別途 pin する）。
+# 〔履歴注記 2026-08-27（Codex bot レビュー PR #329 第5巡指摘3, P2, 限定
+# 採用）: RUN9-L0-HARNESS-3b により `education_technique_lesson_manifest_
+# sha` が PINNED 化され、上記「実際に分離検証を実行可能にするのは
+# education_technique_lesson_manifest_sha の PINNED 化のみ（両欄が揃う
+# こと）」という条件文自体は充足された——`_P5_DEFERRED_VERIFICATION_
+# BLOCKED_BY` の2欄はともに PINNED。ただし「両欄が揃えば検証を実行
+# できる」という含意は誤りだったと判明した: 実際の分離検証（P5 の kana/
+# pitch_midi 実値と実学習素材の実体との照合）を行う extractor/harness
+# 自体が repo に実在しない（development/generalization 軸の extractor は
+# VG-L0 学習ハーネス未実装のため不在——`measurement_spec_sha` は
+# development_generalization_axis について引き続き PENDING）。したがって
+# 検証は依然実行不能——本欄（`_P5_DEFERRED_VERIFICATION_BLOCKED_BY`）と
+# `evaluation/probe_manifest.json` の `blocked_by` 凍結集合はいずれも
+# 変更しない（発行時点の凍結記録であり、事後の PINNED 化で欄名列挙を
+# 更新する設計ではない——上記と同じ規約）。再入条件は本ファイル上方の
+# Fix 32 コメントブロック内 2026-08-27 履歴注記を参照〕。
 _P5_DEFERRED_VERIFICATION_BLOCKED_BY: FrozenSet[str] = frozenset(
     {"practice_audio_split_manifest_sha", "education_technique_lesson_manifest_sha"}
 )
@@ -5423,7 +5516,21 @@ def _validate_p5_deferred_verification(value: Any, *, field: str) -> None:
     事前登録」規約で、未検証のまま held-out として消費されないことを
     機械強制する（`practice_audio_split_manifest_sha`/
     `education_technique_lesson_manifest_sha` がいずれも PINNED になる
-    まで、この分離検証は実行不能——検証不能な主張を凍結しない）。"""
+    まで、この分離検証は実行不能——検証不能な主張を凍結しない）。
+
+    〔履歴注記 2026-08-27（Codex bot レビュー PR #329 第5巡指摘3, P2, 限定
+    採用）: RUN9-L0-HARNESS-3b により上記2欄はいずれも PINNED 化された
+    （`_P5_DEFERRED_VERIFICATION_BLOCKED_BY` 要件は充足済み）。しかし
+    実際の分離検証（P5 の kana/pitch_midi 実値と実学習素材の実体との
+    照合）を行う extractor/harness は依然 repo に実在しない
+    （development/generalization 軸の extractor は VG-L0 学習ハーネス
+    未実装のため不在——`measurement_spec_sha` は development_
+    generalization_axis について引き続き PENDING）。したがって
+    `P5_DEFERRED_VERIFICATION_STATUS` は変更せず、本 validator の検証
+    内容（構造・マーカーの fail-closed 検証）も変更しない——2 pin 欄が
+    揃っただけでは実行できない旨の詳細は本ファイル上方の
+    `_P5_DEFERRED_VERIFICATION_BLOCKED_BY` コメント（2026-08-27 履歴
+    注記）を参照。〕"""
     if not isinstance(value, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
     unknown = set(value.keys()) - _P5_DEFERRED_VERIFICATION_KEYS
@@ -7022,6 +7129,17 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     # PINNED で証拠づける（`validate_practice_split_manifest()` が中身の
     # 最低要件を検証する）。
     "practice_audio_split_manifest_sha",
+    # PR #329 第2巡レビュー指摘2-4（P1、採用）新設: `education_lesson_
+    # builder.py` の `extract_song()` が実際に消費する3入力（pjsNNN.lab /
+    # pjsNNN.musicxml / pjsNNN_song.wav、training70+validation15=85曲分
+    # =255ファイル）の per-file sha256 pin
+    # （`inputs/pjs_consumed_inputs_sha256.json`）自体の実バイト sha256。
+    # `donor_bank_lab.py` の `corpus_identity_hash()` は `.lab` + 対の
+    # `_song.wav` のみを被覆し musicxml を被覆しないため、musicxml 単体の
+    # 改ざんが検出されない穴があった——本欄はその穴を builder 消費入力3種の
+    # 完全被覆で閉じる（`validate_pjs_consumed_inputs_manifest()`/
+    # `load_pinned_consumed_inputs_manifest()` 参照）。
+    "pjs_consumed_inputs_manifest_sha",
     # rev 0.3 新設（User 外部レビュー PR #317 P1-1 採用）: 枝別書込境界
     # policy manifest（`inputs/branch_write_policy.json`）自体の実
     # sha256。本 PR でファイル内容を確定するため PINNED（本欄自体は
@@ -17073,4 +17191,641 @@ def load_pinned_speaker_map_manifest(
             "証拠文書の乖離）を fail-closed で拒否する（PR #328 レビュー第8巡指摘17対応）"
         )
 
+    return data
+
+
+# ---------------------------------------------------------------------------
+# RUN9-L0-HARNESS-3b 第1巡 Codex bot レビュー対応（PR #329 指摘1、P1、
+# 採用）: practice_audio_split_manifest_sha pin の唯一の正規消費経路
+# （`load_pinned_speaker_map_manifest()`/`load_pinned_education_lesson_
+# manifest()` と同型の3層防御・read-once 契約）。sealed-holdout 境界を
+# consumer 側（education_lesson_builder.py）へ machine 強制するための足場
+# ——旧実装は `--split-manifest`/`extract-song` が任意パス・任意 song_id を
+# 無検証で受け付けていた。
+# ---------------------------------------------------------------------------
+
+
+def load_pinned_practice_split_manifest(
+    contract: Run9RunContract,
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`practice_audio_split_manifest_sha` pin の**唯一の正規消費経路**。
+
+    **消費契約（事前登録）**: `education_lesson_builder.py` の practice
+    split manifest 消費はこの関数経由のみで行わなければならない ——
+    `--split-manifest` が指す任意パスへの直接 `json.load()` は契約違反
+    である。
+
+    手順（いずれかで fail-closed、他の `load_pinned_*` 系と同型）:
+    (1) disk 正典 `RUN9_CONTRACT.yaml` を都度再読込し、渡された
+        `contract` の `practice_audio_split_manifest_sha` pin が disk 正典
+        と乖離していないか照合する（改変検出）。
+    (2) 当該 pin が PINNED であることを確認する。
+    (3) manifest 実ファイルの実バイト sha256 が pin 値と一致することを
+        read-once（同一バッファから digest と parse の両方を導出）で確認
+        する——`manifest_path` が任意パスを指していても、この pin と
+        byte-identical でない限り拒否する（sealed ID 混入・改ざん
+        manifest の fail-closed 拒否）。
+    (4) `validate_practice_split_manifest()` で manifest 本体の構造・
+        training/validation/sealed_holdout 3集合の非交差（`_require_
+        disjoint_row_id_sets()`）を検証する。
+
+    戻り値は検証済み manifest dict（training/validation/sealed_holdout の
+    件数検証・sealed_holdout の切り落としは呼び出し側
+    `education_lesson_builder.load_training_validation_ids()` の責務）。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("practice_audio_split_manifest_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("practice_audio_split_manifest_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_practice_split_manifest(): the passed-in contract's "
+            f"practice_audio_split_manifest_sha pin ({passed_field!r}) diverges from the canonical "
+            f"on-disk RUN9_CONTRACT.yaml pin ({disk_field!r}) at {effective_contract_path} — "
+            "treated as tampering evidence and rejected fail-closed"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_practice_split_manifest(): practice_audio_split_manifest_sha is not "
+            f"PINNED (status={field.get('status')!r}) — refusing to consume an unpinned practice "
+            "split manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else PRACTICE_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_practice_split_manifest(): pinned practice split manifest source {path} "
+            "does not exist — this function is the sole canonical access path (direct json.load() "
+            "elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（TOCTOU 対策）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_practice_split_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml practice_audio_split_manifest_sha の pin 値 ({pinned_sha!r}) と "
+            "一致しない — stale・改ざん・sealed ID 混入 manifest は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_practice_split_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_practice_split_manifest(data)
+    return data
+
+
+# ---------------------------------------------------------------------------
+# RUN9-L0-HARNESS-3b: education_technique_lesson_manifest_sha pin の唯一の
+# 正規消費経路（`load_pinned_speaker_map_manifest()` と同型の3層防御・
+# read-once 契約）。
+# ---------------------------------------------------------------------------
+
+_EDUCATION_LESSON_REPO_ROOT = _THIS_DIR.parent.parent.parent
+
+
+def load_pinned_education_lesson_manifest(
+    contract: Run9RunContract,
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+    loaded_builder_sha256: Optional[str] = None,
+) -> Dict[str, Any]:
+    """`education_technique_lesson_manifest_sha` pin の**唯一の正規消費
+    経路**（`load_pinned_speaker_map_manifest()` と同型）。
+
+    **消費契約（事前登録）**: harness の education lesson manifest 消費は
+    この関数経由のみで行わなければならない — `inputs/education_technique_
+    lesson_manifest.json` への直接 `json.load()` は契約違反である。
+
+    手順（いずれかで fail-closed）:
+    (1) disk 正典 `RUN9_CONTRACT.yaml` を都度再読込し、渡された `contract`
+        の `education_technique_lesson_manifest_sha` pin が disk 正典と
+        乖離していないか照合する（改変検出、他の `load_pinned_*` と同型）。
+    (2) 当該 pin が PINNED であることを確認する。
+    (3) manifest 実ファイルの実バイト sha256 が pin 値と一致することを
+        read-once（同一バッファから digest と parse の両方を導出）で
+        確認する。
+    (4) `validate_education_lesson_manifest()` で manifest 本体の構造・
+        `sealed_holdout_technique_release_policy` 語彙・founder 分岐構造
+        非混入を検証する。
+    (5) cross-check (a): `adjudication_basis.source_file`
+        （`USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt`）の実バイト
+        sha256 が `adjudication_basis.sha256` と一致することを machine
+        強制する（裁定文書の改変を fail-closed で拒否する）。
+    (6) cross-check (b): `builder_provenance.repo_relative_path`
+        （`education_lesson_builder.py`）の実バイト sha256 が
+        `builder_provenance.builder_sha256` と一致することを強制する
+        （PR #329 第10巡レビュー指摘2, P2, 採用対応で挙動を拡張——下記
+        `loaded_builder_sha256` 引数の説明を参照）。
+    (7) cross-check (c): `builder_provenance.spec_repo_relative_path`
+        （`HARNESS3B_EXTRACTOR_SPEC.md`）の実バイト sha256 が
+        `builder_provenance.spec_sha256` と一致することを強制する。
+    (8) cross-check (d): `builder_provenance.freeze_record_repo_relative_
+        path`（`inputs/h3b_freeze_record.json`）の実バイト sha256 が
+        `builder_provenance.freeze_record_sha256` と一致することを強制
+        する。
+    (9) cross-check (e): `builder_provenance.superseded_freeze_record_
+        repo_relative_path`（`inputs/h3b_freeze_record.superseded.1.json`、
+        v1 停止時点の破棄せず保存した旧 freeze record）の実バイト sha256
+        が `builder_provenance.superseded_freeze_record_sha256` と一致
+        することを強制する（v1→v1.1 訂正の正直会計を、旧 record を破棄
+        させないことで machine 強制する）。
+    (10) cross-check (f): `builder_provenance.detail_record_repo_relative_
+        path`（`HARNESS3B_EDUCATION_LESSON_RECORD.md`）の実バイト sha256
+        が `builder_provenance.detail_record_sha256` と一致することを
+        強制する（実測記録の改変を fail-closed で拒否する）。
+    (11) cross-check (g): manifest の `channel_vocabulary_map` が
+        `TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP`（本モジュールの schema
+        定数、正本）と完全一致することを強制する — 三系統語彙対応表が
+        manifest 側で改変・ドリフトしていないことの machine 強制。
+    (12) cross-check (h): `alignment_accounting` の内部整合
+        （`aligned_count + count_mismatch_count == total_songs == 85`、
+        `len(count_mismatch_song_ids) == count_mismatch_count`）を強制
+        する（裁定 §1: training 70 + validation 15 = 85 曲のみが対象）。
+    (13) cross-check (i): `determinism_evidence.{training,validation}` の
+        `run1_sha256 == run2_sha256 == run3_sha256` が、それぞれ
+        `training_technique_lesson_sha256`/`validation_technique_lesson_
+        sha256` とも一致することを強制する（独立 3 回実行の byte 一致を
+        machine 強制する）。
+
+    バンドル実体ファイル（training_bundle.json/validation_bundle.json）は
+    rights 制約により repo に収載しない——本関数はそれらの存在を要求せず、
+    sha256 pin 値の検証のみを行う（供給時にこの pin と実バイトを照合する
+    のは呼び出し側の責務）。
+
+    **`loaded_builder_sha256`（PR #329 第10巡レビュー指摘2, P2, 採用
+    対応）**: `education_lesson_builder.py` が自身の import 時に捕捉した
+    自己ソース sha256（`education_lesson_builder._BUILDER_SOURCE_SHA256_
+    AT_LOAD`）を呼び出し元が渡すための省略可能引数。従来 cross-check (b)
+    は publish 直前にディスク上の `education_lesson_builder.py` を毎回
+    再 `read_bytes()` して pin 照合するのみだった——長時間の build
+    プロセス中に（本モジュールが import 済みで実行され続けた後で）
+    checkout 上のファイルが差し替えられても、publish 時点でディスク
+    バイトが pin 値へ戻っていれば cross-check は PASS してしまい、実際に
+    ロードされ実行され続けたコード（差し替え後の別バイト列）が pin
+    検証を経ずに publish される穴があった（逆に、正当にロード済みの pin
+    一致バイト列を publish 直前にのみ一時的に差し替えて偽 FAIL を起こす
+    ことも同型に可能だった）。
+
+    `loaded_builder_sha256` が渡された場合、cross-check (b) はディスク
+    再 hash と load 時捕捉値の**両方**を pin 値と照合し、不一致の種別を
+    区別する:
+      - load 時捕捉値が pin と不一致 → 「実際に実行され続けたコードが
+        そもそも pin と一致しない」（最も重大——ディスクが後で pin 一致
+        バイトへ戻っていても関係なく拒否する）。
+      - load 時捕捉値は pin と一致するが、ディスク実バイトが load 時
+        捕捉値と不一致 → 「ロード後に checkout 上のファイルが差し替え
+        られた」（実行中のコード自体は正しいが、ディスク状態が不審な
+        変化の証跡であるため fail-closed で拒否する）。
+      - 両方一致 → PASS。
+    省略時（`None`、既定値）は従来どおりディスク実バイトのみを pin 値と
+    照合する（後方互換——`education_lesson_builder.py` を経由しない直接
+    呼び出しやテスト層の単体呼び出しでこの引数を渡さない場合に相当）。
+
+    **正直な残存窓（境界宣言）**: (i) import 前（プロセス起動〜本モジュール
+    の最初の import 実行までの間）にファイルが差し替えられた場合、
+    `_BUILDER_SOURCE_SHA256_AT_LOAD` の捕捉自体が既に差し替え後バイトを
+    読む——この窓は本機構では閉じない。(ii) `.pyc` 経由ロード時、実行中の
+    バイトコードとここで比較するソースバイトが理論上乖離し得る（通常の
+    CPython import 経路では `.py` mtime 変化で自動再コンパイルされるため
+    実務上は稀だが、機構としては未検証）。両窓とも運用（fresh checkout
+    からの起動・`.pyc` キャッシュの明示的無効化）で緩和する対象であり、
+    本機構が構造的に閉じるものではない（詳細 = `education_lesson_
+    builder.py` の `_BUILDER_SOURCE_SHA256_AT_LOAD` docstring と同型の
+    境界宣言）。
+
+    戻り値は検証済み manifest dict。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("education_technique_lesson_manifest_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("education_technique_lesson_manifest_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_education_lesson_manifest(): the passed-in contract's "
+            f"education_technique_lesson_manifest_sha pin ({passed_field!r}) diverges from the "
+            f"canonical on-disk RUN9_CONTRACT.yaml pin ({disk_field!r}) at {effective_contract_path} "
+            "— treated as tampering evidence and rejected fail-closed"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_education_lesson_manifest(): education_technique_lesson_manifest_sha is "
+            f"not PINNED (status={field.get('status')!r}) — refusing to consume an unpinned "
+            "education lesson manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else EDUCATION_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): pinned education lesson manifest source "
+            f"{path} does not exist — this function is the sole canonical access path (direct "
+            "json.load() elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（TOCTOU 対策）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): {path} の実バイト sha256 ({actual_sha!r}) "
+            f"が RUN9_CONTRACT.yaml education_technique_lesson_manifest_sha の pin 値 "
+            f"({pinned_sha!r}) と一致しない — stale または改変された manifest は fail-closed で "
+            "拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_education_lesson_manifest(data)
+
+    # (5) cross-check (a): adjudication_basis.source_file の実バイト sha256。
+    adjudication_basis = data["adjudication_basis"]
+    effective_adjudication_path = _resolve_repo_contained_path(
+        adjudication_basis["source_file"],
+        repo_root=_EDUCATION_LESSON_REPO_ROOT,
+        field="adjudication_basis.source_file",
+        context="load_pinned_education_lesson_manifest()",
+    )
+    if not effective_adjudication_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): cross-check source "
+            f"{effective_adjudication_path} (adjudication_basis.source_file) does not exist"
+        )
+    adjudication_actual_sha = hashlib.sha256(effective_adjudication_path.read_bytes()).hexdigest()
+    adjudication_pinned_sha = adjudication_basis["sha256"]
+    if adjudication_actual_sha != adjudication_pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): {effective_adjudication_path} の実バイト "
+            f"sha256 ({adjudication_actual_sha!r}) が adjudication_basis.sha256 pin 値 "
+            f"({adjudication_pinned_sha!r}) と一致しない — 裁定文書の改変を fail-closed で拒否する"
+        )
+
+    bp = data["builder_provenance"]
+
+    # (6) cross-check (b): builder 本体（education_lesson_builder.py）の
+    # 実バイト sha256 照合——PR #329 第10巡レビュー指摘2（P2、採用対応）で
+    # `loaded_builder_sha256` が渡された場合は load 時捕捉値との照合を
+    # 追加する（詳細・脅威モデル = 本関数 docstring の該当節）。builder
+    # 以外の4点（spec/freeze record 現行/superseded/detail record）は
+    # 「実行中のコード」ではなく静的な添付文書であるため、従来どおり
+    # ディスク再 hash のみで照合する（下記ループへ）。
+    builder_resolved = _resolve_repo_contained_path(
+        bp["repo_relative_path"],
+        repo_root=_EDUCATION_LESSON_REPO_ROOT,
+        field="builder_provenance.repo_relative_path",
+        context="load_pinned_education_lesson_manifest()",
+    )
+    if not builder_resolved.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): cross-check source {builder_resolved} "
+            "(builder_provenance.repo_relative_path) does not exist"
+        )
+    builder_actual_disk_sha = hashlib.sha256(builder_resolved.read_bytes()).hexdigest()
+    builder_expected_sha = bp["builder_sha256"]
+    if loaded_builder_sha256 is None:
+        # 後方互換経路（既定）: ディスク実バイトのみを pin 値と照合する。
+        if builder_actual_disk_sha != builder_expected_sha:
+            raise Run9ValidationError(
+                f"load_pinned_education_lesson_manifest(): {builder_resolved} の実バイト sha256 "
+                f"({builder_actual_disk_sha!r}) が builder_provenance.builder_sha256 pin 値 "
+                f"({builder_expected_sha!r}) と一致しない — 改変を fail-closed で拒否する"
+            )
+    else:
+        # PR #329 第10巡レビュー指摘2（P2、採用対応）: builder pin をロード
+        # 済みコードへ束縛する。load 時捕捉値・ディスク実バイトの両方を
+        # pin と照合し、不一致の種別を区別する（docstring 参照）。
+        if loaded_builder_sha256 != builder_expected_sha:
+            raise Run9ValidationError(
+                "load_pinned_education_lesson_manifest(): education_lesson_builder.py の"
+                f"ロード時点捕捉 sha256 ({loaded_builder_sha256!r}) が "
+                f"builder_provenance.builder_sha256 pin 値 ({builder_expected_sha!r}) と一致しない "
+                "— 実際にロードされ実行され続けたコードが pin と一致しない（ディスク上の現在の "
+                f"バイト列 [{builder_actual_disk_sha!r}] が pin と一致するか否かに関わらず拒否 "
+                "する）— fail-closed"
+            )
+        if builder_actual_disk_sha != loaded_builder_sha256:
+            raise Run9ValidationError(
+                f"load_pinned_education_lesson_manifest(): {builder_resolved} の実バイト sha256 "
+                f"({builder_actual_disk_sha!r}) が education_lesson_builder.py のロード時点捕捉 "
+                f"sha256 ({loaded_builder_sha256!r}, pin={builder_expected_sha!r} と一致) と一致 "
+                "しない — ロード後に checkout 上のファイルが差し替えられた証跡として fail-closed "
+                "で拒否する（実行中のコード自体は pin と一致しているが、ディスク上の現在のバイト列 "
+                "は別物である）"
+            )
+        # load 時捕捉値・ディスク実バイトともに pin と一致 -> PASS。
+
+    # (7)-(10) cross-check (c)-(f): spec・freeze record 現行・freeze record
+    # superseded・detail record の実バイト sha256 照合（静的添付文書、
+    # ディスク再 hash のみ）。
+    _cross_check_pairs = (
+        ("spec_repo_relative_path", "spec_sha256", "builder_provenance.spec_sha256"),
+        (
+            "freeze_record_repo_relative_path", "freeze_record_sha256",
+            "builder_provenance.freeze_record_sha256",
+        ),
+        (
+            "superseded_freeze_record_repo_relative_path", "superseded_freeze_record_sha256",
+            "builder_provenance.superseded_freeze_record_sha256",
+        ),
+        (
+            "detail_record_repo_relative_path", "detail_record_sha256",
+            "builder_provenance.detail_record_sha256",
+        ),
+    )
+    for path_key, sha_key, label in _cross_check_pairs:
+        resolved = _resolve_repo_contained_path(
+            bp[path_key],
+            repo_root=_EDUCATION_LESSON_REPO_ROOT,
+            field=f"builder_provenance.{path_key}",
+            context="load_pinned_education_lesson_manifest()",
+        )
+        if not resolved.is_file():
+            raise Run9ValidationError(
+                f"load_pinned_education_lesson_manifest(): cross-check source {resolved} "
+                f"(builder_provenance.{path_key}) does not exist"
+            )
+        actual = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        expected = bp[sha_key]
+        if actual != expected:
+            raise Run9ValidationError(
+                f"load_pinned_education_lesson_manifest(): {resolved} の実バイト sha256 "
+                f"({actual!r}) が {label} pin 値 ({expected!r}) と一致しない — 改変を fail-closed "
+                "で拒否する"
+            )
+
+    # (11) cross-check (g): channel_vocabulary_map が schema 定数と完全一致。
+    manifest_vocab_map = data["channel_vocabulary_map"]
+    schema_vocab_map = list(TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP)
+    if manifest_vocab_map != schema_vocab_map:
+        raise Run9ValidationError(
+            "load_pinned_education_lesson_manifest(): channel_vocabulary_map "
+            f"({manifest_vocab_map!r}) diverges from the pinned schema constant "
+            f"TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP ({schema_vocab_map!r}) — 三系統語彙対応表の "
+            "改変・ドリフトを fail-closed で拒否する"
+        )
+
+    # (12) cross-check (h): alignment_accounting の内部整合（合計85曲）。
+    accounting = data["alignment_accounting"]
+    total_songs = accounting["total_songs"]
+    aligned_count = accounting["aligned_count"]
+    count_mismatch_count = accounting["count_mismatch_count"]
+    count_mismatch_song_ids = accounting["count_mismatch_song_ids"]
+    if total_songs != 85:
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): alignment_accounting.total_songs "
+            f"({total_songs!r}) must be exactly 85 (training 70 + validation 15, 裁定 §1)"
+        )
+    if aligned_count + count_mismatch_count != total_songs:
+        raise Run9ValidationError(
+            "load_pinned_education_lesson_manifest(): alignment_accounting.aligned_count "
+            f"({aligned_count!r}) + count_mismatch_count ({count_mismatch_count!r}) != "
+            f"total_songs ({total_songs!r})"
+        )
+    if len(count_mismatch_song_ids) != count_mismatch_count:
+        raise Run9ValidationError(
+            "load_pinned_education_lesson_manifest(): "
+            f"len(alignment_accounting.count_mismatch_song_ids)={len(count_mismatch_song_ids)!r} "
+            f"!= alignment_accounting.count_mismatch_count={count_mismatch_count!r}"
+        )
+
+    # (13) cross-check (i): determinism_evidence の run1==run2==run3 と
+    # トップレベル training/validation の *_technique_lesson_sha256 との一致。
+    determinism = data["determinism_evidence"]
+    _determinism_pairs = (
+        ("training", "training_technique_lesson_sha256"),
+        ("validation", "validation_technique_lesson_sha256"),
+    )
+    for split_key, top_level_key in _determinism_pairs:
+        split_evidence = determinism[split_key]
+        run_shas = (
+            split_evidence["run1_sha256"], split_evidence["run2_sha256"], split_evidence["run3_sha256"],
+        )
+        top_level_sha = data[top_level_key]
+        if len(set(run_shas)) != 1 or run_shas[0] != top_level_sha:
+            raise Run9ValidationError(
+                f"load_pinned_education_lesson_manifest(): determinism_evidence.{split_key} run1/"
+                f"run2/run3 sha256 ({run_shas!r}) do not all match each other and "
+                f"{top_level_key} ({top_level_sha!r}) — independent-reproduction byte-determinism "
+                "claim is not machine-verified"
+            )
+
+    # (14) cross-check (j)（PR #329 第2巡レビュー指摘2-4, P1, 採用対応）:
+    # `corpus_provenance.consumed_inputs_manifest_repo_relative_path`
+    # （`inputs/pjs_consumed_inputs_sha256.json` — extract_song() が実際に
+    # 消費する3入力の per-file sha256 pin）の実バイト sha256 が
+    # `corpus_provenance.consumed_inputs_manifest_sha256` と一致することを
+    # 強制する。この manifest 自体は `pjs_consumed_inputs_manifest_sha`
+    # pin 経由の `load_pinned_consumed_inputs_manifest()` が別途、抽出前の
+    # gate として直接消費する——本 cross-check は「この education lesson
+    # manifest がどの consumed-inputs pin バイトを前提として生成された
+    # か」の来歴を machine 強制するもので、抽出時ゲートとは独立の証跡。
+    corpus_provenance = data["corpus_provenance"]
+    consumed_inputs_resolved = _resolve_repo_contained_path(
+        corpus_provenance["consumed_inputs_manifest_repo_relative_path"],
+        repo_root=_EDUCATION_LESSON_REPO_ROOT,
+        field="corpus_provenance.consumed_inputs_manifest_repo_relative_path",
+        context="load_pinned_education_lesson_manifest()",
+    )
+    if not consumed_inputs_resolved.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): cross-check source {consumed_inputs_resolved} "
+            "(corpus_provenance.consumed_inputs_manifest_repo_relative_path) does not exist"
+        )
+    consumed_inputs_actual_sha = hashlib.sha256(consumed_inputs_resolved.read_bytes()).hexdigest()
+    consumed_inputs_pinned_sha = corpus_provenance["consumed_inputs_manifest_sha256"]
+    if consumed_inputs_actual_sha != consumed_inputs_pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_education_lesson_manifest(): {consumed_inputs_resolved} の実バイト "
+            f"sha256 ({consumed_inputs_actual_sha!r}) が corpus_provenance.consumed_inputs_"
+            f"manifest_sha256 pin 値 ({consumed_inputs_pinned_sha!r}) と一致しない — musicxml を "
+            "含む消費3入力 pin の改変を fail-closed で拒否する"
+        )
+
+    return data
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第2巡レビュー指摘2-4（P1、採用）新設: `inputs/pjs_consumed_
+# inputs_sha256.json`（`education_lesson_builder.py` の `extract_song()`
+# が実際に消費する3入力 — pjsNNN.lab / pjsNNN.musicxml / pjsNNN_song.wav
+# — の per-file sha256 pin、training70+validation15=85曲×3ファイル=255件）
+# の schema 検証 + `pjs_consumed_inputs_manifest_sha` pin の唯一の正規
+# 消費経路（`load_pinned_practice_split_manifest()` と同型の3層防御・
+# read-once 契約）。
+#
+# `donor_bank_lab.py` の `corpus_identity_hash()` は `.lab` + 対の
+# `_song.wav` のみを被覆し musicxml を被覆しない——本 manifest はその穴を
+# builder 消費入力3種の完全被覆で閉じる。sealed_holdout(15曲)は builder が
+# いかなる経路でも一切消費しないため対象外（`sealed_holdout_excluded`
+# フィールドで明示宣言、欠落ではなく意図的非対象）。
+# ---------------------------------------------------------------------------
+
+_CONSUMED_INPUTS_FILE_KINDS: Tuple[str, str, str] = ("lab_sha256", "musicxml_sha256", "wav_sha256")
+
+
+def validate_pjs_consumed_inputs_manifest(data: Mapping[str, Any]) -> None:
+    """`pjs_consumed_inputs_sha256.json` の構造・件数・値整形式を検証
+    する。`validate_practice_split_manifest()` と対の構造 — `schema` が
+    `SCHEMA_PJS_CONSUMED_INPUTS_MANIFEST` と厳密一致しない入力は拒否
+    する。"""
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"pjs consumed inputs manifest must be an object, got {type(data).__name__}"
+        )
+    schema = data.get("schema")
+    if schema != SCHEMA_PJS_CONSUMED_INPUTS_MANIFEST:
+        raise Run9ValidationError(
+            f"pjs consumed inputs manifest schema must be exactly "
+            f"{SCHEMA_PJS_CONSUMED_INPUTS_MANIFEST!r}, got {schema!r} (a manifest declaring a "
+            "different or missing schema must not be treated as the consumed-inputs pin)"
+        )
+    if data.get("sealed_holdout_excluded") is not True:
+        raise Run9ValidationError(
+            "pjs consumed inputs manifest.sealed_holdout_excluded must be exactly True — the "
+            "sealed_holdout 15 songs must never appear in this pin (builder never consumes them)"
+        )
+    song_count = data.get("song_count")
+    if song_count != 85:
+        raise Run9ValidationError(
+            f"pjs consumed inputs manifest.song_count must be exactly 85 (training 70 + "
+            f"validation 15, 裁定 §1), got {song_count!r}"
+        )
+    kinds = data.get("consumed_file_kinds_per_song")
+    if kinds != list(_CONSUMED_INPUTS_FILE_KINDS):
+        raise Run9ValidationError(
+            "pjs consumed inputs manifest.consumed_file_kinds_per_song must be exactly "
+            f"{list(_CONSUMED_INPUTS_FILE_KINDS)!r}, got {kinds!r}"
+        )
+    songs = data.get("songs")
+    if not isinstance(songs, dict):
+        raise Run9ValidationError(
+            f"pjs consumed inputs manifest.songs must be an object, got {type(songs).__name__}"
+        )
+    if len(songs) != 85:
+        raise Run9ValidationError(
+            f"pjs consumed inputs manifest.songs must have exactly 85 entries, got {len(songs)}"
+        )
+    for song_id, entry in songs.items():
+        if not isinstance(song_id, str) or not song_id:
+            raise Run9ValidationError(
+                f"pjs consumed inputs manifest.songs key must be a non-empty string, got {song_id!r}"
+            )
+        if not isinstance(entry, dict) or set(entry.keys()) != set(_CONSUMED_INPUTS_FILE_KINDS):
+            raise Run9ValidationError(
+                f"pjs consumed inputs manifest.songs.{song_id!r} must be an object with exactly "
+                f"keys {sorted(_CONSUMED_INPUTS_FILE_KINDS)}, got "
+                f"{sorted(entry.keys()) if isinstance(entry, dict) else type(entry).__name__}"
+            )
+        for kind in _CONSUMED_INPUTS_FILE_KINDS:
+            value = entry[kind]
+            if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
+                raise Run9ValidationError(
+                    f"pjs consumed inputs manifest.songs.{song_id!r}.{kind} must be 64 lowercase "
+                    f"hex characters (sha256), got {value!r}"
+                )
+
+
+def load_pinned_consumed_inputs_manifest(
+    contract: Run9RunContract,
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`pjs_consumed_inputs_manifest_sha` pin の**唯一の正規消費経路**
+    （`load_pinned_practice_split_manifest()` と同型の3層防御・read-once
+    契約）。
+
+    **消費契約（事前登録）**: `education_lesson_builder.py` の
+    consumed-inputs pin 消費はこの関数経由のみで行わなければならない ——
+    `inputs/pjs_consumed_inputs_sha256.json` への直接 `json.load()` は
+    契約違反である。
+
+    手順（いずれかで fail-closed、他の `load_pinned_*` 系と同型）:
+    (1) disk 正典 `RUN9_CONTRACT.yaml` を都度再読込し、渡された
+        `contract` の `pjs_consumed_inputs_manifest_sha` pin が disk 正典
+        と乖離していないか照合する（改変検出）。
+    (2) 当該 pin が PINNED であることを確認する。
+    (3) manifest 実ファイルの実バイト sha256 が pin 値と一致することを
+        read-once（同一バッファから digest と parse の両方を導出）で
+        確認する。
+    (4) `validate_pjs_consumed_inputs_manifest()` で manifest 本体の構造・
+        件数（85曲×3ファイル）・値整形式（64hex）を検証する。
+
+    戻り値は検証済み manifest dict（`data["songs"]` が
+    `{song_id: {"lab_sha256": ..., "musicxml_sha256": ..., "wav_sha256":
+    ...}}` の per-song pin 辞書 — 呼び出し側 `education_lesson_builder.
+    load_consumed_inputs_pins()` がこれを抽出する）。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    )
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field("pjs_consumed_inputs_manifest_sha")
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field("pjs_consumed_inputs_manifest_sha")
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            "load_pinned_consumed_inputs_manifest(): the passed-in contract's "
+            f"pjs_consumed_inputs_manifest_sha pin ({passed_field!r}) diverges from the canonical "
+            f"on-disk RUN9_CONTRACT.yaml pin ({disk_field!r}) at {effective_contract_path} — "
+            "treated as tampering evidence and rejected fail-closed"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            "load_pinned_consumed_inputs_manifest(): pjs_consumed_inputs_manifest_sha is not "
+            f"PINNED (status={field.get('status')!r}) — refusing to consume an unpinned "
+            "consumed-inputs manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else PJS_CONSUMED_INPUTS_MANIFEST_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_consumed_inputs_manifest(): pinned consumed-inputs manifest source {path} "
+            "does not exist — this function is the sole canonical access path (direct json.load() "
+            "elsewhere is a contract violation); a missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（TOCTOU 対策）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_consumed_inputs_manifest(): {path} の実バイト sha256 ({actual_sha!r}) が "
+            f"RUN9_CONTRACT.yaml pjs_consumed_inputs_manifest_sha の pin 値 ({pinned_sha!r}) と "
+            "一致しない — stale・改ざんされた consumed-inputs pin は fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            f"load_pinned_consumed_inputs_manifest(): JSON parse に失敗した: {exc}"
+        ) from exc
+    validate_pjs_consumed_inputs_manifest(data)
     return data

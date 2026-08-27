@@ -857,28 +857,36 @@ def test_fix4_load_run9_contract_deepcopies_input(contract_raw: Dict[str, Any]) 
     """Codex bot レビュー PR #315 第2巡指摘1(a): `load_run9_contract()` は
     入力 dict を deepcopy する。load 後に呼び出し元が渡した元 dict の
     ネストした pin 欄を書き換えても `Run9RunContract.raw` は影響を受けない
-    （浅いコピーだとネスト dict が共有されたままになる）。"""
+    （浅いコピーだとネスト dict が共有されたままになる）。
+
+    テスト対象欄は依然 PENDING の `learning_recipe_sha`
+    （`education_technique_lesson_manifest_sha` は RUN9-L0-HARNESS-3b で
+    PINNED 化されたため本 fixture の対象から外した — 2026-08-27）。"""
     fresh_raw = copy.deepcopy(contract_raw)
     contract = m.load_run9_contract(fresh_raw)
-    fresh_raw["education_technique_lesson_manifest_sha"]["status"] = "PINNED"
-    fresh_raw["education_technique_lesson_manifest_sha"]["value"] = "z" * 64  # 非hexだが元dict側だけの改変
-    assert contract.raw["education_technique_lesson_manifest_sha"]["status"] == "PENDING"
-    assert contract.raw["education_technique_lesson_manifest_sha"] is not fresh_raw["education_technique_lesson_manifest_sha"]
+    fresh_raw["learning_recipe_sha"]["status"] = "PINNED"
+    fresh_raw["learning_recipe_sha"]["value"] = "z" * 64  # 非hexだが元dict側だけの改変
+    assert contract.raw["learning_recipe_sha"]["status"] == "PENDING"
+    assert contract.raw["learning_recipe_sha"] is not fresh_raw["learning_recipe_sha"]
 
 
 def test_fix4_gate_state_revalidates_and_rejects_direct_raw_tampering(
     contract_raw: Dict[str, Any],
 ) -> None:
     """Codex bot レビュー PR #315 第2巡指摘1(b): 正常 load 後に
-    `contract.raw["education_technique_lesson_manifest_sha"]["status"]` を直接 "PINNED" へ書き換えても
+    `contract.raw["learning_recipe_sha"]["status"]` を直接 "PINNED" へ書き換えても
     （value は null のまま）、`gate_state()` は毎回 `contract.raw` を
     `load_run9_contract()` で再検証するため Run9ValidationError を送出する
     （load 済みオブジェクトの raw を直接書き換えて READY を騙る経路の閉塞。
     共有 module fixture の汚染を避けるため、ここではローカルにコピーした
-    contract を使う）。"""
+    contract を使う）。
+
+    テスト対象欄は依然 PENDING の `learning_recipe_sha`
+    （`education_technique_lesson_manifest_sha` は RUN9-L0-HARNESS-3b で
+    PINNED 化されたため本 fixture の対象から外した — 2026-08-27）。"""
     fresh_raw = copy.deepcopy(contract_raw)
     contract = m.load_run9_contract(fresh_raw)
-    contract.raw["education_technique_lesson_manifest_sha"]["status"] = "PINNED"  # value は null のまま
+    contract.raw["learning_recipe_sha"]["status"] = "PINNED"  # value は null のまま
     with pytest.raises(m.Run9ValidationError):
         m.gate_state(contract)
 
@@ -11384,18 +11392,27 @@ def test_pin1_r4_branch_write_policy_r0_bytes_is_write_boundary_not_pin() -> Non
 # 同じ理由）。
 
 
-def test_pr327_r13_failure_abort_criteria_repinned_lineage_nine_generations(
+# `test_pr327_r13_failure_abort_criteria_repinned_lineage_nine_generations`
+# （9世代版）は RUN9-L0-HARNESS-3b（2026-08-27）の repin により超過し、下記
+# `test_harness3b_failure_abort_criteria_repinned_lineage_ten_generations`
+# （10世代・全履歴を包含する上位互換）へ置き換えた（重複削除、第3-7巡と
+# 同じ理由）。
+
+
+def test_harness3b_failure_abort_criteria_repinned_lineage_ten_generations(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """failure_abort_criteria_sha の repin 履歴9世代（RUN9-L0-PIN-1 初回
+    """failure_abort_criteria_sha の repin 履歴10世代（RUN9-L0-PIN-1 初回
     → PR #324 第1巡 Fix 1/2/3 → 第2巡 Fix 6 → 第3巡 rule 12 再降格 →
     第4巡 rule 2 の condition 強化 → 第5巡 verify_user_donor_manifest_
     complete() の path ベース署名化 → 第6巡 独立 pinned anchor への
     接地追加 → 第7巡 domain 自体の founder_genome_shas pin への束縛
     追加 → PR #327 レビュー第13巡指摘25 で rule 19（cost cap exceeded）の
-    checkpoint が execution_profile_sha PINNED 化（RUN9-EXECPROFILE-1）を
-    反映せず stale な現在形「現状 PENDING」を残していた欠陥を訂正）が
-    append-only で、現在値が最新（PR #327 第13巡）のものであることを
+    checkpoint の stale 文言を訂正 → RUN9-L0-HARNESS-3b（2026-08-27）で
+    rule 8（§22 step 8）の checkpoint/machine_promotion_condition が
+    「education_technique_lesson_manifest_sha は引き続き PENDING」という
+    stale な言及を残していた欠陥を訂正——同欄は本改訂で PINNED 化された）が
+    append-only で、現在値が最新（RUN9-L0-HARNESS-3b）のものであることを
     明示的に確認する（repin 漏れの回帰防止）。"""
     round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
     round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
@@ -11406,11 +11423,12 @@ def test_pr327_r13_failure_abort_criteria_repinned_lineage_nine_generations(
     round7_value = "9b68656d6b5cb30019376ae9848e03801e10b595b5372dca63ba6a59a9d03caf"
     round8_value = "20c71d273993f062cf562b2097a57bfe530c54303e87287c58e98bad9876df4a"
     round9_value = "da8aee0d49a5dac58b5ddd6b6dc7959f1a15914e9a6e565a4e6851e2b6c7a527"
+    round10_value = "ead64d2fd7896728b1fc7070c90d7a5b2d8bb17740e21c4056a5210a081cf98b"
     current = contract_raw["failure_abort_criteria_sha"]["value"]
-    assert current == round9_value
+    assert current == round10_value
     assert current not in (
         round1_value, round2_value, round3_value, round4_value, round5_value, round6_value,
-        round7_value, round8_value,
+        round7_value, round8_value, round9_value,
     )
     assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
 
@@ -11823,8 +11841,11 @@ def test_execprofile_pre_run_pending_count_is_nine(contract: m.Run9RunContract) 
 
     〔履歴: 本テストが固定していた「9件」は RUN9-EXECPROFILE-1 時点の値。
     RUN9-L0-HARNESS-3a（2026-08-26）で `expected_speaker_map_sha` が
-    追加で PINNED 化され、現在は下記
-    `test_harness3a_pre_run_pending_count_is_eight` が固定する8件へ
+    追加で PINNED 化され、8件へ減少（下記
+    `test_harness3a_pre_run_pending_count_is_eight` 参照）。さらに
+    RUN9-L0-HARNESS-3b（2026-08-27）で `education_technique_lesson_
+    manifest_sha` が PINNED 化され、現在は下記
+    `test_harness3b_pre_run_pending_count_is_seven` が固定する7件へ
     さらに減少した——テスト名はレビュー履歴保持のため改名しない〕。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
@@ -11841,11 +11862,12 @@ def test_execprofile_pre_run_pending_count_is_nine(contract: m.Run9RunContract) 
     assert "execution_profile_sha" not in pending
     assert "dataset_manifest_sha" not in pending
     assert "dataset_row_order_sha" not in pending
-    # 現在値は8/9（下記 test_harness3a_pre_run_pending_count_is_eight と
-    # 同一の期待値）——`expected_speaker_map_sha` の PINNED 化以降、9/10
-    # という値そのものはもはや成立しない。
-    assert len(pending) == 8
-    assert len(all_pending) == 9
+    # 現在値は7/8（下記 test_harness3b_pre_run_pending_count_is_seven と
+    # 同一の期待値）——`expected_speaker_map_sha`/`education_technique_
+    # lesson_manifest_sha` の PINNED 化以降、9/10 や 8/9 という値そのもの
+    # はもはや成立しない。
+    assert len(pending) == 7
+    assert len(all_pending) == 8
 
 
 def test_harness3a_pre_run_pending_count_is_eight(contract: m.Run9RunContract) -> None:
@@ -11853,7 +11875,13 @@ def test_harness3a_pre_run_pending_count_is_eight(contract: m.Run9RunContract) -
     PINNED 化したことにより、pre-run PENDING 欄は9→8件へ減少した
     （optional の human_evaluation_protocol_sha を含めると総
     PENDING 10→9件）——README.md の記述更新（9→8/10→9）と対応する
-    回帰固定。"""
+    回帰固定。
+
+    〔履歴: 本テストが固定していた「8件」は RUN9-L0-HARNESS-3a 時点の値。
+    RUN9-L0-HARNESS-3b（2026-08-27）で `education_technique_lesson_
+    manifest_sha` が追加で PINNED 化され、現在は下記
+    `test_harness3b_pre_run_pending_count_is_seven` が固定する7件へ
+    さらに減少した——テスト名はレビュー履歴保持のため改名しない〕。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
@@ -11864,14 +11892,45 @@ def test_harness3a_pre_run_pending_count_is_eight(contract: m.Run9RunContract) -
         n for n in m.CONTRACT_PIN_FIELDS
         if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
     ]
-    assert len(pending) == 8
-    assert len(all_pending) == 9
+    # 現在値は7/8（下記 test_harness3b_pre_run_pending_count_is_seven と
+    # 同一の期待値）——`education_technique_lesson_manifest_sha` の
+    # PINNED 化以降、8/9 という値そのものはもはや成立しない。
+    assert len(pending) == 7
+    assert len(all_pending) == 8
     assert "dependency_pins_sha" in pending
     assert "measurement_spec_sha" in pending
     assert "expected_speaker_map_sha" not in pending
     assert "execution_profile_sha" not in pending
     assert "dataset_manifest_sha" not in pending
     assert "dataset_row_order_sha" not in pending
+    assert "education_technique_lesson_manifest_sha" not in pending
+    assert m.gate_state(revalidated) == "BLOCKED"
+
+
+def test_harness3b_pre_run_pending_count_is_seven(contract: m.Run9RunContract) -> None:
+    """RUN9-L0-HARNESS-3b（2026-08-27）: `education_technique_lesson_
+    manifest_sha` を PINNED 化したことにより、pre-run PENDING 欄は8→7件へ
+    減少した（optional の human_evaluation_protocol_sha を含めると総
+    PENDING 9→8件）——README.md の記述更新と対応する回帰固定。"""
+    revalidated = m.load_run9_contract(contract.raw)
+    excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
+    pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
+    pending = [
+        n for n in pre_run_fields if not m._is_field_pinned(revalidated.pin_field(n))
+    ]
+    all_pending = [
+        n for n in m.CONTRACT_PIN_FIELDS
+        if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
+    ]
+    assert len(pending) == 7
+    assert len(all_pending) == 8
+    assert "dependency_pins_sha" in pending
+    assert "measurement_spec_sha" in pending
+    assert "expected_speaker_map_sha" not in pending
+    assert "execution_profile_sha" not in pending
+    assert "dataset_manifest_sha" not in pending
+    assert "dataset_row_order_sha" not in pending
+    assert "education_technique_lesson_manifest_sha" not in pending
     assert m.gate_state(revalidated) == "BLOCKED"
 
 
@@ -15376,9 +15435,11 @@ def test_harness2_reexport_manifest_pinning_does_not_affect_pending_set(
     集合に影響しないこと〔履歴: 起草当時は pre-run 必須10欄・総 PENDING
     11欄、RUN9-EXECPROFILE-1（2026-08-26）で pre-run 必須9欄・総 PENDING
     10欄へ、RUN9-L0-HARNESS-3a（2026-08-26）で `expected_speaker_map_sha`
-    も PINNED 化されたため、現在は下記のとおり pre-run 必須8欄・総
-    PENDING 9欄——`test_harness3a_pre_run_pending_count_is_eight` と
-    同一の期待値〕。"""
+    も PINNED 化され pre-run 必須8欄・総 PENDING 9欄へ、
+    RUN9-L0-HARNESS-3b（2026-08-27）で `education_technique_lesson_
+    manifest_sha` も PINNED 化されたため、現在は下記のとおり pre-run
+    必須7欄・総 PENDING 8欄——`test_harness3b_pre_run_pending_count_is_seven`
+    と同一の期待値〕。"""
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
     pending = [n for n in pre_run_fields if not m._is_field_pinned(contract.pin_field(n))]
@@ -15388,8 +15449,8 @@ def test_harness2_reexport_manifest_pinning_does_not_affect_pending_set(
     ]
     assert "reexport_manifest_sha" not in pending
     assert "reexport_manifest_sha" not in all_pending
-    assert len(pending) == 8
-    assert len(all_pending) == 9
+    assert len(pending) == 7
+    assert len(all_pending) == 8
     assert m.gate_state(contract) == "BLOCKED"
 
 
