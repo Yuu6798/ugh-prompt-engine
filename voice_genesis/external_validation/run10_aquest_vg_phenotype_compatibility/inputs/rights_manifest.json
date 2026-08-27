@@ -1,0 +1,64 @@
+{
+  "schema": "voicegenesis-run10-rights-manifest/0.1",
+  "run_id": "RUN10",
+  "experiment_id": "VG-R10-AQUEST-VG-PHENOTYPE-COMPATIBILITY",
+  "status": "DRAFT_NOT_FROZEN",
+  "note": "DESIGN_RUN10 §2.2 / §21 R10-G1 の権利境界を機械可読化した骨格。AQUEST 回答アーカイブの sha と voicebank 来歴が未確定のため未凍結（rights_manifest_sha は PENDING）。",
+  "research_scope": "personal_private",
+  "boundaries": {
+    "third_party_distribution": "prohibited",
+    "public_audio_release": "prohibited",
+    "public_model_release": "prohibited",
+    "public_synthesis_system_release": "prohibited",
+    "external_listener_panel": "prohibited_without_new_permission"
+  },
+  "undetermined_publication_categories": {
+    "note": "DESIGN_RUN10 §2.2「分析表、集計値、設計文書の外部公開可否は今回の回答だけでは確定しないため、本Runでは公開しない」。public dissemination の BLOCKER であり private 研究実施自体の BLOCKER ではない。",
+    "categories": [
+      "analysis_tables",
+      "aggregate_values",
+      "design_documents"
+    ],
+    "run10_disposition": "DO_NOT_PUBLISH",
+    "requires_new_inquiry_to_aquest_before_publication": true
+  },
+  "correspondence": [
+    {
+      "date": "2026-08-25",
+      "summary": "UTAU デフォルト音声のボイスバンク自体には、ほとんど歌い方の情報は含まれず、UTAU 利用者の編集作業によって歌唱音声が生成される。",
+      "archive_sha256": "<PENDING_ARCHIVE>",
+      "archive_location": "PRIVATE_NOT_IN_REPOSITORY"
+    },
+    {
+      "date": "2026-08-27",
+      "summary": "個人による AquesTalk 由来 UTAU デフォルト音声を使った独自音声合成実験は許容。特別なライセンス契約は不要。生成音声データ・学習済みモデル・新たな音声合成システムの第三者配布・公開・使用は禁止。",
+      "archive_sha256": "<PENDING_ARCHIVE>",
+      "archive_location": "PRIVATE_NOT_IN_REPOSITORY"
+    }
+  ],
+  "voicebank_provenance": {
+    "cohort": "A0",
+    "source_kind": "AquesTalk-derived UTAU default voicebank",
+    "voicebank_version": "<UNRESOLVED_EXTERNAL>",
+    "download_source_record": "<UNRESOLVED_EXTERNAL>",
+    "acquisition_date": "<UNRESOLVED_EXTERNAL>",
+    "note": "§7.1 必須 pin（voicebank version / download record / all WAV SHA256 / oto.ini SHA256 / character.txt SHA256 / file order / sample rate / bit depth）は実体取得後に確定する。§32 Stop Rule 3（voicebank provenance unresolved）に該当する間は本測定を開始しない。"
+  },
+  "derivation_chain": {
+    "note": "§2.2 の保守的運用。Phase B 生成物の法的分類を本設計内で断定しない。",
+    "chain": [
+      "AQUEST-derived private source",
+      "measurement only",
+      "frozen phenotype specification",
+      "VoiceGenesis synthesis",
+      "G_null / G_target / G_inverse",
+      "PRIVATE_ONLY derived research outputs"
+    ]
+  },
+  "af01_rights": {
+    "note": "V0 / E0 = AF01 v1.0 は AQUEST 由来資産・人間音声・事前学習モデルを一切含まない source-free 素体（§7.3 / AF01_FROZEN_REGISTRATION_v1.0.md）。AQUEST の権利境界の対象外。",
+    "aquest_assets": "none",
+    "human_recordings": "none",
+    "pretrained_models": "none"
+  }
+}

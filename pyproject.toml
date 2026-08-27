@@ -231,6 +231,10 @@ testpaths = [
     # voice_genesis/evolution/tests/ 配下ではない専用ディレクトリのため個別
     # 収集が必要。依存は標準ライブラリ + PyYAML（本体必須依存）のみ。
     "voice_genesis/evolution/run9_dual_founder_pjs/tests",
+    # RUN10 Phase 0 スキャフォールド（DESIGN_RUN10 §28 最低テストの静的検証可能
+    # サブセット）。voice_genesis/external_validation/ 配下の専用ディレクトリのため
+    # 個別収集が必要。依存は標準ライブラリ + PyYAML（本体必須依存）のみ。
+    "voice_genesis/external_validation/run10_aquest_vg_phenotype_compatibility/tests",
 ]
 pythonpath = ["src", "."]
 markers = [
