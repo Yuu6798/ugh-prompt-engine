@@ -1470,8 +1470,46 @@ seed_policy_sha:
 # `HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照。旧 pin 値（第4世代、
 # PR #328 第3巡2件対応後）は履歴として保持する:
 #   6a6d6e2fe5737bcc2847c66e9420e42c818a682630feb140860951195fd227cd
+#
+# 2026-08-27 第6世代 repin（PR #328 Codex レビュー第6巡指摘13、P1、採用。
+# Claude 完結ルート）: builder 自己照合が「実行されたバイト」ではなく
+# 「パス」を照合対象にしていた TOCTOU（`load_canonical_speaker_map_
+# manifest()` が自己照合の**直前に** `Path(__file__).resolve()` を再度
+# ディスクから読み直していたため、import 済みモジュールが束縛する実行
+# コードと自己照合が読むバイト列が別物になり得た——import 後・照合前に
+# ファイルが置換されると、実行中の旧コードが新しいディスクバイトを hash
+# して照合を通し、偽の `reproduced: true` を印字できた）を、verified
+# self-exec dispatch で構造的に閉じた: `main()` が builder 実バイトを
+# **1回だけ**読み（`source_bytes`）、その sha256 を `builder_provenance.
+# builder_sha256` pin と照合し、**照合に使った同一の `source_bytes`
+# オブジェクト**を `compile()`→`exec()` して得た隔離名前空間の
+# `synthesize()`/`_check_out_does_not_alias_inputs()`/
+# `_atomic_write_bytes()` のみを処理に用いる——「hash したバイト列 ==
+# 実行されるバイト列」を同一オブジェクトで保証する。自己照合の責務は
+# `load_canonical_speaker_map_manifest()` から `main()` へ移設した
+# （`running_builder_path` 引数はテスト専用 override として `main()` 側に
+# 残る）。**境界宣言**: この verified self-exec dispatch を実装する
+# `main()` 自身の完全性（本 builder が repo からどう起動されたか）は
+# この仕組みの手が届く範囲の外にあり、無限後退は解消不能——repo 機構
+# （branch_write_policy + PR レビュー + contract pin）を信頼根とする
+# （`run9_schema.py` の各 `load_pinned_*` 関数が持つ信頼根境界宣言と
+# 同型）。負例テスト（TOCTOU シミュレーション: import 済みモジュール属性
+# `synthesize` の改変が実処理に影響しないことの直接証拠／exec ガード単体:
+# `__name__` sentinel により `main()` が再帰起動しないこと／正常系
+# end-to-end）を `tests/test_speaker_map_builder.py` へ追加した。本対応は
+# speaker map の実測事実（各 founder の合成 embedding sha256・render
+# sha256・秒数・pre_pin_verification_summary の6点 PASS・重みの実効値
+# そのもの）を一切変更しない——speaker_map_builder.py の実バイトが変わった
+# ことによる builder_provenance.builder_sha256 repin のみが本欄の repin
+# 理由。builder 再現実測を workdir 現存の実 emb
+# （`reexport_out/onnx_gate_40000/`）に対し新 verified self-exec dispatch
+# 経由で再実行し、両 founder の出力 sha256（`fc7b73fd...`/`0a681a2c...`）
+# が pin 値と不変のまま一致することを再確認済み（`HARNESS3A_SPEAKER_MAP_
+# RECORD.md` 追記記録参照）。旧 pin 値（第5世代、PR #328 第4巡指摘9対応後）
+# は履歴として保持する:
+#   43e68fde685d55a190e6fab0caa18381bdc2e31456558287f2b0d176df2c3167
 expected_speaker_map_sha:
-  value: "43e68fde685d55a190e6fab0caa18381bdc2e31456558287f2b0d176df2c3167"
+  value: "31eca739390feae363d0ec8a1a2e9a8b653c9106327e02fe30a17c606f9ed099"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/speaker_map_manifest.json
 

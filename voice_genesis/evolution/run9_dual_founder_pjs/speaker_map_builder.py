@@ -62,15 +62,35 @@ L2正規化・摂動・ランダム成分・重み調整は一切行わない（
        ——`run9_schema.load_pinned_speaker_map_manifest()` で (a) manifest
        実バイトが `RUN9_CONTRACT.yaml` の `expected_speaker_map_sha` pin
        と一致すること、(b) 発行済み Founder Genome・reexport/execution_
-       profile 等との全 cross-check、に加え (c) **実行中の builder 自身**
-       （`Path(__file__)` の実バイト sha256）が manifest の
-       `builder_provenance.builder_sha256` と一致することを synthesis
-       前に fail-closed で強制する（PR #328 Codex レビュー第4巡指摘9、
-       P1、採用対応——旧実装 `load_local_speaker_map_manifest()` は
-       manifest の**内部構造検証のみ**を行い、同じ untrusted ファイル内の
-       期待値どうしを比較していたため、改変された manifest + 入力 +
-       期待値の組で偽の `reproduced: true` を印字できる穴があった。
-       manifest への直接 `json.load()` 経路は CLI から排除した）。
+       profile 等との全 cross-check、を synthesis 前に fail-closed で
+       強制する（PR #328 Codex レビュー第4巡指摘9、P1、採用対応——旧実装
+       `load_local_speaker_map_manifest()` は manifest の**内部構造検証
+       のみ**を行い、同じ untrusted ファイル内の期待値どうしを比較して
+       いたため、改変された manifest + 入力 + 期待値の組で偽の
+       `reproduced: true` を印字できる穴があった。manifest への直接
+       `json.load()` 経路は CLI から排除した）。
+  (vi) **実行中の builder 自身の同一性**は `main()` の **verified
+       self-exec dispatch**（PR #328 Codex レビュー第6巡指摘13、P1、
+       採用・Fable 確定対応方針）が保証する——(a) `main()` が
+       `Path(__file__).read_bytes()` を**1回だけ**読み（`source_bytes`）、
+       (b) その sha256 を manifest の `builder_provenance.builder_sha256`
+       pin と照合し、(c) **照合に使った同一の `source_bytes` オブジェクト**
+       を `compile(source_bytes, __file__, "exec")` → 隔離名前空間へ exec
+       して得た `synthesize()`/`_check_out_does_not_alias_inputs()`/
+       `_atomic_write_bytes()` のみを処理に用いる。これにより「hash した
+       バイト列 == 実行されるバイト列」が同一オブジェクトで保証される
+       ——旧実装（`load_canonical_speaker_map_manifest()` 内で自己照合
+       直前に `Path(__file__).resolve()` を**再度ディスクから読み直して
+       いた**）は、import 済みモジュールが束縛する実行コードと自己照合が
+       読むバイト列が別物になり得る TOCTOU を構造的に抱えていた
+       （import 後・照合前にファイルが置換されると、実行中の旧コードが
+       新しいディスクバイトを hash して照合を通し、偽の `reproduced:
+       true` を印字できた）。**境界宣言**: この verified self-exec
+       dispatch を実装する `main()` 自身の完全性（本 builder が repo から
+       どう起動されたか）はこの仕組みの手が届く範囲の外にあり、無限後退
+       は解消不能——repo 機構（branch_write_policy + PR レビュー +
+       contract pin）を信頼根とする（`run9_schema.py` の各
+       `load_pinned_*` 関数が持つ信頼根境界宣言と同型）。
 
 出力: 384-dim float32 raw バイナリ（`.tobytes()`、既存 emb と同形式）。
 emb バイナリ自体は repo にコミットしない（rights 制約、session workdir /
@@ -85,7 +105,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -106,7 +126,6 @@ def load_canonical_speaker_map_manifest(
     identity_domain_path: Optional[Path] = None,
     adjudication_basis_path: Optional[Path] = None,
     gate_synth_py_path: Optional[Path] = None,
-    running_builder_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """本 builder CLI が speaker map manifest を得る**唯一の**正規経路
     （PR #328 Codex レビュー第4巡指摘9、P1、採用対応）。
@@ -131,21 +150,23 @@ def load_canonical_speaker_map_manifest(
     manifest・execution_profile_manifest・gate_synth.py 実ファイルとの
     全 cross-check を fail-closed で強制する）へ渡す。
 
-    **さらに builder 自身の自己照合**（Fable 確定対応方針 手順2）:
-    `load_pinned_speaker_map_manifest()` の cross-check (j) は
-    `builder_provenance.repo_relative_path` を repo-containment guard
-    経由で解決した実ファイルの sha256 を照合するが、本関数は加えて
-    **実際に実行中のこの builder ファイル**（既定 `Path(__file__).
-    resolve()`、`running_builder_path` はテスト専用の override）の実バイト
-    sha256 を manifest の `builder_provenance.builder_sha256` と直接照合
-    する——実行中コードとの乖離を synthesis 前に fail-closed で拒否する
-    ことで「pin 済み builder 以外での再現主張」を構造的に禁止する。
+    **builder 自身の自己照合はこの関数の責務ではない**（2026-08-27、
+    PR #328 Codex レビュー第6巡指摘13、P1、採用対応で `main()` へ移設）:
+    旧版はここで `Path(__file__).resolve()` を自己照合の**直前に読み
+    直して**いたため、import 済みモジュールが束縛する実行コードと自己
+    照合が読むバイト列が別物になり得る TOCTOU を抱えていた（`running_
+    builder_path` 引数はこの旧自己照合専用だったため削除した）。
+    自己照合は現在 `main()` の verified self-exec dispatch（本モジュール
+    docstring 契約 (vi) 参照: `main()` が読んだ `source_bytes` を
+    compile→exec して得た隔離名前空間の関数のみを処理に用いることで、
+    「hash したバイト列 == 実行されるバイト列」を同一オブジェクトで
+    保証する）が担う。
 
     `contract_path`/`manifest_path`/`rights_manifest_path`/
-    `identity_domain_path`/`adjudication_basis_path`/`gate_synth_py_path`/
-    `running_builder_path` はいずれもテスト専用の override 引数——
-    production 呼び出し（全省略）は repo 相対の正典パスのみを消費する
-    （他の `load_pinned_*` 系と同じ override 規約）。
+    `identity_domain_path`/`adjudication_basis_path`/`gate_synth_py_path`
+    はいずれもテスト専用の override 引数——production 呼び出し（全省略）
+    は repo 相対の正典パスのみを消費する（他の `load_pinned_*` 系と同じ
+    override 規約）。
     """
     effective_contract_path = (
         contract_path if contract_path is not None else m.RUN9_CONTRACT_YAML_PATH
@@ -177,25 +198,6 @@ def load_canonical_speaker_map_manifest(
         adjudication_basis_path=adjudication_basis_path,
         gate_synth_py_path=gate_synth_py_path,
     )
-
-    effective_running_builder_path = (
-        running_builder_path if running_builder_path is not None else Path(__file__).resolve()
-    )
-    if not effective_running_builder_path.is_file():
-        raise m.Run9ValidationError(
-            "speaker_map_builder.load_canonical_speaker_map_manifest(): self-check source "
-            f"{effective_running_builder_path} (実行中の builder) does not exist"
-        )
-    running_builder_sha = _sha256_bytes(effective_running_builder_path.read_bytes())
-    pinned_builder_sha = data["builder_provenance"]["builder_sha256"]
-    if running_builder_sha != pinned_builder_sha:
-        raise m.Run9ValidationError(
-            "speaker_map_builder.load_canonical_speaker_map_manifest(): 実行中の builder "
-            f"（{effective_running_builder_path}）の実バイト sha256 ({running_builder_sha!r}) が "
-            f"manifest の builder_provenance.builder_sha256 pin 値 ({pinned_builder_sha!r}) と "
-            "一致しない — pin 済み builder 以外での再現主張を synthesis 前に fail-closed で "
-            "拒否する（PR #328 Codex レビュー第4巡指摘9、P1、採用対応）"
-        )
     return data
 
 
@@ -207,14 +209,16 @@ def synthesize(
     manifest: Optional[Dict[str, Any]] = None,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """`founder_id` 指定 + ritsu/user emb ファイルパスから合成 embedding を
-    決定論的に再構築する。`manifest` を省略すると（CLI 既定経路）
-    `load_canonical_speaker_map_manifest()` で contract pin・builder 自己
-    照合を含む全 cross-check 済みの manifest を読む（テストは合成
-    manifest を明示的に渡すことでこの重い canonical 経路を bypass できる
-    ——`manifest` 引数はテスト専用の穴ではなく、`synthesize()` 自体を
-    純粋な数値検証関数として単体テストするための既存の穴あき設計を
-    そのまま維持する。CLI からは常に `manifest=None` で呼ばれ、
-    canonical 経路を必ず通る）。
+    決定論的に再構築する。`manifest` を省略すると `load_canonical_speaker_
+    map_manifest()` で contract pin・発行済み Founder Genome 等の全
+    cross-check 済みの manifest を読む（テストは合成 manifest を明示的に
+    渡すことでこの重い canonical 経路を bypass できる——`manifest` 引数は
+    テスト専用の穴ではなく、`synthesize()` 自体を純粋な数値検証関数として
+    単体テストするための既存の穴あき設計をそのまま維持する）。CLI
+    （`main()`）は常に verified self-exec dispatch 経由で `manifest=` を
+    明示的に渡して呼ぶ（モジュール docstring 契約 (vi) 参照 — 実行中の
+    builder 自身の自己照合は `main()` 側の責務であり、本関数はそれを
+    前提としない）。
 
     戻り値は `(synth, report)`——`report` は入力/出力 sha256・使用した
     重み式・再現成否を含む機械可読レポート（`synth_speaker_map.py`
@@ -387,7 +391,7 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
         raise
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def _build_argument_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--founder", required=True, choices=sorted(m.CONTRACT_FOUNDER_IDS))
     ap.add_argument("--ritsu-emb", type=Path, required=True)
@@ -396,24 +400,184 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--out", type=Path, default=None,
         help="合成 embedding の書き出し先（省略時は再現検証のみ行い、書き出さない）。",
     )
-    args = ap.parse_args(argv)
+    return ap
 
+
+# exec 済み隔離名前空間の `__name__` に設定する sentinel。`"__main__"` とは
+# 意図的に異なる値にすることで、`compile()`+`exec()` 実行中にモジュール末尾
+# の `if __name__ == "__main__": raise SystemExit(main())` が発火せず、
+# `main()` の再帰起動が起きない（PR #328 Codex レビュー第6巡指摘13、P1、
+# 採用対応。設計意図: 通常の `import` 経路と異なり `exec()` は
+# `sys.modules` へ登録しないため、この名前空間内で完結する）。
+_VERIFIED_NAMESPACE_NAME = "__speaker_map_builder_verified__"
+
+
+def _compile_and_exec_verified_source(source_bytes: bytes, file_path: Path) -> Dict[str, Any]:
+    """`source_bytes`（呼び出し元が sha256 を pin と照合**済み**の実バイト
+    列そのもの）をこのプロセス内で `compile()`→`exec()` し、得られた隔離
+    名前空間 dict を返す（PR #328 Codex レビュー第6巡指摘13、P1、採用・
+    Fable 確定対応方針 手順1(c)/手順2）。
+
+    `main()` の verified self-exec dispatch の中核: 呼び出し元が pin と
+    照合した**同一の** `source_bytes` オブジェクトをそのまま渡すことで、
+    「hash したバイト列 == 実行されるバイト列」が同一オブジェクトで保証
+    される——`sys.modules["speaker_map_builder"]`（import 済みの、pin
+    照合時点とは別バイト列を束縛しているかもしれない旧コード）を一切
+    経由しない。`__name__` は `_VERIFIED_NAMESPACE_NAME`（"__main__" では
+    ない専用の sentinel）に設定し、exec 中にモジュール末尾の
+    `if __name__ == "__main__":` ガードが発火して `main()` が再帰起動する
+    ことを防ぐ（設計意図はモジュール上部 docstring 契約 (vi) 参照）。
+    """
+    code = compile(source_bytes, str(file_path), "exec")
+    namespace: Dict[str, Any] = {
+        "__name__": _VERIFIED_NAMESPACE_NAME,
+        "__file__": str(file_path),
+    }
+    exec(code, namespace)  # noqa: S102 - verified dispatch: hashed bytes == executed bytes, see docstring
+    return namespace
+
+
+def _execute_cli(
+    args: argparse.Namespace,
+    *,
+    synthesize_fn: Callable[[str, Path, Path], Tuple[np.ndarray, Dict[str, Any]]],
+    check_alias_fn: Callable[[Path, Path, Path], Optional[str]],
+    atomic_write_fn: Callable[[Path, bytes], None],
+) -> int:
+    """`main()` のオーケストレーション本体（synth 計算 → alias 判定 →
+    atomic write → report 出力）。呼び出し元から関数群を注入させる形に
+    することで、production 経路（`main()`）は verified self-exec dispatch
+    で得た隔離名前空間の `synthesize`/`_check_out_does_not_alias_inputs`/
+    `_atomic_write_bytes` を注入し、単体テストは実 founder embedding
+    データ非依存の fake 関数を注入できる（PR #328 Codex レビュー第6巡
+    指摘13、P1、採用対応 — 旧実装は `main()` 自体がこれらの処理を直接
+    行っており、`smb.synthesize` を monkeypatch すれば足りたが、
+    verified self-exec dispatch 後は隔離名前空間の関数のみが実処理に
+    使われるため、その注入点をテスト可能な形で切り出した）。"""
     try:
-        synth, report = synthesize(args.founder, args.ritsu_emb, args.user_emb)
+        synth, report = synthesize_fn(args.founder, args.ritsu_emb, args.user_emb)
     except m.Run9ValidationError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
     if args.out is not None:
-        alias_error = _check_out_does_not_alias_inputs(args.out, args.ritsu_emb, args.user_emb)
+        alias_error = check_alias_fn(args.out, args.ritsu_emb, args.user_emb)
         if alias_error is not None:
             print(f"ERROR: speaker_map_builder.main(): {alias_error}", file=sys.stderr)
             return 1
-        _atomic_write_bytes(args.out, synth.tobytes())
+        atomic_write_fn(args.out, synth.tobytes())
         report["out_path"] = str(args.out)
 
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0
+
+
+def main(
+    argv: Optional[List[str]] = None,
+    *,
+    running_builder_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+    manifest_path: Optional[Path] = None,
+    rights_manifest_path: Optional[Path] = None,
+    identity_domain_path: Optional[Path] = None,
+    adjudication_basis_path: Optional[Path] = None,
+    gate_synth_py_path: Optional[Path] = None,
+) -> int:
+    """CLI エントリポイント。**verified self-exec dispatch**（PR #328
+    Codex レビュー第6巡指摘13、P1、採用・Fable 確定対応方針）で処理を
+    完遂する:
+
+    (a) 実行中のこの builder ファイルの実バイト列を**1回だけ**読む
+        （`source_bytes` — 既定 `Path(__file__).resolve()`、
+        `running_builder_path` はテスト専用の override）。
+    (b) canonical loader（`load_canonical_speaker_map_manifest()`、
+        contract pin・発行済み Founder Genome 等の全 cross-check 込み）
+        で得た manifest の `builder_provenance.builder_sha256` と
+        `sha256(source_bytes)` を照合し、不一致は fail-closed で拒否
+        する。
+    (c) **照合に使った同一の `source_bytes` オブジェクト**を
+        `_compile_and_exec_verified_source()` で隔離名前空間へ
+        compile→exec し、その名前空間の `synthesize()`/
+        `_check_out_does_not_alias_inputs()`/`_atomic_write_bytes()` の
+        みを `_execute_cli()` へ注入して処理を完遂する。
+
+    これにより「hash したバイト列 == 実行されるバイト列」が同一
+    オブジェクトで保証され、旧実装（`load_canonical_speaker_map_
+    manifest()` 内で自己照合の**直前に** `Path(__file__).resolve()` を
+    再度ディスクから読み直していたため、import 済みモジュール内の実行
+    コードと自己照合が読んだバイト列が別物になり得た——import 後・照合
+    前にファイルが置換されると、実行中の旧コードが新しいディスクバイト
+    を hash して照合を通し、偽の `reproduced: true` を印字できる
+    TOCTOU）のパス再読込構造を構造的に閉じる。
+
+    **境界宣言**: この検証コード自体（`main()` 自身が repo からどう
+    起動されたか）の完全性は本関数の手が届く範囲の外にあり、無限後退は
+    解消不能——repo 機構（branch_write_policy + PR レビュー +
+    contract pin）を信頼根とする。`run9_schema.py` の各 `load_pinned_*`
+    関数が持つ信頼根境界宣言と同型。
+
+    `running_builder_path`/`contract_path`/`manifest_path`/
+    `rights_manifest_path`/`identity_domain_path`/
+    `adjudication_basis_path`/`gate_synth_py_path` はいずれもテスト専用
+    の override 引数——production 呼び出し（全省略）は repo 相対の正典
+    パスのみを消費する。
+    """
+    args = _build_argument_parser().parse_args(argv)
+
+    effective_running_builder_path = (
+        running_builder_path if running_builder_path is not None else Path(__file__).resolve()
+    )
+    if not effective_running_builder_path.is_file():
+        print(
+            "ERROR: speaker_map_builder.main(): verified self-exec source "
+            f"{effective_running_builder_path} (実行中の builder) does not exist",
+            file=sys.stderr,
+        )
+        return 1
+    # (a) 1回だけ読む——以降このバッファ（`source_bytes`）のみを hash・
+    # compile・exec する。パスを再読込しない（TOCTOU 対策の核心）。
+    source_bytes = effective_running_builder_path.read_bytes()
+
+    try:
+        data = load_canonical_speaker_map_manifest(
+            contract_path=contract_path,
+            manifest_path=manifest_path,
+            rights_manifest_path=rights_manifest_path,
+            identity_domain_path=identity_domain_path,
+            adjudication_basis_path=adjudication_basis_path,
+            gate_synth_py_path=gate_synth_py_path,
+        )
+    except m.Run9ValidationError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    # (b) 照合に使う sha256 は (a) で読んだ同一バッファから導出する。
+    actual_sha = _sha256_bytes(source_bytes)
+    pinned_sha = data["builder_provenance"]["builder_sha256"]
+    if actual_sha != pinned_sha:
+        print(
+            "ERROR: speaker_map_builder.main(): 実行対象の builder 実バイト sha256 "
+            f"({actual_sha!r}) が manifest の builder_provenance.builder_sha256 pin 値 "
+            f"({pinned_sha!r}) と一致しない — verified self-exec dispatch が synthesis 前に "
+            "fail-closed で拒否する（PR #328 Codex レビュー第6巡指摘13、P1、採用対応）",
+            file=sys.stderr,
+        )
+        return 1
+
+    # (c) 照合に使った同一 source_bytes オブジェクトを compile→exec し、
+    # 隔離名前空間の関数群のみを処理に用いる（実行対象バイト == 照合対象
+    # バイトを同一オブジェクトで保証する）。
+    namespace = _compile_and_exec_verified_source(source_bytes, effective_running_builder_path)
+
+    def _verified_synthesize(founder_id: str, ritsu_emb_path: Path, user_emb_path: Path) -> Any:
+        return namespace["synthesize"](founder_id, ritsu_emb_path, user_emb_path, manifest=data)
+
+    return _execute_cli(
+        args,
+        synthesize_fn=_verified_synthesize,
+        check_alias_fn=namespace["_check_out_does_not_alias_inputs"],
+        atomic_write_fn=namespace["_atomic_write_bytes"],
+    )
 
 
 if __name__ == "__main__":

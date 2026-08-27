@@ -16777,14 +16777,19 @@ def load_pinned_speaker_map_manifest(
     (7) cross-check (b): 両 founder について `load_pinned_founder_genome_
         document()`（`contract`/`domain`/`rights_manifest` を渡す——本関数
         自身が genome document の唯一の正規消費経路を re-use する）で
-        読んだ発行済み Founder Genome document の `coords`/`genome_id` と、
-        manifest の `founders.<id>.coords_raw`/`genome_id` が、それぞれ
-        anchor 3軸（af0/ritsu/user）全て・genome_id 文字列で厳密一致する
+        読んだ発行済み Founder Genome document の `coords`/`genome_id`/
+        `profile_label` と、manifest の `founders.<id>.coords_raw`/
+        `genome_id`/`profile_label` が、それぞれ anchor 3軸（af0/ritsu/
+        user）全て・genome_id 文字列・profile_label 文字列で厳密一致する
         ことを強制する——「発行済みFounder Genome、coords、genome_id...は
         変更しない」という裁定の不変宣言を消費時にも機械強制する
         （genome_id 照合は PR #328 Codex レビュー第1巡指摘2、P2、採用
         対応: coords_raw のみの照合では「正しい coords + 別 founder の
-        genome_id」という取り違え偽装を検出できない穴があった）。
+        genome_id」という取り違え偽装を検出できない穴があった。
+        profile_label 照合は PR #328 レビュー第6巡指摘12、P2、採用対応:
+        `validate_speaker_map_manifest()` は非空検証のみで genome 側と
+        照合しておらず、genome_id/coords_raw は正しいが profile_label
+        だけ改竄する取り違え偽装を検出できない穴があった）。
     (8) cross-check (e): `load_pinned_reexport_manifest()` で読んだ
         `artifacts.{ritsu_emb,user_emb}.sha256_run1` と、両 founder の
         `input_embeddings.{ritsu,user}_emb_sha256` が一致することを
@@ -16918,6 +16923,16 @@ def load_pinned_speaker_map_manifest(
                     f"coords.{axis} ({genome_coords[axis]!r}) — 発行済み Founder Genome の coords "
                     "不変宣言を fail-closed で拒否する"
                 )
+        manifest_profile_label = data["founders"][founder_id]["profile_label"]
+        if manifest_profile_label != genome.profile_label:
+            raise Run9ValidationError(
+                f"load_pinned_speaker_map_manifest(): founders.{founder_id}.profile_label "
+                f"({manifest_profile_label!r}) diverges from the pinned Founder Genome document's "
+                f"profile_label ({genome.profile_label!r}) — 発行済み Founder Genome の profile_label "
+                "不変宣言を fail-closed で拒否する（PR #328 レビュー第6巡指摘12対応: 従来は非空検証のみ "
+                "で genome 側と照合しておらず、genome_id/coords_raw は正しいが profile_label だけ "
+                "改竄する取り違え偽装を検出できない穴があった）"
+            )
 
     # (8) cross-check (e): input_embeddings と reexport_manifest pin の一致。
     reexport = load_pinned_reexport_manifest(revalidated)

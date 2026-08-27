@@ -584,6 +584,147 @@ contract repin の順で鶏卵性を解消）後、workdir 現存の実 ritsu/us
   manifest（`builder_provenance` 更新）と contract（第5世代 repin）は
   本節冒頭に記録のとおり変更済み——schema/cross-check の追加変更はない。
 
+## 追記: PR #328 Codex レビュー第6巡指摘12・13（採用）対応 —
+## profile_label cross-check 新設 + builder 自己照合の TOCTOU 構造是正
+## （2026-08-27、Claude 完結ルート）
+
+第5世代 repin 後の `run9_schema.py`/`speaker_map_builder.py` に対し、第6巡で
+以下2件（P2×1、P1×1）が指摘された（採用・Fable 確定方針）。
+
+- **指摘12（P2）**: manifest の `founders.<id>.profile_label` は
+  `validate_speaker_map_manifest()` による非空文字列検証のみで、pin 済み
+  Founder Genome の `profile_label` と照合されていなかった——genome_id/
+  coords_raw は正しいが `profile_label` だけ改竄する取り違え偽装を検出
+  できない穴があった。
+- **指摘13（P1）**: 実行中 builder 自身の自己照合
+  （`load_canonical_speaker_map_manifest()` 旧実装）は、自己照合の
+  **直前に** `Path(__file__).resolve()` を再度ディスクから読み直して
+  いたため、「hash 対象のバイト列」と「実際に実行されるコード（import
+  済みモジュールが束縛する、pin 照合時点とは別バイト列を保持している
+  かもしれない旧コード）」が別オブジェクトになり得る TOCTOU を構造的に
+  抱えていた——import 後・照合前にファイルが置換されると、実行中の旧
+  コードが新しいディスクバイトを hash して照合を通し、偽の
+  `reproduced: true` を印字できた。照合対象が「実行されたバイト」では
+  なく「パス」になっていたことが核心。
+
+### 対応
+
+**指摘12**: `run9_schema.load_pinned_speaker_map_manifest()` の
+cross-check (b)（両 founder の `coords_raw`/`genome_id` を pin 済み
+Founder Genome document と照合する既存箇所）へ `profile_label` の厳密
+一致照合を追加した。負例テスト（両 founder パラメトライズ、
+`profile_label` のみ改竄 → 発行済み Founder Genome の値と異なる非空
+文字列へ差し替えても素通りせず fail-closed で拒否）を
+`tests/test_run9_contract.py` へ追加した。
+
+**指摘13**: **verified self-exec dispatch** を新設し、builder 自己照合の
+責務を `load_canonical_speaker_map_manifest()`（自己照合ロジックを削除、
+`running_builder_path` 引数も削除）から `main()`（CLI エントリポイント）
+へ移設した。`main()` は (a) 実行中の builder ファイルの実バイト列を
+**1回だけ**読み（`source_bytes`）、(b) canonical loader で得た manifest
+の `builder_provenance.builder_sha256` pin と `sha256(source_bytes)` を
+照合し（不一致は fail-closed）、(c) **照合に使った同一の `source_bytes`
+オブジェクト**を `compile(source_bytes, __file__, "exec")` → 隔離名前
+空間へ exec して得た `synthesize()`/`_check_out_does_not_alias_inputs()`/
+`_atomic_write_bytes()` のみを `_execute_cli()`（旧 `main()` のオーケスト
+レーション本体を切り出した共通関数）へ注入して処理を完遂する。これに
+より「hash したバイト列 == 実行されるバイト列」が同一オブジェクトで
+保証され、パス再読込による TOCTOU を構造的に閉じる。
+
+隔離名前空間の `__name__` は `_VERIFIED_NAMESPACE_NAME`
+（`"__speaker_map_builder_verified__"`、`"__main__"` ではない専用の
+sentinel）に設定し、exec 中にモジュール末尾の
+`if __name__ == "__main__": raise SystemExit(main())` が発火して
+`main()` が再帰起動しないことを構造的に保証する。
+
+**境界宣言**（設計指示どおり docstring・contract コメントへ明記済み）:
+この verified self-exec dispatch を実装する `main()` 自身の完全性（本
+builder が repo からどう起動されたか）はこの仕組みの手が届く範囲の外に
+あり、無限後退は解消不能——repo 機構（branch_write_policy + PR レビュー
++ contract pin）を信頼根とする。`run9_schema.py` の各 `load_pinned_*`
+関数が持つ信頼根境界宣言と同型。
+
+負例・単体テスト（`tests/test_speaker_map_builder.py` へ追加）:
+
+- (a) TOCTOU シミュレーション: import 済みモジュール属性 `smb.synthesize`
+  を「常に成功を偽装する」実装へ改変しても、`main()` の verified
+  self-exec dispatch は隔離名前空間の本物の `synthesize()` のみを使う
+  ため、改変された偽装は一切実処理に反映されない（forged な
+  `reproduced: true` が出力に一切現れないことまで確認、
+  `test_main_verified_self_exec_dispatch_bypasses_monkeypatched_module_
+  attribute`）。
+- (a') 実行対象バイト改変: `running_builder_path` override で pin と
+  乖離した builder バイトを渡すと fail-closed で拒否される
+  （`test_main_verified_self_exec_dispatch_source_bytes_mismatch_
+  rejected`）——cross-check (j)（`load_pinned_speaker_map_manifest()`
+  側、repo-relative path の実ファイル照合）と本 dispatch（実行中プロセス
+  が読んだバイトの照合）が独立した防御であることの直接証拠。
+- (b) 正常系 end-to-end: `main()` の verified self-exec dispatch が実際に
+  canonical manifest ロード + `source_bytes` 照合 + compile/exec を経由
+  して隔離名前空間の `synthesize()` を呼び出すこと
+  （`test_main_verified_self_exec_dispatch_real_repo_data_unknown_
+  founder_rejected`、実 founder embedding データ非依存）。alias-guard/
+  atomic-write の end-to-end 挙動は `main()` のオーケストレーション本体
+  を切り出した `_execute_cli()` へ fake 関数群を注入して検証
+  （`test_execute_cli_rejects_out_aliasing_ritsu_emb_and_does_not_
+  corrupt_input`/`test_execute_cli_writes_atomically_via_out_flag`）。
+- (c) exec ガードの単体: `_compile_and_exec_verified_source()` が設定する
+  `__name__` が `"__main__"` ではなく専用 sentinel であること、exec が
+  `SystemExit` を送出せず完遂すること、隔離名前空間に主要関数が定義
+  されていることを直接確認する
+  （`test_compile_and_exec_verified_source_does_not_trigger_main_guard`）。
+
+**鶏卵性の解消手順**（第4巡と同型）: builder のコード確定 → 実バイト
+sha256 実測（`0037bdedf85f75702c0faceae7c7b346b808a6e68368f587d8c0f1b0cb
+7bc2be`）→ `inputs/speaker_map_manifest.json` `builder_provenance.
+builder_sha256` 更新 → manifest 実バイト sha256 実測（`31eca739390feae3
+63d0ec8a1a2e9a8b653c9106327e02fe30a17c606f9ed099`）→ `RUN9_CONTRACT.yaml`
+`expected_speaker_map_sha` 第6世代 repin、の順で直列に実施した。
+`inputs/speaker_map_manifest.json` の diff は `builder_provenance.
+builder_sha256` の1フィールドのみ——両 founder の実測事実（合成
+embedding sha256・render sha256・秒数・`pre_pin_verification_summary`
+6点・重み式そのもの・`profile_label`）は一切変更していない。
+
+### builder 再現実測（両 founder）— 新 verified self-exec dispatch 経路での再実行
+
+本対応は `synthesize()` の合成ロジック（`w_r * ritsu_vec + w_u *
+user_vec` の式・演算順序・dtype 処理）を一切変更していない——変更対象は
+builder 自己照合の実装方式（`load_canonical_speaker_map_manifest()` 内の
+パス再読込 → `main()` の verified self-exec dispatch）と `run9_schema.py`
+の cross-check (b)（`profile_label` 追加）のみ。
+
+第6世代 repin 後、workdir 現存の実 ritsu/user emb
+（`reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.{ritsu,user}.emb`、
+入力 sha256 = `ce4b87b9...`/`588913b7...`、reexport manifest pin と一致）
+に対し、**新 verified self-exec dispatch 経由の CLI
+（`python3 speaker_map_builder.py --founder <id> --ritsu-emb ... --user-emb
+...`）で両 founder の再現実測を再実行し、いずれも `reproduced: true`
+（出力 sha256 が manifest pin `fc7b73fd...`/`0a681a2c...` と完全一致・
+exit 0）を確認した**。canonical loader・cross-check (b) の profile_label
+追加・verified self-exec dispatch の統合動作は実 repo pin 済み manifest
+に対する自動テストでも例外なく通過することを確認済み（上記「対応」節）。
+
+### manifest/contract への反映
+
+- `inputs/speaker_map_manifest.json`: `builder_provenance.builder_sha256`
+  を `speaker_map_builder.py` の新しい実バイト sha256
+  （`0037bdedf85f75702c0faceae7c7b346b808a6e68368f587d8c0f1b0cb7bc2be`）へ
+  更新。既存の founder 実測値（合成 embedding sha256・render sha256・
+  秒数・`pre_pin_verification_summary` 6点・重み式そのもの・
+  `profile_label`）は一切変更していない。
+- `RUN9_CONTRACT.yaml` `expected_speaker_map_sha`: manifest 実バイトが
+  変わったため第6世代へ repin（
+  `31eca739390feae363d0ec8a1a2e9a8b653c9106327e02fe30a17c606f9ed099`。
+  旧値 = 第5世代、`43e68fde685d55a190e6fab0caa18381bdc2e31456558287f2b0d
+  176df2c3167` は履歴として contract コメントに保持）。
+- `run9_schema.py`: `load_pinned_speaker_map_manifest()` cross-check (b)
+  へ `profile_label` の厳密一致照合を追加（指摘12対応）。
+- `speaker_map_builder.py`: `load_canonical_speaker_map_manifest()` から
+  builder 自己照合を削除（`running_builder_path` 引数も削除）し、
+  `main()` を verified self-exec dispatch（`_compile_and_exec_verified_
+  source()`/`_execute_cli()`/`_build_argument_parser()` を新設）へ再構成
+  （指摘13対応）。
+
 ## 逸脱・停止事由
 
 **第1〜3巡分**: なし。検証6点すべて PASS、repo ファイル変更ゼロ、
@@ -597,4 +738,10 @@ sha256 不変）。
 session workdir に現存）、最終検分時に新 canonical CLI 経路で両 founder の
 再現実測を再実行し `reproduced: true` を確認済み（上記節参照）。合成
 ロジック自体・両 founder の実測出力 sha256 は本対応で変更していない。
+
+**第6巡分（指摘12・13）**: なし。検証（`ruff check .`/対象テスト全件/
+verified self-exec dispatch 経由の両 founder 再現実測）すべて PASS。合成
+ロジック自体・両 founder の実測出力 sha256 は本対応で変更していない
+（変更対象は builder 自己照合の実装方式と cross-check (b) の
+profile_label 追加のみ）。
 ruff/pytest は全件 PASS。

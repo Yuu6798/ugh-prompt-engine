@@ -225,23 +225,29 @@ def test_synthesize_output_sha_mismatch_rejected(tmp_path: Path) -> None:
         smb.synthesize("R9F-01", ritsu_path, user_path, manifest=manifest)
 
 
-# --- load_canonical_speaker_map_manifest(): 唯一の正規経路（builder 自己 --
-# --- 照合含む）（PR #328 Codex レビュー第4巡指摘9、P1、採用） --------------
+# --- load_canonical_speaker_map_manifest(): 唯一の正規経路 -----------------
+# --- （PR #328 Codex レビュー第4巡指摘9、P1、採用） -------------------------
 #
 # 旧 `load_local_speaker_map_manifest()`（削除済み）は repo 内 manifest を
 # 直接 `json.load()` し `validate_speaker_map_manifest()` による内部構造
 # 検証のみを行っていた——manifest 実バイトが `RUN9_CONTRACT.yaml` の
-# `expected_speaker_map_sha` pin と一致するか、実行中の builder 自身が
-# `builder_provenance.builder_sha256` と一致するかは確認していなかった
-# （改変された manifest + 入力 + 期待値の組で偽の `reproduced: true` を
-# 印字できる穴——本指摘の核心）。以下は新設 `load_canonical_speaker_map_
-# manifest()` の統合確認 + 指摘9 負例2系統。
+# `expected_speaker_map_sha` pin と一致するかは確認していなかった（改変
+# された manifest + 入力 + 期待値の組で偽の `reproduced: true` を印字
+# できる穴——本指摘の核心）。以下は新設 `load_canonical_speaker_map_
+# manifest()` の統合確認 + 指摘9 負例1系統。
+#
+# **2026-08-27 追記（PR #328 レビュー第6巡指摘13、P1、採用対応）**:
+# 実行中 builder 自身の自己照合（旧: 本関数内で `Path(__file__).resolve()`
+# を自己照合の直前に読み直していた——import 済みモジュールの実行コードと
+# 自己照合が読むバイト列が別物になり得る TOCTOU）は `main()` の verified
+# self-exec dispatch へ移設した。本関数はもはや builder 自己照合を行わない
+# （`running_builder_path` 引数は削除済み）——`main()` 側のテストを参照。
 
 
 def test_load_canonical_speaker_map_manifest_happy_path_real_repo_data() -> None:
     """repo 内の実 pin 済み manifest を、contract/domain/rights_manifest
-    経由の全 cross-check + builder 自己照合を通して例外なく返す（builder
-    CLI が実際に消費する経路の統合確認）。"""
+    経由の全 cross-check を通して例外なく返す（builder CLI が実際に消費
+    する経路の統合確認）。"""
     data = smb.load_canonical_speaker_map_manifest()
     assert data["schema"] == m.SCHEMA_SPEAKER_MAP
     assert "builder_provenance" in data
@@ -263,25 +269,6 @@ def test_load_canonical_speaker_map_manifest_tampered_manifest_contract_pin_mism
     tampered_path.write_bytes(real_bytes + b"\n")
     with pytest.raises(m.Run9ValidationError, match="実バイト sha256"):
         smb.load_canonical_speaker_map_manifest(manifest_path=tampered_path)
-
-
-def test_load_canonical_speaker_map_manifest_builder_self_check_tampered_rejected(
-    tmp_path: Path,
-) -> None:
-    """指摘9 負例(b): 実行中の builder ファイルのコピーへ1byte追加した
-    ものを `running_builder_path` として渡すと（manifest/contract 側は
-    本物のまま——`load_pinned_speaker_map_manifest()` の cross-check (j)
-    は repo 内の本物の `speaker_map_builder.py` と照合するため、そちらは
-    通過する）、本関数が追加する builder 自己照合が fail-closed で拒否
-    する（cross-check (j) と自己照合が独立した防御であることの直接
-    証拠——鶏卵性: builder バイト自体を変える対応で builder_sha256 が
-    変わるため、テストは実行中ファイルの改変ではなく `running_builder_
-    path` override で「実行中コードが pin と乖離した」状態を模擬する）。"""
-    real_builder_path = _RUN_DIR / "speaker_map_builder.py"
-    tampered_copy = tmp_path / "speaker_map_builder_tampered_copy.py"
-    tampered_copy.write_bytes(real_builder_path.read_bytes() + b"\n# tampered\n")
-    with pytest.raises(m.Run9ValidationError, match="builder_provenance.builder_sha256"):
-        smb.load_canonical_speaker_map_manifest(running_builder_path=tampered_copy)
 
 
 def test_load_canonical_speaker_map_manifest_missing_rights_manifest_rejected(
@@ -369,14 +356,28 @@ def test_check_out_distinct_path_not_flagged(tmp_path: Path) -> None:
     assert smb._check_out_does_not_alias_inputs(out_path, ritsu_path, user_path) is None  # noqa: SLF001
 
 
-def test_main_rejects_out_aliasing_ritsu_emb_and_does_not_corrupt_input(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+# --- _execute_cli(): main() のオーケストレーション本体（PR #328 レビュー ---
+# --- 第6巡指摘13、P1、採用対応で main() から切り出し） --------------------
+#
+# `main()` は verified self-exec dispatch（下記「main() verified
+# self-exec dispatch」節）で得た隔離名前空間の関数群のみを実処理に使う
+# ため、production コード（`smb.synthesize` 等のモジュール属性）を
+# monkeypatch しても `main()` の実処理には一切影響しない——これは本対応の
+# 意図した挙動そのものである（下記 TOCTOU 負例テスト参照）。よって
+# alias-guard/atomic-write の end-to-end 挙動は、`main()` が実際に呼ぶ
+# のと同じ共通オーケストレーション関数 `_execute_cli()` へ fake 関数群を
+# 直接注入して検証する（実 founder embedding データ非依存のまま従来と
+# 同等のカバレッジを維持する）。
+
+
+def test_execute_cli_rejects_out_aliasing_ritsu_emb_and_does_not_corrupt_input(
+    tmp_path: Path,
 ) -> None:
-    """`main()` 経由の統合確認: `synthesize()` をモックして本物の manifest
-    照合を経由せずに、`--out` == `--ritsu-emb`（同一パス）指定時に
-    write_bytes() が一切実行されず、非ゼロ終了し、入力ファイルの実バイトが
-    無傷のまま残ることを直接確認する（fail-closed 契約の end-to-end 確認、
-    実 emb を repo に追加せずに検証する）。"""
+    """`_execute_cli()` の統合確認: fake `synthesize_fn` を注入し、
+    `--out` == `--ritsu-emb`（同一パス）指定時に atomic write が一切
+    実行されず、非ゼロ終了し、入力ファイルの実バイトが無傷のまま残る
+    ことを直接確認する（fail-closed 契約の end-to-end 確認、実 emb を
+    repo に追加せずに検証する）。"""
     ritsu_path = tmp_path / "ritsu.emb"
     user_path = tmp_path / "user.emb"
     original_ritsu_bytes = b"\x01\x02\x03\x04" * 96  # 384 bytes、無意味な固定値
@@ -389,15 +390,18 @@ def test_main_rejects_out_aliasing_ritsu_emb_and_does_not_corrupt_input(
     def _fake_synthesize(founder_id: str, ritsu_emb_path: Path, user_emb_path: Path) -> Any:
         return fake_synth, dict(fake_report)
 
-    monkeypatch.setattr(smb, "synthesize", _fake_synthesize)
-
-    argv = [
+    args = smb._build_argument_parser().parse_args([  # noqa: SLF001
         "--founder", "R9F-01",
         "--ritsu-emb", str(ritsu_path),
         "--user-emb", str(user_path),
         "--out", str(ritsu_path),
-    ]
-    rc = smb.main(argv)
+    ])
+    rc = smb._execute_cli(  # noqa: SLF001
+        args,
+        synthesize_fn=_fake_synthesize,
+        check_alias_fn=smb._check_out_does_not_alias_inputs,  # noqa: SLF001
+        atomic_write_fn=smb._atomic_write_bytes,  # noqa: SLF001
+    )
     assert rc == 1
     # 入力 ritsu emb の実バイトが無傷のまま残っていること（破壊されていない）。
     assert ritsu_path.read_bytes() == original_ritsu_bytes
@@ -555,11 +559,10 @@ def test_atomic_write_bytes_staging_does_not_alias_input_paths(
     assert staging_path.resolve() != user_path.resolve()
 
 
-def test_main_writes_atomically_via_out_flag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """`main()` 経由の統合確認: `--out` 指定時に `_atomic_write_bytes()` が
-    実際に呼ばれ、期待バイト列がそのまま書き出されること。"""
+def test_execute_cli_writes_atomically_via_out_flag(tmp_path: Path) -> None:
+    """`_execute_cli()` の統合確認: `--out` 指定時に注入した
+    `atomic_write_fn`（本物の `_atomic_write_bytes()`）が実際に呼ばれ、
+    期待バイト列がそのまま書き出されること。"""
     ritsu_path = tmp_path / "ritsu.emb"
     user_path = tmp_path / "user.emb"
     out_path = tmp_path / "out.emb"
@@ -572,14 +575,137 @@ def test_main_writes_atomically_via_out_flag(
     def _fake_synthesize(founder_id: str, ritsu_emb_path: Path, user_emb_path: Path) -> Any:
         return fake_synth, dict(fake_report)
 
-    monkeypatch.setattr(smb, "synthesize", _fake_synthesize)
-
-    argv = [
+    args = smb._build_argument_parser().parse_args([  # noqa: SLF001
         "--founder", "R9F-01",
         "--ritsu-emb", str(ritsu_path),
         "--user-emb", str(user_path),
         "--out", str(out_path),
-    ]
-    rc = smb.main(argv)
+    ])
+    rc = smb._execute_cli(  # noqa: SLF001
+        args,
+        synthesize_fn=_fake_synthesize,
+        check_alias_fn=smb._check_out_does_not_alias_inputs,  # noqa: SLF001
+        atomic_write_fn=smb._atomic_write_bytes,  # noqa: SLF001
+    )
     assert rc == 0
     assert out_path.read_bytes() == fake_synth.tobytes()
+
+
+# --- main(): verified self-exec dispatch（PR #328 Codex レビュー第6巡 ------
+# --- 指摘13、P1、採用・Fable 確定対応方針） ---------------------------------
+#
+# 旧実装（`load_canonical_speaker_map_manifest()` 内の自己照合）は
+# `Path(__file__).resolve()` を自己照合の**直前に読み直して**いたため、
+# 「hash 対象のバイト列」と「実際に実行されるコード（import 済みモジュール
+# が束縛する、pin 照合時点とは別バイト列を保持しているかもしれない旧
+# コード）」が別オブジェクトになり得る TOCTOU を構造的に抱えていた。
+# 新実装は `main()` が読んだ `source_bytes` を pin と照合した**同一の
+# オブジェクト**を `compile()`→`exec()` して得た隔離名前空間の関数群のみを
+# 実処理に用いる。
+
+
+def test_main_verified_self_exec_dispatch_real_repo_data_unknown_founder_rejected() -> None:
+    """正常系 end-to-end（既存テスト追随）: `main()` の verified self-exec
+    dispatch が実際に canonical manifest ロード + `source_bytes` 照合 +
+    compile/exec を経由して隔離名前空間の `synthesize()` を呼び出すことの
+    統合確認（実 founder embedding データ非依存）: `--ritsu-emb`/
+    `--user-emb` に空ファイル（`/dev/null`）を渡すと、実 sha256 が
+    manifest pin と食い違うため隔離名前空間の `synthesize()` 内バリデー
+    ションで拒否される（`--founder` は argparse `choices` 制約があるため
+    未知 founder_id では argparse 自体が `SystemExit` を送出してしまい
+    `main()` の実処理まで到達しない——本テストは有効な founder_id で
+    `synthesize()` 側の fail-closed 分岐を直接検証する）。"""
+    argv = ["--founder", "R9F-01", "--ritsu-emb", "/dev/null", "--user-emb", "/dev/null"]
+    assert smb.main(argv) == 1
+
+
+def test_main_verified_self_exec_dispatch_source_bytes_mismatch_rejected(
+    tmp_path: Path,
+) -> None:
+    """実行対象 builder バイト改変（実ファイルのコピーへ1byte追加）→
+    `running_builder_path` override 経由で渡すと、manifest/contract 側は
+    本物のまま（cross-check (j) は repo 内の本物の `speaker_map_
+    builder.py` と照合するため通過する）にもかかわらず、`main()` の
+    verified self-exec dispatch が `source_bytes` の sha256 と
+    `builder_provenance.builder_sha256` pin の不一致を fail-closed で
+    拒否する（cross-check (j) と verified self-exec dispatch が独立した
+    防御であることの直接証拠——鶏卵性: builder バイト自体を変える対応で
+    builder_sha256 が変わるため、テストは実行中ファイルの改変ではなく
+    `running_builder_path` override で「実行対象が pin と乖離した」状態を
+    模擬する）。"""
+    real_builder_path = _RUN_DIR / "speaker_map_builder.py"
+    tampered_copy = tmp_path / "speaker_map_builder_tampered_copy.py"
+    tampered_copy.write_bytes(real_builder_path.read_bytes() + b"\n# tampered\n")
+    argv = ["--founder", "R9F-01", "--ritsu-emb", "/dev/null", "--user-emb", "/dev/null"]
+    rc = smb.main(argv, running_builder_path=tampered_copy)
+    assert rc == 1
+
+
+def test_main_verified_self_exec_dispatch_missing_source_rejected(tmp_path: Path) -> None:
+    missing_path = tmp_path / "does_not_exist_builder.py"
+    argv = ["--founder", "R9F-01", "--ritsu-emb", "/dev/null", "--user-emb", "/dev/null"]
+    rc = smb.main(argv, running_builder_path=missing_path)
+    assert rc == 1
+
+
+def test_main_verified_self_exec_dispatch_bypasses_monkeypatched_module_attribute(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """TOCTOU シミュレーション負例（PR #328 レビュー第6巡指摘13、P1、
+    採用対応、必須テスト(a)）: import 済みモジュール属性 `smb.synthesize`
+    を「常に成功を偽装する」実装へ改変する（TOCTOU の比喩: 旧実装が
+    hash 対象を再度ディスクから読み直す間に、実行中コードが既に改変
+    されている状況の直接模擬）。
+
+    旧実装（自己照合の直前に `Path(__file__).resolve()` を読み直すだけで、
+    その後の実処理自体は import 済みの——ここでは改変済みの——
+    `synthesize` をそのまま使っていた）なら、この改変された
+    `smb.synthesize` がそのまま使われ、空ファイル入力（emb sha256
+    不一致）のような fail-closed 分岐すら偽装成功で素通りしてしまう。
+    新実装は `main()` が読んだ `source_bytes` を compile→exec した隔離
+    名前空間の `synthesize` のみを使うため、`smb.synthesize`（モジュール
+    属性）をどれだけ改変しても `main()` の実処理には一切影響しない——
+    改変バイトが exec されないことの直接証拠。"""
+    def _malicious_always_reproduced(
+        founder_id: str, ritsu_emb_path: Path, user_emb_path: Path, *, manifest: Any = None,
+    ) -> Any:
+        # 実際には何も検証せず「成功した」と偽装する——import 済みモジュール
+        # 属性が改変された状況の直接模擬。
+        fake = np.zeros(smb.EMB_DIM, dtype=np.float32)
+        return fake, {"reproduced": True, "founder_id": founder_id, "forged": True}
+
+    monkeypatch.setattr(smb, "synthesize", _malicious_always_reproduced)
+
+    argv = ["--founder", "R9F-01", "--ritsu-emb", "/dev/null", "--user-emb", "/dev/null"]
+    rc = smb.main(argv)
+    # 改変された smb.synthesize は使われず、隔離名前空間の本物の
+    # synthesize() が使われ、空ファイル入力の emb sha256 不一致で
+    # fail-closed 拒否されることを rc != 0 で確認する（forged な
+    # reproduced: true は出力に一切現れない）。
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "forged" not in captured.out
+    assert '"reproduced": true' not in captured.out.lower()
+
+
+def test_compile_and_exec_verified_source_does_not_trigger_main_guard() -> None:
+    """exec ガードの単体（PR #328 レビュー第6巡指摘13、P1、採用対応、
+    必須テスト(c)）: `_compile_and_exec_verified_source()` は隔離名前空間の
+    `__name__` を `"__main__"` 以外の sentinel に設定するため、exec 中に
+    モジュール末尾の `if __name__ == "__main__": raise SystemExit(main())`
+    が発火せず、`main()` の再帰起動が起きないことを直接確認する（発火して
+    いれば、引数なしの argparse が実プロセスの `sys.argv`（pytest 自身の
+    引数）を解釈しようとして `SystemExit` を送出するため、この非発火は
+    `SystemExit` が上がらないことで検出できる）。"""
+    real_builder_path = _RUN_DIR / "speaker_map_builder.py"
+    source_bytes = real_builder_path.read_bytes()
+    namespace = smb._compile_and_exec_verified_source(source_bytes, real_builder_path)  # noqa: SLF001
+    assert namespace["__name__"] == smb._VERIFIED_NAMESPACE_NAME  # noqa: SLF001
+    assert namespace["__name__"] != "__main__"
+    # namespace 内に主要関数が定義されていること（exec が完遂したことの
+    # 直接証拠）。
+    assert callable(namespace["synthesize"])
+    assert callable(namespace["main"])
+    assert callable(namespace["_check_out_does_not_alias_inputs"])
+    assert callable(namespace["_atomic_write_bytes"])
+    assert callable(namespace["_execute_cli"])

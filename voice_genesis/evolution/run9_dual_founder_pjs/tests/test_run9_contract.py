@@ -18923,6 +18923,36 @@ def test_harness3a_load_pinned_speaker_map_manifest_genome_id_tampered_rejected(
 
 
 @pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_load_pinned_speaker_map_manifest_profile_label_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, founder_id: str,
+) -> None:
+    """profile_label改竄（PR #328 Codex レビュー第6巡指摘12、P2、採用対応）:
+    `coords_raw`/`genome_id` は発行済み Founder Genome document と一致させ
+    たまま `profile_label` のみを改竄すると（従来は非空文字列検証のみで
+    genome 側と照合していなかったため素通りしていた取り違え偽装の直接
+    再現）、loader の cross-check (b) が fail-closed で拒否する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        # 有効な非空文字列の形状を保ちつつ、実際の発行済み値とは異なる値へ
+        # 差し替える（validator 単体の非空文字列チェックは素通りする）。
+        genuine = data["founders"][founder_id]["profile_label"]
+        forged = "USER_DOMINANT" if genuine == "AF0_DOMINANT" else "AF0_DOMINANT"
+        data["founders"][founder_id]["profile_label"] = forged
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    # 改竄後 manifest 単体は自己整合しており validator 単体は通過すること
+    # を先に確認する（profile_label 改竄の検出が loader 側の cross-check
+    # (b) に依存していることの直接証拠）。
+    m.validate_speaker_map_manifest(_loads_bytes(manifest_path))
+    with pytest.raises(m.Run9ValidationError, match="profile_label"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
 def test_harness3a_load_pinned_speaker_map_manifest_input_embedding_sha_tampered_vs_reexport_rejected(
     contract: m.Run9RunContract, tmp_path: Path, founder_id: str,
 ) -> None:
