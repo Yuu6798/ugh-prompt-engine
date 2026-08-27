@@ -1752,9 +1752,12 @@ pin 済みバイトを実際に作った実装を特定・再実行できない�
     phrase_end_timing）を全測定し各 1/5 重み。calibration_scale は
     training 68曲（aligned）から母標準偏差（ddof=0, float64, 丸めなし）を
     実測。relative_f0/normalized_energy は標本粒度（frame vs
-    mora/phrase）が構造上曖昧だったため両案を実測しFableがframe粒度を
-    採用（lessonがframe契約のcontourを保持するため。両案の値・標本数は
-    manifest 内 derivation 欄に併記）。equal-weight aggregateは
+    mora/phrase）が構造上曖昧だったため両案を実測し、W1b Task3 時点では
+    Fableがframe粒度を採用していたが、PR #331 第6巡で
+    `residual_correspondence` を aligned mora 単位へ凍結した結果
+    frame 採用の前提が成立しなくなり、mora 粒度（sample_unit: mora /
+    adopted_v2: true）へ切替済み（不採用となった旧案の値・標本数は
+    manifest 内 derivation 欄に経緯付きで併記）。equal-weight aggregateは
     candidate selection 用 search objective に限定し最終科学判定は5
     channel個別値を維持、count_mismatch/not_extractedはゼロ補完しない。
   - [`inputs/candidate_generation_spec_v1.json`](./inputs/candidate_generation_spec_v1.json)

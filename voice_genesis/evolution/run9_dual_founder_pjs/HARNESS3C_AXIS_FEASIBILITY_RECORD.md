@@ -921,3 +921,62 @@ Sonnet に委譲、コミット/push は Fable が別途実行する（本追記
 2487 件全 pass（第5巡時点の2477件から+10件: `residual_correspondence`/
 `reference_source` 逐語一致検査10件〔正常系2件・欠落/改変拒否8件〕、他
 既存回帰）。
+
+## PR #331 Codex bot レビュー第7巡対応（2026-08-27、Claude 完結ルート）
+
+指摘1件、P2、Fable 採用判定（実装・検証・返信起草は Sonnet に委譲、
+コミット/push は Fable が別途実行する。本追記フェーズでは未実施）。
+
+**旧 frame 採用の stale 要約の掃討（P2）**: 第6巡で `residual_
+correspondence` を aligned mora 単位へ凍結し `channels[relative_f0/
+normalized_energy].calibration_scale`（トップレベル `value`/`sample_
+unit`/`n_samples`、および `derivation.option_*.adopted_v2`）は既に
+mora 粒度（`sample_unit: "mora"`, `adopted_v2: true`）へ repin 済み
+だったが、以下3箇所に「Fable は frame 粒度を採用」という**非履歴文脈の
+stale 要約**が残存していた:
+
+- `README.md`（`inputs/loss_evaluator_spec_v1.json` の説明段落）:
+  「両案を実測しFableがframe粒度を採用（lessonがframe契約のcontourを
+  保持するため）」——第6巡切替を反映しない現況要約。
+- `inputs/loss_evaluator_spec_v1.json` の `provenance.detail_record.
+  summary`（本 record への言及要約）:「Fable判定（frame採用）を記録」
+  ——W1b Task3 時点の判定をそのまま現況として提示していた。
+- `RUN9_CONTRACT.yaml` の `loss_evaluator_spec_v1:` 冒頭サマリコメント
+  （日付なし・第1巡以前から無改訂）:「Fableがframe粒度を採用（lessonが
+  frame契約のcontourを保持し loss もframe単位比較のため）」——同型の
+  stale 要約。
+
+3箇所とも、W1b Task3 時点では frame 採用が事実だったが PR #331 第6巡で
+`residual_correspondence` の mora 単位凍結により frame 採用の前提が
+成立しなくなり mora 粒度（`sample_unit: mora` / `adopted_v2: true`）へ
+切替済みである旨を明記する記述へ是正した。旧判定（frame 採用）への言及は
+残したが、いずれも「W1b Task3 時点では…していたが、第6巡で…切替済み」と
+明示的な履歴・訂正文脈の中でのみ残るよう書き換えた——非履歴文脈で
+「frame 採用」を現況として読める記述はゼロにした。`README`/`inputs/
+loss_evaluator_spec_v1.json`/`RUN9_CONTRACT.yaml`/`run9_schema.py` を
+「frame」「案A」「frame-level calibration」等で grep 全数掃討し、他に
+非履歴文脈の stale 記述が残存しないことを確認した（`inputs/loss_
+evaluator_spec_v1.json` の `decision_rationale`（第6巡で既に history+
+訂正文脈で記述済み）・`run9_schema.py` の `LOSS_EVALUATOR_CALIBRATION_
+SCALE_V1` コメント（同）・本 record の W1b Task3 節と第6巡対応節
+（append-only の日付付き記録であり改変不要）はいずれも要修正なし）。
+
+`channels[].calibration_scale` の `value`/`sample_unit`/`n_samples`/
+`derivation` 自体（実測値・adopted フラグ）は第6巡で既に正しく、本巡は
+文書上の要約テキストのみの是正であり数値・判定結果の変更はない。
+
+**連鎖更新**: `inputs/loss_evaluator_spec_v1.json` の `provenance.
+detail_record.summary` バイト変更に伴い `RUN9_CONTRACT.yaml` の
+`loss_evaluator_spec_sha` を repin した。さらに本節を新設したことに伴う
+`HARNESS3C_AXIS_FEASIBILITY_RECORD.md` 自体の実バイト sha256 変更により、
+5 manifest 共通の `provenance.detail_record.sha256` 参照値が全て追随
+更新となるため、5 manifest 全て（`score_axis_catalog_sha`/
+`loss_evaluator_spec_sha`/`candidate_generation_spec_sha`/
+`compute_budget_manifest_sha`/`learning_data_binding_manifest_sha`）を
+第1-6巡と同型の cascade repin した（旧値は `RUN9_CONTRACT.yaml` 側に
+世代履歴コメントとして append-only 保持）。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
+2487 件全 pass（第6巡から件数不変——文書テキストのみの是正で検証ロジック
+の新設・変更なし）。

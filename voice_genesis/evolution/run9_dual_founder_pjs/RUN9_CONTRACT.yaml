@@ -2222,8 +2222,18 @@ pjs_consumed_inputs_manifest_sha:
 # cascade）——値を再計算した（旧値
 # 55a1f33e2438c67c0176c48dcfc4b75da7afeac3acd87ef2bc41321a338f08fa は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第7巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第7巡指摘は README.md/loss_
+# evaluator_spec_v1.json/RUN9_CONTRACT.yaml の非履歴文脈 stale 要約
+# ——旧 frame 採用の記述——の掃討で、score_axis_catalog_v1.json を対象と
+# していない）。`HARNESS3C_AXIS_FEASIBILITY_RECORD.md` へ第7巡対応追記
+# 節を新設したことに伴う `provenance.detail_record.sha256` 参照値の
+# 追随更新のみ（score_axis_catalog_sha の repin note と同型の
+# cascade）——値を再計算した（旧値
+# 659a1dd1cc92b7c5f95de9350f388c4707d9d1b35c9876d2f07722fa145ade8f は
+# 履歴として append-only 保持）。
 score_axis_catalog_sha:
-  value: "659a1dd1cc92b7c5f95de9350f388c4707d9d1b35c9876d2f07722fa145ade8f"
+  value: "0b098e1da713531180485da4d91a3541d65c7515bba704f5eacb67a455d48aad"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/score_axis_catalog_v1.json
 
@@ -2233,9 +2243,11 @@ score_axis_catalog_sha:
 # 境界（PRACTICE=raw audio自己抽出のみ・EDUCATION=凍結lesson使用）を
 # 実装。calibration_scale 5値は W1b Task3実測（training 68曲、ddof=0、
 # float64、丸めなし全桁）——relative_f0/normalized_energyの標本粒度は
-# frame/mora(phrase)両案を実測しFableがframe粒度を採用（lessonがframe
-# 契約のcontourを保持し loss もframe単位比較のため。mora/phrase平均は
-# lessonに存在しない新規導出統計を挟むため不採用）。
+# frame/mora(phrase)両案を実測し、W1b Task3時点ではFableがframe粒度を
+# 採用していたが、PR #331第6巡でresidual_correspondenceがaligned mora
+# 単位集約へ凍結された結果frame採用の前提が成立しなくなり、mora粒度
+# （sample_unit: mora / adopted_v2: true）へ切替済み（詳細は本ファイル
+# 下方の第6巡 repin note 参照）。
 # `run9_schema.validate_loss_evaluator_spec_manifest()`/`load_pinned_
 # loss_evaluator_spec_manifest()` が全構造検証 + cross-check（裁定txt/
 # detail record実バイト照合、calibration値のLOSS_EVALUATOR_CALIBRATION_
@@ -2345,8 +2357,23 @@ score_axis_catalog_sha:
 # （旧値
 # 6433b03093ac8e8d6fa89bd0d74b6c540f9c1e8b6c4ed633c4dae194d23b65d5 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第7巡指摘1、P2、採用対応。
+# Claude 完結ルート）: `provenance.detail_record.summary` の「Fable判定
+# （frame採用）を記録」という非履歴文脈の stale 要約を、W1b Task3 時点
+# では frame 採用だったが PR #331 第6巡で `residual_correspondence` の
+# mora 単位凍結により mora 粒度（`sample_unit: mora` / `adopted_v2:
+# true`）へ切替済みである旨を明記する記述へ是正した——旧判定への言及は
+# 明示的な履歴・訂正文脈の中でのみ残した（`channels[].calibration_
+# scale` の `value`/`sample_unit`/`n_samples`/`derivation` 自体は第6巡
+# で既に正しく、実測値・adopted フラグの変更はない）。これに伴い値を
+# 再計算した。さらに `HARNESS3C_AXIS_FEASIBILITY_RECORD.md` へ第7巡対応
+# 追記節を新設したことに伴う `provenance.detail_record.sha256` 参照値の
+# 追随更新（score_axis_catalog_sha の repin note と同型の cascade）も
+# 同一 repin に含める（旧値
+# aa27e181a4f6031f726a91599c2339cc2a49b8b4a883e02bea4fa5868d03be15 は
+# 履歴として append-only 保持）。
 loss_evaluator_spec_sha:
-  value: "aa27e181a4f6031f726a91599c2339cc2a49b8b4a883e02bea4fa5868d03be15"
+  value: "fb60f4c62119e2dd1a1309b47847fb3561b0a19f20d34105876dfdfe1f3ef7c9"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/loss_evaluator_spec_v1.json
 
@@ -2480,8 +2507,18 @@ loss_evaluator_spec_sha:
 # cascade）——値を再計算した（旧値
 # 229b66b738f65a4e9f28cb10e9b0112711e04c1969fb3e678897a011345f9d68 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第7巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第7巡指摘は README.md/loss_
+# evaluator_spec_v1.json/RUN9_CONTRACT.yaml の非履歴文脈 stale 要約の
+# 掃討で、candidate_generation_spec_v1.json を対象としていない）。
+# `HARNESS3C_AXIS_FEASIBILITY_RECORD.md` へ第7巡対応追記節を新設した
+# ことに伴う `provenance.detail_record.sha256` 参照値の追随更新のみ
+# （score_axis_catalog_sha の repin note と同型の cascade）——値を
+# 再計算した（旧値
+# 070a27f6cc4bcc9d497e0e3a847f7d9f76b21d2fb1f51d665625d935ff523238 は
+# 履歴として append-only 保持）。
 candidate_generation_spec_sha:
-  value: "070a27f6cc4bcc9d497e0e3a847f7d9f76b21d2fb1f51d665625d935ff523238"
+  value: "3f0ae080b01fc4c725b911a92ff304908e52c39da8e27a0e68c91572a95a1898"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/candidate_generation_spec_v1.json
 
@@ -2542,8 +2579,18 @@ candidate_generation_spec_sha:
 # cascade）——値を再計算した（旧値
 # 0f322aa7f5676761b893349afec150dfcb11e4cc3988c1aafaa0be0591ba3555 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第7巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第7巡指摘は README.md/loss_
+# evaluator_spec_v1.json/RUN9_CONTRACT.yaml の非履歴文脈 stale 要約の
+# 掃討で、compute_budget_manifest_v1.json を対象としていない）。
+# `HARNESS3C_AXIS_FEASIBILITY_RECORD.md` へ第7巡対応追記節を新設した
+# ことに伴う `provenance.detail_record.sha256` 参照値の追随更新のみ
+# （score_axis_catalog_sha の repin note と同型の cascade）——値を
+# 再計算した（旧値
+# a09aa41530963db30c32b6235667ba123cd85d4dcab7a459a7968f74efe3a66f は
+# 履歴として append-only 保持）。
 compute_budget_manifest_sha:
-  value: "a09aa41530963db30c32b6235667ba123cd85d4dcab7a459a7968f74efe3a66f"
+  value: "5a712b24dd0fb5dab96656ac9c79f2913359e85bcd5ef22467bf6d2e59188e7f"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/compute_budget_manifest_v1.json
 
@@ -2613,8 +2660,18 @@ compute_budget_manifest_sha:
 # cascade）——値を再計算した（旧値
 # a3a0c4e384c220c3f508d4dd36120ba90d516215954153d698a80ca3b8817a23 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第7巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第7巡指摘は README.md/loss_
+# evaluator_spec_v1.json/RUN9_CONTRACT.yaml の非履歴文脈 stale 要約の
+# 掃討で、learning_data_binding_manifest_v1.json を対象としていない）。
+# `HARNESS3C_AXIS_FEASIBILITY_RECORD.md` へ第7巡対応追記節を新設した
+# ことに伴う `provenance.detail_record.sha256` 参照値の追随更新のみ
+# （score_axis_catalog_sha の repin note と同型の cascade）——値を
+# 再計算した（旧値
+# 8a620a042d83b0fde44b6e8b1cb2a8b59234bb6dca4c9d550c2d7b07bca6dd2f は
+# 履歴として append-only 保持）。
 learning_data_binding_manifest_sha:
-  value: "8a620a042d83b0fde44b6e8b1cb2a8b59234bb6dca4c9d550c2d7b07bca6dd2f"
+  value: "566443ecf7c9d6e11dc717b38789f819c0b44e38595bc08546d2104d2ef75693"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/learning_data_binding_manifest_v1.json
 
