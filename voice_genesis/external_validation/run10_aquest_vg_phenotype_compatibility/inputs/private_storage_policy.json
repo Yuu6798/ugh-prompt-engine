@@ -34,9 +34,19 @@
       "blind_id_map",
       "private feature JSON / measured values / aggregate tables",
       "DESIGN_RUN10 本文（全 revision）および旧 RUN10 案本文",
-      "trained models / synthesis systems derived from AquesTalk assets"
+      "trained models / synthesis systems derived from AquesTalk assets",
+      "VoiceGenesis_Evolution_Theory_v0.3_ja.md 本体（User 裁定 2026-08-27: リポジトリに載せない。参照は sha256 pin と実行時照合のみ）"
     ],
-    "enforced_by": "private_boundary.py::assert_tracked_tree_clean"
+    "enforced_by": "private_boundary.py::assert_tracked_tree_clean",
+    "reaffirmations": [
+      {
+        "date": "2026-08-27",
+        "statement": "UTAU デフォルト音源は個人・非公開でのみ分析／抽出／合成が許諾されており、リポジトリに載せることは許されない。",
+        "scope": "A0 = AquesTalk-derived UTAU default voicebank（WAV / oto.ini / character.txt / prefix.map）",
+        "already_enforced_by": "private_boundary.py::ALWAYS_PRIVATE_NAMES / PRIVATE_ASSET_SUFFIXES",
+        "extension": "同じ保守的姿勢を Evolution Theory v0.3 本体にも適用する（本体非 commit / 実行時照合）。"
+      }
+    ]
   },
   "private_staging": {
     "note": "§26 Atomic Private Results Bundle の staging root。リポジトリ外の private ストレージに置く。",

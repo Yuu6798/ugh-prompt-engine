@@ -376,34 +376,77 @@ def test_detail_never_contradicts_the_state(tmp_path: Path) -> None:
 def test_canonical_name_alone_is_not_enough(tmp_path: Path, monkeypatch) -> None:
     """名前一致だけでは通さない — 同名の別内容は来歴汚染である。"""
     monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", "a" * 64)
-    (_foundry(tmp_path) / inv.EVOLUTION_THEORY_CANONICAL).write_text("wrong", encoding="utf-8")
-    item = inv._check_evolution_theory(tmp_path)
+    body = tmp_path / "private" / inv.EVOLUTION_THEORY_CANONICAL
+    body.parent.mkdir(parents=True)
+    body.write_text("wrong", encoding="utf-8")
+    item = inv._check_evolution_theory(tmp_path, body)
     assert item.state == inv.UNRESOLVED
     assert item.blocking is True
     assert "一致しない" in item.detail
 
 
-def test_canonical_path_with_matching_pin_resolves(tmp_path: Path, monkeypatch) -> None:
-    """正典パス + sha 一致でのみ解決する（偽陰性でないことの確認）。"""
-    body = b"canonical evolution theory v0.3"
-    digest = hashlib.sha256(body).hexdigest()
+def test_wrong_title_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    """別題名のファイルを照合対象に指定しても解決しない。"""
+    monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", "a" * 64)
+    body = tmp_path / "VISION_evolution_theory_v0.3.md"
+    body.write_text("x", encoding="utf-8")
+    item = inv._check_evolution_theory(tmp_path, body)
+    assert item.state == inv.UNRESOLVED
+    assert item.blocking is True
+
+
+def test_private_body_with_matching_pin_resolves(tmp_path: Path, monkeypatch) -> None:
+    """private storage 側の実体 + sha 一致でのみ解決する（偽陰性でないことの確認）。"""
+    body_bytes = b"canonical evolution theory v0.3"
+    digest = hashlib.sha256(body_bytes).hexdigest()
     monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", digest)
-    (_foundry(tmp_path) / inv.EVOLUTION_THEORY_CANONICAL).write_bytes(body)
-    item = inv._check_evolution_theory(tmp_path)
+    body = tmp_path / "private" / inv.EVOLUTION_THEORY_CANONICAL
+    body.parent.mkdir(parents=True)
+    body.write_bytes(body_bytes)
+    item = inv._check_evolution_theory(tmp_path, body)
     assert item.state == inv.PRESENT
     assert item.blocking is False
 
 
+def test_private_path_is_never_recorded(tmp_path: Path, monkeypatch) -> None:
+    """照合対象のパス文字列を inventory へ書かない（§2.2 / §26）。
+
+    inventory.json は commit されるため、private ストレージの構成を
+    そのまま公開することになる。
+    """
+    body_bytes = b"canonical evolution theory v0.3"
+    digest = hashlib.sha256(body_bytes).hexdigest()
+    monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", digest)
+    secret = tmp_path / "very" / "private" / "place"
+    secret.mkdir(parents=True)
+    body = secret / inv.EVOLUTION_THEORY_CANONICAL
+    body.write_bytes(body_bytes)
+    for path in (body, secret / "missing.md", tmp_path / "nope.md"):
+        item = inv._check_evolution_theory(tmp_path, path)
+        assert "very" not in item.detail
+        assert str(secret) not in item.detail
+
+
+def test_reference_is_unresolved_without_a_body_path(tmp_path: Path, monkeypatch) -> None:
+    """pin があっても照合対象が未指定なら解決しない。"""
+    monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", "a" * 64)
+    item = inv._check_evolution_theory(tmp_path, None)
+    assert item.state == inv.UNRESOLVED
+    assert item.blocking is True
+    assert "--evolution-theory-path" in item.detail
+
+
 def test_pin_is_still_pending(tmp_path: Path) -> None:
-    """pin 未取得の間は、正典が置かれても解決にしない（証明できないため）。"""
+    """pin 未取得の間は、実体を渡しても解決にしない（証明できないため）。"""
     assert inv.EVOLUTION_THEORY_CANONICAL_SHA256 is None
-    (_foundry(tmp_path) / inv.EVOLUTION_THEORY_CANONICAL).write_text("x", encoding="utf-8")
-    item = inv._check_evolution_theory(tmp_path)
+    body = tmp_path / inv.EVOLUTION_THEORY_CANONICAL
+    body.write_text("x", encoding="utf-8")
+    item = inv._check_evolution_theory(tmp_path, body)
     assert item.state == inv.UNRESOLVED
     assert "vg_evolution_theory_ref_sha" in item.detail
 
 
-def test_canonical_path_is_a_single_closed_location() -> None:
-    """正典本体の受け入れ位置を閉じる（任意の場所に置かせない）。"""
-    assert inv.EVOLUTION_THEORY_CANONICAL_PATH.endswith(inv.EVOLUTION_THEORY_CANONICAL)
+def test_canonical_body_is_not_a_repository_path() -> None:
+    """正典本体をリポジトリ内の固定パスで解決しない（User 裁定 2026-08-27）。"""
+    assert not hasattr(inv, "EVOLUTION_THEORY_CANONICAL_PATH")
     assert inv.EVOLUTION_THEORY_CANONICAL not in inv.EVOLUTION_THEORY_DISCOVERY_CANDIDATES

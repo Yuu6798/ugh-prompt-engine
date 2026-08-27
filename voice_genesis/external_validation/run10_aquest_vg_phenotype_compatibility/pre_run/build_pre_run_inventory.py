@@ -86,8 +86,11 @@ EVOLUTION_THEORY_CANDIDATES = EVOLUTION_THEORY_DISCOVERY_CANDIDATES
 # §36 が実在を確認した v0.3 本体の題名。§29 手順 5 が要求するのはこの実体である。
 EVOLUTION_THEORY_CANONICAL = "VoiceGenesis_Evolution_Theory_v0.3_ja.md"
 
-# 正典本体を repo 側で受け入れる唯一の位置（閉世界。任意の場所に置かせない）。
-EVOLUTION_THEORY_CANONICAL_PATH = f"voice_genesis/foundry/{EVOLUTION_THEORY_CANONICAL}"
+# 正典本体は **private storage に置き、リポジトリへ commit しない**。
+# 判定は実行時に `--evolution-theory-path` で渡された実体を照合して行う
+# （DESIGN_RUN10 本体に対する `verify_design_document()` と同じパターン）。
+# repo 内の固定パスを正典位置にすると、本体を commit しない限り永久に
+# 解決不能になる（User 裁定 2026-08-27: 本文書はリポジトリに載せない）。
 
 # 正典本体の凍結 sha256。**未取得**（RUN10_CONTRACT.yaml
 # `vg_evolution_theory_ref_sha` = PENDING / Drive 側実体の実バイト sha 未取得）。
@@ -388,74 +391,83 @@ def inventory_aquest(voicebank_root: Optional[Path]) -> List[InventoryItem]:
     ]
 
 
-def _check_evolution_theory(repo: Path) -> InventoryItem:
+def _check_evolution_theory(
+    repo: Path, body_path: Optional[Path] = None
+) -> InventoryItem:
     """§29 手順 5: Evolution Theory v0.3 本体の解決。
 
-    判定は**正典パス + 凍結 sha256 の一致**のみで行う。近縁文書の発見リストは
+    判定は**凍結 sha256 と実体バイトの一致**のみで行う。近縁文書の発見リストは
     報告用であって判定材料ではない — 第 16 巡以前は
     `VISION_evolution_theory_v0.3.md` の実在で PRESENT にしていたため、
     別名の別文書が追加された瞬間に「解決済み」になり、しかも同じ detail が
     「v0.3 本体は不在」と言い続ける自己矛盾を出していた。
+
+    本体は private storage 側にあり、リポジトリには載せない。したがって照合
+    対象は実行時に渡されるローカルパスである。**渡されたパス文字列は
+    detail に書かない** — inventory.json は commit されるため、private
+    ストレージの構成を公開することになる（§2.2 / §26）。
     """
     discovered = [c for c in EVOLUTION_THEORY_DISCOVERY_CANDIDATES if (repo / c).is_file()]
     found_note = f"リポジトリ内に存在する近縁参照（判定材料ではない）: {discovered}. "
+    canonical_note = f"§36 が実在を確認した v0.3 本体 {EVOLUTION_THEORY_CANONICAL!r} "
+
+    def unresolved(why: str) -> InventoryItem:
+        return InventoryItem(
+            item_id="evolution_theory_reference",
+            state=UNRESOLVED,
+            detail=found_note + canonical_note + why,
+            blocking=True,
+        )
 
     if EVOLUTION_THEORY_CANONICAL_SHA256 is None:
-        return InventoryItem(
-            item_id="evolution_theory_reference",
-            state=UNRESOLVED,
-            detail=(
-                found_note
-                + f"§36 が実在を確認した v0.3 本体 {EVOLUTION_THEORY_CANONICAL!r} の"
-                "凍結 sha256 が未取得（RUN10_CONTRACT.yaml"
-                " vg_evolution_theory_ref_sha = PENDING）。pin が無い限り"
-                "「正しい実体が在る」ことは証明できないため解決にしない。"
-            ),
-            blocking=True,
+        return unresolved(
+            "の凍結 sha256 が未取得（RUN10_CONTRACT.yaml"
+            " vg_evolution_theory_ref_sha = PENDING）。pin が無い限り"
+            "「正しい実体が在る」ことは証明できないため解決にしない。"
         )
 
-    canonical = repo / EVOLUTION_THEORY_CANONICAL_PATH
-    if not canonical.is_file():
-        return InventoryItem(
-            item_id="evolution_theory_reference",
-            state=UNRESOLVED,
-            detail=(
-                found_note
-                + f"正典パス {EVOLUTION_THEORY_CANONICAL_PATH!r} に v0.3 本体が不在。"
-            ),
-            blocking=True,
+    if body_path is None:
+        return unresolved(
+            "は private storage 側にあり、照合対象が未指定"
+            "（--evolution-theory-path 未指定）。本文書はリポジトリに載せないため、"
+            "実体照合は実行時にのみ成立する。"
         )
 
-    actual = compute_file_sha256(canonical)
+    body = Path(body_path)
+    if not body.is_file():
+        return unresolved("の照合対象として指定されたパスにファイルが無い。")
+
+    if body.name != EVOLUTION_THEORY_CANONICAL:
+        return unresolved(
+            f"の照合対象として題名の異なるファイルが指定された（{body.name!r}）。"
+        )
+
+    actual = compute_file_sha256(body)
     if actual != EVOLUTION_THEORY_CANONICAL_SHA256:
-        return InventoryItem(
-            item_id="evolution_theory_reference",
-            state=UNRESOLVED,
-            detail=(
-                found_note
-                + f"正典パス {EVOLUTION_THEORY_CANONICAL_PATH!r} の実バイト sha256 が"
-                f"凍結値と一致しない（expected={EVOLUTION_THEORY_CANONICAL_SHA256}"
-                f" actual={actual}）。同名の別内容は来歴汚染である。"
-            ),
-            blocking=True,
+        return unresolved(
+            "の実バイト sha256 が凍結値と一致しない"
+            f"（expected={EVOLUTION_THEORY_CANONICAL_SHA256} actual={actual}）。"
+            "同名の別内容は来歴汚染である。"
         )
 
     return InventoryItem(
         item_id="evolution_theory_reference",
         state=PRESENT,
         detail=(
-            found_note
-            + f"正典 {EVOLUTION_THEORY_CANONICAL_PATH!r} の実バイト sha256 が"
-            "凍結値と一致（§29 手順 5 解決）。"
+            found_note + canonical_note
+            + "の実バイト sha256 が凍結値と一致（§29 手順 5 解決）。"
+            "本体は private storage 側にあり commit しない。"
         ),
         blocking=False,
     )
 
 
-def inventory_repository(repo: Path) -> List[InventoryItem]:
+def inventory_repository(
+    repo: Path, evolution_theory_path: Optional[Path] = None
+) -> List[InventoryItem]:
     """リポジトリ側の参照解決（§29 手順 2/5）。"""
     items = [
-        _check_evolution_theory(repo),
+        _check_evolution_theory(repo, evolution_theory_path),
         InventoryItem(
             item_id="meter_implementation",
             state=ABSENT,
@@ -484,13 +496,14 @@ def build_inventory(
     aquest_voicebank_root: Optional[Path] = None,
     repo: Optional[Path] = None,
     af01_replay: bool = False,
+    evolution_theory_path: Optional[Path] = None,
 ) -> Dict[str, object]:
     """R10-G2 inventory 文書を組み立てる。"""
     root = repo if repo is not None else _repo_root()
     items = (
         inventory_af01(af01_bundle_root, run_replay=af01_replay)
         + inventory_aquest(aquest_voicebank_root)
-        + inventory_repository(root)
+        + inventory_repository(root, evolution_theory_path)
     )
     blocking = [item for item in items if item.blocking]
     return {
@@ -523,6 +536,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="A0 = AquesTalk 由来 UTAU デフォルト音声のルート（private ストレージ）。",
     )
     parser.add_argument(
+        "--evolution-theory-path",
+        default=None,
+        help=(
+            "Evolution Theory v0.3 本体（private ストレージ）の実体パス。"
+            "本文書はリポジトリに載せないため、照合は実行時にのみ成立する。"
+            "指定したパス文字列は inventory.json に記録しない（§2.2 / §26）。"
+        ),
+    )
+    parser.add_argument(
         "--out",
         default=str(_THIS_DIR / "inventory.json"),
         help="inventory.json の書き出し先。",
@@ -537,6 +559,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             Path(args.aquest_voicebank_root) if args.aquest_voicebank_root else None
         ),
         af01_replay=args.af01_replay,
+        evolution_theory_path=(
+            Path(args.evolution_theory_path) if args.evolution_theory_path else None
+        ),
     )
     payload = canonical_json_bytes(inventory)
     # 既定の出力先は追跡中の正典 `pre_run/inventory.json` である。in-place の

@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（321 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（324 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -484,3 +484,12 @@ detail が「v0.3 本体はリポジトリ内に不在」と言い続ける自�
 （`vg_evolution_theory_ref_sha`）は未取得なので、pin を得るまでは正典が置かれても
 解決にしない — 「正しい実体が在る」ことを証明できないからである。名前一致だけで
 通すと同名の別内容で来歴が汚染される。
+
+**追補（User 裁定 2026-08-27）**: v0.3 本体はリポジトリに載せない。したがって
+照合対象は repo 内の固定パスではなく、実行時に `--evolution-theory-path` で渡す
+private storage 側の実体である（DESIGN_RUN10 本体に対する `verify_design_document()`
+と同じパターン）。**渡されたパス文字列は `inventory.json` に記録しない** —
+inventory は commit されるため、private ストレージの構成をそのまま公開することに
+なる（§2.2 / §26）。この裁定は AQUEST 由来資産（UTAU デフォルト音源は個人・非公開
+でのみ分析／抽出／合成が許諾される）に対する姿勢を、VG 側の設計文書へも保守的に
+適用したものである。
