@@ -1,0 +1,169 @@
+{
+  "schema": "run9-loss-evaluator-spec/1.0",
+  "channels": [
+    {
+      "name": "relative_f0",
+      "spec_13_3_name": "relative F0 contour",
+      "lesson_bundle_extracted_trait": "relative_F0",
+      "education_allowed_channel": "pitch_trajectory",
+      "residual_definition": "voiced フレームの lesson 対 render の残差差分の RMS（value_hz、voiced==true のみ、unvoiced はゼロ補完せず除外）",
+      "calibration_scale": {
+        "value": 28.68858178404701,
+        "sample_unit": "frame",
+        "n_samples": 160501,
+        "decision_needed_was": true,
+        "derivation": {
+          "formula": "population_std = numpy.std(values, ddof=0) over eligible=aligned 68 training songs, float64, no rounding",
+          "option_a_frame_pool": {
+            "sample_unit": "frame",
+            "n_samples": 160501,
+            "population_std": 28.68858178404701,
+            "mean": -0.9890442489423432,
+            "rationale": "バンドルの生データ粒度そのもの。voiced frame 1件 = 1標本。unvoiced frame(value_hz=null) はゼロ補完せずに除外。"
+          },
+          "option_b_mora_pool": {
+            "sample_unit": "mora",
+            "n_samples": 2746,
+            "population_std": 20.185403077101824,
+            "mean": -1.688564980473217,
+            "rationale": "duration_ratio/attack_timingと単位を揃え、mora内のframe値を平均してmora代表値1件を1標本とする。voiced frame 0件のmora(実測2件/2748件)はゼロ補完せず除外。",
+            "adopted": false
+          },
+          "fable_decision": "2026-08-27, option A (frame pool) adopted",
+          "decision_rationale": "scale の粒度 = 当該 channel の loss に入る原子残差標本の粒度。relative_f0 は lesson が frame 契約の contour を保持し loss も frame 単位比較のため frame プール（案A）を採用する — mora平均集約（案B）は lesson に存在しない新規導出統計を挟むため不採用。"
+        }
+      },
+      "weight": 0.2
+    },
+    {
+      "name": "duration_ratio",
+      "spec_13_3_name": "note/mora duration ratio",
+      "lesson_bundle_extracted_trait": "duration_ratio",
+      "education_allowed_channel": "phoneme_note_duration_relation",
+      "residual_definition": "mora単位の lesson 対 render の duration_ratio 残差の RMS",
+      "calibration_scale": {
+        "value": 0.26757779133213067,
+        "sample_unit": "mora",
+        "n_samples": 2748,
+        "decision_needed_was": false,
+        "derivation": {
+          "formula": "population_std = numpy.std(values, ddof=0) over eligible=aligned 68 training songs, float64, no rounding",
+          "rationale": "値がバンドル内で既にmora単位のスカラー（1 mora = 1 value）。集約前の生値そのものが1標本のため標本単位の設計判断は不要。",
+          "mean": 1.0266980782881285
+        }
+      },
+      "weight": 0.2
+    },
+    {
+      "name": "normalized_energy",
+      "spec_13_3_name": "phrase-normalized energy envelope",
+      "lesson_bundle_extracted_trait": "energy_envelope",
+      "education_allowed_channel": "dynamics_energy_trajectory",
+      "residual_definition": "numpy RMS per-phrase 正規化後の block(frame) 単位 lesson 対 render 残差の RMS",
+      "calibration_scale": {
+        "value": 0.22003129791359613,
+        "sample_unit": "frame",
+        "n_samples": 166053,
+        "decision_needed_was": true,
+        "derivation": {
+          "formula": "population_std = numpy.std(values, ddof=0) over eligible=aligned 68 training songs, float64, no rounding",
+          "option_a_frame_pool": {
+            "sample_unit": "frame (block)",
+            "n_samples": 166053,
+            "population_std": 0.22003129791359613,
+            "mean": 0.35856642997423976,
+            "rationale": "バンドルの生データ粒度そのもの。block 1件 = 1標本。欠損0件。"
+          },
+          "option_b_phrase_pool": {
+            "sample_unit": "phrase",
+            "n_samples": 201,
+            "population_std": 0.08926916409743947,
+            "mean": 0.38747662785282244,
+            "rationale": "phrase_end_timingと単位を揃え、phrase内のblock値を平均してphrase代表値1件を1標本とする。zero-block phraseは実測0件。",
+            "adopted": false
+          },
+          "fable_decision": "2026-08-27, option A (frame pool) adopted",
+          "decision_rationale": "scale の粒度 = 当該 channel の loss に入る原子残差標本の粒度。normalized_energy は lesson が frame 契約の contour を保持し loss も frame 単位比較のため frame プール（案A）を採用する — phrase平均集約（案B）は lesson に存在しない新規導出統計を挟むため不採用。"
+        }
+      },
+      "weight": 0.2
+    },
+    {
+      "name": "attack_timing",
+      "spec_13_3_name": "attack timing",
+      "lesson_bundle_extracted_trait": "onset_offset.attack_timing",
+      "education_allowed_channel": "timing",
+      "residual_definition": "mora単位の lesson 対 render の attack timing (WORLD harvest FP=5.0 導出、.lab相当のnote境界はrender入力scoreから決定論導出) 残差の RMS",
+      "calibration_scale": {
+        "value": 0.046215471651767655,
+        "sample_unit": "mora",
+        "n_samples": 2748,
+        "decision_needed_was": false,
+        "derivation": {
+          "formula": "population_std = numpy.std(values, ddof=0) over eligible=aligned 68 training songs, float64, no rounding",
+          "rationale": "値がバンドル内で既にmora単位のスカラー。集約前の生値そのものが1標本のため標本単位の設計判断は不要。",
+          "mean": 0.007203579777563855
+        }
+      },
+      "weight": 0.2
+    },
+    {
+      "name": "phrase_end_timing",
+      "spec_13_3_name": "phrase-end timing",
+      "lesson_bundle_extracted_trait": "onset_offset.phrase_end_timing",
+      "education_allowed_channel": "phrase_end_control",
+      "residual_definition": "phrase単位の lesson 対 render の phrase-end timing 残差の RMS",
+      "calibration_scale": {
+        "value": 0.04277885307503042,
+        "sample_unit": "phrase",
+        "n_samples": 201,
+        "decision_needed_was": false,
+        "derivation": {
+          "formula": "population_std = numpy.std(values, ddof=0) over eligible=aligned 68 training songs, float64, no rounding",
+          "rationale": "値がバンドル内で既にphrase単位のスカラー。集約前の生値そのものが1標本のため標本単位の設計判断は不要。",
+          "mean": 0.06490550525415459
+        }
+      },
+      "weight": 0.2
+    }
+  ],
+  "channel_vocabulary_map_cross_check": {
+    "note": "各 channel の spec_13_3_name/lesson_bundle_extracted_trait/education_allowed_channel は run9_schema.TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP（HARNESS3B 正本）の対応する行と一致することを load_pinned_loss_evaluator_spec_manifest() が cross-check する（attack_timing/phrase_end_timing はいずれも extracted_trait='onset_offset' の親キーを共有し、lesson_bundle_extracted_trait 側でのみ .attack_timing/.phrase_end_timing のサブフィールドを明示する）"
+  },
+  "residual_extraction_spec": {
+    "input": "render 出力（gate_synth WAV、44100Hz native — ヘッダ実測値を本節に記載し fail-closed 検査する。sample_rate_hz: 44100, encoding: PCM）",
+    "f0_method": "WORLD harvest, frame_period_ms=5.0",
+    "note_boundary_source": ".lab 相当の note 境界は render 入力 score から決定論導出（HARNESS-3b spec v1.1 と同一手法）",
+    "energy_normalization": "numpy RMS per-phrase 正規化",
+    "compatibility": "本抽出式は HARNESS-3b spec v1.1（HARNESS3B_EXTRACTOR_SPEC.md、spec_sha256参照）と同一の式を render 出力へ適用したものであり、各 channel の残差比較式は channel ごとに v1.1 の残差定義と対に定義する"
+  },
+  "aggregate_scope": "candidate_selection_search_objective_only",
+  "final_scientific_judgment_note": "equal-weight aggregateはcandidate selection用search objectiveに限定し、最終科学判定は5 channel個別値を維持する（裁定 §2 逐語）",
+  "missing_policy": {
+    "zero_fill_prohibited": true,
+    "eligible_count_required_per_channel": true,
+    "not_measurable_definition": "eligible 0 の channel は aggregate から除外し残 channel の等重み再正規化はしない（重み変更 = 意味論変更）。eligible 0 が生じた trial は当該 channel を NOT_MEASURABLE と記録し、search objective は測定可能 channel の 1/5 重み和（欠測分は加点も減点もしない）として定義を凍結する。",
+    "count_mismatch_not_extracted_handling": "count_mismatch / not_extracted はゼロ補完せず、channel ごとの eligible 件数を trial 記録に必須収載する"
+  },
+  "actor_boundary": {
+    "practice": "PRACTICE 枝はこの evaluator を PJS raw audio + founder 自己 render にのみ適用する。education lesson / precomputed teacher feature の入力を禁止する。",
+    "education": "EDUCATION 枝は凍結 lesson を比較対象に使用する。"
+  },
+  "adjudication_basis": {
+    "sha256": "18b467dd0340aeb3e05b26a14bfdb986c502e39a222668ccddd1f396dab1aa31",
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt",
+    "summary": "User 裁定 2026-08-27（Learning Recipe 残5キー）§2 evaluator: 5 mandatory channelを全て測定、training splitのみから決定論的calibration scaleを作り正規化後の固定重みを各1/5とする。count_mismatch/not_extractedをゼロ補完せず、eligible件数とmissing policyを記録する。equal-weight aggregateはcandidate selection用search objectiveに限定し、最終科学判定は5 channel個別値を維持する。PRACTICEはraw audioからFounder自身が特徴・差分を抽出し、Education Lessonまたはprecomputed teacher featureをPRACTICE検索へ入力してはならない。EDUCATIONでは凍結済みTechnique Lessonを入力として利用する。"
+  },
+  "provenance": {
+    "detail_record": {
+      "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
+      "sha256": "023c3e1d42e2ff5f2ab02712e1ab519b25e8f35c6d2e767275ccb3674cacb102",
+      "summary": "W1b Task3: training バンドル（sha256照合供給）68曲の5 channel母標準偏差実測。relative_f0/normalized_energyの標本粒度は両案（frame/mora,phrase）を実測しFable判定（frame採用）を記録。独立2プロセス実行で完全一致（決定論確認済み）。"
+    },
+    "training_bundle_input": {
+      "path": "harness_work/h3b/run1/training_bundle.json (session workdir, repo非収載)",
+      "sha256": "6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da",
+      "matches_education_technique_lesson_manifest_training_sha": true
+    }
+  }
+}

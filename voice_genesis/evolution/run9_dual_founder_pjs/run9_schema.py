@@ -1421,6 +1421,47 @@ EDUCATION_MANIFEST_PATH = _THIS_DIR / "inputs" / "education_technique_lesson_man
 PJS_CONSUMED_INPUTS_MANIFEST_PATH = _THIS_DIR / "inputs" / "pjs_consumed_inputs_sha256.json"
 
 # ---------------------------------------------------------------------------
+# RUN9-L0-HARNESS-3c: learning_recipe manifest 残5キー（search_space/
+# evaluator/candidate_generation/compute_budget/data_binding）を実体化する
+# 5 manifest（User 裁定「RUN9 User裁定 — Learning Recipe 残5キー」§1-§5）。
+# §6 PIN 条件: 本5 manifest が実体化・検証・SHA凍結されるまで
+# `learning_recipe_sha` は PENDING のまま。
+# ---------------------------------------------------------------------------
+
+SCHEMA_SCORE_AXIS_CATALOG = "run9-score-axis-catalog/1.0"
+SCHEMA_LOSS_EVALUATOR_SPEC = "run9-loss-evaluator-spec/1.0"
+SCHEMA_CANDIDATE_GENERATION_SPEC = "run9-candidate-generation-spec/1.0"
+SCHEMA_COMPUTE_BUDGET_MANIFEST = "run9-compute-budget/1.0"
+SCHEMA_LEARNING_DATA_BINDING_MANIFEST = "run9-learning-data-binding/1.0"
+
+SCORE_AXIS_CATALOG_PATH = _THIS_DIR / "inputs" / "score_axis_catalog_v1.json"
+LOSS_EVALUATOR_SPEC_PATH = _THIS_DIR / "inputs" / "loss_evaluator_spec_v1.json"
+CANDIDATE_GENERATION_SPEC_PATH = _THIS_DIR / "inputs" / "candidate_generation_spec_v1.json"
+COMPUTE_BUDGET_MANIFEST_PATH = _THIS_DIR / "inputs" / "compute_budget_manifest_v1.json"
+LEARNING_DATA_BINDING_MANIFEST_PATH = (
+    _THIS_DIR / "inputs" / "learning_data_binding_manifest_v1.json"
+)
+H3C_ADJUDICATION_PATH = _THIS_DIR / "USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt"
+H3C_DETAIL_RECORD_PATH = _THIS_DIR / "HARNESS3C_AXIS_FEASIBILITY_RECORD.md"
+
+# loss_evaluator_spec_v1 の calibration_scale の frozen 正本（W1b Task3実測、
+# HARNESS3C_AXIS_FEASIBILITY_RECORD.md 第2部 Task3。training 68曲・ddof=0・
+# float64・丸めなし全桁）。`validate_loss_evaluator_spec_manifest()` は
+# manifest 内 channel ごとの calibration_scale.value がこの定数と厳密一致
+# することを強制する——「loss spec の calibration 値と channel 対応表の
+# 定数一致」（TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP と同じ「schema 定数を
+# 正本とし manifest 側の値をそれへ照合する」ファミリー掃討パターン）。
+# relative_f0/normalized_energy は frame粒度（案A）を Fable が採用した値
+# （案Bの mora/phrase粒度値は manifest 側 derivation 欄に参考併記のみ）。
+LOSS_EVALUATOR_CALIBRATION_SCALE_V1: Dict[str, float] = {
+    "relative_f0": 28.68858178404701,
+    "duration_ratio": 0.26757779133213067,
+    "normalized_energy": 0.22003129791359613,
+    "attack_timing": 0.046215471651767655,
+    "phrase_end_timing": 0.04277885307503042,
+}
+
+# ---------------------------------------------------------------------------
 # RUN9-L0-HARNESS-3b: technique lesson bundle（`education_lesson_builder.py`
 # が生成する training/validation バンドルの schema 識別子）+ 三系統語彙
 # 対応表（HARNESS3B_EXTRACTOR_SPEC.md §1 の凍結対象表を機械可読へ写した
@@ -7140,6 +7181,19 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     # 完全被覆で閉じる（`validate_pjs_consumed_inputs_manifest()`/
     # `load_pinned_consumed_inputs_manifest()` 参照）。
     "pjs_consumed_inputs_manifest_sha",
+    # RUN9-L0-HARNESS-3c で追加（User 裁定「RUN9 User裁定 — Learning
+    # Recipe 残5キー」§1-§6）: learning_recipe manifest 残5キーを実体化する
+    # 5 manifest 自体の実バイト sha256（design_doc_sha256 と同一のファイル
+    # 実バイト規約）。§6 PIN 条件どおり、この5欄が全て PINNED になるまで
+    # `learning_recipe_sha` は PENDING のまま——本5欄自体は本 PR で内容が
+    # 確定するため PINNED（`validate_score_axis_catalog_manifest()` 等 +
+    # `load_pinned_score_axis_catalog_manifest()` 等が全構造・cross-check
+    # を fail-closed で強制する）。
+    "score_axis_catalog_sha",
+    "loss_evaluator_spec_sha",
+    "candidate_generation_spec_sha",
+    "compute_budget_manifest_sha",
+    "learning_data_binding_manifest_sha",
     # rev 0.3 新設（User 外部レビュー PR #317 P1-1 採用）: 枝別書込境界
     # policy manifest（`inputs/branch_write_policy.json`）自体の実
     # sha256。本 PR でファイル内容を確定するため PINNED（本欄自体は
@@ -17828,4 +17882,844 @@ def load_pinned_consumed_inputs_manifest(
             f"load_pinned_consumed_inputs_manifest(): JSON parse に失敗した: {exc}"
         ) from exc
     validate_pjs_consumed_inputs_manifest(data)
+    return data
+
+
+# =============================================================================
+# RUN9-L0-HARNESS-3c: 5 manifest（score_axis_catalog_v1 / loss_evaluator_
+# spec_v1 / candidate_generation_spec_v1 / compute_budget_manifest_v1 /
+# learning_data_binding_manifest_v1）の validate_*()/load_pinned_*()。
+# 全5関数とも他の `load_pinned_*` 系と同型の3層防御
+# （ディスク正典再読込アンカー・in-process contract 改変検出・read-once
+# 実バイト sha256 照合）+ 本節共通の adjudication/detail-record cross-check
+# + manifest 別の追加 cross-check を持つ。
+# =============================================================================
+
+_H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"schema", "adjudication_basis", "provenance"}
+)
+
+
+def _h3c_cross_check_adjudication_and_detail_record(
+    data: Mapping[str, Any], *, manifest_kind: str
+) -> None:
+    """5 manifest 共通の cross-check（`load_pinned_education_lesson_
+    manifest()` cross-check (a) と同型）: `adjudication_basis.source_file`
+    （`USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt`）と
+    `provenance.detail_record.repo_relative_path`
+    （`HARNESS3C_AXIS_FEASIBILITY_RECORD.md`）の実バイト sha256 が、それぞれ
+    manifest 内の宣言値と一致することを fail-closed で強制する（裁定文書・
+    実測記録の改変を拒否する）。
+    """
+    adjudication_basis = data["adjudication_basis"]
+    adjudication_resolved = _resolve_repo_contained_path(
+        adjudication_basis["source_file"],
+        repo_root=_EDUCATION_LESSON_REPO_ROOT,
+        field="adjudication_basis.source_file",
+        context=manifest_kind,
+    )
+    if not adjudication_resolved.is_file():
+        raise Run9ValidationError(
+            f"{manifest_kind}: cross-check source {adjudication_resolved} "
+            "(adjudication_basis.source_file) does not exist"
+        )
+    adjudication_actual = hashlib.sha256(adjudication_resolved.read_bytes()).hexdigest()
+    adjudication_pinned = adjudication_basis["sha256"]
+    if adjudication_actual != adjudication_pinned:
+        raise Run9ValidationError(
+            f"{manifest_kind}: {adjudication_resolved} の実バイト sha256 ({adjudication_actual!r}) "
+            f"が adjudication_basis.sha256 pin 値 ({adjudication_pinned!r}) と一致しない — 裁定文書の"
+            "改変を fail-closed で拒否する"
+        )
+
+    detail_record = data["provenance"]["detail_record"]
+    detail_resolved = _resolve_repo_contained_path(
+        detail_record["repo_relative_path"],
+        repo_root=_EDUCATION_LESSON_REPO_ROOT,
+        field="provenance.detail_record.repo_relative_path",
+        context=manifest_kind,
+    )
+    if not detail_resolved.is_file():
+        raise Run9ValidationError(
+            f"{manifest_kind}: cross-check source {detail_resolved} "
+            "(provenance.detail_record.repo_relative_path) does not exist"
+        )
+    detail_actual = hashlib.sha256(detail_resolved.read_bytes()).hexdigest()
+    detail_pinned = detail_record["sha256"]
+    if detail_actual != detail_pinned:
+        raise Run9ValidationError(
+            f"{manifest_kind}: {detail_resolved} の実バイト sha256 ({detail_actual!r}) が "
+            f"provenance.detail_record.sha256 pin 値 ({detail_pinned!r}) と一致しない — W1/W1b 実測"
+            "記録の改変を fail-closed で拒否する"
+        )
+
+
+def _h3c_load_pinned_common(
+    *,
+    contract: "Run9RunContract",
+    pin_name: str,
+    manifest_path: Optional[Path],
+    contract_path: Optional[Path],
+    default_path: Path,
+    fn_label: str,
+) -> Dict[str, Any]:
+    """5 manifest 共通の3層防御（ディスク正典再読込アンカー・in-process
+    contract 改変検出・read-once 実バイト sha256 照合・JSON parse）を行い、
+    parse 済み dict を返す（schema 別 validate/cross-check は呼び出し側の
+    責務）。`load_pinned_practice_split_manifest()` 等と同一の防御構造を
+    5関数で重複させないための共通実装。
+    """
+    effective_contract_path = contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    disk_field = disk_contract.pin_field(pin_name)
+
+    revalidated = load_run9_contract(contract.raw)
+    passed_field = revalidated.pin_field(pin_name)
+    if passed_field != disk_field:
+        raise Run9ValidationError(
+            f"{fn_label}(): the passed-in contract's {pin_name} pin ({passed_field!r}) diverges "
+            f"from the canonical on-disk RUN9_CONTRACT.yaml pin ({disk_field!r}) at "
+            f"{effective_contract_path} — treated as tampering evidence and rejected fail-closed"
+        )
+
+    field = disk_field
+    if not _is_field_pinned(field):
+        raise Run9ValidationError(
+            f"{fn_label}(): {pin_name} is not PINNED (status={field.get('status')!r}) — refusing "
+            "to consume an unpinned manifest"
+        )
+    pinned_sha = field["value"]
+    path = manifest_path if manifest_path is not None else default_path
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"{fn_label}(): pinned manifest source {path} does not exist — this function is the "
+            "sole canonical access path (direct json.load() elsewhere is a contract violation); a "
+            "missing file is fail-closed"
+        )
+    # read-once: digest と parse を同一バッファから導出する（TOCTOU 対策）。
+    buf = path.read_bytes()
+    actual_sha = hashlib.sha256(buf).hexdigest()
+    if actual_sha != pinned_sha:
+        raise Run9ValidationError(
+            f"{fn_label}(): {path} の実バイト sha256 ({actual_sha!r}) が RUN9_CONTRACT.yaml "
+            f"{pin_name} の pin 値 ({pinned_sha!r}) と一致しない — stale・改ざんされた manifest は "
+            "fail-closed で拒否する"
+        )
+    try:
+        data = _loads_strict_json(buf.decode("utf-8"))
+    except Run9ValidationError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(f"{fn_label}(): JSON parse に失敗した: {exc}") from exc
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 1. score_axis_catalog_v1
+# ---------------------------------------------------------------------------
+
+_SCORE_AXIS_CATALOG_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = (
+    _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS
+    | frozenset({"composition_invariants", "axes", "transformer_binding"})
+)
+_SCORE_AXIS_IDS: FrozenSet[str] = frozenset({"AX-P1", "AX-D1", "phrase_boundary_control"})
+
+
+def validate_score_axis_catalog_manifest(data: Mapping[str, Any]) -> None:
+    """`score_axis_catalog_v1.json` の構造・値整形式を検証する（裁定
+    「RUN9 User裁定 — Learning Recipe 残5キー」§1: Compositionを変更しない
+    score変換層3軸系への限定）。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"score axis catalog manifest must be an object, got {type(data).__name__}")
+    schema = data.get("schema")
+    if schema != SCHEMA_SCORE_AXIS_CATALOG:
+        raise Run9ValidationError(
+            f"score axis catalog manifest schema must be exactly {SCHEMA_SCORE_AXIS_CATALOG!r}, "
+            f"got {schema!r}"
+        )
+    missing = _SCORE_AXIS_CATALOG_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"score axis catalog manifest missing required key(s): {sorted(missing)}")
+    axes = data["axes"]
+    if not isinstance(axes, dict) or set(axes.keys()) != _SCORE_AXIS_IDS:
+        raise Run9ValidationError(
+            f"score axis catalog manifest.axes must have exactly keys {sorted(_SCORE_AXIS_IDS)}, "
+            f"got {sorted(axes.keys()) if isinstance(axes, dict) else type(axes).__name__}"
+        )
+
+    ax_p1 = axes["AX-P1"]
+    if ax_p1.get("mutable_fields") != ["midi"]:
+        raise Run9ValidationError(
+            f"score axis catalog manifest.axes.AX-P1.mutable_fields must be exactly ['midi'], got "
+            f"{ax_p1.get('mutable_fields')!r}"
+        )
+    lo, hi = ax_p1.get("range_semitones", [None, None])
+    if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)) or not (lo < hi):
+        raise Run9ValidationError(
+            f"score axis catalog manifest.axes.AX-P1.range_semitones must be a [lo, hi] pair with "
+            f"lo < hi, got {ax_p1.get('range_semitones')!r}"
+        )
+    step_p1 = ax_p1.get("quantization_step_semitones")
+    if not isinstance(step_p1, (int, float)) or step_p1 <= 0:
+        raise Run9ValidationError(
+            "score axis catalog manifest.axes.AX-P1.quantization_step_semitones must be a "
+            f"positive number, got {step_p1!r}"
+        )
+
+    ax_d1 = axes["AX-D1"]
+    if ax_d1.get("mutable_fields") != ["duration_beats"]:
+        raise Run9ValidationError(
+            "score axis catalog manifest.axes.AX-D1.mutable_fields must be exactly "
+            f"['duration_beats'], got {ax_d1.get('mutable_fields')!r}"
+        )
+    step_d1 = ax_d1.get("quantization_step_beats")
+    if not isinstance(step_d1, (int, float)) or step_d1 <= 0:
+        raise Run9ValidationError(
+            "score axis catalog manifest.axes.AX-D1.quantization_step_beats must be a positive "
+            f"number, got {step_d1!r}"
+        )
+    min_dur = ax_d1.get("min_duration_beats")
+    if not isinstance(min_dur, (int, float)) or min_dur <= 0:
+        raise Run9ValidationError(
+            f"score axis catalog manifest.axes.AX-D1.min_duration_beats must be a positive number, "
+            f"got {min_dur!r}"
+        )
+
+    family_c = axes["phrase_boundary_control"]
+    if family_c.get("status") != "NOT_EXPRESSIBLE_ON_CURRENT_WIRING":
+        raise Run9ValidationError(
+            "score axis catalog manifest.axes.phrase_boundary_control.status must be exactly "
+            f"'NOT_EXPRESSIBLE_ON_CURRENT_WIRING', got {family_c.get('status')!r} — W1 実測が "
+            "gate_synth._NoteWithMs の配線ギャップを確認した以上、族 c を実効な軸として宣言しては "
+            "ならない"
+        )
+    if family_c.get("axes") != []:
+        raise Run9ValidationError(
+            "score axis catalog manifest.axes.phrase_boundary_control.axes must be an empty list "
+            f"(NOT_EXPRESSIBLE_ON_CURRENT_WIRING declares no expressible axis), got "
+            f"{family_c.get('axes')!r}"
+        )
+
+
+def load_pinned_score_axis_catalog_manifest(
+    contract: "Run9RunContract",
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`score_axis_catalog_sha` pin の**唯一の正規消費経路**（他の
+    `load_pinned_*` 系と同型の3層防御 + read-once 契約）。
+
+    cross-check: (a) 裁定 txt / detail record の実バイト sha256 照合
+    （`_h3c_cross_check_adjudication_and_detail_record()`）。(b) catalog↔
+    変換器の整合: `score_axis_transform.py`（本 harness の score 変換器）へ
+    本 manifest の catalog dict を実際に渡し、range/quantization の境界値が
+    受理され境界外値が `CatalogRejected` で拒否されることを実行時に確認する
+    ——静的な shape 検証だけでなく、凍結した catalog 値が実際に変換器を
+    通して機能することの実測的な裏付けを取る。`score_axis_transform` は
+    `run9_schema` に依存しない一方向消費のため、ここでの import は
+    モジュールレベルではなく本関数内のローカル import に留める（本モジュール
+    冒頭の「他の run9 sibling モジュールを import しない」方針を、恒常的な
+    モジュールレベル依存としては崩さない）。
+    """
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="score_axis_catalog_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=SCORE_AXIS_CATALOG_PATH,
+        fn_label="load_pinned_score_axis_catalog_manifest",
+    )
+    validate_score_axis_catalog_manifest(data)
+    _h3c_cross_check_adjudication_and_detail_record(
+        data, manifest_kind="load_pinned_score_axis_catalog_manifest"
+    )
+
+    import score_axis_transform as _sat  # ローカル import（docstring 参照）
+
+    baseline_notes = [
+        {"kana": "さ", "midi": 64.0, "duration_beats": 1.0, "phrase_index": 0, "is_phrase_final": False},
+        {"kana": "く", "midi": 64.0, "duration_beats": 1.0, "phrase_index": 0, "is_phrase_final": False},
+        {"kana": "ら", "midi": 65.0, "duration_beats": 2.0, "phrase_index": 0, "is_phrase_final": True},
+    ]
+    lo, hi = data["axes"]["AX-P1"]["range_semitones"]
+    step_p1 = data["axes"]["AX-P1"]["quantization_step_semitones"]
+    try:
+        _sat.apply_ax_p1(baseline_notes, note_index=2, offset_semitones=lo, catalog=data)
+        _sat.apply_ax_p1(baseline_notes, note_index=2, offset_semitones=hi, catalog=data)
+    except _sat.ScoreAxisTransformError as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            "load_pinned_score_axis_catalog_manifest(): catalog↔変換器整合チェック失敗 — "
+            f"AX-P1 の range 境界値 [{lo}, {hi}] が score_axis_transform.apply_ax_p1() で受理され"
+            f"なかった: {exc}"
+        ) from exc
+    try:
+        _sat.apply_ax_p1(baseline_notes, note_index=2, offset_semitones=hi + step_p1, catalog=data)
+    except _sat.CatalogRejected:
+        pass
+    else:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            "load_pinned_score_axis_catalog_manifest(): catalog↔変換器整合チェック失敗 — AX-P1 の "
+            f"range 外オフセット {hi + step_p1} が score_axis_transform.apply_ax_p1() に拒否されな"
+            "かった"
+        )
+
+    step_d1 = data["axes"]["AX-D1"]["quantization_step_beats"]
+    min_dur = data["axes"]["AX-D1"]["min_duration_beats"]
+    try:
+        _sat.apply_ax_d1(
+            baseline_notes, note_indices=[0, 1], deltas_beats=[step_d1, -step_d1], catalog=data
+        )
+    except _sat.ScoreAxisTransformError as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            "load_pinned_score_axis_catalog_manifest(): catalog↔変換器整合チェック失敗 — AX-D1 の "
+            f"quantization_step_beats={step_d1} 相当の delta が score_axis_transform.apply_ax_d1() "
+            f"で受理されなかった: {exc}"
+        ) from exc
+    boundary_delta = min_dur - baseline_notes[0]["duration_beats"]
+    try:
+        _sat.apply_ax_d1(
+            baseline_notes, note_indices=[0, 1], deltas_beats=[boundary_delta, -boundary_delta],
+            catalog=data,
+        )
+    except _sat.ScoreAxisTransformError as exc:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            "load_pinned_score_axis_catalog_manifest(): catalog↔変換器整合チェック失敗 — AX-D1 の "
+            f"min_duration_beats={min_dur} ちょうど境界の delta が score_axis_transform.apply_ax_d1"
+            f"() で受理されなかった: {exc}"
+        ) from exc
+    over_boundary_delta = boundary_delta - step_d1
+    try:
+        _sat.apply_ax_d1(
+            baseline_notes, note_indices=[0, 1], deltas_beats=[over_boundary_delta, -over_boundary_delta],
+            catalog=data,
+        )
+    except _sat.CatalogRejected:
+        pass
+    else:  # pragma: no cover - defensive fail-closed
+        raise Run9ValidationError(
+            "load_pinned_score_axis_catalog_manifest(): catalog↔変換器整合チェック失敗 — AX-D1 の "
+            f"min_duration_beats={min_dur} を下回る delta が score_axis_transform.apply_ax_d1() に"
+            "拒否されなかった"
+        )
+
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 2. loss_evaluator_spec_v1
+# ---------------------------------------------------------------------------
+
+_LOSS_EVALUATOR_CHANNEL_NAMES: FrozenSet[str] = frozenset(LOSS_EVALUATOR_CALIBRATION_SCALE_V1.keys())
+_LOSS_EVALUATOR_SPEC_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS | frozenset(
+    {"channels", "residual_extraction_spec", "aggregate_scope", "missing_policy", "actor_boundary"}
+)
+
+
+def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
+    """`loss_evaluator_spec_v1.json` の構造・値整形式を検証する（裁定 §2:
+    5 mandatory channel・training-only calibration・aggregate は
+    candidate_selection 限定・missing policy 非ゼロ補完・actor 境界）。
+
+    cross-check: (a) 5 channel の name 集合が
+    `LOSS_EVALUATOR_CALIBRATION_SCALE_V1` の key 集合と厳密一致する。(b) 各
+    channel の `calibration_scale.value` が `LOSS_EVALUATOR_CALIBRATION_
+    SCALE_V1[name]` と厳密一致する（「loss spec の calibration 値と channel
+    対応表の定数一致」）。(c) 各 channel の
+    `spec_13_3_name`/`lesson_bundle_extracted_trait`/`education_allowed_
+    channel` が `TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP` の対応行と一致
+    する。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"loss evaluator spec manifest must be an object, got {type(data).__name__}")
+    schema = data.get("schema")
+    if schema != SCHEMA_LOSS_EVALUATOR_SPEC:
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest schema must be exactly {SCHEMA_LOSS_EVALUATOR_SPEC!r}, "
+            f"got {schema!r}"
+        )
+    missing = _LOSS_EVALUATOR_SPEC_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"loss evaluator spec manifest missing required key(s): {sorted(missing)}")
+    channels = data["channels"]
+    if not isinstance(channels, list) or len(channels) != 5:
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest.channels must be a list of exactly 5 entries, got "
+            f"{len(channels) if isinstance(channels, list) else type(channels).__name__}"
+        )
+    names = {c.get("name") for c in channels}
+    if names != _LOSS_EVALUATOR_CHANNEL_NAMES:
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest.channels names must be exactly "
+            f"{sorted(_LOSS_EVALUATOR_CHANNEL_NAMES)}, got {sorted(n for n in names if n)}"
+        )
+    vocab_by_physical: Dict[str, Mapping[str, str]] = {
+        row["physical_channel"]: row for row in TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP
+    }
+    total_weight = 0.0
+    for channel in channels:
+        name = channel["name"]
+        weight = channel.get("weight")
+        if weight != 0.2:
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].weight must be exactly 0.2 "
+                f"(1/5, 裁定 §2「正規化後の固定重みを各1/5とする」), got {weight!r}"
+            )
+        total_weight += weight
+        calibration = channel.get("calibration_scale")
+        if not isinstance(calibration, dict):
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].calibration_scale must be "
+                f"an object, got {type(calibration).__name__}"
+            )
+        value = calibration.get("value")
+        expected_value = LOSS_EVALUATOR_CALIBRATION_SCALE_V1[name]
+        if value != expected_value:
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].calibration_scale.value "
+                f"({value!r}) diverges from the pinned schema constant "
+                f"LOSS_EVALUATOR_CALIBRATION_SCALE_V1[{name!r}] ({expected_value!r}) — calibration "
+                "の改変・ドリフトを fail-closed で拒否する"
+            )
+        spec_13_3_name = channel.get("spec_13_3_name")
+        vocab_row = vocab_by_physical.get(spec_13_3_name)
+        if vocab_row is None:
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].spec_13_3_name "
+                f"({spec_13_3_name!r}) does not match any TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP "
+                "physical_channel row"
+            )
+        education_allowed = channel.get("education_allowed_channel")
+        if education_allowed != vocab_row["education_allowed_channel"]:
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].education_allowed_channel "
+                f"({education_allowed!r}) diverges from TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP "
+                f"({vocab_row['education_allowed_channel']!r})"
+            )
+        lesson_trait = channel.get("lesson_bundle_extracted_trait")
+        vocab_trait = vocab_row["extracted_trait"]
+        if not (isinstance(lesson_trait, str) and (lesson_trait == vocab_trait or lesson_trait.startswith(vocab_trait + "."))):
+            raise Run9ValidationError(
+                f"loss evaluator spec manifest.channels[name={name!r}].lesson_bundle_extracted_"
+                f"trait ({lesson_trait!r}) does not match or extend TECHNIQUE_LESSON_CHANNEL_"
+                f"VOCABULARY_MAP extracted_trait ({vocab_trait!r})"
+            )
+    if abs(total_weight - 1.0) > 1e-9:
+        raise Run9ValidationError(
+            f"loss evaluator spec manifest.channels weights must sum to 1.0, got {total_weight!r}"
+        )
+    if data["aggregate_scope"] != "candidate_selection_search_objective_only":
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.aggregate_scope must be exactly "
+            f"'candidate_selection_search_objective_only', got {data['aggregate_scope']!r}"
+        )
+    missing_policy = data["missing_policy"]
+    if missing_policy.get("zero_fill_prohibited") is not True:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.missing_policy.zero_fill_prohibited must be exactly True "
+            "(裁定 §2「count_mismatch / not_extractedをゼロ補完せず」)"
+        )
+    if missing_policy.get("eligible_count_required_per_channel") is not True:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.missing_policy.eligible_count_required_per_channel must "
+            "be exactly True"
+        )
+
+
+def load_pinned_loss_evaluator_spec_manifest(
+    contract: "Run9RunContract",
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`loss_evaluator_spec_sha` pin の**唯一の正規消費経路**（他の
+    `load_pinned_*` 系と同型の3層防御 + read-once 契約 + 裁定/detail-record
+    cross-check）。"""
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="loss_evaluator_spec_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=LOSS_EVALUATOR_SPEC_PATH,
+        fn_label="load_pinned_loss_evaluator_spec_manifest",
+    )
+    validate_loss_evaluator_spec_manifest(data)
+    _h3c_cross_check_adjudication_and_detail_record(
+        data, manifest_kind="load_pinned_loss_evaluator_spec_manifest"
+    )
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 3. candidate_generation_spec_v1
+# ---------------------------------------------------------------------------
+
+_CANDIDATE_GENERATION_SPEC_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS | frozenset(
+    {"seed", "structure", "proposal", "selection", "boundary_handling", "prohibited", "practice_actor_binding"}
+)
+_CANDIDATE_GENERATION_PROHIBITED_REQUIRED: FrozenSet[str] = frozenset(
+    {"reseed", "予算追加", "結果を見た range 拡張", "random fallback"}
+)
+
+
+def validate_candidate_generation_spec_manifest(data: Mapping[str, Any]) -> None:
+    """`candidate_generation_spec_v1.json` の構造・値整形式を検証する
+    （裁定 §3: seed 909002・32 trials×4 candidates=128 units/Founder/arm・
+    reseed/予算追加/range拡張/random fallback 禁止）。
+
+    cross-check: `seed == run9_schema.LEARNING_SEED (909002)`、
+    `structure.trial_count * structure.candidates_per_trial ==
+    structure.units_per_founder_per_arm`、`units_per_founder_per_arm ==
+    LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET (128)`、`trial_count ==
+    LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT (32)`、`total_units ==
+    units_per_founder_per_arm * founders * arms == 512`。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"candidate generation spec manifest must be an object, got {type(data).__name__}"
+        )
+    schema = data.get("schema")
+    if schema != SCHEMA_CANDIDATE_GENERATION_SPEC:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest schema must be exactly "
+            f"{SCHEMA_CANDIDATE_GENERATION_SPEC!r}, got {schema!r}"
+        )
+    missing = _CANDIDATE_GENERATION_SPEC_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest missing required key(s): {sorted(missing)}"
+        )
+    seed = data["seed"]
+    if not isinstance(seed, int) or isinstance(seed, bool) or seed != LEARNING_SEED:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.seed must be the exact int {LEARNING_SEED!r}, "
+            f"got {seed!r}"
+        )
+    structure = data["structure"]
+    trial_count = structure.get("trial_count")
+    candidates_per_trial = structure.get("candidates_per_trial")
+    units_per_founder_per_arm = structure.get("units_per_founder_per_arm")
+    founders = structure.get("founders")
+    arms = structure.get("arms")
+    total_units = structure.get("total_units")
+    if trial_count != LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure.trial_count must equal "
+            f"LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT ({LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT!r}), "
+            f"got {trial_count!r}"
+        )
+    if not isinstance(candidates_per_trial, int) or candidates_per_trial != 4:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure.candidates_per_trial must be exactly 4, "
+            f"got {candidates_per_trial!r}"
+        )
+    if trial_count * candidates_per_trial != units_per_founder_per_arm:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure: trial_count * candidates_per_trial "
+            f"({trial_count * candidates_per_trial!r}) != units_per_founder_per_arm "
+            f"({units_per_founder_per_arm!r})"
+        )
+    if units_per_founder_per_arm != LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure.units_per_founder_per_arm must equal "
+            f"LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET "
+            f"({LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET!r}), got {units_per_founder_per_arm!r}"
+        )
+    if founders != 2 or arms != 2:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure.founders/arms must both be exactly 2, "
+            f"got founders={founders!r} arms={arms!r}"
+        )
+    if total_units != units_per_founder_per_arm * founders * arms:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.structure.total_units must equal "
+            f"units_per_founder_per_arm*founders*arms ({units_per_founder_per_arm * founders * arms!r}), "
+            f"got {total_units!r}"
+        )
+    if total_units != 512:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.structure.total_units must be exactly 512 "
+            f"(裁定 §4「学習探索予算は合計512 logical render units」), got {total_units!r}"
+        )
+    prohibited = set(data["prohibited"])
+    missing_prohibited = _CANDIDATE_GENERATION_PROHIBITED_REQUIRED - prohibited
+    if missing_prohibited:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.prohibited must include all of "
+            f"{sorted(_CANDIDATE_GENERATION_PROHIBITED_REQUIRED)} (裁定 §3 逐語), missing "
+            f"{sorted(missing_prohibited)}"
+        )
+
+
+def load_pinned_candidate_generation_spec_manifest(
+    contract: "Run9RunContract",
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`candidate_generation_spec_sha` pin の**唯一の正規消費経路**（他の
+    `load_pinned_*` 系と同型の3層防御 + read-once 契約 + 裁定/detail-record
+    cross-check）。"""
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="candidate_generation_spec_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=CANDIDATE_GENERATION_SPEC_PATH,
+        fn_label="load_pinned_candidate_generation_spec_manifest",
+    )
+    validate_candidate_generation_spec_manifest(data)
+    _h3c_cross_check_adjudication_and_detail_record(
+        data, manifest_kind="load_pinned_candidate_generation_spec_manifest"
+    )
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 4. compute_budget_manifest_v1
+# ---------------------------------------------------------------------------
+
+_COMPUTE_BUDGET_MANIFEST_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS | frozenset(
+    {"provider", "budget_binding", "total_search_budget", "fixed_evaluation_render_budget", "wall_clock"}
+)
+
+
+def validate_compute_budget_manifest(data: Mapping[str, Any]) -> None:
+    """`compute_budget_manifest_v1.json` の構造・値整形式を検証する（裁定
+    §4: CPUExecutionProvider固定・GPU自動fallback禁止・trial_count=32/
+    render_budget=128束縛・合計512・固定評価renderは別予算・wall_clockは
+    非終了条件）。execution_profile_sha との contract 一致 cross-check は
+    `load_pinned_compute_budget_manifest()` 側（contract を要する）で行う。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(f"compute budget manifest must be an object, got {type(data).__name__}")
+    schema = data.get("schema")
+    if schema != SCHEMA_COMPUTE_BUDGET_MANIFEST:
+        raise Run9ValidationError(
+            f"compute budget manifest schema must be exactly {SCHEMA_COMPUTE_BUDGET_MANIFEST!r}, "
+            f"got {schema!r}"
+        )
+    missing = _COMPUTE_BUDGET_MANIFEST_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(f"compute budget manifest missing required key(s): {sorted(missing)}")
+    provider = data["provider"]
+    if provider.get("selected_execution_provider") != "CPUExecutionProvider":
+        raise Run9ValidationError(
+            "compute budget manifest.provider.selected_execution_provider must be exactly "
+            f"'CPUExecutionProvider', got {provider.get('selected_execution_provider')!r}"
+        )
+    if provider.get("auto_fallback_prohibited") is not True:
+        raise Run9ValidationError(
+            "compute budget manifest.provider.auto_fallback_prohibited must be exactly True"
+        )
+    sha_ref = provider.get("execution_profile_sha_reference", {}).get("value")
+    _require_manifest_sha256_hex(
+        sha_ref, manifest_kind="compute budget manifest",
+        field="provider.execution_profile_sha_reference.value",
+    )
+    budget_binding = data["budget_binding"]
+    trial_count_ref = budget_binding.get("trial_count_ref", {}).get("value")
+    render_budget_ref = budget_binding.get("render_budget_ref", {}).get("value")
+    if trial_count_ref != LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT:
+        raise Run9ValidationError(
+            "compute budget manifest.budget_binding.trial_count_ref.value must equal "
+            f"LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT ({LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT!r}), "
+            f"got {trial_count_ref!r}"
+        )
+    if render_budget_ref != LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET:
+        raise Run9ValidationError(
+            "compute budget manifest.budget_binding.render_budget_ref.value must equal "
+            f"LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET "
+            f"({LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET!r}), got {render_budget_ref!r}"
+        )
+    total_search_budget = data["total_search_budget"].get("value")
+    if total_search_budget != render_budget_ref * 2 * 2:
+        raise Run9ValidationError(
+            "compute budget manifest.total_search_budget.value must equal render_budget_ref*2*2 "
+            f"({render_budget_ref * 2 * 2!r}), got {total_search_budget!r}"
+        )
+    if total_search_budget != 512:
+        raise Run9ValidationError(
+            f"compute budget manifest.total_search_budget.value must be exactly 512, got "
+            f"{total_search_budget!r}"
+        )
+    if data["fixed_evaluation_render_budget"].get("separate_from_search_budget") is not True:
+        raise Run9ValidationError(
+            "compute budget manifest.fixed_evaluation_render_budget.separate_from_search_budget "
+            "must be exactly True (裁定 §4「固定評価renderは別予算とする」)"
+        )
+    wall_clock = data["wall_clock"]
+    if wall_clock.get("is_reference_only") is not True or wall_clock.get("scientific_termination_condition") is not False:
+        raise Run9ValidationError(
+            "compute budget manifest.wall_clock must declare is_reference_only=True and "
+            "scientific_termination_condition=False (裁定 §4「実測秒数はbenchmarkであり、科学的"
+            "終了条件にはしない」)"
+        )
+
+
+def load_pinned_compute_budget_manifest(
+    contract: "Run9RunContract",
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`compute_budget_manifest_sha` pin の**唯一の正規消費経路**（他の
+    `load_pinned_*` 系と同型の3層防御 + read-once 契約 + 裁定/detail-record
+    cross-check）。
+
+    cross-check: `provider.execution_profile_sha_reference.value` が
+    ディスク正典 `RUN9_CONTRACT.yaml` の現行 `execution_profile_sha` PINNED
+    値と厳密一致することを fail-closed で強制する（「compute budget の
+    execution_profile_sha 参照値と contract 一致」）——別々に repin された
+    execution_profile と compute_budget が黙って乖離することを防ぐ。
+    """
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="compute_budget_manifest_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=COMPUTE_BUDGET_MANIFEST_PATH,
+        fn_label="load_pinned_compute_budget_manifest",
+    )
+    validate_compute_budget_manifest(data)
+    _h3c_cross_check_adjudication_and_detail_record(
+        data, manifest_kind="load_pinned_compute_budget_manifest"
+    )
+    effective_contract_path = contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    execution_profile_field = disk_contract.pin_field("execution_profile_sha")
+    if not _is_field_pinned(execution_profile_field):
+        raise Run9ValidationError(
+            "load_pinned_compute_budget_manifest(): RUN9_CONTRACT.yaml execution_profile_sha is "
+            f"not PINNED (status={execution_profile_field.get('status')!r}) — compute budget "
+            "manifest references a pin that is not itself pinned"
+        )
+    manifest_ref = data["provider"]["execution_profile_sha_reference"]["value"]
+    contract_value = execution_profile_field["value"]
+    if manifest_ref != contract_value:
+        raise Run9ValidationError(
+            "load_pinned_compute_budget_manifest(): provider.execution_profile_sha_reference.value "
+            f"({manifest_ref!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml "
+            f"execution_profile_sha PINNED value ({contract_value!r}) — fail-closed rejection"
+        )
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 5. learning_data_binding_manifest_v1
+# ---------------------------------------------------------------------------
+
+_LEARNING_DATA_BINDING_PIN_NAMES: Tuple[str, str, str] = (
+    "practice_audio_split_manifest_sha",
+    "pjs_consumed_inputs_manifest_sha",
+    "education_technique_lesson_manifest_sha",
+)
+_LEARNING_DATA_BINDING_MANIFEST_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = (
+    _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS
+    | frozenset({"bindings", "branch_usage", "data_binding_field_convention"})
+)
+
+
+def validate_learning_data_binding_manifest(data: Mapping[str, Any]) -> None:
+    """`learning_data_binding_manifest_v1.json` の構造・値整形式を検証
+    する（裁定 §5: 3 pin を束ねる manifest・枝別利用制限・data_binding
+    フィールドの参照規約）。3 pin 値の contract との完全一致 cross-check は
+    `load_pinned_learning_data_binding_manifest()` 側（contract を要する）
+    で行う。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"learning data binding manifest must be an object, got {type(data).__name__}"
+        )
+    schema = data.get("schema")
+    if schema != SCHEMA_LEARNING_DATA_BINDING_MANIFEST:
+        raise Run9ValidationError(
+            f"learning data binding manifest schema must be exactly "
+            f"{SCHEMA_LEARNING_DATA_BINDING_MANIFEST!r}, got {schema!r}"
+        )
+    missing = _LEARNING_DATA_BINDING_MANIFEST_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"learning data binding manifest missing required key(s): {sorted(missing)}"
+        )
+    bindings = data["bindings"]
+    if not isinstance(bindings, dict) or set(bindings.keys()) != set(_LEARNING_DATA_BINDING_PIN_NAMES):
+        raise Run9ValidationError(
+            f"learning data binding manifest.bindings must have exactly keys "
+            f"{sorted(_LEARNING_DATA_BINDING_PIN_NAMES)}, got "
+            f"{sorted(bindings.keys()) if isinstance(bindings, dict) else type(bindings).__name__}"
+        )
+    for pin_name in _LEARNING_DATA_BINDING_PIN_NAMES:
+        _require_manifest_sha256_hex(
+            bindings[pin_name], manifest_kind="learning data binding manifest",
+            field=f"bindings.{pin_name}",
+        )
+    branch_usage = data["branch_usage"]
+    practice = branch_usage.get("practice", {})
+    education = branch_usage.get("education", {})
+    if "education_technique_lesson_manifest_sha" in practice.get("uses", []):
+        raise Run9ValidationError(
+            "learning data binding manifest.branch_usage.practice.uses must not include "
+            "education_technique_lesson_manifest_sha（裁定 §5「educationlessonを検索中に参照しな"
+            "い」）"
+        )
+    if education.get("excludes_raw_audio_direct_input") is not True:
+        raise Run9ValidationError(
+            "learning data binding manifest.branch_usage.education.excludes_raw_audio_direct_"
+            "input must be exactly True（裁定 §5「PJS raw audioをlearnerへ直接入力しない」）"
+        )
+    if data["data_binding_field_convention"].get("format") != "sha256:<64hex>":
+        raise Run9ValidationError(
+            "learning data binding manifest.data_binding_field_convention.format must be exactly "
+            f"'sha256:<64hex>', got {data['data_binding_field_convention'].get('format')!r}"
+        )
+
+
+def load_pinned_learning_data_binding_manifest(
+    contract: "Run9RunContract",
+    *,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`learning_data_binding_manifest_sha` pin の**唯一の正規消費経路**
+    （他の `load_pinned_*` 系と同型の3層防御 + read-once 契約 + 裁定/
+    detail-record cross-check）。
+
+    cross-check: `bindings` の3 pin 値それぞれが、ディスク正典
+    `RUN9_CONTRACT.yaml` の対応する現行 PINNED 値と完全一致することを
+    fail-closed で強制する（「data binding の 3 pin 完全一致 fail-closed」
+    ——裁定 §5「loaderはRUN9_CONTRACTの3 pin値との完全一致をfail-closedで
+    要求する」の直接実装）。
+    """
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="learning_data_binding_manifest_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=LEARNING_DATA_BINDING_MANIFEST_PATH,
+        fn_label="load_pinned_learning_data_binding_manifest",
+    )
+    validate_learning_data_binding_manifest(data)
+    _h3c_cross_check_adjudication_and_detail_record(
+        data, manifest_kind="load_pinned_learning_data_binding_manifest"
+    )
+    effective_contract_path = contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    for pin_name in _LEARNING_DATA_BINDING_PIN_NAMES:
+        bound_field = disk_contract.pin_field(pin_name)
+        if not _is_field_pinned(bound_field):
+            raise Run9ValidationError(
+                f"load_pinned_learning_data_binding_manifest(): RUN9_CONTRACT.yaml {pin_name} is "
+                f"not PINNED (status={bound_field.get('status')!r}) — data binding manifest "
+                "references a pin that is not itself pinned"
+            )
+        manifest_value = data["bindings"][pin_name]
+        contract_value = bound_field["value"]
+        if manifest_value != contract_value:
+            raise Run9ValidationError(
+                f"load_pinned_learning_data_binding_manifest(): bindings.{pin_name} "
+                f"({manifest_value!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml "
+                f"{pin_name} PINNED value ({contract_value!r}) — fail-closed rejection (裁定 §5)"
+            )
     return data

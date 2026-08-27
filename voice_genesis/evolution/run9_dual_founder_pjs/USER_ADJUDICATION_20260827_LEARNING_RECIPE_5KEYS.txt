@@ -1,0 +1,163 @@
+RUN9 User裁定 — Learning Recipe 残5キー
+作成日: 2026-08-27 JST
+受領経路: User との対話（RUN9-L0-HARNESS-3c の5 manifest実体化に先立ち、
+session scratchpad（scratchpad/run9_user_adjudication_learning_recipe_5keys.md）
+へ Fable が記録し、以後の実装・レビューが参照する正本として本ファイルへ
+repo 内収載した）
+対象: learning_recipe manifest の残る5キー（search_space / evaluator /
+candidate_generation / compute_budget / data_binding）の確定。RUN9 v1 の
+score変換探索空間を3軸系（note単位の音高偏差 / phrase内の拍・音価配分 /
+phrase境界制御）へ限定、5 mandatory loss channelの評価規約、learning
+seed 909002による32 trials×4 candidates決定論探索、CPUExecutionProvider
+固定の compute budget、3 pinを束ねる learning data binding manifest、
+5 manifestの実体化・検証・SHA凍結までlearning_recipe_shaをPENDINGに保つ
+PIN条件
+状態: User Adjudication（逐語・一字一句改変禁止）
+
+================================================================
+0. この文書の位置づけ
+================================================================
+
+本書は User が 2026-08-27 に下した裁定の逐語全文を repo 内へ収載した
+ものである。POR_CONCEPT_ADJUDICATION_20260824.txt /
+USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt /
+USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt /
+USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt /
+USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt /
+USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt と同じ前例（外部裁定を
+repo 内の凍結文書として保持し、以後の実装・レビューが参照する正本とする）
+に倣う。
+
+RUN9-L0-HARNESS-3c が新設する5 manifest（score_axis_catalog_v1 /
+loss_evaluator_spec_v1 / candidate_generation_spec_v1 /
+compute_budget_manifest_v1 / learning_data_binding_manifest_v1）の
+adjudication_basis、`run9_schema.validate_*()` の docstring、
+RUN9_CONTRACT.yaml の各新規 pin 欄 reason は、すべて本書の逐語からの
+転記であり、Claude Code が新規に発明した値ではない
+（USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt が踏襲した教訓——
+転記元が scratchpad のみだと、将来のレビュアーが「User 転記であって発明で
+ない」ことを検証できない——をさらに踏襲し本書を repo 内収載する）。
+
+以下は起草時の作業メモ
+scratchpad/run9_user_adjudication_learning_recipe_5keys.md の本文を
+一字一句そのまま転記する（改変禁止。同ファイル末尾の「転記注」フッターは
+同ファイル自身の正本所在と、裁定依頼1〔Birth Identity Separation Gate の
+退化の扱い〕が本裁定に含まれず未裁定のまま残ることを注記する事務注記で
+あり、User 裁定の逐語本文ではないため本書には含めない）。
+
+================================================================
+1. 本文（逐語、一字一句改変禁止）
+================================================================
+
+【RUN9 User裁定 — Learning Recipe 残5キー】
+
+1. search_space
+
+RUN9 v1の探索空間を、Compositionを変更しないscore変換層の
+次の3軸系へ限定する。
+
+- note単位の音高偏差
+- phrase内の拍・音価配分
+- phrase境界制御
+
+note数・順序、lyrics/phoneme列、Composition本体を変更してはならない。
+
+frame-level fine F0、direct energy envelope、vibrato、breath、
+timbre/formantの直接注入はRUN9 v1では表現不能と宣言する。
+
+正確なaxis ID・単位・値域・量子化・変換式は、
+PJS validationやFounder学習結果を使わないfixture/smoke検証後に
+axis catalogとして凍結する。
+
+axis catalogがPINNEDになるまでlearning_recipe_shaはPENDINGとする。
+3軸以外の追加、Composition不変条件の緩和、新規注入点の導入は
+新design revisionを必要とする。
+
+
+2. evaluator
+
+5 mandatory channelを全て測定する。
+
+- relative F0 contour
+- note/mora duration ratio
+- phrase-normalized energy envelope
+- attack timing
+- phrase-end timing
+
+training splitのみから決定論的calibration scaleを作り、
+正規化後の固定重みを各1/5とする。
+
+count_mismatch / not_extractedをゼロ補完せず、
+eligible件数とmissing policyを記録する。
+
+equal-weight aggregateはcandidate selection用search objectiveに限定し、
+最終科学判定は5 channel個別値を維持する。
+
+PRACTICEではraw audioからFounder自身が特徴・差分を抽出する。
+Education Lessonまたはprecomputed teacher featureを
+PRACTICE検索へ入力してはならない。
+
+EDUCATIONでは凍結済みTechnique Lessonを入力として利用する。
+
+
+3. candidate_generation
+
+learning seed 909002による決定論探索を採用する。
+
+32 trials × 4 candidates = 128 logical render units per Founder / arm
+とし、同じgenerator規則、axis catalog、proposal schedule、
+tie-break、boundary処理を二体へ適用する。
+
+reseed、予算追加、結果を見たrange拡張、
+random fallbackを禁止する。
+
+PRACTICEのtarget selection・difference estimationは
+Founder-local actor内で実行し、全探索traceを保存する。
+
+
+4. compute_budget
+
+CPUExecutionProviderのみを使用する。
+GPU/providerへの自動fallbackを禁止する。
+
+execution_profile_shaと、
+trial_count=32 / render_budget=128の既裁定を束縛する。
+
+学習探索予算は合計512 logical render units。
+固定評価renderは別予算とする。
+
+実測秒数はbenchmarkであり、科学的終了条件にはしない。
+
+
+5. data_binding
+
+次の3 pinを束ねたlearning data binding manifestを発行する。
+
+- practice_audio_split_manifest_sha
+- pjs_consumed_inputs_manifest_sha
+- education_technique_lesson_manifest_sha
+
+practiceは前2件を検索入力として利用し、
+education lessonを検索中に参照しない。
+
+educationはeducation lessonを利用し、
+PJS raw audioをlearnerへ直接入力しない。
+
+data_bindingフィールドはbinding manifestのraw SHA256参照とし、
+loaderはRUN9_CONTRACTの3 pin値との完全一致をfail-closedで要求する。
+
+
+6. PIN条件
+
+以下5 manifestが実体化・検証・SHA凍結されるまで
+learning_recipe_shaをPINNEDにしない。
+
+- score_axis_catalog_v1
+- loss_evaluator_spec_v1
+- candidate_generation_spec_v1
+- compute_budget_manifest_v1
+- learning_data_binding_manifest_v1
+
+channel、重み、normalization source、axis family、予算、
+actor境界を学習結果に応じて変更する場合は、
+実装修正ではなく新design revisionとして扱う。

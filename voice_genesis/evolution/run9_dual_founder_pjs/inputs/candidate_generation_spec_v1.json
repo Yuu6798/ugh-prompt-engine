@@ -1,0 +1,61 @@
+{
+  "schema": "run9-candidate-generation-spec/1.0",
+  "seed": 909002,
+  "seed_reference_note": "この値は run9_schema.LEARNING_SEED と厳密一致することを load_pinned_candidate_generation_spec_manifest() が fail-closed で強制する",
+  "structure": {
+    "trial_count": 32,
+    "candidates_per_trial": 4,
+    "units_per_founder_per_arm": 128,
+    "units_per_founder_per_arm_formula": "trial_count * candidates_per_trial = 32 * 4 = 128",
+    "founders": 2,
+    "arms": 2,
+    "total_units": 512,
+    "total_units_formula": "units_per_founder_per_arm * founders * arms = 128 * 2 * 2 = 512",
+    "adjudicated_reference": "trial_count/units_per_founder_per_arm はここで再定義せず、既裁定値（RUN9-L0-PIN-2、learning_recipe manifest 側の trial_count==32/render_budget==128、run9_schema.LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT/LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET）への参照であり、本 spec が値の権威ではない"
+  },
+  "proposal": {
+    "rng_independence": "ライブラリ RNG 非依存の hash-based 決定論生成",
+    "digest_formula": "digest = sha256(f\"{seed}:{arm}:{founder}:{trial}:{candidate}\")",
+    "digest_to_candidate_mapping": "digest を軸グリッドの索引列（AX-P1 の 9 グリッド値・AX-D1 の delta 量子化格子上の候補値列）へ決定論写像する",
+    "trial1_candidate0_rule": "trial 1 の candidate 0 は恒等（全軸オフセット/デルタ = 0、= baseline）を必ず含める",
+    "subsequent_trial_schedule": "trial 1 以降は「現 best の近傍 ± 1 量子化ステップ」の決定論近傍列挙と hash 由来の探査候補を固定比率 3:1 で混合する",
+    "proposal_schedule_table": [
+      {"trial_index": 1, "candidate_index": 0, "rule": "identity (all axes = 0, baseline)"},
+      {"trial_index": 1, "candidate_index": "1..3", "rule": "hash-derived exploratory candidates (digest -> grid index)"},
+      {"trial_index": "2..32", "candidate_index": "0", "rule": "current-best neighborhood: nearest deterministic +-1 quantization step candidate not yet evaluated"},
+      {"trial_index": "2..32", "candidate_index": "1", "rule": "current-best neighborhood: second nearest deterministic +-1 quantization step candidate"},
+      {"trial_index": "2..32", "candidate_index": "2..3", "rule": "hash-derived exploratory candidates (digest -> grid index), fixed 3:1 exploration:neighborhood ratio across the 4 candidates of the trial"}
+    ]
+  },
+  "selection": {
+    "objective": "loss_evaluator_spec_v1 の aggregate（candidate_selection_search_objective_only スコープ）を最小化する候補を選ぶ",
+    "tie_break": "(objective, 軸ベクトルの辞書順) の全順序で決定論的に一意の勝者を選ぶ"
+  },
+  "boundary_handling": {
+    "out_of_range": "clamp せず棄却して次の決定論候補へ進む（clamp は同一候補の重複を生み探索を歪めるため）",
+    "duplicate": "重複候補も棄却し次候補へ進む"
+  },
+  "prohibited": [
+    "reseed",
+    "予算追加",
+    "結果を見た range 拡張",
+    "random fallback"
+  ],
+  "practice_actor_binding": {
+    "target_selection": "Founder-local actor 内で実行する",
+    "difference_estimation": "Founder-local actor 内で実行する",
+    "trace_storage": "全探索 trace を practice_trace（既存 schema）+ 本 spec 準拠の trial log に保存する"
+  },
+  "adjudication_basis": {
+    "sha256": "18b467dd0340aeb3e05b26a14bfdb986c502e39a222668ccddd1f396dab1aa31",
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt",
+    "summary": "User 裁定 2026-08-27（Learning Recipe 残5キー）§3 candidate_generation: learning seed 909002による決定論探索を採用し、32 trials×4 candidates=128 logical render units per Founder/armとし、同じgenerator規則・axis catalog・proposal schedule・tie-break・boundary処理を二体へ適用する。reseed・予算追加・結果を見たrange拡張・random fallbackを禁止する。PRACTICEのtarget selection・difference estimationはFounder-local actor内で実行し、全探索traceを保存する。"
+  },
+  "provenance": {
+    "detail_record": {
+      "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
+      "sha256": "023c3e1d42e2ff5f2ab02712e1ab519b25e8f35c6d2e767275ccb3674cacb102",
+      "note": "本 spec の proposal/selection/boundary 処理が動作する探索空間（AX-P1/AX-D1 グリッド）の実効性・量子化制約の実測根拠"
+    }
+  }
+}

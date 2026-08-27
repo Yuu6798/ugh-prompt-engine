@@ -2148,6 +2148,98 @@ pjs_consumed_inputs_manifest_sha:
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/pjs_consumed_inputs_sha256.json
 
+# --- RUN9-L0-HARNESS-3c（2026-08-27, User 裁定「RUN9 User裁定 — Learning
+# Recipe 残5キー」逐語、repo 内収載
+# USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt 参照）で新設・
+# PINNED 化: learning_recipe manifest の残5キー（search_space/evaluator/
+# candidate_generation/compute_budget/data_binding）を実体化する5
+# manifest。裁定 §6 PIN 条件「以下5 manifestが実体化・検証・SHA凍結され
+# るまでlearning_recipe_shaをPINNEDにしない」の実装対象そのもの——本5欄が
+# 全て PINNED になったことで PIN 条件は充足するが、learning_recipe_sha
+# 自体（枝別 recipe manifest 本体の build）はこの PR の対象外であり
+# 引き続き PENDING のまま（下記 learning_recipe_sha 欄の現況追記参照）。
+# 値はいずれも `run9_schema.compute_file_sha256()` と同一のファイル実
+# バイト規約。実測根拠 = W1（score変換プロトタイプ+11 variant render実測）
+# + W1b（未検証格子点render実測+変換器レベルunit検証17ケース+calibration
+# scale実測）を統合した HARNESS3C_AXIS_FEASIBILITY_RECORD.md。
+#
+# score_axis_catalog_v1: 裁定 §1 のCompositionを変更しないscore変換層
+# 3軸系（note単位の音高偏差=AX-P1・phrase内の拍・音価配分=AX-D1・phrase
+# 境界制御=NOT_EXPRESSIBLE_ON_CURRENT_WIRING）を fixture/smoke検証後に
+# 凍結した catalog。`run9_schema.validate_score_axis_catalog_manifest()`/
+# `load_pinned_score_axis_catalog_manifest()` が全構造検証 + cross-check
+# （裁定txt/detail record実バイト照合、catalog↔score_axis_transform.py
+# 変換器の実行時整合——range/quantization境界値の受理と境界外値の拒否を
+# 実際に変換器へ通して確認）を fail-closed で強制する。
+score_axis_catalog_sha:
+  value: "7440b9993a5466e9ff89b1d899c9815b2bcca95046e806107bdc025dbc52b2b3"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/score_axis_catalog_v1.json
+
+# loss_evaluator_spec_v1: 裁定 §2 の5 mandatory channel全測定・training
+# splitのみからのdeterministic calibration scale・固定重み各1/5・
+# missing policy非ゼロ補完・aggregate=candidate selection限定・actor
+# 境界（PRACTICE=raw audio自己抽出のみ・EDUCATION=凍結lesson使用）を
+# 実装。calibration_scale 5値は W1b Task3実測（training 68曲、ddof=0、
+# float64、丸めなし全桁）——relative_f0/normalized_energyの標本粒度は
+# frame/mora(phrase)両案を実測しFableがframe粒度を採用（lessonがframe
+# 契約のcontourを保持し loss もframe単位比較のため。mora/phrase平均は
+# lessonに存在しない新規導出統計を挟むため不採用）。
+# `run9_schema.validate_loss_evaluator_spec_manifest()`/`load_pinned_
+# loss_evaluator_spec_manifest()` が全構造検証 + cross-check（裁定txt/
+# detail record実バイト照合、calibration値のLOSS_EVALUATOR_CALIBRATION_
+# SCALE_V1定数との一致、channel対応表のTECHNIQUE_LESSON_CHANNEL_
+# VOCABULARY_MAP一致）を fail-closed で強制する。
+loss_evaluator_spec_sha:
+  value: "bcfc510a8b234207fb87766f0e682df21f1986b9ed0fcd58b032697c3314e682"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/loss_evaluator_spec_v1.json
+
+# candidate_generation_spec_v1: 裁定 §3 のlearning seed 909002決定論探索・
+# 32 trials×4 candidates=128 logical render units/Founder/arm・hash-based
+# proposal（reseed/予算追加/range拡張/random fallback禁止）・PRACTICE
+# target selection/difference estimationのFounder-local actor内実行を
+# 実装。`run9_schema.validate_candidate_generation_spec_manifest()`/
+# `load_pinned_candidate_generation_spec_manifest()` が全構造検証 +
+# cross-check（裁定txt/detail record実バイト照合、seed==LEARNING_SEED、
+# trial_count×candidates_per_trial=units_per_founder_per_arm=128の整合、
+# total_units=512の整合）を fail-closed で強制する。
+candidate_generation_spec_sha:
+  value: "e039b719aa7af175e139778420319f712055e6d291dc90a209a81e2b41a5636a"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/candidate_generation_spec_v1.json
+
+# compute_budget_manifest_v1: 裁定 §4 のCPUExecutionProvider固定・GPU
+# 自動fallback禁止・execution_profile_shaとtrial_count=32/render_budget=
+# 128既裁定の束縛（参照のみ、再定義しない）・学習探索予算合計512
+# logical render units・固定評価renderは別予算・実測秒数はbenchmark
+# reference限定（科学的終了条件にしない）を実装。
+# `run9_schema.validate_compute_budget_manifest()`/`load_pinned_compute_
+# budget_manifest()` が全構造検証 + cross-check（裁定txt/detail record
+# 実バイト照合、provider.execution_profile_sha_referenceが本ファイルの
+# execution_profile_sha現行PINNED値と厳密一致）を fail-closed で強制
+# する。
+compute_budget_manifest_sha:
+  value: "8acc17f1b703368a2f962129d3235f7c33beabfe73907e2398ede364c042eeed"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/compute_budget_manifest_v1.json
+
+# learning_data_binding_manifest_v1: 裁定 §5 のpractice_audio_split_
+# manifest_sha/pjs_consumed_inputs_manifest_sha/education_technique_
+# lesson_manifest_shaの3 pinを束ねるmanifest。practiceは前2件のみを
+# 検索入力として利用しeducation lessonを検索中に参照しない／education
+# はeducation lessonを利用しPJS raw audioをlearnerへ直接入力しない、
+# という枝別利用制限を宣言する。`run9_schema.validate_learning_data_
+# binding_manifest()`/`load_pinned_learning_data_binding_manifest()`
+# が全構造検証 + cross-check（裁定txt/detail record実バイト照合、
+# bindings 3値それぞれが本ファイルの対応する現行PINNED値と完全一致 —
+# 裁定§5「loaderはRUN9_CONTRACTの3 pin値との完全一致をfail-closedで
+# 要求する」の直接実装）を fail-closed で強制する。
+learning_data_binding_manifest_sha:
+  value: "90d9157c9be29fe793fccb645a5b7f22b4d12c778787416590e55dcf8b5e9cf4"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/learning_data_binding_manifest_v1.json
+
 # --- branch_write_policy_sha: inputs/branch_write_policy.json の実バイト
 # sha256（PINNED — 本 PR で内容確定。User 外部レビュー PR #317 P1-1
 # 採用）。design_doc_sha256 と同一のファイル実バイト規約
@@ -2211,6 +2303,25 @@ learning_recipe_sha:
     従属する（値の形式は sha参照か記述文字列か等、未決）。manifest 実体
     の生成（build）は上記4キーの機械強制を含め VG-L0 ハーネス実装時の
     build 対象のまま——本欄は引き続き PENDING。
+
+    RUN9-L0-HARNESS-3c（2026-08-27, User 裁定「RUN9 User裁定 — Learning
+    Recipe 残5キー」逐語、repo 内収載 USER_ADJUDICATION_20260827_
+    LEARNING_RECIPE_5KEYS.txt 参照）現況追記: 上記で PENDING のまま残って
+    いた5キー（search_space/candidate_generation/evaluator/compute_budget/
+    data_binding）は本裁定で仕様が確定し、各々を実体化する5 manifest
+    （score_axis_catalog_sha/loss_evaluator_spec_sha/candidate_generation_
+    spec_sha/compute_budget_manifest_sha/learning_data_binding_manifest_
+    sha、本ファイル上部の各欄）が本 PR で PINNED 化された——裁定 §6 PIN
+    条件「以下5 manifestが実体化・検証・SHA凍結されるまでlearning_
+    recipe_shaをPINNEDにしない」はこれで充足した。**5 manifest 凍結済み・
+    残 = manifest 実体 build**: 本欄（learning_recipe_sha）自体は、5
+    manifest の内容を実際に束ねた枝別 recipe manifest 本体
+    （`inputs/learning_recipe_manifest.json`、schema
+    `run9-learning-recipe/1.0`、`data_binding` フィールドは
+    learning_data_binding_manifest_v1.json の raw sha256 を
+    `sha256:<64hex>` 形式で参照する）の build がまだ実行されていないため
+    引き続き PENDING のまま——次 PR で build・PINNED 化する（学習ループ
+    骨格・config・dependency closure の設計状況も踏まえて着手する）。
     〔履歴: 旧 reason（User 裁定前、4キーの値は build 時に確定するとして
     いた）——
     learning_recipe.yaml 未作成。VG-L0 学習ハーネス未実装（書き込み先は
