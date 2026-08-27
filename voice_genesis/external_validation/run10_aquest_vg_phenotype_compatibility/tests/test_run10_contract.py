@@ -1005,3 +1005,51 @@ def test_compatible_outcome_combinations_still_pass() -> None:
     doc["scientific_outcome"] = ["PARTIAL_COMPATIBILITY_MAP", "SCHEMA_GAP_IDENTIFIED"]
     doc["novel_trait_candidates"] = {"AQUEST_X01": {"state": "confirmed"}}
     m.validate_results_document(doc)
+
+
+# --- 第 7 巡: overfit 信号と R10-G7 / verdict の整合 -----------------------
+
+
+def test_overfit_signal_forbids_passing_g7() -> None:
+    """§21 R10-G7 / §12.6: E0 校正が失敗した meter は外的妥当性を確立しない。
+
+    提出された Gate 台帳が G0..G14 を PASS と主張するだけで
+    `protocol_verdict: PASS` の overfit 結果が成立していた
+    （PR #330 Codex 第 7 巡 P1）。
+    """
+    doc = _minimal_results()
+    doc["protocol_verdict"] = "PASS"
+    doc["scientific_outcome"] = ["MEASUREMENT_OVERFIT_DETECTED"]
+    doc["hard_gates"] = {gate_id: "PASS" for gate_id, _ in m.PHASE_A_CORE_GATES}
+    doc["external_calibration"] = {
+        "e0_parameter_recovery": {"01_f1_low": {"abs_error": 900.0}},
+        "meter_calibration_status": {"F1_F2_F3": "UNCALIBRATED"},
+        "measurement_overfit_signal": True,
+    }
+    doc["replay"] = {
+        "same_process": "PASS",
+        "cross_process": "PASS",
+        "feature_json_sha": "d" * 64,
+    }
+    with pytest.raises(m.Run10ContractError, match="R10-G7"):
+        m.validate_results_document(doc)
+
+
+def test_overfit_with_failing_g7_is_recorded_as_blocked() -> None:
+    """G7 が PASS でなければ overfit の記録自体は成立する（偽陽性の確認）。"""
+    doc = _minimal_results()
+    doc["protocol_verdict"] = "BLOCKED"
+    doc["scientific_outcome"] = ["MEASUREMENT_OVERFIT_DETECTED"]
+    doc["hard_gates"] = {gate_id: "PASS" for gate_id, _ in m.PHASE_A_CORE_GATES}
+    doc["hard_gates"]["R10-G7"] = "FAIL"
+    doc["external_calibration"] = {
+        "e0_parameter_recovery": {"01_f1_low": {"abs_error": 900.0}},
+        "meter_calibration_status": {"F1_F2_F3": "UNCALIBRATED"},
+        "measurement_overfit_signal": True,
+    }
+    doc["replay"] = {
+        "same_process": "PASS",
+        "cross_process": "PASS",
+        "feature_json_sha": "d" * 64,
+    }
+    m.validate_results_document(doc)

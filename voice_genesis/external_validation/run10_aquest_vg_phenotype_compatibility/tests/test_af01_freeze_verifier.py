@@ -341,24 +341,41 @@ def test_replay_refuses_when_generator_is_absent_from_ledger(
     assert report.checks["generator_in_ledger"] == "FAIL"
 
 
-def test_replay_detects_generator_self_mutation(tmp_path: Path, monkeypatch) -> None:
-    """実行中に自身を書き換える generator を実行後の再 hash で捕まえる。"""
+def test_replay_is_unaffected_by_self_mutation_of_the_executed_copy(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """複製実行により、自分自身（複製）を書き換える generator が無害になる。
+
+    第 4 巡では bundle 側 generator の before/after hash で自己書き換えを
+    検出していたが、第 7 巡の指摘どおりそれは実行バイトを束縛しない。
+    実行対象を認証済み複製へ切り離した結果、複製の自己書き換えは
+    「既に認証済みバイトを実行した後」の出来事となり判定へ影響しない。
+    bundle 側の書き換えは別途 bundle_generator_unchanged_after_run が捉える。
+    """
     body = (
         "from pathlib import Path\n"
         "import sys\n"
+        "Path('a.txt').write_text('frozen')\n"
         "Path(sys.argv[0]).write_text('mutated\\n')\n"
     )
-    root = _replay_bundle(tmp_path, body, {"generator_AF01_SF1.py": "0" * 64})
-    digest = m.compute_file_sha256(root / "generator_AF01_SF1.py")
-    (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(
-        v.render_payload_ledger({"generator_AF01_SF1.py": digest})
-    )
+    root = tmp_path / "bundle"
+    root.mkdir()
+    generator = root / "generator_AF01_SF1.py"
+    generator.write_text(body, encoding="utf-8")
+    entries = {
+        "a.txt": hashlib.sha256(b"frozen").hexdigest(),
+        "generator_AF01_SF1.py": m.compute_file_sha256(generator),
+    }
+    (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(v.render_payload_ledger(entries))
     _pass_ledger_gate(monkeypatch, root)
-    monkeypatch.setitem(m.AF01_FROZEN_HASHES, "af01_generator_sha256", digest)
+    monkeypatch.setitem(
+        m.AF01_FROZEN_HASHES, "af01_generator_sha256", entries["generator_AF01_SF1.py"]
+    )
 
     report = v.verify_deterministic_replay(root)
-    assert report.verdict == v.VERDICT_DRIFT
-    assert report.checks["generator_unchanged_after_run"] == "FAIL"
+    assert report.verdict == v.VERDICT_PASS
+    assert report.checks["bundle_generator_unchanged_after_run"] == "PASS"
+    assert m.compute_file_sha256(generator) == entries["generator_AF01_SF1.py"]
 
 
 def test_replay_exclusion_set_is_closed_and_minimal() -> None:
@@ -524,3 +541,79 @@ def test_containment_violation_is_the_single_implementation(tmp_path: Path) -> N
     assert v.containment_violation(root, "../escape.txt") is not None
     assert v.containment_violation(root, "/etc/passwd") is not None
     assert v.containment_violation(root, "absent.txt") is None  # 不在は missing 扱い
+
+
+# --- 第 7 巡: 実行バイトの構成的な束縛（PR #330 Codex 第 7 巡 P1） --------
+
+
+def test_replay_executes_an_authenticated_copy_not_the_bundle_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """認証した bytes と実行された bytes の同一性を構成的に保証する。
+
+    before/after の hash だけでは、hash 直後に差し替えて実行後に戻せば両方の
+    hash が一致したまま任意の Python が走る。実行対象を bundle 側パスから
+    切り離した複製にすることで、その窓自体を無くす。
+
+    本テストは、実行中に bundle 側の generator を書き換えても**実行された
+    のは認証済み複製である**ことを、出力の内容で確認する。
+    """
+    marker = tmp_path / "which.txt"
+    body = (
+        "from pathlib import Path\n"
+        f"Path({str(marker)!r}).write_text('authenticated')\n"
+        "Path('a.txt').write_text('frozen')\n"
+    )
+    root = tmp_path / "bundle"
+    root.mkdir()
+    generator = root / "generator_AF01_SF1.py"
+    generator.write_text(body, encoding="utf-8")
+    entries = {
+        "a.txt": hashlib.sha256(b"frozen").hexdigest(),
+        "generator_AF01_SF1.py": m.compute_file_sha256(generator),
+    }
+    (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(v.render_payload_ledger(entries))
+    _pass_ledger_gate(monkeypatch, root)
+    monkeypatch.setitem(
+        m.AF01_FROZEN_HASHES, "af01_generator_sha256", entries["generator_AF01_SF1.py"]
+    )
+
+    # 認証後に bundle 側を書き換える（複製実行ならこの内容は走らない）。
+    real_run = v.subprocess.run
+
+    def swap_then_run(*args, **kwargs):
+        generator.write_text(
+            f"from pathlib import Path\nPath({str(marker)!r}).write_text('swapped')\n",
+            encoding="utf-8",
+        )
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(v.subprocess, "run", swap_then_run)
+    report = v.verify_deterministic_replay(root)
+
+    assert marker.read_text() == "authenticated", "bundle 側の差し替えが実行された"
+    # 差し替え自体は bundle mutation として検出される。
+    assert report.verdict == v.VERDICT_DRIFT
+    assert report.checks["executed_authenticated_copy"] == "PASS"
+    assert report.checks["bundle_generator_unchanged_after_run"] == "FAIL"
+
+
+def test_replay_output_dir_excludes_the_executed_copy(tmp_path: Path, monkeypatch) -> None:
+    """実行用の複製が再生成 payload の集計へ混入しないこと。"""
+    body = "from pathlib import Path\nPath('a.txt').write_text('frozen')\n"
+    root = tmp_path / "bundle"
+    root.mkdir()
+    generator = root / "generator_AF01_SF1.py"
+    generator.write_text(body, encoding="utf-8")
+    entries = {
+        "a.txt": hashlib.sha256(b"frozen").hexdigest(),
+        "generator_AF01_SF1.py": m.compute_file_sha256(generator),
+    }
+    (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(v.render_payload_ledger(entries))
+    _pass_ledger_gate(monkeypatch, root)
+    monkeypatch.setitem(
+        m.AF01_FROZEN_HASHES, "af01_generator_sha256", entries["generator_AF01_SF1.py"]
+    )
+    report = v.verify_deterministic_replay(root)
+    assert report.verdict == v.VERDICT_PASS
+    assert report.unexpected == []

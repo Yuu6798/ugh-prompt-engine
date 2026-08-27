@@ -997,6 +997,19 @@ def _validate_outcome_consistency(
             f"（実際 {signal!r}）— evidence が結論を否定してはならない"
         )
 
+    # 規則 5: overfit 信号が立ったなら R10-G7 は PASS になり得ない
+    # （§21 R10-G7 / §12.6: E0 校正に失敗した meter は外的妥当性を確立しない）。
+    # これを縛らないと、提出された Gate 台帳が G0..G14 を PASS と主張するだけで
+    # `protocol_verdict: PASS` の overfit 結果が成立してしまう
+    # （PR #330 Codex 第 7 巡 P1）。
+    if signal is True:
+        ledger = mapping.get("hard_gates")
+        if isinstance(ledger, Mapping) and ledger.get("R10-G7") == "PASS":
+            raise Run10ContractError(
+                "results: measurement_overfit_signal=true のまま R10-G7"
+                " EXTERNAL_METER_CALIBRATION を PASS にはできない（§21 R10-G7 / §12.6）"
+            )
+
     # 規則 4: 逆方向 — overfit 信号が立ったまま成立側の結論を名乗らせない。
     # §12.6 / §21 R10-G7: E0 校正に失敗した meter は CALIBRATED_EXTERNAL に
     # できず、§15.1 はそれを DIRECT_COMPATIBLE の必要条件にしている。

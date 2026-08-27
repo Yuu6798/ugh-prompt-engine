@@ -393,7 +393,19 @@ def verify_deterministic_replay(
                 f" pin={AF01_FROZEN_HASHES['af01_generator_sha256']}"
             ],
         )
-    generator_sha_before = compute_file_sha256(generator)
+    # bytes を **1 回だけ読み**、その buffer を hash する。hash 後に
+    # インタプリタが同じパスを開き直す形だと、hash と open の間に差し替えられた
+    # 任意の Python が実行され、前後の hash は一致したままになる
+    # （PR #330 Codex 第 7 巡 P1 — 第 4 巡の before/after hash では不十分だった）。
+    try:
+        generator_bytes = generator.read_bytes()
+    except OSError as exc:
+        return Af01VerificationReport(
+            verdict=VERDICT_UNAVAILABLE,
+            checks={"generator_readable": "FAIL"},
+            mismatches=[str(exc)],
+        )
+    generator_sha_before = hashlib.sha256(generator_bytes).hexdigest()
     if generator_sha_before != expected_generator:
         return Af01VerificationReport(
             verdict=VERDICT_DRIFT,
@@ -405,10 +417,25 @@ def verify_deterministic_replay(
         )
 
     with tempfile.TemporaryDirectory(prefix="af01_replay_") as tmp:
-        workdir = Path(tmp)
+        workdir = Path(tmp) / "out"
+        workdir.mkdir()
+        # 認証済み buffer を専用ディレクトリへ書き出し、**その複製を実行する**。
+        # 実行対象を bundle 側のパスから切り離すことで、hash した bytes と
+        # 実行された bytes の同一性を構成的に保証する。
+        execdir = Path(tmp) / "exec"
+        execdir.mkdir()
+        authenticated = execdir / "generator_AF01_SF1.py"
+        authenticated.write_bytes(generator_bytes)
+        written_sha = compute_file_sha256(authenticated)
+        if written_sha != expected_generator:  # pragma: no cover - 書き込み破損
+            return Af01VerificationReport(
+                verdict=VERDICT_DRIFT,
+                checks={"authenticated_copy_sha256": "FAIL"},
+                mismatches=[f"複製 sha={written_sha} expected={expected_generator}"],
+            )
         try:
             completed = subprocess.run(
-                [python_executable or sys.executable, str(generator)],
+                [python_executable or sys.executable, str(authenticated)],
                 cwd=workdir,
                 capture_output=True,
                 text=True,
@@ -435,18 +462,20 @@ def verify_deterministic_replay(
                 continue
             rebuilt[relative] = compute_file_sha256(produced)
 
-    # 実行後に再 hash して mutation の窓を閉じる（実行中に自身を書き換える
-    # generator が「認証済みの bytes を実行した」と主張できないようにする）。
+    # 実行対象は複製なので同一性は構成的に保証済み。ここでの再 hash は
+    # 「bundle 側の generator が run 中に書き換えられた」ことを検出する
+    # 追加診断であり、実行バイトの認証はこれに依存しない。
     generator_sha_after = compute_file_sha256(generator)
     if generator_sha_after != generator_sha_before:
         return Af01VerificationReport(
             verdict=VERDICT_DRIFT,
             checks={
                 "generator_authenticated_before_run": "PASS",
-                "generator_unchanged_after_run": "FAIL",
+                "executed_authenticated_copy": "PASS",
+                "bundle_generator_unchanged_after_run": "FAIL",
             },
             mismatches=[
-                f"generator_AF01_SF1.py が実行中に変化した:"
+                f"bundle 側の generator_AF01_SF1.py が実行中に変化した:"
                 f" before={generator_sha_before} after={generator_sha_after}"
             ],
         )
@@ -464,7 +493,8 @@ def verify_deterministic_replay(
         verdict=VERDICT_PASS if identical else VERDICT_DRIFT,
         checks={
             "generator_authenticated_before_run": "PASS",
-            "generator_unchanged_after_run": "PASS",
+            "executed_authenticated_copy": "PASS",
+            "bundle_generator_unchanged_after_run": "PASS",
             "generator_run": "PASS",
             "deterministic_payload_replay": "PASS" if identical else "FAIL",
         },

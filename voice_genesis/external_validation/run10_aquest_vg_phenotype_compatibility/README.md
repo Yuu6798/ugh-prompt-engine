@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（234 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（238 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -292,3 +292,20 @@ E0 校正に失敗した meter は `CALIBRATED_EXTERNAL` になれず、§15.1 �
 完全な束は DESIGN_RUN10 が定義していないため実装側で発明しない。特に
 `GENERATIVE_COMPATIBILITY_ESTABLISHED` と `MEASUREMENT_ONLY_COMPATIBILITY` は
 §16.1 / §16.3 が trait 単位の分類であり、Run 単位で相互排他とは判定しない。
+
+### 第 7 巡（P1×2、全件採用）
+
+1. **overfit 信号と R10-G7 / verdict の整合** — 提出された Gate 台帳が G0..G14 を
+   PASS と主張するだけで `protocol_verdict: PASS` の overfit 結果が成立していた。
+   §21 R10-G7 / §12.6 により E0 校正に失敗した meter は外的妥当性を確立しないため、
+   信号が true なら R10-G7 を PASS にできない（結果として verdict PASS も成立しない）。
+2. **実行バイトの構成的な束縛** — 第 4 巡で入れた before/after hash は、hash 直後に
+   差し替えて実行後に戻せば両方一致したまま任意の Python が走るため、実行バイトを
+   束縛していなかった。generator を **1 回だけ読んでその buffer を hash し、
+   認証済み複製を専用ディレクトリへ書き出してそれを実行する**方式へ変更。
+   hash と open の窓自体を無くした。bundle 側の書き換えは
+   `bundle_generator_unchanged_after_run` が追加診断として捉える。
+
+この変更で自己書き換え検出の意味論が変わった。複製の自己書き換えは「既に認証済み
+バイトを実行した後」の出来事となり判定へ影響しない。該当テストは新しい意味論を
+検証する内容へ書き換えた（旧テストは bundle 側 hash に依存していた）。
