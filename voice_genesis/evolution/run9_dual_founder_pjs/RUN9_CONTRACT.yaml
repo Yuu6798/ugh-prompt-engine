@@ -1325,8 +1325,44 @@ seed_policy_sha:
 # 文書）は `design_revision_doc_sha256` pin（本ファイル上部、design_
 # revision: 0.4 → 0.5 の欄）が契約レベルの現行文書として保持する——本欄
 # では情報記録を重複させない。
+#
+# 2026-08-27 repin（PR #328 Codex レビュー第1巡3件、いずれも採用。Claude
+# 完結ルート）: 指摘1（P1）session workdir 限定だった合成スクリプトと
+# 生成 embedding が repo 外のみに存在し、fresh checkout では manifest の
+# PINNED 出力 hash（`fc7b73fd...`/`0a681a2c...`）を再構成・検証できない
+# 穴を閉じた——checkout-stable fixture `speaker_map_builder.py` を新設
+# （合成ロジックは workdir 原本 `synth_speaker_map.py` から演算式・順序・
+# dtype 処理を逐語移植。入力 emb sha256 を manifest pin と fail-closed
+# 照合してから合成し、出力 sha256 を `synthesized_embedding.sha256` pin
+# と fail-closed 照合する）。manifest 側へ新設 `builder_provenance` 節
+# （`builder_sha256`/`logical_name`/`repo_relative_path`）として builder
+# の実バイト sha256 を追記し、`run9_schema.validate_speaker_map_
+# manifest()`/`load_pinned_speaker_map_manifest()` に builder の実バイト
+# sha256 照合を cross-check (j) として配線した。fresh checkout で両
+# founder（`reexport_out/onnx_gate_40000/` の ritsu/user emb 入力）に対し
+# `speaker_map_builder.py` を実行し、出力 sha256 が manifest pin 値と
+# 完全一致することを実測確認済み（`HARNESS3A_SPEAKER_MAP_RECORD.md`
+# 追記記録参照）。指摘2（P2）`load_pinned_speaker_map_manifest()` の
+# founder genome 照合が `coords_raw` のみで `genome_id` を照合していな
+# かった穴（「正しい coords + 別 founder の genome_id」という取り違え
+# 偽装を検出できない）を閉じた——cross-check (b) へ `founders.<id>.
+# genome_id` と発行済み Founder Genome document の `genome_id` の厳密
+# 一致強制を追加した。指摘3（P2）`run9_schema.py`
+# `_SPEAKER_MAP_ADJUDICATED_DESIGN_REVISION` 直前のコメントが「契約レベル
+# design_revision 同期は本 PR 外・スコープ注記参照」という破棄済み判断を
+# 残置していた（`DESIGN_RUN9_REVISION_0.5.md` の「スコープ注記」節は
+# 契約レベル三点昇格を同一改訂内で実施した際に既に削除済みで、コメントが
+# 矛盾していた）——現行規則（design_revision は contract 三点（トップ
+# レベル欄/`DESIGN_REVISION` 定数/`design_revision_doc_sha256` pin）+ 本
+# manifest 欄の計四点を同一 PR 内で同期昇格する）へ差し替えた。上記3件は
+# いずれも speaker map の実測事実（各 founder の合成 embedding sha256・
+# render sha256・秒数・pre_pin_verification_summary の6点 PASS）を一切
+# 変更しない——`builder_provenance` 節の新設のみで実バイトが変わった
+# ための repin。旧 pin 値（第1世代、HARNESS-3a 初回 PINNED 時）は履歴と
+# して保持する:
+#   3f34dc71b34d9fa944528aba4432501d036d8c26b035a14b40938a255ea182f2
 expected_speaker_map_sha:
-  value: "3f34dc71b34d9fa944528aba4432501d036d8c26b035a14b40938a255ea182f2"
+  value: "3057e5bb8a1b0da1834315b953477ead98b2ab401404d4f76262bd93689070b0"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/speaker_map_manifest.json
 

@@ -214,7 +214,71 @@ cross-manifest 照合・pre_pin_verification_summary 6点 PASS 整合・
 禁止4項目/非主張逐語の存在・contract pin との実バイト sha256 一致）を
 fail-closed で強制する——詳細は `run9_schema.py` docstring 参照。
 
+## 追記: PR #328 Codex レビュー第1巡指摘1（P1、採用）対応 — checkout-stable
+## fixture 化 + fresh checkout 再現実測（2026-08-27、Claude 完結ルート）
+
+上記の合成スクリプト・生成 embedding は session workdir（repo 外）限定
+のままだったため、fresh checkout では manifest の PINNED 出力 hash
+（`fc7b73fd...`/`0a681a2c...`）を再構成・検証できない穴があった。本追記
+は同スクリプトのロジック（演算式・順序・dtype 処理）を逐語移植した
+checkout-stable fixture
+[`speaker_map_builder.py`](./speaker_map_builder.py) を repo 内へ新設し、
+manifest 側へ新設 `builder_provenance` 節
+（`builder_sha256`/`logical_name`/`repo_relative_path`）として builder の
+実バイト sha256 を追記した上で、`RUN9_CONTRACT.yaml`
+`expected_speaker_map_sha` を第2世代へ repin した結果を記録する。
+
+### builder 再現実測（両 founder、workdir 現存の入力 emb に対して実行）
+
+入力: `<session workdir（repo外）>/reexport_out/onnx_gate_40000/
+s5_run6_acoustic_v1.{ritsu,user}.emb`（検証1 節と同一ファイル。実測 sha256
+は同節の値と完全一致することを本追記でも再確認済み）。
+
+```
+$ python3 speaker_map_builder.py --founder R9F-01 \
+    --ritsu-emb <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb \
+    --user-emb  <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.user.emb
+$ python3 speaker_map_builder.py --founder R9F-02 \
+    --ritsu-emb <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb \
+    --user-emb  <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.user.emb
+```
+
+| founder | w_ritsu_expr | w_user_expr | 再構築した out_sha256 | manifest pin (`synthesized_embedding.sha256`) | 一致 |
+|---|---|---|---|---|---|
+| R9F-01 | `0.75` | `0.25` | `fc7b73fd98ef77f7caeba44761bdfe2933228cd9869bc6b27131230dade6e1e9` | `fc7b73fd98ef77f7caeba44761bdfe2933228cd9869bc6b27131230dade6e1e9` | 一致 |
+| R9F-02 | `1.0/3.0` | `2.0/3.0` | `0a681a2c419295c739f6040316412e1cc5b6d16ee496e7f58ee36c45b425c2a1` | `0a681a2c419295c739f6040316412e1cc5b6d16ee496e7f58ee36c45b425c2a1` | 一致 |
+
+**判定: PASS**（両 founder とも builder が再構築した合成 embedding の
+sha256 が manifest pin 値と完全一致——`reproduced: true`。builder 自身が
+`synthesize()` 内で pin 値との fail-closed 照合を行うため、上記コマンド
+が非ゼロ終了しないこと自体が一致の直接証拠でもある）。fail-closed 経路
+（入力 emb を意図的に入れ替える等）も実測確認済み——単体テスト
+[`tests/test_speaker_map_builder.py`](./tests/test_speaker_map_builder.py)
+参照（固定小ベクトルでの加重和数値検証・入力 sha 不一致時の拒否を
+合成 manifest fixture で machine 検証する）。emb バイナリ自体は repo に
+コミットしていない（rights 制約、上記コマンドはいずれも session workdir
+限定のローカル入力に対して実行した）。
+
+### manifest/contract への反映
+
+- `inputs/speaker_map_manifest.json`: `builder_provenance` 節を新設
+  （`builder_sha256` = `speaker_map_builder.py` の実バイト sha256、
+  `logical_name` = `"speaker_map_builder"`、`repo_relative_path` =
+  `"voice_genesis/evolution/run9_dual_founder_pjs/speaker_map_builder.py"`）。
+  既存の founder 実測値（合成 embedding sha256・render sha256・秒数・
+  `pre_pin_verification_summary` 6点）は一切変更していない。
+- `RUN9_CONTRACT.yaml` `expected_speaker_map_sha`: manifest 実バイトが
+  変わったため第2世代へ repin（旧値 = 第1世代、`3f34dc71b34d9fa9445
+  28aba4432501d036d8c26b035a14b40938a255ea182f2` は履歴として contract
+  コメントに保持）。
+- `run9_schema.py`: `validate_speaker_map_manifest()` へ `builder_
+  provenance` の shape 検証を追加、`load_pinned_speaker_map_manifest()`
+  へ cross-check (j)（builder の実バイト sha256 照合、
+  `_resolve_repo_contained_path()` 経由の repo-containment guard 込み）を
+  追加。同関数へ cross-check (b) の拡張として `genome_id` 照合も追加した
+  （PR #328 第1巡指摘2、P2、採用——別項）。
+
 ## 逸脱・停止事由
 
 なし。検証6点すべて PASS、repo ファイル変更ゼロ、`gate_synth.py` は
-read-only 実行のみ。
+read-only 実行のみ。上記追記の builder 再現実測も両 founder とも PASS。

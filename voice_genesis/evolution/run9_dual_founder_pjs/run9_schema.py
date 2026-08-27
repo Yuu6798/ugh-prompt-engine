@@ -16087,21 +16087,41 @@ SPEAKER_MAP_MANIFEST_PATH = _THIS_DIR / "inputs" / "speaker_map_manifest.json"
 _SPEAKER_MAP_REPO_ROOT = _THIS_DIR.parent.parent.parent
 
 SPEAKER_MAP_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
-    "schema", "design_revision", "adjudication_basis", "declaration_af0_not_realized",
-    "synthesis_formula", "founders", "cross_founder_check", "pre_pin_verification_summary",
-    "next_step_per_adjudication", "unchanged_per_adjudication", "repo_state",
+    "schema", "design_revision", "adjudication_basis", "builder_provenance",
+    "declaration_af0_not_realized", "synthesis_formula", "founders", "cross_founder_check",
+    "pre_pin_verification_summary", "next_step_per_adjudication", "unchanged_per_adjudication",
+    "repo_state",
 })
 
 # 裁定が本方式を「design_revision 0.5」として凍結した（逐語「design_
 # revisionを0.5へ上げ」）。本欄は manifest 自身の自己申告値の凍結であり、
 # 契約レベルの `design_revision`（`DESIGN_REVISION` 定数・
-# `RUN9_CONTRACT.yaml` トップレベル欄）とは独立——両者の同期は
-# `DESIGN_RUN9_REVISION_0.5.md`「スコープ注記」節が明記するとおり本 PR の
-# スコープ外（別途のフォローアップ判断）。
+# `RUN9_CONTRACT.yaml` トップレベル欄・`design_revision_doc_sha256` pin）
+# とは別個の欄だが、値自体は既に同期昇格済み——`DESIGN_RUN9_REVISION_
+# 0.5.md`「契約レベルの design_revision 昇格」節のとおり、本 manifest を
+# 収載した PR（RUN9-L0-HARNESS-3a）の同一改訂内で契約レベル三点
+# （`RUN9_CONTRACT.yaml` トップレベル `design_revision` / `run9_schema.
+# DESIGN_REVISION` 定数 / `design_revision_doc_sha256` pin）を 0.4→0.5 へ
+# 同時に repin した（「本 PR のスコープ外」として据え置く初版判断は Fable
+# レビューで不採用と判定され、同文書「経緯注記」節に記録済み）。以後
+# design_revision を変更する際は、契約レベル三点 + 本欄の計四点同期を
+# 同一 PR 内で行う規約とする（PR #328 Codex レビュー第1巡指摘3対応、
+# stale だった「本 PR のスコープ外」記述——参照先の「スコープ注記」節は
+# 既に削除済み——を現行規則へ差し替え）。
 _SPEAKER_MAP_ADJUDICATED_DESIGN_REVISION = "0.5"
 
 _SPEAKER_MAP_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
     "source_file", "sha256", "summary",
+})
+
+# builder_provenance: 合成 embedding を repo-contained に再現する
+# checkout-stable fixture（`speaker_map_builder.py`）の実バイト識別子。
+# PR #328 Codex レビュー第1巡指摘1（P1、採用）対応——session workdir
+# 限定だった合成スクリプトと生成 embedding を fresh checkout から再現・
+# 検証できるようにする。`builder_sha256` は
+# `speaker_map_builder.py`（`repo_relative_path`）の実バイト sha256。
+_SPEAKER_MAP_BUILDER_PROVENANCE_REQUIRED_KEYS: FrozenSet[str] = frozenset({
+    "builder_sha256", "logical_name", "repo_relative_path",
 })
 
 _SPEAKER_MAP_SYNTHESIS_FORMULA_REQUIRED_KEYS: FrozenSet[str] = frozenset({
@@ -16231,14 +16251,20 @@ def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
     みで、以下は `load_pinned_speaker_map_manifest()` 側の cross-check が
     担う（一次データ未 load のためここでは検証しない）:
     (a) 裁定 txt（`adjudication_basis.source_file`）の実バイト sha256 照合
-    (b) 両 founder の `coords_raw` と、`load_pinned_founder_genome_
-        document()` で読んだ発行済み Founder Genome document の `coords`
-        との一致
+    (b) 両 founder の `coords_raw`/`genome_id` と、`load_pinned_founder_
+        genome_document()` で読んだ発行済み Founder Genome document の
+        `coords`/`genome_id` との一致（genome_id 照合は PR #328 Codex
+        レビュー第1巡指摘2、P2、採用対応——coords_raw のみでは「R9F-01
+        coords + 別 founder の genome_id」のような偽装を検出できない
+        穴を閉じる）
     (e) 両 founder の `input_embeddings.{ritsu,user}_emb_sha256` と
         `load_pinned_reexport_manifest()` の `artifacts.{ritsu_emb,
         user_emb}.sha256_run1` との cross-manifest 照合
     (i) `RUN9_CONTRACT.yaml` `expected_speaker_map_sha` pin 値との実バイト
         sha256 一致
+    (j) `builder_provenance.repo_relative_path`（`speaker_map_builder.py`）
+        の実バイト sha256 と `builder_provenance.builder_sha256` との一致
+        （PR #328 Codex レビュー第1巡指摘1、P1、採用対応）
 
     本関数（manifest 単体）が検証する項目:
     (c) `renormalized_runtime_weights` の機械再導出一致——
@@ -16264,6 +16290,8 @@ def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
     (h) `synthesis_formula.prohibited` が裁定4項目・この順序で厳密一致
         すること、`declaration_af0_not_realized` が非主張マーカー4件を
         全て含むこと。
+    (k) `builder_provenance` の shape（`builder_sha256` が 64hex である
+        こと等）——実バイト照合自体は loader 側 (j) が行う。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"speaker map manifest must be an object, got {type(data).__name__}")
@@ -16299,6 +16327,22 @@ def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
             f"speaker map manifest.adjudication_basis.sha256 must be a 64hex sha256, got {basis_sha!r}"
         )
     _require_non_empty_str(basis["summary"], field="adjudication_basis.summary")
+
+    # --- builder_provenance ----------------------------------------------
+    builder = _validate_speaker_map_shape(
+        data["builder_provenance"], field="builder_provenance",
+        required_keys=_SPEAKER_MAP_BUILDER_PROVENANCE_REQUIRED_KEYS,
+    )
+    _require_non_empty_str(builder["logical_name"], field="builder_provenance.logical_name")
+    _require_non_empty_str(
+        builder["repo_relative_path"], field="builder_provenance.repo_relative_path"
+    )
+    builder_sha = builder["builder_sha256"]
+    if not isinstance(builder_sha, str) or not _SHA256_HEX_RE.match(builder_sha):
+        raise Run9ValidationError(
+            f"speaker map manifest.builder_provenance.builder_sha256 must be a 64hex sha256, "
+            f"got {builder_sha!r}"
+        )
 
     # --- declaration_af0_not_realized (h) -------------------------------
     declaration = data["declaration_af0_not_realized"]
@@ -16646,16 +16690,26 @@ def load_pinned_speaker_map_manifest(
     (7) cross-check (b): 両 founder について `load_pinned_founder_genome_
         document()`（`contract`/`domain`/`rights_manifest` を渡す——本関数
         自身が genome document の唯一の正規消費経路を re-use する）で
-        読んだ発行済み Founder Genome document の `coords` と、manifest
-        の `founders.<id>.coords_raw` が anchor 3軸（af0/ritsu/user）
-        全てで厳密一致することを強制する——「発行済みFounder Genome、
-        coords、genome_id...は変更しない」という裁定の不変宣言を消費時
-        にも機械強制する。
+        読んだ発行済み Founder Genome document の `coords`/`genome_id` と、
+        manifest の `founders.<id>.coords_raw`/`genome_id` が、それぞれ
+        anchor 3軸（af0/ritsu/user）全て・genome_id 文字列で厳密一致する
+        ことを強制する——「発行済みFounder Genome、coords、genome_id...は
+        変更しない」という裁定の不変宣言を消費時にも機械強制する
+        （genome_id 照合は PR #328 Codex レビュー第1巡指摘2、P2、採用
+        対応: coords_raw のみの照合では「正しい coords + 別 founder の
+        genome_id」という取り違え偽装を検出できない穴があった）。
     (8) cross-check (e): `load_pinned_reexport_manifest()` で読んだ
         `artifacts.{ritsu_emb,user_emb}.sha256_run1` と、両 founder の
         `input_embeddings.{ritsu,user}_emb_sha256` が一致することを
         cross-manifest で強制する（`pin_match` の自己申告だけでなく実体を
         照合する）。
+    (9) cross-check (j): `builder_provenance.repo_relative_path`
+        （`speaker_map_builder.py`）を `_resolve_repo_contained_path()`
+        経由で repo-containment guard 付きで解決し、実バイト sha256 が
+        `builder_provenance.builder_sha256` と一致することを強制する
+        （PR #328 Codex レビュー第1巡指摘1、P1、採用対応——manifest が
+        自己申告する builder_sha256 と実際に repo に存在する builder の
+        実バイトとの乖離を fail-closed で拒否する）。
 
     戻り値は検証済み manifest dict。
     """
@@ -16734,11 +16788,21 @@ def load_pinned_speaker_map_manifest(
             f"({adjudication_pinned_sha!r}) と一致しない — 裁定文書の改変を fail-closed で拒否する"
         )
 
-    # (7) cross-check (b): coords_raw と発行済み Founder Genome document の一致。
+    # (7) cross-check (b): coords_raw/genome_id と発行済み Founder Genome
+    # document の一致（genome_id 照合は PR #328 レビュー第1巡指摘2対応 —
+    # coords_raw のみでは founder 取り違え偽装を検出できない穴を閉じる）。
     for founder_id in CONTRACT_FOUNDER_IDS:
         genome = load_pinned_founder_genome_document(
             founder_id, contract=revalidated, domain=domain, rights_manifest=rights_manifest,
         )
+        manifest_genome_id = data["founders"][founder_id]["genome_id"]
+        if manifest_genome_id != genome.genome_id:
+            raise Run9ValidationError(
+                f"load_pinned_speaker_map_manifest(): founders.{founder_id}.genome_id "
+                f"({manifest_genome_id!r}) diverges from the pinned Founder Genome document's "
+                f"genome_id ({genome.genome_id!r}) — 発行済み Founder Genome の genome_id 不変宣言を "
+                "fail-closed で拒否する（PR #328 レビュー第1巡指摘2対応）"
+            )
         genome_coords = genome.coords.as_dict()
         manifest_coords_raw = data["founders"][founder_id]["coords_raw"]
         for axis in RUN9_ANCHOR_ORDER:
@@ -16769,5 +16833,29 @@ def load_pinned_speaker_map_manifest(
                 f"user_emb_sha256 ({emb['user_emb_sha256']!r}) diverges from reexport_manifest.json "
                 f"artifacts.user_emb.sha256_run1 ({expected_user_emb!r})"
             )
+
+    # (9) cross-check (j): builder_provenance.builder_sha256 と repo 内
+    # speaker_map_builder.py の実バイト sha256 の一致（PR #328 レビュー
+    # 第1巡指摘1、P1、採用対応）。
+    builder_provenance = data["builder_provenance"]
+    effective_builder_path = _resolve_repo_contained_path(
+        builder_provenance["repo_relative_path"],
+        repo_root=_SPEAKER_MAP_REPO_ROOT,
+        field="builder_provenance.repo_relative_path",
+        context="load_pinned_speaker_map_manifest()",
+    )
+    if not effective_builder_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_speaker_map_manifest(): cross-check source {effective_builder_path} "
+            "(builder_provenance.repo_relative_path) does not exist"
+        )
+    builder_actual_sha = hashlib.sha256(effective_builder_path.read_bytes()).hexdigest()
+    builder_pinned_sha = builder_provenance["builder_sha256"]
+    if builder_actual_sha != builder_pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_speaker_map_manifest(): {effective_builder_path} の実バイト sha256 "
+            f"({builder_actual_sha!r}) が builder_provenance.builder_sha256 pin 値 "
+            f"({builder_pinned_sha!r}) と一致しない — builder の改変を fail-closed で拒否する"
+        )
 
     return data

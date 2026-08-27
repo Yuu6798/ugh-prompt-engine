@@ -18415,6 +18415,20 @@ def test_harness3a_design_revision_promoted_to_0_5(contract: m.Run9RunContract) 
     assert m.gate_state(contract) == "BLOCKED"
 
 
+def test_harness3a_run9_schema_design_revision_comment_no_stale_scope_note() -> None:
+    """PR #328 Codex レビュー第1巡指摘3（P2、採用）対応の回帰: `run9_schema.
+    py` の `_SPEAKER_MAP_ADJUDICATED_DESIGN_REVISION` 直前コメントに、
+    `DESIGN_RUN9_REVISION_0.5.md` から既に削除済みの「スコープ注記」節への
+    参照や「本 PR のスコープ外」という破棄済み判断が残っていないこと
+    （design_revision 昇格が同一改訂内で実施済みという現行事実と矛盾する
+    stale 記述の再発防止）。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert "スコープ外（別途のフォローアップ判断）" not in source
+    assert "同期昇格済み" in source
+    revision_doc_text = DESIGN_REVISION_0_5_DOC_PATH.read_text(encoding="utf-8")
+    assert "スコープ注記" not in revision_doc_text
+
+
 # --- validate_speaker_map_manifest(): 正常系・直列化 ------------------------
 
 
@@ -18656,6 +18670,48 @@ def test_harness3a_manifest_adjudication_basis_sha_shape_rejected() -> None:
         m.validate_speaker_map_manifest(data)
 
 
+# --- validate_speaker_map_manifest(): builder_provenance ---------------------
+# --- (PR #328 Codex レビュー第1巡指摘1、P1、採用) -----------------------------
+
+
+def test_harness3a_manifest_builder_provenance_present() -> None:
+    data = _speaker_map_manifest_data()
+    bp = data["builder_provenance"]
+    assert bp["logical_name"] == "speaker_map_builder"
+    assert bp["repo_relative_path"] == (
+        "voice_genesis/evolution/run9_dual_founder_pjs/speaker_map_builder.py"
+    )
+    assert m._SHA256_HEX_RE.match(bp["builder_sha256"])  # noqa: SLF001 - test-only introspection
+
+
+def test_harness3a_manifest_builder_provenance_missing_key_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    del data["builder_provenance"]["logical_name"]
+    with pytest.raises(m.Run9ValidationError, match="builder_provenance"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_builder_provenance_unknown_key_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["builder_provenance"]["unexpected"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="builder_provenance"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_builder_provenance_sha_shape_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["builder_provenance"]["builder_sha256"] = "not-a-hash"
+    with pytest.raises(m.Run9ValidationError, match="builder_sha256"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_builder_provenance_logical_name_empty_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["builder_provenance"]["logical_name"] = ""
+    with pytest.raises(m.Run9ValidationError, match="logical_name"):
+        m.validate_speaker_map_manifest(data)
+
+
 # --- load_pinned_speaker_map_manifest(): 正常系・cross-check ----------------
 
 
@@ -18797,6 +18853,34 @@ def _loads_bytes(path: Path) -> Dict[str, Any]:
 
 
 @pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_load_pinned_speaker_map_manifest_genome_id_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, founder_id: str,
+) -> None:
+    """genome_id改竄（PR #328 Codex レビュー第1巡指摘2、P2、採用対応）:
+    `coords_raw` は発行済み Founder Genome document と一致させたまま
+    `genome_id` のみを改竄すると（coords 一致だけを見る旧実装なら素通り
+    していた「取り違え偽装」の直接再現）、loader の cross-check (b) が
+    fail-closed で拒否する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        # 有効な16hex genome_id 形状を保ちつつ、実際の発行済み値とは異なる
+        # 値へ差し替える（validator 単体の非空文字列チェックは素通りする）。
+        data["founders"][founder_id]["genome_id"] = "0" * 16
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    # 改竄後 manifest 単体は自己整合しており validator 単体は通過すること
+    # を先に確認する（genome_id 改竄の検出が loader 側の cross-check (b)
+    # に依存していることの直接証拠）。
+    m.validate_speaker_map_manifest(_loads_bytes(manifest_path))
+    with pytest.raises(m.Run9ValidationError, match="genome_id"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
 def test_harness3a_load_pinned_speaker_map_manifest_input_embedding_sha_tampered_vs_reexport_rejected(
     contract: m.Run9RunContract, tmp_path: Path, founder_id: str,
 ) -> None:
@@ -18811,6 +18895,68 @@ def test_harness3a_load_pinned_speaker_map_manifest_input_embedding_sha_tampered
         contract, tmp_path, mutate=_mutate,
     )
     with pytest.raises(m.Run9ValidationError, match="reexport_manifest"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+# --- load_pinned_speaker_map_manifest(): builder_provenance cross-check (j) -
+# --- (PR #328 Codex レビュー第1巡指摘1、P1、採用) -----------------------------
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_builder_sha_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """builder_sha256改竄: `builder_provenance.builder_sha256` を実際の
+    `speaker_map_builder.py` の実バイト sha256 と食い違う値へ改竄すると、
+    loader の cross-check (j) が fail-closed で拒否する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["builder_provenance"]["builder_sha256"] = "a" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="builder_provenance.builder_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_builder_path_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`builder_provenance.repo_relative_path` が repo 内に存在しない
+    パスへ改竄されると fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["builder_provenance"]["repo_relative_path"] = (
+            "voice_genesis/evolution/run9_dual_founder_pjs/does_not_exist_builder.py"
+        )
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_builder_path_escape_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`builder_provenance.repo_relative_path` が絶対パスへ改竄されると
+    repo-containment guard（`_resolve_repo_contained_path()`）が
+    fail-closed で拒否する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["builder_provenance"]["repo_relative_path"] = "/etc/passwd"
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be a repo-relative path"):
         m.load_pinned_speaker_map_manifest(
             tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
             manifest_path=manifest_path, contract_path=contract_path,
