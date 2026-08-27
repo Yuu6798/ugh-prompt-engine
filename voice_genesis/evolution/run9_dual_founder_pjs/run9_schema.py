@@ -16200,7 +16200,8 @@ _SPEAKER_MAP_PRE_PIN_SUMMARY_KEYS: Tuple[str, str, str, str, str, str] = (
 )
 
 _SPEAKER_MAP_PRE_PIN_SUMMARY_REQUIRED_KEYS: FrozenSet[str] = (
-    frozenset(_SPEAKER_MAP_PRE_PIN_SUMMARY_KEYS) | frozenset({"all_pass", "detail_record"})
+    frozenset(_SPEAKER_MAP_PRE_PIN_SUMMARY_KEYS)
+    | frozenset({"all_pass", "detail_record", "detail_record_sha256"})
 )
 
 # 裁定「発行済みFounder Genome、coords、genome_id、TRI_CROSSOVER/1.0は
@@ -16319,6 +16320,12 @@ def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
         の実バイト sha256、(ii) `execution_profile_manifest.json` の
         `render_code_commit.file_sha256` との一致（PR #328 Codex レビュー
         第3巡指摘8、P2、採用対応）
+    (n) `pre_pin_verification_summary.detail_record`（`HARNESS3A_SPEAKER_
+        MAP_RECORD.md` への参照）の実バイト sha256 と `pre_pin_
+        verification_summary.detail_record_sha256` との一致（PR #328
+        Codex レビュー第8巡指摘17、P2、採用対応——旧実装は `detail_record`
+        の非空文字列検証のみで、record が後で編集されても manifest 側の
+        6点 PASS 主張と証拠文書の実体が乖離したまま loader が通っていた）
 
     本関数（manifest 単体）が検証する項目:
     (c) `renormalized_runtime_weights` の機械再導出一致——
@@ -16354,6 +16361,9 @@ def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
         こと等）——実バイト照合自体は loader 側 (j) が行う。
     (m) `repo_state.gate_synth_py_sha256` の shape（64hex であること）——
         実ファイル・execution profile との照合自体は loader 側 (l) が行う。
+    (o) `pre_pin_verification_summary.detail_record_sha256` の shape
+        （64hex であること）——実バイト照合自体は loader 側 (n) が行う
+        （PR #328 Codex レビュー第8巡指摘17、P2、採用対応）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"speaker map manifest must be an object, got {type(data).__name__}")
@@ -16701,6 +16711,12 @@ def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
             f"boolean True, got {summary['all_pass']!r}"
         )
     _require_non_empty_str(summary["detail_record"], field="pre_pin_verification_summary.detail_record")
+    detail_record_sha = summary["detail_record_sha256"]
+    if not isinstance(detail_record_sha, str) or not _SHA256_HEX_RE.match(detail_record_sha):
+        raise Run9ValidationError(
+            "speaker map manifest.pre_pin_verification_summary.detail_record_sha256 must be a "
+            f"64hex sha256, got {detail_record_sha!r}"
+        )
 
     # --- next_step_per_adjudication -----------------------------------
     next_step = data["next_step_per_adjudication"]
@@ -16755,6 +16771,7 @@ def load_pinned_speaker_map_manifest(
     contract: Run9RunContract, *, domain: Run9IdentityDomain, rights_manifest: Mapping[str, Any],
     manifest_path: Optional[Path] = None, contract_path: Optional[Path] = None,
     adjudication_basis_path: Optional[Path] = None, gate_synth_py_path: Optional[Path] = None,
+    detail_record_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """`expected_speaker_map_sha` pin の**唯一の正規消費経路**
     （`load_pinned_execution_profile_manifest()` と同型の3層防御・
@@ -16819,6 +16836,16 @@ def load_pinned_speaker_map_manifest(
              `repo_state.gate_synth_py_sha256` と一致することを
              cross-manifest で強制する（両 manifest が独立に記録した
              gate_synth.py の provenance が食い違えば拒否する）。
+    (11) cross-check (n)（PR #328 Codex レビュー第8巡指摘17、P2、採用
+        対応）: `pre_pin_verification_summary.detail_record`
+        （`HARNESS3A_SPEAKER_MAP_RECORD.md` への repo 相対パス参照）を
+        `_resolve_repo_contained_path()` 経由で repo-containment guard
+        付きで解決し、実バイト sha256 が `pre_pin_verification_summary.
+        detail_record_sha256` と一致することを強制する——旧実装は
+        `detail_record` の非空文字列検証のみで、record が後で編集されても
+        manifest 側の6点 PASS 主張と証拠文書の実体が乖離したまま loader が
+        通っていた穴を閉じる（fail-closed。`detail_record_path` はテスト
+        専用の override 引数、他の cross-check と同じ規約）。
 
     戻り値は検証済み manifest dict。
     """
@@ -17013,5 +17040,37 @@ def load_pinned_speaker_map_manifest(
                 "provenance の不一致を fail-closed で拒否する（smoke WAV の provenance が実在しない "
                 "コードへ帰属される穴を閉じる）"
             )
+
+    # (11) cross-check (n): pre_pin_verification_summary.detail_record
+    # （HARNESS3A_SPEAKER_MAP_RECORD.md への参照）の実バイト sha256 が
+    # pre_pin_verification_summary.detail_record_sha256 pin と一致すること
+    # を machine 強制する（PR #328 Codex レビュー第8巡指摘17、P2、採用
+    # 対応——旧実装は detail_record の非空文字列検証のみで、record が後で
+    # 編集されても manifest 側の6点 PASS 主張と証拠文書の実体が乖離した
+    # まま loader が通っていた）。
+    effective_detail_record_path = (
+        detail_record_path
+        if detail_record_path is not None
+        else _resolve_repo_contained_path(
+            data["pre_pin_verification_summary"]["detail_record"],
+            repo_root=_SPEAKER_MAP_REPO_ROOT,
+            field="pre_pin_verification_summary.detail_record",
+            context="load_pinned_speaker_map_manifest()",
+        )
+    )
+    if not effective_detail_record_path.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_speaker_map_manifest(): cross-check source {effective_detail_record_path} "
+            "(pre_pin_verification_summary.detail_record) does not exist"
+        )
+    detail_record_actual_sha = hashlib.sha256(effective_detail_record_path.read_bytes()).hexdigest()
+    detail_record_pinned_sha = data["pre_pin_verification_summary"]["detail_record_sha256"]
+    if detail_record_actual_sha != detail_record_pinned_sha:
+        raise Run9ValidationError(
+            f"load_pinned_speaker_map_manifest(): {effective_detail_record_path} の実バイト sha256 "
+            f"({detail_record_actual_sha!r}) が pre_pin_verification_summary.detail_record_sha256 "
+            f"pin 値 ({detail_record_pinned_sha!r}) と一致しない — 実測記録の改変（6点 PASS 主張と "
+            "証拠文書の乖離）を fail-closed で拒否する（PR #328 レビュー第8巡指摘17対応）"
+        )
 
     return data

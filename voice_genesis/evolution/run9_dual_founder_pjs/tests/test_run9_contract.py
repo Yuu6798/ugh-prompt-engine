@@ -18385,7 +18385,7 @@ def test_harness3a_design_revision_0_5_doc_exists_and_sha_matches_contract_pin()
     assert DESIGN_REVISION_0_5_DOC_PATH.is_file()
     assert DESIGN_REVISION_0_5_DOC_PATH == REVISION_DOC_PATH
     actual = m.compute_file_sha256(DESIGN_REVISION_0_5_DOC_PATH)
-    assert actual == "15fbe4b6695f9d92dbfb847c203dc1047562993b17d9572481669a5c12bb61f8"
+    assert actual == "095ce77147e897473e8d87b474159c2ff4fdeb6684356cc03649f99a603cb2a9"
     contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
     field = contract_raw["design_revision_doc_sha256"]
     assert field["status"] == "PINNED"
@@ -18668,6 +18668,23 @@ def test_harness3a_manifest_pre_pin_verification_summary_all_pass_forged_rejecte
     data = copy.deepcopy(_speaker_map_manifest_data())
     data["pre_pin_verification_summary"]["all_pass"] = False
     with pytest.raises(m.Run9ValidationError, match="all_pass"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_pre_pin_verification_summary_detail_record_sha256_shape_rejected() -> None:
+    """指摘17（PR #328 レビュー第8巡、P2、採用対応）: `detail_record_
+    sha256` は64hexでなければ validator 単体（shape 検証 (o)）で拒否
+    される。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["pre_pin_verification_summary"]["detail_record_sha256"] = "not-a-hash"
+    with pytest.raises(m.Run9ValidationError, match="detail_record_sha256"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_pre_pin_verification_summary_detail_record_sha256_missing_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    del data["pre_pin_verification_summary"]["detail_record_sha256"]
+    with pytest.raises(m.Run9ValidationError, match="pre_pin_verification_summary"):
         m.validate_speaker_map_manifest(data)
 
 
@@ -19125,6 +19142,62 @@ def test_harness3a_load_pinned_speaker_map_manifest_gate_synth_py_execprofile_cr
             tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
             manifest_path=manifest_path, contract_path=contract_path,
             gate_synth_py_path=fake_gate_synth,
+        )
+
+
+# --- load_pinned_speaker_map_manifest(): detail_record cross-check (n) ------
+# --- (PR #328 Codex レビュー第8巡指摘17、P2、採用) ---------------------------
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_detail_record_sha_manifest_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """manifest 側 sha 改竄: `pre_pin_verification_summary.
+    detail_record_sha256` を実際の `HARNESS3A_SPEAKER_MAP_RECORD.md` の
+    実バイト sha256 と食い違う値へ改竄すると、loader の cross-check (n) が
+    fail-closed で拒否する（旧実装は `detail_record` の非空文字列検証の
+    みで、この改竄を素通りさせていた）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["pre_pin_verification_summary"]["detail_record_sha256"] = "a" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="detail_record_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_detail_record_real_file_diverges_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """record 改竄（実ファイル相違、オーバーライドで偽ファイル注入）:
+    manifest 側の `detail_record_sha256` は正規の pin 値のままでも、
+    `detail_record_path` オーバーライドで内容の異なる偽 record を注入
+    すると、loader の cross-check (n) が fail-closed で拒否する——record
+    が後で編集されても6点 PASS 主張と証拠文書の実体が乖離したまま通って
+    いた穴の直接反証。"""
+    fake_record = tmp_path / "HARNESS3A_SPEAKER_MAP_RECORD.md"
+    fake_record.write_bytes(b"# tampered record content\n")
+    with pytest.raises(m.Run9ValidationError, match="detail_record_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            detail_record_path=fake_record,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_detail_record_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`detail_record_path` オーバーライドが存在しないファイルを指すと
+    fail-closed で拒否される。"""
+    missing_path = tmp_path / "does_not_exist_record.md"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_speaker_map_manifest(
+            contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            detail_record_path=missing_path,
         )
 
 

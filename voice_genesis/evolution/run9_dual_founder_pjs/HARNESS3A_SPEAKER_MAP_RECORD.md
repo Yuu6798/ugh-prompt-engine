@@ -817,6 +817,131 @@ manifest pin と一致）に対し両 founder で再実行し、いずれも
 `0a681a2c...` と完全一致・exit 0）を再確認した——`manifest_override` の
 新設は production 経路（省略時）の挙動に一切影響しないことの直接証拠。
 
+## 追記: PR #328 Codex レビュー第8巡3件（P2×2・P1×1、いずれも採用）対応 —
+## doc誤帰属訂正 + atomic write 保護入力の内部re-check + detail_record実
+## バイト cross-check 新設（2026-08-27、Claude 完結ルート）
+
+第7世代 repin 後の `DESIGN_RUN9_REVISION_0.5.md`/`speaker_map_builder.py`/
+`run9_schema.py` に対し、第8巡で以下3件が指摘された（いずれも採用・
+Fable 確定方針）。
+
+- **指摘15（P2）**: `DESIGN_RUN9_REVISION_0.5.md`「4. 不変宣言」節が、
+  発行済み Founder Genome の `coords`/`genome_id`/`profile_label` との
+  cross-document 照合を `validate_speaker_map_manifest()`（manifest 単体
+  の構造・自己整合のみを検証し、一次データ未 load のため cross-document
+  照合は行わない）の cross-check (b) として記述していたが、実際にこの
+  照合を行うのは `load_pinned_speaker_map_manifest()` 側であり、弱い API
+  （internal-only validator）へ読者を誘導する誤記だった。
+- **指摘16（P1）**: `speaker_map_builder.py` の `_atomic_write_bytes()` が
+  `path`/`data` のみを受け取り、`--out` が保護対象の入力（ritsu/user emb）
+  と同一実体でないかの alias 判定を呼び出し元の preflight
+  （`_check_out_does_not_alias_inputs()`）に全面的に依存していたため、
+  将来この関数が preflight を経由せず直接呼び出される/リファクタされる
+  改修が入ると、検証済み保護入力を `os.replace()` で破壊し得る穴があった。
+- **指摘17（P2）**: manifest の `pre_pin_verification_summary.
+  detail_record`（`HARNESS3A_SPEAKER_MAP_RECORD.md` への参照）が非空
+  文字列検証のみで、record が後で編集されても6点 PASS 主張と証拠文書の
+  実体が乖離したまま `load_pinned_speaker_map_manifest()` が通っていた。
+
+### 対応
+
+- **指摘15**: `DESIGN_RUN9_REVISION_0.5.md`「4. 不変宣言」節の該当記述を
+  「この照合自体は `validate_speaker_map_manifest()`（manifest 単体の
+  構造・自己整合のみを検証し、一次データ未 load のため cross-document
+  照合は行わない）ではなく、`load_pinned_speaker_map_manifest()` の
+  cross-check (b) が担う」という loader への正しい帰属へ訂正した。文書
+  全体を `validate_speaker_map_manifest`/`load_pinned_speaker_map_
+  manifest`/`load_pinned_founder_genome_document` で grep し、他の5箇所
+  （§1 禁止4項目 = (h)、§2 unrealized_mass = (d)、§3 非主張マーカー =
+  (h)、§5 pre_pin_verification_summary 6点 PASS = (f)）はいずれも
+  `validate_speaker_map_manifest()`（manifest 単体で完結する自己整合
+  検証）に正しく帰属していることを実装（`run9_schema.py` 該当関数の
+  docstring 分類 (a)〜(m)）と突き合わせて確認済み——同種の誤帰属は他に
+  なかった。doc byte が変化したため `design_revision_doc_sha256` を
+  repin した（旧値は「manifest/contract への反映」節参照）。
+- **指摘16**: `_check_out_does_not_alias_inputs()`（preflight）と
+  `_atomic_write_bytes()`（内部 re-check）が共有する単一実装
+  `_resolve_alias_conflict(out_path, protected_paths)` を新設し、
+  `_atomic_write_bytes()` のシグネチャへ `protected_paths: Sequence[Path]`
+  を**必須引数**として追加した——書き込み直前にこのヘルパーで alias を
+  再チェックし、alias が見つかれば `Run9ValidationError` を送出して
+  staging ファイルを一切作らず拒否する（`path` の既存実バイトにも
+  一切触れない）。`_execute_cli()` の `atomic_write_fn` 呼び出しを
+  `atomic_write_fn(args.out, synth.tobytes(), (args.ritsu_emb,
+  args.user_emb))` へ更新し、CLI 側の `_check_out_does_not_alias_
+  inputs()` preflight は変更せず維持した（二重防御）。既存テストを新
+  シグネチャへ追随させ、負例2件（`_atomic_write_bytes()` を preflight
+  を経由せず直接呼び出し、`protected_paths` に out と同一実体のパスを
+  渡すと fail-closed 拒否されること——同一パス指定 + symlink alias 指定
+  の2系統）を `tests/test_speaker_map_builder.py` へ追加した。
+- **指摘17**: `inputs/speaker_map_manifest.json`
+  `pre_pin_verification_summary` へ `detail_record_sha256`（64hex）を
+  新設し、`validate_speaker_map_manifest()` へ shape 検証（(o)）、
+  `load_pinned_speaker_map_manifest()` へ cross-check (n) として
+  `pre_pin_verification_summary.detail_record`（本記録文書）を
+  `_resolve_repo_contained_path()` 経由で repo-containment guard 付きで
+  解決し、実バイト sha256 が `detail_record_sha256` と一致することを
+  fail-closed で強制する検証を追加した（他の cross-check と同じ規約で
+  `detail_record_path` をテスト専用 override 引数として追加、
+  `speaker_map_builder.load_canonical_speaker_map_manifest()`/`main()`
+  にも同 override を forward）。負例2件（record 実バイト改竄→ cross-check
+  (n) が拒否、manifest 側 `detail_record_sha256` 改竄→同じく cross-check
+  (n) が拒否）を `tests/test_run9_contract.py` へ追加した。
+
+**鶏卵の解消手順**: 指摘16 の実装で `speaker_map_builder.py` の実バイトが
+変わるため、本記録の「builder 再現実測」節（下記）を実測 → 本記録文書へ
+追記して record バイトを確定 → record の実バイト sha256 を実測 →
+manifest へ `detail_record_sha256` として追加、という順序で実施した
+（record は自身の sha256 を内部に書けないため——`design_revision_doc_
+sha256`/`expected_speaker_map_sha` 前例と同じ「値の転記先は別ファイル」
+規約）。
+
+### builder 再現実測（両 founder）— 指摘16 対応後の verified self-exec
+### dispatch 経由 CLI 再実行
+
+指摘16 対応で `_atomic_write_bytes()`/`_execute_cli()` のシグネチャが
+変わったため（`synthesize()` の合成ロジック自体には一切触れていない）、
+`speaker_map_builder.py`（`main()`、verified self-exec dispatch 経由）を
+workdir 現存の実 ritsu/user emb（`reexport_out/onnx_gate_40000/
+s5_run6_acoustic_v1.{ritsu,user}.emb`、入力 sha256 = `ce4b87b99ac8aa7de
+7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c`/`588913b74d6c16e01f4
+f33223698cd165ac686012e7d878475a3799ccee8bde0`、reexport manifest pin と
+一致）に対し両 founder で再実行し、いずれも `reproduced: true`（出力
+sha256 が manifest pin `fc7b73fd98ef77f7caeba44761bdfe2933228cd9869bc6
+b27131230dade6e1e9`/`0a681a2c419295c739f6040316412e1cc5b6d16ee496e7f58
+ee36c45b425c2a1` と完全一致・exit 0、`--out` 実書き込み経路も
+`_atomic_write_bytes()` の新 `protected_paths` 引数付きで正常完走）を
+確認した——指摘16 の防御強化が正常系の再現性に影響しないことの直接
+証拠。
+
+### manifest/contract への反映
+
+- `DESIGN_RUN9_REVISION_0.5.md`: 「4. 不変宣言」節の cross-check (b)
+  帰属記述を訂正（指摘15）。doc byte が変わったため
+  `RUN9_CONTRACT.yaml` `design_revision_doc_sha256` を repin した。旧値
+  （PR #328 第1巡3件対応後）は履歴として保持する:
+  `15fbe4b6695f9d92dbfb847c203dc1047562993b17d9572481669a5c12bb61f8`
+- `speaker_map_builder.py`: `_resolve_alias_conflict()` 新設 +
+  `_atomic_write_bytes()` の `protected_paths` 必須引数化 +
+  `load_canonical_speaker_map_manifest()`/`main()` への
+  `detail_record_path` override 追加（指摘16・17）。
+- `inputs/speaker_map_manifest.json`: `builder_provenance.builder_sha256`
+  を `speaker_map_builder.py` の新しい実バイト sha256 へ更新、
+  `pre_pin_verification_summary.detail_record_sha256` を本記録文書
+  （本追記込みの最終バイト）の実バイト sha256 として新設。既存の founder
+  実測値（合成 embedding sha256・render sha256・秒数・
+  `pre_pin_verification_summary` 6点・重み式そのもの・`profile_label`・
+  `coords_raw`）は一切変更していない。
+- `RUN9_CONTRACT.yaml` `expected_speaker_map_sha`: manifest 実バイトが
+  変わったため第8世代へ repin（旧値 = 第7世代、
+  `97bb0b46427d3fd886083f02431d3cf7643508c551feab7677ba3b76f3a2ab68` は
+  履歴として contract コメントに保持）。
+- `run9_schema.py`: `validate_speaker_map_manifest()` へ
+  `detail_record_sha256` の shape 検証 (o) を追加、
+  `_SPEAKER_MAP_PRE_PIN_SUMMARY_REQUIRED_KEYS` へ `detail_record_sha256`
+  を追加、`load_pinned_speaker_map_manifest()` へ `detail_record_path`
+  override 引数 + cross-check (n) を追加。
+
 ## 逸脱・停止事由
 
 **第1〜3巡分**: なし。検証6点すべて PASS、repo ファイル変更ゼロ、
@@ -841,4 +966,10 @@ profile_label 追加のみ）。
 `manifest_override` 追加後の CLI 経由の両 founder 再現実測）すべて PASS。
 合成ロジック自体・両 founder の実測出力 sha256 は本対応で変更していない
 （変更対象は `main()` へのテスト専用 kwarg 追加のみ）。
+
+**第8巡分（指摘15・16・17）**: なし。検証（`ruff check .`/対象テスト全件/
+verified self-exec dispatch 経由の両 founder 再現実測）すべて PASS。合成
+ロジック自体・両 founder の実測出力 sha256 は本対応で変更していない
+（変更対象は doc 記述の帰属訂正・`_atomic_write_bytes()` の内部 alias
+re-check・`detail_record_sha256` cross-check 新設のみ）。
 ruff/pytest は全件 PASS。

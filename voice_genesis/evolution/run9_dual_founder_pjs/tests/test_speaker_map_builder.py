@@ -442,7 +442,7 @@ def test_atomic_write_bytes_writes_full_content_and_no_staging_leftover(
     （atomic 置換後の bytes 一致 + staging cleanup の直接証拠）。"""
     out_path = tmp_path / "out.emb"
     payload = b"\x01\x02\x03\x04" * 96
-    smb._atomic_write_bytes(out_path, payload)  # noqa: SLF001
+    smb._atomic_write_bytes(out_path, payload, ())  # noqa: SLF001
     assert out_path.read_bytes() == payload
     leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(f".{out_path.name}.")]
     assert leftovers == []
@@ -454,7 +454,7 @@ def test_atomic_write_bytes_replaces_existing_file(tmp_path: Path) -> None:
     out_path = tmp_path / "out.emb"
     out_path.write_bytes(b"\x00" * 4)
     payload = b"\xff" * 8
-    smb._atomic_write_bytes(out_path, payload)  # noqa: SLF001
+    smb._atomic_write_bytes(out_path, payload, ())  # noqa: SLF001
     assert out_path.read_bytes() == payload
 
 
@@ -464,7 +464,7 @@ def test_atomic_write_bytes_creates_parent_dir(tmp_path: Path) -> None:
     と同じ挙動を `_atomic_write_bytes()` 自身が担う）。"""
     out_path = tmp_path / "nested" / "dir" / "out.emb"
     payload = b"\x09" * 16
-    smb._atomic_write_bytes(out_path, payload)  # noqa: SLF001
+    smb._atomic_write_bytes(out_path, payload, ())  # noqa: SLF001
     assert out_path.read_bytes() == payload
 
 
@@ -486,7 +486,7 @@ def test_atomic_write_bytes_failure_injection_leaves_old_bytes_intact(
     monkeypatch.setattr(smb, "os", _ForwardingModuleProxy(os, replace=_boom))
 
     with pytest.raises(RuntimeError, match="injected failure"):
-        smb._atomic_write_bytes(out_path, b"\x99" * 384)  # noqa: SLF001
+        smb._atomic_write_bytes(out_path, b"\x99" * 384, ())  # noqa: SLF001
 
     # 旧出力の実バイトが無傷のまま残っていること（truncate/partial 出力なし）。
     assert out_path.read_bytes() == original_bytes
@@ -522,7 +522,7 @@ def test_atomic_write_bytes_failure_injection_during_write_leaves_old_bytes_inta
     monkeypatch.setattr(smb, "os", _ForwardingModuleProxy(os, fdopen=_fake_fdopen))
 
     with pytest.raises(RuntimeError, match="injected failure during staging write"):
-        smb._atomic_write_bytes(out_path, b"\x77" * 384)  # noqa: SLF001
+        smb._atomic_write_bytes(out_path, b"\x77" * 384, ())  # noqa: SLF001
 
     assert out_path.read_bytes() == original_bytes
 
@@ -552,12 +552,50 @@ def test_atomic_write_bytes_staging_does_not_alias_input_paths(
     monkeypatch.setattr(
         smb, "tempfile", _ForwardingModuleProxy(tempfile, mkstemp=_tracking_mkstemp),
     )
-    smb._atomic_write_bytes(out_path, b"\x42" * 384)  # noqa: SLF001
+    smb._atomic_write_bytes(out_path, b"\x42" * 384, (ritsu_path, user_path))  # noqa: SLF001
 
     assert len(seen_staging_names) == 1
     staging_path = Path(seen_staging_names[0])
     assert staging_path.resolve() != ritsu_path.resolve()
     assert staging_path.resolve() != user_path.resolve()
+
+
+def test_atomic_write_bytes_direct_call_out_path_aliasing_protected_path_rejected(
+    tmp_path: Path,
+) -> None:
+    """指摘16（PR #328 Codex レビュー第8巡、P1、採用対応）負例:
+    `_check_out_does_not_alias_inputs()` preflight を経由せず
+    `_atomic_write_bytes()` を直接呼び出しても、`protected_paths` に
+    `path`（out）と同一実体のパスが含まれていれば内部の再チェックで
+    fail-closed 拒否される——将来の直接呼び出し/リファクタが preflight を
+    省略しても保護入力を `os.replace()` で破壊できないことの直接証拠。"""
+    protected_path = tmp_path / "ritsu.emb"
+    original_bytes = b"\x01\x02\x03\x04" * 96
+    protected_path.write_bytes(original_bytes)
+    with pytest.raises(m.Run9ValidationError, match="protected input path"):
+        smb._atomic_write_bytes(protected_path, b"\xff" * 384, (protected_path,))  # noqa: SLF001
+    # 保護対象入力の実バイトが無傷のまま残っていること（破壊されていない）。
+    assert protected_path.read_bytes() == original_bytes
+    # staging ファイルすら作られていないこと。
+    leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(f".{protected_path.name}.")]
+    assert leftovers == []
+
+
+def test_atomic_write_bytes_direct_call_out_path_symlink_aliasing_protected_path_rejected(
+    tmp_path: Path,
+) -> None:
+    """指摘16 負例その2: `path`（out）が `protected_paths` の1つと
+    symlink 経由で同一実体を指す場合も、直接呼び出しで fail-closed 拒否
+    される（`_check_out_does_not_alias_inputs()` の symlink 検出テストと
+    同型のカバレッジを内部 re-check 側にも持たせる）。"""
+    protected_path = tmp_path / "ritsu.emb"
+    original_bytes = b"\xaa\xbb\xcc\xdd" * 96
+    protected_path.write_bytes(original_bytes)
+    out_symlink = tmp_path / "out_alias.emb"
+    out_symlink.symlink_to(protected_path)
+    with pytest.raises(m.Run9ValidationError, match="protected input path"):
+        smb._atomic_write_bytes(out_symlink, b"\xff" * 384, (protected_path,))  # noqa: SLF001
+    assert protected_path.read_bytes() == original_bytes
 
 
 def test_execute_cli_writes_atomically_via_out_flag(tmp_path: Path) -> None:

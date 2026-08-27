@@ -304,8 +304,20 @@ design_doc_sha256:
 # 再計算した（旧値
 # acaa8586a93b6c662e427b5f2015e57ca314128ba4cc1dde7ca7ce8841ca6fec は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #328 Codex レビュー第8巡指摘15、P2、採用対応。
+# Claude 完結ルート）: 「4. 不変宣言」節が、発行済み Founder Genome の
+# coords/genome_id/profile_label との cross-document 照合を
+# `validate_speaker_map_manifest()`（manifest 単体の構造・自己整合のみを
+# 検証し、一次データ未 load のため cross-document 照合は行わない）の
+# cross-check (b) として記述していたが、実際にこの照合を行うのは
+# `load_pinned_speaker_map_manifest()` 側であり、弱い API へ読者を誘導する
+# 誤記だった——validator = manifest 内部整合のみ・loader = cross-document
+# 照合、という正しい役割分担へ訂正した。文書全体を grep し、他の同種誤帰属
+# がないことを確認済み（詳細は `HARNESS3A_SPEAKER_MAP_RECORD.md` 第8巡
+# 追記参照）。旧値（PR #328 第1巡3件対応後）は履歴として保持する:
+#   15fbe4b6695f9d92dbfb847c203dc1047562993b17d9572481669a5c12bb61f8
 design_revision_doc_sha256:
-  value: "15fbe4b6695f9d92dbfb847c203dc1047562993b17d9572481669a5c12bb61f8"
+  value: "095ce77147e897473e8d87b474159c2ff4fdeb6684356cc03649f99a603cb2a9"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.5.md
 
@@ -1537,8 +1549,40 @@ seed_policy_sha:
 # 再確認済み（`HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照）。旧 pin 値
 # （第6世代、PR #328 第6巡指摘13対応後）は履歴として保持する:
 #   31eca739390feae363d0ec8a1a2e9a8b653c9106327e02fe30a17c606f9ed099
+#
+# 2026-08-27 第8世代 repin（PR #328 Codex レビュー第8巡指摘16・17、
+# P1×1・P2×1、いずれも採用。Claude 完結ルート）: 指摘16（P1）
+# `speaker_map_builder.py` の `_atomic_write_bytes()` が `path`/`data` の
+# みを受け取り、`--out` が保護対象の入力（ritsu/user emb）と同一実体で
+# ないかの alias 判定を呼び出し元の preflight
+# （`_check_out_does_not_alias_inputs()`）へ全面的に依存していたため、
+# 将来この関数が preflight を経由せず直接呼び出される/リファクタされる
+# 改修が入ると保護入力を `os.replace()` で破壊し得る穴があった——
+# `_check_out_does_not_alias_inputs()`/`_atomic_write_bytes()` が共有する
+# 単一実装 `_resolve_alias_conflict()` を新設し、`_atomic_write_bytes()`
+# のシグネチャへ `protected_paths: Sequence[Path]` を必須引数として追加、
+# 書き込み直前に alias を再チェックするようにした（CLI 側 preflight は
+# 維持——二重防御）。指摘17（P2）manifest の `pre_pin_verification_
+# summary.detail_record`（`HARNESS3A_SPEAKER_MAP_RECORD.md` への参照）が
+# 非空文字列検証のみで、record が後で編集されても6点 PASS 主張と証拠文書
+# の実体が乖離したまま `load_pinned_speaker_map_manifest()` が通っていた
+# ——`pre_pin_verification_summary.detail_record_sha256`（64hex）を新設し、
+# `load_pinned_speaker_map_manifest()` の cross-check (n) として record
+# 実バイト sha256 との一致を fail-closed で強制する検証を追加した。指摘16・
+# 17 とも speaker map の実測事実（各 founder の合成 embedding sha256・
+# render sha256・秒数・pre_pin_verification_summary の6点 PASS・重みの
+# 実効値そのもの・coords_raw・profile_label）を一切変更しない——
+# `builder_provenance.builder_sha256` repin（指摘16 で speaker_map_
+# builder.py の実バイトが変わったため）+ `detail_record_sha256` 新設
+# （指摘17）のみが本欄の repin 理由。builder 再現実測を workdir 現存の実
+# emb（`reexport_out/onnx_gate_40000/`）に対し verified self-exec
+# dispatch 経由で再実行し、両 founder の出力 sha256（`fc7b73fd...`/
+# `0a681a2c...`）が pin 値と不変のまま一致することを確認済み
+# （`HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照）。旧 pin 値（第7世代、
+# PR #328 第7巡指摘14対応後）は履歴として保持する:
+#   97bb0b46427d3fd886083f02431d3cf7643508c551feab7677ba3b76f3a2ab68
 expected_speaker_map_sha:
-  value: "97bb0b46427d3fd886083f02431d3cf7643508c551feab7677ba3b76f3a2ab68"
+  value: "47380a94cf88c9b8d213f5fcaa4422ad94fcb99a45086060f5261286c5d55c23"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/speaker_map_manifest.json
 

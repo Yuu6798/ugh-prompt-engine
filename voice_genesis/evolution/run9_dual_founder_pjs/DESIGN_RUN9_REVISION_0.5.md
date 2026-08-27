@@ -123,11 +123,16 @@ coords_raw.af0` を fail-closed で強制する（af0 の質量が runtime 合�
 `["発行済み Founder Genome", "coords", "genome_id", "TRI_CROSSOVER/1.0"]`
 の4項目ちょうどを収載する。実装面では `founders/R9F-0{1,2}_genome.json`
 ・`RUN9_CONTRACT.yaml` `founder_genome_shas`・TRI_CROSSOVER/1.0 関連
-定数のいずれも本改訂で1byteも変更しない——`validate_speaker_map_
-manifest()` の cross-check (b) が両 founder の `coords_raw` を
-`load_pinned_founder_genome_document()` 経由で読んだ**発行済み** Genome
-document の `coords` と厳密一致させることで、この不変宣言を消費時にも
-機械強制する。
+定数のいずれも本改訂で1byteも変更しない——ただしこの照合自体は
+`validate_speaker_map_manifest()`（manifest 単体の構造・自己整合のみを
+検証し、一次データ未 load のため cross-document 照合は行わない）では
+なく、`load_pinned_speaker_map_manifest()` の cross-check (b) が担う。
+同関数が `load_pinned_founder_genome_document()` 経由で読んだ**発行済み**
+Genome document の `coords`/`genome_id`/`profile_label` と manifest 側の
+`founders.<id>.coords_raw`/`genome_id`/`profile_label` を厳密一致させる
+ことで、この不変宣言を消費時にも機械強制する（validator = manifest 内部
+整合のみ・loader = cross-document 照合、という役割分担は `run9_schema.py`
+`validate_speaker_map_manifest()` docstring が正）。
 
 ## 5. pin 前検証6点
 

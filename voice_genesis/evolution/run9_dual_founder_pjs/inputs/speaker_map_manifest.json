@@ -5,7 +5,7 @@
     "summary": "User 裁定 2026-08-26 AF0 runtime mapping（方式A採用）。RUN9 構造 Genome は af0/ritsu/user 三点 Identity Domain を保持するが、byte-verified な AF0 speaker embedding が現行 RUN6 Backbone に存在しないため、runtime render では ritsu/user 成分のみを再正規化して線形合成する。"
   },
   "builder_provenance": {
-    "builder_sha256": "52b8c36a6b0fa64f8612d9d2585e167a9fba35f0a21abcb871b81ffb70b34079",
+    "builder_sha256": "064172e50d19d39d5fd2c944cd131d12a11d2cc519cd31ce62d18c72bc9ff428",
     "logical_name": "speaker_map_builder",
     "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/speaker_map_builder.py"
   },
@@ -141,7 +141,8 @@
     "5_smoke_render_success": "PASS",
     "6_render_replay_determinism": "PASS",
     "all_pass": true,
-    "detail_record": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3A_SPEAKER_MAP_RECORD.md"
+    "detail_record": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3A_SPEAKER_MAP_RECORD.md",
+    "detail_record_sha256": "d2336ad71b0812795bd434e227b22764e70b1b3b32138c9470722f499eac200a"
   },
   "repo_state": {
     "gate_synth_py_execution_mode": "read-only CLI execution only（編集なし）",

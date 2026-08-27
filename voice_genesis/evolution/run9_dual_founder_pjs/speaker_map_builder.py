@@ -55,7 +55,13 @@ L2正規化・摂動・ランダム成分・重み調整は一切行わない（
        残さない（PR #328 Codex レビュー第3巡指摘7、P2、採用対応。
        `_atomic_write_bytes()`。svp_rpe 側の `utils/atomic_io` 集約実装と
        同型だが、本 run9 系は svp_rpe を import しない独立構成のため builder
-       内へ自足させた最小実装）。
+       内へ自足させた最小実装）。`_atomic_write_bytes()` は保護対象の入力
+       パス群（`protected_paths`）を**必須引数**として受け取り、書き込み
+       直前に (iii) と同じ alias 判定ロジック（`_resolve_alias_conflict()`）
+       で再チェックする——CLI 側の (iii) preflight は維持した上での二重
+       防御であり、将来 `_atomic_write_bytes()` が preflight を経由せず
+       直接呼び出される/リファクタされても保護入力を `os.replace()` で
+       破壊しない（PR #328 Codex レビュー第8巡指摘16、P1、採用対応）。
   (v)  manifest は `load_canonical_speaker_map_manifest()`（本 builder CLI
        の**唯一の**正規 manifest 取得経路。`synthesize()` の
        `manifest=None`（CLI 既定経路）から呼ばれる）を経由してのみ読む
@@ -116,7 +122,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -137,6 +143,7 @@ def load_canonical_speaker_map_manifest(
     identity_domain_path: Optional[Path] = None,
     adjudication_basis_path: Optional[Path] = None,
     gate_synth_py_path: Optional[Path] = None,
+    detail_record_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """本 builder CLI が speaker map manifest を得る**唯一の**正規経路
     （PR #328 Codex レビュー第4巡指摘9、P1、採用対応）。
@@ -174,10 +181,10 @@ def load_canonical_speaker_map_manifest(
     保証する）が担う。
 
     `contract_path`/`manifest_path`/`rights_manifest_path`/
-    `identity_domain_path`/`adjudication_basis_path`/`gate_synth_py_path`
-    はいずれもテスト専用の override 引数——production 呼び出し（全省略）
-    は repo 相対の正典パスのみを消費する（他の `load_pinned_*` 系と同じ
-    override 規約）。
+    `identity_domain_path`/`adjudication_basis_path`/`gate_synth_py_path`/
+    `detail_record_path`（PR #328 レビュー第8巡指摘17対応で追加）はいずれも
+    テスト専用の override 引数——production 呼び出し（全省略）は repo 相対
+    の正典パスのみを消費する（他の `load_pinned_*` 系と同じ override 規約）。
     """
     effective_contract_path = (
         contract_path if contract_path is not None else m.RUN9_CONTRACT_YAML_PATH
@@ -208,6 +215,7 @@ def load_canonical_speaker_map_manifest(
         contract_path=effective_contract_path,
         adjudication_basis_path=adjudication_basis_path,
         gate_synth_py_path=gate_synth_py_path,
+        detail_record_path=detail_record_path,
     )
     return data
 
@@ -334,35 +342,53 @@ def synthesize(
     return synth, report
 
 
+def _resolve_alias_conflict(out_path: Path, protected_paths: Sequence[Path]) -> Optional[Path]:
+    """`out_path` を `Path.resolve()` で解決したうえで、`protected_paths`
+    のいずれかと同一実体（symlink 経由の alias 含む）であれば、その
+    protected path を返す（alias でなければ `None`）。
+
+    `_check_out_does_not_alias_inputs()`（CLI 呼び出し前の preflight）と
+    `_atomic_write_bytes()`（書き込み直前の内部 re-check）が共有する
+    alias 判定ロジックの単一実装（PR #328 Codex レビュー第8巡指摘16、P1、
+    採用対応）——別々に実装すると、将来どちらか一方だけが改修されて判定が
+    食い違う穴を防ぐ。"""
+    out_resolved = out_path.resolve()
+    for protected in protected_paths:
+        if out_resolved == protected.resolve():
+            return protected
+    return None
+
+
 def _check_out_does_not_alias_inputs(
     out_path: Path, ritsu_emb_path: Path, user_emb_path: Path,
 ) -> Optional[str]:
     """`out_path` が `ritsu_emb_path`/`user_emb_path` のいずれかと同一実体
     （symlink 経由の alias 含む）であれば拒否理由の文字列を返す（alias で
-    なければ `None`）。3パスを `Path.resolve()` で解決してから比較する
-    ——`--out` が `--ritsu-emb`/`--user-emb` と同一実体（symlink 経由の
-    alias 含む）の場合、無条件 `write_bytes()` が検証済み入力 emb を破壊
-    する穴を書き込み前に閉じる（PR #328 Codex レビュー第2巡指摘4、P1、
-    採用対応）。"""
+    なければ `None`）。`_resolve_alias_conflict()` で3パスを
+    `Path.resolve()` 解決してから比較する——`--out` が `--ritsu-emb`/
+    `--user-emb` と同一実体（symlink 経由の alias 含む）の場合、無条件
+    `write_bytes()` が検証済み入力 emb を破壊する穴を書き込み前に閉じる
+    （PR #328 Codex レビュー第2巡指摘4、P1、採用対応）。この preflight は
+    `_atomic_write_bytes()` 内部の再チェック（PR #328 レビュー第8巡指摘16
+    対応）と同じ判定ロジックを共有する二重防御の1層目である。"""
+    conflict = _resolve_alias_conflict(out_path, (ritsu_emb_path, user_emb_path))
+    if conflict is None:
+        return None
     out_resolved = out_path.resolve()
-    ritsu_resolved = ritsu_emb_path.resolve()
-    user_resolved = user_emb_path.resolve()
-    if out_resolved == ritsu_resolved:
+    if conflict == ritsu_emb_path:
         return (
             f"--out ({out_path}) resolves to the same file as --ritsu-emb ({ritsu_emb_path}), "
             f"resolved={out_resolved} — fail-closed 拒否（同一実体/symlink alias への書き込みは "
             "検証済み入力 emb の破壊を招くため書き込みを拒否する）"
         )
-    if out_resolved == user_resolved:
-        return (
-            f"--out ({out_path}) resolves to the same file as --user-emb ({user_emb_path}), "
-            f"resolved={out_resolved} — fail-closed 拒否（同一実体/symlink alias への書き込みは "
-            "検証済み入力 emb の破壊を招くため書き込みを拒否する）"
-        )
-    return None
+    return (
+        f"--out ({out_path}) resolves to the same file as --user-emb ({user_emb_path}), "
+        f"resolved={out_resolved} — fail-closed 拒否（同一実体/symlink alias への書き込みは "
+        "検証済み入力 emb の破壊を招くため書き込みを拒否する）"
+    )
 
 
-def _atomic_write_bytes(path: Path, data: bytes) -> None:
+def _atomic_write_bytes(path: Path, data: bytes, protected_paths: Sequence[Path]) -> None:
     """`path` へ `data` を atomic に書き込む（同一ディレクトリ内の一意な
     staging ファイルへ書き、fsync で durable にしてから `os.replace()` で
     置換する。PR #328 Codex レビュー第3巡指摘7、P2、採用対応）。
@@ -374,6 +400,22 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
     独立構成（本モジュール docstring 参照）のため、同型の最小実装を
     builder 内へ自足させる。
 
+    `protected_paths`（**必須引数**、PR #328 Codex レビュー第8巡指摘16、
+    P1、採用対応）: 書き込み保護対象の入力パス群（ritsu/user emb 等）。
+    呼び出し元（`_execute_cli()`）は既に `_check_out_does_not_alias_
+    inputs()` で preflight 済みだが、`_atomic_write_bytes()` 単体は従来
+    `path`/`data` のみを受け取り preflight を信頼するだけだったため、
+    将来この関数が preflight を経由せず直接呼び出される/リファクタされる
+    と、検証済み保護入力を `os.replace()` で破壊し得る穴があった。本関数
+    自身が `_resolve_alias_conflict()`（`_check_out_does_not_alias_
+    inputs()` と同一ロジックを共有）で書き込み直前に alias を再チェック
+    することで、preflight を省略した呼び出しに対しても fail-closed で
+    拒否する（CLI 側の preflight は維持——二重防御。空 sequence を渡せば
+    保護なしの旧来動作と等価だが、production 呼び出し（`_execute_cli()`）
+    は常に `(args.ritsu_emb, args.user_emb)` を渡す）。alias が見つかれば
+    `Run9ValidationError` を送出し、staging ファイルを一切作らずに拒否
+    する（`path` の既存実バイトにも一切触れない）。
+
     失敗時（`BaseException` 含む——`KeyboardInterrupt`/`SystemExit` でも
     staging を残さない）は staging ファイルを best-effort で削除してから
     re-raise する。`os.replace()` 呼び出し前は `path` に一切触れないため、
@@ -383,6 +425,14 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
     書き込み自体が alias 判定を迂回して検証済み入力 emb を破壊する経路を
     構造的に持たない。
     """
+    conflict = _resolve_alias_conflict(path, protected_paths)
+    if conflict is not None:
+        raise m.Run9ValidationError(
+            f"speaker_map_builder._atomic_write_bytes(): out path ({path}) resolves to the same "
+            f"file as a protected input path ({conflict}), resolved={path.resolve()} — fail-closed "
+            "拒否（保護入力パスへの破壊的 os.replace() を防ぐ内部 re-check、PR #328 レビュー第8巡"
+            "指摘16対応 — preflight を経由しない直接呼び出しでも保護入力を破壊しない）"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp",
@@ -453,7 +503,7 @@ def _execute_cli(
     *,
     synthesize_fn: Callable[[str, Path, Path], Tuple[np.ndarray, Dict[str, Any]]],
     check_alias_fn: Callable[[Path, Path, Path], Optional[str]],
-    atomic_write_fn: Callable[[Path, bytes], None],
+    atomic_write_fn: Callable[[Path, bytes, Sequence[Path]], None],
 ) -> int:
     """`main()` のオーケストレーション本体（synth 計算 → alias 判定 →
     atomic write → report 出力）。呼び出し元から関数群を注入させる形に
@@ -476,7 +526,7 @@ def _execute_cli(
         if alias_error is not None:
             print(f"ERROR: speaker_map_builder.main(): {alias_error}", file=sys.stderr)
             return 1
-        atomic_write_fn(args.out, synth.tobytes())
+        atomic_write_fn(args.out, synth.tobytes(), (args.ritsu_emb, args.user_emb))
         report["out_path"] = str(args.out)
 
     print(json.dumps(report, indent=2, ensure_ascii=False))
@@ -493,6 +543,7 @@ def main(
     identity_domain_path: Optional[Path] = None,
     adjudication_basis_path: Optional[Path] = None,
     gate_synth_py_path: Optional[Path] = None,
+    detail_record_path: Optional[Path] = None,
     manifest_override: Optional[Dict[str, Any]] = None,
 ) -> int:
     """CLI エントリポイント。**verified self-exec dispatch**（PR #328
@@ -530,9 +581,9 @@ def main(
 
     `running_builder_path`/`contract_path`/`manifest_path`/
     `rights_manifest_path`/`identity_domain_path`/
-    `adjudication_basis_path`/`gate_synth_py_path` はいずれもテスト専用
-    の override 引数——production 呼び出し（全省略）は repo 相対の正典
-    パスのみを消費する。
+    `adjudication_basis_path`/`gate_synth_py_path`/`detail_record_path`
+    はいずれもテスト専用の override 引数——production 呼び出し（全省略）は
+    repo 相対の正典パスのみを消費する。
 
     `manifest_override`（テスト専用、PR #328 Codex レビュー第7巡指摘14、
     P1、採用対応で新設）: 指定すると `load_canonical_speaker_map_
@@ -580,6 +631,7 @@ def main(
                 identity_domain_path=identity_domain_path,
                 adjudication_basis_path=adjudication_basis_path,
                 gate_synth_py_path=gate_synth_py_path,
+                detail_record_path=detail_record_path,
             )
         except m.Run9ValidationError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
