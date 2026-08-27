@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import inspect
 import json
 import re
@@ -30,9 +31,10 @@ import run9_schema as m  # noqa: E402
 CONTRACT_PATH = _RUN_DIR / "RUN9_CONTRACT.yaml"
 DOMAIN_DRAFT_PATH = _RUN_DIR / "domains" / "identity_domain_run9_v1.json"
 DESIGN_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md"
-# 現行 design_revision (0.4) の差分メモ。design_revision_doc_sha256 が
-# pin する対象。
-REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.4.md"
+# 現行 design_revision (0.5) の差分メモ。design_revision_doc_sha256 が
+# pin する対象（RUN9-L0-HARNESS-3a、2026-08-26、design_revision 0.4 →
+# 0.5 昇格）。
+REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.5.md"
 # rev 0.2/0.3 文書は無改変のまま存続する（design_revision 系譜の各1件）。
 REVISION_0_2_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
 REVISION_0_3_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.3.md"
@@ -1616,15 +1618,16 @@ def _pending_rights_manifest_fixture() -> Dict[str, Any]:
 
 
 def test_revision02_design_revision_constant_is_0_2() -> None:
-    """rev 0.4 では `run9_schema.DESIGN_REVISION` 自体が "0.4" を凍結する
+    """rev 0.5（RUN9-L0-HARNESS-3a、2026-08-26）では
+    `run9_schema.DESIGN_REVISION` 自体が "0.5" を凍結する
     （テスト名は歴史的に revision02_ prefix のまま — Fix 15 の
     founder_genome_shas 改名前例と同様、rename ではなく assertion のみ
     更新する）。"""
-    assert m.DESIGN_REVISION == "0.4"
+    assert m.DESIGN_REVISION == "0.5"
 
 
 def test_revision02_current_contract_declares_0_2(contract_raw: Dict[str, Any]) -> None:
-    assert contract_raw["design_revision"] == "0.4"
+    assert contract_raw["design_revision"] == "0.5"
     m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
 
 
@@ -1656,19 +1659,30 @@ def test_revision04_old_0_3_contract_rejected(contract_raw: Dict[str, Any]) -> N
         m.load_run9_contract(tampered)
 
 
+def test_revision05_old_0_4_contract_rejected(contract_raw: Dict[str, Any]) -> None:
+    """rev 0.5（DESIGN_RUN9_REVISION_0.5.md、RUN9-L0-HARNESS-3a、
+    2026-08-26, User 裁定「RUN9 User裁定 — AF0 runtime mapping」の採用）:
+    旧 "0.4" を宣言する contract も意図どおり拒否される。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["design_revision"] = "0.4"
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
+
+
 def test_revision03_old_0_2_contract_rejection_message_names_current_revision(
     contract_raw: Dict[str, Any],
 ) -> None:
     """PR #317 Codex bot レビュー第1巡 Fix 2 採用: 拒否メッセージが固定
     ファイル名（例: "DESIGN_RUN9_REVISION_0.2.md"）をハードコードして
     いると、design_revision を上げるたびにメッセージ内のファイル名だけが
-    陳腐化する（実際に 0.2 -> 0.3、0.3 -> 0.4 進行時に発生した不備）。
-    メッセージが `DESIGN_REVISION` 定数（現在は "0.4"）から動的に導出
-    されていることを、"0.2" 拒否時のメッセージに現行の "0.4" が含まれる
-    ことで確認する — メッセージが旧値のまま固定化されていれば失敗する。"""
+    陳腐化する（実際に 0.2 -> 0.3、0.3 -> 0.4、0.4 -> 0.5 進行時に発生
+    した/し得た不備）。メッセージが `DESIGN_REVISION` 定数（現在は
+    "0.5"）から動的に導出されていることを、"0.2" 拒否時のメッセージに
+    現行の "0.5" が含まれることで確認する — メッセージが旧値のまま
+    固定化されていれば失敗する。"""
     tampered = copy.deepcopy(contract_raw)
     tampered["design_revision"] = "0.2"
-    with pytest.raises(m.Run9ValidationError, match="0.4"):
+    with pytest.raises(m.Run9ValidationError, match="0.5"):
         m.load_run9_contract(tampered)
 
 
@@ -3408,9 +3422,10 @@ def test_fix319_2_backbone_runtime_bundle_sha_history_notes_prior_value() -> Non
 
 def test_por_revision_design_revision_doc_path_exists() -> None:
     """テスト名は歴史的に por_revision_ prefix のまま（PoR メモ編入時の
-    命名）——rev 0.4 現在は最新差分メモへ追随して assertion のみ更新する。"""
+    命名）——rev 0.5（RUN9-L0-HARNESS-3a）現在は最新差分メモへ追随して
+    assertion のみ更新する。"""
     assert REVISION_DOC_PATH.exists()
-    assert REVISION_DOC_PATH.name == "DESIGN_RUN9_REVISION_0.4.md"
+    assert REVISION_DOC_PATH.name == "DESIGN_RUN9_REVISION_0.5.md"
     assert REVISION_0_3_DOC_PATH.exists()
 
 
@@ -7448,10 +7463,23 @@ def test_rev04_doc_exists_and_declares_lineage() -> None:
 
 
 def test_rev04_doc_sha256_pin_matches_actual_file(contract_raw: Dict[str, Any]) -> None:
+    """〔履歴: rev 0.4 が現行 design_revision だった間、本テストは
+    `design_revision_doc_sha256` pin と rev 0.4 文書の一致を検証していた。
+    RUN9-L0-HARNESS-3a（2026-08-26）で design_revision が 0.5 へ昇格し、
+    同 pin は `DESIGN_RUN9_REVISION_0.5.md` へ repoint された
+    （`test_revision02_doc_sha256_pin_matches_actual_file` が現行の一致を
+    検証する）。本テストは rev 0.4 文書自体が無改変のまま存続している
+    ことのみを確認する形へ改める——テスト名はレビュー履歴保持のため
+    改名しない〕。"""
     field = contract_raw["design_revision_doc_sha256"]
     assert field["status"] == "PINNED"
-    assert field["value"] == _sha256_file(REVISION_0_4_DOC_PATH)
-    assert field["value"] == m.compute_file_sha256(REVISION_0_4_DOC_PATH)
+    assert field["value"] != _sha256_file(REVISION_0_4_DOC_PATH)
+    assert _sha256_file(REVISION_0_4_DOC_PATH) == (
+        "7bfefcf61886062511c30df92c25e597b7a4a7745037514ed4655a623e38df07"
+    )
+    assert m.compute_file_sha256(REVISION_0_4_DOC_PATH) == (
+        "7bfefcf61886062511c30df92c25e597b7a4a7745037514ed4655a623e38df07"
+    )
 
 
 def test_rev04_doc_records_case_a_and_central_problem_redefinition() -> None:
@@ -11791,6 +11819,40 @@ def test_execprofile_pre_run_pending_count_is_nine(contract: m.Run9RunContract) 
     PINNED 化したことにより、pre-run PENDING 欄は10→9件へ減少した
     （optional の human_evaluation_protocol_sha を含めると総
     PENDING 11→10件）——README.md の記述更新（10→9/11→10）と対応する
+    回帰固定。
+
+    〔履歴: 本テストが固定していた「9件」は RUN9-EXECPROFILE-1 時点の値。
+    RUN9-L0-HARNESS-3a（2026-08-26）で `expected_speaker_map_sha` が
+    追加で PINNED 化され、現在は下記
+    `test_harness3a_pre_run_pending_count_is_eight` が固定する8件へ
+    さらに減少した——テスト名はレビュー履歴保持のため改名しない〕。"""
+    revalidated = m.load_run9_contract(contract.raw)
+    excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
+    pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
+    pending = [
+        n for n in pre_run_fields if not m._is_field_pinned(revalidated.pin_field(n))
+    ]
+    all_pending = [
+        n for n in m.CONTRACT_PIN_FIELDS
+        if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
+    ]
+    assert "dependency_pins_sha" in pending
+    assert "measurement_spec_sha" in pending
+    assert "execution_profile_sha" not in pending
+    assert "dataset_manifest_sha" not in pending
+    assert "dataset_row_order_sha" not in pending
+    # 現在値は8/9（下記 test_harness3a_pre_run_pending_count_is_eight と
+    # 同一の期待値）——`expected_speaker_map_sha` の PINNED 化以降、9/10
+    # という値そのものはもはや成立しない。
+    assert len(pending) == 8
+    assert len(all_pending) == 9
+
+
+def test_harness3a_pre_run_pending_count_is_eight(contract: m.Run9RunContract) -> None:
+    """RUN9-L0-HARNESS-3a（2026-08-26）: `expected_speaker_map_sha` を
+    PINNED 化したことにより、pre-run PENDING 欄は9→8件へ減少した
+    （optional の human_evaluation_protocol_sha を含めると総
+    PENDING 10→9件）——README.md の記述更新（9→8/10→9）と対応する
     回帰固定。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
@@ -11802,13 +11864,15 @@ def test_execprofile_pre_run_pending_count_is_nine(contract: m.Run9RunContract) 
         n for n in m.CONTRACT_PIN_FIELDS
         if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
     ]
-    assert len(pending) == 9
-    assert len(all_pending) == 10
+    assert len(pending) == 8
+    assert len(all_pending) == 9
     assert "dependency_pins_sha" in pending
     assert "measurement_spec_sha" in pending
+    assert "expected_speaker_map_sha" not in pending
     assert "execution_profile_sha" not in pending
     assert "dataset_manifest_sha" not in pending
     assert "dataset_row_order_sha" not in pending
+    assert m.gate_state(revalidated) == "BLOCKED"
 
 
 def test_pin2_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> None:
@@ -13300,11 +13364,21 @@ def test_pin2_config_sha_reason_distinguishes_from_learning_recipe(
 def test_pin2_expected_speaker_map_sha_reason_states_af0_gap(
     contract_raw: Dict[str, Any],
 ) -> None:
-    """expected_speaker_map_sha の reason が af0 の gate_synth.py --speaker
-    choices 非対応という構造的ギャップを明記していること。"""
-    reason = contract_raw["expected_speaker_map_sha"]["reason"]
-    assert "ritsu, pjs, user, d3synth, amitaro" in reason
-    assert contract_raw["expected_speaker_map_sha"]["status"] == "PENDING"
+    """〔履歴: RUN9-L0-PIN-2（2026-08-26）時点の回帰——当時 `expected_
+    speaker_map_sha` は PENDING で、reason が af0 の gate_synth.py
+    --speaker choices 非対応という構造的ギャップを明記していた。
+    RUN9-L0-HARNESS-3a（2026-08-26）で同欄は PINNED 化され、`reason` キー
+    は PINNED 欄の shape 規約（`value`/`status`/`source` のみ、`reason`
+    は PENDING/BLOCKED 欄専用）により消失した——旧 reason 文言自体は
+    `RUN9_CONTRACT.yaml` の YAML コメント（parse 対象外）として
+    append-only で保持されている。本テストは新しい PINNED 状態と、旧
+    reason 文言がコメントとして repo に残存していることの両方を確認する
+    （`test_harness3a_expected_speaker_map_sha_pinned` と対になる）〕。"""
+    field = contract_raw["expected_speaker_map_sha"]
+    assert field["status"] == "PINNED"
+    assert "reason" not in field
+    contract_yaml_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert "ritsu, pjs, user, d3synth, amitaro" in contract_yaml_text
 
 
 # ---------------------------------------------------------------------------
@@ -15300,9 +15374,10 @@ def test_harness2_reexport_manifest_pinning_does_not_affect_pending_set(
 ) -> None:
     """reexport_manifest_sha は新規追加の PINNED 欄であり、既存 PENDING
     集合に影響しないこと〔履歴: 起草当時は pre-run 必須10欄・総 PENDING
-    11欄だったが、RUN9-EXECPROFILE-1（2026-08-26）で execution_profile_sha
-    も PINNED 化されたため、現在は下記のとおり pre-run 必須9欄・総
-    PENDING 10欄——`test_execprofile_pre_run_pending_count_is_nine` と
+    11欄、RUN9-EXECPROFILE-1（2026-08-26）で pre-run 必須9欄・総 PENDING
+    10欄へ、RUN9-L0-HARNESS-3a（2026-08-26）で `expected_speaker_map_sha`
+    も PINNED 化されたため、現在は下記のとおり pre-run 必須8欄・総
+    PENDING 9欄——`test_harness3a_pre_run_pending_count_is_eight` と
     同一の期待値〕。"""
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
@@ -15313,8 +15388,8 @@ def test_harness2_reexport_manifest_pinning_does_not_affect_pending_set(
     ]
     assert "reexport_manifest_sha" not in pending
     assert "reexport_manifest_sha" not in all_pending
-    assert len(pending) == 9
-    assert len(all_pending) == 10
+    assert len(pending) == 8
+    assert len(all_pending) == 9
     assert m.gate_state(contract) == "BLOCKED"
 
 
@@ -18188,4 +18263,1048 @@ def test_execprofile_other_existing_pins_unchanged(contract_raw: Dict[str, Any])
 
 
 def test_execprofile_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# RUN9-L0-HARNESS-3a（2026-08-26）: speaker map manifest
+# （schema `run9-speaker-map/1.0`）+ expected_speaker_map_sha PINNED 化。
+# User 裁定「RUN9 User裁定 — AF0 runtime mapping」（repo 内収載
+# USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt）に基づく方式A
+# （ritsu/user 再正規化線形合成、AF0 unrealized mass 明記）。
+# ---------------------------------------------------------------------------
+
+SPEAKER_MAP_ADJUDICATION_PATH = (
+    _RUN_DIR / "USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt"
+)
+DESIGN_REVISION_0_5_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.5.md"
+
+
+def _speaker_map_manifest_data() -> Dict[str, Any]:
+    return m._loads_strict_json(m.SPEAKER_MAP_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _tampered_speaker_map_contract(
+    contract: m.Run9RunContract, tmp_path: Path, *, mutate,
+) -> Tuple[m.Run9RunContract, Path, Path]:
+    """speaker_map_manifest.json の内容を `mutate` で改変し、その実バイト
+    sha256 で `expected_speaker_map_sha` pin を差し替えた合成 contract +
+    manifest ファイル + contract ファイルを用意するテストヘルパー
+    （`_tampered_execprofile_contract()` と同型）。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    mutate(data)
+    manifest_bytes = _canonical_json_bytes(data)
+    manifest_path = tmp_path / "speaker_map_manifest.json"
+    manifest_path.write_bytes(manifest_bytes)
+    import hashlib as _hashlib
+    manifest_sha = _hashlib.sha256(manifest_bytes).hexdigest()
+    tampered_raw = copy.deepcopy(contract.raw)
+    tampered_raw["expected_speaker_map_sha"] = {"value": manifest_sha, "status": "PINNED"}
+    tampered_contract_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_contract_path.write_text(yaml.safe_dump(tampered_raw, allow_unicode=True), encoding="utf-8")
+    return m.load_run9_contract(tampered_raw), manifest_path, tampered_contract_path
+
+
+# --- 裁定文書の repo 収載（PIN-2/HARNESS-2/EXECPROFILE-1 前例と同型） ------
+
+
+def test_harness3a_adjudication_source_file_exists() -> None:
+    assert SPEAKER_MAP_ADJUDICATION_PATH.is_file()
+
+
+def test_harness3a_adjudication_source_contains_verbatim_values() -> None:
+    """凍結した各値（方式A採用・R9F-01/R9F-02の重み・禁止4項目・非主張・
+    design_revision昇格・pin前検証6点・Birth Identity Separation Gate の
+    NOT_ESTABLISHED 凍結規約）が、repo 内収載した裁定文書の本文に一字一句
+    そのまま存在すること（grep 照合——「User 転記であって発明でない」こと
+    を機械検証する）。"""
+    text = SPEAKER_MAP_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    for value in (
+        "方式Aを採用する。",
+        "ritsu = 0.75",
+        "user  = 0.25",
+        "ritsu = 1/3",
+        "user  = 2/3",
+        "L2正規化、摂動、",
+        "ランダム成分、試聴後の重み調整を禁止する。",
+        "AF0成分は構造Genomeには存在するが、",
+        "現行runtimeでは音響的に実現されない。",
+        "本方式は三親音響交配の成立を意味しない。",
+        "AF0音響形質の継承、AF0-dominant音声、",
+        "AF0成分に起因する学習能力差を主張しない。",
+        "design_revisionを0.5へ上げ、",
+        "TRI_CROSSOVER/1.0は変更しない。",
+        "入力hash照合、384-dim float32有限性、",
+        "smoke render成立、render replay決定論を検証する。",
+        "NOT_ESTABLISHEDとして凍結し、",
+        "方式Bへの自動昇格を行わない。",
+        "方式Bは将来のAF0 acoustic realization用の別revision/別Runへ送る。",
+        "方式CはGenome座標の意味をrender層で失うため不採用とする。",
+    ):
+        assert value in text, f"missing verbatim value: {value!r}"
+
+
+def test_harness3a_adjudication_source_body_byte_identical_to_scratchpad_origin() -> None:
+    """本文（【RUN9 User裁定 — AF0 runtime mapping】以降）が起草時の作業
+    メモ scratchpad/run9_user_adjudication_af0_mapping.md と一字一句改変
+    なしで一致すること（改変禁止の直接確認、PIN-2/HARNESS-2/EXECPROFILE-1
+    前例と同型——scratchpad ファイルが本セッション後に存在しない環境では
+    skip）。"""
+    scratchpad_path = Path(
+        "/tmp/claude-0/-home-user-ugh-prompt-engine/"
+        "e505c1c2-c4ad-588b-a1b2-258051a522de/scratchpad/"
+        "run9_user_adjudication_af0_mapping.md"
+    )
+    if not scratchpad_path.is_file():
+        pytest.skip("scratchpad origin file not present in this environment")
+    origin_body = scratchpad_path.read_text(encoding="utf-8")
+    origin_body = "【RUN9 User裁定" + origin_body.split("【RUN9 User裁定", 1)[1]
+    committed_text = SPEAKER_MAP_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    committed_body = "【RUN9 User裁定" + committed_text.split("【RUN9 User裁定", 1)[1]
+    assert committed_body == origin_body
+
+
+def test_harness3a_adjudication_source_sha256_matches_manifest_and_contract_comment() -> None:
+    """裁定 txt の実バイト sha256 固定——manifest の `adjudication_basis.
+    sha256`、および `RUN9_CONTRACT.yaml` 情報記録コメントが記載する値と
+    三者一致すること。"""
+    actual = m.compute_file_sha256(SPEAKER_MAP_ADJUDICATION_PATH)
+    assert actual == "07d932da7d60e0e5abf3011040228d47e0b027514a5d0b6d2c165e71d6c65426"
+    data = _speaker_map_manifest_data()
+    assert data["adjudication_basis"]["sha256"] == actual
+    contract_yaml_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert actual in contract_yaml_text
+
+
+def test_harness3a_design_revision_0_5_doc_exists_and_sha_matches_contract_pin() -> None:
+    """`DESIGN_RUN9_REVISION_0.5.md` は `design_revision_doc_sha256` pin
+    （契約レベルの現行 design_revision 文書）として repoint 済み——
+    `DESIGN_REVISION_0_5_DOC_PATH` は `REVISION_DOC_PATH` と同一パスを
+    指す（別名の重複定義ではなく同じファイルへの別名参照であることの
+    確認込み）。"""
+    assert DESIGN_REVISION_0_5_DOC_PATH.is_file()
+    assert DESIGN_REVISION_0_5_DOC_PATH == REVISION_DOC_PATH
+    actual = m.compute_file_sha256(DESIGN_REVISION_0_5_DOC_PATH)
+    assert actual == "095ce77147e897473e8d87b474159c2ff4fdeb6684356cc03649f99a603cb2a9"
+    contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    field = contract_raw["design_revision_doc_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == actual
+    assert field["source"] == (
+        "voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.5.md"
+    )
+
+
+def test_harness3a_design_revision_promoted_to_0_5(contract: m.Run9RunContract) -> None:
+    """RUN9-L0-HARNESS-3a（2026-08-26）: User 裁定「RUN9 User裁定 — AF0
+    runtime mapping」逐語「design_revisionを0.5へ上げ」に従い、契約
+    レベルの design_revision を実際に 0.4 → 0.5 へ昇格したことを固定する
+    （Fable レビューにより、初版の「契約昇格は本 PR のスコープ外」という
+    据え置き判断は不採用と判定された——同 PR 内で `RUN9_CONTRACT.yaml`
+    トップレベル欄・`run9_schema.DESIGN_REVISION` 定数・
+    `design_revision_doc_sha256` pin の三箇所を同時に repin した）。"""
+    assert m.DESIGN_REVISION == "0.5"
+    contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
+    assert contract_raw["design_revision"] == "0.5"
+    field = contract_raw["design_revision_doc_sha256"]
+    assert field["status"] == "PINNED"
+    assert field["source"] == (
+        "voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.5.md"
+    )
+    assert field["value"] == m.compute_file_sha256(DESIGN_REVISION_0_5_DOC_PATH)
+    m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
+    assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_harness3a_run9_schema_design_revision_comment_no_stale_scope_note() -> None:
+    """PR #328 Codex レビュー第1巡指摘3（P2、採用）対応の回帰: `run9_schema.
+    py` の `_SPEAKER_MAP_ADJUDICATED_DESIGN_REVISION` 直前コメントに、
+    `DESIGN_RUN9_REVISION_0.5.md` から既に削除済みの「スコープ注記」節への
+    参照や「本 PR のスコープ外」という破棄済み判断が残っていないこと
+    （design_revision 昇格が同一改訂内で実施済みという現行事実と矛盾する
+    stale 記述の再発防止）。"""
+    source = (_RUN_DIR / "run9_schema.py").read_text(encoding="utf-8")
+    assert "スコープ外（別途のフォローアップ判断）" not in source
+    assert "同期昇格済み" in source
+    revision_doc_text = DESIGN_REVISION_0_5_DOC_PATH.read_text(encoding="utf-8")
+    assert "スコープ注記" not in revision_doc_text
+
+
+# --- validate_speaker_map_manifest(): 正常系・直列化 ------------------------
+
+
+def test_harness3a_validate_real_manifest_happy_path() -> None:
+    m.validate_speaker_map_manifest(_speaker_map_manifest_data())  # 例外なしの確認
+
+
+def test_harness3a_manifest_reserialization_byte_identical() -> None:
+    """`json.dumps(..., ensure_ascii=False, sort_keys=True, indent=2)` +
+    改行 で再直列化したバイト列が実ファイルのバイトと完全一致すること
+    （`json_dumps` 決定論の直接固定）。"""
+    raw = m.SPEAKER_MAP_MANIFEST_PATH.read_bytes()
+    data = m._loads_strict_json(raw.decode("utf-8"))
+    assert _canonical_json_bytes(data) == raw
+
+
+def test_harness3a_manifest_schema_field() -> None:
+    data = _speaker_map_manifest_data()
+    assert data["schema"] == "run9-speaker-map/1.0" == m.SCHEMA_SPEAKER_MAP
+
+
+def test_harness3a_manifest_no_status_or_expected_sha_self_reference() -> None:
+    """draft の `status`/`expected_speaker_map_sha`/`expected_speaker_map_
+    sha_note` 欄は repo 版 manifest から除去済み——manifest 自身の raw
+    byte sha256 が pin 値になるため、自己参照欄は持たない契約
+    （execution_profile_manifest.json 前例と同じ構造）。"""
+    data = _speaker_map_manifest_data()
+    assert "status" not in data
+    assert "expected_speaker_map_sha" not in data
+    assert "expected_speaker_map_sha_note" not in data
+    assert "scratchpad" not in json.dumps(data, ensure_ascii=False)
+
+
+def test_harness3a_manifest_unknown_top_level_key_fail_closed() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["unexpected"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_missing_top_level_key_fail_closed() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    del data["founders"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_speaker_map_manifest(data)
+
+
+# --- validate_speaker_map_manifest(): fail-closed 全分岐 --------------------
+
+
+def test_harness3a_manifest_wrong_schema_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["schema"] = "run9-speaker-map/0.9"
+    with pytest.raises(m.Run9ValidationError, match="schema"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_wrong_design_revision_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["design_revision"] = "0.4"
+    with pytest.raises(m.Run9ValidationError, match="design_revision"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_prohibited_item_missing_rejected() -> None:
+    """禁止項目欠落: `synthesis_formula.prohibited` からちょうど1件を除去
+    すると fail-closed で拒否される（4項目・順序込み厳密一致）。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["synthesis_formula"]["prohibited"] = ["L2正規化", "摂動", "ランダム成分"]
+    with pytest.raises(m.Run9ValidationError, match="prohibited"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_prohibited_item_reordered_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["synthesis_formula"]["prohibited"] = ["摂動", "L2正規化", "ランダム成分", "試聴後の重み調整"]
+    with pytest.raises(m.Run9ValidationError, match="prohibited"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_declaration_non_claim_marker_missing_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["declaration_af0_not_realized"] = "AF0成分は構造Genomeには存在するが、現行runtimeでは音響的に実現されない。"
+    with pytest.raises(m.Run9ValidationError, match="non-claim marker"):
+        m.validate_speaker_map_manifest(data)
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_manifest_unrealized_mass_mismatch_rejected(founder_id: str) -> None:
+    """unrealized_mass不一致: `unrealized_mass.value` を `coords_raw.af0`
+    と食い違わせると fail-closed で拒否される。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"][founder_id]["unrealized_mass"]["value"] = 0.99
+    with pytest.raises(m.Run9ValidationError, match="unrealized_mass"):
+        m.validate_speaker_map_manifest(data)
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_manifest_renormalized_weight_hex_mismatch_rejected(founder_id: str) -> None:
+    """重み再導出不一致・hex不一致: `w_ritsu_float32_hex` を機械再導出値と
+    食い違わせると fail-closed で拒否される（`repr` は変更しない）。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"][founder_id]["renormalized_runtime_weights"]["w_ritsu_float32_hex"] = "00000000"
+    with pytest.raises(m.Run9ValidationError, match="renormalized_runtime_weights"):
+        m.validate_speaker_map_manifest(data)
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_manifest_renormalized_weight_repr_mismatch_rejected(founder_id: str) -> None:
+    """重み再導出不一致: `w_user_float32_repr` を機械再導出値と食い違わせ
+    ると fail-closed で拒否される（`hex` は変更しない）。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"][founder_id]["renormalized_runtime_weights"]["w_user_float32_repr"] = "0.999"
+    with pytest.raises(m.Run9ValidationError, match="renormalized_runtime_weights"):
+        m.validate_speaker_map_manifest(data)
+
+
+# --- validate_speaker_map_manifest(): w_ritsu_expr/w_user_expr の閉じた -----
+# --- 文法評価（PR #328 Codex レビュー第2巡指摘5、P2、採用） -----------------
+
+
+def test_harness3a_manifest_weight_expr_tampered_but_hex_unchanged_rejected() -> None:
+    """expr 改変（hex/repr は変更しない）: `w_ritsu_expr` を R9F-01 の実際
+    の値 `'0.75'` から、閉じた文法上は正当だが別の値へ評価される `'0.5'`
+    へ差し替えると、`w_ritsu_float32_hex`/`w_ritsu_float32_repr` 欄自体は
+    元の（coords_raw と一致する）正しい値のまま据え置いても fail-closed で
+    拒否される——expr だけを改竄しても `*_float32_hex`/`*_repr` さえ正しけ
+    れば通過していた旧実装の穴の直接再現。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"]["R9F-01"]["renormalized_runtime_weights"]["w_ritsu_expr"] = "0.5"
+    with pytest.raises(m.Run9ValidationError, match="w_ritsu_expr"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_weight_expr_disallowed_form_rejected() -> None:
+    """許容外形式: `w_ritsu_expr` を数式としては同値（`0.5+0.25 == 0.75`）
+    でも閉じた文法（10進小数リテラル or 単純分数 `'A/B'`）に含まれない
+    `'0.5+0.25'` へ差し替えると、文法違反として fail-closed で拒否される
+    （eval 的な一般式評価を導入しないことの直接確認）。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"]["R9F-01"]["renormalized_runtime_weights"]["w_ritsu_expr"] = "0.5+0.25"
+    with pytest.raises(m.Run9ValidationError, match="closed grammar"):
+        m.validate_speaker_map_manifest(data)
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_manifest_input_embedding_sha_shape_rejected(founder_id: str) -> None:
+    """emb sha改竄（shape）: `ritsu_emb_sha256` を非64hex値へ改竄すると
+    validator の shape 検証で fail-closed 拒否される。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"][founder_id]["input_embeddings"]["ritsu_emb_sha256"] = "not-a-hash"
+    with pytest.raises(m.Run9ValidationError, match="64hex"):
+        m.validate_speaker_map_manifest(data)
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_manifest_input_embedding_pin_match_forged_rejected(founder_id: str) -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"][founder_id]["input_embeddings"]["pin_match"] = False
+    with pytest.raises(m.Run9ValidationError, match="pin_match"):
+        m.validate_speaker_map_manifest(data)
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_manifest_synthesized_embedding_run_sha_mismatch_rejected(founder_id: str) -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"][founder_id]["synthesized_embedding"]["run2_sha256"] = "0" * 64
+    with pytest.raises(m.Run9ValidationError, match="run1_sha256/run2_sha256"):
+        m.validate_speaker_map_manifest(data)
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_manifest_synthesized_embedding_bytes_dim_dtype_frozen(founder_id: str) -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"][founder_id]["synthesized_embedding"]["bytes"] = 1537
+    with pytest.raises(m.Run9ValidationError, match="1536"):
+        m.validate_speaker_map_manifest(data)
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_manifest_smoke_run_embed_input_sha_mismatch_rejected(founder_id: str) -> None:
+    """PASS改竄の一形態: `summary_speaker_embed_input_sha256` が合成
+    embedding の sha256 と食い違うと、供給経路検証が fail-closed で
+    拒否する。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"][founder_id]["smoke_render"]["run1"]["summary_speaker_embed_input_sha256"] = "0" * 64
+    with pytest.raises(m.Run9ValidationError, match="summary_speaker_embed_input_sha256"):
+        m.validate_speaker_map_manifest(data)
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_manifest_smoke_run_wav_sha_replay_mismatch_rejected(founder_id: str) -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"][founder_id]["smoke_render"]["run2"]["wav_sha256"] = "1" * 64
+    with pytest.raises(m.Run9ValidationError, match="run1/run2 wav_sha256"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_cross_founder_check_sha_mismatch_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["cross_founder_check"]["r9f01_sha256"] = "0" * 64
+    with pytest.raises(m.Run9ValidationError, match="cross_founder_check"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_cross_founder_check_not_distinct_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    same_sha = data["founders"]["R9F-01"]["synthesized_embedding"]["sha256"]
+    for founder_id in ("R9F-01", "R9F-02"):
+        for key in ("sha256", "run1_sha256", "run2_sha256"):
+            data["founders"][founder_id]["synthesized_embedding"][key] = same_sha
+        for run_key in ("run1", "run2"):
+            data["founders"][founder_id]["smoke_render"][run_key]["summary_speaker_embed_input_sha256"] = same_sha
+    data["cross_founder_check"]["r9f02_sha256"] = same_sha
+    with pytest.raises(m.Run9ValidationError, match="must differ"):
+        m.validate_speaker_map_manifest(data)
+
+
+@pytest.mark.parametrize(
+    "summary_key",
+    [
+        "1_input_hash_match", "2_synthesis_384dim_float32_finite", "3_byte_determinism",
+        "4_two_body_distinctness", "5_smoke_render_success", "6_render_replay_determinism",
+    ],
+)
+def test_harness3a_manifest_pre_pin_verification_summary_item_not_pass_rejected(summary_key: str) -> None:
+    """PASS改竄: 6項目のいずれかを "PASS" 以外へ書き換えると fail-closed
+    で拒否される。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["pre_pin_verification_summary"][summary_key] = "FAIL"
+    with pytest.raises(m.Run9ValidationError, match="PASS"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_pre_pin_verification_summary_all_pass_forged_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["pre_pin_verification_summary"]["all_pass"] = False
+    with pytest.raises(m.Run9ValidationError, match="all_pass"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_pre_pin_verification_summary_detail_record_sha256_shape_rejected() -> None:
+    """指摘17（PR #328 レビュー第8巡、P2、採用対応）: `detail_record_
+    sha256` は64hexでなければ validator 単体（shape 検証 (o)）で拒否
+    される。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["pre_pin_verification_summary"]["detail_record_sha256"] = "not-a-hash"
+    with pytest.raises(m.Run9ValidationError, match="detail_record_sha256"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_pre_pin_verification_summary_detail_record_sha256_missing_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    del data["pre_pin_verification_summary"]["detail_record_sha256"]
+    with pytest.raises(m.Run9ValidationError, match="pre_pin_verification_summary"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_next_step_marker_missing_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["next_step_per_adjudication"] = "smoke PASS 後、manifest を pin する。"
+    with pytest.raises(m.Run9ValidationError, match="NOT_ESTABLISHED"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_unchanged_per_adjudication_item_missing_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["unchanged_per_adjudication"] = ["発行済み Founder Genome", "coords", "genome_id"]
+    with pytest.raises(m.Run9ValidationError, match="unchanged_per_adjudication"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_repo_state_files_modified_forged_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["repo_state"]["repo_files_modified"] = True
+    with pytest.raises(m.Run9ValidationError, match="repo_files_modified"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_adjudication_basis_sha_shape_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["adjudication_basis"]["sha256"] = "not-a-hash"
+    with pytest.raises(m.Run9ValidationError, match="64hex"):
+        m.validate_speaker_map_manifest(data)
+
+
+# --- validate_speaker_map_manifest(): builder_provenance ---------------------
+# --- (PR #328 Codex レビュー第1巡指摘1、P1、採用) -----------------------------
+
+
+def test_harness3a_manifest_builder_provenance_present() -> None:
+    data = _speaker_map_manifest_data()
+    bp = data["builder_provenance"]
+    assert bp["logical_name"] == "speaker_map_builder"
+    assert bp["repo_relative_path"] == (
+        "voice_genesis/evolution/run9_dual_founder_pjs/speaker_map_builder.py"
+    )
+    assert m._SHA256_HEX_RE.match(bp["builder_sha256"])  # noqa: SLF001 - test-only introspection
+
+
+def test_harness3a_manifest_builder_provenance_missing_key_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    del data["builder_provenance"]["logical_name"]
+    with pytest.raises(m.Run9ValidationError, match="builder_provenance"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_builder_provenance_unknown_key_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["builder_provenance"]["unexpected"] = "x"
+    with pytest.raises(m.Run9ValidationError, match="builder_provenance"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_builder_provenance_sha_shape_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["builder_provenance"]["builder_sha256"] = "not-a-hash"
+    with pytest.raises(m.Run9ValidationError, match="builder_sha256"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_builder_provenance_logical_name_empty_rejected() -> None:
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["builder_provenance"]["logical_name"] = ""
+    with pytest.raises(m.Run9ValidationError, match="logical_name"):
+        m.validate_speaker_map_manifest(data)
+
+
+# --- load_pinned_speaker_map_manifest(): 正常系・cross-check ----------------
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_happy_path(
+    contract: m.Run9RunContract,
+) -> None:
+    data = m.load_pinned_speaker_map_manifest(
+        contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+    )
+    assert data["schema"] == m.SCHEMA_SPEAKER_MAP
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_missing_file_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    missing_path = tmp_path / "does_not_exist.json"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_speaker_map_manifest(
+            contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=missing_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_byte_tampering_detected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """(i) manifest 実バイトが pin 値と一致しない場合は fail-closed で
+    拒否される（追記1byteのみでも検出する）。"""
+    tampered_path = tmp_path / "speaker_map_manifest.json"
+    tampered_path.write_bytes(m.SPEAKER_MAP_MANIFEST_PATH.read_bytes() + b"\n")
+    with pytest.raises(m.Run9ValidationError, match="実バイト sha256"):
+        m.load_pinned_speaker_map_manifest(
+            contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=tampered_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_rejects_when_not_pinned(
+    contract_raw: Dict[str, Any], tmp_path: Path,
+) -> None:
+    tampered = copy.deepcopy(contract_raw)
+    tampered["expected_speaker_map_sha"] = {"value": None, "status": "PENDING", "reason": "test"}
+    tampered_yaml_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_yaml_path.write_text(yaml.safe_dump(tampered, allow_unicode=True), encoding="utf-8")
+    tampered_contract = m.load_run9_contract(tampered)
+    with pytest.raises(m.Run9ValidationError, match="not PINNED"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            contract_path=tampered_yaml_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_detects_in_process_contract_tampering(
+    contract: m.Run9RunContract,
+) -> None:
+    """disk 正典 RUN9_CONTRACT.yaml と、渡された `contract.raw` を
+    in-process で改竄した値が食い違うと、disk 側を正として fail-closed で
+    拒否される（read-once 3層防御の中核）。"""
+    tampered_contract = copy.deepcopy(contract)
+    tampered_contract.raw["expected_speaker_map_sha"] = {
+        "value": "f" * 64, "status": "PINNED", "source": "forged",
+    }
+    with pytest.raises(m.Run9ValidationError, match="tampering evidence"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_adjudication_source_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """裁定txt改竄: adjudication_basis.source_file の実バイトが改変されて
+    いると（sha256 が adjudication_basis.sha256 と食い違うと）fail-closed
+    で拒否される。"""
+    tampered_path = tmp_path / "USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt"
+    tampered_path.write_bytes(SPEAKER_MAP_ADJUDICATION_PATH.read_bytes() + b"\ntampered\n")
+    with pytest.raises(m.Run9ValidationError, match="adjudication_basis.sha256"):
+        m.load_pinned_speaker_map_manifest(
+            contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            adjudication_basis_path=tampered_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_adjudication_sha_forged_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["sha256"] = "0" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="adjudication_basis.sha256"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_load_pinned_speaker_map_manifest_coords_tampered_vs_genome_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, founder_id: str,
+) -> None:
+    """coords改竄: `coords_raw` を発行済み Founder Genome document の
+    coords と食い違う値へ改竄すると（validator 単体の自己整合チェックは
+    素通りするよう unrealized_mass/renormalized_runtime_weights（PR #328
+    第2巡指摘5対応後は expr 自体も）も追随させても）、loader の
+    cross-check (b)（`load_pinned_founder_genome_document()` との一致）が
+    fail-closed で拒否する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        f = data["founders"][founder_id]
+        # 座標を改竄（af0 は不変のまま ritsu/user の配分だけをずらす —
+        # unrealized_mass.value == coords_raw.af0 の自己整合は壊さない）。
+        f["coords_raw"]["ritsu"] = 0.35
+        f["coords_raw"]["user"] = 0.05
+        denom = f["coords_raw"]["ritsu"] + f["coords_raw"]["user"]
+        w_ritsu_value = f["coords_raw"]["ritsu"] / denom
+        w_user_value = f["coords_raw"]["user"] / denom
+        w_ritsu_hex, w_ritsu_repr = m._float32_hex_and_repr(w_ritsu_value)
+        w_user_hex, w_user_repr = m._float32_hex_and_repr(w_user_value)
+        f["renormalized_runtime_weights"]["w_ritsu_float32_hex"] = w_ritsu_hex
+        f["renormalized_runtime_weights"]["w_ritsu_float32_repr"] = w_ritsu_repr
+        f["renormalized_runtime_weights"]["w_user_float32_hex"] = w_user_hex
+        f["renormalized_runtime_weights"]["w_user_float32_repr"] = w_user_repr
+        # PR #328 第2巡指摘5対応: validator は expr 自体も coords_raw 由来
+        # の再導出重みと厳密一致することを強制するため、expr も新しい
+        # coords に追随させないと validator 単体の自己整合チェックの時点
+        # で reject されてしまう（本テストの狙いは loader 側 cross-check
+        # (b) による拒否の直接証拠——validator 単体は通過させたい）。
+        # `repr()` は Python の double を厳密に round-trip するため、
+        # `_evaluate_closed_weight_expr()` でパースし直しても同じ float32
+        # hex/repr に帰着する。
+        f["renormalized_runtime_weights"]["w_ritsu_expr"] = repr(w_ritsu_value)
+        f["renormalized_runtime_weights"]["w_user_expr"] = repr(w_user_value)
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    # 改竄後 manifest 単体は自己整合しており validator 単体は通過すること
+    # を先に確認する（coords_raw 改竄の検出が loader 側の cross-check (b)
+    # に依存していることの直接証拠）。
+    m.validate_speaker_map_manifest(_loads_bytes(manifest_path))
+    with pytest.raises(m.Run9ValidationError, match="Founder Genome document"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def _loads_bytes(path: Path) -> Dict[str, Any]:
+    return m._loads_strict_json(path.read_bytes().decode("utf-8"))
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_load_pinned_speaker_map_manifest_genome_id_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, founder_id: str,
+) -> None:
+    """genome_id改竄（PR #328 Codex レビュー第1巡指摘2、P2、採用対応）:
+    `coords_raw` は発行済み Founder Genome document と一致させたまま
+    `genome_id` のみを改竄すると（coords 一致だけを見る旧実装なら素通り
+    していた「取り違え偽装」の直接再現）、loader の cross-check (b) が
+    fail-closed で拒否する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        # 有効な16hex genome_id 形状を保ちつつ、実際の発行済み値とは異なる
+        # 値へ差し替える（validator 単体の非空文字列チェックは素通りする）。
+        data["founders"][founder_id]["genome_id"] = "0" * 16
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    # 改竄後 manifest 単体は自己整合しており validator 単体は通過すること
+    # を先に確認する（genome_id 改竄の検出が loader 側の cross-check (b)
+    # に依存していることの直接証拠）。
+    m.validate_speaker_map_manifest(_loads_bytes(manifest_path))
+    with pytest.raises(m.Run9ValidationError, match="genome_id"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_load_pinned_speaker_map_manifest_profile_label_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, founder_id: str,
+) -> None:
+    """profile_label改竄（PR #328 Codex レビュー第6巡指摘12、P2、採用対応）:
+    `coords_raw`/`genome_id` は発行済み Founder Genome document と一致させ
+    たまま `profile_label` のみを改竄すると（従来は非空文字列検証のみで
+    genome 側と照合していなかったため素通りしていた取り違え偽装の直接
+    再現）、loader の cross-check (b) が fail-closed で拒否する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        # 有効な非空文字列の形状を保ちつつ、実際の発行済み値とは異なる値へ
+        # 差し替える（validator 単体の非空文字列チェックは素通りする）。
+        genuine = data["founders"][founder_id]["profile_label"]
+        forged = "USER_DOMINANT" if genuine == "AF0_DOMINANT" else "AF0_DOMINANT"
+        data["founders"][founder_id]["profile_label"] = forged
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    # 改竄後 manifest 単体は自己整合しており validator 単体は通過すること
+    # を先に確認する（profile_label 改竄の検出が loader 側の cross-check
+    # (b) に依存していることの直接証拠）。
+    m.validate_speaker_map_manifest(_loads_bytes(manifest_path))
+    with pytest.raises(m.Run9ValidationError, match="profile_label"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+@pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
+def test_harness3a_load_pinned_speaker_map_manifest_input_embedding_sha_tampered_vs_reexport_rejected(
+    contract: m.Run9RunContract, tmp_path: Path, founder_id: str,
+) -> None:
+    """emb sha改竄（cross-manifest）: `input_embeddings.ritsu_emb_sha256`
+    が形式上は正しい64hexだが実際の値と食い違うと、loader の cross-check
+    (e)（`reexport_manifest.json` pin との照合）が fail-closed で拒否
+    する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["founders"][founder_id]["input_embeddings"]["ritsu_emb_sha256"] = "a" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="reexport_manifest"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+# --- load_pinned_speaker_map_manifest(): builder_provenance cross-check (j) -
+# --- (PR #328 Codex レビュー第1巡指摘1、P1、採用) -----------------------------
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_builder_sha_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """builder_sha256改竄: `builder_provenance.builder_sha256` を実際の
+    `speaker_map_builder.py` の実バイト sha256 と食い違う値へ改竄すると、
+    loader の cross-check (j) が fail-closed で拒否する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["builder_provenance"]["builder_sha256"] = "a" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="builder_provenance.builder_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_builder_path_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`builder_provenance.repo_relative_path` が repo 内に存在しない
+    パスへ改竄されると fail-closed で拒否される。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["builder_provenance"]["repo_relative_path"] = (
+            "voice_genesis/evolution/run9_dual_founder_pjs/does_not_exist_builder.py"
+        )
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_builder_path_escape_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`builder_provenance.repo_relative_path` が絶対パスへ改竄されると
+    repo-containment guard（`_resolve_repo_contained_path()`）が
+    fail-closed で拒否する。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["builder_provenance"]["repo_relative_path"] = "/etc/passwd"
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="must be a repo-relative path"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+# --- load_pinned_speaker_map_manifest(): repo_state.gate_synth_py_sha256 ----
+# --- cross-check (l)（PR #328 Codex レビュー第3巡指摘8、P2、採用） ----------
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_gate_synth_py_sha_manifest_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """manifest 側 sha 改竄: `repo_state.gate_synth_py_sha256` を実際の
+    `gate_synth.py` の実バイト sha256 と食い違う値へ改竄すると、loader の
+    cross-check (l)-(i) が fail-closed で拒否する（旧実装は 64hex 形式のみ
+    検証しており、この改竄を素通りさせていた）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["repo_state"]["gate_synth_py_sha256"] = "a" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="repo_state.gate_synth_py_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_gate_synth_py_real_file_diverges_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """実ファイル相違（オーバーライドで偽ファイル注入）: manifest 側の
+    `repo_state.gate_synth_py_sha256` は正規の pin 値のままでも、
+    `gate_synth_py_path` オーバーライドで内容の異なる偽 `gate_synth.py` を
+    注入すると、loader の cross-check (l)-(i) が fail-closed で拒否する。"""
+    fake_gate_synth = tmp_path / "gate_synth.py"
+    fake_gate_synth.write_bytes(b"# tampered gate_synth.py content\n")
+    with pytest.raises(m.Run9ValidationError, match="repo_state.gate_synth_py_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            gate_synth_py_path=fake_gate_synth,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_gate_synth_py_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`gate_synth_py_path` オーバーライドが存在しないファイルを指すと
+    fail-closed で拒否される。"""
+    missing_path = tmp_path / "does_not_exist_gate_synth.py"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_speaker_map_manifest(
+            contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            gate_synth_py_path=missing_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_gate_synth_py_execprofile_cross_manifest_mismatch_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """cross-manifest 不一致: `repo_state.gate_synth_py_sha256` を、実ファイル
+    （オーバーライドで注入した偽 `gate_synth.py`）の実バイト sha256 とは
+    一致させつつ（cross-check (l)-(i) は通過させる）、実際の
+    `execution_profile_manifest.json` の `render_code_commit.file_sha256`
+    （real pin 値）とは食い違わせると、loader の cross-check (l)-(ii) が
+    fail-closed で拒否する——(i) 単体では検出できない「両 manifest が独立に
+    記録した gate_synth.py の provenance の食い違い」を検出する直接証拠。
+    """
+    fake_gate_synth = tmp_path / "gate_synth.py"
+    fake_bytes = b"# a different but internally self-consistent gate_synth.py\n"
+    fake_gate_synth.write_bytes(fake_bytes)
+    fake_sha = hashlib.sha256(fake_bytes).hexdigest()
+    # 実際の execution_profile_manifest.json の render_code_commit.file_sha256
+    # （real pin 値）とは異なることを前提として確認しておく（テストの意図が
+    # 偶然の一致で無効化されないことの自己防衛）。
+    real_execprofile = m._loads_strict_json(  # noqa: SLF001 - test-only introspection
+        m.EXECUTION_PROFILE_MANIFEST_PATH.read_text(encoding="utf-8")
+    )
+    real_execprofile_sha = (
+        real_execprofile["additional_measurements"]["render_code_commit"]["file_sha256"]
+    )
+    assert fake_sha != real_execprofile_sha
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["repo_state"]["gate_synth_py_sha256"] = fake_sha
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="render_code_commit.file_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+            gate_synth_py_path=fake_gate_synth,
+        )
+
+
+# --- load_pinned_speaker_map_manifest(): detail_record cross-check (n) ------
+# --- (PR #328 Codex レビュー第8巡指摘17、P2、採用) ---------------------------
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_detail_record_sha_manifest_tampered_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """manifest 側 sha 改竄: `pre_pin_verification_summary.
+    detail_record_sha256` を実際の `HARNESS3A_SPEAKER_MAP_RECORD.md` の
+    実バイト sha256 と食い違う値へ改竄すると、loader の cross-check (n) が
+    fail-closed で拒否する（旧実装は `detail_record` の非空文字列検証の
+    みで、この改竄を素通りさせていた）。"""
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["pre_pin_verification_summary"]["detail_record_sha256"] = "a" * 64
+
+    tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="detail_record_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            tampered_contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_detail_record_real_file_diverges_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """record 改竄（実ファイル相違、オーバーライドで偽ファイル注入）:
+    manifest 側の `detail_record_sha256` は正規の pin 値のままでも、
+    `detail_record_path` オーバーライドで内容の異なる偽 record を注入
+    すると、loader の cross-check (n) が fail-closed で拒否する——record
+    が後で編集されても6点 PASS 主張と証拠文書の実体が乖離したまま通って
+    いた穴の直接反証。"""
+    fake_record = tmp_path / "HARNESS3A_SPEAKER_MAP_RECORD.md"
+    fake_record.write_bytes(b"# tampered record content\n")
+    with pytest.raises(m.Run9ValidationError, match="detail_record_sha256"):
+        m.load_pinned_speaker_map_manifest(
+            contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            detail_record_path=fake_record,
+        )
+
+
+def test_harness3a_load_pinned_speaker_map_manifest_detail_record_missing_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """`detail_record_path` オーバーライドが存在しないファイルを指すと
+    fail-closed で拒否される。"""
+    missing_path = tmp_path / "does_not_exist_record.md"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_speaker_map_manifest(
+            contract, domain=_real_domain(), rights_manifest=_real_rights_manifest(),
+            detail_record_path=missing_path,
+        )
+
+
+# --- RUN9_CONTRACT.yaml: expected_speaker_map_sha は RUN9-L0-HARNESS-3a で --
+# --- PENDING → PINNED へ遷移した --------------------------------------------
+
+
+def test_harness3a_contract_raw_expected_speaker_map_sha_pinned(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["expected_speaker_map_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(m.SPEAKER_MAP_MANIFEST_PATH)
+    assert field["source"] == (
+        "voice_genesis/evolution/run9_dual_founder_pjs/inputs/speaker_map_manifest.json"
+    )
+
+
+# --- README.md: PENDING 件数・stale 現在形記述ゼロの回帰 --------------------
+
+
+def test_harness3a_readme_pending_count_updated_to_eight_and_nine() -> None:
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "pre-run 必須8欄" in readme_text
+    assert "総 PENDING 9欄" in readme_text
+    for paragraph in readme_text.split("\n\n"):
+        if "pre-run 必須9欄" in paragraph or "総 PENDING 10欄" in paragraph:
+            assert ("履歴" in paragraph) or ("解消済み" in paragraph), (
+                f"stale current-tense 9/10-count claim in paragraph: {paragraph!r}"
+            )
+
+
+def test_harness3a_readme_expected_speaker_map_sha_no_longer_claimed_pending() -> None:
+    """PENDING 欄の現行列挙（`attempt_id`/`repository_commit_sha`/...）
+    から `expected_speaker_map_sha` が除去されていること。"""
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    for line in readme_text.splitlines():
+        if "`repository_commit_sha`/`config_sha`/`dependency_pins_sha`/" in line:
+            assert "expected_speaker_map_sha" not in line, (
+                f"stale enumeration still lists expected_speaker_map_sha as pending: {line!r}"
+            )
+
+
+def test_harness3a_readme_references_new_artifacts() -> None:
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    assert "speaker_map_manifest.json" in readme_text
+    assert "HARNESS3A_SPEAKER_MAP_RECORD.md" in readme_text
+    assert "USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt" in readme_text
+    assert "DESIGN_RUN9_REVISION_0.5.md" in readme_text
+
+
+# --- RUN9_CONTRACT.yaml: 既存 pin 全数不変 ----------------------------------
+
+
+def test_harness3a_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -> None:
+    """RUN9-L0-HARNESS-3a は Scope IN の8ファイル（USER_ADJUDICATION_
+    20260826_AF0_RUNTIME_MAPPING.txt 新規 / DESIGN_RUN9_REVISION_0.5.md
+    新規 / inputs/speaker_map_manifest.json 新規 / HARNESS3A_SPEAKER_MAP_
+    RECORD.md 新規 / run9_schema.py / RUN9_CONTRACT.yaml / README.md /
+    tests/test_run9_contract.py）以外の既存 pin 済みファイルの実バイトを
+    一切変更していないこと（代表サンプル——execution_profile_sha/
+    reexport_manifest_sha/seed_policy_sha/failure_abort_criteria_sha/
+    backbone_checkpoint_sha/por_adjudication_sha256/founder_genome_shas は
+    無変更である）。`design_revision_doc_sha256` は例外——裁定逐語
+    「design_revisionを0.5へ上げ」に基づく正当な repin であり（Fable
+    レビュー、`test_harness3a_design_revision_promoted_to_0_5` 参照）、
+    ここでは「現行 `REVISION_DOC_PATH`（rev 0.5 文書）と一致している」
+    ことのみを確認する（＝改変されていないことの確認ではない）。
+    `founders/*.json`/`gate_synth.py`/既存裁定 txt/既存 execution_profile/
+    reexport manifest/DESIGN 0.1-0.4 も1byteも変更していないことを合わせて
+    確認する。"""
+    assert contract_raw["execution_profile_sha"]["value"] == m.compute_file_sha256(
+        m.EXECUTION_PROFILE_MANIFEST_PATH
+    )
+    assert contract_raw["reexport_manifest_sha"]["value"] == m.compute_file_sha256(
+        m.REEXPORT_MANIFEST_PATH
+    )
+    assert contract_raw["seed_policy_sha"]["value"] == m.compute_file_sha256(
+        m.SEED_POLICY_MANIFEST_PATH
+    )
+    assert contract_raw["failure_abort_criteria_sha"]["value"] == m.compute_file_sha256(
+        m.FAILURE_ABORT_MANIFEST_PATH
+    )
+    assert contract_raw["backbone_checkpoint_sha"]["status"] == "PINNED"
+    assert contract_raw["backbone_checkpoint_sha"]["value"] == (
+        "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a"
+    )
+    assert contract_raw["design_revision_doc_sha256"]["value"] == m.compute_file_sha256(
+        REVISION_DOC_PATH
+    )
+    assert contract_raw["por_adjudication_sha256"]["value"] == m.compute_file_sha256(
+        POR_ADJUDICATION_PATH
+    )
+    for founder_id, path_getter in (
+        ("R9F-01", lambda: m.founder_genome_document_path("R9F-01")),
+        ("R9F-02", lambda: m.founder_genome_document_path("R9F-02")),
+    ):
+        field = contract_raw["founder_genome_shas"][founder_id]
+        assert field["status"] == "PINNED"
+        assert field["value"] == m.compute_file_sha256(path_getter())
+    gate_synth_path = (
+        _RUN_DIR.parent.parent / "foundry" / "s1_gate" / "gate_synth.py"
+    )
+    assert m.compute_file_sha256(gate_synth_path) == (
+        "a7404da3b7ea53b94b8d0b694552610e852af2d25d88f7b5d497b58fd30f7894"
+    )
+
+
+def test_harness3a_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
     assert m.gate_state(contract) == "BLOCKED"

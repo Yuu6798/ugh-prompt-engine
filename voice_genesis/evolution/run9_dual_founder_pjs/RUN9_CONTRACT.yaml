@@ -148,6 +148,19 @@
 # 再計算で不変であることを確認済み）——RUN9 は出生前のため科学的影響は
 # ない。
 #
+# RUN9-L0-HARNESS-3a（2026-08-26）: User 裁定「RUN9 User裁定 — AF0
+# runtime mapping」（DESIGN_RUN9_REVISION_0.5.md、repo 内収載
+# USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt）の採用により
+# design_revision 0.4 → 0.5。裁定逐語「design_revisionを0.5へ上げ、発行
+# 済みFounder Genome、coords、genome_id、TRI_CROSSOVER/1.0は変更しない」
+# に従い、契約レベルの design_revision を実際に昇格する（本欄・
+# run9_schema.DESIGN_REVISION 定数・design_revision_doc_sha256 pin の
+# 三箇所を同時に更新——rev 0.2→0.3→0.4 と同じ手順）。旧 "0.1"〜"0.4"
+# 形式の contract は run9_schema.DESIGN_REVISION の凍結値照合により意図
+# どおり fail-closed 拒否される。方式A（ritsu/user 再正規化線形合成）・
+# AF0 unrealized mass 明記義務・非主張3点・Birth Identity Separation
+# Gate の別途実行は expected_speaker_map_sha 欄参照。
+#
 # 各欄の pin 状況は {value, status, reason, source?} 形（VG_FOUNDRY の
 # debt/RUN_CONTRACT_SCHEMA_v1.json pinned_field 慣習に倣うが独立実装 —
 # run9_schema.py 参照）。status ∈ {PINNED, PENDING, BLOCKED}。
@@ -159,7 +172,7 @@
 schema: voicegenesis-run-contract/1.0
 run_id: RUN9
 experiment_id: VG-R9-DUAL-FOUNDER-PJS
-design_revision: "0.4"
+design_revision: "0.5"
 design_doc: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
 
 # rev 0.3 改訂A（DESIGN_RUN9_REVISION_0.3.md、PoR §1/§3/§4）: 旧
@@ -241,12 +254,31 @@ design_doc_sha256:
   source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
 
 # --- design_revision_doc_sha256: 現行 design_revision の差分メモ
-# （DESIGN_RUN9_REVISION_0.4.md）の実 sha256（PINNED）。design_doc_sha256
-# と同じ前例方式。design_revision が 0.3 → 0.4 へ進んだため本欄も rev 0.4
-# 文書の sha256 へ更新する — rev 0.3 文書（b4f05cfb...）自体は無改変の
-# まま存続し、その系譜は DESIGN_RUN9_REVISION_0.4.md 末尾「design_revision
+# （DESIGN_RUN9_REVISION_0.5.md）の実 sha256（PINNED）。design_doc_sha256
+# と同じ前例方式。design_revision が 0.4 → 0.5 へ進んだため本欄も rev 0.5
+# 文書の sha256 へ更新する — rev 0.4 文書（7bfefcf6...）自体は無改変の
+# まま存続し、その系譜は DESIGN_RUN9_REVISION_0.5.md 末尾「design_revision
 # 系譜」表に記録する（欄としては最新 revision の1件のみを pin する規約は
 # design_doc_sha256/design_revision_doc_sha256 の前例どおり）。
+#
+# RUN9-L0-HARNESS-3a（2026-08-26）: User 裁定「RUN9 User裁定 — AF0
+# runtime mapping」（repo 内収載 USER_ADJUDICATION_20260826_AF0_RUNTIME_
+# MAPPING.txt、sha256 = 07d932da7d60e0e5abf3011040228d47e0b027514a5d0b6d2
+# c165e71d6c65426）の採用 + 方式A（ritsu/user 再正規化線形合成・AF0
+# unrealized mass 明記義務・非主張3点・Birth Identity Separation Gate の
+# 別途実行）の凍結を反映した rev 0.5 の sha256 を pin する。rev 0.4
+# 文書自体は無改変のまま存続（旧値 7bfefcf61886062511c30df92c25e597b7a4a
+# 7745037514ed4655a623e38df07 は履歴として append-only 保持）。Fable
+# レビュー（2026-08-26）: 本改訂の初版は契約レベル design_revision 昇格
+# を「本 PR のスコープ外」として据え置いていたが、裁定逐語「design_
+# revisionを0.5へ上げ」は User 裁定の直接指示であり、指示書チェックリスト
+# 漏れが原因の据え置きは採用しないとの判定を受け、同一 PR 内で本欄・
+# design_revision（トップレベル）・run9_schema.DESIGN_REVISION 定数の
+# 三箇所を同時に repin した（内容改訂に伴い DESIGN_RUN9_REVISION_0.5.md
+# 自体の実バイトも変わるため、値は「スコープ注記」節削除前の初版 sha256
+# ではなく、削除後の最終稿の sha256 を pin する——初版 sha256 は履歴として
+# 記録しない、初版は同一 PR 内の未収載中間状態であり repo に確定バイトと
+# して存在したことがないため）。
 # 2026-08-25 外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
 # （DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt、byte-pin 不変。sha256 =
 # a148b4410a7d741b404ada69a6e459679e8dcb01c876fd71ac116c3e0fffb091）の
@@ -272,10 +304,22 @@ design_doc_sha256:
 # 再計算した（旧値
 # acaa8586a93b6c662e427b5f2015e57ca314128ba4cc1dde7ca7ce8841ca6fec は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #328 Codex レビュー第8巡指摘15、P2、採用対応。
+# Claude 完結ルート）: 「4. 不変宣言」節が、発行済み Founder Genome の
+# coords/genome_id/profile_label との cross-document 照合を
+# `validate_speaker_map_manifest()`（manifest 単体の構造・自己整合のみを
+# 検証し、一次データ未 load のため cross-document 照合は行わない）の
+# cross-check (b) として記述していたが、実際にこの照合を行うのは
+# `load_pinned_speaker_map_manifest()` 側であり、弱い API へ読者を誘導する
+# 誤記だった——validator = manifest 内部整合のみ・loader = cross-document
+# 照合、という正しい役割分担へ訂正した。文書全体を grep し、他の同種誤帰属
+# がないことを確認済み（詳細は `HARNESS3A_SPEAKER_MAP_RECORD.md` 第8巡
+# 追記参照）。旧値（PR #328 第1巡3件対応後）は履歴として保持する:
+#   15fbe4b6695f9d92dbfb847c203dc1047562993b17d9572481669a5c12bb61f8
 design_revision_doc_sha256:
-  value: "7bfefcf61886062511c30df92c25e597b7a4a7745037514ed4655a623e38df07"
+  value: "095ce77147e897473e8d87b474159c2ff4fdeb6684356cc03649f99a603cb2a9"
   status: PINNED
-  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.4.md
+  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.5.md
 
 # --- por_adjudication_sha256: PoR メモ（POR_CONCEPT_ADJUDICATION_20260824.txt）
 # の実バイト sha256（PINNED）。design_doc_sha256 と同一規約（ファイル実
@@ -1251,36 +1295,329 @@ seed_policy_sha:
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/seed_policy_manifest.json
 
+# --- expected_speaker_map_sha: inputs/speaker_map_manifest.json の実バイト
+# sha256（design_doc_sha256 と同一のファイル実バイト規約）。RUN9-L0-
+# HARNESS-3a（2026-08-26, User 裁定「RUN9 User裁定 — AF0 runtime mapping」
+# 逐語、repo 内収載 `USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt`
+# 参照）で PINNED 化: 方式A（af0/ritsu/user 三点 Genome を保持したまま、
+# byte-verified な AF0 speaker embedding が現行 RUN6 Backbone に存在しない
+# ため runtime render では ritsu/user 成分のみを再正規化して float32 単純
+# 加重和で線形合成する。L2正規化・摂動・ランダム成分・試聴後の重み調整は
+# 恒久禁止）を採用し、pin 前検証6点（入力hash照合・384-dim float32有限性・
+# 生成embeddingのbyte決定論・二体embeddingの相異・smoke render成立・
+# render replay決定論）を実測、全て PASS したことを受けて
+# `inputs/speaker_map_manifest.json`（schema `run9-speaker-map/1.0`）の
+# raw byte sha256 を本欄へ PINNED 化した。実測の詳細記録は
+# `HARNESS3A_SPEAKER_MAP_RECORD.md` を正とする。`run9_schema.
+# validate_speaker_map_manifest()`/`load_pinned_speaker_map_manifest()`
+# が全構造・cross-check（裁定 txt 実バイト照合、両 founder の coords_raw
+# と発行済み Founder Genome document との一致、再正規化重みの機械再導出、
+# unrealized_mass 整合、入力 emb sha と `reexport_manifest.json` pin との
+# cross-manifest 照合、pre_pin_verification_summary 6点 PASS 整合、禁止
+# 4項目/非主張逐語の存在、本欄との実バイト sha256 一致）を fail-closed で
+# 強制する——harness の speaker map 消費は `load_pinned_speaker_map_
+# manifest()` 経由のみで行う契約（他の `load_pinned_*` 系と同じ規約）。
+#
+# 裁定「その後、Birth Identity Separation Gateを別途実行する。二体分離が
+# 成立しない場合はNOT_ESTABLISHEDとして凍結し、同attempt内で重み変更または
+# 方式Bへの自動昇格を行わない。」——本 PINNED 化は speaker map manifest の
+# 事前検証6点までを対象とし、Birth Identity Separation Gate 自体の実行は
+# 含まない（別途実行）。
+#
+# 情報記録（pin 欄ではない、append-only、PIN-2/HARNESS-2/EXECPROFILE-1
+# 前例のキー体裁踏襲）: repo 収載した裁定逐語文書
+# `USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt` の実バイト sha256
+# （compute_file_sha256() 実測、2026-08-26 時点）:
+#   07d932da7d60e0e5abf3011040228d47e0b027514a5d0b6d2c165e71d6c65426
+# 本ファイルは CONTRACT_PIN_FIELDS へ追加しない（裁定文書自体は「値の
+# 転記元の証跡」であって RUN9 の実行前提条件そのものではないため——
+# reexport_manifest_sha/execution_profile_sha の前例と同じ扱い）。
+#
+# `DESIGN_RUN9_REVISION_0.5.md`（本裁定を design revision として凍結した
+# 文書）は `design_revision_doc_sha256` pin（本ファイル上部、design_
+# revision: 0.4 → 0.5 の欄）が契約レベルの現行文書として保持する——本欄
+# では情報記録を重複させない。
+#
+# 2026-08-27 repin（PR #328 Codex レビュー第1巡3件、いずれも採用。Claude
+# 完結ルート）: 指摘1（P1）session workdir 限定だった合成スクリプトと
+# 生成 embedding が repo 外のみに存在し、fresh checkout では manifest の
+# PINNED 出力 hash（`fc7b73fd...`/`0a681a2c...`）を再構成・検証できない
+# 穴を閉じた——checkout-stable fixture `speaker_map_builder.py` を新設
+# （合成ロジックは workdir 原本 `synth_speaker_map.py` から演算式・順序・
+# dtype 処理を逐語移植。入力 emb sha256 を manifest pin と fail-closed
+# 照合してから合成し、出力 sha256 を `synthesized_embedding.sha256` pin
+# と fail-closed 照合する）。manifest 側へ新設 `builder_provenance` 節
+# （`builder_sha256`/`logical_name`/`repo_relative_path`）として builder
+# の実バイト sha256 を追記し、`run9_schema.validate_speaker_map_
+# manifest()`/`load_pinned_speaker_map_manifest()` に builder の実バイト
+# sha256 照合を cross-check (j) として配線した。fresh checkout で両
+# founder（`reexport_out/onnx_gate_40000/` の ritsu/user emb 入力）に対し
+# `speaker_map_builder.py` を実行し、出力 sha256 が manifest pin 値と
+# 完全一致することを実測確認済み（`HARNESS3A_SPEAKER_MAP_RECORD.md`
+# 追記記録参照）。指摘2（P2）`load_pinned_speaker_map_manifest()` の
+# founder genome 照合が `coords_raw` のみで `genome_id` を照合していな
+# かった穴（「正しい coords + 別 founder の genome_id」という取り違え
+# 偽装を検出できない）を閉じた——cross-check (b) へ `founders.<id>.
+# genome_id` と発行済み Founder Genome document の `genome_id` の厳密
+# 一致強制を追加した。指摘3（P2）`run9_schema.py`
+# `_SPEAKER_MAP_ADJUDICATED_DESIGN_REVISION` 直前のコメントが「契約レベル
+# design_revision 同期は本 PR 外・スコープ注記参照」という破棄済み判断を
+# 残置していた（`DESIGN_RUN9_REVISION_0.5.md` の「スコープ注記」節は
+# 契約レベル三点昇格を同一改訂内で実施した際に既に削除済みで、コメントが
+# 矛盾していた）——現行規則（design_revision は contract 三点（トップ
+# レベル欄/`DESIGN_REVISION` 定数/`design_revision_doc_sha256` pin）+ 本
+# manifest 欄の計四点を同一 PR 内で同期昇格する）へ差し替えた。上記3件は
+# いずれも speaker map の実測事実（各 founder の合成 embedding sha256・
+# render sha256・秒数・pre_pin_verification_summary の6点 PASS）を一切
+# 変更しない——`builder_provenance` 節の新設のみで実バイトが変わった
+# ための repin。旧 pin 値（第1世代、HARNESS-3a 初回 PINNED 時）は履歴と
+# して保持する:
+#   3f34dc71b34d9fa944528aba4432501d036d8c26b035a14b40938a255ea182f2
+#
+# 2026-08-27 第3世代 repin（PR #328 Codex レビュー第2巡3件、いずれも採用。
+# Claude 完結ルート）: 指摘4（P1）speaker_map_builder.py の --out が
+# --ritsu-emb/--user-emb と同一実体（symlink 経由の alias 含む）の場合、
+# 無条件 write_bytes() が検証済み入力 emb を読み取り後に破壊する穴が
+# あった——書き込み前に3パスを Path.resolve() で解決・比較し、--out が
+# 入力いずれかと同一実体なら fail-closed で拒否する
+# _check_out_does_not_alias_inputs() を新設し main() へ配線した（負例
+# テスト: 同一パス2系統 + symlink alias 2系統、計4件）。指摘5（P2）
+# manifest の w_ritsu_expr/w_user_expr（builder が実際に評価して合成に
+# 使う実効値）を validator が検証しておらず、*_float32_hex/repr さえ
+# 正しければ expr 改竄を素通りさせる穴があった——eval() を使わない閉じた
+# 文法パーサ run9_schema._evaluate_closed_weight_expr()（10進小数リテラル
+# または単純分数 'A/B' のみ許容、それ以外は fail-closed 拒否）を新設し、
+# validate_speaker_map_manifest() へ expr 評価結果が coords_raw 由来の
+# 再導出重みと厳密一致することを強制する検証を追加した。speaker_map_
+# builder.py 側の eval() 呼び出しも同じ共有パーサへ置き換えた（builder
+# が既存の依存方向どおり run9_schema を import する側のため、パーサ本体
+# は run9_schema.py に置いた——循環 import なし）。指摘6（P2）は本ファイル
+# の対象外（README.md のみ）。指摘4・5 とも speaker map の実測事実
+# （各 founder の合成 embedding sha256・render sha256・秒数・pre_pin_
+# verification_summary の6点 PASS・重みの実効値そのもの）を一切変更しない
+# ——speaker_map_builder.py の実バイトが変わったことによる
+# builder_provenance.builder_sha256 repin のみが本欄の repin 理由。旧
+# pin 値（第2世代、PR #328 第1巡3件対応後）は履歴として保持する:
+#   3057e5bb8a1b0da1834315b953477ead98b2ab401404d4f76262bd93689070b0
+#
+# 2026-08-27 第4世代 repin（PR #328 Codex レビュー第3巡2件、いずれも採用。
+# Claude 完結ルート）: 指摘7（P2）speaker_map_builder.py の --out への
+# 書き込みが Path.write_bytes() の直接呼び出しで非 atomic だったため、
+# 既存の正当な emb がある状態で書き込みが中断すると truncate/partial
+# 出力が残る穴があった——同一ディレクトリの一意な staging ファイルへ書き、
+# fsync で durable にしてから os.replace() で atomic 置換する
+# _atomic_write_bytes() を新設し main() へ配線した（failure-injection
+# テストで書き込み途中の例外注入後も旧出力バイトが無傷で残ることを確認、
+# alias 拒否チェックとの順序整合——staging ファイルが --ritsu-emb/
+# --user-emb のいずれとも別実体であることも確認済み）。指摘8（P2）
+# `run9_schema.py` の `repo_state.gate_synth_py_sha256` は 64hex 形式のみ
+# 検証されており、実ファイル・execution profile の render_code pin の
+# どちらとも照合していなかったため、smoke WAV の provenance が実在しない
+# コードへ帰属され得る穴があった——`load_pinned_speaker_map_manifest()`
+# の cross-check (l) として (i) `voice_genesis/foundry/s1_gate/
+# gate_synth.py` の実バイト sha256 との一致、(ii)
+# `execution_profile_manifest.json`（`load_pinned_execution_profile_
+# manifest()` 経由）の `render_code_commit.file_sha256` との cross-manifest
+# 一致、の両方を追加した（負例テスト: manifest 側 sha 改竄・実ファイル
+# 相違〔オーバーライドで偽ファイル注入〕・execution profile との
+# cross-manifest 不一致、の3系統）。指摘7・8 とも speaker map の実測事実
+# （各 founder の合成 embedding sha256・render sha256・秒数・pre_pin_
+# verification_summary の6点 PASS・重みの実効値そのもの）を一切変更しない
+# ——speaker_map_builder.py の実バイトが変わったことによる
+# builder_provenance.builder_sha256 repin のみが本欄の repin 理由（指摘8は
+# run9_schema.py/tests のみの変更で manifest 実バイトを変えない）。
+# builder 再現実測を workdir 現存の実 emb（`reexport_out/onnx_gate_40000/`）
+# に対し再実行し、両 founder の出力 sha256（`fc7b73fd...`/`0a681a2c...`）
+# が pin 値と不変のまま一致することを再確認済み
+# （`HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照）。旧 pin 値（第3世代、
+# PR #328 第2巡3件対応後）は履歴として保持する:
+#   ab2a98e99320bc4e93cab48c002b3c3e6546a371e6a390cd70b54ce026c6962d
+#
+# 2026-08-27 第5世代 repin（PR #328 Codex レビュー第4巡指摘9、P1、採用。
+# Claude 完結ルート）: speaker_map_builder.py の CLI 再現経路が manifest の
+# **内部構造検証のみ**（旧 `load_local_speaker_map_manifest()` が直接
+# `json.load()`）で完結しており、(i) manifest 実バイトが本欄
+# `expected_speaker_map_sha` pin と一致するか、(ii) 実行中の builder 自身が
+# `builder_provenance.builder_sha256` と一致するか、のいずれも確認せずに
+# 同じ untrusted ファイル内の期待値どうしを比較して `reproduced: true` を
+# 報告し得た——改変された manifest + 入力 + 期待値の組で偽の再現成功を
+# 印字できる穴があった。builder の manifest 読み込みを新設
+# `load_canonical_speaker_map_manifest()` へ置き換え、
+# `run9_schema.load_run9_contract_from_yaml_path()`/`load_run9_identity_
+# domain()`/`load_rights_manifest_json()` で contract/domain/rights_
+# manifest を正典パスから読み、`load_pinned_speaker_map_manifest()`
+# （本欄 pin の唯一の正規消費経路——manifest 実バイト pin 一致・発行済み
+# Founder Genome・reexport/execution_profile 等との全 cross-check を
+# fail-closed で強制する）経由でのみ manifest を得るよう配線した
+# （manifest への直接 `json.load()` 経路は CLI から排除）。さらに builder
+# 自身の自己照合として、実行中の builder ファイル（`Path(__file__)` の
+# 実バイト sha256）が manifest の `builder_provenance.builder_sha256` と
+# 一致しなければ synthesis 前に fail-closed で拒否する処理を追加した
+# （pin 済み builder 以外での再現主張を構造的に禁止する）。負例テスト
+# （manifest 改変・内部整合は保ったまま→ contract pin 不一致で拒否、
+# builder バイト改変〔コピーへ1byte追加〕→自己照合で拒否）を
+# `tests/test_speaker_map_builder.py` へ追加した。本対応は speaker map の
+# 実測事実（各 founder の合成 embedding sha256・render sha256・秒数・
+# pre_pin_verification_summary の6点 PASS・重みの実効値そのもの）を一切
+# 変更しない——speaker_map_builder.py の実バイトが変わったことによる
+# builder_provenance.builder_sha256 repin のみが本欄の repin 理由。
+# **逸脱注記〔訂正済み・履歴〕**: 実装中、一時「本ラウンドの実行セッション
+# には HARNESS-3a 実測に使用した実 ritsu/user emb（`reexport_out/
+# onnx_gate_40000/` 配下、rights 制約により repo 非同梱・session workdir
+# 限定のアーティファクト）が存在せず、workdir 実 emb に対する builder
+# 再現実測（両 founder）は本ラウンドでは再実行できていない」と報告された
+# が、これは探索誤りであり（実 emb は session workdir に現存）、最終検分
+# で訂正した——新 canonical CLI 経路（contract load → 全 cross-check +
+# builder 自己照合 → 合成）で両 founder の再現実測を再実行し、いずれも
+# `reproduced: true`（出力 sha256 が manifest pin `fc7b73fd...`/
+# `0a681a2c...` と完全一致・exit 0）を確認済み。経緯は
+# `HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照。`synthesize()` の
+# 合成ロジック（式・順序・dtype 処理）は本対応で一切変更しておらず
+# （変更対象は manifest 取得経路と自己照合のみで、`w_r * ritsu_vec +
+# w_u * user_vec` の演算自体には触れていない）、第4世代までに実測確認
+# 済みの出力 sha256（`fc7b73fd...`/`0a681a2c...`）は本 repin でも不変の
+# まま保持している。canonical loader 経由の統合動作（`load_pinned_
+# speaker_map_manifest()` の全 cross-check・自己照合を含む）は実 repo
+# pin 済み manifest に対する自動テストで確認済み——詳細は
+# `HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照。旧 pin 値（第4世代、
+# PR #328 第3巡2件対応後）は履歴として保持する:
+#   6a6d6e2fe5737bcc2847c66e9420e42c818a682630feb140860951195fd227cd
+#
+# 2026-08-27 第6世代 repin（PR #328 Codex レビュー第6巡指摘13、P1、採用。
+# Claude 完結ルート）: builder 自己照合が「実行されたバイト」ではなく
+# 「パス」を照合対象にしていた TOCTOU（`load_canonical_speaker_map_
+# manifest()` が自己照合の**直前に** `Path(__file__).resolve()` を再度
+# ディスクから読み直していたため、import 済みモジュールが束縛する実行
+# コードと自己照合が読むバイト列が別物になり得た——import 後・照合前に
+# ファイルが置換されると、実行中の旧コードが新しいディスクバイトを hash
+# して照合を通し、偽の `reproduced: true` を印字できた）を、verified
+# self-exec dispatch で構造的に閉じた: `main()` が builder 実バイトを
+# **1回だけ**読み（`source_bytes`）、その sha256 を `builder_provenance.
+# builder_sha256` pin と照合し、**照合に使った同一の `source_bytes`
+# オブジェクト**を `compile()`→`exec()` して得た隔離名前空間の
+# `synthesize()`/`_check_out_does_not_alias_inputs()`/
+# `_atomic_write_bytes()` のみを処理に用いる——「hash したバイト列 ==
+# 実行されるバイト列」を同一オブジェクトで保証する。自己照合の責務は
+# `load_canonical_speaker_map_manifest()` から `main()` へ移設した
+# （`running_builder_path` 引数はテスト専用 override として `main()` 側に
+# 残る）。**境界宣言**: この verified self-exec dispatch を実装する
+# `main()` 自身の完全性（本 builder が repo からどう起動されたか）は
+# この仕組みの手が届く範囲の外にあり、無限後退は解消不能——repo 機構
+# （branch_write_policy + PR レビュー + contract pin）を信頼根とする
+# （`run9_schema.py` の各 `load_pinned_*` 関数が持つ信頼根境界宣言と
+# 同型）。負例テスト（TOCTOU シミュレーション: import 済みモジュール属性
+# `synthesize` の改変が実処理に影響しないことの直接証拠／exec ガード単体:
+# `__name__` sentinel により `main()` が再帰起動しないこと／正常系
+# end-to-end）を `tests/test_speaker_map_builder.py` へ追加した。本対応は
+# speaker map の実測事実（各 founder の合成 embedding sha256・render
+# sha256・秒数・pre_pin_verification_summary の6点 PASS・重みの実効値
+# そのもの）を一切変更しない——speaker_map_builder.py の実バイトが変わった
+# ことによる builder_provenance.builder_sha256 repin のみが本欄の repin
+# 理由。builder 再現実測を workdir 現存の実 emb
+# （`reexport_out/onnx_gate_40000/`）に対し新 verified self-exec dispatch
+# 経由で再実行し、両 founder の出力 sha256（`fc7b73fd...`/`0a681a2c...`）
+# が pin 値と不変のまま一致することを再確認済み（`HARNESS3A_SPEAKER_MAP_
+# RECORD.md` 追記記録参照）。旧 pin 値（第5世代、PR #328 第4巡指摘9対応後）
+# は履歴として保持する:
+#   43e68fde685d55a190e6fab0caa18381bdc2e31456558287f2b0d176df2c3167
+#
+# 2026-08-27 第7世代 repin（PR #328 Codex レビュー第7巡指摘14、P1、採用。
+# Claude 完結ルート）: 旧「正常系」テストは `main()` を素通りし
+# `_execute_cli()` へ fake 関数を直接注入していたため、`main()` の
+# canonical loading・self-exec 照合（source_bytes と `builder_provenance.
+# builder_sha256` の一致）・compile/exec dispatch のいずれかが全拒否に
+# 回帰してもテストスイートが green のまま気付けない穴があった。
+# `load_pinned_speaker_map_manifest()` の cross-check (8) は
+# `inputs/reexport_manifest.json` の実 emb sha256 pin（rights 制約により
+# repo 非同梱の実バイナリの digest）と `input_embeddings` の一致を強制
+# するため、canonical loader を経由する限り正常系（`reproduced: true`）を
+# 実 emb バイナリなしに repo コミット可能な形で再現することはできない
+# ——`main()` へテスト専用 kwarg `manifest_override`（CLI フラグとしては
+# 非公開、canonical loader 呼び出しのみを省略する）を新設し、self-exec
+# 照合・compile/exec dispatch・隔離名前空間の本物の `synthesize()` は
+# tmp_path 完結の自己整合フィクスチャに対して実際に実行させる正常系
+# end-to-end テストを `tests/test_speaker_map_builder.py` へ追加した
+# （`main()` を直接呼び exit 0・`reproduced: true`・出力 emb バイト一致を
+# assert する）。本対応は speaker map の実測事実（各 founder の合成
+# embedding sha256・render sha256・秒数・pre_pin_verification_summary の
+# 6点 PASS・重みの実効値そのもの）を一切変更しない——speaker_map_
+# builder.py の実バイトが変わったことによる builder_provenance.
+# builder_sha256 repin のみが本欄の repin 理由。builder 再現実測を
+# workdir 現存の実 emb（`reexport_out/onnx_gate_40000/`）に対し新
+# `manifest_override` 追加後の CLI で再実行し、両 founder の出力 sha256
+# （`fc7b73fd...`/`0a681a2c...`）が pin 値と不変のまま一致することを
+# 再確認済み（`HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照）。旧 pin 値
+# （第6世代、PR #328 第6巡指摘13対応後）は履歴として保持する:
+#   31eca739390feae363d0ec8a1a2e9a8b653c9106327e02fe30a17c606f9ed099
+#
+# 2026-08-27 第8世代 repin（PR #328 Codex レビュー第8巡指摘16・17、
+# P1×1・P2×1、いずれも採用。Claude 完結ルート）: 指摘16（P1）
+# `speaker_map_builder.py` の `_atomic_write_bytes()` が `path`/`data` の
+# みを受け取り、`--out` が保護対象の入力（ritsu/user emb）と同一実体で
+# ないかの alias 判定を呼び出し元の preflight
+# （`_check_out_does_not_alias_inputs()`）へ全面的に依存していたため、
+# 将来この関数が preflight を経由せず直接呼び出される/リファクタされる
+# 改修が入ると保護入力を `os.replace()` で破壊し得る穴があった——
+# `_check_out_does_not_alias_inputs()`/`_atomic_write_bytes()` が共有する
+# 単一実装 `_resolve_alias_conflict()` を新設し、`_atomic_write_bytes()`
+# のシグネチャへ `protected_paths: Sequence[Path]` を必須引数として追加、
+# 書き込み直前に alias を再チェックするようにした（CLI 側 preflight は
+# 維持——二重防御）。指摘17（P2）manifest の `pre_pin_verification_
+# summary.detail_record`（`HARNESS3A_SPEAKER_MAP_RECORD.md` への参照）が
+# 非空文字列検証のみで、record が後で編集されても6点 PASS 主張と証拠文書
+# の実体が乖離したまま `load_pinned_speaker_map_manifest()` が通っていた
+# ——`pre_pin_verification_summary.detail_record_sha256`（64hex）を新設し、
+# `load_pinned_speaker_map_manifest()` の cross-check (n) として record
+# 実バイト sha256 との一致を fail-closed で強制する検証を追加した。指摘16・
+# 17 とも speaker map の実測事実（各 founder の合成 embedding sha256・
+# render sha256・秒数・pre_pin_verification_summary の6点 PASS・重みの
+# 実効値そのもの・coords_raw・profile_label）を一切変更しない——
+# `builder_provenance.builder_sha256` repin（指摘16 で speaker_map_
+# builder.py の実バイトが変わったため）+ `detail_record_sha256` 新設
+# （指摘17）のみが本欄の repin 理由。builder 再現実測を workdir 現存の実
+# emb（`reexport_out/onnx_gate_40000/`）に対し verified self-exec
+# dispatch 経由で再実行し、両 founder の出力 sha256（`fc7b73fd...`/
+# `0a681a2c...`）が pin 値と不変のまま一致することを確認済み
+# （`HARNESS3A_SPEAKER_MAP_RECORD.md` 追記記録参照）。旧 pin 値（第7世代、
+# PR #328 第7巡指摘14対応後）は履歴として保持する:
+#   97bb0b46427d3fd886083f02431d3cf7643508c551feab7677ba3b76f3a2ab68
 expected_speaker_map_sha:
-  value: null
-  status: PENDING
-  reason: >-
-    RUN9-L0-PIN-2（2026-08-26）で reason 訂正: anchor pin の充足だけでなく、
-    af0 が gate_synth.py --speaker の choices
-    {ritsu, pjs, user, d3synth, amitaro} に存在しない構造的ギャップが
-    本欄の真の律速であることを明記する。DESIGN §9.1 の加重合成
-    I_child = Normalize(w_A・I_AF0 + w_R・I_Ritsu + w_U・I_User) を
-    spk_embed へ実現する機構も gate_synth.py に存在しない（実消費箇所
-    gate_synth.py:1330-1372 は `--speaker <name>` の名前ベースで acoustic
-    ディレクトリ内の `*.<name>.emb` を読み込む離散選択のみで、加重和・
-    補間等の合成処理は無い。choices 宣言は gate_synth.py:2599-2604）。
-    af0 側の backbone embedding をどう用意するか（新規生成/別の render
-    経路/af0 は spk_embed を経由しない設計に倒す等）の設計判断、および
-    af0/ritsu/user 座標 → backbone speaker embedding/id への写像方式の
-    設計は VG-L0 ハーネス Memo（RUN9-L0-HARNESS-1）へ登録する——写像方式が
-    未決のまま schema/validator を事前配線しない（先取り禁止）。
-    〔履歴: 旧 PENDING 理由（anchor pin 充足のみを律速として記述しており、
-    af0 の backbone 側構造的ギャップに触れていなかった、RUN9-L0-PIN-2 で
-    是正済み）——
-    2026-08-25 User attestation 実行により、af0 / ritsu に加え user の
-    anchor hash も domains/identity_domain_run9_v1.json で PINNED 済みと
-    なった（本欄冒頭コメント「2026-08-25 User attestation 実行」節参照）
-    ——3 anchor + metric_space_sha が全て揃い `Run9IdentityDomain.
-    is_pinned()` は True（旧来の律速は解消済み）。本欄が引き続き PENDING
-    なのは anchor pin 自体ではなく、speaker map manifest 実体（RUN9 の
-    3 Founder 座標と backbone speaker embedding/id との対応表）そのものが
-    まだ生成・pin 対象として存在しないため（専用 schema・生成手続きは
-    VG-L0 学習ハーネス実装時に確定する、残存ブロッカー(2)）だった〕
+  value: "47380a94cf88c9b8d213f5fcaa4422ad94fcb99a45086060f5261286c5d55c23"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/speaker_map_manifest.json
+
+# 〔履歴: 旧 PENDING（RUN9-L0-PIN-2, 2026-08-26）reason——RUN9-L0-HARNESS-3a
+# で解消済み〕:
+#   RUN9-L0-PIN-2（2026-08-26）で reason 訂正: anchor pin の充足だけでなく、
+#   af0 が gate_synth.py --speaker の choices
+#   {ritsu, pjs, user, d3synth, amitaro} に存在しない構造的ギャップが
+#   本欄の真の律速であることを明記する。DESIGN §9.1 の加重合成
+#   I_child = Normalize(w_A・I_AF0 + w_R・I_Ritsu + w_U・I_User) を
+#   spk_embed へ実現する機構も gate_synth.py に存在しない（実消費箇所
+#   gate_synth.py:1330-1372 は `--speaker <name>` の名前ベースで acoustic
+#   ディレクトリ内の `*.<name>.emb` を読み込む離散選択のみで、加重和・
+#   補間等の合成処理は無い。choices 宣言は gate_synth.py:2599-2604）。
+#   af0 側の backbone embedding をどう用意するか（新規生成/別の render
+#   経路/af0 は spk_embed を経由しない設計に倒す等）の設計判断、および
+#   af0/ritsu/user 座標 → backbone speaker embedding/id への写像方式の
+#   設計は VG-L0 ハーネス Memo（RUN9-L0-HARNESS-1）へ登録する——写像方式が
+#   未決のまま schema/validator を事前配線しない（先取り禁止）。
+#   〔履歴: 旧 PENDING 理由（anchor pin 充足のみを律速として記述しており、
+#   af0 の backbone 側構造的ギャップに触れていなかった、RUN9-L0-PIN-2 で
+#   是正済み）——
+#   2026-08-25 User attestation 実行により、af0 / ritsu に加え user の
+#   anchor hash も domains/identity_domain_run9_v1.json で PINNED 済みと
+#   なった（本欄冒頭コメント「2026-08-25 User attestation 実行」節参照）
+#   ——3 anchor + metric_space_sha が全て揃い `Run9IdentityDomain.
+#   is_pinned()` は True（旧来の律速は解消済み）。本欄が引き続き PENDING
+#   なのは anchor pin 自体ではなく、speaker map manifest 実体（RUN9 の
+#   3 Founder 座標と backbone speaker embedding/id との対応表）そのものが
+#   まだ生成・pin 対象として存在しないため（専用 schema・生成手続きは
+#   VG-L0 学習ハーネス実装時に確定する、残存ブロッカー(2)）だった〕
+#   （af0 の backbone 側構造的ギャップ自体は不変の事実として残るが、
+#   その事実を runtime render 側でどう扱うかは User 裁定「RUN9 User裁定
+#   — AF0 runtime mapping」（方式A: ritsu/user 再正規化線形合成 + AF0
+#   unrealized mass の明記）により決着した——上記 PINNED reason 参照）
 
 backbone_checkpoint_sha:
   value: "6a28d744642df6535000857767c32efee2e69668b390c2e7fa6486908723306a"
