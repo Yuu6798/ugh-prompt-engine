@@ -308,3 +308,33 @@ def test_incomplete_voicebank_is_not_present(tmp_path: Path, missing: str) -> No
     assert item["state"] == inv.ABSENT
     assert item["blocking"] is True
     assert "必須 3 点" in item["detail"]
+
+
+# --- 第 14 巡: canonical_body の全欄照合 ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "mutate, why",
+    [
+        (lambda d: d["canonical_body"].update(pitch="G4"), "pitch"),
+        (lambda d: d["canonical_body"].update(unit_directory="C3/"), "unit_directory"),
+        (lambda d: d["canonical_body"].update(extra=1), "未知の欄"),
+        (lambda d: d["canonical_body"].pop("pitch"), "pitch"),
+        (lambda d: d.update(replacement_policy="overwrite in place"), "replacement_policy"),
+        (lambda d: d.update(surprise=True), "未知の欄"),
+        (lambda d: d.pop("manifest_sha256"), "欠落"),
+    ],
+)
+def test_self_contradictory_registration_is_rejected(tmp_path: Path, mutate, why: str) -> None:
+    """aggregate hash だけ合っていれば通る、という状態を塞ぐ。
+
+    `pitch: G4` と C4 の aggregate hash を同時に宣言した自己矛盾登録が
+    R10-G2 を通過していた（PR #330 Codex 第 14 巡 P1）。
+    """
+    doc = _valid_registration()
+    mutate(doc)
+    path = tmp_path / "FREEZE_REGISTRATION.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    state, detail = inv._check_freeze_registration(path)
+    assert state == inv.ABSENT
+    assert why in detail

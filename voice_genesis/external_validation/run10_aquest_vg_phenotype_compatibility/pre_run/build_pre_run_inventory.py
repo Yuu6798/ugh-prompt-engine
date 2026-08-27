@@ -240,7 +240,20 @@ FREEZE_REGISTRATION_EXPECTED: Dict[str, object] = {
     "pitch_fixture_count": len(AF01_PITCHES),
     "e0_calibration_cases": AF01_E0_CALIBRATION_CASES,
     "mutation_policy": "PROHIBITED_WITHIN_RUN10",
+    "replacement_policy": "new version and new freeze registration required",
 }
+
+# §7.3 の canonical pitch。canonical_body の全欄照合に使う。
+AF01_CANONICAL_PITCH = "C4"
+
+# 登録ファイルの top-level 許容欄（閉世界）。未知欄で宣言を骨抜きにさせない。
+FREEZE_REGISTRATION_ALLOWED_KEYS: Tuple[str, ...] = tuple(FREEZE_REGISTRATION_EXPECTED) + (
+    "payload_ledger_sha256",
+    "af01_spec_sha256",
+    "generator_sha256",
+    "manifest_sha256",
+    "canonical_body",
+)
 
 
 # FREEZE_REGISTRATION.json 側のキー名 → run10_schema の凍結 pin 名。
@@ -266,6 +279,12 @@ def _check_freeze_registration(path: Path) -> Tuple[str, str]:
         return ABSENT, f"{path}: JSON オブジェクトでない"
 
     problems: List[str] = []
+    unknown = set(doc) - set(FREEZE_REGISTRATION_ALLOWED_KEYS)
+    if unknown:
+        problems.append(f"未知の欄: {sorted(unknown)}")
+    missing = set(FREEZE_REGISTRATION_ALLOWED_KEYS) - set(doc)
+    if missing:
+        problems.append(f"欄の欠落: {sorted(missing)}")
     for key, expected in FREEZE_REGISTRATION_EXPECTED.items():
         if doc.get(key) != expected:
             problems.append(f"{key}: expected={expected!r} actual={doc.get(key)!r}")
@@ -278,16 +297,24 @@ def _check_freeze_registration(path: Path) -> Tuple[str, str]:
     if not isinstance(body, dict):
         problems.append("canonical_body が無い")
     else:
-        if body.get("aggregate_sha256") != AF01_FROZEN_HASHES["af01_canonical_c4_sha256"]:
-            problems.append(
-                f"canonical_body.aggregate_sha256: "
-                f"expected={AF01_FROZEN_HASHES['af01_canonical_c4_sha256']} "
-                f"actual={body.get('aggregate_sha256')!r}"
-            )
-        if body.get("aggregate_file") != "AF01_all25_units_C4.wav":
-            problems.append(f"canonical_body.aggregate_file: {body.get('aggregate_file')!r}")
-        if body.get("unit_count") != AF01_ALIAS_COUNT:
-            problems.append(f"canonical_body.unit_count: {body.get('unit_count')!r}")
+        # canonical_body も**全欄**を固定する。aggregate hash だけ一致していれば
+        # 通る状態だと、`pitch: G4` や `unit_directory: C3/` を宣言した自己矛盾
+        # 登録が R10-G2 を通過する（PR #330 Codex 第 14 巡 P1）。
+        expected_body = {
+            "pitch": AF01_CANONICAL_PITCH,
+            "aggregate_file": "AF01_all25_units_C4.wav",
+            "aggregate_sha256": AF01_FROZEN_HASHES["af01_canonical_c4_sha256"],
+            "unit_directory": f"{AF01_CANONICAL_PITCH}/",
+            "unit_count": AF01_ALIAS_COUNT,
+        }
+        unknown_body = set(body) - set(expected_body)
+        if unknown_body:
+            problems.append(f"canonical_body に未知の欄: {sorted(unknown_body)}")
+        for key, expected in expected_body.items():
+            if body.get(key) != expected:
+                problems.append(
+                    f"canonical_body.{key}: expected={expected!r} actual={body.get(key)!r}"
+                )
 
     if problems:
         return ABSENT, f"{path}: 宣言内容が凍結値と一致しない: {problems}"

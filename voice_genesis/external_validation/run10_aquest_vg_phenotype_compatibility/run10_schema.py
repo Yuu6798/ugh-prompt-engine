@@ -1074,6 +1074,21 @@ def _validate_outcome_consistency(
             "results: PHASE_B_NOT_ENTERED は phase_b_entry=ENTER と両立しない（§22.2）"
         )
 
+    # 規則 2b: Phase B へ入っていないのに、その実行 Gate が PASS を主張できない。
+    # §21 は R10-G16..G22 を「PHASE_B_ENTRY = ENTER 時のみ必須」と規定しており、
+    # 入らなかった Run で PASS を記録するのは走っていない Gate の偽の合格である
+    # （PR #330 Codex 第 14 巡 P1）。
+    if entry != "ENTER":
+        ledger = mapping.get("hard_gates")
+        if isinstance(ledger, Mapping):
+            passing = [gate_id for gate_id in PHASE_B_GATE_IDS if ledger.get(gate_id) == "PASS"]
+            if passing:
+                raise Run10ContractError(
+                    f"results.hard_gates: phase_b_entry={entry} で {passing} が PASS を"
+                    "主張している（§21: R10-G16..G22 は ENTER 時のみ必須。"
+                    "入らなかった Run で走っていない Gate を合格にしない）"
+                )
+
     calibration = mapping.get("external_calibration")
     signal = (
         calibration.get("measurement_overfit_signal")
@@ -1083,11 +1098,9 @@ def _validate_outcome_consistency(
     # 以降の規則はすべて `signal is True` で判定する。`1` のような非 bool の
     # truthy 値はどの規則にも掛からず、overfit 信号を立てたまま成立側 outcome と
     # R10-G7 PASS を記録できてしまう（PR #330 Codex 第 12 巡 P1）。
-    if signal is not None and not isinstance(signal, bool):
-        raise Run10ContractError(
-            "results.external_calibration.measurement_overfit_signal は真偽値でなければ"
-            f"ならない（実際 {type(signal).__name__}: {signal!r}）"
-        )
+    _require_boolean_field(
+        "results.external_calibration.measurement_overfit_signal", signal
+    )
 
     # 規則 3: overfit を結論にするなら、その信号が実際に立っていること（§12.6）。
     if "MEASUREMENT_OVERFIT_DETECTED" in outcomes and signal is not True:
@@ -1282,6 +1295,18 @@ def _validate_results_evidence(
             )
 
 
+# 真偽値の意味論を持つ欄（閉世界）。`is True` / `is False` で判定する欄は
+# 非 bool の truthy/falsy 値が全ガードを素通りするため、型を先に固定する。
+# 第 12 巡（measurement_overfit_signal）と第 14 巡（phase_b_eligible）で
+# 同型が 2 度露出したため、判定は本ヘルパへ一本化する。
+def _require_boolean_field(name: str, value: Any) -> None:
+    """`None`（未記載）か真偽値のみ許す。"""
+    if value is not None and not isinstance(value, bool):
+        raise Run10ContractError(
+            f"{name} は真偽値でなければならない（実際 {type(value).__name__}: {value!r}）"
+        )
+
+
 def assert_compatibility_entry(trait_id: str, entry: Any) -> None:
     """§15 / §15.10: family alias が正規 status を上書きしないことを強制する。"""
     mapping = _require_mapping(f"compatibility_matrix.{trait_id}", entry)
@@ -1297,9 +1322,14 @@ def assert_compatibility_entry(trait_id: str, entry: Any) -> None:
     if equivalence is not None and equivalence not in TRAIT_VALUE_EQUIVALENCE:
         raise Run10ContractError(f"{trait_id}.trait_value_equivalence: 未知の値 {equivalence!r}")
     # §15.5 / §21 R10-G18: AQUEST_ONLY_CANDIDATE は Phase B へ送らない。
-    if status == "AQUEST_ONLY_CANDIDATE" and mapping.get("phase_b_eligible") is True:
+    # `is True` だけを見ると `1` や `"yes"` のような非 bool の truthy 値が
+    # 素通りする（PR #330 Codex 第 14 巡 P1 — 第 12 巡の overfit 信号と同型）。
+    eligible = mapping.get("phase_b_eligible")
+    _require_boolean_field(f"{trait_id}.phase_b_eligible", eligible)
+    if status == "AQUEST_ONLY_CANDIDATE" and eligible is not False:
         raise Run10ContractError(
-            f"{trait_id}: AQUEST_ONLY_CANDIDATE は phase_b_eligible にできない（§15.5 / §17）"
+            f"{trait_id}: AQUEST_ONLY_CANDIDATE は phase_b_eligible=false でなければ"
+            f"ならない（§15.5 / §17。実際 {eligible!r}）"
         )
 
 

@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（286 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（301 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -429,3 +429,23 @@ CLAUDE.md は「打ち切りは 3 分類を上書きしない（新しい具体�
    閉世界 allowlist にした。
 
 `test_no_validated_mapping_is_left_open` が閉世界表の存在をテストで固定する。
+
+### 第 14 巡（P1×3）
+
+1. **SKIP なのに Phase B gate が全 PASS** — Gate 台帳が「Phase B へ入らなかった」と
+   「その実行 Gate は全部 PASS」を同時に主張できた。§21 は R10-G16..G22 を
+   ENTER 時のみ必須と規定しており、入らなかった Run で走っていない Gate を
+   合格にしてはならない（規則 2b）。
+2. **`FREEZE_REGISTRATION.json` の全欄照合が抜けていた** — aggregate hash だけ
+   一致していれば通る状態だったため、`canonical_body.pitch: G4` と C4 の
+   aggregate hash を同時に宣言した自己矛盾登録が R10-G2 を通過した。
+   top-level と `canonical_body` の両方を閉世界にした。
+3. **`phase_b_eligible` が非 bool の truthy 値を受理** — `is True` だけを見ていた
+   ため `1` や `"yes"` が素通りした。第 12 巡の overfit 信号と同型。
+
+**第 13 巡の「全数掃討」宣言の訂正**: 2 は第 13 巡で閉じたと述べた範囲の
+取りこぼしである。あのとき閉じたのは契約ローダと results 検証の mapping で、
+`_check_freeze_registration()` は「特定の欄を照合する」実装のままだった。
+「全数掃討」は契約・results 検証に限った話であり、登録ファイル検証は含まれて
+いなかった。3 についても、真偽値欄の型検査を `_require_boolean_field()` へ
+一本化し、第 12 巡の対象（overfit 信号）も同ヘルパへ寄せた。

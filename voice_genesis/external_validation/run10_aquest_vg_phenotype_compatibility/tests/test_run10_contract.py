@@ -331,7 +331,7 @@ def test_aquest_only_candidate_cannot_enter_phase_b() -> None:
     m.assert_compatibility_entry(
         "AQUEST_X01", {"status": "AQUEST_ONLY_CANDIDATE", "phase_b_eligible": False}
     )
-    with pytest.raises(m.Run10ContractError, match="phase_b_eligible にできない"):
+    with pytest.raises(m.Run10ContractError, match="phase_b_eligible=false"):
         m.assert_compatibility_entry(
             "AQUEST_X01", {"status": "AQUEST_ONLY_CANDIDATE", "phase_b_eligible": True}
         )
@@ -1354,3 +1354,51 @@ def test_no_validated_mapping_is_left_open() -> None:
     assert m.ALLOWED_TOP_LEVEL_FIELDS
     assert m.COST_CAP_FIELDS
     assert m.CLAIM_STRENGTH_KEYS
+
+
+# --- 第 14 巡: SKIP 時の Phase B gate / 真偽値欄の型 ----------------------
+
+
+def test_skip_cannot_claim_passing_phase_b_gates() -> None:
+    """§21: 入らなかった Run で走っていない Gate を合格にしない。
+
+    Gate 台帳が「Phase B へ入らなかった」と「その実行 Gate は全部 PASS」を
+    同時に主張できた（PR #330 Codex 第 14 巡 P1）。
+    """
+    doc = _passing_results()
+    doc["phase_b_entry"] = "SKIP"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED", "PHASE_B_NOT_ENTERED"]
+    doc["hard_gates"].update({gate_id: "PASS" for gate_id, _ in m.PHASE_B_GATES})
+    with pytest.raises(m.Run10ContractError, match="R10-G16"):
+        m.validate_results_document(doc)
+
+
+def test_skip_may_record_phase_b_gates_as_not_reached() -> None:
+    """未実行状態での記載は正当（偽陽性の確認）。"""
+    doc = _passing_results()
+    doc["phase_b_entry"] = "SKIP"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED", "PHASE_B_NOT_ENTERED"]
+    doc["hard_gates"].update({gate_id: "NOT_REACHED" for gate_id, _ in m.PHASE_B_GATES})
+    m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize("bogus", [1, 0, "yes", "false", []])
+def test_phase_b_eligible_must_be_boolean(bogus: Any) -> None:
+    """§15.5: 非 bool の truthy/falsy 値がガードを素通りする経路を塞ぐ。
+
+    第 12 巡の overfit 信号と同型。判定を `_require_boolean_field()` へ一本化した。
+    """
+    with pytest.raises(m.Run10ContractError, match="真偽値"):
+        m.assert_compatibility_entry(
+            "AQUEST_X01",
+            {"status": "AQUEST_ONLY_CANDIDATE", "phase_b_eligible": bogus},
+        )
+
+
+def test_boolean_semantics_fields_share_one_validator() -> None:
+    """真偽値欄の型検査が 1 実装であること（同型の再発防止）。"""
+    m._require_boolean_field("x", None)
+    m._require_boolean_field("x", True)
+    m._require_boolean_field("x", False)
+    with pytest.raises(m.Run10ContractError, match="真偽値"):
+        m._require_boolean_field("x", 1)
