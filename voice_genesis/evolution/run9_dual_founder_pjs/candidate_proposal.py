@@ -68,11 +68,37 @@ catalog 消費規約（呼び出し側が `catalog: Mapping[str, Any]` を都度
 `_ax_d1_min_duration_beats()`）。catalog が改訂されて凍結し直された場合、
 本モジュールを変更せずに新しい値が反映される——`score_axis_transform.py`
 冒頭 docstring が述べる設計方針と同一。
+
+第8巡指摘1（P2「undersized L の run 前拒否ゲート」、採用）:
+`require_sufficient_candidate_space()` を新設した。|L| が全提案スロット数
+（`structure.units_per_founder_per_arm`）から恒等スロット1件を除いた
+最小値を下回ると、NOT_PROPOSABLE の頻発により render 数が契約を下回った
+まま run が完走し得る——run 開始前の前提条件として本関数が fail-closed
+で停止する。`run_precondition.minimum_candidate_space`（spec）の参照実装。
+
+第8巡指摘2（P1「同一 trial 内の予約集合の凍結」、採用）:
+`propose_trial_candidates()` を新設した。重複回避が「評価済み」のみを
+見る旧実装では batch 提案（trial 内 4 候補を一括計算）と逐次提案（1件
+ずつ render/評価してから次を計算）で trace が分岐し得た。本関数は
+candidate_index 0->1->2->3 の逐次順で提案し、各候補を**提案された時点で**
+（render/評価を待たず）予約集合（reserved set = proposed-or-evaluated）
+へ加える——近傍列挙・探査プロービングとも予約集合をスキップ対象とする
+ため、batch/逐次いずれの呼び出しパターンでも同一の候補列が決定論的に
+再現する。`proposal.reservation_semantics`（spec）の参照実装。
+
+第8巡指摘3（P2「spec リテラル domain の catalog 連合 cross-check」、
+採用）: `ax_p1_offset_domain_from_catalog()`（`_ax_p1_offset_domain()`
+の公開ラッパー）を新設した。`run9_schema.load_pinned_candidate_
+generation_spec_manifest()` が本関数経由で catalog から独立に offset
+domain を導出し、`candidate_generation_spec_v1.json` 側のリテラル
+`offset_domain` 記述と cross-check する——run9_schema 側が計算式を複製
+しないための単一情報源化（`score_axis_transform.py`/本モジュールの
+既存方針と同型）。
 """
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 # L の要素型: AX-P1 = ("AX-P1", note_index, offset)
 #             AX-D1 = ("AX-D1", phrase_index, (i, j), delta)
@@ -128,6 +154,15 @@ def _ax_p1_offset_domain(catalog: Mapping[str, Any]) -> Tuple[float, ...]:
         if abs(v) > 1e-9:
             values.append(v)
     return tuple(values)
+
+
+def ax_p1_offset_domain_from_catalog(catalog: Mapping[str, Any]) -> Tuple[float, ...]:
+    """`_ax_p1_offset_domain()` の公開ラッパー（PR #331 Codex bot レビュー
+    第8巡指摘3、P2、採用）: `run9_schema.load_pinned_candidate_generation_
+    spec_manifest()` の catalog↔spec cross-check が本関数経由で offset
+    domain を単一情報源（catalog）から導出する——run9_schema 側が本関数と
+    同じ計算式を複製しないための公開エントリポイント。"""
+    return _ax_p1_offset_domain(catalog)
 
 
 def build_ax_p1_ordering(note_count: int, *, catalog: Mapping[str, Any]) -> List[Candidate]:
@@ -463,3 +498,142 @@ def select_neighborhood_candidates(
     neighbors = neighbors_of(current_best, all_candidates, catalog=catalog)
     selected = [cand for cand in neighbors if not is_evaluated(cand)]
     return selected[:limit]
+
+
+# ---------------------------------------------------------------------------
+# run 前提条件ゲート（PR #331 Codex bot レビュー第8巡指摘1、P2、採用）
+# ---------------------------------------------------------------------------
+
+
+def require_sufficient_candidate_space(
+    all_candidates: Sequence[Candidate], *, render_budget: int,
+) -> None:
+    """`run_precondition.minimum_candidate_space` の逐語実装: run 開始前の
+    前提条件として |L|（正準候補列 L の要素数、恒等候補を含まない）が
+    `render_budget - 1`（全提案スロット数から trial1_candidate0_rule の
+    恒等スロット1件を除いた必要最小値）以上であることを要求する。
+
+    不足する場合は run を開始せず fail-closed で停止する——代替挙動の
+    発明・予算追加・結果を見た range 拡張のいずれも行わない（`prohibited`
+    が禁じる事項と対称）。undersized な L のまま run を完走させると、
+    trial 2..32 の近傍・探査スロットが NOT_PROPOSABLE を頻発し、render
+    数が契約（`units_per_founder_per_arm` = 128 units/Founder/arm）を
+    下回ったまま完走し得る——本関数はその状態を run 開始前の検査で構造的
+    に締め出す。
+
+    呼び出し側（次 PR で配線される generator）は L 構築直後・trial ループ
+    開始前に本関数を呼ぶことを想定する。本モジュールは実際の探索ループを
+    持たないため、本関数自体は副作用を持たず検査のみ行う。
+    """
+    required_minimum = render_budget - 1
+    if len(all_candidates) < required_minimum:
+        raise ValueError(
+            f"candidate space L (len={len(all_candidates)}) is smaller than the required "
+            f"minimum ({required_minimum} = render_budget({render_budget}) - 1 identity slot) "
+            "— refusing to start the run (fail-closed; no alternate behavior, budget addition, "
+            "or range expansion is invented; see run_precondition.minimum_candidate_space)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# trial-level 逐次提案 + 予約集合（PR #331 Codex bot レビュー第8巡指摘2、
+# P1、採用）
+# ---------------------------------------------------------------------------
+
+
+def propose_trial_candidates(
+    *,
+    trial: int,
+    current_best: Optional[Candidate],
+    all_candidates: Sequence[Candidate],
+    catalog: Mapping[str, Any],
+    seed: int,
+    arm: str,
+    founder_id: str,
+    reserved: Iterable[Optional[Candidate]] = (),
+    candidates_per_trial: int = 4,
+    neighborhood_limit: int = 3,
+) -> List[Optional[Candidate]]:
+    """`proposal.reservation_semantics` の逐語実装: trial 内の
+    candidate_index 0 -> 1 -> 2 -> 3 を逐次順で提案し、各候補は提案された
+    時点で（render/評価の結果を待たず）予約集合（reserved set =
+    proposed-or-evaluated）へ加える。近傍列挙（`neighbors_of()`）・探査
+    プロービング（`select_exploratory_candidate()`）とも、この予約集合
+    （引数 `reserved` で渡す過去 trial の評価済み候補 ∪ 当該 trial 内で
+    既に提案済みの候補）をスキップ対象とする。
+
+    trial==1: candidate 0 = 恒等（`trial1_candidate0_rule`、返り値の None
+    がこれを表す）、candidate 1..3 = hash-derived exploratory。
+
+    trial>=2: candidate 0..2 は `neighborhood_candidate_rule` の優先順位
+    リストから未予約の先頭 `neighborhood_limit`（既定3）件、shortfall
+    （不足）分と candidate 3 は `exploratory_candidate_rule` で決定論的に
+    補充する（`shortfall_handling`）。近傍キューは各スロット処理直前に
+    予約状態を再フィルタしてから消費するため、同一 trial 内の探査補充が
+    後続スロットの近傍候補を予約済みにしても正しく除外される。
+
+    NOT_PROPOSABLE（探査規則の線形プロービングが全滅した）スロットは
+    None として返す——架空の候補を発明しない。呼び出し側は返り値の None
+    を trial log へ NOT_PROPOSABLE として記録する。
+
+    同一入力（trial・current_best・all_candidates・catalog・seed・arm・
+    founder_id・reserved）からは常に同一の候補列が決定論的に再現する。
+    予約が render/評価の完了を待たず提案時点で確定するため、本関数を
+    1回呼ぶ（batch）のと、呼び出し側が candidate_index ごとに render/
+    評価してから次を計算する（逐次）のとで、結果は常に一致する——digest
+    由来の探査候補が同一 trial 内の既提案候補と衝突しても、線形
+    プロービングで次候補へ進むため重複提案は起こらない。
+
+    `reserved` は本関数内でローカルコピーへのみ追加され、呼び出し側の
+    集合を破壊的に変更しない。
+    """
+    reserved_set = set(reserved)
+
+    def _is_reserved(cand: Optional[Candidate]) -> bool:
+        return cand in reserved_set
+
+    proposed: List[Optional[Candidate]] = []
+
+    if trial == 1:
+        proposed.append(None)  # trial1_candidate0_rule: 恒等
+        reserved_set.add(None)
+        for candidate_index in range(1, candidates_per_trial):
+            cand = select_exploratory_candidate(
+                all_candidates,
+                seed=seed,
+                arm=arm,
+                founder_id=founder_id,
+                trial=trial,
+                candidate_index=candidate_index,
+                is_acceptable=lambda c: not _is_reserved(c),
+            )
+            proposed.append(cand)
+            if cand is not None:
+                reserved_set.add(cand)
+        return proposed
+
+    neighbor_queue = list(neighbors_of(current_best, all_candidates, catalog=catalog))
+
+    for candidate_index in range(candidates_per_trial):
+        if candidate_index < neighborhood_limit:
+            while neighbor_queue and _is_reserved(neighbor_queue[0]):
+                neighbor_queue.pop(0)
+            if neighbor_queue:
+                cand = neighbor_queue.pop(0)
+                proposed.append(cand)
+                reserved_set.add(cand)
+                continue
+        cand = select_exploratory_candidate(
+            all_candidates,
+            seed=seed,
+            arm=arm,
+            founder_id=founder_id,
+            trial=trial,
+            candidate_index=candidate_index,
+            is_acceptable=lambda c: not _is_reserved(c),
+        )
+        proposed.append(cand)
+        if cand is not None:
+            reserved_set.add(cand)
+
+    return proposed

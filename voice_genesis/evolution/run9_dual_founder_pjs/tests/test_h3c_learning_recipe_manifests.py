@@ -703,6 +703,207 @@ def test_h3c_candidate_generation_selection_not_object_rejected() -> None:
         m.validate_candidate_generation_spec_manifest(data)
 
 
+# --- PR #331 第8巡指摘1（P2「undersized L の run 前拒否ゲート」、採用）:
+# `run_precondition` 節の validator 検査。
+
+
+def test_h3c_candidate_generation_run_precondition_present_and_matches_frozen_constants() -> None:
+    data = _manifest_data("candidate_generation_spec")
+    run_precondition = data["run_precondition"]
+    assert (
+        run_precondition["minimum_candidate_space"]
+        == m._CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_MINIMUM_CANDIDATE_SPACE
+    )
+    assert (
+        run_precondition["required_minimum_formula"]
+        == m._CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_REQUIRED_MINIMUM_FORMULA
+    )
+
+
+def test_h3c_candidate_generation_missing_run_precondition_top_level_key_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["run_precondition"]
+    with pytest.raises(m.Run9ValidationError, match="run_precondition"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_run_precondition_minimum_candidate_space_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["run_precondition"]["minimum_candidate_space"] = "run 開始前の検査は行わない"
+    with pytest.raises(m.Run9ValidationError, match="minimum_candidate_space"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_run_precondition_required_minimum_formula_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["run_precondition"]["required_minimum_formula"] = "required_minimum = 0"
+    with pytest.raises(m.Run9ValidationError, match="required_minimum_formula"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_run_precondition_missing_required_minimum_formula_key_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["run_precondition"]["required_minimum_formula"]
+    with pytest.raises(m.Run9ValidationError, match="run_precondition"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_run_precondition_not_object_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["run_precondition"] = "not an object"
+    with pytest.raises(m.Run9ValidationError, match="run_precondition"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+# --- PR #331 第8巡指摘2（P1「同一 trial 内の予約集合の凍結」、採用）:
+# `proposal.reservation_semantics` の validator 検査。
+
+
+def test_h3c_candidate_generation_reservation_semantics_matches_frozen_constant() -> None:
+    data = _manifest_data("candidate_generation_spec")
+    assert (
+        data["proposal"]["reservation_semantics"]
+        == m._CANDIDATE_GENERATION_EXPECTED_RESERVATION_SEMANTICS
+    )
+
+
+def test_h3c_candidate_generation_reservation_semantics_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["proposal"]["reservation_semantics"] = "予約集合は評価済みのみを見る"
+    with pytest.raises(m.Run9ValidationError, match="reservation_semantics"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_missing_reservation_semantics_key_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["proposal"]["reservation_semantics"]
+    with pytest.raises(m.Run9ValidationError, match="proposal"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+# --- PR #331 第8巡指摘3（P2「spec リテラル domain の catalog 連合
+# cross-check」、採用）: ax_p1/ax_d1 サブキー validator 検査 +
+# load_pinned_candidate_generation_spec_manifest() の catalog cross-check。
+
+
+def test_h3c_candidate_generation_ax_p1_missing_subkey_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["proposal"]["candidate_ordering"]["ax_p1"]["catalog_cross_check_note"]
+    with pytest.raises(m.Run9ValidationError, match="ax_p1"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_ax_p1_offset_domain_wrong_type_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["proposal"]["candidate_ordering"]["ax_p1"]["offset_domain"] = "not a list"
+    with pytest.raises(m.Run9ValidationError, match="offset_domain"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_ax_p1_offset_domain_empty_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["proposal"]["candidate_ordering"]["ax_p1"]["offset_domain"] = []
+    with pytest.raises(m.Run9ValidationError, match="offset_domain"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_ax_d1_missing_subkey_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["proposal"]["candidate_ordering"]["ax_d1"]["quantization_step_beats"]
+    with pytest.raises(m.Run9ValidationError, match="ax_d1"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_ax_d1_quantization_step_beats_non_positive_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["proposal"]["candidate_ordering"]["ax_d1"]["quantization_step_beats"] = 0
+    with pytest.raises(m.Run9ValidationError, match="quantization_step_beats"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_ax_d1_min_duration_beats_non_positive_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["proposal"]["candidate_ordering"]["ax_d1"]["min_duration_beats"] = -0.25
+    with pytest.raises(m.Run9ValidationError, match="min_duration_beats"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_catalog_cross_check_passes_on_real_pinned_manifests(
+    contract: m.Run9RunContract,
+) -> None:
+    # load_pinned_candidate_generation_spec_manifest() は本 cross-check を
+    # 内部で通す（正常系はこれが raise しないことで既に
+    # test_h3c_load_pinned_happy_path でも間接検証されているが、本テストは
+    # cross-check の意図を明示する直接テスト）。
+    data = m.load_pinned_candidate_generation_spec_manifest(contract)
+    catalog = m.load_pinned_score_axis_catalog_manifest(contract)
+    import candidate_proposal as cp  # noqa: E402
+
+    expected_offset_domain = list(cp.ax_p1_offset_domain_from_catalog(catalog))
+    assert (
+        data["proposal"]["candidate_ordering"]["ax_p1"]["offset_domain"] == expected_offset_domain
+    )
+    assert (
+        data["proposal"]["candidate_ordering"]["ax_d1"]["quantization_step_beats"]
+        == catalog["axes"]["AX-D1"]["quantization_step_beats"]
+    )
+    assert (
+        data["proposal"]["candidate_ordering"]["ax_d1"]["min_duration_beats"]
+        == catalog["axes"]["AX-D1"]["min_duration_beats"]
+    )
+
+
+def test_h3c_candidate_generation_catalog_cross_check_catches_stale_offset_domain(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    # spec 側の offset_domain を（構造的には妥当なまま）catalog 由来の値と
+    # ずらす — catalog repin 後に spec 側リテラルが追随しなかった状況を
+    # 模す。structural validate は通過するが catalog cross-check で拒否
+    # されることを確認する。
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["proposal"]["candidate_ordering"]["ax_p1"]["offset_domain"] = [
+            -1.0, -0.5, 0.5, 1.0,
+        ]
+
+    tampered_contract, manifest_path, contract_path = _tampered_contract(
+        contract, tmp_path, key="candidate_generation_spec", mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="offset_domain"):
+        m.load_pinned_candidate_generation_spec_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_h3c_candidate_generation_catalog_cross_check_catches_stale_quantization_step_beats(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["proposal"]["candidate_ordering"]["ax_d1"]["quantization_step_beats"] = 0.5
+
+    tampered_contract, manifest_path, contract_path = _tampered_contract(
+        contract, tmp_path, key="candidate_generation_spec", mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="quantization_step_beats"):
+        m.load_pinned_candidate_generation_spec_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
+def test_h3c_candidate_generation_catalog_cross_check_catches_stale_min_duration_beats(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["proposal"]["candidate_ordering"]["ax_d1"]["min_duration_beats"] = 0.5
+
+    tampered_contract, manifest_path, contract_path = _tampered_contract(
+        contract, tmp_path, key="candidate_generation_spec", mutate=_mutate,
+    )
+    with pytest.raises(m.Run9ValidationError, match="min_duration_beats"):
+        m.load_pinned_candidate_generation_spec_manifest(
+            tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
+        )
+
+
 # ---------------------------------------------------------------------------
 # 4. compute_budget_manifest_v1 固有
 # ---------------------------------------------------------------------------

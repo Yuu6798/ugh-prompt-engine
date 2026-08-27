@@ -18575,7 +18575,16 @@ def load_pinned_loss_evaluator_spec_manifest(
 # ---------------------------------------------------------------------------
 
 _CANDIDATE_GENERATION_SPEC_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS | frozenset(
-    {"seed", "structure", "proposal", "selection", "boundary_handling", "prohibited", "practice_actor_binding"}
+    {
+        "seed",
+        "structure",
+        "run_precondition",
+        "proposal",
+        "selection",
+        "boundary_handling",
+        "prohibited",
+        "practice_actor_binding",
+    }
 )
 _CANDIDATE_GENERATION_PROHIBITED_REQUIRED: FrozenSet[str] = frozenset(
     {"reseed", "予算追加", "結果を見た range 拡張", "random fallback"}
@@ -18651,6 +18660,25 @@ _CANDIDATE_GENERATION_EXPECTED_INDEX_FORMULA = (
 _CANDIDATE_GENERATION_CANDIDATE_ORDERING_REQUIRED_KEYS: FrozenSet[str] = frozenset(
     {"definition", "ax_p1", "ax_d1", "total_order"}
 )
+# ax_p1/ax_d1 サブキー必須検査（PR #331 第8巡指摘3、P2、採用）: 旧
+# validator は candidate_ordering の直下キーの存在のみを検査しており、
+# ax_p1.offset_domain/ax_d1.quantization_step_beats/min_duration_beats
+# の値そのものは一切検査対象外だった。本節でサブキーの存在・型を検査し、
+# 実際の catalog 値との cross-check は `load_pinned_candidate_generation_
+# spec_manifest()` 側（pinned catalog へのアクセスを要する）で行う。
+_CANDIDATE_GENERATION_AX_P1_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"tuple", "offset_domain", "offset_domain_note", "note_index_domain", "catalog_cross_check_note"}
+)
+_CANDIDATE_GENERATION_AX_D1_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {
+        "tuple",
+        "delta_domain",
+        "delta_semantics",
+        "quantization_step_beats",
+        "min_duration_beats",
+        "catalog_cross_check_note",
+    }
+)
 _CANDIDATE_GENERATION_EXPLORATORY_RULE_REQUIRED_KEYS: FrozenSet[str] = frozenset(
     {
         "applies_to",
@@ -18679,6 +18707,7 @@ _CANDIDATE_GENERATION_PROPOSAL_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = frozens
         "digest_formula",
         "digest_encoding",
         "digest_to_candidate_mapping",
+        "reservation_semantics",
         "trial1_candidate0_rule",
         "subsequent_trial_schedule",
         "proposal_schedule_table",
@@ -18686,6 +18715,49 @@ _CANDIDATE_GENERATION_PROPOSAL_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = frozens
         "exploratory_candidate_rule",
         "neighborhood_candidate_rule",
     }
+)
+
+# `proposal.reservation_semantics` の逐語凍結（PR #331 Codex bot レビュー
+# 第8巡指摘2、P1、採用）: 重複回避が「評価済み」のみを見ると batch 提案と
+# 逐次提案で trace が分岐し得た欠落を埋める。trial 内の提案は
+# candidate_index 0->1->2->3 の逐次順で行い、各候補は提案された時点で
+# （render/評価を待たず）予約集合（proposed-or-evaluated）へ入る。参照
+# 実装: `candidate_proposal.propose_trial_candidates()`。
+_CANDIDATE_GENERATION_EXPECTED_RESERVATION_SEMANTICS = (
+    "trial 内の候補提案は candidate_index 0 -> 1 -> 2 -> 3 の逐次順で行い、各候補は提案された"
+    "時点で（render/評価の結果を待たず）予約集合（reserved set）へ加える。近傍列挙"
+    "（neighborhood_candidate_rule）・探査規則の線形プロービング（exploratory_candidate_rule."
+    "probing_rule）とも、この予約集合（過去 trial で評価済みの候補 ∪ 当該 trial 内で既に"
+    "提案済みの候補、= proposed-or-evaluated）をスキップ対象とする——exploratory_candidate_"
+    "rule.probing_rule 中の「評価済み」・neighborhood_candidate_rule 中の「未評価」はいずれも"
+    "本 reservation_semantics が定める予約集合を指す（重複回避が評価済みのみを見ると、batch "
+    "提案と逐次提案で trace が分岐し得るため）。同一 trial 内で candidate 0..3 を一括で計算する"
+    "実装（batch）と、各候補を提案の都度 render/評価してから次候補を計算する実装（逐次）は、この"
+    "予約集合の定義により常に同一の候補列を生成する——提案順序が evaluation の完了を待たないため、"
+    "digest 由来の探査候補が同一 trial 内の既提案候補と衝突しても線形プロービングで次候補へ進み、"
+    "batch/逐次いずれでも結果が一致する。参照実装: candidate_proposal.propose_trial_candidates()"
+)
+
+# `run_precondition` の逐語凍結（PR #331 Codex bot レビュー第8巡指摘1、
+# P2、採用）: undersized L の run 前拒否ゲート。参照実装:
+# `candidate_proposal.require_sufficient_candidate_space()`。
+_CANDIDATE_GENERATION_RUN_PRECONDITION_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"minimum_candidate_space", "required_minimum_formula"}
+)
+_CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_MINIMUM_CANDIDATE_SPACE = (
+    "run 開始前の前提条件として、Founder-local な候補列 L（proposal.candidate_ordering が"
+    "定める正準候補列。対象 score の note 構成・phrase 構成に依存し実行時に構築される）の"
+    "有効非恒等候補数 |L| が、全提案スロット数（structure.units_per_founder_per_arm）から "
+    "trial1_candidate0_rule の恒等スロット1件を除いた必要最小値以上であることを要求する。"
+    "|L| がこの最小値を下回る場合、run を開始せず fail-closed で停止する（代替挙動の発明・"
+    "予算追加・結果を見た range 拡張のいずれも行わない — undersized な L のまま run を完走"
+    "させると、NOT_PROPOSABLE の頻発により render 数が契約（units_per_founder_per_arm = 128 "
+    "units/Founder/arm）を下回ったまま完走し得るため、run 前の検査で構造的に締め出す）。"
+    "参照実装: candidate_proposal.require_sufficient_candidate_space()"
+)
+_CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_REQUIRED_MINIMUM_FORMULA = (
+    "required_minimum = structure.units_per_founder_per_arm - 1（= 127。128 提案スロットから "
+    "trial1_candidate0_rule の恒等スロット1件を除いた、L から充足すべき非恒等候補スロット数）"
 )
 
 # selection.tie_break の実行可能な全順序凍結（PR #331 Codex bot レビュー
@@ -18748,6 +18820,12 @@ def _validate_candidate_generation_proposal_schedule(
             f"{_CANDIDATE_GENERATION_EXPECTED_DIGEST_ENCODING!r} exactly, got "
             f"{proposal['digest_encoding']!r}"
         )
+    if proposal["reservation_semantics"] != _CANDIDATE_GENERATION_EXPECTED_RESERVATION_SEMANTICS:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.reservation_semantics must equal "
+            f"{_CANDIDATE_GENERATION_EXPECTED_RESERVATION_SEMANTICS!r} exactly, got "
+            f"{proposal['reservation_semantics']!r}"
+        )
 
     schedule_table = proposal["proposal_schedule_table"]
     if list(schedule_table) != list(_CANDIDATE_GENERATION_EXPECTED_PROPOSAL_SCHEDULE_TABLE):
@@ -18776,6 +18854,55 @@ def _validate_candidate_generation_proposal_schedule(
         raise Run9ValidationError(
             "candidate generation spec manifest.proposal.candidate_ordering.total_order must "
             f"name both axis_id values (AX-D1/AX-P1) it orders, got {total_order!r}"
+        )
+
+    # ax_p1/ax_d1 サブキー存在・型検査（PR #331 第8巡指摘3、P2、採用）:
+    # 実際の catalog 値との cross-check は load_pinned_candidate_generation_
+    # spec_manifest() 側（pinned catalog へのアクセスを要する）で行う。
+    ax_p1 = candidate_ordering["ax_p1"]
+    if not isinstance(ax_p1, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_p1 must be an "
+            f"object, got {type(ax_p1).__name__}"
+        )
+    missing_ax_p1 = _CANDIDATE_GENERATION_AX_P1_REQUIRED_KEYS - set(ax_p1.keys())
+    if missing_ax_p1:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_p1 missing "
+            f"required key(s): {sorted(missing_ax_p1)}"
+        )
+    offset_domain = ax_p1["offset_domain"]
+    if not isinstance(offset_domain, list) or not offset_domain or not all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in offset_domain
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_p1.offset_domain "
+            f"must be a non-empty list of numbers, got {offset_domain!r}"
+        )
+
+    ax_d1 = candidate_ordering["ax_d1"]
+    if not isinstance(ax_d1, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_d1 must be an "
+            f"object, got {type(ax_d1).__name__}"
+        )
+    missing_ax_d1 = _CANDIDATE_GENERATION_AX_D1_REQUIRED_KEYS - set(ax_d1.keys())
+    if missing_ax_d1:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_d1 missing "
+            f"required key(s): {sorted(missing_ax_d1)}"
+        )
+    step_d1 = ax_d1["quantization_step_beats"]
+    if not isinstance(step_d1, (int, float)) or isinstance(step_d1, bool) or step_d1 <= 0:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_d1."
+            f"quantization_step_beats must be a positive number, got {step_d1!r}"
+        )
+    min_dur_d1 = ax_d1["min_duration_beats"]
+    if not isinstance(min_dur_d1, (int, float)) or isinstance(min_dur_d1, bool) or min_dur_d1 <= 0:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.ax_d1."
+            f"min_duration_beats must be a positive number, got {min_dur_d1!r}"
         )
 
     exploratory = proposal["exploratory_candidate_rule"]
@@ -18844,6 +18971,53 @@ def _validate_candidate_generation_proposal_schedule(
             f"trial2-{trial_count}(3 neighborhood + 1 exploratory each) = "
             f"{proposal_derived_units!r} must equal structure.trial_count*candidates_per_trial "
             f"({trial_count * candidates_per_trial!r})"
+        )
+
+
+def _validate_candidate_generation_run_precondition(
+    run_precondition: Mapping[str, Any], *, structure: Mapping[str, Any]
+) -> None:
+    """`run_precondition` 節の逐語凍結検査（PR #331 第8巡指摘1、P2、
+    採用）: undersized L の run 前拒否ゲートが spec 上に凍結されている
+    ことを保証する。参照実装: `candidate_proposal.require_sufficient_
+    candidate_space()`。"""
+    if not isinstance(run_precondition, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.run_precondition must be an object, got "
+            f"{type(run_precondition).__name__}"
+        )
+    missing = _CANDIDATE_GENERATION_RUN_PRECONDITION_REQUIRED_KEYS - set(run_precondition.keys())
+    if missing:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.run_precondition missing required key(s): "
+            f"{sorted(missing)}"
+        )
+    if (
+        run_precondition["minimum_candidate_space"]
+        != _CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_MINIMUM_CANDIDATE_SPACE
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.run_precondition.minimum_candidate_space must "
+            f"equal {_CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_MINIMUM_CANDIDATE_SPACE!r} "
+            f"exactly, got {run_precondition['minimum_candidate_space']!r}"
+        )
+    if (
+        run_precondition["required_minimum_formula"]
+        != _CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_REQUIRED_MINIMUM_FORMULA
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.run_precondition.required_minimum_formula must "
+            f"equal {_CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_REQUIRED_MINIMUM_FORMULA!r} "
+            f"exactly, got {run_precondition['required_minimum_formula']!r}"
+        )
+    # structure との cross-check: required_minimum = units_per_founder_per_arm - 1 == 127。
+    units_per_founder_per_arm = structure["units_per_founder_per_arm"]
+    if units_per_founder_per_arm - 1 != 127:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.run_precondition: structure."
+            f"units_per_founder_per_arm ({units_per_founder_per_arm!r}) - 1 must equal 127 "
+            "(the frozen required_minimum), got a mismatch — this indicates structure and "
+            "run_precondition have drifted apart"
         )
 
 
@@ -18958,8 +19132,63 @@ def validate_candidate_generation_spec_manifest(data: Mapping[str, Any]) -> None
             f"{sorted(_CANDIDATE_GENERATION_PROHIBITED_REQUIRED)} (裁定 §3 逐語), missing "
             f"{sorted(missing_prohibited)}"
         )
+    _validate_candidate_generation_run_precondition(data["run_precondition"], structure=structure)
     _validate_candidate_generation_proposal_schedule(data["proposal"], structure=structure)
     _validate_candidate_generation_selection(data["selection"])
+
+
+def _candidate_generation_cross_check_axis_catalog(
+    data: Mapping[str, Any], *, contract: "Run9RunContract", contract_path: Optional[Path],
+) -> None:
+    """spec 内のリテラル domain/step/min-duration 値（`proposal.
+    candidate_ordering.ax_p1.offset_domain`/`ax_d1.quantization_step_beats`/
+    `ax_d1.min_duration_beats`）を pinned score_axis_catalog manifest の
+    対応値と cross-check する（PR #331 第8巡指摘3、P2、採用: catalog が
+    正当な理由で repin されて値が変わっても、これらのリテラル記述は
+    追随せず旧値のまま両 loader を通過し得た欠落を埋める）。
+
+    catalog 側は本関数内で `load_pinned_score_axis_catalog_manifest()`
+    （score_axis_catalog_sha pin の唯一の正規消費経路）経由でロードする
+    ——直接 json.load() しない。`contract_path` は候補生成 spec 側の呼び
+    出しと同一のものを渡す（tampered-contract テストで両 pin の由来を
+    一致させるため）。offset_domain の導出は `candidate_proposal.
+    ax_p1_offset_domain_from_catalog()`（単一情報源）経由で行い、
+    run9_schema 側で計算式を複製しない。
+    """
+    catalog = load_pinned_score_axis_catalog_manifest(contract, contract_path=contract_path)
+
+    import candidate_proposal as _cp  # ローカル import（score_axis_transform と同型の方針）
+
+    expected_offset_domain = list(_cp.ax_p1_offset_domain_from_catalog(catalog))
+    actual_offset_domain = list(data["proposal"]["candidate_ordering"]["ax_p1"]["offset_domain"])
+    if actual_offset_domain != expected_offset_domain:
+        raise Run9ValidationError(
+            "load_pinned_candidate_generation_spec_manifest(): catalog↔spec 整合チェック失敗 — "
+            f"proposal.candidate_ordering.ax_p1.offset_domain ({actual_offset_domain!r}) が "
+            "pinned score_axis_catalog manifest から独立に導出した値 "
+            f"({expected_offset_domain!r}) と一致しない — catalog が repin されたのに spec 側の"
+            "リテラル記述が追随していない"
+        )
+
+    catalog_step_d1 = catalog["axes"]["AX-D1"]["quantization_step_beats"]
+    spec_step_d1 = data["proposal"]["candidate_ordering"]["ax_d1"]["quantization_step_beats"]
+    if spec_step_d1 != catalog_step_d1:
+        raise Run9ValidationError(
+            "load_pinned_candidate_generation_spec_manifest(): catalog↔spec 整合チェック失敗 — "
+            f"proposal.candidate_ordering.ax_d1.quantization_step_beats ({spec_step_d1!r}) が "
+            "pinned score_axis_catalog manifest の axes.AX-D1.quantization_step_beats "
+            f"({catalog_step_d1!r}) と一致しない"
+        )
+
+    catalog_min_dur_d1 = catalog["axes"]["AX-D1"]["min_duration_beats"]
+    spec_min_dur_d1 = data["proposal"]["candidate_ordering"]["ax_d1"]["min_duration_beats"]
+    if spec_min_dur_d1 != catalog_min_dur_d1:
+        raise Run9ValidationError(
+            "load_pinned_candidate_generation_spec_manifest(): catalog↔spec 整合チェック失敗 — "
+            f"proposal.candidate_ordering.ax_d1.min_duration_beats ({spec_min_dur_d1!r}) が "
+            "pinned score_axis_catalog manifest の axes.AX-D1.min_duration_beats "
+            f"({catalog_min_dur_d1!r}) と一致しない"
+        )
 
 
 def load_pinned_candidate_generation_spec_manifest(
@@ -18970,7 +19199,16 @@ def load_pinned_candidate_generation_spec_manifest(
 ) -> Dict[str, Any]:
     """`candidate_generation_spec_sha` pin の**唯一の正規消費経路**（他の
     `load_pinned_*` 系と同型の3層防御 + read-once 契約 + 裁定/detail-record
-    cross-check）。"""
+    cross-check + catalog↔spec リテラル値 cross-check）。
+
+    cross-check: (a) 裁定 txt / detail record の実バイト sha256 照合
+    （`_h3c_cross_check_adjudication_and_detail_record()`）。(b) spec 内の
+    リテラル domain/step/min-duration 値（ax_p1.offset_domain/ax_d1.
+    quantization_step_beats/ax_d1.min_duration_beats）を pinned
+    score_axis_catalog manifest の対応値と cross-check する
+    （`_candidate_generation_cross_check_axis_catalog()`、PR #331 第8巡
+    指摘3、P2、採用）。
+    """
     data = _h3c_load_pinned_common(
         contract=contract,
         pin_name="candidate_generation_spec_sha",
@@ -18983,6 +19221,7 @@ def load_pinned_candidate_generation_spec_manifest(
     _h3c_cross_check_adjudication_and_detail_record(
         data, manifest_kind="load_pinned_candidate_generation_spec_manifest"
     )
+    _candidate_generation_cross_check_axis_catalog(data, contract=contract, contract_path=contract_path)
     return data
 
 

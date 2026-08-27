@@ -980,3 +980,97 @@ detail_record.summary` バイト変更に伴い `RUN9_CONTRACT.yaml` の
 `pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
 2487 件全 pass（第6巡から件数不変——文書テキストのみの是正で検証ロジック
 の新設・変更なし）。
+
+## PR #331 Codex bot レビュー第8巡対応（2026-08-27、Claude 完結ルート）
+
+指摘3件（P2/P1/P2）、Fable 採用判定（実装・検証・返信起草は Sonnet に
+委譲、コミット/push は Fable が別途実行する）。対象は
+`inputs/candidate_generation_spec_v1.json` + `candidate_proposal.py` +
+`run9_schema.py`。
+
+1. **undersized L の run 前拒否ゲート（P2）**: L の有効非恒等候補数
+   （score の note/phrase 構成に依存し実行時に構築される）が全提案
+   スロット数（`structure.units_per_founder_per_arm` = 128）を下回ると、
+   trial 2..32 の近傍・探査スロットが NOT_PROPOSABLE を頻発し、render
+   数が契約を下回ったまま run が完走し得た。新設トップレベル
+   `run_precondition` へ「run 開始前の前提条件として |L| ≥ 127
+   （= units_per_founder_per_arm - 1、恒等スロット1件を除いた最小値）を
+   要求し、不足時は fail-closed で停止する（代替挙動・予算追加・
+   range 拡張のいずれも発明しない）」を凍結した。
+   `candidate_proposal.require_sufficient_candidate_space()` を新設し
+   （render_budget を引数に取り required_minimum = render_budget - 1 を
+   下回れば `ValueError`）、`run9_schema.
+   validate_candidate_generation_spec_manifest()` へ `run_precondition`
+   の逐語一致検査（`_validate_candidate_generation_run_precondition()`、
+   `structure.units_per_founder_per_arm - 1 == 127` の cross-check
+   込み）を新設した。
+
+2. **同一 trial 内の予約集合の凍結（P1）**: 重複回避が「評価済み」のみを
+   見る旧実装では、trial 内 4 候補を一括計算する batch 提案と、1件ずつ
+   render/評価してから次を計算する逐次提案とで trace が分岐し得た
+   （近傍スロットで選ばれた候補がまだ評価されていないため、同一 trial
+   内の探査スロットの digest 由来プロービングがそれを重複して選び得た）。
+   `proposal.reservation_semantics` を新設し、「trial 内の候補提案は
+   candidate_index 0 -> 1 -> 2 -> 3 の逐次順で行い、各候補は提案された
+   時点で（render/評価を待たず）予約集合（proposed-or-evaluated）へ
+   加える。近傍列挙・探査規則の線形プロービングとも予約集合をスキップ
+   対象とする」旨を凍結した。`candidate_proposal.
+   propose_trial_candidates()` を trial-level 参照実装として新設した
+   （candidate_index 逐次順で近傍優先度リストと探査規則を組み合わせ、
+   予約集合を都度更新する）。実測で seed=909002/arm="arm-a"/
+   founder_id="R9F-01"/current_best=("AX-P1",1,1.0) の3-note fixture
+   において、trial=26 の candidate_index=3 の探査 digest が初期 index で
+   近傍候補0番目（`("AX-P1",1,1.5)`）と衝突するケースを発見し、旧
+   「評価済みのみ」semantics（is_acceptable=常に True）ではこの衝突が
+   そのまま重複選出されること、`propose_trial_candidates()`（予約集合
+   semantics）では線形プロービングで次候補（`("AX-P1",2,-2.0)`）へ
+   進み重複が起きないことを直接検証した——batch（`propose_trial_
+   candidates()` を1回呼ぶ）と逐次（近傍キュー・探査プロービングを
+   candidate_index ごとに手動シミュレートする、同一の予約集合更新規則を
+   使う）が同一の4件を再現することも確認した。
+
+3. **spec リテラル domain の catalog 連合 cross-check（P2）**:
+   catalog（`score_axis_catalog_v1.json`）が正当な理由で repin されて
+   `axes.AX-P1`/`axes.AX-D1` の値が変わっても、`candidate_generation_
+   spec_v1.json` 側のリテラル domain/step/min-duration 記述
+   （`ax_p1.offset_domain`/新設 `ax_d1.quantization_step_beats`/
+   `ax_d1.min_duration_beats`）は追随せず旧値のまま両 loader
+   （`validate_candidate_generation_spec_manifest()`/`load_pinned_
+   score_axis_catalog_manifest()`）を通過し得た——旧 validator は
+   `candidate_ordering` 直下キーの存在のみを検査し、`ax_p1`/`ax_d1`
+   サブキーの値自体は一切検査対象外だった。`ax_d1` へ
+   `quantization_step_beats`（0.25）・`min_duration_beats`（0.25）の
+   リテラル数値フィールドを新設し、`run9_schema.
+   load_pinned_candidate_generation_spec_manifest()` へ `_candidate_
+   generation_cross_check_axis_catalog()` を新設した。本関数は
+   `load_pinned_score_axis_catalog_manifest()`（catalog pin の唯一の
+   正規消費経路）経由で pinned catalog をロードし、
+   `candidate_proposal.ax_p1_offset_domain_from_catalog()`
+   （`_ax_p1_offset_domain()` の公開ラッパー、単一情報源）が catalog
+   から独立に再導出した offset_domain と spec 側のリテラル
+   `offset_domain` を比較、また `ax_d1.quantization_step_beats`/
+   `min_duration_beats` を catalog の対応値と直接比較し、いずれかが
+   不一致なら fail-closed で拒否する。`validate_candidate_generation_
+   spec_manifest()` 側にも `ax_p1`/`ax_d1` サブキーの存在・型検査
+   （catalog 非依存の構造検査のみ）を新設した。
+
+**連鎖更新**: `inputs/candidate_generation_spec_v1.json` の内容変更
+（`run_precondition` 新設・`proposal.reservation_semantics` 新設・
+`ax_p1`/`ax_d1` への `catalog_cross_check_note` 追加・`ax_d1` への
+`quantization_step_beats`/`min_duration_beats` 追加）に伴い
+`RUN9_CONTRACT.yaml` の `candidate_generation_spec_sha` を repin した。
+さらに本節を新設したことに伴う `HARNESS3C_AXIS_FEASIBILITY_RECORD.md`
+自体の実バイト sha256 変更により、5 manifest 共通の `provenance.
+detail_record.sha256` 参照値が全て追随更新となるため、5 manifest 全て
+（`score_axis_catalog_sha`/`loss_evaluator_spec_sha`/
+`candidate_generation_spec_sha`/`compute_budget_manifest_sha`/
+`learning_data_binding_manifest_sha`）を第1-7巡と同型の cascade repin
+した（旧値は `RUN9_CONTRACT.yaml` 側に世代履歴コメントとして
+append-only 保持）。`score_axis_catalog_v1.json`/`loss_evaluator_spec_
+v1.json`/`compute_budget_manifest_v1.json`/`learning_data_binding_
+manifest_v1.json` 自体の内容（`provenance.detail_record.sha256` 以外）
+は本巡で無改訂。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
+全 pass（新設検査・参照実装テストの追加分だけ第7巡から件数増）。

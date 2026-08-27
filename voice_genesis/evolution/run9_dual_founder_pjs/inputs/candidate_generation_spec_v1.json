@@ -13,11 +13,16 @@
     "total_units_formula": "units_per_founder_per_arm * founders * arms = 128 * 2 * 2 = 512",
     "adjudicated_reference": "trial_count/units_per_founder_per_arm はここで再定義せず、既裁定値（RUN9-L0-PIN-2、learning_recipe manifest 側の trial_count==32/render_budget==128、run9_schema.LEARNING_RECIPE_ADJUDICATED_TRIAL_COUNT/LEARNING_RECIPE_ADJUDICATED_RENDER_BUDGET）への参照であり、本 spec が値の権威ではない"
   },
+  "run_precondition": {
+    "minimum_candidate_space": "run 開始前の前提条件として、Founder-local な候補列 L（proposal.candidate_ordering が定める正準候補列。対象 score の note 構成・phrase 構成に依存し実行時に構築される）の有効非恒等候補数 |L| が、全提案スロット数（structure.units_per_founder_per_arm）から trial1_candidate0_rule の恒等スロット1件を除いた必要最小値以上であることを要求する。|L| がこの最小値を下回る場合、run を開始せず fail-closed で停止する（代替挙動の発明・予算追加・結果を見た range 拡張のいずれも行わない — undersized な L のまま run を完走させると、NOT_PROPOSABLE の頻発により render 数が契約（units_per_founder_per_arm = 128 units/Founder/arm）を下回ったまま完走し得るため、run 前の検査で構造的に締め出す）。参照実装: candidate_proposal.require_sufficient_candidate_space()",
+    "required_minimum_formula": "required_minimum = structure.units_per_founder_per_arm - 1（= 127。128 提案スロットから trial1_candidate0_rule の恒等スロット1件を除いた、L から充足すべき非恒等候補スロット数）"
+  },
   "proposal": {
     "rng_independence": "ライブラリ RNG 非依存の hash-based 決定論生成",
     "digest_formula": "digest = sha256(UTF-8(f\"{seed}:{arm}:{founder_id}:{trial}:{candidate}\"))",
     "digest_encoding": "UTF-8",
     "digest_to_candidate_mapping": "digest の先頭8バイトを big-endian uint64 として解釈した値 u を idx = u mod len(L) で candidate_ordering.canonical_list（L）の索引へ写像し、L[idx] を候補とする。詳細な手続き（プロービング・近傍列挙）は exploratory_candidate_rule / neighborhood_candidate_rule が定義する",
+    "reservation_semantics": "trial 内の候補提案は candidate_index 0 -> 1 -> 2 -> 3 の逐次順で行い、各候補は提案された時点で（render/評価の結果を待たず）予約集合（reserved set）へ加える。近傍列挙（neighborhood_candidate_rule）・探査規則の線形プロービング（exploratory_candidate_rule.probing_rule）とも、この予約集合（過去 trial で評価済みの候補 ∪ 当該 trial 内で既に提案済みの候補、= proposed-or-evaluated）をスキップ対象とする——exploratory_candidate_rule.probing_rule 中の「評価済み」・neighborhood_candidate_rule 中の「未評価」はいずれも本 reservation_semantics が定める予約集合を指す（重複回避が評価済みのみを見ると、batch 提案と逐次提案で trace が分岐し得るため）。同一 trial 内で candidate 0..3 を一括で計算する実装（batch）と、各候補を提案の都度 render/評価してから次候補を計算する実装（逐次）は、この予約集合の定義により常に同一の候補列を生成する——提案順序が evaluation の完了を待たないため、digest 由来の探査候補が同一 trial 内の既提案候補と衝突しても線形プロービングで次候補へ進み、batch/逐次いずれでも結果が一致する。参照実装: candidate_proposal.propose_trial_candidates()",
     "trial1_candidate0_rule": "trial 1 の candidate 0 は恒等（全軸オフセット/デルタ = 0、= baseline）を必ず含める",
     "subsequent_trial_schedule": "trial 1 以降は「現 best の近傍（値キー ±1/±2 量子化ステップ + 隣接 index キーの優先順位リストから未評価の先頭3件、幾何的端点・評価済み枯渇いずれの理由の不足分も探査規則で決定論的に補充）」の決定論近傍列挙と hash 由来の探査候補を固定比率 3:1 で混合する。詳細は neighborhood_candidate_rule/exploratory_candidate_rule が定義する",
     "proposal_schedule_table": [
@@ -32,12 +37,16 @@
         "tuple": ["axis_id = \"AX-P1\"", "note_index（対象 score の note 総数にわたり昇順）", "offset（昇順）"],
         "offset_domain": [-2.0, -1.5, -1.0, -0.5, 0.5, 1.0, 1.5, 2.0],
         "offset_domain_note": "score_axis_catalog_v1.json axes.AX-P1（range_semitones=[-2.0,2.0]・quantization_step_semitones=0.5・grid_values_count_per_note=9）から 0 を除いた 8 値。0 は単一軸候補としては非変換（恒等と区別がつかない）ため除外する",
-        "note_index_domain": "0..(対象 score の note 総数-1) 昇順"
+        "note_index_domain": "0..(対象 score の note 総数-1) 昇順",
+        "catalog_cross_check_note": "offset_domain の8値は score_axis_catalog_v1.json axes.AX-P1.range_semitones/quantization_step_semitones から機械導出した値の逐語複製である。run9_schema.load_pinned_candidate_generation_spec_manifest() が pinned score_axis_catalog manifest をロードし、candidate_proposal.ax_p1_offset_domain_from_catalog() 経由で catalog から独立に再導出した値と本 offset_domain を cross-check する（不一致は fail-closed）。catalog が repin されてこれらの値が変わった場合、本 spec 側も同期して repin しなければならない"
       },
       "ax_d1": {
         "tuple": ["axis_id = \"AX-D1\"", "phrase_index（昇順）", "note index ペア (i, j)（同一 phrase 内、i 昇順→j 昇順、i != j）", "delta（昇順）"],
         "delta_domain": "+0.25 刻み（score_axis_catalog_v1.json axes.AX-D1 quantization_step_beats）で、note i（delta を失う側）の変換後 duration が min_duration_beats（0.25）以上を保つ最大値まで。すなわち delta ∈ {0.25, 0.50, …, floor((duration_beats[i] - 0.25) / 0.25) * 0.25} で、この集合が空（duration_beats[i] < 0.5）の場合その (i, j) ペアは L に候補を持たない",
-        "delta_semantics": "delta は note i から note j へ移す量（note i の duration_beats から delta を引き、note j の duration_beats へ delta を足す）。sum(delta)=0 は i,j の2値のみで自動的に満たされる。ordered pair (i, j) と (j, i) は異なる候補として区別する（前者は i が失い j が得る、後者はその逆）"
+        "delta_semantics": "delta は note i から note j へ移す量（note i の duration_beats から delta を引き、note j の duration_beats へ delta を足す）。sum(delta)=0 は i,j の2値のみで自動的に満たされる。ordered pair (i, j) と (j, i) は異なる候補として区別する（前者は i が失い j が得る、後者はその逆）",
+        "quantization_step_beats": 0.25,
+        "min_duration_beats": 0.25,
+        "catalog_cross_check_note": "quantization_step_beats/min_duration_beats はいずれも score_axis_catalog_v1.json axes.AX-D1 の同名値の逐語複製である。run9_schema.load_pinned_candidate_generation_spec_manifest() が pinned score_axis_catalog manifest をロードし、この2値を catalog 側の axes.AX-D1.quantization_step_beats/min_duration_beats と cross-check する（不一致は fail-closed）。catalog が repin されてこれらの値が変わった場合、本 spec 側も同期して repin しなければならない"
       },
       "total_order": "タプル比較 (axis_id, 第2キー, 第3キー, …) の辞書順（Python の tuple 比較と同一意味論: 先頭要素から順に比較し、最初に異なる要素で大小を確定する）。axis_id は文字列比較のため \"AX-D1\" < \"AX-P1\"（'D' < 'P'）となり、AX-D1 候補群が AX-P1 候補群より先に列挙される"
     },
@@ -87,7 +96,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "8450e7fb1332d66a73605f70d7d3c87f2726b25e2354efcc23aa4f18e7df5438",
+      "sha256": "1c166bb15734e98b3e755a55b6fa54e47a78d155c7dea30d9065c275b058c70e",
       "note": "本 spec の proposal/selection/boundary 処理が動作する探索空間（AX-P1/AX-D1 グリッド）の実効性・量子化制約の実測根拠"
     }
   }

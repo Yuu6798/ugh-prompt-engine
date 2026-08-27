@@ -21,6 +21,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _THIS_DIR = Path(__file__).resolve().parent
 _RUN_DIR = _THIS_DIR.parent
 if str(_RUN_DIR) not in sys.path:
@@ -595,3 +597,239 @@ def test_tie_break_earlier_l_position_wins_within_same_axis_at_equal_objective()
     key_first = (2.0, cp.candidate_ordinal(first, ordering))
     key_second = (2.0, cp.candidate_ordinal(second, ordering))
     assert key_first < key_second
+
+
+# ---------------------------------------------------------------------------
+# 6. ax_p1_offset_domain_from_catalog（PR #331 第8巡指摘3、P2、採用: 公開
+# ラッパー。run9_schema.load_pinned_candidate_generation_spec_manifest()
+# の catalog↔spec cross-check が単一情報源として使う）。
+# ---------------------------------------------------------------------------
+
+
+def test_ax_p1_offset_domain_from_catalog_matches_private_helper() -> None:
+    assert cp.ax_p1_offset_domain_from_catalog(CATALOG) == cp._ax_p1_offset_domain(CATALOG)  # noqa: SLF001
+
+
+def test_ax_p1_offset_domain_from_catalog_matches_expected_fixture() -> None:
+    assert cp.ax_p1_offset_domain_from_catalog(CATALOG) == EXPECTED_AX_P1_OFFSET_DOMAIN
+
+
+def test_ax_p1_offset_domain_from_catalog_reflects_narrowed_catalog() -> None:
+    narrowed = json.loads(json.dumps(CATALOG))
+    narrowed["axes"]["AX-P1"]["range_semitones"] = [-1.0, 1.0]
+    assert cp.ax_p1_offset_domain_from_catalog(narrowed) == (-1.0, -0.5, 0.5, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# 7. require_sufficient_candidate_space（PR #331 第8巡指摘1、P2、採用:
+# undersized L の run 前拒否ゲート）。
+# ---------------------------------------------------------------------------
+
+
+def test_require_sufficient_candidate_space_passes_when_l_meets_minimum() -> None:
+    candidates = [("AX-P1", i, 0.5) for i in range(127)]
+    cp.require_sufficient_candidate_space(candidates, render_budget=128)  # must not raise
+
+
+def test_require_sufficient_candidate_space_passes_when_l_exceeds_minimum() -> None:
+    ordering = _build_l()  # 32 要素 > 127 は満たさないが、render_budget を
+    # 小さく設定すれば「十分」なケースとして検査できる。
+    cp.require_sufficient_candidate_space(ordering, render_budget=len(ordering) + 1)
+
+
+def test_require_sufficient_candidate_space_rejects_undersized_l() -> None:
+    ordering = _build_l()  # 32 要素
+    assert len(ordering) == 32
+    with pytest.raises(ValueError, match="required minimum"):
+        cp.require_sufficient_candidate_space(ordering, render_budget=128)  # 127 required, 32 < 127
+
+
+def test_require_sufficient_candidate_space_boundary_exactly_at_minimum_passes() -> None:
+    candidates = [("AX-P1", i, 0.5) for i in range(127)]
+    cp.require_sufficient_candidate_space(candidates, render_budget=128)  # 127 == 127, must not raise
+
+
+def test_require_sufficient_candidate_space_boundary_one_below_minimum_rejects() -> None:
+    candidates = [("AX-P1", i, 0.5) for i in range(126)]
+    with pytest.raises(ValueError):
+        cp.require_sufficient_candidate_space(candidates, render_budget=128)  # 126 < 127
+
+
+# ---------------------------------------------------------------------------
+# 8. propose_trial_candidates（PR #331 第8巡指摘2、P1、採用: 同一 trial
+# 内の予約集合の凍結、trial-level 参照実装）。
+# ---------------------------------------------------------------------------
+
+
+def test_propose_trial_candidates_trial1_returns_identity_plus_three_exploratory() -> None:
+    ordering = _build_l()
+    result = cp.propose_trial_candidates(
+        trial=1,
+        current_best=None,
+        all_candidates=ordering,
+        catalog=CATALOG,
+        seed=909002,
+        arm="arm-a",
+        founder_id="R9F-01",
+        reserved=set(),
+    )
+    assert len(result) == 4
+    assert result[0] is None  # trial1_candidate0_rule: 恒等
+    assert all(c is not None for c in result[1:])
+    assert len(set(result[1:])) == 3  # 重複なし
+
+
+def test_propose_trial_candidates_trial2_plus_achieves_three_neighborhood_one_exploratory() -> None:
+    ordering = _build_l()
+    current_best = ("AX-P1", 1, 1.0)  # 内部領域: 近傍3枠を構造的に満たす
+    result = cp.propose_trial_candidates(
+        trial=5,
+        current_best=current_best,
+        all_candidates=ordering,
+        catalog=CATALOG,
+        seed=909002,
+        arm="arm-a",
+        founder_id="R9F-01",
+        reserved=set(),
+    )
+    assert len(result) == 4
+    assert result[:3] == [
+        ("AX-P1", 1, 1.5),
+        ("AX-P1", 1, 0.5),
+        ("AX-P1", 1, 2.0),
+    ]  # neighbors_of() の優先順位どおり
+    assert result[3] is not None
+    assert result[3] not in result[:3]
+
+
+def test_propose_trial_candidates_deterministic_across_two_calls() -> None:
+    ordering = _build_l()
+    current_best = ("AX-P1", 1, 1.0)
+    kwargs = dict(
+        trial=5, current_best=current_best, all_candidates=ordering, catalog=CATALOG,
+        seed=909002, arm="arm-a", founder_id="R9F-01", reserved=set(),
+    )
+    r1 = cp.propose_trial_candidates(**kwargs)
+    r2 = cp.propose_trial_candidates(**kwargs)
+    assert r1 == r2
+
+
+def test_propose_trial_candidates_respects_reserved_from_past_trials() -> None:
+    ordering = _build_l()
+    current_best = ("AX-P1", 1, 1.0)
+    reserved = {("AX-P1", 1, 1.5)}  # 過去 trial で既に評価済みとする
+    result = cp.propose_trial_candidates(
+        trial=5, current_best=current_best, all_candidates=ordering, catalog=CATALOG,
+        seed=909002, arm="arm-a", founder_id="R9F-01", reserved=reserved,
+    )
+    assert ("AX-P1", 1, 1.5) not in result
+    assert len(set(c for c in result if c is not None)) == len([c for c in result if c is not None])
+
+
+def test_propose_trial_candidates_shortfall_backfilled_by_exploratory() -> None:
+    # note_count=1・v=2.0（値キー・index キー両方が端点）は近傍0件シナリオ
+    # ではないが少数（test_neighbors_of_ax_p1_double_endpoint_shortfall と
+    # 同型の fixture）: 近傍が2件しかないため candidate_index=2 は探査規則
+    # で補充されるはず。
+    single_note_ordering = cp.build_candidate_ordering(
+        note_count=1, phrase_of_note=[0], original_duration_beats=[1.0], catalog=CATALOG
+    )
+    current_best = ("AX-P1", 0, 2.0)
+    neighbors = cp.neighbors_of(current_best, single_note_ordering, catalog=CATALOG)
+    assert len(neighbors) == 2  # shortfall: 3枠中2件のみ
+    result = cp.propose_trial_candidates(
+        trial=5, current_best=current_best, all_candidates=single_note_ordering, catalog=CATALOG,
+        seed=909002, arm="arm-a", founder_id="R9F-01", reserved=set(),
+    )
+    assert len(result) == 4
+    assert result[0] in neighbors
+    assert result[1] in neighbors
+    # candidate_index=2 は近傍が尽きたため探査規則で補充される（None も
+    # あり得る = 全滅・NOT_PROPOSABLE だが、この小さな L では発生しない
+    # ことをここで確認する）。
+    assert result[2] is not None
+    assert len(set(result)) == 4  # 重複なし（None を含む場合も等価判定される）
+
+
+def test_propose_trial_candidates_no_duplicate_when_exploratory_digest_collides_with_neighbor() -> None:
+    # trial=26/candidate_index=3 の探査 digest は、この 3-note fixture・
+    # current_best=("AX-P1",1,1.0)・seed=909002/arm="arm-a"/
+    # founder_id="R9F-01" の下で初期 index が近傍優先順位リスト先頭
+    # （("AX-P1",1,1.5)）と衝突する（brute force で確認済みの固定値）。
+    # 予約集合 semantics がなければこの衝突がそのまま重複選出され得る
+    # ——PR #331 第8巡指摘2 が修正する具体的な不具合の直接証跡。
+    ordering = _build_l()
+    current_best = ("AX-P1", 1, 1.0)
+    neighbors = cp.select_neighborhood_candidates(
+        current_best, ordering, is_evaluated=lambda c: False, catalog=CATALOG, limit=3
+    )
+    collision_target = neighbors[0]
+    digest = cp.digest_bytes(909002, "arm-a", "R9F-01", 26, 3)
+    start = cp.digest_to_index(digest, list_length=len(ordering))
+    assert ordering[start] == collision_target  # 事前計算した衝突が現行 L でも成立することを確認
+
+    # 旧「評価済みのみ」semantics（何も評価済みでないため is_acceptable は
+    # 常に True）を模すと、探査プロービングの初期 index がそのまま
+    # collision_target を返す——これが「予約集合なしでは重複が起こる」
+    # ことの直接証拠。
+    old_semantics_pick = cp.select_exploratory_candidate(
+        ordering, seed=909002, arm="arm-a", founder_id="R9F-01", trial=26, candidate_index=3,
+        is_acceptable=lambda c: True,
+    )
+    assert old_semantics_pick == collision_target
+
+    result = cp.propose_trial_candidates(
+        trial=26, current_best=current_best, all_candidates=ordering, catalog=CATALOG,
+        seed=909002, arm="arm-a", founder_id="R9F-01", reserved=set(),
+    )
+    assert result[:3] == neighbors
+    assert result[3] != collision_target  # 予約集合が衝突を検出し次候補へプロービング
+    assert len(set(result)) == 4  # 重複なし
+
+
+def test_propose_trial_candidates_batch_matches_manual_sequential_simulation() -> None:
+    # batch（propose_trial_candidates() を1回呼ぶ）と、呼び出し側が
+    # candidate_index ごとに render/評価してから次候補を計算する逐次
+    # シミュレーション（同一の予約集合更新規則を手動で適用）が常に同一の
+    # 結果を生成することを確認する（PR #331 第8巡指摘2 の核心要求）。
+    ordering = _build_l()
+    current_best = ("AX-P1", 1, 1.0)
+    seed, arm, founder_id, trial = 909002, "arm-a", "R9F-01", 26  # 衝突が起きる trial
+
+    batch_result = cp.propose_trial_candidates(
+        trial=trial, current_best=current_best, all_candidates=ordering, catalog=CATALOG,
+        seed=seed, arm=arm, founder_id=founder_id, reserved=set(),
+    )
+
+    reserved: set = set()
+    manual_result = []
+    neighbor_queue = list(cp.neighbors_of(current_best, ordering, catalog=CATALOG))
+    for candidate_index in range(4):
+        if candidate_index < 3:
+            while neighbor_queue and neighbor_queue[0] in reserved:
+                neighbor_queue.pop(0)
+            if neighbor_queue:
+                cand = neighbor_queue.pop(0)
+                manual_result.append(cand)
+                reserved.add(cand)
+                continue
+        cand = cp.select_exploratory_candidate(
+            ordering, seed=seed, arm=arm, founder_id=founder_id, trial=trial,
+            candidate_index=candidate_index, is_acceptable=lambda c: c not in reserved,
+        )
+        manual_result.append(cand)
+        if cand is not None:
+            reserved.add(cand)
+
+    assert manual_result == batch_result
+
+
+def test_propose_trial_candidates_does_not_mutate_caller_reserved_set() -> None:
+    ordering = _build_l()
+    reserved = {("AX-P1", 0, 0.5)}
+    reserved_copy = set(reserved)
+    cp.propose_trial_candidates(
+        trial=1, current_best=None, all_candidates=ordering, catalog=CATALOG,
+        seed=909002, arm="arm-a", founder_id="R9F-01", reserved=reserved,
+    )
+    assert reserved == reserved_copy
