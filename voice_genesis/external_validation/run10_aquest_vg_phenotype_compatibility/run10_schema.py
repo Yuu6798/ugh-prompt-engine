@@ -899,6 +899,49 @@ _EVIDENCE_SECTION_SHAPE: Dict[str, Tuple[str, ...]] = {
     "synthesis_validation": ("controls", "construction_meter", "confirmation_meter"),
 }
 
+# evidence 節の種類（第 20 巡でファミリーを終端するための分類）。
+#
+# `SHAPE` = キーが**設計の固定語彙**である節。未知キーを拒否する。
+# `INDEX` = キーが trait id / case id などの**データ識別子**である節。
+#           キー集合を閉じられない（閉じたら測定結果を記録できない）。
+#           ただしその**行**は SHAPE であり、行側で閉じる。
+#
+# 「開いたキー集合」ファミリーは第 12/13/15/17/19/20 巡と 6 度再発した。
+# 個別に塞ぐのをやめ、検証で降りる mapping を全数分類して
+# `MAPPING_CLOSURE_INVENTORY` に登録し、
+# `test_every_validated_mapping_is_registered` が未登録の追加を落とす。
+_EVIDENCE_SECTION_KIND: Dict[str, str] = {
+    "external_calibration": "SHAPE",
+    "decision_rules": "SHAPE",
+    "path_effects": "SHAPE",
+    "replay": "SHAPE",
+    "synthesis_validation": "SHAPE",
+    "compatibility_matrix": "INDEX",
+    "generative_compatibility_matrix": "INDEX",
+    "novel_trait_candidates": "INDEX",
+    "difference_map": "INDEX",
+}
+
+# 検証で降りる mapping の全数棚卸し。名前は `_require_mapping()` へ渡す名前
+# （f-string の埋め込みは `<name>` に正規化）か、専用検証器が扱う節の名前。
+MAPPING_CLOSURE_INVENTORY: Dict[str, str] = {
+    # --- 契約 ---
+    "<pin field>": "SHAPE",                       # value / status / reason / source
+    "contract": "SHAPE",                          # ALLOWED_TOP_LEVEL_FIELDS
+    "cost_cap": "SHAPE",                          # COST_CAP_FIELDS
+    "claim_strength_target": "SHAPE",             # CLAIM_STRENGTH_KEYS
+    "staged_intervention": "SHAPE",               # STAGED_INTERVENTION_SHAPE
+    "staged_intervention.<phase>": "SHAPE",       # STAGED_INTERVENTION_SHAPE[phase]
+    "supersedes[]": "SHAPE",                      # document / status
+    # --- results ---
+    "results": "SHAPE",                           # RESULTS_ALLOWED_FIELDS
+    "results.rights": "SHAPE",                    # RESULTS_RIGHTS_REQUIRED|OPTIONAL
+    "results.hard_gates": "SHAPE",                # ALL_GATE_IDS
+    "results.synthesis_validation.controls": "SHAPE",   # PHASE_B_ONLY_COHORTS
+    "compatibility_matrix.<trait_id>": "SHAPE",   # COMPATIBILITY_ENTRY_ALLOWED_FIELDS
+    "generative_compatibility_matrix.<trait_id>": "SHAPE",  # GENERATIVE_ENTRY_ALLOWED_FIELDS
+}
+
 # evidence 欄のうち、**値まで**固定されるもの（閉世界）。欄の実在だけを見ると
 # `replay: {same_process: FAIL, cross_process: FAIL}` を添えたまま比較地図の
 # 成立を記録できる（PR #330 Codex 第 10 巡 P1）。§21 R10-G14 は Phase A PASS の
@@ -989,6 +1032,15 @@ def _require_nonempty_section(mapping: Mapping[str, Any], name: str, why: str) -
         )
     if not section:
         raise Run10ContractError(f"results.{name}: {why} には本節が必要（空）")
+    if _EVIDENCE_SECTION_KIND.get(name) == "SHAPE":
+        # キーが設計の固定語彙である節は閉じる。INDEX 節（trait id 等が
+        # キー）は閉じられないため、行側 (`assert_*_entry`) で閉じている。
+        unknown = set(section) - set(_EVIDENCE_SECTION_SHAPE.get(name, ()))
+        if unknown:
+            raise Run10ContractError(
+                f"results.{name}: 未知の欄 {sorted(unknown)}"
+                f"（許容 {sorted(_EVIDENCE_SECTION_SHAPE.get(name, ()))}）"
+            )
     required = _EVIDENCE_SECTION_SHAPE.get(name, ())
     # 真偽値で判定しない: `measurement_overfit_signal: false` は正当な値であり、
     # 欠落と混同してはならない。要求するのは「キーが在り、null でなく、
@@ -1394,8 +1446,20 @@ def _validate_results_evidence(
 
     synthesis = mapping.get("synthesis_validation")
     if isinstance(synthesis, Mapping) and synthesis:
+        unknown = set(synthesis) - set(_EVIDENCE_SECTION_SHAPE["synthesis_validation"])
+        if unknown:
+            raise Run10ContractError(
+                f"results.synthesis_validation: 未知の欄 {sorted(unknown)}"
+                f"（許容 {sorted(_EVIDENCE_SECTION_SHAPE['synthesis_validation'])}）"
+            )
         controls = _require_mapping("results.synthesis_validation.controls",
                                     synthesis.get("controls"))
+        unknown_cohorts = set(controls) - set(PHASE_B_ONLY_COHORTS)
+        if unknown_cohorts:
+            raise Run10ContractError(
+                f"results.synthesis_validation.controls: 未知の cohort"
+                f" {sorted(unknown_cohorts)}（§7.5 の 3 対照のみ）"
+            )
         for cohort in PHASE_B_ONLY_COHORTS:
             if not controls.get(cohort):
                 raise Run10ContractError(
@@ -1455,6 +1519,19 @@ def assert_compatibility_entry(trait_id: str, entry: Any) -> None:
         )
 
 
+# generative_compatibility_matrix の 1 行が持てる欄（閉世界）。
+# compatibility 行と同型で、こちらだけ開いていた（PR #330 Codex 第 20 巡 P1）。
+GENERATIVE_ENTRY_ALLOWED_FIELDS: Tuple[str, ...] = (
+    "synthesis_status",
+    "measurement_status",
+    "phase_b_entry",
+    "controls",
+    "construction_meter",
+    "confirmation_meter",
+    "notes",
+)
+
+
 def assert_generative_entry(trait_id: str, entry: Any) -> None:
     """§16 / §20.3: GenerativeCompatibilityMatrix の 1 行を検証する。
 
@@ -1463,6 +1540,12 @@ def assert_generative_entry(trait_id: str, entry: Any) -> None:
     成立を記録できた（PR #330 Codex 第 4 巡 P1）。
     """
     mapping = _require_mapping(f"generative_compatibility_matrix.{trait_id}", entry)
+    unknown = set(mapping) - set(GENERATIVE_ENTRY_ALLOWED_FIELDS)
+    if unknown:
+        raise Run10ContractError(
+            f"generative_compatibility_matrix.{trait_id}: 未知の欄 {sorted(unknown)}"
+            f"（許容 {sorted(GENERATIVE_ENTRY_ALLOWED_FIELDS)}）"
+        )
     status = mapping.get("synthesis_status")
     if status not in GENERATIVE_STATUS:
         raise Run10ContractError(

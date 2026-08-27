@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（344 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（356 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -566,3 +566,32 @@ PRESENT / 非 blocking になる。本体はリポジトリに載せない（Use
    (a) 記録された G15 は Entry 状態と一対一、(b) `ENTER` を名乗るなら裁定 Gate が
    台帳に在る、の 2 つを全 verdict へ効かせた。`NOT_REACHED` も対応表に加えて
    第 15 巡の未実行語彙と揃えた。
+
+### 第 20 巡（P1×1）— 「開いたキー集合」ファミリーの全数終端
+
+指摘は `generative_compatibility_matrix` の行が開いていること（`identity_copy:
+ALLOWED` / `scope: PUBLIC` を足せる）。第 19 巡で compatibility 行を閉じた直後の
+同型で、**このファミリーは第 12/13/15/17/19/20 巡と 6 度再発した**。個別に塞ぐ
+のをやめ、全数棚卸しで終端する。
+
+指摘の 1 件に加えて、同じ掃討で以下も閉じた:
+
+- `generative_compatibility_matrix` の行（`GENERATIVE_ENTRY_ALLOWED_FIELDS`）
+- `synthesis_validation`（固定 3 欄）とその `controls`（§7.5 の 3 対照のみ）
+- キーが設計の固定語彙である evidence 節 — `external_calibration` /
+  `decision_rules` / `path_effects` / `replay` / `synthesis_validation`
+
+**分類の導入**が終端の本体である。検証で降りる mapping を 2 種に分ける:
+
+| 種別 | 意味 | 扱い |
+|---|---|---|
+| `SHAPE` | キーが設計の固定語彙 | 未知キーを拒否する |
+| `INDEX` | キーが trait id / case id などのデータ識別子 | 閉じられない。**行**を SHAPE として閉じる |
+
+`INDEX` を閉じると測定結果そのものが記録できなくなるため、閉世界化は
+「全部閉じる」ではなく「どちらの種別かを宣言し、SHAPE だけ閉じる」が正しい形である。
+`MAPPING_CLOSURE_INVENTORY` が全数を登録し、
+`test_every_validated_mapping_is_registered` が `run10_schema.py` の
+`_require_mapping()` 呼び出しを走査して**未登録の mapping を追加できなくする**。
+新しい mapping を検証対象にしたら、SHAPE / INDEX で分類して登録しない限り
+テストが落ちる。

@@ -1603,3 +1603,125 @@ def test_not_reached_entry_pairs_with_not_reached_gate() -> None:
     doc["hard_gates"] = {"R10-G15": "PASS"}
     with pytest.raises(m.Run10ContractError, match="R10-G15"):
         m.validate_results_document(doc)
+
+
+# --- 第 20 巡: 「開いたキー集合」ファミリーの全数終端（第 20 巡 P1）---------
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("identity_copy", "ALLOWED"),
+        ("scope", "PUBLIC"),
+        ("public_audio_release", True),
+        ("surprise", 1),
+    ],
+)
+def test_generative_entry_rejects_unknown_fields(field: str, value: Any) -> None:
+    """generative 行にも対立宣言を足せない（compatibility 行と同型）。"""
+    doc = _passing_results()
+    doc["protocol_verdict"] = "PASS"
+    doc["phase_b_entry"] = "ENTER"
+    doc["scientific_outcome"] = ["GENERATIVE_COMPATIBILITY_ESTABLISHED"]
+    doc["hard_gates"].update({gate_id: "PASS" for gate_id, _ in m.PHASE_B_GATES})
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "PASS"
+    doc["generative_compatibility_matrix"] = {
+        "F1_F2_F3": {"synthesis_status": "GENERATIVELY_COMPATIBLE", field: value}
+    }
+    doc["synthesis_validation"] = {
+        "controls": {"G_null": {"n": 1}, "G_target": {"n": 1}, "G_inverse": {"n": 1}},
+        "construction_meter": {"m": "PASS"},
+        "confirmation_meter": {"m2": "PASS"},
+    }
+    with pytest.raises(m.Run10ContractError, match="未知の欄"):
+        m.validate_results_document(doc)
+
+
+def test_synthesis_validation_is_closed() -> None:
+    """synthesis_validation とその controls も閉世界。"""
+    doc = _passing_results()
+    doc["synthesis_validation"] = {
+        "controls": {"G_null": {}, "G_target": {}, "G_inverse": {}},
+        "construction_meter": {"m": "PASS"},
+        "confirmation_meter": {"m2": "PASS"},
+        "identity_copy": "ALLOWED",
+    }
+    with pytest.raises(m.Run10ContractError, match="未知の欄"):
+        m.validate_results_document(doc)
+
+
+def test_synthesis_controls_reject_unknown_cohorts() -> None:
+    """§7.5 の 3 対照以外の cohort を controls に足せない。"""
+    doc = _passing_results()
+    doc["synthesis_validation"] = {
+        "controls": {"G_null": {}, "G_target": {}, "G_inverse": {}, "G_secret": {}},
+        "construction_meter": {"m": "PASS"},
+        "confirmation_meter": {"m2": "PASS"},
+    }
+    with pytest.raises(m.Run10ContractError, match="未知の cohort"):
+        m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize(
+    "section",
+    ["external_calibration", "decision_rules", "path_effects"],
+)
+def test_shape_evidence_sections_reject_unknown_fields(section: str) -> None:
+    """キーが設計の固定語彙である evidence 節は閉じる。"""
+    doc = _passing_results()
+    doc[section] = dict(doc[section])
+    doc[section]["scope"] = "PUBLIC"
+    with pytest.raises(m.Run10ContractError, match="未知の欄"):
+        m.validate_results_document(doc)
+
+
+def test_index_evidence_sections_stay_open() -> None:
+    """trait id がキーの節は閉じない（閉じたら測定結果を記録できない）。"""
+    doc = _passing_results()
+    doc["compatibility_matrix"]["F4_NEW_TRAIT"] = {
+        "status": "DIRECT_COMPATIBLE",
+        "support": {"phoneme_contexts": 5},
+        "calibration": "CALIBRATED_EXTERNAL",
+        "holdout": "PASS",
+    }
+    doc["difference_map"]["F4_NEW_TRAIT"] = {"effect": 0.2}
+    m.validate_results_document(doc)
+
+
+def test_every_validated_mapping_is_registered() -> None:
+    """検証で降りる mapping はすべて棚卸し表に登録されている。
+
+    「開いたキー集合」ファミリーは第 12/13/15/17/19/20 巡と 6 度再発した。
+    個別の穴を塞ぐのをやめ、**未登録の mapping を追加できなくする**ことで
+    終端する。新しい `_require_mapping()` を足したら、その名前を
+    `MAPPING_CLOSURE_INVENTORY` へ SHAPE / INDEX で分類して登録しない限り
+    このテストが落ちる。
+    """
+    import re
+
+    source = Path(m.__file__).read_text(encoding="utf-8")
+    names = set()
+    for raw in re.findall(r'_require_mapping\(\s*(f?"[^"]*"|[A-Za-z_][A-Za-z0-9_]*)', source):
+        if not raw.startswith('"') and not raw.startswith('f"'):
+            names.add("<pin field>")  # 呼び出し側が組み立てる pin 欄名
+            continue
+        literal = raw[2:-1] if raw.startswith('f"') else raw[1:-1]
+        names.add(re.sub(r"\{[^}]*\}", lambda mo: f"<{mo.group(0)[1:-1]}>", literal))
+
+    unregistered = names - set(m.MAPPING_CLOSURE_INVENTORY)
+    assert not unregistered, (
+        f"棚卸し表に無い mapping: {sorted(unregistered)}"
+        "（MAPPING_CLOSURE_INVENTORY へ SHAPE / INDEX で登録すること）"
+    )
+    assert set(m.MAPPING_CLOSURE_INVENTORY.values()) <= {"SHAPE", "INDEX"}
+
+
+def test_evidence_sections_are_all_classified() -> None:
+    """evidence 節がすべて SHAPE / INDEX に分類されている。"""
+    assert set(m._EVIDENCE_SECTION_SHAPE) == set(m._EVIDENCE_SECTION_KIND)
+    for name, kind in m._EVIDENCE_SECTION_KIND.items():
+        assert kind in {"SHAPE", "INDEX"}
+        if kind == "SHAPE":
+            assert m._EVIDENCE_SECTION_SHAPE[name], f"{name}: SHAPE なのに欄が空"
+        else:
+            assert m._EVIDENCE_SECTION_SHAPE[name] == (), f"{name}: INDEX に固定欄は持てない"
