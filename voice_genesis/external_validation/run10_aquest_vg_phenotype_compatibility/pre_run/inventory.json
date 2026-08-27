@@ -1,0 +1,86 @@
+{
+  "blocking_items": [
+    "af01_complete_bundle",
+    "af01_freeze_registration",
+    "af01_deterministic_replay",
+    "aquest_voicebank_files",
+    "a0_recorded_pitch_inventory",
+    "design_document_bytes",
+    "meter_implementation",
+    "v1_generation_route"
+  ],
+  "gate": "R10-G2",
+  "gate_name": "PRE_RUN_INVENTORY_COMPLETE",
+  "gate_state": "BLOCKED",
+  "items": [
+    {
+      "blocking": false,
+      "detail": "同梱凍結台帳の実バイト sha256 が af01_payload_ledger_sha256 と一致",
+      "item_id": "af01_payload_sha256sums",
+      "state": "PRESENT"
+    },
+    {
+      "blocking": false,
+      "detail": "構造検査 14/14 PASS（75 unit WAV / 25 alias x C3,C4,G4 / 9 E0 fixture / 6 aggregate probe / canonical 4 点）",
+      "item_id": "af01_ledger_structure",
+      "state": "PRESENT"
+    },
+    {
+      "blocking": true,
+      "detail": "bundle 実体の場所が未指定（--af01-bundle-root）。台帳経由の pin までは検証済みだが、§29 手順 6 の実体照合と手順 7 の決定論的 replay は未実行。",
+      "item_id": "af01_complete_bundle",
+      "state": "UNRESOLVED"
+    },
+    {
+      "blocking": true,
+      "detail": "FREEZE_REGISTRATION.json の実体照合は bundle 取得後に行う。",
+      "item_id": "af01_freeze_registration",
+      "state": "UNRESOLVED"
+    },
+    {
+      "blocking": true,
+      "detail": "§29 手順 7 の決定論的 payload replay は bundle 取得後に行う。",
+      "item_id": "af01_deterministic_replay",
+      "state": "UNRESOLVED"
+    },
+    {
+      "blocking": true,
+      "detail": "A0 voicebank root が未指定または不在。§7.1 の必須 pin（voicebank version / file order / all WAV SHA256 / oto.ini / character.txt）を確定できない。§32 Stop Rule 3 の状態。",
+      "item_id": "aquest_voicebank_files",
+      "state": "UNRESOLVED"
+    },
+    {
+      "blocking": true,
+      "detail": "A0 voicebank root が未指定または不在。§7.1 の必須 pin（voicebank version / file order / all WAV SHA256 / oto.ini / character.txt）を確定できない。§32 Stop Rule 3 の状態。",
+      "item_id": "a0_recorded_pitch_inventory",
+      "state": "UNRESOLVED"
+    },
+    {
+      "blocking": true,
+      "detail": "正本設計 'VoiceGenesis_RUN10_AQUEST_VG_Phenotype_Compatibility_Audit_v0.4.md' の実体が未照合（--design-doc-path 未指定）。本文書はリポジトリに載せないため（§2.2）、実行される文書が凍結 pin と同一であることは実行時にしか確かめられない。契約 YAML の宣言だけでは実在を証明しない。",
+      "item_id": "design_document_bytes",
+      "state": "UNRESOLVED"
+    },
+    {
+      "blocking": false,
+      "detail": "リポジトリ内に存在する近縁参照（判定材料ではない）: ['voice_genesis/foundry/VISION_evolution_theory_v0.2.md', 'voice_genesis/foundry/VISION_evolution_theory_v0.1.md', 'voice_genesis/foundry/VISION_evolution_v0.3_supplementA_spr.md']. §36 が実在を確認した v0.3 本体 'VoiceGenesis_Evolution_Theory_v0.3_ja.md' は契約 pin により同定済み（§29 手順 5 解決）。本体は private storage 側にあり commit しない。実体バイトの照合が要るときは --evolution-theory-path を渡す。",
+      "item_id": "evolution_theory_reference",
+      "state": "PRESENT"
+    },
+    {
+      "blocking": true,
+      "detail": "§11 の測定器 family（M0 Technical Integrity 〜 M6 Identity Signature）は未実装。measurement/ ディレクトリは本 PR の範囲外。",
+      "item_id": "meter_implementation",
+      "state": "ABSENT"
+    },
+    {
+      "blocking": true,
+      "detail": "§7.4 V1 = AF01 を pin 済み VoiceGenesis transport 経路へ一度だけ通した出力。使用する transport / renderer / vocoder の選定が未裁定。生成不能なら Phase A = BLOCKED_V1_UNAVAILABLE。",
+      "item_id": "v1_generation_route",
+      "state": "UNRESOLVED"
+    }
+  ],
+  "note": "測定値・集計値を含まない構造 inventory である（§2.2 公開境界）。AF-P0 / AF0 は §7.7 により optional historical reference のため、欠損しても本 gate を BLOCK しない（AF 固有 family のみ NOT_EVALUABLE）。",
+  "run_id": "RUN10",
+  "schema": "voicegenesis-run10-pre-run-inventory/0.1"
+}

@@ -1,0 +1,69 @@
+{
+  "schema": "voicegenesis-run10-private-storage-policy/0.1",
+  "run_id": "RUN10",
+  "status": "ADJUDICATED_STAGING_ROOT_PENDING",
+  "blocking_question": {
+    "id": "R10-PUB-1",
+    "severity": "STOP_RULE_CANDIDATE",
+    "stop_rules": [
+      "§32-2 private-only storage cannot be guaranteed",
+      "§32-16 third-party distribution or public upload detected"
+    ],
+    "statement": "本 RUN10 実装ツリーが置かれているリポジトリ Yuu6798/ugh-prompt-engine は public である。DESIGN_RUN10 §2.2 は分析表・集計値・設計文書について「本Runでは公開しない」と規定しており、§26 は publication_scope を PRIVATE_ONLY と定める。public リポジトリへの commit は公開に等しいため、どこまでを repository へ置いてよいかは §33 の User 裁定事項である。",
+    "adjudicator": "User",
+    "adjudication": "APPROVED_CODE_ONLY_PUBLIC",
+    "interim_disposition": "ADOPTED_AS_STANDING_POLICY",
+    "interim_rationale": "本方針は裁定により暫定でなくなった。private カテゴリの混入は private_boundary.py と tests/test_private_output_boundary.py が機械的に阻止し続ける。",
+    "adjudicated_at": "2026-08-27",
+    "adjudication_record": "User 裁定 2026-08-27（本セッション内、選択肢 1 を採用）: 「実装コードのみ public で継続」。暫定運用 FAIL_CLOSED_MINIMUM をそのまま正式運用へ昇格する。AQUEST 由来資産・音声・モデル・blind map・測定値・集計表・設計文書本文は public リポジトリへ置かず Drive 側 private に留める。"
+  },
+  "repository_allowed": {
+    "note": "public リポジトリへ commit してよいカテゴリ（User 裁定 2026-08-27 により確定）。",
+    "categories": [
+      "implementation code (measurement harness / contract loader / guards)",
+      "RUN10_CONTRACT.yaml (machine contract; not the design document)",
+      "AF01 payload checksum ledger (VoiceGenesis 自身の source-free 素体のハッシュ台帳)",
+      "structural manifests without measured values"
+    ]
+  },
+  "repository_prohibited": {
+    "categories": [
+      "AquesTalk-derived voicebank WAV / oto.ini / character.txt",
+      "A1 neutral render WAV",
+      "V0 / V1 / E0 / G-series audio bytes",
+      "blind_id_map",
+      "private feature JSON / measured values / aggregate tables",
+      "DESIGN_RUN10 本文（全 revision）および旧 RUN10 案本文",
+      "trained models / synthesis systems derived from AquesTalk assets",
+      "VoiceGenesis_Evolution_Theory_v0.3_ja.md 本体（User 裁定 2026-08-27: リポジトリに載せない。参照は sha256 pin と実行時照合のみ）"
+    ],
+    "enforced_by": "private_boundary.py::assert_tracked_tree_clean",
+    "reaffirmations": [
+      {
+        "date": "2026-08-27",
+        "statement": "UTAU デフォルト音源は個人・非公開でのみ分析／抽出／合成が許諾されており、リポジトリに載せることは許されない。",
+        "scope": "A0 = AquesTalk-derived UTAU default voicebank（WAV / oto.ini / character.txt / prefix.map）",
+        "already_enforced_by": "private_boundary.py::ALWAYS_PRIVATE_NAMES / PRIVATE_ASSET_SUFFIXES",
+        "extension": "同じ保守的姿勢を Evolution Theory v0.3 本体にも適用する（本体非 commit / 実行時照合）。"
+      }
+    ]
+  },
+  "private_staging": {
+    "note": "§26 Atomic Private Results Bundle の staging root。リポジトリ外の private ストレージに置く。",
+    "root": "<PENDING_USER_ATTESTATION>",
+    "drive_layout_reference": "§25 VoiceGenesis/External_Validation/AQUEST/Plan_A_ExistingVoice_Phenotype_Compatibility_Audit/",
+    "sharing": "private",
+    "verified": false
+  },
+  "results_directory": {
+    "path": "results/",
+    "gitignore": "*\n!.gitignore",
+    "note": "§26 により results/ は private bundle。.gitignore 以外を commit しない。"
+  },
+  "residual_unresolved": {
+    "note": "R10-PUB-1 は裁定済みだが、private_storage_policy_sha を PINNED 化するには private staging root の実体確定（private_staging.root）が残っている。",
+    "items": [
+      "private_staging.root"
+    ]
+  }
+}

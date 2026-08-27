@@ -1,0 +1,597 @@
+"""af01_freeze_verifier.py — AF01 v1.0 凍結検証（DESIGN_RUN10 §29 手順 6/7、§21 R10-G2）。
+
+§29 実行順:
+
+```text
+6 verify AF01 v1.0 payload ledger / spec / generator / manifest / canonical C4 Body
+7 execute deterministic AF01 payload replay and freeze verification report
+```
+
+§21 R10-G2 は「AF01 payload ledger、spec、generator、manifest、canonical Body
+のいずれかが不一致なら BLOCKED / reason = AF01_INPUT_DRIFT」と規定する。
+
+本モジュールは 3 段の検証を提供する。
+
+1. `verify_ledger_bytes()` — 台帳ファイル自身の実バイト sha256 が凍結値
+   `af01_payload_ledger_sha256` と一致するか。**bundle 実体なしで実行できる**。
+2. `verify_bundle()` — 台帳の全エントリが実在し、実バイト sha256 が一致し、
+   §7.3 の構造量（75 unit WAV = 25 alias × 3 pitch、9 E0 fixture、6 aggregate
+   probe）を満たし、canonical 4 点（spec / generator / manifest / C4 Body）が
+   凍結値と一致するか。
+3. `verify_deterministic_replay()` — 同梱 generator を **実行前に認証してから**
+   再実行し、再生成 payload が凍結台帳と同一かどうか（§29 手順 7）。
+   CLI の `--replay` は `--bundle-root` を必須とし、手順 6（bundle 実体照合）を
+   通過した場合にのみ手順 7 へ進む。
+
+AF01 は AQUEST 由来資産を一切含まない VoiceGenesis 側の source-free 素体で
+あるため（§7.3）、本モジュールが扱うのは公開境界の外側ではない。ただし
+bundle 実体（音声）はリポジトリへ置かない — 参照するのは台帳とハッシュだけ。
+
+## 脅威モデル境界（2026-08-27 宣言・PR #330 第 8 巡）
+
+本検証器が守るのは **受動的ドリフトの tamper-evidence** である。すなわち
+「bundle が差し替わった / 壊れた / 別物になった」ことを検出する。
+
+```text
+守る:
+  台帳バイトの差し替え（read-once + 凍結 sha 照合）
+  payload バイトの不一致・欠落・bundle 外 symlink
+  bundle 側 generator のドリフト・置換（実行前認証 + 認証済み複製の実行）
+  実行中の bundle 側 generator 書き換え（追加診断）
+
+守らない（境界外）:
+  検証プロセスと同一ユーザ権限を持つ能動的攻撃者
+```
+
+同一ユーザ権限の能動的攻撃者は、認証済み複製の pathname を我々の hash と
+インタプリタの open の間で差し替えることが**理屈上できる**。ただしこの能力を
+持つ攻撃者は、より直接的に python インタプリタの差し替え・LD_PRELOAD・ptrace・
+本ファイル自体の書き換え・検証レポートの偽造ができる。in-process の緩和では
+防げない相手であり、防御の費用対効果が釣り合わない。
+
+これは `docs/DESIGN_M2_extraction_accuracy.md` §6 が同型の争点に対して確立した
+境界（「ローダ内部状態の TOCTOU」等を acknowledged-boundary へ分類）と同じ
+判断であり、RUN10 でも同じ線を引く。
+
+**再入条件**: RUN10 の検証を multi-tenant / 共有ユーザ環境で実行する運用に
+変わった場合、本境界は無効になる。そのときは子プロセスを pathname ではなく
+認証済み buffer 自体へ束縛する（stdin 経由の実行、または inode を掴んだ fd
+経由）実装へ改める。単一ユーザの信頼された環境で実行するという運用規律が、
+本境界の前提である。
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Mapping, Optional, Tuple
+
+_THIS_DIR = Path(__file__).resolve().parent
+if str(_THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(_THIS_DIR))
+
+from svp_rpe.utils.atomic_io import atomic_write_bytes  # noqa: E402
+
+from run10_schema import (  # noqa: E402  (sibling import 流儀 — run9_schema.py と同型)
+    AF01_AGGREGATE_PROBE_COUNT,
+    AF01_ALIAS_COUNT,
+    AF01_E0_CALIBRATION_CASES,
+    AF01_FROZEN_HASHES,
+    AF01_PITCHES,
+    AF01_UNIT_FILE_COUNT,
+    compute_file_sha256,
+)
+
+# 本リポジトリへ同梱した凍結台帳（AF01 bundle の PAYLOAD_SHA256SUMS.txt と同一バイト）。
+PINNED_LEDGER_PATH = _THIS_DIR / "inputs" / "af01_payload_sha256sums.txt"
+
+# 台帳の対象外だが bundle には存在する登録ファイル（§7.3）。
+LEDGER_EXCLUDED_NAMES: Tuple[str, ...] = (
+    "PAYLOAD_SHA256SUMS.txt",
+    "SHA256SUMS.txt",
+    "FREEZE_REGISTRATION.json",
+    "AF01_FROZEN_REGISTRATION_v1.0.md",
+)
+
+# replay で再生成対象から外す台帳エントリ（閉世界）。generator 自身のソースは
+# payload に載っているが定義上 replay の**入力**であり、生成器が自分のソースを
+# 出力することは要求できない。これ以外を黙って除外してはならない — 生成器が
+# 出力しない payload が他にあると分かった場合は、実測の裏付けとともにここへ
+# 明示登録する（黙って除外すると「再生成できていないのに PASS」になる）。
+REPLAY_INPUT_ONLY_ENTRIES: Tuple[str, ...] = ("generator_AF01_SF1.py",)
+
+# canonical 4 点（§21 R10-G2 が不一致で AF01_INPUT_DRIFT を出す対象）。
+CANONICAL_ENTRIES: Dict[str, str] = {
+    "AF01.json": "af01_spec_sha256",
+    "generator_AF01_SF1.py": "af01_generator_sha256",
+    "founder_manifest.json": "af01_manifest_sha256",
+    "AF01_all25_units_C4.wav": "af01_canonical_c4_sha256",
+}
+
+VERDICT_PASS = "PASS"
+VERDICT_DRIFT = "AF01_INPUT_DRIFT"
+VERDICT_UNAVAILABLE = "AF01_BUNDLE_UNAVAILABLE"
+
+
+class Af01LedgerError(ValueError):
+    """台帳の構文・構造の不正。"""
+
+
+@dataclass(frozen=True)
+class Af01VerificationReport:
+    """`verify_*` の結果。判定は `verdict` のみが正本。"""
+
+    verdict: str
+    checks: Dict[str, str] = field(default_factory=dict)
+    mismatches: List[str] = field(default_factory=list)
+    missing: List[str] = field(default_factory=list)
+    unexpected: List[str] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        return self.verdict == VERDICT_PASS
+
+    def to_json(self) -> Dict[str, object]:
+        return {
+            "verdict": self.verdict,
+            "checks": dict(self.checks),
+            "mismatches": list(self.mismatches),
+            "missing": list(self.missing),
+            "unexpected": list(self.unexpected),
+        }
+
+
+def containment_violation(root: Path, relative: str) -> Optional[str]:
+    """`root/relative` が bundle の内側に収まっているか（外なら理由を返す）。
+
+    payload だけでなく、台帳対象外の登録ファイル
+    （`FREEZE_REGISTRATION.json` 等）にも同じ規則を適用する。片方だけ守ると、
+    外部ファイルへの symlink を並べた薄いディレクトリが「自己完結した
+    bundle」として通る（PR #330 Codex 第 3 巡 P2 / 第 6 巡 P2 が payload 側と
+    登録ファイル側で 2 度露出させた同型）。
+    """
+    if Path(relative).is_absolute() or ".." in Path(relative).parts:
+        return f"{relative}: 字句上 bundle 外を指す"
+    target = root / relative
+    if not target.exists():
+        return None  # 不在は containment ではなく missing として扱う
+    resolved_root = root.resolve()
+    resolved = target.resolve()
+    if resolved != resolved_root and resolved_root not in resolved.parents:
+        return f"{relative}: 解決後 {resolved} が bundle root の外"
+    return None
+
+
+def parse_payload_ledger(text: str) -> Dict[str, str]:
+    """`sha256␠␠path` 形式の台帳を `{path: sha256}` にする。
+
+    sha256sum(1) の出力形式に合わせ、区切りは半角空白 2 個。順序は
+    LC_ALL=C ソート（= Python の str 比較）であることも検証する。
+    """
+    entries: Dict[str, str] = {}
+    order: List[str] = []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        if not raw.strip():
+            continue
+        if "  " not in raw:
+            raise Af01LedgerError(f"{lineno} 行目: 'sha256  path' 形式でない: {raw!r}")
+        digest, path = raw.split("  ", 1)
+        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise Af01LedgerError(f"{lineno} 行目: sha256 が不正: {digest!r}")
+        if path in entries:
+            raise Af01LedgerError(f"{lineno} 行目: パスが重複している: {path!r}")
+        entries[path] = digest
+        order.append(path)
+    if not entries:
+        raise Af01LedgerError("台帳が空である")
+    if order != sorted(order):
+        raise Af01LedgerError("台帳のパス順序が LC_ALL=C ソートでない")
+    return entries
+
+
+def render_payload_ledger(entries: Mapping[str, str]) -> bytes:
+    """`parse_payload_ledger()` の逆写像（決定論的再構成）。"""
+    lines = [f"{entries[path]}  {path}" for path in sorted(entries)]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def load_pinned_ledger(path: Path | str | None = None) -> Dict[str, str]:
+    """同梱の凍結台帳を読み、自身の sha256 も検証してから返す。"""
+    report, entries = read_and_verify_ledger(path)
+    if entries is None:
+        raise Af01LedgerError(f"凍結台帳の sha256 が一致しない: {report.to_json()}")
+    return entries
+
+
+def read_and_verify_ledger(
+    ledger_path: Path | str | None = None,
+) -> Tuple[Af01VerificationReport, Optional[Dict[str, str]]]:
+    """台帳を **1 回だけ読み**、そのバイトを hash し、同じバッファを parse する。
+
+    hash した後で読み直すと、その間に差し替えられた台帳を検証済みとして
+    扱う窓ができる（構造量と canonical 4 点さえ保てば残りの payload 集合を
+    すり替えられる — PR #330 Codex 第 4 巡 P1 / AGENTS.md「hash した bytes と
+    実行された bytes の間に cache の窓が無いか」）。
+
+    戻り値の entries は verdict が PASS のときだけ非 None。
+    """
+    path = Path(ledger_path) if ledger_path is not None else PINNED_LEDGER_PATH
+    expected = AF01_FROZEN_HASHES["af01_payload_ledger_sha256"]
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return (
+            Af01VerificationReport(
+                verdict=VERDICT_UNAVAILABLE,
+                checks={"payload_ledger_present": "FAIL"},
+                missing=[str(path)],
+            ),
+            None,
+        )
+    actual = hashlib.sha256(raw).hexdigest()
+    if actual != expected:
+        return (
+            Af01VerificationReport(
+                verdict=VERDICT_DRIFT,
+                checks={"payload_ledger_sha256": "FAIL"},
+                mismatches=[f"payload_ledger_sha256: expected={expected} actual={actual}"],
+            ),
+            None,
+        )
+    entries = parse_payload_ledger(raw.decode("utf-8"))
+    return (
+        Af01VerificationReport(verdict=VERDICT_PASS, checks={"payload_ledger_sha256": "PASS"}),
+        entries,
+    )
+
+
+def verify_ledger_bytes(ledger_path: Path | str | None = None) -> Af01VerificationReport:
+    """台帳ファイル自身の実バイト sha256 を凍結値と照合する（bundle 不要）。"""
+    return read_and_verify_ledger(ledger_path)[0]
+
+
+def check_ledger_structure(entries: Mapping[str, str]) -> Tuple[Dict[str, str], List[str]]:
+    """§7.3 の構造量を台帳だけで検査する（bundle 不要）。"""
+    checks: Dict[str, str] = {}
+    problems: List[str] = []
+
+    unit_wavs = [p for p in entries if p.split("/")[0] in AF01_PITCHES and p.endswith(".wav")]
+    checks["unit_wav_count"] = "PASS" if len(unit_wavs) == AF01_UNIT_FILE_COUNT else "FAIL"
+    if checks["unit_wav_count"] == "FAIL":
+        problems.append(f"unit WAV 数: expected={AF01_UNIT_FILE_COUNT} actual={len(unit_wavs)}")
+
+    for pitch in AF01_PITCHES:
+        aliases = [p for p in unit_wavs if p.startswith(f"{pitch}/")]
+        key = f"alias_count_{pitch}"
+        checks[key] = "PASS" if len(aliases) == AF01_ALIAS_COUNT else "FAIL"
+        if checks[key] == "FAIL":
+            problems.append(f"{pitch} alias 数: expected={AF01_ALIAS_COUNT} actual={len(aliases)}")
+        oto = f"{pitch}/oto.ini"
+        checks[f"oto_ini_{pitch}"] = "PASS" if oto in entries else "FAIL"
+        if oto not in entries:
+            problems.append(f"{oto} が台帳に無い")
+
+    e0_wavs = [
+        p for p in entries if p.startswith("E0_calibration/") and p.endswith(".wav")
+    ]
+    checks["e0_fixture_count"] = "PASS" if len(e0_wavs) == AF01_E0_CALIBRATION_CASES else "FAIL"
+    if checks["e0_fixture_count"] == "FAIL":
+        problems.append(
+            f"E0 fixture 数: expected={AF01_E0_CALIBRATION_CASES} actual={len(e0_wavs)}"
+        )
+
+    truth = "E0_calibration/E0_calibration_truth.json"
+    checks["e0_truth_manifest"] = "PASS" if truth in entries else "FAIL"
+    if truth not in entries:
+        problems.append(f"{truth} が台帳に無い")
+
+    probes = [p for p in entries if "/" not in p and p.endswith(".wav")]
+    checks["aggregate_probe_count"] = (
+        "PASS" if len(probes) == AF01_AGGREGATE_PROBE_COUNT else "FAIL"
+    )
+    if checks["aggregate_probe_count"] == "FAIL":
+        problems.append(
+            f"aggregate probe 数: expected={AF01_AGGREGATE_PROBE_COUNT} actual={len(probes)}"
+        )
+
+    for name, pin_key in CANONICAL_ENTRIES.items():
+        expected = AF01_FROZEN_HASHES[pin_key]
+        actual = entries.get(name)
+        ok = actual == expected
+        checks[f"canonical_{pin_key}"] = "PASS" if ok else "FAIL"
+        if not ok:
+            problems.append(f"{name}: expected={expected} actual={actual}")
+
+    return checks, problems
+
+
+def verify_bundle(
+    bundle_root: Path | str,
+    ledger_path: Path | str | None = None,
+) -> Af01VerificationReport:
+    """bundle 実体を台帳と突き合わせる（§29 手順 6 の完全版）。"""
+    root = Path(bundle_root)
+    if not root.is_dir():
+        return Af01VerificationReport(
+            verdict=VERDICT_UNAVAILABLE,
+            checks={"bundle_present": "FAIL"},
+            missing=[str(root)],
+        )
+
+    source = Path(ledger_path) if ledger_path is not None else (root / "PAYLOAD_SHA256SUMS.txt")
+    ledger_report, entries = read_and_verify_ledger(source)
+    if entries is None:
+        return ledger_report
+
+    checks, problems = check_ledger_structure(entries)
+    checks["payload_ledger_sha256"] = "PASS"
+
+    missing: List[str] = []
+    mismatches: List[str] = []
+    escaping: List[str] = []
+    for relative, expected in sorted(entries.items()):
+        target = root / relative
+        # payload バイトが bundle に含まれていることを字句上と解決後の両方で
+        # 要求する（`containment_violation()` が唯一の実装）。
+        breach = containment_violation(root, relative)
+        if breach is not None:
+            escaping.append(breach)
+            continue
+        if not target.is_file():
+            missing.append(relative)
+            continue
+        actual = compute_file_sha256(target)
+        if actual != expected:
+            mismatches.append(f"{relative}: expected={expected} actual={actual}")
+    checks["payload_files_present"] = "PASS" if not missing else "FAIL"
+    checks["payload_files_sha256"] = "PASS" if not mismatches else "FAIL"
+    checks["payload_contained_in_bundle"] = "PASS" if not escaping else "FAIL"
+    mismatches.extend(escaping)
+
+    # 台帳対象外の登録ファイルにも同じ containment を課す（第 6 巡 P2）。
+    registration_breaches = [
+        breach
+        for breach in (containment_violation(root, name) for name in LEDGER_EXCLUDED_NAMES)
+        if breach is not None
+    ]
+    checks["registration_contained_in_bundle"] = "PASS" if not registration_breaches else "FAIL"
+    escaping.extend(registration_breaches)
+
+    known = set(entries) | set(LEDGER_EXCLUDED_NAMES)
+    unexpected = sorted(
+        str(p.relative_to(root))
+        for p in root.rglob("*")
+        if p.is_file() and str(p.relative_to(root)) not in known
+    )
+    checks["no_unledgered_payload"] = "PASS" if not unexpected else "FAIL"
+
+    failed = problems or missing or mismatches or unexpected or escaping
+    return Af01VerificationReport(
+        verdict=VERDICT_DRIFT if failed else VERDICT_PASS,
+        checks=checks,
+        mismatches=mismatches + problems,
+        missing=missing,
+        unexpected=unexpected,
+    )
+
+
+def verify_deterministic_replay(
+    bundle_root: Path | str,
+    python_executable: Optional[str] = None,
+    timeout_s: int = 1800,
+) -> Af01VerificationReport:
+    """同梱 generator を再実行し、再生成 payload の台帳が凍結台帳と一致するか（§29 手順 7）。
+
+    generator は standalone（VoiceGenesis / AQUEST を import しない — §7.3）で
+    あるため、一時ディレクトリで実行して出力だけを比較する。generator が
+    出力先引数を受け付けない場合は cwd 出力とみなす。
+    """
+    root = Path(bundle_root)
+    generator = root / "generator_AF01_SF1.py"
+    if not generator.is_file():
+        return Af01VerificationReport(
+            verdict=VERDICT_UNAVAILABLE,
+            checks={"generator_present": "FAIL"},
+            missing=[str(generator)],
+        )
+
+    ledger_source = root / "PAYLOAD_SHA256SUMS.txt"
+    ledger_report, frozen = read_and_verify_ledger(ledger_source)
+    if frozen is None:
+        return ledger_report
+
+    # generator を **起動する前に** 実バイトを認証する。台帳だけ検証して
+    # bundle 側の generator をそのまま実行すると、drift を検出するはずの
+    # 検証器が「drift した任意の Python を実行する」経路になる
+    # （PR #330 Codex 第 1 巡 P1 / AGENTS.md「hash した bytes と実行された
+    # bytes の間に cache の窓が無いか」）。
+    expected_generator = frozen.get("generator_AF01_SF1.py")
+    if expected_generator is None:
+        return Af01VerificationReport(
+            verdict=VERDICT_DRIFT,
+            checks={"generator_in_ledger": "FAIL"},
+            mismatches=["generator_AF01_SF1.py が台帳に無い"],
+        )
+    if expected_generator != AF01_FROZEN_HASHES["af01_generator_sha256"]:
+        return Af01VerificationReport(
+            verdict=VERDICT_DRIFT,
+            checks={"generator_ledger_matches_frozen_pin": "FAIL"},
+            mismatches=[
+                f"台帳の generator sha が凍結 pin と不一致:"
+                f" ledger={expected_generator}"
+                f" pin={AF01_FROZEN_HASHES['af01_generator_sha256']}"
+            ],
+        )
+    # bytes を **1 回だけ読み**、その buffer を hash する。hash 後に
+    # インタプリタが同じパスを開き直す形だと、hash と open の間に差し替えられた
+    # 任意の Python が実行され、前後の hash は一致したままになる
+    # （PR #330 Codex 第 7 巡 P1 — 第 4 巡の before/after hash では不十分だった）。
+    try:
+        generator_bytes = generator.read_bytes()
+    except OSError as exc:
+        return Af01VerificationReport(
+            verdict=VERDICT_UNAVAILABLE,
+            checks={"generator_readable": "FAIL"},
+            mismatches=[str(exc)],
+        )
+    generator_sha_before = hashlib.sha256(generator_bytes).hexdigest()
+    if generator_sha_before != expected_generator:
+        return Af01VerificationReport(
+            verdict=VERDICT_DRIFT,
+            checks={"generator_authenticated_before_run": "FAIL"},
+            mismatches=[
+                f"generator_AF01_SF1.py: expected={expected_generator}"
+                f" actual={generator_sha_before}（実行しない）"
+            ],
+        )
+
+    with tempfile.TemporaryDirectory(prefix="af01_replay_") as tmp:
+        workdir = Path(tmp) / "out"
+        workdir.mkdir()
+        # 認証済み buffer を専用ディレクトリへ書き出し、**その複製を実行する**。
+        # 実行対象を bundle 側のパスから切り離すことで、hash した bytes と
+        # 実行された bytes の同一性を構成的に保証する。
+        execdir = Path(tmp) / "exec"
+        execdir.mkdir()
+        authenticated = execdir / "generator_AF01_SF1.py"
+        authenticated.write_bytes(generator_bytes)
+        written_sha = compute_file_sha256(authenticated)
+        if written_sha != expected_generator:  # pragma: no cover - 書き込み破損
+            return Af01VerificationReport(
+                verdict=VERDICT_DRIFT,
+                checks={"authenticated_copy_sha256": "FAIL"},
+                mismatches=[f"複製 sha={written_sha} expected={expected_generator}"],
+            )
+        try:
+            completed = subprocess.run(
+                [python_executable or sys.executable, str(authenticated)],
+                cwd=workdir,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return Af01VerificationReport(
+                verdict=VERDICT_UNAVAILABLE,
+                checks={"generator_run": "TIMEOUT"},
+            )
+        if completed.returncode != 0:
+            return Af01VerificationReport(
+                verdict=VERDICT_UNAVAILABLE,
+                checks={"generator_run": "FAIL"},
+                mismatches=[completed.stderr.strip()[-2000:]],
+            )
+
+        rebuilt: Dict[str, str] = {}
+        for produced in sorted(workdir.rglob("*")):
+            if not produced.is_file():
+                continue
+            relative = str(produced.relative_to(workdir))
+            if relative in LEDGER_EXCLUDED_NAMES:
+                continue
+            rebuilt[relative] = compute_file_sha256(produced)
+
+    # 実行対象は複製なので同一性は構成的に保証済み。ここでの再 hash は
+    # 「bundle 側の generator が run 中に書き換えられた」ことを検出する
+    # 追加診断であり、実行バイトの認証はこれに依存しない。
+    generator_sha_after = compute_file_sha256(generator)
+    if generator_sha_after != generator_sha_before:
+        return Af01VerificationReport(
+            verdict=VERDICT_DRIFT,
+            checks={
+                "generator_authenticated_before_run": "PASS",
+                "executed_authenticated_copy": "PASS",
+                "bundle_generator_unchanged_after_run": "FAIL",
+            },
+            mismatches=[
+                f"bundle 側の generator_AF01_SF1.py が実行中に変化した:"
+                f" before={generator_sha_before} after={generator_sha_after}"
+            ],
+        )
+
+    required = {k: v for k, v in frozen.items() if k not in REPLAY_INPUT_ONLY_ENTRIES}
+    missing = sorted(set(required) - set(rebuilt))
+    unexpected = sorted(set(rebuilt) - set(frozen))
+    mismatches = [
+        f"{path}: frozen={frozen[path]} rebuilt={rebuilt[path]}"
+        for path in sorted(set(required) & set(rebuilt))
+        if frozen[path] != rebuilt[path]
+    ]
+    identical = not (missing or unexpected or mismatches)
+    return Af01VerificationReport(
+        verdict=VERDICT_PASS if identical else VERDICT_DRIFT,
+        checks={
+            "generator_authenticated_before_run": "PASS",
+            "executed_authenticated_copy": "PASS",
+            "bundle_generator_unchanged_after_run": "PASS",
+            "generator_run": "PASS",
+            "deterministic_payload_replay": "PASS" if identical else "FAIL",
+        },
+        mismatches=mismatches,
+        missing=missing,
+        unexpected=unexpected,
+    )
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="AF01 v1.0 凍結検証（DESIGN_RUN10 §29 手順 6/7）")
+    parser.add_argument(
+        "--bundle-root",
+        default=None,
+        help="AF01 bundle 展開先。省略時は同梱台帳の自己検証と構造検査のみ実行する。",
+    )
+    parser.add_argument(
+        "--replay",
+        action="store_true",
+        help="§29 手順 7 の決定論的 payload replay も実行する（--bundle-root 必須）。",
+    )
+    parser.add_argument("--json-out", default=None, help="検証レポートの書き出し先。")
+    args = parser.parse_args(argv)
+
+    if args.replay and args.bundle_root is None:
+        # `--replay` を bundle なしで受理して exit 0 を返すと、自動化が
+        # §29 手順 7 を「成功」として記録できてしまう（PR #330 Codex 第 2 巡 P2）。
+        parser.error("--replay には --bundle-root が必要（bundle なしで手順 7 は成立しない）")
+
+    if args.bundle_root is None:
+        report, entries = read_and_verify_ledger()
+        if entries is not None:
+            checks, problems = check_ledger_structure(entries)
+            checks["payload_ledger_sha256"] = "PASS"
+            report = Af01VerificationReport(
+                verdict=VERDICT_PASS if not problems else VERDICT_DRIFT,
+                checks=checks,
+                mismatches=problems,
+            )
+    elif args.replay:
+        # replay は bundle 実体照合の**後**に走らせる（手順 6 → 手順 7 の順序）。
+        report = verify_bundle(args.bundle_root)
+        if report.passed:
+            replay = verify_deterministic_replay(args.bundle_root)
+            report = Af01VerificationReport(
+                verdict=replay.verdict,
+                checks={**report.checks, **replay.checks},
+                mismatches=report.mismatches + replay.mismatches,
+                missing=report.missing + replay.missing,
+                unexpected=report.unexpected + replay.unexpected,
+            )
+    else:
+        report = verify_bundle(args.bundle_root)
+
+    payload = json.dumps(report.to_json(), ensure_ascii=False, indent=2, sort_keys=True)
+    print(payload)
+    if args.json_out:
+        # 既存の検証レポートを in-place truncate すると、中断・容量不足で
+        # 前の有効な証拠を壊して部分 JSON を残す。inventory 側と同じく
+        # リポジトリの atomic write 集約実装へ委譲する（第 11 巡 P2）。
+        atomic_write_bytes(Path(args.json_out), (payload + "\n").encode("utf-8"))
+    return 0 if report.passed else 1
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
