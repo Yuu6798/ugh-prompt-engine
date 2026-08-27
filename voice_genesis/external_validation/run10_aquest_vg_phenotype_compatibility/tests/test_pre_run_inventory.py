@@ -357,8 +357,10 @@ def test_near_miss_document_does_not_resolve_the_reference(tmp_path: Path) -> No
     していたため、正典 `VoiceGenesis_Evolution_Theory_v0.3_ja.md` を欠いた
     まま R10-G2 が COMPLETE になり得た（来歴汚染）。
     """
-    (_foundry(tmp_path) / "VISION_evolution_theory_v0.3.md").write_text("x", encoding="utf-8")
-    item = inv._check_evolution_theory(tmp_path)
+    near_miss = _foundry(tmp_path) / "VISION_evolution_theory_v0.3.md"
+    near_miss.write_text("x", encoding="utf-8")
+    # 近縁文書を照合対象に渡しても、題名が正典と違う時点で解決しない。
+    item = inv._check_evolution_theory(tmp_path, near_miss)
     assert item.state == inv.UNRESOLVED
     assert item.blocking is True
 
@@ -430,25 +432,37 @@ def test_private_path_is_never_recorded(tmp_path: Path, monkeypatch) -> None:
         assert str(secret) not in item.detail
 
 
-def test_reference_is_unresolved_without_a_body_path(tmp_path: Path, monkeypatch) -> None:
-    """pin があっても照合対象が未指定なら解決しない。"""
+def test_pin_alone_resolves_the_reference(tmp_path: Path, monkeypatch) -> None:
+    """R10-G2 が要求するのは参照の同定であり、契約 pin で成立する。
+
+    実体照合を必須にすると、本体を commit しない限り永久に解決不能になる
+    （User 裁定 2026-08-27: 本文書はリポジトリに載せない）。実体照合は
+    `--evolution-theory-path` を渡したときの追加検査である。
+    """
     _pin(monkeypatch, "a" * 64)
     item = inv._check_evolution_theory(tmp_path, None)
-    assert item.state == inv.UNRESOLVED
-    assert item.blocking is True
+    assert item.state == inv.PRESENT
+    assert item.blocking is False
     assert "--evolution-theory-path" in item.detail
 
 
-def test_pin_is_still_pending(tmp_path: Path) -> None:
-    """pin 未取得の間は、実体を渡しても解決にしない（証明できないため）。"""
-    digest, why = inv._evolution_theory_pin()
-    assert digest is None
-    assert inv.EVOLUTION_THEORY_PIN_FIELD in why
+def test_missing_pin_blocks_even_with_a_body(tmp_path: Path, monkeypatch) -> None:
+    """pin が無ければ、実体を渡しても解決にしない（照合先が無いため）。"""
+    monkeypatch.setattr(
+        inv, "_evolution_theory_pin", lambda contract_path=None: (None, "の pin が無い。")
+    )
     body = tmp_path / inv.EVOLUTION_THEORY_CANONICAL
     body.write_text("x", encoding="utf-8")
     item = inv._check_evolution_theory(tmp_path, body)
     assert item.state == inv.UNRESOLVED
-    assert inv.EVOLUTION_THEORY_PIN_FIELD in item.detail
+    assert item.blocking is True
+
+
+def test_committed_contract_pins_the_reference() -> None:
+    """§29 手順 5 は完了している（User 照合 2026-08-27）。"""
+    digest, why = inv._evolution_theory_pin()
+    assert why == ""
+    assert digest == "87f4208ffdd213099977c4b5a1ee5d06852524036c818e4b14ce6b0e355b2e93"
 
 
 # --- 第 18 巡: pin の出所を契約 1 箇所に閉じる（PR #330 Codex 第 18 巡 P1）--

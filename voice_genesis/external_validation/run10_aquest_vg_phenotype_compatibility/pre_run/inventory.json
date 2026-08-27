@@ -5,7 +5,6 @@
     "af01_deterministic_replay",
     "aquest_voicebank_files",
     "a0_recorded_pitch_inventory",
-    "evolution_theory_reference",
     "meter_implementation",
     "v1_generation_route"
   ],
@@ -56,10 +55,10 @@
       "state": "UNRESOLVED"
     },
     {
-      "blocking": true,
-      "detail": "リポジトリ内に存在する近縁参照（判定材料ではない）: ['voice_genesis/foundry/VISION_evolution_theory_v0.2.md', 'voice_genesis/foundry/VISION_evolution_theory_v0.1.md', 'voice_genesis/foundry/VISION_evolution_v0.3_supplementA_spr.md']. §36 が実在を確認した v0.3 本体 'VoiceGenesis_Evolution_Theory_v0.3_ja.md' の凍結 sha256 が未取得（RUN10_CONTRACT.yaml vg_evolution_theory_ref_sha = PENDING）。pin が無い限り「正しい実体が在る」ことは証明できないため解決にしない。",
+      "blocking": false,
+      "detail": "リポジトリ内に存在する近縁参照（判定材料ではない）: ['voice_genesis/foundry/VISION_evolution_theory_v0.2.md', 'voice_genesis/foundry/VISION_evolution_theory_v0.1.md', 'voice_genesis/foundry/VISION_evolution_v0.3_supplementA_spr.md']. §36 が実在を確認した v0.3 本体 'VoiceGenesis_Evolution_Theory_v0.3_ja.md' は契約 pin により同定済み（§29 手順 5 解決）。本体は private storage 側にあり commit しない。実体バイトの照合が要るときは --evolution-theory-path を渡す。",
       "item_id": "evolution_theory_reference",
-      "state": "UNRESOLVED"
+      "state": "PRESENT"
     },
     {
       "blocking": true,

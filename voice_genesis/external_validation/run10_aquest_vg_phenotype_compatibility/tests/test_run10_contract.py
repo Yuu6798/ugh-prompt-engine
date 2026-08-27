@@ -73,7 +73,8 @@ def test_contract_parses_and_reports_true_gate_state(contract: m.Run10Contract) 
     assert contract.gate_r10_g0() == "BLOCKED"
     missing = contract.missing("CORE")
     assert missing, "Core 欄が全て pin 済みなら BLOCKED にならないはず"
-    # PINNED 済みの欄は AF01 由来の 4 件 + attempt_id。
+    # PINNED 済みの欄は AF01 由来の 4 件 + attempt_id
+    # + Evolution Theory v0.3 参照（User 照合 2026-08-27 で §29 手順 5 完了）。
     pinned = [n for n in m.CORE_PIN_FIELDS if contract.pin(n).pinned]
     assert set(pinned) == {
         "attempt_id",
@@ -81,6 +82,7 @@ def test_contract_parses_and_reports_true_gate_state(contract: m.Run10Contract) 
         "vg_body_artifact_sha",
         "e0_external_calibration_source_sha",
         "e0_af01_sf1_truth_sha",
+        "vg_evolution_theory_ref_sha",
     }
 
 

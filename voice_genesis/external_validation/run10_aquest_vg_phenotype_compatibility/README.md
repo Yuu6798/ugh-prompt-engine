@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（332 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（333 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -526,3 +526,25 @@ R10-G0 は契約側の digest を検証しながら R10-G2 は別バイトを PR
 場合はいずれも None（fail-closed）で R10-G2 を塞ぐ。乖離の検出ではなく、
 乖離し得る状態そのものを無くす方向で終端した。
 `test_module_has_no_independent_digest_constant` が再発を機械強制する。
+
+## §29 手順 5 完了（2026-08-27）
+
+Evolution Theory v0.3 参照が解決した。User が Drive 上の
+`VoiceGenesis_Evolution_Theory_v0.3_ja.md` を raw ファイルとして取得し実バイトを
+照合。複製 2 件（file ID `1b-RQJl9C8RA7uUiAxcTAmTG53Zs5rHIb` /
+`1MC1FPipyyseaXRil6igZOxsqggsyBNVL`）は 25,119 bytes・同一 sha256 で IDENTICAL。
+
+```
+vg_evolution_theory_ref_sha = 87f4208ffdd213099977c4b5a1ee5d06852524036c818e4b14ce6b0e355b2e93
+```
+
+`RUN10_CONTRACT.yaml` の当該 pin に PINNED として記録した（**digest の出所はここ
+1 箇所**。第 18 巡の通り、モジュール定数は置かない）。これにより R10-G0 の CORE
+pin 未充足は 37 → 36 件になった。
+
+R10-G2 が要求するのは §29 手順 5 の「Evolution Theory v0.3 **location**」=
+参照の同定であり、契約 pin の成立をもって `evolution_theory_reference` は
+PRESENT / 非 blocking になる。本体はリポジトリに載せない（User 裁定 2026-08-27）
+ため、実体バイトの照合は `--evolution-theory-path` を渡したときの**追加検査**と
+した — 必須にすると本体を commit しない限り永久に解決不能になるからである。
+渡されたのに一致しない場合は同名の別内容 = 来歴汚染として UNRESOLVED へ落とす。

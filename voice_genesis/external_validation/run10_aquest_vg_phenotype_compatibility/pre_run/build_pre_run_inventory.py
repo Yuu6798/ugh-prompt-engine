@@ -429,16 +429,22 @@ def _check_evolution_theory(
 ) -> InventoryItem:
     """§29 手順 5: Evolution Theory v0.3 本体の解決。
 
-    判定は**凍結 sha256 と実体バイトの一致**のみで行う。近縁文書の発見リストは
-    報告用であって判定材料ではない — 第 16 巡以前は
+    R10-G2 が要求するのは「Evolution Theory v0.3 **location**」であり、
+    参照の同定である。同定が成立するのは契約 `vg_evolution_theory_ref_sha` が
+    PINNED のときで、この pin が digest の唯一の出所である。近縁文書の発見
+    リストは報告用であって判定材料ではない — 第 16 巡以前は
     `VISION_evolution_theory_v0.3.md` の実在で PRESENT にしていたため、
     別名の別文書が追加された瞬間に「解決済み」になり、しかも同じ detail が
     「v0.3 本体は不在」と言い続ける自己矛盾を出していた。
 
-    本体は private storage 側にあり、リポジトリには載せない。したがって照合
-    対象は実行時に渡されるローカルパスである。**渡されたパス文字列は
-    detail に書かない** — inventory.json は commit されるため、private
-    ストレージの構成を公開することになる（§2.2 / §26）。
+    本体は private storage 側にあり、リポジトリには載せない（User 裁定
+    2026-08-27）。したがって実体バイトの照合は**任意**であり、
+    `--evolution-theory-path` が渡されたときにだけ行う。渡されたのに
+    一致しない場合は同名の別内容 = 来歴汚染なので UNRESOLVED へ落とす。
+    実体照合を必須にすると、本体を commit しない限り永久に解決不能になる。
+
+    **渡されたパス文字列は detail に書かない** — inventory.json は commit
+    されるため、private ストレージの構成を公開することになる（§2.2 / §26）。
     """
     discovered = [c for c in EVOLUTION_THEORY_DISCOVERY_CANDIDATES if (repo / c).is_file()]
     found_note = f"リポジトリ内に存在する近縁参照（判定材料ではない）: {discovered}. "
@@ -457,10 +463,16 @@ def _check_evolution_theory(
         return unresolved(why)
 
     if body_path is None:
-        return unresolved(
-            "は private storage 側にあり、照合対象が未指定"
-            "（--evolution-theory-path 未指定）。本文書はリポジトリに載せないため、"
-            "実体照合は実行時にのみ成立する。"
+        return InventoryItem(
+            item_id="evolution_theory_reference",
+            state=PRESENT,
+            detail=(
+                found_note + canonical_note
+                + "は契約 pin により同定済み（§29 手順 5 解決）。本体は private"
+                " storage 側にあり commit しない。実体バイトの照合が要るときは"
+                " --evolution-theory-path を渡す。"
+            ),
+            blocking=False,
         )
 
     body = Path(body_path)
@@ -485,7 +497,7 @@ def _check_evolution_theory(
         state=PRESENT,
         detail=(
             found_note + canonical_note
-            + "の実バイト sha256 が契約の pin と一致（§29 手順 5 解決）。"
+            + "の実バイト sha256 が契約の pin と一致（§29 手順 5 解決・実体照合済み）。"
             "本体は private storage 側にあり commit しない。"
         ),
         blocking=False,

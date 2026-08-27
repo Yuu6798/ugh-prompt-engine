@@ -166,14 +166,17 @@ wavtool_sha:
   reason: wavtool 未選定（§32 Stop Rule 7）。
 
 vg_evolution_theory_ref_sha:
-  value: null
-  status: PENDING
-  reason: >
-    §29 手順 5「resolve Evolution Theory reference」未完。本リポジトリには
-    voice_genesis/foundry/VISION_evolution_theory_v0.1.md / v0.2.md と
-    VISION_evolution_v0.3_supplementA_spr.md のみが存在し、§36 が実在を
-    確認した v0.3 本体（VoiceGenesis_Evolution_Theory_v0.3_ja.md）は
-    リポジトリ内に不在。Drive 側実体の実バイト sha が未取得。
+  value: 87f4208ffdd213099977c4b5a1ee5d06852524036c818e4b14ce6b0e355b2e93
+  status: PINNED
+  source: >
+    §29 手順 5「resolve Evolution Theory reference」完了。User が Drive 上の
+    VoiceGenesis_Evolution_Theory_v0.3_ja.md を raw ファイルとして取得し実バイトを
+    照合（2026-08-27）。複製 2 件（Drive file ID 1b-RQJl9C8RA7uUiAxcTAmTG53Zs5rHIb /
+    1MC1FPipyyseaXRil6igZOxsqggsyBNVL）は 25119 bytes・同一 sha256 で IDENTICAL。
+    本体はリポジトリに載せない（User 裁定 2026-08-27）ため、参照はこの pin のみで行う。
+    実体照合が必要なときは
+    `build_pre_run_inventory.py --evolution-theory-path <private storage の実体>`。
+    本 pin が digest の唯一の出所である（モジュール定数を置かない — 二重管理の pin は乖離する）。
 
 af_p0_design_ref_sha:
   value: null
