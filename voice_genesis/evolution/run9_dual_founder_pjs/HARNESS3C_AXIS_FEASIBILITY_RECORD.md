@@ -1135,3 +1135,111 @@ manifest_v1.json` 自体の内容（`provenance.detail_record.sha256` 以外）
 `pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
 2542 件全 pass（第9巡時点の2532件から+10件: `aggregate_formula` 逐語一致
 検査10件〔正常系1件・欠落/改変拒否9件〕、他既存回帰）。
+
+## PR #331 Codex bot レビュー第11巡対応（2026-08-27、Claude 完結ルート）
+
+指摘2件、いずれも P1、いずれも Fable 採用判定（機械汚染防止領域）。上限
+10巡（`AGENTS.md` §3-4／CLAUDE.md「上限10ラウンド」）到達後の指摘だが、
+3分類（実コード被害/将来汚染・致命的バグ）のうち「致命的バグ」（指摘1=
+評価時挙動が未定義のまま仕様矛盾を放置すれば eligible 会計が実装依存で
+分岐する／指摘2=偽成功経路——実際には何も学習できていない run を恒等勝者
+であるかのように記録し得る）に該当する新規具体経路であるため、打ち切り
+（CLAUDE.md「打ち切りは3分類を上書きしない」）の対象外として採用する。
+実装・検証・返信起草は Sonnet に委譲、コミット/push は Fable が別途実行
+する（本追記フェーズでは未実施）。
+
+1. **normalized_energy のペア除外規則の未定義是正（P1）**:
+   `residual_correspondence.per_channel_aggregation.relative_f0` は
+   「voiced frame が両側いずれかでゼロの mora は当該 channel の比較から
+   除外し、除外数を eligible 会計へ記録する」というペア除外規則を既に
+   凍結していたが、同節の `normalized_energy` にはこの規則が存在せず、
+   lesson 側 mora に energy block が1つも無い場合の評価時挙動（空平均で
+   NaN になるのか、mora ごと破棄するのか）が未定義のまま残っていた——
+   `calibration_scale.derivation.option_c_mora_pool` は pjs096 の
+   zero-block mora 1件を除外した実測（n=2747）を記録していたにも
+   かかわらず、この除外が評価時のどの規則に基づくものか本文からは
+   読み取れなかった。`normalized_energy` の集約規則を二段構造へ逐語
+   凍結し直した: (a) 構造検査 = aligned mora 数の両側完全一致（既存
+   fail-closed を維持）、(b) channel 固有 eligibility = lesson 側・
+   render 側の双方に energy block が1件以上存在する mora のみ eligible
+   とする（ペア除外——relative_f0 の voiced frame ペア規則と同型）。
+   除外 mora の index 列挙を trial 記録へ必須収載し、eligible 件数は
+   ペア除外後の件数と明記、`missing_policy.not_measurable_definition`
+   （eligible==0 の candidate は NOT_SCORABLE）と接続した。calibration
+   導出欄の pjs096 除外注記にも、当該除外が本ペア除外規則の lesson 側
+   単独適用と一致する旨を追記した。`run9_schema.
+   _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_PER_CHANNEL
+   ["normalized_energy"]` を新文言と逐語一致させ（既存の per_channel
+   汎用ループ検査がそのまま適用される）、
+   `test_h3c_loss_evaluator_residual_correspondence_normalized_energy_
+   pairing_rule_tamper_rejected` を新設して規則を落とした旧文言への
+   改ざんが拒否されることを確認した。
+
+2. **best 不在と恒等候補の混同の是正（P1）**: `candidate_proposal.py` の
+   `neighbors_of()`/`propose_trial_candidates()` は `current_best:
+   Optional[Candidate]` の `None` を恒等（identity）専用の意味で使って
+   いたが、`missing_policy` が定める「trial 内の全 candidate が
+   NOT_SCORABLE の場合、best 更新なしで次 trial へ進む」規則により、
+   trial 1 の恒等候補を含む全4候補が NOT_SCORABLE となった場合（または
+   それ以降も scorable な候補が一度も確定しない場合）、「best が定まって
+   いない」状態を表す値が存在しなかった——`None` を「恒等が best」と
+   「best 不在」の両方に流用すると、`neighbors_of()` がこれを取り違え、
+   一度も scorable と確認されていない恒等の近傍を生成してしまう
+   （架空の best からの探索という偽成功経路）。コードを実読し、
+   `candidate_proposal.py` 自体には現時点で全4候補 NOT_SCORABLE の実行
+   ループ（best 追跡込みの generator）はまだ配線されていない
+   （モジュール docstring が明記する既知のスコープ境界: 「実際の探索
+   ループ...は本モジュールの対象外であり別途配線する」）ことを確認した
+   うえで、`current_best` の型契約そのものに存在した欠陥（`None` の
+   多義性）を是正した——将来配線される generator が同じ欠陥を踏まない
+   ための型レベルの予防措置である。`NO_BEST` sentinel（`_NoBestSentinel`
+   クラスの単一インスタンス、`IDENTITY`=`None` とは別個の id）を新設し、
+   `neighbors_of()` は `current_best is NO_BEST` の場合、近傍候補集合を
+   常に空リストで返す（近傍3スロットは全欠 = shortfall、既存の
+   shortfall 経路が `exploratory_candidate_rule` で4枠すべてを決定論的に
+   充当する）。恒等候補の暗黙の再提案はしない——恒等は trial1_candidate0_
+   rule が定める trial 1 candidate 0 の1回のみで、NO_BEST から自動的に
+   恒等へ復帰することはない。`candidate_generation_spec_v1.json`
+   `proposal.neighborhood_candidate_rule` へ `no_best_handling` を新設し
+   （NO_BEST の定義・shortfall 全欠・mix 記録への理由
+   "NO_SCORABLE_BEST" の必須収載を凍結）、`current_best_definition`/
+   `current_best_may_be_identity` にも NO_BEST との区別を明記する改訂を
+   加えた。さらに `selection` 節へ
+   `no_scorable_candidate_terminal_state` を新設し、32 trial 終了時点
+   まで一度も scorable な candidate が確定しなかった場合の run 終端状態
+   `NO_SCORABLE_CANDIDATE`（勝者なし・暗黙の恒等採用なし・当該
+   Founder/arm の学習結果を正直に記録する）を凍結した。`run9_schema.
+   validate_candidate_generation_spec_manifest()` へ
+   `current_best_definition`/`current_best_may_be_identity`/
+   `no_best_handling`/`no_scorable_candidate_terminal_state` の逐語一致
+   検査を新設した（旧版はこれらのキーの存在のみを検査し中身は無検査
+   だった欠落を埋める）。`tests/test_candidate_proposal.py` へ
+   バグ再現系（`test_neighbors_of_none_still_means_identity_not_
+   absence`／`test_neighbors_of_no_best_returns_empty_list_not_
+   identity_neighbors`）・NO_BEST 挙動（`test_no_best_is_not_none`／
+   `test_select_neighborhood_candidates_no_best_returns_empty`／
+   `test_propose_trial_candidates_no_best_backfills_all_four_via_
+   exploratory`／`test_propose_trial_candidates_no_best_deterministic_
+   across_two_calls`）・NO_SCORABLE_CANDIDATE 終端の直接検証
+   （`test_propose_trial_candidates_no_best_never_revives_identity_
+   across_full_run`、127要件を満たす136要素 fixture で32 trial 完走
+   させ恒等が trial 1 の1回のみであることを確認）を追加した。
+
+**連鎖更新**: `inputs/loss_evaluator_spec_v1.json`（指摘1）・
+`inputs/candidate_generation_spec_v1.json`（指摘2）のバイト変更に伴い
+`RUN9_CONTRACT.yaml` の `loss_evaluator_spec_sha`/`candidate_generation_
+spec_sha` を repin した。さらに本節を新設したことに伴う
+`HARNESS3C_AXIS_FEASIBILITY_RECORD.md` 自体の実バイト sha256 変更により、
+5 manifest 共通の `provenance.detail_record.sha256` 参照値が全て追随
+更新となるため、5 manifest 全て（`score_axis_catalog_sha`/
+`loss_evaluator_spec_sha`/`candidate_generation_spec_sha`/
+`compute_budget_manifest_sha`/`learning_data_binding_manifest_sha`）を
+第1-10巡と同型の cascade repin した（旧値は `RUN9_CONTRACT.yaml` 側に
+世代履歴コメントとして append-only 保持）。`score_axis_catalog_v1.json`/
+`compute_budget_manifest_v1.json`/`learning_data_binding_manifest_v1.json`
+自体の内容（`provenance.detail_record.sha256` 以外）は本巡で無改訂。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q
+--tb=short` 全 pass（新設検査・参照実装テストの追加分だけ第10巡から件数
+増）。

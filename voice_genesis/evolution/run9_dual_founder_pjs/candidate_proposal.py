@@ -94,6 +94,31 @@ domain を導出し、`candidate_generation_spec_v1.json` 側のリテラル
 `offset_domain` 記述と cross-check する——run9_schema 側が計算式を複製
 しないための単一情報源化（`score_axis_transform.py`/本モジュールの
 既存方針と同型）。
+
+第11巡指摘2（P1「best 不在と恒等候補の混同」、採用）: `NO_BEST` sentinel
+を新設した。旧実装は `current_best: Optional[Candidate]` の `None` を
+恒等（identity）専用の意味で使っていたが、`missing_policy` が定める
+「trial 内の全 candidate が NOT_SCORABLE の場合、best 更新なしで次 trial
+へ進む」規則により、trial 1 の恒等候補を含む全4候補が NOT_SCORABLE と
+なった場合（またはそれ以降も scorable な候補が一度も現れない場合）、
+「best が定まっていない」状態を表す値が存在しなかった——`None` を
+「恒等が best」と「best 不在」の両方に流用すると、`neighbors_of()` が
+後者を誤って `identity_neighbor_rule` で処理し、実際には一度も scorable
+と確認されていない恒等の近傍を生成してしまう（架空の best からの探索
+という偽成功経路）。`NO_BEST` は `None`（= 恒等が正当な best として確定
+している状態）とは別個の値であり、`neighbors_of()` は `current_best is
+NO_BEST` の場合、近傍候補集合を空リストで返す——近傍3スロットは全欠
+（shortfall）となり、`propose_trial_candidates()` の既存 shortfall 経路
+（`exploratory_candidate_rule` による探査ストリーム補充）がスロット4枠
+すべてを決定論的に充当する。呼び出し側（次 PR で配線される generator）
+は、trial 境界で best を更新する際、直前 trial 終了時点で一度も scorable
+な candidate が確定していなければ `current_best` を `NO_BEST` のまま
+次 trial へ渡すことを要求される（`missing_policy`／
+`neighborhood_candidate_rule.no_best_handling` 参照）。mix 記録への
+理由 "NO_SCORABLE_BEST" の必須収載、および 32 trial 終了時点で一度も
+scorable な candidate が無かった場合の終端状態 `NO_SCORABLE_CANDIDATE`
+は `candidate_generation_spec_v1.json` `selection` 節が定義する
+（勝者なし・暗黙の恒等採用なしを凍結）。
 """
 from __future__ import annotations
 
@@ -311,6 +336,36 @@ def select_exploratory_candidate(
 IDENTITY: None = None
 
 
+class _NoBestSentinel:
+    """`NO_BEST` の型（PR #331 Codex bot レビュー第11巡指摘2、P1、採用）:
+    「best が一度も確定していない」状態を表す、`IDENTITY`（`None`）とは
+    別個のセンチネル。`None` は「恒等が正当な best として確定している」
+    という積極的な値であり、「scorable な候補が一つも無く best が不在」
+    という消極的な状態とは意味が異なる——両者を `None` 一つに重ねると
+    `neighbors_of()` が後者を誤って恒等近傍として扱ってしまう
+    （本モジュール docstring 冒頭の第11巡指摘2 節参照）。"""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "NO_BEST"
+
+    def __bool__(self) -> bool:
+        # 誤って truthy 文脈で恒等・非恒等候補と混同されないよう明示的に
+        # False を返す（`if current_best:` のような曖昧な分岐を書かせない
+        # ための安全策。正しい判定は常に `is NO_BEST` / `is None` で行う）。
+        return False
+
+
+# `NO_BEST` はモジュール内で単一のインスタンスとして共有するセンチネル。
+# 比較は常に `is NO_BEST` で行う（`==` ではなく id 同一性判定）。
+NO_BEST = _NoBestSentinel()
+
+# `current_best` パラメータの型: 非恒等候補（`Candidate`）／恒等
+# （`None` = `IDENTITY`）／best 不在（`NO_BEST`）のいずれか。
+CurrentBest = Union[Candidate, None, _NoBestSentinel]
+
+
 def _index_key(candidate: Candidate) -> Union[int, Tuple[int, Tuple[int, int]]]:
     """候補から index キー（AX-P1: note_index／AX-D1: (phrase_index, (i, j))）
     を取り出す。"""
@@ -349,7 +404,7 @@ def _sorted_index_keys(all_candidates: Sequence[Candidate], axis_id: str) -> Lis
 
 
 def neighbors_of(
-    current_best: Optional[Candidate],
+    current_best: CurrentBest,
     all_candidates: Sequence[Candidate],
     *,
     catalog: Mapping[str, Any],
@@ -358,6 +413,15 @@ def neighbors_of(
     `identity_neighbor_rule` の逐語実装。量子化ステップは `catalog`
     （`score_axis_catalog_v1.json` と同型の dict）から都度導出する
     （ハードコードしない、第5巡指摘1、P2、採用）。
+
+    現 best が `NO_BEST`（scorable な候補が一度も確定していない、第11巡
+    指摘2、P1、採用）の場合、近傍候補集合は常に空リストを返す——近傍3
+    スロットは全欠（shortfall）となり、`select_neighborhood_candidates()`
+    / `propose_trial_candidates()` の既存 shortfall 経路が探査規則
+    （`exploratory_candidate_rule`）でスロットを補充する。恒等
+    （`None`）の近傍とは扱いが異なる点に注意——`None` は「恒等が
+    scorable な best として確定した」ことを表す積極的な値であり、
+    `NO_BEST` はその確定自体が一度も起きていないことを表す。
 
     現 best が L の要素（単一軸候補）の場合、以下の優先順位リストを順に
     評価し、L に存在し（catalog 制約を満たし）かつ未 dedup の候補を集める
@@ -393,6 +457,11 @@ def neighbors_of(
     note_count / phrase 構成に対して3件を大きく上回るため、この
     integration は既存挙動を変更しない。
     """
+    if current_best is NO_BEST:
+        # NO_BEST: best が一度も確定していないため近傍を発明しない
+        # （架空の恒等近傍を生成しない——第11巡指摘2、P1、採用）。
+        return []
+
     candidate_set = set(all_candidates)
     ax_p1_step = _ax_p1_quantization_step(catalog)
     ax_d1_step = _ax_d1_quantization_step(catalog)
@@ -472,7 +541,7 @@ def candidate_ordinal(candidate: Optional[Candidate], all_candidates: Sequence[C
 
 
 def select_neighborhood_candidates(
-    current_best: Optional[Candidate],
+    current_best: CurrentBest,
     all_candidates: Sequence[Candidate],
     *,
     is_evaluated: Callable[[Candidate], bool],
@@ -544,7 +613,7 @@ def require_sufficient_candidate_space(
 def propose_trial_candidates(
     *,
     trial: int,
-    current_best: Optional[Candidate],
+    current_best: CurrentBest,
     all_candidates: Sequence[Candidate],
     catalog: Mapping[str, Any],
     seed: int,
@@ -571,6 +640,15 @@ def propose_trial_candidates(
     補充する（`shortfall_handling`）。近傍キューは各スロット処理直前に
     予約状態を再フィルタしてから消費するため、同一 trial 内の探査補充が
     後続スロットの近傍候補を予約済みにしても正しく除外される。
+
+    `current_best` が `NO_BEST`（第11巡指摘2、P1、採用: scorable な
+    候補が一度も確定していない状態）の場合、`neighbors_of()` が空リストを
+    返すため近傍3スロットは構造的に全欠となり、candidate 0..3 の4枠
+    すべてが `exploratory_candidate_rule`（探査ストリーム）で決定論的に
+    充当される——恒等（`None`）近傍を発明しない。呼び出し側はこの trial
+    の理由を "NO_SCORABLE_BEST" として trial log へ必須記録する
+    （`candidate_generation_spec_v1.json`
+    `proposal.neighborhood_candidate_rule.no_best_handling` 参照）。
 
     NOT_PROPOSABLE（探査規則の線形プロービングが全滅した）スロットは
     None として返す——架空の候補を発明しない。呼び出し側は返り値の None

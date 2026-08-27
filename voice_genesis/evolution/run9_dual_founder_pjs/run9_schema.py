@@ -18289,8 +18289,15 @@ _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_PER_CHANNEL: Dict[str, str] = {
         "channelの比較から除外し、除外数をeligible会計へ記録する（missing_policyと接続）。"
     ),
     "normalized_energy": (
-        "phrase正規化（residual_extraction_spec.energy_normalization、phrase単位で先に適用）後、mora区間内の"
-        "block-RMS値の算術平均。"
+        "(a) 構造検査: aligned mora数の両側完全一致（residual_formulaのfail-closed規則を維持——一致しない"
+        "場合は実装エラーとして比較を続行しない）。(b) channel固有eligibility: phrase正規化"
+        "（residual_extraction_spec.energy_normalization、phrase単位で先に適用）後、mora区間内の"
+        "block-RMS値の算術平均でmora単位に集約する。ただしlesson側・render側の双方にenergy blockが1件以上"
+        "存在するmoraのみeligibleとする（ペア除外——relative_f0のvoiced frameペア規則と同型）。lesson側・"
+        "render側いずれか一方でもenergy blockが0件のmoraは当該channelの比較から除外し、除外moraのindex"
+        "列挙をtrial記録へ必須収載する。eligible件数はこのペア除外後の件数を指す"
+        "（missing_policy.not_measurable_definitionと接続——eligible==0のcandidateはNOT_SCORABLEとして"
+        "記録される）。"
     ),
     "duration_ratio": "恒等——値がバンドル内で既にmora単位のスカラーのため対応規則は不要。",
     "attack_timing": "恒等——値がバンドル内で既にmora単位のスカラーのため対応規則は不要。",
@@ -18821,11 +18828,32 @@ _CANDIDATE_GENERATION_NEIGHBORHOOD_RULE_REQUIRED_KEYS: FrozenSet[str] = frozense
         "applies_to",
         "current_best_definition",
         "current_best_may_be_identity",
+        "no_best_handling",
         "neighbor_value_perturbation",
         "identity_neighbor_rule",
         "enumeration_order",
         "shortfall_handling",
     }
+)
+
+# neighborhood_candidate_rule.current_best_definition/current_best_may_be_identity/
+# no_best_handling の逐語凍結（PR #331 Codex bot レビュー第11巡指摘2、P1、採用）:
+# best 不在（NO_BEST）と恒等 best（None）の混同を防ぐための区別を凍結する。
+_CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_DEFINITION = (
+    '直前 trial 終了時点までに評価され NOT_SCORABLE でない candidate 群のうち selection.objective を最小化する候補。best 更新は trial 境界でのみ確定し、同一 trial 内の候補間の評価順は近傍算出に影響しない。trial 2 の直前 = trial 1 終了時点の最良候補（trial 1 は恒等候補 + hash-derived exploratory 3件の既定構成を維持し、この4件の中から選ぶ）。ただし直前 trial までに一度も scorable な candidate が確定していない場合（trial 1 の恒等候補を含む全4候補が NOT_SCORABLE だった場合を含む）、current_best は不在（no_best_handling 参照）であり恒等ではない'
+)
+_CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_MAY_BE_IDENTITY = (
+    'trial 1 の最良候補が恒等候補（全軸 0）である場合を含む。恒等は L の要素ではないため、この場合の近傍は identity_neighbor_rule に従う。恒等自体が NOT_SCORABLE で best になり得なかった場合は current_best_may_be_identity の対象外であり no_best_handling が適用される——恒等は「best が不在」と等価ではない'
+)
+_CANDIDATE_GENERATION_EXPECTED_NO_BEST_HANDLING = (
+    'trial 1 の恒等候補を含む全4候補が NOT_SCORABLE の場合（missing_policy「trial 内の全 candidate が NOT_SCORABLE の場合、当該 trial はそのまま記録し best 更新なしで次 trial へ進む」参照）、または最初に scorable な candidate が確定するまでの以降の trial でも同様に一度も scorable な candidate が無い場合、current_best は candidate_proposal.NO_BEST（IDENTITY=None とは別個のセンチネル）とする——None は「恒等が正当な best として確定している」ことを表す積極的な値であり、best が一度も確定していない消極的な状態と混同してはならない（PR #331 Codex bot レビュー第11巡指摘2、P1、採用: 旧仕様はこの区別を持たず、None の多義性により架空の恒等近傍が生成され得る欠陥があった）。current_best が NO_BEST の trial では、neighborhood_candidate_rule の近傍3スロットは構造的に全欠（shortfall = 3 全枠）となり、candidate 0..3 の4枠すべてを exploratory_candidate_rule（探査ストリーム、hash 系列）で決定論的に充当する。恒等候補の暗黙の再提案はしない——恒等は trial1_candidate0_rule が定める trial 1 candidate 0 の1回のみで、NO_BEST から自動的に恒等へ復帰することはない。この trial の理由 "NO_SCORABLE_BEST" を探索 trace（practice_actor_binding.trace_storage が定める trial log）へ必須記録する。参照実装: candidate_proposal.NO_BEST（`candidate_proposal.neighbors_of()` は NO_BEST を渡されると空リストを返す）。selection.no_scorable_candidate_terminal_state と接続する（32 trial 終了時点まで NO_BEST が続いた場合の run 終端状態）'
+)
+
+# selection.no_scorable_candidate_terminal_state の逐語凍結（PR #331 第11巡指摘2、
+# P1、採用）: 32 trial 終了時点まで scorable な candidate が一つも無かった場合の
+# run 終端状態。勝者なし・暗黙の恒等採用なしを凍結する。
+_CANDIDATE_GENERATION_EXPECTED_NO_SCORABLE_CANDIDATE_TERMINAL_STATE = (
+    '32 trial（trial 1..32）を通じて一度も scorable な candidate が確定しなかった場合（全 trial で NOT_SCORABLE が続き neighborhood_candidate_rule.no_best_handling の NO_BEST 状態が最終 trial まで解消しなかった場合）、当該 Founder/arm の run は終端状態 NO_SCORABLE_CANDIDATE として記録する。勝者なし（selection による best 選出を行わない）・暗黙の恒等候補採用なし（恒等が NOT_SCORABLE だった事実をそのまま維持し、恒等へのフォールバックで穴埋めしない）を凍結する——偽成功経路（実際には何も学習できていない run を、恒等を勝者としたかのように記録する経路）を構造的に排除するため。当該 Founder/arm の学習結果は NO_SCORABLE_CANDIDATE の事実をそのまま正直に記録する（reseed・予算追加・range 拡張のいずれも行わない、prohibited と同型の制約）。loss_evaluator_spec_v1.json の missing_policy.not_measurable_definition（candidate 単位・trial 単位の NOT_SCORABLE 規則）と接続する上位の run 終端規則である（PR #331 Codex bot レビュー第11巡指摘2、P1、採用）'
 )
 _CANDIDATE_GENERATION_PROPOSAL_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = frozenset(
     {
@@ -18895,7 +18923,7 @@ _CANDIDATE_GENERATION_EXPECTED_RUN_PRECONDITION_REQUIRED_MINIMUM_FORMULA = (
 # `selection` 節がそもそも validator の検査対象外だった欠落も本改訂で
 # 埋めた。
 _CANDIDATE_GENERATION_SELECTION_REQUIRED_KEYS: FrozenSet[str] = frozenset(
-    {"objective", "tie_break"}
+    {"objective", "tie_break", "no_scorable_candidate_terminal_state"}
 )
 _CANDIDATE_GENERATION_EXPECTED_TIE_BREAK = (
     "tie-break キーは (objective, candidate_ordinal) の全順序で決定論的に一意の勝者を選ぶ"
@@ -19105,6 +19133,34 @@ def _validate_candidate_generation_proposal_schedule(
             "candidate generation spec manifest.proposal.neighborhood_candidate_rule missing "
             f"required key(s): {sorted(missing_neighborhood)}"
         )
+    # current_best_definition/current_best_may_be_identity/no_best_handling の逐語凍結
+    # 検査（PR #331 第11巡指摘2、P1、採用）: best 不在（NO_BEST）と恒等 best（None）の
+    # 混同を防ぐ区別が repin で失われないことを保証する。
+    if neighborhood["current_best_definition"] != _CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_DEFINITION:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule."
+            "current_best_definition diverges from the pinned NO_BEST-aware definition — expected "
+            f"exactly {_CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_DEFINITION!r}, got "
+            f"{neighborhood['current_best_definition']!r}"
+        )
+    if (
+        neighborhood["current_best_may_be_identity"]
+        != _CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_MAY_BE_IDENTITY
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule."
+            "current_best_may_be_identity diverges from the pinned definition — expected exactly "
+            f"{_CANDIDATE_GENERATION_EXPECTED_CURRENT_BEST_MAY_BE_IDENTITY!r}, got "
+            f"{neighborhood['current_best_may_be_identity']!r}"
+        )
+    if neighborhood["no_best_handling"] != _CANDIDATE_GENERATION_EXPECTED_NO_BEST_HANDLING:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule."
+            "no_best_handling diverges from the pinned NO_BEST freeze — expected exactly "
+            f"{_CANDIDATE_GENERATION_EXPECTED_NO_BEST_HANDLING!r}, got "
+            f"{neighborhood['no_best_handling']!r} (PR #331 第11巡指摘2、P1、採用: best 不在と恒等 "
+            "best の混同を防ぐ区別を凍結する)"
+        )
 
     # 32×4=128 整合の再確認（structure 節の既存検査と独立に、proposal 節が
     # 記述する trial1(1+3) / trial2-32((3+1)*31) の候補内訳からも導出して
@@ -19189,6 +19245,20 @@ def _validate_candidate_generation_selection(selection: Mapping[str, Any]) -> No
             "candidate generation spec manifest.selection.tie_break must equal "
             f"{_CANDIDATE_GENERATION_EXPECTED_TIE_BREAK!r} exactly, got "
             f"{selection['tie_break']!r}"
+        )
+    # no_scorable_candidate_terminal_state の逐語凍結検査（PR #331 第11巡指摘2、P1、
+    # 採用）: 32 trial 終了時点まで scorable な candidate が一つも無かった場合の
+    # run 終端状態（勝者なし・暗黙の恒等採用なし）が repin で失われないことを保証する。
+    if (
+        selection["no_scorable_candidate_terminal_state"]
+        != _CANDIDATE_GENERATION_EXPECTED_NO_SCORABLE_CANDIDATE_TERMINAL_STATE
+    ):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.selection.no_scorable_candidate_terminal_state "
+            "diverges from the pinned NO_SCORABLE_CANDIDATE terminal-state freeze — expected "
+            f"exactly {_CANDIDATE_GENERATION_EXPECTED_NO_SCORABLE_CANDIDATE_TERMINAL_STATE!r}, "
+            f"got {selection['no_scorable_candidate_terminal_state']!r} (PR #331 第11巡指摘2、"
+            "P1、採用: 勝者なし・暗黙の恒等採用なしを凍結し偽成功経路を排除する)"
         )
 
 

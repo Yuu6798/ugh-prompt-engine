@@ -95,7 +95,7 @@
             "n_samples": 2747,
             "population_std": 0.1571927766940749,
             "mean": 0.343244778448749,
-            "rationale": "W1b Task3では未実測（frame/phraseの2案のみ実測済み）。PR #331第6巡でresidual_correspondence.per_channel_aggregation.normalized_energy（phrase正規化後のblock-RMS値をmora区間内で算術平均）どおりに追加実測: training_bundle.json（raw sha256=6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da照合、使用前に一致確認）のenergy_envelope.phrases[].blocks[].value（既にextractorがphrase内max正規化を適用済みの値、音声デコード・RMS再計算は行わない）を、education_lesson_extractor.pyのparse_lab_file/group_lab_to_morae_with_phrases（.lab再パースのみ、独立reimplementationはimportしてそのまま使用）で得た各moraの[t0,t1)区間へblock開始時刻t_sで振り分け、mora単位に算術平均して1mora=1標本としてプールした。block総数はW1b Task3のframeプール母数166053件と完全一致（同一block母集団からの集計であることを確認）。mora区間内にblockが1件も入らなかったmora1件（pjs096 phrase_index=0 mora_index=1、全2748件中）はゼロ補完せず除外し2747件がeligible。energy_mora_calibration_probe.py（session workdir限定、repo非収載）を独立2回のpython3プロセス起動で実行し出力JSONのsha256が完全一致することを確認（決定論成立）。",
+            "rationale": "W1b Task3では未実測（frame/phraseの2案のみ実測済み）。PR #331第6巡でresidual_correspondence.per_channel_aggregation.normalized_energy（phrase正規化後のblock-RMS値をmora区間内で算術平均）どおりに追加実測: training_bundle.json（raw sha256=6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da照合、使用前に一致確認）のenergy_envelope.phrases[].blocks[].value（既にextractorがphrase内max正規化を適用済みの値、音声デコード・RMS再計算は行わない）を、education_lesson_extractor.pyのparse_lab_file/group_lab_to_morae_with_phrases（.lab再パースのみ、独立reimplementationはimportしてそのまま使用）で得た各moraの[t0,t1)区間へblock開始時刻t_sで振り分け、mora単位に算術平均して1mora=1標本としてプールした。block総数はW1b Task3のframeプール母数166053件と完全一致（同一block母集団からの集計であることを確認）。mora区間内にblockが1件も入らなかったmora1件（pjs096 phrase_index=0 mora_index=1、全2748件中）はゼロ補完せず除外し2747件がeligible（この除外はresidual_correspondence.per_channel_aggregation.normalized_energyが凍結するペア除外規則のlesson側単独適用と一致する——calibrationはlesson側単一ソースのみから導出するため、render側判定は評価時に追加で必要になる）。energy_mora_calibration_probe.py（session workdir限定、repo非収載）を独立2回のpython3プロセス起動で実行し出力JSONのsha256が完全一致することを確認（決定論成立）。",
             "adopted_v1": false,
             "adopted_v2": true
           },
@@ -156,7 +156,7 @@
     "residual_formula": "per_channel_aggregationの規則を両側へ適用したmora単位スカラー列の差のRMS。両側のmora数は恒等対応で常に一致する——一致しない場合は実装エラーとしてfail-closed停止し、比較を続行しない。",
     "per_channel_aggregation": {
       "relative_f0": "mora区間内のvoiced frameの算術平均（float64）。voiced frameが両側いずれかでゼロのmoraは当該channelの比較から除外し、除外数をeligible会計へ記録する（missing_policyと接続）。",
-      "normalized_energy": "phrase正規化（residual_extraction_spec.energy_normalization、phrase単位で先に適用）後、mora区間内のblock-RMS値の算術平均。",
+      "normalized_energy": "(a) 構造検査: aligned mora数の両側完全一致（residual_formulaのfail-closed規則を維持——一致しない場合は実装エラーとして比較を続行しない）。(b) channel固有eligibility: phrase正規化（residual_extraction_spec.energy_normalization、phrase単位で先に適用）後、mora区間内のblock-RMS値の算術平均でmora単位に集約する。ただしlesson側・render側の双方にenergy blockが1件以上存在するmoraのみeligibleとする（ペア除外——relative_f0のvoiced frameペア規則と同型）。lesson側・render側いずれか一方でもenergy blockが0件のmoraは当該channelの比較から除外し、除外moraのindex列挙をtrial記録へ必須収載する。eligible件数はこのペア除外後の件数を指す（missing_policy.not_measurable_definitionと接続——eligible==0のcandidateはNOT_SCORABLEとして記録される）。",
       "duration_ratio": "恒等——値がバンドル内で既にmora単位のスカラーのため対応規則は不要。",
       "attack_timing": "恒等——値がバンドル内で既にmora単位のスカラーのため対応規則は不要。",
       "phrase_end_timing": "恒等——値がバンドル内で既にphrase単位のスカラーのため、mora単位ではなくphrase単位のまま比較する。"
@@ -207,7 +207,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "47b6f996eff0e70206e187ba7ed60b8102f4d6c51de7f3cf3d447175aabd495c",
+      "sha256": "5bfb8140e27ed248f265bbdc8e59824c63b46ea1f7952c7085cc3404a25ac4b2",
       "summary": "W1b Task3: training バンドル（sha256照合供給）68曲の5 channel母標準偏差実測。relative_f0/normalized_energyの標本粒度は両案（frame/mora,phrase）を実測し、W1b Task3時点ではFable判定（frame採用）を記録していたが、PR #331第6巡でresidual_correspondenceがaligned mora単位集約へ凍結された結果frame採用の前提が成立しなくなり、mora粒度採用（sample_unit: mora / adopted_v2: true）へ切替済み（第6巡追記節・本file同梱channels[].calibration_scale.derivation参照）。独立2プロセス実行で完全一致（決定論確認済み）。"
     },
     "training_bundle_input": {

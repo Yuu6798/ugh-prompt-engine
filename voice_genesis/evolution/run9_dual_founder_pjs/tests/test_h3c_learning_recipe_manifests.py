@@ -504,6 +504,22 @@ def test_h3c_loss_evaluator_residual_correspondence_residual_formula_missing_rej
         m.validate_loss_evaluator_spec_manifest(data)
 
 
+def test_h3c_loss_evaluator_residual_correspondence_normalized_energy_pairing_rule_tamper_rejected() -> None:
+    # PR #331 第11巡指摘1（P1、採用）の直接テスト: normalized_energy の
+    # ペア除外規則（lesson側・render側の双方にenergy blockが存在する
+    # moraのみeligible）を、規則を落とした旧文言へ差し替えると拒否される
+    # ことを確認する。
+    data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
+    data["residual_correspondence"]["per_channel_aggregation"]["normalized_energy"] = (
+        "phrase正規化（residual_extraction_spec.energy_normalization、phrase単位で先に適用）後、"
+        "mora区間内のblock-RMS値の算術平均。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match=r"per_channel_aggregation\['normalized_energy'\]"
+    ):
+        m.validate_loss_evaluator_spec_manifest(data)
+
+
 def test_h3c_loss_evaluator_reference_source_matches_frozen_constants() -> None:
     data = _manifest_data("loss_evaluator_spec")
     reference_source = data["reference_source"]

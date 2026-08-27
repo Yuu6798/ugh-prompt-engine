@@ -833,3 +833,153 @@ def test_propose_trial_candidates_does_not_mutate_caller_reserved_set() -> None:
         seed=909002, arm="arm-a", founder_id="R9F-01", reserved=reserved,
     )
     assert reserved == reserved_copy
+
+
+# ---------------------------------------------------------------------------
+# 9. NO_BEST sentinel（PR #331 Codex bot レビュー第11巡指摘2、P1、採用:
+# best 不在と恒等候補の混同の是正）。
+#
+# `missing_policy` は「trial 内の全 candidate（恒等を含む）が NOT_SCORABLE
+# の場合、best 更新なしで次 trial へ進む」ことを規定する。旧実装は
+# `current_best: Optional[Candidate]` の `None` を恒等（identity）専用の
+# 意味で使っており、「best が一度も確定していない」状態を表す別個の値が
+# 存在しなかった。もし呼び出し側がこの状態を（誤って）`None` で表現すると、
+# `neighbors_of()` はそれを恒等 best と取り違え、実際には一度も scorable
+# と確認されていない恒等の近傍を生成してしまう——架空の best からの探索と
+# いう偽成功経路。以下は、この区別が `NO_BEST` によって構造的に閉じられて
+# いることを検証する（バグ再現: None のままでは identity_neighbor_rule が
+# 発火してしまうこと自体は意図された IDENTITY 挙動として残るため、
+# 「None を no-best の代用にしてはならない」契約を明示する形で検証する）。
+# ---------------------------------------------------------------------------
+
+
+def test_neighbors_of_none_still_means_identity_not_absence() -> None:
+    # IDENTITY（None）の意味は本改訂で変えない: None は「恒等が正当な
+    # best として確定している」ことを表す積極的な値であり、identity_
+    # neighbor_rule が発火して非空の近傍集合を返す。
+    ordering = _build_l()
+    neighbors = cp.neighbors_of(None, ordering, catalog=CATALOG)
+    assert len(neighbors) > 0
+
+
+def test_neighbors_of_no_best_returns_empty_list_not_identity_neighbors() -> None:
+    # バグ再現の直接証跡: current_best=NO_BEST（best 不在）は
+    # current_best=None（恒等が best）と区別され、identity_neighbor_rule
+    # を発火させず空リストを返す——None との取り違えがあれば本テストは
+    # test_neighbors_of_none_still_means_identity_not_absence と同じ非空
+    # 結果になり失敗する。
+    ordering = _build_l()
+    neighbors = cp.neighbors_of(cp.NO_BEST, ordering, catalog=CATALOG)
+    assert neighbors == []
+
+
+def test_no_best_is_not_none() -> None:
+    assert cp.NO_BEST is not None
+    assert cp.NO_BEST != None  # noqa: E711 - 明示的に == でも区別されることを確認する
+    assert bool(cp.NO_BEST) is False
+
+
+def test_select_neighborhood_candidates_no_best_returns_empty() -> None:
+    ordering = _build_l()
+    selected = cp.select_neighborhood_candidates(
+        cp.NO_BEST, ordering, is_evaluated=lambda c: False, catalog=CATALOG, limit=3
+    )
+    assert selected == []
+
+
+def test_propose_trial_candidates_no_best_backfills_all_four_via_exploratory() -> None:
+    # NO_BEST（trial 1 の恒等候補を含む全4候補が NOT_SCORABLE だった等で
+    # best が一度も確定していない状態）を trial>=2 の current_best として
+    # 渡すと、近傍3スロットが構造的に全欠となり、candidate 0..3 の4枠
+    # すべてが exploratory_candidate_rule（探査ストリーム）で決定論的に
+    # 充当される——恒等近傍を発明しない（第11巡指摘2、P1、採用）。
+    ordering = _build_l()
+    trial, seed, arm, founder_id = 5, 909002, "arm-a", "R9F-01"
+
+    result = cp.propose_trial_candidates(
+        trial=trial, current_best=cp.NO_BEST, all_candidates=ordering, catalog=CATALOG,
+        seed=seed, arm=arm, founder_id=founder_id, reserved=set(),
+    )
+    assert len(result) == 4
+
+    # 手動シミュレーション: neighbors_of(NO_BEST) は空のため、4枠すべてが
+    # select_exploratory_candidate() の逐次プロービングで決定論的に決まる
+    # はず。
+    reserved: set = set()
+    manual_result = []
+    for candidate_index in range(4):
+        cand = cp.select_exploratory_candidate(
+            ordering, seed=seed, arm=arm, founder_id=founder_id, trial=trial,
+            candidate_index=candidate_index, is_acceptable=lambda c: c not in reserved,
+        )
+        manual_result.append(cand)
+        if cand is not None:
+            reserved.add(cand)
+    assert result == manual_result
+    assert len(set(result)) == 4  # 重複なし
+
+
+def test_propose_trial_candidates_no_best_deterministic_across_two_calls() -> None:
+    ordering = _build_l()
+    kwargs = dict(
+        trial=7, current_best=cp.NO_BEST, all_candidates=ordering, catalog=CATALOG,
+        seed=909002, arm="arm-b", founder_id="R9F-02", reserved=set(),
+    )
+    r1 = cp.propose_trial_candidates(**kwargs)
+    r2 = cp.propose_trial_candidates(**kwargs)
+    assert r1 == r2
+
+
+def test_propose_trial_candidates_no_best_never_revives_identity_across_full_run() -> None:
+    # NO_SCORABLE_CANDIDATE 終端状態（candidate_generation_spec_v1.json
+    # selection.no_scorable_candidate_terminal_state）のモジュールレベル
+    # 直接検証: 全 trial で全 candidate が NOT_SCORABLE のまま 32 trial
+    # 完走するシナリオを模擬する（current_best は trial 1 の恒等提示後、
+    # 一度も scorable な candidate が確定しないため NO_BEST のまま推移する
+    # ——missing_policy「trial 内の全 candidate が NOT_SCORABLE の場合、
+    # best 更新なしで次 trial へ進む」を反映）。恒等（None）は
+    # trial1_candidate0_rule が定める trial 1 candidate 0 の1回のみ現れ、
+    # それ以降のいかなる trial でも NO_BEST から暗黙に再提案されないこと
+    # を確認する（第11巡指摘2、P1、採用の核心要求: 勝者なし・暗黙の恒等
+    # 採用なし）。
+    # 3-note fixture（32要素）は32 trial×4 candidates=128スロットに対して
+    # 枯渇（NOT_PROPOSABLE）が構造的に起こり得るため、本テストでは
+    # require_sufficient_candidate_space() の必要最小値（127）を満たす
+    # 十分に大きな L（各 note が単独 phrase で AX-D1 候補を生まない、
+    # AX-P1 のみ 17 note × 8 offset = 136 要素）を使い、NOT_PROPOSABLE と
+    # 恒等復活を混同せず「恒等は trial 1 のみ」を厳密に検証できるように
+    # する。
+    large_ordering = cp.build_candidate_ordering(
+        note_count=17,
+        phrase_of_note=list(range(17)),  # 各 note が単独 phrase = AX-D1 候補なし
+        original_duration_beats=[1.0] * 17,
+        catalog=CATALOG,
+    )
+    assert len(large_ordering) == 136
+    cp.require_sufficient_candidate_space(large_ordering, render_budget=128)  # must not raise
+
+    seed, arm, founder_id = 909002, "arm-a", "R9F-01"
+    reserved: set = set()
+    identity_count = 0
+
+    for trial in range(1, 33):
+        current_best = None if trial == 1 else cp.NO_BEST
+        result = cp.propose_trial_candidates(
+            trial=trial, current_best=current_best, all_candidates=large_ordering,
+            catalog=CATALOG, seed=seed, arm=arm, founder_id=founder_id, reserved=reserved,
+        )
+        assert len(result) == 4
+        for candidate_index, cand in enumerate(result):
+            if cand is None:
+                assert trial == 1 and candidate_index == 0, (
+                    f"identity (None) reappeared at trial={trial} candidate_index="
+                    f"{candidate_index} — NO_BEST must never implicitly revive the identity "
+                    "candidate, and L is sized to avoid NOT_PROPOSABLE in this scenario"
+                )
+                identity_count += 1
+            else:
+                reserved.add(cand)
+
+    # 恒等は trial 1 candidate 0 で必ず1回だけ現れる（trial1_candidate0_
+    # rule）。それ以外の None はループ内 assert で既に構造的に排除済み。
+    assert identity_count == 1
