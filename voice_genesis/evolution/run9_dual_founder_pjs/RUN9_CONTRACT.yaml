@@ -1833,8 +1833,30 @@ founder_genome_shas:
 # ——抽出式・アラインメント・直列化・バンドル内容は無変更、検証・公開
 # 経路のみの変更）。旧値（第3世代、第2巡対応時点）は履歴として保持する:
 #   08aa92aff93d042f1c1436cddc1732a82e726f0b078236dcc19f713ee20ba65d
+#
+# 〔第5世代 repin, 2026-08-27, PR #329 第4巡 Codex bot レビュー対応〕:
+# Fable 採否判定（採用2/見送り1）。extract-song/assemble/probe-header の
+# `--out` corpus-alias 拒否（`_resolve_output_alias_conflict()`: lexical
+# 絶対パス + `Path.resolve()` の二重チェック）+ assemble 経路の pinned
+# education manifest 照合（`_require_single_split_bundle_bytes_match_
+# pinned_manifest()`、`--allow-unpinned` エスケープハッチ新設）の2件を
+# 実装（いずれも P1、`HARNESS3B_EDUCATION_LESSON_RECORD.md` §15 参照）。
+# 見送り1件（「extract_song 内で canonical pin をロードせよ」）は第3巡で
+# 開示済みの Python 構築可能性の再形成と判定し、実装変更せず境界宣言
+# （§15 参照）で応答した。builder バイト変更（新値
+# = 50a8d22861d7c5cc8c1e3752ee63df52ffe8176e7556c6d97c7e62857069b18d）と
+# `builder_provenance.detail_record_sha256`（§15 追記後の実測記録 raw
+# sha256 = 0a7f59b2b8af14c0a97153afaad25cf78330a574fd9fa77e16045855954495c8）
+# を更新し、manifest raw sha256 が変わったため本欄を repin した。
+# `pjs_consumed_inputs_manifest_sha` は本巡の変更で一切触れていないため
+# 無変更。venv_h3b の python3 による repo builder 再現実行（run7、
+# `--allow-unpinned`）で training/validation バンドルとも既 pin
+# （run1〜run6）と byte 完全一致することを実測で確認済み（抽出式・
+# アラインメント・直列化・バンドル内容は無変更、検証・公開経路のみの
+# 変更）。旧値（第4世代、第3巡対応時点）は履歴として保持する:
+#   e30bb8e51031c423c58ff0e8e83cf90d9a81abf4da10a6c3aa372a506d4f1a33
 education_technique_lesson_manifest_sha:
-  value: "e30bb8e51031c423c58ff0e8e83cf90d9a81abf4da10a6c3aa372a506d4f1a33"
+  value: "f7c3ac9ca1679b7307d09ef750c3709146759586e9fa2e3df5827a56c286a9d7"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/education_technique_lesson_manifest.json
   reason: >-

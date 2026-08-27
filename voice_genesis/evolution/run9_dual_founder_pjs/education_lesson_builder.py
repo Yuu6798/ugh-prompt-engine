@@ -1392,10 +1392,12 @@ def _serialize_bundle_json(obj: Dict[str, Any]) -> bytes:
     return (json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
-def write_bundle_json(obj: Dict[str, Any], path: Path) -> None:
-    """単本バンドルの atomic 書き込み（`assemble` サブコマンド専用 —
-    training/validation を対にして公開する `build` サブコマンドは atomic
-    ペア公開が必要なため `publish_bundle_pair()` を使う、下記参照）。
+def write_bundle_bytes(data: bytes, path: Path) -> None:
+    """既に直列化済みのバンドルバイト列 `data` を `path` へ atomic に
+    書き込む（`write_bundle_json()` の実体。`assemble` サブコマンドが
+    pinned manifest 照合用に sha256 を先に計算した同一バイト列をそのまま
+    書き込めるよう、直列化とファイル書き込みを分離する——PR #329 第4巡
+    レビュー指摘, P1, 採用対応。二重直列化を避ける）。
 
     PR #329 第3巡レビュー指摘5（P2、採用対応）: 旧実装は `Path(path).
     write_bytes()` の直書きで、書き込み途中の失敗（ディスク枯渇・
@@ -1406,7 +1408,7 @@ def write_bundle_json(obj: Dict[str, Any], path: Path) -> None:
     ——`path` の既存実バイトは最後の一括 rename までは一切変更されない
     ため、staging 段の失敗時は旧世代 artifact が無傷のまま残る。"""
     path = Path(path)
-    tmp_path = _atomic_write_bytes(path, _serialize_bundle_json(obj))
+    tmp_path = _atomic_write_bytes(path, data)
     try:
         os.replace(tmp_path, path)
     except BaseException:
@@ -1415,6 +1417,14 @@ def write_bundle_json(obj: Dict[str, Any], path: Path) -> None:
         except OSError:
             pass
         raise
+
+
+def write_bundle_json(obj: Dict[str, Any], path: Path) -> None:
+    """単本バンドルの atomic 書き込み（`assemble` サブコマンド専用 —
+    training/validation を対にして公開する `build` サブコマンドは atomic
+    ペア公開が必要なため `publish_bundle_pair()` を使う、下記参照）。
+    直列化 + 書き込みは `write_bundle_bytes()` へ委譲する。"""
+    write_bundle_bytes(_serialize_bundle_json(obj), Path(path))
 
 
 def _atomic_write_bytes(path: Path, data: bytes) -> Path:
@@ -1830,6 +1840,139 @@ def _require_consumed_input_bytes_match_bytes(
 
 
 # ---------------------------------------------------------------------------
+# --out corpus-alias 拒否（PR #329 第4巡レビュー指摘, P1, 採用対応）:
+# `--out` が対象曲の消費入力（wav/lab/musicxml）や split manifest/contract/
+# consumed-inputs pin ファイルと同一実体（symlink 経由の alias 含む）を
+# 指すと、抽出後の JSON 書き込みが pin 済み corpus 入力を破壊し得た——
+# `speaker_map_builder.py` の `_resolve_alias_conflict()`/
+# `_check_out_does_not_alias_inputs()`（PR #328 Codex レビュー第2巡指摘4/
+# 第8巡指摘16、いずれも P1、採用対応で確立済み前例）と同型のロジックを
+# 本ビルダーの3つの出力サブコマンド（extract-song/assemble/probe-header）
+# へ導入する。
+#
+# `speaker_map_builder._resolve_alias_conflict()` は `Path.resolve()`
+# （symlink 解決込みの絶対化）のみで比較していたが、本実装はそれに加えて
+# `os.path.abspath()`（symlink 未解決の lexical 絶対化）でも比較する二重
+# チェックとする——`out_path` の親ディレクトリが存在しない場合や
+# `Path.resolve(strict=False)` の挙動がプラットフォーム/Python バージョン
+# 間で異なり得ることに依存しない、filesystem 状態非依存の防御を追加する
+# （Fable 設計方針: 「lexical + resolved の二重」）。
+# ---------------------------------------------------------------------------
+
+def _lexical_absolute_path(path: Path) -> Path:
+    """symlink 解決を行わない、絶対化のみの比較用パス。`os.path.abspath()`
+    は文字列操作のみで存在しないパスにも安全に適用できる——`Path.resolve()`
+    と異なりファイルシステムへ一切アクセスしない比較軸を提供する。"""
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def _resolve_output_alias_conflict(
+    out_path: Path, protected_paths: Sequence[Path],
+) -> Optional[Path]:
+    """`out_path` が `protected_paths` のいずれかと (a) 同一実体（symlink
+    経由の alias 含む、`Path.resolve()` 比較）または (b) 同一 lexical 絶対
+    パス（symlink 未解決、`os.path.abspath()` 比較）であれば、その
+    protected path を返す（衝突でなければ `None`）。
+
+    3つの出力コマンド（`_cmd_extract_song`/`_cmd_assemble`/
+    `_cmd_probe_header`）が共有する alias 判定ロジックの単一実装
+    ——`speaker_map_builder._resolve_alias_conflict()` と同じく、別々に
+    実装すると将来どれか1つだけが改修されて判定が食い違う穴を防ぐ。"""
+    out_lexical = _lexical_absolute_path(out_path)
+    out_resolved = out_path.resolve()
+    for protected in protected_paths:
+        if out_lexical == _lexical_absolute_path(protected):
+            return protected
+        if out_resolved == protected.resolve():
+            return protected
+    return None
+
+
+def _require_out_does_not_alias_protected_paths(
+    out_path: Path, protected_paths: Sequence[Path], *, context: str,
+) -> None:
+    """`out_path` が `protected_paths`（当該曲の消費3入力・split
+    manifest・contract・consumed-inputs pin ファイル・spec 等、コマンドが
+    これから読む/読んだ全入力）のいずれとも同一実体でないことを、
+    **読み取り前の preflight として** 検証する（PR #329 第4巡レビュー
+    指摘, P1, 採用対応）。1件でも衝突すれば `ExtractorStopError` で即座に
+    拒否し、以降の読み取り・decode・書き込みは一切実行しない——`--out` が
+    corpus 入力や pin 済み manifest を指す（直接指定・symlink 経由の
+    alias いずれも）ことで、抽出後の JSON 書き込みが pin 済み入力を
+    破壊する経路を書き込み前に閉じる。"""
+    conflict = _resolve_output_alias_conflict(out_path, protected_paths)
+    if conflict is not None:
+        raise ExtractorStopError(
+            f"{context}: --out ({out_path}) resolves to the same file as a protected input path "
+            f"({conflict}), resolved={out_path.resolve()}, lexical={_lexical_absolute_path(out_path)} "
+            "— fail-closed 拒否（pin 済み corpus 入力・split manifest・contract・consumed-inputs "
+            "pin ファイル等への破壊的書き込みは、直接指定・symlink 経由の alias いずれも拒否する）"
+        )
+
+
+def _extract_song_protected_paths(args: argparse.Namespace) -> List[Path]:
+    """`extract-song` が読む全入力パス（当該曲の消費3入力 + split
+    manifest + contract + consumed-inputs pin ファイル + freeze record +
+    spec）。`--out` の alias preflight 対象集合。
+
+    `getattr(..., None)` 経由で読む（`Namespace.attr` の直接参照ではなく）
+    ——実 CLI（argparse）は全属性を必ず設定するが、テスト層が直接構築する
+    最小 `argparse.Namespace`（他の属性のみを設定した fixture）に対しても
+    `AttributeError` ではなく「未指定 = 既定値」として振る舞う方が、
+    本関数を preflight 目的で単体呼び出しする側にとって安全。"""
+    song_dir = Path(args.corpus_root) / args.song_id
+    raw_split_manifest = getattr(args, "split_manifest", None)
+    split_manifest_path = Path(raw_split_manifest) if raw_split_manifest else DEFAULT_SPLIT_MANIFEST_PATH
+    raw_contract_path = getattr(args, "contract_path", None)
+    contract_path = Path(raw_contract_path) if raw_contract_path else run9_schema.RUN9_CONTRACT_YAML_PATH
+    raw_consumed_inputs_manifest = getattr(args, "consumed_inputs_manifest", None)
+    consumed_inputs_manifest_path = (
+        Path(raw_consumed_inputs_manifest)
+        if raw_consumed_inputs_manifest
+        else DEFAULT_CONSUMED_INPUTS_MANIFEST_PATH
+    )
+    raw_freeze_record = getattr(args, "freeze_record", None)
+    freeze_record_path = Path(raw_freeze_record) if raw_freeze_record else DEFAULT_FREEZE_RECORD_PATH
+    raw_spec_path = getattr(args, "spec_path", None)
+    spec_path = Path(raw_spec_path) if raw_spec_path else DEFAULT_SPEC_PATH
+    return [
+        song_dir / f"{args.song_id}_song.wav",
+        song_dir / f"{args.song_id}.lab",
+        song_dir / f"{args.song_id}.musicxml",
+        split_manifest_path,
+        contract_path,
+        consumed_inputs_manifest_path,
+        freeze_record_path,
+        spec_path,
+    ]
+
+
+def _probe_header_protected_paths(args: argparse.Namespace) -> List[Path]:
+    """`probe-header` が読む全入力パス（各 `--song-ids` の WAV + split
+    manifest + contract）。`--out` の alias preflight 対象集合。"""
+    split_manifest_path = Path(args.split_manifest) if args.split_manifest else DEFAULT_SPLIT_MANIFEST_PATH
+    contract_path = Path(args.contract_path) if args.contract_path else run9_schema.RUN9_CONTRACT_YAML_PATH
+    paths: List[Path] = [split_manifest_path, contract_path]
+    for song_id in args.song_ids:
+        paths.append(Path(args.corpus_root) / song_id / f"{song_id}_song.wav")
+    return paths
+
+
+def _assemble_protected_paths(args: argparse.Namespace, song_ids_sorted: Sequence[str]) -> List[Path]:
+    """`assemble` が読む全入力パス（spec + split manifest + contract +
+    `--song-ids-json` + 選択 split の全中間物 JSON）。`--out` の alias
+    preflight 対象集合。`song_ids_sorted` は凍結 split 厳密一致検証を
+    通過済みの確定リストを渡すこと（検証前の生リストを渡すと、まだ
+    正規化されていない song_id から中間物パスを構築してしまう）。"""
+    split_manifest_path = Path(args.split_manifest) if args.split_manifest else DEFAULT_SPLIT_MANIFEST_PATH
+    contract_path = Path(args.contract_path) if args.contract_path else run9_schema.RUN9_CONTRACT_YAML_PATH
+    spec_path = Path(args.spec_path) if args.spec_path else DEFAULT_SPEC_PATH
+    paths: List[Path] = [spec_path, split_manifest_path, contract_path, Path(args.song_ids_json)]
+    paths.extend(Path(args.intermediates_dir) / f"{sid}.json" for sid in song_ids_sorted)
+    return paths
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1848,6 +1991,12 @@ def _cmd_probe_header(args: argparse.Namespace) -> int:
     frozen_split_pins = load_training_validation_ids(split_manifest_path, contract_path=contract_path)
     _require_song_ids_within_frozen_split(
         args.song_ids, frozen_split_pins.frozen_allowed_ids, context="probe-header",
+    )
+    # PR #329 第4巡レビュー指摘（P1、採用対応）: `--out` が対象曲の WAV や
+    # split manifest/contract と同一実体（symlink 経由の alias 含む）を
+    # 指す場合、いずれの WAV も open する前に一括拒否する。
+    _require_out_does_not_alias_protected_paths(
+        Path(args.out), _probe_header_protected_paths(args), context="probe-header",
     )
 
     out = {}
@@ -1875,6 +2024,15 @@ def _cmd_probe_header(args: argparse.Namespace) -> int:
 
 
 def _cmd_extract_song(args: argparse.Namespace) -> int:
+    # PR #329 第4巡レビュー指摘（P1、採用対応）: `--out` が対象曲の消費3
+    # 入力（wav/lab/musicxml、symlink 経由の alias 含む）や split
+    # manifest/contract/consumed-inputs pin/freeze record/spec のいずれかと
+    # 同一実体を指す場合、freeze self-check を含むいかなる読み取りより前に
+    # 一括拒否する——抽出後の JSON 書き込みが pin 済み corpus 入力を破壊
+    # する経路を書き込み前に閉じる。
+    _require_out_does_not_alias_protected_paths(
+        Path(args.out), _extract_song_protected_paths(args), context="extract-song",
+    )
     freeze_selfcheck(Path(args.freeze_record), Path(args.spec_path))
     # PR #329 第1巡レビュー指摘1（P1、採用対応）: `--song-id` に sealed_
     # holdout や split manifest に一切現れない任意 ID を渡しても、旧実装は
@@ -1934,14 +2092,48 @@ def _cmd_assemble(args: argparse.Namespace) -> int:
     _require_exact_frozen_split_membership(
         song_ids_sorted, expected_ids, split=args.split, context="assemble",
     )
+    # PR #329 第4巡レビュー指摘（P1、採用対応）: `--out` が spec/split
+    # manifest/contract/`--song-ids-json`/選択 split の全中間物 JSON の
+    # いずれかと同一実体（symlink 経由の alias 含む）を指す場合、中間物を
+    # 1つも読む前に一括拒否する。
+    _require_out_does_not_alias_protected_paths(
+        Path(args.out), _assemble_protected_paths(args, song_ids_sorted), context="assemble",
+    )
 
     songs = []
     for sid in song_ids_sorted:
         songs.append(json.loads((Path(args.intermediates_dir) / f"{sid}.json").read_text(encoding="utf-8")))
     spec_sha256 = sha256_of_file(Path(args.spec_path))
     bundle = assemble_bundle(args.split, song_ids_sorted, songs, spec_sha256)
-    write_bundle_json(bundle, Path(args.out))
-    print(f"assemble: split={args.split} songs={len(songs)} -> {args.out}", file=sys.stderr)
+    bundle_bytes = _serialize_bundle_json(bundle)
+    actual_sha256 = hashlib.sha256(bundle_bytes).hexdigest()
+
+    # PR #329 第4巡レビュー指摘（P1、採用対応）: `assemble` は pinned
+    # education manifest と照合せず canonical 形式で成功出力し得た——
+    # `run_build()`/`_require_bundle_bytes_match_pinned_manifest()` と同型
+    # の publish 前 fail-closed 照合を単一 split 版として導入する（下記
+    # `_require_single_split_bundle_bytes_match_pinned_manifest()`）。
+    pinned_manifest_check = "SKIPPED_UNPINNED"
+    if not args.allow_unpinned:
+        _require_single_split_bundle_bytes_match_pinned_manifest(
+            args.split, actual_sha256, contract_path=contract_path,
+        )
+        pinned_manifest_check = "PASS"
+    else:
+        print(
+            "assemble(): --allow-unpinned set — skipping pinned-manifest hash cross-check; "
+            "output is UNPINNED and non-canonical until "
+            "inputs/education_technique_lesson_manifest.json is repinned to match "
+            f"(actual {args.split} sha256={actual_sha256!r})",
+            file=sys.stderr,
+        )
+
+    write_bundle_bytes(bundle_bytes, Path(args.out))
+    print(
+        f"assemble: split={args.split} songs={len(songs)} "
+        f"pinned_manifest_check={pinned_manifest_check} -> {args.out}",
+        file=sys.stderr,
+    )
     return 0
 
 
@@ -2002,6 +2194,54 @@ def _require_bundle_bytes_match_pinned_manifest(
             "regeneration under the same design revision; the output is then UNPINNED "
             "(non-canonical) until inputs/education_technique_lesson_manifest.json is repinned "
             "to match."
+        )
+
+
+def _require_single_split_bundle_bytes_match_pinned_manifest(
+    split: str,
+    actual_sha256: str,
+    *,
+    contract_path: Optional[Path],
+    manifest_path: Optional[Path] = None,
+) -> None:
+    """`assemble` 経路（training/validation いずれか1本のみを生成）専用の
+    pinned education lesson manifest 照合（PR #329 第4巡レビュー指摘, P1,
+    採用対応）。`_require_bundle_bytes_match_pinned_manifest()`（`run_build()`
+    専用、training/validation 2本を同時に要求する）とは別関数——`assemble`
+    は1本しか手元にバイトを持たないため、もう一方の split の実測 sha を
+    持ち合わせない/偽装できてしまう構成を避け、要求された `split` 側の
+    pin 値のみを照合する。
+
+    旧実装の `_cmd_assemble()` は pinned education manifest を一切ロード・
+    照合せず、中間物ディレクトリの内容がどのようなもの（依存挙動の
+    ドリフトで生じた非正準バイト、あるいは改ざんされた中間物）であっても
+    canonical な `run9-technique-lesson-bundle/1.0` 形式に整形できてさえ
+    いれば成功終了し得た——「training/validation バンドルの正準な組立
+    手段」として案内されているコマンドが、下流消費者が拒否すべき非正準
+    artifact を成功として発行する経路だった。
+
+    `contract_path`/`manifest_path` の意味・`--allow-unpinned` エスケープ
+    ハッチの設計意図は `_require_bundle_bytes_match_pinned_manifest()` と
+    同型（同 docstring 参照）。不一致は `ExtractorStopError` で publish
+    前に拒否する（実測 sha を表示）。
+    """
+    effective_contract_path = (
+        contract_path if contract_path is not None else run9_schema.RUN9_CONTRACT_YAML_PATH
+    )
+    edu_contract = run9_schema.load_run9_contract_from_yaml_path(effective_contract_path)
+    edu_manifest = run9_schema.load_pinned_education_lesson_manifest(
+        edu_contract, manifest_path=manifest_path, contract_path=effective_contract_path,
+    )
+    key = "training_technique_lesson_sha256" if split == "training" else "validation_technique_lesson_sha256"
+    expected_sha256 = edu_manifest[key]
+    if actual_sha256 != expected_sha256:
+        raise ExtractorStopError(
+            f"assemble(): generated {split} bundle bytes do not match the pinned education lesson "
+            f"manifest's {key} — publish is blocked fail-closed (staging discarded): "
+            f"actual={actual_sha256!r} expected={expected_sha256!r}. Pass --allow-unpinned for a "
+            "deliberate new-attempt regeneration under the same design revision; the output is "
+            "then UNPINNED (non-canonical) until inputs/education_technique_lesson_manifest.json "
+            "is repinned to match."
         )
 
 
@@ -2192,6 +2432,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     p.add_argument("--contract-path", default=None, help="default: RUN9_CONTRACT.yaml (repo canonical)")
     p.add_argument("--out", required=True)
+    p.add_argument(
+        "--allow-unpinned", action="store_true",
+        help="skip the pinned education-lesson-manifest hash cross-check for this split before "
+        "publish (default off — the produced bundle is then UNPINNED/non-canonical until "
+        "inputs/education_technique_lesson_manifest.json is repinned to match; intended only for "
+        "a deliberate new-attempt regeneration under the same design revision)",
+    )
     p.set_defaults(func=_cmd_assemble)
 
     p = sub.add_parser("build", help="full batch build: split manifest -> training/validation bundles")

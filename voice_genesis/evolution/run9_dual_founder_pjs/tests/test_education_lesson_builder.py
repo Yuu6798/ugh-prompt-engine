@@ -1647,3 +1647,219 @@ def test_harness3b_education_manifest_corpus_provenance_cross_check_rejects_tamp
         m.load_pinned_education_lesson_manifest(
             tampered_contract, manifest_path=manifest_path, contract_path=contract_path,
         )
+
+
+# ---------------------------------------------------------------------------
+# PR #329 第4巡 Codex bot レビュー対応（採用2件, P1）:
+#   (1) extract-song/assemble/probe-header の `--out` corpus-alias 拒否
+#   (2) assemble 経路の pinned education manifest 照合
+# ---------------------------------------------------------------------------
+
+
+def test_harness3b_extract_song_cli_rejects_out_aliasing_corpus_wav(tmp_path: Path) -> None:
+    """`--out` が対象曲の WAV を直接指す場合、decode/書き込み前に拒否され、
+    corpus 入力の実バイトは無傷のまま残る。"""
+    song_id = "pjs001"
+    song_dir = tmp_path / song_id
+    song_dir.mkdir()
+    wav_path = song_dir / f"{song_id}_song.wav"
+    wav_path.write_bytes(b"pretend-wav-bytes")
+    rc = elb.main([
+        "extract-song",
+        "--corpus-root", str(tmp_path),
+        "--song-id", song_id,
+        "--out", str(wav_path),
+    ])
+    assert rc == 2
+    assert wav_path.read_bytes() == b"pretend-wav-bytes"
+
+
+def test_harness3b_extract_song_cli_rejects_out_aliasing_corpus_wav_via_symlink(
+    tmp_path: Path,
+) -> None:
+    """`--out` が対象曲の WAV への symlink を指す場合も、同一実体として
+    拒否される（直接指定と同型の防御）。"""
+    song_id = "pjs001"
+    song_dir = tmp_path / song_id
+    song_dir.mkdir()
+    wav_path = song_dir / f"{song_id}_song.wav"
+    wav_path.write_bytes(b"pretend-wav-bytes")
+    alias_out = tmp_path / "alias_out.json"
+    alias_out.symlink_to(wav_path)
+    rc = elb.main([
+        "extract-song",
+        "--corpus-root", str(tmp_path),
+        "--song-id", song_id,
+        "--out", str(alias_out),
+    ])
+    assert rc == 2
+    assert wav_path.read_bytes() == b"pretend-wav-bytes"
+
+
+def test_harness3b_extract_song_cli_rejects_out_aliasing_split_manifest(tmp_path: Path) -> None:
+    """`--out` が消費3入力に限らず、`--split-manifest` として渡した
+    ファイルと同一実体を指す場合も拒否される（保護対象集合が corpus 入力
+    だけでなく split manifest/contract/consumed-inputs pin/freeze
+    record/spec にも及ぶことの直接証跡）。"""
+    custom_split_manifest = tmp_path / "custom_split_manifest.json"
+    custom_split_manifest.write_bytes(m.PRACTICE_MANIFEST_PATH.read_bytes())
+    rc = elb.main([
+        "extract-song",
+        "--corpus-root", str(tmp_path),
+        "--song-id", "pjs001",
+        "--split-manifest", str(custom_split_manifest),
+        "--out", str(custom_split_manifest),
+    ])
+    assert rc == 2
+    assert custom_split_manifest.read_bytes() == m.PRACTICE_MANIFEST_PATH.read_bytes()
+
+
+def test_harness3b_probe_header_cli_rejects_out_aliasing_corpus_wav(tmp_path: Path) -> None:
+    """`--out` が `--song-ids` 対象曲の WAV を直接指す場合、いずれの WAV も
+    open する前に拒否される。"""
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    song_id = training_ids[0]
+    song_dir = tmp_path / song_id
+    song_dir.mkdir()
+    wav_path = song_dir / f"{song_id}_song.wav"
+    wav_path.write_bytes(b"pretend-wav-bytes")
+    rc = elb.main([
+        "probe-header",
+        "--corpus-root", str(tmp_path),
+        "--song-ids", song_id,
+        "--out", str(wav_path),
+    ])
+    assert rc == 2
+    assert wav_path.read_bytes() == b"pretend-wav-bytes"
+
+
+def test_harness3b_assemble_cli_rejects_out_aliasing_intermediate_json(tmp_path: Path) -> None:
+    """`--out` が選択 split の中間物 JSON（1件）と同一実体を指す場合、
+    中間物を1つも読む前に拒否される（assemble 出力の同型ケース）。"""
+    training_ids, _validation_ids, _sealed_ids = _practice_split_ids()
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(training_ids), encoding="utf-8")
+    intermediate_path = tmp_path / f"{training_ids[0]}.json"
+    intermediate_path.write_text(
+        json.dumps({"song_id": training_ids[0], "sentinel": "do-not-overwrite"}), encoding="utf-8",
+    )
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path),
+        "--out", str(intermediate_path),
+    ])
+    assert rc == 2
+    assert json.loads(intermediate_path.read_text(encoding="utf-8"))["sentinel"] == "do-not-overwrite"
+
+
+def test_harness3b_require_single_split_bundle_bytes_match_pinned_manifest_happy_path(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    fake_training_bytes = b'{"synthetic":"training"}\n'
+    training_sha = hashlib.sha256(fake_training_bytes).hexdigest()
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["training_technique_lesson_sha256"] = training_sha
+        for run_key in ("run1_sha256", "run2_sha256", "run3_sha256"):
+            data["determinism_evidence"]["training"][run_key] = training_sha
+
+    _tampered_contract, manifest_path, contract_path = _tampered_education_manifest_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    elb._require_single_split_bundle_bytes_match_pinned_manifest(  # noqa: SLF001
+        "training", training_sha, contract_path=contract_path, manifest_path=manifest_path,
+    )  # must not raise
+
+
+def test_harness3b_require_single_split_bundle_bytes_match_pinned_manifest_rejects_mismatch(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    pinned_validation_sha = "b" * 64
+
+    def _mutate(data: Dict[str, Any]) -> None:
+        data["validation_technique_lesson_sha256"] = pinned_validation_sha
+        for run_key in ("run1_sha256", "run2_sha256", "run3_sha256"):
+            data["determinism_evidence"]["validation"][run_key] = pinned_validation_sha
+
+    _tampered_contract, manifest_path, contract_path = _tampered_education_manifest_contract(
+        contract, tmp_path, mutate=_mutate,
+    )
+    actual_validation_sha = hashlib.sha256(b"drifted-validation-bytes").hexdigest()
+    with pytest.raises(elb.ExtractorStopError, match="do not match the pinned education lesson"):
+        elb._require_single_split_bundle_bytes_match_pinned_manifest(  # noqa: SLF001
+            "validation", actual_validation_sha, contract_path=contract_path, manifest_path=manifest_path,
+        )
+
+
+def test_harness3b_assemble_cli_rejects_bundle_bytes_not_matching_pinned_manifest_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """assemble は pinned education manifest と照合せず canonical 形式で
+    成功出力し得た（第4巡指摘）——合成中間物（実 PJS バンドルとは一致
+    しない）を渡した `assemble` が既定（`--allow-unpinned` 省略）では
+    publish されずに拒否されることを直接確認する。"""
+    training_ids = ["pjs001", "pjs002"]
+
+    def _fake_load_training_validation_ids(*_a: Any, **_k: Any) -> elb.FrozenSplitPins:
+        return elb.FrozenSplitPins(training_ids=tuple(training_ids), validation_ids=())
+
+    monkeypatch.setattr(elb, "load_training_validation_ids", _fake_load_training_validation_ids)
+
+    for sid in training_ids:
+        (tmp_path / f"{sid}.json").write_text(json.dumps(_synthetic_song(sid)), encoding="utf-8")
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(training_ids), encoding="utf-8")
+    out_path = tmp_path / "out.json"
+
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path),
+        "--out", str(out_path),
+    ])
+    assert rc == 2
+    assert not out_path.exists()
+
+
+def test_harness3b_assemble_cli_allow_unpinned_skips_pinned_manifest_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`assemble --allow-unpinned` は `_require_single_split_bundle_bytes_
+    match_pinned_manifest()` を一切呼ばずに publish する——`run_build()`
+    の `--allow-unpinned` と同型のエスケープハッチであることを直接確認
+    する。"""
+
+    def _boom(*_a: Any, **_k: Any) -> Any:  # pragma: no cover - must not run
+        raise AssertionError(
+            "_require_single_split_bundle_bytes_match_pinned_manifest() must not run when "
+            "--allow-unpinned is set"
+        )
+
+    monkeypatch.setattr(elb, "_require_single_split_bundle_bytes_match_pinned_manifest", _boom)
+
+    training_ids = ["pjs001", "pjs002"]
+
+    def _fake_load_training_validation_ids(*_a: Any, **_k: Any) -> elb.FrozenSplitPins:
+        return elb.FrozenSplitPins(training_ids=tuple(training_ids), validation_ids=())
+
+    monkeypatch.setattr(elb, "load_training_validation_ids", _fake_load_training_validation_ids)
+
+    for sid in training_ids:
+        (tmp_path / f"{sid}.json").write_text(json.dumps(_synthetic_song(sid)), encoding="utf-8")
+    song_ids_path = tmp_path / "song_ids.json"
+    song_ids_path.write_text(json.dumps(training_ids), encoding="utf-8")
+    out_path = tmp_path / "out.json"
+
+    rc = elb.main([
+        "assemble",
+        "--split", "training",
+        "--song-ids-json", str(song_ids_path),
+        "--intermediates-dir", str(tmp_path),
+        "--out", str(out_path),
+        "--allow-unpinned",
+    ])
+    assert rc == 0
+    assert out_path.exists()

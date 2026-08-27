@@ -822,3 +822,189 @@ pinned_manifest()` を run6 の実測 sha に対して直接呼び出し、例�
 - freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1巡/第2巡と
   同じ理由——repo builder の identity は manifest 側 `builder_provenance`
   が別途担う）。
+
+## 15. PR #329 Codex bot レビュー第4巡対応 + run7（2026-08-27）
+
+Claude 完結ルート（フェーズ1: 実装 + 検証 + 返信起草。git commit/push は
+別フェーズ）。Fable 採否判定 = 採用2件（いずれも P1）/ 見送り1件（境界
+宣言、実装なし）。**抽出式・アラインメント規則・直列化・バンドル内容は
+無変更**（変更は検証・公開経路のみ、第1〜3巡と同じ不変条件）。
+
+### Fix 13（採用1, P1）: extract-song/assemble/probe-header の `--out`
+corpus-alias 拒否
+
+`--out` が対象曲の消費入力（wav/lab/musicxml、または symlink 経由の
+alias）や split manifest/contract/consumed-inputs pin ファイル等を指すと、
+抽出後の JSON 書き込みがその pin 済み corpus 入力を破壊し得た——builder
+自身にはこれを防ぐ preflight が一切存在しなかった。`speaker_map_
+builder.py` の `_resolve_alias_conflict()`/`_check_out_does_not_alias_
+inputs()`（PR #328 Codex レビュー第2巡指摘4/第8巡指摘16、いずれも P1、
+採用対応で確立済み前例）と同型のロジックを本 builder の3つの出力
+サブコマンドへ導入した。
+
+- 新設 `_resolve_output_alias_conflict()`: `out_path` が保護対象パス群の
+  いずれかと (a) `Path.resolve()` 一致（symlink 経由の alias 含む）
+  **または** (b) `os.path.abspath()` 一致（symlink 未解決の lexical
+  絶対パス）であれば、その保護パスを返す。`speaker_map_builder.
+  _resolve_alias_conflict()` は (a) のみだったが、本実装は (b) も追加した
+  二重チェック——`out_path` の親ディレクトリが未存在の場合や
+  `Path.resolve(strict=False)` の挙動がプラットフォーム間で異なり得る
+  ことに依存しない、filesystem 状態非依存の防御を加える（Fable 設計
+  方針:「lexical + resolved の二重」）。
+- 新設 `_require_out_does_not_alias_protected_paths()`: 衝突があれば
+  `ExtractorStopError` で拒否する共有実装。3コマンドが呼ぶ保護パス集合
+  ビルダー（`_extract_song_protected_paths()`/`_probe_header_protected_
+  paths()`/`_assemble_protected_paths()`）をそれぞれ新設した:
+  - `extract-song`: 当該曲の消費3入力（wav/lab/musicxml）+ split
+    manifest + contract + consumed-inputs pin ファイル + freeze record +
+    spec。**読み取り前の preflight として** `freeze_selfcheck()` を含む
+    いかなる読み取りより前（関数冒頭）に実行する。
+  - `probe-header`: `--song-ids` 全件の WAV + split manifest + contract。
+    既存の凍結 split ゲート（第3巡 Fix 12）の直後・いずれの WAV も open
+    する前に実行する。
+  - `assemble`: spec + split manifest + contract + `--song-ids-json` +
+    選択 split の全中間物 JSON（`song_ids_sorted` は凍結 split 厳密
+    一致検証を通過済みの確定リストを使う）。既存の厳密集合一致ゲート
+    （第2巡 Fix 5）の直後・中間物を1つも読む前に実行する。
+- `_extract_song_protected_paths()` は各 CLI オプションを `getattr(args,
+  "...", None)` 経由で読む——実 CLI（argparse）は全属性を必ず設定するが、
+  テスト層が直接構築する最小 `argparse.Namespace` に対しても
+  `AttributeError` ではなく「未指定 = 既定値」として振る舞う防御的実装
+  とした（第3巡新設の直接呼び出しテスト `test_harness3b_extract_song_
+  direct_call_gate_raises_before_extract_song` が `consumed_inputs_
+  manifest` 属性を持たない最小 Namespace を使っており、この防御がないと
+  regression する）。
+- 新設ユニットテスト: `extract-song --out` = corpus wav 直指定 / symlink
+  経由 / `--split-manifest` として渡した合成ファイルへの直指定（消費
+  3入力に限らない保護対象の直接証跡）、`probe-header --out` = corpus wav
+  直指定、`assemble --out` = 選択 split の中間物 JSON（1件）への直指定
+  ——いずれも拒否され、対象ファイルの実バイトが無傷のまま残ることを確認
+  する。
+
+### Fix 14（採用2, P1）: assemble 経路の pinned education manifest 照合
+
+`assemble` は pinned education manifest と一切照合せず、中間物ディレクトリ
+の内容がどのようなもの（依存挙動のドリフトで生じた非正準バイト、
+改ざんされた中間物）であっても canonical な `run9-technique-lesson-
+bundle/1.0` 形式に整形できてさえいれば成功出力し得た——「training/
+validation バンドルの正準な組立手段」として案内されているコマンドが、
+下流消費者が拒否すべき非正準 artifact を成功として発行する経路だった
+（`run_build()` は第2巡 Fix 5 で同種の穴を閉じていたが、`assemble`
+単体には及んでいなかった）。
+
+- 新設 `_require_single_split_bundle_bytes_match_pinned_manifest()`:
+  `_require_bundle_bytes_match_pinned_manifest()`（`run_build()` 専用、
+  training/validation 2本を同時に要求する）とは別関数——`assemble` は
+  1本しか手元にバイトを持たないため、要求された `split` 側の pin 値
+  （`training_technique_lesson_sha256`/`validation_technique_lesson_
+  sha256` のいずれか）のみを照合する。不一致は `ExtractorStopError` で
+  publish 前に拒否する（実測/pin 値を両方表示）。
+- `_cmd_assemble()`: `assemble_bundle()` 直後にバンドルバイトを直列化して
+  sha256 を計算し、`--allow-unpinned`（新設、既定 off、`run_build()` と
+  同型のエスケープハッチ）でなければ上記照合を実行してから publish する。
+  使用時は UNPINNED である旨を stderr へ明示する（`run_build()` の
+  `--allow-unpinned` メッセージと同型）。
+- 新設 `write_bundle_bytes()`: 既に直列化済みのバイト列を受け取り
+  atomic に書き込む（`_atomic_write_bytes()` + `os.replace()`）。
+  `write_bundle_json()` はこれへ委譲するようリファクタし（直列化 →
+  書き込みの分離）、`assemble` が pin 照合用に計算した同一バイト列を
+  二重直列化なしでそのまま書き込めるようにした——既存の `write_bundle_
+  json()` 呼び出し元・monkeypatch テスト（`_atomic_write_bytes()` を
+  差し替える失敗注入テスト含む）は無変更で動作する。
+- 新設ユニットテスト: `_require_single_split_bundle_bytes_match_pinned_
+  manifest()` の happy path / 不一致拒否の直接単体テスト、`assemble`
+  CLI が既定（`--allow-unpinned` 省略）では合成中間物（実 PJS バンドルと
+  一致しない）を拒否すること、`--allow-unpinned` 指定時は同関数が一切
+  呼ばれずに publish されること（monkeypatch で「呼ばれたら失敗」に
+  して直接確認）。
+
+### 見送り1（境界宣言、実装なし）: 「extract_song 内で canonical pin を
+ロードせよ」
+
+第3巡で正直開示済みの Python 構築可能性（`FrozenSplitPins`/
+`ConsumedInputPins` の docstring「Python の限界」節、Fix 8 参照）の
+再形成であり、Fable 設計判定により実装変更せず境界宣言で応答する。
+
+1. **プロセス内の意図的偽造は Python のいかなる設計でも閉じられない**
+   ——pin を `extract_song()` 内部で関数内ロードへ変えても、repo の
+   確立テスト規約（下記2参照）を満たすにはテスト分離のためのパス引数を
+   受ける必要があり、信頼の所在が「呼び出し元供給の（isinstance 検査
+   済み）オブジェクト」から「呼び出し元供給のパス文字列」へ移動するだけ
+   で、悪意ある呼び出し元がパスを差し替える同型の偽造経路が残る。
+2. **repo の確立テスト規約と両立しない** ——本ファイル群のテストは合成
+   データ・`tmp_path` によるファイルシステム分離・モック不使用を推奨する
+   （CLAUDE.md「Testing」節）。`extract_song()` 内で canonical pin パスを
+   hard-code すると、テストは実 corpus/実 contract に依存するか、
+   monkeypatch でパス定数を差し替えるしかなくなり、後者は結局「呼び出し
+   元がロード元を差し替えられる」という同型の構造を持つ。
+3. **本 PR の防御境界は構造規約 + 型ゲート + grep 監査可能性**
+   ——`FrozenSplitPins`/`ConsumedInputPins` の isinstance ゲート
+   （第3巡 Fix 8）が機械強制するのは「repo 内の全コードパスが
+   `load_training_validation_ids()`/`load_consumed_inputs_pins()`
+   （その内部で `run9_schema.load_pinned_*()` の pin/構造検証）を経由
+   する」という構造的規約であり、この境界は第3巡時点で両型の定義
+   コメントと `extract_song()` の docstring に凍結済みである。
+4. **プロセス内で任意コードを書ける主体はこの脅威モデルの対象外**
+   ——`extract_song()` を直接 import 呼び出しできる主体は、同じ権限で
+   `education_lesson_builder.py` 自身を編集できる（同一 repo・同一
+   プロセス）。この脅威モデルはコードレビュー/CI の層（PR レビュー・
+   `branch_write_policy`・contract pin）で防御されるべきものであり、
+   関数シグネチャの変更では解消しない——`speaker_map_builder.py` の
+   verified self-exec dispatch（第6巡 Fix、`main()` 自身の完全性は
+   「この仕組みの手が届く範囲の外」と明記）と同型の境界宣言。
+
+このスレッドは resolve しない（見送りは resolve せず境界宣言を付けて
+残置する運用 = `AGENTS.md` §3-3）。
+
+### 連鎖更新
+
+builder バイト変更（新値
+`50a8d22861d7c5cc8c1e3752ee63df52ffe8176e7556c6d97c7e62857069b18d`）
++ 本節追記に伴い、`inputs/education_technique_lesson_manifest.json` の
+`builder_provenance.builder_sha256`/`detail_record_sha256` を更新し、
+manifest raw sha256 が変わったため `RUN9_CONTRACT.yaml` の
+`education_technique_lesson_manifest_sha` を第5世代へ repin した（旧値
+= 第4世代、第3巡対応時点の値。履歴は本記録 §12/§13/§14 参照）。
+`pjs_consumed_inputs_manifest_sha`（`inputs/pjs_consumed_inputs_
+sha256.json`）は本節の変更で一切触れていないため無変更（本節はいずれの
+消費入力の実バイト・pin 値にも影響しない、検証・公開経路のみの変更）。
+
+### run7: repo builder（第4巡対応後）による再現実行（独立7回目）
+
+venv_h3b の python3 で、修正後の repo builder を workdir 展開済み corpus
+（`expanded/PJS_corpus_ver1.1`）に対し `build` サブコマンドで実行した。
+freeze record・spec・split manifest・contract・consumed-inputs manifest
+はいずれも repo 収載の既定パス（CLI 引数省略、デフォルト値のまま）。
+
+```
+$ python3 education_lesson_builder.py build \
+    --corpus-root <workdir>/expanded/PJS_corpus_ver1.1 \
+    --out-dir <workdir>/run7_out \
+    --allow-unpinned
+```
+
+| バンドル | 既 pin（run1〜run6） | run7 sha256 | 一致 |
+|---|---|---|---|
+| training | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | `6e13d34298a8e3c8b8632cdddcc98077294980fcb3840bde4bc6a9bcae3528da` | **PASS** |
+| validation | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | `b7a5c94a41ec618133d88cede31af51ee699d5677e0e410c4eadeba659ca9522` | **PASS** |
+
+run7 は本節の2修正がいずれも検証・公開経路（`--out` alias preflight・
+assemble の pinned manifest 照合）のみに閉じており、抽出式・
+アラインメント・直列化・バンドル内容に一切影響しないことの実測証跡で
+ある——run7 は `--allow-unpinned` で実行した（manifest 側
+`builder_provenance.builder_sha256` を本節の builder バイト変更後の値へ
+まだ repin していない時点での実測取得のため）。repin 完了後、
+`_require_bundle_bytes_match_pinned_manifest()` を run7 の実測 sha に
+対して直接呼び出し、例外を投げないこと（＝ canonical path 上で Fix 5
+（第2巡）のゲートが引き続き正しく機能すること）を確認済み。
+
+### 検証結果
+
+- `ruff check .`: clean
+- `python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`:
+  本節（builder_provenance.builder_sha256/detail_record_sha256 の repo
+  収載値更新、`education_technique_lesson_manifest_sha` の5世代目 repin
+  を含む）最終稿確定後に全 PASS。
+- freeze record（`inputs/h3b_freeze_record.json`）: 無変更（第1〜3巡と
+  同じ理由——repo builder の identity は manifest 側 `builder_provenance`
+  が別途担う）。
