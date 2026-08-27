@@ -373,9 +373,14 @@ def test_detail_never_contradicts_the_state(tmp_path: Path) -> None:
         assert "判定材料ではない" in item.detail
 
 
+def _pin(monkeypatch, digest: str) -> None:
+    """契約 pin の解決結果だけを差し替える（pin の出所は契約 1 箇所）。"""
+    monkeypatch.setattr(inv, "_evolution_theory_pin", lambda contract_path=None: (digest, ""))
+
+
 def test_canonical_name_alone_is_not_enough(tmp_path: Path, monkeypatch) -> None:
     """名前一致だけでは通さない — 同名の別内容は来歴汚染である。"""
-    monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", "a" * 64)
+    _pin(monkeypatch, "a" * 64)
     body = tmp_path / "private" / inv.EVOLUTION_THEORY_CANONICAL
     body.parent.mkdir(parents=True)
     body.write_text("wrong", encoding="utf-8")
@@ -387,7 +392,7 @@ def test_canonical_name_alone_is_not_enough(tmp_path: Path, monkeypatch) -> None
 
 def test_wrong_title_is_rejected(tmp_path: Path, monkeypatch) -> None:
     """別題名のファイルを照合対象に指定しても解決しない。"""
-    monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", "a" * 64)
+    _pin(monkeypatch, "a" * 64)
     body = tmp_path / "VISION_evolution_theory_v0.3.md"
     body.write_text("x", encoding="utf-8")
     item = inv._check_evolution_theory(tmp_path, body)
@@ -398,8 +403,7 @@ def test_wrong_title_is_rejected(tmp_path: Path, monkeypatch) -> None:
 def test_private_body_with_matching_pin_resolves(tmp_path: Path, monkeypatch) -> None:
     """private storage 側の実体 + sha 一致でのみ解決する（偽陰性でないことの確認）。"""
     body_bytes = b"canonical evolution theory v0.3"
-    digest = hashlib.sha256(body_bytes).hexdigest()
-    monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", digest)
+    _pin(monkeypatch, hashlib.sha256(body_bytes).hexdigest())
     body = tmp_path / "private" / inv.EVOLUTION_THEORY_CANONICAL
     body.parent.mkdir(parents=True)
     body.write_bytes(body_bytes)
@@ -415,8 +419,7 @@ def test_private_path_is_never_recorded(tmp_path: Path, monkeypatch) -> None:
     そのまま公開することになる。
     """
     body_bytes = b"canonical evolution theory v0.3"
-    digest = hashlib.sha256(body_bytes).hexdigest()
-    monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", digest)
+    _pin(monkeypatch, hashlib.sha256(body_bytes).hexdigest())
     secret = tmp_path / "very" / "private" / "place"
     secret.mkdir(parents=True)
     body = secret / inv.EVOLUTION_THEORY_CANONICAL
@@ -429,7 +432,7 @@ def test_private_path_is_never_recorded(tmp_path: Path, monkeypatch) -> None:
 
 def test_reference_is_unresolved_without_a_body_path(tmp_path: Path, monkeypatch) -> None:
     """pin があっても照合対象が未指定なら解決しない。"""
-    monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", "a" * 64)
+    _pin(monkeypatch, "a" * 64)
     item = inv._check_evolution_theory(tmp_path, None)
     assert item.state == inv.UNRESOLVED
     assert item.blocking is True
@@ -438,12 +441,53 @@ def test_reference_is_unresolved_without_a_body_path(tmp_path: Path, monkeypatch
 
 def test_pin_is_still_pending(tmp_path: Path) -> None:
     """pin 未取得の間は、実体を渡しても解決にしない（証明できないため）。"""
-    assert inv.EVOLUTION_THEORY_CANONICAL_SHA256 is None
+    digest, why = inv._evolution_theory_pin()
+    assert digest is None
+    assert inv.EVOLUTION_THEORY_PIN_FIELD in why
     body = tmp_path / inv.EVOLUTION_THEORY_CANONICAL
     body.write_text("x", encoding="utf-8")
     item = inv._check_evolution_theory(tmp_path, body)
     assert item.state == inv.UNRESOLVED
-    assert "vg_evolution_theory_ref_sha" in item.detail
+    assert inv.EVOLUTION_THEORY_PIN_FIELD in item.detail
+
+
+# --- 第 18 巡: pin の出所を契約 1 箇所に閉じる（PR #330 Codex 第 18 巡 P1）--
+
+
+def test_module_has_no_independent_digest_constant() -> None:
+    """独立した digest 定数を持たない（二重管理の pin は乖離する）。
+
+    R10-G0 が検証する契約 pin と inventory が照合する digest が別物だと、
+    片方の digest を検証しながら別バイトを PRESENT と書ける。
+    """
+    assert not hasattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256")
+    assert inv.EVOLUTION_THEORY_PIN_FIELD == "vg_evolution_theory_ref_sha"
+
+
+def test_pin_comes_from_the_contract(tmp_path: Path) -> None:
+    """契約の PINNED 値がそのまま照合値になる。"""
+    import yaml
+
+    digest = "b" * 64
+    doc = yaml.safe_load(inv.CONTRACT_PATH.read_text(encoding="utf-8"))
+    doc[inv.EVOLUTION_THEORY_PIN_FIELD] = {"value": digest, "status": "PINNED"}
+    path = tmp_path / "RUN10_CONTRACT.yaml"
+    path.write_text(yaml.safe_dump(doc, allow_unicode=True), encoding="utf-8")
+    assert inv._evolution_theory_pin(path) == (digest, "")
+
+
+def test_unreadable_contract_fails_closed(tmp_path: Path) -> None:
+    """契約が読めない・壊れているときは解決しない（fail-closed）。"""
+    missing = tmp_path / "absent.yaml"
+    digest, why = inv._evolution_theory_pin(missing)
+    assert digest is None
+    assert why
+
+    broken = tmp_path / "RUN10_CONTRACT.yaml"
+    broken.write_text("schema: nonsense\n", encoding="utf-8")
+    digest, why = inv._evolution_theory_pin(broken)
+    assert digest is None
+    assert why
 
 
 def test_canonical_body_is_not_a_repository_path() -> None:

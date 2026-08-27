@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（329 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（332 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -512,3 +512,17 @@ inventory は commit されるため、private ストレージの構成をその
 
 2 は第 15 巡の同型で、閉世界の**向き**の取りこぼしだった。上（未知キーの排除）は
 閉じていたが下（必須キーの充足）が開いていた。
+
+### 第 18 巡（P1×1）
+
+**Evolution Theory の pin を二重管理していた** — 照合値をモジュール定数
+`EVOLUTION_THEORY_CANONICAL_SHA256` に持ちながら、契約 `RUN10_CONTRACT.yaml` の
+`vg_evolution_theory_ref_sha` にも同じ digest を書く設計だった。両者が乖離すると、
+R10-G0 は契約側の digest を検証しながら R10-G2 は別バイトを PRESENT と書く —
+矛盾した来歴のまま Run が進む。
+
+**定数を廃止し、pin の出所を契約 1 箇所に閉じた**。`_evolution_theory_pin()` が
+契約をロードして PINNED 値だけを返し、`PENDING` / 契約が読めない / 壊れている
+場合はいずれも None（fail-closed）で R10-G2 を塞ぐ。乖離の検出ではなく、
+乖離し得る状態そのものを無くす方向で終端した。
+`test_module_has_no_independent_digest_constant` が再発を機械強制する。

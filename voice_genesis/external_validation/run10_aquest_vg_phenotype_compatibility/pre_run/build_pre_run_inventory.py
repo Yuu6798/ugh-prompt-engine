@@ -58,8 +58,10 @@ from run10_schema import (  # noqa: E402
     AF01_FROZEN_HASHES,
     AF01_PITCHES,
     AF01_UNIT_FILE_COUNT,
+    Run10ContractError,
     canonical_json_bytes,
     compute_file_sha256,
+    load_run10_contract,
 )
 
 PRESENT = "PRESENT"
@@ -91,11 +93,13 @@ EVOLUTION_THEORY_CANONICAL = "VoiceGenesis_Evolution_Theory_v0.3_ja.md"
 # repo 内の固定パスを正典位置にすると、本体を commit しない限り永久に
 # 解決不能になる（User 裁定 2026-08-27: 本文書はリポジトリに載せない）。
 
-# 正典本体の凍結 sha256。**未取得**（RUN10_CONTRACT.yaml
-# `vg_evolution_theory_ref_sha` = PENDING / Drive 側実体の実バイト sha 未取得）。
-# 名前一致だけで PRESENT にすると、同名の別内容を置くだけで来歴が汚染される。
-# pin を得たらここに 64 桁 hex を書き、`inputs/` へは置かない（§2.2 公開境界）。
-EVOLUTION_THEORY_CANONICAL_SHA256: Optional[str] = None
+# 正典本体の凍結 sha256 の**唯一の出所**は `RUN10_CONTRACT.yaml` の
+# `vg_evolution_theory_ref_sha` である。ここに独立した定数を置いてはならない —
+# 二重管理の pin が乖離すると、R10-G0 は片方の digest を検証しながら R10-G2 は
+# 別バイトを PRESENT と書く、矛盾した来歴のまま Run が進む
+# （PR #330 Codex 第 18 巡 P1）。pin を得たら契約 YAML 側に 1 箇所だけ書く。
+CONTRACT_PATH = _RUN10_DIR / "RUN10_CONTRACT.yaml"
+EVOLUTION_THEORY_PIN_FIELD = "vg_evolution_theory_ref_sha"
 
 
 @dataclass
@@ -394,8 +398,34 @@ def inventory_aquest(voicebank_root: Optional[Path]) -> List[InventoryItem]:
     ]
 
 
+def _evolution_theory_pin(contract_path: Optional[Path] = None) -> Tuple[Optional[str], str]:
+    """契約から Evolution Theory 正典の凍結 sha256 を解決する。
+
+    戻り値は `(digest, why)`。`digest` が None のときだけ `why` が理由を述べる。
+    契約が読めない・壊れている場合も None（fail-closed）— 来歴 pin を解決
+    できないこと自体が R10-G2 を塞ぐ事由である。
+    """
+    path = Path(contract_path) if contract_path is not None else CONTRACT_PATH
+    try:
+        contract = load_run10_contract(path)
+    except (OSError, Run10ContractError) as exc:
+        return None, f"の pin を契約から解決できない（{path.name}: {exc}）。"
+    pin = contract.pins.get(EVOLUTION_THEORY_PIN_FIELD)
+    if pin is None:
+        return None, f"の pin 欄 {EVOLUTION_THEORY_PIN_FIELD} が契約に無い。"
+    if pin.status != "PINNED" or not isinstance(pin.value, str):
+        return None, (
+            f"の凍結 sha256 が未取得（RUN10_CONTRACT.yaml"
+            f" {EVOLUTION_THEORY_PIN_FIELD} = {pin.status}）。pin が無い限り"
+            "「正しい実体が在る」ことは証明できないため解決にしない。"
+        )
+    return pin.value, ""
+
+
 def _check_evolution_theory(
-    repo: Path, body_path: Optional[Path] = None
+    repo: Path,
+    body_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
 ) -> InventoryItem:
     """§29 手順 5: Evolution Theory v0.3 本体の解決。
 
@@ -422,12 +452,9 @@ def _check_evolution_theory(
             blocking=True,
         )
 
-    if EVOLUTION_THEORY_CANONICAL_SHA256 is None:
-        return unresolved(
-            "の凍結 sha256 が未取得（RUN10_CONTRACT.yaml"
-            " vg_evolution_theory_ref_sha = PENDING）。pin が無い限り"
-            "「正しい実体が在る」ことは証明できないため解決にしない。"
-        )
+    expected, why = _evolution_theory_pin(contract_path)
+    if expected is None:
+        return unresolved(why)
 
     if body_path is None:
         return unresolved(
@@ -446,10 +473,10 @@ def _check_evolution_theory(
         )
 
     actual = compute_file_sha256(body)
-    if actual != EVOLUTION_THEORY_CANONICAL_SHA256:
+    if actual != expected:
         return unresolved(
-            "の実バイト sha256 が凍結値と一致しない"
-            f"（expected={EVOLUTION_THEORY_CANONICAL_SHA256} actual={actual}）。"
+            "の実バイト sha256 が契約の pin と一致しない"
+            f"（expected={expected} actual={actual}）。"
             "同名の別内容は来歴汚染である。"
         )
 
@@ -458,7 +485,7 @@ def _check_evolution_theory(
         state=PRESENT,
         detail=(
             found_note + canonical_note
-            + "の実バイト sha256 が凍結値と一致（§29 手順 5 解決）。"
+            + "の実バイト sha256 が契約の pin と一致（§29 手順 5 解決）。"
             "本体は private storage 側にあり commit しない。"
         ),
         blocking=False,
@@ -466,11 +493,13 @@ def _check_evolution_theory(
 
 
 def inventory_repository(
-    repo: Path, evolution_theory_path: Optional[Path] = None
+    repo: Path,
+    evolution_theory_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
 ) -> List[InventoryItem]:
     """リポジトリ側の参照解決（§29 手順 2/5）。"""
     items = [
-        _check_evolution_theory(repo, evolution_theory_path),
+        _check_evolution_theory(repo, evolution_theory_path, contract_path),
         InventoryItem(
             item_id="meter_implementation",
             state=ABSENT,
@@ -500,13 +529,14 @@ def build_inventory(
     repo: Optional[Path] = None,
     af01_replay: bool = False,
     evolution_theory_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
 ) -> Dict[str, object]:
     """R10-G2 inventory 文書を組み立てる。"""
     root = repo if repo is not None else _repo_root()
     items = (
         inventory_af01(af01_bundle_root, run_replay=af01_replay)
         + inventory_aquest(aquest_voicebank_root)
-        + inventory_repository(root, evolution_theory_path)
+        + inventory_repository(root, evolution_theory_path, contract_path)
     )
     blocking = [item for item in items if item.blocking]
     return {
