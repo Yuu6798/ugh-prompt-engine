@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（215 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（234 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -273,3 +273,22 @@ E0 校正に失敗した meter は `CALIBRATED_EXTERNAL` になれず、§15.1 �
 （例: 全行 `NO_STABLE_MAPPING` なのに `COMPATIBILITY_MAP_ESTABLISHED` を名乗る）は、
 §14.6 の判定則が数値で freeze されるまで検証しない。何をもって「地図が成立した」と
 するかは `measurement_decision_spec` が定義するものであり、実装側が発明しない。
+
+### 第 6 巡（P1×1 / P2×1、全件採用 + 2 ファミリーを終端）
+
+1. **outcome 同士の矛盾** — `scientific_outcome` は list であり、各要素を enum 照合
+   するだけだったため `COMPATIBILITY_MAP_ESTABLISHED` と
+   `NO_STABLE_CROSS_SYSTEM_MAPPING` を並べた正典結果が通った。設計本文から一意に
+   矛盾と読める 14 対を閉世界で拒否し、重複記載も拒否する。矛盾検査は evidence の
+   充足より**先**に走らせる（矛盾した結論に「evidence が足りない」と報告するのは誤導）。
+2. **登録ファイルの containment** — 第 3 巡で payload 側の symlink は塞いだが、
+   台帳対象外の `FREEZE_REGISTRATION.json` は除外扱いのまま symlink を辿っていた。
+   containment 判定を `containment_violation()` の単一実装へ寄せ、payload と
+   登録ファイルの両方に同じ規則を適用する。**これで symlink ファミリーを終端する。**
+
+#### 境界宣言 — outcome 組み合わせの検証範囲
+
+拒否するのは設計本文から一意に矛盾と読める対だけである。許容される組み合わせの
+完全な束は DESIGN_RUN10 が定義していないため実装側で発明しない。特に
+`GENERATIVE_COMPATIBILITY_ESTABLISHED` と `MEASUREMENT_ONLY_COMPATIBILITY` は
+§16.1 / §16.3 が trait 単位の分類であり、Run 単位で相互排他とは判定しない。

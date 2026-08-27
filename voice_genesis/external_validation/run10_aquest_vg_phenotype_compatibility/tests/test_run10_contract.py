@@ -958,3 +958,50 @@ def test_outcome_consistency_rules_are_enumerated() -> None:
     source = inspect.getsource(m._validate_outcome_consistency)
     for rule in ("規則 1", "規則 2", "規則 3", "規則 4"):
         assert rule in source
+
+
+# --- 第 6 巡: outcome 同士の矛盾（PR #330 Codex 第 6 巡 P1） --------------
+
+
+def test_contradictory_outcomes_are_rejected() -> None:
+    """§22.2: 地図成立と「安定した対応が無い」を並べた正典結果を拒否する。"""
+    doc = _passing_results()
+    doc["scientific_outcome"] = [
+        "COMPATIBILITY_MAP_ESTABLISHED",
+        "NO_STABLE_CROSS_SYSTEM_MAPPING",
+    ]
+    with pytest.raises(m.Run10ContractError, match="同時に成立しない"):
+        m.validate_results_document(doc)
+
+
+@pytest.mark.parametrize("left, right", m._MUTUALLY_EXCLUSIVE_OUTCOMES)
+def test_every_declared_exclusive_pair_is_enforced(left: str, right: str) -> None:
+    """宣言した相互排他対がすべて実際に拒否される（掃討の被覆）。"""
+    doc = _passing_results()
+    doc["scientific_outcome"] = [left, right]
+    with pytest.raises(m.Run10ContractError, match="同時に成立しない"):
+        m.validate_results_document(doc)
+
+
+def test_duplicate_outcomes_are_rejected() -> None:
+    """同じ結論の重複記載を正典結果に残さない。"""
+    doc = _passing_results()
+    doc["scientific_outcome"] = [
+        "COMPATIBILITY_MAP_ESTABLISHED",
+        "COMPATIBILITY_MAP_ESTABLISHED",
+    ]
+    with pytest.raises(m.Run10ContractError, match="重複"):
+        m.validate_results_document(doc)
+
+
+def test_compatible_outcome_combinations_still_pass() -> None:
+    """矛盾しない組み合わせまで塞いでいないこと（偽陽性の確認）。"""
+    doc = _passing_results()
+    doc["phase_b_entry"] = "SKIP"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED", "PHASE_B_NOT_ENTERED"]
+    m.validate_results_document(doc)
+
+    doc = _passing_results()
+    doc["scientific_outcome"] = ["PARTIAL_COMPATIBILITY_MAP", "SCHEMA_GAP_IDENTIFIED"]
+    doc["novel_trait_candidates"] = {"AQUEST_X01": {"state": "confirmed"}}
+    m.validate_results_document(doc)

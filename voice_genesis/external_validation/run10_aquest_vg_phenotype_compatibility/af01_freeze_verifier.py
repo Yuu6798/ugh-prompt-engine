@@ -112,6 +112,27 @@ class Af01VerificationReport:
         }
 
 
+def containment_violation(root: Path, relative: str) -> Optional[str]:
+    """`root/relative` が bundle の内側に収まっているか（外なら理由を返す）。
+
+    payload だけでなく、台帳対象外の登録ファイル
+    （`FREEZE_REGISTRATION.json` 等）にも同じ規則を適用する。片方だけ守ると、
+    外部ファイルへの symlink を並べた薄いディレクトリが「自己完結した
+    bundle」として通る（PR #330 Codex 第 3 巡 P2 / 第 6 巡 P2 が payload 側と
+    登録ファイル側で 2 度露出させた同型）。
+    """
+    if Path(relative).is_absolute() or ".." in Path(relative).parts:
+        return f"{relative}: 字句上 bundle 外を指す"
+    target = root / relative
+    if not target.exists():
+        return None  # 不在は containment ではなく missing として扱う
+    resolved_root = root.resolve()
+    resolved = target.resolve()
+    if resolved != resolved_root and resolved_root not in resolved.parents:
+        return f"{relative}: 解決後 {resolved} が bundle root の外"
+    return None
+
+
 def parse_payload_ledger(text: str) -> Dict[str, str]:
     """`sha256␠␠path` 形式の台帳を `{path: sha256}` にする。
 
@@ -279,22 +300,16 @@ def verify_bundle(
     missing: List[str] = []
     mismatches: List[str] = []
     escaping: List[str] = []
-    resolved_root = root.resolve()
     for relative, expected in sorted(entries.items()):
         target = root / relative
-        # bundle の外を指す symlink を辿って hash すると、外部ファイルへの
-        # symlink を並べた薄いディレクトリが「完全な AF01 bundle」として
-        # 通ってしまう（PR #330 Codex 第 3 巡 P2）。payload バイトが bundle に
-        # 含まれていることを、字句上と解決後の両方で要求する。
-        if ".." in Path(relative).parts or Path(relative).is_absolute():
-            escaping.append(f"{relative}: 台帳のパスが bundle 外を指す字句を含む")
+        # payload バイトが bundle に含まれていることを字句上と解決後の両方で
+        # 要求する（`containment_violation()` が唯一の実装）。
+        breach = containment_violation(root, relative)
+        if breach is not None:
+            escaping.append(breach)
             continue
         if not target.is_file():
             missing.append(relative)
-            continue
-        resolved = target.resolve()
-        if resolved_root not in resolved.parents:
-            escaping.append(f"{relative}: 解決後 {resolved} が bundle root の外")
             continue
         actual = compute_file_sha256(target)
         if actual != expected:
@@ -303,6 +318,15 @@ def verify_bundle(
     checks["payload_files_sha256"] = "PASS" if not mismatches else "FAIL"
     checks["payload_contained_in_bundle"] = "PASS" if not escaping else "FAIL"
     mismatches.extend(escaping)
+
+    # 台帳対象外の登録ファイルにも同じ containment を課す（第 6 巡 P2）。
+    registration_breaches = [
+        breach
+        for breach in (containment_violation(root, name) for name in LEDGER_EXCLUDED_NAMES)
+        if breach is not None
+    ]
+    checks["registration_contained_in_bundle"] = "PASS" if not registration_breaches else "FAIL"
+    escaping.extend(registration_breaches)
 
     known = set(entries) | set(LEDGER_EXCLUDED_NAMES)
     unexpected = sorted(

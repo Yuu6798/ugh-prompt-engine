@@ -917,12 +917,57 @@ def _validate_gate_ledger(mapping: Mapping[str, Any], gate_ids: Tuple[str, ...],
 # measurement_decision_spec が定義するものであり、実装側が発明しない。
 
 
+# 同時に成立し得ない outcome の組（閉世界）。§22.2 は outcome を list で持つが、
+# 各要素を enum 照合するだけでは `COMPATIBILITY_MAP_ESTABLISHED` と
+# `NO_STABLE_CROSS_SYSTEM_MAPPING` を並べた正典結果が通る
+# （PR #330 Codex 第 6 巡 P1）。
+#
+# 【境界宣言】ここで拒否するのは**設計本文から一意に矛盾と読める対**だけである。
+# 許容される組み合わせの完全な束（どの outcome が同時に成立してよいか）は
+# DESIGN_RUN10 が定義していないため、実装側で発明しない。特に
+# `GENERATIVE_COMPATIBILITY_ESTABLISHED` と `MEASUREMENT_ONLY_COMPATIBILITY` は
+# trait ごとに別判定になり得る（§16.1 / §16.3 は trait 単位の分類）ため、
+# Run 単位で相互排他とは判定しない。
+_MUTUALLY_EXCLUSIVE_OUTCOMES: Tuple[Tuple[str, str], ...] = (
+    # §22.2: 地図が成立した / 部分的にしか成立しない
+    ("COMPATIBILITY_MAP_ESTABLISHED", "PARTIAL_COMPATIBILITY_MAP"),
+    # §15.6 / §22.2: 地図が成立した / 安定した対応が無い
+    ("COMPATIBILITY_MAP_ESTABLISHED", "NO_STABLE_CROSS_SYSTEM_MAPPING"),
+    ("PARTIAL_COMPATIBILITY_MAP", "NO_STABLE_CROSS_SYSTEM_MAPPING"),
+    # §22.2: 測定が不十分 / 何かが成立した
+    ("MEASUREMENT_INSUFFICIENT", "COMPATIBILITY_MAP_ESTABLISHED"),
+    ("MEASUREMENT_INSUFFICIENT", "PARTIAL_COMPATIBILITY_MAP"),
+    ("MEASUREMENT_INSUFFICIENT", "SCHEMA_GAP_IDENTIFIED"),
+    ("MEASUREMENT_INSUFFICIENT", "GENERATIVE_COMPATIBILITY_ESTABLISHED"),
+    ("MEASUREMENT_INSUFFICIENT", "MEASUREMENT_ONLY_COMPATIBILITY"),
+    # §15.6「十分な素材・校正・supportがあるにもかかわらず」= 不十分と両立しない
+    ("MEASUREMENT_INSUFFICIENT", "NO_STABLE_CROSS_SYSTEM_MAPPING"),
+    # §12.6 / §21 R10-G7: 外的妥当性が立たないのに成立を主張しない
+    ("MEASUREMENT_OVERFIT_DETECTED", "COMPATIBILITY_MAP_ESTABLISHED"),
+    ("MEASUREMENT_OVERFIT_DETECTED", "PARTIAL_COMPATIBILITY_MAP"),
+    ("MEASUREMENT_OVERFIT_DETECTED", "GENERATIVE_COMPATIBILITY_ESTABLISHED"),
+    # §16 / §22.2: Phase B へ入らなかった / Phase B 由来の結論
+    ("PHASE_B_NOT_ENTERED", "GENERATIVE_COMPATIBILITY_ESTABLISHED"),
+    ("PHASE_B_NOT_ENTERED", "MEASUREMENT_ONLY_COMPATIBILITY"),
+)
+
+
 def _validate_outcome_consistency(
     mapping: Mapping[str, Any],
     entry: str,
     outcomes: List[Any],
 ) -> None:
     """outcome と Run 状態量の整合を検証する（§16 / §21 R10-G7 / §22.2）。"""
+    # 規則 0: outcome 同士が矛盾していないこと（§22.2）。
+    if len(set(outcomes)) != len(outcomes):
+        raise Run10ContractError(f"results.scientific_outcome: 重複がある {outcomes}")
+    present = set(outcomes)
+    for left, right in _MUTUALLY_EXCLUSIVE_OUTCOMES:
+        if left in present and right in present:
+            raise Run10ContractError(
+                f"results.scientific_outcome: {left} と {right} は同時に成立しない（§22.2）"
+            )
+
     # 規則 1: synthesis 由来の結論は Phase B が走った場合にしか出ない（§16）。
     derived = [o for o in outcomes if o in PHASE_B_DERIVED_OUTCOMES]
     if derived and entry != "ENTER":
@@ -976,6 +1021,10 @@ def _validate_results_evidence(
     `COMPATIBILITY_MAP_ESTABLISHED` を記録できると、比較地図が成立していない
     のに成立したことにできる偽成功経路になる（PR #330 Codex 第 1 巡 P1）。
     """
+    # outcome 同士・outcome と Run 状態量の矛盾は evidence の充足より先に見る
+    # （矛盾した結論に対して「evidence が足りない」と報告するのは誤導になる）。
+    _validate_outcome_consistency(mapping, entry, outcomes)
+
     if verdict == "PASS":
         _validate_gate_ledger(mapping, PHASE_A_GATE_IDS, "protocol_verdict=PASS")
         if entry == "ENTER":
@@ -997,8 +1046,6 @@ def _validate_results_evidence(
     for outcome in outcomes:
         for section in _EVIDENCE_FOR_OUTCOME.get(outcome, ()):
             _require_nonempty_section(mapping, section, outcome)
-
-    _validate_outcome_consistency(mapping, entry, outcomes)
 
     matrix = mapping.get("compatibility_matrix")
     established = any(outcome in _ESTABLISHED_OUTCOMES for outcome in outcomes)

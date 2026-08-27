@@ -45,6 +45,7 @@ if str(_RUN10_DIR) not in sys.path:
 from af01_freeze_verifier import (  # noqa: E402
     PINNED_LEDGER_PATH,
     check_ledger_structure,
+    containment_violation,
     parse_payload_ledger,
     verify_bundle,
     verify_ledger_bytes,
@@ -170,7 +171,12 @@ def inventory_af01(bundle_root: Optional[Path]) -> List[InventoryItem]:
         )
     )
     registration = Path(bundle_root) / "FREEZE_REGISTRATION.json"
-    state, detail = _check_freeze_registration(registration)
+    # bundle 外の JSON への symlink を「必須登録あり」と数えない（第 6 巡 P2）。
+    breach = containment_violation(Path(bundle_root), "FREEZE_REGISTRATION.json")
+    if breach is not None:
+        state, detail = ABSENT, f"bundle に自己完結していない: {breach}"
+    else:
+        state, detail = _check_freeze_registration(registration)
     items.append(
         InventoryItem(
             item_id="af01_freeze_registration",

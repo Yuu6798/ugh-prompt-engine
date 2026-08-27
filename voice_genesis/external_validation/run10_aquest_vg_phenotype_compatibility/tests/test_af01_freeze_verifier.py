@@ -485,3 +485,42 @@ def test_verify_bundle_rejects_symlink_escaping_the_root(tmp_path: Path, monkeyp
     report = v.verify_bundle(root)
     assert report.verdict == v.VERDICT_DRIFT
     assert report.checks["payload_contained_in_bundle"] == "FAIL"
+
+
+# --- 第 6 巡: 登録ファイルの containment（PR #330 Codex 第 6 巡 P2） ------
+
+
+def test_freeze_registration_symlink_outside_bundle_is_rejected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """台帳対象外の登録ファイルにも containment を課す。
+
+    payload 側だけ守ると、外部の正当な JSON を指す symlink を置いた薄い
+    ディレクトリが「自己完結した bundle」として通る。
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "FREEZE_REGISTRATION.json").write_text("{}", encoding="utf-8")
+
+    root = tmp_path / "bundle"
+    (root / "C4").mkdir(parents=True)
+    (root / "C4" / "a.wav").write_bytes(b"frozen")
+    (root / "FREEZE_REGISTRATION.json").symlink_to(outside / "FREEZE_REGISTRATION.json")
+    entries = {"C4/a.wav": hashlib.sha256(b"frozen").hexdigest()}
+    (root / "PAYLOAD_SHA256SUMS.txt").write_bytes(v.render_payload_ledger(entries))
+    _pass_ledger_gate(monkeypatch, root)
+
+    report = v.verify_bundle(root)
+    assert report.verdict == v.VERDICT_DRIFT
+    assert report.checks["registration_contained_in_bundle"] == "FAIL"
+
+
+def test_containment_violation_is_the_single_implementation(tmp_path: Path) -> None:
+    """containment 判定が 1 実装であること（payload と登録ファイルで分岐しない）。"""
+    root = tmp_path / "b"
+    root.mkdir()
+    (root / "inside.txt").write_text("x", encoding="utf-8")
+    assert v.containment_violation(root, "inside.txt") is None
+    assert v.containment_violation(root, "../escape.txt") is not None
+    assert v.containment_violation(root, "/etc/passwd") is not None
+    assert v.containment_violation(root, "absent.txt") is None  # 不在は missing 扱い
