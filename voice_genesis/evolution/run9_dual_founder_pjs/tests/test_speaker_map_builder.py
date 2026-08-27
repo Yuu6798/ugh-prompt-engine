@@ -56,8 +56,11 @@ def _synthetic_manifest_and_inputs(
     _write_emb(ritsu_path, ritsu_vec)
     _write_emb(user_path, user_vec)
 
-    w_r = np.float32(eval(w_ritsu_expr, {"__builtins__": {}}))  # noqa: S307
-    w_u = np.float32(eval(w_user_expr, {"__builtins__": {}}))  # noqa: S307
+    # synthesize() 自身が使う共有パーサ（m._evaluate_closed_weight_expr()）
+    # で独立に重みを評価する——builder 内部実装への依存を避けつつ、
+    # builder/validator が共有するパーサと同一の評価規則で期待値を作る。
+    w_r = np.float32(m._evaluate_closed_weight_expr(w_ritsu_expr, field="test.w_ritsu_expr"))  # noqa: SLF001
+    w_u = np.float32(m._evaluate_closed_weight_expr(w_user_expr, field="test.w_user_expr"))  # noqa: SLF001
     expected_synth = (w_r * ritsu_vec + w_u * user_vec)
     expected_sha = _sha256(expected_synth.tobytes())
 
@@ -233,3 +236,100 @@ def test_load_local_speaker_map_manifest_validates_real_repo_manifest() -> None:
     assert data["builder_provenance"]["repo_relative_path"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/speaker_map_builder.py"
     )
+
+
+# --- _check_out_does_not_alias_inputs(): --out 入力破壊ガード -----------------
+# --- (PR #328 Codex レビュー第2巡指摘4、P1、採用) -----------------------------
+
+
+def test_check_out_alias_same_path_as_ritsu_emb_rejected(tmp_path: Path) -> None:
+    """`--out` に `--ritsu-emb` と全く同一のパスを渡すと（symlink 不使用の
+    最も単純な alias）拒否理由の文字列が返る。"""
+    ritsu_path = tmp_path / "ritsu.emb"
+    user_path = tmp_path / "user.emb"
+    ritsu_path.write_bytes(b"\x00" * 4)
+    user_path.write_bytes(b"\x00" * 4)
+    error = smb._check_out_does_not_alias_inputs(ritsu_path, ritsu_path, user_path)  # noqa: SLF001
+    assert error is not None
+    assert "--ritsu-emb" in error
+
+
+def test_check_out_alias_same_path_as_user_emb_rejected(tmp_path: Path) -> None:
+    ritsu_path = tmp_path / "ritsu.emb"
+    user_path = tmp_path / "user.emb"
+    ritsu_path.write_bytes(b"\x00" * 4)
+    user_path.write_bytes(b"\x00" * 4)
+    error = smb._check_out_does_not_alias_inputs(user_path, ritsu_path, user_path)  # noqa: SLF001
+    assert error is not None
+    assert "--user-emb" in error
+
+
+def test_check_out_symlink_alias_to_ritsu_emb_rejected(tmp_path: Path) -> None:
+    """`--out` が `--ritsu-emb` と異なるパス文字列でも、symlink 経由で
+    同一実体を指していれば `Path.resolve()` により alias と検出される。"""
+    ritsu_path = tmp_path / "ritsu.emb"
+    user_path = tmp_path / "user.emb"
+    ritsu_path.write_bytes(b"\x00" * 4)
+    user_path.write_bytes(b"\x00" * 4)
+    out_symlink = tmp_path / "out_alias.emb"
+    out_symlink.symlink_to(ritsu_path)
+    error = smb._check_out_does_not_alias_inputs(out_symlink, ritsu_path, user_path)  # noqa: SLF001
+    assert error is not None
+    assert "--ritsu-emb" in error
+
+
+def test_check_out_symlink_alias_to_user_emb_rejected(tmp_path: Path) -> None:
+    ritsu_path = tmp_path / "ritsu.emb"
+    user_path = tmp_path / "user.emb"
+    ritsu_path.write_bytes(b"\x00" * 4)
+    user_path.write_bytes(b"\x00" * 4)
+    out_symlink = tmp_path / "out_alias.emb"
+    out_symlink.symlink_to(user_path)
+    error = smb._check_out_does_not_alias_inputs(out_symlink, ritsu_path, user_path)  # noqa: SLF001
+    assert error is not None
+    assert "--user-emb" in error
+
+
+def test_check_out_distinct_path_not_flagged(tmp_path: Path) -> None:
+    """`--out` が入力2つのいずれとも異なる実体であれば `None`（alias なし）
+    を返す——正常系がガードで誤って拒否されないことの確認。"""
+    ritsu_path = tmp_path / "ritsu.emb"
+    user_path = tmp_path / "user.emb"
+    out_path = tmp_path / "out.emb"
+    ritsu_path.write_bytes(b"\x00" * 4)
+    user_path.write_bytes(b"\x00" * 4)
+    assert smb._check_out_does_not_alias_inputs(out_path, ritsu_path, user_path) is None  # noqa: SLF001
+
+
+def test_main_rejects_out_aliasing_ritsu_emb_and_does_not_corrupt_input(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`main()` 経由の統合確認: `synthesize()` をモックして本物の manifest
+    照合を経由せずに、`--out` == `--ritsu-emb`（同一パス）指定時に
+    write_bytes() が一切実行されず、非ゼロ終了し、入力ファイルの実バイトが
+    無傷のまま残ることを直接確認する（fail-closed 契約の end-to-end 確認、
+    実 emb を repo に追加せずに検証する）。"""
+    ritsu_path = tmp_path / "ritsu.emb"
+    user_path = tmp_path / "user.emb"
+    original_ritsu_bytes = b"\x01\x02\x03\x04" * 96  # 384 bytes、無意味な固定値
+    ritsu_path.write_bytes(original_ritsu_bytes)
+    user_path.write_bytes(b"\x00" * 384)
+
+    fake_synth = np.zeros(smb.EMB_DIM, dtype=np.float32)
+    fake_report: Dict[str, Any] = {"founder_id": "R9F-01", "reproduced": True}
+
+    def _fake_synthesize(founder_id: str, ritsu_emb_path: Path, user_emb_path: Path) -> Any:
+        return fake_synth, dict(fake_report)
+
+    monkeypatch.setattr(smb, "synthesize", _fake_synthesize)
+
+    argv = [
+        "--founder", "R9F-01",
+        "--ritsu-emb", str(ritsu_path),
+        "--user-emb", str(user_path),
+        "--out", str(ritsu_path),
+    ]
+    rc = smb.main(argv)
+    assert rc == 1
+    # 入力 ritsu emb の実バイトが無傷のまま残っていること（破壊されていない）。
+    assert ritsu_path.read_bytes() == original_ritsu_bytes

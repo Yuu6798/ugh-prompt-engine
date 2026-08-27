@@ -18546,6 +18546,34 @@ def test_harness3a_manifest_renormalized_weight_repr_mismatch_rejected(founder_i
         m.validate_speaker_map_manifest(data)
 
 
+# --- validate_speaker_map_manifest(): w_ritsu_expr/w_user_expr の閉じた -----
+# --- 文法評価（PR #328 Codex レビュー第2巡指摘5、P2、採用） -----------------
+
+
+def test_harness3a_manifest_weight_expr_tampered_but_hex_unchanged_rejected() -> None:
+    """expr 改変（hex/repr は変更しない）: `w_ritsu_expr` を R9F-01 の実際
+    の値 `'0.75'` から、閉じた文法上は正当だが別の値へ評価される `'0.5'`
+    へ差し替えると、`w_ritsu_float32_hex`/`w_ritsu_float32_repr` 欄自体は
+    元の（coords_raw と一致する）正しい値のまま据え置いても fail-closed で
+    拒否される——expr だけを改竄しても `*_float32_hex`/`*_repr` さえ正しけ
+    れば通過していた旧実装の穴の直接再現。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"]["R9F-01"]["renormalized_runtime_weights"]["w_ritsu_expr"] = "0.5"
+    with pytest.raises(m.Run9ValidationError, match="w_ritsu_expr"):
+        m.validate_speaker_map_manifest(data)
+
+
+def test_harness3a_manifest_weight_expr_disallowed_form_rejected() -> None:
+    """許容外形式: `w_ritsu_expr` を数式としては同値（`0.5+0.25 == 0.75`）
+    でも閉じた文法（10進小数リテラル or 単純分数 `'A/B'`）に含まれない
+    `'0.5+0.25'` へ差し替えると、文法違反として fail-closed で拒否される
+    （eval 的な一般式評価を導入しないことの直接確認）。"""
+    data = copy.deepcopy(_speaker_map_manifest_data())
+    data["founders"]["R9F-01"]["renormalized_runtime_weights"]["w_ritsu_expr"] = "0.5+0.25"
+    with pytest.raises(m.Run9ValidationError, match="closed grammar"):
+        m.validate_speaker_map_manifest(data)
+
+
 @pytest.mark.parametrize("founder_id", ["R9F-01", "R9F-02"])
 def test_harness3a_manifest_input_embedding_sha_shape_rejected(founder_id: str) -> None:
     """emb sha改竄（shape）: `ritsu_emb_sha256` を非64hex値へ改竄すると
@@ -18817,9 +18845,10 @@ def test_harness3a_load_pinned_speaker_map_manifest_coords_tampered_vs_genome_re
 ) -> None:
     """coords改竄: `coords_raw` を発行済み Founder Genome document の
     coords と食い違う値へ改竄すると（validator 単体の自己整合チェックは
-    素通りするよう unrealized_mass/renormalized_runtime_weights も追随
-    させても）、loader の cross-check (b)（`load_pinned_founder_genome_
-    document()` との一致）が fail-closed で拒否する。"""
+    素通りするよう unrealized_mass/renormalized_runtime_weights（PR #328
+    第2巡指摘5対応後は expr 自体も）も追随させても）、loader の
+    cross-check (b)（`load_pinned_founder_genome_document()` との一致）が
+    fail-closed で拒否する。"""
     def _mutate(data: Dict[str, Any]) -> None:
         f = data["founders"][founder_id]
         # 座標を改竄（af0 は不変のまま ritsu/user の配分だけをずらす —
@@ -18827,12 +18856,24 @@ def test_harness3a_load_pinned_speaker_map_manifest_coords_tampered_vs_genome_re
         f["coords_raw"]["ritsu"] = 0.35
         f["coords_raw"]["user"] = 0.05
         denom = f["coords_raw"]["ritsu"] + f["coords_raw"]["user"]
-        w_ritsu_hex, w_ritsu_repr = m._float32_hex_and_repr(f["coords_raw"]["ritsu"] / denom)
-        w_user_hex, w_user_repr = m._float32_hex_and_repr(f["coords_raw"]["user"] / denom)
+        w_ritsu_value = f["coords_raw"]["ritsu"] / denom
+        w_user_value = f["coords_raw"]["user"] / denom
+        w_ritsu_hex, w_ritsu_repr = m._float32_hex_and_repr(w_ritsu_value)
+        w_user_hex, w_user_repr = m._float32_hex_and_repr(w_user_value)
         f["renormalized_runtime_weights"]["w_ritsu_float32_hex"] = w_ritsu_hex
         f["renormalized_runtime_weights"]["w_ritsu_float32_repr"] = w_ritsu_repr
         f["renormalized_runtime_weights"]["w_user_float32_hex"] = w_user_hex
         f["renormalized_runtime_weights"]["w_user_float32_repr"] = w_user_repr
+        # PR #328 第2巡指摘5対応: validator は expr 自体も coords_raw 由来
+        # の再導出重みと厳密一致することを強制するため、expr も新しい
+        # coords に追随させないと validator 単体の自己整合チェックの時点
+        # で reject されてしまう（本テストの狙いは loader 側 cross-check
+        # (b) による拒否の直接証拠——validator 単体は通過させたい）。
+        # `repr()` は Python の double を厳密に round-trip するため、
+        # `_evaluate_closed_weight_expr()` でパースし直しても同じ float32
+        # hex/repr に帰着する。
+        f["renormalized_runtime_weights"]["w_ritsu_expr"] = repr(w_ritsu_value)
+        f["renormalized_runtime_weights"]["w_user_expr"] = repr(w_user_value)
 
     tampered_contract, manifest_path, contract_path = _tampered_speaker_map_contract(
         contract, tmp_path, mutate=_mutate,

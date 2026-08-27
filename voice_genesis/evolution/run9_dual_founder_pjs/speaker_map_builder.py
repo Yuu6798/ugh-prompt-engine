@@ -15,11 +15,16 @@ fixture として新設し、`builder_sha256` として manifest へ pin する�
 **ロジック同一性**: 合成式・演算順序・dtype 処理は session workdir
 `synth_speaker_map.py`（HARNESS-3a 実測に実際に使用したスクリプト）から
 逐語移植した——`ritsu_vec`/`user_vec` = `np.frombuffer(bytes,
-dtype=np.float32)`（再解釈のみ、値の変換・キャストなし）、`w_r`/`w_u` =
-`np.float32(eval(expr, {"__builtins__": {}}))`、`synth = (w_r * ritsu_vec
-+ w_u * user_vec)` の単一式・この順序で固定。L2正規化・摂動・ランダム
-成分・重み調整は一切行わない（裁定「RUN9 User裁定 — AF0 runtime
-mapping」逐語の禁止4項目、`inputs/speaker_map_manifest.json`
+dtype=np.float32)`（再解釈のみ、値の変換・キャストなし）、workdir 原本は
+`w_r`/`w_u` = `np.float32(eval(expr, {"__builtins__": {}}))` で重みを評価
+していた。本 builder では eval() を `run9_schema._evaluate_closed_weight_
+expr()`（eval() を使わない閉じた文法パーサ、10進小数リテラル or 単純分数
+`'A/B'` のみ許容）へ置き換えている（PR #328 Codex レビュー第2巡指摘5、P2、
+採用対応——manifest が現に収載する expr 形式（`'0.75'`/`'1.0/3.0'` 等）は
+いずれもこの閉じた文法に含まれるため、数値結果は workdir 原本と同一）。
+`synth = (w_r * ritsu_vec + w_u * user_vec)` の単一式・この順序で固定。
+L2正規化・摂動・ランダム成分・重み調整は一切行わない（裁定「RUN9 User裁定
+— AF0 runtime mapping」逐語の禁止4項目、`inputs/speaker_map_manifest.json`
 `synthesis_formula.prohibited` と同一）。
 
 **重みの取得元**: 重み式（`w_ritsu_expr`/`w_user_expr`）は本 builder が
@@ -38,6 +43,12 @@ mapping」逐語の禁止4項目、`inputs/speaker_map_manifest.json`
   (ii) 合成結果（384-dim float32 raw バイナリ）の実測 sha256 を manifest
        の `synthesized_embedding.sha256` pin 値と照合する（一致 = 再現
        成功、不一致 = fail-closed 非ゼロ終了）。
+  (iii) `--out` の書き込み先が `--ritsu-emb`/`--user-emb` のいずれかと
+       同一実体（symlink 経由の alias 含む）でないことを、書き込み前に
+       3パスを `Path.resolve()` で解決・比較して確認する（同一実体なら
+       書き込みせず拒否 — 検証済み入力 emb の破壊を防ぐ、PR #328 Codex
+       レビュー第2巡指摘4、P1、採用対応。`_check_out_does_not_alias_
+       inputs()`）。
 本 builder は `RUN9_CONTRACT.yaml` の `expected_speaker_map_sha` pin との
 実バイト照合は行わない（それは `load_pinned_speaker_map_manifest()` の
 責務——本 builder は checkout 直後の fixture 再現に特化した軽量ツールで
@@ -138,11 +149,22 @@ def synthesize(
         )
 
     weights = founder["renormalized_runtime_weights"]
-    # eval() は pin 済み manifest 由来の単純数式リテラル（'0.75' /
-    # '1.0/3.0' 相当）のみに対して使う。__builtins__ を封鎖する（workdir
-    # 原本 synth_speaker_map.py と同じ封鎖規約）。
-    w_r = np.float32(eval(weights["w_ritsu_expr"], {"__builtins__": {}}))  # noqa: S307
-    w_u = np.float32(eval(weights["w_user_expr"], {"__builtins__": {}}))  # noqa: S307
+    # w_ritsu_expr/w_user_expr は m._evaluate_closed_weight_expr()（eval() を
+    # 使わない閉じた文法パーサ、10進小数リテラル or 単純分数 'A/B' のみ許容）
+    # で評価する——validator（run9_schema.validate_speaker_map_manifest()）
+    # と同じパーサを共有することで、builder/validator 間のパーサ乖離による
+    # 数値不一致を構造的に排除する（PR #328 Codex レビュー第2巡指摘5、P2、
+    # 採用対応）。
+    w_r = np.float32(
+        m._evaluate_closed_weight_expr(  # noqa: SLF001 - sibling module, see module docstring
+            weights["w_ritsu_expr"], field=f"{founder_id}.renormalized_runtime_weights.w_ritsu_expr"
+        )
+    )
+    w_u = np.float32(
+        m._evaluate_closed_weight_expr(  # noqa: SLF001 - sibling module, see module docstring
+            weights["w_user_expr"], field=f"{founder_id}.renormalized_runtime_weights.w_user_expr"
+        )
+    )
 
     # 裁定逐語の1式・この順序で固定（workdir 原本 synth_speaker_map.py と
     # 逐語同一）。L2正規化・摂動・ランダム成分・重み調整は行わない。
@@ -184,6 +206,34 @@ def synthesize(
     return synth, report
 
 
+def _check_out_does_not_alias_inputs(
+    out_path: Path, ritsu_emb_path: Path, user_emb_path: Path,
+) -> Optional[str]:
+    """`out_path` が `ritsu_emb_path`/`user_emb_path` のいずれかと同一実体
+    （symlink 経由の alias 含む）であれば拒否理由の文字列を返す（alias で
+    なければ `None`）。3パスを `Path.resolve()` で解決してから比較する
+    ——`--out` が `--ritsu-emb`/`--user-emb` と同一実体（symlink 経由の
+    alias 含む）の場合、無条件 `write_bytes()` が検証済み入力 emb を破壊
+    する穴を書き込み前に閉じる（PR #328 Codex レビュー第2巡指摘4、P1、
+    採用対応）。"""
+    out_resolved = out_path.resolve()
+    ritsu_resolved = ritsu_emb_path.resolve()
+    user_resolved = user_emb_path.resolve()
+    if out_resolved == ritsu_resolved:
+        return (
+            f"--out ({out_path}) resolves to the same file as --ritsu-emb ({ritsu_emb_path}), "
+            f"resolved={out_resolved} — fail-closed 拒否（同一実体/symlink alias への書き込みは "
+            "検証済み入力 emb の破壊を招くため書き込みを拒否する）"
+        )
+    if out_resolved == user_resolved:
+        return (
+            f"--out ({out_path}) resolves to the same file as --user-emb ({user_emb_path}), "
+            f"resolved={out_resolved} — fail-closed 拒否（同一実体/symlink alias への書き込みは "
+            "検証済み入力 emb の破壊を招くため書き込みを拒否する）"
+        )
+    return None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--founder", required=True, choices=sorted(m.CONTRACT_FOUNDER_IDS))
@@ -202,6 +252,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     if args.out is not None:
+        alias_error = _check_out_does_not_alias_inputs(args.out, args.ritsu_emb, args.user_emb)
+        if alias_error is not None:
+            print(f"ERROR: speaker_map_builder.main(): {alias_error}", file=sys.stderr)
+            return 1
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_bytes(synth.tobytes())
         report["out_path"] = str(args.out)

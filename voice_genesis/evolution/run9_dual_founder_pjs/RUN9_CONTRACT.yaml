@@ -1361,8 +1361,34 @@ seed_policy_sha:
 # ための repin。旧 pin 値（第1世代、HARNESS-3a 初回 PINNED 時）は履歴と
 # して保持する:
 #   3f34dc71b34d9fa944528aba4432501d036d8c26b035a14b40938a255ea182f2
+#
+# 2026-08-27 第3世代 repin（PR #328 Codex レビュー第2巡3件、いずれも採用。
+# Claude 完結ルート）: 指摘4（P1）speaker_map_builder.py の --out が
+# --ritsu-emb/--user-emb と同一実体（symlink 経由の alias 含む）の場合、
+# 無条件 write_bytes() が検証済み入力 emb を読み取り後に破壊する穴が
+# あった——書き込み前に3パスを Path.resolve() で解決・比較し、--out が
+# 入力いずれかと同一実体なら fail-closed で拒否する
+# _check_out_does_not_alias_inputs() を新設し main() へ配線した（負例
+# テスト: 同一パス2系統 + symlink alias 2系統、計4件）。指摘5（P2）
+# manifest の w_ritsu_expr/w_user_expr（builder が実際に評価して合成に
+# 使う実効値）を validator が検証しておらず、*_float32_hex/repr さえ
+# 正しければ expr 改竄を素通りさせる穴があった——eval() を使わない閉じた
+# 文法パーサ run9_schema._evaluate_closed_weight_expr()（10進小数リテラル
+# または単純分数 'A/B' のみ許容、それ以外は fail-closed 拒否）を新設し、
+# validate_speaker_map_manifest() へ expr 評価結果が coords_raw 由来の
+# 再導出重みと厳密一致することを強制する検証を追加した。speaker_map_
+# builder.py 側の eval() 呼び出しも同じ共有パーサへ置き換えた（builder
+# が既存の依存方向どおり run9_schema を import する側のため、パーサ本体
+# は run9_schema.py に置いた——循環 import なし）。指摘6（P2）は本ファイル
+# の対象外（README.md のみ）。指摘4・5 とも speaker map の実測事実
+# （各 founder の合成 embedding sha256・render sha256・秒数・pre_pin_
+# verification_summary の6点 PASS・重みの実効値そのもの）を一切変更しない
+# ——speaker_map_builder.py の実バイトが変わったことによる
+# builder_provenance.builder_sha256 repin のみが本欄の repin 理由。旧
+# pin 値（第2世代、PR #328 第1巡3件対応後）は履歴として保持する:
+#   3057e5bb8a1b0da1834315b953477ead98b2ab401404d4f76262bd93689070b0
 expected_speaker_map_sha:
-  value: "3057e5bb8a1b0da1834315b953477ead98b2ab401404d4f76262bd93689070b0"
+  value: "ab2a98e99320bc4e93cab48c002b3c3e6546a371e6a390cd70b54ce026c6962d"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/speaker_map_manifest.json
 

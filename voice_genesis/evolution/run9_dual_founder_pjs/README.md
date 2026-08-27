@@ -1,6 +1,6 @@
 # RUN9 — Tri-Donor Dual-Founder Common-Teacher Learning
 
-**状態: Preregistered / Phase 3（design_revision 0.4、machine-independent 設計層）。本学習未開始。**
+**状態: Preregistered / Phase 3（design_revision 0.5、machine-independent 設計層）。本学習未開始。**
 
 正本設計書: [`DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md`](./DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md)
 （uploads 原本とバイト同一・**byte-pin 不変**。sha256 は `RUN9_CONTRACT.yaml` の
@@ -14,7 +14,12 @@ User 裁定5件、無改変のまま存続）→
 外部指摘（AQUEST 山崎信英氏）を受けた派生設計変更メモ
 [`DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt`](./DERIVED_DESIGN_CHANGES_FROM_EXTERNAL_FEEDBACK_20260825.txt)
 （byte-pin 不変）の編入 + User 追加裁定「確認メモ /
-RUN9 用語整理」の編入）の順で規定する。`design_revision_doc_sha256`/
+RUN9 用語整理」の編入。無改変のまま存続）→
+[`DESIGN_RUN9_REVISION_0.5.md`](./DESIGN_RUN9_REVISION_0.5.md)（2026-08-26、
+User 裁定「RUN9 User裁定 — AF0 runtime mapping」の編入 — AF0 speaker
+embedding が現行 RUN6 Backbone に byte-verified な形で存在しないため、
+runtime render では ritsu/user 成分のみを再正規化して float32 単純加重和
+で線形合成する方式A採用）の順で規定する。`design_revision_doc_sha256`/
 `por_adjudication_sha256` が PINNED で保持する。
 
 AF0・Ritsu・User Donor の三点 Identity から `TRI_CROSSOVER` で二体の

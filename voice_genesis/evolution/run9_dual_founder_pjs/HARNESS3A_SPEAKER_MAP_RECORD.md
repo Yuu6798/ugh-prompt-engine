@@ -278,7 +278,99 @@ sha256 が manifest pin 値と完全一致——`reproduced: true`。builder 自
   追加。同関数へ cross-check (b) の拡張として `genome_id` 照合も追加した
   （PR #328 第1巡指摘2、P2、採用——別項）。
 
+## 追記: PR #328 Codex レビュー第2巡3件（P1×1・P2×2、いずれも採用）対応 —
+## fail-closed 強化 + fresh checkout 再現実測の再確認（2026-08-27、Claude 完結ルート）
+
+第1巡で新設した `speaker_map_builder.py`/`validate_speaker_map_manifest()`
+に対し、第2巡で以下3件の穴が指摘された（いずれも採用・Fable 確定方針）。
+
+- **指摘4（P1）**: `speaker_map_builder.py` の `--out` が `--ritsu-emb`/
+  `--user-emb` と同一実体（symlink 経由の alias 含む）の場合、無条件
+  `write_bytes()` が検証済み入力 emb を読み取り後に破壊していた。
+- **指摘5（P2）**: manifest の `w_ritsu_expr`/`w_user_expr`（builder が
+  実際に評価して合成に使う実効値）を `validate_speaker_map_manifest()`
+  が検証しておらず、`*_float32_hex`/`*_repr` さえ正しければ expr 改竄を
+  素通りさせていた。
+- **指摘6（P2）**: README.md 冒頭の現在地バナーと revision chain が
+  design_revision 0.4 のまま残置されていた（別項、本ファイル対象外）。
+
+### 対応
+
+- **指摘4**: `_check_out_does_not_alias_inputs()` を新設し、書き込み前に
+  `--out`/`--ritsu-emb`/`--user-emb` の3パスを `Path.resolve()` で解決・
+  比較、同一実体なら fail-closed で拒否（書き込みしない）するよう
+  `main()` へ配線した。負例テスト（同一パス2系統・symlink alias 2系統、
+  計4件）を `tests/test_speaker_map_builder.py` へ追加。
+- **指摘5**: eval() を使わない閉じた文法パーサ
+  `run9_schema._evaluate_closed_weight_expr()`（許容形式は (a) 10進小数
+  リテラル `'0.75'` 等の `float()` 直パース、(b) 単純分数 `'A/B'`/`'A.0/B.0'`
+  の分子・分母 `float()` パース除算、の2形式のみ——それ以外は拒否）を
+  新設し、`validate_speaker_map_manifest()` へ expr 評価結果の float32
+  hex/repr が coords_raw 由来の再導出重みと厳密一致することを強制する
+  検証を追加した。`speaker_map_builder.py` 側の eval() 呼び出しも同じ
+  共有パーサへ置き換えた（builder が既存の依存方向どおり `run9_schema`
+  を import する側のため、パーサ本体は `run9_schema.py` に置き、循環
+  import は発生しない）。負例テスト（expr 改変で hex/repr は正しいまま
+  → reject、許容外形式 `'0.5+0.25'` → reject）を
+  `tests/test_run9_contract.py` へ追加。
+- **指摘6**: README.md 冒頭バナー・revision chain を design_revision 0.5
+  へ更新（別項）。
+
+### builder 再現実測の再確認（両 founder、workdir 現存の入力 emb に対して実行）
+
+指摘4・5対応で `speaker_map_builder.py` の実バイトが変わったため
+（合成ロジック自体は不変）、builder 再現実測を再実行し、両 founder の
+出力 sha256 が manifest pin 値と不変のまま一致することを再確認した。
+
+入力: `<session workdir（repo外）>/reexport_out/onnx_gate_40000/
+s5_run6_acoustic_v1.{ritsu,user}.emb`（上記追記と同一ファイル。実測
+sha256 は `ce4b87b99ac8aa7de7857feba6ca163d4ccf76a27f8fce2ac51740c2bb7b3e4c`/
+`588913b74d6c16e01f4f33223698cd165ac686012e7d878475a3799ccee8bde0` で
+pin 値と完全一致することを再確認済み）。
+
+```
+$ python3 speaker_map_builder.py --founder R9F-01 \
+    --ritsu-emb <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb \
+    --user-emb  <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.user.emb
+$ python3 speaker_map_builder.py --founder R9F-02 \
+    --ritsu-emb <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.ritsu.emb \
+    --user-emb  <session workdir（repo外）>/reexport_out/onnx_gate_40000/s5_run6_acoustic_v1.user.emb
+```
+
+| founder | w_ritsu_expr | w_user_expr | 再構築した out_sha256 | manifest pin (`synthesized_embedding.sha256`) | 一致 |
+|---|---|---|---|---|---|
+| R9F-01 | `0.75` | `0.25` | `fc7b73fd98ef77f7caeba44761bdfe2933228cd9869bc6b27131230dade6e1e9` | `fc7b73fd98ef77f7caeba44761bdfe2933228cd9869bc6b27131230dade6e1e9` | 一致 |
+| R9F-02 | `1.0/3.0` | `2.0/3.0` | `0a681a2c419295c739f6040316412e1cc5b6d16ee496e7f58ee36c45b425c2a1` | `0a681a2c419295c739f6040316412e1cc5b6d16ee496e7f58ee36c45b425c2a1` | 一致 |
+
+**判定: PASS**（両 founder とも変わらず一致——`reproduced: true`。合成
+ロジック自体・重みの実効値・出力 embedding は指摘4・5の対応によって一切
+変化しないことの直接証拠）。alias 拒否経路（`--out` を `--ritsu-emb` と
+同一パスに指定・`--out` を `--user-emb` への symlink に指定の2系統）も
+実測確認済み——いずれも非ゼロ終了し、入力 emb の実バイトは無傷のまま
+残った（書き込みが実行されなかったことの直接証拠）。
+
+### manifest/contract への反映
+
+- `inputs/speaker_map_manifest.json`: `builder_provenance.builder_sha256`
+  を `speaker_map_builder.py` の新しい実バイト sha256
+  （`2a10a6d6db4d180c8d27d0c29d521247b19cae1e5519a3029dc5c60d71c7b248`）へ
+  更新。既存の founder 実測値（合成 embedding sha256・render sha256・
+  秒数・`pre_pin_verification_summary` 6点・重み式そのもの）は一切変更
+  していない。
+- `RUN9_CONTRACT.yaml` `expected_speaker_map_sha`: manifest 実バイトが
+  変わったため第3世代へ repin（
+  `ab2a98e99320bc4e93cab48c002b3c3e6546a371e6a390cd70b54ce026c6962d`。
+  旧値 = 第2世代、`3057e5bb8a1b0da1834315b953477ead98b2ab401404d4f76262
+  bd93689070b0` は履歴として contract コメントに保持）。
+- `run9_schema.py`: `_evaluate_closed_weight_expr()` を新設し、
+  `validate_speaker_map_manifest()` の `renormalized_runtime_weights`
+  検証へ expr 評価一致の強制を追加。
+- `speaker_map_builder.py`: `_check_out_does_not_alias_inputs()` を新設
+  し `main()` へ配線、`synthesize()` 内の重み評価を共有パーサ呼び出しへ
+  置き換え。
+
 ## 逸脱・停止事由
 
 なし。検証6点すべて PASS、repo ファイル変更ゼロ、`gate_synth.py` は
 read-only 実行のみ。上記追記の builder 再現実測も両 founder とも PASS。
+第2巡対応後の再確認実測も両 founder とも PASS（出力 sha256 不変）。

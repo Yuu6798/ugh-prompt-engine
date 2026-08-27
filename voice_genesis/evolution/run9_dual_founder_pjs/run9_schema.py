@@ -16240,6 +16240,56 @@ def _float32_hex_and_repr(value: float) -> Tuple[str, str]:
     return packed.hex(), repr(unpacked)
 
 
+# `renormalized_runtime_weights.w_ritsu_expr`/`w_user_expr` を eval() を使わ
+# ずに評価するための閉じた文法（PR #328 Codex レビュー第2巡指摘5、P2、
+# 採用対応）。許容する形式はちょうど2つ:
+#   (a) 10進小数リテラル（符号なし。例: '0.75'）
+#   (b) 単純分数 'A/B'（A・B はいずれも (a) と同じ小数リテラル。例:
+#       '1.0/3.0'）
+# 加減乗算・指数表記・空白・括弧・符号などそれ以外の一切の記法は拒否する。
+_WEIGHT_EXPR_NUMBER_RE = r"[0-9]+(?:\.[0-9]+)?"
+_WEIGHT_EXPR_LITERAL_RE = re.compile(rf"^{_WEIGHT_EXPR_NUMBER_RE}$")
+_WEIGHT_EXPR_FRACTION_RE = re.compile(rf"^({_WEIGHT_EXPR_NUMBER_RE})/({_WEIGHT_EXPR_NUMBER_RE})$")
+
+
+def _evaluate_closed_weight_expr(expr: str, *, field: str) -> float:
+    """`w_ritsu_expr`/`w_user_expr` を eval() を使わない閉じた文法で評価
+    する（PR #328 Codex レビュー第2巡指摘5、P2、採用対応——manifest の
+    expr は builder が実際に評価して合成に使う実効値なのに、旧実装の
+    validator は非空文字列であることしか検証しておらず、expr を coords
+    由来の再導出重みと食い違う値へ改竄しても `*_float32_hex`/`*_repr` さえ
+    正しければ通過していた穴を閉じる）。
+
+    許容する形式はちょうど2つ、それ以外は fail-closed で拒否する:
+      (a) 10進小数リテラル（符号なし。例: `'0.75'`）→ `float()` 直パース
+      (b) 単純分数 `'A/B'` または `'A.0/B.0'`（例: `'1.0/3.0'`）→ 分子・
+          分母をそれぞれ `float()` パースして除算
+
+    `speaker_map_builder.py` の `synthesize()` もこの関数を共有する
+    （builder が `run9_schema` を import する既存の依存方向に合わせ、
+    builder 側の eval() 呼び出しを本関数の呼び出しへ置き換えた）——validator
+    と builder が別々のパーサを持つことによる将来の乖離リスクを構造的に
+    排除する。
+    """
+    if not isinstance(expr, str):
+        raise Run9ValidationError(f"{field}: weight expr must be a str, got {type(expr).__name__}")
+    literal_match = _WEIGHT_EXPR_LITERAL_RE.match(expr)
+    if literal_match is not None:
+        return float(expr)
+    fraction_match = _WEIGHT_EXPR_FRACTION_RE.match(expr)
+    if fraction_match is not None:
+        numerator = float(fraction_match.group(1))
+        denominator = float(fraction_match.group(2))
+        if denominator == 0.0:
+            raise Run9ValidationError(f"{field}: weight expr {expr!r} has zero denominator")
+        return numerator / denominator
+    raise Run9ValidationError(
+        f"{field}: weight expr {expr!r} does not match the closed grammar permitted for weight "
+        "expressions (a bare decimal literal like '0.75', or a simple 'A/B' fraction of decimal "
+        "literals like '1.0/3.0' — no other operators, whitespace, or forms are permitted)"
+    )
+
+
 def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
     """speaker map manifest（`run9-speaker-map/1.0`）の構造を検証する
     （RUN9-L0-HARNESS-3a）。User 裁定「RUN9 User裁定 — AF0 runtime
@@ -16272,7 +16322,13 @@ def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
         （`w_user` は残差）を `struct.pack('>f', ...)` で float32 化し、
         その big-endian hex と `repr()` 文字列が、それぞれ manifest 収載
         の `w_*_float32_hex`/`w_*_float32_repr` と一致することを machine
-        再計算で強制する（`_float32_hex_and_repr()`）。
+        再計算で強制する（`_float32_hex_and_repr()`）。加えて
+        `w_ritsu_expr`/`w_user_expr`（builder が実際に評価して合成に使う
+        実効値）を `_evaluate_closed_weight_expr()`（eval() を使わない
+        閉じた文法パーサ）で評価し、その float32 hex/repr が同じく
+        coords_raw 由来の再導出重みと厳密一致することも強制する（PR #328
+        Codex レビュー第2巡指摘5、P2、採用対応——expr だけを改竄しても
+        `*_float32_hex`/`*_repr` さえ正しければ通過していた穴を閉じる）。
     (d) `unrealized_mass.value == coords_raw.af0`（af0 成分の質量が
         runtime 合成の外側に取り残されている事実を数値としても強制する）。
     (f) `pre_pin_verification_summary` の6項目全てが逐語 `"PASS"` かつ
@@ -16444,6 +16500,31 @@ def validate_speaker_map_manifest(data: Mapping[str, Any]) -> None:
                 f"from coords_raw (user/(ritsu+user)) as hex={expected_user_hex!r} "
                 f"repr={expected_user_repr!r} diverges from manifest values "
                 f"hex={weights['w_user_float32_hex']!r} repr={weights['w_user_float32_repr']!r}"
+            )
+
+        # (c) expr 自体の閉じた文法評価が coords_raw 由来の再導出重みと厳密
+        # 一致すること（PR #328 Codex レビュー第2巡指摘5、P2、採用対応）。
+        w_ritsu_expr_field = f"{f_prefix}.renormalized_runtime_weights.w_ritsu_expr"
+        w_user_expr_field = f"{f_prefix}.renormalized_runtime_weights.w_user_expr"
+        w_ritsu_expr_value = _evaluate_closed_weight_expr(weights["w_ritsu_expr"], field=w_ritsu_expr_field)
+        w_user_expr_value = _evaluate_closed_weight_expr(weights["w_user_expr"], field=w_user_expr_field)
+        w_ritsu_expr_hex, w_ritsu_expr_repr = _float32_hex_and_repr(w_ritsu_expr_value)
+        w_user_expr_hex, w_user_expr_repr = _float32_hex_and_repr(w_user_expr_value)
+        if w_ritsu_expr_hex != expected_ritsu_hex or w_ritsu_expr_repr != expected_ritsu_repr:
+            raise Run9ValidationError(
+                f"speaker map manifest.{w_ritsu_expr_field} ({weights['w_ritsu_expr']!r}) evaluates "
+                f"(closed grammar) to hex={w_ritsu_expr_hex!r} repr={w_ritsu_expr_repr!r}, which "
+                f"diverges from the coords_raw-derived weight hex={expected_ritsu_hex!r} "
+                f"repr={expected_ritsu_repr!r} — expr must reproduce the same effective weight the "
+                "builder consumes"
+            )
+        if w_user_expr_hex != expected_user_hex or w_user_expr_repr != expected_user_repr:
+            raise Run9ValidationError(
+                f"speaker map manifest.{w_user_expr_field} ({weights['w_user_expr']!r}) evaluates "
+                f"(closed grammar) to hex={w_user_expr_hex!r} repr={w_user_expr_repr!r}, which "
+                f"diverges from the coords_raw-derived weight hex={expected_user_hex!r} "
+                f"repr={expected_user_repr!r} — expr must reproduce the same effective weight the "
+                "builder consumes"
             )
 
         # input_embeddings（型検証のみ——(e) cross-manifest 照合は loader 側）
