@@ -15,8 +15,9 @@
   },
   "proposal": {
     "rng_independence": "ライブラリ RNG 非依存の hash-based 決定論生成",
-    "digest_formula": "digest = sha256(f\"{seed}:{arm}:{founder}:{trial}:{candidate}\")",
-    "digest_to_candidate_mapping": "digest を軸グリッドの索引列（AX-P1 の 9 グリッド値・AX-D1 の delta 量子化格子上の候補値列）へ決定論写像する",
+    "digest_formula": "digest = sha256(UTF-8(f\"{seed}:{arm}:{founder_id}:{trial}:{candidate}\"))",
+    "digest_encoding": "UTF-8",
+    "digest_to_candidate_mapping": "digest の先頭8バイトを big-endian uint64 として解釈した値 u を idx = u mod len(L) で candidate_ordering.canonical_list（L）の索引へ写像し、L[idx] を候補とする。詳細な手続き（プロービング・近傍列挙）は exploratory_candidate_rule / neighborhood_candidate_rule が定義する",
     "trial1_candidate0_rule": "trial 1 の candidate 0 は恒等（全軸オフセット/デルタ = 0、= baseline）を必ず含める",
     "subsequent_trial_schedule": "trial 1 以降は「現 best の近傍 ± 1 量子化ステップ」の決定論近傍列挙と hash 由来の探査候補を固定比率 3:1 で混合する",
     "proposal_schedule_table": [
@@ -24,7 +25,40 @@
       {"trial_index": 1, "candidate_index": "1..3", "rule": "hash-derived exploratory candidates (digest -> grid index)"},
       {"trial_index": "2..32", "candidate_index": "0..2", "rule": "current-best neighborhood: nearest, second-nearest, third-nearest deterministic +-1 quantization step candidates not yet evaluated"},
       {"trial_index": "2..32", "candidate_index": "3", "rule": "hash-derived exploratory candidate (digest -> grid index), fixed 3:1 neighborhood:exploration ratio across the 4 candidates of the trial"}
-    ]
+    ],
+    "candidate_ordering": {
+      "definition": "正準候補列 L: 有効な単一軸候補（AX-P1 の note_pitch_offset_semitones 単独変位、AX-D1 の phrase_duration_redistribution_beats 単独変位）の全列挙を、下記 total_order の辞書順で凍結した列。恒等候補（全軸 0）は単一軸候補ではないため L の要素ではなく、trial1_candidate0_rule が別途規定する",
+      "ax_p1": {
+        "tuple": ["axis_id = \"AX-P1\"", "note_index（対象 score の note 総数にわたり昇順）", "offset（昇順）"],
+        "offset_domain": [-2.0, -1.5, -1.0, -0.5, 0.5, 1.0, 1.5, 2.0],
+        "offset_domain_note": "score_axis_catalog_v1.json axes.AX-P1（range_semitones=[-2.0,2.0]・quantization_step_semitones=0.5・grid_values_count_per_note=9）から 0 を除いた 8 値。0 は単一軸候補としては非変換（恒等と区別がつかない）ため除外する",
+        "note_index_domain": "0..(対象 score の note 総数-1) 昇順"
+      },
+      "ax_d1": {
+        "tuple": ["axis_id = \"AX-D1\"", "phrase_index（昇順）", "note index ペア (i, j)（同一 phrase 内、i 昇順→j 昇順、i != j）", "delta（昇順）"],
+        "delta_domain": "+0.25 刻み（score_axis_catalog_v1.json axes.AX-D1 quantization_step_beats）で、note i（delta を失う側）の変換後 duration が min_duration_beats（0.25）以上を保つ最大値まで。すなわち delta ∈ {0.25, 0.50, …, floor((duration_beats[i] - 0.25) / 0.25) * 0.25} で、この集合が空（duration_beats[i] < 0.5）の場合その (i, j) ペアは L に候補を持たない",
+        "delta_semantics": "delta は note i から note j へ移す量（note i の duration_beats から delta を引き、note j の duration_beats へ delta を足す）。sum(delta)=0 は i,j の2値のみで自動的に満たされる。ordered pair (i, j) と (j, i) は異なる候補として区別する（前者は i が失い j が得る、後者はその逆）"
+      },
+      "total_order": "タプル比較 (axis_id, 第2キー, 第3キー, …) の辞書順（Python の tuple 比較と同一意味論: 先頭要素から順に比較し、最初に異なる要素で大小を確定する）。axis_id は文字列比較のため \"AX-D1\" < \"AX-P1\"（'D' < 'P'）となり、AX-D1 候補群が AX-P1 候補群より先に列挙される"
+    },
+    "exploratory_candidate_rule": {
+      "applies_to": "trial 1 の candidate 1..3、および trial 2..32 の candidate 3（proposal_schedule_table の hash-derived exploratory 行すべて。digest はスロットごとに {trial}:{candidate} を差し替えて独立に計算する）",
+      "digest_bytes": "digest_formula で得た digest（sha256、32 バイト）の先頭8バイトを取り出す",
+      "byte_to_integer": "先頭8バイトを big-endian（最上位バイトが先頭）・符号なし整数として解釈し uint64 値 u を得る",
+      "index_formula": "idx = u mod len(L)（len(L) は candidate_ordering.canonical_list の要素数）",
+      "initial_pick": "L[idx] を候補とする",
+      "probing_rule": "L[idx] が既に同一 (seed, arm, founder_id) の探索内で評価済み、または適用時に catalog 制約（range/quantization/min-duration/重複 note index/phrase 越境）に違反する無効候補である場合、idx+1, idx+2, …（各ステップ mod len(L)）の順に決定論線形プロービングし、未評価かつ有効な最初の候補を採用する",
+      "exhaustion_handling": "L の全 len(L) 件を線形プロービングして未評価かつ有効な候補が1件も見つからない場合、当該 candidate スロットは NOT_PROPOSABLE として記録する（架空の候補を発明しない、reseed・range 拡張・random fallback のいずれも行わない）"
+    },
+    "neighborhood_candidate_rule": {
+      "applies_to": "trial 2..32 の candidate 0..2（3件）",
+      "current_best_definition": "直前 trial 終了時点までに評価され NOT_SCORABLE でない candidate 群のうち selection.objective を最小化する候補。best 更新は trial 境界でのみ確定し、同一 trial 内の候補間の評価順は近傍算出に影響しない。trial 2 の直前 = trial 1 終了時点の最良候補（trial 1 は恒等候補 + hash-derived exploratory 3件の既定構成を維持し、この4件の中から選ぶ）",
+      "current_best_may_be_identity": "trial 1 の最良候補が恒等候補（全軸 0）である場合を含む。恒等は L の要素ではないため、この場合の近傍は identity_neighbor_rule に従う",
+      "neighbor_value_perturbation": "現 best が L の要素（単一軸候補）である場合、近傍候補は current best と同一の index キー（AX-P1: 同一 note_index／AX-D1: 同一 phrase_index かつ同一 (i, j)）を保ちつつ、値キー（AX-P1: offset／AX-D1: delta）のみを 1 量子化ステップ（AX-P1: ±0.5／AX-D1: ±0.25）変化させた候補とする。変化後の値が offset_domain/delta_domain の範囲外、または L に存在しない（例: AX-D1 で delta を 0.25 から -0.25 側へ動かすと 0 に達し L の要素でなくなる）場合、その方向の近傍は存在しないものとして単に列挙対象から除く",
+      "identity_neighbor_rule": "現 best が恒等候補の場合、近傍候補集合 = L のうち恒等（全軸 0）からちょうど 1 量子化ステップの候補、すなわち AX-P1 は offset ∈ {-0.5, +0.5} の全 note_index 分、AX-D1 は delta = 0.25 の全 (phrase_index, (i, j)) 分。この定義は neighbor_value_perturbation のルール（値キーを ±1 量子化ステップ変化させる）を、値キーの初期値が 0 である恒等ベクトルへそのまま適用した結果であり、新規のルールを導入するものではない",
+      "enumeration_order": "上記で定まった近傍候補集合を candidate_ordering の total_order（L と同じ辞書順）で列挙し、まだ評価されていない候補を先頭から3件採用する",
+      "shortfall_handling": "未評価の近傍候補が3件未満の場合、不足分は exploratory_candidate_rule の手順（不足している candidate index のスロットごとに digest を計算）で補充する"
+    }
   },
   "selection": {
     "objective": "loss_evaluator_spec_v1 の aggregate（candidate_selection_search_objective_only スコープ）を最小化する候補を選ぶ",
@@ -53,7 +87,7 @@
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
-      "sha256": "9f437925fbdbfdd09f864f9dd29ac611e4f4f36ec0f76e0ab49a445c8e86ed54",
+      "sha256": "54ba4fa0caa1d02a1eac25530dc7d20ce7ee274a03370d2d5fb6274d16a05c6b",
       "note": "本 spec の proposal/selection/boundary 処理が動作する探索空間（AX-P1/AX-D1 グリッド）の実効性・量子化制約の実測根拠"
     }
   }

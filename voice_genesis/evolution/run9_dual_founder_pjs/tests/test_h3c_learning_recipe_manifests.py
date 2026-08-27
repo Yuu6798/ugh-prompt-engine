@@ -414,6 +414,96 @@ def test_h3c_candidate_generation_prohibited_missing_item_rejected() -> None:
         m.validate_candidate_generation_spec_manifest(data)
 
 
+# --- PR #331 第2巡指摘2（P2、採用）: proposal.proposal_schedule_table 形状
+# 強制のテスト。repin で恒等候補脱落・比率復元が起きても fail-closed で
+# 拒否されることを確認する。
+
+
+def test_h3c_candidate_generation_proposal_identity_candidate_dropped_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    # trial1 candidate0 の恒等ルールを hash-derived exploratory へ書き換え
+    # る（恒等候補脱落を模す）。
+    data["proposal"]["proposal_schedule_table"][0] = {
+        "trial_index": 1,
+        "candidate_index": 0,
+        "rule": "hash-derived exploratory candidate (digest -> grid index)",
+    }
+    with pytest.raises(m.Run9ValidationError, match="proposal_schedule_table"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_proposal_ratio_restored_to_2_2_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    # trial 2-32 の内訳表記を旧・矛盾していた 2:2 へ戻す（第1巡で是正済みの
+    # 退行を模す）。
+    data["proposal"]["proposal_schedule_table"][2] = {
+        "trial_index": "2..32",
+        "candidate_index": "0..1",
+        "rule": "current-best neighborhood",
+    }
+    data["proposal"]["proposal_schedule_table"][3] = {
+        "trial_index": "2..32",
+        "candidate_index": "2..3",
+        "rule": "hash-derived exploratory candidates",
+    }
+    with pytest.raises(m.Run9ValidationError, match="proposal_schedule_table"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_proposal_missing_proposal_schedule_table_key_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["proposal"]["proposal_schedule_table"]
+    with pytest.raises(m.Run9ValidationError, match="proposal"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_proposal_missing_digest_encoding_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["proposal"]["digest_encoding"]
+    with pytest.raises(m.Run9ValidationError, match="proposal"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_proposal_digest_formula_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["proposal"]["digest_formula"] = 'digest = sha256(f"{seed}:{arm}:{founder}:{trial}:{candidate}")'
+    with pytest.raises(m.Run9ValidationError, match="digest_formula"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_proposal_missing_exploratory_rule_key_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["proposal"]["exploratory_candidate_rule"]["probing_rule"]
+    with pytest.raises(m.Run9ValidationError, match="exploratory_candidate_rule"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_proposal_byte_to_integer_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["proposal"]["exploratory_candidate_rule"]["byte_to_integer"] = "little-endian uint64"
+    with pytest.raises(m.Run9ValidationError, match="byte_to_integer"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_proposal_probing_rule_tamper_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    data["proposal"]["exploratory_candidate_rule"]["probing_rule"] = "random retry"
+    with pytest.raises(m.Run9ValidationError, match="probing_rule"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_proposal_missing_neighborhood_rule_key_rejected() -> None:
+    data = copy.deepcopy(_manifest_data("candidate_generation_spec"))
+    del data["proposal"]["neighborhood_candidate_rule"]["identity_neighbor_rule"]
+    with pytest.raises(m.Run9ValidationError, match="neighborhood_candidate_rule"):
+        m.validate_candidate_generation_spec_manifest(data)
+
+
+def test_h3c_candidate_generation_proposal_valid_manifest_passes() -> None:
+    data = _manifest_data("candidate_generation_spec")
+    m.validate_candidate_generation_spec_manifest(data)
+
+
 # ---------------------------------------------------------------------------
 # 4. compute_budget_manifest_v1 固有
 # ---------------------------------------------------------------------------

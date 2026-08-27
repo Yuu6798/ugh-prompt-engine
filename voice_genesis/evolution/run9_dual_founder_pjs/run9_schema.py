@@ -18362,6 +18362,234 @@ _CANDIDATE_GENERATION_PROHIBITED_REQUIRED: FrozenSet[str] = frozenset(
     {"reseed", "予算追加", "結果を見た range 拡張", "random fallback"}
 )
 
+# proposal.proposal_schedule_table の凍結形状（PR #331 Codex bot レビュー
+# 第2巡指摘2、P2、採用）: trial 1 = 恒等候補(candidate 0) + hash-derived
+# exploratory 3件(candidate 1..3)、trial 2-32 = neighborhood 3件
+# (candidate 0..2) + exploratory 1件(candidate 3) の 3:1 被覆。repin で
+# 恒等候補脱落・比率復元（2:2 等）が起きても、この定数との deep equality
+# 比較により fail-closed で拒否する。
+_CANDIDATE_GENERATION_EXPECTED_PROPOSAL_SCHEDULE_TABLE: Tuple[Dict[str, Any], ...] = (
+    {"trial_index": 1, "candidate_index": 0, "rule": "identity (all axes = 0, baseline)"},
+    {
+        "trial_index": 1,
+        "candidate_index": "1..3",
+        "rule": "hash-derived exploratory candidates (digest -> grid index)",
+    },
+    {
+        "trial_index": "2..32",
+        "candidate_index": "0..2",
+        "rule": (
+            "current-best neighborhood: nearest, second-nearest, third-nearest "
+            "deterministic +-1 quantization step candidates not yet evaluated"
+        ),
+    },
+    {
+        "trial_index": "2..32",
+        "candidate_index": "3",
+        "rule": (
+            "hash-derived exploratory candidate (digest -> grid index), fixed 3:1 "
+            "neighborhood:exploration ratio across the 4 candidates of the trial"
+        ),
+    },
+)
+
+# digest 写像規則の必須キー（PR #331 第2巡指摘1「Specify the complete
+# digest-to-candidate mapping」の凍結を、第2巡指摘2「Enforce the corrected
+# proposal schedule in the validator」で検証対象にする）: テンプレート
+# 文字列（digest_formula/digest_encoding）・エンディアン規則
+# （exploratory_candidate_rule.byte_to_integer）・プロービング規則
+# （exploratory_candidate_rule.probing_rule）を、生成器実装が選べる余地の
+# ない厳密一致で強制する。
+_CANDIDATE_GENERATION_EXPECTED_DIGEST_FORMULA = (
+    'digest = sha256(UTF-8(f"{seed}:{arm}:{founder_id}:{trial}:{candidate}"))'
+)
+_CANDIDATE_GENERATION_EXPECTED_DIGEST_ENCODING = "UTF-8"
+_CANDIDATE_GENERATION_EXPECTED_BYTE_TO_INTEGER = (
+    "先頭8バイトを big-endian（最上位バイトが先頭）・符号なし整数として解釈し uint64 値 u を得る"
+)
+_CANDIDATE_GENERATION_EXPECTED_PROBING_RULE = (
+    "L[idx] が既に同一 (seed, arm, founder_id) の探索内で評価済み、または適用時に catalog 制約"
+    "（range/quantization/min-duration/重複 note index/phrase 越境）に違反する無効候補である場合、"
+    "idx+1, idx+2, …（各ステップ mod len(L)）の順に決定論線形プロービングし、未評価かつ有効な最初の"
+    "候補を採用する"
+)
+_CANDIDATE_GENERATION_EXPECTED_INDEX_FORMULA = (
+    "idx = u mod len(L)（len(L) は candidate_ordering.canonical_list の要素数）"
+)
+_CANDIDATE_GENERATION_CANDIDATE_ORDERING_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {"definition", "ax_p1", "ax_d1", "total_order"}
+)
+_CANDIDATE_GENERATION_EXPLORATORY_RULE_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {
+        "applies_to",
+        "digest_bytes",
+        "byte_to_integer",
+        "index_formula",
+        "initial_pick",
+        "probing_rule",
+        "exhaustion_handling",
+    }
+)
+_CANDIDATE_GENERATION_NEIGHBORHOOD_RULE_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {
+        "applies_to",
+        "current_best_definition",
+        "current_best_may_be_identity",
+        "neighbor_value_perturbation",
+        "identity_neighbor_rule",
+        "enumeration_order",
+        "shortfall_handling",
+    }
+)
+_CANDIDATE_GENERATION_PROPOSAL_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = frozenset(
+    {
+        "rng_independence",
+        "digest_formula",
+        "digest_encoding",
+        "digest_to_candidate_mapping",
+        "trial1_candidate0_rule",
+        "subsequent_trial_schedule",
+        "proposal_schedule_table",
+        "candidate_ordering",
+        "exploratory_candidate_rule",
+        "neighborhood_candidate_rule",
+    }
+)
+
+
+def _validate_candidate_generation_proposal_schedule(
+    proposal: Mapping[str, Any], *, structure: Mapping[str, Any]
+) -> None:
+    """`proposal` 節の byte レベル凍結（PR #331 第2巡指摘1、P1、採用）が
+    実際に検証対象になっていることを保証する（同指摘2、P2、採用の実装）。
+
+    repin で恒等候補脱落・比率復元（2:2 等）が起きても fail-closed で
+    拒否する: proposal_schedule_table の完全形状一致 + digest 写像規則の
+    必須キー（テンプレート文字列・エンディアン・プロービング規則）の
+    存在と値一致 + 32×4=128 整合の再確認。
+    """
+    if not isinstance(proposal, dict):
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.proposal must be an object, "
+            f"got {type(proposal).__name__}"
+        )
+    missing = _CANDIDATE_GENERATION_PROPOSAL_TOP_LEVEL_REQUIRED_KEYS - set(proposal.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"candidate generation spec manifest.proposal missing required key(s): "
+            f"{sorted(missing)}"
+        )
+
+    if proposal["digest_formula"] != _CANDIDATE_GENERATION_EXPECTED_DIGEST_FORMULA:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.digest_formula must equal "
+            f"{_CANDIDATE_GENERATION_EXPECTED_DIGEST_FORMULA!r} exactly, got "
+            f"{proposal['digest_formula']!r}"
+        )
+    if proposal["digest_encoding"] != _CANDIDATE_GENERATION_EXPECTED_DIGEST_ENCODING:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.digest_encoding must equal "
+            f"{_CANDIDATE_GENERATION_EXPECTED_DIGEST_ENCODING!r} exactly, got "
+            f"{proposal['digest_encoding']!r}"
+        )
+
+    schedule_table = proposal["proposal_schedule_table"]
+    if list(schedule_table) != list(_CANDIDATE_GENERATION_EXPECTED_PROPOSAL_SCHEDULE_TABLE):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.proposal_schedule_table must equal "
+            "the frozen trial1=identity+3-exploratory / trial2-32=3-neighborhood+1-exploratory "
+            f"(3:1) shape exactly, got {schedule_table!r}"
+        )
+
+    candidate_ordering = proposal["candidate_ordering"]
+    if not isinstance(candidate_ordering, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering must be an object, "
+            f"got {type(candidate_ordering).__name__}"
+        )
+    missing_ordering = _CANDIDATE_GENERATION_CANDIDATE_ORDERING_REQUIRED_KEYS - set(
+        candidate_ordering.keys()
+    )
+    if missing_ordering:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering missing required "
+            f"key(s): {sorted(missing_ordering)}"
+        )
+    total_order = candidate_ordering["total_order"]
+    if not isinstance(total_order, str) or "AX-D1" not in total_order or "AX-P1" not in total_order:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.candidate_ordering.total_order must "
+            f"name both axis_id values (AX-D1/AX-P1) it orders, got {total_order!r}"
+        )
+
+    exploratory = proposal["exploratory_candidate_rule"]
+    if not isinstance(exploratory, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule must be an "
+            f"object, got {type(exploratory).__name__}"
+        )
+    missing_exploratory = _CANDIDATE_GENERATION_EXPLORATORY_RULE_REQUIRED_KEYS - set(
+        exploratory.keys()
+    )
+    if missing_exploratory:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule missing "
+            f"required key(s): {sorted(missing_exploratory)}"
+        )
+    if exploratory["byte_to_integer"] != _CANDIDATE_GENERATION_EXPECTED_BYTE_TO_INTEGER:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule."
+            f"byte_to_integer must equal {_CANDIDATE_GENERATION_EXPECTED_BYTE_TO_INTEGER!r} "
+            f"exactly, got {exploratory['byte_to_integer']!r}"
+        )
+    if exploratory["index_formula"] != _CANDIDATE_GENERATION_EXPECTED_INDEX_FORMULA:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule."
+            f"index_formula must equal {_CANDIDATE_GENERATION_EXPECTED_INDEX_FORMULA!r} "
+            f"exactly, got {exploratory['index_formula']!r}"
+        )
+    if exploratory["probing_rule"] != _CANDIDATE_GENERATION_EXPECTED_PROBING_RULE:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule."
+            f"probing_rule must equal {_CANDIDATE_GENERATION_EXPECTED_PROBING_RULE!r} "
+            f"exactly, got {exploratory['probing_rule']!r}"
+        )
+    if "NOT_PROPOSABLE" not in exploratory["exhaustion_handling"]:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.exploratory_candidate_rule."
+            "exhaustion_handling must record the NOT_PROPOSABLE outcome, got "
+            f"{exploratory['exhaustion_handling']!r}"
+        )
+
+    neighborhood = proposal["neighborhood_candidate_rule"]
+    if not isinstance(neighborhood, dict):
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule must be an "
+            f"object, got {type(neighborhood).__name__}"
+        )
+    missing_neighborhood = _CANDIDATE_GENERATION_NEIGHBORHOOD_RULE_REQUIRED_KEYS - set(
+        neighborhood.keys()
+    )
+    if missing_neighborhood:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal.neighborhood_candidate_rule missing "
+            f"required key(s): {sorted(missing_neighborhood)}"
+        )
+
+    # 32×4=128 整合の再確認（structure 節の既存検査と独立に、proposal 節が
+    # 記述する trial1(1+3) / trial2-32((3+1)*31) の候補内訳からも導出して
+    # 一致することを cross-check する）。
+    trial_count = structure["trial_count"]
+    candidates_per_trial = structure["candidates_per_trial"]
+    proposal_derived_units = 4 + (trial_count - 1) * candidates_per_trial
+    if proposal_derived_units != trial_count * candidates_per_trial:
+        raise Run9ValidationError(
+            "candidate generation spec manifest.proposal: trial1(1 identity + 3 exploratory) + "
+            f"trial2-{trial_count}(3 neighborhood + 1 exploratory each) = "
+            f"{proposal_derived_units!r} must equal structure.trial_count*candidates_per_trial "
+            f"({trial_count * candidates_per_trial!r})"
+        )
+
 
 def validate_candidate_generation_spec_manifest(data: Mapping[str, Any]) -> None:
     """`candidate_generation_spec_v1.json` の構造・値整形式を検証する
@@ -18450,6 +18678,7 @@ def validate_candidate_generation_spec_manifest(data: Mapping[str, Any]) -> None
             f"{sorted(_CANDIDATE_GENERATION_PROHIBITED_REQUIRED)} (裁定 §3 逐語), missing "
             f"{sorted(missing_prohibited)}"
         )
+    _validate_candidate_generation_proposal_schedule(data["proposal"], structure=structure)
 
 
 def load_pinned_candidate_generation_spec_manifest(

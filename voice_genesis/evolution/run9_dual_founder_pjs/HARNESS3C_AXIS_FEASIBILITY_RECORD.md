@@ -474,3 +474,71 @@ repin 不要。
 `pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
 2414 件全 pass（新規テスト12件を含む: AX-D1 重複拒否1件・合計保存性質
 テスト4件・same-phrase 拒否/回帰2件、branch uses 厳密一致5件、他既存回帰）。
+
+## PR #331 Codex bot レビュー第2巡対応（2026-08-27、Claude 完結ルート）
+
+2 指摘全て Fable 採用判定（機械汚染防止領域）。実装・検証・返信起草は
+Sonnet に委譲、コミット/push は Fable が別途実行する（本追記フェーズでは
+未実施）。
+
+1. **digest→candidate 写像の byte レベル凍結（P1）**:
+   `inputs/candidate_generation_spec_v1.json` `proposal` 節へ、実装が選べる
+   余地を残さない byte レベルの写像規則を逐語で追記した。
+   - **正準候補列 L**（`candidate_ordering`）: 有効な単一軸候補
+     （AX-P1: `(axis_id, note_index 昇順, offset 昇順〔0除外8グリッド値〕)`。
+     AX-D1: `(axis_id, phrase_index 昇順, 同一phrase内note indexペア(i,j)
+     〔i昇順→j昇順、i から j へ delta を移す ordered pair〕, delta 昇順
+     〔0.25刻み・min-duration 0.25 制約を満たす最大値まで〕)`）の全列挙を、
+     タプル比較 `(axis_id, 第2キー, 第3キー…)` の辞書順で凍結した
+     （`"AX-D1" < "AX-P1"` のため AX-D1 群が先）。
+   - **探査候補**（`exploratory_candidate_rule`）:
+     `digest = sha256(UTF-8(f"{seed}:{arm}:{founder_id}:{trial}:{candidate}"))`
+     の先頭8バイトを big-endian uint64 として解釈し `idx = u mod len(L)`、
+     評価済み・無効な場合は `idx+1, idx+2, …`（mod len(L)）の決定論線形
+     プロービングで次の未評価有効候補へ、全滅時は当該 candidate を
+     NOT_PROPOSABLE として記録する（発明しない）。
+   - **近傍候補**（`neighborhood_candidate_rule`）: 現 best（trial 1 直後は
+     trial 1 の最良候補——恒等候補である場合を含む）から、index キー
+     （note_index／phrase_index+(i,j)）を固定したまま値キー（offset／
+     delta）のみ ±1量子化ステップ変化させた L の要素を、L と同じ辞書順で
+     列挙し未評価の先頭3件を採用、3件未満の不足分は探査規則で補充する。
+     恒等が現 best の場合の近傍（`identity_neighbor_rule`）も、この
+     ルールを値キー初期値0のベクトルへ機械的に適用した結果として明記
+     した。
+   - 上記の generator-agnostic な部分（L 構築・digest→index 写像・
+     プロービング・近傍列挙）を参照実装
+     `voice_genesis/evolution/run9_dual_founder_pjs/candidate_proposal.py`
+     として新設した（実際の探索ループ——PRACTICE actor 内候補適用・
+     render・loss 評価・trial 跨ぎ best 更新・trace 保存——は指摘原文が
+     述べる「次の PR」の対象として本モジュールのスコープ外に置く）。
+2. **validator の proposal schedule 形状強制（P2）**:
+   `run9_schema.validate_candidate_generation_spec_manifest()` が
+   `proposal` 節を一切検査していなかった欠落を埋めた。新設
+   `_validate_candidate_generation_proposal_schedule()` が
+   `proposal_schedule_table`（trial1=恒等+探査3件／trial2-32=近傍3件+
+   探査1件の3:1 被覆）を凍結定数との完全一致で検査し、digest 写像規則の
+   必須キー（`digest_formula`/`digest_encoding` のテンプレート文字列、
+   `exploratory_candidate_rule.byte_to_integer` のエンディアン規則、
+   `probing_rule` のプロービング規則）の存在と値一致を強制し、
+   `candidate_ordering`/`neighborhood_candidate_rule` の必須キー欠落も
+   拒否する。32×4=128 整合も trial1(1+3) + trial2-32((3+1)*31) の内訳
+   から独立に再導出して structure 節の値と cross-check する。これにより
+   repin で恒等候補脱落・比率復元（2:2 等）が起きても fail-closed で
+   拒否される。
+
+**連鎖更新**: `inputs/candidate_generation_spec_v1.json` のバイト変更に
+伴い `RUN9_CONTRACT.yaml` の `candidate_generation_spec_sha` を第3世代へ
+repin した。さらに本節を新設したことに伴う `HARNESS3C_AXIS_FEASIBILITY_
+RECORD.md` 自体の実バイト sha256 変更により、5 manifest 共通の
+`provenance.detail_record.sha256` 参照値が全て追随更新となるため、
+5 manifest 全て（`score_axis_catalog_sha`/`loss_evaluator_spec_sha`/
+`candidate_generation_spec_sha`/`compute_budget_manifest_sha`/
+`learning_data_binding_manifest_sha`）を第1巡と同型の cascade repin した
+（旧値は `RUN9_CONTRACT.yaml` 側に世代履歴コメントとして append-only
+保持）。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short`
+2450 件全 pass（新規テスト36件を含む: `candidate_proposal.py` 参照実装の
+決定論・辞書順・プロービング境界テスト26件、validator 形状拒否/回帰
+テスト10件、他既存回帰）。
