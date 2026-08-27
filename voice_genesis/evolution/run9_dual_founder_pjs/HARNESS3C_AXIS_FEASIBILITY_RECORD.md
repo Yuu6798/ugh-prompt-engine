@@ -1317,3 +1317,80 @@ manifest_v1.json` 自体の内容（`provenance.detail_record.sha256` 以外）
 --tb=short` 2552 件全 pass（第11巡時点の2550件から+2件: `applies_to`/
 `shortfall_handling` 逐語一致検査の改ざん拒否テスト2件、他は repin 反映
 後の既存回帰）。
+
+## PR #331 Codex bot レビュー第13巡対応（2026-08-27、Claude 完結ルート）
+
+指摘1件、P2、Fable 採用判定。上限10巡（`AGENTS.md` §3-4／CLAUDE.md
+「上限10ラウンド」）到達後の指摘だが、CLAUDE.md「打ち切りは3分類を
+上書きしない」（新しい具体経路を示す指摘は巡数に依らず採用）に該当する
+ため採用する——本巡指摘は3分類のうち**偽成功経路**（note_count 過小時に
+有効候補が無警告で欠落し digest ordinal が変化する = 決定論契約の
+silent 破り）の新規具体経路であり、既存の是正済み類型の焼き直しではない。
+実装・検証・返信起草は Sonnet に委譲、コミット/push は Fable が別途
+実行する（本追記フェーズでは未実施）。
+
+1. **note-domain 長不一致の拒否（P2）**: `candidate_proposal.
+   build_candidate_ordering()` は `note_count: int` を
+   `phrase_of_note`/`original_duration_beats` とは独立の引数として受け
+   取る。旧実装は `build_ax_d1_ordering()` 内部で `phrase_of_note` と
+   `original_duration_beats` の相互長一致のみを検査しており（`if
+   len(phrase_of_note) != len(original_duration_beats): raise
+   ValueError(...)`）、`note_count` が両者と一致するかは無検査だった。
+   実読で確認した不整合時の2経路: (a) `note_count` が過大な場合、
+   `build_ax_p1_ordering(note_count, ...)` が存在しない note_index の
+   AX-P1 候補を L に生成し、`require_sufficient_candidate_space()` の
+   |L| 検査を偽通過した上で、実際に候補が適用される段（`score_axis_
+   transform.apply_ax_p1()`）まで検出が先送りされる（同関数は
+   `note_index` の range 検査で `ScoreAxisTransformError` を送出する
+   fail-closed 実装のため実害はクラッシュ扱いで止まるが、run 前提条件
+   ゲートが本来の目的〔undersized/不整合な L の run 前拒否〕を果たさず
+   run 開始後まで不整合を持ち越す）。(b) `note_count` が過小な場合、
+   本来存在すべき note の AX-P1 候補が**無警告のまま** L から欠落する
+   ——`require_sufficient_candidate_space()` は縮小した |L| をそのまま
+   受理し得るため run は完走するが、candidate_ordering の total_order・
+   ひいては `digest_to_index()` が返す `idx = u mod len(L)` の写像先が
+   意図した L と異なる集合に対して決定論的に「別の」候補列へずれる
+   ——digest 由来の探索が凍結済み total_order とは異なる縮小 L 上で
+   決定論的に再現するだけであり、外形上は動作して見えるため偽成功
+   経路に該当する。
+   `build_candidate_ordering()` 冒頭へ `note_count == len(phrase_of_note)
+   == len(original_duration_beats)` の完全一致 fail-closed 検査
+   （`ValueError`、既存の `build_ax_d1_ordering()` 側検査と同一の
+   エラーメッセージ様式）を追加した。シグネチャは変更していない
+   （`note_count` 引数の削除・導出化はしない——spec の候補列 L 構築規約
+   が note 数を明示入力とする現行構造を維持し、実装レベルの防御のみ
+   追加する最小修正。設計は Fable が事前指示）。`build_ax_p1_ordering()`/
+   `build_ax_d1_ordering()` を `build_candidate_ordering()` を経由せず
+   直接呼ぶ生産経路は本モジュール内に存在しないことを `grep` で確認した
+   （両関数の呼び出し元は `build_candidate_ordering()` 自身とテストのみ）
+   ——他の入口からの同型不整合混入経路は無い。
+   `tests/test_candidate_proposal.py` へ
+   `test_build_candidate_ordering_rejects_note_count_larger_than_domains`/
+   `test_build_candidate_ordering_rejects_note_count_smaller_than_domains`
+   （拒否2ケース）と `test_build_candidate_ordering_accepts_consistent_
+   note_count`（既存一致ケースの回帰確認）を新設した。
+   `candidate_generation_spec_v1.json` には note_count と phrase_of_note/
+   original_duration_beats の入力整合検査を宣言する既存節が無く、本巡の
+   修正は実装レベルの入力検査（凍結済み candidate_ordering 定義・
+   total_order 意味論はいずれも不変）のため spec 文言の改訂は不要と
+   判定した。
+
+**連鎖更新**: `candidate_proposal.py`/`tests/test_candidate_proposal.py`
+自体は `candidate_generation_spec_v1.json` のバイトに影響しない（spec
+本文は無改訂）が、本節を新設したことによる `HARNESS3C_AXIS_FEASIBILITY_
+RECORD.md` 自体の実バイト sha256 変更により、5 manifest 共通の
+`provenance.detail_record.sha256` 参照値が全て追随更新となるため、5
+manifest 全て（`score_axis_catalog_sha`/`loss_evaluator_spec_sha`/
+`candidate_generation_spec_sha`/`compute_budget_manifest_sha`/
+`learning_data_binding_manifest_sha`）を第1-12巡と同型の cascade repin
+した（旧値は `RUN9_CONTRACT.yaml` 側に世代履歴コメントとして
+append-only 保持）。`score_axis_catalog_v1.json`/`loss_evaluator_spec_
+v1.json`/`candidate_generation_spec_v1.json`/`compute_budget_manifest_
+v1.json`/`learning_data_binding_manifest_v1.json` 自体の内容
+（`provenance.detail_record.sha256` 以外）は本巡で無改訂。
+
+**検証**: `ruff check .` clean（リポジトリ全体）。
+`python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q
+--tb=short` 2555 件全 pass（第12巡時点の2552件から+3件: note_count
+不整合拒否テスト2件・一致ケース回帰確認テスト1件、他は repin 反映後の
+既存回帰）。

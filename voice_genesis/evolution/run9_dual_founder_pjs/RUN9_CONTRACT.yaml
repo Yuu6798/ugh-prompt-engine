@@ -2271,8 +2271,18 @@ pjs_consumed_inputs_manifest_sha:
 # 再計算した（旧値
 # ea3262a0a39f3a71eb8439e820c60d1e18298989c81b385272890f809385a184 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第13巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第13巡指摘は candidate_
+# proposal.py/tests/test_candidate_proposal.py を対象としており、
+# score_axis_catalog_v1.json を対象としていない）。`HARNESS3C_AXIS_
+# FEASIBILITY_RECORD.md` へ第13巡対応追記節を新設したことに伴う
+# `provenance.detail_record.sha256` 参照値の追随更新のみ
+# （score_axis_catalog_sha の repin note と同型の cascade）——値を
+# 再計算した（旧値
+# 4f1f00811ab387c785bf966e179648dbb3ca9b0e7905aa73107640b18091e075 は
+# 履歴として append-only 保持）。
 score_axis_catalog_sha:
-  value: "4f1f00811ab387c785bf966e179648dbb3ca9b0e7905aa73107640b18091e075"
+  value: "535cdca5dc20d96a145c7aa61a4789d92a974a73a53cfc81d2dab3b1408aa4b5"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/score_axis_catalog_v1.json
 
@@ -2461,8 +2471,18 @@ score_axis_catalog_sha:
 # した（旧値
 # e8f22ef9559df0cd8a7a0f1e41dddfd53067ef26908154840176263de481d7a5 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第13巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第13巡指摘は candidate_
+# proposal.py/tests/test_candidate_proposal.py を対象としており、
+# loss_evaluator_spec_v1.json を対象としていない）。`HARNESS3C_AXIS_
+# FEASIBILITY_RECORD.md` へ第13巡対応追記節を新設したことに伴う
+# `provenance.detail_record.sha256` 参照値の追随更新のみ
+# （score_axis_catalog_sha の repin note と同型の cascade）——値を再計算
+# した（旧値
+# 18117be192f5c538d240eea3e1144ece8e09de21af1998822ec1452a74f9ee25 は
+# 履歴として append-only 保持）。
 loss_evaluator_spec_sha:
-  value: "18117be192f5c538d240eea3e1144ece8e09de21af1998822ec1452a74f9ee25"
+  value: "60bcc84772a7f52ecefdd64cbece8a343fc1d24546882b8bc00d265e9ef3e380"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/loss_evaluator_spec_v1.json
 
@@ -2689,8 +2709,20 @@ loss_evaluator_spec_sha:
 # sha256` 参照値の追随更新も同一 repin に含める（旧値
 # 955dc2df8807223ea880e93098f5206d8d7ab3de3812322628839da0ce14a104 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第13巡指摘、P2、採用対応。
+# Claude 完結ルート）: 本ファイルの内容自体は無改訂（第13巡指摘は
+# `candidate_proposal.build_candidate_ordering()` の note_count 入力
+# 検査という実装レベルの防御であり、凍結済み candidate_ordering 定義・
+# total_order 意味論は不変。spec に note_count と phrase_of_note/
+# original_duration_beats の入力整合検査を宣言する既存節も無いため、
+# 追記の必要も無いと判定した）。`HARNESS3C_AXIS_FEASIBILITY_RECORD.md`
+# へ第13巡対応追記節を新設したことに伴う `provenance.detail_record.
+# sha256` 参照値の追随更新のみ（score_axis_catalog_sha の repin note と
+# 同型の cascade）——値を再計算した（旧値
+# 5dab06cd0661b51edb7473ee0fc1fe481568f01f75398eee4c0eaaf9263a68f9 は
+# 履歴として append-only 保持）。
 candidate_generation_spec_sha:
-  value: "5dab06cd0661b51edb7473ee0fc1fe481568f01f75398eee4c0eaaf9263a68f9"
+  value: "9e982772d5347d2cd936e190cd068f3929d240e1b8cd63447136eb8f26b29161"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/candidate_generation_spec_v1.json
 
@@ -2800,8 +2832,18 @@ candidate_generation_spec_sha:
 # 再計算した（旧値
 # bb6b512bf41e1fbca87e73ad0082d37f1ce737d1dc03d9d6c4a74feabfd2ddfb は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第13巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第13巡指摘は candidate_
+# proposal.py/tests/test_candidate_proposal.py を対象としており、
+# compute_budget_manifest_v1.json を対象としていない）。`HARNESS3C_AXIS_
+# FEASIBILITY_RECORD.md` へ第13巡対応追記節を新設したことに伴う
+# `provenance.detail_record.sha256` 参照値の追随更新のみ
+# （score_axis_catalog_sha の repin note と同型の cascade）——値を
+# 再計算した（旧値
+# d4a53b070190762476eb922d99ae2748c217d94b1287d082fd8c8272a6430279 は
+# 履歴として append-only 保持）。
 compute_budget_manifest_sha:
-  value: "d4a53b070190762476eb922d99ae2748c217d94b1287d082fd8c8272a6430279"
+  value: "7e10d818cd1ee1931b82142a6ffd59b801c629569b1b900fabf01f79bccbb288"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/compute_budget_manifest_v1.json
 
@@ -2920,8 +2962,18 @@ compute_budget_manifest_sha:
 # 再計算した（旧値
 # 147656ebdda9e6a8b4d24899c17a439fcda0787d3fd3e2448c66e249c6762154 は
 # 履歴として append-only 保持）。
+# 2026-08-27 repin（PR #331 Codex bot レビュー第13巡対応、Claude 完結
+# ルート）: 本ファイルの内容自体は無改訂（第13巡指摘は candidate_
+# proposal.py/tests/test_candidate_proposal.py を対象としており、
+# learning_data_binding_manifest_v1.json を対象としていない）。
+# `HARNESS3C_AXIS_FEASIBILITY_RECORD.md` へ第13巡対応追記節を新設した
+# ことに伴う `provenance.detail_record.sha256` 参照値の追随更新のみ
+# （score_axis_catalog_sha の repin note と同型の cascade）——値を
+# 再計算した（旧値
+# 73bda1f2e04049ccf7260e4dccf070dab4cb7e97dc7b01b469c986fbe54b2630 は
+# 履歴として append-only 保持）。
 learning_data_binding_manifest_sha:
-  value: "73bda1f2e04049ccf7260e4dccf070dab4cb7e97dc7b01b469c986fbe54b2630"
+  value: "cf54ce5e785f87d5ec9a8c91042e7c255de1db1a6dac1bf9be3f414dbcf73289"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/learning_data_binding_manifest_v1.json
 

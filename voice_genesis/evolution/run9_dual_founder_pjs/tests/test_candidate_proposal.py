@@ -154,6 +154,44 @@ def test_candidate_ordering_empty_note_count_yields_no_ax_p1() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 1c. note_count と phrase_of_note/original_duration_beats の長さ不一致は
+# fail-closed で拒否する（PR #331 Codex bot レビュー第13巡指摘1、P2、採用）。
+# `build_ax_d1_ordering()` 側の phrase_of_note/original_duration_beats 相互
+# 長検査だけでは、note_count が独立に取り違えられた場合を検出できない。
+# ---------------------------------------------------------------------------
+
+
+def test_build_candidate_ordering_rejects_note_count_larger_than_domains() -> None:
+    # note_count が phrase_of_note/original_duration_beats より過大な場合、
+    # 存在しない note の AX-P1 候補が L に混入し得る不整合であり拒否する。
+    with pytest.raises(ValueError, match="note_count"):
+        cp.build_candidate_ordering(
+            note_count=NOTE_COUNT + 1,
+            phrase_of_note=PHRASE_OF_NOTE,
+            original_duration_beats=ORIGINAL_DURATION_BEATS,
+            catalog=CATALOG,
+        )
+
+
+def test_build_candidate_ordering_rejects_note_count_smaller_than_domains() -> None:
+    # note_count が過小な場合、有効な AX-P1 候補が無警告で欠落し digest
+    # ordinal が変化し得る不整合であり拒否する。
+    with pytest.raises(ValueError, match="note_count"):
+        cp.build_candidate_ordering(
+            note_count=NOTE_COUNT - 1,
+            phrase_of_note=PHRASE_OF_NOTE,
+            original_duration_beats=ORIGINAL_DURATION_BEATS,
+            catalog=CATALOG,
+        )
+
+
+def test_build_candidate_ordering_accepts_consistent_note_count() -> None:
+    # 一致するケースは引き続き pass する（回帰確認）。
+    ordering = _build_l()
+    assert ordering != []
+
+
+# ---------------------------------------------------------------------------
 # 1b. catalog 値改変が L へ反映されること（PR #331 第5巡指摘1、P2、採用の
 # 直接テスト: L 構築はハードコード定数からではなく catalog 引数から都度
 # 導出するため、catalog の range/step を改変すれば L の内容が追随する）。

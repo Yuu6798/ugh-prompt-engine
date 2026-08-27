@@ -264,7 +264,24 @@ def build_candidate_ordering(
     min-duration はすべて `catalog`（`score_axis_catalog_v1.json` と同型の
     dict。本番経路では `run9_schema.
     load_pinned_score_axis_catalog_manifest()` の戻り値を渡す）から導出し、
-    本モジュール内にハードコードしない（第5巡指摘1、P2、採用）。"""
+    本モジュール内にハードコードしない（第5巡指摘1、P2、採用）。
+
+    第13巡指摘1（P2「note-domain 長不一致の拒否」、採用）: `note_count` は
+    `phrase_of_note`/`original_duration_beats` とは独立の引数で受け取るため、
+    呼び出し側が3者を取り違えると `build_ax_d1_ordering()` 側の相互長検査
+    だけでは検出できない不整合が生じ得る（`note_count` 過大 → 存在しない
+    note の AX-P1 候補が L に混入し `require_sufficient_candidate_space()`
+    を偽通過した上で後段 `apply_ax_p1()` の note_index range 検査まで
+    先送りされる／`note_count` 過小 → 有効候補が無警告で欠落し digest
+    ordinal が変化する——決定論契約の silent 破り）。`note_count ==
+    len(phrase_of_note) == len(original_duration_beats)` の完全一致を
+    fail-closed で検査する。"""
+    if not (note_count == len(phrase_of_note) == len(original_duration_beats)):
+        raise ValueError(
+            "note_count と phrase_of_note/original_duration_beats の長さが一致しない "
+            f"(note_count={note_count}, len(phrase_of_note)={len(phrase_of_note)}, "
+            f"len(original_duration_beats)={len(original_duration_beats)})"
+        )
     ax_d1 = build_ax_d1_ordering(
         phrase_of_note,
         original_duration_beats,
