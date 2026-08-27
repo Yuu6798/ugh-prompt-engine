@@ -14,6 +14,7 @@ inventory は「存在しないものを PRESENT と書かない」ことだけ�
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -338,3 +339,71 @@ def test_self_contradictory_registration_is_rejected(tmp_path: Path, mutate, why
     state, detail = inv._check_freeze_registration(path)
     assert state == inv.ABSENT
     assert why in detail
+
+
+# --- 第 16 巡: Evolution Theory 正典の実体照合（PR #330 Codex 第 16 巡 P1）--
+
+
+def _foundry(repo: Path) -> Path:
+    d = repo / "voice_genesis" / "foundry"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def test_near_miss_document_does_not_resolve_the_reference(tmp_path: Path) -> None:
+    """別名の近縁文書が追加されても §29 手順 5 は解決しない。
+
+    第 16 巡以前は `VISION_evolution_theory_v0.3.md` の実在で PRESENT に
+    していたため、正典 `VoiceGenesis_Evolution_Theory_v0.3_ja.md` を欠いた
+    まま R10-G2 が COMPLETE になり得た（来歴汚染）。
+    """
+    (_foundry(tmp_path) / "VISION_evolution_theory_v0.3.md").write_text("x", encoding="utf-8")
+    item = inv._check_evolution_theory(tmp_path)
+    assert item.state == inv.UNRESOLVED
+    assert item.blocking is True
+
+
+def test_detail_never_contradicts_the_state(tmp_path: Path) -> None:
+    """PRESENT なのに detail が「不在」と言う自己矛盾を出さない。"""
+    (_foundry(tmp_path) / "VISION_evolution_theory_v0.3.md").write_text("x", encoding="utf-8")
+    item = inv._check_evolution_theory(tmp_path)
+    if item.state == inv.PRESENT:
+        assert "不在" not in item.detail
+    else:
+        assert "判定材料ではない" in item.detail
+
+
+def test_canonical_name_alone_is_not_enough(tmp_path: Path, monkeypatch) -> None:
+    """名前一致だけでは通さない — 同名の別内容は来歴汚染である。"""
+    monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", "a" * 64)
+    (_foundry(tmp_path) / inv.EVOLUTION_THEORY_CANONICAL).write_text("wrong", encoding="utf-8")
+    item = inv._check_evolution_theory(tmp_path)
+    assert item.state == inv.UNRESOLVED
+    assert item.blocking is True
+    assert "一致しない" in item.detail
+
+
+def test_canonical_path_with_matching_pin_resolves(tmp_path: Path, monkeypatch) -> None:
+    """正典パス + sha 一致でのみ解決する（偽陰性でないことの確認）。"""
+    body = b"canonical evolution theory v0.3"
+    digest = hashlib.sha256(body).hexdigest()
+    monkeypatch.setattr(inv, "EVOLUTION_THEORY_CANONICAL_SHA256", digest)
+    (_foundry(tmp_path) / inv.EVOLUTION_THEORY_CANONICAL).write_bytes(body)
+    item = inv._check_evolution_theory(tmp_path)
+    assert item.state == inv.PRESENT
+    assert item.blocking is False
+
+
+def test_pin_is_still_pending(tmp_path: Path) -> None:
+    """pin 未取得の間は、正典が置かれても解決にしない（証明できないため）。"""
+    assert inv.EVOLUTION_THEORY_CANONICAL_SHA256 is None
+    (_foundry(tmp_path) / inv.EVOLUTION_THEORY_CANONICAL).write_text("x", encoding="utf-8")
+    item = inv._check_evolution_theory(tmp_path)
+    assert item.state == inv.UNRESOLVED
+    assert "vg_evolution_theory_ref_sha" in item.detail
+
+
+def test_canonical_path_is_a_single_closed_location() -> None:
+    """正典本体の受け入れ位置を閉じる（任意の場所に置かせない）。"""
+    assert inv.EVOLUTION_THEORY_CANONICAL_PATH.endswith(inv.EVOLUTION_THEORY_CANONICAL)
+    assert inv.EVOLUTION_THEORY_CANONICAL not in inv.EVOLUTION_THEORY_DISCOVERY_CANDIDATES

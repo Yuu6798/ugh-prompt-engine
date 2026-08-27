@@ -57,7 +57,7 @@
     },
     {
       "blocking": true,
-      "detail": "リポジトリ内に存在する参照: ['voice_genesis/foundry/VISION_evolution_theory_v0.2.md', 'voice_genesis/foundry/VISION_evolution_theory_v0.1.md', 'voice_genesis/foundry/VISION_evolution_v0.3_supplementA_spr.md']. §36 が実在を確認した v0.3 本体 'VoiceGenesis_Evolution_Theory_v0.3_ja.md' はリポジトリ内に不在（Drive 側実体の sha 未取得）。",
+      "detail": "リポジトリ内に存在する近縁参照（判定材料ではない）: ['voice_genesis/foundry/VISION_evolution_theory_v0.2.md', 'voice_genesis/foundry/VISION_evolution_theory_v0.1.md', 'voice_genesis/foundry/VISION_evolution_v0.3_supplementA_spr.md']. §36 が実在を確認した v0.3 本体 'VoiceGenesis_Evolution_Theory_v0.3_ja.md' の凍結 sha256 が未取得（RUN10_CONTRACT.yaml vg_evolution_theory_ref_sha = PENDING）。pin が無い限り「正しい実体が在る」ことは証明できないため解決にしない。",
       "item_id": "evolution_theory_reference",
       "state": "UNRESOLVED"
     },

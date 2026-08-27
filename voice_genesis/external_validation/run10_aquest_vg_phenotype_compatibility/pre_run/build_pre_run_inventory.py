@@ -60,22 +60,40 @@ from run10_schema import (  # noqa: E402
     AF01_PITCHES,
     AF01_UNIT_FILE_COUNT,
     canonical_json_bytes,
+    compute_file_sha256,
 )
 
 PRESENT = "PRESENT"
 ABSENT = "ABSENT"
 UNRESOLVED = "UNRESOLVED"
 
-# repository 内で解決を試みる Evolution Theory 参照（§29 手順 5）。
-EVOLUTION_THEORY_CANDIDATES = (
+# repository 内で見つかった近縁の Evolution Theory 参照（§29 手順 5）。
+#
+# **これは報告用の情報であり、解決の判定材料ではない。** 近縁文書の発見から
+# 正典の存在を推論すると、`VISION_evolution_theory_v0.3.md` のような別文書が
+# 追加された瞬間に「解決済み」になり、§29 手順 5 が要求する v0.3 本体を
+# 欠いたまま R10-G2 が COMPLETE になる（PR #330 Codex 第 16 巡 P1）。
+EVOLUTION_THEORY_DISCOVERY_CANDIDATES = (
     "voice_genesis/foundry/VISION_evolution_theory_v0.3.md",
     "voice_genesis/foundry/VISION_evolution_theory_v0.2.md",
     "voice_genesis/foundry/VISION_evolution_theory_v0.1.md",
     "voice_genesis/foundry/VISION_evolution_v0.3_supplementA_spr.md",
 )
 
-# §36 が実在を確認した v0.3 本体の題名。リポジトリ内に無い場合は UNRESOLVED。
+# 後方互換の別名（旧名で参照している呼び出し側のため）。
+EVOLUTION_THEORY_CANDIDATES = EVOLUTION_THEORY_DISCOVERY_CANDIDATES
+
+# §36 が実在を確認した v0.3 本体の題名。§29 手順 5 が要求するのはこの実体である。
 EVOLUTION_THEORY_CANONICAL = "VoiceGenesis_Evolution_Theory_v0.3_ja.md"
+
+# 正典本体を repo 側で受け入れる唯一の位置（閉世界。任意の場所に置かせない）。
+EVOLUTION_THEORY_CANONICAL_PATH = f"voice_genesis/foundry/{EVOLUTION_THEORY_CANONICAL}"
+
+# 正典本体の凍結 sha256。**未取得**（RUN10_CONTRACT.yaml
+# `vg_evolution_theory_ref_sha` = PENDING / Drive 側実体の実バイト sha 未取得）。
+# 名前一致だけで PRESENT にすると、同名の別内容を置くだけで来歴が汚染される。
+# pin を得たらここに 64 桁 hex を書き、`inputs/` へは置かない（§2.2 公開境界）。
+EVOLUTION_THEORY_CANONICAL_SHA256: Optional[str] = None
 
 
 @dataclass
@@ -370,21 +388,74 @@ def inventory_aquest(voicebank_root: Optional[Path]) -> List[InventoryItem]:
     ]
 
 
+def _check_evolution_theory(repo: Path) -> InventoryItem:
+    """§29 手順 5: Evolution Theory v0.3 本体の解決。
+
+    判定は**正典パス + 凍結 sha256 の一致**のみで行う。近縁文書の発見リストは
+    報告用であって判定材料ではない — 第 16 巡以前は
+    `VISION_evolution_theory_v0.3.md` の実在で PRESENT にしていたため、
+    別名の別文書が追加された瞬間に「解決済み」になり、しかも同じ detail が
+    「v0.3 本体は不在」と言い続ける自己矛盾を出していた。
+    """
+    discovered = [c for c in EVOLUTION_THEORY_DISCOVERY_CANDIDATES if (repo / c).is_file()]
+    found_note = f"リポジトリ内に存在する近縁参照（判定材料ではない）: {discovered}. "
+
+    if EVOLUTION_THEORY_CANONICAL_SHA256 is None:
+        return InventoryItem(
+            item_id="evolution_theory_reference",
+            state=UNRESOLVED,
+            detail=(
+                found_note
+                + f"§36 が実在を確認した v0.3 本体 {EVOLUTION_THEORY_CANONICAL!r} の"
+                "凍結 sha256 が未取得（RUN10_CONTRACT.yaml"
+                " vg_evolution_theory_ref_sha = PENDING）。pin が無い限り"
+                "「正しい実体が在る」ことは証明できないため解決にしない。"
+            ),
+            blocking=True,
+        )
+
+    canonical = repo / EVOLUTION_THEORY_CANONICAL_PATH
+    if not canonical.is_file():
+        return InventoryItem(
+            item_id="evolution_theory_reference",
+            state=UNRESOLVED,
+            detail=(
+                found_note
+                + f"正典パス {EVOLUTION_THEORY_CANONICAL_PATH!r} に v0.3 本体が不在。"
+            ),
+            blocking=True,
+        )
+
+    actual = compute_file_sha256(canonical)
+    if actual != EVOLUTION_THEORY_CANONICAL_SHA256:
+        return InventoryItem(
+            item_id="evolution_theory_reference",
+            state=UNRESOLVED,
+            detail=(
+                found_note
+                + f"正典パス {EVOLUTION_THEORY_CANONICAL_PATH!r} の実バイト sha256 が"
+                f"凍結値と一致しない（expected={EVOLUTION_THEORY_CANONICAL_SHA256}"
+                f" actual={actual}）。同名の別内容は来歴汚染である。"
+            ),
+            blocking=True,
+        )
+
+    return InventoryItem(
+        item_id="evolution_theory_reference",
+        state=PRESENT,
+        detail=(
+            found_note
+            + f"正典 {EVOLUTION_THEORY_CANONICAL_PATH!r} の実バイト sha256 が"
+            "凍結値と一致（§29 手順 5 解決）。"
+        ),
+        blocking=False,
+    )
+
+
 def inventory_repository(repo: Path) -> List[InventoryItem]:
     """リポジトリ側の参照解決（§29 手順 2/5）。"""
-    found = [c for c in EVOLUTION_THEORY_CANDIDATES if (repo / c).is_file()]
-    canonical_present = any(c.endswith("VISION_evolution_theory_v0.3.md") for c in found)
     items = [
-        InventoryItem(
-            item_id="evolution_theory_reference",
-            state=PRESENT if canonical_present else UNRESOLVED,
-            detail=(
-                f"リポジトリ内に存在する参照: {found}. "
-                f"§36 が実在を確認した v0.3 本体 {EVOLUTION_THEORY_CANONICAL!r} は"
-                "リポジトリ内に不在（Drive 側実体の sha 未取得）。"
-            ),
-            blocking=not canonical_present,
-        ),
+        _check_evolution_theory(repo),
         InventoryItem(
             item_id="meter_implementation",
             state=ABSENT,

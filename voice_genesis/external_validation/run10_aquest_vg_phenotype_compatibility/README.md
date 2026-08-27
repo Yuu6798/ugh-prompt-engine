@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（315 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（321 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -469,3 +469,18 @@ CLAUDE.md は「打ち切りは 3 分類を上書きしない（新しい具体�
 1 は第 13/14 巡の「開いたキー集合」ファミリーの再発である。前 2 巡で閉じたのは
 検証対象 mapping のキー集合であって、**値の語彙**ではなかった。今回は台帳の
 キー・値・状態の三面を同時に閉じたので、Gate 台帳としての開口部は残っていない。
+
+### 第 16 巡（P1×1）
+
+**Evolution Theory 正典を「近縁文書の発見」で解決済みにしていた** — §29 手順 5 が
+要求するのは §36 が実在を確認した v0.3 本体 `VoiceGenesis_Evolution_Theory_v0.3_ja.md`
+だが、判定は `VISION_evolution_theory_v0.3.md`（別名の別文書）の実在で行っていた。
+後者が追加された瞬間に `evolution_theory_reference` が PRESENT になり、しかも同じ
+detail が「v0.3 本体はリポジトリ内に不在」と言い続ける自己矛盾を出したまま、
+他の blocker が解けたら R10-G2 が COMPLETE になり得た（来歴汚染）。
+
+判定を**正典パス + 凍結 sha256 の一致**のみに変えた。近縁文書の発見リストは
+報告用の情報として残すが判定材料ではない。凍結 sha256
+（`vg_evolution_theory_ref_sha`）は未取得なので、pin を得るまでは正典が置かれても
+解決にしない — 「正しい実体が在る」ことを証明できないからである。名前一致だけで
+通すと同名の別内容で来歴が汚染される。
