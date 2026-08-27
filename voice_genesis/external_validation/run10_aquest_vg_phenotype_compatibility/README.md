@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（210 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（215 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -247,3 +247,29 @@ evidence 節の形状契約は、**DESIGN_RUN10 が節ごとに明示してい�
    `performance_claim: C2` が通った。§5.3 の凍結値と完全一致を要求する。
 5. **inventory の非 atomic write** — 追跡中の正典を in-place truncate していた。
    リポジトリの atomic write 集約実装（`svp_rpe.utils.atomic_io`）へ委譲する。
+
+### 第 5 巡（P1×2、全件採用 + 同型の逆方向も併せて掃討）
+
+指摘は 2 件だが、いずれも「evidence が結論と矛盾したまま正典結果を記録できる」
+同型だったため、outcome × Run 状態量の整合を 4 規則の閉世界表へまとめて終端した。
+
+| 規則 | 内容 | 由来 |
+|---|---|---|
+| 1 | synthesis 由来 outcome は `phase_b_entry=ENTER` が前提 | 第 3 巡 |
+| 2 | `PHASE_B_NOT_ENTERED` は `ENTER` と両立しない | **第 5 巡 指摘** |
+| 3 | `MEASUREMENT_OVERFIT_DETECTED` は `measurement_overfit_signal=true` を要求 | **第 5 巡 指摘** |
+| 4 | `measurement_overfit_signal=true` のまま成立側 outcome は名乗れない | 同型の逆方向（当方で追加） |
+
+規則 3 は、第 4 巡で「false を欠落と混同しない」ために存在判定へ直した副作用で
+`measurement_overfit_signal: false` が通っていたもの。規則 4 は指摘に含まれないが、
+片方だけ塞ぐと矛盾記録の穴が残るため同時に掃討した（§12.6 / §21 R10-G7:
+E0 校正に失敗した meter は `CALIBRATED_EXTERNAL` になれず、§15.1 はそれを
+`DIRECT_COMPATIBLE` の必要条件にしている）。
+
+#### 境界宣言 — 整合検証の範囲
+
+縛るのは outcome と **Run 全体の状態量**（`phase_b_entry` /
+`measurement_overfit_signal`）の整合までである。trait 単位の値と outcome の整合
+（例: 全行 `NO_STABLE_MAPPING` なのに `COMPATIBILITY_MAP_ESTABLISHED` を名乗る）は、
+§14.6 の判定則が数値で freeze されるまで検証しない。何をもって「地図が成立した」と
+するかは `measurement_decision_spec` が定義するものであり、実装側が発明しない。

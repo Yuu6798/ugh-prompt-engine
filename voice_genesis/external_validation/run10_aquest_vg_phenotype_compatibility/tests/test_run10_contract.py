@@ -9,6 +9,7 @@ DESIGN_RUN10 §28「最低テスト」121 項目のうち、本 PR の範囲（�
 from __future__ import annotations
 
 import copy
+import inspect
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -878,3 +879,82 @@ def test_claim_strength_ceilings_match_design() -> None:
     assert m.CLAIM_STRENGTH_TARGET["performance_claim"] == "C0"
     assert m.CLAIM_STRENGTH_TARGET["trait_identity_equivalence_claim"] == "C0"
     assert m.CLAIM_STRENGTH_TARGET["transfer_or_reconstruction_claim"] == "C0"
+
+
+# --- 第 5 巡: outcome と Run 状態量の整合（ファミリー終端） ----------------
+
+
+def test_phase_b_not_entered_conflicts_with_enter() -> None:
+    """§22.2: Phase B へ入ったのに「入らなかった」と記録させない（逆方向）。"""
+    doc = _passing_results()
+    doc["phase_b_entry"] = "ENTER"
+    doc["scientific_outcome"] = ["PHASE_B_NOT_ENTERED"]
+    doc["hard_gates"].update({gate_id: "PASS" for gate_id, _ in m.PHASE_B_GATES})
+    doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "PASS"
+    with pytest.raises(m.Run10ContractError, match="PHASE_B_NOT_ENTERED"):
+        m.validate_results_document(doc)
+
+
+def test_phase_b_not_entered_is_fine_when_skipped() -> None:
+    """SKIP なら PHASE_B_NOT_ENTERED は正当（§0「SKIPは失敗を意味しない」）。"""
+    doc = _passing_results()
+    doc["phase_b_entry"] = "SKIP"
+    doc["scientific_outcome"] = ["COMPATIBILITY_MAP_ESTABLISHED", "PHASE_B_NOT_ENTERED"]
+    m.validate_results_document(doc)
+
+
+def test_overfit_outcome_requires_the_signal_to_be_true() -> None:
+    """§12.6: evidence が結論を否定したまま記録させない。
+
+    存在判定に直した副作用で `measurement_overfit_signal: false` が通っていた
+    （PR #330 Codex 第 5 巡 P1）。
+    """
+    doc = _minimal_results()
+    doc["scientific_outcome"] = ["MEASUREMENT_OVERFIT_DETECTED"]
+    doc["external_calibration"] = {
+        "e0_parameter_recovery": {"01_f1_low": {"abs_error": 900.0}},
+        "meter_calibration_status": {"F1_F2_F3": "UNCALIBRATED"},
+        "measurement_overfit_signal": False,
+    }
+    doc["replay"] = {
+        "same_process": "PASS",
+        "cross_process": "PASS",
+        "feature_json_sha": "d" * 64,
+    }
+    with pytest.raises(m.Run10ContractError, match="measurement_overfit_signal = true"):
+        m.validate_results_document(doc)
+
+
+def test_overfit_signal_blocks_established_outcomes() -> None:
+    """§12.6 / §21 R10-G7: 外的妥当性が立たないまま成立側の結論を名乗らせない。
+
+    第 5 巡の指摘は overfit 側 1 方向だけだったが、同型の逆方向をここで併せて
+    掃討する（片方だけ塞ぐと矛盾記録の穴が残る）。
+    """
+    for outcome in m._ESTABLISHED_OUTCOMES:
+        doc = _passing_results()
+        doc["scientific_outcome"] = [outcome]
+        doc["external_calibration"]["measurement_overfit_signal"] = True
+        if outcome in m.PHASE_B_DERIVED_OUTCOMES:
+            doc["phase_b_entry"] = "ENTER"
+            doc["hard_gates"].update({g: "PASS" for g, _ in m.PHASE_B_GATES})
+            doc["hard_gates"][m.PHASE_B_ENTRY_GATE[0]] = "PASS"
+            doc["generative_compatibility_matrix"] = {
+                "F1_F2_F3": {"synthesis_status": "GENERATIVELY_COMPATIBLE"}
+            }
+            doc["synthesis_validation"] = {
+                "controls": {"G_null": {"n": 1}, "G_target": {"n": 1}, "G_inverse": {"n": 1}},
+                "construction_meter": {"m": "PASS"},
+                "confirmation_meter": {"m2": "PASS"},
+            }
+        for section in ("novel_trait_candidates",):
+            doc.setdefault(section, {"AQUEST_X01": {"state": "confirmed"}})
+        with pytest.raises(m.Run10ContractError, match="measurement_overfit_signal=true"):
+            m.validate_results_document(doc)
+
+
+def test_outcome_consistency_rules_are_enumerated() -> None:
+    """整合規則が outcome × Run 状態量の 4 方向をすべて持つ（掃討の被覆）。"""
+    source = inspect.getsource(m._validate_outcome_consistency)
+    for rule in ("規則 1", "規則 2", "規則 3", "規則 4"):
+        assert rule in source

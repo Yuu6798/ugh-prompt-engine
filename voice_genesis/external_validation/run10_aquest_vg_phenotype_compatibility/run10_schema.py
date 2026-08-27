@@ -902,6 +902,68 @@ def _validate_gate_ledger(mapping: Mapping[str, Any], gate_ids: Tuple[str, ...],
         )
 
 
+# outcome と evidence / 状態量の**矛盾**を塞ぐ閉世界表。
+#
+# 「必要な節が在る」ことと「その中身が結論と整合する」ことは別であり、
+# 後者が抜けていると evidence が結論を否定したまま正典結果を記録できる
+# （PR #330 Codex 第 5 巡 P1 が 2 方向で露出させた）。同型を個別に潰さず、
+# 下の 4 規則で outcome × 状態量のファミリーを全数掃討して終端する。
+#
+# 【境界宣言】ここで縛るのは outcome と、Run 全体の状態量
+# （phase_b_entry / measurement_overfit_signal）の整合だけである。
+# trait 単位の値と outcome の整合（例: 全行が NO_STABLE_MAPPING なのに
+# COMPATIBILITY_MAP_ESTABLISHED を名乗る）は、§14.6 の判定則が数値で
+# freeze されるまで検証しない — 何をもって「地図が成立した」とするかは
+# measurement_decision_spec が定義するものであり、実装側が発明しない。
+
+
+def _validate_outcome_consistency(
+    mapping: Mapping[str, Any],
+    entry: str,
+    outcomes: List[Any],
+) -> None:
+    """outcome と Run 状態量の整合を検証する（§16 / §21 R10-G7 / §22.2）。"""
+    # 規則 1: synthesis 由来の結論は Phase B が走った場合にしか出ない（§16）。
+    derived = [o for o in outcomes if o in PHASE_B_DERIVED_OUTCOMES]
+    if derived and entry != "ENTER":
+        raise Run10ContractError(
+            f"results: {derived} は phase_b_entry=ENTER が前提（§16）。"
+            f" 実際の phase_b_entry={entry!r}"
+        )
+
+    # 規則 2: 逆方向 — Phase B へ入ったのに「入らなかった」と記録させない（§22.2）。
+    if "PHASE_B_NOT_ENTERED" in outcomes and entry == "ENTER":
+        raise Run10ContractError(
+            "results: PHASE_B_NOT_ENTERED は phase_b_entry=ENTER と両立しない（§22.2）"
+        )
+
+    calibration = mapping.get("external_calibration")
+    signal = (
+        calibration.get("measurement_overfit_signal")
+        if isinstance(calibration, Mapping)
+        else None
+    )
+
+    # 規則 3: overfit を結論にするなら、その信号が実際に立っていること（§12.6）。
+    if "MEASUREMENT_OVERFIT_DETECTED" in outcomes and signal is not True:
+        raise Run10ContractError(
+            "results: MEASUREMENT_OVERFIT_DETECTED には"
+            " external_calibration.measurement_overfit_signal = true が必要"
+            f"（実際 {signal!r}）— evidence が結論を否定してはならない"
+        )
+
+    # 規則 4: 逆方向 — overfit 信号が立ったまま成立側の結論を名乗らせない。
+    # §12.6 / §21 R10-G7: E0 校正に失敗した meter は CALIBRATED_EXTERNAL に
+    # できず、§15.1 はそれを DIRECT_COMPATIBLE の必要条件にしている。
+    if signal is True:
+        established = [o for o in outcomes if o in _ESTABLISHED_OUTCOMES]
+        if established:
+            raise Run10ContractError(
+                f"results: measurement_overfit_signal=true のまま {established} は名乗れない"
+                "（§12.6 / §21 R10-G7 — 外的妥当性が確立していない）"
+            )
+
+
 def _validate_results_evidence(
     mapping: Mapping[str, Any],
     verdict: str,
@@ -936,16 +998,7 @@ def _validate_results_evidence(
         for section in _EVIDENCE_FOR_OUTCOME.get(outcome, ()):
             _require_nonempty_section(mapping, section, outcome)
 
-    # §16: synthesis 由来の結論はすべて Phase B が走った場合にしか出ない。
-    # GENERATIVE_COMPATIBILITY_ESTABLISHED だけを縛ると、
-    # MEASUREMENT_ONLY_COMPATIBILITY（§16.3）を SKIP / NOT_REACHED のまま
-    # 名乗れてしまう（PR #330 Codex 第 3 巡 P1）。
-    named = [o for o in outcomes if o in PHASE_B_DERIVED_OUTCOMES]
-    if named and entry != "ENTER":
-        raise Run10ContractError(
-            f"results: {named} は phase_b_entry=ENTER が前提（§16）。"
-            f" 実際の phase_b_entry={entry!r}"
-        )
+    _validate_outcome_consistency(mapping, entry, outcomes)
 
     matrix = mapping.get("compatibility_matrix")
     established = any(outcome in _ESTABLISHED_OUTCOMES for outcome in outcomes)
