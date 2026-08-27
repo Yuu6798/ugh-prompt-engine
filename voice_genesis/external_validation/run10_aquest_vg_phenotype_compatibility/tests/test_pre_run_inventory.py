@@ -508,3 +508,44 @@ def test_canonical_body_is_not_a_repository_path() -> None:
     """正典本体をリポジトリ内の固定パスで解決しない（User 裁定 2026-08-27）。"""
     assert not hasattr(inv, "EVOLUTION_THEORY_CANONICAL_PATH")
     assert inv.EVOLUTION_THEORY_CANONICAL not in inv.EVOLUTION_THEORY_DISCOVERY_CANDIDATES
+
+
+# --- 第 21 巡: README 現在地表と機械状態の同期（第 21 巡 P2）----------------
+
+
+_README = _RUN_DIR / "README.md"
+
+
+def _procedure_row(step: str) -> str:
+    """README「次の実装単位」表から §29 手順 N の行を取り出す。"""
+    for line in _README.read_text(encoding="utf-8").splitlines():
+        if line.startswith(f"| {step} |"):
+            return line
+    raise AssertionError(f"README に §29 手順 {step} の行が無い")
+
+
+def test_readme_step5_agrees_with_the_contract_pin() -> None:
+    """手順 5 の現在地が契約 pin と食い違わない。
+
+    README の現在地表は「次に何へ着手できるか」を選ぶために読まれる。
+    契約 pin が解決済みなのに表が未解決と言い続けると、済んだ前提条件を
+    律速だと誤読させる（PR #330 Codex 第 21 巡 P2）。
+    """
+    digest, _why = inv._evolution_theory_pin()
+    row = _procedure_row("5")
+    if digest is None:
+        assert "完了" not in row, "pin 未解決なのに README が完了と書いている"
+    else:
+        assert "完了" in row, "契約 pin は解決済みなのに README が未解決と書いている"
+        assert "リポジトリ内に不在" not in row
+
+
+def test_readme_step5_matches_the_inventory_state() -> None:
+    """手順 5 の現在地が inventory.json の item 状態とも食い違わない。"""
+    committed = json.loads(COMMITTED_INVENTORY.read_text(encoding="utf-8"))
+    item = next(
+        i for i in committed["items"] if i["item_id"] == "evolution_theory_reference"
+    )
+    row = _procedure_row("5")
+    assert ("完了" in row) == (item["state"] == inv.PRESENT)
+    assert ("完了" in row) == (item["blocking"] is False)

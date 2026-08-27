@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（356 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（358 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -118,7 +118,7 @@ run10_aquest_vg_phenotype_compatibility/
 | 2 | repository / dependencies / private storage の検証 | **完了**（R10-PUB-1 = 裁定済み。staging root のみ残件） |
 | 3 | Pre-Run Inventory 実行 | **実装済み**（結果は BLOCKED） |
 | 4 | A0 voicebank の inventory と hash | **User 供給待ち**（machine-dependent） |
-| 5 | Evolution Theory 参照の解決 | v0.3 本体がリポジトリ内に不在 |
+| 5 | Evolution Theory 参照の解決 | **完了**（2026-08-27 実バイト照合 → 契約 pin 済み。本体は private のまま） |
 | 6 | AF01 payload ledger 等の検証 | **台帳段階まで完了**／実体照合は bundle 待ち |
 | 7 | AF01 決定論的 payload replay | bundle 実体待ち |
 | 8 | AF01 V1 生成 | transport 経路の選定が未裁定 |
@@ -595,3 +595,16 @@ ALLOWED` / `scope: PUBLIC` を足せる）。第 19 巡で compatibility 行を�
 `_require_mapping()` 呼び出しを走査して**未登録の mapping を追加できなくする**。
 新しい mapping を検証対象にしたら、SHAPE / INDEX で分類して登録しない限り
 テストが落ちる。
+
+### 第 21 巡（P2×1）
+
+**現在地表が機械状態と食い違っていた** — 「次の実装単位」表の §29 手順 5 の行が
+「v0.3 本体がリポジトリ内に不在」を律速として掲げたままだった。本体を置かないのは
+User 裁定による**意図的な不在**であり、参照は契約 pin で既に解決している
+（`inventory.json` も `evolution_theory_reference: PRESENT`）。この表は「次に何へ
+着手できるか」を選ぶために読まれるため、済んだ前提条件を律速だと誤読させる。
+
+行を「完了（実バイト照合 → 契約 pin 済み。本体は private のまま）」に直し、
+`test_readme_step5_agrees_with_the_contract_pin` と
+`test_readme_step5_matches_the_inventory_state` で**表と機械状態の同期をテストで
+固定**した。どちらへ動かしても片方だけ古いままにはできない。
