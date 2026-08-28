@@ -419,6 +419,145 @@ def test_negative_prohibitions_marker_missing(manifest_data: Dict[str, Any]) -> 
         m.validate_probe_manifest(bad)
 
 
+def test_negative_pr333_r9_identity_axis_source_missing_rev06_supersede_marker(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """PR #333 第9巡指摘（P1、採用）の回帰: `measurement_boundary.
+    identity_axis_source` が rev 0.6 の supersede 先
+    （`identity_decision_protocol_v0.6.json`）へ言及しない旧文言相当の
+    宣言に戻ると fail-closed で拒否される（calibration・閾値・判定規則の
+    正本が identity_metric_space.json のままという stale な現在形宣言の
+    再発防止）。"""
+    bad = _mutate(manifest_data)
+    bad["measurement_boundary"]["identity_axis_source"] = (
+        "inputs/identity_metric_space.json が正本"
+        "（domains/identity_domain_run9_v1.json の metric_space_sha としてpin済み）。"
+        "distance/calibration/confuser_controlの式・閾値は本manifestで重複定義しない。"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_pr333_r9_identity_axis_source_missing_supersede_word(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """同上: `identity_decision_protocol_v0.6.json` への言及があっても
+    supersede の語を欠く文言は依然として拒否される（両マーカーが独立に
+    必須であることの確認）。"""
+    bad = _mutate(manifest_data)
+    bad["measurement_boundary"]["identity_axis_source"] = (
+        "inputs/identity_metric_space.json が正本"
+        "（metric_space_sha としてpin済み）。calibration・閾値・判定規則は "
+        "inputs/identity_decision_protocol_v0.6.json も参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_pr333_r10_scope_statement_missing_rev06_supersede_marker(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """PR #333 第10巡指摘（P2、採用）の回帰: 第9巡は `identity_axis_source`
+    のみを rev 0.6 supersede マーカーで守り、`measurement_boundary.
+    scope_statement` は汎用文言（「何を鳴らすか」/「どう測るかは対象外」）
+    のみの検査に留まっていた。scope_statement が identity_decision_
+    protocol_v0.6.json への supersede に言及しない旧文言相当（第9巡是正前
+    と同型）に戻ると fail-closed で拒否されることを確認する（汎用文言自体
+    は保持したまま rev 0.6 言及だけを欠く最小欠陥）。"""
+    bad = _mutate(manifest_data)
+    bad["measurement_boundary"]["scope_statement"] = (
+        "本manifestが定義するのは何を鳴らすか（score cells + render契約 + "
+        "take台帳）のみ。どう測るかは対象外——identity軸は"
+        "inputs/identity_metric_space.json（metric_space_sha としてpin済み）"
+        "が正本、P4/P5のdevelopment/generalization軸の測定仕様は"
+        "measurement_spec_sha（別欄・PENDINGのまま）が別途凍結する。"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_positive_pr333_r11_identity_axis_source_declares_exact_supersede_fragment_ref(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """PR #333 第11巡指摘2（P2、採用）: 実 manifest の
+    `measurement_boundary.identity_axis_source` が、supersede 宣言の実在
+    箇所（`identity_decision_protocol_v0.6.json` 側の `supersede_
+    declaration.superseded_sections`）を逐語で指していること——第9巡是正
+    時に誤って `identity_metric_space.json` 側を指していた欠陥（第11巡で
+    是正）の回帰確認。"""
+    assert (
+        m._IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER
+        in manifest_data["measurement_boundary"]["identity_axis_source"]
+    )
+    assert m._IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER == (
+        "identity_decision_protocol_v0.6.json#supersede_declaration.superseded_sections"
+    )
+    # 誤 prefix（identity_metric_space.json 側）は manifest 本文には出現
+    # しない（旧文言の履歴引用〔旧文言...〕ブロックは意図的に除外——旧文言
+    # 自体は supersede 節への言及を欠いていたのであり、誤った prefix の
+    # fragment 参照を含んではいなかった）。
+    wrong_prefix_fragment = (
+        "identity_metric_space.json#supersede_declaration.superseded_sections"
+    )
+    assert wrong_prefix_fragment not in manifest_data["measurement_boundary"][
+        "identity_axis_source"
+    ]
+
+
+def test_negative_pr333_r11_identity_axis_source_wrong_supersede_declaration_file_prefix(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """PR #333 第11巡指摘2（P2、採用）の回帰: `identity_axis_source` の
+    fragment 参照が誤って `identity_metric_space.json` 側の
+    `supersede_declaration.superseded_sections` を指す（第11巡是正前と
+    同型の誤 prefix）と fail-closed で拒否される——`supersede_declaration`
+    節は `identity_decision_protocol_v0.6.json` 側にのみ実在し
+    （`identity_metric_space.json` は本改訂で無改変のため同節を持たない）、
+    第10巡の汎用マーカー検査（ファイル名・"supersede" 語の部分文字列存在
+    のみ）はこの誤 prefix を捕捉できなかった——他所の正本表明文言に
+    `identity_decision_protocol_v0.6.json` という文字列自体は出現するため
+    汎用マーカーは素通りしていた。本テストは第11巡で追加した逐語
+    fragment マーカーがこれを閉じることを確認する。"""
+    bad = _mutate(manifest_data)
+    bad["measurement_boundary"]["identity_axis_source"] = bad["measurement_boundary"][
+        "identity_axis_source"
+    ].replace(
+        "identity_decision_protocol_v0.6.json#supersede_declaration.superseded_sections",
+        "identity_metric_space.json#supersede_declaration.superseded_sections",
+    )
+    # 誤 prefix 差し替え後も汎用マーカー（ファイル名・"supersede" 語）自体は
+    # 引き続き充足していること（第10巡の検査だけでは通ってしまうことの
+    # 直接確認——本テストが実際に第11巡の逐語マーカーで初めて拒否される
+    # ことを示すための前提確認）。
+    for generic_marker in m._REV06_SUPERSEDE_DECLARATION_MARKERS:
+        assert generic_marker in bad["measurement_boundary"]["identity_axis_source"]
+    with pytest.raises(
+        m.Run9ValidationError, match="measurement_boundary.identity_axis_source"
+    ):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_pr333_r10_scope_statement_missing_supersede_word(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """同上: `identity_decision_protocol_v0.6.json` への言及があっても
+    supersede の語を欠く scope_statement は依然として拒否される（両
+    マーカーが独立に必須であることの確認、identity_axis_source 側の
+    第9巡回帰テストと同型）。"""
+    bad = _mutate(manifest_data)
+    bad["measurement_boundary"]["scope_statement"] = (
+        "本manifestが定義するのは何を鳴らすか（score cells + render契約 + "
+        "take台帳）のみ。どう測るかは対象外——identity軸のfeature/distance"
+        "生成定義はinputs/identity_metric_space.json（metric_space_sha と"
+        "してpin済み）が正本のまま、calibration・閾値・判定規則は"
+        "inputs/identity_decision_protocol_v0.6.jsonも参照する、"
+        "P4/P5のdevelopment/generalization軸の測定仕様はmeasurement_spec_sha"
+        "（別欄・PENDINGのまま）が別途凍結する。"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
 def test_negative_prohibitions_missing_render_infeasible_carveout(
     manifest_data: Dict[str, Any],
 ) -> None:
@@ -3072,3 +3211,85 @@ def test_negative_fix24_recipe_marker_missing(
     p3["role"] = p3["role"].replace(marker, "")
     with pytest.raises(m.Run9ValidationError):
         m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
+# PR #333 Codex bot レビュー第3巡指摘1（P1、採用）: revision_bridge の
+# C0/C1/positive/negative 4エントリの `identity_metric_space_ref` が
+# identity_decision_protocol_v0.6.json の supersede_declaration.
+# preserved_generation_definitions に列挙されていることの閉包検査
+# ---------------------------------------------------------------------------
+
+
+def test_pr333_r3_positive_all_superseded_calibration_entries_are_preserved(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """回帰確認: 実 probe_manifest.json + 実 identity_decision_protocol_
+    v0.6.json の組で、C0/C1/positive/negative の4エントリいずれも閉包
+    検査を通過すること（full-chain 経由）。"""
+    m.validate_probe_manifest(manifest_data)  # 例外なしの確認
+    protocol_document = m._load_identity_decision_protocol_document()
+    preserved = set(
+        protocol_document["supersede_declaration"]["preserved_generation_definitions"]
+    )
+    for entry_name in m._REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES:
+        ref = manifest_data["revision_bridge"][entry_name]["identity_metric_space_ref"]
+        assert ref in preserved, f"{entry_name}: {ref!r} not in preserved_generation_definitions"
+
+
+def test_negative_pr333_r3_bridge_ref_outside_preserved_generation_definitions(
+    manifest_data: Dict[str, Any], tmp_path: Path,
+) -> None:
+    """`identity_decision_protocol_v0.6.json` の
+    `supersede_declaration.preserved_generation_definitions` から
+    `c0_replay_takes` が実際に参照する生成定義 path を1件取り除いた合成
+    fixture を `IDENTITY_DECISION_PROTOCOL_PATH` へ差し替えると、
+    `validate_probe_manifest()` full-chain が閉包検査で fail-closed 拒否
+    すること（実ファイルは一切改変しない——`m.IDENTITY_DECISION_PROTOCOL_
+    PATH` を差し替えて元へ復元する、`SCORE_PY_REFERENCE_PATH` と同型の
+    monkeypatch 方式）。"""
+    protocol_data = copy.deepcopy(m._load_identity_decision_protocol_document())
+    removed_ref = "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population"
+    items = protocol_data["supersede_declaration"]["preserved_generation_definitions"]
+    assert removed_ref in items
+    items.remove(removed_ref)
+    tampered_path = tmp_path / "identity_decision_protocol_v0.6_tampered.json"
+    tampered_path.write_text(
+        json.dumps(protocol_data, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    original_path = m.IDENTITY_DECISION_PROTOCOL_PATH
+    try:
+        m.IDENTITY_DECISION_PROTOCOL_PATH = tampered_path  # type: ignore[misc]
+        with pytest.raises(
+            m.Run9ValidationError, match="preserved_generation_definitions"
+        ):
+            m.validate_probe_manifest(_mutate(manifest_data))
+    finally:
+        m.IDENTITY_DECISION_PROTOCOL_PATH = original_path  # type: ignore[misc]
+    # 復元後は通常どおり通過することを確認する（後続テストへの汚染防止）。
+    m.validate_probe_manifest(_mutate(manifest_data))
+
+
+def test_negative_pr333_r3_bridge_ref_missing_preserved_generation_definitions_key(
+    manifest_data: Dict[str, Any], tmp_path: Path,
+) -> None:
+    """`preserved_generation_definitions` キー自体が存在しない合成
+    fixture でも（`.get(..., [])` フォールバックにより）closure check が
+    通常どおり fail-closed で拒否すること（KeyError で落ちず
+    Run9ValidationError として一貫させる）。"""
+    protocol_data = copy.deepcopy(m._load_identity_decision_protocol_document())
+    del protocol_data["supersede_declaration"]["preserved_generation_definitions"]
+    tampered_path = tmp_path / "identity_decision_protocol_v0.6_no_key.json"
+    tampered_path.write_text(
+        json.dumps(protocol_data, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    original_path = m.IDENTITY_DECISION_PROTOCOL_PATH
+    try:
+        m.IDENTITY_DECISION_PROTOCOL_PATH = tampered_path  # type: ignore[misc]
+        with pytest.raises(m.Run9ValidationError):
+            m.validate_probe_manifest(_mutate(manifest_data))
+    finally:
+        m.IDENTITY_DECISION_PROTOCOL_PATH = original_path  # type: ignore[misc]
+    m.validate_probe_manifest(_mutate(manifest_data))

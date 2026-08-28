@@ -1,6 +1,6 @@
 # RUN9 — Tri-Donor Dual-Founder Common-Teacher Learning
 
-**状態: Preregistered / Phase 3（design_revision 0.5、machine-independent 設計層）。本学習未開始。**
+**状態: Preregistered / Phase 3（design_revision 0.6、machine-independent 設計層）。本学習未開始。**
 
 正本設計書: [`DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md`](./DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md)
 （uploads 原本とバイト同一・**byte-pin 不変**。sha256 は `RUN9_CONTRACT.yaml` の
@@ -19,8 +19,14 @@ RUN9 用語整理」の編入。無改変のまま存続）→
 User 裁定「RUN9 User裁定 — AF0 runtime mapping」の編入 — AF0 speaker
 embedding が現行 RUN6 Backbone に byte-verified な形で存在しないため、
 runtime render では ritsu/user 成分のみを再正規化して float32 単純加重和
-で線形合成する方式A採用）の順で規定する。`design_revision_doc_sha256`/
-`por_adjudication_sha256` が PINNED で保持する。
+で線形合成する方式A採用）→
+[`DESIGN_RUN9_REVISION_0.6.md`](./DESIGN_RUN9_REVISION_0.6.md)（2026-08-27、
+User 裁定「RUN9 User裁定 — Identity Calibration Degeneracy /
+design_revision 0.6」の編入 — C0 母集団の render replay byte 決定論実測
+により旧 calibration 規則が解析的に退化することが判明したため、Identity
+decision protocol 全体を再事前登録する pre-run design correction）の順で
+規定する。`design_revision_doc_sha256`/`por_adjudication_sha256` が
+PINNED で保持する。
 
 AF0・Ritsu・User Donor の三点 Identity から `TRI_CROSSOVER` で二体の
 Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生
@@ -382,6 +388,16 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    `False` だった（意図どおり）——2026-08-25 User attestation 実行により
    user anchor も PINNED 化され、現在は `is_pinned() == True`（domain
    凍結済み、下記「解消済み（2026-08-25 User attestation 実行）」節参照）。
+   〔rev 0.6 supersession 注記（PR #333 第16巡指摘2、P2、上限到達後、
+   採用）: 本項目は Phase 3 凍結時点（`identity_metric_space.json` 自身
+   の定義記述）の歴史的記述であり、同ファイル自体は rev 0.6 でも無改変
+   のまま正しい。ただし上記 `calibration`（`theta_cal = P95(D_C0)` +
+   C1/正負参照の3校正有効性ゲート）の**判定規則**は rev 0.6 で
+   `inputs/identity_decision_protocol_v0.6.json` へ supersede 済み（裁定
+   §7、下記「解消済み（RUN9-L0-HARNESS-3c rev 0.6）」節参照）——第15巡
+   （§18）は本項目を「定義記述で対象外」と判定したが、現在形の読解が
+   退化 gate（`theta_cal(F)=P95(D_C0(F))=0`）へ誘導し得る曖昧さを安全側
+   に倒すため、本ラベルを付与する（本文の書き換えはしない）。〕
 2. **ControlProfile 基盤**（新規モジュール [`run9_controlprofile.py`](./run9_controlprofile.py)）:
    `run9-control-profile/1.0` — `voice_id`/`branch`/`revision`
    （`BRANCH_REVISIONS` 語彙と整合: `r0` 出生中立・`replay`/`r_sham`/
@@ -592,15 +608,23 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   evaluated_renders。式・値は同ファイルへの参照のみで重複定義せず、
   negative_reference/pjs_reference は新規 render 不要）/
   `measurement_boundary`（「どう測るか」は本 manifest の対象外という
-  境界明文 — identity 軸は `inputs/identity_metric_space.json`
-  正本、development/generalization 軸は `measurement_spec_sha`（別欄）が
-  別途凍結。〔履歴: 当時 PENDING → RUN9-L0-PIN-1（2026-08-25）で identity
-  軸の extractor カタログを PINNED 化・development/generalization 軸は
-  VG-L0 ハーネス実装待ちとして NOT_YET_IMPLEMENTED を明示保留 → 同日 PR
-  #324 第2巡 Codex bot レビュー Fix 5（偽 READY 経路 + 本 measurement_
-  boundary 節自身との正典矛盾の指摘、採用）で `measurement_spec_sha` は
-  PENDING へ復帰。manifest 実体・validator・loader は撤去せず事前配線の
-  まま残置、下記「解消済み（RUN9-L0-PIN-1）」節参照〕）/ `prohibitions`
+  境界明文 — identity 軸の feature/distance 生成定義は
+  `inputs/identity_metric_space.json` が正本のまま（無改変・
+  immutability）、calibration・閾値・判定規則は rev 0.6 実行について
+  `inputs/identity_decision_protocol_v0.6.json` が正本（supersede、
+  裁定 §7）、development/generalization 軸は `measurement_spec_sha`
+  （別欄）が別途凍結。〔履歴: 当時 PENDING → RUN9-L0-PIN-1（2026-08-25）で
+  identity 軸の extractor カタログを PINNED 化・development/
+  generalization 軸は VG-L0 ハーネス実装待ちとして NOT_YET_IMPLEMENTED を
+  明示保留 → 同日 PR #324 第2巡 Codex bot レビュー Fix 5（偽 READY 経路 +
+  本 measurement_boundary 節自身との正典矛盾の指摘、採用）で
+  `measurement_spec_sha` は PENDING へ復帰。manifest 実体・validator・
+  loader は撤去せず事前配線のまま残置、下記「解消済み（RUN9-L0-PIN-1）」
+  節参照 → design_revision 0.6（2026-08-27）で `identity_axis_source` の
+  「calibration・閾値・判定規則の正本は identity_metric_space.json」と
+  いう宣言文が rev 0.6 supersede に未追随のまま残っていた欠陥を PR #333
+  第9巡（P1、採用）で是正し、上記の二元宣言へ更新した（旧文言は manifest
+  内に履歴残置）〕）/ `prohibitions`
   （render 後の cell・
   水準追加禁止・結果を見た後の probe 変更禁止・測定仕様の変更を本
   manifest で行わない、の3禁則 + render 不能 cell の是正 repin はこの
@@ -866,13 +890,20 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   は事前配線のまま撤去せず残置する。測定仕様は identity 軸と
   development/generalization 軸の2つに分かれる
   （`evaluation/probe_manifest.json#measurement_boundary` が明文化する
-  既存の境界、本 manifest はこれを変更しない）。identity 軸は
-  revision_bridge の7 metric-path（PINNED 済み `probe_manifest_sha` 側）
-  それぞれについて、extractor（WORLD/pyworld、
+  既存の境界、本 manifest はこれを変更しない）。identity 軸の
+  feature/distance 生成定義は revision_bridge の7 metric-path（PINNED
+  済み `probe_manifest_sha` 側）それぞれについて、extractor
+  （WORLD/pyworld、
   `voice_genesis/foundry/adapter/donor_bank.py:190-196
   analyze_donor_world()` — grep で実在確認済み）+ normalization
-  （`level_normalization`）の参照カタログを凍結済み（式・閾値そのものは
-  `inputs/identity_metric_space.json` を正本のまま重複定義しない）。
+  （`level_normalization`）+ rev 0.6 判定規則への
+  `identity_decision_protocol_ref` の参照カタログを凍結済み（式は引き続き
+  `inputs/identity_metric_space.json` を正本のまま重複定義しない一方、
+  calibration・閾値・判定規則は rev 0.6 実行について
+  `inputs/identity_decision_protocol_v0.6.json` が正本——rev 0.6 裁定 §7
+  が supersede、`hypothesis_algebra_sha` として PINNED。〔履歴: PR #333
+  第9巡（P1、採用）是正前は「式・閾値そのものは identity_metric_space.json
+  を正本のまま重複定義しない」と supersede への言及なく記述していた〕）。
   development/generalization 軸（P4/P5、DESIGN_RUN9 §16.3
   DevelopmentalVector の9指標 + §14 C4 GENERALIZED_GAIN）は対応する
   extractor が VG-L0 学習ハーネス未実装のため repo に実在せず（grep 確認:
@@ -916,11 +947,24 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   PINNED 化され、残 PENDING は pre-run 必須8欄（総 PENDING 9欄）へ
   減少した——下記「解消済み（RUN9-L0-HARNESS-3a, 2026-08-26）」節参照。
   続けて RUN9-L0-HARNESS-3b（2026-08-27）で `education_technique_lesson_
-  manifest_sha` が PINNED 化され、残 PENDING は下記のとおり pre-run
-  必須7欄（総 PENDING 8欄）へ減少した——下記
-  「解消済み（RUN9-L0-HARNESS-3b, 2026-08-27）」節参照（`attempt_id`/
-  `repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
-  `learning_recipe_sha`/`measurement_spec_sha`/`hypothesis_algebra_sha` の
+  manifest_sha` が PINNED 化され、残 PENDING は pre-run 必須7欄
+  （総 PENDING 8欄）へ減少した——下記
+  「解消済み（RUN9-L0-HARNESS-3b, 2026-08-27）」節参照。続けて
+  design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
+  `hypothesis_algebra_sha` が（H1-H6 閾値校正欄から Identity decision
+  protocol の pin 欄へ用途確定した上で）PINNED 化され、残 PENDING は
+  pre-run 必須6欄（総 PENDING 7欄）へ一時的に減少した——下記
+  「解消済み（RUN9-L0-HARNESS-3c rev 0.6, 2026-08-27）」節参照。続けて
+  PR #333 Codex bot レビュー第1巡指摘1（2026-08-28、P1、採用）で、
+  design §18（v0.1 923-965行）/ `inputs/failure_abort_criteria.json`
+  rule 14・16 が要求する H1-H6 δtarget/εk 校正前提が rev 0.6 の pin 用途
+  変更により pre-run 閉集合の外へ落ちていた欠陥を是正するため、新規
+  `hypothesis_threshold_calibration_sha`（PENDING）を分離新設した。残
+  PENDING は下記のとおり pre-run 必須7欄（総 PENDING 8欄）へ増加した——
+  下記「解消済み（PR #333 第1巡指摘1, 2026-08-28）」節参照
+  （`attempt_id`/`repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
+  `learning_recipe_sha`/`measurement_spec_sha`/`hypothesis_threshold_
+  calibration_sha` の
   pre-run 必須7欄が引き続き PENDING のため（optional の
   `human_evaluation_protocol_sha` を含めると総 PENDING 8欄）——
   `tests/test_run9_contract.py` の回帰テストで機械確認済み）。
@@ -1256,6 +1300,59 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   [`HARNESS3B_EDUCATION_LESSON_RECORD.md`](./HARNESS3B_EDUCATION_LESSON_RECORD.md)
   を正とする。design_revision は本改訂で変更していない（0.5 のまま —
   channel 意味論・抽出法・正規化法を変更していないため）。
+
+**解消済み（PR #333 第1巡指摘1, 2026-08-28）**:
+- H1-H6 δtarget/εk 校正前提が pre-run 閉集合から外れていた欠陥（Codex bot
+  レビュー第1巡指摘1、P1、採用）→ `hypothesis_algebra_sha` が rev 0.6
+  裁定 §7 で identity decision protocol の pin 欄へ用途確定した結果、
+  design §18（v0.1 923-965行、`LCB_95(Δtarget,i) > δtarget` /
+  `LCB_95(Δk,i) >= -εk`）と `inputs/failure_abort_criteria.json` rule
+  14・16（machine_promotion_condition が実装・実測校正を要求——rev 0.6
+  supersede の対象外であることをグラウンディングで確認済み）が要求する
+  H1-H6 δtarget/εk 校正前提の追跡が、pin 用途の付け替えにより pre-run
+  gate の閉集合から漏れていた。新規 `hypothesis_threshold_calibration_sha`
+  （PENDING）を分離新設し、`gate_state()` の pre-run 閉集合へ含めた
+  （`hypothesis_algebra_sha` 自体・裁定 §7 の pin 用途確定は無改変）。
+
+**解消済み（RUN9-L0-HARNESS-3c rev 0.6, 2026-08-27）**:
+- `hypothesis_algebra_sha` 未 pin →
+  User 裁定「RUN9 User裁定 — Identity Calibration Degeneracy /
+  design_revision 0.6」（2026-08-27、repo 内収載
+  [`USER_ADJUDICATION_20260827_IDENTITY_REV06.txt`](./USER_ADJUDICATION_20260827_IDENTITY_REV06.txt)）
+  の採用。既存の render replay byte 決定論実測により、現行
+  `identity_metric_space.json` calibration 規則の `theta_cal(F) =
+  P95(D_C0(F))` が C0 母集団全ゼロの下で解析的に 0 へ退化することが
+  Birth Probe 実行前に確定したため行う pre-run design correction
+  （観測後の救済ではない）。Birth Identity Separation だけでなく学習後
+  Identity 保持判定を含む Identity decision protocol 全体を新規
+  [`inputs/identity_decision_protocol_v0.6.json`](./inputs/identity_decision_protocol_v0.6.json)
+  （schema `run9-identity-decision-protocol/0.6`）として再事前登録した
+  ——C0/C1（各 founder 20 takes）は閾値校正母集団ではなく runtime 決定論
+  の exact-replay attestation として扱い、Birth Identity Separation は
+  凍結済み P0 cell 上の `d12 = distance(R9F-01:r0, R9F-02:r0)` の machine
+  feature 判定（`d12 > 0` のみ `ESTABLISHED_BY_MACHINE_FEATURE`）へ、
+  学習後 Identity 保持判定は `m_other = d_other - d_self`/`m_pjs = d_pjs
+  - d_self` のマージン方式（両方 `> 0` のときのみ `STABLE_BY_MACHINE_
+  METRIC`）へそれぞれ切り替える。`identity_metric_space.json`（feature/
+  distance 定義）・`domains/identity_domain_run9_v1.json`・発行済み
+  Founder Genome・coords・genome_id・speaker map・`TRI_CROSSOVER/1.0` は
+  いずれも無改変のまま——新規 protocol はこれらを参照した上で旧
+  `calibration`（freeze_threshold/validity_gates/decision_rule）節のみを
+  rev 0.6 実行について supersede する。同 protocol の raw byte sha256 を
+  `hypothesis_algebra_sha`（H1-H6 閾値校正欄から用途確定）へ `PINNED`
+  化した。`design_revision` を契約レベルで 0.5 → 0.6 へ昇格（本欄・
+  `run9_schema.DESIGN_REVISION` 定数・`design_revision_doc_sha256` pin の
+  三箇所を同時に更新——rev 0.2→0.3→0.4→0.5 と同じ手順）。既存 frozen
+  tuple（`BIRTH_OUTCOMES`/`SEPARATION_OUTCOMES`/`IDENTITY_OUTCOMES`）は
+  無改変のまま、裁定の新ラベルは protocol 側 `IDENTITY_PROTOCOL_*`
+  outcome_detail 定数として二層構造で新設した。`failure_abort_criteria.json`
+  の Birth Gate 関連 rule（rule 7/16）に残っていた P95/theta_cal(F) 閾値
+  前提の stale 文言も rev 0.6 supersede への参照へ是正し repin した。
+  **本改訂（第2 PR フェーズ1）は上記の事前登録一式の実装までを範囲とし、
+  Birth Gate の実行自体は含まない**（裁定 §8 の区切りどおり——実測
+  ゼロ）。詳細は
+  [`DESIGN_RUN9_REVISION_0.6.md`](./DESIGN_RUN9_REVISION_0.6.md)/
+  [`HARNESS3C_REV06_RECORD.md`](./HARNESS3C_REV06_RECORD.md) を正とする。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →
@@ -1880,12 +1977,34 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   （schema `run9-learning-recipe/1.0`、`run9_schema.LEARNING_RECIPE_
   MANIFEST_PATH` が規約パスを凍結済み・`validate_learning_recipe_
   manifest()` が構造を検証）の実体生成（残存ブロッカー(3)）。
-- **identity metric space の実測校正**: `inputs/identity_metric_space.json`
-  の `calibration`（`freeze_threshold`/`validity_gates`/`decision_rule`）が
-  定める閾値生成（C0 95 パーセンタイル・C1 sham 副作用・positive/negative
-  reference からの実測 threshold freeze）は spec の事前登録のみで、実測は
-  birth probe 実行後（Founder 生成待ち）。`worked_example` は synthetic
-  illustration であり実測ではない。
+- **Birth Gate（rev 0.6）の実測実行**: `inputs/identity_decision_
+  protocol_v0.6.json` が定める各節の実測は spec の事前登録のみで、実測は
+  birth probe 実行後（Founder 生成待ち）——`c0_determinism_attestation`/
+  `c1_sham_attestation`（founder ごと各 20 takes exact-replay
+  attestation）・`positive_reference_audit`（founder ごとの追加
+  exact-replay 監査）・`birth_identity_separation`/`pjs_confuser`（d12
+  machine feature 判定）・`post_learning_identity_retention`（m_other/
+  m_pjs マージン判定）・`birth_gate_overall_pass`（上記監査の完了証跡
+  `completion_evidence_requirement` + `audit_stop_refs` 非該当）の
+  いずれも未実行のまま。`inputs/identity_metric_space.json` の
+  `worked_example` は synthetic illustration であり実測ではない
+  （同ファイル自体は rev 0.6 でも無改変のまま——上記 protocol がこれを
+  参照した上で `calibration`（`freeze_threshold`/`validity_gates`/
+  `decision_rule`）節のみを rev 0.6 実行について supersede する）。
+  〔履歴: 本エントリは design_revision 0.6（rev 0.6 裁定 §7 supersede）
+  で C0/C1 が閾値校正母集団から exact-replay attestation へ再分類された
+  後も「`calibration`（`freeze_threshold`/`validity_gates`/
+  `decision_rule`）が定める閾値生成（C0 95 パーセンタイル・C1 sham
+  副作用・positive/negative reference からの実測 threshold freeze）は
+  spec の事前登録のみで、実測は birth probe 実行後」という旧文言のまま
+  残っており、実装者へ退化 theta_cal(F) gate の再構築を指示しうる状態
+  だった——PR #333 第9巡（P1、採用）は
+  `evaluation/probe_manifest.json#measurement_boundary` の
+  `identity_axis_source` 宣言文のみを是正対象としており、本節（次フェーズ
+  節の指示リスト形態）に残っていた同ファミリーの欠陥は対象外のまま
+  見落とされていた。PR #333 第15巡（P1、上限到達後——CLAUDE.md「bot
+  レビュー対応の運用」3分類のうち『将来汚染』の新規具体経路として採用）
+  で是正〕
 
 上記の残 pin を除く machine-dependent な実装作業:
 

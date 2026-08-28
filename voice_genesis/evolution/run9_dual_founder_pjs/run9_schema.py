@@ -56,14 +56,23 @@ RUN9_NORMALIZATION = "largest-component-residual"
 RUN_ID = "RUN9"
 EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
 
-# 現行 design_revision（凍結値。User 裁定 2026-08-26 =
-# DESIGN_RUN9_REVISION_0.5.md — 「RUN9 User裁定 — AF0 runtime mapping」
-# `USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt` の採用。裁定逐語
-# 「design_revisionを0.5へ上げ」）。旧 revision "0.1"/"0.2"/"0.3"/"0.4" を
-# 宣言する contract は意図どおり拒否される — 修正が必要なら design_
-# revision を上げ、旧 attempt を append-only 履歴として残す規約
-# （DESIGN_RUN9 ヘッダ注記）。
-DESIGN_REVISION = "0.5"
+# 現行 design_revision（凍結値。User 裁定 2026-08-27 =
+# DESIGN_RUN9_REVISION_0.6.md — 「RUN9 User裁定 — Identity Calibration
+# Degeneracy / design_revision 0.6」
+# `USER_ADJUDICATION_20260827_IDENTITY_REV06.txt` の採用。裁定逐語
+# 「選択肢Aを採用する。ただし...Identity decision protocol全体を
+# design_revision 0.6として再事前登録する」）。既存 render replay byte
+# 決定論実測により現行 identity_metric_space.json calibration 規則の
+# theta_cal(F)=P95(D_C0(F)) が C0 母集団全ゼロの下で 0 へ解析的に退化する
+# ことが Birth Probe 実行前に確定したための pre-run design correction —
+# Birth Identity Separation の d12 machine feature 判定・学習後 Identity
+# 保持のマージン方式（m_other/m_pjs）を新規 identity_decision_protocol_
+# v0.6.json として再事前登録し、旧 calibration/decision_rule を rev 0.6
+# 実行について supersede する（identity_metric_space.json 自体は無改変）。
+# 旧 revision "0.1"〜"0.5" を宣言する contract は意図どおり拒否される —
+# 修正が必要なら design_revision を上げ、旧 attempt を append-only 履歴
+# として残す規約（DESIGN_RUN9 ヘッダ注記）。
+DESIGN_REVISION = "0.6"
 
 # rev 0.3（改訂A、PoR §1/§3/§4/§16）: 単一 LEARN_PERFORMANCE エッジを
 # CONTROL 無介入枝 + 二つの介入エッジ（PRACTICE_FROM_AUDIO / 稽古,
@@ -160,6 +169,133 @@ FOUNDER_RESPONSE_OUTCOMES: Tuple[str, str, str] = (
 IDENTITY_OUTCOMES: Tuple[str, str, str] = (
     "STABLE_BY_MACHINE_METRIC", "SHIFTED", "UNCALIBRATED",
 )
+
+# ---------------------------------------------------------------------------
+# rev 0.6（design_revision 0.6、User 裁定「RUN9 User裁定 — Identity
+# Calibration Degeneracy / design_revision 0.6」、repo 内収載
+# USER_ADJUDICATION_20260827_IDENTITY_REV06.txt）: Identity decision
+# protocol（`inputs/identity_decision_protocol_v0.6.json`）が導入する
+# outcome_detail 語彙。上記 BIRTH_OUTCOMES/SEPARATION_OUTCOMES/
+# IDENTITY_OUTCOMES は**無改変**のまま維持する——裁定の新ラベルは、これら
+# 既存語彙に「併記」する detail 層としてのみ新設する（design spec
+# 「語彙の扱い」節: 既存 validator/harness の enum 契約を変更しない
+# 二層構造）。各定数がどの既存 outcome を精緻化するかはコメントで対応
+# づける。
+# ---------------------------------------------------------------------------
+
+# c0_determinism_attestation（裁定 §1）: render byte 不一致は
+# DETERMINISM_CONTRACT_BROKEN、render 一致だが feature 計算不一致は
+# IMPLEMENTATION_FAILURE（既存 FAILURE_CLASSES の値を再利用）——決定論的
+# に排他な割当てであり両立しない。
+IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME = "DETERMINISM_CONTRACT_BROKEN"
+IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME = "IMPLEMENTATION_FAILURE"  # == FAILURE_CLASSES[0]
+
+# c1_sham_attestation（裁定 §2）の非ゼロ停止語彙。
+IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME = "C1_SHAM_EFFECT_DETECTED"
+
+# PR #333 Codex bot レビュー第5巡指摘2（P1、採用）: c1_sham_attestation は
+# on_nonzero（D_C1(F)≠0 全体）のみを持ち、「WAV バイトは不一致だが identity
+# feature は一致（D_C1(F)=0）」という決定論破りの具体的経路には未発火だった
+# ——C0/positive_reference_audit の on_mismatch と同一語彙
+# `IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME`（DETERMINISM_CONTRACT_
+# BROKEN）を c1_sham_attestation.on_wav_byte_mismatch.outcome でも再利用する
+# ため、本節に専用の新定数は不要（既存定数の再配線のみ）。
+
+# PR #333 Codex bot レビュー第6巡指摘1（P1、採用）: on_nonzero にも
+# on_wav_byte_mismatch にも、「WAV bytes は C0/reference と一致し D_C1(F)=0
+# だが serialized identity feature bytes/hash が不一致（dtype/signed-zero/
+# シリアライズ差等）」という経路には未発火だった——C0 側の対称分岐
+# `IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME`（IMPLEMENTATION_FAILURE）
+# を c1_sham_attestation.on_feature_mismatch.outcome でも再利用するため、
+# 本節にも専用の新定数は不要（既存定数の再配線のみ）。
+
+# birth_identity_separation（裁定 §4）の outcome_detail 二層構造:
+# BIRTH_OUTCOMES[0]="ESTABLISHED" を精緻化する成立側ラベルと、
+# BIRTH_OUTCOMES[1]="NOT_ESTABLISHED" に付随する凍結理由ラベルのペア。
+IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL = "ESTABLISHED_BY_MACHINE_FEATURE"
+IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL = (
+    "PROJECTED_RUNTIME_IDENTITIES_COLLAPSED_IN_MACHINE_FEATURE_SPACE"
+)
+# PR #333 Codex bot レビュー第1巡指摘3（P2、採用）新設: established の
+# 逆条件（両 feature が valid/finite）が満たされない——いずれかの feature
+# が invalid または non-finite——場合の第3分岐。d12=0 による feature
+# collapse（`IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL`）とは区別される
+# 測定/実装失敗系の凍結であり、裁定§4『両featureがvalid/finiteであり、
+# d12 > 0の場合のみBIRTH=ESTABLISHED』+ 裁定§9『Birth Gate不成立時は
+# NOT_ESTABLISHEDとして凍結する』の機械符号化（新規則の発明ではない）。
+IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL = (
+    "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_FEATURE"
+)
+
+# PR #333 Codex bot レビュー第16巡指摘1（P1、上限到達後——CLAUDE.md「bot
+# レビュー対応の運用」3分類のうち『致命的バグ（偽成功経路）』の新規具体
+# 経路として採用）新設: established の条件「両 feature が valid/finite
+# かつ d12 > 0」は d12 自体の finite 性を要求しておらず、両 feature が
+# valid/finite であっても Euclidean 距離計算の overflow 等で d12=+inf と
+# なる場合、比較演算子上は d12 > 0 が真となるため ESTABLISHED_BY_MACHINE_
+# FEATURE へ到達し得た（偽成功経路）。pjs_confuser 側には同型の
+# invalid_or_nonfinite_distance 分岐（第8巡指摘3）が既設だったのに対し、
+# d12 側にはこの被覆漏れが残っていた非対称——第8巡の値域被覆表が導出値
+# d12 自体の非有限性を見落としていたことを本定数のコメントが正直に記録
+# する。d12=0 の feature collapse（IDENTITY_PROTOCOL_BIRTH_COLLAPSE_
+# DETAIL）・feature 自体の invalid/non-finite（本定数の直上）とは区別
+# される第3の凍結分岐。
+IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL = (
+    "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_D12"
+)
+
+# PR #333 Codex bot レビュー第4巡指摘1（P1、採用）新設:
+# `birth_gate_aggregate_rule.not_established.outcome_detail_priority` 第3
+# 優先枝（PJS confuser 距離=0）専用ラベル。`pjs_confuser.on_zero` 自体は
+# 無改変（本定数は同節を書き換えずに参照するためだけに存在する）——
+# `IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL`/`IDENTITY_PROTOCOL_
+# BIRTH_COLLAPSE_DETAIL` と同型の第3分岐ラベル。
+IDENTITY_PROTOCOL_BIRTH_PJS_CONFUSER_COLLAPSE_DETAIL = (
+    "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_FEATURE_COLLAPSE"
+)
+
+# PR #333 Codex bot レビュー第8巡指摘3（P2、採用）新設: pjs_confuser は
+# on_positive（距離>0）/on_zero（距離=0）の2分岐のみを持ち、距離が invalid
+# または non-finite の場合はどちらの条件にも該当しない未登録分岐だった
+# （等号・不等号比較は non-finite 値に対して両方 false となり得るため、
+# 文字通りの消費者は無条件に沈黙し得た）。birth_identity_separation.
+# invalid_or_nonfinite_feature（第1巡指摘3）・post_learning_identity_
+# retention.invalid_or_nonfinite_feature（第2巡指摘2）と同型の測定/実装
+# 失敗系ラベル。
+IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL = (
+    "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_INVALID_OR_NONFINITE_DISTANCE"
+)
+
+# post_learning_identity_retention（裁定 §6）の outcome_detail。
+# IDENTITY_OUTCOMES[0]="STABLE_BY_MACHINE_METRIC" に併記する。
+IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL = "RELATIVE_SELF_NEAREST"
+# PR #333 第2巡指摘2（P2、採用）新設: stable/shifted いずれの条件（m_other/
+# m_pjs が有限の実数値であることが前提）にも該当しない invalid/non-finite
+# feature の第3分岐——IDENTITY_OUTCOMES[2]="UNCALIBRATED"（既存語彙）に
+# 併記する。birth_identity_separation.IDENTITY_PROTOCOL_BIRTH_INVALID_
+# FEATURE_DETAIL（第1巡指摘3）と同型の測定/実装失敗系の凍結であり、裁定
+# §9 の fail-closed 原則の機械符号化（新規則の発明ではない）。
+IDENTITY_PROTOCOL_RETENTION_INVALID_OR_NONFINITE_DETAIL = (
+    "IDENTITY_PROTOCOL_POST_LEARNING_INVALID_OR_NONFINITE_FEATURE"
+)
+
+# birth_gate_overall_pass.completion_evidence_requirement（PR #333 Codex
+# bot レビュー第11巡指摘1、P1、採用）新設: 従来の definition は
+# identity_establishment=ESTABLISHED ∧ audit_stop_refs（不一致述語）非該当
+# のみを規定しており、監査結果そのものの欠落（C0/C1 の部分 render・結果
+# 未発行・positive 監査未実行）は不一致述語のいずれにも該当しないため無音
+# のまま overall PASS へ落ち得た欠陥の是正——閉世界の完了述語を第3の連言項
+# として追加する。outcome_detail は新設するが、その outcome は既存
+# `IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME`（IMPLEMENTATION_FAILURE、
+# FAILURE_CLASSES 既存語彙）をそのまま再利用し、IDENTITY_OUTCOMES/
+# FAILURE_CLASSES 等の既存 frozen tuple へは値を追加しない（監査欠落は
+# 修正可能な運用不備であり DESIGN_FAILURE/SCIENTIFIC_NULL ではなく
+# IMPLEMENTATION_FAILURE 分類が妥当——C0 側 feature_computation_mismatch_
+# with_matching_render と同種の割当て判断）。
+IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_DETAIL = "IDENTITY_PROTOCOL_AUDIT_INCOMPLETE"
+IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_OUTCOME = (
+    IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME
+)  # == "IMPLEMENTATION_FAILURE"（既存語彙の再利用、新規値ではない）
 
 # rev 0.3（User 外部レビュー PR #317 P2-4 採用、PoR §12）: held-out gain は
 # 「実装可能なら」ではなく RUN9 の最低限の評価漏洩防止として必須。
@@ -3484,10 +3620,13 @@ def validate_education_lesson_manifest(data: Mapping[str, Any]) -> None:
 # probe manifest（RUN9-PROBE-1, DESIGN_RUN9 §15 Probe Set の実体 manifest）:
 # P0-P5 の score cells + render 契約 + revision_bridge（§15 probe 語彙 ↔
 # identity_metric_space 語彙の橋渡し）を単一ファイルへ凍結する。「どう
-# 測るか」は本 manifest の対象外のまま——identity 軸は
-# `inputs/identity_metric_space.json` が正本、development/generalization
-# 軸の測定仕様は `measurement_spec_sha`（別欄、PENDING のまま）が別途
-# 凍結する（`measurement_boundary` 節が明文化）。
+# 測るか」は本 manifest の対象外のまま——identity 軸の feature/distance
+# 生成定義は `inputs/identity_metric_space.json` が正本のまま（無改変・
+# immutability）、calibration・閾値・判定規則は rev 0.6 実行について
+# `inputs/identity_decision_protocol_v0.6.json` が正本（supersede、
+# rev 0.6 裁定 §7、PR #333 第9巡指摘 P1 で追随）、development/
+# generalization 軸の測定仕様は `measurement_spec_sha`（別欄、PENDING の
+# まま）が別途凍結する（`measurement_boundary` 節が明文化）。
 # ---------------------------------------------------------------------------
 
 SCHEMA_PROBE_MANIFEST = "run9-probe-manifest/1.0"
@@ -4736,12 +4875,94 @@ _REVISION_BRIDGE_EXPECTED_CELL_REF: Mapping[str, str] = types.MappingProxyType({
     "evaluated_renders": "P0-NEUTRAL-SAKURA-FRAGMENT",
 })
 
+# PR #333 第2巡指摘1（P1、採用）: rev 0.6（`inputs/identity_decision_
+# protocol_v0.6.json`、裁定 §7 supersede_declaration）は identity_metric_
+# space.json の calibration.freeze_threshold / calibration.validity_gates /
+# calibration.decision_rule を rev 0.6 実行について supersede した。しかし
+# 本 bridge の4エントリ（C0/C1/positive/negative）の `identity_metric_
+# space_ref` はいずれも supersede 済みの calibration 節を参照したまま
+# repoint されておらず、判定規則の実参照が旧 calibration へ向いたままだった
+# （probe の render 生成定義——cell_ref/contract_field_ref/new_render_
+# required 等——は supersede 対象外のため無改変で有効。今回変更するのは
+# 判定規則の参照先のみ）。以下 `_IDENTITY_DECISION_PROTOCOL_REF_PREFIX` +
+# `_REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES` +
+# `_REVISION_BRIDGE_EXPECTED_DECISION_PROTOCOL_REF` の3点で、この4エントリ
+# にのみ新規 `identity_decision_protocol_ref`（判定規則の現行正本）+
+# `superseded_calibration_note`（`identity_metric_space_ref` が判定規則と
+# しては supersede 済みであることの明記）を追加要求する。`identity_metric_
+# space_ref` 自体は変更しない（履歴参照として保持——旧 calibration 節の
+# population/render 定義自体は無改変のまま参照により有効なため、削除する
+# 理由がない）。reference_render は `calibration.distance_unit.reference_
+# render_definition` を参照しており、supersede_declaration の対象外
+# （calibration.distance_unit は preserved_sections 側の識別子ではないが
+# superseded_sections にも含まれない——単なる render 定義であり判定規則
+# ではないため）なので本対象に含めない。
+_IDENTITY_DECISION_PROTOCOL_REF_PREFIX = "inputs/identity_decision_protocol_v0.6.json#"
+_REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES: FrozenSet[str] = frozenset({
+    "c0_replay_takes", "c1_sham_takes", "positive_reference", "negative_reference",
+})
+_REVISION_BRIDGE_EXPECTED_DECISION_PROTOCOL_REF: Mapping[str, str] = types.MappingProxyType({
+    "c0_replay_takes": _IDENTITY_DECISION_PROTOCOL_REF_PREFIX + "c0_determinism_attestation",
+    "c1_sham_takes": _IDENTITY_DECISION_PROTOCOL_REF_PREFIX + "c1_sham_attestation",
+    "positive_reference": _IDENTITY_DECISION_PROTOCOL_REF_PREFIX + "positive_reference_audit",
+    "negative_reference": (
+        _IDENTITY_DECISION_PROTOCOL_REF_PREFIX
+        + "birth_identity_separation.negative_reference_gate_note"
+    ),
+})
+_REVISION_BRIDGE_SUPERSEDE_NOTE_MARKER = "supersede"
+
 _MEASUREMENT_BOUNDARY_KEYS: FrozenSet[str] = frozenset(
     {"scope_statement", "identity_axis_source", "development_generalization_axis_source"}
 )
 _MEASUREMENT_BOUNDARY_SCOPE_MARKERS: Tuple[str, ...] = ("何を鳴らすか", "どう測るかは対象外")
-_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS: Tuple[str, ...] = (
+# PR #333 第9巡指摘（P1、採用）: identity_axis_source が「calibration・閾値・
+# 判定規則の正本は identity_metric_space.json」と現在形で宣言したまま rev 0.6
+# 裁定 §7 の supersede（identity_decision_protocol_v0.6.json への切替え）に
+# 追随していなかった欠陥を是正。以後この二元宣言（feature/distance 生成定義
+# = identity_metric_space.json が正本 ／ calibration・閾値・判定規則 =
+# identity_decision_protocol_v0.6.json が rev 0.6 実行について正本）が
+# 必ず両方言及されることを fail-closed で強制する。
+#
+# PR #333 第10巡指摘（P2、採用）: 第9巡の回帰ガードは `identity_axis_source`
+# のみを守り、正典表明を行う残り2箇所——probe_manifest.json
+# `measurement_boundary.scope_statement`（本ファイル、汎用文言のみ検査）と
+# measurement_spec_manifest.json `scope_note`（非空検査のみ）——は同じ
+# rev 0.6 supersede マーカーを要求していなかった。将来の repin で
+# 「identity_metric_space.json が calibration・閾値の正」へ回帰しても
+# この2箇所は素通りしてしまう穴だった。マーカー定義自体は本 dict 1箇所に
+# 集約し（識別子名を宣言箇所限定の `_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_
+# MARKERS` から用途横断の `_REV06_SUPERSEDE_DECLARATION_MARKERS` へ改名）、
+# `_validate_measurement_boundary()`（scope_statement + identity_axis_source
+# の2箇所）と `validate_measurement_spec_manifest()`（scope_note）の計3箇所
+# で同一マーカー集合・同一 `_validate_marker_bearing_str()` 経路によって
+# fail-closed 検査する（ガード方式の統一）。manifest 本文は第9巡で既に
+# 両宣言を rev 0.6 supersede へ言及する文言へ改訂済みのため、本改訂は
+# 検査ロジックのみでデータ側は無改変。
+_REV06_SUPERSEDE_DECLARATION_MARKERS: Tuple[str, ...] = (
     "inputs/identity_metric_space.json", "metric_space_sha",
+    "identity_decision_protocol_v0.6.json", "supersede",
+)
+
+# PR #333 第11巡指摘2（P2、採用）新設: `_REV06_SUPERSEDE_DECLARATION_
+# MARKERS` は汎用部分文字列（ファイル名・"supersede" 等）の存在のみを
+# 検査するため、`identity_axis_source` が宣言する fragment 参照
+# （`...#supersede_declaration.superseded_sections`）の file prefix が
+# 誤って `identity_metric_space.json` を指していても、
+# `identity_decision_protocol_v0.6.json` という文字列自体は同じ宣言文の
+# 他所（正本表明）に既出のため通過してしまっていた——第10巡はこの穴を
+# 残したまま（マーカーが汎用すぎて fragment 参照の実体を見ていなかった）。
+# `supersede_declaration` は `identity_decision_protocol_v0.6.json` 側に
+# のみ実在し（`identity_metric_space.json` は本改訂で無改変のため同節を
+# 持たない）、正しい fragment 参照は逐語で1つに定まる。本マーカーは
+# その逐語文字列そのものの存在を要求し、誤った file prefix への差し替え
+# （`identity_metric_space.json#supersede_declaration...` への回帰）を
+# fail-closed で拒否する——新規則の発明ではなく、裁定§7『新規
+# identity_decision_protocol_v0.6.jsonを発行し、既存metricのfeature/
+# distance定義を参照した上で、旧calibration/decision ruleをrev 0.6実行に
+# ついてsupersedeする。』が指す supersede 宣言の実在箇所への逐語照合。
+_IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER = (
+    "identity_decision_protocol_v0.6.json#supersede_declaration.superseded_sections"
 )
 _MEASUREMENT_BOUNDARY_DEV_GEN_AXIS_MARKERS: Tuple[str, ...] = ("measurement_spec_sha", "PENDING")
 
@@ -6273,6 +6494,49 @@ def _load_identity_metric_space_document(*, path: Optional[Path] = None) -> Dict
     return _loads_strict_json(path.read_text(encoding="utf-8"))
 
 
+def _load_identity_metric_space_document_verified(
+    expected_metric_space_sha: str, *, path: Optional[Path] = None
+) -> Dict[str, Any]:
+    """PR #333 Codex bot レビュー第1巡指摘2（P1、採用）用: `_load_identity_
+    metric_space_document()` は disk 上の `inputs/identity_metric_space.json`
+    を読み込むだけで、読んだバイトが `Run9IdentityDomain.metric_space_sha`
+    pin と一致するかを一切照合しない——`load_pinned_identity_decision_
+    protocol()` の cross-check (2)（20465行付近）は `metric_reference.
+    metric_space_sha`（protocol 側の**宣言値**）と `domain.metric_space_sha`
+    （domain 側の**宣言値**）という2つの文字列同士の一致しか見ておらず、
+    どちらも実ファイルバイトを再ハッシュしていない。stale・改ざんされた
+    checkout では、宣言値が一致したまま実ファイルの feature/distance 定義
+    だけが変わっていても両 cross-check を素通りし、Birth Gate の identity
+    判定を汚染し得た。
+
+    本関数は他の `load_pinned_*` 系関数（`_h3c_load_pinned_common()`）と
+    同じ read-once TOCTOU 対策で、実バイトを1回だけ読み parse し、その
+    **同一パース結果**から `compute_file_sha256()` docstring が定義する
+    正規形（canonical）規約（`_compute_canonical_pin_sha256()` —
+    `json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",",
+    ":"))` の sha256、`metric_space_sha` 自体の pin 規約と同一）で sha256
+    を再計算し、呼び出し側が渡す pin 済み値（`domain.metric_space_sha`）と
+    厳密一致することを fail-closed で強制する。"""
+    if path is None:
+        path = IDENTITY_METRIC_SPACE_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"_load_identity_metric_space_document_verified(): {path} の実在が必須だが見つからない "
+            "（凍結・改変禁止の read-only 入力）"
+        )
+    # read-once: digest 対象の parse と返り値の parse を同一バッファから導出する。
+    buf = path.read_bytes()
+    document = _loads_strict_json(buf.decode("utf-8"))
+    actual_sha = _compute_canonical_pin_sha256(document)
+    if actual_sha != expected_metric_space_sha:
+        raise Run9ValidationError(
+            f"_load_identity_metric_space_document_verified(): {path} の実バイトから再計算した正規形 "
+            f"sha256 ({actual_sha!r}) が期待値 ({expected_metric_space_sha!r}) と一致しない — "
+            "stale・改ざんされた identity_metric_space.json は fail-closed で拒否する"
+        )
+    return document
+
+
 def _resolve_identity_metric_space_ref(
     ref: str, *, document: Mapping[str, Any], field: str
 ) -> None:
@@ -6300,19 +6564,67 @@ def _resolve_identity_metric_space_ref(
         current = current[segment]
 
 
+def _load_identity_decision_protocol_document(*, path: Optional[Path] = None) -> Dict[str, Any]:
+    """PR #333 第2巡指摘1（P1、採用）用: `revision_bridge.*.identity_
+    decision_protocol_ref` の dotted path 全体を実文書に対して走査する
+    ために、`inputs/identity_decision_protocol_v0.6.json`（凍結・改変禁止
+    の read-only 入力）を読み込むだけの loader。`_load_identity_metric_
+    space_document()` と同型——形状検証は行わず単に `_loads_strict_json()`
+    でパースした dict を返す（形状検証は `validate_identity_decision_
+    protocol()` の職務のまま重複させない）。"""
+    if path is None:
+        path = IDENTITY_DECISION_PROTOCOL_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"revision_bridge.*.identity_decision_protocol_ref の dotted path 解決には {path} の "
+            "実在が必須だが見つからない（凍結・改変禁止の read-only 入力）"
+        )
+    return _loads_strict_json(path.read_text(encoding="utf-8"))
+
+
+def _resolve_identity_decision_protocol_ref(
+    ref: str, *, document: Mapping[str, Any], field: str
+) -> None:
+    """`_resolve_identity_metric_space_ref()` と同型: `inputs/identity_
+    decision_protocol_v0.6.json#a.b.c` 形式の参照の dotted path 全セグメン
+    トを実文書に対して走査し、途中の typo を fail-closed で検出する。"""
+    suffix = ref[len(_IDENTITY_DECISION_PROTOCOL_REF_PREFIX):]
+    segments = suffix.split(".") if suffix else []
+    if not segments or any(not s for s in segments):
+        raise Run9ValidationError(
+            f"{field} has a malformed dotted path suffix after "
+            f"{_IDENTITY_DECISION_PROTOCOL_REF_PREFIX!r}: {suffix!r}"
+        )
+    current: Any = document
+    walked: List[str] = []
+    for segment in segments:
+        walked.append(segment)
+        if not isinstance(current, Mapping) or segment not in current:
+            raise Run9ValidationError(
+                f"{field} = {ref!r} does not resolve against {IDENTITY_DECISION_PROTOCOL_PATH} — "
+                f"segment {segment!r} (path so far: {'.'.join(walked)!r}) does not exist"
+            )
+        current = current[segment]
+
+
 def _validate_revision_bridge_entry(
     entry: Any, *, entry_name: str, field: str, valid_cell_ids: FrozenSet[str],
     identity_metric_space_document: Mapping[str, Any],
+    identity_decision_protocol_document: Mapping[str, Any],
 ) -> None:
     if not isinstance(entry, dict):
         raise Run9ValidationError(f"{field} must be an object, got {type(entry).__name__}")
     requires_new_render = _REVISION_BRIDGE_NEW_RENDER_REQUIRED[entry_name]
     has_contract_field_ref = entry_name in _REVISION_BRIDGE_CONTRACT_FIELD_REF
+    has_superseded_calibration = entry_name in _REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES
     allowed = {"description", "identity_metric_space_ref", "new_render_required"}
     if requires_new_render:
         allowed.add("cell_ref")
     if has_contract_field_ref:
         allowed.add("contract_field_ref")
+    if has_superseded_calibration:
+        allowed.add("identity_decision_protocol_ref")
+        allowed.add("superseded_calibration_note")
     unknown = set(entry.keys()) - allowed
     if unknown:
         raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
@@ -6349,6 +6661,65 @@ def _validate_revision_bridge_entry(
             f"{entry_name!r} (Fix 8: エントリ→期待 path の厳密対応 — 他エントリの正しい path を "
             f"取り違えて指すことを防ぐ), got {ref!r}"
         )
+
+    # PR #333 第2巡指摘1（P1、採用）: C0/C1/positive/negative の4エントリ
+    # は identity_metric_space_ref が指す calibration 節が rev 0.6 裁定 §7
+    # により supersede 済みのため、判定規則の現行正本を指す
+    # identity_decision_protocol_ref を追加要求する（identity_metric_
+    # space_ref 自体は履歴参照として無改変のまま維持——旧参照を保持する
+    # 履歴残置様式）。
+    if has_superseded_calibration:
+        protocol_ref = entry["identity_decision_protocol_ref"]
+        if not isinstance(protocol_ref, str) or not protocol_ref.startswith(
+            _IDENTITY_DECISION_PROTOCOL_REF_PREFIX
+        ):
+            raise Run9ValidationError(
+                f"{field}.identity_decision_protocol_ref must be a string starting with "
+                f"{_IDENTITY_DECISION_PROTOCOL_REF_PREFIX!r} (rev 0.6 裁定 §7 supersede 後の判定規則"
+                "正本は inputs/identity_decision_protocol_v0.6.json への参照のみ), got "
+                f"{protocol_ref!r}"
+            )
+        _resolve_identity_decision_protocol_ref(
+            protocol_ref, document=identity_decision_protocol_document,
+            field=f"{field}.identity_decision_protocol_ref",
+        )
+        expected_protocol_ref = _REVISION_BRIDGE_EXPECTED_DECISION_PROTOCOL_REF[entry_name]
+        if protocol_ref != expected_protocol_ref:
+            raise Run9ValidationError(
+                f"{field}.identity_decision_protocol_ref must be exactly {expected_protocol_ref!r} "
+                f"for entry {entry_name!r} (エントリ→期待 path の厳密対応、Fix 8 と同方式), got "
+                f"{protocol_ref!r}"
+            )
+        # PR #333 第3巡指摘1（P1、採用）: identity_metric_space_ref が指す
+        # 生成定義 path（ref、上記で解決・厳密一致済み）が、
+        # identity_decision_protocol_v0.6.json（実文書、Python 定数では
+        # ない）の supersede_declaration.preserved_generation_definitions
+        # に実際に列挙されていることを cross-document で検査する（閉包
+        # 検査 — bridge が消費する生成定義 path が protocol 側で「今も
+        # 有効」と宣言されないまま参照されることを防ぐ。将来 bridge に
+        # 新規 superseded-calibration エントリが増えた場合、protocol 側の
+        # 列挙更新を怠るとここで fail-closed する）。
+        preserved_generation_definitions = identity_decision_protocol_document.get(
+            "supersede_declaration", {}
+        ).get("preserved_generation_definitions", [])
+        if ref not in preserved_generation_definitions:
+            raise Run9ValidationError(
+                f"{field}.identity_metric_space_ref ({ref!r}) is not listed in "
+                "inputs/identity_decision_protocol_v0.6.json#supersede_declaration."
+                "preserved_generation_definitions — the generation definition this bridge entry "
+                "consumes must be declared as preserved there (closure check between the bridge's "
+                "superseded-calibration entries and the protocol's supersede declaration)"
+            )
+        note = _require_non_empty_str(
+            entry["superseded_calibration_note"], field=f"{field}.superseded_calibration_note",
+        )
+        if _REVISION_BRIDGE_SUPERSEDE_NOTE_MARKER not in note:
+            raise Run9ValidationError(
+                f"{field}.superseded_calibration_note must contain the marker "
+                f"{_REVISION_BRIDGE_SUPERSEDE_NOTE_MARKER!r} (identity_metric_space_ref の calibration "
+                "節が判定規則としては supersede 済みであることを本文で明記する), got text without "
+                "that marker"
+            )
 
     new_render_required = entry["new_render_required"]
     if not isinstance(new_render_required, bool) or new_render_required is not requires_new_render:
@@ -6408,11 +6779,22 @@ def _validate_measurement_boundary(data: Any) -> None:
         raise Run9ValidationError(f"measurement_boundary missing required key(s): {sorted(missing)}")
     _validate_marker_bearing_str(
         data["scope_statement"], field="measurement_boundary.scope_statement",
-        markers=_MEASUREMENT_BOUNDARY_SCOPE_MARKERS,
+        # PR #333 第10巡指摘（P2、採用）: 汎用文言マーカーに加え、
+        # rev 0.6 supersede への言及（`_REV06_SUPERSEDE_DECLARATION_MARKERS`）
+        # も必須化——identity_axis_source と同一の回帰ガードを scope_statement
+        # にも適用する（第9巡は identity_axis_source のみを守っていた）。
+        markers=_MEASUREMENT_BOUNDARY_SCOPE_MARKERS + _REV06_SUPERSEDE_DECLARATION_MARKERS,
     )
     _validate_marker_bearing_str(
         data["identity_axis_source"], field="measurement_boundary.identity_axis_source",
-        markers=_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS,
+        # PR #333 第11巡指摘2（P2、採用）: 汎用マーカーに加え、
+        # `_IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER`（正しい
+        # fragment 参照の逐語文字列）も必須化——誤った file prefix への
+        # 差し替え（`identity_metric_space.json#supersede_declaration...`
+        # への回帰）は汎用マーカーだけでは通過してしまうため、逐語一致を
+        # 追加で fail-closed 検査する。
+        markers=_REV06_SUPERSEDE_DECLARATION_MARKERS
+        + (_IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER,),
     )
     _validate_marker_bearing_str(
         data["development_generalization_axis_source"],
@@ -6451,9 +6833,13 @@ def validate_probe_manifest(data: Mapping[str, Any]) -> None:
     群と同じ流儀 — Run9ValidationError・意味論マーカー方式・閉集合）。
 
     「どう測るか」は本 manifest の対象外（`measurement_boundary` が明文化
-    ——identity 軸は `inputs/identity_metric_space.json` が正本のまま、
-    P4/P5 の development/generalization 軸の測定仕様は
-    `measurement_spec_sha`（別欄、PENDING のまま）が別途凍結する）。
+    ——identity 軸の feature/distance 生成定義は
+    `inputs/identity_metric_space.json` が正本のまま（無改変・
+    immutability）、calibration・閾値・判定規則は rev 0.6 実行について
+    `inputs/identity_decision_protocol_v0.6.json` が正本（supersede、
+    rev 0.6 裁定 §7、PR #333 第9巡指摘 P1 で追随）、P4/P5 の
+    development/generalization 軸の測定仕様は `measurement_spec_sha`
+    （別欄、PENDING のまま）が別途凍結する）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"probe manifest must be an object, got {type(data).__name__}")
@@ -6547,11 +6933,16 @@ def validate_probe_manifest(data: Mapping[str, Any]) -> None:
     # read-only 入力）を1回だけ読み込み、全 revision_bridge エントリで
     # 使い回す（エントリごとの再読み込みを避ける）。
     identity_metric_space_document = _load_identity_metric_space_document()
+    # PR #333 第2巡指摘1（P1、採用）: identity_decision_protocol_ref の
+    # dotted path 走査に使う（`identity_metric_space_document` と同様、
+    # 全エントリで1回だけ読み込み使い回す）。
+    identity_decision_protocol_document = _load_identity_decision_protocol_document()
     for entry_name in _REVISION_BRIDGE_ENTRY_NAMES:
         _validate_revision_bridge_entry(
             revision_bridge[entry_name], entry_name=entry_name,
             field=f"revision_bridge.{entry_name}", valid_cell_ids=valid_cell_ids,
             identity_metric_space_document=identity_metric_space_document,
+            identity_decision_protocol_document=identity_decision_protocol_document,
         )
 
     _validate_measurement_boundary(data["measurement_boundary"])
@@ -7210,6 +7601,18 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     "probe_manifest_sha",
     "measurement_spec_sha",
     "hypothesis_algebra_sha",
+    # PR #333 Codex bot レビュー第1巡指摘1（P1、採用）新設: rev 0.6 裁定 §7
+    # により `hypothesis_algebra_sha` は H1-H6 閾値校正欄から Identity
+    # decision protocol の pin 欄へ用途確定した（裁定 §7 の pin 用途確定は
+    # 不変のまま）。design §18.1/§18.2（LCB_95(Δtarget,i) > δtarget /
+    # LCB_95(Δk,i) >= -εk）と inputs/failure_abort_criteria.json rule
+    # 14/16 が要求する H1-H6 δtarget/εk 校正前提は rev 0.6 裁定の対象外
+    # （supersede されていない・別 pin 欄が必要）であり、pin 欄の用途変更
+    # によって pre-run gate から閉集合の外へ落ちていた——本欄はその追跡を
+    # 分離新設し、校正の実施・凍結まで PENDING のまま pre-run gate に
+    # 含める（gate_state() の閉集合対象、CONTRACT_POST_RUN_PIN_FIELDS/
+    # CONTRACT_OPTIONAL_PIN_FIELDS のいずれにも含めない）。
+    "hypothesis_threshold_calibration_sha",
     "human_evaluation_protocol_sha",
     "artifact_manifest_sha",
     "cost_record_sha",
@@ -8366,13 +8769,17 @@ def _validate_measurement_spec_metric_path(entry: Any, *, entry_name: str) -> No
             f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}] must be an "
             f"object, got {type(entry).__name__}"
         )
-    unknown = set(entry.keys()) - _MEASUREMENT_SPEC_METRIC_PATH_KEYS
+    has_superseded_calibration = entry_name in _REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES
+    allowed_keys = set(_MEASUREMENT_SPEC_METRIC_PATH_KEYS)
+    if has_superseded_calibration:
+        allowed_keys.add("identity_decision_protocol_ref")
+    unknown = set(entry.keys()) - allowed_keys
     if unknown:
         raise Run9ValidationError(
             f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}] has unknown "
             f"key(s): {sorted(unknown)}"
         )
-    missing = _MEASUREMENT_SPEC_METRIC_PATH_KEYS - set(entry.keys())
+    missing = allowed_keys - set(entry.keys())
     if missing:
         raise Run9ValidationError(
             f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}] missing "
@@ -8389,6 +8796,19 @@ def _validate_measurement_spec_metric_path(entry: Any, *, entry_name: str) -> No
             f"(evaluation/probe_manifest.json との整合— 二重 pin), got "
             f"{entry['identity_metric_space_ref']!r}"
         )
+    # PR #333 第2巡指摘1（P1、採用）: C0/C1/positive/negative の4エントリは
+    # revision_bridge 側と同様に identity_decision_protocol_ref も二重 pin
+    # として厳密一致を要求する（判定規則の参照先が probe_manifest.json /
+    # measurement_spec_manifest.json 間で独立に乖離することを防ぐ）。
+    if has_superseded_calibration:
+        expected_protocol_ref = _REVISION_BRIDGE_EXPECTED_DECISION_PROTOCOL_REF[entry_name]
+        if entry["identity_decision_protocol_ref"] != expected_protocol_ref:
+            raise Run9ValidationError(
+                f"measurement spec manifest.identity_axis_metric_paths[{entry_name!r}]"
+                f".identity_decision_protocol_ref must equal revision_bridge の凍結値 "
+                f"{expected_protocol_ref!r} (evaluation/probe_manifest.json との整合— 二重 pin), got "
+                f"{entry['identity_decision_protocol_ref']!r}"
+            )
     extractor = entry["extractor"]
     if not isinstance(extractor, dict) or set(extractor.keys()) != _MEASUREMENT_SPEC_EXTRACTOR_KEYS:
         raise Run9ValidationError(
@@ -8476,7 +8896,16 @@ def validate_measurement_spec_manifest(data: Mapping[str, Any]) -> None:
             f"{schema!r}"
         )
 
-    _require_non_empty_str(data["scope_note"], field="measurement spec manifest.scope_note")
+    # PR #333 第10巡指摘（P2、採用）: 非空検査のみだったため、正典表明の
+    # 現在形が「identity_metric_space.json のみが calibration・閾値の正」へ
+    # 回帰しても素通りしていた。probe_manifest.json 側
+    # （`_validate_measurement_boundary()`）と同一マーカー集合・同一
+    # `_validate_marker_bearing_str()` 経路で rev 0.6 supersede への言及を
+    # fail-closed で強制する（ガード方式の統一、3宣言目）。
+    _validate_marker_bearing_str(
+        data["scope_note"], field="measurement spec manifest.scope_note",
+        markers=_REV06_SUPERSEDE_DECLARATION_MARKERS,
+    )
 
     metric_paths = data["identity_axis_metric_paths"]
     if not isinstance(metric_paths, dict):
@@ -16286,6 +16715,16 @@ SPEAKER_MAP_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 # 同一 PR 内で行う規約とする（PR #328 Codex レビュー第1巡指摘3対応、
 # stale だった「本 PR のスコープ外」記述——参照先の「スコープ注記」節は
 # 既に削除済み——を現行規則へ差し替え）。
+# 例外（rev 0.6 で確定・四点同期規約の適用条件の明確化）: 本欄は
+# 「speaker map 合成方式が adjudicate された時点の design_revision」の
+# 凍結であり、speaker map manifest 自身の `design_revision` 欄との厳密
+# 一致検査に使う。speaker map を無改変のまま契約レベル design_revision
+# のみが昇格する改訂（rev 0.6 = Identity decision protocol の再事前登録。
+# 裁定 §7 が speaker map を不変対象に列挙し、manifest のバイト変更自体が
+# 裁定違反となる）では本欄を据え置く——機械追随させると「speaker map が
+# 新 revision で再 adjudicate された」という事実に反する主張になり、かつ
+# 不変対象の manifest 側と乖離して検査が壊れる。四点同期規約は speaker
+# map 方式自体を再 adjudicate する改訂にのみ適用する。
 _SPEAKER_MAP_ADJUDICATED_DESIGN_REVISION = "0.5"
 
 _SPEAKER_MAP_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
@@ -19819,4 +20258,1455 @@ def load_pinned_learning_data_binding_manifest(
                 f"({manifest_value!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml "
                 f"{pin_name} PINNED value ({contract_value!r}) — fail-closed rejection (裁定 §5)"
             )
+    return data
+
+
+# =============================================================================
+# RUN9-L0-HARNESS-3c rev 0.6（design_revision 0.6、2026-08-27）:
+# identity_decision_protocol_v0.6.json（`run9-identity-decision-protocol/0.6`）
+# の validate_*()/load_pinned_*()。User 裁定「RUN9 User裁定 — Identity
+# Calibration Degeneracy / design_revision 0.6」（repo 内収載
+# USER_ADJUDICATION_20260827_IDENTITY_REV06.txt）§1-§9 の機械表現。
+#
+# 本 manifest は python builder script を経由しない hand-authored 文書
+# のため、`_h3c_cross_check_adjudication_and_detail_record()`（5manifest
+# 共通の `provenance.detail_record` 前提）は再利用しない——`provenance`
+# の形は本節専用（`design_revision_doc` のみ、`detail_record` は持たない
+# ——HARNESS3C_REV06_RECORD.md は実装完了後に書かれる記録であり、protocol
+# 側から前方参照すると執筆順序が循環する）。3層防御（ディスク正典再読込
+# アンカー・in-process contract 改変検出・read-once 実バイト sha256 照合）
+# のみ `_h3c_load_pinned_common()` を再利用する。
+# =============================================================================
+
+SCHEMA_IDENTITY_DECISION_PROTOCOL = "run9-identity-decision-protocol/0.6"
+
+IDENTITY_DECISION_PROTOCOL_PATH = (
+    _THIS_DIR / "inputs" / "identity_decision_protocol_v0.6.json"
+)
+
+# repo ルート（`run9_dual_founder_pjs` -> `evolution` -> `voice_genesis` ->
+# repo root の3階層上）。他の H3 系 manifest と同一規約
+# （`_REEXPORT_REPO_ROOT`/`_EDUCATION_LESSON_REPO_ROOT` 等と同型）。
+_IDENTITY_DECISION_PROTOCOL_REPO_ROOT = _THIS_DIR.parent.parent.parent
+
+# PR #333 Codex bot レビュー第7巡指摘2（P2、採用）: `metric_reference.
+# source_file` の凍結期待値。旧実装は同フィールドを非空文字列としてしか
+# 検証しておらず、実際に読む identity_metric_space.json は常に固定定数
+# `IDENTITY_METRIC_SPACE_PATH` 経由（`_load_identity_metric_space_
+# document_verified()`）で、`metric_reference.source_file` はどの読み込み
+# 経路にも使われない単なる注記文字列だった——宣言 path が誤記・改ざんされて
+# も検出できない乖離を構造的に閉じる。`IDENTITY_METRIC_SPACE_PATH` から
+# repo-relative 表記を導出し（`adjudication_basis.source_file`/
+# `provenance.design_revision_doc.source_file` と同じ posix 形式の既存
+# 表記規約）、validator（構造）+ loader（cross-check、二層防御）の双方で
+# 厳密一致を要求する（`birth_identity_separation.cell_ref` の二層防御と
+# 同型）。
+_IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE = (
+    IDENTITY_METRIC_SPACE_PATH.relative_to(_IDENTITY_DECISION_PROTOCOL_REPO_ROOT).as_posix()
+)
+
+_IDENTITY_DECISION_PROTOCOL_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "adjudication_basis", "provenance", "metric_reference",
+    "supersede_declaration", "pre_run_correction_basis",
+    "c0_determinism_attestation", "c1_sham_attestation",
+    "positive_reference_audit", "birth_identity_separation", "pjs_confuser",
+    "post_learning_identity_retention", "immutability", "execution_order",
+    "invariants",
+    # PR #333 Codex bot レビュー第4巡指摘1（P1、採用）新設: birth_identity_
+    # separation.established と pjs_confuser.on_zero の合成条件・優先順を
+    # 凍結する連言ゲート節（既存11節は無改変のまま参照のみ）。第5巡指摘1
+    # （P1、採用）で conjunct_refs の排他ペア欠陥を是正（下記定数群参照）。
+    "birth_gate_aggregate_rule",
+    # PR #333 Codex bot レビュー第5巡指摘3（P1、採用）新設: Birth Gate 判定を
+    # identity_establishment（BIRTH ラベル判定、上記 birth_gate_aggregate_
+    # rule）と本節（learning recipe freeze / 学習実行へ進む可否を決める
+    # overall PASS 判定、C0/C1/positive reference の exact-replay 監査停止
+    # 条件を含む）の二層へ分離する新設節。
+    "birth_gate_overall_pass",
+})
+
+# 裁定 §1/§2 の contract_field_ref 凍結値（interventions 配下、
+# `INTERVENTION_TAKE_COUNT_FIELDS` の各要素とフィールド名で対応する）。
+_IDENTITY_PROTOCOL_C0_CONTRACT_FIELD_REF = (
+    "RUN9_CONTRACT.yaml#interventions.c0_replay_takes_per_founder"
+)
+_IDENTITY_PROTOCOL_C1_CONTRACT_FIELD_REF = (
+    "RUN9_CONTRACT.yaml#interventions.c1_sham_takes_per_founder"
+)
+
+# 裁定 §5 の pjs_reference 参照先（`identity_metric_space.json` の既存
+# confuser_control.pjs_reference_definition を無改変のまま参照する）。
+_IDENTITY_PROTOCOL_PJS_REFERENCE_REF = (
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "confuser_control.pjs_reference_definition"
+)
+
+# supersede_declaration（裁定 §7）: identity_metric_space.json の
+# feature/distance 定義（無改変・参照により有効）と、rev 0.6 実行につき
+# supersede する calibration 節の閉じた集合。
+_IDENTITY_PROTOCOL_PRESERVED_METRIC_SECTIONS: FrozenSet[str] = frozenset({
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "feature_extractor",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "extraction_procedure",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "identity_feature",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "distance",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "confuser_control",
+})
+_IDENTITY_PROTOCOL_SUPERSEDED_METRIC_SECTIONS: FrozenSet[str] = frozenset({
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.freeze_threshold",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.validity_gates",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.decision_rule",
+})
+
+# PR #333 Codex bot レビュー第3巡指摘1（P1、採用）: superseded_sections は
+# calibration.freeze_threshold/validity_gates を節ごと supersede すると
+# 宣言する一方、evaluation/probe_manifest.json revision_bridge の
+# C0/C1/positive/negative 4エントリの superseded_calibration_note は同じ
+# 節配下の生成定義（d_c0_population 等、母集団の作り方・reference の定義）
+# を「参照により有効のまま履歴保持する」と個別に宣言していた——supersede
+# 宣言（節丸ごと）と依存（節配下の生成定義は今も有効）が同時成立し、Gate
+# 入力生成手順の正本が曖昧だった。本定数は `_REVISION_BRIDGE_EXPECTED_
+# METRIC_REF`（bridge 側の唯一の正本 dict）から、`_REVISION_BRIDGE_
+# SUPERSEDED_CALIBRATION_ENTRIES`（C0/C1/positive/negative の4エントリ名）
+# についてのみ導出する——bridge 定数から直接導出することで、bridge が実際
+# に参照する生成定義 path と本定数が構造的に乖離できないようにする
+# （single source of truth）。将来 bridge に新たな superseded-calibration
+# エントリが増えれば本定数も自動的に増え、protocol 側 JSON の
+# `preserved_generation_definitions` 列挙の更新が
+# `validate_identity_decision_protocol()` の閉じた集合検査によって
+# 強制される（閉包検査）。`_validate_revision_bridge_entry()` はさらに、
+# bridge 各エントリの `identity_metric_space_ref` が実際の protocol
+# document（JSON ファイル、Python 定数ではない）が宣言する
+# `preserved_generation_definitions` に含まれることを cross-document で
+# 検査する（本定数との二重防御——どちらか片方だけが更新されて乖離する
+# ことを防ぐ）。
+_IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS: FrozenSet[str] = frozenset(
+    _REVISION_BRIDGE_EXPECTED_METRIC_REF[name]
+    for name in _REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES
+)
+_IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS_NOTE_MARKERS: Tuple[str, str] = (
+    "supersede", "生成定義",
+)
+
+# immutability（裁定 §7 逐語列挙、順序込み・7項目ちょうど）。
+_IDENTITY_PROTOCOL_UNCHANGED_ITEMS: Tuple[str, ...] = (
+    "inputs/identity_metric_space.json",
+    "domains/identity_domain_run9_v1.json",
+    "発行済み Founder Genome",
+    "coords",
+    "genome_id",
+    "speaker map",
+    "TRI_CROSSOVER/1.0",
+)
+
+# execution_order（裁定 §8 逐語列挙、順序込み・6項目ちょうど）。
+_IDENTITY_PROTOCOL_PREREQUISITES: Tuple[str, ...] = (
+    "DESIGN_RUN9_REVISION_0.6.md",
+    "User裁定文書",
+    "identity_decision_protocol_v0.6.json",
+    "validator/loader",
+    "hypothesis_algebra_sha",
+    "関連probe bridge・failure routingの更新",
+)
+
+# invariants.same_attempt_prohibitions（裁定 §9 逐語列挙、順序込み・5項目
+# ちょうど）。
+_IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS: Tuple[str, ...] = (
+    "Founder座標変更",
+    "speaker-map重み変更",
+    "Identity metric feature変更",
+    "任意epsilon追加",
+    "方式Bへの自動昇格",
+)
+
+# =============================================================================
+# birth_gate_aggregate_rule（PR #333 Codex bot レビュー第4巡指摘1、P1、
+# 採用）: birth_identity_separation.established（d12>0 → ESTABLISHED）と
+# pjs_confuser.on_zero（PJS confuser距離=0 → NOT_ESTABLISHED）が独立に
+# 定義され、合成条件・優先順が未定義だった穴を埋める。裁定§4/§5は独立の
+# 門ではなく Birth Gate の連言構成要素であり、本節は §5 逐語の機械符号化
+# ——新規則の発明ではない。既存 established/invalid_or_nonfinite_feature/
+# on_positive/on_zero の各分岐は無改変のまま conjunct_refs で参照するのみ。
+#
+# PR #333 Codex bot レビュー第5巡指摘1（P1、採用）: 第4巡実装の
+# conjunct_refs は established/invalid_or_nonfinite_feature（排他ペア）と
+# on_positive/on_zero（排他ペア）の両方を「全項が成立」と要求してしまい、
+# 文字通りの消費者は決して ESTABLISHED になれない欠陥を含んでいた
+# （第4巡実装の欠陥）。conjunct_refs を成功述語のみ（2項目）へ限定し
+# 直し、失敗分岐は下記 `_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS`
+# （outcome_detail_priority.failure_refs）へ分離した。
+# =============================================================================
+
+# conjunct_refs（新設節内の逐語列挙、順序込み・2項目ちょうど——成功述語
+# のみ。PR #333 第5巡指摘1 是正で4項目→2項目、排他ペアを解消。document
+# 内自己参照であり identity_metric_space.json 側の cross-document 走査は
+# 不要。他の `_require_ordered_str_list_matching_tuple` 対象と同じ形状
+# ガードで dict 偽装も拒否する）。
+_IDENTITY_PROTOCOL_BIRTH_GATE_CONJUNCT_REFS: Tuple[str, ...] = (
+    "birth_identity_separation.established",
+    "pjs_confuser.on_positive",
+)
+
+# outcome_detail_priority.failure_refs（PR #333 第5巡指摘1、P1、採用、
+# 新設）: conjunct_refs から分離した失敗分岐参照——`order`（下記）と同順で
+# 各優先枝が指す実際の JSON 分岐を列挙する（順序込み・3項目ちょうど）。
+# 新規則の発明ではなく、既存分岐（birth_identity_separation.invalid_or_
+# nonfinite_feature/not_established、pjs_confuser.on_zero）への参照を
+# conjunct_refs から移設するのみ。
+#
+# PR #333 Codex bot レビュー第8巡指摘3（P2、採用）: pjs_confuser に新設した
+# invalid_or_nonfinite_distance 分岐（同型の validity 系失敗）を3項目→4項目
+# へ追加。validity 系（feature/PJS distance）の直後・collapse 系（d12=0/
+# PJS距離=0）の前という優先順内の位置は、feature invalid の場合はそれに
+# 依存する PJS distance も invalid になり得るため「値が評価不能」という
+# 同種の失敗を隣接させ、「値は有効だが collapse」という別種の失敗より上流
+# に置く設計（詳細は order_note）。
+#
+# PR #333 Codex bot レビュー第16巡指摘1（P1、上限到達後、採用）: 4項目→
+# 5項目へ拡張し、birth_identity_separation に新設した invalid_or_
+# nonfinite_d12 分岐を feature validity（(1)）の直後・PJS confuser
+# distance validity（(3)）の前へ挿入した——d12 は同じ birth_identity_
+# separation 節の feature から直接導出されるスカラー値であり、別の測定
+# 対象（founder r0 と PJS reference 間の距離）である PJS confuser
+# distance よりも feature validity に近い依存関係にあるため（詳細は
+# order_note）。
+_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS: Tuple[str, str, str, str, str] = (
+    "birth_identity_separation.invalid_or_nonfinite_feature",
+    "birth_identity_separation.invalid_or_nonfinite_d12",
+    "pjs_confuser.invalid_or_nonfinite_distance",
+    "birth_identity_separation.not_established",
+    "pjs_confuser.on_zero",
+)
+
+# outcome_detail_priority.order（裁定 §9 fail-closed 原則を根拠とする
+# Fable 設計の決定論的優先順、順序込み・5項目ちょうど）: (1) validity
+# （invalid/non-finite feature）→ (2) validity（invalid/non-finite d12、
+# 第16巡指摘1で追加）→ (3) validity（invalid/non-finite PJS confuser
+# distance、第8巡指摘3で追加）→ (4) d12=0（feature collapse）→ (5) PJS
+# confuser distance=0。
+_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER: Tuple[str, str, str, str, str] = (
+    "invalid_or_nonfinite_feature",
+    "invalid_or_nonfinite_d12",
+    "invalid_or_nonfinite_pjs_distance",
+    "d12_zero_collapse",
+    "pjs_confuser_zero_distance",
+)
+
+# outcome_detail_priority.detail_by_key の凍結値（優先順の各キーが指す
+# outcome_detail ラベル——いずれも既存/上記で凍結済みの定数を再利用する。
+# 新語彙の発明はしない）。
+_IDENTITY_PROTOCOL_BIRTH_GATE_DETAIL_BY_KEY: Mapping[str, str] = types.MappingProxyType({
+    "invalid_or_nonfinite_feature": IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL,
+    "invalid_or_nonfinite_d12": IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL,
+    "invalid_or_nonfinite_pjs_distance": IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL,
+    "d12_zero_collapse": IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL,
+    "pjs_confuser_zero_distance": IDENTITY_PROTOCOL_BIRTH_PJS_CONFUSER_COLLAPSE_DETAIL,
+})
+
+# =============================================================================
+# c1_sham_attestation.outcome_priority（PR #333 Codex bot レビュー第8巡
+# 指摘1、P2、採用、新設）: on_nonzero（D_C1(F)≠0 全体）と on_wav_byte_
+# mismatch（WAV bytes 不一致、D_C1(F)=0 であっても発火する condition 文言
+# のため D_C1(F)≠0 でも該当）が『WAV bytes 不一致かつ D_C1(F)≠0』という
+# 経路で同時成立し得るにも関わらず優先順・全該当会計が未定義だった穴を
+# 埋める——birth_gate_aggregate_rule.not_established.outcome_detail_
+# priority と同型パターン（on_feature_mismatch は condition が D_C1(F)=0
+# を前提とするため on_nonzero とは元々排他で対象外）。
+# =============================================================================
+
+_IDENTITY_PROTOCOL_C1_OUTCOME_PRIORITY_ORDER: Tuple[str, str, str] = (
+    "on_wav_byte_mismatch",
+    "on_feature_mismatch",
+    "on_nonzero",
+)
+
+# gate_failure_action_ref の凍結値（invariants 節への自己参照 dotted
+# path、裁定§9『Birth Gate不成立時はNOT_ESTABLISHEDとして凍結する』への
+# 接続点）。
+_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_ACTION_REF = "invariants.birth_gate_failure_action"
+
+# =============================================================================
+# birth_gate_overall_pass（PR #333 Codex bot レビュー第5巡指摘3、P1、
+# 採用、新設）: birth_gate_aggregate_rule（identity_establishment 層、
+# BIRTH ラベル判定）は validity/d12/PJS の連言のみを規定し、C0/C1/positive
+# reference の exact-replay 監査を含まないため、監査失敗（DETERMINISM_
+# CONTRACT_BROKEN 等）と BIRTH=ESTABLISHED が同時成立し得た。本節は
+# Birth Gate 全体の PASS/非PASS（learning recipe freeze / 学習実行へ進む
+# 可否）を identity_establishment 層とは別の二層目として規定する——新規則
+# の発明ではなく裁定§8『rev 0.6のBirth GateがPASSした場合のみ、learning
+# recipe freezeおよび学習実行へ進む。』の機械符号化。
+# =============================================================================
+
+# identity_establishment_ref の凍結値（birth_gate_aggregate_rule への
+# 自己参照 dotted path）。
+_IDENTITY_PROTOCOL_OVERALL_PASS_IDENTITY_ESTABLISHMENT_REF = "birth_gate_aggregate_rule"
+
+# audit_stop_refs（新設節内の逐語列挙、順序込み・5項目ちょうど）: Birth
+# Gate 全体の PASS を妨げ得る exact-replay 監査の停止語彙割当て節を列挙
+# する——c1_sham_attestation は on_nonzero（既存）と on_wav_byte_mismatch
+# （第5巡指摘2、新設）に加え on_feature_mismatch（第6巡指摘1、新設）の
+# 3つを含む。
+_IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS: Tuple[str, str, str, str, str] = (
+    "c0_determinism_attestation.on_mismatch",
+    "c1_sham_attestation.on_nonzero",
+    "c1_sham_attestation.on_wav_byte_mismatch",
+    "c1_sham_attestation.on_feature_mismatch",
+    "positive_reference_audit.on_mismatch",
+)
+
+# completion_evidence_requirement.audit_completeness_refs（PR #333 Codex
+# bot レビュー第11巡指摘1、P1、採用、新設）: audit_stop_refs（不一致述語
+# 5節）とは別軸——監査結果そのものの存在・完全性（C0/C1 各 20/20 takes・
+# positive reference 実行済み）を要求する第3の連言項。不一致述語
+# （on_mismatch/on_nonzero 等）はいずれも real-valued な比較結果の存在を
+# 前提とするため、監査未実施・部分実施はこれらのいずれにも該当せず無音の
+# まま overall PASS へ落ち得た穴を埋める。
+_IDENTITY_PROTOCOL_OVERALL_PASS_COMPLETION_REFS: Tuple[str, str, str] = (
+    "c0_determinism_attestation",
+    "c1_sham_attestation",
+    "positive_reference_audit",
+)
+
+
+def _validate_identity_protocol_shape(
+    value: Any, *, field: str, required_keys: FrozenSet[str],
+) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
+    unknown = set(value.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(value.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    return value
+
+
+def _validate_identity_protocol_sha256(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
+        raise Run9ValidationError(f"{field} must be a 64hex sha256, got {value!r}")
+    return value
+
+
+def _validate_identity_protocol_metric_ref_list(
+    value: Any, *, field: str, expected: FrozenSet[str],
+) -> None:
+    """`supersede_declaration.{preserved,superseded}_sections` の閉じた
+    集合検証（構造検証のみ — 各参照が `identity_metric_space.json` に
+    実在するかの走査は `load_pinned_identity_decision_protocol()` の
+    cross-check (g) が担う。validator = 内部整合のみ・loader =
+    cross-document 照合、という本 repo 全体の役割分担を踏襲する）。"""
+    if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+        raise Run9ValidationError(f"{field} must be a list of strings, got {value!r}")
+    if set(value) != expected:
+        raise Run9ValidationError(
+            f"{field} must equal the frozen set {sorted(expected)} exactly (順不同・要素の過不足を"
+            f"拒否), got {value!r}"
+        )
+
+
+def _require_ordered_str_list_matching_tuple(
+    value: Any, *, field: str, expected: Tuple[str, ...],
+) -> None:
+    """PR #333 Codex bot レビュー第1巡指摘4（P2、採用）用: 順序込みで
+    frozen tuple と一致するかを検査する3箇所（`immutability.unchanged` /
+    `execution_order.prerequisites_before_birth_gate` /
+    `invariants.same_attempt_prohibitions`）は、旧実装が `tuple(value) !=
+    expected` のみで比較していたため、`value` が期待文字列をキーとする
+    insertion-ordered dict（mapping）であっても `tuple(dict)` はそのキー
+    列を返し、値が任意でも frozen tuple 比較を偽通過し得た（同型の穴が
+    3箇所に存在——`_validate_identity_protocol_metric_ref_list()` は既に
+    `isinstance(value, list)` 形状検査を先行させておりこの穴を持たない）。
+    本 helper は tuple 比較の前に `isinstance(value, list)` + 全要素 str
+    の形状検査を必須化し、dict 偽装を fail-closed で拒否する。"""
+    if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+        raise Run9ValidationError(f"{field} must be a list of strings, got {value!r}")
+    if tuple(value) != expected:
+        raise Run9ValidationError(
+            f"{field} must equal {expected!r} exactly (順序込み逐語列挙), got {value!r}"
+        )
+
+
+def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
+    """`inputs/identity_decision_protocol_v0.6.json`
+    （`run9-identity-decision-protocol/0.6`）の構造を検証する。User 裁定
+    「RUN9 User裁定 — Identity Calibration Degeneracy / design_revision
+    0.6」§1-§9 の機械表現——`identity_metric_space.json` は無改変のまま
+    feature/distance 定義を参照し、`calibration` 節（freeze_threshold/
+    validity_gates/decision_rule）のみを rev 0.6 実行について supersede
+    する。
+
+    本関数は manifest 単体の構造・自己整合のみを検証する（一次データ
+    未 load のため cross-document 照合は行わない — `validate_speaker_map_
+    manifest()` と同じ役割分担）。cross-document 照合（裁定 txt 実バイト・
+    metric_space_sha・P0 cell_ref・c0/c1 takes 数・rev doc sha・supersede
+    節名の実在）は `load_pinned_identity_decision_protocol()` の職務。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"identity decision protocol must be an object, got {type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _IDENTITY_DECISION_PROTOCOL_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"identity decision protocol has unknown key(s): {sorted(unknown)}")
+    missing = _IDENTITY_DECISION_PROTOCOL_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"identity decision protocol missing required key(s): {sorted(missing)}"
+        )
+
+    schema = data["schema"]
+    if schema != SCHEMA_IDENTITY_DECISION_PROTOCOL:
+        raise Run9ValidationError(
+            f"identity decision protocol.schema must be exactly "
+            f"{SCHEMA_IDENTITY_DECISION_PROTOCOL!r}, got {schema!r}"
+        )
+
+    # --- adjudication_basis --------------------------------------------
+    basis = _validate_identity_protocol_shape(
+        data["adjudication_basis"], field="adjudication_basis",
+        required_keys=frozenset({"source_file", "sha256", "summary"}),
+    )
+    _require_non_empty_str(basis["source_file"], field="adjudication_basis.source_file")
+    _validate_identity_protocol_sha256(basis["sha256"], field="adjudication_basis.sha256")
+    _require_non_empty_str(basis["summary"], field="adjudication_basis.summary")
+
+    # --- provenance ------------------------------------------------------
+    provenance = _validate_identity_protocol_shape(
+        data["provenance"], field="provenance",
+        required_keys=frozenset({"design_revision_doc", "authored_by", "note"}),
+    )
+    rev_doc = _validate_identity_protocol_shape(
+        provenance["design_revision_doc"], field="provenance.design_revision_doc",
+        required_keys=frozenset({"source_file", "sha256"}),
+    )
+    _require_non_empty_str(rev_doc["source_file"], field="provenance.design_revision_doc.source_file")
+    _validate_identity_protocol_sha256(
+        rev_doc["sha256"], field="provenance.design_revision_doc.sha256"
+    )
+    _require_non_empty_str(provenance["authored_by"], field="provenance.authored_by")
+    _require_non_empty_str(provenance["note"], field="provenance.note")
+
+    # --- metric_reference --------------------------------------------------
+    metric_ref = _validate_identity_protocol_shape(
+        data["metric_reference"], field="metric_reference",
+        required_keys=frozenset({"source_file", "metric_space_sha", "note"}),
+    )
+    # PR #333 第7巡指摘2（P2、採用）: 非空文字列チェックのみでは、実際に
+    # 読む identity_metric_space.json（固定定数 IDENTITY_METRIC_SPACE_PATH
+    # 経由）と宣言 path の乖離（誤記・改ざん）を検出できない——凍結期待
+    # path との厳密一致を要求する（loader 側 cross-check (2) の再照合と
+    # 二層防御）。
+    if metric_ref["source_file"] != _IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE:
+        raise Run9ValidationError(
+            "identity decision protocol metric_reference.source_file must be exactly "
+            f"{_IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE!r}, got "
+            f"{metric_ref['source_file']!r}"
+        )
+    _validate_identity_protocol_sha256(
+        metric_ref["metric_space_sha"], field="metric_reference.metric_space_sha"
+    )
+    _require_non_empty_str(metric_ref["note"], field="metric_reference.note")
+
+    # --- supersede_declaration --------------------------------------------
+    supersede = _validate_identity_protocol_shape(
+        data["supersede_declaration"], field="supersede_declaration",
+        required_keys=frozenset({
+            "verbatim", "preserved_sections", "superseded_sections",
+            "preserved_generation_definitions", "preserved_generation_definitions_note",
+        }),
+    )
+    _require_non_empty_str(supersede["verbatim"], field="supersede_declaration.verbatim")
+    _validate_identity_protocol_metric_ref_list(
+        supersede["preserved_sections"], field="supersede_declaration.preserved_sections",
+        expected=_IDENTITY_PROTOCOL_PRESERVED_METRIC_SECTIONS,
+    )
+    _validate_identity_protocol_metric_ref_list(
+        supersede["superseded_sections"], field="supersede_declaration.superseded_sections",
+        expected=_IDENTITY_PROTOCOL_SUPERSEDED_METRIC_SECTIONS,
+    )
+    # PR #333 第3巡指摘1（P1、採用）: superseded_sections は節丸ごと
+    # supersede を宣言するが、bridge が実際に消費する節配下の生成定義
+    # （d_c0_population 等）は判定意味論とは別に「今も有効」であることを
+    # 本フィールドで閉じた集合として明記する——supersede 宣言と依存の
+    # 同時成立による曖昧さを解消する（`_IDENTITY_PROTOCOL_PRESERVED_
+    # GENERATION_DEFINITIONS` は bridge 側の凍結表から直接導出——single
+    # source of truth）。
+    _validate_identity_protocol_metric_ref_list(
+        supersede["preserved_generation_definitions"],
+        field="supersede_declaration.preserved_generation_definitions",
+        expected=_IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS,
+    )
+    _validate_marker_bearing_str(
+        supersede["preserved_generation_definitions_note"],
+        field="supersede_declaration.preserved_generation_definitions_note",
+        markers=_IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS_NOTE_MARKERS,
+    )
+
+    # --- pre_run_correction_basis ------------------------------------------
+    correction = _validate_identity_protocol_shape(
+        data["pre_run_correction_basis"], field="pre_run_correction_basis",
+        required_keys=frozenset({"verbatim", "degeneracy_basis_references"}),
+    )
+    _require_non_empty_str(correction["verbatim"], field="pre_run_correction_basis.verbatim")
+    refs = correction["degeneracy_basis_references"]
+    if not isinstance(refs, list) or not refs or any(
+        not isinstance(r, str) or not r.strip() for r in refs
+    ):
+        raise Run9ValidationError(
+            "pre_run_correction_basis.degeneracy_basis_references must be a non-empty list of "
+            f"non-empty strings, got {refs!r}"
+        )
+
+    # --- c0_determinism_attestation（裁定 §1）-------------------------------
+    c0 = _validate_identity_protocol_shape(
+        data["c0_determinism_attestation"], field="c0_determinism_attestation",
+        required_keys=frozenset({
+            "verbatim", "takes_per_founder", "contract_field_ref", "requirement",
+            "expected", "prohibition", "role", "on_mismatch",
+        }),
+    )
+    _require_non_empty_str(c0["verbatim"], field="c0_determinism_attestation.verbatim")
+    _require_positive_int(
+        c0["takes_per_founder"], field="c0_determinism_attestation.takes_per_founder"
+    )
+    if c0["contract_field_ref"] != _IDENTITY_PROTOCOL_C0_CONTRACT_FIELD_REF:
+        raise Run9ValidationError(
+            "c0_determinism_attestation.contract_field_ref must be exactly "
+            f"{_IDENTITY_PROTOCOL_C0_CONTRACT_FIELD_REF!r}, got {c0['contract_field_ref']!r}"
+        )
+    for f in ("requirement", "expected", "prohibition", "role"):
+        _require_non_empty_str(c0[f], field=f"c0_determinism_attestation.{f}")
+    on_mismatch = _validate_identity_protocol_shape(
+        c0["on_mismatch"], field="c0_determinism_attestation.on_mismatch",
+        required_keys=frozenset({
+            "render_byte_mismatch", "feature_computation_mismatch_with_matching_render",
+        }),
+    )
+    if on_mismatch["render_byte_mismatch"] != IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME:
+        raise Run9ValidationError(
+            "c0_determinism_attestation.on_mismatch.render_byte_mismatch must be exactly "
+            f"{IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME!r}, got "
+            f"{on_mismatch['render_byte_mismatch']!r}"
+        )
+    if (
+        on_mismatch["feature_computation_mismatch_with_matching_render"]
+        != IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME
+    ):
+        raise Run9ValidationError(
+            "c0_determinism_attestation.on_mismatch.feature_computation_mismatch_with_matching_"
+            f"render must be exactly {IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME!r}, got "
+            f"{on_mismatch['feature_computation_mismatch_with_matching_render']!r}"
+        )
+
+    # --- c1_sham_attestation（裁定 §2）-------------------------------------
+    c1 = _validate_identity_protocol_shape(
+        data["c1_sham_attestation"], field="c1_sham_attestation",
+        required_keys=frozenset({
+            "verbatim", "takes_per_founder", "contract_field_ref", "requirement",
+            "expected", "role", "on_nonzero", "on_wav_byte_mismatch", "on_feature_mismatch",
+            "outcome_priority",
+        }),
+    )
+    _require_non_empty_str(c1["verbatim"], field="c1_sham_attestation.verbatim")
+    _require_positive_int(c1["takes_per_founder"], field="c1_sham_attestation.takes_per_founder")
+    if c1["contract_field_ref"] != _IDENTITY_PROTOCOL_C1_CONTRACT_FIELD_REF:
+        raise Run9ValidationError(
+            "c1_sham_attestation.contract_field_ref must be exactly "
+            f"{_IDENTITY_PROTOCOL_C1_CONTRACT_FIELD_REF!r}, got {c1['contract_field_ref']!r}"
+        )
+    for f in ("requirement", "expected", "role"):
+        _require_non_empty_str(c1[f], field=f"c1_sham_attestation.{f}")
+    if c1["on_nonzero"] != IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME:
+        raise Run9ValidationError(
+            f"c1_sham_attestation.on_nonzero must be exactly {IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME!r}"
+            f", got {c1['on_nonzero']!r}"
+        )
+    # PR #333 Codex bot レビュー第5巡指摘2（P1、採用）新設: on_nonzero
+    # （D_C1(F)≠0 全体）だけでは「WAV バイトは不一致だが identity feature は
+    # 一致（D_C1(F)=0）」という決定論破りの具体的経路に発火する分岐が無かった
+    # ——c0_determinism_attestation.on_mismatch と同一語彙を再利用する（新
+    # 語彙の発明はしない）。
+    c1_wav_mismatch = _validate_identity_protocol_shape(
+        c1["on_wav_byte_mismatch"], field="c1_sham_attestation.on_wav_byte_mismatch",
+        required_keys=frozenset({"condition", "outcome", "gate_effect", "cross_reference", "note"}),
+    )
+    if c1_wav_mismatch["outcome"] != IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME:
+        raise Run9ValidationError(
+            "c1_sham_attestation.on_wav_byte_mismatch.outcome must be exactly "
+            f"{IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME!r} (c0_determinism_attestation."
+            f"on_mismatch.render_byte_mismatch と同一語彙の再利用), got "
+            f"{c1_wav_mismatch['outcome']!r}"
+        )
+    for f in ("condition", "gate_effect", "cross_reference", "note"):
+        _require_non_empty_str(c1_wav_mismatch[f], field=f"c1_sham_attestation.on_wav_byte_mismatch.{f}")
+    # PR #333 Codex bot レビュー第6巡指摘1（P1、採用）新設: on_nonzero
+    # （D_C1(F)≠0 全体）にも on_wav_byte_mismatch（WAV bytes 不一致）にも、
+    # 「WAV bytes は一致し D_C1(F)=0 だが serialized identity feature
+    # bytes/hash が不一致（dtype/signed-zero/シリアライズ差等）」という
+    # 経路が未分岐だった——c0_determinism_attestation.on_mismatch.feature_
+    # computation_mismatch_with_matching_render と同一語彙を再利用する
+    # （新語彙の発明はしない）。
+    c1_feature_mismatch = _validate_identity_protocol_shape(
+        c1["on_feature_mismatch"], field="c1_sham_attestation.on_feature_mismatch",
+        required_keys=frozenset({"condition", "outcome", "gate_effect", "cross_reference", "note"}),
+    )
+    if c1_feature_mismatch["outcome"] != IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME:
+        raise Run9ValidationError(
+            "c1_sham_attestation.on_feature_mismatch.outcome must be exactly "
+            f"{IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME!r} (c0_determinism_attestation."
+            f"on_mismatch.feature_computation_mismatch_with_matching_render と同一語彙の再利用), got "
+            f"{c1_feature_mismatch['outcome']!r}"
+        )
+    for f in ("condition", "gate_effect", "cross_reference", "note"):
+        _require_non_empty_str(
+            c1_feature_mismatch[f], field=f"c1_sham_attestation.on_feature_mismatch.{f}"
+        )
+    # PR #333 Codex bot レビュー第8巡指摘1（P2、採用）新設: 「WAV bytes
+    # 不一致かつ D_C1(F)≠0」の場合、on_nonzero と on_wav_byte_mismatch が
+    # 同時該当し得るにも関わらず優先順・全該当会計が未定義だった穴を埋める
+    # （on_feature_mismatch は D_C1(F)=0 前提のため on_nonzero とは排他で
+    # 対象外）。birth_gate_aggregate_rule.not_established.outcome_detail_
+    # priority と同型パターン。
+    c1_priority = _validate_identity_protocol_shape(
+        c1["outcome_priority"], field="c1_sham_attestation.outcome_priority",
+        required_keys=frozenset({"order", "detail_by_key", "order_note"}),
+    )
+    _require_ordered_str_list_matching_tuple(
+        c1_priority["order"], field="c1_sham_attestation.outcome_priority.order",
+        expected=_IDENTITY_PROTOCOL_C1_OUTCOME_PRIORITY_ORDER,
+    )
+    c1_detail_by_key = _validate_identity_protocol_shape(
+        c1_priority["detail_by_key"], field="c1_sham_attestation.outcome_priority.detail_by_key",
+        required_keys=frozenset(_IDENTITY_PROTOCOL_C1_OUTCOME_PRIORITY_ORDER),
+    )
+    # detail_by_key の各値は c1_sham_attestation 側で既に検証済みの実際の
+    # outcome 値と単一の正本を共有する（二重に書き起こさない——
+    # birth_gate_aggregate_rule.verbatim_basis と同型のパターン）。
+    _c1_outcome_priority_expected = {
+        "on_wav_byte_mismatch": c1_wav_mismatch["outcome"],
+        "on_feature_mismatch": c1_feature_mismatch["outcome"],
+        "on_nonzero": c1["on_nonzero"],
+    }
+    for key, expected_outcome in _c1_outcome_priority_expected.items():
+        if c1_detail_by_key[key] != expected_outcome:
+            raise Run9ValidationError(
+                f"c1_sham_attestation.outcome_priority.detail_by_key.{key} must be byte-identical "
+                f"to c1_sham_attestation.{key}.outcome (single source of truth), got "
+                f"{c1_detail_by_key[key]!r} != {expected_outcome!r}"
+            )
+    _require_non_empty_str(
+        c1_priority["order_note"], field="c1_sham_attestation.outcome_priority.order_note"
+    )
+
+    # --- positive_reference_audit（裁定 §3）---------------------------------
+    positive = _validate_identity_protocol_shape(
+        data["positive_reference_audit"], field="positive_reference_audit",
+        required_keys=frozenset({"verbatim", "requirement", "role", "on_mismatch"}),
+    )
+    for f in ("verbatim", "requirement", "role"):
+        _require_non_empty_str(positive[f], field=f"positive_reference_audit.{f}")
+    # PR #333 Codex bot レビュー第4巡指摘2（P1、採用）新設: positive_
+    # reference_audit は要求のみで不一致時の停止先を持たなかった
+    # （c0_determinism_attestation/c1_sham_attestation には停止語彙割当てが
+    # あるのに本節だけ未登録）。C0 側の停止語彙定数をそのまま再利用する
+    # 決定論的割当て（新語彙の発明はしない）——裁定§3+§9 の機械符号化。
+    positive_on_mismatch = _validate_identity_protocol_shape(
+        positive["on_mismatch"], field="positive_reference_audit.on_mismatch",
+        required_keys=frozenset({
+            "wav_byte_mismatch", "distance_nonzero_or_feature_mismatch_with_matching_wav",
+            "note", "gate_effect",
+        }),
+    )
+    if positive_on_mismatch["wav_byte_mismatch"] != IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME:
+        raise Run9ValidationError(
+            "positive_reference_audit.on_mismatch.wav_byte_mismatch must be exactly "
+            f"{IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME!r} (c0_determinism_attestation."
+            f"on_mismatch.render_byte_mismatch と同一語彙の再利用), got "
+            f"{positive_on_mismatch['wav_byte_mismatch']!r}"
+        )
+    if (
+        positive_on_mismatch["distance_nonzero_or_feature_mismatch_with_matching_wav"]
+        != IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME
+    ):
+        raise Run9ValidationError(
+            "positive_reference_audit.on_mismatch.distance_nonzero_or_feature_mismatch_with_"
+            f"matching_wav must be exactly {IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME!r} "
+            "(c0_determinism_attestation.on_mismatch.feature_computation_mismatch_with_"
+            f"matching_render と同一語彙の再利用), got "
+            f"{positive_on_mismatch['distance_nonzero_or_feature_mismatch_with_matching_wav']!r}"
+        )
+    for f in ("note", "gate_effect"):
+        _require_non_empty_str(positive_on_mismatch[f], field=f"positive_reference_audit.on_mismatch.{f}")
+
+    # --- birth_identity_separation（裁定 §4）--------------------------------
+    birth = _validate_identity_protocol_shape(
+        data["birth_identity_separation"], field="birth_identity_separation",
+        required_keys=frozenset({
+            "verbatim", "cell_ref", "formula", "established", "not_established",
+            "invalid_or_nonfinite_feature", "invalid_or_nonfinite_d12",
+            "negative_reference_gate_note",
+        }),
+    )
+    _require_non_empty_str(birth["verbatim"], field="birth_identity_separation.verbatim")
+    expected_cell_ref = next(iter(_PROBE_EXPECTED_CELL_IDS["P0"]))
+    if birth["cell_ref"] != expected_cell_ref:
+        raise Run9ValidationError(
+            f"birth_identity_separation.cell_ref must be exactly {expected_cell_ref!r} (P0 Neutral "
+            f"Identity Probe, frozen), got {birth['cell_ref']!r}"
+        )
+    _require_non_empty_str(birth["formula"], field="birth_identity_separation.formula")
+    established = _validate_identity_protocol_shape(
+        birth["established"], field="birth_identity_separation.established",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail"}),
+    )
+    _require_non_empty_str(established["condition"], field="birth_identity_separation.established.condition")
+    if established["birth_outcome"] != "ESTABLISHED" or "ESTABLISHED" not in BIRTH_OUTCOMES:
+        raise Run9ValidationError(
+            "birth_identity_separation.established.birth_outcome must be exactly 'ESTABLISHED' "
+            f"(BIRTH_OUTCOMES 既存語彙), got {established['birth_outcome']!r}"
+        )
+    if established["outcome_detail"] != IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL:
+        raise Run9ValidationError(
+            "birth_identity_separation.established.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL!r}, got {established['outcome_detail']!r}"
+        )
+    not_established = _validate_identity_protocol_shape(
+        birth["not_established"], field="birth_identity_separation.not_established",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail", "action"}),
+    )
+    _require_non_empty_str(
+        not_established["condition"], field="birth_identity_separation.not_established.condition"
+    )
+    if not_established["birth_outcome"] != "NOT_ESTABLISHED" or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES:
+        raise Run9ValidationError(
+            "birth_identity_separation.not_established.birth_outcome must be exactly "
+            f"'NOT_ESTABLISHED' (BIRTH_OUTCOMES 既存語彙), got {not_established['birth_outcome']!r}"
+        )
+    if not_established["outcome_detail"] != IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL:
+        raise Run9ValidationError(
+            "birth_identity_separation.not_established.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL!r}, got {not_established['outcome_detail']!r}"
+        )
+    _require_non_empty_str(
+        not_established["action"], field="birth_identity_separation.not_established.action"
+    )
+    # PR #333 第1巡指摘3（P2、採用）: invalid/non-finite feature の第3分岐
+    # （established/not_established のいずれの条件にも該当しない未登録の穴
+    # を埋める——feature collapse とは区別される測定/実装失敗系の凍結）。
+    invalid_feature = _validate_identity_protocol_shape(
+        birth["invalid_or_nonfinite_feature"],
+        field="birth_identity_separation.invalid_or_nonfinite_feature",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail", "action", "note"}),
+    )
+    _require_non_empty_str(
+        invalid_feature["condition"],
+        field="birth_identity_separation.invalid_or_nonfinite_feature.condition",
+    )
+    if (
+        invalid_feature["birth_outcome"] != "NOT_ESTABLISHED"
+        or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES
+    ):
+        raise Run9ValidationError(
+            "birth_identity_separation.invalid_or_nonfinite_feature.birth_outcome must be exactly "
+            f"'NOT_ESTABLISHED' (BIRTH_OUTCOMES 既存語彙), got {invalid_feature['birth_outcome']!r}"
+        )
+    if invalid_feature["outcome_detail"] != IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL:
+        raise Run9ValidationError(
+            "birth_identity_separation.invalid_or_nonfinite_feature.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL!r}, got "
+            f"{invalid_feature['outcome_detail']!r}"
+        )
+    _require_non_empty_str(
+        invalid_feature["action"],
+        field="birth_identity_separation.invalid_or_nonfinite_feature.action",
+    )
+    _require_non_empty_str(
+        invalid_feature["note"], field="birth_identity_separation.invalid_or_nonfinite_feature.note"
+    )
+    # PR #333 第16巡指摘1（P1、上限到達後、採用）: invalid/non-finite d12
+    # の第3分岐（established/not_established/invalid_or_nonfinite_feature
+    # のいずれの条件にも該当しない——両 feature が valid/finite であって
+    # も d12 自体が overflow 等で non-finite になり得る未登録の穴を埋める
+    # ——feature 自体の invalid（上記 invalid_feature）とも d12=0 の
+    # feature collapse（not_established）とも区別される測定/実装失敗系の
+    # 凍結）。
+    invalid_d12 = _validate_identity_protocol_shape(
+        birth["invalid_or_nonfinite_d12"],
+        field="birth_identity_separation.invalid_or_nonfinite_d12",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail", "action", "note"}),
+    )
+    _require_non_empty_str(
+        invalid_d12["condition"],
+        field="birth_identity_separation.invalid_or_nonfinite_d12.condition",
+    )
+    if (
+        invalid_d12["birth_outcome"] != "NOT_ESTABLISHED"
+        or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES
+    ):
+        raise Run9ValidationError(
+            "birth_identity_separation.invalid_or_nonfinite_d12.birth_outcome must be exactly "
+            f"'NOT_ESTABLISHED' (BIRTH_OUTCOMES 既存語彙), got {invalid_d12['birth_outcome']!r}"
+        )
+    if invalid_d12["outcome_detail"] != IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL:
+        raise Run9ValidationError(
+            "birth_identity_separation.invalid_or_nonfinite_d12.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL!r}, got "
+            f"{invalid_d12['outcome_detail']!r}"
+        )
+    _require_non_empty_str(
+        invalid_d12["action"],
+        field="birth_identity_separation.invalid_or_nonfinite_d12.action",
+    )
+    _require_non_empty_str(
+        invalid_d12["note"], field="birth_identity_separation.invalid_or_nonfinite_d12.note"
+    )
+    _require_non_empty_str(
+        birth["negative_reference_gate_note"],
+        field="birth_identity_separation.negative_reference_gate_note",
+    )
+
+    # --- pjs_confuser（裁定 §5）--------------------------------------------
+    pjs = _validate_identity_protocol_shape(
+        data["pjs_confuser"], field="pjs_confuser",
+        required_keys=frozenset({
+            "verbatim", "metric", "pjs_reference_ref", "on_zero", "on_positive",
+            "invalid_or_nonfinite_distance",
+        }),
+    )
+    _require_non_empty_str(pjs["verbatim"], field="pjs_confuser.verbatim")
+    _require_non_empty_str(pjs["metric"], field="pjs_confuser.metric")
+    if pjs["pjs_reference_ref"] != _IDENTITY_PROTOCOL_PJS_REFERENCE_REF:
+        raise Run9ValidationError(
+            f"pjs_confuser.pjs_reference_ref must be exactly {_IDENTITY_PROTOCOL_PJS_REFERENCE_REF!r}"
+            f", got {pjs['pjs_reference_ref']!r}"
+        )
+    on_zero = _validate_identity_protocol_shape(
+        pjs["on_zero"], field="pjs_confuser.on_zero",
+        required_keys=frozenset({"condition", "birth_outcome", "reason"}),
+    )
+    _require_non_empty_str(on_zero["condition"], field="pjs_confuser.on_zero.condition")
+    if on_zero["birth_outcome"] != "NOT_ESTABLISHED" or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES:
+        raise Run9ValidationError(
+            "pjs_confuser.on_zero.birth_outcome must be exactly 'NOT_ESTABLISHED' (BIRTH_OUTCOMES "
+            f"既存語彙), got {on_zero['birth_outcome']!r}"
+        )
+    _require_non_empty_str(on_zero["reason"], field="pjs_confuser.on_zero.reason")
+    on_positive = _validate_identity_protocol_shape(
+        pjs["on_positive"], field="pjs_confuser.on_positive", required_keys=frozenset({"policy"}),
+    )
+    _require_non_empty_str(on_positive["policy"], field="pjs_confuser.on_positive.policy")
+    # PR #333 Codex bot レビュー第8巡指摘3（P2、採用）新設: on_positive/
+    # on_zero のいずれの条件にも該当しない「距離が invalid または
+    # non-finite」という測定/実装失敗系の第3分岐——birth_identity_
+    # separation.invalid_or_nonfinite_feature（第1巡指摘3）と同型。
+    pjs_invalid_distance = _validate_identity_protocol_shape(
+        pjs["invalid_or_nonfinite_distance"], field="pjs_confuser.invalid_or_nonfinite_distance",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail", "action", "note"}),
+    )
+    _require_non_empty_str(
+        pjs_invalid_distance["condition"], field="pjs_confuser.invalid_or_nonfinite_distance.condition"
+    )
+    if (
+        pjs_invalid_distance["birth_outcome"] != "NOT_ESTABLISHED"
+        or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES
+    ):
+        raise Run9ValidationError(
+            "pjs_confuser.invalid_or_nonfinite_distance.birth_outcome must be exactly "
+            f"'NOT_ESTABLISHED' (BIRTH_OUTCOMES 既存語彙), got "
+            f"{pjs_invalid_distance['birth_outcome']!r}"
+        )
+    if pjs_invalid_distance["outcome_detail"] != IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL:
+        raise Run9ValidationError(
+            "pjs_confuser.invalid_or_nonfinite_distance.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL!r}, got "
+            f"{pjs_invalid_distance['outcome_detail']!r}"
+        )
+    _require_non_empty_str(
+        pjs_invalid_distance["action"], field="pjs_confuser.invalid_or_nonfinite_distance.action"
+    )
+    _require_non_empty_str(
+        pjs_invalid_distance["note"], field="pjs_confuser.invalid_or_nonfinite_distance.note"
+    )
+
+    # --- post_learning_identity_retention（裁定 §6）-------------------------
+    retention = _validate_identity_protocol_shape(
+        data["post_learning_identity_retention"], field="post_learning_identity_retention",
+        required_keys=frozenset({
+            "verbatim", "formulas", "stable", "shifted", "invalid_or_nonfinite_feature",
+            "additional_record",
+        }),
+    )
+    _require_non_empty_str(retention["verbatim"], field="post_learning_identity_retention.verbatim")
+    formulas = _validate_identity_protocol_shape(
+        retention["formulas"], field="post_learning_identity_retention.formulas",
+        required_keys=frozenset({"d_self", "d_other", "d_pjs", "m_other", "m_pjs"}),
+    )
+    for f in ("d_self", "d_other", "d_pjs", "m_other", "m_pjs"):
+        _require_non_empty_str(formulas[f], field=f"post_learning_identity_retention.formulas.{f}")
+    stable = _validate_identity_protocol_shape(
+        retention["stable"], field="post_learning_identity_retention.stable",
+        required_keys=frozenset({"condition", "identity_outcome", "outcome_detail"}),
+    )
+    _require_non_empty_str(stable["condition"], field="post_learning_identity_retention.stable.condition")
+    if (
+        stable["identity_outcome"] != "STABLE_BY_MACHINE_METRIC"
+        or "STABLE_BY_MACHINE_METRIC" not in IDENTITY_OUTCOMES
+    ):
+        raise Run9ValidationError(
+            "post_learning_identity_retention.stable.identity_outcome must be exactly "
+            f"'STABLE_BY_MACHINE_METRIC' (IDENTITY_OUTCOMES 既存語彙), got "
+            f"{stable['identity_outcome']!r}"
+        )
+    if stable["outcome_detail"] != IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL:
+        raise Run9ValidationError(
+            "post_learning_identity_retention.stable.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL!r}, got {stable['outcome_detail']!r}"
+        )
+    shifted = _validate_identity_protocol_shape(
+        retention["shifted"], field="post_learning_identity_retention.shifted",
+        required_keys=frozenset({"condition", "identity_outcome", "boundary_note"}),
+    )
+    _require_non_empty_str(
+        shifted["condition"], field="post_learning_identity_retention.shifted.condition"
+    )
+    if shifted["identity_outcome"] != "SHIFTED" or "SHIFTED" not in IDENTITY_OUTCOMES:
+        raise Run9ValidationError(
+            "post_learning_identity_retention.shifted.identity_outcome must be exactly 'SHIFTED' "
+            f"(IDENTITY_OUTCOMES 既存語彙), got {shifted['identity_outcome']!r}"
+        )
+    _require_non_empty_str(
+        shifted["boundary_note"], field="post_learning_identity_retention.shifted.boundary_note"
+    )
+    # PR #333 第2巡指摘2（P2、採用）: stable/shifted いずれの条件にも
+    # 該当しない invalid/non-finite feature の第3分岐（birth_identity_
+    # separation.invalid_or_nonfinite_feature、第1巡指摘3と同型）。
+    invalid_retention_feature = _validate_identity_protocol_shape(
+        retention["invalid_or_nonfinite_feature"],
+        field="post_learning_identity_retention.invalid_or_nonfinite_feature",
+        required_keys=frozenset({"condition", "identity_outcome", "outcome_detail", "action", "note"}),
+    )
+    _require_non_empty_str(
+        invalid_retention_feature["condition"],
+        field="post_learning_identity_retention.invalid_or_nonfinite_feature.condition",
+    )
+    if (
+        invalid_retention_feature["identity_outcome"] != "UNCALIBRATED"
+        or "UNCALIBRATED" not in IDENTITY_OUTCOMES
+    ):
+        raise Run9ValidationError(
+            "post_learning_identity_retention.invalid_or_nonfinite_feature.identity_outcome must be "
+            f"exactly 'UNCALIBRATED' (IDENTITY_OUTCOMES 既存語彙), got "
+            f"{invalid_retention_feature['identity_outcome']!r}"
+        )
+    if invalid_retention_feature["outcome_detail"] != (
+        IDENTITY_PROTOCOL_RETENTION_INVALID_OR_NONFINITE_DETAIL
+    ):
+        raise Run9ValidationError(
+            "post_learning_identity_retention.invalid_or_nonfinite_feature.outcome_detail must be "
+            f"exactly {IDENTITY_PROTOCOL_RETENTION_INVALID_OR_NONFINITE_DETAIL!r}, got "
+            f"{invalid_retention_feature['outcome_detail']!r}"
+        )
+    _require_non_empty_str(
+        invalid_retention_feature["action"],
+        field="post_learning_identity_retention.invalid_or_nonfinite_feature.action",
+    )
+    _require_non_empty_str(
+        invalid_retention_feature["note"],
+        field="post_learning_identity_retention.invalid_or_nonfinite_feature.note",
+    )
+    _require_non_empty_str(
+        retention["additional_record"], field="post_learning_identity_retention.additional_record"
+    )
+
+    # --- immutability（裁定 §7）---------------------------------------------
+    immutability = _validate_identity_protocol_shape(
+        data["immutability"], field="immutability",
+        required_keys=frozenset({"verbatim", "unchanged", "prohibition"}),
+    )
+    _require_non_empty_str(immutability["verbatim"], field="immutability.verbatim")
+    _require_ordered_str_list_matching_tuple(
+        immutability["unchanged"], field="immutability.unchanged",
+        expected=_IDENTITY_PROTOCOL_UNCHANGED_ITEMS,
+    )
+    _require_non_empty_str(immutability["prohibition"], field="immutability.prohibition")
+
+    # --- execution_order（裁定 §8）------------------------------------------
+    execution_order = _validate_identity_protocol_shape(
+        data["execution_order"], field="execution_order",
+        required_keys=frozenset({
+            "verbatim", "prerequisites_before_birth_gate", "gate_sequencing", "this_pr_scope",
+        }),
+    )
+    _require_non_empty_str(execution_order["verbatim"], field="execution_order.verbatim")
+    _require_ordered_str_list_matching_tuple(
+        execution_order["prerequisites_before_birth_gate"],
+        field="execution_order.prerequisites_before_birth_gate",
+        expected=_IDENTITY_PROTOCOL_PREREQUISITES,
+    )
+    _require_non_empty_str(execution_order["gate_sequencing"], field="execution_order.gate_sequencing")
+    _require_non_empty_str(execution_order["this_pr_scope"], field="execution_order.this_pr_scope")
+
+    # --- invariants（裁定 §9）------------------------------------------------
+    invariants = _validate_identity_protocol_shape(
+        data["invariants"], field="invariants",
+        required_keys=frozenset({
+            "verbatim", "birth_gate_failure_action", "same_attempt_prohibitions", "escape_hatch",
+        }),
+    )
+    _require_non_empty_str(invariants["verbatim"], field="invariants.verbatim")
+    _require_non_empty_str(
+        invariants["birth_gate_failure_action"], field="invariants.birth_gate_failure_action"
+    )
+    _require_ordered_str_list_matching_tuple(
+        invariants["same_attempt_prohibitions"], field="invariants.same_attempt_prohibitions",
+        expected=_IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS,
+    )
+    _require_non_empty_str(invariants["escape_hatch"], field="invariants.escape_hatch")
+
+    # --- birth_gate_aggregate_rule（PR #333 Codex bot レビュー第4巡指摘1、
+    # P1、採用）----------------------------------------------------------
+    # birth_identity_separation.established（d12>0）と pjs_confuser.on_zero
+    # （PJS confuser距離=0）が独立に定義され合成条件・優先順が未定義だった
+    # 穴を埋める、Birth Gate identity_establishment 層の ESTABLISHED 連言
+    # 条件。既存4分岐（established/invalid_or_nonfinite_feature/on_positive/
+    # on_zero）は無改変のまま conjunct_refs/failure_refs で参照するのみ。
+    # PR #333 第5巡指摘1（P1、採用）: conjunct_refs を成功述語2項目のみへ
+    # 是正（第4巡実装の排他ペア欠陥の是正）。第5巡指摘3（P1、採用）:
+    # identity_establishment_scope_note を新設し、本節の必要十分条件が
+    # identity_establishment 層限定であることを明記（Birth Gate 全体の
+    # PASS は下記 birth_gate_overall_pass 節が別途規定）。
+    aggregate = _validate_identity_protocol_shape(
+        data["birth_gate_aggregate_rule"], field="birth_gate_aggregate_rule",
+        required_keys=frozenset({
+            "note", "verbatim_basis", "necessary_and_sufficient_condition_for_established",
+            "identity_establishment_scope_note",
+            "conjunct_refs", "established", "not_established", "gate_failure_action_ref",
+        }),
+    )
+    _require_non_empty_str(aggregate["note"], field="birth_gate_aggregate_rule.note")
+    # verbatim_basis は裁定§5 の逐語引用——pjs_confuser.verbatim（既に上で
+    # 検証済みの同一裁定引用）と単一の正本を共有する（二重に書き起こさない
+    # ——文字列同士の食い違いは fail-closed で拒否する）。
+    if aggregate["verbatim_basis"] != pjs["verbatim"]:
+        raise Run9ValidationError(
+            "birth_gate_aggregate_rule.verbatim_basis must be byte-identical to "
+            f"pjs_confuser.verbatim (single source of truth), got "
+            f"{aggregate['verbatim_basis']!r} != {pjs['verbatim']!r}"
+        )
+    _require_non_empty_str(
+        aggregate["necessary_and_sufficient_condition_for_established"],
+        field="birth_gate_aggregate_rule.necessary_and_sufficient_condition_for_established",
+    )
+    # PR #333 第5巡指摘3（P1、採用）: 本節の「必要十分」は identity_
+    # establishment 層（BIRTH ラベル）限定であることを明記する scope note
+    # （Birth Gate 全体の PASS は birth_gate_overall_pass 節が別途規定）。
+    _require_non_empty_str(
+        aggregate["identity_establishment_scope_note"],
+        field="birth_gate_aggregate_rule.identity_establishment_scope_note",
+    )
+    _require_ordered_str_list_matching_tuple(
+        aggregate["conjunct_refs"], field="birth_gate_aggregate_rule.conjunct_refs",
+        expected=_IDENTITY_PROTOCOL_BIRTH_GATE_CONJUNCT_REFS,
+    )
+    agg_established = _validate_identity_protocol_shape(
+        aggregate["established"], field="birth_gate_aggregate_rule.established",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail"}),
+    )
+    _require_non_empty_str(
+        agg_established["condition"], field="birth_gate_aggregate_rule.established.condition"
+    )
+    if agg_established["birth_outcome"] != "ESTABLISHED" or "ESTABLISHED" not in BIRTH_OUTCOMES:
+        raise Run9ValidationError(
+            "birth_gate_aggregate_rule.established.birth_outcome must be exactly 'ESTABLISHED' "
+            f"(BIRTH_OUTCOMES 既存語彙), got {agg_established['birth_outcome']!r}"
+        )
+    if agg_established["outcome_detail"] != IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL:
+        raise Run9ValidationError(
+            "birth_gate_aggregate_rule.established.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL!r}, got "
+            f"{agg_established['outcome_detail']!r}"
+        )
+    agg_not_established = _validate_identity_protocol_shape(
+        aggregate["not_established"], field="birth_gate_aggregate_rule.not_established",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail_priority"}),
+    )
+    _require_non_empty_str(
+        agg_not_established["condition"], field="birth_gate_aggregate_rule.not_established.condition"
+    )
+    if (
+        agg_not_established["birth_outcome"] != "NOT_ESTABLISHED"
+        or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES
+    ):
+        raise Run9ValidationError(
+            "birth_gate_aggregate_rule.not_established.birth_outcome must be exactly "
+            f"'NOT_ESTABLISHED' (BIRTH_OUTCOMES 既存語彙), got "
+            f"{agg_not_established['birth_outcome']!r}"
+        )
+    priority = _validate_identity_protocol_shape(
+        agg_not_established["outcome_detail_priority"],
+        field="birth_gate_aggregate_rule.not_established.outcome_detail_priority",
+        required_keys=frozenset({"order", "detail_by_key", "order_note", "failure_refs"}),
+    )
+    _require_ordered_str_list_matching_tuple(
+        priority["order"],
+        field="birth_gate_aggregate_rule.not_established.outcome_detail_priority.order",
+        expected=_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER,
+    )
+    # PR #333 第5巡指摘1（P1、採用）新設: conjunct_refs から分離した失敗
+    # 分岐参照——order と同順で各優先枝が指す実際の JSON 分岐を列挙する。
+    _require_ordered_str_list_matching_tuple(
+        priority["failure_refs"],
+        field="birth_gate_aggregate_rule.not_established.outcome_detail_priority.failure_refs",
+        expected=_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS,
+    )
+    detail_by_key = _validate_identity_protocol_shape(
+        priority["detail_by_key"],
+        field="birth_gate_aggregate_rule.not_established.outcome_detail_priority.detail_by_key",
+        required_keys=frozenset(_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER),
+    )
+    for key, expected_detail in _IDENTITY_PROTOCOL_BIRTH_GATE_DETAIL_BY_KEY.items():
+        if detail_by_key[key] != expected_detail:
+            raise Run9ValidationError(
+                "birth_gate_aggregate_rule.not_established.outcome_detail_priority."
+                f"detail_by_key.{key} must be exactly {expected_detail!r}, got "
+                f"{detail_by_key[key]!r}"
+            )
+    _require_non_empty_str(
+        priority["order_note"],
+        field="birth_gate_aggregate_rule.not_established.outcome_detail_priority.order_note",
+    )
+    if aggregate["gate_failure_action_ref"] != _IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_ACTION_REF:
+        raise Run9ValidationError(
+            "birth_gate_aggregate_rule.gate_failure_action_ref must be exactly "
+            f"{_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_ACTION_REF!r}, got "
+            f"{aggregate['gate_failure_action_ref']!r}"
+        )
+
+    # --- birth_gate_overall_pass（PR #333 Codex bot レビュー第5巡指摘3、
+    # P1、採用、新設）------------------------------------------------------
+    # identity_establishment（上記 birth_gate_aggregate_rule）とは別の
+    # 二層目: Birth Gate 全体の PASS（learning recipe freeze / 学習実行へ
+    # 進む可否）は identity_establishment=ESTABLISHED に加えて C0/C1/
+    # positive reference の各 exact-replay 監査がいずれの停止条件にも該当
+    # しないことを要求する。監査失敗は ESTABLISHED 判定そのものを無効化
+    # しない（identity 判定と実装健全性判定の会計分離）。
+    overall_pass = _validate_identity_protocol_shape(
+        data["birth_gate_overall_pass"], field="birth_gate_overall_pass",
+        required_keys=frozenset({
+            "definition", "identity_establishment_ref", "audit_stop_refs",
+            "completion_evidence_requirement",
+            "pass_gates_learning", "audit_failure_does_not_invalidate_established",
+            "verbatim_basis", "note",
+        }),
+    )
+    _require_non_empty_str(overall_pass["definition"], field="birth_gate_overall_pass.definition")
+    if (
+        overall_pass["identity_establishment_ref"]
+        != _IDENTITY_PROTOCOL_OVERALL_PASS_IDENTITY_ESTABLISHMENT_REF
+    ):
+        raise Run9ValidationError(
+            "birth_gate_overall_pass.identity_establishment_ref must be exactly "
+            f"{_IDENTITY_PROTOCOL_OVERALL_PASS_IDENTITY_ESTABLISHMENT_REF!r}, got "
+            f"{overall_pass['identity_establishment_ref']!r}"
+        )
+    _require_ordered_str_list_matching_tuple(
+        overall_pass["audit_stop_refs"], field="birth_gate_overall_pass.audit_stop_refs",
+        expected=_IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS,
+    )
+    # --- completion_evidence_requirement（PR #333 Codex bot レビュー第11巡
+    # 指摘1、P1、採用、新設）---------------------------------------------
+    # audit_stop_refs（不一致述語、上記）とは別軸の第3連言項: 監査結果
+    # そのものの欠落・部分実施（C0/C1 の部分 render・結果未発行・positive
+    # 監査未実行）を closed-world に検出する。不一致述語のいずれにも
+    # 該当しないため、これが無いと欠落は無音のまま overall PASS へ落ちる。
+    completion_req = _validate_identity_protocol_shape(
+        overall_pass["completion_evidence_requirement"],
+        field="birth_gate_overall_pass.completion_evidence_requirement",
+        required_keys=frozenset({
+            "audit_completeness_refs", "condition", "gate_effect", "note",
+            "on_incomplete", "outcome",
+        }),
+    )
+    _require_ordered_str_list_matching_tuple(
+        completion_req["audit_completeness_refs"],
+        field="birth_gate_overall_pass.completion_evidence_requirement.audit_completeness_refs",
+        expected=_IDENTITY_PROTOCOL_OVERALL_PASS_COMPLETION_REFS,
+    )
+    _require_non_empty_str(
+        completion_req["condition"],
+        field="birth_gate_overall_pass.completion_evidence_requirement.condition",
+    )
+    if completion_req["on_incomplete"] != IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_DETAIL:
+        raise Run9ValidationError(
+            "birth_gate_overall_pass.completion_evidence_requirement.on_incomplete must be "
+            f"exactly {IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_DETAIL!r}, got "
+            f"{completion_req['on_incomplete']!r}"
+        )
+    if completion_req["outcome"] != IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_OUTCOME:
+        raise Run9ValidationError(
+            "birth_gate_overall_pass.completion_evidence_requirement.outcome must be exactly "
+            f"{IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_OUTCOME!r} (IMPLEMENTATION_FAILURE 系の既存"
+            f"語彙を再利用——新規 outcome 値の発明ではない), got {completion_req['outcome']!r}"
+        )
+    _require_non_empty_str(
+        completion_req["gate_effect"],
+        field="birth_gate_overall_pass.completion_evidence_requirement.gate_effect",
+    )
+    _require_non_empty_str(
+        completion_req["note"],
+        field="birth_gate_overall_pass.completion_evidence_requirement.note",
+    )
+    _require_non_empty_str(
+        overall_pass["pass_gates_learning"], field="birth_gate_overall_pass.pass_gates_learning"
+    )
+    _require_non_empty_str(
+        overall_pass["audit_failure_does_not_invalidate_established"],
+        field="birth_gate_overall_pass.audit_failure_does_not_invalidate_established",
+    )
+    # verbatim_basis は execution_order.gate_sequencing（裁定§8 逐語、
+    # 既に上で検証済みの同一裁定引用）と単一の正本を共有する（二重に
+    # 書き起こさない——文字列同士の食い違いは fail-closed で拒否する）。
+    if overall_pass["verbatim_basis"] != execution_order["gate_sequencing"]:
+        raise Run9ValidationError(
+            "birth_gate_overall_pass.verbatim_basis must be byte-identical to "
+            f"execution_order.gate_sequencing (single source of truth), got "
+            f"{overall_pass['verbatim_basis']!r} != {execution_order['gate_sequencing']!r}"
+        )
+    _require_non_empty_str(overall_pass["note"], field="birth_gate_overall_pass.note")
+
+
+def load_pinned_identity_decision_protocol(
+    contract: "Run9RunContract",
+    *,
+    domain: "Run9IdentityDomain",
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+    design_revision_doc_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`hypothesis_algebra_sha` pin の**唯一の正規消費経路**（rev 0.6 以降、
+    同欄は H1-H6 閾値校正欄から本 protocol の pin 欄へ用途確定済み——
+    `RUN9_CONTRACT.yaml` hypothesis_algebra_sha reason 参照）。
+
+    **消費契約（事前登録）**: harness の identity decision protocol 消費は
+    この関数経由のみで行わなければならない——`inputs/identity_decision_
+    protocol_v0.6.json` への直接 `json.load()` は契約違反である。
+
+    手順（いずれかで fail-closed）:
+    (1)-(4) 他の `load_pinned_*` 関数と同型（`_h3c_load_pinned_common()`
+        経由——disk 正典再読込・改変検出、PINNED 確認、実在確認、実バイト
+        sha256 一致確認、JSON parse）。
+    (5) `validate_identity_decision_protocol()` で manifest 本体の構造を
+        検証する。
+    (6) cross-check (1): `adjudication_basis.source_file`
+        （`USER_ADJUDICATION_20260827_IDENTITY_REV06.txt`）の実バイト
+        sha256 が `adjudication_basis.sha256` と一致することを machine
+        強制する（裁定文書の改変を fail-closed で拒否する）。
+    (7) cross-check (2): `metric_reference.metric_space_sha` が、渡された
+        `domain`（`domains/identity_domain_run9_v1.json` 由来）の
+        `metric_space_sha` と一致することを強制する——identity_metric_
+        space.json 無改変宣言（裁定§7）を消費時にも machine 強制する。
+        併せて `metric_reference.source_file` が凍結期待 path（`_IDENTITY_
+        PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE`、`IDENTITY_METRIC_
+        SPACE_PATH` 由来）と一致することも再照合する（PR #333 第7巡指摘2,
+        P2, 採用 — 実際に読む identity_metric_space.json は常に固定定数
+        経由で source_file の宣言値自体はどの読み込みにも使われないため、
+        宣言 path が誤記・改ざんされても旧実装の非空文字列チェックのみでは
+        検出できなかった欠陥の是正）。
+    (8) cross-check (3): `birth_identity_separation.cell_ref` が
+        `_PROBE_EXPECTED_CELL_IDS["P0"]`（probe manifest 側の凍結 P0 cell
+        定義、正本）と一致することを再照合する（validator 側の静的照合に
+        加え、loader でも同一の凍結正本を再導出して照合する二重防御）。
+    (9) cross-check (4): `c0_determinism_attestation.takes_per_founder`/
+        `c1_sham_attestation.takes_per_founder` が、`contract` の
+        `interventions.c0_replay_takes_per_founder`/
+        `interventions.c1_sham_takes_per_founder`（PINNED、founder 1体
+        あたり n=20）と一致することを強制する。
+    (10) cross-check (5): `provenance.design_revision_doc.sha256` が、
+        `contract` の `design_revision_doc_sha256` PINNED 値と一致する
+        ことを強制する。
+    (11) cross-check (6): `provenance.design_revision_doc.source_file`
+        （`DESIGN_RUN9_REVISION_0.6.md`）の**実バイト** sha256 を
+        `_resolve_repo_contained_path()` + read-once で再計算し、
+        `provenance.design_revision_doc.sha256`（= cross-check (5) で
+        contract pin と一致確認済みの宣言値）と一致することを強制する
+        （PR #333 第2巡指摘3, P2, 採用 — 是正前は宣言値同士
+        （manifest ⇔ contract pin）の比較のみで、どちらの宣言値も
+        `DESIGN_RUN9_REVISION_0.6.md` の実ファイルを再ハッシュしておらず、
+        改訂文書の無断改変を検出できなかった。cross-check (1)
+        （adjudication_basis）と同型の read-once + 実バイト sha256 照合。
+        `design_revision_doc_path` を渡せばテスト用に実ファイルパスを
+        上書き可能（`adjudication_basis_path` 等の既存 override 引数と
+        同型）。
+    (12) cross-check (7): 既に `validate_identity_decision_protocol()` が
+        outcome_detail 語彙（`IDENTITY_PROTOCOL_*` 定数群）とのリテラル
+        一致を強制済み——本関数では追加の語彙照合は行わない（重複させ
+        ない）。
+    (13) cross-check (8): `supersede_declaration.{preserved,superseded}_
+        sections` の各エントリが `inputs/identity_metric_space.json` に
+        実在することを `_resolve_identity_metric_space_ref()` で走査する
+        （dotted path の typo・存在しない節名の宣言を fail-closed で
+        検出する）。本 cross-check が読む document 自体も
+        `_load_identity_metric_space_document_verified()` 経由で実バイトの
+        正規形 sha256 を `domain.metric_space_sha` と再照合する（PR #333
+        第1巡指摘2, P1, 採用 — cross-check (2) は宣言値同士の比較のみで
+        実ファイルを再ハッシュしていなかった欠陥の是正）。
+
+    戻り値は検証済み manifest dict。
+    """
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="hypothesis_algebra_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=IDENTITY_DECISION_PROTOCOL_PATH,
+        fn_label="load_pinned_identity_decision_protocol",
+    )
+    validate_identity_decision_protocol(data)
+
+    # (6) cross-check (1): adjudication_basis.source_file の実バイト sha256。
+    adjudication_basis = data["adjudication_basis"]
+    adjudication_resolved = _resolve_repo_contained_path(
+        adjudication_basis["source_file"],
+        repo_root=_IDENTITY_DECISION_PROTOCOL_REPO_ROOT,
+        field="adjudication_basis.source_file",
+        context="load_pinned_identity_decision_protocol()",
+    )
+    if not adjudication_resolved.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_identity_decision_protocol(): cross-check source {adjudication_resolved} "
+            "(adjudication_basis.source_file) does not exist"
+        )
+    adjudication_actual = hashlib.sha256(adjudication_resolved.read_bytes()).hexdigest()
+    adjudication_pinned = adjudication_basis["sha256"]
+    if adjudication_actual != adjudication_pinned:
+        raise Run9ValidationError(
+            f"load_pinned_identity_decision_protocol(): {adjudication_resolved} の実バイト sha256 "
+            f"({adjudication_actual!r}) が adjudication_basis.sha256 pin 値 ({adjudication_pinned!r}) "
+            "と一致しない — 裁定文書の改変を fail-closed で拒否する"
+        )
+
+    # (7) cross-check (2): metric_reference.metric_space_sha と domain の一致。
+    manifest_metric_sha = data["metric_reference"]["metric_space_sha"]
+    if manifest_metric_sha != domain.metric_space_sha:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): metric_reference.metric_space_sha "
+            f"({manifest_metric_sha!r}) diverges from the pinned Run9IdentityDomain's "
+            f"metric_space_sha ({domain.metric_space_sha!r}) — identity_metric_space.json 無改変"
+            "宣言（裁定§7）の消費時 fail-closed 強制"
+        )
+    # PR #333 第7巡指摘2（P2、採用）: metric_reference.source_file の再照合
+    # （二層防御、birth_identity_separation.cell_ref の cross-check (3) と
+    # 同型）——validate_identity_decision_protocol() で静的照合済みだが、
+    # 本関数が実際に消費する identity_metric_space.json は常に固定定数
+    # IDENTITY_METRIC_SPACE_PATH 経由（cross-check (8) 参照）であり、
+    # source_file の宣言値そのものはどの読み込みにも使われないため、
+    # loader 側でも同一の凍結正本を再導出して照合する。
+    manifest_metric_source_file = data["metric_reference"]["source_file"]
+    if manifest_metric_source_file != _IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): metric_reference.source_file "
+            f"({manifest_metric_source_file!r}) diverges from the canonical "
+            f"identity_metric_space.json path "
+            f"({_IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE!r}) — fail-closed re-check"
+        )
+
+    # (8) cross-check (3): birth_identity_separation.cell_ref の再照合。
+    expected_cell_ref = next(iter(_PROBE_EXPECTED_CELL_IDS["P0"]))
+    manifest_cell_ref = data["birth_identity_separation"]["cell_ref"]
+    if manifest_cell_ref != expected_cell_ref:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): birth_identity_separation.cell_ref "
+            f"({manifest_cell_ref!r}) diverges from the canonical P0 cell "
+            f"({expected_cell_ref!r}) — fail-closed re-check"
+        )
+
+    # (9) cross-check (4): C0/C1 takes 数と interventions pin の一致。
+    revalidated_contract = load_run9_contract(contract.raw)
+    c0_field = revalidated_contract.intervention_take_count_field("c0_replay_takes_per_founder")
+    c1_field = revalidated_contract.intervention_take_count_field("c1_sham_takes_per_founder")
+    manifest_c0_takes = data["c0_determinism_attestation"]["takes_per_founder"]
+    manifest_c1_takes = data["c1_sham_attestation"]["takes_per_founder"]
+    if manifest_c0_takes != c0_field["value"]:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): c0_determinism_attestation.takes_per_founder "
+            f"({manifest_c0_takes!r}) diverges from RUN9_CONTRACT.yaml "
+            f"interventions.c0_replay_takes_per_founder PINNED value ({c0_field['value']!r})"
+        )
+    if manifest_c1_takes != c1_field["value"]:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): c1_sham_attestation.takes_per_founder "
+            f"({manifest_c1_takes!r}) diverges from RUN9_CONTRACT.yaml "
+            f"interventions.c1_sham_takes_per_founder PINNED value ({c1_field['value']!r})"
+        )
+
+    # (10) cross-check (5): provenance.design_revision_doc.sha256 と contract
+    # design_revision_doc_sha256 PINNED 値の一致。
+    rev_doc_field = revalidated_contract.pin_field("design_revision_doc_sha256")
+    if not _is_field_pinned(rev_doc_field):
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): RUN9_CONTRACT.yaml design_revision_doc_sha256 "
+            f"is not PINNED (status={rev_doc_field.get('status')!r})"
+        )
+    manifest_rev_doc_sha = data["provenance"]["design_revision_doc"]["sha256"]
+    if manifest_rev_doc_sha != rev_doc_field["value"]:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): provenance.design_revision_doc.sha256 "
+            f"({manifest_rev_doc_sha!r}) diverges from RUN9_CONTRACT.yaml design_revision_doc_sha256 "
+            f"PINNED value ({rev_doc_field['value']!r})"
+        )
+
+    # (11) cross-check (6): provenance.design_revision_doc.source_file の
+    # 実バイト sha256 を再計算し、manifest_rev_doc_sha（cross-check (5) で
+    # contract pin と一致確認済み）と照合する。PR #333 第2巡指摘3（P2,
+    # 採用）: 是正前は宣言値同士の比較のみで、DESIGN_RUN9_REVISION_0.6.md
+    # の実ファイルを一度も再ハッシュしていなかった——改訂文書自体の無断
+    # 改変を fail-closed で検出できない欠陥だった。
+    rev_doc_source_file = data["provenance"]["design_revision_doc"]["source_file"]
+    rev_doc_resolved = (
+        design_revision_doc_path
+        if design_revision_doc_path is not None
+        else _resolve_repo_contained_path(
+            rev_doc_source_file,
+            repo_root=_IDENTITY_DECISION_PROTOCOL_REPO_ROOT,
+            field="provenance.design_revision_doc.source_file",
+            context="load_pinned_identity_decision_protocol()",
+        )
+    )
+    if not rev_doc_resolved.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_identity_decision_protocol(): cross-check source {rev_doc_resolved} "
+            "(provenance.design_revision_doc.source_file) does not exist"
+        )
+    rev_doc_actual_sha = hashlib.sha256(rev_doc_resolved.read_bytes()).hexdigest()
+    if rev_doc_actual_sha != manifest_rev_doc_sha:
+        raise Run9ValidationError(
+            f"load_pinned_identity_decision_protocol(): {rev_doc_resolved} の実バイト sha256 "
+            f"({rev_doc_actual_sha!r}) が provenance.design_revision_doc.sha256 pin 値 "
+            f"({manifest_rev_doc_sha!r}) と一致しない — 改訂文書の改変を fail-closed で拒否する"
+        )
+
+    # (13) cross-check (8): supersede_declaration の各節名が
+    # identity_metric_space.json に実在することを走査する。PR #333 Codex
+    # bot レビュー第1巡指摘2（P1、採用）: cross-check (2) は宣言値同士の
+    # 比較のみだったため、`_load_identity_metric_space_document_verified()`
+    # で実バイトから再計算した正規形 sha256 を domain.metric_space_sha と
+    # fail-closed で照合してから読む（stale/改ざん checkout の拒否）。
+    identity_metric_space_document = _load_identity_metric_space_document_verified(
+        domain.metric_space_sha
+    )
+    supersede = data["supersede_declaration"]
+    for ref in list(supersede["preserved_sections"]) + list(supersede["superseded_sections"]):
+        _resolve_identity_metric_space_ref(
+            ref, document=identity_metric_space_document,
+            field="supersede_declaration.{preserved,superseded}_sections[]",
+        )
+    # PR #333 第3巡指摘1（P1、採用）: preserved_generation_definitions の
+    # 各 dotted path も identity_metric_space.json に実在することを走査
+    # する（typo・存在しない節名の宣言を fail-closed で検出する、上記と
+    # 同型）。
+    for ref in list(supersede["preserved_generation_definitions"]):
+        _resolve_identity_metric_space_ref(
+            ref, document=identity_metric_space_document,
+            field="supersede_declaration.preserved_generation_definitions[]",
+        )
+
     return data

@@ -1,8 +1,8 @@
 {
   "measurement_boundary": {
     "development_generalization_axis_source": "P4/P5のdevelopment/generalization軸（feature extractor・normalization・metric version）はRUN9_CONTRACT.yaml measurement_spec_sha（別欄）が別途凍結する。同欄は本PR 時点で引き続きPENDING。",
-    "identity_axis_source": "inputs/identity_metric_space.json が正本（domains/identity_domain_run9_v1.json の metric_space_sha としてpin済み）。distance/calibration/confuser_controlの式・閾値は 本manifestで重複定義しない。",
-    "scope_statement": "本manifestが定義するのは何を鳴らすか（score cells + render契約 + take台帳）のみ。どう測るかは対象外——identity軸はinputs/identity_metric_space.json（metric_space_sha としてpin済み）が正本、P4/P5のdevelopment/generalization軸の測定仕様はmeasurement_spec_sha（別欄・PENDINGのまま）が別途凍結する。"
+    "identity_axis_source": "feature/distance定義（feature_extractor/extraction_procedure/identity_feature/distance/confuser_control）とcalibration配下のpreserved_generation_definitions（d_c0_population/d_c1_population/positive_reference_definition/negative_reference_definition、生成手順の定義のみ）はinputs/identity_metric_space.jsonが正本のまま（domains/identity_domain_run9_v1.jsonのmetric_space_shaとしてpin済み・無改変のままimmutability維持）。calibration・閾値・判定規則（freeze_threshold/validity_gates/decision_ruleの各節）は、rev 0.6実行についてinputs/identity_decision_protocol_v0.6.jsonが正本（hypothesis_algebra_shaとしてpin済み、rev 0.6裁定§7「旧calibration/decision ruleをrev 0.6実行についてsupersedeする」がidentity_decision_protocol_v0.6.json#supersede_declaration.superseded_sectionsとして凍結——PR #333第11巡是正前は誤ってidentity_metric_space.json側を指しており、supersede_declaration節はidentity_decision_protocol_v0.6.json側にのみ実在する）。いずれも本manifestで重複定義しない。〔旧文言（PR #333第9巡是正前、rev 0.6 supersedeへの言及を欠いていた）: 「inputs/identity_metric_space.json が正本（domains/identity_domain_run9_v1.json の metric_space_sha としてpin済み）。distance/calibration/confuser_controlの式・閾値は 本manifestで重複定義しない。」〕",
+    "scope_statement": "本manifestが定義するのは何を鳴らすか（score cells + render契約 + take台帳）のみ。どう測るかは対象外——identity軸のfeature/distance生成定義はinputs/identity_metric_space.json（metric_space_shaとしてpin済み・無改変のままimmutability維持）が正本のまま、calibration・閾値・判定規則はrev 0.6実行についてinputs/identity_decision_protocol_v0.6.json（hypothesis_algebra_shaとしてpin済み、rev 0.6裁定§7がsupersede）が正本、P4/P5のdevelopment/generalization軸の測定仕様はmeasurement_spec_sha（別欄・PENDINGのまま）が別途凍結する。〔旧文言（PR #333第9巡是正前、rev 0.6 supersedeへの言及を欠いていた）: 「本manifestが定義するのは何を鳴らすか（score cells + render契約 + take台帳）のみ。どう測るかは対象外——identity軸はinputs/identity_metric_space.json（metric_space_sha としてpin済み）が正本、P4/P5のdevelopment/generalization軸の測定仕様はmeasurement_spec_sha（別欄・PENDINGのまま）が別途凍結する。」〕"
   },
   "note": "RUN9-PROBE-1: DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §15 Probe Set (P0-P5) の実体manifest。score cellsはmanifest内にself-contained直書きし、新規score moduleは作らない。JSON→ScoreNote変換ハーネスはmachine-dependentの別フェーズで本manifest の対象外。書式は決定論pretty（ensure_ascii=False, indent=2, sort_keys=True + 末尾改行）——founders/*.jsonと同一規約。PR #322 Codexレビュー第1巡2件（採用）反映済み: Fix 1 = render_contract.harness_runtime_seed_policy新設（宣言harnessが実消費するruntime seed=42を明示、performance_seed=909001はgenome-policy層と精密化。gate_synth.py自体の改変は不採用）。Fix 2 = P1-P3のfactor_levelsを{axes: {...}}構造へ再編し、各cellへlevelsメタデータを付与、factor_levels⇔cellの双方向対応をvalidate_probe_manifest()が機械検証する。第2-4巡（validatorロジック中心、manifestバイト変更を伴う分のみ記載）: Fix 7 = P2 filler tuple凍結（medial_filler_pitch_midi追加）。第5巡: Fix 11 = P2のphrase_dynamics軸を操作可能軸表から除去し、対応cellをdiagnostic_role（levelsとは独立のcell属性）へ再分類、P2 roleへEnergy計器能力の境界宣言を追記（energy制御の新規発明は不採用——計器能力の正直な境界宣言を採った）。",
   "probes": [
@@ -869,15 +869,19 @@
       "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
       "contract_field_ref": "RUN9_CONTRACT.yaml#interventions.c0_replay_takes_per_founder",
       "description": "P0 cellの同条件再render。RUN9_CONTRACT.yaml interventions.c0_replay_takes_per_founder （PINNED、founder 1体あたりn=20）本。",
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#c0_determinism_attestation",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population",
-      "new_render_required": true
+      "new_render_required": true,
+      "superseded_calibration_note": "identity_metric_space_ref（calibration.freeze_threshold.d_c0_population）はrev 0.6裁定§7によりD_C0(F)の判定規則としてsupersede済み——population定義（founder-pooling・自己比較）自体は参照により有効のまま履歴保持するが、判定規則（全take exact-replay要求・D_C0(F)=0×20期待・不一致時の停止分類）の現行正本はidentity_decision_protocol_ref（c0_determinism_attestation）を参照する。"
     },
     "c1_sham_takes": {
       "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
       "contract_field_ref": "RUN9_CONTRACT.yaml#interventions.c1_sham_takes_per_founder",
       "description": "P0 cell + ZERO_CONTROLPROFILE_SHAM条件でのrender。RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder（PINNED、founder 1体あたりn=20）本。",
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#c1_sham_attestation",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.c1_gate.d_c1_population",
-      "new_render_required": true
+      "new_render_required": true,
+      "superseded_calibration_note": "identity_metric_space_ref（calibration.validity_gates.c1_gate.d_c1_population）はrev 0.6裁定§7によりD_C1(F)の判定規則としてsupersede済み——判定規則（C0/referenceとの完全一致要求・D_C1(F)=0×20期待・非ゼロ時のC1_SHAM_EFFECT_DETECTED分類）の現行正本はidentity_decision_protocol_ref（c1_sham_attestation）を参照する。"
     },
     "evaluated_renders": {
       "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
@@ -887,8 +891,10 @@
     },
     "negative_reference": {
       "description": "新規render不要。他方founderのreference_render（P0 cellのbirth probe時初回render）をそのまま参照する（negative_reference_gate.negative_reference_definitionの定義どおり）。",
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#birth_identity_separation.negative_reference_gate_note",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.negative_reference_gate.negative_reference_definition",
-      "new_render_required": false
+      "new_render_required": false,
+      "superseded_calibration_note": "identity_metric_space_ref（calibration.validity_gates.negative_reference_gate.negative_reference_definition）はrev 0.6裁定§7によりsupersede済み——negative reference gateはbirth_identity_separationのd12を対称参照する方式へ切替わり、独立証拠として二重計上しない（裁定§4）。判定方針の現行正本はidentity_decision_protocol_ref（birth_identity_separation.negative_reference_gate_note）を参照する。"
     },
     "pjs_reference": {
       "description": "新規render不要。RUN9側でのrenderではなく、inputs/identity_metric_space.json confuser_control.pjs_reference_definitionが定める決定論的PJSコーパス集約（_song.wavペアの辞書順集約）から導出する。",
@@ -898,8 +904,10 @@
     "positive_reference": {
       "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
       "description": "P0 cellのbirth probe時専用追加render1本。reference_renderともC0の20テイクいずれとも別の独立テイク（positive_reference_gate.positive_reference_definitionの定義どおり）。",
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#positive_reference_audit",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.positive_reference_gate.positive_reference_definition",
-      "new_render_required": true
+      "new_render_required": true,
+      "superseded_calibration_note": "identity_metric_space_ref（calibration.validity_gates.positive_reference_gate.positive_reference_definition）はrev 0.6裁定§7により「独立した閾値校正標本としては扱わない」判定方針としてsupersede済み——定義自体（reference/C0双方と別の独立テイク1本）は参照により有効のまま履歴保持するが、判定方針の現行正本はidentity_decision_protocol_ref（positive_reference_audit）を参照する。"
     },
     "reference_render": {
       "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",

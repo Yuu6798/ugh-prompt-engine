@@ -161,6 +161,33 @@
 # AF0 unrealized mass 明記義務・非主張3点・Birth Identity Separation
 # Gate の別途実行は expected_speaker_map_sha 欄参照。
 #
+# RUN9-L0-HARNESS-3c rev 0.6（2026-08-27、第2 PR フェーズ1）: User 裁定
+# 「RUN9 User裁定 — Identity Calibration Degeneracy / design_revision 0.6」
+# （DESIGN_RUN9_REVISION_0.6.md、repo 内収載
+# USER_ADJUDICATION_20260827_IDENTITY_REV06.txt）の採用により design_
+# revision 0.5 → 0.6。既存の render replay byte 決定論実測（RUN9-L0-
+# HARNESS-3a）により、現行 identity_metric_space.json calibration 規則の
+# theta_cal(F)=P95(D_C0(F)) が C0 母集団全ゼロの下で解析的に 0 へ退化する
+# ことが Birth Probe 実行前に確定したため行う pre-run design correction
+# （観測後の救済ではない、裁定前文逐語）。Birth Identity Separation だけ
+# でなく学習後 Identity 保持判定を含む Identity decision protocol 全体を
+# 新規 `inputs/identity_decision_protocol_v0.6.json`
+# （`run9-identity-decision-protocol/0.6`）として再事前登録する——同
+# protocol は identity_metric_space.json の feature/distance 定義（無改変）
+# を参照した上で、同ファイルの calibration 節（freeze_threshold/
+# validity_gates/decision_rule）のみを rev 0.6 実行について supersede
+# する。裁定逐語「design_revisionを0.6へ上げ...発行済みFounder Genome、
+# coords、genome_id、speaker map、TRI_CROSSOVER/1.0は変更しない」に従い、
+# 契約レベルの design_revision を実際に昇格する（本欄・run9_schema.
+# DESIGN_REVISION 定数・design_revision_doc_sha256 pin の三箇所を同時に
+# 更新——rev 0.2→0.3→0.4→0.5 と同じ手順）。旧 "0.1"〜"0.5" 形式の contract
+# は run9_schema.DESIGN_REVISION の凍結値照合により意図どおり fail-closed
+# 拒否される。同 protocol の raw byte sha256 を hypothesis_algebra_sha へ
+# PINNED 化する（下記同欄参照）。**本改訂（第2 PR）は上記の事前登録一式の
+# 実装までを範囲とし、Birth Gate の実行自体は含まない**（裁定 §8: 実行順
+# の区切りどおり——C0/C1/positive reference/d12/PJS confuser/post-learning
+# retention のいずれも本 PR 時点では未実測）。
+#
 # 各欄の pin 状況は {value, status, reason, source?} 形（VG_FOUNDRY の
 # debt/RUN_CONTRACT_SCHEMA_v1.json pinned_field 慣習に倣うが独立実装 —
 # run9_schema.py 参照）。status ∈ {PINNED, PENDING, BLOCKED}。
@@ -172,7 +199,7 @@
 schema: voicegenesis-run-contract/1.0
 run_id: RUN9
 experiment_id: VG-R9-DUAL-FOUNDER-PJS
-design_revision: "0.5"
+design_revision: "0.6"
 design_doc: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
 
 # rev 0.3 改訂A（DESIGN_RUN9_REVISION_0.3.md、PoR §1/§3/§4）: 旧
@@ -316,10 +343,21 @@ design_doc_sha256:
 # がないことを確認済み（詳細は `HARNESS3A_SPEAKER_MAP_RECORD.md` 第8巡
 # 追記参照）。旧値（PR #328 第1巡3件対応後）は履歴として保持する:
 #   15fbe4b6695f9d92dbfb847c203dc1047562993b17d9572481669a5c12bb61f8
+#
+# RUN9-L0-HARNESS-3c（2026-08-27、design_revision 0.5 → 0.6）: User 裁定
+# 「RUN9 User裁定 — Identity Calibration Degeneracy / design_revision 0.6」
+# （repo 内収載 USER_ADJUDICATION_20260827_IDENTITY_REV06.txt、sha256 =
+# 43c7e71cd3bcb7cf3840c67a18e4a4c35a0259b9e04b1335868c33e925420db1）の
+# 採用 + Identity decision protocol 全体の再事前登録（C0/C1 exact-replay
+# attestation 化・Birth Identity Separation の d12 machine feature 判定
+# 化・学習後 Identity 保持のマージン方式 m_other/m_pjs 化）を反映した
+# rev 0.6 の sha256 を pin する。rev 0.5 文書自体は無改変のまま存続（旧値
+# 095ce77147e897473e8d87b474159c2ff4fdeb6684356cc03649f99a603cb2a9 は
+# 履歴として append-only 保持）。
 design_revision_doc_sha256:
-  value: "095ce77147e897473e8d87b474159c2ff4fdeb6684356cc03649f99a603cb2a9"
+  value: "40f027c247c380af57b767963af758fde0e4fa7a279f5fa68a8b7e55d10956af"
   status: PINNED
-  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.5.md
+  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.6.md
 
 # --- por_adjudication_sha256: PoR メモ（POR_CONCEPT_ADJUDICATION_20260824.txt）
 # の実バイト sha256（PINNED）。design_doc_sha256 と同一規約（ファイル実
@@ -370,10 +408,26 @@ repository_commit_sha:
 # manifest sha/c1 take 数がディスク正典 RUN9_CONTRACT.yaml の各 PINNED
 # 値と一致しない場合 fail-closed 拒否する）が検証・消費する。
 dataset_manifest_sha:
-  value: "ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448"
+  value: "525ebad0d7d444157214f01be9a03f72b6efccdf59e138bb2aca5b8e4f5fb3f1"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/dataset_split_manifest.json
   reason: >-
+    〔repin 履歴〕 PR #333 第11巡指摘2（P2、採用）の probe_manifest_sha
+    repin に追随: identity_probe.probe_manifest_sha 転記値
+    （load_pinned_dataset_split_manifest() が RUN9_CONTRACT.yaml
+    probe_manifest_sha PINNED 値と cross-check する）を新値へ更新した。
+    第11巡の repin は probe_manifest.json measurement_boundary.
+    identity_axis_source の誤 prefix 参照（identity_metric_space.json#
+    supersede_declaration... → identity_decision_protocol_v0.6.json#
+    supersede_declaration...）是正であり、他フィールドへの新規キー挿入は
+    伴わないため pjs_song_based_probe_non_adoption_citation /
+    c1_sham_takes.description への行番号引用（P4 role 787行、
+    c1_sham_takes description 880行）は不変。旧値（履歴として保持）:
+    "43de511f2711fc9d559e8d21461a5b00c3a99ddc03b83455d577039e7952ddd6"
+    〔履歴（さらに旧、PR #333 第9巡指摘による repin）〕:
+    "4138639209caabf08465141681756e3b0bc7be4167516ea9bd93b6d276456cf4"
+    〔履歴（さらに旧、PR #333 第2巡指摘1による repin）〕:
+    "ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448"
     〔履歴: 旧 PENDING 理由（RUN9-L0-PIN-2 で解消済み）——
     TRAIN/VALIDATION/SEALED HOLDOUT/IDENTITY PROBE split の manifest が未確定。
     rights manifest は起草済み（inputs/rights_manifest.json、schema
@@ -3359,8 +3413,46 @@ learning_recipe_sha:
 # 2 Fix 合算で manifest バイトが変わったため sha256 を再計算した。旧値
 # （履歴として保持）:
 # "98d1b2b01abcb79eae82a26a7b0f2af834b58562d0ba3131b41db9cb1c7c5b9e"
+# PR #333 第2巡指摘1（P1、採用）で repin（旧値、履歴として保持）:
+# "c6c4b862e775ce99e579ba8e4574453ae86048fa801c9b4e1265743021475534"
+# — revision_bridge の C0/C1/positive/negative 4エントリが、rev 0.6 裁定
+# §7 により supersede 済みの identity_metric_space.json calibration 節
+# （freeze_threshold/validity_gates）を判定規則の実参照として指したままに
+# なっていた欠陥の是正。各エントリへ新規 identity_decision_protocol_ref
+# （判定規則の現行正本、inputs/identity_decision_protocol_v0.6.json の
+# 対応節を指す）+ superseded_calibration_note（supersede 済みであることの
+# 明記）を追加した——identity_metric_space_ref 自体は履歴参照として無改変
+# のまま保持する（旧参照を保持する履歴残置様式。probe の生成定義——cell_
+# ref/contract_field_ref/new_render_required 等——は supersede 対象外の
+# ため無改変で有効）。
+# PR #333 第9巡指摘（P1、採用）で repin（旧値、履歴として保持）:
+# "60adeb93b6ca920bdbc590f24ffdb62f68bd12a387e2543361d88954fb1932fe"
+# — measurement_boundary.identity_axis_source/scope_statement が「calibration・
+# 閾値・判定規則の正本は identity_metric_space.json」と現在形で宣言したまま
+# であり、rev 0.6 裁定 §7 による identity_decision_protocol_v0.6.json への
+# supersede に更新されていなかった欠陥の是正。両文言を「feature/distance定義
+# + preserved_generation_definitions = identity_metric_space.json が正本（無改変・
+# immutability）／calibration・閾値・判定規則 = identity_decision_protocol_v0.6.json
+# が rev 0.6 実行について正本（supersede、裁定§7）」の二元宣言へ更新し、
+# 旧文言は各フィールド内に履歴残置した。
+# PR #333 第11巡指摘2（P2、採用）で repin（旧値、履歴として保持）:
+# "c121243b9679ceae88322a43d1c804c2c5eddb4d25413c09e6a7d737033ea095"
+# — measurement_boundary.identity_axis_source の正典宣言が
+# `identity_metric_space.json#supersede_declaration.superseded_sections`
+# という存在しない節参照（`supersede_declaration` は
+# `identity_decision_protocol_v0.6.json` 側にのみ実在し、
+# `identity_metric_space.json` は本改訂で無改変のため同節を持たない）を
+# 含んでいた欠陥の是正。参照 prefix を
+# `identity_decision_protocol_v0.6.json#supersede_declaration.superseded_sections`
+# へ訂正し、旧誤参照が誤りだった経緯を同フィールド内に履歴残置した——
+# 第9巡の宣言文自身が誤参照を導入していた（是正時に prefix を精査せず
+# `identity_metric_space.json#` を踏襲した）ため、本 repin であわせて
+# 正直に記録した。第10巡のマーカー検査（`_REV06_SUPERSEDE_DECLARATION_
+# MARKERS` による汎用部分文字列検査）はこの誤 prefix を捕捉できなかった
+# ——`run9_schema.py` へ正確な参照文字列の逐語検査を追加した（本 PR 同時
+# 反映、manifest バイト変更を伴わないコード変更）。
 probe_manifest_sha:
-  value: "c6c4b862e775ce99e579ba8e4574453ae86048fa801c9b4e1265743021475534"
+  value: "3acefc13121b6414ffec661e6b55ad5ae15c32992af402aac951c5a4d78a3cba"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 
@@ -3384,6 +3476,23 @@ probe_manifest_sha:
 # PINNED 化は正典間で矛盾していた）で PENDING へ復帰。manifest/validator/
 # loader 自体は撤去せず事前配線のまま維持（NOT_YET_IMPLEMENTED の自己申告
 # は正直な状態表現であり撤回対象ではない）〕
+# 〔PR #333 第2巡指摘1（P1、採用）: pin 状態は PENDING のまま変更しないが、
+# inputs/measurement_spec_manifest.json の identity_axis_metric_paths
+# 4エントリ（c0_replay_takes/c1_sham_takes/positive_reference/
+# negative_reference）へ identity_decision_protocol_ref を追加し、
+# probe_manifest.json revision_bridge との整合を是正した（同 bridge が
+# rev 0.6 で supersede 済みの calibration 節を判定規則の実参照として指し
+# たままだった欠陥——probe_manifest_sha repin 参照）。PENDING のため
+# repin 不要、本文是正のみ〕
+# 〔PR #333 第9巡指摘（P1、採用）: pin 状態は PENDING のまま変更しないが、
+# scope_note が「identity 軸の距離・校正・閾値の正本は identity_metric_
+# space.json」と現在形で宣言したまま rev 0.6 supersede に更新されていな
+# かった欠陥を是正——feature/distance生成定義 = identity_metric_space.json
+# が正本（無改変・immutability）／calibration・閾値・判定規則 =
+# identity_decision_protocol_v0.6.json が rev 0.6 実行について正本
+# （supersede、裁定§7）の二元宣言へ更新し、旧文言は scope_note 内に履歴
+# 残置した（probe_manifest.json measurement_boundary と同型是正）。PENDING
+# のため repin 不要、本文是正のみ〕
 measurement_spec_sha:
   value: null
   status: PENDING
@@ -3395,10 +3504,274 @@ measurement_spec_sha:
     実装時（VG-L0 ハーネス）。〔履歴: PIN-1 で一時 PINNED 化 → 第2巡指摘
     （偽 READY 経路 + probe manifest 正典矛盾）で PENDING へ復帰〕
 
+# RUN9-L0-HARNESS-3c（2026-08-27、design_revision 0.6）: User 裁定「RUN9
+# User裁定 — Identity Calibration Degeneracy / design_revision 0.6」
+# 裁定逐語「同protocolのraw SHA256をhypothesis_algebra_shaへPINNEDする」
+# （§7）に従い、本欄の用途を H1-H6 閾値校正欄から rev 0.6 Identity
+# decision protocol の pin 欄へ確定した。新規
+# `inputs/identity_decision_protocol_v0.6.json`（schema `run9-identity-
+# decision-protocol/0.6`）の raw byte sha256 を PINNED 化する——同
+# protocol は C0/C1 exact-replay attestation・positive reference audit・
+# Birth Identity Separation の d12 machine feature 判定・PJS confuser
+# 距離記録・学習後 Identity 保持のマージン方式（m_other/m_pjs）を再事前
+# 登録する（DESIGN_RUN9_REVISION_0.6.md 参照）。
+# 〔履歴: 旧 reason（rev 0.5 まで、H1-H6 閾値校正欄としての用途）——
+# 「H1-H6 の閾値（δtarget / εk）校正が未実施（positive / negative
+# control 未実施）。」本欄は当時 §18.1/§18.2 の LCB_95(Δtarget,i) >
+# δtarget・LCB_95(Δk,i) >= -εk の δtarget/εk 校正結果を PIN する想定
+# だったが、rev 0.6 裁定により Identity decision protocol の pin 欄へ
+# 用途確定し、H1-H6 閾値校正は本欄の対象から外れた（H1-H6 自体の要否は
+# rev 0.6 の対象外——別途の設計判断が必要な場合は別欄・別 design_revision
+# で扱う）。〕
+# 【repin 履歴（append-only）】
+# - RUN9-L0-HARNESS-3c rev 0.6（2026-08-27、値
+#   967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3）:
+#   初回 PINNED 化（上記コメント参照）。
+# - PR #333 Codex bot レビュー第1巡指摘3（2026-08-28、P2、採用、値
+#   304e72376e30e8e3974485d393c1f56a7256017588bc877c2be15f080291fb77 へ
+#   repin）: `birth_identity_separation` へ `invalid_or_nonfinite_feature`
+#   分岐（新定数 `IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_
+#   NONFINITE_FEATURE`）を追加した——established/not_established のいずれ
+#   の条件にも該当しない invalid/non-finite feature の未登録分岐を埋める
+#   （d12=0 の feature collapse とは区別される測定/実装失敗系の凍結、
+#   裁定§4逆条件 + 裁定§9 の機械符号化。新規則の発明ではない）。
+# - PR #333 Codex bot レビュー第2巡指摘2（2026-08-28、P2、採用、値
+#   cde8b003ff88b78693c81058e3a80ec4fbfe546df7e3f8e61812c8d6f61c67c1 へ
+#   repin）: `post_learning_identity_retention` へ `invalid_or_nonfinite_
+#   feature` 分岐（新定数 `IDENTITY_PROTOCOL_POST_LEARNING_INVALID_OR_
+#   NONFINITE_FEATURE`）を追加した——stable/shifted いずれの条件（m_other/
+#   m_pjs が有限実数であることが前提）にも該当しない invalid/non-finite
+#   feature の未登録分岐を埋める（birth_identity_separation.invalid_or_
+#   nonfinite_feature と同型、裁定§9 の機械符号化。新規則の発明ではない）。
+# - PR #333 Codex bot レビュー第3巡指摘1（2026-08-28、P1、採用、値
+#   7525cd5ef484bfd94a234f25b44a48368d2f1607f334de1b868863c1bd133f4a へ
+#   repin）: `supersede_declaration` へ `preserved_generation_definitions`
+#   （+ `preserved_generation_definitions_note`）を追加した——
+#   superseded_sections が calibration.freeze_threshold/validity_gates を
+#   節ごと supersede すると宣言する一方、bridge の superseded_calibration_
+#   note が同じ節配下の生成定義（d_c0_population 等）を「参照により有効の
+#   まま履歴保持する」と個別に宣言しており、supersede 宣言（節丸ごと）と
+#   依存（節配下の生成定義は今も有効）が同時成立して Gate 入力生成手順の
+#   正本が曖昧だった欠陥の是正（新規則の発明ではなく、supersede 宣言の
+#   対象範囲を threshold/decision-rule 意味論のみへ機械可読に凍結し直す
+#   スコープ明確化）。
+# - PR #333 Codex bot レビュー第4巡指摘1/2（2026-08-28、P1×2、採用、値
+#   f626e309d187177800d33afabe6c81537faa3c59a5432e080f88e0d4854f1778 へ
+#   repin）: 新規節 `birth_gate_aggregate_rule` を追加した（指摘1）——
+#   `birth_identity_separation.established`（d12>0 → ESTABLISHED）と
+#   `pjs_confuser.on_zero`（PJS confuser距離=0 → NOT_ESTABLISHED）が独立に
+#   定義され合成条件・優先順が未定義だった穴を埋める、Birth Gate 全体の
+#   ESTABLISHED 連言条件（既存4分岐は無改変のまま conjunct_refs で参照の
+#   み）。あわせて `positive_reference_audit` へ `on_mismatch`（WAVバイト
+#   不一致→DETERMINISM_CONTRACT_BROKEN／バイト一致だがdistance≠0または
+#   feature計算不一致→IMPLEMENTATION_FAILURE、いずれも c0_determinism_
+#   attestation.on_mismatch と同一語彙の再利用）を追加した（指摘2）——
+#   従来は要求のみで不一致時の停止先を持たなかった。いずれも新規則の
+#   発明ではなく裁定§4/§5/§9・§3+§9 の機械符号化。
+# - PR #333 Codex bot レビュー第5巡指摘1/2/3（2026-08-28、P1×3、採用、値
+#   2e47c7d6f093add787159d1a6325b70d308146280a3e8f40abdc08e1b10e59cd へ
+#   repin）: 指摘1 — 第4巡実装の `conjunct_refs`（4項目）が
+#   `birth_identity_separation.established`/`invalid_or_nonfinite_feature`
+#   と `pjs_confuser.on_positive`/`on_zero` という互いに排他な2組を「全項
+#   成立」と要求してしまい、文字通りの消費者は決して ESTABLISHED になれ
+#   ない欠陥だった（第4巡実装の欠陥）。`conjunct_refs` を成功述語のみ
+#   （`birth_identity_separation.established`/`pjs_confuser.on_positive`
+#   の2項目）へ限定し直し、失敗分岐は新設
+#   `outcome_detail_priority.failure_refs`（3項目、`order` と同順）へ
+#   分離した。指摘2 — `c1_sham_attestation` へ `on_wav_byte_mismatch`
+#   （C1 render の WAV バイトが不一致だが identity feature は一致
+#   （D_C1(F)=0）の具体的経路 → 既存定数 `IDENTITY_PROTOCOL_C0_RENDER_
+#   MISMATCH_OUTCOME` = `DETERMINISM_CONTRACT_BROKEN` を再利用）を新設
+#   した——C0/positive_reference_audit が feature-level/byte-level を分離
+#   しているのに C1 だけ未分岐だった穴の是正。指摘3 — 新規節
+#   `birth_gate_overall_pass` を追加し、Birth Gate 判定を二層へ再構成
+#   した: `birth_gate_aggregate_rule`（identity_establishment 層、BIRTH
+#   ラベルの ESTABLISHED/NOT_ESTABLISHED を決める）と本節（overall PASS
+#   層、C0/C1/positive reference の exact-replay 監査停止条件を含めて
+#   learning recipe freeze / 学習実行へ進む可否を決める）——従来は
+#   `birth_gate_aggregate_rule` の「必要十分条件」が validity/d12/PJS の
+#   みで exact-replay 監査を含まず、監査失敗と ESTABLISHED が同時成立し
+#   得た。`birth_gate_aggregate_rule` へ `identity_establishment_scope_
+#   note` を新設し、「必要十分」の文言を identity_establishment 層限定と
+#   明記した。3件とも新規則の発明ではなく、裁定§4/§5/§9・§2/§9・§8 の
+#   機械符号化——既存 established/invalid_or_nonfinite_feature/
+#   not_established/on_positive/on_zero/on_nonzero の各分岐は無改変。
+# - PR #333 Codex bot レビュー第6巡指摘1（2026-08-28、P1、採用、値
+#   027e3c04ff2978572e9e43ccfdae7314b2171a67f4536ae6a3a0c537153d1b25 へ
+#   repin）: `c1_sham_attestation` へ `on_feature_mismatch`（C1 render の
+#   WAV bytes が C0/reference と一致し数値距離 D_C1(F)=0 であっても、
+#   serialized identity feature bytes/hash が C0/reference と不一致
+#   （dtype/signed-zero/シリアライズ差等）→ 既存定数 `IDENTITY_PROTOCOL_
+#   C0_FEATURE_MISMATCH_OUTCOME` = `IMPLEMENTATION_FAILURE` を再利用）を
+#   新設した——on_nonzero（D_C1(F)≠0）にも on_wav_byte_mismatch（WAV
+#   bytes 不一致）にも未発火だった経路の是正。C0 側に render 一致だが
+#   feature 計算不一致（feature_computation_mismatch_with_matching_
+#   render → IMPLEMENTATION_FAILURE）という対称分岐が既存であるのに対し
+#   C1 だけが未分岐だった穴。`birth_gate_overall_pass.audit_stop_refs`
+#   へ `c1_sham_attestation.on_feature_mismatch` を追加（4→5項目）。新規則
+#   の発明ではなく裁定§2『C1のWAV bytesおよびidentity featureはC0/
+#   referenceと完全一致することを要求する。』の機械符号化——既存
+#   on_nonzero/on_wav_byte_mismatch の各分岐は無改変。
+# - PR #333 Codex bot レビュー第8巡指摘1/3（2026-08-28、P2×2、採用、値
+#   cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887 へ
+#   repin）: 指摘1 — `c1_sham_attestation` へ `outcome_priority`（`order`/
+#   `detail_by_key`/`order_note`）を新設した——`on_nonzero`（D_C1(F)≠0
+#   全体）と `on_wav_byte_mismatch`（WAV bytes 不一致、`condition` 文言が
+#   D_C1(F)=0 でも該当すると明記するため D_C1(F)≠0 でも該当）が「WAV
+#   bytes 不一致かつ D_C1(F)≠0」という経路で同時該当し得るにも関わらず
+#   優先順・全該当会計が未定義だった穴の是正（`on_feature_mismatch` は
+#   D_C1(F)=0 前提のため `on_nonzero` とは元々排他で対象外）。優先順序
+#   (1) `on_wav_byte_mismatch` → (2) `on_feature_mismatch` → (3)
+#   `on_nonzero`（byte 決定論の破りが最上流の物理的原因のため最優先、
+#   次に feature 決定論、最後に効果検出）。`birth_gate_aggregate_rule.
+#   not_established.outcome_detail_priority` と同型パターン。指摘3 —
+#   `pjs_confuser` へ `invalid_or_nonfinite_distance` 分岐（新定数
+#   `IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_INVALID_OR_
+#   NONFINITE_DISTANCE`）を追加した——`on_positive`/`on_zero` のいずれの
+#   条件にも該当しない distance invalid/non-finite の未登録分岐を埋める
+#   （`birth_identity_separation.invalid_or_nonfinite_feature` と同型）。
+#   `birth_gate_aggregate_rule.not_established.outcome_detail_priority`
+#   の `order`/`failure_refs`/`detail_by_key` を3項目→4項目へ拡張し、
+#   新設 `invalid_or_nonfinite_pjs_distance` を validity 系（(1)）の直後・
+#   collapse 系（(3)(4)）の前へ位置付けた。両件とも新規則の発明ではなく
+#   裁定§2/§5/§9 の機械符号化——既存 `on_nonzero`/`on_wav_byte_mismatch`/
+#   `on_feature_mismatch`/`on_positive`/`on_zero` の各分岐は無改変。
+# - PR #333 Codex bot レビュー第11巡指摘1（2026-08-28、P1、採用、値
+#   c10e4701677a285f36cb99823c83388da067a54e838f27c066c5b7e8c1110e03 へ
+#   repin）: `birth_gate_overall_pass` へ新規節 `completion_evidence_
+#   requirement`（`audit_completeness_refs`/`condition`/`gate_effect`/
+#   `note`/`on_incomplete`/`outcome` の6キー）を追加した——従来の
+#   `definition`（identity_establishment=ESTABLISHED ∧ `audit_stop_refs`
+#   列挙の停止条件非該当）は監査の「不一致」しか検出できず、監査結果
+#   そのものの「欠落」（C0/C1 の部分 render・結果未発行・positive 監査
+#   未実行）は不一致述語のいずれにも該当しないため無音のまま overall
+#   PASS へ落ち得た穴の是正（新設節が overall PASS の第3の連言項として
+#   completeness を closed-world に要求する）。`definition` 文言へ本節
+#   への言及を追記した。新規則の発明ではなく裁定§1/§2/§3 の 20 takes・
+#   positive reference 監査要求 + §9 fail-closed 原則の機械符号化——
+#   既存 `audit_stop_refs`（不一致検出、5節）は無改変のまま、本節は
+#   それとは独立の完了証跡層として追加する。`on_incomplete` の outcome_
+#   detail 定数 `IDENTITY_PROTOCOL_AUDIT_INCOMPLETE` は新設するが、
+#   その `outcome` は既存 `IMPLEMENTATION_FAILURE`（FAILURE_CLASSES 既存
+#   語彙、C0 側 `feature_computation_mismatch_with_matching_render` と
+#   同一語彙）を再利用し、`IDENTITY_OUTCOMES`/`FAILURE_CLASSES` 等の
+#   既存 frozen tuple へは値を追加しない。
+# - PR #333 Codex bot レビュー第13巡指摘（2026-08-28、P1、上限到達後——
+#   CLAUDE.md「bot レビュー対応の運用」3分類のうち『致命的バグ（偽成功
+#   経路）』の新規具体経路として採用、値
+#   e536845d424a3dc32b9f6e61f0e5028ffc7b0f65cea1e8da1fedb129699b6e18 へ
+#   repin）: `birth_gate_overall_pass.completion_evidence_requirement.
+#   condition` のうち `positive_reference_audit` 項が「実行され結果が
+#   記録済みであること」という単数表現に留まり、`c0_determinism_
+#   attestation`/`c1_sham_attestation` が備える両 founder（R9F-01/
+#   R9F-02）ごとの明示列挙を欠いていた穴の是正——
+#   `inputs/identity_metric_space.json#calibration.validity_gates.
+#   positive_reference_gate.positive_reference_definition`（同ファイル
+#   行101）は positive_reference(F) を founder ごとに定義しており、
+#   文字通りの消費者は R9F-01 のみの positive 監査（R9F-02 分は省略）
+#   でも本節の条件を満たしたと解釈でき、その場合でも
+#   identity_establishment=ESTABLISHED かつ audit_stop_refs 非該当なら
+#   overall PASS へ到達し学習が進行し得た（偽成功経路）。condition を
+#   『両 founder（R9F-01/R9F-02）それぞれの positive_reference(F) 監査が
+#   実行され記録済み』の閉集合列挙へ改訂し、c0/c1 項と同型の per-founder
+#   様式に揃えた——裁定§3の founder 単位（§4/§6 と同粒度）での機械符号化
+#   であり、新規則の発明ではない。片 founder のみの欠落は改訂後も既存の
+#   `on_incomplete`（`IDENTITY_PROTOCOL_AUDIT_INCOMPLETE`）/`outcome`
+#   （`IMPLEMENTATION_FAILURE`、いずれも無改変）へ該当し、新規 outcome
+#   語彙は追加していない。`audit_completeness_refs`（frozen tuple）へは
+#   値を追加せず、`condition` プローズの改訂のみに限定した。
+#   `c0_determinism_attestation`/`c1_sham_attestation` 側は既に
+#   per-founder 明示列挙を備えており同型の曖昧さは無い（総点検、
+#   残余ゼロ）。
+# - PR #333 Codex bot レビュー第16巡指摘1（2026-08-28、P1、上限到達後——
+#   CLAUDE.md「bot レビュー対応の運用」3分類のうち『致命的バグ（偽成功
+#   経路）』の新規具体経路として採用、値
+#   f3caa566718f435d5fcf5f7408ed085194dea73b9f276d5d1e1576f498f4e04e へ
+#   repin）: `birth_identity_separation.established.condition` は「両
+#   founder の feature が valid/finite かつ d12 > 0」のみを要求し、d12
+#   自体の finite 性を要求していなかった——両 feature が valid/finite
+#   であっても Euclidean 距離計算の overflow 等で d12=+inf となる場合、
+#   比較演算子上は d12 > 0 が真となるため ESTABLISHED_BY_MACHINE_FEATURE
+#   へ到達し得た（偽成功経路）。`pjs_confuser` 側には同型の
+#   `invalid_or_nonfinite_distance` 分岐が第8巡指摘3で既設だったのに
+#   対し、d12 側にはこの被覆漏れが残っていた非対称——第8巡の値域被覆表
+#   が導出値 d12 自体の非有限性を見落としていたことを本 repin が正直に
+#   記録する。`birth_identity_separation` へ `invalid_or_nonfinite_d12`
+#   分岐（新定数 `IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_
+#   NONFINITE_D12`）を新設し、`established.condition`/`birth_gate_
+#   aggregate_rule.established.condition`/`.not_established.condition`/
+#   `.necessary_and_sufficient_condition_for_established` へ d12 の
+#   finite 要求を反映した。`outcome_detail_priority` の `order`/
+#   `failure_refs`/`detail_by_key` を4項目→5項目へ拡張し、新設
+#   `invalid_or_nonfinite_d12` を validity 系第1項（feature invalid）の
+#   直後・PJS confuser distance validity（第8巡新設分）の前へ位置付けた
+#   ——d12 は同じ birth_identity_separation 節の feature から直接導出
+#   されるスカラー値であり、別の測定対象（founder r0 と PJS reference
+#   間の距離）である PJS confuser distance よりも feature validity に
+#   近い依存関係にあるため。他の導出値（post_learning_identity_
+#   retention の m_other/m_pjs）は第2巡指摘2で invalid/non-finite 分岐
+#   （`IDENTITY_PROTOCOL_POST_LEARNING_INVALID_OR_NONFINITE_FEATURE`）が
+#   既設であることを再点検し、同型の被覆漏れが無いことを確認した（残余
+#   ゼロ）。新規則の発明ではなく裁定§4『両featureがvalid/finiteであり、
+#   d12 > 0の場合のみ、BIRTH = ESTABLISHED_BY_MACHINE_FEATURE』が黙示的
+#   に前提とする「d12 自体が評価可能な有限の実数値であること」+ 裁定§9
+#   fail-closed 原則の機械符号化——既存 `established`/`not_established`/
+#   `invalid_or_nonfinite_feature`/`pjs_confuser.*` の各分岐は無改変。
 hypothesis_algebra_sha:
+  value: "f3caa566718f435d5fcf5f7408ed085194dea73b9f276d5d1e1576f498f4e04e"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json
+  reason: >-
+    rev 0.6 裁定 §7「同protocolのraw SHA256をhypothesis_algebra_shaへ
+    PINNEDする」に基づき pin。値は inputs/identity_decision_protocol_
+    v0.6.json の実バイト sha256（load_pinned_identity_decision_protocol()
+    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第16巡
+    指摘1（P1、上限到達後、採用）で `birth_identity_separation` へ
+    `invalid_or_nonfinite_d12` 分岐を新設し、d12 の finite 性要求を
+    established 条件へ追加したため repin（上記【repin 履歴】参照）。
+    旧値（PR #333 第13巡指摘、履歴として保持）:
+    "e536845d424a3dc32b9f6e61f0e5028ffc7b0f65cea1e8da1fedb129699b6e18"
+    〔以下、第13巡時点の reason 原文——旧repin の理由記述として履歴保持〕
+    PR #333 第13巡指摘（P1、上限到達後、採用）で `birth_gate_overall_pass.
+    completion_evidence_requirement.condition` の positive_reference_
+    audit 項を per-founder 閉集合列挙へ改訂したため repin（上記
+    【repin 履歴】参照）。旧値（PR #333 第11巡指摘1、履歴として保持）:
+    "c10e4701677a285f36cb99823c83388da067a54e838f27c066c5b7e8c1110e03"
+    〔以下、第11巡時点の reason 原文——旧repin の理由記述として履歴保持〕
+    PR #333 第11巡指摘1（P1、採用）で `birth_gate_overall_pass.
+    completion_evidence_requirement` 新設のため repin（上記【repin
+    履歴】参照）。旧値（PR #333 第8巡指摘1/3、履歴として保持）:
+    "cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887"
+    〔以下、第8巡時点の reason 原文——旧repin の理由記述として履歴保持〕
+    第8巡指摘1/3（P2×2、採用）で `c1_sham_attestation.outcome_priority` +
+    `pjs_confuser.invalid_or_nonfinite_distance` 新設のため repin（上記
+    【repin 履歴】参照）。
+
+# PR #333 Codex bot レビュー第1巡指摘1（P1、採用）新設: hypothesis_algebra_
+# sha が rev 0.6 裁定 §7 で identity decision protocol の pin へ用途確定
+# したため、design §18（v0.1 923-965行、LCB_95(Δtarget,i) > δtarget /
+# LCB_95(Δk,i) >= -εk）/ inputs/failure_abort_criteria.json rule 14・16
+# （machine_promotion_condition が「hypothesis_algebra_sha の schema/
+# validator（δtarget/εk 校正ロジック含む）が実装され、positive/negative
+# control からの実測校正が完了した時点で MACHINE へ昇格する」と明記——
+# rev 0.6 supersede の対象は identity_decision_protocol の calibration/
+# decision_rule 節のみで H1-H6 の δtarget/εk 校正要求は supersede されて
+# いない、grep 確認済み）の H1–H6 δtarget/εk 校正前提を追跡する pin を
+# 分離新設。校正の実施・凍結まで PENDING（裁定 §7 の pin 用途確定は不変の
+# まま——hypothesis_algebra_sha 自体は本指摘で変更しない）。
+hypothesis_threshold_calibration_sha:
   value: null
   status: PENDING
-  reason: H1-H6 の閾値（δtarget / εk）校正が未実施（positive / negative control 未実施）。
+  reason: >-
+    DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §18.1 Target
+    Skill Gain（δtarget、`δtargetはpositive/negative controlから凍結する。`）
+    / §18.2 Non-Inferiority（εk、対象軸に Identity を含む）の LCB_95 比較式
+    に必要な δtarget/εk の実測校正（positive/negative control からの校正）
+    が未実施。校正ロジック・schema/validator も repo に未実装（Group D、
+    grep 確認: 該当なし）。failure_abort_criteria.json rule 14/16 の
+    machine_promotion_condition が要求する実装・実測校正が完了するまで
+    PENDING のまま——H1-H6 自体の要否は rev 0.6 の対象外（別途の設計判断が
+    必要な場合は別途 design_revision で扱う）。
 
 # optional 欄（PR #317 Codex bot レビュー第1巡 Fix 1 採用、
 # run9_schema.CONTRACT_OPTIONAL_PIN_FIELDS）: rev 0.3 改訂F により人間
@@ -3696,8 +4069,122 @@ cost_record_sha:
 #   〔履歴〕として rule 本文内に保持、削除しない）。rule_id/enforcement/
 #   verbatim は無改変。分類数・他 rule は無改変（sha256 確認済み）。
 #   バイトが変わったため repin（10世代目）。
+# - RUN9-L0-HARNESS-3c rev 0.6（2026-08-27、design_revision 0.5 → 0.6、値
+#   297dd46aaa8c520238072f93b9d5e18748dbdd31b4a389a4a8d7e48cd70d8cba へ
+#   repin）: 実装前グラウンディング（User 指示）で Birth Gate 関連 rule に
+#   P95/theta_cal(F) 閾値前提の stale 文言がないか確認した結果、2件を
+#   是正した（rule_id/enforcement/verbatim は無改変、分類数も不変
+#   ——MACHINE 1件 / PROCEDURAL 19件）:
+#   (a) rule 7（Birth Identity separation not established）: checkpoint が
+#   参照していた「identity_metric_space.json の distance/calibration
+#   evidence」が rev 0.6 で inputs/identity_decision_protocol_v0.6.json
+#   birth_identity_separation 節（d12>0 machine feature 判定）へ
+#   supersede されたことを追記。machine_promotion_condition も更新——旧
+#   条件が要求していた「single 閾値による自動判定の設計変更」は rev 0.6
+#   protocol としてすでに供給済みであり、残る昇格条件は実装のみ（実
+#   Birth Probe render からの d12 計算実行系 + consumption-time verifier）
+#   に絞り込んだ。DESIGN_RUN9 §22 step 7 の逐語（`adjudicate` = 人間判定）
+#   自体は byte-pin 済みのため無改変——本 rule の enforcement は
+#   PROCEDURAL のまま据え置く（実装がまだ存在しないため）。
+#   (b) rule 16（Identity drift beyond non-inferiority）: checkpoint 内
+#   「identity_metric_space.json calibration.decision_rule の theta_cal(F)
+#   比較（既存・実装済み・実内容検査）」という記述が、theta_cal(F) の
+#   解析的退化確定（DESIGN_RUN9_REVISION_0.6.md §0）と calibration/
+#   decision_rule の rev 0.6 supersede により stale 化していたため訂正
+#   した——本 rule 自体の結論（非対象軸マージン判定であり PROCEDURAL のま
+#   ま）は変わらない。旧文言はいずれも〔履歴〕として rule 本文内に保持
+#   （削除しない）。他 rule・post_stop_prohibitions・classification_
+#   policy は無改変（sha256 確認済み）。
+# - PR #333 Codex bot レビュー第1巡指摘1 是正（2026-08-28、Fable 判定、値
+#   3de4db27a23498c236b75b3efbb152c0675fce84fe2d6bddfb8bd565850b1251 へ
+#   repin）: 本巡指摘1（P1「Keep the H1–H6 calibration gate pending」）と
+#   同型の正典矛盾を残さないための是正。rule 14/16 の checkpoint/
+#   machine_promotion_condition が引き続き「hypothesis_algebra_sha は
+#   schema 文字列・REQUIRED_KEYS・validator のいずれも未定義」等、H1-H6
+#   δtarget/εk 校正前提の追跡先として `hypothesis_algebra_sha` を参照した
+#   ままだった——同欄は rev 0.6 裁定 §7「同protocolのraw SHA256を
+#   hypothesis_algebra_shaへPINNEDする」により identity decision protocol
+#   の pin 欄へ用途確定済み（PINNED 化済み）であり、この参照は本巡指摘1
+#   の是正（`hypothesis_threshold_calibration_sha` の分離新設）と整合しな
+#   い stale 参照だった。
+#   (a) rule 14（mandatory metric degeneracy without audit fallback）:
+#   checkpoint の grep 確認対象を `hypothesis_algebra_sha` から
+#   `hypothesis_threshold_calibration_sha`（pin 欄のみ新設・PENDING、対応
+#   する manifest 実体・schema/validator は未定義のまま）へ更新。
+#   machine_promotion_condition も同様に追跡先を更新。
+#   (b) rule 16（Identity drift beyond non-inferiority）: checkpoint/
+#   machine_promotion_condition とも rule 14 と同型の理由で追跡先を更新。
+#   いずれも rev 0.6 裁定 §7 の pin 用途確定の経緯を一句添え、旧文言は
+#   〔履歴（PR #333 第1巡指摘1、2026-08-28）〕として rule 本文内に
+#   append-only 保持（削除しない）。rule_id/enforcement/verbatim・分類数
+#   （MACHINE 1件 / PROCEDURAL 19件）は無改変。他 rule・
+#   post_stop_prohibitions・classification_policy は無改変（sha256
+#   確認済み）。バイトが変わったため repin（12世代目）。
+# - PR #333 Codex bot レビュー第12巡指摘1 是正（2026-08-28、Fable 判定、
+#   採否上限10巡到達後 — 3分類「将来汚染」の新規具体経路として採用、値
+#   7bb311e08abfb2bd608a9e54387c5f3c477e7283cc9ae9432de3a8a9e5bdfcbb へ
+#   repin）: rule 7/rule 16 が inputs/identity_decision_protocol_v0.6.json
+#   の**存在しない `decision_rule` 節**を参照していた誤参照を是正。
+#   (a) rule 7（Birth Identity separation not established）:
+#   machine_promotion_condition の「(ii) その結果を本 protocol の
+#   decision_rule に基づき機械的に BIRTH_OUTCOMES へ写像する
+#   consumption-time verifier」を、実在する outcome 写像正本
+#   `birth_gate_aggregate_rule`（birth_identity_separation × pjs_confuser
+#   の連言 + outcome_detail_priority + completion_evidence_requirement を
+#   含む Birth Gate 全体の正本）への参照へ訂正した。記載どおり d12 単独
+#   写像を実装すると PJS 距離 0（pjs_confuser.on_zero）でも受理する弱
+#   規則が MACHINE 化され得るため、将来の実装がこの誤参照を辿らないよう
+#   是正する。
+#   (b) rule 16（Identity drift beyond non-inferiority）: checkpoint の
+#   「inputs/identity_decision_protocol_v0.6.json の calibration/
+#   decision_rule 節へ supersede 済み」を、実在する supersede 先
+#   `post_learning_identity_retention`（m_other/m_pjs マージン + invalid
+#   分岐）への参照へ訂正した（rule 7 と同型の誤参照）。
+#   failure_abort_criteria.json 全20 rule を grep して同型の存在しない
+#   節名参照が他に無いかを総点検した（identity_decision_protocol_v0.6.json
+#   への他の節名参照は rule 7 の `birth_identity_separation`〔実在〕のみ
+#   ——残余ゼロを確認）。旧文言はいずれも〔履歴（PR #333 第12巡指摘1、
+#   2026-08-28）〕として rule 本文内に append-only 保持（削除しない）。
+#   rule_id/enforcement/verbatim・分類数（MACHINE 1件 / PROCEDURAL 19件）
+#   は無改変。他 rule・post_stop_prohibitions・classification_policy は
+#   無改変（sha256 確認済み）。バイトが変わったため repin（13世代目）。
+# - PR #333 Codex bot レビュー第14巡指摘1 是正（2026-08-28、Fable 判定、
+#   採否上限10巡到達後 — 3分類「将来汚染」の新規具体経路〔第12巡対応自身が
+#   残した欠陥〕として採用、値
+#   2000a9eb0551f653246572e0d9a6baf888ea06996c1d3d7a726121f66f7f2a01 へ
+#   repin）: 第12巡是正後の rule 7 machine_promotion_condition が
+#   「birth_gate_aggregate_rule（birth_identity_separation × pjs_confuser
+#   の連言 + outcome_detail_priority + completion_evidence_requirement を
+#   含む Birth Gate 全体の正本）」と記述していたが、
+#   completion_evidence_requirement は実際には birth_gate_aggregate_rule
+#   配下ではなく兄弟節 birth_gate_overall_pass 配下にのみ存在し
+#   （identity_decision_protocol_v0.6.json 実キー構成で確認。
+#   birth_gate_aggregate_rule 自身も identity_establishment_scope_note で
+#   「本節は identity_establishment 層のみを規定し、Birth Gate 全体の
+#   PASS は birth_gate_overall_pass 節が別途規定する」と自己宣言している）、
+#   記載どおり実装すると completion_evidence_requirement（監査完了証跡）と
+#   audit_stop_refs（監査不一致の停止条件）をいずれも検査しない identity
+#   establishment のみの検証で MACHINE 化・学習進行が可能になる欠陥だった。
+#   rule 7 の machine_promotion_condition を、outcome 写像＝
+#   birth_gate_aggregate_rule／最終 gate 判定＝birth_gate_overall_pass
+#   （audit_stop_refs 非該当 + completion_evidence_requirement の完了証跡を
+#   含む）の**両節参照**へ是正し、節と内容の対応を実キー構成と一致させた。
+#   第12巡の是正文自身が節内容を誤記述していた経緯は履歴として削除せず
+#   append-only のまま残置し正直に記録した。他 rule に同型の「実在節だが
+#   中身の誤記述」が無いか failure_abort_criteria.json 全20 rule を
+#   identity_decision_protocol_v0.6.json への節名参照（`本 protocol`/
+#   `同 protocol`/`同protocol`/直接節名）で grep して総点検した——rule 7
+#   checkpoint の `birth_identity_separation` 節参照（実在）、rule 16 の
+#   `post_learning_identity_retention` 節参照（実在・第12巡是正済み、
+#   m_other/m_pjs マージン+invalid_or_nonfinite_feature 分岐の記述も
+#   実キー構成と一致）はいずれも中身の誤記述なし。存在しない/内容誤記述の
+#   節名参照は rule 7 machine_promotion_condition の1箇所のみであり、
+#   本是正後の残余はゼロ。rule_id/enforcement/verbatim・分類数
+#   （MACHINE 1件 / PROCEDURAL 19件）は無改変。他 rule・
+#   post_stop_prohibitions・classification_policy は無改変（sha256
+#   確認済み）。バイトが変わったため repin（14世代目）。
 failure_abort_criteria_sha:
-  value: "ead64d2fd7896728b1fc7070c90d7a5b2d8bb17740e21c4056a5210a081cf98b"
+  value: "2000a9eb0551f653246572e0d9a6baf888ea06996c1d3d7a726121f66f7f2a01"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 

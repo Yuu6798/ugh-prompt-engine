@@ -27,6 +27,7 @@
         "module": "voice_genesis/foundry/adapter/donor_bank.py",
         "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
       },
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#c0_determinism_attestation",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population",
       "metric_version": "run9-identity-metric/0.5",
       "normalization": {
@@ -42,6 +43,7 @@
         "module": "voice_genesis/foundry/adapter/donor_bank.py",
         "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
       },
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#c1_sham_attestation",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.c1_gate.d_c1_population",
       "metric_version": "run9-identity-metric/0.5",
       "normalization": {
@@ -72,6 +74,7 @@
         "module": "voice_genesis/foundry/adapter/donor_bank.py",
         "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
       },
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#birth_identity_separation.negative_reference_gate_note",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.negative_reference_gate.negative_reference_definition",
       "metric_version": "run9-identity-metric/0.5",
       "normalization": {
@@ -102,6 +105,7 @@
         "module": "voice_genesis/foundry/adapter/donor_bank.py",
         "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
       },
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#positive_reference_audit",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.positive_reference_gate.positive_reference_definition",
       "metric_version": "run9-identity-metric/0.5",
       "normalization": {
@@ -127,5 +131,5 @@
     }
   },
   "schema": "run9-measurement-spec/1.0",
-  "scope_note": "本 manifest は RUN9_CONTRACT.yaml measurement_spec_sha の実体。測定仕様は identity 軸と development/generalization 軸の2つに分かれる（evaluation/probe_manifest.json#measurement_boundary、および README.md:587-590 が明文化する境界。本節はこの境界を変更しない）。identity 軸の距離・校正・閾値の正本は inputs/identity_metric_space.json（metric_space_sha として既 PINNED）であり、本 manifest では重複定義しない — identity_axis_metric_paths 節は同ファイル revision_bridge が凍結した7つの metric-path それぞれについて『どの extractor がその測定を実行するか』のカタログ（extractor 参照 + normalization 参照。式・閾値は再掲しない）のみを追加する。development/generalization 軸（P4/P5、DESIGN_RUN9 §16.3 DevelopmentalVector + §14 C4 GENERALIZED_GAIN）は本欄が別途凍結すべき対象だが、対応する extractor は VG-L0 学習ハーネス未実装のため repo に実在しない（grep 確認: 該当実装なし）。development_generalization_axis 節はこの事実を正直に記録し、閉じた metric 名の語彙のみを 凍結する。存在しない extractor・未校正の数値をここで発明しない。"
+  "scope_note": "本 manifest は RUN9_CONTRACT.yaml measurement_spec_sha の実体。測定仕様は identity 軸と development/generalization 軸の2つに分かれる（evaluation/probe_manifest.json#measurement_boundary、および README.md:587-590 が明文化する境界。本節はこの境界を変更しない）。identity 軸のfeature/distance生成定義（および calibration 配下の preserved_generation_definitions：d_c0_population/d_c1_population/positive_reference_definition/negative_reference_definition、生成手順の定義のみ）の正本は inputs/identity_metric_space.json（metric_space_sha として既 PINNED・無改変のまま immutability 維持）であり、calibration・閾値・判定規則（freeze_threshold/validity_gates/decision_rule）は rev 0.6 実行について inputs/identity_decision_protocol_v0.6.json（hypothesis_algebra_sha として PINNED、rev 0.6 裁定 §7 が supersede）が正本であり、いずれも本 manifest では重複定義しない — identity_axis_metric_paths 節は同ファイル revision_bridge が凍結した7つの metric-path それぞれについて『どの extractor がその測定を実行するか』のカタログ（extractor 参照 + normalization 参照 + rev 0.6 判定規則への identity_decision_protocol_ref 参照。式・閾値は再掲しない）のみを追加する。development/generalization 軸（P4/P5、DESIGN_RUN9 §16.3 DevelopmentalVector + §14 C4 GENERALIZED_GAIN）は本欄が別途凍結すべき対象だが、対応する extractor は VG-L0 学習ハーネス未実装のため repo に実在しない（grep 確認: 該当実装なし）。development_generalization_axis 節はこの事実を正直に記録し、閉じた metric 名の語彙のみを 凍結する。存在しない extractor・未校正の数値をここで発明しない。〔旧文言（PR #333第9巡是正前、rev 0.6 supersedeへの言及を欠いていた）: 「identity 軸の距離・校正・閾値の正本は inputs/identity_metric_space.json（metric_space_sha として既 PINNED）であり、本 manifest では重複定義しない — identity_axis_metric_paths 節は同ファイル revision_bridge が凍結した7つの metric-path それぞれについて『どの extractor がその測定を実行するか』のカタログ（extractor 参照 + normalization 参照。式・閾値は再掲しない）のみを追加する。」〕"
 }
