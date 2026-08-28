@@ -170,16 +170,48 @@ def _functions(trees: Dict[str, ast.Module]) -> Dict[str, list[FunctionRef]]:
     return out
 
 
-_NESTED_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+def _function_definition_nodes(
+    node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+) -> Iterator[ast.AST]:
+    """関数オブジェクト生成時に評価される式を返す（本体は含めない）。"""
+    if not isinstance(node, ast.Lambda):
+        yield from node.decorator_list
+    yield node.args
+    if not isinstance(node, ast.Lambda) and node.returns is not None:
+        yield node.returns
+    yield from getattr(node, "type_params", ())
 
 
-def _runtime_nodes(node: ast.AST) -> Iterator[ast.AST]:
-    """node の実行本体を辿り、未呼び出しのネストスコープへは降りない。"""
-    for child in ast.iter_child_nodes(node):
-        if isinstance(child, _NESTED_SCOPE_NODES):
-            continue
+def _runtime_nodes(node: ast.AST, *, _root_scope: bool = True) -> Iterator[ast.AST]:
+    """実行時に評価される子 node を辿る。
+
+    到達した関数の本体は辿る一方、ネストした関数・lambda は default / decorator
+    等の定義時評価だけを辿る。class 本体は class 文の実行時に評価されるため辿る。
+    generator expression は生成時に評価される最外 iterable だけを辿り、要素式・
+    filter・内側 iterable は反復開始まで遅延されるので除外する。
+    """
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        children: Iterator[ast.AST] = _function_definition_nodes(node)
+        if _root_scope and not isinstance(node, ast.Lambda):
+            children = iter((*children, *node.body))
+    elif isinstance(node, ast.ClassDef):
+        children = iter(
+            (
+                *node.decorator_list,
+                *node.bases,
+                *(keyword.value for keyword in node.keywords),
+                *getattr(node, "type_params", ()),
+                *node.body,
+            )
+        )
+    elif isinstance(node, ast.GeneratorExp):
+        children = iter((node.generators[0].iter,))
+    else:
+        children = ast.iter_child_nodes(node)
+
+    for child in children:
         yield child
-        yield from _runtime_nodes(child)
+        yield from _runtime_nodes(child, _root_scope=False)
 
 
 def _calls_in(node: ast.AST) -> Set[str]:
@@ -328,7 +360,7 @@ def _wired_constants(trees: Dict[str, ast.Module]) -> Set[ConstantId]:
     for constant_id, value in constants.items():
         rel, _name = constant_id
         deps: Set[ConstantId] = set()
-        for node in ast.walk(value):
+        for node in (value, *_runtime_nodes(value)):
             if isinstance(node, ast.Name):
                 resolved = _resolve_constant_name(rel, node.id, constants, imported)
                 if resolved is not None:
@@ -554,6 +586,38 @@ def test_called_nested_body_wires_declarations() -> None:
     )
     assert ("synthetic.py", "VOCAB") in _wired_constants(trees)
     assert "assert_guard" in _called_in_functions(trees)
+
+
+def test_nested_definition_time_code_wires_declarations() -> None:
+    """nested def の default と class 本体は定義文到達時に即時評価される。"""
+    trees = _synthetic(
+        "VOCAB = ('X',)\n"
+        "def assert_guard(x):\n"
+        "    return x\n"
+        "def public_entry():\n"
+        "    def _helper(value=assert_guard(VOCAB)):\n"
+        "        return value\n"
+        "    class Container:\n"
+        "        value = VOCAB\n"
+        "    return Container\n"
+    )
+    assert ("synthetic.py", "VOCAB") in _wired_constants(trees)
+    assert "assert_guard" in _called_in_functions(trees)
+
+
+def test_deferred_constant_scopes_do_not_create_dependency_edges() -> None:
+    """lambda / generator の遅延本体は定数初期化時の依存に数えない。"""
+    trees = _synthetic(
+        "VOCAB = ('X',)\n"
+        "CALLBACK = lambda: VOCAB\n"
+        "VALUES = (VOCAB for _ in ())\n"
+        "def public_entry():\n"
+        "    return CALLBACK, VALUES\n"
+    )
+    wired = _wired_constants(trees)
+    assert ("synthetic.py", "CALLBACK") in wired
+    assert ("synthetic.py", "VALUES") in wired
+    assert ("synthetic.py", "VOCAB") not in wired
 
 
 def test_duplicate_constant_names_preserve_module_identity() -> None:
