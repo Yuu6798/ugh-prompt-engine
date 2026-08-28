@@ -374,6 +374,9 @@ def test_publish_cleanup_covers_baseexception_termination(
         "reexport_manifest_sha256",
         "backbone_runtime_bundle_sha256",
         "executor_sha256",
+        "run9_schema_sha256",
+        "run9_controlprofile_sha256",
+        "gate_synth_sha256",
     ],
 )
 def test_provenance_snapshot_rejects_post_snapshot_mutation(
@@ -389,6 +392,9 @@ def test_provenance_snapshot_rejects_post_snapshot_mutation(
         "reexport_manifest_sha256",
         "backbone_runtime_bundle_sha256",
         "executor_sha256",
+        "run9_schema_sha256",
+        "run9_controlprofile_sha256",
+        "gate_synth_sha256",
     ]
     paths = {key: tmp_path / f"{index}.bin" for index, key in enumerate(keys)}
     for index, path in enumerate(paths.values()):
@@ -406,8 +412,37 @@ def test_provenance_snapshot_rejects_executor_changed_since_module_load(
     _, on_disk_sha = bp._read_once(bp._EXECUTOR_PATH, label="test executor provenance")
     assert on_disk_sha == bp._EXECUTOR_LOAD_SHA256
     monkeypatch.setattr(bp, "_EXECUTOR_LOAD_SHA256", "0" * 64)
-    with pytest.raises(bp.BirthProbeError, match="executor changed after module load"):
+    monkeypatch.setitem(bp._LOAD_TIME_PROVENANCE_SHA256, "executor_sha256", "0" * 64)
+    with pytest.raises(bp.BirthProbeError, match="executor_sha256 changed after executor module load"):
         bp._snapshot_provenance_inputs()
+
+
+@pytest.mark.parametrize(
+    "changed_key",
+    ["run9_schema_sha256", "run9_controlprofile_sha256", "gate_synth_sha256"],
+)
+def test_provenance_snapshot_rejects_helper_changed_since_executor_load(
+    monkeypatch: pytest.MonkeyPatch,
+    changed_key: str,
+) -> None:
+    path = bp._LOAD_TIME_PROVENANCE_PATHS[changed_key]
+    _, on_disk_sha = bp._read_once(path, label=f"test {changed_key}")
+    assert on_disk_sha == bp._LOAD_TIME_PROVENANCE_SHA256[changed_key]
+    monkeypatch.setitem(bp._LOAD_TIME_PROVENANCE_SHA256, changed_key, "0" * 64)
+    with pytest.raises(bp.BirthProbeError, match=f"{changed_key} changed after executor module load"):
+        bp._snapshot_provenance_inputs()
+
+
+@pytest.mark.parametrize("module_name", list(bp._HELPER_MODULE_NAMES.values()))
+def test_main_provenance_guard_rejects_preloaded_repo_helper(
+    monkeypatch: pytest.MonkeyPatch,
+    module_name: str,
+) -> None:
+    for helper_name in bp._HELPER_MODULE_NAMES.values():
+        monkeypatch.delitem(sys.modules, helper_name, raising=False)
+    monkeypatch.setitem(sys.modules, module_name, object())
+    with pytest.raises(bp.BirthProbeError, match="repo helper modules were already loaded"):
+        bp._assert_helper_modules_not_preloaded()
 
 
 def test_gate_synth_renderer_adapter_matches_runtime_note_and_tempo_contract() -> None:
