@@ -476,6 +476,67 @@ def test_negative_pr333_r10_scope_statement_missing_rev06_supersede_marker(
         m.validate_probe_manifest(bad)
 
 
+def test_positive_pr333_r11_identity_axis_source_declares_exact_supersede_fragment_ref(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """PR #333 第11巡指摘2（P2、採用）: 実 manifest の
+    `measurement_boundary.identity_axis_source` が、supersede 宣言の実在
+    箇所（`identity_decision_protocol_v0.6.json` 側の `supersede_
+    declaration.superseded_sections`）を逐語で指していること——第9巡是正
+    時に誤って `identity_metric_space.json` 側を指していた欠陥（第11巡で
+    是正）の回帰確認。"""
+    assert (
+        m._IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER
+        in manifest_data["measurement_boundary"]["identity_axis_source"]
+    )
+    assert m._IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER == (
+        "identity_decision_protocol_v0.6.json#supersede_declaration.superseded_sections"
+    )
+    # 誤 prefix（identity_metric_space.json 側）は manifest 本文には出現
+    # しない（旧文言の履歴引用〔旧文言...〕ブロックは意図的に除外——旧文言
+    # 自体は supersede 節への言及を欠いていたのであり、誤った prefix の
+    # fragment 参照を含んではいなかった）。
+    wrong_prefix_fragment = (
+        "identity_metric_space.json#supersede_declaration.superseded_sections"
+    )
+    assert wrong_prefix_fragment not in manifest_data["measurement_boundary"][
+        "identity_axis_source"
+    ]
+
+
+def test_negative_pr333_r11_identity_axis_source_wrong_supersede_declaration_file_prefix(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """PR #333 第11巡指摘2（P2、採用）の回帰: `identity_axis_source` の
+    fragment 参照が誤って `identity_metric_space.json` 側の
+    `supersede_declaration.superseded_sections` を指す（第11巡是正前と
+    同型の誤 prefix）と fail-closed で拒否される——`supersede_declaration`
+    節は `identity_decision_protocol_v0.6.json` 側にのみ実在し
+    （`identity_metric_space.json` は本改訂で無改変のため同節を持たない）、
+    第10巡の汎用マーカー検査（ファイル名・"supersede" 語の部分文字列存在
+    のみ）はこの誤 prefix を捕捉できなかった——他所の正本表明文言に
+    `identity_decision_protocol_v0.6.json` という文字列自体は出現するため
+    汎用マーカーは素通りしていた。本テストは第11巡で追加した逐語
+    fragment マーカーがこれを閉じることを確認する。"""
+    bad = _mutate(manifest_data)
+    bad["measurement_boundary"]["identity_axis_source"] = bad["measurement_boundary"][
+        "identity_axis_source"
+    ].replace(
+        "identity_decision_protocol_v0.6.json#supersede_declaration.superseded_sections",
+        "identity_metric_space.json#supersede_declaration.superseded_sections",
+    )
+    # 誤 prefix 差し替え後も汎用マーカー（ファイル名・"supersede" 語）自体は
+    # 引き続き充足していること（第10巡の検査だけでは通ってしまうことの
+    # 直接確認——本テストが実際に第11巡の逐語マーカーで初めて拒否される
+    # ことを示すための前提確認）。
+    for generic_marker in m._REV06_SUPERSEDE_DECLARATION_MARKERS:
+        assert generic_marker in bad["measurement_boundary"]["identity_axis_source"]
+    with pytest.raises(
+        m.Run9ValidationError, match="measurement_boundary.identity_axis_source"
+    ):
+        m.validate_probe_manifest(bad)
+
+
 def test_negative_pr333_r10_scope_statement_missing_supersede_word(
     manifest_data: Dict[str, Any],
 ) -> None:

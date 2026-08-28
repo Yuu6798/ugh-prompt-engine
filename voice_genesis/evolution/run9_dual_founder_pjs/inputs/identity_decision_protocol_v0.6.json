@@ -54,7 +54,19 @@
       "c1_sham_attestation.on_feature_mismatch",
       "positive_reference_audit.on_mismatch"
     ],
-    "definition": "Birth Gate 全体の PASS ⇔ identity_establishment（= birth_gate_aggregate_rule の連言判定）が ESTABLISHED ∧ C0/C1/positive reference の各 attestation・audit（audit_stop_refs 列挙の5節）がいずれの停止条件にも該当しない。",
+    "completion_evidence_requirement": {
+      "audit_completeness_refs": [
+        "c0_determinism_attestation",
+        "c1_sham_attestation",
+        "positive_reference_audit"
+      ],
+      "condition": "c0_determinism_attestation は両 founder（R9F-01/R9F-02）とも c0_determinism_attestation.takes_per_founder（=20、RUN9_CONTRACT.yaml interventions.c0_replay_takes_per_founder の pin 値と一致）本の take 結果が記録済みであること、c1_sham_attestation は同数（=20、interventions.c1_sham_takes_per_founder の pin 値と一致）本の take 結果が記録済みであること、positive_reference_audit は実行され結果が記録済みであることを要求する——監査結果それ自体の欠落・部分実施（C0/C1 の部分 render・結果未発行・positive 監査未実行等）を closed-world に検出する第3の連言項。audit_stop_refs（不一致の検出）とは別軸——欠落は『不一致』ではなく『まだ判定できない』状態であり、不一致述語（on_mismatch/on_nonzero 等）はいずれも real-valued な比較結果の存在を前提とするため、audit_stop_refs だけでは監査未実施・部分実施を捕捉できない。",
+      "gate_effect": "いずれかの監査が欠落・部分的な場合、overall PASS は不成立とし学習非進行とする（閾値救済禁止、裁定§9 fail-closed 原則）。",
+      "note": "PR #333 Codex bot レビュー第11巡指摘1（P1、採用）新設: 従来の definition は identity_establishment=ESTABLISHED ∧ audit_stop_refs 列挙の停止条件非該当のみを規定しており、監査結果そのものの欠落（C0/C1 の部分 render・結果未発行・positive 監査未実行）は不一致述語（on_mismatch/on_nonzero 等）のいずれにも該当しないため無音のまま overall PASS へ落ち得た欠陥の是正——tests/test_run9_contract.py の literal-consumer テスト（`_literal_consumer_birth_gate()`）が全 mismatch フラグを既定 false（= 監査は実施済みで不一致なし）として扱い、監査の存在・take 完全性そのものは表現していなかった点も同根の欠陥として第11巡で追加検証した。新規則の発明ではなく、裁定§1『C0はFounderごとに20 takesを実行する。』/ §2『C1 ZERO_CONTROLPROFILE_SHAMもFounderごとに20 takes実行する。』/ §3『positive referenceは追加のexact replay監査として維持する。』+ §9『Birth Gate不成立時はNOT_ESTABLISHEDとして凍結する。』fail-closed 原則の機械符号化。既存 audit_stop_refs（不一致検出、5節）は無改変のまま——本節はそれとは独立の第3連言項（完了証跡）として追加する。",
+      "on_incomplete": "IDENTITY_PROTOCOL_AUDIT_INCOMPLETE",
+      "outcome": "IMPLEMENTATION_FAILURE"
+    },
+    "definition": "Birth Gate 全体の PASS ⇔ identity_establishment（= birth_gate_aggregate_rule の連言判定）が ESTABLISHED ∧ C0/C1/positive reference の各 attestation・audit（audit_stop_refs 列挙の5節）がいずれの停止条件にも該当しない ∧ C0/C1/positive reference の各監査結果が完了している（completion_evidence_requirement——欠落・部分実施の場合は IDENTITY_PROTOCOL_AUDIT_INCOMPLETE として非 PASS）。",
     "identity_establishment_ref": "birth_gate_aggregate_rule",
     "note": "PR #333 Codex bot レビュー第5巡指摘3（P1、採用）新設: 従来の birth_gate_aggregate_rule の『必要十分条件』は validity/d12/PJS のみを規定し、C0/C1/positive reference の exact-replay 監査を含んでいなかったため、監査失敗（DETERMINISM_CONTRACT_BROKEN 等）と BIRTH=ESTABLISHED が同時成立し得た。本節は Birth Gate 判定を二層に再構成する: identity_establishment（birth_gate_aggregate_rule、BIRTH ラベルを決める層）と本節 birth_gate_overall_pass（learning recipe freeze / 学習実行へ進む可否を決める層）——新規則の発明ではなく、裁定§8『rev 0.6のBirth GateがPASSした場合のみ、learning recipe freezeおよび学習実行へ進む。』の機械符号化。",
     "pass_gates_learning": "PASS の場合のみ learning recipe freeze / 学習実行へ進む（裁定§8）。非 PASS の場合は Birth Gate 全体として学習非進行——ESTABLISHED であっても監査停止があれば学習を開始しない。",

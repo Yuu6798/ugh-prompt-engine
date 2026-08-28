@@ -262,6 +262,24 @@ IDENTITY_PROTOCOL_RETENTION_INVALID_OR_NONFINITE_DETAIL = (
     "IDENTITY_PROTOCOL_POST_LEARNING_INVALID_OR_NONFINITE_FEATURE"
 )
 
+# birth_gate_overall_pass.completion_evidence_requirement（PR #333 Codex
+# bot レビュー第11巡指摘1、P1、採用）新設: 従来の definition は
+# identity_establishment=ESTABLISHED ∧ audit_stop_refs（不一致述語）非該当
+# のみを規定しており、監査結果そのものの欠落（C0/C1 の部分 render・結果
+# 未発行・positive 監査未実行）は不一致述語のいずれにも該当しないため無音
+# のまま overall PASS へ落ち得た欠陥の是正——閉世界の完了述語を第3の連言項
+# として追加する。outcome_detail は新設するが、その outcome は既存
+# `IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME`（IMPLEMENTATION_FAILURE、
+# FAILURE_CLASSES 既存語彙）をそのまま再利用し、IDENTITY_OUTCOMES/
+# FAILURE_CLASSES 等の既存 frozen tuple へは値を追加しない（監査欠落は
+# 修正可能な運用不備であり DESIGN_FAILURE/SCIENTIFIC_NULL ではなく
+# IMPLEMENTATION_FAILURE 分類が妥当——C0 側 feature_computation_mismatch_
+# with_matching_render と同種の割当て判断）。
+IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_DETAIL = "IDENTITY_PROTOCOL_AUDIT_INCOMPLETE"
+IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_OUTCOME = (
+    IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME
+)  # == "IMPLEMENTATION_FAILURE"（既存語彙の再利用、新規値ではない）
+
 # rev 0.3（User 外部レビュー PR #317 P2-4 採用、PoR §12）: held-out gain は
 # 「実装可能なら」ではなく RUN9 の最低限の評価漏洩防止として必須。
 # train-only gain と held-out gain を必ず別記録する4欄を凍結する
@@ -4908,6 +4926,27 @@ _REV06_SUPERSEDE_DECLARATION_MARKERS: Tuple[str, ...] = (
     "inputs/identity_metric_space.json", "metric_space_sha",
     "identity_decision_protocol_v0.6.json", "supersede",
 )
+
+# PR #333 第11巡指摘2（P2、採用）新設: `_REV06_SUPERSEDE_DECLARATION_
+# MARKERS` は汎用部分文字列（ファイル名・"supersede" 等）の存在のみを
+# 検査するため、`identity_axis_source` が宣言する fragment 参照
+# （`...#supersede_declaration.superseded_sections`）の file prefix が
+# 誤って `identity_metric_space.json` を指していても、
+# `identity_decision_protocol_v0.6.json` という文字列自体は同じ宣言文の
+# 他所（正本表明）に既出のため通過してしまっていた——第10巡はこの穴を
+# 残したまま（マーカーが汎用すぎて fragment 参照の実体を見ていなかった）。
+# `supersede_declaration` は `identity_decision_protocol_v0.6.json` 側に
+# のみ実在し（`identity_metric_space.json` は本改訂で無改変のため同節を
+# 持たない）、正しい fragment 参照は逐語で1つに定まる。本マーカーは
+# その逐語文字列そのものの存在を要求し、誤った file prefix への差し替え
+# （`identity_metric_space.json#supersede_declaration...` への回帰）を
+# fail-closed で拒否する——新規則の発明ではなく、裁定§7『新規
+# identity_decision_protocol_v0.6.jsonを発行し、既存metricのfeature/
+# distance定義を参照した上で、旧calibration/decision ruleをrev 0.6実行に
+# ついてsupersedeする。』が指す supersede 宣言の実在箇所への逐語照合。
+_IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER = (
+    "identity_decision_protocol_v0.6.json#supersede_declaration.superseded_sections"
+)
 _MEASUREMENT_BOUNDARY_DEV_GEN_AXIS_MARKERS: Tuple[str, ...] = ("measurement_spec_sha", "PENDING")
 
 _PROHIBITION_MARKERS: Tuple[str, ...] = (
@@ -6731,7 +6770,14 @@ def _validate_measurement_boundary(data: Any) -> None:
     )
     _validate_marker_bearing_str(
         data["identity_axis_source"], field="measurement_boundary.identity_axis_source",
-        markers=_REV06_SUPERSEDE_DECLARATION_MARKERS,
+        # PR #333 第11巡指摘2（P2、採用）: 汎用マーカーに加え、
+        # `_IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER`（正しい
+        # fragment 参照の逐語文字列）も必須化——誤った file prefix への
+        # 差し替え（`identity_metric_space.json#supersede_declaration...`
+        # への回帰）は汎用マーカーだけでは通過してしまうため、逐語一致を
+        # 追加で fail-closed 検査する。
+        markers=_REV06_SUPERSEDE_DECLARATION_MARKERS
+        + (_IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER,),
     )
     _validate_marker_bearing_str(
         data["development_generalization_axis_source"],
@@ -20476,6 +20522,19 @@ _IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS: Tuple[str, str, str, str, str] 
     "positive_reference_audit.on_mismatch",
 )
 
+# completion_evidence_requirement.audit_completeness_refs（PR #333 Codex
+# bot レビュー第11巡指摘1、P1、採用、新設）: audit_stop_refs（不一致述語
+# 5節）とは別軸——監査結果そのものの存在・完全性（C0/C1 各 20/20 takes・
+# positive reference 実行済み）を要求する第3の連言項。不一致述語
+# （on_mismatch/on_nonzero 等）はいずれも real-valued な比較結果の存在を
+# 前提とするため、監査未実施・部分実施はこれらのいずれにも該当せず無音の
+# まま overall PASS へ落ち得た穴を埋める。
+_IDENTITY_PROTOCOL_OVERALL_PASS_COMPLETION_REFS: Tuple[str, str, str] = (
+    "c0_determinism_attestation",
+    "c1_sham_attestation",
+    "positive_reference_audit",
+)
+
 
 def _validate_identity_protocol_shape(
     value: Any, *, field: str, required_keys: FrozenSet[str],
@@ -21266,6 +21325,7 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         data["birth_gate_overall_pass"], field="birth_gate_overall_pass",
         required_keys=frozenset({
             "definition", "identity_establishment_ref", "audit_stop_refs",
+            "completion_evidence_requirement",
             "pass_gates_learning", "audit_failure_does_not_invalidate_established",
             "verbatim_basis", "note",
         }),
@@ -21283,6 +21343,49 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
     _require_ordered_str_list_matching_tuple(
         overall_pass["audit_stop_refs"], field="birth_gate_overall_pass.audit_stop_refs",
         expected=_IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS,
+    )
+    # --- completion_evidence_requirement（PR #333 Codex bot レビュー第11巡
+    # 指摘1、P1、採用、新設）---------------------------------------------
+    # audit_stop_refs（不一致述語、上記）とは別軸の第3連言項: 監査結果
+    # そのものの欠落・部分実施（C0/C1 の部分 render・結果未発行・positive
+    # 監査未実行）を closed-world に検出する。不一致述語のいずれにも
+    # 該当しないため、これが無いと欠落は無音のまま overall PASS へ落ちる。
+    completion_req = _validate_identity_protocol_shape(
+        overall_pass["completion_evidence_requirement"],
+        field="birth_gate_overall_pass.completion_evidence_requirement",
+        required_keys=frozenset({
+            "audit_completeness_refs", "condition", "gate_effect", "note",
+            "on_incomplete", "outcome",
+        }),
+    )
+    _require_ordered_str_list_matching_tuple(
+        completion_req["audit_completeness_refs"],
+        field="birth_gate_overall_pass.completion_evidence_requirement.audit_completeness_refs",
+        expected=_IDENTITY_PROTOCOL_OVERALL_PASS_COMPLETION_REFS,
+    )
+    _require_non_empty_str(
+        completion_req["condition"],
+        field="birth_gate_overall_pass.completion_evidence_requirement.condition",
+    )
+    if completion_req["on_incomplete"] != IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_DETAIL:
+        raise Run9ValidationError(
+            "birth_gate_overall_pass.completion_evidence_requirement.on_incomplete must be "
+            f"exactly {IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_DETAIL!r}, got "
+            f"{completion_req['on_incomplete']!r}"
+        )
+    if completion_req["outcome"] != IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_OUTCOME:
+        raise Run9ValidationError(
+            "birth_gate_overall_pass.completion_evidence_requirement.outcome must be exactly "
+            f"{IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_OUTCOME!r} (IMPLEMENTATION_FAILURE 系の既存"
+            f"語彙を再利用——新規 outcome 値の発明ではない), got {completion_req['outcome']!r}"
+        )
+    _require_non_empty_str(
+        completion_req["gate_effect"],
+        field="birth_gate_overall_pass.completion_evidence_requirement.gate_effect",
+    )
+    _require_non_empty_str(
+        completion_req["note"],
+        field="birth_gate_overall_pass.completion_evidence_requirement.note",
     )
     _require_non_empty_str(
         overall_pass["pass_gates_learning"], field="birth_gate_overall_pass.pass_gates_learning"

@@ -12120,14 +12120,15 @@ def test_pin2_dataset_manifest_sha_is_pinned_and_matches_actual_file(
     field = contract_raw["dataset_manifest_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.DATASET_SPLIT_MANIFEST_PATH)
-    # PR #333 第9巡指摘（P1、採用）の probe_manifest_sha repin に追随し
+    # PR #333 第11巡指摘2（P2、採用）の probe_manifest_sha repin に追随し
     # dataset_split_manifest.json（identity_probe.probe_manifest_sha 転記
     # 値）を更新したため repin（旧値
-    # 4138639209caabf08465141681756e3b0bc7be4167516ea9bd93b6d276456cf4・
+    # 43de511f2711fc9d559e8d21461a5b00c3a99ddc03b83455d577039e7952ddd6・
+    # さらに旧 4138639209caabf08465141681756e3b0bc7be4167516ea9bd93b6d276456cf4・
     # さらに旧 ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448
     # はいずれも RUN9_CONTRACT.yaml の repin 履歴コメントに保持）。
     assert field["value"] == (
-        "43de511f2711fc9d559e8d21461a5b00c3a99ddc03b83455d577039e7952ddd6"
+        "525ebad0d7d444157214f01be9a03f72b6efccdf59e138bb2aca5b8e4f5fb3f1"
     )
 
 
@@ -19903,9 +19904,9 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     field = contract_raw["hypothesis_algebra_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.IDENTITY_DECISION_PROTOCOL_PATH)
-    # PR #333 第8巡指摘1/3（P2×2、採用）: `c1_sham_attestation.
-    # outcome_priority` + `pjs_confuser.invalid_or_nonfinite_distance`
-    # 新設のため repin（旧値
+    # PR #333 第11巡指摘1（P1、採用）: `birth_gate_overall_pass.
+    # completion_evidence_requirement` 新設のため repin（旧値
+    # cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887・
     # 027e3c04ff2978572e9e43ccfdae7314b2171a67f4536ae6a3a0c537153d1b25・
     # 2e47c7d6f093add787159d1a6325b70d308146280a3e8f40abdc08e1b10e59cd・
     # f626e309d187177800d33afabe6c81537faa3c59a5432e080f88e0d4854f1778・
@@ -19915,7 +19916,7 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     # 967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3 は
     # RUN9_CONTRACT.yaml の【repin 履歴】コメントに保持）。
     assert field["value"] == (
-        "cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887"
+        "c10e4701677a285f36cb99823c83388da067a54e838f27c066c5b7e8c1110e03"
     )
     assert field["source"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json"
@@ -21160,6 +21161,7 @@ def _literal_consumer_birth_gate(
     c1_wav_byte_mismatch: bool = False,
     c1_feature_mismatch: bool = False,
     positive_mismatch: bool = False,
+    audit_complete: bool = True,
 ) -> Tuple[str, bool]:
     """protocol JSON の `birth_gate_aggregate_rule.conjunct_refs` 列挙を
     そのまま辿って BIRTH outcome を、`birth_gate_overall_pass` の定義を
@@ -21169,6 +21171,15 @@ def _literal_consumer_birth_gate(
     protocol 側の分岐定義（`established`/`not_established` の
     `birth_outcome` 値）だけを読む——本関数自身は ESTABLISHED/
     NOT_ESTABLISHED をハードコードしない。
+
+    `audit_complete`（PR #333 第11巡指摘1、P1、採用、新設引数）: C0/C1/
+    positive reference の各監査結果そのものが記録済みかどうか（take 数
+    充足・positive 監査実行済み）を表す runtime fact——`c0_mismatch` 等の
+    「不一致」フラグとは独立の第3の軸である（監査が実施されていなければ
+    不一致判定自体が定義できない）。既定 True は「全監査完了」の世界線
+    のみを表し、旧テスト群（第5-10巡）が既定値のまま『全成功』を意味して
+    いた前提を維持する——第11巡はこれを明示引数へ格上げし、False の世界線
+    を新規に追加検証する。
     """
     agg = protocol["birth_gate_aggregate_rule"]
     conjunct_truth = {
@@ -21187,9 +21198,20 @@ def _literal_consumer_birth_gate(
         c0_mismatch or c1_nonzero or c1_wav_byte_mismatch or c1_feature_mismatch
         or positive_mismatch
     )
+    # completion_evidence_requirement（第11巡指摘1）が protocol 側に実在
+    # することを要求する——本節が欠落した protocol データに対しては、監査
+    # 完了性の第3連言項そのものが存在しないため、本 literal consumer は
+    # 「まだ判定できない」を検出できず、指摘1 が是正した欠陥をそのまま
+    # 再現してしまう。この assert 自体が指摘1 の回帰ガードを兼ねる。
+    assert "completion_evidence_requirement" in protocol["birth_gate_overall_pass"], (
+        "literal consumer: birth_gate_overall_pass.completion_evidence_requirement is "
+        "missing — this is the exact PR #333 第11巡指摘1 regression (audit completeness "
+        "is not representable, so incomplete audits would silently pass)"
+    )
     # overall PASS の定義（`birth_gate_overall_pass.definition`）をそのまま
-    # 辿る: identity_establishment = ESTABLISHED ∧ 監査停止が一件も無い。
-    overall_pass = established and not audit_failed
+    # 辿る: identity_establishment = ESTABLISHED ∧ 監査停止が一件も無い
+    # ∧ 監査結果そのものが完了している（第11巡追加の第3連言項）。
+    overall_pass = established and not audit_failed and audit_complete
     return birth_outcome, overall_pass
 
 
@@ -21608,6 +21630,222 @@ def test_pr333_r8_load_pinned_rejects_new_field_tamper_via_hash_mismatch(
     )
     with pytest.raises(
         m.Run9ValidationError, match="pjs_confuser.invalid_or_nonfinite_distance.outcome_detail"
+    ):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )
+
+
+# =============================================================================
+# PR #333 Codex bot レビュー第11巡対応（2026-08-28、フェーズ1）
+# 指摘1（P1）: 監査結果の欠落（partial render・結果未発行・positive 監査
+#   未実行）は audit_stop_refs（不一致述語のみ）に未該当のため、overall
+#   PASS が無音のまま成立し得た穴の是正——`birth_gate_overall_pass` へ
+#   `completion_evidence_requirement`（第3の連言項）を新設。
+# =============================================================================
+
+
+# --- 指摘1: birth_gate_overall_pass.completion_evidence_requirement --------
+
+
+def test_pr333_r11_completion_evidence_requirement_audit_completeness_refs_matches_frozen_tuple() -> (
+    None
+):
+    data = _identity_decision_protocol_data()
+    refs = data["birth_gate_overall_pass"]["completion_evidence_requirement"][
+        "audit_completeness_refs"
+    ]
+    assert tuple(refs) == m._IDENTITY_PROTOCOL_OVERALL_PASS_COMPLETION_REFS
+    assert refs == [
+        "c0_determinism_attestation",
+        "c1_sham_attestation",
+        "positive_reference_audit",
+    ]
+
+
+def test_pr333_r11_completion_evidence_requirement_on_incomplete_and_outcome_match_constants() -> (
+    None
+):
+    """`on_incomplete` は新設 outcome_detail 定数、`outcome` は既存
+    IMPLEMENTATION_FAILURE 系語彙（新規 frozen tuple 値の追加ではなく
+    再利用）と単一の正本を共有する——実データで一致確認。"""
+    data = _identity_decision_protocol_data()
+    req = data["birth_gate_overall_pass"]["completion_evidence_requirement"]
+    assert req["on_incomplete"] == m.IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_DETAIL
+    assert req["on_incomplete"] == "IDENTITY_PROTOCOL_AUDIT_INCOMPLETE"
+    assert req["outcome"] == m.IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_OUTCOME
+    assert req["outcome"] == "IMPLEMENTATION_FAILURE"
+    # IMPLEMENTATION_FAILURE 系の既存語彙を再利用しているだけであり、
+    # FAILURE_CLASSES 自体は無改変（新規値を追加していない）ことの確認。
+    assert req["outcome"] in m.FAILURE_CLASSES
+    assert req["outcome"] == m.FAILURE_CLASSES[0]
+
+
+def test_pr333_r11_validate_rejects_missing_completion_evidence_requirement_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["birth_gate_overall_pass"]["completion_evidence_requirement"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r11_validate_rejects_completion_evidence_requirement_missing_subkey() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["birth_gate_overall_pass"]["completion_evidence_requirement"]["note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r11_validate_rejects_completion_evidence_requirement_audit_completeness_refs_reordered() -> (
+    None
+):
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_overall_pass"]["completion_evidence_requirement"][
+        "audit_completeness_refs"
+    ] = list(
+        reversed(
+            data["birth_gate_overall_pass"]["completion_evidence_requirement"][
+                "audit_completeness_refs"
+            ]
+        )
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="birth_gate_overall_pass.completion_evidence_requirement.audit_completeness_refs",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r11_validate_rejects_completion_evidence_requirement_audit_completeness_refs_dict_masquerade() -> (
+    None
+):
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_overall_pass"]["completion_evidence_requirement"][
+        "audit_completeness_refs"
+    ] = _dict_masquerading_as_ordered_list(m._IDENTITY_PROTOCOL_OVERALL_PASS_COMPLETION_REFS)
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="completion_evidence_requirement.audit_completeness_refs must be a list",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r11_validate_rejects_completion_evidence_requirement_wrong_on_incomplete() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_overall_pass"]["completion_evidence_requirement"]["on_incomplete"] = (
+        "SOME_OTHER_LABEL"
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="birth_gate_overall_pass.completion_evidence_requirement.on_incomplete",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r11_validate_rejects_completion_evidence_requirement_wrong_outcome() -> None:
+    """`outcome` を IMPLEMENTATION_FAILURE 以外（例えば別の停止語彙）へ
+    差し替えると拒否される——既存語彙の再利用が固定されていることの
+    確認（新規 outcome 値の発明を防ぐ）。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_overall_pass"]["completion_evidence_requirement"]["outcome"] = (
+        "DETERMINISM_CONTRACT_BROKEN"
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="birth_gate_overall_pass.completion_evidence_requirement.outcome",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r11_validate_rejects_completion_evidence_requirement_empty_condition() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_overall_pass"]["completion_evidence_requirement"]["condition"] = ""
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r11_definition_mentions_completion_evidence_requirement() -> None:
+    """`definition` 文言が第3連言項（completion_evidence_requirement）へ
+    実際に言及していること——第5巡の audit_stop_refs 追加時と同様、
+    definition テキスト自体が新設節を反映していることを確認する。"""
+    data = _identity_decision_protocol_data()
+    assert "completion_evidence_requirement" in data["birth_gate_overall_pass"]["definition"]
+    assert (
+        m.IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_DETAIL
+        in data["birth_gate_overall_pass"]["definition"]
+    )
+
+
+# --- 指摘1: 敵対的自己検査（literal consumer, audit completeness 軸）-------
+
+
+def test_pr333_r11_adversarial_literal_consumer_audit_incomplete_established_but_not_pass() -> (
+    None
+):
+    """(f) 監査結果が欠落（C0/C1 の一部 take 未記録・positive 監査未実行等
+    を audit_complete=False として表す。identity_establishment は全て
+    成功・不一致フラグも全て False）→ ESTABLISHED は維持されるが
+    overall PASS は不成立（指摘1 の核心——是正前は本ケースが無音で
+    overall PASS へ落ちていた）。"""
+    protocol = _identity_decision_protocol_data()
+    birth_outcome, overall_pass = _literal_consumer_birth_gate(
+        protocol,
+        feature_valid=True, d12_positive=True, pjs_distance_positive=True,
+        audit_complete=False,
+    )
+    assert birth_outcome == "ESTABLISHED"
+    assert overall_pass is False
+
+
+def test_pr333_r11_adversarial_literal_consumer_all_success_and_complete_passes() -> None:
+    """(g) 全成功 + 監査完了（明示的に audit_complete=True）→ ESTABLISHED +
+    overall PASS——第5巡 all_success テスト（既定値依存）を明示引数で
+    再確認する回帰確認。"""
+    protocol = _identity_decision_protocol_data()
+    birth_outcome, overall_pass = _literal_consumer_birth_gate(
+        protocol,
+        feature_valid=True, d12_positive=True, pjs_distance_positive=True,
+        audit_complete=True,
+    )
+    assert birth_outcome == "ESTABLISHED"
+    assert overall_pass is True
+
+
+# --- load_pinned_identity_decision_protocol(): 第11巡フィールドの一貫性 ----
+
+
+def test_pr333_r11_load_pinned_happy_path_with_completion_evidence_requirement(
+    contract: m.Run9RunContract,
+) -> None:
+    domain = _real_identity_domain()
+    data = m.load_pinned_identity_decision_protocol(contract, domain=domain)
+    assert "completion_evidence_requirement" in data["birth_gate_overall_pass"]
+    assert tuple(
+        data["birth_gate_overall_pass"]["completion_evidence_requirement"][
+            "audit_completeness_refs"
+        ]
+    ) == m._IDENTITY_PROTOCOL_OVERALL_PASS_COMPLETION_REFS
+
+
+def test_pr333_r11_load_pinned_rejects_completion_evidence_requirement_tamper_via_hash_mismatch(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """新設節を改ざんした合成 manifest は、実バイト sha256 が pin 済み
+    hypothesis_algebra_sha と食い違うため fail-closed で拒否されること
+    （既存巡と同型の tamper 経路確認）。"""
+    domain = _real_identity_domain()
+
+    def mutate(data: Dict[str, Any]) -> None:
+        data["birth_gate_overall_pass"]["completion_evidence_requirement"]["on_incomplete"] = (
+            "TAMPERED"
+        )
+
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=mutate
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="birth_gate_overall_pass.completion_evidence_requirement.on_incomplete",
     ):
         m.load_pinned_identity_decision_protocol(
             tampered_contract, domain=domain, manifest_path=manifest_path,

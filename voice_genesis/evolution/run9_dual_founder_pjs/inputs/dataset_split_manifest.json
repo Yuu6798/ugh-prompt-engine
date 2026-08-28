@@ -49,7 +49,7 @@
     "implementation": "evaluation/probe_manifest.json probes[probe_id=\"P0\"]（title \"Neutral Identity Probe\"、cell_id \"P0-NEUTRAL-SAKURA-FRAGMENT\"）",
     "implementation_class": "NON_SONG_SPLIT",
     "pjs_song_based_probe_non_adoption_citation": "voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json probes[probe_id=\"P4\"].role（787行、逐語の一部）: \"PJS楽曲の採譜は不採用とする（採譜作業が必要な上、sealed-holdout非開封規律と衝突するため）。\"",
-    "probe_manifest_sha": "c121243b9679ceae88322a43d1c804c2c5eddb4d25413c09e6a7d737033ea095"
+    "probe_manifest_sha": "3acefc13121b6414ffec661e6b55ad5ae15c32992af402aac951c5a4d78a3cba"
   },
   "negative_sham_control": {
     "c1_sham_takes_per_founder": 20,

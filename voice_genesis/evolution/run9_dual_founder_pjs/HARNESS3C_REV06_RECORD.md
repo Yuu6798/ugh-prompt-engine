@@ -2134,3 +2134,253 @@ $ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=
   巡数上限を超えていても採用判定自体は行う（上限は「無条件で全採用し
   続ける運用」を終了させるものであり、3分類判定を無効化するものでは
   ない）。
+
+## 14. PR #333 Codex bot レビュー第11巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`7fb36ff8`）。**採否上限10巡到達後（§13.7）の対応**——2件とも、§13.7 が
+定める3分類（実コード被害 / 将来汚染 / 致命的バグ）のいずれかに該当し、
+かつ本記録が既に掃討・対応済みのファミリーとは異なる新規具体経路を指す
+指摘であるため採用した：指摘1は Birth Gate の overall PASS 判定が監査
+**欠落**（実施されたかどうか自体）を検出できない穴——不一致述語のみを
+検査する既存ファミリー（§8/§9/§11 の on_mismatch/on_nonzero 系）とは
+別軸の**未実施・部分実施**という新規具体経路であり、学習非進行の
+fail-closed 原則が実測なしに崩れ得る**致命的バグ**に該当する。指摘2は
+存在しない節を指す**誤参照**——正典宣言の実在箇所が誤っているという、
+第9/10巡（マーカー検査の適用範囲・存在）とは異なる**参照先そのものの
+正しさ**という新規具体経路であり、将来の読者・ツールが誤った節を実正本
+と誤認する**将来汚染**に該当する。両件とも着手前に事実確認を行い、
+指摘内容が事実と一致することを確認したうえで実装した。
+
+### 14.1 指摘1（P1）: 「Require completed audits before declaring overall
+PASS」
+
+**事実確認（着手前）**: `inputs/identity_decision_protocol_v0.6.json`
+`birth_gate_overall_pass.definition`（是正前）を読み、「identity_
+establishment が ESTABLISHED ∧ audit_stop_refs 列挙の5節がいずれの
+停止条件にも該当しない」という消極定義のみであることを確認した。
+`audit_stop_refs` が指す各分岐（`on_mismatch`/`on_nonzero`/
+`on_wav_byte_mismatch`/`on_feature_mismatch`）はいずれも「比較の結果が
+不一致だった」ことを検出する述語であり、比較そのものが**未実施**
+（例: C0 が20 take中10 takeしか render されていない、positive
+reference audit が一度も実行されていない）の場合はどの述語にも該当
+しない——不一致述語は real-valued な比較結果の存在を前提とするため。
+`tests/test_run9_contract.py` の `_literal_consumer_birth_gate()`
+（21152-21193行、是正前）は `c0_mismatch`/`c1_nonzero`/
+`c1_wav_byte_mismatch`/`c1_feature_mismatch`/`positive_mismatch` の
+5フラグを既定 `False` として受け取り、それを「全成功（監査は実施済みで
+不一致なし）」の世界線として扱っていた——監査の**存在**・take**完全性**
+そのものを表現する変数を持たず、「実施していない」世界線と「実施して
+全て一致した」世界線を区別できない構造だった。指摘内容は事実と一致
+→ Fable 設計どおり実装。
+
+### 14.2 実装（Fable 設計）
+
+`birth_gate_overall_pass` へ新規節 `completion_evidence_requirement`
+（`audit_completeness_refs`/`condition`/`gate_effect`/`note`/
+`on_incomplete`/`outcome` の6キー）を追加し、overall PASS の判定式へ
+第3の連言項として組み込んだ：
+
+```
+overall PASS ⇔ identity_establishment = ESTABLISHED
+             ∧ audit_stop_refs（5節）がいずれの停止条件にも該当しない
+             ∧ completion_evidence_requirement（新設）が要求する
+               完了証跡が揃っている
+```
+
+`completion_evidence_requirement` が要求する完了証跡:
+
+- `c0_determinism_attestation`: 両 founder（R9F-01/R9F-02）とも
+  `takes_per_founder`（=20、`RUN9_CONTRACT.yaml
+  interventions.c0_replay_takes_per_founder` の pin 値と一致）本の
+  take 結果が記録済みであること。
+- `c1_sham_attestation`: 同数（=20、`interventions.
+  c1_sham_takes_per_founder` の pin 値と一致）本の take 結果が記録
+  済みであること。
+- `positive_reference_audit`: 実行され結果が記録済みであること。
+
+いずれかが欠落・部分的な場合、`on_incomplete`（新設 outcome_detail
+定数 `IDENTITY_PROTOCOL_AUDIT_INCOMPLETE`）として overall PASS 不成立・
+学習非進行とする。**新規則の発明ではなく**、裁定§1『C0はFounderごとに
+20 takesを実行する。』/ §2『C1 ZERO_CONTROLPROFILE_SHAMもFounderごとに
+20 takes実行する。』/ §3『positive referenceは追加のexact replay監査
+として維持する。』+ §9『Birth Gate不成立時はNOT_ESTABLISHEDとして
+凍結する。』fail-closed 原則の機械符号化。既存 `audit_stop_refs`
+（不一致検出、5節）は無改変のまま——本節はそれとは独立の完了証跡層
+として追加する。
+
+**既存 frozen tuple への値追加は行わない**（Task 指示遵守）：
+`on_incomplete` の outcome_detail 定数
+`IDENTITY_PROTOCOL_AUDIT_INCOMPLETE`（新設シンボル名）は新設するが、
+その `outcome` フィールドは既存 `IMPLEMENTATION_FAILURE`
+（`FAILURE_CLASSES` 既存語彙、C0 側
+`feature_computation_mismatch_with_matching_render` と同一語彙）を
+そのまま再利用する——`IDENTITY_OUTCOMES`/`FAILURE_CLASSES` 等の既存
+frozen tuple 自体へは値を追加していない（監査欠落は修正可能な運用不備
+であり `DESIGN_FAILURE`/`SCIENTIFIC_NULL` ではなく
+`IMPLEMENTATION_FAILURE` 分類が妥当という C0 側と同種の割当て判断）。
+命名は既存様式（`IDENTITY_PROTOCOL_<節>_<状態>_DETAIL`）に合わせた。
+
+`run9_schema.py` 側は `_IDENTITY_PROTOCOL_OVERALL_PASS_COMPLETION_REFS`
+（`audit_completeness_refs` の凍結期待 tuple、3項目・順序込み）を新設
+し、`validate_identity_decision_protocol()` の `birth_gate_overall_pass`
+required_keys へ `completion_evidence_requirement` を追加、新設節の
+形状・`audit_completeness_refs` の順序込み一致・`on_incomplete`/
+`outcome` の逐語一致を fail-closed 検証する。
+
+**敵対的自己検査（`_literal_consumer_birth_gate()`）の是正**: `Tuple`
+戻り値を導出する関数へ `audit_complete: bool = True` を新設引数として
+追加し、`overall_pass = established and not audit_failed and
+audit_complete` へ拡張した（旧式は `established and not audit_failed`
+のみ）。あわせて、protocol データに `completion_evidence_requirement`
+節自体が存在しない場合は `assert` で明示的に失敗させる回帰ガードを
+関数内に追加した——本節が欠落した protocol に対しては監査完了性の
+連言項そのものが表現不能であり、これは指摘1が是正した欠陥をこの
+literal consumer 自身が再現してしまうことを意味するため。
+
+### 14.3 新設テスト
+
+`tests/test_run9_contract.py`（`# --- 指摘1: ...` 見出し配下）:
+
+- 構造検証: `audit_completeness_refs` の凍結 tuple 一致、`on_incomplete`
+  /`outcome` の定数一致（`FAILURE_CLASSES[0]` と一致することの直接
+  確認込み）、`completion_evidence_requirement` キー欠落・サブキー欠落・
+  `audit_completeness_refs` の順序反転・dict 偽装・`on_incomplete`/
+  `outcome` の改ざん・`condition` 空文字列がいずれも fail-closed 拒否
+  されること、`definition` 文言が新設節へ実際に言及していること。
+- 敵対的自己検査: `audit_complete=False`（他は全成功）→
+  `birth_outcome == "ESTABLISHED"` かつ `overall_pass is False`
+  （指摘1の核心——是正前は本ケースが無音で overall PASS へ落ちていた）。
+  `audit_complete=True` 明示指定での全成功ケースも回帰確認。
+- `load_pinned_identity_decision_protocol()` の happy path・
+  hash-mismatch tamper 経路（新設節の改ざんが fail-closed 拒否される
+  こと）。
+
+### 14.4 指摘2（P2）: 「Point the supersede declaration at the protocol
+document」
+
+**事実確認（着手前）**: `evaluation/probe_manifest.json`
+`measurement_boundary.identity_axis_source`（是正前）を読み、正典宣言が
+`identity_metric_space.json#supersede_declaration.superseded_sections`
+という文字列を含んでいることを確認した。`inputs/identity_decision_
+protocol_v0.6.json` を読み、`supersede_declaration` 節が同ファイル側に
+実在すること（254-275行）を確認した。`grep -rn supersede_declaration`
+で repo 全体を走査し、`identity_metric_space.json` 自体が同節を持たない
+こと（本改訂で無改変のため）を確認した——つまり `identity_axis_source`
+の宣言は**存在しない節参照**だった。`run9_schema.py`
+`_REV06_SUPERSEDE_DECLARATION_MARKERS`（第10巡で改名・拡張したマーカー
+tuple）を読み、4マーカー（`inputs/identity_metric_space.json`/
+`metric_space_sha`/`identity_decision_protocol_v0.6.json`/`supersede`）
+がいずれも汎用部分文字列の存在検査に過ぎないことを確認した——誤
+prefix `identity_metric_space.json#supersede_declaration...` を持つ
+文へ差し替えても、`identity_decision_protocol_v0.6.json` という文字列
+自体は同じ宣言文の他所（正本表明部分）に既出するため、全4マーカーが
+充足したまま通過してしまう（実際に `python3 -c "..."` で誤 prefix 版
+文字列を構成し、全マーカーが in 判定で True になることを事前確認
+した）。`measurement_spec_manifest.json` の `scope_note`・`README.md`
+を grep し、同型の誤参照が他に存在しないことを確認した（1箇所のみ）。
+指摘内容は事実と一致 → Fable 設計どおり実装。
+
+### 14.5 実装（Fable 設計）
+
+`evaluation/probe_manifest.json` `measurement_boundary.
+identity_axis_source` の参照 prefix を
+`identity_metric_space.json#supersede_declaration.superseded_sections`
+から
+`identity_decision_protocol_v0.6.json#supersede_declaration.superseded_sections`
+へ訂正した。第9巡の宣言文自身が誤参照を導入していた経緯（是正時に
+prefix を精査せず `identity_metric_space.json#` を踏襲してしまった）を
+同フィールド内に正直に履歴残置した。
+
+`run9_schema.py` へ新規マーカー定数
+`_IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER`（正しい fragment
+参照の逐語文字列 `"identity_decision_protocol_v0.6.json#supersede_
+declaration.superseded_sections"`）を追加し、`_validate_measurement_
+boundary()` の `identity_axis_source` 検査マーカーへ
+`_REV06_SUPERSEDE_DECLARATION_MARKERS` に加えて連結した——これにより
+汎用マーカーでは捕捉できなかった誤 prefix への回帰を、正確な参照
+文字列の逐語一致検査で fail-closed 拒否する。`scope_statement`/
+`scope_note` は元々この fragment 参照を持たない（正本表明のみで
+dotted-path 参照は行わない）ため、対象外のまま据え置いた（同型箇所は
+1箇所のみと確認済み——§14.4）。
+
+**cascade repin**: `probe_manifest.json` のバイト変更に伴い、
+`probe_manifest_sha`（RUN9_CONTRACT.yaml）を repin
+（`c121243b...` → `3acefc13...`）。`inputs/dataset_split_manifest.json`
+`identity_probe.probe_manifest_sha` 転記値を新値へ更新し、同ファイルの
+バイト変更に伴い `dataset_manifest_sha`（RUN9_CONTRACT.yaml）を repin
+（`43de511f...` → `525ebad0...`）——既存 cascade 様式（第2巡・第9巡と
+同型）を踏襲した。いずれの repin も append-only で旧値を
+RUN9_CONTRACT.yaml の repin 履歴コメントに保持している。
+
+### 14.6 新設テスト
+
+`tests/test_run9_probe_manifest.py`:
+
+- `test_positive_pr333_r11_identity_axis_source_declares_exact_
+  supersede_fragment_ref`: 実 manifest が正しい fragment 参照を逐語で
+  含み、誤 prefix 版の文字列は含まないことの直接確認。
+- `test_negative_pr333_r11_identity_axis_source_wrong_supersede_
+  declaration_file_prefix`: 誤 prefix（`identity_metric_space.json#
+  supersede_declaration...`）へ差し戻すと fail-closed 拒否される
+  こと。差し戻し後も第10巡までの汎用マーカー4件は充足したまま
+  であることを明示的に確認したうえで（= 第10巡の検査だけでは通過
+  してしまうことの直接証明）、新設の逐語マーカーが初めてこれを
+  拒否することを確認する。
+
+### 14.7 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2730 passed, 7 warnings in ~44s
+```
+
+新設テスト16件（2714→2730）。既存テスト2件
+（`test_pin2_dataset_manifest_sha_is_pinned_and_matches_actual_file`/
+`test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file`）の
+リテラル pin 値アサーションを、正当な repin に伴い新値へ更新した
+（cascade repin の直接的帰結であり、検査ロジック自体の変更ではない）。
+
+### 14.8 変更ファイル
+
+- `inputs/identity_decision_protocol_v0.6.json`: `birth_gate_overall_
+  pass` へ `completion_evidence_requirement` 新設、`definition` 文言を
+  第3連言項へ言及するよう更新。
+- `evaluation/probe_manifest.json`: `measurement_boundary.
+  identity_axis_source` の誤 prefix 参照を訂正。
+- `RUN9_CONTRACT.yaml`: `hypothesis_algebra_sha`/`probe_manifest_sha`/
+  `dataset_manifest_sha` の3 pin を append-only 履歴付きで repin。
+- `inputs/dataset_split_manifest.json`: `identity_probe.probe_
+  manifest_sha` 転記値を新 pin 値へ更新。
+- `run9_schema.py`: `IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_DETAIL`/
+  `IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_OUTCOME`/
+  `_IDENTITY_PROTOCOL_OVERALL_PASS_COMPLETION_REFS`/
+  `_IDENTITY_AXIS_SOURCE_SUPERSEDE_FRAGMENT_REF_MARKER` 新設、
+  `validate_identity_decision_protocol()`/`_validate_measurement_
+  boundary()` へ検証ロジック追加。
+- `tests/test_run9_contract.py`: 新設テスト14件（構造検証10件・敵対的
+  自己検査2件・load_pinned 2件）+ `_literal_consumer_birth_gate()`
+  helper の拡張（`audit_complete` 引数・completion_evidence_requirement
+  存在の assert）、既存2件のリテラル pin 値更新。
+- `tests/test_run9_probe_manifest.py`: 新設テスト2件。
+- `HARNESS3C_REV06_RECORD.md`: 本節。
+
+immutability 対象（`identity_metric_space.json`/`identity_domain`/
+`Genome`/speaker map manifest）・裁定逐語転記部分
+（`USER_ADJUDICATION_20260827_IDENTITY_REV06.txt`）は1 byte も変更して
+いない。既存 frozen tuple（`IDENTITY_OUTCOMES`/`FAILURE_CLASSES`/
+`_IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS` 等）への値追加も
+行っていない（§14.2 参照）。
+
+### 14.9 逸脱事項
+
+- ファミリー全数掃討は本巡の対象外——指摘1・指摘2はいずれも§12.3が
+  既に掃討したファミリーとは異なる新規具体経路（監査完了性という
+  第3軸／fragment 参照の逐語正しさ）であり、既存ファミリーの再監査を
+  要求するものではない。
+- 上限10巡到達後の対応であるため、本節冒頭（§14 導入部）で3分類
+  該当性を明記した——`AGENTS.md` §3-4・CLAUDE.md「bot レビュー対応の
+  運用」節が定める運用に従う。

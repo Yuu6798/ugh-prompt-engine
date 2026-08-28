@@ -408,18 +408,23 @@ repository_commit_sha:
 # manifest sha/c1 take 数がディスク正典 RUN9_CONTRACT.yaml の各 PINNED
 # 値と一致しない場合 fail-closed 拒否する）が検証・消費する。
 dataset_manifest_sha:
-  value: "43de511f2711fc9d559e8d21461a5b00c3a99ddc03b83455d577039e7952ddd6"
+  value: "525ebad0d7d444157214f01be9a03f72b6efccdf59e138bb2aca5b8e4f5fb3f1"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/dataset_split_manifest.json
   reason: >-
-    〔repin 履歴〕 PR #333 第9巡指摘（P1、採用）の probe_manifest_sha
+    〔repin 履歴〕 PR #333 第11巡指摘2（P2、採用）の probe_manifest_sha
     repin に追随: identity_probe.probe_manifest_sha 転記値
     （load_pinned_dataset_split_manifest() が RUN9_CONTRACT.yaml
     probe_manifest_sha PINNED 値と cross-check する）を新値へ更新した。
-    pjs_song_based_probe_non_adoption_citation / c1_sham_takes.description
-    への行番号引用（P4 role 787行、c1_sham_takes description 880行）は
-    今回の repin では新規キー挿入を伴わないため不変（既存値の文字列拡張の
-    みで行数は変わらない）。旧値（履歴として保持）:
+    第11巡の repin は probe_manifest.json measurement_boundary.
+    identity_axis_source の誤 prefix 参照（identity_metric_space.json#
+    supersede_declaration... → identity_decision_protocol_v0.6.json#
+    supersede_declaration...）是正であり、他フィールドへの新規キー挿入は
+    伴わないため pjs_song_based_probe_non_adoption_citation /
+    c1_sham_takes.description への行番号引用（P4 role 787行、
+    c1_sham_takes description 880行）は不変。旧値（履歴として保持）:
+    "43de511f2711fc9d559e8d21461a5b00c3a99ddc03b83455d577039e7952ddd6"
+    〔履歴（さらに旧、PR #333 第9巡指摘による repin）〕:
     "4138639209caabf08465141681756e3b0bc7be4167516ea9bd93b6d276456cf4"
     〔履歴（さらに旧、PR #333 第2巡指摘1による repin）〕:
     "ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448"
@@ -3430,8 +3435,24 @@ learning_recipe_sha:
 # immutability）／calibration・閾値・判定規則 = identity_decision_protocol_v0.6.json
 # が rev 0.6 実行について正本（supersede、裁定§7）」の二元宣言へ更新し、
 # 旧文言は各フィールド内に履歴残置した。
+# PR #333 第11巡指摘2（P2、採用）で repin（旧値、履歴として保持）:
+# "c121243b9679ceae88322a43d1c804c2c5eddb4d25413c09e6a7d737033ea095"
+# — measurement_boundary.identity_axis_source の正典宣言が
+# `identity_metric_space.json#supersede_declaration.superseded_sections`
+# という存在しない節参照（`supersede_declaration` は
+# `identity_decision_protocol_v0.6.json` 側にのみ実在し、
+# `identity_metric_space.json` は本改訂で無改変のため同節を持たない）を
+# 含んでいた欠陥の是正。参照 prefix を
+# `identity_decision_protocol_v0.6.json#supersede_declaration.superseded_sections`
+# へ訂正し、旧誤参照が誤りだった経緯を同フィールド内に履歴残置した——
+# 第9巡の宣言文自身が誤参照を導入していた（是正時に prefix を精査せず
+# `identity_metric_space.json#` を踏襲した）ため、本 repin であわせて
+# 正直に記録した。第10巡のマーカー検査（`_REV06_SUPERSEDE_DECLARATION_
+# MARKERS` による汎用部分文字列検査）はこの誤 prefix を捕捉できなかった
+# ——`run9_schema.py` へ正確な参照文字列の逐語検査を追加した（本 PR 同時
+# 反映、manifest バイト変更を伴わないコード変更）。
 probe_manifest_sha:
-  value: "c121243b9679ceae88322a43d1c804c2c5eddb4d25413c09e6a7d737033ea095"
+  value: "3acefc13121b6414ffec661e6b55ad5ae15c32992af402aac951c5a4d78a3cba"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 
@@ -3615,16 +3636,41 @@ measurement_spec_sha:
 #   collapse 系（(3)(4)）の前へ位置付けた。両件とも新規則の発明ではなく
 #   裁定§2/§5/§9 の機械符号化——既存 `on_nonzero`/`on_wav_byte_mismatch`/
 #   `on_feature_mismatch`/`on_positive`/`on_zero` の各分岐は無改変。
+# - PR #333 Codex bot レビュー第11巡指摘1（2026-08-28、P1、採用、値
+#   c10e4701677a285f36cb99823c83388da067a54e838f27c066c5b7e8c1110e03 へ
+#   repin）: `birth_gate_overall_pass` へ新規節 `completion_evidence_
+#   requirement`（`audit_completeness_refs`/`condition`/`gate_effect`/
+#   `note`/`on_incomplete`/`outcome` の6キー）を追加した——従来の
+#   `definition`（identity_establishment=ESTABLISHED ∧ `audit_stop_refs`
+#   列挙の停止条件非該当）は監査の「不一致」しか検出できず、監査結果
+#   そのものの「欠落」（C0/C1 の部分 render・結果未発行・positive 監査
+#   未実行）は不一致述語のいずれにも該当しないため無音のまま overall
+#   PASS へ落ち得た穴の是正（新設節が overall PASS の第3の連言項として
+#   completeness を closed-world に要求する）。`definition` 文言へ本節
+#   への言及を追記した。新規則の発明ではなく裁定§1/§2/§3 の 20 takes・
+#   positive reference 監査要求 + §9 fail-closed 原則の機械符号化——
+#   既存 `audit_stop_refs`（不一致検出、5節）は無改変のまま、本節は
+#   それとは独立の完了証跡層として追加する。`on_incomplete` の outcome_
+#   detail 定数 `IDENTITY_PROTOCOL_AUDIT_INCOMPLETE` は新設するが、
+#   その `outcome` は既存 `IMPLEMENTATION_FAILURE`（FAILURE_CLASSES 既存
+#   語彙、C0 側 `feature_computation_mismatch_with_matching_render` と
+#   同一語彙）を再利用し、`IDENTITY_OUTCOMES`/`FAILURE_CLASSES` 等の
+#   既存 frozen tuple へは値を追加しない。
 hypothesis_algebra_sha:
-  value: "cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887"
+  value: "c10e4701677a285f36cb99823c83388da067a54e838f27c066c5b7e8c1110e03"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json
   reason: >-
     rev 0.6 裁定 §7「同protocolのraw SHA256をhypothesis_algebra_shaへ
     PINNEDする」に基づき pin。値は inputs/identity_decision_protocol_
     v0.6.json の実バイト sha256（load_pinned_identity_decision_protocol()
-    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第8巡
-    指摘1/3（P2×2、採用）で `c1_sham_attestation.outcome_priority` +
+    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第11巡
+    指摘1（P1、採用）で `birth_gate_overall_pass.completion_evidence_
+    requirement` 新設のため repin（上記【repin 履歴】参照）。旧値
+    （PR #333 第8巡指摘1/3、履歴として保持）:
+    "cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887"
+    〔以下、第8巡時点の reason 原文——旧repin の理由記述として履歴保持〕
+    第8巡指摘1/3（P2×2、採用）で `c1_sham_attestation.outcome_priority` +
     `pjs_confuser.invalid_or_nonfinite_distance` 新設のため repin（上記
     【repin 履歴】参照）。
 
