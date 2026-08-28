@@ -60,6 +60,42 @@ def _read_once(path: Path, *, label: str) -> tuple[bytes, str]:
     return value, sha256_bytes(value)
 
 
+def _provenance_input_paths() -> Dict[str, Path]:
+    """Return the repo-resident execution/provenance inputs frozen for one run."""
+    return {
+        "run9_contract_sha256": _THIS_DIR / "RUN9_CONTRACT.yaml",
+        "identity_decision_protocol_sha256": (
+            _THIS_DIR / "inputs" / "identity_decision_protocol_v0.6.json"
+        ),
+        "probe_manifest_sha256": _THIS_DIR / "evaluation" / "probe_manifest.json",
+        "speaker_map_manifest_sha256": _THIS_DIR / "inputs" / "speaker_map_manifest.json",
+        "reexport_manifest_sha256": _THIS_DIR / "inputs" / "reexport_manifest.json",
+        "backbone_runtime_bundle_sha256": (
+            _THIS_DIR / "inputs" / "backbone_runtime_bundle.json"
+        ),
+        "executor_sha256": Path(__file__).resolve(),
+    }
+
+
+def _snapshot_provenance_inputs() -> Dict[str, str]:
+    """Hash every repo provenance input before any render work starts."""
+    return {
+        key: _read_once(path, label=f"provenance snapshot {key}")[1]
+        for key, path in _provenance_input_paths().items()
+    }
+
+
+def _verify_provenance_inputs_unchanged(snapshot: Mapping[str, str]) -> None:
+    """Fail closed if any repo provenance input changed after the snapshot."""
+    paths = _provenance_input_paths()
+    if set(snapshot) != set(paths):
+        raise BirthProbeError("provenance snapshot is incomplete or contains unknown inputs")
+    for key, path in paths.items():
+        _, actual = _read_once(path, label=f"provenance post-run {key}")
+        if actual != snapshot[key]:
+            raise BirthProbeError(f"provenance input changed during execution: {path}")
+
+
 def serialize_feature(vector: np.ndarray) -> bytes:
     """Serialize a feature in one explicit, signed-zero-preserving format.
 
@@ -635,7 +671,7 @@ def publish_evidence_bundle(
             canonical_json_bytes({"schema": "run9-birth-gate-artifact-manifest/1.0", "files": inventory})
         )
         os.replace(staging, output_dir)
-    except Exception:
+    except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
@@ -920,9 +956,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        provenance_snapshot = _snapshot_provenance_inputs()
         probe, speaker_map, reexport, backbone_bundle, practice_split, expected_takes = (
             _load_verified_inputs()
         )
+        # Catch a repo mutation that happened between the pre-render snapshot and
+        # the verified loader consumption before admitting any expensive render.
+        _verify_provenance_inputs_unchanged(provenance_snapshot)
         expected_acoustic = reexport["artifacts"]["acoustic_onnx"]["sha256_run1"]
         # The exact acoustic byte gate is deliberately the first external asset
         # check and precedes renderer construction or PJS feature work.
@@ -950,31 +990,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             expected_takes=expected_takes,
         )
         renderer.verify_inputs_unchanged()
+        # Verify the exact repo-resident code/protocol/manifest snapshot again
+        # immediately before evidence provenance is sealed and published.
+        _verify_provenance_inputs_unchanged(provenance_snapshot)
         result["input_provenance"] = {
-            "run9_contract_sha256": _read_once(_THIS_DIR / "RUN9_CONTRACT.yaml", label="RUN9 contract")[1],
-            "identity_decision_protocol_sha256": _read_once(
-                _THIS_DIR / "inputs" / "identity_decision_protocol_v0.6.json",
-                label="identity protocol",
-            )[1],
-            "probe_manifest_sha256": _read_once(
-                _THIS_DIR / "evaluation" / "probe_manifest.json", label="probe manifest"
-            )[1],
-            "speaker_map_manifest_sha256": _read_once(
-                _THIS_DIR / "inputs" / "speaker_map_manifest.json", label="speaker map manifest"
-            )[1],
-            "reexport_manifest_sha256": _read_once(
-                _THIS_DIR / "inputs" / "reexport_manifest.json", label="reexport manifest"
-            )[1],
-            "backbone_runtime_bundle_sha256": _read_once(
-                _THIS_DIR / "inputs" / "backbone_runtime_bundle.json", label="backbone bundle"
-            )[1],
+            **provenance_snapshot,
             "practice_expanded_corpus_identity_sha256": practice_split[
                 "expanded_corpus_identity_sha256"
             ],
             "pjs_reference_excluded_relative_paths": list(
                 pjs_reference_record.excluded_relative_paths
             ),
-            "executor_sha256": _read_once(Path(__file__).resolve(), label="Birth Probe executor")[1],
             "acoustic_onnx_sha256": expected_acoustic,
         }
         _seal_result(result)
