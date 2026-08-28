@@ -19909,8 +19909,10 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     field = contract_raw["hypothesis_algebra_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.IDENTITY_DECISION_PROTOCOL_PATH)
-    # PR #333 第11巡指摘1（P1、採用）: `birth_gate_overall_pass.
-    # completion_evidence_requirement` 新設のため repin（旧値
+    # PR #333 第13巡指摘（P1、上限到達後、採用）: `birth_gate_overall_pass.
+    # completion_evidence_requirement.condition` の positive_reference_
+    # audit 項を founder 単位の閉集合列挙へ改訂したため repin（旧値
+    # c10e4701677a285f36cb99823c83388da067a54e838f27c066c5b7e8c1110e03・
     # cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887・
     # 027e3c04ff2978572e9e43ccfdae7314b2171a67f4536ae6a3a0c537153d1b25・
     # 2e47c7d6f093add787159d1a6325b70d308146280a3e8f40abdc08e1b10e59cd・
@@ -19921,7 +19923,7 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     # 967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3 は
     # RUN9_CONTRACT.yaml の【repin 履歴】コメントに保持）。
     assert field["value"] == (
-        "c10e4701677a285f36cb99823c83388da067a54e838f27c066c5b7e8c1110e03"
+        "e536845d424a3dc32b9f6e61f0e5028ffc7b0f65cea1e8da1fedb129699b6e18"
     )
     assert field["source"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json"
@@ -21167,6 +21169,7 @@ def _literal_consumer_birth_gate(
     c1_feature_mismatch: bool = False,
     positive_mismatch: bool = False,
     audit_complete: bool = True,
+    positive_reference_audit_both_founders_complete: bool = True,
 ) -> Tuple[str, bool]:
     """protocol JSON の `birth_gate_aggregate_rule.conjunct_refs` 列挙を
     そのまま辿って BIRTH outcome を、`birth_gate_overall_pass` の定義を
@@ -21185,6 +21188,19 @@ def _literal_consumer_birth_gate(
     のみを表し、旧テスト群（第5-10巡）が既定値のまま『全成功』を意味して
     いた前提を維持する——第11巡はこれを明示引数へ格上げし、False の世界線
     を新規に追加検証する。
+
+    `positive_reference_audit_both_founders_complete`（PR #333 第13巡
+    指摘、P1、上限到達後、採用、新設引数）: `audit_complete` は監査
+    3種（C0/C1/positive reference）を単一の粒度でしか表現できず、
+    positive_reference_audit が「両 founder のうち片方だけ監査済み」
+    という founder 単位の部分完了を単独で表現できなかった——第13巡是正
+    後の protocol 側 condition（両 founder それぞれの positive_
+    reference(F) 監査を要求する閉集合列挙）を literal に辿るため、本引数
+    を `audit_complete` とは独立の第4の軸として追加する。既定 True は
+    「両 founder とも positive reference 監査済み」の世界線を表し、
+    第5-12巡の既定値依存テストの前提（全成功）を変えない。False は
+    「片 founder のみ監査済み（例: R9F-01 のみ、R9F-02 は省略）」という
+    第13巡指摘が指す具体的な偽成功経路の世界線を表す。
     """
     agg = protocol["birth_gate_aggregate_rule"]
     conjunct_truth = {
@@ -21213,10 +21229,31 @@ def _literal_consumer_birth_gate(
         "missing — this is the exact PR #333 第11巡指摘1 regression (audit completeness "
         "is not representable, so incomplete audits would silently pass)"
     )
+    # PR #333 第13巡指摘（P1、上限到達後、採用）の回帰ガード: condition
+    # プローズが positive_reference_audit を founder 単位（R9F-01/
+    # R9F-02 双方）の閉集合列挙として要求していることを literal に確認
+    # する。この assert が無いと、単数表現へ後退した場合に本 literal
+    # consumer 自身が第13巡指摘の欠陥（片 founder のみの監査で
+    # audit_complete=True 相当を許してしまう）を再現し得る。
+    completion_condition = protocol["birth_gate_overall_pass"][
+        "completion_evidence_requirement"
+    ]["condition"]
+    assert "positive_reference_audit" in completion_condition
+    assert "R9F-01" in completion_condition and "R9F-02" in completion_condition, (
+        "literal consumer: completion_evidence_requirement.condition does not enumerate "
+        "both founders (R9F-01/R9F-02) — this is the exact PR #333 第13巡 regression "
+        "(a single-founder positive_reference audit could satisfy a singular condition)"
+    )
     # overall PASS の定義（`birth_gate_overall_pass.definition`）をそのまま
     # 辿る: identity_establishment = ESTABLISHED ∧ 監査停止が一件も無い
-    # ∧ 監査結果そのものが完了している（第11巡追加の第3連言項）。
-    overall_pass = established and not audit_failed and audit_complete
+    # ∧ 監査結果そのものが完了している（第11巡追加の第3連言項、第13巡で
+    # positive_reference_audit を founder 単位まで精緻化）。
+    overall_pass = (
+        established
+        and not audit_failed
+        and audit_complete
+        and positive_reference_audit_both_founders_complete
+    )
     return birth_outcome, overall_pass
 
 
@@ -21856,3 +21893,110 @@ def test_pr333_r11_load_pinned_rejects_completion_evidence_requirement_tamper_vi
             tampered_contract, domain=domain, manifest_path=manifest_path,
             contract_path=tmp_path / "RUN9_CONTRACT.yaml",
         )
+
+
+# =============================================================================
+# PR #333 Codex bot レビュー第13巡対応（2026-08-28、フェーズ1、上限到達後）
+# 指摘（P1、上限到達後——3分類「致命的バグ（偽成功経路）」の新規具体経路）:
+#   `birth_gate_overall_pass.completion_evidence_requirement.condition` の
+#   positive_reference_audit 項が単数表現に留まり founder 単位の閉集合
+#   列挙を欠いていたため、identity_metric_space.json が positive_
+#   reference(F) を founder ごとに定義しているにもかかわらず、片 founder
+#   （R9F-01 のみ）の positive 監査でも overall PASS が成立し得た穴の
+#   是正——condition を c0/c1 と同型の per-founder 様式へ改訂した。
+# =============================================================================
+
+
+# --- 指摘: completion_evidence_requirement.condition の founder 単位列挙 ----
+
+
+def test_pr333_r13_completion_evidence_requirement_condition_enumerates_both_founders_for_positive_reference() -> (
+    None
+):
+    """positive_reference_audit 項が c0/c1 項と同型に両 founder
+    （R9F-01/R9F-02）を明示列挙していること——第13巡是正の核心。"""
+    data = _identity_decision_protocol_data()
+    condition = data["birth_gate_overall_pass"]["completion_evidence_requirement"]["condition"]
+    positive_clause_start = condition.index("positive_reference_audit は")
+    positive_clause = condition[positive_clause_start:]
+    assert "R9F-01" in positive_clause
+    assert "R9F-02" in positive_clause
+    assert "positive_reference(F)" in positive_clause
+    # 是正前の単数表現（founder 列挙を欠く文言）が残置していないことの
+    # 直接的な回帰ガード。
+    assert "positive_reference_audit は実行され結果が記録済みであることを要求する" not in condition
+
+
+def test_pr333_r13_completion_evidence_requirement_condition_references_per_founder_metric_definition() -> (
+    None
+):
+    """positive_reference(F) の founder 単位定義への参照
+    （inputs/identity_metric_space.json の positive_reference_definition）
+    を condition が明示していること——裁定§3を founder 粒度で機械符号化
+    したという設計意図の直接確認。"""
+    data = _identity_decision_protocol_data()
+    condition = data["birth_gate_overall_pass"]["completion_evidence_requirement"]["condition"]
+    assert (
+        "identity_metric_space.json#calibration.validity_gates.positive_reference_gate."
+        "positive_reference_definition" in condition
+    )
+
+
+def test_pr333_r13_completion_evidence_requirement_note_documents_round13_fix() -> None:
+    """note が第13巡の是正経緯（偽成功経路の具体例・founder 単位への
+    改訂・on_incomplete/outcome 既存語彙の再利用）を記録していること。"""
+    data = _identity_decision_protocol_data()
+    note = data["birth_gate_overall_pass"]["completion_evidence_requirement"]["note"]
+    assert "第13巡" in note
+    assert "R9F-01" in note and "R9F-02" in note
+    assert m.IDENTITY_PROTOCOL_AUDIT_INCOMPLETE_DETAIL in note
+
+
+def test_pr333_r13_c0_and_c1_condition_clauses_already_enumerate_both_founders() -> None:
+    """総点検（残余ゼロの確認）: c0_determinism_attestation/
+    c1_sham_attestation 項は第13巡是正前から既に両 founder を明示列挙して
+    おり、positive_reference_audit と同型の曖昧さを持たないこと。"""
+    data = _identity_decision_protocol_data()
+    condition = data["birth_gate_overall_pass"]["completion_evidence_requirement"]["condition"]
+    c0_clause_start = condition.index("c0_determinism_attestation は")
+    c1_clause_start = condition.index("c1_sham_attestation は")
+    c0_clause = condition[c0_clause_start:c1_clause_start]
+    assert "R9F-01" in c0_clause and "R9F-02" in c0_clause
+
+
+# --- 指摘: 敵対的自己検査（literal consumer, positive reference founder 軸）-
+
+
+def test_pr333_r13_adversarial_literal_consumer_single_founder_positive_reference_blocks_overall_pass() -> (
+    None
+):
+    """(h) 片 founder（例: R9F-01）のみ positive_reference 監査済み・
+    R9F-02 は省略（`positive_reference_audit_both_founders_complete=False`）
+    → identity_establishment は ESTABLISHED を維持するが overall PASS は
+    不成立——第13巡指摘の核心（是正前は本ケースが無音で overall PASS へ
+    落ち得た偽成功経路）。他の監査完了フラグは全て True。"""
+    protocol = _identity_decision_protocol_data()
+    birth_outcome, overall_pass = _literal_consumer_birth_gate(
+        protocol,
+        feature_valid=True, d12_positive=True, pjs_distance_positive=True,
+        audit_complete=True,
+        positive_reference_audit_both_founders_complete=False,
+    )
+    assert birth_outcome == "ESTABLISHED"
+    assert overall_pass is False
+
+
+def test_pr333_r13_adversarial_literal_consumer_both_founders_positive_reference_passes() -> None:
+    """(i) 両 founder とも positive_reference 監査済み
+    （`positive_reference_audit_both_founders_complete=True`、既定値）→
+    ESTABLISHED + overall PASS——第5/11巡 all_success テストを本軸でも
+    明示引数で再確認する回帰確認。"""
+    protocol = _identity_decision_protocol_data()
+    birth_outcome, overall_pass = _literal_consumer_birth_gate(
+        protocol,
+        feature_valid=True, d12_positive=True, pjs_distance_positive=True,
+        audit_complete=True,
+        positive_reference_audit_both_founders_complete=True,
+    )
+    assert birth_outcome == "ESTABLISHED"
+    assert overall_pass is True

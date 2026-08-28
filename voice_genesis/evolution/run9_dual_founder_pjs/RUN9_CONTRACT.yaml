@@ -3656,18 +3656,51 @@ measurement_spec_sha:
 #   語彙、C0 側 `feature_computation_mismatch_with_matching_render` と
 #   同一語彙）を再利用し、`IDENTITY_OUTCOMES`/`FAILURE_CLASSES` 等の
 #   既存 frozen tuple へは値を追加しない。
+# - PR #333 Codex bot レビュー第13巡指摘（2026-08-28、P1、上限到達後——
+#   CLAUDE.md「bot レビュー対応の運用」3分類のうち『致命的バグ（偽成功
+#   経路）』の新規具体経路として採用、値
+#   e536845d424a3dc32b9f6e61f0e5028ffc7b0f65cea1e8da1fedb129699b6e18 へ
+#   repin）: `birth_gate_overall_pass.completion_evidence_requirement.
+#   condition` のうち `positive_reference_audit` 項が「実行され結果が
+#   記録済みであること」という単数表現に留まり、`c0_determinism_
+#   attestation`/`c1_sham_attestation` が備える両 founder（R9F-01/
+#   R9F-02）ごとの明示列挙を欠いていた穴の是正——
+#   `inputs/identity_metric_space.json#calibration.validity_gates.
+#   positive_reference_gate.positive_reference_definition`（同ファイル
+#   行101）は positive_reference(F) を founder ごとに定義しており、
+#   文字通りの消費者は R9F-01 のみの positive 監査（R9F-02 分は省略）
+#   でも本節の条件を満たしたと解釈でき、その場合でも
+#   identity_establishment=ESTABLISHED かつ audit_stop_refs 非該当なら
+#   overall PASS へ到達し学習が進行し得た（偽成功経路）。condition を
+#   『両 founder（R9F-01/R9F-02）それぞれの positive_reference(F) 監査が
+#   実行され記録済み』の閉集合列挙へ改訂し、c0/c1 項と同型の per-founder
+#   様式に揃えた——裁定§3の founder 単位（§4/§6 と同粒度）での機械符号化
+#   であり、新規則の発明ではない。片 founder のみの欠落は改訂後も既存の
+#   `on_incomplete`（`IDENTITY_PROTOCOL_AUDIT_INCOMPLETE`）/`outcome`
+#   （`IMPLEMENTATION_FAILURE`、いずれも無改変）へ該当し、新規 outcome
+#   語彙は追加していない。`audit_completeness_refs`（frozen tuple）へは
+#   値を追加せず、`condition` プローズの改訂のみに限定した。
+#   `c0_determinism_attestation`/`c1_sham_attestation` 側は既に
+#   per-founder 明示列挙を備えており同型の曖昧さは無い（総点検、
+#   残余ゼロ）。
 hypothesis_algebra_sha:
-  value: "c10e4701677a285f36cb99823c83388da067a54e838f27c066c5b7e8c1110e03"
+  value: "e536845d424a3dc32b9f6e61f0e5028ffc7b0f65cea1e8da1fedb129699b6e18"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json
   reason: >-
     rev 0.6 裁定 §7「同protocolのraw SHA256をhypothesis_algebra_shaへ
     PINNEDする」に基づき pin。値は inputs/identity_decision_protocol_
     v0.6.json の実バイト sha256（load_pinned_identity_decision_protocol()
-    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第11巡
-    指摘1（P1、採用）で `birth_gate_overall_pass.completion_evidence_
-    requirement` 新設のため repin（上記【repin 履歴】参照）。旧値
-    （PR #333 第8巡指摘1/3、履歴として保持）:
+    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第13巡
+    指摘（P1、上限到達後、採用）で `birth_gate_overall_pass.
+    completion_evidence_requirement.condition` の positive_reference_
+    audit 項を per-founder 閉集合列挙へ改訂したため repin（上記
+    【repin 履歴】参照）。旧値（PR #333 第11巡指摘1、履歴として保持）:
+    "c10e4701677a285f36cb99823c83388da067a54e838f27c066c5b7e8c1110e03"
+    〔以下、第11巡時点の reason 原文——旧repin の理由記述として履歴保持〕
+    PR #333 第11巡指摘1（P1、採用）で `birth_gate_overall_pass.
+    completion_evidence_requirement` 新設のため repin（上記【repin
+    履歴】参照）。旧値（PR #333 第8巡指摘1/3、履歴として保持）:
     "cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887"
     〔以下、第8巡時点の reason 原文——旧repin の理由記述として履歴保持〕
     第8巡指摘1/3（P2×2、採用）で `c1_sham_attestation.outcome_priority` +

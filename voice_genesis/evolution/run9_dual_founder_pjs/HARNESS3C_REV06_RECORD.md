@@ -2543,3 +2543,184 @@ immutability 対象（`identity_metric_space.json`/`identity_domain`/
 - 上限10巡到達後の対応であるため、本節冒頭（§15 導入部）で3分類
   該当性を明記した——`AGENTS.md` §3-4・CLAUDE.md「bot レビュー対応の
   運用」節が定める運用に従う。
+
+## 16. PR #333 Codex bot レビュー第13巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`3309733c`）。**採否上限10巡到達後（§13.7）の対応**——CLAUDE.md「bot
+レビュー対応の運用」節が定める3分類（実コード被害 / 将来汚染 /
+致命的バグ）のうち、本指摘は**致命的バグ（偽成功経路）**に該当し採用
+した。§14（第11巡指摘1、監査**欠落**という未実施・部分実施の穴）とは
+別の**新規具体経路**である——第11巡は「監査が実施されたか」という3種
+（C0/C1/positive reference）単位の粗い完了性を新設したが、本巡指摘は
+その内部の`positive_reference_audit`項が単数表現に留まり、
+`c0_determinism_attestation`/`c1_sham_attestation`が備える founder
+単位（R9F-01/R9F-02）の閉集合列挙を欠いていたため、片 founder のみの
+positive 監査でも「実行され結果が記録済み」を満たしたと解釈でき、
+その場合でも identity_establishment=ESTABLISHED かつ audit_stop_refs
+非該当なら overall PASS へ到達し学習が進行し得るという、第14節とは
+別粒度（3種単位 vs founder 単位）の新規具体経路である。「打ち切りは
+3分類を上書きしない」の運用に従い、上限到達後であっても新しい具体
+経路を示す指摘として採否判定を行った。着手前に事実確認を行い、
+指摘内容が事実と一致することを確認したうえで実装した。
+
+### 16.1 指摘（P1）: 「Require positive-reference evidence from both
+founders」
+
+**事実確認（着手前）**: `inputs/identity_decision_protocol_v0.6.json`
+`birth_gate_overall_pass.completion_evidence_requirement.condition`
+（是正前）を読み、`c0_determinism_attestation`/`c1_sham_attestation`
+の各節は「両 founder（R9F-01/R9F-02）とも……本の take 結果が記録済み
+であること」という founder 単位の明示列挙で規定されている一方、
+`positive_reference_audit`の節は「実行され結果が記録済みであることを
+要求する」という単数表現のみであり、founder 単位の閉集合列挙を欠いて
+いたことを確認した。
+
+`inputs/identity_metric_space.json`（行101、`calibration.validity_
+gates.positive_reference_gate.positive_reference_definition`）を読み、
+「positive_reference(F) = 当該 founder F 自身の birth probe 時に生成
+する専用の追加レンダー1テイク」——`F`引数を明示し founder ごとに独立
+した監査対象として定義されていることを確認した。
+
+この2点を突き合わせると、`completion_evidence_requirement.condition`
+の文字通りの消費者は、`positive_reference_audit`項について「（いずれか
+1 founder の）positive_reference(F) 監査が1件でも実行され記録済み」を
+もって条件充足と解釈し得る——R9F-01 のみを監査し R9F-02 分を省略しても
+「実行され結果が記録済み」という単数表現は偽にならないため。この場合、
+`birth_gate_aggregate_rule`（identity_establishment）が ESTABLISHED、
+`audit_stop_refs`（5節の不一致述語）がいずれも非該当であれば、
+`birth_gate_overall_pass`は PASS へ到達し学習（learning recipe freeze
+/ 学習実行）が進行し得る——裁定§3が要求する「positive referenceは
+追加のexact replay監査として維持する」を founder 単位で満たさないまま
+Birth Gate を通過する偽成功経路である。指摘内容は事実と一致 → Fable
+設計どおり実装。
+
+### 16.2 実装（Fable 設計）
+
+`completion_evidence_requirement.condition`の`positive_reference_
+audit`項を、`c0_determinism_attestation`/`c1_sham_attestation`と同型の
+founder 単位閉集合列挙へ改訂した:
+
+- 旧: 「positive_reference_audit は実行され結果が記録済みであることを
+  要求する」
+- 新: 「positive_reference_audit は両 founder（R9F-01/R9F-02）それぞれ
+  の positive_reference(F)（inputs/identity_metric_space.json#
+  calibration.validity_gates.positive_reference_gate.positive_
+  reference_definition が founder 単位で定義する専用の追加レンダー1
+  テイク）監査が実行され結果が記録済みであることを要求する」
+
+裁定§3『positive referenceは追加のexact replay監査として維持する。』
+を、裁定§4/§6が founder ごとに d12/m_other/m_pjs を扱うのと同じ粒度で
+機械符号化するものであり、新規則の発明ではない。片 founder のみの
+欠落は改訂後も既存の`on_incomplete`（`IDENTITY_PROTOCOL_AUDIT_
+INCOMPLETE`）/`outcome`（`IMPLEMENTATION_FAILURE`、いずれも第11巡新設
+のまま無改変・既存語彙の再利用）へ該当する——本巡は`condition`プローズ
+の改訂のみであり、`audit_completeness_refs`（frozen tuple、3項目）へ
+値は追加していない。`note`へ本巡の是正経緯（偽成功経路の具体・founder
+単位への改訂・既存語彙再利用）を append-only で追記した（削除しない）。
+
+**C0/C1 項の同型点検**（Task 指示）: `c0_determinism_attestation`/
+`c1_sham_attestation`の各条件節は、本巡是正前から既に「両 founder
+（R9F-01/R9F-02）とも」の明示列挙を備えており、`positive_reference_
+audit`と同型の曖昧さ（founder 単位列挙の欠落）は無いことを確認した
+（`tests/test_run9_contract.py`の
+`test_pr333_r13_c0_and_c1_condition_clauses_already_enumerate_both_
+founders`が回帰確認する）。**残余はゼロ**。
+
+`RUN9_CONTRACT.yaml`の`hypothesis_algebra_sha`を
+`e536845d424a3dc32b9f6e61f0e5028ffc7b0f65cea1e8da1fedb129699b6e18`へ
+repin した（旧値
+`c10e4701677a285f36cb99823c83388da067a54e838f27c066c5b7e8c1110e03`は
+既存の【repin 履歴】コメントへ append-only で保持）。
+
+### 16.3 敵対的自己検査（`_literal_consumer_birth_gate()`）の拡張
+
+`positive_reference_audit_both_founders_complete: bool = True`を新設
+引数として追加し、`overall_pass`の連言式へ第4の軸として組み込んだ
+（`established and not audit_failed and audit_complete and positive_
+reference_audit_both_founders_complete`）。既定値`True`は「両 founder
+とも positive reference 監査済み」の世界線を表し、第5-12巡の既定値
+依存テストが表す『全成功』の前提を変えない。`False`は「片 founder の
+みの監査」という本巡指摘が指す具体的な偽成功経路を表す。
+
+あわせて、本 literal consumer 内に`completion_evidence_requirement.
+condition`が`positive_reference_audit`項について両 founder
+（R9F-01/R9F-02）を実際に明示列挙していることを確認する`assert`を
+新設した——本節のプローズが単数表現へ後退した場合、この literal
+consumer 自身が本巡指摘の欠陥（片 founder のみの監査で`audit_
+complete=True`相当を許してしまう）を再現し得るため、この assert 自体
+が本巡の回帰ガードを兼ねる（第11巡で`completion_evidence_requirement`
+節そのものの存在を確認する assert を追加した際と同型の設計判断）。
+
+### 16.4 新設テスト
+
+`tests/test_run9_contract.py`（`# --- 指摘: ...`見出し配下、6件新設）:
+
+- 構造検証: `completion_evidence_requirement.condition`の
+  `positive_reference_audit`項が R9F-01/R9F-02 双方・
+  `positive_reference(F)`表記を含むこと、旧単数表現の文字列が残置して
+  いないこと（回帰ガード）、`identity_metric_space.json`の
+  `positive_reference_definition`フラグメントパスへ実際に参照している
+  こと、`note`が第13巡の是正経緯・`IDENTITY_PROTOCOL_AUDIT_INCOMPLETE`
+  定数を記録していること。
+- 総点検確認: `c0_determinism_attestation`/`c1_sham_attestation`の
+  条件節が既に両 founder を明示列挙しており同型の曖昧さが無いこと
+  （残余ゼロの直接確認）。
+- 敵対的自己検査: `positive_reference_audit_both_founders_complete=
+  False`（他は全成功）→`birth_outcome == "ESTABLISHED"`かつ
+  `overall_pass is False`（本巡指摘の核心——是正前は本ケースが無音で
+  overall PASS へ落ち得た）。`True`（既定値）明示指定での全成功ケース
+  も回帰確認。
+
+`load_pinned_identity_decision_protocol()`側の tamper 経路・
+`hypothesis_algebra_sha`一致確認は既存テスト（第11巡新設分）が新しい
+`condition`文言・repin 後の値に対して引き続き回帰確認する（内容検証は
+非厳密一致——`_require_non_empty_str`のみのため、文言変更自体では既存
+テストの失敗は発生しない。値の一致確認は本節が更新した pin 値へ追随
+済み）。
+
+### 16.5 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2736 passed, 7 warnings in 43.96s
+```
+
+テスト件数は2730件→2736件（新設6件、§16.4参照）。
+
+### 16.6 変更ファイル
+
+- `inputs/identity_decision_protocol_v0.6.json`:
+  `completion_evidence_requirement.condition`の`positive_reference_
+  audit`項を founder 単位閉集合列挙へ改訂、`note`へ第13巡の是正経緯を
+  append-only 追記。
+- `RUN9_CONTRACT.yaml`: `hypothesis_algebra_sha`を repin
+  （`c10e4701...` → `e536845d...`、既存【repin 履歴】へ append-only
+  追記）。
+- `tests/test_run9_contract.py`: `_literal_consumer_birth_gate()`へ
+  `positive_reference_audit_both_founders_complete`引数を新設し
+  founder 単位の敵対的自己検査軸を追加、`hypothesis_algebra_sha`の
+  pin 値回帰テストを新値へ更新、新設テスト6件を追加。
+- `HARNESS3C_REV06_RECORD.md`: 本節。
+
+immutability 対象（`identity_metric_space.json`/`identity_domain`/
+`Genome`/speaker map manifest）・裁定逐語転記部分
+（`USER_ADJUDICATION_20260827_IDENTITY_REV06.txt`）は1 byte も変更して
+いない。`identity_metric_space.json`は本巡でも参照のみで無改変
+（positive_reference_definition は既存節をそのまま参照した）。既存
+frozen tuple（`_IDENTITY_PROTOCOL_OVERALL_PASS_COMPLETION_REFS`等）へ
+の値追加も行っていない——本巡は`condition`/`note`プローズの改訂のみ。
+
+### 16.7 逸脱事項
+
+- ファミリー全数掃討は§16.2の C0/C1 同型点検で実施済み（残余ゼロ）——
+  本巡指摘が対象とする「founder 単位列挙の欠落」という穴の型について、
+  `completion_evidence_requirement.condition`内の他項（c0/c1）を全数
+  点検した。`audit_completeness_refs`が参照する3節はこの2節と
+  `positive_reference_audit`のみであり、対象範囲に漏れは無い。
+- 上限10巡到達後の対応であるため、本節冒頭（§16 導入部）で3分類
+  該当性・§14との経路差異を明記した——`AGENTS.md` §3-4・CLAUDE.md
+  「bot レビュー対応の運用」節が定める運用に従う。
