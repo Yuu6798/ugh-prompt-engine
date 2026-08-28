@@ -414,15 +414,6 @@ COST_CAP_FIELDS: Tuple[str, ...] = (
 # 上限なしで課金作業を開始できてしまう（PR #330 Codex 第 1 巡 P2）。
 COST_CAP_PIN_FIELDS: Tuple[str, ...] = tuple(f"cost_cap.{name}" for name in COST_CAP_FIELDS)
 
-CONTRACT_STAGES: Tuple[str, ...] = (
-    "CORE",
-    "AFTER_CALIBRATION",
-    "BEFORE_TARGET_MEASUREMENT",
-    "AFTER_PHASE_A",
-    "PHASE_B",
-    "AFTER_RUN",
-)
-
 _STAGE_FIELDS: Dict[str, Tuple[str, ...]] = {
     "CORE": CORE_PIN_FIELDS + COST_CAP_PIN_FIELDS,
     "AFTER_CALIBRATION": AFTER_CALIBRATION_PIN_FIELDS,
@@ -431,6 +422,12 @@ _STAGE_FIELDS: Dict[str, Tuple[str, ...]] = {
     "PHASE_B": PHASE_B_PIN_FIELDS,
     "AFTER_RUN": AFTER_RUN_PIN_FIELDS,
 }
+
+# §23 の stage 語彙。**実際に検証へ効いているのは `_STAGE_FIELDS` のキー**
+# であるため、語彙をそこから導出して二重管理を無くす。別々に書くと、片方に
+# stage を足したときに「宣言された語彙」と「検証される語彙」が乖離する
+# （PR #330 第 18 巡で pin digest について同じ形を潰したのと同型）。
+CONTRACT_STAGES: Tuple[str, ...] = tuple(_STAGE_FIELDS)
 
 
 class Run10ContractError(ValueError):
@@ -470,8 +467,13 @@ class Run10Contract:
         BLOCKABLE_PIN_FIELDS は status == "BLOCKED" を許容する
         （§7.7 / §21 R10-G2: AF-P0 / AF0 欠損は RUN10 を BLOCK しない）。
         """
-        if stage not in _STAGE_FIELDS:
-            raise Run10ContractError(f"未知の stage: {stage}")
+        # 公開語彙 `CONTRACT_STAGES` そのもので照合する（`_STAGE_FIELDS` の
+        # キーから導出しているので同一集合であり、「宣言した語彙」と
+        # 「検証される語彙」が同じ 1 つになる）。
+        if stage not in CONTRACT_STAGES:
+            raise Run10ContractError(
+                f"未知の stage: {stage}（許容 {list(CONTRACT_STAGES)}）"
+            )
         out: List[str] = []
         for name in _STAGE_FIELDS[stage]:
             field = self.pins[name]

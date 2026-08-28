@@ -100,7 +100,7 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（395 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット（401 件）
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -644,3 +644,40 @@ User 裁定による**意図的な不在**であり、参照は契約 pin で既
    回していない」と「生成互換が成立した」）。生成側の成立は Phase B を実際に
    回した行にしか起こり得ないので、`GENERATIVE_SUCCESS_STATUS` の行は
    `ENTER` を要求する。不成立側の行は回していない状態を記録できる。
+
+## フォローアップ（PR #330 マージ後）
+
+### 「宣言されたが適用されていない検証器」ファミリーの終端
+
+PR #330 のレビューで同型が 3 度出た:
+
+| 巡 | 宣言したもの | 適用されていなかった場所 |
+|---|---|---|
+| 4 | `GENERATIVE_STATUS` | 一度も照合に使われていなかった |
+| 22 | `verify_design_document()` | どの検収経路にも繋がっていなかった |
+| 23 | `_is_absent_evidence()` | compatibility 行へ適用漏れ |
+
+いずれも「検査の語彙・関数を書いたが、実行経路から参照されていない」ことが
+原因である。第 20 巡の「開いたキー集合」と同じく、個別に塞ぐのではなく
+**未配線のまま追加できなくする**ことで終端した。
+
+`tests/test_enforcement_wiring.py` が静的解析（`ast`）で次を検査する:
+
+1. `run10_schema` のモジュール定数は、いずれかの関数本体から load されるか、
+   load される別の定数へモジュール階層で取り込まれていること（推移閉包 —
+   `CORE_PIN_FIELDS` のように `_STAGE_FIELDS` 経由で効くものを拾うため）
+2. 公開検証器（`assert_*` / `verify_*`）は、パッケージ内の**非テスト**
+   モジュールの関数本体から呼ばれていること
+
+例外は `UNWIRED_REGISTRY` に理由付きで登録する。登録簿に無い未配線が現れたら
+落ち、配線済みになったのに登録簿へ残っている項目でも落ちる（例外の陳腐化防止）。
+現在の登録は 5 件で、うち 2 件は `PENDING_APPLICATION:`（配線先の producer が
+まだ実装されていない予約ガード）である。
+
+### stage 語彙の単一化
+
+上の監査が `CONTRACT_STAGES` を未配線として検出した。宣言された stage 語彙は
+`CONTRACT_STAGES`、実際に検証へ効いていたのは `_STAGE_FIELDS` のキーで、
+別々に書かれていた（第 18 巡の pin digest 二重管理と同型）。`CONTRACT_STAGES`
+を `_STAGE_FIELDS` から導出し、`missing()` の照合も公開語彙側で行うようにして、
+「宣言した語彙」と「検証される語彙」を同じ 1 つにした。

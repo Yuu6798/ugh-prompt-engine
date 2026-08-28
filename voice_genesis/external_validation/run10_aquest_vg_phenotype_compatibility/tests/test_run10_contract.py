@@ -1842,3 +1842,17 @@ def test_non_success_rows_may_record_a_skipped_entry(status: str) -> None:
 def test_generative_success_status_is_a_declared_subset() -> None:
     """成立側 status の集合が §16 の enum の部分集合であること。"""
     assert set(m.GENERATIVE_SUCCESS_STATUS) < set(m.GENERATIVE_STATUS)
+
+
+# --- フォローアップ: stage 語彙の単一化 -------------------------------------
+
+
+def test_contract_stages_is_derived_from_the_enforced_table() -> None:
+    """宣言した stage 語彙と検証される stage 集合が同一であること。"""
+    assert m.CONTRACT_STAGES == tuple(m._STAGE_FIELDS)
+
+
+def test_unknown_stage_fails_closed(contract: m.Run10Contract) -> None:
+    """語彙外の stage は PASS を返さず送出する（沈黙の PASS を作らない）。"""
+    with pytest.raises(m.Run10ContractError, match="未知の stage"):
+        contract.stage_state("CORE_TYPO")
