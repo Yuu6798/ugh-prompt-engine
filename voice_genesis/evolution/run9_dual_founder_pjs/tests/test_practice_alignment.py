@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -135,4 +136,19 @@ def test_audit_manifest_is_rejected_before_wav_open(tmp_path: Path) -> None:
 
 
 def test_practice_module_does_not_import_education_lab_module() -> None:
-    assert "education_lesson_builder" not in sys.modules
+    script = "\n".join(
+        (
+            "import json",
+            "import sys",
+            f"sys.path.insert(0, {str(_RUN_DIR)!r})",
+            "import practice_alignment",
+            "print(json.dumps('education_lesson_builder' in sys.modules))",
+        )
+    )
+    completed = subprocess.run(
+        [sys.executable, "-I", "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.stdout.strip() == "false"
