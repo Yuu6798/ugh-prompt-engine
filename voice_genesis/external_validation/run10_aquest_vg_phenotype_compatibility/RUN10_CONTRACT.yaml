@@ -6,18 +6,15 @@
 # 文書本文は本 public リポジトリへ commit しない（§2.2 — private_boundary.py が機械強制）。
 #
 # 現状: R10-G0 (RUN_CONTRACT_COMPLETE) = BLOCKED。
-# Core 欄の大半が PENDING である。これは正直な状態表現であり、捏造して PINNED に
-# していない。PENDING の主因は 2 系統:
+# Core 欄にはなお PENDING が残る。これは正直な状態表現であり、捏造して PINNED に
+# していない。2026-08-28 時点で A0 inventory、標準 UTAU toolchain、private storage、
+# cost cap は実測または User 裁定により凍結済み。残る主因は 2 系統:
 #
-#   (a) A0（AquesTalk 由来 UTAU デフォルト音声）の実体が未取得 — voicebank /
-#       oto.ini / resampler / wavtool / neutral UST は User 供給かつ machine-dependent。
-#   (b) 公開境界の残件 — R10-PUB-1（public リポジトリの扱い）は User 裁定
-#       2026-08-27「実装コードのみ public で継続」で決着したが、§26 private
-#       staging root の実体が未確定のため private_storage_policy_sha は
-#       凍結できない（inputs/private_storage_policy.json の residual_unresolved）。
+#   (a) neutral carrier / UST と UTAU ExecutionProfile、A0 recorded pitch inventory。
+#   (b) rights archive、measurement/calibration、V1、blind/evaluation 手順等の未実装成果物。
 #
-# PINNED 済みの欄は、実バイト検証を通した AF01 v1.0 由来のものだけである
-# （af01_freeze_verifier.py が 15/15 PASS を再現する）。
+# AF0 / AF-P0 historical reference は User 裁定により Hard 判定へ使わず BLOCKED。
+# Primary VoiceGenesis reference は AF01 v1.0 のままである。
 #
 # design_revision の erratum: 文書ヘッダと §37 は v0.4 だが §23/§27 の雛形は
 # "0.3" のまま。v0.4 で AF01 凍結登録という実体的改訂が入っているため、
@@ -104,29 +101,36 @@ rights_manifest_sha:
     アーカイブの sha と voicebank 来歴が未確定のため凍結できない。
 
 private_storage_policy_sha:
-  value: null
-  status: PENDING
+  value: a4280fc0f1761ae9b77e4c6946e9260ba80e76a08257824eb34dbfc737f61988
+  status: PINNED
   reason: >
-    R10-PUB-1（public リポジトリの扱い）は User 裁定 2026-08-27
-    「実装コードのみ public で継続」で決着済み。ただし §26 private staging
-    root の実体が未確定のため方針文書を凍結できない。
+    User 裁定 2026-08-28 により owner-only Google Drive 領域
+    VoiceGenesis/External_Validation/AQUEST/RUN10_Private_Assets/ を正式採用。
+    Google Drive API で対象と親階層の shared=false、owner 権限のみ、broad permission
+    不在を再検証した inputs/private_storage_policy.json の実バイト sha256。
 
 pre_run_inventory_sha:
   value: null
   status: PENDING
   reason: >
-    pre_run/build_pre_run_inventory.py は実装済みだが、A0 voicebank と
-    AF01 bundle 実体が未取得のため inventory は不完全（§29 手順 3）。
+    pre_run/build_pre_run_inventory.py は実装済み。A0、設計文書、AF01 bundle は
+    private staging へ取得済みだが、Linux での AF01 replay、A0 recorded pitch、
+    meter 群、V1 route 等が未完了のため最終 inventory は未凍結（§29 手順 3）。
 
 aquest_voicebank_manifest_sha:
-  value: null
-  status: PENDING
-  reason: A0 = AquesTalk 由来 UTAU デフォルト音声の実体が未取得（User 供給・machine-dependent）。
+  value: 042813936caf759f3fc95a29a6655a07c76a3a302bd6705538443ca5d08fe01f
+  status: PINNED
+  reason: >
+    owner-only private staging の A0 = UTAU 0.4.19(c) 同梱 _Default を
+    pre_run/build_a0_manifest.py で走査した manifest 実バイト sha256。
+    独立 2 回生成が byte-identical、288 files、WAV 142、unreadable 0。
 
 aquest_raw_file_order_sha:
-  value: null
-  status: PENDING
-  reason: A0 未取得のため file order を確定できない（§7.1 必須 pin）。
+  value: 2c6be5939fc5e849c4d77962edc6b22c29e809b731ba2d2a8c7e5fc6c7931b13
+  status: PINNED
+  reason: >
+    上記 A0 manifest が記録する root-relative POSIX path の UTF-8 byte-order
+    ソート列 sha256（§7.1）。
 
 aquest_recorded_pitch_inventory_sha:
   value: null
@@ -136,14 +140,16 @@ aquest_recorded_pitch_inventory_sha:
     実質単一ピッチ収録なら cross-pitch persistence = NOT_EVALUABLE となる。
 
 oto_ini_sha:
-  value: null
-  status: PENDING
-  reason: A0 未取得（§7.1 必須 pin）。
+  value: 9836404bfdcac094acefe7c87a7ae8923b5def8607a87b38ab0572549246d0e1
+  status: PINNED
+  reason: A0 _Default/oto.ini の raw bytes sha256（§7.1）。
 
 utau_execution_profile_sha:
   value: null
   status: PENDING
-  reason: UTAU 実行環境（version / OS / 実行形態）が未確定（§9.3）。
+  reason: >
+    UTAU 0.4.19(c) と標準 resampler/wavtool は選定・pin 済みだが、§9.3 の
+    carrier/UST/tempo/note duration/flags/render seed を含む全 profile は未凍結。
 
 neutral_carrier_manifest_sha:
   value: null
@@ -156,14 +162,19 @@ neutral_ust_sha:
   reason: neutral UST 未作成。§9.2 の禁止操作不在を検証してから凍結する（§29 手順 10-11）。
 
 resampler_sha:
-  value: null
-  status: PENDING
-  reason: resampler 未選定（§32 Stop Rule 7 = pin 不能なら停止）。
+  value: fca8affa0398f157bd2a00e3d07e400c60c1c03c190e9bcb5e89e17dad7abd4c
+  status: PINNED
+  reason: >
+    User 裁定 2026-08-28 により UTAU 0.4.19(c) 同梱標準 resampler.exe を
+    canonical render toolchain に採用。raw bytes sha256。third-party / version
+    fallback と target 観測後の差替えは禁止し、実行前後の不一致は fail-closed。
 
 wavtool_sha:
-  value: null
-  status: PENDING
-  reason: wavtool 未選定（§32 Stop Rule 7）。
+  value: 3717891b7cbc788731bbf7459d724283923b4642ba687ca269ee81bd18370cb0
+  status: PINNED
+  reason: >
+    User 裁定 2026-08-28 により UTAU 0.4.19(c) 同梱標準 wavtool.exe を
+    canonical render toolchain に採用した raw bytes sha256。差替え禁止。
 
 vg_evolution_theory_ref_sha:
   value: 87f4208ffdd213099977c4b5a1ee5d06852524036c818e4b14ce6b0e355b2e93
@@ -180,18 +191,19 @@ vg_evolution_theory_ref_sha:
 
 af_p0_design_ref_sha:
   value: null
-  status: PENDING
+  status: BLOCKED
   reason: >
-    §7.7 / §21 R10-G2 により optional historical reference。実体照合が
-    未実施のため PENDING。AF 固有 family を Hard 判定へ使わない場合は
-    BLOCKED へ落として RUN10 を継続してよい（欠損は全体を BLOCK しない）。
+    User 裁定 2026-08-28 により RUN10-ATTEMPT-01 の Hard 判定へ使用しない。
+    historical artifact の失敗・不存在を主張するものではなく、正典実体と provenance
+    を本 attempt の比較 reference として十分に確認しないという optional BLOCKED。
 
 af0_canonical_artifact_sha:
   value: null
-  status: PENDING
+  status: BLOCKED
   reason: >
-    §7.7 により optional。RUN10 の Primary V0 は AF0 ではなく AF01 v1.0
-    であるため、欠損は Phase A の BLOCKER ではない。
+    User 裁定 2026-08-28 により AF0 固有 family は NOT_EVALUABLE。
+    Primary V0 は AF01 v1.0 canonical C4 Body とし、AQUEST target 測定開始後に
+    AF0 reference を本 attempt へ追加しない。
 
 vg_reference_manifest_sha:
   value: 19538ccb81c001d22bb8bda26e99edbeca433b9b98595bf8814877956130ed89
@@ -431,21 +443,27 @@ cost_record_sha:
 
 cost_cap:
   cpu_hours_max:
-    value: null
-    status: PENDING
-    reason: §33 により cost cap は User 裁定事項。未裁定。
+    value: 48
+    status: PINNED
+    reason: >
+      User 裁定 2026-08-28。Phase A と、ENTER 時の Phase B を合わせた
+      RUN10-ATTEMPT-01 全体の Hard Cap。Phase A は CPU-only。
   gpu_hours_max:
-    value: null
-    status: PENDING
-    reason: §33 により User 裁定事項。Phase A は CPU 測定のみを想定するが未裁定。
+    value: 2
+    status: PINNED
+    reason: >
+      User 裁定 2026-08-28。GPU は Phase B または明示的に必要な既存 VoiceGenesis
+      経路だけで使用可能。GPU fallback / 自動選択は禁止。
   storage_bytes_max:
-    value: null
-    status: PENDING
-    reason: §33 により User 裁定事項。未裁定。
+    value: 5000000000
+    status: PINNED
+    reason: User 裁定 2026-08-28。RUN10-ATTEMPT-01 全体の Hard Cap。
   render_count_max:
-    value: null
-    status: PENDING
-    reason: §33 により User 裁定事項。未裁定。
+    value: 2000
+    status: PINNED
+    reason: >
+      User 裁定 2026-08-28。RUN10-ATTEMPT-01 全体の Hard Cap。
+      本 Run でモデル学習を実行しない。結果確認後の同一 attempt 内引き上げ禁止。
 
 # =========================================================================
 # Claim Ceiling（§5.3）— scalar へ圧縮しない

@@ -1,10 +1,10 @@
 {
   "schema": "voicegenesis-run10-private-storage-policy/0.1",
   "run_id": "RUN10",
-  "status": "ADJUDICATED_STAGING_ROOT_PENDING",
+  "status": "ADJUDICATED_PRIVATE_ROOT_VERIFIED",
   "blocking_question": {
     "id": "R10-PUB-1",
-    "severity": "STOP_RULE_CANDIDATE",
+    "severity": "RESOLVED",
     "stop_rules": [
       "§32-2 private-only storage cannot be guaranteed",
       "§32-16 third-party distribution or public upload detected"
@@ -16,6 +16,13 @@
     "interim_rationale": "本方針は裁定により暫定でなくなった。private カテゴリの混入は private_boundary.py と tests/test_private_output_boundary.py が機械的に阻止し続ける。",
     "adjudicated_at": "2026-08-27",
     "adjudication_record": "User 裁定 2026-08-27（本セッション内、選択肢 1 を採用）: 「実装コードのみ public で継続」。暫定運用 FAIL_CLOSED_MINIMUM をそのまま正式運用へ昇格する。AQUEST 由来資産・音声・モデル・blind map・測定値・集計表・設計文書本文は public リポジトリへ置かず Drive 側 private に留める。"
+  },
+  "private_root_adjudication": {
+    "adjudicator": "User",
+    "adjudicated_at": "2026-08-28",
+    "decision": "APPROVED_OWNER_ONLY",
+    "persistent_root": "VoiceGenesis/External_Validation/AQUEST/RUN10_Private_Assets/",
+    "temporary_execution": "SESSION_LOCAL_ONLY"
   },
   "repository_allowed": {
     "note": "public リポジトリへ commit してよいカテゴリ（User 裁定 2026-08-27 により確定）。",
@@ -35,7 +42,8 @@
       "private feature JSON / measured values / aggregate tables",
       "DESIGN_RUN10 本文（全 revision）および旧 RUN10 案本文",
       "trained models / synthesis systems derived from AquesTalk assets",
-      "VoiceGenesis_Evolution_Theory_v0.3_ja.md 本体（User 裁定 2026-08-27: リポジトリに載せない。参照は sha256 pin と実行時照合のみ）"
+      "VoiceGenesis_Evolution_Theory_v0.3_ja.md 本体（User 裁定 2026-08-27: リポジトリに載せない。参照は sha256 pin と実行時照合のみ）",
+      "UTAU 標準 resampler.exe / wavtool.exe の実体（User 裁定 2026-08-28: private のみ。public には sha256 pin のみ）"
     ],
     "enforced_by": "private_boundary.py::assert_tracked_tree_clean",
     "reaffirmations": [
@@ -49,11 +57,25 @@
     ]
   },
   "private_staging": {
-    "note": "§26 Atomic Private Results Bundle の staging root。リポジトリ外の private ストレージに置く。",
-    "root": "<PENDING_USER_ATTESTATION>",
-    "drive_layout_reference": "§25 VoiceGenesis/External_Validation/AQUEST/Plan_A_ExistingVoice_Phenotype_Compatibility_Audit/",
-    "sharing": "private",
-    "verified": false
+    "note": "§26 Atomic Private Results Bundle の persistent private root。実際の展開・render・一時解析は session-local private workdir で行い、検証済み成果物だけをこの owner-only Drive 領域へ publish する。",
+    "root": "Google Drive: VoiceGenesis/External_Validation/AQUEST/RUN10_Private_Assets/",
+    "drive_layout_reference": "VoiceGenesis/External_Validation/AQUEST/RUN10_Private_Assets/{source_assets,private_results,staging_records}/",
+    "sharing": "owner-only",
+    "verified": true,
+    "verified_at": "2026-08-28",
+    "verification_evidence": {
+      "source": "Google Drive files.get permission metadata for the target folder and each named parent",
+      "shared": false,
+      "permission_types": [
+        "user:owner"
+      ],
+      "broad_permissions": []
+    }
+  },
+  "temporary_execution": {
+    "location": "session-local private workdir",
+    "persistent_publication": false,
+    "publish_only_verified_outputs": true
   },
   "results_directory": {
     "path": "results/",
@@ -61,9 +83,7 @@
     "note": "§26 により results/ は private bundle。.gitignore 以外を commit しない。"
   },
   "residual_unresolved": {
-    "note": "R10-PUB-1 は裁定済みだが、private_storage_policy_sha を PINNED 化するには private staging root の実体確定（private_staging.root）が残っている。",
-    "items": [
-      "private_staging.root"
-    ]
+    "note": "User 裁定 2026-08-28 と Google Drive permission metadata の再検証により、private staging root に関する残件はない。",
+    "items": []
   }
 }
