@@ -688,3 +688,165 @@ manifest` 系の既存テストが実データを通すことで正常系を確�
   形で実装した（裁定の immutability 原則・第1巡の「履歴残置」慣習との
   整合を優先した設計判断——Fable 設計メモの「旧参照を保持（履歴残置
   様式）」指示に沿う）。
+
+## 6. PR #333 Codex bot レビュー第3巡対応（2026-08-28、フェーズ1）
+
+### 6.0 第2巡の見落とし（正直な記録）
+
+第2巡指摘1は「bridge の `identity_metric_space_ref` が supersede 済み
+calibration 節を指したまま」という欠陥を、新規 `identity_decision_
+protocol_ref`（判定規則の現行正本）+ `superseded_calibration_note`
+（本文明記）の追加で是正した。しかしこの是正自体が新たな曖昧さを
+生んでいたことを見落としていた: `supersede_declaration.superseded_
+sections` は `calibration.freeze_threshold`/`calibration.validity_gates`
+を**節ごと**（節配下の全サブフィールドを含めて）supersede すると宣言する
+一方、追加した `superseded_calibration_note` は同じ節配下の生成定義
+（例: `calibration.freeze_threshold.d_c0_population` — founder-pooling
+禁止・自己比較禁止という母集団の作り方の定義）を「参照により有効のまま
+履歴保持する」と個別に宣言していた。つまり「節丸ごと supersede」という
+宣言と、「節配下の特定サブフィールドは今も有効」という依存が同一 protocol
+内で同時成立しており、機械的にどちらが正本か決定不能だった——第2巡時点
+ではこの二重宣言の矛盾を検出する仕組み（閉じた集合検査・cross-document
+照合）が存在しなかった。
+
+### 6.1 指摘1（P1）: supersede 宣言と生成定義依存の同時成立
+
+**事実確認**: `inputs/identity_decision_protocol_v0.6.json`
+`supersede_declaration.superseded_sections` は
+`inputs/identity_metric_space.json#calibration.freeze_threshold` /
+`#calibration.validity_gates` / `#calibration.decision_rule` の3節を
+**節ごと**列挙している。一方 `evaluation/probe_manifest.json`
+`revision_bridge` の `c0_replay_takes`/`c1_sham_takes`/
+`positive_reference`/`negative_reference` 4エントリの
+`superseded_calibration_note`（第2巡で追加）は、同じ節配下の生成定義
+（`calibration.freeze_threshold.d_c0_population` /
+`calibration.validity_gates.c1_gate.d_c1_population` /
+`calibration.validity_gates.positive_reference_gate.positive_reference_
+definition` / `calibration.validity_gates.negative_reference_gate.
+negative_reference_definition`）を指して「population定義（founder-
+pooling・自己比較）自体は参照により有効のまま履歴保持する」「定義自体
+（reference/C0双方と別の独立テイク1本）は参照により有効のまま履歴保持
+する」と、判定規則としては supersede 済みだが**生成定義としては今も
+有効**と明記していた（`run9_schema.py` 873-897/904-910行付近の
+`_REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES` コメント + 実 JSON
+`evaluation/probe_manifest.json` 873-910行付近を確認）。裁定§7 逐語
+「旧calibration/decision ruleをrev 0.6実行についてsupersedeする」は
+「calibration/decision rule」という語で判定意味論を指しており、生成
+手順（母集団の作り方・reference の定義）の supersede までは明言して
+いない——bridge note の解釈（生成定義は今も有効）は裁定逐語と整合する
+一方、protocol 側の `superseded_sections` の**節丸ごと**列挙という
+表現形式がその区別を機械可読な形で表していなかった、というのが本指摘の
+核心である。指摘記載の行番号「probe_manifest.json 893-910 行付近」は
+実ファイルの `negative_reference`（893-897行）/`positive_reference`
+（904-910行）エントリと一致することを確認した（着手前の事実確認）。
+
+**実装**: `identity_decision_protocol_v0.6.json` の
+`supersede_declaration` へ `preserved_generation_definitions`（bridge
+4エントリが実際に消費する生成定義 dotted path の閉じた列挙、4件）+
+`preserved_generation_definitions_note`（機械可読な範囲宣言 — supersede
+の対象は当該節の閾値推定・判定意味論のみであり、列挙した生成定義は生成
+手順の正本として有効のまま、判定の現行正本は protocol 側の対応節を参照
+する旨を明記）を新設した。4件の path は `run9_schema.py` の bridge 側
+唯一の正本 `_REVISION_BRIDGE_EXPECTED_METRIC_REF` から、supersede-
+calibration 対象4エントリ名（`_REVISION_BRIDGE_SUPERSEDED_CALIBRATION_
+ENTRIES`）についてのみ**導出**した新規定数
+`_IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS`（single source of
+truth — bridge 側の凍結表と手で二重に書き起こさない）を正として、
+`validate_identity_decision_protocol()` の閉じた集合検査（`_validate_
+identity_protocol_metric_ref_list()` 再利用）+ note のマーカー検査
+（`_validate_marker_bearing_str()` 再利用、マーカー `"supersede"`/
+`"生成定義"`）で強制する。`load_pinned_identity_decision_protocol()`
+cross-check (8)（旧 (13)）の走査ループへ `preserved_generation_
+definitions` の各 dotted path を追加し、`identity_metric_space.json` に
+実在することも走査する（既存 `preserved_sections`/`superseded_sections`
+走査と同型）。
+
+さらに `_validate_revision_bridge_entry()`（`evaluation/probe_manifest.
+json` 側）へ cross-document 閉包検査を追加した: 各 superseded-
+calibration エントリの `identity_metric_space_ref`（実データの値、
+Python 定数ではない）が、実際に読み込んだ `identity_decision_protocol_
+v0.6.json` 文書（`_load_identity_decision_protocol_document()` 経由）の
+`supersede_declaration.preserved_generation_definitions` に含まれる
+ことを fail-closed で強制する。これにより、将来 bridge 側に新たな
+superseded-calibration エントリが増えた場合（`_REVISION_BRIDGE_
+SUPERSEDED_CALIBRATION_ENTRIES`/`_REVISION_BRIDGE_EXPECTED_METRIC_REF`
+の更新）、`_IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS`
+（Python 定数側、bridge から自動導出）と protocol JSON 側の宣言の両方が
+連動して更新を強制される二重防御になる——Python 定数の更新だけでは
+実 JSON ファイルは変わらないため、この cross-document 検査が実際の
+乖離を検出する主体である。`evaluation/probe_manifest.json`/`inputs/
+measurement_spec_manifest.json` 自体は本巡では無改変（bridge note の
+文言は「参照先 path としては supersede 済みの節を指す」という第2巡の
+表現のままで新構造と矛盾しないため、最小是正すら不要と判定した）。
+
+**repin cascade**: `inputs/identity_decision_protocol_v0.6.json` バイト
+変更に伴い `hypothesis_algebra_sha` を repin
+（旧 `cde8b003ff88b78693c81058e3a80ec4fbfe546df7e3f8e61812c8d6f61c67c1` →
+新 `7525cd5ef484bfd94a234f25b44a48368d2f1607f334de1b868863c1bd133f4a`）。
+`evaluation/probe_manifest.json`/`inputs/measurement_spec_manifest.json`
+は無改変のため `probe_manifest_sha`/`measurement_spec_sha` の repin は
+発生しない。
+
+### 6.2 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2614 passed, 8 warnings in ~43s
+```
+
+新設テスト10件（2604→2614）: `tests/test_run9_contract.py` に7件
+（`preserved_generation_definitions` の bridge 導出一致確認・閉じた集合
+検査の過剰/不足エントリ拒否・キー欠落拒否・note マーカー欠落/空文字
+拒否・loader typo 走査）、`tests/test_run9_probe_manifest.py` に3件
+（実データでの4エントリ閉包検査通過確認・`IDENTITY_DECISION_PROTOCOL_
+PATH` 差し替えによる列挙外 path 拒否の合成 fixture・列挙キー自体の欠落
+拒否）。
+
+### 6.3 変更ファイル
+
+- `inputs/identity_decision_protocol_v0.6.json`:
+  `supersede_declaration` へ `preserved_generation_definitions`（4件）+
+  `preserved_generation_definitions_note` 新設。
+- `run9_schema.py`: `_IDENTITY_PROTOCOL_PRESERVED_GENERATION_
+  DEFINITIONS`（bridge 側凍結表から導出）/`_IDENTITY_PROTOCOL_
+  PRESERVED_GENERATION_DEFINITIONS_NOTE_MARKERS` 新設定数、
+  `validate_identity_decision_protocol()` の `supersede_declaration`
+  検証拡張（新2キーの閉じた集合検査 + note マーカー検査）、
+  `load_pinned_identity_decision_protocol()` cross-check 走査へ
+  `preserved_generation_definitions` 追加、`_validate_revision_bridge_
+  entry()` へ cross-document 閉包検査（bridge の `identity_metric_
+  space_ref` が protocol 側の `preserved_generation_definitions` に
+  含まれることの fail-closed 強制）を追加。
+- `RUN9_CONTRACT.yaml`: `hypothesis_algebra_sha` repin（値・repin履歴
+  コメント追加）。
+- `tests/test_run9_contract.py`: 上記の回帰テスト・repin 値更新・新規
+  fail-closed テスト7件追加。
+- `tests/test_run9_probe_manifest.py`: 閉包検査の回帰・fail-closed
+  テスト3件追加。
+
+### 6.4 逸脱事項
+
+- immutability 対象（`identity_metric_space.json`/`identity_domain`/
+  `Genome`/speaker map manifest）・裁定逐語転記部分（`USER_ADJUDICATION_
+  20260827_IDENTITY_REV06.txt`）は 1 byte も変更していない（`git status
+  --short` で確認済み）。
+- `evaluation/probe_manifest.json`/`inputs/measurement_spec_manifest.
+  json` は Fable 設計メモが想定した「bridge note の文言が『節ごと
+  supersede』前提で書かれていて新構造と矛盾する場合のみ最小是正」の
+  条件に該当しないと判定し、無改変とした——既存 `superseded_calibration_
+  note` の文言（「識別子（specific dotted path）レベルで supersede
+  済み」という表現）は、本改訂後も「判定規則としては supersede 済み」
+  という意味で読める限り新構造と矛盾しない。
+- `_IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS` を bridge 側の
+  凍結表（`_REVISION_BRIDGE_EXPECTED_METRIC_REF` +
+  `_REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES`）から直接導出する
+  設計とした（ハードコードされた別リストとして二重に書き起こさない）。
+  これにより Python 定数同士の乖離は構造的に発生しないが、実 JSON
+  ファイル（protocol 側の宣言）との乖離は自動では防げないため、
+  `_validate_revision_bridge_entry()` の cross-document 閉包検査を
+  別途追加し、実データレベルでも二重防御とした——設計メモの「閉包検査」
+  指示を、Python 定数間の構造的保証 + 実文書間の実行時検査の2段構えで
+  実装した設計判断。

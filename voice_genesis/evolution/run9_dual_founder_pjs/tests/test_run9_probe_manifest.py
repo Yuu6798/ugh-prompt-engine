@@ -3072,3 +3072,85 @@ def test_negative_fix24_recipe_marker_missing(
     p3["role"] = p3["role"].replace(marker, "")
     with pytest.raises(m.Run9ValidationError):
         m.validate_probe_manifest(bad)
+
+
+# ---------------------------------------------------------------------------
+# PR #333 Codex bot レビュー第3巡指摘1（P1、採用）: revision_bridge の
+# C0/C1/positive/negative 4エントリの `identity_metric_space_ref` が
+# identity_decision_protocol_v0.6.json の supersede_declaration.
+# preserved_generation_definitions に列挙されていることの閉包検査
+# ---------------------------------------------------------------------------
+
+
+def test_pr333_r3_positive_all_superseded_calibration_entries_are_preserved(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """回帰確認: 実 probe_manifest.json + 実 identity_decision_protocol_
+    v0.6.json の組で、C0/C1/positive/negative の4エントリいずれも閉包
+    検査を通過すること（full-chain 経由）。"""
+    m.validate_probe_manifest(manifest_data)  # 例外なしの確認
+    protocol_document = m._load_identity_decision_protocol_document()
+    preserved = set(
+        protocol_document["supersede_declaration"]["preserved_generation_definitions"]
+    )
+    for entry_name in m._REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES:
+        ref = manifest_data["revision_bridge"][entry_name]["identity_metric_space_ref"]
+        assert ref in preserved, f"{entry_name}: {ref!r} not in preserved_generation_definitions"
+
+
+def test_negative_pr333_r3_bridge_ref_outside_preserved_generation_definitions(
+    manifest_data: Dict[str, Any], tmp_path: Path,
+) -> None:
+    """`identity_decision_protocol_v0.6.json` の
+    `supersede_declaration.preserved_generation_definitions` から
+    `c0_replay_takes` が実際に参照する生成定義 path を1件取り除いた合成
+    fixture を `IDENTITY_DECISION_PROTOCOL_PATH` へ差し替えると、
+    `validate_probe_manifest()` full-chain が閉包検査で fail-closed 拒否
+    すること（実ファイルは一切改変しない——`m.IDENTITY_DECISION_PROTOCOL_
+    PATH` を差し替えて元へ復元する、`SCORE_PY_REFERENCE_PATH` と同型の
+    monkeypatch 方式）。"""
+    protocol_data = copy.deepcopy(m._load_identity_decision_protocol_document())
+    removed_ref = "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population"
+    items = protocol_data["supersede_declaration"]["preserved_generation_definitions"]
+    assert removed_ref in items
+    items.remove(removed_ref)
+    tampered_path = tmp_path / "identity_decision_protocol_v0.6_tampered.json"
+    tampered_path.write_text(
+        json.dumps(protocol_data, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    original_path = m.IDENTITY_DECISION_PROTOCOL_PATH
+    try:
+        m.IDENTITY_DECISION_PROTOCOL_PATH = tampered_path  # type: ignore[misc]
+        with pytest.raises(
+            m.Run9ValidationError, match="preserved_generation_definitions"
+        ):
+            m.validate_probe_manifest(_mutate(manifest_data))
+    finally:
+        m.IDENTITY_DECISION_PROTOCOL_PATH = original_path  # type: ignore[misc]
+    # 復元後は通常どおり通過することを確認する（後続テストへの汚染防止）。
+    m.validate_probe_manifest(_mutate(manifest_data))
+
+
+def test_negative_pr333_r3_bridge_ref_missing_preserved_generation_definitions_key(
+    manifest_data: Dict[str, Any], tmp_path: Path,
+) -> None:
+    """`preserved_generation_definitions` キー自体が存在しない合成
+    fixture でも（`.get(..., [])` フォールバックにより）closure check が
+    通常どおり fail-closed で拒否すること（KeyError で落ちず
+    Run9ValidationError として一貫させる）。"""
+    protocol_data = copy.deepcopy(m._load_identity_decision_protocol_document())
+    del protocol_data["supersede_declaration"]["preserved_generation_definitions"]
+    tampered_path = tmp_path / "identity_decision_protocol_v0.6_no_key.json"
+    tampered_path.write_text(
+        json.dumps(protocol_data, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    original_path = m.IDENTITY_DECISION_PROTOCOL_PATH
+    try:
+        m.IDENTITY_DECISION_PROTOCOL_PATH = tampered_path  # type: ignore[misc]
+        with pytest.raises(m.Run9ValidationError):
+            m.validate_probe_manifest(_mutate(manifest_data))
+    finally:
+        m.IDENTITY_DECISION_PROTOCOL_PATH = original_path  # type: ignore[misc]
+    m.validate_probe_manifest(_mutate(manifest_data))

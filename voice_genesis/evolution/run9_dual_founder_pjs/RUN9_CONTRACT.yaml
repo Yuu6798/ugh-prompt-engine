@@ -3501,17 +3501,29 @@ measurement_spec_sha:
 #   m_pjs が有限実数であることが前提）にも該当しない invalid/non-finite
 #   feature の未登録分岐を埋める（birth_identity_separation.invalid_or_
 #   nonfinite_feature と同型、裁定§9 の機械符号化。新規則の発明ではない）。
+# - PR #333 Codex bot レビュー第3巡指摘1（2026-08-28、P1、採用、値
+#   7525cd5ef484bfd94a234f25b44a48368d2f1607f334de1b868863c1bd133f4a へ
+#   repin）: `supersede_declaration` へ `preserved_generation_definitions`
+#   （+ `preserved_generation_definitions_note`）を追加した——
+#   superseded_sections が calibration.freeze_threshold/validity_gates を
+#   節ごと supersede すると宣言する一方、bridge の superseded_calibration_
+#   note が同じ節配下の生成定義（d_c0_population 等）を「参照により有効の
+#   まま履歴保持する」と個別に宣言しており、supersede 宣言（節丸ごと）と
+#   依存（節配下の生成定義は今も有効）が同時成立して Gate 入力生成手順の
+#   正本が曖昧だった欠陥の是正（新規則の発明ではなく、supersede 宣言の
+#   対象範囲を threshold/decision-rule 意味論のみへ機械可読に凍結し直す
+#   スコープ明確化）。
 hypothesis_algebra_sha:
-  value: "cde8b003ff88b78693c81058e3a80ec4fbfe546df7e3f8e61812c8d6f61c67c1"
+  value: "7525cd5ef484bfd94a234f25b44a48368d2f1607f334de1b868863c1bd133f4a"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json
   reason: >-
     rev 0.6 裁定 §7「同protocolのraw SHA256をhypothesis_algebra_shaへ
     PINNEDする」に基づき pin。値は inputs/identity_decision_protocol_
     v0.6.json の実バイト sha256（load_pinned_identity_decision_protocol()
-    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第2巡
-    指摘2（P2、採用）で post_learning_identity_retention.invalid_or_
-    nonfinite_feature 分岐を追加したため repin（上記【repin 履歴】参照）。
+    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第3巡
+    指摘1（P1、採用）で supersede_declaration.preserved_generation_
+    definitions（+ note）を追加したため repin（上記【repin 履歴】参照）。
 
 # PR #333 Codex bot レビュー第1巡指摘1（P1、採用）新設: hypothesis_algebra_
 # sha が rev 0.6 裁定 §7 で identity decision protocol の pin へ用途確定

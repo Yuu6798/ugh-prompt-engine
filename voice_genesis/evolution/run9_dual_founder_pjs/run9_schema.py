@@ -6569,6 +6569,26 @@ def _validate_revision_bridge_entry(
                 f"for entry {entry_name!r} (エントリ→期待 path の厳密対応、Fix 8 と同方式), got "
                 f"{protocol_ref!r}"
             )
+        # PR #333 第3巡指摘1（P1、採用）: identity_metric_space_ref が指す
+        # 生成定義 path（ref、上記で解決・厳密一致済み）が、
+        # identity_decision_protocol_v0.6.json（実文書、Python 定数では
+        # ない）の supersede_declaration.preserved_generation_definitions
+        # に実際に列挙されていることを cross-document で検査する（閉包
+        # 検査 — bridge が消費する生成定義 path が protocol 側で「今も
+        # 有効」と宣言されないまま参照されることを防ぐ。将来 bridge に
+        # 新規 superseded-calibration エントリが増えた場合、protocol 側の
+        # 列挙更新を怠るとここで fail-closed する）。
+        preserved_generation_definitions = identity_decision_protocol_document.get(
+            "supersede_declaration", {}
+        ).get("preserved_generation_definitions", [])
+        if ref not in preserved_generation_definitions:
+            raise Run9ValidationError(
+                f"{field}.identity_metric_space_ref ({ref!r}) is not listed in "
+                "inputs/identity_decision_protocol_v0.6.json#supersede_declaration."
+                "preserved_generation_definitions — the generation definition this bridge entry "
+                "consumes must be declared as preserved there (closure check between the bridge's "
+                "superseded-calibration entries and the protocol's supersede declaration)"
+            )
         note = _require_non_empty_str(
             entry["superseded_calibration_note"], field=f"{field}.superseded_calibration_note",
         )
@@ -20164,6 +20184,36 @@ _IDENTITY_PROTOCOL_SUPERSEDED_METRIC_SECTIONS: FrozenSet[str] = frozenset({
     _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.decision_rule",
 })
 
+# PR #333 Codex bot レビュー第3巡指摘1（P1、採用）: superseded_sections は
+# calibration.freeze_threshold/validity_gates を節ごと supersede すると
+# 宣言する一方、evaluation/probe_manifest.json revision_bridge の
+# C0/C1/positive/negative 4エントリの superseded_calibration_note は同じ
+# 節配下の生成定義（d_c0_population 等、母集団の作り方・reference の定義）
+# を「参照により有効のまま履歴保持する」と個別に宣言していた——supersede
+# 宣言（節丸ごと）と依存（節配下の生成定義は今も有効）が同時成立し、Gate
+# 入力生成手順の正本が曖昧だった。本定数は `_REVISION_BRIDGE_EXPECTED_
+# METRIC_REF`（bridge 側の唯一の正本 dict）から、`_REVISION_BRIDGE_
+# SUPERSEDED_CALIBRATION_ENTRIES`（C0/C1/positive/negative の4エントリ名）
+# についてのみ導出する——bridge 定数から直接導出することで、bridge が実際
+# に参照する生成定義 path と本定数が構造的に乖離できないようにする
+# （single source of truth）。将来 bridge に新たな superseded-calibration
+# エントリが増えれば本定数も自動的に増え、protocol 側 JSON の
+# `preserved_generation_definitions` 列挙の更新が
+# `validate_identity_decision_protocol()` の閉じた集合検査によって
+# 強制される（閉包検査）。`_validate_revision_bridge_entry()` はさらに、
+# bridge 各エントリの `identity_metric_space_ref` が実際の protocol
+# document（JSON ファイル、Python 定数ではない）が宣言する
+# `preserved_generation_definitions` に含まれることを cross-document で
+# 検査する（本定数との二重防御——どちらか片方だけが更新されて乖離する
+# ことを防ぐ）。
+_IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS: FrozenSet[str] = frozenset(
+    _REVISION_BRIDGE_EXPECTED_METRIC_REF[name]
+    for name in _REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES
+)
+_IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS_NOTE_MARKERS: Tuple[str, str] = (
+    "supersede", "生成定義",
+)
+
 # immutability（裁定 §7 逐語列挙、順序込み・7項目ちょうど）。
 _IDENTITY_PROTOCOL_UNCHANGED_ITEMS: Tuple[str, ...] = (
     "inputs/identity_metric_space.json",
@@ -20329,7 +20379,10 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
     # --- supersede_declaration --------------------------------------------
     supersede = _validate_identity_protocol_shape(
         data["supersede_declaration"], field="supersede_declaration",
-        required_keys=frozenset({"verbatim", "preserved_sections", "superseded_sections"}),
+        required_keys=frozenset({
+            "verbatim", "preserved_sections", "superseded_sections",
+            "preserved_generation_definitions", "preserved_generation_definitions_note",
+        }),
     )
     _require_non_empty_str(supersede["verbatim"], field="supersede_declaration.verbatim")
     _validate_identity_protocol_metric_ref_list(
@@ -20339,6 +20392,23 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
     _validate_identity_protocol_metric_ref_list(
         supersede["superseded_sections"], field="supersede_declaration.superseded_sections",
         expected=_IDENTITY_PROTOCOL_SUPERSEDED_METRIC_SECTIONS,
+    )
+    # PR #333 第3巡指摘1（P1、採用）: superseded_sections は節丸ごと
+    # supersede を宣言するが、bridge が実際に消費する節配下の生成定義
+    # （d_c0_population 等）は判定意味論とは別に「今も有効」であることを
+    # 本フィールドで閉じた集合として明記する——supersede 宣言と依存の
+    # 同時成立による曖昧さを解消する（`_IDENTITY_PROTOCOL_PRESERVED_
+    # GENERATION_DEFINITIONS` は bridge 側の凍結表から直接導出——single
+    # source of truth）。
+    _validate_identity_protocol_metric_ref_list(
+        supersede["preserved_generation_definitions"],
+        field="supersede_declaration.preserved_generation_definitions",
+        expected=_IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS,
+    )
+    _validate_marker_bearing_str(
+        supersede["preserved_generation_definitions_note"],
+        field="supersede_declaration.preserved_generation_definitions_note",
+        markers=_IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS_NOTE_MARKERS,
     )
 
     # --- pre_run_correction_basis ------------------------------------------
@@ -20885,6 +20955,15 @@ def load_pinned_identity_decision_protocol(
         _resolve_identity_metric_space_ref(
             ref, document=identity_metric_space_document,
             field="supersede_declaration.{preserved,superseded}_sections[]",
+        )
+    # PR #333 第3巡指摘1（P1、採用）: preserved_generation_definitions の
+    # 各 dotted path も identity_metric_space.json に実在することを走査
+    # する（typo・存在しない節名の宣言を fail-closed で検出する、上記と
+    # 同型）。
+    for ref in list(supersede["preserved_generation_definitions"]):
+        _resolve_identity_metric_space_ref(
+            ref, document=identity_metric_space_document,
+            field="supersede_declaration.preserved_generation_definitions[]",
         )
 
     return data

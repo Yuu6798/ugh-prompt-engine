@@ -19720,6 +19720,108 @@ def test_rev06_validate_rejects_superseded_sections_not_closed_set() -> None:
         m.validate_identity_decision_protocol(data)
 
 
+# --- preserved_generation_definitions（PR #333 第3巡指摘1、P1、採用）------
+
+
+def test_rev06_preserved_generation_definitions_matches_bridge_frozen_table() -> None:
+    """supersede_declaration.preserved_generation_definitions（実 JSON）
+    が、evaluation/probe_manifest.json revision_bridge の凍結表
+    （`_REVISION_BRIDGE_EXPECTED_METRIC_REF` の C0/C1/positive/negative
+    4エントリ、`_REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES`）から
+    導出した閉じた集合と一致すること（single source of truth の確認）。"""
+    data = _identity_decision_protocol_data()
+    declared = set(data["supersede_declaration"]["preserved_generation_definitions"])
+    assert declared == m._IDENTITY_PROTOCOL_PRESERVED_GENERATION_DEFINITIONS
+    assert declared == {
+        m._REVISION_BRIDGE_EXPECTED_METRIC_REF[name]
+        for name in m._REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES
+    }
+    assert declared == {
+        "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population",
+        "inputs/identity_metric_space.json#calibration.validity_gates.c1_gate.d_c1_population",
+        (
+            "inputs/identity_metric_space.json#calibration.validity_gates."
+            "negative_reference_gate.negative_reference_definition"
+        ),
+        (
+            "inputs/identity_metric_space.json#calibration.validity_gates."
+            "positive_reference_gate.positive_reference_definition"
+        ),
+    }
+
+
+def test_rev06_validate_rejects_preserved_generation_definitions_extra_entry() -> None:
+    """節丸ごと supersede されている calibration.decision_rule を生成定義
+    として紛れ込ませても閉じた集合検査で拒否されること（decision_rule は
+    判定式そのものであり生成定義ではない——preserved_generation_
+    definitions への混入を防ぐ）。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["supersede_declaration"]["preserved_generation_definitions"].append(
+        "inputs/identity_metric_space.json#calibration.decision_rule"
+    )
+    with pytest.raises(m.Run9ValidationError, match="preserved_generation_definitions"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_validate_rejects_preserved_generation_definitions_missing_entry() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["supersede_declaration"]["preserved_generation_definitions"].pop()
+    with pytest.raises(m.Run9ValidationError, match="preserved_generation_definitions"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_validate_rejects_preserved_generation_definitions_missing_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["supersede_declaration"]["preserved_generation_definitions"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_validate_rejects_preserved_generation_definitions_note_missing_marker() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["supersede_declaration"]["preserved_generation_definitions_note"] = (
+        "この文には要求されるマーカーのどちらも含まれない、無害な平文である。"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="preserved_generation_definitions_note"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_validate_rejects_preserved_generation_definitions_note_empty() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["supersede_declaration"]["preserved_generation_definitions_note"] = ""
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_load_pinned_rejects_preserved_generation_definitions_typo(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """preserved_generation_definitions の1件を、同じ節配下だが実在しない
+    typo path へ差し替えた場合の fail-closed 拒否（validator の閉じた集合
+    検査、または loader cross-check (8) 系の dotted path 実在走査のいずれ
+    かで検出される——`test_rev06_load_pinned_rejects_supersede_section_
+    typo` と同型）。"""
+    domain = _real_identity_domain()
+
+    def mutate(data: Dict[str, Any]) -> None:
+        items = data["supersede_declaration"]["preserved_generation_definitions"]
+        idx = items.index(
+            "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population"
+        )
+        items[idx] = "inputs/identity_metric_space.json#calibration.freeze_threshold.does_not_exist"
+
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=mutate
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )
+
+
 # --- outcome_detail 語彙: 既存 frozen tuple への非破壊確認 -------------------
 
 
@@ -19749,13 +19851,15 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     field = contract_raw["hypothesis_algebra_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.IDENTITY_DECISION_PROTOCOL_PATH)
-    # PR #333 第2巡指摘2（P2、採用）: post_learning_identity_retention.
-    # invalid_or_nonfinite_feature 分岐追加により repin（旧値
+    # PR #333 第3巡指摘1（P1、採用）: supersede_declaration へ
+    # preserved_generation_definitions（+ note）を追加したため repin
+    # （旧値
+    # cde8b003ff88b78693c81058e3a80ec4fbfe546df7e3f8e61812c8d6f61c67c1・
     # 304e72376e30e8e3974485d393c1f56a7256017588bc877c2be15f080291fb77・
     # 967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3 は
     # RUN9_CONTRACT.yaml の【repin 履歴】コメントに保持）。
     assert field["value"] == (
-        "cde8b003ff88b78693c81058e3a80ec4fbfe546df7e3f8e61812c8d6f61c67c1"
+        "7525cd5ef484bfd94a234f25b44a48368d2f1607f334de1b868863c1bd133f4a"
     )
     assert field["source"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json"

@@ -156,6 +156,13 @@
   },
   "schema": "run9-identity-decision-protocol/0.6",
   "supersede_declaration": {
+    "preserved_generation_definitions": [
+      "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population",
+      "inputs/identity_metric_space.json#calibration.validity_gates.c1_gate.d_c1_population",
+      "inputs/identity_metric_space.json#calibration.validity_gates.negative_reference_gate.negative_reference_definition",
+      "inputs/identity_metric_space.json#calibration.validity_gates.positive_reference_gate.positive_reference_definition"
+    ],
+    "preserved_generation_definitions_note": "PR #333 Codex bot レビュー第3巡指摘1（P1、採用）: superseded_sections が calibration.freeze_threshold / calibration.validity_gates を節ごと supersede すると宣言する一方、evaluation/probe_manifest.json revision_bridge の C0/C1/positive/negative 4エントリの superseded_calibration_note は同じ節配下の生成定義（母集団の作り方・reference の定義）を「参照により有効のまま履歴保持する」と個別に宣言しており、supersede 宣言（節丸ごと）と依存（節配下の生成定義は今も有効）が同時成立して Gate 入力生成手順の正本が曖昧になっていた。本 note が範囲を機械可読に凍結する: superseded_sections の supersede が対象とするのは当該節の閾値推定・判定意味論（threshold/calibration/decision rule）のみであり（裁定§7逐語「旧calibration/decision ruleをrev 0.6実行についてsupersedeする」の機械符号化）、preserved_generation_definitions に列挙する生成定義は生成手順の正本として有効のまま——判定の現行正本は protocol 側の対応節（c0_determinism_attestation/c1_sham_attestation/positive_reference_audit/birth_identity_separation.negative_reference_gate_note）を参照する。identity_metric_space.json 自体は本節を含め無改変（immutability、裁定§7）。",
     "preserved_sections": [
       "inputs/identity_metric_space.json#feature_extractor",
       "inputs/identity_metric_space.json#extraction_procedure",
