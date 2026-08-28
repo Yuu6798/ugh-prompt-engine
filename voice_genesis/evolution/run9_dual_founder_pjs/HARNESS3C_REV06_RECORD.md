@@ -3059,3 +3059,230 @@ README.md プローズのみ）。
   該当性・第9巡との関係（宣言文形態のみ対象・指示リスト形態は見落とし）
   を明記した——`AGENTS.md` §3-4・CLAUDE.md「bot レビュー対応の運用」
   節が定める運用に従う。
+
+## 19. PR #333 Codex bot レビュー第16巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`be7b50d0`）。**採否上限10巡到達後（§13.7）の対応**——CLAUDE.md「bot
+レビュー対応の運用」節が定める3分類のうち、指摘1は**致命的バグ（偽成功
+経路）**、指摘2は**将来汚染**にそれぞれ該当するため採用した。着手前に
+両指摘の事実確認を行い、いずれも事実と一致することを確認したうえで
+実装した。
+
+### 19.1 指摘1（P1）: 「Reject non-finite d12 before establishment」
+
+**事実確認（着手前）**: `identity_decision_protocol_v0.6.json`
+`birth_identity_separation.established.condition`（是正前）が「両
+founder の feature が valid/finite かつ d12 > 0」のみを規定し、**d12
+自体の finite 性**を要求していないことを実読で確認した。両 feature が
+valid/finite であっても、Euclidean 距離計算のオーバーフローで
+d12=+inf となる場合、比較演算子上は d12 > 0 が真となるため
+ESTABLISHED_BY_MACHINE_FEATURE へ到達し得る（偽成功経路）ことを確認
+した。`pjs_confuser` 側には `invalid_or_nonfinite_distance` 分岐
+（第8巡指摘3、既設）があり、pjs 距離が invalid/non-finite の場合に
+NOT_ESTABLISHED へ落とす経路が既に存在するのに対し、`birth_identity_
+separation` 側には d12 自体の non-finite に対応する分岐が存在せず、
+established/not_established（d12=0）/invalid_or_nonfinite_feature
+（feature 自体の invalid）のいずれの条件にも該当しない未登録分岐で
+あることを確認した——第8巡の値域被覆表（`invalid_or_nonfinite_
+distance` 新設の判断根拠となった被覆点検）が pjs 距離という直接の
+測定値の被覆漏れは埋めたが、d12 という**導出値**（feature からの
+Euclidean 距離計算結果）自体の非有限性は見落としていたという非対称
+を確認した。指摘内容は事実と一致 → 実装した。
+
+**採否根拠（上限到達後）**: CLAUDE.md「bot レビュー対応の運用」3分類の
+うち『致命的バグ（矛盾・実行不能・偽成功経路）』に該当する新規具体
+経路——pjs_confuser 側は第8巡で明示分岐済みという非対称が、d12 側に
+残る被覆漏れを機械的に示す。上限到達後も採用した。
+
+**実装（Fable 設計 → Sonnet 実装）**:
+
+- `inputs/identity_decision_protocol_v0.6.json`:
+  - `birth_identity_separation.established.condition` へ「d12 が
+    finite であること」を必要条件として追加した（「両 founder の
+    feature が valid/finite かつ d12 が finite かつ d12 > 0」）。
+  - `birth_identity_separation` へ新設分岐 `invalid_or_nonfinite_d12`
+    を追加した（`invalid_or_nonfinite_feature` と同型の5キー構造:
+    `condition`/`birth_outcome`/`outcome_detail`/`action`/`note`）。
+    `outcome_detail` は新定数 `IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_
+    INVALID_OR_NONFINITE_D12`（既存 frozen tuple `BIRTH_OUTCOMES`
+    への値追加はしない——`IDENTITY_PROTOCOL_*` detail 層への新設のみ）。
+  - `birth_gate_aggregate_rule.established.condition`/`.not_
+    established.condition`/`.necessary_and_sufficient_condition_for_
+    established` の各プローズへ d12 の finite 性要求を反映した。
+  - `outcome_detail_priority` の `order`/`failure_refs`/`detail_by_key`
+    を4項目→5項目へ拡張し、新設 `invalid_or_nonfinite_d12` を優先順
+    2項目目（feature validity の直後・PJS confuser distance validity
+    の前）へ挿入した——d12 は同じ `birth_identity_separation` 節の
+    feature から直接導出されるスカラー値であり、別の測定対象（founder
+    r0 と PJS reference 間の距離）である PJS confuser distance より
+    feature validity に近い依存関係にあるため（`order_note` に理由を
+    明記）。
+  - conjunct 側（`birth_gate_aggregate_rule.conjunct_refs`）は成功
+    述語2項目（`birth_identity_separation.established`/`pjs_confuser.
+    on_positive`）のまま無改変——`established` 自体の condition 文言
+    へ d12 finite 要求を組み込んだため、conjunct_refs の集合自体を
+    変更する必要はない。
+- `run9_schema.py`:
+  - 新定数 `IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL` を新設。
+  - `_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS`/`_IDENTITY_PROTOCOL_
+    BIRTH_GATE_PRIORITY_ORDER`（いずれも `Tuple[str, str, str, str]`
+    → `Tuple[str, str, str, str, str]`）/`_IDENTITY_PROTOCOL_BIRTH_
+    GATE_DETAIL_BY_KEY` を5項目へ拡張。
+  - `birth_identity_separation` の `required_keys` frozenset へ
+    `invalid_or_nonfinite_d12` を追加し、`validate_identity_decision_
+    protocol()` に同型の検証ブロック（missing key / wrong birth_
+    outcome / wrong outcome_detail / empty condition 等を fail-closed
+    で拒否）を追加した。
+- 敵対的シミュレーション（`tests/test_run9_contract.py`
+  `_literal_consumer_birth_gate()`）へ `d12_finite: bool = True`
+  引数を追加し、`conjunct_truth["birth_identity_separation.
+  established"]` の導出式へ `and d12_finite` を組み込んだ（既定 True
+  のため第5-15巡の既存呼び出しは無改変で動作）。新規テスト
+  `test_pr333_r16_adversarial_literal_consumer_d12_nonfinite_not_
+  established`（`d12=+inf → NOT_ESTABLISHED` ケース）を追加した。
+- `RUN9_CONTRACT.yaml`: protocol バイト変更に伴い `hypothesis_algebra_
+  sha` を repin（旧値
+  `e536845d424a3dc32b9f6e61f0e5028ffc7b0f65cea1e8da1fedb129699b6e18` →
+  新値
+  `f3caa566718f435d5fcf5f7408ed085194dea73b9f276d5d1e1576f498f4e04e`）。
+  【repin 履歴】へ本巡エントリを追記し、`tests/test_run9_contract.py`
+  `test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file`
+  の期待値を同期した。
+
+**他の導出値の再点検（残余ゼロの確認）**: 裁定§6 が定義する学習後
+判定の導出値 `m_other`/`m_pjs`（`d_other - d_self`/`d_pjs - d_self`）
+についても同型の非有限性リスクがないか再点検した。
+`post_learning_identity_retention.invalid_or_nonfinite_feature`
+（第2巡指摘2、既設）の `condition` を実読し、「d_self/d_other/d_pjs、
+またはそれらから導出する m_other/m_pjs のいずれかが invalid または
+non-finite」の場合に `UNCALIBRATED`（既存 `IDENTITY_OUTCOMES` 語彙）
+へ落とす分岐が**導出値 m_other/m_pjs 自体の非有限性まで明示的に含んで
+既設**であることを確認した——d12 側とは異なり、被覆漏れは無い。以上
+により、本 protocol が扱う導出値（d12・m_other・m_pjs）のうち非有限性
+チェックが欠落していたのは d12 のみであり、**本巡の是正で残余ゼロ**
+であることを終端宣言する。
+
+### 19.2 指摘2（P2）: 「Mark the earlier calibration summary as
+superseded」
+
+**事実確認（着手前）**: `README.md` Phase 3 節（「1. identity metric
+space の定義と pin」項、是正前時点で行368-390）が `theta_cal =
+P95(D_C0)` + C1/正負参照の3校正有効性ゲートを現在形の記述として保持
+していることを確認した。第15巡（§18）は README.md 内の同箇所（是正前
+時点で § 379 付近）を「`identity_metric_space.json` 自身の定義記述——
+rev 0.6 でも無改変のまま正しい」と判定し、「次フェーズ/blocker」節の
+指示リスト形態（実装者への実測指示）とは異なり対象外と判定していた
+——この第15巡判定自体は事実に反しない（同ファイルは immutability
+により無改変のまま正しい）。指摘内容（現在形の記述が読解次第で退化
+gate へ誘導し得る曖昧さを残す）も事実と一致する → 実装した。
+
+**採否根拠（上限到達後）**: CLAUDE.md 3分類のうち『将来汚染』（誤った
+規約・帰属・スキーマが下流の実装や記録を汚す）に該当する——第15巡が
+「定義記述で対象外」と判定した箇所だが、現在形の読解で退化 gate
+（`theta_cal(F)=P95(D_C0(F))=0`）へ誘導し得る曖昧さをラベル付与で安全
+側に倒す新規具体的な安全余地であるため、上限到達後も採用した。
+
+**実装**: 当該項目の末尾（「2. ControlProfile 基盤」の直前）へ rev 0.6
+supersession 注記（1段落）を追加した。本文（`theta_cal = P95(D_C0)`
+等の定義記述自体）は書き換えない——`identity_metric_space.json` は
+immutability 対象のため、同ファイルの定義記述の忠実な転記である本文
+は凍結時点の記録として引き続き正確である。注記は「本項目は Phase 3
+凍結時点の歴史的記述であり同ファイル自体は rev 0.6 でも無改変のまま
+正しいが、`calibration` の**判定規則**は rev 0.6 で `identity_
+decision_protocol_v0.6.json` へ supersede 済み（裁定§7）」の趣旨を
+明記し、第15巡判定との差分（対象外判定 → ラベル付与への安全側修正）
+を注記内に正直に記録した。
+
+### 19.3 第15巡判定との関係（正直な記録）
+
+第15巡（§18）の「対象外」判定自体は誤りではない——同判定は「次フェーズ
+/blocker 節の指示リスト形態」という走査対象の外側にある「Phase 3 時点
+の spec 定義描写」を対象範囲外と正しく除外したものであり、本節が変更
+するのはその除外**範囲**ではなく、除外された箇所に対する**安全余地の
+評価**である。第15巡は「指示リスト形態でないなら実害なし」の基準で
+判定したのに対し、本巡（上限到達後の3分類再判定）は「現在形の記述が
+読解次第で退化 gate へ誘導し得るか」という異なる観点から同箇所を
+再評価し、ラベル付与という最小限の安全余地を追加した。両判定は矛盾
+しない——対象範囲の判定（第15巡）と安全余地の評価（第16巡）は独立の
+問いである。
+
+### 19.4 新設テスト
+
+**指摘1**: `tests/test_run9_contract.py` へ以下を新設（全14件、加えて
+`_literal_consumer_birth_gate()` ヘルパーへ `d12_finite` 引数を追加）:
+
+- `test_pr333_r16_validate_real_manifest_happy_path_with_r16_fields`
+- `test_pr333_r16_established_condition_requires_d12_finite`
+- `test_pr333_r16_validate_rejects_missing_invalid_d12_key`
+- `test_pr333_r16_validate_rejects_invalid_d12_wrong_birth_outcome`
+- `test_pr333_r16_validate_rejects_invalid_d12_wrong_outcome_detail`
+- `test_pr333_r16_validate_rejects_invalid_d12_missing_subkey`
+- `test_pr333_r16_validate_rejects_invalid_d12_empty_condition`
+- `test_pr333_r16_invalid_d12_detail_constant_distinct_from_siblings`
+- `test_pr333_r16_birth_gate_priority_order_extended_to_five_items`
+- `test_pr333_r16_validate_rejects_birth_gate_priority_order_reverted_to_four_items`
+- `test_pr333_r16_necessary_and_sufficient_condition_mentions_d12_finite`
+- `test_pr333_r16_load_pinned_happy_path_with_new_fields`
+- `test_pr333_r16_load_pinned_rejects_new_field_tamper_via_hash_mismatch`
+- `test_pr333_r16_adversarial_literal_consumer_d12_nonfinite_not_established`
+  （敵対的シミュレーション、d12=+inf → NOT_ESTABLISHED の直接確認）
+
+既存の以下のテストは新設分岐（5項目化）に合わせて期待値を更新した
+（テスト名は履歴保持のため改名しない、第8巡 §11 と同型の運用）:
+
+- `test_pr333_r5_failure_refs_matches_frozen_tuple_ordered`
+- `test_pr333_r5_aggregate_rule_existing_branches_byte_unchanged`
+- `test_pr333_r8_birth_gate_priority_order_extended_to_four_items`
+- `test_pr333_r8_load_pinned_happy_path_with_new_fields`
+- `test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file`
+  （`RUN9_CONTRACT.yaml` の pin 値と同期）
+
+**指摘2**: 該当なし。README.md「Phase 3」節のプローズ訂正のみであり、
+`.md` は構造検証テストの対象外（第14巡§17.2/§17.3・第15巡§18.2と同型
+の判断）。
+
+### 19.5 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2751 passed, 8 warnings in 47.62s
+```
+
+テスト件数は第15巡（2737件）から14件増（新設14件）。
+
+### 19.6 変更ファイル
+
+- `inputs/identity_decision_protocol_v0.6.json`: `birth_identity_
+  separation` へ `invalid_or_nonfinite_d12` 分岐を新設し、`established`
+  条件・`birth_gate_aggregate_rule` の各プローズ・
+  `outcome_detail_priority`（4→5項目）へ d12 の finite 性要求を反映。
+- `run9_schema.py`: 新定数 `IDENTITY_PROTOCOL_BIRTH_INVALID_D12_
+  DETAIL`、`_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS`/`_IDENTITY_
+  PROTOCOL_BIRTH_GATE_PRIORITY_ORDER`/`_IDENTITY_PROTOCOL_BIRTH_GATE_
+  DETAIL_BY_KEY` の5項目化、`birth_identity_separation` の
+  `required_keys` 拡張 + 新設検証ブロック。
+- `RUN9_CONTRACT.yaml`: `hypothesis_algebra_sha` repin（【repin 履歴】
+  追記）。
+- `tests/test_run9_contract.py`: 新設14件 + 既存5件の期待値更新
+  （§19.4 参照）。
+- `README.md`: Phase 3「1. identity metric space の定義と pin」項末尾
+  へ rev 0.6 supersession 注記を追加（本文は無改変）。
+- `HARNESS3C_REV06_RECORD.md`: 本節。
+
+immutability 対象（`identity_metric_space.json`/`identity_domain`/
+`Genome`/speaker map manifest）・裁定逐語転記部分
+（`USER_ADJUDICATION_*.txt`）は1 byte も変更していない。既存 frozen
+tuple（`BIRTH_OUTCOMES`/`SEPARATION_OUTCOMES`/`IDENTITY_OUTCOMES`）へ
+値は追加していない。
+
+### 19.7 逸脱事項
+
+- 上限10巡到達後の対応であるため、本節冒頭（§19 導入部）で3分類該当性
+  を指摘ごとに明記した——`AGENTS.md` §3-4・CLAUDE.md「bot レビュー対応
+  の運用」節が定める運用に従う。
+- コミット・push・GitHub への投稿は本フェーズ1の範囲外（Fable が検分
+  後に実行）。

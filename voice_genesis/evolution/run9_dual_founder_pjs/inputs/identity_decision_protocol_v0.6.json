@@ -11,35 +11,38 @@
     ],
     "established": {
       "birth_outcome": "ESTABLISHED",
-      "condition": "conjunct_refs 全項が成立（両 founder の feature が valid/finite かつ d12 > 0 かつ 両 founder の PJS confuser 距離 > 0）",
+      "condition": "conjunct_refs 全項が成立（両 founder の feature が valid/finite かつ d12 が finite かつ d12 > 0 かつ 両 founder の PJS confuser 距離 > 0）",
       "outcome_detail": "ESTABLISHED_BY_MACHINE_FEATURE"
     },
     "gate_failure_action_ref": "invariants.birth_gate_failure_action",
     "identity_establishment_scope_note": "本節（birth_gate_aggregate_rule）は Birth Gate の identity_establishment 層——BIRTH = ESTABLISHED / NOT_ESTABLISHED のラベル判定——のみを規定する。Birth Gate 全体の PASS（learning recipe freeze / 学習実行へ進む可否）は、本節の ESTABLISHED 判定に加えて C0/C1/positive reference の exact-replay 監査結果を要求する二層目の 判定であり、birth_gate_overall_pass 節が別途規定する（PR #333 Codex bot レビュー第5巡指摘3、P1、採用）。",
-    "necessary_and_sufficient_condition_for_established": "両 founder（R9F-01/R9F-02）の feature が valid/finite ∧ d12 > 0 ∧ 両 founder の PJS confuser 距離 > 0（連言）。いずれか1項でも不成立なら BIRTH = NOT_ESTABLISHED。本節は identity_establishment 層（BIRTH ラベルの判定）の必要十分条件であり、Birth Gate 全体の PASS/非PASS は birth_gate_overall_pass 節が別途規定する（C0/C1/positive reference の exact-replay 監査停止条件を含む——本節単独の『必要十分』は identity_establishment 層に限定される、PR #333 第5巡指摘3）。",
+    "necessary_and_sufficient_condition_for_established": "両 founder（R9F-01/R9F-02）の feature が valid/finite ∧ d12 が finite ∧ d12 > 0 ∧ 両 founder の PJS confuser 距離 > 0（連言）。いずれか1項でも不成立なら BIRTH = NOT_ESTABLISHED。本節は identity_establishment 層（BIRTH ラベルの判定）の必要十分条件であり、Birth Gate 全体の PASS/非PASS は birth_gate_overall_pass 節が別途規定する（C0/C1/positive reference の exact-replay 監査停止条件を含む——本節単独の『必要十分』は identity_establishment 層に限定される、PR #333 第5巡指摘3）。d12 の finite 性要求は PR #333 第16巡指摘1（P1、上限到達後、採用）で追加した——両 feature が valid/finite であっても d12 自体が Euclidean 距離計算の overflow 等で non-finite になり得るため（詳細は birth_identity_separation.invalid_or_nonfinite_d12）。",
     "not_established": {
       "birth_outcome": "NOT_ESTABLISHED",
-      "condition": "conjunct_refs のいずれか1項以上が不成立（feature invalid/non-finite、または d12=0、または PJS confuser 距離=0 のうち少なくとも1つ）",
+      "condition": "conjunct_refs のいずれか1項以上が不成立（feature invalid/non-finite、d12 自体が invalid/non-finite、または d12=0、または PJS confuser 距離=0 のうち少なくとも1つ）",
       "outcome_detail_priority": {
         "detail_by_key": {
           "d12_zero_collapse": "PROJECTED_RUNTIME_IDENTITIES_COLLAPSED_IN_MACHINE_FEATURE_SPACE",
+          "invalid_or_nonfinite_d12": "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_D12",
           "invalid_or_nonfinite_feature": "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_FEATURE",
           "invalid_or_nonfinite_pjs_distance": "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_INVALID_OR_NONFINITE_DISTANCE",
           "pjs_confuser_zero_distance": "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_FEATURE_COLLAPSE"
         },
         "failure_refs": [
           "birth_identity_separation.invalid_or_nonfinite_feature",
+          "birth_identity_separation.invalid_or_nonfinite_d12",
           "pjs_confuser.invalid_or_nonfinite_distance",
           "birth_identity_separation.not_established",
           "pjs_confuser.on_zero"
         ],
         "order": [
           "invalid_or_nonfinite_feature",
+          "invalid_or_nonfinite_d12",
           "invalid_or_nonfinite_pjs_distance",
           "d12_zero_collapse",
           "pjs_confuser_zero_distance"
         ],
-        "order_note": "同一 attempt 内で複数の不成立条件が同時に該当し得る。outcome_detail の記録は本 order の先頭に該当した1件を主 detail とし、該当した条件キー全件を outcome_detail_all_applicable_keys へ機械可読リストで併記する（情報を落とさない）。優先順序は (1) validity（invalid/non-finite feature）→ (2) validity（invalid/non-finite PJS confuser distance）→ (3) d12=0（feature collapse）→ (4) PJS confuser distance=0。PR #333 第8巡指摘3（P2、採用）新設: pjs_confuser.invalid_or_nonfinite_distance（新設分岐）を優先順3項目→4項目へ追加し、validity 系（(1))の直後・collapse 系（(3)(4)）の前へ位置付けた——(1)(2) はいずれも『測定・実装レベルで値そのものが評価不能』という同種の失敗（値の符号比較が定義できない）である一方、(3)(4) は『値は有効だが collapse（差が消失）』という別種の失敗であり、値が評価可能であることを前提とする点で validity 系より下流の懸念事項であるため（feature invalid ⇒ 通常はそれに依存する pjs distance も invalid になり得るため、更に上流の (1) を (2) より優先する）。failure_refs は各優先枝（order と同順）が指す実際の失敗分岐を列挙する——PR #333 第5巡指摘1（P1、採用）で conjunct_refs から分離した失敗分岐参照の格納先であり、新規則の発明ではなく既存分岐（birth_identity_separation.invalid_or_nonfinite_feature/not_established、pjs_confuser.invalid_or_nonfinite_distance/on_zero）への参照を移設・追加するのみ。"
+        "order_note": "同一 attempt 内で複数の不成立条件が同時に該当し得る。outcome_detail の記録は本 order の先頭に該当した1件を主 detail とし、該当した条件キー全件を outcome_detail_all_applicable_keys へ機械可読リストで併記する（情報を落とさない）。優先順序は (1) validity（invalid/non-finite feature）→ (2) validity（invalid/non-finite d12、第16巡指摘1で追加）→ (3) validity（invalid/non-finite PJS confuser distance）→ (4) d12=0（feature collapse）→ (5) PJS confuser distance=0。PR #333 第8巡指摘3（P2、採用）新設: pjs_confuser.invalid_or_nonfinite_distance（新設分岐）を優先順3項目→4項目へ追加し、validity 系（(1))の直後・collapse 系（(3)(4)）の前へ位置付けた——(1)(2) はいずれも『測定・実装レベルで値そのものが評価不能』という同種の失敗（値の符号比較が定義できない）である一方、(3)(4) は『値は有効だが collapse（差が消失）』という別種の失敗であり、値が評価可能であることを前提とする点で validity 系より下流の懸念事項であるため（feature invalid ⇒ 通常はそれに依存する pjs distance も invalid になり得るため、更に上流の (1) を (2) より優先する）。PR #333 第16巡指摘1（P1、上限到達後——CLAUDE.md「bot レビュー対応の運用」3分類のうち『致命的バグ（偽成功経路）』の新規具体経路として採用）新設: birth_identity_separation.invalid_or_nonfinite_d12（新設分岐）を優先順2項目目へ挿入し、旧2〜4項目目を3〜5項目目へ繰り下げた——d12 は R9F-01/R9F-02 の feature から直接導出されるスカラー値であり、feature 自体が valid/finite であっても Euclidean 距離計算の overflow 等で d12 自体が non-finite になり得る（feature validity と d12 validity は独立の失敗事由）。d12 の validity は同じ birth_identity_separation 節が扱う自節内の量であり、PJS confuser distance（別の測定対象——founder r0 と PJS reference 間の距離）よりも feature validity（(1)）に近い依存関係にあるため、(1) の直後・(3) PJS distance validity の前に位置付けた。failure_refs は各優先枝（order と同順）が指す実際の失敗分岐を列挙する——PR #333 第5巡指摘1（P1、採用）で conjunct_refs から分離した失敗分岐参照の格納先であり、新規則の発明ではなく既存分岐（birth_identity_separation.invalid_or_nonfinite_feature/invalid_or_nonfinite_d12/not_established、pjs_confuser.invalid_or_nonfinite_distance/on_zero）への参照を移設・追加するのみ。"
       }
     },
     "note": "PR #333 Codex bot レビュー第4巡指摘1（P1、採用）で追加した conjunct_refs は、birth_identity_separation.established（valid/finite ∧ d12>0 の成立分岐）と invalid_or_nonfinite_feature（valid/finite の不成立分岐）、および pjs_confuser.on_positive（距離>0 の成立分岐）と on_zero（距離=0 の不成立分岐）という互いに排他な2組を『全項が成立』と要求する連言としてしまい、文字通りの消費者は常に NOT_ESTABLISHED に凍結される欠陥を含んでいた（第4巡実装の欠陥、PR #333 Codex bot レビュー第5巡指摘1、P1、採用、で発見・是正）。本節は conjunct_refs を成功述語のみ（birth_identity_separation.established / pjs_confuser.on_positive）へ限定し直し、失敗分岐（birth_identity_separation.invalid_or_nonfinite_feature / birth_identity_separation.not_established / pjs_confuser.on_zero）は not_established.outcome_detail_priority.failure_refs へ分離した——裁定§4/§5は独立の門ではなく Birth Gate の連言構成要素であり、本節は §5逐語『distance=0の場合はPJS confuserとのfeature collapseとしてBIRTH NOT_ESTABLISHEDとする。』の機械符号化であって新規則の発明ではない。既存 birth_identity_separation.established/invalid_or_nonfinite_feature/not_established、pjs_confuser.on_positive/on_zero の各分岐は無改変のまま本節から参照するのみであり、文言変更は一切行っていない。",
@@ -76,10 +79,17 @@
     "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
     "established": {
       "birth_outcome": "ESTABLISHED",
-      "condition": "両 founder の feature が valid/finite かつ d12 > 0",
+      "condition": "両 founder の feature が valid/finite かつ d12 が finite かつ d12 > 0",
       "outcome_detail": "ESTABLISHED_BY_MACHINE_FEATURE"
     },
     "formula": "d12 = distance(R9F-01:r0, R9F-02:r0)",
+    "invalid_or_nonfinite_d12": {
+      "action": "凍結し、学習へ進まない（同attempt内でのepsilon追加・再試行は行わない——裁定§9）。",
+      "birth_outcome": "NOT_ESTABLISHED",
+      "condition": "R9F-01/R9F-02のfeatureがいずれもvalid/finiteであっても、そこから導出するd12自体がinvalidまたはnon-finite（例: 数値演算のoverflow）",
+      "note": "PR #333 Codex bot レビュー第16巡指摘1（P1、上限到達後——CLAUDE.md「bot レビュー対応の運用」3分類のうち『致命的バグ（偽成功経路）』の新規具体経路として採用）新設: established.condition は『両featureがvalid/finiteかつd12>0』のみを要求し、d12自体のfinite性を要求していなかった——両featureがvalid/finiteであっても、Euclidean距離計算のoverflow等でd12=+infとなる場合、比較演算子上はd12>0が真となるためESTABLISHED_BY_MACHINE_FEATUREへ到達し得た（偽成功経路）。pjs_confuser側には同型のinvalid_or_nonfinite_distance分岐が第8巡指摘3で既設だったのに対し、d12側にはこの被覆漏れが残っていた非対称——第8巡の値域被覆表がd12という導出値自体の非有限性を見落としていたことを本節が正直に記録する。d12=0によるfeature collapse（not_established、既存分岐・無改変）、およびR9F-01/R9F-02自体のfeature invalid（invalid_or_nonfinite_feature、既存分岐・無改変）とは区別される第3の凍結分岐であり、裁定§4『両featureがvalid/finiteであり、d12 > 0の場合のみ、BIRTH = ESTABLISHED_BY_MACHINE_FEATURE』が黙示的に前提とする『d12自体が評価可能な有限の実数値であること』+ 裁定§9『Birth Gate不成立時はNOT_ESTABLISHEDとして凍結する』fail-closed原則の機械符号化である。既存 established/not_established/invalid_or_nonfinite_feature の各分岐は無改変のまま——本節はそれらとは独立の第3分岐として追加する。新規則の発明ではない。",
+      "outcome_detail": "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_D12"
+    },
     "invalid_or_nonfinite_feature": {
       "action": "凍結し、学習へ進まない（同attempt内でのepsilon追加・再試行は行わない——裁定§9）。",
       "birth_outcome": "NOT_ESTABLISHED",

@@ -19918,9 +19918,10 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     field = contract_raw["hypothesis_algebra_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.IDENTITY_DECISION_PROTOCOL_PATH)
-    # PR #333 第13巡指摘（P1、上限到達後、採用）: `birth_gate_overall_pass.
-    # completion_evidence_requirement.condition` の positive_reference_
-    # audit 項を founder 単位の閉集合列挙へ改訂したため repin（旧値
+    # PR #333 第16巡指摘1（P1、上限到達後、採用）: `birth_identity_
+    # separation` へ `invalid_or_nonfinite_d12` 分岐を新設し、established
+    # 条件へ d12 の finite 性要求を追加したため repin（旧値
+    # e536845d424a3dc32b9f6e61f0e5028ffc7b0f65cea1e8da1fedb129699b6e18・
     # c10e4701677a285f36cb99823c83388da067a54e838f27c066c5b7e8c1110e03・
     # cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887・
     # 027e3c04ff2978572e9e43ccfdae7314b2171a67f4536ae6a3a0c537153d1b25・
@@ -19932,7 +19933,7 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     # 967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3 は
     # RUN9_CONTRACT.yaml の【repin 履歴】コメントに保持）。
     assert field["value"] == (
-        "e536845d424a3dc32b9f6e61f0e5028ffc7b0f65cea1e8da1fedb129699b6e18"
+        "f3caa566718f435d5fcf5f7408ed085194dea73b9f276d5d1e1576f498f4e04e"
     )
     assert field["source"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json"
@@ -20839,19 +20840,23 @@ def test_pr333_r5_conjunct_refs_and_failure_refs_disjoint_no_exclusive_pair() ->
 
 def test_pr333_r5_failure_refs_matches_frozen_tuple_ordered() -> None:
     """PR #333 第8巡指摘3（P2、採用）で `pjs_confuser.invalid_or_nonfinite_
-    distance` 分岐追加に伴い failure_refs/order は3項目→4項目へ伸長した
+    distance` 分岐追加に伴い failure_refs/order は3項目→4項目へ伸長、
+    第16巡指摘1（P1、上限到達後、採用）で `birth_identity_separation.
+    invalid_or_nonfinite_d12` 分岐追加に伴い4項目→5項目へ再伸長した
     （テスト名はレビュー履歴保持のため改名しない）。"""
     data = _identity_decision_protocol_data()
     priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
     assert tuple(priority["failure_refs"]) == m._IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS
     assert priority["failure_refs"] == [
         "birth_identity_separation.invalid_or_nonfinite_feature",
+        "birth_identity_separation.invalid_or_nonfinite_d12",
         "pjs_confuser.invalid_or_nonfinite_distance",
         "birth_identity_separation.not_established",
         "pjs_confuser.on_zero",
     ]
     # order と同順であること（対応関係の可読性——(1) validity（feature）→
-    # (2) validity（PJS distance）→ (3) d12=0 → (4) PJS confuser distance=0）。
+    # (2) validity（d12）→ (3) validity（PJS distance）→ (4) d12=0 →
+    # (5) PJS confuser distance=0）。
     assert len(priority["order"]) == len(priority["failure_refs"])
 
 
@@ -20941,7 +20946,10 @@ def test_pr333_r5_aggregate_rule_existing_branches_byte_unchanged() -> None:
     無改変（1 byte も変更していない）——第4巡回帰確認と同型。pjs_confuser
     トップレベル key set は第8巡指摘3（P2、採用）の
     `invalid_or_nonfinite_distance` 新設で伸長している（`test_pr333_r4_
-    aggregate_rule_pjs_confuser_section_byte_unchanged` の docstring 参照）。"""
+    aggregate_rule_pjs_confuser_section_byte_unchanged` の docstring 参照）。
+    birth_identity_separation トップレベル key set は第16巡指摘1（P1、
+    上限到達後、採用）の `invalid_or_nonfinite_d12` 新設でさらに伸長して
+    いる。"""
     data = _identity_decision_protocol_data()
     assert set(data["pjs_confuser"].keys()) == {
         "verbatim", "metric", "pjs_reference_ref", "on_zero", "on_positive",
@@ -20952,7 +20960,8 @@ def test_pr333_r5_aggregate_rule_existing_branches_byte_unchanged() -> None:
     }
     assert set(data["birth_identity_separation"].keys()) == {
         "verbatim", "cell_ref", "formula", "established", "not_established",
-        "invalid_or_nonfinite_feature", "negative_reference_gate_note",
+        "invalid_or_nonfinite_feature", "invalid_or_nonfinite_d12",
+        "negative_reference_gate_note",
     }
 
 
@@ -21220,6 +21229,7 @@ def _literal_consumer_birth_gate(
     feature_valid: bool,
     d12_positive: bool,
     pjs_distance_positive: bool,
+    d12_finite: bool = True,
     c0_mismatch: bool = False,
     c1_nonzero: bool = False,
     c1_wav_byte_mismatch: bool = False,
@@ -21258,10 +21268,20 @@ def _literal_consumer_birth_gate(
     第5-12巡の既定値依存テストの前提（全成功）を変えない。False は
     「片 founder のみ監査済み（例: R9F-01 のみ、R9F-02 は省略）」という
     第13巡指摘が指す具体的な偽成功経路の世界線を表す。
+
+    `d12_finite`（PR #333 第16巡指摘1、P1、上限到達後、採用、新設引数）:
+    `d12_positive` は「d12 と 0 の大小比較結果」のみを表し、d12 自体が
+    有限の実数値であるかどうかを独立に表現できなかった——両 feature が
+    valid/finite であっても Euclidean 距離計算の overflow 等で d12=+inf
+    となり得る場合、素朴な `d12 > 0` 比較は真になるため、is (d12_positive
+    を True のまま) established へ到達し得た偽成功経路を literal consumer
+    でも再現できていなかった。既定 True は「d12 が有限」の世界線（第5-15巡
+    の既定値依存テストの前提を変えない）、False は「d12=+inf」（有限性
+    要求の不成立）を表す。
     """
     agg = protocol["birth_gate_aggregate_rule"]
     conjunct_truth = {
-        "birth_identity_separation.established": feature_valid and d12_positive,
+        "birth_identity_separation.established": feature_valid and d12_finite and d12_positive,
         "pjs_confuser.on_positive": pjs_distance_positive,
     }
     for ref in agg["conjunct_refs"]:
@@ -21405,6 +21425,36 @@ def test_pr333_r5_adversarial_literal_consumer_no_exclusive_pair_all_conjuncts_s
             "with the other conjuncts under the all-success world state"
         )
     assert all(conjunct_truth[ref] for ref in agg["conjunct_refs"])
+
+
+def test_pr333_r16_adversarial_literal_consumer_d12_nonfinite_not_established() -> None:
+    """(f) d12=+inf（両 feature は valid/finite・PJS 距離も正値）→
+    NOT_ESTABLISHED（第16巡指摘1 の核心——d12 自体の finite 性を要求
+    しない旧 established.condition の下では、素朴な d12 > 0 比較が真に
+    なるため ESTABLISHED_BY_MACHINE_FEATURE へ到達し得た偽成功経路の
+    回帰ガード）。"""
+    protocol = _identity_decision_protocol_data()
+    birth_outcome, overall_pass = _literal_consumer_birth_gate(
+        protocol,
+        feature_valid=True, d12_positive=True, pjs_distance_positive=True,
+        d12_finite=False,
+    )
+    assert birth_outcome == "NOT_ESTABLISHED"
+    assert overall_pass is False
+    # 新設分岐が実際に protocol 側で登録されていることも直接確認する
+    # （outcome_detail 定数はハードコードせず protocol JSON から読む）。
+    invalid_d12 = protocol["birth_identity_separation"]["invalid_or_nonfinite_d12"]
+    assert invalid_d12["birth_outcome"] == "NOT_ESTABLISHED"
+    assert invalid_d12["outcome_detail"] == "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_D12"
+    priority = protocol["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    assert "invalid_or_nonfinite_d12" in priority["order"]
+    assert "birth_identity_separation.invalid_or_nonfinite_d12" in priority["failure_refs"]
+    assert priority["detail_by_key"]["invalid_or_nonfinite_d12"] == invalid_d12["outcome_detail"]
+    # 優先順内の位置: feature validity（先頭）の直後、PJS distance validity
+    # の前（第16巡指摘1の依存順設計、order_note 参照）。
+    assert priority["order"].index("invalid_or_nonfinite_feature") < priority["order"].index(
+        "invalid_or_nonfinite_d12"
+    ) < priority["order"].index("invalid_or_nonfinite_pjs_distance")
 
 
 # =============================================================================
@@ -21670,17 +21720,24 @@ def test_pr333_r8_validate_rejects_pjs_invalid_distance_empty_condition() -> Non
 
 
 def test_pr333_r8_birth_gate_priority_order_extended_to_four_items() -> None:
+    """第8巡実装時点の名残の関数名——第16巡指摘1で5項目へ再拡張された
+    ため、期待値をその時点の実データ（`invalid_or_nonfinite_d12` 挿入後）
+    へ更新する（関数名は既存回帰の追跡単位として維持、内容は現行仕様）。"""
     data = _identity_decision_protocol_data()
     priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
     assert tuple(priority["order"]) == m._IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER
     assert priority["order"] == [
         "invalid_or_nonfinite_feature",
+        "invalid_or_nonfinite_d12",
         "invalid_or_nonfinite_pjs_distance",
         "d12_zero_collapse",
         "pjs_confuser_zero_distance",
     ]
     assert priority["detail_by_key"]["invalid_or_nonfinite_pjs_distance"] == (
         m.IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL
+    )
+    assert priority["detail_by_key"]["invalid_or_nonfinite_d12"] == (
+        m.IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL
     )
 
 
@@ -21708,9 +21765,10 @@ def test_pr333_r8_load_pinned_happy_path_with_new_fields(
     data = m.load_pinned_identity_decision_protocol(contract, domain=domain)
     assert "outcome_priority" in data["c1_sham_attestation"]
     assert "invalid_or_nonfinite_distance" in data["pjs_confuser"]
+    assert "invalid_or_nonfinite_d12" in data["birth_identity_separation"]
     assert len(
         data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]["order"]
-    ) == 4
+    ) == 5
 
 
 def test_pr333_r8_load_pinned_rejects_new_field_tamper_via_hash_mismatch(
@@ -22057,3 +22115,177 @@ def test_pr333_r13_adversarial_literal_consumer_both_founders_positive_reference
     )
     assert birth_outcome == "ESTABLISHED"
     assert overall_pass is True
+
+
+# =============================================================================
+# PR #333 Codex bot レビュー第16巡対応（2026-08-28、フェーズ1、上限到達後）
+# 指摘1（P1、上限到達後——3分類「致命的バグ（偽成功経路）」の新規具体経路）:
+#   `birth_identity_separation.established.condition` は「両 founder の
+#   feature が valid/finite かつ d12 > 0」のみを要求し、d12 自体の finite
+#   性を要求していなかった——両 feature が valid/finite であっても
+#   Euclidean 距離計算の overflow 等で d12=+inf となる場合、比較演算子上は
+#   d12 > 0 が真となるため ESTABLISHED_BY_MACHINE_FEATURE へ到達し得た
+#   （偽成功経路）。pjs_confuser 側には同型の invalid_or_nonfinite_distance
+#   分岐が第8巡指摘3で既設だったのに対し、d12 側にはこの被覆漏れが残って
+#   いた非対称——第8巡の値域被覆表が導出値 d12 自体の非有限性を見落として
+#   いたことを本節が正直に記録する。他の導出値（post_learning_identity_
+#   retention の m_other/m_pjs）は第2巡指摘2で invalid/non-finite 分岐が
+#   既設であることを再点検し、同型の被覆漏れが無いことを確認した（残余
+#   ゼロ、詳細は RUN9_CONTRACT.yaml hypothesis_algebra_sha 【repin 履歴】
+#   第16巡エントリ）。
+# =============================================================================
+
+
+# --- 指摘1: birth_identity_separation.invalid_or_nonfinite_d12 -------------
+
+
+def test_pr333_r16_validate_real_manifest_happy_path_with_r16_fields() -> None:
+    m.validate_identity_decision_protocol(_identity_decision_protocol_data())  # 例外なしの確認
+
+
+def test_pr333_r16_established_condition_requires_d12_finite() -> None:
+    """established.condition の文言が d12 の finite 性を明示的に要求して
+    いること——是正前は『d12 > 0』のみで finite 性が欠落していた。"""
+    data = _identity_decision_protocol_data()
+    condition = data["birth_identity_separation"]["established"]["condition"]
+    assert "d12 が finite" in condition
+    assert "d12 > 0" in condition
+
+
+def test_pr333_r16_validate_rejects_missing_invalid_d12_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["birth_identity_separation"]["invalid_or_nonfinite_d12"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r16_validate_rejects_invalid_d12_wrong_birth_outcome() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_identity_separation"]["invalid_or_nonfinite_d12"]["birth_outcome"] = (
+        "ESTABLISHED"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="birth_identity_separation.invalid_or_nonfinite_d12.birth_outcome"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r16_validate_rejects_invalid_d12_wrong_outcome_detail() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_identity_separation"]["invalid_or_nonfinite_d12"]["outcome_detail"] = (
+        "MADE_UP_LABEL"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="birth_identity_separation.invalid_or_nonfinite_d12.outcome_detail"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r16_validate_rejects_invalid_d12_missing_subkey() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["birth_identity_separation"]["invalid_or_nonfinite_d12"]["note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r16_validate_rejects_invalid_d12_empty_condition() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_identity_separation"]["invalid_or_nonfinite_d12"]["condition"] = ""
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r16_invalid_d12_detail_constant_distinct_from_siblings() -> None:
+    """invalid/non-finite d12 の凍結（測定/実装失敗系）は、d12=0 の feature
+    collapse（established/not_established の正規条件）とも feature 自体の
+    invalid/non-finite（invalid_or_nonfinite_feature）とも別ラベルで machine
+    可読に区別されること——三者を同一定数へ縮退させない。"""
+    assert (
+        m.IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL
+        != m.IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL
+    )
+    assert (
+        m.IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL
+        != m.IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL
+    )
+    assert (
+        m.IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL
+        != m.IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL
+    )
+    assert m.IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL not in m.BIRTH_OUTCOMES
+    assert m.IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL not in m.IDENTITY_OUTCOMES
+
+
+def test_pr333_r16_birth_gate_priority_order_extended_to_five_items() -> None:
+    data = _identity_decision_protocol_data()
+    priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    assert tuple(priority["order"]) == m._IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER
+    assert len(priority["order"]) == 5
+    # 依存順設計: feature validity（先頭）の直後・PJS distance validity の前。
+    assert priority["order"][0] == "invalid_or_nonfinite_feature"
+    assert priority["order"][1] == "invalid_or_nonfinite_d12"
+    assert priority["order"][2] == "invalid_or_nonfinite_pjs_distance"
+
+
+def test_pr333_r16_validate_rejects_birth_gate_priority_order_reverted_to_four_items() -> None:
+    """第16巡以前の4項目 order を復元しても是正後の validator が拒否する
+    こと——回帰防止の直接確認。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]["order"] = [
+        "invalid_or_nonfinite_feature", "invalid_or_nonfinite_pjs_distance",
+        "d12_zero_collapse", "pjs_confuser_zero_distance",
+    ]
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="birth_gate_aggregate_rule.not_established.outcome_detail_priority.order",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r16_necessary_and_sufficient_condition_mentions_d12_finite() -> None:
+    data = _identity_decision_protocol_data()
+    nsc = data["birth_gate_aggregate_rule"][
+        "necessary_and_sufficient_condition_for_established"
+    ]
+    assert "d12 が finite" in nsc
+    assert "第16巡" in nsc
+
+
+# --- load_pinned_identity_decision_protocol(): 第16巡フィールドの一貫性 -----
+
+
+def test_pr333_r16_load_pinned_happy_path_with_new_fields(
+    contract: m.Run9RunContract,
+) -> None:
+    domain = _real_identity_domain()
+    data = m.load_pinned_identity_decision_protocol(contract, domain=domain)
+    assert "invalid_or_nonfinite_d12" in data["birth_identity_separation"]
+    assert len(
+        data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]["order"]
+    ) == 5
+
+
+def test_pr333_r16_load_pinned_rejects_new_field_tamper_via_hash_mismatch(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """新設フィールドを改ざんした合成 manifest は、実バイト sha256 が
+    pin 済み hypothesis_algebra_sha と食い違うため fail-closed で拒否
+    されること（既存巡と同型の tamper 経路確認）。"""
+    domain = _real_identity_domain()
+
+    def mutate(data: Dict[str, Any]) -> None:
+        data["birth_identity_separation"]["invalid_or_nonfinite_d12"]["outcome_detail"] = (
+            "TAMPERED"
+        )
+
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=mutate
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="birth_identity_separation.invalid_or_nonfinite_d12.outcome_detail",
+    ):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )

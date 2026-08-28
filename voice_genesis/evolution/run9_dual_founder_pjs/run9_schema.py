@@ -227,6 +227,23 @@ IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL = (
     "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_FEATURE"
 )
 
+# PR #333 Codex bot レビュー第16巡指摘1（P1、上限到達後——CLAUDE.md「bot
+# レビュー対応の運用」3分類のうち『致命的バグ（偽成功経路）』の新規具体
+# 経路として採用）新設: established の条件「両 feature が valid/finite
+# かつ d12 > 0」は d12 自体の finite 性を要求しておらず、両 feature が
+# valid/finite であっても Euclidean 距離計算の overflow 等で d12=+inf と
+# なる場合、比較演算子上は d12 > 0 が真となるため ESTABLISHED_BY_MACHINE_
+# FEATURE へ到達し得た（偽成功経路）。pjs_confuser 側には同型の
+# invalid_or_nonfinite_distance 分岐（第8巡指摘3）が既設だったのに対し、
+# d12 側にはこの被覆漏れが残っていた非対称——第8巡の値域被覆表が導出値
+# d12 自体の非有限性を見落としていたことを本定数のコメントが正直に記録
+# する。d12=0 の feature collapse（IDENTITY_PROTOCOL_BIRTH_COLLAPSE_
+# DETAIL）・feature 自体の invalid/non-finite（本定数の直上）とは区別
+# される第3の凍結分岐。
+IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL = (
+    "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_D12"
+)
+
 # PR #333 Codex bot レビュー第4巡指摘1（P1、採用）新設:
 # `birth_gate_aggregate_rule.not_established.outcome_detail_priority` 第3
 # 優先枝（PJS confuser 距離=0）専用ラベル。`pjs_confuser.on_zero` 自体は
@@ -20442,20 +20459,32 @@ _IDENTITY_PROTOCOL_BIRTH_GATE_CONJUNCT_REFS: Tuple[str, ...] = (
 # 依存する PJS distance も invalid になり得るため「値が評価不能」という
 # 同種の失敗を隣接させ、「値は有効だが collapse」という別種の失敗より上流
 # に置く設計（詳細は order_note）。
-_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS: Tuple[str, str, str, str] = (
+#
+# PR #333 Codex bot レビュー第16巡指摘1（P1、上限到達後、採用）: 4項目→
+# 5項目へ拡張し、birth_identity_separation に新設した invalid_or_
+# nonfinite_d12 分岐を feature validity（(1)）の直後・PJS confuser
+# distance validity（(3)）の前へ挿入した——d12 は同じ birth_identity_
+# separation 節の feature から直接導出されるスカラー値であり、別の測定
+# 対象（founder r0 と PJS reference 間の距離）である PJS confuser
+# distance よりも feature validity に近い依存関係にあるため（詳細は
+# order_note）。
+_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS: Tuple[str, str, str, str, str] = (
     "birth_identity_separation.invalid_or_nonfinite_feature",
+    "birth_identity_separation.invalid_or_nonfinite_d12",
     "pjs_confuser.invalid_or_nonfinite_distance",
     "birth_identity_separation.not_established",
     "pjs_confuser.on_zero",
 )
 
 # outcome_detail_priority.order（裁定 §9 fail-closed 原則を根拠とする
-# Fable 設計の決定論的優先順、順序込み・4項目ちょうど）: (1) validity
-# （invalid/non-finite feature）→ (2) validity（invalid/non-finite PJS
-# confuser distance、第8巡指摘3で追加）→ (3) d12=0（feature collapse）→
-# (4) PJS confuser distance=0。
-_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER: Tuple[str, str, str, str] = (
+# Fable 設計の決定論的優先順、順序込み・5項目ちょうど）: (1) validity
+# （invalid/non-finite feature）→ (2) validity（invalid/non-finite d12、
+# 第16巡指摘1で追加）→ (3) validity（invalid/non-finite PJS confuser
+# distance、第8巡指摘3で追加）→ (4) d12=0（feature collapse）→ (5) PJS
+# confuser distance=0。
+_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER: Tuple[str, str, str, str, str] = (
     "invalid_or_nonfinite_feature",
+    "invalid_or_nonfinite_d12",
     "invalid_or_nonfinite_pjs_distance",
     "d12_zero_collapse",
     "pjs_confuser_zero_distance",
@@ -20466,6 +20495,7 @@ _IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER: Tuple[str, str, str, str] = (
 # 新語彙の発明はしない）。
 _IDENTITY_PROTOCOL_BIRTH_GATE_DETAIL_BY_KEY: Mapping[str, str] = types.MappingProxyType({
     "invalid_or_nonfinite_feature": IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL,
+    "invalid_or_nonfinite_d12": IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL,
     "invalid_or_nonfinite_pjs_distance": IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL,
     "d12_zero_collapse": IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL,
     "pjs_confuser_zero_distance": IDENTITY_PROTOCOL_BIRTH_PJS_CONFUSER_COLLAPSE_DETAIL,
@@ -20912,7 +20942,8 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         data["birth_identity_separation"], field="birth_identity_separation",
         required_keys=frozenset({
             "verbatim", "cell_ref", "formula", "established", "not_established",
-            "invalid_or_nonfinite_feature", "negative_reference_gate_note",
+            "invalid_or_nonfinite_feature", "invalid_or_nonfinite_d12",
+            "negative_reference_gate_note",
         }),
     )
     _require_non_empty_str(birth["verbatim"], field="birth_identity_separation.verbatim")
@@ -20990,6 +21021,43 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
     )
     _require_non_empty_str(
         invalid_feature["note"], field="birth_identity_separation.invalid_or_nonfinite_feature.note"
+    )
+    # PR #333 第16巡指摘1（P1、上限到達後、採用）: invalid/non-finite d12
+    # の第3分岐（established/not_established/invalid_or_nonfinite_feature
+    # のいずれの条件にも該当しない——両 feature が valid/finite であって
+    # も d12 自体が overflow 等で non-finite になり得る未登録の穴を埋める
+    # ——feature 自体の invalid（上記 invalid_feature）とも d12=0 の
+    # feature collapse（not_established）とも区別される測定/実装失敗系の
+    # 凍結）。
+    invalid_d12 = _validate_identity_protocol_shape(
+        birth["invalid_or_nonfinite_d12"],
+        field="birth_identity_separation.invalid_or_nonfinite_d12",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail", "action", "note"}),
+    )
+    _require_non_empty_str(
+        invalid_d12["condition"],
+        field="birth_identity_separation.invalid_or_nonfinite_d12.condition",
+    )
+    if (
+        invalid_d12["birth_outcome"] != "NOT_ESTABLISHED"
+        or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES
+    ):
+        raise Run9ValidationError(
+            "birth_identity_separation.invalid_or_nonfinite_d12.birth_outcome must be exactly "
+            f"'NOT_ESTABLISHED' (BIRTH_OUTCOMES 既存語彙), got {invalid_d12['birth_outcome']!r}"
+        )
+    if invalid_d12["outcome_detail"] != IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL:
+        raise Run9ValidationError(
+            "birth_identity_separation.invalid_or_nonfinite_d12.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_BIRTH_INVALID_D12_DETAIL!r}, got "
+            f"{invalid_d12['outcome_detail']!r}"
+        )
+    _require_non_empty_str(
+        invalid_d12["action"],
+        field="birth_identity_separation.invalid_or_nonfinite_d12.action",
+    )
+    _require_non_empty_str(
+        invalid_d12["note"], field="birth_identity_separation.invalid_or_nonfinite_d12.note"
     )
     _require_non_empty_str(
         birth["negative_reference_gate_note"],

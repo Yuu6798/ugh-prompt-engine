@@ -3683,16 +3683,56 @@ measurement_spec_sha:
 #   `c0_determinism_attestation`/`c1_sham_attestation` 側は既に
 #   per-founder 明示列挙を備えており同型の曖昧さは無い（総点検、
 #   残余ゼロ）。
+# - PR #333 Codex bot レビュー第16巡指摘1（2026-08-28、P1、上限到達後——
+#   CLAUDE.md「bot レビュー対応の運用」3分類のうち『致命的バグ（偽成功
+#   経路）』の新規具体経路として採用、値
+#   f3caa566718f435d5fcf5f7408ed085194dea73b9f276d5d1e1576f498f4e04e へ
+#   repin）: `birth_identity_separation.established.condition` は「両
+#   founder の feature が valid/finite かつ d12 > 0」のみを要求し、d12
+#   自体の finite 性を要求していなかった——両 feature が valid/finite
+#   であっても Euclidean 距離計算の overflow 等で d12=+inf となる場合、
+#   比較演算子上は d12 > 0 が真となるため ESTABLISHED_BY_MACHINE_FEATURE
+#   へ到達し得た（偽成功経路）。`pjs_confuser` 側には同型の
+#   `invalid_or_nonfinite_distance` 分岐が第8巡指摘3で既設だったのに
+#   対し、d12 側にはこの被覆漏れが残っていた非対称——第8巡の値域被覆表
+#   が導出値 d12 自体の非有限性を見落としていたことを本 repin が正直に
+#   記録する。`birth_identity_separation` へ `invalid_or_nonfinite_d12`
+#   分岐（新定数 `IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_
+#   NONFINITE_D12`）を新設し、`established.condition`/`birth_gate_
+#   aggregate_rule.established.condition`/`.not_established.condition`/
+#   `.necessary_and_sufficient_condition_for_established` へ d12 の
+#   finite 要求を反映した。`outcome_detail_priority` の `order`/
+#   `failure_refs`/`detail_by_key` を4項目→5項目へ拡張し、新設
+#   `invalid_or_nonfinite_d12` を validity 系第1項（feature invalid）の
+#   直後・PJS confuser distance validity（第8巡新設分）の前へ位置付けた
+#   ——d12 は同じ birth_identity_separation 節の feature から直接導出
+#   されるスカラー値であり、別の測定対象（founder r0 と PJS reference
+#   間の距離）である PJS confuser distance よりも feature validity に
+#   近い依存関係にあるため。他の導出値（post_learning_identity_
+#   retention の m_other/m_pjs）は第2巡指摘2で invalid/non-finite 分岐
+#   （`IDENTITY_PROTOCOL_POST_LEARNING_INVALID_OR_NONFINITE_FEATURE`）が
+#   既設であることを再点検し、同型の被覆漏れが無いことを確認した（残余
+#   ゼロ）。新規則の発明ではなく裁定§4『両featureがvalid/finiteであり、
+#   d12 > 0の場合のみ、BIRTH = ESTABLISHED_BY_MACHINE_FEATURE』が黙示的
+#   に前提とする「d12 自体が評価可能な有限の実数値であること」+ 裁定§9
+#   fail-closed 原則の機械符号化——既存 `established`/`not_established`/
+#   `invalid_or_nonfinite_feature`/`pjs_confuser.*` の各分岐は無改変。
 hypothesis_algebra_sha:
-  value: "e536845d424a3dc32b9f6e61f0e5028ffc7b0f65cea1e8da1fedb129699b6e18"
+  value: "f3caa566718f435d5fcf5f7408ed085194dea73b9f276d5d1e1576f498f4e04e"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json
   reason: >-
     rev 0.6 裁定 §7「同protocolのraw SHA256をhypothesis_algebra_shaへ
     PINNEDする」に基づき pin。値は inputs/identity_decision_protocol_
     v0.6.json の実バイト sha256（load_pinned_identity_decision_protocol()
-    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第13巡
-    指摘（P1、上限到達後、採用）で `birth_gate_overall_pass.
+    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第16巡
+    指摘1（P1、上限到達後、採用）で `birth_identity_separation` へ
+    `invalid_or_nonfinite_d12` 分岐を新設し、d12 の finite 性要求を
+    established 条件へ追加したため repin（上記【repin 履歴】参照）。
+    旧値（PR #333 第13巡指摘、履歴として保持）:
+    "e536845d424a3dc32b9f6e61f0e5028ffc7b0f65cea1e8da1fedb129699b6e18"
+    〔以下、第13巡時点の reason 原文——旧repin の理由記述として履歴保持〕
+    PR #333 第13巡指摘（P1、上限到達後、採用）で `birth_gate_overall_pass.
     completion_evidence_requirement.condition` の positive_reference_
     audit 項を per-founder 閉集合列挙へ改訂したため repin（上記
     【repin 履歴】参照）。旧値（PR #333 第11巡指摘1、履歴として保持）:

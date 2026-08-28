@@ -388,6 +388,16 @@ machine-independent（実音源・実 render・実学習を要さない）次段
    `False` だった（意図どおり）——2026-08-25 User attestation 実行により
    user anchor も PINNED 化され、現在は `is_pinned() == True`（domain
    凍結済み、下記「解消済み（2026-08-25 User attestation 実行）」節参照）。
+   〔rev 0.6 supersession 注記（PR #333 第16巡指摘2、P2、上限到達後、
+   採用）: 本項目は Phase 3 凍結時点（`identity_metric_space.json` 自身
+   の定義記述）の歴史的記述であり、同ファイル自体は rev 0.6 でも無改変
+   のまま正しい。ただし上記 `calibration`（`theta_cal = P95(D_C0)` +
+   C1/正負参照の3校正有効性ゲート）の**判定規則**は rev 0.6 で
+   `inputs/identity_decision_protocol_v0.6.json` へ supersede 済み（裁定
+   §7、下記「解消済み（RUN9-L0-HARNESS-3c rev 0.6）」節参照）——第15巡
+   （§18）は本項目を「定義記述で対象外」と判定したが、現在形の読解が
+   退化 gate（`theta_cal(F)=P95(D_C0(F))=0`）へ誘導し得る曖昧さを安全側
+   に倒すため、本ラベルを付与する（本文の書き換えはしない）。〕
 2. **ControlProfile 基盤**（新規モジュール [`run9_controlprofile.py`](./run9_controlprofile.py)）:
    `run9-control-profile/1.0` — `voice_id`/`branch`/`revision`
    （`BRANCH_REVISIONS` 語彙と整合: `r0` 出生中立・`replay`/`r_sham`/
