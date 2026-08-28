@@ -11457,9 +11457,13 @@ def test_harness3b_failure_abort_criteria_repinned_lineage_ten_generations(
     checkpoint/machine_promotion_condition が引き続き参照していた
     `hypothesis_algebra_sha`（rev 0.6 で identity decision protocol の
     pin 欄へ用途確定済み）を、H1-H6 δtarget/εk 校正前提の新追跡先
-    `hypothesis_threshold_calibration_sha` へ更新した第12世代が
-    append-only で、現在値が最新のものであることを明示的に確認する
-    （repin 漏れの回帰防止）。"""
+    `hypothesis_threshold_calibration_sha` へ更新した第12世代 + PR #333
+    Codex bot レビュー第12巡指摘1 是正（2026-08-28、Fable 判定、採否上限
+    10巡到達後の採用）で rule 7/rule 16 が identity_decision_protocol_
+    v0.6.json の存在しない `decision_rule` 節を参照していた誤参照を
+    実在節（`birth_gate_aggregate_rule`/`post_learning_identity_
+    retention`）へ訂正した第13世代が append-only で、現在値が最新の
+    ものであることを明示的に確認する（repin 漏れの回帰防止）。"""
     round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
     round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
     round3_value = "6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44"
@@ -11472,11 +11476,12 @@ def test_harness3b_failure_abort_criteria_repinned_lineage_ten_generations(
     round10_value = "ead64d2fd7896728b1fc7070c90d7a5b2d8bb17740e21c4056a5210a081cf98b"
     round11_value = "297dd46aaa8c520238072f93b9d5e18748dbdd31b4a389a4a8d7e48cd70d8cba"
     round12_value = "3de4db27a23498c236b75b3efbb152c0675fce84fe2d6bddfb8bd565850b1251"
+    round13_value = "7bb311e08abfb2bd608a9e54387c5f3c477e7283cc9ae9432de3a8a9e5bdfcbb"
     current = contract_raw["failure_abort_criteria_sha"]["value"]
-    assert current == round12_value
+    assert current == round13_value
     assert current not in (
         round1_value, round2_value, round3_value, round4_value, round5_value, round6_value,
-        round7_value, round8_value, round9_value, round10_value, round11_value,
+        round7_value, round8_value, round9_value, round10_value, round11_value, round12_value,
     )
     assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
 

@@ -4047,8 +4047,36 @@ cost_record_sha:
 #   （MACHINE 1件 / PROCEDURAL 19件）は無改変。他 rule・
 #   post_stop_prohibitions・classification_policy は無改変（sha256
 #   確認済み）。バイトが変わったため repin（12世代目）。
+# - PR #333 Codex bot レビュー第12巡指摘1 是正（2026-08-28、Fable 判定、
+#   採否上限10巡到達後 — 3分類「将来汚染」の新規具体経路として採用、値
+#   7bb311e08abfb2bd608a9e54387c5f3c477e7283cc9ae9432de3a8a9e5bdfcbb へ
+#   repin）: rule 7/rule 16 が inputs/identity_decision_protocol_v0.6.json
+#   の**存在しない `decision_rule` 節**を参照していた誤参照を是正。
+#   (a) rule 7（Birth Identity separation not established）:
+#   machine_promotion_condition の「(ii) その結果を本 protocol の
+#   decision_rule に基づき機械的に BIRTH_OUTCOMES へ写像する
+#   consumption-time verifier」を、実在する outcome 写像正本
+#   `birth_gate_aggregate_rule`（birth_identity_separation × pjs_confuser
+#   の連言 + outcome_detail_priority + completion_evidence_requirement を
+#   含む Birth Gate 全体の正本）への参照へ訂正した。記載どおり d12 単独
+#   写像を実装すると PJS 距離 0（pjs_confuser.on_zero）でも受理する弱
+#   規則が MACHINE 化され得るため、将来の実装がこの誤参照を辿らないよう
+#   是正する。
+#   (b) rule 16（Identity drift beyond non-inferiority）: checkpoint の
+#   「inputs/identity_decision_protocol_v0.6.json の calibration/
+#   decision_rule 節へ supersede 済み」を、実在する supersede 先
+#   `post_learning_identity_retention`（m_other/m_pjs マージン + invalid
+#   分岐）への参照へ訂正した（rule 7 と同型の誤参照）。
+#   failure_abort_criteria.json 全20 rule を grep して同型の存在しない
+#   節名参照が他に無いかを総点検した（identity_decision_protocol_v0.6.json
+#   への他の節名参照は rule 7 の `birth_identity_separation`〔実在〕のみ
+#   ——残余ゼロを確認）。旧文言はいずれも〔履歴（PR #333 第12巡指摘1、
+#   2026-08-28）〕として rule 本文内に append-only 保持（削除しない）。
+#   rule_id/enforcement/verbatim・分類数（MACHINE 1件 / PROCEDURAL 19件）
+#   は無改変。他 rule・post_stop_prohibitions・classification_policy は
+#   無改変（sha256 確認済み）。バイトが変わったため repin（13世代目）。
 failure_abort_criteria_sha:
-  value: "3de4db27a23498c236b75b3efbb152c0675fce84fe2d6bddfb8bd565850b1251"
+  value: "7bb311e08abfb2bd608a9e54387c5f3c477e7283cc9ae9432de3a8a9e5bdfcbb"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 

@@ -2384,3 +2384,162 @@ immutability 対象（`identity_metric_space.json`/`identity_domain`/
 - 上限10巡到達後の対応であるため、本節冒頭（§14 導入部）で3分類
   該当性を明記した——`AGENTS.md` §3-4・CLAUDE.md「bot レビュー対応の
   運用」節が定める運用に従う。
+
+## 15. PR #333 Codex bot レビュー第12巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`72b43808`）。**採否上限10巡到達後（§13.7）の対応**——§13.7 が定める
+3分類（実コード被害 / 将来汚染 / 致命的バグ）のうち**「将来汚染」**の
+新規具体経路に該当するため採用した：本巡指摘は
+`inputs/failure_abort_criteria.json` rule 7/rule 16 が
+`inputs/identity_decision_protocol_v0.6.json` の**存在しない
+`decision_rule` 節**を outcome 写像の正本として参照している誤りを
+指す。§14.4（第11巡指摘2）が是正した誤参照（`supersede_declaration` の
+fragment prefix 誤り）とは異なる**別ファイル・別文脈の新規具体経路**
+（machine_promotion_condition が将来の実装者を誤った節へ導く）であり、
+記載どおり実装すると d12 単独写像（PJS 距離 0 でも受理する弱規則）が
+MACHINE 化され得るため、正典ポインタが将来の MACHINE 昇格実装を弱い
+規則へ誘導する**将来汚染**に該当する。Fable が着手前に事実確認を行い、
+指摘内容が事実と一致することを確認したうえで実装した。
+
+### 15.1 指摘（P2）: 「Point machine promotion at the aggregate birth
+rule」
+
+**事実確認（着手前）**: `inputs/identity_decision_protocol_v0.6.json`
+の全トップレベル節（`python3 -c "json.load(...).keys()"` で列挙）を
+確認し、`decision_rule` という節はトップレベルに存在しないことを確認
+した。実在するのは `adjudication_basis`/`birth_gate_aggregate_rule`/
+`birth_gate_overall_pass`/`birth_identity_separation`/
+`c0_determinism_attestation`/`c1_sham_attestation`/`execution_order`/
+`immutability`/`invariants`/`metric_reference`/`pjs_confuser`/
+`positive_reference_audit`/`post_learning_identity_retention`/
+`pre_run_correction_basis`/`provenance`/`schema`/
+`supersede_declaration` の16節。
+
+`failure_abort_criteria.json` rule 7 の `machine_promotion_condition`
+（是正前）を読み、「(ii) その結果を本 protocol の decision_rule に
+基づき機械的に BIRTH_OUTCOMES へ写像する consumption-time verifier」と
+記述していることを確認した——「本 protocol」= 直前の文脈から
+`identity_decision_protocol_v0.6.json` を指すが、同ファイルに
+`decision_rule` 節は存在しない。実在する outcome 写像の正本は
+`birth_gate_aggregate_rule` であり、その中身は
+`birth_identity_separation`（d12）×`pjs_confuser`（PJS distance）の
+連言 + `birth_gate_overall_pass.completion_evidence_requirement`
+（第11巡§14.2で新設した監査完了性）を含む Birth Gate 全体の判定式で
+ある（`established`/`not_established` の2分岐、`not_established` 側は
+`outcome_detail_priority` で4優先枝——`d12_zero_collapse`/
+`invalid_or_nonfinite_feature`/`invalid_or_nonfinite_pjs_distance`/
+`pjs_confuser_zero_distance`——を優先順位付けする）。記載どおり
+「本 protocol の decision_rule」という**存在しない節**を実装対象として
+consumption-time verifier を書くと、実装者は `birth_identity_separation`
+（d12>0 のみ）を単独で BIRTH_OUTCOMES へ写像する狭い規則を書いてしまい
+得る——これは `pjs_confuser` 側の PJS distance が 0（`on_zero`、PJS
+confusability が解消していない状態）であっても d12>0 さえ満たせば
+ESTABLISHED と誤って機械判定してしまう弱規則であり、rule 7 の verbatim
+「Birth Identity separation not established」が本来防ぐべき失敗を
+すり抜けさせる。指摘内容は事実と一致 → Fable 設計どおり実装。
+
+`failure_abort_criteria.json` rule 16 の `checkpoint`（是正前）も同様に
+「rev 0.6 実行について inputs/identity_decision_protocol_v0.6.json の
+calibration/decision_rule 節へ supersede 済み」と記述しており、同一の
+存在しない節名（`calibration/decision_rule`）を参照していた。直後の
+括弧内で本 rule 自身が「同 protocol の post_learning_identity_retention
+は theta_cal(F) を一切参照しない m_other/m_pjs マージン方式」と実在の
+supersede 先を既に言い当てているにもかかわらず、supersede 元の文で
+異なる（存在しない）節名を名指ししており、rule 7 と同型の誤参照だった。
+指摘内容は事実と一致 → Fable 設計どおり実装。
+
+### 15.2 実装（Fable 設計）
+
+- rule 7 `machine_promotion_condition`: 「(ii) その結果を本 protocol の
+  decision_rule に基づき」を「(ii) その結果を本 protocol の
+  birth_gate_aggregate_rule（birth_identity_separation × pjs_confuser
+  の連言 + outcome_detail_priority + completion_evidence_requirement を
+  含む Birth Gate 全体の正本）に基づき」へ訂正した。
+- rule 16 `checkpoint`: 「inputs/identity_decision_protocol_v0.6.json
+  の calibration/decision_rule 節へ supersede 済み」を
+  「inputs/identity_decision_protocol_v0.6.json の
+  post_learning_identity_retention 節（m_other/m_pjs マージン方式 +
+  invalid_or_nonfinite_feature 分岐）へ supersede 済み」へ訂正した。
+
+いずれも既存の履歴残置様式（append-only）に従い、旧文言を
+〔履歴（PR #333 第12巡指摘1、2026-08-28、採否上限到達後 — 3分類
+「将来汚染」の新規具体経路として採用）〕括弧として当該フィールド末尾に
+保持した（削除しない）。`rule_id`/`enforcement`/`verbatim` は無改変
+（rule 7: `enforcement=PROCEDURAL`/`verbatim="Birth Identity separation
+not established"`、rule 16: `enforcement=PROCEDURAL`/
+`verbatim="Identity drift beyond non-inferiority"`）。分類数
+（MACHINE 1件 / PROCEDURAL 19件）も無改変。
+
+**総点検（Task 指示）**: `failure_abort_criteria.json` 全20 rule を
+grep（`identity_decision_protocol_v0.6.json`/`本 protocol`/`同
+protocol`/`同protocol` の4パターン）し、同ファイルへの節名参照が
+他に無いかを確認した。ヒットは本是正前時点で4箇所（rule 7 の
+checkpoint・machine_promotion_condition、rule 16 の checkpoint、rule 14
+の checkpoint 内 User 裁定逐語引用）のみ。rule 7 checkpoint の
+`birth_identity_separation` 節参照は実在（是正不要）、rule 14 の
+「同protocolのraw SHA256をhypothesis_algebra_shaへPINNEDする」は
+User 裁定逐語の直接引用でありファイル全体の pin を指す文であって節名
+主張ではない（是正不要）。したがって存在しない節名参照は rule 7
+machine_promotion_condition・rule 16 checkpoint の2箇所のみであり、
+本是正後の**残余はゼロ**である。
+
+`RUN9_CONTRACT.yaml` `failure_abort_criteria_sha` を13世代目へ repin
+（`3de4db27a23498c236b75b3efbb152c0675fce84fe2d6bddfb8bd565850b1251` →
+`7bb311e08abfb2bd608a9e54387c5f3c477e7283cc9ae9432de3a8a9e5bdfcbb`、
+既存の repin 履歴コメントへ append-only で追記、旧値は削除しない）。
+
+### 15.3 新設テスト
+
+本巡は既存フィールドのプローズ訂正のみ（構造・キー集合・
+`enforcement`/`verbatim`/`rule_id`/分類数はいずれも無改変）であり、
+新規の構造検証テストは追加していない。既存の repin 世代検査
+（`tests/test_run9_contract.py` の `failure_abort_criteria_sha` 履歴
+回帰テスト）へ `round13_value` を追加し、現在値が13世代目であること・
+旧12世代のいずれとも一致しないことを確認する形で更新した（第12巡§14
+以前と同型の repin 検査様式）。`test_rev06_failure_abort_criteria_
+rule7_and_rule16_reference_rev06`（既存）が rule 7/16 の
+`identity_decision_protocol_v0.6.json` 言及・`enforcement`/`verbatim`
+無改変を引き続き回帰確認する。
+
+### 15.4 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2730 passed, 7 warnings in 42.89s
+```
+
+テスト件数は2730件のまま変化なし（既存 repin 世代検査の更新のみで
+新規テスト追加なし）。
+
+### 15.5 変更ファイル
+
+- `inputs/failure_abort_criteria.json`: rule 7 `machine_promotion_
+  condition`・rule 16 `checkpoint` の存在しない `decision_rule` 節参照を
+  実在節（`birth_gate_aggregate_rule`/`post_learning_identity_
+  retention`）へ訂正（旧文言は履歴残置）。
+- `RUN9_CONTRACT.yaml`: `failure_abort_criteria_sha` を13世代目へ
+  append-only 履歴付きで repin。
+- `tests/test_run9_contract.py`: repin 世代検査へ `round13_value` を
+  追加、docstring を更新。
+- `HARNESS3C_REV06_RECORD.md`: 本節。
+
+immutability 対象（`identity_metric_space.json`/`identity_domain`/
+`Genome`/speaker map manifest）・裁定逐語転記部分
+（`USER_ADJUDICATION_20260827_IDENTITY_REV06.txt`）は1 byte も変更して
+いない。`identity_decision_protocol_v0.6.json` 自体も無改変（誤参照は
+`failure_abort_criteria.json` 側のみに存在した）。既存 frozen tuple・
+`rule_id`/`enforcement`/`verbatim`・分類数（MACHINE 1件 / PROCEDURAL
+19件）への変更も行っていない。
+
+### 15.6 逸脱事項
+
+- ファミリー全数掃討は§15.2の総点検で実施済み（残余ゼロ）——本巡指摘が
+  対象とする「存在しない節名参照」という穴の型そのものについて、
+  同ファイル内の同型箇所を全数走査した。
+- 上限10巡到達後の対応であるため、本節冒頭（§15 導入部）で3分類
+  該当性を明記した——`AGENTS.md` §3-4・CLAUDE.md「bot レビュー対応の
+  運用」節が定める運用に従う。
