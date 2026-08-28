@@ -2926,3 +2926,136 @@ immutability 対象（`identity_metric_space.json`/`identity_domain`/
   該当性・過去巡対応自身が残した欠陥という共通点を明記した——
   `AGENTS.md` §3-4・CLAUDE.md「bot レビュー対応の運用」節が定める
   運用に従う。
+
+## 18. PR #333 Codex bot レビュー第15巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`75d487a6`）。**採否上限10巡到達後（§13.7）の対応**——CLAUDE.md「bot
+レビュー対応の運用」節が定める3分類のうち、本巡指摘は**将来汚染**
+（誤った規約・帰属・スキーマが下流の実装や記録を汚す）に該当し、かつ
+本記録が既に掃討・対応済みのファミリー（第9巡§12、
+`identity_axis_source` の**宣言文**形態）とは異なる新規具体経路——
+「次フェーズ」節の**指示リスト形態**に残っていた同ファミリー別形態の
+欠陥——を指すため採用した。着手前に事実確認を行い、指摘内容が事実と
+一致することを確認したうえで実装した。
+
+### 18.1 指摘（P1）: 「Remove the superseded calibration blocker」
+
+**事実確認（着手前）**: README.md の実箇所を grep で特定したところ、
+指摘コメントが記す anchor 行 1330 は本記録の rev 0.6 改訂サマリ段落内
+（`` `calibration`（freeze_threshold/validity_gates/decision_rule）
+節のみを ``、是正前時点の行番号）であり、実際に是正対象となる
+「次フェーズ」節のブロッカー箇条書きは行 1970-1975（是正前時点）で
+あることを確認した（指摘の anchor 行とのズレは実ファイル側の行番号
+変動によるもの、実害なし——指摘本文が引用する文言・意味内容は
+1970-1975 の箇条書きと一致）。当該箇条書きが「`inputs/identity_metric_
+space.json` の `calibration`（`freeze_threshold`/`validity_gates`/
+`decision_rule`）が定める閾値生成（C0 95 パーセンタイル・C1 sham
+副作用・positive/negative reference からの実測 threshold freeze）は
+spec の事前登録のみで、実測は birth probe 実行後」という旧文言のまま
+残っていることを確認した。
+
+`inputs/identity_decision_protocol_v0.6.json` を実読し、design_
+revision 0.6（rev 0.6 裁定 §7 supersede）で C0/C1 は
+`c0_determinism_attestation`/`c1_sham_attestation`（founder ごと各
+20 takes exact-replay attestation）へ、Birth Identity Separation は
+`birth_identity_separation`/`pjs_confuser` の d12 machine feature
+判定へ、学習後 Identity 保持判定は `post_learning_identity_retention`
+の m_other/m_pjs マージン方式へ、Birth Gate 全体の PASS 判定は
+`birth_gate_overall_pass`（`completion_evidence_requirement` +
+`audit_stop_refs`）へそれぞれ再分類・移行済みであることを実測確認した
+（同ファイルのキー構成は README.md 上記「解消済み（design_revision
+0.6）」節が既に詳述する内容と一致）。旧文言のまま残置された「次フェーズ」
+節は、閾値校正母集団としての C0/C1（`freeze_threshold`/`decision_rule`）
+実測を実装者へ指示する内容であり、rev 0.6 で reclassify 済みの意味論と
+矛盾する——実装者がこの箇条書きのみを読んで着手すると、退化
+theta_cal(F) gate（本記録該当節・README.md §1313-1314 が記録する
+「C0 母集団全ゼロの下で theta_cal(F) = P95(D_C0(F)) が解析的に 0 へ
+退化する」欠陥）を再構築し得る。指摘内容は事実と一致 → 実装した。
+
+**採否根拠（上限到達後）**: 第9巡（§12、本記録該当節）は
+`evaluation/probe_manifest.json#measurement_boundary` の
+`identity_axis_source` **宣言文**形態の同型欠陥のみを是正対象とし、
+「次フェーズ」節の**指示リスト**形態は当時の走査範囲外だった（宣言文
+形態に限定された掃討であり、指示リスト形態は見落とされていた——本巡
+がこの経緯を正直に記録する）。本巡指摘は同一ファミリー（rev 0.6
+supersede 未追随）の**別形態**という新規具体経路であり、実装者が旧
+calibration 意味論の実行を指示されたまま着手し得る**将来汚染**に
+該当するため、CLAUDE.md 3分類の下で上限到達後も採用した。
+
+**実装（Fable 設計）**: 当該箇条書きを rev 0.6 の Birth Gate 作業内容
+（`c0_determinism_attestation`/`c1_sham_attestation`・
+`positive_reference_audit`・`birth_identity_separation`/`pjs_confuser`
+の d12 判定・`post_learning_identity_retention` の m_other/m_pjs
+マージン判定・`birth_gate_overall_pass` の完了証跡）の記述へ更新した。
+旧文言は削除せず、既存の履歴残置様式（append-only）に従い
+`〔履歴: ...〕` として当該箇条書き末尾に保持し、第9巡の掃討範囲が
+宣言文形態に限定されていた経緯・本巡が指示リスト形態の同型欠陥として
+是正した経緯を明記した。`identity_metric_space.json` 自体は
+immutability 対象のため無改変のまま（是正後の README.md 本文も「同
+ファイル自体は rev 0.6 でも無改変」と明記）。
+
+**指示リスト形態の掃討（Task 指示）**: run9 README.md 全体 + `docs/`
+内の run9 言及を「次フェーズ/blocker/TODO/昇格条件」系の指示リストに
+絞って grep 走査した（`次フェーズ`/`blocker`/`TODO`/`昇格条件`/
+`残 pin`/`残存ブロッカー` のヘッダー・見出し語、および `theta_cal`/
+`freeze_threshold`/`decision_rule`/`threshold freeze`/`閾値凍結`/
+`閾値生成` の直接語彙で二重に走査）。`docs/` 配下に run9 言及は0件
+（`grep -rl "run9\|RUN9" docs/` 該当なし）。README.md 内の他ヒット
+（§379 の Phase 3 定義記述、§1313/1330/1339 の rev 0.6 改訂サマリ
+段落）はいずれも「次フェーズ/blocker」節の外側にあり、指示リストでは
+なく Phase 3 時点の spec 定義描写・supersede 経緯の宣言文（前者は
+`identity_metric_space.json` 自身の定義記述——rev 0.6 でも無改変の
+まま正しい、後者は是正済みの供述文）であることを確認した——実装者へ
+旧 calibration 意味論の**実行**を指示する残余は、本節是正前時点で
+今回是正した1箇所のみだった。**本節是正後、指示リスト形態の残余は
+ゼロ**であることを終端宣言する（第9巡が宣言文形態のみを対象にした
+経緯は上記「採否根拠」に明記済み）。
+
+### 18.2 新設テスト
+
+該当なし。本巡の是正は README.md「次フェーズ」節のプローズ訂正のみで
+あり、`.md` は構造検証テストの対象外（第14巡§17.2/§17.3 と同型の
+判断——見出し・箇条書きのポインタ化/文言更新は専用テストを追加しない
+既定運用）。既存の README stale-phrase 掃討テスト
+（`test_fix8_no_stale_deferred_practice_pin_field_language_remains` 等）
+は本箇所とは別ファミリーの語彙を対象としており、本巡の是正内容と
+重複しない。
+
+### 18.3 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2737 passed, 7 warnings in 43.38s
+```
+
+テスト件数は第14巡と同数（2737件、README.md のみの変更のため新設
+テストなし）。
+
+### 18.4 変更ファイル
+
+- `README.md`: 「次フェーズ（machine-dependent）」節の「identity metric
+  space の実測校正」箇条書きを、rev 0.6 の Birth Gate 作業内容
+  （C0/C1 exact-replay attestation・positive reference audit・d12/margin
+  判定・birth_gate_overall_pass 完了証跡）の記述へ更新（旧文言は履歴
+  残置）。
+- `HARNESS3C_REV06_RECORD.md`: 本節。
+
+immutability 対象（`identity_metric_space.json`/`identity_domain`/
+`Genome`/speaker map manifest）・裁定逐語転記部分
+（`USER_ADJUDICATION_*.txt`）は1 byte も変更していない。
+`identity_decision_protocol_v0.6.json`/`RUN9_CONTRACT.yaml`/
+`inputs/failure_abort_criteria.json` も無改変（本巡の是正対象は
+README.md プローズのみ）。
+
+### 18.5 逸脱事項
+
+- ファミリー全数掃討は §18.1「指示リスト形態の掃討」で実施済み
+  （残余ゼロを終端宣言）。
+- 上限10巡到達後の対応であるため、本節冒頭（§18 導入部）で3分類
+  該当性・第9巡との関係（宣言文形態のみ対象・指示リスト形態は見落とし）
+  を明記した——`AGENTS.md` §3-4・CLAUDE.md「bot レビュー対応の運用」
+  節が定める運用に従う。

@@ -1967,12 +1967,34 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   （schema `run9-learning-recipe/1.0`、`run9_schema.LEARNING_RECIPE_
   MANIFEST_PATH` が規約パスを凍結済み・`validate_learning_recipe_
   manifest()` が構造を検証）の実体生成（残存ブロッカー(3)）。
-- **identity metric space の実測校正**: `inputs/identity_metric_space.json`
-  の `calibration`（`freeze_threshold`/`validity_gates`/`decision_rule`）が
-  定める閾値生成（C0 95 パーセンタイル・C1 sham 副作用・positive/negative
-  reference からの実測 threshold freeze）は spec の事前登録のみで、実測は
-  birth probe 実行後（Founder 生成待ち）。`worked_example` は synthetic
-  illustration であり実測ではない。
+- **Birth Gate（rev 0.6）の実測実行**: `inputs/identity_decision_
+  protocol_v0.6.json` が定める各節の実測は spec の事前登録のみで、実測は
+  birth probe 実行後（Founder 生成待ち）——`c0_determinism_attestation`/
+  `c1_sham_attestation`（founder ごと各 20 takes exact-replay
+  attestation）・`positive_reference_audit`（founder ごとの追加
+  exact-replay 監査）・`birth_identity_separation`/`pjs_confuser`（d12
+  machine feature 判定）・`post_learning_identity_retention`（m_other/
+  m_pjs マージン判定）・`birth_gate_overall_pass`（上記監査の完了証跡
+  `completion_evidence_requirement` + `audit_stop_refs` 非該当）の
+  いずれも未実行のまま。`inputs/identity_metric_space.json` の
+  `worked_example` は synthetic illustration であり実測ではない
+  （同ファイル自体は rev 0.6 でも無改変のまま——上記 protocol がこれを
+  参照した上で `calibration`（`freeze_threshold`/`validity_gates`/
+  `decision_rule`）節のみを rev 0.6 実行について supersede する）。
+  〔履歴: 本エントリは design_revision 0.6（rev 0.6 裁定 §7 supersede）
+  で C0/C1 が閾値校正母集団から exact-replay attestation へ再分類された
+  後も「`calibration`（`freeze_threshold`/`validity_gates`/
+  `decision_rule`）が定める閾値生成（C0 95 パーセンタイル・C1 sham
+  副作用・positive/negative reference からの実測 threshold freeze）は
+  spec の事前登録のみで、実測は birth probe 実行後」という旧文言のまま
+  残っており、実装者へ退化 theta_cal(F) gate の再構築を指示しうる状態
+  だった——PR #333 第9巡（P1、採用）は
+  `evaluation/probe_manifest.json#measurement_boundary` の
+  `identity_axis_source` 宣言文のみを是正対象としており、本節（次フェーズ
+  節の指示リスト形態）に残っていた同ファミリーの欠陥は対象外のまま
+  見落とされていた。PR #333 第15巡（P1、上限到達後——CLAUDE.md「bot
+  レビュー対応の運用」3分類のうち『将来汚染』の新規具体経路として採用）
+  で是正〕
 
 上記の残 pin を除く machine-dependent な実装作業:
 
