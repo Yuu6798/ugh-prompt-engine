@@ -172,17 +172,36 @@ def _functions(trees: Dict[str, ast.Module]) -> Dict[str, list[FunctionRef]]:
 
 def _function_definition_nodes(
     node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+    *,
+    postponed_annotations: bool,
 ) -> Iterator[ast.AST]:
     """関数オブジェクト生成時に評価される式を返す（本体は含めない）。"""
     if not isinstance(node, ast.Lambda):
         yield from node.decorator_list
-    yield node.args
-    if not isinstance(node, ast.Lambda) and node.returns is not None:
+    yield from node.args.defaults
+    yield from (default for default in node.args.kw_defaults if default is not None)
+    if not postponed_annotations and not isinstance(node, ast.Lambda):
+        positional = (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
+        yield from (arg.annotation for arg in positional if arg.annotation is not None)
+        if node.args.vararg is not None and node.args.vararg.annotation is not None:
+            yield node.args.vararg.annotation
+        if node.args.kwarg is not None and node.args.kwarg.annotation is not None:
+            yield node.args.kwarg.annotation
+    if (
+        not postponed_annotations
+        and not isinstance(node, ast.Lambda)
+        and node.returns is not None
+    ):
         yield node.returns
-    yield from getattr(node, "type_params", ())
+    # PEP 695 の bound / constraint は参照時まで遅延されるため辿らない。
 
 
-def _runtime_nodes(node: ast.AST, *, _root_scope: bool = True) -> Iterator[ast.AST]:
+def _runtime_nodes(
+    node: ast.AST,
+    *,
+    postponed_annotations: bool = False,
+    _root_scope: bool = True,
+) -> Iterator[ast.AST]:
     """実行時に評価される子 node を辿る。
 
     到達した関数の本体は辿る一方、ネストした関数・lambda は default / decorator
@@ -191,7 +210,9 @@ def _runtime_nodes(node: ast.AST, *, _root_scope: bool = True) -> Iterator[ast.A
     filter・内側 iterable は反復開始まで遅延されるので除外する。
     """
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-        children: Iterator[ast.AST] = _function_definition_nodes(node)
+        children: Iterator[ast.AST] = _function_definition_nodes(
+            node, postponed_annotations=postponed_annotations
+        )
         if _root_scope and not isinstance(node, ast.Lambda):
             children = iter((*children, *node.body))
     elif isinstance(node, ast.ClassDef):
@@ -200,21 +221,38 @@ def _runtime_nodes(node: ast.AST, *, _root_scope: bool = True) -> Iterator[ast.A
                 *node.decorator_list,
                 *node.bases,
                 *(keyword.value for keyword in node.keywords),
-                *getattr(node, "type_params", ()),
                 *node.body,
             )
         )
     elif isinstance(node, ast.GeneratorExp):
         children = iter((node.generators[0].iter,))
+    elif isinstance(node, ast.AnnAssign) and postponed_annotations:
+        children = iter(
+            (node.target, *(() if node.value is None else (node.value,)))
+        )
     else:
         children = ast.iter_child_nodes(node)
 
     for child in children:
         yield child
-        yield from _runtime_nodes(child, _root_scope=False)
+        yield from _runtime_nodes(
+            child,
+            postponed_annotations=postponed_annotations,
+            _root_scope=False,
+        )
 
 
-def _calls_in(node: ast.AST) -> Set[str]:
+def _postpones_annotations(tree: ast.Module) -> bool:
+    """``from __future__ import annotations`` が有効か。"""
+    return any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "__future__"
+        and any(alias.name == "annotations" for alias in node.names)
+        for node in tree.body
+    )
+
+
+def _calls_in(node: ast.AST, *, postponed_annotations: bool = False) -> Set[str]:
     """直接呼び出し（`f(...)`）だけを数える。
 
     `obj.verify_x()` のような属性呼び出しを裸の名前へ潰すと、無関係な
@@ -225,7 +263,7 @@ def _calls_in(node: ast.AST) -> Set[str]:
     誤って緩む側には倒れない。
     """
     called: Set[str] = set()
-    for sub in _runtime_nodes(node):
+    for sub in _runtime_nodes(node, postponed_annotations=postponed_annotations):
         if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
             called.add(sub.func.id)
     return called
@@ -261,8 +299,10 @@ def _reachable_functions(trees: Dict[str, ast.Module]) -> Set[str]:
     frontier = list(reachable)
     while frontier:
         current = frontier.pop()
-        for _rel, node in functions.get(current, ()):
-            for callee in _calls_in(node):
+        for rel, node in functions.get(current, ()):
+            for callee in _calls_in(
+                node, postponed_annotations=_postpones_annotations(trees[rel])
+            ):
                 if callee in functions and callee not in reachable:
                     reachable.add(callee)
                     frontier.append(callee)
@@ -340,7 +380,9 @@ def _names_loaded_in_functions(trees: Dict[str, ast.Module]) -> Set[ConstantId]:
     used: Set[ConstantId] = set()
     for name in _reachable_functions(trees):
         for rel, node in functions.get(name, ()):
-            for sub in _runtime_nodes(node):
+            for sub in _runtime_nodes(
+                node, postponed_annotations=_postpones_annotations(trees[rel])
+            ):
                 if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
                     resolved = _resolve_constant_name(rel, sub.id, constants, imported)
                     if resolved is not None:
@@ -399,8 +441,10 @@ def _called_in_functions(trees: Dict[str, ast.Module]) -> Set[str]:
     functions = _functions(trees)
     called: Set[str] = set()
     for name in _reachable_functions(trees):
-        for _rel, node in functions.get(name, ()):
-            called |= _calls_in(node)
+        for rel, node in functions.get(name, ()):
+            called |= _calls_in(
+                node, postponed_annotations=_postpones_annotations(trees[rel])
+            )
     return called
 
 
@@ -618,6 +662,25 @@ def test_deferred_constant_scopes_do_not_create_dependency_edges() -> None:
     assert ("synthetic.py", "CALLBACK") in wired
     assert ("synthetic.py", "VALUES") in wired
     assert ("synthetic.py", "VOCAB") not in wired
+
+
+def test_postponed_annotations_do_not_wire_declarations() -> None:
+    """future annotations は注釈を遅延するが default は即時評価する。"""
+    trees = _synthetic(
+        "from __future__ import annotations\n"
+        "ANNOTATION_ONLY = ('annotation',)\n"
+        "DEFAULT_VALUE = ('default',)\n"
+        "def assert_guard(value):\n"
+        "    return value\n"
+        "def public_entry(\n"
+        "    value: ANNOTATION_ONLY = assert_guard(DEFAULT_VALUE),\n"
+        ") -> ANNOTATION_ONLY:\n"
+        "    return value\n"
+    )
+    wired = _wired_constants(trees)
+    assert ("synthetic.py", "DEFAULT_VALUE") in wired
+    assert ("synthetic.py", "ANNOTATION_ONLY") not in wired
+    assert "assert_guard" in _called_in_functions(trees)
 
 
 def test_duplicate_constant_names_preserve_module_identity() -> None:
