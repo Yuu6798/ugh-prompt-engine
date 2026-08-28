@@ -2018,6 +2018,23 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   BIRTH outcome は未評価であり `NOT_ESTABLISHED` を捏造していない。
   詳細証跡は `BIRTH_GATE_ATTEMPT_20260828.md`。
 
+  **executor/consumer 実装（本PR）**: `birth_probe_executor.py` が rev 0.6
+  Birth Gate の欠落していた実行境界を実装した。pin 済み manifest は既存
+  `load_pinned_*` 経路で読み、reexport 9 artifact・canon 4 asset・vocoder・
+  execution profile・PJS expanded corpus identity を render/分析前に照合する。
+  固定実行順は Founder ごとに reference 1 + C0 20 + C1 20 + positive 1
+  （計 84 render）。C0/C1 は `build_neutral_profile()` からそれぞれ
+  `derive_profile(CONTROL, {}, control_condition="NO_LEARNING_REPLAY")` と
+  `derive_profile(CONTROL, {}, control_condition="ZERO_CONTROLPROFILE_SHAM")`
+  を実際に通し、空 partition の `replay` / `r_sham` を記録する。WORLD feature は
+  rev 0.6 が参照する `identity_metric_space.json` の手続きどおり抽出し、
+  C0/C1/positive の exact bytes、finite `d12 > 0`、両 Founder の finite
+  PJS confuser distance、監査完了を閉世界で評価する。結果 bundle は staging
+  完成後の atomic rename でのみ公開し、既存出力の上書きは拒否する。
+  この実装は測定を行っておらず、上記 2026-08-28 attempt の結論も変更しない。
+  現在の再実行ブロッカーは pin 済み `cdbd779c...` acoustic ONNX の実体または
+  同バイト再現環境のみであり、`80a40f...` への repin/fallback は実装していない。
+
 上記の残 pin を除く machine-dependent な実装作業:
 
 - **practice/education harness 実装**: VG-L0 学習ハーネスの一部として、
@@ -2137,6 +2154,7 @@ run9_dual_founder_pjs/
 ├── README.md                                                   # 本ファイル
 ├── run9_schema.py                                              # domain / TRI_CROSSOVER / contract / 書込境界 / manifest validator / R9-G1・LessonRecord・rights 4層・founder genome 文書発行 他の run-local 正本
 ├── run9_controlprofile.py                                      # Phase 3: ControlProfile schema / derive_profile 書込境界機械強制 / Run9ProfileLedger / practice trace schema
+├── birth_probe_executor.py                                     # rev 0.6 Birth Probe 84-render executor / WORLD feature consumer / atomic evidence publisher
 ├── practice_split_builder.py                                   # RUN9-BIRTH-PREP-1 §B: PRACTICE_FROM_AUDIO split manifest builder + advisory 音響 inventory sidecar
 ├── domains/
 │   └── identity_domain_run9_v1.json                            # af0/ritsu/metric_space_sha/user が全て PINNED（2026-08-25 User attestation 実行・is_pinned()==True）
@@ -2152,6 +2170,7 @@ run9_dual_founder_pjs/
 ├── tests/
 │   ├── test_run9_contract.py                                   # §27 最低テストの静的検証可能サブセット + Revision 0.2/0.3/0.4 対応テスト + User 外部レビュー P1/P2 対応テスト + Phase 3 item 1/3 テスト
 │   ├── test_run9_controlprofile.py                             # Phase 3: run9_controlprofile.py の最低テスト（書込境界・ledger append-only/冪等/conflict・neutral profile 決定論・practice trace）
+│   ├── test_birth_probe_executor.py                            # rev 0.6 exact-replay、優先順位、closed-world completeness、C1 sham、atomic publish
 │   ├── test_run9_founder_genome_issuance.py                    # RUN9-BIRTH-PREP-1 §A: founder genome 文書発行の最低テスト（再生成同一性・契約照合・fail-closed継承）
 │   └── test_practice_split_builder.py                          # RUN9-BIRTH-PREP-1 §B: practice_split_builder.py の最低テスト（決定論・件数境界・sidecar不干渉。合成 fixture のみ・実PJS非同梱）
 └── results/

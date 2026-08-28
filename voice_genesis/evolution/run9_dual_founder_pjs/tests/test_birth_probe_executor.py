@@ -1,0 +1,338 @@
+"""RUN9 rev 0.6 Birth Probe executor/consumer tests."""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+_THIS_DIR = Path(__file__).resolve().parent
+_RUN_DIR = _THIS_DIR.parent
+if str(_RUN_DIR) not in sys.path:
+    sys.path.insert(0, str(_RUN_DIR))
+
+import birth_probe_executor as bp  # noqa: E402
+
+
+FOUNDERS = ("R9F-01", "R9F-02")
+
+
+def _observation(wav: bytes, vector: list[float], *, profile: str | None = None) -> bp.RenderObservation:
+    return bp.RenderObservation.build(
+        wav,
+        bp.FeatureArtifact.from_vector(np.asarray(vector, dtype=np.float64)),
+        control_profile_id=profile,
+    )
+
+
+def _evidence(*, count: int = 20):
+    references = {
+        "R9F-01": _observation(b"founder-1", [0.0, 1.0]),
+        "R9F-02": _observation(b"founder-2", [1.0, 0.0]),
+    }
+    profile_ids = {
+        founder: tuple(profile.profile_id for profile in bp._control_profiles(founder))  # noqa: SLF001
+        for founder in FOUNDERS
+    }
+    c0 = {
+        founder: [
+            _observation(
+                references[founder].wav,
+                references[founder].feature.vector.tolist(),
+                profile=profile_ids[founder][0],
+            )
+        ]
+        * count
+        for founder in FOUNDERS
+    }
+    c1 = {
+        founder: [
+            _observation(
+                references[founder].wav,
+                references[founder].feature.vector.tolist(),
+                profile=profile_ids[founder][1],
+            )
+        ]
+        * count
+        for founder in FOUNDERS
+    }
+    positive = dict(references)
+    pjs = bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0]))
+    return references, c0, c1, positive, pjs
+
+
+def test_happy_path_is_complete_deterministic_and_passes() -> None:
+    references, c0, c1, positive, pjs = _evidence()
+    first = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+    )
+    second = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+    )
+    assert bp.canonical_json_bytes(first) == bp.canonical_json_bytes(second)
+    assert first["identity_establishment"] == {
+        "birth_outcome": "ESTABLISHED",
+        "outcome_detail": "ESTABLISHED_BY_MACHINE_FEATURE",
+        "outcome_detail_all_applicable_keys": [],
+    }
+    assert first["d12"] == pytest.approx(2**0.5)
+    assert first["audit"] == {
+        "complete": True,
+        "stops": [],
+        "completion_detail": None,
+        "completion_outcome": None,
+    }
+    assert first["overall_pass"] is True
+    assert first["learning_progression_allowed"] is True
+
+
+def test_c1_priority_records_all_applicable_keys() -> None:
+    references, c0, c1, positive, pjs = _evidence()
+    _, sham = bp._control_profiles("R9F-01")  # noqa: SLF001
+    c1["R9F-01"][0] = _observation(
+        b"different-wav", [9.0, 9.0], profile=sham.profile_id
+    )
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+    )
+    stop = result["audit"]["stops"][0]
+    assert stop["outcome"] == "DETERMINISM_CONTRACT_BROKEN"
+    assert stop["applicable_keys"] == ["on_wav_byte_mismatch", "on_nonzero"]
+    assert result["identity_establishment"]["birth_outcome"] == "ESTABLISHED"
+    assert result["overall_pass"] is False
+
+
+def test_matching_wav_but_different_serialized_feature_is_implementation_failure() -> None:
+    references, c0, c1, positive, pjs = _evidence()
+    # Euclidean distance treats +0/-0 as equal, but the frozen exact-feature
+    # audit must still observe the byte-level signed-zero difference.
+    references["R9F-01"] = _observation(b"same", [0.0, 1.0])
+    replay, _ = bp._control_profiles("R9F-01")  # noqa: SLF001
+    matching = _observation(b"same", [0.0, 1.0], profile=replay.profile_id)
+    c0["R9F-01"] = [
+        _observation(b"same", [-0.0, 1.0], profile=replay.profile_id)
+    ] + [matching] * 19
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+    )
+    assert result["audit"]["stops"][0]["outcome"] == "IMPLEMENTATION_FAILURE"
+    assert result["audit"]["stops"][0]["applicable_keys"] == [
+        "feature_computation_mismatch_with_matching_render"
+    ]
+
+
+@pytest.mark.parametrize(("cell", "profile"), (("c0", "wrong-replay"), ("c1", "wrong-sham")))
+def test_control_cells_require_the_exact_derived_profile(cell: str, profile: str) -> None:
+    references, c0, c1, positive, pjs = _evidence()
+    takes = c0 if cell == "c0" else c1
+    takes["R9F-01"][0] = _observation(
+        references["R9F-01"].wav,
+        references["R9F-01"].feature.vector.tolist(),
+        profile=profile,
+    )
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+    )
+    matching = [
+        stop
+        for stop in result["audit"]["stops"]
+        if stop["founder_id"] == "R9F-01" and stop["cell"] == cell and stop["take_index"] == 0
+    ]
+    assert matching[0]["outcome"] == "IMPLEMENTATION_FAILURE"
+    assert result["overall_pass"] is False
+
+
+def test_incomplete_evidence_is_closed_world_non_pass() -> None:
+    references, c0, c1, positive, pjs = _evidence(count=19)
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+    )
+    assert result["audit"]["complete"] is False
+    assert result["audit"]["completion_detail"] == "IDENTITY_PROTOCOL_AUDIT_INCOMPLETE"
+    assert result["overall_pass"] is False
+    assert result["learning_progression_allowed"] is False
+
+
+def test_invalid_d12_has_frozen_priority_over_collapses() -> None:
+    references, c0, c1, positive, pjs = _evidence()
+    huge = bp.FeatureArtifact.from_vector(np.asarray([1e308, -1e308]))
+    references["R9F-02"] = bp.RenderObservation.build(b"huge", huge)
+    c0["R9F-02"] = [references["R9F-02"]] * 20
+    c1["R9F-02"] = [references["R9F-02"]] * 20
+    positive["R9F-02"] = references["R9F-02"]
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+    )
+    assert result["d12"] is None
+    assert result["identity_establishment"]["outcome_detail"] == (
+        "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_D12"
+    )
+
+
+def test_execute_uses_fixed_order_and_real_zero_controlprofile_sham() -> None:
+    calls: list[tuple[str, str, int, object]] = []
+
+    def renderer(founder: str, condition: str, index: int, profile):
+        calls.append((founder, condition, index, profile))
+        return founder.encode("ascii")
+
+    def extractor(wav: bytes) -> bp.FeatureArtifact:
+        value = 0.0 if wav == b"R9F-01" else 1.0
+        return bp.FeatureArtifact.from_vector(np.asarray([value, 1.0 - value]))
+
+    pjs = bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0]))
+    result, _ = bp.execute_birth_gate(
+        renderer=renderer,
+        extractor=extractor,
+        pjs_reference=pjs,
+        expected_takes=2,
+    )
+    assert len(calls) == 12
+    assert [(condition, index) for _, condition, index, _ in calls[:6]] == [
+        ("reference", 0),
+        ("c0", 0),
+        ("c0", 1),
+        ("c1", 0),
+        ("c1", 1),
+        ("positive_reference", 0),
+    ]
+    c1_profiles = [profile for _, condition, _, profile in calls if condition == "c1"]
+    c0_profiles = [profile for _, condition, _, profile in calls if condition == "c0"]
+    assert all(profile["branch"] == "CONTROL" for profile in c0_profiles)
+    assert all(profile["revision"] == "replay" for profile in c0_profiles)
+    assert all(not any(profile["partitions"].values()) for profile in c0_profiles)
+    assert all(profile["branch"] == "CONTROL" for profile in c1_profiles)
+    assert all(profile["revision"] == "r_sham" for profile in c1_profiles)
+    assert all(not any(profile["partitions"].values()) for profile in c1_profiles)
+    assert result["overall_pass"] is True
+
+
+def test_acoustic_pin_mismatch_prevents_renderer_use(tmp_path: Path) -> None:
+    acoustic = tmp_path / "acoustic.onnx"
+    acoustic.write_bytes(b"wrong")
+    with pytest.raises(bp.BirthProbeError, match="zero renders admitted"):
+        bp.verify_exact_acoustic(acoustic, "0" * 64)
+
+
+def test_pjs_pin_is_verified_before_feature_extraction(tmp_path: Path) -> None:
+    song = tmp_path / "pjs001"
+    song.mkdir()
+    lab = song / "pjs001.lab"
+    wav = song / "pjs001_song.wav"
+    lab.write_bytes(b"lab")
+    wav.write_bytes(b"wav")
+    called = False
+
+    def extractor(_: bytes) -> bp.FeatureArtifact:
+        nonlocal called
+        called = True
+        return bp.FeatureArtifact.from_vector(np.asarray([1.0]))
+
+    with pytest.raises(bp.BirthProbeError, match="expanded corpus identity mismatch"):
+        bp.build_pjs_reference(tmp_path, extractor, expected_corpus_sha256="0" * 64)
+    assert called is False
+
+
+def test_publish_is_atomic_and_refuses_overwrite(tmp_path: Path) -> None:
+    references, c0, c1, positive, pjs = _evidence(count=1)
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+        expected_takes=1,
+    )
+    observations = {
+        founder: {
+            "reference": [references[founder]],
+            "c0": c0[founder],
+            "c1": c1[founder],
+            "positive_reference": [positive[founder]],
+        }
+        for founder in FOUNDERS
+    }
+    output = tmp_path / "evidence"
+    bp.publish_evidence_bundle(output, result, observations, pjs)
+    assert (output / "birth_gate_evidence.json").is_file()
+    assert (output / "artifact_manifest.json").is_file()
+    with pytest.raises(bp.BirthProbeError, match="refusing to overwrite"):
+        bp.publish_evidence_bundle(output, result, observations, pjs)
+
+
+def test_publish_failure_injection_leaves_no_partial_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    references, c0, c1, positive, pjs = _evidence(count=1)
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+        expected_takes=1,
+    )
+    observations = {
+        founder: {
+            "reference": [references[founder]],
+            "c0": c0[founder],
+            "c1": c1[founder],
+            "positive_reference": [positive[founder]],
+        }
+        for founder in FOUNDERS
+    }
+    original_write_bytes = Path.write_bytes
+
+    def injected_write(path: Path, data: bytes) -> int:
+        if path.name == "birth_gate_evidence.json":
+            raise OSError("injected publication failure")
+        return original_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", injected_write)
+    output = tmp_path / "evidence"
+    with pytest.raises(OSError, match="injected publication failure"):
+        bp.publish_evidence_bundle(output, result, observations, pjs)
+    assert not output.exists()
+    assert list(tmp_path.glob(".evidence.build-*")) == []
+
+
+def test_unknown_or_missing_founder_is_rejected() -> None:
+    references, c0, c1, positive, pjs = _evidence()
+    del c0["R9F-02"]
+    with pytest.raises(bp.BirthProbeError, match="exactly"):
+        bp.evaluate_birth_gate(
+            references=references,
+            c0_takes=c0,
+            c1_takes=c1,
+            positive_references=positive,
+            pjs_reference=pjs,
+        )
