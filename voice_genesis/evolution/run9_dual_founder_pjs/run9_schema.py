@@ -21052,10 +21052,54 @@ def validate_practice_audit_annotation_manifest(data: Mapping[str, Any]) -> None
     _validate_practice_alignment_provenance(obj, manifest_kind="practice audit annotation manifest")
 
 
+@dataclass(frozen=True)
+class VerifiedPracticeAlignmentSpec:
+    """Frozen spec plus the executable compiled from its verified source bytes."""
+
+    manifest: Dict[str, Any]
+    implementation_bytes: bytes
+    implementation_sha256: str
+    executable_module: types.ModuleType
+
+
+def _load_verified_practice_alignment_module(
+    implementation: Path, source: bytes, digest: str
+) -> types.ModuleType:
+    """Compile/exec the same source buffer used for the implementation digest."""
+    module_name = f"_run9_verified_practice_alignment_{digest}"
+    module = types.ModuleType(module_name)
+    module.__file__ = str(implementation)
+    module.__package__ = ""
+    sys.modules[module_name] = module
+    try:
+        code = compile(source, str(implementation), "exec")
+        exec(code, module.__dict__)
+    except Exception as exc:
+        if sys.modules.get(module_name) is module:
+            sys.modules.pop(module_name, None)
+        raise Run9ValidationError(
+            "load_pinned_practice_alignment_spec(): verified implementation "
+            f"compile/exec failed: {exc}"
+        ) from exc
+    for entrypoint in ("build_score_projection", "align_wav_to_projection"):
+        if not callable(getattr(module, entrypoint, None)):
+            raise Run9ValidationError(
+                "load_pinned_practice_alignment_spec(): verified implementation "
+                f"missing callable entrypoint {entrypoint!r}"
+            )
+    return module
+
+
 def load_pinned_practice_alignment_spec(
     contract: "Run9RunContract", *, manifest_path: Optional[Path] = None,
     contract_path: Optional[Path] = None,
-) -> Dict[str, Any]:
+) -> VerifiedPracticeAlignmentSpec:
+    """Load the pin and return an executable compiled from the verified bytes.
+
+    Callers must invoke alignment through ``executable_module`` from the returned
+    object.  An ambient or previously cached ``practice_alignment`` import is not an
+    execution authority for the pinned PRACTICE branch.
+    """
     data = _h3c_load_pinned_common(
         contract=contract, pin_name="practice_alignment_spec_sha", manifest_path=manifest_path,
         contract_path=contract_path, default_path=PRACTICE_ALIGNMENT_SPEC_PATH,
@@ -21074,14 +21118,23 @@ def load_pinned_practice_alignment_spec(
             "load_pinned_practice_alignment_spec(): pinned implementation does not exist: "
             f"{implementation}"
         )
-    implementation_sha = hashlib.sha256(implementation.read_bytes()).hexdigest()
+    implementation_bytes = implementation.read_bytes()
+    implementation_sha = hashlib.sha256(implementation_bytes).hexdigest()
     if implementation_sha != data["algorithm"]["implementation_sha256"]:
         raise Run9ValidationError(
             "load_pinned_practice_alignment_spec(): implementation raw sha256 "
             f"{implementation_sha!r} diverges from algorithm.implementation_sha256 "
             f"{data['algorithm']['implementation_sha256']!r}"
         )
-    return data
+    executable_module = _load_verified_practice_alignment_module(
+        implementation, implementation_bytes, implementation_sha
+    )
+    return VerifiedPracticeAlignmentSpec(
+        manifest=data,
+        implementation_bytes=implementation_bytes,
+        implementation_sha256=implementation_sha,
+        executable_module=executable_module,
+    )
 
 
 def _load_pinned_practice_actor_input_manifest_metadata(

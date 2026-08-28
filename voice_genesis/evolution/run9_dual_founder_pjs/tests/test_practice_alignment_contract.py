@@ -5,6 +5,7 @@ import copy
 import hashlib
 import json
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,46 @@ def test_practice_alignment_spec_pins_implementation_bytes() -> None:
     implementation = repo_root / data["algorithm"]["implementation"]
     assert data["algorithm"]["implementation_sha256"] == hashlib.sha256(
         implementation.read_bytes()
+    ).hexdigest()
+
+
+def test_alignment_spec_loader_executes_the_verified_source_buffer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale ambient import cannot become the pinned executable authority."""
+    contract = m.load_run9_contract_from_yaml_path(m.RUN9_CONTRACT_YAML_PATH)
+    data = _load(m.PRACTICE_ALIGNMENT_SPEC_PATH)
+    repo_root = _RUN_DIR.parent.parent.parent
+    implementation = (
+        repo_root / data["algorithm"]["implementation"]
+    ).resolve()
+    expected_bytes = implementation.read_bytes()
+    original_read_bytes = Path.read_bytes
+    implementation_reads = 0
+
+    def read_once_for_execution(path: Path) -> bytes:
+        nonlocal implementation_reads
+        if path.resolve() == implementation:
+            implementation_reads += 1
+            if implementation_reads > 1:
+                return b"tampered after verified read"
+        return original_read_bytes(path)
+
+    stale = types.ModuleType("practice_alignment")
+    stale.align_wav_to_projection = lambda *args, **kwargs: "stale"
+    monkeypatch.setitem(sys.modules, "practice_alignment", stale)
+    monkeypatch.setattr(Path, "read_bytes", read_once_for_execution)
+
+    loaded = m.load_pinned_practice_alignment_spec(contract)
+
+    assert implementation_reads == 1
+    assert loaded.implementation_bytes == expected_bytes
+    assert loaded.implementation_sha256 == data["algorithm"][
+        "implementation_sha256"
+    ]
+    assert loaded.executable_module is not stale
+    assert loaded.executable_module.sha256_bytes(b"verified") == hashlib.sha256(
+        b"verified"
     ).hexdigest()
 
 
