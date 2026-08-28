@@ -419,6 +419,41 @@ def test_negative_prohibitions_marker_missing(manifest_data: Dict[str, Any]) -> 
         m.validate_probe_manifest(bad)
 
 
+def test_negative_pr333_r9_identity_axis_source_missing_rev06_supersede_marker(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """PR #333 第9巡指摘（P1、採用）の回帰: `measurement_boundary.
+    identity_axis_source` が rev 0.6 の supersede 先
+    （`identity_decision_protocol_v0.6.json`）へ言及しない旧文言相当の
+    宣言に戻ると fail-closed で拒否される（calibration・閾値・判定規則の
+    正本が identity_metric_space.json のままという stale な現在形宣言の
+    再発防止）。"""
+    bad = _mutate(manifest_data)
+    bad["measurement_boundary"]["identity_axis_source"] = (
+        "inputs/identity_metric_space.json が正本"
+        "（domains/identity_domain_run9_v1.json の metric_space_sha としてpin済み）。"
+        "distance/calibration/confuser_controlの式・閾値は本manifestで重複定義しない。"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_pr333_r9_identity_axis_source_missing_supersede_word(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """同上: `identity_decision_protocol_v0.6.json` への言及があっても
+    supersede の語を欠く文言は依然として拒否される（両マーカーが独立に
+    必須であることの確認）。"""
+    bad = _mutate(manifest_data)
+    bad["measurement_boundary"]["identity_axis_source"] = (
+        "inputs/identity_metric_space.json が正本"
+        "（metric_space_sha としてpin済み）。calibration・閾値・判定規則は "
+        "inputs/identity_decision_protocol_v0.6.json も参照する。"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
 def test_negative_prohibitions_missing_render_infeasible_carveout(
     manifest_data: Dict[str, Any],
 ) -> None:

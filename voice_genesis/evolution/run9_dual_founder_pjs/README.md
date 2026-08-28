@@ -598,15 +598,23 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   evaluated_renders。式・値は同ファイルへの参照のみで重複定義せず、
   negative_reference/pjs_reference は新規 render 不要）/
   `measurement_boundary`（「どう測るか」は本 manifest の対象外という
-  境界明文 — identity 軸は `inputs/identity_metric_space.json`
-  正本、development/generalization 軸は `measurement_spec_sha`（別欄）が
-  別途凍結。〔履歴: 当時 PENDING → RUN9-L0-PIN-1（2026-08-25）で identity
-  軸の extractor カタログを PINNED 化・development/generalization 軸は
-  VG-L0 ハーネス実装待ちとして NOT_YET_IMPLEMENTED を明示保留 → 同日 PR
-  #324 第2巡 Codex bot レビュー Fix 5（偽 READY 経路 + 本 measurement_
-  boundary 節自身との正典矛盾の指摘、採用）で `measurement_spec_sha` は
-  PENDING へ復帰。manifest 実体・validator・loader は撤去せず事前配線の
-  まま残置、下記「解消済み（RUN9-L0-PIN-1）」節参照〕）/ `prohibitions`
+  境界明文 — identity 軸の feature/distance 生成定義は
+  `inputs/identity_metric_space.json` が正本のまま（無改変・
+  immutability）、calibration・閾値・判定規則は rev 0.6 実行について
+  `inputs/identity_decision_protocol_v0.6.json` が正本（supersede、
+  裁定 §7）、development/generalization 軸は `measurement_spec_sha`
+  （別欄）が別途凍結。〔履歴: 当時 PENDING → RUN9-L0-PIN-1（2026-08-25）で
+  identity 軸の extractor カタログを PINNED 化・development/
+  generalization 軸は VG-L0 ハーネス実装待ちとして NOT_YET_IMPLEMENTED を
+  明示保留 → 同日 PR #324 第2巡 Codex bot レビュー Fix 5（偽 READY 経路 +
+  本 measurement_boundary 節自身との正典矛盾の指摘、採用）で
+  `measurement_spec_sha` は PENDING へ復帰。manifest 実体・validator・
+  loader は撤去せず事前配線のまま残置、下記「解消済み（RUN9-L0-PIN-1）」
+  節参照 → design_revision 0.6（2026-08-27）で `identity_axis_source` の
+  「calibration・閾値・判定規則の正本は identity_metric_space.json」と
+  いう宣言文が rev 0.6 supersede に未追随のまま残っていた欠陥を PR #333
+  第9巡（P1、採用）で是正し、上記の二元宣言へ更新した（旧文言は manifest
+  内に履歴残置）〕）/ `prohibitions`
   （render 後の cell・
   水準追加禁止・結果を見た後の probe 変更禁止・測定仕様の変更を本
   manifest で行わない、の3禁則 + render 不能 cell の是正 repin はこの
@@ -872,13 +880,20 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   は事前配線のまま撤去せず残置する。測定仕様は identity 軸と
   development/generalization 軸の2つに分かれる
   （`evaluation/probe_manifest.json#measurement_boundary` が明文化する
-  既存の境界、本 manifest はこれを変更しない）。identity 軸は
-  revision_bridge の7 metric-path（PINNED 済み `probe_manifest_sha` 側）
-  それぞれについて、extractor（WORLD/pyworld、
+  既存の境界、本 manifest はこれを変更しない）。identity 軸の
+  feature/distance 生成定義は revision_bridge の7 metric-path（PINNED
+  済み `probe_manifest_sha` 側）それぞれについて、extractor
+  （WORLD/pyworld、
   `voice_genesis/foundry/adapter/donor_bank.py:190-196
   analyze_donor_world()` — grep で実在確認済み）+ normalization
-  （`level_normalization`）の参照カタログを凍結済み（式・閾値そのものは
-  `inputs/identity_metric_space.json` を正本のまま重複定義しない）。
+  （`level_normalization`）+ rev 0.6 判定規則への
+  `identity_decision_protocol_ref` の参照カタログを凍結済み（式は引き続き
+  `inputs/identity_metric_space.json` を正本のまま重複定義しない一方、
+  calibration・閾値・判定規則は rev 0.6 実行について
+  `inputs/identity_decision_protocol_v0.6.json` が正本——rev 0.6 裁定 §7
+  が supersede、`hypothesis_algebra_sha` として PINNED。〔履歴: PR #333
+  第9巡（P1、採用）是正前は「式・閾値そのものは identity_metric_space.json
+  を正本のまま重複定義しない」と supersede への言及なく記述していた〕）。
   development/generalization 軸（P4/P5、DESIGN_RUN9 §16.3
   DevelopmentalVector の9指標 + §14 C4 GENERALIZED_GAIN）は対応する
   extractor が VG-L0 学習ハーネス未実装のため repo に実在せず（grep 確認:

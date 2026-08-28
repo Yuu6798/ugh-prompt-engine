@@ -12083,13 +12083,14 @@ def test_pin2_dataset_manifest_sha_is_pinned_and_matches_actual_file(
     field = contract_raw["dataset_manifest_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.DATASET_SPLIT_MANIFEST_PATH)
-    # PR #333 第2巡指摘1（P1、採用）の probe_manifest_sha repin に追随し
+    # PR #333 第9巡指摘（P1、採用）の probe_manifest_sha repin に追随し
     # dataset_split_manifest.json（identity_probe.probe_manifest_sha 転記
-    # 値・行番号引用）を更新したため repin（旧値
-    # ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448 は
-    # RUN9_CONTRACT.yaml の repin 履歴コメントに保持）。
+    # 値）を更新したため repin（旧値
+    # 4138639209caabf08465141681756e3b0bc7be4167516ea9bd93b6d276456cf4・
+    # さらに旧 ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448
+    # はいずれも RUN9_CONTRACT.yaml の repin 履歴コメントに保持）。
     assert field["value"] == (
-        "4138639209caabf08465141681756e3b0bc7be4167516ea9bd93b6d276456cf4"
+        "43de511f2711fc9d559e8d21461a5b00c3a99ddc03b83455d577039e7952ddd6"
     )
 
 
@@ -13659,6 +13660,8 @@ def test_pin1_r3_measurement_spec_manifest_file_byte_unchanged_despite_pending_p
     PENDING へ復帰したが、inputs/measurement_spec_manifest.json 自体の
     バイトは RUN9-L0-PIN-1 初回実装時点から一切改変していない（manifest/
     validator/loader は事前配線のまま残置——撤去していないことの確認）。
+    テスト名の「unchanged」は「pin 状態が PENDING のまま変わらない」ことを
+    指す——ファイルバイト自体は下記のとおり2回、例外的に改訂されている。
 
     PR #333 第2巡指摘1（P1、採用）で例外的に改訂: C0/C1/positive/negative
     の4エントリの identity_metric_space_ref が rev 0.6 裁定 §7 で
@@ -13671,9 +13674,21 @@ def test_pin1_r3_measurement_spec_manifest_file_byte_unchanged_despite_pending_p
     generalization 軸の extractor 未実装状態は変えない）。旧値（PIN-1〜
     PR #333 第1巡まで不変だった値、履歴として保持）:
     "cb3e3b45973caa3737531b9636454a4542bc75f60d03a80a6a0411a9847bfdd5"
+
+    PR #333 第9巡指摘（P1、採用）で再度例外的に改訂: `scope_note` が
+    「identity 軸の距離・校正・閾値の正本は identity_metric_space.json」と
+    現在形で宣言したまま rev 0.6 裁定 §7 の supersede に未追随だった欠陥を
+    是正し、「feature/distance 生成定義 = identity_metric_space.json が
+    正本（無改変・immutability）／calibration・閾値・判定規則 =
+    identity_decision_protocol_v0.6.json が rev 0.6 実行について正本
+    （supersede）」の二元宣言へ更新した（probe_manifest.json
+    measurement_boundary と同型の是正——対応する
+    `test_pr333_r9_canonical_source_declarations_reference_rev06_supersede`
+    参照）。旧値（第2巡是正後〜第9巡まで不変だった値、履歴として保持）:
+    "22ea90724141df64bcb5f393ed2000261641e6c2c51a14445853689e90e9bc52"
     """
     assert m.compute_file_sha256(m.MEASUREMENT_SPEC_MANIFEST_PATH) == (
-        "22ea90724141df64bcb5f393ed2000261641e6c2c51a14445853689e90e9bc52"
+        "17fd50610b541d349885198ebe032abf1a47a1f1b530a1427bb23902befcc9fd"
     )
 
 
@@ -20060,16 +20075,32 @@ def test_rev06_load_pinned_rejects_disk_contract_divergence(
 
 def test_rev06_probe_manifest_does_not_declare_hypothesis_algebra_sha_pending(
 ) -> None:
-    """probe_manifest.json の revision_bridge は hypothesis_algebra_sha を
+    """probe_manifest.json のいかなる箇所も hypothesis_algebra_sha を
     literal PENDING と正典宣言していない（PR #324 の measurement_spec 正典
-    矛盾の教訓 — 本改訂の実装前グラウンディングで確認済み。probe_manifest
-    は score cells + render契約 + take台帳のみを定義し、identity 軸の
-    式・閾値・pin 状態は重複定義しない、という measurement_boundary の
-    scope_statement どおりのため probe_manifest 側の repin は不要
-    だった）。"""
+    矛盾——PINNED 済み欄が別正典で PENDING と主張される欠陥パターン——の
+    再発防止）。
+
+    〔履歴: 実装前グラウンディング（design_revision 0.6 着手時点）では
+    revision_bridge が hypothesis_algebra_sha という文字列を一切含んで
+    いなかった（probe_manifest 側の repin 不要と判定）。PR #333 第9巡
+    指摘（P1、採用）で measurement_boundary.identity_axis_source/
+    scope_statement へ「calibration・閾値・判定規則は rev 0.6 実行に
+    ついて identity_decision_protocol_v0.6.json が正本（hypothesis_
+    algebra_sha としてpin済み）」という二元宣言を追加したため、以後は
+    文字列が出現する——ただし PINNED 状態を正しく宣言しており、PR #324 が
+    禁じた「PENDING と偽る」矛盾ではない。本テストはその区別を機械的に
+    強制する（絶対不在ではなく PENDING 併記の不在を検査する）よう改訂
+    した。〕"""
     probe_manifest_path = _RUN_DIR / "evaluation" / "probe_manifest.json"
     text = probe_manifest_path.read_text(encoding="utf-8")
-    assert "hypothesis_algebra_sha" not in text
+    if "hypothesis_algebra_sha" in text:
+        # PR #324 型の正典矛盾（PENDING と偽る併記）だけを禁止する——
+        # PINNED であることの正しい宣言（本改訂で追加）は許容する。同一文
+        # （句点区切り、80文字以内の近傍）内で「PENDING」を主張していない
+        # ことを機械的に確認する。
+        for hit in re.finditer("hypothesis_algebra_sha[^。]{0,80}", text):
+            assert "PENDING" not in hit.group(0)
+        assert "hypothesis_algebra_shaとしてpin済み" in text
 
 
 def test_rev06_failure_abort_criteria_rule7_and_rule16_reference_rev06() -> None:
@@ -20084,6 +20115,38 @@ def test_rev06_failure_abort_criteria_rule7_and_rule16_reference_rev06() -> None
     assert by_id[7]["verbatim"] == "Birth Identity separation not established"
     assert by_id[16]["enforcement"] == "PROCEDURAL"
     assert by_id[16]["verbatim"] == "Identity drift beyond non-inferiority"
+
+
+def test_pr333_r9_canonical_source_declarations_reference_rev06_supersede() -> None:
+    """PR #333 第9巡指摘（P1、採用）の直接回帰: 宣言文レベルの正典表明
+    （probe_manifest.json measurement_boundary / measurement_spec_
+    manifest.json scope_note）のいずれも、calibration・閾値・判定規則の
+    現行正本が rev 0.6 実行について identity_decision_protocol_v0.6.json
+    へ supersede 済みであることに言及していること（feature/distance 生成
+    定義側は identity_metric_space.json のまま正本であることも両立して
+    言及していること）。第2巡是正はエントリ単位の参照付け替えに留まり、
+    この宣言文レベルの現在形主張自体は rev 0.6 以前のまま取り残されて
+    いた（本テストが直接照合する対象）。"""
+    probe_data = m._loads_strict_json(m.PROBE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    identity_axis_source = probe_data["measurement_boundary"]["identity_axis_source"]
+    scope_statement = probe_data["measurement_boundary"]["scope_statement"]
+    for text in (identity_axis_source, scope_statement):
+        assert "inputs/identity_metric_space.json" in text
+        assert "identity_decision_protocol_v0.6.json" in text
+        assert "supersede" in text
+
+    spec_data = m._loads_strict_json(m.MEASUREMENT_SPEC_MANIFEST_PATH.read_text(encoding="utf-8"))
+    scope_note = spec_data["scope_note"]
+    assert "inputs/identity_metric_space.json" in scope_note
+    assert "identity_decision_protocol_v0.6.json" in scope_note
+    assert "supersede" in scope_note
+
+    readme_text = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    # README のプローズ2箇所（probe_manifest.json 7成果物の記述 /
+    # measurement_spec_manifest.json extractor カタログの記述）双方が
+    # 同型の二元宣言へ追随していること。
+    assert readme_text.count("identity_decision_protocol_v0.6.json` が正本（supersede、") >= 1
+    assert "calibration・閾値・判定規則は rev 0.6 実行について" in readme_text
 
 
 # =============================================================================

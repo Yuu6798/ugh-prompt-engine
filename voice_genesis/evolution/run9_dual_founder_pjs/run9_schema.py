@@ -3585,10 +3585,13 @@ def validate_education_lesson_manifest(data: Mapping[str, Any]) -> None:
 # probe manifest（RUN9-PROBE-1, DESIGN_RUN9 §15 Probe Set の実体 manifest）:
 # P0-P5 の score cells + render 契約 + revision_bridge（§15 probe 語彙 ↔
 # identity_metric_space 語彙の橋渡し）を単一ファイルへ凍結する。「どう
-# 測るか」は本 manifest の対象外のまま——identity 軸は
-# `inputs/identity_metric_space.json` が正本、development/generalization
-# 軸の測定仕様は `measurement_spec_sha`（別欄、PENDING のまま）が別途
-# 凍結する（`measurement_boundary` 節が明文化）。
+# 測るか」は本 manifest の対象外のまま——identity 軸の feature/distance
+# 生成定義は `inputs/identity_metric_space.json` が正本のまま（無改変・
+# immutability）、calibration・閾値・判定規則は rev 0.6 実行について
+# `inputs/identity_decision_protocol_v0.6.json` が正本（supersede、
+# rev 0.6 裁定 §7、PR #333 第9巡指摘 P1 で追随）、development/
+# generalization 軸の測定仕様は `measurement_spec_sha`（別欄、PENDING の
+# まま）が別途凍結する（`measurement_boundary` 節が明文化）。
 # ---------------------------------------------------------------------------
 
 SCHEMA_PROBE_MANIFEST = "run9-probe-manifest/1.0"
@@ -4878,8 +4881,16 @@ _MEASUREMENT_BOUNDARY_KEYS: FrozenSet[str] = frozenset(
     {"scope_statement", "identity_axis_source", "development_generalization_axis_source"}
 )
 _MEASUREMENT_BOUNDARY_SCOPE_MARKERS: Tuple[str, ...] = ("何を鳴らすか", "どう測るかは対象外")
+# PR #333 第9巡指摘（P1、採用）: identity_axis_source が「calibration・閾値・
+# 判定規則の正本は identity_metric_space.json」と現在形で宣言したまま rev 0.6
+# 裁定 §7 の supersede（identity_decision_protocol_v0.6.json への切替え）に
+# 追随していなかった欠陥を是正。以後この二元宣言（feature/distance 生成定義
+# = identity_metric_space.json が正本 ／ calibration・閾値・判定規則 =
+# identity_decision_protocol_v0.6.json が rev 0.6 実行について正本）が
+# 必ず両方言及されることを fail-closed で強制する。
 _MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS: Tuple[str, ...] = (
     "inputs/identity_metric_space.json", "metric_space_sha",
+    "identity_decision_protocol_v0.6.json", "supersede",
 )
 _MEASUREMENT_BOUNDARY_DEV_GEN_AXIS_MARKERS: Tuple[str, ...] = ("measurement_spec_sha", "PENDING")
 
@@ -6739,9 +6750,13 @@ def validate_probe_manifest(data: Mapping[str, Any]) -> None:
     群と同じ流儀 — Run9ValidationError・意味論マーカー方式・閉集合）。
 
     「どう測るか」は本 manifest の対象外（`measurement_boundary` が明文化
-    ——identity 軸は `inputs/identity_metric_space.json` が正本のまま、
-    P4/P5 の development/generalization 軸の測定仕様は
-    `measurement_spec_sha`（別欄、PENDING のまま）が別途凍結する）。
+    ——identity 軸の feature/distance 生成定義は
+    `inputs/identity_metric_space.json` が正本のまま（無改変・
+    immutability）、calibration・閾値・判定規則は rev 0.6 実行について
+    `inputs/identity_decision_protocol_v0.6.json` が正本（supersede、
+    rev 0.6 裁定 §7、PR #333 第9巡指摘 P1 で追随）、P4/P5 の
+    development/generalization 軸の測定仕様は `measurement_spec_sha`
+    （別欄、PENDING のまま）が別途凍結する）。
     """
     if not isinstance(data, dict):
         raise Run9ValidationError(f"probe manifest must be an object, got {type(data).__name__}")

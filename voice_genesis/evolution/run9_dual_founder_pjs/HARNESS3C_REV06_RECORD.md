@@ -1767,3 +1767,232 @@ byte-unchanged 確認2件の対象範囲更新（トップレベル key set の�
 - ファミリー全数掃討（§11.4）の結果、(a) 重複可能な述語対・(b) 分岐の
   無い値域のいずれも本巡の3件の是正で残余ゼロとなったことを確認した
   ——追加の是正対象は発見されなかった。
+
+## 12. PR #333 Codex bot レビュー第9巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`fb22c2a2`）。1件（P1）着手前に事実確認、指摘内容は事実と一致したため
+採用対応。裁定正本は本 PR の対象外（既存裁定 §1-§9 の再解釈ではなく、
+第2巡が見落とした宣言文レベルの stale 表明の是正）。
+
+### 12.1 指摘（P1）: 「Reconcile the identity-axis canonical source」
+
+**事実確認（着手前、逐語引用）**:
+
+- `evaluation/probe_manifest.json` `measurement_boundary.identity_axis_
+  source`（是正前）: 「inputs/identity_metric_space.json が正本
+  （domains/identity_domain_run9_v1.json の metric_space_sha として
+  pin済み）。distance/calibration/confuser_controlの式・閾値は 本
+  manifestで重複定義しない。」
+- 同 `scope_statement`（是正前、抜粋）: 「identity軸は
+  inputs/identity_metric_space.json（metric_space_sha としてpin済み）が
+  正本」
+- `inputs/measurement_spec_manifest.json` `scope_note`（是正前、抜粋、
+  134行付近）: 「identity 軸の距離・校正・閾値の正本は
+  inputs/identity_metric_space.json（metric_space_sha として既
+  PINNED）であり、本 manifest では重複定義しない」
+- `README.md`（是正前、601-602行付近）: 「identity 軸は
+  `inputs/identity_metric_space.json` 正本」
+- `README.md`（是正前、875-881行付近）: 「式・閾値そのものは
+  `inputs/identity_metric_space.json` を正本のまま重複定義しない」
+
+いずれも現在形で「calibration・閾値・判定規則の正本は
+identity_metric_space.json」と宣言しており、rev 0.6 裁定 §7「旧
+calibration/decision ruleをrev 0.6実行についてsupersedeする」（新規
+`inputs/identity_decision_protocol_v0.6.json` への切替え、
+`hypothesis_algebra_sha` として PINNED 済み）への言及を一切欠いていた
+ことを確認した。第2巡指摘1（本記録 §5）は `evaluation/probe_manifest.json`
+revision_bridge の**エントリ単位**（c0_replay_takes/c1_sham_takes/
+positive_reference/negative_reference の `identity_metric_space_ref`）の
+参照付け替えのみを行い、上記の**宣言文レベル**（measurement_boundary
+自身の identity_axis_source/scope_statement、および同型の
+measurement_spec_manifest.json scope_note・README プローズ2箇所）は
+見落としたまま残っていた。**指摘内容は事実と一致** → Fable 設計どおり
+実装。
+
+### 12.2 実装（Fable 設計）
+
+対象5箇所すべてを、feature/distance 定義（および calibration 配下の
+`preserved_generation_definitions`——d_c0_population/d_c1_population/
+positive_reference_definition/negative_reference_definition、生成手順の
+定義のみ）は `inputs/identity_metric_space.json` が正本のまま（無改変・
+immutability 維持）／calibration・閾値・判定規則
+（freeze_threshold/validity_gates/decision_rule の各節）は rev 0.6 実行
+について `inputs/identity_decision_protocol_v0.6.json` が正本
+（supersede、裁定 §7、`hypothesis_algebra_sha` として PINNED）、という
+二元宣言へ更新した。旧文言はいずれも各フィールド内へ〔旧文言〕形式で
+履歴残置し（probe_manifest.json/measurement_spec_manifest.json は
+フィールド末尾の〔旧文言（PR #333第9巡是正前...）〕括弧、README.md/
+run9_schema.py は同型の〔履歴...〕括弧）、削除しない。
+
+- `evaluation/probe_manifest.json`: `measurement_boundary.identity_axis_
+  source`/`scope_statement` を二元宣言へ更新。
+- `inputs/measurement_spec_manifest.json`: `scope_note` の該当箇所を
+  同型に更新。
+- `README.md`: probe_manifest.json 7成果物の記述（旧601-602行付近）と
+  measurement_spec_manifest.json extractor カタログの記述（旧875-881行
+  付近）の2箇所を更新。README はプローズであり pin 対象外であることを
+  確認済み（`README.md:NNN` 形式の行番号引用は
+  `inputs/measurement_spec_manifest.json` の2箇所（19行目
+  `scope_source`・134行目 `scope_note`）のみで、いずれも本改訂で編集した
+  2ブロックより手前（587-590行）を指しており非影響——リポジトリ全体を
+  grep して確認した）。
+- `run9_schema.py`: probe manifest のモジュール冒頭コメント（旧
+  3585-3591行付近）と `validate_probe_manifest()` docstring（旧
+  6733-6745行付近）を同型のパラフレーズとして同時是正（宣言文の要約が
+  別の場所で stale 化する再発を防ぐ）。加えて
+  `_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS` へ
+  `"identity_decision_protocol_v0.6.json"`/`"supersede"` の2マーカーを
+  追加し、`identity_axis_source` が今後も二元宣言を両方言及することを
+  `validate_probe_manifest()` で fail-closed 強制するようにした
+  （既存の `inputs/identity_metric_space.json`/`metric_space_sha`
+  マーカーは無改変のまま維持）。
+
+**フィールド閉集合の扱い**: `measurement_boundary` は
+`_MEASUREMENT_BOUNDARY_KEYS`（`scope_statement`/`identity_axis_source`/
+`development_generalization_axis_source` の3キーのみ）で厳密閉集合
+検証されており、新規キー追加は validator 改訂を要する。本改訂は
+新規キーを追加せず既存2フィールドの文言拡張のみで完結させた（validator
+側は新マーカー2件の追加のみ）。
+
+### 12.3 ファミリー全数掃討（Task 指示必須・終端宣言）
+
+「calibration/閾値/判定の正」と現在形で主張する箇所をリポジトリ全体
+（run9 ディレクトリ + README + docs 内の run9 言及）から `identity_
+metric_space`/`正本` の組で grep し、全数を点検した。
+
+| # | 箇所 | 状態（是正前） | 対応 |
+|---|---|---|---|
+| 1 | `evaluation/probe_manifest.json` `measurement_boundary.identity_axis_source` | 現在形で正本宣言・supersede 未言及 | **本巡で是正**（§12.2） |
+| 2 | 同 `scope_statement` | 同上 | **本巡で是正**（§12.2） |
+| 3 | `inputs/measurement_spec_manifest.json` `scope_note`（134行） | 同上 | **本巡で是正**（§12.2） |
+| 4 | `README.md`（旧601-602行、probe_manifest 7成果物の記述） | 同上 | **本巡で是正**（§12.2） |
+| 5 | `README.md`（旧875-881行、measurement_spec extractor カタログの記述） | 同上 | **本巡で是正**（§12.2） |
+| 6 | `run9_schema.py` probe manifest モジュールコメント（旧3585-3591行） | 同型のパラフレーズ・supersede 未言及 | **本巡で是正**（§12.2、Task 範囲外だが同型欠陥として併せて解消） |
+| 7 | `run9_schema.py` `validate_probe_manifest()` docstring（旧6733-6745行） | 同上 | **本巡で是正**（§12.2、同上） |
+| 8 | `run9_schema.py` `_validate_revision_bridge_entry()` エラーメッセージ（`_IDENTITY_METRIC_SPACE_REF_PREFIX` 検証、6564行付近） | 「正本は identity_metric_space.json への参照のみ」 | **対象外と判定**——これは `identity_metric_space_ref` フィールド自身の構造検証（値が同ファイルへの参照でなければならない、という規約）であり、calibration・閾値・判定規則の現行正本を主張するものではない。エントリの生成定義参照（`identity_metric_space_ref`）自体は rev 0.6 でも supersede 対象外のまま有効——第2巡是正が既に `identity_decision_protocol_ref`/`superseded_calibration_note` を併記済み |
+| 9 | `evaluation/probe_manifest.json` revision_bridge 4エントリの `superseded_calibration_note` | rev 0.6 供 supersede を明記済み | 対象外（第2巡で既に是正済み、本巡は無改変） |
+| 10 | README.md 1298行付近（rev 0.6 の解消済み節、過去形で supersede の経緯を記述） | 過去形の履歴記述（正しく supersede に言及） | 対象外（現在形の stale 宣言ではない） |
+
+**残余ゼロを終端宣言する**: 上記10箇所を機械的に走査した結果、指摘が
+挙げた3箇所（#1-3）に加え、第2巡グラウンディングが見落とした同型の
+宣言文2箇所（README.md #4-5）と、宣言文のパラフレーズに過ぎない
+run9_schema.py 内コメント2箇所（#6-7）を発見し、いずれも本巡で是正した。
+それ以外（#8-10）は、フィールド自体の構造規約や生成定義参照
+（supersede 対象外）、または既に是正済み・過去形で正しく記述された
+箇所であり、対象外と判定した。**同型の宣言文レベル欠陥の残余はゼロ**。
+
+### 12.4 repin cascade
+
+`evaluation/probe_manifest.json` のバイト変更に伴い `probe_manifest_sha`
+を repin（旧
+`60adeb93b6ca920bdbc590f24ffdb62f68bd12a387e2543361d88954fb1932fe` → 新
+`c121243b9679ceae88322a43d1c804c2c5eddb4d25413c09e6a7d737033ea095`）。
+`identity_probe.probe_manifest_sha` 転記値・`pjs_song_based_probe_non_
+adoption_citation`/`c1_sham_takes.description` への行番号引用（787/880
+行）はいずれも既存キーの**文字列拡張のみ**（新規キー挿入を伴わない）
+ため行番号は不変——転記値のみ更新し、`inputs/dataset_split_manifest.json`
+の実バイトに伴い `dataset_manifest_sha` を repin（旧
+`4138639209caabf08465141681756e3b0bc7be4167516ea9bd93b6d276456cf4` → 新
+`43de511f2711fc9d559e8d21461a5b00c3a99ddc03b83455d577039e7952ddd6`）。
+
+`inputs/measurement_spec_manifest.json` の `scope_note` 変更に伴いバイトは
+変わったが、`measurement_spec_sha` は元々 PENDING（VG-L0 学習ハーネス
+実装待ちの既存律速は不変）のため repin は発生しない——本文是正のみ
+（`test_pin1_r3_measurement_spec_manifest_file_byte_unchanged_despite_
+pending_pin` の期待値を新実バイト sha256 へ更新して追随）。
+
+`README.md` はプローズであり pin 対象外（§12.2 で確認済み）。
+`inputs/identity_decision_protocol_v0.6.json`・`inputs/identity_metric_
+space.json`・`domains/identity_domain_run9_v1.json` は1 byte も
+変更していない（`git status --short` で確認済み）ため `hypothesis_
+algebra_sha` は無改変のまま。
+
+### 12.5 既存テストの追随（回帰値更新）
+
+- `tests/test_run9_contract.py::test_pin2_dataset_manifest_sha_is_pinned_
+  and_matches_actual_file`: `dataset_manifest_sha` 期待値を新値へ更新。
+- `tests/test_run9_contract.py::test_pin1_r3_measurement_spec_manifest_
+  file_byte_unchanged_despite_pending_pin`: 期待 sha256 を新値へ更新
+  （テスト名の「unchanged」は「pin 状態が PENDING のまま」を指すのみで
+  ファイルバイト自体は本巡含め計3回改訂されていることをテスト docstring
+  へ明記）。
+- `tests/test_run9_contract.py::test_rev06_probe_manifest_does_not_
+  declare_hypothesis_algebra_sha_pending`: 「`hypothesis_algebra_sha`
+  という文字列が一切出現しない」という絶対不在の検査から、「出現する
+  場合は PENDING と矛盾併記していないこと」という正確な検査へ改訂
+  （本巡の是正で `identity_axis_source` が正当に `hypothesis_algebra_
+  sha` を PINNED 宣言の一部として参照するようになったため、絶対不在
+  検査のままでは正しい是正を偽陽性で拒否してしまう——検査意図
+  〔PR #324 型の PENDING 偽装矛盾の検出〕をそのまま保ちつつ、判定条件を
+  「不在」から「PENDING との矛盾併記の不在」へ精密化した）。
+
+### 12.6 新設テスト
+
+- `tests/test_run9_probe_manifest.py::test_negative_pr333_r9_identity_
+  axis_source_missing_rev06_supersede_marker`: `identity_axis_source` を
+  旧文言（rev 0.6 supersede 未言及）へ差し戻すと fail-closed 拒否される
+  ことの回帰。
+- `tests/test_run9_probe_manifest.py::test_negative_pr333_r9_identity_
+  axis_source_missing_supersede_word`: `identity_decision_protocol_v0.6.
+  json` への言及があっても `supersede` の語を欠く文言は依然拒否される
+  ことの確認（2マーカーが独立必須であることの確認）。
+- `tests/test_run9_contract.py::test_pr333_r9_canonical_source_
+  declarations_reference_rev06_supersede`: 実ファイル
+  （probe_manifest.json/measurement_spec_manifest.json/README.md）が
+  いずれも二元宣言（feature/distance 側=identity_metric_space.json・
+  calibration/閾値/判定規則側=identity_decision_protocol_v0.6.json+
+  supersede）を実際に含んでいることの直接照合。
+
+### 12.7 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2710 passed, 7 warnings in ~43s
+```
+
+新設テスト3件（2707→2710）。既存テスト3件の回帰値更新（§12.5）。
+
+### 12.8 変更ファイル
+
+- `evaluation/probe_manifest.json`: `measurement_boundary.identity_axis_
+  source`/`scope_statement` を二元宣言へ更新（旧文言は履歴残置）。
+- `inputs/measurement_spec_manifest.json`: `scope_note` を同型に更新
+  （旧文言は履歴残置）。
+- `inputs/dataset_split_manifest.json`: `identity_probe.probe_manifest_
+  sha` 転記値更新（行番号引用は不変）。
+- `RUN9_CONTRACT.yaml`: `probe_manifest_sha`/`dataset_manifest_sha`
+  repin（値・repin履歴コメント追加）+ `measurement_spec_sha` 本文是正
+  コメント追加（pin 状態は PENDING のまま変更なし）。
+- `README.md`: probe_manifest.json 7成果物の記述・measurement_spec_
+  manifest.json extractor カタログの記述の2箇所を二元宣言へ更新（旧
+  文言は各箇所の〔履歴〕括弧へ保持）。
+- `run9_schema.py`: probe manifest モジュールコメント・
+  `validate_probe_manifest()` docstring を同型に更新、
+  `_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS` へ2マーカー追加。
+- `tests/test_run9_probe_manifest.py`: 新設 fail-closed テスト2件。
+- `tests/test_run9_contract.py`: 新設確認テスト1件 + 既存テスト3件の
+  回帰値・検査条件更新（§12.5）。
+
+### 12.9 逸脱事項
+
+- immutability 対象（`identity_metric_space.json`/`identity_domain`/
+  `Genome`/speaker map manifest）・裁定逐語転記部分
+  （`USER_ADJUDICATION_20260827_IDENTITY_REV06.txt`）は1 byte も
+  変更していない。`inputs/identity_decision_protocol_v0.6.json` も本巡は
+  無改変（`hypothesis_algebra_sha` 自体は repin なし）。
+- `run9_schema.py` のモジュールコメント・docstring 2箇所（§12.3 #6-7）
+  の是正は Task 指示（3箇所の宣言文）の範囲外だが、同一の stale
+  パラフレーズであり、ファミリー全数掃討（Task 指示必須）の一部として
+  併せて是正した——第2巡（§5.0）が「文字列の不在確認だけでなく実参照先
+  の突合せまで行う」という教訓を残したのと同型に、本巡は「指摘が挙げた
+  宣言文そのものだけでなく、その宣言文を要約するコメント・docstring も
+  併せて点検する」という教訓を残す。
+- README.md の2箇所是正により行数が増加したが、リポジトリ全体を grep
+  して README.md への行番号引用が `inputs/measurement_spec_manifest.json`
+  の2箇所（19行目・134行目、いずれも本改訂で編集した2ブロックより手前の
+  587-590行を指す）のみであることを確認済みであり、他箇所への行番号
+  シフトの影響はない。

@@ -408,18 +408,20 @@ repository_commit_sha:
 # manifest sha/c1 take 数がディスク正典 RUN9_CONTRACT.yaml の各 PINNED
 # 値と一致しない場合 fail-closed 拒否する）が検証・消費する。
 dataset_manifest_sha:
-  value: "4138639209caabf08465141681756e3b0bc7be4167516ea9bd93b6d276456cf4"
+  value: "43de511f2711fc9d559e8d21461a5b00c3a99ddc03b83455d577039e7952ddd6"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/dataset_split_manifest.json
   reason: >-
-    〔repin 履歴〕 PR #333 第2巡指摘1（P1、採用）の probe_manifest_sha
+    〔repin 履歴〕 PR #333 第9巡指摘（P1、採用）の probe_manifest_sha
     repin に追随: identity_probe.probe_manifest_sha 転記値
     （load_pinned_dataset_split_manifest() が RUN9_CONTRACT.yaml
-    probe_manifest_sha PINNED 値と cross-check する）を新値へ更新し、
+    probe_manifest_sha PINNED 値と cross-check する）を新値へ更新した。
     pjs_song_based_probe_non_adoption_citation / c1_sham_takes.description
-    への行番号引用（P4 role: 786→787行、c1_sham_takes description:
-    878→880行——probe_manifest.json への新規キー挿入によるシフト）を
-    再照合して修正した。旧値（履歴として保持）:
+    への行番号引用（P4 role 787行、c1_sham_takes description 880行）は
+    今回の repin では新規キー挿入を伴わないため不変（既存値の文字列拡張の
+    みで行数は変わらない）。旧値（履歴として保持）:
+    "4138639209caabf08465141681756e3b0bc7be4167516ea9bd93b6d276456cf4"
+    〔履歴（さらに旧、PR #333 第2巡指摘1による repin）〕:
     "ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448"
     〔履歴: 旧 PENDING 理由（RUN9-L0-PIN-2 で解消済み）——
     TRAIN/VALIDATION/SEALED HOLDOUT/IDENTITY PROBE split の manifest が未確定。
@@ -3418,8 +3420,18 @@ learning_recipe_sha:
 # のまま保持する（旧参照を保持する履歴残置様式。probe の生成定義——cell_
 # ref/contract_field_ref/new_render_required 等——は supersede 対象外の
 # ため無改変で有効）。
+# PR #333 第9巡指摘（P1、採用）で repin（旧値、履歴として保持）:
+# "60adeb93b6ca920bdbc590f24ffdb62f68bd12a387e2543361d88954fb1932fe"
+# — measurement_boundary.identity_axis_source/scope_statement が「calibration・
+# 閾値・判定規則の正本は identity_metric_space.json」と現在形で宣言したまま
+# であり、rev 0.6 裁定 §7 による identity_decision_protocol_v0.6.json への
+# supersede に更新されていなかった欠陥の是正。両文言を「feature/distance定義
+# + preserved_generation_definitions = identity_metric_space.json が正本（無改変・
+# immutability）／calibration・閾値・判定規則 = identity_decision_protocol_v0.6.json
+# が rev 0.6 実行について正本（supersede、裁定§7）」の二元宣言へ更新し、
+# 旧文言は各フィールド内に履歴残置した。
 probe_manifest_sha:
-  value: "60adeb93b6ca920bdbc590f24ffdb62f68bd12a387e2543361d88954fb1932fe"
+  value: "c121243b9679ceae88322a43d1c804c2c5eddb4d25413c09e6a7d737033ea095"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json
 
@@ -3451,6 +3463,15 @@ probe_manifest_sha:
 # rev 0.6 で supersede 済みの calibration 節を判定規則の実参照として指し
 # たままだった欠陥——probe_manifest_sha repin 参照）。PENDING のため
 # repin 不要、本文是正のみ〕
+# 〔PR #333 第9巡指摘（P1、採用）: pin 状態は PENDING のまま変更しないが、
+# scope_note が「identity 軸の距離・校正・閾値の正本は identity_metric_
+# space.json」と現在形で宣言したまま rev 0.6 supersede に更新されていな
+# かった欠陥を是正——feature/distance生成定義 = identity_metric_space.json
+# が正本（無改変・immutability）／calibration・閾値・判定規則 =
+# identity_decision_protocol_v0.6.json が rev 0.6 実行について正本
+# （supersede、裁定§7）の二元宣言へ更新し、旧文言は scope_note 内に履歴
+# 残置した（probe_manifest.json measurement_boundary と同型是正）。PENDING
+# のため repin 不要、本文是正のみ〕
 measurement_spec_sha:
   value: null
   status: PENDING
