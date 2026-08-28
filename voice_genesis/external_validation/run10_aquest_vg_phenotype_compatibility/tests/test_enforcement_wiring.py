@@ -21,6 +21,16 @@ PR #330 のレビューで同型が 3 度出た:
 
 例外は `UNWIRED_REGISTRY` に理由付きで登録する。登録簿に無い未配線が現れたら
 落ちるし、配線済みになったのに登録簿へ残っている項目でも落ちる（陳腐化防止）。
+
+【境界宣言】本監査は **必要条件**であって十分条件ではない。捕まえるのは
+「宣言された名前がどの実行経路からも参照されていない」ことだけである。
+到達可能性は AST の直接呼び出しだけを辿る近似で、Python の動的性
+（属性経由・間接呼び出し・エイリアス・同名の多重定義）は解決しない。
+限界は `AUDIT_LIMITATIONS` に列挙し、再入条件を添えてある。「宣言された
+検証器が実際に**正しい分岐で**使われているか」は本監査の範囲外であり、
+そちらは各検証器の個別テストが担う。
+
+本監査の主張は「未配線の宣言を無言で増やせない」ことに限る。
 """
 from __future__ import annotations
 
@@ -89,6 +99,34 @@ UNWIRED_REGISTRY: Dict[str, str] = {
 }
 
 
+# 本監査が**捕まえないもの**と、その再入条件（PR #332 Codex 第 2 巡 P2×3）。
+#
+# 監査の主張を実態より広く書くと、それ自体が将来の実装者を誤らせる
+# （「このファミリーは終端済み」と読まれる）。捕捉できない経路を列挙して
+# 主張を狭める。列挙を消すには、対応する解析を実装してから消すこと。
+AUDIT_LIMITATIONS: Dict[str, str] = {
+    "unreachable_public_entry": (
+        "呼び出し元の無い公開関数そのものを起点に数えるため、未使用の "
+        "`public_helper()` が定数を load していれば配線済みと判定する。"
+        "再入条件: CLI / 公開 API の実エントリポイント一覧を宣言し、"
+        "そこからのみ辿る方式へ切り替えるとき。"
+    ),
+    "private_predicate_application_sites": (
+        "監査対象はモジュール直下の公開検証器（assert_* / verify_*）と "
+        "ALL_CAPS 定数に限る。`_is_absent_evidence()` のような private 述語が"
+        "「ある分岐では使われ、別の分岐では使われていない」ことは検出しない"
+        "（PR #330 第 23 巡の欠陥そのもの）。"
+        "再入条件: private 述語ごとに必須適用箇所を宣言する表を作るとき。"
+    ),
+    "module_qualified_call_resolution": (
+        "呼び出しグラフのノードを関数名で同定するため、同名関数が複数モジュール"
+        "にあると区別しない（現に `main` / `to_json` が重複している）。"
+        "属性呼び出しは数えないので緩む側には倒れないが、同名の直接呼び出しは"
+        "取り違え得る。再入条件: モジュール / クラスで修飾した解決を実装するとき。"
+    ),
+}
+
+
 def _tree(rel: str) -> ast.Module:
     return ast.parse((_RUN_DIR / rel).read_text(encoding="utf-8"))
 
@@ -125,14 +163,19 @@ def _functions(trees: Dict[str, ast.Module]) -> Dict[str, list]:
 
 
 def _calls_in(node: ast.AST) -> Set[str]:
+    """直接呼び出し（`f(...)`）だけを数える。
+
+    `obj.verify_x()` のような属性呼び出しを裸の名前へ潰すと、無関係な
+    メソッド呼び出しが同名のモジュール関数を「配線済み」にしてしまう
+    （PR #332 Codex 第 2 巡 P2）。本パッケージは `from ... import name`
+    形式の直接呼び出しで統一されているため、属性呼び出しを落としても
+    実際の配線は取りこぼさない — 取りこぼせば未配線として落ちるので、
+    誤って緩む側には倒れない。
+    """
     called: Set[str] = set()
     for sub in ast.walk(node):
-        if isinstance(sub, ast.Call):
-            target = sub.func
-            if isinstance(target, ast.Name):
-                called.add(target.id)
-            elif isinstance(target, ast.Attribute):
-                called.add(target.attr)
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+            called.add(sub.func.id)
     return called
 
 
@@ -350,3 +393,26 @@ def test_validator_called_only_from_dead_code_is_unwired() -> None:
         "    assert_guard(1)\n"
     )
     assert "assert_guard" not in _called_in_functions(trees)
+
+
+def test_audit_limitations_are_declared() -> None:
+    """監査の限界が列挙され、それぞれに再入条件が書かれていること。
+
+    「ファミリーを終端した」という主張を実態より広く書くと、それ自体が
+    将来の実装者を誤らせる。捕捉できない経路は消さずに宣言しておく。
+    """
+    assert AUDIT_LIMITATIONS, "限界の宣言が空になっている（主張が実態を超えていないか確認）"
+    for name, text in AUDIT_LIMITATIONS.items():
+        assert "再入条件:" in text, f"{name}: 再入条件が書かれていない"
+        assert len(text) >= 40, f"{name}: 説明が短すぎる"
+
+
+def test_attribute_calls_do_not_wire_a_validator() -> None:
+    """`obj.verify_x()` が同名のモジュール関数を配線済みにしない。"""
+    trees = _synthetic(
+        "def verify_x(v):\n"
+        "    pass\n"
+        "def public_entry(obj):\n"
+        "    return obj.verify_x()\n"
+    )
+    assert "verify_x" not in _called_in_functions(trees)
