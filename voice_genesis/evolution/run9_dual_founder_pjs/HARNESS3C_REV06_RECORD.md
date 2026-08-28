@@ -850,3 +850,158 @@ PATH` 差し替えによる列挙外 path 拒否の合成 fixture・列挙キー
   別途追加し、実データレベルでも二重防御とした——設計メモの「閉包検査」
   指示を、Python 定数間の構造的保証 + 実文書間の実行時検査の2段構えで
   実装した設計判断。
+
+## 7. PR #333 Codex bot レビュー第4巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`d8dfd704`）。2件全て採用（P1×2）。裁定正本は本 PR の対象外（既存裁定
+§1-§9 の再解釈ではなく、実装欠陥の是正）。両件とも Fable が事前に採否・
+設計を確定し、着手前の事実確認で指摘内容が実物と一致することを確認して
+から実装した。
+
+### 7.1 指摘1（P1）: 「Require every birth check before declaring
+ESTABLISHED」
+
+**事実確認**: `inputs/identity_decision_protocol_v0.6.json` の
+`birth_identity_separation` の `established` 分岐（d12>0 →
+ESTABLISHED）と `pjs_confuser` の `on_zero` 分岐（PJS confuser 距離=0 →
+NOT_ESTABLISHED）が、それぞれ独立した節として定義されており、両者の
+合成条件・優先順を定義する節が存在しないことを確認した（`validate_
+identity_decision_protocol()` の実装・実データともに、この2節を横断して
+束ねる検証は第3巡時点まで存在しなかった）。
+
+**実装（Fable 設計）**: 新規節 `birth_gate_aggregate_rule` を発行し、
+Birth Gate 全体の ESTABLISHED 判定を単一の連言として凍結した:
+
+- **必要十分条件**: 「両 founder の feature が valid/finite」∧
+  「d12 > 0」∧「両 founder の PJS confuser 距離 > 0」の連言
+  （`necessary_and_sufficient_condition_for_established`）。裁定§4/§5は
+  独立の門ではなく Birth Gate の連言構成要素であり、`verbatim_basis`
+  （裁定§5 逐語「distance=0の場合はPJS confuserとのfeature collapseとして
+  BIRTH NOT_ESTABLISHEDとする。」）を `pjs_confuser.verbatim` と単一の
+  正本として共有することで、新規則の発明ではなく既存裁定の機械符号化
+  であることを構造的に強制した（`verbatim_basis != pjs_confuser.
+  verbatim` は validator が fail-closed で拒否する）。
+- **不成立時の outcome_detail 記録**: `outcome_detail_priority` に
+  決定論的優先順（`order`: `invalid_or_nonfinite_feature` →
+  `d12_zero_collapse` → `pjs_confuser_zero_distance`、順序込み固定
+  タプル）を凍結し、`detail_by_key` で各優先枝が指す outcome_detail
+  ラベルを既存/新設の凍結定数へ紐付けた——`invalid_or_nonfinite_feature`
+  は既存 `IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL`、
+  `d12_zero_collapse` は既存 `IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL`
+  を再利用し、`pjs_confuser_zero_distance` のみ新規定数
+  `IDENTITY_PROTOCOL_BIRTH_PJS_CONFUSER_COLLAPSE_DETAIL` を追加した
+  （`pjs_confuser.on_zero` 自体は無改変——本定数は `birth_gate_aggregate_
+  rule` 側だけが保持し、既存節を書き換えない設計とした）。`order_note`
+  に、複数条件が同時該当し得ること・優先順の先頭1件を主 detail とし
+  該当した全条件キーを `outcome_detail_all_applicable_keys` へ機械可読
+  リストで併記する旨（情報を落とさない）を明記した。
+- **§9 接続**: `gate_failure_action_ref` を `invariants.birth_gate_
+  failure_action` への自己参照 dotted path として凍結し、Birth Gate
+  不成立時の凍結（§9）へ接続した。
+- **既存分岐との相互参照**: `conjunct_refs`（順序込み4項目固定タプル
+  `birth_identity_separation.established` /
+  `birth_identity_separation.invalid_or_nonfinite_feature` /
+  `pjs_confuser.on_positive` / `pjs_confuser.on_zero`）で既存4分岐を
+  参照するのみ——`birth_identity_separation`/`pjs_confuser` 両節は
+  1 byte も変更していない（`test_pr333_r4_aggregate_rule_pjs_confuser_
+  section_byte_unchanged` で回帰確認）。
+
+### 7.2 指摘2（P1）: 「Route a failed positive-reference audit to a
+stop」
+
+**事実確認**: `positive_reference_audit` 節が要求（WAV byte 一致 +
+distance=0）のみを規定し、不一致時の outcome/stop action を持たない
+ことを確認した。同時に `c0_determinism_attestation` には `on_mismatch`
+（render byte 不一致 → `DETERMINISM_CONTRACT_BROKEN` / feature 計算
+不一致 → `IMPLEMENTATION_FAILURE`）、`c1_sham_attestation` には
+`on_nonzero`（→ `C1_SHAM_EFFECT_DETECTED`）という停止語彙割当てが既に
+存在しており、`positive_reference_audit` だけがこの割当てを持たない
+未登録の穴であることを確認した。
+
+**実装（Fable 設計）**: `positive_reference_audit` へ `on_mismatch` を
+新設し、C0 と同型の決定論的停止割当てを凍結した——WAV バイト不一致は
+`wav_byte_mismatch`（値は既存定数 `IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_
+OUTCOME` = `DETERMINISM_CONTRACT_BROKEN` をそのまま再利用）、バイト
+一致だが distance≠0 または feature 計算不一致は
+`distance_nonzero_or_feature_mismatch_with_matching_wav`（値は既存定数
+`IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME` = `IMPLEMENTATION_
+FAILURE` をそのまま再利用）とし、新語彙は一切発明していない
+（`test_pr333_r4_positive_reference_audit_on_mismatch_reuses_c0_
+vocabulary` で C0 側の実データ値との一致を直接確認）。`gate_effect` へ
+「いずれの outcome も Birth Gate 非 PASS・学習非進行・閾値救済禁止
+（裁定§9）。C0側 `c0_determinism_attestation.on_mismatch` と同一の
+割当て規則である」旨を明記し、裁定§3『positive referenceは追加のexact
+replay監査として維持する』+ §9 fail-closed の機械符号化であることを
+文書化した。`c0_determinism_attestation`/`c1_sham_attestation` 両節は
+1 byte も変更していない（`test_pr333_r4_c0_c1_sections_byte_unchanged_
+by_positive_reference_fix` で回帰確認）。
+
+### 7.3 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2638 passed, 7 warnings in ~44s
+```
+
+新設テスト24件（2614→2638）: `tests/test_run9_contract.py` へ
+`pr333_r4_*` prefix で追加——`birth_gate_aggregate_rule` の happy path・
+既存語彙再利用確認・verbatim_basis 単一正本確認・欠落キー拒否・
+verbatim_basis 改ざん拒否・established/not_established の outcome_detail
+改ざん拒否・`conjunct_refs` 並び替え/過剰エントリ/dict 偽装拒否・
+`outcome_detail_priority.order`/`detail_by_key` 改ざん/未登録キー拒否・
+`gate_failure_action_ref` 改ざん拒否・3ラベルの非衝突確認・
+`pjs_confuser` 節無改変確認・`positive_reference_audit.on_mismatch`
+の C0 語彙再利用確認・欠落キー拒否・両フィールド値改ざん拒否・サブキー
+欠落拒否・空文字拒否・`c0_determinism_attestation`/`c1_sham_attestation`
+節無改変確認・`load_pinned_identity_decision_protocol()` happy path
+（新設2フィールドの to-level 到達確認）・改ざん経由 loader fail-closed
+確認。
+
+### 7.4 変更ファイル
+
+- `inputs/identity_decision_protocol_v0.6.json`: 新規節
+  `birth_gate_aggregate_rule` 追加（指摘1）、`positive_reference_audit`
+  へ `on_mismatch` 追加（指摘2）。`birth_identity_separation`/
+  `pjs_confuser`/`c0_determinism_attestation`/`c1_sham_attestation` の
+  既存4節は無改変。
+- `run9_schema.py`: 新規定数 `IDENTITY_PROTOCOL_BIRTH_PJS_CONFUSER_
+  COLLAPSE_DETAIL`・`_IDENTITY_PROTOCOL_BIRTH_GATE_CONJUNCT_REFS`・
+  `_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER`・`_IDENTITY_PROTOCOL_
+  BIRTH_GATE_DETAIL_BY_KEY`・`_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_
+  ACTION_REF`、`_IDENTITY_DECISION_PROTOCOL_TOP_LEVEL_KEYS` へ
+  `birth_gate_aggregate_rule` 追加、`validate_identity_decision_
+  protocol()` へ `birth_gate_aggregate_rule` の構造検証ブロック（既存
+  `pjs_confuser` 検証結果の `pjs` 変数を再利用した `verbatim_basis`
+  cross-check 含む）+ `positive_reference_audit.on_mismatch` の検証
+  拡張。
+- `RUN9_CONTRACT.yaml`: `hypothesis_algebra_sha` repin（値・repin履歴
+  コメント追加）。
+- `tests/test_run9_contract.py`: `hypothesis_algebra_sha` repin 値の
+  回帰更新、新規 fail-closed/確認テスト24件追加。
+
+### 7.5 逸脱事項
+
+- immutability 対象（`identity_metric_space.json`/`identity_domain`/
+  `Genome`/speaker map manifest）・裁定逐語転記部分（`USER_ADJUDICATION_
+  20260827_IDENTITY_REV06.txt`）は 1 byte も変更していない
+  （`git status --short` で確認済み）。
+- 指摘1の実装にあたり `pjs_confuser.on_zero` へ `outcome_detail` を
+  追加する案も検討したが、既存節への追記は「文言変更は矛盾解消に必要な
+  最小限のみ」という Fable 設計方針に照らして不要（`birth_gate_
+  aggregate_rule` 側だけで新規定数を保持すれば矛盾なく合成条件を表現
+  できる）と判断し、`pjs_confuser` 節は 1 byte も変更しない設計とした
+  （既存4分岐すべて無改変）。
+- `outcome_detail_priority` の「複数該当時に全項目を機械可読リストで
+  併記する」という指示は、本 PR が Birth Gate 実測を一切含まない事前
+  登録フェーズ（裁定§8 実行順どおり）であるため、実行時の
+  `outcome_detail_all_applicable_keys` 生成ロジック自体はまだ実装
+  対象外——本節はその生成規約（優先順・参照ラベル）を pre-run で凍結
+  するところまでを範囲とした（他の全節と同じく「事前登録一式」の一部）。
+- `birth_gate_aggregate_rule`/`positive_reference_audit.on_mismatch`
+  いずれも既存 `BIRTH_OUTCOMES`/`FAILURE_CLASSES` frozen tuple への
+  値追加は行っていない（既存語彙の再利用 + `IDENTITY_PROTOCOL_*` detail
+  層への新設のみ、という二層構造の設計方針を維持）。

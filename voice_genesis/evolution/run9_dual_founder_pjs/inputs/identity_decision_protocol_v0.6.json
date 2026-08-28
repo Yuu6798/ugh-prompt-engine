@@ -4,6 +4,40 @@
     "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260827_IDENTITY_REV06.txt",
     "summary": "User 裁定 2026-08-27「Identity Calibration Degeneracy / design_revision 0.6」（選択肢A採用）。既存 render replay byte 決定論実測により現行規則の D_C0(F) が全ゼロ、theta_cal(F)=P95(D_C0(F))=0 へ退化することが実行前に解析的に確定したため 行う pre-run design correction。Birth Identity Separation だけ でなく学習後 Identity 保持判定を含む Identity decision protocol 全体を本 protocol として再事前登録する。"
   },
+  "birth_gate_aggregate_rule": {
+    "conjunct_refs": [
+      "birth_identity_separation.established",
+      "birth_identity_separation.invalid_or_nonfinite_feature",
+      "pjs_confuser.on_positive",
+      "pjs_confuser.on_zero"
+    ],
+    "established": {
+      "birth_outcome": "ESTABLISHED",
+      "condition": "conjunct_refs 全項が成立（両 founder の feature が valid/finite かつ d12 > 0 かつ 両 founder の PJS confuser 距離 > 0）",
+      "outcome_detail": "ESTABLISHED_BY_MACHINE_FEATURE"
+    },
+    "gate_failure_action_ref": "invariants.birth_gate_failure_action",
+    "necessary_and_sufficient_condition_for_established": "両 founder（R9F-01/R9F-02）の feature が valid/finite ∧ d12 > 0 ∧ 両 founder の PJS confuser 距離 > 0（連言）。いずれか1項でも不成立なら BIRTH = NOT_ESTABLISHED。",
+    "not_established": {
+      "birth_outcome": "NOT_ESTABLISHED",
+      "condition": "conjunct_refs のいずれか1項以上が不成立（feature invalid/non-finite、または d12=0、または PJS confuser 距離=0 のうち少なくとも1つ）",
+      "outcome_detail_priority": {
+        "detail_by_key": {
+          "d12_zero_collapse": "PROJECTED_RUNTIME_IDENTITIES_COLLAPSED_IN_MACHINE_FEATURE_SPACE",
+          "invalid_or_nonfinite_feature": "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_FEATURE",
+          "pjs_confuser_zero_distance": "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_FEATURE_COLLAPSE"
+        },
+        "order": [
+          "invalid_or_nonfinite_feature",
+          "d12_zero_collapse",
+          "pjs_confuser_zero_distance"
+        ],
+        "order_note": "同一 attempt 内で複数の不成立条件が同時に該当し得る。outcome_detail の記録は本 order の先頭に該当した1件を主 detail とし、該当した条件キー全件を outcome_detail_all_applicable_keys へ機械可読リストで併記する（情報を落とさない）。優先順序は (1) validity（invalid/non-finite feature）→ (2) d12=0（feature collapse）→ (3) PJS confuser distance=0。"
+      }
+    },
+    "note": "PR #333 Codex bot レビュー第4巡指摘1（P1、採用）: birth_identity_separation の established 分岐（d12>0 → ESTABLISHED）と pjs_confuser の on_zero 分岐（PJS confuser 距離=0 → NOT_ESTABLISHED）が独立に定義され、両者の合成条件・優先順が未定義だった。本節は Birth Gate 全体の ESTABLISHED 判定を単一の連言として凍結する——裁定§4/§5は独立の門ではなく Birth Gate の連言構成要素であり、§5逐語『distance=0の場合はPJS confuserとのfeature collapseとしてBIRTH NOT_ESTABLISHEDとする。』の機械符号化であって新規則の発明ではない。既存 birth_identity_separation.established/invalid_or_nonfinite_feature、pjs_confuser.on_positive/on_zero の各分岐は無改変のまま本節から conjunct_refs で参照するのみであり、文言変更は一切行っていない。",
+    "verbatim_basis": "distance=0の場合はPJS confuserとのfeature collapseとしてBIRTH NOT_ESTABLISHEDとする。"
+  },
   "birth_identity_separation": {
     "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
     "established": {
@@ -107,6 +141,12 @@
     "verbatim": "distance=0の場合はPJS confuserとのfeature collapseとしてBIRTH NOT_ESTABLISHEDとする。"
   },
   "positive_reference_audit": {
+    "on_mismatch": {
+      "distance_nonzero_or_feature_mismatch_with_matching_wav": "IMPLEMENTATION_FAILURE",
+      "gate_effect": "WAV バイト不一致（DETERMINISM_CONTRACT_BROKEN）・バイト一致だが distance≠0 または feature 計算不一致（IMPLEMENTATION_FAILURE）のいずれの outcome も Birth Gate 非 PASS・学習非進行・閾値救済禁止（裁定§9）。C0側 c0_determinism_attestation.on_mismatch と同一の割当て規則である。",
+      "note": "PR #333 Codex bot レビュー第4巡指摘2（P1、採用）: positive_reference_audit は要求（WAV byte一致 + distance=0）のみを規定し、不一致時の停止先を持たなかった——c0_determinism_attestation/c1_sham_attestation には停止語彙割当てがあるのに対し、本節だけ未登録の穴だった。本節は c0_determinism_attestation.on_mismatch と同一の決定論的割当てを再利用する（新語彙の発明はしない）。裁定§3『positive referenceは追加のexact replay監査として維持する。』+ 裁定§9 fail-closed 原則の機械符号化であり、新規則ではない。",
+      "wav_byte_mismatch": "DETERMINISM_CONTRACT_BROKEN"
+    },
     "requirement": "referenceとのWAV byte一致およびdistance=0を要求する。",
     "role": "独立した閾値校正標本としては扱わない。",
     "verbatim": "positive referenceは追加のexact replay監査として維持する。"

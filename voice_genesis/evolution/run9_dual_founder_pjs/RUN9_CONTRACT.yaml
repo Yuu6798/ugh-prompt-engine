@@ -3513,17 +3513,31 @@ measurement_spec_sha:
 #   正本が曖昧だった欠陥の是正（新規則の発明ではなく、supersede 宣言の
 #   対象範囲を threshold/decision-rule 意味論のみへ機械可読に凍結し直す
 #   スコープ明確化）。
+# - PR #333 Codex bot レビュー第4巡指摘1/2（2026-08-28、P1×2、採用、値
+#   f626e309d187177800d33afabe6c81537faa3c59a5432e080f88e0d4854f1778 へ
+#   repin）: 新規節 `birth_gate_aggregate_rule` を追加した（指摘1）——
+#   `birth_identity_separation.established`（d12>0 → ESTABLISHED）と
+#   `pjs_confuser.on_zero`（PJS confuser距離=0 → NOT_ESTABLISHED）が独立に
+#   定義され合成条件・優先順が未定義だった穴を埋める、Birth Gate 全体の
+#   ESTABLISHED 連言条件（既存4分岐は無改変のまま conjunct_refs で参照の
+#   み）。あわせて `positive_reference_audit` へ `on_mismatch`（WAVバイト
+#   不一致→DETERMINISM_CONTRACT_BROKEN／バイト一致だがdistance≠0または
+#   feature計算不一致→IMPLEMENTATION_FAILURE、いずれも c0_determinism_
+#   attestation.on_mismatch と同一語彙の再利用）を追加した（指摘2）——
+#   従来は要求のみで不一致時の停止先を持たなかった。いずれも新規則の
+#   発明ではなく裁定§4/§5/§9・§3+§9 の機械符号化。
 hypothesis_algebra_sha:
-  value: "7525cd5ef484bfd94a234f25b44a48368d2f1607f334de1b868863c1bd133f4a"
+  value: "f626e309d187177800d33afabe6c81537faa3c59a5432e080f88e0d4854f1778"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json
   reason: >-
     rev 0.6 裁定 §7「同protocolのraw SHA256をhypothesis_algebra_shaへ
     PINNEDする」に基づき pin。値は inputs/identity_decision_protocol_
     v0.6.json の実バイト sha256（load_pinned_identity_decision_protocol()
-    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第3巡
-    指摘1（P1、採用）で supersede_declaration.preserved_generation_
-    definitions（+ note）を追加したため repin（上記【repin 履歴】参照）。
+    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第4巡
+    指摘1/2（P1×2、採用）で `birth_gate_aggregate_rule` 新設 +
+    `positive_reference_audit.on_mismatch` 新設のため repin（上記
+    【repin 履歴】参照）。
 
 # PR #333 Codex bot レビュー第1巡指摘1（P1、採用）新設: hypothesis_algebra_
 # sha が rev 0.6 裁定 §7 で identity decision protocol の pin へ用途確定

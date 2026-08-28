@@ -19851,15 +19851,15 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     field = contract_raw["hypothesis_algebra_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.IDENTITY_DECISION_PROTOCOL_PATH)
-    # PR #333 第3巡指摘1（P1、採用）: supersede_declaration へ
-    # preserved_generation_definitions（+ note）を追加したため repin
-    # （旧値
+    # PR #333 第4巡指摘1/2（P1×2、採用）: birth_gate_aggregate_rule 新設 +
+    # positive_reference_audit.on_mismatch 新設のため repin（旧値
+    # 7525cd5ef484bfd94a234f25b44a48368d2f1607f334de1b868863c1bd133f4a・
     # cde8b003ff88b78693c81058e3a80ec4fbfe546df7e3f8e61812c8d6f61c67c1・
     # 304e72376e30e8e3974485d393c1f56a7256017588bc877c2be15f080291fb77・
     # 967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3 は
     # RUN9_CONTRACT.yaml の【repin 履歴】コメントに保持）。
     assert field["value"] == (
-        "7525cd5ef484bfd94a234f25b44a48368d2f1607f334de1b868863c1bd133f4a"
+        "f626e309d187177800d33afabe6c81537faa3c59a5432e080f88e0d4854f1778"
     )
     assert field["source"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json"
@@ -20316,3 +20316,292 @@ def test_pr333_r1_validate_still_rejects_reordered_list_after_shape_guard() -> N
     )
     with pytest.raises(m.Run9ValidationError, match="invariants.same_attempt_prohibitions"):
         m.validate_identity_decision_protocol(data)
+
+
+# =============================================================================
+# PR #333 Codex bot レビュー第4巡対応（2026-08-28、フェーズ1）
+# 指摘1（P1、`birth_gate_aggregate_rule` 新設）・指摘2（P1、
+# `positive_reference_audit.on_mismatch` 新設）。両者とも新規則の発明では
+# なく裁定§4/§5/§9・§3+§9 の機械符号化——既存 established/not_established/
+# invalid_or_nonfinite_feature/pjs_confuser/c0_determinism_attestation の
+# 各分岐は無改変のまま参照するのみ。
+# =============================================================================
+
+
+# --- 指摘1: birth_gate_aggregate_rule ---------------------------------------
+
+
+def test_pr333_r4_validate_real_manifest_happy_path_with_aggregate_rule() -> None:
+    m.validate_identity_decision_protocol(_identity_decision_protocol_data())  # 例外なしの確認
+
+
+def test_pr333_r4_aggregate_rule_established_reuses_existing_birth_outcomes() -> None:
+    """新設節は既存 BIRTH_OUTCOMES/outcome_detail 定数を再利用するのみで、
+    新規語彙を frozen tuple へ追加していないこと。"""
+    data = _identity_decision_protocol_data()
+    aggregate = data["birth_gate_aggregate_rule"]
+    assert aggregate["established"]["birth_outcome"] == "ESTABLISHED"
+    assert aggregate["established"]["birth_outcome"] in m.BIRTH_OUTCOMES
+    assert aggregate["established"]["outcome_detail"] == m.IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL
+    assert aggregate["not_established"]["birth_outcome"] == "NOT_ESTABLISHED"
+    assert aggregate["not_established"]["birth_outcome"] in m.BIRTH_OUTCOMES
+    assert m.BIRTH_OUTCOMES == ("ESTABLISHED", "NOT_ESTABLISHED")
+
+
+def test_pr333_r4_aggregate_rule_verbatim_basis_matches_pjs_confuser_verbatim() -> None:
+    """verbatim_basis は pjs_confuser.verbatim（裁定§5 逐語）と単一の正本を
+    共有する——実データで一致確認。"""
+    data = _identity_decision_protocol_data()
+    assert (
+        data["birth_gate_aggregate_rule"]["verbatim_basis"]
+        == data["pjs_confuser"]["verbatim"]
+    )
+    assert data["pjs_confuser"]["verbatim"] == (
+        "distance=0の場合はPJS confuserとのfeature collapseとしてBIRTH NOT_ESTABLISHEDとする。"
+    )
+
+
+def test_pr333_r4_validate_rejects_missing_aggregate_rule_top_level_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["birth_gate_aggregate_rule"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_aggregate_rule_verbatim_basis_mismatch() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_aggregate_rule"]["verbatim_basis"] = "改ざんされた逐語"
+    with pytest.raises(m.Run9ValidationError, match="verbatim_basis"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_aggregate_rule_established_wrong_outcome_detail() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_aggregate_rule"]["established"]["outcome_detail"] = "MADE_UP_LABEL"
+    with pytest.raises(
+        m.Run9ValidationError, match="birth_gate_aggregate_rule.established.outcome_detail"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_aggregate_rule_conjunct_refs_reordered() -> None:
+    """conjunct_refs は裁定 §4/§5 参照節の順序込み逐語列挙——並び替えも
+    拒否する（他の3系列の frozen tuple 検査と同型）。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_aggregate_rule"]["conjunct_refs"] = list(
+        reversed(data["birth_gate_aggregate_rule"]["conjunct_refs"])
+    )
+    with pytest.raises(m.Run9ValidationError, match="birth_gate_aggregate_rule.conjunct_refs"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_aggregate_rule_conjunct_refs_extra_entry() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_aggregate_rule"]["conjunct_refs"].append("pjs_confuser.metric")
+    with pytest.raises(m.Run9ValidationError, match="birth_gate_aggregate_rule.conjunct_refs"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_aggregate_rule_conjunct_refs_dict_masquerade() -> None:
+    """指摘4（第1巡）と同型の dict 偽装拒否——本新設フィールドにも同じ
+    形状ガードが効いていること。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_aggregate_rule"]["conjunct_refs"] = _dict_masquerading_as_ordered_list(
+        m._IDENTITY_PROTOCOL_BIRTH_GATE_CONJUNCT_REFS
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="birth_gate_aggregate_rule.conjunct_refs must be a list"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_aggregate_rule_priority_order_reordered() -> None:
+    """outcome_detail_priority.order は決定論的優先順（(1) validity →
+    (2) d12=0 → (3) PJS confuser distance=0）——並び替えも拒否する。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    priority["order"] = list(reversed(priority["order"]))
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="birth_gate_aggregate_rule.not_established.outcome_detail_priority.order",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_aggregate_rule_priority_detail_by_key_tamper() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    priority["detail_by_key"]["d12_zero_collapse"] = "MADE_UP_LABEL"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=(
+            "birth_gate_aggregate_rule.not_established.outcome_detail_priority.detail_by_key."
+            "d12_zero_collapse"
+        ),
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_aggregate_rule_priority_detail_by_key_unknown_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    priority["detail_by_key"]["extra_unregistered_key"] = "SOMETHING"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="outcome_detail_priority.detail_by_key has unknown key",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_aggregate_rule_gate_failure_action_ref_tamper() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_aggregate_rule"]["gate_failure_action_ref"] = "invariants.escape_hatch"
+    with pytest.raises(
+        m.Run9ValidationError, match="birth_gate_aggregate_rule.gate_failure_action_ref"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_aggregate_rule_priority_details_distinct_from_established_detail() -> None:
+    """not_established 側の3ラベルは established 側ラベルとも互いとも
+    衝突しない、既存 BIRTH_OUTCOMES へも追加されていないこと。"""
+    established = m.IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL
+    details = (
+        m.IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL,
+        m.IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL,
+        m.IDENTITY_PROTOCOL_BIRTH_PJS_CONFUSER_COLLAPSE_DETAIL,
+    )
+    assert len(set(details)) == 3
+    assert established not in details
+    for detail in details + (established,):
+        assert detail not in m.BIRTH_OUTCOMES
+
+
+def test_pr333_r4_aggregate_rule_pjs_confuser_section_byte_unchanged() -> None:
+    """既存 pjs_confuser 節は本改訂で無改変（1 byte も変更しない）—— on_zero
+    に outcome_detail 等の新フィールドを追加していないことの直接確認。"""
+    data = _identity_decision_protocol_data()
+    assert set(data["pjs_confuser"].keys()) == {
+        "verbatim", "metric", "pjs_reference_ref", "on_zero", "on_positive",
+    }
+    assert set(data["pjs_confuser"]["on_zero"].keys()) == {
+        "condition", "birth_outcome", "reason",
+    }
+
+
+# --- 指摘2: positive_reference_audit.on_mismatch ----------------------------
+
+
+def test_pr333_r4_positive_reference_audit_on_mismatch_reuses_c0_vocabulary() -> None:
+    """新設 on_mismatch は C0 側の停止語彙定数をそのまま再利用しているこ
+    と（新語彙の発明はしない、という Fable 設計方針の機械確認）。"""
+    data = _identity_decision_protocol_data()
+    on_mismatch = data["positive_reference_audit"]["on_mismatch"]
+    assert on_mismatch["wav_byte_mismatch"] == m.IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME
+    assert (
+        on_mismatch["distance_nonzero_or_feature_mismatch_with_matching_wav"]
+        == m.IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME
+    )
+    c0_on_mismatch = data["c0_determinism_attestation"]["on_mismatch"]
+    assert on_mismatch["wav_byte_mismatch"] == c0_on_mismatch["render_byte_mismatch"]
+    assert (
+        on_mismatch["distance_nonzero_or_feature_mismatch_with_matching_wav"]
+        == c0_on_mismatch["feature_computation_mismatch_with_matching_render"]
+    )
+
+
+def test_pr333_r4_validate_rejects_missing_positive_reference_on_mismatch_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["positive_reference_audit"]["on_mismatch"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_positive_reference_wav_byte_mismatch_wrong_value() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["positive_reference_audit"]["on_mismatch"]["wav_byte_mismatch"] = "IMPLEMENTATION_FAILURE"
+    with pytest.raises(
+        m.Run9ValidationError, match="positive_reference_audit.on_mismatch.wav_byte_mismatch"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_positive_reference_distance_mismatch_wrong_value() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["positive_reference_audit"]["on_mismatch"][
+        "distance_nonzero_or_feature_mismatch_with_matching_wav"
+    ] = "DETERMINISM_CONTRACT_BROKEN"
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=(
+            "positive_reference_audit.on_mismatch.distance_nonzero_or_feature_mismatch_with_"
+            "matching_wav"
+        ),
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_positive_reference_on_mismatch_missing_subkey() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["positive_reference_audit"]["on_mismatch"]["gate_effect"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_validate_rejects_positive_reference_on_mismatch_empty_note() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["positive_reference_audit"]["on_mismatch"]["note"] = ""
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r4_c0_c1_sections_byte_unchanged_by_positive_reference_fix() -> None:
+    """C0/C1 側の停止語彙割当ては本改訂で無改変（再利用のみで書き換えて
+    いないことの直接確認）。"""
+    data = _identity_decision_protocol_data()
+    assert data["c0_determinism_attestation"]["on_mismatch"] == {
+        "render_byte_mismatch": "DETERMINISM_CONTRACT_BROKEN",
+        "feature_computation_mismatch_with_matching_render": "IMPLEMENTATION_FAILURE",
+    }
+    assert data["c1_sham_attestation"]["on_nonzero"] == "C1_SHAM_EFFECT_DETECTED"
+
+
+# --- load_pinned_identity_decision_protocol(): 第4巡フィールドの一貫性 ------
+
+
+def test_pr333_r4_load_pinned_happy_path_with_new_sections(
+    contract: m.Run9RunContract,
+) -> None:
+    domain = _real_identity_domain()
+    data = m.load_pinned_identity_decision_protocol(contract, domain=domain)
+    assert data["schema"] == m.SCHEMA_IDENTITY_DECISION_PROTOCOL
+    assert "birth_gate_aggregate_rule" in data
+    assert "on_mismatch" in data["positive_reference_audit"]
+
+
+def test_pr333_r4_load_pinned_rejects_aggregate_rule_tamper_via_hash_mismatch(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """新設節を改ざんした合成 manifest は、manifest 実バイト sha256 が
+    pin 済み `hypothesis_algebra_sha` と食い違うため fail-closed で拒否
+    されること（他の tamper 系テストと同型の入口——validator 単体の拒否は
+    上記の専用テストで、loader 経路はこの sha 不一致経路で検出される）。"""
+    domain = _real_identity_domain()
+
+    def mutate(data: Dict[str, Any]) -> None:
+        data["birth_gate_aggregate_rule"]["gate_failure_action_ref"] = "invariants.escape_hatch"
+
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=mutate
+    )
+    # _tampered_identity_protocol_contract() は改ざん後バイトへ hypothesis_
+    # algebra_sha を追随させるため、この経路では validate() 自体が拒否する
+    # （上記 test_pr333_r4_validate_rejects_aggregate_rule_gate_failure_
+    # action_ref_tamper と同一検出点、loader 経由での再確認）。
+    with pytest.raises(
+        m.Run9ValidationError, match="birth_gate_aggregate_rule.gate_failure_action_ref"
+    ):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )

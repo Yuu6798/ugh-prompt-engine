@@ -211,6 +211,16 @@ IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL = (
     "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_FEATURE"
 )
 
+# PR #333 Codex bot レビュー第4巡指摘1（P1、採用）新設:
+# `birth_gate_aggregate_rule.not_established.outcome_detail_priority` 第3
+# 優先枝（PJS confuser 距離=0）専用ラベル。`pjs_confuser.on_zero` 自体は
+# 無改変（本定数は同節を書き換えずに参照するためだけに存在する）——
+# `IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL`/`IDENTITY_PROTOCOL_
+# BIRTH_COLLAPSE_DETAIL` と同型の第3分岐ラベル。
+IDENTITY_PROTOCOL_BIRTH_PJS_CONFUSER_COLLAPSE_DETAIL = (
+    "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_FEATURE_COLLAPSE"
+)
+
 # post_learning_identity_retention（裁定 §6）の outcome_detail。
 # IDENTITY_OUTCOMES[0]="STABLE_BY_MACHINE_METRIC" に併記する。
 IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL = "RELATIVE_SELF_NEAREST"
@@ -20151,6 +20161,10 @@ _IDENTITY_DECISION_PROTOCOL_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
     "positive_reference_audit", "birth_identity_separation", "pjs_confuser",
     "post_learning_identity_retention", "immutability", "execution_order",
     "invariants",
+    # PR #333 Codex bot レビュー第4巡指摘1（P1、採用）新設: birth_identity_
+    # separation.established と pjs_confuser.on_zero の合成条件・優先順を
+    # 凍結する連言ゲート節（既存11節は無改変のまま参照のみ）。
+    "birth_gate_aggregate_rule",
 })
 
 # 裁定 §1/§2 の contract_field_ref 凍結値（interventions 配下、
@@ -20244,6 +20258,51 @@ _IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS: Tuple[str, ...] = (
     "任意epsilon追加",
     "方式Bへの自動昇格",
 )
+
+# =============================================================================
+# birth_gate_aggregate_rule（PR #333 Codex bot レビュー第4巡指摘1、P1、
+# 採用）: birth_identity_separation.established（d12>0 → ESTABLISHED）と
+# pjs_confuser.on_zero（PJS confuser距離=0 → NOT_ESTABLISHED）が独立に
+# 定義され、合成条件・優先順が未定義だった穴を埋める。裁定§4/§5は独立の
+# 門ではなく Birth Gate の連言構成要素であり、本節は §5 逐語の機械符号化
+# ——新規則の発明ではない。既存 established/invalid_or_nonfinite_feature/
+# on_positive/on_zero の各分岐は無改変のまま conjunct_refs で参照するのみ。
+# =============================================================================
+
+# conjunct_refs（新設節内の逐語列挙、順序込み・4項目ちょうど——document 内
+# 自己参照であり identity_metric_space.json 側の cross-document 走査は
+# 不要。他の3つの `_require_ordered_str_list_matching_tuple` 対象と同じ
+# 形状ガードで dict 偽装も拒否する）。
+_IDENTITY_PROTOCOL_BIRTH_GATE_CONJUNCT_REFS: Tuple[str, ...] = (
+    "birth_identity_separation.established",
+    "birth_identity_separation.invalid_or_nonfinite_feature",
+    "pjs_confuser.on_positive",
+    "pjs_confuser.on_zero",
+)
+
+# outcome_detail_priority.order（裁定 §9 fail-closed 原則を根拠とする
+# Fable 設計の決定論的優先順、順序込み・3項目ちょうど）: (1) validity
+# （invalid/non-finite feature）→ (2) d12=0（feature collapse）→ (3) PJS
+# confuser distance=0。
+_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER: Tuple[str, str, str] = (
+    "invalid_or_nonfinite_feature",
+    "d12_zero_collapse",
+    "pjs_confuser_zero_distance",
+)
+
+# outcome_detail_priority.detail_by_key の凍結値（優先順の各キーが指す
+# outcome_detail ラベル——いずれも既存/上記で凍結済みの定数を再利用する。
+# 新語彙の発明はしない）。
+_IDENTITY_PROTOCOL_BIRTH_GATE_DETAIL_BY_KEY: Mapping[str, str] = types.MappingProxyType({
+    "invalid_or_nonfinite_feature": IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL,
+    "d12_zero_collapse": IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL,
+    "pjs_confuser_zero_distance": IDENTITY_PROTOCOL_BIRTH_PJS_CONFUSER_COLLAPSE_DETAIL,
+})
+
+# gate_failure_action_ref の凍結値（invariants 節への自己参照 dotted
+# path、裁定§9『Birth Gate不成立時はNOT_ESTABLISHEDとして凍結する』への
+# 接続点）。
+_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_ACTION_REF = "invariants.birth_gate_failure_action"
 
 
 def _validate_identity_protocol_shape(
@@ -20493,10 +20552,42 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
     # --- positive_reference_audit（裁定 §3）---------------------------------
     positive = _validate_identity_protocol_shape(
         data["positive_reference_audit"], field="positive_reference_audit",
-        required_keys=frozenset({"verbatim", "requirement", "role"}),
+        required_keys=frozenset({"verbatim", "requirement", "role", "on_mismatch"}),
     )
     for f in ("verbatim", "requirement", "role"):
         _require_non_empty_str(positive[f], field=f"positive_reference_audit.{f}")
+    # PR #333 Codex bot レビュー第4巡指摘2（P1、採用）新設: positive_
+    # reference_audit は要求のみで不一致時の停止先を持たなかった
+    # （c0_determinism_attestation/c1_sham_attestation には停止語彙割当てが
+    # あるのに本節だけ未登録）。C0 側の停止語彙定数をそのまま再利用する
+    # 決定論的割当て（新語彙の発明はしない）——裁定§3+§9 の機械符号化。
+    positive_on_mismatch = _validate_identity_protocol_shape(
+        positive["on_mismatch"], field="positive_reference_audit.on_mismatch",
+        required_keys=frozenset({
+            "wav_byte_mismatch", "distance_nonzero_or_feature_mismatch_with_matching_wav",
+            "note", "gate_effect",
+        }),
+    )
+    if positive_on_mismatch["wav_byte_mismatch"] != IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME:
+        raise Run9ValidationError(
+            "positive_reference_audit.on_mismatch.wav_byte_mismatch must be exactly "
+            f"{IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME!r} (c0_determinism_attestation."
+            f"on_mismatch.render_byte_mismatch と同一語彙の再利用), got "
+            f"{positive_on_mismatch['wav_byte_mismatch']!r}"
+        )
+    if (
+        positive_on_mismatch["distance_nonzero_or_feature_mismatch_with_matching_wav"]
+        != IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME
+    ):
+        raise Run9ValidationError(
+            "positive_reference_audit.on_mismatch.distance_nonzero_or_feature_mismatch_with_"
+            f"matching_wav must be exactly {IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME!r} "
+            "(c0_determinism_attestation.on_mismatch.feature_computation_mismatch_with_"
+            f"matching_render と同一語彙の再利用), got "
+            f"{positive_on_mismatch['distance_nonzero_or_feature_mismatch_with_matching_wav']!r}"
+        )
+    for f in ("note", "gate_effect"):
+        _require_non_empty_str(positive_on_mismatch[f], field=f"positive_reference_audit.on_mismatch.{f}")
 
     # --- birth_identity_separation（裁定 §4）--------------------------------
     birth = _validate_identity_protocol_shape(
@@ -20751,6 +20842,105 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         expected=_IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS,
     )
     _require_non_empty_str(invariants["escape_hatch"], field="invariants.escape_hatch")
+
+    # --- birth_gate_aggregate_rule（PR #333 Codex bot レビュー第4巡指摘1、
+    # P1、採用）----------------------------------------------------------
+    # birth_identity_separation.established（d12>0）と pjs_confuser.on_zero
+    # （PJS confuser距離=0）が独立に定義され合成条件・優先順が未定義だった
+    # 穴を埋める、Birth Gate 全体の ESTABLISHED 連言条件。既存4分岐
+    # （established/invalid_or_nonfinite_feature/on_positive/on_zero）は
+    # 無改変のまま conjunct_refs で参照するのみ。
+    aggregate = _validate_identity_protocol_shape(
+        data["birth_gate_aggregate_rule"], field="birth_gate_aggregate_rule",
+        required_keys=frozenset({
+            "note", "verbatim_basis", "necessary_and_sufficient_condition_for_established",
+            "conjunct_refs", "established", "not_established", "gate_failure_action_ref",
+        }),
+    )
+    _require_non_empty_str(aggregate["note"], field="birth_gate_aggregate_rule.note")
+    # verbatim_basis は裁定§5 の逐語引用——pjs_confuser.verbatim（既に上で
+    # 検証済みの同一裁定引用）と単一の正本を共有する（二重に書き起こさない
+    # ——文字列同士の食い違いは fail-closed で拒否する）。
+    if aggregate["verbatim_basis"] != pjs["verbatim"]:
+        raise Run9ValidationError(
+            "birth_gate_aggregate_rule.verbatim_basis must be byte-identical to "
+            f"pjs_confuser.verbatim (single source of truth), got "
+            f"{aggregate['verbatim_basis']!r} != {pjs['verbatim']!r}"
+        )
+    _require_non_empty_str(
+        aggregate["necessary_and_sufficient_condition_for_established"],
+        field="birth_gate_aggregate_rule.necessary_and_sufficient_condition_for_established",
+    )
+    _require_ordered_str_list_matching_tuple(
+        aggregate["conjunct_refs"], field="birth_gate_aggregate_rule.conjunct_refs",
+        expected=_IDENTITY_PROTOCOL_BIRTH_GATE_CONJUNCT_REFS,
+    )
+    agg_established = _validate_identity_protocol_shape(
+        aggregate["established"], field="birth_gate_aggregate_rule.established",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail"}),
+    )
+    _require_non_empty_str(
+        agg_established["condition"], field="birth_gate_aggregate_rule.established.condition"
+    )
+    if agg_established["birth_outcome"] != "ESTABLISHED" or "ESTABLISHED" not in BIRTH_OUTCOMES:
+        raise Run9ValidationError(
+            "birth_gate_aggregate_rule.established.birth_outcome must be exactly 'ESTABLISHED' "
+            f"(BIRTH_OUTCOMES 既存語彙), got {agg_established['birth_outcome']!r}"
+        )
+    if agg_established["outcome_detail"] != IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL:
+        raise Run9ValidationError(
+            "birth_gate_aggregate_rule.established.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL!r}, got "
+            f"{agg_established['outcome_detail']!r}"
+        )
+    agg_not_established = _validate_identity_protocol_shape(
+        aggregate["not_established"], field="birth_gate_aggregate_rule.not_established",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail_priority"}),
+    )
+    _require_non_empty_str(
+        agg_not_established["condition"], field="birth_gate_aggregate_rule.not_established.condition"
+    )
+    if (
+        agg_not_established["birth_outcome"] != "NOT_ESTABLISHED"
+        or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES
+    ):
+        raise Run9ValidationError(
+            "birth_gate_aggregate_rule.not_established.birth_outcome must be exactly "
+            f"'NOT_ESTABLISHED' (BIRTH_OUTCOMES 既存語彙), got "
+            f"{agg_not_established['birth_outcome']!r}"
+        )
+    priority = _validate_identity_protocol_shape(
+        agg_not_established["outcome_detail_priority"],
+        field="birth_gate_aggregate_rule.not_established.outcome_detail_priority",
+        required_keys=frozenset({"order", "detail_by_key", "order_note"}),
+    )
+    _require_ordered_str_list_matching_tuple(
+        priority["order"],
+        field="birth_gate_aggregate_rule.not_established.outcome_detail_priority.order",
+        expected=_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER,
+    )
+    detail_by_key = _validate_identity_protocol_shape(
+        priority["detail_by_key"],
+        field="birth_gate_aggregate_rule.not_established.outcome_detail_priority.detail_by_key",
+        required_keys=frozenset(_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER),
+    )
+    for key, expected_detail in _IDENTITY_PROTOCOL_BIRTH_GATE_DETAIL_BY_KEY.items():
+        if detail_by_key[key] != expected_detail:
+            raise Run9ValidationError(
+                "birth_gate_aggregate_rule.not_established.outcome_detail_priority."
+                f"detail_by_key.{key} must be exactly {expected_detail!r}, got "
+                f"{detail_by_key[key]!r}"
+            )
+    _require_non_empty_str(
+        priority["order_note"],
+        field="birth_gate_aggregate_rule.not_established.outcome_detail_priority.order_note",
+    )
+    if aggregate["gate_failure_action_ref"] != _IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_ACTION_REF:
+        raise Run9ValidationError(
+            "birth_gate_aggregate_rule.gate_failure_action_ref must be exactly "
+            f"{_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_ACTION_REF!r}, got "
+            f"{aggregate['gate_failure_action_ref']!r}"
+        )
 
 
 def load_pinned_identity_decision_protocol(
