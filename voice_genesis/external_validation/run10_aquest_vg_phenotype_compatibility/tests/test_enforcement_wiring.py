@@ -13,8 +13,9 @@ PR #330 のレビューで同型が 3 度出た:
 
 判定は静的解析で行う（実行時のフラグではなく、ソースの参照関係を見る）:
 
-1. `run10_schema` のモジュール定数は、いずれかの関数本体から load されるか、
-   load される別の定数へモジュール階層で取り込まれていること（推移閉包）。
+1. 走査対象モジュールの直下 ALL_CAPS 定数は、**到達可能な**関数本体から
+   load されるか、load される別の定数へモジュール階層で取り込まれている
+   こと（推移閉包）。
 2. 公開検証器（`assert_*` / `verify_*`）は、パッケージ内の**非テスト**
    モジュールの関数本体から呼ばれていること。
 
@@ -33,13 +34,29 @@ _RUN_DIR = _THIS_DIR.parent
 if str(_RUN_DIR) not in sys.path:
     sys.path.insert(0, str(_RUN_DIR))
 
-# 実行経路とみなすモジュール（テストを含まない）。
-ENFORCEMENT_MODULES: Tuple[str, ...] = (
-    "run10_schema.py",
-    "private_boundary.py",
-    "af01_freeze_verifier.py",
-    "pre_run/build_pre_run_inventory.py",
-)
+# 検査対象は RUN10 ツリーの**非テスト Python モジュール全数**を走査して求める。
+#
+# ハードコードした一覧にすると、§24 が予定する `measurement/` `calibration/`
+# `evaluation/` が追加されたとき、そこに置かれた未配線の `assert_*` /
+# `verify_*` が監査の視界に入らないまま全テストが通る — 「ファミリー全数掃討」
+# の看板と実際の走査範囲が乖離する（PR #332 Codex 第 1 巡 P2）。
+_EXCLUDED_DIRS = frozenset({"tests", "__pycache__", "results"})
+
+
+def enforcement_modules() -> Tuple[str, ...]:
+    """RUN10 ツリー配下の非テストモジュール（ツリー相対パス、安定順）。"""
+    found = []
+    for path in sorted(_RUN_DIR.rglob("*.py")):
+        rel = path.relative_to(_RUN_DIR)
+        if _EXCLUDED_DIRS & set(rel.parts):
+            continue
+        if rel.name.startswith("test_") or rel.name == "conftest.py":
+            continue
+        found.append(rel.as_posix())
+    return tuple(found)
+
+
+ENFORCEMENT_MODULES: Tuple[str, ...] = enforcement_modules()
 
 # 未配線であることが正当な項目と、その理由。
 #
@@ -76,31 +93,96 @@ def _tree(rel: str) -> ast.Module:
     return ast.parse((_RUN_DIR / rel).read_text(encoding="utf-8"))
 
 
-def _module_constants(tree: ast.Module) -> Dict[str, ast.expr]:
-    """モジュール直下の ALL_CAPS 定数（名前 → 値の式）。"""
+def _module_constants(trees: Dict[str, ast.Module]) -> Dict[str, ast.expr]:
+    """走査対象**全モジュール**の直下 ALL_CAPS 定数（名前 → 値の式）。
+
+    schema だけを見ると、将来 `measurement/` 等に置かれた検査語彙が監査の
+    外に出る（PR #332 Codex 第 1 巡 P2 と同じ理由）。
+    """
     out: Dict[str, ast.expr] = {}
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            targets = node.targets
-        elif isinstance(node, ast.AnnAssign):
-            targets = [node.target]
-        else:
-            continue
-        for target in targets:
-            if isinstance(target, ast.Name) and target.id == target.id.upper():
-                out[target.id] = node.value
+    for tree in trees.values():
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id == target.id.upper():
+                    out[target.id] = node.value
     return out
 
 
-def _names_loaded_in_functions(trees: Dict[str, ast.Module]) -> Set[str]:
-    """関数本体で load される識別子（= 実行時に参照される名前）。"""
-    used: Set[str] = set()
+def _functions(trees: Dict[str, ast.Module]) -> Dict[str, list]:
+    """関数名 → その定義ノード（同名は複数ありうるので list）。"""
+    out: Dict[str, list] = {}
     for tree in trees.values():
-        for func in ast.walk(tree):
-            if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for node in ast.walk(func):
-                    if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-                        used.add(node.id)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.setdefault(node.name, []).append(node)
+    return out
+
+
+def _calls_in(node: ast.AST) -> Set[str]:
+    called: Set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            target = sub.func
+            if isinstance(target, ast.Name):
+                called.add(target.id)
+            elif isinstance(target, ast.Attribute):
+                called.add(target.attr)
+    return called
+
+
+def _entry_points(trees: Dict[str, ast.Module]) -> Set[str]:
+    """呼び出しグラフの起点。
+
+    公開関数（`_` で始まらないモジュール直下の def）とメソッド、`main` を
+    起点とする。private ヘルパは、起点から辿り着けたときだけ到達可能に
+    なる — 「どこからも呼ばれない private ヘルパで定数に触れる」だけでは
+    配線済みと数えない。
+    """
+    entries: Set[str] = set()
+    for tree in trees.values():
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if not node.name.startswith("_") or node.name == "__init__":
+                    entries.add(node.name)
+    return entries
+
+
+def _reachable_functions(trees: Dict[str, ast.Module]) -> Set[str]:
+    """起点から呼び出しグラフを辿って到達できる関数名。"""
+    functions = _functions(trees)
+    reachable = {name for name in _entry_points(trees) if name in functions}
+    frontier = list(reachable)
+    while frontier:
+        current = frontier.pop()
+        for node in functions.get(current, ()):
+            for callee in _calls_in(node):
+                if callee in functions and callee not in reachable:
+                    reachable.add(callee)
+                    frontier.append(callee)
+    return reachable
+
+
+def _names_loaded_in_functions(trees: Dict[str, ast.Module]) -> Set[str]:
+    """**到達可能な**関数本体で load される識別子。
+
+    到達可能性を見ないと、どこからも呼ばれない private ヘルパで新しい検査
+    定数に触れるだけで「配線済み」と数えられ、実行経路が無いまま本テストが
+    通る — 本テストが防ごうとしている当の退行である
+    （PR #332 Codex 第 1 巡 P2）。
+    """
+    functions = _functions(trees)
+    used: Set[str] = set()
+    for name in _reachable_functions(trees):
+        for node in functions.get(name, ()):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                    used.add(sub.id)
     return used
 
 
@@ -110,7 +192,7 @@ def _wired_constants(trees: Dict[str, ast.Module]) -> Set[str]:
     `CORE_PIN_FIELDS` のように、関数からは直接触られず `_STAGE_FIELDS` 経由で
     効いている定数がある。モジュール階層での取り込みを辿って配線済みと数える。
     """
-    constants = _module_constants(trees["run10_schema.py"])
+    constants = _module_constants(trees)
     edges = {
         name: {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
         for name, value in constants.items()
@@ -140,17 +222,16 @@ def _public_validators(trees: Dict[str, ast.Module]) -> Dict[str, str]:
 
 
 def _called_in_functions(trees: Dict[str, ast.Module]) -> Set[str]:
+    """到達可能な関数本体から呼ばれている関数名。
+
+    ここでも到達可能性を見る。到達不能なヘルパからの呼び出しは実行経路では
+    ないため、検証器の「配線済み」判定には使えない。
+    """
+    functions = _functions(trees)
     called: Set[str] = set()
-    for tree in trees.values():
-        for func in ast.walk(tree):
-            if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for node in ast.walk(func):
-                    if isinstance(node, ast.Call):
-                        target = node.func
-                        if isinstance(target, ast.Name):
-                            called.add(target.id)
-                        elif isinstance(target, ast.Attribute):
-                            called.add(target.attr)
+    for name in _reachable_functions(trees):
+        for node in functions.get(name, ()):
+            called |= _calls_in(node)
     return called
 
 
@@ -160,7 +241,7 @@ def _trees() -> Dict[str, ast.Module]:
 
 def _unwired() -> Set[str]:
     trees = _trees()
-    constants = set(_module_constants(trees["run10_schema.py"]))
+    constants = set(_module_constants(trees))
     validators = _public_validators(trees)
     unwired = constants - _wired_constants(trees)
     unwired |= set(validators) - _called_in_functions(trees)
@@ -206,3 +287,66 @@ def test_pending_application_entries_name_their_future_call_site() -> None:
     assert pending, "予約ガードが 1 件も無いのは想定外（実装が進んだら本テストを畳む）"
     for name, reason in pending.items():
         assert "実装時に配線する" in reason, f"{name}: 配線の条件が書かれていない"
+
+
+# --- 監査そのものの検証（PR #332 Codex 第 1 巡 P2×2） ----------------------
+
+
+def test_module_discovery_covers_the_whole_tree() -> None:
+    """走査範囲がツリーの非テストモジュール全数であること。
+
+    ハードコード一覧だと、§24 が予定する `measurement/` などが追加された
+    とき、そこの未配線検証器が監査の視界に入らないまま全テストが通る。
+    """
+    expected = {
+        path.relative_to(_RUN_DIR).as_posix()
+        for path in _RUN_DIR.rglob("*.py")
+        if not (_EXCLUDED_DIRS & set(path.relative_to(_RUN_DIR).parts))
+        and not path.name.startswith("test_")
+        and path.name != "conftest.py"
+    }
+    assert set(ENFORCEMENT_MODULES) == expected
+    assert expected, "非テストモジュールが 1 件も見つからないのは想定外"
+    assert not any(rel.startswith("tests/") for rel in ENFORCEMENT_MODULES)
+
+
+def _synthetic(source: str) -> Dict[str, ast.Module]:
+    return {"synthetic.py": ast.parse(source)}
+
+
+def test_unreachable_helper_does_not_wire_a_constant() -> None:
+    """到達不能な private ヘルパで触れただけでは配線済みにしない。
+
+    これを見ないと、新しい検査定数を使われないヘルパへ書くだけで本テストが
+    通り、実行経路が無いまま「配線済み」になる — 本テストが防ごうとしている
+    当の退行である。
+    """
+    trees = _synthetic(
+        "VOCAB = ('X',)\n"
+        "def _never_called():\n"
+        "    return VOCAB\n"
+    )
+    assert "VOCAB" not in _wired_constants(trees)
+
+
+def test_constant_reached_through_a_public_entry_point_is_wired() -> None:
+    """起点から辿れるヘルパ経由なら配線済みと数える（偽陽性の確認）。"""
+    trees = _synthetic(
+        "VOCAB = ('X',)\n"
+        "def _helper():\n"
+        "    return VOCAB\n"
+        "def public_entry():\n"
+        "    return _helper()\n"
+    )
+    assert "VOCAB" in _wired_constants(trees)
+
+
+def test_validator_called_only_from_dead_code_is_unwired() -> None:
+    """到達不能なコードからの呼び出しは検証器の配線と数えない。"""
+    trees = _synthetic(
+        "def assert_guard(x):\n"
+        "    pass\n"
+        "def _never_called():\n"
+        "    assert_guard(1)\n"
+    )
+    assert "assert_guard" not in _called_in_functions(trees)

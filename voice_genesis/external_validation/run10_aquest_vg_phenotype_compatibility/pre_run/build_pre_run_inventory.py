@@ -84,9 +84,6 @@ EVOLUTION_THEORY_DISCOVERY_CANDIDATES = (
     "voice_genesis/foundry/VISION_evolution_v0.3_supplementA_spr.md",
 )
 
-# 後方互換の別名（旧名で参照している呼び出し側のため）。
-EVOLUTION_THEORY_CANDIDATES = EVOLUTION_THEORY_DISCOVERY_CANDIDATES
-
 # §36 が実在を確認した v0.3 本体の題名。§29 手順 5 が要求するのはこの実体である。
 EVOLUTION_THEORY_CANONICAL = "VoiceGenesis_Evolution_Theory_v0.3_ja.md"
 
