@@ -500,3 +500,191 @@ All checks passed!
 $ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
 2597 passed, 7 warnings in ~41s
 ```
+
+## 5. PR #333 Codex bot レビュー第2巡対応（2026-08-28、フェーズ1）
+
+### 5.0 第1巡グラウンディングの見落とし（正直な記録）
+
+§0.4 の第1巡グラウンディングは「`hypothesis_algebra_sha` という文字列が
+probe_manifest.json に出現しない」ことのみを grep 確認し、「render
+bookkeeping と decision semantics は構造的に分離されている」という一般論
+から repin 不要と判定した。この判定は**文字列の不在**しか見ておらず、
+`revision_bridge.*.identity_metric_space_ref` の**個々の参照先パス**が
+`supersede_declaration.superseded_sections`（`calibration.freeze_
+threshold`/`calibration.validity_gates`/`calibration.decision_rule`）の
+どれかに実際に含まれているかどうかを一つも照合していなかった。第2巡
+指摘1で実際に diff を取ったところ、C0/C1/positive/negative の4エントリ
+の `identity_metric_space_ref` はいずれも supersede 済みの calibration
+節（`calibration.freeze_threshold.d_c0_population`/`calibration.
+validity_gates.{c1_gate,positive_reference_gate,negative_reference_
+gate}.*`）を指したままであり、「render bookkeeping と decision semantics
+は分離されている」という一般論は判定規則の実参照先については成立して
+いなかった。以後の同種グラウンディングでは、文字列の不在確認だけでなく
+supersede_declaration の対象集合と実参照先の突合せまで行う。
+
+### 5.1 指摘1（P1）: bridge の参照先が supersede 済み calibration 節を
+指したまま
+
+**事実確認**: `evaluation/probe_manifest.json` revision_bridge の
+`c0_replay_takes`/`c1_sham_takes`/`positive_reference`/
+`negative_reference` 4エントリの `identity_metric_space_ref` が、rev 0.6
+`supersede_declaration.superseded_sections` に列挙された calibration 節
+（`calibration.freeze_threshold.d_c0_population`/`calibration.validity_
+gates.c1_gate.d_c1_population`/`calibration.validity_gates.positive_
+reference_gate.positive_reference_definition`/`calibration.validity_
+gates.negative_reference_gate.negative_reference_definition`）をそのまま
+参照していることを確認した。`inputs/measurement_spec_manifest.json`
+`identity_axis_metric_paths` の同4エントリも同じ参照先を転記していた。
+`reference_render`（`calibration.distance_unit.reference_render_
+definition`）は `supersede_declaration` の対象外（`calibration.
+distance_unit` は preserved/superseded いずれの列挙にも含まれない、単なる
+render 定義）であるため対象から除外した。
+
+**実装**: `identity_metric_space_ref` 自体は無改変のまま履歴参照として
+保持し（旧参照を保持する履歴残置様式——probe の生成定義である cell_ref/
+contract_field_ref/new_render_required は supersede 対象外のため元々
+無改変で有効）、上記4エントリへ新規 `identity_decision_protocol_ref`
+（判定規則の現行正本、`inputs/identity_decision_protocol_v0.6.json` の
+対応節: `c0_determinism_attestation`/`c1_sham_attestation`/`positive_
+reference_audit`/`birth_identity_separation.negative_reference_gate_
+note`）+ `superseded_calibration_note`（supersede 済みであることの本文
+明記、marker `"supersede"` を validator が強制）を追加した。
+`_validate_revision_bridge_entry()`/`_validate_measurement_spec_metric_
+path()` を拡張し、新規 `_load_identity_decision_protocol_document()`/
+`_resolve_identity_decision_protocol_ref()`/`_REVISION_BRIDGE_EXPECTED_
+DECISION_PROTOCOL_REF` でエントリ→期待 path の厳密対応（Fix 8 と同方式）
++ dotted path 実在走査 + probe_manifest.json ⇔ measurement_spec_
+manifest.json の二重 pin 一致を fail-closed 強制する。
+
+**repin cascade**: `probe_manifest.json` バイト変更に伴い
+`probe_manifest_sha` を repin
+（旧 `c6c4b862e775ce99e579ba8e4574453ae86048fa801c9b4e1265743021475534` →
+新 `60adeb93b6ca920bdbc590f24ffdb62f68bd12a387e2543361d88954fb1932fe`）。
+これに追随し `inputs/dataset_split_manifest.json`
+`identity_probe.probe_manifest_sha` 転記値と、`pjs_song_based_probe_non_
+adoption_citation`/`c1_sham_takes.description` への行番号引用（新規キー
+挿入によるシフト: P4 role 786→787行、c1_sham_takes description
+878→880行）を更新し、`dataset_manifest_sha` を repin
+（旧 `ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448` →
+新 `4138639209caabf08465141681756e3b0bc7be4167516ea9bd93b6d276456cf4`）。
+`inputs/measurement_spec_manifest.json` も同4エントリへ `identity_
+decision_protocol_ref` を追加したためバイトが変わったが、
+`measurement_spec_sha` は元々 PENDING（VG-L0 学習ハーネス実装待ちの
+既存律速は不変）のため repin は発生しない——本文是正のみ。
+
+### 5.2 指摘2（P2）: post_learning_identity_retention の invalid/
+non-finite 分岐欠如
+
+**事実確認**: `post_learning_identity_retention` が `stable`
+（`m_other > 0 かつ m_pjs > 0`）/`shifted`（`m_other <= 0 または m_pjs
+<= 0`）の2分岐のみで、両条件が前提とする「m_other/m_pjs が有限の実数値」
+が成立しない invalid/non-finite feature の事前登録分岐が無いことを確認
+した。既存 `IDENTITY_OUTCOMES` に `UNCALIBRATED` が実在することを確認
+（`("STABLE_BY_MACHINE_METRIC", "SHIFTED", "UNCALIBRATED")`）。
+
+**実装**: `post_learning_identity_retention.invalid_or_nonfinite_
+feature` 節を新設し、`identity_outcome` を既存 `IDENTITY_OUTCOMES` の
+`UNCALIBRATED`（tuple へ値追加はしない）、`outcome_detail` を新定数
+`IDENTITY_PROTOCOL_RETENTION_INVALID_OR_NONFINITE_DETAIL`
+（`IDENTITY_PROTOCOL_POST_LEARNING_INVALID_OR_NONFINITE_FEATURE`、第1巡
+指摘3の `IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_
+FEATURE` と同型命名）で凍結した。`validate_identity_decision_protocol()`
+の `post_learning_identity_retention` 検証ブロックへ同型の分岐検証を
+追加。偽 SHIFTED/偽 STABLE の記録を構造排除する測定失敗系の凍結であり、
+裁定§6の両条件の逆条件（feature が invalid/non-finite）+ 裁定§9
+fail-closed 原則の機械符号化——新規則の発明ではない。
+
+**repin cascade**: `inputs/identity_decision_protocol_v0.6.json` バイト
+変更に伴い `hypothesis_algebra_sha` を repin
+（旧 `304e72376e30e8e3974485d393c1f56a7256017588bc877c2be15f080291fb77` →
+新 `cde8b003ff88b78693c81058e3a80ec4fbfe546df7e3f8e61812c8d6f61c67c1`）。
+
+### 5.3 指摘3（P2）: pinned revision document バイトの未再照合
+
+**事実確認**: `load_pinned_identity_decision_protocol()` の cross-check
+(5)（旧番号）は `provenance.design_revision_doc.sha256`（manifest 側の
+**宣言値**）と `RUN9_CONTRACT.yaml` `design_revision_doc_sha256`
+PINNED 値（contract 側の**宣言値**）の一致しか見ておらず、どちらの宣言値
+も `DESIGN_RUN9_REVISION_0.6.md` の**実バイト**を一度も再ハッシュして
+いなかったことを確認した（第1巡指摘2 が是正した `metric_reference.
+metric_space_sha` の欠陥——宣言値同士の比較のみで実ファイルを再
+ハッシュしない——と同型のパターンが、改訂文書側にも未是正のまま残って
+いた）。
+
+**実装**: 新規 cross-check (6) として、`provenance.design_revision_doc.
+source_file`（`_resolve_repo_contained_path()` で repo-containment guard
+を経由）を read-once で実バイト読込 + sha256 再計算し、cross-check (5)
+で contract pin と一致確認済みの `manifest_rev_doc_sha` と厳密一致する
+ことを fail-closed で強制する——cross-check (1)（adjudication_basis）と
+同型の read-once + 実バイト sha256 照合。テスト用に `design_revision_
+doc_path` override 引数を追加した（既存 `adjudication_basis_path` 等と
+同型の慣習）。本改訂は `load_pinned_identity_decision_protocol()` の
+ロジック追加のみで `identity_decision_protocol_v0.6.json` のバイトは
+変えない（§5.2 の repin に含まれる cross-check 番号の付け替え——(11)〜
+(13) へシフト——のみ、値は無改変）。
+
+### 5.4 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2604 passed, 7 warnings in ~41s
+```
+
+新設テスト: `tests/test_run9_contract.py` に9件（指摘2の5件 + 指摘3の
+2件 + カウント/repin 値更新テスト2件〔`test_pin2_dataset_manifest_sha_
+is_pinned_and_matches_actual_file`/`test_pin1_r3_measurement_spec_
+manifest_file_byte_unchanged_despite_pending_pin` の値更新〕）のうち
+新規追加は7件（2597→2604）。指摘1は既存 validator/loader の拡張であり
+新規テストは追加していない（既存の `test_rev06_validate_real_manifest_
+happy_path`/`validate_probe_manifest`/`validate_measurement_spec_
+manifest` 系の既存テストが実データを通すことで正常系を確認、fail-closed
+分岐は §5.1 実装の拡張ロジックが既存の「エントリ→期待 path 厳密対応」
+（Fix 8 パターン）を再利用しているため既存の型テストで構造的にカバー
+される）。
+
+### 5.5 変更ファイル
+
+- `run9_schema.py`: `_IDENTITY_DECISION_PROTOCOL_REF_PREFIX`/
+  `_REVISION_BRIDGE_SUPERSEDED_CALIBRATION_ENTRIES`/`_REVISION_BRIDGE_
+  EXPECTED_DECISION_PROTOCOL_REF`/`_REVISION_BRIDGE_SUPERSEDE_NOTE_
+  MARKER` 新設定数、`_load_identity_decision_protocol_document()`/
+  `_resolve_identity_decision_protocol_ref()` 新設、`_validate_revision_
+  bridge_entry()`/`_validate_measurement_spec_metric_path()` 拡張、
+  `IDENTITY_PROTOCOL_RETENTION_INVALID_OR_NONFINITE_DETAIL` 定数新設、
+  `validate_identity_decision_protocol()` の `post_learning_identity_
+  retention` 検証拡張、`load_pinned_identity_decision_protocol()` へ
+  cross-check (6) 新設 + `design_revision_doc_path` override 引数追加。
+- `RUN9_CONTRACT.yaml`: `probe_manifest_sha`/`dataset_manifest_sha`/
+  `hypothesis_algebra_sha` repin（値・repin履歴コメント追加）+
+  `measurement_spec_sha` 本文是正コメント追加（pin 状態は PENDING の
+  まま変更なし）。
+- `evaluation/probe_manifest.json`: revision_bridge の
+  c0_replay_takes/c1_sham_takes/positive_reference/negative_reference
+  4エントリへ `identity_decision_protocol_ref`/`superseded_calibration_
+  note` 追加。
+- `inputs/measurement_spec_manifest.json`: identity_axis_metric_paths
+  の同4エントリへ `identity_decision_protocol_ref` 追加。
+- `inputs/dataset_split_manifest.json`: `identity_probe.probe_manifest_
+  sha` 転記値更新 + 行番号引用2箇所（786→787、878→880）更新。
+- `inputs/identity_decision_protocol_v0.6.json`: `post_learning_
+  identity_retention.invalid_or_nonfinite_feature` 分岐追加。
+- `tests/test_run9_contract.py`: 上記の回帰テスト・repin 値更新・新規
+  fail-closed テスト追加。
+
+### 5.6 逸脱事項
+
+- immutability 対象（`identity_metric_space.json`/`identity_domain`/
+  `Genome`/speaker map manifest）・裁定逐語転記部分（`USER_ADJUDICATION_
+  20260827_IDENTITY_REV06.txt`）は 1 byte も変更していない（`git status
+  --short` で確認済み）。
+- 既存 frozen tuple（`BIRTH_OUTCOMES`/`IDENTITY_OUTCOMES`/
+  `SEPARATION_OUTCOMES` 等）への値追加は行っていない——新設語彙は
+  すべて `IDENTITY_PROTOCOL_*` の outcome_detail 定数側のみ。
+- 指摘1の bridge 是正は「参照先の付け替え」を、既存参照を削除して
+  上書きするのではなく、新規フィールド追加 + 旧参照の履歴保持という
+  形で実装した（裁定の immutability 原則・第1巡の「履歴残置」慣習との
+  整合を優先した設計判断——Fable 設計メモの「旧参照を保持（履歴残置
+  様式）」指示に沿う）。

@@ -12083,8 +12083,13 @@ def test_pin2_dataset_manifest_sha_is_pinned_and_matches_actual_file(
     field = contract_raw["dataset_manifest_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.DATASET_SPLIT_MANIFEST_PATH)
+    # PR #333 第2巡指摘1（P1、採用）の probe_manifest_sha repin に追随し
+    # dataset_split_manifest.json（identity_probe.probe_manifest_sha 転記
+    # 値・行番号引用）を更新したため repin（旧値
+    # ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448 は
+    # RUN9_CONTRACT.yaml の repin 履歴コメントに保持）。
     assert field["value"] == (
-        "ba52536c1e36f5d64018a2de7877c288c39ee855a0b463d937ace8032650d448"
+        "4138639209caabf08465141681756e3b0bc7be4167516ea9bd93b6d276456cf4"
     )
 
 
@@ -13654,9 +13659,21 @@ def test_pin1_r3_measurement_spec_manifest_file_byte_unchanged_despite_pending_p
     PENDING へ復帰したが、inputs/measurement_spec_manifest.json 自体の
     バイトは RUN9-L0-PIN-1 初回実装時点から一切改変していない（manifest/
     validator/loader は事前配線のまま残置——撤去していないことの確認）。
+
+    PR #333 第2巡指摘1（P1、採用）で例外的に改訂: C0/C1/positive/negative
+    の4エントリの identity_metric_space_ref が rev 0.6 裁定 §7 で
+    supersede 済みの calibration 節を参照したままだったため、新規
+    identity_decision_protocol_ref を追加した（probe_manifest.json
+    revision_bridge と同型の是正——evaluation/probe_manifest.json 側の
+    対応する `test_rev06_*` 系テスト参照）。measurement_spec_sha 自体は
+    引き続き PENDING のまま（VG-L0 学習ハーネス実装待ちの律速は不変——
+    本改訂は identity 軸カタログの参照先是正のみで、development/
+    generalization 軸の extractor 未実装状態は変えない）。旧値（PIN-1〜
+    PR #333 第1巡まで不変だった値、履歴として保持）:
+    "cb3e3b45973caa3737531b9636454a4542bc75f60d03a80a6a0411a9847bfdd5"
     """
     assert m.compute_file_sha256(m.MEASUREMENT_SPEC_MANIFEST_PATH) == (
-        "cb3e3b45973caa3737531b9636454a4542bc75f60d03a80a6a0411a9847bfdd5"
+        "22ea90724141df64bcb5f393ed2000261641e6c2c51a14445853689e90e9bc52"
     )
 
 
@@ -19719,6 +19736,7 @@ def test_rev06_outcome_detail_constants_do_not_collide_with_existing_frozen_voca
     assert m.IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL not in m.BIRTH_OUTCOMES
     assert m.IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL not in m.BIRTH_OUTCOMES
     assert m.IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL not in m.IDENTITY_OUTCOMES
+    assert m.IDENTITY_PROTOCOL_RETENTION_INVALID_OR_NONFINITE_DETAIL not in m.IDENTITY_OUTCOMES
     assert m.IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME not in m.FAILURE_CLASSES
 
 
@@ -19731,12 +19749,13 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     field = contract_raw["hypothesis_algebra_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.IDENTITY_DECISION_PROTOCOL_PATH)
-    # PR #333 第1巡指摘3（P2、採用）: invalid_or_nonfinite_feature 分岐
-    # 追加により repin（旧値
+    # PR #333 第2巡指摘2（P2、採用）: post_learning_identity_retention.
+    # invalid_or_nonfinite_feature 分岐追加により repin（旧値
+    # 304e72376e30e8e3974485d393c1f56a7256017588bc877c2be15f080291fb77・
     # 967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3 は
     # RUN9_CONTRACT.yaml の【repin 履歴】コメントに保持）。
     assert field["value"] == (
-        "304e72376e30e8e3974485d393c1f56a7256017588bc877c2be15f080291fb77"
+        "cde8b003ff88b78693c81058e3a80ec4fbfe546df7e3f8e61812c8d6f61c67c1"
     )
     assert field["source"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json"
@@ -19835,6 +19854,58 @@ def test_rev06_load_pinned_rejects_design_revision_doc_sha_mismatch(
             tampered_contract, domain=domain, manifest_path=manifest_path,
             contract_path=tmp_path / "RUN9_CONTRACT.yaml",
         )
+
+
+def test_rev06_load_pinned_rejects_design_revision_doc_actual_bytes_tamper(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """PR #333 第2巡指摘3（P2、採用）の是正確認: `provenance.design_
+    revision_doc.sha256` が manifest / `RUN9_CONTRACT.yaml`
+    `design_revision_doc_sha256` pin の両方と一致していても（cross-check
+    (5) は通過）、`DESIGN_RUN9_REVISION_0.6.md` の**実バイト**がそれらの
+    宣言値と食い違えば cross-check (6) が fail-closed で検出すること
+    （是正前は宣言値同士の比較のみで、この改ざんを検出できなかった）。"""
+    domain = _real_identity_domain()
+    # mutate なし: manifest の provenance.design_revision_doc.sha256 は
+    # 実物の DESIGN_RUN9_REVISION_0.6.md 由来の値のまま（= contract pin と
+    # も一致、cross-check (5) は通過させる）。`design_revision_doc_path`
+    # override だけを改ざんした別内容のファイルへ差し替える。
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=lambda data: None
+    )
+    tampered_doc_path = tmp_path / "DESIGN_RUN9_REVISION_0.6_TAMPERED.md"
+    tampered_doc_path.write_text("tampered design revision doc content\n", encoding="utf-8")
+    with pytest.raises(
+        m.Run9ValidationError, match="provenance.design_revision_doc.sha256"
+    ):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+            design_revision_doc_path=tampered_doc_path,
+        )
+
+
+def test_rev06_load_pinned_accepts_design_revision_doc_path_override_matching_bytes(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """override 経路自体の正常系確認: 実ファイルと同一バイトのコピーを
+    `design_revision_doc_path` へ渡せば cross-check (6) を素通りすること
+    （override 引数がテスト用の単純な迂回口ではなく、実バイト照合を正しく
+    行っていることの対照）。"""
+    domain = _real_identity_domain()
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=lambda data: None
+    )
+    identical_doc_path = tmp_path / "DESIGN_RUN9_REVISION_0.6_COPY.md"
+    identical_doc_path.write_bytes(
+        (_RUN_DIR / "DESIGN_RUN9_REVISION_0.6.md").read_bytes()
+    )
+    data = m.load_pinned_identity_decision_protocol(
+        tampered_contract, domain=domain, manifest_path=manifest_path,
+        contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        design_revision_doc_path=identical_doc_path,
+    )
+    assert data["schema"] == m.SCHEMA_IDENTITY_DECISION_PROTOCOL
 
 
 def test_rev06_load_pinned_rejects_supersede_section_typo(
@@ -20029,6 +20100,65 @@ def test_pr333_r1_invalid_feature_detail_constant_distinct_from_collapse_detail(
         != m.IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL
     )
     assert m.IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL not in m.BIRTH_OUTCOMES
+
+
+# --- PR #333 第2巡指摘2: post_learning_identity_retention.invalid_or_
+# nonfinite_feature --------------------------------------------------------
+
+
+def test_pr333_r2_validate_rejects_missing_retention_invalid_feature_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["post_learning_identity_retention"]["invalid_or_nonfinite_feature"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r2_validate_rejects_wrong_retention_invalid_feature_outcome_detail() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["post_learning_identity_retention"]["invalid_or_nonfinite_feature"]["outcome_detail"] = (
+        "MADE_UP_LABEL"
+    )
+    with pytest.raises(m.Run9ValidationError, match="invalid_or_nonfinite_feature.outcome_detail"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r2_validate_rejects_wrong_retention_invalid_feature_identity_outcome() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["post_learning_identity_retention"]["invalid_or_nonfinite_feature"]["identity_outcome"] = (
+        "STABLE_BY_MACHINE_METRIC"
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="invalid_or_nonfinite_feature.identity_outcome"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r2_retention_invalid_feature_detail_constant_distinct_from_stable_detail() -> None:
+    """invalid/non-finite feature の凍結（測定/実装失敗系、UNCALIBRATED）
+    と裁定§6の正規の STABLE_BY_MACHINE_METRIC 判定は別ラベルで machine
+    可読に区別されること——両者を同一定数へ縮退させない（PR #333 第1巡
+    指摘3の birth 側 IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL /
+    IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL の非衝突確認と同型）。"""
+    assert (
+        m.IDENTITY_PROTOCOL_RETENTION_INVALID_OR_NONFINITE_DETAIL
+        != m.IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL
+    )
+    assert m.IDENTITY_PROTOCOL_RETENTION_INVALID_OR_NONFINITE_DETAIL not in m.IDENTITY_OUTCOMES
+
+
+def test_pr333_r2_retention_invalid_feature_uses_uncalibrated_not_new_vocab() -> None:
+    """`identity_outcome` は既存 IDENTITY_OUTCOMES の 'UNCALIBRATED' その
+    ものであり、新規語彙を frozen tuple へ追加していないこと（既存 tuple
+    への値追加禁止 — 新設は outcome_detail 側のみ、という Fable 設計方針
+    の機械確認）。"""
+    data = _identity_decision_protocol_data()
+    assert (
+        data["post_learning_identity_retention"]["invalid_or_nonfinite_feature"][
+            "identity_outcome"
+        ]
+        == "UNCALIBRATED"
+    )
+    assert m.IDENTITY_OUTCOMES == ("STABLE_BY_MACHINE_METRIC", "SHIFTED", "UNCALIBRATED")
 
 
 # --- 指摘4: protocol 配列比較の dict 偽装拒否 -------------------------------

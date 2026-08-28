@@ -120,6 +120,13 @@
       "m_other": "d_other - d_self",
       "m_pjs": "d_pjs - d_self"
     },
+    "invalid_or_nonfinite_feature": {
+      "action": "IDENTITY_OUTCOMES 既存語彙の UNCALIBRATED として記録し、STABLE_BY_MACHINE_METRIC / SHIFTED いずれの判定も行わない（偽陽性・偽陰性の記録を構造排除する）。",
+      "condition": "d_self/d_other/d_pjs、またはそれらから導出するm_other/m_pjsのいずれかがinvalidまたはnon-finite",
+      "identity_outcome": "UNCALIBRATED",
+      "note": "裁定§6の両条件（stable: m_other > 0 かつ m_pjs > 0／shifted: m_other <= 0 または m_pjs <= 0）はいずれも m_other/m_pjs が有限の実数値であることを前提としており、feature/距離が invalid または non-finite の場合はどちらの条件にも該当しない未登録分岐だった。birth_identity_separation.invalid_or_nonfinite_feature（PR #333 第1巡指摘3）と同型——d12=0によるfeature collapse/裁定§6の閾値超過とは区別される測定/実装失敗系の凍結であり、裁定§9『Birth Gate不成立時はNOT_ESTABLISHEDとして凍結する』のfail-closed原則を学習後判定へ機械符号化したものである。新規則の発明ではない。",
+      "outcome_detail": "IDENTITY_PROTOCOL_POST_LEARNING_INVALID_OR_NONFINITE_FEATURE"
+    },
     "shifted": {
       "boundary_note": "同率をSTABLEへ丸めない。",
       "condition": "m_other <= 0 または m_pjs <= 0",

@@ -48,14 +48,14 @@
     "design_vocabulary_note": "DESIGN §12 は IDENTITY PROBE を PJS song 単位の4分割目として規定するが、既 PINNED の practice_audio_split_manifest.json は PJS 100曲全数を TRAIN/VALIDATION/SEALED_HOLDOUT の3分割で排他的に使い切っており、独立した4分割目を新たに確保する余地が構造的に存在しない。DESIGN §12 が IDENTITY PROBE に求める役割（Founder間・条件間の identity 比較の基準点の提供）は、既 PINNED の evaluation/probe_manifest.json P0 cell（PJS song から派生しない、独自に authored された score fragment）が既に担っている。この対応は本 manifest が新規に決定するものではなく、既 PINNED 正典（probe_manifest.json）が既に下していた設計決定を、DESIGN §12 の IDENTITY PROBE という語彙のもとで追認するものである。P4 の role が PJS song ベースの identity probe を明示的に不採用とした理由（採譜負担 + sealed-holdout 非開封規律との衝突）は、IDENTITY PROBE を PJS song split として実装しないことの隣接する根拠として引用する。NEGATIVE / SHAM CONTROL split（DESIGN §12 5分割目）も同型の未決点であり、negative_sham_control 節で同様に扱う。",
     "implementation": "evaluation/probe_manifest.json probes[probe_id=\"P0\"]（title \"Neutral Identity Probe\"、cell_id \"P0-NEUTRAL-SAKURA-FRAGMENT\"）",
     "implementation_class": "NON_SONG_SPLIT",
-    "pjs_song_based_probe_non_adoption_citation": "voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json probes[probe_id=\"P4\"].role（786行、逐語の一部）: \"PJS楽曲の採譜は不採用とする（採譜作業が必要な上、sealed-holdout非開封規律と衝突するため）。\"",
-    "probe_manifest_sha": "c6c4b862e775ce99e579ba8e4574453ae86048fa801c9b4e1265743021475534"
+    "pjs_song_based_probe_non_adoption_citation": "voice_genesis/evolution/run9_dual_founder_pjs/evaluation/probe_manifest.json probes[probe_id=\"P4\"].role（787行、逐語の一部）: \"PJS楽曲の採譜は不採用とする（採譜作業が必要な上、sealed-holdout非開封規律と衝突するため）。\"",
+    "probe_manifest_sha": "60adeb93b6ca920bdbc590f24ffdb62f68bd12a387e2543361d88954fb1932fe"
   },
   "negative_sham_control": {
     "c1_sham_takes_per_founder": 20,
     "design_vocabulary_citation": "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §12 Dataset Split（574-595行の5分割語彙ブロック、583行目、逐語）: \"NEGATIVE / SHAM CONTROL\"",
     "design_vocabulary_note": "DESIGN §12 は NEGATIVE / SHAM CONTROL を PJS song 単位の5分割目として規定するが、既 PINNED の practice_audio_split_manifest.json は PJS 100曲全数を3分割で使い切っており、独立した5分割目を新たに確保する余地が構造的に存在しない。DESIGN §12 が NEGATIVE / SHAM CONTROL に求める役割（介入なしの対照条件の確保）は、既 PINNED の RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder（C1 = ZERO_CONTROLPROFILE_SHAM 条件、P0 cell 上で founder 1体あたり n=20 takes を render）が既に担っている。この対応も本 manifest が新規に決定するものではなく、既 PINNED 正典（RUN9_CONTRACT.yaml / probe_manifest.json revision_bridge）が既に下していた設計決定を、DESIGN §12 の NEGATIVE / SHAM CONTROL という語彙のもとで追認するものである。",
-    "implementation": "RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder（PINNED, value=20, C1 = ZERO_CONTROLPROFILE_SHAM 条件）—— evaluation/probe_manifest.json revision_bridge.c1_sham_takes.description（878行、逐語）: \"P0 cell + ZERO_CONTROLPROFILE_SHAM条件でのrender。RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder（PINNED、founder 1体あたりn=20）本。\"",
+    "implementation": "RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder（PINNED, value=20, C1 = ZERO_CONTROLPROFILE_SHAM 条件）—— evaluation/probe_manifest.json revision_bridge.c1_sham_takes.description（880行、逐語）: \"P0 cell + ZERO_CONTROLPROFILE_SHAM条件でのrender。RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder（PINNED、founder 1体あたりn=20）本。\"",
     "implementation_class": "NON_SONG_SPLIT"
   },
   "schema": "run9-dataset-split-manifest/1.0",

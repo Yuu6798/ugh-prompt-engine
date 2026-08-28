@@ -27,6 +27,7 @@
         "module": "voice_genesis/foundry/adapter/donor_bank.py",
         "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
       },
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#c0_determinism_attestation",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population",
       "metric_version": "run9-identity-metric/0.5",
       "normalization": {
@@ -42,6 +43,7 @@
         "module": "voice_genesis/foundry/adapter/donor_bank.py",
         "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
       },
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#c1_sham_attestation",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.c1_gate.d_c1_population",
       "metric_version": "run9-identity-metric/0.5",
       "normalization": {
@@ -72,6 +74,7 @@
         "module": "voice_genesis/foundry/adapter/donor_bank.py",
         "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
       },
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#birth_identity_separation.negative_reference_gate_note",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.negative_reference_gate.negative_reference_definition",
       "metric_version": "run9-identity-metric/0.5",
       "normalization": {
@@ -102,6 +105,7 @@
         "module": "voice_genesis/foundry/adapter/donor_bank.py",
         "verified_by": "grep -n \"def analyze_donor_world\" voice_genesis/foundry/adapter/donor_bank.py"
       },
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#positive_reference_audit",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.positive_reference_gate.positive_reference_definition",
       "metric_version": "run9-identity-metric/0.5",
       "normalization": {

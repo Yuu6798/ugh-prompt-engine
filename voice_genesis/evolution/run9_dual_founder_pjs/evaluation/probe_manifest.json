@@ -869,15 +869,19 @@
       "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
       "contract_field_ref": "RUN9_CONTRACT.yaml#interventions.c0_replay_takes_per_founder",
       "description": "P0 cellの同条件再render。RUN9_CONTRACT.yaml interventions.c0_replay_takes_per_founder （PINNED、founder 1体あたりn=20）本。",
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#c0_determinism_attestation",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.freeze_threshold.d_c0_population",
-      "new_render_required": true
+      "new_render_required": true,
+      "superseded_calibration_note": "identity_metric_space_ref（calibration.freeze_threshold.d_c0_population）はrev 0.6裁定§7によりD_C0(F)の判定規則としてsupersede済み——population定義（founder-pooling・自己比較）自体は参照により有効のまま履歴保持するが、判定規則（全take exact-replay要求・D_C0(F)=0×20期待・不一致時の停止分類）の現行正本はidentity_decision_protocol_ref（c0_determinism_attestation）を参照する。"
     },
     "c1_sham_takes": {
       "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
       "contract_field_ref": "RUN9_CONTRACT.yaml#interventions.c1_sham_takes_per_founder",
       "description": "P0 cell + ZERO_CONTROLPROFILE_SHAM条件でのrender。RUN9_CONTRACT.yaml interventions.c1_sham_takes_per_founder（PINNED、founder 1体あたりn=20）本。",
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#c1_sham_attestation",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.c1_gate.d_c1_population",
-      "new_render_required": true
+      "new_render_required": true,
+      "superseded_calibration_note": "identity_metric_space_ref（calibration.validity_gates.c1_gate.d_c1_population）はrev 0.6裁定§7によりD_C1(F)の判定規則としてsupersede済み——判定規則（C0/referenceとの完全一致要求・D_C1(F)=0×20期待・非ゼロ時のC1_SHAM_EFFECT_DETECTED分類）の現行正本はidentity_decision_protocol_ref（c1_sham_attestation）を参照する。"
     },
     "evaluated_renders": {
       "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
@@ -887,8 +891,10 @@
     },
     "negative_reference": {
       "description": "新規render不要。他方founderのreference_render（P0 cellのbirth probe時初回render）をそのまま参照する（negative_reference_gate.negative_reference_definitionの定義どおり）。",
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#birth_identity_separation.negative_reference_gate_note",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.negative_reference_gate.negative_reference_definition",
-      "new_render_required": false
+      "new_render_required": false,
+      "superseded_calibration_note": "identity_metric_space_ref（calibration.validity_gates.negative_reference_gate.negative_reference_definition）はrev 0.6裁定§7によりsupersede済み——negative reference gateはbirth_identity_separationのd12を対称参照する方式へ切替わり、独立証拠として二重計上しない（裁定§4）。判定方針の現行正本はidentity_decision_protocol_ref（birth_identity_separation.negative_reference_gate_note）を参照する。"
     },
     "pjs_reference": {
       "description": "新規render不要。RUN9側でのrenderではなく、inputs/identity_metric_space.json confuser_control.pjs_reference_definitionが定める決定論的PJSコーパス集約（_song.wavペアの辞書順集約）から導出する。",
@@ -898,8 +904,10 @@
     "positive_reference": {
       "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
       "description": "P0 cellのbirth probe時専用追加render1本。reference_renderともC0の20テイクいずれとも別の独立テイク（positive_reference_gate.positive_reference_definitionの定義どおり）。",
+      "identity_decision_protocol_ref": "inputs/identity_decision_protocol_v0.6.json#positive_reference_audit",
       "identity_metric_space_ref": "inputs/identity_metric_space.json#calibration.validity_gates.positive_reference_gate.positive_reference_definition",
-      "new_render_required": true
+      "new_render_required": true,
+      "superseded_calibration_note": "identity_metric_space_ref（calibration.validity_gates.positive_reference_gate.positive_reference_definition）はrev 0.6裁定§7により「独立した閾値校正標本としては扱わない」判定方針としてsupersede済み——定義自体（reference/C0双方と別の独立テイク1本）は参照により有効のまま履歴保持するが、判定方針の現行正本はidentity_decision_protocol_ref（positive_reference_audit）を参照する。"
     },
     "reference_render": {
       "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
