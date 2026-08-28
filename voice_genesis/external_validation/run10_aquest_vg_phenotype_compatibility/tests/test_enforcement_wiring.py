@@ -182,6 +182,135 @@ def _functions(trees: Dict[str, ast.Module]) -> Dict[str, list[FunctionRef]]:
     return out
 
 
+class _LocalBindingVisitor(ast.NodeVisitor):
+    """1 関数scopeのlocal束縛を収集し、nested scope本体には降りない。"""
+
+    def __init__(self) -> None:
+        self.bound: Set[str] = set()
+        self.globals: Set[str] = set()
+
+    def visit_Name(self, node: ast.Name) -> None:  # noqa: N802 - ast API
+        if isinstance(node.ctx, (ast.Store, ast.Del)):
+            self.bound.add(node.id)
+
+    def visit_Global(self, node: ast.Global) -> None:  # noqa: N802 - ast API
+        self.globals.update(node.names)
+
+    def visit_Nonlocal(self, node: ast.Nonlocal) -> None:  # noqa: N802 - ast API
+        self.bound.update(node.names)
+
+    def visit_Import(self, node: ast.Import) -> None:  # noqa: N802 - ast API
+        self.bound.update(alias.asname or alias.name.split(".", 1)[0] for alias in node.names)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802 - ast API
+        self.bound.update(alias.asname or alias.name for alias in node.names if alias.name != "*")
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:  # noqa: N802 - ast API
+        if node.name is not None:
+            self.bound.add(node.name)
+        self.generic_visit(node)
+
+    def visit_MatchAs(self, node: ast.MatchAs) -> None:  # noqa: N802 - ast API
+        if node.name is not None:
+            self.bound.add(node.name)
+        self.generic_visit(node)
+
+    def visit_MatchStar(self, node: ast.MatchStar) -> None:  # noqa: N802 - ast API
+        if node.name is not None:
+            self.bound.add(node.name)
+
+    def visit_MatchMapping(  # noqa: N802 - ast API
+        self, node: ast.MatchMapping
+    ) -> None:
+        if node.rest is not None:
+            self.bound.add(node.rest)
+        self.generic_visit(node)
+
+    def _visit_definition_time(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda
+    ) -> None:
+        for child in _function_definition_nodes(node, postponed_annotations=False):
+            self.visit(child)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802 - ast API
+        self.bound.add(node.name)
+        self._visit_definition_time(node)
+
+    def visit_AsyncFunctionDef(  # noqa: N802 - ast API
+        self, node: ast.AsyncFunctionDef
+    ) -> None:
+        self.bound.add(node.name)
+        self._visit_definition_time(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802 - ast API
+        self._visit_definition_time(node)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802 - ast API
+        self.bound.add(node.name)
+        for child in (*node.decorator_list, *node.bases):
+            self.visit(child)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+
+    def _visit_comprehension(self, node: ast.AST) -> None:
+        generators = node.generators  # type: ignore[attr-defined]
+        for generator in generators:
+            self.visit(generator.iter)
+            for condition in generator.ifs:
+                self.visit(condition)
+        if isinstance(node, ast.DictComp):
+            self.visit(node.key)
+            self.visit(node.value)
+        else:
+            self.visit(node.elt)  # type: ignore[attr-defined]
+
+    visit_ListComp = _visit_comprehension
+    visit_SetComp = _visit_comprehension
+    visit_DictComp = _visit_comprehension
+    visit_GeneratorExp = _visit_comprehension
+
+
+def _function_local_bindings(node: FunctionNode) -> Set[str]:
+    """node 自身の lexical local（global 宣言は除外）。"""
+    visitor = _LocalBindingVisitor()
+    arguments = (
+        *node.args.posonlyargs,
+        *node.args.args,
+        *node.args.kwonlyargs,
+    )
+    visitor.bound.update(argument.arg for argument in arguments)
+    if node.args.vararg is not None:
+        visitor.bound.add(node.args.vararg.arg)
+    if node.args.kwarg is not None:
+        visitor.bound.add(node.args.kwarg.arg)
+    for statement in node.body:
+        visitor.visit(statement)
+    return visitor.bound - visitor.globals
+
+
+def _function_shadowing(trees: Dict[str, ast.Module]) -> Dict[int, Set[str]]:
+    """各関数でmodule名解決より優先される自身+外側関数の束縛。"""
+    out: Dict[int, Set[str]] = {}
+
+    def walk(node: ast.AST, enclosing: Set[str]) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            local = _function_local_bindings(node)
+            out[id(node)] = enclosing | local
+            for statement in node.body:
+                walk(statement, enclosing | local)
+        elif isinstance(node, ast.ClassDef):
+            # class namespace は method の enclosing lexical scope にはならない。
+            for statement in node.body:
+                walk(statement, enclosing)
+        else:
+            for child in ast.iter_child_nodes(node):
+                walk(child, enclosing)
+
+    for tree in trees.values():
+        walk(tree, set())
+    return out
+
+
 def _function_definition_nodes(
     node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
     *,
@@ -464,6 +593,7 @@ def _names_loaded_in_functions(trees: Dict[str, ast.Module]) -> Set[ConstantId]:
     functions = _functions(trees)
     constants = _module_constants(trees)
     imported = _imported_constants(trees, constants)
+    shadowing = _function_shadowing(trees)
     used: Set[ConstantId] = set()
     for name in _reachable_functions(trees):
         for rel, node in functions.get(name, ()):
@@ -471,6 +601,8 @@ def _names_loaded_in_functions(trees: Dict[str, ast.Module]) -> Set[ConstantId]:
                 node, postponed_annotations=_postpones_annotations(trees[rel])
             ):
                 if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                    if sub.id in shadowing.get(id(node), set()):
+                        continue
                     resolved = _resolve_constant_name(rel, sub.id, constants, imported)
                     if resolved is not None:
                         used.add(resolved)
@@ -893,6 +1025,47 @@ def test_unpacked_constant_targets_are_inventoried_individually() -> None:
         ("synthetic.py", "REST"),
     }
     assert _unwired_declarations(trees) == {"FMAX", "REST"}
+
+
+def test_lexical_bindings_shadow_module_constants() -> None:
+    """parameter/local/import と enclosing local は同名module定数をwireしない。"""
+    trees = _synthetic(
+        "PARAMETER = ('module',)\n"
+        "ASSIGNED = ('module',)\n"
+        "IMPORTED = ('module',)\n"
+        "ENCLOSING = ('module',)\n"
+        "def parameter_entry(PARAMETER):\n"
+        "    return PARAMETER\n"
+        "def assigned_entry():\n"
+        "    ASSIGNED = ('local',)\n"
+        "    return ASSIGNED\n"
+        "def imported_entry():\n"
+        "    import local_module as IMPORTED\n"
+        "    return IMPORTED\n"
+        "def enclosing_entry():\n"
+        "    ENCLOSING = ('local',)\n"
+        "    def _helper():\n"
+        "        return ENCLOSING\n"
+        "    return _helper()\n"
+    )
+    assert not _wired_constants(trees)
+    assert _unwired_declarations(trees) == {
+        "PARAMETER",
+        "ASSIGNED",
+        "IMPORTED",
+        "ENCLOSING",
+    }
+
+
+def test_global_declaration_resolves_module_constant() -> None:
+    """global 宣言されたNameはlocal shadowではなくmodule定数へ解決する。"""
+    trees = _synthetic(
+        "VOCAB = ('module',)\n"
+        "def public_entry():\n"
+        "    global VOCAB\n"
+        "    return VOCAB\n"
+    )
+    assert _wired_constants(trees) == {("synthetic.py", "VOCAB")}
 
 
 def test_imported_constant_keeps_its_declaring_module_identity() -> None:
