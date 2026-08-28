@@ -413,6 +413,80 @@ def test_publish_cleanup_covers_baseexception_termination(
     assert list(tmp_path.glob(".evidence.build-*")) == []
 
 
+def test_publish_rejects_silently_corrupted_staged_feature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    references, c0, c1, positive, pjs = _evidence(count=1)
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+        expected_takes=1,
+    )
+    observations = {
+        founder: {
+            "reference": [references[founder]],
+            "c0": c0[founder],
+            "c1": c1[founder],
+            "positive_reference": [positive[founder]],
+        }
+        for founder in FOUNDERS
+    }
+    original_write_bytes = Path.write_bytes
+
+    def corrupted_write(path: Path, data: bytes) -> int:
+        if path.name == "R9F-01_reference_00.bin":
+            return original_write_bytes(path, data[:-1])
+        return original_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", corrupted_write)
+    output = tmp_path / "evidence"
+    with pytest.raises(bp.BirthProbeError, match="staged feature readback mismatch"):
+        bp.publish_evidence_bundle(output, result, observations, pjs)
+    assert not output.exists()
+    assert list(tmp_path.glob(".evidence.build-*")) == []
+
+
+def test_publish_rejects_corrupted_artifact_manifest_after_serialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    references, c0, c1, positive, pjs = _evidence(count=1)
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+        expected_takes=1,
+    )
+    observations = {
+        founder: {
+            "reference": [references[founder]],
+            "c0": c0[founder],
+            "c1": c1[founder],
+            "positive_reference": [positive[founder]],
+        }
+        for founder in FOUNDERS
+    }
+    original_write_bytes = Path.write_bytes
+
+    def corrupted_write(path: Path, data: bytes) -> int:
+        if path.name == "artifact_manifest.json":
+            data = bp.canonical_json_bytes(
+                {"schema": "run9-birth-gate-artifact-manifest/1.0", "files": {}}
+            )
+        return original_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", corrupted_write)
+    output = tmp_path / "evidence"
+    with pytest.raises(bp.BirthProbeError, match="staged artifact manifest disagrees"):
+        bp.publish_evidence_bundle(output, result, observations, pjs)
+    assert not output.exists()
+    assert list(tmp_path.glob(".evidence.build-*")) == []
+
+
 @pytest.mark.parametrize(
     "changed_key",
     [
@@ -657,6 +731,42 @@ def test_gate_synth_renderer_adapter_matches_runtime_note_and_tempo_contract() -
     renderer._gate = FakeGate()
     renderer._sf = FakeSoundFile()
     assert renderer("R9F-01", "reference", 0, None) == b"adapter-wav"
+
+
+@pytest.mark.parametrize(
+    "waveform",
+    [
+        np.asarray([], dtype=np.float32),
+        np.asarray([[0.0]], dtype=np.float32),
+        np.asarray([np.nan], dtype=np.float32),
+        np.asarray([np.inf], dtype=np.float32),
+    ],
+)
+def test_gate_synth_renderer_rejects_invalid_raw_waveform_before_pcm_write(waveform) -> None:
+    renderer = object.__new__(bp.GateSynthRenderer)
+    renderer._notes = [bp._ProbeNote(mora="あ", midi=60, duration_beats=1.0)]
+    renderer._tempo = 120.0
+    renderer._model_bytes = {}
+    renderer._variance_phonemes = {}
+    renderer._acoustic_phonemes = {}
+    renderer._embeddings = {"R9F-01": np.zeros(384, dtype=np.float32)}
+
+    class FakeGate:
+        @staticmethod
+        def run_pipeline(*args, **kwargs):
+            record = args[6]
+            record["seed"] = bp._RUNTIME_SEED
+            return waveform
+
+    class FakeSoundFile:
+        @staticmethod
+        def write(*args, **kwargs):
+            raise AssertionError("PCM write must not be reached for invalid raw waveform")
+
+    renderer._gate = FakeGate()
+    renderer._sf = FakeSoundFile()
+    with pytest.raises(bp.BirthProbeError, match="non-empty finite one-dimensional"):
+        renderer("R9F-01", "reference", 0, None)
 
 
 def test_unknown_or_missing_founder_is_rejected() -> None:
