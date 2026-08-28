@@ -24,6 +24,7 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Protocol, Sequence
 
@@ -38,6 +39,9 @@ _CONDITIONS = ("reference", "c0", "c1", "positive_reference")
 _RESULT_SCHEMA = "run9-birth-gate-evidence/0.6"
 _FEATURE_SCHEMA = b"RUN9-IDENTITY-FEATURE-F64LE/1\x00"
 _RUNTIME_SEED = 42
+_DIRECT_DEPENDENCY_MANIFEST_PATH = _THIS_DIR / "inputs" / "dependency_pins_manifest.json"
+_DIRECT_DEPENDENCY_PACKAGES = ("numpy", "scipy", "soundfile", "PyYAML", "onnxruntime")
+_PYWORLD_PIN_VERSION = "0.3.5"
 
 
 class BirthProbeError(RuntimeError):
@@ -125,6 +129,7 @@ def _provenance_input_paths() -> Dict[str, Path]:
         "backbone_runtime_bundle_sha256": (
             _THIS_DIR / "inputs" / "backbone_runtime_bundle.json"
         ),
+        "dependency_pins_manifest_sha256": _DIRECT_DEPENDENCY_MANIFEST_PATH,
         **_LOAD_TIME_PROVENANCE_PATHS,
     }
 
@@ -258,9 +263,9 @@ def _control_profiles(founder_id: str) -> tuple[Any, Any]:
 def extract_identity_feature(wav_bytes: bytes) -> FeatureArtifact:
     """Apply the pinned WORLD identity feature procedure to WAV bytes.
 
-    Imports are intentionally lazy: CI can exercise all decision logic without
-    installing the measurement-only ``pyworld`` dependency.  A real run fails
-    before publication when the frozen 0.3.5 implementation is unavailable.
+    Imports are intentionally local so unit tests can exercise decision logic
+    without the measurement stack.  Production ``main()`` preflights and
+    version-binds this exact stack before the first render is admitted.
     """
     try:
         import pyworld  # type: ignore[import-not-found]
@@ -270,9 +275,10 @@ def extract_identity_feature(wav_bytes: bytes) -> FeatureArtifact:
         raise BirthProbeError(
             "WORLD extraction requires pyworld==0.3.5 plus soundfile/scipy in the execution environment"
         ) from exc
-    if getattr(pyworld, "__version__", None) != "0.3.5":
+    if getattr(pyworld, "__version__", None) != _PYWORLD_PIN_VERSION:
         raise BirthProbeError(
-            f"pyworld version must be exactly '0.3.5', got {getattr(pyworld, '__version__', None)!r}"
+            f"pyworld version must be exactly {_PYWORLD_PIN_VERSION!r}, "
+            f"got {getattr(pyworld, '__version__', None)!r}"
         )
     try:
         samples, native_sr = sf.read(io.BytesIO(wav_bytes), dtype="float64", always_2d=False)
@@ -964,19 +970,87 @@ def _load_pinned_json(contract: Any, pin_name: str, path: Path) -> Dict[str, Any
     return parsed
 
 
-def _validate_execution_environment(profile: Mapping[str, Any]) -> None:
-    runtime = profile["identity_semantics"]["runtime"]
+def _load_direct_dependency_pin_versions() -> Dict[str, str]:
+    """Read the recorded direct runtime dependency pins without claiming full closure."""
+    value, _ = _read_once(_DIRECT_DEPENDENCY_MANIFEST_PATH, label="dependency pins manifest")
     try:
-        import onnxruntime as ort
+        parsed = json.loads(value.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BirthProbeError(f"dependency pins manifest is not valid UTF-8 JSON: {exc}") from exc
+    rows = parsed.get("python_dependency_pins") if isinstance(parsed, dict) else None
+    if not isinstance(rows, list):
+        raise BirthProbeError("dependency pins manifest must contain python_dependency_pins list")
+    pins: Dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise BirthProbeError("dependency pin rows must be objects")
+        package = row.get("package")
+        pin_version = row.get("pin_version")
+        observed_version = row.get("observed_version")
+        status = row.get("status")
+        if not isinstance(package, str) or not isinstance(pin_version, str):
+            raise BirthProbeError("dependency pin rows require string package and pin_version")
+        if package in pins:
+            raise BirthProbeError(f"duplicate dependency pin row for {package}")
+        if status != "MATCH" or observed_version != pin_version:
+            raise BirthProbeError(f"dependency pin record is not a verified MATCH for {package}")
+        pins[package] = pin_version
+    missing = sorted(set(_DIRECT_DEPENDENCY_PACKAGES) - set(pins))
+    if missing:
+        raise BirthProbeError(f"dependency pins manifest is missing direct runtime packages: {missing!r}")
+    selected = {package: pins[package] for package in _DIRECT_DEPENDENCY_PACKAGES}
+    selected["pyworld"] = _PYWORLD_PIN_VERSION
+    return selected
+
+
+def _validate_execution_environment(
+    profile: Mapping[str, Any], expected_dependencies: Mapping[str, str]
+) -> Dict[str, str]:
+    """Fail closed on runtime identity or directly executed dependency drift."""
+    runtime = profile["identity_semantics"]["runtime"]
+    required_dependencies = set(_DIRECT_DEPENDENCY_PACKAGES) | {"pyworld"}
+    if set(expected_dependencies) != required_dependencies:
+        raise BirthProbeError(
+            f"direct dependency expectation set is not closed: expected {sorted(required_dependencies)!r}, "
+            f"got {sorted(expected_dependencies)!r}"
+        )
+    try:
+        scipy = importlib.import_module("scipy")
+        soundfile = importlib.import_module("soundfile")
+        yaml_module = importlib.import_module("yaml")
+        ort = importlib.import_module("onnxruntime")
+        pyworld = importlib.import_module("pyworld")
     except ImportError as exc:  # pragma: no cover - measurement environment only
-        raise BirthProbeError("onnxruntime is unavailable") from exc
+        raise BirthProbeError(f"direct runtime dependency is unavailable: {exc}") from exc
+    module_versions = {
+        "numpy": getattr(np, "__version__", None),
+        "scipy": getattr(scipy, "__version__", None),
+        "soundfile": getattr(soundfile, "__version__", None),
+        "PyYAML": getattr(yaml_module, "__version__", None),
+        "onnxruntime": getattr(ort, "__version__", None),
+        "pyworld": getattr(pyworld, "__version__", None),
+    }
+    actual_dependencies: Dict[str, str] = {}
+    for package in sorted(required_dependencies):
+        expected = expected_dependencies[package]
+        module_version = module_versions[package]
+        try:
+            distribution_version = importlib_metadata.version(package)
+        except importlib_metadata.PackageNotFoundError as exc:
+            raise BirthProbeError(f"runtime dependency distribution is unavailable: {package}") from exc
+        if module_version != expected or distribution_version != expected:
+            raise BirthProbeError(
+                f"runtime dependency version mismatch for {package}: expected {expected!r}, "
+                f"module={module_version!r}, distribution={distribution_version!r}"
+            )
+        actual_dependencies[package] = expected
     os_release = platform.freedesktop_os_release()
     pretty_os = os_release.get("PRETTY_NAME", "")
     os_match = re.match(r"^(Ubuntu\s+\d+\.\d+(?:\.\d+)?)", pretty_os)
     normalized_os = os_match.group(1) if os_match is not None else pretty_os
     actual = {
         "architecture": platform.machine(),
-        "onnxruntime": getattr(ort, "__version__", None),
+        "onnxruntime": actual_dependencies["onnxruntime"],
         "os": normalized_os,
         "python": platform.python_version(),
         "selected_execution_provider": "CPUExecutionProvider",
@@ -985,10 +1059,17 @@ def _validate_execution_environment(profile: Mapping[str, Any]) -> None:
         raise BirthProbeError(f"execution profile mismatch: expected {runtime!r}, got {actual!r}")
     if "CPUExecutionProvider" not in ort.get_available_providers():
         raise BirthProbeError("CPUExecutionProvider is not available")
+    return {"python": platform.python_version(), **actual_dependencies}
 
 
 def _load_verified_inputs() -> tuple[
-    Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any], Dict[str, Any], int
+    Dict[str, Any],
+    Dict[str, Any],
+    Dict[str, Any],
+    Dict[str, Any],
+    Dict[str, Any],
+    int,
+    Dict[str, str],
 ]:
     import run9_schema
 
@@ -1006,7 +1087,10 @@ def _load_verified_inputs() -> tuple[
         contract, domain=domain, rights_manifest=rights
     )
     execution_profile = run9_schema.load_pinned_execution_profile_manifest(contract)
-    _validate_execution_environment(execution_profile)
+    expected_dependencies = _load_direct_dependency_pin_versions()
+    runtime_dependency_versions = _validate_execution_environment(
+        execution_profile, expected_dependencies
+    )
     backbone_bundle = _load_pinned_json(
         contract,
         "backbone_runtime_bundle_sha",
@@ -1016,7 +1100,15 @@ def _load_verified_inputs() -> tuple[
     expected_takes = protocol["c0_determinism_attestation"]["takes_per_founder"]
     if expected_takes != protocol["c1_sham_attestation"]["takes_per_founder"]:
         raise BirthProbeError("C0/C1 take counts diverge in the pinned protocol")
-    return probe, speaker_map, reexport, backbone_bundle, practice_split, expected_takes
+    return (
+        probe,
+        speaker_map,
+        reexport,
+        backbone_bundle,
+        practice_split,
+        expected_takes,
+        runtime_dependency_versions,
+    )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -1030,9 +1122,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         _assert_helper_modules_not_preloaded()
         provenance_snapshot = _snapshot_provenance_inputs()
-        probe, speaker_map, reexport, backbone_bundle, practice_split, expected_takes = (
-            _load_verified_inputs()
-        )
+        (
+            probe,
+            speaker_map,
+            reexport,
+            backbone_bundle,
+            practice_split,
+            expected_takes,
+            runtime_dependency_versions,
+        ) = _load_verified_inputs()
         # Catch a repo mutation that happened between the pre-render snapshot and
         # the verified loader consumption before admitting any expensive render.
         _verify_provenance_inputs_unchanged(provenance_snapshot)
@@ -1068,6 +1166,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _verify_provenance_inputs_unchanged(provenance_snapshot)
         result["input_provenance"] = {
             **provenance_snapshot,
+            "runtime_dependency_versions": runtime_dependency_versions,
             "practice_expanded_corpus_identity_sha256": practice_split[
                 "expanded_corpus_identity_sha256"
             ],
