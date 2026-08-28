@@ -161,6 +161,33 @@
 # AF0 unrealized mass 明記義務・非主張3点・Birth Identity Separation
 # Gate の別途実行は expected_speaker_map_sha 欄参照。
 #
+# RUN9-L0-HARNESS-3c rev 0.6（2026-08-27、第2 PR フェーズ1）: User 裁定
+# 「RUN9 User裁定 — Identity Calibration Degeneracy / design_revision 0.6」
+# （DESIGN_RUN9_REVISION_0.6.md、repo 内収載
+# USER_ADJUDICATION_20260827_IDENTITY_REV06.txt）の採用により design_
+# revision 0.5 → 0.6。既存の render replay byte 決定論実測（RUN9-L0-
+# HARNESS-3a）により、現行 identity_metric_space.json calibration 規則の
+# theta_cal(F)=P95(D_C0(F)) が C0 母集団全ゼロの下で解析的に 0 へ退化する
+# ことが Birth Probe 実行前に確定したため行う pre-run design correction
+# （観測後の救済ではない、裁定前文逐語）。Birth Identity Separation だけ
+# でなく学習後 Identity 保持判定を含む Identity decision protocol 全体を
+# 新規 `inputs/identity_decision_protocol_v0.6.json`
+# （`run9-identity-decision-protocol/0.6`）として再事前登録する——同
+# protocol は identity_metric_space.json の feature/distance 定義（無改変）
+# を参照した上で、同ファイルの calibration 節（freeze_threshold/
+# validity_gates/decision_rule）のみを rev 0.6 実行について supersede
+# する。裁定逐語「design_revisionを0.6へ上げ...発行済みFounder Genome、
+# coords、genome_id、speaker map、TRI_CROSSOVER/1.0は変更しない」に従い、
+# 契約レベルの design_revision を実際に昇格する（本欄・run9_schema.
+# DESIGN_REVISION 定数・design_revision_doc_sha256 pin の三箇所を同時に
+# 更新——rev 0.2→0.3→0.4→0.5 と同じ手順）。旧 "0.1"〜"0.5" 形式の contract
+# は run9_schema.DESIGN_REVISION の凍結値照合により意図どおり fail-closed
+# 拒否される。同 protocol の raw byte sha256 を hypothesis_algebra_sha へ
+# PINNED 化する（下記同欄参照）。**本改訂（第2 PR）は上記の事前登録一式の
+# 実装までを範囲とし、Birth Gate の実行自体は含まない**（裁定 §8: 実行順
+# の区切りどおり——C0/C1/positive reference/d12/PJS confuser/post-learning
+# retention のいずれも本 PR 時点では未実測）。
+#
 # 各欄の pin 状況は {value, status, reason, source?} 形（VG_FOUNDRY の
 # debt/RUN_CONTRACT_SCHEMA_v1.json pinned_field 慣習に倣うが独立実装 —
 # run9_schema.py 参照）。status ∈ {PINNED, PENDING, BLOCKED}。
@@ -172,7 +199,7 @@
 schema: voicegenesis-run-contract/1.0
 run_id: RUN9
 experiment_id: VG-R9-DUAL-FOUNDER-PJS
-design_revision: "0.5"
+design_revision: "0.6"
 design_doc: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md
 
 # rev 0.3 改訂A（DESIGN_RUN9_REVISION_0.3.md、PoR §1/§3/§4）: 旧
@@ -316,10 +343,21 @@ design_doc_sha256:
 # がないことを確認済み（詳細は `HARNESS3A_SPEAKER_MAP_RECORD.md` 第8巡
 # 追記参照）。旧値（PR #328 第1巡3件対応後）は履歴として保持する:
 #   15fbe4b6695f9d92dbfb847c203dc1047562993b17d9572481669a5c12bb61f8
+#
+# RUN9-L0-HARNESS-3c（2026-08-27、design_revision 0.5 → 0.6）: User 裁定
+# 「RUN9 User裁定 — Identity Calibration Degeneracy / design_revision 0.6」
+# （repo 内収載 USER_ADJUDICATION_20260827_IDENTITY_REV06.txt、sha256 =
+# 43c7e71cd3bcb7cf3840c67a18e4a4c35a0259b9e04b1335868c33e925420db1）の
+# 採用 + Identity decision protocol 全体の再事前登録（C0/C1 exact-replay
+# attestation 化・Birth Identity Separation の d12 machine feature 判定
+# 化・学習後 Identity 保持のマージン方式 m_other/m_pjs 化）を反映した
+# rev 0.6 の sha256 を pin する。rev 0.5 文書自体は無改変のまま存続（旧値
+# 095ce77147e897473e8d87b474159c2ff4fdeb6684356cc03649f99a603cb2a9 は
+# 履歴として append-only 保持）。
 design_revision_doc_sha256:
-  value: "095ce77147e897473e8d87b474159c2ff4fdeb6684356cc03649f99a603cb2a9"
+  value: "40f027c247c380af57b767963af758fde0e4fa7a279f5fa68a8b7e55d10956af"
   status: PINNED
-  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.5.md
+  source: voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.6.md
 
 # --- por_adjudication_sha256: PoR メモ（POR_CONCEPT_ADJUDICATION_20260824.txt）
 # の実バイト sha256（PINNED）。design_doc_sha256 と同一規約（ファイル実
@@ -3395,10 +3433,34 @@ measurement_spec_sha:
     実装時（VG-L0 ハーネス）。〔履歴: PIN-1 で一時 PINNED 化 → 第2巡指摘
     （偽 READY 経路 + probe manifest 正典矛盾）で PENDING へ復帰〕
 
+# RUN9-L0-HARNESS-3c（2026-08-27、design_revision 0.6）: User 裁定「RUN9
+# User裁定 — Identity Calibration Degeneracy / design_revision 0.6」
+# 裁定逐語「同protocolのraw SHA256をhypothesis_algebra_shaへPINNEDする」
+# （§7）に従い、本欄の用途を H1-H6 閾値校正欄から rev 0.6 Identity
+# decision protocol の pin 欄へ確定した。新規
+# `inputs/identity_decision_protocol_v0.6.json`（schema `run9-identity-
+# decision-protocol/0.6`）の raw byte sha256 を PINNED 化する——同
+# protocol は C0/C1 exact-replay attestation・positive reference audit・
+# Birth Identity Separation の d12 machine feature 判定・PJS confuser
+# 距離記録・学習後 Identity 保持のマージン方式（m_other/m_pjs）を再事前
+# 登録する（DESIGN_RUN9_REVISION_0.6.md 参照）。
+# 〔履歴: 旧 reason（rev 0.5 まで、H1-H6 閾値校正欄としての用途）——
+# 「H1-H6 の閾値（δtarget / εk）校正が未実施（positive / negative
+# control 未実施）。」本欄は当時 §18.1/§18.2 の LCB_95(Δtarget,i) >
+# δtarget・LCB_95(Δk,i) >= -εk の δtarget/εk 校正結果を PIN する想定
+# だったが、rev 0.6 裁定により Identity decision protocol の pin 欄へ
+# 用途確定し、H1-H6 閾値校正は本欄の対象から外れた（H1-H6 自体の要否は
+# rev 0.6 の対象外——別途の設計判断が必要な場合は別欄・別 design_revision
+# で扱う）。〕
 hypothesis_algebra_sha:
-  value: null
-  status: PENDING
-  reason: H1-H6 の閾値（δtarget / εk）校正が未実施（positive / negative control 未実施）。
+  value: "967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json
+  reason: >-
+    rev 0.6 裁定 §7「同protocolのraw SHA256をhypothesis_algebra_shaへ
+    PINNEDする」に基づき pin。値は inputs/identity_decision_protocol_
+    v0.6.json の実バイト sha256（load_pinned_identity_decision_protocol()
+    が消費時に再照合する——直接 json.load() は契約違反）。
 
 # optional 欄（PR #317 Codex bot レビュー第1巡 Fix 1 採用、
 # run9_schema.CONTRACT_OPTIONAL_PIN_FIELDS）: rev 0.3 改訂F により人間
@@ -3696,8 +3758,34 @@ cost_record_sha:
 #   〔履歴〕として rule 本文内に保持、削除しない）。rule_id/enforcement/
 #   verbatim は無改変。分類数・他 rule は無改変（sha256 確認済み）。
 #   バイトが変わったため repin（10世代目）。
+# - RUN9-L0-HARNESS-3c rev 0.6（2026-08-27、design_revision 0.5 → 0.6、値
+#   297dd46aaa8c520238072f93b9d5e18748dbdd31b4a389a4a8d7e48cd70d8cba へ
+#   repin）: 実装前グラウンディング（User 指示）で Birth Gate 関連 rule に
+#   P95/theta_cal(F) 閾値前提の stale 文言がないか確認した結果、2件を
+#   是正した（rule_id/enforcement/verbatim は無改変、分類数も不変
+#   ——MACHINE 1件 / PROCEDURAL 19件）:
+#   (a) rule 7（Birth Identity separation not established）: checkpoint が
+#   参照していた「identity_metric_space.json の distance/calibration
+#   evidence」が rev 0.6 で inputs/identity_decision_protocol_v0.6.json
+#   birth_identity_separation 節（d12>0 machine feature 判定）へ
+#   supersede されたことを追記。machine_promotion_condition も更新——旧
+#   条件が要求していた「single 閾値による自動判定の設計変更」は rev 0.6
+#   protocol としてすでに供給済みであり、残る昇格条件は実装のみ（実
+#   Birth Probe render からの d12 計算実行系 + consumption-time verifier）
+#   に絞り込んだ。DESIGN_RUN9 §22 step 7 の逐語（`adjudicate` = 人間判定）
+#   自体は byte-pin 済みのため無改変——本 rule の enforcement は
+#   PROCEDURAL のまま据え置く（実装がまだ存在しないため）。
+#   (b) rule 16（Identity drift beyond non-inferiority）: checkpoint 内
+#   「identity_metric_space.json calibration.decision_rule の theta_cal(F)
+#   比較（既存・実装済み・実内容検査）」という記述が、theta_cal(F) の
+#   解析的退化確定（DESIGN_RUN9_REVISION_0.6.md §0）と calibration/
+#   decision_rule の rev 0.6 supersede により stale 化していたため訂正
+#   した——本 rule 自体の結論（非対象軸マージン判定であり PROCEDURAL のま
+#   ま）は変わらない。旧文言はいずれも〔履歴〕として rule 本文内に保持
+#   （削除しない）。他 rule・post_stop_prohibitions・classification_
+#   policy は無改変（sha256 確認済み）。
 failure_abort_criteria_sha:
-  value: "ead64d2fd7896728b1fc7070c90d7a5b2d8bb17740e21c4056a5210a081cf98b"
+  value: "297dd46aaa8c520238072f93b9d5e18748dbdd31b4a389a4a8d7e48cd70d8cba"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 

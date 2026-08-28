@@ -1,0 +1,159 @@
+{
+  "adjudication_basis": {
+    "sha256": "43c7e71cd3bcb7cf3840c67a18e4a4c35a0259b9e04b1335868c33e925420db1",
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260827_IDENTITY_REV06.txt",
+    "summary": "User 裁定 2026-08-27「Identity Calibration Degeneracy / design_revision 0.6」（選択肢A採用）。既存 render replay byte 決定論実測により現行規則の D_C0(F) が全ゼロ、theta_cal(F)=P95(D_C0(F))=0 へ退化することが実行前に解析的に確定したため 行う pre-run design correction。Birth Identity Separation だけ でなく学習後 Identity 保持判定を含む Identity decision protocol 全体を本 protocol として再事前登録する。"
+  },
+  "birth_identity_separation": {
+    "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
+    "established": {
+      "birth_outcome": "ESTABLISHED",
+      "condition": "両 founder の feature が valid/finite かつ d12 > 0",
+      "outcome_detail": "ESTABLISHED_BY_MACHINE_FEATURE"
+    },
+    "formula": "d12 = distance(R9F-01:r0, R9F-02:r0)",
+    "negative_reference_gate_note": "negative reference gateは同じd12を対称参照する。独立証拠として二重計上しない。",
+    "not_established": {
+      "action": "凍結し、学習へ進まない。",
+      "birth_outcome": "NOT_ESTABLISHED",
+      "condition": "d12 = 0",
+      "outcome_detail": "PROJECTED_RUNTIME_IDENTITIES_COLLAPSED_IN_MACHINE_FEATURE_SPACE"
+    },
+    "verbatim": "両featureがvalid/finiteであり、d12 > 0の場合のみ、BIRTH = ESTABLISHED_BY_MACHINE_FEATURE"
+  },
+  "c0_determinism_attestation": {
+    "contract_field_ref": "RUN9_CONTRACT.yaml#interventions.c0_replay_takes_per_founder",
+    "expected": "D_C0(F)=0×20",
+    "on_mismatch": {
+      "feature_computation_mismatch_with_matching_render": "IMPLEMENTATION_FAILURE",
+      "render_byte_mismatch": "DETERMINISM_CONTRACT_BROKEN"
+    },
+    "prohibition": "replay-noise閾値の推定には使用しない。",
+    "requirement": "各 take について reference render との raw WAV SHA256 および identity feature bytes/hash の完全一致。",
+    "role": "C0はruntime決定論の実証として保存する。",
+    "takes_per_founder": 20,
+    "verbatim": "全takeについてreference renderとraw WAV SHA256およびidentity feature bytes/hashの完全一致を要求する。"
+  },
+  "c1_sham_attestation": {
+    "contract_field_ref": "RUN9_CONTRACT.yaml#interventions.c1_sham_takes_per_founder",
+    "expected": "D_C1(F)=0×20",
+    "on_nonzero": "C1_SHAM_EFFECT_DETECTED",
+    "requirement": "C1のWAV bytesおよびidentity featureはC0/referenceと完全一致することを要求する。",
+    "role": "ControlProfile機構通過の副作用ゼロを確認する。",
+    "takes_per_founder": 20,
+    "verbatim": "非ゼロの場合はC1_SHAM_EFFECT_DETECTEDとして停止する。"
+  },
+  "execution_order": {
+    "gate_sequencing": "rev 0.6のBirth GateがPASSした場合のみ、learning recipe freezeおよび学習実行へ進む。",
+    "prerequisites_before_birth_gate": [
+      "DESIGN_RUN9_REVISION_0.6.md",
+      "User裁定文書",
+      "identity_decision_protocol_v0.6.json",
+      "validator/loader",
+      "hypothesis_algebra_sha",
+      "関連probe bridge・failure routingの更新"
+    ],
+    "this_pr_scope": "本 PR は上記6点の事前登録一式の実装までを範囲とし、Birth Gate の実行自体は含まない（実測ゼロ）。",
+    "verbatim": "Birth Gate、learning_recipe_shaの最終build/PIN、LEARN_PERFORMANCEを開始しない。"
+  },
+  "immutability": {
+    "prohibition": "identity_metric_space.jsonを直接編集してmetric_space_shaとGenome IDを動かしてはならない。",
+    "unchanged": [
+      "inputs/identity_metric_space.json",
+      "domains/identity_domain_run9_v1.json",
+      "発行済み Founder Genome",
+      "coords",
+      "genome_id",
+      "speaker map",
+      "TRI_CROSSOVER/1.0"
+    ],
+    "verbatim": "既存identity_metric_space.json、domains/identity_domain_run9_v1.json、発行済みFounder Genome、coords、genome_id、speaker map、TRI_CROSSOVER/1.0は変更しない。"
+  },
+  "invariants": {
+    "birth_gate_failure_action": "NOT_ESTABLISHEDとして凍結する。",
+    "escape_hatch": "方式Bが必要な場合は別design_revisionまたは別Runとする。",
+    "same_attempt_prohibitions": [
+      "Founder座標変更",
+      "speaker-map重み変更",
+      "Identity metric feature変更",
+      "任意epsilon追加",
+      "方式Bへの自動昇格"
+    ],
+    "verbatim": "同attempt内で、Founder座標変更、speaker-map重み変更、Identity metric feature変更、任意epsilon追加、方式Bへの自動昇格を行わない。"
+  },
+  "metric_reference": {
+    "metric_space_sha": "de3a459bdea761850d465caa60a91a16d7a9a39b65652dd409f6e45a20ee1bb4",
+    "note": "identity_metric_space.json は本改訂で無改変（1 byte も変更 しない）。feature_extractor/extraction_procedure/identity_feature/distance/confuser_control の各節は参照により有効の まま維持する——本 protocol はこれらを再定義しない。metric_space_sha は domains/identity_domain_run9_v1.json が保持する 既 PINNED 値と一致することを load_pinned_identity_decision_protocol() が消費時に cross-check する。",
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_metric_space.json"
+  },
+  "pjs_confuser": {
+    "metric": "distance(founder r0, pjs_reference)",
+    "on_positive": {
+      "policy": "距離・marginを記録するが、事後的な最小距離閾値を新設しない。"
+    },
+    "on_zero": {
+      "birth_outcome": "NOT_ESTABLISHED",
+      "condition": "distance = 0",
+      "reason": "PJS confuserとのfeature collapse"
+    },
+    "pjs_reference_ref": "inputs/identity_metric_space.json#confuser_control.pjs_reference_definition",
+    "verbatim": "distance=0の場合はPJS confuserとのfeature collapseとしてBIRTH NOT_ESTABLISHEDとする。"
+  },
+  "positive_reference_audit": {
+    "requirement": "referenceとのWAV byte一致およびdistance=0を要求する。",
+    "role": "独立した閾値校正標本としては扱わない。",
+    "verbatim": "positive referenceは追加のexact replay監査として維持する。"
+  },
+  "post_learning_identity_retention": {
+    "additional_record": "d_pjs(r_learned)-d_pjs(r0)もPJS方向への接近evidenceとして別記録する。",
+    "formulas": {
+      "d_other": "distance(r, other Founder r0)",
+      "d_pjs": "distance(r, PJS reference)",
+      "d_self": "distance(r, own r0)",
+      "m_other": "d_other - d_self",
+      "m_pjs": "d_pjs - d_self"
+    },
+    "shifted": {
+      "boundary_note": "同率をSTABLEへ丸めない。",
+      "condition": "m_other <= 0 または m_pjs <= 0",
+      "identity_outcome": "SHIFTED"
+    },
+    "stable": {
+      "condition": "m_other > 0 かつ m_pjs > 0",
+      "identity_outcome": "STABLE_BY_MACHINE_METRIC",
+      "outcome_detail": "RELATIVE_SELF_NEAREST"
+    },
+    "verbatim": "m_other > 0 かつ m_pjs > 0 の場合のみSTABLE_BY_MACHINE_METRIC / RELATIVE_SELF_NEAREST"
+  },
+  "pre_run_correction_basis": {
+    "degeneracy_basis_references": [
+      "DESIGN_RUN9_REVISION_0.6.md#0",
+      "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3A_SPEAKER_MAP_RECORD.md"
+    ],
+    "verbatim": "本裁定はC0/C1/Identity距離・学習結果・holdoutを観測した後の救済ではない。既存のrender replay byte決定論実測により、現行規則のD_C0(F)が全ゼロ、theta_cal(F)=P95(D_C0(F))=0へ退化することが実行前に解析的に確定したため行うpre-run design correctionである。"
+  },
+  "provenance": {
+    "authored_by": "Claude 完結ルート（Fable 設計 → Sonnet 実装、design_revision 0.6 第2 PR フェーズ1）。本 protocol は education_lesson_builder.py/speaker_map_builder.py のような python builder script を経由しない hand-authored 文書であり、builder_provenance 節は持たない——値はすべて adjudication_basis の 裁定文書からの転記、または既 PINNED 正本（identity_metric_space.json/RUN9_CONTRACT.yaml/probe_manifest.json）からの 参照のみで構成する。",
+    "design_revision_doc": {
+      "sha256": "40f027c247c380af57b767963af758fde0e4fa7a279f5fa68a8b7e55d10956af",
+      "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.6.md"
+    },
+    "note": "本 protocol は design_revision 0.6 の事前登録一式（裁定 §8）の一部として発行され、Birth Gate・LEARN_PERFORMANCE の実測を 一切含まない——本 protocol の raw byte sha256 が hypothesis_algebra_sha へ PINNED 化されるのみで、C0/C1/positive reference/d12/PJS confuser/post-learning retention のいずれ も本 PR 時点では未実測（実測ゼロ）。"
+  },
+  "schema": "run9-identity-decision-protocol/0.6",
+  "supersede_declaration": {
+    "preserved_sections": [
+      "inputs/identity_metric_space.json#feature_extractor",
+      "inputs/identity_metric_space.json#extraction_procedure",
+      "inputs/identity_metric_space.json#identity_feature",
+      "inputs/identity_metric_space.json#distance",
+      "inputs/identity_metric_space.json#confuser_control"
+    ],
+    "superseded_sections": [
+      "inputs/identity_metric_space.json#calibration.freeze_threshold",
+      "inputs/identity_metric_space.json#calibration.validity_gates",
+      "inputs/identity_metric_space.json#calibration.decision_rule"
+    ],
+    "verbatim": "新規identity_decision_protocol_v0.6.jsonを発行し、既存metricのfeature/distance定義を参照した上で、旧calibration/decision ruleをrev 0.6実行についてsupersedeする。"
+  }
+}

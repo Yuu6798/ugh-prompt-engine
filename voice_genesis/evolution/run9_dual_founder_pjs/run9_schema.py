@@ -56,14 +56,23 @@ RUN9_NORMALIZATION = "largest-component-residual"
 RUN_ID = "RUN9"
 EXPERIMENT_ID = "VG-R9-DUAL-FOUNDER-PJS"
 
-# 現行 design_revision（凍結値。User 裁定 2026-08-26 =
-# DESIGN_RUN9_REVISION_0.5.md — 「RUN9 User裁定 — AF0 runtime mapping」
-# `USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt` の採用。裁定逐語
-# 「design_revisionを0.5へ上げ」）。旧 revision "0.1"/"0.2"/"0.3"/"0.4" を
-# 宣言する contract は意図どおり拒否される — 修正が必要なら design_
-# revision を上げ、旧 attempt を append-only 履歴として残す規約
-# （DESIGN_RUN9 ヘッダ注記）。
-DESIGN_REVISION = "0.5"
+# 現行 design_revision（凍結値。User 裁定 2026-08-27 =
+# DESIGN_RUN9_REVISION_0.6.md — 「RUN9 User裁定 — Identity Calibration
+# Degeneracy / design_revision 0.6」
+# `USER_ADJUDICATION_20260827_IDENTITY_REV06.txt` の採用。裁定逐語
+# 「選択肢Aを採用する。ただし...Identity decision protocol全体を
+# design_revision 0.6として再事前登録する」）。既存 render replay byte
+# 決定論実測により現行 identity_metric_space.json calibration 規則の
+# theta_cal(F)=P95(D_C0(F)) が C0 母集団全ゼロの下で 0 へ解析的に退化する
+# ことが Birth Probe 実行前に確定したための pre-run design correction —
+# Birth Identity Separation の d12 machine feature 判定・学習後 Identity
+# 保持のマージン方式（m_other/m_pjs）を新規 identity_decision_protocol_
+# v0.6.json として再事前登録し、旧 calibration/decision_rule を rev 0.6
+# 実行について supersede する（identity_metric_space.json 自体は無改変）。
+# 旧 revision "0.1"〜"0.5" を宣言する contract は意図どおり拒否される —
+# 修正が必要なら design_revision を上げ、旧 attempt を append-only 履歴
+# として残す規約（DESIGN_RUN9 ヘッダ注記）。
+DESIGN_REVISION = "0.6"
 
 # rev 0.3（改訂A、PoR §1/§3/§4/§16）: 単一 LEARN_PERFORMANCE エッジを
 # CONTROL 無介入枝 + 二つの介入エッジ（PRACTICE_FROM_AUDIO / 稽古,
@@ -160,6 +169,41 @@ FOUNDER_RESPONSE_OUTCOMES: Tuple[str, str, str] = (
 IDENTITY_OUTCOMES: Tuple[str, str, str] = (
     "STABLE_BY_MACHINE_METRIC", "SHIFTED", "UNCALIBRATED",
 )
+
+# ---------------------------------------------------------------------------
+# rev 0.6（design_revision 0.6、User 裁定「RUN9 User裁定 — Identity
+# Calibration Degeneracy / design_revision 0.6」、repo 内収載
+# USER_ADJUDICATION_20260827_IDENTITY_REV06.txt）: Identity decision
+# protocol（`inputs/identity_decision_protocol_v0.6.json`）が導入する
+# outcome_detail 語彙。上記 BIRTH_OUTCOMES/SEPARATION_OUTCOMES/
+# IDENTITY_OUTCOMES は**無改変**のまま維持する——裁定の新ラベルは、これら
+# 既存語彙に「併記」する detail 層としてのみ新設する（design spec
+# 「語彙の扱い」節: 既存 validator/harness の enum 契約を変更しない
+# 二層構造）。各定数がどの既存 outcome を精緻化するかはコメントで対応
+# づける。
+# ---------------------------------------------------------------------------
+
+# c0_determinism_attestation（裁定 §1）: render byte 不一致は
+# DETERMINISM_CONTRACT_BROKEN、render 一致だが feature 計算不一致は
+# IMPLEMENTATION_FAILURE（既存 FAILURE_CLASSES の値を再利用）——決定論的
+# に排他な割当てであり両立しない。
+IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME = "DETERMINISM_CONTRACT_BROKEN"
+IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME = "IMPLEMENTATION_FAILURE"  # == FAILURE_CLASSES[0]
+
+# c1_sham_attestation（裁定 §2）の非ゼロ停止語彙。
+IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME = "C1_SHAM_EFFECT_DETECTED"
+
+# birth_identity_separation（裁定 §4）の outcome_detail 二層構造:
+# BIRTH_OUTCOMES[0]="ESTABLISHED" を精緻化する成立側ラベルと、
+# BIRTH_OUTCOMES[1]="NOT_ESTABLISHED" に付随する凍結理由ラベルのペア。
+IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL = "ESTABLISHED_BY_MACHINE_FEATURE"
+IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL = (
+    "PROJECTED_RUNTIME_IDENTITIES_COLLAPSED_IN_MACHINE_FEATURE_SPACE"
+)
+
+# post_learning_identity_retention（裁定 §6）の outcome_detail。
+# IDENTITY_OUTCOMES[0]="STABLE_BY_MACHINE_METRIC" に併記する。
+IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL = "RELATIVE_SELF_NEAREST"
 
 # rev 0.3（User 外部レビュー PR #317 P2-4 採用、PoR §12）: held-out gain は
 # 「実装可能なら」ではなく RUN9 の最低限の評価漏洩防止として必須。
@@ -16286,6 +16330,16 @@ SPEAKER_MAP_MANIFEST_REQUIRED_KEYS: FrozenSet[str] = frozenset({
 # 同一 PR 内で行う規約とする（PR #328 Codex レビュー第1巡指摘3対応、
 # stale だった「本 PR のスコープ外」記述——参照先の「スコープ注記」節は
 # 既に削除済み——を現行規則へ差し替え）。
+# 例外（rev 0.6 で確定・四点同期規約の適用条件の明確化）: 本欄は
+# 「speaker map 合成方式が adjudicate された時点の design_revision」の
+# 凍結であり、speaker map manifest 自身の `design_revision` 欄との厳密
+# 一致検査に使う。speaker map を無改変のまま契約レベル design_revision
+# のみが昇格する改訂（rev 0.6 = Identity decision protocol の再事前登録。
+# 裁定 §7 が speaker map を不変対象に列挙し、manifest のバイト変更自体が
+# 裁定違反となる）では本欄を据え置く——機械追随させると「speaker map が
+# 新 revision で再 adjudicate された」という事実に反する主張になり、かつ
+# 不変対象の manifest 側と乖離して検査が壊れる。四点同期規約は speaker
+# map 方式自体を再 adjudicate する改訂にのみ適用する。
 _SPEAKER_MAP_ADJUDICATED_DESIGN_REVISION = "0.5"
 
 _SPEAKER_MAP_ADJUDICATION_BASIS_REQUIRED_KEYS: FrozenSet[str] = frozenset({
@@ -19819,4 +19873,658 @@ def load_pinned_learning_data_binding_manifest(
                 f"({manifest_value!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml "
                 f"{pin_name} PINNED value ({contract_value!r}) — fail-closed rejection (裁定 §5)"
             )
+    return data
+
+
+# =============================================================================
+# RUN9-L0-HARNESS-3c rev 0.6（design_revision 0.6、2026-08-27）:
+# identity_decision_protocol_v0.6.json（`run9-identity-decision-protocol/0.6`）
+# の validate_*()/load_pinned_*()。User 裁定「RUN9 User裁定 — Identity
+# Calibration Degeneracy / design_revision 0.6」（repo 内収載
+# USER_ADJUDICATION_20260827_IDENTITY_REV06.txt）§1-§9 の機械表現。
+#
+# 本 manifest は python builder script を経由しない hand-authored 文書
+# のため、`_h3c_cross_check_adjudication_and_detail_record()`（5manifest
+# 共通の `provenance.detail_record` 前提）は再利用しない——`provenance`
+# の形は本節専用（`design_revision_doc` のみ、`detail_record` は持たない
+# ——HARNESS3C_REV06_RECORD.md は実装完了後に書かれる記録であり、protocol
+# 側から前方参照すると執筆順序が循環する）。3層防御（ディスク正典再読込
+# アンカー・in-process contract 改変検出・read-once 実バイト sha256 照合）
+# のみ `_h3c_load_pinned_common()` を再利用する。
+# =============================================================================
+
+SCHEMA_IDENTITY_DECISION_PROTOCOL = "run9-identity-decision-protocol/0.6"
+
+IDENTITY_DECISION_PROTOCOL_PATH = (
+    _THIS_DIR / "inputs" / "identity_decision_protocol_v0.6.json"
+)
+
+# repo ルート（`run9_dual_founder_pjs` -> `evolution` -> `voice_genesis` ->
+# repo root の3階層上）。他の H3 系 manifest と同一規約
+# （`_REEXPORT_REPO_ROOT`/`_EDUCATION_LESSON_REPO_ROOT` 等と同型）。
+_IDENTITY_DECISION_PROTOCOL_REPO_ROOT = _THIS_DIR.parent.parent.parent
+
+_IDENTITY_DECISION_PROTOCOL_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
+    "schema", "adjudication_basis", "provenance", "metric_reference",
+    "supersede_declaration", "pre_run_correction_basis",
+    "c0_determinism_attestation", "c1_sham_attestation",
+    "positive_reference_audit", "birth_identity_separation", "pjs_confuser",
+    "post_learning_identity_retention", "immutability", "execution_order",
+    "invariants",
+})
+
+# 裁定 §1/§2 の contract_field_ref 凍結値（interventions 配下、
+# `INTERVENTION_TAKE_COUNT_FIELDS` の各要素とフィールド名で対応する）。
+_IDENTITY_PROTOCOL_C0_CONTRACT_FIELD_REF = (
+    "RUN9_CONTRACT.yaml#interventions.c0_replay_takes_per_founder"
+)
+_IDENTITY_PROTOCOL_C1_CONTRACT_FIELD_REF = (
+    "RUN9_CONTRACT.yaml#interventions.c1_sham_takes_per_founder"
+)
+
+# 裁定 §5 の pjs_reference 参照先（`identity_metric_space.json` の既存
+# confuser_control.pjs_reference_definition を無改変のまま参照する）。
+_IDENTITY_PROTOCOL_PJS_REFERENCE_REF = (
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "confuser_control.pjs_reference_definition"
+)
+
+# supersede_declaration（裁定 §7）: identity_metric_space.json の
+# feature/distance 定義（無改変・参照により有効）と、rev 0.6 実行につき
+# supersede する calibration 節の閉じた集合。
+_IDENTITY_PROTOCOL_PRESERVED_METRIC_SECTIONS: FrozenSet[str] = frozenset({
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "feature_extractor",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "extraction_procedure",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "identity_feature",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "distance",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "confuser_control",
+})
+_IDENTITY_PROTOCOL_SUPERSEDED_METRIC_SECTIONS: FrozenSet[str] = frozenset({
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.freeze_threshold",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.validity_gates",
+    _IDENTITY_METRIC_SPACE_REF_PREFIX + "calibration.decision_rule",
+})
+
+# immutability（裁定 §7 逐語列挙、順序込み・7項目ちょうど）。
+_IDENTITY_PROTOCOL_UNCHANGED_ITEMS: Tuple[str, ...] = (
+    "inputs/identity_metric_space.json",
+    "domains/identity_domain_run9_v1.json",
+    "発行済み Founder Genome",
+    "coords",
+    "genome_id",
+    "speaker map",
+    "TRI_CROSSOVER/1.0",
+)
+
+# execution_order（裁定 §8 逐語列挙、順序込み・6項目ちょうど）。
+_IDENTITY_PROTOCOL_PREREQUISITES: Tuple[str, ...] = (
+    "DESIGN_RUN9_REVISION_0.6.md",
+    "User裁定文書",
+    "identity_decision_protocol_v0.6.json",
+    "validator/loader",
+    "hypothesis_algebra_sha",
+    "関連probe bridge・failure routingの更新",
+)
+
+# invariants.same_attempt_prohibitions（裁定 §9 逐語列挙、順序込み・5項目
+# ちょうど）。
+_IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS: Tuple[str, ...] = (
+    "Founder座標変更",
+    "speaker-map重み変更",
+    "Identity metric feature変更",
+    "任意epsilon追加",
+    "方式Bへの自動昇格",
+)
+
+
+def _validate_identity_protocol_shape(
+    value: Any, *, field: str, required_keys: FrozenSet[str],
+) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
+    unknown = set(value.keys()) - required_keys
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = required_keys - set(value.keys())
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    return value
+
+
+def _validate_identity_protocol_sha256(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
+        raise Run9ValidationError(f"{field} must be a 64hex sha256, got {value!r}")
+    return value
+
+
+def _validate_identity_protocol_metric_ref_list(
+    value: Any, *, field: str, expected: FrozenSet[str],
+) -> None:
+    """`supersede_declaration.{preserved,superseded}_sections` の閉じた
+    集合検証（構造検証のみ — 各参照が `identity_metric_space.json` に
+    実在するかの走査は `load_pinned_identity_decision_protocol()` の
+    cross-check (g) が担う。validator = 内部整合のみ・loader =
+    cross-document 照合、という本 repo 全体の役割分担を踏襲する）。"""
+    if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+        raise Run9ValidationError(f"{field} must be a list of strings, got {value!r}")
+    if set(value) != expected:
+        raise Run9ValidationError(
+            f"{field} must equal the frozen set {sorted(expected)} exactly (順不同・要素の過不足を"
+            f"拒否), got {value!r}"
+        )
+
+
+def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
+    """`inputs/identity_decision_protocol_v0.6.json`
+    （`run9-identity-decision-protocol/0.6`）の構造を検証する。User 裁定
+    「RUN9 User裁定 — Identity Calibration Degeneracy / design_revision
+    0.6」§1-§9 の機械表現——`identity_metric_space.json` は無改変のまま
+    feature/distance 定義を参照し、`calibration` 節（freeze_threshold/
+    validity_gates/decision_rule）のみを rev 0.6 実行について supersede
+    する。
+
+    本関数は manifest 単体の構造・自己整合のみを検証する（一次データ
+    未 load のため cross-document 照合は行わない — `validate_speaker_map_
+    manifest()` と同じ役割分担）。cross-document 照合（裁定 txt 実バイト・
+    metric_space_sha・P0 cell_ref・c0/c1 takes 数・rev doc sha・supersede
+    節名の実在）は `load_pinned_identity_decision_protocol()` の職務。
+    """
+    if not isinstance(data, dict):
+        raise Run9ValidationError(
+            f"identity decision protocol must be an object, got {type(data).__name__}"
+        )
+    unknown = set(data.keys()) - _IDENTITY_DECISION_PROTOCOL_TOP_LEVEL_KEYS
+    if unknown:
+        raise Run9ValidationError(f"identity decision protocol has unknown key(s): {sorted(unknown)}")
+    missing = _IDENTITY_DECISION_PROTOCOL_TOP_LEVEL_KEYS - set(data.keys())
+    if missing:
+        raise Run9ValidationError(
+            f"identity decision protocol missing required key(s): {sorted(missing)}"
+        )
+
+    schema = data["schema"]
+    if schema != SCHEMA_IDENTITY_DECISION_PROTOCOL:
+        raise Run9ValidationError(
+            f"identity decision protocol.schema must be exactly "
+            f"{SCHEMA_IDENTITY_DECISION_PROTOCOL!r}, got {schema!r}"
+        )
+
+    # --- adjudication_basis --------------------------------------------
+    basis = _validate_identity_protocol_shape(
+        data["adjudication_basis"], field="adjudication_basis",
+        required_keys=frozenset({"source_file", "sha256", "summary"}),
+    )
+    _require_non_empty_str(basis["source_file"], field="adjudication_basis.source_file")
+    _validate_identity_protocol_sha256(basis["sha256"], field="adjudication_basis.sha256")
+    _require_non_empty_str(basis["summary"], field="adjudication_basis.summary")
+
+    # --- provenance ------------------------------------------------------
+    provenance = _validate_identity_protocol_shape(
+        data["provenance"], field="provenance",
+        required_keys=frozenset({"design_revision_doc", "authored_by", "note"}),
+    )
+    rev_doc = _validate_identity_protocol_shape(
+        provenance["design_revision_doc"], field="provenance.design_revision_doc",
+        required_keys=frozenset({"source_file", "sha256"}),
+    )
+    _require_non_empty_str(rev_doc["source_file"], field="provenance.design_revision_doc.source_file")
+    _validate_identity_protocol_sha256(
+        rev_doc["sha256"], field="provenance.design_revision_doc.sha256"
+    )
+    _require_non_empty_str(provenance["authored_by"], field="provenance.authored_by")
+    _require_non_empty_str(provenance["note"], field="provenance.note")
+
+    # --- metric_reference --------------------------------------------------
+    metric_ref = _validate_identity_protocol_shape(
+        data["metric_reference"], field="metric_reference",
+        required_keys=frozenset({"source_file", "metric_space_sha", "note"}),
+    )
+    _require_non_empty_str(metric_ref["source_file"], field="metric_reference.source_file")
+    _validate_identity_protocol_sha256(
+        metric_ref["metric_space_sha"], field="metric_reference.metric_space_sha"
+    )
+    _require_non_empty_str(metric_ref["note"], field="metric_reference.note")
+
+    # --- supersede_declaration --------------------------------------------
+    supersede = _validate_identity_protocol_shape(
+        data["supersede_declaration"], field="supersede_declaration",
+        required_keys=frozenset({"verbatim", "preserved_sections", "superseded_sections"}),
+    )
+    _require_non_empty_str(supersede["verbatim"], field="supersede_declaration.verbatim")
+    _validate_identity_protocol_metric_ref_list(
+        supersede["preserved_sections"], field="supersede_declaration.preserved_sections",
+        expected=_IDENTITY_PROTOCOL_PRESERVED_METRIC_SECTIONS,
+    )
+    _validate_identity_protocol_metric_ref_list(
+        supersede["superseded_sections"], field="supersede_declaration.superseded_sections",
+        expected=_IDENTITY_PROTOCOL_SUPERSEDED_METRIC_SECTIONS,
+    )
+
+    # --- pre_run_correction_basis ------------------------------------------
+    correction = _validate_identity_protocol_shape(
+        data["pre_run_correction_basis"], field="pre_run_correction_basis",
+        required_keys=frozenset({"verbatim", "degeneracy_basis_references"}),
+    )
+    _require_non_empty_str(correction["verbatim"], field="pre_run_correction_basis.verbatim")
+    refs = correction["degeneracy_basis_references"]
+    if not isinstance(refs, list) or not refs or any(
+        not isinstance(r, str) or not r.strip() for r in refs
+    ):
+        raise Run9ValidationError(
+            "pre_run_correction_basis.degeneracy_basis_references must be a non-empty list of "
+            f"non-empty strings, got {refs!r}"
+        )
+
+    # --- c0_determinism_attestation（裁定 §1）-------------------------------
+    c0 = _validate_identity_protocol_shape(
+        data["c0_determinism_attestation"], field="c0_determinism_attestation",
+        required_keys=frozenset({
+            "verbatim", "takes_per_founder", "contract_field_ref", "requirement",
+            "expected", "prohibition", "role", "on_mismatch",
+        }),
+    )
+    _require_non_empty_str(c0["verbatim"], field="c0_determinism_attestation.verbatim")
+    _require_positive_int(
+        c0["takes_per_founder"], field="c0_determinism_attestation.takes_per_founder"
+    )
+    if c0["contract_field_ref"] != _IDENTITY_PROTOCOL_C0_CONTRACT_FIELD_REF:
+        raise Run9ValidationError(
+            "c0_determinism_attestation.contract_field_ref must be exactly "
+            f"{_IDENTITY_PROTOCOL_C0_CONTRACT_FIELD_REF!r}, got {c0['contract_field_ref']!r}"
+        )
+    for f in ("requirement", "expected", "prohibition", "role"):
+        _require_non_empty_str(c0[f], field=f"c0_determinism_attestation.{f}")
+    on_mismatch = _validate_identity_protocol_shape(
+        c0["on_mismatch"], field="c0_determinism_attestation.on_mismatch",
+        required_keys=frozenset({
+            "render_byte_mismatch", "feature_computation_mismatch_with_matching_render",
+        }),
+    )
+    if on_mismatch["render_byte_mismatch"] != IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME:
+        raise Run9ValidationError(
+            "c0_determinism_attestation.on_mismatch.render_byte_mismatch must be exactly "
+            f"{IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME!r}, got "
+            f"{on_mismatch['render_byte_mismatch']!r}"
+        )
+    if (
+        on_mismatch["feature_computation_mismatch_with_matching_render"]
+        != IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME
+    ):
+        raise Run9ValidationError(
+            "c0_determinism_attestation.on_mismatch.feature_computation_mismatch_with_matching_"
+            f"render must be exactly {IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME!r}, got "
+            f"{on_mismatch['feature_computation_mismatch_with_matching_render']!r}"
+        )
+
+    # --- c1_sham_attestation（裁定 §2）-------------------------------------
+    c1 = _validate_identity_protocol_shape(
+        data["c1_sham_attestation"], field="c1_sham_attestation",
+        required_keys=frozenset({
+            "verbatim", "takes_per_founder", "contract_field_ref", "requirement",
+            "expected", "role", "on_nonzero",
+        }),
+    )
+    _require_non_empty_str(c1["verbatim"], field="c1_sham_attestation.verbatim")
+    _require_positive_int(c1["takes_per_founder"], field="c1_sham_attestation.takes_per_founder")
+    if c1["contract_field_ref"] != _IDENTITY_PROTOCOL_C1_CONTRACT_FIELD_REF:
+        raise Run9ValidationError(
+            "c1_sham_attestation.contract_field_ref must be exactly "
+            f"{_IDENTITY_PROTOCOL_C1_CONTRACT_FIELD_REF!r}, got {c1['contract_field_ref']!r}"
+        )
+    for f in ("requirement", "expected", "role"):
+        _require_non_empty_str(c1[f], field=f"c1_sham_attestation.{f}")
+    if c1["on_nonzero"] != IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME:
+        raise Run9ValidationError(
+            f"c1_sham_attestation.on_nonzero must be exactly {IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME!r}"
+            f", got {c1['on_nonzero']!r}"
+        )
+
+    # --- positive_reference_audit（裁定 §3）---------------------------------
+    positive = _validate_identity_protocol_shape(
+        data["positive_reference_audit"], field="positive_reference_audit",
+        required_keys=frozenset({"verbatim", "requirement", "role"}),
+    )
+    for f in ("verbatim", "requirement", "role"):
+        _require_non_empty_str(positive[f], field=f"positive_reference_audit.{f}")
+
+    # --- birth_identity_separation（裁定 §4）--------------------------------
+    birth = _validate_identity_protocol_shape(
+        data["birth_identity_separation"], field="birth_identity_separation",
+        required_keys=frozenset({
+            "verbatim", "cell_ref", "formula", "established", "not_established",
+            "negative_reference_gate_note",
+        }),
+    )
+    _require_non_empty_str(birth["verbatim"], field="birth_identity_separation.verbatim")
+    expected_cell_ref = next(iter(_PROBE_EXPECTED_CELL_IDS["P0"]))
+    if birth["cell_ref"] != expected_cell_ref:
+        raise Run9ValidationError(
+            f"birth_identity_separation.cell_ref must be exactly {expected_cell_ref!r} (P0 Neutral "
+            f"Identity Probe, frozen), got {birth['cell_ref']!r}"
+        )
+    _require_non_empty_str(birth["formula"], field="birth_identity_separation.formula")
+    established = _validate_identity_protocol_shape(
+        birth["established"], field="birth_identity_separation.established",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail"}),
+    )
+    _require_non_empty_str(established["condition"], field="birth_identity_separation.established.condition")
+    if established["birth_outcome"] != "ESTABLISHED" or "ESTABLISHED" not in BIRTH_OUTCOMES:
+        raise Run9ValidationError(
+            "birth_identity_separation.established.birth_outcome must be exactly 'ESTABLISHED' "
+            f"(BIRTH_OUTCOMES 既存語彙), got {established['birth_outcome']!r}"
+        )
+    if established["outcome_detail"] != IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL:
+        raise Run9ValidationError(
+            "birth_identity_separation.established.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL!r}, got {established['outcome_detail']!r}"
+        )
+    not_established = _validate_identity_protocol_shape(
+        birth["not_established"], field="birth_identity_separation.not_established",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail", "action"}),
+    )
+    _require_non_empty_str(
+        not_established["condition"], field="birth_identity_separation.not_established.condition"
+    )
+    if not_established["birth_outcome"] != "NOT_ESTABLISHED" or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES:
+        raise Run9ValidationError(
+            "birth_identity_separation.not_established.birth_outcome must be exactly "
+            f"'NOT_ESTABLISHED' (BIRTH_OUTCOMES 既存語彙), got {not_established['birth_outcome']!r}"
+        )
+    if not_established["outcome_detail"] != IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL:
+        raise Run9ValidationError(
+            "birth_identity_separation.not_established.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL!r}, got {not_established['outcome_detail']!r}"
+        )
+    _require_non_empty_str(
+        not_established["action"], field="birth_identity_separation.not_established.action"
+    )
+    _require_non_empty_str(
+        birth["negative_reference_gate_note"],
+        field="birth_identity_separation.negative_reference_gate_note",
+    )
+
+    # --- pjs_confuser（裁定 §5）--------------------------------------------
+    pjs = _validate_identity_protocol_shape(
+        data["pjs_confuser"], field="pjs_confuser",
+        required_keys=frozenset({
+            "verbatim", "metric", "pjs_reference_ref", "on_zero", "on_positive",
+        }),
+    )
+    _require_non_empty_str(pjs["verbatim"], field="pjs_confuser.verbatim")
+    _require_non_empty_str(pjs["metric"], field="pjs_confuser.metric")
+    if pjs["pjs_reference_ref"] != _IDENTITY_PROTOCOL_PJS_REFERENCE_REF:
+        raise Run9ValidationError(
+            f"pjs_confuser.pjs_reference_ref must be exactly {_IDENTITY_PROTOCOL_PJS_REFERENCE_REF!r}"
+            f", got {pjs['pjs_reference_ref']!r}"
+        )
+    on_zero = _validate_identity_protocol_shape(
+        pjs["on_zero"], field="pjs_confuser.on_zero",
+        required_keys=frozenset({"condition", "birth_outcome", "reason"}),
+    )
+    _require_non_empty_str(on_zero["condition"], field="pjs_confuser.on_zero.condition")
+    if on_zero["birth_outcome"] != "NOT_ESTABLISHED" or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES:
+        raise Run9ValidationError(
+            "pjs_confuser.on_zero.birth_outcome must be exactly 'NOT_ESTABLISHED' (BIRTH_OUTCOMES "
+            f"既存語彙), got {on_zero['birth_outcome']!r}"
+        )
+    _require_non_empty_str(on_zero["reason"], field="pjs_confuser.on_zero.reason")
+    on_positive = _validate_identity_protocol_shape(
+        pjs["on_positive"], field="pjs_confuser.on_positive", required_keys=frozenset({"policy"}),
+    )
+    _require_non_empty_str(on_positive["policy"], field="pjs_confuser.on_positive.policy")
+
+    # --- post_learning_identity_retention（裁定 §6）-------------------------
+    retention = _validate_identity_protocol_shape(
+        data["post_learning_identity_retention"], field="post_learning_identity_retention",
+        required_keys=frozenset({
+            "verbatim", "formulas", "stable", "shifted", "additional_record",
+        }),
+    )
+    _require_non_empty_str(retention["verbatim"], field="post_learning_identity_retention.verbatim")
+    formulas = _validate_identity_protocol_shape(
+        retention["formulas"], field="post_learning_identity_retention.formulas",
+        required_keys=frozenset({"d_self", "d_other", "d_pjs", "m_other", "m_pjs"}),
+    )
+    for f in ("d_self", "d_other", "d_pjs", "m_other", "m_pjs"):
+        _require_non_empty_str(formulas[f], field=f"post_learning_identity_retention.formulas.{f}")
+    stable = _validate_identity_protocol_shape(
+        retention["stable"], field="post_learning_identity_retention.stable",
+        required_keys=frozenset({"condition", "identity_outcome", "outcome_detail"}),
+    )
+    _require_non_empty_str(stable["condition"], field="post_learning_identity_retention.stable.condition")
+    if (
+        stable["identity_outcome"] != "STABLE_BY_MACHINE_METRIC"
+        or "STABLE_BY_MACHINE_METRIC" not in IDENTITY_OUTCOMES
+    ):
+        raise Run9ValidationError(
+            "post_learning_identity_retention.stable.identity_outcome must be exactly "
+            f"'STABLE_BY_MACHINE_METRIC' (IDENTITY_OUTCOMES 既存語彙), got "
+            f"{stable['identity_outcome']!r}"
+        )
+    if stable["outcome_detail"] != IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL:
+        raise Run9ValidationError(
+            "post_learning_identity_retention.stable.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL!r}, got {stable['outcome_detail']!r}"
+        )
+    shifted = _validate_identity_protocol_shape(
+        retention["shifted"], field="post_learning_identity_retention.shifted",
+        required_keys=frozenset({"condition", "identity_outcome", "boundary_note"}),
+    )
+    _require_non_empty_str(
+        shifted["condition"], field="post_learning_identity_retention.shifted.condition"
+    )
+    if shifted["identity_outcome"] != "SHIFTED" or "SHIFTED" not in IDENTITY_OUTCOMES:
+        raise Run9ValidationError(
+            "post_learning_identity_retention.shifted.identity_outcome must be exactly 'SHIFTED' "
+            f"(IDENTITY_OUTCOMES 既存語彙), got {shifted['identity_outcome']!r}"
+        )
+    _require_non_empty_str(
+        shifted["boundary_note"], field="post_learning_identity_retention.shifted.boundary_note"
+    )
+    _require_non_empty_str(
+        retention["additional_record"], field="post_learning_identity_retention.additional_record"
+    )
+
+    # --- immutability（裁定 §7）---------------------------------------------
+    immutability = _validate_identity_protocol_shape(
+        data["immutability"], field="immutability",
+        required_keys=frozenset({"verbatim", "unchanged", "prohibition"}),
+    )
+    _require_non_empty_str(immutability["verbatim"], field="immutability.verbatim")
+    if tuple(immutability["unchanged"]) != _IDENTITY_PROTOCOL_UNCHANGED_ITEMS:
+        raise Run9ValidationError(
+            f"immutability.unchanged must equal {_IDENTITY_PROTOCOL_UNCHANGED_ITEMS!r} exactly "
+            f"(順序込み・裁定§7逐語列挙), got {immutability['unchanged']!r}"
+        )
+    _require_non_empty_str(immutability["prohibition"], field="immutability.prohibition")
+
+    # --- execution_order（裁定 §8）------------------------------------------
+    execution_order = _validate_identity_protocol_shape(
+        data["execution_order"], field="execution_order",
+        required_keys=frozenset({
+            "verbatim", "prerequisites_before_birth_gate", "gate_sequencing", "this_pr_scope",
+        }),
+    )
+    _require_non_empty_str(execution_order["verbatim"], field="execution_order.verbatim")
+    if tuple(execution_order["prerequisites_before_birth_gate"]) != _IDENTITY_PROTOCOL_PREREQUISITES:
+        raise Run9ValidationError(
+            f"execution_order.prerequisites_before_birth_gate must equal "
+            f"{_IDENTITY_PROTOCOL_PREREQUISITES!r} exactly (順序込み・裁定§8逐語列挙), got "
+            f"{execution_order['prerequisites_before_birth_gate']!r}"
+        )
+    _require_non_empty_str(execution_order["gate_sequencing"], field="execution_order.gate_sequencing")
+    _require_non_empty_str(execution_order["this_pr_scope"], field="execution_order.this_pr_scope")
+
+    # --- invariants（裁定 §9）------------------------------------------------
+    invariants = _validate_identity_protocol_shape(
+        data["invariants"], field="invariants",
+        required_keys=frozenset({
+            "verbatim", "birth_gate_failure_action", "same_attempt_prohibitions", "escape_hatch",
+        }),
+    )
+    _require_non_empty_str(invariants["verbatim"], field="invariants.verbatim")
+    _require_non_empty_str(
+        invariants["birth_gate_failure_action"], field="invariants.birth_gate_failure_action"
+    )
+    if (
+        tuple(invariants["same_attempt_prohibitions"])
+        != _IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS
+    ):
+        raise Run9ValidationError(
+            f"invariants.same_attempt_prohibitions must equal "
+            f"{_IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS!r} exactly (順序込み・裁定§9逐語列挙), "
+            f"got {invariants['same_attempt_prohibitions']!r}"
+        )
+    _require_non_empty_str(invariants["escape_hatch"], field="invariants.escape_hatch")
+
+
+def load_pinned_identity_decision_protocol(
+    contract: "Run9RunContract",
+    *,
+    domain: "Run9IdentityDomain",
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """`hypothesis_algebra_sha` pin の**唯一の正規消費経路**（rev 0.6 以降、
+    同欄は H1-H6 閾値校正欄から本 protocol の pin 欄へ用途確定済み——
+    `RUN9_CONTRACT.yaml` hypothesis_algebra_sha reason 参照）。
+
+    **消費契約（事前登録）**: harness の identity decision protocol 消費は
+    この関数経由のみで行わなければならない——`inputs/identity_decision_
+    protocol_v0.6.json` への直接 `json.load()` は契約違反である。
+
+    手順（いずれかで fail-closed）:
+    (1)-(4) 他の `load_pinned_*` 関数と同型（`_h3c_load_pinned_common()`
+        経由——disk 正典再読込・改変検出、PINNED 確認、実在確認、実バイト
+        sha256 一致確認、JSON parse）。
+    (5) `validate_identity_decision_protocol()` で manifest 本体の構造を
+        検証する。
+    (6) cross-check (1): `adjudication_basis.source_file`
+        （`USER_ADJUDICATION_20260827_IDENTITY_REV06.txt`）の実バイト
+        sha256 が `adjudication_basis.sha256` と一致することを machine
+        強制する（裁定文書の改変を fail-closed で拒否する）。
+    (7) cross-check (2): `metric_reference.metric_space_sha` が、渡された
+        `domain`（`domains/identity_domain_run9_v1.json` 由来）の
+        `metric_space_sha` と一致することを強制する——identity_metric_
+        space.json 無改変宣言（裁定§7）を消費時にも machine 強制する。
+    (8) cross-check (3): `birth_identity_separation.cell_ref` が
+        `_PROBE_EXPECTED_CELL_IDS["P0"]`（probe manifest 側の凍結 P0 cell
+        定義、正本）と一致することを再照合する（validator 側の静的照合に
+        加え、loader でも同一の凍結正本を再導出して照合する二重防御）。
+    (9) cross-check (4): `c0_determinism_attestation.takes_per_founder`/
+        `c1_sham_attestation.takes_per_founder` が、`contract` の
+        `interventions.c0_replay_takes_per_founder`/
+        `interventions.c1_sham_takes_per_founder`（PINNED、founder 1体
+        あたり n=20）と一致することを強制する。
+    (10) cross-check (5): `provenance.design_revision_doc.sha256` が、
+        `contract` の `design_revision_doc_sha256` PINNED 値と一致する
+        ことを強制する。
+    (11) cross-check (6): 既に `validate_identity_decision_protocol()` が
+        outcome_detail 語彙（`IDENTITY_PROTOCOL_*` 定数群）とのリテラル
+        一致を強制済み——本関数では追加の語彙照合は行わない（重複させ
+        ない）。
+    (12) cross-check (7): `supersede_declaration.{preserved,superseded}_
+        sections` の各エントリが `inputs/identity_metric_space.json` に
+        実在することを `_resolve_identity_metric_space_ref()` で走査する
+        （dotted path の typo・存在しない節名の宣言を fail-closed で
+        検出する）。
+
+    戻り値は検証済み manifest dict。
+    """
+    data = _h3c_load_pinned_common(
+        contract=contract,
+        pin_name="hypothesis_algebra_sha",
+        manifest_path=manifest_path,
+        contract_path=contract_path,
+        default_path=IDENTITY_DECISION_PROTOCOL_PATH,
+        fn_label="load_pinned_identity_decision_protocol",
+    )
+    validate_identity_decision_protocol(data)
+
+    # (6) cross-check (1): adjudication_basis.source_file の実バイト sha256。
+    adjudication_basis = data["adjudication_basis"]
+    adjudication_resolved = _resolve_repo_contained_path(
+        adjudication_basis["source_file"],
+        repo_root=_IDENTITY_DECISION_PROTOCOL_REPO_ROOT,
+        field="adjudication_basis.source_file",
+        context="load_pinned_identity_decision_protocol()",
+    )
+    if not adjudication_resolved.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_identity_decision_protocol(): cross-check source {adjudication_resolved} "
+            "(adjudication_basis.source_file) does not exist"
+        )
+    adjudication_actual = hashlib.sha256(adjudication_resolved.read_bytes()).hexdigest()
+    adjudication_pinned = adjudication_basis["sha256"]
+    if adjudication_actual != adjudication_pinned:
+        raise Run9ValidationError(
+            f"load_pinned_identity_decision_protocol(): {adjudication_resolved} の実バイト sha256 "
+            f"({adjudication_actual!r}) が adjudication_basis.sha256 pin 値 ({adjudication_pinned!r}) "
+            "と一致しない — 裁定文書の改変を fail-closed で拒否する"
+        )
+
+    # (7) cross-check (2): metric_reference.metric_space_sha と domain の一致。
+    manifest_metric_sha = data["metric_reference"]["metric_space_sha"]
+    if manifest_metric_sha != domain.metric_space_sha:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): metric_reference.metric_space_sha "
+            f"({manifest_metric_sha!r}) diverges from the pinned Run9IdentityDomain's "
+            f"metric_space_sha ({domain.metric_space_sha!r}) — identity_metric_space.json 無改変"
+            "宣言（裁定§7）の消費時 fail-closed 強制"
+        )
+
+    # (8) cross-check (3): birth_identity_separation.cell_ref の再照合。
+    expected_cell_ref = next(iter(_PROBE_EXPECTED_CELL_IDS["P0"]))
+    manifest_cell_ref = data["birth_identity_separation"]["cell_ref"]
+    if manifest_cell_ref != expected_cell_ref:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): birth_identity_separation.cell_ref "
+            f"({manifest_cell_ref!r}) diverges from the canonical P0 cell "
+            f"({expected_cell_ref!r}) — fail-closed re-check"
+        )
+
+    # (9) cross-check (4): C0/C1 takes 数と interventions pin の一致。
+    revalidated_contract = load_run9_contract(contract.raw)
+    c0_field = revalidated_contract.intervention_take_count_field("c0_replay_takes_per_founder")
+    c1_field = revalidated_contract.intervention_take_count_field("c1_sham_takes_per_founder")
+    manifest_c0_takes = data["c0_determinism_attestation"]["takes_per_founder"]
+    manifest_c1_takes = data["c1_sham_attestation"]["takes_per_founder"]
+    if manifest_c0_takes != c0_field["value"]:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): c0_determinism_attestation.takes_per_founder "
+            f"({manifest_c0_takes!r}) diverges from RUN9_CONTRACT.yaml "
+            f"interventions.c0_replay_takes_per_founder PINNED value ({c0_field['value']!r})"
+        )
+    if manifest_c1_takes != c1_field["value"]:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): c1_sham_attestation.takes_per_founder "
+            f"({manifest_c1_takes!r}) diverges from RUN9_CONTRACT.yaml "
+            f"interventions.c1_sham_takes_per_founder PINNED value ({c1_field['value']!r})"
+        )
+
+    # (10) cross-check (5): provenance.design_revision_doc.sha256 と contract
+    # design_revision_doc_sha256 PINNED 値の一致。
+    rev_doc_field = revalidated_contract.pin_field("design_revision_doc_sha256")
+    if not _is_field_pinned(rev_doc_field):
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): RUN9_CONTRACT.yaml design_revision_doc_sha256 "
+            f"is not PINNED (status={rev_doc_field.get('status')!r})"
+        )
+    manifest_rev_doc_sha = data["provenance"]["design_revision_doc"]["sha256"]
+    if manifest_rev_doc_sha != rev_doc_field["value"]:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): provenance.design_revision_doc.sha256 "
+            f"({manifest_rev_doc_sha!r}) diverges from RUN9_CONTRACT.yaml design_revision_doc_sha256 "
+            f"PINNED value ({rev_doc_field['value']!r})"
+        )
+
+    # (12) cross-check (7): supersede_declaration の各節名が
+    # identity_metric_space.json に実在することを走査する。
+    identity_metric_space_document = _load_identity_metric_space_document()
+    supersede = data["supersede_declaration"]
+    for ref in list(supersede["preserved_sections"]) + list(supersede["superseded_sections"]):
+        _resolve_identity_metric_space_ref(
+            ref, document=identity_metric_space_document,
+            field="supersede_declaration.{preserved,superseded}_sections[]",
+        )
+
     return data

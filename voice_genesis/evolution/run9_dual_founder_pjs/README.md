@@ -1,6 +1,6 @@
 # RUN9 — Tri-Donor Dual-Founder Common-Teacher Learning
 
-**状態: Preregistered / Phase 3（design_revision 0.5、machine-independent 設計層）。本学習未開始。**
+**状態: Preregistered / Phase 3（design_revision 0.6、machine-independent 設計層）。本学習未開始。**
 
 正本設計書: [`DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md`](./DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md)
 （uploads 原本とバイト同一・**byte-pin 不変**。sha256 は `RUN9_CONTRACT.yaml` の
@@ -19,8 +19,14 @@ RUN9 用語整理」の編入。無改変のまま存続）→
 User 裁定「RUN9 User裁定 — AF0 runtime mapping」の編入 — AF0 speaker
 embedding が現行 RUN6 Backbone に byte-verified な形で存在しないため、
 runtime render では ritsu/user 成分のみを再正規化して float32 単純加重和
-で線形合成する方式A採用）の順で規定する。`design_revision_doc_sha256`/
-`por_adjudication_sha256` が PINNED で保持する。
+で線形合成する方式A採用）→
+[`DESIGN_RUN9_REVISION_0.6.md`](./DESIGN_RUN9_REVISION_0.6.md)（2026-08-27、
+User 裁定「RUN9 User裁定 — Identity Calibration Degeneracy /
+design_revision 0.6」の編入 — C0 母集団の render replay byte 決定論実測
+により旧 calibration 規則が解析的に退化することが判明したため、Identity
+decision protocol 全体を再事前登録する pre-run design correction）の順で
+規定する。`design_revision_doc_sha256`/`por_adjudication_sha256` が
+PINNED で保持する。
 
 AF0・Ritsu・User Donor の三点 Identity から `TRI_CROSSOVER` で二体の
 Founder 候補（`R9F-01` = AF0 優勢、`R9F-02` = User 優勢）を出生
@@ -916,13 +922,18 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   PINNED 化され、残 PENDING は pre-run 必須8欄（総 PENDING 9欄）へ
   減少した——下記「解消済み（RUN9-L0-HARNESS-3a, 2026-08-26）」節参照。
   続けて RUN9-L0-HARNESS-3b（2026-08-27）で `education_technique_lesson_
-  manifest_sha` が PINNED 化され、残 PENDING は下記のとおり pre-run
-  必須7欄（総 PENDING 8欄）へ減少した——下記
-  「解消済み（RUN9-L0-HARNESS-3b, 2026-08-27）」節参照（`attempt_id`/
-  `repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
-  `learning_recipe_sha`/`measurement_spec_sha`/`hypothesis_algebra_sha` の
-  pre-run 必須7欄が引き続き PENDING のため（optional の
-  `human_evaluation_protocol_sha` を含めると総 PENDING 8欄）——
+  manifest_sha` が PINNED 化され、残 PENDING は pre-run 必須7欄
+  （総 PENDING 8欄）へ減少した——下記
+  「解消済み（RUN9-L0-HARNESS-3b, 2026-08-27）」節参照。続けて
+  design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
+  `hypothesis_algebra_sha` が（H1-H6 閾値校正欄から Identity decision
+  protocol の pin 欄へ用途確定した上で）PINNED 化され、残 PENDING は
+  下記のとおり pre-run 必須6欄（総 PENDING 7欄）へ減少した——下記
+  「解消済み（RUN9-L0-HARNESS-3c rev 0.6, 2026-08-27）」節参照
+  （`attempt_id`/`repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
+  `learning_recipe_sha`/`measurement_spec_sha` の
+  pre-run 必須6欄が引き続き PENDING のため（optional の
+  `human_evaluation_protocol_sha` を含めると総 PENDING 7欄）——
   `tests/test_run9_contract.py` の回帰テストで機械確認済み）。
 
 **解消済み（RUN9-L0-HARNESS-1, 2026-08-26）**:
@@ -1256,6 +1267,46 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   [`HARNESS3B_EDUCATION_LESSON_RECORD.md`](./HARNESS3B_EDUCATION_LESSON_RECORD.md)
   を正とする。design_revision は本改訂で変更していない（0.5 のまま —
   channel 意味論・抽出法・正規化法を変更していないため）。
+
+**解消済み（RUN9-L0-HARNESS-3c rev 0.6, 2026-08-27）**:
+- `hypothesis_algebra_sha` 未 pin →
+  User 裁定「RUN9 User裁定 — Identity Calibration Degeneracy /
+  design_revision 0.6」（2026-08-27、repo 内収載
+  [`USER_ADJUDICATION_20260827_IDENTITY_REV06.txt`](./USER_ADJUDICATION_20260827_IDENTITY_REV06.txt)）
+  の採用。既存の render replay byte 決定論実測により、現行
+  `identity_metric_space.json` calibration 規則の `theta_cal(F) =
+  P95(D_C0(F))` が C0 母集団全ゼロの下で解析的に 0 へ退化することが
+  Birth Probe 実行前に確定したため行う pre-run design correction
+  （観測後の救済ではない）。Birth Identity Separation だけでなく学習後
+  Identity 保持判定を含む Identity decision protocol 全体を新規
+  [`inputs/identity_decision_protocol_v0.6.json`](./inputs/identity_decision_protocol_v0.6.json)
+  （schema `run9-identity-decision-protocol/0.6`）として再事前登録した
+  ——C0/C1（各 founder 20 takes）は閾値校正母集団ではなく runtime 決定論
+  の exact-replay attestation として扱い、Birth Identity Separation は
+  凍結済み P0 cell 上の `d12 = distance(R9F-01:r0, R9F-02:r0)` の machine
+  feature 判定（`d12 > 0` のみ `ESTABLISHED_BY_MACHINE_FEATURE`）へ、
+  学習後 Identity 保持判定は `m_other = d_other - d_self`/`m_pjs = d_pjs
+  - d_self` のマージン方式（両方 `> 0` のときのみ `STABLE_BY_MACHINE_
+  METRIC`）へそれぞれ切り替える。`identity_metric_space.json`（feature/
+  distance 定義）・`domains/identity_domain_run9_v1.json`・発行済み
+  Founder Genome・coords・genome_id・speaker map・`TRI_CROSSOVER/1.0` は
+  いずれも無改変のまま——新規 protocol はこれらを参照した上で旧
+  `calibration`（freeze_threshold/validity_gates/decision_rule）節のみを
+  rev 0.6 実行について supersede する。同 protocol の raw byte sha256 を
+  `hypothesis_algebra_sha`（H1-H6 閾値校正欄から用途確定）へ `PINNED`
+  化した。`design_revision` を契約レベルで 0.5 → 0.6 へ昇格（本欄・
+  `run9_schema.DESIGN_REVISION` 定数・`design_revision_doc_sha256` pin の
+  三箇所を同時に更新——rev 0.2→0.3→0.4→0.5 と同じ手順）。既存 frozen
+  tuple（`BIRTH_OUTCOMES`/`SEPARATION_OUTCOMES`/`IDENTITY_OUTCOMES`）は
+  無改変のまま、裁定の新ラベルは protocol 側 `IDENTITY_PROTOCOL_*`
+  outcome_detail 定数として二層構造で新設した。`failure_abort_criteria.json`
+  の Birth Gate 関連 rule（rule 7/16）に残っていた P95/theta_cal(F) 閾値
+  前提の stale 文言も rev 0.6 supersede への参照へ是正し repin した。
+  **本改訂（第2 PR フェーズ1）は上記の事前登録一式の実装までを範囲とし、
+  Birth Gate の実行自体は含まない**（裁定 §8 の区切りどおり——実測
+  ゼロ）。詳細は
+  [`DESIGN_RUN9_REVISION_0.6.md`](./DESIGN_RUN9_REVISION_0.6.md)/
+  [`HARNESS3C_REV06_RECORD.md`](./HARNESS3C_REV06_RECORD.md) を正とする。
 
 **解消済み（RUN9-L0-PIN-2, 2026-08-26）**:
 - ~~`dataset_manifest_sha`/`dataset_row_order_sha` 未 pin~~ →

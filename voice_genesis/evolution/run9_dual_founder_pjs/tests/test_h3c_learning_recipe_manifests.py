@@ -167,12 +167,17 @@ def test_h3c_all_five_pin_names_in_contract_pin_fields() -> None:
 
 
 def test_h3c_pre_run_pending_field_count_is_seven(contract: m.Run9RunContract) -> None:
+    """テスト名は歴史的固定（rename しない、他の pending-count テストと
+    同型の規約）。値は design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6）で
+    `hypothesis_algebra_sha` が PINNED 化されたことにより 7 → 6 件へ
+    減少した。"""
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
     pending = [n for n in pre_run_fields if not m._is_field_pinned(contract.pin_field(n))]  # noqa: SLF001
-    assert len(pending) == 7, pending
+    assert len(pending) == 6, pending
     for entry in _MANIFESTS.values():
         assert entry["pin_name"] not in pending
+    assert "hypothesis_algebra_sha" not in pending
 
 
 def test_h3c_learning_recipe_sha_still_pending(contract: m.Run9RunContract) -> None:

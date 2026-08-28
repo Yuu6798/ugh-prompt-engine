@@ -1,0 +1,212 @@
+RUN9 User裁定 — Identity Calibration Degeneracy / design_revision 0.6
+作成日: 2026-08-27 JST
+受領経路: User との対話（既存 render replay byte 決定論実測により、現行
+規則の D_C0(F) が全ゼロ、theta_cal(F)=P95(D_C0(F))=0 へ退化することが
+実行前に解析的に確定したことを受け、session scratchpad
+（scratchpad/run9_user_adjudication_identity_rev06.md）へ Fable が記録し、
+以後の実装・レビューが参照する正本として本ファイルへ repo 内収載した）
+対象: C0/C1 校正母集団の性質再定義（閾値推定に使わない runtime 決定論の
+実証としてのみ保存）、positive reference の扱い（独立閾値校正標本としては
+扱わない）、Birth Identity Separation の machine feature 判定への切替え
+（d12 > 0 の要否）、PJS Confuser の距離記録方針、学習後 Identity 保持判定
+（m_other/m_pjs マージン方式への切替え）、identity_metric_space.json の
+feature/distance 定義を不変のまま参照する新規 identity_decision_
+protocol_v0.6.json の発行と旧 calibration/decision_rule の supersede、
+hypothesis_algebra_sha への同 protocol raw SHA256 の PINNED 化、実行順
+（本改訂完了までの Birth Gate/LEARN_PERFORMANCE 開始禁止）、不変規律
+（同 attempt 内の座標・重み・metric feature 変更/epsilon追加/方式B自動
+昇格の禁止）
+状態: User Adjudication（逐語・一字一句改変禁止）
+
+================================================================
+0. この文書の位置づけ
+================================================================
+
+本書は User が 2026-08-27 に下した裁定の逐語全文を repo 内へ収載した
+ものである。POR_CONCEPT_ADJUDICATION_20260824.txt /
+USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt /
+USER_ADJUDICATION_20260826_HARNESS_COMPANIONS_EMBEDS.txt /
+USER_ADJUDICATION_20260826_EXECUTION_PROFILE.txt /
+USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt /
+USER_ADJUDICATION_20260827_PJS_LESSON_FREEZE.txt と同じ前例（外部裁定を
+repo 内の凍結文書として保持し、以後の実装・レビューが参照する正本とする）
+に倣う。
+
+本改訂で新設する inputs/identity_decision_protocol_v0.6.json の各節、
+`run9_schema.validate_identity_decision_protocol()` の docstring、
+RUN9_CONTRACT.yaml の design_revision/design_revision_doc_sha256/
+hypothesis_algebra_sha 各 reason は、すべて本書の逐語からの転記であり、
+Claude Code が新規に発明した値ではない（転記元が scratchpad のみだと
+将来のレビュアーが「User 転記であって発明でない」ことを検証できないと
+いう既存前例の教訓を踏襲し、本書を repo 内収載する）。
+
+本裁定の前提: DESIGN_RUN9_REVISION_0.6.md が引用する S0 スパイク実測記録
+および RUN9-L0-HARNESS-3a の render replay byte 決定論実測（既存正本）
+により、現行 identity_metric_space.json の calibration 規則（theta_cal(F)
+= P95(D_C0(F))）が、C0 母集団の render byte 決定論のもとでは D_C0(F) が
+全ゼロ標本となり theta_cal(F)=0 へ解析的に退化することが、Birth Probe
+実行前に判明した。本裁定は、この退化が判明した後の観測結果を用いた事後
+救済ではなく、実行前に行う設計是正（pre-run design correction）である
+（本文冒頭の逐語を参照）。
+
+以下は起草時の作業メモ
+scratchpad/run9_user_adjudication_identity_rev06.md の裁定本文部分
+（【RUN9 User裁定...】から始まり、末尾の§9まで）を一字一句そのまま転記
+する（改変禁止）。同ファイル末尾の転記注（scratchpad 正本であることの
+注記）は裁定本文外のため転記対象に含めない。
+
+================================================================
+1. 本文（逐語、一字一句改変禁止）
+================================================================
+
+【RUN9 User裁定 — Identity Calibration Degeneracy / design_revision 0.6】
+
+選択肢Aを採用する。
+
+ただし、Birth Identity Separationだけでなく、
+学習後Identity保持判定を含むIdentity decision protocol全体を
+design_revision 0.6として再事前登録する。
+
+本裁定はC0/C1/Identity距離・学習結果・holdoutを観測した後の救済ではない。
+既存のrender replay byte決定論実測により、
+現行規則のD_C0(F)が全ゼロ、
+theta_cal(F)=P95(D_C0(F))=0へ退化することが
+実行前に解析的に確定したため行うpre-run design correctionである。
+
+
+1. C0
+
+C0はFounderごとに20 takesを実行する。
+
+全takeについてreference renderと
+raw WAV SHA256およびidentity feature bytes/hashの完全一致を要求する。
+
+D_C0(F)=0×20を期待値とし、
+replay-noise閾値の推定には使用しない。
+
+C0はruntime決定論の実証として保存する。
+不一致時は閾値を作らず、
+IMPLEMENTATION_FAILUREまたは
+DETERMINISM_CONTRACT_BROKENとして停止する。
+
+
+2. C1
+
+C1 ZERO_CONTROLPROFILE_SHAMもFounderごとに20 takes実行する。
+
+C1のWAV bytesおよびidentity featureは
+C0/referenceと完全一致することを要求する。
+
+D_C1(F)=0×20を期待し、
+ControlProfile機構通過の副作用ゼロを確認する。
+
+非ゼロの場合はC1_SHAM_EFFECT_DETECTEDとして停止する。
+
+
+3. Positive reference
+
+positive referenceは追加のexact replay監査として維持する。
+referenceとのWAV byte一致およびdistance=0を要求する。
+独立した閾値校正標本としては扱わない。
+
+
+4. Birth Identity Separation
+
+凍結済みP0 Neutral Identity Probeで、
+
+d12 = distance(R9F-01:r0, R9F-02:r0)
+
+を計算する。
+
+両featureがvalid/finiteであり、d12 > 0の場合のみ、
+BIRTH = ESTABLISHED_BY_MACHINE_FEATURE
+とする。
+
+d12 = 0の場合は
+NOT_ESTABLISHED /
+PROJECTED_RUNTIME_IDENTITIES_COLLAPSED_IN_MACHINE_FEATURE_SPACE
+として凍結し、学習へ進まない。
+
+negative reference gateは同じd12を対称参照する。
+独立証拠として二重計上しない。
+
+
+5. PJS Confuser
+
+出生時に各Founderと凍結済みPJS referenceとの距離を記録する。
+distance=0の場合はPJS confuserとのfeature collapseとして
+BIRTH NOT_ESTABLISHEDとする。
+
+正値の場合は距離・marginを記録するが、
+事後的な最小距離閾値を新設しない。
+
+
+6. 学習後Identity保持
+
+各学習後render rについて、
+
+d_self  = distance(r, own r0)
+d_other = distance(r, other Founder r0)
+d_pjs   = distance(r, PJS reference)
+
+m_other = d_other - d_self
+m_pjs   = d_pjs - d_self
+
+を計算する。
+
+m_other > 0 かつ m_pjs > 0 の場合のみ
+STABLE_BY_MACHINE_METRIC /
+RELATIVE_SELF_NEAREST
+とする。
+
+いずれかが0以下ならSHIFTEDとする。
+同率をSTABLEへ丸めない。
+
+d_pjs(r_learned)-d_pjs(r0)も
+PJS方向への接近evidenceとして別記録する。
+
+
+7. Metric文書とGenomeの不変性
+
+既存identity_metric_space.json、
+domains/identity_domain_run9_v1.json、
+発行済みFounder Genome、coords、genome_id、
+speaker map、TRI_CROSSOVER/1.0は変更しない。
+
+identity_metric_space.jsonを直接編集して
+metric_space_shaとGenome IDを動かしてはならない。
+
+新規identity_decision_protocol_v0.6.jsonを発行し、
+既存metricのfeature/distance定義を参照した上で、
+旧calibration/decision ruleをrev 0.6実行についてsupersedeする。
+
+同protocolのraw SHA256をhypothesis_algebra_shaへPINNEDする。
+
+
+8. 実行順
+
+DESIGN_RUN9_REVISION_0.6.md、
+User裁定文書、
+identity_decision_protocol_v0.6.json、
+validator/loader、
+hypothesis_algebra_sha、
+関連probe bridge・failure routingの更新が完了するまで、
+Birth Gate、learning_recipe_shaの最終build/PIN、
+LEARN_PERFORMANCEを開始しない。
+
+rev 0.6のBirth GateがPASSした場合のみ、
+learning recipe freezeおよび学習実行へ進む。
+
+
+9. 不変規律
+
+Birth Gate不成立時はNOT_ESTABLISHEDとして凍結する。
+
+同attempt内で、
+Founder座標変更、
+speaker-map重み変更、
+Identity metric feature変更、
+任意epsilon追加、
+方式Bへの自動昇格を行わない。
+
+方式Bが必要な場合は別design_revisionまたは別Runとする。

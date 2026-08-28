@@ -31,11 +31,11 @@ import run9_schema as m  # noqa: E402
 CONTRACT_PATH = _RUN_DIR / "RUN9_CONTRACT.yaml"
 DOMAIN_DRAFT_PATH = _RUN_DIR / "domains" / "identity_domain_run9_v1.json"
 DESIGN_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md"
-# 現行 design_revision (0.5) の差分メモ。design_revision_doc_sha256 が
-# pin する対象（RUN9-L0-HARNESS-3a、2026-08-26、design_revision 0.4 →
-# 0.5 昇格）。
-REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.5.md"
-# rev 0.2/0.3 文書は無改変のまま存続する（design_revision 系譜の各1件）。
+# 現行 design_revision (0.6) の差分メモ。design_revision_doc_sha256 が
+# pin する対象（RUN9-L0-HARNESS-3c、2026-08-27、design_revision 0.5 →
+# 0.6 昇格）。
+REVISION_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.6.md"
+# rev 0.2/0.3/0.5 文書は無改変のまま存続する（design_revision 系譜の各1件）。
 REVISION_0_2_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.2.md"
 REVISION_0_3_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.3.md"
 POR_ADJUDICATION_PATH = _RUN_DIR / "POR_CONCEPT_ADJUDICATION_20260824.txt"
@@ -1626,16 +1626,16 @@ def _pending_rights_manifest_fixture() -> Dict[str, Any]:
 
 
 def test_revision02_design_revision_constant_is_0_2() -> None:
-    """rev 0.5（RUN9-L0-HARNESS-3a、2026-08-26）では
-    `run9_schema.DESIGN_REVISION` 自体が "0.5" を凍結する
+    """rev 0.6（RUN9-L0-HARNESS-3c、2026-08-27）では
+    `run9_schema.DESIGN_REVISION` 自体が "0.6" を凍結する
     （テスト名は歴史的に revision02_ prefix のまま — Fix 15 の
     founder_genome_shas 改名前例と同様、rename ではなく assertion のみ
     更新する）。"""
-    assert m.DESIGN_REVISION == "0.5"
+    assert m.DESIGN_REVISION == "0.6"
 
 
 def test_revision02_current_contract_declares_0_2(contract_raw: Dict[str, Any]) -> None:
-    assert contract_raw["design_revision"] == "0.5"
+    assert contract_raw["design_revision"] == "0.6"
     m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
 
 
@@ -1683,14 +1683,14 @@ def test_revision03_old_0_2_contract_rejection_message_names_current_revision(
     """PR #317 Codex bot レビュー第1巡 Fix 2 採用: 拒否メッセージが固定
     ファイル名（例: "DESIGN_RUN9_REVISION_0.2.md"）をハードコードして
     いると、design_revision を上げるたびにメッセージ内のファイル名だけが
-    陳腐化する（実際に 0.2 -> 0.3、0.3 -> 0.4、0.4 -> 0.5 進行時に発生
-    した/し得た不備）。メッセージが `DESIGN_REVISION` 定数（現在は
-    "0.5"）から動的に導出されていることを、"0.2" 拒否時のメッセージに
-    現行の "0.5" が含まれることで確認する — メッセージが旧値のまま
-    固定化されていれば失敗する。"""
+    陳腐化する（実際に 0.2 -> 0.3、0.3 -> 0.4、0.4 -> 0.5、0.5 -> 0.6
+    進行時に発生した/し得た不備）。メッセージが `DESIGN_REVISION` 定数
+    （現在は "0.6"）から動的に導出されていることを、"0.2" 拒否時の
+    メッセージに現行の "0.6" が含まれることで確認する — メッセージが
+    旧値のまま固定化されていれば失敗する。"""
     tampered = copy.deepcopy(contract_raw)
     tampered["design_revision"] = "0.2"
-    with pytest.raises(m.Run9ValidationError, match="0.5"):
+    with pytest.raises(m.Run9ValidationError, match="0.6"):
         m.load_run9_contract(tampered)
 
 
@@ -3430,10 +3430,10 @@ def test_fix319_2_backbone_runtime_bundle_sha_history_notes_prior_value() -> Non
 
 def test_por_revision_design_revision_doc_path_exists() -> None:
     """テスト名は歴史的に por_revision_ prefix のまま（PoR メモ編入時の
-    命名）——rev 0.5（RUN9-L0-HARNESS-3a）現在は最新差分メモへ追随して
-    assertion のみ更新する。"""
+    命名）——rev 0.6（RUN9-L0-HARNESS-3c rev 0.6）現在は最新差分メモへ
+    追随して assertion のみ更新する。"""
     assert REVISION_DOC_PATH.exists()
-    assert REVISION_DOC_PATH.name == "DESIGN_RUN9_REVISION_0.5.md"
+    assert REVISION_DOC_PATH.name == "DESIGN_RUN9_REVISION_0.6.md"
     assert REVISION_0_3_DOC_PATH.exists()
 
 
@@ -11411,9 +11411,13 @@ def test_harness3b_failure_abort_criteria_repinned_lineage_ten_generations(
     checkpoint の stale 文言を訂正 → RUN9-L0-HARNESS-3b（2026-08-27）で
     rule 8（§22 step 8）の checkpoint/machine_promotion_condition が
     「education_technique_lesson_manifest_sha は引き続き PENDING」という
-    stale な言及を残していた欠陥を訂正——同欄は本改訂で PINNED 化された）が
-    append-only で、現在値が最新（RUN9-L0-HARNESS-3b）のものであることを
-    明示的に確認する（repin 漏れの回帰防止）。"""
+    stale な言及を残していた欠陥を訂正——同欄は本改訂で PINNED 化された）
+    + design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
+    rule 7（Birth Identity separation not established）/rule 16（Identity
+    drift beyond non-inferiority）の theta_cal(F)/calibration 依存の stale
+    文言を rev 0.6 supersede 後の記述へ訂正した第11世代が
+    append-only で、現在値が最新（RUN9-L0-HARNESS-3c rev 0.6）のもので
+    あることを明示的に確認する（repin 漏れの回帰防止）。"""
     round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
     round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
     round3_value = "6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44"
@@ -11424,11 +11428,12 @@ def test_harness3b_failure_abort_criteria_repinned_lineage_ten_generations(
     round8_value = "20c71d273993f062cf562b2097a57bfe530c54303e87287c58e98bad9876df4a"
     round9_value = "da8aee0d49a5dac58b5ddd6b6dc7959f1a15914e9a6e565a4e6851e2b6c7a527"
     round10_value = "ead64d2fd7896728b1fc7070c90d7a5b2d8bb17740e21c4056a5210a081cf98b"
+    round11_value = "297dd46aaa8c520238072f93b9d5e18748dbdd31b4a389a4a8d7e48cd70d8cba"
     current = contract_raw["failure_abort_criteria_sha"]["value"]
-    assert current == round10_value
+    assert current == round11_value
     assert current not in (
         round1_value, round2_value, round3_value, round4_value, round5_value, round6_value,
-        round7_value, round8_value, round9_value,
+        round7_value, round8_value, round9_value, round10_value,
     )
     assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
 
@@ -11844,8 +11849,11 @@ def test_execprofile_pre_run_pending_count_is_nine(contract: m.Run9RunContract) 
     追加で PINNED 化され、8件へ減少（下記
     `test_harness3a_pre_run_pending_count_is_eight` 参照）。さらに
     RUN9-L0-HARNESS-3b（2026-08-27）で `education_technique_lesson_
-    manifest_sha` が PINNED 化され、現在は下記
-    `test_harness3b_pre_run_pending_count_is_seven` が固定する7件へ
+    manifest_sha` が PINNED 化され、7件へ減少（下記
+    `test_harness3b_pre_run_pending_count_is_seven` 参照）。さらに
+    design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
+    `hypothesis_algebra_sha` が PINNED 化され、現在は下記
+    `test_harness3c_rev06_pre_run_pending_count_is_six` が固定する6件へ
     さらに減少した——テスト名はレビュー履歴保持のため改名しない〕。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
@@ -11862,12 +11870,12 @@ def test_execprofile_pre_run_pending_count_is_nine(contract: m.Run9RunContract) 
     assert "execution_profile_sha" not in pending
     assert "dataset_manifest_sha" not in pending
     assert "dataset_row_order_sha" not in pending
-    # 現在値は7/8（下記 test_harness3b_pre_run_pending_count_is_seven と
+    # 現在値は6/7（下記 test_harness3c_rev06_pre_run_pending_count_is_six と
     # 同一の期待値）——`expected_speaker_map_sha`/`education_technique_
-    # lesson_manifest_sha` の PINNED 化以降、9/10 や 8/9 という値そのもの
-    # はもはや成立しない。
-    assert len(pending) == 7
-    assert len(all_pending) == 8
+    # lesson_manifest_sha`/`hypothesis_algebra_sha` の PINNED 化以降、
+    # 9/10・8/9・7/8 という値そのものはもはや成立しない。
+    assert len(pending) == 6
+    assert len(all_pending) == 7
 
 
 def test_harness3a_pre_run_pending_count_is_eight(contract: m.Run9RunContract) -> None:
@@ -11879,8 +11887,11 @@ def test_harness3a_pre_run_pending_count_is_eight(contract: m.Run9RunContract) -
 
     〔履歴: 本テストが固定していた「8件」は RUN9-L0-HARNESS-3a 時点の値。
     RUN9-L0-HARNESS-3b（2026-08-27）で `education_technique_lesson_
-    manifest_sha` が追加で PINNED 化され、現在は下記
-    `test_harness3b_pre_run_pending_count_is_seven` が固定する7件へ
+    manifest_sha` が追加で PINNED 化され、7件へ減少（下記
+    `test_harness3b_pre_run_pending_count_is_seven` 参照）。さらに
+    design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
+    `hypothesis_algebra_sha` が PINNED 化され、現在は下記
+    `test_harness3c_rev06_pre_run_pending_count_is_six` が固定する6件へ
     さらに減少した——テスト名はレビュー履歴保持のため改名しない〕。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
@@ -11892,11 +11903,12 @@ def test_harness3a_pre_run_pending_count_is_eight(contract: m.Run9RunContract) -
         n for n in m.CONTRACT_PIN_FIELDS
         if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
     ]
-    # 現在値は7/8（下記 test_harness3b_pre_run_pending_count_is_seven と
-    # 同一の期待値）——`education_technique_lesson_manifest_sha` の
-    # PINNED 化以降、8/9 という値そのものはもはや成立しない。
-    assert len(pending) == 7
-    assert len(all_pending) == 8
+    # 現在値は6/7（下記 test_harness3c_rev06_pre_run_pending_count_is_six と
+    # 同一の期待値）——`education_technique_lesson_manifest_sha`/
+    # `hypothesis_algebra_sha` の PINNED 化以降、7/8 という値そのものは
+    # もはや成立しない。
+    assert len(pending) == 6
+    assert len(all_pending) == 7
     assert "dependency_pins_sha" in pending
     assert "measurement_spec_sha" in pending
     assert "expected_speaker_map_sha" not in pending
@@ -11911,7 +11923,13 @@ def test_harness3b_pre_run_pending_count_is_seven(contract: m.Run9RunContract) -
     """RUN9-L0-HARNESS-3b（2026-08-27）: `education_technique_lesson_
     manifest_sha` を PINNED 化したことにより、pre-run PENDING 欄は8→7件へ
     減少した（optional の human_evaluation_protocol_sha を含めると総
-    PENDING 9→8件）——README.md の記述更新と対応する回帰固定。"""
+    PENDING 9→8件）——README.md の記述更新と対応する回帰固定。
+
+    〔履歴: 本テストが固定していた「7件」は RUN9-L0-HARNESS-3b 時点の値。
+    design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
+    `hypothesis_algebra_sha` が追加で PINNED 化され、現在は下記
+    `test_harness3c_rev06_pre_run_pending_count_is_six` が固定する6件へ
+    さらに減少した——テスト名はレビュー履歴保持のため改名しない〕。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
@@ -11922,10 +11940,39 @@ def test_harness3b_pre_run_pending_count_is_seven(contract: m.Run9RunContract) -
         n for n in m.CONTRACT_PIN_FIELDS
         if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
     ]
-    assert len(pending) == 7
-    assert len(all_pending) == 8
+    assert len(pending) == 6
+    assert len(all_pending) == 7
     assert "dependency_pins_sha" in pending
     assert "measurement_spec_sha" in pending
+    assert "expected_speaker_map_sha" not in pending
+    assert "execution_profile_sha" not in pending
+    assert "dataset_manifest_sha" not in pending
+    assert "dataset_row_order_sha" not in pending
+    assert "education_technique_lesson_manifest_sha" not in pending
+    assert m.gate_state(revalidated) == "BLOCKED"
+
+
+def test_harness3c_rev06_pre_run_pending_count_is_six(contract: m.Run9RunContract) -> None:
+    """design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）:
+    `hypothesis_algebra_sha` を（H1-H6 閾値校正欄から identity decision
+    protocol の pin 欄へ用途確定した上で）PINNED 化したことにより、
+    pre-run PENDING 欄は7→6件へ減少した（optional の human_evaluation_
+    protocol_sha を含めると総 PENDING 8→7件）。"""
+    revalidated = m.load_run9_contract(contract.raw)
+    excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
+    pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
+    pending = [
+        n for n in pre_run_fields if not m._is_field_pinned(revalidated.pin_field(n))
+    ]
+    all_pending = [
+        n for n in m.CONTRACT_PIN_FIELDS
+        if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
+    ]
+    assert len(pending) == 6
+    assert len(all_pending) == 7
+    assert "dependency_pins_sha" in pending
+    assert "measurement_spec_sha" in pending
+    assert "hypothesis_algebra_sha" not in pending
     assert "expected_speaker_map_sha" not in pending
     assert "execution_profile_sha" not in pending
     assert "dataset_manifest_sha" not in pending
@@ -15437,9 +15484,11 @@ def test_harness2_reexport_manifest_pinning_does_not_affect_pending_set(
     10欄へ、RUN9-L0-HARNESS-3a（2026-08-26）で `expected_speaker_map_sha`
     も PINNED 化され pre-run 必須8欄・総 PENDING 9欄へ、
     RUN9-L0-HARNESS-3b（2026-08-27）で `education_technique_lesson_
-    manifest_sha` も PINNED 化されたため、現在は下記のとおり pre-run
-    必須7欄・総 PENDING 8欄——`test_harness3b_pre_run_pending_count_is_seven`
-    と同一の期待値〕。"""
+    manifest_sha` も PINNED 化され pre-run 必須7欄・総 PENDING 8欄へ、
+    design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
+    `hypothesis_algebra_sha` も PINNED 化されたため、現在は下記のとおり
+    pre-run 必須6欄・総 PENDING 7欄——
+    `test_harness3c_rev06_pre_run_pending_count_is_six` と同一の期待値〕。"""
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
     pending = [n for n in pre_run_fields if not m._is_field_pinned(contract.pin_field(n))]
@@ -15449,8 +15498,8 @@ def test_harness2_reexport_manifest_pinning_does_not_affect_pending_set(
     ]
     assert "reexport_manifest_sha" not in pending
     assert "reexport_manifest_sha" not in all_pending
-    assert len(pending) == 7
-    assert len(all_pending) == 8
+    assert len(pending) == 6
+    assert len(all_pending) == 7
     assert m.gate_state(contract) == "BLOCKED"
 
 
@@ -18339,6 +18388,7 @@ SPEAKER_MAP_ADJUDICATION_PATH = (
     _RUN_DIR / "USER_ADJUDICATION_20260826_AF0_RUNTIME_MAPPING.txt"
 )
 DESIGN_REVISION_0_5_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.5.md"
+DESIGN_REVISION_0_6_DOC_PATH = _RUN_DIR / "DESIGN_RUN9_REVISION_0.6.md"
 
 
 def _speaker_map_manifest_data() -> Dict[str, Any]:
@@ -18437,44 +18487,65 @@ def test_harness3a_adjudication_source_sha256_matches_manifest_and_contract_comm
     assert actual in contract_yaml_text
 
 
-def test_harness3a_design_revision_0_5_doc_exists_and_sha_matches_contract_pin() -> None:
-    """`DESIGN_RUN9_REVISION_0.5.md` は `design_revision_doc_sha256` pin
-    （契約レベルの現行 design_revision 文書）として repoint 済み——
-    `DESIGN_REVISION_0_5_DOC_PATH` は `REVISION_DOC_PATH` と同一パスを
-    指す（別名の重複定義ではなく同じファイルへの別名参照であることの
-    確認込み）。"""
+def test_harness3a_design_revision_0_5_doc_is_byte_unchanged() -> None:
+    """RUN9-L0-HARNESS-3c（design_revision 0.5 → 0.6）以降、
+    `DESIGN_RUN9_REVISION_0.5.md` は `design_revision_doc_sha256` pin の
+    対象ではなくなる（下記 rev 0.6 テスト参照）が、rev 0.2/0.3/0.4 の前例
+    （`test_revision03_rev02_doc_is_byte_unchanged` 等）と同型に、文書自体
+    は無改変のまま存続することを固定 sha256 で確認する（`design_revision
+    系譜」表の frozen literal）。"""
     assert DESIGN_REVISION_0_5_DOC_PATH.is_file()
-    assert DESIGN_REVISION_0_5_DOC_PATH == REVISION_DOC_PATH
     actual = m.compute_file_sha256(DESIGN_REVISION_0_5_DOC_PATH)
     assert actual == "095ce77147e897473e8d87b474159c2ff4fdeb6684356cc03649f99a603cb2a9"
+
+
+def test_harness3c_design_revision_0_6_doc_exists_and_sha_matches_contract_pin() -> None:
+    """`DESIGN_RUN9_REVISION_0.6.md` は `design_revision_doc_sha256` pin
+    （契約レベルの現行 design_revision 文書）として repoint 済み——
+    `DESIGN_REVISION_0_6_DOC_PATH` は `REVISION_DOC_PATH` と同一パスを
+    指す（別名の重複定義ではなく同じファイルへの別名参照であることの
+    確認込み）。"""
+    assert DESIGN_REVISION_0_6_DOC_PATH.is_file()
+    assert DESIGN_REVISION_0_6_DOC_PATH == REVISION_DOC_PATH
+    actual = m.compute_file_sha256(DESIGN_REVISION_0_6_DOC_PATH)
+    assert actual == "40f027c247c380af57b767963af758fde0e4fa7a279f5fa68a8b7e55d10956af"
     contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
     field = contract_raw["design_revision_doc_sha256"]
     assert field["status"] == "PINNED"
     assert field["value"] == actual
     assert field["source"] == (
-        "voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.5.md"
+        "voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.6.md"
     )
 
 
-def test_harness3a_design_revision_promoted_to_0_5(contract: m.Run9RunContract) -> None:
-    """RUN9-L0-HARNESS-3a（2026-08-26）: User 裁定「RUN9 User裁定 — AF0
-    runtime mapping」逐語「design_revisionを0.5へ上げ」に従い、契約
-    レベルの design_revision を実際に 0.4 → 0.5 へ昇格したことを固定する
-    （Fable レビューにより、初版の「契約昇格は本 PR のスコープ外」という
-    据え置き判断は不採用と判定された——同 PR 内で `RUN9_CONTRACT.yaml`
-    トップレベル欄・`run9_schema.DESIGN_REVISION` 定数・
-    `design_revision_doc_sha256` pin の三箇所を同時に repin した）。"""
-    assert m.DESIGN_REVISION == "0.5"
+def test_harness3c_design_revision_promoted_to_0_6(contract: m.Run9RunContract) -> None:
+    """RUN9-L0-HARNESS-3c（2026-08-27）: User 裁定「RUN9 User裁定 —
+    Identity Calibration Degeneracy / design_revision 0.6」逐語
+    「Identity decision protocol全体をdesign_revision 0.6として再事前
+    登録する」に従い、契約レベルの design_revision を実際に 0.5 → 0.6 へ
+    昇格したことを固定する（`RUN9_CONTRACT.yaml` トップレベル欄・
+    `run9_schema.DESIGN_REVISION` 定数・`design_revision_doc_sha256` pin
+    の三箇所を同時に repin した——rev 0.2→0.3→0.4→0.5 と同じ手順）。"""
+    assert m.DESIGN_REVISION == "0.6"
     contract_raw = yaml.safe_load(CONTRACT_PATH.read_text(encoding="utf-8"))
-    assert contract_raw["design_revision"] == "0.5"
+    assert contract_raw["design_revision"] == "0.6"
     field = contract_raw["design_revision_doc_sha256"]
     assert field["status"] == "PINNED"
     assert field["source"] == (
-        "voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.5.md"
+        "voice_genesis/evolution/run9_dual_founder_pjs/DESIGN_RUN9_REVISION_0.6.md"
     )
-    assert field["value"] == m.compute_file_sha256(DESIGN_REVISION_0_5_DOC_PATH)
+    assert field["value"] == m.compute_file_sha256(DESIGN_REVISION_0_6_DOC_PATH)
     m.load_run9_contract(contract_raw)  # 例外を投げないことの確認
     assert m.gate_state(contract) == "BLOCKED"
+
+
+def test_revision06_old_0_5_contract_rejected(contract_raw: Dict[str, Any]) -> None:
+    """design_revision 0.6: 旧 "0.5" を宣言する contract も意図どおり
+    拒否される（rev 0.2〜0.5 の前例と同型）。"""
+    tampered = copy.deepcopy(contract_raw)
+    tampered["design_revision"] = "0.5"
+    with pytest.raises(m.Run9ValidationError):
+        m.load_run9_contract(tampered)
 
 
 def test_harness3a_run9_schema_design_revision_comment_no_stale_scope_note() -> None:
@@ -19369,3 +19440,400 @@ def test_harness3a_other_existing_pins_unchanged(contract_raw: Dict[str, Any]) -
 
 def test_harness3a_gate_state_still_blocked(contract: m.Run9RunContract) -> None:
     assert m.gate_state(contract) == "BLOCKED"
+
+
+# =============================================================================
+# RUN9-L0-HARNESS-3c rev 0.6（design_revision 0.6、2026-08-27）: User 裁定
+# 「RUN9 User裁定 — Identity Calibration Degeneracy / design_revision 0.6」
+# （repo 内収載 USER_ADJUDICATION_20260827_IDENTITY_REV06.txt）+ 新規
+# inputs/identity_decision_protocol_v0.6.json（`run9-identity-decision-
+# protocol/0.6`）+ hypothesis_algebra_sha PINNED 化。第2 PR フェーズ1 —
+# 本 harness は事前登録のみで Birth Gate 実測は含まない。
+# =============================================================================
+
+REV06_ADJUDICATION_PATH = (
+    _RUN_DIR / "USER_ADJUDICATION_20260827_IDENTITY_REV06.txt"
+)
+
+
+def _identity_decision_protocol_data() -> Dict[str, Any]:
+    return m._loads_strict_json(m.IDENTITY_DECISION_PROTOCOL_PATH.read_text(encoding="utf-8"))
+
+
+def _real_identity_domain() -> "m.Run9IdentityDomain":
+    return m.load_run9_identity_domain(m.RUN9_IDENTITY_DOMAIN_PATH)
+
+
+def _tampered_identity_protocol_contract(
+    contract: m.Run9RunContract, tmp_path: Path, *, mutate,
+) -> Tuple[m.Run9RunContract, Path, Path]:
+    """identity_decision_protocol_v0.6.json の内容を `mutate` で改変し、
+    その実バイト sha256 で `hypothesis_algebra_sha` pin を差し替えた合成
+    contract + manifest ファイル + contract ファイルを用意するテスト
+    ヘルパー（`_tampered_speaker_map_contract()` と同型）。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    mutate(data)
+    manifest_bytes = (
+        json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode("utf-8")
+    manifest_path = tmp_path / "identity_decision_protocol_v0.6.json"
+    manifest_path.write_bytes(manifest_bytes)
+    manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+    tampered_raw = copy.deepcopy(contract.raw)
+    tampered_raw["hypothesis_algebra_sha"] = {"value": manifest_sha, "status": "PINNED"}
+    tampered_contract_path = tmp_path / "RUN9_CONTRACT.yaml"
+    tampered_contract_path.write_text(
+        yaml.safe_dump(tampered_raw, allow_unicode=True), encoding="utf-8"
+    )
+    return m.load_run9_contract(tampered_raw), manifest_path, tampered_contract_path
+
+
+# --- 裁定文書の repo 収載 -----------------------------------------------------
+
+
+def test_rev06_adjudication_source_file_exists() -> None:
+    assert REV06_ADJUDICATION_PATH.is_file()
+
+
+def test_rev06_adjudication_source_contains_verbatim_values() -> None:
+    """裁定 §1-§9 の凍結値が、repo 内収載した裁定文書の本文に一字一句
+    そのまま存在すること（grep 照合——「User 転記であって発明でない」こと
+    を機械検証する。`test_harness3a_adjudication_source_contains_verbatim_
+    values` と同型）。"""
+    text = REV06_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    for value in (
+        "選択肢Aを採用する。",
+        "design_revision 0.6として再事前登録する。",
+        "本裁定はC0/C1/Identity距離・学習結果・holdoutを観測した後の救済ではない。",
+        "theta_cal(F)=P95(D_C0(F))=0へ退化することが",
+        "C0はFounderごとに20 takesを実行する。",
+        "D_C0(F)=0×20を期待値とし、",
+        "DETERMINISM_CONTRACT_BROKENとして停止する。",
+        "C1 ZERO_CONTROLPROFILE_SHAMもFounderごとに20 takes実行する。",
+        "非ゼロの場合はC1_SHAM_EFFECT_DETECTEDとして停止する。",
+        "positive referenceは追加のexact replay監査として維持する。",
+        "d12 = distance(R9F-01:r0, R9F-02:r0)",
+        "BIRTH = ESTABLISHED_BY_MACHINE_FEATURE",
+        "PROJECTED_RUNTIME_IDENTITIES_COLLAPSED_IN_MACHINE_FEATURE_SPACE",
+        "独立証拠として二重計上しない。",
+        "BIRTH NOT_ESTABLISHEDとする。",
+        "事後的な最小距離閾値を新設しない。",
+        "m_other = d_other - d_self",
+        "m_pjs   = d_pjs - d_self",
+        "STABLE_BY_MACHINE_METRIC /",
+        "RELATIVE_SELF_NEAREST",
+        "同率をSTABLEへ丸めない。",
+        "既存identity_metric_space.json、",
+        "同protocolのraw SHA256をhypothesis_algebra_shaへPINNEDする。",
+        "LEARN_PERFORMANCEを開始しない。",
+        "Birth Gate不成立時はNOT_ESTABLISHEDとして凍結する。",
+        "方式Bが必要な場合は別design_revisionまたは別Runとする。",
+    ):
+        assert value in text, f"missing verbatim value: {value!r}"
+
+
+def test_rev06_adjudication_source_body_byte_identical_to_scratchpad_origin() -> None:
+    """本文（【RUN9 User裁定...】から末尾§9まで）が起草時の作業メモ
+    scratchpad/run9_user_adjudication_identity_rev06.md と一字一句改変なし
+    で一致すること（scratchpad origin file 非存在環境では skip）。"""
+    scratchpad_path = Path(
+        "/tmp/claude-0/-home-user-ugh-prompt-engine/"
+        "e505c1c2-c4ad-588b-a1b2-258051a522de/scratchpad/"
+        "run9_user_adjudication_identity_rev06.md"
+    )
+    if not scratchpad_path.is_file():
+        pytest.skip("scratchpad origin file not present in this environment")
+    marker = "【RUN9 User裁定 — Identity Calibration Degeneracy / design_revision 0.6】"
+    origin_full = scratchpad_path.read_text(encoding="utf-8")
+    origin_body = (marker + origin_full.split(marker, 1)[1]).split(
+        "---\n（転記注", 1
+    )[0].rstrip("\n")
+    committed_text = REV06_ADJUDICATION_PATH.read_text(encoding="utf-8")
+    committed_body = (marker + committed_text.split(marker, 1)[1]).rstrip("\n")
+    assert committed_body == origin_body
+
+
+def test_rev06_adjudication_source_sha256_matches_protocol_and_contract_comment() -> None:
+    """裁定 txt の実バイト sha256 固定——protocol の
+    `adjudication_basis.sha256`、および `RUN9_CONTRACT.yaml` 情報記録
+    コメントが記載する値と三者一致すること。"""
+    actual = m.compute_file_sha256(REV06_ADJUDICATION_PATH)
+    assert actual == "43c7e71cd3bcb7cf3840c67a18e4a4c35a0259b9e04b1335868c33e925420db1"
+    data = _identity_decision_protocol_data()
+    assert data["adjudication_basis"]["sha256"] == actual
+    contract_yaml_text = CONTRACT_PATH.read_text(encoding="utf-8")
+    assert actual in contract_yaml_text
+
+
+# --- validate_identity_decision_protocol(): 正常系・直列化 ------------------
+
+
+def test_rev06_validate_real_manifest_happy_path() -> None:
+    m.validate_identity_decision_protocol(_identity_decision_protocol_data())  # 例外なしの確認
+
+
+def test_rev06_manifest_reserialization_byte_identical() -> None:
+    raw = m.IDENTITY_DECISION_PROTOCOL_PATH.read_bytes()
+    data = m._loads_strict_json(raw.decode("utf-8"))
+    reserialized = (
+        json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode("utf-8")
+    assert reserialized == raw
+
+
+def test_rev06_validate_rejects_unknown_top_level_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["unexpected_extra_field"] = True
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_validate_rejects_missing_top_level_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["pjs_confuser"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_validate_rejects_wrong_schema() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["schema"] = "run9-identity-decision-protocol/0.5"
+    with pytest.raises(m.Run9ValidationError, match="schema"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_validate_rejects_wrong_c0_takes_type() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["c0_determinism_attestation"]["takes_per_founder"] = 20.0
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_validate_rejects_wrong_birth_cell_ref() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_identity_separation"]["cell_ref"] = "P1-REG-LOW-DUR-SHORT"
+    with pytest.raises(m.Run9ValidationError, match="cell_ref"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_validate_rejects_wrong_outcome_detail_vocabulary() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_identity_separation"]["established"]["outcome_detail"] = "MADE_UP_LABEL"
+    with pytest.raises(m.Run9ValidationError, match="outcome_detail"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_validate_rejects_reordered_immutability_unchanged() -> None:
+    """裁定§7逐語列挙の順序込み一致——並び替えも拒否する。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["immutability"]["unchanged"] = list(reversed(data["immutability"]["unchanged"]))
+    with pytest.raises(m.Run9ValidationError, match="immutability.unchanged"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_rev06_validate_rejects_superseded_sections_not_closed_set() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["supersede_declaration"]["superseded_sections"].append(
+        "inputs/identity_metric_space.json#calibration"
+    )
+    with pytest.raises(m.Run9ValidationError, match="superseded_sections"):
+        m.validate_identity_decision_protocol(data)
+
+
+# --- outcome_detail 語彙: 既存 frozen tuple への非破壊確認 -------------------
+
+
+def test_rev06_outcome_detail_constants_do_not_collide_with_existing_frozen_vocab() -> None:
+    """裁定の新ラベルは既存 BIRTH_OUTCOMES/IDENTITY_OUTCOMES に**追加**
+    されるのではなく、別定数（`IDENTITY_PROTOCOL_*`）として独立に凍結
+    されていること（二層構造——既存 tuple は無改変）。"""
+    assert m.BIRTH_OUTCOMES == ("ESTABLISHED", "NOT_ESTABLISHED")
+    assert m.IDENTITY_OUTCOMES == ("STABLE_BY_MACHINE_METRIC", "SHIFTED", "UNCALIBRATED")
+    assert m.SEPARATION_OUTCOMES == (
+        "MACHINE_EVIDENCE_SUPPORTED", "MIXED", "NOT_ESTABLISHED",
+    )
+    assert m.IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL not in m.BIRTH_OUTCOMES
+    assert m.IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL not in m.BIRTH_OUTCOMES
+    assert m.IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL not in m.IDENTITY_OUTCOMES
+    assert m.IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME not in m.FAILURE_CLASSES
+
+
+# --- hypothesis_algebra_sha PINNED 化 ---------------------------------------
+
+
+def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
+    contract_raw: Dict[str, Any],
+) -> None:
+    field = contract_raw["hypothesis_algebra_sha"]
+    assert field["status"] == "PINNED"
+    assert field["value"] == m.compute_file_sha256(m.IDENTITY_DECISION_PROTOCOL_PATH)
+    assert field["value"] == (
+        "967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3"
+    )
+    assert field["source"] == (
+        "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json"
+    )
+
+
+# --- load_pinned_identity_decision_protocol(): 正常系・cross-check ----------
+
+
+def test_rev06_load_pinned_happy_path(contract: m.Run9RunContract) -> None:
+    domain = _real_identity_domain()
+    data = m.load_pinned_identity_decision_protocol(contract, domain=domain)
+    assert data["schema"] == m.SCHEMA_IDENTITY_DECISION_PROTOCOL
+
+
+def test_rev06_load_pinned_missing_file_rejected(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    domain = _real_identity_domain()
+    missing_path = tmp_path / "does_not_exist.json"
+    with pytest.raises(m.Run9ValidationError, match="does not exist"):
+        m.load_pinned_identity_decision_protocol(
+            contract, domain=domain, manifest_path=missing_path
+        )
+
+
+def test_rev06_load_pinned_rejects_adjudication_sha_tamper(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    domain = _real_identity_domain()
+
+    def mutate(data: Dict[str, Any]) -> None:
+        data["adjudication_basis"]["sha256"] = "0" * 64
+
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=mutate
+    )
+    with pytest.raises(m.Run9ValidationError, match="adjudication_basis.sha256"):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )
+
+
+def test_rev06_load_pinned_rejects_metric_space_sha_tamper(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    domain = _real_identity_domain()
+
+    def mutate(data: Dict[str, Any]) -> None:
+        data["metric_reference"]["metric_space_sha"] = "1" * 64
+
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=mutate
+    )
+    with pytest.raises(m.Run9ValidationError, match="metric_space_sha"):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )
+
+
+def test_rev06_load_pinned_rejects_c0_takes_mismatch_with_contract(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    domain = _real_identity_domain()
+
+    def mutate(data: Dict[str, Any]) -> None:
+        data["c0_determinism_attestation"]["takes_per_founder"] = 5
+
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=mutate
+    )
+    with pytest.raises(m.Run9ValidationError, match="c0_determinism_attestation.takes_per_founder"):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )
+
+
+def test_rev06_load_pinned_rejects_design_revision_doc_sha_mismatch(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    domain = _real_identity_domain()
+
+    def mutate(data: Dict[str, Any]) -> None:
+        data["provenance"]["design_revision_doc"]["sha256"] = "2" * 64
+
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=mutate
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="provenance.design_revision_doc.sha256"
+    ):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )
+
+
+def test_rev06_load_pinned_rejects_supersede_section_typo(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """supersede_declaration の節名が identity_metric_space.json に実在
+    しない typo の場合、loader の cross-check (7) が fail-closed で検出
+    すること（validator 単体は閉じた集合の一致のみを見るため通す —
+    loader が実文書へ走査して typo を検出する二段防御の確認）。"""
+    domain = _real_identity_domain()
+
+    def mutate(data: Dict[str, Any]) -> None:
+        sections = data["supersede_declaration"]["superseded_sections"]
+        idx = sections.index("inputs/identity_metric_space.json#calibration.decision_rule")
+        sections[idx] = "inputs/identity_metric_space.json#calibration.does_not_exist"
+
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=mutate
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )
+
+
+def test_rev06_load_pinned_rejects_disk_contract_divergence(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """in-process contract が disk 正典 RUN9_CONTRACT.yaml と乖離している
+    場合、改変証跡として fail-closed 拒否されること（他の `load_pinned_*`
+    と同型の3層防御・第1層）。"""
+    domain = _real_identity_domain()
+    tampered_raw = copy.deepcopy(contract.raw)
+    tampered_raw["hypothesis_algebra_sha"] = dict(tampered_raw["hypothesis_algebra_sha"])
+    tampered_raw["hypothesis_algebra_sha"]["value"] = "3" * 64
+    tampered_contract = m.load_run9_contract(tampered_raw)
+    with pytest.raises(m.Run9ValidationError, match="diverges from the canonical on-disk"):
+        m.load_pinned_identity_decision_protocol(tampered_contract, domain=domain)
+
+
+# --- design_revision 0.6 の contract 昇格に伴うグラウンディング確認 ---------
+
+
+def test_rev06_probe_manifest_does_not_declare_hypothesis_algebra_sha_pending(
+) -> None:
+    """probe_manifest.json の revision_bridge は hypothesis_algebra_sha を
+    literal PENDING と正典宣言していない（PR #324 の measurement_spec 正典
+    矛盾の教訓 — 本改訂の実装前グラウンディングで確認済み。probe_manifest
+    は score cells + render契約 + take台帳のみを定義し、identity 軸の
+    式・閾値・pin 状態は重複定義しない、という measurement_boundary の
+    scope_statement どおりのため probe_manifest 側の repin は不要
+    だった）。"""
+    probe_manifest_path = _RUN_DIR / "evaluation" / "probe_manifest.json"
+    text = probe_manifest_path.read_text(encoding="utf-8")
+    assert "hypothesis_algebra_sha" not in text
+
+
+def test_rev06_failure_abort_criteria_rule7_and_rule16_reference_rev06() -> None:
+    """failure_abort_criteria.json の Birth Gate 関連 rule（rule 7/16）が
+    rev 0.6 supersede への参照を含むこと（stale 文言是正の直接回帰）。"""
+    data = m._loads_strict_json(m.FAILURE_ABORT_MANIFEST_PATH.read_text(encoding="utf-8"))
+    by_id = {r["rule_id"]: r for r in data["rules"]}
+    assert "identity_decision_protocol_v0.6.json" in by_id[7]["checkpoint"]
+    assert "rev 0.6" in by_id[16]["checkpoint"] or "0.6" in by_id[16]["checkpoint"]
+    # enforcement/rule_id/verbatim は無改変（stale 文言の是正のみ）。
+    assert by_id[7]["enforcement"] == "PROCEDURAL"
+    assert by_id[7]["verbatim"] == "Birth Identity separation not established"
+    assert by_id[16]["enforcement"] == "PROCEDURAL"
+    assert by_id[16]["verbatim"] == "Identity drift beyond non-inferiority"
