@@ -2032,10 +2032,25 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   PJS confuser distance、監査完了を閉世界で評価する。結果 bundle は staging
   完成後の atomic rename でのみ公開し、既存出力の上書きは拒否する。
   この実装は測定を行っておらず、上記 2026-08-28 attempt の結論も変更しない。
-  現在の再実行ブロッカーは pin 済み `cdbd779c...` acoustic ONNX の実体または
-  同バイト再現環境のみであり、`80a40f...` への repin/fallback は実装していない。
+  なお C1 `ZERO_CONTROLPROFILE_SHAM` は、`gate_synth` 側に ControlProfile
+  attachment boundary が存在しないため render 呼出し前に fail-closed する
+  （`r_sham` を横に保持したまま通常 render を実行し C1 mechanism を通したと
+  誤認して PASS する経路を塞ぐため。PR #337 第7巡レビュー採用）。
 
-上記の残 pin を除く machine-dependent な実装作業:
+  **現在の再実行ブロッカー（3件、いずれか未解消の間は実測に到達しない）**:
+
+  1. **C1 `r_sham` synthesis attachment 未実装**: production C1 render は
+     `GateSynthRenderer.__call__()` が `BirthProbeError` で停止させる。
+     未事前登録の ControlProfile 意味論を汎用 `gate_synth` へ推測で
+     追加はしない。これは machine-dependent 実行ではなく実装作業。
+  2. **`RUN9_CONTRACT.yaml#dependency_pins_sha` が `PENDING`**: 直接実行する
+     数値依存（NumPy/SciPy/SoundFile/PyYAML/ONNX Runtime）の期待 version は
+     contract pin 経由でのみ受理するため、`_load_direct_dependency_pin_versions()`
+     が render 前に fail-closed する（mutable な manifest 自身を権威にしない）。
+  3. **pin 済み `cdbd779c...` acoustic ONNX の実体または同バイト再現環境**:
+     `80a40f...` への repin/fallback は実装していない。
+
+上記3ブロッカーとは別に残る machine-dependent な実装作業:
 
 - **practice/education harness 実装**: VG-L0 学習ハーネスの一部として、
   PRACTICE_FROM_AUDIO（Founder 自身の自律特徴抽出・差分推定・制御探索
@@ -2047,16 +2062,18 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   を通じて `Run9ProfileLedger` へ publish する（書込境界は Phase 3 で
   既に機械強制済み — builder は境界検証を再実装しない）。
 - **6分類の実測パイプライン**: `BIRTH_OUTCOMES`〜`IDENTITY_OUTCOMES` を
-  実際の render/measurement 結果から機械判定するロジックの実装（現状は
-  語彙の凍結のみ）。`REQUIRED_GAIN_FIELDS`（held-out gain 必須4欄）の
-  実測パイプラインも同様。identity 距離の実測は
+  render/measurement 結果から機械判定するロジックと、
   `inputs/identity_metric_space.json` の spec（WORLD sp 平均ベクトル・
-  Euclidean 距離）を実装する。
-- **C0/C1 の実 render**: `CONTROL_CONDITIONS` の両条件を実際に render し
-  `control_conditions_satisfied()` で評価 readiness を確認するパイプ
-  ライン。`run9_controlprofile.derive_profile(..., control_condition=...)`
-  が C0/C1 それぞれの ControlProfile revision（`replay`/`r_sham`）を
-  既に生成できる — harness はこれを呼ぶだけでよい。
+  Euclidean 距離）による identity 距離算出は `birth_probe_executor.py`
+  で実装済み——残るのは上記3ブロッカー解消後の実行であり pipeline の
+  再実装ではない。未実装で残るのは `REQUIRED_GAIN_FIELDS`（held-out gain
+  必須4欄）の実測パイプラインのみで、これは学習ハーネス側の作業。
+- **C0/C1 の実 render**: 固定実行順（Founder ごと reference 1 + C0 20 +
+  C1 20 + positive 1 = 84 render）・`derive_profile(..., control_condition=...)`
+  による `replay`/`r_sham` 導出・`control_conditions_satisfied()` の
+  readiness 評価は executor に実装済み。C0 は実行境界まで到達しており残るのは
+  machine-dependent 実行のみだが、**C1 は上記ブロッカー1（`r_sham` の
+  synthesis attachment 未実装）のため実装作業が残る**。
 - **practice trace の実体生成**: `run9_controlprofile.SCHEMA_PRACTICE_
   TRACE`/`validate_practice_trace()` の最低要件を満たす実トレースの記録
   （模倣対象選択・内部差分推定・探索履歴）は harness 実装時。

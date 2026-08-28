@@ -22289,3 +22289,59 @@ def test_pr333_r16_load_pinned_rejects_new_field_tamper_via_hash_mismatch(
             tampered_contract, domain=domain, manifest_path=manifest_path,
             contract_path=tmp_path / "RUN9_CONTRACT.yaml",
         )
+
+
+# ---------------------------------------------------------------------------
+# PR #337 Codex bot レビュー第8巡対応（P2, 採用）: README の再実行ブロッカー
+# 記述が実状態と一致していること。acoustic ONNX を唯一のブロッカーと呼ぶと
+# 次の実行者へ実行不能な handoff を渡すため、3 件を全数列挙する。
+# ---------------------------------------------------------------------------
+
+
+def _executor_impl_section() -> str:
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    section = readme.split("**executor/consumer 実装（本PR）**:", 1)
+    assert len(section) == 2, "README の executor/consumer 実装節が見つからない"
+    return section[1].split("## 設計判断の記録", 1)[0]
+
+
+def test_pr337_r8_readme_lists_all_three_rerun_blockers() -> None:
+    """再実行ブロッカーが acoustic ONNX 単独ではなく、(1) C1 `r_sham`
+    synthesis attachment 未実装、(2) `dependency_pins_sha` PENDING、
+    (3) pin 済み acoustic ONNX exact bytes/再現環境、の 3 件として
+    列挙されていること。"""
+    section = _executor_impl_section()
+    assert "現在の再実行ブロッカー" in section
+    assert "のみであり" not in section.split("現在の再実行ブロッカー", 1)[1].split(
+        "machine-dependent な実装作業", 1
+    )[0], "単独ブロッカー主張へ退行している"
+    assert "r_sham" in section
+    assert "dependency_pins_sha" in section
+    assert "PENDING" in section
+    assert "cdbd779c" in section
+
+
+def test_pr337_r8_readme_records_c1_fail_closed_behavior() -> None:
+    """production C1 が render 前に fail-closed することが README に
+    記録されていること（`r_sham` を bypass したまま PASS しない）。"""
+    section = _executor_impl_section()
+    assert "ZERO_CONTROLPROFILE_SHAM" in section
+    assert "fail-closed" in section
+
+
+def test_pr337_r7_readme_remaining_work_does_not_reschedule_implemented_pipeline() -> None:
+    """残作業リストが、本 PR で実装済みの 6 分類判定 / identity 距離 /
+    固定実行順パイプラインを「未実装の残作業」として再掲していないこと
+    （実装済み pipeline と未了の実行/実装を分離する）。"""
+    readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
+    remaining = readme.split("machine-dependent な実装作業:", 1)
+    assert len(remaining) == 2, "残作業リストの見出しが見つからない"
+    remaining_text = remaining[1].split("**erratum", 1)[0]
+    assert "現状は\n  語彙の凍結のみ" not in remaining_text
+    assert "実装済み" in remaining_text
+    # C0/C1 節は「実装済み部分」と「C1 に残る実装作業」を両方明示する
+    c0c1 = remaining_text.split("- **C0/C1 の実 render**:", 1)
+    assert len(c0c1) == 2
+    c0c1_text = c0c1[1].split("\n- ", 1)[0]
+    assert "実装済み" in c0c1_text
+    assert "r_sham" in c0c1_text
