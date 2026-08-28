@@ -48,9 +48,10 @@
       "c0_determinism_attestation.on_mismatch",
       "c1_sham_attestation.on_nonzero",
       "c1_sham_attestation.on_wav_byte_mismatch",
+      "c1_sham_attestation.on_feature_mismatch",
       "positive_reference_audit.on_mismatch"
     ],
-    "definition": "Birth Gate 全体の PASS ⇔ identity_establishment（= birth_gate_aggregate_rule の連言判定）が ESTABLISHED ∧ C0/C1/positive reference の各 attestation・audit（audit_stop_refs 列挙の4節）がいずれの停止条件にも該当しない。",
+    "definition": "Birth Gate 全体の PASS ⇔ identity_establishment（= birth_gate_aggregate_rule の連言判定）が ESTABLISHED ∧ C0/C1/positive reference の各 attestation・audit（audit_stop_refs 列挙の5節）がいずれの停止条件にも該当しない。",
     "identity_establishment_ref": "birth_gate_aggregate_rule",
     "note": "PR #333 Codex bot レビュー第5巡指摘3（P1、採用）新設: 従来の birth_gate_aggregate_rule の『必要十分条件』は validity/d12/PJS のみを規定し、C0/C1/positive reference の exact-replay 監査を含んでいなかったため、監査失敗（DETERMINISM_CONTRACT_BROKEN 等）と BIRTH=ESTABLISHED が同時成立し得た。本節は Birth Gate 判定を二層に再構成する: identity_establishment（birth_gate_aggregate_rule、BIRTH ラベルを決める層）と本節 birth_gate_overall_pass（learning recipe freeze / 学習実行へ進む可否を決める層）——新規則の発明ではなく、裁定§8『rev 0.6のBirth GateがPASSした場合のみ、learning recipe freezeおよび学習実行へ進む。』の機械符号化。",
     "pass_gates_learning": "PASS の場合のみ learning recipe freeze / 学習実行へ進む（裁定§8）。非 PASS の場合は Birth Gate 全体として学習非進行——ESTABLISHED であっても監査停止があれば学習を開始しない。",
@@ -96,6 +97,13 @@
   "c1_sham_attestation": {
     "contract_field_ref": "RUN9_CONTRACT.yaml#interventions.c1_sham_takes_per_founder",
     "expected": "D_C1(F)=0×20",
+    "on_feature_mismatch": {
+      "condition": "C1 render の WAV bytes が C0/reference と一致し数値距離 D_C1(F)=0 であっても、serialized identity feature bytes/hash が C0/reference と不一致（dtype/signed-zero/シリアライズ差等）",
+      "cross_reference": "c0_determinism_attestation.on_mismatch.feature_computation_mismatch_with_matching_render と同一の feature-mismatch routing 規則を C1 に適用する（新語彙の発明はしない）。",
+      "gate_effect": "Birth Gate 非 PASS・学習非進行（閾値救済禁止、裁定§9 fail-closed 原則）。",
+      "note": "PR #333 Codex bot レビュー第6巡指摘1（P1、採用）新設: 従来の on_nonzero（D_C1(F)≠0 全体）と on_wav_byte_mismatch（WAV bytes 不一致だが feature/数値距離は一致）のいずれにも、『WAV bytes は C0/reference と一致し数値距離 D_C1(F)=0 だが、serialized identity feature bytes/hash が不一致（dtype/signed-zero/シリアライズ差等）』という決定論破りの具体的経路に発火する分岐が存在しなかった——C0 側には render 一致だが feature 計算不一致という対称分岐（feature_computation_mismatch_with_matching_render → IMPLEMENTATION_FAILURE）が既存であるのに対し、C1 だけがこの経路に未分岐だった穴の是正。裁定§2『C1のWAV bytesおよびidentity featureはC0/referenceと完全一致することを要求する。』の機械符号化であり、新規則の発明ではない。既存 on_nonzero（C1_SHAM_EFFECT_DETECTED）/on_wav_byte_mismatch（DETERMINISM_CONTRACT_BROKEN）は無改変。",
+      "outcome": "IMPLEMENTATION_FAILURE"
+    },
     "on_nonzero": "C1_SHAM_EFFECT_DETECTED",
     "on_wav_byte_mismatch": {
       "condition": "C1 render の WAV bytes が C0/reference と不一致（identity feature が一致し D_C1(F)=0 であっても）",

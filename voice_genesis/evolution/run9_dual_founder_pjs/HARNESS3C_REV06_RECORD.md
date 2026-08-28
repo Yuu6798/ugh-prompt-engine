@@ -1211,3 +1211,120 @@ identity_decision_protocol()` happy path（新設3フィールドの到達確認
 - `birth_gate_aggregate_rule`/`birth_gate_overall_pass` いずれも既存
   `BIRTH_OUTCOMES`/`FAILURE_CLASSES` frozen tuple への値追加は行って
   いない（既存語彙の再利用のみ、という二層構造の設計方針を維持）。
+
+## 9. PR #333 Codex bot レビュー第6巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`5d9abded`）。1件（P1）採用。裁定正本は本 PR の対象外（既存裁定 §1-§9 の
+再解釈ではなく、第5巡（本記録 §8）と同型の未登録分岐の是正）。
+
+### 9.1 指摘1（P1）: 「Reject C1 feature-only mismatches at zero
+distance」
+
+**事実確認**: `c1_sham_attestation` が `on_nonzero`（D_C1(F)≠0 全体、
+`C1_SHAM_EFFECT_DETECTED` へ停止）と `on_wav_byte_mismatch`（第5巡、
+WAV bytes 不一致→`DETERMINISM_CONTRACT_BROKEN`）の2分岐のみを持ち、
+「WAV bytes は C0/reference と一致し数値距離 D_C1(F)=0 だが、serialized
+identity feature bytes/hash が C0/reference と不一致（dtype/signed-zero/
+シリアライズ差等）」という決定論破りの具体的経路のいずれにも発火する
+分岐が存在しないことを確認した。`c0_determinism_attestation.on_mismatch`
+には対称分岐 `feature_computation_mismatch_with_matching_render` →
+`IMPLEMENTATION_FAILURE`（render 一致だが feature 計算不一致）が既存
+であるのに対し、C1 側だけがこの経路に未分岐だった——第5巡指摘2
+（本記録 §8.2、byte-level 未分岐の是正）と同型だが独立の穴（byte-level
+と feature-level は別軸であり、片方の是正がもう片方を自動的に埋めない）。
+**指摘内容は事実と一致** → Fable 設計どおり実装。
+
+**実装（Fable 設計）**: `c1_sham_attestation` へ `on_feature_mismatch`
+を新設した——「C1 render の WAV bytes が C0/reference と一致し数値距離
+D_C1(F)=0 であっても、serialized identity feature bytes/hash が
+C0/reference と不一致 → `IMPLEMENTATION_FAILURE`（既存定数
+`IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME` の再利用、新語彙の発明
+はしない）。Birth Gate 非 PASS・学習非進行（裁定§9）」。`cross_reference`
+フィールドで `c0_determinism_attestation.on_mismatch.feature_
+computation_mismatch_with_matching_render` と同一の feature-mismatch
+routing 規則であることを明記した（`test_pr333_r6_c1_on_feature_mismatch_
+reuses_c0_vocabulary` で実データ一致確認）。既存 `on_nonzero`
+（`C1_SHAM_EFFECT_DETECTED`）/`on_wav_byte_mismatch`
+（`DETERMINISM_CONTRACT_BROKEN`）は無改変（`test_pr333_r6_c1_on_nonzero_
+and_on_wav_byte_mismatch_unchanged`）。`birth_gate_overall_pass.audit_
+stop_refs` へ `c1_sham_attestation.on_feature_mismatch` を追加した
+（4→5項目、`test_pr333_r5_overall_pass_audit_stop_refs_matches_frozen_
+tuple` を5項目へ更新して回帰確認）。
+
+### 9.2 敵対的自己検査（Task 指示必須）
+
+`_literal_consumer_birth_gate()`（§8.4 で実装済みのシミュレーション
+関数）へ `c1_feature_mismatch` 引数を追加し、以下1系を新規に機械検証
+した——矛盾なし:
+
+- **(e) C1 feature のみ不一致**: WAV bytes は一致・identity_
+  establishment 側は全て成功、`c1_feature_mismatch=True` →
+  `birth_outcome == "ESTABLISHED"`（ESTABLISHED 判定は維持）∧
+  `overall_pass is False`（監査停止で非PASS）∧ 実データの
+  `c1_sham_attestation.on_feature_mismatch.outcome ==
+  "IMPLEMENTATION_FAILURE"` ∧ 同値が
+  `c0_determinism_attestation.on_mismatch.feature_computation_mismatch_
+  with_matching_render` と一致（C0 側対称分岐との語彙一致を直接確認）
+  （`test_pr333_r6_adversarial_literal_consumer_c1_feature_only_
+  mismatch_established_but_not_pass`）。
+
+既存 (a)-(d) の4系（§8.4）も回帰実行し矛盾なし。
+
+### 9.3 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2681 passed, 7 warnings in ~45s
+```
+
+新設テスト7件（2674→2681）: `tests/test_run9_contract.py` へ
+`pr333_r6_*` prefix で追加——`on_feature_mismatch` の C0 語彙再利用確認・
+欠落キー/誤値/サブキー欠落/空文字拒否・既存 `on_nonzero`/`on_wav_byte_
+mismatch` 無改変確認・敵対的自己検査1系（§9.2）。
+
+### 9.4 変更ファイル
+
+- `inputs/identity_decision_protocol_v0.6.json`:
+  `c1_sham_attestation.on_feature_mismatch` 新設（指摘1）、
+  `birth_gate_overall_pass.audit_stop_refs` へ同分岐を追加（4→5項目）、
+  同節 `definition` の「4節」表記を「5節」へ更新。既存
+  `on_nonzero`/`on_wav_byte_mismatch`/`c0_determinism_attestation`/
+  `positive_reference_audit`/`birth_identity_separation`/`pjs_confuser`
+  の各既存分岐は無改変。
+- `run9_schema.py`: `_IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS`
+  を4項目→5項目へ改訂（`c1_sham_attestation.on_feature_mismatch` 追加）。
+  `validate_identity_decision_protocol()` へ `c1_sham_attestation.on_
+  feature_mismatch` の構造検証（`condition`/`outcome`/`gate_effect`/
+  `cross_reference`/`note`）を追加。専用の新定数は追加していない
+  （既存 `IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME` の再配線のみ）。
+- `RUN9_CONTRACT.yaml`: `hypothesis_algebra_sha` repin（値・repin履歴
+  コメント・reason 追記）。
+- `tests/test_run9_contract.py`: `hypothesis_algebra_sha` repin 値の
+  回帰更新、`_literal_consumer_birth_gate()` へ `c1_feature_mismatch`
+  引数追加、`audit_stop_refs` frozen tuple 一致テストを5項目へ更新、
+  新規 fail-closed/確認/敵対的自己検査テスト7件追加。
+
+### 9.5 逸脱事項
+
+- immutability 対象（`identity_metric_space.json`/`identity_domain`/
+  `Genome`/speaker map manifest）・裁定逐語転記部分（`USER_ADJUDICATION_
+  20260827_IDENTITY_REV06.txt`）は1 byte も変更していない（`git status
+  --short` で確認済み）。
+- 本指摘は第5巡指摘2（本記録 §8.2）と同型だが独立の穴の是正であり、
+  裁定 §1-§9 そのものの再解釈は行っていない——byte-level（WAV bytes）と
+  feature-level（serialized identity feature bytes/hash）は別軸の
+  決定論破りであり、片方の是正がもう片方を自動的に埋めないことを本節
+  で明記した。
+- 既存 `BIRTH_OUTCOMES`/`FAILURE_CLASSES` frozen tuple への値追加は
+  行っていない（既存語彙の再利用のみ）。`_IDENTITY_PROTOCOL_OVERALL_
+  PASS_AUDIT_STOP_REFS` は監査停止参照の列挙という性質上、新設分岐の
+  追加に伴い伸長する運用（第5巡で新設・本巡で4→5項目へ伸長）——
+  `BIRTH_OUTCOMES`/`FAILURE_CLASSES` のような判定語彙 enum とは異なる
+  カテゴリである。
+- 本 PR は依然として事前登録フェーズ（裁定§8 実行順どおり、Birth Gate
+  の実行自体は含まない）——`on_feature_mismatch` も判定規約の凍結までを
+  範囲とし、実行時の実測ロジック自体は本 PR の対象外。

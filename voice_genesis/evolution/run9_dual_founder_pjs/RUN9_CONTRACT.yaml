@@ -3554,18 +3554,33 @@ measurement_spec_sha:
 #   明記した。3件とも新規則の発明ではなく、裁定§4/§5/§9・§2/§9・§8 の
 #   機械符号化——既存 established/invalid_or_nonfinite_feature/
 #   not_established/on_positive/on_zero/on_nonzero の各分岐は無改変。
+# - PR #333 Codex bot レビュー第6巡指摘1（2026-08-28、P1、採用、値
+#   027e3c04ff2978572e9e43ccfdae7314b2171a67f4536ae6a3a0c537153d1b25 へ
+#   repin）: `c1_sham_attestation` へ `on_feature_mismatch`（C1 render の
+#   WAV bytes が C0/reference と一致し数値距離 D_C1(F)=0 であっても、
+#   serialized identity feature bytes/hash が C0/reference と不一致
+#   （dtype/signed-zero/シリアライズ差等）→ 既存定数 `IDENTITY_PROTOCOL_
+#   C0_FEATURE_MISMATCH_OUTCOME` = `IMPLEMENTATION_FAILURE` を再利用）を
+#   新設した——on_nonzero（D_C1(F)≠0）にも on_wav_byte_mismatch（WAV
+#   bytes 不一致）にも未発火だった経路の是正。C0 側に render 一致だが
+#   feature 計算不一致（feature_computation_mismatch_with_matching_
+#   render → IMPLEMENTATION_FAILURE）という対称分岐が既存であるのに対し
+#   C1 だけが未分岐だった穴。`birth_gate_overall_pass.audit_stop_refs`
+#   へ `c1_sham_attestation.on_feature_mismatch` を追加（4→5項目）。新規則
+#   の発明ではなく裁定§2『C1のWAV bytesおよびidentity featureはC0/
+#   referenceと完全一致することを要求する。』の機械符号化——既存
+#   on_nonzero/on_wav_byte_mismatch の各分岐は無改変。
 hypothesis_algebra_sha:
-  value: "2e47c7d6f093add787159d1a6325b70d308146280a3e8f40abdc08e1b10e59cd"
+  value: "027e3c04ff2978572e9e43ccfdae7314b2171a67f4536ae6a3a0c537153d1b25"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json
   reason: >-
     rev 0.6 裁定 §7「同protocolのraw SHA256をhypothesis_algebra_shaへ
     PINNEDする」に基づき pin。値は inputs/identity_decision_protocol_
     v0.6.json の実バイト sha256（load_pinned_identity_decision_protocol()
-    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第5巡
-    指摘1/2/3（P1×3、採用）で `birth_gate_aggregate_rule.conjunct_refs`
-    是正 + `c1_sham_attestation.on_wav_byte_mismatch` 新設 +
-    `birth_gate_overall_pass` 新設のため repin（上記【repin 履歴】参照）。
+    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第6巡
+    指摘1（P1、採用）で `c1_sham_attestation.on_feature_mismatch` 新設の
+    ため repin（上記【repin 履歴】参照）。
 
 # PR #333 Codex bot レビュー第1巡指摘1（P1、採用）新設: hypothesis_algebra_
 # sha が rev 0.6 裁定 §7 で identity decision protocol の pin へ用途確定

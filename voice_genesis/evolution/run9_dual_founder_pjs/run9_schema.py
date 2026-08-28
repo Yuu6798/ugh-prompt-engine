@@ -201,6 +201,14 @@ IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME = "C1_SHAM_EFFECT_DETECTED"
 # BROKEN）を c1_sham_attestation.on_wav_byte_mismatch.outcome でも再利用する
 # ため、本節に専用の新定数は不要（既存定数の再配線のみ）。
 
+# PR #333 Codex bot レビュー第6巡指摘1（P1、採用）: on_nonzero にも
+# on_wav_byte_mismatch にも、「WAV bytes は C0/reference と一致し D_C1(F)=0
+# だが serialized identity feature bytes/hash が不一致（dtype/signed-zero/
+# シリアライズ差等）」という経路には未発火だった——C0 側の対称分岐
+# `IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME`（IMPLEMENTATION_FAILURE）
+# を c1_sham_attestation.on_feature_mismatch.outcome でも再利用するため、
+# 本節にも専用の新定数は不要（既存定数の再配線のみ）。
+
 # birth_identity_separation（裁定 §4）の outcome_detail 二層構造:
 # BIRTH_OUTCOMES[0]="ESTABLISHED" を精緻化する成立側ラベルと、
 # BIRTH_OUTCOMES[1]="NOT_ESTABLISHED" に付随する凍結理由ラベルのペア。
@@ -20354,14 +20362,16 @@ _IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_ACTION_REF = "invariants.birth_gate_failur
 # 自己参照 dotted path）。
 _IDENTITY_PROTOCOL_OVERALL_PASS_IDENTITY_ESTABLISHMENT_REF = "birth_gate_aggregate_rule"
 
-# audit_stop_refs（新設節内の逐語列挙、順序込み・4項目ちょうど）: Birth
+# audit_stop_refs（新設節内の逐語列挙、順序込み・5項目ちょうど）: Birth
 # Gate 全体の PASS を妨げ得る exact-replay 監査の停止語彙割当て節を列挙
 # する——c1_sham_attestation は on_nonzero（既存）と on_wav_byte_mismatch
-# （第5巡指摘2、新設）の両方を含む。
-_IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS: Tuple[str, str, str, str] = (
+# （第5巡指摘2、新設）に加え on_feature_mismatch（第6巡指摘1、新設）の
+# 3つを含む。
+_IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS: Tuple[str, str, str, str, str] = (
     "c0_determinism_attestation.on_mismatch",
     "c1_sham_attestation.on_nonzero",
     "c1_sham_attestation.on_wav_byte_mismatch",
+    "c1_sham_attestation.on_feature_mismatch",
     "positive_reference_audit.on_mismatch",
 )
 
@@ -20592,7 +20602,7 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         data["c1_sham_attestation"], field="c1_sham_attestation",
         required_keys=frozenset({
             "verbatim", "takes_per_founder", "contract_field_ref", "requirement",
-            "expected", "role", "on_nonzero", "on_wav_byte_mismatch",
+            "expected", "role", "on_nonzero", "on_wav_byte_mismatch", "on_feature_mismatch",
         }),
     )
     _require_non_empty_str(c1["verbatim"], field="c1_sham_attestation.verbatim")
@@ -20627,6 +20637,28 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         )
     for f in ("condition", "gate_effect", "cross_reference", "note"):
         _require_non_empty_str(c1_wav_mismatch[f], field=f"c1_sham_attestation.on_wav_byte_mismatch.{f}")
+    # PR #333 Codex bot レビュー第6巡指摘1（P1、採用）新設: on_nonzero
+    # （D_C1(F)≠0 全体）にも on_wav_byte_mismatch（WAV bytes 不一致）にも、
+    # 「WAV bytes は一致し D_C1(F)=0 だが serialized identity feature
+    # bytes/hash が不一致（dtype/signed-zero/シリアライズ差等）」という
+    # 経路が未分岐だった——c0_determinism_attestation.on_mismatch.feature_
+    # computation_mismatch_with_matching_render と同一語彙を再利用する
+    # （新語彙の発明はしない）。
+    c1_feature_mismatch = _validate_identity_protocol_shape(
+        c1["on_feature_mismatch"], field="c1_sham_attestation.on_feature_mismatch",
+        required_keys=frozenset({"condition", "outcome", "gate_effect", "cross_reference", "note"}),
+    )
+    if c1_feature_mismatch["outcome"] != IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME:
+        raise Run9ValidationError(
+            "c1_sham_attestation.on_feature_mismatch.outcome must be exactly "
+            f"{IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME!r} (c0_determinism_attestation."
+            f"on_mismatch.feature_computation_mismatch_with_matching_render と同一語彙の再利用), got "
+            f"{c1_feature_mismatch['outcome']!r}"
+        )
+    for f in ("condition", "gate_effect", "cross_reference", "note"):
+        _require_non_empty_str(
+            c1_feature_mismatch[f], field=f"c1_sham_attestation.on_feature_mismatch.{f}"
+        )
 
     # --- positive_reference_audit（裁定 §3）---------------------------------
     positive = _validate_identity_protocol_shape(

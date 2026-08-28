@@ -19851,9 +19851,9 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     field = contract_raw["hypothesis_algebra_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.IDENTITY_DECISION_PROTOCOL_PATH)
-    # PR #333 第5巡指摘1/2/3（P1×3、採用）: `birth_gate_aggregate_rule.
-    # conjunct_refs` 是正 + `c1_sham_attestation.on_wav_byte_mismatch` 新設
-    # + `birth_gate_overall_pass` 新設のため repin（旧値
+    # PR #333 第6巡指摘1（P1、採用）: `c1_sham_attestation.on_feature_
+    # mismatch` 新設のため repin（旧値
+    # 2e47c7d6f093add787159d1a6325b70d308146280a3e8f40abdc08e1b10e59cd・
     # f626e309d187177800d33afabe6c81537faa3c59a5432e080f88e0d4854f1778・
     # 7525cd5ef484bfd94a234f25b44a48368d2f1607f334de1b868863c1bd133f4a・
     # cde8b003ff88b78693c81058e3a80ec4fbfe546df7e3f8e61812c8d6f61c67c1・
@@ -19861,7 +19861,7 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     # 967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3 は
     # RUN9_CONTRACT.yaml の【repin 履歴】コメントに保持）。
     assert field["value"] == (
-        "2e47c7d6f093add787159d1a6325b70d308146280a3e8f40abdc08e1b10e59cd"
+        "027e3c04ff2978572e9e43ccfdae7314b2171a67f4536ae6a3a0c537153d1b25"
     )
     assert field["source"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json"
@@ -20825,6 +20825,61 @@ def test_pr333_r5_c1_on_nonzero_byte_unchanged() -> None:
     assert data["c1_sham_attestation"]["on_nonzero"] == "C1_SHAM_EFFECT_DETECTED"
 
 
+# --- 第6巡指摘1: c1_sham_attestation.on_feature_mismatch --------------------
+
+
+def test_pr333_r6_c1_on_feature_mismatch_reuses_c0_vocabulary() -> None:
+    """新設 on_feature_mismatch は C0 側の feature-mismatch 停止語彙定数を
+    そのまま再利用していること（新語彙の発明はしない）。"""
+    data = _identity_decision_protocol_data()
+    on_feature = data["c1_sham_attestation"]["on_feature_mismatch"]
+    assert on_feature["outcome"] == m.IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME
+    assert on_feature["outcome"] == "IMPLEMENTATION_FAILURE"
+    c0_on_mismatch = data["c0_determinism_attestation"]["on_mismatch"]
+    assert on_feature["outcome"] == c0_on_mismatch["feature_computation_mismatch_with_matching_render"]
+
+
+def test_pr333_r6_validate_rejects_c1_on_feature_mismatch_missing_top_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["c1_sham_attestation"]["on_feature_mismatch"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r6_validate_rejects_c1_on_feature_mismatch_wrong_outcome() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["c1_sham_attestation"]["on_feature_mismatch"]["outcome"] = "C1_SHAM_EFFECT_DETECTED"
+    with pytest.raises(
+        m.Run9ValidationError, match="c1_sham_attestation.on_feature_mismatch.outcome"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r6_validate_rejects_c1_on_feature_mismatch_missing_subkey() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["c1_sham_attestation"]["on_feature_mismatch"]["cross_reference"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r6_validate_rejects_c1_on_feature_mismatch_empty_note() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["c1_sham_attestation"]["on_feature_mismatch"]["note"] = ""
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r6_c1_on_nonzero_and_on_wav_byte_mismatch_unchanged() -> None:
+    """既存 on_nonzero（C1_SHAM_EFFECT_DETECTED）・on_wav_byte_mismatch
+    （DETERMINISM_CONTRACT_BROKEN）は本巡改訂で無改変。"""
+    data = _identity_decision_protocol_data()
+    assert data["c1_sham_attestation"]["on_nonzero"] == "C1_SHAM_EFFECT_DETECTED"
+    assert (
+        data["c1_sham_attestation"]["on_wav_byte_mismatch"]["outcome"]
+        == "DETERMINISM_CONTRACT_BROKEN"
+    )
+
+
 # --- 指摘3: birth_gate_overall_pass（二層分離）------------------------------
 
 
@@ -20857,6 +20912,7 @@ def test_pr333_r5_overall_pass_audit_stop_refs_matches_frozen_tuple() -> None:
         "c0_determinism_attestation.on_mismatch",
         "c1_sham_attestation.on_nonzero",
         "c1_sham_attestation.on_wav_byte_mismatch",
+        "c1_sham_attestation.on_feature_mismatch",
         "positive_reference_audit.on_mismatch",
     ]
 
@@ -20936,6 +20992,7 @@ def test_pr333_r5_load_pinned_happy_path_with_new_sections(
     assert data["schema"] == m.SCHEMA_IDENTITY_DECISION_PROTOCOL
     assert "birth_gate_overall_pass" in data
     assert "on_wav_byte_mismatch" in data["c1_sham_attestation"]
+    assert "on_feature_mismatch" in data["c1_sham_attestation"]
     assert "failure_refs" in (
         data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
     )
@@ -20983,6 +21040,7 @@ def _literal_consumer_birth_gate(
     c0_mismatch: bool = False,
     c1_nonzero: bool = False,
     c1_wav_byte_mismatch: bool = False,
+    c1_feature_mismatch: bool = False,
     positive_mismatch: bool = False,
 ) -> Tuple[str, bool]:
     """protocol JSON の `birth_gate_aggregate_rule.conjunct_refs` 列挙を
@@ -21007,7 +21065,10 @@ def _literal_consumer_birth_gate(
         else agg["not_established"]["birth_outcome"]
     )
 
-    audit_failed = c0_mismatch or c1_nonzero or c1_wav_byte_mismatch or positive_mismatch
+    audit_failed = (
+        c0_mismatch or c1_nonzero or c1_wav_byte_mismatch or c1_feature_mismatch
+        or positive_mismatch
+    )
     # overall PASS の定義（`birth_gate_overall_pass.definition`）をそのまま
     # 辿る: identity_establishment = ESTABLISHED ∧ 監査停止が一件も無い。
     overall_pass = established and not audit_failed
@@ -21055,6 +21116,34 @@ def test_pr333_r5_adversarial_literal_consumer_c1_byte_only_mismatch_broken_but_
     assert (
         protocol["c1_sham_attestation"]["on_wav_byte_mismatch"]["outcome"]
         == "DETERMINISM_CONTRACT_BROKEN"
+    )
+
+
+def test_pr333_r6_adversarial_literal_consumer_c1_feature_only_mismatch_established_but_not_pass() -> (
+    None
+):
+    """(e) C1 feature のみ不一致（WAV bytes は一致・identity_establishment
+    は全て成功）→ ESTABLISHED 維持だが overall 非 PASS（第6巡指摘1 の核心
+    ——on_nonzero/on_wav_byte_mismatch のいずれにも未発火だった経路）。"""
+    protocol = _identity_decision_protocol_data()
+    birth_outcome, overall_pass = _literal_consumer_birth_gate(
+        protocol,
+        feature_valid=True, d12_positive=True, pjs_distance_positive=True,
+        c1_feature_mismatch=True,
+    )
+    assert birth_outcome == "ESTABLISHED"
+    assert overall_pass is False
+    # 監査停止語彙が実際に protocol 側で IMPLEMENTATION_FAILURE へ
+    # 割り当てられていることも直接確認する（C0 側の対称分岐と同一語彙）。
+    assert (
+        protocol["c1_sham_attestation"]["on_feature_mismatch"]["outcome"]
+        == "IMPLEMENTATION_FAILURE"
+    )
+    assert (
+        protocol["c1_sham_attestation"]["on_feature_mismatch"]["outcome"]
+        == protocol["c0_determinism_attestation"]["on_mismatch"][
+            "feature_computation_mismatch_with_matching_render"
+        ]
     )
 
 
