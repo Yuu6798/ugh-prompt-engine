@@ -1005,3 +1005,209 @@ verbatim_basis 改ざん拒否・established/not_established の outcome_detail
   いずれも既存 `BIRTH_OUTCOMES`/`FAILURE_CLASSES` frozen tuple への
   値追加は行っていない（既存語彙の再利用 + `IDENTITY_PROTOCOL_*` detail
   層への新設のみ、という二層構造の設計方針を維持）。
+
+## 8. PR #333 Codex bot レビュー第5巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`68bb1872`）。3件全て採用（P1×3）。裁定正本は本 PR の対象外（既存裁定
+§1-§9 の再解釈ではなく、実装欠陥の是正）。指摘1・3 は第4巡実装
+（本記録 §7）が導入した欠陥の是正であり、その経緯を本節で正直に記録
+する。3件とも Fable が事前に採否・設計を確定し、着手前の事実確認で
+指摘内容が実物と一致することを確認してから実装した。
+
+### 8.1 指摘1（P1）: 「Conjoin predicates rather than mutually exclusive
+branches」
+
+**事実確認**: 第4巡（本記録 §7.1）で追加した `birth_gate_aggregate_rule.
+conjunct_refs` が `birth_identity_separation.established` と
+`invalid_or_nonfinite_feature`、`pjs_confuser.on_positive` と `on_zero`
+という**排他ペア両方**を含んでおり、「conjunct_refs 全項が成立」という
+連言条件が要求する4項目は数学的に同時成立不可能（`established` と
+`invalid_or_nonfinite_feature` は互いに否定の関係、`on_positive` と
+`on_zero` も同様）であることを確認した。文字通りの消費者（protocol
+JSON の宣言だけを読んで判定を実装するコード）は、この連言が常に偽と
+なるため決して BIRTH=ESTABLISHED に到達できず、毎回 NOT_ESTABLISHED へ
+凍結される——**第4巡実装自体の欠陥**であり、第4巡の Completion Summary
+（本記録 §7.1）が「新規則の発明ではない」と記述した設計意図（Birth Gate
+全体の ESTABLISHED 連言条件を凍結する）を実装が正しく符号化できていな
+かった。
+
+**実装（Fable 設計）**: `conjunct_refs` を成功述語のみ2項目
+（`birth_identity_separation.established` / `pjs_confuser.on_positive`）
+へ限定し直した。失敗分岐（`birth_identity_separation.invalid_or_
+nonfinite_feature` / `birth_identity_separation.not_established` /
+`pjs_confuser.on_zero`）は新設 `not_established.outcome_detail_priority.
+failure_refs`（3項目、`order` と同順）へ分離し、conjunct_refs から完全
+に除外した——`conjunct_refs ∩ failure_refs = ∅` を直接検証するテスト
+（`test_pr333_r5_conjunct_refs_and_failure_refs_disjoint_no_exclusive_
+pair`）で回帰確認する。`birth_identity_separation`/`pjs_confuser` 既存
+節は1 byte も変更していない（第4巡と同型の無改変方針を維持、`test_
+pr333_r5_aggregate_rule_existing_branches_byte_unchanged` で確認）。
+
+`note` フィールドへ、第4巡実装が排他ペア欠陥を含んでいたこと・本巡が
+それを発見・是正したことを明記した（是正の透明性——CLAUDE.md 運用細則
+「事後監査」の精神に沿い、成果物自体に経緯を残す）。
+
+### 8.2 指摘2（P1）: 「Route C1 byte-only mismatches to a stop」
+
+**事実確認**: `c1_sham_attestation` が `on_nonzero`（D_C1(F)≠0 全体、
+`C1_SHAM_EFFECT_DETECTED` へ停止）のみを持ち、`c0_determinism_
+attestation`/`positive_reference_audit` が明示的に区別している
+「WAV バイトは不一致だが identity feature は一致（byte-level のみの
+決定論破り）」という具体的経路に対して、C1 側だけ専用の分岐が存在しな
+いことを確認した。
+
+**実装（Fable 設計）**: `c1_sham_attestation` へ `on_wav_byte_mismatch`
+を新設した——「C1 render の WAV bytes が C0/reference と不一致（identity
+feature が一致し D_C1(F)=0 であっても）→ `DETERMINISM_CONTRACT_BROKEN`
+（既存定数 `IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME` の再利用、
+新語彙の発明はしない）。Birth Gate 非 PASS・学習非進行」。
+`cross_reference` フィールドで `c0_determinism_attestation.on_mismatch.
+render_byte_mismatch`・`positive_reference_audit.on_mismatch.wav_byte_
+mismatch` と同一の byte-mismatch routing 規則であることを明記した
+（`test_pr333_r5_c1_on_wav_byte_mismatch_reuses_c0_vocabulary` で実データ
+一致確認）。既存 `on_nonzero`（`C1_SHAM_EFFECT_DETECTED`）は無改変
+（`test_pr333_r5_c1_on_nonzero_byte_unchanged`）。
+
+### 8.3 指摘3（P1）: 「Include exact-replay audits in the aggregate
+gate」
+
+**事実確認**: `birth_gate_aggregate_rule.necessary_and_sufficient_
+condition_for_established` が validity/d12/PJS confuser のみを規定し、
+C0/C1/positive reference の exact-replay 監査（`on_mismatch`/
+`on_nonzero`/`on_wav_byte_mismatch`）を一切含んでいないことを確認した。
+このため、監査失敗（例: `DETERMINISM_CONTRACT_BROKEN`）と
+BIRTH=ESTABLISHED が同時成立し得る——第4巡実装が導入した
+`birth_gate_aggregate_rule` は Birth Gate の一部（identity_
+establishment 層）のみを規定しており、Birth Gate 全体の PASS 判定
+（裁定§8『rev 0.6のBirth GateがPASSした場合のみ、learning recipe
+freezeおよび学習実行へ進む。』）を機械符号化していなかった。
+
+**実装（Fable 設計 — 二層分離）**: Birth Gate 判定を2層に再構成した:
+
+- **identity_establishment**（既存 `birth_gate_aggregate_rule`、無改変
+  のまま維持——ただし指摘1 の是正を含む）: BIRTH ラベル
+  （ESTABLISHED / NOT_ESTABLISHED）を決める層。`necessary_and_
+  sufficient_condition_for_established` の「必要十分」はこの層限定
+  であることを新設 `identity_establishment_scope_note` で明記した。
+- **birth_gate_overall_pass**（新設節）: 「Birth Gate 全体の PASS ⇔
+  identity_establishment = ESTABLISHED ∧ C0/C1/positive reference の
+  各 attestation・audit（`audit_stop_refs` 列挙の4節: `c0_determinism_
+  attestation.on_mismatch` / `c1_sham_attestation.on_nonzero` /
+  `c1_sham_attestation.on_wav_byte_mismatch` / `positive_reference_
+  audit.on_mismatch`）がいずれの停止条件にも該当しない」。`verbatim_
+  basis` は `execution_order.gate_sequencing`（裁定§8 逐語、既存フィー
+  ルドと単一正本を共有——二重に書き起こさない）と byte-identical
+  であることを validator が cross-check する。`pass_gates_learning` で
+  「PASS のみが learning recipe freeze / 学習実行へ進む条件」を、
+  `audit_failure_does_not_invalidate_established` で「監査失敗時は
+  該当停止語彙で停止し ESTABLISHED 判定そのものは無効化しない（identity
+  判定と実装健全性判定の会計分離）——ただし gate は非 PASS」を明記した。
+
+### 8.4 敵対的自己検査（Task 指示必須）
+
+protocol JSON だけを入力に「文字通りの消費者」を演じるシミュレーション
+（`_literal_consumer_birth_gate()`、`tests/test_run9_contract.py` へ
+テストコードとして実装・収載）を実装後・報告前に実行し、以下4系を機械
+検証した——いずれも矛盾なし:
+
+- **(a) 全成功ケース**: `feature_valid=True, d12_positive=True,
+  pjs_distance_positive=True`、監査失敗なし → `birth_outcome ==
+  "ESTABLISHED"` ∧ `overall_pass is True`
+  （`test_pr333_r5_adversarial_literal_consumer_all_success_
+  establishes_and_passes`）。
+- **(b) PJS 距離 0**: 他は全て成功、`pjs_distance_positive=False` →
+  `birth_outcome == "NOT_ESTABLISHED"` ∧ `overall_pass is False`
+  （`test_pr333_r5_adversarial_literal_consumer_pjs_zero_distance_not_
+  established`）。
+- **(c) C1 バイトのみ不一致**: identity_establishment 側は全て成功、
+  `c1_wav_byte_mismatch=True` → `birth_outcome == "ESTABLISHED"`
+  （ESTABLISHED 判定は維持）∧ `overall_pass is False`（監査停止で
+  非PASS）∧ 実データの `c1_sham_attestation.on_wav_byte_mismatch.
+  outcome == "DETERMINISM_CONTRACT_BROKEN"`
+  （`test_pr333_r5_adversarial_literal_consumer_c1_byte_only_mismatch_
+  broken_but_established`）。
+- **(d) 排他ペア非存在**: `conjunct_refs` の全参照（成功述語2項目）が
+  全成功ワールドで同時に True を返すこと、かつ `conjunct_refs ∩
+  failure_refs = ∅` であることを直接検証
+  （`test_pr333_r5_adversarial_literal_consumer_no_exclusive_pair_all_
+  conjuncts_satisfiable` / `test_pr333_r5_conjunct_refs_and_failure_
+  refs_disjoint_no_exclusive_pair`）。
+
+矛盾は検出されなかった（実装のやり直しは発生していない）。
+
+### 8.5 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2674 passed, 7 warnings in ~42s
+```
+
+新設テスト36件（2638→2674）: `tests/test_run9_contract.py` へ
+`pr333_r5_*` prefix で追加——`conjunct_refs` 是正の happy path・成功
+述語2項目のみへの限定確認・排他ペア非存在確認・`failure_refs` 新設の
+frozen tuple 一致/欠落キー/並び替え/過剰エントリ/dict 偽装拒否・旧
+排他ペア4項目の復元回帰拒否・`identity_establishment_scope_note` 欠落
+/空文字拒否・既存節無改変確認・`c1_sham_attestation.on_wav_byte_
+mismatch` の C0/positive 語彙再利用確認・欠落キー/誤値/サブキー欠落
+/空文字拒否・既存 `on_nonzero` 無改変確認・`birth_gate_overall_pass`
+の `identity_establishment_ref` 一致確認・`verbatim_basis` 単一正本
+確認・`audit_stop_refs` frozen tuple 一致/欠落/誤値/並び替え/過剰
+エントリ/dict 偽装拒否・欠落サブキー/空文字拒否・`load_pinned_
+identity_decision_protocol()` happy path（新設3フィールドの到達確認）
+・改ざん経由 loader fail-closed 確認・敵対的自己検査4系（§8.4）。
+
+### 8.6 変更ファイル
+
+- `inputs/identity_decision_protocol_v0.6.json`:
+  `birth_gate_aggregate_rule.conjunct_refs` を4項目（排他ペア2組）から
+  成功述語2項目へ是正（指摘1）、`not_established.outcome_detail_
+  priority.failure_refs` 新設（指摘1、失敗分岐参照の分離先）、
+  `identity_establishment_scope_note` 新設（指摘3、必要十分の層限定
+  明記）、`c1_sham_attestation.on_wav_byte_mismatch` 新設（指摘2）、
+  新規節 `birth_gate_overall_pass` 追加（指摘3）。既存
+  `birth_identity_separation`/`pjs_confuser`/`c0_determinism_
+  attestation`/`c1_sham_attestation.on_nonzero`/`positive_reference_
+  audit` の既存分岐は無改変。
+- `run9_schema.py`: 新規定数 `_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_
+  REFS`・`_IDENTITY_PROTOCOL_OVERALL_PASS_IDENTITY_ESTABLISHMENT_REF`・
+  `_IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS`、
+  `_IDENTITY_PROTOCOL_BIRTH_GATE_CONJUNCT_REFS` を4項目→2項目へ改訂、
+  `_IDENTITY_DECISION_PROTOCOL_TOP_LEVEL_KEYS` へ `birth_gate_overall_
+  pass` 追加、`validate_identity_decision_protocol()` へ
+  `c1_sham_attestation.on_wav_byte_mismatch`・`birth_gate_aggregate_
+  rule.identity_establishment_scope_note`・`outcome_detail_priority.
+  failure_refs`・`birth_gate_overall_pass` 全体の構造検証ブロックを
+  追加。
+- `RUN9_CONTRACT.yaml`: `hypothesis_algebra_sha` repin（値・repin履歴
+  コメント・reason 追記）。
+- `tests/test_run9_contract.py`: `hypothesis_algebra_sha` repin 値の
+  回帰更新、新規 fail-closed/確認/敵対的自己検査テスト36件追加。
+
+### 8.7 逸脱事項
+
+- immutability 対象（`identity_metric_space.json`/`identity_domain`/
+  `Genome`/speaker map manifest）・裁定逐語転記部分（`USER_ADJUDICATION_
+  20260827_IDENTITY_REV06.txt`）は1 byte も変更していない（`git status
+  --short` で確認済み）。
+- 指摘1・3 はいずれも第4巡実装（本記録 §7）が導入した欠陥の是正であり、
+  裁定 §1-§9 そのものの再解釈は行っていない——本節 §8.1/§8.3 に経緯を
+  正直に記録した（第4巡の設計意図は正しかったが実装が意図を正しく
+  符号化できていなかった、という区別）。
+- `birth_gate_overall_pass` の `audit_stop_refs` は C0/C1/positive
+  reference の4節のみを列挙し、`birth_identity_separation`/
+  `pjs_confuser`（= identity_establishment 層の構成要素）は含めていな
+  い——両者は identity_establishment 層の判定材料であり、overall PASS
+  層が追加で要求する exact-replay 監査とは会計上別カテゴリのため
+  （指摘3 の設計方針: 二層は独立の懸念事項を分離する）。
+- 本 PR は依然として事前登録フェーズ（裁定§8 実行順どおり、Birth Gate
+  の実行自体は含まない）——`birth_gate_overall_pass`/`c1_sham_
+  attestation.on_wav_byte_mismatch`/`outcome_detail_priority.failure_
+  refs` いずれも判定規約の凍結までを範囲とし、実行時の実測ロジック
+  自体は本 PR の対象外。
+- `birth_gate_aggregate_rule`/`birth_gate_overall_pass` いずれも既存
+  `BIRTH_OUTCOMES`/`FAILURE_CLASSES` frozen tuple への値追加は行って
+  いない（既存語彙の再利用のみ、という二層構造の設計方針を維持）。

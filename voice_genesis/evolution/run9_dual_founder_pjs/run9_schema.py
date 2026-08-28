@@ -193,6 +193,14 @@ IDENTITY_PROTOCOL_C0_FEATURE_MISMATCH_OUTCOME = "IMPLEMENTATION_FAILURE"  # == F
 # c1_sham_attestation（裁定 §2）の非ゼロ停止語彙。
 IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME = "C1_SHAM_EFFECT_DETECTED"
 
+# PR #333 Codex bot レビュー第5巡指摘2（P1、採用）: c1_sham_attestation は
+# on_nonzero（D_C1(F)≠0 全体）のみを持ち、「WAV バイトは不一致だが identity
+# feature は一致（D_C1(F)=0）」という決定論破りの具体的経路には未発火だった
+# ——C0/positive_reference_audit の on_mismatch と同一語彙
+# `IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME`（DETERMINISM_CONTRACT_
+# BROKEN）を c1_sham_attestation.on_wav_byte_mismatch.outcome でも再利用する
+# ため、本節に専用の新定数は不要（既存定数の再配線のみ）。
+
 # birth_identity_separation（裁定 §4）の outcome_detail 二層構造:
 # BIRTH_OUTCOMES[0]="ESTABLISHED" を精緻化する成立側ラベルと、
 # BIRTH_OUTCOMES[1]="NOT_ESTABLISHED" に付随する凍結理由ラベルのペア。
@@ -20163,8 +20171,15 @@ _IDENTITY_DECISION_PROTOCOL_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
     "invariants",
     # PR #333 Codex bot レビュー第4巡指摘1（P1、採用）新設: birth_identity_
     # separation.established と pjs_confuser.on_zero の合成条件・優先順を
-    # 凍結する連言ゲート節（既存11節は無改変のまま参照のみ）。
+    # 凍結する連言ゲート節（既存11節は無改変のまま参照のみ）。第5巡指摘1
+    # （P1、採用）で conjunct_refs の排他ペア欠陥を是正（下記定数群参照）。
     "birth_gate_aggregate_rule",
+    # PR #333 Codex bot レビュー第5巡指摘3（P1、採用）新設: Birth Gate 判定を
+    # identity_establishment（BIRTH ラベル判定、上記 birth_gate_aggregate_
+    # rule）と本節（learning recipe freeze / 学習実行へ進む可否を決める
+    # overall PASS 判定、C0/C1/positive reference の exact-replay 監査停止
+    # 条件を含む）の二層へ分離する新設節。
+    "birth_gate_overall_pass",
 })
 
 # 裁定 §1/§2 の contract_field_ref 凍結値（interventions 配下、
@@ -20267,16 +20282,35 @@ _IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS: Tuple[str, ...] = (
 # 門ではなく Birth Gate の連言構成要素であり、本節は §5 逐語の機械符号化
 # ——新規則の発明ではない。既存 established/invalid_or_nonfinite_feature/
 # on_positive/on_zero の各分岐は無改変のまま conjunct_refs で参照するのみ。
+#
+# PR #333 Codex bot レビュー第5巡指摘1（P1、採用）: 第4巡実装の
+# conjunct_refs は established/invalid_or_nonfinite_feature（排他ペア）と
+# on_positive/on_zero（排他ペア）の両方を「全項が成立」と要求してしまい、
+# 文字通りの消費者は決して ESTABLISHED になれない欠陥を含んでいた
+# （第4巡実装の欠陥）。conjunct_refs を成功述語のみ（2項目）へ限定し
+# 直し、失敗分岐は下記 `_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS`
+# （outcome_detail_priority.failure_refs）へ分離した。
 # =============================================================================
 
-# conjunct_refs（新設節内の逐語列挙、順序込み・4項目ちょうど——document 内
-# 自己参照であり identity_metric_space.json 側の cross-document 走査は
-# 不要。他の3つの `_require_ordered_str_list_matching_tuple` 対象と同じ
-# 形状ガードで dict 偽装も拒否する）。
+# conjunct_refs（新設節内の逐語列挙、順序込み・2項目ちょうど——成功述語
+# のみ。PR #333 第5巡指摘1 是正で4項目→2項目、排他ペアを解消。document
+# 内自己参照であり identity_metric_space.json 側の cross-document 走査は
+# 不要。他の `_require_ordered_str_list_matching_tuple` 対象と同じ形状
+# ガードで dict 偽装も拒否する）。
 _IDENTITY_PROTOCOL_BIRTH_GATE_CONJUNCT_REFS: Tuple[str, ...] = (
     "birth_identity_separation.established",
-    "birth_identity_separation.invalid_or_nonfinite_feature",
     "pjs_confuser.on_positive",
+)
+
+# outcome_detail_priority.failure_refs（PR #333 第5巡指摘1、P1、採用、
+# 新設）: conjunct_refs から分離した失敗分岐参照——`order`（下記）と同順で
+# 各優先枝が指す実際の JSON 分岐を列挙する（順序込み・3項目ちょうど）。
+# 新規則の発明ではなく、既存分岐（birth_identity_separation.invalid_or_
+# nonfinite_feature/not_established、pjs_confuser.on_zero）への参照を
+# conjunct_refs から移設するのみ。
+_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS: Tuple[str, str, str] = (
+    "birth_identity_separation.invalid_or_nonfinite_feature",
+    "birth_identity_separation.not_established",
     "pjs_confuser.on_zero",
 )
 
@@ -20303,6 +20337,33 @@ _IDENTITY_PROTOCOL_BIRTH_GATE_DETAIL_BY_KEY: Mapping[str, str] = types.MappingPr
 # path、裁定§9『Birth Gate不成立時はNOT_ESTABLISHEDとして凍結する』への
 # 接続点）。
 _IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_ACTION_REF = "invariants.birth_gate_failure_action"
+
+# =============================================================================
+# birth_gate_overall_pass（PR #333 Codex bot レビュー第5巡指摘3、P1、
+# 採用、新設）: birth_gate_aggregate_rule（identity_establishment 層、
+# BIRTH ラベル判定）は validity/d12/PJS の連言のみを規定し、C0/C1/positive
+# reference の exact-replay 監査を含まないため、監査失敗（DETERMINISM_
+# CONTRACT_BROKEN 等）と BIRTH=ESTABLISHED が同時成立し得た。本節は
+# Birth Gate 全体の PASS/非PASS（learning recipe freeze / 学習実行へ進む
+# 可否）を identity_establishment 層とは別の二層目として規定する——新規則
+# の発明ではなく裁定§8『rev 0.6のBirth GateがPASSした場合のみ、learning
+# recipe freezeおよび学習実行へ進む。』の機械符号化。
+# =============================================================================
+
+# identity_establishment_ref の凍結値（birth_gate_aggregate_rule への
+# 自己参照 dotted path）。
+_IDENTITY_PROTOCOL_OVERALL_PASS_IDENTITY_ESTABLISHMENT_REF = "birth_gate_aggregate_rule"
+
+# audit_stop_refs（新設節内の逐語列挙、順序込み・4項目ちょうど）: Birth
+# Gate 全体の PASS を妨げ得る exact-replay 監査の停止語彙割当て節を列挙
+# する——c1_sham_attestation は on_nonzero（既存）と on_wav_byte_mismatch
+# （第5巡指摘2、新設）の両方を含む。
+_IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS: Tuple[str, str, str, str] = (
+    "c0_determinism_attestation.on_mismatch",
+    "c1_sham_attestation.on_nonzero",
+    "c1_sham_attestation.on_wav_byte_mismatch",
+    "positive_reference_audit.on_mismatch",
+)
 
 
 def _validate_identity_protocol_shape(
@@ -20531,7 +20592,7 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         data["c1_sham_attestation"], field="c1_sham_attestation",
         required_keys=frozenset({
             "verbatim", "takes_per_founder", "contract_field_ref", "requirement",
-            "expected", "role", "on_nonzero",
+            "expected", "role", "on_nonzero", "on_wav_byte_mismatch",
         }),
     )
     _require_non_empty_str(c1["verbatim"], field="c1_sham_attestation.verbatim")
@@ -20548,6 +20609,24 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
             f"c1_sham_attestation.on_nonzero must be exactly {IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME!r}"
             f", got {c1['on_nonzero']!r}"
         )
+    # PR #333 Codex bot レビュー第5巡指摘2（P1、採用）新設: on_nonzero
+    # （D_C1(F)≠0 全体）だけでは「WAV バイトは不一致だが identity feature は
+    # 一致（D_C1(F)=0）」という決定論破りの具体的経路に発火する分岐が無かった
+    # ——c0_determinism_attestation.on_mismatch と同一語彙を再利用する（新
+    # 語彙の発明はしない）。
+    c1_wav_mismatch = _validate_identity_protocol_shape(
+        c1["on_wav_byte_mismatch"], field="c1_sham_attestation.on_wav_byte_mismatch",
+        required_keys=frozenset({"condition", "outcome", "gate_effect", "cross_reference", "note"}),
+    )
+    if c1_wav_mismatch["outcome"] != IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME:
+        raise Run9ValidationError(
+            "c1_sham_attestation.on_wav_byte_mismatch.outcome must be exactly "
+            f"{IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME!r} (c0_determinism_attestation."
+            f"on_mismatch.render_byte_mismatch と同一語彙の再利用), got "
+            f"{c1_wav_mismatch['outcome']!r}"
+        )
+    for f in ("condition", "gate_effect", "cross_reference", "note"):
+        _require_non_empty_str(c1_wav_mismatch[f], field=f"c1_sham_attestation.on_wav_byte_mismatch.{f}")
 
     # --- positive_reference_audit（裁定 §3）---------------------------------
     positive = _validate_identity_protocol_shape(
@@ -20847,13 +20926,19 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
     # P1、採用）----------------------------------------------------------
     # birth_identity_separation.established（d12>0）と pjs_confuser.on_zero
     # （PJS confuser距離=0）が独立に定義され合成条件・優先順が未定義だった
-    # 穴を埋める、Birth Gate 全体の ESTABLISHED 連言条件。既存4分岐
-    # （established/invalid_or_nonfinite_feature/on_positive/on_zero）は
-    # 無改変のまま conjunct_refs で参照するのみ。
+    # 穴を埋める、Birth Gate identity_establishment 層の ESTABLISHED 連言
+    # 条件。既存4分岐（established/invalid_or_nonfinite_feature/on_positive/
+    # on_zero）は無改変のまま conjunct_refs/failure_refs で参照するのみ。
+    # PR #333 第5巡指摘1（P1、採用）: conjunct_refs を成功述語2項目のみへ
+    # 是正（第4巡実装の排他ペア欠陥の是正）。第5巡指摘3（P1、採用）:
+    # identity_establishment_scope_note を新設し、本節の必要十分条件が
+    # identity_establishment 層限定であることを明記（Birth Gate 全体の
+    # PASS は下記 birth_gate_overall_pass 節が別途規定）。
     aggregate = _validate_identity_protocol_shape(
         data["birth_gate_aggregate_rule"], field="birth_gate_aggregate_rule",
         required_keys=frozenset({
             "note", "verbatim_basis", "necessary_and_sufficient_condition_for_established",
+            "identity_establishment_scope_note",
             "conjunct_refs", "established", "not_established", "gate_failure_action_ref",
         }),
     )
@@ -20870,6 +20955,13 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
     _require_non_empty_str(
         aggregate["necessary_and_sufficient_condition_for_established"],
         field="birth_gate_aggregate_rule.necessary_and_sufficient_condition_for_established",
+    )
+    # PR #333 第5巡指摘3（P1、採用）: 本節の「必要十分」は identity_
+    # establishment 層（BIRTH ラベル）限定であることを明記する scope note
+    # （Birth Gate 全体の PASS は birth_gate_overall_pass 節が別途規定）。
+    _require_non_empty_str(
+        aggregate["identity_establishment_scope_note"],
+        field="birth_gate_aggregate_rule.identity_establishment_scope_note",
     )
     _require_ordered_str_list_matching_tuple(
         aggregate["conjunct_refs"], field="birth_gate_aggregate_rule.conjunct_refs",
@@ -20912,12 +21004,19 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
     priority = _validate_identity_protocol_shape(
         agg_not_established["outcome_detail_priority"],
         field="birth_gate_aggregate_rule.not_established.outcome_detail_priority",
-        required_keys=frozenset({"order", "detail_by_key", "order_note"}),
+        required_keys=frozenset({"order", "detail_by_key", "order_note", "failure_refs"}),
     )
     _require_ordered_str_list_matching_tuple(
         priority["order"],
         field="birth_gate_aggregate_rule.not_established.outcome_detail_priority.order",
         expected=_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER,
+    )
+    # PR #333 第5巡指摘1（P1、採用）新設: conjunct_refs から分離した失敗
+    # 分岐参照——order と同順で各優先枝が指す実際の JSON 分岐を列挙する。
+    _require_ordered_str_list_matching_tuple(
+        priority["failure_refs"],
+        field="birth_gate_aggregate_rule.not_established.outcome_detail_priority.failure_refs",
+        expected=_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS,
     )
     detail_by_key = _validate_identity_protocol_shape(
         priority["detail_by_key"],
@@ -20941,6 +21040,54 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
             f"{_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_ACTION_REF!r}, got "
             f"{aggregate['gate_failure_action_ref']!r}"
         )
+
+    # --- birth_gate_overall_pass（PR #333 Codex bot レビュー第5巡指摘3、
+    # P1、採用、新設）------------------------------------------------------
+    # identity_establishment（上記 birth_gate_aggregate_rule）とは別の
+    # 二層目: Birth Gate 全体の PASS（learning recipe freeze / 学習実行へ
+    # 進む可否）は identity_establishment=ESTABLISHED に加えて C0/C1/
+    # positive reference の各 exact-replay 監査がいずれの停止条件にも該当
+    # しないことを要求する。監査失敗は ESTABLISHED 判定そのものを無効化
+    # しない（identity 判定と実装健全性判定の会計分離）。
+    overall_pass = _validate_identity_protocol_shape(
+        data["birth_gate_overall_pass"], field="birth_gate_overall_pass",
+        required_keys=frozenset({
+            "definition", "identity_establishment_ref", "audit_stop_refs",
+            "pass_gates_learning", "audit_failure_does_not_invalidate_established",
+            "verbatim_basis", "note",
+        }),
+    )
+    _require_non_empty_str(overall_pass["definition"], field="birth_gate_overall_pass.definition")
+    if (
+        overall_pass["identity_establishment_ref"]
+        != _IDENTITY_PROTOCOL_OVERALL_PASS_IDENTITY_ESTABLISHMENT_REF
+    ):
+        raise Run9ValidationError(
+            "birth_gate_overall_pass.identity_establishment_ref must be exactly "
+            f"{_IDENTITY_PROTOCOL_OVERALL_PASS_IDENTITY_ESTABLISHMENT_REF!r}, got "
+            f"{overall_pass['identity_establishment_ref']!r}"
+        )
+    _require_ordered_str_list_matching_tuple(
+        overall_pass["audit_stop_refs"], field="birth_gate_overall_pass.audit_stop_refs",
+        expected=_IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS,
+    )
+    _require_non_empty_str(
+        overall_pass["pass_gates_learning"], field="birth_gate_overall_pass.pass_gates_learning"
+    )
+    _require_non_empty_str(
+        overall_pass["audit_failure_does_not_invalidate_established"],
+        field="birth_gate_overall_pass.audit_failure_does_not_invalidate_established",
+    )
+    # verbatim_basis は execution_order.gate_sequencing（裁定§8 逐語、
+    # 既に上で検証済みの同一裁定引用）と単一の正本を共有する（二重に
+    # 書き起こさない——文字列同士の食い違いは fail-closed で拒否する）。
+    if overall_pass["verbatim_basis"] != execution_order["gate_sequencing"]:
+        raise Run9ValidationError(
+            "birth_gate_overall_pass.verbatim_basis must be byte-identical to "
+            f"execution_order.gate_sequencing (single source of truth), got "
+            f"{overall_pass['verbatim_basis']!r} != {execution_order['gate_sequencing']!r}"
+        )
+    _require_non_empty_str(overall_pass["note"], field="birth_gate_overall_pass.note")
 
 
 def load_pinned_identity_decision_protocol(

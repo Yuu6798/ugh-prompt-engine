@@ -3526,18 +3526,46 @@ measurement_spec_sha:
 #   attestation.on_mismatch と同一語彙の再利用）を追加した（指摘2）——
 #   従来は要求のみで不一致時の停止先を持たなかった。いずれも新規則の
 #   発明ではなく裁定§4/§5/§9・§3+§9 の機械符号化。
+# - PR #333 Codex bot レビュー第5巡指摘1/2/3（2026-08-28、P1×3、採用、値
+#   2e47c7d6f093add787159d1a6325b70d308146280a3e8f40abdc08e1b10e59cd へ
+#   repin）: 指摘1 — 第4巡実装の `conjunct_refs`（4項目）が
+#   `birth_identity_separation.established`/`invalid_or_nonfinite_feature`
+#   と `pjs_confuser.on_positive`/`on_zero` という互いに排他な2組を「全項
+#   成立」と要求してしまい、文字通りの消費者は決して ESTABLISHED になれ
+#   ない欠陥だった（第4巡実装の欠陥）。`conjunct_refs` を成功述語のみ
+#   （`birth_identity_separation.established`/`pjs_confuser.on_positive`
+#   の2項目）へ限定し直し、失敗分岐は新設
+#   `outcome_detail_priority.failure_refs`（3項目、`order` と同順）へ
+#   分離した。指摘2 — `c1_sham_attestation` へ `on_wav_byte_mismatch`
+#   （C1 render の WAV バイトが不一致だが identity feature は一致
+#   （D_C1(F)=0）の具体的経路 → 既存定数 `IDENTITY_PROTOCOL_C0_RENDER_
+#   MISMATCH_OUTCOME` = `DETERMINISM_CONTRACT_BROKEN` を再利用）を新設
+#   した——C0/positive_reference_audit が feature-level/byte-level を分離
+#   しているのに C1 だけ未分岐だった穴の是正。指摘3 — 新規節
+#   `birth_gate_overall_pass` を追加し、Birth Gate 判定を二層へ再構成
+#   した: `birth_gate_aggregate_rule`（identity_establishment 層、BIRTH
+#   ラベルの ESTABLISHED/NOT_ESTABLISHED を決める）と本節（overall PASS
+#   層、C0/C1/positive reference の exact-replay 監査停止条件を含めて
+#   learning recipe freeze / 学習実行へ進む可否を決める）——従来は
+#   `birth_gate_aggregate_rule` の「必要十分条件」が validity/d12/PJS の
+#   みで exact-replay 監査を含まず、監査失敗と ESTABLISHED が同時成立し
+#   得た。`birth_gate_aggregate_rule` へ `identity_establishment_scope_
+#   note` を新設し、「必要十分」の文言を identity_establishment 層限定と
+#   明記した。3件とも新規則の発明ではなく、裁定§4/§5/§9・§2/§9・§8 の
+#   機械符号化——既存 established/invalid_or_nonfinite_feature/
+#   not_established/on_positive/on_zero/on_nonzero の各分岐は無改変。
 hypothesis_algebra_sha:
-  value: "f626e309d187177800d33afabe6c81537faa3c59a5432e080f88e0d4854f1778"
+  value: "2e47c7d6f093add787159d1a6325b70d308146280a3e8f40abdc08e1b10e59cd"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json
   reason: >-
     rev 0.6 裁定 §7「同protocolのraw SHA256をhypothesis_algebra_shaへ
     PINNEDする」に基づき pin。値は inputs/identity_decision_protocol_
     v0.6.json の実バイト sha256（load_pinned_identity_decision_protocol()
-    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第4巡
-    指摘1/2（P1×2、採用）で `birth_gate_aggregate_rule` 新設 +
-    `positive_reference_audit.on_mismatch` 新設のため repin（上記
-    【repin 履歴】参照）。
+    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第5巡
+    指摘1/2/3（P1×3、採用）で `birth_gate_aggregate_rule.conjunct_refs`
+    是正 + `c1_sham_attestation.on_wav_byte_mismatch` 新設 +
+    `birth_gate_overall_pass` 新設のため repin（上記【repin 履歴】参照）。
 
 # PR #333 Codex bot レビュー第1巡指摘1（P1、採用）新設: hypothesis_algebra_
 # sha が rev 0.6 裁定 §7 で identity decision protocol の pin へ用途確定

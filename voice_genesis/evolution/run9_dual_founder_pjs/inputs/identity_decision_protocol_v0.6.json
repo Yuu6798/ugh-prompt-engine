@@ -7,9 +7,7 @@
   "birth_gate_aggregate_rule": {
     "conjunct_refs": [
       "birth_identity_separation.established",
-      "birth_identity_separation.invalid_or_nonfinite_feature",
-      "pjs_confuser.on_positive",
-      "pjs_confuser.on_zero"
+      "pjs_confuser.on_positive"
     ],
     "established": {
       "birth_outcome": "ESTABLISHED",
@@ -17,7 +15,8 @@
       "outcome_detail": "ESTABLISHED_BY_MACHINE_FEATURE"
     },
     "gate_failure_action_ref": "invariants.birth_gate_failure_action",
-    "necessary_and_sufficient_condition_for_established": "両 founder（R9F-01/R9F-02）の feature が valid/finite ∧ d12 > 0 ∧ 両 founder の PJS confuser 距離 > 0（連言）。いずれか1項でも不成立なら BIRTH = NOT_ESTABLISHED。",
+    "identity_establishment_scope_note": "本節（birth_gate_aggregate_rule）は Birth Gate の identity_establishment 層——BIRTH = ESTABLISHED / NOT_ESTABLISHED のラベル判定——のみを規定する。Birth Gate 全体の PASS（learning recipe freeze / 学習実行へ進む可否）は、本節の ESTABLISHED 判定に加えて C0/C1/positive reference の exact-replay 監査結果を要求する二層目の 判定であり、birth_gate_overall_pass 節が別途規定する（PR #333 Codex bot レビュー第5巡指摘3、P1、採用）。",
+    "necessary_and_sufficient_condition_for_established": "両 founder（R9F-01/R9F-02）の feature が valid/finite ∧ d12 > 0 ∧ 両 founder の PJS confuser 距離 > 0（連言）。いずれか1項でも不成立なら BIRTH = NOT_ESTABLISHED。本節は identity_establishment 層（BIRTH ラベルの判定）の必要十分条件であり、Birth Gate 全体の PASS/非PASS は birth_gate_overall_pass 節が別途規定する（C0/C1/positive reference の exact-replay 監査停止条件を含む——本節単独の『必要十分』は identity_establishment 層に限定される、PR #333 第5巡指摘3）。",
     "not_established": {
       "birth_outcome": "NOT_ESTABLISHED",
       "condition": "conjunct_refs のいずれか1項以上が不成立（feature invalid/non-finite、または d12=0、または PJS confuser 距離=0 のうち少なくとも1つ）",
@@ -27,16 +26,35 @@
           "invalid_or_nonfinite_feature": "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_FEATURE",
           "pjs_confuser_zero_distance": "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_FEATURE_COLLAPSE"
         },
+        "failure_refs": [
+          "birth_identity_separation.invalid_or_nonfinite_feature",
+          "birth_identity_separation.not_established",
+          "pjs_confuser.on_zero"
+        ],
         "order": [
           "invalid_or_nonfinite_feature",
           "d12_zero_collapse",
           "pjs_confuser_zero_distance"
         ],
-        "order_note": "同一 attempt 内で複数の不成立条件が同時に該当し得る。outcome_detail の記録は本 order の先頭に該当した1件を主 detail とし、該当した条件キー全件を outcome_detail_all_applicable_keys へ機械可読リストで併記する（情報を落とさない）。優先順序は (1) validity（invalid/non-finite feature）→ (2) d12=0（feature collapse）→ (3) PJS confuser distance=0。"
+        "order_note": "同一 attempt 内で複数の不成立条件が同時に該当し得る。outcome_detail の記録は本 order の先頭に該当した1件を主 detail とし、該当した条件キー全件を outcome_detail_all_applicable_keys へ機械可読リストで併記する（情報を落とさない）。優先順序は (1) validity（invalid/non-finite feature）→ (2) d12=0（feature collapse）→ (3) PJS confuser distance=0。 failure_refs は各優先枝（order と同順）が指す実際の失敗分岐を列挙する——PR #333 第5巡指摘1（P1、採用）で conjunct_refs から分離した失敗分岐参照の格納先であり、新規則の発明ではなく既存分岐（birth_identity_separation.invalid_or_nonfinite_feature/not_established、pjs_confuser.on_zero）への参照を移設するのみ。"
       }
     },
-    "note": "PR #333 Codex bot レビュー第4巡指摘1（P1、採用）: birth_identity_separation の established 分岐（d12>0 → ESTABLISHED）と pjs_confuser の on_zero 分岐（PJS confuser 距離=0 → NOT_ESTABLISHED）が独立に定義され、両者の合成条件・優先順が未定義だった。本節は Birth Gate 全体の ESTABLISHED 判定を単一の連言として凍結する——裁定§4/§5は独立の門ではなく Birth Gate の連言構成要素であり、§5逐語『distance=0の場合はPJS confuserとのfeature collapseとしてBIRTH NOT_ESTABLISHEDとする。』の機械符号化であって新規則の発明ではない。既存 birth_identity_separation.established/invalid_or_nonfinite_feature、pjs_confuser.on_positive/on_zero の各分岐は無改変のまま本節から conjunct_refs で参照するのみであり、文言変更は一切行っていない。",
+    "note": "PR #333 Codex bot レビュー第4巡指摘1（P1、採用）で追加した conjunct_refs は、birth_identity_separation.established（valid/finite ∧ d12>0 の成立分岐）と invalid_or_nonfinite_feature（valid/finite の不成立分岐）、および pjs_confuser.on_positive（距離>0 の成立分岐）と on_zero（距離=0 の不成立分岐）という互いに排他な2組を『全項が成立』と要求する連言としてしまい、文字通りの消費者は常に NOT_ESTABLISHED に凍結される欠陥を含んでいた（第4巡実装の欠陥、PR #333 Codex bot レビュー第5巡指摘1、P1、採用、で発見・是正）。本節は conjunct_refs を成功述語のみ（birth_identity_separation.established / pjs_confuser.on_positive）へ限定し直し、失敗分岐（birth_identity_separation.invalid_or_nonfinite_feature / birth_identity_separation.not_established / pjs_confuser.on_zero）は not_established.outcome_detail_priority.failure_refs へ分離した——裁定§4/§5は独立の門ではなく Birth Gate の連言構成要素であり、本節は §5逐語『distance=0の場合はPJS confuserとのfeature collapseとしてBIRTH NOT_ESTABLISHEDとする。』の機械符号化であって新規則の発明ではない。既存 birth_identity_separation.established/invalid_or_nonfinite_feature/not_established、pjs_confuser.on_positive/on_zero の各分岐は無改変のまま本節から参照するのみであり、文言変更は一切行っていない。",
     "verbatim_basis": "distance=0の場合はPJS confuserとのfeature collapseとしてBIRTH NOT_ESTABLISHEDとする。"
+  },
+  "birth_gate_overall_pass": {
+    "audit_failure_does_not_invalidate_established": "監査失敗時は該当停止語彙（DETERMINISM_CONTRACT_BROKEN / IMPLEMENTATION_FAILURE / C1_SHAM_EFFECT_DETECTED のいずれか該当するもの）で停止し、identity_establishment 層の ESTABLISHED 判定そのものは無効化しない——identity 判定（feature 空間の分離が成立しているか）と実装健全性判定（決定論契約が守られているか）の会計分離。ただし本節の overall PASS は非成立となる。",
+    "audit_stop_refs": [
+      "c0_determinism_attestation.on_mismatch",
+      "c1_sham_attestation.on_nonzero",
+      "c1_sham_attestation.on_wav_byte_mismatch",
+      "positive_reference_audit.on_mismatch"
+    ],
+    "definition": "Birth Gate 全体の PASS ⇔ identity_establishment（= birth_gate_aggregate_rule の連言判定）が ESTABLISHED ∧ C0/C1/positive reference の各 attestation・audit（audit_stop_refs 列挙の4節）がいずれの停止条件にも該当しない。",
+    "identity_establishment_ref": "birth_gate_aggregate_rule",
+    "note": "PR #333 Codex bot レビュー第5巡指摘3（P1、採用）新設: 従来の birth_gate_aggregate_rule の『必要十分条件』は validity/d12/PJS のみを規定し、C0/C1/positive reference の exact-replay 監査を含んでいなかったため、監査失敗（DETERMINISM_CONTRACT_BROKEN 等）と BIRTH=ESTABLISHED が同時成立し得た。本節は Birth Gate 判定を二層に再構成する: identity_establishment（birth_gate_aggregate_rule、BIRTH ラベルを決める層）と本節 birth_gate_overall_pass（learning recipe freeze / 学習実行へ進む可否を決める層）——新規則の発明ではなく、裁定§8『rev 0.6のBirth GateがPASSした場合のみ、learning recipe freezeおよび学習実行へ進む。』の機械符号化。",
+    "pass_gates_learning": "PASS の場合のみ learning recipe freeze / 学習実行へ進む（裁定§8）。非 PASS の場合は Birth Gate 全体として学習非進行——ESTABLISHED であっても監査停止があれば学習を開始しない。",
+    "verbatim_basis": "rev 0.6のBirth GateがPASSした場合のみ、learning recipe freezeおよび学習実行へ進む。"
   },
   "birth_identity_separation": {
     "cell_ref": "P0-NEUTRAL-SAKURA-FRAGMENT",
@@ -79,6 +97,13 @@
     "contract_field_ref": "RUN9_CONTRACT.yaml#interventions.c1_sham_takes_per_founder",
     "expected": "D_C1(F)=0×20",
     "on_nonzero": "C1_SHAM_EFFECT_DETECTED",
+    "on_wav_byte_mismatch": {
+      "condition": "C1 render の WAV bytes が C0/reference と不一致（identity feature が一致し D_C1(F)=0 であっても）",
+      "cross_reference": "c0_determinism_attestation.on_mismatch.render_byte_mismatch および positive_reference_audit.on_mismatch.wav_byte_mismatch と同一の byte-mismatch routing 規則を C1 に適用する（新語彙の発明はしない）。",
+      "gate_effect": "Birth Gate 非 PASS・学習非進行（閾値救済禁止、裁定§9 fail-closed 原則）。",
+      "note": "PR #333 Codex bot レビュー第5巡指摘2（P1、採用）新設: 従来の on_nonzero（D_C1(F)≠0）のみでは、『WAV バイトは不一致だが identity feature は一致（D_C1(F)=0）』という決定論破りの具体的経路に発火する分岐が存在しなかった——C0/positive_reference_audit が feature-level と byte-level を明示的に分離しているのに対し C1 だけが未分岐だった穴の是正。裁定§2『C1のWAV bytesおよびidentity featureはC0/referenceと完全一致することを要求する。』の機械符号化であり、新規則の発明ではない。既存 on_nonzero（C1_SHAM_EFFECT_DETECTED）は無改変。",
+      "outcome": "DETERMINISM_CONTRACT_BROKEN"
+    },
     "requirement": "C1のWAV bytesおよびidentity featureはC0/referenceと完全一致することを要求する。",
     "role": "ControlProfile機構通過の副作用ゼロを確認する。",
     "takes_per_founder": 20,

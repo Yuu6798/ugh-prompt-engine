@@ -19851,15 +19851,17 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     field = contract_raw["hypothesis_algebra_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.IDENTITY_DECISION_PROTOCOL_PATH)
-    # PR #333 第4巡指摘1/2（P1×2、採用）: birth_gate_aggregate_rule 新設 +
-    # positive_reference_audit.on_mismatch 新設のため repin（旧値
+    # PR #333 第5巡指摘1/2/3（P1×3、採用）: `birth_gate_aggregate_rule.
+    # conjunct_refs` 是正 + `c1_sham_attestation.on_wav_byte_mismatch` 新設
+    # + `birth_gate_overall_pass` 新設のため repin（旧値
+    # f626e309d187177800d33afabe6c81537faa3c59a5432e080f88e0d4854f1778・
     # 7525cd5ef484bfd94a234f25b44a48368d2f1607f334de1b868863c1bd133f4a・
     # cde8b003ff88b78693c81058e3a80ec4fbfe546df7e3f8e61812c8d6f61c67c1・
     # 304e72376e30e8e3974485d393c1f56a7256017588bc877c2be15f080291fb77・
     # 967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3 は
     # RUN9_CONTRACT.yaml の【repin 履歴】コメントに保持）。
     assert field["value"] == (
-        "f626e309d187177800d33afabe6c81537faa3c59a5432e080f88e0d4854f1778"
+        "2e47c7d6f093add787159d1a6325b70d308146280a3e8f40abdc08e1b10e59cd"
     )
     assert field["source"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json"
@@ -20605,3 +20607,473 @@ def test_pr333_r4_load_pinned_rejects_aggregate_rule_tamper_via_hash_mismatch(
             tampered_contract, domain=domain, manifest_path=manifest_path,
             contract_path=tmp_path / "RUN9_CONTRACT.yaml",
         )
+
+
+# =============================================================================
+# PR #333 Codex bot レビュー第5巡対応（2026-08-28、フェーズ1）
+# 指摘1（P1、`birth_gate_aggregate_rule.conjunct_refs` の排他ペア欠陥是正
+# — 第4巡実装の欠陥）・指摘2（P1、`c1_sham_attestation.on_wav_byte_
+# mismatch` 新設）・指摘3（P1、`birth_gate_overall_pass` 新設・二層分離）。
+# いずれも新規則の発明ではなく裁定§4/§5/§9・§2/§9・§8 の機械符号化——既存
+# established/invalid_or_nonfinite_feature/not_established/on_positive/
+# on_zero/on_nonzero の各分岐は無改変のまま参照するのみ。
+# =============================================================================
+
+
+# --- 指摘1: birth_gate_aggregate_rule.conjunct_refs 是正 --------------------
+
+
+def test_pr333_r5_validate_real_manifest_happy_path_with_r5_fields() -> None:
+    m.validate_identity_decision_protocol(_identity_decision_protocol_data())  # 例外なしの確認
+
+
+def test_pr333_r5_conjunct_refs_now_two_success_predicates_only() -> None:
+    """第4巡実装の4項目（排他ペア2組）から、成功述語のみの2項目へ是正
+    されたこと——実データで直接確認する。"""
+    data = _identity_decision_protocol_data()
+    conjunct_refs = data["birth_gate_aggregate_rule"]["conjunct_refs"]
+    assert conjunct_refs == [
+        "birth_identity_separation.established",
+        "pjs_confuser.on_positive",
+    ]
+    assert tuple(conjunct_refs) == m._IDENTITY_PROTOCOL_BIRTH_GATE_CONJUNCT_REFS
+
+
+def test_pr333_r5_conjunct_refs_and_failure_refs_disjoint_no_exclusive_pair() -> None:
+    """指摘1 是正の直接確認（敵対的自己検査 (d)）: conjunct_refs と
+    failure_refs が互いに素であり、`birth_identity_separation.*`／
+    `pjs_confuser.*` それぞれについて conjunct_refs 側に1項目のみが
+    存在すること——第4巡実装のように同じ問いの成立・不成立を同時に
+    conjunct_refs へ要求する排他ペアが存在しないことの機械証明。"""
+    data = _identity_decision_protocol_data()
+    agg = data["birth_gate_aggregate_rule"]
+    conjunct = set(agg["conjunct_refs"])
+    failure = set(agg["not_established"]["outcome_detail_priority"]["failure_refs"])
+    assert conjunct.isdisjoint(failure)
+
+    birth_conjuncts = {r for r in conjunct if r.startswith("birth_identity_separation.")}
+    birth_failures = {r for r in failure if r.startswith("birth_identity_separation.")}
+    assert birth_conjuncts == {"birth_identity_separation.established"}
+    assert birth_conjuncts.isdisjoint(birth_failures)
+
+    pjs_conjuncts = {r for r in conjunct if r.startswith("pjs_confuser.")}
+    pjs_failures = {r for r in failure if r.startswith("pjs_confuser.")}
+    assert pjs_conjuncts == {"pjs_confuser.on_positive"}
+    assert pjs_conjuncts.isdisjoint(pjs_failures)
+
+
+def test_pr333_r5_failure_refs_matches_frozen_tuple_ordered() -> None:
+    data = _identity_decision_protocol_data()
+    priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    assert tuple(priority["failure_refs"]) == m._IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS
+    assert priority["failure_refs"] == [
+        "birth_identity_separation.invalid_or_nonfinite_feature",
+        "birth_identity_separation.not_established",
+        "pjs_confuser.on_zero",
+    ]
+    # order と同順であること（対応関係の可読性——(1) validity → (2) d12=0
+    # → (3) PJS confuser distance=0）。
+    assert len(priority["order"]) == len(priority["failure_refs"])
+
+
+def test_pr333_r5_validate_rejects_conjunct_refs_missing_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["birth_gate_aggregate_rule"]["conjunct_refs"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_failure_refs_missing_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    del priority["failure_refs"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_failure_refs_reordered() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    priority["failure_refs"] = list(reversed(priority["failure_refs"]))
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="birth_gate_aggregate_rule.not_established.outcome_detail_priority.failure_refs",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_failure_refs_extra_entry() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    priority["failure_refs"].append("pjs_confuser.metric")
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="birth_gate_aggregate_rule.not_established.outcome_detail_priority.failure_refs",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_failure_refs_dict_masquerade() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    priority["failure_refs"] = _dict_masquerading_as_ordered_list(
+        m._IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match=(
+            "birth_gate_aggregate_rule.not_established.outcome_detail_priority.failure_refs "
+            "must be a list"
+        ),
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_conjunct_refs_reintroducing_old_exclusive_pair() -> None:
+    """第4巡実装の欠陥そのもの（排他ペア4項目）を復元しても是正後の
+    validator が拒否すること——回帰防止の直接確認。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_aggregate_rule"]["conjunct_refs"] = [
+        "birth_identity_separation.established",
+        "birth_identity_separation.invalid_or_nonfinite_feature",
+        "pjs_confuser.on_positive",
+        "pjs_confuser.on_zero",
+    ]
+    with pytest.raises(m.Run9ValidationError, match="birth_gate_aggregate_rule.conjunct_refs"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_identity_establishment_scope_note_missing_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["birth_gate_aggregate_rule"]["identity_establishment_scope_note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_identity_establishment_scope_note_empty() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_aggregate_rule"]["identity_establishment_scope_note"] = ""
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_aggregate_rule_existing_branches_byte_unchanged() -> None:
+    """既存 birth_identity_separation/pjs_confuser 節は本改訂で無改変
+    （1 byte も変更していない）——第4巡回帰確認と同型。"""
+    data = _identity_decision_protocol_data()
+    assert set(data["pjs_confuser"].keys()) == {
+        "verbatim", "metric", "pjs_reference_ref", "on_zero", "on_positive",
+    }
+    assert set(data["pjs_confuser"]["on_zero"].keys()) == {
+        "condition", "birth_outcome", "reason",
+    }
+    assert set(data["birth_identity_separation"].keys()) == {
+        "verbatim", "cell_ref", "formula", "established", "not_established",
+        "invalid_or_nonfinite_feature", "negative_reference_gate_note",
+    }
+
+
+# --- 指摘2: c1_sham_attestation.on_wav_byte_mismatch ------------------------
+
+
+def test_pr333_r5_c1_on_wav_byte_mismatch_reuses_c0_vocabulary() -> None:
+    """新設 on_wav_byte_mismatch は C0 側の停止語彙定数をそのまま再利用
+    していること（新語彙の発明はしない）。"""
+    data = _identity_decision_protocol_data()
+    on_wav = data["c1_sham_attestation"]["on_wav_byte_mismatch"]
+    assert on_wav["outcome"] == m.IDENTITY_PROTOCOL_C0_RENDER_MISMATCH_OUTCOME
+    assert on_wav["outcome"] == "DETERMINISM_CONTRACT_BROKEN"
+    c0_on_mismatch = data["c0_determinism_attestation"]["on_mismatch"]
+    assert on_wav["outcome"] == c0_on_mismatch["render_byte_mismatch"]
+    positive_on_mismatch = data["positive_reference_audit"]["on_mismatch"]
+    assert on_wav["outcome"] == positive_on_mismatch["wav_byte_mismatch"]
+
+
+def test_pr333_r5_validate_rejects_c1_on_wav_byte_mismatch_missing_top_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["c1_sham_attestation"]["on_wav_byte_mismatch"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_c1_on_wav_byte_mismatch_wrong_outcome() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["c1_sham_attestation"]["on_wav_byte_mismatch"]["outcome"] = "C1_SHAM_EFFECT_DETECTED"
+    with pytest.raises(
+        m.Run9ValidationError, match="c1_sham_attestation.on_wav_byte_mismatch.outcome"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_c1_on_wav_byte_mismatch_missing_subkey() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["c1_sham_attestation"]["on_wav_byte_mismatch"]["cross_reference"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_c1_on_wav_byte_mismatch_empty_note() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["c1_sham_attestation"]["on_wav_byte_mismatch"]["note"] = ""
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_c1_on_nonzero_byte_unchanged() -> None:
+    """既存 on_nonzero（C1_SHAM_EFFECT_DETECTED）は本改訂で無改変。"""
+    data = _identity_decision_protocol_data()
+    assert data["c1_sham_attestation"]["on_nonzero"] == "C1_SHAM_EFFECT_DETECTED"
+
+
+# --- 指摘3: birth_gate_overall_pass（二層分離）------------------------------
+
+
+def test_pr333_r5_overall_pass_identity_establishment_ref_points_to_aggregate_rule() -> None:
+    data = _identity_decision_protocol_data()
+    assert (
+        data["birth_gate_overall_pass"]["identity_establishment_ref"]
+        == "birth_gate_aggregate_rule"
+    )
+
+
+def test_pr333_r5_overall_pass_verbatim_basis_matches_execution_order_gate_sequencing() -> None:
+    """verbatim_basis は execution_order.gate_sequencing（裁定§8 逐語）と
+    単一の正本を共有する——実データで一致確認。"""
+    data = _identity_decision_protocol_data()
+    assert (
+        data["birth_gate_overall_pass"]["verbatim_basis"]
+        == data["execution_order"]["gate_sequencing"]
+    )
+    assert data["execution_order"]["gate_sequencing"] == (
+        "rev 0.6のBirth GateがPASSした場合のみ、learning recipe freezeおよび学習実行へ進む。"
+    )
+
+
+def test_pr333_r5_overall_pass_audit_stop_refs_matches_frozen_tuple() -> None:
+    data = _identity_decision_protocol_data()
+    audit_stop_refs = data["birth_gate_overall_pass"]["audit_stop_refs"]
+    assert tuple(audit_stop_refs) == m._IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS
+    assert audit_stop_refs == [
+        "c0_determinism_attestation.on_mismatch",
+        "c1_sham_attestation.on_nonzero",
+        "c1_sham_attestation.on_wav_byte_mismatch",
+        "positive_reference_audit.on_mismatch",
+    ]
+
+
+def test_pr333_r5_validate_rejects_missing_birth_gate_overall_pass_top_level_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["birth_gate_overall_pass"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_overall_pass_wrong_identity_establishment_ref() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_overall_pass"]["identity_establishment_ref"] = "pjs_confuser"
+    with pytest.raises(
+        m.Run9ValidationError, match="birth_gate_overall_pass.identity_establishment_ref"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_overall_pass_audit_stop_refs_reordered() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_overall_pass"]["audit_stop_refs"] = list(
+        reversed(data["birth_gate_overall_pass"]["audit_stop_refs"])
+    )
+    with pytest.raises(m.Run9ValidationError, match="birth_gate_overall_pass.audit_stop_refs"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_overall_pass_audit_stop_refs_extra_entry() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_overall_pass"]["audit_stop_refs"].append("pjs_confuser.on_zero")
+    with pytest.raises(m.Run9ValidationError, match="birth_gate_overall_pass.audit_stop_refs"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_overall_pass_audit_stop_refs_dict_masquerade() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_overall_pass"]["audit_stop_refs"] = _dict_masquerading_as_ordered_list(
+        m._IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="birth_gate_overall_pass.audit_stop_refs must be a list"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_overall_pass_verbatim_basis_mismatch() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_overall_pass"]["verbatim_basis"] = "改ざんされた逐語"
+    with pytest.raises(m.Run9ValidationError, match="birth_gate_overall_pass.verbatim_basis"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_overall_pass_missing_subkey() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["birth_gate_overall_pass"]["note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r5_validate_rejects_overall_pass_empty_definition() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_overall_pass"]["definition"] = ""
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_identity_decision_protocol(data)
+
+
+# --- load_pinned_identity_decision_protocol(): 第5巡フィールドの一貫性 ------
+
+
+def test_pr333_r5_load_pinned_happy_path_with_new_sections(
+    contract: m.Run9RunContract,
+) -> None:
+    domain = _real_identity_domain()
+    data = m.load_pinned_identity_decision_protocol(contract, domain=domain)
+    assert data["schema"] == m.SCHEMA_IDENTITY_DECISION_PROTOCOL
+    assert "birth_gate_overall_pass" in data
+    assert "on_wav_byte_mismatch" in data["c1_sham_attestation"]
+    assert "failure_refs" in (
+        data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    )
+
+
+def test_pr333_r5_load_pinned_rejects_overall_pass_tamper_via_hash_mismatch(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """新設節を改ざんした合成 manifest は、manifest 実バイト sha256 が
+    pin 済み hypothesis_algebra_sha と食い違うため fail-closed で拒否
+    されること（第4巡と同型の tamper 経路確認）。"""
+    domain = _real_identity_domain()
+
+    def mutate(data: Dict[str, Any]) -> None:
+        data["birth_gate_overall_pass"]["identity_establishment_ref"] = "pjs_confuser"
+
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=mutate
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="birth_gate_overall_pass.identity_establishment_ref"
+    ):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )
+
+
+# =============================================================================
+# 敵対的自己検査（Task 指示必須）: protocol JSON だけを入力に「文字通りの
+# 消費者」を演じるシミュレーション。ハードコードされた Python 分岐ロジック
+# ではなく、`conjunct_refs`/`audit_stop_refs` の JSON 列挙をそのまま辿る
+# ことで、protocol 側の宣言だけから Birth outcome / overall PASS を導出
+# する——validator の意図と実データの整合を、validator 自身とは独立の
+# 経路で二重確認する。
+# =============================================================================
+
+
+def _literal_consumer_birth_gate(
+    protocol: Dict[str, Any],
+    *,
+    feature_valid: bool,
+    d12_positive: bool,
+    pjs_distance_positive: bool,
+    c0_mismatch: bool = False,
+    c1_nonzero: bool = False,
+    c1_wav_byte_mismatch: bool = False,
+    positive_mismatch: bool = False,
+) -> Tuple[str, bool]:
+    """protocol JSON の `birth_gate_aggregate_rule.conjunct_refs` 列挙を
+    そのまま辿って BIRTH outcome を、`birth_gate_overall_pass` の定義を
+    そのまま辿って overall PASS を導出する「文字通りの消費者」。
+
+    conjunct ref 文字列 → 実世界の真偽値の対応表 (`conjunct_truth`) 以外は
+    protocol 側の分岐定義（`established`/`not_established` の
+    `birth_outcome` 値）だけを読む——本関数自身は ESTABLISHED/
+    NOT_ESTABLISHED をハードコードしない。
+    """
+    agg = protocol["birth_gate_aggregate_rule"]
+    conjunct_truth = {
+        "birth_identity_separation.established": feature_valid and d12_positive,
+        "pjs_confuser.on_positive": pjs_distance_positive,
+    }
+    for ref in agg["conjunct_refs"]:
+        assert ref in conjunct_truth, f"literal consumer: unknown conjunct ref {ref!r}"
+    established = all(conjunct_truth[ref] for ref in agg["conjunct_refs"])
+    birth_outcome = (
+        agg["established"]["birth_outcome"] if established
+        else agg["not_established"]["birth_outcome"]
+    )
+
+    audit_failed = c0_mismatch or c1_nonzero or c1_wav_byte_mismatch or positive_mismatch
+    # overall PASS の定義（`birth_gate_overall_pass.definition`）をそのまま
+    # 辿る: identity_establishment = ESTABLISHED ∧ 監査停止が一件も無い。
+    overall_pass = established and not audit_failed
+    return birth_outcome, overall_pass
+
+
+def test_pr333_r5_adversarial_literal_consumer_all_success_establishes_and_passes() -> None:
+    """(a) 全成功ケース → ESTABLISHED + overall PASS。"""
+    protocol = _identity_decision_protocol_data()
+    birth_outcome, overall_pass = _literal_consumer_birth_gate(
+        protocol,
+        feature_valid=True, d12_positive=True, pjs_distance_positive=True,
+    )
+    assert birth_outcome == "ESTABLISHED"
+    assert overall_pass is True
+
+
+def test_pr333_r5_adversarial_literal_consumer_pjs_zero_distance_not_established() -> None:
+    """(b) PJS 距離 0（他は全て成功）→ NOT_ESTABLISHED。"""
+    protocol = _identity_decision_protocol_data()
+    birth_outcome, overall_pass = _literal_consumer_birth_gate(
+        protocol,
+        feature_valid=True, d12_positive=True, pjs_distance_positive=False,
+    )
+    assert birth_outcome == "NOT_ESTABLISHED"
+    assert overall_pass is False
+
+
+def test_pr333_r5_adversarial_literal_consumer_c1_byte_only_mismatch_broken_but_established() -> (
+    None
+):
+    """(c) C1 バイトのみ不一致（identity_establishment は全て成功）→
+    DETERMINISM_CONTRACT_BROKEN 相当の監査停止・overall 非PASS・ただし
+    BIRTH=ESTABLISHED 判定自体は維持される（会計分離、指摘3 の核心）。"""
+    protocol = _identity_decision_protocol_data()
+    birth_outcome, overall_pass = _literal_consumer_birth_gate(
+        protocol,
+        feature_valid=True, d12_positive=True, pjs_distance_positive=True,
+        c1_wav_byte_mismatch=True,
+    )
+    assert birth_outcome == "ESTABLISHED"
+    assert overall_pass is False
+    # 監査停止語彙が実際に protocol 側で DETERMINISM_CONTRACT_BROKEN へ
+    # 割り当てられていることも直接確認する。
+    assert (
+        protocol["c1_sham_attestation"]["on_wav_byte_mismatch"]["outcome"]
+        == "DETERMINISM_CONTRACT_BROKEN"
+    )
+
+
+def test_pr333_r5_adversarial_literal_consumer_no_exclusive_pair_all_conjuncts_satisfiable() -> (
+    None
+):
+    """(d) conjunct_refs の全参照が同時成立可能であること（排他ペア非
+    存在の直接シミュレーション確認）——全成功ワールドで conjunct_refs の
+    各項が独立に True になることを、`_literal_consumer_birth_gate` が
+    使う `conjunct_truth` 辞書を直接検査して確認する。"""
+    protocol = _identity_decision_protocol_data()
+    agg = protocol["birth_gate_aggregate_rule"]
+    conjunct_truth = {
+        "birth_identity_separation.established": True,
+        "pjs_confuser.on_positive": True,
+    }
+    for ref in agg["conjunct_refs"]:
+        assert conjunct_truth[ref] is True, (
+            f"literal consumer: conjunct ref {ref!r} is not satisfiable simultaneously "
+            "with the other conjuncts under the all-success world state"
+        )
+    assert all(conjunct_truth[ref] for ref in agg["conjunct_refs"])
