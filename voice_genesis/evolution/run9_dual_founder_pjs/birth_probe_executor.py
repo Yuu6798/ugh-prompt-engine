@@ -688,6 +688,106 @@ def execute_birth_gate(
     return result, observations
 
 
+def _staged_result_record(
+    parsed_result: Mapping[str, Any], founder: str, condition: str, index: int
+) -> Mapping[str, Any]:
+    founders = parsed_result.get("founders")
+    if not isinstance(founders, Mapping) or set(founders) != set(_FOUNDER_IDS):
+        raise BirthProbeError("staged evidence result founders are not closed-world")
+    founder_result = founders.get(founder)
+    if not isinstance(founder_result, Mapping):
+        raise BirthProbeError(f"staged evidence result is missing founder {founder}")
+    if condition in {"reference", "positive_reference"}:
+        record = founder_result.get(condition)
+    else:
+        records = founder_result.get(condition)
+        if not isinstance(records, list) or index >= len(records):
+            raise BirthProbeError(f"staged evidence result is missing {founder}/{condition}/{index}")
+        record = records[index]
+    if not isinstance(record, Mapping):
+        raise BirthProbeError(f"staged evidence result record is invalid for {founder}/{condition}/{index}")
+    return record
+
+
+def _validate_staged_evidence_bundle(
+    staging: Path,
+    result: Mapping[str, Any],
+    observations: Mapping[str, Mapping[str, Sequence[RenderObservation]]],
+    pjs_reference: FeatureArtifact,
+    expected_inventory: Mapping[str, str],
+) -> None:
+    """Parse and read back a complete staged bundle before the atomic rename."""
+    evidence_path = staging / "birth_gate_evidence.json"
+    evidence_bytes, _ = _read_once(evidence_path, label="staged birth gate evidence")
+    expected_evidence_bytes = canonical_json_bytes(dict(result))
+    if evidence_bytes != expected_evidence_bytes:
+        raise BirthProbeError("staged birth gate evidence bytes diverge from the in-memory result")
+    try:
+        parsed_result = json.loads(evidence_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BirthProbeError(f"staged birth gate evidence is not valid UTF-8 JSON: {exc}") from exc
+    if parsed_result != dict(result):
+        raise BirthProbeError("staged birth gate evidence parse differs from the in-memory result")
+
+    for founder in _FOUNDER_IDS:
+        for condition in _CONDITIONS:
+            for index, observation in enumerate(observations[founder][condition]):
+                stem = f"{founder}_{condition}_{index:02d}"
+                wav_bytes, wav_sha = _read_once(
+                    staging / "wav" / f"{stem}.wav", label=f"staged WAV {stem}"
+                )
+                feature_bytes, feature_sha = _read_once(
+                    staging / "features" / f"{stem}.bin", label=f"staged feature {stem}"
+                )
+                if wav_bytes != observation.wav or wav_sha != observation.wav_sha256:
+                    raise BirthProbeError(f"staged WAV readback mismatch for {stem}")
+                if feature_bytes != observation.feature.data or feature_sha != observation.feature.sha256:
+                    raise BirthProbeError(f"staged feature readback mismatch for {stem}")
+                record = _staged_result_record(parsed_result, founder, condition, index)
+                if (
+                    record.get("wav_sha256") != wav_sha
+                    or record.get("feature_sha256") != feature_sha
+                    or record.get("feature_bytes") != len(feature_bytes)
+                ):
+                    raise BirthProbeError(f"staged evidence record disagrees with artifact bytes for {stem}")
+
+    pjs_bytes, pjs_sha = _read_once(
+        staging / "features" / "pjs_reference.bin", label="staged PJS reference"
+    )
+    if pjs_bytes != pjs_reference.data or pjs_sha != pjs_reference.sha256:
+        raise BirthProbeError("staged PJS reference readback mismatch")
+    pjs_record = parsed_result.get("pjs_reference")
+    if not isinstance(pjs_record, Mapping) or (
+        pjs_record.get("feature_sha256") != pjs_sha
+        or pjs_record.get("feature_bytes") != len(pjs_bytes)
+    ):
+        raise BirthProbeError("staged PJS evidence record disagrees with artifact bytes")
+
+    manifest_path = staging / "artifact_manifest.json"
+    manifest_bytes, _ = _read_once(manifest_path, label="staged artifact manifest")
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BirthProbeError(f"staged artifact manifest is not valid UTF-8 JSON: {exc}") from exc
+    actual_inventory: Dict[str, str] = {}
+    actual_files: set[str] = set()
+    for path in sorted(staging.rglob("*")):
+        if path.is_file():
+            relative = path.relative_to(staging).as_posix()
+            actual_files.add(relative)
+            if relative != "artifact_manifest.json":
+                actual_inventory[relative] = sha256_bytes(path.read_bytes())
+    if actual_inventory != dict(expected_inventory):
+        raise BirthProbeError("staged artifact inventory changed after manifest construction")
+    if manifest != {
+        "schema": "run9-birth-gate-artifact-manifest/1.0",
+        "files": actual_inventory,
+    }:
+        raise BirthProbeError("staged artifact manifest disagrees with readback inventory")
+    if actual_files != set(actual_inventory) | {"artifact_manifest.json"}:
+        raise BirthProbeError("staged evidence bundle contains missing or unexpected files")
+
+
 def publish_evidence_bundle(
     output_dir: Path,
     result: Mapping[str, Any],
@@ -742,6 +842,7 @@ def publish_evidence_bundle(
         (staging / "artifact_manifest.json").write_bytes(
             canonical_json_bytes({"schema": "run9-birth-gate-artifact-manifest/1.0", "files": inventory})
         )
+        _validate_staged_evidence_bundle(staging, result, observations, pjs_reference, inventory)
         os.replace(staging, output_dir)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
@@ -934,7 +1035,10 @@ class GateSynthRenderer:
         )
         if record.get("seed") != _RUNTIME_SEED:
             raise BirthProbeError(f"gate_synth recorded unexpected runtime seed: {record.get('seed')!r}")
-        peak = float(np.max(np.abs(waveform))) if waveform.size else 0.0
+        waveform = np.asarray(waveform)
+        if waveform.ndim != 1 or waveform.size == 0 or not bool(np.isfinite(waveform).all()):
+            raise BirthProbeError("gate_synth waveform must be a non-empty finite one-dimensional array")
+        peak = float(np.max(np.abs(waveform)))
         if peak > 0.0:
             waveform = waveform / peak * 0.6
         with tempfile.TemporaryDirectory(prefix="run9-birth-render-") as directory:
