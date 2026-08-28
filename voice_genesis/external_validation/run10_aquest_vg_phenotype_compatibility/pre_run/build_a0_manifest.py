@@ -127,6 +127,30 @@ def _validate_required_shape(kind_counts: Mapping[str, int]) -> None:
         )
 
 
+def _assert_voicebank_snapshot_unchanged(
+    root: Path, entries: List[Mapping[str, Any]]
+) -> None:
+    expected = {str(entry["path"]): str(entry["sha256"]) for entry in entries}
+    actual: Dict[str, str] = {}
+    for path in _ordered_files(root):
+        relative = path.relative_to(root).as_posix()
+        actual[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    added = sorted(set(actual) - set(expected))
+    removed = sorted(set(expected) - set(actual))
+    changed = sorted(
+        path
+        for path in set(actual) & set(expected)
+        if actual[path] != expected[path]
+    )
+    if added or removed or changed:
+        raise ValueError(
+            "A0 voicebank changed after its manifest snapshot: "
+            f"added={added[:5]!r}, removed={removed[:5]!r}, "
+            f"hash_mismatch={changed[:5]!r}"
+        )
+
+
 def _validated_output_path(out: Path, staging_root: Path) -> Path:
     resolved = assert_private_staging_path(out, staging_root)
     repository = repo_root(_RUN10_DIR).resolve()
@@ -335,6 +359,9 @@ def write_manifest(
         raise ValueError(
             f"A0 manifest sha256 mismatch: expected {expected}, got {actual}"
         )
+    _assert_voicebank_snapshot_unchanged(
+        Path(voicebank_root).resolve(), document["files"]
+    )
     atomic_write_bytes(destination, payload)
     return payload
 

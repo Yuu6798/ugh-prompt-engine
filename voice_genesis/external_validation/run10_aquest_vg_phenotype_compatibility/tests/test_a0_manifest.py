@@ -354,6 +354,39 @@ def test_manifest_pin_mismatch_does_not_publish(tmp_path: Path) -> None:
     assert not out.exists()
 
 
+@pytest.mark.parametrize("mutation", ["add", "remove", "change"])
+def test_post_snapshot_voicebank_mutation_does_not_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    root = _voicebank(tmp_path)
+    staging = tmp_path / "private"
+    out = staging / "a0_voicebank_manifest.json"
+    expected = _manifest_sha(root)
+    canonical_json_bytes = subject.canonical_json_bytes
+
+    def mutate_after_snapshot(document: dict[str, object]) -> bytes:
+        if mutation == "add":
+            (root / "late.bin").write_bytes(b"late")
+        elif mutation == "remove":
+            (root / "readme.txt").unlink()
+        else:
+            (root / "character.txt").write_text(
+                "name=changed after snapshot\n", encoding="utf-8"
+            )
+        return canonical_json_bytes(document)
+
+    monkeypatch.setattr(subject, "canonical_json_bytes", mutate_after_snapshot)
+    with pytest.raises(ValueError, match="changed after its manifest snapshot"):
+        subject.write_manifest(
+            root,
+            staging,
+            out,
+            voicebank_version="test",
+            expected_manifest_sha256=expected,
+        )
+    assert not out.exists()
+
+
 def test_cli_manifest_pin_comes_from_the_run_contract() -> None:
     assert subject._pinned_manifest_sha256() == (
         "042813936caf759f3fc95a29a6655a07c76a3a302bd6705538443ca5d08fe01f"
