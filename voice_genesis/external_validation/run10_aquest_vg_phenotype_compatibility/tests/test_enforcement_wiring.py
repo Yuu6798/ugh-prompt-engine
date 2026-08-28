@@ -321,6 +321,23 @@ def _deferred_execution_mode(
     return "iterate" if has_yield else "call"
 
 
+def _modes_execute_function(
+    name: str,
+    modes: Set[str],
+    functions: Dict[str, list[FunctionRef]],
+    trees: Dict[str, ast.Module],
+) -> bool:
+    """観測した mode のいずれかが name の候補定義の本体を開始するか。"""
+    return any(
+        _deferred_execution_mode(
+            candidate,
+            postponed_annotations=_postpones_annotations(trees[candidate_rel]),
+        )
+        in modes
+        for candidate_rel, candidate in functions.get(name, ())
+    )
+
+
 def _entry_points(trees: Dict[str, ast.Module]) -> Set[str]:
     """呼び出しグラフの起点。
 
@@ -358,12 +375,8 @@ def _reachable_functions(trees: Dict[str, ast.Module]) -> Set[str]:
             ).items():
                 if callee not in functions or callee in reachable:
                     continue
-                executes_body = any(
-                    _deferred_execution_mode(
-                        candidate, postponed_annotations=_postpones_annotations(trees[candidate_rel])
-                    )
-                    in modes
-                    for candidate_rel, candidate in functions[callee]
+                executes_body = _modes_execute_function(
+                    callee, modes, functions, trees
                 )
                 if executes_body:
                     reachable.add(callee)
@@ -487,7 +500,7 @@ def _public_validators(trees: Dict[str, ast.Module]) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for rel, tree in trees.items():
         for node in tree.body:
-            if isinstance(node, ast.FunctionDef) and (
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
                 node.name.startswith("assert_") or node.name.startswith("verify_")
             ):
                 out[node.name] = rel
@@ -504,9 +517,15 @@ def _called_in_functions(trees: Dict[str, ast.Module]) -> Set[str]:
     called: Set[str] = set()
     for name in _reachable_functions(trees):
         for rel, node in functions.get(name, ()):
-            called |= _calls_in(
+            modes_by_callee = _call_modes_in(
                 node, postponed_annotations=_postpones_annotations(trees[rel])
             )
+            called |= {
+                callee
+                for callee, modes in modes_by_callee.items()
+                if callee not in functions
+                or _modes_execute_function(callee, modes, functions, trees)
+            }
     return called
 
 
@@ -796,6 +815,41 @@ def test_iterated_generator_and_awaited_coroutine_bodies_are_reachable() -> None
     assert ("synthetic.py", "COROUTINE_VOCAB") in wired
     assert "assert_generator" in called
     assert "assert_coroutine" in called
+
+
+def test_discarded_deferred_validators_are_not_wired() -> None:
+    """validator 自身が generator/coroutine の場合も、破棄した call は未配線。"""
+    trees = _synthetic(
+        "def verify_generator():\n"
+        "    yield 1\n"
+        "async def assert_coroutine():\n"
+        "    return None\n"
+        "def public_entry():\n"
+        "    verify_generator()\n"
+        "    assert_coroutine()\n"
+    )
+    called = _called_in_functions(trees)
+    assert "verify_generator" not in called
+    assert "assert_coroutine" not in called
+    assert _unwired_declarations(trees) == {"verify_generator", "assert_coroutine"}
+
+
+def test_executed_deferred_validators_are_wired() -> None:
+    """validator 自身も明示的な反復 / await があれば配線済み。"""
+    trees = _synthetic(
+        "def verify_generator():\n"
+        "    yield 1\n"
+        "async def assert_coroutine():\n"
+        "    return None\n"
+        "async def public_entry():\n"
+        "    for _ in verify_generator():\n"
+        "        pass\n"
+        "    await assert_coroutine()\n"
+    )
+    called = _called_in_functions(trees)
+    assert "verify_generator" in called
+    assert "assert_coroutine" in called
+    assert not _unwired_declarations(trees)
 
 
 def test_duplicate_constant_names_preserve_module_identity() -> None:
