@@ -400,6 +400,61 @@ def test_provenance_snapshot_rejects_post_snapshot_mutation(
         bp._verify_provenance_inputs_unchanged(snapshot)
 
 
+def test_provenance_snapshot_rejects_executor_changed_since_module_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, on_disk_sha = bp._read_once(bp._EXECUTOR_PATH, label="test executor provenance")
+    assert on_disk_sha == bp._EXECUTOR_LOAD_SHA256
+    monkeypatch.setattr(bp, "_EXECUTOR_LOAD_SHA256", "0" * 64)
+    with pytest.raises(bp.BirthProbeError, match="executor changed after module load"):
+        bp._snapshot_provenance_inputs()
+
+
+def test_gate_synth_renderer_adapter_matches_runtime_note_and_tempo_contract() -> None:
+    renderer = object.__new__(bp.GateSynthRenderer)
+    renderer._notes = [bp._ProbeNote(mora="あ", midi=60, duration_beats=1.5)]
+    renderer._tempo = 120.0
+    renderer._model_bytes = {}
+    renderer._variance_phonemes = {}
+    renderer._acoustic_phonemes = {}
+    renderer._embeddings = {"R9F-01": np.zeros(384, dtype=np.float32)}
+
+    class FakeGate:
+        @staticmethod
+        def run_pipeline(
+            notes,
+            beats_to_seconds,
+            tempo_bpm,
+            model_bytes,
+            variance_phonemes,
+            acoustic_phonemes,
+            record,
+            **kwargs,
+        ):
+            del model_bytes, variance_phonemes, acoustic_phonemes, kwargs
+            note = notes[0]
+            assert note.mora == "あ"
+            assert note.midi == 60
+            assert beats_to_seconds(note.duration_beats, tempo_bpm) == pytest.approx(0.75)
+            record["seed"] = bp._RUNTIME_SEED
+            return np.asarray([0.25, -0.25], dtype=np.float32)
+
+    class FakeSoundFile:
+        @staticmethod
+        def write(path, waveform, sample_rate, *, subtype, format):
+            del waveform, sample_rate, subtype, format
+            path.write_bytes(b"adapter-wav")
+
+        @staticmethod
+        def read(file_object, *, dtype, always_2d):
+            del file_object, dtype, always_2d
+            return np.asarray([0.1, -0.1], dtype=np.float64), 44_100
+
+    renderer._gate = FakeGate()
+    renderer._sf = FakeSoundFile()
+    assert renderer("R9F-01", "reference", 0, None) == b"adapter-wav"
+
+
 def test_unknown_or_missing_founder_is_rejected() -> None:
     references, c0, c1, positive, pjs = _evidence()
     del c0["R9F-02"]
