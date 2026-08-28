@@ -2,9 +2,11 @@
 """RUN9 rev 0.6 Birth Probe executor and closed-world result consumer.
 
 The scientific decision rules live in the pinned rev 0.6 protocol.  This
-module supplies the previously missing execution boundary: exact asset
-preflight, 84 fixed renders, WORLD feature extraction, C0/C1/positive replay
-audits, founder/PJS distances, and an atomic evidence bundle.
+module supplies the execution boundary for exact asset preflight, fixed
+renders, WORLD feature extraction, C0/C1/positive replay audits,
+founder/PJS distances, and an atomic evidence bundle.  Any prerequisite
+that is not actually bound to the execution semantics is rejected before
+measurement rather than being silently treated as implemented.
 
 No learning operation is exposed here.  In particular, this module cannot
 build or pin ``learning_recipe_sha``.
@@ -857,7 +859,13 @@ class _ProbeNote:
 
 
 class GateSynthRenderer:
-    """Production adapter for the frozen ``gate_synth.run_pipeline`` path."""
+    """Production adapter for the frozen ``gate_synth.run_pipeline`` path.
+
+    C1 is deliberately fail-closed until the neutral ``r_sham`` ControlProfile
+    can be attached at the actual synthesis integration boundary.  Merely
+    carrying the profile beside a render is not evidence that the sham
+    mechanism was exercised.
+    """
 
     def __init__(
         self,
@@ -1021,6 +1029,11 @@ class GateSynthRenderer:
             raise BirthProbeError("C0/C1 must carry their exact empty CONTROL profiles")
         if control_profile is not None and any(control_profile["partitions"].values()):
             raise BirthProbeError("C0/C1 CONTROL profile partitions must remain empty")
+        if condition == "c1":
+            raise BirthProbeError(
+                "C1 ZERO_CONTROLPROFILE_SHAM synthesis attachment is not implemented in gate_synth; "
+                "refusing to render while the r_sham profile would be bypassed"
+            )
         record: Dict[str, Any] = {}
         waveform = self._gate.run_pipeline(
             self._notes,
@@ -1074,14 +1087,14 @@ def _load_pinned_json(contract: Any, pin_name: str, path: Path) -> Dict[str, Any
     return parsed
 
 
-def _load_direct_dependency_pin_versions() -> Dict[str, str]:
-    """Read the recorded direct runtime dependency pins without claiming full closure."""
-    value, _ = _read_once(_DIRECT_DEPENDENCY_MANIFEST_PATH, label="dependency pins manifest")
-    try:
-        parsed = json.loads(value.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise BirthProbeError(f"dependency pins manifest is not valid UTF-8 JSON: {exc}") from exc
-    rows = parsed.get("python_dependency_pins") if isinstance(parsed, dict) else None
+def _load_direct_dependency_pin_versions(contract: Any) -> Dict[str, str]:
+    """Load direct runtime versions only from the preregistered contract pin."""
+    parsed = _load_pinned_json(
+        contract,
+        "dependency_pins_sha",
+        _DIRECT_DEPENDENCY_MANIFEST_PATH,
+    )
+    rows = parsed.get("python_dependency_pins")
     if not isinstance(rows, list):
         raise BirthProbeError("dependency pins manifest must contain python_dependency_pins list")
     pins: Dict[str, str] = {}
@@ -1191,7 +1204,7 @@ def _load_verified_inputs() -> tuple[
         contract, domain=domain, rights_manifest=rights
     )
     execution_profile = run9_schema.load_pinned_execution_profile_manifest(contract)
-    expected_dependencies = _load_direct_dependency_pin_versions()
+    expected_dependencies = _load_direct_dependency_pin_versions(contract)
     runtime_dependency_versions = _validate_execution_environment(
         execution_profile, expected_dependencies
     )
