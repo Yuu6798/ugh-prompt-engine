@@ -293,6 +293,23 @@ def test_verified_zip_rejects_missing_extracted_files(tmp_path: Path) -> None:
         )
 
 
+def test_zip_validates_directory_entries_before_ignoring_them(tmp_path: Path) -> None:
+    root = _voicebank(tmp_path)
+    archive = tmp_path / "A0.zip"
+    _zip_voicebank(root, archive)
+    with zipfile.ZipFile(archive, "a") as handle:
+        handle.writestr("../escape/", b"")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    with pytest.raises(ValueError, match="escapes its archive root"):
+        subject.build_manifest(
+            root,
+            voicebank_version="test",
+            zip_path=archive,
+            zip_sha256=digest,
+        )
+
+
 def test_obtained_at_is_only_recorded_when_explicit(tmp_path: Path) -> None:
     root = _voicebank(tmp_path)
     without = subject.build_manifest(root, voicebank_version="test")

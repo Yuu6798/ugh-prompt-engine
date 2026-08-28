@@ -189,8 +189,12 @@ def _validated_zip(
 
     archive_hashes: Dict[str, str] = {}
     with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
-        members = [info for info in archive.infolist() if not info.is_dir()]
-        paths = [_zip_member_path(info) for info in members]
+        inspected = [
+            (info, _zip_member_path(info)) for info in archive.infolist()
+        ]
+        members_and_paths = [pair for pair in inspected if not pair[0].is_dir()]
+        members = [pair[0] for pair in members_and_paths]
+        paths = [pair[1] for pair in members_and_paths]
         strip_root = bool(paths) and all(
             len(path.parts) >= 2 and path.parts[0] == root_name for path in paths
         )
