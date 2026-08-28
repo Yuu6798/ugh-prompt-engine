@@ -188,6 +188,7 @@ class _LocalBindingVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         self.bound: Set[str] = set()
         self.globals: Set[str] = set()
+        self.callables: Set[str] = set()
 
     def visit_Name(self, node: ast.Name) -> None:  # noqa: N802 - ast API
         if isinstance(node.ctx, (ast.Store, ast.Del)):
@@ -234,12 +235,14 @@ class _LocalBindingVisitor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802 - ast API
         self.bound.add(node.name)
+        self.callables.add(node.name)
         self._visit_definition_time(node)
 
     def visit_AsyncFunctionDef(  # noqa: N802 - ast API
         self, node: ast.AsyncFunctionDef
     ) -> None:
         self.bound.add(node.name)
+        self.callables.add(node.name)
         self._visit_definition_time(node)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802 - ast API
@@ -288,18 +291,48 @@ def _function_local_bindings(node: FunctionNode) -> Set[str]:
     return visitor.bound - visitor.globals
 
 
-def _function_shadowing(trees: Dict[str, ast.Module]) -> Dict[int, Set[str]]:
-    """各関数でmodule名解決より優先される自身+外側関数の束縛。"""
+def _function_local_callables(node: FunctionNode) -> Set[str]:
+    """node 自身のscopeに定義される nested function 名。"""
+    visitor = _LocalBindingVisitor()
+    for statement in node.body:
+        visitor.visit(statement)
+    return visitor.callables - visitor.globals
+
+
+def _function_enclosing_bindings(trees: Dict[str, ast.Module]) -> Dict[int, Set[str]]:
+    """各関数の定義時に有効な外側関数の lexical binding。"""
     out: Dict[int, Set[str]] = {}
 
     def walk(node: ast.AST, enclosing: Set[str]) -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             local = _function_local_bindings(node)
-            out[id(node)] = enclosing | local
+            out[id(node)] = set(enclosing)
             for statement in node.body:
                 walk(statement, enclosing | local)
         elif isinstance(node, ast.ClassDef):
             # class namespace は method の enclosing lexical scope にはならない。
+            for statement in node.body:
+                walk(statement, enclosing)
+        else:
+            for child in ast.iter_child_nodes(node):
+                walk(child, enclosing)
+
+    for tree in trees.values():
+        walk(tree, set())
+    return out
+
+
+def _function_enclosing_callables(trees: Dict[str, ast.Module]) -> Dict[int, Set[str]]:
+    """各関数を囲む外側関数scopeの nested function binding。"""
+    out: Dict[int, Set[str]] = {}
+
+    def walk(node: ast.AST, enclosing: Set[str]) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            local = _function_local_callables(node)
+            out[id(node)] = set(enclosing)
+            for statement in node.body:
+                walk(statement, enclosing | local)
+        elif isinstance(node, ast.ClassDef):
             for statement in node.body:
                 walk(statement, enclosing)
         else:
@@ -337,50 +370,97 @@ def _function_definition_nodes(
     # PEP 695 の bound / constraint は参照時まで遅延されるため辿らない。
 
 
-def _runtime_nodes(
+def _runtime_scoped_nodes(
     node: ast.AST,
     *,
+    shadowed: Set[str] | None = None,
     postponed_annotations: bool = False,
     _root_scope: bool = True,
-) -> Iterator[ast.AST]:
-    """実行時に評価される子 node を辿る。
+) -> Iterator[Tuple[ast.AST, Set[str]]]:
+    """実行時に評価される子 node と、その地点の lexical shadow を辿る。
 
     到達した関数の本体は辿る一方、ネストした関数・lambda は default / decorator
     等の定義時評価だけを辿る。class 本体は class 文の実行時に評価されるため辿る。
     generator expression は生成時に評価される最外 iterable だけを辿り、要素式・
     filter・内側 iterable は反復開始まで遅延されるので除外する。
     """
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-        children: Iterator[ast.AST] = _function_definition_nodes(
-            node, postponed_annotations=postponed_annotations
-        )
-        if _root_scope and not isinstance(node, ast.Lambda):
-            children = iter((*children, *node.body))
-    elif isinstance(node, ast.ClassDef):
-        children = iter(
-            (
-                *node.decorator_list,
-                *node.bases,
-                *(keyword.value for keyword in node.keywords),
-                *node.body,
-            )
-        )
-    elif isinstance(node, ast.GeneratorExp):
-        children = iter((node.generators[0].iter,))
-    elif isinstance(node, ast.AnnAssign) and postponed_annotations:
-        children = iter(
-            (node.target, *(() if node.value is None else (node.value,)))
-        )
-    else:
-        children = ast.iter_child_nodes(node)
+    current = set() if shadowed is None else shadowed
 
-    for child in children:
-        yield child
-        yield from _runtime_nodes(
+    def descend(child: ast.AST, bindings: Set[str]) -> Iterator[Tuple[ast.AST, Set[str]]]:
+        yield child, bindings
+        yield from _runtime_scoped_nodes(
             child,
+            shadowed=bindings,
             postponed_annotations=postponed_annotations,
             _root_scope=False,
         )
+
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        for child in _function_definition_nodes(
+            node, postponed_annotations=postponed_annotations
+        ):
+            yield from descend(child, current)
+        if _root_scope and not isinstance(node, ast.Lambda):
+            body_bindings = current | _function_local_bindings(node)
+            for child in node.body:
+                yield from descend(child, body_bindings)
+        return
+
+    if isinstance(node, ast.ClassDef):
+        headers = (
+            *node.decorator_list,
+            *node.bases,
+            *(keyword.value for keyword in node.keywords),
+        )
+        for child in headers:
+            yield from descend(child, current)
+        for child in node.body:
+            yield from descend(child, current)
+        return
+
+    if isinstance(node, ast.GeneratorExp):
+        yield from descend(node.generators[0].iter, current)
+        return
+
+    if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp)):
+        comprehension_bindings = current | {
+            name.id
+            for generator in node.generators
+            for name in _assigned_names(generator.target)
+        }
+        for index, generator in enumerate(node.generators):
+            iter_bindings = current if index == 0 else comprehension_bindings
+            yield generator, iter_bindings
+            yield from descend(generator.iter, iter_bindings)
+            for condition in generator.ifs:
+                yield from descend(condition, comprehension_bindings)
+        if isinstance(node, ast.DictComp):
+            yield from descend(node.key, comprehension_bindings)
+            yield from descend(node.value, comprehension_bindings)
+        else:
+            yield from descend(node.elt, comprehension_bindings)
+        return
+
+    if isinstance(node, ast.AnnAssign) and postponed_annotations:
+        yield from descend(node.target, current)
+        if node.value is not None:
+            yield from descend(node.value, current)
+        return
+
+    for child in ast.iter_child_nodes(node):
+        yield from descend(child, current)
+
+
+def _runtime_nodes(
+    node: ast.AST,
+    *,
+    postponed_annotations: bool = False,
+) -> Iterator[ast.AST]:
+    """lexical context が不要な利用箇所向けの runtime node view。"""
+    for child, _shadowed in _runtime_scoped_nodes(
+        node, postponed_annotations=postponed_annotations
+    ):
+        yield child
 
 
 def _postpones_annotations(tree: ast.Module) -> bool:
@@ -400,35 +480,53 @@ def _direct_call_name(node: ast.AST) -> str | None:
 
 
 def _call_modes_in(
-    node: ast.AST, *, postponed_annotations: bool = False
+    node: ast.AST,
+    *,
+    enclosing_bindings: Set[str] | None = None,
+    enclosing_callables: Set[str] | None = None,
+    postponed_annotations: bool = False,
 ) -> Dict[str, Set[str]]:
     """直接呼び出しと、遅延 callable を実行する構文上の mode を返す。"""
     modes: Dict[str, Set[str]] = {}
+    local_callables = (
+        set() if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        else _function_local_callables(node)
+    )
+    resolvable_shadowed = (enclosing_callables or set()) | local_callables
 
-    def add(call: ast.AST, mode: str) -> None:
+    def add(call: ast.AST, mode: str, shadowed: Set[str]) -> None:
         name = _direct_call_name(call)
-        if name is not None:
+        if name is not None and (name not in shadowed or name in resolvable_shadowed):
             modes.setdefault(name, set()).add(mode)
 
-    for sub in _runtime_nodes(node, postponed_annotations=postponed_annotations):
-        add(sub, "call")
+    for sub, shadowed in _runtime_scoped_nodes(
+        node,
+        shadowed=enclosing_bindings,
+        postponed_annotations=postponed_annotations,
+    ):
+        add(sub, "call", shadowed)
         if isinstance(sub, ast.Await):
-            add(sub.value, "await")
+            add(sub.value, "await", shadowed)
         elif isinstance(sub, ast.AsyncFor):
-            add(sub.iter, "async_iterate")
+            add(sub.iter, "async_iterate", shadowed)
         elif isinstance(sub, ast.For):
-            add(sub.iter, "iterate")
+            add(sub.iter, "iterate", shadowed)
         elif isinstance(sub, ast.comprehension):
-            add(sub.iter, "async_iterate" if sub.is_async else "iterate")
+            add(
+                sub.iter,
+                "async_iterate" if sub.is_async else "iterate",
+                shadowed,
+            )
         elif isinstance(sub, ast.YieldFrom):
-            add(sub.value, "iterate")
+            add(sub.value, "iterate", shadowed)
         elif (
             isinstance(sub, ast.Call)
             and isinstance(sub.func, ast.Name)
+            and sub.func.id not in shadowed
             and sub.func.id in {"all", "any", "list", "max", "min", "next", "set", "sum", "tuple"}
             and sub.args
         ):
-            add(sub.args[0], "iterate")
+            add(sub.args[0], "iterate", shadowed)
     return modes
 
 
@@ -505,6 +603,8 @@ def _entry_points(trees: Dict[str, ast.Module]) -> Set[str]:
 def _reachable_functions(trees: Dict[str, ast.Module]) -> Set[str]:
     """起点から呼び出しグラフを辿って到達できる関数名。"""
     functions = _functions(trees)
+    enclosing = _function_enclosing_bindings(trees)
+    enclosing_callables = _function_enclosing_callables(trees)
     reachable = {name for name in _entry_points(trees) if name in functions}
     frontier = list(reachable)
     while frontier:
@@ -512,7 +612,10 @@ def _reachable_functions(trees: Dict[str, ast.Module]) -> Set[str]:
         for rel, node in functions.get(current, ()):
             postponed = _postpones_annotations(trees[rel])
             for callee, modes in _call_modes_in(
-                node, postponed_annotations=postponed
+                node,
+                enclosing_bindings=enclosing.get(id(node), set()),
+                enclosing_callables=enclosing_callables.get(id(node), set()),
+                postponed_annotations=postponed,
             ).items():
                 if callee not in functions or callee in reachable:
                     continue
@@ -593,15 +696,17 @@ def _names_loaded_in_functions(trees: Dict[str, ast.Module]) -> Set[ConstantId]:
     functions = _functions(trees)
     constants = _module_constants(trees)
     imported = _imported_constants(trees, constants)
-    shadowing = _function_shadowing(trees)
+    enclosing = _function_enclosing_bindings(trees)
     used: Set[ConstantId] = set()
     for name in _reachable_functions(trees):
         for rel, node in functions.get(name, ()):
-            for sub in _runtime_nodes(
-                node, postponed_annotations=_postpones_annotations(trees[rel])
+            for sub, shadowed in _runtime_scoped_nodes(
+                node,
+                shadowed=enclosing.get(id(node), set()),
+                postponed_annotations=_postpones_annotations(trees[rel]),
             ):
                 if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
-                    if sub.id in shadowing.get(id(node), set()):
+                    if sub.id in shadowed:
                         continue
                     resolved = _resolve_constant_name(rel, sub.id, constants, imported)
                     if resolved is not None:
@@ -658,11 +763,16 @@ def _called_in_functions(trees: Dict[str, ast.Module]) -> Set[str]:
     ないため、検証器の「配線済み」判定には使えない。
     """
     functions = _functions(trees)
+    enclosing = _function_enclosing_bindings(trees)
+    enclosing_callables = _function_enclosing_callables(trees)
     called: Set[str] = set()
     for name in _reachable_functions(trees):
         for rel, node in functions.get(name, ()):
             modes_by_callee = _call_modes_in(
-                node, postponed_annotations=_postpones_annotations(trees[rel])
+                node,
+                enclosing_bindings=enclosing.get(id(node), set()),
+                enclosing_callables=enclosing_callables.get(id(node), set()),
+                postponed_annotations=_postpones_annotations(trees[rel]),
             )
             called |= {
                 callee
@@ -1066,6 +1176,38 @@ def test_global_declaration_resolves_module_constant() -> None:
         "    return VOCAB\n"
     )
     assert _wired_constants(trees) == {("synthetic.py", "VOCAB")}
+
+
+def test_comprehension_target_shadows_module_constant() -> None:
+    """comprehension の暗黙scope内loadは同名module定数へ解決しない。"""
+    trees = _synthetic(
+        "VOCAB = ('module',)\n"
+        "def public_entry():\n"
+        "    return [VOCAB for VOCAB in ('local',)]\n"
+    )
+    assert ("synthetic.py", "VOCAB") not in _wired_constants(trees)
+
+
+def test_function_default_uses_enclosing_scope_before_parameter_binding() -> None:
+    """default 式はcallee parameterが束縛される前に外側scopeで評価される。"""
+    trees = _synthetic(
+        "VOCAB = ('module',)\n"
+        "def public_entry(VOCAB=VOCAB):\n"
+        "    return VOCAB\n"
+    )
+    assert _wired_constants(trees) == {("synthetic.py", "VOCAB")}
+
+
+def test_local_callable_does_not_wire_same_named_validator() -> None:
+    """local/parameterのcallは同名module validatorの配線に数えない。"""
+    trees = _synthetic(
+        "def assert_guard():\n"
+        "    return None\n"
+        "def public_entry(assert_guard):\n"
+        "    return assert_guard()\n"
+    )
+    assert "assert_guard" not in _called_in_functions(trees)
+    assert _unwired_declarations(trees) == {"assert_guard"}
 
 
 def test_imported_constant_keeps_its_declaring_module_identity() -> None:
