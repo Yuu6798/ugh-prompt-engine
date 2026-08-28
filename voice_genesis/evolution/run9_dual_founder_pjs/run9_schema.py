@@ -237,6 +237,18 @@ IDENTITY_PROTOCOL_BIRTH_PJS_CONFUSER_COLLAPSE_DETAIL = (
     "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_FEATURE_COLLAPSE"
 )
 
+# PR #333 Codex bot レビュー第8巡指摘3（P2、採用）新設: pjs_confuser は
+# on_positive（距離>0）/on_zero（距離=0）の2分岐のみを持ち、距離が invalid
+# または non-finite の場合はどちらの条件にも該当しない未登録分岐だった
+# （等号・不等号比較は non-finite 値に対して両方 false となり得るため、
+# 文字通りの消費者は無条件に沈黙し得た）。birth_identity_separation.
+# invalid_or_nonfinite_feature（第1巡指摘3）・post_learning_identity_
+# retention.invalid_or_nonfinite_feature（第2巡指摘2）と同型の測定/実装
+# 失敗系ラベル。
+IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL = (
+    "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_INVALID_OR_NONFINITE_DISTANCE"
+)
+
 # post_learning_identity_retention（裁定 §6）の outcome_detail。
 # IDENTITY_OUTCOMES[0]="STABLE_BY_MACHINE_METRIC" に併記する。
 IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL = "RELATIVE_SELF_NEAREST"
@@ -20332,18 +20344,29 @@ _IDENTITY_PROTOCOL_BIRTH_GATE_CONJUNCT_REFS: Tuple[str, ...] = (
 # 新規則の発明ではなく、既存分岐（birth_identity_separation.invalid_or_
 # nonfinite_feature/not_established、pjs_confuser.on_zero）への参照を
 # conjunct_refs から移設するのみ。
-_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS: Tuple[str, str, str] = (
+#
+# PR #333 Codex bot レビュー第8巡指摘3（P2、採用）: pjs_confuser に新設した
+# invalid_or_nonfinite_distance 分岐（同型の validity 系失敗）を3項目→4項目
+# へ追加。validity 系（feature/PJS distance）の直後・collapse 系（d12=0/
+# PJS距離=0）の前という優先順内の位置は、feature invalid の場合はそれに
+# 依存する PJS distance も invalid になり得るため「値が評価不能」という
+# 同種の失敗を隣接させ、「値は有効だが collapse」という別種の失敗より上流
+# に置く設計（詳細は order_note）。
+_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS: Tuple[str, str, str, str] = (
     "birth_identity_separation.invalid_or_nonfinite_feature",
+    "pjs_confuser.invalid_or_nonfinite_distance",
     "birth_identity_separation.not_established",
     "pjs_confuser.on_zero",
 )
 
 # outcome_detail_priority.order（裁定 §9 fail-closed 原則を根拠とする
-# Fable 設計の決定論的優先順、順序込み・3項目ちょうど）: (1) validity
-# （invalid/non-finite feature）→ (2) d12=0（feature collapse）→ (3) PJS
-# confuser distance=0。
-_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER: Tuple[str, str, str] = (
+# Fable 設計の決定論的優先順、順序込み・4項目ちょうど）: (1) validity
+# （invalid/non-finite feature）→ (2) validity（invalid/non-finite PJS
+# confuser distance、第8巡指摘3で追加）→ (3) d12=0（feature collapse）→
+# (4) PJS confuser distance=0。
+_IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER: Tuple[str, str, str, str] = (
     "invalid_or_nonfinite_feature",
+    "invalid_or_nonfinite_pjs_distance",
     "d12_zero_collapse",
     "pjs_confuser_zero_distance",
 )
@@ -20353,9 +20376,27 @@ _IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER: Tuple[str, str, str] = (
 # 新語彙の発明はしない）。
 _IDENTITY_PROTOCOL_BIRTH_GATE_DETAIL_BY_KEY: Mapping[str, str] = types.MappingProxyType({
     "invalid_or_nonfinite_feature": IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL,
+    "invalid_or_nonfinite_pjs_distance": IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL,
     "d12_zero_collapse": IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL,
     "pjs_confuser_zero_distance": IDENTITY_PROTOCOL_BIRTH_PJS_CONFUSER_COLLAPSE_DETAIL,
 })
+
+# =============================================================================
+# c1_sham_attestation.outcome_priority（PR #333 Codex bot レビュー第8巡
+# 指摘1、P2、採用、新設）: on_nonzero（D_C1(F)≠0 全体）と on_wav_byte_
+# mismatch（WAV bytes 不一致、D_C1(F)=0 であっても発火する condition 文言
+# のため D_C1(F)≠0 でも該当）が『WAV bytes 不一致かつ D_C1(F)≠0』という
+# 経路で同時成立し得るにも関わらず優先順・全該当会計が未定義だった穴を
+# 埋める——birth_gate_aggregate_rule.not_established.outcome_detail_
+# priority と同型パターン（on_feature_mismatch は condition が D_C1(F)=0
+# を前提とするため on_nonzero とは元々排他で対象外）。
+# =============================================================================
+
+_IDENTITY_PROTOCOL_C1_OUTCOME_PRIORITY_ORDER: Tuple[str, str, str] = (
+    "on_wav_byte_mismatch",
+    "on_feature_mismatch",
+    "on_nonzero",
+)
 
 # gate_failure_action_ref の凍結値（invariants 節への自己参照 dotted
 # path、裁定§9『Birth Gate不成立時はNOT_ESTABLISHEDとして凍結する』への
@@ -20629,6 +20670,7 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         required_keys=frozenset({
             "verbatim", "takes_per_founder", "contract_field_ref", "requirement",
             "expected", "role", "on_nonzero", "on_wav_byte_mismatch", "on_feature_mismatch",
+            "outcome_priority",
         }),
     )
     _require_non_empty_str(c1["verbatim"], field="c1_sham_attestation.verbatim")
@@ -20685,6 +20727,42 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         _require_non_empty_str(
             c1_feature_mismatch[f], field=f"c1_sham_attestation.on_feature_mismatch.{f}"
         )
+    # PR #333 Codex bot レビュー第8巡指摘1（P2、採用）新設: 「WAV bytes
+    # 不一致かつ D_C1(F)≠0」の場合、on_nonzero と on_wav_byte_mismatch が
+    # 同時該当し得るにも関わらず優先順・全該当会計が未定義だった穴を埋める
+    # （on_feature_mismatch は D_C1(F)=0 前提のため on_nonzero とは排他で
+    # 対象外）。birth_gate_aggregate_rule.not_established.outcome_detail_
+    # priority と同型パターン。
+    c1_priority = _validate_identity_protocol_shape(
+        c1["outcome_priority"], field="c1_sham_attestation.outcome_priority",
+        required_keys=frozenset({"order", "detail_by_key", "order_note"}),
+    )
+    _require_ordered_str_list_matching_tuple(
+        c1_priority["order"], field="c1_sham_attestation.outcome_priority.order",
+        expected=_IDENTITY_PROTOCOL_C1_OUTCOME_PRIORITY_ORDER,
+    )
+    c1_detail_by_key = _validate_identity_protocol_shape(
+        c1_priority["detail_by_key"], field="c1_sham_attestation.outcome_priority.detail_by_key",
+        required_keys=frozenset(_IDENTITY_PROTOCOL_C1_OUTCOME_PRIORITY_ORDER),
+    )
+    # detail_by_key の各値は c1_sham_attestation 側で既に検証済みの実際の
+    # outcome 値と単一の正本を共有する（二重に書き起こさない——
+    # birth_gate_aggregate_rule.verbatim_basis と同型のパターン）。
+    _c1_outcome_priority_expected = {
+        "on_wav_byte_mismatch": c1_wav_mismatch["outcome"],
+        "on_feature_mismatch": c1_feature_mismatch["outcome"],
+        "on_nonzero": c1["on_nonzero"],
+    }
+    for key, expected_outcome in _c1_outcome_priority_expected.items():
+        if c1_detail_by_key[key] != expected_outcome:
+            raise Run9ValidationError(
+                f"c1_sham_attestation.outcome_priority.detail_by_key.{key} must be byte-identical "
+                f"to c1_sham_attestation.{key}.outcome (single source of truth), got "
+                f"{c1_detail_by_key[key]!r} != {expected_outcome!r}"
+            )
+    _require_non_empty_str(
+        c1_priority["order_note"], field="c1_sham_attestation.outcome_priority.order_note"
+    )
 
     # --- positive_reference_audit（裁定 §3）---------------------------------
     positive = _validate_identity_protocol_shape(
@@ -20820,6 +20898,7 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         data["pjs_confuser"], field="pjs_confuser",
         required_keys=frozenset({
             "verbatim", "metric", "pjs_reference_ref", "on_zero", "on_positive",
+            "invalid_or_nonfinite_distance",
         }),
     )
     _require_non_empty_str(pjs["verbatim"], field="pjs_confuser.verbatim")
@@ -20844,6 +20923,38 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         pjs["on_positive"], field="pjs_confuser.on_positive", required_keys=frozenset({"policy"}),
     )
     _require_non_empty_str(on_positive["policy"], field="pjs_confuser.on_positive.policy")
+    # PR #333 Codex bot レビュー第8巡指摘3（P2、採用）新設: on_positive/
+    # on_zero のいずれの条件にも該当しない「距離が invalid または
+    # non-finite」という測定/実装失敗系の第3分岐——birth_identity_
+    # separation.invalid_or_nonfinite_feature（第1巡指摘3）と同型。
+    pjs_invalid_distance = _validate_identity_protocol_shape(
+        pjs["invalid_or_nonfinite_distance"], field="pjs_confuser.invalid_or_nonfinite_distance",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail", "action", "note"}),
+    )
+    _require_non_empty_str(
+        pjs_invalid_distance["condition"], field="pjs_confuser.invalid_or_nonfinite_distance.condition"
+    )
+    if (
+        pjs_invalid_distance["birth_outcome"] != "NOT_ESTABLISHED"
+        or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES
+    ):
+        raise Run9ValidationError(
+            "pjs_confuser.invalid_or_nonfinite_distance.birth_outcome must be exactly "
+            f"'NOT_ESTABLISHED' (BIRTH_OUTCOMES 既存語彙), got "
+            f"{pjs_invalid_distance['birth_outcome']!r}"
+        )
+    if pjs_invalid_distance["outcome_detail"] != IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL:
+        raise Run9ValidationError(
+            "pjs_confuser.invalid_or_nonfinite_distance.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL!r}, got "
+            f"{pjs_invalid_distance['outcome_detail']!r}"
+        )
+    _require_non_empty_str(
+        pjs_invalid_distance["action"], field="pjs_confuser.invalid_or_nonfinite_distance.action"
+    )
+    _require_non_empty_str(
+        pjs_invalid_distance["note"], field="pjs_confuser.invalid_or_nonfinite_distance.note"
+    )
 
     # --- post_learning_identity_retention（裁定 §6）-------------------------
     retention = _validate_identity_protocol_shape(

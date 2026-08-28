@@ -19851,8 +19851,10 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     field = contract_raw["hypothesis_algebra_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.IDENTITY_DECISION_PROTOCOL_PATH)
-    # PR #333 第6巡指摘1（P1、採用）: `c1_sham_attestation.on_feature_
-    # mismatch` 新設のため repin（旧値
+    # PR #333 第8巡指摘1/3（P2×2、採用）: `c1_sham_attestation.
+    # outcome_priority` + `pjs_confuser.invalid_or_nonfinite_distance`
+    # 新設のため repin（旧値
+    # 027e3c04ff2978572e9e43ccfdae7314b2171a67f4536ae6a3a0c537153d1b25・
     # 2e47c7d6f093add787159d1a6325b70d308146280a3e8f40abdc08e1b10e59cd・
     # f626e309d187177800d33afabe6c81537faa3c59a5432e080f88e0d4854f1778・
     # 7525cd5ef484bfd94a234f25b44a48368d2f1607f334de1b868863c1bd133f4a・
@@ -19861,7 +19863,7 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     # 967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3 は
     # RUN9_CONTRACT.yaml の【repin 履歴】コメントに保持）。
     assert field["value"] == (
-        "027e3c04ff2978572e9e43ccfdae7314b2171a67f4536ae6a3a0c537153d1b25"
+        "cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887"
     )
     assert field["source"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json"
@@ -20480,15 +20482,23 @@ def test_pr333_r4_aggregate_rule_priority_details_distinct_from_established_deta
 
 
 def test_pr333_r4_aggregate_rule_pjs_confuser_section_byte_unchanged() -> None:
-    """既存 pjs_confuser 節は本改訂で無改変（1 byte も変更しない）—— on_zero
-    に outcome_detail 等の新フィールドを追加していないことの直接確認。"""
+    """既存 pjs_confuser.on_zero/on_positive は第4巡改訂で無改変（1 byte も
+    変更しない）—— on_zero に outcome_detail 等の新フィールドを追加して
+    いないことの直接確認。pjs_confuser 自体のトップレベル key set は第8巡
+    指摘3（P2、採用）で `invalid_or_nonfinite_distance` を新設したため、
+    第4巡時点のクローズドセット（5項目）から6項目へ伸長している——本
+    テストの対象は on_zero/on_positive の無改変確認に限定し、トップレベル
+    key set は成長を許容する（新設分岐の追加は「既存分岐の無改変」の範囲
+    外）。"""
     data = _identity_decision_protocol_data()
     assert set(data["pjs_confuser"].keys()) == {
         "verbatim", "metric", "pjs_reference_ref", "on_zero", "on_positive",
+        "invalid_or_nonfinite_distance",
     }
     assert set(data["pjs_confuser"]["on_zero"].keys()) == {
         "condition", "birth_outcome", "reason",
     }
+    assert set(data["pjs_confuser"]["on_positive"].keys()) == {"policy"}
 
 
 # --- 指摘2: positive_reference_audit.on_mismatch ----------------------------
@@ -20663,16 +20673,20 @@ def test_pr333_r5_conjunct_refs_and_failure_refs_disjoint_no_exclusive_pair() ->
 
 
 def test_pr333_r5_failure_refs_matches_frozen_tuple_ordered() -> None:
+    """PR #333 第8巡指摘3（P2、採用）で `pjs_confuser.invalid_or_nonfinite_
+    distance` 分岐追加に伴い failure_refs/order は3項目→4項目へ伸長した
+    （テスト名はレビュー履歴保持のため改名しない）。"""
     data = _identity_decision_protocol_data()
     priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
     assert tuple(priority["failure_refs"]) == m._IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS
     assert priority["failure_refs"] == [
         "birth_identity_separation.invalid_or_nonfinite_feature",
+        "pjs_confuser.invalid_or_nonfinite_distance",
         "birth_identity_separation.not_established",
         "pjs_confuser.on_zero",
     ]
-    # order と同順であること（対応関係の可読性——(1) validity → (2) d12=0
-    # → (3) PJS confuser distance=0）。
+    # order と同順であること（対応関係の可読性——(1) validity（feature）→
+    # (2) validity（PJS distance）→ (3) d12=0 → (4) PJS confuser distance=0）。
     assert len(priority["order"]) == len(priority["failure_refs"])
 
 
@@ -20758,11 +20772,15 @@ def test_pr333_r5_validate_rejects_identity_establishment_scope_note_empty() -> 
 
 
 def test_pr333_r5_aggregate_rule_existing_branches_byte_unchanged() -> None:
-    """既存 birth_identity_separation/pjs_confuser 節は本改訂で無改変
-    （1 byte も変更していない）——第4巡回帰確認と同型。"""
+    """既存 birth_identity_separation/pjs_confuser.on_zero 節は本改訂で
+    無改変（1 byte も変更していない）——第4巡回帰確認と同型。pjs_confuser
+    トップレベル key set は第8巡指摘3（P2、採用）の
+    `invalid_or_nonfinite_distance` 新設で伸長している（`test_pr333_r4_
+    aggregate_rule_pjs_confuser_section_byte_unchanged` の docstring 参照）。"""
     data = _identity_decision_protocol_data()
     assert set(data["pjs_confuser"].keys()) == {
         "verbatim", "metric", "pjs_reference_ref", "on_zero", "on_positive",
+        "invalid_or_nonfinite_distance",
     }
     assert set(data["pjs_confuser"]["on_zero"].keys()) == {
         "condition", "birth_outcome", "reason",
@@ -21256,3 +21274,242 @@ def test_pr333_r7_load_pinned_identity_decision_protocol_cross_check_reuses_froz
         result["metric_reference"]["source_file"]
         == m._IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE
     )
+
+
+# =============================================================================
+# PR #333 Codex bot レビュー第8巡対応（2026-08-28、フェーズ1）
+# 指摘1（P2）: c1_sham_attestation の重複可能な述語対（on_nonzero ×
+#   on_wav_byte_mismatch）に優先順・全該当会計が未定義だった穴の是正。
+# 指摘3（P2）: pjs_confuser の distance が invalid/non-finite の場合に
+#   on_positive/on_zero いずれにも該当しない未登録分岐の是正。
+# =============================================================================
+
+
+# --- 指摘1: c1_sham_attestation.outcome_priority ----------------------------
+
+
+def test_pr333_r8_c1_outcome_priority_order_matches_frozen_tuple() -> None:
+    data = _identity_decision_protocol_data()
+    priority = data["c1_sham_attestation"]["outcome_priority"]
+    assert tuple(priority["order"]) == m._IDENTITY_PROTOCOL_C1_OUTCOME_PRIORITY_ORDER
+    assert priority["order"] == ["on_wav_byte_mismatch", "on_feature_mismatch", "on_nonzero"]
+
+
+def test_pr333_r8_c1_outcome_priority_detail_by_key_matches_actual_outcomes() -> None:
+    """detail_by_key の各値は c1_sham_attestation 側の実際の outcome 値と
+    単一の正本を共有する（二重に書き起こさない）ことを実データで確認。"""
+    data = _identity_decision_protocol_data()
+    c1 = data["c1_sham_attestation"]
+    detail_by_key = c1["outcome_priority"]["detail_by_key"]
+    assert detail_by_key["on_wav_byte_mismatch"] == c1["on_wav_byte_mismatch"]["outcome"]
+    assert detail_by_key["on_feature_mismatch"] == c1["on_feature_mismatch"]["outcome"]
+    assert detail_by_key["on_nonzero"] == c1["on_nonzero"]
+    assert detail_by_key["on_wav_byte_mismatch"] == "DETERMINISM_CONTRACT_BROKEN"
+    assert detail_by_key["on_feature_mismatch"] == "IMPLEMENTATION_FAILURE"
+    assert detail_by_key["on_nonzero"] == "C1_SHAM_EFFECT_DETECTED"
+
+
+def test_pr333_r8_validate_rejects_c1_missing_outcome_priority_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["c1_sham_attestation"]["outcome_priority"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r8_validate_rejects_c1_outcome_priority_missing_subkey() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["c1_sham_attestation"]["outcome_priority"]["order_note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r8_validate_rejects_c1_outcome_priority_order_reordered() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["c1_sham_attestation"]["outcome_priority"]["order"] = list(
+        reversed(data["c1_sham_attestation"]["outcome_priority"]["order"])
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="c1_sham_attestation.outcome_priority.order"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r8_validate_rejects_c1_outcome_priority_order_dict_masquerade() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["c1_sham_attestation"]["outcome_priority"]["order"] = _dict_masquerading_as_ordered_list(
+        m._IDENTITY_PROTOCOL_C1_OUTCOME_PRIORITY_ORDER
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="c1_sham_attestation.outcome_priority.order must be a list"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r8_validate_rejects_c1_outcome_priority_detail_by_key_mismatch() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["c1_sham_attestation"]["outcome_priority"]["detail_by_key"]["on_nonzero"] = (
+        "MADE_UP_LABEL"
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="c1_sham_attestation.outcome_priority.detail_by_key.on_nonzero",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r8_validate_rejects_c1_outcome_priority_detail_by_key_unregistered_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["c1_sham_attestation"]["outcome_priority"]["detail_by_key"]["extra_key"] = "X"
+    with pytest.raises(m.Run9ValidationError, match="unknown key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r8_validate_rejects_c1_outcome_priority_order_note_empty() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["c1_sham_attestation"]["outcome_priority"]["order_note"] = ""
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r8_c1_on_nonzero_on_wav_byte_mismatch_on_feature_mismatch_unchanged() -> None:
+    """既存 on_nonzero/on_wav_byte_mismatch/on_feature_mismatch は本巡改訂
+    で無改変（outcome_priority は新設フィールドの追加のみ）。"""
+    data = _identity_decision_protocol_data()
+    c1 = data["c1_sham_attestation"]
+    assert c1["on_nonzero"] == "C1_SHAM_EFFECT_DETECTED"
+    assert c1["on_wav_byte_mismatch"]["outcome"] == "DETERMINISM_CONTRACT_BROKEN"
+    assert c1["on_feature_mismatch"]["outcome"] == "IMPLEMENTATION_FAILURE"
+
+
+# --- 指摘3: pjs_confuser.invalid_or_nonfinite_distance ----------------------
+
+
+def test_pr333_r8_pjs_invalid_or_nonfinite_distance_happy_path() -> None:
+    data = _identity_decision_protocol_data()
+    branch = data["pjs_confuser"]["invalid_or_nonfinite_distance"]
+    assert branch["birth_outcome"] == "NOT_ESTABLISHED"
+    assert branch["outcome_detail"] == m.IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL
+    assert branch["outcome_detail"] == (
+        "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_INVALID_OR_NONFINITE_DISTANCE"
+    )
+
+
+def test_pr333_r8_pjs_invalid_distance_detail_does_not_collide_with_existing_vocab() -> None:
+    assert m.IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL not in m.BIRTH_OUTCOMES
+    assert m.IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL not in m.IDENTITY_OUTCOMES
+    assert m.IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL != (
+        m.IDENTITY_PROTOCOL_BIRTH_PJS_CONFUSER_COLLAPSE_DETAIL
+    )
+    assert m.IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL != (
+        m.IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL
+    )
+
+
+def test_pr333_r8_validate_rejects_pjs_missing_invalid_distance_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["pjs_confuser"]["invalid_or_nonfinite_distance"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r8_validate_rejects_pjs_invalid_distance_wrong_birth_outcome() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["pjs_confuser"]["invalid_or_nonfinite_distance"]["birth_outcome"] = "ESTABLISHED"
+    with pytest.raises(
+        m.Run9ValidationError, match="pjs_confuser.invalid_or_nonfinite_distance.birth_outcome"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r8_validate_rejects_pjs_invalid_distance_wrong_outcome_detail() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["pjs_confuser"]["invalid_or_nonfinite_distance"]["outcome_detail"] = "MADE_UP_LABEL"
+    with pytest.raises(
+        m.Run9ValidationError, match="pjs_confuser.invalid_or_nonfinite_distance.outcome_detail"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r8_validate_rejects_pjs_invalid_distance_missing_subkey() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["pjs_confuser"]["invalid_or_nonfinite_distance"]["note"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r8_validate_rejects_pjs_invalid_distance_empty_condition() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["pjs_confuser"]["invalid_or_nonfinite_distance"]["condition"] = ""
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_identity_decision_protocol(data)
+
+
+# --- 指摘3: birth_gate_aggregate_rule.not_established.outcome_detail_priority
+# の3項目→4項目への拡張 ---------------------------------------------------
+
+
+def test_pr333_r8_birth_gate_priority_order_extended_to_four_items() -> None:
+    data = _identity_decision_protocol_data()
+    priority = data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]
+    assert tuple(priority["order"]) == m._IDENTITY_PROTOCOL_BIRTH_GATE_PRIORITY_ORDER
+    assert priority["order"] == [
+        "invalid_or_nonfinite_feature",
+        "invalid_or_nonfinite_pjs_distance",
+        "d12_zero_collapse",
+        "pjs_confuser_zero_distance",
+    ]
+    assert priority["detail_by_key"]["invalid_or_nonfinite_pjs_distance"] == (
+        m.IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL
+    )
+
+
+def test_pr333_r8_validate_rejects_birth_gate_priority_order_reverted_to_three_items() -> None:
+    """第8巡以前の3項目 order を復元しても是正後の validator が拒否する
+    こと——回帰防止の直接確認。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]["order"] = [
+        "invalid_or_nonfinite_feature", "d12_zero_collapse", "pjs_confuser_zero_distance",
+    ]
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="birth_gate_aggregate_rule.not_established.outcome_detail_priority.order",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+# --- load_pinned_identity_decision_protocol(): 第8巡フィールドの一貫性 ------
+
+
+def test_pr333_r8_load_pinned_happy_path_with_new_fields(
+    contract: m.Run9RunContract,
+) -> None:
+    domain = _real_identity_domain()
+    data = m.load_pinned_identity_decision_protocol(contract, domain=domain)
+    assert "outcome_priority" in data["c1_sham_attestation"]
+    assert "invalid_or_nonfinite_distance" in data["pjs_confuser"]
+    assert len(
+        data["birth_gate_aggregate_rule"]["not_established"]["outcome_detail_priority"]["order"]
+    ) == 4
+
+
+def test_pr333_r8_load_pinned_rejects_new_field_tamper_via_hash_mismatch(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """新設フィールドを改ざんした合成 manifest は、実バイト sha256 が
+    pin 済み hypothesis_algebra_sha と食い違うため fail-closed で拒否
+    されること（既存巡と同型の tamper 経路確認）。"""
+    domain = _real_identity_domain()
+
+    def mutate(data: Dict[str, Any]) -> None:
+        data["pjs_confuser"]["invalid_or_nonfinite_distance"]["outcome_detail"] = "TAMPERED"
+
+    tampered_contract, manifest_path, _ = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=mutate
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="pjs_confuser.invalid_or_nonfinite_distance.outcome_detail"
+    ):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )

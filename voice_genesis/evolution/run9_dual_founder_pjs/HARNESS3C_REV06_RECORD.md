@@ -21,23 +21,31 @@ Birth Gate の実行は裁定 §8 が明示的に区切る「別途」の工程�
 （contract トップレベル欄 / `run9_schema.DESIGN_REVISION` 定数 /
 `design_revision_doc_sha256` pin）+ `hypothesis_algebra_sha` の
 H1-H6閾値校正欄→ Identity decision protocol pin 欄への用途確定完了。
-PR #333 Codex bot レビュー第1巡〜第7巡対応（本記録 §4-§10）を経た最終
-状態として、`ruff check .` clean、`pytest` は run9 サブツリー **2681 件
-全 pass**（新設テストを含む。巡ごとの内訳は各節参照）。実装前グラウン
-ディング時点（第0巡）では probe_manifest.json の repin は不要と判定
-していたが、**第2巡指摘1（§5.1）の bridge 参照是正により
-probe_manifest.json はその後 repin 済み**（`probe_manifest_sha`
-旧→新、詳細は §5.1）。failure_abort_criteria.json は実装前グラウン
-ディングの時点で Birth Gate 関連 2 rule の stale 文言を是正し repin
-した（この repin は第1巡以降の対応と独立、以後未変更）。
+PR #333 Codex bot レビュー対応（本記録 §4 以降、巡ごとに節を追加する
+運用）を経て、`ruff check .` clean・`pytest` は run9 サブツリー全件
+pass を維持している。**
+
+**本節はテスト件数・巡数のリテラル値を主張しない（PR #333 第8巡指摘2、
+P2、採用、本記録 §11.2 で構造変更）。最新の検証結果は、本記録内で
+最後に追加された『PR #333 Codex bot レビュー第N巡対応』節（ファイル
+末尾に最も近い巡セクション）の「検証結果」小節（`pytest ... passed`
+の実行ログ）を正とする**——巡が進むたびに新設テストが追加され続ける
+ため、本節にリテラルの件数・巡数を書くと次巡の追加のたびに再び stale
+化する。実際に第7巡指摘1（本記録 §10.1）は当時の最新値「2681件」へ
+本節を更新したが、その更新元となった第7巡自身が新設した5件のテスト
+（2681→2686）が本節へ反映されないまま残り、最新化した直後にまた
+§10.3 の実測値と矛盾するという再帰問題が発生していた（本節の更新が
+常にその巡自身の変更より1手遅れる構造的な欠陥）。本改訂はテスト件数
+を本節から完全に排除しポインタへ置き換えることで、この再帰問題を
+構造的に終端する——以後、巡が追加されても本節自体の更新は不要になる。
 
 | # | 成果物 | 状態 |
 |---|---|---|
 | 1 | `DESIGN_RUN9_REVISION_0.6.md` | 新規作成・完了 |
 | 2 | `USER_ADJUDICATION_20260827_IDENTITY_REV06.txt` | 新規作成・裁定逐語 byte 一致確認済み |
-| 3 | `inputs/identity_decision_protocol_v0.6.json` | 新規作成・§P 構造どおり（第1巡〜第7巡対応で追補・repin 継続） |
-| 4 | `run9_schema.py`: validate/load + outcome_detail 定数 | 新規実装・テスト green（第1巡〜第7巡対応で追補） |
-| 5 | `RUN9_CONTRACT.yaml`: hypothesis_algebra_sha PINNED + design_revision 0.6 昇格 | 完了（`hypothesis_algebra_sha` は第1巡以降のレビュー対応で複数回 repin、最新値は §9 参照） |
+| 3 | `inputs/identity_decision_protocol_v0.6.json` | 新規作成・§P 構造どおり（巡ごとの対応で追補・repin 継続、最新状態は本記録内で最後に追加された巡セクションを正とする） |
+| 4 | `run9_schema.py`: validate/load + outcome_detail 定数 | 新規実装・テスト green（巡ごとの対応で追補） |
+| 5 | `RUN9_CONTRACT.yaml`: hypothesis_algebra_sha PINNED + design_revision 0.6 昇格 | 完了（`hypothesis_algebra_sha` は複数回 repin、最新値は本記録内で最後に追加された巡セクションの repin cascade 小節を正とする——ポインタ化、第8巡指摘2） |
 | 6 | probe bridge / failure routing 更新 | probe_manifest: 実装前グラウンディング時点では不要と判定したが第2巡指摘1（§5.1）で bridge 参照是正に伴い repin 済み / failure_abort_criteria: rule 7/16 是正・repin（11世代目、以後未変更） |
 | 7 | `HARNESS3C_REV06_RECORD.md`（本ファイル） | 本ファイル |
 
@@ -45,6 +53,20 @@ probe_manifest.json はその後 repin 済み**（`probe_manifest_sha`
 の記述**（履歴保持、上記が現行正）: 「`pytest` は run9 サブツリー
 2584 件全 pass（新設 26 件を含む）。実装前グラウンディングで
 probe_manifest.json の repin は不要と判定（該当する正典矛盾なし）」。
+
+**第7巡是正時点（本記録 §10.1、レビュー対応着手後の中間状態）の記述**
+（履歴保持、上記ポインタ形式が現行正）: 「`pytest` は run9 サブツリー
+2681 件全 pass」——この数値は第7巡自身が追加した5件のテストを含めて
+おらず、記述直後から stale だった（実際の第7巡終了時点の値は §10.3 の
+2686 件）。この矛盾こそが本改訂（第8巡指摘2）でポインタ形式へ構造変更
+した直接の理由である。
+
+実装前グラウンディング時点（第0巡）では probe_manifest.json の repin
+は不要と判定していたが、**第2巡指摘1（§5.1）の bridge 参照是正により
+probe_manifest.json はその後 repin 済み**（`probe_manifest_sha`
+旧→新、詳細は §5.1）。failure_abort_criteria.json は実装前グラウン
+ディングの時点で Birth Gate 関連 2 rule の stale 文言を是正し repin
+した（この repin は第1巡以降の対応と独立、以後未変更）。
 
 ---
 
@@ -1474,3 +1496,274 @@ protocol()` 経由の end-to-end 改ざん拒否・loader cross-check の凍結�
 - 本 PR は依然として事前登録フェーズ（裁定§8 実行順どおり、Birth Gate
   の実行自体は含まない）——`on_feature_mismatch` も判定規約の凍結までを
   範囲とし、実行時の実測ロジック自体は本 PR の対象外。
+
+## 11. PR #333 Codex bot レビュー第8巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`567e36b0`）。3件（P2 × 3）着手前に事実確認、3件とも事実と一致した
+ため採用対応。裁定正本は本 PR の対象外（既存裁定 §1-§9 の再解釈ではなく、
+既存節の未登録分岐・自己矛盾の是正）。加えて、ファミリー全数掃討
+（同型の重複可能な述語対・分岐の無い値域）を実施し終端宣言した（§11.4）。
+
+### 11.1 指摘1（P2）: 「Resolve overlapping C1 mismatch outcomes」
+
+**事実確認**: `c1_sham_attestation` が「WAV bytes 不一致かつ D_C1(F)≠0」
+の場合、`on_nonzero`（D_C1(F)≠0 全体、条件に byte 一致/不一致の限定
+なし）と `on_wav_byte_mismatch`（`condition` 文言が「D_C1(F)=0 であって
+も」と明記——D_C1(F)≠0 の場合にも該当する設計）の双方に同時該当し、
+優先順・全該当会計が未定義であることを確認した（`on_feature_mismatch`
+は `condition` が D_C1(F)=0 を前提とするため `on_nonzero` とは元々排他
+——第6巡指摘1〔本記録 §9.1〕で新設した際の設計どおりで、本指摘の対象
+外）。**指摘内容は事実と一致** → Fable 設計どおり実装。
+
+**実装（Fable 設計）**: `c1_sham_attestation` へ `outcome_priority`
+（`order`/`detail_by_key`/`order_note`）を新設し、決定論的優先順を
+凍結した——birth 側 `outcome_detail_priority`（第4巡指摘1・第5巡指摘1・
+第8巡指摘3で拡張）と同型パターン: (1) `on_wav_byte_mismatch` — byte
+決定論の破りは render 自体が異なるという最上流の物理的原因であり最優先、
+(2) `on_feature_mismatch` — 次に feature シリアライズ決定論の破り、
+(3) `on_nonzero` — 上記いずれにも該当しない残余としての効果検出。
+`detail_by_key` の各値は `c1_sham_attestation` 側で既に検証済みの実際
+の `outcome` 値と単一の正本を共有する（二重に書き起こさない設計—— `
+c1_sham_attestation.outcome_priority.detail_by_key.{key}` が
+`c1_sham_attestation.{key}.outcome` と byte-identical であることを
+validator が fail-closed で強制）。主 outcome は `order` 先頭の該当
+キーとし、該当した全キーは `outcome_all_applicable_keys` へ機械可読
+リストで併記する旨を `order_note` に明記した（情報を落とさない、本 PR
+は事前登録フェーズのためその実行時生成ロジック自体は対象外——生成規約
+の凍結までを範囲とする）。既存 `on_nonzero`/`on_wav_byte_mismatch`/
+`on_feature_mismatch` は無改変
+（`test_pr333_r8_c1_on_nonzero_on_wav_byte_mismatch_on_feature_mismatch_
+unchanged` で確認）。
+
+**C0 / positive_reference_audit の同型点検**（Task 指示）: `c0_
+determinism_attestation.on_mismatch` の `render_byte_mismatch`/`feature_
+computation_mismatch_with_matching_render` は、後者の `condition` が
+「render 一致」を明示的に前提とするため前者（render 不一致が前提）とは
+構造的に排他——重複しない。`positive_reference_audit.on_mismatch` の
+`wav_byte_mismatch`/`distance_nonzero_or_feature_mismatch_with_matching_
+wav` も同様に、後者が「matching wav」を明示的に前提とするため排他——
+重複しない。C1 だけが `on_nonzero` の条件を「D_C1(F)≠0」という byte
+レベルを問わない広い条件のまま定義しており、後から追加された
+`on_wav_byte_mismatch`（第5巡）・`on_feature_mismatch`（第6巡）の
+condition 文言がそれぞれ独立に byte 一致/不一致を明示したことで、
+`on_nonzero` との重複が構造的に生じていた——C0/positive_reference_audit
+は初回実装時から2分岐が相互に排他な条件文言で設計されていたのに対し、
+C1 は3分岐が別々の巡（第4巡原設計→第5巡→第6巡）で段階的に追加された
+ため、この非対称性が生じたと判定した。C0/positive_reference_audit へ
+の追加是正は不要（詳細は §11.4 のファミリー掃討結果）。
+
+### 11.2 指摘2（P2）: 「Update the summary to the final test count」
+
+**事実確認**: 第7巡是正（本記録 §10.1）後の「総合判定」節が「2681 件
+全 pass」の記述のまま固定されており、§10.3 の実測値「2686 件」と
+再び矛盾していることを確認した——第7巡指摘1（同じく「総合判定の
+陳腐化」を扱った指摘）の是正自体が、その巡が新設した5件のテストを
+本節へ反映し損ねたことで即座に再陳腐化するという再帰問題を露呈させて
+いた。**指摘内容は事実と一致** → Fable 設計どおり実装（**構造的終端**）。
+
+**実装（Fable 設計）**: 「総合判定」節から**リテラルのテスト件数・
+巡数の現在形主張を排除**し、「最新の検証結果は本記録内で最後に追加
+された『PR #333 Codex bot レビュー第N巡対応』節（ファイル末尾に最も
+近い巡セクション）の「検証結果」小節を正とする」というポインタ形式へ
+書き換えた（本記録冒頭「総合判定」節参照）。特定の節番号（例: 「§10」）
+を直接名指す形式は避けた——節番号自体も巡が増えるたびに変わるため、
+「ファイル末尾に最も近い巡セクション」という位置関係の記述にすることで、
+今後何巡追加されても本節の見出し・文面が stale 化しない構造とした。
+併せて成果物テーブルの5行目（`hypothesis_algebra_sha` の最新値ポインタ、
+旧「§9 参照」という特定節番号の直接参照）も同型のポインタ形式へ是正
+した——同じ再帰問題を抱えていたため（本節の対象を指摘2の文言どおり
+「総合判定」節に限定しつつ、同一節内の同型欠陥として併せて解消した）。
+第7巡是正時点の「2681件」という中間状態の数値は、それが stale だった
+経緯の説明とともに履歴注記として残置した（初版時点の「2584件」注記と
+並置）。この構造変更の理由（第7巡の是正自体が数値を陳腐化させた再帰
+問題の終端）を「総合判定」節本文に明記した。
+
+**cascade 確認**: 本節の変更は `HARNESS3C_REV06_RECORD.md` のプローズ
+のみであり、`run9_schema.py`/JSON manifest/`RUN9_CONTRACT.yaml` のいず
+れにも影響しない——第7巡指摘1（§10.1）が確認したとおり、本ファイルを
+参照する pin/cross-check は存在しない（`run9_schema.py` のコメント・
+`README.md` の散文リンクのみ）。**本節の変更に伴う repin cascade は
+発生しない**。
+
+### 11.3 指摘3（P2）: 「Handle non-finite PJS birth distances」
+
+**事実確認**: `pjs_confuser` が `on_positive`（距離>0）/`on_zero`
+（距離=0）の2分岐のみを持ち、distance が invalid または non-finite の
+場合はどちらの条件にも該当しない未登録分岐であることを確認した
+（等号・不等号比較は non-finite 値に対して両方 false となり得るため、
+文字通りの消費者は無条件に沈黙し得た——`birth_identity_separation.
+invalid_or_nonfinite_feature`〔第1巡指摘3〕・`post_learning_identity_
+retention.invalid_or_nonfinite_feature`〔第2巡指摘2〕と同型の穴）。
+集約 gate（`birth_gate_aggregate_rule`）側にも対応する失敗分岐参照が
+存在しないことを確認した。**指摘内容は事実と一致** → Fable 設計どおり
+実装。
+
+**実装（Fable 設計）**: `pjs_confuser` へ `invalid_or_nonfinite_
+distance` 分岐（`condition`/`birth_outcome`〔`NOT_ESTABLISHED`〕/
+`outcome_detail`〔新定数〕/`action`/`note`、`birth_identity_separation.
+invalid_or_nonfinite_feature` と同型キー構成）を追加した。新定数
+`IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_DETAIL = "IDENTITY_PROTOCOL_
+BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_INVALID_OR_NONFINITE_DISTANCE"` を
+新設（既存 `IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL`/`IDENTITY_
+PROTOCOL_BIRTH_PJS_CONFUSER_COLLAPSE_DETAIL` と同型命名・非衝突）。
+
+`birth_gate_aggregate_rule.not_established.outcome_detail_priority` の
+`order`/`failure_refs`/`detail_by_key` を3項目→4項目へ拡張し、新設
+`invalid_or_nonfinite_pjs_distance` を優先順に組み込んだ。**位置の
+設計判断**: validity 系（(1) `invalid_or_nonfinite_feature`）の直後・
+collapse 系（(3) `d12_zero_collapse`/(4) `pjs_confuser_zero_distance`）
+の前という順位2へ配置した——(1)(2) はいずれも「測定・実装レベルで値
+そのものが評価不能（符号比較が定義できない）」という同種の失敗である
+のに対し、(3)(4) は「値は有効だが collapse（差が消失）」という別種の
+失敗であり値が評価可能であることを前提とする点で validity 系より下流
+の懸念事項であるため。さらに (1) を (2) より先に置いた理由は、founder
+feature が invalid であれば通常はそれに依存する PJS distance の計算も
+invalid になり得るため、より上流の原因である feature validity を優先
+する（依存関係に沿った優先順）。`failure_refs` へ `pjs_confuser.
+invalid_or_nonfinite_distance` を同じ位置（2番目）で追加した。既存
+`on_positive`/`on_zero`/`birth_identity_separation.*` の各分岐は無改変
+（`test_pr333_r8_c1_on_nonzero_on_wav_byte_mismatch_on_feature_mismatch_
+unchanged` と対の `on_zero`/`on_positive` 無改変確認は既存 byte-
+unchanged テスト2件の更新〔§11.6〕で維持）。
+
+### 11.4 ファミリー全数掃討（Task 指示必須・終端宣言）
+
+protocol 全体を機械的に走査し、次の2ファミリーの残余を点検した。
+
+#### (a) 重複可能な述語対の総点検
+
+各節の分岐条件を列挙し、同時成立し得る組に優先順が定義されているかを
+全節について確認した。
+
+| 節 | 分岐 | 重複可能性 | 優先順の要否 | 状態 |
+|---|---|---|---|---|
+| `c0_determinism_attestation.on_mismatch` | `render_byte_mismatch` / `feature_computation_mismatch_with_matching_render` | 無（後者が「render 一致」を前提とし構造的に排他） | 不要 | 既に閉じている |
+| `c1_sham_attestation` | `on_nonzero` / `on_wav_byte_mismatch` / `on_feature_mismatch` | 有（`on_nonzero`×`on_wav_byte_mismatch`。`on_feature_mismatch` は D_C1(F)=0 前提のため `on_nonzero` と排他） | 要 | **第8巡指摘1で是正済み**（`outcome_priority` 新設） |
+| `positive_reference_audit.on_mismatch` | `wav_byte_mismatch` / `distance_nonzero_or_feature_mismatch_with_matching_wav` | 無（後者が「matching wav」を前提とし構造的に排他） | 不要 | 既に閉じている |
+| `birth_identity_separation` | `established` / `not_established` / `invalid_or_nonfinite_feature` | 無（3値が d12/feature validity の値域を排他分割） | 不要 | 既に閉じている |
+| `pjs_confuser` | `on_positive` / `on_zero` / `invalid_or_nonfinite_distance` | 無（3値が distance の値域を排他分割——ただし従来は3値目が未登録） | 不要（値域網羅は (b) の対象） | **第8巡指摘3で分岐追加**（優先順ではなく値域欠落——(b) 参照） |
+| `post_learning_identity_retention` | `stable` / `shifted` / `invalid_or_nonfinite_feature` | 無（3値が m_other/m_pjs の値域を排他分割） | 不要 | 既に閉じている（第2巡指摘2で分岐追加済み） |
+| `birth_gate_aggregate_rule` | `established` / `not_established`（内部4優先枝） | `established`/`not_established` 自体は論理否定で排他。`not_established` 内部の4優先枝は互いに重複し得る（例: feature invalid ⇒ PJS distance も invalid になり得る） | 要（内部4優先枝間） | 既に閉じている（第4/5巡で `established`/`not_established` の優先順機構を確立、**第8巡指摘3で内部優先枝を3→4項目へ拡張**） |
+| `birth_gate_overall_pass` | PASS ⇔ established ∧ ¬(いずれの audit_stop_refs にも該当) | audit_stop_refs 内の複数項目は同時該当し得るが、overall_pass は boolean gate であり単一 outcome の選定を要求しない（各 attestation 節が個別に outcome を報告する） | 不要（boolean AND/OR に優先順は無意味） | 既に閉じている |
+
+**残余ゼロを終端宣言する**: C1 の1件（`on_nonzero`×`on_wav_byte_
+mismatch`）が本巡で唯一の未対応事例であり、指摘1で是正済み。他の全節
+は構造的排他（`condition` 文言が相互に排他な前提を明示）または既存の
+優先順機構（`birth_gate_aggregate_rule` 内部4優先枝、第4/5/8巡で確立）
+のいずれかで閉じている。**同型の重複述語対の残余はゼロ**。
+
+#### (b) 分岐の無い値域の総点検
+
+各判定入力について、「正 / ゼロ / 負 / non-finite / invalid」の5値域
+被覆表を作成した。
+
+| 判定入力 | 定義域 | 正 | ゼロ | 負 | non-finite/invalid |
+|---|---|---|---|---|---|
+| d12（`birth_identity_separation`） | Euclidean distance（≥0 保証） | `established` | `not_established` | N/A（距離は非負、構造的に空） | `invalid_or_nonfinite_feature`（既存・第1巡指摘3） |
+| pjs_confuser distance | Euclidean distance（≥0 保証） | `on_positive` | `on_zero` | N/A（距離は非負、構造的に空） | `invalid_or_nonfinite_distance`（**第8巡指摘3で新設・本改訂で被覆完了**） |
+| D_C0(F)（C0 render replay 距離） | 等価性判定（exact-match test） | N/A（「一致/不一致」の二値判定であり符号域を持たない） | 一致（無違反、pass） | N/A | `on_mismatch` に包摂——mismatch 判定は「reference と exact に一致しない」ことの検出であり、NaN 等の non-finite 出力も自動的に「不一致」に分類される（等価性判定は non-finite 値に対して安全側に倒れる。値域の観点で追加分岐は不要） |
+| D_C1(F)（C1 sham 距離） | 等価性判定（exact-match test） | N/A | 一致（無違反、pass） | N/A | `on_nonzero`/`on_wav_byte_mismatch`/`on_feature_mismatch` に包摂——D_C0(F) と同型の理由で等価性判定は non-finite を安全側で「不一致」に分類する |
+| positive reference 距離 | 等価性判定（exact-match test） | N/A | 一致（無違反、pass） | N/A | `on_mismatch` に包摂——同型の理由 |
+| m_other = d_other − d_self | 実数（差、符号は任意） | `stable` の一部条件 | `shifted`（`<=0` に包摂） | `shifted`（`<=0` に包摂） | `invalid_or_nonfinite_feature`（既存・第2巡指摘2） |
+| m_pjs = d_pjs − d_self | 実数（差、符号は任意） | `stable` の一部条件 | `shifted`（`<=0` に包摂） | `shifted`（`<=0` に包摂） | `invalid_or_nonfinite_feature`（既存・第2巡指摘2、m_other と共有） |
+
+**設計上の一般則（本掃討で言語化）**: distance/等価性を判定する入力
+（d12・pjs_confuser distance・D_C0/D_C1/positive reference の各種
+distance）のうち、**符号比較（`>0`/`=0`）で判定するもの**（d12・
+pjs_confuser distance）は non-finite 値に対して両方の比較が false と
+なり得るため明示的な invalid/non-finite 分岐が必須である一方、**等価性
+判定（exact-match test）で判定するもの**（D_C0/D_C1/positive reference
+の各 exact-replay attestation）は non-finite 出力も自動的に「reference
+と一致しない」＝ mismatch に分類されるため追加分岐が不要——この非対称
+性が、pjs_confuser distance（符号比較）にだけ本巡まで穴が残っていた
+構造的理由である。m_other/m_pjs は差分（符号比較の一種）だが、既存の
+`invalid_or_nonfinite_feature` 分岐（第2巡指摘2）で既に被覆済み。
+
+「負」の値域はすべての純粋な distance（d12・pjs_confuser・D_C0/D_C1/
+positive reference の各距離）について構造的に空である（Euclidean
+distance は定義上非負）——N/A であり残余ではない。m_other/m_pjs のみ
+差分のため負の値域が意味を持ち、これは `shifted`（`<=0`）へ既に包摂
+済みである。
+
+**残余ゼロを終端宣言する**: pjs_confuser distance の1件（本巡で被覆
+完了）が唯一の未被覆値域であり、他のすべての判定入力は既存分岐で
+被覆済みか、値域が構造的に空（N/A）であるかのいずれかである。**同型の
+無分岐値域の残余はゼロ**。
+
+### 11.5 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2707 passed, 7 warnings in ~43s
+```
+
+新設テスト21件（2686→2707）: `tests/test_run9_contract.py` へ
+`pr333_r8_*` prefix で追加——`c1_sham_attestation.outcome_priority` の
+`order` frozen tuple 一致・`detail_by_key` 実データ一致確認・欠落
+トップレベルキー/サブキー拒否・`order` 並び替え/dict 偽装拒否・
+`detail_by_key` 値改ざん/未登録キー拒否・`order_note` 空文字拒否・
+既存 `on_nonzero`/`on_wav_byte_mismatch`/`on_feature_mismatch` 無改変
+確認（指摘1、10件）、`pjs_confuser.invalid_or_nonfinite_distance` の
+happy path・非衝突確認・欠落キー/サブキー拒否・`birth_outcome`/
+`outcome_detail` 改ざん拒否・空文字拒否（指摘3、6件）、
+`birth_gate_aggregate_rule` 優先順4項目拡張の確認・3項目への回帰拒否
+（指摘3、2件）、`load_pinned_identity_decision_protocol()` happy path
+（新設フィールドの到達確認）・改ざん経由 loader fail-closed 確認
+（指摘1/3共通、2件）、`hypothesis_algebra_sha` repin 値の回帰更新
+（既存テスト1件の値更新）、`pjs_confuser`/`birth_identity_separation`
+byte-unchanged 確認2件の対象範囲更新（トップレベル key set の伸長を
+許容するよう docstring・assertion を是正）。
+
+### 11.6 変更ファイル
+
+- `inputs/identity_decision_protocol_v0.6.json`: `c1_sham_attestation`
+  へ `outcome_priority`（`order`/`detail_by_key`/`order_note`）新設
+  （指摘1）、`pjs_confuser` へ `invalid_or_nonfinite_distance` 分岐
+  新設（指摘3）、`birth_gate_aggregate_rule.not_established.outcome_
+  detail_priority` の `order`/`failure_refs`/`detail_by_key` を3項目→
+  4項目へ拡張（指摘3）。既存 `on_nonzero`/`on_wav_byte_mismatch`/
+  `on_feature_mismatch`/`on_positive`/`on_zero`/`birth_identity_
+  separation.*` の各既存分岐は無改変。
+- `run9_schema.py`: 新規定数 `IDENTITY_PROTOCOL_PJS_INVALID_DISTANCE_
+  DETAIL`・`_IDENTITY_PROTOCOL_C1_OUTCOME_PRIORITY_ORDER`、
+  `_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS`/`_IDENTITY_PROTOCOL_
+  BIRTH_GATE_PRIORITY_ORDER`/`_IDENTITY_PROTOCOL_BIRTH_GATE_DETAIL_BY_
+  KEY` を3項目→4項目へ改訂、`validate_identity_decision_protocol()` へ
+  `c1_sham_attestation.outcome_priority`・`pjs_confuser.invalid_or_
+  nonfinite_distance` の構造検証ブロックを追加（`c1_sham_attestation`/
+  `pjs_confuser` それぞれの `required_keys` へ新キー追加を含む）。
+- `RUN9_CONTRACT.yaml`: `hypothesis_algebra_sha` repin（値・repin履歴
+  コメント追加）。
+- `HARNESS3C_REV06_RECORD.md`: 「総合判定」節をポインタ形式へ構造変更
+  （指摘2）、本節（§11）追加。
+- `tests/test_run9_contract.py`: `hypothesis_algebra_sha` repin 値の
+  回帰更新、`pjs_confuser`/`birth_identity_separation` byte-unchanged
+  確認2件の対象範囲更新、`failure_refs` 4項目化の回帰更新、新規
+  fail-closed/確認テスト21件追加。
+
+### 11.7 逸脱事項
+
+- immutability 対象（`identity_metric_space.json`/`identity_domain`/
+  `Genome`/speaker map manifest）・裁定逐語転記部分（`USER_ADJUDICATION_
+  20260827_IDENTITY_REV06.txt`）は1 byte も変更していない。
+- 既存 `BIRTH_OUTCOMES`/`IDENTITY_OUTCOMES`/`FAILURE_CLASSES` frozen
+  tuple への値追加は行っていない（既存語彙の再利用のみ）。
+  `_IDENTITY_PROTOCOL_BIRTH_GATE_FAILURE_REFS`/`_IDENTITY_PROTOCOL_
+  BIRTH_GATE_PRIORITY_ORDER`/`_IDENTITY_PROTOCOL_BIRTH_GATE_DETAIL_BY_
+  KEY`/`_IDENTITY_PROTOCOL_OVERALL_PASS_AUDIT_STOP_REFS` は監査停止・
+  優先順参照の列挙という性質上、新設分岐の追加に伴い伸長する運用
+  （第5/6巡で新設・伸長、本巡も3→4項目へ伸長）——`BIRTH_OUTCOMES`/
+  `IDENTITY_OUTCOMES`/`FAILURE_CLASSES` のような判定語彙 enum とは
+  異なるカテゴリであり、これらへの値追加ではない。
+- `c1_sham_attestation.outcome_priority`/`birth_gate_aggregate_rule`
+  優先順拡張 いずれも判定規約の凍結までを範囲とし、`outcome_all_
+  applicable_keys`/`outcome_detail_all_applicable_keys` 自体の実行時
+  生成ロジックは本 PR の対象外（裁定§8 実行順どおり、Birth Gate の
+  実行自体は依然として事前登録フェーズの対象外）。
+- ファミリー全数掃討（§11.4）の結果、(a) 重複可能な述語対・(b) 分岐の
+  無い値域のいずれも本巡の3件の是正で残余ゼロとなったことを確認した
+  ——追加の是正対象は発見されなかった。

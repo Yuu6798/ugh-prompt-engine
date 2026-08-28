@@ -3570,17 +3570,42 @@ measurement_spec_sha:
 #   の発明ではなく裁定§2『C1のWAV bytesおよびidentity featureはC0/
 #   referenceと完全一致することを要求する。』の機械符号化——既存
 #   on_nonzero/on_wav_byte_mismatch の各分岐は無改変。
+# - PR #333 Codex bot レビュー第8巡指摘1/3（2026-08-28、P2×2、採用、値
+#   cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887 へ
+#   repin）: 指摘1 — `c1_sham_attestation` へ `outcome_priority`（`order`/
+#   `detail_by_key`/`order_note`）を新設した——`on_nonzero`（D_C1(F)≠0
+#   全体）と `on_wav_byte_mismatch`（WAV bytes 不一致、`condition` 文言が
+#   D_C1(F)=0 でも該当すると明記するため D_C1(F)≠0 でも該当）が「WAV
+#   bytes 不一致かつ D_C1(F)≠0」という経路で同時該当し得るにも関わらず
+#   優先順・全該当会計が未定義だった穴の是正（`on_feature_mismatch` は
+#   D_C1(F)=0 前提のため `on_nonzero` とは元々排他で対象外）。優先順序
+#   (1) `on_wav_byte_mismatch` → (2) `on_feature_mismatch` → (3)
+#   `on_nonzero`（byte 決定論の破りが最上流の物理的原因のため最優先、
+#   次に feature 決定論、最後に効果検出）。`birth_gate_aggregate_rule.
+#   not_established.outcome_detail_priority` と同型パターン。指摘3 —
+#   `pjs_confuser` へ `invalid_or_nonfinite_distance` 分岐（新定数
+#   `IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_PJS_CONFUSER_INVALID_OR_
+#   NONFINITE_DISTANCE`）を追加した——`on_positive`/`on_zero` のいずれの
+#   条件にも該当しない distance invalid/non-finite の未登録分岐を埋める
+#   （`birth_identity_separation.invalid_or_nonfinite_feature` と同型）。
+#   `birth_gate_aggregate_rule.not_established.outcome_detail_priority`
+#   の `order`/`failure_refs`/`detail_by_key` を3項目→4項目へ拡張し、
+#   新設 `invalid_or_nonfinite_pjs_distance` を validity 系（(1)）の直後・
+#   collapse 系（(3)(4)）の前へ位置付けた。両件とも新規則の発明ではなく
+#   裁定§2/§5/§9 の機械符号化——既存 `on_nonzero`/`on_wav_byte_mismatch`/
+#   `on_feature_mismatch`/`on_positive`/`on_zero` の各分岐は無改変。
 hypothesis_algebra_sha:
-  value: "027e3c04ff2978572e9e43ccfdae7314b2171a67f4536ae6a3a0c537153d1b25"
+  value: "cf149cd5d897533d105f83523d23cfc8a8647ec5d6b72cb84e1fc5e395c7f887"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json
   reason: >-
     rev 0.6 裁定 §7「同protocolのraw SHA256をhypothesis_algebra_shaへ
     PINNEDする」に基づき pin。値は inputs/identity_decision_protocol_
     v0.6.json の実バイト sha256（load_pinned_identity_decision_protocol()
-    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第6巡
-    指摘1（P1、採用）で `c1_sham_attestation.on_feature_mismatch` 新設の
-    ため repin（上記【repin 履歴】参照）。
+    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第8巡
+    指摘1/3（P2×2、採用）で `c1_sham_attestation.outcome_priority` +
+    `pjs_confuser.invalid_or_nonfinite_distance` 新設のため repin（上記
+    【repin 履歴】参照）。
 
 # PR #333 Codex bot レビュー第1巡指摘1（P1、採用）新設: hypothesis_algebra_
 # sha が rev 0.6 裁定 §7 で identity decision protocol の pin へ用途確定
