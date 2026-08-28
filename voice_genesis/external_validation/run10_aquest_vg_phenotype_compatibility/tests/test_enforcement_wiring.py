@@ -252,6 +252,45 @@ def _postpones_annotations(tree: ast.Module) -> bool:
     )
 
 
+def _direct_call_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id
+    return None
+
+
+def _call_modes_in(
+    node: ast.AST, *, postponed_annotations: bool = False
+) -> Dict[str, Set[str]]:
+    """直接呼び出しと、遅延 callable を実行する構文上の mode を返す。"""
+    modes: Dict[str, Set[str]] = {}
+
+    def add(call: ast.AST, mode: str) -> None:
+        name = _direct_call_name(call)
+        if name is not None:
+            modes.setdefault(name, set()).add(mode)
+
+    for sub in _runtime_nodes(node, postponed_annotations=postponed_annotations):
+        add(sub, "call")
+        if isinstance(sub, ast.Await):
+            add(sub.value, "await")
+        elif isinstance(sub, ast.AsyncFor):
+            add(sub.iter, "async_iterate")
+        elif isinstance(sub, ast.For):
+            add(sub.iter, "iterate")
+        elif isinstance(sub, ast.comprehension):
+            add(sub.iter, "async_iterate" if sub.is_async else "iterate")
+        elif isinstance(sub, ast.YieldFrom):
+            add(sub.value, "iterate")
+        elif (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Name)
+            and sub.func.id in {"all", "any", "list", "max", "min", "next", "set", "sum", "tuple"}
+            and sub.args
+        ):
+            add(sub.args[0], "iterate")
+    return modes
+
+
 def _calls_in(node: ast.AST, *, postponed_annotations: bool = False) -> Set[str]:
     """直接呼び出し（`f(...)`）だけを数える。
 
@@ -262,11 +301,24 @@ def _calls_in(node: ast.AST, *, postponed_annotations: bool = False) -> Set[str]
     実際の配線は取りこぼさない — 取りこぼせば未配線として落ちるので、
     誤って緩む側には倒れない。
     """
-    called: Set[str] = set()
-    for sub in _runtime_nodes(node, postponed_annotations=postponed_annotations):
-        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
-            called.add(sub.func.id)
-    return called
+    return set(
+        _call_modes_in(node, postponed_annotations=postponed_annotations)
+    )
+
+
+def _deferred_execution_mode(
+    node: FunctionNode, *, postponed_annotations: bool
+) -> str:
+    """関数本体を開始する mode（通常 call / coroutine await / generator iterate）。"""
+    has_yield = any(
+        isinstance(sub, (ast.Yield, ast.YieldFrom))
+        for sub in _runtime_nodes(
+            node, postponed_annotations=postponed_annotations
+        )
+    )
+    if isinstance(node, ast.AsyncFunctionDef):
+        return "async_iterate" if has_yield else "await"
+    return "iterate" if has_yield else "call"
 
 
 def _entry_points(trees: Dict[str, ast.Module]) -> Set[str]:
@@ -300,10 +352,20 @@ def _reachable_functions(trees: Dict[str, ast.Module]) -> Set[str]:
     while frontier:
         current = frontier.pop()
         for rel, node in functions.get(current, ()):
-            for callee in _calls_in(
-                node, postponed_annotations=_postpones_annotations(trees[rel])
-            ):
-                if callee in functions and callee not in reachable:
+            postponed = _postpones_annotations(trees[rel])
+            for callee, modes in _call_modes_in(
+                node, postponed_annotations=postponed
+            ).items():
+                if callee not in functions or callee in reachable:
+                    continue
+                executes_body = any(
+                    _deferred_execution_mode(
+                        candidate, postponed_annotations=_postpones_annotations(trees[candidate_rel])
+                    )
+                    in modes
+                    for candidate_rel, candidate in functions[callee]
+                )
+                if executes_body:
                     reachable.add(callee)
                     frontier.append(callee)
     return reachable
@@ -681,6 +743,59 @@ def test_postponed_annotations_do_not_wire_declarations() -> None:
     assert ("synthetic.py", "DEFAULT_VALUE") in wired
     assert ("synthetic.py", "ANNOTATION_ONLY") not in wired
     assert "assert_guard" in _called_in_functions(trees)
+
+
+def test_discarded_generator_and_coroutine_bodies_are_not_reachable() -> None:
+    """generator/coroutine は呼び出して破棄しただけでは本体を実行しない。"""
+    trees = _synthetic(
+        "GENERATOR_VOCAB = ('generator',)\n"
+        "COROUTINE_VOCAB = ('coroutine',)\n"
+        "def assert_generator(value):\n"
+        "    return value\n"
+        "def assert_coroutine(value):\n"
+        "    return value\n"
+        "def _generator():\n"
+        "    assert_generator(GENERATOR_VOCAB)\n"
+        "    yield 1\n"
+        "async def _coroutine():\n"
+        "    assert_coroutine(COROUTINE_VOCAB)\n"
+        "def public_entry():\n"
+        "    _generator()\n"
+        "    _coroutine()\n"
+    )
+    wired = _wired_constants(trees)
+    called = _called_in_functions(trees)
+    assert ("synthetic.py", "GENERATOR_VOCAB") not in wired
+    assert ("synthetic.py", "COROUTINE_VOCAB") not in wired
+    assert "assert_generator" not in called
+    assert "assert_coroutine" not in called
+
+
+def test_iterated_generator_and_awaited_coroutine_bodies_are_reachable() -> None:
+    """明示的な反復 / await 経路では遅延本体を辿る。"""
+    trees = _synthetic(
+        "GENERATOR_VOCAB = ('generator',)\n"
+        "COROUTINE_VOCAB = ('coroutine',)\n"
+        "def assert_generator(value):\n"
+        "    return value\n"
+        "def assert_coroutine(value):\n"
+        "    return value\n"
+        "def _generator():\n"
+        "    assert_generator(GENERATOR_VOCAB)\n"
+        "    yield 1\n"
+        "async def _coroutine():\n"
+        "    assert_coroutine(COROUTINE_VOCAB)\n"
+        "async def public_entry():\n"
+        "    for _ in _generator():\n"
+        "        pass\n"
+        "    await _coroutine()\n"
+    )
+    wired = _wired_constants(trees)
+    called = _called_in_functions(trees)
+    assert ("synthetic.py", "GENERATOR_VOCAB") in wired
+    assert ("synthetic.py", "COROUTINE_VOCAB") in wired
+    assert "assert_generator" in called
+    assert "assert_coroutine" in called
 
 
 def test_duplicate_constant_names_preserve_module_identity() -> None:
