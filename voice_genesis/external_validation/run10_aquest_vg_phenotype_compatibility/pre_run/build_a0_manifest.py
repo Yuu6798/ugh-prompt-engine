@@ -91,6 +91,20 @@ def _file_order_sha256(paths: List[str]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _validate_required_shape(kind_counts: Mapping[str, int]) -> None:
+    required = {
+        "wav": "at least one WAV",
+        "oto_ini": "oto.ini",
+        "character_txt": "character.txt",
+    }
+    missing = [label for kind, label in required.items() if kind_counts[kind] == 0]
+    if missing:
+        raise ValueError(
+            "A0 voicebank is incomplete; missing required material: "
+            + ", ".join(missing)
+        )
+
+
 def _validated_output_path(out: Path, staging_root: Path) -> Path:
     resolved = assert_private_staging_path(out, staging_root)
     repository = repo_root(_RUN10_DIR).resolve()
@@ -99,6 +113,22 @@ def _validated_output_path(out: Path, staging_root: Path) -> Path:
             f"A0 manifest must remain outside the Git repository: {resolved}"
         )
     return resolved
+
+
+def _assert_output_does_not_replace_input(
+    destination: Path,
+    voicebank_root: Path,
+    zip_path: Optional[Path],
+) -> None:
+    root = voicebank_root.resolve()
+    if destination == root or destination.is_relative_to(root):
+        raise PrivateBoundaryError(
+            f"A0 manifest output must not replace a voicebank input: {destination}"
+        )
+    if zip_path is not None and destination == zip_path.resolve():
+        raise PrivateBoundaryError(
+            f"A0 manifest output must not replace the source ZIP: {destination}"
+        )
 
 
 def _zip_member_path(info: zipfile.ZipInfo) -> PurePosixPath:
@@ -210,6 +240,7 @@ def build_manifest(
                 entry["audio"] = audio
         entries.append(entry)
 
+    _validate_required_shape(kind_counts)
     verified_zip_sha256 = _validated_zip(
         zip_path,
         zip_sha256,
@@ -258,6 +289,11 @@ def write_manifest(
     zip_sha256: Optional[str] = None,
 ) -> bytes:
     destination = _validated_output_path(Path(out), Path(staging_root))
+    _assert_output_does_not_replace_input(
+        destination,
+        Path(voicebank_root),
+        Path(zip_path) if zip_path is not None else None,
+    )
     document = build_manifest(
         Path(voicebank_root),
         voicebank_version=voicebank_version,

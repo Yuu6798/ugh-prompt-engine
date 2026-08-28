@@ -50,10 +50,13 @@ Source / Identity 形質体系と測定器を同じ条件で適用したとき�
 |---|---|---|
 | R10-G0 `RUN_CONTRACT_COMPLETE` | **BLOCKED** | cost cap・A0基本pin・標準UTAU toolchain・private policyは凍結済みだが、他のCore pinにPENDINGが残る |
 | R10-G1 `RIGHTS_AND_PRIVATE_BOUNDARY` | **BLOCKED** | private boundaryは解決済み。AQUEST回答の正典private archiveとrights manifest freezeが未完了 |
-| R10-G2 `PRE_RUN_INVENTORY_COMPLETE` | **BLOCKED** | 設計文書・A0・AF01 bundleは取得済み。LinuxでのAF01 replay、A0 recorded pitch、meter群、残Core成果物が未完了 |
+| R10-G2 `PRE_RUN_INVENTORY_COMPLETE` | **BLOCKED** | committed inventoryはprivate入力なしで再生成する公開baselineのためUNRESOLVEDを維持。private preflightでは設計文書・A0をPRESENTまで確認したが、AF01 Linux replay、A0 recorded pitch、meter群、残Core成果物が未完了 |
 | R10-G3 以降 | 未到達 | — |
 
-`pre_run/inventory.json` が機械可読な正本（`gate_state: BLOCKED`）。
+`pre_run/inventory.json` はprivate path/実体を渡さずCIで再生成できる**公開baseline**であり、
+現在のprivate実行記録そのものではない。private実測では別出力へ再生成し、全項目完了後に
+その実バイトを `pre_run_inventory_sha` へpinする。公開baselineとprivate実行記録はどちらも
+現時点で `gate_state: BLOCKED` であり、PASSを主張しない。
 
 ### 実測済みで PASS しているもの
 

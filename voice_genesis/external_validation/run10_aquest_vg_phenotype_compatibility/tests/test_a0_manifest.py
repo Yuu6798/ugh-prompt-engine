@@ -103,10 +103,14 @@ def test_file_order_sha_matches_the_listed_paths(tmp_path: Path) -> None:
 def test_ordering_is_locale_independent(tmp_path: Path) -> None:
     root = tmp_path / "voicebank"
     root.mkdir()
+    _write_wav(root / "required.wav")
+    (root / "oto.ini").write_text("required.wav=x,0,0,0,0,0\n", encoding="utf-8")
+    (root / "character.txt").write_text("name=test\n", encoding="utf-8")
     for name in ("a10.txt", "B2.txt", "a2.txt", "10.txt"):
         (root / name).write_text(name, encoding="utf-8")
     document = subject.build_manifest(root, voicebank_version="test")
-    assert [entry["path"] for entry in document["files"]] == [
+    paths = [entry["path"] for entry in document["files"]]
+    assert [path for path in paths if path.endswith(".txt") and path != "character.txt"] == [
         "10.txt",
         "B2.txt",
         "a10.txt",
@@ -115,10 +119,13 @@ def test_ordering_is_locale_independent(tmp_path: Path) -> None:
 
 
 def test_audio_fields_are_measured(tmp_path: Path) -> None:
-    root = tmp_path / "voicebank"
-    root.mkdir()
+    root = _voicebank(tmp_path)
     _write_wav(root / "stereo.wav", sample_rate=44100, channels=2)
-    entry = subject.build_manifest(root, voicebank_version="test")["files"][0]
+    entry = next(
+        entry
+        for entry in subject.build_manifest(root, voicebank_version="test")["files"]
+        if entry["path"] == "stereo.wav"
+    )
     assert entry["audio"] == {
         "sample_rate": 44100,
         "bit_depth": 16,
@@ -128,12 +135,23 @@ def test_audio_fields_are_measured(tmp_path: Path) -> None:
 
 
 def test_unreadable_wav_is_counted_not_silently_zeroed(tmp_path: Path) -> None:
-    root = tmp_path / "voicebank"
-    root.mkdir()
+    root = _voicebank(tmp_path)
     (root / "bad.wav").write_bytes(b"not a wave")
     document = subject.build_manifest(root, voicebank_version="test")
-    assert "audio" not in document["files"][0]
+    bad = next(entry for entry in document["files"] if entry["path"] == "bad.wav")
+    assert "audio" not in bad
     assert document["aggregates"]["audio_unreadable"] == 1
+
+
+@pytest.mark.parametrize("missing", ["wav", "oto.ini", "character.txt"])
+def test_incomplete_voicebank_is_rejected(tmp_path: Path, missing: str) -> None:
+    root = _voicebank(tmp_path)
+    if missing == "wav":
+        (root / "a.wav").unlink()
+    else:
+        (root / missing).unlink()
+    with pytest.raises(ValueError, match="incomplete"):
+        subject.build_manifest(root, voicebank_version="test")
 
 
 def test_out_outside_staging_root_is_refused(tmp_path: Path) -> None:
@@ -156,6 +174,35 @@ def test_out_inside_repository_is_refused(tmp_path: Path) -> None:
             staging / "a0_voicebank_manifest.json",
             voicebank_version="test",
         )
+
+
+def test_out_cannot_replace_a_voicebank_input(tmp_path: Path) -> None:
+    root = _voicebank(tmp_path)
+    with pytest.raises(PrivateBoundaryError, match="voicebank input"):
+        subject.write_manifest(
+            root,
+            tmp_path,
+            root / "oto.ini",
+            voicebank_version="test",
+        )
+    assert (root / "oto.ini").read_text(encoding="utf-8").startswith("a.wav=")
+
+
+def test_out_cannot_replace_the_source_zip(tmp_path: Path) -> None:
+    root = _voicebank(tmp_path)
+    archive = tmp_path / "A0.zip"
+    digest = _zip_voicebank(root, archive)
+    before = archive.read_bytes()
+    with pytest.raises(PrivateBoundaryError, match="source ZIP"):
+        subject.write_manifest(
+            root,
+            tmp_path,
+            archive,
+            voicebank_version="test",
+            zip_path=archive,
+            zip_sha256=digest,
+        )
+    assert archive.read_bytes() == before
 
 
 def test_zip_sha_mismatch_fails_closed(tmp_path: Path) -> None:
@@ -217,9 +264,9 @@ def test_verified_zip_rejects_missing_extracted_files(tmp_path: Path) -> None:
     root = _voicebank(tmp_path)
     archive = tmp_path / "A0.zip"
     digest = _zip_voicebank(root, archive)
-    (root / "character.txt").unlink()
+    (root / "readme.txt").unlink()
 
-    with pytest.raises(ValueError, match="missing_from_root=.*character.txt"):
+    with pytest.raises(ValueError, match="missing_from_root=.*readme.txt"):
         subject.build_manifest(
             root,
             voicebank_version="test",
