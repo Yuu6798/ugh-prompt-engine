@@ -60,6 +60,12 @@ def _read_once(path: Path, *, label: str) -> tuple[bytes, str]:
     return value, sha256_bytes(value)
 
 
+_EXECUTOR_PATH = Path(__file__).resolve()
+_, _EXECUTOR_LOAD_SHA256 = _read_once(
+    _EXECUTOR_PATH, label="Birth Probe executor module-load provenance"
+)
+
+
 def _provenance_input_paths() -> Dict[str, Path]:
     """Return the repo-resident execution/provenance inputs frozen for one run."""
     return {
@@ -73,16 +79,22 @@ def _provenance_input_paths() -> Dict[str, Path]:
         "backbone_runtime_bundle_sha256": (
             _THIS_DIR / "inputs" / "backbone_runtime_bundle.json"
         ),
-        "executor_sha256": Path(__file__).resolve(),
+        "executor_sha256": _EXECUTOR_PATH,
     }
 
 
 def _snapshot_provenance_inputs() -> Dict[str, str]:
-    """Hash every repo provenance input before any render work starts."""
-    return {
-        key: _read_once(path, label=f"provenance snapshot {key}")[1]
-        for key, path in _provenance_input_paths().items()
-    }
+    """Hash repo provenance inputs and bind the executor to module-load bytes."""
+    snapshot: Dict[str, str] = {}
+    for key, path in _provenance_input_paths().items():
+        _, actual = _read_once(path, label=f"provenance snapshot {key}")
+        if key == "executor_sha256" and path.resolve() == _EXECUTOR_PATH:
+            if actual != _EXECUTOR_LOAD_SHA256:
+                raise BirthProbeError("Birth Probe executor changed after module load")
+            snapshot[key] = _EXECUTOR_LOAD_SHA256
+        else:
+            snapshot[key] = actual
+    return snapshot
 
 
 def _verify_provenance_inputs_unchanged(snapshot: Mapping[str, str]) -> None:
@@ -678,8 +690,8 @@ def publish_evidence_bundle(
 
 @dataclass(frozen=True)
 class _ProbeNote:
-    kana: str
-    pitch_midi: int
+    mora: str
+    midi: int
     duration_beats: float
 
 
@@ -803,8 +815,8 @@ class GateSynthRenderer:
         self._tempo = float(cell["tempo_bpm"])
         self._notes = [
             _ProbeNote(
-                kana=note["kana"],
-                pitch_midi=int(note["pitch_midi"]),
+                mora=str(note["kana"]),
+                midi=int(note["pitch_midi"]),
                 duration_beats=float(note["duration_beats"]),
             )
             for note in cell["notes"]
@@ -846,7 +858,7 @@ class GateSynthRenderer:
         record: Dict[str, Any] = {}
         waveform = self._gate.run_pipeline(
             self._notes,
-            lambda beats: beats * 60.0 / self._tempo,
+            lambda beats, tempo_bpm: beats * 60.0 / tempo_bpm,
             self._tempo,
             self._model_bytes,
             self._variance_phonemes,
