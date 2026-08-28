@@ -454,6 +454,49 @@ def test_negative_pr333_r9_identity_axis_source_missing_supersede_word(
         m.validate_probe_manifest(bad)
 
 
+def test_negative_pr333_r10_scope_statement_missing_rev06_supersede_marker(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """PR #333 第10巡指摘（P2、採用）の回帰: 第9巡は `identity_axis_source`
+    のみを rev 0.6 supersede マーカーで守り、`measurement_boundary.
+    scope_statement` は汎用文言（「何を鳴らすか」/「どう測るかは対象外」）
+    のみの検査に留まっていた。scope_statement が identity_decision_
+    protocol_v0.6.json への supersede に言及しない旧文言相当（第9巡是正前
+    と同型）に戻ると fail-closed で拒否されることを確認する（汎用文言自体
+    は保持したまま rev 0.6 言及だけを欠く最小欠陥）。"""
+    bad = _mutate(manifest_data)
+    bad["measurement_boundary"]["scope_statement"] = (
+        "本manifestが定義するのは何を鳴らすか（score cells + render契約 + "
+        "take台帳）のみ。どう測るかは対象外——identity軸は"
+        "inputs/identity_metric_space.json（metric_space_sha としてpin済み）"
+        "が正本、P4/P5のdevelopment/generalization軸の測定仕様は"
+        "measurement_spec_sha（別欄・PENDINGのまま）が別途凍結する。"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
+def test_negative_pr333_r10_scope_statement_missing_supersede_word(
+    manifest_data: Dict[str, Any],
+) -> None:
+    """同上: `identity_decision_protocol_v0.6.json` への言及があっても
+    supersede の語を欠く scope_statement は依然として拒否される（両
+    マーカーが独立に必須であることの確認、identity_axis_source 側の
+    第9巡回帰テストと同型）。"""
+    bad = _mutate(manifest_data)
+    bad["measurement_boundary"]["scope_statement"] = (
+        "本manifestが定義するのは何を鳴らすか（score cells + render契約 + "
+        "take台帳）のみ。どう測るかは対象外——identity軸のfeature/distance"
+        "生成定義はinputs/identity_metric_space.json（metric_space_sha と"
+        "してpin済み）が正本のまま、calibration・閾値・判定規則は"
+        "inputs/identity_decision_protocol_v0.6.jsonも参照する、"
+        "P4/P5のdevelopment/generalization軸の測定仕様はmeasurement_spec_sha"
+        "（別欄・PENDINGのまま）が別途凍結する。"
+    )
+    with pytest.raises(m.Run9ValidationError):
+        m.validate_probe_manifest(bad)
+
+
 def test_negative_prohibitions_missing_render_infeasible_carveout(
     manifest_data: Dict[str, Any],
 ) -> None:

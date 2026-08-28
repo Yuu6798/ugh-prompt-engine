@@ -4888,7 +4888,23 @@ _MEASUREMENT_BOUNDARY_SCOPE_MARKERS: Tuple[str, ...] = ("何を鳴らすか", "�
 # = identity_metric_space.json が正本 ／ calibration・閾値・判定規則 =
 # identity_decision_protocol_v0.6.json が rev 0.6 実行について正本）が
 # 必ず両方言及されることを fail-closed で強制する。
-_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS: Tuple[str, ...] = (
+#
+# PR #333 第10巡指摘（P2、採用）: 第9巡の回帰ガードは `identity_axis_source`
+# のみを守り、正典表明を行う残り2箇所——probe_manifest.json
+# `measurement_boundary.scope_statement`（本ファイル、汎用文言のみ検査）と
+# measurement_spec_manifest.json `scope_note`（非空検査のみ）——は同じ
+# rev 0.6 supersede マーカーを要求していなかった。将来の repin で
+# 「identity_metric_space.json が calibration・閾値の正」へ回帰しても
+# この2箇所は素通りしてしまう穴だった。マーカー定義自体は本 dict 1箇所に
+# 集約し（識別子名を宣言箇所限定の `_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_
+# MARKERS` から用途横断の `_REV06_SUPERSEDE_DECLARATION_MARKERS` へ改名）、
+# `_validate_measurement_boundary()`（scope_statement + identity_axis_source
+# の2箇所）と `validate_measurement_spec_manifest()`（scope_note）の計3箇所
+# で同一マーカー集合・同一 `_validate_marker_bearing_str()` 経路によって
+# fail-closed 検査する（ガード方式の統一）。manifest 本文は第9巡で既に
+# 両宣言を rev 0.6 supersede へ言及する文言へ改訂済みのため、本改訂は
+# 検査ロジックのみでデータ側は無改変。
+_REV06_SUPERSEDE_DECLARATION_MARKERS: Tuple[str, ...] = (
     "inputs/identity_metric_space.json", "metric_space_sha",
     "identity_decision_protocol_v0.6.json", "supersede",
 )
@@ -6707,11 +6723,15 @@ def _validate_measurement_boundary(data: Any) -> None:
         raise Run9ValidationError(f"measurement_boundary missing required key(s): {sorted(missing)}")
     _validate_marker_bearing_str(
         data["scope_statement"], field="measurement_boundary.scope_statement",
-        markers=_MEASUREMENT_BOUNDARY_SCOPE_MARKERS,
+        # PR #333 第10巡指摘（P2、採用）: 汎用文言マーカーに加え、
+        # rev 0.6 supersede への言及（`_REV06_SUPERSEDE_DECLARATION_MARKERS`）
+        # も必須化——identity_axis_source と同一の回帰ガードを scope_statement
+        # にも適用する（第9巡は identity_axis_source のみを守っていた）。
+        markers=_MEASUREMENT_BOUNDARY_SCOPE_MARKERS + _REV06_SUPERSEDE_DECLARATION_MARKERS,
     )
     _validate_marker_bearing_str(
         data["identity_axis_source"], field="measurement_boundary.identity_axis_source",
-        markers=_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS,
+        markers=_REV06_SUPERSEDE_DECLARATION_MARKERS,
     )
     _validate_marker_bearing_str(
         data["development_generalization_axis_source"],
@@ -8813,7 +8833,16 @@ def validate_measurement_spec_manifest(data: Mapping[str, Any]) -> None:
             f"{schema!r}"
         )
 
-    _require_non_empty_str(data["scope_note"], field="measurement spec manifest.scope_note")
+    # PR #333 第10巡指摘（P2、採用）: 非空検査のみだったため、正典表明の
+    # 現在形が「identity_metric_space.json のみが calibration・閾値の正」へ
+    # 回帰しても素通りしていた。probe_manifest.json 側
+    # （`_validate_measurement_boundary()`）と同一マーカー集合・同一
+    # `_validate_marker_bearing_str()` 経路で rev 0.6 supersede への言及を
+    # fail-closed で強制する（ガード方式の統一、3宣言目）。
+    _validate_marker_bearing_str(
+        data["scope_note"], field="measurement spec manifest.scope_note",
+        markers=_REV06_SUPERSEDE_DECLARATION_MARKERS,
+    )
 
     metric_paths = data["identity_axis_metric_paths"]
     if not isinstance(metric_paths, dict):

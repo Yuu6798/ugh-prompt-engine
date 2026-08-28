@@ -1996,3 +1996,141 @@ $ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=
   の2箇所（19行目・134行目、いずれも本改訂で編集した2ブロックより手前の
   587-590行を指す）のみであることを確認済みであり、他箇所への行番号
   シフトの影響はない。
+
+## 13. PR #333 Codex bot レビュー第10巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`f983b2da`）。1件（P2）着手前に事実確認、指摘内容は事実と一致したため
+採用対応。裁定正本は本 PR の対象外（第9巡が確立した二元宣言の内容自体
+ではなく、その回帰ガードの適用範囲の是正）。**本巡で bot レビュー対応の
+採否上限10巡に到達した**（§13.4 参照）。
+
+### 13.1 指摘（P2）: 「Guard all canonical-source declarations」
+
+**事実確認（着手前）**: `run9_schema.py` を読み、第9巡（本記録 §12）が
+新設した rev 0.6 supersede マーカー検査の適用範囲を突合した。
+
+- `_validate_measurement_boundary()`（旧4880-4895行付近）: `identity_axis_
+  source` は `_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS`（`inputs/
+  identity_metric_space.json`/`metric_space_sha`/`identity_decision_
+  protocol_v0.6.json`/`supersede` の4マーカー）で検査されていたが、
+  `scope_statement`（同関数、旧6708-6711行付近）は `_MEASUREMENT_
+  BOUNDARY_SCOPE_MARKERS`（「何を鳴らすか」/「どう測るかは対象外」の
+  汎用文言2件）のみで、rev 0.6 マーカーは一切要求していなかった。
+- `validate_measurement_spec_manifest()` の `scope_note`（旧8816行）は
+  `_require_non_empty_str()` のみ——非空検査のみで、マーカー検査
+  そのものが存在しなかった。
+
+**指摘内容は事実と一致**（identity_axis_source 以外の2箇所は将来の
+repin で「identity_metric_space.json が calibration・閾値の正」へ
+回帰しても検査を素通りする）→ Fable 設計どおり実装。
+
+実データ側（`evaluation/probe_manifest.json` の `scope_statement` /
+`inputs/measurement_spec_manifest.json` の `scope_note`）は第9巡是正
+（§12.2）で既に4マーカーを含む二元宣言文へ更新済みであることを
+`python3 -c "..."` で事前確認した——いずれも新検査を無改変のまま通過
+することを実装前に確認済み（見込みどおり、manifest 本文の改訂・repin は
+発生しなかった）。
+
+### 13.2 実装（Fable 設計）
+
+第9巡が identity_axis_source 専用に定義した4マーカー tuple
+（`_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS`）を、宣言箇所限定の
+識別子名から用途横断の `_REV06_SUPERSEDE_DECLARATION_MARKERS` へ改名し
+（値は無改変）、3箇所すべてが同一マーカー集合・同一
+`_validate_marker_bearing_str()` 経路を通るようガード方式を統一した
+（Task 指示「共通ヘルパー化が自然ならそうする」——低レベル共通ヘルパー
+`_validate_marker_bearing_str()` は第2巡時点で既存のため、新規ヘルパー
+関数は追加せず、マーカー定義の一元化 + 呼び出し側3箇所の統一で足りると
+判定）。
+
+- `_validate_measurement_boundary()`: `scope_statement` の検査を
+  `_MEASUREMENT_BOUNDARY_SCOPE_MARKERS + _REV06_SUPERSEDE_DECLARATION_
+  MARKERS`（汎用文言2件 + rev 0.6 マーカー4件の結合）へ拡張。
+  `identity_axis_source` は同じ `_REV06_SUPERSEDE_DECLARATION_MARKERS`
+  を参照するよう改名のみ（検査内容は無改変）。
+- `validate_measurement_spec_manifest()`: `scope_note` の検査を
+  `_require_non_empty_str()` から `_validate_marker_bearing_str(...,
+  markers=_REV06_SUPERSEDE_DECLARATION_MARKERS)` へ置き換え（非空検査は
+  `_validate_marker_bearing_str()` が内部で `_require_non_empty_str()`
+  を呼ぶため後退しない）。
+
+manifest 本文（`evaluation/probe_manifest.json`/`inputs/measurement_
+spec_manifest.json`）は無改変——事前確認（§13.1）どおり現データが新検査
+を通過したため、repin は発生していない。
+
+### 13.3 新設テスト
+
+- `tests/test_run9_probe_manifest.py::test_negative_pr333_r10_scope_
+  statement_missing_rev06_supersede_marker`: `scope_statement` を
+  rev 0.6 supersede 未言及の旧文言相当へ差し戻すと fail-closed 拒否
+  されることの回帰（identity_axis_source 側の第9巡回帰テストと同型）。
+- 同 `test_negative_pr333_r10_scope_statement_missing_supersede_word`:
+  `identity_decision_protocol_v0.6.json` への言及があっても `supersede`
+  の語を欠く `scope_statement` は依然拒否されることの確認（2マーカーが
+  独立必須であることの確認）。
+- `tests/test_run9_contract.py::test_negative_pr333_r10_scope_note_
+  missing_rev06_supersede_marker`: `measurement_spec_manifest.json`
+  `scope_note` を旧文言相当へ差し戻すと `validate_measurement_spec_
+  manifest()` が fail-closed 拒否することの回帰（第9巡時点では検査
+  自体が存在せず非空文字列であれば何でも通過していた欠陥の直接回帰）。
+- 同 `test_negative_pr333_r10_scope_note_missing_supersede_word`: 同上、
+  `supersede` の語のみを欠く場合の確認。
+
+### 13.4 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2714 passed, 7 warnings in ~47s
+```
+
+新設テスト4件（2710→2714）。既存テストの回帰値更新は不要（manifest
+本文が無改変のため sha・回帰値のいずれも変わらない）。
+
+### 13.5 変更ファイル
+
+- `run9_schema.py`: `_MEASUREMENT_BOUNDARY_IDENTITY_AXIS_MARKERS` を
+  `_REV06_SUPERSEDE_DECLARATION_MARKERS` へ改名（値は無改変）、
+  `_validate_measurement_boundary()` の `scope_statement` 検査へ rev 0.6
+  マーカーを追加、`validate_measurement_spec_manifest()` の `scope_note`
+  検査を非空検査からマーカー検査へ置き換え。
+- `tests/test_run9_probe_manifest.py`: 新設 fail-closed テスト2件
+  （`scope_statement`）。
+- `tests/test_run9_contract.py`: 新設 fail-closed テスト2件
+  （`scope_note`）。
+
+`evaluation/probe_manifest.json`・`inputs/measurement_spec_manifest.json`
+はいずれも無改変（§13.2 で確認）。`RUN9_CONTRACT.yaml`・pin 値の repin
+なし。
+
+### 13.6 逸脱事項
+
+- immutability 対象（`identity_metric_space.json`/`identity_domain`/
+  `Genome`/speaker map manifest）・裁定逐語転記部分
+  （`USER_ADJUDICATION_20260827_IDENTITY_REV06.txt`）は1 byte も
+  変更していない。`inputs/identity_decision_protocol_v0.6.json` も本巡は
+  無改変。
+- 本巡は検査ロジックのみの改訂であり、ファミリー全数掃討（§12.3 が
+  10箇所を既に確認済み）を再実行する対象ではない——本巡の指摘は §12.3
+  #1-3（既是正のデータ文言）ではなく、そのデータ文言を守る**検査コード
+  側**の適用漏れ2箇所（scope_statement/scope_note）についてのものであり、
+  §12.3 の掃討結果自体（データ文言レベル）に変更はない。
+
+### 13.7 採否上限10巡到達 — 以後の運用切替え
+
+`AGENTS.md` §3-4 の bot レビュー対応上限（同一 PR 10ラウンド）に本巡で
+到達した。CLAUDE.md「bot レビュー対応の運用」節が定める運用に従い、
+以後 PR #333 への Codex bot レビュー追加ラウンドは:
+
+- **採用するのは新しい具体的経路を示す指摘のみ**（3分類 — 実コード被害
+  / 将来汚染 / 致命的バグ——のいずれかに該当し、かつ本記録が既に
+  掃討・対応済みのファミリーとは異なる具体的な新規欠陥経路を指す指摘）。
+- それ以外（既対応ファミリーの言い換え、逓減領域の指摘、3分類に該当
+  しない指摘）は**境界宣言のみを記録し、実装は行わず User へ引き継ぐ**。
+- 「打ち切りは3分類を上書きしない」——新しい具体経路を示す指摘であれば
+  巡数上限を超えていても採用判定自体は行う（上限は「無条件で全採用し
+  続ける運用」を終了させるものであり、3分類判定を無効化するものでは
+  ない）。

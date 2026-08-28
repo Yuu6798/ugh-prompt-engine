@@ -11048,6 +11048,43 @@ def test_pin1_measurement_spec_manifest_bad_dev_gen_status_fail_closed() -> None
         m.validate_measurement_spec_manifest(data)
 
 
+def test_negative_pr333_r10_scope_note_missing_rev06_supersede_marker() -> None:
+    """PR #333 第10巡指摘（P2、採用）の回帰: `validate_measurement_spec_
+    manifest()` の `scope_note` 検査は第9巡時点で非空検査のみだった
+    （probe_manifest.json 側の `identity_axis_source`/`scope_statement` と
+    異なり rev 0.6 supersede マーカーを要求していなかった）。scope_note が
+    identity_decision_protocol_v0.6.json への supersede に言及しない旧文言
+    相当（第9巡是正前と同型）に戻ると fail-closed で拒否されることを
+    確認する。"""
+    data = copy.deepcopy(_measurement_spec_manifest_data())
+    data["scope_note"] = (
+        "本 manifest は RUN9_CONTRACT.yaml measurement_spec_sha の実体。"
+        "identity 軸の距離・校正・閾値の正本は "
+        "inputs/identity_metric_space.json（metric_space_sha として既 "
+        "PINNED）であり、本 manifest では重複定義しない。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="scope_note"):
+        m.validate_measurement_spec_manifest(data)
+
+
+def test_negative_pr333_r10_scope_note_missing_supersede_word() -> None:
+    """同上: `identity_decision_protocol_v0.6.json` への言及があっても
+    supersede の語を欠く scope_note は依然として拒否される（両マーカーが
+    独立に必須であることの確認、probe_manifest.json 側の第9巡回帰テストと
+    同型）。"""
+    data = copy.deepcopy(_measurement_spec_manifest_data())
+    data["scope_note"] = (
+        "本 manifest は RUN9_CONTRACT.yaml measurement_spec_sha の実体。"
+        "identity 軸の距離・校正・閾値の正本は "
+        "inputs/identity_metric_space.json（metric_space_sha として既 "
+        "PINNED）であり、calibration・閾値・判定規則は "
+        "inputs/identity_decision_protocol_v0.6.json も参照する。本 "
+        "manifest では重複定義しない。"
+    )
+    with pytest.raises(m.Run9ValidationError, match="scope_note"):
+        m.validate_measurement_spec_manifest(data)
+
+
 # ---------------------------------------------------------------------------
 # read-once loader: PINNED確認 / contract改竄検出 / manifestバイト改竄検出 /
 # 正常系 parse 返却（3関数とも同一パターン、Persistent Artifact Safety Gate
