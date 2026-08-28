@@ -287,3 +287,216 @@ path）、in-process contract の disk 正典乖離、の13ケースがいずれ
    宣言の直接遵守）。
 3. その他、design spec §P の構造・cross-check 7項目・実行順は逐語どおり
    実装し、逸脱はない。
+
+---
+
+## 4. PR #333 Codex bot レビュー第1巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`1373e1b0`）。4件全て採用（P1×2・P2×2）。裁定正本は本 PR の対象外
+（既存裁定 §1-§9 の再解釈ではなく、実装欠陥の是正）。
+
+### 4.1 指摘1（P1）: H1-H6 校正 gate の pre-run 閉集合からの脱落
+
+**グラウンディング（着手前の事実確認、逐語引用）**:
+
+- design v0.1 §18.1 Target Skill Gain（923-931行）:
+  `LCB_95(Δtarget,i) > δtarget` / 「`δtarget` はpositive/negative
+  controlから凍結する。」
+- design v0.1 §18.2 Non-Inferiority（933-939行）:
+  `LCB_95(Δk,i) >= -εk`（対象軸に Identity を含む）
+- `inputs/failure_abort_criteria.json` rule 14 `machine_promotion_
+  condition`: 「hypothesis_algebra_sha の schema/validator（§18.1
+  δtarget 校正ロジック含む）が実装され、positive/negative control
+  からの実測校正が完了した時点で MACHINE へ昇格する。」
+- 同 rule 16 `checkpoint`: 「design_revision 0.6（RUN9-L0-HARNESS-3c
+  rev 0.6）時点の identity_metric_space.json calibration.decision_rule
+  の theta_cal(F) 比較は、rev 0.6 実行について inputs/identity_
+  decision_protocol_v0.6.json の calibration/decision_rule 節へ
+  supersede 済み」——supersede されたのは **theta_cal(F) 比較のみ**で
+  あり、H1-H6 の δtarget/εk 校正要求そのものは supersede 宣言に含まれて
+  いない。
+- rev 0.6 裁定本文（USER_ADJUDICATION_20260827_IDENTITY_REV06.txt）
+  §1-§9 のいずれにも H1-H6 δtarget/εk 校正の要否判断は含まれない（裁定
+  は Birth Identity Separation + 学習後 Identity 保持判定の再設計に
+  限定——rev 0.6 は H1-H6 校正要求を明示的に supersede していない）。
+- RUN9_CONTRACT.yaml 旧 `hypothesis_algebra_sha` reason（本改訂前の
+  〔履歴〕注記）: 「rev 0.6 裁定により Identity decision protocol の
+  pin 欄へ用途確定し、**H1-H6 閾値校正は本欄の対象から外れた**」——
+  用途変更そのものは裁定 §7 の直接実装であり正当だが、H1-H6 校正前提の
+  追跡先が失われた。
+
+**判定**: 要求は現存（supersede されていない）。**Fable 設計どおり
+実装**: 新規 pre-run PENDING pin `hypothesis_threshold_calibration_sha`
+を `RUN9_CONTRACT.yaml` に追加、`run9_schema.CONTRACT_PIN_FIELDS` へ登録
+（`CONTRACT_POST_RUN_PIN_FIELDS`/`CONTRACT_OPTIONAL_PIN_FIELDS` のいずれ
+にも含めない——`gate_state()` の pre-run 閉集合へ自動包含）。
+`hypothesis_algebra_sha` 自体・裁定 §7 の pin 用途確定は無改変。
+pre-run PENDING 件数の期待値を 6→7（総 7→8）へ全箇所追随（テスト5箇所
+の既存回帰値更新 + 新設 `test_pr333_r1_pre_run_pending_count_is_seven`
++ `tests/test_h3c_learning_recipe_manifests.py::
+test_h3c_pre_run_pending_field_count_is_seven` + README.md）。
+
+### 4.2 指摘2（P1）: metric space 実バイトの再照合欠如
+
+**事実確認**: `load_pinned_identity_decision_protocol()` の cross-check
+(2)（旧 20465行付近）は `metric_reference.metric_space_sha`（protocol
+側の宣言値）と `domain.metric_space_sha`（domain 側の宣言値）という
+2つの**宣言済み文字列**同士の比較のみで、どちらも実ファイルバイトを
+再ハッシュしない。cross-check (7)（旧 20522行付近）は
+`_load_identity_metric_space_document()` で実ファイルを読むが、読んだ
+バイトの sha256 を一切照合しない。結果、stale/改ざんされた
+`inputs/identity_metric_space.json` は宣言値さえ一致していれば両
+cross-check を素通りし得た。実測再現テスト
+（`test_pr333_r1_load_pinned_identity_decision_protocol_detects_metric_
+space_content_drift`）で、is修正前に本経路が改ざんを検出しないことを
+確認した。
+
+**実装**: 新規 `_load_identity_metric_space_document_verified()`
+（read-once TOCTOU パターン、`_h3c_load_pinned_common()` と同型）を
+新設し、実バイトから `_compute_canonical_pin_sha256()`（`metric_space_
+sha` 自体の pin 規約と同一の正規形 sha256）を再計算して
+`domain.metric_space_sha` と fail-closed で照合する。
+`load_pinned_identity_decision_protocol()` の cross-check (7) をこの
+新関数経由へ切替え。`validate_probe_manifest()` 側の既存呼び出し
+（`_load_identity_metric_space_document()`、構造検証専用・domain 引数
+なし）は変更していない（役割が異なる——本指摘の対象はあくまで
+`load_pinned_identity_decision_protocol()` のcross-document 信頼判定）。
+`Run9IdentityDomain.is_pinned()`/`content_digest()` が意図的に外部
+アーティファクトの内容照合を行わない設計原則（`build_founder()`
+docstring 6877-6890行、af0/ritsu/metric_space_sha は「取消意味論を
+持たない外部アーティファクトへの形状pin」）とは非対称関係にない——
+本修正は「pin 済み宣言値と実ファイルの整合」という TOCTOU 対策であり、
+「pin 済み宣言値が外部の真の事実と一致するか」という R9-G1 tooling
+（machine-dependent、未実装）の職務には踏み込んでいない。
+
+テスト: happy path・sha 不一致拒否・実際の改ざん検出（内容ドリフト）・
+`load_pinned_identity_decision_protocol()` 経由の統合確認、の4件。
+
+### 4.3 指摘3（P2）: invalid/non-finite feature の未登録分岐
+
+**実装**: `inputs/identity_decision_protocol_v0.6.json`
+`birth_identity_separation` へ `invalid_or_nonfinite_feature` 分岐
+（`condition`/`birth_outcome`（`NOT_ESTABLISHED`）/`outcome_detail`
+（新定数）/`action`/`note`）を追加。新定数
+`IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL =
+"IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_FEATURE"`
+を新設（`BIRTH_OUTCOMES`/既存 outcome_detail 定数のいずれとも非衝突）。
+`validate_identity_decision_protocol()` の `birth_identity_separation`
+必須キー集合へ追加し、`not_established` と同型の検証（condition 非空・
+birth_outcome 厳密一致・outcome_detail 厳密一致・action/note 非空）を
+実装。d12=0 による feature collapse（既存 `not_established` 分岐）とは
+別ラベルで区別——裁定§4「両featureがvalid/finiteであり、d12 > 0の場合
+のみBIRTH=ESTABLISHED」の逆条件 + 裁定§9「Birth Gate不成立時は
+NOT_ESTABLISHEDとして凍結する」の機械符号化であり、新規則の発明では
+ない。裁定逐語の転記部分（USER_ADJUDICATION txt / rev doc 内の逐語
+引用節）は無改変。
+
+protocol バイト変更に伴い `hypothesis_algebra_sha` を repin（旧
+`967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3` →新
+`304e72376e30e8e3974485d393c1f56a7256017588bc877c2be15f080291fb77`、旧
+値は RUN9_CONTRACT.yaml の【repin 履歴】コメントへ append-only 保持）。
+`design_revision_doc_sha256`（`DESIGN_RUN9_REVISION_0.6.md` を無改変の
+まま参照）は本指摘では変更不要——protocol 側の
+`provenance.design_revision_doc.sha256` は既存値のまま一致する。
+
+### 4.4 指摘4（P2）: protocol 配列比較の dict 偽装
+
+**事実確認**: `validate_identity_decision_protocol()` 内の3箇所
+（`immutability.unchanged`/`execution_order.prerequisites_before_
+birth_gate`/`invariants.same_attempt_prohibitions`）が旧実装で
+`tuple(value) != EXPECTED_TUPLE` のみを検査しており、`value` が期待
+文字列をキーとする insertion-ordered dict（値は任意）でも
+`tuple(dict)` はそのキー列を返すため偽通過し得た。同モジュール内の
+`_validate_identity_protocol_metric_ref_list()`（`supersede_
+declaration.*_sections` 用）は既に `isinstance(value, list)` 形状検査
+を先行させており、この穴を持たないことを確認——validator 内の
+配列比較は上記3箇所のみが同型の欠陥を持っていた。
+
+**実装**: 新規 `_require_ordered_str_list_matching_tuple()` helper を
+新設し、`isinstance(value, list)` + 全要素 str の形状検査をタプル比較の
+前に必須化。3箇所すべてをこの helper 経由へ置換。既存の順序込み厳密
+一致（並び替え拒否）挙動は非回帰（`test_pr333_r1_validate_still_
+rejects_reordered_list_after_shape_guard` で確認）。
+
+### 4.5 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2597 passed, 7 warnings in ~40s
+```
+
+新設テスト: `tests/test_run9_contract.py` に18件（指摘1のカウント回帰1件
++ 指摘2の4件 + 指摘3の4件 + 指摘4の5件 + 既存カウントテスト5件の値
+更新）。`tests/test_h3c_learning_recipe_manifests.py` の既存カウント
+テスト1件も 6→7 へ値更新。
+
+### 4.6 変更ファイル
+
+- `run9_schema.py`: 新規 pin 名の登録・`_load_identity_metric_space_
+  document_verified()` 新設 + cross-check (7) 差替え・
+  `IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL` 定数 +
+  `birth_identity_separation` 検証拡張・`_require_ordered_str_list_
+  matching_tuple()` 新設 + 3箇所置換。
+- `RUN9_CONTRACT.yaml`: `hypothesis_threshold_calibration_sha`
+  新設（PENDING）+ `hypothesis_algebra_sha` repin（値・repin履歴コメント
+  追加）+ `failure_abort_criteria_sha` 12世代目 repin（§4.8）。
+- `inputs/identity_decision_protocol_v0.6.json`:
+  `birth_identity_separation.invalid_or_nonfinite_feature` 分岐追加。
+- `inputs/failure_abort_criteria.json`: rule 14/16 の checkpoint/
+  machine_promotion_condition の stale `hypothesis_algebra_sha` 参照を
+  `hypothesis_threshold_calibration_sha` へ差替え（§4.8）。
+- `tests/test_run9_contract.py` / `tests/test_h3c_learning_recipe_
+  manifests.py`: 上記の回帰テスト・カウント値更新（`failure_abort_
+  criteria_sha` repin lineage テストの round12 追加を含む）。
+- `README.md`: pre-run PENDING 件数の記述更新（6/7→7/8）+
+  「解消済み（PR #333 第1巡指摘1, 2026-08-28）」節新設。
+
+### 4.7 逸脱事項
+
+- `inputs/failure_abort_criteria.json` rule 14/16 の stale な
+  `hypothesis_algebra_sha` 参照は当初スコープ外として現状維持していたが、
+  Fable 判定により是正済み——詳細は下記 §4.8 を参照。
+- immutability 対象（`identity_metric_space.json`/`identity_domain`/
+  `Genome`/speaker map manifest）は 1 byte も変更していない（`git
+  status --short` で確認済み）。
+
+### 4.8 追加是正（Fable 判定、2026-08-28）: rule 14/16 の stale 参照是正
+
+**Fable 判定**: §4.7 が報告した逸脱事項（rule 14/16 の
+`machine_promotion_condition`/checkpoint が引き続き `hypothesis_algebra_
+sha` を参照）は、本巡指摘1（P1「Keep the H1–H6 calibration gate
+pending」）と同型の正典矛盾を残さないため是正する。
+
+**対応**: `inputs/failure_abort_criteria.json` rule 14/16 の
+checkpoint・machine_promotion_condition を、H1-H6 δtarget/εk 校正前提の
+追跡先として `hypothesis_algebra_sha`（rev 0.6 で identity decision
+protocol の pin 欄へ用途確定済み）ではなく新設 `hypothesis_threshold_
+calibration_sha` を参照する文言へ差し替えた。rev 0.6 裁定 §7「同protocol
+のraw SHA256をhypothesis_algebra_shaへPINNEDする」による用途確定の経緯を
+一句添え、旧文言は〔履歴（PR #333 第1巡指摘1、2026-08-28）〕として rule
+本文内に append-only 保持（削除しない）。`rule_id`/`enforcement`/
+`verbatim`・分類数（MACHINE 1件 / PROCEDURAL 19件）はいずれも無改変。
+
+**連鎖更新**: `inputs/failure_abort_criteria.json` の実バイト変更に伴い
+`failure_abort_criteria_sha` を12世代目へ repin した（旧
+`297dd46aaa8c520238072f93b9d5e18748dbdd31b4a389a4a8d7e48cd70d8cba` → 新
+`3de4db27a23498c236b75b3efbb152c0675fce84fe2d6bddfb8bd565850b1251`、旧値
+は `RUN9_CONTRACT.yaml` の【repin 履歴】コメントへ append-only 保持）。
+`tests/test_run9_contract.py::
+test_harness3b_failure_abort_criteria_repinned_lineage_ten_generations`
+（12世代の repin lineage を通しで確認する既存の全履歴テスト、テスト名は
+レビュー履歴保持のため改名しない）へ round12 の値を追加した。
+
+**検証**:
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2597 passed, 7 warnings in ~41s
+```

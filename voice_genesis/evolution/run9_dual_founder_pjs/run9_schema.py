@@ -200,6 +200,16 @@ IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL = "ESTABLISHED_BY_MACHINE_FEATURE"
 IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL = (
     "PROJECTED_RUNTIME_IDENTITIES_COLLAPSED_IN_MACHINE_FEATURE_SPACE"
 )
+# PR #333 Codex bot レビュー第1巡指摘3（P2、採用）新設: established の
+# 逆条件（両 feature が valid/finite）が満たされない——いずれかの feature
+# が invalid または non-finite——場合の第3分岐。d12=0 による feature
+# collapse（`IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL`）とは区別される
+# 測定/実装失敗系の凍結であり、裁定§4『両featureがvalid/finiteであり、
+# d12 > 0の場合のみBIRTH=ESTABLISHED』+ 裁定§9『Birth Gate不成立時は
+# NOT_ESTABLISHEDとして凍結する』の機械符号化（新規則の発明ではない）。
+IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL = (
+    "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_FEATURE"
+)
 
 # post_learning_identity_retention（裁定 §6）の outcome_detail。
 # IDENTITY_OUTCOMES[0]="STABLE_BY_MACHINE_METRIC" に併記する。
@@ -6317,6 +6327,49 @@ def _load_identity_metric_space_document(*, path: Optional[Path] = None) -> Dict
     return _loads_strict_json(path.read_text(encoding="utf-8"))
 
 
+def _load_identity_metric_space_document_verified(
+    expected_metric_space_sha: str, *, path: Optional[Path] = None
+) -> Dict[str, Any]:
+    """PR #333 Codex bot レビュー第1巡指摘2（P1、採用）用: `_load_identity_
+    metric_space_document()` は disk 上の `inputs/identity_metric_space.json`
+    を読み込むだけで、読んだバイトが `Run9IdentityDomain.metric_space_sha`
+    pin と一致するかを一切照合しない——`load_pinned_identity_decision_
+    protocol()` の cross-check (2)（20465行付近）は `metric_reference.
+    metric_space_sha`（protocol 側の**宣言値**）と `domain.metric_space_sha`
+    （domain 側の**宣言値**）という2つの文字列同士の一致しか見ておらず、
+    どちらも実ファイルバイトを再ハッシュしていない。stale・改ざんされた
+    checkout では、宣言値が一致したまま実ファイルの feature/distance 定義
+    だけが変わっていても両 cross-check を素通りし、Birth Gate の identity
+    判定を汚染し得た。
+
+    本関数は他の `load_pinned_*` 系関数（`_h3c_load_pinned_common()`）と
+    同じ read-once TOCTOU 対策で、実バイトを1回だけ読み parse し、その
+    **同一パース結果**から `compute_file_sha256()` docstring が定義する
+    正規形（canonical）規約（`_compute_canonical_pin_sha256()` —
+    `json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",",
+    ":"))` の sha256、`metric_space_sha` 自体の pin 規約と同一）で sha256
+    を再計算し、呼び出し側が渡す pin 済み値（`domain.metric_space_sha`）と
+    厳密一致することを fail-closed で強制する。"""
+    if path is None:
+        path = IDENTITY_METRIC_SPACE_PATH
+    if not path.is_file():
+        raise Run9ValidationError(
+            f"_load_identity_metric_space_document_verified(): {path} の実在が必須だが見つからない "
+            "（凍結・改変禁止の read-only 入力）"
+        )
+    # read-once: digest 対象の parse と返り値の parse を同一バッファから導出する。
+    buf = path.read_bytes()
+    document = _loads_strict_json(buf.decode("utf-8"))
+    actual_sha = _compute_canonical_pin_sha256(document)
+    if actual_sha != expected_metric_space_sha:
+        raise Run9ValidationError(
+            f"_load_identity_metric_space_document_verified(): {path} の実バイトから再計算した正規形 "
+            f"sha256 ({actual_sha!r}) が期待値 ({expected_metric_space_sha!r}) と一致しない — "
+            "stale・改ざんされた identity_metric_space.json は fail-closed で拒否する"
+        )
+    return document
+
+
 def _resolve_identity_metric_space_ref(
     ref: str, *, document: Mapping[str, Any], field: str
 ) -> None:
@@ -7254,6 +7307,18 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     "probe_manifest_sha",
     "measurement_spec_sha",
     "hypothesis_algebra_sha",
+    # PR #333 Codex bot レビュー第1巡指摘1（P1、採用）新設: rev 0.6 裁定 §7
+    # により `hypothesis_algebra_sha` は H1-H6 閾値校正欄から Identity
+    # decision protocol の pin 欄へ用途確定した（裁定 §7 の pin 用途確定は
+    # 不変のまま）。design §18.1/§18.2（LCB_95(Δtarget,i) > δtarget /
+    # LCB_95(Δk,i) >= -εk）と inputs/failure_abort_criteria.json rule
+    # 14/16 が要求する H1-H6 δtarget/εk 校正前提は rev 0.6 裁定の対象外
+    # （supersede されていない・別 pin 欄が必要）であり、pin 欄の用途変更
+    # によって pre-run gate から閉集合の外へ落ちていた——本欄はその追跡を
+    # 分離新設し、校正の実施・凍結まで PENDING のまま pre-run gate に
+    # 含める（gate_state() の閉集合対象、CONTRACT_POST_RUN_PIN_FIELDS/
+    # CONTRACT_OPTIONAL_PIN_FIELDS のいずれにも含めない）。
+    "hypothesis_threshold_calibration_sha",
     "human_evaluation_protocol_sha",
     "artifact_manifest_sha",
     "cost_record_sha",
@@ -20013,6 +20078,28 @@ def _validate_identity_protocol_metric_ref_list(
         )
 
 
+def _require_ordered_str_list_matching_tuple(
+    value: Any, *, field: str, expected: Tuple[str, ...],
+) -> None:
+    """PR #333 Codex bot レビュー第1巡指摘4（P2、採用）用: 順序込みで
+    frozen tuple と一致するかを検査する3箇所（`immutability.unchanged` /
+    `execution_order.prerequisites_before_birth_gate` /
+    `invariants.same_attempt_prohibitions`）は、旧実装が `tuple(value) !=
+    expected` のみで比較していたため、`value` が期待文字列をキーとする
+    insertion-ordered dict（mapping）であっても `tuple(dict)` はそのキー
+    列を返し、値が任意でも frozen tuple 比較を偽通過し得た（同型の穴が
+    3箇所に存在——`_validate_identity_protocol_metric_ref_list()` は既に
+    `isinstance(value, list)` 形状検査を先行させておりこの穴を持たない）。
+    本 helper は tuple 比較の前に `isinstance(value, list)` + 全要素 str
+    の形状検査を必須化し、dict 偽装を fail-closed で拒否する。"""
+    if not isinstance(value, list) or any(not isinstance(v, str) for v in value):
+        raise Run9ValidationError(f"{field} must be a list of strings, got {value!r}")
+    if tuple(value) != expected:
+        raise Run9ValidationError(
+            f"{field} must equal {expected!r} exactly (順序込み逐語列挙), got {value!r}"
+        )
+
+
 def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
     """`inputs/identity_decision_protocol_v0.6.json`
     （`run9-identity-decision-protocol/0.6`）の構造を検証する。User 裁定
@@ -20191,7 +20278,7 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         data["birth_identity_separation"], field="birth_identity_separation",
         required_keys=frozenset({
             "verbatim", "cell_ref", "formula", "established", "not_established",
-            "negative_reference_gate_note",
+            "invalid_or_nonfinite_feature", "negative_reference_gate_note",
         }),
     )
     _require_non_empty_str(birth["verbatim"], field="birth_identity_separation.verbatim")
@@ -20236,6 +20323,39 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         )
     _require_non_empty_str(
         not_established["action"], field="birth_identity_separation.not_established.action"
+    )
+    # PR #333 第1巡指摘3（P2、採用）: invalid/non-finite feature の第3分岐
+    # （established/not_established のいずれの条件にも該当しない未登録の穴
+    # を埋める——feature collapse とは区別される測定/実装失敗系の凍結）。
+    invalid_feature = _validate_identity_protocol_shape(
+        birth["invalid_or_nonfinite_feature"],
+        field="birth_identity_separation.invalid_or_nonfinite_feature",
+        required_keys=frozenset({"condition", "birth_outcome", "outcome_detail", "action", "note"}),
+    )
+    _require_non_empty_str(
+        invalid_feature["condition"],
+        field="birth_identity_separation.invalid_or_nonfinite_feature.condition",
+    )
+    if (
+        invalid_feature["birth_outcome"] != "NOT_ESTABLISHED"
+        or "NOT_ESTABLISHED" not in BIRTH_OUTCOMES
+    ):
+        raise Run9ValidationError(
+            "birth_identity_separation.invalid_or_nonfinite_feature.birth_outcome must be exactly "
+            f"'NOT_ESTABLISHED' (BIRTH_OUTCOMES 既存語彙), got {invalid_feature['birth_outcome']!r}"
+        )
+    if invalid_feature["outcome_detail"] != IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL:
+        raise Run9ValidationError(
+            "birth_identity_separation.invalid_or_nonfinite_feature.outcome_detail must be exactly "
+            f"{IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL!r}, got "
+            f"{invalid_feature['outcome_detail']!r}"
+        )
+    _require_non_empty_str(
+        invalid_feature["action"],
+        field="birth_identity_separation.invalid_or_nonfinite_feature.action",
+    )
+    _require_non_empty_str(
+        invalid_feature["note"], field="birth_identity_separation.invalid_or_nonfinite_feature.note"
     )
     _require_non_empty_str(
         birth["negative_reference_gate_note"],
@@ -20330,11 +20450,10 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         required_keys=frozenset({"verbatim", "unchanged", "prohibition"}),
     )
     _require_non_empty_str(immutability["verbatim"], field="immutability.verbatim")
-    if tuple(immutability["unchanged"]) != _IDENTITY_PROTOCOL_UNCHANGED_ITEMS:
-        raise Run9ValidationError(
-            f"immutability.unchanged must equal {_IDENTITY_PROTOCOL_UNCHANGED_ITEMS!r} exactly "
-            f"(順序込み・裁定§7逐語列挙), got {immutability['unchanged']!r}"
-        )
+    _require_ordered_str_list_matching_tuple(
+        immutability["unchanged"], field="immutability.unchanged",
+        expected=_IDENTITY_PROTOCOL_UNCHANGED_ITEMS,
+    )
     _require_non_empty_str(immutability["prohibition"], field="immutability.prohibition")
 
     # --- execution_order（裁定 §8）------------------------------------------
@@ -20345,12 +20464,11 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         }),
     )
     _require_non_empty_str(execution_order["verbatim"], field="execution_order.verbatim")
-    if tuple(execution_order["prerequisites_before_birth_gate"]) != _IDENTITY_PROTOCOL_PREREQUISITES:
-        raise Run9ValidationError(
-            f"execution_order.prerequisites_before_birth_gate must equal "
-            f"{_IDENTITY_PROTOCOL_PREREQUISITES!r} exactly (順序込み・裁定§8逐語列挙), got "
-            f"{execution_order['prerequisites_before_birth_gate']!r}"
-        )
+    _require_ordered_str_list_matching_tuple(
+        execution_order["prerequisites_before_birth_gate"],
+        field="execution_order.prerequisites_before_birth_gate",
+        expected=_IDENTITY_PROTOCOL_PREREQUISITES,
+    )
     _require_non_empty_str(execution_order["gate_sequencing"], field="execution_order.gate_sequencing")
     _require_non_empty_str(execution_order["this_pr_scope"], field="execution_order.this_pr_scope")
 
@@ -20365,15 +20483,10 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
     _require_non_empty_str(
         invariants["birth_gate_failure_action"], field="invariants.birth_gate_failure_action"
     )
-    if (
-        tuple(invariants["same_attempt_prohibitions"])
-        != _IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS
-    ):
-        raise Run9ValidationError(
-            f"invariants.same_attempt_prohibitions must equal "
-            f"{_IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS!r} exactly (順序込み・裁定§9逐語列挙), "
-            f"got {invariants['same_attempt_prohibitions']!r}"
-        )
+    _require_ordered_str_list_matching_tuple(
+        invariants["same_attempt_prohibitions"], field="invariants.same_attempt_prohibitions",
+        expected=_IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS,
+    )
     _require_non_empty_str(invariants["escape_hatch"], field="invariants.escape_hatch")
 
 
@@ -20426,7 +20539,11 @@ def load_pinned_identity_decision_protocol(
         sections` の各エントリが `inputs/identity_metric_space.json` に
         実在することを `_resolve_identity_metric_space_ref()` で走査する
         （dotted path の typo・存在しない節名の宣言を fail-closed で
-        検出する）。
+        検出する）。本 cross-check が読む document 自体も
+        `_load_identity_metric_space_document_verified()` 経由で実バイトの
+        正規形 sha256 を `domain.metric_space_sha` と再照合する（PR #333
+        第1巡指摘2, P1, 採用 — cross-check (2) は宣言値同士の比較のみで
+        実ファイルを再ハッシュしていなかった欠陥の是正）。
 
     戻り値は検証済み manifest dict。
     """
@@ -20518,8 +20635,14 @@ def load_pinned_identity_decision_protocol(
         )
 
     # (12) cross-check (7): supersede_declaration の各節名が
-    # identity_metric_space.json に実在することを走査する。
-    identity_metric_space_document = _load_identity_metric_space_document()
+    # identity_metric_space.json に実在することを走査する。PR #333 Codex
+    # bot レビュー第1巡指摘2（P1、採用）: cross-check (2) は宣言値同士の
+    # 比較のみだったため、`_load_identity_metric_space_document_verified()`
+    # で実バイトから再計算した正規形 sha256 を domain.metric_space_sha と
+    # fail-closed で照合してから読む（stale/改ざん checkout の拒否）。
+    identity_metric_space_document = _load_identity_metric_space_document_verified(
+        domain.metric_space_sha
+    )
     supersede = data["supersede_declaration"]
     for ref in list(supersede["preserved_sections"]) + list(supersede["superseded_sections"]):
         _resolve_identity_metric_space_ref(

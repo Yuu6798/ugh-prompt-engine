@@ -12,6 +12,13 @@
       "outcome_detail": "ESTABLISHED_BY_MACHINE_FEATURE"
     },
     "formula": "d12 = distance(R9F-01:r0, R9F-02:r0)",
+    "invalid_or_nonfinite_feature": {
+      "action": "凍結し、学習へ進まない（同attempt内でのepsilon追加・再試行は行わない——裁定§9）。",
+      "birth_outcome": "NOT_ESTABLISHED",
+      "condition": "R9F-01/R9F-02いずれかのfeatureがinvalidまたはnon-finite",
+      "note": "d12=0によるfeature collapse（established/not_establishedの分岐対象）とは区別される測定/実装失敗系の凍結——裁定§4『両featureがvalid/finiteであり、d12 > 0の場合のみ、BIRTH = ESTABLISHED_BY_MACHINE_FEATURE』の逆条件（valid/finite前提が満たされない場合）に対する、裁定§9『Birth Gate不成立時はNOT_ESTABLISHEDとして凍結する』の機械符号化であり、新規則の発明ではない。",
+      "outcome_detail": "IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_NONFINITE_FEATURE"
+    },
     "negative_reference_gate_note": "negative reference gateは同じd12を対称参照する。独立証拠として二重計上しない。",
     "not_established": {
       "action": "凍結し、学習へ進まない。",

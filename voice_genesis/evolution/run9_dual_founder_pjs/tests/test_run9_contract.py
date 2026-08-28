@@ -11415,9 +11415,14 @@ def test_harness3b_failure_abort_criteria_repinned_lineage_ten_generations(
     + design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
     rule 7（Birth Identity separation not established）/rule 16（Identity
     drift beyond non-inferiority）の theta_cal(F)/calibration 依存の stale
-    文言を rev 0.6 supersede 後の記述へ訂正した第11世代が
-    append-only で、現在値が最新（RUN9-L0-HARNESS-3c rev 0.6）のもので
-    あることを明示的に確認する（repin 漏れの回帰防止）。"""
+    文言を rev 0.6 supersede 後の記述へ訂正した第11世代 + PR #333 Codex bot
+    レビュー第1巡指摘1 是正（2026-08-28、Fable 判定）で rule 14/16 の
+    checkpoint/machine_promotion_condition が引き続き参照していた
+    `hypothesis_algebra_sha`（rev 0.6 で identity decision protocol の
+    pin 欄へ用途確定済み）を、H1-H6 δtarget/εk 校正前提の新追跡先
+    `hypothesis_threshold_calibration_sha` へ更新した第12世代が
+    append-only で、現在値が最新のものであることを明示的に確認する
+    （repin 漏れの回帰防止）。"""
     round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
     round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
     round3_value = "6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44"
@@ -11429,11 +11434,12 @@ def test_harness3b_failure_abort_criteria_repinned_lineage_ten_generations(
     round9_value = "da8aee0d49a5dac58b5ddd6b6dc7959f1a15914e9a6e565a4e6851e2b6c7a527"
     round10_value = "ead64d2fd7896728b1fc7070c90d7a5b2d8bb17740e21c4056a5210a081cf98b"
     round11_value = "297dd46aaa8c520238072f93b9d5e18748dbdd31b4a389a4a8d7e48cd70d8cba"
+    round12_value = "3de4db27a23498c236b75b3efbb152c0675fce84fe2d6bddfb8bd565850b1251"
     current = contract_raw["failure_abort_criteria_sha"]["value"]
-    assert current == round11_value
+    assert current == round12_value
     assert current not in (
         round1_value, round2_value, round3_value, round4_value, round5_value, round6_value,
-        round7_value, round8_value, round9_value, round10_value,
+        round7_value, round8_value, round9_value, round10_value, round11_value,
     )
     assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
 
@@ -11852,9 +11858,13 @@ def test_execprofile_pre_run_pending_count_is_nine(contract: m.Run9RunContract) 
     manifest_sha` が PINNED 化され、7件へ減少（下記
     `test_harness3b_pre_run_pending_count_is_seven` 参照）。さらに
     design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
-    `hypothesis_algebra_sha` が PINNED 化され、現在は下記
-    `test_harness3c_rev06_pre_run_pending_count_is_six` が固定する6件へ
-    さらに減少した——テスト名はレビュー履歴保持のため改名しない〕。"""
+    `hypothesis_algebra_sha` が PINNED 化され、下記
+    `test_harness3c_rev06_pre_run_pending_count_is_six` が固定していた
+    6件へ一時的に減少したが、PR #333 Codex bot レビュー第1巡指摘1
+    （2026-08-28、P1、採用）で `hypothesis_threshold_calibration_sha`
+    （H1-H6 δtarget/εk 校正欄の分離新設）が追加されたため、現在は下記
+    `test_pr333_r1_pre_run_pending_count_is_seven` が固定する7件へ増加
+    した——テスト名はレビュー履歴保持のため改名しない〕。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
@@ -11870,12 +11880,13 @@ def test_execprofile_pre_run_pending_count_is_nine(contract: m.Run9RunContract) 
     assert "execution_profile_sha" not in pending
     assert "dataset_manifest_sha" not in pending
     assert "dataset_row_order_sha" not in pending
-    # 現在値は6/7（下記 test_harness3c_rev06_pre_run_pending_count_is_six と
+    # 現在値は7/8（下記 test_pr333_r1_pre_run_pending_count_is_seven と
     # 同一の期待値）——`expected_speaker_map_sha`/`education_technique_
-    # lesson_manifest_sha`/`hypothesis_algebra_sha` の PINNED 化以降、
-    # 9/10・8/9・7/8 という値そのものはもはや成立しない。
-    assert len(pending) == 6
-    assert len(all_pending) == 7
+    # lesson_manifest_sha`/`hypothesis_algebra_sha` の PINNED 化 +
+    # `hypothesis_threshold_calibration_sha` の新設以降、9/10・8/9・7/8・
+    # 6/7 という値そのものはもはや成立しない。
+    assert len(pending) == 7
+    assert len(all_pending) == 8
 
 
 def test_harness3a_pre_run_pending_count_is_eight(contract: m.Run9RunContract) -> None:
@@ -11890,9 +11901,12 @@ def test_harness3a_pre_run_pending_count_is_eight(contract: m.Run9RunContract) -
     manifest_sha` が追加で PINNED 化され、7件へ減少（下記
     `test_harness3b_pre_run_pending_count_is_seven` 参照）。さらに
     design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
-    `hypothesis_algebra_sha` が PINNED 化され、現在は下記
-    `test_harness3c_rev06_pre_run_pending_count_is_six` が固定する6件へ
-    さらに減少した——テスト名はレビュー履歴保持のため改名しない〕。"""
+    `hypothesis_algebra_sha` が PINNED 化され、下記
+    `test_harness3c_rev06_pre_run_pending_count_is_six` が固定していた
+    6件へ一時的に減少したが、PR #333 Codex bot レビュー第1巡指摘1
+    （2026-08-28、P1、採用）で `hypothesis_threshold_calibration_sha` が
+    追加されたため、現在は下記 `test_pr333_r1_pre_run_pending_count_is_seven`
+    が固定する7件へ増加した——テスト名はレビュー履歴保持のため改名しない〕。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
@@ -11903,12 +11917,13 @@ def test_harness3a_pre_run_pending_count_is_eight(contract: m.Run9RunContract) -
         n for n in m.CONTRACT_PIN_FIELDS
         if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
     ]
-    # 現在値は6/7（下記 test_harness3c_rev06_pre_run_pending_count_is_six と
+    # 現在値は7/8（下記 test_pr333_r1_pre_run_pending_count_is_seven と
     # 同一の期待値）——`education_technique_lesson_manifest_sha`/
-    # `hypothesis_algebra_sha` の PINNED 化以降、7/8 という値そのものは
+    # `hypothesis_algebra_sha` の PINNED 化 + `hypothesis_threshold_
+    # calibration_sha` の新設以降、8/9・7/8・6/7 という値そのものは
     # もはや成立しない。
-    assert len(pending) == 6
-    assert len(all_pending) == 7
+    assert len(pending) == 7
+    assert len(all_pending) == 8
     assert "dependency_pins_sha" in pending
     assert "measurement_spec_sha" in pending
     assert "expected_speaker_map_sha" not in pending
@@ -11927,9 +11942,12 @@ def test_harness3b_pre_run_pending_count_is_seven(contract: m.Run9RunContract) -
 
     〔履歴: 本テストが固定していた「7件」は RUN9-L0-HARNESS-3b 時点の値。
     design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
-    `hypothesis_algebra_sha` が追加で PINNED 化され、現在は下記
-    `test_harness3c_rev06_pre_run_pending_count_is_six` が固定する6件へ
-    さらに減少した——テスト名はレビュー履歴保持のため改名しない〕。"""
+    `hypothesis_algebra_sha` が追加で PINNED 化され、下記
+    `test_harness3c_rev06_pre_run_pending_count_is_six` が固定していた
+    6件へ一時的に減少したが、PR #333 Codex bot レビュー第1巡指摘1
+    （2026-08-28、P1、採用）で `hypothesis_threshold_calibration_sha` が
+    追加されたため、現在は下記 `test_pr333_r1_pre_run_pending_count_is_seven`
+    が固定する7件へ増加した——テスト名はレビュー履歴保持のため改名しない〕。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
@@ -11940,8 +11958,8 @@ def test_harness3b_pre_run_pending_count_is_seven(contract: m.Run9RunContract) -
         n for n in m.CONTRACT_PIN_FIELDS
         if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
     ]
-    assert len(pending) == 6
-    assert len(all_pending) == 7
+    assert len(pending) == 7
+    assert len(all_pending) == 8
     assert "dependency_pins_sha" in pending
     assert "measurement_spec_sha" in pending
     assert "expected_speaker_map_sha" not in pending
@@ -11957,7 +11975,17 @@ def test_harness3c_rev06_pre_run_pending_count_is_six(contract: m.Run9RunContrac
     `hypothesis_algebra_sha` を（H1-H6 閾値校正欄から identity decision
     protocol の pin 欄へ用途確定した上で）PINNED 化したことにより、
     pre-run PENDING 欄は7→6件へ減少した（optional の human_evaluation_
-    protocol_sha を含めると総 PENDING 8→7件）。"""
+    protocol_sha を含めると総 PENDING 8→7件）。
+
+    〔履歴: 本テストが固定していた「6件」は RUN9-L0-HARNESS-3c rev 0.6
+    時点の値。PR #333 Codex bot レビュー第1巡指摘1（2026-08-28、P1、
+    採用）: `hypothesis_algebra_sha` の pin 用途が identity decision
+    protocol へ確定した結果、design §18 / failure_abort_criteria.json
+    rule 14・16 が要求する H1-H6 δtarget/εk 校正前提の追跡が pre-run
+    閉集合から外れていた欠陥を是正するため `hypothesis_threshold_
+    calibration_sha` を分離新設し、現在は下記
+    `test_pr333_r1_pre_run_pending_count_is_seven` が固定する7件へ
+    増加した——テスト名はレビュー履歴保持のため改名しない〕。"""
     revalidated = m.load_run9_contract(contract.raw)
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
@@ -11968,11 +11996,44 @@ def test_harness3c_rev06_pre_run_pending_count_is_six(contract: m.Run9RunContrac
         n for n in m.CONTRACT_PIN_FIELDS
         if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
     ]
-    assert len(pending) == 6
-    assert len(all_pending) == 7
+    assert len(pending) == 7
+    assert len(all_pending) == 8
     assert "dependency_pins_sha" in pending
     assert "measurement_spec_sha" in pending
     assert "hypothesis_algebra_sha" not in pending
+    assert "hypothesis_threshold_calibration_sha" in pending
+    assert "expected_speaker_map_sha" not in pending
+    assert "execution_profile_sha" not in pending
+    assert "dataset_manifest_sha" not in pending
+    assert "dataset_row_order_sha" not in pending
+    assert "education_technique_lesson_manifest_sha" not in pending
+    assert m.gate_state(revalidated) == "BLOCKED"
+
+
+def test_pr333_r1_pre_run_pending_count_is_seven(contract: m.Run9RunContract) -> None:
+    """PR #333 Codex bot レビュー第1巡指摘1（2026-08-28、P1、採用）:
+    `hypothesis_threshold_calibration_sha` を新設したことにより、
+    pre-run PENDING 欄は6→7件へ増加した（optional の human_evaluation_
+    protocol_sha を含めると総 PENDING 7→8件）——design §18 /
+    failure_abort_criteria.json rule 14・16 が要求する H1-H6 δtarget/εk
+    校正前提が rev 0.6 で pre-run 閉集合から外れていた欠陥の是正
+    （`hypothesis_algebra_sha` 自体は無改変のまま）。"""
+    revalidated = m.load_run9_contract(contract.raw)
+    excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
+    pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
+    pending = [
+        n for n in pre_run_fields if not m._is_field_pinned(revalidated.pin_field(n))
+    ]
+    all_pending = [
+        n for n in m.CONTRACT_PIN_FIELDS
+        if n not in m.CONTRACT_POST_RUN_PIN_FIELDS and not m._is_field_pinned(revalidated.pin_field(n))
+    ]
+    assert len(pending) == 7
+    assert len(all_pending) == 8
+    assert "dependency_pins_sha" in pending
+    assert "measurement_spec_sha" in pending
+    assert "hypothesis_algebra_sha" not in pending
+    assert "hypothesis_threshold_calibration_sha" in pending
     assert "expected_speaker_map_sha" not in pending
     assert "execution_profile_sha" not in pending
     assert "dataset_manifest_sha" not in pending
@@ -15486,9 +15547,11 @@ def test_harness2_reexport_manifest_pinning_does_not_affect_pending_set(
     RUN9-L0-HARNESS-3b（2026-08-27）で `education_technique_lesson_
     manifest_sha` も PINNED 化され pre-run 必須7欄・総 PENDING 8欄へ、
     design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
-    `hypothesis_algebra_sha` も PINNED 化されたため、現在は下記のとおり
-    pre-run 必須6欄・総 PENDING 7欄——
-    `test_harness3c_rev06_pre_run_pending_count_is_six` と同一の期待値〕。"""
+    `hypothesis_algebra_sha` も PINNED 化され pre-run 必須6欄・総
+    PENDING 7欄へ、PR #333 Codex bot レビュー第1巡指摘1（2026-08-28、
+    P1、採用）で `hypothesis_threshold_calibration_sha` が新設された
+    ため、現在は下記のとおり pre-run 必須7欄・総 PENDING 8欄——
+    `test_pr333_r1_pre_run_pending_count_is_seven` と同一の期待値〕。"""
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
     pending = [n for n in pre_run_fields if not m._is_field_pinned(contract.pin_field(n))]
@@ -15498,8 +15561,8 @@ def test_harness2_reexport_manifest_pinning_does_not_affect_pending_set(
     ]
     assert "reexport_manifest_sha" not in pending
     assert "reexport_manifest_sha" not in all_pending
-    assert len(pending) == 6
-    assert len(all_pending) == 7
+    assert len(pending) == 7
+    assert len(all_pending) == 8
     assert m.gate_state(contract) == "BLOCKED"
 
 
@@ -19654,6 +19717,7 @@ def test_rev06_outcome_detail_constants_do_not_collide_with_existing_frozen_voca
     )
     assert m.IDENTITY_PROTOCOL_BIRTH_ESTABLISHED_DETAIL not in m.BIRTH_OUTCOMES
     assert m.IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL not in m.BIRTH_OUTCOMES
+    assert m.IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL not in m.BIRTH_OUTCOMES
     assert m.IDENTITY_PROTOCOL_RETENTION_STABLE_DETAIL not in m.IDENTITY_OUTCOMES
     assert m.IDENTITY_PROTOCOL_C1_MISMATCH_OUTCOME not in m.FAILURE_CLASSES
 
@@ -19667,8 +19731,12 @@ def test_rev06_hypothesis_algebra_sha_pinned_and_matches_protocol_file(
     field = contract_raw["hypothesis_algebra_sha"]
     assert field["status"] == "PINNED"
     assert field["value"] == m.compute_file_sha256(m.IDENTITY_DECISION_PROTOCOL_PATH)
+    # PR #333 第1巡指摘3（P2、採用）: invalid_or_nonfinite_feature 分岐
+    # 追加により repin（旧値
+    # 967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3 は
+    # RUN9_CONTRACT.yaml の【repin 履歴】コメントに保持）。
     assert field["value"] == (
-        "967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3"
+        "304e72376e30e8e3974485d393c1f56a7256017588bc877c2be15f080291fb77"
     )
     assert field["source"] == (
         "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json"
@@ -19837,3 +19905,180 @@ def test_rev06_failure_abort_criteria_rule7_and_rule16_reference_rev06() -> None
     assert by_id[7]["verbatim"] == "Birth Identity separation not established"
     assert by_id[16]["enforcement"] == "PROCEDURAL"
     assert by_id[16]["verbatim"] == "Identity drift beyond non-inferiority"
+
+
+# =============================================================================
+# PR #333 Codex bot レビュー第1巡対応（2026-08-28、フェーズ1）
+# 指摘1（P1、hypothesis_threshold_calibration_sha 新設）のカウント回帰は
+# 上記 `test_pr333_r1_pre_run_pending_count_is_seven` を参照。以下は
+# 指摘2（P1、metric space 実バイト再照合）・指摘3（P2、invalid/non-finite
+# feature 分岐）・指摘4（P2、protocol 配列比較の dict 偽装拒否）。
+# =============================================================================
+
+
+# --- 指摘2: _load_identity_metric_space_document_verified() ----------------
+
+
+def test_pr333_r1_load_identity_metric_space_document_verified_happy_path() -> None:
+    """実ファイルの実バイトから再計算した正規形 sha256 が
+    `domain.metric_space_sha`（PINNED 値）と一致する現行状態では例外なく
+    通り、`_load_identity_metric_space_document()`（sha 非照合の旧経路）
+    と同一の dict を返すこと。"""
+    domain = _real_identity_domain()
+    verified = m._load_identity_metric_space_document_verified(domain.metric_space_sha)
+    unverified = m._load_identity_metric_space_document()
+    assert verified == unverified
+
+
+def test_pr333_r1_load_identity_metric_space_document_verified_rejects_sha_mismatch(
+    tmp_path: Path,
+) -> None:
+    """渡された期待 sha256 が実バイトの正規形 sha256 と一致しない場合、
+    fail-closed で拒否すること（`_load_identity_metric_space_document()`
+    は sha を一切見ないため通してしまっていた——回帰確認）。"""
+    real_path = m.IDENTITY_METRIC_SPACE_PATH
+    copy_path = tmp_path / "identity_metric_space.json"
+    copy_path.write_bytes(real_path.read_bytes())
+    with pytest.raises(m.Run9ValidationError, match="正規形"):
+        m._load_identity_metric_space_document_verified("0" * 64, path=copy_path)
+
+
+def test_pr333_r1_load_identity_metric_space_document_verified_detects_content_drift(
+    tmp_path: Path,
+) -> None:
+    """PR #333 第1巡指摘2 の直接再現: `identity_metric_space.json` の
+    内容が改変されても、期待 sha256（改変前の実 pin 値）を渡された場合は
+    その改変を fail-closed で検出すること——旧
+    `_load_identity_metric_space_document()` はこの検出を一切行わず、
+    改変された feature/distance 定義を素通りで消費していた。"""
+    domain = _real_identity_domain()
+    real_path = m.IDENTITY_METRIC_SPACE_PATH
+    tampered = m._loads_strict_json(real_path.read_text(encoding="utf-8"))
+    # feature_extractor 等の深部を改変（トップレベルキー丸ごとの追加でも
+    # 正規形 sha256 は変わるため、実在の枝を書き換える）。
+    tampered["metric_version"] = tampered.get("metric_version", "tampered") + "-TAMPERED"
+    tampered_path = tmp_path / "identity_metric_space.json"
+    tampered_path.write_text(
+        json.dumps(tampered, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(m.Run9ValidationError, match="正規形"):
+        m._load_identity_metric_space_document_verified(
+            domain.metric_space_sha, path=tampered_path
+        )
+
+
+def test_pr333_r1_load_pinned_identity_decision_protocol_detects_metric_space_content_drift(
+    contract: m.Run9RunContract, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """統合確認: `identity_metric_space.json` の on-disk 内容が改変されて
+    いても、protocol 側の宣言値 (`metric_reference.metric_space_sha`) と
+    contract 側の宣言値 (`domain.metric_space_sha`) が両方とも改変前の値の
+    ままなら（= cross-check (2) は宣言値同士の比較のみのため通過する）、
+    `load_pinned_identity_decision_protocol()` 全体としては cross-check
+    (7) の実バイト再照合で fail-closed 拒否すること——protocol/contract は
+    無改変のまま、`identity_metric_space.json` 側だけを差し替える。"""
+    domain = _real_identity_domain()
+    real_path = m.IDENTITY_METRIC_SPACE_PATH
+    tampered = m._loads_strict_json(real_path.read_text(encoding="utf-8"))
+    tampered["metric_version"] = tampered.get("metric_version", "tampered") + "-TAMPERED"
+    tampered_path = tmp_path / "identity_metric_space.json"
+    tampered_path.write_text(
+        json.dumps(tampered, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(m, "IDENTITY_METRIC_SPACE_PATH", tampered_path)
+    with pytest.raises(m.Run9ValidationError, match="正規形"):
+        m.load_pinned_identity_decision_protocol(contract, domain=domain)
+
+
+# --- 指摘3: birth_identity_separation.invalid_or_nonfinite_feature --------
+
+
+def test_pr333_r1_validate_rejects_missing_invalid_feature_key() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    del data["birth_identity_separation"]["invalid_or_nonfinite_feature"]
+    with pytest.raises(m.Run9ValidationError, match="missing required key"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r1_validate_rejects_wrong_invalid_feature_outcome_detail() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_identity_separation"]["invalid_or_nonfinite_feature"]["outcome_detail"] = (
+        "MADE_UP_LABEL"
+    )
+    with pytest.raises(m.Run9ValidationError, match="invalid_or_nonfinite_feature.outcome_detail"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r1_validate_rejects_wrong_invalid_feature_birth_outcome() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["birth_identity_separation"]["invalid_or_nonfinite_feature"]["birth_outcome"] = (
+        "ESTABLISHED"
+    )
+    with pytest.raises(m.Run9ValidationError, match="invalid_or_nonfinite_feature.birth_outcome"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r1_invalid_feature_detail_constant_distinct_from_collapse_detail() -> None:
+    """invalid/non-finite feature の凍結（測定/実装失敗系）と d12=0 の
+    feature collapse（裁定§4の正規の NOT_ESTABLISHED 条件）は別ラベルで
+    machine 可読に区別されること——両者を同一定数へ縮退させない。"""
+    assert (
+        m.IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL
+        != m.IDENTITY_PROTOCOL_BIRTH_COLLAPSE_DETAIL
+    )
+    assert m.IDENTITY_PROTOCOL_BIRTH_INVALID_FEATURE_DETAIL not in m.BIRTH_OUTCOMES
+
+
+# --- 指摘4: protocol 配列比較の dict 偽装拒否 -------------------------------
+
+
+def _dict_masquerading_as_ordered_list(expected: Tuple[str, ...]) -> Dict[str, str]:
+    """`tuple(dict)` がキー列を返す性質を使って、期待 tuple と同じ順序の
+    キーを持つ insertion-ordered dict（値は任意）を作る——旧実装の
+    `tuple(value) != expected` を偽通過し得た形状。"""
+    return {key: "ARBITRARY_VALUE_NOT_A_LIST_ELEMENT" for key in expected}
+
+
+def test_pr333_r1_validate_rejects_dict_masquerading_as_immutability_unchanged() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["immutability"]["unchanged"] = _dict_masquerading_as_ordered_list(
+        m._IDENTITY_PROTOCOL_UNCHANGED_ITEMS
+    )
+    with pytest.raises(m.Run9ValidationError, match="immutability.unchanged must be a list"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r1_validate_rejects_dict_masquerading_as_prerequisites() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["execution_order"]["prerequisites_before_birth_gate"] = (
+        _dict_masquerading_as_ordered_list(m._IDENTITY_PROTOCOL_PREREQUISITES)
+    )
+    with pytest.raises(
+        m.Run9ValidationError,
+        match="execution_order.prerequisites_before_birth_gate must be a list",
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r1_validate_rejects_dict_masquerading_as_same_attempt_prohibitions() -> None:
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["invariants"]["same_attempt_prohibitions"] = _dict_masquerading_as_ordered_list(
+        m._IDENTITY_PROTOCOL_SAME_ATTEMPT_PROHIBITIONS
+    )
+    with pytest.raises(
+        m.Run9ValidationError, match="invariants.same_attempt_prohibitions must be a list"
+    ):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r1_validate_still_rejects_reordered_list_after_shape_guard() -> None:
+    """形状ガード追加後も、実際の list に対する順序込み厳密一致の既存挙動
+    （並び替え拒否）が壊れていないこと（非回帰）。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["invariants"]["same_attempt_prohibitions"] = list(
+        reversed(data["invariants"]["same_attempt_prohibitions"])
+    )
+    with pytest.raises(m.Run9ValidationError, match="invariants.same_attempt_prohibitions"):
+        m.validate_identity_decision_protocol(data)

@@ -928,12 +928,20 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6、2026-08-27）で
   `hypothesis_algebra_sha` が（H1-H6 閾値校正欄から Identity decision
   protocol の pin 欄へ用途確定した上で）PINNED 化され、残 PENDING は
-  下記のとおり pre-run 必須6欄（総 PENDING 7欄）へ減少した——下記
-  「解消済み（RUN9-L0-HARNESS-3c rev 0.6, 2026-08-27）」節参照
+  pre-run 必須6欄（総 PENDING 7欄）へ一時的に減少した——下記
+  「解消済み（RUN9-L0-HARNESS-3c rev 0.6, 2026-08-27）」節参照。続けて
+  PR #333 Codex bot レビュー第1巡指摘1（2026-08-28、P1、採用）で、
+  design §18（v0.1 923-965行）/ `inputs/failure_abort_criteria.json`
+  rule 14・16 が要求する H1-H6 δtarget/εk 校正前提が rev 0.6 の pin 用途
+  変更により pre-run 閉集合の外へ落ちていた欠陥を是正するため、新規
+  `hypothesis_threshold_calibration_sha`（PENDING）を分離新設した。残
+  PENDING は下記のとおり pre-run 必須7欄（総 PENDING 8欄）へ増加した——
+  下記「解消済み（PR #333 第1巡指摘1, 2026-08-28）」節参照
   （`attempt_id`/`repository_commit_sha`/`config_sha`/`dependency_pins_sha`/
-  `learning_recipe_sha`/`measurement_spec_sha` の
-  pre-run 必須6欄が引き続き PENDING のため（optional の
-  `human_evaluation_protocol_sha` を含めると総 PENDING 7欄）——
+  `learning_recipe_sha`/`measurement_spec_sha`/`hypothesis_threshold_
+  calibration_sha` の
+  pre-run 必須7欄が引き続き PENDING のため（optional の
+  `human_evaluation_protocol_sha` を含めると総 PENDING 8欄）——
   `tests/test_run9_contract.py` の回帰テストで機械確認済み）。
 
 **解消済み（RUN9-L0-HARNESS-1, 2026-08-26）**:
@@ -1267,6 +1275,19 @@ machine-independent（実音源・実 render・実学習を要さない）次段
   [`HARNESS3B_EDUCATION_LESSON_RECORD.md`](./HARNESS3B_EDUCATION_LESSON_RECORD.md)
   を正とする。design_revision は本改訂で変更していない（0.5 のまま —
   channel 意味論・抽出法・正規化法を変更していないため）。
+
+**解消済み（PR #333 第1巡指摘1, 2026-08-28）**:
+- H1-H6 δtarget/εk 校正前提が pre-run 閉集合から外れていた欠陥（Codex bot
+  レビュー第1巡指摘1、P1、採用）→ `hypothesis_algebra_sha` が rev 0.6
+  裁定 §7 で identity decision protocol の pin 欄へ用途確定した結果、
+  design §18（v0.1 923-965行、`LCB_95(Δtarget,i) > δtarget` /
+  `LCB_95(Δk,i) >= -εk`）と `inputs/failure_abort_criteria.json` rule
+  14・16（machine_promotion_condition が実装・実測校正を要求——rev 0.6
+  supersede の対象外であることをグラウンディングで確認済み）が要求する
+  H1-H6 δtarget/εk 校正前提の追跡が、pin 用途の付け替えにより pre-run
+  gate の閉集合から漏れていた。新規 `hypothesis_threshold_calibration_sha`
+  （PENDING）を分離新設し、`gate_state()` の pre-run 閉集合へ含めた
+  （`hypothesis_algebra_sha` 自体・裁定 §7 の pin 用途確定は無改変）。
 
 **解消済み（RUN9-L0-HARNESS-3c rev 0.6, 2026-08-27）**:
 - `hypothesis_algebra_sha` 未 pin →

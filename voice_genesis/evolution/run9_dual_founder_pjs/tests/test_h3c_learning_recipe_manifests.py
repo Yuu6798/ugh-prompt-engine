@@ -170,14 +170,19 @@ def test_h3c_pre_run_pending_field_count_is_seven(contract: m.Run9RunContract) -
     """テスト名は歴史的固定（rename しない、他の pending-count テストと
     同型の規約）。値は design_revision 0.6（RUN9-L0-HARNESS-3c rev 0.6）で
     `hypothesis_algebra_sha` が PINNED 化されたことにより 7 → 6 件へ
-    減少した。"""
+    減少したが、PR #333 Codex bot レビュー第1巡指摘1（2026-08-28、P1、
+    採用）で `hypothesis_threshold_calibration_sha`（H1-H6 δtarget/εk
+    校正欄の分離新設）が追加されたため、現在は 6 → 7 件へ増加した
+    （`test_pr333_r1_pre_run_pending_count_is_seven` と同一の期待値。
+    テスト名はレビュー履歴保持のため改名しない）。"""
     excluded = m.CONTRACT_POST_RUN_PIN_FIELDS | m.CONTRACT_OPTIONAL_PIN_FIELDS
     pre_run_fields = [n for n in m.CONTRACT_PIN_FIELDS if n not in excluded]
     pending = [n for n in pre_run_fields if not m._is_field_pinned(contract.pin_field(n))]  # noqa: SLF001
-    assert len(pending) == 6, pending
+    assert len(pending) == 7, pending
     for entry in _MANIFESTS.values():
         assert entry["pin_name"] not in pending
     assert "hypothesis_algebra_sha" not in pending
+    assert "hypothesis_threshold_calibration_sha" in pending
 
 
 def test_h3c_learning_recipe_sha_still_pending(contract: m.Run9RunContract) -> None:

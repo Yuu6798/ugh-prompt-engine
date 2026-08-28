@@ -3452,15 +3452,55 @@ measurement_spec_sha:
 # 用途確定し、H1-H6 閾値校正は本欄の対象から外れた（H1-H6 自体の要否は
 # rev 0.6 の対象外——別途の設計判断が必要な場合は別欄・別 design_revision
 # で扱う）。〕
+# 【repin 履歴（append-only）】
+# - RUN9-L0-HARNESS-3c rev 0.6（2026-08-27、値
+#   967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3）:
+#   初回 PINNED 化（上記コメント参照）。
+# - PR #333 Codex bot レビュー第1巡指摘3（2026-08-28、P2、採用、値
+#   304e72376e30e8e3974485d393c1f56a7256017588bc877c2be15f080291fb77 へ
+#   repin）: `birth_identity_separation` へ `invalid_or_nonfinite_feature`
+#   分岐（新定数 `IDENTITY_PROTOCOL_BIRTH_NOT_ESTABLISHED_INVALID_OR_
+#   NONFINITE_FEATURE`）を追加した——established/not_established のいずれ
+#   の条件にも該当しない invalid/non-finite feature の未登録分岐を埋める
+#   （d12=0 の feature collapse とは区別される測定/実装失敗系の凍結、
+#   裁定§4逆条件 + 裁定§9 の機械符号化。新規則の発明ではない）。
 hypothesis_algebra_sha:
-  value: "967e40c2291b7532783b0becd574f16fba63972b5007bbe5c055979ef1de8db3"
+  value: "304e72376e30e8e3974485d393c1f56a7256017588bc877c2be15f080291fb77"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_decision_protocol_v0.6.json
   reason: >-
     rev 0.6 裁定 §7「同protocolのraw SHA256をhypothesis_algebra_shaへ
     PINNEDする」に基づき pin。値は inputs/identity_decision_protocol_
     v0.6.json の実バイト sha256（load_pinned_identity_decision_protocol()
-    が消費時に再照合する——直接 json.load() は契約違反）。
+    が消費時に再照合する——直接 json.load() は契約違反）。PR #333 第1巡
+    指摘3（P2、採用）で invalid_or_nonfinite_feature 分岐を追加したため
+    repin（上記【repin 履歴】参照）。
+
+# PR #333 Codex bot レビュー第1巡指摘1（P1、採用）新設: hypothesis_algebra_
+# sha が rev 0.6 裁定 §7 で identity decision protocol の pin へ用途確定
+# したため、design §18（v0.1 923-965行、LCB_95(Δtarget,i) > δtarget /
+# LCB_95(Δk,i) >= -εk）/ inputs/failure_abort_criteria.json rule 14・16
+# （machine_promotion_condition が「hypothesis_algebra_sha の schema/
+# validator（δtarget/εk 校正ロジック含む）が実装され、positive/negative
+# control からの実測校正が完了した時点で MACHINE へ昇格する」と明記——
+# rev 0.6 supersede の対象は identity_decision_protocol の calibration/
+# decision_rule 節のみで H1-H6 の δtarget/εk 校正要求は supersede されて
+# いない、grep 確認済み）の H1–H6 δtarget/εk 校正前提を追跡する pin を
+# 分離新設。校正の実施・凍結まで PENDING（裁定 §7 の pin 用途確定は不変の
+# まま——hypothesis_algebra_sha 自体は本指摘で変更しない）。
+hypothesis_threshold_calibration_sha:
+  value: null
+  status: PENDING
+  reason: >-
+    DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §18.1 Target
+    Skill Gain（δtarget、`δtargetはpositive/negative controlから凍結する。`）
+    / §18.2 Non-Inferiority（εk、対象軸に Identity を含む）の LCB_95 比較式
+    に必要な δtarget/εk の実測校正（positive/negative control からの校正）
+    が未実施。校正ロジック・schema/validator も repo に未実装（Group D、
+    grep 確認: 該当なし）。failure_abort_criteria.json rule 14/16 の
+    machine_promotion_condition が要求する実装・実測校正が完了するまで
+    PENDING のまま——H1-H6 自体の要否は rev 0.6 の対象外（別途の設計判断が
+    必要な場合は別途 design_revision で扱う）。
 
 # optional 欄（PR #317 Codex bot レビュー第1巡 Fix 1 採用、
 # run9_schema.CONTRACT_OPTIONAL_PIN_FIELDS）: rev 0.3 改訂F により人間
@@ -3784,8 +3824,33 @@ cost_record_sha:
 #   ま）は変わらない。旧文言はいずれも〔履歴〕として rule 本文内に保持
 #   （削除しない）。他 rule・post_stop_prohibitions・classification_
 #   policy は無改変（sha256 確認済み）。
+# - PR #333 Codex bot レビュー第1巡指摘1 是正（2026-08-28、Fable 判定、値
+#   3de4db27a23498c236b75b3efbb152c0675fce84fe2d6bddfb8bd565850b1251 へ
+#   repin）: 本巡指摘1（P1「Keep the H1–H6 calibration gate pending」）と
+#   同型の正典矛盾を残さないための是正。rule 14/16 の checkpoint/
+#   machine_promotion_condition が引き続き「hypothesis_algebra_sha は
+#   schema 文字列・REQUIRED_KEYS・validator のいずれも未定義」等、H1-H6
+#   δtarget/εk 校正前提の追跡先として `hypothesis_algebra_sha` を参照した
+#   ままだった——同欄は rev 0.6 裁定 §7「同protocolのraw SHA256を
+#   hypothesis_algebra_shaへPINNEDする」により identity decision protocol
+#   の pin 欄へ用途確定済み（PINNED 化済み）であり、この参照は本巡指摘1
+#   の是正（`hypothesis_threshold_calibration_sha` の分離新設）と整合しな
+#   い stale 参照だった。
+#   (a) rule 14（mandatory metric degeneracy without audit fallback）:
+#   checkpoint の grep 確認対象を `hypothesis_algebra_sha` から
+#   `hypothesis_threshold_calibration_sha`（pin 欄のみ新設・PENDING、対応
+#   する manifest 実体・schema/validator は未定義のまま）へ更新。
+#   machine_promotion_condition も同様に追跡先を更新。
+#   (b) rule 16（Identity drift beyond non-inferiority）: checkpoint/
+#   machine_promotion_condition とも rule 14 と同型の理由で追跡先を更新。
+#   いずれも rev 0.6 裁定 §7 の pin 用途確定の経緯を一句添え、旧文言は
+#   〔履歴（PR #333 第1巡指摘1、2026-08-28）〕として rule 本文内に
+#   append-only 保持（削除しない）。rule_id/enforcement/verbatim・分類数
+#   （MACHINE 1件 / PROCEDURAL 19件）は無改変。他 rule・
+#   post_stop_prohibitions・classification_policy は無改変（sha256
+#   確認済み）。バイトが変わったため repin（12世代目）。
 failure_abort_criteria_sha:
-  value: "297dd46aaa8c520238072f93b9d5e18748dbdd31b4a389a4a8d7e48cd70d8cba"
+  value: "3de4db27a23498c236b75b3efbb152c0675fce84fe2d6bddfb8bd565850b1251"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 
