@@ -115,6 +115,30 @@ def test_c1_priority_records_all_applicable_keys() -> None:
     assert result["overall_pass"] is False
 
 
+def test_c1_same_wav_nonzero_feature_distance_is_sham_effect() -> None:
+    references, c0, c1, positive, pjs = _evidence()
+    _, sham = bp._control_profiles("R9F-01")  # noqa: SLF001
+    c1["R9F-01"][0] = _observation(
+        references["R9F-01"].wav,
+        [0.5, 1.0],
+        profile=sham.profile_id,
+    )
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+    )
+    matching = [
+        stop
+        for stop in result["audit"]["stops"]
+        if stop["founder_id"] == "R9F-01" and stop["cell"] == "c1" and stop["take_index"] == 0
+    ]
+    assert matching[0]["outcome"] == "C1_SHAM_EFFECT_DETECTED"
+    assert matching[0]["applicable_keys"] == ["on_nonzero"]
+
+
 def test_matching_wav_but_different_serialized_feature_is_implementation_failure() -> None:
     references, c0, c1, positive, pjs = _evidence()
     # Euclidean distance treats +0/-0 as equal, but the frozen exact-feature
@@ -415,6 +439,13 @@ def test_provenance_snapshot_rejects_executor_changed_since_module_load(
     monkeypatch.setitem(bp._LOAD_TIME_PROVENANCE_SHA256, "executor_sha256", "0" * 64)
     with pytest.raises(bp.BirthProbeError, match="executor_sha256 changed after executor module load"):
         bp._snapshot_provenance_inputs()
+
+
+def test_executor_digest_is_captured_before_numpy_import() -> None:
+    source = Path(bp.__file__).read_text(encoding="utf-8")
+    digest_capture = "_EXECUTOR_LOAD_SHA256 = hashlib.sha256(_EXECUTOR_PATH.read_bytes()).hexdigest()"
+    numpy_import = 'np = importlib.import_module("numpy")'
+    assert source.index(digest_capture) < source.index(numpy_import)
 
 
 @pytest.mark.parametrize(
