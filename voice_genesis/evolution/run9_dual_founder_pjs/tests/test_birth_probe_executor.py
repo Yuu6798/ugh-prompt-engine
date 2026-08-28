@@ -87,6 +87,17 @@ def _dependency_rows() -> list[dict[str, object]]:
     ]
 
 
+def _dependency_contract(manifest_path: Path, *, status: str = "PINNED", value: str | None = None):
+    digest = bp.sha256_bytes(manifest_path.read_bytes()) if value is None else value
+    return SimpleNamespace(
+        pin_field=lambda name: (
+            {"status": status, "value": digest}
+            if name == "dependency_pins_sha"
+            else pytest.fail(f"unexpected pin lookup: {name}")
+        )
+    )
+
+
 def test_happy_path_is_complete_deterministic_and_passes() -> None:
     references, c0, c1, positive, pjs = _evidence()
     first = bp.evaluate_birth_gate(
@@ -577,7 +588,7 @@ def test_main_provenance_guard_rejects_preloaded_repo_helper(
         bp._assert_helper_modules_not_preloaded()
 
 
-def test_direct_dependency_pins_are_read_from_recorded_manifest(
+def test_direct_dependency_pins_are_read_from_contract_pinned_manifest(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manifest_path = tmp_path / "dependency_pins_manifest.json"
@@ -585,7 +596,8 @@ def test_direct_dependency_pins_are_read_from_recorded_manifest(
         json.dumps({"python_dependency_pins": _dependency_rows()}), encoding="utf-8"
     )
     monkeypatch.setattr(bp, "_DIRECT_DEPENDENCY_MANIFEST_PATH", manifest_path)
-    assert bp._load_direct_dependency_pin_versions() == {
+    contract = _dependency_contract(manifest_path)
+    assert bp._load_direct_dependency_pin_versions(contract) == {
         "numpy": "2.4.6",
         "scipy": "1.17.1",
         "soundfile": "0.14.0",
@@ -593,6 +605,26 @@ def test_direct_dependency_pins_are_read_from_recorded_manifest(
         "onnxruntime": "1.29.0",
         "pyworld": "0.3.5",
     }
+
+
+@pytest.mark.parametrize(
+    ("status", "value"),
+    (("PENDING", None), ("PINNED", "0" * 64)),
+)
+def test_direct_dependency_manifest_requires_preregistered_matching_contract_pin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    status: str,
+    value: str | None,
+) -> None:
+    manifest_path = tmp_path / "dependency_pins_manifest.json"
+    manifest_path.write_text(
+        json.dumps({"python_dependency_pins": _dependency_rows()}), encoding="utf-8"
+    )
+    monkeypatch.setattr(bp, "_DIRECT_DEPENDENCY_MANIFEST_PATH", manifest_path)
+    contract = _dependency_contract(manifest_path, status=status, value=value)
+    with pytest.raises(bp.BirthProbeError, match="dependency_pins_sha does not match its RUN9 contract pin"):
+        bp._load_direct_dependency_pin_versions(contract)
 
 
 def test_direct_dependency_pin_record_must_be_verified_match(
@@ -604,8 +636,9 @@ def test_direct_dependency_pin_record_must_be_verified_match(
     manifest_path = tmp_path / "dependency_pins_manifest.json"
     manifest_path.write_text(json.dumps({"python_dependency_pins": rows}), encoding="utf-8")
     monkeypatch.setattr(bp, "_DIRECT_DEPENDENCY_MANIFEST_PATH", manifest_path)
+    contract = _dependency_contract(manifest_path)
     with pytest.raises(bp.BirthProbeError, match="not a verified MATCH for numpy"):
-        bp._load_direct_dependency_pin_versions()
+        bp._load_direct_dependency_pin_versions(contract)
 
 
 def test_execution_environment_validates_direct_dependency_versions(
@@ -731,6 +764,24 @@ def test_gate_synth_renderer_adapter_matches_runtime_note_and_tempo_contract() -
     renderer._gate = FakeGate()
     renderer._sf = FakeSoundFile()
     assert renderer("R9F-01", "reference", 0, None) == b"adapter-wav"
+
+
+def test_gate_synth_renderer_fails_closed_before_bypassing_c1_controlprofile() -> None:
+    renderer = object.__new__(bp.GateSynthRenderer)
+
+    class FakeGate:
+        @staticmethod
+        def run_pipeline(*args, **kwargs):
+            raise AssertionError("gate_synth must not run while C1 ControlProfile attachment is unsupported")
+
+    renderer._gate = FakeGate()
+    profile = {
+        "branch": "CONTROL",
+        "revision": "r_sham",
+        "partitions": {"trait_control": {}, "technique_control": {}},
+    }
+    with pytest.raises(bp.BirthProbeError, match="C1 ZERO_CONTROLPROFILE_SHAM synthesis attachment"):
+        renderer("R9F-01", "c1", 0, profile)
 
 
 @pytest.mark.parametrize(
