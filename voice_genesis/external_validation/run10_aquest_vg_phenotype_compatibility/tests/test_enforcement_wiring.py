@@ -37,7 +37,7 @@ from __future__ import annotations
 import ast
 import sys
 from pathlib import Path
-from typing import Dict, Set, Tuple
+from typing import Dict, Iterator, Set, Tuple
 
 _THIS_DIR = Path(__file__).resolve().parent
 _RUN_DIR = _THIS_DIR.parent
@@ -131,14 +131,22 @@ def _tree(rel: str) -> ast.Module:
     return ast.parse((_RUN_DIR / rel).read_text(encoding="utf-8"))
 
 
-def _module_constants(trees: Dict[str, ast.Module]) -> Dict[str, ast.expr]:
-    """走査対象**全モジュール**の直下 ALL_CAPS 定数（名前 → 値の式）。
+ConstantId = Tuple[str, str]
+FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef
+FunctionRef = Tuple[str, FunctionNode]
+
+
+def _module_constants(trees: Dict[str, ast.Module]) -> Dict[ConstantId, ast.expr]:
+    """走査対象**全モジュール**の直下 ALL_CAPS 定数（ID → 値の式）。
 
     schema だけを見ると、将来 `measurement/` 等に置かれた検査語彙が監査の
     外に出る（PR #332 Codex 第 1 巡 P2 と同じ理由）。
+
+    ID は ``(module-relative path, name)``。名前だけに潰すと、別モジュールの
+    同名定数の片方が使われているだけで、もう片方まで配線済みになる。
     """
-    out: Dict[str, ast.expr] = {}
-    for tree in trees.values():
+    out: Dict[ConstantId, ast.expr] = {}
+    for rel, tree in trees.items():
         for node in tree.body:
             if isinstance(node, ast.Assign):
                 targets = node.targets
@@ -148,18 +156,30 @@ def _module_constants(trees: Dict[str, ast.Module]) -> Dict[str, ast.expr]:
                 continue
             for target in targets:
                 if isinstance(target, ast.Name) and target.id == target.id.upper():
-                    out[target.id] = node.value
+                    out[(rel, target.id)] = node.value
     return out
 
 
-def _functions(trees: Dict[str, ast.Module]) -> Dict[str, list]:
+def _functions(trees: Dict[str, ast.Module]) -> Dict[str, list[FunctionRef]]:
     """関数名 → その定義ノード（同名は複数ありうるので list）。"""
-    out: Dict[str, list] = {}
-    for tree in trees.values():
+    out: Dict[str, list[FunctionRef]] = {}
+    for rel, tree in trees.items():
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                out.setdefault(node.name, []).append(node)
+                out.setdefault(node.name, []).append((rel, node))
     return out
+
+
+_NESTED_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def _runtime_nodes(node: ast.AST) -> Iterator[ast.AST]:
+    """node の実行本体を辿り、未呼び出しのネストスコープへは降りない。"""
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, _NESTED_SCOPE_NODES):
+            continue
+        yield child
+        yield from _runtime_nodes(child)
 
 
 def _calls_in(node: ast.AST) -> Set[str]:
@@ -173,7 +193,7 @@ def _calls_in(node: ast.AST) -> Set[str]:
     誤って緩む側には倒れない。
     """
     called: Set[str] = set()
-    for sub in ast.walk(node):
+    for sub in _runtime_nodes(node):
         if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
             called.add(sub.func.id)
     return called
@@ -189,10 +209,16 @@ def _entry_points(trees: Dict[str, ast.Module]) -> Set[str]:
     """
     entries: Set[str] = set()
     for tree in trees.values():
-        for node in ast.walk(tree):
+        for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if not node.name.startswith("_") or node.name == "__init__":
                     entries.add(node.name)
+            elif isinstance(node, ast.ClassDef):
+                for member in node.body:
+                    if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
+                        not member.name.startswith("_") or member.name == "__init__"
+                    ):
+                        entries.add(member.name)
     return entries
 
 
@@ -203,7 +229,7 @@ def _reachable_functions(trees: Dict[str, ast.Module]) -> Set[str]:
     frontier = list(reachable)
     while frontier:
         current = frontier.pop()
-        for node in functions.get(current, ()):
+        for _rel, node in functions.get(current, ()):
             for callee in _calls_in(node):
                 if callee in functions and callee not in reachable:
                     reachable.add(callee)
@@ -211,8 +237,65 @@ def _reachable_functions(trees: Dict[str, ast.Module]) -> Set[str]:
     return reachable
 
 
-def _names_loaded_in_functions(trees: Dict[str, ast.Module]) -> Set[str]:
-    """**到達可能な**関数本体で load される識別子。
+def _module_name(rel: str) -> str:
+    """RUN10 相対 Python パスを import 名へ変換する。"""
+    path = Path(rel)
+    parts = list(path.parts)
+    if parts[-1] == "__init__.py":
+        parts.pop()
+    else:
+        parts[-1] = Path(parts[-1]).stem
+    return ".".join(parts)
+
+
+def _module_index(trees: Dict[str, ast.Module]) -> Dict[str, str]:
+    """import 名 → RUN10 相対パス。曖昧な suffix は登録しない。"""
+    full = {_module_name(rel): rel for rel in trees}
+    out = dict(full)
+    suffixes: Dict[str, list[str]] = {}
+    for name, rel in full.items():
+        suffixes.setdefault(name.rsplit(".", 1)[-1], []).append(rel)
+    for suffix, rels in suffixes.items():
+        if len(rels) == 1:
+            out.setdefault(suffix, rels[0])
+    return out
+
+
+def _imported_constants(
+    trees: Dict[str, ast.Module], constants: Dict[ConstantId, ast.expr]
+) -> Dict[str, Dict[str, ConstantId]]:
+    """各 module の ``from x import NAME`` が指す定数 ID。"""
+    modules = _module_index(trees)
+    out: Dict[str, Dict[str, ConstantId]] = {rel: {} for rel in trees}
+    for rel, tree in trees.items():
+        for node in tree.body:
+            if not isinstance(node, ast.ImportFrom) or node.level or node.module is None:
+                continue
+            imported_rel = modules.get(node.module)
+            if imported_rel is None:
+                continue
+            for alias in node.names:
+                target = (imported_rel, alias.name)
+                if target in constants:
+                    out[rel][alias.asname or alias.name] = target
+    return out
+
+
+def _resolve_constant_name(
+    rel: str,
+    name: str,
+    constants: Dict[ConstantId, ast.expr],
+    imported: Dict[str, Dict[str, ConstantId]],
+) -> ConstantId | None:
+    """識別子を同一 module または明示 import 先の定数へ解決する。"""
+    local = (rel, name)
+    if local in constants:
+        return local
+    return imported.get(rel, {}).get(name)
+
+
+def _names_loaded_in_functions(trees: Dict[str, ast.Module]) -> Set[ConstantId]:
+    """**到達可能な**関数本体で load される定数 ID。
 
     到達可能性を見ないと、どこからも呼ばれない private ヘルパで新しい検査
     定数に触れるだけで「配線済み」と数えられ、実行経路が無いまま本テストが
@@ -220,32 +303,43 @@ def _names_loaded_in_functions(trees: Dict[str, ast.Module]) -> Set[str]:
     （PR #332 Codex 第 1 巡 P2）。
     """
     functions = _functions(trees)
-    used: Set[str] = set()
+    constants = _module_constants(trees)
+    imported = _imported_constants(trees, constants)
+    used: Set[ConstantId] = set()
     for name in _reachable_functions(trees):
-        for node in functions.get(name, ()):
-            for sub in ast.walk(node):
+        for rel, node in functions.get(name, ()):
+            for sub in _runtime_nodes(node):
                 if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
-                    used.add(sub.id)
+                    resolved = _resolve_constant_name(rel, sub.id, constants, imported)
+                    if resolved is not None:
+                        used.add(resolved)
     return used
 
 
-def _wired_constants(trees: Dict[str, ast.Module]) -> Set[str]:
+def _wired_constants(trees: Dict[str, ast.Module]) -> Set[ConstantId]:
     """実行時に参照される定数の推移閉包。
 
     `CORE_PIN_FIELDS` のように、関数からは直接触られず `_STAGE_FIELDS` 経由で
     効いている定数がある。モジュール階層での取り込みを辿って配線済みと数える。
     """
     constants = _module_constants(trees)
-    edges = {
-        name: {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
-        for name, value in constants.items()
-    }
+    imported = _imported_constants(trees, constants)
+    edges: Dict[ConstantId, Set[ConstantId]] = {}
+    for constant_id, value in constants.items():
+        rel, _name = constant_id
+        deps: Set[ConstantId] = set()
+        for node in ast.walk(value):
+            if isinstance(node, ast.Name):
+                resolved = _resolve_constant_name(rel, node.id, constants, imported)
+                if resolved is not None:
+                    deps.add(resolved)
+        edges[constant_id] = deps
     wired = _names_loaded_in_functions(trees)
     changed = True
     while changed:
         changed = False
-        for name in list(wired):
-            for dep in edges.get(name, ()):
+        for constant_id in list(wired):
+            for dep in edges.get(constant_id, ()):
                 if dep not in wired:
                     wired.add(dep)
                     changed = True
@@ -273,7 +367,7 @@ def _called_in_functions(trees: Dict[str, ast.Module]) -> Set[str]:
     functions = _functions(trees)
     called: Set[str] = set()
     for name in _reachable_functions(trees):
-        for node in functions.get(name, ()):
+        for _rel, node in functions.get(name, ()):
             called |= _calls_in(node)
     return called
 
@@ -282,13 +376,27 @@ def _trees() -> Dict[str, ast.Module]:
     return {rel: _tree(rel) for rel in ENFORCEMENT_MODULES}
 
 
-def _unwired() -> Set[str]:
-    trees = _trees()
+def _display_constant_ids(ids: Set[ConstantId], all_ids: Set[ConstantId]) -> Set[str]:
+    """一意名は従来名、同名宣言は ``module::NAME`` で表示する。"""
+    counts: Dict[str, int] = {}
+    for _rel, name in all_ids:
+        counts[name] = counts.get(name, 0) + 1
+    return {
+        name if counts[name] == 1 else f"{rel}::{name}"
+        for rel, name in ids
+    }
+
+
+def _unwired_declarations(trees: Dict[str, ast.Module]) -> Set[str]:
     constants = set(_module_constants(trees))
     validators = _public_validators(trees)
-    unwired = constants - _wired_constants(trees)
+    unwired = _display_constant_ids(constants - _wired_constants(trees), constants)
     unwired |= set(validators) - _called_in_functions(trees)
     return unwired
+
+
+def _unwired() -> Set[str]:
+    return _unwired_declarations(_trees())
 
 
 def test_no_unregistered_unwired_declaration() -> None:
@@ -369,7 +477,7 @@ def test_unreachable_helper_does_not_wire_a_constant() -> None:
         "def _never_called():\n"
         "    return VOCAB\n"
     )
-    assert "VOCAB" not in _wired_constants(trees)
+    assert ("synthetic.py", "VOCAB") not in _wired_constants(trees)
 
 
 def test_constant_reached_through_a_public_entry_point_is_wired() -> None:
@@ -381,7 +489,7 @@ def test_constant_reached_through_a_public_entry_point_is_wired() -> None:
         "def public_entry():\n"
         "    return _helper()\n"
     )
-    assert "VOCAB" in _wired_constants(trees)
+    assert ("synthetic.py", "VOCAB") in _wired_constants(trees)
 
 
 def test_validator_called_only_from_dead_code_is_unwired() -> None:
@@ -416,3 +524,62 @@ def test_attribute_calls_do_not_wire_a_validator() -> None:
         "    return obj.verify_x()\n"
     )
     assert "verify_x" not in _called_in_functions(trees)
+
+
+def test_uncalled_nested_body_does_not_wire_declarations() -> None:
+    """未呼び出し nested def の本体は定数・検証器を配線済みにしない。"""
+    trees = _synthetic(
+        "VOCAB = ('X',)\n"
+        "def assert_guard(x):\n"
+        "    pass\n"
+        "def public_entry():\n"
+        "    def _dead():\n"
+        "        assert_guard(VOCAB)\n"
+        "    return 0\n"
+    )
+    assert ("synthetic.py", "VOCAB") not in _wired_constants(trees)
+    assert "assert_guard" not in _called_in_functions(trees)
+
+
+def test_called_nested_body_wires_declarations() -> None:
+    """nested def が実際に呼ばれる場合は、その本体を呼び出しグラフで辿る。"""
+    trees = _synthetic(
+        "VOCAB = ('X',)\n"
+        "def assert_guard(x):\n"
+        "    pass\n"
+        "def public_entry():\n"
+        "    def _helper():\n"
+        "        assert_guard(VOCAB)\n"
+        "    return _helper()\n"
+    )
+    assert ("synthetic.py", "VOCAB") in _wired_constants(trees)
+    assert "assert_guard" in _called_in_functions(trees)
+
+
+def test_duplicate_constant_names_preserve_module_identity() -> None:
+    """別 module の同名定数を、片方の参照だけで両方 wired にしない。"""
+    trees = {
+        "used.py": ast.parse(
+            "VOCAB = ('used',)\n"
+            "def public_entry():\n"
+            "    return VOCAB\n"
+        ),
+        "unused.py": ast.parse("VOCAB = ('unused',)\n"),
+    }
+    assert ("used.py", "VOCAB") in _wired_constants(trees)
+    assert ("unused.py", "VOCAB") not in _wired_constants(trees)
+    assert _unwired_declarations(trees) == {"unused.py::VOCAB"}
+
+
+def test_imported_constant_keeps_its_declaring_module_identity() -> None:
+    """明示 import した定数は宣言 module 側の ID を wired にする。"""
+    trees = {
+        "schema.py": ast.parse("VOCAB = ('X',)\n"),
+        "consumer.py": ast.parse(
+            "from schema import VOCAB\n"
+            "def public_entry():\n"
+            "    return VOCAB\n"
+        ),
+    }
+    assert _wired_constants(trees) == {("schema.py", "VOCAB")}
+    assert not _unwired_declarations(trees)
