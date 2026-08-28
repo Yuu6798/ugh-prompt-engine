@@ -325,6 +325,81 @@ def test_publish_failure_injection_leaves_no_partial_bundle(
     assert list(tmp_path.glob(".evidence.build-*")) == []
 
 
+@pytest.mark.parametrize("termination_type", [KeyboardInterrupt, SystemExit])
+def test_publish_cleanup_covers_baseexception_termination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    termination_type: type[BaseException],
+) -> None:
+    references, c0, c1, positive, pjs = _evidence(count=1)
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+        expected_takes=1,
+    )
+    observations = {
+        founder: {
+            "reference": [references[founder]],
+            "c0": c0[founder],
+            "c1": c1[founder],
+            "positive_reference": [positive[founder]],
+        }
+        for founder in FOUNDERS
+    }
+    original_write_bytes = Path.write_bytes
+
+    def injected_write(path: Path, data: bytes) -> int:
+        if path.name == "birth_gate_evidence.json":
+            raise termination_type()
+        return original_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", injected_write)
+    output = tmp_path / "evidence"
+    with pytest.raises(termination_type):
+        bp.publish_evidence_bundle(output, result, observations, pjs)
+    assert not output.exists()
+    assert list(tmp_path.glob(".evidence.build-*")) == []
+
+
+@pytest.mark.parametrize(
+    "changed_key",
+    [
+        "run9_contract_sha256",
+        "identity_decision_protocol_sha256",
+        "probe_manifest_sha256",
+        "speaker_map_manifest_sha256",
+        "reexport_manifest_sha256",
+        "backbone_runtime_bundle_sha256",
+        "executor_sha256",
+    ],
+)
+def test_provenance_snapshot_rejects_post_snapshot_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_key: str,
+) -> None:
+    keys = [
+        "run9_contract_sha256",
+        "identity_decision_protocol_sha256",
+        "probe_manifest_sha256",
+        "speaker_map_manifest_sha256",
+        "reexport_manifest_sha256",
+        "backbone_runtime_bundle_sha256",
+        "executor_sha256",
+    ]
+    paths = {key: tmp_path / f"{index}.bin" for index, key in enumerate(keys)}
+    for index, path in enumerate(paths.values()):
+        path.write_bytes(f"before-{index}".encode("ascii"))
+    monkeypatch.setattr(bp, "_provenance_input_paths", lambda: paths)
+    snapshot = bp._snapshot_provenance_inputs()
+    paths[changed_key].write_bytes(b"after")
+    with pytest.raises(bp.BirthProbeError, match="provenance input changed during execution"):
+        bp._verify_provenance_inputs_unchanged(snapshot)
+
+
 def test_unknown_or_missing_founder_is_rejected() -> None:
     references, c0, c1, positive, pjs = _evidence()
     del c0["R9F-02"]
