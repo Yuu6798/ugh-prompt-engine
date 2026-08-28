@@ -1,8 +1,10 @@
 """RUN9 rev 0.6 Birth Probe executor/consumer tests."""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -60,6 +62,29 @@ def _evidence(*, count: int = 20):
     positive = dict(references)
     pjs = bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0]))
     return references, c0, c1, positive, pjs
+
+
+def _dependency_rows() -> list[dict[str, object]]:
+    versions = {
+        "python": "3.11.15",
+        "numpy": "2.4.6",
+        "librosa": "0.11.0",
+        "numba": "0.66.0",
+        "scipy": "1.17.1",
+        "soundfile": "0.14.0",
+        "PyYAML": "6.0.1",
+        "pyloudnorm": "0.2.0",
+        "onnxruntime": "1.29.0",
+    }
+    return [
+        {
+            "package": package,
+            "pin_version": version,
+            "observed_version": version,
+            "status": "MATCH",
+        }
+        for package, version in versions.items()
+    ]
 
 
 def test_happy_path_is_complete_deterministic_and_passes() -> None:
@@ -397,6 +422,7 @@ def test_publish_cleanup_covers_baseexception_termination(
         "speaker_map_manifest_sha256",
         "reexport_manifest_sha256",
         "backbone_runtime_bundle_sha256",
+        "dependency_pins_manifest_sha256",
         "executor_sha256",
         "run9_schema_sha256",
         "run9_controlprofile_sha256",
@@ -415,6 +441,7 @@ def test_provenance_snapshot_rejects_post_snapshot_mutation(
         "speaker_map_manifest_sha256",
         "reexport_manifest_sha256",
         "backbone_runtime_bundle_sha256",
+        "dependency_pins_manifest_sha256",
         "executor_sha256",
         "run9_schema_sha256",
         "run9_controlprofile_sha256",
@@ -474,6 +501,117 @@ def test_main_provenance_guard_rejects_preloaded_repo_helper(
     monkeypatch.setitem(sys.modules, module_name, object())
     with pytest.raises(bp.BirthProbeError, match="repo helper modules were already loaded"):
         bp._assert_helper_modules_not_preloaded()
+
+
+def test_direct_dependency_pins_are_read_from_recorded_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "dependency_pins_manifest.json"
+    manifest_path.write_text(
+        json.dumps({"python_dependency_pins": _dependency_rows()}), encoding="utf-8"
+    )
+    monkeypatch.setattr(bp, "_DIRECT_DEPENDENCY_MANIFEST_PATH", manifest_path)
+    assert bp._load_direct_dependency_pin_versions() == {
+        "numpy": "2.4.6",
+        "scipy": "1.17.1",
+        "soundfile": "0.14.0",
+        "PyYAML": "6.0.1",
+        "onnxruntime": "1.29.0",
+        "pyworld": "0.3.5",
+    }
+
+
+def test_direct_dependency_pin_record_must_be_verified_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rows = _dependency_rows()
+    numpy_row = next(row for row in rows if row["package"] == "numpy")
+    numpy_row["observed_version"] = "0.0.0"
+    manifest_path = tmp_path / "dependency_pins_manifest.json"
+    manifest_path.write_text(json.dumps({"python_dependency_pins": rows}), encoding="utf-8")
+    monkeypatch.setattr(bp, "_DIRECT_DEPENDENCY_MANIFEST_PATH", manifest_path)
+    with pytest.raises(bp.BirthProbeError, match="not a verified MATCH for numpy"):
+        bp._load_direct_dependency_pin_versions()
+
+
+def test_execution_environment_validates_direct_dependency_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = {
+        "numpy": "2.4.6",
+        "scipy": "1.17.1",
+        "soundfile": "0.14.0",
+        "PyYAML": "6.0.1",
+        "onnxruntime": "1.29.0",
+        "pyworld": "0.3.5",
+    }
+    modules = {
+        "numpy": SimpleNamespace(__version__="2.4.6"),
+        "scipy": SimpleNamespace(__version__="1.17.1"),
+        "soundfile": SimpleNamespace(__version__="0.14.0"),
+        "yaml": SimpleNamespace(__version__="6.0.1"),
+        "onnxruntime": SimpleNamespace(
+            __version__="1.29.0",
+            get_available_providers=lambda: ["CPUExecutionProvider"],
+        ),
+        "pyworld": SimpleNamespace(__version__="0.3.5"),
+    }
+    monkeypatch.setattr(bp, "np", modules["numpy"])
+    monkeypatch.setattr(bp.importlib, "import_module", lambda name: modules[name])
+    monkeypatch.setattr(bp.importlib_metadata, "version", lambda package: expected[package])
+    os_release = bp.platform.freedesktop_os_release()
+    pretty_os = os_release.get("PRETTY_NAME", "")
+    os_match = bp.re.match(r"^(Ubuntu\s+\d+\.\d+(?:\.\d+)?)", pretty_os)
+    normalized_os = os_match.group(1) if os_match is not None else pretty_os
+    profile = {
+        "identity_semantics": {
+            "runtime": {
+                "architecture": bp.platform.machine(),
+                "onnxruntime": "1.29.0",
+                "os": normalized_os,
+                "python": bp.platform.python_version(),
+                "selected_execution_provider": "CPUExecutionProvider",
+            }
+        }
+    }
+    assert bp._validate_execution_environment(profile, expected) == {
+        "python": bp.platform.python_version(),
+        **expected,
+    }
+
+
+def test_execution_environment_rejects_distribution_version_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = {
+        "numpy": "2.4.6",
+        "scipy": "1.17.1",
+        "soundfile": "0.14.0",
+        "PyYAML": "6.0.1",
+        "onnxruntime": "1.29.0",
+        "pyworld": "0.3.5",
+    }
+    modules = {
+        "numpy": SimpleNamespace(__version__="2.4.6"),
+        "scipy": SimpleNamespace(__version__="1.17.1"),
+        "soundfile": SimpleNamespace(__version__="0.14.0"),
+        "yaml": SimpleNamespace(__version__="6.0.1"),
+        "onnxruntime": SimpleNamespace(
+            __version__="1.29.0",
+            get_available_providers=lambda: ["CPUExecutionProvider"],
+        ),
+        "pyworld": SimpleNamespace(__version__="0.3.5"),
+    }
+    monkeypatch.setattr(bp, "np", modules["numpy"])
+    monkeypatch.setattr(bp.importlib, "import_module", lambda name: modules[name])
+    monkeypatch.setattr(
+        bp.importlib_metadata,
+        "version",
+        lambda package: "9.9.9" if package == "scipy" else expected[package],
+    )
+    profile = {"identity_semantics": {"runtime": {}}}
+    with pytest.raises(bp.BirthProbeError, match="runtime dependency version mismatch for scipy"):
+        bp._validate_execution_environment(profile, expected)
 
 
 def test_gate_synth_renderer_adapter_matches_runtime_note_and_tempo_contract() -> None:
