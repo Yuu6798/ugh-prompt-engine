@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import io
 import json
 import math
@@ -26,7 +27,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Protocol, Sequence
 
-import numpy as np
+_EXECUTOR_PATH = Path(__file__).resolve()
+_EXECUTOR_LOAD_SHA256 = hashlib.sha256(_EXECUTOR_PATH.read_bytes()).hexdigest()
+np = importlib.import_module("numpy")
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR.parents[2]
@@ -60,10 +63,6 @@ def _read_once(path: Path, *, label: str) -> tuple[bytes, str]:
     return value, sha256_bytes(value)
 
 
-_EXECUTOR_PATH = Path(__file__).resolve()
-_, _EXECUTOR_LOAD_SHA256 = _read_once(
-    _EXECUTOR_PATH, label="Birth Probe executor module-load provenance"
-)
 _HELPER_PROVENANCE_PATHS: Dict[str, Path] = {
     "run9_schema_sha256": _THIS_DIR / "run9_schema.py",
     "run9_controlprofile_sha256": _THIS_DIR / "run9_controlprofile.py",
@@ -440,7 +439,11 @@ def evaluate_birth_gate(
                 })
             if take.wav_sha256 != reference.wav_sha256:
                 applicable.append("on_wav_byte_mismatch")
-            if take.wav_sha256 == reference.wav_sha256 and take.feature.data != reference.feature.data:
+            if (
+                take.wav_sha256 == reference.wav_sha256
+                and take.feature.data != reference.feature.data
+                and distance == 0.0
+            ):
                 applicable.append("on_feature_mismatch")
             if distance != 0.0:
                 applicable.append("on_nonzero")
