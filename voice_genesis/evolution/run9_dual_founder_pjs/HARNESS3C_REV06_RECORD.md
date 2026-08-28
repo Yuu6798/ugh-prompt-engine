@@ -21,20 +21,30 @@ Birth Gate の実行は裁定 §8 が明示的に区切る「別途」の工程�
 （contract トップレベル欄 / `run9_schema.DESIGN_REVISION` 定数 /
 `design_revision_doc_sha256` pin）+ `hypothesis_algebra_sha` の
 H1-H6閾値校正欄→ Identity decision protocol pin 欄への用途確定完了。
-`ruff check .` clean、`pytest` は run9 サブツリー 2584 件全 pass（新設
-26 件を含む）。実装前グラウンディングで probe_manifest.json の repin は
-不要と判定（該当する正典矛盾なし）、failure_abort_criteria.json は
-Birth Gate 関連 2 rule の stale 文言を是正し repin した。**
+PR #333 Codex bot レビュー第1巡〜第7巡対応（本記録 §4-§10）を経た最終
+状態として、`ruff check .` clean、`pytest` は run9 サブツリー **2681 件
+全 pass**（新設テストを含む。巡ごとの内訳は各節参照）。実装前グラウン
+ディング時点（第0巡）では probe_manifest.json の repin は不要と判定
+していたが、**第2巡指摘1（§5.1）の bridge 参照是正により
+probe_manifest.json はその後 repin 済み**（`probe_manifest_sha`
+旧→新、詳細は §5.1）。failure_abort_criteria.json は実装前グラウン
+ディングの時点で Birth Gate 関連 2 rule の stale 文言を是正し repin
+した（この repin は第1巡以降の対応と独立、以後未変更）。
 
 | # | 成果物 | 状態 |
 |---|---|---|
 | 1 | `DESIGN_RUN9_REVISION_0.6.md` | 新規作成・完了 |
 | 2 | `USER_ADJUDICATION_20260827_IDENTITY_REV06.txt` | 新規作成・裁定逐語 byte 一致確認済み |
-| 3 | `inputs/identity_decision_protocol_v0.6.json` | 新規作成・§P 構造どおり |
-| 4 | `run9_schema.py`: validate/load + outcome_detail 定数 | 新規実装・テスト green |
-| 5 | `RUN9_CONTRACT.yaml`: hypothesis_algebra_sha PINNED + design_revision 0.6 昇格 | 完了 |
-| 6 | probe bridge / failure routing 更新 | probe_manifest: 不要と判定（グラウンディング）/ failure_abort_criteria: rule 7/16 是正・repin（11世代目） |
+| 3 | `inputs/identity_decision_protocol_v0.6.json` | 新規作成・§P 構造どおり（第1巡〜第7巡対応で追補・repin 継続） |
+| 4 | `run9_schema.py`: validate/load + outcome_detail 定数 | 新規実装・テスト green（第1巡〜第7巡対応で追補） |
+| 5 | `RUN9_CONTRACT.yaml`: hypothesis_algebra_sha PINNED + design_revision 0.6 昇格 | 完了（`hypothesis_algebra_sha` は第1巡以降のレビュー対応で複数回 repin、最新値は §9 参照） |
+| 6 | probe bridge / failure routing 更新 | probe_manifest: 実装前グラウンディング時点では不要と判定したが第2巡指摘1（§5.1）で bridge 参照是正に伴い repin 済み / failure_abort_criteria: rule 7/16 是正・repin（11世代目、以後未変更） |
 | 7 | `HARNESS3C_REV06_RECORD.md`（本ファイル） | 本ファイル |
+
+**初版時点（design_revision 0.6 第2 PR フェーズ1、レビュー対応着手前）
+の記述**（履歴保持、上記が現行正）: 「`pytest` は run9 サブツリー
+2584 件全 pass（新設 26 件を含む）。実装前グラウンディングで
+probe_manifest.json の repin は不要と判定（該当する正典矛盾なし）」。
 
 ---
 
@@ -106,6 +116,14 @@ bookkeeping（何を鳴らすか）と decision semantics（どう判定する�
 probe_manifest 側の render 契約に影響しない）。回帰テスト
 `test_rev06_probe_manifest_does_not_declare_hypothesis_algebra_sha_
 pending` で固定した。
+
+> **第0巡時点の判定であることの注記**（第7巡指摘1対応で追記）:
+> 上記「repin は不要」は本節が扱う `hypothesis_algebra_sha`
+> 非出現の観点に限った着手前グラウンディングの判定であり、その後
+> 第2巡指摘1（§5.1）で発見された別軸の欠陥（revision_bridge の
+> `identity_metric_space_ref` が supersede 済み節を指したまま）への
+> 対応で `probe_manifest.json` は repin 済みである。最終状態は §5.1
+> および総合判定を正とする。
 
 ### 0.5 `inputs/failure_abort_criteria.json` の Birth Gate 関連 rule 監査
 
@@ -1319,6 +1337,134 @@ mismatch` 無改変確認・敵対的自己検査1系（§9.2）。
   feature-level（serialized identity feature bytes/hash）は別軸の
   決定論破りであり、片方の是正がもう片方を自動的に埋めないことを本節
   で明記した。
+
+---
+
+## 10. PR #333 Codex bot レビュー第7巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`3a61a62e`）。2件（P2 × 2）着手前に事実確認、両件とも事実と一致した
+ため採用対応。裁定正本は本 PR の対象外（既存裁定 §1-§9 の再解釈ではなく、
+既存節の自己矛盾是正・欠落した cross-check の追加）。
+
+### 10.1 指摘1（P2）: 「Refresh the canonical summary after review
+fixes」
+
+**事実確認**: 本記録冒頭の「総合判定」が design_revision 0.6 実装完了
+直後（第2 PR フェーズ1、レビュー対応着手前）の状態のまま——「2584 件
+全 pass」「probe_manifest.json の repin は不要と判定」——で固定されて
+おり、その後の第2巡指摘1（§5.1、bridge 参照是正に伴う probe_manifest.
+json repin）・第6巡 §9.3（最終 2681 件 pass）と自己矛盾していることを
+確認した。**指摘内容は事実と一致** → Fable 設計どおり実装。
+
+**実装**: 「総合判定」節を最終状態（テスト件数・probe_manifest repin
+実績・巡数）へ更新した。旧記述は削除せず、「初版時点の記述」注記付きで
+節末に履歴保持した（本記録 §総合判定）。§0.4（実装前グラウンディングの
+probe_manifest 判定）にも、その判定が `hypothesis_algebra_sha`
+非出現の観点に限った着手前時点のものであり、最終状態は §5.1 が正である
+ことを示す注記ブロックを追加した。record 全体を走査し、他に総合判定と
+矛盾する見出し・サマリー文言が無いことを確認した（各巡セクション §4-§9
+はいずれもその巡の時点の状態を記述する時系列ログとして構成されており、
+「総合判定」以外に現在形の総括主張を行う箇所は存在しなかった）。
+
+**cascade 確認**: `provenance.detail_record` 経由で本 record を参照する
+pin は、5manifest 共通の `_h3c_cross_check_adjudication_and_detail_
+record()` の消費対象（`HARNESS3C_AXIS_FEASIBILITY_RECORD.md` 系列）
+であり、`HARNESS3C_REV06_RECORD.md` 自身は対象外であることを
+`run9_schema.py` のコメント（識別 decision protocol 節冒頭、
+「HARNESS3C_REV06_RECORD.md は実装完了後に書かれる記録であり、protocol
+側から前方参照すると執筆順序が循環するため `_h3c_cross_check_
+adjudication_and_detail_record()` を再利用しない」）で確認した。repo
+全体を `HARNESS3C_REV06_RECORD` で grep し、`run9_schema.py`（上記コメント
+のみ）と `README.md`（正本ポインタの散文リンクのみ、pin ではない）以外に
+本ファイルを参照する箇所がないことも確認した——**本 record のバイト
+変更に伴う repin cascade は発生しない**（着手前の見込みどおり）。
+
+### 10.2 指摘2（P2）: 「Validate the declared metric source path」
+
+**事実確認**: `validate_identity_decision_protocol()` の
+`metric_reference.source_file` 検証が非空文字列チェックのみ
+（`_require_non_empty_str()`）であり、`load_pinned_identity_decision_
+protocol()` が実際に読む `identity_metric_space.json` は常に固定定数
+`IDENTITY_METRIC_SPACE_PATH` 経由（`_load_identity_metric_space_
+document_verified(domain.metric_space_sha)`、cross-check (8)）で、
+`metric_reference.source_file` の宣言値自体はどの読み込み経路にも
+使われていないことを確認した——宣言 path が誤記・改ざんされても、
+`metric_reference.metric_space_sha` さえ `domain.metric_space_sha` と
+一致していれば検証を通過してしまう構造的な乖離だった。**指摘内容は
+事実と一致** → Fable 設計どおり実装。
+
+**実装（Fable 設計）**: `IDENTITY_METRIC_SPACE_PATH` から repo-relative
+表記（既存 `adjudication_basis.source_file`/`provenance.design_
+revision_doc.source_file` と同じ posix 形式）を導出する凍結定数
+`_IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE` を新設し、
+(a) `validate_identity_decision_protocol()` で `metric_reference.
+source_file` の厳密一致を要求（`_require_non_empty_str()` を置換）、
+(b) `load_pinned_identity_decision_protocol()` の cross-check (2) を
+拡張し、同一の凍結正本を再導出して二層防御で再照合する
+（`birth_identity_separation.cell_ref` の validator + loader
+cross-check (3) 二層防御と同型）。protocol 実データの現宣言値
+（`"voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_
+metric_space.json"`）は是正時点で期待 path と一致しており、**protocol
+側の repin は不要**（`test_pr333_r7_metric_reference_source_file_
+matches_frozen_expected_constant` で回帰確認）。
+
+**同型点検（他 provenance 欄の source_file）**: `adjudication_basis.
+source_file` と `provenance.design_revision_doc.source_file` は、
+loader が declared source_file を `_resolve_repo_contained_path()` で
+解決し実バイトを read-once で再ハッシュしてから宣言 sha256（さらに
+adjudication は自欄、design_revision_doc は contract PINNED 値と）と
+突合する構造（cross-check (1)/(6)）——宣言 path そのものが実ハッシュ対象
+の決定に使われるため、typo/改ざんは実ファイル不在 or sha256 不一致で
+必ず検出される。`metric_reference.source_file` だけが「実ハッシュ対象は
+別の固定定数経由、宣言値は非空文字列チェックのみ」という非対称な構造
+だった——他の provenance 欄は同型の穴を持たない（**既に閉じている**）
+ことを repo 内 `"source_file"` 全出現（3件、protocol JSON 内）を
+grep して確認した。
+
+### 10.3 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2686 passed, 7 warnings in ~45s
+```
+
+新設テスト5件（2681→2686）: `tests/test_run9_contract.py` へ
+`pr333_r7_*` prefix で追加——凍結定数と実データの一致確認・typo 拒否・
+実在する無関係ファイルへの差し替え拒否・`load_pinned_identity_decision_
+protocol()` 経由の end-to-end 改ざん拒否・loader cross-check の凍結正本
+再利用確認。
+
+### 10.4 変更ファイル
+
+- `HARNESS3C_REV06_RECORD.md`: 「総合判定」節を最終状態へ更新（初版時点
+  の記述は履歴保持）、§0.4 へ第0巡時点判定であることの注記ブロック追加
+  （指摘1）、本節（§10）追加。
+- `run9_schema.py`: `_IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_
+  SOURCE_FILE` 定数新設（`_IDENTITY_DECISION_PROTOCOL_REPO_ROOT` 直後）、
+  `validate_identity_decision_protocol()` の `metric_reference.
+  source_file` 検証を非空文字列チェックから厳密一致チェックへ置換、
+  `load_pinned_identity_decision_protocol()` cross-check (2) へ
+  `source_file` 再照合を追加（docstring も同期更新）（指摘2）。
+- `tests/test_run9_contract.py`: 新規テスト5件追加（指摘2）。
+- `inputs/identity_decision_protocol_v0.6.json` / `RUN9_CONTRACT.yaml`:
+  **無改変**（宣言値が既に期待 path と一致していたため repin 不要）。
+
+### 10.5 逸脱事項
+
+- immutability 対象（`identity_metric_space.json`/`identity_domain`/
+  `Genome`/speaker map manifest）・裁定逐語転記部分（`USER_ADJUDICATION_
+  20260827_IDENTITY_REV06.txt`）は1 byte も変更していない。
+- `inputs/identity_decision_protocol_v0.6.json` は無改変のため
+  `hypothesis_algebra_sha` の repin は発生していない（本巡の変更は
+  `run9_schema.py`（検証ロジック）と `HARNESS3C_REV06_RECORD.md`
+  （記録の是正）のみ）。
+- 本節はコミット・push・GitHub への投稿前の Fable 検分待ちフェーズ1
+  実装であり、返信文面は別ファイル（`pr333_round7_replies.md`）に
+  起草済み。
 - 既存 `BIRTH_OUTCOMES`/`FAILURE_CLASSES` frozen tuple への値追加は
   行っていない（既存語彙の再利用のみ）。`_IDENTITY_PROTOCOL_OVERALL_
   PASS_AUDIT_STOP_REFS` は監査停止参照の列挙という性質上、新設分岐の

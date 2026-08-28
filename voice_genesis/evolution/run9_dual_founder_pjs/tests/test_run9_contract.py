@@ -21166,3 +21166,93 @@ def test_pr333_r5_adversarial_literal_consumer_no_exclusive_pair_all_conjuncts_s
             "with the other conjuncts under the all-success world state"
         )
     assert all(conjunct_truth[ref] for ref in agg["conjunct_refs"])
+
+
+# =============================================================================
+# PR #333 Codex bot レビュー第7巡対応（2026-08-28、フェーズ1）
+# 指摘2: metric_reference.source_file の宣言 path 検証欠如
+#
+# 旧実装は metric_reference.source_file を非空文字列としてしか検証して
+# おらず、実際に読む identity_metric_space.json は常に固定定数
+# IDENTITY_METRIC_SPACE_PATH 経由で、source_file の宣言値自体はどの
+# 読み込みにも使われていなかった——誤記・改ざんされても検出できない
+# 乖離を、凍結期待 path との厳密一致（validator + loader 二層防御、
+# birth_identity_separation.cell_ref と同型）で閉じる。
+# =============================================================================
+
+
+def test_pr333_r7_metric_reference_source_file_matches_frozen_expected_constant() -> None:
+    """protocol 実データの現宣言値が、IDENTITY_METRIC_SPACE_PATH から
+    導出した凍結期待 path と一致していること（是正時点で repin 不要
+    だったことの回帰確認）。"""
+    data = _identity_decision_protocol_data()
+    assert (
+        data["metric_reference"]["source_file"]
+        == m._IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE
+    )
+    assert m._IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE == (
+        "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_metric_space.json"
+    )
+
+
+def test_pr333_r7_validate_rejects_metric_reference_source_file_typo() -> None:
+    """metric_reference.source_file が凍結期待 path と一致しない場合、
+    validate_identity_decision_protocol() が fail-closed で拒否すること
+    （旧実装は非空文字列チェックのみで、この typo/改ざんを素通りさせて
+    いた）。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["metric_reference"]["source_file"] = (
+        "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_metric_space_TYPO.json"
+    )
+    with pytest.raises(m.Run9ValidationError, match="metric_reference.source_file"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r7_validate_rejects_metric_reference_source_file_pointing_elsewhere() -> None:
+    """typo だけでなく、実在する別の repo 内ファイル（内容も無関係）を
+    指す差し替えも同様に拒否すること——「実在するファイルを指してさえ
+    いれば通る」ような緩い検証になっていないことの確認。"""
+    data = copy.deepcopy(_identity_decision_protocol_data())
+    data["metric_reference"]["source_file"] = (
+        "voice_genesis/evolution/run9_dual_founder_pjs/RUN9_CONTRACT.yaml"
+    )
+    with pytest.raises(m.Run9ValidationError, match="metric_reference.source_file"):
+        m.validate_identity_decision_protocol(data)
+
+
+def test_pr333_r7_load_pinned_identity_decision_protocol_rejects_metric_reference_source_file_tamper(
+    contract: m.Run9RunContract, tmp_path: Path,
+) -> None:
+    """統合確認: metric_reference.source_file が改ざんされた manifest を
+    `load_pinned_identity_decision_protocol()` 経由で消費しようとすると、
+    end-to-end で fail-closed 拒否されること。"""
+    domain = _real_identity_domain()
+
+    def _tamper(data: Dict[str, Any]) -> None:
+        data["metric_reference"]["source_file"] = (
+            "voice_genesis/evolution/run9_dual_founder_pjs/inputs/identity_metric_space_TYPO.json"
+        )
+
+    tampered_contract, manifest_path, _contract_path = _tampered_identity_protocol_contract(
+        contract, tmp_path, mutate=_tamper,
+    )
+    with pytest.raises(m.Run9ValidationError, match="metric_reference.source_file"):
+        m.load_pinned_identity_decision_protocol(
+            tampered_contract, domain=domain, manifest_path=manifest_path,
+            contract_path=tmp_path / "RUN9_CONTRACT.yaml",
+        )
+
+
+def test_pr333_r7_load_pinned_identity_decision_protocol_cross_check_reuses_frozen_constant(
+    contract: m.Run9RunContract,
+) -> None:
+    """loader 側 cross-check (2) が validator と同一の凍結正本
+    （`_IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE`）を再利用
+    していること——現行の実 manifest / 実 contract では両者とも通過する
+    ことを直接確認する（two-layer defense の非衝突確認）。"""
+    domain = _real_identity_domain()
+    result = m.load_pinned_identity_decision_protocol(contract, domain=domain)
+    assert (
+        result["metric_reference"]["source_file"]
+        == m._IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE
+    )

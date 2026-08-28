@@ -20170,6 +20170,22 @@ IDENTITY_DECISION_PROTOCOL_PATH = (
 # （`_REEXPORT_REPO_ROOT`/`_EDUCATION_LESSON_REPO_ROOT` 等と同型）。
 _IDENTITY_DECISION_PROTOCOL_REPO_ROOT = _THIS_DIR.parent.parent.parent
 
+# PR #333 Codex bot レビュー第7巡指摘2（P2、採用）: `metric_reference.
+# source_file` の凍結期待値。旧実装は同フィールドを非空文字列としてしか
+# 検証しておらず、実際に読む identity_metric_space.json は常に固定定数
+# `IDENTITY_METRIC_SPACE_PATH` 経由（`_load_identity_metric_space_
+# document_verified()`）で、`metric_reference.source_file` はどの読み込み
+# 経路にも使われない単なる注記文字列だった——宣言 path が誤記・改ざんされて
+# も検出できない乖離を構造的に閉じる。`IDENTITY_METRIC_SPACE_PATH` から
+# repo-relative 表記を導出し（`adjudication_basis.source_file`/
+# `provenance.design_revision_doc.source_file` と同じ posix 形式の既存
+# 表記規約）、validator（構造）+ loader（cross-check、二層防御）の双方で
+# 厳密一致を要求する（`birth_identity_separation.cell_ref` の二層防御と
+# 同型）。
+_IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE = (
+    IDENTITY_METRIC_SPACE_PATH.relative_to(_IDENTITY_DECISION_PROTOCOL_REPO_ROOT).as_posix()
+)
+
 _IDENTITY_DECISION_PROTOCOL_TOP_LEVEL_KEYS: FrozenSet[str] = frozenset({
     "schema", "adjudication_basis", "provenance", "metric_reference",
     "supersede_declaration", "pre_run_correction_basis",
@@ -20500,7 +20516,17 @@ def validate_identity_decision_protocol(data: Mapping[str, Any]) -> None:
         data["metric_reference"], field="metric_reference",
         required_keys=frozenset({"source_file", "metric_space_sha", "note"}),
     )
-    _require_non_empty_str(metric_ref["source_file"], field="metric_reference.source_file")
+    # PR #333 第7巡指摘2（P2、採用）: 非空文字列チェックのみでは、実際に
+    # 読む identity_metric_space.json（固定定数 IDENTITY_METRIC_SPACE_PATH
+    # 経由）と宣言 path の乖離（誤記・改ざん）を検出できない——凍結期待
+    # path との厳密一致を要求する（loader 側 cross-check (2) の再照合と
+    # 二層防御）。
+    if metric_ref["source_file"] != _IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE:
+        raise Run9ValidationError(
+            "identity decision protocol metric_reference.source_file must be exactly "
+            f"{_IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE!r}, got "
+            f"{metric_ref['source_file']!r}"
+        )
     _validate_identity_protocol_sha256(
         metric_ref["metric_space_sha"], field="metric_reference.metric_space_sha"
     )
@@ -21152,6 +21178,13 @@ def load_pinned_identity_decision_protocol(
         `domain`（`domains/identity_domain_run9_v1.json` 由来）の
         `metric_space_sha` と一致することを強制する——identity_metric_
         space.json 無改変宣言（裁定§7）を消費時にも machine 強制する。
+        併せて `metric_reference.source_file` が凍結期待 path（`_IDENTITY_
+        PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE`、`IDENTITY_METRIC_
+        SPACE_PATH` 由来）と一致することも再照合する（PR #333 第7巡指摘2,
+        P2, 採用 — 実際に読む identity_metric_space.json は常に固定定数
+        経由で source_file の宣言値自体はどの読み込みにも使われないため、
+        宣言 path が誤記・改ざんされても旧実装の非空文字列チェックのみでは
+        検出できなかった欠陥の是正）。
     (8) cross-check (3): `birth_identity_separation.cell_ref` が
         `_PROBE_EXPECTED_CELL_IDS["P0"]`（probe manifest 側の凍結 P0 cell
         定義、正本）と一致することを再照合する（validator 側の静的照合に
@@ -21233,6 +21266,21 @@ def load_pinned_identity_decision_protocol(
             f"({manifest_metric_sha!r}) diverges from the pinned Run9IdentityDomain's "
             f"metric_space_sha ({domain.metric_space_sha!r}) — identity_metric_space.json 無改変"
             "宣言（裁定§7）の消費時 fail-closed 強制"
+        )
+    # PR #333 第7巡指摘2（P2、採用）: metric_reference.source_file の再照合
+    # （二層防御、birth_identity_separation.cell_ref の cross-check (3) と
+    # 同型）——validate_identity_decision_protocol() で静的照合済みだが、
+    # 本関数が実際に消費する identity_metric_space.json は常に固定定数
+    # IDENTITY_METRIC_SPACE_PATH 経由（cross-check (8) 参照）であり、
+    # source_file の宣言値そのものはどの読み込みにも使われないため、
+    # loader 側でも同一の凍結正本を再導出して照合する。
+    manifest_metric_source_file = data["metric_reference"]["source_file"]
+    if manifest_metric_source_file != _IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE:
+        raise Run9ValidationError(
+            "load_pinned_identity_decision_protocol(): metric_reference.source_file "
+            f"({manifest_metric_source_file!r}) diverges from the canonical "
+            f"identity_metric_space.json path "
+            f"({_IDENTITY_PROTOCOL_METRIC_REFERENCE_EXPECTED_SOURCE_FILE!r}) — fail-closed re-check"
         )
 
     # (8) cross-check (3): birth_identity_separation.cell_ref の再照合。
