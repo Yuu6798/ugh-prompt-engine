@@ -40,7 +40,7 @@ Source / Identity 形質体系と測定器を同じ条件で適用したとき�
 | 裁定者 | User（§33） |
 | 裁定 | **`APPROVED_CODE_ONLY_PUBLIC`**（2026-08-27）— 「実装コードのみ public で継続」 |
 | 常設方針 | AQUEST 由来資産・音声・モデル・blind map・測定値・集計表・設計文書本文は public リポジトリへ置かず Drive 側 private に留める。public に置くのは実装コード・契約 YAML・AF01 ハッシュ台帳・測定値を含まない構造 manifest のみ。`private_boundary.py` が機械強制する。 |
-| 残件 | §26 private staging root の実体が未確定のため `private_storage_policy_sha` は依然 PENDING（`residual_unresolved`）。 |
+| Private root | User 裁定 2026-08-28 により `VoiceGenesis/External_Validation/AQUEST/RUN10_Private_Assets/` を採用。Drive API で対象と親階層が `shared:false`・owner 権限のみと再確認し、`private_storage_policy_sha` を PINNED。 |
 
 機械可読な正本は `inputs/private_storage_policy.json` の `blocking_question`。
 
@@ -48,12 +48,15 @@ Source / Identity 形質体系と測定器を同じ条件で適用したとき�
 
 | Gate | 状態 | 理由 |
 |---|---|---|
-| R10-G0 `RUN_CONTRACT_COMPLETE` | **BLOCKED** | Core pin 欄に PENDING が残る（§31 cost cap 4 欄を含む） |
-| R10-G1 `RIGHTS_AND_PRIVATE_BOUNDARY` | **BLOCKED** | R10-PUB-1 は裁定済み。AQUEST 回答アーカイブ未固定 / private staging root 未確定 |
-| R10-G2 `PRE_RUN_INVENTORY_COMPLETE` | **BLOCKED** | 設計文書の実体未照合 / A0 未取得 / AF01 bundle 実体未取得 / meter 未実装 |
+| R10-G0 `RUN_CONTRACT_COMPLETE` | **BLOCKED** | cost cap・A0基本pin・標準UTAU toolchain・private policyは凍結済みだが、他のCore pinにPENDINGが残る |
+| R10-G1 `RIGHTS_AND_PRIVATE_BOUNDARY` | **BLOCKED** | private boundaryは解決済み。AQUEST回答の正典private archiveとrights manifest freezeが未完了 |
+| R10-G2 `PRE_RUN_INVENTORY_COMPLETE` | **BLOCKED** | committed inventoryはprivate入力なしで再生成する公開baselineのためUNRESOLVEDを維持。private preflightでは設計文書・A0をPRESENTまで確認したが、AF01 Linux replay、A0 recorded pitch、meter群、残Core成果物が未完了 |
 | R10-G3 以降 | 未到達 | — |
 
-`pre_run/inventory.json` が機械可読な正本（`gate_state: BLOCKED`）。
+`pre_run/inventory.json` はprivate path/実体を渡さずCIで再生成できる**公開baseline**であり、
+現在のprivate実行記録そのものではない。private実測では別出力へ再生成し、全項目完了後に
+その実バイトを `pre_run_inventory_sha` へpinする。公開baselineとprivate実行記録はどちらも
+現時点で `gate_state: BLOCKED` であり、PASSを主張しない。
 
 ### 実測済みで PASS しているもの
 
@@ -72,9 +75,10 @@ python voice_genesis/external_validation/run10_aquest_vg_phenotype_compatibility
 - canonical 4 点（`AF01.json` / `generator_AF01_SF1.py` / `founder_manifest.json` /
   `AF01_all25_units_C4.wav`）が設計 §7.3 の凍結値と一致
 
-未実行なのは bundle 実体との照合（§29 手順 6 の第 2 段）と決定論的 payload
-replay（手順 7）である。いずれも 8.9 MB の bundle 実体を要し、Drive MCP 経由では
-取得できなかった（セッションが落ちる）。bundle をローカルに置ければ
+8.9 MB の bundle 実体は owner-only private staging へ取得済みで、payload の
+presence/hash は一致した。Windows では ledger の POSIX path と列挙した backslash path
+の比較、および symlink 権限で full verdict が fail-closed になるため、§29 手順 6 の
+最終照合と手順 7 の決定論 replay は Linux 実行環境で行う。
 
 ```bash
 python af01_freeze_verifier.py --bundle-root <AF01_v1.0 展開先>
@@ -95,12 +99,13 @@ run10_aquest_vg_phenotype_compatibility/
 ├── inputs/
 │   ├── af01_payload_sha256sums.txt   # AF01 v1.0 凍結台帳（実バイト同一）
 │   ├── rights_manifest.json          # §2.2 権利境界（DRAFT_NOT_FROZEN）
-│   └── private_storage_policy.json   # 保管方針（R10-PUB-1 裁定済／staging root 残件）
+│   └── private_storage_policy.json   # 保管方針（R10-PUB-1 + owner-only root 裁定・検証済み）
 ├── pre_run/
+│   ├── build_a0_manifest.py           # §29 手順 4（private staging 専用）
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（407 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -113,22 +118,43 @@ run10_aquest_vg_phenotype_compatibility/
 
 | 手順 | 内容 | 律速 |
 |---|---|---|
-| 0 | v0.4 承認と Core Run Contract freeze | **User 裁定**（cost cap 4 欄。R10-PUB-1 は裁定済み） |
+| 0 | v0.4 承認と Core Run Contract freeze | cost cap 4 欄・R10-PUB-1・private root・UTAU標準toolchain・AF0 optional BLOCKEDを裁定済み。残Core pinあり |
 | 1 | AQUEST 回答と権利境界の archive/pin | User（原文の private archive 化） |
-| 2 | repository / dependencies / private storage の検証 | **完了**（R10-PUB-1 = 裁定済み。staging root のみ残件） |
+| 2 | repository / dependencies / private storage の検証 | private storage は完了。repository commit / dependency pin は本測定直前まで未凍結 |
 | 3 | Pre-Run Inventory 実行 | **実装済み**（結果は BLOCKED） |
-| 4 | A0 voicebank の inventory と hash | **User 供給待ち**（machine-dependent） |
+| 4 | A0 voicebank の inventory と hash | **完了**（pin済みZIPと展開rootの全path/hash一致、288 files、WAV 142、unreadable 0、独立2生成 byte-identical） |
 | 5 | Evolution Theory 参照の解決 | **完了**（2026-08-27 実バイト照合 → 契約 pin 済み。本体は private のまま） |
-| 6 | AF01 payload ledger 等の検証 | **台帳段階まで完了**／実体照合は bundle 待ち |
-| 7 | AF01 決定論的 payload replay | bundle 実体待ち |
+| 6 | AF01 payload ledger 等の検証 | bundle取得・payload hash照合済み。full verifierはLinuxで実行待ち |
+| 7 | AF01 決定論的 payload replay | Linux実行待ち（Windows path/symlink前提ではfail-closed） |
 | 8 | AF01 V1 生成 | transport 経路の選定が未裁定 |
-| 9 | E0 の truth / code independence 検証 | bundle 実体待ち |
-| 10–11 | neutral carrier manifest と Performance 不在検証 | resampler / wavtool 選定待ち |
+| 9 | E0 の truth / code independence 検証 | bundle取得済み。Linuxでの実体照合とparameter manifest境界の裁定待ち |
+| 10–11 | neutral carrier manifest と Performance 不在検証 | 標準resampler/wavtoolはpin済み。carrier/UST固定値の凍結待ち |
 | 12–16 | 内部校正 → E0 外部校正 → 数値判定則 freeze | §11 measurement family の実装が前提 |
 
 機械側だけで進められる次の単位は **§11 measurement family（M0–M6）の実装**
 と **§12 内部校正 fixture の生成**である。ただし E0 外部校正（手順 14）は
 AF01 bundle 実体を要する。
+
+## A0 voicebank manifest（private staging 専用）
+
+`pre_run/build_a0_manifest.py` は A0 の root 相対ファイル順、全ファイルの
+SHA-256、WAV の PCM ヘッダ値を決定論的 JSON にまとめる。出力には private な
+ファイル名と per-file hash が含まれるため、Git リポジトリ内への書き出しを拒否し、
+明示した private staging root の内側にのみ原子的に書く。
+
+```text
+python pre_run/build_a0_manifest.py \
+  --voicebank-root <private>/A0/_Default \
+  --staging-root <private> \
+  --zip-path <private>/A0/RUN10_A0_UTAU_Default.zip \
+  --zip-sha256 <verified-zip-sha256> \
+  --voicebank-version "UTAUデフォルト音声 Ver1.2" \
+  --out <private>/A0/a0_voicebank_manifest.json
+```
+
+ZIP の path/hash は同時指定であり、不一致時は manifest を公開しない。
+`--obtained-at` を明示しない限り実行時刻を含めないため、同一入力の出力は
+バイト一致する。manifest 本体・A0 実体・ファイル名一覧は commit しない。
 
 ## 主張の天井（§5.3）
 

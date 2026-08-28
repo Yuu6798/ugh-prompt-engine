@@ -88,10 +88,6 @@ UNWIRED_REGISTRY: Dict[str, str] = {
         "正当な実行経路である — git 追跡ツリー全体を検査する性質上、"
         "アプリケーションコードからは呼ばれない。"
     ),
-    "assert_private_staging_path": (
-        "PENDING_APPLICATION: §26 private results bundle の書き出し実装時に配線する。"
-        "現時点で staging へ書き出す producer が存在しないため呼び出し元が無い。"
-    ),
     "assert_no_public_destination": (
         "PENDING_APPLICATION: 成果物の送出先を受け取るコードの実装時に配線する。"
         "現時点で destination を扱う producer が存在しないため呼び出し元が無い。"

@@ -67,14 +67,13 @@ def _fully_pinned(doc: Dict[str, Any]) -> Dict[str, Any]:
 def test_contract_parses_and_reports_true_gate_state(contract: m.Run10Contract) -> None:
     """§28-1: R10-G0 は Core 欄が全て pin 済みのときだけ PASS になる。
 
-    現時点の contract は A0 未取得・measurement 層未実装のため BLOCKED である
+    現時点の contract は A0 基本pinを凍結済みだが、measurement 層等が未実装のため BLOCKED である
     ことをそのまま検証する（捏造して PASS にしない）。
     """
     assert contract.gate_r10_g0() == "BLOCKED"
     missing = contract.missing("CORE")
     assert missing, "Core 欄が全て pin 済みなら BLOCKED にならないはず"
-    # PINNED 済みの欄は AF01 由来の 4 件 + attempt_id
-    # + Evolution Theory v0.3 参照（User 照合 2026-08-27 で §29 手順 5 完了）。
+    # PINNED 済み欄を明示し、裁定済み項目が PENDING へ巻き戻らないようにする。
     pinned = [n for n in m.CORE_PIN_FIELDS if contract.pin(n).pinned]
     assert set(pinned) == {
         "attempt_id",
@@ -83,6 +82,12 @@ def test_contract_parses_and_reports_true_gate_state(contract: m.Run10Contract) 
         "e0_external_calibration_source_sha",
         "e0_af01_sf1_truth_sha",
         "vg_evolution_theory_ref_sha",
+        "private_storage_policy_sha",
+        "aquest_voicebank_manifest_sha",
+        "aquest_raw_file_order_sha",
+        "oto_ini_sha",
+        "resampler_sha",
+        "wavtool_sha",
     }
 
 
@@ -207,20 +212,63 @@ def test_private_storage_policy_records_public_repo_adjudication() -> None:
     assert question["adjudicated_at"] == "2026-08-27"
     assert question["interim_disposition"] == "ADOPTED_AS_STANDING_POLICY"
     assert "設計文書本文" in question["adjudication_record"]
+    private_root = doc["private_root_adjudication"]
+    assert private_root["adjudicator"] == "User"
+    assert private_root["adjudicated_at"] == "2026-08-28"
+    assert private_root["decision"] == "APPROVED_OWNER_ONLY"
+    assert private_root["temporary_execution"] == "SESSION_LOCAL_ONLY"
 
 
-def test_private_storage_policy_pin_is_not_frozen(contract: m.Run10Contract) -> None:
-    """§32-2: staging root が未確定の間は private_storage_policy_sha を PINNED にしない。
-
-    R10-PUB-1 の裁定は下りたが、§26 private staging root の実体が未確定である
-    以上、方針文書は凍結できない（残件は `residual_unresolved`）。
-    """
+def test_private_storage_policy_is_verified_and_byte_pinned(
+    contract: m.Run10Contract,
+) -> None:
+    """§32-2: owner-only root の再検証済み policy bytes を契約へ接続する。"""
+    import hashlib
     import json
 
-    doc = json.loads(PRIVATE_POLICY_PATH.read_text(encoding="utf-8"))
-    assert doc["private_staging"]["verified"] is False
-    assert doc["residual_unresolved"]["items"] == ["private_staging.root"]
-    assert contract.pin("private_storage_policy_sha").status == "PENDING"
+    policy_bytes = PRIVATE_POLICY_PATH.read_bytes()
+    doc = json.loads(policy_bytes)
+    assert doc["status"] == "ADJUDICATED_PRIVATE_ROOT_VERIFIED"
+    assert doc["private_staging"]["verified"] is True
+    assert doc["private_staging"]["sharing"] == "owner-only"
+    assert doc["private_staging"]["verification_evidence"]["broad_permissions"] == []
+    assert doc["residual_unresolved"]["items"] == []
+    pin = contract.pin("private_storage_policy_sha")
+    assert pin.status == "PINNED"
+    assert pin.value == hashlib.sha256(policy_bytes).hexdigest()
+
+
+def test_user_adjudicated_a0_toolchain_and_optional_af0_are_frozen(
+    contract: m.Run10Contract,
+) -> None:
+    """2026-08-28 裁定と実測済み A0/UTAU pin を正本契約へ固定する。"""
+    expected = {
+        "aquest_voicebank_manifest_sha": (
+            "042813936caf759f3fc95a29a6655a07c76a3a302bd6705538443ca5d08fe01f"
+        ),
+        "aquest_raw_file_order_sha": (
+            "2c6be5939fc5e849c4d77962edc6b22c29e809b731ba2d2a8c7e5fc6c7931b13"
+        ),
+        "oto_ini_sha": (
+            "9836404bfdcac094acefe7c87a7ae8923b5def8607a87b38ab0572549246d0e1"
+        ),
+        "resampler_sha": (
+            "fca8affa0398f157bd2a00e3d07e400c60c1c03c190e9bcb5e89e17dad7abd4c"
+        ),
+        "wavtool_sha": (
+            "3717891b7cbc788731bbf7459d724283923b4642ba687ca269ee81bd18370cb0"
+        ),
+    }
+    for name, value in expected.items():
+        pin = contract.pin(name)
+        assert pin.status == "PINNED"
+        assert pin.value == value
+
+    for name in ("af_p0_design_ref_sha", "af0_canonical_artifact_sha"):
+        pin = contract.pin(name)
+        assert pin.status == "BLOCKED"
+        assert pin.value is None
+        assert name not in contract.missing("CORE")
 
 
 # --- §28-13: Performance 除外 ----------------------------------------------
@@ -516,9 +564,17 @@ def test_cost_cap_pins_block_gate_g0(contract_doc: Dict[str, Any]) -> None:
 
 
 def test_cost_cap_pins_are_registered_as_pin_fields(contract: m.Run10Contract) -> None:
-    """cost cap 4 欄が pin 欄として登録され、現状は PENDING である。"""
-    for name in m.COST_CAP_PIN_FIELDS:
-        assert contract.pin(name).status == "PENDING"
+    """2026-08-28 User 裁定の 4 上限を RUN10-ATTEMPT-01 へ固定する。"""
+    expected = {
+        "cost_cap.cpu_hours_max": 48,
+        "cost_cap.gpu_hours_max": 2,
+        "cost_cap.storage_bytes_max": 5_000_000_000,
+        "cost_cap.render_count_max": 2_000,
+    }
+    for name, value in expected.items():
+        pin = contract.pin(name)
+        assert pin.status == "PINNED"
+        assert pin.value == value
 
 
 # --- results の evidence 要求（PR #330 Codex 第 1 巡 P1） -------------------
