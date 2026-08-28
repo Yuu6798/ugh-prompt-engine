@@ -31,11 +31,12 @@ sha256 が凍結値と一致するか）。これは §29 手順 6 の第 1 段�
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 _THIS_DIR = Path(__file__).resolve().parent
 _RUN10_DIR = _THIS_DIR.parent
@@ -49,6 +50,11 @@ from af01_freeze_verifier import (  # noqa: E402
     read_and_verify_ledger,
     verify_bundle,
     verify_deterministic_replay,
+)
+from build_a0_manifest import (  # noqa: E402
+    SCHEMA as A0_MANIFEST_SCHEMA,
+    _assert_voicebank_snapshot_unchanged,
+    _file_order_sha256,
 )
 from svp_rpe.utils.atomic_io import atomic_write_bytes  # noqa: E402
 
@@ -349,7 +355,81 @@ def _check_freeze_registration(path: Path) -> Tuple[str, str]:
     return PRESENT, f"{path}: schema / 凍結ハッシュ / 構造量の宣言が凍結値と一致"
 
 
-def inventory_aquest(voicebank_root: Optional[Path]) -> List[InventoryItem]:
+def _a0_contract_pins(
+    contract_path: Optional[Path] = None,
+) -> Tuple[Optional[Dict[str, str]], str]:
+    path = Path(contract_path) if contract_path is not None else CONTRACT_PATH
+    fields = (
+        "aquest_voicebank_manifest_sha",
+        "aquest_raw_file_order_sha",
+        "oto_ini_sha",
+    )
+    try:
+        contract = load_run10_contract(path)
+    except (OSError, Run10ContractError) as exc:
+        return None, f"A0 pin を contract から解決できない: {exc}"
+    values: Dict[str, str] = {}
+    for field in fields:
+        pin = contract.pins.get(field)
+        if pin is None or not pin.pinned or not isinstance(pin.value, str):
+            return None, f"RUN10_CONTRACT.yaml の {field} が PINNED でない"
+        values[field] = pin.value
+    return values, ""
+
+
+def _verify_a0_manifest_and_root(
+    root: Path,
+    manifest_path: Optional[Path],
+    contract_path: Optional[Path],
+) -> Tuple[bool, str, int]:
+    if manifest_path is None or not Path(manifest_path).is_file():
+        return False, "private A0 manifest が未指定または不在", 0
+    pins, why = _a0_contract_pins(contract_path)
+    if pins is None:
+        return False, why, 0
+
+    try:
+        manifest_bytes = Path(manifest_path).read_bytes()
+        actual_manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+        if actual_manifest_sha != pins["aquest_voicebank_manifest_sha"]:
+            return False, "A0 manifest sha256 が contract pin と一致しない", 0
+        document = json.loads(manifest_bytes.decode("utf-8"))
+        if not isinstance(document, dict) or document.get("schema") != A0_MANIFEST_SCHEMA:
+            return False, "A0 manifest schema が不正", 0
+        entries: Any = document.get("files")
+        if not isinstance(entries, list) or not entries:
+            return False, "A0 manifest files が空または不正", 0
+        paths: List[str] = []
+        seen = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                return False, "A0 manifest file entry が不正", 0
+            path = entry.get("path")
+            digest = entry.get("sha256")
+            if not isinstance(path, str) or not isinstance(digest, str):
+                return False, "A0 manifest path/hash が不正", 0
+            if path in seen:
+                return False, "A0 manifest に重複 path がある", 0
+            seen.add(path)
+            paths.append(path)
+        if _file_order_sha256(paths) != pins["aquest_raw_file_order_sha"]:
+            return False, "A0 file-order sha256 が contract pin と一致しない", 0
+        oto_entries = [entry for entry in entries if entry["path"] == "oto.ini"]
+        if len(oto_entries) != 1 or oto_entries[0]["sha256"] != pins["oto_ini_sha"]:
+            return False, "A0 oto.ini sha256 が contract pin と一致しない", 0
+        _assert_voicebank_snapshot_unchanged(root, entries)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        return False, f"A0 manifest/root 照合に失敗: {exc}", 0
+
+    wav_count = sum(entry.get("kind") == "wav" for entry in entries)
+    return True, "A0 manifest と展開 root の全 path/hash および3 contract pinが一致", wav_count
+
+
+def inventory_aquest(
+    voicebank_root: Optional[Path],
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> List[InventoryItem]:
     """A0 関連項目（§7.1 / §9.4）。実体は User 供給・machine-dependent。"""
     if voicebank_root is None or not Path(voicebank_root).is_dir():
         detail = (
@@ -362,23 +442,16 @@ def inventory_aquest(voicebank_root: Optional[Path]) -> List[InventoryItem]:
             InventoryItem("a0_recorded_pitch_inventory", UNRESOLVED, detail, blocking=True),
         ]
 
-    root = Path(voicebank_root)
-    wavs = sorted(p for p in root.rglob("*.wav") if p.is_file())
-    oto = sorted(p for p in root.rglob("oto.ini") if p.is_file())
-    character = sorted(p for p in root.rglob("character.txt") if p.is_file())
-    # §7.1 は character.txt SHA256 を必須 pin に挙げており、本関数の未取得
-    # メッセージも rights_manifest も同じ 3 点を required と書いている。
-    # WAV と oto.ini だけで PRESENT にすると、不完全な voicebank のまま
-    # R10-G2 が COMPLETE になり得る（PR #330 Codex 第 12 巡 P2）。
-    present = bool(wavs) and bool(oto) and bool(character)
+    root = Path(voicebank_root).resolve()
+    present, verification_detail, wav_count = _verify_a0_manifest_and_root(
+        root, manifest_path, contract_path
+    )
     return [
         InventoryItem(
             item_id="aquest_voicebank_files",
             state=PRESENT if present else ABSENT,
             detail=(
-                f"raw WAV {len(wavs)} 件 / oto.ini {len(oto)} 件 / character.txt "
-                f"{len(character)} 件"
-                + ("" if present else "（§7.1 必須 3 点のいずれかが欠けている）")
+                f"raw WAV {wav_count} 件。{verification_detail}"
             ),
             blocking=not present,
         ),
@@ -602,6 +675,7 @@ def inventory_repository(
 def build_inventory(
     af01_bundle_root: Optional[Path] = None,
     aquest_voicebank_root: Optional[Path] = None,
+    aquest_voicebank_manifest_path: Optional[Path] = None,
     repo: Optional[Path] = None,
     af01_replay: bool = False,
     evolution_theory_path: Optional[Path] = None,
@@ -612,7 +686,9 @@ def build_inventory(
     root = repo if repo is not None else _repo_root()
     items = (
         inventory_af01(af01_bundle_root, run_replay=af01_replay)
-        + inventory_aquest(aquest_voicebank_root)
+        + inventory_aquest(
+            aquest_voicebank_root, aquest_voicebank_manifest_path, contract_path
+        )
         + inventory_repository(root, evolution_theory_path, contract_path, design_doc_path)
     )
     blocking = [item for item in items if item.blocking]
@@ -646,6 +722,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="A0 = AquesTalk 由来 UTAU デフォルト音声のルート（private ストレージ）。",
     )
     parser.add_argument(
+        "--aquest-voicebank-manifest",
+        default=None,
+        help=(
+            "build_a0_manifest.py が private staging に生成した A0 manifest。"
+            "contract pin と展開 root の全 path/hash を照合する。"
+        ),
+    )
+    parser.add_argument(
         "--design-doc-path",
         default=None,
         help=(
@@ -675,6 +759,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         af01_bundle_root=Path(args.af01_bundle_root) if args.af01_bundle_root else None,
         aquest_voicebank_root=(
             Path(args.aquest_voicebank_root) if args.aquest_voicebank_root else None
+        ),
+        aquest_voicebank_manifest_path=(
+            Path(args.aquest_voicebank_manifest)
+            if args.aquest_voicebank_manifest
+            else None
         ),
         af01_replay=args.af01_replay,
         evolution_theory_path=(

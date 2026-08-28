@@ -29,6 +29,7 @@ if str(_RUN_DIR / "pre_run") not in sys.path:
     sys.path.insert(0, str(_RUN_DIR / "pre_run"))
 
 import build_pre_run_inventory as inv  # noqa: E402
+import build_a0_manifest as a0  # noqa: E402
 import run10_schema as m  # noqa: E402
 
 COMMITTED_INVENTORY = _RUN_DIR / "pre_run" / "inventory.json"
@@ -36,6 +37,25 @@ COMMITTED_INVENTORY = _RUN_DIR / "pre_run" / "inventory.json"
 
 def _items(document: dict) -> dict:
     return {item["item_id"]: item for item in document["items"]}
+
+
+def _pinned_a0_manifest(
+    root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    document = a0.build_manifest(root, voicebank_version="test")
+    payload = m.canonical_json_bytes(document)
+    manifest = tmp_path / "a0_voicebank_manifest.json"
+    manifest.write_bytes(payload)
+    oto = next(entry for entry in document["files"] if entry["path"] == "oto.ini")
+    pins = {
+        "aquest_voicebank_manifest_sha": hashlib.sha256(payload).hexdigest(),
+        "aquest_raw_file_order_sha": document["ordering"]["file_order_sha256"],
+        "oto_ini_sha": oto["sha256"],
+    }
+    monkeypatch.setattr(
+        inv, "_a0_contract_pins", lambda contract_path=None: (pins, "")
+    )
+    return manifest
 
 
 def test_inventory_reports_blocked_without_a0_and_meters() -> None:
@@ -65,7 +85,9 @@ def test_a0_items_are_unresolved_when_voicebank_absent() -> None:
     assert items["a0_recorded_pitch_inventory"]["state"] == inv.UNRESOLVED
 
 
-def test_a0_raw_unit_count_is_recorded_when_voicebank_present(tmp_path: Path) -> None:
+def test_a0_raw_unit_count_is_recorded_when_voicebank_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """§28-15: voicebank があれば raw WAV 件数を記録する。"""
     root = tmp_path / "voicebank"
     root.mkdir()
@@ -73,9 +95,57 @@ def test_a0_raw_unit_count_is_recorded_when_voicebank_present(tmp_path: Path) ->
         (root / name).write_bytes(b"RIFF")
     (root / "oto.ini").write_text("", encoding="utf-8")
     (root / "character.txt").write_text("name=x", encoding="utf-8")
-    items = _items(inv.build_inventory(aquest_voicebank_root=root))
+    manifest = _pinned_a0_manifest(root, tmp_path, monkeypatch)
+    items = _items(
+        inv.build_inventory(
+            aquest_voicebank_root=root,
+            aquest_voicebank_manifest_path=manifest,
+        )
+    )
     assert items["aquest_voicebank_files"]["state"] == inv.PRESENT
     assert "raw WAV 3 件" in items["aquest_voicebank_files"]["detail"]
+
+
+def test_a0_root_without_pinned_manifest_is_not_present(tmp_path: Path) -> None:
+    root = tmp_path / "voicebank"
+    root.mkdir()
+    (root / "a.wav").write_bytes(b"RIFF")
+    (root / "oto.ini").write_text("", encoding="utf-8")
+    (root / "character.txt").write_text("name=x", encoding="utf-8")
+    item = _items(inv.build_inventory(aquest_voicebank_root=root))[
+        "aquest_voicebank_files"
+    ]
+    assert item["state"] == inv.ABSENT
+    assert item["blocking"] is True
+    assert "manifest" in item["detail"]
+
+
+@pytest.mark.parametrize("mutation", ["add", "remove", "change"])
+def test_a0_root_drift_from_pinned_manifest_is_not_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    root = tmp_path / "voicebank"
+    root.mkdir()
+    (root / "a.wav").write_bytes(b"RIFF")
+    (root / "oto.ini").write_text("", encoding="utf-8")
+    (root / "character.txt").write_text("name=x", encoding="utf-8")
+    manifest = _pinned_a0_manifest(root, tmp_path, monkeypatch)
+    if mutation == "add":
+        (root / "late.bin").write_bytes(b"late")
+    elif mutation == "remove":
+        (root / "character.txt").unlink()
+    else:
+        (root / "oto.ini").write_text("changed", encoding="utf-8")
+
+    item = _items(
+        inv.build_inventory(
+            aquest_voicebank_root=root,
+            aquest_voicebank_manifest_path=manifest,
+        )
+    )["aquest_voicebank_files"]
+    assert item["state"] == inv.ABSENT
+    assert item["blocking"] is True
+    assert "changed after its manifest snapshot" in item["detail"]
 
 
 def test_unperformed_pitch_inventory_keeps_blocking(tmp_path: Path) -> None:
@@ -292,7 +362,9 @@ def test_replay_pass_clears_the_item(tmp_path: Path, monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("missing", ["oto.ini", "character.txt"])
-def test_incomplete_voicebank_is_not_present(tmp_path: Path, missing: str) -> None:
+def test_incomplete_voicebank_is_not_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
     """§7.1: WAV と oto.ini だけで PRESENT にしない（character.txt も必須 pin）。
 
     不完全な voicebank のまま R10-G2 が COMPLETE になり得た
@@ -302,13 +374,19 @@ def test_incomplete_voicebank_is_not_present(tmp_path: Path, missing: str) -> No
     root.mkdir()
     (root / "a.wav").write_bytes(b"RIFF")
     for name in ("oto.ini", "character.txt"):
-        if name != missing:
-            (root / name).write_text("x", encoding="utf-8")
-    items = _items(inv.build_inventory(aquest_voicebank_root=root))
+        (root / name).write_text("x", encoding="utf-8")
+    manifest = _pinned_a0_manifest(root, tmp_path, monkeypatch)
+    (root / missing).unlink()
+    items = _items(
+        inv.build_inventory(
+            aquest_voicebank_root=root,
+            aquest_voicebank_manifest_path=manifest,
+        )
+    )
     item = items["aquest_voicebank_files"]
     assert item["state"] == inv.ABSENT
     assert item["blocking"] is True
-    assert "必須 3 点" in item["detail"]
+    assert "changed after its manifest snapshot" in item["detail"]
 
 
 # --- 第 14 巡: canonical_body の全欄照合 ---------------------------------
