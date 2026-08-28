@@ -3,36 +3,42 @@
   "bindings": {
     "practice_audio_split_manifest_sha": "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6",
     "pjs_consumed_inputs_manifest_sha": "4e61deae223844bbabf110be309c0a2179d9cd68c272a0dafb9e062d19f6e8b0",
-    "education_technique_lesson_manifest_sha": "fc01f413e3d92a679d7ace81aae7ffbcf97714ededb8de28211971efb5321b2c"
+    "education_technique_lesson_manifest_sha": "fc01f413e3d92a679d7ace81aae7ffbcf97714ededb8de28211971efb5321b2c",
+    "practice_alignment_spec_sha": "dc8a37fe3c1883694082936c9bee31f10266dabb1cf1ae5f2b94232d16000567",
+    "practice_actor_input_manifest_sha": "f81d476bb8f240dbb54812dccf44c4c4d4d92d823cac8ad61fb3cda402abbbda",
+    "practice_audit_annotation_manifest_sha": "11d568c303825654aaf2eb1ad4fd50f8455e76791e38653cbe78b76c2ebbf88c"
   },
-  "bindings_source_note": "3値とも RUN9_CONTRACT.yaml の現行 PINNED 値の転記。load_pinned_learning_data_binding_manifest() は都度ディスク再読込した RUN9_CONTRACT.yaml のこの 3 pin 値との完全一致を fail-closed で要求する（裁定 §5 逐語）。いずれか1つでも不一致・repin により乖離した場合は拒否する。",
+  "bindings_source_note": "旧3値 + PRACTICE再凍結3値はいずれもRUN9_CONTRACT.yamlの現行PINNED値の転記。load_pinned_learning_data_binding_manifest()は都度ディスク再読込した6 pin値との完全一致をfail-closedで要求する。",
   "branch_usage": {
     "practice": {
-      "uses": ["practice_audio_split_manifest_sha", "pjs_consumed_inputs_manifest_sha"],
-      "excludes_during_search": ["education_technique_lesson_manifest_sha"],
-      "rule": "practiceは前2件（practice_audio_split_manifest_sha / pjs_consumed_inputs_manifest_sha）を検索入力として利用し、education lessonを検索中に参照しない"
+      "uses": ["practice_alignment_spec_sha", "practice_actor_input_manifest_sha"],
+      "upstream_provenance": ["practice_audio_split_manifest_sha", "pjs_consumed_inputs_manifest_sha"],
+      "post_freeze_audit": ["practice_audit_annotation_manifest_sha"],
+      "excludes_during_search": ["education_technique_lesson_manifest_sha", "pjs_consumed_inputs_manifest_sha", "practice_audit_annotation_manifest_sha"],
+      "lab_allowed": false,
+      "rule": "practice検索はpractice_alignment_spec_sha + practice_actor_input_manifest_shaのみを利用する。旧split/consumed pinsはupstream provenanceに限定し、.labを含むconsumed/audit/education lessonを検索中に開かない。"
     },
     "education": {
       "uses": ["education_technique_lesson_manifest_sha"],
       "excludes_raw_audio_direct_input": true,
       "rule": "educationはeducation lessonを利用し、PJS raw audioをlearnerへ直接入力しない"
     },
-    "future_enforcement_note": "将来の学習ループ実装がこの branch_usage 宣言を import 分離テスト（practice 側モジュールが education lesson manifest を、education 側モジュールが PJS raw audio consumed-inputs パスを import しないことを機械強制するテスト）で機械強制することを、本 note に記載する（裁定 §5 逐語を踏まえた実装義務の事前登録）"
+    "future_enforcement_note": "PRACTICE learnerはactor manifestのWAV + projection参照だけを受理し、audit manifest・.lab・mixed consumed-inputs manifestのopen試行をread前にfail-closed拒否する。EDUCATION learnerは凍結lessonだけを受理する。"
   },
   "data_binding_field_convention": {
     "format": "sha256:<64hex>",
-    "refers_to": "learning_recipe manifest 側の data_binding フィールドは、本 manifest（learning_data_binding_manifest_v1.json）自体の raw sha256 を 'sha256:<64hex>' 形式で参照する（3 pin 値そのものではなく、3 pin 値を束ねた本 manifest への単一参照）"
+    "refers_to": "learning_recipe manifest 側の data_binding フィールドは、本 manifest（learning_data_binding_manifest_v1.json）自体の raw sha256 を 'sha256:<64hex>' 形式で参照する（6 pin 値そのものではなく、6 pin 値を束ねた本 manifest への単一参照）"
   },
   "adjudication_basis": {
     "sha256": "18b467dd0340aeb3e05b26a14bfdb986c502e39a222668ccddd1f396dab1aa31",
     "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt",
-    "summary": "User 裁定 2026-08-27（Learning Recipe 残5キー）§5 data_binding: practice_audio_split_manifest_sha / pjs_consumed_inputs_manifest_sha / education_technique_lesson_manifest_sha の3 pinを束ねたlearning data binding manifestを発行する。practiceは前2件を検索入力として利用し education lessonを検索中に参照しない。educationはeducation lessonを利用しPJS raw audioをlearnerへ直接入力しない。data_bindingフィールドはbinding manifestのraw SHA256参照とし、loaderはRUN9_CONTRACTの3 pin値との完全一致をfail-closedで要求する。"
+    "summary": "User裁定2026-08-27 §5はsplit / consumed inputs / education lessonの3 pinを束ねるdata bindingを凍結した。User裁定2026-08-28 §5-§6は既存3 pinをupstream provenanceとして維持しつつ、alignment spec / actor-safe input / post-freeze auditの新3 pinを追加して計6 pinへ再凍結し、PRACTICE検索入力をalignment spec + actor-safe manifestだけへ限定した。data_bindingフィールドは本manifestのraw SHA256を参照し、loaderはRUN9_CONTRACTの6 pin値との完全一致をfail-closedで要求する。"
   },
   "provenance": {
     "detail_record": {
       "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_AXIS_FEASIBILITY_RECORD.md",
       "sha256": "b85906f8ec0c59f60b6a410cf97a757ec3f6f6c4d47e4f6bf4bd425f03217d55",
-      "note": "本 manifest 自体は W1/W1b 実測を直接参照しない（束ねる3 pinの由来はそれぞれ HARNESS3A/HARNESS3B/PR #329 の既存 record）が、本 manifest が属する RUN9-L0-HARNESS-3c フェーズの一部としてこの record を provenance に収載する"
+      "note": "本manifest自体はW1/W1b実測を直接参照しない。旧3 pinの由来はHARNESS3A/HARNESS3B/PR #329、新3 pinは各manifestが2026-08-28裁定とHARNESS3C_PRACTICE_ALIGNMENT_RECORD.mdを個別にpinする。本manifestはRUN9-L0-HARNESS-3cの既存5-key bundleとして本detail recordを維持する。"
     }
   }
 }

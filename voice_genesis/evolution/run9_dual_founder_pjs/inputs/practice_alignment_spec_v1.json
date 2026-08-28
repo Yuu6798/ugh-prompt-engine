@@ -1,0 +1,122 @@
+{
+  "schema": "run9-practice-alignment-spec/1.0",
+  "algorithm": {
+    "algorithm_id": "monotonic_segment_dp_v1",
+    "deterministic": true,
+    "implementation": "voice_genesis/evolution/run9_dual_founder_pjs/practice_alignment.py",
+    "implementation_sha256": "d7ee70510c42b106f8d8dfb2ab34f9c7c54ffa0f1f5459234a3d13102b3321b8"
+  },
+  "input_contract": {
+    "allowed_inputs": [
+      "training_raw_audio",
+      "sanitized_score_projection"
+    ],
+    "wav_format": {
+      "encoding": "PCM",
+      "channels": 1,
+      "sample_rate_hz": 48000,
+      "bits_per_sample": 24
+    },
+    "score_projection_fields": [
+      "mora_order",
+      "mora_count",
+      "nominal_duration_ratio",
+      "phrase_grouping",
+      "lyrics_phoneme_sequence",
+      "nominal_pitch"
+    ],
+    "teacher_boundary_inputs_allowed": false
+  },
+  "feature_extraction": {
+    "frame_window_ms": 40,
+    "frame_hop_ms": 10,
+    "rms_db_floor": 1e-12,
+    "active_threshold_db_below_peak": 30.0,
+    "active_pad_frames": 2,
+    "onset_normalization": "positive_rms_db_delta_divided_by_p95_clipped_0_1",
+    "low_energy_complement": "active_peak_minus_rms_db_normalized_to_0_1",
+    "pitch_evidence": "nominal_pitch_normalized_autocorrelation_clipped_0_1",
+    "dtype": "float64",
+    "nonfinite_policy": "ALIGNMENT_FAILED"
+  },
+  "cost_function": {
+    "formula": "1.25*ln(observed_frames/target_frames)^2 + (1-mean_nominal_pitch_autocorrelation) + internal_boundary*0.35*(1-boundary_strength)",
+    "terms": [
+      "duration_log_ratio",
+      "nominal_pitch_autocorrelation",
+      "internal_boundary_strength"
+    ],
+    "weights": {
+      "duration_log_ratio": 1.25,
+      "nominal_pitch_autocorrelation": 1.0,
+      "internal_boundary_strength": 0.35
+    },
+    "accumulation_dtype": "float64"
+  },
+  "constraints": {
+    "exact_segments_equal_mora_count": true,
+    "monotonic": true,
+    "minimum_frames_per_mora": 3,
+    "duration_ratio_bounds": [
+      0.35,
+      2.8
+    ],
+    "first_last_active_extent_fixed": true
+  },
+  "tie_break": {
+    "epsilon": 1e-12,
+    "order": [
+      "lower_total_cost",
+      "smaller_predecessor_frame"
+    ]
+  },
+  "failure_policy": {
+    "alignment_failure_status": "ALIGNMENT_FAILED",
+    "candidate_status": "NOT_SCORABLE",
+    "zero_fill": "PROHIBITED",
+    "guessed_fill": "PROHIBITED",
+    "budget_extension": "PROHIBITED",
+    "terminal_conditions": [
+      "no_active_audio",
+      "audio_too_short",
+      "no_feasible_path",
+      "nonfinite_value",
+      "normalized_cost_above_maximum"
+    ],
+    "maximum_normalized_cost": 3.0
+  },
+  "output_contract": {
+    "status_values": [
+      "ALIGNED",
+      "ALIGNMENT_FAILED"
+    ],
+    "fields": [
+      "status",
+      "reason",
+      "mora_count",
+      "boundaries_s",
+      "total_cost",
+      "normalized_cost"
+    ],
+    "boundary_unit": "seconds_from_wav_start",
+    "failed_boundaries": []
+  },
+  "prohibitions": [
+    "lab_fallback",
+    "external_alignment",
+    "teacher_derived_boundary",
+    "random_fallback"
+  ],
+  "adjudication_basis": {
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260828_PRACTICE_ALIGNMENT.txt",
+    "sha256": "f33f1deb80bfe824d6c9313cef95961a26ce7174a0b745f51a3884e5b77bf8fb",
+    "summary": "User裁定2026-08-28: PRACTICE teacher-side inputsをtraining raw audioと非演奏由来score projection exact 6要素に限定し、決定論alignmentとfail-closed failure policyを学習前に凍結する。"
+  },
+  "provenance": {
+    "detail_record": {
+      "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_PRACTICE_ALIGNMENT_RECORD.md",
+      "sha256": "5f1d1b09b4fd664a26178bf310a574c226f61acc39ccf5645b6ea3952dbae3c3",
+      "summary": "W2 prototype DP alignment / score projection determinism and feasibility record: exact replay passed and training 70/70 aligned."
+    }
+  }
+}

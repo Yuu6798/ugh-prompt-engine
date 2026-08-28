@@ -1,0 +1,525 @@
+{
+  "schema": "run9-practice-audit-annotation-manifest/1.0",
+  "bindings": {
+    "pjs_consumed_inputs_manifest_sha": "4e61deae223844bbabf110be309c0a2179d9cd68c272a0dafb9e062d19f6e8b0",
+    "practice_actor_input_manifest_sha": "f81d476bb8f240dbb54812dccf44c4c4d4d92d823cac8ad61fb3cda402abbbda"
+  },
+  "access_policy": {
+    "mode": "POST_FREEZE_AUDIT_ONLY",
+    "r_practice_freeze_attestation_required": true,
+    "measurement_only": true
+  },
+  "entries": [
+    {
+      "song_id": "pjs063",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs063/pjs063.lab",
+        "sha256": "5d48715559195ee71ed3816095838c489e76a78dac040f005b8366c1aed18b9b"
+      }
+    },
+    {
+      "song_id": "pjs020",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs020/pjs020.lab",
+        "sha256": "db4a1faa7eea2d65824da8ea2c2e80e8ccbf771177bc9fd8e6ca16fafe4becb5"
+      }
+    },
+    {
+      "song_id": "pjs073",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs073/pjs073.lab",
+        "sha256": "eb3696df7fc5a3df5e758396d831dd49aabe8999f988f903fc8ecd8848f8d8ff"
+      }
+    },
+    {
+      "song_id": "pjs019",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs019/pjs019.lab",
+        "sha256": "74c489dd7273faed3d79562e2ba8f68f249c9b56b4b01669cc853c63f82a2d35"
+      }
+    },
+    {
+      "song_id": "pjs098",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs098/pjs098.lab",
+        "sha256": "0ed61d103fcd6569c1b53e00994f5b2f1302aa28802a0ccccb2529b5cfa6e0f4"
+      }
+    },
+    {
+      "song_id": "pjs083",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs083/pjs083.lab",
+        "sha256": "a22754f6850c08390cc92e269e9c3321f87e0c995120b3259bef9104e7dde798"
+      }
+    },
+    {
+      "song_id": "pjs026",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs026/pjs026.lab",
+        "sha256": "279b66db915e266e28b908f7c667e478bc0875e79e19deee7450f817e39177cd"
+      }
+    },
+    {
+      "song_id": "pjs035",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs035/pjs035.lab",
+        "sha256": "24a98a5679d792155ab3dc0c97223d6773eef058870581a001e0e0838a3f29ae"
+      }
+    },
+    {
+      "song_id": "pjs077",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs077/pjs077.lab",
+        "sha256": "4bb0d31aa74c060cfd0133d43cc4e7f4bc612ff9c3ea30cb2976f331e304b841"
+      }
+    },
+    {
+      "song_id": "pjs058",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs058/pjs058.lab",
+        "sha256": "efcfe8211cf1c7559c196557653829bc0a3df40f9146eff0cdc3773c1f84a6f1"
+      }
+    },
+    {
+      "song_id": "pjs021",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs021/pjs021.lab",
+        "sha256": "a70fec7269bdc4600c7d08aa50c1ef3b343c3daeb9febb432c0dc29aebd352df"
+      }
+    },
+    {
+      "song_id": "pjs012",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs012/pjs012.lab",
+        "sha256": "e730d05b9394f0f944f6e4d347dc989485e05f432efb05bcb06d0546e2ee2c00"
+      }
+    },
+    {
+      "song_id": "pjs097",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs097/pjs097.lab",
+        "sha256": "9ea4381e26c1e48daa6676dbd1396aa0103234c1372445471f2202ac8a611e8c"
+      }
+    },
+    {
+      "song_id": "pjs005",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs005/pjs005.lab",
+        "sha256": "ab5aae64e89f26c5f0e5240786731a3f1b1979ae20d6e0beee95d7f85fe6664f"
+      }
+    },
+    {
+      "song_id": "pjs052",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs052/pjs052.lab",
+        "sha256": "5327be09e7ae63d94b1d0fff877aaf2ea2372ccfb268fb20c7535e336f50f4d9"
+      }
+    },
+    {
+      "song_id": "pjs089",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs089/pjs089.lab",
+        "sha256": "b5a004727eac5e7f0c31be10a7d2b30dbdda24bc5498a2311e64af6561a5c50e"
+      }
+    },
+    {
+      "song_id": "pjs088",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs088/pjs088.lab",
+        "sha256": "14ac3cd160e0ddbb018e8da35a57771db2de3f33206a7f15ca5dcb65068ef323"
+      }
+    },
+    {
+      "song_id": "pjs003",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs003/pjs003.lab",
+        "sha256": "56bb6799d44fef447807882b8a22413d493cda97bdccb1112cff13efa0459023"
+      }
+    },
+    {
+      "song_id": "pjs029",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs029/pjs029.lab",
+        "sha256": "bbf17373d9a409026008971203e410e16acb771b8840c4f85ec35fb49379481e"
+      }
+    },
+    {
+      "song_id": "pjs028",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs028/pjs028.lab",
+        "sha256": "e0db61f02301f98842619d364a13f2372e261002035dccfec6c6a3f326804478"
+      }
+    },
+    {
+      "song_id": "pjs055",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs055/pjs055.lab",
+        "sha256": "4db6a46056c6ed1dfad1e9f50617a1af4ff6ddcb322c31d20b3496d5e5b747e6"
+      }
+    },
+    {
+      "song_id": "pjs075",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs075/pjs075.lab",
+        "sha256": "c990f6aa44fb2aaac96bf9593600a03344531c7bed16ae9c21ea7468c02db98b"
+      }
+    },
+    {
+      "song_id": "pjs023",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs023/pjs023.lab",
+        "sha256": "9a476e25ea0c9513a7e768ae957986d07c59f97041e7d1402b4ac24df10e01f2"
+      }
+    },
+    {
+      "song_id": "pjs084",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs084/pjs084.lab",
+        "sha256": "10e2fae8f53b721cbf3f0317f94790fe9e2821defb9ad22bbf810c33a407b66a"
+      }
+    },
+    {
+      "song_id": "pjs001",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs001/pjs001.lab",
+        "sha256": "864b4178871538f19125128945a6a1f03c690e215df064a247496508981bd4bf"
+      }
+    },
+    {
+      "song_id": "pjs100",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs100/pjs100.lab",
+        "sha256": "f00d0e9a27e2c217d6b55eb37c97c8c840e7824a1775aab82e3b5761438eab69"
+      }
+    },
+    {
+      "song_id": "pjs006",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs006/pjs006.lab",
+        "sha256": "8b2e42839b49971290b4e91356a2ffb312e0a5658bbf94097ebb9aad1fbcf785"
+      }
+    },
+    {
+      "song_id": "pjs031",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs031/pjs031.lab",
+        "sha256": "eb217b4fb56c4e5e3845576106ec1cc78293bb0a7e0dcb40a78d27055dd96c45"
+      }
+    },
+    {
+      "song_id": "pjs007",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs007/pjs007.lab",
+        "sha256": "f20fb542e543800182ffaa9f6ee8bb5dbe316eaa6666d4989caa729160ee4cce"
+      }
+    },
+    {
+      "song_id": "pjs057",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs057/pjs057.lab",
+        "sha256": "03e76898b0fd8e3e66ded606ed8abb7a43632af8ff02928c90c39385e31556d5"
+      }
+    },
+    {
+      "song_id": "pjs039",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs039/pjs039.lab",
+        "sha256": "ae3f22b21654778a41e13b32b4b6f4f3c27c7c091933628039f3814bb6372d67"
+      }
+    },
+    {
+      "song_id": "pjs049",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs049/pjs049.lab",
+        "sha256": "6103861791dc801986c1c1067a90fc077717c28f99c6c1466eff733539ec3ee8"
+      }
+    },
+    {
+      "song_id": "pjs018",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs018/pjs018.lab",
+        "sha256": "7436ae33f422a67905a17364382dbd3082fb6e75543234e15865d9fbc384630d"
+      }
+    },
+    {
+      "song_id": "pjs030",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs030/pjs030.lab",
+        "sha256": "ce7f401261e5debc089379c1c90d935d17f48a6a87b9edbadeacf228e7788743"
+      }
+    },
+    {
+      "song_id": "pjs038",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs038/pjs038.lab",
+        "sha256": "e7292520029a2742992ed461e60f3cb8c6ef69770be67646ca540732d9ab88b8"
+      }
+    },
+    {
+      "song_id": "pjs065",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs065/pjs065.lab",
+        "sha256": "c2029a3a31e346423987383192dc10ca888397fa0568b43eefeb5b9d417c340d"
+      }
+    },
+    {
+      "song_id": "pjs032",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs032/pjs032.lab",
+        "sha256": "ca8f8e308d7a036234ea0a2b2ae4c02c8d26629bd440c4e02f8b94f5184af2ea"
+      }
+    },
+    {
+      "song_id": "pjs036",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs036/pjs036.lab",
+        "sha256": "e9bcb10aed303ea650415498a17b62c4f4473c85f3f6b11a93118dd0535ec97f"
+      }
+    },
+    {
+      "song_id": "pjs054",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs054/pjs054.lab",
+        "sha256": "8f62068d7d31b7a04fb520af349b3c6ddcfbe002c2fe5d6056a4e2d51424e566"
+      }
+    },
+    {
+      "song_id": "pjs013",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs013/pjs013.lab",
+        "sha256": "7cd77f007799458a6b101661090c8cd90ddab1dd7c89d2de1621b92088daa00f"
+      }
+    },
+    {
+      "song_id": "pjs043",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs043/pjs043.lab",
+        "sha256": "2fe89a382ba3bd921d5df07bdc4459585af29043be0d272cdd67ca6c9f21f855"
+      }
+    },
+    {
+      "song_id": "pjs086",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs086/pjs086.lab",
+        "sha256": "8986007fede71d4da0e1d935f056a800385b44c011ab650d21832eb037c6966c"
+      }
+    },
+    {
+      "song_id": "pjs081",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs081/pjs081.lab",
+        "sha256": "b818c9f6bdd1568bd1ce0d87a5d3db3f323c7fbd08cc23e9d360d98bb394f78d"
+      }
+    },
+    {
+      "song_id": "pjs094",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs094/pjs094.lab",
+        "sha256": "8e7011ff3f3911fa456a5e6f4999477745e9214638ccf261a32140d4773c16d7"
+      }
+    },
+    {
+      "song_id": "pjs022",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs022/pjs022.lab",
+        "sha256": "b5bb172af97a43bc33c8ac0de4c7e9f80dab6f6fd866cd3b98489ff521f1092e"
+      }
+    },
+    {
+      "song_id": "pjs010",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs010/pjs010.lab",
+        "sha256": "fe1f4a29f30ec1f2526a21d8ef332bf79d8b7b5812bec13df95ac310bb501b44"
+      }
+    },
+    {
+      "song_id": "pjs004",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs004/pjs004.lab",
+        "sha256": "7f91ba3c0fb29343eb59660b2d1fe0418ec68b115e9a41ef85c98ca2f52e1921"
+      }
+    },
+    {
+      "song_id": "pjs002",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs002/pjs002.lab",
+        "sha256": "4beb640cb2c6fd639b7a6866a0affee7f95a814e15586aa62cb10707e1310d30"
+      }
+    },
+    {
+      "song_id": "pjs044",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs044/pjs044.lab",
+        "sha256": "8ff1fdcb0081ab85b72a29307597470fd2980c1235c94d466a48fd5d5a8285ed"
+      }
+    },
+    {
+      "song_id": "pjs071",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs071/pjs071.lab",
+        "sha256": "68af382acb5e3fc168f0204f43e2beebc2b6bc52a432820e7e4658ca2ef8fe8f"
+      }
+    },
+    {
+      "song_id": "pjs090",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs090/pjs090.lab",
+        "sha256": "31a2fb7923145ab8db2ac875a9bd796db47b876e63c048b8d93c101cfde29e86"
+      }
+    },
+    {
+      "song_id": "pjs008",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs008/pjs008.lab",
+        "sha256": "6653dd7002c91dcc757c8ab782dc5386a1cae57ab822ac1afaff61f3649a4811"
+      }
+    },
+    {
+      "song_id": "pjs064",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs064/pjs064.lab",
+        "sha256": "b2ad5be0349040c5bf1fc3d87f94267edce794a7987ee742d0fb785a1f4ffde6"
+      }
+    },
+    {
+      "song_id": "pjs014",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs014/pjs014.lab",
+        "sha256": "52dbb9d1f7b27d4ea50e0ab182137f4c990cb83d8f9171d538a9d7bc066ab708"
+      }
+    },
+    {
+      "song_id": "pjs037",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs037/pjs037.lab",
+        "sha256": "61448d35b721a07fe60282abfeeab3574aed468b7ae1e605cf69aba0c2b42b2d"
+      }
+    },
+    {
+      "song_id": "pjs095",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs095/pjs095.lab",
+        "sha256": "ec401b82c2b81d6ff81ea030fef0646543df4d91713914fc46f7d7b5c46e7c43"
+      }
+    },
+    {
+      "song_id": "pjs096",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs096/pjs096.lab",
+        "sha256": "766c6958c0b07b51b76f185c94082d703747d0df85271133789870afc9d87e96"
+      }
+    },
+    {
+      "song_id": "pjs093",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs093/pjs093.lab",
+        "sha256": "e135fce64da2735bd6076e25c68867a1e6450606dc23de0f24d6e9fe51f0e4c0"
+      }
+    },
+    {
+      "song_id": "pjs085",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs085/pjs085.lab",
+        "sha256": "e3d318dc4d00f6d4a202bfe8ac864bac8421bd7c551e7eb6c6582075ab92f7b3"
+      }
+    },
+    {
+      "song_id": "pjs062",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs062/pjs062.lab",
+        "sha256": "284b0a5f5d067132e77ba289e0098dc46b27f49633ba1b3a7410af5db90b51f2"
+      }
+    },
+    {
+      "song_id": "pjs053",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs053/pjs053.lab",
+        "sha256": "a452182ac2cb05ee7000a121b2702ab713d28b609b3e52013d69665831bb4b02"
+      }
+    },
+    {
+      "song_id": "pjs087",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs087/pjs087.lab",
+        "sha256": "53b17a54d8049c73a3a0816ca96f0777ad10da583dae8f900a88cf9d9b851d5c"
+      }
+    },
+    {
+      "song_id": "pjs079",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs079/pjs079.lab",
+        "sha256": "07c357165e318d34c230ffb7f7036e1bcff9f8500df9dfac02b3aecf68453a05"
+      }
+    },
+    {
+      "song_id": "pjs061",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs061/pjs061.lab",
+        "sha256": "39cd7b94540b1365d7b8a39590dbfd0b7cd8571f0675c7ffb52334254b113ad2"
+      }
+    },
+    {
+      "song_id": "pjs047",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs047/pjs047.lab",
+        "sha256": "faefe4743a3efe8e1d109e7a424755ec03c8a70ab64bd8fc7cda100b7a2cbf0d"
+      }
+    },
+    {
+      "song_id": "pjs015",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs015/pjs015.lab",
+        "sha256": "eed4604cbf5ed047ec86d728d851fc826a702c14861c2f914b9d9f866d05fca6"
+      }
+    },
+    {
+      "song_id": "pjs074",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs074/pjs074.lab",
+        "sha256": "325ba680b0215453981691d1d3f96683ada603eadcd1df44b96192dfc5533ff2"
+      }
+    },
+    {
+      "song_id": "pjs024",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs024/pjs024.lab",
+        "sha256": "d590c7261b20922ba89c75822c0e073692df24ffd405033e209e0aaae11d38fc"
+      }
+    },
+    {
+      "song_id": "pjs027",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs027/pjs027.lab",
+        "sha256": "386e09cf5450b387ea7d2bf5dd10ea5f8310ae3c88fc62660f346e93b4b1ca17"
+      }
+    },
+    {
+      "song_id": "pjs060",
+      "lab": {
+        "relative_path": "PJS_corpus_ver1.1/pjs060/pjs060.lab",
+        "sha256": "869e87adc7eae6925283d8d4e12ea047647f6f0bc9e002e5032e449897151758"
+      }
+    }
+  ],
+  "feedback_prohibitions": [
+    "learning",
+    "candidate_selection",
+    "additional_trial",
+    "controlprofile_update",
+    "threshold_change",
+    "weight_change",
+    "search_range_change"
+  ],
+  "adjudication_basis": {
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260828_PRACTICE_ALIGNMENT.txt",
+    "sha256": "f33f1deb80bfe824d6c9313cef95961a26ce7174a0b745f51a3884e5b77bf8fb",
+    "summary": "User裁定2026-08-28: .labをr_practice freeze後のcommon external auditでのみmeasurement-only使用し、学習・選択・追加試行・各種再調整へのfeedbackを禁止する。"
+  },
+  "provenance": {
+    "detail_record": {
+      "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_PRACTICE_ALIGNMENT_RECORD.md",
+      "sha256": "5f1d1b09b4fd664a26178bf310a574c226f61acc39ccf5645b6ea3952dbae3c3",
+      "summary": "W2 establishes the actor-side alignment path without reading .lab; annotation pins are quarantined for post-freeze audit."
+    }
+  }
+}

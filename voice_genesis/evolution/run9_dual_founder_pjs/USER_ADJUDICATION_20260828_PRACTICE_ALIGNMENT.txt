@@ -1,0 +1,61 @@
+【RUN9 User裁定 — PRACTICE Alignment / Teacher Annotation Boundary】
+
+選択肢Aを採用する。
+
+PRACTICE_FROM_AUDIOのlearner / Founder-local actorへ、PJSの .lab または
+そこから導出された教師演奏の個別境界情報を入力してはならない。
+
+PRACTICEで許可する教師側入力は、
+- training raw audio
+- 教師Performanceから導出されていないscore contextの凍結projection
+のみとする。
+
+score contextはmora順序、mora数、nominal duration ratio、phrase grouping、
+lyrics/phoneme列、nominal pitchに限定する。
+
+1. Founder-local alignment
+教師音声のmora/phrase境界は、Founder-local actorがraw audioとscore contextから
+自律推定する。決定論的alignment algorithmについて、入力特徴、cost function、
+constraints、tie-break、failure policyを学習開始前にpractice_alignment_spec_v1
+として凍結する。.lab fallback、外部alignment、teacher-derived boundary、
+random fallbackを禁止する。
+
+2. Mandatory 5 channel
+PRACTICEでも以下5 channelをすべて測定する。
+- relative F0 contour
+- note/mora duration ratio
+- phrase-normalized energy envelope
+- attack timing
+- phrase-end timing
+これらはFounder-localに推定した境界から算出する。alignment不能時は
+ALIGNMENT_FAILED / NOT_SCORABLEとして記録し、ゼロ補完、推測補完、予算追加を
+行わない。
+
+3. PRACTICE / EDUCATION非対称
+PRACTICE: raw audioからFounder自身が境界・特徴・差分を推定する。
+EDUCATION: .lab整列済みの凍結Technique Lessonを受け取る。
+両者のreference精度差は欠陥ではなく、PRACTICEとEDUCATIONの情報量差という
+実験変数として記録する。
+
+4. 検索と監査の分離
+PRACTICE検索中はFounder-local推定値だけを用いる。r_practice凍結後の共通外部
+監査では、.labをmeasurement-onlyの基準として利用してよい。ただし監査結果を
+学習、候補選択、追加trial、ControlProfile更新、閾値・重み・探索範囲の変更へ
+戻してはならない。
+
+5. Data binding
+既存pjs_consumed_inputs_manifest_shaは上流provenanceとして維持するが、その
+全内容をPRACTICE actorの検索入力として公開してはならない。新たに、
+- practice_actor_input_manifest_v1
+- practice_audit_annotation_manifest_v1
+を分離する。practice_actor_input_manifestにはWAVとsanitized score projection
+だけを含める。practice_audit_annotation_manifestの.labは
+POST_FREEZE_AUDIT_ONLYとする。builder / learnerが.labを開こうとした場合は
+学習開始前にfail-closedで停止する。
+
+6. Freeze
+loss_evaluator_spec_v1、learning_data_binding_manifest_v1、
+practice_alignment_spec_v1、practice_actor_input_manifest_v1、
+関連validator / loaderを再凍結するまでlearning_recipe_shaをPINNEDにしない。
+本裁定は既存PoRの入力境界を実装へ適用する訂正であり、新しい学習channelや
+実験目的を追加するものではない。
