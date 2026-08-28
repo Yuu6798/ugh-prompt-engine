@@ -119,7 +119,7 @@ run10_aquest_vg_phenotype_compatibility/
 | 1 | AQUEST 回答と権利境界の archive/pin | User（原文の private archive 化） |
 | 2 | repository / dependencies / private storage の検証 | private storage は完了。repository commit / dependency pin は本測定直前まで未凍結 |
 | 3 | Pre-Run Inventory 実行 | **実装済み**（結果は BLOCKED） |
-| 4 | A0 voicebank の inventory と hash | **完了**（288 files、WAV 142、unreadable 0、独立2生成 byte-identical） |
+| 4 | A0 voicebank の inventory と hash | **完了**（pin済みZIPと展開rootの全path/hash一致、288 files、WAV 142、unreadable 0、独立2生成 byte-identical） |
 | 5 | Evolution Theory 参照の解決 | **完了**（2026-08-27 実バイト照合 → 契約 pin 済み。本体は private のまま） |
 | 6 | AF01 payload ledger 等の検証 | bundle取得・payload hash照合済み。full verifierはLinuxで実行待ち |
 | 7 | AF01 決定論的 payload replay | Linux実行待ち（Windows path/symlink前提ではfail-closed） |

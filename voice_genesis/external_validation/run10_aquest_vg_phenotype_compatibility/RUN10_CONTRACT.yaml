@@ -123,6 +123,7 @@ aquest_voicebank_manifest_sha:
   reason: >
     owner-only private staging の A0 = UTAU 0.4.19(c) 同梱 _Default を
     pre_run/build_a0_manifest.py で走査した manifest 実バイト sha256。
+    pin 済み ZIP の member path/hash と展開 root の全 file path/hash が一致し、
     独立 2 回生成が byte-identical、288 files、WAV 142、unreadable 0。
 
 aquest_raw_file_order_sha:

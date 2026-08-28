@@ -5,6 +5,7 @@ import hashlib
 import json
 import sys
 import wave
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -41,6 +42,14 @@ def _voicebank(tmp_path: Path) -> Path:
     (root / "character.txt").write_text("name=Default\n", encoding="utf-8")
     (root / "readme.txt").write_text("private\n", encoding="utf-8")
     return root
+
+
+def _zip_voicebank(root: Path, archive: Path) -> str:
+    with zipfile.ZipFile(archive, "w") as handle:
+        for path in sorted(item for item in root.rglob("*") if item.is_file()):
+            relative = path.relative_to(root).as_posix()
+            handle.writestr(f"{root.name}/{relative}", path.read_bytes())
+    return hashlib.sha256(archive.read_bytes()).hexdigest()
 
 
 def test_manifest_has_the_declared_shape(tmp_path: Path) -> None:
@@ -162,16 +171,61 @@ def test_zip_sha_mismatch_fails_closed(tmp_path: Path) -> None:
 
 
 def test_verified_zip_is_recorded(tmp_path: Path) -> None:
+    root = _voicebank(tmp_path)
     archive = tmp_path / "A0.zip"
-    archive.write_bytes(b"archive")
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    digest = _zip_voicebank(root, archive)
     document = subject.build_manifest(
-        _voicebank(tmp_path),
+        root,
         voicebank_version="test",
         zip_path=archive,
         zip_sha256=digest,
     )
     assert document["acquisition"]["zip_sha256"] == digest
+
+
+def test_verified_zip_must_match_the_inventoried_voicebank(tmp_path: Path) -> None:
+    root = _voicebank(tmp_path)
+    archive = tmp_path / "A0.zip"
+    digest = _zip_voicebank(root, archive)
+    (root / "character.txt").write_text("name=stale extraction\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="hash_mismatch=.*character.txt"):
+        subject.build_manifest(
+            root,
+            voicebank_version="test",
+            zip_path=archive,
+            zip_sha256=digest,
+        )
+
+
+def test_verified_zip_rejects_unarchived_extra_files(tmp_path: Path) -> None:
+    root = _voicebank(tmp_path)
+    archive = tmp_path / "A0.zip"
+    digest = _zip_voicebank(root, archive)
+    (root / "injected.bin").write_bytes(b"not from the archive")
+
+    with pytest.raises(ValueError, match="extra_in_root=.*injected.bin"):
+        subject.build_manifest(
+            root,
+            voicebank_version="test",
+            zip_path=archive,
+            zip_sha256=digest,
+        )
+
+
+def test_verified_zip_rejects_missing_extracted_files(tmp_path: Path) -> None:
+    root = _voicebank(tmp_path)
+    archive = tmp_path / "A0.zip"
+    digest = _zip_voicebank(root, archive)
+    (root / "character.txt").unlink()
+
+    with pytest.raises(ValueError, match="missing_from_root=.*character.txt"):
+        subject.build_manifest(
+            root,
+            voicebank_version="test",
+            zip_path=archive,
+            zip_sha256=digest,
+        )
 
 
 def test_obtained_at_is_only_recorded_when_explicit(tmp_path: Path) -> None:

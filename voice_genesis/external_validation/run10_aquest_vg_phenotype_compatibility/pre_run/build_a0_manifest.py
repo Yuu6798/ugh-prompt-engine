@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
+import stat
 import sys
 import wave
+import zipfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from pathlib import PurePosixPath
+from typing import Any, Dict, List, Mapping, Optional
 
 _THIS_DIR = Path(__file__).resolve().parent
 _RUN10_DIR = _THIS_DIR.parent
@@ -28,7 +32,6 @@ from run10_schema import (  # noqa: E402
     EXPERIMENT_ID,
     RUN_ID,
     canonical_json_bytes,
-    compute_file_sha256,
 )
 from svp_rpe.utils.atomic_io import atomic_write_bytes  # noqa: E402
 
@@ -52,9 +55,9 @@ def _kind(path: Path) -> str:
     return "other"
 
 
-def _audio_header(path: Path) -> Optional[Dict[str, int]]:
+def _audio_header(payload: bytes) -> Optional[Dict[str, int]]:
     try:
-        with wave.open(str(path), "rb") as handle:
+        with wave.open(io.BytesIO(payload), "rb") as handle:
             if handle.getcomptype() != "NONE":
                 return None
             return {
@@ -68,7 +71,15 @@ def _audio_header(path: Path) -> Optional[Dict[str, int]]:
 
 
 def _ordered_files(root: Path) -> List[Path]:
-    files = [path for path in root.rglob("*") if path.is_file()]
+    files = []
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError(f"A0 voicebank must not contain symlinks: {path}")
+        if path.is_file():
+            resolved = path.resolve(strict=True)
+            if not resolved.is_relative_to(root):
+                raise ValueError(f"A0 voicebank path escapes its root: {path}")
+            files.append(path)
     return sorted(
         files,
         key=lambda path: path.relative_to(root).as_posix().encode("utf-8"),
@@ -90,7 +101,28 @@ def _validated_output_path(out: Path, staging_root: Path) -> Path:
     return resolved
 
 
-def _validated_zip(zip_path: Optional[Path], expected_sha256: Optional[str]) -> Optional[str]:
+def _zip_member_path(info: zipfile.ZipInfo) -> PurePosixPath:
+    name = info.filename
+    if "\\" in name:
+        raise ValueError(f"A0 ZIP member must use POSIX separators: {name!r}")
+    path = PurePosixPath(name)
+    if path.is_absolute() or ".." in path.parts or not path.parts:
+        raise ValueError(f"A0 ZIP member escapes its archive root: {name!r}")
+    if path.parts[0].endswith(":"):
+        raise ValueError(f"A0 ZIP member has a drive-qualified path: {name!r}")
+    mode = info.external_attr >> 16
+    if stat.S_ISLNK(mode):
+        raise ValueError(f"A0 ZIP member must not be a symlink: {name!r}")
+    return path
+
+
+def _validated_zip(
+    zip_path: Optional[Path],
+    expected_sha256: Optional[str],
+    *,
+    root_name: str,
+    extracted_hashes: Mapping[str, str],
+) -> Optional[str]:
     if (zip_path is None) != (expected_sha256 is None):
         raise ValueError("--zip-path and --zip-sha256 must be supplied together")
     if zip_path is None:
@@ -100,9 +132,38 @@ def _validated_zip(zip_path: Optional[Path], expected_sha256: Optional[str]) -> 
     expected = expected_sha256.lower()
     if len(expected) != 64 or any(char not in "0123456789abcdef" for char in expected):
         raise ValueError("--zip-sha256 must be a 64-character hexadecimal digest")
-    actual = compute_file_sha256(zip_path)
+    archive_bytes = zip_path.read_bytes()
+    actual = hashlib.sha256(archive_bytes).hexdigest()
     if actual != expected:
         raise ValueError(f"A0 ZIP sha256 mismatch: expected {expected}, got {actual}")
+
+    archive_hashes: Dict[str, str] = {}
+    with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+        members = [info for info in archive.infolist() if not info.is_dir()]
+        paths = [_zip_member_path(info) for info in members]
+        strip_root = bool(paths) and all(
+            len(path.parts) >= 2 and path.parts[0] == root_name for path in paths
+        )
+        for info, path in zip(members, paths):
+            relative = PurePosixPath(*path.parts[1:]) if strip_root else path
+            key = relative.as_posix()
+            if key in archive_hashes:
+                raise ValueError(f"A0 ZIP contains a duplicate member path: {key}")
+            archive_hashes[key] = hashlib.sha256(archive.read(info)).hexdigest()
+
+    missing = sorted(set(archive_hashes) - set(extracted_hashes))
+    unexpected = sorted(set(extracted_hashes) - set(archive_hashes))
+    changed = sorted(
+        path
+        for path in set(archive_hashes) & set(extracted_hashes)
+        if archive_hashes[path] != extracted_hashes[path]
+    )
+    if missing or unexpected or changed:
+        raise ValueError(
+            "A0 ZIP contents do not match the inventoried voicebank root: "
+            f"missing_from_root={missing[:5]!r}, extra_in_root={unexpected[:5]!r}, "
+            f"hash_mismatch={changed[:5]!r}"
+        )
     return actual
 
 
@@ -120,13 +181,6 @@ def build_manifest(
     if not voicebank_version.strip():
         raise ValueError("voicebank_version must not be empty")
 
-    verified_zip_sha256 = _validated_zip(zip_path, zip_sha256)
-    acquisition: Dict[str, str] = {}
-    if obtained_at is not None:
-        acquisition["obtained_at"] = obtained_at
-    if verified_zip_sha256 is not None:
-        acquisition["zip_sha256"] = verified_zip_sha256
-
     kind_counts = {
         "wav": 0,
         "frq": 0,
@@ -138,22 +192,35 @@ def build_manifest(
     unreadable_audio = 0
     entries: List[Dict[str, Any]] = []
     for path in _ordered_files(root):
+        payload = path.read_bytes()
         relative = path.relative_to(root).as_posix()
         kind = _kind(path)
         kind_counts[kind] += 1
         entry: Dict[str, Any] = {
             "path": relative,
-            "size_bytes": path.stat().st_size,
-            "sha256": compute_file_sha256(path),
+            "size_bytes": len(payload),
+            "sha256": hashlib.sha256(payload).hexdigest(),
             "kind": kind,
         }
         if kind == "wav":
-            audio = _audio_header(path)
+            audio = _audio_header(payload)
             if audio is None:
                 unreadable_audio += 1
             else:
                 entry["audio"] = audio
         entries.append(entry)
+
+    verified_zip_sha256 = _validated_zip(
+        zip_path,
+        zip_sha256,
+        root_name=root.name,
+        extracted_hashes={entry["path"]: entry["sha256"] for entry in entries},
+    )
+    acquisition: Dict[str, str] = {}
+    if obtained_at is not None:
+        acquisition["obtained_at"] = obtained_at
+    if verified_zip_sha256 is not None:
+        acquisition["zip_sha256"] = verified_zip_sha256
 
     listed_paths = [entry["path"] for entry in entries]
     return {
