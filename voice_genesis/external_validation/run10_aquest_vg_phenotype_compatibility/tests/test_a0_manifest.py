@@ -52,6 +52,11 @@ def _zip_voicebank(root: Path, archive: Path) -> str:
     return hashlib.sha256(archive.read_bytes()).hexdigest()
 
 
+def _manifest_sha(root: Path, *, voicebank_version: str = "test") -> str:
+    document = subject.build_manifest(root, voicebank_version=voicebank_version)
+    return hashlib.sha256(subject.canonical_json_bytes(document)).hexdigest()
+
+
 def test_manifest_has_the_declared_shape(tmp_path: Path) -> None:
     document = subject.build_manifest(
         _voicebank(tmp_path), voicebank_version="UTAU Default 1.2"
@@ -80,11 +85,20 @@ def test_manifest_is_byte_deterministic(tmp_path: Path) -> None:
     staging = tmp_path / "private"
     first = staging / "first.json"
     second = staging / "second.json"
+    expected = _manifest_sha(root, voicebank_version="UTAU Default 1.2")
     first_bytes = subject.write_manifest(
-        root, staging, first, voicebank_version="UTAU Default 1.2"
+        root,
+        staging,
+        first,
+        voicebank_version="UTAU Default 1.2",
+        expected_manifest_sha256=expected,
     )
     second_bytes = subject.write_manifest(
-        root, staging, second, voicebank_version="UTAU Default 1.2"
+        root,
+        staging,
+        second,
+        voicebank_version="UTAU Default 1.2",
+        expected_manifest_sha256=expected,
     )
     assert first_bytes == second_bytes == first.read_bytes() == second.read_bytes()
 
@@ -161,6 +175,7 @@ def test_out_outside_staging_root_is_refused(tmp_path: Path) -> None:
             tmp_path / "private",
             tmp_path / "public" / "manifest.json",
             voicebank_version="test",
+            expected_manifest_sha256="0" * 64,
         )
 
 
@@ -173,6 +188,7 @@ def test_out_inside_repository_is_refused(tmp_path: Path) -> None:
             staging,
             staging / "a0_voicebank_manifest.json",
             voicebank_version="test",
+            expected_manifest_sha256="0" * 64,
         )
 
 
@@ -184,6 +200,7 @@ def test_out_cannot_replace_a_voicebank_input(tmp_path: Path) -> None:
             tmp_path,
             root / "oto.ini",
             voicebank_version="test",
+            expected_manifest_sha256="0" * 64,
         )
     assert (root / "oto.ini").read_text(encoding="utf-8").startswith("a.wav=")
 
@@ -199,6 +216,7 @@ def test_out_cannot_replace_the_source_zip(tmp_path: Path) -> None:
             tmp_path,
             archive,
             voicebank_version="test",
+            expected_manifest_sha256="0" * 64,
             zip_path=archive,
             zip_sha256=digest,
         )
@@ -294,5 +312,32 @@ def test_written_manifest_is_valid_json(tmp_path: Path) -> None:
     root = _voicebank(tmp_path)
     staging = tmp_path / "private"
     out = staging / "a0_voicebank_manifest.json"
-    subject.write_manifest(root, staging, out, voicebank_version="test")
+    subject.write_manifest(
+        root,
+        staging,
+        out,
+        voicebank_version="test",
+        expected_manifest_sha256=_manifest_sha(root),
+    )
     assert json.loads(out.read_text(encoding="utf-8"))["schema"] == subject.SCHEMA
+
+
+def test_manifest_pin_mismatch_does_not_publish(tmp_path: Path) -> None:
+    root = _voicebank(tmp_path)
+    staging = tmp_path / "private"
+    out = staging / "a0_voicebank_manifest.json"
+    with pytest.raises(ValueError, match="manifest sha256 mismatch"):
+        subject.write_manifest(
+            root,
+            staging,
+            out,
+            voicebank_version="test",
+            expected_manifest_sha256="0" * 64,
+        )
+    assert not out.exists()
+
+
+def test_cli_manifest_pin_comes_from_the_run_contract() -> None:
+    assert subject._pinned_manifest_sha256() == (
+        "042813936caf759f3fc95a29a6655a07c76a3a302bd6705538443ca5d08fe01f"
+    )

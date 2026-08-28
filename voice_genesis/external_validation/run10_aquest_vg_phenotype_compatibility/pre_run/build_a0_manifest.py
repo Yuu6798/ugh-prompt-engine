@@ -32,11 +32,13 @@ from run10_schema import (  # noqa: E402
     EXPERIMENT_ID,
     RUN_ID,
     canonical_json_bytes,
+    load_run10_contract,
 )
 from svp_rpe.utils.atomic_io import atomic_write_bytes  # noqa: E402
 
 SCHEMA = "voicegenesis-run10-a0-voicebank-manifest/0.1"
 ORDERING_RULE = "root-relative POSIX paths sorted by UTF-8 byte sequence"
+CONTRACT_PATH = _RUN10_DIR / "RUN10_CONTRACT.yaml"
 
 
 def _kind(path: Path) -> str:
@@ -89,6 +91,26 @@ def _ordered_files(root: Path) -> List[Path]:
 def _file_order_sha256(paths: List[str]) -> str:
     payload = "".join(f"{path}\n" for path in paths).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def _normalized_sha256(value: str, label: str) -> str:
+    normalized = value.lower()
+    if len(normalized) != 64 or any(
+        char not in "0123456789abcdef" for char in normalized
+    ):
+        raise ValueError(f"{label} must be a 64-character hexadecimal digest")
+    return normalized
+
+
+def _pinned_manifest_sha256() -> str:
+    contract = load_run10_contract(CONTRACT_PATH)
+    pin = contract.pin("aquest_voicebank_manifest_sha")
+    if not pin.pinned or not isinstance(pin.value, str):
+        raise ValueError(
+            "RUN10_CONTRACT.yaml must PIN aquest_voicebank_manifest_sha before "
+            "publishing an A0 manifest"
+        )
+    return _normalized_sha256(pin.value, "aquest_voicebank_manifest_sha")
 
 
 def _validate_required_shape(kind_counts: Mapping[str, int]) -> None:
@@ -159,9 +181,7 @@ def _validated_zip(
         return None
     if not zip_path.is_file():
         raise FileNotFoundError(f"A0 ZIP does not exist: {zip_path}")
-    expected = expected_sha256.lower()
-    if len(expected) != 64 or any(char not in "0123456789abcdef" for char in expected):
-        raise ValueError("--zip-sha256 must be a 64-character hexadecimal digest")
+    expected = _normalized_sha256(expected_sha256, "--zip-sha256")
     archive_bytes = zip_path.read_bytes()
     actual = hashlib.sha256(archive_bytes).hexdigest()
     if actual != expected:
@@ -284,6 +304,7 @@ def write_manifest(
     out: Path,
     *,
     voicebank_version: str,
+    expected_manifest_sha256: str,
     obtained_at: Optional[str] = None,
     zip_path: Optional[Path] = None,
     zip_sha256: Optional[str] = None,
@@ -302,6 +323,14 @@ def write_manifest(
         zip_sha256=zip_sha256,
     )
     payload = canonical_json_bytes(document)
+    expected = _normalized_sha256(
+        expected_manifest_sha256, "expected_manifest_sha256"
+    )
+    actual = hashlib.sha256(payload).hexdigest()
+    if actual != expected:
+        raise ValueError(
+            f"A0 manifest sha256 mismatch: expected {expected}, got {actual}"
+        )
     atomic_write_bytes(destination, payload)
     return payload
 
@@ -325,6 +354,7 @@ def main() -> int:
         args.staging_root,
         args.out,
         voicebank_version=args.voicebank_version,
+        expected_manifest_sha256=_pinned_manifest_sha256(),
         obtained_at=args.obtained_at,
         zip_path=args.zip_path,
         zip_sha256=args.zip_sha256,
