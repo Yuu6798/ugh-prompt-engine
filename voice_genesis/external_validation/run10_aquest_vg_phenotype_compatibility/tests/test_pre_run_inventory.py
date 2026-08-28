@@ -10,7 +10,8 @@
 ```
 
 inventory は「存在しないものを PRESENT と書かない」ことだけを役目とする。
-現時点では A0 未取得・meter 未実装のため R10-G2 = BLOCKED が正しい状態である。
+committed public baseline は private A0 入力なし・meter 未実装のため、
+R10-G2 = BLOCKED が正しい状態である。
 """
 from __future__ import annotations
 

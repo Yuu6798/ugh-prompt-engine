@@ -483,9 +483,11 @@ claim_strength_target:
 # =========================================================================
 #
 #   R10-G0  RUN_CONTRACT_COMPLETE      : BLOCKED（Core 欄に PENDING が残る）
-#   R10-G1  RIGHTS_AND_PRIVATE_BOUNDARY: BLOCKED（R10-PUB-1 は裁定済み／AQUEST 回答
-#                                        アーカイブ未固定・staging root 未確定）
-#   R10-G2  PRE_RUN_INVENTORY_COMPLETE : BLOCKED（A0 未取得 / AF01 bundle 実体未取得）
+#   R10-G1  RIGHTS_AND_PRIVATE_BOUNDARY: BLOCKED（private root は owner-only と確認済み。
+#                                        AQUEST 回答アーカイブと rights manifest が未凍結）
+#   R10-G2  PRE_RUN_INVENTORY_COMPLETE : BLOCKED（A0・設計文書・AF01 bundle は private
+#                                        staging に取得済み。AF01 Linux replay、A0 収録
+#                                        pitch inventory、meter 群、V1 route 等が未完了）
 #   R10-G3 以降                        : 未到達
 #
 # §23 末尾「AQUEST target本測定開始時点で必須pinが一つでも欠ける場合、本測定開始禁止」。
