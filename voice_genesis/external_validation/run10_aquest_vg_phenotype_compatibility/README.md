@@ -97,10 +97,11 @@ run10_aquest_vg_phenotype_compatibility/
 │   ├── rights_manifest.json          # §2.2 権利境界（DRAFT_NOT_FROZEN）
 │   └── private_storage_policy.json   # 保管方針（R10-PUB-1 裁定済／staging root 残件）
 ├── pre_run/
+│   ├── build_a0_manifest.py           # §29 手順 4（private staging 専用）
 │   ├── build_pre_run_inventory.py    # §29 手順 3/5
 │   └── inventory.json                # R10-G2 の機械可読状態
 ├── results/                      # §26 private bundle（.gitignore 以外を commit しない）
-└── tests/                        # §28 最低テストの静的検証可能サブセット（407 件）
+└── tests/                        # §28 最低テストの静的検証可能サブセット
 ```
 
 設計 §24 が挙げる `calibration/` `measurement/` `evaluation/`
@@ -117,7 +118,7 @@ run10_aquest_vg_phenotype_compatibility/
 | 1 | AQUEST 回答と権利境界の archive/pin | User（原文の private archive 化） |
 | 2 | repository / dependencies / private storage の検証 | **完了**（R10-PUB-1 = 裁定済み。staging root のみ残件） |
 | 3 | Pre-Run Inventory 実行 | **実装済み**（結果は BLOCKED） |
-| 4 | A0 voicebank の inventory と hash | **User 供給待ち**（machine-dependent） |
+| 4 | A0 voicebank の inventory と hash | **生成器実装済み**／実体照合は private staging で実行 |
 | 5 | Evolution Theory 参照の解決 | **完了**（2026-08-27 実バイト照合 → 契約 pin 済み。本体は private のまま） |
 | 6 | AF01 payload ledger 等の検証 | **台帳段階まで完了**／実体照合は bundle 待ち |
 | 7 | AF01 決定論的 payload replay | bundle 実体待ち |
@@ -129,6 +130,27 @@ run10_aquest_vg_phenotype_compatibility/
 機械側だけで進められる次の単位は **§11 measurement family（M0–M6）の実装**
 と **§12 内部校正 fixture の生成**である。ただし E0 外部校正（手順 14）は
 AF01 bundle 実体を要する。
+
+## A0 voicebank manifest（private staging 専用）
+
+`pre_run/build_a0_manifest.py` は A0 の root 相対ファイル順、全ファイルの
+SHA-256、WAV の PCM ヘッダ値を決定論的 JSON にまとめる。出力には private な
+ファイル名と per-file hash が含まれるため、Git リポジトリ内への書き出しを拒否し、
+明示した private staging root の内側にのみ原子的に書く。
+
+```text
+python pre_run/build_a0_manifest.py \
+  --voicebank-root <private>/A0/_Default \
+  --staging-root <private> \
+  --zip-path <private>/A0/RUN10_A0_UTAU_Default.zip \
+  --zip-sha256 <verified-zip-sha256> \
+  --voicebank-version "UTAUデフォルト音声 Ver1.2" \
+  --out <private>/A0/a0_voicebank_manifest.json
+```
+
+ZIP の path/hash は同時指定であり、不一致時は manifest を公開しない。
+`--obtained-at` を明示しない限り実行時刻を含めないため、同一入力の出力は
+バイト一致する。manifest 本体・A0 実体・ファイル名一覧は commit しない。
 
 ## 主張の天井（§5.3）
 
