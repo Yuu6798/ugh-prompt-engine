@@ -136,6 +136,17 @@ FunctionNode = ast.FunctionDef | ast.AsyncFunctionDef
 FunctionRef = Tuple[str, FunctionNode]
 
 
+def _assigned_names(target: ast.expr) -> Iterator[ast.Name]:
+    """単純代入と tuple/list unpacking の Name 葉を返す。"""
+    if isinstance(target, ast.Name):
+        yield target
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for element in target.elts:
+            yield from _assigned_names(element)
+    elif isinstance(target, ast.Starred):
+        yield from _assigned_names(target.value)
+
+
 def _module_constants(trees: Dict[str, ast.Module]) -> Dict[ConstantId, ast.expr]:
     """走査対象**全モジュール**の直下 ALL_CAPS 定数（ID → 値の式）。
 
@@ -155,8 +166,9 @@ def _module_constants(trees: Dict[str, ast.Module]) -> Dict[ConstantId, ast.expr
             else:
                 continue
             for target in targets:
-                if isinstance(target, ast.Name) and target.id == target.id.upper():
-                    out[(rel, target.id)] = node.value
+                for name in _assigned_names(target):
+                    if name.id == name.id.upper():
+                        out[(rel, name.id)] = node.value
     return out
 
 
@@ -865,6 +877,22 @@ def test_duplicate_constant_names_preserve_module_identity() -> None:
     assert ("used.py", "VOCAB") in _wired_constants(trees)
     assert ("unused.py", "VOCAB") not in _wired_constants(trees)
     assert _unwired_declarations(trees) == {"unused.py::VOCAB"}
+
+
+def test_unpacked_constant_targets_are_inventoried_individually() -> None:
+    """tuple/list unpacking の ALL_CAPS も各 Name を別宣言として棚卸しする。"""
+    trees = _synthetic(
+        "FMIN, [FMAX, *REST] = (1, [2, 3, 4])\n"
+        "def public_entry():\n"
+        "    return FMIN\n"
+    )
+    constants = set(_module_constants(trees))
+    assert constants == {
+        ("synthetic.py", "FMIN"),
+        ("synthetic.py", "FMAX"),
+        ("synthetic.py", "REST"),
+    }
+    assert _unwired_declarations(trees) == {"FMAX", "REST"}
 
 
 def test_imported_constant_keeps_its_declaring_module_identity() -> None:
