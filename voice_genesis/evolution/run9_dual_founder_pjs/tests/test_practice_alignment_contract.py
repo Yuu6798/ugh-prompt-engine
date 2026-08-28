@@ -103,3 +103,74 @@ def test_learning_binding_search_excludes_lab_bearing_manifests() -> None:
     assert "pjs_consumed_inputs_manifest_sha" in practice["excludes_during_search"]
     assert "practice_audit_annotation_manifest_sha" in practice["excludes_during_search"]
     assert practice["lab_allowed"] is False
+
+
+def test_actor_loader_returns_the_exact_verified_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A consumer never has to reopen mutable actor paths after hash preflight."""
+    wav_bytes = b"RIFF-verification-snapshot"
+    projection = {
+        "mora_order": [0],
+        "mora_count": 1,
+        "nominal_duration_ratio": [1.0],
+        "phrase_grouping": [0],
+        "lyrics_phoneme_sequence": [
+            {"lyric": "あ", "phoneme_sequence": []},
+        ],
+        "nominal_pitch": [60],
+    }
+    projection_bytes = (
+        json.dumps(
+            projection,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("utf-8")
+    wav_path = tmp_path / "pjs001" / "pjs001_song.wav"
+    projection_path = tmp_path / "harness_work" / "pjs001.json"
+    wav_path.parent.mkdir(parents=True)
+    projection_path.parent.mkdir(parents=True)
+    wav_path.write_bytes(wav_bytes)
+    projection_path.write_bytes(projection_bytes)
+    manifest = {
+        "entries": [
+            {
+                "song_id": "pjs001",
+                "wav": {
+                    "relative_path": "pjs001/pjs001_song.wav",
+                    "sha256": hashlib.sha256(wav_bytes).hexdigest(),
+                },
+                "score_projection": {
+                    "relative_path": "harness_work/pjs001.json",
+                    "sha256": hashlib.sha256(projection_bytes).hexdigest(),
+                },
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        m,
+        "_load_pinned_practice_actor_input_manifest_metadata",
+        lambda *args, **kwargs: manifest,
+    )
+
+    loaded = m.load_pinned_practice_actor_input_manifest(
+        object(), artifact_root=tmp_path
+    )
+    verified = loaded.entries[0]
+
+    # A concurrent regeneration after preflight cannot change the bytes consumed
+    # from the returned snapshot.
+    wav_path.write_bytes(b"changed after verification")
+    projection_path.write_text("{}\n", encoding="utf-8")
+    assert verified.wav_bytes == wav_bytes
+    assert verified.score_projection_bytes == projection_bytes
+    assert verified.score_projection == projection
+    assert hashlib.sha256(verified.wav_bytes).hexdigest() == manifest["entries"][0][
+        "wav"
+    ]["sha256"]
+    assert hashlib.sha256(verified.score_projection_bytes).hexdigest() == manifest[
+        "entries"
+    ][0]["score_projection"]["sha256"]

@@ -21138,22 +21138,48 @@ def _read_practice_actor_artifact(
     return candidate.read_bytes()
 
 
+@dataclass(frozen=True)
+class VerifiedPracticeActorEntry:
+    """One actor input pair whose exact bytes passed the pinned checks.
+
+    Downstream alignment and learning code must consume ``wav_bytes`` and
+    ``score_projection`` from this object.  Reopening the manifest paths after this
+    loader returns would reintroduce an unchecked time-of-check/time-of-use window.
+    """
+
+    song_id: str
+    wav_bytes: bytes
+    score_projection_bytes: bytes
+    score_projection: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class VerifiedPracticeActorInputs:
+    """Pinned actor metadata plus the immutable byte snapshots it verified."""
+
+    manifest: Dict[str, Any]
+    entries: Tuple[VerifiedPracticeActorEntry, ...]
+
+
 def load_pinned_practice_actor_input_manifest(
     contract: "Run9RunContract",
     *,
     artifact_root: Path,
     manifest_path: Optional[Path] = None,
     contract_path: Optional[Path] = None,
-) -> Dict[str, Any]:
+) -> VerifiedPracticeActorInputs:
     """Load the actor manifest and verify every WAV/projection artifact.
 
     ``artifact_root`` is mandatory: no ambient working-directory lookup or fallback is
     permitted.  Projection bytes are SHA-checked before strict JSON parsing and exact-six
-    validation.  This path never opens the mixed consumed-inputs manifest or ``.lab``.
+    validation.  The returned entries own the exact byte snapshots that passed those
+    checks, so consumers do not reopen mutable paths after preflight.  This path never
+    opens the mixed consumed-inputs manifest or ``.lab``.
     """
     data = _load_pinned_practice_actor_input_manifest_metadata(
         contract, manifest_path=manifest_path, contract_path=contract_path
     )
+    verified_entries: List[VerifiedPracticeActorEntry] = []
     for i, entry in enumerate(data["entries"]):
         wav = _read_practice_actor_artifact(
             artifact_root, entry["wav"]["relative_path"], role=f"entries[{i}].wav"
@@ -21183,7 +21209,18 @@ def load_pinned_practice_actor_input_manifest(
         _validate_sanitized_score_projection(
             projection, field=f"practice actor projection artifact[{i}]"
         )
-    return data
+        verified_entries.append(
+            VerifiedPracticeActorEntry(
+                song_id=entry["song_id"],
+                wav_bytes=wav,
+                score_projection_bytes=projection_bytes,
+                score_projection=projection,
+            )
+        )
+    return VerifiedPracticeActorInputs(
+        manifest=data,
+        entries=tuple(verified_entries),
+    )
 
 
 def load_pinned_practice_audit_annotation_manifest(
