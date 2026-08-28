@@ -151,7 +151,7 @@
     "note": "各 channel の spec_13_3_name/lesson_bundle_extracted_trait/education_allowed_channel は run9_schema.TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP（HARNESS3B 正本）の対応する行と一致することを load_pinned_loss_evaluator_spec_manifest() が cross-check する（attack_timing/phrase_end_timing はいずれも extracted_trait='onset_offset' の親キーを共有し、lesson_bundle_extracted_trait 側でのみ .attack_timing/.phrase_end_timing のサブフィールドを明示する）"
   },
   "residual_correspondence": {
-    "definition_note": "lesson側contourとrender側contourはframe数が一般に一致しない（AX-D1のduration再配分では保証的に不一致）ため、frame elementwiseのRMSは未定義だった。対応の単位をaligned moraへ凍結する。1:1のmoraアラインメントは両側で既知——lesson側はHARNESS-3bの.lab×musicxmlアラインメント、render側はrenderに入力したscoreのnote区間そのもの（score変換はnote数・順序を不変に保つためmora対応は恒等）。warping・リサンプリング・truncationはいずれも不採用（発明しない）。",
+    "definition_note": "lesson側contourとrender側contourはframe数が一般に一致しない（AX-D1のduration再配分では保証的に不一致）ため、frame elementwiseのRMSは未定義だった。対応の単位をaligned moraへ凍結する。EDUCATION側reference境界はHARNESS-3bの凍結lesson bundle、PRACTICE側reference境界はtraining raw WAV + sanitized score projectionからFounder-local monotonic_segment_dp_v1が生成する。render側は入力scoreのnote区間そのもの（score変換はnote数・順序を不変に保つためmora対応は恒等）。warping・リサンプリング・truncation・.lab fallbackはいずれも不採用（発明しない）。",
     "unit": "aligned mora",
     "residual_formula": "per_channel_aggregationの規則を両側へ適用したmora単位スカラー列の差のRMS。両側のmora数は恒等対応で常に一致する——一致しない場合は実装エラーとしてfail-closed停止し、比較を続行しない。",
     "per_channel_aggregation": {
@@ -164,7 +164,7 @@
   },
   "reference_source": {
     "education": "EDUCATION枝: 凍結済みTechnique lesson bundleの値（sha pin供給）。",
-    "practice": "PRACTICE枝: Founder-local actorがPJS training raw audio（PRACTICE_ALLOWED_DATA_INPUTSのpjs_training_audio）から同一の抽出式（HARNESS-3b spec v1.1と同式）で抽出したreference特徴。precomputed teacher featureの供給は引き続き禁止する——抽出という行為がFounder側で実行されることが要件（式の共有はPoR §3.2「同じfeature extractorコードを利用すること自体は禁止しない」〔run9_schema.pyのPRACTICE_REQUIRED_AUTONOMOUS_OPERATIONSコメント〕によりactor制約と両立する）。",
+    "practice": "PRACTICE枝: Founder-local actorがpractice_actor_input_manifest_shaでpinされたtraining raw WAVとsanitized score projectionのみを読み、practice_alignment_spec_shaでpinされたmonotonic_segment_dp_v1境界に沿って同一の抽出式で生成したreference特徴。.labはr_practice凍結後のPOST_FREEZE_AUDIT_ONLYであり、検索中のreference生成・candidate selectionへ供給しない。",
     "common": "residual式・対応/集約規則（residual_correspondence）・calibration_scale・重みは両枝共通——比較の等価性を保つ。channelごとの比較対象定義はこのreference_sourceのみが枝で分岐する。actor_boundary節（practice/education）と相互参照。"
   },
   "residual_extraction_spec": {
@@ -193,11 +193,19 @@
     "eligible_count_required_per_channel": true,
     "not_measurable_definition": "いずれかの channel が eligible == 0 の candidate は当該 candidate を NOT_SCORABLE と記録する。いずれかの channel が eligible == 0 の trial（= trial 内の全 candidate のうち少なくとも1つが NOT_SCORABLE な channel を持つ trial ではなく、当該 candidate 自身）は NOT_SCORABLE として candidate selection（best 更新の比較対象）から除外する — 部分計測の candidate が完全計測の candidate に勝ち得た旧定義（欠測 channel を加点も減点もしないゼロ補完相当の扱い）の欠陥を是正する。除外の事実（NOT_SCORABLE フラグ）と channel 別 eligible 件数を trial 記録へ必須収載する（ゼロ補完禁止・eligible 記録の裁定 §2 要件は維持）。trial 内の全 candidate が NOT_SCORABLE の場合、当該 trial はそのまま記録し best 更新なしで次 trial へ進む（当該 trial の render 予算は消費済みとして計上する — reseed・予算追加はしない）。",
     "count_mismatch_not_extracted_handling": "count_mismatch / not_extracted はゼロ補完せず、channel ごとの eligible 件数を trial 記録に必須収載する",
+    "alignment_failure_handling": "PRACTICE alignmentがno active audio / audio too short / no feasible path / nonfinite value / normalized cost > 3.0のいずれかで不成立ならALIGNMENT_FAILEDかつcandidate NOT_SCORABLE。ゼロ補完・推測補完・.lab fallback・追加trial・render予算延長を禁止する。",
     "spec_correction_note": "本改訂（PR #331 レビュー第1巡 採用2、2026-08-27）は学習開始前の spec 是正であり、DESIGN_RUN9_TRI_DONOR_DUAL_FOUNDER_PJS_LEARNING_v0.1.md §11.4 Freeze Rule（'lesson freeze -> learning start -> no lesson modification'）が禁じる学習開始後の変更には該当しない。"
   },
   "actor_boundary": {
-    "practice": "PRACTICE 枝はこの evaluator を PJS raw audio + founder 自己 render にのみ適用する。education lesson / precomputed teacher feature の入力を禁止する。",
+    "practice": "PRACTICE 枝は training raw WAV + 凍結済み非演奏由来 sanitized score projection のexact 2 inputsからFounder-local monotonic_segment_dp_v1で境界を生成し、この evaluator をFounder自己renderとの比較へ適用する。.lab / education lesson / external alignment / teacher-derived boundary / precomputed teacher feature / random fallbackを検索入力として禁止する。",
     "education": "EDUCATION 枝は凍結 lesson を比較対象に使用する。"
+  },
+  "practice_alignment_binding": {
+    "spec_pin": "practice_alignment_spec_sha",
+    "actor_input_pin": "practice_actor_input_manifest_sha",
+    "audit_annotation_pin": "practice_audit_annotation_manifest_sha",
+    "audit_mode": "POST_FREEZE_AUDIT_ONLY",
+    "audit_feedback_allowed": false
   },
   "adjudication_basis": {
     "sha256": "18b467dd0340aeb3e05b26a14bfdb986c502e39a222668ccddd1f396dab1aa31",

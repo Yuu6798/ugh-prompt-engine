@@ -1,0 +1,806 @@
+{
+  "schema": "run9-practice-actor-input-manifest/1.0",
+  "bindings": {
+    "practice_audio_split_manifest_sha": "fd06000888736e87bba867b48fdf5651cf7c53b152121a318d1e10f11373f1e6",
+    "practice_alignment_spec_sha": "dc8a37fe3c1883694082936c9bee31f10266dabb1cf1ae5f2b94232d16000567"
+  },
+  "split": "training",
+  "input_boundary": {
+    "allowed_payload_fields": [
+      "wav",
+      "score_projection"
+    ],
+    "wav_format": {
+      "encoding": "PCM",
+      "channels": 1,
+      "sample_rate_hz": 48000,
+      "bits_per_sample": 24
+    },
+    "lab_allowed": false,
+    "teacher_boundary_allowed": false
+  },
+  "entries": [
+    {
+      "song_id": "pjs063",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs063/pjs063_song.wav",
+        "sha256": "f1254622cbeff9a181918238a17fef1a0fc9eab853ce99b073361cd5ce887c7d"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs063.json",
+        "sha256": "ea6f751794ad0fa7f3c12e8f17b9c6a3926cf3e98a3c4d98db106b9dc5e102ef"
+      }
+    },
+    {
+      "song_id": "pjs020",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs020/pjs020_song.wav",
+        "sha256": "57391be7fa50ff6f2e35ed40db0e5d9f4273869f09e66c34499368bfbc92faa7"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs020.json",
+        "sha256": "d3a2d64cb514838ef339645318be14d4fb7590b846e16b15b412514971b9f9d4"
+      }
+    },
+    {
+      "song_id": "pjs073",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs073/pjs073_song.wav",
+        "sha256": "46155f945d4217accb262b802af0c01c74cb7410bfa33980117be6d009a5fc5d"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs073.json",
+        "sha256": "9c6dfe4bb7e16885a5a9c41261e9e37475c12c74f6a18e17645bbac308437281"
+      }
+    },
+    {
+      "song_id": "pjs019",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs019/pjs019_song.wav",
+        "sha256": "22961995b9e672b0d9b84fbc0fe26d6c19cbf26755d52b8accbc60e849dd0e69"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs019.json",
+        "sha256": "ad5812f7d6079464165c8bfa835ed8235709f262d4bfe55f3edb18019fd07592"
+      }
+    },
+    {
+      "song_id": "pjs098",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs098/pjs098_song.wav",
+        "sha256": "7c6b65904f9003f4bd31212b30c41e9ddf5a3f3224b8f6c2e73244fd92a67358"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs098.json",
+        "sha256": "2c5a0085819370d925c2565896bd7483d77848742a0a0ec76d0205e0b23e499e"
+      }
+    },
+    {
+      "song_id": "pjs083",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs083/pjs083_song.wav",
+        "sha256": "be59c5c72d992ee26b25fef466f4aa4b8f0554d7e033fa9c10285580813b6847"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs083.json",
+        "sha256": "b86bfb324b8c9ffd5e4585a9b47c4a6e4add9e8f5083372e3662d13d1b906d68"
+      }
+    },
+    {
+      "song_id": "pjs026",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs026/pjs026_song.wav",
+        "sha256": "898a8c597a0c9a4d1952df1651506ccde7b658d4e5b24251756ed1cf2f3b9edc"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs026.json",
+        "sha256": "f3e8b6ca2cafecc473f736bf882b8bb5f80c8ba1a5519023b6595417ace35259"
+      }
+    },
+    {
+      "song_id": "pjs035",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs035/pjs035_song.wav",
+        "sha256": "f02ee953ab26ac41d3d7faa0285dca7bc06a4d14fd7d4fb3ad946da7b5d39ade"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs035.json",
+        "sha256": "fb40a211334058169be63fa4a0f2280a6beeffc5cf55efe2dfd50b5df422f5e2"
+      }
+    },
+    {
+      "song_id": "pjs077",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs077/pjs077_song.wav",
+        "sha256": "1758df94eafb175f03a804e70ff94cb5f61e44f1acb92cffea41f5e59c9ef515"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs077.json",
+        "sha256": "6ad3acaecaff6ed2baf2a96886d4907c10120a8549b0d68bedbb24ae8f1239ea"
+      }
+    },
+    {
+      "song_id": "pjs058",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs058/pjs058_song.wav",
+        "sha256": "220961df4a8a83bdf055f653b83eb74a2a25d313e2e36f9e619cee24c9da69fd"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs058.json",
+        "sha256": "4385b5d51ef15ce0daeec6d5152e79c32bbd7e6f89781b2c91fdfa143644343e"
+      }
+    },
+    {
+      "song_id": "pjs021",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs021/pjs021_song.wav",
+        "sha256": "e8714921f5ae9dc84a7ef59ebe2ff63a42fb0e1d8d40fa8231becd7f0f95c0cb"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs021.json",
+        "sha256": "af93b71e3d3b79141513429fecb39fba56e71d7a113e9a67fbeea8d05dd7a8e9"
+      }
+    },
+    {
+      "song_id": "pjs012",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs012/pjs012_song.wav",
+        "sha256": "7e6f8aaa7de849bc221b932d4ba073d5229902b3957d33b5751eb79878486116"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs012.json",
+        "sha256": "2e23f14764ddb7143e84e1d72673e236eb2c075d30f142110a4c79b72f7713ac"
+      }
+    },
+    {
+      "song_id": "pjs097",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs097/pjs097_song.wav",
+        "sha256": "fb27b57ffce05726222b735361d4ad8fcea10319c66ba40647049b5fa9151dfb"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs097.json",
+        "sha256": "aa1b39f9116edece081cf8a94403defa8e284116e2cfc0f983108a71b64692cf"
+      }
+    },
+    {
+      "song_id": "pjs005",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs005/pjs005_song.wav",
+        "sha256": "7e8cc232bd8f10f852463ffd2868390b2317428f5dbb8beda680e2c513cfe4a2"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs005.json",
+        "sha256": "a8d4a8501962a32b6572a8980ef053c870df3105c4c97080f7ecb5733bbdb2fe"
+      }
+    },
+    {
+      "song_id": "pjs052",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs052/pjs052_song.wav",
+        "sha256": "1812c3c5d864dd27090c678c35407196a179873c6902bf3de9e412c1c5f52e73"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs052.json",
+        "sha256": "a36ab037a041586b0dea61bdfb5a791f7efa1f2872f8c08b45d87aacc345d9a5"
+      }
+    },
+    {
+      "song_id": "pjs089",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs089/pjs089_song.wav",
+        "sha256": "46577fd055998b5b6b003563a5bdc5d80c8706fc0fb951ebe1f0cd329fe54cf1"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs089.json",
+        "sha256": "a082cca845920253b3b8ec054d65e4c76f6abc18c9a7d6747fceffdbec5c896c"
+      }
+    },
+    {
+      "song_id": "pjs088",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs088/pjs088_song.wav",
+        "sha256": "7c74b574ad8326e3415e17b907458cb5a58417fbbcdef030c2d4550514195ef9"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs088.json",
+        "sha256": "afdb744972409e6e218deedd93924516467911e04fdbbdcf11bb9c5923069137"
+      }
+    },
+    {
+      "song_id": "pjs003",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs003/pjs003_song.wav",
+        "sha256": "b737f83c68a346a5cfeccb7d813276521eb235995d4498349c8e2fe61c24f2f4"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs003.json",
+        "sha256": "bc6e44ef31937d53e45080a8128d3ca71a44f8588bee1b3ada5b3dfb1a3835e8"
+      }
+    },
+    {
+      "song_id": "pjs029",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs029/pjs029_song.wav",
+        "sha256": "2832ca460b23f4bfa5437d9a17580aff63cb60a26903cf6da5cefa48e21dd084"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs029.json",
+        "sha256": "8e45da25d586bacf3d4b37292b06a9eecba1836f362fb7098aa4168b9fe71859"
+      }
+    },
+    {
+      "song_id": "pjs028",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs028/pjs028_song.wav",
+        "sha256": "63ca3bef454ce652a619ae5891f01cccad49562660e9e0724113dd1f7ea7d15b"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs028.json",
+        "sha256": "1c840b4218092e75a16ce871197a1202a4de9cf6e77a58f0ecffec0037cc6e53"
+      }
+    },
+    {
+      "song_id": "pjs055",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs055/pjs055_song.wav",
+        "sha256": "6e9dd880a5bc0a6d2f39cf0d8ff2d9b4943f7ad3f8a1c5cdf416e9f7dc2e562d"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs055.json",
+        "sha256": "707398fc8e0fbe58a6bf2587a9807542004dacabac534c578f482390a2f93312"
+      }
+    },
+    {
+      "song_id": "pjs075",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs075/pjs075_song.wav",
+        "sha256": "27ed2107973c465fb34d645724cc807ea526b1686340fc8166c9b7ce1a75cbcb"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs075.json",
+        "sha256": "f66acc1040ac624b6ad663e5b2592752e01bf7a7860ca051819d7c00da53eda5"
+      }
+    },
+    {
+      "song_id": "pjs023",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs023/pjs023_song.wav",
+        "sha256": "b07c45597b49cd4d2ab04fc69b3cefc8ec849db49f0ec4ba186c4168cd56c32d"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs023.json",
+        "sha256": "ab8602d7a9a10d8fc581984cda1a6b6c44d21599d83fa68e6014a78a5e8a660e"
+      }
+    },
+    {
+      "song_id": "pjs084",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs084/pjs084_song.wav",
+        "sha256": "c96afaa445729f7018cae2fa657c6bedb42165c7cd9bf1594c39d6f2dd072ff1"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs084.json",
+        "sha256": "cfb94b7ded08960ebe94f0caff5d52946331d5b2c434caa5f830ac8f7b264792"
+      }
+    },
+    {
+      "song_id": "pjs001",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs001/pjs001_song.wav",
+        "sha256": "cbd14289cea8c5cd2e7a859076a2448f852143f8e5868b7cb655270764cf4f3a"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs001.json",
+        "sha256": "07ad03c0b7defb69b7130a58cc7ab12f800ad8a863f1f723a2fe54258eec9421"
+      }
+    },
+    {
+      "song_id": "pjs100",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs100/pjs100_song.wav",
+        "sha256": "55c285f8d8f0e6113ab20e66a1e1e5981785df2bf282cea132834672bcf3cffa"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs100.json",
+        "sha256": "311f812c413f89c108abada35a01acdd366e828e2b68d91dee9c1e8a9b189e46"
+      }
+    },
+    {
+      "song_id": "pjs006",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs006/pjs006_song.wav",
+        "sha256": "a9f515921821a57c510c1e7d8648fa95069b30c2c729a623394f182c4669ed58"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs006.json",
+        "sha256": "30880e6e7ffc9d1317bdc3f8590c9d04db92e6ffe6b3bff051c762c343d25be1"
+      }
+    },
+    {
+      "song_id": "pjs031",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs031/pjs031_song.wav",
+        "sha256": "dcf694248417d8a0d59da528ec11262ea8c2c26bc1fc63d3512dee7ed3cc8d4a"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs031.json",
+        "sha256": "3ed66a3e0ba831dff31ad166ae827154f9d1ad07feb599064cc35f549082dc90"
+      }
+    },
+    {
+      "song_id": "pjs007",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs007/pjs007_song.wav",
+        "sha256": "c3c5ee4e09a0e439f51c09c6cd82c576fe95c5b5d696e263c729d5533b260d41"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs007.json",
+        "sha256": "cac769c443dc03457adb5fb3eca160a2a814f75902644856cc49d2f0cb4db553"
+      }
+    },
+    {
+      "song_id": "pjs057",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs057/pjs057_song.wav",
+        "sha256": "214171c61b184ff1b8fe1e68f2f79d58ea4eb2670fa94d00622d96f256380c8d"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs057.json",
+        "sha256": "b829545c012b1e3fff00934dccd22f5005cd7da9ffcce68edc59b88d01d53601"
+      }
+    },
+    {
+      "song_id": "pjs039",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs039/pjs039_song.wav",
+        "sha256": "3f5206555dab95564e77950bdf93efd3b210ba4ddceba368a84520f23e17b888"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs039.json",
+        "sha256": "6e8d5d7631f2d2d8ad26fbba2f105c9abeb52e05724ed20e14943eef92bc377d"
+      }
+    },
+    {
+      "song_id": "pjs049",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs049/pjs049_song.wav",
+        "sha256": "b5eff258433b6aa1ff034c5134bea7241483bb32268fb3f0ae57c3918bebdd91"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs049.json",
+        "sha256": "4977359771c1ac47f170f737272aca4407b288079cea1f1720b099ba83d30f2b"
+      }
+    },
+    {
+      "song_id": "pjs018",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs018/pjs018_song.wav",
+        "sha256": "7a12d8d38ee6ab359d065c9d23b6257f64105819345418018ba713c59c7f2fd7"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs018.json",
+        "sha256": "72ac066872108d2cc0675eb7335c9418b92af41560f21fa4ce0a981e48ee4c16"
+      }
+    },
+    {
+      "song_id": "pjs030",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs030/pjs030_song.wav",
+        "sha256": "7b361bd723bd8c5151a26a3d4c3a292b23e3a298197ca9a8c83b0afcd59c3a5d"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs030.json",
+        "sha256": "119b3f344b59f03e48aec150f7a92452920327e47a3d53bbcb08469add74fee0"
+      }
+    },
+    {
+      "song_id": "pjs038",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs038/pjs038_song.wav",
+        "sha256": "8d0daa6daf137b588a69f5ece4106cb11fb42dc94d510ac477a8e7cc1c3d83c0"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs038.json",
+        "sha256": "dce5507399ef0fc2968e46edbdb66780ada41ae0eb5f499f92e13166a43a576e"
+      }
+    },
+    {
+      "song_id": "pjs065",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs065/pjs065_song.wav",
+        "sha256": "6d3be54db5abe5d019188d197157c621dd7101e5f5ea70cd643b4444070ff0dd"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs065.json",
+        "sha256": "e0ea38c0d302db0150a680705e451cb461c278e3f90f7a532561ffa61b266167"
+      }
+    },
+    {
+      "song_id": "pjs032",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs032/pjs032_song.wav",
+        "sha256": "5dc39abc45965fe097a58e52506a398cd93306736ba7670939aa5ee3d0352242"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs032.json",
+        "sha256": "b136744608ed55d63a15f4a9e93ae147e9cdd5aebe7b0f2288b060b47cd539cf"
+      }
+    },
+    {
+      "song_id": "pjs036",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs036/pjs036_song.wav",
+        "sha256": "ccdc8e4be8fe22bd1d632f3889a412b391aac61a7c510236e1c254f09b90df18"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs036.json",
+        "sha256": "de4617664cf626d5939d4cb0cbee708c1aabf7bffb8ae719308bcd5ac848898c"
+      }
+    },
+    {
+      "song_id": "pjs054",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs054/pjs054_song.wav",
+        "sha256": "5d0583eedc9d94ddf6885c142b7bece1896fb6d241f2a16158c092d559d21558"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs054.json",
+        "sha256": "477273d1d09fce86f5de9a09a0fadf845e3eb3b6d42bb248bc6d206ceeeab695"
+      }
+    },
+    {
+      "song_id": "pjs013",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs013/pjs013_song.wav",
+        "sha256": "95e68c33031aabef3a99c892ad93b7c375a90224a396ac7bd3ed5ed1722419ae"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs013.json",
+        "sha256": "8917d274d4d4b099e498595b2bbb3494b9f0cbdb8307fe2d21375fcbe381af15"
+      }
+    },
+    {
+      "song_id": "pjs043",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs043/pjs043_song.wav",
+        "sha256": "c092a08e7ab8a69e3889a8c3f1d6e5f7c5b5bb915ecb50ec856359b76fce6953"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs043.json",
+        "sha256": "3f450941ea7045a1c21796d81d20da8941a8d3c53132c455903c4ce52b3aa78e"
+      }
+    },
+    {
+      "song_id": "pjs086",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs086/pjs086_song.wav",
+        "sha256": "59c439fa123e6a6b9c13dd9a1dffe6d6af2fbf390c89509c9aa6fa895990a4f8"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs086.json",
+        "sha256": "47febf59fa15278c7b398af471a3bb6aa9a6759a289c13d076294f8e98dc4a0d"
+      }
+    },
+    {
+      "song_id": "pjs081",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs081/pjs081_song.wav",
+        "sha256": "17d9afa0780e8900ac074e415a6e3ece9f6054ab570efb8df439371cfb08b2ff"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs081.json",
+        "sha256": "f78660b4b29e11b54028a9d5ca70cd569494ba939b309ba55829f23c68db5ee1"
+      }
+    },
+    {
+      "song_id": "pjs094",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs094/pjs094_song.wav",
+        "sha256": "afd89f92d3b919589cfa421fb052373e26f2690b12be9708671073a909e6623a"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs094.json",
+        "sha256": "64f4cab6cd5dbeb8b799bc624dd229462261eef1480441465a752372eaf1a3b0"
+      }
+    },
+    {
+      "song_id": "pjs022",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs022/pjs022_song.wav",
+        "sha256": "cf274c609ec436262d4a29a3b3541b9ed240880e6932585fe237037cad92f5ff"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs022.json",
+        "sha256": "af50b41d981844bbbb19d1bb267e86ebf9db2ad3996860c87b1a9033fa586feb"
+      }
+    },
+    {
+      "song_id": "pjs010",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs010/pjs010_song.wav",
+        "sha256": "02d65da7f6f41cde7b964d03ac47603d5bfc8dea24ac8359cebf60faa0701ad7"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs010.json",
+        "sha256": "31995293fc27f5b228462b8c7ca8bca52b7183d18704aa6388e4ba259913bb48"
+      }
+    },
+    {
+      "song_id": "pjs004",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs004/pjs004_song.wav",
+        "sha256": "e7dbc8ecce8f9979cbe3ee5003dcec396dd9079666d190268505e3d9e638dda8"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs004.json",
+        "sha256": "14a16a1e1c79ae6ff5620aebdb8d11eabdb36dbda339deaa67bad648f7d54e0c"
+      }
+    },
+    {
+      "song_id": "pjs002",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs002/pjs002_song.wav",
+        "sha256": "38c4dd447f561a044fa7ab1fabe9883da4209bc5f87954cc8789b43aff5c3e93"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs002.json",
+        "sha256": "5526d2bf7959e1ecc448fa38235cad71b77f1b1c968a7d3cf871d88362c28c17"
+      }
+    },
+    {
+      "song_id": "pjs044",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs044/pjs044_song.wav",
+        "sha256": "ddeefa265fd55ad1a1eb995d29d73ea4abc0529f975db03d353f2d9c282f277e"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs044.json",
+        "sha256": "ae21ecaa489e19741aa982e4dff4f16f8f705c10b618b273e39a6e3f5fe19341"
+      }
+    },
+    {
+      "song_id": "pjs071",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs071/pjs071_song.wav",
+        "sha256": "a3ab64c0fd3b342b0cf9002da44cf1390b22312e9d5337c8e5bd6a42be071a09"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs071.json",
+        "sha256": "1561e5f398444c0df2aed739da9e4025e380b36e22169136921d9007c59da2bb"
+      }
+    },
+    {
+      "song_id": "pjs090",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs090/pjs090_song.wav",
+        "sha256": "456f24f556c2bf41150f651fecdeeac7b3554bd6e0977d67fdc711251310e2a9"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs090.json",
+        "sha256": "f61e6629786818f1b9f1d54ef75a4f0e2aee127859aca58248ed352f8d24acd4"
+      }
+    },
+    {
+      "song_id": "pjs008",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs008/pjs008_song.wav",
+        "sha256": "668a110e74eeab73006ea0a82546841af6e4e0c3dd94fd9b26be1c60cff198d2"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs008.json",
+        "sha256": "e3b60d12a6e2f9d2b26aa7087b4ae2aa65c30e01730cdc8502f25e1cf4629eb7"
+      }
+    },
+    {
+      "song_id": "pjs064",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs064/pjs064_song.wav",
+        "sha256": "c4e4d43694383a2305ea6231d765f0ce27340f31beaf626fc2752358331650a6"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs064.json",
+        "sha256": "fd535ba103ef77bb98733fc5d7e74d8a0ef797a1beae5b7cc8953ee516ca87d7"
+      }
+    },
+    {
+      "song_id": "pjs014",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs014/pjs014_song.wav",
+        "sha256": "f75b0fb2fe349d8d298993dc9218da562b7724349acc857887e663f7c7d1e987"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs014.json",
+        "sha256": "97b772a0a3969249257e43650fa35f2e75b8a84ac2f91f2800f321ad598c3436"
+      }
+    },
+    {
+      "song_id": "pjs037",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs037/pjs037_song.wav",
+        "sha256": "adaa24f55f02148908b948d7000985964f119e88c51643df768c89375639a2f3"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs037.json",
+        "sha256": "021a79edf552e7047ebc33cf847781b32e8ca12b3c027c9287655fd5e0a658a9"
+      }
+    },
+    {
+      "song_id": "pjs095",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs095/pjs095_song.wav",
+        "sha256": "7dca82505ea51a51ba7b6e062976bb9371650d84294c9adee35240f8503ad37a"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs095.json",
+        "sha256": "f1b92f271a33eaeb05c158ae6a6e30fbe917f545621d435bccb02f2b51e98c4c"
+      }
+    },
+    {
+      "song_id": "pjs096",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs096/pjs096_song.wav",
+        "sha256": "310d47a50fbe6e93aae249d82adfddb2ddf7b8b692b8126f2e702f579f2611ac"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs096.json",
+        "sha256": "5f9449f39381417861e69c3bb092910c00bdc702e2d50880bde4b22236ed90bb"
+      }
+    },
+    {
+      "song_id": "pjs093",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs093/pjs093_song.wav",
+        "sha256": "82b963e43b88e94bf91bfca92e86b0a27bc35d5b7d4c5b809b917985c9d2beb0"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs093.json",
+        "sha256": "bdf11c225be854cbd1e71c88aa23d49c00e4ea5730a053717450bcb315656a39"
+      }
+    },
+    {
+      "song_id": "pjs085",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs085/pjs085_song.wav",
+        "sha256": "b91ccff45840b01ab99b5400b83cffc994eb158b2ed3719b92e644887f948ef7"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs085.json",
+        "sha256": "5260650e733f43f0d8b9a70ddc332a1d957451b9645beb00a280a86b6be8a1f6"
+      }
+    },
+    {
+      "song_id": "pjs062",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs062/pjs062_song.wav",
+        "sha256": "67847b1862850c06b30b133680bc49891b372bf3d2588272579f67012f7c79b9"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs062.json",
+        "sha256": "ff55be3e4271de6bd4c16b91a173c893e90d077147ce159ad4aac43fab059e1e"
+      }
+    },
+    {
+      "song_id": "pjs053",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs053/pjs053_song.wav",
+        "sha256": "ee6a06b4ab9f01b5819a50c2d8d044925be8ba3e58191c6489b6b83409ace46c"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs053.json",
+        "sha256": "7a0ad414484cd546e956ecb24153c0fc2e5fc29617c46efbf14cc8cd167883c2"
+      }
+    },
+    {
+      "song_id": "pjs087",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs087/pjs087_song.wav",
+        "sha256": "e0818ba9c6439b3e18d049bb0bd3fd5e438ad1c0816e0575790afe56467b6ddc"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs087.json",
+        "sha256": "4ac4e78950afc55bce8851e1f23ef5857b054c3b5052f4199961bc1aebb3f10f"
+      }
+    },
+    {
+      "song_id": "pjs079",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs079/pjs079_song.wav",
+        "sha256": "88023d3b6e40222529cd9315e957a2687600b4e7e0f970a81336e37172c5a229"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs079.json",
+        "sha256": "c372cfb96efe8a2bdeda1e7329a584a687c3e403b752e0d37ad9efb6e12a3b46"
+      }
+    },
+    {
+      "song_id": "pjs061",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs061/pjs061_song.wav",
+        "sha256": "5f8610a01d4b318d03f98b7e8796ee8d3d0c5fd897a73287fa20c18bf05ba5ad"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs061.json",
+        "sha256": "04bf90227dffb3e3023b9e08c26f2fcd66124e6ca9d28d151e6894968ed19e61"
+      }
+    },
+    {
+      "song_id": "pjs047",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs047/pjs047_song.wav",
+        "sha256": "1dd5df6df44f7aea381dd6927a3324b23dc86c8628bc38197660fbdbf3e0c713"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs047.json",
+        "sha256": "d8b54a38357389a84fe18c70f332c692e44ecd45582e6bac33d56c3099949aab"
+      }
+    },
+    {
+      "song_id": "pjs015",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs015/pjs015_song.wav",
+        "sha256": "bc66ea773c49b5fe62cdb389afbd18b821e165d2581adfd4766588f5549096ad"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs015.json",
+        "sha256": "0d7c7d861245b8e67987fcddb59e9a9121f8cce6bc877f8d8124497d62d57e87"
+      }
+    },
+    {
+      "song_id": "pjs074",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs074/pjs074_song.wav",
+        "sha256": "3caf700da264a92487bc8287fec79770c02f56b3997accd45f7d474b560a3280"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs074.json",
+        "sha256": "1f6b142b4fbd739be26a192e3f456e725a96823734d6d64b59ff0181e8eb3de0"
+      }
+    },
+    {
+      "song_id": "pjs024",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs024/pjs024_song.wav",
+        "sha256": "dcd595a8e3f872773d2692d486ff3ce2c5aa050e2537caf86563413b30067a92"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs024.json",
+        "sha256": "f92b1a96b4501e7817618ab9ce579d21bbe231e9fc726160b2c828e9ae7968ac"
+      }
+    },
+    {
+      "song_id": "pjs027",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs027/pjs027_song.wav",
+        "sha256": "38cab918ea26985735f06e61fdf9bb7fa271fcc1c2411af804e80af22905c4e1"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs027.json",
+        "sha256": "1f82323e2552417e1e013768425b34d48030eb4f9bacf6be550d1014d859b6fc"
+      }
+    },
+    {
+      "song_id": "pjs060",
+      "wav": {
+        "relative_path": "PJS_corpus_ver1.1/pjs060/pjs060_song.wav",
+        "sha256": "4195f56bd41c4b809d27e1fa813e65c401e5524981249f414d9c03073159e438"
+      },
+      "score_projection": {
+        "relative_path": "harness_work/h3c/practice_score_projections/pjs060.json",
+        "sha256": "90041bee1a01366445241aedbfe727b41594f22c283541cfe2a4255cb2d6b1a8"
+      }
+    }
+  ],
+  "adjudication_basis": {
+    "source_file": "voice_genesis/evolution/run9_dual_founder_pjs/USER_ADJUDICATION_20260828_PRACTICE_ALIGNMENT.txt",
+    "sha256": "f33f1deb80bfe824d6c9313cef95961a26ce7174a0b745f51a3884e5b77bf8fb",
+    "summary": "User裁定2026-08-28: PRACTICE learner-facing payloadをtraining raw WAVとsanitized score projection exact 6要素に限定し、.labおよびteacher-derived boundaryを分離する。"
+  },
+  "provenance": {
+    "detail_record": {
+      "repo_relative_path": "voice_genesis/evolution/run9_dual_founder_pjs/HARNESS3C_PRACTICE_ALIGNMENT_RECORD.md",
+      "sha256": "5f1d1b09b4fd664a26178bf310a574c226f61acc39ccf5645b6ea3952dbae3c3",
+      "summary": "W2 score projection generator exact replay record: projection generation passed for training 70/70."
+    }
+  }
+}

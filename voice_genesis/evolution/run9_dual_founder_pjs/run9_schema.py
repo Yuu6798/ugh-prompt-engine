@@ -1569,6 +1569,11 @@ SCHEMA_LOSS_EVALUATOR_SPEC = "run9-loss-evaluator-spec/1.0"
 SCHEMA_CANDIDATE_GENERATION_SPEC = "run9-candidate-generation-spec/1.0"
 SCHEMA_COMPUTE_BUDGET_MANIFEST = "run9-compute-budget/1.0"
 SCHEMA_LEARNING_DATA_BINDING_MANIFEST = "run9-learning-data-binding/1.0"
+SCHEMA_PRACTICE_ALIGNMENT_SPEC = "run9-practice-alignment-spec/1.0"
+SCHEMA_PRACTICE_ACTOR_INPUT_MANIFEST = "run9-practice-actor-input-manifest/1.0"
+SCHEMA_PRACTICE_AUDIT_ANNOTATION_MANIFEST = (
+    "run9-practice-audit-annotation-manifest/1.0"
+)
 
 SCORE_AXIS_CATALOG_PATH = _THIS_DIR / "inputs" / "score_axis_catalog_v1.json"
 LOSS_EVALUATOR_SPEC_PATH = _THIS_DIR / "inputs" / "loss_evaluator_spec_v1.json"
@@ -1577,8 +1582,21 @@ COMPUTE_BUDGET_MANIFEST_PATH = _THIS_DIR / "inputs" / "compute_budget_manifest_v
 LEARNING_DATA_BINDING_MANIFEST_PATH = (
     _THIS_DIR / "inputs" / "learning_data_binding_manifest_v1.json"
 )
+PRACTICE_ALIGNMENT_SPEC_PATH = _THIS_DIR / "inputs" / "practice_alignment_spec_v1.json"
+PRACTICE_ACTOR_INPUT_MANIFEST_PATH = (
+    _THIS_DIR / "inputs" / "practice_actor_input_manifest_v1.json"
+)
+PRACTICE_AUDIT_ANNOTATION_MANIFEST_PATH = (
+    _THIS_DIR / "inputs" / "practice_audit_annotation_manifest_v1.json"
+)
 H3C_ADJUDICATION_PATH = _THIS_DIR / "USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt"
 H3C_DETAIL_RECORD_PATH = _THIS_DIR / "HARNESS3C_AXIS_FEASIBILITY_RECORD.md"
+PRACTICE_ALIGNMENT_ADJUDICATION_PATH = (
+    _THIS_DIR / "USER_ADJUDICATION_20260828_PRACTICE_ALIGNMENT.txt"
+)
+PRACTICE_ALIGNMENT_DETAIL_RECORD_PATH = (
+    _THIS_DIR / "HARNESS3C_PRACTICE_ALIGNMENT_RECORD.md"
+)
 
 # loss_evaluator_spec_v1 の calibration_scale の frozen 正本（W1b Task3実測、
 # HARNESS3C_AXIS_FEASIBILITY_RECORD.md 第2部 Task3 + PR #331 第6巡追加実測。
@@ -7578,6 +7596,14 @@ CONTRACT_PIN_FIELDS: Tuple[str, ...] = (
     # 完全被覆で閉じる（`validate_pjs_consumed_inputs_manifest()`/
     # `load_pinned_consumed_inputs_manifest()` 参照）。
     "pjs_consumed_inputs_manifest_sha",
+    # RUN9-L0-HARNESS-3c PRACTICE Alignment 再凍結（User 裁定
+    # 2026-08-28）: Founder-local alignment の決定論仕様、PRACTICE 検索へ
+    # 公開してよい WAV + sanitized score projection、r_practice 凍結後の
+    # measurement-only .lab を相互に分離した3 manifest。いずれも学習前に
+    # PINNED 必須であり、post-run/optional 除外には入れない。
+    "practice_alignment_spec_sha",
+    "practice_actor_input_manifest_sha",
+    "practice_audit_annotation_manifest_sha",
     # RUN9-L0-HARNESS-3c で追加（User 裁定「RUN9 User裁定 — Learning
     # Recipe 残5キー」§1-§6）: learning_recipe manifest 残5キーを実体化する
     # 5 manifest 自体の実バイト sha256（design_doc_sha256 と同一のファイル
@@ -18667,6 +18693,9 @@ _LOSS_EVALUATOR_SPEC_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = _H3C_COMMON_TOP_L
         "actor_boundary",
         "residual_correspondence",
         "reference_source",
+        "practice_alignment_binding",
+        "channel_vocabulary_map_cross_check",
+        "final_scientific_judgment_note",
     }
 )
 
@@ -18697,8 +18726,10 @@ _LOSS_EVALUATOR_EXPECTED_NOT_MEASURABLE_DEFINITION = (
 # 境界を逐語一致で強制する。トップレベルキーの存在検査のみでは repin で
 # 空文字列・欠落・「education lesson を入力可」への緩和文言が通過し得た。
 _LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_PRACTICE = (
-    "PRACTICE 枝はこの evaluator を PJS raw audio + founder 自己 render にのみ適用する。"
-    "education lesson / precomputed teacher feature の入力を禁止する。"
+    "PRACTICE 枝は training raw WAV + 凍結済み非演奏由来 sanitized score projection の"
+    "exact 2 inputsからFounder-local monotonic_segment_dp_v1で境界を生成し、この evaluator を"
+    "Founder自己renderとの比較へ適用する。.lab / education lesson / external alignment / "
+    "teacher-derived boundary / precomputed teacher feature / random fallbackを検索入力として禁止する。"
 )
 _LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION = "EDUCATION 枝は凍結 lesson を比較対象に使用する。"
 
@@ -18712,10 +18743,11 @@ _LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION = "EDUCATION 枝は凍結 less
 # fail-closed で拒否する。
 _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_DEFINITION_NOTE = (
     "lesson側contourとrender側contourはframe数が一般に一致しない（AX-D1のduration再配分では保証的に不一致）"
-    "ため、frame elementwiseのRMSは未定義だった。対応の単位をaligned moraへ凍結する。1:1のmoraアラインメントは"
-    "両側で既知——lesson側はHARNESS-3bの.lab×musicxmlアラインメント、render側はrenderに入力したscoreのnote"
-    "区間そのもの（score変換はnote数・順序を不変に保つためmora対応は恒等）。warping・リサンプリング・"
-    "truncationはいずれも不採用（発明しない）。"
+    "ため、frame elementwiseのRMSは未定義だった。対応の単位をaligned moraへ凍結する。EDUCATION側reference"
+    "境界はHARNESS-3bの凍結lesson bundle、PRACTICE側reference境界はtraining raw WAV + sanitized score "
+    "projectionからFounder-local monotonic_segment_dp_v1が生成する。render側は入力scoreのnote区間そのもの"
+    "（score変換はnote数・順序を不変に保つためmora対応は恒等）。warping・リサンプリング・truncation・"
+    ".lab fallbackはいずれも不採用（発明しない）。"
 )
 _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_UNIT = "aligned mora"
 _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_RESIDUAL_FORMULA = (
@@ -18756,17 +18788,28 @@ _LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_EDUCATION = (
     "EDUCATION枝: 凍結済みTechnique lesson bundleの値（sha pin供給）。"
 )
 _LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_PRACTICE = (
-    "PRACTICE枝: Founder-local actorがPJS training raw audio（PRACTICE_ALLOWED_DATA_INPUTSの"
-    "pjs_training_audio）から同一の抽出式（HARNESS-3b spec v1.1と同式）で抽出したreference特徴。"
-    "precomputed teacher featureの供給は引き続き禁止する——抽出という行為がFounder側で実行されることが要件"
-    "（式の共有はPoR §3.2「同じfeature extractorコードを利用すること自体は禁止しない」"
-    "〔run9_schema.pyのPRACTICE_REQUIRED_AUTONOMOUS_OPERATIONSコメント〕によりactor制約と両立する）。"
+    "PRACTICE枝: Founder-local actorがpractice_actor_input_manifest_shaでpinされたtraining raw WAVと"
+    "sanitized score projectionのみを読み、practice_alignment_spec_shaでpinされた"
+    "monotonic_segment_dp_v1境界に沿って同一の抽出式で生成したreference特徴。.labはr_practice凍結後の"
+    "POST_FREEZE_AUDIT_ONLYであり、検索中のreference生成・candidate selectionへ供給しない。"
 )
 _LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_COMMON = (
     "residual式・対応/集約規則（residual_correspondence）・calibration_scale・重みは両枝共通——比較の等価性を"
     "保つ。channelごとの比較対象定義はこのreference_sourceのみが枝で分岐する。actor_boundary節"
     "（practice/education）と相互参照。"
 )
+_LOSS_EVALUATOR_EXPECTED_ALIGNMENT_FAILURE_HANDLING = (
+    "PRACTICE alignmentがno active audio / audio too short / no feasible path / nonfinite value / "
+    "normalized cost > 3.0のいずれかで不成立ならALIGNMENT_FAILEDかつcandidate NOT_SCORABLE。"
+    "ゼロ補完・推測補完・.lab fallback・追加trial・render予算延長を禁止する。"
+)
+_LOSS_EVALUATOR_EXPECTED_PRACTICE_ALIGNMENT_BINDING: Dict[str, Any] = {
+    "spec_pin": "practice_alignment_spec_sha",
+    "actor_input_pin": "practice_actor_input_manifest_sha",
+    "audit_annotation_pin": "practice_audit_annotation_manifest_sha",
+    "audit_mode": "POST_FREEZE_AUDIT_ONLY",
+    "audit_feedback_allowed": False,
+}
 
 # aggregate_formula の実行可能な式の凍結（PR #331 Codex bot レビュー第10巡
 # 指摘1、P1、採用対応）: aggregate の使用範囲（search objective 限定、
@@ -18833,11 +18876,20 @@ def _validate_loss_evaluator_aggregate_formula(aggregate_formula: Mapping[str, A
     指摘1、P1、採用の実装）。channel RMS・calibration_scale・weight の
     結合式が repin で未凍結の別式へ差し替わることを fail-closed で拒否する。
     """
-    if not isinstance(aggregate_formula, dict):
-        raise Run9ValidationError(
-            "loss evaluator spec manifest.aggregate_formula must be an object, got "
-            f"{type(aggregate_formula).__name__}"
-        )
+    aggregate_formula = _require_exact_manifest_keys(
+        aggregate_formula,
+        keys=frozenset(
+            {
+                "formula",
+                "measurable_definition",
+                "term_definitions",
+                "dtype",
+                "summation_order",
+                "objective_direction",
+            }
+        ),
+        field="loss evaluator spec manifest.aggregate_formula",
+    )
     formula = aggregate_formula.get("formula")
     if formula != _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_FORMULA:
         raise Run9ValidationError(
@@ -18854,11 +18906,11 @@ def _validate_loss_evaluator_aggregate_formula(aggregate_formula: Mapping[str, A
             f"{measurable_definition!r}"
         )
     term_definitions = aggregate_formula.get("term_definitions")
-    if not isinstance(term_definitions, dict):
-        raise Run9ValidationError(
-            "loss evaluator spec manifest.aggregate_formula.term_definitions must be an object, "
-            f"got {type(term_definitions).__name__}"
-        )
+    term_definitions = _require_exact_manifest_keys(
+        term_definitions,
+        keys=frozenset(_LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_TERM_DEFINITIONS),
+        field="loss evaluator spec manifest.aggregate_formula.term_definitions",
+    )
     for term_name, expected_definition in _LOSS_EVALUATOR_EXPECTED_AGGREGATE_FORMULA_TERM_DEFINITIONS.items():
         actual_definition = term_definitions.get(term_name)
         if actual_definition != expected_definition:
@@ -18914,18 +18966,18 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
     calibration_scale・weight を結合する実行可能な search_objective 式の
     凍結）が凍結文言と逐語一致する（第10巡指摘1、P1、採用）。
     """
-    if not isinstance(data, dict):
-        raise Run9ValidationError(f"loss evaluator spec manifest must be an object, got {type(data).__name__}")
-    schema = data.get("schema")
+    obj = _require_exact_manifest_keys(
+        data,
+        keys=_LOSS_EVALUATOR_SPEC_TOP_LEVEL_REQUIRED_KEYS,
+        field="loss evaluator spec manifest",
+    )
+    schema = obj["schema"]
     if schema != SCHEMA_LOSS_EVALUATOR_SPEC:
         raise Run9ValidationError(
             f"loss evaluator spec manifest schema must be exactly {SCHEMA_LOSS_EVALUATOR_SPEC!r}, "
             f"got {schema!r}"
         )
-    missing = _LOSS_EVALUATOR_SPEC_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
-    if missing:
-        raise Run9ValidationError(f"loss evaluator spec manifest missing required key(s): {sorted(missing)}")
-    channels = data["channels"]
+    channels = obj["channels"]
     if not isinstance(channels, list) or len(channels) != 5:
         raise Run9ValidationError(
             f"loss evaluator spec manifest.channels must be a list of exactly 5 entries, got "
@@ -18941,7 +18993,22 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
         row["physical_channel"]: row for row in TECHNIQUE_LESSON_CHANNEL_VOCABULARY_MAP
     }
     total_weight = 0.0
-    for channel in channels:
+    for channel_raw in channels:
+        channel = _require_exact_manifest_keys(
+            channel_raw,
+            keys=frozenset(
+                {
+                    "name",
+                    "spec_13_3_name",
+                    "lesson_bundle_extracted_trait",
+                    "education_allowed_channel",
+                    "residual_definition",
+                    "calibration_scale",
+                    "weight",
+                }
+            ),
+            field="loss evaluator spec manifest.channels[]",
+        )
         name = channel["name"]
         weight = channel.get("weight")
         if weight != 0.2:
@@ -18950,12 +19017,16 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
                 f"(1/5, 裁定 §2「正規化後の固定重みを各1/5とする」), got {weight!r}"
             )
         total_weight += weight
-        calibration = channel.get("calibration_scale")
-        if not isinstance(calibration, dict):
-            raise Run9ValidationError(
-                f"loss evaluator spec manifest.channels[name={name!r}].calibration_scale must be "
-                f"an object, got {type(calibration).__name__}"
-            )
+        calibration = _require_exact_manifest_keys(
+            channel["calibration_scale"],
+            keys=frozenset(
+                {"value", "sample_unit", "n_samples", "decision_needed_was", "derivation"}
+            ),
+            field=(
+                "loss evaluator spec manifest.channels"
+                f"[name={name!r}].calibration_scale"
+            ),
+        )
         value = calibration.get("value")
         expected_value = LOSS_EVALUATOR_CALIBRATION_SCALE_V1[name]
         if value != expected_value:
@@ -18992,13 +19063,26 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
         raise Run9ValidationError(
             f"loss evaluator spec manifest.channels weights must sum to 1.0, got {total_weight!r}"
         )
-    if data["aggregate_scope"] != "candidate_selection_search_objective_only":
+    if obj["aggregate_scope"] != "candidate_selection_search_objective_only":
         raise Run9ValidationError(
             "loss evaluator spec manifest.aggregate_scope must be exactly "
-            f"'candidate_selection_search_objective_only', got {data['aggregate_scope']!r}"
+            f"'candidate_selection_search_objective_only', got {obj['aggregate_scope']!r}"
         )
-    _validate_loss_evaluator_aggregate_formula(data["aggregate_formula"])
-    missing_policy = data["missing_policy"]
+    _validate_loss_evaluator_aggregate_formula(obj["aggregate_formula"])
+    missing_policy = _require_exact_manifest_keys(
+        obj["missing_policy"],
+        keys=frozenset(
+            {
+                "zero_fill_prohibited",
+                "eligible_count_required_per_channel",
+                "not_measurable_definition",
+                "count_mismatch_not_extracted_handling",
+                "alignment_failure_handling",
+                "spec_correction_note",
+            }
+        ),
+        field="loss evaluator spec manifest.missing_policy",
+    )
     if missing_policy.get("zero_fill_prohibited") is not True:
         raise Run9ValidationError(
             "loss evaluator spec manifest.missing_policy.zero_fill_prohibited must be exactly True "
@@ -19018,13 +19102,20 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
             f"{not_measurable_definition!r} (PR #331 第1巡採用2 是正文言への repin 復元強制、"
             "旧「部分 channel 採点」文言への差し戻しを fail-closed で拒否する)"
         )
-
-    actor_boundary = data["actor_boundary"]
-    if not isinstance(actor_boundary, dict):
+    if (
+        missing_policy["alignment_failure_handling"]
+        != _LOSS_EVALUATOR_EXPECTED_ALIGNMENT_FAILURE_HANDLING
+    ):
         raise Run9ValidationError(
-            f"loss evaluator spec manifest.actor_boundary must be an object, got "
-            f"{type(actor_boundary).__name__}"
+            "loss evaluator spec manifest.missing_policy.alignment_failure_handling "
+            "diverges from the frozen ALIGNMENT_FAILED/NOT_SCORABLE fail-closed policy"
         )
+
+    actor_boundary = _require_exact_manifest_keys(
+        obj["actor_boundary"],
+        keys=frozenset({"practice", "education"}),
+        field="loss evaluator spec manifest.actor_boundary",
+    )
     actor_boundary_practice = actor_boundary.get("practice")
     if actor_boundary_practice != _LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_PRACTICE:
         raise Run9ValidationError(
@@ -19042,12 +19133,11 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
             f"{_LOSS_EVALUATOR_EXPECTED_ACTOR_BOUNDARY_EDUCATION!r}, got {actor_boundary_education!r}"
         )
 
-    residual_correspondence = data["residual_correspondence"]
-    if not isinstance(residual_correspondence, dict):
-        raise Run9ValidationError(
-            "loss evaluator spec manifest.residual_correspondence must be an object, got "
-            f"{type(residual_correspondence).__name__}"
-        )
+    residual_correspondence = _require_exact_manifest_keys(
+        obj["residual_correspondence"],
+        keys=frozenset({"definition_note", "unit", "residual_formula", "per_channel_aggregation"}),
+        field="loss evaluator spec manifest.residual_correspondence",
+    )
     definition_note = residual_correspondence.get("definition_note")
     if definition_note != _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_DEFINITION_NOTE:
         raise Run9ValidationError(
@@ -19072,11 +19162,14 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
             f"{residual_formula!r}"
         )
     per_channel_aggregation = residual_correspondence.get("per_channel_aggregation")
-    if not isinstance(per_channel_aggregation, dict):
-        raise Run9ValidationError(
-            "loss evaluator spec manifest.residual_correspondence.per_channel_aggregation must be "
-            f"an object, got {type(per_channel_aggregation).__name__}"
-        )
+    per_channel_aggregation = _require_exact_manifest_keys(
+        per_channel_aggregation,
+        keys=frozenset(_LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_PER_CHANNEL),
+        field=(
+            "loss evaluator spec manifest.residual_correspondence."
+            "per_channel_aggregation"
+        ),
+    )
     for channel_name, expected_rule in _LOSS_EVALUATOR_EXPECTED_RESIDUAL_CORRESPONDENCE_PER_CHANNEL.items():
         actual_rule = per_channel_aggregation.get(channel_name)
         if actual_rule != expected_rule:
@@ -19086,12 +19179,11 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
                 f"{expected_rule!r}, got {actual_rule!r}"
             )
 
-    reference_source = data["reference_source"]
-    if not isinstance(reference_source, dict):
-        raise Run9ValidationError(
-            f"loss evaluator spec manifest.reference_source must be an object, got "
-            f"{type(reference_source).__name__}"
-        )
+    reference_source = _require_exact_manifest_keys(
+        obj["reference_source"],
+        keys=frozenset({"education", "practice", "common"}),
+        field="loss evaluator spec manifest.reference_source",
+    )
     reference_source_education = reference_source.get("education")
     if reference_source_education != _LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_EDUCATION:
         raise Run9ValidationError(
@@ -19115,6 +19207,16 @@ def validate_loss_evaluator_spec_manifest(data: Mapping[str, Any]) -> None:
             "loss evaluator spec manifest.reference_source.common diverges from the pinned "
             f"cross-branch invariance statement — expected exactly "
             f"{_LOSS_EVALUATOR_EXPECTED_REFERENCE_SOURCE_COMMON!r}, got {reference_source_common!r}"
+        )
+    alignment_binding = _require_exact_manifest_keys(
+        obj["practice_alignment_binding"],
+        keys=frozenset(_LOSS_EVALUATOR_EXPECTED_PRACTICE_ALIGNMENT_BINDING),
+        field="loss evaluator spec manifest.practice_alignment_binding",
+    )
+    if alignment_binding != _LOSS_EVALUATOR_EXPECTED_PRACTICE_ALIGNMENT_BINDING:
+        raise Run9ValidationError(
+            "loss evaluator spec manifest.practice_alignment_binding diverges from the frozen "
+            "three-pin and POST_FREEZE_AUDIT_ONLY boundary"
         )
 
 
@@ -20116,21 +20218,31 @@ def load_pinned_compute_budget_manifest(
 # 5. learning_data_binding_manifest_v1
 # ---------------------------------------------------------------------------
 
-_LEARNING_DATA_BINDING_PIN_NAMES: Tuple[str, str, str] = (
+_LEARNING_DATA_BINDING_PIN_NAMES: Tuple[str, ...] = (
     "practice_audio_split_manifest_sha",
     "pjs_consumed_inputs_manifest_sha",
     "education_technique_lesson_manifest_sha",
+    "practice_alignment_spec_sha",
+    "practice_actor_input_manifest_sha",
+    "practice_audit_annotation_manifest_sha",
 )
 _LEARNING_DATA_BINDING_MANIFEST_TOP_LEVEL_REQUIRED_KEYS: FrozenSet[str] = (
     _H3C_COMMON_TOP_LEVEL_REQUIRED_KEYS
-    | frozenset({"bindings", "branch_usage", "data_binding_field_convention"})
+    | frozenset(
+        {
+            "bindings",
+            "bindings_source_note",
+            "branch_usage",
+            "data_binding_field_convention",
+        }
+    )
 )
 # PR #331 レビュー第1巡 採用4: branch_usage.{practice,education}.uses の厳密集合一致
 # 検証で使う正典集合（裁定 §5「practiceは前2件を検索入力として利用し、education
 # lessonを検索中に参照しない」「educationはeducation lessonを利用し、PJS raw audio
 # をlearnerへ直接入力しない」の完全形——欠落・過剰・空を全て拒否する）。
 _LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED: FrozenSet[str] = frozenset(
-    {"practice_audio_split_manifest_sha", "pjs_consumed_inputs_manifest_sha"}
+    {"practice_alignment_spec_sha", "practice_actor_input_manifest_sha"}
 )
 _LEARNING_DATA_BINDING_EDUCATION_USES_REQUIRED: FrozenSet[str] = frozenset(
     {"education_technique_lesson_manifest_sha"}
@@ -20139,27 +20251,24 @@ _LEARNING_DATA_BINDING_EDUCATION_USES_REQUIRED: FrozenSet[str] = frozenset(
 
 def validate_learning_data_binding_manifest(data: Mapping[str, Any]) -> None:
     """`learning_data_binding_manifest_v1.json` の構造・値整形式を検証
-    する（裁定 §5: 3 pin を束ねる manifest・枝別利用制限・data_binding
-    フィールドの参照規約）。3 pin 値の contract との完全一致 cross-check は
+    する（旧裁定 §5 の3 pin + PRACTICE再凍結3 pinを束ねる manifest・枝別
+    利用制限・data_binding フィールドの参照規約）。6 pin 値の contract との
+    完全一致 cross-check は
     `load_pinned_learning_data_binding_manifest()` 側（contract を要する）
     で行う。
     """
-    if not isinstance(data, dict):
-        raise Run9ValidationError(
-            f"learning data binding manifest must be an object, got {type(data).__name__}"
-        )
-    schema = data.get("schema")
+    obj = _require_exact_manifest_keys(
+        data,
+        keys=_LEARNING_DATA_BINDING_MANIFEST_TOP_LEVEL_REQUIRED_KEYS,
+        field="learning data binding manifest",
+    )
+    schema = obj["schema"]
     if schema != SCHEMA_LEARNING_DATA_BINDING_MANIFEST:
         raise Run9ValidationError(
             f"learning data binding manifest schema must be exactly "
             f"{SCHEMA_LEARNING_DATA_BINDING_MANIFEST!r}, got {schema!r}"
         )
-    missing = _LEARNING_DATA_BINDING_MANIFEST_TOP_LEVEL_REQUIRED_KEYS - set(data.keys())
-    if missing:
-        raise Run9ValidationError(
-            f"learning data binding manifest missing required key(s): {sorted(missing)}"
-        )
-    bindings = data["bindings"]
+    bindings = obj["bindings"]
     if not isinstance(bindings, dict) or set(bindings.keys()) != set(_LEARNING_DATA_BINDING_PIN_NAMES):
         raise Run9ValidationError(
             f"learning data binding manifest.bindings must have exactly keys "
@@ -20171,10 +20280,31 @@ def validate_learning_data_binding_manifest(data: Mapping[str, Any]) -> None:
             bindings[pin_name], manifest_kind="learning data binding manifest",
             field=f"bindings.{pin_name}",
         )
-    branch_usage = data["branch_usage"]
-    practice = branch_usage.get("practice", {})
-    education = branch_usage.get("education", {})
-    practice_uses = practice.get("uses")
+    branch_usage = _require_exact_manifest_keys(
+        obj["branch_usage"],
+        keys=frozenset({"practice", "education", "future_enforcement_note"}),
+        field="learning data binding manifest.branch_usage",
+    )
+    practice = _require_exact_manifest_keys(
+        branch_usage["practice"],
+        keys=frozenset(
+            {
+                "uses",
+                "upstream_provenance",
+                "post_freeze_audit",
+                "excludes_during_search",
+                "lab_allowed",
+                "rule",
+            }
+        ),
+        field="learning data binding manifest.branch_usage.practice",
+    )
+    education = _require_exact_manifest_keys(
+        branch_usage["education"],
+        keys=frozenset({"uses", "excludes_raw_audio_direct_input", "rule"}),
+        field="learning data binding manifest.branch_usage.education",
+    )
+    practice_uses = practice["uses"]
     if (
         not isinstance(practice_uses, list)
         or len(practice_uses) != len(_LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED)
@@ -20182,12 +20312,37 @@ def validate_learning_data_binding_manifest(data: Mapping[str, Any]) -> None:
     ):
         raise Run9ValidationError(
             "learning data binding manifest.branch_usage.practice.uses must be exactly "
-            f"{sorted(_LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED)}（裁定 §5「practiceは前2件を"
-            "検索入力として利用し、education lessonを検索中に参照しない」— 欠落・過剰・空・"
-            "education_technique_lesson_manifest_sha の混入を全て拒否する厳密集合一致）, got "
+            f"{sorted(_LEARNING_DATA_BINDING_PRACTICE_USES_REQUIRED)}（PRACTICE検索は"
+            "alignment spec + actor-safe manifestのみ）, got "
             f"{sorted(practice_uses) if isinstance(practice_uses, list) else type(practice_uses).__name__}"
         )
-    education_uses = education.get("uses")
+    if practice["upstream_provenance"] != [
+        "practice_audio_split_manifest_sha",
+        "pjs_consumed_inputs_manifest_sha",
+    ]:
+        raise Run9ValidationError(
+            "learning data binding manifest.branch_usage.practice.upstream_provenance must "
+            "retain the frozen split and consumed-input pins without exposing them as search inputs"
+        )
+    if practice["post_freeze_audit"] != ["practice_audit_annotation_manifest_sha"]:
+        raise Run9ValidationError(
+            "learning data binding manifest.branch_usage.practice.post_freeze_audit must be "
+            "exactly practice_audit_annotation_manifest_sha"
+        )
+    if practice["excludes_during_search"] != [
+        "education_technique_lesson_manifest_sha",
+        "pjs_consumed_inputs_manifest_sha",
+        "practice_audit_annotation_manifest_sha",
+    ]:
+        raise Run9ValidationError(
+            "learning data binding manifest.branch_usage.practice.excludes_during_search must "
+            "exclude education lesson, mixed consumed-input metadata, and audit annotations"
+        )
+    if practice["lab_allowed"] is not False:
+        raise Run9ValidationError(
+            "learning data binding manifest.branch_usage.practice.lab_allowed must be False"
+        )
+    education_uses = education["uses"]
     if (
         not isinstance(education_uses, list)
         or len(education_uses) != len(_LEARNING_DATA_BINDING_EDUCATION_USES_REQUIRED)
@@ -20200,15 +20355,20 @@ def validate_learning_data_binding_manifest(data: Mapping[str, Any]) -> None:
             "全て拒否する厳密集合一致）, got "
             f"{sorted(education_uses) if isinstance(education_uses, list) else type(education_uses).__name__}"
         )
-    if education.get("excludes_raw_audio_direct_input") is not True:
+    if education["excludes_raw_audio_direct_input"] is not True:
         raise Run9ValidationError(
             "learning data binding manifest.branch_usage.education.excludes_raw_audio_direct_"
             "input must be exactly True（裁定 §5「PJS raw audioをlearnerへ直接入力しない」）"
         )
-    if data["data_binding_field_convention"].get("format") != "sha256:<64hex>":
+    convention = _require_exact_manifest_keys(
+        obj["data_binding_field_convention"],
+        keys=frozenset({"format", "refers_to"}),
+        field="learning data binding manifest.data_binding_field_convention",
+    )
+    if convention["format"] != "sha256:<64hex>":
         raise Run9ValidationError(
             "learning data binding manifest.data_binding_field_convention.format must be exactly "
-            f"'sha256:<64hex>', got {data['data_binding_field_convention'].get('format')!r}"
+            f"'sha256:<64hex>', got {convention['format']!r}"
         )
 
 
@@ -20222,11 +20382,10 @@ def load_pinned_learning_data_binding_manifest(
     （他の `load_pinned_*` 系と同型の3層防御 + read-once 契約 + 裁定/
     detail-record cross-check）。
 
-    cross-check: `bindings` の3 pin 値それぞれが、ディスク正典
+    cross-check: `bindings` の6 pin 値それぞれが、ディスク正典
     `RUN9_CONTRACT.yaml` の対応する現行 PINNED 値と完全一致することを
-    fail-closed で強制する（「data binding の 3 pin 完全一致 fail-closed」
-    ——裁定 §5「loaderはRUN9_CONTRACTの3 pin値との完全一致をfail-closedで
-    要求する」の直接実装）。
+    fail-closed で強制する（旧裁定 §5 の3 pinにPRACTICE再凍結3 pinを追加した
+    6 pin完全一致の直接実装）。
     """
     data = _h3c_load_pinned_common(
         contract=contract,
@@ -20257,6 +20416,910 @@ def load_pinned_learning_data_binding_manifest(
                 f"load_pinned_learning_data_binding_manifest(): bindings.{pin_name} "
                 f"({manifest_value!r}) diverges from the canonical on-disk RUN9_CONTRACT.yaml "
                 f"{pin_name} PINNED value ({contract_value!r}) — fail-closed rejection (裁定 §5)"
+            )
+    return data
+
+
+# =============================================================================
+# RUN9-L0-HARNESS-3c PRACTICE Alignment 再凍結（User 裁定 2026-08-28）:
+# 決定論 alignment 仕様 / actor 検索入力 / post-freeze audit 注釈を3つの
+# 閉世界 manifest へ分離する。検索側 loader が audit manifest や .lab を
+# 返す経路を作らず、.lab の実ファイル open は別の post-freeze audit 実装
+# の責務とする。
+# =============================================================================
+
+_PRACTICE_ALIGNMENT_PROJECTION_KEYS: Tuple[str, ...] = (
+    "mora_order",
+    "mora_count",
+    "nominal_duration_ratio",
+    "phrase_grouping",
+    "lyrics_phoneme_sequence",
+    "nominal_pitch",
+)
+_PRACTICE_ALIGNMENT_PROHIBITIONS: FrozenSet[str] = frozenset(
+    {
+        "lab_fallback",
+        "external_alignment",
+        "teacher_derived_boundary",
+        "random_fallback",
+    }
+)
+_PRACTICE_AUDIT_FEEDBACK_PROHIBITIONS: Tuple[str, ...] = (
+    "learning",
+    "candidate_selection",
+    "additional_trial",
+    "controlprofile_update",
+    "threshold_change",
+    "weight_change",
+    "search_range_change",
+)
+
+_PRACTICE_ALIGNMENT_SPEC_KEYS: FrozenSet[str] = frozenset(
+    {
+        "schema",
+        "algorithm",
+        "input_contract",
+        "feature_extraction",
+        "cost_function",
+        "constraints",
+        "tie_break",
+        "failure_policy",
+        "output_contract",
+        "prohibitions",
+        "adjudication_basis",
+        "provenance",
+    }
+)
+_PRACTICE_ALIGNMENT_ALGORITHM_KEYS = frozenset(
+    {"algorithm_id", "deterministic", "implementation", "implementation_sha256"}
+)
+_PRACTICE_ALIGNMENT_INPUT_CONTRACT_KEYS = frozenset(
+    {
+        "allowed_inputs",
+        "wav_format",
+        "score_projection_fields",
+        "teacher_boundary_inputs_allowed",
+    }
+)
+_PRACTICE_ALIGNMENT_WAV_FORMAT_KEYS = frozenset(
+    {"encoding", "channels", "sample_rate_hz", "bits_per_sample"}
+)
+_PRACTICE_ALIGNMENT_FEATURE_KEYS = frozenset(
+    {
+        "frame_window_ms",
+        "frame_hop_ms",
+        "rms_db_floor",
+        "active_threshold_db_below_peak",
+        "active_pad_frames",
+        "onset_normalization",
+        "low_energy_complement",
+        "pitch_evidence",
+        "dtype",
+        "nonfinite_policy",
+    }
+)
+_PRACTICE_ALIGNMENT_COST_KEYS = frozenset(
+    {"formula", "terms", "weights", "accumulation_dtype"}
+)
+_PRACTICE_ALIGNMENT_CONSTRAINT_KEYS = frozenset(
+    {
+        "exact_segments_equal_mora_count",
+        "monotonic",
+        "minimum_frames_per_mora",
+        "duration_ratio_bounds",
+        "first_last_active_extent_fixed",
+    }
+)
+_PRACTICE_ALIGNMENT_TIE_BREAK_KEYS = frozenset(
+    {"epsilon", "order"}
+)
+_PRACTICE_ALIGNMENT_FAILURE_KEYS = frozenset(
+    {
+        "alignment_failure_status",
+        "candidate_status",
+        "zero_fill",
+        "guessed_fill",
+        "budget_extension",
+        "terminal_conditions",
+        "maximum_normalized_cost",
+    }
+)
+_PRACTICE_ALIGNMENT_OUTPUT_KEYS = frozenset(
+    {"status_values", "fields", "boundary_unit", "failed_boundaries"}
+)
+
+_PRACTICE_ACTOR_INPUT_KEYS = frozenset(
+    {
+        "schema",
+        "bindings",
+        "split",
+        "input_boundary",
+        "entries",
+        "adjudication_basis",
+        "provenance",
+    }
+)
+_PRACTICE_ACTOR_BINDING_KEYS = frozenset(
+    {"practice_audio_split_manifest_sha", "practice_alignment_spec_sha"}
+)
+_PRACTICE_ACTOR_BOUNDARY_KEYS = frozenset(
+    {"allowed_payload_fields", "wav_format", "lab_allowed", "teacher_boundary_allowed"}
+)
+_PRACTICE_ACTOR_ENTRY_KEYS = frozenset({"song_id", "wav", "score_projection"})
+_PRACTICE_ACTOR_WAV_KEYS = frozenset({"relative_path", "sha256"})
+_PRACTICE_ACTOR_PROJECTION_KEYS = frozenset({"relative_path", "sha256"})
+
+_PRACTICE_AUDIT_KEYS = frozenset(
+    {
+        "schema",
+        "bindings",
+        "access_policy",
+        "entries",
+        "feedback_prohibitions",
+        "adjudication_basis",
+        "provenance",
+    }
+)
+_PRACTICE_AUDIT_BINDING_KEYS = frozenset(
+    {"pjs_consumed_inputs_manifest_sha", "practice_actor_input_manifest_sha"}
+)
+_PRACTICE_AUDIT_ACCESS_KEYS = frozenset(
+    {"mode", "r_practice_freeze_attestation_required", "measurement_only"}
+)
+_PRACTICE_AUDIT_ENTRY_KEYS = frozenset({"song_id", "lab"})
+_PRACTICE_AUDIT_LAB_KEYS = frozenset({"relative_path", "sha256"})
+
+
+def _require_exact_manifest_keys(value: Any, *, keys: FrozenSet[str], field: str) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise Run9ValidationError(f"{field} must be an object, got {type(value).__name__}")
+    unknown = set(value) - keys
+    if unknown:
+        raise Run9ValidationError(f"{field} has unknown key(s): {sorted(unknown)}")
+    missing = keys - set(value)
+    if missing:
+        raise Run9ValidationError(f"{field} missing required key(s): {sorted(missing)}")
+    return value
+
+
+def _validate_practice_alignment_provenance(
+    data: Mapping[str, Any], *, manifest_kind: str
+) -> None:
+    adjudication = _require_exact_manifest_keys(
+        data["adjudication_basis"],
+        keys=frozenset({"source_file", "sha256", "summary"}),
+        field=f"{manifest_kind}.adjudication_basis",
+    )
+    if adjudication["source_file"] != (
+        "voice_genesis/evolution/run9_dual_founder_pjs/"
+        "USER_ADJUDICATION_20260828_PRACTICE_ALIGNMENT.txt"
+    ):
+        raise Run9ValidationError(
+            f"{manifest_kind}.adjudication_basis.source_file must reference the committed "
+            "2026-08-28 PRACTICE Alignment adjudication"
+        )
+    _require_manifest_sha256_hex(
+        adjudication["sha256"], manifest_kind=manifest_kind,
+        field="adjudication_basis.sha256",
+    )
+    provenance = _require_exact_manifest_keys(
+        data["provenance"], keys=frozenset({"detail_record"}),
+        field=f"{manifest_kind}.provenance",
+    )
+    detail = _require_exact_manifest_keys(
+        provenance["detail_record"],
+        keys=frozenset({"repo_relative_path", "sha256", "summary"}),
+        field=f"{manifest_kind}.provenance.detail_record",
+    )
+    if detail["repo_relative_path"] != (
+        "voice_genesis/evolution/run9_dual_founder_pjs/"
+        "HARNESS3C_PRACTICE_ALIGNMENT_RECORD.md"
+    ):
+        raise Run9ValidationError(
+            f"{manifest_kind}.provenance.detail_record.repo_relative_path must reference "
+            "HARNESS3C_PRACTICE_ALIGNMENT_RECORD.md"
+        )
+    _require_manifest_sha256_hex(
+        detail["sha256"], manifest_kind=manifest_kind,
+        field="provenance.detail_record.sha256",
+    )
+
+
+def _cross_check_practice_alignment_provenance(
+    data: Mapping[str, Any], *, manifest_kind: str
+) -> None:
+    for block_name, path_key, sha_key in (
+        ("adjudication_basis", "source_file", "sha256"),
+        ("provenance.detail_record", "repo_relative_path", "sha256"),
+    ):
+        block = (
+            data["adjudication_basis"]
+            if block_name == "adjudication_basis"
+            else data["provenance"]["detail_record"]
+        )
+        resolved = _resolve_repo_contained_path(
+            block[path_key], repo_root=_EDUCATION_LESSON_REPO_ROOT,
+            field=f"{block_name}.{path_key}", context=manifest_kind,
+        )
+        if not resolved.is_file():
+            raise Run9ValidationError(
+                f"{manifest_kind}: cross-check source {resolved} ({block_name}.{path_key}) "
+                "does not exist"
+            )
+        actual = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        if actual != block[sha_key]:
+            raise Run9ValidationError(
+                f"{manifest_kind}: {resolved} actual sha256 {actual!r} diverges from "
+                f"{block_name}.{sha_key} {block[sha_key]!r}"
+            )
+
+
+def validate_practice_alignment_spec_manifest(data: Mapping[str, Any]) -> None:
+    obj = _require_exact_manifest_keys(
+        data, keys=_PRACTICE_ALIGNMENT_SPEC_KEYS, field="practice alignment spec manifest"
+    )
+    if obj["schema"] != SCHEMA_PRACTICE_ALIGNMENT_SPEC:
+        raise Run9ValidationError(
+            f"practice alignment spec manifest schema must be exactly "
+            f"{SCHEMA_PRACTICE_ALIGNMENT_SPEC!r}, got {obj['schema']!r}"
+        )
+    algorithm = _require_exact_manifest_keys(
+        obj["algorithm"], keys=_PRACTICE_ALIGNMENT_ALGORITHM_KEYS,
+        field="practice alignment spec manifest.algorithm",
+    )
+    if algorithm != {
+        "algorithm_id": "monotonic_segment_dp_v1",
+        "deterministic": True,
+        "implementation": (
+            "voice_genesis/evolution/run9_dual_founder_pjs/practice_alignment.py"
+        ),
+        "implementation_sha256": (
+            "d7ee70510c42b106f8d8dfb2ab34f9c7c54ffa0f1f5459234a3d13102b3321b8"
+        ),
+    }:
+        raise Run9ValidationError(
+            "practice alignment spec manifest.algorithm must freeze "
+            "monotonic_segment_dp_v1 and its run-local implementation"
+        )
+    input_contract = _require_exact_manifest_keys(
+        obj["input_contract"], keys=_PRACTICE_ALIGNMENT_INPUT_CONTRACT_KEYS,
+        field="practice alignment spec manifest.input_contract",
+    )
+    if input_contract["allowed_inputs"] != ["training_raw_audio", "sanitized_score_projection"]:
+        raise Run9ValidationError(
+            "practice alignment spec manifest.input_contract.allowed_inputs must be exactly "
+            "['training_raw_audio', 'sanitized_score_projection']"
+        )
+    if input_contract["score_projection_fields"] != list(_PRACTICE_ALIGNMENT_PROJECTION_KEYS):
+        raise Run9ValidationError(
+            "practice alignment spec manifest.input_contract.score_projection_fields must be "
+            "the adjudicated six-field projection in frozen order"
+        )
+    if input_contract["teacher_boundary_inputs_allowed"] is not False:
+        raise Run9ValidationError(
+            "practice alignment spec manifest.input_contract.teacher_boundary_inputs_allowed "
+            "must be exactly False"
+        )
+    wav_format = _require_exact_manifest_keys(
+        input_contract["wav_format"],
+        keys=_PRACTICE_ALIGNMENT_WAV_FORMAT_KEYS,
+        field="practice alignment spec manifest.input_contract.wav_format",
+    )
+    if wav_format != {
+        "encoding": "PCM",
+        "channels": 1,
+        "sample_rate_hz": 48000,
+        "bits_per_sample": 24,
+    }:
+        raise Run9ValidationError(
+            "practice alignment spec manifest.input_contract.wav_format must be exactly "
+            "PCM mono 48000 Hz 24-bit"
+        )
+    feature = _require_exact_manifest_keys(
+        obj["feature_extraction"], keys=_PRACTICE_ALIGNMENT_FEATURE_KEYS,
+        field="practice alignment spec manifest.feature_extraction",
+    )
+    expected_feature = {
+        "frame_window_ms": 40,
+        "frame_hop_ms": 10,
+        "rms_db_floor": 1e-12,
+        "active_threshold_db_below_peak": 30.0,
+        "active_pad_frames": 2,
+        "onset_normalization": "positive_rms_db_delta_divided_by_p95_clipped_0_1",
+        "low_energy_complement": "active_peak_minus_rms_db_normalized_to_0_1",
+        "pitch_evidence": "nominal_pitch_normalized_autocorrelation_clipped_0_1",
+        "dtype": "float64",
+        "nonfinite_policy": "ALIGNMENT_FAILED",
+    }
+    if feature != expected_feature:
+        raise Run9ValidationError(
+            "practice alignment spec manifest.feature_extraction diverges from the frozen "
+            "40ms/10ms RMS-onset-low-energy-pitch feature contract"
+        )
+    cost = _require_exact_manifest_keys(
+        obj["cost_function"], keys=_PRACTICE_ALIGNMENT_COST_KEYS,
+        field="practice alignment spec manifest.cost_function",
+    )
+    expected_cost = {
+        "formula": (
+            "1.25*ln(observed_frames/target_frames)^2 + "
+            "(1-mean_nominal_pitch_autocorrelation) + "
+            "internal_boundary*0.35*(1-boundary_strength)"
+        ),
+        "terms": [
+            "duration_log_ratio",
+            "nominal_pitch_autocorrelation",
+            "internal_boundary_strength",
+        ],
+        "weights": {
+            "duration_log_ratio": 1.25,
+            "nominal_pitch_autocorrelation": 1.0,
+            "internal_boundary_strength": 0.35,
+        },
+        "accumulation_dtype": "float64",
+    }
+    if cost != expected_cost:
+        raise Run9ValidationError(
+            "practice alignment spec manifest.cost_function diverges from the frozen DP cost"
+        )
+    constraints = _require_exact_manifest_keys(
+        obj["constraints"], keys=_PRACTICE_ALIGNMENT_CONSTRAINT_KEYS,
+        field="practice alignment spec manifest.constraints",
+    )
+    if constraints != {
+        "exact_segments_equal_mora_count": True,
+        "monotonic": True,
+        "minimum_frames_per_mora": 3,
+        "duration_ratio_bounds": [0.35, 2.8],
+        "first_last_active_extent_fixed": True,
+    }:
+        raise Run9ValidationError(
+            "practice alignment spec manifest.constraints diverges from the frozen exact-N "
+            "monotonic segmentation constraints"
+        )
+    tie_break = _require_exact_manifest_keys(
+        obj["tie_break"], keys=_PRACTICE_ALIGNMENT_TIE_BREAK_KEYS,
+        field="practice alignment spec manifest.tie_break",
+    )
+    if tie_break != {
+        "epsilon": 1e-12,
+        "order": ["lower_total_cost", "smaller_predecessor_frame"],
+    }:
+        raise Run9ValidationError(
+            "practice alignment spec manifest.tie_break must freeze epsilon=1e-12 then "
+            "smaller predecessor frame"
+        )
+    failure = _require_exact_manifest_keys(
+        obj["failure_policy"], keys=_PRACTICE_ALIGNMENT_FAILURE_KEYS,
+        field="practice alignment spec manifest.failure_policy",
+    )
+    expected_failure = {
+        "alignment_failure_status": "ALIGNMENT_FAILED",
+        "candidate_status": "NOT_SCORABLE",
+        "zero_fill": "PROHIBITED",
+        "guessed_fill": "PROHIBITED",
+        "budget_extension": "PROHIBITED",
+        "terminal_conditions": [
+            "no_active_audio",
+            "audio_too_short",
+            "no_feasible_path",
+            "nonfinite_value",
+            "normalized_cost_above_maximum",
+        ],
+        "maximum_normalized_cost": 3.0,
+    }
+    for key, expected in expected_failure.items():
+        if failure[key] != expected:
+            raise Run9ValidationError(
+                f"practice alignment spec manifest.failure_policy.{key} must be exactly {expected!r}"
+            )
+    output = _require_exact_manifest_keys(
+        obj["output_contract"], keys=_PRACTICE_ALIGNMENT_OUTPUT_KEYS,
+        field="practice alignment spec manifest.output_contract",
+    )
+    if output != {
+        "status_values": ["ALIGNED", "ALIGNMENT_FAILED"],
+        "fields": [
+            "status",
+            "reason",
+            "mora_count",
+            "boundaries_s",
+            "total_cost",
+            "normalized_cost",
+        ],
+        "boundary_unit": "seconds_from_wav_start",
+        "failed_boundaries": [],
+    }:
+        raise Run9ValidationError(
+            "practice alignment spec manifest.output_contract diverges from the frozen "
+            "alignment result shape"
+        )
+    prohibited = obj["prohibitions"]
+    if not isinstance(prohibited, list) or len(prohibited) != len(_PRACTICE_ALIGNMENT_PROHIBITIONS) or set(prohibited) != _PRACTICE_ALIGNMENT_PROHIBITIONS:
+        raise Run9ValidationError(
+            "practice alignment spec manifest.prohibitions must exactly contain lab_fallback, "
+            "external_alignment, teacher_derived_boundary, random_fallback"
+        )
+    _validate_practice_alignment_provenance(obj, manifest_kind="practice alignment spec manifest")
+
+
+def _validate_sanitized_score_projection(value: Any, *, field: str) -> None:
+    projection = _require_exact_manifest_keys(
+        value, keys=frozenset(_PRACTICE_ALIGNMENT_PROJECTION_KEYS), field=field
+    )
+    count = projection["mora_count"]
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        raise Run9ValidationError(f"{field}.mora_count must be a positive exact int")
+    if projection["mora_order"] != list(range(count)):
+        raise Run9ValidationError(f"{field}.mora_order must be exactly [0, ..., mora_count-1]")
+    for key in (
+        "nominal_duration_ratio", "phrase_grouping", "lyrics_phoneme_sequence", "nominal_pitch"
+    ):
+        if not isinstance(projection[key], list) or len(projection[key]) != count:
+            raise Run9ValidationError(f"{field}.{key} length must equal mora_count={count}")
+    for i, ratio in enumerate(projection["nominal_duration_ratio"]):
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not math.isfinite(ratio) or ratio <= 0:
+            raise Run9ValidationError(f"{field}.nominal_duration_ratio[{i}] must be finite and positive")
+    phrase_grouping = projection["phrase_grouping"]
+    if any(isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in phrase_grouping):
+        raise Run9ValidationError(f"{field}.phrase_grouping values must be non-negative exact ints")
+    if phrase_grouping[0] != 0 or any(
+        phrase_grouping[i] not in (phrase_grouping[i - 1], phrase_grouping[i - 1] + 1)
+        for i in range(1, count)
+    ):
+        raise Run9ValidationError(f"{field}.phrase_grouping must be contiguous and start at 0")
+    for i, item in enumerate(projection["lyrics_phoneme_sequence"]):
+        lyric_phoneme = _require_exact_manifest_keys(
+            item, keys=frozenset({"lyric", "phoneme_sequence"}),
+            field=f"{field}.lyrics_phoneme_sequence[{i}]",
+        )
+        _require_non_empty_str(
+            lyric_phoneme["lyric"],
+            field=f"{field}.lyrics_phoneme_sequence[{i}].lyric",
+        )
+        if not isinstance(lyric_phoneme["phoneme_sequence"], list) or not all(
+            isinstance(v, str) and v for v in lyric_phoneme["phoneme_sequence"]
+        ):
+            raise Run9ValidationError(
+                f"{field}.lyrics_phoneme_sequence[{i}].phoneme_sequence must be a string "
+                "list (empty records source absence; inference is prohibited)"
+            )
+    if abs(math.fsum(projection["nominal_duration_ratio"]) - 1.0) > 1e-12:
+        raise Run9ValidationError(
+            f"{field}.nominal_duration_ratio must sum to 1 within 1e-12"
+        )
+    for i, pitch in enumerate(projection["nominal_pitch"]):
+        if (
+            isinstance(pitch, bool)
+            or not isinstance(pitch, (int, float))
+            or not math.isfinite(pitch)
+            or pitch <= 0
+        ):
+            raise Run9ValidationError(f"{field}.nominal_pitch[{i}] must be finite and positive")
+
+
+def _validate_repo_relative_input_path(value: Any, *, field: str, suffix: str) -> None:
+    _require_non_empty_str(value, field=field)
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts or path.suffix.lower() != suffix:
+        raise Run9ValidationError(
+            f"{field} must be a contained relative {suffix} path without '..', got {value!r}"
+        )
+
+
+def validate_practice_actor_input_manifest(data: Mapping[str, Any]) -> None:
+    obj = _require_exact_manifest_keys(
+        data, keys=_PRACTICE_ACTOR_INPUT_KEYS, field="practice actor input manifest"
+    )
+    if obj["schema"] != SCHEMA_PRACTICE_ACTOR_INPUT_MANIFEST:
+        raise Run9ValidationError(
+            f"practice actor input manifest schema must be exactly "
+            f"{SCHEMA_PRACTICE_ACTOR_INPUT_MANIFEST!r}, got {obj['schema']!r}"
+        )
+    bindings = _require_exact_manifest_keys(
+        obj["bindings"], keys=_PRACTICE_ACTOR_BINDING_KEYS,
+        field="practice actor input manifest.bindings",
+    )
+    for key in _PRACTICE_ACTOR_BINDING_KEYS:
+        _require_manifest_sha256_hex(bindings[key], manifest_kind="practice actor input manifest", field=f"bindings.{key}")
+    if obj["split"] != "training":
+        raise Run9ValidationError("practice actor input manifest.split must be exactly 'training'")
+    boundary = _require_exact_manifest_keys(
+        obj["input_boundary"], keys=_PRACTICE_ACTOR_BOUNDARY_KEYS,
+        field="practice actor input manifest.input_boundary",
+    )
+    if boundary["allowed_payload_fields"] != ["wav", "score_projection"]:
+        raise Run9ValidationError(
+            "practice actor input manifest.input_boundary.allowed_payload_fields must be exactly "
+            "['wav', 'score_projection']"
+        )
+    wav_format = _require_exact_manifest_keys(
+        boundary["wav_format"],
+        keys=_PRACTICE_ALIGNMENT_WAV_FORMAT_KEYS,
+        field="practice actor input manifest.input_boundary.wav_format",
+    )
+    if wav_format != {
+        "encoding": "PCM",
+        "channels": 1,
+        "sample_rate_hz": 48000,
+        "bits_per_sample": 24,
+    }:
+        raise Run9ValidationError(
+            "practice actor input manifest.input_boundary.wav_format must be exactly "
+            "PCM mono 48000 Hz 24-bit"
+        )
+    if boundary["lab_allowed"] is not False or boundary["teacher_boundary_allowed"] is not False:
+        raise Run9ValidationError(
+            "practice actor input manifest.input_boundary must set lab_allowed=False and "
+            "teacher_boundary_allowed=False"
+        )
+    entries = obj["entries"]
+    if not isinstance(entries, list) or not entries:
+        raise Run9ValidationError("practice actor input manifest.entries must be a non-empty list")
+    song_ids: List[str] = []
+    for i, entry_raw in enumerate(entries):
+        entry = _require_exact_manifest_keys(
+            entry_raw, keys=_PRACTICE_ACTOR_ENTRY_KEYS,
+            field=f"practice actor input manifest.entries[{i}]",
+        )
+        song_id = entry["song_id"]
+        _require_non_empty_str(song_id, field=f"practice actor input manifest.entries[{i}].song_id")
+        song_ids.append(song_id)
+        wav = _require_exact_manifest_keys(
+            entry["wav"], keys=_PRACTICE_ACTOR_WAV_KEYS,
+            field=f"practice actor input manifest.entries[{i}].wav",
+        )
+        _validate_repo_relative_input_path(
+            wav["relative_path"], field=f"practice actor input manifest.entries[{i}].wav.relative_path", suffix=".wav"
+        )
+        _require_manifest_sha256_hex(wav["sha256"], manifest_kind="practice actor input manifest", field=f"entries[{i}].wav.sha256")
+        projection_ref = _require_exact_manifest_keys(
+            entry["score_projection"],
+            keys=_PRACTICE_ACTOR_PROJECTION_KEYS,
+            field=f"practice actor input manifest.entries[{i}].score_projection",
+        )
+        _validate_repo_relative_input_path(
+            projection_ref["relative_path"],
+            field=(
+                f"practice actor input manifest.entries[{i}]."
+                "score_projection.relative_path"
+            ),
+            suffix=".json",
+        )
+        _require_manifest_sha256_hex(
+            projection_ref["sha256"],
+            manifest_kind="practice actor input manifest",
+            field=f"entries[{i}].score_projection.sha256",
+        )
+    _require_no_duplicate_list_items(song_ids, manifest_kind="practice actor input manifest", field="entries[].song_id")
+    _validate_practice_alignment_provenance(obj, manifest_kind="practice actor input manifest")
+
+
+def validate_practice_audit_annotation_manifest(data: Mapping[str, Any]) -> None:
+    obj = _require_exact_manifest_keys(
+        data, keys=_PRACTICE_AUDIT_KEYS, field="practice audit annotation manifest"
+    )
+    if obj["schema"] != SCHEMA_PRACTICE_AUDIT_ANNOTATION_MANIFEST:
+        raise Run9ValidationError(
+            f"practice audit annotation manifest schema must be exactly "
+            f"{SCHEMA_PRACTICE_AUDIT_ANNOTATION_MANIFEST!r}, got {obj['schema']!r}"
+        )
+    bindings = _require_exact_manifest_keys(
+        obj["bindings"], keys=_PRACTICE_AUDIT_BINDING_KEYS,
+        field="practice audit annotation manifest.bindings",
+    )
+    for key in _PRACTICE_AUDIT_BINDING_KEYS:
+        _require_manifest_sha256_hex(bindings[key], manifest_kind="practice audit annotation manifest", field=f"bindings.{key}")
+    access = _require_exact_manifest_keys(
+        obj["access_policy"], keys=_PRACTICE_AUDIT_ACCESS_KEYS,
+        field="practice audit annotation manifest.access_policy",
+    )
+    if access != {
+        "mode": "POST_FREEZE_AUDIT_ONLY",
+        "r_practice_freeze_attestation_required": True,
+        "measurement_only": True,
+    }:
+        raise Run9ValidationError(
+            "practice audit annotation manifest.access_policy must freeze "
+            "POST_FREEZE_AUDIT_ONLY + r_practice attestation + measurement-only"
+        )
+    if obj["feedback_prohibitions"] != list(_PRACTICE_AUDIT_FEEDBACK_PROHIBITIONS):
+        raise Run9ValidationError(
+            "practice audit annotation manifest.feedback_prohibitions must be the frozen ordered "
+            "seven-item no-feedback list"
+        )
+    entries = obj["entries"]
+    if not isinstance(entries, list) or not entries:
+        raise Run9ValidationError("practice audit annotation manifest.entries must be a non-empty list")
+    song_ids: List[str] = []
+    for i, entry_raw in enumerate(entries):
+        entry = _require_exact_manifest_keys(
+            entry_raw, keys=_PRACTICE_AUDIT_ENTRY_KEYS,
+            field=f"practice audit annotation manifest.entries[{i}]",
+        )
+        song_id = entry["song_id"]
+        _require_non_empty_str(song_id, field=f"practice audit annotation manifest.entries[{i}].song_id")
+        song_ids.append(song_id)
+        lab = _require_exact_manifest_keys(
+            entry["lab"], keys=_PRACTICE_AUDIT_LAB_KEYS,
+            field=f"practice audit annotation manifest.entries[{i}].lab",
+        )
+        _validate_repo_relative_input_path(
+            lab["relative_path"], field=f"practice audit annotation manifest.entries[{i}].lab.relative_path", suffix=".lab"
+        )
+        _require_manifest_sha256_hex(lab["sha256"], manifest_kind="practice audit annotation manifest", field=f"entries[{i}].lab.sha256")
+    _require_no_duplicate_list_items(song_ids, manifest_kind="practice audit annotation manifest", field="entries[].song_id")
+    _validate_practice_alignment_provenance(obj, manifest_kind="practice audit annotation manifest")
+
+
+@dataclass(frozen=True)
+class VerifiedPracticeAlignmentSpec:
+    """Frozen spec plus the executable compiled from its verified source bytes."""
+
+    manifest: Dict[str, Any]
+    implementation_bytes: bytes
+    implementation_sha256: str
+    executable_module: types.ModuleType
+
+
+def _load_verified_practice_alignment_module(
+    implementation: Path, source: bytes, digest: str
+) -> types.ModuleType:
+    """Compile/exec the same source buffer used for the implementation digest."""
+    module_name = f"_run9_verified_practice_alignment_{digest}"
+    module = types.ModuleType(module_name)
+    module.__file__ = str(implementation)
+    module.__package__ = ""
+    sys.modules[module_name] = module
+    try:
+        code = compile(source, str(implementation), "exec")
+        exec(code, module.__dict__)
+    except Exception as exc:
+        if sys.modules.get(module_name) is module:
+            sys.modules.pop(module_name, None)
+        raise Run9ValidationError(
+            "load_pinned_practice_alignment_spec(): verified implementation "
+            f"compile/exec failed: {exc}"
+        ) from exc
+    for entrypoint in ("build_score_projection", "align_wav_to_projection"):
+        if not callable(getattr(module, entrypoint, None)):
+            raise Run9ValidationError(
+                "load_pinned_practice_alignment_spec(): verified implementation "
+                f"missing callable entrypoint {entrypoint!r}"
+            )
+    return module
+
+
+def load_pinned_practice_alignment_spec(
+    contract: "Run9RunContract", *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> VerifiedPracticeAlignmentSpec:
+    """Load the pin and return an executable compiled from the verified bytes.
+
+    Callers must invoke alignment through ``executable_module`` from the returned
+    object.  An ambient or previously cached ``practice_alignment`` import is not an
+    execution authority for the pinned PRACTICE branch.
+    """
+    data = _h3c_load_pinned_common(
+        contract=contract, pin_name="practice_alignment_spec_sha", manifest_path=manifest_path,
+        contract_path=contract_path, default_path=PRACTICE_ALIGNMENT_SPEC_PATH,
+        fn_label="load_pinned_practice_alignment_spec",
+    )
+    validate_practice_alignment_spec_manifest(data)
+    _cross_check_practice_alignment_provenance(data, manifest_kind="load_pinned_practice_alignment_spec")
+    implementation = _resolve_repo_contained_path(
+        data["algorithm"]["implementation"],
+        repo_root=_EDUCATION_LESSON_REPO_ROOT,
+        field="algorithm.implementation",
+        context="load_pinned_practice_alignment_spec",
+    )
+    if not implementation.is_file():
+        raise Run9ValidationError(
+            "load_pinned_practice_alignment_spec(): pinned implementation does not exist: "
+            f"{implementation}"
+        )
+    implementation_bytes = implementation.read_bytes()
+    implementation_sha = hashlib.sha256(implementation_bytes).hexdigest()
+    if implementation_sha != data["algorithm"]["implementation_sha256"]:
+        raise Run9ValidationError(
+            "load_pinned_practice_alignment_spec(): implementation raw sha256 "
+            f"{implementation_sha!r} diverges from algorithm.implementation_sha256 "
+            f"{data['algorithm']['implementation_sha256']!r}"
+        )
+    executable_module = _load_verified_practice_alignment_module(
+        implementation, implementation_bytes, implementation_sha
+    )
+    return VerifiedPracticeAlignmentSpec(
+        manifest=data,
+        implementation_bytes=implementation_bytes,
+        implementation_sha256=implementation_sha,
+        executable_module=executable_module,
+    )
+
+
+def _load_pinned_practice_actor_input_manifest_metadata(
+    contract: "Run9RunContract", *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    data = _h3c_load_pinned_common(
+        contract=contract, pin_name="practice_actor_input_manifest_sha", manifest_path=manifest_path,
+        contract_path=contract_path, default_path=PRACTICE_ACTOR_INPUT_MANIFEST_PATH,
+        fn_label="load_pinned_practice_actor_input_manifest",
+    )
+    validate_practice_actor_input_manifest(data)
+    _cross_check_practice_alignment_provenance(data, manifest_kind="load_pinned_practice_actor_input_manifest")
+    effective_contract_path = contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    for pin_name in _PRACTICE_ACTOR_BINDING_KEYS:
+        field = disk_contract.pin_field(pin_name)
+        if not _is_field_pinned(field) or data["bindings"][pin_name] != field["value"]:
+            raise Run9ValidationError(
+                f"load_pinned_practice_actor_input_manifest(): bindings.{pin_name} must exactly "
+                "match the canonical PINNED contract value"
+            )
+    practice = load_pinned_practice_split_manifest(disk_contract, contract_path=effective_contract_path)
+    expected_ids = practice["row_ids"]["training"]
+    actual_ids = [entry["song_id"] for entry in data["entries"]]
+    if actual_ids != expected_ids:
+        raise Run9ValidationError(
+            "load_pinned_practice_actor_input_manifest(): entries song_id order must exactly "
+            "match practice split training order"
+        )
+    return data
+
+
+def _read_practice_actor_artifact(
+    artifact_root: Path, relative_path: str, *, role: str
+) -> bytes:
+    root = artifact_root.resolve(strict=True)
+    candidate = (root / relative_path).resolve(strict=True)
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise Run9ValidationError(
+            f"load_pinned_practice_actor_input_manifest(): {role} escapes explicit "
+            f"artifact_root: {relative_path!r}"
+        ) from exc
+    if candidate.suffix.lower() == ".lab":
+        raise Run9ValidationError(
+            f"load_pinned_practice_actor_input_manifest(): {role} resolves to forbidden .lab"
+        )
+    if not candidate.is_file():
+        raise Run9ValidationError(
+            f"load_pinned_practice_actor_input_manifest(): {role} is not a regular file"
+        )
+    return candidate.read_bytes()
+
+
+@dataclass(frozen=True)
+class VerifiedPracticeActorEntry:
+    """One actor input pair whose exact bytes passed the pinned checks.
+
+    Downstream alignment and learning code must consume ``wav_bytes`` and
+    ``score_projection`` from this object.  Reopening the manifest paths after this
+    loader returns would reintroduce an unchecked time-of-check/time-of-use window.
+    """
+
+    song_id: str
+    wav_bytes: bytes
+    score_projection_bytes: bytes
+    score_projection: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class VerifiedPracticeActorInputs:
+    """Pinned actor metadata plus the immutable byte snapshots it verified."""
+
+    manifest: Dict[str, Any]
+    entries: Tuple[VerifiedPracticeActorEntry, ...]
+
+
+def load_pinned_practice_actor_input_manifest(
+    contract: "Run9RunContract",
+    *,
+    artifact_root: Path,
+    manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None,
+) -> VerifiedPracticeActorInputs:
+    """Load the actor manifest and verify every WAV/projection artifact.
+
+    ``artifact_root`` is mandatory: no ambient working-directory lookup or fallback is
+    permitted.  Projection bytes are SHA-checked before strict JSON parsing and exact-six
+    validation.  The returned entries own the exact byte snapshots that passed those
+    checks, so consumers do not reopen mutable paths after preflight.  This path never
+    opens the mixed consumed-inputs manifest or ``.lab``.
+    """
+    data = _load_pinned_practice_actor_input_manifest_metadata(
+        contract, manifest_path=manifest_path, contract_path=contract_path
+    )
+    verified_entries: List[VerifiedPracticeActorEntry] = []
+    for i, entry in enumerate(data["entries"]):
+        wav = _read_practice_actor_artifact(
+            artifact_root, entry["wav"]["relative_path"], role=f"entries[{i}].wav"
+        )
+        if hashlib.sha256(wav).hexdigest() != entry["wav"]["sha256"]:
+            raise Run9ValidationError(
+                "load_pinned_practice_actor_input_manifest(): "
+                f"entries[{i}].wav raw sha256 mismatch"
+            )
+        projection_bytes = _read_practice_actor_artifact(
+            artifact_root,
+            entry["score_projection"]["relative_path"],
+            role=f"entries[{i}].score_projection",
+        )
+        if hashlib.sha256(projection_bytes).hexdigest() != entry["score_projection"]["sha256"]:
+            raise Run9ValidationError(
+                "load_pinned_practice_actor_input_manifest(): "
+                f"entries[{i}].score_projection raw sha256 mismatch"
+            )
+        try:
+            projection = _loads_strict_json(projection_bytes.decode("utf-8"))
+        except Exception as exc:
+            raise Run9ValidationError(
+                "load_pinned_practice_actor_input_manifest(): "
+                f"entries[{i}].score_projection strict JSON parse failed: {exc}"
+            ) from exc
+        _validate_sanitized_score_projection(
+            projection, field=f"practice actor projection artifact[{i}]"
+        )
+        verified_entries.append(
+            VerifiedPracticeActorEntry(
+                song_id=entry["song_id"],
+                wav_bytes=wav,
+                score_projection_bytes=projection_bytes,
+                score_projection=projection,
+            )
+        )
+    return VerifiedPracticeActorInputs(
+        manifest=data,
+        entries=tuple(verified_entries),
+    )
+
+
+def load_pinned_practice_audit_annotation_manifest(
+    contract: "Run9RunContract", *, manifest_path: Optional[Path] = None,
+    contract_path: Optional[Path] = None, r_practice_frozen: bool = False,
+) -> Dict[str, Any]:
+    """Audit metadata のみを load する。実 `.lab` open は行わない。"""
+    if r_practice_frozen is not True:
+        raise Run9ValidationError(
+            "load_pinned_practice_audit_annotation_manifest(): r_practice freeze "
+            "attestation is required before audit metadata access"
+        )
+    data = _h3c_load_pinned_common(
+        contract=contract, pin_name="practice_audit_annotation_manifest_sha",
+        manifest_path=manifest_path, contract_path=contract_path,
+        default_path=PRACTICE_AUDIT_ANNOTATION_MANIFEST_PATH,
+        fn_label="load_pinned_practice_audit_annotation_manifest",
+    )
+    validate_practice_audit_annotation_manifest(data)
+    _cross_check_practice_alignment_provenance(data, manifest_kind="load_pinned_practice_audit_annotation_manifest")
+    effective_contract_path = contract_path if contract_path is not None else RUN9_CONTRACT_YAML_PATH
+    disk_contract = load_run9_contract_from_yaml_path(effective_contract_path)
+    for pin_name in _PRACTICE_AUDIT_BINDING_KEYS:
+        field = disk_contract.pin_field(pin_name)
+        if not _is_field_pinned(field) or data["bindings"][pin_name] != field["value"]:
+            raise Run9ValidationError(
+                f"load_pinned_practice_audit_annotation_manifest(): bindings.{pin_name} must "
+                "exactly match the canonical PINNED contract value"
+            )
+    actor = _load_pinned_practice_actor_input_manifest_metadata(
+        disk_contract, contract_path=effective_contract_path
+    )
+    consumed = load_pinned_consumed_inputs_manifest(disk_contract, contract_path=effective_contract_path)
+    actor_ids = [entry["song_id"] for entry in actor["entries"]]
+    audit_ids = [entry["song_id"] for entry in data["entries"]]
+    if audit_ids != actor_ids:
+        raise Run9ValidationError(
+            "load_pinned_practice_audit_annotation_manifest(): audit song_id order must exactly "
+            "match actor input order"
+        )
+    for entry in data["entries"]:
+        song_id = entry["song_id"]
+        if entry["lab"]["sha256"] != consumed["songs"][song_id]["lab_sha256"]:
+            raise Run9ValidationError(
+                f"load_pinned_practice_audit_annotation_manifest(): {song_id} lab sha does not "
+                "match the upstream consumed-inputs pin"
             )
     return data
 

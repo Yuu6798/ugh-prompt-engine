@@ -2202,6 +2202,26 @@ pjs_consumed_inputs_manifest_sha:
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/pjs_consumed_inputs_sha256.json
 
+# --- PRACTICE Alignment再凍結（User裁定 2026-08-28）: 検索側の決定論
+# alignment仕様、actor-safe WAV+projection参照、r_practice凍結後のみの
+# measurement-only .lab auditを3 pinへ分離する。W2はscore projection
+# 70/70生成・DP 70/70 ALIGNED・固定3曲独立process exact replayを確認済み
+# （HARNESS3C_PRACTICE_ALIGNMENT_RECORD.md）。
+practice_alignment_spec_sha:
+  value: "dc8a37fe3c1883694082936c9bee31f10266dabb1cf1ae5f2b94232d16000567"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_alignment_spec_v1.json
+
+practice_actor_input_manifest_sha:
+  value: "f81d476bb8f240dbb54812dccf44c4c4d4d92d823cac8ad61fb3cda402abbbda"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_actor_input_manifest_v1.json
+
+practice_audit_annotation_manifest_sha:
+  value: "11d568c303825654aaf2eb1ad4fd50f8455e76791e38653cbe78b76c2ebbf88c"
+  status: PINNED
+  source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/practice_audit_annotation_manifest_v1.json
+
 # --- RUN9-L0-HARNESS-3c（2026-08-27, User 裁定「RUN9 User裁定 — Learning
 # Recipe 残5キー」逐語、repo 内収載
 # USER_ADJUDICATION_20260827_LEARNING_RECIPE_5KEYS.txt 参照）で新設・
@@ -2536,7 +2556,9 @@ score_axis_catalog_sha:
 # 18117be192f5c538d240eea3e1144ece8e09de21af1998822ec1452a74f9ee25 は
 # 履歴として append-only 保持）。
 loss_evaluator_spec_sha:
-  value: "60bcc84772a7f52ecefdd64cbece8a343fc1d24546882b8bc00d265e9ef3e380"
+  # 2026-08-28 PRACTICE再凍結 repin。旧値:
+  # 60bcc84772a7f52ecefdd64cbece8a343fc1d24546882b8bc00d265e9ef3e380
+  value: "2fb59556af2751cfe3a82388440920919f468124ffd4e240591c5cbe0a41f4fb"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/loss_evaluator_spec_v1.json
 
@@ -3027,7 +3049,9 @@ compute_budget_manifest_sha:
 # 73bda1f2e04049ccf7260e4dccf070dab4cb7e97dc7b01b469c986fbe54b2630 は
 # 履歴として append-only 保持）。
 learning_data_binding_manifest_sha:
-  value: "cf54ce5e785f87d5ec9a8c91042e7c255de1db1a6dac1bf9be3f414dbcf73289"
+  # 2026-08-28 PRACTICE再凍結3 pin追加による repin。旧値:
+  # cf54ce5e785f87d5ec9a8c91042e7c255de1db1a6dac1bf9be3f414dbcf73289
+  value: "d282bb7a0ca112889b53a03469ea6eb98a478e68f43f3293579b3625f709cae8"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/learning_data_binding_manifest_v1.json
 
@@ -3061,6 +3085,10 @@ learning_recipe_sha:
   value: null
   status: PENDING
   reason: >-
+    2026-08-28 PRACTICE Alignment再凍結の3 manifestはPINNED済み。ただし
+    rev 0.6 Birth Gate（C0/C1各Founder 20 takes exact replay、両Founder
+    positive reference、finite d12 > 0、PJS confuser、overall_pass）が
+    PASSしていない限りrecipe build/PINへ進まない。NOT_ESTABLISHEDなら凍結停止する。
     RUN9-L0-PIN-2（2026-08-26, User 裁定 2026-08-25 — 逐語一次ソースは
     repo 内収載 USER_ADJUDICATION_20260825_PIN2_LEARNING_BUDGET.txt。
     Codex bot レビュー PR #325 第1巡指摘 Fix 2, P2, 採用: 転記元が

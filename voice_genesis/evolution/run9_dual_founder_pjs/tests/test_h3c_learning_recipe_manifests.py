@@ -421,14 +421,14 @@ def test_h3c_loss_evaluator_actor_boundary_matches_frozen_constants() -> None:
 def test_h3c_loss_evaluator_actor_boundary_practice_empty_rejected() -> None:
     data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
     data["actor_boundary"]["practice"] = ""
-    with pytest.raises(m.Run9ValidationError, match="actor_boundary.practice"):
+    with pytest.raises(m.Run9ValidationError, match="actor_boundary.*practice"):
         m.validate_loss_evaluator_spec_manifest(data)
 
 
 def test_h3c_loss_evaluator_actor_boundary_practice_missing_rejected() -> None:
     data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
     del data["actor_boundary"]["practice"]
-    with pytest.raises(m.Run9ValidationError, match="actor_boundary.practice"):
+    with pytest.raises(m.Run9ValidationError, match="actor_boundary.*practice"):
         m.validate_loss_evaluator_spec_manifest(data)
 
 
@@ -447,7 +447,7 @@ def test_h3c_loss_evaluator_actor_boundary_practice_permits_education_lesson_rej
 def test_h3c_loss_evaluator_actor_boundary_education_missing_rejected() -> None:
     data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
     del data["actor_boundary"]["education"]
-    with pytest.raises(m.Run9ValidationError, match="actor_boundary.education"):
+    with pytest.raises(m.Run9ValidationError, match="actor_boundary.*education"):
         m.validate_loss_evaluator_spec_manifest(data)
 
 
@@ -510,7 +510,7 @@ def test_h3c_loss_evaluator_residual_correspondence_per_channel_tamper_rejected(
 def test_h3c_loss_evaluator_residual_correspondence_residual_formula_missing_rejected() -> None:
     data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
     del data["residual_correspondence"]["residual_formula"]
-    with pytest.raises(m.Run9ValidationError, match="residual_correspondence.residual_formula"):
+    with pytest.raises(m.Run9ValidationError, match="residual_correspondence.*residual_formula"):
         m.validate_loss_evaluator_spec_manifest(data)
 
 
@@ -561,7 +561,7 @@ def test_h3c_loss_evaluator_reference_source_practice_permits_education_lesson_r
 def test_h3c_loss_evaluator_reference_source_education_missing_rejected() -> None:
     data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
     del data["reference_source"]["education"]
-    with pytest.raises(m.Run9ValidationError, match="reference_source.education"):
+    with pytest.raises(m.Run9ValidationError, match="reference_source.*education"):
         m.validate_loss_evaluator_spec_manifest(data)
 
 
@@ -638,7 +638,7 @@ def test_h3c_loss_evaluator_aggregate_formula_weight_term_tamper_rejected() -> N
 def test_h3c_loss_evaluator_aggregate_formula_term_definition_missing_rejected() -> None:
     data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
     del data["aggregate_formula"]["term_definitions"]["residual_RMS_c"]
-    with pytest.raises(m.Run9ValidationError, match=r"term_definitions\['residual_RMS_c'\]"):
+    with pytest.raises(m.Run9ValidationError, match="term_definitions.*residual_RMS_c"):
         m.validate_loss_evaluator_spec_manifest(data)
 
 
@@ -652,7 +652,7 @@ def test_h3c_loss_evaluator_aggregate_formula_dtype_tamper_rejected() -> None:
 def test_h3c_loss_evaluator_aggregate_formula_summation_order_missing_rejected() -> None:
     data = copy.deepcopy(_manifest_data("loss_evaluator_spec"))
     del data["aggregate_formula"]["summation_order"]
-    with pytest.raises(m.Run9ValidationError, match="aggregate_formula.summation_order"):
+    with pytest.raises(m.Run9ValidationError, match="aggregate_formula.*summation_order"):
         m.validate_loss_evaluator_spec_manifest(data)
 
 
