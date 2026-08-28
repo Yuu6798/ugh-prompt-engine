@@ -64,6 +64,53 @@ _EXECUTOR_PATH = Path(__file__).resolve()
 _, _EXECUTOR_LOAD_SHA256 = _read_once(
     _EXECUTOR_PATH, label="Birth Probe executor module-load provenance"
 )
+_HELPER_PROVENANCE_PATHS: Dict[str, Path] = {
+    "run9_schema_sha256": _THIS_DIR / "run9_schema.py",
+    "run9_controlprofile_sha256": _THIS_DIR / "run9_controlprofile.py",
+    "gate_synth_sha256": _REPO_ROOT / "voice_genesis" / "foundry" / "s1_gate" / "gate_synth.py",
+}
+_HELPER_MODULE_NAMES = {
+    "run9_schema_sha256": "run9_schema",
+    "run9_controlprofile_sha256": "run9_controlprofile",
+    "gate_synth_sha256": "gate_synth",
+}
+_LOAD_TIME_PROVENANCE_PATHS: Dict[str, Path] = {
+    "executor_sha256": _EXECUTOR_PATH,
+    **_HELPER_PROVENANCE_PATHS,
+}
+_LOAD_TIME_PROVENANCE_SHA256: Dict[str, str] = {
+    "executor_sha256": _EXECUTOR_LOAD_SHA256,
+    **{
+        key: _read_once(path, label=f"{key} module-load provenance")[1]
+        for key, path in _HELPER_PROVENANCE_PATHS.items()
+    },
+}
+
+
+def _assert_helper_modules_not_preloaded() -> None:
+    """Reject stale repo helper modules before provenance-controlled execution."""
+    loaded = sorted(
+        module_name for module_name in _HELPER_MODULE_NAMES.values() if module_name in sys.modules
+    )
+    if loaded:
+        raise BirthProbeError(
+            "repo helper modules were already loaded before Birth Probe main provenance control: "
+            + ", ".join(loaded)
+        )
+
+
+def _assert_local_helper_module(module: Any, provenance_key: str) -> None:
+    """Bind an imported repo helper module to the load-time path and bytes."""
+    expected_path = _LOAD_TIME_PROVENANCE_PATHS[provenance_key].resolve()
+    module_file = getattr(module, "__file__", None)
+    if not isinstance(module_file, str) or Path(module_file).resolve() != expected_path:
+        raise BirthProbeError(
+            f"{provenance_key} loaded from an unexpected module path: {module_file!r}"
+        )
+    _, actual = _read_once(expected_path, label=f"loaded helper {provenance_key}")
+    expected = _LOAD_TIME_PROVENANCE_SHA256[provenance_key]
+    if actual != expected:
+        raise BirthProbeError(f"{provenance_key} changed after executor module load")
 
 
 def _provenance_input_paths() -> Dict[str, Path]:
@@ -79,19 +126,21 @@ def _provenance_input_paths() -> Dict[str, Path]:
         "backbone_runtime_bundle_sha256": (
             _THIS_DIR / "inputs" / "backbone_runtime_bundle.json"
         ),
-        "executor_sha256": _EXECUTOR_PATH,
+        **_LOAD_TIME_PROVENANCE_PATHS,
     }
 
 
 def _snapshot_provenance_inputs() -> Dict[str, str]:
-    """Hash repo provenance inputs and bind the executor to module-load bytes."""
+    """Hash repo provenance inputs and bind executed code to module-load bytes."""
     snapshot: Dict[str, str] = {}
     for key, path in _provenance_input_paths().items():
         _, actual = _read_once(path, label=f"provenance snapshot {key}")
-        if key == "executor_sha256" and path.resolve() == _EXECUTOR_PATH:
-            if actual != _EXECUTOR_LOAD_SHA256:
-                raise BirthProbeError("Birth Probe executor changed after module load")
-            snapshot[key] = _EXECUTOR_LOAD_SHA256
+        expected_path = _LOAD_TIME_PROVENANCE_PATHS.get(key)
+        if expected_path is not None and path.resolve() == expected_path.resolve():
+            expected = _LOAD_TIME_PROVENANCE_SHA256[key]
+            if actual != expected:
+                raise BirthProbeError(f"{key} changed after executor module load")
+            snapshot[key] = expected
         else:
             snapshot[key] = actual
     return snapshot
@@ -186,6 +235,8 @@ def _control_profiles(founder_id: str) -> tuple[Any, Any]:
     import run9_controlprofile as controlprofile
     import run9_schema
 
+    _assert_local_helper_module(run9_schema, "run9_schema_sha256")
+    _assert_local_helper_module(controlprofile, "run9_controlprofile_sha256")
     neutral = controlprofile.build_neutral_profile(founder_id)
     replay = controlprofile.derive_profile(
         neutral,
@@ -758,6 +809,11 @@ class GateSynthRenderer:
             import gate_synth
         except ImportError as exc:  # pragma: no cover - measurement environment only
             raise BirthProbeError(f"gate_synth runtime dependency unavailable: {exc}") from exc
+        _assert_local_helper_module(gate_synth, "gate_synth_sha256")
+        if getattr(gate_synth, "_GATE_SYNTH_PY_LOAD_TIME_SHA256", None) != (
+            _LOAD_TIME_PROVENANCE_SHA256["gate_synth_sha256"]
+        ):
+            raise BirthProbeError("gate_synth in-memory load-time bytes diverge from Birth Probe provenance")
         self._sf = sf
         self._gate = gate_synth
         self._input_paths = {
@@ -933,6 +989,7 @@ def _load_verified_inputs() -> tuple[
 ]:
     import run9_schema
 
+    _assert_local_helper_module(run9_schema, "run9_schema_sha256")
     contract_path = _THIS_DIR / "RUN9_CONTRACT.yaml"
     contract = run9_schema.load_run9_contract_from_yaml_path(contract_path)
     domain = run9_schema.load_run9_identity_domain(_THIS_DIR / "domains" / "identity_domain_run9_v1.json")
@@ -968,6 +1025,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        _assert_helper_modules_not_preloaded()
         provenance_snapshot = _snapshot_provenance_inputs()
         probe, speaker_map, reexport, backbone_bundle, practice_split, expected_takes = (
             _load_verified_inputs()
