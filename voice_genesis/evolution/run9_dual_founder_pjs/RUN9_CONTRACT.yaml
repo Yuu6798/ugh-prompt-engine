@@ -4108,8 +4108,43 @@ cost_record_sha:
 #   rule_id/enforcement/verbatim・分類数（MACHINE 1件 / PROCEDURAL 19件）
 #   は無改変。他 rule・post_stop_prohibitions・classification_policy は
 #   無改変（sha256 確認済み）。バイトが変わったため repin（13世代目）。
+# - PR #333 Codex bot レビュー第14巡指摘1 是正（2026-08-28、Fable 判定、
+#   採否上限10巡到達後 — 3分類「将来汚染」の新規具体経路〔第12巡対応自身が
+#   残した欠陥〕として採用、値
+#   2000a9eb0551f653246572e0d9a6baf888ea06996c1d3d7a726121f66f7f2a01 へ
+#   repin）: 第12巡是正後の rule 7 machine_promotion_condition が
+#   「birth_gate_aggregate_rule（birth_identity_separation × pjs_confuser
+#   の連言 + outcome_detail_priority + completion_evidence_requirement を
+#   含む Birth Gate 全体の正本）」と記述していたが、
+#   completion_evidence_requirement は実際には birth_gate_aggregate_rule
+#   配下ではなく兄弟節 birth_gate_overall_pass 配下にのみ存在し
+#   （identity_decision_protocol_v0.6.json 実キー構成で確認。
+#   birth_gate_aggregate_rule 自身も identity_establishment_scope_note で
+#   「本節は identity_establishment 層のみを規定し、Birth Gate 全体の
+#   PASS は birth_gate_overall_pass 節が別途規定する」と自己宣言している）、
+#   記載どおり実装すると completion_evidence_requirement（監査完了証跡）と
+#   audit_stop_refs（監査不一致の停止条件）をいずれも検査しない identity
+#   establishment のみの検証で MACHINE 化・学習進行が可能になる欠陥だった。
+#   rule 7 の machine_promotion_condition を、outcome 写像＝
+#   birth_gate_aggregate_rule／最終 gate 判定＝birth_gate_overall_pass
+#   （audit_stop_refs 非該当 + completion_evidence_requirement の完了証跡を
+#   含む）の**両節参照**へ是正し、節と内容の対応を実キー構成と一致させた。
+#   第12巡の是正文自身が節内容を誤記述していた経緯は履歴として削除せず
+#   append-only のまま残置し正直に記録した。他 rule に同型の「実在節だが
+#   中身の誤記述」が無いか failure_abort_criteria.json 全20 rule を
+#   identity_decision_protocol_v0.6.json への節名参照（`本 protocol`/
+#   `同 protocol`/`同protocol`/直接節名）で grep して総点検した——rule 7
+#   checkpoint の `birth_identity_separation` 節参照（実在）、rule 16 の
+#   `post_learning_identity_retention` 節参照（実在・第12巡是正済み、
+#   m_other/m_pjs マージン+invalid_or_nonfinite_feature 分岐の記述も
+#   実キー構成と一致）はいずれも中身の誤記述なし。存在しない/内容誤記述の
+#   節名参照は rule 7 machine_promotion_condition の1箇所のみであり、
+#   本是正後の残余はゼロ。rule_id/enforcement/verbatim・分類数
+#   （MACHINE 1件 / PROCEDURAL 19件）は無改変。他 rule・
+#   post_stop_prohibitions・classification_policy は無改変（sha256
+#   確認済み）。バイトが変わったため repin（14世代目）。
 failure_abort_criteria_sha:
-  value: "7bb311e08abfb2bd608a9e54387c5f3c477e7283cc9ae9432de3a8a9e5bdfcbb"
+  value: "2000a9eb0551f653246572e0d9a6baf888ea06996c1d3d7a726121f66f7f2a01"
   status: PINNED
   source: voice_genesis/evolution/run9_dual_founder_pjs/inputs/failure_abort_criteria.json
 

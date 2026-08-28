@@ -11462,8 +11462,15 @@ def test_harness3b_failure_abort_criteria_repinned_lineage_ten_generations(
     10巡到達後の採用）で rule 7/rule 16 が identity_decision_protocol_
     v0.6.json の存在しない `decision_rule` 節を参照していた誤参照を
     実在節（`birth_gate_aggregate_rule`/`post_learning_identity_
-    retention`）へ訂正した第13世代が append-only で、現在値が最新の
-    ものであることを明示的に確認する（repin 漏れの回帰防止）。"""
+    retention`）へ訂正した第13世代 + PR #333 Codex bot レビュー第14巡
+    指摘1 是正（2026-08-28、Fable 判定、採否上限10巡到達後の採用）で、
+    第13世代の是正文自身が `birth_gate_aggregate_rule` に
+    `completion_evidence_requirement`（実際には兄弟節
+    `birth_gate_overall_pass` 配下にのみ存在）を含めて誤記述していた
+    穴を、outcome 写像＝`birth_gate_aggregate_rule`／最終 gate 判定＝
+    `birth_gate_overall_pass` の両節参照へ訂正した第14世代が
+    append-only で、現在値が最新のものであることを明示的に確認する
+    （repin 漏れの回帰防止）。"""
     round1_value = "b045af35b6ad3131e076624568e0449bb0d5625853a2e8c99f0bdc17690bb110"
     round2_value = "8892230a81f40f2d91dfdf454f9637a65244430ab6241aebf03b7ad655f26d81"
     round3_value = "6cdfcb05763e9c15f9a70e7e887b4f4c3600bbc94e468e02970a1692fb1fef44"
@@ -11477,11 +11484,13 @@ def test_harness3b_failure_abort_criteria_repinned_lineage_ten_generations(
     round11_value = "297dd46aaa8c520238072f93b9d5e18748dbdd31b4a389a4a8d7e48cd70d8cba"
     round12_value = "3de4db27a23498c236b75b3efbb152c0675fce84fe2d6bddfb8bd565850b1251"
     round13_value = "7bb311e08abfb2bd608a9e54387c5f3c477e7283cc9ae9432de3a8a9e5bdfcbb"
+    round14_value = "2000a9eb0551f653246572e0d9a6baf888ea06996c1d3d7a726121f66f7f2a01"
     current = contract_raw["failure_abort_criteria_sha"]["value"]
-    assert current == round13_value
+    assert current == round14_value
     assert current not in (
         round1_value, round2_value, round3_value, round4_value, round5_value, round6_value,
         round7_value, round8_value, round9_value, round10_value, round11_value, round12_value,
+        round13_value,
     )
     assert current == m.compute_file_sha256(m.FAILURE_ABORT_MANIFEST_PATH)
 
@@ -20160,6 +20169,54 @@ def test_rev06_failure_abort_criteria_rule7_and_rule16_reference_rev06() -> None
     assert by_id[7]["verbatim"] == "Birth Identity separation not established"
     assert by_id[16]["enforcement"] == "PROCEDURAL"
     assert by_id[16]["verbatim"] == "Identity drift beyond non-inferiority"
+
+
+# =============================================================================
+# PR #333 Codex bot レビュー第14巡対応（2026-08-28、フェーズ1、採否上限
+# 10巡到達後 — 3分類「将来汚染」の新規具体経路〔第12巡対応自身が残した
+# 欠陥〕として採用）
+# 指摘1（P2）: rule 7 machine_promotion_condition が
+# `birth_gate_aggregate_rule` に `completion_evidence_requirement`
+# （実際には兄弟節 `birth_gate_overall_pass` 配下にのみ存在）を含めて
+# 誤記述していたため、outcome 写像＝`birth_gate_aggregate_rule`／
+# 最終 gate 判定＝`birth_gate_overall_pass` の両節参照へ訂正した。
+# =============================================================================
+
+
+def test_pr333_r14_rule7_machine_promotion_condition_references_both_gate_sections() -> None:
+    """第14巡指摘1 の直接回帰: rule 7 machine_promotion_condition が
+    outcome 写像（identity_establishment 層）を `birth_gate_aggregate_rule`
+    へ、最終 gate 判定（completion_evidence_requirement を含む）を
+    `birth_gate_overall_pass` へ、それぞれ実キー構成と一致する形で
+    参照していること——是正前は前者1節のみへ両方の役割を誤って束ねて
+    いた（completion_evidence_requirement は後者配下にのみ実在）。"""
+    data = m._loads_strict_json(m.FAILURE_ABORT_MANIFEST_PATH.read_text(encoding="utf-8"))
+    by_id = {r["rule_id"]: r for r in data["rules"]}
+    condition = by_id[7]["machine_promotion_condition"]
+    assert "birth_gate_aggregate_rule" in condition
+    assert "birth_gate_overall_pass" in condition
+    assert "completion_evidence_requirement" in condition
+    assert "audit_stop_refs" in condition
+    # 是正前の誤記述（completion_evidence_requirement を
+    # birth_gate_aggregate_rule の括弧内に同梱）は履歴〔...〕として
+    # append-only 保持するが、現行 (ii) 節本体では両節を分離参照する
+    # ことを確認する（第14巡履歴ブロック自体には旧文言が残るため、
+    # 履歴ブロックを除いた本体側の分離を直接照合する）。
+    active_condition = condition.split("〔履歴:", 1)[0]
+    assert "birth_gate_aggregate_rule" in active_condition
+    assert "birth_gate_overall_pass" in active_condition
+    assert "completion_evidence_requirement" in active_condition
+    # enforcement/rule_id/verbatim・分類は無改変。
+    assert by_id[7]["enforcement"] == "PROCEDURAL"
+    assert by_id[7]["verbatim"] == "Birth Identity separation not established"
+    protocol_data = m._loads_strict_json(
+        m.IDENTITY_DECISION_PROTOCOL_PATH.read_text(encoding="utf-8")
+    )
+    # completion_evidence_requirement は実際に birth_gate_overall_pass
+    # 配下にのみ存在し、birth_gate_aggregate_rule 配下には存在しない
+    # ことを実キー構成で直接確認する（誤記述の再発防止）。
+    assert "completion_evidence_requirement" in protocol_data["birth_gate_overall_pass"]
+    assert "completion_evidence_requirement" not in protocol_data["birth_gate_aggregate_rule"]
 
 
 def test_pr333_r9_canonical_source_declarations_reference_rev06_supersede() -> None:

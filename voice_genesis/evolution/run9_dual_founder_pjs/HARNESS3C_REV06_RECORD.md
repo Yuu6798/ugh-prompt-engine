@@ -46,7 +46,7 @@ P2、採用、本記録 §11.2 で構造変更）。最新の検証結果は、�
 | 3 | `inputs/identity_decision_protocol_v0.6.json` | 新規作成・§P 構造どおり（巡ごとの対応で追補・repin 継続、最新状態は本記録内で最後に追加された巡セクションを正とする） |
 | 4 | `run9_schema.py`: validate/load + outcome_detail 定数 | 新規実装・テスト green（巡ごとの対応で追補） |
 | 5 | `RUN9_CONTRACT.yaml`: hypothesis_algebra_sha PINNED + design_revision 0.6 昇格 | 完了（`hypothesis_algebra_sha` は複数回 repin、最新値は本記録内で最後に追加された巡セクションの repin cascade 小節を正とする——ポインタ化、第8巡指摘2） |
-| 6 | probe bridge / failure routing 更新 | probe_manifest: 実装前グラウンディング時点では不要と判定したが第2巡指摘1（§5.1）で bridge 参照是正に伴い repin 済み / failure_abort_criteria: rule 7/16 是正・repin（11世代目、以後未変更） |
+| 6 | probe bridge / failure routing 更新 | probe_manifest: 実装前グラウンディング時点では不要と判定したが第2巡指摘1（§5.1）で bridge 参照是正に伴い repin 済み / failure_abort_criteria: rule 7/16 是正・repin。以後も巡ごとの対応で追補・repin 継続、最新の世代番号・sha 値は本記録内で最後に追加された巡セクションの repin cascade 小節を正とする（ポインタ化、第8巡指摘2と同型・第14巡§17.2で見出し表側も統一） |
 | 7 | `HARNESS3C_REV06_RECORD.md`（本ファイル） | 本ファイル |
 
 **初版時点（design_revision 0.6 第2 PR フェーズ1、レビュー対応着手前）
@@ -66,7 +66,11 @@ probe_manifest.json の repin は不要と判定（該当する正典矛盾な�
 probe_manifest.json はその後 repin 済み**（`probe_manifest_sha`
 旧→新、詳細は §5.1）。failure_abort_criteria.json は実装前グラウン
 ディングの時点で Birth Gate 関連 2 rule の stale 文言を是正し repin
-した（この repin は第1巡以降の対応と独立、以後未変更）。
+した（この repin 自体は第1巡以降の対応と独立に発生したものだが、
+その後も第1巡指摘1（§4.8）・第12巡指摘1（§15）・第14巡指摘1（§17）で
+追加の巡ごとの是正・repin が発生している——最新の世代番号・sha 値は
+本記録内で最後に追加された巡セクションの repin cascade 小節を正とする、
+上記見出し表 row 6 と同型のポインタ形式）。
 
 ---
 
@@ -2724,3 +2728,201 @@ frozen tuple（`_IDENTITY_PROTOCOL_OVERALL_PASS_COMPLETION_REFS`等）へ
 - 上限10巡到達後の対応であるため、本節冒頭（§16 導入部）で3分類
   該当性・§14との経路差異を明記した——`AGENTS.md` §3-4・CLAUDE.md
   「bot レビュー対応の運用」節が定める運用に従う。
+
+## 17. PR #333 Codex bot レビュー第14巡対応（2026-08-28、フェーズ1）
+
+対象 PR: #333（branch `claude/run9-implementation-start-p7xqqu`、head
+`64c40493`）。**採否上限10巡到達後（§13.7）の対応**——CLAUDE.md「bot
+レビュー対応の運用」節が定める3分類（実コード被害 / 将来汚染 /
+致命的バグ）のうち、本巡2件はいずれも**将来汚染**（誤った規約・帰属・
+スキーマが下流の実装や記録を汚す）に該当し採用した。2件はいずれも
+**過去巡対応自身が残した欠陥**という共通点を持つ新規具体経路である
+（指摘1は第12巡§15対応自身の誤記述、指摘2は第8巡指摘2のポインタ化
+方針を row 6 のみ未適用のまま残した見落とし）。着手前にそれぞれ事実
+確認を行い、指摘内容が事実と一致することを確認したうえで実装した。
+
+### 17.1 指摘1（P2）: 「Point machine promotion at the overall-pass rule」
+
+**事実確認（着手前）**: `inputs/identity_decision_protocol_v0.6.json`
+を `python3 -c "json.load(...)"` で読み、`completion_evidence_
+requirement` キーが `birth_gate_overall_pass` 配下にのみ実在し
+（`"completion_evidence_requirement" in d["birth_gate_overall_pass"]`
+→ `True`）、`birth_gate_aggregate_rule` 配下には存在しないこと
+（同 → `False`）を実測確認した。`birth_gate_aggregate_rule` 自身の
+`identity_establishment_scope_note`（同ファイル）も「本節（birth_gate_
+aggregate_rule）は Birth Gate の identity_establishment 層——BIRTH =
+ESTABLISHED / NOT_ESTABLISHED のラベル判定——のみを規定する。Birth
+Gate 全体の PASS（learning recipe freeze / 学習実行へ進む可否）は、
+本節の ESTABLISHED 判定に加えて C0/C1/positive reference の
+exact-replay 監査結果を要求する二層目の判定であり、birth_gate_
+overall_pass 節が別途規定する」と自己宣言していることを確認した。
+
+`inputs/failure_abort_criteria.json` rule 7 の `machine_promotion_
+condition`（第12巡是正後・本巡是正前）を読み、「(ii) その結果を本
+protocol の birth_gate_aggregate_rule（birth_identity_separation ×
+pjs_confuser の連言 + outcome_detail_priority +
+completion_evidence_requirement を含む Birth Gate 全体の正本）に
+基づき機械的に BIRTH_OUTCOMES へ写像する consumption-time verifier」
+と記述していることを確認した——`completion_evidence_requirement` を
+`birth_gate_aggregate_rule` の括弧内（同節の中身の説明）に含めており、
+実キー構成と一致しない。記載どおり実装すると、実装者は
+`birth_gate_aggregate_rule`（identity_establishment 層のみ、C0/C1/
+positive reference の監査完了証跡もその不一致検出も一切含まない）を
+単独で消費して BIRTH_OUTCOMES への写像・MACHINE 化を完了してしまい
+得る——`birth_gate_overall_pass` が要求する `audit_stop_refs`
+（監査不一致の停止条件5節）・`completion_evidence_requirement`
+（監査完了証跡、欠落・部分実施の検出）のいずれも経由しないまま
+「MACHINE 昇格済み」と誤認し得るため、completion 検査を省いた
+identity establishment のみの検証で MACHINE 化・学習進行が可能になる
+欠陥である。指摘内容は事実と一致 → Fable 設計どおり実装。
+
+**実装（Fable 設計）**: rule 7 `machine_promotion_condition` の (ii)
+を、outcome 写像（identity_establishment 層）＝`birth_gate_aggregate_
+rule`、最終 gate 判定（learning recipe freeze / 学習実行への可否）＝
+`birth_gate_overall_pass`（`audit_stop_refs` の停止条件非該当 +
+`completion_evidence_requirement` の監査完了証跡を含む）の**両節
+参照**へ訂正し、節と内容の対応を実キー構成と正確に一致させた。既存の
+履歴残置様式（append-only）に従い、第12巡是正時の旧文言（誤記述を
+含む）は削除せず〔履歴（PR #333 第12巡指摘1、...）〕として当該
+フィールド末尾に保持したうえで、本巡の是正経緯を新規〔履歴（PR #333
+第14巡指摘1、...）〕として追記した——第12巡の是正文自身が節内容を
+誤記述していた経緯を、削除せず正直に記録として残す。`rule_id`/
+`enforcement`/`verbatim` は無改変（`enforcement=PROCEDURAL`/
+`verbatim="Birth Identity separation not established"`）。分類数
+（MACHINE 1件 / PROCEDURAL 19件）も無改変。
+
+**総点検（Task 指示）**: 他 rule に「実在節だが中身の誤記述」が無いか、
+`failure_abort_criteria.json` 全20 rule を `identity_decision_
+protocol_v0.6.json` への節名参照（`本 protocol`/`同 protocol`/
+`同protocol`/直接節名の4パターン、第12巡§15.2 と同一 grep 手法）で
+走査した。ヒットは本是正前時点で rule 7（checkpoint の
+`birth_identity_separation` 節参照・machine_promotion_condition の
+`birth_gate_aggregate_rule`/`completion_evidence_requirement` 参照）・
+rule 16（checkpoint の `post_learning_identity_retention` 節参照）の
+2 rule のみ。rule 7 checkpoint の `birth_identity_separation` 節参照は
+実在節かつ内容記述（d12>0 machine feature 判定、両 feature が
+valid/finite の場合のみ ESTABLISHED_BY_MACHINE_FEATURE、d12=0 は
+NOT_ESTABLISHED）も `identity_decision_protocol_v0.6.json` の実キー
+構成（`established`/`not_established` 分岐）と一致（是正不要）。
+rule 16 checkpoint の `post_learning_identity_retention` 節参照も
+実在節かつ内容記述（m_other/m_pjs マージン方式 +
+invalid_or_nonfinite_feature 分岐）が実キー構成（`formulas`/
+`stable`/`shifted`/`invalid_or_nonfinite_feature`）と一致（是正
+不要）。したがって「実在節だが中身の誤記述」に該当したのは rule 7
+machine_promotion_condition の1箇所のみであり、**本是正後の残余は
+ゼロ**である。
+
+`RUN9_CONTRACT.yaml` `failure_abort_criteria_sha` を14世代目へ repin
+（`7bb311e08abfb2bd608a9e54387c5f3c477e7283cc9ae9432de3a8a9e5bdfcbb` →
+`2000a9eb0551f653246572e0d9a6baf888ea06996c1d3d7a726121f66f7f2a01`、
+既存の repin 履歴コメントへ append-only で追記、旧値は削除しない）。
+
+### 17.2 指摘2（P2）: 「Refresh the failure-routing generation in the
+summary」
+
+**事実確認（着手前）**: 本記録 §総合判定の見出し表 row 6（旧文言）を
+確認し、「failure_abort_criteria: rule 7/16 是正・repin（11世代目、
+以後未変更）」という現在形主張のままであることを確認した。一方、
+`RUN9_CONTRACT.yaml` の repin 履歴コメント（本記録 §15.2 該当箇所）を
+確認したところ、第12巡（§15）で13世代目へ repin 済みであり、
+「11世代目・以後無変更」という記述は §15 と直接矛盾する stale 記述
+であることを確認した。§66-69（旧文言）も同様に「この repin は第1巡
+以降の対応と独立、以後未変更」という現在形主張を含んでおり、同じ矛盾を
+抱えていた。第8巡指摘2（本記録 §11.2）が row 5
+（`hypothesis_algebra_sha`）についてのみポインタ形式へ構造変更した際、
+row 6（`failure_abort_criteria_sha`）への同型適用が漏れていたことが
+根本原因——row 5 と row 6 は同じ見出し表内の隣接行でありながら、
+一方のみポインタ化され他方は現在形記述のまま取り残されていた。
+指摘内容は事実と一致 → Fable 設計どおり実装。
+
+**実装（ファミリー完全終端）**: 見出し表 row 6 を、第8巡で確立した
+「最新巡セクション参照」ポインタ形式（row 5 と同型）へ是正した——
+「以後も巡ごとの対応で追補・repin 継続、最新の世代番号・sha 値は
+本記録内で最後に追加された巡セクションの repin cascade 小節を正と
+する」という文言へ書き換え、個別の世代番号・「以後未変更」という
+現在形主張を除去した。§66-69 の本文段落も同型のポインタ形式へ書き換え、
+第1巡指摘1（§4.8）・第12巡指摘1（§15）・第14巡指摘1（本節）で追加の
+巡ごとの是正・repin が発生している事実を明記したうえで、最新値の正本を
+巡セクションへ委譲する形にした。
+
+**見出し表・総合判定まわりの全行走査（Task 指示）**: 総合判定節
+（本記録 §総合判定、旧行番号 18-70 相当）の全行を再走査し、残存する
+リテラルの現在形主張（世代番号・sha 値・件数）を洗い出した。row 1-4/7
+は元々リテラル値を持たない（「完了」「新規作成」等の状態語のみ）ため
+対象外。row 3（`identity_decision_protocol_v0.6.json`）・row 5
+（`hypothesis_algebra_sha`）は第8巡時点で既にポインタ形式（是正不要）。
+本節が新たに是正した row 6・§66-69 の2箇所以外にリテラルの現在形
+主張は残っていない。「初版時点」「第7巡是正時点」の2つの引用ブロック
+（旧行52-62相当）はいずれも履歴注記として明示的にラベル付けされて
+おり（「履歴保持、上記が現行正」「履歴保持、上記ポインタ形式が現行
+正」）、初版時点の値を履歴注記として残置する Task 指示の様式と
+一致するため書き換えていない。**この掃討で見出し陳腐化ファミリーの
+残余はゼロ**であることを終端宣言する。
+
+### 17.3 新設テスト
+
+`tests/test_run9_contract.py`:
+
+- `test_pr333_r14_rule7_machine_promotion_condition_references_both_
+  gate_sections`（新設）: rule 7 `machine_promotion_condition` の
+  現行本体（〔履歴:...〕以前の部分）が `birth_gate_aggregate_rule`/
+  `birth_gate_overall_pass`/`completion_evidence_requirement`/
+  `audit_stop_refs` をすべて含むこと、`enforcement`/`verbatim` が
+  無改変であることを回帰確認する。さらに
+  `identity_decision_protocol_v0.6.json` の実キー構成を直接読み、
+  `completion_evidence_requirement` が `birth_gate_overall_pass`
+  配下にのみ存在し `birth_gate_aggregate_rule` 配下には存在しない
+  ことを直接照合する（誤記述の再発防止）。
+- `test_harness3b_failure_abort_criteria_repinned_lineage_ten_
+  generations`（既存、docstring・値を更新）: `round14_value` を追加し、
+  現在値が14世代目であること・旧13世代のいずれとも一致しないことを
+  確認する形で更新した（第12/13巡と同型の repin 検査様式）。
+
+`HARNESS3C_REV06_RECORD.md` 側の見出し表・§66-69 のポインタ化は
+プローズ訂正のみであり、専用の構造検証テストは追加していない
+（第8巡指摘2の row 5 是正時も同様、`.md` はテスト対象外）。
+
+### 17.4 検証結果
+
+```
+$ ruff check .
+All checks passed!
+
+$ python3 -m pytest voice_genesis/evolution/run9_dual_founder_pjs/tests -q --tb=short
+2737 passed, 7 warnings in 43.21s
+```
+
+テスト件数は2736件→2737件（新設1件、§17.3参照）。
+
+### 17.5 変更ファイル
+
+- `inputs/failure_abort_criteria.json`: rule 7 `machine_promotion_
+  condition` の (ii) を、outcome 写像＝`birth_gate_aggregate_rule`／
+  最終 gate 判定＝`birth_gate_overall_pass` の両節参照へ訂正（旧文言は
+  履歴残置）。
+- `RUN9_CONTRACT.yaml`: `failure_abort_criteria_sha` を14世代目へ
+  append-only 履歴付きで repin。
+- `tests/test_run9_contract.py`: repin 世代検査へ `round14_value` を
+  追加、`test_pr333_r14_rule7_machine_promotion_condition_references_
+  both_gate_sections` を新設。
+- `HARNESS3C_REV06_RECORD.md`: 本節。見出し表 row 6・§66-69 を
+  ポインタ形式へ是正（第8巡指摘2の row 5 是正と同型）。
+
+immutability 対象（`identity_metric_space.json`/`identity_domain`/
+`Genome`/speaker map manifest）・裁定逐語転記部分
+（`USER_ADJUDICATION_20260827_IDENTITY_REV06.txt`）は1 byte も変更して
+いない。`identity_decision_protocol_v0.6.json` 自体も無改変（誤記述は
+`failure_abort_criteria.json` 側のみに存在した）。既存 frozen tuple・
+`rule_id`/`enforcement`/`verbatim`・分類数（MACHINE 1件 / PROCEDURAL
+19件）への変更も行っていない。
+
+### 17.6 逸脱事項
+
+- ファミリー全数掃討は§17.1の総点検（residual = 0）・§17.2の見出し表
+  全行走査（residual = 0）でそれぞれ実施済み。2件の指摘は独立の
+  ファミリー（節内容の誤記述 / 見出し表の現在形陳腐化）であり、
+  それぞれの掃討範囲内で残余ゼロを終端宣言した。
+- 上限10巡到達後の対応であるため、本節冒頭（§17 導入部）で3分類
+  該当性・過去巡対応自身が残した欠陥という共通点を明記した——
+  `AGENTS.md` §3-4・CLAUDE.md「bot レビュー対応の運用」節が定める
+  運用に従う。
