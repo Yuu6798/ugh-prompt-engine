@@ -2006,6 +2006,18 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   レビュー対応の運用」3分類のうち『将来汚染』の新規具体経路として採用）
   で是正〕
 
+  **2026-08-28 execution attempt**: PR #335 merge commit
+  `28e69d579417ccfd2a99ff7c9476b28ce37b5bfb` から再開したが、pin 済み
+  `reexport_manifest.json` の acoustic ONNX expected SHA256
+  `cdbd779c...` に対し、現環境の独立2回 export は byte-identical な
+  `80a40f...`（同一 279,777,001 bytes）となり post-export 閉世界照合で
+  fail-closed 停止した。C0/C1/positive reference/d12/PJS confuser は全て
+  未実行であり、`birth_gate_overall_pass.completion_evidence_requirement`
+  の `IDENTITY_PROTOCOL_AUDIT_INCOMPLETE` → `IMPLEMENTATION_FAILURE` として
+  学習非進行、`learning_recipe_sha` は `PENDING` のまま。科学的な
+  BIRTH outcome は未評価であり `NOT_ESTABLISHED` を捏造していない。
+  詳細証跡は `BIRTH_GATE_ATTEMPT_20260828.md`。
+
 上記の残 pin を除く machine-dependent な実装作業:
 
 - **practice/education harness 実装**: VG-L0 学習ハーネスの一部として、
