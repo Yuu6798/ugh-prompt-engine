@@ -82,10 +82,16 @@ presence/hash は一致した。Windows では ledger の POSIX path と列挙�
 
 ```bash
 python af01_freeze_verifier.py --bundle-root <AF01_v1.0 展開先>
-python af01_freeze_verifier.py --bundle-root <AF01_v1.0 展開先> --replay
+test ! -e /mnt/data/AF01_Frozen_Validation_Specimen_v1.0
+python af01_freeze_verifier.py \
+  --bundle-root <AF01_v1.0 展開先> \
+  --replay \
+  --replay-output-root /mnt/data/AF01_Frozen_Validation_Specimen_v1.0
 ```
 
-で実行できる。
+で実行できる。凍結済み canonical generator は出力先 `/mnt/data/AF01_Frozen_Validation_Specimen_v1.0`
+を内包するため、cwd へ出力する合成 generator と異なり比較先の明示が必要である。比較先が
+実行前から存在する場合、stale payload を再生成結果と取り違えないよう verifier は実行前に拒否する。
 
 ## ディレクトリ
 

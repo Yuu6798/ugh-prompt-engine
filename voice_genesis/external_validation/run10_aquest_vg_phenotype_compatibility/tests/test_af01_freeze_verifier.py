@@ -247,6 +247,58 @@ def test_deterministic_replay_passes_when_payload_is_identical(
     assert report.verdict == v.VERDICT_PASS
 
 
+def test_deterministic_replay_accepts_an_explicit_absolute_output_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """絶対出力先を内包する凍結 generator の payload をその場所で比較する。"""
+    rebuilt = tmp_path / "canonical-output"
+    body = textwrap.dedent(
+        f"""
+        from pathlib import Path
+        root = Path({str(rebuilt)!r})
+        root.mkdir(parents=True)
+        (root / "a.wav").write_bytes(b"frozen")
+        """
+    ).strip() + "\n"
+    root = _authenticated_replay_bundle(
+        tmp_path, body, {"a.wav": hashlib.sha256(b"frozen").hexdigest()}
+    )
+    _pass_ledger_gate(monkeypatch, root)
+    monkeypatch.setitem(
+        m.AF01_FROZEN_HASHES,
+        "af01_generator_sha256",
+        m.compute_file_sha256(root / "generator_AF01_SF1.py"),
+    )
+
+    report = v.verify_deterministic_replay(root, replay_output_root=rebuilt)
+
+    assert report.verdict == v.VERDICT_PASS
+    assert report.checks["deterministic_payload_replay"] == "PASS"
+
+
+def test_deterministic_replay_rejects_a_stale_explicit_output_root_before_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """既存 payload を新しい replay 出力として読む偽成功経路を閉じる。"""
+    rebuilt = tmp_path / "canonical-output"
+    rebuilt.mkdir()
+    sentinel = tmp_path / "executed"
+    body = f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n"
+    root = _authenticated_replay_bundle(tmp_path, body, {})
+    _pass_ledger_gate(monkeypatch, root)
+    monkeypatch.setitem(
+        m.AF01_FROZEN_HASHES,
+        "af01_generator_sha256",
+        m.compute_file_sha256(root / "generator_AF01_SF1.py"),
+    )
+
+    report = v.verify_deterministic_replay(root, replay_output_root=rebuilt)
+
+    assert report.verdict == v.VERDICT_UNAVAILABLE
+    assert report.checks["replay_output_root_clean"] == "FAIL"
+    assert not sentinel.exists()
+
+
 def test_deterministic_replay_reports_unavailable_without_generator(tmp_path: Path) -> None:
     """generator 不在を PASS と取り違えない。"""
     report = v.verify_deterministic_replay(tmp_path)
@@ -414,6 +466,13 @@ def test_cli_replay_without_bundle_root_is_rejected() -> None:
     """bundle なしの `--replay` を exit 0 で受理しない（手順 7 の偽成功を防ぐ）。"""
     with pytest.raises(SystemExit) as excinfo:
         v.main(["--replay"])
+    assert excinfo.value.code == 2
+
+
+def test_cli_replay_output_root_without_replay_is_rejected(tmp_path: Path) -> None:
+    """比較先だけの指定を replay 実行済みとして受理しない。"""
+    with pytest.raises(SystemExit) as excinfo:
+        v.main(["--replay-output-root", str(tmp_path / "out")])
     assert excinfo.value.code == 2
 
 

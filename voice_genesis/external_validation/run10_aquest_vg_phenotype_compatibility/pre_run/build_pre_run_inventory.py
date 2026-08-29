@@ -136,6 +136,7 @@ def _repo_root() -> Path:
 def inventory_af01(
     bundle_root: Optional[Path],
     run_replay: bool = False,
+    replay_output_root: Optional[Path] = None,
 ) -> List[InventoryItem]:
     """AF01 v1.0 関連項目（§29 手順 6 の第 1 段を含む）。"""
     items: List[InventoryItem] = []
@@ -234,7 +235,12 @@ def inventory_af01(
             )
         )
     else:
-        replay_report = verify_deterministic_replay(bundle_root)
+        replay_kwargs = (
+            {"replay_output_root": replay_output_root}
+            if replay_output_root is not None
+            else {}
+        )
+        replay_report = verify_deterministic_replay(bundle_root, **replay_kwargs)
         items.append(
             InventoryItem(
                 item_id="af01_deterministic_replay",
@@ -678,6 +684,7 @@ def build_inventory(
     aquest_voicebank_manifest_path: Optional[Path] = None,
     repo: Optional[Path] = None,
     af01_replay: bool = False,
+    af01_replay_output_root: Optional[Path] = None,
     evolution_theory_path: Optional[Path] = None,
     contract_path: Optional[Path] = None,
     design_doc_path: Optional[Path] = None,
@@ -685,7 +692,11 @@ def build_inventory(
     """R10-G2 inventory 文書を組み立てる。"""
     root = repo if repo is not None else _repo_root()
     items = (
-        inventory_af01(af01_bundle_root, run_replay=af01_replay)
+        inventory_af01(
+            af01_bundle_root,
+            run_replay=af01_replay,
+            replay_output_root=af01_replay_output_root,
+        )
         + inventory_aquest(
             aquest_voicebank_root, aquest_voicebank_manifest_path, contract_path
         )
@@ -715,6 +726,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--af01-replay",
         action="store_true",
         help="§29 手順 7 の決定論的 payload replay を実行する（--af01-bundle-root 必須）。",
+    )
+    parser.add_argument(
+        "--af01-replay-output-root",
+        default=None,
+        help=(
+            "凍結 generator が cwd 外へ書く場合の再生成 payload root（絶対パス）。"
+            "--af01-replay と同時に指定する。"
+        ),
     )
     parser.add_argument(
         "--aquest-voicebank-root",
@@ -755,6 +774,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.af01_replay and args.af01_bundle_root is None:
         parser.error("--af01-replay には --af01-bundle-root が必要")
+    if args.af01_replay_output_root is not None and not args.af01_replay:
+        parser.error("--af01-replay-output-root は --af01-replay と同時に指定する")
     inventory = build_inventory(
         af01_bundle_root=Path(args.af01_bundle_root) if args.af01_bundle_root else None,
         aquest_voicebank_root=(
@@ -766,6 +787,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             else None
         ),
         af01_replay=args.af01_replay,
+        af01_replay_output_root=(
+            Path(args.af01_replay_output_root) if args.af01_replay_output_root else None
+        ),
         evolution_theory_path=(
             Path(args.evolution_theory_path) if args.evolution_theory_path else None
         ),

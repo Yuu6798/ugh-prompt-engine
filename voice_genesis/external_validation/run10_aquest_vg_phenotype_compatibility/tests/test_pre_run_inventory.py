@@ -359,6 +359,36 @@ def test_replay_pass_clears_the_item(tmp_path: Path, monkeypatch) -> None:
     assert items["af01_deterministic_replay"]["blocking"] is False
 
 
+def test_replay_output_root_is_forwarded_to_the_verifier(tmp_path: Path, monkeypatch) -> None:
+    """canonical generator の明示出力先を inventory 経路で落とさない。"""
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    rebuilt = tmp_path / "canonical-output"
+    seen = []
+    monkeypatch.setattr(
+        inv,
+        "verify_bundle",
+        lambda root, ledger_path=None: _fake_report("PASS", {}),
+    )
+
+    def fake_replay(root, **kwargs):
+        seen.append(kwargs)
+        return _fake_report("PASS", {"deterministic_payload_replay": "PASS"})
+
+    monkeypatch.setattr(inv, "verify_deterministic_replay", fake_replay)
+
+    items = _items(
+        inv.build_inventory(
+            af01_bundle_root=bundle,
+            af01_replay=True,
+            af01_replay_output_root=rebuilt,
+        )
+    )
+
+    assert seen == [{"replay_output_root": rebuilt}]
+    assert items["af01_deterministic_replay"]["state"] == inv.PRESENT
+
+
 # --- 第 12 巡: A0 presence は §7.1 の必須 3 点を要求する -----------------
 
 

@@ -384,12 +384,15 @@ def verify_deterministic_replay(
     bundle_root: Path | str,
     python_executable: Optional[str] = None,
     timeout_s: int = 1800,
+    replay_output_root: Path | str | None = None,
 ) -> Af01VerificationReport:
     """同梱 generator を再実行し、再生成 payload の台帳が凍結台帳と一致するか（§29 手順 7）。
 
     generator は standalone（VoiceGenesis / AQUEST を import しない — §7.3）で
     あるため、一時ディレクトリで実行して出力だけを比較する。generator が
-    出力先引数を受け付けない場合は cwd 出力とみなす。
+    出力先引数を受け付けない場合は既定で cwd 出力とみなす。凍結済み generator が
+    絶対出力先を内包する場合は ``replay_output_root`` を明示する。明示先は stale な
+    既存 payload を再生成結果と取り違えないよう、実行前に存在してはならない。
     """
     root = Path(bundle_root)
     generator = root / "generator_AF01_SF1.py"
@@ -453,6 +456,21 @@ def verify_deterministic_replay(
     with tempfile.TemporaryDirectory(prefix="af01_replay_") as tmp:
         workdir = Path(tmp) / "out"
         workdir.mkdir()
+        rebuilt_root = workdir
+        if replay_output_root is not None:
+            rebuilt_root = Path(replay_output_root)
+            if not rebuilt_root.is_absolute():
+                return Af01VerificationReport(
+                    verdict=VERDICT_UNAVAILABLE,
+                    checks={"replay_output_root_absolute": "FAIL"},
+                    mismatches=[f"replay_output_root は絶対パス必須: {rebuilt_root}"],
+                )
+            if rebuilt_root.exists():
+                return Af01VerificationReport(
+                    verdict=VERDICT_UNAVAILABLE,
+                    checks={"replay_output_root_clean": "FAIL"},
+                    mismatches=[f"replay_output_root が実行前から存在する: {rebuilt_root}"],
+                )
         # 認証済み buffer を専用ディレクトリへ書き出し、**その複製を実行する**。
         # 実行対象を bundle 側のパスから切り離すことで、hash した bytes と
         # 実行された bytes の同一性を構成的に保証する。
@@ -488,10 +506,10 @@ def verify_deterministic_replay(
             )
 
         rebuilt: Dict[str, str] = {}
-        for produced in sorted(workdir.rglob("*")):
+        for produced in sorted(rebuilt_root.rglob("*")):
             if not produced.is_file():
                 continue
-            relative = str(produced.relative_to(workdir))
+            relative = str(produced.relative_to(rebuilt_root))
             if relative in LEDGER_EXCLUDED_NAMES:
                 continue
             rebuilt[relative] = compute_file_sha256(produced)
@@ -550,6 +568,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="§29 手順 7 の決定論的 payload replay も実行する（--bundle-root 必須）。",
     )
+    parser.add_argument(
+        "--replay-output-root",
+        default=None,
+        help=(
+            "凍結 generator が cwd 外へ書く場合の再生成 payload root（絶対パス）。"
+            "実行前から存在する場合は stale 混入防止のため拒否する。"
+        ),
+    )
     parser.add_argument("--json-out", default=None, help="検証レポートの書き出し先。")
     args = parser.parse_args(argv)
 
@@ -557,6 +583,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         # `--replay` を bundle なしで受理して exit 0 を返すと、自動化が
         # §29 手順 7 を「成功」として記録できてしまう（PR #330 Codex 第 2 巡 P2）。
         parser.error("--replay には --bundle-root が必要（bundle なしで手順 7 は成立しない）")
+    if args.replay_output_root is not None and not args.replay:
+        parser.error("--replay-output-root は --replay と同時に指定する")
 
     if args.bundle_root is None:
         report, entries = read_and_verify_ledger()
@@ -572,7 +600,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         # replay は bundle 実体照合の**後**に走らせる（手順 6 → 手順 7 の順序）。
         report = verify_bundle(args.bundle_root)
         if report.passed:
-            replay = verify_deterministic_replay(args.bundle_root)
+            replay = verify_deterministic_replay(
+                args.bundle_root,
+                replay_output_root=args.replay_output_root,
+            )
             report = Af01VerificationReport(
                 verdict=replay.verdict,
                 checks={**report.checks, **replay.checks},
