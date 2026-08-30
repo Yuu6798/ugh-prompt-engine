@@ -60,6 +60,11 @@ jobs:
           admission_tests.write_text(text.replace(marker, added + marker, 1), encoding='utf-8')
 
           text = pod_tests.read_text(encoding='utf-8')
+          old_expectation = '    assert any(row.startswith("libc6:") for row in rows)\n'
+          new_expectation = '    assert not any(row.startswith("libc6:") for row in rows)\n'
+          if text.count(old_expectation) != 1:
+              raise SystemExit(f'legacy libc expectation count={text.count(old_expectation)}')
+          text = text.replace(old_expectation, new_expectation, 1)
           marker = '''def test_entry_native_preflight_reads_existing_verified_bootstrap_checkout() -> None:\n'''
           added = '''def test_native_lock_keeps_os_base_outside_exact_install_boundary() -> None:\n    names = {\n        row.rpartition("=")[0].split(":", 1)[0]\n        for row in (RUN_DIR / "inputs" / "measurement_native_install_lock.txt").read_text(encoding="utf-8").splitlines()\n        if row.strip()\n    }\n    assert "libc6" not in names\n    assert "libc6-dev" not in names\n    assert "linux-libc-dev" not in names\n    assert "dpkg" not in names\n    assert "perl-base" not in names\n    assert {"gcc", "g++", "make", "binutils", "libffi-dev", "libsndfile1"} <= names\n\n\n'''
           if marker not in text:
