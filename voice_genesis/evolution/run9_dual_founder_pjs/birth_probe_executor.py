@@ -78,7 +78,7 @@ class _IssuedCandidateDiagnostic(dict):
     """Candidate-bound record minted only by the verified production executor path."""
 
 
-_ISSUED_CANDIDATE_DIAGNOSTIC_IDS: set[int] = set()
+_ISSUED_CANDIDATE_DIAGNOSTIC_IDS: Dict[int, str] = {}
 
 
 def canonical_json_bytes(value: Any) -> bytes:
@@ -938,12 +938,18 @@ def _issue_candidate_bound_diagnostic_record(
     *,
     renderer: Renderer,
 ) -> _IssuedCandidateDiagnostic:
-    """Mint the only candidate-bound diagnostic capability from consumed model bytes."""
+    """Build a candidate-bound diagnostic from consumed model bytes.
+
+    This helper does not register publication authority by itself; registration
+    occurs only after the fixed production diagnostic executor completes.
+    """
     observed_acoustic_sha256 = _renderer_consumed_acoustic_sha256(renderer)
     if observed_acoustic_sha256 != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
         raise BirthProbeError(
             "candidate-bound diagnostic consumed acoustic bytes do not match the preregistered 80a40f candidate"
         )
+    if measurement_result.get("expected_takes_per_founder") != 20:
+        raise BirthProbeError("candidate-bound diagnostic requires exactly 20 takes per founder")
     payload = _build_diagnostic_record_payload(
         measurement_result,
         schema=_NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA,
@@ -953,9 +959,7 @@ def _issue_candidate_bound_diagnostic_record(
         candidate_bytes_bound_to_consumed_buffer=True,
         formal_refreeze_eligible=False,
     )
-    issued = _IssuedCandidateDiagnostic(payload)
-    _ISSUED_CANDIDATE_DIAGNOSTIC_IDS.add(id(issued))
-    return issued
+    return _IssuedCandidateDiagnostic(payload)
 
 
 def execute_non_adjudicative_diagnostic(
@@ -982,6 +986,14 @@ def execute_non_adjudicative_diagnostic(
 
     production_renderer = type(renderer) is GateSynthRenderer
     if production_renderer:
+        if expected_takes != 20:
+            raise BirthProbeError(
+                "production candidate diagnostic requires the fixed 20 takes per founder"
+            )
+        if extractor is not extract_identity_feature:
+            raise BirthProbeError(
+                "production candidate diagnostic requires the pinned identity feature extractor"
+            )
         observed_acoustic = _renderer_consumed_acoustic_sha256(renderer)
         if observed_acoustic != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
             raise BirthProbeError(
@@ -1016,6 +1028,7 @@ def execute_non_adjudicative_diagnostic(
             observations,
         )
     diagnostic = _issue_candidate_bound_diagnostic_record(measured, renderer=renderer)
+    _ISSUED_CANDIDATE_DIAGNOSTIC_IDS[id(diagnostic)] = diagnostic["diagnostic_record_sha256"]
     return diagnostic, observations
 
 
@@ -1325,13 +1338,13 @@ def publish_non_adjudicative_diagnostic_bundle(
     """Atomically publish quarantined diagnostics; bound capability is executor-issued only."""
     schema = diagnostic.get("schema")
     if schema == _NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA:
-        if (
-            type(diagnostic) is not _IssuedCandidateDiagnostic
-            or id(diagnostic) not in _ISSUED_CANDIDATE_DIAGNOSTIC_IDS
-        ):
+        registered_seal = _ISSUED_CANDIDATE_DIAGNOSTIC_IDS.get(id(diagnostic))
+        if type(diagnostic) is not _IssuedCandidateDiagnostic or registered_seal is None:
             raise BirthProbeError(
                 "candidate-bound diagnostic was not issued by the verified production executor"
             )
+        if diagnostic.get("diagnostic_record_sha256") != registered_seal:
+            raise BirthProbeError("candidate-bound diagnostic changed after verified production issuance")
         if diagnostic.get("candidate_acoustic_onnx_sha256") != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
             raise BirthProbeError("diagnostic record acoustic candidate is not preregistered")
         if diagnostic.get("declared_candidate_acoustic_onnx_sha256") is not None:
@@ -1451,7 +1464,7 @@ def publish_non_adjudicative_diagnostic_bundle(
         )
         os.replace(staging, output_dir)
         if schema == _NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA:
-            _ISSUED_CANDIDATE_DIAGNOSTIC_IDS.discard(id(diagnostic))
+            _ISSUED_CANDIDATE_DIAGNOSTIC_IDS.pop(id(diagnostic), None)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
