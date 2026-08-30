@@ -231,6 +231,10 @@ def _request_json(
             raw = response.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
+        if method == "POST" and 500 <= exc.code <= 599:
+            raise AmbiguousLaunchError(
+                f"RunPod {method} server error {exc.code} after request initiation: {detail}"
+            ) from exc
         raise RuntimeError(f"RunPod API {exc.code}: {detail}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise AmbiguousLaunchError(

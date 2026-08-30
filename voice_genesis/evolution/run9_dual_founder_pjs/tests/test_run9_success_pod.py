@@ -255,6 +255,53 @@ def test_launch_reconciles_ambiguous_post_transport_failure(
     assert "reconcile in the RunPod console immediately" in captured.err
 
 
+def test_request_json_classifies_http_5xx_as_ambiguous_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ErrorBody:
+        def read(self) -> bytes:
+            return b"temporary server failure"
+
+    def server_error(*args: Any, **kwargs: Any) -> Any:
+        raise runner.urllib.error.HTTPError(
+            runner.CREATE_POD_URL,
+            503,
+            "Service Unavailable",
+            hdrs=None,
+            fp=ErrorBody(),
+        )
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", server_error)
+    with pytest.raises(runner.AmbiguousLaunchError, match="server error 503"):
+        runner._request_json(
+            "POST", runner.CREATE_POD_URL, api_key="not-printed", payload={"x": 1}
+        )
+
+
+def test_request_json_keeps_http_4xx_as_definite_api_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ErrorBody:
+        def read(self) -> bytes:
+            return b"bad request"
+
+    def client_error(*args: Any, **kwargs: Any) -> Any:
+        raise runner.urllib.error.HTTPError(
+            runner.CREATE_POD_URL,
+            400,
+            "Bad Request",
+            hdrs=None,
+            fp=ErrorBody(),
+        )
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", client_error)
+    with pytest.raises(RuntimeError, match="RunPod API 400") as exc_info:
+        runner._request_json(
+            "POST", runner.CREATE_POD_URL, api_key="not-printed", payload={"x": 1}
+        )
+    assert type(exc_info.value) is RuntimeError
+
+
 def test_request_json_classifies_timeout_as_ambiguous_post(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
