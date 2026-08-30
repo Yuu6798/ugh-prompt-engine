@@ -94,9 +94,19 @@ def platform_machine() -> str:
 
 
 def self_check_filter_installed() -> None:
-    """フィルタが実際に効いていることを検証する（偽陽性防止に AF_UNIX 成功も確認）。"""
-    _expect_af_blocked(socket.AF_INET, "AF_INET")
-    _expect_af_blocked(socket.AF_INET6, "AF_INET6")
+    """フィルタが実際に効いていることを検証する（偽陽性防止に AF_UNIX 成功も確認）。
+
+    このフィルタはドメイン（arg0）単位で拒否するため、同一ドメインの
+    ソケット種別は SOCK_STREAM/SOCK_DGRAM を問わずすべて拒否されるはず。
+    SOCK_DGRAM だけを検査すると、同一ファミリの SOCK_STREAM (TCP) を許す
+    ホストポリシー下で偽陽性の自己検査通過を招く。両方の種別を検査する。
+    """
+    for family, label in ((socket.AF_INET, "AF_INET"), (socket.AF_INET6, "AF_INET6")):
+        for kind, kind_label in (
+            (socket.SOCK_STREAM, "SOCK_STREAM"),
+            (socket.SOCK_DGRAM, "SOCK_DGRAM"),
+        ):
+            _expect_af_blocked(family, kind, f"{label}/{kind_label}")
     try:
         unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     except OSError as exc:
@@ -104,9 +114,9 @@ def self_check_filter_installed() -> None:
     unix_socket.close()
 
 
-def _expect_af_blocked(family: socket.AddressFamily, label: str) -> None:
+def _expect_af_blocked(family: socket.AddressFamily, kind: socket.SocketKind, label: str) -> None:
     try:
-        blocked_socket = socket.socket(family, socket.SOCK_DGRAM)
+        blocked_socket = socket.socket(family, kind)
     except OSError as exc:
         if exc.errno != EPERM:
             raise SeccompInstallError(

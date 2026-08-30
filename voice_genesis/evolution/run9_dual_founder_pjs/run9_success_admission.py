@@ -334,9 +334,20 @@ def _verify_network_isolation_netns() -> None:
 
 
 def _verify_network_isolation_seccomp() -> None:
-    """Empirically confirm the seccomp filter blocks AF_INET/AF_INET6 socket creation."""
-    _expect_socket_blocked_with_eperm(socket.AF_INET, "AF_INET")
-    _expect_socket_blocked_with_eperm(socket.AF_INET6, "AF_INET6")
+    """Empirically confirm the seccomp filter blocks AF_INET/AF_INET6 socket creation.
+
+    Our BPF filter blocks by domain (arg0), so it blocks every socket type in
+    that domain, not just SOCK_DGRAM. Probing only SOCK_DGRAM would pass a
+    host policy that blocks datagram sockets but still permits stream (TCP)
+    sockets in the same family -- a false-success path. Probe both
+    SOCK_STREAM and SOCK_DGRAM for both inet families.
+    """
+    for family, label in ((socket.AF_INET, "AF_INET"), (socket.AF_INET6, "AF_INET6")):
+        for kind, kind_label in (
+            (socket.SOCK_STREAM, "SOCK_STREAM"),
+            (socket.SOCK_DGRAM, "SOCK_DGRAM"),
+        ):
+            _expect_socket_blocked_with_eperm(family, kind, f"{label}/{kind_label}")
     try:
         unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     except OSError as exc:
@@ -344,9 +355,11 @@ def _verify_network_isolation_seccomp() -> None:
     unix_socket.close()
 
 
-def _expect_socket_blocked_with_eperm(family: socket.AddressFamily, label: str) -> None:
+def _expect_socket_blocked_with_eperm(
+    family: socket.AddressFamily, kind: socket.SocketKind, label: str
+) -> None:
     try:
-        blocked_socket = socket.socket(family, socket.SOCK_DGRAM)
+        blocked_socket = socket.socket(family, kind)
     except OSError as exc:
         if exc.errno != errno.EPERM:
             raise bp.BirthProbeError(

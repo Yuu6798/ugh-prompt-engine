@@ -220,10 +220,19 @@ class _FakeUnixSocket:
         self.closed = True
 
 
-def _seccomp_blocking_socket_factory(*, blocked_families: set[int]) -> Any:
+_ALL_INET_PAIRS = frozenset(
+    {
+        (admission.socket.AF_INET, admission.socket.SOCK_STREAM),
+        (admission.socket.AF_INET, admission.socket.SOCK_DGRAM),
+        (admission.socket.AF_INET6, admission.socket.SOCK_STREAM),
+        (admission.socket.AF_INET6, admission.socket.SOCK_DGRAM),
+    }
+)
+
+
+def _seccomp_blocking_socket_factory(*, blocked_pairs: set[tuple[int, int]]) -> Any:
     def factory(family: int, kind: int) -> Any:
-        del kind
-        if family in blocked_families:
+        if (family, kind) in blocked_pairs:
             raise OSError(admission.errno.EPERM, "Operation not permitted")
         return _FakeUnixSocket()
 
@@ -236,9 +245,7 @@ def test_verify_network_isolation_seccomp_accepts_blocked_inet(
     monkeypatch.setattr(
         admission.socket,
         "socket",
-        _seccomp_blocking_socket_factory(
-            blocked_families={admission.socket.AF_INET, admission.socket.AF_INET6}
-        ),
+        _seccomp_blocking_socket_factory(blocked_pairs=set(_ALL_INET_PAIRS)),
     )
     admission._verify_network_isolation("seccomp")  # noqa: SLF001
 
@@ -246,24 +253,48 @@ def test_verify_network_isolation_seccomp_accepts_blocked_inet(
 def test_verify_network_isolation_seccomp_rejects_unblocked_inet(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    blocked = {
+        pair
+        for pair in _ALL_INET_PAIRS
+        if pair[0] != admission.socket.AF_INET
+    }
     monkeypatch.setattr(
         admission.socket,
         "socket",
-        _seccomp_blocking_socket_factory(blocked_families={admission.socket.AF_INET6}),
+        _seccomp_blocking_socket_factory(blocked_pairs=blocked),
     )
-    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET sockets"):
+    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET/SOCK_STREAM sockets"):
         admission._verify_network_isolation("seccomp")  # noqa: SLF001
 
 
 def test_verify_network_isolation_seccomp_rejects_unblocked_inet6(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    blocked = {
+        pair
+        for pair in _ALL_INET_PAIRS
+        if pair[0] != admission.socket.AF_INET6
+    }
     monkeypatch.setattr(
         admission.socket,
         "socket",
-        _seccomp_blocking_socket_factory(blocked_families={admission.socket.AF_INET}),
+        _seccomp_blocking_socket_factory(blocked_pairs=blocked),
     )
-    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET6 sockets"):
+    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET6/SOCK_STREAM sockets"):
+        admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_verify_network_isolation_seccomp_rejects_dgram_only_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for the P2 false-success gap: SOCK_DGRAM blocked, SOCK_STREAM (TCP) open."""
+    blocked = {pair for pair in _ALL_INET_PAIRS if pair[1] == admission.socket.SOCK_DGRAM}
+    monkeypatch.setattr(
+        admission.socket,
+        "socket",
+        _seccomp_blocking_socket_factory(blocked_pairs=blocked),
+    )
+    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET/SOCK_STREAM sockets"):
         admission._verify_network_isolation("seccomp")  # noqa: SLF001
 
 
@@ -271,13 +302,14 @@ def test_verify_network_isolation_seccomp_rejects_wrong_errno(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def factory(family: int, kind: int) -> Any:
-        del kind
-        if family == admission.socket.AF_INET:
+        if family == admission.socket.AF_INET and kind == admission.socket.SOCK_STREAM:
             raise OSError(admission.errno.EACCES, "Permission denied")
+        if (family, kind) in _ALL_INET_PAIRS:
+            raise OSError(admission.errno.EPERM, "Operation not permitted")
         return _FakeUnixSocket()
 
     monkeypatch.setattr(admission.socket, "socket", factory)
-    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET sockets"):
+    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET/SOCK_STREAM sockets"):
         admission._verify_network_isolation("seccomp")  # noqa: SLF001
 
 
@@ -285,10 +317,11 @@ def test_verify_network_isolation_seccomp_rejects_broken_unix_baseline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def factory(family: int, kind: int) -> Any:
-        del kind
         if family == admission.socket.AF_UNIX:
             raise OSError("unix sockets unavailable")
-        raise OSError(admission.errno.EPERM, "Operation not permitted")
+        if (family, kind) in _ALL_INET_PAIRS:
+            raise OSError(admission.errno.EPERM, "Operation not permitted")
+        return _FakeUnixSocket()
 
     monkeypatch.setattr(admission.socket, "socket", factory)
     with pytest.raises(bp.BirthProbeError, match="seccomp verification socket baseline failed"):
