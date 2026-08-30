@@ -30,6 +30,12 @@ _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR.parents[2]
 _POLICY_PATH = _THIS_DIR / "inputs" / "success_only_admission_policy.json"
 _MEASUREMENT_LOCK_PATH = _THIS_DIR / "inputs" / "measurement_environment_lock.txt"
+_MEASUREMENT_NATIVE_INSTALL_LOCK_PATH = (
+    _THIS_DIR / "inputs" / "measurement_native_install_lock.txt"
+)
+_MEASUREMENT_NATIVE_MANIFEST_PATH = (
+    _THIS_DIR / "inputs" / "measurement_native_manifest.txt"
+)
 _POLICY_SCHEMA = "run9-success-only-admission-policy/1.0"
 _ADMISSION_SCHEMA = "run9-successful-artifact-admission/1.0"
 _MANIFEST_SCHEMA = "run9-successful-artifact-manifest/1.0"
@@ -235,6 +241,8 @@ def _snapshot_repo_inputs() -> Dict[str, str]:
     paths = {
         "success_only_admission_policy_sha256": _POLICY_PATH,
         "measurement_environment_lock_sha256": _MEASUREMENT_LOCK_PATH,
+        "measurement_native_install_lock_sha256": _MEASUREMENT_NATIVE_INSTALL_LOCK_PATH,
+        "measurement_native_manifest_sha256": _MEASUREMENT_NATIVE_MANIFEST_PATH,
         "success_admission_executor_sha256": Path(__file__).resolve(),
         "birth_probe_executor_sha256": _THIS_DIR / "birth_probe_executor.py",
         "run9_contract_sha256": _THIS_DIR / "RUN9_CONTRACT.yaml",
@@ -319,6 +327,55 @@ def _disable_ort_telemetry() -> None:
         disable()
     except (ImportError, AttributeError, RuntimeError) as exc:
         raise bp.BirthProbeError("ONNX Runtime telemetry could not be disabled") from exc
+
+
+def _validate_native_runtime() -> Dict[str, Any]:
+    """Fail closed unless the complete installed dpkg manifest matches the committed one."""
+    try:
+        expected_bytes = _MEASUREMENT_NATIVE_MANIFEST_PATH.read_bytes()
+        expected_rows = sorted(
+            line.strip()
+            for line in expected_bytes.decode("utf-8").splitlines()
+            if line.strip()
+        )
+        install_bytes = _MEASUREMENT_NATIVE_INSTALL_LOCK_PATH.read_bytes()
+        install_rows = sorted(
+            line.strip()
+            for line in install_bytes.decode("utf-8").splitlines()
+            if line.strip()
+        )
+        actual_rows = sorted(
+            line.strip()
+            for line in subprocess.run(
+                ["dpkg-query", "-W", "-f=${binary:Package}=${Version}\n"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+            if line.strip()
+        )
+    except (OSError, UnicodeDecodeError, subprocess.CalledProcessError) as exc:
+        raise bp.BirthProbeError("native measurement dependency closure could not be verified") from exc
+    if not expected_rows or not install_rows:
+        raise bp.BirthProbeError("native measurement dependency lock is empty")
+    for row in expected_rows + install_rows:
+        name, sep, version = row.partition("=")
+        if not sep or not name or not version:
+            raise bp.BirthProbeError(f"native measurement lock row is invalid: {row!r}")
+    if not set(install_rows).issubset(set(expected_rows)):
+        raise bp.BirthProbeError("native install lock is not a subset of the final native manifest")
+    if actual_rows != expected_rows:
+        raise bp.BirthProbeError(
+            "native measurement dependency closure mismatch: "
+            f"extra={sorted(set(actual_rows)-set(expected_rows))!r}, "
+            f"missing={sorted(set(expected_rows)-set(actual_rows))!r}"
+        )
+    return {
+        "manifest_sha256": _sha256_bytes(expected_bytes),
+        "package_count": len(expected_rows),
+        "install_lock_sha256": _sha256_bytes(install_bytes),
+        "mutable_package_count": len(install_rows),
+    }
 
 
 def _validate_runtime(policy: Mapping[str, Any]) -> Dict[str, str]:
@@ -494,8 +551,9 @@ def execute_success_only_admission(
     policy = load_admission_policy()
     _verify_source_commit(source_commit)
     _verify_network_isolation()
-    _disable_ort_telemetry()
+    native_runtime = _validate_native_runtime()
     runtime_versions = _validate_runtime(policy)
+    _disable_ort_telemetry()
     bp._assert_helper_modules_not_preloaded()  # noqa: SLF001
     repo_provenance = _snapshot_repo_inputs()
     probe, speaker_map, backbone, practice_split, expected_takes = _load_measurement_inputs(
@@ -529,6 +587,7 @@ def execute_success_only_admission(
     measurement["measurement_provenance"] = {
         **repo_provenance,
         "runtime_dependency_versions": runtime_versions,
+        "native_runtime": native_runtime,
         "practice_expanded_corpus_identity_sha256": pjs_record.corpus_sha256,
         "pjs_reference_excluded_relative_paths": list(pjs_record.excluded_relative_paths),
         "candidate_identity_exposed_to_evaluator": False,

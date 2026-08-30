@@ -50,6 +50,7 @@ def test_checked_in_policy_passes_runner_preflight_shape_check() -> None:
 def test_entry_watchdog_reuses_confirmed_retrying_self_stop() -> None:
     text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
     watchdog = text[text.index('(\n  sleep "$WALL_CLOCK_SECONDS"'): text.index('WATCHDOG_PID=$!')]
+    assert watchdog.index("force_restore_network_for_stop") < watchdog.index("self_stop || true")
     assert "self_stop || true" in watchdog
     assert 'runpodctl stop pod "$RUNPOD_POD_ID" || true' not in watchdog
     assert "for attempt in 1 2 3 4 5" in text
@@ -65,6 +66,26 @@ def test_entry_measurement_environment_uses_committed_full_lock() -> None:
     rows = [line for line in lock.read_text(encoding="utf-8").splitlines() if line]
     assert len(rows) > 7
     assert all(row.count("==") == 1 for row in rows)
+
+
+def test_entry_uses_committed_exact_native_closure() -> None:
+    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
+    preflight = text[text.index('stage "preflight-system"'): text.index('stage "python-3.11.15"')]
+    assert "measurement_native_install_lock.txt" in preflight
+    assert "measurement_native_manifest.txt" in preflight
+    assert "--allow-downgrades" in preflight
+    assert "dpkg-query -W" in preflight
+    assert "cmp -s" in preflight
+    install_rows = [
+        line for line in (RUN_DIR / "inputs" / "measurement_native_install_lock.txt").read_text(encoding="utf-8").splitlines() if line
+    ]
+    manifest_rows = [
+        line for line in (RUN_DIR / "inputs" / "measurement_native_manifest.txt").read_text(encoding="utf-8").splitlines() if line
+    ]
+    assert install_rows
+    assert len(manifest_rows) > len(install_rows)
+    assert all("=" in row for row in install_rows + manifest_rows)
+    assert set(install_rows).issubset(set(manifest_rows))
 
 
 def test_entry_enables_watchdog_before_the_first_download() -> None:
@@ -190,6 +211,67 @@ def test_launch_rejects_success_response_without_pod_id(
     captured = capsys.readouterr()
     assert '"pod_id": null' in captured.out
     assert "billable Pod may exist" in captured.err
+
+
+def test_launch_reconciles_ambiguous_post_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    payload = runner.build_launch_payload(COMMIT)
+    monkeypatch.setenv("RUNPOD_API_KEY", "not-printed")
+    monkeypatch.setattr(
+        runner,
+        "verify_prelaunch",
+        lambda: {
+            "source_commit": COMMIT,
+            "payload_sha256": "b" * 64,
+            "payload": payload,
+        },
+    )
+    monkeypatch.setattr(
+        runner,
+        "_request_json",
+        lambda *args, **kwargs: (_ for _ in ()).throw(runner.AmbiguousLaunchError("timeout")),
+    )
+    assert runner.main(["launch", "--confirm-launch", runner.CONFIRMATION]) == 2
+    captured = capsys.readouterr()
+    assert '"launch_status": "AMBIGUOUS_POST"' in captured.out
+    assert '"pod_id": null' in captured.out
+    assert "billable Pod may exist" in captured.err
+    assert "reconcile in the RunPod console immediately" in captured.err
+
+
+def test_request_json_classifies_timeout_as_ambiguous_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def timeout(*args: Any, **kwargs: Any) -> Any:
+        raise TimeoutError("response lost")
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", timeout)
+    with pytest.raises(runner.AmbiguousLaunchError, match="transport failed"):
+        runner._request_json(
+            "POST", runner.CREATE_POD_URL, api_key="not-printed", payload={"x": 1}
+        )
+
+
+def test_request_json_classifies_malformed_json_as_ambiguous_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"{not-json"
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", lambda *args, **kwargs: Response())
+    with pytest.raises(runner.AmbiguousLaunchError, match="could not be decoded as JSON"):
+        runner._request_json(
+            "POST", runner.CREATE_POD_URL, api_key="not-printed", payload={"x": 1}
+        )
 
 
 def test_preflight_rejects_dirty_tree_before_remote_check(

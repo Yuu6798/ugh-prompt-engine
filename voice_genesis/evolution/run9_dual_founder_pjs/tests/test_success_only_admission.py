@@ -114,6 +114,42 @@ def test_measurement_lock_is_bound_into_repo_provenance() -> None:
     assert snapshot["measurement_environment_lock_sha256"] == admission._sha256_bytes(lock_bytes)  # noqa: SLF001
 
 
+def test_native_measurement_locks_are_bound_into_repo_provenance() -> None:
+    snapshot = admission._snapshot_repo_inputs()  # noqa: SLF001
+    for key, path in (
+        ("measurement_native_install_lock_sha256", admission._MEASUREMENT_NATIVE_INSTALL_LOCK_PATH),  # noqa: SLF001
+        ("measurement_native_manifest_sha256", admission._MEASUREMENT_NATIVE_MANIFEST_PATH),  # noqa: SLF001
+    ):
+        assert key in snapshot
+        assert snapshot[key] == admission._sha256_bytes(path.read_bytes())  # noqa: SLF001
+
+
+def test_native_runtime_validator_requires_exact_committed_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = admission._MEASUREMENT_NATIVE_MANIFEST_PATH.read_text(encoding="utf-8")  # noqa: SLF001
+    completed = admission.subprocess.CompletedProcess(
+        args=["dpkg-query"], returncode=0, stdout=expected, stderr=""
+    )
+    monkeypatch.setattr(admission.subprocess, "run", lambda *args, **kwargs: completed)
+    observed = admission._validate_native_runtime()  # noqa: SLF001
+    assert observed["manifest_sha256"] == admission._sha256_bytes(  # noqa: SLF001
+        admission._MEASUREMENT_NATIVE_MANIFEST_PATH.read_bytes()  # noqa: SLF001
+    )
+    assert observed["package_count"] > observed["mutable_package_count"] > 0
+
+
+def test_native_runtime_validator_rejects_manifest_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    completed = admission.subprocess.CompletedProcess(
+        args=["dpkg-query"], returncode=0, stdout="unexpected:amd64=1.0\n", stderr=""
+    )
+    monkeypatch.setattr(admission.subprocess, "run", lambda *args, **kwargs: completed)
+    with pytest.raises(bp.BirthProbeError, match="native measurement dependency closure mismatch"):
+        admission._validate_native_runtime()  # noqa: SLF001
+
+
 def test_production_cli_has_no_network_isolation_bypass() -> None:
     source = Path(admission.__file__).read_text(encoding="utf-8")
     assert "allow-test-network" not in source

@@ -50,6 +50,10 @@ class PreflightError(RuntimeError):
     """The local or remote source boundary is not launchable."""
 
 
+class AmbiguousLaunchError(RuntimeError):
+    """The RunPod create request may have produced a billable Pod without a handle."""
+
+
 def _git(*args: str, cwd: pathlib.Path = REPO_ROOT) -> str:
     completed = subprocess.run(
         ["git", *args],
@@ -224,12 +228,22 @@ def _request_json(
     )
     try:
         with urllib.request.urlopen(request, timeout=90) as response:
-            result = json.loads(response.read().decode("utf-8"))
+            raw = response.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"RunPod API {exc.code}: {detail}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise AmbiguousLaunchError(
+            f"RunPod {method} transport failed after request initiation: {type(exc).__name__}"
+        ) from exc
+    try:
+        result = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AmbiguousLaunchError(
+            f"RunPod {method} response was received but could not be decoded as JSON"
+        ) from exc
     if not isinstance(result, dict):
-        raise RuntimeError("RunPod API returned a non-object response")
+        raise AmbiguousLaunchError(f"RunPod {method} returned a non-object JSON response")
     return result
 
 
@@ -258,17 +272,34 @@ def _launch(args: argparse.Namespace) -> int:
     if not api_key:
         raise PreflightError("RUNPOD_API_KEY is not configured")
     report = verify_prelaunch()
-    response = _request_json(
-        "POST",
-        CREATE_POD_URL,
-        api_key=api_key,
-        payload=report["payload"],
-    )
+    try:
+        response = _request_json(
+            "POST",
+            CREATE_POD_URL,
+            api_key=api_key,
+            payload=report["payload"],
+        )
+    except AmbiguousLaunchError as exc:
+        _print_json(
+            {
+                "schema": "run9-success-pod-launch/1.0",
+                "source_commit": report["source_commit"],
+                "payload_sha256": report["payload_sha256"],
+                "launch_status": "AMBIGUOUS_POST",
+                "pod_id": None,
+                "pod": None,
+            }
+        )
+        raise RuntimeError(
+            "RunPod POST /pods outcome is ambiguous after request initiation; a billable Pod "
+            "may exist without a recorded stop handle — reconcile in the RunPod console immediately"
+        ) from exc
     pod_id = _extract_pod_id(response)
     launch_record = {
         "schema": "run9-success-pod-launch/1.0",
         "source_commit": report["source_commit"],
         "payload_sha256": report["payload_sha256"],
+        "launch_status": "CONFIRMED_RESPONSE" if pod_id is not None else "AMBIGUOUS_NO_POD_ID",
         "pod_id": pod_id,
         "pod": response,
     }

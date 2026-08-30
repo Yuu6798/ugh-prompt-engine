@@ -43,6 +43,14 @@ restore_network() {
   fi
 }
 
+force_restore_network_for_stop() {
+  # The watchdog subshell was forked before FIREWALL_ACTIVE changes, so it must
+  # not rely on that shell-local flag when recovering connectivity for runpodctl.
+  iptables -P OUTPUT ACCEPT 2>/dev/null || true
+  iptables -F OUTPUT 2>/dev/null || true
+  FIREWALL_ACTIVE="false"
+}
+
 self_stop() {
   if [ -z "${RUNPOD_POD_ID:-}" ]; then
     echo "| run9: RUNPOD_POD_ID is absent; self-stop skipped"
@@ -102,6 +110,7 @@ trap on_exit EXIT
 (
   sleep "$WALL_CLOCK_SECONDS"
   echo "| run9: watchdog reached ${WALL_CLOCK_SECONDS}s; forcing stop" >&2
+  force_restore_network_for_stop
   self_stop || true
 ) &
 WATCHDOG_PID=$!
@@ -214,11 +223,21 @@ PY
 }
 
 stage "preflight-system"
+readonly NATIVE_INSTALL_LOCK="$RUN_DIR/inputs/measurement_native_install_lock.txt"
+readonly NATIVE_MANIFEST="$RUN_DIR/inputs/measurement_native_manifest.txt"
+[ -s "$NATIVE_INSTALL_LOCK" ] || die "committed native install lock is missing"
+[ -s "$NATIVE_MANIFEST" ] || die "committed native manifest is missing"
+mapfile -t NATIVE_PACKAGES < "$NATIVE_INSTALL_LOCK"
+[ "${#NATIVE_PACKAGES[@]}" -gt 0 ] || die "native install lock is empty"
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-  build-essential ca-certificates curl git iptables libbz2-dev libffi-dev \
-  liblzma-dev libreadline-dev libsqlite3-dev libssl-dev libsndfile1 tk-dev \
-  unzip xz-utils zlib1g-dev
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+  --allow-downgrades "${NATIVE_PACKAGES[@]}"
+dpkg-query -W -f='${binary:Package}=${Version}\n' | LC_ALL=C sort \
+  > "$WORK/measurement_native_environment.actual"
+if ! cmp -s "$NATIVE_MANIFEST" "$WORK/measurement_native_environment.actual"; then
+  diff -u "$NATIVE_MANIFEST" "$WORK/measurement_native_environment.actual" >&2 || true
+  die "native measurement environment does not match committed manifest"
+fi
 
 stage "python-3.11.15"
 fetch_url "$PYTHON_TGZ_URL" "$WORK/Python-${PYTHON_VERSION}.tgz" \
