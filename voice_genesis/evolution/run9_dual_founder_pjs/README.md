@@ -2052,6 +2052,16 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   ファイル名/schemaを共有しない。このPRでは外部実資産がないため診断自体は
   未実行であり、rev 0.6 attempt・contract pin・科学結果は変更しない。
 
+  **2026-08-30 alternate diagnostic preflight**: PR #338 merge commit
+  `b3dfd19d3bd5d014bf90e4cff75f0f6fb17cb9fd` から外部資産を再取得し、
+  checkpoint/canon/vocoder/PJS・DiffSinger commit・export package 81件の
+  全数一致後に候補再生成を1回実行した。9成果物中8件は既存reexport
+  manifestとbyte一致したが、acoustic ONNXは期待candidate `80a40f...` では
+  なく `463d048...`（同一279,777,001 bytes）となったため、候補同一性
+  preconditionでfail-closed停止した。84-render診断は0件、診断record/bundle
+  は未発行。`463d...` は代替採用・repinせず、repeatabilityも主張しない。
+  詳細証跡は `RUN9_ALTERNATE_DIAGNOSTIC_PREFLIGHT_20260830.md`。
+
   **現在の再実行ブロッカー（2件、いずれか未解消の間は正式実測へ進まない）**:
 
   1. **`RUN9_CONTRACT.yaml#dependency_pins_sha` が `PENDING`**: 直接実行する
@@ -2062,7 +2072,10 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
      `80a40f...` 本体を含む閉じた外部asset集合で隔離診断を完了し、その後に
      separate design revision / reexport manifest / contract pin chain を
      レビュー付きで新設する必要がある。診断結果をrev 0.6正式証跡へ流用する
-     repin/fallbackは実装していない。
+     repin/fallbackは実装していない。2026-08-30 preflightでは凍結済みsource
+     assetと81依存lockを再現しても acoustic が `463d048...` となり、期待
+     `80a40f...` と不一致で停止した。したがって解除にはexact `80a40f...`
+     bytes/同バイト再現環境、または別candidateを選ぶ新しいUser裁定が必要。
 
 上記2ブロッカーとは別に残る machine-dependent な実装作業:
 

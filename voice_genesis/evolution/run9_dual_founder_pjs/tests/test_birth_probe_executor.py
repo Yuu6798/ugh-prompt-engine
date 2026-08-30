@@ -464,6 +464,9 @@ def test_non_adjudicative_executor_requires_renderer_bound_to_candidate_bytes() 
         def __call__(self, *args, **kwargs):
             raise AssertionError("render must not start before candidate-byte verification")
 
+        def verify_inputs_unchanged(self):
+            raise AssertionError("verification must not start before candidate-byte verification")
+
     pjs = bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0]))
     with pytest.raises(bp.BirthProbeError, match="not bound to the preregistered 80a40f"):
         bp.execute_non_adjudicative_diagnostic(
