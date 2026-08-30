@@ -37,7 +37,11 @@ def test_payload_is_cpu_pinned_non_interruptible_and_secret_free() -> None:
 
 def test_payload_bootstrap_fetches_exact_commit_and_stops_on_bootstrap_failure() -> None:
     command = runner.build_launch_payload(COMMIT)["dockerStartCmd"][0]
-    assert 'fetch --depth 1 origin "$RUN9_PIN_COMMIT"' in command
+    assert 'readonly BOOTSTRAP_NETWORK_TIMEOUT_SECONDS=1800' in command
+    assert 'timeout --foreground --signal=TERM --kill-after=30s' in command
+    assert 'bootstrap_network apt-get update' in command
+    assert 'bootstrap_network apt-get install -y --no-install-recommends' in command
+    assert 'bootstrap_network git -C /root/run9-bootstrap fetch --depth 1 origin "$RUN9_PIN_COMMIT"' in command
     assert 'actual="$(git -C /root/run9-bootstrap rev-parse HEAD)"' in command
     assert '[ "$actual" = "$RUN9_PIN_COMMIT" ]' in command
     assert 'runpodctl stop pod "$RUNPOD_POD_ID"' in command
@@ -380,6 +384,26 @@ def test_request_json_classifies_timeout_as_ambiguous_post(
 
     monkeypatch.setattr(runner.urllib.request, "urlopen", timeout)
     with pytest.raises(runner.AmbiguousLaunchError, match="transport failed"):
+        runner._request_json(
+            "POST", runner.CREATE_POD_URL, api_key="not-printed", payload={"x": 1}
+        )
+
+
+def test_request_json_classifies_truncated_2xx_body_as_ambiguous_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            raise runner.http.client.IncompleteRead(b'{"id": "partial', 30)
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", lambda *args, **kwargs: Response())
+    with pytest.raises(runner.AmbiguousLaunchError, match="HTTP response failed.*IncompleteRead"):
         runner._request_json(
             "POST", runner.CREATE_POD_URL, api_key="not-printed", payload={"x": 1}
         )

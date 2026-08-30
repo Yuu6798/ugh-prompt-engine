@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import pathlib
@@ -98,13 +99,18 @@ bootstrap_exit() {
   exit "$ec"
 }
 trap bootstrap_exit EXIT
+readonly BOOTSTRAP_NETWORK_TIMEOUT_SECONDS=1800
+bootstrap_network() {
+  timeout --foreground --signal=TERM --kill-after=30s \
+    "$BOOTSTRAP_NETWORK_TIMEOUT_SECONDS" "$@"
+}
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get install -y --no-install-recommends ca-certificates curl git python3
+bootstrap_network apt-get update
+bootstrap_network apt-get install -y --no-install-recommends ca-certificates curl git python3
 rm -rf /root/run9-bootstrap
 git init /root/run9-bootstrap
 git -C /root/run9-bootstrap remote add origin https://github.com/Yuu6798/ugh-prompt-engine.git
-git -C /root/run9-bootstrap fetch --depth 1 origin "$RUN9_PIN_COMMIT"
+bootstrap_network git -C /root/run9-bootstrap fetch --depth 1 origin "$RUN9_PIN_COMMIT"
 git -C /root/run9-bootstrap checkout --detach FETCH_HEAD
 actual="$(git -C /root/run9-bootstrap rev-parse HEAD)"
 [ "$actual" = "$RUN9_PIN_COMMIT" ]
@@ -230,12 +236,23 @@ def _request_json(
         with urllib.request.urlopen(request, timeout=90) as response:
             raw = response.read()
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except http.client.HTTPException:
+            detail = "<HTTP error body unreadable>"
         if method == "POST" and 500 <= exc.code <= 599:
             raise AmbiguousLaunchError(
                 f"RunPod {method} server error {exc.code} after request initiation: {detail}"
             ) from exc
         raise RuntimeError(f"RunPod API {exc.code}: {detail}") from exc
+    except http.client.HTTPException as exc:
+        if method == "POST":
+            raise AmbiguousLaunchError(
+                f"RunPod {method} HTTP response failed after request initiation: {type(exc).__name__}"
+            ) from exc
+        raise RuntimeError(
+            f"RunPod {method} HTTP response failed: {type(exc).__name__}"
+        ) from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise AmbiguousLaunchError(
             f"RunPod {method} transport failed after request initiation: {type(exc).__name__}"
