@@ -1,0 +1,150 @@
+name: temp-pr340-round13-native-boundary
+on:
+  push:
+    branches: [codex/run9-success-only-prepod]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/run9-success-only-prepod
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Derive implementation-bound native lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE='runpod/base:1.1.0-ubuntu2404@sha256:6a7ffc191ddee44bcede7b8508a76f67df690df7d58043edd6695ef63bffef23'
+          RUN_DIR='voice_genesis/evolution/run9_dual_founder_pjs'
+          docker pull "$IMAGE"
+          cat > /tmp/derive_native_boundary.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          ROOTS=(gcc g++ make binutils libffi-dev libsndfile1)
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends ca-certificates python3 "${ROOTS[@]}"
+          python3 - /repo/voice_genesis/evolution/run9_dual_founder_pjs/inputs/measurement_native_install_lock.txt "${ROOTS[@]}" <<'PY'
+          import re, subprocess, sys
+          from pathlib import Path
+
+          out = Path(sys.argv[1])
+          roots = sys.argv[2:]
+          forbidden = {
+              'build-essential',
+              'dpkg', 'dpkg-dev', 'libdpkg-perl',
+              'libc-bin', 'libc-dev-bin', 'libc6', 'libc6-dev',
+              'linux-libc-dev',
+              'perl-base', 'perl-modules-5.38', 'libperl5.38t64',
+          }
+          cmd = [
+              'apt-cache', 'depends', '--recurse', '--no-recommends', '--no-suggests',
+              '--no-conflicts', '--no-breaks', '--no-replaces', '--no-enhances', *roots,
+          ]
+          text = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+          names = set(roots)
+          pat = re.compile(r'^\s*(?:PreDepends|Depends):\s+([^\s]+)\s*$')
+          for line in text.splitlines():
+              match = pat.match(line)
+              if not match:
+                  continue
+              name = match.group(1)
+              if name.startswith('<') or name.endswith('>'):
+                  continue
+              base = name.split(':', 1)[0]
+              if base not in forbidden:
+                  names.add(name)
+          names = {name for name in names if name.split(':', 1)[0] not in forbidden}
+          rows = set()
+          for name in sorted(names):
+              completed = subprocess.run(
+                  ['dpkg-query', '-W', '-f=${binary:Package}=${Version}\n', name],
+                  capture_output=True, text=True,
+              )
+              if completed.returncode != 0:
+                  continue
+              for row in completed.stdout.splitlines():
+                  row = row.strip()
+                  if row and '=' in row:
+                      rows.add(row)
+          row_names = {row.rpartition('=')[0].split(':', 1)[0] for row in rows}
+          missing = [root for root in roots if root not in row_names]
+          if missing:
+              raise SystemExit(f'implementation lock missing required roots: {missing!r}')
+          leaked = sorted(row_names & forbidden)
+          if leaked:
+              raise SystemExit(f'OS-base packages leaked into implementation lock: {leaked!r}')
+          if not any(row.startswith('libgcc-s1:') for row in rows):
+              raise SystemExit('implementation lock missing libgcc runtime')
+          if not any(row.startswith('libstdc++6:') for row in rows):
+              raise SystemExit('implementation lock missing libstdc++ runtime')
+          out.write_text('\n'.join(sorted(rows)) + '\n', encoding='utf-8')
+          print(f'implementation native lock={len(rows)} packages')
+          PY
+          SH
+          chmod +x /tmp/derive_native_boundary.sh
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo" "$IMAGE" bash /tmp/derive_native_boundary.sh
+      - name: Apply boundary regression guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          run_dir = Path('voice_genesis/evolution/run9_dual_founder_pjs')
+          entry = run_dir / 'run9_success_pod_entry.sh'
+          admission_tests = run_dir / 'tests/test_success_only_admission.py'
+          pod_tests = run_dir / 'tests/test_run9_success_pod.py'
+
+          text = entry.read_text(encoding='utf-8')
+          old = '''DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \\
+  ca-certificates curl git iptables unzip xz-utils libssl-dev zlib1g-dev\n'''
+          new = '''DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \\
+  ca-certificates curl git iptables unzip xz-utils libssl-dev zlib1g-dev libc6-dev\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'bootstrap native boundary replacement count={text.count(old)}')
+          entry.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          text = admission_tests.read_text(encoding='utf-8')
+          marker = '''def test_native_runtime_validator_queries_only_committed_closure(\n'''
+          added = '''def test_native_measurement_lock_excludes_os_base_packages() -> None:\n    rows = [\n        line.strip()\n        for line in admission._MEASUREMENT_NATIVE_INSTALL_LOCK_PATH.read_text(encoding="utf-8").splitlines()\n        if line.strip()\n    ]  # noqa: SLF001\n    names = {row.rpartition("=")[0].split(":", 1)[0] for row in rows}\n    forbidden = {\n        "build-essential",\n        "dpkg", "dpkg-dev", "libdpkg-perl",\n        "libc-bin", "libc-dev-bin", "libc6", "libc6-dev",\n        "linux-libc-dev",\n        "perl-base", "perl-modules-5.38", "libperl5.38t64",\n    }\n    required = {"gcc", "g++", "make", "binutils", "libffi-dev", "libsndfile1"}\n    assert names.isdisjoint(forbidden)\n    assert required <= names\n\n\n'''
+          if marker not in text:
+              raise SystemExit('admission native validator marker not found')
+          admission_tests.write_text(text.replace(marker, added + marker, 1), encoding='utf-8')
+
+          text = pod_tests.read_text(encoding='utf-8')
+          marker = '''def test_entry_native_preflight_reads_existing_verified_bootstrap_checkout() -> None:\n'''
+          added = '''def test_entry_installs_os_base_headers_outside_exact_measurement_lock() -> None:\n    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")\n    preflight = text[text.index('stage "preflight-system"'):text.index('stage "python-3.11.15"')]\n    lock_names = {\n        row.rpartition("=")[0].split(":", 1)[0]\n        for row in (RUN_DIR / "inputs" / "measurement_native_install_lock.txt").read_text(encoding="utf-8").splitlines()\n        if row.strip()\n    }\n    assert "libc6-dev" in preflight\n    assert "libc6-dev" not in lock_names\n    assert "linux-libc-dev" not in lock_names\n    assert "dpkg" not in lock_names\n    assert "perl-base" not in lock_names\n\n\n'''
+          if marker not in text:
+              raise SystemExit('pod native preflight marker not found')
+          pod_tests.write_text(text.replace(marker, added + marker, 1), encoding='utf-8')
+          PY
+      - name: Validate round13 fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python -m compileall -q \
+            voice_genesis/evolution/run9_dual_founder_pjs/run9_success_admission.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_success_only_admission.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_run9_success_pod.py
+          bash -n voice_genesis/evolution/run9_dual_founder_pjs/run9_success_pod_entry.sh
+          git diff --check
+          pytest -q \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_success_only_admission.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_run9_success_pod.py
+      - name: Commit fix and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/temp_pr340_round13_native_boundary.yml
+          git config user.name 'Yuu6798'
+          git config user.email 'kkoo6798@gmail.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(run9): exclude OS base from native measurement lock'
+          git push origin HEAD:codex/run9-success-only-prepod
