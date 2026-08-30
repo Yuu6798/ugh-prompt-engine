@@ -1,10 +1,13 @@
 """Success-only registration and output-only evaluator boundary tests."""
 from __future__ import annotations
 
+import ast
 import inspect
 import json
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -175,6 +178,136 @@ def test_native_runtime_validator_rejects_consumed_closure_drift(
 def test_production_cli_has_no_network_isolation_bypass() -> None:
     source = Path(admission.__file__).read_text(encoding="utf-8")
     assert "allow-test-network" not in source
+
+
+def test_verify_network_isolation_rejects_unknown_mode() -> None:
+    with pytest.raises(bp.BirthProbeError, match="unknown network isolation mode"):
+        admission._verify_network_isolation("not-a-real-mode")  # noqa: SLF001
+
+
+def test_verify_network_isolation_netns_accepts_loopback_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(admission.os, "listdir", lambda path: ["lo"])
+    admission._verify_network_isolation("netns")  # noqa: SLF001
+    admission._verify_network_isolation("userns-netns")  # noqa: SLF001
+
+
+def test_verify_network_isolation_netns_rejects_extra_interfaces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(admission.os, "listdir", lambda path: ["lo", "eth0"])
+    with pytest.raises(bp.BirthProbeError, match="interface-less network namespace"):
+        admission._verify_network_isolation("netns")  # noqa: SLF001
+
+
+def test_verify_network_isolation_netns_wraps_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_oserror(path: str) -> list[str]:
+        raise OSError("no such directory")
+
+    monkeypatch.setattr(admission.os, "listdir", raise_oserror)
+    with pytest.raises(bp.BirthProbeError, match="could not be verified"):
+        admission._verify_network_isolation("netns")  # noqa: SLF001
+
+
+class _FakeUnixSocket:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _seccomp_blocking_socket_factory(*, blocked_families: set[int]) -> Any:
+    def factory(family: int, kind: int) -> Any:
+        del kind
+        if family in blocked_families:
+            raise OSError(admission.errno.EPERM, "Operation not permitted")
+        return _FakeUnixSocket()
+
+    return factory
+
+
+def test_verify_network_isolation_seccomp_accepts_blocked_inet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        admission.socket,
+        "socket",
+        _seccomp_blocking_socket_factory(
+            blocked_families={admission.socket.AF_INET, admission.socket.AF_INET6}
+        ),
+    )
+    admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_verify_network_isolation_seccomp_rejects_unblocked_inet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        admission.socket,
+        "socket",
+        _seccomp_blocking_socket_factory(blocked_families={admission.socket.AF_INET6}),
+    )
+    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET sockets"):
+        admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_verify_network_isolation_seccomp_rejects_unblocked_inet6(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        admission.socket,
+        "socket",
+        _seccomp_blocking_socket_factory(blocked_families={admission.socket.AF_INET}),
+    )
+    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET6 sockets"):
+        admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_verify_network_isolation_seccomp_rejects_wrong_errno(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def factory(family: int, kind: int) -> Any:
+        del kind
+        if family == admission.socket.AF_INET:
+            raise OSError(admission.errno.EACCES, "Permission denied")
+        return _FakeUnixSocket()
+
+    monkeypatch.setattr(admission.socket, "socket", factory)
+    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET sockets"):
+        admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_verify_network_isolation_seccomp_rejects_broken_unix_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def factory(family: int, kind: int) -> Any:
+        del kind
+        if family == admission.socket.AF_UNIX:
+            raise OSError("unix sockets unavailable")
+        raise OSError(admission.errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(admission.socket, "socket", factory)
+    with pytest.raises(bp.BirthProbeError, match="seccomp verification socket baseline failed"):
+        admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_seccomp_prelude_module_parses() -> None:
+    prelude = _RUN_DIR / "run9_seccomp_prelude.py"
+    ast.parse(prelude.read_text(encoding="utf-8"))
+
+
+def test_seccomp_prelude_rejects_bad_usage() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(_RUN_DIR / "run9_seccomp_prelude.py")],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert "usage: run9_seccomp_prelude.py" in completed.stderr
 
 
 def test_scientific_evaluator_signature_has_no_candidate_or_registry_input() -> None:

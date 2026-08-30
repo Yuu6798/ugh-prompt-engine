@@ -308,8 +308,10 @@ elif unshare -n true 2>/dev/null; then
   NETWORK_ISOLATION_MODE="netns"
 elif unshare -rn true 2>/dev/null; then
   NETWORK_ISOLATION_MODE="userns-netns"
+elif python3 "$BOOTSTRAP_RUN_DIR/run9_seccomp_prelude.py" --probe 2>/dev/null; then
+  NETWORK_ISOLATION_MODE="seccomp"
 else
-  die "no usable network isolation mechanism (iptables needs NET_ADMIN; unshare -n and -rn denied)"
+  die "no usable network isolation mechanism (iptables needs NET_ADMIN; unshare -n/-rn and seccomp filter denied)"
 fi
 echo "| run9: network isolation mode=$NETWORK_ISOLATION_MODE"
 
@@ -487,6 +489,9 @@ case "$NETWORK_ISOLATION_MODE" in
   userns-netns)
     ISOLATION_PREFIX=(unshare -rn)
     ;;
+  seccomp)
+    ISOLATION_PREFIX=("$VENV_RENDER/bin/python" "$RUN_DIR/run9_seccomp_prelude.py" "--exec")
+    ;;
   *)
     die "unknown network isolation mode: $NETWORK_ISOLATION_MODE"
     ;;
@@ -501,6 +506,7 @@ set +e
   --vocoder-dir "$VOCODER_DIR" \
   --pjs-corpus-root "$PJS_ROOT" \
   --source-commit "$RUN9_PIN_COMMIT" \
+  --network-isolation-mode "$NETWORK_ISOLATION_MODE" \
   --out "$RESULT_DIR"
 ADMISSION_EC=$?
 set -e

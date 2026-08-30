@@ -9,6 +9,7 @@ returns PASS.  Rejection leaves the registration directory absent.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import importlib
 from importlib import metadata as importlib_metadata
@@ -17,6 +18,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -292,7 +294,10 @@ def _verify_source_commit(source_commit: str) -> None:
         raise bp.BirthProbeError("checked-out repository has tracked modifications")
 
 
-def _verify_network_isolation() -> None:
+_NETWORK_ISOLATION_MODES = ("iptables", "netns", "userns-netns", "seccomp")
+
+
+def _verify_network_isolation_iptables() -> None:
     """Require an OUTPUT-drop firewall before ONNX Runtime session creation."""
     try:
         rules = subprocess.run(
@@ -314,6 +319,53 @@ def _verify_network_isolation() -> None:
     }
     if not required.issubset(set(rules)) or not established_rules.intersection(rules):
         raise bp.BirthProbeError("render process does not have the required OUTPUT-drop firewall")
+
+
+def _verify_network_isolation_netns() -> None:
+    """Require confinement to an interface-less (loopback-only) network namespace."""
+    try:
+        interfaces = set(os.listdir("/sys/class/net"))
+    except OSError as exc:
+        raise bp.BirthProbeError("render network isolation could not be verified") from exc
+    if not interfaces <= {"lo"}:
+        raise bp.BirthProbeError(
+            "render process is not confined to an interface-less network namespace"
+        )
+
+
+def _verify_network_isolation_seccomp() -> None:
+    """Empirically confirm the seccomp filter blocks AF_INET/AF_INET6 socket creation."""
+    _expect_socket_blocked_with_eperm(socket.AF_INET, "AF_INET")
+    _expect_socket_blocked_with_eperm(socket.AF_INET6, "AF_INET6")
+    try:
+        unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError as exc:
+        raise bp.BirthProbeError("seccomp verification socket baseline failed") from exc
+    unix_socket.close()
+
+
+def _expect_socket_blocked_with_eperm(family: socket.AddressFamily, label: str) -> None:
+    try:
+        blocked_socket = socket.socket(family, socket.SOCK_DGRAM)
+    except OSError as exc:
+        if exc.errno != errno.EPERM:
+            raise bp.BirthProbeError(
+                f"render process can still create {label} sockets"
+            ) from exc
+        return
+    blocked_socket.close()
+    raise bp.BirthProbeError(f"render process can still create {label} sockets")
+
+
+def _verify_network_isolation(mode: str) -> None:
+    if mode == "iptables":
+        _verify_network_isolation_iptables()
+    elif mode in ("netns", "userns-netns"):
+        _verify_network_isolation_netns()
+    elif mode == "seccomp":
+        _verify_network_isolation_seccomp()
+    else:
+        raise bp.BirthProbeError(f"unknown network isolation mode: {mode}")
 
 
 def _disable_ort_telemetry() -> None:
@@ -527,6 +579,7 @@ def execute_success_only_admission(
     vocoder_dir: Path,
     pjs_corpus_root: Path,
     source_commit: str,
+    network_isolation_mode: str = "iptables",
 ) -> tuple[
     _IssuedSuccessAdmission,
     Dict[str, Any],
@@ -537,7 +590,7 @@ def execute_success_only_admission(
     """Render, judge outputs, and issue a success capability; never register failure."""
     policy = load_admission_policy()
     _verify_source_commit(source_commit)
-    _verify_network_isolation()
+    _verify_network_isolation(network_isolation_mode)
     native_runtime = _validate_native_runtime()
     runtime_versions = _validate_runtime(policy)
     _disable_ort_telemetry()
@@ -832,6 +885,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--vocoder-dir", required=True, type=Path)
     parser.add_argument("--pjs-corpus-root", required=True, type=Path)
     parser.add_argument("--source-commit", required=True)
+    parser.add_argument(
+        "--network-isolation-mode",
+        choices=_NETWORK_ISOLATION_MODES,
+        default="iptables",
+    )
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
     if args.out.exists():
@@ -845,6 +903,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 vocoder_dir=args.vocoder_dir,
                 pjs_corpus_root=args.pjs_corpus_root,
                 source_commit=args.source_commit,
+                network_isolation_mode=args.network_isolation_mode,
             )
         )
         publish_successful_artifact_bundle(
