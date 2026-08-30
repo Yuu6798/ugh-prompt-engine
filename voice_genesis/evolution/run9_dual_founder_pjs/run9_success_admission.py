@@ -183,11 +183,51 @@ def snapshot_generated_export(
             "file": filename,
             "sha256_run1": digest,
         }
-    return GeneratedExportSnapshot(
+    snapshot = GeneratedExportSnapshot(
         root=root,
         artifacts=artifacts,
         artifact_bytes=artifact_bytes,
     )
+    _validated_generated_artifact_bytes(snapshot, policy)
+    return snapshot
+
+
+def _validated_generated_artifact_bytes(
+    snapshot: GeneratedExportSnapshot,
+    policy: Mapping[str, Any],
+) -> Dict[str, bytes]:
+    """Copy and verify the exact model-byte payload bound by the snapshot records."""
+    expected = policy["generated_export_artifacts"]
+    if set(snapshot.artifacts) != set(expected):
+        raise bp.BirthProbeError("generated export snapshot logical artifact set changed")
+    if set(snapshot.artifact_bytes) != set(expected.values()):
+        raise bp.BirthProbeError("generated export snapshot byte payload set changed")
+    copied: Dict[str, bytes] = {}
+    for logical_name, filename in sorted(expected.items()):
+        record = snapshot.artifacts.get(logical_name)
+        if not isinstance(record, Mapping) or set(record) != {
+            "bytes",
+            "file",
+            "sha256_run1",
+        }:
+            raise bp.BirthProbeError(
+                f"generated export snapshot record is invalid: {logical_name}"
+            )
+        value = snapshot.artifact_bytes.get(filename)
+        if type(value) is not bytes or not value:
+            raise bp.BirthProbeError(
+                f"generated export snapshot byte payload is invalid: {filename}"
+            )
+        if (
+            record.get("file") != filename
+            or record.get("bytes") != len(value)
+            or record.get("sha256_run1") != _sha256_bytes(value)
+        ):
+            raise bp.BirthProbeError(
+                f"generated export snapshot byte payload diverges from its record: {filename}"
+            )
+        copied[filename] = value
+    return copied
 
 
 def _snapshot_repo_inputs() -> Dict[str, str]:
@@ -354,8 +394,11 @@ def _load_measurement_inputs(policy: Mapping[str, Any]) -> tuple[
 
 
 def _verify_snapshot_still_matches(snapshot: GeneratedExportSnapshot) -> None:
-    current = snapshot_generated_export(snapshot.root, load_admission_policy())
-    if current.artifacts != snapshot.artifacts:
+    policy = load_admission_policy()
+    expected_bytes = _validated_generated_artifact_bytes(snapshot, policy)
+    current = snapshot_generated_export(snapshot.root, policy)
+    current_bytes = _validated_generated_artifact_bytes(current, policy)
+    if current.artifacts != snapshot.artifacts or current_bytes != expected_bytes:
         raise bp.BirthProbeError("generated export bytes changed during measurement")
 
 
@@ -367,6 +410,8 @@ def _issue_success_admission(
     repo_provenance: Mapping[str, str],
 ) -> _IssuedSuccessAdmission:
     """Mint registration authority only after the output-only decision is PASS."""
+    policy = load_admission_policy()
+    _validated_generated_artifact_bytes(snapshot, policy)
     if measurement.get("schema") != bp._RESULT_SCHEMA:  # noqa: SLF001
         raise bp.BirthProbeError("success admission requires the fixed Birth evidence schema")
     if measurement.get("overall_pass") is not True:
@@ -542,6 +587,8 @@ def publish_successful_artifact_bundle(
     generated: GeneratedExportSnapshot,
 ) -> None:
     """Atomically publish the complete model/evidence bundle after PASS only."""
+    policy = load_admission_policy()
+    generated_artifact_bytes = _validated_generated_artifact_bytes(generated, policy)
     registered_seal = _ISSUED_ADMISSIONS.get(id(admission))
     if type(admission) is not _IssuedSuccessAdmission or registered_seal is None:
         raise bp.BirthProbeError("success admission was not issued by this executor")
@@ -589,7 +636,7 @@ def publish_successful_artifact_bundle(
         (staging / "model").mkdir()
         (staging / "wav").mkdir()
         (staging / "features").mkdir()
-        for filename, value in generated.artifact_bytes.items():
+        for filename, value in generated_artifact_bytes.items():
             (staging / "model" / filename).write_bytes(value)
         for founder in _FOUNDER_IDS:
             for condition in _CONDITIONS:
@@ -612,7 +659,7 @@ def publish_successful_artifact_bundle(
             "registration_allowed": True,
         }
         (staging / "SUCCESS.json").write_bytes(_canonical_json_bytes(success_marker))
-        for filename, expected in generated.artifact_bytes.items():
+        for filename, expected in generated_artifact_bytes.items():
             if (staging / "model" / filename).read_bytes() != expected:
                 raise bp.BirthProbeError(
                     f"staged successful model readback mismatch: {filename}"

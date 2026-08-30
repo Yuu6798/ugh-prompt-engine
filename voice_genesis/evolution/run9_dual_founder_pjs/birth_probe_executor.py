@@ -112,7 +112,6 @@ def _run9_zero_controlprofile_sham_duration_hook(
 ) -> Callable[[list[int], dict], list[int]]:
     """Bind the zero profile to a synthesis hook while preserving output semantics."""
     attestation = _consume_run9_zero_controlprofile_sham(profile)
-    record["run9_control_profile_attachment"] = attestation
     called = False
 
     def apply(predicted: list[int], context: dict) -> list[int]:
@@ -125,11 +124,14 @@ def _run9_zero_controlprofile_sham_duration_hook(
             raise BirthProbeError("RUN9 C1 synthesis hook received a non-integer duration vector")
         if not isinstance(context, dict):
             raise BirthProbeError("RUN9 C1 synthesis hook received an invalid context")
-        if record.get("run9_control_profile_attachment") != attestation:
-            raise BirthProbeError("RUN9 C1 synthesis attestation changed before hook consumption")
+        if "run9_control_profile_attachment" in record:
+            raise BirthProbeError("RUN9 C1 synthesis attestation existed before hook consumption")
         called = True
+        record["run9_control_profile_attachment"] = attestation
+        setattr(apply, "run9_consumed", True)
         return list(predicted)
 
+    setattr(apply, "run9_consumed", False)
     return apply
 
 
@@ -1125,11 +1127,13 @@ class GateSynthRenderer:
             "speaker_name": "ritsu",
             "speaker_embed_vector": self._embeddings[founder_id],
         }
+        sham_hook: Optional[Callable[[list[int], dict], list[int]]] = None
         if condition == "c1":
-            run_kwargs["final_phone_dur_override"] = _run9_zero_controlprofile_sham_duration_hook(
+            sham_hook = _run9_zero_controlprofile_sham_duration_hook(
                 control_profile,
                 record,
             )
+            run_kwargs["final_phone_dur_override"] = sham_hook
         waveform = self._gate.run_pipeline(
             self._notes,
             lambda beats, tempo_bpm: beats * 60.0 / tempo_bpm,
@@ -1141,6 +1145,10 @@ class GateSynthRenderer:
             **run_kwargs,
         )
         if condition == "c1":
+            if sham_hook is None or getattr(sham_hook, "run9_consumed", False) is not True:
+                raise BirthProbeError(
+                    "C1 synthesis call did not invoke the ControlProfile duration hook"
+                )
             expected_attachment = {
                 "status": "CONSUMED_INERT_ZERO_PROFILE",
                 "voice_id": founder_id,

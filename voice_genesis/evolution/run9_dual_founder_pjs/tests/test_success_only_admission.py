@@ -274,6 +274,27 @@ def test_success_publisher_rejects_observation_swap_after_pass(tmp_path: Path) -
         )
 
 
+def test_success_publisher_rejects_snapshot_byte_payload_swap_after_issue(
+    tmp_path: Path,
+) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    issued = _issue(snapshot)
+    filename = next(iter(snapshot.artifact_bytes))
+    snapshot.artifact_bytes[filename] = b"post-evaluation-replacement"
+    output = tmp_path / "successful_swapped_model_bytes"
+
+    with pytest.raises(bp.BirthProbeError, match="byte payload diverges from its record"):
+        admission.publish_successful_artifact_bundle(
+            output,
+            issued,
+            _measurement(passed=True),
+            _observations(),
+            bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+            snapshot,
+        )
+    assert not output.exists()
+
+
 def test_success_publisher_rejects_silently_corrupted_feature_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -338,7 +359,10 @@ def test_c1_zero_profile_hook_is_identity_and_single_use() -> None:
         record,
     )
     predicted = [1, 2, 3]
+    assert record == {}
+    assert getattr(hook, "run9_consumed") is False
     assert hook(predicted, {}) == predicted
+    assert getattr(hook, "run9_consumed") is True
     assert record["run9_control_profile_attachment"] == {
         "status": "CONSUMED_INERT_ZERO_PROFILE",
         "voice_id": "R9F-01",
@@ -347,6 +371,62 @@ def test_c1_zero_profile_hook_is_identity_and_single_use() -> None:
     }
     with pytest.raises(bp.BirthProbeError, match="more than once"):
         hook(predicted, {})
+
+
+def _c1_renderer(gate: object) -> bp.GateSynthRenderer:
+    renderer = object.__new__(bp.GateSynthRenderer)
+    renderer._notes = [bp._ProbeNote(mora="あ", midi=60, duration_beats=1.0)]  # noqa: SLF001
+    renderer._tempo = 120.0
+    renderer._model_bytes = {}
+    renderer._variance_phonemes = {}
+    renderer._acoustic_phonemes = {}
+    renderer._embeddings = {"R9F-01": np.zeros(384, dtype=np.float32)}
+
+    class FakeSoundFile:
+        @staticmethod
+        def write(path: Path, waveform: np.ndarray, sample_rate: int, **kwargs: object) -> None:
+            del waveform, sample_rate, kwargs
+            path.write_bytes(b"c1-hook-wav")
+
+        @staticmethod
+        def read(file_object: object, **kwargs: object) -> tuple[np.ndarray, int]:
+            del file_object, kwargs
+            return np.asarray([0.1, -0.1], dtype=np.float64), 44_100
+
+    renderer._gate = gate
+    renderer._sf = FakeSoundFile()
+    return renderer
+
+
+def test_c1_renderer_rejects_record_only_attachment_without_hook_invocation() -> None:
+    class FakeGate:
+        @staticmethod
+        def run_pipeline(*args: object, **kwargs: object) -> np.ndarray:
+            del kwargs
+            record = args[6]
+            record["seed"] = bp._RUNTIME_SEED  # noqa: SLF001
+            return np.asarray([0.25, -0.25], dtype=np.float32)
+
+    _, sham = bp._control_profiles("R9F-01")  # noqa: SLF001
+    with pytest.raises(bp.BirthProbeError, match="did not invoke"):
+        _c1_renderer(FakeGate())("R9F-01", "c1", 0, sham.to_dict())
+
+
+def test_c1_renderer_accepts_actual_single_inert_hook_consumption() -> None:
+    class FakeGate:
+        @staticmethod
+        def run_pipeline(*args: object, **kwargs: object) -> np.ndarray:
+            record = args[6]
+            hook = kwargs["final_phone_dur_override"]
+            assert hook([5, 8], {"real_phones": ["a", "i"]}) == [5, 8]
+            record["seed"] = bp._RUNTIME_SEED  # noqa: SLF001
+            return np.asarray([0.25, -0.25], dtype=np.float32)
+
+    _, sham = bp._control_profiles("R9F-01")  # noqa: SLF001
+    assert (
+        _c1_renderer(FakeGate())("R9F-01", "c1", 0, sham.to_dict())
+        == b"c1-hook-wav"
+    )
 
 
 def test_legacy_rev06_cli_remains_disabled(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
