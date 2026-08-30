@@ -300,6 +300,19 @@ if ! cmp -s "$NATIVE_INSTALL_LOCK" "$WORK/measurement_native_environment.actual"
   die "consumed native measurement closure does not match committed lock"
 fi
 
+NETWORK_ISOLATION_MODE=""
+if iptables -w -A OUTPUT -j RETURN 2>/dev/null; then
+  iptables -w -D OUTPUT -j RETURN
+  NETWORK_ISOLATION_MODE="iptables"
+elif unshare -n true 2>/dev/null; then
+  NETWORK_ISOLATION_MODE="netns"
+elif unshare -rn true 2>/dev/null; then
+  NETWORK_ISOLATION_MODE="userns-netns"
+else
+  die "no usable network isolation mechanism (iptables needs NET_ADMIN; unshare -n and -rn denied)"
+fi
+echo "| run9: network isolation mode=$NETWORK_ISOLATION_MODE"
+
 stage "python-3.11.15"
 fetch_url "$PYTHON_TGZ_URL" "$WORK/Python-${PYTHON_VERSION}.tgz" \
   "$PYTHON_TGZ_SHA" "CPython source"
@@ -458,17 +471,31 @@ PY
 "$VENV_RENDER/bin/python" -m pip freeze --all > "$WORK/measurement_environment.freeze"
 
 stage "render-network-isolation"
-iptables -F OUTPUT
-iptables -A OUTPUT -o lo -j ACCEPT
-iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-iptables -A OUTPUT -j REJECT
-iptables -P OUTPUT DROP
-FIREWALL_ACTIVE="true"
+ISOLATION_PREFIX=()
+case "$NETWORK_ISOLATION_MODE" in
+  iptables)
+    iptables -F OUTPUT
+    iptables -A OUTPUT -o lo -j ACCEPT
+    iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+    iptables -A OUTPUT -j REJECT
+    iptables -P OUTPUT DROP
+    FIREWALL_ACTIVE="true"
+    ;;
+  netns)
+    ISOLATION_PREFIX=(unshare -n)
+    ;;
+  userns-netns)
+    ISOLATION_PREFIX=(unshare -rn)
+    ;;
+  *)
+    die "unknown network isolation mode: $NETWORK_ISOLATION_MODE"
+    ;;
+esac
 
 stage "success-only-admission"
 export ORT_TELEMETRY_DISABLED=1
 set +e
-"$VENV_RENDER/bin/python" "$RUN_DIR/run9_success_admission.py" \
+"${ISOLATION_PREFIX[@]}" "$VENV_RENDER/bin/python" "$RUN_DIR/run9_success_admission.py" \
   --acoustic-dir "$GENERATED" \
   --canon-model-dir "$CANON_DIR" \
   --vocoder-dir "$VOCODER_DIR" \
