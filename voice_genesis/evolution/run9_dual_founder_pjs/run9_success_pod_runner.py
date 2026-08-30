@@ -238,7 +238,7 @@ def _request_json(
     except urllib.error.HTTPError as exc:
         try:
             detail = exc.read().decode("utf-8", errors="replace")
-        except http.client.HTTPException:
+        except (http.client.HTTPException, TimeoutError, OSError):
             detail = "<HTTP error body unreadable>"
         if method == "POST" and 500 <= exc.code <= 599:
             raise AmbiguousLaunchError(
