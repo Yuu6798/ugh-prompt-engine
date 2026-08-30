@@ -1,0 +1,368 @@
+"""Success-only registration and output-only evaluator boundary tests."""
+from __future__ import annotations
+
+import inspect
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+
+_RUN_DIR = Path(__file__).resolve().parent.parent
+if str(_RUN_DIR) not in sys.path:
+    sys.path.insert(0, str(_RUN_DIR))
+
+import birth_probe_executor as bp  # noqa: E402
+import run9_success_admission as admission  # noqa: E402
+
+
+FOUNDERS = ("R9F-01", "R9F-02")
+CONDITIONS = ("reference", "c0", "c1", "positive_reference")
+
+
+def _write_generated_export(root: Path) -> admission.GeneratedExportSnapshot:
+    policy = admission.load_admission_policy()
+    root.mkdir()
+    for index, filename in enumerate(policy["generated_export_artifacts"].values()):
+        (root / filename).write_bytes(f"generated-{index}-{filename}".encode())
+    return admission.snapshot_generated_export(root, policy)
+
+
+def _observation(label: str, profile: str | None = None) -> bp.RenderObservation:
+    return bp.RenderObservation.build(
+        f"wav-{label}".encode(),
+        bp.FeatureArtifact.from_vector(np.asarray([0.0, 1.0], dtype=np.float64)),
+        control_profile_id=profile,
+    )
+
+
+def _observations() -> dict[str, dict[str, list[bp.RenderObservation]]]:
+    result: dict[str, dict[str, list[bp.RenderObservation]]] = {}
+    for founder in FOUNDERS:
+        replay, sham = bp._control_profiles(founder)  # noqa: SLF001
+        result[founder] = {
+            "reference": [_observation(f"{founder}-reference")],
+            "c0": [_observation(f"{founder}-c0-{i}", replay.profile_id) for i in range(20)],
+            "c1": [_observation(f"{founder}-c1-{i}", sham.profile_id) for i in range(20)],
+            "positive_reference": [_observation(f"{founder}-positive")],
+        }
+    return result
+
+
+def _measurement(*, passed: bool) -> dict[str, object]:
+    observations = _observations()
+    pjs = bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0]))
+
+    def record(item: bp.RenderObservation) -> dict[str, object]:
+        return {
+            "wav_sha256": item.wav_sha256,
+            "feature_sha256": item.feature.sha256,
+            "feature_bytes": len(item.feature.data),
+        }
+
+    value: dict[str, object] = {
+        "schema": bp._RESULT_SCHEMA,  # noqa: SLF001
+        "overall_pass": passed,
+        "learning_progression_allowed": passed,
+        "founders": {
+            founder: {
+                "reference": record(observations[founder]["reference"][0]),
+                "c0": [record(item) for item in observations[founder]["c0"]],
+                "c1": [record(item) for item in observations[founder]["c1"]],
+                "positive_reference": record(
+                    observations[founder]["positive_reference"][0]
+                ),
+            }
+            for founder in FOUNDERS
+        },
+        "pjs_reference": {
+            "feature_sha256": pjs.sha256,
+            "feature_bytes": len(pjs.data),
+        },
+    }
+    return bp._seal_result(value)  # noqa: SLF001
+
+
+def _issue(
+    snapshot: admission.GeneratedExportSnapshot,
+    *,
+    passed: bool = True,
+) -> admission._IssuedSuccessAdmission:  # noqa: SLF001
+    return admission._issue_success_admission(  # noqa: SLF001
+        measurement=_measurement(passed=passed),
+        snapshot=snapshot,
+        source_commit="1" * 40,
+        repo_provenance={"policy": "2" * 64},
+    )
+
+
+def test_policy_is_pass_only_and_candidate_blind() -> None:
+    policy = admission.load_admission_policy()
+    assert policy["admission"]["decision"] == "PASS_ONLY"
+    assert policy["admission"]["failure_registry_effect"] == "NONE"
+    assert "candidate_artifact_sha256" in policy["evaluator_boundary"]["forbidden_inputs"]
+    assert "candidate_artifact_bytes" in policy["evaluator_boundary"]["forbidden_inputs"]
+    assert len(policy["generated_export_artifacts"]) == 9
+
+
+def test_production_cli_has_no_network_isolation_bypass() -> None:
+    source = Path(admission.__file__).read_text(encoding="utf-8")
+    assert "allow-test-network" not in source
+
+
+def test_scientific_evaluator_signature_has_no_candidate_or_registry_input() -> None:
+    parameters = set(inspect.signature(bp.evaluate_birth_gate).parameters)
+    assert parameters == {
+        "references",
+        "c0_takes",
+        "c1_takes",
+        "positive_references",
+        "pjs_reference",
+        "expected_takes",
+    }
+    assert not any("candidate" in name or "registry" in name for name in parameters)
+
+
+def test_generated_export_snapshot_has_no_preregistered_digest(tmp_path: Path) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    assert len(snapshot.artifacts) == 9
+    assert all(
+        set(record) == {"bytes", "file", "sha256_run1"}
+        for record in snapshot.artifacts.values()
+    )
+    policy_text = admission._POLICY_PATH.read_text(encoding="utf-8")  # noqa: SLF001
+    assert snapshot.acoustic_sha256 not in policy_text
+
+
+def test_generated_export_requires_exactly_nine_files(tmp_path: Path) -> None:
+    policy = admission.load_admission_policy()
+    root = tmp_path / "generated"
+    root.mkdir()
+    for filename in policy["generated_export_artifacts"].values():
+        (root / filename).write_bytes(b"x")
+    (root / "unexpected.bin").write_bytes(b"x")
+    with pytest.raises(bp.BirthProbeError, match="closed nine-file set"):
+        admission.snapshot_generated_export(root, policy)
+
+
+def test_nonpass_cannot_issue_registration_authority(tmp_path: Path) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    before = dict(admission._ISSUED_ADMISSIONS)  # noqa: SLF001
+    with pytest.raises(admission.ArtifactRejected, match="did not pass"):
+        _issue(snapshot, passed=False)
+    assert admission._ISSUED_ADMISSIONS == before  # noqa: SLF001
+
+
+def test_forged_admission_cannot_publish(tmp_path: Path) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    with pytest.raises(bp.BirthProbeError, match="was not issued"):
+        admission.publish_successful_artifact_bundle(
+            tmp_path / "successful_forged",
+            {"schema": admission._ADMISSION_SCHEMA},  # noqa: SLF001
+            _measurement(passed=True),
+            _observations(),
+            bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+            snapshot,
+        )
+
+
+def test_success_bundle_contains_model_and_complete_evidence(tmp_path: Path) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    measurement = _measurement(passed=True)
+    issued = _issue(snapshot)
+    output = tmp_path / "successful_run9"
+    admission.publish_successful_artifact_bundle(
+        output,
+        issued,
+        measurement,
+        _observations(),
+        bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+        snapshot,
+    )
+    assert (output / "SUCCESS.json").is_file()
+    assert len(list((output / "model").iterdir())) == 9
+    assert len(list((output / "wav").iterdir())) == 84
+    assert len(list((output / "features").iterdir())) == 85
+    manifest = json.loads((output / "artifact_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["schema"] == admission._MANIFEST_SCHEMA  # noqa: SLF001
+    assert "SUCCESS.json" in manifest["files"]
+
+
+def test_success_publisher_is_atomic_on_rename_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    issued = _issue(snapshot)
+    output = tmp_path / "successful_atomic"
+
+    def fail_replace(_source: Path, _target: Path) -> None:
+        raise OSError("injected rename failure")
+
+    monkeypatch.setattr(admission.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected"):
+        admission.publish_successful_artifact_bundle(
+            output,
+            issued,
+            _measurement(passed=True),
+            _observations(),
+            bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+            snapshot,
+        )
+    assert not output.exists()
+    assert not list(tmp_path.glob(".successful_atomic.build-*"))
+
+
+@pytest.mark.parametrize("termination_type", [KeyboardInterrupt, SystemExit])
+def test_success_publisher_cleans_staging_on_baseexception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    termination_type: type[BaseException],
+) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    issued = _issue(snapshot)
+    output = tmp_path / "successful_interrupted"
+
+    def interrupt(_source: Path, _target: Path) -> None:
+        raise termination_type()
+
+    monkeypatch.setattr(admission.os, "replace", interrupt)
+    with pytest.raises(termination_type):
+        admission.publish_successful_artifact_bundle(
+            output,
+            issued,
+            _measurement(passed=True),
+            _observations(),
+            bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+            snapshot,
+        )
+    assert not output.exists()
+    assert not list(tmp_path.glob(".successful_interrupted.build-*"))
+
+
+def test_success_publisher_rejects_tampered_measurement_after_issue(tmp_path: Path) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    measurement = _measurement(passed=True)
+    issued = _issue(snapshot)
+    measurement["founders"]["R9F-01"]["reference"]["wav_sha256"] = "0" * 64
+    with pytest.raises(bp.BirthProbeError, match="evidence seal is invalid"):
+        admission.publish_successful_artifact_bundle(
+            tmp_path / "successful_tampered_measurement",
+            issued,
+            measurement,
+            _observations(),
+            bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+            snapshot,
+        )
+
+
+def test_success_publisher_rejects_observation_swap_after_pass(tmp_path: Path) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    issued = _issue(snapshot)
+    observations = _observations()
+    observations["R9F-01"]["reference"][0] = _observation("replacement")
+    with pytest.raises(bp.BirthProbeError, match="does not bind the published observation"):
+        admission.publish_successful_artifact_bundle(
+            tmp_path / "successful_swapped_observation",
+            issued,
+            _measurement(passed=True),
+            observations,
+            bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+            snapshot,
+        )
+
+
+def test_success_publisher_rejects_silently_corrupted_feature_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    issued = _issue(snapshot)
+    original_write = Path.write_bytes
+
+    def corrupt(path: Path, value: bytes) -> int:
+        if path.name == "R9F-01_reference_00.bin":
+            value = value[:-1]
+        return original_write(path, value)
+
+    monkeypatch.setattr(Path, "write_bytes", corrupt)
+    output = tmp_path / "successful_corrupt_feature"
+    with pytest.raises(bp.BirthProbeError, match="feature readback mismatch"):
+        admission.publish_successful_artifact_bundle(
+            output,
+            issued,
+            _measurement(passed=True),
+            _observations(),
+            bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+            snapshot,
+        )
+    assert not output.exists()
+    assert not list(tmp_path.glob(".successful_corrupt_feature.build-*"))
+
+
+def test_success_publisher_rejects_corrupted_manifest_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    issued = _issue(snapshot)
+    original_write = Path.write_bytes
+
+    def corrupt(path: Path, value: bytes) -> int:
+        if path.name == "artifact_manifest.json":
+            value = b"{}\n"
+        return original_write(path, value)
+
+    monkeypatch.setattr(Path, "write_bytes", corrupt)
+    output = tmp_path / "successful_corrupt_manifest"
+    with pytest.raises(bp.BirthProbeError, match="manifest failed readback"):
+        admission.publish_successful_artifact_bundle(
+            output,
+            issued,
+            _measurement(passed=True),
+            _observations(),
+            bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+            snapshot,
+        )
+    assert not output.exists()
+    assert not list(tmp_path.glob(".successful_corrupt_manifest.build-*"))
+
+
+def test_c1_zero_profile_hook_is_identity_and_single_use() -> None:
+    _, sham = bp._control_profiles("R9F-01")  # noqa: SLF001
+    record: dict[str, object] = {}
+    hook = bp._run9_zero_controlprofile_sham_duration_hook(  # noqa: SLF001
+        sham.to_dict(),
+        record,
+    )
+    predicted = [1, 2, 3]
+    assert hook(predicted, {}) == predicted
+    assert record["run9_control_profile_attachment"] == {
+        "status": "CONSUMED_INERT_ZERO_PROFILE",
+        "voice_id": "R9F-01",
+        "revision": "r_sham",
+        "profile_id": sham.profile_id,
+    }
+    with pytest.raises(bp.BirthProbeError, match="more than once"):
+        hook(predicted, {})
+
+
+def test_legacy_rev06_cli_remains_disabled(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    result = bp.main(
+        [
+            "--acoustic-dir",
+            str(tmp_path),
+            "--canon-model-dir",
+            str(tmp_path),
+            "--vocoder-dir",
+            str(tmp_path),
+            "--pjs-corpus-root",
+            str(tmp_path),
+            "--out",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert result == 2
+    assert "success-only admission harness" in capsys.readouterr().err

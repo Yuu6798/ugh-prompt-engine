@@ -22292,8 +22292,8 @@ def test_pr333_r16_load_pinned_rejects_new_field_tamper_via_hash_mismatch(
 
 
 # ---------------------------------------------------------------------------
-# PR #337 Codex bot レビュー第8巡対応（P2, 採用）+ 2026-08-30 alternate
-# attempt: README の再実行ブロッカー記述が実状態と一致していること。
+# 2026-08-30 User裁定: 旧候補の事前登録を廃止し、生成物単体の固定評価が
+# PASSした場合だけ同一bytesを登録するsuccess-only境界がREADMEに明示されること。
 # ---------------------------------------------------------------------------
 
 
@@ -22304,43 +22304,37 @@ def _executor_impl_section() -> str:
     return section[1].split("## 設計判断の記録", 1)[0]
 
 
-def test_alternate_attempt_readme_lists_both_formal_rerun_blockers() -> None:
-    """C1 attachment 解消後の2ブロッカーを全数列挙していること。"""
+def test_success_only_readme_forbids_candidate_identity_as_evaluator_input() -> None:
     section = _executor_impl_section()
-    assert "現在の再実行ブロッカー" in section
-    assert "のみであり" not in section.split("現在の再実行ブロッカー", 1)[1].split(
-        "machine-dependent な実装作業", 1
-    )[0], "単独ブロッカー主張へ退行している"
-    assert "dependency_pins_sha" in section
-    assert "PENDING" in section
-    assert "alternate diagnostic 実行と後続の正式再凍結" in section
-    assert "80a40f" in section
-    assert "cdbd779c" not in section.split("現在の再実行ブロッカー", 1)[1].split(
-        "machine-dependent な実装作業", 1
-    )[0]
+    assert "success-only admission" in section
+    assert "candidate identity exposed" not in section
+    for token in ("候補", "bytes/hash", "過去attempt", "登録状態", "registry path", "入力禁止"):
+        assert token in section
+    assert "PASS の場合に限り" in section
+    assert "登録directoryを作らない" in section
 
 
-def test_alternate_attempt_readme_records_c1_attachment_behavior() -> None:
-    """production C1 attachmentとfail-closed監査が記録されていること。"""
+def test_success_only_readme_records_inert_c1_consumption() -> None:
     section = _executor_impl_section()
     assert "ZERO_CONTROLPROFILE_SHAM" in section
-    assert "CONSUMED_INERT_ZERO_PROFILE" in section
-    assert "fail-closed" in section
+    assert "duration vector を不変" in section
+    assert "単回消費" in section
+    assert "測定機を成功側へ変形せず" in section
 
 
-def test_pr337_r7_readme_remaining_work_does_not_reschedule_implemented_pipeline() -> None:
+def test_success_only_readme_remaining_work_does_not_reschedule_birth_pipeline() -> None:
     """残作業リストが、本 PR で実装済みの 6 分類判定 / identity 距離 /
     固定実行順パイプラインを「未実装の残作業」として再掲していないこと
     （実装済み pipeline と未了の実行/実装を分離する）。"""
     readme = (_RUN_DIR / "README.md").read_text(encoding="utf-8")
-    remaining = readme.split("machine-dependent な実装作業:", 1)
+    remaining = readme.split("success-only Birth admission の実行後も残る学習段の実装作業:", 1)
     assert len(remaining) == 2, "残作業リストの見出しが見つからない"
     remaining_text = remaining[1].split("**erratum", 1)[0]
     assert "現状は\n  語彙の凍結のみ" not in remaining_text
     assert "実装済み" in remaining_text
-    # C0/C1 節は「実装済み部分」と「C1 に残る実装作業」を両方明示する
+    # C0/C1 はともに実装済みで、残るのはmachine-dependent実行だけ。
     c0c1 = remaining_text.split("- **C0/C1 の実 render**:", 1)
     assert len(c0c1) == 2
     c0c1_text = c0c1[1].split("\n- ", 1)[0]
     assert "実装済み" in c0c1_text
-    assert "r_sham" in c0c1_text
+    assert "C0/C1 とも実行境界まで到達" in c0c1_text

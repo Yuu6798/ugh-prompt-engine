@@ -1,0 +1,61 @@
+{
+  "admission": {
+    "decision": "PASS_ONLY",
+    "failure_registry_effect": "NONE",
+    "output_directory_prefix": "successful_",
+    "registration_allowed_value": true,
+    "required_measurement_overall_pass": true
+  },
+  "evaluator_boundary": {
+    "allowed_inputs": [
+      "rendered_wav_bytes",
+      "serialized_identity_features",
+      "fixed_control_profile_ids",
+      "fixed_pjs_reference_feature"
+    ],
+    "forbidden_inputs": [
+      "candidate_artifact_bytes",
+      "candidate_artifact_sha256",
+      "candidate_attempt_history",
+      "candidate_registration_state",
+      "candidate_registry_path"
+    ],
+    "rule": "The scientific evaluator receives generated outputs only. Candidate identity is attached after PASS and cannot affect the decision."
+  },
+  "expected_takes_per_founder": 20,
+  "generated_export_artifacts": {
+    "acoustic_onnx": "s5_run6_acoustic_v1.onnx",
+    "d3synth_emb": "s5_run6_acoustic_v1.d3synth.emb",
+    "dictionary_ja_txt": "dictionary-ja.txt",
+    "dsconfig_yaml": "dsconfig.yaml",
+    "languages_json": "s5_run6_acoustic_v1.languages.json",
+    "phonemes_json": "s5_run6_acoustic_v1.phonemes.json",
+    "pjs_emb": "s5_run6_acoustic_v1.pjs.emb",
+    "ritsu_emb": "s5_run6_acoustic_v1.ritsu.emb",
+    "user_emb": "s5_run6_acoustic_v1.user.emb"
+  },
+  "measurement_runtime": {
+    "architecture": "x86_64",
+    "network_isolation_required_during_render": true,
+    "operating_system": "Ubuntu 24.04.4",
+    "packages": {
+      "PyYAML": "6.0.1",
+      "numpy": "2.4.6",
+      "onnxruntime": "1.29.0",
+      "pyworld": "0.3.5",
+      "scipy": "1.17.1",
+      "setuptools": "79.0.1",
+      "soundfile": "0.14.0"
+    },
+    "python": "3.11.15",
+    "selected_execution_provider": "CPUExecutionProvider",
+    "telemetry": "DISABLED_BEFORE_SESSION_CREATION"
+  },
+  "schema": "run9-success-only-admission-policy/1.0",
+  "successful_bundle": {
+    "artifact_manifest_schema": "run9-successful-artifact-manifest/1.0",
+    "bundle_schema": "run9-successful-artifact-admission/1.0",
+    "required_generated_export_count": 9,
+    "required_render_count": 84
+  }
+}

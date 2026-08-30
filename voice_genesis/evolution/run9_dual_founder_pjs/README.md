@@ -2032,39 +2032,30 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
   PJS confuser distance、監査完了を閉世界で評価する。結果 bundle は staging
   完成後の atomic rename でのみ公開し、既存出力の上書きは拒否する。
   この実装は測定を行っておらず、上記 2026-08-28 attempt の結論も変更しない。
-  なお C1 `ZERO_CONTROLPROFILE_SHAM` は、`GateSynthRenderer` が closed-world
-  の空 `r_sham` profile を pin 済み `gate_synth.run_pipeline()` 呼出し直前に
-  消費し、`CONSUMED_INERT_ZERO_PROFILE` attestation を同 synthesis callへ
-  渡す `record` object に格納する実 attachment boundary へ接続済み。
-  Founder/profile ID を含む完全一致を要求し、横持ちだけ・非空 partition・
-  attestation 欠落を fail-closed で拒否する。pin 済み `gate_synth.py` 本体は
-  変更しないため、過去の実smokeに結合した execution-profile provenanceも
-  維持する。
+  C1 `ZERO_CONTROLPROFILE_SHAM` は、closed-world の空 `r_sham` profile を
+  pin 済み `gate_synth.run_pipeline()` が実際に呼ぶ duration hook へ接続する。
+  hook は duration vector を不変で返す一方、Founder/profile ID を含む完全一致・
+  単回消費・synthesis call と同じ `record` 上の attestation を要求する。これに
+  より、測定機を成功側へ変形せず、sham mechanism を通した事実だけを監査する。
 
-  **2026-08-30 alternate-attempt decision and implementation**: User は
-  `USER_ADJUDICATION_20260830_ONNX_ALTERNATE_ATTEMPT.txt` で cdbd ONNX の
-  salvage を不可能と判断し、別attemptへの移行を指示した。実装解釈と
-  stop condition は `RUN9_ALTERNATE_ATTEMPT_PLAN_20260830.md` を正とする。
-  `80a40f...` candidate はまだ正式pinではなく、最初は
-  `run9-birth-probe-non-adjudicative-diagnostic/1.0` の隔離経路のみで受理する。
-  同経路は `QUARANTINED_NON_ADJUDICATIVE`、formal evidence=false、formal
-  overall PASS=null、learning progression=false を強制し、正式publisherと
-  ファイル名/schemaを共有しない。このPRでは外部実資産がないため診断自体は
-  未実行であり、rev 0.6 attempt・contract pin・科学結果は変更しない。
+  **2026-08-30 success-only admission への移行**:
 
-  **現在の再実行ブロッカー（2件、いずれか未解消の間は正式実測へ進まない）**:
+  `USER_ADJUDICATION_20260830_SUCCESS_ONLY_REGISTRATION.txt` に基づき、生成物を
+  事前登録してから候補 hash と照合する方式を廃止した。`run9_success_admission.py`
+  はクリーン export の9ファイルを同一プロセス内だけで byte snapshot し、その
+  バイトで固定84 renderを完走する。科学評価器へ渡るのは WAV、直列化済み WORLD
+  feature、固定 ControlProfile ID、固定 PJS reference feature のみであり、候補
+  bytes/hash、過去attempt、登録状態、registry path は入力禁止である。
 
-  1. **`RUN9_CONTRACT.yaml#dependency_pins_sha` が `PENDING`**: 直接実行する
-     数値依存（NumPy/SciPy/SoundFile/PyYAML/ONNX Runtime）の期待 version は
-     contract pin 経由でのみ受理するため、`_load_direct_dependency_pin_versions()`
-     が render 前に fail-closed する（mutable な manifest 自身を権威にしない）。
-  2. **alternate diagnostic 実行と後続の正式再凍結**: candidate
-     `80a40f...` 本体を含む閉じた外部asset集合で隔離診断を完了し、その後に
-     separate design revision / reexport manifest / contract pin chain を
-     レビュー付きで新設する必要がある。診断結果をrev 0.6正式証跡へ流用する
-     repin/fallbackは実装していない。
+  PASS の場合に限り、評価した9ファイル・84 WAV・85 feature・測定証跡を staging
+  へ全数配置し、manifest readback 後の atomic rename で `successful_*` bundleを
+  1回だけ登録する。NOT_ESTABLISHED、implementation failure、pod failure の場合は
+  登録directoryを作らない。旧rev 0.6 publisher/CLIと失敗候補専用のalternate
+  schemaは無効・廃止し、旧候補を新方式へ流用しない。設計とpod運用境界は
+  `SUCCESS_ONLY_ADMISSION_HARNESS_DESIGN_v1.md` および
+  `RUN9_SUCCESS_POD_PRELAUNCH.md` を正とする。
 
-上記2ブロッカーとは別に残る machine-dependent な実装作業:
+success-only Birth admission の実行後も残る学習段の実装作業:
 
 - **practice/education harness 実装**: VG-L0 学習ハーネスの一部として、
   PRACTICE_FROM_AUDIO（Founder 自身の自律特徴抽出・差分推定・制御探索
@@ -2085,9 +2076,8 @@ Phase 3 で machine-independent な設計・schema・contract・validator は
 - **C0/C1 の実 render**: 固定実行順（Founder ごと reference 1 + C0 20 +
   C1 20 + positive 1 = 84 render）・`derive_profile(..., control_condition=...)`
   による `replay`/`r_sham` 導出・`control_conditions_satisfied()` の
-  readiness 評価は executor に実装済み。C0 は実行境界まで到達しており残るのは
-  machine-dependent 実行のみ。C1 synthesis attachment 自体は実装済みだが、
-  alternate candidate の隔離診断と正式再凍結は上記ブロッカー2として残る。
+  readiness 評価は executor に実装済み。C0/C1 とも実行境界まで到達しており、
+  残るのは success-only pod 上の machine-dependent 実行のみ。
 - **practice trace の実体生成**: `run9_controlprofile.SCHEMA_PRACTICE_
   TRACE`/`validate_practice_trace()` の最低要件を満たす実トレースの記録
   （模倣対象選択・内部差分推定・探索履歴）は harness 実装時。
