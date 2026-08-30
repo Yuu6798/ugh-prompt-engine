@@ -1,0 +1,64 @@
+name: temp-pr340-round10-private-staging
+on:
+  push:
+    branches: [codex/run9-success-only-prepod]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/run9-success-only-prepod
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply private staging fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          run_dir = Path('voice_genesis/evolution/run9_dual_founder_pjs')
+          admission = run_dir / 'run9_success_admission.py'
+          tests = run_dir / 'tests/test_success_only_admission.py'
+
+          text = admission.read_text(encoding='utf-8')
+          old = '''    output_dir.parent.mkdir(parents=True, exist_ok=True)\n    staging = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.build-", dir=output_dir.parent))\n'''
+          new = '''    output_dir.parent.mkdir(parents=True, exist_ok=True)\n    # The output parent is the live HTTP document root in the Pod. Never stage\n    # partially built registration bytes underneath it: SimpleHTTPRequestHandler\n    # serves dot-prefixed directories too. Keep staging on the same filesystem but\n    # as a sibling of the document root, and expose it only via the final rename.\n    staging_parent = output_dir.parent.parent / f".{output_dir.parent.name}.run9-staging"\n    if staging_parent == output_dir.parent or output_dir.parent in staging_parent.parents:\n        raise bp.BirthProbeError("successful staging directory must be outside publication root")\n    staging_parent.mkdir(parents=True, exist_ok=True)\n    staging = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.build-", dir=staging_parent))\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'staging replacement count={text.count(old)}')
+          admission.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          test_text = tests.read_text(encoding='utf-8')
+          marker = '''def test_success_publisher_is_atomic_on_rename_failure(\n'''
+          added = '''def test_success_publisher_stages_outside_publication_root(\n    tmp_path: Path,\n    monkeypatch: pytest.MonkeyPatch,\n) -> None:\n    snapshot = _write_generated_export(tmp_path / "generated")\n    issued = _issue(snapshot)\n    public_root = tmp_path / "run9_public"\n    public_root.mkdir()\n    output = public_root / "successful_run9"\n    sources: list[Path] = []\n    real_replace = admission.os.replace\n\n    def capture_replace(source: Path, target: Path) -> None:\n        sources.append(Path(source).resolve())\n        real_replace(source, target)\n\n    monkeypatch.setattr(admission.os, "replace", capture_replace)\n    admission.publish_successful_artifact_bundle(\n        output,\n        issued,\n        _measurement(passed=True),\n        _observations(),\n        bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),\n        snapshot,\n    )\n    assert output.is_dir()\n    assert len(sources) == 1\n    staged = sources[0]\n    assert staged.parent != public_root.resolve()\n    assert public_root.resolve() not in staged.parents\n    assert staged.parent.parent == public_root.resolve().parent\n\n\n'''
+          if marker not in test_text:
+              raise SystemExit('atomic rename test marker not found')
+          tests.write_text(test_text.replace(marker, added + marker, 1), encoding='utf-8')
+          PY
+      - name: Validate private staging fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python -m compileall -q \
+            voice_genesis/evolution/run9_dual_founder_pjs/run9_success_admission.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_success_only_admission.py
+          bash -n voice_genesis/evolution/run9_dual_founder_pjs/run9_success_pod_entry.sh
+          git diff --check
+          pytest -q voice_genesis/evolution/run9_dual_founder_pjs/tests/test_success_only_admission.py
+      - name: Commit fix and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/temp_pr340_round10_private_staging.yml
+          git config user.name 'Yuu6798'
+          git config user.email 'kkoo6798@gmail.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(run9): stage success bundle outside public root'
+          git push origin HEAD:codex/run9-success-only-prepod
