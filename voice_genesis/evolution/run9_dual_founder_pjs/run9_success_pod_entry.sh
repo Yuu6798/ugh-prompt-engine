@@ -274,7 +274,8 @@ apt-get update -qq
 # Bootstrap-only modules needed to build the pinned CPython/package stack are
 # outside the scientific native comparator; measurement does not import them.
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-  ca-certificates curl git iptables unzip xz-utils libssl-dev zlib1g-dev
+  ca-certificates curl git iptables unzip xz-utils libssl-dev zlib1g-dev \
+  libbz2-dev liblzma-dev libsqlite3-dev
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
   --allow-downgrades "${NATIVE_PACKAGES[@]}"
 python3 - "$NATIVE_INSTALL_LOCK" "$WORK/measurement_native_environment.actual" <<'PY'
@@ -312,6 +313,8 @@ tar -xzf "$WORK/Python-${PYTHON_VERSION}.tgz" -C "$WORK"
 readonly PY="/opt/python-${PYTHON_VERSION}/bin/python3.11"
 [ "$($PY -c 'import platform; print(platform.python_version())')" = "$PYTHON_VERSION" ] \
   || die "compiled Python version mismatch"
+"$PY" -c 'import bz2, ctypes, lzma, sqlite3, ssl, zlib' \
+  || die "compiled Python is missing required stdlib extension modules"
 
 stage "source-checkout"
 git clone -q https://github.com/Yuu6798/ugh-prompt-engine.git "$REPO"
