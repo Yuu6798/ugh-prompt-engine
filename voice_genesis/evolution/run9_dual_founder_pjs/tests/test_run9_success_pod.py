@@ -56,6 +56,20 @@ def test_entry_watchdog_reuses_confirmed_retrying_self_stop() -> None:
     assert "for attempt in 1 2 3 4 5" in text
 
 
+def test_entry_native_preflight_reads_existing_verified_bootstrap_checkout() -> None:
+    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
+    bootstrap_dir = text.index("readonly BOOTSTRAP_RUN_DIR=")
+    preflight_start = text.index('stage "preflight-system"')
+    source_checkout = text.index('stage "source-checkout"')
+    assert bootstrap_dir < preflight_start < source_checkout
+    preflight = text[preflight_start:text.index('stage "python-3.11.15"')]
+    assert 'git -C "$BOOTSTRAP_RUN_DIR" rev-parse HEAD' in preflight
+    assert '[ "$BOOTSTRAP_HEAD" = "$RUN9_PIN_COMMIT" ]' in preflight
+    assert '$BOOTSTRAP_RUN_DIR/inputs/measurement_native_install_lock.txt' in preflight
+    assert '$BOOTSTRAP_RUN_DIR/inputs/measurement_native_manifest.txt' in preflight
+    assert '$RUN_DIR/inputs/measurement_native_' not in preflight
+
+
 def test_entry_measurement_environment_uses_committed_full_lock() -> None:
     text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
     measurement = text[text.index('stage "measurement-environment"'): text.index('stage "render-network-isolation"')]

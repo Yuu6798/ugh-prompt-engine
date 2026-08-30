@@ -13,6 +13,10 @@ readonly PUBLIC="/workspace/run9_public"
 readonly REPO="$WORK/ugh-prompt-engine"
 readonly DS="$WORK/DiffSinger"
 readonly RUN_DIR="$REPO/voice_genesis/evolution/run9_dual_founder_pjs"
+# The entry script is executed from the already fetched, commit-verified bootstrap
+# checkout before $REPO exists. Early immutable inputs must therefore be read from
+# the directory containing this exact script, not from the later work checkout.
+readonly BOOTSTRAP_RUN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly STATUS_FILE="$PUBLIC/status.json"
 readonly STAGE_FILE="$PUBLIC/.current_stage"
 readonly RESULT_DIR="$PUBLIC/successful_run9"
@@ -223,10 +227,13 @@ PY
 }
 
 stage "preflight-system"
-readonly NATIVE_INSTALL_LOCK="$RUN_DIR/inputs/measurement_native_install_lock.txt"
-readonly NATIVE_MANIFEST="$RUN_DIR/inputs/measurement_native_manifest.txt"
-[ -s "$NATIVE_INSTALL_LOCK" ] || die "committed native install lock is missing"
-[ -s "$NATIVE_MANIFEST" ] || die "committed native manifest is missing"
+BOOTSTRAP_HEAD="$(git -C "$BOOTSTRAP_RUN_DIR" rev-parse HEAD 2>/dev/null || true)"
+[ "$BOOTSTRAP_HEAD" = "$RUN9_PIN_COMMIT" ] \
+  || die "bootstrap checkout does not match RUN9_PIN_COMMIT before native preflight"
+readonly NATIVE_INSTALL_LOCK="$BOOTSTRAP_RUN_DIR/inputs/measurement_native_install_lock.txt"
+readonly NATIVE_MANIFEST="$BOOTSTRAP_RUN_DIR/inputs/measurement_native_manifest.txt"
+[ -s "$NATIVE_INSTALL_LOCK" ] || die "committed native install lock is missing from bootstrap checkout"
+[ -s "$NATIVE_MANIFEST" ] || die "committed native manifest is missing from bootstrap checkout"
 mapfile -t NATIVE_PACKAGES < "$NATIVE_INSTALL_LOCK"
 [ "${#NATIVE_PACKAGES[@]}" -gt 0 ] || die "native install lock is empty"
 apt-get update -qq
