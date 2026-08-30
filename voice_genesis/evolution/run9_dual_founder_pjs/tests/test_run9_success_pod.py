@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import signal
+import time
 import pathlib
 import subprocess
 import sys
@@ -49,7 +53,7 @@ def test_checked_in_policy_passes_runner_preflight_shape_check() -> None:
 
 def test_entry_watchdog_reuses_confirmed_retrying_self_stop() -> None:
     text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
-    watchdog = text[text.index('(\n  sleep "$WALL_CLOCK_SECONDS"'): text.index('WATCHDOG_PID=$!')]
+    watchdog = text[text.index('(\n  readonly WATCHDOG_SELF_PID='): text.index('WATCHDOG_PID=$!')]
     assert watchdog.index("terminate_main_for_deadline") < watchdog.index("force_restore_network_for_stop")
     assert watchdog.index("force_restore_network_for_stop") < watchdog.index("self_stop || true")
     assert "self_stop || true" in watchdog
@@ -111,9 +115,62 @@ def test_entry_keeps_watchdog_through_hold_and_caps_wall_clock() -> None:
 
 def test_watchdog_terminates_workload_before_opening_network_for_stop() -> None:
     text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
-    watchdog = text[text.index('(\n  sleep "$WALL_CLOCK_SECONDS"'): text.index('WATCHDOG_PID=$!')]
+    watchdog = text[text.index('(\n  readonly WATCHDOG_SELF_PID='): text.index('WATCHDOG_PID=$!')]
+    assert 'readonly WATCHDOG_SELF_PID="$BASHPID"' in watchdog
+    assert 'terminate_main_for_deadline "$WATCHDOG_SELF_PID"' in watchdog
     assert watchdog.index("terminate_main_for_deadline") < watchdog.index("force_restore_network_for_stop")
     assert watchdog.index("force_restore_network_for_stop") < watchdog.index("self_stop || true")
+
+
+def test_deadline_process_tree_preserves_outer_watchdog(tmp_path: pathlib.Path) -> None:
+    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
+    start = text.index("terminate_main_for_deadline() {")
+    end = text.index("\n\nself_stop()", start)
+    helper = text[start:end]
+
+    marker = tmp_path / "watchdog-survived.txt"
+    workload_pid_file = tmp_path / "workload.pid"
+    grandchild_pid_file = tmp_path / "grandchild.pid"
+    q_marker = shlex.quote(str(marker))
+    q_workload = shlex.quote(str(workload_pid_file))
+    q_grandchild = shlex.quote(str(grandchild_pid_file))
+    script = f"""
+set -eu
+{helper}
+MAIN_SHELL_PID=$$
+(
+  readonly WATCHDOG_SELF_PID="$BASHPID"
+  while [ ! -s {q_workload} ]; do sleep 0.01; done
+  terminate_main_for_deadline "$WATCHDOG_SELF_PID"
+  printf 'watchdog-survived\n' > {q_marker}
+) &
+(
+  sleep 30 &
+  printf '%s\n' "$!" > {q_grandchild}
+  printf '%s\n' "$BASHPID" > {q_workload}
+  wait
+) &
+wait
+"""
+    proc = subprocess.Popen(["bash", "-c", script])
+    try:
+        proc.wait(timeout=5)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and not marker.exists():
+            time.sleep(0.02)
+        assert proc.returncode == -signal.SIGKILL
+        assert marker.read_text(encoding="utf-8") == "watchdog-survived\n"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=2)
+        for pid_file in (workload_pid_file, grandchild_pid_file):
+            if not pid_file.exists():
+                continue
+            try:
+                os.kill(int(pid_file.read_text(encoding="utf-8").strip()), signal.SIGKILL)
+            except (ProcessLookupError, ValueError):
+                pass
 
 def test_entry_enables_watchdog_before_the_first_download() -> None:
     text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")

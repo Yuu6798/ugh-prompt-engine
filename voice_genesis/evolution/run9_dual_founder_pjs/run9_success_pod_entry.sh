@@ -60,18 +60,20 @@ force_restore_network_for_stop() {
 
 terminate_main_for_deadline() {
   # Fail closed: no render/evaluator process may survive into the network-open
-  # RunPod stop phase. Walk /proc recursively so worker grandchildren are also
-  # terminated, while preserving only this watchdog subshell.
+  # RunPod stop phase. The watchdog PID is captured by the outer watchdog shell
+  # before command substitution changes BASHPID, then passed through recursion.
+  local watchdog_pid="$1"
+  [ -n "$watchdog_pid" ] || return 1
   descendants_of() {
-    local parent="$1" child
+    local parent="$1" preserved_watchdog_pid="$2" child
     for child in $(cat "/proc/${parent}/task/${parent}/children" 2>/dev/null || true); do
-      [ "$child" = "$BASHPID" ] && continue
-      descendants_of "$child"
+      [ "$child" = "$preserved_watchdog_pid" ] && continue
+      descendants_of "$child" "$preserved_watchdog_pid"
       printf '%s\n' "$child"
     done
   }
   local victim
-  for victim in $(descendants_of "$MAIN_SHELL_PID"); do
+  for victim in $(descendants_of "$MAIN_SHELL_PID" "$watchdog_pid"); do
     kill -KILL "$victim" 2>/dev/null || true
   done
   kill -KILL "$MAIN_SHELL_PID" 2>/dev/null || true
@@ -144,9 +146,10 @@ PY
 trap on_exit EXIT
 
 (
+  readonly WATCHDOG_SELF_PID="$BASHPID"
   sleep "$WALL_CLOCK_SECONDS"
   echo "| run9: watchdog reached ${WALL_CLOCK_SECONDS}s; terminating workload before stop" >&2
-  terminate_main_for_deadline
+  terminate_main_for_deadline "$WATCHDOG_SELF_PID"
   force_restore_network_for_stop
   self_stop || true
 ) &
