@@ -709,7 +709,15 @@ def publish_successful_artifact_bundle(
     if output_dir.exists():
         raise bp.BirthProbeError(f"refusing to overwrite successful bundle: {output_dir}")
     output_dir.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.build-", dir=output_dir.parent))
+    # The output parent is the live HTTP document root in the Pod. Never stage
+    # partially built registration bytes underneath it: SimpleHTTPRequestHandler
+    # serves dot-prefixed directories too. Keep staging on the same filesystem but
+    # as a sibling of the document root, and expose it only via the final rename.
+    staging_parent = output_dir.parent.parent / f".{output_dir.parent.name}.run9-staging"
+    if staging_parent == output_dir.parent or output_dir.parent in staging_parent.parents:
+        raise bp.BirthProbeError("successful staging directory must be outside publication root")
+    staging_parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.build-", dir=staging_parent))
     try:
         (staging / "model").mkdir()
         (staging / "wav").mkdir()

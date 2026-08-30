@@ -236,6 +236,39 @@ def test_success_bundle_contains_model_and_complete_evidence(tmp_path: Path) -> 
     assert "SUCCESS.json" in manifest["files"]
 
 
+def test_success_publisher_stages_outside_publication_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    issued = _issue(snapshot)
+    public_root = tmp_path / "run9_public"
+    public_root.mkdir()
+    output = public_root / "successful_run9"
+    sources: list[Path] = []
+    real_replace = admission.os.replace
+
+    def capture_replace(source: Path, target: Path) -> None:
+        sources.append(Path(source).resolve())
+        real_replace(source, target)
+
+    monkeypatch.setattr(admission.os, "replace", capture_replace)
+    admission.publish_successful_artifact_bundle(
+        output,
+        issued,
+        _measurement(passed=True),
+        _observations(),
+        bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+        snapshot,
+    )
+    assert output.is_dir()
+    assert len(sources) == 1
+    staged = sources[0]
+    assert staged.parent != public_root.resolve()
+    assert public_root.resolve() not in staged.parents
+    assert staged.parent.parent == public_root.resolve().parent
+
+
 def test_success_publisher_is_atomic_on_rename_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
