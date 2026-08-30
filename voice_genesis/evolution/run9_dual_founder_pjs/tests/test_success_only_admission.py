@@ -114,32 +114,36 @@ def test_measurement_lock_is_bound_into_repo_provenance() -> None:
     assert snapshot["measurement_environment_lock_sha256"] == admission._sha256_bytes(lock_bytes)  # noqa: SLF001
 
 
-def test_native_measurement_locks_are_bound_into_repo_provenance() -> None:
+def test_native_measurement_lock_is_bound_into_repo_provenance() -> None:
     snapshot = admission._snapshot_repo_inputs()  # noqa: SLF001
-    for key, path in (
-        ("measurement_native_install_lock_sha256", admission._MEASUREMENT_NATIVE_INSTALL_LOCK_PATH),  # noqa: SLF001
-        ("measurement_native_manifest_sha256", admission._MEASUREMENT_NATIVE_MANIFEST_PATH),  # noqa: SLF001
-    ):
-        assert key in snapshot
-        assert snapshot[key] == admission._sha256_bytes(path.read_bytes())  # noqa: SLF001
+    key = "measurement_native_install_lock_sha256"
+    path = admission._MEASUREMENT_NATIVE_INSTALL_LOCK_PATH  # noqa: SLF001
+    assert key in snapshot
+    assert "measurement_native_manifest_sha256" not in snapshot
+    assert snapshot[key] == admission._sha256_bytes(path.read_bytes())  # noqa: SLF001
 
 
-def test_native_runtime_validator_requires_exact_committed_manifest(
+def test_native_runtime_validator_queries_only_committed_closure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    expected = admission._MEASUREMENT_NATIVE_MANIFEST_PATH.read_text(encoding="utf-8")  # noqa: SLF001
-    completed = admission.subprocess.CompletedProcess(
-        args=["dpkg-query"], returncode=0, stdout=expected, stderr=""
-    )
-    monkeypatch.setattr(admission.subprocess, "run", lambda *args, **kwargs: completed)
+    expected = [
+        line for line in admission._MEASUREMENT_NATIVE_INSTALL_LOCK_PATH.read_text(encoding="utf-8").splitlines() if line
+    ]  # noqa: SLF001
+    captured = {}
+    def fake_run(args, **kwargs):
+        captured["args"] = list(args)
+        return admission.subprocess.CompletedProcess(args=args, returncode=0, stdout="\n".join(expected) + "\n", stderr="")
+    monkeypatch.setattr(admission.subprocess, "run", fake_run)
     observed = admission._validate_native_runtime()  # noqa: SLF001
-    assert observed["manifest_sha256"] == admission._sha256_bytes(  # noqa: SLF001
-        admission._MEASUREMENT_NATIVE_MANIFEST_PATH.read_bytes()  # noqa: SLF001
+    assert observed["closure_sha256"] == admission._sha256_bytes(  # noqa: SLF001
+        admission._MEASUREMENT_NATIVE_INSTALL_LOCK_PATH.read_bytes()  # noqa: SLF001
     )
-    assert observed["package_count"] > observed["mutable_package_count"] > 0
+    assert observed["package_count"] == len(expected)
+    queried = captured["args"][3:]
+    assert queried == [row.rpartition("=")[0] for row in sorted(expected)]
 
 
-def test_native_runtime_validator_rejects_manifest_drift(
+def test_native_runtime_validator_rejects_consumed_closure_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     completed = admission.subprocess.CompletedProcess(
@@ -148,7 +152,6 @@ def test_native_runtime_validator_rejects_manifest_drift(
     monkeypatch.setattr(admission.subprocess, "run", lambda *args, **kwargs: completed)
     with pytest.raises(bp.BirthProbeError, match="native measurement dependency closure mismatch"):
         admission._validate_native_runtime()  # noqa: SLF001
-
 
 def test_production_cli_has_no_network_isolation_bypass() -> None:
     source = Path(admission.__file__).read_text(encoding="utf-8")

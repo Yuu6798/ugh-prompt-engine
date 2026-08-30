@@ -50,6 +50,7 @@ def test_checked_in_policy_passes_runner_preflight_shape_check() -> None:
 def test_entry_watchdog_reuses_confirmed_retrying_self_stop() -> None:
     text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
     watchdog = text[text.index('(\n  sleep "$WALL_CLOCK_SECONDS"'): text.index('WATCHDOG_PID=$!')]
+    assert watchdog.index("terminate_main_for_deadline") < watchdog.index("force_restore_network_for_stop")
     assert watchdog.index("force_restore_network_for_stop") < watchdog.index("self_stop || true")
     assert "self_stop || true" in watchdog
     assert 'runpodctl stop pod "$RUNPOD_POD_ID" || true' not in watchdog
@@ -66,7 +67,7 @@ def test_entry_native_preflight_reads_existing_verified_bootstrap_checkout() -> 
     assert 'git -C "$BOOTSTRAP_RUN_DIR" rev-parse HEAD' in preflight
     assert '[ "$BOOTSTRAP_HEAD" = "$RUN9_PIN_COMMIT" ]' in preflight
     assert '$BOOTSTRAP_RUN_DIR/inputs/measurement_native_install_lock.txt' in preflight
-    assert '$BOOTSTRAP_RUN_DIR/inputs/measurement_native_manifest.txt' in preflight
+    assert 'measurement_native_manifest.txt' not in preflight
     assert '$RUN_DIR/inputs/measurement_native_' not in preflight
 
 
@@ -86,21 +87,33 @@ def test_entry_uses_committed_exact_native_closure() -> None:
     text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
     preflight = text[text.index('stage "preflight-system"'): text.index('stage "python-3.11.15"')]
     assert "measurement_native_install_lock.txt" in preflight
-    assert "measurement_native_manifest.txt" in preflight
-    assert "--allow-downgrades" in preflight
-    assert "dpkg-query -W" in preflight
-    assert "cmp -s" in preflight
-    install_rows = [
-        line for line in (RUN_DIR / "inputs" / "measurement_native_install_lock.txt").read_text(encoding="utf-8").splitlines() if line
-    ]
-    manifest_rows = [
-        line for line in (RUN_DIR / "inputs" / "measurement_native_manifest.txt").read_text(encoding="utf-8").splitlines() if line
-    ]
-    assert install_rows
-    assert len(manifest_rows) > len(install_rows)
-    assert all("=" in row for row in install_rows + manifest_rows)
-    assert set(install_rows).issubset(set(manifest_rows))
+    assert "measurement_native_manifest.txt" not in preflight
+    assert 'dpkg-query", "-W"' in preflight
+    assert 'ca-certificates curl git iptables unzip xz-utils' in preflight
+    lock = RUN_DIR / "inputs" / "measurement_native_install_lock.txt"
+    rows = [line for line in lock.read_text(encoding="utf-8").splitlines() if line]
+    assert len(rows) > 20
+    assert any(row.startswith("libsndfile1:") for row in rows)
+    assert any(row.startswith("libc6:") for row in rows)
+    assert any(row.startswith("gcc") for row in rows)
+    assert all("=" in row for row in rows)
 
+
+def test_entry_keeps_watchdog_through_hold_and_caps_wall_clock() -> None:
+    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
+    block = text[text.index("on_exit() {"): text.index("trap on_exit EXIT")]
+    assert 'STOP_BUDGET_SECONDS=180' in text
+    assert 'max_hold=$(( remaining - STOP_BUDGET_SECONDS ))' in block
+    assert block.index('sleep "$hold"') < block.index('if self_stop; then')
+    assert block.index('if self_stop; then') < block.index('kill "$WATCHDOG_PID"')
+    assert block.index('wait "$WATCHDOG_PID"') > block.index('if self_stop; then')
+
+
+def test_watchdog_terminates_workload_before_opening_network_for_stop() -> None:
+    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
+    watchdog = text[text.index('(\n  sleep "$WALL_CLOCK_SECONDS"'): text.index('WATCHDOG_PID=$!')]
+    assert watchdog.index("terminate_main_for_deadline") < watchdog.index("force_restore_network_for_stop")
+    assert watchdog.index("force_restore_network_for_stop") < watchdog.index("self_stop || true")
 
 def test_entry_enables_watchdog_before_the_first_download() -> None:
     text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")

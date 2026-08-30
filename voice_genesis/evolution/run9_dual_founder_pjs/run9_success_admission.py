@@ -33,9 +33,6 @@ _MEASUREMENT_LOCK_PATH = _THIS_DIR / "inputs" / "measurement_environment_lock.tx
 _MEASUREMENT_NATIVE_INSTALL_LOCK_PATH = (
     _THIS_DIR / "inputs" / "measurement_native_install_lock.txt"
 )
-_MEASUREMENT_NATIVE_MANIFEST_PATH = (
-    _THIS_DIR / "inputs" / "measurement_native_manifest.txt"
-)
 _POLICY_SCHEMA = "run9-success-only-admission-policy/1.0"
 _ADMISSION_SCHEMA = "run9-successful-artifact-admission/1.0"
 _MANIFEST_SCHEMA = "run9-successful-artifact-manifest/1.0"
@@ -242,7 +239,6 @@ def _snapshot_repo_inputs() -> Dict[str, str]:
         "success_only_admission_policy_sha256": _POLICY_PATH,
         "measurement_environment_lock_sha256": _MEASUREMENT_LOCK_PATH,
         "measurement_native_install_lock_sha256": _MEASUREMENT_NATIVE_INSTALL_LOCK_PATH,
-        "measurement_native_manifest_sha256": _MEASUREMENT_NATIVE_MANIFEST_PATH,
         "success_admission_executor_sha256": Path(__file__).resolve(),
         "birth_probe_executor_sha256": _THIS_DIR / "birth_probe_executor.py",
         "run9_contract_sha256": _THIS_DIR / "RUN9_CONTRACT.yaml",
@@ -330,24 +326,24 @@ def _disable_ort_telemetry() -> None:
 
 
 def _validate_native_runtime() -> Dict[str, Any]:
-    """Fail closed unless the complete installed dpkg manifest matches the committed one."""
+    """Fail closed on the exact native libraries/build inputs consumed by measurement."""
     try:
-        expected_bytes = _MEASUREMENT_NATIVE_MANIFEST_PATH.read_bytes()
+        lock_bytes = _MEASUREMENT_NATIVE_INSTALL_LOCK_PATH.read_bytes()
         expected_rows = sorted(
             line.strip()
-            for line in expected_bytes.decode("utf-8").splitlines()
+            for line in lock_bytes.decode("utf-8").splitlines()
             if line.strip()
         )
-        install_bytes = _MEASUREMENT_NATIVE_INSTALL_LOCK_PATH.read_bytes()
-        install_rows = sorted(
-            line.strip()
-            for line in install_bytes.decode("utf-8").splitlines()
-            if line.strip()
-        )
+        names = []
+        for row in expected_rows:
+            name, sep, version = row.rpartition("=")
+            if not sep or not name or not version:
+                raise bp.BirthProbeError(f"native measurement closure row is invalid: {row!r}")
+            names.append(name)
         actual_rows = sorted(
             line.strip()
             for line in subprocess.run(
-                ["dpkg-query", "-W", "-f=${binary:Package}=${Version}\n"],
+                ["dpkg-query", "-W", "-f=${binary:Package}=${Version}\n", *names],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -356,14 +352,8 @@ def _validate_native_runtime() -> Dict[str, Any]:
         )
     except (OSError, UnicodeDecodeError, subprocess.CalledProcessError) as exc:
         raise bp.BirthProbeError("native measurement dependency closure could not be verified") from exc
-    if not expected_rows or not install_rows:
-        raise bp.BirthProbeError("native measurement dependency lock is empty")
-    for row in expected_rows + install_rows:
-        name, sep, version = row.partition("=")
-        if not sep or not name or not version:
-            raise bp.BirthProbeError(f"native measurement lock row is invalid: {row!r}")
-    if not set(install_rows).issubset(set(expected_rows)):
-        raise bp.BirthProbeError("native install lock is not a subset of the final native manifest")
+    if not expected_rows:
+        raise bp.BirthProbeError("native measurement dependency closure is empty")
     if actual_rows != expected_rows:
         raise bp.BirthProbeError(
             "native measurement dependency closure mismatch: "
@@ -371,12 +361,9 @@ def _validate_native_runtime() -> Dict[str, Any]:
             f"missing={sorted(set(expected_rows)-set(actual_rows))!r}"
         )
     return {
-        "manifest_sha256": _sha256_bytes(expected_bytes),
+        "closure_sha256": _sha256_bytes(lock_bytes),
         "package_count": len(expected_rows),
-        "install_lock_sha256": _sha256_bytes(install_bytes),
-        "mutable_package_count": len(install_rows),
     }
-
 
 def _validate_runtime(policy: Mapping[str, Any]) -> Dict[str, str]:
     runtime = policy["measurement_runtime"]

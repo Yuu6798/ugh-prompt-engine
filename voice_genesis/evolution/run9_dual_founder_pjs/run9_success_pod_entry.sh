@@ -21,6 +21,9 @@ readonly STATUS_FILE="$PUBLIC/status.json"
 readonly STAGE_FILE="$PUBLIC/.current_stage"
 readonly RESULT_DIR="$PUBLIC/successful_run9"
 readonly WALL_CLOCK_SECONDS=21600
+readonly STOP_BUDGET_SECONDS=180
+readonly START_EPOCH="$(date +%s)"
+readonly MAIN_SHELL_PID="$$"
 
 mkdir -p "$WORK" "$PUBLIC"
 STAGE="init"
@@ -55,6 +58,25 @@ force_restore_network_for_stop() {
   FIREWALL_ACTIVE="false"
 }
 
+terminate_main_for_deadline() {
+  # Fail closed: no render/evaluator process may survive into the network-open
+  # RunPod stop phase. Walk /proc recursively so worker grandchildren are also
+  # terminated, while preserving only this watchdog subshell.
+  descendants_of() {
+    local parent="$1" child
+    for child in $(cat "/proc/${parent}/task/${parent}/children" 2>/dev/null || true); do
+      [ "$child" = "$BASHPID" ] && continue
+      descendants_of "$child"
+      printf '%s\n' "$child"
+    done
+  }
+  local victim
+  for victim in $(descendants_of "$MAIN_SHELL_PID"); do
+    kill -KILL "$victim" 2>/dev/null || true
+  done
+  kill -KILL "$MAIN_SHELL_PID" 2>/dev/null || true
+}
+
 self_stop() {
   if [ -z "${RUNPOD_POD_ID:-}" ]; then
     echo "| run9: RUNPOD_POD_ID is absent; self-stop skipped"
@@ -75,7 +97,6 @@ self_stop() {
 on_exit() {
   local ec=$?
   set +e
-  [ -n "${WATCHDOG_PID:-}" ] && kill "$WATCHDOG_PID" 2>/dev/null || true
   [ -n "${HEARTBEAT_PID:-}" ] && kill "$HEARTBEAT_PID" 2>/dev/null || true
   restore_network
   local state="failed"
@@ -101,19 +122,31 @@ PY
   if [ -f /workspace/run9_console.log ]; then
     cp -f /workspace/run9_console.log "$PUBLIC/run9_console.log" 2>/dev/null || true
   fi
-  local hold=900
-  [ "$state" = "success" ] && hold=2700
-  echo "| run9: holding result endpoint for ${hold}s"
+  local requested_hold=900 now remaining max_hold hold
+  [ "$state" = "success" ] && requested_hold=2700
+  now="$(date +%s)"
+  remaining=$(( START_EPOCH + WALL_CLOCK_SECONDS - now ))
+  max_hold=$(( remaining - STOP_BUDGET_SECONDS ))
+  [ "$max_hold" -lt 0 ] && max_hold=0
+  hold="$requested_hold"
+  [ "$hold" -gt "$max_hold" ] && hold="$max_hold"
+  echo "| run9: holding result endpoint for ${hold}s (requested=${requested_hold}s, wall-clock capped)"
   sleep "$hold"
   [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true
-  self_stop || true
+  if self_stop; then
+    [ -n "${WATCHDOG_PID:-}" ] && kill "$WATCHDOG_PID" 2>/dev/null || true
+  else
+    echo "| run9: exit self-stop failed; keeping watchdog alive until wall-clock deadline" >&2
+    [ -n "${WATCHDOG_PID:-}" ] && wait "$WATCHDOG_PID" || true
+  fi
   exit "$ec"
 }
 trap on_exit EXIT
 
 (
   sleep "$WALL_CLOCK_SECONDS"
-  echo "| run9: watchdog reached ${WALL_CLOCK_SECONDS}s; forcing stop" >&2
+  echo "| run9: watchdog reached ${WALL_CLOCK_SECONDS}s; terminating workload before stop" >&2
+  terminate_main_for_deadline
   force_restore_network_for_stop
   self_stop || true
 ) &
@@ -231,19 +264,36 @@ BOOTSTRAP_HEAD="$(git -C "$BOOTSTRAP_RUN_DIR" rev-parse HEAD 2>/dev/null || true
 [ "$BOOTSTRAP_HEAD" = "$RUN9_PIN_COMMIT" ] \
   || die "bootstrap checkout does not match RUN9_PIN_COMMIT before native preflight"
 readonly NATIVE_INSTALL_LOCK="$BOOTSTRAP_RUN_DIR/inputs/measurement_native_install_lock.txt"
-readonly NATIVE_MANIFEST="$BOOTSTRAP_RUN_DIR/inputs/measurement_native_manifest.txt"
-[ -s "$NATIVE_INSTALL_LOCK" ] || die "committed native install lock is missing from bootstrap checkout"
-[ -s "$NATIVE_MANIFEST" ] || die "committed native manifest is missing from bootstrap checkout"
+[ -s "$NATIVE_INSTALL_LOCK" ] || die "committed native measurement closure is missing from bootstrap checkout"
 mapfile -t NATIVE_PACKAGES < "$NATIVE_INSTALL_LOCK"
-[ "${#NATIVE_PACKAGES[@]}" -gt 0 ] || die "native install lock is empty"
+[ "${#NATIVE_PACKAGES[@]}" -gt 0 ] || die "native measurement closure is empty"
 apt-get update -qq
+# Bootstrap-only modules needed to build the pinned CPython/package stack are
+# outside the scientific native comparator; measurement does not import them.
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+  ca-certificates curl git iptables unzip xz-utils libssl-dev zlib1g-dev
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
   --allow-downgrades "${NATIVE_PACKAGES[@]}"
-dpkg-query -W -f='${binary:Package}=${Version}\n' | LC_ALL=C sort \
-  > "$WORK/measurement_native_environment.actual"
-if ! cmp -s "$NATIVE_MANIFEST" "$WORK/measurement_native_environment.actual"; then
-  diff -u "$NATIVE_MANIFEST" "$WORK/measurement_native_environment.actual" >&2 || true
-  die "native measurement environment does not match committed manifest"
+python3 - "$NATIVE_INSTALL_LOCK" "$WORK/measurement_native_environment.actual" <<'PY'
+import pathlib, subprocess, sys
+lock, out = map(pathlib.Path, sys.argv[1:])
+rows = sorted(line.strip() for line in lock.read_text(encoding="utf-8").splitlines() if line.strip())
+names = []
+for row in rows:
+    name, sep, version = row.rpartition("=")
+    if not sep or not name or not version:
+        raise SystemExit(f"invalid native closure row: {row!r}")
+    names.append(name)
+completed = subprocess.run(
+    ["dpkg-query", "-W", "-f=${binary:Package}=${Version}\n", *names],
+    check=True, capture_output=True, text=True,
+)
+actual = sorted(line.strip() for line in completed.stdout.splitlines() if line.strip())
+out.write_text("\n".join(actual) + "\n", encoding="utf-8")
+PY
+if ! cmp -s "$NATIVE_INSTALL_LOCK" "$WORK/measurement_native_environment.actual"; then
+  diff -u "$NATIVE_INSTALL_LOCK" "$WORK/measurement_native_environment.actual" >&2 || true
+  die "consumed native measurement closure does not match committed lock"
 fi
 
 stage "python-3.11.15"
