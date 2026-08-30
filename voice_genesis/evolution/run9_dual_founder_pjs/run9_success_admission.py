@@ -29,6 +29,7 @@ import birth_probe_executor as bp
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR.parents[2]
 _POLICY_PATH = _THIS_DIR / "inputs" / "success_only_admission_policy.json"
+_MEASUREMENT_LOCK_PATH = _THIS_DIR / "inputs" / "measurement_environment_lock.txt"
 _POLICY_SCHEMA = "run9-success-only-admission-policy/1.0"
 _ADMISSION_SCHEMA = "run9-successful-artifact-admission/1.0"
 _MANIFEST_SCHEMA = "run9-successful-artifact-manifest/1.0"
@@ -233,6 +234,7 @@ def _validated_generated_artifact_bytes(
 def _snapshot_repo_inputs() -> Dict[str, str]:
     paths = {
         "success_only_admission_policy_sha256": _POLICY_PATH,
+        "measurement_environment_lock_sha256": _MEASUREMENT_LOCK_PATH,
         "success_admission_executor_sha256": Path(__file__).resolve(),
         "birth_probe_executor_sha256": _THIS_DIR / "birth_probe_executor.py",
         "run9_contract_sha256": _THIS_DIR / "RUN9_CONTRACT.yaml",
@@ -352,7 +354,37 @@ def _validate_runtime(policy: Mapping[str, Any]) -> Dict[str, str]:
             "setuptools version mismatch: "
             f"expected {packages['setuptools']!r}, got {setuptools_version!r}"
         )
-    return {**observed, "setuptools": setuptools_version}
+    try:
+        expected_freeze = sorted(
+            line.strip()
+            for line in _MEASUREMENT_LOCK_PATH.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        )
+        actual_freeze = sorted(
+            line.strip()
+            for line in subprocess.run(
+                [sys.executable, "-m", "pip", "freeze", "--all"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+            if line.strip()
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise bp.BirthProbeError("measurement dependency closure could not be verified") from exc
+    if actual_freeze != expected_freeze:
+        raise bp.BirthProbeError(
+            "measurement dependency closure mismatch: "
+            f"extra={sorted(set(actual_freeze)-set(expected_freeze))!r}, "
+            f"missing={sorted(set(expected_freeze)-set(actual_freeze))!r}"
+        )
+    closure = {}
+    for row in expected_freeze:
+        if row.count("==") != 1:
+            raise bp.BirthProbeError(f"measurement lock row is not an exact pin: {row!r}")
+        name, version = row.split("==", 1)
+        closure[name] = version
+    return {"python": observed["python"], **closure}
 
 
 def _load_measurement_inputs(policy: Mapping[str, Any]) -> tuple[

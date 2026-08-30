@@ -70,10 +70,26 @@ def _canonical_json_bytes(value: object) -> bytes:
 
 def _bootstrap_command() -> str:
     return r'''set -euo pipefail
+bootstrap_self_stop() {
+  if [ -z "${RUNPOD_POD_ID:-}" ]; then
+    echo "run9 bootstrap: RUNPOD_POD_ID unset; self-stop skipped" >&2
+    return 0
+  fi
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if runpodctl stop pod "$RUNPOD_POD_ID"; then
+      return 0
+    fi
+    echo "run9 bootstrap: self-stop attempt=$attempt failed" >&2
+    [ "$attempt" -lt 5 ] && sleep 30
+  done
+  echo "run9 bootstrap: SELF-STOP FAILED after 5 attempts; pod may still be billing: $RUNPOD_POD_ID" >&2
+  return 1
+}
 bootstrap_exit() {
   ec=$?
-  if [ "$ec" -ne 0 ] && [ -n "${RUNPOD_POD_ID:-}" ]; then
-    runpodctl stop pod "$RUNPOD_POD_ID" 2>/dev/null || true
+  if [ "$ec" -ne 0 ]; then
+    bootstrap_self_stop || true
   fi
   exit "$ec"
 }
@@ -222,6 +238,12 @@ def _print_json(value: object) -> None:
     sys.stdout.write("\n")
 
 
+def _extract_pod_id(response: Mapping[str, Any]) -> str | None:
+    """Return a non-empty RunPod identifier from known REST response keys."""
+    value = response.get("id") or response.get("podId")
+    return value if isinstance(value, str) and value else None
+
+
 def _prepare(_: argparse.Namespace) -> int:
     _print_json(verify_prelaunch())
     return 0
@@ -242,14 +264,20 @@ def _launch(args: argparse.Namespace) -> int:
         api_key=api_key,
         payload=report["payload"],
     )
-    _print_json(
-        {
-            "schema": "run9-success-pod-launch/1.0",
-            "source_commit": report["source_commit"],
-            "payload_sha256": report["payload_sha256"],
-            "pod": response,
-        }
-    )
+    pod_id = _extract_pod_id(response)
+    launch_record = {
+        "schema": "run9-success-pod-launch/1.0",
+        "source_commit": report["source_commit"],
+        "payload_sha256": report["payload_sha256"],
+        "pod_id": pod_id,
+        "pod": response,
+    }
+    _print_json(launch_record)
+    if pod_id is None:
+        raise RuntimeError(
+            "RunPod POST /pods succeeded but returned no id/podId; a billable Pod may "
+            "exist without a recorded stop handle — reconcile in the RunPod console immediately"
+        )
     return 0
 
 

@@ -107,6 +107,13 @@ def test_policy_is_pass_only_and_candidate_blind() -> None:
     assert len(policy["generated_export_artifacts"]) == 9
 
 
+def test_measurement_lock_is_bound_into_repo_provenance() -> None:
+    snapshot = admission._snapshot_repo_inputs()  # noqa: SLF001
+    assert "measurement_environment_lock_sha256" in snapshot
+    lock_bytes = admission._MEASUREMENT_LOCK_PATH.read_bytes()  # noqa: SLF001
+    assert snapshot["measurement_environment_lock_sha256"] == admission._sha256_bytes(lock_bytes)  # noqa: SLF001
+
+
 def test_production_cli_has_no_network_isolation_bypass() -> None:
     source = Path(admission.__file__).read_text(encoding="utf-8")
     assert "allow-test-network" not in source

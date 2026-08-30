@@ -102,9 +102,7 @@ trap on_exit EXIT
 (
   sleep "$WALL_CLOCK_SECONDS"
   echo "| run9: watchdog reached ${WALL_CLOCK_SECONDS}s; forcing stop" >&2
-  if [ -n "${RUNPOD_POD_ID:-}" ]; then
-    runpodctl stop pod "$RUNPOD_POD_ID" || true
-  fi
+  self_stop || true
 ) &
 WATCHDOG_PID=$!
 
@@ -335,24 +333,45 @@ readonly GENERATED="$WORK/generated_export"
 
 stage "measurement-environment"
 readonly VENV_RENDER="$WORK/venv_render"
+readonly MEASUREMENT_LOCK="$RUN_DIR/inputs/measurement_environment_lock.txt"
+[ -s "$MEASUREMENT_LOCK" ] || die "committed measurement environment lock is missing"
 "$PY" -m venv --clear "$VENV_RENDER"
-"$VENV_RENDER/bin/pip" install --no-cache-dir \
-  numpy==2.4.6 scipy==1.17.1 soundfile==0.14.0 PyYAML==6.0.1 \
-  onnxruntime==1.29.0 pyworld==0.3.5 setuptools==79.0.1
-"$VENV_RENDER/bin/python" - <<'PY'
-import importlib.metadata as md, platform
-expected = {
-    "PyYAML": "6.0.1",
-    "numpy": "2.4.6",
-    "onnxruntime": "1.29.0",
-    "pyworld": "0.3.5",
-    "scipy": "1.17.1",
-    "setuptools": "79.0.1",
-    "soundfile": "0.14.0",
-}
-actual = {name: md.version(name) for name in expected}
-assert actual == expected, (actual, expected)
-assert platform.python_version() == "3.11.15", platform.python_version()
+PIP_PIN="$(grep -Ei '^pip==' "$MEASUREMENT_LOCK")"
+[ -n "$PIP_PIN" ] || die "measurement lock does not pin pip"
+"$VENV_RENDER/bin/python" -m pip install --no-cache-dir --upgrade "$PIP_PIN"
+for build_package in setuptools wheel Cython numpy; do
+  build_pin="$(grep -Ei "^${build_package}==" "$MEASUREMENT_LOCK")"
+  [ -n "$build_pin" ] || die "measurement lock does not pin $build_package"
+  "$VENV_RENDER/bin/python" -m pip install --no-cache-dir --no-deps "$build_pin"
+done
+grep -Evi '^pip==' "$MEASUREMENT_LOCK" > "$WORK/measurement_environment.install.lock"
+"$VENV_RENDER/bin/python" -m pip install --no-cache-dir --no-deps --no-build-isolation \
+  -r "$WORK/measurement_environment.install.lock"
+"$VENV_RENDER/bin/python" - "$MEASUREMENT_LOCK" <<'PY'
+import pathlib, platform, subprocess, sys
+lock_path = pathlib.Path(sys.argv[1])
+expected = sorted(
+    line.strip()
+    for line in lock_path.read_text(encoding="utf-8").splitlines()
+    if line.strip()
+)
+actual = sorted(
+    line.strip()
+    for line in subprocess.run(
+        [sys.executable, "-m", "pip", "freeze", "--all"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    if line.strip()
+)
+if actual != expected:
+    raise SystemExit(
+        f"measurement closure mismatch extra={sorted(set(actual)-set(expected))} "
+        f"missing={sorted(set(expected)-set(actual))}"
+    )
+if platform.python_version() != "3.11.15":
+    raise SystemExit(f"compiled Python version drift: {platform.python_version()}")
 PY
 "$VENV_RENDER/bin/python" -m pip freeze --all > "$WORK/measurement_environment.freeze"
 

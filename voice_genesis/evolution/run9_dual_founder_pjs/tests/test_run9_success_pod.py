@@ -37,11 +37,34 @@ def test_payload_bootstrap_fetches_exact_commit_and_stops_on_bootstrap_failure()
     assert 'actual="$(git -C /root/run9-bootstrap rev-parse HEAD)"' in command
     assert '[ "$actual" = "$RUN9_PIN_COMMIT" ]' in command
     assert 'runpodctl stop pod "$RUNPOD_POD_ID"' in command
+    assert "for attempt in 1 2 3 4 5" in command
+    assert 'sleep 30' in command
+    assert "SELF-STOP FAILED after 5 attempts" in command
     assert "run9_success_pod_entry.sh" in command
 
 
 def test_checked_in_policy_passes_runner_preflight_shape_check() -> None:
     runner._validate_policy(RUN_DIR / "inputs" / "success_only_admission_policy.json")
+
+
+def test_entry_watchdog_reuses_confirmed_retrying_self_stop() -> None:
+    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
+    watchdog = text[text.index('(\n  sleep "$WALL_CLOCK_SECONDS"'): text.index('WATCHDOG_PID=$!')]
+    assert "self_stop || true" in watchdog
+    assert 'runpodctl stop pod "$RUNPOD_POD_ID" || true' not in watchdog
+    assert "for attempt in 1 2 3 4 5" in text
+
+
+def test_entry_measurement_environment_uses_committed_full_lock() -> None:
+    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
+    measurement = text[text.index('stage "measurement-environment"'): text.index('stage "render-network-isolation"')]
+    assert 'measurement_environment_lock.txt' in measurement
+    assert '--no-deps --no-build-isolation' in measurement
+    assert 'pip", "freeze", "--all"' in measurement
+    lock = RUN_DIR / "inputs" / "measurement_environment_lock.txt"
+    rows = [line for line in lock.read_text(encoding="utf-8").splitlines() if line]
+    assert len(rows) > 7
+    assert all(row.count("==") == 1 for row in rows)
 
 
 def test_entry_enables_watchdog_before_the_first_download() -> None:
@@ -145,6 +168,28 @@ def test_confirmed_launch_performs_exactly_one_post(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(runner, "_request_json", record)
     assert runner.main(["launch", "--confirm-launch", runner.CONFIRMATION]) == 0
     assert calls == [("POST", runner.CREATE_POD_URL, payload)]
+
+
+def test_launch_rejects_success_response_without_pod_id(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    payload = runner.build_launch_payload(COMMIT)
+    monkeypatch.setenv("RUNPOD_API_KEY", "not-printed")
+    monkeypatch.setattr(
+        runner,
+        "verify_prelaunch",
+        lambda: {
+            "source_commit": COMMIT,
+            "payload_sha256": "b" * 64,
+            "payload": payload,
+        },
+    )
+    monkeypatch.setattr(runner, "_request_json", lambda *args, **kwargs: {"status": "created"})
+    assert runner.main(["launch", "--confirm-launch", runner.CONFIRMATION]) == 2
+    captured = capsys.readouterr()
+    assert '"pod_id": null' in captured.out
+    assert "billable Pod may exist" in captured.err
 
 
 def test_preflight_rejects_dirty_tree_before_remote_check(
