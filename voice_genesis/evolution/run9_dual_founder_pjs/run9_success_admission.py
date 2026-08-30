@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 import birth_probe_executor as bp
 
@@ -332,14 +332,21 @@ def _verify_network_isolation_netns() -> None:
         )
 
 
-_SECCOMP_VERIFY_FAMILIES: tuple[tuple[int, str], ...] = (
-    (socket.AF_INET, "AF_INET"),
-    (socket.AF_INET6, "AF_INET6"),
-    (socket.AF_PACKET, "AF_PACKET"),
-)
-# Plain ints with labels: socket.socket() accepts an int `type`, and DCCP /
-# SOCK_PACKET have no `socket` module constants to reference.
-_SECCOMP_VERIFY_KINDS: tuple[tuple[int, str], ...] = (
+# AF_UNIX and AF_NETLINK are the only two domains our seccomp allowlist
+# (run9_seccomp_prelude.py) admits. AF_NETLINK is exempt from this sweep
+# by design: it is kernel-local only (no external transmission is possible
+# over it -- there is no such thing as a routable AF_NETLINK packet), and
+# glibc getifaddrs()/libuuid may depend on it, so refusing it would buy the
+# isolation claim nothing while breaking unrelated things. Sweeping it here
+# would be verifying a claim we do not make and do not want to make.
+_SECCOMP_EXEMPT_DOMAINS = (socket.AF_UNIX, socket.AF_NETLINK)
+_SECCOMP_DOMAIN_SWEEP_RANGE = range(0, 64)
+# Plain ints: socket.socket() accepts an int `type`, and DCCP / SOCK_PACKET
+# have no `socket` module constants to reference. Covers every socket(2)
+# type currently defined by the kernel (SOCK_CLOEXEC/SOCK_NONBLOCK are
+# flag bits ORed onto these, not distinct types, so they need no separate
+# sweep cell).
+_SECCOMP_SWEEP_TYPES: tuple[tuple[int, str], ...] = (
     (1, "SOCK_STREAM"),
     (2, "SOCK_DGRAM"),
     (3, "SOCK_RAW"),
@@ -348,28 +355,92 @@ _SECCOMP_VERIFY_KINDS: tuple[tuple[int, str], ...] = (
     (6, "SOCK_DCCP"),
     (10, "SOCK_PACKET"),
 )
+_SECCOMP_INET_FAMILIES: tuple[tuple[int, str], ...] = (
+    (socket.AF_INET, "AF_INET"),
+    (socket.AF_INET6, "AF_INET6"),
+)
+_SECCOMP_PACKET_TYPES: tuple[tuple[int, str], ...] = (
+    (3, "SOCK_RAW"),
+    (2, "SOCK_DGRAM"),
+)
 
 
 def _verify_network_isolation_seccomp() -> None:
-    """Empirically confirm no internet-domain socket object can be created.
+    """Empirically confirm no socket object can be created outside AF_UNIX/AF_NETLINK.
 
-    Full-matrix over the socket(2) creation surface: every (family, type)
-    cell across AF_INET / AF_INET6 / AF_PACKET x the seven POSIX/Linux socket
-    types must fail to produce a socket object. Probing only one type (e.g.
-    SOCK_DGRAM, or SOCK_STREAM+SOCK_DGRAM) would pass a host policy that
-    blocks that subset while leaving another type (SOCK_RAW, SOCK_PACKET,
-    ...) open -- a false-success path. This check is errno-agnostic by
-    design: the observable guarantee is "creation did not succeed", and a
-    real deployment may enforce that via seccomp EPERM, a missing
-    capability (also EPERM), an unsupported protocol (EPROTONOSUPPORT), or
-    a rejected type (EINVAL) -- any OSError counts as blocked. Only an
-    actual successful `socket.socket()` call is a verification failure.
-    This is the terminal probe for this isolation-mechanism family: no
-    further socket kind/family enumeration is pending.
+    Exhaustive over the enumerable socket(2) argument space. socket(2) has
+    exactly three arguments -- domain, type, protocol -- so once all three
+    axes are swept there is no further axis left to enumerate; this is the
+    terminal probe for this isolation-mechanism family. (A finding about a
+    non-socket(2) network escape path -- io_uring, a bind-mounted /proc
+    trick, etc. -- would be a different family of gap, not a hole in this
+    sweep.)
+
+    Errno-agnostic by design: the observable guarantee is "creation did not
+    succeed", and a real deployment may enforce that via seccomp EPERM, a
+    missing capability (also EPERM), an unsupported protocol
+    (EPROTONOSUPPORT), a rejected type (EINVAL), or any other OSError.
+    Only an actual successful `socket.socket()` call is a verification
+    failure -- prior narrower probes here missed AF_PACKET entirely, then
+    missed explicit-protocol raw sockets (`SOCK_RAW`+`IPPROTO_ICMP` fails
+    with EPROTONOSUPPORT even in an *open* environment when probed with
+    protocol 0, silently passing a policy that permits it with the real
+    protocol set), then missed domains outside the small enumerated set
+    entirely (a domain BLOCKLIST cannot terminate the domain axis --
+    AF_SMC(43)/AF_XDP(44)/etc. would pass unchecked). This sweep is
+    structured to close all three gaps at once rather than grow reactively:
+
+      * every domain 0..63 except AF_UNIX(1)/AF_NETLINK(16) x all 7 sweep
+        types, protocol 0 -- terminates the domain axis in full instead of
+        naming a handful of known-hostile domains.
+      * AF_INET/AF_INET6 x all 7 sweep types x the full 8-bit protocol
+        range (0..255) -- terminates the protocol axis for the two
+        Internet families, covering every explicit-protocol raw/ICMP/
+        SCTP/DCCP path.
+      * AF_PACKET x {SOCK_RAW, SOCK_DGRAM} x the full 16-bit ethertype
+        range (0..65535) -- AF_PACKET sockets are parameterized by
+        ethertype rather than IP protocol; other AF_PACKET types are
+        already covered by the domain sweep's protocol-0 row above.
+      * AF_UNIX/SOCK_STREAM must still succeed: the baseline that proves
+        this check is not vacuously passing because `socket.socket` itself
+        is broken in this process.
+
+    Per-failure messages are informative but their formatting is deferred:
+    with ~135k probes in the full sweep, eagerly formatting a label for
+    every cell would be wasted work on the overwhelmingly common blocked
+    outcome. A label is only built on the one path where it is needed --
+    the process can still create a socket the isolation mechanism was
+    supposed to deny.
     """
-    for family, family_label in _SECCOMP_VERIFY_FAMILIES:
-        for kind, kind_label in _SECCOMP_VERIFY_KINDS:
-            _expect_socket_creation_blocked(family, kind, f"{family_label}/{kind_label}")
+    for domain in _SECCOMP_DOMAIN_SWEEP_RANGE:
+        if domain in _SECCOMP_EXEMPT_DOMAINS:
+            continue
+        for kind, kind_label in _SECCOMP_SWEEP_TYPES:
+            _expect_socket_creation_blocked(
+                domain,
+                kind,
+                0,
+                lambda domain=domain, kind_label=kind_label: f"domain={domain}/{kind_label}/proto=0",
+            )
+    for family, family_label in _SECCOMP_INET_FAMILIES:
+        for kind, kind_label in _SECCOMP_SWEEP_TYPES:
+            for proto in range(0, 256):
+                _expect_socket_creation_blocked(
+                    family,
+                    kind,
+                    proto,
+                    lambda family_label=family_label,
+                    kind_label=kind_label,
+                    proto=proto: f"{family_label}/{kind_label}/proto={proto}",
+                )
+    for kind, kind_label in _SECCOMP_PACKET_TYPES:
+        for proto in range(0, 65536):
+            _expect_socket_creation_blocked(
+                socket.AF_PACKET,
+                kind,
+                proto,
+                lambda kind_label=kind_label, proto=proto: f"AF_PACKET/{kind_label}/ethertype={proto}",
+            )
     try:
         unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     except OSError as exc:
@@ -377,15 +448,17 @@ def _verify_network_isolation_seccomp() -> None:
     unix_socket.close()
 
 
-def _expect_socket_creation_blocked(family: int, kind: int, label: str) -> None:
+def _expect_socket_creation_blocked(
+    family: int, kind: int, proto: int, describe: Callable[[], str]
+) -> None:
     try:
-        blocked_socket = socket.socket(family, kind)
+        blocked_socket = socket.socket(family, kind, proto)
     except OSError:
         # Errno-agnostic: seccomp EPERM, missing-capability EPERM,
         # EPROTONOSUPPORT, EINVAL, etc. all mean "no socket object exists".
         return
     blocked_socket.close()
-    raise bp.BirthProbeError(f"render process can still create {label} sockets")
+    raise bp.BirthProbeError(f"render process can still create {describe()} sockets")
 
 
 def _verify_network_isolation(mode: str) -> None:
