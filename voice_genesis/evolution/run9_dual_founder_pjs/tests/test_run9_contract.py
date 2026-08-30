@@ -22292,9 +22292,8 @@ def test_pr333_r16_load_pinned_rejects_new_field_tamper_via_hash_mismatch(
 
 
 # ---------------------------------------------------------------------------
-# PR #337 Codex bot レビュー第8巡対応（P2, 採用）: README の再実行ブロッカー
-# 記述が実状態と一致していること。acoustic ONNX を唯一のブロッカーと呼ぶと
-# 次の実行者へ実行不能な handoff を渡すため、3 件を全数列挙する。
+# PR #337 Codex bot レビュー第8巡対応（P2, 採用）+ 2026-08-30 alternate
+# attempt: README の再実行ブロッカー記述が実状態と一致していること。
 # ---------------------------------------------------------------------------
 
 
@@ -22305,27 +22304,27 @@ def _executor_impl_section() -> str:
     return section[1].split("## 設計判断の記録", 1)[0]
 
 
-def test_pr337_r8_readme_lists_all_three_rerun_blockers() -> None:
-    """再実行ブロッカーが acoustic ONNX 単独ではなく、(1) C1 `r_sham`
-    synthesis attachment 未実装、(2) `dependency_pins_sha` PENDING、
-    (3) pin 済み acoustic ONNX exact bytes/再現環境、の 3 件として
-    列挙されていること。"""
+def test_alternate_attempt_readme_lists_both_formal_rerun_blockers() -> None:
+    """C1 attachment 解消後の2ブロッカーを全数列挙していること。"""
     section = _executor_impl_section()
     assert "現在の再実行ブロッカー" in section
     assert "のみであり" not in section.split("現在の再実行ブロッカー", 1)[1].split(
         "machine-dependent な実装作業", 1
     )[0], "単独ブロッカー主張へ退行している"
-    assert "r_sham" in section
     assert "dependency_pins_sha" in section
     assert "PENDING" in section
-    assert "cdbd779c" in section
+    assert "alternate diagnostic 実行と後続の正式再凍結" in section
+    assert "80a40f" in section
+    assert "cdbd779c" not in section.split("現在の再実行ブロッカー", 1)[1].split(
+        "machine-dependent な実装作業", 1
+    )[0]
 
 
-def test_pr337_r8_readme_records_c1_fail_closed_behavior() -> None:
-    """production C1 が render 前に fail-closed することが README に
-    記録されていること（`r_sham` を bypass したまま PASS しない）。"""
+def test_alternate_attempt_readme_records_c1_attachment_behavior() -> None:
+    """production C1 attachmentとfail-closed監査が記録されていること。"""
     section = _executor_impl_section()
     assert "ZERO_CONTROLPROFILE_SHAM" in section
+    assert "CONSUMED_INERT_ZERO_PROFILE" in section
     assert "fail-closed" in section
 
 
