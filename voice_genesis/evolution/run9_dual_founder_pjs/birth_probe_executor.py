@@ -147,11 +147,13 @@ _HELPER_PROVENANCE_PATHS: Dict[str, Path] = {
     "run9_schema_sha256": _THIS_DIR / "run9_schema.py",
     "run9_controlprofile_sha256": _THIS_DIR / "run9_controlprofile.py",
     "gate_synth_sha256": _REPO_ROOT / "voice_genesis" / "foundry" / "s1_gate" / "gate_synth.py",
+    "phoneme_jp_sha256": _REPO_ROOT / "voice_genesis" / "singer" / "phoneme_jp.py",
 }
 _HELPER_MODULE_NAMES = {
     "run9_schema_sha256": "run9_schema",
     "run9_controlprofile_sha256": "run9_controlprofile",
     "gate_synth_sha256": "gate_synth",
+    "phoneme_jp_sha256": "phoneme_jp",
 }
 _LOAD_TIME_PROVENANCE_PATHS: Dict[str, Path] = {
     "executor_sha256": _EXECUTOR_PATH,
@@ -931,9 +933,40 @@ def publish_evidence_bundle(
 
 @dataclass(frozen=True)
 class _ProbeNote:
-    mora: str
+    # `mora` holds a `singer/phoneme_jp.Mora` (onset/vowel structured value),
+    # not the raw kana string — see `_probe_note_mora` for the conversion
+    # boundary. Typed `Any` because `phoneme_jp` is only resolvable at
+    # runtime (provenance-controlled import, see `GateSynthRenderer.__init__`).
+    mora: Any
     midi: int
     duration_beats: float
+
+
+def _probe_note_mora(phoneme_jp_module: Any, kana: str) -> Any:
+    """Convert one pinned probe-manifest ``kana`` field into the structured
+    Mora value ``gate_synth.mora_phonemes``/``build_inputs`` expect.
+
+    The pinned P0 probe manifest (``evaluation/probe_manifest.json``) carries
+    ``notes[i].kana`` as a plain kana string per note — it is transcribed
+    1:1 from ``singer/score.py`` (see the manifest's ``source`` block), which
+    itself builds ``ScoreNote.mora`` via ``phoneme_jp.kana_to_morae(kana)``.
+    ``gate_synth.mora_phonemes`` (called from ``gate_synth.build_inputs``)
+    reads ``mora.onset``/``mora.vowel`` off that structured value; a raw
+    string reaching it raises ``AttributeError: 'str' object has no
+    attribute 'onset'``.  This function performs the same canonical
+    kana -> Mora parse the foundry's own callers use — it does not invent a
+    new kana/phoneme mapping — and fails closed (rather than guessing a mora
+    boundary) if a manifest kana field is not exactly one mora, matching the
+    "1 mora = 1 note" contract documented in both ``singer/score.py`` and
+    ``singer/phoneme_jp.py``.
+    """
+    morae = phoneme_jp_module.kana_to_morae(kana)
+    if len(morae) != 1:
+        raise BirthProbeError(
+            f"probe manifest note kana {kana!r} did not parse to exactly one mora "
+            f"(got {len(morae)}); refusing to guess a mora boundary"
+        )
+    return morae[0]
 
 
 class GateSynthRenderer:
@@ -1003,6 +1036,11 @@ class GateSynthRenderer:
             if str(foundry_dir) not in sys.path:
                 sys.path.insert(0, str(foundry_dir))
             import gate_synth
+
+            singer_dir = _REPO_ROOT / "voice_genesis" / "singer"
+            if str(singer_dir) not in sys.path:
+                sys.path.insert(0, str(singer_dir))
+            import phoneme_jp
         except ImportError as exc:  # pragma: no cover - measurement environment only
             raise BirthProbeError(f"gate_synth runtime dependency unavailable: {exc}") from exc
         _assert_local_helper_module(gate_synth, "gate_synth_sha256")
@@ -1010,6 +1048,7 @@ class GateSynthRenderer:
             _LOAD_TIME_PROVENANCE_SHA256["gate_synth_sha256"]
         ):
             raise BirthProbeError("gate_synth in-memory load-time bytes diverge from Birth Probe provenance")
+        _assert_local_helper_module(phoneme_jp, "phoneme_jp_sha256")
         self._sf = sf
         self._gate = gate_synth
         self._input_paths = {
@@ -1067,7 +1106,7 @@ class GateSynthRenderer:
         self._tempo = float(cell["tempo_bpm"])
         self._notes = [
             _ProbeNote(
-                mora=str(note["kana"]),
+                mora=_probe_note_mora(phoneme_jp, str(note["kana"])),
                 midi=int(note["pitch_midi"]),
                 duration_beats=float(note["duration_beats"]),
             )

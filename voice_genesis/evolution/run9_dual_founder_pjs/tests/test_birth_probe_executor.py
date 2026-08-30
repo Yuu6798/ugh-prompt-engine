@@ -1,6 +1,7 @@
 """RUN9 rev 0.6 Birth Probe executor/consumer tests."""
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -15,6 +16,46 @@ if str(_RUN_DIR) not in sys.path:
     sys.path.insert(0, str(_RUN_DIR))
 
 import birth_probe_executor as bp  # noqa: E402
+
+# `voice_genesis/` from this test file: parents[0]=run9_dual_founder_pjs,
+# [1]=evolution, [2]=voice_genesis.
+_VOICE_GENESIS_DIR = _THIS_DIR.parents[2]
+_GATE_SYNTH_PATH = _VOICE_GENESIS_DIR / "foundry" / "s1_gate" / "gate_synth.py"
+_PHONEME_JP_PATH = _VOICE_GENESIS_DIR / "singer" / "phoneme_jp.py"
+_FOUNDRY_TESTS_DIR = _VOICE_GENESIS_DIR / "foundry" / "tests"
+if str(_FOUNDRY_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_FOUNDRY_TESTS_DIR))
+
+from _optional_runtime_stubs import stub_onnxruntime_if_missing  # noqa: E402
+
+
+def _load_gate_synth():
+    """Load the real `gate_synth.py` (onnxruntime-stubbed, matching the
+    foundry's own `test_s7_gate_synth_dur_hook.py::_load_gate_synth`
+    pattern) so its actual `mora_phonemes`/`build_inputs` run, not a fake."""
+    spec = importlib.util.spec_from_file_location("gate_synth", _GATE_SYNTH_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["gate_synth"] = module
+    with stub_onnxruntime_if_missing():
+        spec.loader.exec_module(module)
+    sys.modules.pop("gate_synth", None)
+    return module
+
+
+def _load_phoneme_jp():
+    """Load the real `singer/phoneme_jp.py` — the canonical kana -> Mora
+    parser `GateSynthRenderer.__init__` and `singer/score.py` both use."""
+    spec = importlib.util.spec_from_file_location("phoneme_jp", _PHONEME_JP_PATH)
+    module = importlib.util.module_from_spec(spec)
+    # `@dataclass` on `Mora` resolves its own module via `sys.modules`, so it
+    # must be registered before exec (same requirement `_load_gate_synth`
+    # satisfies for `gate_synth`).
+    sys.modules["phoneme_jp"] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop("phoneme_jp", None)
+    return module
 
 
 FOUNDERS = ("R9F-01", "R9F-02")
@@ -614,6 +655,62 @@ def test_gate_synth_renderer_adapter_matches_runtime_note_and_tempo_contract() -
     renderer._gate = FakeGate()
     renderer._sf = FakeSoundFile()
     assert renderer("R9F-01", "reference", 0, None) == b"adapter-wav"
+
+
+def test_probe_note_mora_converts_kana_via_canonical_phoneme_jp_parser() -> None:
+    """`_probe_note_mora` must use the same kana -> Mora parse as
+    `singer/score.py` (`phoneme_jp.kana_to_morae`), not a bespoke mapping."""
+    phoneme_jp = _load_phoneme_jp()
+    mora = bp._probe_note_mora(phoneme_jp, "さ")
+    assert isinstance(mora, phoneme_jp.Mora)
+    assert mora.onset == "s"
+    assert mora.vowel == "a"
+
+    vowel_only = bp._probe_note_mora(phoneme_jp, "い")
+    assert vowel_only.onset is None
+    assert vowel_only.vowel == "i"
+
+
+def test_probe_note_mora_rejects_kana_that_is_not_exactly_one_mora() -> None:
+    phoneme_jp = _load_phoneme_jp()
+    with pytest.raises(bp.BirthProbeError, match="did not parse to exactly one mora"):
+        bp._probe_note_mora(phoneme_jp, "さくら")
+
+
+def test_gate_synth_renderer_note_construction_matches_pinned_p0_probe_cell() -> None:
+    """Regression for the real RUN9 Birth Gate pod crash:
+
+        gate_synth.py:316 mora_phonemes -> if mora.onset is not None:
+        AttributeError: 'str' object has no attribute 'onset'
+
+    `GateSynthRenderer.__init__` used to build `_ProbeNote(mora=str(note["kana"]), ...)`
+    directly from the pinned probe manifest, handing `gate_synth.build_inputs`
+    (via `run_pipeline`) a raw kana string where it expects a structured
+    `phoneme_jp.Mora`. This exercises the exact note-construction boundary
+    (`_probe_note_mora` + `_ProbeNote`) against every note of the pinned P0
+    cell and confirms the real `gate_synth.mora_phonemes` accepts each
+    constructed note without raising.
+    """
+    phoneme_jp = _load_phoneme_jp()
+    gate_synth = _load_gate_synth()
+    manifest = json.loads(
+        (_RUN_DIR / "evaluation" / "probe_manifest.json").read_text(encoding="utf-8")
+    )
+    p0_probes = [probe for probe in manifest["probes"] if probe["probe_id"] == "P0"]
+    assert len(p0_probes) == 1
+    cells = p0_probes[0]["cells"]
+    assert len(cells) == 1
+    notes = cells[0]["notes"]
+    assert notes, "pinned P0 cell must carry at least one note"
+
+    for note in notes:
+        probe_note = bp._ProbeNote(
+            mora=bp._probe_note_mora(phoneme_jp, str(note["kana"])),
+            midi=int(note["pitch_midi"]),
+            duration_beats=float(note["duration_beats"]),
+        )
+        phonemes = gate_synth.mora_phonemes(probe_note.mora)
+        assert phonemes, f"empty phoneme list for kana {note['kana']!r}"
 
 
 def test_gate_synth_renderer_rejects_non_exact_c1_profile_before_synthesis() -> None:
