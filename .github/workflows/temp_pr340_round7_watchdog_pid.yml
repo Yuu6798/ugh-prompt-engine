@@ -1,0 +1,73 @@
+name: temp-pr340-round7-watchdog-pid
+on:
+  push:
+    branches: [codex/run9-success-only-prepod]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/run9-success-only-prepod
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply watchdog pid fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          run_dir = Path('voice_genesis/evolution/run9_dual_founder_pjs')
+          entry = run_dir / 'run9_success_pod_entry.sh'
+          tests = run_dir / 'tests/test_run9_success_pod.py'
+
+          def replace_once(path: Path, old: str, new: str, label: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, got {count}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          old_helper = '''terminate_main_for_deadline() {\n  # Fail closed: no render/evaluator process may survive into the network-open\n  # RunPod stop phase. Walk /proc recursively so worker grandchildren are also\n  # terminated, while preserving only this watchdog subshell.\n  descendants_of() {\n    local parent="$1" child\n    for child in $(cat "/proc/${parent}/task/${parent}/children" 2>/dev/null || true); do\n      [ "$child" = "$BASHPID" ] && continue\n      descendants_of "$child"\n      printf '%s\\n' "$child"\n    done\n  }\n  local victim\n  for victim in $(descendants_of "$MAIN_SHELL_PID"); do\n    kill -KILL "$victim" 2>/dev/null || true\n  done\n  kill -KILL "$MAIN_SHELL_PID" 2>/dev/null || true\n}\n'''
+          new_helper = '''terminate_main_for_deadline() {\n  # Fail closed: no render/evaluator process may survive into the network-open\n  # RunPod stop phase. The watchdog PID is captured by the outer watchdog shell\n  # before command substitution changes BASHPID, then passed through recursion.\n  local watchdog_pid="$1"\n  [ -n "$watchdog_pid" ] || return 1\n  descendants_of() {\n    local parent="$1" preserved_watchdog_pid="$2" child\n    for child in $(cat "/proc/${parent}/task/${parent}/children" 2>/dev/null || true); do\n      [ "$child" = "$preserved_watchdog_pid" ] && continue\n      descendants_of "$child" "$preserved_watchdog_pid"\n      printf '%s\\n' "$child"\n    done\n  }\n  local victim\n  for victim in $(descendants_of "$MAIN_SHELL_PID" "$watchdog_pid"); do\n    kill -KILL "$victim" 2>/dev/null || true\n  done\n  kill -KILL "$MAIN_SHELL_PID" 2>/dev/null || true\n}\n'''
+          replace_once(entry, old_helper, new_helper, 'deadline helper')
+
+          old_watchdog = '''(\n  sleep "$WALL_CLOCK_SECONDS"\n  echo "| run9: watchdog reached ${WALL_CLOCK_SECONDS}s; terminating workload before stop" >&2\n  terminate_main_for_deadline\n  force_restore_network_for_stop\n  self_stop || true\n) &\n'''
+          new_watchdog = '''(\n  readonly WATCHDOG_SELF_PID="$BASHPID"\n  sleep "$WALL_CLOCK_SECONDS"\n  echo "| run9: watchdog reached ${WALL_CLOCK_SECONDS}s; terminating workload before stop" >&2\n  terminate_main_for_deadline "$WATCHDOG_SELF_PID"\n  force_restore_network_for_stop\n  self_stop || true\n) &\n'''
+          replace_once(entry, old_watchdog, new_watchdog, 'watchdog capture')
+
+          test_text = tests.read_text(encoding='utf-8')
+          if 'import os\n' not in test_text:
+              test_text = test_text.replace('import json\n', 'import json\nimport os\nimport shlex\nimport signal\nimport time\n', 1)
+
+          old_order_test = '''def test_watchdog_terminates_workload_before_opening_network_for_stop() -> None:\n    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")\n    watchdog = text[text.index('(\\n  sleep "$WALL_CLOCK_SECONDS"'): text.index('WATCHDOG_PID=$!')]\n    assert watchdog.index("terminate_main_for_deadline") < watchdog.index("force_restore_network_for_stop")\n    assert watchdog.index("force_restore_network_for_stop") < watchdog.index("self_stop || true")\n'''
+          new_order_test = '''def test_watchdog_terminates_workload_before_opening_network_for_stop() -> None:\n    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")\n    watchdog = text[text.index('(\\n  readonly WATCHDOG_SELF_PID='): text.index('WATCHDOG_PID=$!')]\n    assert 'readonly WATCHDOG_SELF_PID="$BASHPID"' in watchdog\n    assert 'terminate_main_for_deadline "$WATCHDOG_SELF_PID"' in watchdog\n    assert watchdog.index("terminate_main_for_deadline") < watchdog.index("force_restore_network_for_stop")\n    assert watchdog.index("force_restore_network_for_stop") < watchdog.index("self_stop || true")\n\n\ndef test_deadline_process_tree_preserves_outer_watchdog(tmp_path: pathlib.Path) -> None:\n    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")\n    start = text.index("terminate_main_for_deadline() {")\n    end = text.index("\\n\\nself_stop()", start)\n    helper = text[start:end]\n\n    marker = tmp_path / "watchdog-survived.txt"\n    workload_pid_file = tmp_path / "workload.pid"\n    grandchild_pid_file = tmp_path / "grandchild.pid"\n    q_marker = shlex.quote(str(marker))\n    q_workload = shlex.quote(str(workload_pid_file))\n    q_grandchild = shlex.quote(str(grandchild_pid_file))\n    script = f"""\nset -eu\n{helper}\nMAIN_SHELL_PID=$$\n(\n  readonly WATCHDOG_SELF_PID=\"$BASHPID\"\n  while [ ! -s {q_workload} ]; do sleep 0.01; done\n  terminate_main_for_deadline \"$WATCHDOG_SELF_PID\"\n  printf 'watchdog-survived\\n' > {q_marker}\n) &\n(\n  sleep 30 &\n  printf '%s\\n' \"$!\" > {q_grandchild}\n  printf '%s\\n' \"$BASHPID\" > {q_workload}\n  wait\n) &\nwait\n"""\n    proc = subprocess.Popen(["bash", "-c", script])\n    try:\n        proc.wait(timeout=5)\n        deadline = time.monotonic() + 2\n        while time.monotonic() < deadline and not marker.exists():\n            time.sleep(0.02)\n        assert proc.returncode == -signal.SIGKILL\n        assert marker.read_text(encoding="utf-8") == "watchdog-survived\\n"\n    finally:\n        if proc.poll() is None:\n            proc.kill()\n            proc.wait(timeout=2)\n        for pid_file in (workload_pid_file, grandchild_pid_file):\n            if not pid_file.exists():\n                continue\n            try:\n                os.kill(int(pid_file.read_text(encoding="utf-8").strip()), signal.SIGKILL)\n            except (ProcessLookupError, ValueError):\n                pass\n'''
+          if test_text.count(old_order_test) != 1:
+              raise SystemExit(f'order test replacement count={test_text.count(old_order_test)}')
+          tests.write_text(test_text.replace(old_order_test, new_order_test, 1), encoding='utf-8')
+          PY
+      - name: Validate focused fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python -m compileall -q voice_genesis/evolution/run9_dual_founder_pjs/tests/test_run9_success_pod.py
+          bash -n voice_genesis/evolution/run9_dual_founder_pjs/run9_success_pod_entry.sh
+          git diff --check
+          pytest -q voice_genesis/evolution/run9_dual_founder_pjs/tests/test_run9_success_pod.py
+      - name: Commit fix and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/temp_pr340_round7_watchdog_pid.yml
+          git config user.name 'Yuu6798'
+          git config user.email 'kkoo6798@gmail.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(run9): preserve watchdog pid across deadline traversal'
+          git push origin HEAD:codex/run9-success-only-prepod
