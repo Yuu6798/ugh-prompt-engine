@@ -1,0 +1,72 @@
+name: temp-pr340-round5-review-fix
+
+on:
+  push:
+    branches:
+      - codex/run9-success-only-prepod
+    paths:
+      - .github/workflows/temp_pr340_round5_review_fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/run9-success-only-prepod
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply HTTP 5xx ambiguity fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          run_dir = Path('voice_genesis/evolution/run9_dual_founder_pjs')
+          runner = run_dir / 'run9_success_pod_runner.py'
+          tests = run_dir / 'tests/test_run9_success_pod.py'
+
+          def replace_once(path: Path, old: str, new: str, label: str) -> None:
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, got {count}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          old_http = '''    except urllib.error.HTTPError as exc:\n        detail = exc.read().decode("utf-8", errors="replace")\n        raise RuntimeError(f"RunPod API {exc.code}: {detail}") from exc\n'''
+          new_http = '''    except urllib.error.HTTPError as exc:\n        detail = exc.read().decode("utf-8", errors="replace")\n        if method == "POST" and 500 <= exc.code <= 599:\n            raise AmbiguousLaunchError(\n                f"RunPod {method} server error {exc.code} after request initiation: {detail}"\n            ) from exc\n        raise RuntimeError(f"RunPod API {exc.code}: {detail}") from exc\n'''
+          replace_once(runner, old_http, new_http, 'HTTP 5xx ambiguous launch handling')
+
+          marker = '''def test_request_json_classifies_timeout_as_ambiguous_post(\n'''
+          added = '''def test_request_json_classifies_http_5xx_as_ambiguous_post(\n    monkeypatch: pytest.MonkeyPatch,\n) -> None:\n    class ErrorBody:\n        def read(self) -> bytes:\n            return b"temporary server failure"\n\n    def server_error(*args: Any, **kwargs: Any) -> Any:\n        raise runner.urllib.error.HTTPError(\n            runner.CREATE_POD_URL,\n            503,\n            "Service Unavailable",\n            hdrs=None,\n            fp=ErrorBody(),\n        )\n\n    monkeypatch.setattr(runner.urllib.request, "urlopen", server_error)\n    with pytest.raises(runner.AmbiguousLaunchError, match="server error 503"):\n        runner._request_json(\n            "POST", runner.CREATE_POD_URL, api_key="not-printed", payload={"x": 1}\n        )\n\n\ndef test_request_json_keeps_http_4xx_as_definite_api_failure(\n    monkeypatch: pytest.MonkeyPatch,\n) -> None:\n    class ErrorBody:\n        def read(self) -> bytes:\n            return b"bad request"\n\n    def client_error(*args: Any, **kwargs: Any) -> Any:\n        raise runner.urllib.error.HTTPError(\n            runner.CREATE_POD_URL,\n            400,\n            "Bad Request",\n            hdrs=None,\n            fp=ErrorBody(),\n        )\n\n    monkeypatch.setattr(runner.urllib.request, "urlopen", client_error)\n    with pytest.raises(RuntimeError, match="RunPod API 400") as exc_info:\n        runner._request_json(\n            "POST", runner.CREATE_POD_URL, api_key="not-printed", payload={"x": 1}\n        )\n    assert type(exc_info.value) is RuntimeError\n\n\n'''
+          replace_once(tests, marker, added + marker, 'HTTP status regression tests')
+          PY
+
+      - name: Validate focused fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python -m compileall -q voice_genesis/evolution/run9_dual_founder_pjs/run9_success_pod_runner.py
+          git diff --check
+          pytest -q voice_genesis/evolution/run9_dual_founder_pjs/tests/test_run9_success_pod.py
+
+      - name: Commit fix and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/temp_pr340_round5_review_fix.yml
+          git config user.name 'Yuu6798'
+          git config user.email 'kkoo6798@gmail.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(run9): treat RunPod 5xx as ambiguous launch'
+          git push origin HEAD:codex/run9-success-only-prepod
