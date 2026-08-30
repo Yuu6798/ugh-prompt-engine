@@ -48,6 +48,7 @@ _FOUNDER_IDS = ("R9F-01", "R9F-02")
 _CONDITIONS = ("reference", "c0", "c1", "positive_reference")
 _RESULT_SCHEMA = "run9-birth-gate-evidence/0.6"
 _NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA = "run9-birth-probe-non-adjudicative-diagnostic/1.0"
+_UNBOUND_RENDERER_DIAGNOSTIC_SCHEMA = "run9-birth-probe-unbound-renderer-diagnostic/1.0"
 _NON_ADJUDICATIVE_QUARANTINE_SCHEMA = "run9-non-adjudicative-quarantine/1.0"
 _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256 = (
     "80a40f9ebee3f486de8e48c3911b188a6a4652147dd9e02dfcd90ef2f9eac646"
@@ -85,7 +86,7 @@ def sha256_bytes(value: bytes) -> str:
 
 
 def _consume_run9_zero_controlprofile_sham(profile: Mapping[str, Any]) -> Dict[str, str]:
-    """Validate and attest inert C1 immediately before the pinned synth call."""
+    """Validate the exact inert C1 profile and build its synthesis attestation."""
     if not isinstance(profile, Mapping) or set(profile) != _RUN9_CONTROL_PROFILE_KEYS:
         raise BirthProbeError("RUN9 C1 ControlProfile top-level keys are not closed-world")
     expected_literals = {
@@ -116,6 +117,41 @@ def _consume_run9_zero_controlprofile_sham(profile: Mapping[str, Any]) -> Dict[s
         "revision": "r_sham",
         "profile_id": profile_id,
     }
+
+
+def _run9_zero_controlprofile_sham_duration_hook(
+    profile: Mapping[str, Any],
+    record: Dict[str, Any],
+) -> Callable[[list[int], dict], list[int]]:
+    """Bind ``r_sham`` to a hook the pinned synthesis path actually consumes.
+
+    The zero profile is intentionally an identity intervention: it returns the
+    predicted duration vector byte-for-byte-equivalently as integer values.  It
+    is nevertheless passed through ``gate_synth.run_pipeline``'s existing
+    ``final_phone_dur_override`` boundary, which ``resolve_final_phone_dur``
+    invokes before Stage 2/3 synthesis.  This closes the former false-success
+    path where an attestation could sit beside synthesis without being read.
+    """
+    attestation = _consume_run9_zero_controlprofile_sham(profile)
+    record["run9_control_profile_attachment"] = attestation
+    called = False
+
+    def apply(predicted: list[int], context: dict) -> list[int]:
+        nonlocal called
+        if called:
+            raise BirthProbeError("RUN9 C1 zero-profile synthesis hook was invoked more than once")
+        if not isinstance(predicted, list) or any(
+            isinstance(value, bool) or not isinstance(value, int) for value in predicted
+        ):
+            raise BirthProbeError("RUN9 C1 synthesis hook received a non-integer duration vector")
+        if not isinstance(context, dict):
+            raise BirthProbeError("RUN9 C1 synthesis hook received an invalid context")
+        if record.get("run9_control_profile_attachment") != attestation:
+            raise BirthProbeError("RUN9 C1 synthesis attestation changed before hook consumption")
+        called = True
+        return list(predicted)
+
+    return apply
 
 
 def _read_once(path: Path, *, label: str) -> tuple[bytes, str]:
@@ -819,6 +855,8 @@ def build_non_adjudicative_diagnostic_record(
         "schema": _NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA,
         "disposition": "QUARANTINED_NON_ADJUDICATIVE",
         "candidate_acoustic_onnx_sha256": observed_acoustic_sha256,
+        "candidate_bytes_bound_to_consumed_buffer": True,
+        "formal_refreeze_eligible": True,
         **document_shas,
         "source_measurement_evidence_sha256": source_seal,
         "measurement_snapshot_sha256": snapshot_sha256,
@@ -832,6 +870,49 @@ def build_non_adjudicative_diagnostic_record(
     return record
 
 
+def _build_unbound_renderer_diagnostic_record(
+    measurement_result: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Return a test-only measurement that cannot identify an acoustic candidate."""
+    source = _verified_sealed_result(measurement_result)
+    predicates_satisfied = source.pop("overall_pass", None)
+    progression = source.pop("learning_progression_allowed", None)
+    source_seal = source.pop("evidence_sha256")
+    if not isinstance(predicates_satisfied, bool) or progression is not predicates_satisfied:
+        raise BirthProbeError("unbound diagnostic source result has invalid decision booleans")
+    record: Dict[str, Any] = {
+        "schema": _UNBOUND_RENDERER_DIAGNOSTIC_SCHEMA,
+        "disposition": "UNBOUND_CUSTOM_RENDERER_TEST_ONLY",
+        "candidate_acoustic_onnx_sha256": None,
+        "candidate_bytes_bound_to_consumed_buffer": False,
+        "formal_refreeze_eligible": False,
+        "source_measurement_evidence_sha256": source_seal,
+        "measurement_snapshot_sha256": sha256_bytes(canonical_json_bytes(source)),
+        "diagnostic_current_protocol_predicates_satisfied": predicates_satisfied,
+        "formal_birth_gate_evidence": False,
+        "formal_birth_gate_overall_pass": None,
+        "learning_progression_allowed": False,
+        "measurement_snapshot": source,
+    }
+    record["diagnostic_record_sha256"] = sha256_bytes(canonical_json_bytes(record))
+    return record
+
+
+def _renderer_consumed_acoustic_sha256(renderer: Renderer) -> str:
+    """Hash the exact in-memory acoustic buffer passed by the production adapter."""
+    if type(renderer) is not GateSynthRenderer:
+        raise BirthProbeError(
+            "candidate-byte binding requires the exact production GateSynthRenderer"
+        )
+    model_bytes = getattr(renderer, "_model_bytes", None)
+    if not isinstance(model_bytes, Mapping):
+        raise BirthProbeError("production renderer is missing its consumed model-byte bundle")
+    acoustic_bytes = model_bytes.get("acoustic_onnx")
+    if not isinstance(acoustic_bytes, bytes) or not acoustic_bytes:
+        raise BirthProbeError("production renderer acoustic_onnx consumed buffer is invalid")
+    return sha256_bytes(acoustic_bytes)
+
+
 def execute_non_adjudicative_diagnostic(
     *,
     renderer: Renderer,
@@ -839,27 +920,53 @@ def execute_non_adjudicative_diagnostic(
     extractor: FeatureExtractor = extract_identity_feature,
     expected_takes: int = 20,
 ) -> tuple[Dict[str, Any], Dict[str, Dict[str, list[RenderObservation]]]]:
-    """Run the 84-render measurement as a quarantined candidate diagnostic."""
-    verified_acoustic = getattr(renderer, "verified_acoustic_sha256", None)
-    if verified_acoustic != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
-        raise BirthProbeError(
-            "non-adjudicative diagnostic renderer is not bound to the preregistered 80a40f bytes"
-        )
+    """Run the 84-render measurement as a quarantined candidate diagnostic.
+
+    Only the exact production ``GateSynthRenderer`` may identify the preregistered
+    candidate, and its identity is derived from the in-memory ``acoustic_onnx``
+    bytes that ``__call__`` passes to ``gate_synth.run_pipeline``.  Legacy/custom
+    renderers remain useful to unit-test the measurement shape, but their result
+    is downgraded to an unbound test-only schema with no candidate digest and can
+    neither be published as the alternate diagnostic nor justify formal refreeze.
+    """
     verify_inputs_unchanged = getattr(renderer, "verify_inputs_unchanged", None)
     if not callable(verify_inputs_unchanged):
         raise BirthProbeError(
             "non-adjudicative diagnostic renderer lacks post-render input verification"
         )
+
+    production_renderer = type(renderer) is GateSynthRenderer
+    if production_renderer:
+        observed_acoustic = _renderer_consumed_acoustic_sha256(renderer)
+        if observed_acoustic != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
+            raise BirthProbeError(
+                "non-adjudicative diagnostic consumed acoustic bytes do not match the preregistered 80a40f candidate"
+            )
+    else:
+        declared_acoustic = getattr(renderer, "verified_acoustic_sha256", None)
+        if declared_acoustic != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
+            raise BirthProbeError(
+                "non-adjudicative diagnostic renderer is not bound to the preregistered 80a40f bytes"
+            )
+        observed_acoustic = None
+
     measured, observations = execute_birth_gate(
         renderer=renderer,
         pjs_reference=pjs_reference,
         extractor=extractor,
         expected_takes=expected_takes,
     )
+    if production_renderer:
+        post_acoustic = _renderer_consumed_acoustic_sha256(renderer)
+        if post_acoustic != observed_acoustic:
+            raise BirthProbeError("production renderer acoustic model buffer changed during diagnostic")
     verify_inputs_unchanged()
+
+    if not production_renderer:
+        return _build_unbound_renderer_diagnostic_record(measured), observations
     diagnostic = build_non_adjudicative_diagnostic_record(
         measured,
-        observed_acoustic_sha256=_ALTERNATE_CANDIDATE_ACOUSTIC_SHA256,
+        observed_acoustic_sha256=observed_acoustic,
     )
     return diagnostic, observations
 
@@ -1066,6 +1173,10 @@ def _validate_staged_non_adjudicative_bundle(
         raise BirthProbeError("staged diagnostic provenance documents changed or do not match")
     if parsed.get("candidate_acoustic_onnx_sha256") != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
         raise BirthProbeError("staged diagnostic acoustic candidate is not preregistered")
+    if parsed.get("candidate_bytes_bound_to_consumed_buffer") is not True:
+        raise BirthProbeError("staged diagnostic candidate is not bound to consumed model bytes")
+    if parsed.get("formal_refreeze_eligible") is not True:
+        raise BirthProbeError("staged diagnostic is not eligible to inform formal refreeze")
     for founder in _FOUNDER_IDS:
         for condition in _CONDITIONS:
             for index, observation in enumerate(observations[founder][condition]):
@@ -1160,6 +1271,10 @@ def publish_non_adjudicative_diagnostic_bundle(
         raise BirthProbeError("diagnostic record does not preserve the quarantine decision boundary")
     if diagnostic.get("candidate_acoustic_onnx_sha256") != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
         raise BirthProbeError("diagnostic record acoustic candidate is not preregistered")
+    if diagnostic.get("candidate_bytes_bound_to_consumed_buffer") is not True:
+        raise BirthProbeError("diagnostic record candidate is not bound to consumed model bytes")
+    if diagnostic.get("formal_refreeze_eligible") is not True:
+        raise BirthProbeError("diagnostic record is not eligible to inform formal refreeze")
     expected_documents = _alternate_attempt_document_shas()
     if any(diagnostic.get(key) != value for key, value in expected_documents.items()):
         raise BirthProbeError("diagnostic record provenance documents changed or do not match")
@@ -1265,10 +1380,12 @@ class _ProbeNote:
 class GateSynthRenderer:
     """Production adapter for the frozen ``gate_synth.run_pipeline`` path.
 
-    Immediately before C1 synthesis, the adapter consumes the exact neutral
-    ``r_sham`` ControlProfile and places its attestation in the same ``record``
-    object passed into the pinned synthesis call.  The call must preserve that
-    attestation; merely carrying a profile beside a render is not accepted.
+    C1 carries the exact neutral ``r_sham`` ControlProfile through the pinned
+    synthesis function's existing ``final_phone_dur_override`` boundary.  The
+    hook is an identity transform (zero control) but is actually invoked by
+    ``resolve_final_phone_dur`` before downstream synthesis, avoiding the former
+    record-only attestation path while leaving pinned ``gate_synth.py`` bytes
+    unchanged.
     """
 
     def __init__(
@@ -1402,8 +1519,8 @@ class GateSynthRenderer:
 
     @property
     def verified_acoustic_sha256(self) -> str:
-        """Return the acoustic digest verified and snapshotted by this adapter."""
-        return self._input_hashes[f"artifact_{self._input_paths['acoustic'].name}"]
+        """Return the digest of the exact in-memory acoustic bytes used by synthesis."""
+        return _renderer_consumed_acoustic_sha256(self)
 
     def _build_embeddings(
         self, speaker_map: Mapping[str, Any], artifact_bytes: Mapping[str, bytes]
@@ -1446,9 +1563,14 @@ class GateSynthRenderer:
                     f"{condition.upper()} must carry the exact derived CONTROL profile"
                 )
         record: Dict[str, Any] = {}
+        run_kwargs: Dict[str, Any] = {
+            "speaker_name": "ritsu",
+            "speaker_embed_vector": self._embeddings[founder_id],
+        }
         if condition == "c1":
-            record["run9_control_profile_attachment"] = _consume_run9_zero_controlprofile_sham(
-                control_profile
+            run_kwargs["final_phone_dur_override"] = _run9_zero_controlprofile_sham_duration_hook(
+                control_profile,
+                record,
             )
         try:
             waveform = self._gate.run_pipeline(
@@ -1459,8 +1581,7 @@ class GateSynthRenderer:
                 self._variance_phonemes,
                 self._acoustic_phonemes,
                 record,
-                speaker_name="ritsu",
-                speaker_embed_vector=self._embeddings[founder_id],
+                **run_kwargs,
             )
         except ValueError as exc:
             raise BirthProbeError(f"gate_synth rejected the render contract: {exc}") from exc
