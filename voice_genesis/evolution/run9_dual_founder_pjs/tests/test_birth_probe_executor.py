@@ -322,7 +322,7 @@ def test_pjs_pin_is_verified_before_feature_extraction(tmp_path: Path) -> None:
     assert called is False
 
 
-def test_publish_is_atomic_and_refuses_overwrite(tmp_path: Path) -> None:
+def test_formal_publish_api_is_disabled_after_terminal_attempt(tmp_path: Path) -> None:
     references, c0, c1, positive, pjs = _evidence(count=1)
     result = bp.evaluate_birth_gate(
         references=references,
@@ -342,11 +342,13 @@ def test_publish_is_atomic_and_refuses_overwrite(tmp_path: Path) -> None:
         for founder in FOUNDERS
     }
     output = tmp_path / "evidence"
-    bp.publish_evidence_bundle(output, result, observations, pjs)
-    assert (output / "birth_gate_evidence.json").is_file()
-    assert (output / "artifact_manifest.json").is_file()
-    with pytest.raises(bp.BirthProbeError, match="refusing to overwrite"):
+    with pytest.raises(
+        bp.BirthProbeError,
+        match="formal RUN9 rev 0.6 evidence publication is disabled",
+    ):
         bp.publish_evidence_bundle(output, result, observations, pjs)
+    assert not output.exists()
+    assert list(tmp_path.glob(".evidence.build-*")) == []
 
 
 def test_alternate_candidate_diagnostic_is_quarantined_and_not_formal_evidence(

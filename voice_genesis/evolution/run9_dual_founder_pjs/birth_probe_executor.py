@@ -1188,6 +1188,13 @@ def publish_evidence_bundle(
             canonical_json_bytes({"schema": "run9-birth-gate-artifact-manifest/1.0", "files": inventory})
         )
         _validate_staged_evidence_bundle(staging, result, observations, pjs_reference, inventory)
+        if _FORMAL_REV06_CLI_DISABLED:
+            raise BirthProbeError(
+                "formal RUN9 rev 0.6 evidence publication is disabled after the terminal "
+                "2026-08-28 IMPLEMENTATION_FAILED attempt; use only quarantined "
+                "non-adjudicative diagnostic publication until a separately reviewed "
+                "design revision/reexport/contract refreeze is installed"
+            )
         os.replace(staging, output_dir)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
