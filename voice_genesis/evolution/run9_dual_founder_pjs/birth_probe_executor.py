@@ -74,6 +74,13 @@ class BirthProbeError(RuntimeError):
     """A fail-closed preflight, render, feature, or publication failure."""
 
 
+class _IssuedCandidateDiagnostic(dict):
+    """Candidate-bound record minted only by the verified production executor path."""
+
+
+_ISSUED_CANDIDATE_DIAGNOSTIC_IDS: set[int] = set()
+
+
 def canonical_json_bytes(value: Any) -> bytes:
     """Canonical UTF-8 JSON for evidence identity and deterministic tests."""
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode(
@@ -827,65 +834,32 @@ def _alternate_attempt_document_shas() -> Dict[str, str]:
     }
 
 
-def build_non_adjudicative_diagnostic_record(
+def _build_diagnostic_record_payload(
     measurement_result: Mapping[str, Any],
     *,
-    observed_acoustic_sha256: str,
+    schema: str,
+    disposition: str,
+    candidate_acoustic_onnx_sha256: Optional[str],
+    declared_candidate_acoustic_onnx_sha256: Optional[str],
+    candidate_bytes_bound_to_consumed_buffer: bool,
+    formal_refreeze_eligible: bool,
 ) -> Dict[str, Any]:
-    """Quarantine a candidate-byte measurement so it cannot satisfy Birth Gate.
-
-    The nested measurement deliberately omits the formal ``overall_pass`` and
-    ``learning_progression_allowed`` fields.  Its predicates may be inspected,
-    but the enclosing record is permanently non-adjudicative and cannot be fed
-    to the formal evidence publisher or used to unlock learning.
-    """
+    """Build the common sealed diagnostic payload without granting publication authority."""
     source = _verified_sealed_result(measurement_result)
-    if observed_acoustic_sha256 != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
-        raise BirthProbeError(
-            "alternate diagnostic acoustic sha256 must equal the preregistered 80a40f candidate"
-        )
     document_shas = _alternate_attempt_document_shas()
     predicates_satisfied = source.pop("overall_pass", None)
     progression = source.pop("learning_progression_allowed", None)
     source_seal = source.pop("evidence_sha256")
     if not isinstance(predicates_satisfied, bool) or progression is not predicates_satisfied:
         raise BirthProbeError("diagnostic source result has invalid decision booleans")
-    snapshot_sha256 = sha256_bytes(canonical_json_bytes(source))
     record: Dict[str, Any] = {
-        "schema": _NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA,
-        "disposition": "QUARANTINED_NON_ADJUDICATIVE",
-        "candidate_acoustic_onnx_sha256": observed_acoustic_sha256,
-        "candidate_bytes_bound_to_consumed_buffer": True,
-        "formal_refreeze_eligible": True,
+        "schema": schema,
+        "disposition": disposition,
+        "candidate_acoustic_onnx_sha256": candidate_acoustic_onnx_sha256,
+        "declared_candidate_acoustic_onnx_sha256": declared_candidate_acoustic_onnx_sha256,
+        "candidate_bytes_bound_to_consumed_buffer": candidate_bytes_bound_to_consumed_buffer,
+        "formal_refreeze_eligible": formal_refreeze_eligible,
         **document_shas,
-        "source_measurement_evidence_sha256": source_seal,
-        "measurement_snapshot_sha256": snapshot_sha256,
-        "diagnostic_current_protocol_predicates_satisfied": predicates_satisfied,
-        "formal_birth_gate_evidence": False,
-        "formal_birth_gate_overall_pass": None,
-        "learning_progression_allowed": False,
-        "measurement_snapshot": source,
-    }
-    record["diagnostic_record_sha256"] = sha256_bytes(canonical_json_bytes(record))
-    return record
-
-
-def _build_unbound_renderer_diagnostic_record(
-    measurement_result: Mapping[str, Any],
-) -> Dict[str, Any]:
-    """Return a test-only measurement that cannot identify an acoustic candidate."""
-    source = _verified_sealed_result(measurement_result)
-    predicates_satisfied = source.pop("overall_pass", None)
-    progression = source.pop("learning_progression_allowed", None)
-    source_seal = source.pop("evidence_sha256")
-    if not isinstance(predicates_satisfied, bool) or progression is not predicates_satisfied:
-        raise BirthProbeError("unbound diagnostic source result has invalid decision booleans")
-    record: Dict[str, Any] = {
-        "schema": _UNBOUND_RENDERER_DIAGNOSTIC_SCHEMA,
-        "disposition": "UNBOUND_CUSTOM_RENDERER_TEST_ONLY",
-        "candidate_acoustic_onnx_sha256": None,
-        "candidate_bytes_bound_to_consumed_buffer": False,
-        "formal_refreeze_eligible": False,
         "source_measurement_evidence_sha256": source_seal,
         "measurement_snapshot_sha256": sha256_bytes(canonical_json_bytes(source)),
         "diagnostic_current_protocol_predicates_satisfied": predicates_satisfied,
@@ -896,6 +870,52 @@ def _build_unbound_renderer_diagnostic_record(
     }
     record["diagnostic_record_sha256"] = sha256_bytes(canonical_json_bytes(record))
     return record
+
+
+def build_non_adjudicative_diagnostic_record(
+    measurement_result: Mapping[str, Any],
+    *,
+    observed_acoustic_sha256: str,
+) -> Dict[str, Any]:
+    """Build an explicitly unbound quarantine record from a caller declaration.
+
+    This compatibility builder intentionally cannot mint candidate-bound or
+    refreeze-eligible evidence.  ``observed_acoustic_sha256`` is treated only as
+    a declaration and is retained for audit.  Candidate authority is granted
+    exclusively by ``execute_non_adjudicative_diagnostic`` after the exact
+    production renderer has consumed and reverified the preregistered model
+    bytes.
+    """
+    if observed_acoustic_sha256 != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
+        raise BirthProbeError(
+            "alternate diagnostic acoustic sha256 must equal the preregistered 80a40f candidate"
+        )
+    return _build_diagnostic_record_payload(
+        measurement_result,
+        schema=_UNBOUND_RENDERER_DIAGNOSTIC_SCHEMA,
+        disposition="QUARANTINED_NON_ADJUDICATIVE",
+        candidate_acoustic_onnx_sha256=None,
+        declared_candidate_acoustic_onnx_sha256=observed_acoustic_sha256,
+        candidate_bytes_bound_to_consumed_buffer=False,
+        formal_refreeze_eligible=False,
+    )
+
+
+def _build_unbound_renderer_diagnostic_record(
+    measurement_result: Mapping[str, Any],
+    *,
+    declared_acoustic_sha256: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return a test-only measurement that cannot identify an acoustic candidate."""
+    return _build_diagnostic_record_payload(
+        measurement_result,
+        schema=_UNBOUND_RENDERER_DIAGNOSTIC_SCHEMA,
+        disposition="UNBOUND_CUSTOM_RENDERER_TEST_ONLY",
+        candidate_acoustic_onnx_sha256=None,
+        declared_candidate_acoustic_onnx_sha256=declared_acoustic_sha256,
+        candidate_bytes_bound_to_consumed_buffer=False,
+        formal_refreeze_eligible=False,
+    )
 
 
 def _renderer_consumed_acoustic_sha256(renderer: Renderer) -> str:
@@ -913,6 +933,31 @@ def _renderer_consumed_acoustic_sha256(renderer: Renderer) -> str:
     return sha256_bytes(acoustic_bytes)
 
 
+def _issue_candidate_bound_diagnostic_record(
+    measurement_result: Mapping[str, Any],
+    *,
+    renderer: Renderer,
+) -> _IssuedCandidateDiagnostic:
+    """Mint the only candidate-bound diagnostic capability from consumed model bytes."""
+    observed_acoustic_sha256 = _renderer_consumed_acoustic_sha256(renderer)
+    if observed_acoustic_sha256 != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
+        raise BirthProbeError(
+            "candidate-bound diagnostic consumed acoustic bytes do not match the preregistered 80a40f candidate"
+        )
+    payload = _build_diagnostic_record_payload(
+        measurement_result,
+        schema=_NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA,
+        disposition="QUARANTINED_NON_ADJUDICATIVE",
+        candidate_acoustic_onnx_sha256=observed_acoustic_sha256,
+        declared_candidate_acoustic_onnx_sha256=None,
+        candidate_bytes_bound_to_consumed_buffer=True,
+        formal_refreeze_eligible=True,
+    )
+    issued = _IssuedCandidateDiagnostic(payload)
+    _ISSUED_CANDIDATE_DIAGNOSTIC_IDS.add(id(issued))
+    return issued
+
+
 def execute_non_adjudicative_diagnostic(
     *,
     renderer: Renderer,
@@ -927,7 +972,7 @@ def execute_non_adjudicative_diagnostic(
     bytes that ``__call__`` passes to ``gate_synth.run_pipeline``.  Legacy/custom
     renderers remain useful to unit-test the measurement shape, but their result
     is downgraded to an unbound test-only schema with no candidate digest and can
-    neither be published as the alternate diagnostic nor justify formal refreeze.
+    neither be published as candidate-bound evidence nor justify formal refreeze.
     """
     verify_inputs_unchanged = getattr(renderer, "verify_inputs_unchanged", None)
     if not callable(verify_inputs_unchanged):
@@ -963,11 +1008,14 @@ def execute_non_adjudicative_diagnostic(
     verify_inputs_unchanged()
 
     if not production_renderer:
-        return _build_unbound_renderer_diagnostic_record(measured), observations
-    diagnostic = build_non_adjudicative_diagnostic_record(
-        measured,
-        observed_acoustic_sha256=observed_acoustic,
-    )
+        return (
+            _build_unbound_renderer_diagnostic_record(
+                measured,
+                declared_acoustic_sha256=declared_acoustic,
+            ),
+            observations,
+        )
+    diagnostic = _issue_candidate_bound_diagnostic_record(measured, renderer=renderer)
     return diagnostic, observations
 
 
@@ -1171,12 +1219,27 @@ def _validate_staged_non_adjudicative_bundle(
     expected_documents = _alternate_attempt_document_shas()
     if any(parsed.get(key) != value for key, value in expected_documents.items()):
         raise BirthProbeError("staged diagnostic provenance documents changed or do not match")
-    if parsed.get("candidate_acoustic_onnx_sha256") != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
-        raise BirthProbeError("staged diagnostic acoustic candidate is not preregistered")
-    if parsed.get("candidate_bytes_bound_to_consumed_buffer") is not True:
-        raise BirthProbeError("staged diagnostic candidate is not bound to consumed model bytes")
-    if parsed.get("formal_refreeze_eligible") is not True:
-        raise BirthProbeError("staged diagnostic is not eligible to inform formal refreeze")
+
+    schema = parsed.get("schema")
+    if schema == _NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA:
+        if parsed.get("candidate_acoustic_onnx_sha256") != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
+            raise BirthProbeError("staged diagnostic acoustic candidate is not preregistered")
+        if parsed.get("declared_candidate_acoustic_onnx_sha256") is not None:
+            raise BirthProbeError("staged bound diagnostic must not carry a caller declaration")
+        if parsed.get("candidate_bytes_bound_to_consumed_buffer") is not True:
+            raise BirthProbeError("staged diagnostic candidate is not bound to consumed model bytes")
+        if parsed.get("formal_refreeze_eligible") is not True:
+            raise BirthProbeError("staged diagnostic is not eligible to inform formal refreeze")
+    elif schema == _UNBOUND_RENDERER_DIAGNOSTIC_SCHEMA:
+        if parsed.get("candidate_acoustic_onnx_sha256") is not None:
+            raise BirthProbeError("staged unbound diagnostic must not identify a candidate")
+        if parsed.get("candidate_bytes_bound_to_consumed_buffer") is not False:
+            raise BirthProbeError("staged unbound diagnostic falsely claims consumed-byte binding")
+        if parsed.get("formal_refreeze_eligible") is not False:
+            raise BirthProbeError("staged unbound diagnostic falsely claims refreeze eligibility")
+    else:
+        raise BirthProbeError("staged diagnostic has an unknown schema")
+
     for founder in _FOUNDER_IDS:
         for condition in _CONDITIONS:
             for index, observation in enumerate(observations[founder][condition]):
@@ -1259,22 +1322,44 @@ def publish_non_adjudicative_diagnostic_bundle(
     observations: Mapping[str, Mapping[str, Sequence[RenderObservation]]],
     pjs_reference: FeatureArtifact,
 ) -> None:
-    """Atomically publish candidate diagnostics under unmistakable quarantine."""
-    if diagnostic.get("schema") != _NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA:
+    """Atomically publish quarantined diagnostics; bound capability is executor-issued only."""
+    schema = diagnostic.get("schema")
+    if schema == _NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA:
+        if (
+            type(diagnostic) is not _IssuedCandidateDiagnostic
+            or id(diagnostic) not in _ISSUED_CANDIDATE_DIAGNOSTIC_IDS
+        ):
+            raise BirthProbeError(
+                "candidate-bound diagnostic was not issued by the verified production executor"
+            )
+        if diagnostic.get("candidate_acoustic_onnx_sha256") != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
+            raise BirthProbeError("diagnostic record acoustic candidate is not preregistered")
+        if diagnostic.get("declared_candidate_acoustic_onnx_sha256") is not None:
+            raise BirthProbeError("bound diagnostic must not carry a caller-declared candidate digest")
+        if diagnostic.get("candidate_bytes_bound_to_consumed_buffer") is not True:
+            raise BirthProbeError("diagnostic record candidate is not bound to consumed model bytes")
+        if diagnostic.get("formal_refreeze_eligible") is not True:
+            raise BirthProbeError("diagnostic record is not eligible to inform formal refreeze")
+    elif schema == _UNBOUND_RENDERER_DIAGNOSTIC_SCHEMA:
+        if diagnostic.get("candidate_acoustic_onnx_sha256") is not None:
+            raise BirthProbeError("unbound diagnostic must not identify a candidate")
+        if diagnostic.get("candidate_bytes_bound_to_consumed_buffer") is not False:
+            raise BirthProbeError("unbound diagnostic falsely claims consumed-byte binding")
+        if diagnostic.get("formal_refreeze_eligible") is not False:
+            raise BirthProbeError("unbound diagnostic falsely claims refreeze eligibility")
+    else:
         raise BirthProbeError("diagnostic record has an unknown or missing schema")
+
     if (
-        diagnostic.get("disposition") != "QUARANTINED_NON_ADJUDICATIVE"
+        diagnostic.get("disposition") not in {
+            "QUARANTINED_NON_ADJUDICATIVE",
+            "UNBOUND_CUSTOM_RENDERER_TEST_ONLY",
+        }
         or diagnostic.get("formal_birth_gate_evidence") is not False
         or diagnostic.get("formal_birth_gate_overall_pass") is not None
         or diagnostic.get("learning_progression_allowed") is not False
     ):
         raise BirthProbeError("diagnostic record does not preserve the quarantine decision boundary")
-    if diagnostic.get("candidate_acoustic_onnx_sha256") != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
-        raise BirthProbeError("diagnostic record acoustic candidate is not preregistered")
-    if diagnostic.get("candidate_bytes_bound_to_consumed_buffer") is not True:
-        raise BirthProbeError("diagnostic record candidate is not bound to consumed model bytes")
-    if diagnostic.get("formal_refreeze_eligible") is not True:
-        raise BirthProbeError("diagnostic record is not eligible to inform formal refreeze")
     expected_documents = _alternate_attempt_document_shas()
     if any(diagnostic.get(key) != value for key, value in expected_documents.items()):
         raise BirthProbeError("diagnostic record provenance documents changed or do not match")
@@ -1365,6 +1450,8 @@ def publish_non_adjudicative_diagnostic_bundle(
             staging, diagnostic, observations, pjs_reference, inventory
         )
         os.replace(staging, output_dir)
+        if schema == _NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA:
+            _ISSUED_CANDIDATE_DIAGNOSTIC_IDS.discard(id(diagnostic))
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
@@ -1615,7 +1702,6 @@ class GateSynthRenderer:
         readback, sample_rate = self._sf.read(io.BytesIO(wav_bytes), dtype="float64", always_2d=False)
         if sample_rate != 44_100 or readback.ndim != 1 or not np.isfinite(readback).all():
             raise BirthProbeError("published render WAV failed PCM readback/meter validation")
-        # Compute the frozen publication meters from the exact readback bytes.
         _ = float(np.max(np.abs(readback))) if readback.size else 0.0
         _ = float(np.sqrt(np.mean(readback**2))) if readback.size else 0.0
         return wav_bytes
@@ -1802,12 +1888,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             expected_takes,
             runtime_dependency_versions,
         ) = _load_verified_inputs()
-        # Catch a repo mutation that happened between the pre-render snapshot and
-        # the verified loader consumption before admitting any expensive render.
         _verify_provenance_inputs_unchanged(provenance_snapshot)
         expected_acoustic = reexport["artifacts"]["acoustic_onnx"]["sha256_run1"]
-        # The exact acoustic byte gate is deliberately the first external asset
-        # check and precedes renderer construction or PJS feature work.
         verify_exact_acoustic(
             args.acoustic_dir / reexport["artifacts"]["acoustic_onnx"]["file"],
             expected_acoustic,
@@ -1832,8 +1914,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             expected_takes=expected_takes,
         )
         renderer.verify_inputs_unchanged()
-        # Verify the exact repo-resident code/protocol/manifest snapshot again
-        # immediately before evidence provenance is sealed and published.
         _verify_provenance_inputs_unchanged(provenance_snapshot)
         result["input_provenance"] = {
             **provenance_snapshot,
