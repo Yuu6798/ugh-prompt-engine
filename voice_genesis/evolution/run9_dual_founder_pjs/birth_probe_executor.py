@@ -951,7 +951,7 @@ def _issue_candidate_bound_diagnostic_record(
         candidate_acoustic_onnx_sha256=observed_acoustic_sha256,
         declared_candidate_acoustic_onnx_sha256=None,
         candidate_bytes_bound_to_consumed_buffer=True,
-        formal_refreeze_eligible=True,
+        formal_refreeze_eligible=False,
     )
     issued = _IssuedCandidateDiagnostic(payload)
     _ISSUED_CANDIDATE_DIAGNOSTIC_IDS.add(id(issued))
@@ -1228,8 +1228,8 @@ def _validate_staged_non_adjudicative_bundle(
             raise BirthProbeError("staged bound diagnostic must not carry a caller declaration")
         if parsed.get("candidate_bytes_bound_to_consumed_buffer") is not True:
             raise BirthProbeError("staged diagnostic candidate is not bound to consumed model bytes")
-        if parsed.get("formal_refreeze_eligible") is not True:
-            raise BirthProbeError("staged diagnostic is not eligible to inform formal refreeze")
+        if parsed.get("formal_refreeze_eligible") is not False:
+            raise BirthProbeError("staged diagnostic must not grant formal refreeze eligibility")
     elif schema == _UNBOUND_RENDERER_DIAGNOSTIC_SCHEMA:
         if parsed.get("candidate_acoustic_onnx_sha256") is not None:
             raise BirthProbeError("staged unbound diagnostic must not identify a candidate")
@@ -1338,8 +1338,8 @@ def publish_non_adjudicative_diagnostic_bundle(
             raise BirthProbeError("bound diagnostic must not carry a caller-declared candidate digest")
         if diagnostic.get("candidate_bytes_bound_to_consumed_buffer") is not True:
             raise BirthProbeError("diagnostic record candidate is not bound to consumed model bytes")
-        if diagnostic.get("formal_refreeze_eligible") is not True:
-            raise BirthProbeError("diagnostic record is not eligible to inform formal refreeze")
+        if diagnostic.get("formal_refreeze_eligible") is not False:
+            raise BirthProbeError("diagnostic record must not grant formal refreeze eligibility")
     elif schema == _UNBOUND_RENDERER_DIAGNOSTIC_SCHEMA:
         if diagnostic.get("candidate_acoustic_onnx_sha256") is not None:
             raise BirthProbeError("unbound diagnostic must not identify a candidate")
