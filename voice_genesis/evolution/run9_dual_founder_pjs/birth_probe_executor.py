@@ -58,6 +58,7 @@ _RUNTIME_SEED = 42
 _DIRECT_DEPENDENCY_MANIFEST_PATH = _THIS_DIR / "inputs" / "dependency_pins_manifest.json"
 _DIRECT_DEPENDENCY_PACKAGES = ("numpy", "scipy", "soundfile", "PyYAML", "onnxruntime")
 _PYWORLD_PIN_VERSION = "0.3.5"
+_FORMAL_REV06_CLI_DISABLED = True
 _RUN9_CONTROL_PROFILE_KEYS = frozenset({
     "schema",
     "voice_id",
@@ -1890,6 +1891,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        if _FORMAL_REV06_CLI_DISABLED:
+            raise BirthProbeError(
+                "formal RUN9 rev 0.6 CLI is permanently disabled after the terminal "
+                "2026-08-28 IMPLEMENTATION_FAILED attempt; use only the quarantined "
+                "non-adjudicative diagnostic path until a separately reviewed design "
+                "revision/reexport/contract refreeze is installed"
+            )
         _assert_helper_modules_not_preloaded()
         provenance_snapshot = _snapshot_provenance_inputs()
         (
