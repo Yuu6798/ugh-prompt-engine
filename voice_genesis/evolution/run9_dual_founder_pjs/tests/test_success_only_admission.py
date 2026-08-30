@@ -123,6 +123,25 @@ def test_native_measurement_lock_is_bound_into_repo_provenance() -> None:
     assert snapshot[key] == admission._sha256_bytes(path.read_bytes())  # noqa: SLF001
 
 
+def test_native_measurement_lock_excludes_os_base_packages() -> None:
+    rows = [
+        line.strip()
+        for line in admission._MEASUREMENT_NATIVE_INSTALL_LOCK_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]  # noqa: SLF001
+    names = {row.rpartition("=")[0].split(":", 1)[0] for row in rows}
+    forbidden = {
+        "build-essential",
+        "dpkg", "dpkg-dev", "libdpkg-perl",
+        "libc-bin", "libc-dev-bin", "libc6", "libc6-dev",
+        "linux-libc-dev",
+        "perl-base", "perl-modules-5.38", "libperl5.38t64",
+    }
+    required = {"gcc", "g++", "make", "binutils", "libffi-dev", "libsndfile1"}
+    assert names.isdisjoint(forbidden)
+    assert required <= names
+
+
 def test_native_runtime_validator_queries_only_committed_closure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

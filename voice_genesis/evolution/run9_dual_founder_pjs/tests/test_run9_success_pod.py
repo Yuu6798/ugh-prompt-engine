@@ -65,6 +65,20 @@ def test_entry_watchdog_reuses_confirmed_retrying_self_stop() -> None:
     assert "for attempt in 1 2 3 4 5" in text
 
 
+def test_native_lock_keeps_os_base_outside_exact_install_boundary() -> None:
+    names = {
+        row.rpartition("=")[0].split(":", 1)[0]
+        for row in (RUN_DIR / "inputs" / "measurement_native_install_lock.txt").read_text(encoding="utf-8").splitlines()
+        if row.strip()
+    }
+    assert "libc6" not in names
+    assert "libc6-dev" not in names
+    assert "linux-libc-dev" not in names
+    assert "dpkg" not in names
+    assert "perl-base" not in names
+    assert {"gcc", "g++", "make", "binutils", "libffi-dev", "libsndfile1"} <= names
+
+
 def test_entry_native_preflight_reads_existing_verified_bootstrap_checkout() -> None:
     text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
     bootstrap_dir = text.index("readonly BOOTSTRAP_RUN_DIR=")
@@ -102,7 +116,7 @@ def test_entry_uses_committed_exact_native_closure() -> None:
     rows = [line for line in lock.read_text(encoding="utf-8").splitlines() if line]
     assert len(rows) > 20
     assert any(row.startswith("libsndfile1:") for row in rows)
-    assert any(row.startswith("libc6:") for row in rows)
+    assert not any(row.startswith("libc6:") for row in rows)
     assert any(row.startswith("gcc") for row in rows)
     assert all("=" in row for row in rows)
 
