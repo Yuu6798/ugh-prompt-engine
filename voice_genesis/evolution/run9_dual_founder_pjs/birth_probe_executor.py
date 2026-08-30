@@ -36,14 +36,37 @@ np = importlib.import_module("numpy")
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR.parents[2]
+_ALTERNATE_ATTEMPT_PLAN_PATH = _THIS_DIR / "RUN9_ALTERNATE_ATTEMPT_PLAN_20260830.md"
+_ALTERNATE_ATTEMPT_ADJUDICATION_PATH = (
+    _THIS_DIR / "USER_ADJUDICATION_20260830_ONNX_ALTERNATE_ATTEMPT.txt"
+)
+_SOURCE_ATTEMPT_RECORD_PATH = _THIS_DIR / "BIRTH_GATE_ATTEMPT_20260828.md"
+_SOURCE_ATTEMPT_RECORD_SHA256 = (
+    "528d22e18665a99b4be261bc0bfdb155fd21799bf73eae5faa8481c50d2b5874"
+)
 _FOUNDER_IDS = ("R9F-01", "R9F-02")
 _CONDITIONS = ("reference", "c0", "c1", "positive_reference")
 _RESULT_SCHEMA = "run9-birth-gate-evidence/0.6"
+_NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA = "run9-birth-probe-non-adjudicative-diagnostic/1.0"
+_NON_ADJUDICATIVE_QUARANTINE_SCHEMA = "run9-non-adjudicative-quarantine/1.0"
+_ALTERNATE_CANDIDATE_ACOUSTIC_SHA256 = (
+    "80a40f9ebee3f486de8e48c3911b188a6a4652147dd9e02dfcd90ef2f9eac646"
+)
 _FEATURE_SCHEMA = b"RUN9-IDENTITY-FEATURE-F64LE/1\x00"
 _RUNTIME_SEED = 42
 _DIRECT_DEPENDENCY_MANIFEST_PATH = _THIS_DIR / "inputs" / "dependency_pins_manifest.json"
 _DIRECT_DEPENDENCY_PACKAGES = ("numpy", "scipy", "soundfile", "PyYAML", "onnxruntime")
 _PYWORLD_PIN_VERSION = "0.3.5"
+_RUN9_CONTROL_PROFILE_KEYS = frozenset({
+    "schema",
+    "voice_id",
+    "branch",
+    "revision",
+    "parent_revision",
+    "partitions",
+    "profile_id",
+})
+_RUN9_CONTROL_PARTITION_KEYS = frozenset({"trait_control", "technique_control"})
 
 
 class BirthProbeError(RuntimeError):
@@ -59,6 +82,40 @@ def canonical_json_bytes(value: Any) -> bytes:
 
 def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _consume_run9_zero_controlprofile_sham(profile: Mapping[str, Any]) -> Dict[str, str]:
+    """Validate and attest inert C1 immediately before the pinned synth call."""
+    if not isinstance(profile, Mapping) or set(profile) != _RUN9_CONTROL_PROFILE_KEYS:
+        raise BirthProbeError("RUN9 C1 ControlProfile top-level keys are not closed-world")
+    expected_literals = {
+        "schema": "run9-control-profile/1.0",
+        "branch": "CONTROL",
+        "revision": "r_sham",
+        "parent_revision": "r0",
+    }
+    for key, expected in expected_literals.items():
+        if profile.get(key) != expected:
+            raise BirthProbeError(f"RUN9 C1 ControlProfile {key} must be {expected!r}")
+    voice_id = profile.get("voice_id")
+    profile_id = profile.get("profile_id")
+    if not isinstance(voice_id, str) or not voice_id:
+        raise BirthProbeError("RUN9 C1 ControlProfile voice_id must be a non-empty string")
+    if not isinstance(profile_id, str) or re.fullmatch(r"[0-9a-f]{16}", profile_id) is None:
+        raise BirthProbeError(
+            "RUN9 C1 ControlProfile profile_id must be 16 lowercase hex characters"
+        )
+    partitions = profile.get("partitions")
+    if not isinstance(partitions, Mapping) or set(partitions) != _RUN9_CONTROL_PARTITION_KEYS:
+        raise BirthProbeError("RUN9 C1 ControlProfile partitions are not closed-world")
+    if any(not isinstance(partitions[key], Mapping) or partitions[key] for key in partitions):
+        raise BirthProbeError("RUN9 C1 ControlProfile partitions must both be empty objects")
+    return {
+        "status": "CONSUMED_INERT_ZERO_PROFILE",
+        "voice_id": voice_id,
+        "revision": "r_sham",
+        "profile_id": profile_id,
+    }
 
 
 def _read_once(path: Path, *, label: str) -> tuple[bytes, str]:
@@ -690,6 +747,123 @@ def execute_birth_gate(
     return result, observations
 
 
+def _verified_sealed_result(result: Mapping[str, Any]) -> Dict[str, Any]:
+    """Copy and verify a sealed current-protocol measurement result."""
+    if result.get("schema") != _RESULT_SCHEMA:
+        raise BirthProbeError("diagnostic source result has an unknown or missing schema")
+    copied = json.loads(canonical_json_bytes(dict(result)).decode("utf-8"))
+    claimed = copied.pop("evidence_sha256", None)
+    if not isinstance(claimed, str) or sha256_bytes(canonical_json_bytes(copied)) != claimed:
+        raise BirthProbeError("diagnostic source result evidence seal is invalid")
+    copied["evidence_sha256"] = claimed
+    return copied
+
+
+def _alternate_attempt_document_shas() -> Dict[str, str]:
+    """Bind diagnostic provenance to the repo documents read for this run."""
+    _, source_sha = _read_once(
+        _SOURCE_ATTEMPT_RECORD_PATH, label="alternate diagnostic source attempt record"
+    )
+    if source_sha != _SOURCE_ATTEMPT_RECORD_SHA256:
+        raise BirthProbeError("terminal source attempt record changed from its frozen bytes")
+    plan_bytes, plan_sha = _read_once(
+        _ALTERNATE_ATTEMPT_PLAN_PATH, label="alternate diagnostic plan"
+    )
+    adjudication_bytes, adjudication_sha = _read_once(
+        _ALTERNATE_ATTEMPT_ADJUDICATION_PATH, label="alternate diagnostic User adjudication"
+    )
+    required_plan_tokens = (
+        _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256.encode("ascii"),
+        source_sha.encode("ascii"),
+        b"QUARANTINED_NON_ADJUDICATIVE",
+    )
+    if any(token not in plan_bytes for token in required_plan_tokens):
+        raise BirthProbeError("alternate diagnostic plan is missing a frozen candidate boundary")
+    if (
+        b"signed_by: USER" not in adjudication_bytes
+        or b"quote_type: verbatim" not in adjudication_bytes
+    ):
+        raise BirthProbeError("alternate diagnostic User adjudication relay is not marked verbatim")
+    return {
+        "source_attempt_record_sha256": source_sha,
+        "alternate_attempt_plan_sha256": plan_sha,
+        "alternate_attempt_adjudication_sha256": adjudication_sha,
+    }
+
+
+def build_non_adjudicative_diagnostic_record(
+    measurement_result: Mapping[str, Any],
+    *,
+    observed_acoustic_sha256: str,
+) -> Dict[str, Any]:
+    """Quarantine a candidate-byte measurement so it cannot satisfy Birth Gate.
+
+    The nested measurement deliberately omits the formal ``overall_pass`` and
+    ``learning_progression_allowed`` fields.  Its predicates may be inspected,
+    but the enclosing record is permanently non-adjudicative and cannot be fed
+    to the formal evidence publisher or used to unlock learning.
+    """
+    source = _verified_sealed_result(measurement_result)
+    if observed_acoustic_sha256 != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
+        raise BirthProbeError(
+            "alternate diagnostic acoustic sha256 must equal the preregistered 80a40f candidate"
+        )
+    document_shas = _alternate_attempt_document_shas()
+    predicates_satisfied = source.pop("overall_pass", None)
+    progression = source.pop("learning_progression_allowed", None)
+    source_seal = source.pop("evidence_sha256")
+    if not isinstance(predicates_satisfied, bool) or progression is not predicates_satisfied:
+        raise BirthProbeError("diagnostic source result has invalid decision booleans")
+    snapshot_sha256 = sha256_bytes(canonical_json_bytes(source))
+    record: Dict[str, Any] = {
+        "schema": _NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA,
+        "disposition": "QUARANTINED_NON_ADJUDICATIVE",
+        "candidate_acoustic_onnx_sha256": observed_acoustic_sha256,
+        **document_shas,
+        "source_measurement_evidence_sha256": source_seal,
+        "measurement_snapshot_sha256": snapshot_sha256,
+        "diagnostic_current_protocol_predicates_satisfied": predicates_satisfied,
+        "formal_birth_gate_evidence": False,
+        "formal_birth_gate_overall_pass": None,
+        "learning_progression_allowed": False,
+        "measurement_snapshot": source,
+    }
+    record["diagnostic_record_sha256"] = sha256_bytes(canonical_json_bytes(record))
+    return record
+
+
+def execute_non_adjudicative_diagnostic(
+    *,
+    renderer: Renderer,
+    pjs_reference: FeatureArtifact,
+    extractor: FeatureExtractor = extract_identity_feature,
+    expected_takes: int = 20,
+) -> tuple[Dict[str, Any], Dict[str, Dict[str, list[RenderObservation]]]]:
+    """Run the 84-render measurement as a quarantined candidate diagnostic."""
+    verified_acoustic = getattr(renderer, "verified_acoustic_sha256", None)
+    if verified_acoustic != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
+        raise BirthProbeError(
+            "non-adjudicative diagnostic renderer is not bound to the preregistered 80a40f bytes"
+        )
+    verify_inputs_unchanged = getattr(renderer, "verify_inputs_unchanged", None)
+    if not callable(verify_inputs_unchanged):
+        raise BirthProbeError(
+            "non-adjudicative diagnostic renderer lacks post-render input verification"
+        )
+    measured, observations = execute_birth_gate(
+        renderer=renderer,
+        pjs_reference=pjs_reference,
+        extractor=extractor,
+        expected_takes=expected_takes,
+    )
+    verify_inputs_unchanged()
+    diagnostic = build_non_adjudicative_diagnostic_record(
+        measured,
+        observed_acoustic_sha256=_ALTERNATE_CANDIDATE_ACOUSTIC_SHA256,
+    )
+    return diagnostic, observations
+
+
 def _staged_result_record(
     parsed_result: Mapping[str, Any], founder: str, condition: str, index: int
 ) -> Mapping[str, Any]:
@@ -851,6 +1025,236 @@ def publish_evidence_bundle(
         raise
 
 
+def _validate_staged_non_adjudicative_bundle(
+    staging: Path,
+    diagnostic: Mapping[str, Any],
+    observations: Mapping[str, Mapping[str, Sequence[RenderObservation]]],
+    pjs_reference: FeatureArtifact,
+    expected_inventory: Mapping[str, str],
+) -> None:
+    """Read back a diagnostic bundle while preserving its quarantine boundary."""
+    diagnostic_path = staging / "non_adjudicative_diagnostic.json"
+    diagnostic_bytes, _ = _read_once(diagnostic_path, label="staged diagnostic record")
+    if diagnostic_bytes != canonical_json_bytes(dict(diagnostic)):
+        raise BirthProbeError("staged diagnostic record bytes diverge from memory")
+    try:
+        parsed = json.loads(diagnostic_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BirthProbeError(f"staged diagnostic record is not valid UTF-8 JSON: {exc}") from exc
+    if parsed != dict(diagnostic):
+        raise BirthProbeError("staged diagnostic record parse differs from memory")
+    snapshot = parsed.get("measurement_snapshot")
+    if not isinstance(snapshot, Mapping):
+        raise BirthProbeError("staged diagnostic measurement snapshot is missing")
+    for forbidden in ("overall_pass", "learning_progression_allowed", "evidence_sha256"):
+        if forbidden in snapshot:
+            raise BirthProbeError(f"staged diagnostic snapshot contains forbidden field {forbidden}")
+    if sha256_bytes(canonical_json_bytes(dict(snapshot))) != parsed.get("measurement_snapshot_sha256"):
+        raise BirthProbeError("staged diagnostic measurement snapshot seal is invalid")
+    predicates_satisfied = parsed.get("diagnostic_current_protocol_predicates_satisfied")
+    if not isinstance(predicates_satisfied, bool):
+        raise BirthProbeError("staged diagnostic decision predicate flag is invalid")
+    reconstructed_source = dict(snapshot)
+    reconstructed_source["overall_pass"] = predicates_satisfied
+    reconstructed_source["learning_progression_allowed"] = predicates_satisfied
+    if sha256_bytes(canonical_json_bytes(reconstructed_source)) != parsed.get(
+        "source_measurement_evidence_sha256"
+    ):
+        raise BirthProbeError("staged diagnostic source measurement seal is invalid")
+    expected_documents = _alternate_attempt_document_shas()
+    if any(parsed.get(key) != value for key, value in expected_documents.items()):
+        raise BirthProbeError("staged diagnostic provenance documents changed or do not match")
+    if parsed.get("candidate_acoustic_onnx_sha256") != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
+        raise BirthProbeError("staged diagnostic acoustic candidate is not preregistered")
+    for founder in _FOUNDER_IDS:
+        for condition in _CONDITIONS:
+            for index, observation in enumerate(observations[founder][condition]):
+                stem = f"{founder}_{condition}_{index:02d}"
+                wav_bytes, wav_sha = _read_once(
+                    staging / "diagnostic_wav" / f"{stem}.wav", label=f"staged diagnostic WAV {stem}"
+                )
+                feature_bytes, feature_sha = _read_once(
+                    staging / "diagnostic_features" / f"{stem}.bin",
+                    label=f"staged diagnostic feature {stem}",
+                )
+                if wav_bytes != observation.wav or wav_sha != observation.wav_sha256:
+                    raise BirthProbeError(f"staged diagnostic WAV readback mismatch for {stem}")
+                if feature_bytes != observation.feature.data or feature_sha != observation.feature.sha256:
+                    raise BirthProbeError(f"staged diagnostic feature readback mismatch for {stem}")
+                record = _staged_result_record(snapshot, founder, condition, index)
+                if (
+                    record.get("wav_sha256") != wav_sha
+                    or record.get("feature_sha256") != feature_sha
+                    or record.get("feature_bytes") != len(feature_bytes)
+                ):
+                    raise BirthProbeError(
+                        f"staged diagnostic snapshot disagrees with artifact bytes for {stem}"
+                    )
+    pjs_bytes, pjs_sha = _read_once(
+        staging / "diagnostic_features" / "pjs_reference.bin",
+        label="staged diagnostic PJS reference",
+    )
+    if pjs_bytes != pjs_reference.data or pjs_sha != pjs_reference.sha256:
+        raise BirthProbeError("staged diagnostic PJS reference readback mismatch")
+    pjs_record = snapshot.get("pjs_reference")
+    if not isinstance(pjs_record, Mapping) or (
+        pjs_record.get("feature_sha256") != pjs_sha
+        or pjs_record.get("feature_bytes") != len(pjs_bytes)
+    ):
+        raise BirthProbeError("staged diagnostic PJS snapshot disagrees with artifact bytes")
+
+    quarantine = {
+        "schema": _NON_ADJUDICATIVE_QUARANTINE_SCHEMA,
+        "disposition": "QUARANTINED_NON_ADJUDICATIVE",
+        "formal_birth_gate_evidence": False,
+        "learning_progression_allowed": False,
+    }
+    quarantine_bytes, _ = _read_once(
+        staging / "QUARANTINE.json", label="staged diagnostic quarantine marker"
+    )
+    if quarantine_bytes != canonical_json_bytes(quarantine):
+        raise BirthProbeError("staged diagnostic quarantine marker is invalid")
+
+    manifest_bytes, _ = _read_once(
+        staging / "diagnostic_artifact_manifest.json",
+        label="staged diagnostic artifact manifest",
+    )
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BirthProbeError(f"staged diagnostic manifest is not valid UTF-8 JSON: {exc}") from exc
+    actual_inventory: Dict[str, str] = {}
+    actual_files: set[str] = set()
+    for path in sorted(staging.rglob("*")):
+        if path.is_file():
+            relative = path.relative_to(staging).as_posix()
+            actual_files.add(relative)
+            if relative != "diagnostic_artifact_manifest.json":
+                actual_inventory[relative] = sha256_bytes(path.read_bytes())
+    if actual_inventory != dict(expected_inventory):
+        raise BirthProbeError("staged diagnostic inventory changed after manifest construction")
+    if manifest != {
+        "schema": "run9-non-adjudicative-diagnostic-artifact-manifest/1.0",
+        "files": actual_inventory,
+    }:
+        raise BirthProbeError("staged diagnostic manifest disagrees with readback inventory")
+    if actual_files != set(actual_inventory) | {"diagnostic_artifact_manifest.json"}:
+        raise BirthProbeError("staged diagnostic bundle contains missing or unexpected files")
+
+
+def publish_non_adjudicative_diagnostic_bundle(
+    output_dir: Path,
+    diagnostic: Mapping[str, Any],
+    observations: Mapping[str, Mapping[str, Sequence[RenderObservation]]],
+    pjs_reference: FeatureArtifact,
+) -> None:
+    """Atomically publish candidate diagnostics under unmistakable quarantine."""
+    if diagnostic.get("schema") != _NON_ADJUDICATIVE_DIAGNOSTIC_SCHEMA:
+        raise BirthProbeError("diagnostic record has an unknown or missing schema")
+    if (
+        diagnostic.get("disposition") != "QUARANTINED_NON_ADJUDICATIVE"
+        or diagnostic.get("formal_birth_gate_evidence") is not False
+        or diagnostic.get("formal_birth_gate_overall_pass") is not None
+        or diagnostic.get("learning_progression_allowed") is not False
+    ):
+        raise BirthProbeError("diagnostic record does not preserve the quarantine decision boundary")
+    if diagnostic.get("candidate_acoustic_onnx_sha256") != _ALTERNATE_CANDIDATE_ACOUSTIC_SHA256:
+        raise BirthProbeError("diagnostic record acoustic candidate is not preregistered")
+    expected_documents = _alternate_attempt_document_shas()
+    if any(diagnostic.get(key) != value for key, value in expected_documents.items()):
+        raise BirthProbeError("diagnostic record provenance documents changed or do not match")
+    sealed = dict(diagnostic)
+    claimed = sealed.pop("diagnostic_record_sha256", None)
+    if not isinstance(claimed, str) or sha256_bytes(canonical_json_bytes(sealed)) != claimed:
+        raise BirthProbeError("diagnostic record seal is invalid")
+    snapshot = diagnostic.get("measurement_snapshot")
+    if not isinstance(snapshot, Mapping):
+        raise BirthProbeError("diagnostic record is missing its measurement snapshot")
+    predicates_satisfied = diagnostic.get("diagnostic_current_protocol_predicates_satisfied")
+    if not isinstance(predicates_satisfied, bool):
+        raise BirthProbeError("diagnostic record decision predicate flag is invalid")
+    reconstructed_source = dict(snapshot)
+    reconstructed_source["overall_pass"] = predicates_satisfied
+    reconstructed_source["learning_progression_allowed"] = predicates_satisfied
+    if sha256_bytes(canonical_json_bytes(reconstructed_source)) != diagnostic.get(
+        "source_measurement_evidence_sha256"
+    ):
+        raise BirthProbeError("diagnostic source measurement seal is invalid")
+    expected_takes = snapshot.get("expected_takes_per_founder")
+    if isinstance(expected_takes, bool) or not isinstance(expected_takes, int) or expected_takes <= 0:
+        raise BirthProbeError("diagnostic snapshot has an invalid expected take count")
+    _closed_founder_mapping(observations, label="diagnostic publication observations")
+    expected_counts = {
+        "reference": 1,
+        "c0": expected_takes,
+        "c1": expected_takes,
+        "positive_reference": 1,
+    }
+    for founder in _FOUNDER_IDS:
+        founder_observations = observations[founder]
+        if not isinstance(founder_observations, Mapping) or set(founder_observations) != set(_CONDITIONS):
+            raise BirthProbeError(
+                f"diagnostic publication observations for {founder} are not closed-world"
+            )
+        for condition, count in expected_counts.items():
+            if len(founder_observations[condition]) != count:
+                raise BirthProbeError(
+                    f"diagnostic observations for {founder}/{condition} must contain {count} items"
+                )
+    if not _feature_valid(pjs_reference):
+        raise BirthProbeError("refusing to publish an invalid diagnostic PJS reference feature")
+    output_dir = output_dir.resolve()
+    if not output_dir.name.startswith("non_adjudicative_"):
+        raise BirthProbeError("diagnostic output directory name must start with non_adjudicative_")
+    if output_dir.exists():
+        raise BirthProbeError(f"refusing to overwrite existing diagnostic directory: {output_dir}")
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.build-", dir=output_dir.parent))
+    try:
+        (staging / "diagnostic_wav").mkdir()
+        (staging / "diagnostic_features").mkdir()
+        for founder in _FOUNDER_IDS:
+            for condition in _CONDITIONS:
+                for index, observation in enumerate(observations[founder][condition]):
+                    stem = f"{founder}_{condition}_{index:02d}"
+                    (staging / "diagnostic_wav" / f"{stem}.wav").write_bytes(observation.wav)
+                    (staging / "diagnostic_features" / f"{stem}.bin").write_bytes(
+                        observation.feature.data
+                    )
+        (staging / "diagnostic_features" / "pjs_reference.bin").write_bytes(
+            pjs_reference.data
+        )
+        (staging / "non_adjudicative_diagnostic.json").write_bytes(
+            canonical_json_bytes(dict(diagnostic))
+        )
+        quarantine = {
+            "schema": _NON_ADJUDICATIVE_QUARANTINE_SCHEMA,
+            "disposition": "QUARANTINED_NON_ADJUDICATIVE",
+            "formal_birth_gate_evidence": False,
+            "learning_progression_allowed": False,
+        }
+        (staging / "QUARANTINE.json").write_bytes(canonical_json_bytes(quarantine))
+        inventory: Dict[str, str] = {}
+        for path in sorted(staging.rglob("*")):
+            if path.is_file():
+                inventory[path.relative_to(staging).as_posix()] = sha256_bytes(path.read_bytes())
+        (staging / "diagnostic_artifact_manifest.json").write_bytes(
+            canonical_json_bytes(
+                {
+                    "schema": "run9-non-adjudicative-diagnostic-artifact-manifest/1.0",
+                    "files": inventory,
+                }
+            )
+        )
+        _validate_staged_non_adjudicative_bundle(
+            staging, diagnostic, observations, pjs_reference, inventory
+        )
+        os.replace(staging, output_dir)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
 @dataclass(frozen=True)
 class _ProbeNote:
     mora: str
@@ -861,10 +1265,10 @@ class _ProbeNote:
 class GateSynthRenderer:
     """Production adapter for the frozen ``gate_synth.run_pipeline`` path.
 
-    C1 is deliberately fail-closed until the neutral ``r_sham`` ControlProfile
-    can be attached at the actual synthesis integration boundary.  Merely
-    carrying the profile beside a render is not evidence that the sham
-    mechanism was exercised.
+    Immediately before C1 synthesis, the adapter consumes the exact neutral
+    ``r_sham`` ControlProfile and places its attestation in the same ``record``
+    object passed into the pinned synthesis call.  The call must preserve that
+    attestation; merely carrying a profile beside a render is not accepted.
     """
 
     def __init__(
@@ -996,6 +1400,11 @@ class GateSynthRenderer:
             for note in cell["notes"]
         ]
 
+    @property
+    def verified_acoustic_sha256(self) -> str:
+        """Return the acoustic digest verified and snapshotted by this adapter."""
+        return self._input_hashes[f"artifact_{self._input_paths['acoustic'].name}"]
+
     def _build_embeddings(
         self, speaker_map: Mapping[str, Any], artifact_bytes: Mapping[str, bytes]
     ) -> Dict[str, np.ndarray]:
@@ -1029,23 +1438,47 @@ class GateSynthRenderer:
             raise BirthProbeError("C0/C1 must carry their exact empty CONTROL profiles")
         if control_profile is not None and any(control_profile["partitions"].values()):
             raise BirthProbeError("C0/C1 CONTROL profile partitions must remain empty")
-        if condition == "c1":
-            raise BirthProbeError(
-                "C1 ZERO_CONTROLPROFILE_SHAM synthesis attachment is not implemented in gate_synth; "
-                "refusing to render while the r_sham profile would be bypassed"
-            )
+        if condition in {"c0", "c1"}:
+            replay, sham = _control_profiles(founder_id)
+            expected_profile = replay.to_dict() if condition == "c0" else sham.to_dict()
+            if dict(control_profile) != expected_profile:
+                raise BirthProbeError(
+                    f"{condition.upper()} must carry the exact derived CONTROL profile"
+                )
         record: Dict[str, Any] = {}
-        waveform = self._gate.run_pipeline(
-            self._notes,
-            lambda beats, tempo_bpm: beats * 60.0 / tempo_bpm,
-            self._tempo,
-            self._model_bytes,
-            self._variance_phonemes,
-            self._acoustic_phonemes,
-            record,
-            speaker_name="ritsu",
-            speaker_embed_vector=self._embeddings[founder_id],
-        )
+        if condition == "c1":
+            record["run9_control_profile_attachment"] = _consume_run9_zero_controlprofile_sham(
+                control_profile
+            )
+        try:
+            waveform = self._gate.run_pipeline(
+                self._notes,
+                lambda beats, tempo_bpm: beats * 60.0 / tempo_bpm,
+                self._tempo,
+                self._model_bytes,
+                self._variance_phonemes,
+                self._acoustic_phonemes,
+                record,
+                speaker_name="ritsu",
+                speaker_embed_vector=self._embeddings[founder_id],
+            )
+        except ValueError as exc:
+            raise BirthProbeError(f"gate_synth rejected the render contract: {exc}") from exc
+        if condition == "c1":
+            expected_attachment = {
+                "status": "CONSUMED_INERT_ZERO_PROFILE",
+                "voice_id": founder_id,
+                "revision": "r_sham",
+                "profile_id": control_profile["profile_id"],
+            }
+            if record.get("run9_control_profile_attachment") != expected_attachment:
+                raise BirthProbeError(
+                    "C1 synthesis call did not preserve exact ControlProfile consumption: "
+                    f"expected {expected_attachment!r}, got "
+                    f"{record.get('run9_control_profile_attachment')!r}"
+                )
+        elif "run9_control_profile_attachment" in record:
+            raise BirthProbeError("gate_synth emitted a ControlProfile attachment outside C1")
         if record.get("seed") != _RUNTIME_SEED:
             raise BirthProbeError(f"gate_synth recorded unexpected runtime seed: {record.get('seed')!r}")
         waveform = np.asarray(waveform)

@@ -349,6 +349,162 @@ def test_publish_is_atomic_and_refuses_overwrite(tmp_path: Path) -> None:
         bp.publish_evidence_bundle(output, result, observations, pjs)
 
 
+def test_alternate_candidate_diagnostic_is_quarantined_and_not_formal_evidence(
+    tmp_path: Path,
+) -> None:
+    references, c0, c1, positive, pjs = _evidence(count=1)
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+        expected_takes=1,
+    )
+    observations = {
+        founder: {
+            "reference": [references[founder]],
+            "c0": c0[founder],
+            "c1": c1[founder],
+            "positive_reference": [positive[founder]],
+        }
+        for founder in FOUNDERS
+    }
+    diagnostic = bp.build_non_adjudicative_diagnostic_record(
+        result,
+        observed_acoustic_sha256=bp._ALTERNATE_CANDIDATE_ACOUSTIC_SHA256,  # noqa: SLF001
+    )
+    assert diagnostic["disposition"] == "QUARANTINED_NON_ADJUDICATIVE"
+    assert diagnostic["diagnostic_current_protocol_predicates_satisfied"] is True
+    assert diagnostic["formal_birth_gate_evidence"] is False
+    assert diagnostic["formal_birth_gate_overall_pass"] is None
+    assert diagnostic["learning_progression_allowed"] is False
+    assert (
+        diagnostic["source_attempt_record_sha256"]
+        == bp._SOURCE_ATTEMPT_RECORD_SHA256  # noqa: SLF001
+    )
+    assert diagnostic["alternate_attempt_plan_sha256"] == bp.sha256_bytes(
+        bp._ALTERNATE_ATTEMPT_PLAN_PATH.read_bytes()  # noqa: SLF001
+    )
+    assert "overall_pass" not in diagnostic["measurement_snapshot"]
+    assert "learning_progression_allowed" not in diagnostic["measurement_snapshot"]
+    with pytest.raises(bp.BirthProbeError, match="unknown or missing schema"):
+        bp.publish_evidence_bundle(tmp_path / "formal", diagnostic, observations, pjs)
+
+    output = tmp_path / "non_adjudicative_80a40f"
+    bp.publish_non_adjudicative_diagnostic_bundle(output, diagnostic, observations, pjs)
+    assert (output / "QUARANTINE.json").is_file()
+    assert (output / "non_adjudicative_diagnostic.json").is_file()
+    assert (output / "diagnostic_artifact_manifest.json").is_file()
+    assert not (output / "birth_gate_evidence.json").exists()
+    assert not (output / "artifact_manifest.json").exists()
+
+
+def test_alternate_diagnostic_rejects_unregistered_candidate_bytes() -> None:
+    references, c0, c1, positive, pjs = _evidence(count=1)
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+        expected_takes=1,
+    )
+    with pytest.raises(bp.BirthProbeError, match="preregistered 80a40f candidate"):
+        bp.build_non_adjudicative_diagnostic_record(
+            result,
+            observed_acoustic_sha256="0" * 64,
+        )
+
+
+def test_non_adjudicative_publish_failure_leaves_no_partial_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    references, c0, c1, positive, pjs = _evidence(count=1)
+    result = bp.evaluate_birth_gate(
+        references=references,
+        c0_takes=c0,
+        c1_takes=c1,
+        positive_references=positive,
+        pjs_reference=pjs,
+        expected_takes=1,
+    )
+    observations = {
+        founder: {
+            "reference": [references[founder]],
+            "c0": c0[founder],
+            "c1": c1[founder],
+            "positive_reference": [positive[founder]],
+        }
+        for founder in FOUNDERS
+    }
+    diagnostic = bp.build_non_adjudicative_diagnostic_record(
+        result,
+        observed_acoustic_sha256=bp._ALTERNATE_CANDIDATE_ACOUSTIC_SHA256,  # noqa: SLF001
+    )
+    original_write_bytes = Path.write_bytes
+
+    def injected_write(path: Path, data: bytes) -> int:
+        if path.name == "QUARANTINE.json":
+            raise OSError("injected diagnostic publication failure")
+        return original_write_bytes(path, data)
+
+    monkeypatch.setattr(Path, "write_bytes", injected_write)
+    output = tmp_path / "non_adjudicative_failure"
+    with pytest.raises(OSError, match="injected diagnostic publication failure"):
+        bp.publish_non_adjudicative_diagnostic_bundle(output, diagnostic, observations, pjs)
+    assert not output.exists()
+    assert list(tmp_path.glob(".non_adjudicative_failure.build-*")) == []
+
+
+def test_non_adjudicative_executor_requires_renderer_bound_to_candidate_bytes() -> None:
+    class UnboundRenderer:
+        def __call__(self, *args, **kwargs):
+            raise AssertionError("render must not start before candidate-byte verification")
+
+    pjs = bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0]))
+    with pytest.raises(bp.BirthProbeError, match="not bound to the preregistered 80a40f"):
+        bp.execute_non_adjudicative_diagnostic(
+            renderer=UnboundRenderer(),
+            pjs_reference=pjs,
+            expected_takes=1,
+        )
+
+
+def test_non_adjudicative_executor_verifies_inputs_after_fixed_render_order() -> None:
+    class BoundRenderer:
+        verified_acoustic_sha256 = bp._ALTERNATE_CANDIDATE_ACOUSTIC_SHA256  # noqa: SLF001
+
+        def __init__(self):
+            self.calls = []
+            self.post_verified = False
+
+        def __call__(self, founder_id, condition, take_index, control_profile):
+            self.calls.append((founder_id, condition, take_index, control_profile))
+            return founder_id.encode("ascii")
+
+        def verify_inputs_unchanged(self):
+            self.post_verified = True
+
+    def extractor(wav_bytes: bytes) -> bp.FeatureArtifact:
+        vector = [0.0, 1.0] if wav_bytes == b"R9F-01" else [1.0, 0.0]
+        return bp.FeatureArtifact.from_vector(np.asarray(vector))
+
+    renderer = BoundRenderer()
+    pjs = bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0]))
+    diagnostic, observations = bp.execute_non_adjudicative_diagnostic(
+        renderer=renderer,
+        pjs_reference=pjs,
+        extractor=extractor,
+        expected_takes=1,
+    )
+    assert len(renderer.calls) == 8
+    assert renderer.post_verified is True
+    assert set(observations) == set(FOUNDERS)
+    assert diagnostic["formal_birth_gate_evidence"] is False
+    assert diagnostic["learning_progression_allowed"] is False
+
+
 def test_publish_failure_injection_leaves_no_partial_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -766,22 +922,94 @@ def test_gate_synth_renderer_adapter_matches_runtime_note_and_tempo_contract() -
     assert renderer("R9F-01", "reference", 0, None) == b"adapter-wav"
 
 
-def test_gate_synth_renderer_fails_closed_before_bypassing_c1_controlprofile() -> None:
+def test_gate_synth_renderer_passes_and_attests_c1_controlprofile() -> None:
     renderer = object.__new__(bp.GateSynthRenderer)
+    renderer._notes = [bp._ProbeNote(mora="あ", midi=60, duration_beats=1.0)]
+    renderer._tempo = 120.0
+    renderer._model_bytes = {}
+    renderer._variance_phonemes = {}
+    renderer._acoustic_phonemes = {}
+    renderer._embeddings = {"R9F-01": np.zeros(384, dtype=np.float32)}
 
     class FakeGate:
         @staticmethod
         def run_pipeline(*args, **kwargs):
-            raise AssertionError("gate_synth must not run while C1 ControlProfile attachment is unsupported")
+            del kwargs
+            record = args[6]
+            assert record["run9_control_profile_attachment"] == {
+                "status": "CONSUMED_INERT_ZERO_PROFILE",
+                "voice_id": "R9F-01",
+                "revision": "r_sham",
+                "profile_id": "7235ca358cc12cfe",
+            }
+            record["seed"] = bp._RUNTIME_SEED
+            return np.asarray([0.25, -0.25], dtype=np.float32)
+
+    class FakeSoundFile:
+        @staticmethod
+        def write(path, waveform, sample_rate, *, subtype, format):
+            del waveform, sample_rate, subtype, format
+            path.write_bytes(b"c1-adapter-wav")
+
+        @staticmethod
+        def read(file_object, *, dtype, always_2d):
+            del file_object, dtype, always_2d
+            return np.asarray([0.1, -0.1], dtype=np.float64), 44_100
 
     renderer._gate = FakeGate()
-    profile = {
-        "branch": "CONTROL",
-        "revision": "r_sham",
-        "partitions": {"trait_control": {}, "technique_control": {}},
-    }
-    with pytest.raises(bp.BirthProbeError, match="C1 ZERO_CONTROLPROFILE_SHAM synthesis attachment"):
+    renderer._sf = FakeSoundFile()
+    _, sham = bp._control_profiles("R9F-01")  # noqa: SLF001
+    assert renderer("R9F-01", "c1", 0, sham.to_dict()) == b"c1-adapter-wav"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"revision": "replay"},
+        {"parent_revision": "other"},
+        {"profile_id": "not-a-profile-id"},
+        {"partitions": {"trait_control": {"energy": 0.0}, "technique_control": {}}},
+    ],
+)
+def test_c1_synthesis_attachment_rejects_non_inert_or_wrong_identity(mutation) -> None:
+    _, sham = bp._control_profiles("R9F-01")  # noqa: SLF001
+    profile = sham.to_dict()
+    profile.update(mutation)
+    with pytest.raises(bp.BirthProbeError, match="RUN9 C1 ControlProfile"):
+        bp._consume_run9_zero_controlprofile_sham(profile)  # noqa: SLF001
+
+
+def test_c1_renderer_rejects_well_formed_but_nonderived_profile_id() -> None:
+    renderer = object.__new__(bp.GateSynthRenderer)
+    _, sham = bp._control_profiles("R9F-01")  # noqa: SLF001
+    profile = sham.to_dict()
+    profile["profile_id"] = "0" * 16
+    with pytest.raises(bp.BirthProbeError, match="exact derived CONTROL profile"):
         renderer("R9F-01", "c1", 0, profile)
+
+
+def test_gate_synth_renderer_rejects_missing_c1_consumption_attestation() -> None:
+    renderer = object.__new__(bp.GateSynthRenderer)
+    renderer._notes = [bp._ProbeNote(mora="あ", midi=60, duration_beats=1.0)]
+    renderer._tempo = 120.0
+    renderer._model_bytes = {}
+    renderer._variance_phonemes = {}
+    renderer._acoustic_phonemes = {}
+    renderer._embeddings = {"R9F-01": np.zeros(384, dtype=np.float32)}
+
+    class FakeGate:
+        @staticmethod
+        def run_pipeline(*args, **kwargs):
+            del kwargs
+            record = args[6]
+            del record["run9_control_profile_attachment"]
+            record["seed"] = bp._RUNTIME_SEED
+            return np.asarray([0.25, -0.25], dtype=np.float32)
+
+    renderer._gate = FakeGate()
+    _, sham = bp._control_profiles("R9F-01")  # noqa: SLF001
+    with pytest.raises(bp.BirthProbeError, match="did not preserve exact"):
+        renderer("R9F-01", "c1", 0, sham.to_dict())
 
 
 @pytest.mark.parametrize(
