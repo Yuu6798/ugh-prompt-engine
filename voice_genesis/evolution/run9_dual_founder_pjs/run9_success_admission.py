@@ -9,7 +9,6 @@ returns PASS.  Rejection leaves the registration directory absent.
 from __future__ import annotations
 
 import argparse
-import errno
 import hashlib
 import importlib
 from importlib import metadata as importlib_metadata
@@ -333,21 +332,44 @@ def _verify_network_isolation_netns() -> None:
         )
 
 
-def _verify_network_isolation_seccomp() -> None:
-    """Empirically confirm the seccomp filter blocks AF_INET/AF_INET6 socket creation.
+_SECCOMP_VERIFY_FAMILIES: tuple[tuple[int, str], ...] = (
+    (socket.AF_INET, "AF_INET"),
+    (socket.AF_INET6, "AF_INET6"),
+    (socket.AF_PACKET, "AF_PACKET"),
+)
+# Plain ints with labels: socket.socket() accepts an int `type`, and DCCP /
+# SOCK_PACKET have no `socket` module constants to reference.
+_SECCOMP_VERIFY_KINDS: tuple[tuple[int, str], ...] = (
+    (1, "SOCK_STREAM"),
+    (2, "SOCK_DGRAM"),
+    (3, "SOCK_RAW"),
+    (4, "SOCK_RDM"),
+    (5, "SOCK_SEQPACKET"),
+    (6, "SOCK_DCCP"),
+    (10, "SOCK_PACKET"),
+)
 
-    Our BPF filter blocks by domain (arg0), so it blocks every socket type in
-    that domain, not just SOCK_DGRAM. Probing only SOCK_DGRAM would pass a
-    host policy that blocks datagram sockets but still permits stream (TCP)
-    sockets in the same family -- a false-success path. Probe both
-    SOCK_STREAM and SOCK_DGRAM for both inet families.
+
+def _verify_network_isolation_seccomp() -> None:
+    """Empirically confirm no internet-domain socket object can be created.
+
+    Full-matrix over the socket(2) creation surface: every (family, type)
+    cell across AF_INET / AF_INET6 / AF_PACKET x the seven POSIX/Linux socket
+    types must fail to produce a socket object. Probing only one type (e.g.
+    SOCK_DGRAM, or SOCK_STREAM+SOCK_DGRAM) would pass a host policy that
+    blocks that subset while leaving another type (SOCK_RAW, SOCK_PACKET,
+    ...) open -- a false-success path. This check is errno-agnostic by
+    design: the observable guarantee is "creation did not succeed", and a
+    real deployment may enforce that via seccomp EPERM, a missing
+    capability (also EPERM), an unsupported protocol (EPROTONOSUPPORT), or
+    a rejected type (EINVAL) -- any OSError counts as blocked. Only an
+    actual successful `socket.socket()` call is a verification failure.
+    This is the terminal probe for this isolation-mechanism family: no
+    further socket kind/family enumeration is pending.
     """
-    for family, label in ((socket.AF_INET, "AF_INET"), (socket.AF_INET6, "AF_INET6")):
-        for kind, kind_label in (
-            (socket.SOCK_STREAM, "SOCK_STREAM"),
-            (socket.SOCK_DGRAM, "SOCK_DGRAM"),
-        ):
-            _expect_socket_blocked_with_eperm(family, kind, f"{label}/{kind_label}")
+    for family, family_label in _SECCOMP_VERIFY_FAMILIES:
+        for kind, kind_label in _SECCOMP_VERIFY_KINDS:
+            _expect_socket_creation_blocked(family, kind, f"{family_label}/{kind_label}")
     try:
         unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     except OSError as exc:
@@ -355,16 +377,12 @@ def _verify_network_isolation_seccomp() -> None:
     unix_socket.close()
 
 
-def _expect_socket_blocked_with_eperm(
-    family: socket.AddressFamily, kind: socket.SocketKind, label: str
-) -> None:
+def _expect_socket_creation_blocked(family: int, kind: int, label: str) -> None:
     try:
         blocked_socket = socket.socket(family, kind)
-    except OSError as exc:
-        if exc.errno != errno.EPERM:
-            raise bp.BirthProbeError(
-                f"render process can still create {label} sockets"
-            ) from exc
+    except OSError:
+        # Errno-agnostic: seccomp EPERM, missing-capability EPERM,
+        # EPROTONOSUPPORT, EINVAL, etc. all mean "no socket object exists".
         return
     blocked_socket.close()
     raise bp.BirthProbeError(f"render process can still create {label} sockets")

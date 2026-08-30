@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import errno
 import inspect
 import json
 import subprocess
@@ -220,97 +221,108 @@ class _FakeUnixSocket:
         self.closed = True
 
 
-_ALL_INET_PAIRS = frozenset(
-    {
-        (admission.socket.AF_INET, admission.socket.SOCK_STREAM),
-        (admission.socket.AF_INET, admission.socket.SOCK_DGRAM),
-        (admission.socket.AF_INET6, admission.socket.SOCK_STREAM),
-        (admission.socket.AF_INET6, admission.socket.SOCK_DGRAM),
-    }
+# Full socket(2)-creation-surface matrix under test: every (family, kind)
+# cell `_verify_network_isolation_seccomp` is expected to probe.
+_ALL_MATRIX_CELLS = frozenset(
+    (family, kind)
+    for family, _ in admission._SECCOMP_VERIFY_FAMILIES  # noqa: SLF001
+    for kind, _ in admission._SECCOMP_VERIFY_KINDS  # noqa: SLF001
 )
 
 
-def _seccomp_blocking_socket_factory(*, blocked_pairs: set[tuple[int, int]]) -> Any:
+def _seccomp_matrix_socket_factory(
+    *,
+    open_cells: set[tuple[int, int]] = frozenset(),
+    blocked_errno: dict[tuple[int, int], int] | None = None,
+    default_errno: int = errno.EPERM,
+) -> Any:
+    """Fake `socket.socket` over the full matrix.
+
+    AF_UNIX always succeeds here (the success baseline is exercised by its
+    own dedicated test). Matrix cells in `open_cells` also return a live
+    (fake) socket object -- i.e. creation "succeeded". Every other matrix
+    cell raises OSError with the errno from `blocked_errno` for that cell if
+    given, else `default_errno`. This lets tests express the errno-agnostic
+    semantics under verification: any errno on a blocked cell must still
+    count as blocked.
+    """
+    blocked_errno = blocked_errno or {}
+
     def factory(family: int, kind: int) -> Any:
-        if (family, kind) in blocked_pairs:
-            raise OSError(admission.errno.EPERM, "Operation not permitted")
-        return _FakeUnixSocket()
+        if family == admission.socket.AF_UNIX or (family, kind) in open_cells:
+            return _FakeUnixSocket()
+        raise OSError(blocked_errno.get((family, kind), default_errno), "blocked")
 
     return factory
 
 
-def test_verify_network_isolation_seccomp_accepts_blocked_inet(
+def test_verify_network_isolation_seccomp_accepts_fully_blocked_matrix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        admission.socket,
-        "socket",
-        _seccomp_blocking_socket_factory(blocked_pairs=set(_ALL_INET_PAIRS)),
-    )
+    monkeypatch.setattr(admission.socket, "socket", _seccomp_matrix_socket_factory())
     admission._verify_network_isolation("seccomp")  # noqa: SLF001
 
 
-def test_verify_network_isolation_seccomp_rejects_unblocked_inet(
+def test_verify_network_isolation_seccomp_rejects_stream_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    blocked = {
-        pair
-        for pair in _ALL_INET_PAIRS
-        if pair[0] != admission.socket.AF_INET
-    }
+    """Regression for P2 round 1: SOCK_DGRAM-only probing missed an open SOCK_STREAM."""
     monkeypatch.setattr(
         admission.socket,
         "socket",
-        _seccomp_blocking_socket_factory(blocked_pairs=blocked),
+        _seccomp_matrix_socket_factory(
+            open_cells={(admission.socket.AF_INET, 1)}  # 1 = SOCK_STREAM
+        ),
     )
     with pytest.raises(bp.BirthProbeError, match="can still create AF_INET/SOCK_STREAM sockets"):
         admission._verify_network_isolation("seccomp")  # noqa: SLF001
 
 
-def test_verify_network_isolation_seccomp_rejects_unblocked_inet6(
+def test_verify_network_isolation_seccomp_rejects_raw_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    blocked = {
-        pair
-        for pair in _ALL_INET_PAIRS
-        if pair[0] != admission.socket.AF_INET6
-    }
+    """Regression for P2 round 2: only SOCK_STREAM/SOCK_DGRAM probing missed SOCK_RAW."""
     monkeypatch.setattr(
         admission.socket,
         "socket",
-        _seccomp_blocking_socket_factory(blocked_pairs=blocked),
+        _seccomp_matrix_socket_factory(
+            open_cells={(admission.socket.AF_INET, 3)}  # 3 = SOCK_RAW
+        ),
     )
-    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET6/SOCK_STREAM sockets"):
+    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET/SOCK_RAW sockets"):
         admission._verify_network_isolation("seccomp")  # noqa: SLF001
 
 
-def test_verify_network_isolation_seccomp_rejects_dgram_only_block(
+def test_verify_network_isolation_seccomp_rejects_af_packet_open(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regression for the P2 false-success gap: SOCK_DGRAM blocked, SOCK_STREAM (TCP) open."""
-    blocked = {pair for pair in _ALL_INET_PAIRS if pair[1] == admission.socket.SOCK_DGRAM}
+    """Regression for P2 round 2: AF_PACKET was previously not probed at all."""
     monkeypatch.setattr(
         admission.socket,
         "socket",
-        _seccomp_blocking_socket_factory(blocked_pairs=blocked),
+        _seccomp_matrix_socket_factory(
+            open_cells={(admission.socket.AF_PACKET, 10)}  # 10 = SOCK_PACKET
+        ),
     )
-    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET/SOCK_STREAM sockets"):
+    with pytest.raises(
+        bp.BirthProbeError, match="can still create AF_PACKET/SOCK_PACKET sockets"
+    ):
         admission._verify_network_isolation("seccomp")  # noqa: SLF001
 
 
-def test_verify_network_isolation_seccomp_rejects_wrong_errno(
+def test_verify_network_isolation_seccomp_is_errno_agnostic(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def factory(family: int, kind: int) -> Any:
-        if family == admission.socket.AF_INET and kind == admission.socket.SOCK_STREAM:
-            raise OSError(admission.errno.EACCES, "Permission denied")
-        if (family, kind) in _ALL_INET_PAIRS:
-            raise OSError(admission.errno.EPERM, "Operation not permitted")
-        return _FakeUnixSocket()
-
-    monkeypatch.setattr(admission.socket, "socket", factory)
-    with pytest.raises(bp.BirthProbeError, match="can still create AF_INET/SOCK_STREAM sockets"):
-        admission._verify_network_isolation("seccomp")  # noqa: SLF001
+    """A blocked cell may fail with any errno (EPROTONOSUPPORT, EINVAL, ...), not just EPERM."""
+    non_eperm_cell = next(iter(_ALL_MATRIX_CELLS))
+    monkeypatch.setattr(
+        admission.socket,
+        "socket",
+        _seccomp_matrix_socket_factory(
+            blocked_errno={non_eperm_cell: errno.EPROTONOSUPPORT}
+        ),
+    )
+    admission._verify_network_isolation("seccomp")  # noqa: SLF001
 
 
 def test_verify_network_isolation_seccomp_rejects_broken_unix_baseline(
@@ -319,9 +331,7 @@ def test_verify_network_isolation_seccomp_rejects_broken_unix_baseline(
     def factory(family: int, kind: int) -> Any:
         if family == admission.socket.AF_UNIX:
             raise OSError("unix sockets unavailable")
-        if (family, kind) in _ALL_INET_PAIRS:
-            raise OSError(admission.errno.EPERM, "Operation not permitted")
-        return _FakeUnixSocket()
+        raise OSError(errno.EPERM, "blocked")
 
     monkeypatch.setattr(admission.socket, "socket", factory)
     with pytest.raises(bp.BirthProbeError, match="seccomp verification socket baseline failed"):

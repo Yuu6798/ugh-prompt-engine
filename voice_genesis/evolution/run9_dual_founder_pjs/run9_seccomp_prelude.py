@@ -93,19 +93,40 @@ def platform_machine() -> str:
     return os.uname().machine
 
 
+_SELF_CHECK_FAMILIES: tuple[tuple[int, str], ...] = (
+    (socket.AF_INET, "AF_INET"),
+    (socket.AF_INET6, "AF_INET6"),
+    (socket.AF_PACKET, "AF_PACKET"),
+)
+# Plain ints with labels: socket.socket() accepts an int `type`, and DCCP /
+# SOCK_PACKET have no `socket` module constants to reference.
+_SELF_CHECK_KINDS: tuple[tuple[int, str], ...] = (
+    (1, "SOCK_STREAM"),
+    (2, "SOCK_DGRAM"),
+    (3, "SOCK_RAW"),
+    (4, "SOCK_RDM"),
+    (5, "SOCK_SEQPACKET"),
+    (6, "SOCK_DCCP"),
+    (10, "SOCK_PACKET"),
+)
+
+
 def self_check_filter_installed() -> None:
     """フィルタが実際に効いていることを検証する（偽陽性防止に AF_UNIX 成功も確認）。
 
-    このフィルタはドメイン（arg0）単位で拒否するため、同一ドメインの
-    ソケット種別は SOCK_STREAM/SOCK_DGRAM を問わずすべて拒否されるはず。
-    SOCK_DGRAM だけを検査すると、同一ファミリの SOCK_STREAM (TCP) を許す
-    ホストポリシー下で偽陽性の自己検査通過を招く。両方の種別を検査する。
+    このフィルタはドメイン（arg0）単位で拒否するため、同一ドメインのソケット
+    種別は STREAM/DGRAM/RAW/... を問わずすべて拒否されるはず。一部の種別
+    だけを検査すると、それ以外の種別（SOCK_RAW・AF_PACKET 等）を許すホスト
+    ポリシー下で偽陽性の自己検査通過を招く。AF_INET/AF_INET6/AF_PACKET と
+    socket(2) が受理する 7 種別の全マトリクスを検査する。
+
+    自プロセスに装着した既知セマンティクスのフィルタ（ドメイン単位で
+    ハンドラ前段に割り込み、型バリデーション前に EPERM を返す）を検査する
+    自己検査であるため、他ファミリ検証（`run9_success_admission.py` の
+    errno 非依存な運用側検証）とは異なり EPERM 厳密判定を維持する。
     """
-    for family, label in ((socket.AF_INET, "AF_INET"), (socket.AF_INET6, "AF_INET6")):
-        for kind, kind_label in (
-            (socket.SOCK_STREAM, "SOCK_STREAM"),
-            (socket.SOCK_DGRAM, "SOCK_DGRAM"),
-        ):
+    for family, label in _SELF_CHECK_FAMILIES:
+        for kind, kind_label in _SELF_CHECK_KINDS:
             _expect_af_blocked(family, kind, f"{label}/{kind_label}")
     try:
         unix_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -114,7 +135,7 @@ def self_check_filter_installed() -> None:
     unix_socket.close()
 
 
-def _expect_af_blocked(family: socket.AddressFamily, kind: socket.SocketKind, label: str) -> None:
+def _expect_af_blocked(family: int, kind: int, label: str) -> None:
     try:
         blocked_socket = socket.socket(family, kind)
     except OSError as exc:
