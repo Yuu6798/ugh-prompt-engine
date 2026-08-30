@@ -1,0 +1,158 @@
+name: temp-pr340-round6e-review-fixes
+on:
+  push:
+    branches: [codex/run9-success-only-prepod]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/run9-success-only-prepod
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Derive measurement-relevant native closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE='runpod/base:1.1.0-ubuntu2404@sha256:6a7ffc191ddee44bcede7b8508a76f67df690df7d58043edd6695ef63bffef23'
+          RUN_DIR='voice_genesis/evolution/run9_dual_founder_pjs'
+          docker pull "$IMAGE"
+          cat > native_probe.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          ROOTS=(build-essential libffi-dev libsndfile1)
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            ca-certificates curl git iptables unzip xz-utils libssl-dev zlib1g-dev
+          apt-get install -y -qq --no-install-recommends "${ROOTS[@]}"
+          python3 - /repo/voice_genesis/evolution/run9_dual_founder_pjs/inputs/measurement_native_install_lock.txt "${ROOTS[@]}" <<'PY'
+          import re, subprocess, sys
+          from pathlib import Path
+          out = Path(sys.argv[1])
+          roots = sys.argv[2:]
+          text = subprocess.run(
+              ['apt-cache','depends','--recurse','--no-recommends','--no-suggests',
+               '--no-conflicts','--no-breaks','--no-replaces','--no-enhances',*roots],
+              check=True, capture_output=True, text=True,
+          ).stdout
+          names = set(roots)
+          pat = re.compile(r'^\s*(?:PreDepends|Depends):\s+([^\s]+)\s*$')
+          for line in text.splitlines():
+              m = pat.match(line)
+              if m:
+                  name = m.group(1)
+                  if not (name.startswith('<') or name.endswith('>')):
+                      names.add(name)
+          rows = set()
+          for name in sorted(names):
+              cp = subprocess.run(
+                  ['dpkg-query','-W','-f=${binary:Package}=${Version}\n',name],
+                  capture_output=True, text=True,
+              )
+              if cp.returncode:
+                  continue
+              for row in cp.stdout.splitlines():
+                  row = row.strip()
+                  pkg, sep, version = row.rpartition('=')
+                  if sep and pkg and version:
+                      rows.add(row)
+          required = ('libc6:', 'libgcc-s1:', 'libstdc++6:', 'libsndfile1:', 'libffi8:')
+          missing = [p for p in required if not any(r.startswith(p) for r in rows)]
+          if missing:
+              raise SystemExit(f'measurement native closure missing providers: {missing!r}')
+          if not any(r.startswith('gcc') for r in rows):
+              raise SystemExit('measurement native closure missing compiler toolchain')
+          if any(r.startswith(('fonts-', 'tk', 'libtk', 'libxft', 'libfontconfig')) for r in rows):
+              raise SystemExit('measurement native closure contains unrelated Tk/font packages')
+          out.write_text('\n'.join(sorted(rows)) + '\n', encoding='utf-8')
+          print(f'measurement-relevant native closure={len(rows)} packages')
+          PY
+          SH
+          chmod +x native_probe.sh
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo" "$IMAGE" bash /repo/native_probe.sh
+          rm -f native_probe.sh "$RUN_DIR/inputs/measurement_native_manifest.txt"
+          test -s "$RUN_DIR/inputs/measurement_native_install_lock.txt"
+      - name: Apply round6 implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+          src = Path('.github/workflows/temp_pr340_round6_review_fixes.yml').read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = src.index(marker, src.index('- name: Apply review fixes')) + len(marker)
+          end = src.index("\n          PY\n      - name: Validate focused fixes", start)
+          Path('/tmp/apply_round6.py').write_text(textwrap.dedent(src[start:end]), encoding='utf-8')
+          PY
+          python /tmp/apply_round6.py
+          python - <<'PY'
+          from pathlib import Path
+
+          run_dir = Path('voice_genesis/evolution/run9_dual_founder_pjs')
+          pod_tests = run_dir / 'tests/test_run9_success_pod.py'
+          entry = run_dir / 'run9_success_pod_entry.sh'
+
+          # Repair the generated Python literal used to locate the watchdog block.
+          text = pod_tests.read_text(encoding='utf-8')
+          bad = '''watchdog = text[text.index('(\n  sleep "$WALL_CLOCK_SECONDS"'): text.index('WATCHDOG_PID=$!')]'''.replace('\\n', '\n')
+          good = '''watchdog = text[text.index('(\\n  sleep "$WALL_CLOCK_SECONDS"'): text.index('WATCHDOG_PID=$!')]'''
+          if text.count(bad) != 1:
+              raise SystemExit(f'watchdog literal repair count={text.count(bad)}')
+          text = text.replace(bad, good, 1)
+
+          # Round-4 bootstrap-order test: the full OS manifest was intentionally removed.
+          old_line = "    assert '$BOOTSTRAP_RUN_DIR/inputs/measurement_native_manifest.txt' in preflight\n"
+          if text.count(old_line) != 1:
+              raise SystemExit(f'old bootstrap manifest assertion count={text.count(old_line)}')
+          text = text.replace(old_line, "    assert 'measurement_native_manifest.txt' not in preflight\n", 1)
+          pod_tests.write_text(text, encoding='utf-8')
+
+          et = entry.read_text(encoding='utf-8')
+          # Bootstrap-only build support is not part of the scientific comparator.
+          old_ops = '''DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \\\n  ca-certificates curl git iptables unzip xz-utils\n'''
+          new_ops = '''# Bootstrap-only modules needed to build the pinned CPython/package stack are\n# outside the scientific native comparator; measurement does not import them.\nDEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \\\n  ca-certificates curl git iptables unzip xz-utils libssl-dev zlib1g-dev\n'''
+          if et.count(old_ops) != 1:
+              raise SystemExit(f'bootstrap operational package block count={et.count(old_ops)}')
+          et = et.replace(old_ops, new_ops, 1)
+
+          # Strengthen the deadline: recursively kill all workload descendants and
+          # the main shell with SIGKILL before outbound connectivity is restored.
+          old_helper = '''terminate_main_for_deadline() {\n  # Stop the main workload before opening outbound connectivity for RunPod stop.\n  # /proc avoids adding a procps dependency.  BASHPID identifies this watchdog\n  # subshell so it is not killed with the main shell's other children.\n  local child\n  for child in $(cat "/proc/${MAIN_SHELL_PID}/task/${MAIN_SHELL_PID}/children" 2>/dev/null || true); do\n    [ "$child" = "$BASHPID" ] && continue\n    kill -TERM "$child" 2>/dev/null || true\n  done\n  kill -TERM "$MAIN_SHELL_PID" 2>/dev/null || true\n}\n\n'''
+          new_helper = '''terminate_main_for_deadline() {\n  # Fail closed: no render/evaluator process may survive into the network-open\n  # RunPod stop phase. Walk /proc recursively so worker grandchildren are also\n  # terminated, while preserving only this watchdog subshell.\n  descendants_of() {\n    local parent="$1" child\n    for child in $(cat "/proc/${parent}/task/${parent}/children" 2>/dev/null || true); do\n      [ "$child" = "$BASHPID" ] && continue\n      descendants_of "$child"\n      printf '%s\\n' "$child"\n    done\n  }\n  local victim\n  for victim in $(descendants_of "$MAIN_SHELL_PID"); do\n    kill -KILL "$victim" 2>/dev/null || true\n  done\n  kill -KILL "$MAIN_SHELL_PID" 2>/dev/null || true\n}\n\n'''
+          if et.count(old_helper) != 1:
+              raise SystemExit(f'deadline helper replacement count={et.count(old_helper)}')
+          entry.write_text(et.replace(old_helper, new_helper, 1), encoding='utf-8')
+          PY
+      - name: Validate focused fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python -m compileall -q \
+            voice_genesis/evolution/run9_dual_founder_pjs/run9_success_admission.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/run9_success_pod_runner.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_run9_success_pod.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_success_only_admission.py
+          bash -n voice_genesis/evolution/run9_dual_founder_pjs/run9_success_pod_entry.sh
+          git diff --check
+          pytest -q \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_run9_success_pod.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_success_only_admission.py
+      - name: Commit fixes and remove temporary workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/temp_pr340_round6{,b,c,d,e}_review_fixes.yml
+          git config user.name 'Yuu6798'
+          git config user.email 'kkoo6798@gmail.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(run9): close round6 watchdog and native closure gaps'
+          git push origin HEAD:codex/run9-success-only-prepod
