@@ -81,7 +81,7 @@ jobs:
             apt-get install -y -qq --no-install-recommends --allow-downgrades "${rows[@]}"
             for row in "${rows[@]}"; do
               name="${row%=*}"
-              actual="$(dpkg-query -W -f="${binary:Package}=${Version}" "$name")"
+              actual="$(dpkg-query -W -f="\${binary:Package}=\${Version}" "$name")"
               [ "$actual" = "$row" ] || { echo "native mismatch: $name $actual != $row" >&2; exit 1; }
             done
           '
