@@ -703,9 +703,16 @@ def publish_successful_artifact_bundle(
         raise bp.BirthProbeError("successful bundle must contain exactly 84 render observations")
     _verify_measurement_artifact_binding(measurement, observations, pjs_reference)
     _verify_snapshot_still_matches(generated)
-    output_dir = output_dir.resolve()
+    # Preserve the requested publication leaf. Path.resolve() follows a dangling
+    # symlink and can silently retarget the final atomic rename outside the served
+    # publication root. Normalize dot segments without dereferencing the leaf,
+    # reject any symlink at the requested destination, then keep this lexical path
+    # as the os.replace() target.
+    output_dir = Path(os.path.abspath(output_dir))
     if not output_dir.name.startswith("successful_"):
         raise bp.BirthProbeError("successful output directory must start with 'successful_'")
+    if output_dir.is_symlink():
+        raise bp.BirthProbeError("successful output path must not be a symlink")
     if output_dir.exists():
         raise bp.BirthProbeError(f"refusing to overwrite successful bundle: {output_dir}")
     output_dir.parent.mkdir(parents=True, exist_ok=True)

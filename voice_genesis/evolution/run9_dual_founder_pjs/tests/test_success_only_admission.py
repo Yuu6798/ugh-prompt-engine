@@ -269,6 +269,31 @@ def test_success_publisher_stages_outside_publication_root(
     assert staged.parent == public_root.resolve().parent
 
 
+def test_success_publisher_rejects_dangling_publication_leaf_symlink(
+    tmp_path: Path,
+) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    issued = _issue(snapshot)
+    public_root = tmp_path / "run9_public"
+    public_root.mkdir()
+    output = public_root / "successful_run9"
+    redirected = tmp_path / "successful_redirect"
+    output.symlink_to(redirected, target_is_directory=True)
+
+    with pytest.raises(bp.BirthProbeError, match="output path must not be a symlink"):
+        admission.publish_successful_artifact_bundle(
+            output,
+            issued,
+            _measurement(passed=True),
+            _observations(),
+            bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+            snapshot,
+        )
+    assert output.is_symlink()
+    assert not redirected.exists()
+    assert not (public_root / "SUCCESS.json").exists()
+
+
 def test_success_publisher_rejects_symlinked_staging_before_bundle_writes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
