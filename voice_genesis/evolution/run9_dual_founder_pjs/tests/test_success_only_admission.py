@@ -266,7 +266,39 @@ def test_success_publisher_stages_outside_publication_root(
     staged = sources[0]
     assert staged.parent != public_root.resolve()
     assert public_root.resolve() not in staged.parents
-    assert staged.parent.parent == public_root.resolve().parent
+    assert staged.parent == public_root.resolve().parent
+
+
+def test_success_publisher_rejects_symlinked_staging_before_bundle_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _write_generated_export(tmp_path / "generated")
+    issued = _issue(snapshot)
+    public_root = tmp_path / "run9_public"
+    public_root.mkdir()
+    output = public_root / "successful_run9"
+    redirected = tmp_path / "redirected-staging"
+    redirected.symlink_to(public_root, target_is_directory=True)
+
+    monkeypatch.setattr(
+        admission.tempfile,
+        "mkdtemp",
+        lambda *args, **kwargs: str(redirected),
+    )
+    with pytest.raises(bp.BirthProbeError, match="must not be a symlink"):
+        admission.publish_successful_artifact_bundle(
+            output,
+            issued,
+            _measurement(passed=True),
+            _observations(),
+            bp.FeatureArtifact.from_vector(np.asarray([2.0, 2.0])),
+            snapshot,
+        )
+    assert not output.exists()
+    assert not (public_root / "model").exists()
+    assert not (public_root / "wav").exists()
+    assert not (public_root / "features").exists()
 
 
 def test_success_publisher_is_atomic_on_rename_failure(

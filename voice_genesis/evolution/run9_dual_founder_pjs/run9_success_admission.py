@@ -711,13 +711,27 @@ def publish_successful_artifact_bundle(
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     # The output parent is the live HTTP document root in the Pod. Never stage
     # partially built registration bytes underneath it: SimpleHTTPRequestHandler
-    # serves dot-prefixed directories too. Keep staging on the same filesystem but
-    # as a sibling of the document root, and expose it only via the final rename.
-    staging_parent = output_dir.parent.parent / f".{output_dir.parent.name}.run9-staging"
-    if staging_parent == output_dir.parent or output_dir.parent in staging_parent.parents:
-        raise bp.BirthProbeError("successful staging directory must be outside publication root")
-    staging_parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.build-", dir=staging_parent))
+    # serves dot-prefixed directories too. Resolve the actual publication root,
+    # then let mkdtemp atomically create a fresh sibling staging directory under
+    # its resolved parent so a pre-existing symlink cannot redirect staging back
+    # into the served tree. Validate the created path before writing bundle bytes.
+    publication_root = output_dir.parent.resolve(strict=True)
+    staging_parent = publication_root.parent.resolve(strict=True)
+    staging = Path(
+        tempfile.mkdtemp(prefix=f".{output_dir.name}.build-", dir=staging_parent)
+    )
+    if staging.is_symlink():
+        raise bp.BirthProbeError("successful staging directory must not be a symlink")
+    resolved_staging = staging.resolve(strict=True)
+    if (
+        resolved_staging == publication_root
+        or publication_root in resolved_staging.parents
+        or resolved_staging.parent != staging_parent
+    ):
+        raise bp.BirthProbeError("successful staging directory escaped private sibling root")
+    if os.stat(resolved_staging).st_dev != os.stat(publication_root).st_dev:
+        raise bp.BirthProbeError("successful staging directory is not on publication filesystem")
+    staging = resolved_staging
     try:
         (staging / "model").mkdir()
         (staging / "wav").mkdir()
