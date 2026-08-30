@@ -1,0 +1,137 @@
+name: temp-pr340-round6c-review-fixes
+on:
+  push:
+    branches: [codex/run9-success-only-prepod]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/run9-success-only-prepod
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Derive consumed native closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE='runpod/base:1.1.0-ubuntu2404@sha256:6a7ffc191ddee44bcede7b8508a76f67df690df7d58043edd6695ef63bffef23'
+          RUN_DIR='voice_genesis/evolution/run9_dual_founder_pjs'
+          docker pull "$IMAGE"
+          cat > native_probe.sh <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          ROOTS=(
+            build-essential libbz2-dev libffi-dev liblzma-dev libreadline-dev
+            libsqlite3-dev libssl-dev libsndfile1 tk-dev zlib1g-dev
+          )
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends ca-certificates curl git iptables unzip xz-utils python3
+          apt-get install -y -qq --no-install-recommends "${ROOTS[@]}"
+          python3 - /repo/voice_genesis/evolution/run9_dual_founder_pjs/inputs/measurement_native_install_lock.txt "${ROOTS[@]}" <<'PY'
+          import re, subprocess, sys
+          from pathlib import Path
+          out = Path(sys.argv[1])
+          roots = sys.argv[2:]
+          cmd = [
+              'apt-cache', 'depends', '--recurse', '--no-recommends', '--no-suggests',
+              '--no-conflicts', '--no-breaks', '--no-replaces', '--no-enhances', *roots,
+          ]
+          text = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+          names = set(roots)
+          pat = re.compile(r'^\s*(?:PreDepends|Depends):\s+([^\s]+)\s*$')
+          for line in text.splitlines():
+              match = pat.match(line)
+              if not match:
+                  continue
+              name = match.group(1)
+              if name.startswith('<') or name.endswith('>'):
+                  continue
+              names.add(name)
+          rows = set()
+          for name in sorted(names):
+              completed = subprocess.run(
+                  ['dpkg-query', '-W', '-f=${binary:Package}=${Version}\n', name],
+                  capture_output=True, text=True,
+              )
+              if completed.returncode != 0:
+                  continue
+              for row in completed.stdout.splitlines():
+                  row = row.strip()
+                  if row and '=' in row:
+                      rows.add(row)
+          required_prefixes = ('libc6:', 'libgcc-s1:', 'libstdc++6:', 'libsndfile1:')
+          missing = [prefix for prefix in required_prefixes if not any(row.startswith(prefix) for row in rows)]
+          if missing:
+              raise SystemExit(f'consumed native closure missing required runtime providers: {missing!r}')
+          if not any(row.startswith('gcc') for row in rows):
+              raise SystemExit('consumed native closure missing compiler toolchain')
+          out.write_text('\n'.join(sorted(rows)) + '\n', encoding='utf-8')
+          print(f'consumed native closure={len(rows)} packages')
+          PY
+          SH
+          chmod +x native_probe.sh
+          docker run --rm -v "$GITHUB_WORKSPACE:/repo" "$IMAGE" bash /repo/native_probe.sh
+          rm -f native_probe.sh "$RUN_DIR/inputs/measurement_native_manifest.txt"
+          test -s "$RUN_DIR/inputs/measurement_native_install_lock.txt"
+      - name: Apply round6 patch and repair test literal
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+          path = Path('.github/workflows/temp_pr340_round6_review_fixes.yml')
+          text = path.read_text(encoding='utf-8')
+          marker = "          python - <<'PY'\n"
+          start = text.index(marker, text.index('- name: Apply review fixes')) + len(marker)
+          end = text.index("\n          PY\n      - name: Validate focused fixes", start)
+          script = textwrap.dedent(text[start:end])
+          Path('/tmp/apply_round6.py').write_text(script, encoding='utf-8')
+          PY
+          python /tmp/apply_round6.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('voice_genesis/evolution/run9_dual_founder_pjs/tests/test_run9_success_pod.py')
+          text = p.read_text(encoding='utf-8')
+          bad = '''watchdog = text[text.index('(\n  sleep "$WALL_CLOCK_SECONDS"'): text.index('WATCHDOG_PID=$!')]'''.replace('\\n', '\n')
+          good = '''watchdog = text[text.index('(\\n  sleep "$WALL_CLOCK_SECONDS"'): text.index('WATCHDOG_PID=$!')]'''
+          count = text.count(bad)
+          if count != 1:
+              raise SystemExit(f'watchdog test literal repair expected 1 match, got {count}')
+          p.write_text(text.replace(bad, good, 1), encoding='utf-8')
+          PY
+      - name: Validate focused fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -e '.[dev]'
+          python -m compileall -q \
+            voice_genesis/evolution/run9_dual_founder_pjs/run9_success_admission.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/run9_success_pod_runner.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_run9_success_pod.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_success_only_admission.py
+          bash -n voice_genesis/evolution/run9_dual_founder_pjs/run9_success_pod_entry.sh
+          git diff --check
+          pytest -q \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_run9_success_pod.py \
+            voice_genesis/evolution/run9_dual_founder_pjs/tests/test_success_only_admission.py
+      - name: Commit fixes and remove temporary workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f \
+            .github/workflows/temp_pr340_round6_review_fixes.yml \
+            .github/workflows/temp_pr340_round6b_review_fixes.yml \
+            .github/workflows/temp_pr340_round6c_review_fixes.yml
+          git config user.name 'Yuu6798'
+          git config user.email 'kkoo6798@gmail.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'fix(run9): close round6 watchdog and native closure gaps'
+          git push origin HEAD:codex/run9-success-only-prepod
