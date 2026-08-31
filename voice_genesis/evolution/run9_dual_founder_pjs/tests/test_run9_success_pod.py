@@ -196,6 +196,46 @@ def test_entry_enables_watchdog_before_the_first_download() -> None:
     assert text.index("WATCHDOG_PID=$!") < text.index("PYTHON_TGZ_URL=")
 
 
+def test_entry_preflight_falls_back_to_seccomp_probe() -> None:
+    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
+    preflight = text[
+        text.index('stage "preflight-system"') : text.index('stage "python-3.11.15"')
+    ]
+    assert (
+        'elif python3 "$BOOTSTRAP_RUN_DIR/run9_seccomp_prelude.py" --probe 2>/dev/null; then'
+        in preflight
+    )
+    assert 'NETWORK_ISOLATION_MODE="seccomp"' in preflight
+    assert preflight.index("unshare -rn true") < preflight.index(
+        'python3 "$BOOTSTRAP_RUN_DIR/run9_seccomp_prelude.py" --probe'
+    )
+    assert (
+        "no usable network isolation mechanism (iptables needs NET_ADMIN; "
+        "unshare -n/-rn and seccomp filter denied)" in preflight
+    )
+
+
+def test_entry_render_isolation_case_covers_seccomp() -> None:
+    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
+    isolation_case = text[
+        text.index('case "$NETWORK_ISOLATION_MODE" in') : text.index("esac")
+    ]
+    assert "seccomp)" in isolation_case
+    assert (
+        'ISOLATION_PREFIX=("$VENV_RENDER/bin/python" "$RUN_DIR/run9_seccomp_prelude.py" "--exec")'
+        in isolation_case
+    )
+    assert isolation_case.index("seccomp)") < isolation_case.index("*)")
+
+
+def test_entry_admission_invocation_passes_network_isolation_mode() -> None:
+    text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
+    admission_call = text[
+        text.index('stage "success-only-admission"') : text.index("ADMISSION_EC=$?")
+    ]
+    assert '--network-isolation-mode "$NETWORK_ISOLATION_MODE"' in admission_call
+
+
 def test_entry_isolates_measurement_network_before_admission() -> None:
     text = (RUN_DIR / "run9_success_pod_entry.sh").read_text(encoding="utf-8")
     isolation = text[text.index('stage "render-network-isolation"') :]

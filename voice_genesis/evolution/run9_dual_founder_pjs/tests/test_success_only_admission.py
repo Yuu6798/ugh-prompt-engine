@@ -1,10 +1,14 @@
 """Success-only registration and output-only evaluator boundary tests."""
 from __future__ import annotations
 
+import ast
+import errno
 import inspect
 import json
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -175,6 +179,189 @@ def test_native_runtime_validator_rejects_consumed_closure_drift(
 def test_production_cli_has_no_network_isolation_bypass() -> None:
     source = Path(admission.__file__).read_text(encoding="utf-8")
     assert "allow-test-network" not in source
+
+
+def test_verify_network_isolation_rejects_unknown_mode() -> None:
+    with pytest.raises(bp.BirthProbeError, match="unknown network isolation mode"):
+        admission._verify_network_isolation("not-a-real-mode")  # noqa: SLF001
+
+
+def test_verify_network_isolation_netns_accepts_loopback_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(admission.os, "listdir", lambda path: ["lo"])
+    admission._verify_network_isolation("netns")  # noqa: SLF001
+    admission._verify_network_isolation("userns-netns")  # noqa: SLF001
+
+
+def test_verify_network_isolation_netns_rejects_extra_interfaces(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(admission.os, "listdir", lambda path: ["lo", "eth0"])
+    with pytest.raises(bp.BirthProbeError, match="interface-less network namespace"):
+        admission._verify_network_isolation("netns")  # noqa: SLF001
+
+
+def test_verify_network_isolation_netns_wraps_oserror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_oserror(path: str) -> list[str]:
+        raise OSError("no such directory")
+
+    monkeypatch.setattr(admission.os, "listdir", raise_oserror)
+    with pytest.raises(bp.BirthProbeError, match="could not be verified"):
+        admission._verify_network_isolation("netns")  # noqa: SLF001
+
+
+class _FakeUnixSocket:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+# AF_SMC(43): the exact enforcement-gap regression from round 3 -- a domain
+# BLOCKLIST that only enumerates {AF_INET, AF_INET6, AF_PACKET} lets this
+# domain (falls back to TCP -- real external transmission) through
+# unchecked. Verified against glibc's bits/socket.h (`PF_SMC 43`), which
+# mirrors the kernel uapi AF_*/PF_* family constants.
+_AF_SMC = 43
+
+
+def _seccomp_sweep_socket_factory(
+    *,
+    open_cells: set[tuple[int, int, int]] = frozenset(),
+    blocked_errno: dict[tuple[int, int, int], int] | None = None,
+    default_errno: int = errno.EPERM,
+) -> Any:
+    """Fake `socket.socket` over the exhaustive (domain, type, protocol) sweep.
+
+    AF_UNIX and AF_NETLINK always succeed here: AF_UNIX is the dedicated
+    success baseline the real verifier checks explicitly, and AF_NETLINK is
+    allowed by design and structurally never probed by the sweep -- so
+    "AF_NETLINK can be opened" cannot by itself fail verification. Any
+    other (family, kind, proto) triple in `open_cells` also succeeds --
+    i.e. creation "succeeded", simulating a hole in the isolation
+    mechanism. Every other triple raises OSError with the errno from
+    `blocked_errno` for that cell if given, else `default_errno`. This lets
+    tests express the errno-agnostic semantics under verification: any
+    errno on a blocked cell must still count as blocked. `proto` defaults
+    to 0 so this factory also serves the two-argument AF_UNIX baseline
+    call the real verifier makes.
+    """
+    blocked_errno = blocked_errno or {}
+
+    def factory(family: int, kind: int, proto: int = 0) -> Any:
+        if family in (admission.socket.AF_UNIX, admission.socket.AF_NETLINK):
+            return _FakeUnixSocket()
+        if (family, kind, proto) in open_cells:
+            return _FakeUnixSocket()
+        raise OSError(blocked_errno.get((family, kind, proto), default_errno), "blocked")
+
+    return factory
+
+
+def test_verify_network_isolation_seccomp_accepts_fully_blocked_sweep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(admission.socket, "socket", _seccomp_sweep_socket_factory())
+    admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_verify_network_isolation_seccomp_rejects_raw_with_explicit_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round-3 regression: `SOCK_RAW` with protocol 0 fails EPROTONOSUPPORT even in an
+    open environment, so a protocol-0-only probe misses a policy that permits SOCK_RAW
+    with an explicit protocol (e.g. IPPROTO_ICMP=1)."""
+    monkeypatch.setattr(
+        admission.socket,
+        "socket",
+        _seccomp_sweep_socket_factory(
+            open_cells={(admission.socket.AF_INET, 3, 1)}  # SOCK_RAW, IPPROTO_ICMP
+        ),
+    )
+    with pytest.raises(
+        bp.BirthProbeError, match=r"can still create AF_INET/SOCK_RAW/proto=1 sockets"
+    ):
+        admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_verify_network_isolation_seccomp_rejects_af_smc_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round-3 regression: a domain BLOCKLIST cannot terminate the domain axis -- an
+    unenumerated domain (AF_SMC here) passes unchecked. The exhaustive domain sweep
+    (0..63 except the two allowlisted domains) must catch it."""
+    monkeypatch.setattr(
+        admission.socket,
+        "socket",
+        _seccomp_sweep_socket_factory(open_cells={(_AF_SMC, 1, 0)}),
+    )
+    with pytest.raises(
+        bp.BirthProbeError,
+        match=r"can still create domain=43/SOCK_STREAM/proto=0 sockets",
+    ):
+        admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_verify_network_isolation_seccomp_exempts_af_netlink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AF_NETLINK is allowed by design (kernel-local only, no external transmission);
+    it being openable must not fail verification."""
+    monkeypatch.setattr(
+        admission.socket,
+        "socket",
+        _seccomp_sweep_socket_factory(),
+    )
+    assert admission.socket.socket(admission.socket.AF_NETLINK, 3)  # openable, as designed
+    admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_verify_network_isolation_seccomp_is_errno_agnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blocked cell may fail with any errno (EPROTONOSUPPORT, EINVAL, ...), not just EPERM."""
+    monkeypatch.setattr(
+        admission.socket,
+        "socket",
+        _seccomp_sweep_socket_factory(
+            blocked_errno={(admission.socket.AF_INET, 3, 1): errno.EPROTONOSUPPORT}
+        ),
+    )
+    admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_verify_network_isolation_seccomp_rejects_broken_unix_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def factory(family: int, kind: int, proto: int = 0) -> Any:
+        if family == admission.socket.AF_UNIX:
+            raise OSError("unix sockets unavailable")
+        if family == admission.socket.AF_NETLINK:
+            return _FakeUnixSocket()
+        raise OSError(errno.EPERM, "blocked")
+
+    monkeypatch.setattr(admission.socket, "socket", factory)
+    with pytest.raises(bp.BirthProbeError, match="seccomp verification socket baseline failed"):
+        admission._verify_network_isolation("seccomp")  # noqa: SLF001
+
+
+def test_seccomp_prelude_module_parses() -> None:
+    prelude = _RUN_DIR / "run9_seccomp_prelude.py"
+    ast.parse(prelude.read_text(encoding="utf-8"))
+
+
+def test_seccomp_prelude_rejects_bad_usage() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(_RUN_DIR / "run9_seccomp_prelude.py")],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 2
+    assert "usage: run9_seccomp_prelude.py" in completed.stderr
 
 
 def test_scientific_evaluator_signature_has_no_candidate_or_registry_input() -> None:

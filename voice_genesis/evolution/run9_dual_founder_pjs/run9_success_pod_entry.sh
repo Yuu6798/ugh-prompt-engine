@@ -274,7 +274,8 @@ apt-get update -qq
 # Bootstrap-only modules needed to build the pinned CPython/package stack are
 # outside the scientific native comparator; measurement does not import them.
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-  ca-certificates curl git iptables unzip xz-utils libssl-dev zlib1g-dev
+  ca-certificates curl git iptables unzip xz-utils libssl-dev zlib1g-dev \
+  libbz2-dev liblzma-dev libsqlite3-dev
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
   --allow-downgrades "${NATIVE_PACKAGES[@]}"
 python3 - "$NATIVE_INSTALL_LOCK" "$WORK/measurement_native_environment.actual" <<'PY'
@@ -299,6 +300,21 @@ if ! cmp -s "$NATIVE_INSTALL_LOCK" "$WORK/measurement_native_environment.actual"
   die "consumed native measurement closure does not match committed lock"
 fi
 
+NETWORK_ISOLATION_MODE=""
+if iptables -w -A OUTPUT -j RETURN 2>/dev/null; then
+  iptables -w -D OUTPUT -j RETURN
+  NETWORK_ISOLATION_MODE="iptables"
+elif unshare -n true 2>/dev/null; then
+  NETWORK_ISOLATION_MODE="netns"
+elif unshare -rn true 2>/dev/null; then
+  NETWORK_ISOLATION_MODE="userns-netns"
+elif python3 "$BOOTSTRAP_RUN_DIR/run9_seccomp_prelude.py" --probe 2>/dev/null; then
+  NETWORK_ISOLATION_MODE="seccomp"
+else
+  die "no usable network isolation mechanism (iptables needs NET_ADMIN; unshare -n/-rn and seccomp filter denied)"
+fi
+echo "| run9: network isolation mode=$NETWORK_ISOLATION_MODE"
+
 stage "python-3.11.15"
 fetch_url "$PYTHON_TGZ_URL" "$WORK/Python-${PYTHON_VERSION}.tgz" \
   "$PYTHON_TGZ_SHA" "CPython source"
@@ -312,6 +328,8 @@ tar -xzf "$WORK/Python-${PYTHON_VERSION}.tgz" -C "$WORK"
 readonly PY="/opt/python-${PYTHON_VERSION}/bin/python3.11"
 [ "$($PY -c 'import platform; print(platform.python_version())')" = "$PYTHON_VERSION" ] \
   || die "compiled Python version mismatch"
+"$PY" -c 'import bz2, ctypes, lzma, sqlite3, ssl, zlib' \
+  || die "compiled Python is missing required stdlib extension modules"
 
 stage "source-checkout"
 git clone -q https://github.com/Yuu6798/ugh-prompt-engine.git "$REPO"
@@ -455,22 +473,40 @@ PY
 "$VENV_RENDER/bin/python" -m pip freeze --all > "$WORK/measurement_environment.freeze"
 
 stage "render-network-isolation"
-iptables -F OUTPUT
-iptables -A OUTPUT -o lo -j ACCEPT
-iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-iptables -A OUTPUT -j REJECT
-iptables -P OUTPUT DROP
-FIREWALL_ACTIVE="true"
+ISOLATION_PREFIX=()
+case "$NETWORK_ISOLATION_MODE" in
+  iptables)
+    iptables -F OUTPUT
+    iptables -A OUTPUT -o lo -j ACCEPT
+    iptables -A OUTPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+    iptables -A OUTPUT -j REJECT
+    iptables -P OUTPUT DROP
+    FIREWALL_ACTIVE="true"
+    ;;
+  netns)
+    ISOLATION_PREFIX=(unshare -n)
+    ;;
+  userns-netns)
+    ISOLATION_PREFIX=(unshare -rn)
+    ;;
+  seccomp)
+    ISOLATION_PREFIX=("$VENV_RENDER/bin/python" "$RUN_DIR/run9_seccomp_prelude.py" "--exec")
+    ;;
+  *)
+    die "unknown network isolation mode: $NETWORK_ISOLATION_MODE"
+    ;;
+esac
 
 stage "success-only-admission"
 export ORT_TELEMETRY_DISABLED=1
 set +e
-"$VENV_RENDER/bin/python" "$RUN_DIR/run9_success_admission.py" \
+"${ISOLATION_PREFIX[@]}" "$VENV_RENDER/bin/python" "$RUN_DIR/run9_success_admission.py" \
   --acoustic-dir "$GENERATED" \
   --canon-model-dir "$CANON_DIR" \
   --vocoder-dir "$VOCODER_DIR" \
   --pjs-corpus-root "$PJS_ROOT" \
   --source-commit "$RUN9_PIN_COMMIT" \
+  --network-isolation-mode "$NETWORK_ISOLATION_MODE" \
   --out "$RESULT_DIR"
 ADMISSION_EC=$?
 set -e
