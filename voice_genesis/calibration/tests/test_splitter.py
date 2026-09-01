@@ -3,9 +3,11 @@ from __future__ import annotations
 import pytest
 
 from voice_genesis.calibration.splitter import (
+    CoverageRepairInfeasible,
     RealizedSplitMap,
     RowInput,
     SwapRecord,
+    _axis_value,
     _repair_coverage,
     _required_pairs,
     realize_split,
@@ -255,3 +257,154 @@ def test_realize_split_end_to_end_coverage_guarantee_via_singleton_strata() -> N
     for s in realized.assignment.values():
         counts[s] += 1
     assert sum(counts.values()) == 48
+
+
+# ---------------------------------------------------------------------------
+# unsafe greedy fallback replaced by bounded deterministic (donor, victim)
+# search (Codex review 2026-09-01): the old fallback moved donors[0] even when
+# unsafe, which could undo an already-satisfied constraint and oscillate.
+# ---------------------------------------------------------------------------
+
+
+def _six_row_overlapping_family() -> tuple[list[RowInput], dict[str, Split]]:
+    """6 行、CAL=3/SEL=1/HOLD=2 の feasible シナリオ。r1 が
+    truth_level/generator_impl/boundary_class の 3 軸すべてで要求ペアの値を
+    同時に持つ「overlap 行」であり、donor/victim を独立に安全性判定する旧
+    実装だと（HMAC 順によっては）安全な手を素通りして振動しうる構造。
+    joint simulate-then-check の新実装は単一 swap（またはごく少数の swap）
+    で 3 件の違反すべてを解消できる。
+    """
+    rows = [
+        RowInput(
+            row_id="r1", family="FAM6", stratum={},
+            truth_level="T1", generator_impl="G1", boundary_class="B1",
+        ),
+        RowInput(row_id="r2", family="FAM6", stratum={}, truth_level="T1"),
+        RowInput(
+            row_id="r3", family="FAM6", stratum={}, generator_impl="G1", boundary_class="B1",
+        ),
+        RowInput(row_id="r4", family="FAM6", stratum={}),  # SEL filler, no required attr
+        RowInput(row_id="r5", family="FAM6", stratum={}, truth_level="T1"),
+        RowInput(row_id="r6", family="FAM6", stratum={}, generator_impl="G1", boundary_class="B1"),
+    ]
+    assignment: dict[str, Split] = {
+        "r1": Split.CALIBRATION,
+        "r2": Split.CALIBRATION,
+        "r3": Split.CALIBRATION,
+        "r4": Split.SELECTION,
+        "r5": Split.HOLDOUT,
+        "r6": Split.HOLDOUT,
+    }
+    return rows, assignment
+
+
+def test_repair_coverage_six_row_overlapping_family_terminates_satisfied() -> None:
+    """reviewer シナリオ形状: 6 行家族、truth/generator/boundary が重なり合う
+    値を持つ行が混在し、CAL=3/SEL=1/HOLD=2 の feasible な初期配置から出発する。
+    修復は（振動せず）終端し、事後条件として T1/G1/B1 が 3 split すべてに
+    最低 1 件ずつ存在する。
+    """
+    rows, assignment = _six_row_overlapping_family()
+    rows_by_id = {r.row_id: r for r in rows}
+    required_pairs = _required_pairs(rows)
+    assert ("truth_level", "T1") in required_pairs
+    assert ("generator_impl", "G1") in required_pairs
+    assert ("boundary_class", "B1") in required_pairs
+
+    swaps = _repair_coverage(rows_by_id, assignment, SECRET_A, required_pairs)
+
+    assert all(isinstance(s, SwapRecord) for s in swaps)
+    assert all(s.reason == "coverage" for s in swaps)
+    # 所属先集合・行数は保存される（swap は交換のみ）。
+    assert set(assignment.keys()) == set(rows_by_id.keys())
+    counts = {Split.CALIBRATION: 0, Split.SELECTION: 0, Split.HOLDOUT: 0}
+    for s in assignment.values():
+        counts[s] += 1
+    assert counts == {Split.CALIBRATION: 3, Split.SELECTION: 1, Split.HOLDOUT: 2}
+
+    for value, axis in (("T1", "truth_level"), ("G1", "generator_impl"), ("B1", "boundary_class")):
+        for split in (Split.CALIBRATION, Split.SELECTION, Split.HOLDOUT):
+            present = any(
+                _axis_value(rows_by_id[rid], axis) == value
+                for rid, s in assignment.items()
+                if s == split
+            )
+            assert present, f"{axis}={value} missing from {split} after repair"
+
+
+def test_repair_coverage_deterministic_across_repeated_calls() -> None:
+    """同一入力からは常に同一の repaired map が得られる（determinism 要件）。"""
+    rows_a, assignment_a = _six_row_overlapping_family()
+    rows_b, assignment_b = _six_row_overlapping_family()
+    rows_by_id_a = {r.row_id: r for r in rows_a}
+    rows_by_id_b = {r.row_id: r for r in rows_b}
+    required_pairs = _required_pairs(rows_a)
+
+    swaps_a = _repair_coverage(rows_by_id_a, assignment_a, SECRET_A, required_pairs)
+    swaps_b = _repair_coverage(rows_by_id_b, assignment_b, SECRET_A, required_pairs)
+
+    assert assignment_a == assignment_b
+    assert swaps_a == swaps_b
+
+
+def test_repair_coverage_infeasible_case_fails_closed_without_mutation() -> None:
+    """genuinely infeasible シナリオ: SELECTION は 1 行 (`v`) しか持たず、その
+    唯一の victim 候補も、target axis の donor 候補 3 件のいずれも、単独では
+    truth_level=RARE の被覆を満たしつつ generator_impl=X / boundary_class=P
+    の既存被覆を壊さない組み合わせを提供できない（v が SEL 側で X と P の
+    唯一の担い手であり、かつ CAL/HOLD 側の RARE 行はいずれも X か P のどちらか
+    一方しか運ばないため、どの (donor, victim) を選んでも必ずどこかの被覆を
+    壊す）。`CoverageRepairInfeasible` が axis/value/target_split を保持して
+    送出され、`assignment` は一切変更されない。
+    """
+    rows = [
+        RowInput(row_id="r1", family="FAM_INFEASIBLE", stratum={},
+                  truth_level="RARE", generator_impl="X"),
+        RowInput(row_id="r2", family="FAM_INFEASIBLE", stratum={},
+                  truth_level="RARE", boundary_class="P"),
+        RowInput(row_id="r3", family="FAM_INFEASIBLE", stratum={}, truth_level="RARE"),
+        RowInput(row_id="v", family="FAM_INFEASIBLE", stratum={},
+                  generator_impl="X", boundary_class="P"),
+        RowInput(row_id="x2", family="FAM_INFEASIBLE", stratum={}, generator_impl="X"),
+        RowInput(row_id="x3", family="FAM_INFEASIBLE", stratum={}, generator_impl="X"),
+        RowInput(row_id="p2", family="FAM_INFEASIBLE", stratum={}, boundary_class="P"),
+        RowInput(row_id="p3", family="FAM_INFEASIBLE", stratum={}, boundary_class="P"),
+    ]
+    assignment: dict[str, Split] = {
+        "r1": Split.CALIBRATION,
+        "r2": Split.CALIBRATION,
+        "r3": Split.HOLDOUT,
+        "v": Split.SELECTION,
+        "x2": Split.HOLDOUT,
+        "x3": Split.HOLDOUT,
+        "p2": Split.HOLDOUT,
+        "p3": Split.HOLDOUT,
+    }
+    rows_by_id = {r.row_id: r for r in rows}
+    required_pairs = _required_pairs(rows)
+    assert ("truth_level", "RARE") in required_pairs
+    assert ("generator_impl", "X") in required_pairs
+    assert ("boundary_class", "P") in required_pairs
+
+    # 事前条件確認: 唯一の違反は (truth_level, RARE, SELECTION)。
+    violations_before = [
+        (axis, value, split)
+        for axis, value in sorted(required_pairs)
+        for split in (Split.CALIBRATION, Split.SELECTION, Split.HOLDOUT)
+        if not any(
+            _axis_value(rows_by_id[rid], axis) == value
+            for rid, s in assignment.items()
+            if s == split
+        )
+    ]
+    assert violations_before == [("truth_level", "RARE", Split.SELECTION)]
+
+    snapshot = dict(assignment)
+    with pytest.raises(CoverageRepairInfeasible) as excinfo:
+        _repair_coverage(rows_by_id, assignment, SECRET_A, required_pairs)
+
+    assert excinfo.value.axis == "truth_level"
+    assert excinfo.value.value == "RARE"
+    assert excinfo.value.target_split == Split.SELECTION
+    # fail-closed: assignment は一切変更されていない。
+    assert assignment == snapshot

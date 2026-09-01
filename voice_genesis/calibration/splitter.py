@@ -146,26 +146,27 @@ def _coverage_violations(
     return violations
 
 
-def _safe_to_remove(
-    row_id: str,
-    rows_by_id: Mapping[str, RowInput],
-    assignment: Mapping[str, Split],
-    split: Split,
-    required_pairs: set[tuple[str, Any]],
-) -> bool:
-    row = rows_by_id[row_id]
-    for axis in _COVERAGE_AXES:
-        v = _axis_value(row, axis)
-        if v is None or (axis, v) not in required_pairs:
-            continue
-        count_in_split = sum(
-            1
-            for rid, s in assignment.items()
-            if s == split and _axis_value(rows_by_id[rid], axis) == v
+class CoverageRepairInfeasible(RuntimeError):
+    """coverage 制約を満たす決定論的な (donor, victim) 組が 1 つも存在しない場合
+    に送出する typed error（Codex レビュー 2026-09-01 採用）。
+
+    `_repair_coverage` は候補を全数走査してから諦めるため、この例外が送出された
+    時点で `assignment` は **一切変更されていない**（fail-closed。walk 済みの
+    候補が全滅した違反を無理に「まだ安全確認していない donors[0]」へ強制移動
+    して振動・誤修復するのを防ぐ）。キャンペーン層では既存語彙
+    (`voice_genesis.calibration.vocab.BlockedCode`) の fail-closed コードへ
+    マップされる想定であり、本例外自体は新規 vocab code を発行しない。
+    """
+
+    def __init__(self, axis: str, value: Any, target_split: Split, detail: str) -> None:
+        self.axis = axis
+        self.value = value
+        self.target_split = target_split
+        self.detail = detail
+        super().__init__(
+            f"splitter: no feasible donor/victim assignment for {axis}={value!r} "
+            f"-> {target_split.value}: {detail}"
         )
-        if count_in_split <= 1:
-            return False
-    return True
 
 
 def _repair_coverage(
@@ -188,6 +189,7 @@ def _repair_coverage(
                 f"(remaining violations: {violations})"
             )
         axis, value, target_split = violations[0]
+        current_violations = set(violations)
         donors = sorted(
             (
                 rid
@@ -196,46 +198,67 @@ def _repair_coverage(
             ),
             key=lambda rid: _hmac_hex(secret, rid),
         )
-        if not donors:
-            raise RuntimeError(
-                f"splitter: no donor row available for {axis}={value} -> {target_split}"
-            )
-        # [UNDERSPEC-CAL-06] 設計正本は donor 選択の安全性検査までは規定しない。
-        # donor 自身の現在の split から抜いても、その split の他の required
-        # pair 被覆を壊さない候補を優先する。この安全確認を怠ると、同一行が
-        # 直前に別の違反を直した「唯一の担い手」として再度 donor に選ばれ、
-        # 別の split へ移動して自分が直したばかりの被覆を壊し、次の周回で
-        # また逆方向へ選ばれる…という振動が起きて repair が収束しない
-        # (guard 上限で RuntimeError になる)。victim 側の `_safe_to_remove`
-        # と対称的に donor 側にも同じ安全性検査を適用する。
-        donor = next(
-            (
-                cand
-                for cand in donors
-                if _safe_to_remove(cand, rows_by_id, assignment, assignment[cand], required_pairs)
-            ),
-            None,
-        )
-        if donor is None:
-            donor = donors[0]
-        donor_split = assignment[donor]
-        victims = sorted(
-            (rid for rid, s in assignment.items() if s == target_split and rid != donor),
-            key=lambda rid: _hmac_hex(secret, rid),
-        )
-        victim = next(
-            (
-                cand
-                for cand in victims
-                if _safe_to_remove(cand, rows_by_id, assignment, target_split, required_pairs)
-            ),
-            None,
-        )
-        if victim is None:
-            victim = victims[0] if victims else None
-        if victim is None:
-            raise RuntimeError(f"splitter: no victim row available in {target_split}")
 
+        # [UNDERSPEC-CAL-06] 設計正本は donor/victim 選択の安全性検査までは
+        # 規定しない。donor 単独・victim 単独の局所的な安全確認
+        # (`_safe_to_remove` 相当) では、両者の交互作用（donor が自分の元の
+        # split から抜けた分を victim が偶然埋め合わせる/埋め合わせない）を
+        # 見落とし、安全に見える手が実際には他の required pair 被覆を壊す
+        # ケースを取りこぼす。さらに「安全な donor が 1 件も見つからなければ
+        # donors[0] へ無条件フォールバック」する実装は、直前の周回で別の違反
+        # を直した「唯一の担い手」を再び動かして自分の被覆を壊し、次の周回で
+        # また逆方向に選ばれる…という振動を起こし得る（Codex レビュー
+        # 2026-09-01 指摘）。
+        #
+        # 修正: (donor, victim) の組を HMAC 順で **同時に** 試し、実際に
+        # swap した結果を `_coverage_violations` で再計算して確認する
+        # （simulate-then-check）。得られる新しい違反集合が「元の違反集合の
+        # 部分集合」かつ「今回対象にした違反 (axis, value, target_split) を
+        # 含まない」場合のみ採用する（＝新しい被覆破壊を作らず、かつ着実に
+        # 前進する）。この条件を満たす組が 1 つも見つからなければ、
+        # assignment を一切変更せずに `CoverageRepairInfeasible` で
+        # fail-closed する。候補数は有限 (donors x victims) であり、
+        # 走査順は HMAC-rank に基づき決定的なので、同一入力からは常に同一の
+        # (donor, victim) が選ばれる。
+        chosen: tuple[str, str] | None = None
+        for cand_donor in donors:
+            donor_split = assignment[cand_donor]
+            victims = sorted(
+                (
+                    rid
+                    for rid, s in assignment.items()
+                    if s == target_split and rid != cand_donor
+                ),
+                key=lambda rid: _hmac_hex(secret, rid),
+            )
+            for cand_victim in victims:
+                trial = dict(assignment)
+                trial[cand_donor] = target_split
+                trial[cand_victim] = donor_split
+                trial_violations = _coverage_violations(rows_by_id, trial, required_pairs)
+                trial_violations_set = set(trial_violations)
+                resolves_target = (axis, value, target_split) not in trial_violations_set
+                introduces_nothing_new = trial_violations_set <= current_violations
+                if resolves_target and introduces_nothing_new:
+                    chosen = (cand_donor, cand_victim)
+                    break
+            if chosen is not None:
+                break
+
+        if chosen is None:
+            raise CoverageRepairInfeasible(
+                axis=axis,
+                value=value,
+                target_split=target_split,
+                detail=(
+                    f"no (donor, victim) pair among {len(donors)} donor candidate(s) "
+                    "resolves this violation without breaking another coverage "
+                    "constraint (assignment left unmodified)"
+                ),
+            )
+
+        donor, victim = chosen
+        donor_split = assignment[donor]
         assignment[donor], assignment[victim] = target_split, donor_split
         hk_a, hk_b = _hmac_hex(secret, donor), _hmac_hex(secret, victim)
         detail = f"{axis}={value}->{target_split.value}"

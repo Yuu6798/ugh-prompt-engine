@@ -191,6 +191,11 @@ class DirectionalPair:
     `delta_output` は output 単位（例: 候補 meter が返す HNR dB の差）の効果量。
     construct が truth と output で同一単位を共有しない場合、この 2 つは
     異なる物理量であり単純合算できない（Codex レビュー 2026-09-01 第 3 巡）。
+
+    `sweep_id` は resolvable-pair 最低数（>= 3）判定の単位（Codex レビュー
+    2026-09-01 採用）: 設計正本は「resolvable pair >= 3」を **各 sweep ごと**
+    に要求する（sweep 間で集約した合計 3 件では不十分。1 sweep に集中して
+    いない限り、複数の異なる測定条件から独立に 3 件を揃えることを求める趣旨）。
     """
 
     pair_id: str
@@ -202,6 +207,7 @@ class DirectionalPair:
     u_num_j: float
     correct_sign: bool
     is_adjacent: bool
+    sweep_id: str = "default"
 
 
 @dataclass(frozen=True)
@@ -209,6 +215,9 @@ class DirectionalGateResult:
     resolvable_pairs: tuple[str, ...]
     resolvable_count: int
     three_pair_warning: bool
+    sweep_resolvable_counts: Mapping[str, int]
+    sweeps_below_minimum: tuple[str, ...]
+    sweeps_with_warning: tuple[str, ...]
     all_resolvable_correct_sign: bool
     adjacent_reversal_rate: float
     negative_control_failures: int
@@ -255,12 +264,16 @@ def directional_gates(
     resolvable(i,j) <=> (a) かつ (b) かつ (c)   [units_commensurate=True のみ]
     ```
 
-    いずれも厳密不等号。resolvable pair は sweep ごとに >= 3 必須（ちょうど 3
-    は `three_pair_warning` を立てる）。全 resolvable adjacent pair の正符号、
-    `adjacent_reversal_rate == 0`、negative/positive control 失敗数 == 0 が
-    必須（noise floor 超過は (b) に統合済みだが、呼び出し側が追加の外部判定を
-    持つ場合のための `noise_floor_exceeded` 引数も残す）。`tau_b` は記録する
-    のみで PASS 閾値には決して使わない。
+    いずれも厳密不等号。resolvable pair の最低数 (>= 3) は **sweep ごと**に
+    課される（Codex レビュー 2026-09-01 採用: sweep 間で集約した合計ではなく、
+    宣言された全 sweep がそれぞれ独立に >= 3 件を満たさなければ gate は
+    FAIL。「ちょうど 3」の警告 (`three_pair_warning` 相当) も sweep 単位で
+    立て、`sweep_resolvable_counts` / `sweeps_below_minimum` /
+    `sweeps_with_warning` として結果に含める）。全 resolvable adjacent pair の
+    正符号、`adjacent_reversal_rate == 0`、negative/positive control 失敗数
+    == 0 が必須（noise floor 超過は (b) に統合済みだが、呼び出し側が追加の
+    外部判定を持つ場合のための `noise_floor_exceeded` 引数も残す）。`tau_b` は
+    記録するのみで PASS 閾値には決して使わない。
     """
     reasons: list[str] = []
     resolvable: list[DirectionalPair] = []
@@ -276,9 +289,23 @@ def directional_gates(
             resolvable.append(p)
 
     resolvable_count = len(resolvable)
-    if resolvable_count < 3:
-        reasons.append("resolvable pair count < 3")
-    three_pair_warning = resolvable_count == 3
+
+    sweep_ids = sorted({p.sweep_id for p in pairs})
+    sweep_resolvable_counts: dict[str, int] = {s: 0 for s in sweep_ids}
+    for p in resolvable:
+        sweep_resolvable_counts[p.sweep_id] += 1
+
+    sweeps_below_minimum = tuple(s for s in sweep_ids if sweep_resolvable_counts[s] < 3)
+    sweeps_with_warning = tuple(s for s in sweep_ids if sweep_resolvable_counts[s] == 3)
+    every_sweep_meets_minimum = bool(sweep_ids) and not sweeps_below_minimum
+    three_pair_warning = bool(sweeps_with_warning)
+
+    if not sweep_ids:
+        reasons.append("no sweep declared (empty pair set)")
+    if sweeps_below_minimum:
+        reasons.append(
+            "resolvable pair count < 3 in sweep(s): " + ", ".join(sweeps_below_minimum)
+        )
 
     all_correct = all(p.correct_sign for p in resolvable) if resolvable else False
     if not all_correct:
@@ -298,7 +325,7 @@ def directional_gates(
         reasons.append("effect does not exceed noise floor")
 
     passed = (
-        resolvable_count >= 3
+        every_sweep_meets_minimum
         and all_correct
         and adjacent_reversal_rate == 0.0
         and negative_control_failures == 0
@@ -309,6 +336,9 @@ def directional_gates(
         resolvable_pairs=tuple(p.pair_id for p in resolvable),
         resolvable_count=resolvable_count,
         three_pair_warning=three_pair_warning,
+        sweep_resolvable_counts=sweep_resolvable_counts,
+        sweeps_below_minimum=sweeps_below_minimum,
+        sweeps_with_warning=sweeps_with_warning,
         all_resolvable_correct_sign=all_correct,
         adjacent_reversal_rate=adjacent_reversal_rate,
         negative_control_failures=negative_control_failures,

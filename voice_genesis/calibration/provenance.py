@@ -213,7 +213,13 @@ class LeakageCheckResult:
 @dataclass(frozen=True)
 class ChainVerification:
     """`verify_chain()` の詳細結果。単に True/False だけでなく、末尾の
-    truncated/不完全行と prev_sha 不一致（sibling 分岐・改竄）を区別する。"""
+    truncated/不完全行と prev_sha 不一致（sibling 分岐・改竄）を区別する。
+
+    **fail-closed 契約**（Codex レビュー 2026-09-01 採用）: `truncated_tail=True`
+    は常に `ok=False` を伴う（末尾が中断された台帳は「検証できない」のであって
+    「検証に成功した」のではない）。`truncated_tail` フィールドは、その `ok=False`
+    が改竄由来 (`tamper_at_seq` 有り) なのか write 中断由来なのかを呼び出し側が
+    区別できるよう残す。"""
 
     ok: bool
     entries_verified: int
@@ -222,8 +228,44 @@ class ChainVerification:
     detail: str
 
 
+class LedgerTruncatedTailError(RuntimeError):
+    """`Ledger.append()` が、既存ファイルの末尾が truncated（write 中断で不完全な
+    最終行）だと検出した際に送出する。既存の破損した bytes へ盲目的に追記して
+    さらなる破損を積み重ねることを防ぐ fail-closed 契約（Codex レビュー
+    2026-09-01 採用）。呼び出し側は台帳を手動で修復（truncated tail の切除、
+    または別経路での再構成）してから再試行すること。"""
+
+    def __init__(self, path: Path, detail: str) -> None:
+        self.path = path
+        self.detail = detail
+        super().__init__(
+            f"Ledger.append refused: {detail} (path={path})"
+        )
+
+
 def _entry_sha(seq: int, prev_sha: str, payload: Mapping[str, Any]) -> str:
     return manifest_sha({"seq": seq, "prev_sha": prev_sha, "payload": _jsonable(payload)})
+
+
+def _split_complete_lines(content: str) -> tuple[list[str], bool]:
+    """ファイル内容を「改行区切りの完全な行」の列と「末尾 truncated 判定」に
+    分解する。`verify_chain()` と `Ledger.append()` の両方が使う共通ロジック
+    （Codex レビュー 2026-09-01 採用: append 側も同じ判定を再利用することで、
+    truncated tail への追記と検証の判定基準を一致させる）。"""
+    truncated_tail = False
+    if content and not content.endswith("\n"):
+        truncated_tail = True
+    raw_lines = [ln for ln in content.splitlines() if ln.strip()]
+    if truncated_tail and raw_lines:
+        # 最後の非空行が truncated 行そのもの: JSON parse を試し、失敗すれば
+        # それを truncated 行として除外する。parse に成功する（＝改行だけが
+        # 欠けた完全な行だった）場合は truncated 扱いを取り消す。
+        try:
+            json.loads(raw_lines[-1])
+            truncated_tail = False
+        except json.JSONDecodeError:
+            raw_lines = raw_lines[:-1]
+    return raw_lines, truncated_tail
 
 
 class Ledger:
@@ -238,9 +280,13 @@ class Ledger:
     攻撃の余地を減らすため）。より広い対象を digest する保守的な選択であり、
     設計正本の要求を弱めていない。
 
-    `append()` は `fcntl.flock(LOCK_EX)` で排他制御し、書込は
+    `append()` は `fcntl.flock(LOCK_EX)` を **先に** 獲得し、そのロックを保持した
+    まま on-disk の tail を読み直して `seq`/`prev_sha` を導出し、
     write → flush → `os.fsync` の順で行ってからロックを解放する（単一 writer
-    境界の契約。モジュール docstring 参照）。
+    境界の契約。モジュール docstring 参照）。プロセス内キャッシュ
+    (`self._entries`) から `seq`/`prev_sha` を先に決めてしまうと、同一パスへの
+    複数 `Ledger` インスタンスの交互 append で兄弟 `seq` が発生しうるため
+    （Codex レビュー 2026-09-01 採用）。
     """
 
     def __init__(self, path: Path) -> None:
@@ -277,26 +323,69 @@ class Ledger:
         return tuple(self._entries)
 
     def append(self, payload: Mapping[str, Any]) -> LedgerEntry:
+        """payload を append する。
+
+        **単一 writer 境界の契約**（Codex レビュー 2026-09-01 採用、再修正）:
+        `seq`/`prev_sha` は、この呼び出し **以前** にプロセス内でキャッシュされた
+        `self._entries`（他インスタンスの append を反映しない可能性がある）から
+        導出してはならない。`fcntl.flock(LOCK_EX)` を先に獲得し、そのロックを
+        保持したまま on-disk の現在のファイル末尾を読み直して `seq`/`prev_sha`
+        を導出する。これにより、同一パスに対する複数 `Ledger` インスタンス
+        （プロセス内・プロセス間を問わない）が交互に `append()` しても、
+        兄弟 `seq=0` の重複や chain 分岐が起きない。
+        """
         payload_j = _jsonable(payload)
-        prev_sha = self._entries[-1].entry_sha if self._entries else GENESIS_PREV_SHA
-        seq = len(self._entries)
-        entry_sha = _entry_sha(seq, prev_sha, payload_j)
-        entry = LedgerEntry(seq=seq, prev_sha=prev_sha, entry_sha=entry_sha, payload=payload_j)
-        line = canonical_json(
-            {"seq": entry.seq, "prev_sha": entry.prev_sha, "entry_sha": entry.entry_sha,
-             "payload": entry.payload}
-        )
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as f:
+        # "a+" は存在しなければファイルを作成し、読み書き両方を許す。POSIX 上
+        # 'a' モードは O_APPEND を伴うため、write() は（read でファイル位置が
+        # どこへ動いていても）常に真の EOF へ書き込まれる。read → write の間に
+        # 明示的な seek を挟むのは、C stdio の「読み書きモードでは read と
+        # write の間に fseek/fflush が必要」という契約を満たすため。
+        with self.path.open("a+", encoding="utf-8") as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
+                f.seek(0)
+                content = f.read()
+                raw_lines, truncated_tail = _split_complete_lines(content)
+                if truncated_tail:
+                    raise LedgerTruncatedTailError(
+                        self.path,
+                        "existing ledger tail is truncated (incomplete final line); "
+                        "refusing to append onto partial bytes",
+                    )
+                if raw_lines:
+                    try:
+                        tail_raw = json.loads(raw_lines[-1])
+                        seq = int(tail_raw["seq"]) + 1
+                        prev_sha = str(tail_raw["entry_sha"])
+                    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                        raise LedgerTruncatedTailError(
+                            self.path,
+                            "existing ledger tail line is unparseable/malformed; "
+                            "refusing to append",
+                        ) from exc
+                else:
+                    seq = 0
+                    prev_sha = GENESIS_PREV_SHA
+
+                entry_sha = _entry_sha(seq, prev_sha, payload_j)
+                entry = LedgerEntry(
+                    seq=seq, prev_sha=prev_sha, entry_sha=entry_sha, payload=payload_j
+                )
+                line = canonical_json(
+                    {"seq": entry.seq, "prev_sha": entry.prev_sha, "entry_sha": entry.entry_sha,
+                     "payload": entry.payload}
+                )
+                f.seek(0, os.SEEK_END)
                 f.write(line)
                 f.write("\n")
                 f.flush()
                 os.fsync(f.fileno())
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        self._entries.append(entry)
+        # in-memory cache は on-disk の真の状態から再構築する（他インスタンスの
+        # append をキャッシュへ反映するため。プロセス内キャッシュを信頼しない）。
+        self._entries = list(self._read_all())
         return entry
 
     def verify_chain(self) -> ChainVerification:
@@ -312,19 +401,7 @@ class Ledger:
         if self.path.exists():
             with self.path.open("r", encoding="utf-8") as f:
                 content = f.read()
-            if content and not content.endswith("\n"):
-                truncated_tail = True
-            raw_lines = [ln for ln in content.splitlines() if ln.strip()]
-            if truncated_tail and raw_lines:
-                # 最後の非空行が truncated 行そのもの: JSON parse を試し、失敗
-                # すればそれを truncated 行として除外する。parse に成功する
-                # （＝改行だけが欠けた完全な行だった）場合は truncated 扱いを
-                # 取り消す。
-                try:
-                    json.loads(raw_lines[-1])
-                    truncated_tail = False
-                except json.JSONDecodeError:
-                    raw_lines = raw_lines[:-1]
+            raw_lines, truncated_tail = _split_complete_lines(content)
 
         prev = GENESIS_PREV_SHA
         verified = 0
@@ -367,12 +444,20 @@ class Ledger:
             prev = raw["entry_sha"]
             verified += 1
 
+        # fail-closed（Codex レビュー 2026-09-01 採用）: 末尾が truncated な台帳は
+        # 「(改竄ではないが) 検証未完了」であり、正当な chain として ok=True を
+        # 返してはならない。有効な prefix が検証済みであることは
+        # `entries_verified` / `truncated_tail` で呼び出し側に伝える。
         return ChainVerification(
-            ok=True,
+            ok=not truncated_tail,
             entries_verified=verified,
             truncated_tail=truncated_tail,
             tamper_at_seq=None,
-            detail="chain verified" if not truncated_tail else "chain verified up to truncated tail",
+            detail=(
+                "chain verified"
+                if not truncated_tail
+                else "chain verified up to truncated tail (fail-closed: ok=False)"
+            ),
         )
 
     @staticmethod

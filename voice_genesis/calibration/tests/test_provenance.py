@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from voice_genesis.calibration.provenance import (
     CampaignIdentity,
     CodeIdentity,
     Ledger,
     LedgerEntry,
+    LedgerTruncatedTailError,
     ProvenanceRecord,
     provenance_record_to_dict,
 )
@@ -121,9 +124,16 @@ def test_ledger_verify_chain_detects_truncated_tail(tmp_path) -> None:
     assert result.truncated_tail is True
     # 末尾の壊れた行を除いた prefix (先頭 1 行) は正当な chain として検証される。
     assert result.entries_verified == 1
+    # fail-closed（Codex レビュー 2026-09-01 採用）: truncated tail は常に
+    # ok=False。「検証未完了」であって「検証に成功した」のではない。
+    assert result.ok is False
 
 
-def test_ledger_verify_chain_truncated_tail_with_valid_prefix_still_ok(tmp_path) -> None:
+def test_ledger_verify_chain_truncated_tail_with_valid_prefix_fails_closed(tmp_path) -> None:
+    """[Codex レビュー 2026-09-01 採用] 旧実装は truncated tail でも有効な
+    prefix さえあれば `ok=True` を返していた（fail-open のバグ）。prefix が
+    空であっても truncated tail である以上、`ok=False` を返す（fail-closed）。
+    """
     path = tmp_path / "ledger.jsonl"
     ledger = Ledger(path)
     ledger.append({"kind": "meter_call", "row_id": "r0"})
@@ -135,7 +145,56 @@ def test_ledger_verify_chain_truncated_tail_with_valid_prefix_still_ok(tmp_path)
     result = Ledger(path).verify_chain()
     assert result.truncated_tail is True
     assert result.entries_verified == 0
-    assert result.ok is True  # 空の chain は空のまま正当
+    assert result.ok is False  # fail-closed: truncated tail は常に ok=False
+
+
+def test_ledger_append_refuses_when_existing_tail_truncated(tmp_path) -> None:
+    """[Codex レビュー 2026-09-01 採用] `append()` は、既存ファイルの末尾が
+    truncated（write 中断で不完全な最終行）だった場合、その破損 bytes へ盲目的
+    に追記して破損を積み重ねてはならず、`LedgerTruncatedTailError` で
+    fail-closed する（ファイル内容も一切変更しない）。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    full_content = path.read_text(encoding="utf-8")
+    lines = full_content.splitlines()
+    cut_point = len(lines[0]) + 1 + len(lines[1]) // 2
+    truncated_content = full_content[:cut_point]
+    path.write_text(truncated_content, encoding="utf-8")
+
+    fresh = Ledger(path)
+    with pytest.raises(LedgerTruncatedTailError):
+        fresh.append({"kind": "meter_call", "row_id": "r2"})
+
+    # append 失敗後もファイル内容は一切変更されていない（破損 bytes への
+    # 追記が起きていないことを直接検証する）。
+    assert path.read_text(encoding="utf-8") == truncated_content
+
+
+def test_ledger_two_instances_interleaved_append_no_sibling_seq(tmp_path) -> None:
+    """[Codex レビュー 2026-09-01 採用] 同一パスに対する 2 つの `Ledger`
+    インスタンスが交互に append しても、seq/prev_sha は on-disk の真の tail
+    から導出されるため、兄弟 `seq=0` の重複は起きず、chain は連続する。"""
+    path = tmp_path / "ledger.jsonl"
+    l1 = Ledger(path)
+    l2 = Ledger(path)  # l1 の append をまだ知らない、独立にキャッシュ空の状態
+
+    e1 = l1.append({"kind": "meter_call", "row_id": "r0"})
+    e2 = l2.append({"kind": "meter_call", "row_id": "r1"})  # l2 のキャッシュは stale
+    e3 = l1.append({"kind": "meter_call", "row_id": "r2"})
+    e4 = l2.append({"kind": "meter_call", "row_id": "r3"})
+
+    assert [e1.seq, e2.seq, e3.seq, e4.seq] == [0, 1, 2, 3]
+    assert e2.prev_sha == e1.entry_sha
+    assert e3.prev_sha == e2.entry_sha
+    assert e4.prev_sha == e3.entry_sha
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 4
+    assert result.tamper_at_seq is None
 
 
 def test_check_leakage_pre_unseal_access_is_blocked() -> None:

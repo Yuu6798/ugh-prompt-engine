@@ -254,7 +254,7 @@ def test_absolute_gates_no_primary_instance_raises() -> None:
 
 def _pair(pair_id: str, delta_truth: float, delta_output: float, *, correct_sign: bool = True,
           is_adjacent: bool = True, u_gt_i: float = 0.1, u_num_i: float = 0.05,
-          u_gt_j: float = 0.1, u_num_j: float = 0.05) -> DirectionalPair:
+          u_gt_j: float = 0.1, u_num_j: float = 0.05, sweep_id: str = "default") -> DirectionalPair:
     return DirectionalPair(
         pair_id=pair_id,
         delta_truth=delta_truth,
@@ -265,6 +265,7 @@ def _pair(pair_id: str, delta_truth: float, delta_output: float, *, correct_sign
         u_num_j=u_num_j,
         correct_sign=correct_sign,
         is_adjacent=is_adjacent,
+        sweep_id=sweep_id,
     )
 
 
@@ -432,3 +433,78 @@ def test_directional_control_failures_block_pass() -> None:
         positive_control_failures=0, units_commensurate=False,
     )
     assert result.passed is False
+
+
+# ---------------------------------------------------------------------------
+# resolvable-pair minimum is PER SWEEP (Codex review 2026-09-01)
+# ---------------------------------------------------------------------------
+
+
+def test_directional_three_pairs_spread_over_three_sweeps_fails() -> None:
+    """3 件の resolvable pair が 3 つの異なる sweep に 1 件ずつ分散していると、
+    集約カウントでは 3 件で足りているように見えるが、各 sweep 単独では最低数
+    (>= 3) を満たさないため gate は FAIL する。"""
+    pairs = [
+        _pair("p1", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-A"),
+        _pair("p2", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-B"),
+        _pair("p3", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-C"),
+    ]
+    result = directional_gates(
+        pairs,
+        u_rep=0.02,
+        u_proc=0.01,
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.resolvable_count == 3  # aggregate count looks sufficient...
+    assert result.passed is False  # ...but no single sweep reaches the minimum
+    assert set(result.sweeps_below_minimum) == {"sweep-A", "sweep-B", "sweep-C"}
+    assert result.sweep_resolvable_counts == {"sweep-A": 1, "sweep-B": 1, "sweep-C": 1}
+    assert result.sweeps_with_warning == ()
+
+
+def test_directional_one_sweep_with_exactly_three_pairs_passes_with_warning() -> None:
+    """全ての resolvable pair (3 件) が単一 sweep に属していれば、その sweep は
+    最低数を満たし gate は通過するが、「ちょうど 3」の警告がその sweep に
+    立つ。"""
+    pairs = [
+        _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-A")
+        for i in range(3)
+    ]
+    result = directional_gates(
+        pairs,
+        u_rep=0.02,
+        u_proc=0.01,
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.passed is True
+    assert result.sweep_resolvable_counts == {"sweep-A": 3}
+    assert result.sweeps_with_warning == ("sweep-A",)
+    assert result.sweeps_below_minimum == ()
+    assert result.three_pair_warning is True
+
+
+def test_directional_multi_sweep_each_meeting_minimum_passes() -> None:
+    """複数 sweep それぞれが独立に最低数 (>= 3) を満たせば gate は通過する。"""
+    pairs = [
+        _pair(f"a{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-A")
+        for i in range(3)
+    ] + [
+        _pair(f"b{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-B")
+        for i in range(4)
+    ]
+    result = directional_gates(
+        pairs,
+        u_rep=0.02,
+        u_proc=0.01,
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.passed is True
+    assert result.sweeps_below_minimum == ()
+    assert result.sweep_resolvable_counts == {"sweep-A": 3, "sweep-B": 4}
+    assert result.sweeps_with_warning == ("sweep-A",)  # sweep-B has 4, not exactly 3
