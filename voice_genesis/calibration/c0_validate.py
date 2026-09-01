@@ -179,6 +179,24 @@ REQUIRED_BLOCKING_KEYS: tuple[str, ...] = (
     "rng_ledger",
 )
 
+#: REQUIRED_BLOCKING のうち frozen environment / preprocessing identity を
+#: 表す scalar string fields。`_is_hollow()` は意図的に `0`/`False` を
+#: populated とみなすため、これらは別途 nonblank `str` を必須化する。
+_REQUIRED_STRING_SCALAR_KEYS = frozenset(
+    {
+        "repo.url",
+        "measurement_directory_status",
+        "dependencies.python_version",
+        "dependencies.numpy_version",
+        "dependencies.scipy_version",
+        "dependencies.librosa_version",
+        "dependencies.soundfile_version",
+        "sample_format.dtype",
+        "sample_format.channel_policy",
+        "sample_format.resampling_impl",
+    }
+)
+
 #: `frozen_design.meter_specs.<METER_ID>` の各エントリが持つべき必須ネスト
 #: キー（設計正本 §3.1「meter 別 construct/unit/domain/algorithm family/
 #: 有限 parameter grid/baseline/fallback/missing・failure rule」。
@@ -602,6 +620,11 @@ def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
             missing.append(
                 f"{key}: shape (must be a full 40-character lowercase hex commit SHA, "
                 f"got {value!r})"
+            )
+            continue
+        if key in _REQUIRED_STRING_SCALAR_KEYS and not isinstance(value, str):
+            missing.append(
+                f"{key}: type (must be a nonblank string, got {type(value).__name__})"
             )
             continue
         container_kind = _CONTAINER_TYPE_KEYS.get(key)

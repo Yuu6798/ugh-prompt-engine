@@ -1081,3 +1081,29 @@ def test_claim_critical_set_accepts_same_members_in_different_order() -> None:
     ]
     result = c0_validate.validate_c0_manifest(manifest)
     assert result.is_blocked is False
+@pytest.mark.parametrize(
+    ("path", "invalid"),
+    [
+        (("sample_format", "dtype"), False),
+        (("sample_format", "resampling_impl"), True),
+        (("dependencies", "numpy_version"), 0),
+        (("repo", "url"), 123),
+        (("measurement_directory_status",), False),
+    ],
+)
+def test_required_string_scalar_fields_reject_non_strings(
+    path: tuple[str, ...], invalid: object
+) -> None:
+    manifest = _complete_manifest()
+    node: dict[str, object] = manifest
+    for part in path[:-1]:
+        child = node[part]
+        assert isinstance(child, dict)
+        node = child
+    node[path[-1]] = invalid
+
+    result = c0_validate.validate_c0_manifest(manifest)
+
+    dotted = ".".join(path)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(item.startswith(f"{dotted}: type") for item in result.missing_required_keys)

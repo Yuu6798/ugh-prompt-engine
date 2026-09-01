@@ -239,8 +239,8 @@ def failure_boundary(
     first_fail: Hashable | None = None
     for level, flag in zip(ordered_levels, pass_flags):
         passed = bool(flag) if flag is not None else False
-        if passed:
-            last_pass = level
-        elif first_fail is None:
+        if not passed:
             first_fail = level
+            break
+        last_pass = level
     return last_pass, first_fail

@@ -275,3 +275,11 @@ def test_detection_rates_rejects_instance_ids_reused_across_control_classes() ->
 
     assert excinfo.value.kind == "cross_class"
     assert excinfo.value.duplicate_ids == tuple(shared_ids)
+def test_failure_boundary_stops_at_first_failure() -> None:
+    levels = ["L1", "L2", "L3"]
+    flags = [True, None, True]
+
+    last_pass, first_fail = failure_boundary(levels, flags)
+
+    assert last_pass == "L1"
+    assert first_fail == "L2"
