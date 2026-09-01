@@ -16,12 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 20
 
-      - name: Guard expected parent
+      - name: Guard review baseline
         shell: bash
         run: |
-          test "$(git rev-parse HEAD^)" = "fa79b98d88f5eeb308a250b015708398e85291e3"
+          changed="$(git diff --name-only fa79b98d88f5eeb308a250b015708398e85291e3..HEAD)"
+          test "$changed" = ".github/workflows/pr342_review_integrity_fix.yml"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -37,28 +38,50 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
 
-          def replace_once(path: str, pattern: str, replacement: str, *, flags: int = 0) -> None:
-              p = Path(path)
-              text = p.read_text(encoding="utf-8")
-              new, n = re.subn(pattern, replacement, text, count=1, flags=flags)
-              if n != 1:
-                  raise RuntimeError(f"{path}: expected exactly one replacement, got {n}")
-              p.write_text(new, encoding="utf-8")
+
+          def read(path: str) -> str:
+              return Path(path).read_text(encoding="utf-8")
+
+
+          def write(path: str, text: str) -> None:
+              Path(path).write_text(text, encoding="utf-8")
+
+
+          def replace_between(path: str, start: str, end: str, replacement: str) -> None:
+              text = read(path)
+              i = text.index(start)
+              j = text.index(end, i)
+              write(path, text[:i] + replacement + text[j:])
+
+
+          def replace_literal(path: str, old: str, new: str) -> None:
+              text = read(path)
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{path}: expected one literal match, got {count}")
+              write(path, text.replace(old, new, 1))
+
 
           def append_once(path: str, marker: str, block: str) -> None:
-              p = Path(path)
-              text = p.read_text(encoding="utf-8")
+              text = read(path)
               if marker in text:
                   return
-              p.write_text(text.rstrip() + "\n\n\n" + block.strip() + "\n", encoding="utf-8")
+              write(path, text.rstrip() + "\n\n\n" + block.strip() + "\n")
 
-          # 1) selection.py: reject every non-finite numeric ranking input before vector/sort.
+
+          def replace_top_level_function(path: str, name: str, replacement: str) -> None:
+              text = read(path)
+              start = text.index(f"def {name}(")
+              next_def = text.find("\ndef ", start + 1)
+              end = len(text) if next_def < 0 else next_def + 1
+              write(path, text[:start] + replacement.rstrip() + "\n\n" + text[end:])
+
+
+          # 1) selection.py — every numeric sort input must be finite before ranking.
           selection_helpers = '''def _required_criteria_values(
               criteria: CandidateCriteria, family: SelectionFamily
           ) -> tuple[float | int | None, ...]:
-              """Return every numeric field that can participate in the family ranking vector."""
               common: tuple[float | int | None, ...] = (
                   criteria.nuisance_sensitivity_max,
                   criteria.missing_failure_rate,
@@ -79,23 +102,23 @@ jobs:
 
 
           def _criteria_payload_present(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
-              values = _required_criteria_values(criteria, family)
-              # Only family-specific fields can legitimately be None; treating any None as
-              # absent is conservative and keeps malformed runtime payloads out of ranking.
-              return all(value is not None for value in values)
+              return all(value is not None for value in _required_criteria_values(criteria, family))
 
 
           def _criteria_values_finite(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
               if not _criteria_payload_present(criteria, family):
                   return False
               try:
-                  return all(math.isfinite(value) for value in _required_criteria_values(criteria, family))
+                  return all(
+                      math.isfinite(value)
+                      for value in _required_criteria_values(criteria, family)
+                  )
               except (TypeError, ValueError):
                   return False
 
 
           def _has_required_criteria(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
-              """All ranking inputs must be present and finite before vector construction."""
+              """Ranking inputs must be both present and finite."""
               return _criteria_payload_present(criteria, family) and _criteria_values_finite(
                   criteria, family
               )
@@ -106,24 +129,24 @@ jobs:
           ) -> str | None:
               if not _criteria_payload_present(criteria, family):
                   return "criteria_payload_absent"
-              if not _criteria_values_finite(criteria, family):
+              if not has_criteria:
                   return "criteria_non_finite"
               if not criteria.eligible:
                   return "flagged_ineligible"
               return None
 
 
-          def _vector_for'''
-          replace_once(
+          '''
+          replace_between(
               "voice_genesis/calibration/selection.py",
-              r"def _has_required_criteria\(.*?\n\ndef _vector_for",
+              "def _has_required_criteria(",
+              "def _vector_for(",
               selection_helpers,
-              flags=re.S,
           )
-          replace_once(
+          replace_literal(
               "voice_genesis/calibration/selection.py",
-              r"(def _vector_for\(\n    criteria: CandidateCriteria, family: SelectionFamily, \*, rounded: bool\n\) -> tuple\[float \| int \| str, \.\.\.\]:\n)(    err = round_error)",
-              r'''\1    if not _criteria_payload_present(criteria, family):
+              "    err = round_error if rounded else (lambda v: v)\n",
+              '''    if not _criteria_payload_present(criteria, family):
                   raise ValueError(
                       f"selection: candidate {criteria.candidate_id!r} missing {family.value} criteria fields"
                   )
@@ -131,18 +154,15 @@ jobs:
                   raise ValueError(
                       f"selection: candidate {criteria.candidate_id!r} has non-finite ranking criteria"
                   )
-              \2''',
-          )
-          replace_once(
-              "voice_genesis/calibration/selection.py",
-              r'reason は `\\"criteria_payload_absent\\"` または\n    #: `\\"flagged_ineligible\\"` のいずれか',
-              'reason は `"criteria_payload_absent"` /\n    #: `"criteria_non_finite"` / `"flagged_ineligible"` のいずれか',
+              err = round_error if rounded else (lambda v: v)
+          ''',
           )
 
-          # 2) gates.py: pair_id identity is global, not scoped by sweep labels.
-          replace_once(
+          # 2) gates.py — pair identity is global across the directional observation set.
+          replace_between(
               "voice_genesis/calibration/gates.py",
-              r'''    pair_ids_by_sweep: dict\[str, list\[str\]\] = \{\}\n    for p in pairs:\n        pair_ids_by_sweep\.setdefault\(p\.sweep_id, \[\]\)\.append\(p\.pair_id\)\n    duplicate_pair_ids: list\[str\] = \[\]\n    for sweep_id, ids in pair_ids_by_sweep\.items\(\):\n        dupes = sorted\(\{pid for pid in ids if ids\.count\(pid\) > 1\}\)\n        if dupes:\n            duplicate_pair_ids\.append\(f"sweep \{sweep_id\}: \{', '\.join\(dupes\)\}"\)\n    if duplicate_pair_ids:\n        reasons\.append\(\n            "duplicate pair_id\(s\) within sweep: " \+ "; "\.join\(duplicate_pair_ids\)\n        \)''',
+              "    pair_ids_by_sweep: dict[str, list[str]] = {}\n",
+              "    resolvable: list[DirectionalPair] = []\n",
               '''    seen_pair_ids: set[str] = set()
               duplicate_pair_ids_set: set[str] = set()
               for p in pairs:
@@ -154,20 +174,27 @@ jobs:
                   reasons.append(
                       "duplicate pair_id(s) across directional observations: "
                       + ", ".join(duplicate_pair_ids)
-                  )''',
+                  )
+
+          ''',
           )
 
-          # 3) c0_validate.py: producer emits SHA-256; validator must enforce the same shape.
-          replace_once(
+          # 3) c0_validate.py — match the SHA-256 identifier shape emitted by RngLedger.
+          replace_literal(
               "voice_genesis/calibration/c0_validate.py",
-              r'''            if not isinstance\(seed_ref, str\) or seed_ref\.strip\(\) == "":\n                violations\.append\(\n                    f"rng_ledger\[\{i\}\]\.public_seed_id \(required seed reference when seeded=true\)"\n                \)''',
+              '''            if not isinstance(seed_ref, str) or seed_ref.strip() == "":
+                          violations.append(
+                              f"rng_ledger[{i}].public_seed_id (required seed reference when seeded=true)"
+                          )
+          ''',
               '''            if not isinstance(seed_ref, str) or _SHA256_HEX_RE.fullmatch(seed_ref) is None:
-                  violations.append(
-                      f"rng_ledger[{i}].public_seed_id (must be a 64-character lowercase sha256 hex digest when seeded=true)"
-                  )''',
+                          violations.append(
+                              f"rng_ledger[{i}].public_seed_id (must be a 64-character lowercase sha256 hex digest when seeded=true)"
+                          )
+          ''',
           )
 
-          # 4) provenance.py: an integer can never grant holdout access by itself.
+          # 4) provenance.py — derive the unseal boundary from a verified ledger event.
           provenance_helpers = '''
 
           _UNSEAL_COMMITMENT_KEYS: tuple[str, ...] = (
@@ -187,11 +214,12 @@ jobs:
 
 
           def _verified_holdout_unseal_seq(ledger_entries: Sequence[LedgerEntry]) -> int | None:
-              """Derive the first valid holdout-unseal boundary from a verified ledger chain.
+              """Return the first valid holdout-unseal boundary, or None fail-closed.
 
-              The unseal event must reference a prior SELECTION_FROZEN event by its entry SHA,
-              and the four prerequisite commitment hashes must be present and identical on both
-              events. A caller-supplied integer is never sufficient to create this boundary.
+              A valid unseal is in a fully verified ledger chain, references a prior
+              `selection_frozen` entry by its entry SHA, and repeats the four frozen
+              prerequisite commitment hashes exactly. A caller-supplied integer alone
+              never creates an unseal boundary.
               """
               prev_sha = GENESIS_PREV_SHA
               for expected_seq, entry in enumerate(ledger_entries):
@@ -209,7 +237,10 @@ jobs:
                       continue
                   kind = payload.get("kind")
                   if kind == "selection_frozen":
-                      if all(_is_sha256_hex(payload.get(key)) for key in _UNSEAL_COMMITMENT_KEYS):
+                      if all(
+                          _is_sha256_hex(payload.get(key))
+                          for key in _UNSEAL_COMMITMENT_KEYS
+                      ):
                           frozen_by_sha[entry.entry_sha] = payload
                       continue
                   if kind != "holdout_unseal":
@@ -221,19 +252,28 @@ jobs:
                   frozen = frozen_by_sha.get(freeze_sha)
                   if frozen is None:
                       continue
-                  if not all(_is_sha256_hex(payload.get(key)) for key in _UNSEAL_COMMITMENT_KEYS):
+                  if not all(
+                      _is_sha256_hex(payload.get(key))
+                      for key in _UNSEAL_COMMITMENT_KEYS
+                  ):
                       continue
-                  if not all(payload.get(key) == frozen.get(key) for key in _UNSEAL_COMMITMENT_KEYS):
+                  if not all(
+                      payload.get(key) == frozen.get(key)
+                      for key in _UNSEAL_COMMITMENT_KEYS
+                  ):
                       continue
                   return entry.seq
               return None
           '''
-          replace_once(
+          replace_literal(
               "voice_genesis/calibration/provenance.py",
-              r"\n\nclass Ledger:\n",
+              "\n\nclass Ledger:\n",
               provenance_helpers + "\n\nclass Ledger:\n",
           )
 
+          provenance_path = "voice_genesis/calibration/provenance.py"
+          provenance_text = read(provenance_path)
+          leakage_start = provenance_text.index("    @staticmethod\n    def check_leakage(")
           new_check_leakage = '''    @staticmethod
               def check_leakage(
                   ledger_entries: Sequence[LedgerEntry],
@@ -241,13 +281,12 @@ jobs:
                   unseal_seq: int | None,
                   control_row_ids: Collection[str] = (),
               ) -> LeakageCheckResult:
-                  """Fail closed on any pre-unseal holdout access.
+                  """Fail closed on pre-unseal holdout access.
 
-                  The permission boundary is derived from a cryptographically valid ledger chain
-                  containing a `holdout_unseal` event that references a prior `selection_frozen`
-                  event with matching baseline/candidate-space/selection-rule/selected-candidate
-                  commitments. `unseal_seq` is retained only as an optional expected-sequence
-                  assertion for compatibility; it can never grant access on its own.
+                  The authoritative boundary is derived from a cryptographically verified
+                  `holdout_unseal` ledger event with matching frozen prerequisite references.
+                  `unseal_seq` is retained only as an optional expected-sequence assertion for
+                  compatibility; it can never grant access by itself.
                   """
                   verified_unseal_seq = _verified_holdout_unseal_seq(ledger_entries)
                   if unseal_seq is not None and unseal_seq != verified_unseal_seq:
@@ -276,14 +315,9 @@ jobs:
                       blocked=None, control_excluded_count=control_excluded_count
                   )
           '''
-          replace_once(
-              "voice_genesis/calibration/provenance.py",
-              r"    @staticmethod\n    def check_leakage\(.*?\n        return LeakageCheckResult\(blocked=None, control_excluded_count=control_excluded_count\)\n?",
-              new_check_leakage,
-              flags=re.S,
-          )
+          write(provenance_path, provenance_text[:leakage_start] + new_check_leakage.rstrip() + "\n")
 
-          # Regression tests: append to existing inventory-covered test files only.
+          # Regression tests — append only to existing inventory-covered test paths.
           append_once(
               "voice_genesis/calibration/tests/test_selection.py",
               "test_selection_non_finite_common_ranking_field_is_ineligible",
@@ -329,10 +363,22 @@ jobs:
               "test_directional_duplicate_pair_id_across_sweeps_fails",
               '''def test_directional_duplicate_pair_id_across_sweeps_fails() -> None:
                   pairs = [
-                      _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-A")
+                      _pair(
+                          f"p{i}",
+                          delta_truth=1.0,
+                          delta_output=1.0,
+                          is_adjacent=False,
+                          sweep_id="sweep-A",
+                      )
                       for i in range(3)
                   ] + [
-                      _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-B")
+                      _pair(
+                          f"p{i}",
+                          delta_truth=1.0,
+                          delta_output=1.0,
+                          is_adjacent=False,
+                          sweep_id="sweep-B",
+                      )
                       for i in range(3)
                   ]
                   result = directional_gates(
@@ -346,12 +392,14 @@ jobs:
                   )
                   assert result.sweep_resolvable_counts == {"sweep-A": 3, "sweep-B": 3}
                   assert result.passed is False
-                  assert any("duplicate pair_id" in reason for reason in result.failure_reasons)''',
+                  assert any(
+                      "duplicate pair_id" in reason for reason in result.failure_reasons
+                  )''',
           )
 
           append_once(
               "voice_genesis/calibration/tests/test_c0_validate.py",
-              "test_rng_ledger_rejects_non_digest_public_seed_id",
+              "test_rng_ledger_producer_declarations_round_trip_validator",
               '''def test_rng_ledger_rejects_non_digest_public_seed_id() -> None:
                   manifest = _complete_manifest()
                   manifest["rng_ledger"][0]["public_seed_id"] = "x"
@@ -391,11 +439,9 @@ jobs:
                   assert vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG not in result.blocked_codes''',
           )
 
-          # Replace the old fail-open post-unseal test with a verified-event version, then append
-          # explicit forged-integer and commitment-mismatch regressions.
-          replace_once(
+          replace_top_level_function(
               "voice_genesis/calibration/tests/test_provenance.py",
-              r"def test_check_leakage_post_unseal_access_is_allowed\(.*?(?=\ndef )",
+              "test_check_leakage_post_unseal_access_is_allowed",
               '''def test_check_leakage_post_unseal_access_is_allowed(tmp_path) -> None:
                   ledger = Ledger(tmp_path / "ledger.jsonl")
                   commitments = {
@@ -414,14 +460,13 @@ jobs:
                   )
                   ledger.append({"kind": "meter_call", "row_id": "holdout-1"})
                   result = Ledger.check_leakage(
-                      ledger.entries, holdout_row_ids=["holdout-1"], unseal_seq=unseal.seq
+                      ledger.entries,
+                      holdout_row_ids=["holdout-1"],
+                      unseal_seq=unseal.seq,
                   )
-                  assert result.blocked is None
-
-
-              ''',
-              flags=re.S,
+                  assert result.blocked is None''',
           )
+
           append_once(
               "voice_genesis/calibration/tests/test_provenance.py",
               "test_check_leakage_forged_unseal_integer_cannot_grant_access",
@@ -438,7 +483,9 @@ jobs:
                   )
                   ledger.append({"kind": "meter_call", "row_id": "holdout-1"})
                   result = Ledger.check_leakage(
-                      ledger.entries, holdout_row_ids=["holdout-1"], unseal_seq=0
+                      ledger.entries,
+                      holdout_row_ids=["holdout-1"],
+                      unseal_seq=0,
                   )
                   assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
 
@@ -462,7 +509,9 @@ jobs:
                   )
                   ledger.append({"kind": "render", "row_id": "holdout-1"})
                   result = Ledger.check_leakage(
-                      ledger.entries, holdout_row_ids=["holdout-1"], unseal_seq=None
+                      ledger.entries,
+                      holdout_row_ids=["holdout-1"],
+                      unseal_seq=None,
                   )
                   assert result.blocked == BlockedCode.BLOCKED_LEAKAGE''',
           )
