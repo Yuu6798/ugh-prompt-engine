@@ -80,6 +80,28 @@ Codex レビュー 2026-09-01（第 2 巡）採用分。正本改訂は §0 保�
   **凍結済み CLAIM_CRITICAL_SET の全 member が CALIBRATED_ABSOLUTE のときのみ** M6 distance を
   計算し、それ以外は NOT_EVALUABLE（部分データからの distance 出力は禁止）
 
+## 2.6 結果を左右する選択の設計時凍結（Codex レビュー第 4 巡採用）
+
+実装者裁量に残さず、本 memo で凍結する（C0 freeze 承認時のユーザーレビュー対象である
+位置づけは不変。変更は本 memo の改訂として行い、コード内の暗黙変更を禁止する）:
+
+- **selection の ceiling 階級間裁定（§9 の補完）**: meter family 内の selection は
+  ceiling 階級の優先順で単一 pool を選んでから族別 lexicographic を適用する。
+  (1) ABSOLUTE ceiling の eligible 候補が 1 つでもあれば、その pool のみで ABSOLUTE 族
+  criteria により選抜。(2) 無ければ DIRECTIONAL ceiling pool で DIRECTIONAL 族 criteria。
+  (3) それも無ければ `SELECTION_FAILED_CLOSED`。DIAGNOSTIC_ONLY ceiling の候補は holdout
+  claim の selection 対象にならない（M4 は §8/§16 により selection を回さず全候補
+  DIAGNOSTIC_ONLY で閉じる）
+- **§8 の未確定パラメタグリッド**（件数は §8 と厳密一致）:
+  - M2A-HNR-ACF 8 = frame {25, 40} ms × hop {10, 20} ms × window {hann, blackman_harris}
+  - M2A-HARMONIC-RESIDUAL 12 = K {8, 10, 12} × window {hann, blackman_harris} ×
+    residual band {0–Nyquist, 0–6 kHz}
+  - M2A-D4C 3 = 集計帯 {broadband, 0–3 kHz, 3–6 kHz}（F0 入力は選択済み F0_CONTROL 固定）
+  - M4-LOCAL-PROMINENCE 4 = prominence 閾値 {6, 12} dB × envelope 平滑帯域 {150, 300} Hz
+  - M5-WAVE-DISCONTINUITY 3 = 検出窓 {2, 5, 10} ms
+  - M5-SPECTRAL-FLUX 4 = frame {512, 1024} × flux ノルム {L1, L2}
+  - F0-PYIN 4 = frame {2048, 4096} × hop {256, 512}（設計正本で確定済み・再掲）
+
 ## 3. underspec の解決規約
 
 設計正本が数値・グリッドを確定していない箇所（例: family 別 truth×confound の因子直積の
