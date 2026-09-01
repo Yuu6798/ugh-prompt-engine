@@ -1052,3 +1052,32 @@ def test_actual_dirty_checkout_blocks_even_if_manifest_claims_clean(monkeypatch)
 
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     assert "repo.dirty_tree (inspected checkout is actually dirty)" in result.missing_required_keys
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        ["M3_FORMANTS", "M2_SPECTRAL_TILT"],
+        ["M3_FORMANTS", "M2_SPECTRAL_TILT", "M2_APERIODICITY", "M4_RESONANCE"],
+        ["M3_FORMANTS", "M2_SPECTRAL_TILT", "M2_APERIODICITY", "M3_FORMANTS"],
+        "M3_FORMANTS",
+    ],
+)
+def test_claim_critical_set_must_exactly_match_frozen_set(declared) -> None:
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["claim_critical_set"] = declared
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert result.is_blocked is True
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any("frozen_design.claim_critical_set" in item for item in result.missing_required_keys)
+
+
+def test_claim_critical_set_accepts_same_members_in_different_order() -> None:
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["claim_critical_set"] = [
+        "M2_APERIODICITY",
+        "M3_FORMANTS",
+        "M2_SPECTRAL_TILT",
+    ]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert result.is_blocked is False

@@ -618,6 +618,38 @@ def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
     return missing
 
 
+def _check_claim_critical_set(manifest: Mapping[str, object]) -> list[str]:
+    """Require the C0 claim-critical declaration to equal the frozen D1 set.
+
+    Presence/non-hollowness is insufficient: shrinking or extending this set would
+    change which meter evidence later claim gates require.  The declaration is a
+    list for manifest schema stability, but membership is a closed set: duplicate,
+    missing, unknown, or non-string members all fail closed.
+    """
+    key = "frozen_design.claim_critical_set"
+    found, value = _resolve(manifest, key)
+    if not found or value is None or _is_hollow(value):
+        return []  # required-key validation already reports absence/hollowness
+    if not isinstance(value, list):
+        return [f"{key}: type (must be a list, got {type(value).__name__})"]
+    if any(not isinstance(member, str) for member in value):
+        return [f"{key}: members (every member must be a meter-id string)"]
+
+    expected = {meter.value for meter in vocab.CLAIM_CRITICAL_SET}
+    declared = set(value)
+    violations: list[str] = []
+    if len(value) != len(declared):
+        duplicates = sorted({member for member in value if value.count(member) > 1})
+        violations.append(f"{key}: duplicate member(s) {duplicates!r}")
+    missing = sorted(expected - declared)
+    extra = sorted(declared - expected)
+    if missing:
+        violations.append(f"{key}: missing frozen meter(s) {missing!r}")
+    if extra:
+        violations.append(f"{key}: unknown/extra meter(s) {extra!r}")
+    return violations
+
+
 def _check_hash_maps(manifest: Mapping[str, object]) -> list[str]:
     """path+hash 系マップの内容検証（設計正本 §3.1。`[UNDERSPEC-CAL-C10]`）。
 
@@ -1118,6 +1150,7 @@ def _check_rng_ledger_unseeded(manifest: Mapping[str, object]) -> tuple[str, ...
 def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     """C0 freeze manifest を dry-run 検証する（書込・secret 生成・freeze event なし）。"""
     missing_required = _check_required_blocking(manifest)
+    missing_required += _check_claim_critical_set(manifest)
     missing_required += _check_checkout_identity(manifest)
     missing_required += _check_hash_maps(manifest)
     missing_required += _check_path_inventory_coverage(manifest)

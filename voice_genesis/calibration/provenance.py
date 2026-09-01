@@ -21,6 +21,7 @@ leakage」と「事後改竄」のみである。外部鍵管理を伴わない�
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 from collections.abc import Collection, Iterable, Mapping, Sequence
@@ -521,6 +522,45 @@ def _verified_holdout_unseal_seq(ledger_entries: Sequence[LedgerEntry]) -> int |
     return None
 
 
+def _verified_split_freeze_commitment(
+    ledger_entries: Sequence[LedgerEntry],
+) -> tuple[str, str] | None:
+    """Return the unique pre-measurement split-freeze commitments, fail closed.
+
+    The ledger is the existing provenance authority boundary.  A valid
+    ``split_frozen`` event must be in a fully valid chain, occur before any render
+    or meter call, and carry both the realized-map hash and the SHA-256 commitment
+    of the runtime split secret.  Multiple/ill-shaped freeze declarations are
+    ambiguous and therefore rejected.
+    """
+    prev_sha = GENESIS_PREV_SHA
+    for expected_seq, entry in enumerate(ledger_entries):
+        if entry.seq != expected_seq or entry.prev_sha != prev_sha:
+            return None
+        if entry.entry_sha != _entry_sha(entry.seq, entry.prev_sha, entry.payload):
+            return None
+        prev_sha = entry.entry_sha
+
+    frozen: tuple[str, str] | None = None
+    for entry in ledger_entries:
+        payload = entry.payload
+        if not isinstance(payload, Mapping):
+            continue
+        kind = payload.get("kind")
+        if kind in ("render", "meter_call") and frozen is None:
+            return None
+        if kind != "split_frozen":
+            continue
+        if frozen is not None:
+            return None
+        realized_hash = payload.get("realized_split_map_hash")
+        seal_commitment = payload.get("seal_commitment")
+        if not _is_sha256_hex(realized_hash) or not _is_sha256_hex(seal_commitment):
+            return None
+        frozen = (realized_hash, seal_commitment)
+    return frozen
+
+
 class Ledger:
     """append-only JSONL 台帳。
 
@@ -751,11 +791,14 @@ class Ledger:
         references.  `unseal_seq` is retained only as an optional expected-sequence
         assertion for compatibility; it can never grant access by itself.
 
-        The protected row set is derived only after the supplied `RealizedSplitMap`
-        has been mechanically recomputed and verified from its split rows and the
-        split secret (`splitter.verify_split`).  A raw caller-provided assignment is
-        therefore not an authority boundary.  `holdout_row_ids` is only an equality
-        assertion against the verified map and cannot shrink the seal.
+        The protected row set is derived only after four independent checks agree:
+        (1) the verification rows contain the complete canonical frozen matrix row-id
+        set, (2) the realized map covers that same closed set, (3) `verify_split`
+        mechanically reproduces the realized map, and (4) a valid pre-measurement
+        `split_frozen` ledger event binds both `realized_sha` and SHA-256(split_secret).
+        Thus neither caller-supplied rows, secret, nor a self-consistent reduced split
+        can shrink the seal.  `holdout_row_ids` is only an equality assertion against
+        the authenticated map.
         """
         verified_unseal_seq = _verified_holdout_unseal_seq(ledger_entries)
         if unseal_seq is not None and unseal_seq != verified_unseal_seq:
@@ -770,6 +813,24 @@ class Ledger:
         ):
             return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
 
+        from voice_genesis.calibration.fixtures.matrix import build_matrix
+
+        canonical_matrix = build_matrix()
+        canonical_by_id = {row.row_id: row for row in canonical_matrix}
+        canonical_row_ids = set(canonical_by_id)
+        verification_row_ids = [row.row_id for row in split_verification_rows]
+        if (
+            len(verification_row_ids) != len(set(verification_row_ids))
+            or set(verification_row_ids) != canonical_row_ids
+            or set(realized_split_map.assignment) != canonical_row_ids
+        ):
+            return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
+        if any(
+            row.family != canonical_by_id[row.row_id].row.family
+            for row in split_verification_rows
+        ):
+            return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
+
         try:
             split_verified = verify_split(
                 split_verification_rows,
@@ -779,6 +840,16 @@ class Ledger:
         except (KeyError, TypeError, ValueError):
             split_verified = False
         if not split_verified:
+            return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
+
+        frozen_split = _verified_split_freeze_commitment(ledger_entries)
+        if frozen_split is None:
+            return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
+        frozen_map_hash, frozen_secret_commitment = frozen_split
+        if (
+            frozen_map_hash != realized_split_map.realized_sha
+            or frozen_secret_commitment != hashlib.sha256(split_secret).hexdigest()
+        ):
             return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
 
         from voice_genesis.calibration.vocab import Split
