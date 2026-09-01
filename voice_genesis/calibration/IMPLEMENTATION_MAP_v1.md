@@ -102,6 +102,51 @@ Codex レビュー 2026-09-01（第 2 巡）採用分。正本改訂は §0 保�
   - M5-SPECTRAL-FLUX 4 = frame {512, 1024} × flux ノルム {L1, L2}
   - F0-PYIN 4 = frame {2048, 4096} × hop {256, 512}（設計正本で確定済み・再掲）
 
+## 2.7 fixture matrix の設計時凍結（Codex レビュー第 5 巡採用。§5.2 件数と厳密一致）
+
+実装は本節の機械的転記とし、行選択の裁量を残さない。
+
+**truth core の因子分解**（軸水準は §5.1 の値。明記なき軸は下記 anchor 水準）:
+
+- F0_CONTROL 12 = F0 4 × SR 3（generator = harmonic pulse train）
+- FORMANT_GT 60 = pole set 5 × bandwidth anchor 3 × 実装 2（cascade / additive）× F0 {C3, G4}
+- TILT_GT 30 = slope 5 × SR 3 × F0 {C3, G4}
+- APERIODICITY_GT 36 = fraction 6 × F0 {C3, G4} × SR 3、bandwise 24 = band 4 × fraction 6
+  （anchor F0=C3・SR 48k）
+- RESONANCE_GT 24 = center 4 × bandwidth 3 × prominence 2
+- TRANSITION_GT 24 = join type 4 × severity 3 × duration class 2
+- IDENTITY_CAUSAL_SWEEP 60 = founder 4 × trait 3 × delta 5
+
+**anchor 水準**: SR 48000 / gain −12 dBFS / duration 1.00 s / noise clean /
+context steady-isolated。family anchor（confound の基点）: F0_CONTROL = C4@48k、
+FORMANT_GT A1 = pole set (500,1900,2600)・bw 100・C3 / A2 = (500,900,2400)・bw 100・G4、
+TILT_GT = slope −12・C3@48k、APERIODICITY = fraction 0.10・C3@48k、
+RESONANCE = center 1000・bw 150・prom 12、TRANSITION = amplitude step・中 severity・長 class、
+IDENTITY A1 = founder 1・trait 1・delta 0 / A2 = founder 3・trait 2・delta 0。
+
+**confound block（決定的レシピ）**: 正準 nuisance 系列 =
+`[gain→−24, gain→−6, dur→0.25, dur→0.50, dur→2.00, noise→40, noise→20, noise→10,
+context→ramp, context→prefix/suffix, context→transition-adjacent]`（11 行、family anchor に
+適用）→ §5.1 の 6 targeted interactions（記載順）→ 第 2 anchor（A2）への同系列、の順に連結し、
+**family の confound 件数 N の先頭 N 件**を採る。ただし family の truth construct を変える軸は
+「適用外」として系列から除外する（APERIODICITY は noise 軸・その関与 interaction を除外、
+TRANSITION は context 軸を除外。§10.1「truth 自体が変わる軸は invariance に混ぜない」準拠）。
+件数検算: F0 24 = 11+6+7、FORMANT 24 = 11+6+7、TILT 12 = 11+1、APER 6 =（noise 除外 8 行系列の）
+先頭 6、RESONANCE 12 = 11+1、TRANSITION 12 =（context 除外 8 行系列）+ 適用可 interaction 4
+= 12、IDENTITY 24 = 11+6+7。
+
+**boundary/negative block（決定的レシピ）**: 正準 boundary 系列 =
+`[F0→G2, F0→C5, SR→16k, SR→96k, gain→−36, gain→−1, dur→0.10, dur→4.00, noise→0dB]`
+（family anchor に適用・適用外軸は除外）+ negative control 系列 =
+`[silence, noise-only, pure-sine（F0_CONTROL 以外）, out-of-band-pole（FORMANT/RESONANCE）,
+too-short, invalid-SR]`。family の件数 N に対し **boundary 系列の先頭 (N−3) 件 + negative
+系列の先頭 3 件**（N=6 の family は boundary 4 + negative 2）。negative には §4.2 両側条件の
+対 positive 指定を付す。件数: F0 12 / FORMANT 12 / TILT 6 / APER 6 / RESONANCE 12 /
+TRANSITION 12 / IDENTITY 12。
+
+本節の変更は memo 改訂としてのみ行い、コード内での暗黙変更を禁止する。C0 freeze 承認時の
+ユーザーレビュー対象。
+
 ## 3. underspec の解決規約
 
 設計正本が数値・グリッドを確定していない箇所（例: family 別 truth×confound の因子直積の
