@@ -144,6 +144,30 @@ too-short, invalid-SR]`。family の件数 N に対し **boundary 系列の先�
 対 positive 指定を付す。件数: F0 12 / FORMANT 12 / TILT 6 / APER 6 / RESONANCE 12 /
 TRANSITION 12 / IDENTITY 12。
 
+**targeted interactions の per-family 実列挙**（規則 = §5.1 記載順の先頭 k 件、
+truth construct を変える軸が関与するものは適用外。第 6 巡レビュー採用）:
+
+- F0_CONTROL / FORMANT_GT / IDENTITY: 全 6 件
+- TILT_GT (k=1): high-F0×low-SR
+- RESONANCE_GT (k=1): high-F0×low-SR
+- TRANSITION_GT (k=4): high-F0×low-SR, high-F0×short-duration, high-F0×low-SNR,
+  low-F0×high-SR（context 軸関与の transition×short-duration と、次順の low-gain×noise を
+  規則により不採用）
+- APERIODICITY_GT (k=0): noise 軸関与 2 件を除いた 4 件は N=6 が nuisance 系列で
+  埋まるため不採用
+
+**control 共有契約**（第 6 巡レビュー採用。N_neg≥10 と split 配分の構造矛盾の解消）:
+
+- §10.1 の最小数 N_neg/N_pos は **instance 数**（logical cell × probe repeat 5）で数える
+- negative control 行は HMAC 配分で home split を持つ（§5.2 の件数会計は不変）が、
+  **sweep truth を運ばない control class**（§4.2 の直交宣言）として全段階（selection の
+  共通 fail filter / holdout gate 5）で評価可とする。leakage 検査（`BLOCKED_LEAKAGE`）は
+  control 行を明示除外し、除外集合と本契約を C0 manifest と台帳に記録する
+- 対 positive control（§4.2 両側条件）= family anchor の truth core 行 2 件を C0 で指定
+  （truth 行としての役割は不変。2 cell × 5 repeat = 10 instances で N_pos を充足）
+- これにより N=6 family（negative 2 cell = 10 instances）でも gate 5 の最小数と
+  selection fail filter を同時充足する
+
 本節の変更は memo 改訂としてのみ行い、コード内での暗黙変更を禁止する。C0 freeze 承認時の
 ユーザーレビュー対象。
 
