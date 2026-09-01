@@ -52,6 +52,38 @@ class CandidateCriteria:
     adjacent_reversal_rate: float | None = None
 
 
+def _has_required_criteria(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
+    """`family` が要求する criteria フィールドが揃っているか（Codex レビュー
+    2026-09-01 P1: `_vector_for()` が全候補に対して無条件に呼ばれており、
+    criteria payload が欠けた候補（例: pyworld 未導入時の D4C 系候補で
+    測定基準がそもそも存在しない）に対して ValueError を送出し、
+    fail-closed/ranking パスに到達する前に選抜全体を壊していた）。"""
+    if family is SelectionFamily.ABSOLUTE:
+        return (
+            criteria.primary_normalized_mae is not None
+            and criteria.signed_bias is not None
+            and criteria.primary_q95_ae is not None
+        )
+    return criteria.kendall_tau is not None and criteria.adjacent_reversal_rate is not None
+
+
+def _ineligibility_reason(
+    criteria: CandidateCriteria, family: SelectionFamily, *, has_criteria: bool
+) -> str | None:
+    """`(candidate_id, reason)` として `SelectionOutcome.ineligible_candidates`
+    に記録する理由文字列。eligible かつ criteria が揃っている候補には `None`
+    を返す（`[UNDERSPEC-CAL]` 設計正本は ineligible 理由の具体的な語彙までは
+    規定しないため、「flagged so」/「criteria payload absent」の 2 値をその
+    まま機械可読な定数へ落とした最も単純な選択）。criteria 欠落を flagged
+    ineligible より優先して報告する（欠落の方がより具体的な診断情報のため）。
+    """
+    if not has_criteria:
+        return "criteria_payload_absent"
+    if not criteria.eligible:
+        return "flagged_ineligible"
+    return None
+
+
 def _vector_for(
     criteria: CandidateCriteria, family: SelectionFamily, *, rounded: bool
 ) -> tuple[float | int | str, ...]:
@@ -99,6 +131,10 @@ class SelectionOutcome:
     raw_vectors: Mapping[str, tuple[float | int | str, ...]]
     rounded_vectors: Mapping[str, tuple[float | int | str, ...]]
     outcome: str
+    #: eligible ではなかった候補の `(candidate_id, reason)`（Codex レビュー
+    #: 2026-09-01 P1）。reason は `"criteria_payload_absent"` または
+    #: `"flagged_ineligible"` のいずれか（`_ineligibility_reason` 参照）。
+    ineligible_candidates: tuple[tuple[str, str], ...] = ()
 
 
 def _check_unique_candidate_ids(candidates: Sequence[CandidateCriteria]) -> None:
@@ -124,19 +160,45 @@ def select(
 
     比較は **丸め後の vector** で行う（有効数字 3 桁 / 0.001 刻み / complexity は
     整数のまま）。丸め前後の vector を両方とも `SelectionOutcome` に記録する
-    （`SELECTION_FROZEN` event 用）。eligible な候補が 1 件もなければ
-    `SELECTION_FAILED_CLOSED`（候補選択なし・meter ceiling は上限
-    NOT_EVALUABLE として呼び出し側が扱う）。candidate_id が重複する候補が
-    含まれる場合は `raw_vectors`/`rounded_vectors` の dict キーが黙って
-    上書きされるのを防ぐため `ValueError` を送出する（Codex レビュー
-    2026-09-01 採用）。
+    （`SELECTION_FROZEN` event 用）。ranking vector は **criteria payload が
+    揃っている候補**についてのみ構築する（Codex レビュー 2026-09-01 P1:
+    従来は `eligible` フラグに関わらず全候補に対して無条件に vector を構築
+    しており、criteria payload がそもそも欠けた候補（例: pyworld 未導入時の
+    D4C 系候補）で `ValueError` を送出し、fail-closed/ranking パスに到達する
+    前に選抜全体を壊していた）。候補は次のいずれかに該当すると ineligible
+    として扱う（`_ineligibility_reason` 参照）: (1) `criteria payload absent`
+    — family が要求する criteria フィールドが欠けている、(2) `flagged so`
+    — `eligible=False` と明示されている（criteria 自体は揃っていてもよく、
+    この場合は監査目的で vector を構築する）。ineligible な候補は
+    `(candidate_id, reason)` として `SelectionOutcome.ineligible_candidates`
+    に記録し、ranking プールからは除外する。
+
+    eligible な候補が 1 件もなければ `SELECTION_FAILED_CLOSED`（候補選択
+    なし・meter ceiling は上限 NOT_EVALUABLE として呼び出し側が扱う）。
+    candidate_id が重複する候補が含まれる場合は `raw_vectors`/
+    `rounded_vectors` の dict キーが黙って上書きされるのを防ぐため
+    `ValueError` を送出する（Codex レビュー 2026-09-01 採用）。
     """
     _check_unique_candidate_ids(candidates)
-    eligible = [c for c in candidates if c.eligible]
-    raw_vectors = {c.candidate_id: _vector_for(c, family, rounded=False) for c in candidates}
-    rounded_vectors = {
-        c.candidate_id: _vector_for(c, family, rounded=True) for c in candidates
-    }
+
+    raw_vectors: dict[str, tuple[float | int | str, ...]] = {}
+    rounded_vectors: dict[str, tuple[float | int | str, ...]] = {}
+    eligible: list[CandidateCriteria] = []
+    ineligible: list[tuple[str, str]] = []
+
+    for c in candidates:
+        has_criteria = _has_required_criteria(c, family)
+        if has_criteria:
+            # criteria が揃っている限り、eligible フラグに関わらず vector を
+            # 構築する（SELECTION_FROZEN event の全候補監査要件。ineligible
+            # だが criteria を持つ候補も vector 自体は記録対象）。
+            raw_vectors[c.candidate_id] = _vector_for(c, family, rounded=False)
+            rounded_vectors[c.candidate_id] = _vector_for(c, family, rounded=True)
+        reason = _ineligibility_reason(c, family, has_criteria=has_criteria)
+        if reason is None:
+            eligible.append(c)
+        else:
+            ineligible.append((c.candidate_id, reason))
 
     if not eligible:
         return SelectionOutcome(
@@ -146,6 +208,7 @@ def select(
             raw_vectors=raw_vectors,
             rounded_vectors=rounded_vectors,
             outcome="SELECTION_FAILED_CLOSED",
+            ineligible_candidates=tuple(ineligible),
         )
 
     ranked = sorted(eligible, key=lambda c: rounded_vectors[c.candidate_id])
@@ -157,6 +220,7 @@ def select(
         raw_vectors=raw_vectors,
         rounded_vectors=rounded_vectors,
         outcome="SELECTED",
+        ineligible_candidates=tuple(ineligible),
     )
 
 

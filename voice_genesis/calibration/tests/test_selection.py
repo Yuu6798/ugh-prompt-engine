@@ -119,10 +119,77 @@ def test_selection_directional_family_uses_kendall_tau_and_reversal_rate() -> No
     assert outcome.selected_candidate_id == "good"
 
 
-def test_selection_missing_required_field_raises() -> None:
+def test_selection_missing_required_field_is_ineligible_not_a_raise() -> None:
+    """[Codex レビュー 2026-09-01 P1] regression: `eligible=True`（既定値）
+    でも criteria payload そのものが欠けている候補は、旧実装では
+    `_vector_for()` が無条件に呼ばれ `ValueError` を送出していた。修正後は
+    `criteria_payload_absent` として ineligible 扱いになり、
+    fail-closed（`SELECTION_FAILED_CLOSED`）へ正常に到達する。"""
     incomplete = CandidateCriteria(candidate_id="x")
-    with pytest.raises(ValueError):
-        select([incomplete], SelectionFamily.ABSOLUTE)
+    outcome = select([incomplete], SelectionFamily.ABSOLUTE)
+    assert outcome.outcome == "SELECTION_FAILED_CLOSED"
+    assert outcome.selected_candidate_id is None
+    assert outcome.ineligible_candidates == (("x", "criteria_payload_absent"),)
+    # criteria が欠けているため vector は構築されない。
+    assert "x" not in outcome.raw_vectors
+    assert "x" not in outcome.rounded_vectors
+
+
+def test_selection_mix_of_eligible_and_criteria_absent_ineligible_succeeds() -> None:
+    """[Codex レビュー 2026-09-01 P1] finding #2 regression: eligible な候補
+    2 件 + criteria payload が丸ごと欠けた ineligible 候補 1 件（D4C without
+    pyworld のような「測定基準そのものが無い」ケースを模す）を混在させても、
+    `_vector_for()` が ineligible 候補で ValueError を送出することなく
+    eligible な 2 件のみで選抜が成立し、ineligible 候補は理由付きで
+    `SelectionOutcome.ineligible_candidates` に記録されること。"""
+    a = CandidateCriteria(
+        candidate_id="cand-A", primary_normalized_mae=0.1, signed_bias=0.0,
+        primary_q95_ae=0.1,
+    )
+    b = CandidateCriteria(
+        candidate_id="cand-B", primary_normalized_mae=0.5, signed_bias=0.0,
+        primary_q95_ae=0.5,
+    )
+    no_criteria = CandidateCriteria(candidate_id="d4c-no-pyworld")
+    outcome = select([a, b, no_criteria], SelectionFamily.ABSOLUTE)
+    assert outcome.outcome == "SELECTED"
+    assert outcome.selected_candidate_id == "cand-A"
+    assert set(outcome.ranked_candidate_ids) == {"cand-A", "cand-B"}
+    assert outcome.ineligible_candidates == (("d4c-no-pyworld", "criteria_payload_absent"),)
+    assert "d4c-no-pyworld" not in outcome.raw_vectors
+
+
+def test_selection_all_ineligible_without_criteria_is_selection_failed_closed() -> None:
+    """全候補が criteria payload absent の ineligible → `SELECTION_FAILED_CLOSED`
+    （raise ではなく fail-closed 経路に正常到達すること）。"""
+    a = CandidateCriteria(candidate_id="no-criteria-a")
+    b = CandidateCriteria(candidate_id="no-criteria-b")
+    outcome = select([a, b], SelectionFamily.ABSOLUTE)
+    assert outcome.outcome == "SELECTION_FAILED_CLOSED"
+    assert outcome.selected_candidate_id is None
+    assert set(outcome.ineligible_candidates) == {
+        ("no-criteria-a", "criteria_payload_absent"),
+        ("no-criteria-b", "criteria_payload_absent"),
+    }
+
+
+def test_selection_flagged_ineligible_with_criteria_still_builds_vector() -> None:
+    """`eligible=False` だが criteria 自体は揃っている候補は、引き続き
+    raw/rounded vector に記録される（SELECTION_FROZEN 全候補監査要件は
+    保たれる）一方、ineligible として reason `"flagged_ineligible"` で
+    記録される。"""
+    a = CandidateCriteria(
+        candidate_id="cand-A", primary_normalized_mae=0.1, signed_bias=0.0,
+        primary_q95_ae=0.1,
+    )
+    flagged = CandidateCriteria(
+        candidate_id="cand-B", eligible=False, primary_normalized_mae=0.9,
+        signed_bias=0.9, primary_q95_ae=0.9,
+    )
+    outcome = select([a, flagged], SelectionFamily.ABSOLUTE)
+    assert outcome.outcome == "SELECTED"
+    assert outcome.ineligible_candidates == (("cand-B", "flagged_ineligible"),)
+    assert "cand-B" in outcome.raw_vectors and "cand-B" in outcome.rounded_vectors
 
 
 # ---------------------------------------------------------------------------

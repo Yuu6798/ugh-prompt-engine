@@ -9,6 +9,7 @@ from pathlib import Path
 
 from voice_genesis.calibration import c0_validate, streams, vocab
 from voice_genesis.calibration.candidates import registry as candidate_registry
+from voice_genesis.calibration.fixtures import axes as fixture_axes
 
 _MEASUREMENT_DIRECTORY_STATUS = "ABSENT:legacy_path=voice_genesis/harness/measure_v3.py"
 
@@ -73,6 +74,31 @@ def _full_path_inventory_maps() -> dict[str, dict[str, str]]:
     return out
 
 
+def _full_meter_specs() -> dict[str, dict[str, str]]:
+    """凍結 registry の全 meter family に対し、`METER_SPEC_REQUIRED_KEYS`
+    を機械的に完全充足するエントリを生成する（設計正本 §3.1「frozen design
+    全項目」。`[UNDERSPEC-CAL-C17]`）。"""
+    return {
+        meter_id: {
+            key: f"{meter_id.lower()}_{key}" for key in c0_validate.METER_SPEC_REQUIRED_KEYS
+        }
+        for meter_id in _ALL_METER_IDS
+    }
+
+
+def _full_fixture_spec() -> dict[str, dict[str, str]]:
+    """`fixtures.axes.FixtureFamily` の全 7 family に対し、
+    `FIXTURE_SPEC_REQUIRED_KEYS` を機械的に完全充足するエントリを生成する
+    （`[UNDERSPEC-CAL-C17]`）。"""
+    return {
+        family.value: {
+            key: f"{family.value.lower()}_{key}"
+            for key in c0_validate.FIXTURE_SPEC_REQUIRED_KEYS
+        }
+        for family in fixture_axes.FixtureFamily
+    }
+
+
 def _full_rng_ledger() -> list[dict[str, object]]:
     """C0 closed set（`streams.expected_rng_stream_names()`）の全 9 stream を
     過不足なく含む `rng_ledger`（Codex レビュー 2026-09-01 P1 finding #2 の
@@ -110,14 +136,29 @@ def _complete_manifest() -> dict[str, object]:
         },
         "frozen_design": {
             "claim_critical_set": ["M3_FORMANTS", "M2_SPECTRAL_TILT", "M2_APERIODICITY"],
-            "meter_specs": {
-                meter_id: {"construct": f"{meter_id.lower()}_construct"}
-                for meter_id in _ALL_METER_IDS
+            "meter_specs": _full_meter_specs(),
+            "fixture_spec": _full_fixture_spec(),
+            "split_spec": {
+                "ratios": "50/25/25",
+                "seed_scheme": "hkdf",
+                "seal_commitment_rule": "hmac-sha256 pre-commit before split reveal",
             },
-            "fixture_spec": {"family": "F0_CONTROL"},
-            "split_spec": {"split": "50/25/25", "seed": "hkdf"},
-            "selection_rule": {"tie_rule": "candidate_id lexical"},
-            "provenance_spec": {"schema": "vgcal-provenance/1"},
+            "selection_spec": {
+                "selection_rule": "lexicographic ABSOLUTE>DIRECTIONAL ceiling then per-family vector",
+                "tie_rule": "candidate_id lexical",
+                "candidate_exhaustion_rule": "SELECTION_FAILED_CLOSED when eligible pool empty",
+                "holdout_fail_outcome": "meter ceiling capped at DIAGNOSTIC_ONLY",
+            },
+            "provenance_spec": {
+                "schema_version": "vgcal-provenance/1",
+                "artifact_layout": "campaign_id/family/split/row_id.wav + manifest.json",
+            },
+            "cost_caps": {
+                "compute": "single-node CPU, no GPU budget",
+                "storage": "456 logical cells * repeats <= 50GB",
+                "budget": "no paid API calls (fully local pipeline)",
+            },
+            "stop_rules": ["ABORT_ON_UNSEEDED_RNG", "ABORT_ON_HASH_MISMATCH"],
         },
         "independence_ledger": _full_independence_ledger(),
         "rng_ledger": _full_rng_ledger(),
@@ -312,8 +353,10 @@ def test_hollow_empty_container_manifest_is_blocked() -> None:
             "meter_specs": {},
             "fixture_spec": {},
             "split_spec": {},
-            "selection_rule": {},
+            "selection_spec": {},
             "provenance_spec": {},
+            "cost_caps": {},
+            "stop_rules": [],
         },
         "independence_ledger": {},
         "rng_ledger": [],
@@ -521,6 +564,105 @@ def test_meter_specs_missing_one_meter_family_is_listed() -> None:
     assert "frozen_design.meter_specs.M6_IDENTITY" in result.missing_required_keys
     # 他の meter は欠けていないので余計な entry は列挙されない
     assert sum(1 for k in result.missing_required_keys if "meter_specs." in k) == 1
+
+
+# ---------------------------------------------------------------------------
+# frozen-design セクションの完全なネスト鍵集合検査（Codex レビュー
+# 2026-09-01 P1 finding: `fixture_spec={"family": "F0_CONTROL"}` のような
+# hollow な placeholder が非空チェックのみでは通過してしまっていた）。
+# `[UNDERSPEC-CAL-C17]`。
+# ---------------------------------------------------------------------------
+
+
+def test_meter_spec_entry_missing_one_nested_key_is_listed() -> None:
+    """`frozen_design.meter_specs.<METER_ID>` からネスト鍵を 1 つ落とすと
+    `frozen_design.meter_specs.<METER_ID>.<key>` として個別に BLOCK される。
+    """
+    manifest = _complete_manifest()
+    del manifest["frozen_design"]["meter_specs"]["M6_IDENTITY"]["baseline"]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.meter_specs.M6_IDENTITY.baseline" in result.missing_required_keys
+
+
+def test_fixture_spec_placeholder_from_finding_is_blocked() -> None:
+    """本 finding が直接指摘した hollow placeholder
+    (`fixture_spec={"family": "F0_CONTROL"}`) が確実に BLOCK されることを
+    確認する回帰テスト（コードレビュー原文の再現ケース）。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["fixture_spec"] = {"family": "F0_CONTROL"}
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    # "family" というキー自体は fixture_spec の必須ネスト鍵語彙に無いため、
+    # 全 7 family が丸ごと欠落として列挙される。
+    for family in fixture_axes.FixtureFamily:
+        assert f"frozen_design.fixture_spec.{family.value}" in result.missing_required_keys
+
+
+def test_fixture_spec_missing_one_family_is_listed() -> None:
+    """`frozen_design.fixture_spec` の網羅性検査: `meter_specs` と対をなす
+    fixture family 側の欠落検出。"""
+    manifest = _complete_manifest()
+    del manifest["frozen_design"]["fixture_spec"]["RESONANCE_GT"]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.fixture_spec.RESONANCE_GT" in result.missing_required_keys
+    assert sum(1 for k in result.missing_required_keys if "fixture_spec." in k) == 1
+
+
+def test_fixture_spec_entry_missing_one_nested_key_is_listed() -> None:
+    manifest = _complete_manifest()
+    del manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["generator_hash"]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.fixture_spec.FORMANT_GT.generator_hash" in result.missing_required_keys
+
+
+def test_split_spec_missing_one_nested_key_is_listed() -> None:
+    manifest = _complete_manifest()
+    del manifest["frozen_design"]["split_spec"]["seal_commitment_rule"]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.split_spec.seal_commitment_rule" in result.missing_required_keys
+
+
+def test_selection_spec_missing_one_nested_key_is_listed() -> None:
+    manifest = _complete_manifest()
+    del manifest["frozen_design"]["selection_spec"]["holdout_fail_outcome"]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert (
+        "frozen_design.selection_spec.holdout_fail_outcome" in result.missing_required_keys
+    )
+
+
+def test_provenance_spec_missing_one_nested_key_is_listed() -> None:
+    manifest = _complete_manifest()
+    del manifest["frozen_design"]["provenance_spec"]["artifact_layout"]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.provenance_spec.artifact_layout" in result.missing_required_keys
+
+
+def test_cost_caps_missing_one_nested_key_is_listed() -> None:
+    manifest = _complete_manifest()
+    del manifest["frozen_design"]["cost_caps"]["storage"]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.cost_caps.storage" in result.missing_required_keys
+
+
+def test_nested_section_entry_that_is_not_a_mapping_is_blocked() -> None:
+    """`frozen_design.meter_specs.<METER_ID>` / `fixture_spec.<FAMILY>` が
+    mapping ではない（例: 文字列）場合も BLOCK する。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["meter_specs"]["M6_IDENTITY"] = "not-a-mapping"
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "frozen_design.meter_specs.M6_IDENTITY" in k and "must be a mapping" in k
+        for k in result.missing_required_keys
+    )
 
 
 def test_independence_ledger_invalid_tier_value_blocks() -> None:

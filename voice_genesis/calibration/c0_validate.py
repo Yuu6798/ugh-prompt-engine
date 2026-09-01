@@ -36,7 +36,32 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
   - `frozen_design.meter_specs` は `candidates.registry.ALL_CANDIDATES` が
     定義する全 meter family をカバーする（欠落 meter は
     `frozen_design.meter_specs.<METER_ID>` として個別に列挙する。
-    `[UNDERSPEC-CAL-C11]`）。
+    `[UNDERSPEC-CAL-C11]`）。加えて、各 meter エントリは
+    `METER_SPEC_REQUIRED_KEYS`（construct/unit/domain/algorithm_family/
+    parameter_grid/baseline/fallback/missing_failure_rule）を完全に持つ
+    ことを要求する（欠落ネスト鍵は `frozen_design.meter_specs.<METER_ID>.
+    <key>` として個別列挙。`[UNDERSPEC-CAL-C17]`）。
+  - `frozen_design.fixture_spec` は `fixtures.axes.FixtureFamily` の全 7
+    family をカバーし（欠落 family は `frozen_design.fixture_spec.<FAMILY>`
+    として個別列挙）、各 family エントリは `FIXTURE_SPEC_REQUIRED_KEYS`
+    （generator_version/generator_hash/known_truth_field/confound_axes/
+    boundary_probes/negative_controls）を完全に持つことを要求する
+    （`[UNDERSPEC-CAL-C17]`。Codex レビュー 2026-09-01 P1: 従来
+    `fixture_spec={"family": "F0_CONTROL"}` のような hollow な
+    placeholder manifest が素通りしていた finding の直接該当箇所）。
+  - campaign-level セクション `frozen_design.split_spec` /
+    `selection_spec` / `provenance_spec` / `cost_caps` はそれぞれ
+    `SPLIT_SPEC_REQUIRED_KEYS`（ratios/seed_scheme/seal_commitment_rule）・
+    `SELECTION_SPEC_REQUIRED_KEYS`（selection_rule/tie_rule/
+    candidate_exhaustion_rule/holdout_fail_outcome）・
+    `PROVENANCE_SPEC_REQUIRED_KEYS`（schema_version/artifact_layout）・
+    `COST_CAPS_REQUIRED_KEYS`（compute/storage/budget）を完全に持つことを
+    要求する（`[UNDERSPEC-CAL-C17]`）。`frozen_design.stop_rules` は非空値
+    のみを要求する（設計正本はネスト構造を規定しない）。旧
+    `frozen_design.selection_rule`（単一 tie_rule のみを保持していた）は
+    `selection_spec` へ改名・拡張した（§3.1「selection rule・tie rule・
+    candidate exhaustion rule・holdout FAIL 後の固定 outcome」の 4 項目を
+    1 セクションへ集約する方が他の frozen-design 項目と一貫するため）。
   - `independence_ledger` は非空 mapping であり、各エントリの値が
     `vocab.IndependenceTier` の閉語彙に属する文字列であることを検査する。
     加えて、ledger のキー集合は `candidates.registry.ALL_CANDIDATES` が定義
@@ -92,6 +117,7 @@ from pathlib import Path
 
 from . import streams, vocab
 from .candidates import registry as candidate_registry
+from .fixtures import axes as fixture_axes
 
 # ---------------------------------------------------------------------------
 # 二層キー語彙（設計正本 §3.1 / §3.2 の機械可読な写像）
@@ -120,11 +146,69 @@ REQUIRED_BLOCKING_KEYS: tuple[str, ...] = (
     "frozen_design.meter_specs",
     "frozen_design.fixture_spec",
     "frozen_design.split_spec",
-    "frozen_design.selection_rule",
+    "frozen_design.selection_spec",
     "frozen_design.provenance_spec",
+    "frozen_design.cost_caps",
+    "frozen_design.stop_rules",
     "independence_ledger",
     "rng_ledger",
 )
+
+#: `frozen_design.meter_specs.<METER_ID>` の各エントリが持つべき必須ネスト
+#: キー（設計正本 §3.1「meter 別 construct/unit/domain/algorithm family/
+#: 有限 parameter grid/baseline/fallback/missing・failure rule」。
+#: `[UNDERSPEC-CAL-C17]`。Codex レビュー 2026-09-01 P1: 従来は
+#: `frozen_design.*` を非空チェックのみで通過させており、
+#: `meter_specs={meter_id: {"construct": "..."}}` のような hollow な
+#: placeholder エントリでも REQUIRED_BLOCKING を通過してしまっていた）。
+METER_SPEC_REQUIRED_KEYS: tuple[str, ...] = (
+    "construct",
+    "unit",
+    "domain",
+    "algorithm_family",
+    "parameter_grid",
+    "baseline",
+    "fallback",
+    "missing_failure_rule",
+)
+
+#: `frozen_design.fixture_spec.<FAMILY>` の各エントリが持つべき必須ネスト
+#: キー（設計正本 §3.1「fixture family・generator version/hash・
+#: known-truth field・confound 軸・boundary probes・negative controls」。
+#: `[UNDERSPEC-CAL-C17]`）。
+FIXTURE_SPEC_REQUIRED_KEYS: tuple[str, ...] = (
+    "generator_version",
+    "generator_hash",
+    "known_truth_field",
+    "confound_axes",
+    "boundary_probes",
+    "negative_controls",
+)
+
+#: `frozen_design.split_spec` の必須ネストキー（設計正本 §3.1「split・
+#: seed・seal」。`[UNDERSPEC-CAL-C17]`）。
+SPLIT_SPEC_REQUIRED_KEYS: tuple[str, ...] = ("ratios", "seed_scheme", "seal_commitment_rule")
+
+#: `frozen_design.selection_spec` の必須ネストキー（設計正本 §3.1
+#: 「selection rule・tie rule・candidate exhaustion rule・holdout FAIL
+#: 後の固定 outcome」。`[UNDERSPEC-CAL-C17]` 設計正本は selection rule
+#: 本体を独立キーとして列挙する記法までは規定しないため、他の frozen-design
+#: 項目と一貫させ `selection_spec` 配下へネストした）。
+SELECTION_SPEC_REQUIRED_KEYS: tuple[str, ...] = (
+    "selection_rule",
+    "tie_rule",
+    "candidate_exhaustion_rule",
+    "holdout_fail_outcome",
+)
+
+#: `frozen_design.provenance_spec` の必須ネストキー（設計正本 §3.1
+#: 「provenance schema・artifact layout」。`[UNDERSPEC-CAL-C17]`）。
+PROVENANCE_SPEC_REQUIRED_KEYS: tuple[str, ...] = ("schema_version", "artifact_layout")
+
+#: `frozen_design.cost_caps` の必須ネストキー（設計正本 §3.1「cost cap」。
+#: `[UNDERSPEC-CAL-C17]` 設計正本は cost cap の内訳次元までは規定しないため、
+#: 最も基本的な 3 次元 compute/storage/budget に固定した）。
+COST_CAPS_REQUIRED_KEYS: tuple[str, ...] = ("compute", "storage", "budget")
 
 #: path+hash 系マップ（設計正本 §3.1: 「候補 meter・generator・schema・test の
 #: 全 path + SHA-256」）。各マップは `path -> sha256_hex` の mapping。
@@ -466,6 +550,121 @@ def _check_meter_specs_coverage(manifest: Mapping[str, object]) -> list[str]:
     return [f"frozen_design.meter_specs.{meter_id}" for meter_id in missing_meters]
 
 
+def _missing_nested_keys(
+    entry: Mapping[str, object], required_keys: tuple[str, ...]
+) -> list[str]:
+    """`entry` から `required_keys` のうち欠落・hollow なキー名のみを返す
+    （`_is_hollow` を再利用。Codex レビュー 2026-09-01 P1: 空コンテナ・空
+    文字列の placeholder value は「未記録」と同義として missing 扱いにする）。
+    """
+    return [key for key in required_keys if key not in entry or _is_hollow(entry.get(key))]
+
+
+def _check_meter_spec_nested_keys(manifest: Mapping[str, object]) -> list[str]:
+    """`frozen_design.meter_specs.<METER_ID>` の各エントリが `METER_SPEC_
+    REQUIRED_KEYS` を完全に持つかを検査する（設計正本 §3.1「meter 別
+    construct/unit/domain/algorithm family/有限 parameter grid/baseline/
+    fallback/missing・failure rule」。`[UNDERSPEC-CAL-C17]`。Codex レビュー
+    2026-09-01 P1: `meter_specs={meter_id: {"construct": "..."}}` のような
+    hollow な placeholder エントリは、従来は `_check_meter_specs_coverage`
+    の「meter family キーが存在するか」チェックのみを通過し、それ以上の
+    内容検証を受けていなかった）。
+
+    存在しない meter_id のエントリ自体は `_check_meter_specs_coverage` が
+    別途捕捉するため、ここでは manifest に実際に供給されているエントリの
+    ネスト鍵不備のみを検出する（二重報告回避）。
+    """
+    found, meter_specs = _resolve(manifest, "frozen_design.meter_specs")
+    if not found or _is_hollow(meter_specs) or not isinstance(meter_specs, Mapping):
+        return []  # 欠落/非 mapping は _check_required_blocking 側で既に捕捉
+    violations: list[str] = []
+    for meter_id in sorted(k for k in meter_specs.keys() if isinstance(k, str)):
+        entry = meter_specs[meter_id]
+        if not isinstance(entry, Mapping):
+            violations.append(
+                f"frozen_design.meter_specs.{meter_id} (entry must be a mapping)"
+            )
+            continue
+        violations += [
+            f"frozen_design.meter_specs.{meter_id}.{key}"
+            for key in _missing_nested_keys(entry, METER_SPEC_REQUIRED_KEYS)
+        ]
+    return violations
+
+
+def _required_fixture_family_ids() -> frozenset[str]:
+    """`fixtures.axes.FixtureFamily`（設計正本 §4.2 の 7 fixture family）の
+    値集合。"""
+    return frozenset(f.value for f in fixture_axes.FixtureFamily)
+
+
+def _check_fixture_spec_coverage(manifest: Mapping[str, object]) -> list[str]:
+    """`frozen_design.fixture_spec` が `fixtures.axes.FixtureFamily` の全 7
+    family をカバーするかを検査する（`_check_meter_specs_coverage` と対をなす
+    fixture 側の網羅性検査。`[UNDERSPEC-CAL-C17]`）。欠落 family を個別に
+    列挙する。
+    """
+    found, fixture_spec = _resolve(manifest, "frozen_design.fixture_spec")
+    if not found or _is_hollow(fixture_spec) or not isinstance(fixture_spec, Mapping):
+        return []  # 欠落/非 mapping は _check_required_blocking 側で既に捕捉
+    missing_families = sorted(_required_fixture_family_ids() - set(fixture_spec.keys()))
+    return [f"frozen_design.fixture_spec.{family_id}" for family_id in missing_families]
+
+
+def _check_fixture_spec_nested_keys(manifest: Mapping[str, object]) -> list[str]:
+    """`frozen_design.fixture_spec.<FAMILY>` の各エントリが `FIXTURE_SPEC_
+    REQUIRED_KEYS` を完全に持つかを検査する（設計正本 §3.1「fixture family・
+    generator version/hash・known-truth field・confound 軸・boundary
+    probes・negative controls」。`[UNDERSPEC-CAL-C17]`。Codex レビュー
+    2026-09-01 P1: `fixture_spec={"family": "F0_CONTROL"}` のような hollow な
+    placeholder manifest が REQUIRED_BLOCKING を素通りしていた本 finding の
+    直接の再現ケース）。存在しない family のエントリ自体は
+    `_check_fixture_spec_coverage` が別途捕捉する。
+    """
+    found, fixture_spec = _resolve(manifest, "frozen_design.fixture_spec")
+    if not found or _is_hollow(fixture_spec) or not isinstance(fixture_spec, Mapping):
+        return []  # 欠落/非 mapping は _check_required_blocking 側で既に捕捉
+    violations: list[str] = []
+    for family_id in sorted(k for k in fixture_spec.keys() if isinstance(k, str)):
+        entry = fixture_spec[family_id]
+        if not isinstance(entry, Mapping):
+            violations.append(
+                f"frozen_design.fixture_spec.{family_id} (entry must be a mapping)"
+            )
+            continue
+        violations += [
+            f"frozen_design.fixture_spec.{family_id}.{key}"
+            for key in _missing_nested_keys(entry, FIXTURE_SPEC_REQUIRED_KEYS)
+        ]
+    return violations
+
+
+def _check_campaign_section_nested_keys(manifest: Mapping[str, object]) -> list[str]:
+    """campaign-level frozen-design セクション（`split_spec` /
+    `selection_spec` / `provenance_spec` / `cost_caps`）が、それぞれの必須
+    ネストキーを完全に持つかを検査する（設計正本 §3.1「split・seed・seal、
+    selection rule・tie rule・candidate exhaustion rule・holdout FAIL 後の
+    固定 outcome、provenance schema・artifact layout・cost cap」。
+    `[UNDERSPEC-CAL-C17]`）。`stop_rules` はネスト構造を設計正本が規定しない
+    ため、本関数の対象外（`REQUIRED_BLOCKING_KEYS` 側の非空チェックのみ）。
+    """
+    violations: list[str] = []
+    sections: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("frozen_design.split_spec", SPLIT_SPEC_REQUIRED_KEYS),
+        ("frozen_design.selection_spec", SELECTION_SPEC_REQUIRED_KEYS),
+        ("frozen_design.provenance_spec", PROVENANCE_SPEC_REQUIRED_KEYS),
+        ("frozen_design.cost_caps", COST_CAPS_REQUIRED_KEYS),
+    )
+    for section_path, required_keys in sections:
+        found, section = _resolve(manifest, section_path)
+        if not found or _is_hollow(section) or not isinstance(section, Mapping):
+            continue  # 欠落/非 mapping は _check_required_blocking 側で既に捕捉
+        violations += [
+            f"{section_path}.{key}" for key in _missing_nested_keys(section, required_keys)
+        ]
+    return violations
+
+
 def _check_independence_ledger(manifest: Mapping[str, object]) -> list[str]:
     """`independence_ledger` のエントリ形状検査（設計正本 §4。`[UNDERSPEC-CAL-C12]`）。
 
@@ -696,6 +895,10 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     missing_required += _check_hash_map_category_uniqueness(manifest)
     missing_required += _check_hash_content_match(manifest)
     missing_required += _check_meter_specs_coverage(manifest)
+    missing_required += _check_meter_spec_nested_keys(manifest)
+    missing_required += _check_fixture_spec_coverage(manifest)
+    missing_required += _check_fixture_spec_nested_keys(manifest)
+    missing_required += _check_campaign_section_nested_keys(manifest)
     missing_required += _check_independence_ledger(manifest)
     missing_required += _check_rng_ledger_shape(manifest)
     missing_required += _check_rng_ledger_closed_set(manifest)

@@ -217,6 +217,56 @@ def test_f0_control_fft_peak_near_declared_f0() -> None:
 
 
 # ---------------------------------------------------------------------------
+# declared gain は context 付加後の全体波形に適用される
+# (Codex レビュー 2026-09-01 P1: fixtures/generators/common.py:153)
+# ---------------------------------------------------------------------------
+
+
+def test_context_segment_peak_matches_declared_gain_voiced_prefix() -> None:
+    """-24dBFS row + `100ms-voiced-prefix/suffix` context: prefix/suffix
+    segment の実現 peak が declared gain レベル（量子化許容誤差内）に一致する
+    こと。修正前は `common.finalize()` が core 単体にのみ gain を適用してから
+    固定振幅 (peak 0.5) の context トーンを追加していたため、-24dBFS row でも
+    context 区間は常に -6dBFS 相当（`20*log10(0.5)`）に固定されていた。
+    """
+    row = _f0_row(f0_hz=261.626, duration_s=0.3, gain_dbfs=-24.0, context="100ms-voiced-prefix/suffix")
+    pcm = f0_control.render(row, _rng())
+    x = pcm.astype(np.float64) / 32767.0
+
+    n_prefix = int(round(0.100 * row.sr_hz))
+    prefix = x[:n_prefix]
+    suffix = x[-n_prefix:]
+    core = x[n_prefix:-n_prefix]
+
+    target_amp = 10.0 ** (row.gain_dbfs / 20.0)
+    # PCM int16 量子化ステップ (1/32767) の数ステップ分を許容誤差とする。
+    quant_tol = 4.0 / 32767.0
+
+    assert abs(float(np.max(np.abs(prefix))) - target_amp) <= quant_tol
+    assert abs(float(np.max(np.abs(suffix))) - target_amp) <= quant_tol
+    assert abs(float(np.max(np.abs(core))) - target_amp) <= quant_tol
+
+
+def test_context_segment_peak_matches_declared_gain_transition_adjacent() -> None:
+    """-24dBFS row + `transition-adjacent` context: 連結された adjacent tone
+    の peak も declared gain レベルに一致すること（voiced-prefix/suffix と
+    同型の回帰）。"""
+    row = _f0_row(f0_hz=261.626, duration_s=0.3, gain_dbfs=-24.0, context="transition-adjacent")
+    pcm = f0_control.render(row, _rng())
+    x = pcm.astype(np.float64) / 32767.0
+
+    n_core = int(round(0.3 * row.sr_hz))
+    core = x[:n_core]
+    adjacent = x[n_core:]
+
+    target_amp = 10.0 ** (row.gain_dbfs / 20.0)
+    quant_tol = 4.0 / 32767.0
+
+    assert abs(float(np.max(np.abs(core))) - target_amp) <= quant_tol
+    assert abs(float(np.max(np.abs(adjacent))) - target_amp) <= quant_tol
+
+
+# ---------------------------------------------------------------------------
 # 独立オラクル: TILT_GT -> fitted log-magnitude slope
 # ---------------------------------------------------------------------------
 
@@ -528,11 +578,21 @@ def test_resonance_transition_adjacent_whole_pcm_measurement_needs_steady_restri
     """`transition-adjacent` の adjacent tone（`f0_hz*1.5` の高調波）は declared
     `center_hz` の peak 窓に紛れ込みうるため、最終 PCM 全体（連結された
     adjacent tone を含む）をそのまま素朴に測定すると、steady 区間に限定した
-    測定より明確に外れることを確認する（module docstring「"steady" core
-    区間への測定窓の限定」が経験的に必要であることの記録・回帰防止）。
-    steady 区間限定測定 (`test_resonance_realized_prominence_matches_declared_
-    with_context_confound` 側)は許容誤差内に収まる一方、素朴な全体測定は
-    その差が測定誤差近似 (1.5dB) の枠を明確に超えて悪化しうることを示す。
+    測定より外れることを確認する（module docstring「"steady" core 区間への
+    測定窓の限定」が経験的に必要であることの記録・回帰防止）。
+
+    [Codex レビュー 2026-09-01 P1 (fixtures/generators/common.py:153)]
+    以前は `common.finalize()` が declared gain を core 単体にのみ適用してから
+    context（adjacent tone 含む）を固定振幅で追加していたため、adjacent tone
+    が declared gain と無関係な振幅（この row では core より約 6dB 大きい）を
+    持ち、素朴な全体測定の contamination が測定誤差近似 (1.5dB) の枠を明確に
+    超えて悪化していた。gain を「context 付加後の完全な waveform 全体」へ
+    適用するよう修正した結果、adjacent tone も declared gain レベルに揃い
+    contamination は大幅に縮小したが（steady 区間限定測定との差は依然として
+    正 — 周波数領域での高調波混入そのものは振幅整合とは独立に残る）、
+    ゼロにはならない。よって steady 区間限定測定の方が一貫して declared 値に
+    近いという方向性そのものは変わらないため、その方向性のみを検証する
+    （margin を振幅バグ時代の 0.5dB から縮小）。
     """
     duration_s = 1.0
     row = _resonance_row(
@@ -549,10 +609,10 @@ def test_resonance_transition_adjacent_whole_pcm_measurement_needs_steady_restri
     whole_error = abs(whole_db - row.prominence_db)
     steady_error = abs(steady_db - row.prominence_db)
     assert steady_error <= 1.5
-    assert whole_error > steady_error + 0.5, (
+    assert whole_error > steady_error + 0.02, (
         f"whole={whole_db:.3f}dB steady={steady_db:.3f}dB declared={row.prominence_db}dB "
-        "(expected whole-PCM measurement to be meaningfully more contaminated than "
-        "the steady-restricted measurement)"
+        "(expected whole-PCM measurement to remain more contaminated than "
+        "the steady-restricted measurement, even after the P1 gain fix)"
     )
 
 

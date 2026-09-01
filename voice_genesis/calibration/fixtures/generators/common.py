@@ -2,7 +2,9 @@
 PCM 16-bit 量子化（最終 byte-determinism 境界）・dBFS gain 適用・20ms cosine
 ramp・100ms voiced prefix/suffix context 組み立て・transition-adjacent
 context・declared SNR での noise mixing（streams 由来の `np.random.Generator`
-を使用）。
+を使用）。`finalize()` の適用順序は context -> gain -> noise（Codex レビュー
+2026-09-01 P1: declared gain は context 付加後の完全な assembled waveform
+全体に単一スカラーとして適用する。詳細は `finalize()` docstring 参照）。
 
 全関数は `(row, rng)` を除き副作用を持たない純粋関数。float64 内部演算 → 本
 モジュールで最終的に PCM int16 へ量子化する（設計正本 §6: 「float 中間から PCM
@@ -72,9 +74,16 @@ def apply_cosine_ramp(x: np.ndarray, sr_hz: int, ramp_s: float) -> np.ndarray:
 
 def make_voiced_tone(f0_hz: float, sr_hz: int, duration_s: float) -> np.ndarray:
     """context 組み立て用の一定音高トーン（真値の対象ではないため単純な
-    band-limited pulse train を再利用する）。"""
+    band-limited pulse train を再利用する）。unit peak（`harmonic_pulse_train`
+    が内部で `peak_normalize` 済み）で返す — declared gain の適用は
+    `finalize()` が context 付加後の完全な waveform 全体へ単一スカラーとして
+    行うため、ここで独自に振幅を減衰させない（Codex レビュー 2026-09-01 P1:
+    従来の固定 `* 0.5` 減衰は、`finalize()` が core 単体に先に gain を適用
+    してから本関数の出力を追加していたため、これらの context 区間（voiced-
+    prefix/suffix・transition-adjacent）が declared gain と無関係な
+    -6dBFS 相当に固定される原因だった）。"""
     n = n_samples(duration_s, sr_hz)
-    return harmonic_pulse_train(f0_hz, sr_hz, n) * 0.5
+    return harmonic_pulse_train(f0_hz, sr_hz, n)
 
 
 def assemble_context(core: np.ndarray, *, sr_hz: int, context: str, f0_hz: float) -> np.ndarray:
@@ -148,8 +157,22 @@ def negative_control_core(
 
 
 def finalize(core: np.ndarray, row: "object", rng: np.random.Generator) -> np.ndarray:
-    """gain -> context -> noise -> PCM16 の共通仕上げパイプライン。"""
-    core = apply_gain_dbfs(core, row.gain_dbfs)
-    core = assemble_context(core, sr_hz=row.sr_hz, context=row.context, f0_hz=row.f0_hz)
-    core = add_noise_at_snr(core, rng, noise_clean=row.noise_clean, noise_snr_db=row.noise_snr_db)
-    return quantize_pcm16(core)
+    """context -> gain -> noise -> PCM16 の共通仕上げパイプライン。
+
+    declared gain (`row.gain_dbfs`) は core 単体ではなく、context 付加後の
+    **完全に組み立てられた waveform 全体**へ単一スカラー（peak-normalize +
+    scale）として適用する（Codex レビュー 2026-09-01 P1: 従来は
+    `apply_gain_dbfs(core, ...)` を context 付加**前**の core 単体に適用して
+    いたため、`assemble_context()` が追加する voiced-prefix/suffix・
+    transition-adjacent context トーンは declared gain と無関係な固定振幅の
+    まま残っていた。全 generator の `core` は既に `peak_normalize` 済み
+    （呼び出し規約）で `make_voiced_tone` も unit peak のため、組み立て後の
+    全体を単一 gain スカラーで正規化すれば core・context 双方の峰値が
+    ともに declared gain レベルへ揃う）。
+    """
+    assembled = assemble_context(core, sr_hz=row.sr_hz, context=row.context, f0_hz=row.f0_hz)
+    gained = apply_gain_dbfs(assembled, row.gain_dbfs)
+    noisy = add_noise_at_snr(
+        gained, rng, noise_clean=row.noise_clean, noise_snr_db=row.noise_snr_db
+    )
+    return quantize_pcm16(noisy)
