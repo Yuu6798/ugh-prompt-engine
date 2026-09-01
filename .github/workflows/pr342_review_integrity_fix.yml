@@ -1,0 +1,507 @@
+name: PR342 bounded review integrity fix
+
+on:
+  push:
+    branches:
+      - claude/design-based-implementation-653xpl
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Guard expected parent
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD^)" = "fa79b98d88f5eeb308a250b015708398e85291e3"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Apply bounded fixes and regression tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path: str, pattern: str, replacement: str, *, flags: int = 0) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              new, n = re.subn(pattern, replacement, text, count=1, flags=flags)
+              if n != 1:
+                  raise RuntimeError(f"{path}: expected exactly one replacement, got {n}")
+              p.write_text(new, encoding="utf-8")
+
+          def append_once(path: str, marker: str, block: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if marker in text:
+                  return
+              p.write_text(text.rstrip() + "\n\n\n" + block.strip() + "\n", encoding="utf-8")
+
+          # 1) selection.py: reject every non-finite numeric ranking input before vector/sort.
+          selection_helpers = '''def _required_criteria_values(
+              criteria: CandidateCriteria, family: SelectionFamily
+          ) -> tuple[float | int | None, ...]:
+              """Return every numeric field that can participate in the family ranking vector."""
+              common: tuple[float | int | None, ...] = (
+                  criteria.nuisance_sensitivity_max,
+                  criteria.missing_failure_rate,
+                  criteria.complexity_rank,
+              )
+              if family is SelectionFamily.ABSOLUTE:
+                  return (
+                      criteria.primary_normalized_mae,
+                      criteria.signed_bias,
+                      criteria.primary_q95_ae,
+                      *common,
+                  )
+              return (
+                  criteria.kendall_tau,
+                  criteria.adjacent_reversal_rate,
+                  *common,
+              )
+
+
+          def _criteria_payload_present(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
+              values = _required_criteria_values(criteria, family)
+              # Only family-specific fields can legitimately be None; treating any None as
+              # absent is conservative and keeps malformed runtime payloads out of ranking.
+              return all(value is not None for value in values)
+
+
+          def _criteria_values_finite(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
+              if not _criteria_payload_present(criteria, family):
+                  return False
+              try:
+                  return all(math.isfinite(value) for value in _required_criteria_values(criteria, family))
+              except (TypeError, ValueError):
+                  return False
+
+
+          def _has_required_criteria(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
+              """All ranking inputs must be present and finite before vector construction."""
+              return _criteria_payload_present(criteria, family) and _criteria_values_finite(
+                  criteria, family
+              )
+
+
+          def _ineligibility_reason(
+              criteria: CandidateCriteria, family: SelectionFamily, *, has_criteria: bool
+          ) -> str | None:
+              if not _criteria_payload_present(criteria, family):
+                  return "criteria_payload_absent"
+              if not _criteria_values_finite(criteria, family):
+                  return "criteria_non_finite"
+              if not criteria.eligible:
+                  return "flagged_ineligible"
+              return None
+
+
+          def _vector_for'''
+          replace_once(
+              "voice_genesis/calibration/selection.py",
+              r"def _has_required_criteria\(.*?\n\ndef _vector_for",
+              selection_helpers,
+              flags=re.S,
+          )
+          replace_once(
+              "voice_genesis/calibration/selection.py",
+              r"(def _vector_for\(\n    criteria: CandidateCriteria, family: SelectionFamily, \*, rounded: bool\n\) -> tuple\[float \| int \| str, \.\.\.\]:\n)(    err = round_error)",
+              r'''\1    if not _criteria_payload_present(criteria, family):
+                  raise ValueError(
+                      f"selection: candidate {criteria.candidate_id!r} missing {family.value} criteria fields"
+                  )
+              if not _criteria_values_finite(criteria, family):
+                  raise ValueError(
+                      f"selection: candidate {criteria.candidate_id!r} has non-finite ranking criteria"
+                  )
+              \2''',
+          )
+          replace_once(
+              "voice_genesis/calibration/selection.py",
+              r'reason は `\\"criteria_payload_absent\\"` または\n    #: `\\"flagged_ineligible\\"` のいずれか',
+              'reason は `"criteria_payload_absent"` /\n    #: `"criteria_non_finite"` / `"flagged_ineligible"` のいずれか',
+          )
+
+          # 2) gates.py: pair_id identity is global, not scoped by sweep labels.
+          replace_once(
+              "voice_genesis/calibration/gates.py",
+              r'''    pair_ids_by_sweep: dict\[str, list\[str\]\] = \{\}\n    for p in pairs:\n        pair_ids_by_sweep\.setdefault\(p\.sweep_id, \[\]\)\.append\(p\.pair_id\)\n    duplicate_pair_ids: list\[str\] = \[\]\n    for sweep_id, ids in pair_ids_by_sweep\.items\(\):\n        dupes = sorted\(\{pid for pid in ids if ids\.count\(pid\) > 1\}\)\n        if dupes:\n            duplicate_pair_ids\.append\(f"sweep \{sweep_id\}: \{', '\.join\(dupes\)\}"\)\n    if duplicate_pair_ids:\n        reasons\.append\(\n            "duplicate pair_id\(s\) within sweep: " \+ "; "\.join\(duplicate_pair_ids\)\n        \)''',
+              '''    seen_pair_ids: set[str] = set()
+              duplicate_pair_ids_set: set[str] = set()
+              for p in pairs:
+                  if p.pair_id in seen_pair_ids:
+                      duplicate_pair_ids_set.add(p.pair_id)
+                  seen_pair_ids.add(p.pair_id)
+              duplicate_pair_ids = sorted(duplicate_pair_ids_set)
+              if duplicate_pair_ids:
+                  reasons.append(
+                      "duplicate pair_id(s) across directional observations: "
+                      + ", ".join(duplicate_pair_ids)
+                  )''',
+          )
+
+          # 3) c0_validate.py: producer emits SHA-256; validator must enforce the same shape.
+          replace_once(
+              "voice_genesis/calibration/c0_validate.py",
+              r'''            if not isinstance\(seed_ref, str\) or seed_ref\.strip\(\) == "":\n                violations\.append\(\n                    f"rng_ledger\[\{i\}\]\.public_seed_id \(required seed reference when seeded=true\)"\n                \)''',
+              '''            if not isinstance(seed_ref, str) or _SHA256_HEX_RE.fullmatch(seed_ref) is None:
+                  violations.append(
+                      f"rng_ledger[{i}].public_seed_id (must be a 64-character lowercase sha256 hex digest when seeded=true)"
+                  )''',
+          )
+
+          # 4) provenance.py: an integer can never grant holdout access by itself.
+          provenance_helpers = '''
+
+          _UNSEAL_COMMITMENT_KEYS: tuple[str, ...] = (
+              "baseline_audit_sha",
+              "candidate_space_sha",
+              "selection_rule_sha",
+              "selected_candidate_sha",
+          )
+
+
+          def _is_sha256_hex(value: object) -> bool:
+              return (
+                  isinstance(value, str)
+                  and len(value) == 64
+                  and all(ch in "0123456789abcdef" for ch in value)
+              )
+
+
+          def _verified_holdout_unseal_seq(ledger_entries: Sequence[LedgerEntry]) -> int | None:
+              """Derive the first valid holdout-unseal boundary from a verified ledger chain.
+
+              The unseal event must reference a prior SELECTION_FROZEN event by its entry SHA,
+              and the four prerequisite commitment hashes must be present and identical on both
+              events. A caller-supplied integer is never sufficient to create this boundary.
+              """
+              prev_sha = GENESIS_PREV_SHA
+              for expected_seq, entry in enumerate(ledger_entries):
+                  if entry.seq != expected_seq or entry.prev_sha != prev_sha:
+                      return None
+                  expected_sha = _entry_sha(entry.seq, entry.prev_sha, entry.payload)
+                  if entry.entry_sha != expected_sha:
+                      return None
+                  prev_sha = entry.entry_sha
+
+              frozen_by_sha: dict[str, Mapping[str, Any]] = {}
+              for entry in ledger_entries:
+                  payload = entry.payload
+                  if not isinstance(payload, Mapping):
+                      continue
+                  kind = payload.get("kind")
+                  if kind == "selection_frozen":
+                      if all(_is_sha256_hex(payload.get(key)) for key in _UNSEAL_COMMITMENT_KEYS):
+                          frozen_by_sha[entry.entry_sha] = payload
+                      continue
+                  if kind != "holdout_unseal":
+                      continue
+
+                  freeze_sha = payload.get("selection_freeze_event_sha")
+                  if not _is_sha256_hex(freeze_sha):
+                      continue
+                  frozen = frozen_by_sha.get(freeze_sha)
+                  if frozen is None:
+                      continue
+                  if not all(_is_sha256_hex(payload.get(key)) for key in _UNSEAL_COMMITMENT_KEYS):
+                      continue
+                  if not all(payload.get(key) == frozen.get(key) for key in _UNSEAL_COMMITMENT_KEYS):
+                      continue
+                  return entry.seq
+              return None
+          '''
+          replace_once(
+              "voice_genesis/calibration/provenance.py",
+              r"\n\nclass Ledger:\n",
+              provenance_helpers + "\n\nclass Ledger:\n",
+          )
+
+          new_check_leakage = '''    @staticmethod
+              def check_leakage(
+                  ledger_entries: Sequence[LedgerEntry],
+                  holdout_row_ids: Iterable[str],
+                  unseal_seq: int | None,
+                  control_row_ids: Collection[str] = (),
+              ) -> LeakageCheckResult:
+                  """Fail closed on any pre-unseal holdout access.
+
+                  The permission boundary is derived from a cryptographically valid ledger chain
+                  containing a `holdout_unseal` event that references a prior `selection_frozen`
+                  event with matching baseline/candidate-space/selection-rule/selected-candidate
+                  commitments. `unseal_seq` is retained only as an optional expected-sequence
+                  assertion for compatibility; it can never grant access on its own.
+                  """
+                  verified_unseal_seq = _verified_holdout_unseal_seq(ledger_entries)
+                  if unseal_seq is not None and unseal_seq != verified_unseal_seq:
+                      verified_unseal_seq = None
+
+                  holdout_set = set(holdout_row_ids)
+                  control_set = set(control_row_ids)
+                  control_excluded_count = 0
+                  for entry in ledger_entries:
+                      payload = entry.payload
+                      row_id = payload.get("row_id") if isinstance(payload, Mapping) else None
+                      if row_id is None or row_id not in holdout_set:
+                          continue
+                      kind = payload.get("kind") if isinstance(payload, Mapping) else None
+                      if kind not in ("render", "meter_call"):
+                          continue
+                      if row_id in control_set:
+                          control_excluded_count += 1
+                          continue
+                      if verified_unseal_seq is None or entry.seq < verified_unseal_seq:
+                          return LeakageCheckResult(
+                              blocked=BlockedCode.BLOCKED_LEAKAGE,
+                              control_excluded_count=control_excluded_count,
+                          )
+                  return LeakageCheckResult(
+                      blocked=None, control_excluded_count=control_excluded_count
+                  )
+          '''
+          replace_once(
+              "voice_genesis/calibration/provenance.py",
+              r"    @staticmethod\n    def check_leakage\(.*?\n        return LeakageCheckResult\(blocked=None, control_excluded_count=control_excluded_count\)\n?",
+              new_check_leakage,
+              flags=re.S,
+          )
+
+          # Regression tests: append to existing inventory-covered test files only.
+          append_once(
+              "voice_genesis/calibration/tests/test_selection.py",
+              "test_selection_non_finite_common_ranking_field_is_ineligible",
+              '''def test_selection_non_finite_primary_criterion_is_ineligible() -> None:
+                  bad = CandidateCriteria(
+                      candidate_id="bad-nan",
+                      primary_normalized_mae=float("nan"),
+                      signed_bias=0.0,
+                      primary_q95_ae=0.1,
+                  )
+                  good = CandidateCriteria(
+                      candidate_id="good",
+                      primary_normalized_mae=0.2,
+                      signed_bias=0.0,
+                      primary_q95_ae=0.2,
+                  )
+                  outcome = select([bad, good], SelectionFamily.ABSOLUTE)
+                  assert outcome.selected_candidate_id == "good"
+                  assert outcome.ineligible_candidates == (("bad-nan", "criteria_non_finite"),)
+                  assert "bad-nan" not in outcome.raw_vectors
+
+
+              def test_selection_non_finite_common_ranking_field_is_ineligible() -> None:
+                  bad = CandidateCriteria(
+                      candidate_id="bad-inf",
+                      kendall_tau=0.99,
+                      adjacent_reversal_rate=0.0,
+                      nuisance_sensitivity_max=float("inf"),
+                  )
+                  good = CandidateCriteria(
+                      candidate_id="good",
+                      kendall_tau=0.9,
+                      adjacent_reversal_rate=0.0,
+                  )
+                  outcome = select([bad, good], SelectionFamily.DIRECTIONAL)
+                  assert outcome.selected_candidate_id == "good"
+                  assert outcome.ineligible_candidates == (("bad-inf", "criteria_non_finite"),)
+                  assert "bad-inf" not in outcome.rounded_vectors''',
+          )
+
+          append_once(
+              "voice_genesis/calibration/tests/test_gates.py",
+              "test_directional_duplicate_pair_id_across_sweeps_fails",
+              '''def test_directional_duplicate_pair_id_across_sweeps_fails() -> None:
+                  pairs = [
+                      _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-A")
+                      for i in range(3)
+                  ] + [
+                      _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-B")
+                      for i in range(3)
+                  ]
+                  result = directional_gates(
+                      pairs,
+                      u_rep=0.02,
+                      u_proc=0.01,
+                      expected_sweep_ids={"sweep-A", "sweep-B"},
+                      negative_control_failures=0,
+                      positive_control_failures=0,
+                      units_commensurate=False,
+                  )
+                  assert result.sweep_resolvable_counts == {"sweep-A": 3, "sweep-B": 3}
+                  assert result.passed is False
+                  assert any("duplicate pair_id" in reason for reason in result.failure_reasons)''',
+          )
+
+          append_once(
+              "voice_genesis/calibration/tests/test_c0_validate.py",
+              "test_rng_ledger_rejects_non_digest_public_seed_id",
+              '''def test_rng_ledger_rejects_non_digest_public_seed_id() -> None:
+                  manifest = _complete_manifest()
+                  manifest["rng_ledger"][0]["public_seed_id"] = "x"
+                  result = c0_validate.validate_c0_manifest(manifest)
+                  assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+                  assert any(".public_seed_id" in key for key in result.missing_required_keys)
+
+
+              def test_rng_ledger_producer_declarations_round_trip_validator() -> None:
+                  ledger = streams.RngLedger()
+                  secret = b"unit-test-secret"
+                  for family in fixture_axes.FAMILY_ORDER:
+                      ledger.record(
+                          secret,
+                          campaign_id="RUN10-CAL-test",
+                          family=family.value,
+                          split="selection",
+                          row_id=f"{family.value}-row",
+                          probe_index=0,
+                          purpose="generator",
+                      )
+                  first_family = fixture_axes.FAMILY_ORDER[0].value
+                  for purpose in ("split_hmac", "split_tiebreak"):
+                      ledger.record(
+                          secret,
+                          campaign_id="RUN10-CAL-test",
+                          family=first_family,
+                          split="selection",
+                          row_id="split-row",
+                          probe_index=0,
+                          purpose=purpose,
+                      )
+                  manifest = _complete_manifest()
+                  manifest["rng_ledger"] = ledger.to_declaration_records()
+                  result = c0_validate.validate_c0_manifest(manifest)
+                  assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE not in result.blocked_codes
+                  assert vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG not in result.blocked_codes''',
+          )
+
+          # Replace the old fail-open post-unseal test with a verified-event version, then append
+          # explicit forged-integer and commitment-mismatch regressions.
+          replace_once(
+              "voice_genesis/calibration/tests/test_provenance.py",
+              r"def test_check_leakage_post_unseal_access_is_allowed\(.*?(?=\ndef )",
+              '''def test_check_leakage_post_unseal_access_is_allowed(tmp_path) -> None:
+                  ledger = Ledger(tmp_path / "ledger.jsonl")
+                  commitments = {
+                      "baseline_audit_sha": "1" * 64,
+                      "candidate_space_sha": "2" * 64,
+                      "selection_rule_sha": "3" * 64,
+                      "selected_candidate_sha": "4" * 64,
+                  }
+                  frozen = ledger.append({"kind": "selection_frozen", **commitments})
+                  unseal = ledger.append(
+                      {
+                          "kind": "holdout_unseal",
+                          **commitments,
+                          "selection_freeze_event_sha": frozen.entry_sha,
+                      }
+                  )
+                  ledger.append({"kind": "meter_call", "row_id": "holdout-1"})
+                  result = Ledger.check_leakage(
+                      ledger.entries, holdout_row_ids=["holdout-1"], unseal_seq=unseal.seq
+                  )
+                  assert result.blocked is None
+
+
+              ''',
+              flags=re.S,
+          )
+          append_once(
+              "voice_genesis/calibration/tests/test_provenance.py",
+              "test_check_leakage_forged_unseal_integer_cannot_grant_access",
+              '''def test_check_leakage_forged_unseal_integer_cannot_grant_access(tmp_path) -> None:
+                  ledger = Ledger(tmp_path / "ledger.jsonl")
+                  ledger.append(
+                      {
+                          "kind": "selection_frozen",
+                          "baseline_audit_sha": "1" * 64,
+                          "candidate_space_sha": "2" * 64,
+                          "selection_rule_sha": "3" * 64,
+                          "selected_candidate_sha": "4" * 64,
+                      }
+                  )
+                  ledger.append({"kind": "meter_call", "row_id": "holdout-1"})
+                  result = Ledger.check_leakage(
+                      ledger.entries, holdout_row_ids=["holdout-1"], unseal_seq=0
+                  )
+                  assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
+
+
+              def test_check_leakage_mismatched_unseal_commitments_fail_closed(tmp_path) -> None:
+                  ledger = Ledger(tmp_path / "ledger.jsonl")
+                  commitments = {
+                      "baseline_audit_sha": "1" * 64,
+                      "candidate_space_sha": "2" * 64,
+                      "selection_rule_sha": "3" * 64,
+                      "selected_candidate_sha": "4" * 64,
+                  }
+                  frozen = ledger.append({"kind": "selection_frozen", **commitments})
+                  ledger.append(
+                      {
+                          "kind": "holdout_unseal",
+                          **commitments,
+                          "selected_candidate_sha": "5" * 64,
+                          "selection_freeze_event_sha": frozen.entry_sha,
+                      }
+                  )
+                  ledger.append({"kind": "render", "row_id": "holdout-1"})
+                  result = Ledger.check_leakage(
+                      ledger.entries, holdout_row_ids=["holdout-1"], unseal_seq=None
+                  )
+                  assert result.blocked == BlockedCode.BLOCKED_LEAKAGE''',
+          )
+          PY
+
+      - name: Targeted tests
+        run: |
+          python -m pytest -q \
+            voice_genesis/calibration/tests/test_selection.py \
+            voice_genesis/calibration/tests/test_gates.py \
+            voice_genesis/calibration/tests/test_c0_validate.py \
+            voice_genesis/calibration/tests/test_provenance.py
+
+      - name: Lint touched code
+        run: |
+          ruff check \
+            voice_genesis/calibration/selection.py \
+            voice_genesis/calibration/gates.py \
+            voice_genesis/calibration/c0_validate.py \
+            voice_genesis/calibration/provenance.py \
+            voice_genesis/calibration/tests/test_selection.py \
+            voice_genesis/calibration/tests/test_gates.py \
+            voice_genesis/calibration/tests/test_c0_validate.py \
+            voice_genesis/calibration/tests/test_provenance.py
+
+      - name: Commit bounded fix and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/pr342_review_integrity_fix.yml
+          git add \
+            voice_genesis/calibration/selection.py \
+            voice_genesis/calibration/gates.py \
+            voice_genesis/calibration/c0_validate.py \
+            voice_genesis/calibration/provenance.py \
+            voice_genesis/calibration/tests/test_selection.py \
+            voice_genesis/calibration/tests/test_gates.py \
+            voice_genesis/calibration/tests/test_c0_validate.py \
+            voice_genesis/calibration/tests/test_provenance.py
+          git commit -m "fix(calibration): close critical review integrity gaps"
+          git push origin HEAD:claude/design-based-implementation-653xpl
