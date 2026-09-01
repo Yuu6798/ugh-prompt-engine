@@ -162,9 +162,63 @@ def test_complete_manifest_pyworld_absent_only_ineligible_not_blocked() -> None:
 def test_pyworld_present_makes_d4c_eligible() -> None:
     manifest = _complete_manifest()
     manifest["dependencies"]["pyworld_version"] = "0.3.4"
-    manifest["dependencies"]["pyworld_wheel_hash"] = "g" * 64
+    manifest["dependencies"]["pyworld_wheel_hash"] = "a" * 64
     result = c0_validate.validate_c0_manifest(manifest)
     assert result.d4c_ineligible is False
+    assert result.is_blocked is False
+
+
+def test_pyworld_empty_string_wheel_hash_is_ineligible() -> None:
+    """Codex レビュー 2026-09-01 P1: `""` は non-None かつ `ABSENT:` prefix
+    でもないため、hollow 検査を欠いた旧実装では D4C eligible と誤判定
+    していた（hollow pyworld pin values enable D4C）。"""
+    manifest = _complete_manifest()
+    manifest["dependencies"]["pyworld_version"] = "0.3.4"
+    manifest["dependencies"]["pyworld_wheel_hash"] = ""
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert result.d4c_ineligible is True
+    assert result.d4c_ineligibility_reason is not None
+    assert "pyworld_wheel_hash" in result.d4c_ineligibility_reason
+    assert result.is_blocked is False
+
+
+def test_pyworld_dict_wheel_hash_is_ineligible() -> None:
+    """`{}` のような mapping 値は `isinstance(value, str)` を落とすため、
+    型不整合も欠落と同様に ineligible 判定させる。"""
+    manifest = _complete_manifest()
+    manifest["dependencies"]["pyworld_version"] = "0.3.4"
+    manifest["dependencies"]["pyworld_wheel_hash"] = {}
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert result.d4c_ineligible is True
+    assert result.d4c_ineligibility_reason is not None
+    assert "pyworld_wheel_hash" in result.d4c_ineligibility_reason
+    assert result.is_blocked is False
+
+
+def test_pyworld_non_hash_string_wheel_hash_is_ineligible() -> None:
+    """任意の非 hash 文字列（`^[0-9a-f]{64}$` を満たさない）は、旧実装では
+    'present かつ非 None かつ non-ABSENT' の緩い条件を満たしてしまい D4C
+    eligible と誤判定されていた（Codex レビュー 2026-09-01 P1）。"""
+    manifest = _complete_manifest()
+    manifest["dependencies"]["pyworld_version"] = "0.3.4"
+    manifest["dependencies"]["pyworld_wheel_hash"] = "not-a-real-hash"
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert result.d4c_ineligible is True
+    assert result.d4c_ineligibility_reason is not None
+    assert "pyworld_wheel_hash" in result.d4c_ineligibility_reason
+    assert result.is_blocked is False
+
+
+def test_pyworld_blank_version_is_ineligible() -> None:
+    """`pyworld_version` が空白のみの文字列（non-empty だが blank）は
+    「exact version」を満たさないため ineligible とする。"""
+    manifest = _complete_manifest()
+    manifest["dependencies"]["pyworld_version"] = "   "
+    manifest["dependencies"]["pyworld_wheel_hash"] = "a" * 64
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert result.d4c_ineligible is True
+    assert result.d4c_ineligibility_reason is not None
+    assert "pyworld_version" in result.d4c_ineligibility_reason
     assert result.is_blocked is False
 
 

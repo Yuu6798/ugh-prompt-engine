@@ -227,29 +227,27 @@ def test_expected_rng_stream_names_matches_frozen_family_count() -> None:
     assert "F0_CONTROL/render" in names
 
 
-def test_rng_ledger_producer_round_trips_through_c0_validate_with_no_rng_block() -> None:
-    """producer (`RngLedger.record` 経由の `to_records()`) → validator
-    (`c0_validate._check_rng_ledger_shape` / `_check_rng_ledger_closed_set` /
-    `BLOCKED_C0_UNSEEDED_RNG`) の往復テスト（Codex レビュー 2026-09-01 P1
-    finding #2 の回帰防止: canonical producer が §3.3 の closed set（family
-    ごとの render stream 1 個 ∪ split/hmac ∪ split/tiebreak）を過不足なく
-    record すれば、validator 側で一切 BLOCK されないことを確認する）。
-    """
-    from voice_genesis.calibration import c0_validate, vocab
+def _record_multi_row_probe_campaign(ledger: RngLedger, secret: bytes) -> None:
+    """各 family へ複数 row × 複数 probe を record する（family あたり 1 件しか
+    record しない旧テストは、`stream_name` が family 単位へ折り畳まれる事実
+    ―― `RngLedger.record()` は row/probe ごとに 1 entry を積むため、同一
+    family へ 2 件目以降を record すると `to_records()`（AUDIT 形式）は同一
+    `stream_name` を持つ複数 entry を返す ―― を隠してしまっていた
+    (Codex レビュー 2026-09-01 P1 finding #1)。"""
     from voice_genesis.calibration.fixtures.axes import FAMILY_ORDER
 
-    secret = b"\x09" * 32
-    ledger = RngLedger()
     for family in FAMILY_ORDER:
-        ledger.record(
-            secret,
-            campaign_id="RUN10-CAL",
-            family=family.value,
-            split="CALIBRATION",
-            row_id="n/a",
-            probe_index=0,
-            purpose="generator",
-        )
+        for row_idx in range(2):
+            for probe_idx in range(2):
+                ledger.record(
+                    secret,
+                    campaign_id="RUN10-CAL",
+                    family=family.value,
+                    split="CALIBRATION",
+                    row_id=f"row-{row_idx}",
+                    probe_index=probe_idx,
+                    purpose="generator",
+                )
     ledger.record(
         secret,
         campaign_id="RUN10-CAL",
@@ -269,7 +267,40 @@ def test_rng_ledger_producer_round_trips_through_c0_validate_with_no_rng_block()
         purpose="split_tiebreak",
     )
 
-    manifest = {"rng_ledger": ledger.to_records()}
+
+def test_rng_ledger_declaration_records_round_trip_through_c0_validate_with_no_rng_block() -> None:
+    """producer (`RngLedger.record` を row/probe ごとに複数回呼んだ上での
+    `to_declaration_records()`) → validator
+    (`c0_validate._check_rng_ledger_shape` / `_check_rng_ledger_closed_set` /
+    `BLOCKED_C0_UNSEEDED_RNG`) の往復テスト（Codex レビュー 2026-09-01 P1
+    finding #1 の回帰防止）。
+
+    旧テストは family あたり 1 entry しか record しておらず、closed-set 重複
+    検査が一切踏まれない状態を「往復成功」として偽装していた。本テストは
+    family あたり row×probe = 4 entry を record したうえで、declaration-form
+    (`to_declaration_records()`) が正しく stream_name 単位へ集約し、
+    validator 側で一切 BLOCK されないことを確認する。
+    """
+    from voice_genesis.calibration import c0_validate, vocab
+    from voice_genesis.calibration.fixtures.axes import FAMILY_ORDER
+
+    secret = b"\x09" * 32
+    ledger = RngLedger()
+    _record_multi_row_probe_campaign(ledger, secret)
+
+    # family あたり 4 entry (2 row x 2 probe) + split_hmac/tiebreak 各 1 entry
+    # が積まれている（audit 形式は依然 per-derivation で重複を含む）。
+    assert len(ledger.to_records()) == len(FAMILY_ORDER) * 4 + 2
+
+    declaration_records = ledger.to_declaration_records()
+    # declaration 形式は stream_name 単位に集約されるため、family 数 + 2
+    # (split/hmac, split/tiebreak) 件ちょうどになる（重複なし）。
+    assert len(declaration_records) == len(FAMILY_ORDER) + 2
+    stream_names = [r["stream_name"] for r in declaration_records]
+    assert len(stream_names) == len(set(stream_names))  # 重複なし
+    assert all(r["seeded"] is True for r in declaration_records)
+
+    manifest = {"rng_ledger": declaration_records}
     result = c0_validate.validate_c0_manifest(manifest)
 
     # RNG 台帳自体は形状・seed 参照・closed set いずれも妥当なので、RNG 由来の
@@ -279,3 +310,28 @@ def test_rng_ledger_producer_round_trips_through_c0_validate_with_no_rng_block()
     assert vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG not in result.blocked_codes
     assert not any(k.startswith("rng_ledger") for k in result.missing_required_keys)
     assert result.unseeded_rng_streams == ()
+
+
+def test_rng_ledger_raw_audit_records_with_duplicates_are_blocked() -> None:
+    """負のテスト（意図された使い分けの文書化）: `to_records()`（per-derivation
+    AUDIT 形式）を家族あたり複数 row/probe で record したうえで、そのまま
+    （集約せずに）C0 manifest `rng_ledger` へ渡すと、同一 `stream_name` の
+    重複により `_check_rng_ledger_closed_set` が確実に BLOCK することを
+    確認する。`to_declaration_records()` を使うべき理由の回帰防止。"""
+    from voice_genesis.calibration import c0_validate
+
+    secret = b"\x0a" * 32
+    ledger = RngLedger()
+    _record_multi_row_probe_campaign(ledger, secret)
+
+    manifest = {"rng_ledger": ledger.to_records()}
+    result = c0_validate.validate_c0_manifest(manifest)
+
+    duplicate_violations = [
+        k for k in result.missing_required_keys if "duplicate stream" in k
+    ]
+    assert duplicate_violations, (
+        "raw audit records (to_records()) fed directly to c0_validate should be "
+        "rejected via duplicate stream_name violations — this documents that "
+        "manifest producers must use to_declaration_records() instead"
+    )

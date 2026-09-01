@@ -354,6 +354,35 @@ def test_check_leakage_control_row_ids_excluded_non_control_holdout_still_detect
     assert result.control_excluded_count == 2
 
 
+def test_ledger_tolerates_structurally_malformed_line_seq_only(tmp_path) -> None:
+    """[Codex レビュー 2026-09-01 P1 finding #3] `{"seq": 0}` のような
+    parseable-but-malformed な行（JSON としてはパース可能だが `prev_sha`/
+    `entry_sha`/`payload` を欠く）に対して、`Ledger.__init__`（内部で
+    `_read_all()` を呼ぶ）は `KeyError` を送出してクラッシュしてはならない。
+    構築は成功し、`verify_chain()` が chain-invalid（`ok=False`、malformed
+    行の位置を指す `tamper_at_seq`）として報告し、`append()` は改竄パスと
+    同様に `LedgerChainInvalidError` で拒否する。"""
+    path = tmp_path / "ledger.jsonl"
+    path.write_text('{"seq":0}\n', encoding="utf-8")
+
+    # 構築自体がクラッシュしない（旧実装は KeyError を送出していた）。
+    ledger = Ledger(path)
+    assert ledger.entries == ()
+    assert len(ledger.malformed_lines) == 1
+    assert ledger.malformed_lines[0].line_index == 0
+
+    result = ledger.verify_chain()
+    assert result.ok is False
+    assert result.tamper_at_seq == 0
+    assert "malformed" in result.detail
+
+    with pytest.raises(LedgerChainInvalidError) as excinfo:
+        ledger.append({"kind": "render", "row_id": "r0"})
+    assert excinfo.value.tamper_at_seq == 0
+    # fail-closed: append 失敗後もファイル内容は一切変更されていない。
+    assert path.read_text(encoding="utf-8") == '{"seq":0}\n'
+
+
 def test_check_leakage_control_row_pure_control_holdout_never_blocks() -> None:
     entries = [
         LedgerEntry(seq=0, prev_sha="0" * 64, entry_sha="a" * 64,

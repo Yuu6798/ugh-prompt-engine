@@ -618,14 +618,50 @@ def _check_recorded_or_absent(
 
 
 def _check_pyworld(manifest: Mapping[str, object]) -> tuple[bool, str | None]:
-    """pyworld 特則（§3.3）: exact version + wheel hash 欠落 → D4C のみ ineligible。"""
+    """pyworld 特則（§3.3）: exact version + wheel hash 欠落 → D4C のみ ineligible。
+
+    Codex レビュー 2026-09-01 P1: 従来は「present かつ非 None かつ
+    `ABSENT:` prefix でない」ことしか検査しておらず、`""`・`{}`・
+    hash 形式を満たさない任意文字列であっても D4C eligible（=
+    `d4c_ineligible=False`）と判定してしまっていた（hollow pin values
+    enable D4C）。本実装は:
+
+    - `pyworld_version`: 非空文字列（空白のみも不可）であることを要求する。
+    - `pyworld_wheel_hash`: `^[0-9a-f]{64}$`（`_SHA256_HEX_RE`。
+      `[UNDERSPEC-CAL-CXX]` 設計正本 §3.3 は wheel hash の具体的文字列形式
+      までは規定しないため、`HASH_MAP_KEYS` など他の sha256 系フィールドが
+      既に採用する bare 64 桁小文字 16 進形式へ統一する — 最も単純で
+      一貫した選択。`sha256:<64hex>` のようなプレフィックス付き文字列は
+      受理しない）にマッチすることを要求する。
+
+    いずれかが欠落・hollow・形式不正なら `d4c_ineligible=True` とし、
+    具体的にどちらが不正だったかを reason に列挙する（campaign 全体は
+    引き続き BLOCK しない）。
+    """
     found_version, version = _resolve(manifest, PYWORLD_VERSION_KEY)
     found_hash, wheel_hash = _resolve(manifest, PYWORLD_WHEEL_HASH_KEY)
-    version_ok = found_version and version is not None and not _is_absent_marker(version)
-    hash_ok = found_hash and wheel_hash is not None and not _is_absent_marker(wheel_hash)
+
+    version_ok = (
+        found_version
+        and isinstance(version, str)
+        and not _is_absent_marker(version)
+        and version.strip() != ""
+    )
+    hash_ok = (
+        found_hash
+        and isinstance(wheel_hash, str)
+        and not _is_absent_marker(wheel_hash)
+        and _SHA256_HEX_RE.match(wheel_hash) is not None
+    )
     if version_ok and hash_ok:
         return False, None
-    return True, "pyworld exact version + wheel hash not recorded"
+
+    details: list[str] = []
+    if not version_ok:
+        details.append("pyworld_version missing/blank")
+    if not hash_ok:
+        details.append("pyworld_wheel_hash missing or not a bare 64-hex sha256")
+    return True, "; ".join(details)
 
 
 def _check_rng_ledger_unseeded(manifest: Mapping[str, object]) -> tuple[str, ...]:

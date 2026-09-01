@@ -199,6 +199,33 @@ class LedgerEntry:
 
 GENESIS_PREV_SHA = "0" * 64
 
+#: `LedgerEntry` として扱うために各行が最低限持つべき必須フィールド
+#: （Codex レビュー 2026-09-01 P1 finding #3）。JSON としてはパース可能でも
+#: これらを欠く行（例: `{"seq": 0}`）は「構造的に malformed」とみなす。
+_ENTRY_REQUIRED_KEYS = frozenset({"seq", "prev_sha", "entry_sha", "payload"})
+
+
+@dataclass(frozen=True)
+class MalformedLedgerLine:
+    """`Ledger._read_all()` が検出した、JSON としてはパース可能だが
+    `LedgerEntry` に必須のフィールド（`_ENTRY_REQUIRED_KEYS`）を欠く/型が
+    不正な行の記録（Codex レビュー 2026-09-01 P1 finding #3）。
+
+    従来 `_read_all()` は `raw["prev_sha"]` のような直接インデックスで
+    行を `LedgerEntry` 化しており、`{"seq": 0}` のような parseable-but-
+    malformed な行に対して `KeyError` を送出していた。この例外は
+    `Ledger.__init__` から呼び出し側へそのまま伝播するため、
+    `verify_chain()` を呼ぶ前に台帳の構築自体がクラッシュし、
+    「破損を検出して報告する」という契約を満たせなかった。
+    `_read_all()` はこの種の行を `LedgerEntry` としては構築せず、代わりに
+    `MalformedLedgerLine` として記録する（クラッシュしない）。chain 全体の
+    正当性についての権威ある判定は引き続き `verify_chain()` が独立に行う。
+    """
+
+    line_index: int
+    raw: str
+    reason: str
+
 
 @dataclass(frozen=True)
 class LeakageCheckResult:
@@ -343,6 +370,29 @@ def _verify_chain_prefix(
                 detail=f"unparseable line at position {i}",
                 missing_final_newline=missing_final_newline,
             )
+        # 構造的 malformed 検査（Codex レビュー 2026-09-01 P1 finding #3）:
+        # JSON としてはパース可能でも `seq`/`prev_sha`/`entry_sha`/`payload`
+        # のいずれかを欠く行（例: `{"seq": 0}`）は、以降の `.get()` ベースの
+        # 意味検査（prev_sha 不一致等）でも ok=False にはなるが、detail が
+        # 「改竄」と紛らわしくなる。ここで先に検出し、malformed である旨を
+        # 明示した detail を返す（fail-closed: chain-invalid として扱う）。
+        missing_keys = (
+            sorted(_ENTRY_REQUIRED_KEYS - set(raw.keys()))
+            if isinstance(raw, Mapping)
+            else sorted(_ENTRY_REQUIRED_KEYS)
+        )
+        if missing_keys:
+            return ChainVerification(
+                ok=False,
+                entries_verified=verified,
+                truncated_tail=truncated_tail,
+                tamper_at_seq=i,
+                detail=(
+                    f"malformed entry at position {i} (seq slot {i}): "
+                    f"missing required field(s) {missing_keys}"
+                ),
+                missing_final_newline=missing_final_newline,
+            )
         if raw.get("seq") != i:
             return ChainVerification(
                 ok=False,
@@ -420,36 +470,81 @@ class Ledger:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._entries: list[LedgerEntry] = list(self._read_all()) if path.exists() else []
+        self._entries: list[LedgerEntry] = []
+        self._malformed: list[MalformedLedgerLine] = []
+        if path.exists():
+            self._entries, self._malformed = self._read_all()
 
-    def _read_all(self) -> Iterable[LedgerEntry]:
-        """既存ファイルから読み込む（キャッシュ用途）。
+    def _read_all(self) -> tuple[list[LedgerEntry], list[MalformedLedgerLine]]:
+        """既存ファイルから読み込む（キャッシュ用途）。`(entries, malformed)`
+        を返す。
 
-        末尾の truncated/不完全な行は静かにスキップする（クラッシュさせない）。
-        破損の有無・種別の権威ある判定は `verify_chain()` が独立にファイル全体
-        を読み直して行う。ここで例外を投げると `Ledger(path)` の構築自体が
-        破損ファイルに対して失敗し、`verify_chain()` を呼ぶ前にクラッシュして
-        しまう（それでは「破損を検出して報告する」という契約を満たせない）。
+        末尾の truncated/不完全な行は静かにスキップする（クラッシュさせない。
+        `_split_complete_lines` を再利用し、`verify_chain()`/`append()` と
+        同じ行分割・truncated 判定基準を共有する）。
+
+        JSON としてはパース可能だが `LedgerEntry` に必須のフィールド
+        （`_ENTRY_REQUIRED_KEYS`）を欠く「構造的 malformed」な行（例:
+        `{"seq": 0}`）に対しても、`raw["prev_sha"]` のような直接インデックス
+        で `KeyError` を送出してはならない（Codex レビュー 2026-09-01 P1
+        finding #3: 従来はここで `KeyError` が `Ledger.__init__` へそのまま
+        伝播し、`verify_chain()` を呼ぶ前に構築自体がクラッシュしていた ―
+        「破損を検出して報告する」という契約を満たせていなかった）。
+        malformed な行は `LedgerEntry` としては構築せず、`MalformedLedgerLine`
+        として別途記録して読み進める。
+
+        破損の有無・種別についての権威ある判定は本メソッドの責務ではなく、
+        `verify_chain()` がファイル全体を独立に読み直して行う
+        （`_verify_chain_prefix` が同じ `_ENTRY_REQUIRED_KEYS` 検査を chain
+        順序の文脈で再実行し、malformed な行の位置を `ok=False` +
+        `tamper_at_seq` として報告する）。
         """
-        with self.path.open("r", encoding="utf-8") as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                try:
-                    raw = json.loads(stripped)
-                except json.JSONDecodeError:
-                    continue
-                yield LedgerEntry(
+        content = self.path.read_text(encoding="utf-8")
+        raw_lines, _truncated_tail, _missing_final_newline = _split_complete_lines(content)
+
+        entries: list[LedgerEntry] = []
+        malformed: list[MalformedLedgerLine] = []
+        for i, line in enumerate(raw_lines):
+            try:
+                raw = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(raw, Mapping) or not _ENTRY_REQUIRED_KEYS.issubset(raw.keys()):
+                missing = (
+                    sorted(_ENTRY_REQUIRED_KEYS - set(raw.keys()))
+                    if isinstance(raw, Mapping)
+                    else sorted(_ENTRY_REQUIRED_KEYS)
+                )
+                malformed.append(
+                    MalformedLedgerLine(
+                        line_index=i,
+                        raw=line,
+                        reason=f"missing required field(s) {missing}",
+                    )
+                )
+                continue
+            entries.append(
+                LedgerEntry(
                     seq=raw["seq"],
                     prev_sha=raw["prev_sha"],
                     entry_sha=raw["entry_sha"],
                     payload=raw["payload"],
                 )
+            )
+        return entries, malformed
 
     @property
     def entries(self) -> tuple[LedgerEntry, ...]:
         return tuple(self._entries)
+
+    @property
+    def malformed_lines(self) -> tuple[MalformedLedgerLine, ...]:
+        """`_read_all()` が検出した構造的 malformed 行（Codex レビュー
+        2026-09-01 P1 finding #3）。空タプルは「malformed 行なし」を意味する。
+        権威ある chain 検証結果は `verify_chain()` を使うこと（本 property は
+        `Ledger(path)` 構築時点でのスナップショットに過ぎず、on-disk 内容が
+        構築後に変化していれば古くなる）。"""
+        return tuple(self._malformed)
 
     def append(self, payload: Mapping[str, Any]) -> LedgerEntry:
         """payload を append する。

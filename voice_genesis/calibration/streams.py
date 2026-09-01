@@ -286,9 +286,22 @@ class RngLedger:
         return entry
 
     def to_records(self) -> list[dict[str, object]]:
-        """`c0_validate._check_rng_ledger_shape` が要求する形状
-        (`stream_name`/`seeded`/`seeded=True` 時の `public_seed_id`) を満たす
-        dict を返す（既存 field は維持。Codex レビュー 2026-09-01 P1）。"""
+        """**AUDIT 形式**: `record()` が積んだ全 entry を 1 対 1 で dict 化した
+        per-derivation の完全な列挙（row_id/probe_index を保持）。
+
+        監査・デバッグ用途（「どの row/probe がどの secret 由来 seed で
+        導出されたか」を個別に追跡する）のための形であり、**C0 manifest の
+        `rng_ledger` へ直接渡してはならない**（Codex レビュー 2026-09-01 P1
+        finding #1）: 同一 family/purpose に属する複数 row/probe の entry は
+        `stream_name`（`<family>/render` 等、family+purpose 単位の粗粒度）が
+        すべて同一値へ折り畳まれるため、2 件目以降が
+        `c0_validate._check_rng_ledger_closed_set` の重複検査（closed set は
+        stream_name の重複を許さない）に必ず抵触する。これは検査の不備では
+        なく意図された挙動であり、declaration-form との役割分離を強制する
+        （`test_streams.py` の対応する負のテストが直接この抵触を確認する）。
+
+        C0 manifest producer は代わりに `to_declaration_records()` を使うこと。
+        """
         return [
             {
                 "stream_name": e.stream_name,
@@ -303,3 +316,42 @@ class RngLedger:
             }
             for e in self.entries
         ]
+
+    def to_declaration_records(self) -> list[dict[str, object]]:
+        """**DECLARATION 形式**: `stream_name` 単位で `to_records()` の
+        per-derivation entry を集約し、1 stream class = 1 record にした
+        dict を返す。C0 manifest の `rng_ledger` はこの形式を consume する
+        契約（Codex レビュー 2026-09-01 P1 finding #1: `to_records()` の
+        per-derivation AUDIT 形式を manifest producer が直接使うと、同一
+        family 内の 2 件目以降の row/probe が `stream_name` 重複で
+        `c0_validate._check_rng_ledger_closed_set` に必ず抵触していた）。
+
+        集約規則:
+          - `stream_name`: group key（`streams.stream_name()` の戻り値）。
+          - `seeded`: group を構成する全 entry の `seeded` が True の場合のみ
+            True（1 件でも unseeded な entry を含む group は False とし、
+            `BLOCKED_C0_UNSEEDED_RNG` を正しく発火させる）。
+          - `public_seed_id`: group を構成する全 entry の `public_seed_id`
+            （各 64 桁固定長の hex 文字列）を昇順ソートしてから連結し
+            sha256 した digest。固定長要素の連結のため区切り文字なしでも
+            `stream_info` の長さ接頭辞問題（可変長 field の境界衝突）は
+            生じない。secret 自体は元より `public_seed_id`（= sha256(OKM))
+            にも登場しないため、この digest からも逆算できない。
+        """
+        groups: dict[str, list[RngLedgerEntry]] = {}
+        for e in self.entries:
+            groups.setdefault(e.stream_name, []).append(e)
+
+        records: list[dict[str, object]] = []
+        for stream, members in sorted(groups.items()):
+            all_seeded = all(m.seeded for m in members)
+            constituent_ids = sorted(m.public_seed_id for m in members)
+            digest = hashlib.sha256("".join(constituent_ids).encode("ascii")).hexdigest()
+            records.append(
+                {
+                    "stream_name": stream,
+                    "seeded": all_seeded,
+                    "public_seed_id": digest,
+                }
+            )
+        return records
