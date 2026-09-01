@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 ROOT = Path.cwd()
@@ -66,42 +65,19 @@ replace_once(
     '''        `unseal_seq` is retained only as an optional expected-sequence assertion for\n        compatibility; it can never grant access by itself.  The protected row set is\n        authenticated against `realized_split_assignment`; caller-supplied\n        `holdout_row_ids` is only an equality assertion and cannot shrink the seal.\n        \"\"\"''',
 )
 
-# Update existing leakage tests mechanically: their declared set becomes the authoritative map.
+# Existing tests use a wrapper that authenticates their declared holdout rows. New
+# negative tests call Ledger.check_leakage directly to exercise mismatch/missing maps.
 p = ROOT / "voice_genesis/calibration/tests/test_provenance.py"
 s = p.read_text(encoding="utf-8")
-if "def _realized_holdout_assignment(" not in s:
-    insert = '''\n\ndef _realized_holdout_assignment(row_ids):\n    from voice_genesis.calibration.vocab import Split\n    return {row_id: Split.HOLDOUT for row_id in row_ids}\n'''
-    marker = "from voice_genesis.calibration.vocab import BlockedCode\n"
+marker = "from voice_genesis.calibration.vocab import BlockedCode\n"
+wrapper = '''\n\ndef _check_leakage(*args, **kwargs):\n    from voice_genesis.calibration.vocab import Split\n\n    if \"holdout_row_ids\" in kwargs:\n        holdout = kwargs[\"holdout_row_ids\"]\n    elif len(args) >= 2:\n        holdout = args[1]\n    else:\n        raise AssertionError(\"holdout_row_ids required by test wrapper\")\n    kwargs.setdefault(\n        \"realized_split_assignment\",\n        {row_id: Split.HOLDOUT for row_id in holdout},\n    )\n    return Ledger.check_leakage(*args, **kwargs)\n'''
+if "def _check_leakage(*args, **kwargs):" not in s:
     if marker not in s:
         raise SystemExit("test_provenance import marker missing")
-    s = s.replace(marker, marker + insert, 1)
-
-# AST source-position insertion for every Ledger.check_leakage call missing the new keyword.
-tree = ast.parse(s)
-lines = s.splitlines(keepends=True)
-offsets = [0]
-for line in lines:
-    offsets.append(offsets[-1] + len(line))
-insertions = []
-for node in ast.walk(tree):
-    if not isinstance(node, ast.Call):
-        continue
-    fn = node.func
-    if not (isinstance(fn, ast.Attribute) and fn.attr == "check_leakage"):
-        continue
-    if any(k.arg == "realized_split_assignment" for k in node.keywords):
-        continue
-    holdout_kw = next((k for k in node.keywords if k.arg == "holdout_row_ids"), None)
-    if holdout_kw is None:
-        continue
-    expr = ast.get_source_segment(s, holdout_kw.value)
-    if expr is None:
-        raise SystemExit("could not recover holdout expression")
-    end = offsets[node.end_lineno - 1] + node.end_col_offset
-    # Insert immediately before closing ')'.
-    insertions.append((end - 1, f", realized_split_assignment=_realized_holdout_assignment({expr})"))
-for pos, text in sorted(insertions, reverse=True):
-    s = s[:pos] + text + s[pos:]
+    s = s.replace(marker, marker + wrapper, 1)
+s = s.replace("Ledger.check_leakage(", "_check_leakage(")
+# Restore the wrapper's internal authoritative call.
+s = s.replace("return _check_leakage(*args, **kwargs)", "return Ledger.check_leakage(*args, **kwargs)", 1)
 p.write_text(s, encoding="utf-8")
 
 append_once(
