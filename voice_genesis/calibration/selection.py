@@ -331,8 +331,8 @@ def _merge_unranked_pool_audit(
 def _merge_diagnostic_pool_audit(
     outcome: SelectionOutcome, pool: Sequence[CandidateCriteria]
 ) -> SelectionOutcome:
-    """DIAGNOSTIC_ONLY candidates are audit-only: preserve any canonical
-    criterion vector that is actually present, but never add them to ranking.
+    """Audit-only candidates (DIAGNOSTIC_ONLY / NONE) preserve any canonical
+    criterion vector that is actually present, but never enter ranking.
 
     CandidateCriteria does not carry a separate selection-family tag, so the
     existing payload shape is the only non-speculative discriminator. A complete
@@ -396,10 +396,9 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
        DIRECTIONAL 族 selection を行う。
     3. 両プールとも空なら `SELECTION_FAILED_CLOSED`。
 
-    `ceiling == DIAGNOSTIC_ONLY`（または `ceiling` 未設定）の候補は、たとえ
-    `eligible=True` であっても **いかなる場合も選抜対象に入らない**
-    （ABSOLUTE pool が空で DIRECTIONAL pool も空なら、DIAGNOSTIC_ONLY 候補が
-    どれだけ criteria 上優れていても selection は FAILED_CLOSED になる）。
+    `ceiling == DIAGNOSTIC_ONLY` / `NONE` の候補は、たとえ `eligible=True` でも
+    **いかなる場合も選抜対象に入らない**。ただし §9 の全候補監査要件に従い、
+    保持可能な criterion vector と除外理由は audit-only として必ず残す。
 
     数値上 DIRECTIONAL 候補の criteria が ABSOLUTE 候補より良く見えても、
     ceiling が高い ABSOLUTE pool が非空である限りそちらを優先する
@@ -446,20 +445,23 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
     absolute_pool = _pool(ClaimCeiling.ABSOLUTE)
     directional_pool = _pool(ClaimCeiling.DIRECTIONAL)
     diagnostic_pool = _pool(ClaimCeiling.DIAGNOSTIC_ONLY)
+    none_pool = _pool(ClaimCeiling.NONE)
 
     if _has_selectable(absolute_pool, SelectionFamily.ABSOLUTE):
         outcome = select(absolute_pool, SelectionFamily.ABSOLUTE)
         outcome = _merge_unranked_pool_audit(
             outcome, directional_pool, SelectionFamily.DIRECTIONAL
         )
-        return _merge_diagnostic_pool_audit(outcome, diagnostic_pool)
+        outcome = _merge_diagnostic_pool_audit(outcome, diagnostic_pool)
+        return _merge_diagnostic_pool_audit(outcome, none_pool)
 
     if _has_selectable(directional_pool, SelectionFamily.DIRECTIONAL):
         outcome = select(directional_pool, SelectionFamily.DIRECTIONAL)
         outcome = _merge_unranked_pool_audit(
             outcome, absolute_pool, SelectionFamily.ABSOLUTE
         )
-        return _merge_diagnostic_pool_audit(outcome, diagnostic_pool)
+        outcome = _merge_diagnostic_pool_audit(outcome, diagnostic_pool)
+        return _merge_diagnostic_pool_audit(outcome, none_pool)
 
     absolute_audit = select(absolute_pool, SelectionFamily.ABSOLUTE)
     directional_audit = select(directional_pool, SelectionFamily.DIRECTIONAL)
@@ -476,7 +478,7 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
     for candidate in candidates:
         if (
             candidate.candidate_id not in accounted_ids
-            and candidate.ceiling != ClaimCeiling.DIAGNOSTIC_ONLY
+            and candidate.ceiling not in (ClaimCeiling.DIAGNOSTIC_ONLY, ClaimCeiling.NONE)
         ):
             ineligible.append((candidate.candidate_id, "different_ceiling_pool"))
 
@@ -489,4 +491,5 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
         outcome="SELECTION_FAILED_CLOSED",
         ineligible_candidates=tuple(ineligible),
     )
-    return _merge_diagnostic_pool_audit(failed, diagnostic_pool)
+    failed = _merge_diagnostic_pool_audit(failed, diagnostic_pool)
+    return _merge_diagnostic_pool_audit(failed, none_pool)
