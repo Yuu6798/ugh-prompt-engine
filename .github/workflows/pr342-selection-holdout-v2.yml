@@ -17,11 +17,24 @@ jobs:
           python-version: '3.11'
       - name: Apply bounded review fixes
         run: python .github/pr342_selection_holdout_patch.py
+      - name: Deduplicate diagnostic failure audit
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('voice_genesis/calibration/selection.py')
+          s = p.read_text(encoding='utf-8')
+          old = '''    for candidate in candidates:\n        if candidate.candidate_id not in accounted_ids:\n            ineligible.append((candidate.candidate_id, "different_ceiling_pool"))\n\n    failed = SelectionOutcome('''
+          new = '''    for candidate in candidates:\n        if (\n            candidate.candidate_id not in accounted_ids\n            and candidate.ceiling != ClaimCeiling.DIAGNOSTIC_ONLY\n        ):\n            ineligible.append((candidate.candidate_id, "different_ceiling_pool"))\n\n    failed = SelectionOutcome('''
+          if old not in s:
+              raise SystemExit('diagnostic failure audit anchor missing')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
       - name: Remove temporary assets
         run: |
           rm -f .github/pr342_selection_holdout_patch.py
           rm -f .github/workflows/pr342-selection-holdout.yml
           rm -f .github/workflows/pr342-selection-holdout-v2.yml
+          rm -f .github/pr342-selection-holdout-trigger.txt
       - name: Commit locally for validation
         run: |
           git config user.name "github-actions[bot]"
