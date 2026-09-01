@@ -29,6 +29,18 @@ jobs:
               raise SystemExit('diagnostic failure audit anchor missing')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
           PY
+      - name: Align failure audit regression
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('voice_genesis/calibration/tests/test_selection.py')
+          s = p.read_text(encoding='utf-8')
+          old = '("diag-only", "different_ceiling_pool")'
+          if s.count(old) < 2:
+              raise SystemExit('expected diagnostic failure audit assertions missing')
+          s = s.replace(old, '("diag-only", "criteria_payload_absent")', 2)
+          p.write_text(s, encoding='utf-8')
+          PY
       - name: Remove temporary assets
         run: |
           rm -f .github/pr342_selection_holdout_patch.py
