@@ -76,15 +76,22 @@ def u_rep(per_instance_per_process_ranges: Mapping[Hashable, Sequence[float]]) -
     （設計正本 §6 の 6-call 構成に対する構造ゼロ希釈防止）。除外は U_rep を
     大きくする方向にしか働かない、fail 側の保守的な読みである。
 
-    全セルが singleton（有効な range が 1 件もない）の場合は計算不能として
+    いずれかの repeat 値が NaN/Inf の場合は range 計算前に fail-closed として
+    `None` を返す。Python の `max()`/`min()` は入力順によって NaN を事実上
+    読み飛ばし有限 range を作り得るため、非有限値を U_rep=0 等へ縮退させない。
+
+    全セルが singleton（有効な range が 1 件もない）の場合も計算不能として
     `None` を返す。呼び出し側はこれを NOT_EVALUABLE 系の missing 理由へ
     写像すること（`OUTPUT_NOT_EVALUABLE` 等）。
     """
     ranges: list[float] = []
     for repeats in per_instance_per_process_ranges.values():
+        values = np.asarray(repeats, dtype=float)
+        if values.size > 0 and not bool(np.all(np.isfinite(values))):
+            return None
         if len(repeats) < 2:
             continue
-        ranges.append((max(repeats) - min(repeats)) / 2.0)
+        ranges.append((float(np.max(values)) - float(np.min(values))) / 2.0)
     if not ranges:
         return None
     return q95(ranges)
