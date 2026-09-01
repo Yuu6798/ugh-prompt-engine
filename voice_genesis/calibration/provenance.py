@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from voice_genesis.calibration.canonical import canonical_json, manifest_sha
+from voice_genesis.calibration.splitter import RealizedSplitMap, RowInput, verify_split
 from voice_genesis.calibration.vocab import BlockedCode
 
 
@@ -739,33 +740,55 @@ class Ledger:
         holdout_row_ids: Iterable[str],
         unseal_seq: int | None,
         control_row_ids: Collection[str] = (),
-        realized_split_assignment: Mapping[str, object] | None = None,
+        realized_split_map: RealizedSplitMap | None = None,
+        split_verification_rows: Sequence[RowInput] = (),
+        split_secret: bytes | None = None,
     ) -> LeakageCheckResult:
         """Fail closed on pre-unseal holdout access.
 
-        The authoritative boundary is derived from a cryptographically verified
-        `holdout_unseal` ledger event with matching frozen prerequisite references.
-        `unseal_seq` is retained only as an optional expected-sequence assertion for
-        compatibility; it can never grant access by itself.  The protected row set is
-        authenticated against `realized_split_assignment`; caller-supplied
-        `holdout_row_ids` is only an equality assertion and cannot shrink the seal.
+        The authoritative unseal boundary is derived from a cryptographically
+        verified `holdout_unseal` ledger event with matching frozen prerequisite
+        references.  `unseal_seq` is retained only as an optional expected-sequence
+        assertion for compatibility; it can never grant access by itself.
+
+        The protected row set is derived only after the supplied `RealizedSplitMap`
+        has been mechanically recomputed and verified from its split rows and the
+        split secret (`splitter.verify_split`).  A raw caller-provided assignment is
+        therefore not an authority boundary.  `holdout_row_ids` is only an equality
+        assertion against the verified map and cannot shrink the seal.
         """
         verified_unseal_seq = _verified_holdout_unseal_seq(ledger_entries)
         if unseal_seq is not None and unseal_seq != verified_unseal_seq:
             verified_unseal_seq = None
 
         declared_holdout_set = set(holdout_row_ids)
-        if realized_split_assignment is None:
+        if (
+            realized_split_map is None
+            or split_secret is None
+            or not split_verification_rows
+            or not realized_split_map.assignment
+        ):
+            return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
+
+        try:
+            split_verified = verify_split(
+                split_verification_rows,
+                split_secret,
+                realized_split_map,
+            )
+        except (KeyError, TypeError, ValueError):
+            split_verified = False
+        if not split_verified:
             return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
 
         from voice_genesis.calibration.vocab import Split
 
         authenticated_holdout_set = {
             row_id
-            for row_id, split in realized_split_assignment.items()
+            for row_id, split in realized_split_map.assignment.items()
             if split == Split.HOLDOUT or split == Split.HOLDOUT.value
         }
-        if declared_holdout_set != authenticated_holdout_set:
+        if not authenticated_holdout_set or declared_holdout_set != authenticated_holdout_set:
             return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
         holdout_set = authenticated_holdout_set
         # ``control_row_ids`` is not an authority boundary.  A caller may request
