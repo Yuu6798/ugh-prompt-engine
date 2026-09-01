@@ -5,8 +5,11 @@ from __future__ import annotations
 import copy
 
 from voice_genesis.calibration import c0_validate, vocab
+from voice_genesis.calibration.candidates import registry as candidate_registry
 
 _MEASUREMENT_DIRECTORY_STATUS = "ABSENT:legacy_path=voice_genesis/harness/measure_v3.py"
+
+_ALL_METER_IDS = sorted(m.value for m in vocab.MeterId)
 
 
 def _complete_manifest() -> dict[str, object]:
@@ -39,7 +42,10 @@ def _complete_manifest() -> dict[str, object]:
         },
         "frozen_design": {
             "claim_critical_set": ["M3_FORMANTS", "M2_SPECTRAL_TILT", "M2_APERIODICITY"],
-            "meter_specs": {"F0_CONTROL": {"construct": "fundamental_frequency"}},
+            "meter_specs": {
+                meter_id: {"construct": f"{meter_id.lower()}_construct"}
+                for meter_id in _ALL_METER_IDS
+            },
             "fixture_spec": {"family": "F0_CONTROL"},
             "split_spec": {"split": "50/25/25", "seed": "hkdf"},
             "selection_rule": {"tie_rule": "candidate_id lexical"},
@@ -47,8 +53,12 @@ def _complete_manifest() -> dict[str, object]:
         },
         "independence_ledger": {"F0_CONTROL": "INDEPENDENT_ANALYTIC"},
         "rng_ledger": [
-            {"stream_name": "split_secret", "seeded": True},
-            {"stream_name": "generator/F0_CONTROL/row0", "seeded": True},
+            {"stream_name": "split_secret", "seeded": True, "public_seed_id": "1" * 64},
+            {
+                "stream_name": "generator/F0_CONTROL/row0",
+                "seeded": True,
+                "public_seed_id": "2" * 64,
+            },
         ],
         "env": {
             "container_image_digest": "ABSENT:no_container_used",
@@ -58,6 +68,12 @@ def _complete_manifest() -> dict[str, object]:
             "world_build_flags": "ABSENT:wheel_used",
         },
     }
+
+
+def test_complete_manifest_meter_specs_covers_registry_meters() -> None:
+    """fixture 自体の健全性: registry の全 meter family を meter_specs が持つこと。"""
+    registry_meters = {c.meter.value for c in candidate_registry.ALL_CANDIDATES}
+    assert set(_ALL_METER_IDS) == registry_meters
 
 
 def test_complete_manifest_has_no_blocks() -> None:
@@ -135,18 +151,125 @@ def test_recorded_or_absent_key_with_real_value_no_downgrade() -> None:
 def test_unseeded_rng_stream_blocks() -> None:
     manifest = _complete_manifest()
     manifest["rng_ledger"] = [
-        {"stream_name": "split_secret", "seeded": True},
+        {"stream_name": "split_secret", "seeded": True, "public_seed_id": "1" * 64},
         {"stream_name": "tie_break", "seeded": False},
     ]
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG in result.blocked_codes
     assert "tie_break" in result.unseeded_rng_streams
+    # unseeded 宣言以外は shape として妥当なので内容不備 BLOCK は併発しない
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE not in result.blocked_codes
 
 
 def test_all_seeded_rng_ledger_has_no_unseeded_block() -> None:
     result = c0_validate.validate_c0_manifest(_complete_manifest())
     assert vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG not in result.blocked_codes
     assert result.unseeded_rng_streams == ()
+
+
+def test_hollow_empty_container_manifest_is_blocked() -> None:
+    """Codex レビュー 2026-09-01 P1: 全キーが存在するが空コンテナ/空文字列の
+    「hollow」manifest は、存在チェックのみでは通ってしまっていた。内容検証で
+    ちゃんと BLOCK されることを確認する。
+    """
+    hollow: dict[str, object] = {
+        "repo": {"url": "", "commit_sha": "", "dirty_tree": False},
+        "measurement_directory_status": "",
+        "candidates": {
+            "meter_paths_sha256": {},
+            "generator_paths_sha256": {},
+            "schema_paths_sha256": {},
+            "test_paths_sha256": {},
+        },
+        "dependencies": {
+            "python_version": "",
+            "numpy_version": "",
+            "scipy_version": "",
+            "librosa_version": "",
+            "soundfile_version": "",
+        },
+        "sample_format": {"dtype": "", "channel_policy": "", "resampling_impl": ""},
+        "frozen_design": {
+            "claim_critical_set": [],
+            "meter_specs": {},
+            "fixture_spec": {},
+            "split_spec": {},
+            "selection_rule": {},
+            "provenance_spec": {},
+        },
+        "independence_ledger": {},
+        "rng_ledger": [],
+    }
+    result = c0_validate.validate_c0_manifest(hollow)
+    assert result.is_blocked is True
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    # `repo.dirty_tree=False` は hollow ではなく正しい記録値そのものなので missing
+    # に現れない。それ以外の全 REQUIRED_BLOCKING キーは hollow のため missing。
+    expected_missing = set(c0_validate.REQUIRED_BLOCKING_KEYS) - {"repo.dirty_tree"}
+    assert expected_missing.issubset(set(result.missing_required_keys))
+    assert "repo.dirty_tree" not in result.missing_required_keys
+
+
+def test_hash_map_entry_with_malformed_sha256_blocks() -> None:
+    manifest = _complete_manifest()
+    manifest["candidates"]["meter_paths_sha256"] = {
+        "voice_genesis/calibration/candidates/registry.py": "not-a-valid-sha256"
+    }
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        k.startswith("candidates.meter_paths_sha256[") for k in result.missing_required_keys
+    )
+
+
+def test_hash_map_entry_with_empty_path_blocks() -> None:
+    manifest = _complete_manifest()
+    manifest["candidates"]["meter_paths_sha256"] = {"": "a" * 64}
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        k.startswith("candidates.meter_paths_sha256[") for k in result.missing_required_keys
+    )
+
+
+def test_meter_specs_missing_one_meter_family_is_listed() -> None:
+    manifest = _complete_manifest()
+    del manifest["frozen_design"]["meter_specs"]["M6_IDENTITY"]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.meter_specs.M6_IDENTITY" in result.missing_required_keys
+    # 他の meter は欠けていないので余計な entry は列挙されない
+    assert sum(1 for k in result.missing_required_keys if "meter_specs." in k) == 1
+
+
+def test_independence_ledger_invalid_tier_value_blocks() -> None:
+    manifest = _complete_manifest()
+    manifest["independence_ledger"] = {"F0_CONTROL": "NOT_A_REAL_TIER"}
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(k.startswith("independence_ledger[") for k in result.missing_required_keys)
+
+
+def test_rng_ledger_entry_missing_stream_name_blocks() -> None:
+    manifest = _complete_manifest()
+    manifest["rng_ledger"] = [{"seeded": True, "public_seed_id": "3" * 64}]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(".stream_name" in k for k in result.missing_required_keys)
+
+
+def test_rng_ledger_seeded_entry_missing_seed_reference_blocks() -> None:
+    """`seeded=true` だが seed 参照（`public_seed_id`）が記録されていない
+    entry は、`seeded=false` の明示宣言（BLOCKED_C0_UNSEEDED_RNG）とは別に、
+    manifest 内容不備として BLOCKED_C0_MANIFEST_INCOMPLETE で捕捉する。
+    """
+    manifest = _complete_manifest()
+    manifest["rng_ledger"] = [{"stream_name": "split_secret", "seeded": True}]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(".public_seed_id" in k for k in result.missing_required_keys)
+    # seeded=true と明示宣言されているので unseeded 扱いにはしない
+    assert vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG not in result.blocked_codes
 
 
 def test_validate_c0_manifest_is_pure_no_io(tmp_path, monkeypatch) -> None:  # noqa: ANN001

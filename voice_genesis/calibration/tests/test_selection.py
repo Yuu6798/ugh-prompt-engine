@@ -189,6 +189,35 @@ def test_select_across_ceilings_diagnostic_only_never_selected() -> None:
     assert outcome.selected_candidate_id is None
 
 
+def test_select_duplicate_candidate_id_raises() -> None:
+    """[Codex レビュー 2026-09-01] regression: dict comprehension で
+    candidate_id をキーにすると重複時に一方が黙って上書きされる。`select()`
+    はこれを検出して `ValueError` を送出しなければならない。"""
+    a = CandidateCriteria(
+        candidate_id="dup", primary_normalized_mae=0.1, signed_bias=0.0, primary_q95_ae=0.1,
+    )
+    b = CandidateCriteria(
+        candidate_id="dup", primary_normalized_mae=0.9, signed_bias=0.9, primary_q95_ae=0.9,
+    )
+    with pytest.raises(ValueError, match="dup"):
+        select([a, b], SelectionFamily.ABSOLUTE)
+
+
+def test_select_across_ceilings_duplicate_candidate_id_raises() -> None:
+    """[Codex レビュー 2026-09-01] regression: `select_across_ceilings` も
+    pool 分割前に candidate_id の一意性を検証する。"""
+    a = CandidateCriteria(
+        candidate_id="dup", ceiling=ClaimCeiling.ABSOLUTE,
+        primary_normalized_mae=0.1, signed_bias=0.0, primary_q95_ae=0.1,
+    )
+    b = CandidateCriteria(
+        candidate_id="dup", ceiling=ClaimCeiling.DIRECTIONAL,
+        kendall_tau=0.5, adjacent_reversal_rate=0.0,
+    )
+    with pytest.raises(ValueError, match="dup"):
+        select_across_ceilings([a, b])
+
+
 def test_select_across_ceilings_ineligible_absolute_does_not_block_directional_fallback() -> None:
     ineligible_absolute = CandidateCriteria(
         candidate_id="abs-ineligible",

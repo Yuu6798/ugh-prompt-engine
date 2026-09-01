@@ -21,7 +21,16 @@ try:
     import pyworld  # type: ignore[import-untyped]
 
     _PYWORLD_AVAILABLE = True
-except ImportError:  # pragma: no cover - 本環境では未インストール（設計正本 §3.3 pyworld 特則）
+except ModuleNotFoundError as _exc:  # pragma: no cover - 本環境では未インストール（設計正本 §3.3 pyworld 特則）
+    # [Codex レビュー 2026-09-01 P2] `pyworld` パッケージ自体が見つからない場合
+    # （`e.name == "pyworld"`）に限って「不在」として ineligible 扱いする。
+    # インストール済みだが ABI/共有ライブラリ破損（例: `pyworld` の C 拡張が
+    # 依存する `.so` が見つからない）で失敗する場合は `ImportError` の別形
+    # （多くは `ModuleNotFoundError` ではなく `ImportError` そのもの、または
+    # `e.name` が `pyworld` 以外の内部依存名になる）であり、これを「不在」と
+    # 誤報告すると実際の破損を隠蔽してしまうため、re-raise して顕在化させる。
+    if _exc.name != "pyworld":
+        raise
     pyworld = None  # type: ignore[assignment]
     _PYWORLD_AVAILABLE = False
 

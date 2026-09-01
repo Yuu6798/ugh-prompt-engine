@@ -14,7 +14,27 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
 ## 二層判定（設計正本 §3.1 / §3.2）
 
 - **REQUIRED_BLOCKING**（§3.1）: 欠落すると
-  `vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE` を発行する。
+  `vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE` を発行する。単なる
+  キー存在チェックに留めず、以下の内容検証も行う（Codex レビュー
+  2026-09-01 P1: 空コンテナの hollow manifest が存在チェックのみでは
+  通過してしまうため）:
+  - 文字列値は非空（空白のみも不可）、mapping/list 値は非空（`{}`/`[]` は
+    「未記録」と同義として missing 扱い）。
+  - path+hash 系マップ（`candidates.*_paths_sha256`）は各エントリが
+    `path -> sha256` 形状で、path は非空文字列、sha256 は 64 桁の小文字
+    16 進文字列であることを検査する（`[UNDERSPEC-CAL-C10]`）。
+  - `frozen_design.meter_specs` は `candidates.registry.ALL_CANDIDATES` が
+    定義する全 meter family をカバーする（欠落 meter は
+    `frozen_design.meter_specs.<METER_ID>` として個別に列挙する。
+    `[UNDERSPEC-CAL-C11]`）。
+  - `independence_ledger` は非空 mapping であり、各エントリの値が
+    `vocab.IndependenceTier` の閉語彙に属する文字列であることを検査する
+    （`[UNDERSPEC-CAL-C12]`）。
+  - `rng_ledger` は非空 list であり、各エントリが `stream_name`（非空文字列）
+    と `seeded`（bool）を持ち、`seeded=True` のエントリは非空の
+    `public_seed_id`（seed 参照。§3.3「stream 列挙 + seed 参照」に対応。
+    `streams.RngLedgerEntry.public_seed_id` と命名を揃えた）も持つことを
+    検査する（`[UNDERSPEC-CAL-C13]`）。
 - **RECORDED_OR_ABSENT**（§3.2）: 値または `"ABSENT:<理由>"` 文字列のいずれか
   が必須記録される。[UNDERSPEC-CAL-C07] 「必須記録」という文言を厳格に読み、
   キー自体が manifest に全く存在しない場合は REQUIRED_BLOCKING と同じ扱い
@@ -34,15 +54,20 @@ ineligible とする（`d4c_ineligible=True` で表現。BLOCKED code は発行�
 ## RNG 台帳（§3.3）
 
 `rng_ledger` に列挙された stream のいずれかが unseeded と明示的に宣言されて
-いる場合、`vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG` を発行する。
+いる場合、`vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG` を発行する
+（entry の形状そのものが壊れている場合は上記 REQUIRED_BLOCKING の内容検証
+側で `BLOCKED_C0_MANIFEST_INCOMPLETE` として捕捉する。両者は排他ではなく
+併発しうる）。
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from . import vocab
+from .candidates import registry as candidate_registry
 
 # ---------------------------------------------------------------------------
 # 二層キー語彙（設計正本 §3.1 / §3.2 の機械可読な写像）
@@ -76,6 +101,17 @@ REQUIRED_BLOCKING_KEYS: tuple[str, ...] = (
     "independence_ledger",
     "rng_ledger",
 )
+
+#: path+hash 系マップ（設計正本 §3.1: 「候補 meter・generator・schema・test の
+#: 全 path + SHA-256」）。各マップは `path -> sha256_hex` の mapping。
+HASH_MAP_KEYS: tuple[str, ...] = (
+    "candidates.meter_paths_sha256",
+    "candidates.generator_paths_sha256",
+    "candidates.schema_paths_sha256",
+    "candidates.test_paths_sha256",
+)
+
+_SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 #: RECORDED_OR_ABSENT（§3.2）。値 または `"ABSENT:<理由>"` のいずれかが必須。
 RECORDED_OR_ABSENT_KEYS: tuple[str, ...] = (
@@ -114,6 +150,21 @@ def _is_absent_marker(value: object) -> bool:
     return isinstance(value, str) and value.startswith(_ABSENT_PREFIX)
 
 
+def _is_hollow(value: object) -> bool:
+    """`None` 以外で「実質未記録」とみなす値（空文字列・空 mapping・空 list 等）。
+
+    存在チェックだけでは `{}` や `""` を「記録済み」として通してしまうため
+    （Codex レビュー 2026-09-01 P1: hollow manifest 問題）、内容の空虚さも
+    missing 扱いにする。真偽値・数値の `0`/`False` は意図的な記録値
+    でありうるため hollow とはみなさない。
+    """
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (Mapping, list, tuple, set, frozenset)):
+        return len(value) == 0
+    return False
+
+
 @dataclass(frozen=True)
 class C0ValidationResult:
     """dry-run 検証結果。書込・secret 生成・freeze event のいずれも伴わない。"""
@@ -131,7 +182,7 @@ class C0ValidationResult:
 
 
 def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
-    """REQUIRED_BLOCKING キーのうち欠落しているものを返す。
+    """REQUIRED_BLOCKING キーのうち欠落・hollow なものを返す。
 
     `repo.dirty_tree` は「値が False であること」自体が要求（§3.1:
     「dirty-tree=false」）のため、存在していても `True` なら欠落と同様に
@@ -140,12 +191,104 @@ def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
     missing: list[str] = []
     for key in REQUIRED_BLOCKING_KEYS:
         found, value = _resolve(manifest, key)
-        if not found or value is None:
+        if not found or value is None or _is_hollow(value):
             missing.append(key)
             continue
         if key == "repo.dirty_tree" and value is not False:
             missing.append(f"{key} (must be exactly false, got {value!r})")
     return missing
+
+
+def _check_hash_maps(manifest: Mapping[str, object]) -> list[str]:
+    """path+hash 系マップの内容検証（設計正本 §3.1。`[UNDERSPEC-CAL-C10]`）。
+
+    非空・欠落チェックは `_check_required_blocking` 側で既に行うため、ここでは
+    「存在し非空だが形状が壊れている」ケースのみを追加で検出する。
+    """
+    violations: list[str] = []
+    for key in HASH_MAP_KEYS:
+        found, value = _resolve(manifest, key)
+        if not found or _is_hollow(value) or not isinstance(value, Mapping):
+            continue  # 欠落/非 mapping は _check_required_blocking 側で既に捕捉
+        for path, sha in value.items():
+            if not isinstance(path, str) or path.strip() == "":
+                violations.append(f"{key}[{path!r}] (path must be a non-empty string)")
+                continue
+            if not isinstance(sha, str) or not _SHA256_HEX_RE.match(sha):
+                violations.append(
+                    f"{key}[{path!r}] (sha256 must be 64 lowercase hex chars, got {sha!r})"
+                )
+    return violations
+
+
+def _required_meter_ids() -> frozenset[str]:
+    """`candidates.registry.ALL_CANDIDATES` が定義する全 meter family の値集合。"""
+    return frozenset(c.meter.value for c in candidate_registry.ALL_CANDIDATES)
+
+
+def _check_meter_specs_coverage(manifest: Mapping[str, object]) -> list[str]:
+    """`frozen_design.meter_specs` が candidates.registry の全 meter family を
+    カバーするかを検査する（設計正本 §3.1「frozen design 全項目」。
+    `[UNDERSPEC-CAL-C11]`）。欠落 meter を個別に列挙する。
+    """
+    found, meter_specs = _resolve(manifest, "frozen_design.meter_specs")
+    if not found or _is_hollow(meter_specs) or not isinstance(meter_specs, Mapping):
+        return []  # 欠落/非 mapping は _check_required_blocking 側で既に捕捉
+    missing_meters = sorted(_required_meter_ids() - set(meter_specs.keys()))
+    return [f"frozen_design.meter_specs.{meter_id}" for meter_id in missing_meters]
+
+
+def _check_independence_ledger(manifest: Mapping[str, object]) -> list[str]:
+    """`independence_ledger` のエントリ形状検査（設計正本 §4。`[UNDERSPEC-CAL-C12]`）。
+
+    各値が `vocab.IndependenceTier` の閉語彙に属する文字列であることを検査する。
+    """
+    found, ledger = _resolve(manifest, "independence_ledger")
+    if not found or _is_hollow(ledger) or not isinstance(ledger, Mapping):
+        return []  # 欠落/非 mapping は _check_required_blocking 側で既に捕捉
+    valid_tiers = {t.value for t in vocab.IndependenceTier}
+    violations: list[str] = []
+    for entry_key, tier_value in ledger.items():
+        if not isinstance(tier_value, str) or tier_value not in valid_tiers:
+            violations.append(
+                f"independence_ledger[{entry_key!r}] (must be one of {sorted(valid_tiers)}, "
+                f"got {tier_value!r})"
+            )
+    return violations
+
+
+def _check_rng_ledger_shape(manifest: Mapping[str, object]) -> list[str]:
+    """`rng_ledger` の entry 形状検査（設計正本 §3.3「stream 列挙 + seed 参照」。
+    `[UNDERSPEC-CAL-C13]`）。
+
+    各 entry は非空 `stream_name`（str）と `seeded`（bool）を必須とし、
+    `seeded=True` の場合はさらに非空 `public_seed_id`（seed 参照。
+    `streams.RngLedgerEntry.public_seed_id` と命名を揃えた）を必須とする。
+    """
+    found, ledger = _resolve(manifest, "rng_ledger")
+    if not found or _is_hollow(ledger) or not isinstance(ledger, Sequence):
+        return []  # 欠落/空/非 list は _check_required_blocking 側で既に捕捉
+    if isinstance(ledger, (str, bytes)):
+        return [f"rng_ledger (must be a list of entries, got {type(ledger).__name__})"]
+
+    violations: list[str] = []
+    for i, entry in enumerate(ledger):
+        if not isinstance(entry, Mapping):
+            violations.append(f"rng_ledger[{i}] (entry must be a mapping)")
+            continue
+        stream_name = entry.get("stream_name")
+        if not isinstance(stream_name, str) or stream_name.strip() == "":
+            violations.append(f"rng_ledger[{i}].stream_name (must be a non-empty string)")
+        if not isinstance(entry.get("seeded"), bool):
+            violations.append(f"rng_ledger[{i}].seeded (must be a bool)")
+            continue
+        if entry["seeded"] is True:
+            seed_ref = entry.get("public_seed_id")
+            if not isinstance(seed_ref, str) or seed_ref.strip() == "":
+                violations.append(
+                    f"rng_ledger[{i}].public_seed_id (required seed reference when seeded=true)"
+                )
+    return violations
 
 
 def _check_recorded_or_absent(
@@ -162,7 +305,7 @@ def _check_recorded_or_absent(
     downgrades: list[str] = []
     for key in RECORDED_OR_ABSENT_KEYS:
         found, value = _resolve(manifest, key)
-        if not found or value is None:
+        if not found or value is None or _is_hollow(value):
             missing_entirely.append(key)
             continue
         if _is_absent_marker(value):
@@ -181,14 +324,16 @@ def _check_pyworld(manifest: Mapping[str, object]) -> tuple[bool, str | None]:
     return True, "pyworld exact version + wheel hash not recorded"
 
 
-def _check_rng_ledger(manifest: Mapping[str, object]) -> tuple[str, ...]:
+def _check_rng_ledger_unseeded(manifest: Mapping[str, object]) -> tuple[str, ...]:
     """`rng_ledger` 中で unseeded と明示宣言された stream 名のリストを返す。
 
     各 entry は `{"stream_name": str, "seeded": bool, ...}` を想定する
     ([UNDERSPEC-CAL-C08] 設計正本は entry のフィールド名までは規定しない。
     最も単純な bool フラグ方式を採った)。`rng_ledger` 自体が欠落・空・
     非 list の場合はここでは検出しない（欠落は REQUIRED_BLOCKING 側で
-    既に捕捉される）。
+    既に捕捉される）。entry 自体の形状違反（`stream_name`/`seeded` 欠落等）は
+    `_check_rng_ledger_shape` 側で `BLOCKED_C0_MANIFEST_INCOMPLETE` として
+    別途捕捉する（本関数は `seeded=False` の明示宣言のみを見る）。
     """
     found, ledger = _resolve(manifest, "rng_ledger")
     if not found or not isinstance(ledger, Sequence) or isinstance(ledger, (str, bytes)):
@@ -206,11 +351,16 @@ def _check_rng_ledger(manifest: Mapping[str, object]) -> tuple[str, ...]:
 def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     """C0 freeze manifest を dry-run 検証する（書込・secret 生成・freeze event なし）。"""
     missing_required = _check_required_blocking(manifest)
+    missing_required += _check_hash_maps(manifest)
+    missing_required += _check_meter_specs_coverage(manifest)
+    missing_required += _check_independence_ledger(manifest)
+    missing_required += _check_rng_ledger_shape(manifest)
+
     missing_recorded, downgrades = _check_recorded_or_absent(manifest)
     all_missing = tuple(missing_required + missing_recorded)
 
     d4c_ineligible, d4c_reason = _check_pyworld(manifest)
-    unseeded_streams = _check_rng_ledger(manifest)
+    unseeded_streams = _check_rng_ledger_unseeded(manifest)
 
     blocked: list[vocab.BlockedCode] = []
     if all_missing:

@@ -22,22 +22,36 @@ def test_component_u_hand_computed() -> None:
 
 
 def test_pair_uncertainty_sum_of_norms_exceeds_norm_of_sum_l2() -> None:
-    # 三角不等式の非退化ケース: u_a=[3,4] (||.||2=5), u_b=[4,3] (||.||2=5)
-    # sum-of-norms = 5+5 = 10
-    # norm-of-sum = ||[7,7]||2 = sqrt(49+49) = sqrt(98) = 7*sqrt(2) ≈ 9.899...
-    # sum-of-norms (10) > norm-of-sum (9.899...) -> 採用式は保守的 (より大きい)
+    """[Codex レビュー 2026-09-01] `pair_uncertainty` は `m6_distance` の
+    component distance と同一の `1/n` 等重み (`n` = 各ベクトルの成分数) を
+    p-norm に掛ける（distance が `weight=1/n` を掛けているのと同じ演算。
+    `_weighted_norm` の docstring 参照）。修正前は重みなし p-norm をそのまま
+    使っており、n 成分の pair で `U_obs_pair` が `D_obs` に対し最大 n 倍
+    過大だった。
+
+    三角不等式の非退化ケース: u_a=[3,4] (n=2, ||.||2=5 -> weighted=5/2=2.5),
+    u_b=[4,3] (n=2, ||.||2=5 -> weighted=2.5)
+    sum-of-norms (weighted) = 2.5+2.5 = 5.0
+    norm-of-sum (weighted)  = ||[7,7]||2/2 = sqrt(49+49)/2 = 7*sqrt(2)/2 ≈ 4.9497...
+    sum-of-norms (5.0) > norm-of-sum (≈4.9497) -> 同じ重みを掛けても
+    採用式 (sum-of-norms) の保守性 (より大きい) は保たれる
+    """
     u_a = [3.0, 4.0]
     u_b = [4.0, 3.0]
     sum_of_norms = pair_uncertainty(u_a, u_b, "L2")
-    norm_of_sum = math.sqrt((3.0 + 4.0) ** 2 + (4.0 + 3.0) ** 2)
-    assert sum_of_norms == pytest.approx(10.0)
-    assert norm_of_sum == pytest.approx(7 * math.sqrt(2))
+    norm_of_sum = math.sqrt((3.0 + 4.0) ** 2 + (4.0 + 3.0) ** 2) / 2.0
+    assert sum_of_norms == pytest.approx(5.0)
+    assert norm_of_sum == pytest.approx(7 * math.sqrt(2) / 2.0)
     assert sum_of_norms > norm_of_sum
 
 
 def test_pair_uncertainty_l1_hand_computed() -> None:
-    # ||[1,2,3]||1 + ||[4,5]||1 = 6 + 9 = 15
-    assert pair_uncertainty([1.0, 2.0, 3.0], [4.0, 5.0], "L1") == pytest.approx(15.0)
+    # weighted L1 norm = ||v||1 / len(v) (m6_distance と同じ 1/n 等重み。
+    # n は各ベクトル自身の長さ):
+    #   ||[1,2,3]||1/3 = 6/3 = 2.0
+    #   ||[4,5]||1/2   = 9/2 = 4.5
+    # U_obs_pair = 2.0 + 4.5 = 6.5
+    assert pair_uncertainty([1.0, 2.0, 3.0], [4.0, 5.0], "L1") == pytest.approx(6.5)
 
 
 def test_t_null_hand_computed() -> None:
@@ -173,3 +187,46 @@ def test_m6_distance_full_success_oracle_l1_and_l2() -> None:
     assert result_l2.distance == pytest.approx(expected_l2)
     by_id_l2 = {c.component_id: c for c in result_l2.components}
     assert by_id_l2["M2_APERIODICITY"].contribution == pytest.approx(4.0)  # L2: diff^2
+
+
+def test_pair_uncertainty_distance_consistency_hand_derived() -> None:
+    """[Codex レビュー 2026-09-01] scale-consistency オラクル: 各終端の
+    不確かさベクトルが `m6_distance` の `diff_normalized` の絶対値そのもの
+    (対称ケース `u_A = u_B = |d|`) のとき、`D_obs == U_obs_pair/2` が
+    p in {1,2} いずれでも成立する（endpoint symmetry）。
+
+    手計算導出（`pair_uncertainty` / `_weighted_norm` の docstring と同一）:
+    ```
+    weighted_norm(v,p) = ||v||_p / n   (n = len(v); m6_distance の distance が
+                                          使う 1/n 等重みと同一)
+    U_obs_pair = weighted_norm(u_A,p) + weighted_norm(u_B,p)
+               = ||d||_p/n + ||d||_p/n = 2*(||d||_p/n)
+    D_obs      = weight * norm_p(d) = (1/n) * ||d||_p   (m6_distance の式そのもの)
+    => U_obs_pair = 2 * D_obs  <=>  D_obs == U_obs_pair / 2
+    ```
+    weight に `1/n**(1/p)` 等の p 依存重みを使う実装や、`_norm` に重みを
+    掛け忘れる回帰があると、この等式は崩れ本テストは失敗する。
+    """
+    components_a = {
+        MeterId.M3_FORMANTS: 100.0,
+        MeterId.M2_SPECTRAL_TILT: 50.0,
+        MeterId.M2_APERIODICITY: 10.0,
+    }
+    components_b = {
+        MeterId.M3_FORMANTS: 110.0,
+        MeterId.M2_SPECTRAL_TILT: 40.0,
+        MeterId.M2_APERIODICITY: 16.0,
+    }
+    e_use = {
+        MeterId.M3_FORMANTS: 20.0,
+        MeterId.M2_SPECTRAL_TILT: 5.0,
+        MeterId.M2_APERIODICITY: 3.0,
+    }
+    for norm in ("L1", "L2"):
+        result = m6_distance(
+            components_a, components_b, e_use, member_status=_ALL_ABSOLUTE, norm=norm
+        )
+        assert result.distance is not None
+        abs_diffs = [abs(c.diff_normalized) for c in result.components]
+        u_obs_pair = pair_uncertainty(abs_diffs, abs_diffs, norm)
+        assert result.distance == pytest.approx(u_obs_pair / 2.0)

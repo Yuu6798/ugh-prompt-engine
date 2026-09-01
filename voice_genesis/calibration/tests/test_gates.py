@@ -85,6 +85,18 @@ def _instance(instance_id: str, ae: float, e: float, u_gt: float, u_num: float, 
     )
 
 
+def _inv_pairs(
+    axis: str, n: int, *, ds: float = 0.0, e_use_i0: float = 1.0, e_use_ia: float = 1.0
+) -> list[InvariancePair]:
+    """axis 上に `n` 件の *distinct* pair_id を持つ InvariancePair を生成する。
+    gate4' の重複 pair_id 検出（Codex レビュー 2026-09-01）を通過させるため、
+    テストは同一観測を使い回すのではなく必ずこのヘルパーで一意な観測を作る。"""
+    return [
+        InvariancePair(pair_id=f"{axis}-p{i}", axis=axis, ds=ds, e_use_i0=e_use_i0, e_use_ia=e_use_ia)
+        for i in range(n)
+    ]
+
+
 def test_absolute_gates_g_zero_passes_boundary() -> None:
     # G = ae+u_gt+u_num+u_rep+u_proc-e_use = 1.0+0+0+0+0-1.0 = 0.0 -> PASS 側
     instances = [_instance("i1", ae=1.0, e=1.0, u_gt=0.0, u_num=0.0, e_use=1.0)]
@@ -92,9 +104,8 @@ def test_absolute_gates_g_zero_passes_boundary() -> None:
         instances,
         u_rep=0.0,
         u_proc=0.0,
-        invariance_pairs_by_axis={
-            "axis1": [InvariancePair("axis1", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)] * 5
-        },
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
         fdr0=0.0,
         fnr1=0.0,
         min_count_met=True,
@@ -113,19 +124,18 @@ def test_absolute_gates_hand_computed_full_pass() -> None:
     # gate3: bias=mean([1.0,-0.5])=0.25, |bias|=0.25
     #   max(u_gt+u_num)=max(0.3,0.3)=0.3, median(e_use)=median([2.0,2.0])=2.0
     #   lhs = 0.25+0.3+0.05+0.05 = 0.65 <= 2.0 -> True
-    # gate4 (5 pairs, all identical): margin = 0.01+0.05+0.05-1.0 = -0.89 <= 0
+    # gate4 (5 distinct pairs, identical ds/e_use): margin = 0.01+0.05+0.05-1.0 = -0.89 <= 0
     instances = [
         _instance("i1", ae=1.0, e=1.0, u_gt=0.2, u_num=0.1, e_use=2.0),
         _instance("i2", ae=0.5, e=-0.5, u_gt=0.2, u_num=0.1, e_use=2.0),
     ]
-    invariance = {
-        "axis1": [InvariancePair("axis1", ds=0.01, e_use_i0=1.0, e_use_ia=1.0) for _ in range(5)]
-    }
+    invariance = {"axis1": _inv_pairs("axis1", 5, ds=0.01)}
     result = absolute_gates(
         instances,
         u_rep=0.05,
         u_proc=0.05,
         invariance_pairs_by_axis=invariance,
+        declared_invariance_axes={"axis1"},
         fdr0=0.0,
         fnr1=0.0,
         min_count_met=True,
@@ -148,9 +158,8 @@ def test_absolute_gates_gate3_arithmetic_fails_hand_computed() -> None:
         instances,
         u_rep=0.0,
         u_proc=0.0,
-        invariance_pairs_by_axis={
-            "axis1": [InvariancePair("axis1", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)] * 5
-        },
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
         fdr0=0.0,
         fnr1=0.0,
         min_count_met=True,
@@ -169,9 +178,8 @@ def test_absolute_gates_ineligible_primary_fails_gate1() -> None:
         [ineligible, good],
         u_rep=0.0,
         u_proc=0.0,
-        invariance_pairs_by_axis={
-            "axis1": [InvariancePair("axis1", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)] * 5
-        },
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
         fdr0=0.0,
         fnr1=0.0,
         min_count_met=True,
@@ -186,9 +194,8 @@ def test_absolute_gates_invariance_axis_needs_5_pairs() -> None:
         instances,
         u_rep=0.0,
         u_proc=0.0,
-        invariance_pairs_by_axis={
-            "axis1": [InvariancePair("axis1", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)] * 4
-        },
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 4)},
+        declared_invariance_axes={"axis1"},
         fdr0=0.0,
         fnr1=0.0,
         min_count_met=True,
@@ -197,15 +204,59 @@ def test_absolute_gates_invariance_axis_needs_5_pairs() -> None:
     assert "axis1" in "".join(result.failure_reasons)
 
 
+def test_absolute_gates_invariance_duplicate_pair_id_fails() -> None:
+    """[Codex レビュー 2026-09-01] regression: 同一観測 (同じ pair_id) を 5 回
+    複製しても ">=5 pairs" を満たしたことにはならない。旧実装は
+    `len(pairs) < 5` しか見ておらず、1 件の観測を 5 回カウントする水増しを
+    通してしまっていた。"""
+    instances = [_instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)]
+    duplicated_observation = InvariancePair(
+        pair_id="dup", axis="axis1", ds=0.0, e_use_i0=1.0, e_use_ia=1.0
+    )
+    result = absolute_gates(
+        instances,
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": [duplicated_observation] * 5},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.gate4_invariance is False
+    assert result.passed is False
+    assert any("duplicate" in r for r in result.failure_reasons)
+
+
+def test_absolute_gates_declared_axis_absent_from_pairs_fails() -> None:
+    """[Codex レビュー 2026-09-01] regression: `declared_invariance_axes` は
+    C0 で凍結した閉集合として走査するため、対応する pair が
+    `invariance_pairs_by_axis` に 1 件もない軸は黙って消えず、明示的に
+    `<5 pairs` として gate4' を FAIL させる。"""
+    instances = [_instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)]
+    result = absolute_gates(
+        instances,
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={},  # axis2 に対応する pair が 1 件もない
+        declared_invariance_axes={"axis2"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.gate4_invariance is False
+    assert result.passed is False
+    assert "axis2" in "".join(result.failure_reasons)
+
+
 def test_absolute_gates_gate5_detection_fails_when_fdr_nonzero() -> None:
     instances = [_instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)]
     result = absolute_gates(
         instances,
         u_rep=0.0,
         u_proc=0.0,
-        invariance_pairs_by_axis={
-            "axis1": [InvariancePair("axis1", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)] * 5
-        },
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
         fdr0=0.1,
         fnr1=0.0,
         min_count_met=True,
@@ -219,9 +270,8 @@ def test_absolute_gates_gate5_not_applicable_passthrough() -> None:
         instances,
         u_rep=0.0,
         u_proc=0.0,
-        invariance_pairs_by_axis={
-            "axis1": [InvariancePair("axis1", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)] * 5
-        },
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
         fdr0=0.9,
         fnr1=0.9,
         min_count_met=False,
@@ -241,6 +291,7 @@ def test_absolute_gates_no_primary_instance_raises() -> None:
             u_rep=0.0,
             u_proc=0.0,
             invariance_pairs_by_axis={},
+            declared_invariance_axes=(),
             fdr0=0.0,
             fnr1=0.0,
             min_count_met=True,
@@ -278,6 +329,7 @@ def test_directional_resolvable_exact_equality_is_not_resolvable() -> None:
         [p],
         u_rep=0.02,
         u_proc=0.01,
+        expected_sweep_ids={"default"},
         negative_control_failures=0,
         positive_control_failures=0,
         units_commensurate=True,
@@ -292,6 +344,7 @@ def test_directional_resolvable_strictly_greater_is_resolvable() -> None:
         [p],
         u_rep=0.02,
         u_proc=0.01,
+        expected_sweep_ids={"default"},
         negative_control_failures=0,
         positive_control_failures=0,
         units_commensurate=True,
@@ -314,6 +367,7 @@ def test_directional_units_incommensurate_truth_passes_output_fails() -> None:
         [p],
         u_rep=0.02,
         u_proc=0.01,
+        expected_sweep_ids={"default"},
         negative_control_failures=0,
         positive_control_failures=0,
         units_commensurate=False,
@@ -335,6 +389,7 @@ def test_directional_units_commensurate_two_conjuncts_pass_but_combined_fails() 
         [p],
         u_rep=0.02,
         u_proc=0.01,
+        expected_sweep_ids={"default"},
         negative_control_failures=0,
         positive_control_failures=0,
         units_commensurate=True,
@@ -350,6 +405,7 @@ def test_directional_units_incommensurate_same_pair_would_resolve_without_combin
         [p],
         u_rep=0.02,
         u_proc=0.01,
+        expected_sweep_ids={"default"},
         negative_control_failures=0,
         positive_control_failures=0,
         units_commensurate=False,
@@ -366,6 +422,7 @@ def test_directional_exactly_three_pairs_sets_warning_flag() -> None:
         pairs,
         u_rep=0.02,
         u_proc=0.01,
+        expected_sweep_ids={"default"},
         negative_control_failures=0,
         positive_control_failures=0,
         units_commensurate=False,
@@ -380,6 +437,7 @@ def test_directional_fewer_than_three_pairs_fails() -> None:
         pairs,
         u_rep=0.02,
         u_proc=0.01,
+        expected_sweep_ids={"default"},
         negative_control_failures=0,
         positive_control_failures=0,
         units_commensurate=False,
@@ -399,6 +457,7 @@ def test_directional_adjacent_reversal_fails() -> None:
         pairs,
         u_rep=0.02,
         u_proc=0.01,
+        expected_sweep_ids={"default"},
         negative_control_failures=0,
         positive_control_failures=0,
         units_commensurate=False,
@@ -407,17 +466,46 @@ def test_directional_adjacent_reversal_fails() -> None:
     assert result.passed is False
 
 
+def test_directional_nonadjacent_wrong_sign_does_not_block_pass() -> None:
+    """[Codex レビュー 2026-09-01] regression: §10.4 は「全 resolvable
+    **adjacent** pair の正符号」を要求する。resolvable な non-adjacent pair
+    の符号違反は pass 判定基準に数えてはならない（旧実装は non-adjacent の
+    符号違反でも `all_correct=False` にしていた）。"""
+    adjacent_ok = [
+        _pair(f"adj{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=True, correct_sign=True)
+        for i in range(3)
+    ]
+    nonadjacent_wrong = _pair(
+        "nonadj-wrong", delta_truth=1.0, delta_output=1.0, is_adjacent=False, correct_sign=False
+    )
+    result = directional_gates(
+        [*adjacent_ok, nonadjacent_wrong],
+        u_rep=0.02,
+        u_proc=0.01,
+        expected_sweep_ids={"default"},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert nonadjacent_wrong.pair_id in result.resolvable_pairs  # 記録はされる
+    assert result.all_resolvable_correct_sign is True
+    assert result.adjacent_reversal_rate == 0.0
+    assert result.passed is True
+
+
 def test_directional_tau_b_recorded_but_never_gates_pass() -> None:
     pairs = [
         _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False) for i in range(3)
     ]
     result_low_tau = directional_gates(
-        pairs, u_rep=0.02, u_proc=0.01, negative_control_failures=0,
-        positive_control_failures=0, units_commensurate=False, tau_b=0.01,
+        pairs, u_rep=0.02, u_proc=0.01, expected_sweep_ids={"default"},
+        negative_control_failures=0, positive_control_failures=0,
+        units_commensurate=False, tau_b=0.01,
     )
     result_high_tau = directional_gates(
-        pairs, u_rep=0.02, u_proc=0.01, negative_control_failures=0,
-        positive_control_failures=0, units_commensurate=False, tau_b=0.99,
+        pairs, u_rep=0.02, u_proc=0.01, expected_sweep_ids={"default"},
+        negative_control_failures=0, positive_control_failures=0,
+        units_commensurate=False, tau_b=0.99,
     )
     assert result_low_tau.passed == result_high_tau.passed
     assert result_low_tau.tau_b == pytest.approx(0.01)
@@ -429,10 +517,31 @@ def test_directional_control_failures_block_pass() -> None:
         _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False) for i in range(3)
     ]
     result = directional_gates(
-        pairs, u_rep=0.02, u_proc=0.01, negative_control_failures=1,
+        pairs, u_rep=0.02, u_proc=0.01, expected_sweep_ids={"default"},
+        negative_control_failures=1,
         positive_control_failures=0, units_commensurate=False,
     )
     assert result.passed is False
+
+
+def test_directional_duplicate_pair_id_within_sweep_fails() -> None:
+    """[Codex レビュー 2026-09-01] regression: 同一 pair_id が同一 sweep 内で
+    重複していると、resolvable 件数の水増しを防ぐため gate は FAIL する。"""
+    pairs = [
+        _pair("dup", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-A")
+        for _ in range(3)
+    ]
+    result = directional_gates(
+        pairs,
+        u_rep=0.02,
+        u_proc=0.01,
+        expected_sweep_ids={"sweep-A"},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.passed is False
+    assert any("duplicate" in r for r in result.failure_reasons)
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +562,7 @@ def test_directional_three_pairs_spread_over_three_sweeps_fails() -> None:
         pairs,
         u_rep=0.02,
         u_proc=0.01,
+        expected_sweep_ids={"sweep-A", "sweep-B", "sweep-C"},
         negative_control_failures=0,
         positive_control_failures=0,
         units_commensurate=False,
@@ -476,6 +586,7 @@ def test_directional_one_sweep_with_exactly_three_pairs_passes_with_warning() ->
         pairs,
         u_rep=0.02,
         u_proc=0.01,
+        expected_sweep_ids={"sweep-A"},
         negative_control_failures=0,
         positive_control_failures=0,
         units_commensurate=False,
@@ -500,6 +611,7 @@ def test_directional_multi_sweep_each_meeting_minimum_passes() -> None:
         pairs,
         u_rep=0.02,
         u_proc=0.01,
+        expected_sweep_ids={"sweep-A", "sweep-B"},
         negative_control_failures=0,
         positive_control_failures=0,
         units_commensurate=False,
@@ -508,3 +620,26 @@ def test_directional_multi_sweep_each_meeting_minimum_passes() -> None:
     assert result.sweeps_below_minimum == ()
     assert result.sweep_resolvable_counts == {"sweep-A": 3, "sweep-B": 4}
     assert result.sweeps_with_warning == ("sweep-A",)  # sweep-B has 4, not exactly 3
+
+
+def test_directional_expected_sweep_with_no_observed_pairs_fails() -> None:
+    """[Codex レビュー 2026-09-01] regression: `expected_sweep_ids` で宣言した
+    2 sweep のうち 1 つに observed pair が 1 件もない場合、frozen closed-set
+    原則により黙って消えず明示的に FAIL する（NOT_EVALUABLE 側へ写像される
+    べき欠落）。"""
+    pairs = [
+        _pair(f"a{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-A")
+        for i in range(3)
+    ]
+    result = directional_gates(
+        pairs,
+        u_rep=0.02,
+        u_proc=0.01,
+        expected_sweep_ids={"sweep-A", "sweep-B"},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.passed is False
+    assert "sweep-B" in result.sweeps_below_minimum
+    assert result.sweep_resolvable_counts["sweep-B"] == 0

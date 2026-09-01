@@ -101,6 +101,22 @@ class SelectionOutcome:
     outcome: str
 
 
+def _check_unique_candidate_ids(candidates: Sequence[CandidateCriteria]) -> None:
+    """candidate_id 重複を検出したら即 raise する（Codex レビュー 2026-09-01
+    採用）: dict comprehension で candidate_id をキーにすると重複時に一方が
+    黙って上書きされ、selection の再現性が壊れる。"""
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for c in candidates:
+        if c.candidate_id in seen and c.candidate_id not in duplicates:
+            duplicates.append(c.candidate_id)
+        seen.add(c.candidate_id)
+    if duplicates:
+        raise ValueError(
+            "selection: duplicate candidate_id(s): " + ", ".join(sorted(duplicates))
+        )
+
+
 def select(
     candidates: Sequence[CandidateCriteria], family: SelectionFamily
 ) -> SelectionOutcome:
@@ -110,8 +126,12 @@ def select(
     整数のまま）。丸め前後の vector を両方とも `SelectionOutcome` に記録する
     （`SELECTION_FROZEN` event 用）。eligible な候補が 1 件もなければ
     `SELECTION_FAILED_CLOSED`（候補選択なし・meter ceiling は上限
-    NOT_EVALUABLE として呼び出し側が扱う）。
+    NOT_EVALUABLE として呼び出し側が扱う）。candidate_id が重複する候補が
+    含まれる場合は `raw_vectors`/`rounded_vectors` の dict キーが黙って
+    上書きされるのを防ぐため `ValueError` を送出する（Codex レビュー
+    2026-09-01 採用）。
     """
+    _check_unique_candidate_ids(candidates)
     eligible = [c for c in candidates if c.eligible]
     raw_vectors = {c.candidate_id: _vector_for(c, family, rounded=False) for c in candidates}
     rounded_vectors = {
@@ -157,7 +177,11 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
     数値上 DIRECTIONAL 候補の criteria が ABSOLUTE 候補より良く見えても、
     ceiling が高い ABSOLUTE pool が非空である限りそちらを優先する
     （ceiling そのものが選抜の第一階層であり、criteria 比較より優先される）。
+
+    candidate_id が入力全体で重複する場合は `select()` と同様に `ValueError`
+    を送出する（pool 分割前の全候補で一意性を保証する）。
     """
+    _check_unique_candidate_ids(candidates)
     absolute_pool = [
         c for c in candidates if c.eligible and c.ceiling == ClaimCeiling.ABSOLUTE
     ]

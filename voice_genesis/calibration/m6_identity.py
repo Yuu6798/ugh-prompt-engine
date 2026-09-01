@@ -34,20 +34,63 @@ def component_u(u_gt: float, u_num: float, u_rep: float, u_proc: float, e_use: f
 
 
 def _norm(values: Sequence[float], p: Norm) -> float:
+    """`p` に応じた重みなしベクトルノルム（`||v||_1` または `||v||_2`）。"""
     arr = np.asarray(values, dtype=float)
     if p == "L1":
         return float(np.sum(np.abs(arr)))
     return float(np.sqrt(np.sum(arr**2)))
 
 
-def pair_uncertainty(u_a: Sequence[float], u_b: Sequence[float], p: Norm) -> float:
-    """`U_obs_pair(A,B) = ||u_A||_p + ||u_B||_p`（sum-of-norms）。
+def _weighted_norm(values: Sequence[float], p: Norm) -> float:
+    """`m6_distance` の component distance と**同一の `1/n` 等重み**を適用した
+    p-norm（Codex レビュー 2026-09-01 採用: distance/uncertainty スケール
+    不整合の修正）。
 
-    `||u_A + u_B||_p`（norm-of-sum）は L2 で保守上限を下回りうるため明示的に
-    棄却する（設計正本 §12: 三角不等式によりベクトルの向きが揃っていない限り
-    `||u_A+u_B|| < ||u_A||+||u_B||` となり、保守性を失う）。
+    `m6_distance` は `n = len(critical_ids)` として
+    `weight = 1/n` を掛け、L1 は `weight * sum(|d|)`、L2 は
+    `weight * sqrt(sum(d**2))` を返す（**`1/n**(1/p)` ではなく文字通り `1/n`**
+    — 実装が実際に課している重みをそのまま踏襲する。標準的な p-norm の
+    次元正規化 `1/n**(1/p)` ではない点に注意）。
+
+    ここでの `_weighted_norm(v, p) = _norm(v, p) / n`（`n = len(v)`）は
+    distance と全く同じ演算を pairwise uncertainty ベクトルにも適用したもの。
+    `n=0`（空ベクトル）は寄与ゼロとして `0.0` を返す。
     """
-    return _norm(u_a, p) + _norm(u_b, p)
+    values = list(values)
+    n = len(values)
+    if n == 0:
+        return 0.0
+    return _norm(values, p) / n
+
+
+def pair_uncertainty(u_a: Sequence[float], u_b: Sequence[float], p: Norm) -> float:
+    """`U_obs_pair(A,B) = ||u_A||_p/n_A + ||u_B||_p/n_B`（sum-of-norms、
+    `m6_distance` と同一の `1/n` 等重みを両端点それぞれに適用）。
+
+    修正前は `_norm` が重みなし（distance に掛かる `1/n` を欠いた）p-norm を
+    そのまま返していたため、`n` 成分の pair では `U_obs_pair` が `D_obs` に
+    対して最大 `n` 倍過大になり得た（Codex レビュー 2026-09-01: n=3 の
+    CLAIM_CRITICAL_SET で `T_null` を不当に緩めていた）。`_weighted_norm` で
+    distance と同じ `1/n` を掛けることでスケールを揃える。
+
+    整合性の導出（各終端の不確かさが component 差分の絶対値と一致する対称
+    ケース）: `u_A = u_B = |d|`（`d` は `m6_distance` の `diff_normalized`
+    ベクトル）のとき、
+    ```
+    U_obs_pair = weighted_norm(u_A,p) + weighted_norm(u_B,p)
+               = ||d||_p/n + ||d||_p/n = 2 * ||d||_p/n = 2 * D_obs
+    ```
+    （`D_obs = weight * norm_p(d)` かつ `weight = 1/n` は `m6_distance` の式
+    そのもの）。すなわち `D_obs == U_obs_pair/2` が p in {1,2} いずれでも
+    成立する — スケールが揃っていることの検算式（`tests/test_m6.py` の
+    consistency test で回帰検知する）。
+
+    `||u_A + u_B||_p`（norm-of-sum）は明示的に棄却する（設計正本 §12: 三角
+    不等式によりベクトルの向きが揃っていない限り `||u_A+u_B|| < ||u_A||+||u_B||`
+    となり保守性を失う。この関係は両辺に同じ `1/n` 重みを掛けても不等号の
+    向きは保存される）。
+    """
+    return _weighted_norm(u_a, p) + _weighted_norm(u_b, p)
 
 
 def t_null(d_null: Sequence[float], u_null_pair: Sequence[float]) -> float:

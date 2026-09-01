@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -67,8 +67,14 @@ class InstanceMargin:
 
 @dataclass(frozen=True)
 class InvariancePair:
-    """gate4' の invariance axis 上の 1 pair。"""
+    """gate4' の invariance axis 上の 1 pair。
 
+    `pair_id` は axis 内で一意な観測識別子（Codex レビュー 2026-09-01 採用）:
+    同一観測を複数回カウントして ">= 5 pairs" を水増しできないよう、
+    `absolute_gates` は axis 内で `pair_id` が重複したら gate4' を FAIL させる。
+    """
+
+    pair_id: str
     axis: str
     ds: float
     e_use_i0: float
@@ -94,6 +100,7 @@ def absolute_gates(
     u_rep: float,
     u_proc: float,
     invariance_pairs_by_axis: Mapping[str, Sequence[InvariancePair]],
+    declared_invariance_axes: Collection[str],
     fdr0: float,
     fnr1: float,
     min_count_met: bool,
@@ -116,6 +123,12 @@ def absolute_gates(
 
     境界は `<= 0` が PASS（G が厳密に 0 でも PASS）。AE が median 経由で noise を
     部分的に含むための `+U_rep+U_proc` は保守的二重計上であり意図的（修正しない）。
+
+    `declared_invariance_axes` は C0 で凍結した閉集合（Codex レビュー
+    2026-09-01 採用）: gate4' はこの宣言済み軸集合を走査し、
+    `invariance_pairs_by_axis` に対応する pair が 1 件もない軸があっても
+    黙って消えず、明示的に `<5 pairs` として FAIL する。軸内で `pair_id` が
+    重複する観測（同一観測の水増しカウント）も gate4' を FAIL させる。
     """
     primary = [i for i in per_instance if i.domain == Domain.PRIMARY]
     if not primary:
@@ -150,10 +163,19 @@ def absolute_gates(
     if not gate3:
         reasons.append("gate3: |BIAS|+max(U_GT+U_num)+U_rep+U_proc > median(E_use)")
 
-    gate4 = bool(invariance_pairs_by_axis)
-    if not invariance_pairs_by_axis:
+    gate4 = bool(declared_invariance_axes)
+    if not declared_invariance_axes:
         reasons.append("gate4': no invariance axis declared")
-    for axis, pairs in invariance_pairs_by_axis.items():
+    for axis in declared_invariance_axes:
+        pairs = invariance_pairs_by_axis.get(axis, ())
+        pair_ids = [p.pair_id for p in pairs]
+        duplicate_ids = sorted({pid for pid in pair_ids if pair_ids.count(pid) > 1})
+        if duplicate_ids:
+            gate4 = False
+            reasons.append(
+                f"gate4': axis {axis} has duplicate pair_id(s): {', '.join(duplicate_ids)}"
+            )
+            continue
         if len(pairs) < 5:
             gate4 = False
             reasons.append(f"gate4': axis {axis} has <5 pairs")
@@ -232,6 +254,7 @@ def directional_gates(
     *,
     u_rep: float,
     u_proc: float,
+    expected_sweep_ids: Collection[str],
     negative_control_failures: int,
     positive_control_failures: int,
     units_commensurate: bool,
@@ -269,13 +292,34 @@ def directional_gates(
     宣言された全 sweep がそれぞれ独立に >= 3 件を満たさなければ gate は
     FAIL。「ちょうど 3」の警告 (`three_pair_warning` 相当) も sweep 単位で
     立て、`sweep_resolvable_counts` / `sweeps_below_minimum` /
-    `sweeps_with_warning` として結果に含める）。全 resolvable adjacent pair の
-    正符号、`adjacent_reversal_rate == 0`、negative/positive control 失敗数
-    == 0 が必須（noise floor 超過は (b) に統合済みだが、呼び出し側が追加の
-    外部判定を持つ場合のための `noise_floor_exceeded` 引数も残す）。`tau_b` は
-    記録するのみで PASS 閾値には決して使わない。
+    `sweeps_with_warning` として結果に含める）。`expected_sweep_ids` は C0 で
+    凍結した閉集合として渡す（Codex レビュー 2026-09-01 採用）: 観測 pair から
+    sweep 集合を逆算すると、有効な出力が 1 件もない sweep が黙って消えて
+    しまうため、宣言済みの全 sweep を走査し、observed pair が 0 件の sweep は
+    `sweeps_below_minimum`（延いては gate FAIL、NOT_EVALUABLE 側へ写像）に
+    明示的に含める。全 resolvable **adjacent** pair の正符号（§10.4「全
+    resolvable adjacent pair の正符号」— non-adjacent な resolvable pair は
+    記録されるが符号閾値には数えない）、`adjacent_reversal_rate == 0`、
+    negative/positive control 失敗数 == 0、sweep 内で `pair_id` が重複する
+    観測がないこと、が必須（noise floor 超過は (b) に統合済みだが、呼び出し側が
+    追加の外部判定を持つ場合のための `noise_floor_exceeded` 引数も残す）。
+    `tau_b` は記録するのみで PASS 閾値には決して使わない。
     """
     reasons: list[str] = []
+
+    pair_ids_by_sweep: dict[str, list[str]] = {}
+    for p in pairs:
+        pair_ids_by_sweep.setdefault(p.sweep_id, []).append(p.pair_id)
+    duplicate_pair_ids: list[str] = []
+    for sweep_id, ids in pair_ids_by_sweep.items():
+        dupes = sorted({pid for pid in ids if ids.count(pid) > 1})
+        if dupes:
+            duplicate_pair_ids.append(f"sweep {sweep_id}: {', '.join(dupes)}")
+    if duplicate_pair_ids:
+        reasons.append(
+            "duplicate pair_id(s) within sweep: " + "; ".join(duplicate_pair_ids)
+        )
+
     resolvable: list[DirectionalPair] = []
     for p in pairs:
         r_truth = (p.u_gt_i + p.u_num_i) + (p.u_gt_j + p.u_num_j)
@@ -290,10 +334,11 @@ def directional_gates(
 
     resolvable_count = len(resolvable)
 
-    sweep_ids = sorted({p.sweep_id for p in pairs})
+    sweep_ids = sorted(set(expected_sweep_ids))
     sweep_resolvable_counts: dict[str, int] = {s: 0 for s in sweep_ids}
     for p in resolvable:
-        sweep_resolvable_counts[p.sweep_id] += 1
+        if p.sweep_id in sweep_resolvable_counts:
+            sweep_resolvable_counts[p.sweep_id] += 1
 
     sweeps_below_minimum = tuple(s for s in sweep_ids if sweep_resolvable_counts[s] < 3)
     sweeps_with_warning = tuple(s for s in sweep_ids if sweep_resolvable_counts[s] == 3)
@@ -301,19 +346,21 @@ def directional_gates(
     three_pair_warning = bool(sweeps_with_warning)
 
     if not sweep_ids:
-        reasons.append("no sweep declared (empty pair set)")
+        reasons.append("no expected sweep declared")
     if sweeps_below_minimum:
         reasons.append(
             "resolvable pair count < 3 in sweep(s): " + ", ".join(sweeps_below_minimum)
         )
 
-    all_correct = all(p.correct_sign for p in resolvable) if resolvable else False
+    adjacent_resolvable = [p for p in resolvable if p.is_adjacent]
+    all_correct = all(p.correct_sign for p in adjacent_resolvable)
     if not all_correct:
-        reasons.append("not all resolvable pairs have correct sign")
+        reasons.append("not all resolvable adjacent pairs have correct sign")
 
-    adjacent = [p for p in resolvable if p.is_adjacent]
-    reversals = sum(1 for p in adjacent if not p.correct_sign)
-    adjacent_reversal_rate = (reversals / len(adjacent)) if adjacent else 0.0
+    reversals = sum(1 for p in adjacent_resolvable if not p.correct_sign)
+    adjacent_reversal_rate = (
+        (reversals / len(adjacent_resolvable)) if adjacent_resolvable else 0.0
+    )
     if adjacent_reversal_rate != 0.0:
         reasons.append("adjacent_reversal_rate != 0")
 
@@ -326,6 +373,7 @@ def directional_gates(
 
     passed = (
         every_sweep_meets_minimum
+        and not duplicate_pair_ids
         and all_correct
         and adjacent_reversal_rate == 0.0
         and negative_control_failures == 0

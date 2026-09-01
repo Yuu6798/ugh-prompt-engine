@@ -199,6 +199,56 @@ def test_d4c_reports_ineligible_when_pyworld_absent() -> None:
     assert out.missing_reason is None
 
 
+def _reload_aperiodicity_under_patched_import(monkeypatch, broken_import) -> None:  # noqa: ANN001
+    import builtins
+    import importlib
+
+    real_import = builtins.__import__
+    monkeypatch.setattr(builtins, "__import__", broken_import(real_import))
+    try:
+        importlib.reload(aperiodicity)
+    finally:
+        monkeypatch.undo()
+        importlib.reload(aperiodicity)  # 後始末: 実 import 状態へ復元（他テストへの汚染防止）
+
+
+def test_pyworld_broken_shared_library_importerror_propagates(monkeypatch) -> None:  # noqa: ANN001
+    """`pyworld` はインストール済みだが共有ライブラリ破損等で `ImportError`
+    （`ModuleNotFoundError` ではない）を投げる場合、「不在」として握りつぶさず
+    re-raise する（Codex レビュー 2026-09-01 P2）。
+    """
+
+    def broken_import(real_import):
+        def _fn(name, *args, **kwargs):
+            if name == "pyworld":
+                raise ImportError("libworld.so: cannot open shared object file")
+            return real_import(name, *args, **kwargs)
+
+        return _fn
+
+    with pytest.raises(ImportError):
+        _reload_aperiodicity_under_patched_import(monkeypatch, broken_import)
+    assert aperiodicity.d4c_available() is False  # 後始末後は元の（不在）状態
+
+
+def test_pyworld_modulenotfound_with_other_name_propagates(monkeypatch) -> None:  # noqa: ANN001
+    """`pyworld` 自体ではなく、その依存先が `ModuleNotFoundError` を出す場合
+    （`e.name != "pyworld"`）も「不在」扱いにせず re-raise する。
+    """
+
+    def broken_import(real_import):
+        def _fn(name, *args, **kwargs):
+            if name == "pyworld":
+                raise ModuleNotFoundError("No module named 'pyworld._internal_dep'", name="pyworld._internal_dep")
+            return real_import(name, *args, **kwargs)
+
+        return _fn
+
+    with pytest.raises(ModuleNotFoundError):
+        _reload_aperiodicity_under_patched_import(monkeypatch, broken_import)
+    assert aperiodicity.d4c_available() is False
+
+
 # ---------------------------------------------------------------------------
 # M4-LOCAL-PROMINENCE
 # ---------------------------------------------------------------------------
