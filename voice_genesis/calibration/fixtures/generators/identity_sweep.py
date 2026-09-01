@@ -1,7 +1,7 @@
 """IDENTITY_CAUSAL_SWEEP generator（設計正本 §4.2, §12）: 4 synthetic founders
 （distinct F0/formant-set/tilt parameter bundle）× 3 claim-critical traits ×
 `delta in {-2..+2}` generator units。content/duration/SNR は founder 内で
-固定し、`trait` の指定する 1 軸だけを `delta` に応じて founder baseline から
+固定し、`trait` の指定する 1 軸だけを `delta` に応じて row baseline から
 摂動する（one-factor causal sweep, §12）。
 
 trait -> 物理量換算（`fixtures/axes.py` の
@@ -12,6 +12,9 @@ GT を主張しないため、これらは construct validation 用の内部一�
 - ``F0``: `f0 *= 2 ** (delta * 5 cents / 1200)`
 - ``FORMANT_SHIFT``: 各 pole 周波数 `*= 1 + 0.02 * delta`
 - ``TILT_SLOPE``: `tilt_db_per_oct += 1.0 * delta`
+
+`row.f0_hz` は confound / boundary 行で founder F0 を上書きしうる凍結済み
+row-level 条件であるため、常に synthesized F0 の baseline として優先する。
 """
 
 from __future__ import annotations
@@ -30,7 +33,12 @@ from voice_genesis.calibration.fixtures.generators import common
 
 def _effective_params(row: object) -> tuple[float, tuple[float, ...], float, float]:
     founder = IDENTITY_FOUNDERS[row.founder_id]
-    f0_hz = float(founder["f0_hz"])
+    # Truth-core rows carry the founder F0 in row.f0_hz, while confound / boundary
+    # rows may deliberately override it (e.g. high-F0 interactions or G2/C5 probes).
+    # The canonical row value is therefore the authoritative baseline.  Fall back
+    # to the founder only for defensive compatibility with row-like test doubles.
+    row_f0_hz = getattr(row, "f0_hz", None)
+    f0_hz = float(founder["f0_hz"] if row_f0_hz is None else row_f0_hz)
     poles = tuple(float(p) for p in founder["pole_freqs_hz"])
     bandwidth_hz = float(founder["bandwidth_hz"])
     tilt = float(founder["tilt_db_per_oct"])
