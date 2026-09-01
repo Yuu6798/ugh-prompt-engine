@@ -50,6 +50,7 @@
   "voice_genesis/calibration/tests/test_matrix.py",
   "voice_genesis/calibration/tests/test_observables.py",
   "voice_genesis/calibration/tests/test_provenance.py",
+  "voice_genesis/calibration/tests/test_provenance_unseal_prerequisites.py",
   "voice_genesis/calibration/tests/test_registry.py",
   "voice_genesis/calibration/tests/test_selection.py",
   "voice_genesis/calibration/tests/test_splitter.py",
