@@ -154,22 +154,43 @@ class DuplicateInstanceIdError(ValueError):
         )
 
 
-def _normalize_keyed_outcomes(outcomes: KeyedOutcomes, kind: str) -> dict[str, bool]:
-    """`Mapping[instance_id, outcome]` または `(instance_id, outcome)` の
-    `Sequence` を `dict[instance_id, outcome]` へ正規化する。`Mapping` はキー
-    の一意性が言語仕様上保証されるため対象外。`Sequence` 形式で同一
-    `instance_id` が複数回出現した場合は `DuplicateInstanceIdError` を送出する
-    （素朴に `dict(outcomes)` するだけだと後勝ちで重複が黙って消えるため、
-    明示的に走査して検出する）。
+
+class InvalidControlOutcomeError(ValueError):
+    """Raised when a keyed control outcome is not an actual ``bool``.
+
+    Missing/invalid meter outputs must be mapped by the caller to the documented
+    failure polarity before entering ``detection_rates``; arbitrary truthy values
+    must never be interpreted as successful control evidence.
     """
-    if isinstance(outcomes, Mapping):
-        return dict(outcomes)
+
+    def __init__(self, kind: str, instance_id: str, outcome: object) -> None:
+        self.kind = kind
+        self.instance_id = instance_id
+        self.outcome = outcome
+        super().__init__(
+            "detection_rates: non-boolean control outcome in "
+            f"{kind}_outcomes for {instance_id!r}: {outcome!r}"
+        )
+
+def _normalize_keyed_outcomes(outcomes: KeyedOutcomes, kind: str) -> dict[str, bool]:
+    """Normalize keyed outcomes while validating identity and value shape.
+
+    ``Mapping`` keys are unique by construction; sequence form is checked for
+    duplicate instance IDs. In both forms every outcome must be an actual ``bool``
+    (``type(value) is bool``). Missing/invalid upstream outputs are part of the
+    failure numerator by contract, so callers must map them to ``True`` for
+    negative controls and ``False`` for positive controls before this boundary.
+    Truthy sentinels such as NaN or error strings are rejected fail-closed.
+    """
+    items = outcomes.items() if isinstance(outcomes, Mapping) else outcomes
     seen: dict[str, bool] = {}
     duplicate_ids: list[str] = []
-    for instance_id, outcome in outcomes:
+    for instance_id, outcome in items:
         if instance_id in seen:
             duplicate_ids.append(instance_id)
             continue
+        if type(outcome) is not bool:
+            raise InvalidControlOutcomeError(kind, instance_id, outcome)
         seen[instance_id] = outcome
     if duplicate_ids:
         raise DuplicateInstanceIdError(kind, sorted(set(duplicate_ids)))
@@ -195,6 +216,9 @@ def detection_rates(
     重複出現は `DuplicateInstanceIdError` で reject する（silently 潰さない）。
     negative / positive の二母集団も互いに素でなければならず、同一 instance ID
     を両側へ再ラベルした場合は `kind="cross_class"` の同例外で fail-closed にする。
+    outcome 値は actual `bool` のみを受理する。NaN・error string・数値 sentinel 等の
+    非 bool は `InvalidControlOutcomeError` で拒否し、truthy 値を positive-control の
+    成功として誤認しない。missing/invalid は caller が failure polarity に写像して渡す。
 
     最小数 (`N_neg>=10` かつ `N_pos>=10`) を満たさない construct は結果を
     PASS 判定に使うべきではない（`min_count_met` で呼び出し側が判定する）。

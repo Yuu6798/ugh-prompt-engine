@@ -180,3 +180,17 @@ def test_gate_monotonicity_empty_ok() -> None:
 
 def test_gate_monotonicity_single_late_gate_without_earlier_is_violation() -> None:
     assert procedure_gates_monotonic([ProcedureGate.HOLDOUT_EXECUTED_VALID]) is False
+
+def test_campaign_closed_empty_expected_cannot_shrink_frozen_meter_set() -> None:
+    assert campaign_closed({}, []) is False
+
+
+def test_campaign_closed_incomplete_expected_is_rejected() -> None:
+    incomplete = list(MeterId)[:-1]
+    terminal = {meter: TerminalStatus.DIAGNOSTIC_ONLY for meter in incomplete}
+    assert campaign_closed(terminal, incomplete) is False
+
+
+def test_campaign_closed_derives_full_meter_set_when_expected_omitted() -> None:
+    terminal = {meter: TerminalStatus.INVALID for meter in MeterId}
+    assert campaign_closed(terminal) is True

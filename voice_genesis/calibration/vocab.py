@@ -185,10 +185,20 @@ def debt_discharged(terminal: Mapping[MeterId, TerminalStatus]) -> bool:
 
 
 def campaign_closed(
-    terminal: Mapping[MeterId, TerminalStatus], expected: Iterable[MeterId]
+    terminal: Mapping[MeterId, TerminalStatus],
+    expected: Iterable[MeterId] | None = None,
 ) -> bool:
-    """CAMPAIGN_CLOSED（手続的閉鎖）: `expected` の全 meter が何らかの終端 status に
-    到達しているか（値そのものは問わない。INVALID/NOT_EVALUABLE/DIAGNOSTIC_ONLY も
-    正当な終端であるため = D1）。
+    """Derive procedural campaign closure from the frozen ``MeterId`` set.
+
+    The required meter population is not a runtime choice: every frozen ``MeterId``
+    must have a terminal status. ``expected`` is retained only as a compatibility
+    assertion for existing callers; when supplied it must be an exact, duplicate-free
+    copy of the frozen set and can never shrink the closure requirement.
     """
-    return all(meter in terminal for meter in expected)
+    frozen = tuple(MeterId)
+    if expected is not None:
+        supplied = tuple(expected)
+        supplied_set = set(supplied)
+        if len(supplied) != len(supplied_set) or supplied_set != set(frozen):
+            return False
+    return all(meter in terminal for meter in frozen)

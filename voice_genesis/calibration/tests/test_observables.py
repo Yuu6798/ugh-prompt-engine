@@ -6,6 +6,7 @@ from voice_genesis.calibration.observables import (
     DetectionResult,
     DuplicateInstanceIdError,
     ErrorTerms,
+    InvalidControlOutcomeError,
     bias,
     detection_rates,
     error_terms,
@@ -283,3 +284,20 @@ def test_failure_boundary_stops_at_first_failure() -> None:
 
     assert last_pass == "L1"
     assert first_fail == "L2"
+
+@pytest.mark.parametrize("invalid", [float("nan"), "meter-error", 1, None])
+def test_detection_rates_rejects_non_boolean_positive_outcomes(invalid: object) -> None:
+    pos = _keyed("pos", [True] * 9) + [("pos-invalid", invalid)]  # type: ignore[list-item]
+    with pytest.raises(InvalidControlOutcomeError) as excinfo:
+        detection_rates(_keyed("neg", [False] * 10), pos)
+    assert excinfo.value.kind == "pos"
+    assert excinfo.value.instance_id == "pos-invalid"
+
+
+def test_detection_rates_rejects_truthy_non_boolean_negative_outcome() -> None:
+    neg = {f"neg{i}": False for i in range(10)}
+    neg["neg9"] = "error"  # type: ignore[assignment]
+    with pytest.raises(InvalidControlOutcomeError) as excinfo:
+        detection_rates(neg, _keyed("pos", [True] * 10))
+    assert excinfo.value.kind == "neg"
+    assert excinfo.value.instance_id == "neg9"
