@@ -72,12 +72,10 @@ def test_ledger_append_refreshes_entries_without_reconstruction(tmp_path) -> Non
     ledger.append({"kind": "render", "row_id": "r1"})
     ledger.append({"kind": "meter_call", "row_id": "r1"})
 
-    # append 直後、再構築なしで ledger.entries を直接使う (regression 経路)。
     assert len(ledger.entries) == 2
     assert all(isinstance(e, LedgerEntry) for e in ledger.entries)
     assert ledger.malformed_lines == ()
 
-    # check_leakage は再構築なしでもクラッシュせず正常に動く。
     result = Ledger.check_leakage(ledger.entries, holdout_row_ids=["holdout-x"], unseal_seq=None)
     assert result.blocked is None
 
@@ -121,7 +119,7 @@ def test_ledger_verify_chain_detects_prev_sha_mismatch_sibling_branch(tmp_path) 
 
     lines = path.read_text(encoding="utf-8").splitlines()
     tampered = json.loads(lines[1])
-    tampered["prev_sha"] = "f" * 64  # 別 chain から分岐したかのような偽 prev_sha
+    tampered["prev_sha"] = "f" * 64
     lines[1] = json.dumps(tampered)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -139,7 +137,6 @@ def test_ledger_verify_chain_detects_truncated_tail(tmp_path) -> None:
     ledger.append({"kind": "meter_call", "row_id": "r0"})
     ledger.append({"kind": "meter_call", "row_id": "r1"})
 
-    # 2 件目の途中でファイルを切断する (改行なし・JSON 不完全)。
     full_content = path.read_text(encoding="utf-8")
     lines = full_content.splitlines()
     cut_point = len(lines[0]) + 1 + len(lines[1]) // 2
@@ -149,10 +146,7 @@ def test_ledger_verify_chain_detects_truncated_tail(tmp_path) -> None:
     fresh = Ledger(path)
     result = fresh.verify_chain()
     assert result.truncated_tail is True
-    # 末尾の壊れた行を除いた prefix (先頭 1 行) は正当な chain として検証される。
     assert result.entries_verified == 1
-    # fail-closed（Codex レビュー 2026-09-01 採用）: truncated tail は常に
-    # ok=False。「検証未完了」であって「検証に成功した」のではない。
     assert result.ok is False
 
 
@@ -165,14 +159,13 @@ def test_ledger_verify_chain_truncated_tail_with_valid_prefix_fails_closed(tmp_p
     ledger = Ledger(path)
     ledger.append({"kind": "meter_call", "row_id": "r0"})
     full_content = path.read_text(encoding="utf-8")
-    # 先頭 1 行のみを、改行なしで（末尾が切れた体で）書き直す。
     first_line = full_content.splitlines()[0]
     path.write_text(first_line[: len(first_line) // 2], encoding="utf-8")
 
     result = Ledger(path).verify_chain()
     assert result.truncated_tail is True
     assert result.entries_verified == 0
-    assert result.ok is False  # fail-closed: truncated tail は常に ok=False
+    assert result.ok is False
 
 
 def test_ledger_append_refuses_when_existing_tail_truncated(tmp_path) -> None:
@@ -195,8 +188,6 @@ def test_ledger_append_refuses_when_existing_tail_truncated(tmp_path) -> None:
     with pytest.raises(LedgerTruncatedTailError):
         fresh.append({"kind": "meter_call", "row_id": "r2"})
 
-    # append 失敗後もファイル内容は一切変更されていない（破損 bytes への
-    # 追記が起きていないことを直接検証する）。
     assert path.read_text(encoding="utf-8") == truncated_content
 
 
@@ -213,8 +204,6 @@ def test_ledger_append_refuses_when_middle_entry_tampered(tmp_path) -> None:
     ledger.append({"kind": "render", "row_id": "r1"})
     ledger.append({"kind": "render", "row_id": "r2"})
 
-    # 先頭（末尾ではない）エントリの payload を改竄する。entry_sha/prev_sha は
-    # 再計算しないため、末尾行だけを見れば依然 "整合する" ように見える。
     lines = path.read_text(encoding="utf-8").splitlines()
     tampered = json.loads(lines[0])
     tampered["payload"]["row_id"] = "TAMPERED"
@@ -227,7 +216,6 @@ def test_ledger_append_refuses_when_middle_entry_tampered(tmp_path) -> None:
         fresh.append({"kind": "render", "row_id": "r3"})
     assert excinfo.value.tamper_at_seq == 0
 
-    # fail-closed: append 失敗後もファイル内容は一切変更されていない。
     assert path.read_text(encoding="utf-8") == before
 
 
@@ -240,7 +228,6 @@ def test_ledger_verify_chain_ok_with_missing_final_newline_flag(tmp_path) -> Non
     ledger.append({"kind": "meter_call", "row_id": "r0"})
     ledger.append({"kind": "meter_call", "row_id": "r1"})
 
-    # 末尾の改行だけを取り除く（JSON 本体は完全に残す）。
     full_content = path.read_text(encoding="utf-8")
     assert full_content.endswith("\n")
     path.write_text(full_content[:-1], encoding="utf-8")
@@ -264,14 +251,14 @@ def test_ledger_append_self_heals_missing_final_newline_no_corruption(tmp_path) 
     ledger.append({"kind": "meter_call", "row_id": "r1"})
 
     full_content = path.read_text(encoding="utf-8")
-    path.write_text(full_content[:-1], encoding="utf-8")  # 末尾改行のみ除去
+    path.write_text(full_content[:-1], encoding="utf-8")
 
     fresh = Ledger(path)
     e2 = fresh.append({"kind": "meter_call", "row_id": "r2"})
     assert e2.seq == 2
 
     final_content = path.read_text(encoding="utf-8")
-    assert "}{" not in final_content  # 連結破損が起きていない
+    assert "}{" not in final_content
     lines = [ln for ln in final_content.splitlines() if ln.strip()]
     assert len(lines) == 3
     for i, ln in enumerate(lines):
@@ -289,10 +276,10 @@ def test_ledger_two_instances_interleaved_append_no_sibling_seq(tmp_path) -> Non
     から導出されるため、兄弟 `seq=0` の重複は起きず、chain は連続する。"""
     path = tmp_path / "ledger.jsonl"
     l1 = Ledger(path)
-    l2 = Ledger(path)  # l1 の append をまだ知らない、独立にキャッシュ空の状態
+    l2 = Ledger(path)
 
     e1 = l1.append({"kind": "meter_call", "row_id": "r0"})
-    e2 = l2.append({"kind": "meter_call", "row_id": "r1"})  # l2 のキャッシュは stale
+    e2 = l2.append({"kind": "meter_call", "row_id": "r1"})
     e3 = l1.append({"kind": "meter_call", "row_id": "r2"})
     e4 = l2.append({"kind": "meter_call", "row_id": "r3"})
 
@@ -337,10 +324,10 @@ def test_check_leakage_unseal_none_blocks_any_holdout_access() -> None:
 def test_check_leakage_post_unseal_access_is_allowed(tmp_path) -> None:
     ledger = Ledger(tmp_path / "ledger.jsonl")
     commitments = {
-        "baseline_audit_sha": "1" * 64,
-        "candidate_space_sha": "2" * 64,
-        "selection_rule_sha": "3" * 64,
-        "selected_candidate_sha": "4" * 64,
+        "baseline_audit_sha": ledger.append({"kind": "baseline_audit"}).entry_sha,
+        "candidate_space_sha": ledger.append({"kind": "candidate_space"}).entry_sha,
+        "selection_rule_sha": ledger.append({"kind": "selection_rule"}).entry_sha,
+        "selected_candidate_sha": ledger.append({"kind": "selected_candidate"}).entry_sha,
     }
     frozen = ledger.append({"kind": "selection_frozen", **commitments})
     unseal = ledger.append(
@@ -416,8 +403,6 @@ def test_check_leakage_control_row_ids_excluded_non_control_holdout_still_detect
         unseal_seq=None,
         control_row_ids=["holdout-control-1"],
     )
-    # holdout-control-1 への 2 件 (render, meter_call) は除外され、
-    # holdout-sweep-1 (非 control) で初めて BLOCKED_LEAKAGE が確定する。
     assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
     assert result.control_excluded_count == 2
 
@@ -433,7 +418,6 @@ def test_ledger_tolerates_structurally_malformed_line_seq_only(tmp_path) -> None
     path = tmp_path / "ledger.jsonl"
     path.write_text('{"seq":0}\n', encoding="utf-8")
 
-    # 構築自体がクラッシュしない（旧実装は KeyError を送出していた）。
     ledger = Ledger(path)
     assert ledger.entries == ()
     assert len(ledger.malformed_lines) == 1
@@ -447,7 +431,6 @@ def test_ledger_tolerates_structurally_malformed_line_seq_only(tmp_path) -> None
     with pytest.raises(LedgerChainInvalidError) as excinfo:
         ledger.append({"kind": "render", "row_id": "r0"})
     assert excinfo.value.tamper_at_seq == 0
-    # fail-closed: append 失敗後もファイル内容は一切変更されていない。
     assert path.read_text(encoding="utf-8") == '{"seq":0}\n'
 
 
@@ -499,17 +482,18 @@ def test_check_leakage_forged_unseal_integer_cannot_grant_access(tmp_path) -> No
 def test_check_leakage_mismatched_unseal_commitments_fail_closed(tmp_path) -> None:
     ledger = Ledger(tmp_path / "ledger.jsonl")
     commitments = {
-        "baseline_audit_sha": "1" * 64,
-        "candidate_space_sha": "2" * 64,
-        "selection_rule_sha": "3" * 64,
-        "selected_candidate_sha": "4" * 64,
+        "baseline_audit_sha": ledger.append({"kind": "baseline_audit"}).entry_sha,
+        "candidate_space_sha": ledger.append({"kind": "candidate_space"}).entry_sha,
+        "selection_rule_sha": ledger.append({"kind": "selection_rule"}).entry_sha,
+        "selected_candidate_sha": ledger.append({"kind": "selected_candidate"}).entry_sha,
     }
     frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    alternate_selected = ledger.append({"kind": "selected_candidate"})
     ledger.append(
         {
             "kind": "holdout_unseal",
             **commitments,
-            "selected_candidate_sha": "5" * 64,
+            "selected_candidate_sha": alternate_selected.entry_sha,
             "selection_freeze_event_sha": frozen.entry_sha,
         }
     )
