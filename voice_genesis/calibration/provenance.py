@@ -251,7 +251,7 @@ class ChainVerification:
     `missing_final_newline`（Codex レビュー 2026-09-01 P1 追加）: 最終行が
     改行未終端だが JSON としては完全にパース可能だった場合に `True`。この
     ケースは **fail-closed の対象ではない**（`ok` は content が正当なら
-    `True` のまま）: 1 エントリも失われておらず、欠けているのは区切りの
+    `True` のまま）: 1エントリも失われておらず、欠けているのは区切りの
     改行のみだからである（情報提供目的のフラグ。`Ledger.append()` は次回
     追記時にこれを自己修復する）。"""
 
@@ -330,10 +330,6 @@ def _split_complete_lines(content: str) -> tuple[list[str], bool, bool]:
         truncated_tail = True
     raw_lines = [ln for ln in content.splitlines() if ln.strip()]
     if truncated_tail and raw_lines:
-        # 最後の非空行が truncated 行そのもの: JSON parse を試し、失敗すれば
-        # それを truncated 行として除外する。parse に成功する（＝改行だけが
-        # 欠けた完全な行だった）場合は truncated 扱いを取り消し、代わりに
-        # missing_final_newline を立てる。
         try:
             json.loads(raw_lines[-1])
             truncated_tail = False
@@ -367,12 +363,6 @@ def _verify_chain_prefix(
                 detail=f"unparseable line at position {i}",
                 missing_final_newline=missing_final_newline,
             )
-        # 構造的 malformed 検査（Codex レビュー 2026-09-01 P1 finding #3）:
-        # JSON としてはパース可能でも `seq`/`prev_sha`/`entry_sha`/`payload`
-        # のいずれかを欠く行（例: `{"seq": 0}`）は、以降の `.get()` ベースの
-        # 意味検査（prev_sha 不一致等）でも ok=False にはなるが、detail が
-        # 「改竄」と紛らわしくなる。ここで先に検出し、malformed である旨を
-        # 明示した detail を返す（fail-closed: chain-invalid として扱う）。
         missing_keys = (
             sorted(_ENTRY_REQUIRED_KEYS - set(raw.keys()))
             if isinstance(raw, Mapping)
@@ -421,13 +411,6 @@ def _verify_chain_prefix(
         prev = raw["entry_sha"]
         verified += 1
 
-    # fail-closed（Codex レビュー 2026-09-01 採用）: 末尾が truncated な台帳は
-    # 「(改竄ではないが) 検証未完了」であり、正当な chain として ok=True を
-    # 返してはならない。有効な prefix が検証済みであることは
-    # `entries_verified` / `truncated_tail` で呼び出し側に伝える。
-    # `missing_final_newline` は fail-closed の対象外（Codex レビュー
-    # 2026-09-01 P1）: 1 件も失われていない正当な chain であり、`ok` は
-    # 通常どおり `not truncated_tail` に従う。
     return ChainVerification(
         ok=not truncated_tail,
         entries_verified=verified,
@@ -444,12 +427,13 @@ def _verify_chain_prefix(
     )
 
 
-_UNSEAL_COMMITMENT_KEYS: tuple[str, ...] = (
-    "baseline_audit_sha",
-    "candidate_space_sha",
-    "selection_rule_sha",
-    "selected_candidate_sha",
-)
+_UNSEAL_PREREQUISITE_KINDS: Mapping[str, str] = {
+    "baseline_audit_sha": "baseline_audit",
+    "candidate_space_sha": "candidate_space",
+    "selection_rule_sha": "selection_rule",
+    "selected_candidate_sha": "selected_candidate",
+}
+_UNSEAL_COMMITMENT_KEYS: tuple[str, ...] = tuple(_UNSEAL_PREREQUISITE_KINDS)
 
 
 def _is_sha256_hex(value: object) -> bool:
@@ -460,13 +444,42 @@ def _is_sha256_hex(value: object) -> bool:
     )
 
 
+def _references_prior_prerequisites(
+    payload: Mapping[str, Any],
+    prior_entries_by_sha: Mapping[str, LedgerEntry],
+) -> bool:
+    """Resolve each frozen prerequisite SHA to its canonical prior ledger event.
+
+    The four §7 commitment fields are entry-SHA references, not arbitrary digest
+    strings.  Their canonical event kind is the field name without the `_sha`
+    suffix.  Because `prior_entries_by_sha` is populated only from entries that
+    precede the payload being validated, this simultaneously proves existence,
+    ordering, kind, and cryptographic linkage into the already-verified chain.
+    """
+    for key, expected_kind in _UNSEAL_PREREQUISITE_KINDS.items():
+        ref = payload.get(key)
+        if not _is_sha256_hex(ref):
+            return False
+        prerequisite = prior_entries_by_sha.get(ref)
+        if prerequisite is None:
+            return False
+        prerequisite_payload = prerequisite.payload
+        if not isinstance(prerequisite_payload, Mapping):
+            return False
+        if prerequisite_payload.get("kind") != expected_kind:
+            return False
+    return True
+
+
 def _verified_holdout_unseal_seq(ledger_entries: Sequence[LedgerEntry]) -> int | None:
     """Return the first valid holdout-unseal boundary, or None fail-closed.
 
-    A valid unseal is in a fully verified ledger chain, references a prior
-    `selection_frozen` entry by its entry SHA, and repeats the four frozen
-    prerequisite commitment hashes exactly. A caller-supplied integer alone
-    never creates an unseal boundary.
+    A valid unseal is in a fully verified ledger chain and has the strict order:
+    four canonical prerequisite events -> `selection_frozen` -> `holdout_unseal`.
+    Both selection and unseal must carry the same four entry-SHA references, and
+    `holdout_unseal` must reference the prior selection event by entry SHA.  A
+    caller-supplied integer or four merely well-formed 64-hex strings can never
+    create an unseal boundary.
     """
     prev_sha = GENESIS_PREV_SHA
     for expected_seq, entry in enumerate(ledger_entries):
@@ -477,30 +490,33 @@ def _verified_holdout_unseal_seq(ledger_entries: Sequence[LedgerEntry]) -> int |
             return None
         prev_sha = entry.entry_sha
 
+    prior_entries_by_sha: dict[str, LedgerEntry] = {}
     frozen_by_sha: dict[str, Mapping[str, Any]] = {}
     for entry in ledger_entries:
         payload = entry.payload
         if not isinstance(payload, Mapping):
+            prior_entries_by_sha[entry.entry_sha] = entry
             continue
         kind = payload.get("kind")
         if kind == "selection_frozen":
-            if all(_is_sha256_hex(payload.get(key)) for key in _UNSEAL_COMMITMENT_KEYS):
+            if _references_prior_prerequisites(payload, prior_entries_by_sha):
                 frozen_by_sha[entry.entry_sha] = payload
+            prior_entries_by_sha[entry.entry_sha] = entry
             continue
-        if kind != "holdout_unseal":
-            continue
-
-        freeze_sha = payload.get("selection_freeze_event_sha")
-        if not _is_sha256_hex(freeze_sha):
-            continue
-        frozen = frozen_by_sha.get(freeze_sha)
-        if frozen is None:
-            continue
-        if not all(_is_sha256_hex(payload.get(key)) for key in _UNSEAL_COMMITMENT_KEYS):
-            continue
-        if not all(payload.get(key) == frozen.get(key) for key in _UNSEAL_COMMITMENT_KEYS):
-            continue
-        return entry.seq
+        if kind == "holdout_unseal":
+            freeze_sha = payload.get("selection_freeze_event_sha")
+            if _is_sha256_hex(freeze_sha):
+                frozen = frozen_by_sha.get(freeze_sha)
+                if (
+                    frozen is not None
+                    and _references_prior_prerequisites(payload, prior_entries_by_sha)
+                    and all(
+                        payload.get(key) == frozen.get(key)
+                        for key in _UNSEAL_COMMITMENT_KEYS
+                    )
+                ):
+                    return entry.seq
+        prior_entries_by_sha[entry.entry_sha] = entry
     return None
 
 
@@ -521,7 +537,7 @@ class Ledger:
     write → flush → `os.fsync` の順で行ってからロックを解放する（単一 writer
     境界の契約。モジュール docstring 参照）。プロセス内キャッシュ
     (`self._entries`) から `seq`/`prev_sha` を先に決めてしまうと、同一パスへの
-    複数 `Ledger` インスタンスの交互 append で兄弟 `seq` が発生しうるため
+    複数 `Ledger` インスタンスの交互 append で兄弟 `seq=0` が発生しうるため
     （Codex レビュー 2026-09-01 採用）。
     """
 
@@ -637,11 +653,6 @@ class Ledger:
         """
         payload_j = _jsonable(payload)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # "a+" は存在しなければファイルを作成し、読み書き両方を許す。POSIX 上
-        # 'a' モードは O_APPEND を伴うため、write() は（read でファイル位置が
-        # どこへ動いていても）常に真の EOF へ書き込まれる。read → write の間に
-        # 明示的な seek を挟むのは、C stdio の「読み書きモードでは read と
-        # write の間に fseek/fflush が必要」という契約を満たすため。
         with self.path.open("a+", encoding="utf-8") as f:
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
@@ -654,14 +665,6 @@ class Ledger:
                         "existing ledger tail is truncated (incomplete final line); "
                         "refusing to append onto partial bytes",
                     )
-                # 全 chain 検証（Codex レビュー 2026-09-01 P1 finding #4）: 従来
-                # ここでは末尾行の seq/entry_sha だけを読んで次エントリを
-                # 導出しており、途中の行が改竄されていても検出せずに追記して
-                # しまっていた（改竄行より後ろが改竄後に再計算された "整合
-                # する" prev_sha 連鎖で偽装されていれば、末尾のみの検査では
-                # 気付けない）。ロックを保持したまま `verify_chain()` と同じ
-                # 判定ロジックを既読の `raw_lines` に対して再実行し、prefix
-                # 全体が正当な場合のみ以降の追記処理へ進む。
                 chain_check = _verify_chain_prefix(
                     raw_lines, truncated_tail=False, missing_final_newline=missing_final_newline
                 )
@@ -670,13 +673,6 @@ class Ledger:
                         self.path, chain_check.detail, chain_check.tamper_at_seq
                     )
                 if missing_final_newline:
-                    # 自己修復（Codex レビュー 2026-09-01 P1 採用）: 最終行が
-                    # 改行未終端でも JSON としては完全にパースできる（＝1件も
-                    # 失われていない）場合は、単に区切り改行が欠けているだけ
-                    # なので拒否せず、まず欠けた "\n" を書いてから通常どおり
-                    # 追記する。これを怠ると次に書く行と `}{` のように直接
-                    # 連結して破損する。既存の正当な chain を拒否するより
-                    # 安全な選択（有効な chain を fail-closed で reject しない）。
                     f.seek(0, os.SEEK_END)
                     f.write("\n")
                 if raw_lines:
@@ -687,8 +683,7 @@ class Ledger:
                     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
                         raise LedgerTruncatedTailError(
                             self.path,
-                            "existing ledger tail line is unparseable/malformed; "
-                            "refusing to append",
+                            "existing ledger tail line is unparseable/malformed; refusing to append",
                         ) from exc
                 else:
                     seq = 0
@@ -713,14 +708,6 @@ class Ledger:
                 os.fsync(f.fileno())
             finally:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        # in-memory cache は on-disk の真の状態から再構築する（他インスタンスの
-        # append をキャッシュへ反映するため。プロセス内キャッシュを信頼しない）。
-        # `_read_all()` は `(entries, malformed)` の 2-tuple を返す
-        # （`__init__` と同じアンパック規約。Codex レビュー 2026-09-01 P1
-        # finding: これをアンパックせず `self._entries` へそのまま代入すると
-        # `entries` が `[entries_list, malformed_list]` という 2 要素の
-        # list になり、`ledger.entries` が `LedgerEntry` ではなく list を
-        # 返すようになって `check_leakage` が `AttributeError` で落ちていた）。
         self._entries, self._malformed = self._read_all()
         return entry
 
