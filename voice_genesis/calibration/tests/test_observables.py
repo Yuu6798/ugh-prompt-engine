@@ -264,3 +264,14 @@ def test_failure_boundary_all_fail() -> None:
 def test_failure_boundary_length_mismatch_raises() -> None:
     with pytest.raises(ValueError):
         failure_boundary(["a", "b"], [True])
+
+def test_detection_rates_rejects_instance_ids_reused_across_control_classes() -> None:
+    shared_ids = [f"shared-{i}" for i in range(10)]
+    neg = {instance_id: False for instance_id in shared_ids}
+    pos = {instance_id: True for instance_id in shared_ids}
+
+    with pytest.raises(DuplicateInstanceIdError) as excinfo:
+        detection_rates(neg, pos)
+
+    assert excinfo.value.kind == "cross_class"
+    assert excinfo.value.duplicate_ids == tuple(shared_ids)

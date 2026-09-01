@@ -446,6 +446,29 @@ def _is_sha256_hex(value: object) -> bool:
     )
 
 
+def _valid_unseal_prerequisite_payload(
+    payload: Mapping[str, Any], expected_kind: str
+) -> bool:
+    """Validate the minimum frozen event envelope for an unseal prerequisite.
+
+    The canonical design requires every procedural evidence event to carry the
+    hash of the object it attests to.  A kind-only ledger row therefore cannot
+    satisfy an unseal prerequisite.  The selected-candidate prerequisite also
+    needs the selected candidate identity; otherwise it is not a candidate
+    selection record at all.  Deeper artifact semantics remain committed by the
+    64-hex ``artifact_sha`` and are outside this ledger-level seal check.
+    """
+    if payload.get("kind") != expected_kind:
+        return False
+    if not _is_sha256_hex(payload.get("artifact_sha")):
+        return False
+    if expected_kind == "selected_candidate":
+        candidate_id = payload.get("candidate_id")
+        if not isinstance(candidate_id, str) or not candidate_id:
+            return False
+    return True
+
+
 def _references_prior_prerequisites(
     payload: Mapping[str, Any],
     prior_entries_by_sha: Mapping[str, LedgerEntry],
@@ -468,7 +491,7 @@ def _references_prior_prerequisites(
         prerequisite_payload = prerequisite.payload
         if not isinstance(prerequisite_payload, Mapping):
             return False
-        if prerequisite_payload.get("kind") != expected_kind:
+        if not _valid_unseal_prerequisite_payload(prerequisite_payload, expected_kind):
             return False
     return True
 

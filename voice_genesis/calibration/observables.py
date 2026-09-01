@@ -193,6 +193,8 @@ def detection_rates(
     10 回繰り返すだけで `N>=10` を水増しできてしまっていた）。カウント
     (`n_neg`/`n_pos`) は **distinct instance 数**であり、同一 `instance_id` の
     重複出現は `DuplicateInstanceIdError` で reject する（silently 潰さない）。
+    negative / positive の二母集団も互いに素でなければならず、同一 instance ID
+    を両側へ再ラベルした場合は `kind="cross_class"` の同例外で fail-closed にする。
 
     最小数 (`N_neg>=10` かつ `N_pos>=10`) を満たさない construct は結果を
     PASS 判定に使うべきではない（`min_count_met` で呼び出し側が判定する）。
@@ -201,6 +203,10 @@ def detection_rates(
     """
     neg_map = _normalize_keyed_outcomes(neg_outcomes, "neg")
     pos_map = _normalize_keyed_outcomes(pos_outcomes, "pos")
+
+    cross_class_ids = sorted(set(neg_map).intersection(pos_map))
+    if cross_class_ids:
+        raise DuplicateInstanceIdError("cross_class", cross_class_ids)
 
     n_neg = len(neg_map)
     n_pos = len(pos_map)

@@ -484,10 +484,10 @@ def test_check_leakage_unseal_none_blocks_any_holdout_access() -> None:
 def test_check_leakage_post_unseal_access_is_allowed(tmp_path) -> None:
     ledger = Ledger(tmp_path / "ledger.jsonl")
     commitments = {
-        "baseline_audit_sha": ledger.append({"kind": "baseline_audit"}).entry_sha,
-        "candidate_space_sha": ledger.append({"kind": "candidate_space"}).entry_sha,
-        "selection_rule_sha": ledger.append({"kind": "selection_rule"}).entry_sha,
-        "selected_candidate_sha": ledger.append({"kind": "selected_candidate"}).entry_sha,
+        "baseline_audit_sha": ledger.append({"kind": "baseline_audit", "artifact_sha": "a" * 64}).entry_sha,
+        "candidate_space_sha": ledger.append({"kind": "candidate_space", "artifact_sha": "b" * 64}).entry_sha,
+        "selection_rule_sha": ledger.append({"kind": "selection_rule", "artifact_sha": "c" * 64}).entry_sha,
+        "selected_candidate_sha": ledger.append({"kind": "selected_candidate", "artifact_sha": "d" * 64, "candidate_id": "candidate-test"}).entry_sha,
     }
     frozen = ledger.append({"kind": "selection_frozen", **commitments})
     unseal = ledger.append(
@@ -647,13 +647,13 @@ def test_check_leakage_forged_unseal_integer_cannot_grant_access(tmp_path) -> No
 def test_check_leakage_mismatched_unseal_commitments_fail_closed(tmp_path) -> None:
     ledger = Ledger(tmp_path / "ledger.jsonl")
     commitments = {
-        "baseline_audit_sha": ledger.append({"kind": "baseline_audit"}).entry_sha,
-        "candidate_space_sha": ledger.append({"kind": "candidate_space"}).entry_sha,
-        "selection_rule_sha": ledger.append({"kind": "selection_rule"}).entry_sha,
-        "selected_candidate_sha": ledger.append({"kind": "selected_candidate"}).entry_sha,
+        "baseline_audit_sha": ledger.append({"kind": "baseline_audit", "artifact_sha": "a" * 64}).entry_sha,
+        "candidate_space_sha": ledger.append({"kind": "candidate_space", "artifact_sha": "b" * 64}).entry_sha,
+        "selection_rule_sha": ledger.append({"kind": "selection_rule", "artifact_sha": "c" * 64}).entry_sha,
+        "selected_candidate_sha": ledger.append({"kind": "selected_candidate", "artifact_sha": "d" * 64, "candidate_id": "candidate-test"}).entry_sha,
     }
     frozen = ledger.append({"kind": "selection_frozen", **commitments})
-    alternate_selected = ledger.append({"kind": "selected_candidate"})
+    alternate_selected = ledger.append({"kind": "selected_candidate", "artifact_sha": "d" * 64, "candidate_id": "candidate-test"})
     ledger.append(
         {
             "kind": "holdout_unseal",
