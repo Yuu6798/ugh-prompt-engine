@@ -654,7 +654,13 @@ class Ledger:
                 fcntl.flock(f.fileno(), fcntl.LOCK_UN)
         # in-memory cache は on-disk の真の状態から再構築する（他インスタンスの
         # append をキャッシュへ反映するため。プロセス内キャッシュを信頼しない）。
-        self._entries = list(self._read_all())
+        # `_read_all()` は `(entries, malformed)` の 2-tuple を返す
+        # （`__init__` と同じアンパック規約。Codex レビュー 2026-09-01 P1
+        # finding: これをアンパックせず `self._entries` へそのまま代入すると
+        # `entries` が `[entries_list, malformed_list]` という 2 要素の
+        # list になり、`ledger.entries` が `LedgerEntry` ではなく list を
+        # 返すようになって `check_leakage` が `AttributeError` で落ちていた）。
+        self._entries, self._malformed = self._read_all()
         return entry
 
     def verify_chain(self) -> ChainVerification:

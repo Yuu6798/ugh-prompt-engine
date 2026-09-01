@@ -244,18 +244,47 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
 
     candidate_id が入力全体で重複する場合は `select()` と同様に `ValueError`
     を送出する（pool 分割前の全候補で一意性を保証する）。
+
+    **プール非空判定は「真に選抜可能」基準で行う**（Codex レビュー
+    2026-09-01 P1 finding: 従来は `c.eligible` フラグのみでプールの非空性を
+    判定していたため、`ceiling=ABSOLUTE` かつ `eligible=True`（既定値）だが
+    criteria payload がそもそも欠けた候補（例: pyworld 未導入時の D4C 系
+    候補）が ABSOLUTE pool を「非空」に見せかけていた。その結果
+    `select(absolute_pool, ABSOLUTE)` が呼ばれ、`select()` 内部でその候補が
+    `criteria_payload_absent` として ineligible 判定され eligible 候補が
+    0 件になり、`SELECTION_FAILED_CLOSED` を **DIRECTIONAL へフォールバック
+    せずに** 直接返してしまっていた。本実装は `select()` が使うのと同じ
+    `_has_required_criteria()` + `eligible` フラグの述語 (`_has_selectable`)
+    でプールの非空性を判定する: 各 ceiling プールに「真に選抜可能」な候補が
+    1 件も無ければ、そのプールは（メンバーが存在していても）非空とはみなさず
+    次の ceiling へフォールバックする。実際に `select()` へ渡すプールは
+    ABSOLUTE/DIRECTIONAL 両 ceiling を束ねた `non_diagnostic_pool`
+    （`DIAGNOSTIC_ONLY`/未設定は既存どおり常に除外）とする — こうすることで、
+    選ばれなかった ceiling 側の候補（criteria payload absent / flagged
+    ineligible のいずれか）も、選ばれた family の criteria 要件を満たさない
+    ため自然に ineligible 判定され、`SelectionOutcome.ineligible_candidates`
+    に理由付きで記録される（監査要件: どの候補が何故選抜対象外だったかを
+    常に追跡できる）。
     """
     _check_unique_candidate_ids(candidates)
-    absolute_pool = [
-        c for c in candidates if c.eligible and c.ceiling == ClaimCeiling.ABSOLUTE
-    ]
-    if absolute_pool:
-        return select(absolute_pool, SelectionFamily.ABSOLUTE)
 
-    directional_pool = [
-        c for c in candidates if c.eligible and c.ceiling == ClaimCeiling.DIRECTIONAL
+    def _pool(ceiling: ClaimCeiling) -> list[CandidateCriteria]:
+        return [c for c in candidates if c.ceiling == ceiling]
+
+    def _has_selectable(pool: Sequence[CandidateCriteria], family: SelectionFamily) -> bool:
+        return any(c.eligible and _has_required_criteria(c, family) for c in pool)
+
+    non_diagnostic_pool = [
+        c for c in candidates
+        if c.ceiling in (ClaimCeiling.ABSOLUTE, ClaimCeiling.DIRECTIONAL)
     ]
-    if directional_pool:
-        return select(directional_pool, SelectionFamily.DIRECTIONAL)
+
+    absolute_pool = _pool(ClaimCeiling.ABSOLUTE)
+    if _has_selectable(absolute_pool, SelectionFamily.ABSOLUTE):
+        return select(non_diagnostic_pool, SelectionFamily.ABSOLUTE)
+
+    directional_pool = _pool(ClaimCeiling.DIRECTIONAL)
+    if _has_selectable(directional_pool, SelectionFamily.DIRECTIONAL):
+        return select(non_diagnostic_pool, SelectionFamily.DIRECTIONAL)
 
     return select([], SelectionFamily.ABSOLUTE)

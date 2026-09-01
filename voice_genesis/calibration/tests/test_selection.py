@@ -303,3 +303,34 @@ def test_select_across_ceilings_ineligible_absolute_does_not_block_directional_f
     outcome = select_across_ceilings([ineligible_absolute, directional])
     assert outcome.family == SelectionFamily.DIRECTIONAL
     assert outcome.selected_candidate_id == "dir-1"
+
+
+def test_select_across_ceilings_absolute_without_criteria_falls_back_to_directional() -> None:
+    """[P1] regression: ceiling プールの非空判定が `eligible` フラグのみに
+    基づいていると、`ceiling=ABSOLUTE` かつ `eligible=True`（既定値）だが
+    criteria payload そのものが欠けた候補（pyworld 未導入時の D4C 系候補等）
+    が ABSOLUTE pool を「非空」に見せかけ、`select()` 内部で
+    `criteria_payload_absent` として ineligible 判定された結果、eligible
+    候補 0 件で `SELECTION_FAILED_CLOSED` が DIRECTIONAL へフォールバック
+    せずに直接返っていた。修正後は `_has_required_criteria()` も非空判定に
+    使うため、真に選抜可能な候補が無い ABSOLUTE pool は非空とみなされず
+    DIRECTIONAL へ正しくフォールバックする。"""
+    absolute_no_criteria = CandidateCriteria(
+        candidate_id="abs-no-criteria",
+        ceiling=ClaimCeiling.ABSOLUTE,
+        # primary_normalized_mae / signed_bias / primary_q95_ae は未設定
+        # (criteria payload absent).
+    )
+    directional = CandidateCriteria(
+        candidate_id="dir-1",
+        ceiling=ClaimCeiling.DIRECTIONAL,
+        kendall_tau=0.7,
+        adjacent_reversal_rate=0.0,
+    )
+    outcome = select_across_ceilings([absolute_no_criteria, directional])
+    assert outcome.family == SelectionFamily.DIRECTIONAL
+    assert outcome.outcome == "SELECTED"
+    assert outcome.selected_candidate_id == "dir-1"
+    # ABSOLUTE 側の criteria-absent 候補は ineligible として理由付きで記録
+    # される（監査要件: なぜ選抜対象外だったかを追跡できる）。
+    assert ("abs-no-criteria", "criteria_payload_absent") in outcome.ineligible_candidates

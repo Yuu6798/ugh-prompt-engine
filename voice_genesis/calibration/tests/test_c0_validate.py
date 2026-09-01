@@ -74,25 +74,45 @@ def _full_path_inventory_maps() -> dict[str, dict[str, str]]:
     return out
 
 
-def _full_meter_specs() -> dict[str, dict[str, str]]:
+def _shape_valid_nested_value(key: str, seed: str) -> object:
+    """`c0_validate._shape_violation` (BOUNDED shape validation,
+    `[UNDERSPEC-CAL-C18]`) が要求する形状を満たす、`key`/`seed` に応じた
+    決定的な placeholder 値を返す。`key` が形状規則の対象外なら、従来どおり
+    人間可読な文字列 `f"{seed}_{key}"` を返す。"""
+    if key.endswith("_hash") or key.endswith("_sha256"):
+        return hashlib.sha256(f"{seed}_{key}".encode("utf-8")).hexdigest()
+    if key in ("confound_axes", "boundary_probes", "negative_controls", "stop_rules"):
+        return [f"{seed}_{key}_0", f"{seed}_{key}_1"]
+    if key == "parameter_grid":
+        return {f"{seed}_{key}_axis": [0, 1]}
+    return f"{seed}_{key}"
+
+
+def _full_meter_specs() -> dict[str, dict[str, object]]:
     """凍結 registry の全 meter family に対し、`METER_SPEC_REQUIRED_KEYS`
     を機械的に完全充足するエントリを生成する（設計正本 §3.1「frozen design
-    全項目」。`[UNDERSPEC-CAL-C17]`）。"""
+    全項目」。`[UNDERSPEC-CAL-C17]`）。値は `_shape_valid_nested_value` で
+    BOUNDED shape validation（`[UNDERSPEC-CAL-C18]`）を満たすよう生成する
+    （`parameter_grid` は非空 mapping）。"""
     return {
         meter_id: {
-            key: f"{meter_id.lower()}_{key}" for key in c0_validate.METER_SPEC_REQUIRED_KEYS
+            key: _shape_valid_nested_value(key, meter_id.lower())
+            for key in c0_validate.METER_SPEC_REQUIRED_KEYS
         }
         for meter_id in _ALL_METER_IDS
     }
 
 
-def _full_fixture_spec() -> dict[str, dict[str, str]]:
+def _full_fixture_spec() -> dict[str, dict[str, object]]:
     """`fixtures.axes.FixtureFamily` の全 7 family に対し、
     `FIXTURE_SPEC_REQUIRED_KEYS` を機械的に完全充足するエントリを生成する
-    （`[UNDERSPEC-CAL-C17]`）。"""
+    （`[UNDERSPEC-CAL-C17]`）。値は `_shape_valid_nested_value` で BOUNDED
+    shape validation（`[UNDERSPEC-CAL-C18]`）を満たすよう生成する
+    （`generator_hash` は 64 桁 hex、`confound_axes`/`boundary_probes`/
+    `negative_controls` は非空 list）。"""
     return {
         family.value: {
-            key: f"{family.value.lower()}_{key}"
+            key: _shape_valid_nested_value(key, family.value.lower())
             for key in c0_validate.FIXTURE_SPEC_REQUIRED_KEYS
         }
         for family in fixture_axes.FixtureFamily
@@ -616,6 +636,146 @@ def test_fixture_spec_entry_missing_one_nested_key_is_listed() -> None:
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     assert "frozen_design.fixture_spec.FORMANT_GT.generator_hash" in result.missing_required_keys
+
+
+# ---------------------------------------------------------------------------
+# BOUNDED shape validation（Codex レビュー 2026-09-01 P1、`[UNDERSPEC-CAL-C18]`）
+# 「値は存在するが形状が壊れている」ケース。存在チェックのみでは通過して
+# いたが、`_shape_violation` が形状クラスごとに個別に検出する。
+# ---------------------------------------------------------------------------
+
+
+def test_fixture_spec_generator_hash_not_a_hash_string_blocks() -> None:
+    """finding 原文の再現ケース: `generator_hash="not-a-hash"` は非空文字列
+    ではあるため従来の存在/hollow チェックのみでは通過していた。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["generator_hash"] = "not-a-hash"
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    violations = [
+        k for k in result.missing_required_keys
+        if k.startswith("frozen_design.fixture_spec.FORMANT_GT.generator_hash")
+    ]
+    assert len(violations) == 1
+    assert ": shape" in violations[0]
+
+
+def test_fixture_spec_confound_axes_scalar_string_blocks() -> None:
+    """finding 原文の再現ケース: `confound_axes="x"` は非空文字列であるため
+    従来は list 型を要求せず通過していた。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["confound_axes"] = "x"
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    violations = [
+        k for k in result.missing_required_keys
+        if k.startswith("frozen_design.fixture_spec.FORMANT_GT.confound_axes")
+    ]
+    assert len(violations) == 1
+    assert ": shape" in violations[0]
+
+
+def test_fixture_spec_boundary_probes_empty_list_blocks() -> None:
+    """空 list は `_is_hollow` の非空コンテナチェックで既に missing 扱いだが、
+    shape 規則としても「非空 list」を要求することを明示的に確認する。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["boundary_probes"] = []
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.fixture_spec.FORMANT_GT.boundary_probes" in result.missing_required_keys
+
+
+def test_fixture_spec_negative_controls_mapping_instead_of_list_blocks() -> None:
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["negative_controls"] = {
+        "a": 1
+    }
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    violations = [
+        k for k in result.missing_required_keys
+        if k.startswith("frozen_design.fixture_spec.FORMANT_GT.negative_controls")
+    ]
+    assert len(violations) == 1
+    assert ": shape" in violations[0]
+
+
+def test_fixture_spec_generator_version_blank_string_blocks() -> None:
+    """`generator_version` は非空チェックだけでは `"  "`（空白のみ）を検出
+    できない場合がある形状クラス（version-ish フィールド）の直接検査。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["generator_version"] = "   "
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    # 空白のみ文字列は _is_hollow でも既に missing 扱いになるため、shape
+    # violation としてではなく通常の missing として列挙されることを確認する
+    # （二重報告しないこと自体もここで確認する）。
+    violations = [
+        k for k in result.missing_required_keys
+        if k.startswith("frozen_design.fixture_spec.FORMANT_GT.generator_version")
+    ]
+    assert violations == ["frozen_design.fixture_spec.FORMANT_GT.generator_version"]
+
+
+def test_meter_spec_parameter_grid_scalar_int_blocks() -> None:
+    """finding 原文の再現ケース: `parameter_grid=1` は非 hollow な scalar
+    (`0`/`False` と異なり `_is_hollow` の対象外) のため従来は通過していた。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["meter_specs"]["M6_IDENTITY"]["parameter_grid"] = 1
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    violations = [
+        k for k in result.missing_required_keys
+        if k.startswith("frozen_design.meter_specs.M6_IDENTITY.parameter_grid")
+    ]
+    assert len(violations) == 1
+    assert ": shape" in violations[0]
+
+
+def test_meter_spec_parameter_grid_empty_mapping_blocks() -> None:
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["meter_specs"]["M6_IDENTITY"]["parameter_grid"] = {}
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.meter_specs.M6_IDENTITY.parameter_grid" in result.missing_required_keys
+
+
+def test_provenance_spec_schema_version_non_string_blocks() -> None:
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["provenance_spec"]["schema_version"] = 1
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    violations = [
+        k for k in result.missing_required_keys
+        if k.startswith("frozen_design.provenance_spec.schema_version")
+    ]
+    assert len(violations) == 1
+    assert ": shape" in violations[0]
+
+
+def test_stop_rules_scalar_string_blocks() -> None:
+    """`frozen_design.stop_rules` は `_check_required_blocking` が直接走査する
+    トップレベル REQUIRED_BLOCKING キー（ネスト section ではない）だが、非空
+    list 形状も要求する（Codex レビュー 2026-09-01 P1、`[UNDERSPEC-CAL-C18]`）。
+    """
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["stop_rules"] = "ABORT_ON_UNSEEDED_RNG"
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    violations = [
+        k for k in result.missing_required_keys if k.startswith("frozen_design.stop_rules")
+    ]
+    assert len(violations) == 1
+    assert ": shape" in violations[0]
+
+
+def test_stop_rules_valid_list_is_not_blocked_by_shape() -> None:
+    """既存の非空 list 値（fixture 既定値）は shape 違反として誤検出しない
+    ことを確認する回帰ガード。"""
+    result = c0_validate.validate_c0_manifest(_complete_manifest())
+    assert not any(
+        k.startswith("frozen_design.stop_rules") for k in result.missing_required_keys
+    )
 
 
 def test_split_spec_missing_one_nested_key_is_listed() -> None:

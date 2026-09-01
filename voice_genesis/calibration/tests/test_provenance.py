@@ -56,6 +56,34 @@ def test_ledger_append_and_read_round_trip(tmp_path) -> None:
     assert reloaded.entries[0].payload["row_id"] == "r1"
 
 
+def test_ledger_append_refreshes_entries_without_reconstruction(tmp_path) -> None:
+    """[P1] regression: `append()` の in-memory キャッシュ再構築は
+    `self._entries, self._malformed = self._read_all()` のようにアンパック
+    しなければならない。旧実装は `self._entries = list(self._read_all())`
+    のように `(entries, malformed)` の 2-tuple をそのまま代入していたため、
+    `ledger.entries` が `LedgerEntry` インスタンスの代わりに
+    `[entries_list, malformed_list]` という 2 要素の list を返すように
+    壊れており、`check_leakage(ledger.entries, ...)` が
+    `AttributeError: 'list' object has no attribute 'payload'` で
+    クラッシュしていた（別インスタンスとして再構築すれば
+    `_read_all()` が `__init__` 経路で正しくアンパックされるため露呈せず、
+    append 直後に同一インスタンスの `.entries` を使う経路でのみ再現する）。"""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append({"kind": "render", "row_id": "r1"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    # append 直後、再構築なしで ledger.entries を直接使う (regression 経路)。
+    assert len(ledger.entries) == 2
+    assert all(isinstance(e, LedgerEntry) for e in ledger.entries)
+    assert ledger.malformed_lines == ()
+
+    # check_leakage は再構築なしでもクラッシュせず正常に動く。
+    result = Ledger.check_leakage(
+        ledger.entries, holdout_row_ids=["holdout-x"], unseal_seq=None
+    )
+    assert result.blocked is None
+
+
 def test_ledger_verify_chain_ok_on_untampered(tmp_path) -> None:
     ledger = Ledger(tmp_path / "ledger.jsonl")
     for i in range(5):

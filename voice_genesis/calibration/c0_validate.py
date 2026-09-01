@@ -56,8 +56,9 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
     candidate_exhaustion_rule/holdout_fail_outcome）・
     `PROVENANCE_SPEC_REQUIRED_KEYS`（schema_version/artifact_layout）・
     `COST_CAPS_REQUIRED_KEYS`（compute/storage/budget）を完全に持つことを
-    要求する（`[UNDERSPEC-CAL-C17]`）。`frozen_design.stop_rules` は非空値
-    のみを要求する（設計正本はネスト構造を規定しない）。旧
+    要求する（`[UNDERSPEC-CAL-C17]`）。`frozen_design.stop_rules` はネスト
+    構造こそ規定しない（設計正本は個々の rule のスキーマまでは規定しない）が、
+    非空 list であることは要求する（`[UNDERSPEC-CAL-C18]`）。旧
     `frozen_design.selection_rule`（単一 tie_rule のみを保持していた）は
     `selection_spec` へ改名・拡張した（§3.1「selection rule・tie rule・
     candidate exhaustion rule・holdout FAIL 後の固定 outcome」の 4 項目を
@@ -81,6 +82,28 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
     重複をそれぞれ個別列挙。`[UNDERSPEC-CAL-C16]`。Codex レビュー 2026-09-01
     P1: 従来は 1 件の well-formed entry があれば通過しており、stream 集合が
     閉じているかを一切検査していなかった）。
+  - **BOUNDED shape validation**（`[UNDERSPEC-CAL-C18]`。Codex レビュー
+    2026-09-01 P1: `generator_hash="not-a-hash"`・`confound_axes="x"`・
+    `parameter_grid=1` のような、非 hollow だが型として明らかに壊れた
+    scalar 値が上記ネスト鍵の完全性検査を素通りしていた）: `meter_specs`/
+    `fixture_spec`/campaign-level セクション（`split_spec`/`selection_spec`/
+    `provenance_spec`/`cost_caps`）配下のネスト鍵、および `frozen_design.
+    stop_rules` は、存在・非 hollow であることに加えてフィールド名から
+    機械的に導出した最小限の「形状」も検査する（`_shape_violation`）:
+    フィールド名が `*_hash`/`*_sha256` で終わるものは bare 64 桁小文字
+    16 進 sha256 文字列、`confound_axes`/`boundary_probes`/
+    `negative_controls`/`stop_rules` は非空 list、`parameter_grid` は
+    非空 mapping、`generator_version`/`schema_version` は非空白 str で
+    あることを要求する。違反は `"<section>.<key>: shape (<reason>)"`
+    として個別列挙する（欠落/hollow の `"<section>.<key>"` と区別できる
+    形式）。
+
+    **本 validator が検査するのは値の「形状」までである。値の意味論的
+    相互検証（registry/matrix との突合 — 例えば `parameter_grid` の中身が
+    実際に `candidates.registry` の宣言と整合するか、`generator_hash` が
+    実際に `fixtures/generators/*.py` の実装内容と一致するか）は、armed
+    C0 freeze producer 実装時（§18 Gate 2 承認後の別 PR）の責務であり、
+    本 dry-run validator の範囲外である。**
 - **RECORDED_OR_ABSENT**（§3.2）: 値または `"ABSENT:<理由>"` 文字列のいずれか
   が必須記録される。[UNDERSPEC-CAL-C07] 「必須記録」という文言を厳格に読み、
   キー自体が manifest に全く存在しない場合は REQUIRED_BLOCKING と同じ扱い
@@ -218,6 +241,72 @@ HASH_MAP_KEYS: tuple[str, ...] = (
     "candidates.schema_paths_sha256",
     "candidates.test_paths_sha256",
 )
+
+# ---------------------------------------------------------------------------
+# BOUNDED shape validation（Codex レビュー 2026-09-01 P1: 従来
+# `_missing_nested_keys` はキーの存在/hollow 判定のみを行い、値の「形状」を
+# 一切検査していなかったため、`generator_hash="not-a-hash"` /
+# `confound_axes="x"` / `parameter_grid=1` のような、型として明らかに壊れた
+# 値でも REQUIRED_BLOCKING を素通りしていた。`[UNDERSPEC-CAL-C18]`）
+#
+# **本 validator が検査するのは値の「形状」までである。値の意味論的相互検証
+# （registry/matrix との突合。例えば `parameter_grid` の中身が実際に
+# `candidates.registry` の宣言と整合するか、`generator_hash` が実際に
+# `fixtures/generators/*.py` の実装内容と一致するか）は、armed C0 freeze
+# producer 実装時（§18 Gate 2 承認後の別 PR）の責務であり、本 dry-run
+# validator の範囲外である。**
+# ---------------------------------------------------------------------------
+
+#: このサフィックスで終わるネストフィールド名は「ダイジェスト値」として、
+#: bare 64 桁小文字 16 進 sha256 文字列（`_SHA256_HEX_RE`。他の sha256 系
+#: フィールド — `HASH_MAP_KEYS` の value・`PYWORLD_WHEEL_HASH_KEY` —
+#: と同一形式へ統一）であることを要求する。
+_HASH_FIELD_SUFFIXES: tuple[str, ...] = ("_hash", "_sha256")
+
+#: 非空 list であることを要求するネストフィールド名（設計正本が「軸」
+#: 「probe」「control」「rule」の複数形を列挙で表現する箇所。単一 scalar
+#: では複数性の要求を満たせないため list 型を要求する）。
+_LIST_SHAPE_FIELDS: frozenset[str] = frozenset(
+    {"confound_axes", "boundary_probes", "negative_controls", "stop_rules"}
+)
+
+#: 非空 mapping であることを要求するネストフィールド名。
+_MAPPING_SHAPE_FIELDS: frozenset[str] = frozenset({"parameter_grid"})
+
+#: 非空白 str であることを要求する「version」系ネストフィールド名（`_is_hollow`
+#: の空文字列チェックに加え、意図せず数値・bool 等の非文字列型が入るのを防ぐ）。
+_VERSION_SHAPE_FIELDS: frozenset[str] = frozenset({"generator_version", "schema_version"})
+
+
+def _shape_violation(field_name: str, value: object) -> str | None:
+    """`field_name`（ネストしたキー名。ドット区切りパスの最後の要素）が
+    上記のいずれかの形状規則に該当する場合、`value` がその規則を満たすかを
+    検査する。違反時は人間可読な理由文字列を返し、規則の対象外または規則を
+    満たす場合は `None` を返す（＝missing/hollow 判定は呼び出し側の既存
+    `_is_hollow` チェックが別途行うため、ここでは「存在し非 hollow な値の
+    形状」のみを見る）。
+
+    `[UNDERSPEC-CAL-C18]` 設計正本 §3.1 はネストしたリーフ値の型までは
+    明示しないため、フィールド名の命名規則から機械的に導出した最小限の
+    形状規則を採用する（最も単純で一貫した選択）。
+    """
+    if any(field_name.endswith(suffix) for suffix in _HASH_FIELD_SUFFIXES):
+        if not isinstance(value, str) or not _SHA256_HEX_RE.match(value):
+            return "must be a 64-char lowercase hex sha256 string"
+        return None
+    if field_name in _LIST_SHAPE_FIELDS:
+        if not isinstance(value, list) or len(value) == 0:
+            return "must be a non-empty list"
+        return None
+    if field_name in _MAPPING_SHAPE_FIELDS:
+        if not isinstance(value, Mapping) or len(value) == 0:
+            return "must be a non-empty mapping"
+        return None
+    if field_name in _VERSION_SHAPE_FIELDS:
+        if not isinstance(value, str) or value.strip() == "":
+            return "must be a non-blank string"
+        return None
+    return None
 
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -382,6 +471,18 @@ def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
     `repo.dirty_tree` は「値が False であること」自体が要求（§3.1:
     「dirty-tree=false」）のため、存在していても `True` なら欠落と同様に
     扱う（fail-closed。値が `False` 以外の型・欠落も含めて違反とする）。
+
+    `frozen_design.stop_rules` はネストしたセクションではなく本関数が直接
+    走査する REQUIRED_BLOCKING キーだが、BOUNDED shape validation
+    （`_shape_violation`。`[UNDERSPEC-CAL-C18]`）の対象フィールド
+    (`_LIST_SHAPE_FIELDS`) でもあるため、非空チェック通過後に追加で形状も
+    検査する（例: `stop_rules="x"` のような非 list scalar は非空文字列と
+    しては通過してしまうため）。他の REQUIRED_BLOCKING_KEYS には
+    `_shape_violation` を汎用的に適用しない: leaf 名だけで判定すると
+    `candidates.meter_paths_sha256` のような "path -> sha256 の mapping"
+    フィールドが `_HASH_FIELD_SUFFIXES`（`*_sha256`）に誤ってマッチし
+    （値自体は mapping であり単一 hash 文字列ではない）、正当な manifest を
+    誤 BLOCK してしまうため、`stop_rules` のみ個別に検査する。
     """
     missing: list[str] = []
     for key in REQUIRED_BLOCKING_KEYS:
@@ -391,6 +492,11 @@ def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
             continue
         if key == "repo.dirty_tree" and value is not False:
             missing.append(f"{key} (must be exactly false, got {value!r})")
+            continue
+        if key == "frozen_design.stop_rules":
+            reason = _shape_violation("stop_rules", value)
+            if reason is not None:
+                missing.append(f"{key}: shape ({reason})")
     return missing
 
 
@@ -550,14 +656,30 @@ def _check_meter_specs_coverage(manifest: Mapping[str, object]) -> list[str]:
     return [f"frozen_design.meter_specs.{meter_id}" for meter_id in missing_meters]
 
 
-def _missing_nested_keys(
-    entry: Mapping[str, object], required_keys: tuple[str, ...]
+def _nested_key_violations(
+    entry: Mapping[str, object], required_keys: tuple[str, ...], prefix: str
 ) -> list[str]:
-    """`entry` から `required_keys` のうち欠落・hollow なキー名のみを返す
-    （`_is_hollow` を再利用。Codex レビュー 2026-09-01 P1: 空コンテナ・空
-    文字列の placeholder value は「未記録」と同義として missing 扱いにする）。
+    """`entry` から `required_keys` の (1) 欠落/hollow なキーと (2) 値は存在
+    するが `_shape_violation`（BOUNDED shape validation, `[UNDERSPEC-CAL-C18]`）
+    に違反するキーの両方を、`prefix.<key>` 形式の violation 文字列として
+    返す（`_is_hollow` を再利用。Codex レビュー 2026-09-01 P1: 従来の欠落
+    判定のみでは、`generator_hash="not-a-hash"` のような形状が壊れた値は
+    素通りしていた）。
+
+    欠落/hollow は従来どおり `f"{prefix}.{key}"`、shape 違反は
+    `f"{prefix}.{key}: shape ({reason})"` として区別できる形式で返す
+    （後者は値そのものは記録されている＝§3.2 の「未記録」とは異なる違反種別
+    であるため）。
     """
-    return [key for key in required_keys if key not in entry or _is_hollow(entry.get(key))]
+    violations: list[str] = []
+    for key in required_keys:
+        if key not in entry or _is_hollow(entry.get(key)):
+            violations.append(f"{prefix}.{key}")
+            continue
+        reason = _shape_violation(key, entry[key])
+        if reason is not None:
+            violations.append(f"{prefix}.{key}: shape ({reason})")
+    return violations
 
 
 def _check_meter_spec_nested_keys(manifest: Mapping[str, object]) -> list[str]:
@@ -585,10 +707,9 @@ def _check_meter_spec_nested_keys(manifest: Mapping[str, object]) -> list[str]:
                 f"frozen_design.meter_specs.{meter_id} (entry must be a mapping)"
             )
             continue
-        violations += [
-            f"frozen_design.meter_specs.{meter_id}.{key}"
-            for key in _missing_nested_keys(entry, METER_SPEC_REQUIRED_KEYS)
-        ]
+        violations += _nested_key_violations(
+            entry, METER_SPEC_REQUIRED_KEYS, f"frozen_design.meter_specs.{meter_id}"
+        )
     return violations
 
 
@@ -632,10 +753,9 @@ def _check_fixture_spec_nested_keys(manifest: Mapping[str, object]) -> list[str]
                 f"frozen_design.fixture_spec.{family_id} (entry must be a mapping)"
             )
             continue
-        violations += [
-            f"frozen_design.fixture_spec.{family_id}.{key}"
-            for key in _missing_nested_keys(entry, FIXTURE_SPEC_REQUIRED_KEYS)
-        ]
+        violations += _nested_key_violations(
+            entry, FIXTURE_SPEC_REQUIRED_KEYS, f"frozen_design.fixture_spec.{family_id}"
+        )
     return violations
 
 
@@ -659,9 +779,7 @@ def _check_campaign_section_nested_keys(manifest: Mapping[str, object]) -> list[
         found, section = _resolve(manifest, section_path)
         if not found or _is_hollow(section) or not isinstance(section, Mapping):
             continue  # 欠落/非 mapping は _check_required_blocking 側で既に捕捉
-        violations += [
-            f"{section_path}.{key}" for key in _missing_nested_keys(section, required_keys)
-        ]
+        violations += _nested_key_violations(section, required_keys, section_path)
     return violations
 
 
