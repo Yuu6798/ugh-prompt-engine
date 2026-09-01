@@ -46,6 +46,7 @@
   "voice_genesis/calibration/tests/test_determinism.py",
   "voice_genesis/calibration/tests/test_gates.py",
   "voice_genesis/calibration/tests/test_generators.py",
+  "voice_genesis/calibration/tests/test_identity_sweep_overrides.py",
   "voice_genesis/calibration/tests/test_m6.py",
   "voice_genesis/calibration/tests/test_matrix.py",
   "voice_genesis/calibration/tests/test_observables.py",
