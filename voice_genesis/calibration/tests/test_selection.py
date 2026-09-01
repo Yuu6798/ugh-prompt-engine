@@ -543,3 +543,61 @@ def test_successful_directional_selection_preserves_absolute_audit_vectors() -> 
     assert "abs-audited" in outcome.raw_vectors
     assert "abs-audited" in outcome.rounded_vectors
     assert ("abs-audited", "flagged_ineligible") in outcome.ineligible_candidates
+
+
+def test_successful_selection_preserves_diagnostic_only_audit_vectors() -> None:
+    absolute = CandidateCriteria(
+        candidate_id="abs-selected",
+        ceiling=ClaimCeiling.ABSOLUTE,
+        primary_normalized_mae=0.2,
+        signed_bias=0.0,
+        primary_q95_ae=0.3,
+    )
+    diagnostic_absolute = CandidateCriteria(
+        candidate_id="diag-abs",
+        ceiling=ClaimCeiling.DIAGNOSTIC_ONLY,
+        primary_normalized_mae=0.4,
+        signed_bias=0.1,
+        primary_q95_ae=0.6,
+    )
+    diagnostic_directional = CandidateCriteria(
+        candidate_id="diag-dir",
+        ceiling=ClaimCeiling.DIAGNOSTIC_ONLY,
+        kendall_tau=0.7,
+        adjacent_reversal_rate=0.1,
+    )
+
+    outcome = select_across_ceilings(
+        [absolute, diagnostic_absolute, diagnostic_directional]
+    )
+
+    assert outcome.selected_candidate_id == "abs-selected"
+    assert outcome.ranked_candidate_ids == ("abs-selected",)
+    assert "diag-abs" in outcome.raw_vectors
+    assert "diag-abs" in outcome.rounded_vectors
+    assert "diag-dir" in outcome.raw_vectors
+    assert "diag-dir" in outcome.rounded_vectors
+    assert ("diag-abs", "different_ceiling_pool") in outcome.ineligible_candidates
+    assert ("diag-dir", "different_ceiling_pool") in outcome.ineligible_candidates
+
+
+def test_successful_selection_accounts_for_diagnostic_without_criteria() -> None:
+    directional = CandidateCriteria(
+        candidate_id="dir-selected",
+        ceiling=ClaimCeiling.DIRECTIONAL,
+        kendall_tau=0.9,
+        adjacent_reversal_rate=0.0,
+    )
+    diagnostic = CandidateCriteria(
+        candidate_id="diag-no-criteria",
+        ceiling=ClaimCeiling.DIAGNOSTIC_ONLY,
+    )
+
+    outcome = select_across_ceilings([directional, diagnostic])
+
+    assert outcome.selected_candidate_id == "dir-selected"
+    assert "diag-no-criteria" not in outcome.raw_vectors
+    assert (
+        "diag-no-criteria",
+        "criteria_payload_absent",
+    ) in outcome.ineligible_candidates

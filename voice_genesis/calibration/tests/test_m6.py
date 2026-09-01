@@ -230,3 +230,38 @@ def test_pair_uncertainty_distance_consistency_hand_derived() -> None:
         abs_diffs = [abs(c.diff_normalized) for c in result.components]
         u_obs_pair = pair_uncertainty(abs_diffs, abs_diffs, norm)
         assert result.distance == pytest.approx(u_obs_pair / 2.0)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("a", float("nan")),
+        ("a", float("inf")),
+        ("b", float("-inf")),
+        ("e_use", 0.0),
+        ("e_use", -1.0),
+        ("e_use", float("nan")),
+        ("e_use", float("inf")),
+    ],
+)
+def test_m6_distance_invalid_normalization_operands_are_not_evaluable(
+    field: str, bad_value: float
+) -> None:
+    components_a = {m: 1.0 for m in CLAIM_CRITICAL_SET}
+    components_b = {m: 2.0 for m in CLAIM_CRITICAL_SET}
+    e_use = {m: 1.0 for m in CLAIM_CRITICAL_SET}
+    target = next(iter(CLAIM_CRITICAL_SET))
+
+    if field == "a":
+        components_a[target] = bad_value
+    elif field == "b":
+        components_b[target] = bad_value
+    else:
+        e_use[target] = bad_value
+
+    result = m6_distance(
+        components_a, components_b, e_use, member_status=_ALL_ABSOLUTE, norm="L1"
+    )
+    assert result.status == TerminalStatus.NOT_EVALUABLE
+    assert result.distance is None
+    assert result.components == ()

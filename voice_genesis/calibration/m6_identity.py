@@ -156,6 +156,16 @@ def m6_distance(
         return M6Result(status=TerminalStatus.NOT_EVALUABLE, distance=None, components=())
 
     critical_ids = sorted(CLAIM_CRITICAL_SET, key=lambda m: m.value)
+    valid_operands = all(
+        math.isfinite(components_a[cid])
+        and math.isfinite(components_b[cid])
+        and math.isfinite(e_use[cid])
+        and e_use[cid] > 0
+        for cid in critical_ids
+    )
+    if not valid_operands:
+        return M6Result(status=TerminalStatus.NOT_EVALUABLE, distance=None, components=())
+
     contributions: list[ComponentContribution] = []
     normalized_diffs: list[float] = []
     for cid in critical_ids:

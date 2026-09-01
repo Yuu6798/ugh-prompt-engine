@@ -294,6 +294,65 @@ def _merge_unranked_pool_audit(
     )
 
 
+def _merge_diagnostic_pool_audit(
+    outcome: SelectionOutcome, pool: Sequence[CandidateCriteria]
+) -> SelectionOutcome:
+    """DIAGNOSTIC_ONLY candidates are audit-only: preserve any canonical
+    criterion vector that is actually present, but never add them to ranking.
+
+    CandidateCriteria does not carry a separate selection-family tag, so the
+    existing payload shape is the only non-speculative discriminator. A complete
+    ABSOLUTE payload is preferred; otherwise a complete DIRECTIONAL payload is
+    used. Candidates with neither payload remain accounted as
+    criteria_payload_absent.
+    """
+    absolute_pool = [
+        c for c in pool if _criteria_payload_present(c, SelectionFamily.ABSOLUTE)
+    ]
+    absolute_ids = {c.candidate_id for c in absolute_pool}
+    directional_pool = [
+        c
+        for c in pool
+        if c.candidate_id not in absolute_ids
+        and _criteria_payload_present(c, SelectionFamily.DIRECTIONAL)
+    ]
+    audited_ids = absolute_ids | {c.candidate_id for c in directional_pool}
+
+    raw_vectors = dict(outcome.raw_vectors)
+    rounded_vectors = dict(outcome.rounded_vectors)
+    reasons = list(outcome.ineligible_candidates)
+
+    for audit_pool, family in (
+        (absolute_pool, SelectionFamily.ABSOLUTE),
+        (directional_pool, SelectionFamily.DIRECTIONAL),
+    ):
+        if not audit_pool:
+            continue
+        audit = select(audit_pool, family)
+        raw_vectors.update(audit.raw_vectors)
+        rounded_vectors.update(audit.rounded_vectors)
+        canonical_reasons = dict(audit.ineligible_candidates)
+        reasons.extend(
+            (
+                c.candidate_id,
+                canonical_reasons.get(c.candidate_id, "different_ceiling_pool"),
+            )
+            for c in audit_pool
+        )
+
+    reasons.extend(
+        (c.candidate_id, "criteria_payload_absent")
+        for c in pool
+        if c.candidate_id not in audited_ids
+    )
+    return replace(
+        outcome,
+        raw_vectors=raw_vectors,
+        rounded_vectors=rounded_vectors,
+        ineligible_candidates=tuple(reasons),
+    )
+
+
 def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> SelectionOutcome:
     """ceiling 階級間の裁定規則（§2.6 で凍結。Codex レビュー 2026-09-01 第 4 巡採用）。
 
@@ -352,18 +411,21 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
 
     absolute_pool = _pool(ClaimCeiling.ABSOLUTE)
     directional_pool = _pool(ClaimCeiling.DIRECTIONAL)
+    diagnostic_pool = _pool(ClaimCeiling.DIAGNOSTIC_ONLY)
 
     if _has_selectable(absolute_pool, SelectionFamily.ABSOLUTE):
         outcome = select(absolute_pool, SelectionFamily.ABSOLUTE)
-        return _merge_unranked_pool_audit(
+        outcome = _merge_unranked_pool_audit(
             outcome, directional_pool, SelectionFamily.DIRECTIONAL
         )
+        return _merge_diagnostic_pool_audit(outcome, diagnostic_pool)
 
     if _has_selectable(directional_pool, SelectionFamily.DIRECTIONAL):
         outcome = select(directional_pool, SelectionFamily.DIRECTIONAL)
-        return _merge_unranked_pool_audit(
+        outcome = _merge_unranked_pool_audit(
             outcome, absolute_pool, SelectionFamily.ABSOLUTE
         )
+        return _merge_diagnostic_pool_audit(outcome, diagnostic_pool)
 
     absolute_audit = select(absolute_pool, SelectionFamily.ABSOLUTE)
     directional_audit = select(directional_pool, SelectionFamily.DIRECTIONAL)
