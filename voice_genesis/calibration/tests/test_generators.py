@@ -6,6 +6,7 @@ from scipy.signal import welch
 
 from voice_genesis.calibration.fixtures.generators import (
     aperiodicity,
+    common,
     f0_control,
     formant,
     identity_sweep,
@@ -424,6 +425,59 @@ def test_resonance_realized_prominence_matches_declared_with_snr_confound_noise(
     )
 
 
+def test_resonance_realized_snr_and_prominence_both_hold_when_correction_nontrivial() -> None:
+    """[Codex レビュー 2026-09-01 P1 finding #2] regression: nuisance noise の
+    振幅は CORRECTED clean signal（`floor + scaled_peak * correction`）を基準
+    に導出しなければならない。`resonance_bandwidth_hz=50` (extreme, `correction
+    != 1` を誘発する) の confound 行で、FINAL PCM 上の実現 prominence と
+    実現 SNR の**両方**が declared 値の許容誤差内に収まることを確認する
+    （旧実装は pre-correction の `floor+scaled_peak` を基準にしており、
+    `correction != 1` の行では realized SNR が declared SNR から乖離して
+    いた）。
+
+    実現 SNR は `_core` 内部の rng 消費順序（floor draw → peak raw draw →
+    nuisance raw draw）を同一 seed で再現した `raw`（nuisance の未スケール
+    draw）を使い、FINAL PCM 上で `raw` 方向への射影から独立に測定する
+    （`_nuisance_noise_component` 自体は呼ばない）。
+    """
+    prominence_tolerance_db = 1.5
+    snr_tolerance_db = 0.5
+    row = _resonance_row(
+        center_hz=2000.0, resonance_bandwidth_hz=50.0, prominence_db=12.0,
+        duration_s=2.0, noise_clean=False, noise_snr_db=20.0,
+    )
+    n = common.n_samples(row.duration_s, row.sr_hz)
+
+    # `_core` の rng 消費順序を同一 seed で再現し、nuisance の未スケール draw
+    # (`raw`) を独立に取得する（floor draw と peak-raw draw は消費するが破棄）。
+    measurement_rng = _rng()
+    _floor_draw = measurement_rng.standard_normal(n)
+    _peak_raw_draw = measurement_rng.standard_normal(n)
+    raw = measurement_rng.standard_normal(n)
+
+    pcm = resonance.render(row, _rng())
+    x = pcm.astype(np.float64) / 32767.0
+
+    # realized prominence（既存の独立 welch 測定を再利用）。
+    realized_prominence_db = _welch_local_prominence_db(pcm, row.sr_hz, row.center_hz, 50.0)
+    assert abs(realized_prominence_db - row.prominence_db) <= prominence_tolerance_db, (
+        f"realized_prominence={realized_prominence_db:.3f}dB declared={row.prominence_db}dB"
+    )
+
+    # realized SNR: x = k*(floor+nuisance+final_peak) の単一線形スカラー k の
+    # もとで、raw 方向への最小二乗射影から noise 成分の実現パワーを推定する
+    # (floor+final_peak は raw と独立な乱数系列であるため cross term は
+    # duration_s=2.0 の長さで無視できるほど小さい)。
+    proj = float(np.dot(x, raw) / np.dot(raw, raw))
+    noise_power = float(np.mean((proj * raw) ** 2))
+    total_power = float(np.mean(x**2))
+    clean_power = max(total_power - noise_power, 1e-12)
+    realized_snr_db = 10.0 * np.log10(clean_power / noise_power)
+    assert abs(realized_snr_db - row.noise_snr_db) <= snr_tolerance_db, (
+        f"realized_snr={realized_snr_db:.3f}dB declared={row.noise_snr_db}dB"
+    )
+
+
 def _resonance_steady_core_pcm(
     pcm: np.ndarray, context: str, sr_hz: int, duration_s: float
 ) -> np.ndarray:
@@ -578,6 +632,96 @@ def test_transition_ramp_widens_with_long_duration_class(join_type: str) -> None
     assert abs(mid_long - steady_post_short) > 0.01 * 32767.0 or abs(
         mid_long - steady_pre
     ) > 0.01 * 32767.0
+
+
+# ---------------------------------------------------------------------------
+# TRANSITION_GT: crossfade is centered on declared join_time_s
+# (Codex レビュー 2026-09-01 P1)
+# ---------------------------------------------------------------------------
+
+
+def _local_blend_fraction(
+    x: np.ndarray, base: np.ndarray, alt: np.ndarray, window: int
+) -> np.ndarray:
+    """局所ウィンドウで `x ≈ A*base + B*alt` を最小二乗フィットし、各サンプル
+    位置での energy-weighted blend fraction `B/(A+B)` を返す（`base`/`alt` は
+    `transition._steady_tone` から独立に再構成した既知の厳密 reference 波形。
+    `transition._blend_envelope`/`_core` は一切呼ばない独立測定）。窓内の
+    局所和は boxcar 畳み込みでまとめて計算する。
+    """
+    kernel = np.ones(window, dtype=np.float64)
+
+    def _local_sum(a: np.ndarray) -> np.ndarray:
+        return np.convolve(a, kernel, mode="same")
+
+    s_bb = _local_sum(base * base)
+    s_aa = _local_sum(alt * alt)
+    s_ba = _local_sum(base * alt)
+    s_xb = _local_sum(x * base)
+    s_xa = _local_sum(x * alt)
+
+    det = s_bb * s_aa - s_ba * s_ba
+    with np.errstate(invalid="ignore", divide="ignore"):
+        a_coef = np.where(np.abs(det) > 1e-9, (s_xb * s_aa - s_xa * s_ba) / det, np.nan)
+        b_coef = np.where(np.abs(det) > 1e-9, (s_bb * s_xa - s_ba * s_xb) / det, np.nan)
+        denom = a_coef + b_coef
+        frac = np.where(np.abs(denom) > 1e-9, b_coef / denom, np.nan)
+    return frac
+
+
+@pytest.mark.parametrize("duration_class", ["short", "long"])
+def test_transition_crossfade_realized_midpoint_matches_declared_join_time(
+    duration_class: str,
+) -> None:
+    """[Codex レビュー 2026-09-01 P1] regression: `crossfade` の実現遷移中心は
+    declared `join_time_s`（= `join_sample`）と一致すること。旧実装は
+    crossfade window が `join_sample` から片側にのみ伸びており（他 3 join
+    type のように中心配置ではなかった）、実現遷移中心が
+    `join_sample + ramp_samples/2` へずれていた。`x ≈ A*base + B*alt` の
+    energy-weighted blend fraction `B/(A+B)` を独立に局所最小二乗推定し、
+    それが 0.5 を跨ぐサンプル位置を実現遷移中心として測定する。
+    """
+    row = _transition_row(
+        join_type="crossfade", duration_class=duration_class,
+        discontinuity_magnitude=0.35, join_time_s=0.2, duration_s=0.4,
+        f0_hz=220.0,
+    )
+    n = common.n_samples(row.duration_s, row.sr_hz)
+    pcm = transition.render(row, _rng())
+    x = pcm.astype(np.float64) / 32767.0
+
+    base = transition._steady_tone(row.f0_hz, row.sr_hz, n)
+    alt_f0 = row.f0_hz * (1.0 + row.discontinuity_magnitude)
+    alt = common.peak_normalize(transition._steady_tone(alt_f0, row.sr_hz, n))
+
+    join_sample = int(round(row.join_time_s * row.sr_hz))
+    ramp_samples = transition._ramp_samples_for(row, row.sr_hz)
+    old_buggy_midpoint = join_sample + ramp_samples // 2
+
+    window = max(64, ramp_samples // 4)
+    frac = _local_blend_fraction(x, base, alt, window)
+
+    search_start = max(0, join_sample - ramp_samples * 3)
+    search_end = min(len(frac), join_sample + ramp_samples * 3)
+    crossing = None
+    for i in range(search_start, search_end):
+        if not np.isnan(frac[i]) and frac[i] >= 0.5:
+            crossing = i
+            break
+    assert crossing is not None, "blend fraction never reaches 0.5 near join_sample"
+
+    tolerance = max(1, ramp_samples // 2)
+    assert abs(crossing - join_sample) <= tolerance, (
+        f"duration_class={duration_class!r} realized_midpoint_sample={crossing} "
+        f"join_sample={join_sample} ramp_samples={ramp_samples} tolerance={tolerance}"
+    )
+    # 旧実装の off-by-half-width シフトが解消していること: 実現中心は
+    # declared join_sample の方が、旧実装が予測する位置 (join_sample +
+    # ramp/2) よりも近い。
+    assert abs(crossing - join_sample) < abs(crossing - old_buggy_midpoint), (
+        f"duration_class={duration_class!r} realized_midpoint_sample={crossing} closer to "
+        f"old buggy midpoint {old_buggy_midpoint} than declared join_sample {join_sample}"
+    )
 
 
 def test_transition_recorded_truth_carries_ramp_duration_and_magnitude() -> None:

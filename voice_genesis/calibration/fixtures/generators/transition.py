@@ -12,8 +12,13 @@ discontinuity magnitude を truth として生成時に記録する（`row.join_
 同一 severity の short/long 行が byte-identical に render されていた）。
 4 join type 全てで、severity（discontinuity magnitude、= レベル差そのもの）は
 不変のまま、`join_time_s` を中心に `duration_class` 由来の幅を持つ
-raised-cosine ramp で 2 つの状態を橋渡しする。`crossfade` は元々このパターン
-（`duration_class` 由来の window で 2 状態を混ぜる）だったため変更不要。
+raised-cosine ramp で 2 つの状態を橋渡しする。`crossfade` も元々
+`duration_class` 由来の window で 2 状態を混ぜるパターンだったが、window の
+起点が `join_sample`（= 遷移がそこから片側にだけ伸びる）になっており、他
+3 join type のように `join_sample` を**中心**に置いていなかった
+（`[UNDERSPEC-CAL-B12]` の続き。Codex レビュー 2026-09-01 P1: `crossfade` を
+`_blend_envelope` へ揃え、declared `join_time_s` が遷移の中心を指すという
+4 join type 共通の規約に統一した）。
 recorded truth は `row.join_time_s`（exact join time、不変）+
 `row.discontinuity_magnitude`（severity）+ `row.duration_class`（ramp
 duration。`[UNDERSPEC-CAL-B06]` の short=5ms/long=50ms 写像により具体秒数が
@@ -107,15 +112,17 @@ def _core(row: object) -> np.ndarray:
         return common.peak_normalize(x)
 
     if join_type == "crossfade":
-        window_s = _DURATION_CLASS_S.get(row.duration_class or "long", 0.050)
-        w = max(1, min(int(round(window_s * sr_hz)), n - join_sample))
+        # `join_sample` を中心に幅 `ramp_samples` の raised-cosine で blend
+        # する（他 3 join type と同じ `_blend_envelope` を使用。Codex レビュー
+        # 2026-09-01 P1: 従来は `join_sample` から片側にだけ crossfade window
+        # が伸びており、declared `join_time_s` が遷移の開始点になっていた —
+        # 他 3 type は raised-cosine を join_sample 中心に置くため、declared
+        # join_time_s は「遷移の中心」を意味する。crossfade だけこの規約から
+        # 外れていた）。
+        ramp_samples = _ramp_samples_for(row, sr_hz)
         alt = common.peak_normalize(_steady_tone(f0_hz * (1.0 + mag), sr_hz, n))
-        x = base.copy()
-        ramp = np.linspace(0.0, 1.0, w)
-        x[join_sample : join_sample + w] = (1.0 - ramp) * base[
-            join_sample : join_sample + w
-        ] + ramp * alt[join_sample : join_sample + w]
-        x[join_sample + w :] = alt[join_sample + w :]
+        blend_env = _blend_envelope(n, join_sample, ramp_samples)
+        x = base * (1.0 - blend_env) + alt * blend_env
         return common.peak_normalize(x)
 
     raise ValueError(f"unknown TRANSITION_GT join_type: {join_type!r}")

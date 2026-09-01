@@ -355,6 +355,43 @@ def test_hash_content_mismatch_blocks() -> None:
     )
 
 
+def test_hash_map_path_duplicated_across_categories_with_conflicting_digest_blocks() -> None:
+    """[Codex レビュー 2026-09-01 P1 finding #4] 同一 path が 2 カテゴリに
+    矛盾する digest で宣言されていると BLOCK する（従来は 4 マップの合併を
+    `declared[path] = sha` で単純マージしており、後勝ちで silently 通過して
+    いた）。"""
+    manifest = _complete_manifest()
+    target = "voice_genesis/calibration/streams.py"
+    schema = manifest["candidates"]["schema_paths_sha256"]
+    assert target in schema
+    correct_sha = schema[target]
+    conflicting_sha = "c" * 64
+    assert conflicting_sha != correct_sha
+    manifest["candidates"]["meter_paths_sha256"][target] = conflicting_sha
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "multiple categories" in k and target in k for k in result.missing_required_keys
+    )
+
+
+def test_hash_map_path_duplicated_across_categories_with_identical_digest_still_blocks() -> None:
+    """[Codex レビュー 2026-09-01 P1 finding #4] digest が一致していても
+    category assignment の一意性そのものが manifest 側の整合性要求
+    （§3.1）であるため BLOCK する（重複が"無害"でも見逃さない）。"""
+    manifest = _complete_manifest()
+    target = "voice_genesis/calibration/streams.py"
+    schema = manifest["candidates"]["schema_paths_sha256"]
+    assert target in schema
+    identical_sha = schema[target]
+    manifest["candidates"]["meter_paths_sha256"][target] = identical_sha
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "multiple categories" in k and target in k for k in result.missing_required_keys
+    )
+
+
 def test_path_inventory_immune_to_missing_file_in_incomplete_checkout(
     tmp_path, monkeypatch  # noqa: ANN001
 ) -> None:

@@ -28,7 +28,11 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
     （欠落 path・inventory に無い unknown/extra path をそれぞれ個別列挙。
     `[UNDERSPEC-CAL-C14]`。Codex レビュー 2026-09-01 P1: 従来は supplied
     entries の形状のみを検証しており、ファイルを丸ごと省略しても通過して
-    しまっていた）。
+    しまっていた）。加えて、同一 path が 4 マップの複数カテゴリに重複して
+    宣言されていないことも検査する（digest が一致していても重複は BLOCK
+    する。Codex レビュー 2026-09-01 P1: 従来は 4 マップを `declared[path] =
+    sha` で単純マージしており、同一 path が矛盾する digest で 2 カテゴリに
+    宣言されていても後勝ちで silently 採用されていた）。
   - `frozen_design.meter_specs` は `candidates.registry.ALL_CANDIDATES` が
     定義する全 meter family をカバーする（欠落 meter は
     `frozen_design.meter_specs.<METER_ID>` として個別に列挙する。
@@ -363,6 +367,40 @@ def _check_path_inventory_coverage(manifest: Mapping[str, object]) -> list[str]:
     return violations
 
 
+def _check_hash_map_category_uniqueness(manifest: Mapping[str, object]) -> list[str]:
+    """4 つの path+hash 系マップ（`HASH_MAP_KEYS`）間で同一 path が複数カテゴリに
+    重複して宣言されていないことを検査する（Codex レビュー 2026-09-01 P1:
+    `_check_hash_content_match` は 4 マップを `declared[path] = sha` で単純に
+    マージしており、同じ path が 2 カテゴリに異なる digest で宣言されていても
+    後勝ちで silently 採用され検出できなかった）。
+
+    digest が一致していても重複は BLOCK する: meter/generator/schema/test の
+    カテゴリ分類は manifest が担う記録であり、1 つの path はちょうど 1 カテゴリに
+    属する一意な分類を持つべきという manifest 側の整合性要求（§3.1）。digest が
+    たまたま一致していても、どのカテゴリに属するかが曖昧な manifest は
+    信頼できる分類記録として認められない（category assignment must be
+    unique）。重複 path は個別に列挙する。
+    """
+    path_categories: dict[str, list[str]] = {}
+    for key in HASH_MAP_KEYS:
+        found, value = _resolve(manifest, key)
+        if not found or _is_hollow(value) or not isinstance(value, Mapping):
+            return []  # 欠落/非 mapping は _check_required_blocking 側で既に捕捉
+        for path in value.keys():
+            if isinstance(path, str):
+                path_categories.setdefault(path, []).append(key)
+
+    violations: list[str] = []
+    for path in sorted(path_categories):
+        categories = path_categories[path]
+        if len(categories) > 1:
+            violations.append(
+                f"candidates.*_paths_sha256[{path!r}] (path declared in multiple "
+                f"categories: {', '.join(categories)}; category assignment must be unique)"
+            )
+    return violations
+
+
 def _check_hash_content_match(manifest: Mapping[str, object]) -> list[str]:
     """4 つの path+hash 系マップに宣言された sha256 を、実ファイルバイトの実測
     sha256 と比較する（設計正本 §3.1「候補 meter・generator・schema・test の全
@@ -619,6 +657,7 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     missing_required = _check_required_blocking(manifest)
     missing_required += _check_hash_maps(manifest)
     missing_required += _check_path_inventory_coverage(manifest)
+    missing_required += _check_hash_map_category_uniqueness(manifest)
     missing_required += _check_hash_content_match(manifest)
     missing_required += _check_meter_specs_coverage(manifest)
     missing_required += _check_independence_ledger(manifest)

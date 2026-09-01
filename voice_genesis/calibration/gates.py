@@ -138,6 +138,14 @@ def absolute_gates(
     中のバケットキー）を検証し、不一致が 1 件でもあれば当該軸を gate4' FAIL
     とする（理由を個別に列挙する。duplicate pair_id 検査より前に行う —
     axis 不一致がある時点でその pair は当該軸の証拠として無効）。
+
+    `per_instance` 中の PRIMARY `InstanceMargin` は `instance_id` で重複がない
+    ことも検査する（Codex レビュー 2026-09-01 P1: 従来は identity を見ずに
+    `per_instance` をそのまま集計しており、同一 instance を複数回渡すと
+    q95/max/mean/median の各集計へ水増しカウントされ、高 E_use instance を
+    重複させるだけで gate2'/gate3 の判定を意図せず反転させられた）。
+    invariance pair の duplicate pair_id 検査（gate4'）と同じ流儀で、重複
+    instance_id を個別に列挙し gate1 を FAIL させる。
     """
     primary = [i for i in per_instance if i.domain == Domain.PRIMARY]
     if not primary:
@@ -145,9 +153,17 @@ def absolute_gates(
 
     reasons: list[str] = []
 
-    gate1 = all(i.eligible for i in primary)
-    if not gate1:
+    primary_ids = [i.instance_id for i in primary]
+    duplicate_instance_ids = sorted({iid for iid in primary_ids if primary_ids.count(iid) > 1})
+
+    gate1 = all(i.eligible for i in primary) and not duplicate_instance_ids
+    if not all(i.eligible for i in primary):
         reasons.append("gate1: some PRIMARY instance not eligible")
+    if duplicate_instance_ids:
+        reasons.append(
+            "gate1: duplicate PRIMARY InstanceMargin.instance_id: "
+            + ", ".join(duplicate_instance_ids)
+        )
 
     eligible_primary = [i for i in primary if i.eligible]
     g_values = tuple(

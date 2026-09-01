@@ -47,6 +47,43 @@ pre-gain 折り込みで最終 PCM 上の宣言 SNR・宣言 prominence の両�
 （`render()` 側は `common.finalize()` の noise 適用を skip させ、二重適用を
 防ぐ。`[UNDERSPEC-CAL-C15]`）。
 
+**nuisance noise の基準信号は CORRECTED clean signal**（Codex レビュー
+2026-09-01 P1 #2）: nuisance の振幅は「宣言 SNR = clean signal power /
+noise power」から逆算するため、基準に使う "clean signal" は実際に出荷される
+peak 成分（= one-shot prominence 補正後の `scaled_peak * correction`）でな
+ければならない。しかし correction 自身は floor（= nuisance を含む）を測定し
+て決まるため、素朴には「correction を決めるには nuisance が要り、nuisance
+を決めるには correction が要る」循環になる。本実装はこれを 2 パスの決定論的
+手続きで断ち切る（反復探索ではなく固定 2 パス。**one-shot** の思想を維持）:
+
+1. **Pass 1（nuisance-free で correction を確定）**: nuisance を一切折り込ま
+   ない「純粋な」`floor + scaled_peak`（context 適用後）で prominence を測定
+   し、`correction` を求める。
+2. **nuisance を CORRECTED clean signal 基準で導出**: `_nuisance_noise_
+   component()` の基準信号を `floor + scaled_peak * correction`（pass 1 で
+   確定した corrected peak）に差し替える。これにより宣言 SNR は実際に出荷
+   される peak 成分の実パワーを基準に計算され、`correction != 1` の行でも
+   realized SNR が declared SNR から乖離しなくなる（旧実装は pre-correction
+   の `floor + scaled_peak` を基準にしており、この乖離が finding の本体
+   だった）。
+3. **Pass 2（re-verify）**: nuisance を折り込んだ `combined_floor` は local
+   spectral floor を僅かに押し上げうる（nuisance 自身が floor のパワーへ
+   加算されるため）。そのため同じ one-shot 補正をもう一度だけ、今度は
+   `combined_floor + corrected_peak` を基準に適用し、prominence を再検証
+   する（pass 1 と同じ手続きを nuisance 込みでもう一度呼ぶだけであり、
+   correction が再び nuisance に依存する循環を生まない — pass 2 の
+   `correction2` は nuisance の再計算をトリガーしない）。
+
+**残差誤差と U_GT への寄与**: pass 2 の `correction2` は「nuisance 折り込みに
+よる floor のわずかな上昇」のみを吸収する残差補正であり、これを peak へ再乗
+算すると、pass 1 で `corrected_peak` 基準に較正した nuisance の実パワーと、
+最終的な peak 実パワー（`corrected_peak * correction2`）との間に小さな
+ミスマッチが生じる（`correction2` は 1 に極めて近いため、通常このミスマッチ
+は無視できるほど小さい）。この残差は上記「近似誤差と U_GT への寄与」節と同様
+に `RESONANCE_GT` truth の `U_GT`（generator truth の保守上限）へ計上すべき
+成分である（実測は `tests/test_generators.py` の SNR confound 回帰テストで
+declared SNR ±0.5dB として検証される）。
+
 **近似誤差と U_GT への寄与**: この 1-パス補正は「peak 窓内の PSD レベルは
 floor 成分の寄与を無視できるほど peak 成分が支配的である」という線形近似に
 基づく（peak 成分をスケール `c` 倍すると、peak 窓内のパワーはおおむね `c**2`
@@ -157,15 +194,26 @@ def _nuisance_noise_component(
     （`render()` 側で `common.finalize()` の重複 noise 適用を止める必要がある
     — 二重適用こそが元のバグだった）。
 
-    ここでの `reference_signal`（floor + 較正前 peak 成分）は `common.
-    add_noise_at_snr` が通常参照する「noise 適用直前の signal」に相当する
-    pre-gain 版のプロキシである。gain は後段で mixed signal 全体へ均一に
-    掛かるスカラーに過ぎないため、この pre-gain スケールで SNR を合わせて
-    おけば最終 PCM 上の SNR も宣言値に一致する。prominence 較正の
-    `correction` 係数は peak 成分のみに掛かる小さな残差補正（module docstring
-    の one-shot 近似誤差 ±1.5dB 相当）であり、nuisance の基準信号には織り込ま
-    ない（correction を織り込むと floor 側の nuisance 計算が correction 自身
-    に依存する循環になるため）。
+    ここでの `reference_signal` は `common.add_noise_at_snr` が通常参照する
+    「noise 適用直前の signal」に相当する pre-gain 版のプロキシである。gain は
+    後段で mixed signal 全体へ均一に掛かるスカラーに過ぎないため、この
+    pre-gain スケールで SNR を合わせておけば最終 PCM 上の SNR も宣言値に
+    一致する。
+
+    **`reference_signal` は CORRECTED clean signal を渡すこと**（Codex レビュー
+    2026-09-01 P1 #2）: prominence 較正の `correction` 係数は peak 成分の
+    実パワーを変える（module docstring の one-shot 近似誤差 ±1.5dB 相当の
+    残差補正）。宣言 SNR は「実際に出荷される peak 成分の実パワー」を基準に
+    定義されるため、呼び出し側は `floor + scaled_peak`（pre-correction）で
+    はなく `floor + scaled_peak * correction`（post-correction）を
+    `reference_signal` として渡さなければならない。`correction` を決めるには
+    floor（= nuisance を含む floor）の測定が要り、nuisance を決めるには
+    `correction` が要る、という素朴な循環は、呼び出し側 (`_core`) が
+    「nuisance-free で `correction` を確定 → その `corrected_peak` を基準に
+    nuisance を導出」という固定 2 パスの手順で断ち切る（`_core` の実装・
+    module docstring「nuisance noise の基準信号は CORRECTED clean signal」
+    参照。本関数自体はどちらの `reference_signal` が渡されても同じ SNR 式を
+    適用するだけで、循環を断つロジックは持たない）。
 
     `context` 系列（20ms-cosine-ramp 等）由来で `core` 配列長が伸びる行との
     組合せは、正準 nuisance 系列が「1 行につき 1 軸のみ変更」（`axes.
@@ -210,6 +258,34 @@ def _context_core_bounds(context: str, sr_hz: int, n_core: int) -> tuple[int, in
     raise ValueError(f"unknown context level: {context!r}")
 
 
+def _prominence_correction(
+    row: object,
+    sr_hz: int,
+    center: float,
+    bandwidth: float,
+    start: int,
+    length: int,
+    floor_component: np.ndarray,
+    peak_component_: np.ndarray,
+) -> float:
+    """`floor_component + peak_component_` を context 適用後の steady core
+    区間で測定し、宣言 prominence へ合わせる one-shot 補正係数を返す（module
+    docstring「prominence 実現則」参照）。"""
+    context_floor = common.assemble_context(
+        floor_component, sr_hz=sr_hz, context=row.context, f0_hz=row.f0_hz
+    )
+    context_mixed = common.assemble_context(
+        floor_component + peak_component_, sr_hz=sr_hz, context=row.context, f0_hz=row.f0_hz
+    )
+    steady_floor = context_floor[start : start + length]
+    steady_mixed = context_mixed[start : start + length]
+
+    floor_db = _measure_floor_db(steady_floor, sr_hz)
+    peak_db = _measure_peak_db(steady_mixed, sr_hz, center, bandwidth)
+    shortfall_db = float(row.prominence_db) - (peak_db - floor_db)
+    return 10.0 ** (shortfall_db / 20.0)
+
+
 def _core(row: object, rng: np.random.Generator) -> np.ndarray:
     sr_hz = row.sr_hz
     n = common.n_samples(row.duration_s, sr_hz)
@@ -228,35 +304,39 @@ def _core(row: object, rng: np.random.Generator) -> np.ndarray:
     target_ratio = 10.0 ** (row.prominence_db / 20.0)
     scaled_peak = peak_component * (target_ratio * floor_rms / peak_rms)
 
-    # declared-SNR nuisance noise を floor 測定より前に折り込む（Codex レビュー
-    # 2026-09-01 P1: 較正後に nuisance を足す元の順序では floor が事後的に
-    # 上がり、実現 prominence が declared 値を下回っていた）。
-    nuisance = _nuisance_noise_component(row, rng, floor + scaled_peak)
+    start, length = _context_core_bounds(row.context, sr_hz, n)
+
+    # Pass 1（nuisance-free）: one-shot 補正パス（測定 → 不足分算出 → 1 回だけ
+    # 追加乗算。反復なし）。measurement は `context` 適用後の "FULLY
+    # FINALIZED" レンダリング（gain は測定チェーンに含めない — module
+    # docstring 参照）の steady core 区間で行う。ここではまだ nuisance noise
+    # を折り込まない（`correction` が `nuisance` に依存し、`nuisance` の基準
+    # 信号が `correction` に依存する循環を避けるため。module docstring
+    # 「nuisance noise の基準信号は CORRECTED clean signal」参照）。
+    correction = _prominence_correction(
+        row, sr_hz, center, bandwidth, start, length, floor, scaled_peak
+    )
+    corrected_peak = scaled_peak * correction
+
+    # declared-SNR nuisance noise は CORRECTED clean signal（floor +
+    # corrected_peak）を基準に折り込む（Codex レビュー 2026-09-01 P1 #2:
+    # 従来は pre-correction の floor+scaled_peak を基準にしており、
+    # `correction != 1` の行では realized SNR が declared SNR から乖離して
+    # いた）。
+    nuisance = _nuisance_noise_component(row, rng, floor + corrected_peak)
     combined_floor = floor if nuisance is None else floor + nuisance
 
-    # one-shot 補正パス（測定 → 不足分算出 → 1 回だけ追加乗算。反復なし）。
-    # Codex レビュー 2026-09-01 P1: 測定は `context` 適用後の "FULLY FINALIZED"
-    # レンダリング（gain は測定チェーンに含めない — module docstring 参照）の
-    # steady core 区間で行う。gain は core 全体への単一スカラー倍であり
-    # dB 差 (peak-floor) を保存するため測定チェーンから除外できる一方、
-    # context（連結・テーパー）は較正後に適用すると最終 PCM の実現値と
-    # 較正時の想定が食い違うため、ここで先に折り込む。
-    context_floor = common.assemble_context(
-        combined_floor, sr_hz=sr_hz, context=row.context, f0_hz=row.f0_hz
+    # Pass 2（re-verify）: nuisance を折り込んだ floor は local spectral
+    # floor を僅かに押し上げうるため、同じ one-shot 補正をもう一度だけ
+    # `combined_floor` 基準で適用し prominence を再検証する（固定 2 パスの
+    # 決定論的手続きであり反復探索ではない。nuisance の再計算はトリガー
+    # しない — 残差は module docstring「残差誤差と U_GT への寄与」参照）。
+    correction2 = _prominence_correction(
+        row, sr_hz, center, bandwidth, start, length, combined_floor, corrected_peak
     )
-    context_mixed = common.assemble_context(
-        combined_floor + scaled_peak, sr_hz=sr_hz, context=row.context, f0_hz=row.f0_hz
-    )
-    start, length = _context_core_bounds(row.context, sr_hz, n)
-    steady_floor = context_floor[start : start + length]
-    steady_mixed = context_mixed[start : start + length]
+    final_peak = corrected_peak * correction2
 
-    floor_db = _measure_floor_db(steady_floor, sr_hz)
-    unit_pass_peak_db = _measure_peak_db(steady_mixed, sr_hz, center, bandwidth)
-    shortfall_db = float(row.prominence_db) - (unit_pass_peak_db - floor_db)
-    correction = 10.0 ** (shortfall_db / 20.0)
-
-    mixed = combined_floor + scaled_peak * correction
+    mixed = combined_floor + final_peak
     return common.peak_normalize(mixed)
 
 

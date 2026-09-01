@@ -188,6 +188,48 @@ def test_absolute_gates_ineligible_primary_fails_gate1() -> None:
     assert result.passed is False
 
 
+def test_absolute_gates_duplicate_primary_instance_id_fails() -> None:
+    """[Codex レビュー 2026-09-01 P1] regression: 同一 instance_id を持つ
+    high-E_use instance を複製すると、旧実装では identity を見ずに集計する
+    ため gate3 の判定 (bias/median(E_use)) が反転してしまっていた。新実装は
+    duplicate instance_id を検出して gate1 を FAIL させ、全体を確実に FAIL
+    させる。"""
+    # i1 単独だと gate3: bias=1.0, max(u_gt+u_num)=0.1, median(e_use)=2.0
+    #   lhs=1.1 <= 2.0 -> True (gate3 PASS のはずのケース)
+    high_e_use = _instance("i1", ae=1.0, e=1.0, u_gt=0.05, u_num=0.05, e_use=2.0)
+    result_without_duplicate = absolute_gates(
+        [high_e_use],
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result_without_duplicate.gate3_bias_budget is True
+
+    # 同一 instance_id "i1" を複製 (水増し) しても、新実装は duplicate として
+    # 検出し gate1 を FAIL させる (旧実装は集計だけを歪め見逃していた)。
+    duplicated = InstanceMargin(
+        instance_id="i1", domain=Domain.PRIMARY, eligible=True,
+        ae=1.0, e=1.0, u_gt=0.05, u_num=0.05, e_use=2.0,
+    )
+    result = absolute_gates(
+        [high_e_use, duplicated],
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.gate1_all_eligible is False
+    assert result.passed is False
+    assert any("duplicate" in r and "i1" in r for r in result.failure_reasons)
+
+
 def test_absolute_gates_invariance_axis_needs_5_pairs() -> None:
     instances = [_instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)]
     result = absolute_gates(
