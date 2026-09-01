@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -9,6 +10,13 @@ import numpy as np
 
 from voice_genesis.calibration.observables import q95
 from voice_genesis.calibration.vocab import ClaimCeiling, Domain, EvidenceClass
+
+
+def _all_finite(values: Sequence[float]) -> bool:
+    """`values` の全要素が有限 (`math.isfinite`) か。NaN/inf/-inf のいずれかを
+    含めば `False`（gates.py:226 P1 finding: NaN の margins/aggregate が
+    `> 0`/`<= 0` の比較を素通りしてしまう対策の共通ヘルパー）。"""
+    return all(math.isfinite(v) for v in values)
 
 
 def threshold_margin(e_use: float, u_gt: float, u_num: float) -> float:
@@ -146,6 +154,20 @@ def absolute_gates(
     重複させるだけで gate2'/gate3 の判定を意図せず反転させられた）。
     invariance pair の duplicate pair_id 検査（gate4'）と同じ流儀で、重複
     instance_id を個別に列挙し gate1 を FAIL させる。
+
+    **NaN/非有限値は明示的に FAIL として扱う**（gates.py:226 P1 finding、
+    2026-09-01 レビュー: gate4' は `if q95(margins) > 0: gate4 = False` という
+    「fail 条件が真なら False にする」制御フローで、`gate4` の初期値は
+    `True` だった。`NaN > 0` は `False` のためこの if 節を素通りし、`gate4`
+    は初期値 `True`（PASS）のまま残ってしまっていた。加えて gate3/gate_max'
+    は Python 組込 `max()` で集計するが、`max()` は NaN の比較が常に `False`
+    になる副作用で **走査順序によっては NaN 要素を無言で読み飛ばし**、
+    NaN を含む列からでも有限な最大値を返すことがある（`max([1.0, nan])
+    == 1.0` だが `max([nan, 1.0]) == nan`）。本実装は全 gate（2'/max'/3/4'）
+    で、集計関数（`q95`/`max`/`np.mean`/`np.median`）に値を渡す前に
+    `_all_finite()` で入力 margin 列を明示検査し、非有限値が 1 件でもあれば
+    集計を実行せずその gate を typed な非有限理由で直接 FAIL させる（凍結
+    設計: missing/nonfinite は fail 扱い）。
     """
     primary = [i for i in per_instance if i.domain == Domain.PRIMARY]
     if not primary:
@@ -169,24 +191,49 @@ def absolute_gates(
     g_values = tuple(
         i.ae + i.u_gt + i.u_num + u_rep + u_proc - i.e_use for i in eligible_primary
     )
+    g_values_finite = _all_finite(g_values)
 
-    gate2 = bool(g_values) and q95(g_values) <= 0
+    gate2 = bool(g_values) and g_values_finite and q95(g_values) <= 0
     if not gate2:
-        reasons.append("gate2': q95_i(G[i]) > 0 (or no eligible instance)")
+        if g_values and not g_values_finite:
+            reasons.append("gate2': G[i] contains non-finite value(s)")
+        else:
+            reasons.append("gate2': q95_i(G[i]) > 0 (or no eligible instance)")
 
-    gate_max = bool(g_values) and max(g_values) <= 0
+    gate_max = bool(g_values) and g_values_finite and max(g_values) <= 0
     if not gate_max:
-        reasons.append("gate_max': max_i(G[i]) > 0 (or no eligible instance)")
+        if g_values and not g_values_finite:
+            reasons.append("gate_max': G[i] contains non-finite value(s)")
+        else:
+            reasons.append("gate_max': max_i(G[i]) > 0 (or no eligible instance)")
 
     if eligible_primary:
-        bias_value = abs(float(np.mean([i.e for i in eligible_primary])))
-        max_u_gt_num = max(i.u_gt + i.u_num for i in eligible_primary)
-        median_e_use = float(np.median([i.e_use for i in eligible_primary]))
-        gate3 = bias_value + max_u_gt_num + u_rep + u_proc <= median_e_use
+        e_values = [i.e for i in eligible_primary]
+        u_gt_num_values = [i.u_gt + i.u_num for i in eligible_primary]
+        e_use_values = [i.e_use for i in eligible_primary]
+        gate3_inputs_finite = (
+            _all_finite(e_values)
+            and _all_finite(u_gt_num_values)
+            and _all_finite(e_use_values)
+            and math.isfinite(u_rep)
+            and math.isfinite(u_proc)
+        )
+        if gate3_inputs_finite:
+            bias_value = abs(float(np.mean(e_values)))
+            max_u_gt_num = max(u_gt_num_values)
+            median_e_use = float(np.median(e_use_values))
+            gate3_lhs = bias_value + max_u_gt_num + u_rep + u_proc
+            gate3 = math.isfinite(gate3_lhs) and gate3_lhs <= median_e_use
+        else:
+            gate3 = False
     else:
+        gate3_inputs_finite = True  # not applicable; failure reason below is generic
         gate3 = False
     if not gate3:
-        reasons.append("gate3: |BIAS|+max(U_GT+U_num)+U_rep+U_proc > median(E_use)")
+        if eligible_primary and not gate3_inputs_finite:
+            reasons.append("gate3: BIAS/U_GT+U_num/E_use inputs contain non-finite value(s)")
+        else:
+            reasons.append("gate3: |BIAS|+max(U_GT+U_num)+U_rep+U_proc > median(E_use)")
 
     gate4 = bool(declared_invariance_axes)
     if not declared_invariance_axes:
@@ -223,7 +270,12 @@ def absolute_gates(
             reasons.append(f"gate4': axis {axis} has <5 pairs")
             continue
         margins = [p.ds + u_rep + u_proc - min(p.e_use_i0, p.e_use_ia) for p in pairs]
-        if q95(margins) > 0:
+        if not _all_finite(margins):
+            gate4 = False
+            reasons.append(f"gate4': axis {axis} has non-finite margin(s)")
+            continue
+        axis_q95 = q95(margins)
+        if not math.isfinite(axis_q95) or axis_q95 > 0:
             gate4 = False
             reasons.append(f"gate4': axis {axis} q95 margin > 0")
 
@@ -346,6 +398,17 @@ def directional_gates(
     観測がないこと、が必須（noise floor 超過は (b) に統合済みだが、呼び出し側が
     追加の外部判定を持つ場合のための `noise_floor_exceeded` 引数も残す）。
     `tau_b` は記録するのみで PASS 閾値には決して使わない。
+
+    **NaN 監査**（gates.py:226 P1 finding の横展開、2026-09-01 レビュー）:
+    resolvability の 2 連言 (a)/(b)（および `units_commensurate=True` 時の
+    (c)）はいずれも厳密不等号 (`>`) のみで判定しており、`NaN > x` は常に
+    `False` のため NaN を含む pair は自動的に resolvable から除外される
+    （`max()`/`q95()` のような集計を経由しないため、absolute_gates の
+    gate_max'/gate3 が抱えていた「走査順序次第で NaN 要素を無言で読み飛ばす」
+    問題は起こらない）。`passed` を構成する他の条件（`adjacent_reversal_rate
+    == 0.0`・`negative_control_failures == 0` 等）も等号比較でありNaN は
+    自動的に不一致として FAIL 側になる。監査の結果、本関数に NaN-passes の
+    修正は不要と判断した。
     """
     reasons: list[str] = []
 

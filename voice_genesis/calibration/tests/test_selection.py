@@ -334,3 +334,41 @@ def test_select_across_ceilings_absolute_without_criteria_falls_back_to_directio
     # ABSOLUTE 側の criteria-absent 候補は ineligible として理由付きで記録
     # される（監査要件: なぜ選抜対象外だったかを追跡できる）。
     assert ("abs-no-criteria", "criteria_payload_absent") in outcome.ineligible_candidates
+
+
+def test_select_across_ceilings_directional_with_absolute_fields_does_not_leak_into_ranking() -> None:
+    """[P1] regression (selection.py:284): 従来は `select_across_ceilings` が
+    ABSOLUTE/DIRECTIONAL 両プールの union を `select()` へ渡していたため、
+    ceiling=DIRECTIONAL の候補がたまたま ABSOLUTE 族の criteria フィールド
+    (`primary_normalized_mae`/`signed_bias`/`primary_q95_ae`) を全て持って
+    いると、ABSOLUTE selection の ranking に紛れ込み、数値次第では
+    ABSOLUTE 候補に競り勝ってしまえた。修正後は `select()` へ渡すのは選ばれた
+    ceiling（ここでは ABSOLUTE）のプールのみであり、DIRECTIONAL 候補は
+    ABSOLUTE selection の ranking に一切現れない。"""
+    weaker_absolute = CandidateCriteria(
+        candidate_id="abs-weak",
+        ceiling=ClaimCeiling.ABSOLUTE,
+        primary_normalized_mae=0.5,
+        signed_bias=0.5,
+        primary_q95_ae=0.5,
+    )
+    directional_with_absolute_fields = CandidateCriteria(
+        candidate_id="dir-imposter",
+        ceiling=ClaimCeiling.DIRECTIONAL,
+        # ABSOLUTE 族の criteria が全て揃っており、しかも数値上は
+        # weaker_absolute より遥かに優れて見える。
+        primary_normalized_mae=0.01,
+        signed_bias=0.0,
+        primary_q95_ae=0.01,
+        kendall_tau=0.9,
+        adjacent_reversal_rate=0.0,
+    )
+    outcome = select_across_ceilings([weaker_absolute, directional_with_absolute_fields])
+    assert outcome.family == SelectionFamily.ABSOLUTE
+    assert outcome.outcome == "SELECTED"
+    # ABSOLUTE 候補が勝つ（唯一の ranking 対象のため）。
+    assert outcome.selected_candidate_id == "abs-weak"
+    # DIRECTIONAL 候補は ranking に一切現れない。
+    assert "dir-imposter" not in outcome.ranked_candidate_ids
+    # 監査要件: なぜ ranking 対象外だったかは ineligible_candidates に残る。
+    assert ("dir-imposter", "different_ceiling_pool") in outcome.ineligible_candidates

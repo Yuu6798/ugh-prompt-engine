@@ -373,6 +373,115 @@ def test_absolute_gates_gate5_not_applicable_passthrough() -> None:
     assert result.gate5_detection is True
 
 
+def test_absolute_gates_nan_ds_in_invariance_pair_fails_gate4() -> None:
+    """[P1] regression (gates.py:226): gate4' の制御フローは `if
+    q95(margins) > 0: gate4 = False` で、`gate4` の初期値は `True` のため
+    `NaN > 0`（常に `False`）だとこの if 節を素通りし、gate4' が誤って
+    PASS になっていた。1 件でも `ds=NaN` の InvariancePair があれば gate4'
+    は明示的に FAIL する。"""
+    instances = [_instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)]
+    pairs = _inv_pairs("axis1", 5, ds=0.0)
+    # 1 件だけ ds を NaN にする（残り 4 件は正常値）。
+    nan_pair = InvariancePair(
+        pair_id="axis1-p0", axis="axis1", ds=float("nan"), e_use_i0=1.0, e_use_ia=1.0
+    )
+    pairs[0] = nan_pair
+    result = absolute_gates(
+        instances,
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": pairs},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.gate4_invariance is False
+    assert result.passed is False
+    assert any("non-finite" in r and "axis1" in r for r in result.failure_reasons)
+
+
+def test_absolute_gates_nan_ae_fails_gate2() -> None:
+    """[P1] regression (gates.py:226 横展開): `InstanceMargin.ae` が NaN だと
+    `G[i]` が NaN になる。gate2' は `q95_i(G[i]) <= 0` の直接代入なので
+    `NaN <= 0` は `False` となり元々 FAIL していたが、本修正は非有限入力を
+    明示的な typed reason で検出する（集計関数へ非有限値を渡さない）。"""
+    instances = [
+        InstanceMargin(
+            instance_id="i1", domain=Domain.PRIMARY, eligible=True,
+            ae=float("nan"), e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0,
+        )
+    ]
+    result = absolute_gates(
+        instances,
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.gate2_q95 is False
+    assert result.passed is False
+    assert any("non-finite" in r and "gate2'" in r for r in result.failure_reasons)
+
+
+def test_absolute_gates_gate_max_nan_element_not_silently_dropped() -> None:
+    """[P1] regression: Python 組込 `max()` は NaN の比較が常に `False` に
+    なる副作用で、走査順序次第では NaN 要素を無言で読み飛ばし有限な最大値を
+    返してしまう（`max([1.0, nan]) == 1.0`）。i2（NaN 由来の G[i]）が i1 の
+    **後**に来ても、`max(g_values)` に頼らず明示的な有限性検査で FAIL する
+    ことを確認する。"""
+    instances = [
+        _instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0),  # G = -1.0
+        InstanceMargin(
+            instance_id="i2", domain=Domain.PRIMARY, eligible=True,
+            ae=float("nan"), e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0,
+        ),
+    ]
+    result = absolute_gates(
+        instances,
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.gate_max is False
+    assert result.passed is False
+    assert any("non-finite" in r and "gate_max'" in r for r in result.failure_reasons)
+
+
+def test_absolute_gates_gate3_nan_u_gt_num_not_silently_dropped_by_max() -> None:
+    """[P1] regression: gate3 の `max_u_gt_num` も Python 組込 `max()` を
+    使うため、同じ順序依存の NaN 読み飛ばしバグを抱えていた。i1 (finite) の
+    後に NaN な (u_gt+u_num) を持つ i2 が続いても gate3 は明示的に FAIL する。
+    """
+    instances = [
+        _instance("i1", ae=0.0, e=0.0, u_gt=0.05, u_num=0.05, e_use=10.0),
+        InstanceMargin(
+            instance_id="i2", domain=Domain.PRIMARY, eligible=True,
+            ae=0.0, e=0.0, u_gt=float("nan"), u_num=0.0, e_use=10.0,
+        ),
+    ]
+    result = absolute_gates(
+        instances,
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.gate3_bias_budget is False
+    assert result.passed is False
+    assert any("non-finite" in r and "gate3" in r for r in result.failure_reasons)
+
+
 def test_absolute_gates_no_primary_instance_raises() -> None:
     boundary_only = InstanceMargin(
         instance_id="b1", domain=Domain.BOUNDARY, eligible=True,

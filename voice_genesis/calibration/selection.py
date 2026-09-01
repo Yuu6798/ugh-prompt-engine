@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 from voice_genesis.calibration.vocab import ClaimCeiling
@@ -224,6 +224,28 @@ def select(
     )
 
 
+def _other_pool_audit_reason(criteria: CandidateCriteria, family: SelectionFamily) -> str:
+    """選ばれなかった ceiling プールに属する候補の audit 理由を返す（`select()`
+    の対象プールには含めないが、監査要件のため理由付きで記録する）。
+
+    まず `_ineligibility_reason()` と同じ criteria 判定を再利用する（criteria
+    payload absent / flagged ineligible はこちらを優先。選ばれた family の
+    criteria 要件をたまたま満たさない候補が大半のため）。一方、DIRECTIONAL
+    候補が ABSOLUTE の criteria フィールドをたまたま全て持つ（あるいはその
+    逆）場合は `_ineligibility_reason()` が `None` を返しうる — その候補は
+    criteria 上は選抜可能に見えても、単に **ceiling 階級が異なる**ために
+    このプールでは never ranked である。この場合を「理由なし」で握り潰さず
+    `different_ceiling_pool` として明示的に記録する（selection.py:284 P1
+    finding: 従来はこの候補も `select()` の ranking プールへ紛れ込ませて
+    しまい、DIRECTIONAL 候補が ABSOLUTE selection に勝ててしまっていた）。
+    """
+    has_criteria = _has_required_criteria(criteria, family)
+    reason = _ineligibility_reason(criteria, family, has_criteria=has_criteria)
+    if reason is not None:
+        return reason
+    return "different_ceiling_pool"
+
+
 def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> SelectionOutcome:
     """ceiling 階級間の裁定規則（§2.6 で凍結。Codex レビュー 2026-09-01 第 4 巡採用）。
 
@@ -257,14 +279,20 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
     `_has_required_criteria()` + `eligible` フラグの述語 (`_has_selectable`)
     でプールの非空性を判定する: 各 ceiling プールに「真に選抜可能」な候補が
     1 件も無ければ、そのプールは（メンバーが存在していても）非空とはみなさず
-    次の ceiling へフォールバックする。実際に `select()` へ渡すプールは
-    ABSOLUTE/DIRECTIONAL 両 ceiling を束ねた `non_diagnostic_pool`
-    （`DIAGNOSTIC_ONLY`/未設定は既存どおり常に除外）とする — こうすることで、
-    選ばれなかった ceiling 側の候補（criteria payload absent / flagged
-    ineligible のいずれか）も、選ばれた family の criteria 要件を満たさない
-    ため自然に ineligible 判定され、`SelectionOutcome.ineligible_candidates`
-    に理由付きで記録される（監査要件: どの候補が何故選抜対象外だったかを
-    常に追跡できる）。
+    次の ceiling へフォールバックする。
+
+    **ranking に渡すプールは選ばれた ceiling 階級のみ**（selection.py:284 P1
+    finding、2026-09-01 レビュー: 従来は ABSOLUTE/DIRECTIONAL 両 ceiling を
+    束ねた `non_diagnostic_pool` を `select()` へ渡していたため、選ばれな
+    かった側の ceiling の候補が「たまたま選ばれた family の criteria
+    フィールドを全て持つ」場合に ranking 対象へ紛れ込み、DIRECTIONAL 候補が
+    ABSOLUTE selection に勝ってしまう経路があった。本実装は `select()` を
+    選ばれた ceiling のプール（`absolute_pool` または `directional_pool`）
+    のみで呼び、選ばれなかった側のプール候補は **いかなる場合もその
+    selection の ranking には入らない**。選ばれなかった側の候補の監査情報
+    （なぜ選抜対象外だったか）は失わない: `_other_pool_audit_reason()` で
+    理由を導出し、`select()` が返した `SelectionOutcome.ineligible_candidates`
+    へ別途マージする。
     """
     _check_unique_candidate_ids(candidates)
 
@@ -274,17 +302,33 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
     def _has_selectable(pool: Sequence[CandidateCriteria], family: SelectionFamily) -> bool:
         return any(c.eligible and _has_required_criteria(c, family) for c in pool)
 
-    non_diagnostic_pool = [
-        c for c in candidates
-        if c.ceiling in (ClaimCeiling.ABSOLUTE, ClaimCeiling.DIRECTIONAL)
-    ]
-
     absolute_pool = _pool(ClaimCeiling.ABSOLUTE)
-    if _has_selectable(absolute_pool, SelectionFamily.ABSOLUTE):
-        return select(non_diagnostic_pool, SelectionFamily.ABSOLUTE)
-
     directional_pool = _pool(ClaimCeiling.DIRECTIONAL)
+
+    if _has_selectable(absolute_pool, SelectionFamily.ABSOLUTE):
+        outcome = select(absolute_pool, SelectionFamily.ABSOLUTE)
+        other_pool_audit = tuple(
+            (c.candidate_id, _other_pool_audit_reason(c, SelectionFamily.ABSOLUTE))
+            for c in directional_pool
+        )
+        if other_pool_audit:
+            outcome = replace(
+                outcome,
+                ineligible_candidates=outcome.ineligible_candidates + other_pool_audit,
+            )
+        return outcome
+
     if _has_selectable(directional_pool, SelectionFamily.DIRECTIONAL):
-        return select(non_diagnostic_pool, SelectionFamily.DIRECTIONAL)
+        outcome = select(directional_pool, SelectionFamily.DIRECTIONAL)
+        other_pool_audit = tuple(
+            (c.candidate_id, _other_pool_audit_reason(c, SelectionFamily.DIRECTIONAL))
+            for c in absolute_pool
+        )
+        if other_pool_audit:
+            outcome = replace(
+                outcome,
+                ineligible_candidates=outcome.ineligible_candidates + other_pool_audit,
+            )
+        return outcome
 
     return select([], SelectionFamily.ABSOLUTE)

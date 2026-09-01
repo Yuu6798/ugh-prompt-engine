@@ -242,6 +242,32 @@ HASH_MAP_KEYS: tuple[str, ...] = (
     "candidates.test_paths_sha256",
 )
 
+#: REQUIRED_BLOCKING キーのうち、値がトップレベルで特定のコンテナ型
+#: （mapping または list）でなければならないもの（c0_validate.py:490 P1
+#: finding、2026-09-01 レビュー: `meter_specs="x"` のようなスカラー値は
+#: `_is_hollow` の非空チェックのみを通過してしまい、後続の deeper validator
+#: （`_check_meter_specs_coverage` 等）は `isinstance(value, Mapping)` で
+#: 早期 return する設計のため、非 Mapping/非 list な値は事実上まったく検証
+#: されずに REQUIRED_BLOCKING を通過していた。`[UNDERSPEC-CAL-C19]`）。値は
+#: `"mapping"` または `"list"`。`str`/`tuple` は `list` 判定から明示的に除外
+#: するため `isinstance(value, list)` で厳密に検査する（`Sequence` 判定だと
+#: 文字列も通ってしまう）。
+_CONTAINER_TYPE_KEYS: dict[str, str] = {
+    "candidates.meter_paths_sha256": "mapping",
+    "candidates.generator_paths_sha256": "mapping",
+    "candidates.schema_paths_sha256": "mapping",
+    "candidates.test_paths_sha256": "mapping",
+    "frozen_design.meter_specs": "mapping",
+    "frozen_design.fixture_spec": "mapping",
+    "frozen_design.split_spec": "mapping",
+    "frozen_design.selection_spec": "mapping",
+    "frozen_design.provenance_spec": "mapping",
+    "frozen_design.cost_caps": "mapping",
+    "frozen_design.stop_rules": "list",
+    "independence_ledger": "mapping",
+    "rng_ledger": "list",
+}
+
 # ---------------------------------------------------------------------------
 # BOUNDED shape validation（Codex レビュー 2026-09-01 P1: 従来
 # `_missing_nested_keys` はキーの存在/hollow 判定のみを行い、値の「形状」を
@@ -483,6 +509,17 @@ def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
     フィールドが `_HASH_FIELD_SUFFIXES`（`*_sha256`）に誤ってマッチし
     （値自体は mapping であり単一 hash 文字列ではない）、正当な manifest を
     誤 BLOCK してしまうため、`stop_rules` のみ個別に検査する。
+
+    **トップレベルのコンテナ型検査**（c0_validate.py:490 P1 finding、
+    2026-09-01 レビュー: `meter_specs="x"` のような非空スカラー値は、この
+    関数の非空チェックのみを通過し、`_check_meter_specs_coverage` 等の
+    deeper validator が `isinstance(value, Mapping)` で早期 return する
+    設計のため、実質まったく内容検証を受けずに REQUIRED_BLOCKING を素通り
+    していた。`[UNDERSPEC-CAL-C19]`）。`_CONTAINER_TYPE_KEYS` に列挙した
+    キーは、非空チェック通過後さらに期待コンテナ型（mapping/list）を
+    検査し、型不一致は `"<key>: type (...)"` として個別に BLOCK する。
+    型検査を通過した後続の deeper validator（`_check_meter_specs_coverage`
+    等）は、以後 `isinstance` 前提を安全に置ける。
     """
     missing: list[str] = []
     for key in REQUIRED_BLOCKING_KEYS:
@@ -492,6 +529,13 @@ def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
             continue
         if key == "repo.dirty_tree" and value is not False:
             missing.append(f"{key} (must be exactly false, got {value!r})")
+            continue
+        container_kind = _CONTAINER_TYPE_KEYS.get(key)
+        if container_kind == "mapping" and not isinstance(value, Mapping):
+            missing.append(f"{key}: type (must be a mapping, got {type(value).__name__})")
+            continue
+        if container_kind == "list" and not isinstance(value, list):
+            missing.append(f"{key}: type (must be a list, got {type(value).__name__})")
             continue
         if key == "frozen_design.stop_rules":
             reason = _shape_violation("stop_rules", value)

@@ -7,6 +7,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from voice_genesis.calibration import c0_validate, streams, vocab
 from voice_genesis.calibration.candidates import registry as candidate_registry
 from voice_genesis.calibration.fixtures import axes as fixture_axes
@@ -757,7 +759,10 @@ def test_stop_rules_scalar_string_blocks() -> None:
     """`frozen_design.stop_rules` は `_check_required_blocking` が直接走査する
     トップレベル REQUIRED_BLOCKING キー（ネスト section ではない）だが、非空
     list 形状も要求する（Codex レビュー 2026-09-01 P1、`[UNDERSPEC-CAL-C18]`）。
-    """
+    非 list scalar は、`[UNDERSPEC-CAL-C19]`（c0_validate.py:490 P1 finding、
+    トップレベルコンテナ型検査）により shape 検査より先にトップレベル型
+    検査で捕捉され、`": type"` 違反として報告される（`": shape"` ではない —
+    型検査を通過して初めて shape 検査に到達する設計）。"""
     manifest = _complete_manifest()
     manifest["frozen_design"]["stop_rules"] = "ABORT_ON_UNSEEDED_RNG"
     result = c0_validate.validate_c0_manifest(manifest)
@@ -766,7 +771,7 @@ def test_stop_rules_scalar_string_blocks() -> None:
         k for k in result.missing_required_keys if k.startswith("frozen_design.stop_rules")
     ]
     assert len(violations) == 1
-    assert ": shape" in violations[0]
+    assert ": type" in violations[0]
 
 
 def test_stop_rules_valid_list_is_not_blocked_by_shape() -> None:
@@ -810,6 +815,36 @@ def test_cost_caps_missing_one_nested_key_is_listed() -> None:
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     assert "frozen_design.cost_caps.storage" in result.missing_required_keys
+
+
+# ---------------------------------------------------------------------------
+# トップレベルコンテナ型検査（Codex レビュー 2026-09-01 P1: c0_validate.py:490
+# finding）: `meter_specs="x"` のようなスカラー値は非空チェックのみでは通過
+# してしまい、deeper validator（`isinstance(value, Mapping)` 前提）が
+# 早期 return するため実質検証を受けずに素通りしていた。`[UNDERSPEC-CAL-C19]`。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dotted_key", sorted(c0_validate._CONTAINER_TYPE_KEYS))
+def test_structured_section_scalar_value_blocks(dotted_key: str) -> None:
+    """finding 原文の再現ケース: 構造化セクションをスカラー文字列 `"x"` に
+    差し替えても、非空文字列のため旧実装では存在チェックを通過し、以後の
+    deeper validator も非 Mapping/非 list を早期 return して見逃していた。
+    修正後はトップレベルのコンテナ型を明示検査し BLOCK する。"""
+    manifest = _complete_manifest()
+    parts = dotted_key.split(".")
+    node = manifest
+    for part in parts[:-1]:
+        node = node[part]  # type: ignore[index]
+    node[parts[-1]] = "x"  # type: ignore[index]
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    violations = [
+        k for k in result.missing_required_keys
+        if k.startswith(dotted_key) and ": type" in k
+    ]
+    assert len(violations) == 1, (dotted_key, result.missing_required_keys)
 
 
 def test_nested_section_entry_that_is_not_a_mapping_is_blocked() -> None:
