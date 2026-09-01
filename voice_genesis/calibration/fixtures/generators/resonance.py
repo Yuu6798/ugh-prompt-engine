@@ -57,6 +57,38 @@ floor 成分の寄与を無視できるほど peak 成分が支配的である�
 の保守上限）へ計上すべき成分である（`tests/test_generators.py` の帯域端
 (50Hz/300Hz, declared 12dB) 検証で実測される許容誤差 ±1.5dB が、この近似
 誤差の実測上限の目安）。
+
+**context nuisance を較正パスへ折り込む**（Codex レビュー 2026-09-01 P1）:
+上記 1-パス補正パスは元々 `context`（cosine-ramp / voiced-prefix-suffix /
+transition-adjacent）適用**前**の core のみを測定していた。`common.
+finalize()` は gain → context → noise の順で適用するため（noise は上記の
+通り既に事前折り込み済み）、実際に出荷される最終 PCM は較正時に測定した
+core とは異なる波形（context 適用後）になる。特に `20ms-cosine-ramp` は
+core 自身のサンプル値を in-place でテーパーするため、較正時に想定した
+floor/peak レベルと最終 PCM のそれが食い違いうる。
+
+修正: `_core()` は `combined_floor` と `combined_floor + scaled_peak`（unit
+gain）の両方に `common.assemble_context()` を適用してから測定する
+（**gain は測定チェーンに含めない** — `apply_gain_dbfs` は入力を peak=1.0
+へ独立に再正規化するため、floor-alone と mixed のそれぞれに別々に適用すると
+無関係なスケール差を持ち込んでしまう。gain は core 全体への単一スカラー倍
+であり dB 差 (peak-floor) を保存するため、測定チェーンから除外しても補正の
+正しさは変わらない）。
+
+**"steady" core 区間への測定窓の限定**: `100ms-voiced-prefix/suffix` と
+`transition-adjacent` は core の前後に無関係な別波形（voiced tone）を
+**連結**するだけで core 自身のサンプル値は書き換えない。これら 2 context
+では、prefix/suffix・adjacent tone の高調波が declared `center_hz` ±
+`bandwidth_hz/2` の peak 窓や floor 測定域に紛れ込みうるため、
+`_context_core_bounds()` で core の "steady" 区間（宣言 truth が実際に対象と
+する区間）のオフセットを求め、その区間だけを切り出してから測定する
+（`steady-isolated` / `20ms-cosine-ramp` は core の長さを context が変えない
+ため区間は core 全体のまま）。連結型 context ではこの限定により measurement
+は「context 適用前の core を直接測る」のと数値的に等価になる（連結は core
+自身の値を変えないため）— つまり、この限定を課さないと prefix/suffix/
+adjacent の高調波混入で補正が却って壊れる。一方 `20ms-cosine-ramp` は core
+自身が書き換わるため、区間全体（テーパー込み）を測ることで較正が実際に
+出荷される波形を正しく反映するようになる。
 """
 
 from __future__ import annotations
@@ -154,6 +186,30 @@ def _nuisance_noise_component(
     return raw * scale
 
 
+def _context_core_bounds(context: str, sr_hz: int, n_core: int) -> tuple[int, int]:
+    """`common.assemble_context()` が組み立てる文脈付き波形のうち、
+    RESONANCE_GT truth が実際に対象とする "steady" core 区間の
+    `(start, length)` サンプルオフセットを返す（module docstring の
+    「"steady" core 区間への測定窓の限定」参照）。
+
+    - `steady-isolated` / `20ms-cosine-ramp`: context は core の長さを変えず
+      (`20ms-cosine-ramp` は core を in-place でテーパーするのみ)、core 全体が
+      そのまま steady 区間。
+    - `100ms-voiced-prefix/suffix`: prefix（100ms 分のサンプル）の直後、
+      suffix の直前が core。
+    - `transition-adjacent`: adjacent tone は core の**後ろ**に連結される
+      だけなので core は先頭のまま。
+    """
+    if context in ("steady-isolated", "20ms-cosine-ramp"):
+        return 0, n_core
+    if context == "100ms-voiced-prefix/suffix":
+        n_prefix = common.n_samples(0.100, sr_hz)
+        return n_prefix, n_core
+    if context == "transition-adjacent":
+        return 0, n_core
+    raise ValueError(f"unknown context level: {context!r}")
+
+
 def _core(row: object, rng: np.random.Generator) -> np.ndarray:
     sr_hz = row.sr_hz
     n = common.n_samples(row.duration_s, sr_hz)
@@ -179,10 +235,24 @@ def _core(row: object, rng: np.random.Generator) -> np.ndarray:
     combined_floor = floor if nuisance is None else floor + nuisance
 
     # one-shot 補正パス（測定 → 不足分算出 → 1 回だけ追加乗算。反復なし）。
-    # floor 測定は combined_floor（内部励起 floor + nuisance noise の総和）
-    # 上で行うため、補正はこの「最終的に実現される総 floor」を基準にする。
-    floor_db = _measure_floor_db(combined_floor, sr_hz)
-    unit_pass_peak_db = _measure_peak_db(combined_floor + scaled_peak, sr_hz, center, bandwidth)
+    # Codex レビュー 2026-09-01 P1: 測定は `context` 適用後の "FULLY FINALIZED"
+    # レンダリング（gain は測定チェーンに含めない — module docstring 参照）の
+    # steady core 区間で行う。gain は core 全体への単一スカラー倍であり
+    # dB 差 (peak-floor) を保存するため測定チェーンから除外できる一方、
+    # context（連結・テーパー）は較正後に適用すると最終 PCM の実現値と
+    # 較正時の想定が食い違うため、ここで先に折り込む。
+    context_floor = common.assemble_context(
+        combined_floor, sr_hz=sr_hz, context=row.context, f0_hz=row.f0_hz
+    )
+    context_mixed = common.assemble_context(
+        combined_floor + scaled_peak, sr_hz=sr_hz, context=row.context, f0_hz=row.f0_hz
+    )
+    start, length = _context_core_bounds(row.context, sr_hz, n)
+    steady_floor = context_floor[start : start + length]
+    steady_mixed = context_mixed[start : start + length]
+
+    floor_db = _measure_floor_db(steady_floor, sr_hz)
+    unit_pass_peak_db = _measure_peak_db(steady_mixed, sr_hz, center, bandwidth)
     shortfall_db = float(row.prominence_db) - (unit_pass_peak_db - floor_db)
     correction = 10.0 ** (shortfall_db / 20.0)
 

@@ -12,10 +12,19 @@
   home split が HOLDOUT の positive control が unseal 前に seal を破って観測
   可能になる欠陥があった）。positive control としての証拠は、leakage 除外を
   経由せず、評価対象 split 内に既にある truth 行から
-  `positive_detection_instances()` で instance 数として数える
-  （selection 段階 = selection split 内の truth 行、holdout gate 5 = unseal
-  後の holdout split 内の truth 行。truth 行 × probe repeat 5 で
-  `N_pos >= 10` を trivially 充足し、seal を跨がない）。
+  `positive_detection_instances()` で instance 数として数える。
+- **positive 検出証拠 = 評価対象 split 内の当該 family の全 truth-core 行
+  （×5 repeats）**（Codex レビュー 2026-09-01 第 8 巡: DESIGN RULING、
+  designated-2-anchor 方式を置換）。旧方式は `positive_control=True` の
+  designated 2 行のみを instance 母集団としており、この 2 行の home split
+  は HMAC 由来で片方にしか属さないことが構造的にあり得るため、selection と
+  holdout の両方で `N_pos>=10` を同時に満たせない場合があった（2 行が同一
+  split に home split を持てば一方が `N_pos=10`・他方は `N_pos=0`）。family
+  の truth core 行数は最小でも 12 件（F0_CONTROL）あり、50/25/25 split の下で
+  selection/holdout 各側に最低でも数件が入るため、truth core 行全体を母集団に
+  拡張すれば両 split で `N_pos>=10` を安定して充足できる。`positive_control`
+  フラグ自体（designated anchor の row metadata）は監査用途にそのまま残すが、
+  instance 数の計算からは外す。
 """
 
 from __future__ import annotations
@@ -79,22 +88,26 @@ def positive_detection_instances(
     *,
     family: str | None = None,
 ) -> frozenset[tuple[str, int]]:
-    """§2.7 改訂の positive 証拠の数え方: leakage 除外を経由せず、`split`
-    （`splitter.RealizedSplitMap.assignment` が返す `vocab.Split` 値。
-    selection 段階なら `Split.SELECTION`、holdout gate 5 なら unseal 後の
-    `Split.HOLDOUT`）内にある positive control **truth 行**の
-    `(row_id, probe_index)` instance 集合を返す。
+    """§2.7 第 8 巡改訂の positive 証拠の数え方（DESIGN RULING, FROZEN）:
+    leakage 除外を経由せず、`split`（`splitter.RealizedSplitMap.assignment`
+    が返す `vocab.Split` 値。selection 段階なら `Split.SELECTION`、
+    holdout gate 5 なら unseal 後の `Split.HOLDOUT`）内にある **当該 family の
+    全 truth-core 行**（`block == "TRUTH_CORE"`。designated 2-anchor
+    (`positive_control=True`) への限定は撤廃）の `(row_id, probe_index)`
+    instance 集合を返す。
 
-    truth 行 1 件 × `PROBE_REPEATS`(=5) instance であり、family ごとに
-    positive control truth 行が 2 件あるため、単一 split 内に home split を
-    持つ 1 件のみでも `N_pos=5` だが、通常運用では両 anchor が異なる split に
-    home を持つとは限らず、`family` を指定して両 anchor を合算すれば
-    `N_pos>=10` を trivially 充足する（IMPLEMENTATION_MAP §2.7）。`family` を
-    省略すると全 family 分をまとめて返す。
+    旧方式（designated 2-anchor のみ）は、2 行の home split が HMAC 由来で
+    片方の split にしか属さない場合があり、selection と holdout の両方で
+    `N_pos>=10` を同時に満たせない構造的欠陥があった（Codex レビュー
+    2026-09-01 P1）。family の truth core 行数は最小でも 12 件あり、50/25/25
+    split の下で各 split に複数件が入るため、truth core 行全体を母集団に
+    拡張すれば `truth 行数 × PROBE_REPEATS(=5)` で selection/holdout 両方で
+    `N_pos>=10` を安定して充足する。`family` を省略すると全 family 分を
+    まとめて返す。
     """
     out: set[tuple[str, int]] = set()
     for mr in rows:
-        if not mr.row.positive_control:
+        if mr.row.block != "TRUTH_CORE":
             continue
         if family is not None and mr.row.family != family:
             continue

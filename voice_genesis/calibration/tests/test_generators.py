@@ -424,6 +424,84 @@ def test_resonance_realized_prominence_matches_declared_with_snr_confound_noise(
     )
 
 
+def _resonance_steady_core_pcm(
+    pcm: np.ndarray, context: str, sr_hz: int, duration_s: float
+) -> np.ndarray:
+    """`resonance._context_core_bounds()` と独立に、テスト側でも同じ
+    "steady" core 区間の切り出しを再導出する（`common.assemble_context()` の
+    prefix/suffix/adjacent の組み立てレシピをそのまま反映）。連結型 context
+    （voiced-prefix/suffix・transition-adjacent）の core は truth-bearing で
+    ない外的 framing nuisance を含まないため、実現 prominence の測定窓は
+    steady 区間に限定する（module docstring「"steady" core 区間への測定窓の
+    限定」参照）。"""
+    n_core = int(round(duration_s * sr_hz))
+    if context == "100ms-voiced-prefix/suffix":
+        n_prefix = int(round(0.100 * sr_hz))
+        return pcm[n_prefix : n_prefix + n_core]
+    if context == "transition-adjacent":
+        return pcm[:n_core]
+    return pcm  # steady-isolated / 20ms-cosine-ramp: core の長さは不変
+
+
+@pytest.mark.parametrize(
+    "context", ["20ms-cosine-ramp", "100ms-voiced-prefix/suffix", "transition-adjacent"]
+)
+def test_resonance_realized_prominence_matches_declared_with_context_confound(
+    context: str,
+) -> None:
+    """[Codex レビュー 2026-09-01 P1] regression: context（cosine-ramp /
+    voiced-prefix-suffix / transition-adjacent）は `common.finalize()` が
+    prominence 較正の**後**に適用するため、較正時に測定した core と最終 PCM
+    の実際の波形（context 適用後）が食い違いうる。全 3 context 水準の
+    confound 行で、"steady" core 区間に限定した final PCM 上の実現 prominence
+    が declared 値の許容誤差内に収まることを確認する。
+    """
+    tolerance_db = 1.5  # クリーンな steady-isolated と同じ許容誤差目安を適用
+    duration_s = 1.0
+    row = _resonance_row(
+        center_hz=2000.0, resonance_bandwidth_hz=150.0, prominence_db=12.0,
+        duration_s=duration_s, context=context,
+    )
+    pcm = resonance.render(row, _rng())
+    steady_pcm = _resonance_steady_core_pcm(pcm, context, row.sr_hz, duration_s)
+    realized_db = _welch_local_prominence_db(steady_pcm, row.sr_hz, row.center_hz, 150.0)
+    assert abs(realized_db - row.prominence_db) <= tolerance_db, (
+        f"context={context!r} realized={realized_db:.3f}dB declared={row.prominence_db}dB"
+    )
+
+
+def test_resonance_transition_adjacent_whole_pcm_measurement_needs_steady_restriction() -> None:
+    """`transition-adjacent` の adjacent tone（`f0_hz*1.5` の高調波）は declared
+    `center_hz` の peak 窓に紛れ込みうるため、最終 PCM 全体（連結された
+    adjacent tone を含む）をそのまま素朴に測定すると、steady 区間に限定した
+    測定より明確に外れることを確認する（module docstring「"steady" core
+    区間への測定窓の限定」が経験的に必要であることの記録・回帰防止）。
+    steady 区間限定測定 (`test_resonance_realized_prominence_matches_declared_
+    with_context_confound` 側)は許容誤差内に収まる一方、素朴な全体測定は
+    その差が測定誤差近似 (1.5dB) の枠を明確に超えて悪化しうることを示す。
+    """
+    duration_s = 1.0
+    row = _resonance_row(
+        center_hz=2000.0, resonance_bandwidth_hz=150.0, prominence_db=12.0,
+        duration_s=duration_s, context="transition-adjacent",
+    )
+    pcm = resonance.render(row, _rng())
+    n_core = int(round(duration_s * row.sr_hz))
+    steady_pcm = pcm[:n_core]
+
+    whole_db = _welch_local_prominence_db(pcm, row.sr_hz, row.center_hz, 150.0)
+    steady_db = _welch_local_prominence_db(steady_pcm, row.sr_hz, row.center_hz, 150.0)
+
+    whole_error = abs(whole_db - row.prominence_db)
+    steady_error = abs(steady_db - row.prominence_db)
+    assert steady_error <= 1.5
+    assert whole_error > steady_error + 0.5, (
+        f"whole={whole_db:.3f}dB steady={steady_db:.3f}dB declared={row.prominence_db}dB "
+        "(expected whole-PCM measurement to be meaningfully more contaminated than "
+        "the steady-restricted measurement)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # TRANSITION_GT: join 前後で振幅の不連続が検出できる
 # ---------------------------------------------------------------------------

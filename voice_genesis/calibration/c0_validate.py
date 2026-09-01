@@ -73,6 +73,7 @@ ineligible とする（`d4c_ineligible=True` で表現。BLOCKED code は発行�
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -130,23 +131,87 @@ _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 #: 直下にある前提）。
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
+#: 版管理されたクローズド inventory ファイル名（`voice_genesis/calibration/` 直下）。
+PATH_INVENTORY_FILENAME = "c0_path_inventory.json"
+
+
+def _path_inventory_file(repo_root: Path | None = None) -> Path:
+    root = repo_root if repo_root is not None else _REPO_ROOT
+    return root / "voice_genesis" / "calibration" / PATH_INVENTORY_FILENAME
+
 
 def calibration_path_inventory(repo_root: Path | None = None) -> frozenset[str]:
-    """`voice_genesis/calibration/**/*.py` の repo-relative path 全集合を返す。
+    """版管理されコミットされたクローズド inventory ファイル
+    (`voice_genesis/calibration/c0_path_inventory.json`) を厳格パースして
+    repo-relative path 全集合を返す。
 
     設計正本 §3.1「候補 meter・generator・schema・test の全 path + SHA-256」の
-    "全" を機械的に判定できる正本として、実リポジトリのファイルツリーを直接
-    列挙する（Codex レビュー 2026-09-01 P1: 従来は supplied entries の形状のみ
-    検証しており、ファイルを丸ごと省略しても通過してしまっていた）。tests/
-    配下も対象に含める（§3.1 は test path のカバレッジも要求する）。
+    "全" を機械的に判定できる正本として機能する（Codex レビュー 2026-09-01
+    P1 (#1): 従来は supplied entries の形状のみ検証しており、ファイルを丸ごと
+    省略しても通過してしまっていた）。
 
-    public 関数として公開する: 将来 C0 freeze を実際に実行する武装版スクリプト
-    （§18 Gate 2 承認後）が、この dry-run 検証と同一の inventory 定義を再利用
-    できるようにするため。
+    Codex レビュー 2026-09-01 P1 (#2): 以前の実装は検証対象の checkout 自身に
+    対して `rglob("*.py")` を実行しており circular だった — その checkout が
+    ファイルを 1 件でも欠いていれば、inventory 側（rglob の結果）からも同じ
+    ファイルが消え、manifest 側（同じ checkout をハッシュ化して作る）とも
+    自動的に一致してしまうため、欠落を検出できなかった。本関数はこの循環を
+    断つため、**検証対象の checkout の実ファイルツリーには一切依存しない**
+    版管理済みの `c0_path_inventory.json` のみを読む。checkout が壊れていても
+    (このファイル自体は Git 管理下にあるため通常存在する) inventory は正しい
+    値を返し続け、manifest 側のみが欠落を反映するため
+    `_check_path_inventory_coverage` が確実に検出できる。
+
+    parse-strict: 中身は文字列のみからなる **ソート済み・重複なし** の JSON
+    配列でなければならない。壊れていれば `ValueError` を送出する（fail-closed:
+    inventory 自体が信頼できない状態で検証を通過させない）。
+
+    inventory 自体のドリフト検知（実ファイルツリーと乖離していないか）は本
+    関数の責務ではなく `tests/test_c0_path_inventory_sync.py`（`rglob` で
+    再生成し本ファイルと厳密一致検査）が担う。
+    """
+    path = _path_inventory_file(repo_root)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(
+            f"calibration_path_inventory: cannot read committed inventory {path}: {exc}"
+        ) from exc
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"calibration_path_inventory: malformed JSON in {path}: {exc}"
+        ) from exc
+    if not isinstance(data, list) or not all(isinstance(p, str) for p in data):
+        raise ValueError(
+            f"calibration_path_inventory: {path} must contain a JSON array of strings"
+        )
+    if len(data) != len(set(data)):
+        raise ValueError(f"calibration_path_inventory: {path} contains duplicate paths")
+    if data != sorted(data):
+        raise ValueError(f"calibration_path_inventory: {path} must be sorted")
+    return frozenset(data)
+
+
+def scan_calibration_tree_inventory(repo_root: Path | None = None) -> frozenset[str]:
+    """実ファイルツリーを `rglob` で直接走査した inventory。
+
+    **検証本体では使わない**（`validate_c0_manifest` / `calibration_path_inventory`
+    からは呼ばれない — 検証対象 checkout の実ツリーに依存すると
+    `calibration_path_inventory` が断ち切った circular dependency が復活する
+    ため）。用途は 2 つ: (1) `c0_path_inventory.json` を生成・再生成するとき
+    の基礎データ、(2) `tests/test_c0_path_inventory_sync.py` の sync test が
+    「コミット済み inventory が実ツリーとドリフトしていないか」を確認する
+    ときの比較対象。生成物には `c0_path_inventory.json` 自身の path も含める
+    （inventory ファイル自体も版管理・監査対象であるため。§3.1「候補 meter・
+    generator・schema・test の全 path」に含める必要はないが、inventory の
+    自己完結性のため同じ集合に含めておく）。
     """
     root = repo_root if repo_root is not None else _REPO_ROOT
     package_dir = root / "voice_genesis" / "calibration"
-    return frozenset(p.relative_to(root).as_posix() for p in package_dir.rglob("*.py"))
+    paths = {p.relative_to(root).as_posix() for p in package_dir.rglob("*.py")}
+    paths.add((package_dir / PATH_INVENTORY_FILENAME).relative_to(root).as_posix())
+    return frozenset(paths)
 
 #: RECORDED_OR_ABSENT（§3.2）。値 または `"ABSENT:<理由>"` のいずれかが必須。
 RECORDED_OR_ABSENT_KEYS: tuple[str, ...] = (

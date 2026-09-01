@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 
 from voice_genesis.calibration import c0_validate, vocab
 from voice_genesis.calibration.candidates import registry as candidate_registry
@@ -26,34 +27,34 @@ def _fake_sha256(path: str) -> str:
     return hashlib.sha256(path.encode("utf-8")).hexdigest()
 
 
+def _classify_path(path: str) -> str:
+    """分類規則: `candidates/` 配下 → meter、`fixtures/generators/` 配下 →
+    generator、`tests/` 配下 → test、それ以外 → schema。分類そのものは記録上
+    の区分であり `_check_path_inventory_coverage` は合併集合の網羅性のみを
+    要求する。"""
+    if path.startswith("voice_genesis/calibration/candidates/"):
+        return "meter_paths_sha256"
+    if path.startswith("voice_genesis/calibration/fixtures/generators/"):
+        return "generator_paths_sha256"
+    if path.startswith("voice_genesis/calibration/tests/"):
+        return "test_paths_sha256"
+    return "schema_paths_sha256"
+
+
 def _full_path_inventory_maps() -> dict[str, dict[str, str]]:
     """`c0_validate.calibration_path_inventory()`（本体側と同一の inventory
     helper。Codex レビュー 2026-09-01 P1）から 4 カテゴリの path+hash マップを
-    機械生成する。分類規則: `candidates/` 配下 → meter、
-    `fixtures/generators/` 配下 → generator、`tests/` 配下 → test、それ以外 →
-    schema。分類そのものは記録上の区分であり `_check_path_inventory_coverage`
-    は合併集合の網羅性のみを要求する。
+    機械生成する。
     """
-    meter: dict[str, str] = {}
-    generator: dict[str, str] = {}
-    schema: dict[str, str] = {}
-    test: dict[str, str] = {}
-    for path in sorted(c0_validate.calibration_path_inventory()):
-        h = _fake_sha256(path)
-        if path.startswith("voice_genesis/calibration/candidates/"):
-            meter[path] = h
-        elif path.startswith("voice_genesis/calibration/fixtures/generators/"):
-            generator[path] = h
-        elif path.startswith("voice_genesis/calibration/tests/"):
-            test[path] = h
-        else:
-            schema[path] = h
-    return {
-        "meter_paths_sha256": meter,
-        "generator_paths_sha256": generator,
-        "schema_paths_sha256": schema,
-        "test_paths_sha256": test,
+    out: dict[str, dict[str, str]] = {
+        "meter_paths_sha256": {},
+        "generator_paths_sha256": {},
+        "schema_paths_sha256": {},
+        "test_paths_sha256": {},
     }
+    for path in sorted(c0_validate.calibration_path_inventory()):
+        out[_classify_path(path)][path] = _fake_sha256(path)
+    return out
 
 
 def _complete_manifest() -> dict[str, object]:
@@ -308,6 +309,73 @@ def test_path_inventory_phantom_extra_path_blocks() -> None:
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     assert any(
         "unknown/extra path" in k and phantom in k for k in result.missing_required_keys
+    )
+
+
+def test_path_inventory_immune_to_missing_file_in_incomplete_checkout(
+    tmp_path, monkeypatch  # noqa: ANN001
+) -> None:
+    """[Codex レビュー 2026-09-01 P1 (#2)] regression: 旧実装は
+    `calibration_path_inventory()` が検証対象 checkout 自身に対して
+    `rglob("*.py")` を実行しており circular だった — checkout が 1 ファイルでも
+    物理的に欠けていると、inventory 側（rglob の結果）からもそのファイルが消え、
+    manifest 側（同じ checkout をスキャンして作る）とも自動的に一致してしまい、
+    欠落を検出できなかった。
+
+    新実装は inventory を版管理済み `c0_path_inventory.json` から読むため、
+    checkout が不完全でも inventory は正しい値のままである。本テストは
+    tmp_path 上に「committed inventory ファイルはあるが 1 ファイルが物理的に
+    欠けている(不完全な checkout)」ツリーを構築し、(1) inventory 自体が
+    checkout の欠落に影響されないこと、(2) その状態で構築した manifest が
+    validator によって確実に BLOCK されること、の両方を確認する。
+    """
+    committed = sorted(c0_validate.calibration_path_inventory())
+    dropped = "voice_genesis/calibration/streams.py"
+    assert dropped in committed
+
+    package_dir = tmp_path / "voice_genesis" / "calibration"
+    package_dir.mkdir(parents=True)
+    inventory_file_rel = f"voice_genesis/calibration/{c0_validate.PATH_INVENTORY_FILENAME}"
+    for rel in committed:
+        if rel in (dropped, inventory_file_rel):
+            continue  # dropped は物理的に欠落させる。inventory file は下で別途書く
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("", encoding="utf-8")
+    (package_dir / c0_validate.PATH_INVENTORY_FILENAME).write_text(
+        json.dumps(committed), encoding="utf-8"
+    )
+
+    # (1) inventory 自体は checkout の欠落に影響されず、依然として dropped を
+    #     要求し続ける（circularity 断ち切りの直接確認: rglob ベースなら
+    #     ここで dropped が消えて (2) の検出が成立しなくなる）。
+    inventory_from_broken_checkout = c0_validate.calibration_path_inventory(
+        repo_root=tmp_path
+    )
+    assert dropped in inventory_from_broken_checkout
+
+    scanned = c0_validate.scan_calibration_tree_inventory(repo_root=tmp_path)
+    assert dropped not in scanned  # 物理的に欠けているので live scan には現れない
+
+    # (2) manifest の hash map は「実際に checkout 上に存在するファイルだけ」を
+    #     反映して生成したとする（不完全な checkout をそのまま反映した現実的な
+    #     シナリオ）。
+    manifest = _complete_manifest()
+    grouped: dict[str, dict[str, str]] = {
+        "meter_paths_sha256": {},
+        "generator_paths_sha256": {},
+        "schema_paths_sha256": {},
+        "test_paths_sha256": {},
+    }
+    for path in sorted(scanned):
+        grouped[_classify_path(path)][path] = _fake_sha256(path)
+    manifest["candidates"] = grouped
+
+    monkeypatch.setattr(c0_validate, "_REPO_ROOT", tmp_path)
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "missing required path" in k and dropped in k for k in result.missing_required_keys
     )
 
 

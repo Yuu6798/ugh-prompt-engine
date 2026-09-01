@@ -249,6 +249,57 @@ def test_absolute_gates_declared_axis_absent_from_pairs_fails() -> None:
     assert "axis2" in "".join(result.failure_reasons)
 
 
+def test_absolute_gates_invariance_axis_mismatch_fails() -> None:
+    """[Codex レビュー 2026-09-01 P1] regression: `invariance_pairs_by_axis` の
+    バケットキーは呼び出し側が組み立てるだけの辞書キーであり、各
+    `InvariancePair.axis` と一致している保証はない。duration 軸の pair 5 件を
+    "gain" バケットへ紛れ込ませても、旧実装はバケットキーだけを信頼して
+    `len(pairs) >= 5` を満たすため gate4' を PASS させてしまっていた。新実装は
+    `p.axis == axis` を検証し、不一致があれば gate4' を FAIL させる。"""
+    instances = [_instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)]
+    duration_pairs_under_gain_key = [
+        InvariancePair(pair_id=f"dur-p{i}", axis="duration", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)
+        for i in range(5)
+    ]
+    result = absolute_gates(
+        instances,
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"gain": duration_pairs_under_gain_key},
+        declared_invariance_axes={"gain"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.gate4_invariance is False
+    assert result.passed is False
+    assert any("mismatched" in r and "gain" in r for r in result.failure_reasons)
+
+
+def test_absolute_gates_invariance_unknown_bucket_key_fails() -> None:
+    """[Codex レビュー 2026-09-01 P1] regression: `invariance_pairs_by_axis` に
+    `declared_invariance_axes` に含まれないバケットキーがあっても、旧実装は
+    宣言済み軸集合のみを走査するため黙って無視していた。新実装はこれも
+    gate4' FAIL として明示的に検出する。"""
+    instances = [_instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)]
+    result = absolute_gates(
+        instances,
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={
+            "axis1": _inv_pairs("axis1", 5),
+            "undeclared-axis": _inv_pairs("undeclared-axis", 5),
+        },
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.gate4_invariance is False
+    assert result.passed is False
+    assert any("undeclared-axis" in r for r in result.failure_reasons)
+
+
 def test_absolute_gates_gate5_detection_fails_when_fdr_nonzero() -> None:
     instances = [_instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)]
     result = absolute_gates(

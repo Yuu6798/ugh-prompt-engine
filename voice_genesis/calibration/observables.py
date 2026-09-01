@@ -123,26 +123,82 @@ class DetectionResult:
     control_gate: str = "APPLICABLE"
 
 
+#: `detection_rates` へ渡す keyed outcome の入力形。`Mapping[instance_id, outcome]`
+#: または `(instance_id, outcome)` の `Sequence` のいずれか（Codex レビュー
+#: 2026-09-01 P1）。
+KeyedOutcomes = Mapping[str, bool] | Sequence[tuple[str, bool]]
+
+
+class DuplicateInstanceIdError(ValueError):
+    """`detection_rates` に渡された keyed outcomes 内で `instance_id` が重複した
+    ときの typed failure（Codex レビュー 2026-09-01 P1: 生の bool sequence では
+    同一 instance を 10 回繰り返すだけで `N>=10` を水増しできてしまっていた。
+    instance_id をキーとして扱うことで distinct instance のみを数え、重複
+    出現を明示的に reject する）。呼び出し側はこれを捕捉して既存語彙
+    (`vocab.BlockedCode`) の fail-closed コードへ写像する想定。
+    """
+
+    def __init__(self, kind: str, duplicate_ids: Sequence[str]) -> None:
+        self.kind = kind
+        self.duplicate_ids = tuple(duplicate_ids)
+        super().__init__(
+            f"detection_rates: duplicate instance_id(s) in {kind}_outcomes: "
+            f"{', '.join(duplicate_ids)}"
+        )
+
+
+def _normalize_keyed_outcomes(outcomes: KeyedOutcomes, kind: str) -> dict[str, bool]:
+    """`Mapping[instance_id, outcome]` または `(instance_id, outcome)` の
+    `Sequence` を `dict[instance_id, outcome]` へ正規化する。`Mapping` はキー
+    の一意性が言語仕様上保証されるため対象外。`Sequence` 形式で同一
+    `instance_id` が複数回出現した場合は `DuplicateInstanceIdError` を送出する
+    （素朴に `dict(outcomes)` するだけだと後勝ちで重複が黙って消えるため、
+    明示的に走査して検出する）。
+    """
+    if isinstance(outcomes, Mapping):
+        return dict(outcomes)
+    seen: dict[str, bool] = {}
+    duplicate_ids: list[str] = []
+    for instance_id, outcome in outcomes:
+        if instance_id in seen:
+            duplicate_ids.append(instance_id)
+            continue
+        seen[instance_id] = outcome
+    if duplicate_ids:
+        raise DuplicateInstanceIdError(kind, sorted(set(duplicate_ids)))
+    return seen
+
+
 def detection_rates(
-    neg_outcomes: Sequence[bool],
-    pos_outcomes: Sequence[bool],
+    neg_outcomes: KeyedOutcomes,
+    pos_outcomes: KeyedOutcomes,
     *,
     control_gate: str = "APPLICABLE",
 ) -> DetectionResult:
-    """`neg_outcomes[i]` = True は negative control が「発火した」ことを示す
-    (誤検出、または missing/invalid 出力 — §10.1: missing/invalid は分子に算入し、
-    分母からは除外しない）。`pos_outcomes[i]` = True は positive control が
-    正しく発火したこと（False が FNR1 の分子）。
+    """`neg_outcomes[instance_id]` = True は negative control が「発火した」
+    ことを示す (誤検出、または missing/invalid 出力 — §10.1: missing/invalid は
+    分子に算入し、分母からは除外しない）。`pos_outcomes[instance_id]` = True は
+    positive control が正しく発火したこと（False が FNR1 の分子）。
+
+    `neg_outcomes` / `pos_outcomes` は `instance_id` をキーとする
+    `Mapping[str, bool]`、または `(instance_id, outcome)` の `Sequence` として
+    渡す（Codex レビュー 2026-09-01 P1: 生の bool sequence では 1 instance を
+    10 回繰り返すだけで `N>=10` を水増しできてしまっていた）。カウント
+    (`n_neg`/`n_pos`) は **distinct instance 数**であり、同一 `instance_id` の
+    重複出現は `DuplicateInstanceIdError` で reject する（silently 潰さない）。
 
     最小数 (`N_neg>=10` かつ `N_pos>=10`) を満たさない construct は結果を
     PASS 判定に使うべきではない（`min_count_met` で呼び出し側が判定する）。
     `control_gate="NOT_APPLICABLE"` の場合は C0 で事前宣言された非該当 construct
     であることをそのまま通過させる（呼び出し側が gate5 で分岐に使う）。
     """
-    n_neg = len(neg_outcomes)
-    n_pos = len(pos_outcomes)
-    fdr0 = (sum(1 for v in neg_outcomes if v) / n_neg) if n_neg > 0 else 0.0
-    fnr1 = (sum(1 for v in pos_outcomes if not v) / n_pos) if n_pos > 0 else 0.0
+    neg_map = _normalize_keyed_outcomes(neg_outcomes, "neg")
+    pos_map = _normalize_keyed_outcomes(pos_outcomes, "pos")
+
+    n_neg = len(neg_map)
+    n_pos = len(pos_map)
+    fdr0 = (sum(1 for v in neg_map.values() if v) / n_neg) if n_neg > 0 else 0.0
+    fnr1 = (sum(1 for v in pos_map.values() if not v) / n_pos) if n_pos > 0 else 0.0
     min_count_met = n_neg >= 10 and n_pos >= 10
     return DetectionResult(
         fdr0=fdr0,

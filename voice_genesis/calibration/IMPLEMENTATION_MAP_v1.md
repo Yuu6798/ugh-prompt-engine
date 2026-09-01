@@ -164,13 +164,19 @@ truth construct を変える軸が関与するものは適用外。第 6 巡レ�
   共通 fail filter / holdout gate 5）で評価可とする。leakage 検査（`BLOCKED_LEAKAGE`）は
   control 行を明示除外し、除外集合と本契約を C0 manifest と台帳に記録する
 - 対 positive control（§4.2 両側条件）= family anchor の truth core 行 2 件を C0 で指定
-  （truth 行としての役割は不変）。**leakage 除外はこの positive 行には適用しない**
-  （第 7 巡レビュー採用: positive control は truth core 行そのものであり、home split が
-  HOLDOUT なら holdout seal の対象そのものである。leakage 除外集合に含めると unseal 前に
-  sweep truth を観測できてしまうため除外集合は negative のみとする）。positive 証拠は、
-  評価対象 split 内に既にある truth 行から instance 数で数える（selection 段階=
-  selection split 内の truth 行、holdout gate 5 = unseal 後の holdout split 内の truth
-  行。2 cell × 5 repeat = 10 instances で N_pos を trivially 充足し、seal を跨がない）
+  （truth 行としての役割は不変。designated anchor 行の metadata としては残す）。
+  **leakage 除外はこの positive 行には適用しない**（第 7 巡レビュー採用: positive control
+  は truth core 行そのものであり、home split が HOLDOUT なら holdout seal の対象そのもの
+  である。leakage 除外集合に含めると unseal 前に sweep truth を観測できてしまうため除外
+  集合は negative のみとする）。**positive 検出証拠 = 評価対象 split 内の当該 family の
+  全 truth-core 行（×5 repeats）**（第 8 巡レビュー採用、DESIGN RULING: designated
+  2-anchor 方式は instance 数の計算対象としては撤廃。2 行の home split が同一 split に
+  偏ると selection/holdout の一方で `N_pos=0` になり両 split で `N_pos>=10` を同時に
+  満たせない構造欠陥があったため、母集団を「評価対象 split 内の当該 family の全
+  truth-core 行」へ拡張した。selection 段階 = selection split 内の truth-core 行、
+  holdout gate 5 = unseal 後の holdout split 内の truth-core 行。family の truth core
+  行数は最小でも 12 件あり、50/25/25 split の下で両 split とも `N_pos>=10` を安定して
+  充足し、seal を跨がない）
 - これにより N=6 family（negative 2 cell = 10 instances）でも gate 5 の最小数と
   selection fail filter を同時充足する
 

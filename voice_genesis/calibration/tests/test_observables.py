@@ -4,6 +4,7 @@ import pytest
 
 from voice_genesis.calibration.observables import (
     DetectionResult,
+    DuplicateInstanceIdError,
     ErrorTerms,
     bias,
     detection_rates,
@@ -16,6 +17,12 @@ from voice_genesis.calibration.observables import (
     u_proc,
     u_rep,
 )
+
+
+def _keyed(prefix: str, outcomes: list[bool]) -> list[tuple[str, bool]]:
+    """distinct instance_id を割り振った `(instance_id, outcome)` list を作る
+    テスト用ヘルパー（`detection_rates` の keyed outcomes 契約用）。"""
+    return [(f"{prefix}{i}", v) for i, v in enumerate(outcomes)]
 
 
 def test_two_stage_median_hand_computed_oracle_unbalanced_repeats() -> None:
@@ -153,8 +160,8 @@ def test_nuisance_ds_hand_computed() -> None:
 def test_detection_rates_missing_counted_in_numerator() -> None:
     # neg_outcomes: 10 controls, 2 fired (誤検出/missing扱い) -> FDR0=2/10=0.2
     # pos_outcomes: 10 controls, 1 不発火 -> FNR1=1/10=0.1
-    neg = [True, True] + [False] * 8
-    pos = [False] + [True] * 9
+    neg = _keyed("neg", [True, True] + [False] * 8)
+    pos = _keyed("pos", [False] + [True] * 9)
     result = detection_rates(neg, pos)
     assert result == DetectionResult(
         fdr0=0.2, fnr1=0.1, n_neg=10, n_pos=10, min_count_met=True, control_gate="APPLICABLE"
@@ -162,24 +169,65 @@ def test_detection_rates_missing_counted_in_numerator() -> None:
 
 
 def test_detection_rates_missing_does_not_reduce_denominator() -> None:
-    # 分母は常に len(outcomes) であり、missing/invalid を除外して分母を
+    # 分母は常に distinct instance 数であり、missing/invalid を除外して分母を
     # 縮めてはならない (設計正本 §10.1)。
-    neg = [True] * 3 + [False] * 7  # 10 件中 3 件 "fired" (誤検出 or missing)
-    result = detection_rates(neg, [True] * 10)
+    neg = _keyed("neg", [True] * 3 + [False] * 7)  # 10 件中 3 件 "fired"
+    result = detection_rates(neg, _keyed("pos", [True] * 10))
     assert result.n_neg == 10
     assert result.fdr0 == pytest.approx(0.3)
 
 
 def test_detection_rates_min_count_not_met() -> None:
-    result = detection_rates([False] * 5, [True] * 12)
+    result = detection_rates(_keyed("neg", [False] * 5), _keyed("pos", [True] * 12))
     assert result.min_count_met is False
 
 
 def test_detection_rates_not_applicable_control_gate_passthrough() -> None:
-    result = detection_rates([], [], control_gate="NOT_APPLICABLE")
+    result = detection_rates({}, {}, control_gate="NOT_APPLICABLE")
     assert result.control_gate == "NOT_APPLICABLE"
     assert result.fdr0 == 0.0
     assert result.fnr1 == 0.0
+
+
+def test_detection_rates_accepts_mapping_form() -> None:
+    """`Mapping[instance_id, outcome]` 形式でも `Sequence[tuple]` 形式と同じ
+    結果になること。"""
+    neg = {"n0": True, "n1": True, **{f"n{i}": False for i in range(2, 10)}}
+    pos = {"p0": False, **{f"p{i}": True for i in range(1, 10)}}
+    result = detection_rates(neg, pos)
+    assert result == DetectionResult(
+        fdr0=0.2, fnr1=0.1, n_neg=10, n_pos=10, min_count_met=True, control_gate="APPLICABLE"
+    )
+
+
+def test_detection_rates_duplicate_instance_id_in_neg_rejected() -> None:
+    """[Codex レビュー 2026-09-01 P1] regression: 同一 instance を 10 回繰り返す
+    (raw sequence 水増し) だけでは N>=10 を満たしたことにはならない。
+    `neg_outcomes` に重複 `instance_id` があれば `DuplicateInstanceIdError` で
+    typed failure として reject される。"""
+    duplicated_10x = [("row-1", False)] * 10
+    with pytest.raises(DuplicateInstanceIdError) as excinfo:
+        detection_rates(duplicated_10x, _keyed("pos", [True] * 10))
+    assert excinfo.value.kind == "neg"
+    assert excinfo.value.duplicate_ids == ("row-1",)
+
+
+def test_detection_rates_duplicate_instance_id_in_pos_rejected() -> None:
+    duplicated_10x = [("row-1", True)] * 10
+    with pytest.raises(DuplicateInstanceIdError) as excinfo:
+        detection_rates(_keyed("neg", [False] * 10), duplicated_10x)
+    assert excinfo.value.kind == "pos"
+    assert excinfo.value.duplicate_ids == ("row-1",)
+
+
+def test_detection_rates_duplicate_instance_id_does_not_satisfy_min_count() -> None:
+    """1 instance を 10 回複製しても `min_count_met` を trivially 満たせない
+    ことの直接確認: 例外送出そのものが「水増しは通らない」ことを保証する
+    （呼び出し側が例外を fail-closed として扱えば、min_count_met=True の結果は
+    決して得られない）。"""
+    duplicated_10x = [("row-1", True)] * 10
+    with pytest.raises(DuplicateInstanceIdError):
+        detection_rates(duplicated_10x, duplicated_10x)
 
 
 def test_failure_boundary_missing_counts_as_first_fail() -> None:

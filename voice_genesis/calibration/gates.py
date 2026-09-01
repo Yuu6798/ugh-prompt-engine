@@ -129,6 +129,15 @@ def absolute_gates(
     `invariance_pairs_by_axis` に対応する pair が 1 件もない軸があっても
     黙って消えず、明示的に `<5 pairs` として FAIL する。軸内で `pair_id` が
     重複する観測（同一観測の水増しカウント）も gate4' を FAIL させる。
+
+    `invariance_pairs_by_axis` のバケットキーは呼び出し側が組み立てる辞書
+    キーに過ぎず、各 `InvariancePair.axis` フィールドと一致している保証は
+    ない（Codex レビュー 2026-09-01 P1: 従来はバケットキーを無条件に信頼して
+    おり、`axis` が異なる pair を誤ったバケットへ紛れ込ませても検出できな
+    かった）。本関数は各バケット内の全 pair について `p.axis == axis`（走査
+    中のバケットキー）を検証し、不一致が 1 件でもあれば当該軸を gate4' FAIL
+    とする（理由を個別に列挙する。duplicate pair_id 検査より前に行う —
+    axis 不一致がある時点でその pair は当該軸の証拠として無効）。
     """
     primary = [i for i in per_instance if i.domain == Domain.PRIMARY]
     if not primary:
@@ -166,8 +175,25 @@ def absolute_gates(
     gate4 = bool(declared_invariance_axes)
     if not declared_invariance_axes:
         reasons.append("gate4': no invariance axis declared")
+
+    unknown_bucket_keys = sorted(set(invariance_pairs_by_axis) - set(declared_invariance_axes))
+    if unknown_bucket_keys:
+        gate4 = False
+        reasons.append(
+            "gate4': invariance_pairs_by_axis has bucket key(s) not in "
+            f"declared_invariance_axes: {', '.join(unknown_bucket_keys)}"
+        )
+
     for axis in declared_invariance_axes:
         pairs = invariance_pairs_by_axis.get(axis, ())
+        mislabeled = sorted({p.pair_id for p in pairs if p.axis != axis})
+        if mislabeled:
+            gate4 = False
+            reasons.append(
+                f"gate4': axis {axis} bucket contains pair(s) with mismatched "
+                f"InvariancePair.axis: {', '.join(mislabeled)}"
+            )
+            continue
         pair_ids = [p.pair_id for p in pairs]
         duplicate_ids = sorted({pid for pid in pair_ids if pair_ids.count(pid) > 1})
         if duplicate_ids:

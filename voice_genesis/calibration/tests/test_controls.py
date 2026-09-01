@@ -58,29 +58,12 @@ def test_control_row_ids_still_covers_all_negative_controls() -> None:
 
 # ---------------------------------------------------------------------------
 # positive_detection_instances: leakage 除外を経由しない positive 証拠の数え方
+# (Codex レビュー 2026-09-01 第 8 巡 DESIGN RULING: 母集団 = 評価対象 split 内の
+# 当該 family の全 truth-core 行。designated 2-anchor 方式は撤廃)
 # ---------------------------------------------------------------------------
 
 
-def test_positive_detection_instances_reaches_min_n_pos_on_real_matrix() -> None:
-    """§10.1 の最小数 `N_pos>=10` を、leakage 除外を経由せず split 内の
-    truth 行 × probe repeat 5 の instance 数だけで trivially 充足できること
-    を実データで確認する（dummy split secret による決定論的 split の下、
-    IDENTITY_CAUSAL_SWEEP の 2 件の positive control 行がどちらも SELECTION
-    split を home split に持つ具体ケース）。
-    """
-    rows = _real_matrix_rows()
-    realized = _realize_dummy_split(rows)
-
-    instances = controls.positive_detection_instances(
-        rows, realized.assignment, Split.SELECTION, family="IDENTITY_CAUSAL_SWEEP"
-    )
-    assert len(instances) >= 10
-    # 2 positive control 行 × PROBE_REPEATS(5) = 10 ちょうど（両 anchor が同一
-    # split に home split を持つ場合の下限そのもの）。
-    assert len(instances) == 2 * controls.PROBE_REPEATS
-
-
-def test_positive_detection_instances_only_counts_home_split_and_positive_rows() -> None:
+def test_positive_detection_instances_only_counts_home_split_and_truth_core_rows() -> None:
     rows = _real_matrix_rows()
     realized = _realize_dummy_split(rows)
 
@@ -91,25 +74,59 @@ def test_positive_detection_instances_only_counts_home_split_and_positive_rows()
     for row_id in row_ids_in_instances:
         assert realized.assignment[row_id] == Split.SELECTION
 
-    positive_ids_for_family = {
+    truth_core_ids_for_family = {
         mr.row_id
         for mr in rows
-        if mr.row.positive_control and mr.row.family == "IDENTITY_CAUSAL_SWEEP"
+        if mr.row.block == "TRUTH_CORE" and mr.row.family == "IDENTITY_CAUSAL_SWEEP"
     }
-    assert row_ids_in_instances.issubset(positive_ids_for_family)
+    assert row_ids_in_instances.issubset(truth_core_ids_for_family)
+    # designated anchor への限定は撤廃されたため、truth core 行のうち
+    # positive_control=True でない行も母集団に含まれうる。
+    assert row_ids_in_instances == {
+        row_id
+        for row_id in truth_core_ids_for_family
+        if realized.assignment[row_id] == Split.SELECTION
+    }
 
     probe_indices = {probe_index for _row_id, probe_index in instances}
     assert probe_indices == set(range(controls.PROBE_REPEATS))
 
 
-def test_positive_detection_instances_empty_split_yields_empty_set() -> None:
-    """home split を誰も持たない split × family の組では空集合を返す
-    （dummy split の実測: TILT_GT の positive control 2 件はどちらも
-    SELECTION には割り当てられない）。
+def test_positive_detection_instances_reaches_min_n_pos_for_every_family_both_splits() -> None:
+    """[Codex レビュー 2026-09-01 P1 / 第 8 巡] regression: 旧 designated-2-anchor
+    方式では、2 行の home split が同じ split に偏ると、もう一方の split では
+    `N_pos=0` となり selection と holdout の両方で `N_pos>=10` を同時に
+    満たせなかった。truth-core 行全体を母集団に拡張した新方式では、実データ
+    (実 matrix + dummy split secret) の下で全 family・selection/holdout 両方
+    ともに `N_pos>=10` を満たすことを確認する。
     """
     rows = _real_matrix_rows()
     realized = _realize_dummy_split(rows)
-    instances = controls.positive_detection_instances(
-        rows, realized.assignment, Split.SELECTION, family="TILT_GT"
-    )
-    assert instances == frozenset()
+    families = sorted({mr.row.family for mr in rows})
+
+    for family in families:
+        for split in (Split.SELECTION, Split.HOLDOUT):
+            instances = controls.positive_detection_instances(
+                rows, realized.assignment, split, family=family
+            )
+            assert len(instances) >= 10, (family, split)
+
+
+def test_positive_detection_instances_reaches_min_n_pos_for_every_family_both_splits_real_matrix_default_secret() -> None:  # noqa: E501
+    """`_realize_dummy_split` のダミー secret に加え、`splitter.realize_split`
+    のデフォルト stratum 因子（空リスト）でも同様に成立することを確認する
+    （dummy secret 依存の偶然一致ではないことの追加確認）。
+    """
+    rows = _real_matrix_rows()
+    row_inputs = [
+        splitter.RowInput(row_id=mr.row_id, family=mr.row.family, stratum={}) for mr in rows
+    ]
+    realized = splitter.realize_split(row_inputs, b"another-dummy-secret-for-controls-test", [])
+    families = sorted({mr.row.family for mr in rows})
+
+    for family in families:
+        for split in (Split.SELECTION, Split.HOLDOUT):
+            instances = controls.positive_detection_instances(
+                rows, realized.assignment, split, family=family
+            )
+            assert len(instances) >= 10, (family, split)
