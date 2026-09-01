@@ -54,6 +54,21 @@
 | `candidates/impl/*` | 候補 algorithm family 実装（pyin=librosa / cepstral poles / Burg LPC（`fs'=2*max_formant` 決定的 resample 必須）/ harmonic OLS・Theil-Sen / ACF HNR / harmonic residual / D4C=pyworld guarded / local prominence / wave discontinuity / spectral flux）+ `b0_wrappers.py`（harness 無改変 import） |
 | `c0_validate.py` | C0 manifest の dry-run 検証（REQUIRED_BLOCKING / RECORDED_OR_ABSENT の二層判定・BLOCKED_* code 発行・書込なし）（§3） |
 
+## 2.5 設計正本の実装解釈（correction 候補。正本は read-only のため append-only 記録）
+
+Codex レビュー 2026-09-01（第 2 巡）採用分。正本改訂は §0 保存規則により本実装では行わず、
+以下の解釈で実装し、C0 freeze 承認時のユーザーレビュー対象とする:
+
+- **U_rep（§6/§10.1）**: 6 call 構成（within-process 3 call + fresh-process 3×1 call）では
+  singleton process の range が構造ゼロとして q95 を希釈する。`u_rep` は **repeat 数 ≥ 2 の
+  process group のみ**を母集団とする（n=1 の range は 0 でなく未定義。除外は U_rep を
+  大きくする fail 側の保守的読み）
+- **M6 × CLAIM_CRITICAL_SET（§12）**: §12「CALIBRATED_ABSOLUTE component のみで構成」を
+  部分集合の再構成と読まない。D1（C0 後の縮小禁止）・§8（1件でも missing/ineligible なら
+  NOT_EVALUABLE）・§15（全 critical component ABSOLUTE 必須）と整合する唯一の読みとして、
+  **凍結済み CLAIM_CRITICAL_SET の全 member が CALIBRATED_ABSOLUTE のときのみ** M6 distance を
+  計算し、それ以外は NOT_EVALUABLE（部分データからの distance 出力は禁止）
+
 ## 3. underspec の解決規約
 
 設計正本が数値・グリッドを確定していない箇所（例: family 別 truth×confound の因子直積の
