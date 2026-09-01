@@ -88,7 +88,7 @@ C0 freeze の実行は一切含まない（授権境界は本ファイル冒頭�
 | `candidates/impl/resonance_prominence.py` | 平滑化スペクトル包絡上の `scipy.signal.find_peaks(prominence=...)`（M4-LOCAL-PROMINENCE） | §8 |
 | `candidates/impl/transition.py` | wave-discontinuity（短窓 RMS jump）・spectral-flux（frame-to-frame L1/L2 magnitude flux） | §8 |
 | `candidates/impl/b0_wrappers.py` | `voice_genesis/harness/measure.py` / `measure_v3.py` の**無改変 import**（既存 `voice_genesis/singer/gate_checks.py` 等と同じ `sys.path` sibling-import パターンを踏襲）。5 つの B0 candidate をここでのみ harness へ配線する | §8 |
-| `c0_validate.py` | C0 manifest dry-run 検証: REQUIRED_BLOCKING（§3.1）欠落・hollow（空文字列/空コンテナ）→ `BLOCKED_C0_MANIFEST_INCOMPLETE`（キー存在チェックに加え、path+hash マップの形状・`frozen_design.meter_specs` の全 meter family 網羅・`independence_ledger`/`rng_ledger` のエントリ形状も検証 = Codex レビュー 2026-09-01 P1）、RECORDED_OR_ABSENT（§3.2）は値または `ABSENT:<理由>` を許容し `WEAK_ENV_LOCK` 降格 annotation、pyworld 特則（§3.3、D4C のみ ineligible・campaign は BLOCK しない）、RNG 台帳の unseeded stream 検出 → `BLOCKED_C0_UNSEEDED_RNG`。**書込・secret 生成・freeze event 記録なし**。§18 Gate 2 承認後の武装版 freeze スクリプトは別 PR（未着手） | §3 |
+| `c0_validate.py` | C0 manifest dry-run 検証: REQUIRED_BLOCKING（§3.1）欠落・hollow（空文字列/空コンテナ）→ `BLOCKED_C0_MANIFEST_INCOMPLETE`（キー存在チェックに加え、path+hash マップの形状・`frozen_design.meter_specs` の全 meter family 網羅・`independence_ledger`/`rng_ledger` のエントリ形状も検証 = Codex レビュー 2026-09-01 P1。`independence_ledger` はさらにキー集合が `candidates.registry.ALL_CANDIDATES` の凍結 99 candidate_id 全集合と完全一致すること、各 entry の tier が registry 宣言 tier と一致することも検証 = Codex レビュー 2026-09-01 追加 P1）、RECORDED_OR_ABSENT（§3.2）は値または `ABSENT:<理由>` を許容し `WEAK_ENV_LOCK` 降格 annotation、pyworld 特則（§3.3、D4C のみ ineligible・campaign は BLOCK しない）、RNG 台帳の unseeded stream 検出 → `BLOCKED_C0_UNSEEDED_RNG`。**書込・secret 生成・freeze event 記録なし**。§18 Gate 2 承認後の武装版 freeze スクリプトは別 PR（未着手） | §3 |
 
 依存の例外: `candidates/impl/b0_wrappers.py` のみ `voice_genesis/harness/*` を
 read-only import する（本ファイル冒頭「テスト」節の「`voice_genesis.harness`
@@ -136,7 +136,7 @@ Phase C の B0 wrapper には適用されない。タスク境界で明示的に
 | `UNDERSPEC-CAL-C09` | `candidates/registry.py`, `candidates/impl/aperiodicity.py` | M2A-HARMONIC-RESIDUAL の残差帯域グリッド「0–Nyquist」を実装トークン `broadband`（D4C 側の帯域トークンと統一）へ写像した |
 | `UNDERSPEC-CAL-C10` | `c0_validate.py` | path+hash 系マップ（`candidates.*_paths_sha256`）の各エントリを `path(非空文字列) -> sha256(64 桁小文字 16 進)` 形状として検証した（Codex レビュー 2026-09-01 P1） |
 | `UNDERSPEC-CAL-C11` | `c0_validate.py` | `frozen_design.meter_specs` が `candidates.registry.ALL_CANDIDATES` の全 meter family（vocab.MeterId 全件）をカバーすることを要求し、欠落 meter を個別キーとして列挙する規則にした（Codex レビュー 2026-09-01 P1） |
-| `UNDERSPEC-CAL-C12` | `c0_validate.py` | `independence_ledger` の各エントリ値を `vocab.IndependenceTier` の閉語彙メンバーであることまで検証した（Codex レビュー 2026-09-01 P1） |
+| `UNDERSPEC-CAL-C12` | `c0_validate.py` | `independence_ledger` の各エントリ値を `vocab.IndependenceTier` の閉語彙メンバーであることまで検証した（Codex レビュー 2026-09-01 P1）。加えて、ledger のキー集合は `candidates.registry.ALL_CANDIDATES` の凍結 99 candidate_id 全集合と完全一致（欠落・unknown/extra を個別列挙）、各 entry の tier は registry 宣言 tier と一致（不一致を個別列挙）することを要求する（Codex レビュー 2026-09-01 追加 P1: 従来はキー集合の網羅性を一切検査していなかった） |
 | `UNDERSPEC-CAL-C13` | `c0_validate.py` | `rng_ledger` エントリの形状を `{"stream_name": str(非空), "seeded": bool}` に加え、`seeded=true` の場合は非空 `public_seed_id`（`streams.RngLedgerEntry.public_seed_id` と命名を揃えた seed 参照）を必須とした（Codex レビュー 2026-09-01 P1: §3.3「stream 列挙 + seed 参照」の反映） |
 
 以下は Codex レビュー（2026-09-01、複数巡）で採用され `IMPLEMENTATION_MAP_v1.md`

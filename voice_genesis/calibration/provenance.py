@@ -219,13 +219,21 @@ class ChainVerification:
     は常に `ok=False` を伴う（末尾が中断された台帳は「検証できない」のであって
     「検証に成功した」のではない）。`truncated_tail` フィールドは、その `ok=False`
     が改竄由来 (`tamper_at_seq` 有り) なのか write 中断由来なのかを呼び出し側が
-    区別できるよう残す。"""
+    区別できるよう残す。
+
+    `missing_final_newline`（Codex レビュー 2026-09-01 P1 追加）: 最終行が
+    改行未終端だが JSON としては完全にパース可能だった場合に `True`。この
+    ケースは **fail-closed の対象ではない**（`ok` は content が正当なら
+    `True` のまま）: 1 エントリも失われておらず、欠けているのは区切りの
+    改行のみだからである（情報提供目的のフラグ。`Ledger.append()` は次回
+    追記時にこれを自己修復する）。"""
 
     ok: bool
     entries_verified: int
     truncated_tail: bool
     tamper_at_seq: int | None
     detail: str
+    missing_final_newline: bool = False
 
 
 class LedgerTruncatedTailError(RuntimeError):
@@ -247,25 +255,39 @@ def _entry_sha(seq: int, prev_sha: str, payload: Mapping[str, Any]) -> str:
     return manifest_sha({"seq": seq, "prev_sha": prev_sha, "payload": _jsonable(payload)})
 
 
-def _split_complete_lines(content: str) -> tuple[list[str], bool]:
+def _split_complete_lines(content: str) -> tuple[list[str], bool, bool]:
     """ファイル内容を「改行区切りの完全な行」の列と「末尾 truncated 判定」に
     分解する。`verify_chain()` と `Ledger.append()` の両方が使う共通ロジック
     （Codex レビュー 2026-09-01 採用: append 側も同じ判定を再利用することで、
-    truncated tail への追記と検証の判定基準を一致させる）。"""
+    truncated tail への追記と検証の判定基準を一致させる）。
+
+    戻り値は `(raw_lines, truncated_tail, missing_final_newline)`。
+
+    `missing_final_newline`（Codex レビュー 2026-09-01 P1 追加）: ファイルの
+    最終行が改行で終端されていないが、JSON としては完全にパース可能な場合
+    （＝末尾で write が中断されたのではなく、単に区切り改行だけが欠けている
+    場合）に `True` となる。この場合 `truncated_tail` は `False` に戻す
+    （chain としては正当に検証できるため）が、`Ledger.append()` 側はこの
+    フラグを見て区切り改行を自己修復してから追記する必要がある（さもないと
+    次の JSON 行と `}{` のように直接連結し破損する）。
+    """
     truncated_tail = False
+    missing_final_newline = False
     if content and not content.endswith("\n"):
         truncated_tail = True
     raw_lines = [ln for ln in content.splitlines() if ln.strip()]
     if truncated_tail and raw_lines:
         # 最後の非空行が truncated 行そのもの: JSON parse を試し、失敗すれば
         # それを truncated 行として除外する。parse に成功する（＝改行だけが
-        # 欠けた完全な行だった）場合は truncated 扱いを取り消す。
+        # 欠けた完全な行だった）場合は truncated 扱いを取り消し、代わりに
+        # missing_final_newline を立てる。
         try:
             json.loads(raw_lines[-1])
             truncated_tail = False
+            missing_final_newline = True
         except json.JSONDecodeError:
             raw_lines = raw_lines[:-1]
-    return raw_lines, truncated_tail
+    return raw_lines, truncated_tail, missing_final_newline
 
 
 class Ledger:
@@ -333,6 +355,16 @@ class Ledger:
         を導出する。これにより、同一パスに対する複数 `Ledger` インスタンス
         （プロセス内・プロセス間を問わない）が交互に `append()` しても、
         兄弟 `seq=0` の重複や chain 分岐が起きない。
+
+        **末尾改行の自己修復**（Codex レビュー 2026-09-01 P1 採用）: 既存
+        ファイルの最終行が改行未終端でも、JSON としては完全にパース可能なら
+        （＝write 中断ではなく、区切り改行だけが欠けている）`append()` はこれを
+        拒否せず、排他ロックを保持したまま欠けた `"\n"` をまず書いてから通常
+        どおり追記する。1 件もエントリを失っていない正当な chain を
+        `LedgerTruncatedTailError` で reject するより安全（かつ、この自己修復
+        をしないと次の追記が `}{` のように直接連結して破損する）。
+        `verify_chain()` はこの状態を `missing_final_newline=True` として
+        報告する（fail-closed の対象外）。
         """
         payload_j = _jsonable(payload)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -346,13 +378,23 @@ class Ledger:
             try:
                 f.seek(0)
                 content = f.read()
-                raw_lines, truncated_tail = _split_complete_lines(content)
+                raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
                 if truncated_tail:
                     raise LedgerTruncatedTailError(
                         self.path,
                         "existing ledger tail is truncated (incomplete final line); "
                         "refusing to append onto partial bytes",
                     )
+                if missing_final_newline:
+                    # 自己修復（Codex レビュー 2026-09-01 P1 採用）: 最終行が
+                    # 改行未終端でも JSON としては完全にパースできる（＝1件も
+                    # 失われていない）場合は、単に区切り改行が欠けているだけ
+                    # なので拒否せず、まず欠けた "\n" を書いてから通常どおり
+                    # 追記する。これを怠ると次に書く行と `}{` のように直接
+                    # 連結して破損する。既存の正当な chain を拒否するより
+                    # 安全な選択（有効な chain を fail-closed で reject しない）。
+                    f.seek(0, os.SEEK_END)
+                    f.write("\n")
                 if raw_lines:
                     try:
                         tail_raw = json.loads(raw_lines[-1])
@@ -395,13 +437,18 @@ class Ledger:
           中断された痕跡）。この場合、末尾行を除いた prefix は正当な可能性がある。
         - `tamper_at_seq`: `prev_sha` 不一致（同一 chain 上の sibling 分岐、
           または内容改竄）を検出した最初の seq。
+        - `missing_final_newline`（Codex レビュー 2026-09-01 P1 追加）: 最終行が
+          改行未終端だが JSON としては完全にパース可能だった場合に `True`。
+          1 エントリも失われていないため fail-closed の対象ではない
+          （content が正当であれば `ok=True` のまま。情報提供目的のみ）。
         """
         truncated_tail = False
+        missing_final_newline = False
         raw_lines: list[str] = []
         if self.path.exists():
             with self.path.open("r", encoding="utf-8") as f:
                 content = f.read()
-            raw_lines, truncated_tail = _split_complete_lines(content)
+            raw_lines, truncated_tail, missing_final_newline = _split_complete_lines(content)
 
         prev = GENESIS_PREV_SHA
         verified = 0
@@ -415,6 +462,7 @@ class Ledger:
                     truncated_tail=True,
                     tamper_at_seq=None,
                     detail=f"unparseable line at position {i}",
+                    missing_final_newline=missing_final_newline,
                 )
             if raw.get("seq") != i:
                 return ChainVerification(
@@ -423,6 +471,7 @@ class Ledger:
                     truncated_tail=truncated_tail,
                     tamper_at_seq=i,
                     detail=f"seq mismatch at position {i}: expected {i}, got {raw.get('seq')}",
+                    missing_final_newline=missing_final_newline,
                 )
             if raw.get("prev_sha") != prev:
                 return ChainVerification(
@@ -431,6 +480,7 @@ class Ledger:
                     truncated_tail=truncated_tail,
                     tamper_at_seq=i,
                     detail=f"prev_sha mismatch at seq {i} (sibling branch or tamper)",
+                    missing_final_newline=missing_final_newline,
                 )
             expected = _entry_sha(i, prev, raw.get("payload", {}))
             if expected != raw.get("entry_sha"):
@@ -440,6 +490,7 @@ class Ledger:
                     truncated_tail=truncated_tail,
                     tamper_at_seq=i,
                     detail=f"entry_sha mismatch at seq {i} (content tamper)",
+                    missing_final_newline=missing_final_newline,
                 )
             prev = raw["entry_sha"]
             verified += 1
@@ -448,6 +499,9 @@ class Ledger:
         # 「(改竄ではないが) 検証未完了」であり、正当な chain として ok=True を
         # 返してはならない。有効な prefix が検証済みであることは
         # `entries_verified` / `truncated_tail` で呼び出し側に伝える。
+        # `missing_final_newline` は fail-closed の対象外（Codex レビュー
+        # 2026-09-01 P1）: 1 件も失われていない正当な chain であり、`ok` は
+        # 通常どおり `not truncated_tail` に従う。
         return ChainVerification(
             ok=not truncated_tail,
             entries_verified=verified,
@@ -455,9 +509,12 @@ class Ledger:
             tamper_at_seq=None,
             detail=(
                 "chain verified"
-                if not truncated_tail
+                if not truncated_tail and not missing_final_newline
                 else "chain verified up to truncated tail (fail-closed: ok=False)"
+                if truncated_tail
+                else "chain verified (final line missing trailing newline, self-healed on next append)"
             ),
+            missing_final_newline=missing_final_newline,
         )
 
     @staticmethod

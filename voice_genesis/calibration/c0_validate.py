@@ -28,8 +28,13 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
     `frozen_design.meter_specs.<METER_ID>` として個別に列挙する。
     `[UNDERSPEC-CAL-C11]`）。
   - `independence_ledger` は非空 mapping であり、各エントリの値が
-    `vocab.IndependenceTier` の閉語彙に属する文字列であることを検査する
-    （`[UNDERSPEC-CAL-C12]`）。
+    `vocab.IndependenceTier` の閉語彙に属する文字列であることを検査する。
+    加えて、ledger のキー集合は `candidates.registry.ALL_CANDIDATES` が定義
+    する凍結 99 候補の candidate_id 全集合と完全一致することを要求する
+    （欠落・unknown/extra はそれぞれ個別列挙）。各 entry の tier は registry
+    が宣言する当該候補の tier と一致するかも cross-check する
+    （`[UNDERSPEC-CAL-C12]`。Codex レビュー 2026-09-01 P1: 従来はキー集合の
+    網羅性を一切検査していなかった）。
   - `rng_ledger` は非空 list であり、各エントリが `stream_name`（非空文字列）
     と `seeded`（bool）を持ち、`seeded=True` のエントリは非空の
     `public_seed_id`（seed 参照。§3.3「stream 列挙 + seed 参照」に対応。
@@ -242,6 +247,13 @@ def _check_independence_ledger(manifest: Mapping[str, object]) -> list[str]:
     """`independence_ledger` のエントリ形状検査（設計正本 §4。`[UNDERSPEC-CAL-C12]`）。
 
     各値が `vocab.IndependenceTier` の閉語彙に属する文字列であることを検査する。
+    さらに、ledger のキー集合が凍結済み 99 候補registry（`candidates.registry.
+    ALL_CANDIDATES`）の candidate_id 全集合と **完全一致** することを要求する
+    （Codex レビュー 2026-09-01 P1: 従来は供給された値の形状のみ検査し、凍結
+    candidate set 全体をカバーしているかを一切見ていなかった）。欠落
+    candidate_id・registry に存在しない unknown/extra な candidate_id は、
+    いずれも個別に列挙する。あわせて、各 entry の tier が registry が宣言する
+    その候補の tier と一致するかも cross-check する（不一致は個別に列挙）。
     """
     found, ledger = _resolve(manifest, "independence_ledger")
     if not found or _is_hollow(ledger) or not isinstance(ledger, Mapping):
@@ -253,6 +265,30 @@ def _check_independence_ledger(manifest: Mapping[str, object]) -> list[str]:
             violations.append(
                 f"independence_ledger[{entry_key!r}] (must be one of {sorted(valid_tiers)}, "
                 f"got {tier_value!r})"
+            )
+
+    registry_ids = {c.candidate_id for c in candidate_registry.ALL_CANDIDATES}
+    ledger_ids = {k for k in ledger.keys() if isinstance(k, str)}
+    missing_ids = sorted(registry_ids - ledger_ids)
+    unknown_ids = sorted(ledger_ids - registry_ids)
+    violations.extend(
+        f"independence_ledger (missing candidate_id: {cid!r})" for cid in missing_ids
+    )
+    violations.extend(
+        f"independence_ledger (unknown/extra candidate_id: {cid!r})" for cid in unknown_ids
+    )
+
+    registry_by_id = {c.candidate_id: c for c in candidate_registry.ALL_CANDIDATES}
+    for entry_key, tier_value in ledger.items():
+        candidate = registry_by_id.get(entry_key) if isinstance(entry_key, str) else None
+        if candidate is None:
+            continue  # unknown id は上で既に捕捉済み
+        if not isinstance(tier_value, str) or tier_value not in valid_tiers:
+            continue  # 形状違反は上で既に捕捉済み（tier 比較は形状が妥当な場合のみ）
+        if tier_value != candidate.independence_tier.value:
+            violations.append(
+                f"independence_ledger[{entry_key!r}] (tier mismatch: registry declares "
+                f"{candidate.independence_tier.value!r}, ledger has {tier_value!r})"
             )
     return violations
 

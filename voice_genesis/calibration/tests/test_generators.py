@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from scipy.signal import welch
 
 from voice_genesis.calibration.fixtures.generators import (
     aperiodicity,
@@ -347,6 +348,60 @@ def test_resonance_spectral_peak_near_declared_center() -> None:
     far = (freqs > 200) & (freqs < row.center_hz - 500)
     assert near.any() and far.any()
     assert mag_db[near].max() > np.median(mag_db[far]) + 3.0
+
+
+def _welch_local_prominence_db(
+    pcm: np.ndarray, sr_hz: int, center_hz: float, bandwidth_hz: float
+) -> float:
+    """[Codex レビュー 2026-09-01 P2] 生成器の内部実装（`resonance._measure_*`）
+    を再利用しない、独立した welch ベースの LOCAL SPECTRAL PEAK PROMINENCE
+    測定。peak = `center_hz` ± `bandwidth_hz/2` 内の PSD 最大値。floor =
+    `center_hz` の ±1 octave 外側（`[50Hz, center/2]` ∪ `[center*2,
+    0.95*nyquist]`）の PSD 中央値 — 生成器が使う 2-pole resonator の skirt が
+    近傍窓では noise floor まで十分減衰しないため、declared bandwidth の
+    数倍程度の窓ではなく、center から十分離れた（1 octave）帯域を使う
+    （このモジュールの他所での実測: center±32*bandwidth の窓でもなお
+    真の floor より 5-20dB 高い）。
+    """
+    x = pcm.astype(np.float64) / 32767.0
+    nperseg = min(len(x), 2048)
+    freqs, psd = welch(x, fs=sr_hz, nperseg=nperseg, window="hann", detrend=False)
+    psd_db = 10.0 * np.log10(psd + 1e-20)
+
+    half_bw = bandwidth_hz / 2.0
+    peak_mask = np.abs(freqs - center_hz) <= half_bw
+    peak_db = float(psd_db[peak_mask].max())
+
+    nyquist = sr_hz / 2.0
+    lo_far, hi_far = center_hz / 2.0, center_hz * 2.0
+    floor_mask = ((freqs >= 50.0) & (freqs <= lo_far)) | (
+        (freqs >= hi_far) & (freqs <= nyquist * 0.95)
+    )
+    floor_db = float(np.median(psd_db[floor_mask]))
+    return peak_db - floor_db
+
+
+@pytest.mark.parametrize("bandwidth_hz", [50.0, 300.0])
+def test_resonance_realized_prominence_matches_declared_across_bandwidth_extremes(
+    bandwidth_hz: float,
+) -> None:
+    """[Codex レビュー 2026-09-01 P2] 実現される LOCAL SPECTRAL PEAK
+    PROMINENCE は、declared `resonance_bandwidth_hz` の両極端（50Hz/300Hz）
+    でも同じ declared prominence（12dB）に対して近い値へ収束すること
+    （one-shot 補正パスの回帰テスト。補正前の旧実装は帯域幅ごとに実現値が
+    大きくばらついていた）。
+    """
+    tolerance_db = 1.5  # 実測近似誤差の上限目安（モジュール docstring 参照）
+    row = _resonance_row(
+        center_hz=2000.0, resonance_bandwidth_hz=bandwidth_hz, prominence_db=12.0,
+        duration_s=1.0,
+    )
+    pcm = resonance.render(row, _rng())
+    realized_db = _welch_local_prominence_db(pcm, row.sr_hz, row.center_hz, bandwidth_hz)
+    assert abs(realized_db - row.prominence_db) <= tolerance_db, (
+        f"bandwidth={bandwidth_hz}Hz realized={realized_db:.3f}dB "
+        f"declared={row.prominence_db}dB"
+    )
 
 
 # ---------------------------------------------------------------------------

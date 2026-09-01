@@ -173,6 +173,58 @@ def test_ledger_append_refuses_when_existing_tail_truncated(tmp_path) -> None:
     assert path.read_text(encoding="utf-8") == truncated_content
 
 
+def test_ledger_verify_chain_ok_with_missing_final_newline_flag(tmp_path) -> None:
+    """[Codex レビュー 2026-09-01 P1] 最終行が改行未終端でも JSON としては
+    完全にパース可能（＝write 中断ではない）なら、chain は正当として
+    `ok=True` のまま `missing_final_newline=True` を追加情報として返す。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    # 末尾の改行だけを取り除く（JSON 本体は完全に残す）。
+    full_content = path.read_text(encoding="utf-8")
+    assert full_content.endswith("\n")
+    path.write_text(full_content[:-1], encoding="utf-8")
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 2
+    assert result.tamper_at_seq is None
+    assert result.truncated_tail is False
+    assert result.missing_final_newline is True
+
+
+def test_ledger_append_self_heals_missing_final_newline_no_corruption(tmp_path) -> None:
+    """[Codex レビュー 2026-09-01 P1] append() は、既存台帳の末尾改行のみが
+    欠けている場合（内容は完全な JSON）、`LedgerTruncatedTailError` を投げず、
+    まず欠けた "\n" を書いてから通常どおり追記する。結果ファイルは `}{` の
+    ような連結破損を起こさず、seq/prev_sha chain も連続する。"""
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "meter_call", "row_id": "r0"})
+    ledger.append({"kind": "meter_call", "row_id": "r1"})
+
+    full_content = path.read_text(encoding="utf-8")
+    path.write_text(full_content[:-1], encoding="utf-8")  # 末尾改行のみ除去
+
+    fresh = Ledger(path)
+    e2 = fresh.append({"kind": "meter_call", "row_id": "r2"})
+    assert e2.seq == 2
+
+    final_content = path.read_text(encoding="utf-8")
+    assert "}{" not in final_content  # 連結破損が起きていない
+    lines = [ln for ln in final_content.splitlines() if ln.strip()]
+    assert len(lines) == 3
+    for i, ln in enumerate(lines):
+        assert json.loads(ln)["seq"] == i
+
+    result = Ledger(path).verify_chain()
+    assert result.ok is True
+    assert result.entries_verified == 3
+    assert result.tamper_at_seq is None
+
+
 def test_ledger_two_instances_interleaved_append_no_sibling_seq(tmp_path) -> None:
     """[Codex レビュー 2026-09-01 採用] 同一パスに対する 2 つの `Ledger`
     インスタンスが交互に append しても、seq/prev_sha は on-disk の真の tail

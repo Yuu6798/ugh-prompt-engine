@@ -12,6 +12,13 @@ _MEASUREMENT_DIRECTORY_STATUS = "ABSENT:legacy_path=voice_genesis/harness/measur
 _ALL_METER_IDS = sorted(m.value for m in vocab.MeterId)
 
 
+def _full_independence_ledger() -> dict[str, str]:
+    """凍結 99 候補registry から独立性台帳を生成する（手書き 99 行を避ける）。"""
+    return {
+        c.candidate_id: c.independence_tier.value for c in candidate_registry.ALL_CANDIDATES
+    }
+
+
 def _complete_manifest() -> dict[str, object]:
     return {
         "repo": {
@@ -51,7 +58,7 @@ def _complete_manifest() -> dict[str, object]:
             "selection_rule": {"tie_rule": "candidate_id lexical"},
             "provenance_spec": {"schema": "vgcal-provenance/1"},
         },
-        "independence_ledger": {"F0_CONTROL": "INDEPENDENT_ANALYTIC"},
+        "independence_ledger": _full_independence_ledger(),
         "rng_ledger": [
             {"stream_name": "split_secret", "seeded": True, "public_seed_id": "1" * 64},
             {
@@ -244,10 +251,46 @@ def test_meter_specs_missing_one_meter_family_is_listed() -> None:
 
 def test_independence_ledger_invalid_tier_value_blocks() -> None:
     manifest = _complete_manifest()
-    manifest["independence_ledger"] = {"F0_CONTROL": "NOT_A_REAL_TIER"}
+    manifest["independence_ledger"]["F0-B0-CURRENT"] = "NOT_A_REAL_TIER"
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     assert any(k.startswith("independence_ledger[") for k in result.missing_required_keys)
+
+
+def test_independence_ledger_missing_candidate_id_blocks() -> None:
+    """[Codex レビュー 2026-09-01 P1] ledger のキー集合は凍結 99 候補
+    registry と完全一致しなければならない: 1 件欠落しただけで BLOCK。"""
+    manifest = _complete_manifest()
+    del manifest["independence_ledger"]["F0-B0-CURRENT"]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "missing candidate_id: 'F0-B0-CURRENT'" in k for k in result.missing_required_keys
+    )
+
+
+def test_independence_ledger_unknown_extra_candidate_id_blocks() -> None:
+    """registry に存在しない candidate_id が ledger に紛れ込んでいても BLOCK。"""
+    manifest = _complete_manifest()
+    manifest["independence_ledger"]["NOT-A-REAL-CANDIDATE-ID"] = "INDEPENDENT_ANALYTIC"
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "unknown/extra candidate_id: 'NOT-A-REAL-CANDIDATE-ID'" in k
+        for k in result.missing_required_keys
+    )
+
+
+def test_independence_ledger_tier_mismatch_blocks() -> None:
+    """ledger の tier が registry の宣言 tier と食い違えば BLOCK（cross-check）。"""
+    manifest = _complete_manifest()
+    # registry は F0-B0-CURRENT を INDEPENDENT_ANALYTIC と宣言する。
+    manifest["independence_ledger"]["F0-B0-CURRENT"] = "CROSS_IMPLEMENTATION"
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "tier mismatch" in k and "F0-B0-CURRENT" in k for k in result.missing_required_keys
+    )
 
 
 def test_rng_ledger_entry_missing_stream_name_blocks() -> None:
