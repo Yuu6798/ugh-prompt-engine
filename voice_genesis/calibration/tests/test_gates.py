@@ -1044,3 +1044,34 @@ def test_directional_sign_is_derived_from_measured_deltas_not_flag() -> None:
     assert result.all_resolvable_correct_sign is False
     assert result.adjacent_reversal_rate == 1.0
     assert result.passed is False
+
+
+def test_absolute_gates_invariance_pair_id_reused_across_axes_fails() -> None:
+    instances = [_instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)]
+    shared_ids = [f"shared-{i}" for i in range(5)]
+    axis_a = [
+        InvariancePair(pair_id=pid, axis="axis-a", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)
+        for pid in shared_ids
+    ]
+    axis_b = [
+        InvariancePair(pair_id=pid, axis="axis-b", ds=0.0, e_use_i0=1.0, e_use_ia=1.0)
+        for pid in shared_ids
+    ]
+
+    result = absolute_gates(
+        instances,
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis-a": axis_a, "axis-b": axis_b},
+        declared_invariance_axes={"axis-a", "axis-b"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+
+    assert result.gate4_invariance is False
+    assert result.passed is False
+    assert any(
+        "reused across invariance axes" in reason and "shared-0" in reason
+        for reason in result.failure_reasons
+    )

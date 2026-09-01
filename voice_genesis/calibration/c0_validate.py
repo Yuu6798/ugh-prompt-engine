@@ -2,8 +2,8 @@
 
 **本モジュールは dry-run 検証のみを行う。** ファイル書込・secret 生成・
 freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md §0
-授権境界）。`validate_c0_manifest()` は与えられた manifest mapping を
-読むだけの純関数であり、副作用を持たない。
+授権境界）。`validate_c0_manifest()` は manifest と検証対象 checkout の read-only identity
+（Git HEAD / dirty state）を読むが、書込・secret 生成などの副作用は持たない。
 
 設計正本 §18 は実行に先立つ 3 件のユーザー承認 Gate を要求する。本モジュールが
 実装するのは、そのうち **Gate 2（C0 freeze の実行承認）にまだ到達していない
@@ -134,6 +134,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -343,6 +344,71 @@ _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 #: 2 階層上がると repo root（本ファイルが `<repo_root>/voice_genesis/calibration/`
 #: 直下にある前提）。
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _inspect_checkout_identity(
+    repo_root: Path | None = None,
+) -> tuple[str | None, bool | None, str | None]:
+    """Return ``(HEAD, dirty, error)`` for the checkout being validated.
+
+    This is deliberately read-only.  C0 path hashes are computed from this checkout,
+    so accepting a caller-provided but unrelated commit SHA/dirty flag would make the
+    provenance pin describe different bytes than those actually inspected.  Git
+    inspection failure is returned as an error so the caller can fail closed.
+    """
+    root = repo_root if repo_root is not None else _REPO_ROOT
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if head.returncode != 0:
+            detail = head.stderr.strip() or head.stdout.strip() or f"exit {head.returncode}"
+            return None, None, f"git rev-parse HEAD failed: {detail}"
+        head_sha = head.stdout.strip()
+        if re.fullmatch(r"[0-9a-f]{40}", head_sha) is None:
+            return None, None, f"git rev-parse HEAD returned malformed SHA: {head_sha!r}"
+
+        status = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if status.returncode != 0:
+            detail = status.stderr.strip() or status.stdout.strip() or f"exit {status.returncode}"
+            return None, None, f"git status failed: {detail}"
+        return head_sha, bool(status.stdout.strip()), None
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, None, f"git checkout inspection failed: {exc}"
+
+
+def _check_checkout_identity(manifest: Mapping[str, object]) -> list[str]:
+    """Bind ``repo.commit_sha``/``repo.dirty_tree`` to the bytes being inspected."""
+    head_sha, dirty, error = _inspect_checkout_identity()
+    if error is not None or head_sha is None or dirty is None:
+        return [f"repo.checkout_identity ({error or 'unavailable'})"]
+
+    violations: list[str] = []
+    found_sha, declared_sha = _resolve(manifest, "repo.commit_sha")
+    if (
+        found_sha
+        and isinstance(declared_sha, str)
+        and re.fullmatch(r"[0-9a-f]{40}", declared_sha) is not None
+        and declared_sha != head_sha
+    ):
+        violations.append(
+            "repo.commit_sha (does not match inspected checkout HEAD: "
+            f"declared={declared_sha}, actual={head_sha})"
+        )
+    if dirty:
+        violations.append("repo.dirty_tree (inspected checkout is actually dirty)")
+    return violations
+
 
 #: 版管理されたクローズド inventory ファイル名（`voice_genesis/calibration/` 直下）。
 PATH_INVENTORY_FILENAME = "c0_path_inventory.json"
@@ -1052,6 +1118,7 @@ def _check_rng_ledger_unseeded(manifest: Mapping[str, object]) -> tuple[str, ...
 def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     """C0 freeze manifest を dry-run 検証する（書込・secret 生成・freeze event なし）。"""
     missing_required = _check_required_blocking(manifest)
+    missing_required += _check_checkout_identity(manifest)
     missing_required += _check_hash_maps(manifest)
     missing_required += _check_path_inventory_coverage(manifest)
     missing_required += _check_hash_map_category_uniqueness(manifest)

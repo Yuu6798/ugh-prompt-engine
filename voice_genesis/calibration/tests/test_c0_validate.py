@@ -43,6 +43,13 @@ def _real_sha256(repo_relative_path: str) -> str:
     return hashlib.sha256(file_path.read_bytes()).hexdigest()
 
 
+def _current_checkout_sha() -> str:
+    head_sha, _dirty, error = c0_validate._inspect_checkout_identity()
+    assert error is None
+    assert head_sha is not None
+    return head_sha
+
+
 def _classify_path(path: str) -> str:
     """分類規則: `candidates/` 配下 → meter、`fixtures/generators/` 配下 →
     generator、`tests/` 配下 → test、それ以外 → schema。分類そのものは記録上
@@ -135,7 +142,7 @@ def _complete_manifest() -> dict[str, object]:
     return {
         "repo": {
             "url": "https://github.com/Yuu6798/ugh-prompt-engine",
-            "commit_sha": "a" * 40,
+            "commit_sha": _current_checkout_sha(),
             "dirty_tree": False,
         },
         "measurement_directory_status": _MEASUREMENT_DIRECTORY_STATUS,
@@ -1015,3 +1022,33 @@ def test_repo_commit_sha_requires_full_lowercase_hex() -> None:
         assert result.is_blocked
         assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
         assert any("repo.commit_sha" in item for item in result.missing_required_keys)
+
+
+def test_well_formed_unrelated_commit_sha_blocks() -> None:
+    manifest = _complete_manifest()
+    actual = manifest["repo"]["commit_sha"]
+    unrelated = "0" * 40 if actual != "0" * 40 else "1" * 40
+    manifest["repo"]["commit_sha"] = unrelated
+
+    result = c0_validate.validate_c0_manifest(manifest)
+
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        key.startswith("repo.commit_sha (does not match inspected checkout HEAD")
+        for key in result.missing_required_keys
+    )
+
+
+def test_actual_dirty_checkout_blocks_even_if_manifest_claims_clean(monkeypatch) -> None:
+    manifest = _complete_manifest()
+    actual = manifest["repo"]["commit_sha"]
+    monkeypatch.setattr(
+        c0_validate,
+        "_inspect_checkout_identity",
+        lambda repo_root=None: (actual, True, None),
+    )
+
+    result = c0_validate.validate_c0_manifest(manifest)
+
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "repo.dirty_tree (inspected checkout is actually dirty)" in result.missing_required_keys

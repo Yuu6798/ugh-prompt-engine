@@ -293,6 +293,20 @@ def absolute_gates(
             f"declared_invariance_axes: {', '.join(unknown_bucket_keys)}"
         )
 
+    pair_id_buckets: dict[str, set[str]] = {}
+    for bucket_axis, bucket_pairs in invariance_pairs_by_axis.items():
+        for pair in bucket_pairs:
+            pair_id_buckets.setdefault(pair.pair_id, set()).add(bucket_axis)
+    cross_axis_reuse = sorted(
+        pair_id for pair_id, buckets in pair_id_buckets.items() if len(buckets) > 1
+    )
+    if cross_axis_reuse:
+        gate4 = False
+        reasons.append(
+            "gate4': duplicate pair_id(s) reused across invariance axes: "
+            + ", ".join(cross_axis_reuse)
+        )
+
     for axis in declared_invariance_axes:
         pairs = invariance_pairs_by_axis.get(axis, ())
         mislabeled = sorted({p.pair_id for p in pairs if p.axis != axis})

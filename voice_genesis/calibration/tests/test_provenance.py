@@ -14,6 +14,8 @@ from voice_genesis.calibration.provenance import (
     ProvenanceRecord,
     provenance_record_to_dict,
 )
+from voice_genesis.calibration.fixtures.controls import negative_control_row_ids
+from voice_genesis.calibration.fixtures.matrix import build_matrix
 from voice_genesis.calibration.vocab import BlockedCode
 
 
@@ -373,35 +375,39 @@ def test_check_leakage_ignores_non_render_meter_call_entries() -> None:
 
 
 def test_check_leakage_control_row_ids_excluded_non_control_holdout_still_detected() -> None:
-    """[IMPLEMENTATION_MAP_v1.md §2.7 control 共有契約] control 行
-    (`control_row_ids`) は sweep truth を運ばないため、unseal 前に holdout
-    split 上で参照されても leakage としない。一方、同じ entry 集合内の
-    非 control な holdout 行は従来どおり検出される。"""
+    """Only a frozen negative-control identity receives the exemption; a second
+    truth-bearing holdout row in the same entry set remains blocked."""
+    control_id = sorted(negative_control_row_ids(build_matrix()))[0]
+    truth_row = next(
+        mr
+        for mr in build_matrix()
+        if mr.row.block == "TRUTH_CORE" and mr.row.control_class is None
+    )
     entries = [
         LedgerEntry(
             seq=0,
             prev_sha="0" * 64,
             entry_sha="a" * 64,
-            payload={"kind": "render", "row_id": "holdout-control-1"},
+            payload={"kind": "render", "row_id": control_id},
         ),
         LedgerEntry(
             seq=1,
             prev_sha="a" * 64,
             entry_sha="b" * 64,
-            payload={"kind": "meter_call", "row_id": "holdout-control-1"},
+            payload={"kind": "meter_call", "row_id": control_id},
         ),
         LedgerEntry(
             seq=2,
             prev_sha="b" * 64,
             entry_sha="c" * 64,
-            payload={"kind": "meter_call", "row_id": "holdout-sweep-1"},
+            payload={"kind": "meter_call", "row_id": truth_row.row_id},
         ),
     ]
     result = Ledger.check_leakage(
         entries,
-        holdout_row_ids=["holdout-control-1", "holdout-sweep-1"],
+        holdout_row_ids=[control_id, truth_row.row_id],
         unseal_seq=None,
-        control_row_ids=["holdout-control-1"],
+        control_row_ids=[control_id],
     )
     assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
     assert result.control_excluded_count == 2
@@ -435,25 +441,26 @@ def test_ledger_tolerates_structurally_malformed_line_seq_only(tmp_path) -> None
 
 
 def test_check_leakage_control_row_pure_control_holdout_never_blocks() -> None:
+    control_id = sorted(negative_control_row_ids(build_matrix()))[0]
     entries = [
         LedgerEntry(
             seq=0,
             prev_sha="0" * 64,
             entry_sha="a" * 64,
-            payload={"kind": "render", "row_id": "holdout-control-1"},
+            payload={"kind": "render", "row_id": control_id},
         ),
         LedgerEntry(
             seq=1,
             prev_sha="a" * 64,
             entry_sha="b" * 64,
-            payload={"kind": "meter_call", "row_id": "holdout-control-1"},
+            payload={"kind": "meter_call", "row_id": control_id},
         ),
     ]
     result = Ledger.check_leakage(
         entries,
-        holdout_row_ids=["holdout-control-1"],
+        holdout_row_ids=[control_id],
         unseal_seq=None,
-        control_row_ids=["holdout-control-1"],
+        control_row_ids=[control_id],
     )
     assert result.blocked is None
     assert result.control_excluded_count == 2
@@ -504,3 +511,25 @@ def test_check_leakage_mismatched_unseal_commitments_fail_closed(tmp_path) -> No
         unseal_seq=None,
     )
     assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
+
+
+def test_check_leakage_caller_cannot_forge_truth_row_as_control() -> None:
+    truth_row = next(
+        mr for mr in build_matrix() if mr.row.block == "TRUTH_CORE" and mr.row.control_class is None
+    )
+    entry = LedgerEntry(
+        seq=0,
+        prev_sha="0" * 64,
+        entry_sha="a" * 64,
+        payload={"kind": "render", "row_id": truth_row.row_id},
+    )
+
+    result = Ledger.check_leakage(
+        [entry],
+        holdout_row_ids=[truth_row.row_id],
+        unseal_seq=None,
+        control_row_ids=[truth_row.row_id],
+    )
+
+    assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
+    assert result.control_excluded_count == 0

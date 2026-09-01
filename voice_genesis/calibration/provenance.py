@@ -752,7 +752,15 @@ class Ledger:
             verified_unseal_seq = None
 
         holdout_set = set(holdout_row_ids)
-        control_set = set(control_row_ids)
+        # ``control_row_ids`` is not an authority boundary.  A caller may request
+        # exemption only for rows that the committed frozen matrix independently
+        # identifies as truth-free negative controls.  Truth-bearing/unknown rows
+        # supplied here remain sealed.
+        from voice_genesis.calibration.fixtures.controls import negative_control_row_ids
+        from voice_genesis.calibration.fixtures.matrix import build_matrix
+
+        frozen_negative_controls = negative_control_row_ids(build_matrix())
+        control_set = set(control_row_ids) & set(frozen_negative_controls)
         control_excluded_count = 0
         for entry in ledger_entries:
             payload = entry.payload
