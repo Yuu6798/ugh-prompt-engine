@@ -126,6 +126,16 @@ def test_u_rep_empty_cell_ignored_not_singleton_special_case() -> None:
     assert u_rep(cells) == pytest.approx(1.0)
 
 
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_u_rep_nonfinite_repeat_returns_none(invalid: float) -> None:
+    """非有限 repeat を Python max/min の順序依存で有限 range に縮退させない。"""
+    cells = {
+        ("i1", "p1"): [1.0, invalid],
+        ("i2", "p1"): [0.0, 2.0],
+    }
+    assert u_rep(cells) is None
+
+
 def test_u_proc_two_process_hand_computed() -> None:
     # instance i1: [med1=2.0, med2=6.0] -> |diff|=4.0
     # instance i2: [med1=10.0, med2=10.5] -> |diff|=0.5
