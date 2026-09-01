@@ -63,6 +63,17 @@ Codex レビュー 2026-09-01（第 2 巡）採用分。正本改訂は §0 保�
   singleton process の range が構造ゼロとして q95 を希釈する。`u_rep` は **repeat 数 ≥ 2 の
   process group のみ**を母集団とする（n=1 の range は 0 でなく未定義。除外は U_rep を
   大きくする fail 側の保守的読み）
+- **R_ij の単位分解（§10.4）**: v1.0 の `R_ij` は truth 単位の `U_GT/U_num` と output 単位の
+  `U_rep/U_proc` を加算しており、truth と output の construct 単位が異なる候補（例: M2A 系 =
+  truth は injected fraction / output は HNR dB）では無意味になる。実装は単位健全な二連言に
+  分解する: (a) truth 側 resolvability `Delta_truth(i,j) > (U_GT_i+U_num_i)+(U_GT_j+U_num_j)`
+  （truth 単位のみ・事前決定可能）、(b) output 側有意性 `|Delta_output(i,j)| > 2*(U_rep+U_proc)`
+  （output 単位。§10.4 既存の「各 effect が noise floor 超過」連言の定式化）。単位可換な
+  construct（フラグで宣言）には v1.0 の合算式も**追加で**課し、定義可能な範囲で v1.0 の
+  保守性を弱めない（Codex レビュー第 3 巡 2026-09-01 採用）
+- **row_id 一意性（§5/§7）**: fixture matrix バリデーションは件数一致に加えて全 456 行の
+  canonical row_id の一意性を必須とする（重複 row は件数検査を素通りして計画セルを暗黙に
+  欠落させるため）。splitter も入力 row_id 重複を拒否する（Codex レビュー第 3 巡採用）
 - **M6 × CLAIM_CRITICAL_SET（§12）**: §12「CALIBRATED_ABSOLUTE component のみで構成」を
   部分集合の再構成と読まない。D1（C0 後の縮小禁止）・§8（1件でも missing/ineligible なら
   NOT_EVALUABLE）・§15（全 critical component ABSOLUTE 必須）と整合する唯一の読みとして、
