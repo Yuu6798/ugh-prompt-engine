@@ -404,6 +404,26 @@ def test_resonance_realized_prominence_matches_declared_across_bandwidth_extreme
     )
 
 
+def test_resonance_realized_prominence_matches_declared_with_snr_confound_noise() -> None:
+    """[Codex レビュー 2026-09-01 P1] declared `noise_snr_db` の nuisance noise
+    は `common.finalize()` が prominence 較正の**後**に加えるため、較正時に
+    想定した floor と最終 PCM の floor が食い違い、confound 行（noise 軸）では
+    実現 prominence が declared 値を下回っていた。20dB SNR の confound 行で、
+    FINAL PCM 上の実現 prominence が declared 値の許容誤差内に収まることを
+    確認する（回帰防止）。
+    """
+    tolerance_db = 1.5  # クリーンな場合と同じ近似誤差の上限目安を適用
+    row = _resonance_row(
+        center_hz=2000.0, resonance_bandwidth_hz=150.0, prominence_db=12.0,
+        duration_s=1.0, noise_clean=False, noise_snr_db=20,
+    )
+    pcm = resonance.render(row, _rng())
+    realized_db = _welch_local_prominence_db(pcm, row.sr_hz, row.center_hz, 150.0)
+    assert abs(realized_db - row.prominence_db) <= tolerance_db, (
+        f"snr_db=20 realized={realized_db:.3f}dB declared={row.prominence_db}dB"
+    )
+
+
 # ---------------------------------------------------------------------------
 # TRANSITION_GT: join 前後で振幅の不連続が検出できる
 # ---------------------------------------------------------------------------
@@ -421,6 +441,76 @@ def test_transition_amplitude_step_is_detectable_at_join_time() -> None:
     pre_rms = float(np.sqrt(np.mean(x[join_sample - window : join_sample] ** 2)))
     post_rms = float(np.sqrt(np.mean(x[join_sample : join_sample + window] ** 2)))
     assert post_rms > pre_rms * 1.1
+
+
+# ---------------------------------------------------------------------------
+# TRANSITION_GT: duration_class は遷移時間として物理化される
+# ([UNDERSPEC-CAL-B12], Codex レビュー 2026-09-01 P1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "join_type", ["amplitude-step", "phase-jump", "spectral-envelope-switch", "crossfade"]
+)
+def test_transition_short_vs_long_duration_class_differ_in_bytes(join_type: str) -> None:
+    """同一 severity で duration_class だけを short/long に変えると、遷移窓の
+    物理的な長さ（5ms vs 50ms）が異なるため PCM が byte-identical になっては
+    ならない（4 join type 全て）。"""
+    row_short = _transition_row(
+        join_type=join_type, severity="medium", duration_class="short",
+        discontinuity_magnitude=0.35,
+    )
+    row_long = _transition_row(
+        join_type=join_type, severity="medium", duration_class="long",
+        discontinuity_magnitude=0.35,
+    )
+    pcm_short = transition.render(row_short, _rng())
+    pcm_long = transition.render(row_long, _rng())
+    assert not np.array_equal(pcm_short, pcm_long)
+
+
+@pytest.mark.parametrize(
+    "join_type", ["amplitude-step", "phase-jump", "spectral-envelope-switch"]
+)
+def test_transition_ramp_widens_with_long_duration_class(join_type: str) -> None:
+    """long (50ms) は short (5ms) より遷移が widen し、join time から離れた
+    位置でもなお pre/post 中間状態にある区間が長く残ること（ramp が本当に
+    duration_class 由来の幅で実現されていることの直接検証。crossfade は元々
+    この性質を持つため対象外）。"""
+    row_short = _transition_row(
+        join_type=join_type, severity="high", duration_class="short",
+        discontinuity_magnitude=0.65, duration_s=0.4, join_time_s=0.2,
+    )
+    row_long = _transition_row(
+        join_type=join_type, severity="high", duration_class="long",
+        discontinuity_magnitude=0.65, duration_s=0.4, join_time_s=0.2,
+    )
+    pcm_short = transition.render(row_short, _rng())
+    pcm_long = transition.render(row_long, _rng())
+
+    join_sample = int(round(0.2 * SR))
+    probe = int(round(0.030 * SR))  # 30ms: within the long (50ms) ramp, outside short (5ms)
+    # 短い duration_class は join+30ms 時点で既に post-join 定常状態に収束
+    # しているはずだが、長い duration_class はまだ遷移途中（pre/post いずれの
+    # 定常値とも異なる）はず。
+    steady_pre = float(np.abs(pcm_short[join_sample - probe]))
+    steady_post_short = float(np.abs(pcm_short[join_sample + probe]))
+    mid_long = float(np.abs(pcm_long[join_sample + probe]))
+    # long の遷移途中サンプルは、short の (収束済み) post 値とは有意に異なる。
+    assert abs(mid_long - steady_post_short) > 0.01 * 32767.0 or abs(
+        mid_long - steady_pre
+    ) > 0.01 * 32767.0
+
+
+def test_transition_recorded_truth_carries_ramp_duration_and_magnitude() -> None:
+    """recorded truth は severity (`discontinuity_magnitude`) と ramp duration
+    の両方を担保する: `duration_class` から `[UNDERSPEC-CAL-B06]` の
+    short=5ms/long=50ms 写像で ramp 秒数が一意に導ける。"""
+    row = _transition_row(duration_class="short", discontinuity_magnitude=0.35)
+    assert row.duration_class == "short"
+    assert transition._DURATION_CLASS_S[row.duration_class] == 0.005
+    assert row.discontinuity_magnitude == 0.35
+    assert row.join_time_s is not None  # exact join time は変更なく記録され続ける
 
 
 # ---------------------------------------------------------------------------

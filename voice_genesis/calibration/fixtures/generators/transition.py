@@ -4,6 +4,20 @@ crossfade × 3 severities × 2 duration classes。exact join time・投入
 discontinuity magnitude を truth として生成時に記録する（`row.join_time_s` /
 `row.discontinuity_magnitude`。値そのものは `fixtures/matrix.py` が構築時に
 確定済み。本モジュールはそれを波形へ具現化するのみ）。
+
+`duration_class`（join 遷移窓長。short=5ms/long=50ms、`[UNDERSPEC-CAL-B06]`）は
+**遷移時間そのものとして物理化する**（`[UNDERSPEC-CAL-B12]`。Codex レビュー
+2026-09-01 P1: 従来 `amplitude-step`/`phase-jump`/`spectral-envelope-switch` は
+`join_sample` で瞬時に切り替わる実装で `duration_class` を一切参照しておらず、
+同一 severity の short/long 行が byte-identical に render されていた）。
+4 join type 全てで、severity（discontinuity magnitude、= レベル差そのもの）は
+不変のまま、`join_time_s` を中心に `duration_class` 由来の幅を持つ
+raised-cosine ramp で 2 つの状態を橋渡しする。`crossfade` は元々このパターン
+（`duration_class` 由来の window で 2 状態を混ぜる）だったため変更不要。
+recorded truth は `row.join_time_s`（exact join time、不変）+
+`row.discontinuity_magnitude`（severity）+ `row.duration_class`（ramp
+duration。`[UNDERSPEC-CAL-B06]` の short=5ms/long=50ms 写像により具体秒数が
+一意に定まる）の 3 者で ramp duration と magnitude の両方を担保する。
 """
 
 from __future__ import annotations
@@ -28,6 +42,31 @@ def _alt_envelope(x: np.ndarray, sr_hz: int) -> np.ndarray:
     return sosfiltfilt(sos, x)
 
 
+def _ramp_samples_for(row: object, sr_hz: int) -> int:
+    """`duration_class`（short=5ms/long=50ms, `[UNDERSPEC-CAL-B06]`）を遷移
+    窓のサンプル数へ変換する（`[UNDERSPEC-CAL-B12]`。未指定は long 扱い）。"""
+    ramp_s = _DURATION_CLASS_S.get(row.duration_class or "long", 0.050)
+    return max(1, int(round(ramp_s * sr_hz)))
+
+
+def _blend_envelope(n: int, center_sample: int, ramp_samples: int) -> np.ndarray:
+    """`center_sample` を中心に幅 `ramp_samples` の raised-cosine で 0→1 へ
+    遷移する envelope（ramp 窓外は 0/1 に飽和）。exact join time
+    （`row.join_time_s` → `center_sample`）は不変のまま、遷移の物理的な長さ
+    だけを `duration_class` に応じて変える（`[UNDERSPEC-CAL-B12]`）。"""
+    ramp_samples = max(1, ramp_samples)
+    half = ramp_samples // 2
+    start = max(0, center_sample - half)
+    end = min(n, start + ramp_samples)
+    start = max(0, end - ramp_samples)
+    env = np.zeros(n, dtype=np.float64)
+    env[end:] = 1.0
+    span = end - start
+    if span > 0:
+        env[start:end] = 0.5 * (1.0 - np.cos(np.pi * np.arange(span) / span))
+    return env
+
+
 def _core(row: object) -> np.ndarray:
     sr_hz = row.sr_hz
     f0_hz = row.f0_hz
@@ -40,13 +79,13 @@ def _core(row: object) -> np.ndarray:
     join_type = row.join_type
 
     if join_type == "amplitude-step":
-        x = base.copy()
-        x[join_sample:] *= 1.0 + mag
+        ramp_samples = _ramp_samples_for(row, sr_hz)
+        gain_env = _blend_envelope(n, join_sample, ramp_samples)
+        x = base * (1.0 + mag * gain_env)
         return common.peak_normalize(x)
 
     if join_type == "phase-jump":
         t = np.arange(n, dtype=np.float64) / sr_hz
-        x = base.copy()
         phase_shift = mag * np.pi
         second_half = np.zeros(n, dtype=np.float64)
         k = 1
@@ -55,13 +94,16 @@ def _core(row: object) -> np.ndarray:
             second_half += (1.0 / k) * np.sin(2.0 * np.pi * k * f0_hz * t + phase_shift)
             k += 1
         second_half = common.peak_normalize(second_half)
-        x[join_sample:] = second_half[join_sample:]
+        ramp_samples = _ramp_samples_for(row, sr_hz)
+        blend_env = _blend_envelope(n, join_sample, ramp_samples)
+        x = base * (1.0 - blend_env) + second_half * blend_env
         return common.peak_normalize(x)
 
     if join_type == "spectral-envelope-switch":
-        alt = common.peak_normalize(_alt_envelope(base, sr_hz))
-        x = base.copy()
-        x[join_sample:] = alt[join_sample:] * (1.0 + mag)
+        alt = common.peak_normalize(_alt_envelope(base, sr_hz)) * (1.0 + mag)
+        ramp_samples = _ramp_samples_for(row, sr_hz)
+        blend_env = _blend_envelope(n, join_sample, ramp_samples)
+        x = base * (1.0 - blend_env) + alt * blend_env
         return common.peak_normalize(x)
 
     if join_type == "crossfade":

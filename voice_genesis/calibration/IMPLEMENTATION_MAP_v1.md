@@ -164,7 +164,13 @@ truth construct を変える軸が関与するものは適用外。第 6 巡レ�
   共通 fail filter / holdout gate 5）で評価可とする。leakage 検査（`BLOCKED_LEAKAGE`）は
   control 行を明示除外し、除外集合と本契約を C0 manifest と台帳に記録する
 - 対 positive control（§4.2 両側条件）= family anchor の truth core 行 2 件を C0 で指定
-  （truth 行としての役割は不変。2 cell × 5 repeat = 10 instances で N_pos を充足）
+  （truth 行としての役割は不変）。**leakage 除外はこの positive 行には適用しない**
+  （第 7 巡レビュー採用: positive control は truth core 行そのものであり、home split が
+  HOLDOUT なら holdout seal の対象そのものである。leakage 除外集合に含めると unseal 前に
+  sweep truth を観測できてしまうため除外集合は negative のみとする）。positive 証拠は、
+  評価対象 split 内に既にある truth 行から instance 数で数える（selection 段階=
+  selection split 内の truth 行、holdout gate 5 = unseal 後の holdout split 内の truth
+  行。2 cell × 5 repeat = 10 instances で N_pos を trivially 充足し、seal を跨がない）
 - これにより N=6 family（negative 2 cell = 10 instances）でも gate 5 の最小数と
   selection fail filter を同時充足する
 

@@ -60,7 +60,7 @@ core）は **インフラ実装のみ** であり、以下は一切含まない:
 |---|---|
 | `fixtures/axes.py` | §5.1 primary/boundary 軸水準・§2.7 anchor 水準・family 別 truth 値の凍結定数 |
 | `fixtures/matrix.py` | `FixtureRow`（canonical dict → `row_id`）+ `MatrixRow`（+ domain）。family 別 truth core 因子分解・正準 nuisance/boundary/negative 系列の決定的レシピ・per-family targeted interaction 列挙・D2 + §3.3 F0 帯域整合検査による domain 導出・`validate_matrix()` / `assert_no_duplicate_row_ids()` |
-| `fixtures/controls.py` | `ControlClass` 閉語彙 + negative/positive control row_id 抽出（`provenance.check_leakage` の `control_row_ids` 用） |
+| `fixtures/controls.py` | `ControlClass` 閉語彙 + negative control row_id 抽出（`provenance.check_leakage` の `control_row_ids` 用。positive control は truth core 行のため leakage 除外集合には含めない）+ `positive_detection_instances()`（split 内 truth 行から N_pos を instance 数で数える） |
 | `fixtures/generators/common.py` | PCM 16-bit 量子化・dBFS gain・20ms cosine ramp・100ms voiced prefix/suffix・transition-adjacent context・declared SNR noise mixing |
 | `fixtures/generators/{f0_control,formant,tilt,aperiodicity,resonance,transition,identity_sweep}.py` | family 別決定論 generator。FORMANT_GT は resonator code path を共有しない 2 実装（cascade: `scipy.signal.lfilter` 時間領域 / additive: 閉形式 `\|H(f)\|` 周波数領域） |
 | `fixtures/determinism.py` | fresh-process byte-identity 検査 → 違反 `BLOCKED_C1_GENERATOR_NONDETERMINISTIC` |
@@ -125,6 +125,7 @@ Phase C の B0 wrapper には適用されない。タスク境界で明示的に
 | `UNDERSPEC-CAL-B09` | `fixtures/axes.py` | F0_CONTROL の第 2 confound anchor（設計正本 §2.7 の anchor 一覧は単一 anchor C4@48k のみ明記するが、confound 件数検算「F0 24=11+6+7」は FORMANT_GT/IDENTITY と同型の 2-anchor 構造を要求する）を G4@48k（F0 のみ変更）とした |
 | `UNDERSPEC-CAL-B10` | `fixtures/axes.py` | single-anchor family（TILT/APERIODICITY/RESONANCE/TRANSITION）の positive control 用第 2 anchor（§2.7 control 共有契約は「2 anchor truth rows per family」を要求するが、これら 4 family の anchor 一覧は単一 anchor のみ明記）を、truth core grid 上で A1 と最も対照的な点（primary sweep 軸の反対端）とした |
 | `UNDERSPEC-CAL-B11` | `fixtures/generators/tilt.py` | TILT_GT の dB/oct slope 定義を `A_k[dB]=slope*log2(k)`（高調波次数 k の log2、`k=1` を 0dB 基準）の 1 定義に凍結した（回帰ルーチンは使わず、meter 側の tilt 推定と非共有） |
+| `UNDERSPEC-CAL-B12` | `fixtures/generators/transition.py` | `duration_class`（short=5ms/long=50ms, `UNDERSPEC-CAL-B06`）を 4 join type（amplitude-step/phase-jump/spectral-envelope-switch/crossfade）全てで「join time を中心とした raised-cosine 遷移窓の物理的な長さ」として具現化した（Codex レビュー 2026-09-01 P1: 従来 crossfade 以外の 3 join type は瞬時切り替えで `duration_class` を無視しており、同一 severity の short/long 行が byte-identical に render されていた） |
 | `UNDERSPEC-CAL-C01` | `candidates/impl/b0_wrappers.py` | 5 つの B0 candidate と harness 関数の配線対応（`F0-B0-CURRENT`→`estimate_f0_hps`、`M3-B0-CURRENT-CENTROID`/`M4-B0-CURRENT-CENTROID`→ともに `formant_centroid_and_f1`（M3/M4 で同一の現行 centroid 実装を診断的に再利用）、`M2T-B0-CURRENT-HYBRID`→`source_tilt_v2`（regression/h1h2 の unit 混在そのものが「HYBRID」の実体。`spectral_tilt_db_per_oct` は legacy 参照値として diagnostics に同梱）、`M2A-B0-AUTOCORR-PERIODICITY`→`hnr_db_approx`）を設計正本の候補名一致から導いた |
 | `UNDERSPEC-CAL-C02` | `candidates/impl/formant_cepstral.py` | M3 formant 系のピーク missing 閾値を「帯域内ピーク 0 個で OUTPUT_MISSING」とした（M2T の「K 本未満は missing」に相当する明記が M3 にはないため、最も単純な閾値を採用） |
 | `UNDERSPEC-CAL-C03` | `candidates/impl/formant_burg.py` | Burg LPC 実装詳細（リサンプラ=`scipy.signal.resample_poly`（有理比を `Fraction` で厳密化）、preemphasis=1 次ハイパス時定数として `preemph_hz` を解釈、窓関数=Hamming、極選択=単位円内・虚部正・周波数昇順）を機械的に選んだ |
@@ -138,6 +139,8 @@ Phase C の B0 wrapper には適用されない。タスク境界で明示的に
 | `UNDERSPEC-CAL-C11` | `c0_validate.py` | `frozen_design.meter_specs` が `candidates.registry.ALL_CANDIDATES` の全 meter family（vocab.MeterId 全件）をカバーすることを要求し、欠落 meter を個別キーとして列挙する規則にした（Codex レビュー 2026-09-01 P1） |
 | `UNDERSPEC-CAL-C12` | `c0_validate.py` | `independence_ledger` の各エントリ値を `vocab.IndependenceTier` の閉語彙メンバーであることまで検証した（Codex レビュー 2026-09-01 P1）。加えて、ledger のキー集合は `candidates.registry.ALL_CANDIDATES` の凍結 99 candidate_id 全集合と完全一致（欠落・unknown/extra を個別列挙）、各 entry の tier は registry 宣言 tier と一致（不一致を個別列挙）することを要求する（Codex レビュー 2026-09-01 追加 P1: 従来はキー集合の網羅性を一切検査していなかった） |
 | `UNDERSPEC-CAL-C13` | `c0_validate.py` | `rng_ledger` エントリの形状を `{"stream_name": str(非空), "seeded": bool}` に加え、`seeded=true` の場合は非空 `public_seed_id`（`streams.RngLedgerEntry.public_seed_id` と命名を揃えた seed 参照）を必須とした（Codex レビュー 2026-09-01 P1: §3.3「stream 列挙 + seed 参照」の反映） |
+| `UNDERSPEC-CAL-C14` | `c0_validate.py` | path+hash 系マップ（`candidates.*_paths_sha256`）4 カテゴリの合併集合が要求すべき inventory を、実リポジトリの `voice_genesis/calibration/**/*.py` 全件列挙（`calibration_path_inventory()`、public 関数として freeze script 再利用可）として機械定義した（Codex レビュー 2026-09-01 P1: 従来は supplied entries のみを検証しファイル省略・phantom path 混入を検出できなかった） |
+| `UNDERSPEC-CAL-C15` | `fixtures/generators/resonance.py` | declared `noise_snr_db` の nuisance noise を prominence 較正の floor 測定より前に解析的に折り込む式（pre-gain スケールでの SNR 式適用。gain は mixed signal 全体への単一スカラー倍のため相対 dB 比を保存する）を採用した（Codex レビュー 2026-09-01 P1: 従来 `common.finalize()` が較正後にこの noise を加えており、noise 軸 confound 行で実現 prominence が declared 値を下回っていた） |
 
 以下は Codex レビュー（2026-09-01、複数巡）で採用され `IMPLEMENTATION_MAP_v1.md`
 に凍結された仕様であり、上表の UNDERSPEC には数えない（正本の一部として実装

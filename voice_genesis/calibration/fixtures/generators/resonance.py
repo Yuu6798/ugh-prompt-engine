@@ -35,6 +35,18 @@ prominence 実現則（Codex レビュー 2026-09-01 P2 改訂）: truth は
    （shortfall, dB）を計算し、`10**(shortfall/20)` を peak 成分へ追加で
    一括乗算する（測定 → 補正の 1 パスのみ。確率的な繰り返し探索なし）。
 
+**declared SNR nuisance noise の折り込み**（Codex レビュー 2026-09-01 P1）:
+confound 行に declared `noise_snr_db` が設定されている場合、`common.
+finalize()` は通常この noise を本補正パスの**後**（gain・context 適用後）に
+加える。そのため較正時に想定した floor と最終 PCM の floor が食い違い、
+noise 軸の confound 行では実現 prominence が declared 値を下回っていた。
+本実装は `_nuisance_noise_component()` でこの noise を解析的に事前生成し、
+floor 測定（上記 2(b)）より前に折り込む。gain 適用は mixed signal 全体への
+単一スカラー倍（peak 正規化 + 一定倍率）であり相対 dB 比を保存するため、この
+pre-gain 折り込みで最終 PCM 上の宣言 SNR・宣言 prominence の両方が整合する
+（`render()` 側は `common.finalize()` の noise 適用を skip させ、二重適用を
+防ぐ。`[UNDERSPEC-CAL-C15]`）。
+
 **近似誤差と U_GT への寄与**: この 1-パス補正は「peak 窓内の PSD レベルは
 floor 成分の寄与を無視できるほど peak 成分が支配的である」という線形近似に
 基づく（peak 成分をスケール `c` 倍すると、peak 窓内のパワーはおおむね `c**2`
@@ -48,6 +60,8 @@ floor 成分の寄与を無視できるほど peak 成分が支配的である�
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 import numpy as np
 from scipy.signal import iirpeak, lfilter, welch
@@ -91,6 +105,55 @@ def _measure_floor_db(floor: np.ndarray, sr_hz: int) -> float:
     return float(np.median(psd_db[valid]))
 
 
+def _nuisance_noise_component(
+    row: object, rng: np.random.Generator, reference_signal: np.ndarray
+) -> np.ndarray | None:
+    """declared `noise_snr_db` の nuisance noise 成分を、`common.add_noise_at_snr`
+    が使う式と同一の SNR 式で解析的に事前生成する（`[UNDERSPEC-CAL-C15]`。Codex
+    レビュー 2026-09-01 P1）。
+
+    **バグの所在**: `common.finalize()` は通常この noise を **prominence 較正の
+    後**（gain・context 適用後）に加える。そのため較正時に想定した spectral
+    floor と、最終 PCM に実際に現れる floor が食い違い、confound 行（declared
+    SNR 付き）では最終 PCM 上の実現 prominence が declared 値を下回っていた。
+
+    **修正の algebra**: `common.apply_gain_dbfs` は mixed signal 全体（floor +
+    peak 成分）への**単一スカラー倍**（peak 正規化 + 一定倍率）であり、
+    成分間の相対 dB 比を保存する。したがって nuisance noise をこの pre-gain
+    スケールで生成し `floor` へ折り込んでおけば、後段の gain 適用・PCM 量子化
+    を経ても、宣言 SNR と宣言 prominence の両方が最終 PCM 上で整合する
+    （`render()` 側で `common.finalize()` の重複 noise 適用を止める必要がある
+    — 二重適用こそが元のバグだった）。
+
+    ここでの `reference_signal`（floor + 較正前 peak 成分）は `common.
+    add_noise_at_snr` が通常参照する「noise 適用直前の signal」に相当する
+    pre-gain 版のプロキシである。gain は後段で mixed signal 全体へ均一に
+    掛かるスカラーに過ぎないため、この pre-gain スケールで SNR を合わせて
+    おけば最終 PCM 上の SNR も宣言値に一致する。prominence 較正の
+    `correction` 係数は peak 成分のみに掛かる小さな残差補正（module docstring
+    の one-shot 近似誤差 ±1.5dB 相当）であり、nuisance の基準信号には織り込ま
+    ない（correction を織り込むと floor 側の nuisance 計算が correction 自身
+    に依存する循環になるため）。
+
+    `context` 系列（20ms-cosine-ramp 等）由来で `core` 配列長が伸びる行との
+    組合せは、正準 nuisance 系列が「1 行につき 1 軸のみ変更」（`axes.
+    CANONICAL_NUISANCE_SEQUENCE`）のため RESONANCE_GT の固定 456-cell 行列には
+    現れない（noise 軸と context 軸が同一行で同時に変わる行が存在しない）。
+    """
+    if row.noise_clean or row.noise_snr_db is None:
+        return None
+    signal_power = float(np.mean(np.square(reference_signal)))
+    if signal_power <= 0.0:
+        return None
+    raw = rng.standard_normal(reference_signal.size)
+    raw_power = float(np.mean(np.square(raw)))
+    if raw_power <= 0.0:
+        return None
+    target_noise_power = signal_power / (10.0 ** (row.noise_snr_db / 10.0))
+    scale = np.sqrt(target_noise_power / raw_power)
+    return raw * scale
+
+
 def _core(row: object, rng: np.random.Generator) -> np.ndarray:
     sr_hz = row.sr_hz
     n = common.n_samples(row.duration_s, sr_hz)
@@ -109,13 +172,21 @@ def _core(row: object, rng: np.random.Generator) -> np.ndarray:
     target_ratio = 10.0 ** (row.prominence_db / 20.0)
     scaled_peak = peak_component * (target_ratio * floor_rms / peak_rms)
 
+    # declared-SNR nuisance noise を floor 測定より前に折り込む（Codex レビュー
+    # 2026-09-01 P1: 較正後に nuisance を足す元の順序では floor が事後的に
+    # 上がり、実現 prominence が declared 値を下回っていた）。
+    nuisance = _nuisance_noise_component(row, rng, floor + scaled_peak)
+    combined_floor = floor if nuisance is None else floor + nuisance
+
     # one-shot 補正パス（測定 → 不足分算出 → 1 回だけ追加乗算。反復なし）。
-    floor_db = _measure_floor_db(floor, sr_hz)
-    unit_pass_peak_db = _measure_peak_db(floor + scaled_peak, sr_hz, center, bandwidth)
+    # floor 測定は combined_floor（内部励起 floor + nuisance noise の総和）
+    # 上で行うため、補正はこの「最終的に実現される総 floor」を基準にする。
+    floor_db = _measure_floor_db(combined_floor, sr_hz)
+    unit_pass_peak_db = _measure_peak_db(combined_floor + scaled_peak, sr_hz, center, bandwidth)
     shortfall_db = float(row.prominence_db) - (unit_pass_peak_db - floor_db)
     correction = 10.0 ** (shortfall_db / 20.0)
 
-    mixed = floor + scaled_peak * correction
+    mixed = combined_floor + scaled_peak * correction
     return common.peak_normalize(mixed)
 
 
@@ -124,4 +195,9 @@ def render(row: object, rng: np.random.Generator) -> np.ndarray:
     core = common.negative_control_core(row, rng, n, row.f0_hz)
     if core is None:
         core = _core(row, rng)
+        # declared-SNR nuisance noise（あれば）は `_core`/
+        # `_nuisance_noise_component` が既に折り込み済みなので、
+        # `common.finalize()` に二重で足させない（元のバグの本体）。
+        finalize_row = row if row.noise_clean else replace(row, noise_clean=True)
+        return common.finalize(core, finalize_row, rng)
     return common.finalize(core, row, rng)

@@ -156,6 +156,28 @@ def derive_generator(
     return np.random.Generator(np.random.PCG64(seed))
 
 
+def stream_name(
+    *,
+    campaign_id: str,
+    family: str,
+    split: str,
+    row_id: str,
+    probe_index: int,
+    purpose: str,
+) -> str:
+    """`c0_validate._check_rng_ledger_shape` が要求する `stream_name` を、
+    stream を一意に分離する 6 field から機械的に導出する（Codex レビュー
+    2026-09-01 P1: 従来 `RngLedgerEntry`/`to_records()` はこの field 自体を
+    持たず、canonical な producer の出力が常に C0 dry-run 検証で BLOCK されて
+    いた）。区切り文字 `/` は各 field の内容には現れない前提（`campaign_id`/
+    `family`/`split`/`purpose` は閉語彙由来、`row_id` は canonical row_id 由来
+    でいずれもスラッシュを含まない）。衝突耐性が必要な同一性判定そのものは
+    `stream_info()` の長さ接頭辞方式 info バイト列（HKDF 導出の実引数）が担う
+    ため、この文字列表現は人間可読な台帳ラベルの役割に留める。
+    """
+    return f"{campaign_id}/{family}/{split}/{row_id}/{probe_index}/{purpose}"
+
+
 @dataclass(frozen=True)
 class RngLedgerEntry:
     """1 stream 分の台帳エントリ。secret は記録しない
@@ -168,6 +190,8 @@ class RngLedgerEntry:
     row_id: str
     probe_index: int
     public_seed_id: str
+    stream_name: str
+    seeded: bool = True
 
 
 @dataclass
@@ -208,20 +232,34 @@ class RngLedger:
             row_id=row_id,
             probe_index=probe_index,
             public_seed_id=public_seed_id,
+            stream_name=stream_name(
+                campaign_id=campaign_id,
+                family=family,
+                split=split,
+                row_id=row_id,
+                probe_index=probe_index,
+                purpose=purpose,
+            ),
+            seeded=True,  # `record()` は常に HKDF から実際に seed を導出済み
         )
         self.entries.append(entry)
         return entry
 
     def to_records(self) -> list[dict[str, object]]:
+        """`c0_validate._check_rng_ledger_shape` が要求する形状
+        (`stream_name`/`seeded`/`seeded=True` 時の `public_seed_id`) を満たす
+        dict を返す（既存 field は維持。Codex レビュー 2026-09-01 P1）。"""
         return [
             {
+                "stream_name": e.stream_name,
+                "seeded": e.seeded,
+                "public_seed_id": e.public_seed_id,
                 "purpose": e.purpose,
                 "campaign_id": e.campaign_id,
                 "family": e.family,
                 "split": e.split,
                 "row_id": e.row_id,
                 "probe_index": e.probe_index,
-                "public_seed_id": e.public_seed_id,
             }
             for e in self.entries
         ]

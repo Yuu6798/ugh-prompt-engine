@@ -177,3 +177,59 @@ def test_rng_ledger_accumulates_multiple_entries() -> None:
         )
     assert len(ledger.entries) == 3
     assert len(ledger.to_records()) == 3
+
+
+def test_rng_ledger_records_carry_stream_name_and_seeded() -> None:
+    """Codex レビュー 2026-09-01 P1: `to_records()` は `stream_name`/`seeded`
+    を欠いており、canonical な producer の出力が `c0_validate` の RNG 台帳
+    形状検査を常に BLOCK していた。"""
+    secret = b"\x08" * 32
+    ledger = RngLedger()
+    entry = ledger.record(
+        secret,
+        campaign_id="RUN10-CAL",
+        family="F0_CONTROL",
+        split="CALIBRATION",
+        row_id="row-1",
+        probe_index=2,
+        purpose="generator",
+    )
+    assert entry.stream_name == "RUN10-CAL/F0_CONTROL/CALIBRATION/row-1/2/generator"
+    assert entry.seeded is True
+
+    [record] = ledger.to_records()
+    assert record["stream_name"] == entry.stream_name
+    assert record["seeded"] is True
+    assert record["public_seed_id"] == entry.public_seed_id
+
+
+def test_rng_ledger_producer_round_trips_through_c0_validate_with_no_rng_block() -> None:
+    """producer (`RngLedger.record` 経由の `to_records()`) → validator
+    (`c0_validate._check_rng_ledger_shape` / `BLOCKED_C0_UNSEEDED_RNG`) の
+    往復テスト（Codex レビュー 2026-09-01 P1 の回帰防止: canonical producer の
+    出力が形状不一致で常に BLOCKED_C0_MANIFEST_INCOMPLETE になっていた）。
+    """
+    from voice_genesis.calibration import c0_validate, vocab
+
+    secret = b"\x09" * 32
+    ledger = RngLedger()
+    for i, purpose in enumerate(("split_tiebreak", "generator")):
+        ledger.record(
+            secret,
+            campaign_id="RUN10-CAL",
+            family="F0_CONTROL",
+            split="CALIBRATION",
+            row_id=f"row-{i}",
+            probe_index=0,
+            purpose=purpose,
+        )
+
+    manifest = {"rng_ledger": ledger.to_records()}
+    result = c0_validate.validate_c0_manifest(manifest)
+
+    # RNG 台帳自体は形状・seed 参照ともに妥当なので、RNG 由来の block/missing
+    # key は一切現れない（他キー欠落による BLOCKED_C0_MANIFEST_INCOMPLETE は
+    # 本テストの対象外 — manifest はわざと rng_ledger のみを与えている）。
+    assert vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG not in result.blocked_codes
+    assert not any(k.startswith("rng_ledger") for k in result.missing_required_keys)
+    assert result.unseeded_rng_streams == ()

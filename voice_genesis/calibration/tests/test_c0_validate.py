@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 
 from voice_genesis.calibration import c0_validate, vocab
 from voice_genesis.calibration.candidates import registry as candidate_registry
@@ -19,6 +20,42 @@ def _full_independence_ledger() -> dict[str, str]:
     }
 
 
+def _fake_sha256(path: str) -> str:
+    """テスト用の決定的な擬似 sha256（path から機械的に導出。実ハッシュ値では
+    ない）。"""
+    return hashlib.sha256(path.encode("utf-8")).hexdigest()
+
+
+def _full_path_inventory_maps() -> dict[str, dict[str, str]]:
+    """`c0_validate.calibration_path_inventory()`（本体側と同一の inventory
+    helper。Codex レビュー 2026-09-01 P1）から 4 カテゴリの path+hash マップを
+    機械生成する。分類規則: `candidates/` 配下 → meter、
+    `fixtures/generators/` 配下 → generator、`tests/` 配下 → test、それ以外 →
+    schema。分類そのものは記録上の区分であり `_check_path_inventory_coverage`
+    は合併集合の網羅性のみを要求する。
+    """
+    meter: dict[str, str] = {}
+    generator: dict[str, str] = {}
+    schema: dict[str, str] = {}
+    test: dict[str, str] = {}
+    for path in sorted(c0_validate.calibration_path_inventory()):
+        h = _fake_sha256(path)
+        if path.startswith("voice_genesis/calibration/candidates/"):
+            meter[path] = h
+        elif path.startswith("voice_genesis/calibration/fixtures/generators/"):
+            generator[path] = h
+        elif path.startswith("voice_genesis/calibration/tests/"):
+            test[path] = h
+        else:
+            schema[path] = h
+    return {
+        "meter_paths_sha256": meter,
+        "generator_paths_sha256": generator,
+        "schema_paths_sha256": schema,
+        "test_paths_sha256": test,
+    }
+
+
 def _complete_manifest() -> dict[str, object]:
     return {
         "repo": {
@@ -27,12 +64,7 @@ def _complete_manifest() -> dict[str, object]:
             "dirty_tree": False,
         },
         "measurement_directory_status": _MEASUREMENT_DIRECTORY_STATUS,
-        "candidates": {
-            "meter_paths_sha256": {"voice_genesis/calibration/candidates/registry.py": "b" * 64},
-            "generator_paths_sha256": {"voice_genesis/calibration/fixtures/generators": "c" * 64},
-            "schema_paths_sha256": {"voice_genesis/calibration/vocab.py": "d" * 64},
-            "test_paths_sha256": {"voice_genesis/calibration/tests": "e" * 64},
-        },
+        "candidates": _full_path_inventory_maps(),
         "dependencies": {
             "python_version": "3.11.9",
             "numpy_version": "2.4.6",
@@ -236,6 +268,46 @@ def test_hash_map_entry_with_empty_path_blocks() -> None:
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     assert any(
         k.startswith("candidates.meter_paths_sha256[") for k in result.missing_required_keys
+    )
+
+
+def test_path_inventory_covers_full_calibration_package() -> None:
+    """fixture 自体の健全性: `_full_path_inventory_maps()` の 4 カテゴリ合併集合
+    が `calibration_path_inventory()` と厳密一致すること。"""
+    maps = _full_path_inventory_maps()
+    declared = set(maps["meter_paths_sha256"]) | set(maps["generator_paths_sha256"])
+    declared |= set(maps["schema_paths_sha256"]) | set(maps["test_paths_sha256"])
+    assert declared == c0_validate.calibration_path_inventory()
+
+
+def test_path_inventory_dropped_file_blocks() -> None:
+    """[Codex レビュー 2026-09-01 P1] ある実ファイルを 4 マップいずれからも
+    省略すると、supplied entries の形状は妥当なままでも BLOCK する
+    （従来は "供給された entry のみ" しか検証していなかったため通過していた）。
+    """
+    manifest = _complete_manifest()
+    dropped = "voice_genesis/calibration/streams.py"
+    schema = manifest["candidates"]["schema_paths_sha256"]
+    assert dropped in schema
+    del schema[dropped]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "missing required path" in k and dropped in k for k in result.missing_required_keys
+    )
+
+
+def test_path_inventory_phantom_extra_path_blocks() -> None:
+    """[Codex レビュー 2026-09-01 P1] リポジトリに実在しない phantom path を
+    紛れ込ませても BLOCK する（"供給された entry のみ" 検証では気づけない）。
+    """
+    manifest = _complete_manifest()
+    phantom = "voice_genesis/calibration/not_a_real_file.py"
+    manifest["candidates"]["schema_paths_sha256"][phantom] = "a" * 64
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "unknown/extra path" in k and phantom in k for k in result.missing_required_keys
     )
 
 

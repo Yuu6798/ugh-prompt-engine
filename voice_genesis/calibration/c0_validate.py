@@ -22,7 +22,13 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
     「未記録」と同義として missing 扱い）。
   - path+hash 系マップ（`candidates.*_paths_sha256`）は各エントリが
     `path -> sha256` 形状で、path は非空文字列、sha256 は 64 桁の小文字
-    16 進文字列であることを検査する（`[UNDERSPEC-CAL-C10]`）。
+    16 進文字列であることを検査する（`[UNDERSPEC-CAL-C10]`）。加えて、4 マップ
+    の**合併集合**が `calibration_path_inventory()`（実リポジトリの
+    `voice_genesis/calibration/**/*.py` 全件）と厳密一致することを要求する
+    （欠落 path・inventory に無い unknown/extra path をそれぞれ個別列挙。
+    `[UNDERSPEC-CAL-C14]`。Codex レビュー 2026-09-01 P1: 従来は supplied
+    entries の形状のみを検証しており、ファイルを丸ごと省略しても通過して
+    しまっていた）。
   - `frozen_design.meter_specs` は `candidates.registry.ALL_CANDIDATES` が
     定義する全 meter family をカバーする（欠落 meter は
     `frozen_design.meter_specs.<METER_ID>` として個別に列挙する。
@@ -70,6 +76,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from . import vocab
 from .candidates import registry as candidate_registry
@@ -117,6 +124,29 @@ HASH_MAP_KEYS: tuple[str, ...] = (
 )
 
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+#: `c0_validate.py` 自身のパス（`voice_genesis/calibration/c0_validate.py`）から
+#: 2 階層上がると repo root（本ファイルが `<repo_root>/voice_genesis/calibration/`
+#: 直下にある前提）。
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def calibration_path_inventory(repo_root: Path | None = None) -> frozenset[str]:
+    """`voice_genesis/calibration/**/*.py` の repo-relative path 全集合を返す。
+
+    設計正本 §3.1「候補 meter・generator・schema・test の全 path + SHA-256」の
+    "全" を機械的に判定できる正本として、実リポジトリのファイルツリーを直接
+    列挙する（Codex レビュー 2026-09-01 P1: 従来は supplied entries の形状のみ
+    検証しており、ファイルを丸ごと省略しても通過してしまっていた）。tests/
+    配下も対象に含める（§3.1 は test path のカバレッジも要求する）。
+
+    public 関数として公開する: 将来 C0 freeze を実際に実行する武装版スクリプト
+    （§18 Gate 2 承認後）が、この dry-run 検証と同一の inventory 定義を再利用
+    できるようにするため。
+    """
+    root = repo_root if repo_root is not None else _REPO_ROOT
+    package_dir = root / "voice_genesis" / "calibration"
+    return frozenset(p.relative_to(root).as_posix() for p in package_dir.rglob("*.py"))
 
 #: RECORDED_OR_ABSENT（§3.2）。値 または `"ABSENT:<理由>"` のいずれかが必須。
 RECORDED_OR_ABSENT_KEYS: tuple[str, ...] = (
@@ -223,6 +253,41 @@ def _check_hash_maps(manifest: Mapping[str, object]) -> list[str]:
                 violations.append(
                     f"{key}[{path!r}] (sha256 must be 64 lowercase hex chars, got {sha!r})"
                 )
+    return violations
+
+
+def _check_path_inventory_coverage(manifest: Mapping[str, object]) -> list[str]:
+    """4 つの path+hash 系マップ（`HASH_MAP_KEYS`）の**合併集合**が、実リポジトリの
+    `calibration_path_inventory()` と厳密一致することを検査する（設計正本 §3.1
+    「候補 meter・generator・schema・test の全 path + SHA-256」。Codex レビュー
+    2026-09-01 P1: 従来は supplied entries の形状のみを検証しており、ファイルを
+    丸ごと省略しても・関係ない phantom path を紛れ込ませても通過してしまっていた）。
+
+    4 カテゴリの**各々**が inventory を個別にカバーする必要はない（meter/
+    generator/schema/test の切り分けは記録上の分類であり、正本はカテゴリ単位の
+    完全性までは要求しない）。missing（inventory にあるが 4 マップいずれにも
+    無い）・unknown（4 マップのどこかにあるが inventory に無い）をそれぞれ個別
+    に列挙する。いずれかのマップが欠落/空/非 mapping の場合は
+    `_check_required_blocking`/`_check_hash_maps` 側で既に捕捉されるため、ここ
+    では二重報告を避けてスキップする。
+    """
+    declared: set[str] = set()
+    for key in HASH_MAP_KEYS:
+        found, value = _resolve(manifest, key)
+        if not found or _is_hollow(value) or not isinstance(value, Mapping):
+            return []
+        declared.update(p for p in value.keys() if isinstance(p, str))
+
+    inventory = calibration_path_inventory()
+    missing = sorted(inventory - declared)
+    unknown = sorted(declared - inventory)
+    violations = [
+        f"candidates.*_paths_sha256 (missing required path: {p!r})" for p in missing
+    ]
+    violations += [
+        f"candidates.*_paths_sha256 (unknown/extra path not in repo inventory: {p!r})"
+        for p in unknown
+    ]
     return violations
 
 
@@ -388,6 +453,7 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     """C0 freeze manifest を dry-run 検証する（書込・secret 生成・freeze event なし）。"""
     missing_required = _check_required_blocking(manifest)
     missing_required += _check_hash_maps(manifest)
+    missing_required += _check_path_inventory_coverage(manifest)
     missing_required += _check_meter_specs_coverage(manifest)
     missing_required += _check_independence_ledger(manifest)
     missing_required += _check_rng_ledger_shape(manifest)
