@@ -26,7 +26,9 @@ jobs:
           cache: pip
 
       - name: Apply bounded fixes
-        run: python .github/pr342_gate_transition_patch.py
+        run: |
+          python .github/pr342_gate_transition_patch.py
+          python .github/pr342_gate_transition_compat.py
 
       - name: Install test dependencies
         run: pip install -e ".[dev]"
