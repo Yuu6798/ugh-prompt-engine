@@ -140,8 +140,9 @@ def absolute_gates(
     gate 4': 各 invariance 軸 a で
              q95_pairs( dS[a,pair] + U_rep + U_proc - min(E_use_i0,E_use_ia) ) <= 0
              （各軸 >= 5 pairs 必須。未達なら ABSOLUTE 不可）
-    gate 5: FDR0 == 0 かつ FNR1 == 0（最小数条件付き。または control_gate
-            NOT_APPLICABLE で通過）
+    gate 5: FDR0 == 0 かつ FNR1 == 0（最小数条件付き）。current frozen
+            campaign は全 fixture family が APPLICABLE のため、runtime の
+            control_gate=NOT_APPLICABLE は bypass 権限として扱わない。
     ```
 
     境界は `<= 0` が PASS（G が厳密に 0 でも PASS）。AE が median 経由で noise を
@@ -363,8 +364,18 @@ def absolute_gates(
             gate4 = False
             reasons.append(f"gate4': axis {axis} q95 margin > 0")
 
-    gate5 = (control_gate == "NOT_APPLICABLE") or (min_count_met and fdr0 == 0.0 and fnr1 == 0.0)
-    if not gate5:
+    # The frozen campaign declaration in fixtures.controls is APPLICABLE for every
+    # fixture family.  `control_gate` is retained for API compatibility/audit input,
+    # but a runtime NOT_APPLICABLE value is not an authority boundary and cannot
+    # bypass the detection gate.  Supporting a genuine NOT_APPLICABLE construct
+    # requires an authenticated frozen declaration, which this campaign does not have.
+    control_gate_authorized = control_gate == "APPLICABLE"
+    gate5 = control_gate_authorized and min_count_met and fdr0 == 0.0 and fnr1 == 0.0
+    if not control_gate_authorized:
+        reasons.append(
+            "gate5: runtime control_gate exemption not authorized by frozen APPLICABLE declaration"
+        )
+    elif not gate5:
         reasons.append("gate5: FDR0/FNR1 not both zero, or min-count not met")
 
     passed = budget_inputs_valid and gate1 and gate2 and gate_max and gate3 and gate4 and gate5

@@ -373,7 +373,10 @@ def test_absolute_gates_gate5_detection_fails_when_fdr_nonzero() -> None:
     assert result.gate5_detection is False
 
 
-def test_absolute_gates_gate5_not_applicable_passthrough() -> None:
+def test_absolute_gates_runtime_not_applicable_cannot_bypass_frozen_controls() -> None:
+    """All frozen fixture families declare control_gate=APPLICABLE.  A runtime
+    NOT_APPLICABLE argument must therefore fail closed instead of bypassing FDR/FNR
+    and minimum-count checks."""
     instances = [_instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)]
     result = absolute_gates(
         instances,
@@ -386,7 +389,9 @@ def test_absolute_gates_gate5_not_applicable_passthrough() -> None:
         min_count_met=False,
         control_gate="NOT_APPLICABLE",
     )
-    assert result.gate5_detection is True
+    assert result.gate5_detection is False
+    assert result.passed is False
+    assert any("not authorized" in reason for reason in result.failure_reasons)
 
 
 def test_absolute_gates_nan_ds_in_invariance_pair_fails_gate4() -> None:
