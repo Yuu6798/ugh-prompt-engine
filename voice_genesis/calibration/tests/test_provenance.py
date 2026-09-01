@@ -16,22 +16,55 @@ from voice_genesis.calibration.provenance import (
 )
 from voice_genesis.calibration.fixtures.controls import negative_control_row_ids
 from voice_genesis.calibration.fixtures.matrix import build_matrix
+from voice_genesis.calibration.splitter import RealizedSplitMap, RowInput, realize_split
 from voice_genesis.calibration.vocab import BlockedCode
 
 
-def _check_leakage(*args, **kwargs):
+def _verified_split_material(holdout_row_ids):
+    """Build a small, mechanically verified split whose HOLDOUT set is exact.
+
+    Leakage unit tests use synthetic row ids, so this helper searches a deterministic
+    test-only split secret until the requested ids occupy all HOLDOUT slots.  The
+    production gate still calls ``verify_split`` itself; no raw assignment is trusted.
+    """
     from voice_genesis.calibration.vocab import Split
 
+    targets = tuple(dict.fromkeys(holdout_row_ids))
+    if not targets:
+        return (), None, None
+
+    fillers = tuple(f"__split-test-filler-{i}" for i in range(3 * len(targets)))
+    rows = tuple(
+        RowInput(row_id=row_id, family="TEST", stratum={})
+        for row_id in (*targets, *fillers)
+    )
+    target_set = set(targets)
+    for nonce in range(4096):
+        secret = nonce.to_bytes(32, "big")
+        realized = realize_split(rows, secret, ())
+        realized_holdout = {
+            row_id
+            for row_id, split in realized.assignment.items()
+            if split == Split.HOLDOUT
+        }
+        if realized_holdout == target_set:
+            return rows, secret, realized
+    raise AssertionError("could not construct deterministic test split for requested holdout ids")
+
+
+def _check_leakage(*args, **kwargs):
     if "holdout_row_ids" in kwargs:
         holdout = kwargs["holdout_row_ids"]
     elif len(args) >= 2:
         holdout = args[1]
     else:
         raise AssertionError("holdout_row_ids required by test wrapper")
-    kwargs.setdefault(
-        "realized_split_assignment",
-        {row_id: Split.HOLDOUT for row_id in holdout},
-    )
+
+    if "realized_split_map" not in kwargs:
+        rows, secret, realized = _verified_split_material(holdout)
+        kwargs.setdefault("realized_split_map", realized)
+        kwargs.setdefault("split_verification_rows", rows)
+        kwargs.setdefault("split_secret", secret)
     return Ledger.check_leakage(*args, **kwargs)
 
 
@@ -552,8 +585,10 @@ def test_check_leakage_caller_cannot_forge_truth_row_as_control() -> None:
 
 
 def test_check_leakage_rejects_incomplete_declared_holdout_set() -> None:
-    from voice_genesis.calibration.vocab import Split
-
+    rows, secret, realized = _verified_split_material(
+        ["holdout-declared", "holdout-omitted"]
+    )
+    assert realized is not None and secret is not None
     entries = [
         LedgerEntry(
             seq=0,
@@ -562,22 +597,41 @@ def test_check_leakage_rejects_incomplete_declared_holdout_set() -> None:
             payload={"kind": "render", "row_id": "holdout-omitted"},
         )
     ]
-    realized = {
-        "holdout-declared": Split.HOLDOUT,
-        "holdout-omitted": Split.HOLDOUT,
-        "selection-row": Split.SELECTION,
-    }
     result = Ledger.check_leakage(
         entries,
         holdout_row_ids=["holdout-declared"],
         unseal_seq=None,
-        realized_split_assignment=realized,
+        realized_split_map=realized,
+        split_verification_rows=rows,
+        split_secret=secret,
     )
     assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
 
 
-def test_check_leakage_requires_realized_split_assignment() -> None:
+def test_check_leakage_requires_verified_realized_split_map() -> None:
+    result = Ledger.check_leakage([], holdout_row_ids=[], unseal_seq=None)
+    assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
+
+
+def test_check_leakage_rejects_tampered_realized_split_map() -> None:
+    from voice_genesis.calibration.vocab import Split
+
+    rows, secret, realized = _verified_split_material(["holdout-1"])
+    assert realized is not None and secret is not None
+    tampered_assignment = dict(realized.assignment)
+    tampered_assignment["holdout-1"] = Split.CALIBRATION
+    tampered = RealizedSplitMap(
+        stratum_factor_names=realized.stratum_factor_names,
+        assignment=tampered_assignment,
+        swaps=realized.swaps,
+        realized_sha=realized.realized_sha,
+    )
     result = Ledger.check_leakage(
-        [], holdout_row_ids=[], unseal_seq=None, realized_split_assignment=None
+        [],
+        holdout_row_ids=["holdout-1"],
+        unseal_seq=None,
+        realized_split_map=tampered,
+        split_verification_rows=rows,
+        split_secret=secret,
     )
     assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
