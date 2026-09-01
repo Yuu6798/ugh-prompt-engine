@@ -442,6 +442,7 @@ def directional_gates(
     u_rep: float,
     u_proc: float,
     expected_sweep_ids: Collection[str],
+    expected_adjacent_pair_ids: Mapping[str, Collection[str]] | None = None,
     negative_control_failures: int,
     positive_control_failures: int,
     units_commensurate: bool,
@@ -568,8 +569,85 @@ def directional_gates(
     if sweeps_below_minimum:
         reasons.append("resolvable pair count < 3 in sweep(s): " + ", ".join(sweeps_below_minimum))
 
-    adjacent_resolvable = [p for p in resolvable if p.is_adjacent]
-    all_correct = all(_same_nonzero_sign(p.delta_truth, p.delta_output) for p in adjacent_resolvable)
+    # `is_adjacent` is caller metadata and must not decide which measured signs are
+    # gated.  The authority boundary is a separately frozen sweep -> adjacent
+    # pair-id declaration.  The runtime flag is checked only as an assertion.
+    adjacency_inputs_valid = True
+    frozen_adjacent_by_sweep: dict[str, set[str]] = {s: set() for s in sweep_ids}
+    if expected_adjacent_pair_ids is None:
+        adjacency_inputs_valid = False
+        reasons.append("no frozen adjacent-pair declaration")
+    else:
+        declared_sweeps = set(expected_adjacent_pair_ids)
+        if declared_sweeps != set(sweep_ids):
+            adjacency_inputs_valid = False
+            reasons.append("frozen adjacent-pair sweep set does not match expected_sweep_ids")
+
+        declared_pair_owner: dict[str, str] = {}
+        for sweep in sweep_ids:
+            raw_ids = list(expected_adjacent_pair_ids.get(sweep, ()))
+            if any(not isinstance(pair_id, str) or not pair_id for pair_id in raw_ids):
+                adjacency_inputs_valid = False
+                reasons.append(f"frozen adjacent-pair declaration has invalid pair_id in sweep {sweep}")
+                continue
+            if len(raw_ids) != len(set(raw_ids)):
+                adjacency_inputs_valid = False
+                reasons.append(f"frozen adjacent-pair declaration has duplicate pair_id in sweep {sweep}")
+            ids = set(raw_ids)
+            if not ids:
+                adjacency_inputs_valid = False
+                reasons.append(f"no frozen adjacent pair declared for sweep {sweep}")
+            frozen_adjacent_by_sweep[sweep] = ids
+            for pair_id in ids:
+                owner = declared_pair_owner.get(pair_id)
+                if owner is not None and owner != sweep:
+                    adjacency_inputs_valid = False
+                    reasons.append(
+                        f"frozen adjacent pair_id {pair_id} is declared in multiple sweeps: "
+                        f"{owner}, {sweep}"
+                    )
+                declared_pair_owner[pair_id] = sweep
+
+        observed_by_id = {p.pair_id: p for p in pairs}
+        missing_or_misowned: list[str] = []
+        for sweep, pair_ids in frozen_adjacent_by_sweep.items():
+            for pair_id in sorted(pair_ids):
+                observed = observed_by_id.get(pair_id)
+                if observed is None or observed.sweep_id != sweep:
+                    missing_or_misowned.append(f"{sweep}:{pair_id}")
+        if missing_or_misowned:
+            adjacency_inputs_valid = False
+            reasons.append(
+                "frozen adjacent pair(s) missing or assigned to wrong sweep: "
+                + ", ".join(missing_or_misowned)
+            )
+
+        flag_mismatches = sorted(
+            p.pair_id
+            for p in pairs
+            if p.sweep_id in frozen_adjacent_by_sweep
+            and p.is_adjacent != (p.pair_id in frozen_adjacent_by_sweep[p.sweep_id])
+        )
+        if flag_mismatches:
+            adjacency_inputs_valid = False
+            reasons.append(
+                "runtime is_adjacent disagrees with frozen adjacency: "
+                + ", ".join(flag_mismatches)
+            )
+
+    adjacent_resolvable = [
+        p
+        for p in resolvable
+        if p.sweep_id in frozen_adjacent_by_sweep
+        and p.pair_id in frozen_adjacent_by_sweep[p.sweep_id]
+    ]
+    has_authenticated_adjacent_evidence = adjacency_inputs_valid and bool(adjacent_resolvable)
+    if not has_authenticated_adjacent_evidence:
+        reasons.append("no authenticated resolvable adjacent evidence")
+
+    all_correct = has_authenticated_adjacent_evidence and all(
+        _same_nonzero_sign(p.delta_truth, p.delta_output) for p in adjacent_resolvable
+    )
     if not all_correct:
         reasons.append("not all resolvable adjacent pairs have correct measured delta sign")
 
@@ -591,6 +669,8 @@ def directional_gates(
         budget_inputs_valid
         and every_sweep_meets_minimum
         and not duplicate_pair_ids
+        and adjacency_inputs_valid
+        and has_authenticated_adjacent_evidence
         and all_correct
         and adjacent_reversal_rate == 0.0
         and negative_control_failures == 0

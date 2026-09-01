@@ -825,10 +825,31 @@ class Ledger:
             or set(realized_split_map.assignment) != canonical_row_ids
         ):
             return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
-        if any(
-            row.family != canonical_by_id[row.row_id].row.family
-            for row in split_verification_rows
-        ):
+
+        canonical_split_inputs = {
+            matrix_row.row_id: RowInput(
+                row_id=matrix_row.row_id,
+                family=matrix_row.row.family,
+                stratum={},
+                truth_level=matrix_row.row.block,
+                generator_impl=matrix_row.row.generator_impl,
+                boundary_class=matrix_row.domain.value,
+            )
+            for matrix_row in canonical_matrix
+        }
+        for supplied in split_verification_rows:
+            expected = canonical_split_inputs[supplied.row_id]
+            if (
+                supplied.family != expected.family
+                or dict(supplied.stratum) != dict(expected.stratum)
+                or supplied.truth_level != expected.truth_level
+                or supplied.generator_impl != expected.generator_impl
+                or supplied.boundary_class != expected.boundary_class
+            ):
+                return LeakageCheckResult(
+                    blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0
+                )
+        if tuple(realized_split_map.stratum_factor_names) != ():
             return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
 
         try:

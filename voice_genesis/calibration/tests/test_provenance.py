@@ -838,3 +838,59 @@ def test_check_leakage_accepts_full_canonical_split_with_matching_commitment(tmp
         split_secret=secret,
     )
     assert result.blocked is None
+
+
+
+def test_check_leakage_rejects_forged_split_row_attributes_even_with_matching_freeze() -> None:
+    """A self-consistent split from forged split-driving row metadata is not authoritative."""
+    from voice_genesis.calibration.vocab import Split
+
+    canonical_rows, secret, canonical_realized = _canonical_split_material()
+    target = canonical_rows[0]
+    forged_variants = (
+        {"stratum": {"forged": "value"}},
+        {"truth_level": "FORGED_TRUTH"},
+        {"generator_impl": "FORGED_IMPL"},
+        {"boundary_class": "FORGED_BOUNDARY"},
+    )
+
+    for overrides in forged_variants:
+        forged_rows = list(canonical_rows)
+        values = {
+            "row_id": target.row_id,
+            "family": target.family,
+            "stratum": dict(target.stratum),
+            "truth_level": target.truth_level,
+            "generator_impl": target.generator_impl,
+            "boundary_class": target.boundary_class,
+        }
+        values.update(overrides)
+        forged_rows[0] = RowInput(**values)
+        forged_realized = realize_split(
+            forged_rows, secret, canonical_realized.stratum_factor_names
+        )
+        split_payload = {
+            "kind": "split_frozen",
+            "realized_split_map_hash": forged_realized.realized_sha,
+            "seal_commitment": hashlib.sha256(secret).hexdigest(),
+        }
+        split_entry = LedgerEntry(
+            seq=0,
+            prev_sha=GENESIS_PREV_SHA,
+            entry_sha=_entry_sha(0, GENESIS_PREV_SHA, split_payload),
+            payload=split_payload,
+        )
+        holdout = [
+            row_id
+            for row_id, split in forged_realized.assignment.items()
+            if split == Split.HOLDOUT
+        ]
+        result = Ledger.check_leakage(
+            [split_entry],
+            holdout_row_ids=holdout,
+            unseal_seq=None,
+            realized_split_map=forged_realized,
+            split_verification_rows=forged_rows,
+            split_secret=secret,
+        )
+        assert result.blocked == BlockedCode.BLOCKED_LEAKAGE, overrides

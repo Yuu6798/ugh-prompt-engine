@@ -577,6 +577,26 @@ def _pair(
     )
 
 
+_directional_gates_impl = directional_gates
+
+
+def directional_gates(pairs, **kwargs):
+    """Test adapter: make each fixture's intended adjacency an explicit declaration."""
+    if "expected_adjacent_pair_ids" not in kwargs:
+        expected_sweeps = set(kwargs.get("expected_sweep_ids", ()))
+        kwargs["expected_adjacent_pair_ids"] = {
+            sweep: tuple(
+                sorted(
+                    p.pair_id
+                    for p in pairs
+                    if p.sweep_id == sweep and p.is_adjacent
+                )
+            )
+            for sweep in expected_sweeps
+        }
+    return _directional_gates_impl(pairs, **kwargs)
+
+
 def test_directional_resolvable_exact_equality_is_not_resolvable() -> None:
     # r_truth = 0.15+0.15 = 0.3; u_rep+u_proc=0.03 -> r_combined = 0.3+0.06=0.36
     # delta_truth == r_combined (等号) -> strict > を満たさず not resolvable
@@ -846,7 +866,7 @@ def test_directional_one_sweep_with_exactly_three_pairs_passes_with_warning() ->
     最低数を満たし gate は通過するが、「ちょうど 3」の警告がその sweep に
     立つ。"""
     pairs = [
-        _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-A")
+        _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=True, sweep_id="sweep-A")
         for i in range(3)
     ]
     result = directional_gates(
@@ -868,10 +888,10 @@ def test_directional_one_sweep_with_exactly_three_pairs_passes_with_warning() ->
 def test_directional_multi_sweep_each_meeting_minimum_passes() -> None:
     """複数 sweep それぞれが独立に最低数 (>= 3) を満たせば gate は通過する。"""
     pairs = [
-        _pair(f"a{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-A")
+        _pair(f"a{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=True, sweep_id="sweep-A")
         for i in range(3)
     ] + [
-        _pair(f"b{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False, sweep_id="sweep-B")
+        _pair(f"b{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=True, sweep_id="sweep-B")
         for i in range(4)
     ]
     result = directional_gates(
@@ -1080,3 +1100,47 @@ def test_absolute_gates_invariance_pair_id_reused_across_axes_fails() -> None:
         "reused across invariance axes" in reason and "shared-0" in reason
         for reason in result.failure_reasons
     )
+
+
+
+def test_directional_caller_cannot_hide_reversals_with_nonadjacent_flags() -> None:
+    pairs = [
+        _pair(
+            f"hide-{i}",
+            delta_truth=1.0,
+            delta_output=-1.0,
+            correct_sign=True,
+            is_adjacent=False,
+        )
+        for i in range(3)
+    ]
+    result = directional_gates(
+        pairs,
+        u_rep=0.0,
+        u_proc=0.0,
+        expected_sweep_ids={"default"},
+        expected_adjacent_pair_ids={"default": {"hide-0", "hide-1", "hide-2"}},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.resolvable_count == 3
+    assert result.adjacent_reversal_rate == 1.0
+    assert result.all_resolvable_correct_sign is False
+    assert result.passed is False
+    assert any("is_adjacent" in reason for reason in result.failure_reasons)
+
+
+def test_directional_missing_frozen_adjacency_declaration_fails_closed() -> None:
+    pairs = [_pair(f"decl-{i}", delta_truth=1.0, delta_output=1.0) for i in range(3)]
+    result = _directional_gates_impl(
+        pairs,
+        u_rep=0.0,
+        u_proc=0.0,
+        expected_sweep_ids={"default"},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.passed is False
+    assert any("frozen adjacent-pair declaration" in reason for reason in result.failure_reasons)
