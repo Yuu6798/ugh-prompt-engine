@@ -34,7 +34,7 @@
 | module | 実装内容（正本§） |
 |---|---|
 | `vocab.py` | 閉語彙全部: 終端 status・手続 Gate（§1）・BLOCKED codes（§3.3）・missing 理由コード（§11）・independence tier / claim ceiling（§4.1）・evidence_class（§10.2）・Domain/Split enum・`CLAIM_CRITICAL_SET` 定数・`debt_discharged()` 純導出関数（D1） |
-| `canonical.py` | 正規化 JSON serialization（sorted keys・区切り最小・NaN/Inf 禁止・float は Python repr 最短往復）+ `row_id = sha256(row_json)` + `manifest_sha`（§7, §3.3） |
+| `canonical.py` | バージョン付き正規形 **`vgcal-canon/1`**（sorted keys・区切り最小・NaN/Inf 拒否・float は Python repr 最短往復 + `-0.0`→`0.0` 正規化）+ `row_id = sha256(row_json)` + `manifest_sha`。設計正本 §7 の「RFC 8785 相当」は **byte 互換を主張しない**: RFC 8785 と数値表記が異なる（例 `1e-07` vs `1e-7`）ため、正規形を独自名で版管理し、検証器は同一実装で照合する（Codex レビュー 2026-09-01 採用） |
 | `streams.py` | HKDF-SHA256 stream 分離（`info` = 長さ接頭辞付き field 連結: campaign_id/family/split/row_id/probe_index/purpose）→ 64bit seed → `np.random.Generator(PCG64)`。RNG 台帳 dataclass（§3.3, §7） |
 | `splitter.py` | HMAC-SHA256(secret,row_id) 昇順 → stratum 内 largest-remainder 50/25/25 → 端数の偶奇交互配分 → 制約検査 → 決定的最小 swap 修復 + swap 記録 → 実現済み row→split 表と検証器（§7） |
 | `tolerance.py` | pooled dispersion（family×condition class）・`tolerance=max(k·pooled_SD, floor)`・floor 機械導出・`UNSTABLE_CELL`・`TOLERANCE_FLOOR_LIMITED`（§6） |
@@ -43,7 +43,7 @@
 | `selection.py` | 族別 lexicographic（ABSOLUTE 系列 / DIRECTIONAL 系列）・丸め後比較（error=有効3桁, rate=0.001, complexity=int）・丸め前後 vector 記録・`SELECTION_FAILED_CLOSED`（§9） |
 | `status.py` | first-match cascade（§11 の 5 段）・missing→(status, reason) 一意写像・手続 Gate 単調性検査（§1 R1） |
 | `m6_identity.py` | `u_X[j]`・sum-of-norms `U_obs_pair`・`T_null=q95(D_null+U_null_pair)`・`distinct()`・空 critical set → NOT_EVALUABLE・等重み L1/L2 のみ（§12） |
-| `provenance.py` | §13 必須 field の dataclass schema + append-only JSONL ledger（entry sha 連鎖）+ leakage 検査（holdout row の unseal 前初出 → `BLOCKED_LEAKAGE`）（§7, §13） |
+| `provenance.py` | §13 必須 field の dataclass schema + append-only JSONL ledger（entry sha 連鎖）+ leakage 検査（holdout row の unseal 前初出 → `BLOCKED_LEAKAGE`）（§7, §13）。**単一 writer 境界を契約とする**: append は fcntl 排他ロック + flush/fsync で直列化し、並列 meter 実行（§14）は per-worker 記録 → 直列 append の集約で行う。`verify_chain()` は途中破損（truncated 末尾行・sibling 分岐）を検出して報告する（Codex レビュー 2026-09-01 採用） |
 | `fixtures/axes.py` | §5.1 primary/boundary 軸水準の凍結定数 |
 | `fixtures/matrix.py` | 456 logical cell の**明示列挙**（family 別内訳・cal/sel/holdout 数は §5.2 表と厳密一致をテストで enforce）・domain tag 導出・F0 帯域整合検査 → BOUNDARY 再タグ（§3.3）・nuisance block（一因子主効果 + 6 targeted interactions の全行列挙） |
 | `fixtures/controls.py` | family 別 negative control + 対 positive control（両側条件）（§4.2） |
@@ -71,7 +71,11 @@ docstring に `[UNDERSPEC-CAL-nn]` タグで記録し、`README.md` の UNDERSPE
   （matrix は列挙とカウント検証のみ）
 - 必須検証: 456/228/114/114 の厳密一致・99 候補数・split の決定性と制約充足・gate 式の
   境界ケース（G[i]=0 は PASS 側）・status cascade の網羅/排他・M6 空集合→NOT_EVALUABLE・
-  canonical JSON の安定性（key 順・float 往復）・generator の同 seed 再現
+  canonical JSON の安定性（key 順・float 往復・`-0.0` 正規化）・generator の同 seed 再現
+- **式単位の独立数値オラクル**（Codex レビュー 2026-09-01 採用）: 結果を左右する全式
+  （二段 median / q95 margin `G[i]` / gate3 / gate4' invariance / `R_ij`・resolvable /
+  FDR0・FNR1 / selection 丸め / M6 sum-of-norms・`T_null`）に、実装から独立に手計算した
+  入力ベクトル→期待値の固定オラクルを 1 件以上与え、不一致は即 fail とする
 - generator determinism の fresh-process 検査は `@pytest.mark.slow` 可
 
 ## 5. 実装フェーズ（委譲単位）
