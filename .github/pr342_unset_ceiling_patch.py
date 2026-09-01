@@ -27,7 +27,6 @@ elif new_pools not in selection:
 
 old_abs_return = '''        outcome = _merge_diagnostic_pool_audit(outcome, diagnostic_pool)\n        return _merge_diagnostic_pool_audit(outcome, none_pool)\n'''
 new_abs_return = '''        outcome = _merge_diagnostic_pool_audit(outcome, diagnostic_pool)\n        outcome = _merge_diagnostic_pool_audit(outcome, none_pool)\n        return _merge_invalid_ceiling_pool_audit(outcome, invalid_ceiling_pool)\n'''
-# Occurs in both ABSOLUTE and DIRECTIONAL success branches.
 count = selection.count(old_abs_return)
 if count:
     selection = selection.replace(old_abs_return, new_abs_return)
@@ -46,5 +45,5 @@ selection_path.write_text(selection)
 tests = test_path.read_text()
 regressions = '''\n\ndef test_select_across_ceilings_accounts_for_unset_ceiling_in_successful_audit() -> None:\n    selected = CandidateCriteria(\n        candidate_id=\"abs-selected\",\n        ceiling=ClaimCeiling.ABSOLUTE,\n        primary_normalized_mae=0.2,\n        signed_bias=0.0,\n        primary_q95_ae=0.3,\n    )\n    unset = CandidateCriteria(\n        candidate_id=\"unset-ceiling\",\n        primary_normalized_mae=0.4,\n        signed_bias=0.1,\n        primary_q95_ae=0.5,\n    )\n\n    outcome = select_across_ceilings([selected, unset])\n\n    assert outcome.selected_candidate_id == \"abs-selected\"\n    assert outcome.ranked_candidate_ids == (\"abs-selected\",)\n    assert \"unset-ceiling\" in outcome.raw_vectors\n    assert \"unset-ceiling\" in outcome.rounded_vectors\n    assert (\"unset-ceiling\", \"ceiling_unset\") in outcome.ineligible_candidates\n\n\ndef test_select_across_ceilings_accounts_for_unknown_ceiling_in_successful_audit() -> None:\n    selected = CandidateCriteria(\n        candidate_id=\"dir-selected\",\n        ceiling=ClaimCeiling.DIRECTIONAL,\n        kendall_tau=0.9,\n        adjacent_reversal_rate=0.0,\n    )\n    unknown = CandidateCriteria(\n        candidate_id=\"unknown-ceiling\",\n        ceiling=\"NOT_FROZEN\",  # type: ignore[arg-type]\n        kendall_tau=0.7,\n        adjacent_reversal_rate=0.1,\n    )\n\n    outcome = select_across_ceilings([selected, unknown])\n\n    assert outcome.selected_candidate_id == \"dir-selected\"\n    assert outcome.ranked_candidate_ids == (\"dir-selected\",)\n    assert \"unknown-ceiling\" in outcome.raw_vectors\n    assert \"unknown-ceiling\" in outcome.rounded_vectors\n    assert (\"unknown-ceiling\", \"ceiling_unknown\") in outcome.ineligible_candidates\n'''
 if "test_select_across_ceilings_accounts_for_unset_ceiling_in_successful_audit" not in tests:
-    tests = tests.rstrip() + regressions + "\n"
+    tests = tests.rstrip() + regressions.rstrip() + "\n"
     test_path.write_text(tests)
