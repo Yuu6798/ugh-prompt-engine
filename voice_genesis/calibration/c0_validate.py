@@ -334,6 +334,7 @@ def _shape_violation(field_name: str, value: object) -> str | None:
         return None
     return None
 
+
 _SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 
 #: `c0_validate.py` 自身のパス（`voice_genesis/calibration/c0_validate.py`）から
@@ -389,13 +390,9 @@ def calibration_path_inventory(repo_root: Path | None = None) -> frozenset[str]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"calibration_path_inventory: malformed JSON in {path}: {exc}"
-        ) from exc
+        raise ValueError(f"calibration_path_inventory: malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, list) or not all(isinstance(p, str) for p in data):
-        raise ValueError(
-            f"calibration_path_inventory: {path} must contain a JSON array of strings"
-        )
+        raise ValueError(f"calibration_path_inventory: {path} must contain a JSON array of strings")
     if len(data) != len(set(data)):
         raise ValueError(f"calibration_path_inventory: {path} contains duplicate paths")
     if data != sorted(data):
@@ -422,6 +419,7 @@ def scan_calibration_tree_inventory(repo_root: Path | None = None) -> frozenset[
     paths = {p.relative_to(root).as_posix() for p in package_dir.rglob("*.py")}
     paths.add((package_dir / PATH_INVENTORY_FILENAME).relative_to(root).as_posix())
     return frozenset(paths)
+
 
 #: RECORDED_OR_ABSENT（§3.2）。値 または `"ABSENT:<理由>"` のいずれかが必須。
 RECORDED_OR_ABSENT_KEYS: tuple[str, ...] = (
@@ -591,9 +589,7 @@ def _check_path_inventory_coverage(manifest: Mapping[str, object]) -> list[str]:
     inventory = calibration_path_inventory()
     missing = sorted(inventory - declared)
     unknown = sorted(declared - inventory)
-    violations = [
-        f"candidates.*_paths_sha256 (missing required path: {p!r})" for p in missing
-    ]
+    violations = [f"candidates.*_paths_sha256 (missing required path: {p!r})" for p in missing]
     violations += [
         f"candidates.*_paths_sha256 (unknown/extra path not in repo inventory: {p!r})"
         for p in unknown
@@ -747,9 +743,7 @@ def _check_meter_spec_nested_keys(manifest: Mapping[str, object]) -> list[str]:
     for meter_id in sorted(k for k in meter_specs.keys() if isinstance(k, str)):
         entry = meter_specs[meter_id]
         if not isinstance(entry, Mapping):
-            violations.append(
-                f"frozen_design.meter_specs.{meter_id} (entry must be a mapping)"
-            )
+            violations.append(f"frozen_design.meter_specs.{meter_id} (entry must be a mapping)")
             continue
         violations += _nested_key_violations(
             entry, METER_SPEC_REQUIRED_KEYS, f"frozen_design.meter_specs.{meter_id}"
@@ -793,9 +787,7 @@ def _check_fixture_spec_nested_keys(manifest: Mapping[str, object]) -> list[str]
     for family_id in sorted(k for k in fixture_spec.keys() if isinstance(k, str)):
         entry = fixture_spec[family_id]
         if not isinstance(entry, Mapping):
-            violations.append(
-                f"frozen_design.fixture_spec.{family_id} (entry must be a mapping)"
-            )
+            violations.append(f"frozen_design.fixture_spec.{family_id} (entry must be a mapping)")
             continue
         violations += _nested_key_violations(
             entry, FIXTURE_SPEC_REQUIRED_KEYS, f"frozen_design.fixture_spec.{family_id}"
@@ -855,9 +847,7 @@ def _check_independence_ledger(manifest: Mapping[str, object]) -> list[str]:
     ledger_ids = {k for k in ledger.keys() if isinstance(k, str)}
     missing_ids = sorted(registry_ids - ledger_ids)
     unknown_ids = sorted(ledger_ids - registry_ids)
-    violations.extend(
-        f"independence_ledger (missing candidate_id: {cid!r})" for cid in missing_ids
-    )
+    violations.extend(f"independence_ledger (missing candidate_id: {cid!r})" for cid in missing_ids)
     violations.extend(
         f"independence_ledger (unknown/extra candidate_id: {cid!r})" for cid in unknown_ids
     )
@@ -904,9 +894,9 @@ def _check_rng_ledger_shape(manifest: Mapping[str, object]) -> list[str]:
             continue
         if entry["seeded"] is True:
             seed_ref = entry.get("public_seed_id")
-            if not isinstance(seed_ref, str) or seed_ref.strip() == "":
+            if not isinstance(seed_ref, str) or _SHA256_HEX_RE.fullmatch(seed_ref) is None:
                 violations.append(
-                    f"rng_ledger[{i}].public_seed_id (required seed reference when seeded=true)"
+                    f"rng_ledger[{i}].public_seed_id (must be a 64-character lowercase sha256 hex digest when seeded=true)"
                 )
     return violations
 

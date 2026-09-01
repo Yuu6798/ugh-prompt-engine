@@ -287,8 +287,7 @@ class LedgerChainInvalidError(RuntimeError):
         self.detail = detail
         self.tamper_at_seq = tamper_at_seq
         super().__init__(
-            f"Ledger.append refused: existing chain integrity check failed: {detail} "
-            f"(path={path})"
+            f"Ledger.append refused: existing chain integrity check failed: {detail} (path={path})"
         )
 
 
@@ -302,9 +301,7 @@ class LedgerTruncatedTailError(RuntimeError):
     def __init__(self, path: Path, detail: str) -> None:
         self.path = path
         self.detail = detail
-        super().__init__(
-            f"Ledger.append refused: {detail} (path={path})"
-        )
+        super().__init__(f"Ledger.append refused: {detail} (path={path})")
 
 
 def _entry_sha(seq: int, prev_sha: str, payload: Mapping[str, Any]) -> str:
@@ -445,6 +442,66 @@ def _verify_chain_prefix(
         ),
         missing_final_newline=missing_final_newline,
     )
+
+
+_UNSEAL_COMMITMENT_KEYS: tuple[str, ...] = (
+    "baseline_audit_sha",
+    "candidate_space_sha",
+    "selection_rule_sha",
+    "selected_candidate_sha",
+)
+
+
+def _is_sha256_hex(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(ch in "0123456789abcdef" for ch in value)
+    )
+
+
+def _verified_holdout_unseal_seq(ledger_entries: Sequence[LedgerEntry]) -> int | None:
+    """Return the first valid holdout-unseal boundary, or None fail-closed.
+
+    A valid unseal is in a fully verified ledger chain, references a prior
+    `selection_frozen` entry by its entry SHA, and repeats the four frozen
+    prerequisite commitment hashes exactly. A caller-supplied integer alone
+    never creates an unseal boundary.
+    """
+    prev_sha = GENESIS_PREV_SHA
+    for expected_seq, entry in enumerate(ledger_entries):
+        if entry.seq != expected_seq or entry.prev_sha != prev_sha:
+            return None
+        expected_sha = _entry_sha(entry.seq, entry.prev_sha, entry.payload)
+        if entry.entry_sha != expected_sha:
+            return None
+        prev_sha = entry.entry_sha
+
+    frozen_by_sha: dict[str, Mapping[str, Any]] = {}
+    for entry in ledger_entries:
+        payload = entry.payload
+        if not isinstance(payload, Mapping):
+            continue
+        kind = payload.get("kind")
+        if kind == "selection_frozen":
+            if all(_is_sha256_hex(payload.get(key)) for key in _UNSEAL_COMMITMENT_KEYS):
+                frozen_by_sha[entry.entry_sha] = payload
+            continue
+        if kind != "holdout_unseal":
+            continue
+
+        freeze_sha = payload.get("selection_freeze_event_sha")
+        if not _is_sha256_hex(freeze_sha):
+            continue
+        frozen = frozen_by_sha.get(freeze_sha)
+        if frozen is None:
+            continue
+        if not all(_is_sha256_hex(payload.get(key)) for key in _UNSEAL_COMMITMENT_KEYS):
+            continue
+        if not all(payload.get(key) == frozen.get(key) for key in _UNSEAL_COMMITMENT_KEYS):
+            continue
+        return entry.seq
+    return None
 
 
 class Ledger:
@@ -642,8 +699,12 @@ class Ledger:
                     seq=seq, prev_sha=prev_sha, entry_sha=entry_sha, payload=payload_j
                 )
                 line = canonical_json(
-                    {"seq": entry.seq, "prev_sha": entry.prev_sha, "entry_sha": entry.entry_sha,
-                     "payload": entry.payload}
+                    {
+                        "seq": entry.seq,
+                        "prev_sha": entry.prev_sha,
+                        "entry_sha": entry.entry_sha,
+                        "payload": entry.payload,
+                    }
                 )
                 f.seek(0, os.SEEK_END)
                 f.write(line)
@@ -692,20 +753,17 @@ class Ledger:
         unseal_seq: int | None,
         control_row_ids: Collection[str] = (),
     ) -> LeakageCheckResult:
-        """holdout row_id が unseal (`unseal_seq`) より前の render/meter-call
-        entry に初出した場合 `BLOCKED_LEAKAGE`。`unseal_seq=None` は
-        「unseal 未実施」を意味し、holdout row への一切のアクセスが違反となる。
+        """Fail closed on pre-unseal holdout access.
 
-        `control_row_ids`（IMPLEMENTATION_MAP_v1.md §2.7「control 共有契約」:
-        negative/positive control 行は sweep truth を運ばず、family 全体に
-        直交する固定 fixture として split を跨いで再利用されるため、たとえ
-        holdout 側に属していても事前アクセスは leakage ではない）に含まれる
-        row_id は、unseal 前の render/meter-call entry に現れても
-        `BLOCKED_LEAKAGE` の対象から除外する。除外が実際に働いたことを
-        `LeakageCheckResult.control_excluded_count` で判別できるようにする
-        （0 なら「除外ロジックが単に発火しなかった」と「control が空」を区別
-        できないが、非 0 なら確実に除外が適用されたことを示す）。
+        The authoritative boundary is derived from a cryptographically verified
+        `holdout_unseal` ledger event with matching frozen prerequisite references.
+        `unseal_seq` is retained only as an optional expected-sequence assertion for
+        compatibility; it can never grant access by itself.
         """
+        verified_unseal_seq = _verified_holdout_unseal_seq(ledger_entries)
+        if unseal_seq is not None and unseal_seq != verified_unseal_seq:
+            verified_unseal_seq = None
+
         holdout_set = set(holdout_row_ids)
         control_set = set(control_row_ids)
         control_excluded_count = 0
@@ -720,7 +778,7 @@ class Ledger:
             if row_id in control_set:
                 control_excluded_count += 1
                 continue
-            if unseal_seq is None or entry.seq < unseal_seq:
+            if verified_unseal_seq is None or entry.seq < verified_unseal_seq:
                 return LeakageCheckResult(
                     blocked=BlockedCode.BLOCKED_LEAKAGE,
                     control_excluded_count=control_excluded_count,

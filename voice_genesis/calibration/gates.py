@@ -188,9 +188,7 @@ def absolute_gates(
         )
 
     eligible_primary = [i for i in primary if i.eligible]
-    g_values = tuple(
-        i.ae + i.u_gt + i.u_num + u_rep + u_proc - i.e_use for i in eligible_primary
-    )
+    g_values = tuple(i.ae + i.u_gt + i.u_num + u_rep + u_proc - i.e_use for i in eligible_primary)
     g_values_finite = _all_finite(g_values)
 
     gate2 = bool(g_values) and g_values_finite and q95(g_values) <= 0
@@ -279,9 +277,7 @@ def absolute_gates(
             gate4 = False
             reasons.append(f"gate4': axis {axis} q95 margin > 0")
 
-    gate5 = (control_gate == "NOT_APPLICABLE") or (
-        min_count_met and fdr0 == 0.0 and fnr1 == 0.0
-    )
+    gate5 = (control_gate == "NOT_APPLICABLE") or (min_count_met and fdr0 == 0.0 and fnr1 == 0.0)
     if not gate5:
         reasons.append("gate5: FDR0/FNR1 not both zero, or min-count not met")
 
@@ -412,17 +408,16 @@ def directional_gates(
     """
     reasons: list[str] = []
 
-    pair_ids_by_sweep: dict[str, list[str]] = {}
+    seen_pair_ids: set[str] = set()
+    duplicate_pair_ids_set: set[str] = set()
     for p in pairs:
-        pair_ids_by_sweep.setdefault(p.sweep_id, []).append(p.pair_id)
-    duplicate_pair_ids: list[str] = []
-    for sweep_id, ids in pair_ids_by_sweep.items():
-        dupes = sorted({pid for pid in ids if ids.count(pid) > 1})
-        if dupes:
-            duplicate_pair_ids.append(f"sweep {sweep_id}: {', '.join(dupes)}")
+        if p.pair_id in seen_pair_ids:
+            duplicate_pair_ids_set.add(p.pair_id)
+        seen_pair_ids.add(p.pair_id)
+    duplicate_pair_ids = sorted(duplicate_pair_ids_set)
     if duplicate_pair_ids:
         reasons.append(
-            "duplicate pair_id(s) within sweep: " + "; ".join(duplicate_pair_ids)
+            "duplicate pair_id(s) across directional observations: " + ", ".join(duplicate_pair_ids)
         )
 
     resolvable: list[DirectionalPair] = []
@@ -453,9 +448,7 @@ def directional_gates(
     if not sweep_ids:
         reasons.append("no expected sweep declared")
     if sweeps_below_minimum:
-        reasons.append(
-            "resolvable pair count < 3 in sweep(s): " + ", ".join(sweeps_below_minimum)
-        )
+        reasons.append("resolvable pair count < 3 in sweep(s): " + ", ".join(sweeps_below_minimum))
 
     adjacent_resolvable = [p for p in resolvable if p.is_adjacent]
     all_correct = all(p.correct_sign for p in adjacent_resolvable)
@@ -463,9 +456,7 @@ def directional_gates(
         reasons.append("not all resolvable adjacent pairs have correct sign")
 
     reversals = sum(1 for p in adjacent_resolvable if not p.correct_sign)
-    adjacent_reversal_rate = (
-        (reversals / len(adjacent_resolvable)) if adjacent_resolvable else 0.0
-    )
+    adjacent_reversal_rate = (reversals / len(adjacent_resolvable)) if adjacent_resolvable else 0.0
     if adjacent_reversal_rate != 0.0:
         reasons.append("adjacent_reversal_rate != 0")
 

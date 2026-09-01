@@ -78,9 +78,7 @@ def test_ledger_append_refreshes_entries_without_reconstruction(tmp_path) -> Non
     assert ledger.malformed_lines == ()
 
     # check_leakage は再構築なしでもクラッシュせず正常に動く。
-    result = Ledger.check_leakage(
-        ledger.entries, holdout_row_ids=["holdout-x"], unseal_seq=None
-    )
+    result = Ledger.check_leakage(ledger.entries, holdout_row_ids=["holdout-x"], unseal_seq=None)
     assert result.blocked is None
 
 
@@ -311,8 +309,12 @@ def test_ledger_two_instances_interleaved_append_no_sibling_seq(tmp_path) -> Non
 
 def test_check_leakage_pre_unseal_access_is_blocked() -> None:
     entries = [
-        LedgerEntry(seq=0, prev_sha="0" * 64, entry_sha="a" * 64,
-                    payload={"kind": "render", "row_id": "holdout-1"}),
+        LedgerEntry(
+            seq=0,
+            prev_sha="0" * 64,
+            entry_sha="a" * 64,
+            payload={"kind": "render", "row_id": "holdout-1"},
+        ),
     ]
     result = Ledger.check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=5)
     assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
@@ -321,28 +323,50 @@ def test_check_leakage_pre_unseal_access_is_blocked() -> None:
 
 def test_check_leakage_unseal_none_blocks_any_holdout_access() -> None:
     entries = [
-        LedgerEntry(seq=0, prev_sha="0" * 64, entry_sha="a" * 64,
-                    payload={"kind": "meter_call", "row_id": "holdout-1"}),
+        LedgerEntry(
+            seq=0,
+            prev_sha="0" * 64,
+            entry_sha="a" * 64,
+            payload={"kind": "meter_call", "row_id": "holdout-1"},
+        ),
     ]
     result = Ledger.check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=None)
     assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
 
 
-def test_check_leakage_post_unseal_access_is_allowed() -> None:
-    entries = [
-        LedgerEntry(seq=0, prev_sha="0" * 64, entry_sha="a" * 64,
-                    payload={"kind": "selection_frozen"}),
-        LedgerEntry(seq=1, prev_sha="a" * 64, entry_sha="b" * 64,
-                    payload={"kind": "meter_call", "row_id": "holdout-1"}),
-    ]
-    result = Ledger.check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=1)
+def test_check_leakage_post_unseal_access_is_allowed(tmp_path) -> None:
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    commitments = {
+        "baseline_audit_sha": "1" * 64,
+        "candidate_space_sha": "2" * 64,
+        "selection_rule_sha": "3" * 64,
+        "selected_candidate_sha": "4" * 64,
+    }
+    frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    unseal = ledger.append(
+        {
+            "kind": "holdout_unseal",
+            **commitments,
+            "selection_freeze_event_sha": frozen.entry_sha,
+        }
+    )
+    ledger.append({"kind": "meter_call", "row_id": "holdout-1"})
+    result = Ledger.check_leakage(
+        ledger.entries,
+        holdout_row_ids=["holdout-1"],
+        unseal_seq=unseal.seq,
+    )
     assert result.blocked is None
 
 
 def test_check_leakage_non_holdout_row_never_blocks() -> None:
     entries = [
-        LedgerEntry(seq=0, prev_sha="0" * 64, entry_sha="a" * 64,
-                    payload={"kind": "render", "row_id": "calibration-1"}),
+        LedgerEntry(
+            seq=0,
+            prev_sha="0" * 64,
+            entry_sha="a" * 64,
+            payload={"kind": "render", "row_id": "calibration-1"},
+        ),
     ]
     result = Ledger.check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=None)
     assert result.blocked is None
@@ -350,8 +374,12 @@ def test_check_leakage_non_holdout_row_never_blocks() -> None:
 
 def test_check_leakage_ignores_non_render_meter_call_entries() -> None:
     entries = [
-        LedgerEntry(seq=0, prev_sha="0" * 64, entry_sha="a" * 64,
-                    payload={"kind": "split_frozen", "row_id": "holdout-1"}),
+        LedgerEntry(
+            seq=0,
+            prev_sha="0" * 64,
+            entry_sha="a" * 64,
+            payload={"kind": "split_frozen", "row_id": "holdout-1"},
+        ),
     ]
     result = Ledger.check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=None)
     assert result.blocked is None
@@ -363,12 +391,24 @@ def test_check_leakage_control_row_ids_excluded_non_control_holdout_still_detect
     split 上で参照されても leakage としない。一方、同じ entry 集合内の
     非 control な holdout 行は従来どおり検出される。"""
     entries = [
-        LedgerEntry(seq=0, prev_sha="0" * 64, entry_sha="a" * 64,
-                    payload={"kind": "render", "row_id": "holdout-control-1"}),
-        LedgerEntry(seq=1, prev_sha="a" * 64, entry_sha="b" * 64,
-                    payload={"kind": "meter_call", "row_id": "holdout-control-1"}),
-        LedgerEntry(seq=2, prev_sha="b" * 64, entry_sha="c" * 64,
-                    payload={"kind": "meter_call", "row_id": "holdout-sweep-1"}),
+        LedgerEntry(
+            seq=0,
+            prev_sha="0" * 64,
+            entry_sha="a" * 64,
+            payload={"kind": "render", "row_id": "holdout-control-1"},
+        ),
+        LedgerEntry(
+            seq=1,
+            prev_sha="a" * 64,
+            entry_sha="b" * 64,
+            payload={"kind": "meter_call", "row_id": "holdout-control-1"},
+        ),
+        LedgerEntry(
+            seq=2,
+            prev_sha="b" * 64,
+            entry_sha="c" * 64,
+            payload={"kind": "meter_call", "row_id": "holdout-sweep-1"},
+        ),
     ]
     result = Ledger.check_leakage(
         entries,
@@ -413,10 +453,18 @@ def test_ledger_tolerates_structurally_malformed_line_seq_only(tmp_path) -> None
 
 def test_check_leakage_control_row_pure_control_holdout_never_blocks() -> None:
     entries = [
-        LedgerEntry(seq=0, prev_sha="0" * 64, entry_sha="a" * 64,
-                    payload={"kind": "render", "row_id": "holdout-control-1"}),
-        LedgerEntry(seq=1, prev_sha="a" * 64, entry_sha="b" * 64,
-                    payload={"kind": "meter_call", "row_id": "holdout-control-1"}),
+        LedgerEntry(
+            seq=0,
+            prev_sha="0" * 64,
+            entry_sha="a" * 64,
+            payload={"kind": "render", "row_id": "holdout-control-1"},
+        ),
+        LedgerEntry(
+            seq=1,
+            prev_sha="a" * 64,
+            entry_sha="b" * 64,
+            payload={"kind": "meter_call", "row_id": "holdout-control-1"},
+        ),
     ]
     result = Ledger.check_leakage(
         entries,
@@ -426,3 +474,49 @@ def test_check_leakage_control_row_pure_control_holdout_never_blocks() -> None:
     )
     assert result.blocked is None
     assert result.control_excluded_count == 2
+
+
+def test_check_leakage_forged_unseal_integer_cannot_grant_access(tmp_path) -> None:
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        {
+            "kind": "selection_frozen",
+            "baseline_audit_sha": "1" * 64,
+            "candidate_space_sha": "2" * 64,
+            "selection_rule_sha": "3" * 64,
+            "selected_candidate_sha": "4" * 64,
+        }
+    )
+    ledger.append({"kind": "meter_call", "row_id": "holdout-1"})
+    result = Ledger.check_leakage(
+        ledger.entries,
+        holdout_row_ids=["holdout-1"],
+        unseal_seq=0,
+    )
+    assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
+
+
+def test_check_leakage_mismatched_unseal_commitments_fail_closed(tmp_path) -> None:
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    commitments = {
+        "baseline_audit_sha": "1" * 64,
+        "candidate_space_sha": "2" * 64,
+        "selection_rule_sha": "3" * 64,
+        "selected_candidate_sha": "4" * 64,
+    }
+    frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    ledger.append(
+        {
+            "kind": "holdout_unseal",
+            **commitments,
+            "selected_candidate_sha": "5" * 64,
+            "selection_freeze_event_sha": frozen.entry_sha,
+        }
+    )
+    ledger.append({"kind": "render", "row_id": "holdout-1"})
+    result = Ledger.check_leakage(
+        ledger.entries,
+        holdout_row_ids=["holdout-1"],
+        unseal_seq=None,
+    )
+    assert result.blocked == BlockedCode.BLOCKED_LEAKAGE

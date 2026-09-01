@@ -52,33 +52,53 @@ class CandidateCriteria:
     adjacent_reversal_rate: float | None = None
 
 
-def _has_required_criteria(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
-    """`family` が要求する criteria フィールドが揃っているか（Codex レビュー
-    2026-09-01 P1: `_vector_for()` が全候補に対して無条件に呼ばれており、
-    criteria payload が欠けた候補（例: pyworld 未導入時の D4C 系候補で
-    測定基準がそもそも存在しない）に対して ValueError を送出し、
-    fail-closed/ranking パスに到達する前に選抜全体を壊していた）。"""
+def _required_criteria_values(
+    criteria: CandidateCriteria, family: SelectionFamily
+) -> tuple[float | int | None, ...]:
+    common: tuple[float | int | None, ...] = (
+        criteria.nuisance_sensitivity_max,
+        criteria.missing_failure_rate,
+        criteria.complexity_rank,
+    )
     if family is SelectionFamily.ABSOLUTE:
         return (
-            criteria.primary_normalized_mae is not None
-            and criteria.signed_bias is not None
-            and criteria.primary_q95_ae is not None
+            criteria.primary_normalized_mae,
+            criteria.signed_bias,
+            criteria.primary_q95_ae,
+            *common,
         )
-    return criteria.kendall_tau is not None and criteria.adjacent_reversal_rate is not None
+    return (
+        criteria.kendall_tau,
+        criteria.adjacent_reversal_rate,
+        *common,
+    )
+
+
+def _criteria_payload_present(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
+    return all(value is not None for value in _required_criteria_values(criteria, family))
+
+
+def _criteria_values_finite(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
+    if not _criteria_payload_present(criteria, family):
+        return False
+    try:
+        return all(math.isfinite(value) for value in _required_criteria_values(criteria, family))
+    except (TypeError, ValueError):
+        return False
+
+
+def _has_required_criteria(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
+    """Ranking inputs must be both present and finite."""
+    return _criteria_payload_present(criteria, family) and _criteria_values_finite(criteria, family)
 
 
 def _ineligibility_reason(
     criteria: CandidateCriteria, family: SelectionFamily, *, has_criteria: bool
 ) -> str | None:
-    """`(candidate_id, reason)` として `SelectionOutcome.ineligible_candidates`
-    に記録する理由文字列。eligible かつ criteria が揃っている候補には `None`
-    を返す（`[UNDERSPEC-CAL]` 設計正本は ineligible 理由の具体的な語彙までは
-    規定しないため、「flagged so」/「criteria payload absent」の 2 値をその
-    まま機械可読な定数へ落とした最も単純な選択）。criteria 欠落を flagged
-    ineligible より優先して報告する（欠落の方がより具体的な診断情報のため）。
-    """
-    if not has_criteria:
+    if not _criteria_payload_present(criteria, family):
         return "criteria_payload_absent"
+    if not has_criteria:
+        return "criteria_non_finite"
     if not criteria.eligible:
         return "flagged_ineligible"
     return None
@@ -87,6 +107,14 @@ def _ineligibility_reason(
 def _vector_for(
     criteria: CandidateCriteria, family: SelectionFamily, *, rounded: bool
 ) -> tuple[float | int | str, ...]:
+    if not _criteria_payload_present(criteria, family):
+        raise ValueError(
+            f"selection: candidate {criteria.candidate_id!r} missing {family.value} criteria fields"
+        )
+    if not _criteria_values_finite(criteria, family):
+        raise ValueError(
+            f"selection: candidate {criteria.candidate_id!r} has non-finite ranking criteria"
+        )
     err = round_error if rounded else (lambda v: v)
     rate = round_rate if rounded else (lambda v: v)
     if family is SelectionFamily.ABSOLUTE:
@@ -96,8 +124,7 @@ def _vector_for(
             or criteria.primary_q95_ae is None
         ):
             raise ValueError(
-                f"selection: candidate {criteria.candidate_id!r} missing ABSOLUTE"
-                " criteria fields"
+                f"selection: candidate {criteria.candidate_id!r} missing ABSOLUTE criteria fields"
             )
         return (
             err(criteria.primary_normalized_mae),
@@ -110,8 +137,7 @@ def _vector_for(
         )
     if criteria.kendall_tau is None or criteria.adjacent_reversal_rate is None:
         raise ValueError(
-            f"selection: candidate {criteria.candidate_id!r} missing DIRECTIONAL"
-            " criteria fields"
+            f"selection: candidate {criteria.candidate_id!r} missing DIRECTIONAL criteria fields"
         )
     return (
         rate(1 - criteria.kendall_tau),
@@ -148,14 +174,10 @@ def _check_unique_candidate_ids(candidates: Sequence[CandidateCriteria]) -> None
             duplicates.append(c.candidate_id)
         seen.add(c.candidate_id)
     if duplicates:
-        raise ValueError(
-            "selection: duplicate candidate_id(s): " + ", ".join(sorted(duplicates))
-        )
+        raise ValueError("selection: duplicate candidate_id(s): " + ", ".join(sorted(duplicates)))
 
 
-def select(
-    candidates: Sequence[CandidateCriteria], family: SelectionFamily
-) -> SelectionOutcome:
+def select(candidates: Sequence[CandidateCriteria], family: SelectionFamily) -> SelectionOutcome:
     """selection split のみから、族別 lexicographic 比較で 1 候補を選ぶ。
 
     比較は **丸め後の vector** で行う（有効数字 3 桁 / 0.001 刻み / complexity は

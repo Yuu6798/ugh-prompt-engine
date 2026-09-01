@@ -20,9 +20,7 @@ _ALL_METER_IDS = sorted(m.value for m in vocab.MeterId)
 
 def _full_independence_ledger() -> dict[str, str]:
     """凍結 99 候補registry から独立性台帳を生成する（手書き 99 行を避ける）。"""
-    return {
-        c.candidate_id: c.independence_tier.value for c in candidate_registry.ALL_CANDIDATES
-    }
+    return {c.candidate_id: c.independence_tier.value for c in candidate_registry.ALL_CANDIDATES}
 
 
 def _fake_sha256(path: str) -> str:
@@ -323,7 +321,9 @@ def test_recorded_or_absent_key_with_real_value_no_downgrade() -> None:
     manifest["env"]["container_image_digest"] = "sha256:" + "0" * 64
     result = c0_validate.validate_c0_manifest(manifest)
     assert result.is_blocked is False
-    assert not any(a.startswith("env.container_image_digest:") for a in result.downgrade_annotations)
+    assert not any(
+        a.startswith("env.container_image_digest:") for a in result.downgrade_annotations
+    )
 
 
 def test_unseeded_rng_stream_blocks() -> None:
@@ -400,9 +400,7 @@ def test_hash_map_entry_with_malformed_sha256_blocks() -> None:
     }
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
-    assert any(
-        k.startswith("candidates.meter_paths_sha256[") for k in result.missing_required_keys
-    )
+    assert any(k.startswith("candidates.meter_paths_sha256[") for k in result.missing_required_keys)
 
 
 def test_hash_map_entry_with_empty_path_blocks() -> None:
@@ -410,9 +408,7 @@ def test_hash_map_entry_with_empty_path_blocks() -> None:
     manifest["candidates"]["meter_paths_sha256"] = {"": "a" * 64}
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
-    assert any(
-        k.startswith("candidates.meter_paths_sha256[") for k in result.missing_required_keys
-    )
+    assert any(k.startswith("candidates.meter_paths_sha256[") for k in result.missing_required_keys)
 
 
 def test_path_inventory_covers_full_calibration_package() -> None:
@@ -436,9 +432,7 @@ def test_path_inventory_dropped_file_blocks() -> None:
     del schema[dropped]
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
-    assert any(
-        "missing required path" in k and dropped in k for k in result.missing_required_keys
-    )
+    assert any("missing required path" in k and dropped in k for k in result.missing_required_keys)
 
 
 def test_path_inventory_phantom_extra_path_blocks() -> None:
@@ -450,9 +444,7 @@ def test_path_inventory_phantom_extra_path_blocks() -> None:
     manifest["candidates"]["schema_paths_sha256"][phantom] = "a" * 64
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
-    assert any(
-        "unknown/extra path" in k and phantom in k for k in result.missing_required_keys
-    )
+    assert any("unknown/extra path" in k and phantom in k for k in result.missing_required_keys)
 
 
 def test_hash_content_mismatch_blocks() -> None:
@@ -489,9 +481,7 @@ def test_hash_map_path_duplicated_across_categories_with_conflicting_digest_bloc
     manifest["candidates"]["meter_paths_sha256"][target] = conflicting_sha
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
-    assert any(
-        "multiple categories" in k and target in k for k in result.missing_required_keys
-    )
+    assert any("multiple categories" in k and target in k for k in result.missing_required_keys)
 
 
 def test_hash_map_path_duplicated_across_categories_with_identical_digest_still_blocks() -> None:
@@ -506,13 +496,12 @@ def test_hash_map_path_duplicated_across_categories_with_identical_digest_still_
     manifest["candidates"]["meter_paths_sha256"][target] = identical_sha
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
-    assert any(
-        "multiple categories" in k and target in k for k in result.missing_required_keys
-    )
+    assert any("multiple categories" in k and target in k for k in result.missing_required_keys)
 
 
 def test_path_inventory_immune_to_missing_file_in_incomplete_checkout(
-    tmp_path, monkeypatch  # noqa: ANN001
+    tmp_path,
+    monkeypatch,  # noqa: ANN001
 ) -> None:
     """[Codex レビュー 2026-09-01 P1 (#2)] regression: 旧実装は
     `calibration_path_inventory()` が検証対象 checkout 自身に対して
@@ -548,9 +537,7 @@ def test_path_inventory_immune_to_missing_file_in_incomplete_checkout(
     # (1) inventory 自体は checkout の欠落に影響されず、依然として dropped を
     #     要求し続ける（circularity 断ち切りの直接確認: rglob ベースなら
     #     ここで dropped が消えて (2) の検出が成立しなくなる）。
-    inventory_from_broken_checkout = c0_validate.calibration_path_inventory(
-        repo_root=tmp_path
-    )
+    inventory_from_broken_checkout = c0_validate.calibration_path_inventory(repo_root=tmp_path)
     assert dropped in inventory_from_broken_checkout
 
     scanned = c0_validate.scan_calibration_tree_inventory(repo_root=tmp_path)
@@ -573,9 +560,7 @@ def test_path_inventory_immune_to_missing_file_in_incomplete_checkout(
     monkeypatch.setattr(c0_validate, "_REPO_ROOT", tmp_path)
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
-    assert any(
-        "missing required path" in k and dropped in k for k in result.missing_required_keys
-    )
+    assert any("missing required path" in k and dropped in k for k in result.missing_required_keys)
 
 
 def test_meter_specs_missing_one_meter_family_is_listed() -> None:
@@ -655,7 +640,8 @@ def test_fixture_spec_generator_hash_not_a_hash_string_blocks() -> None:
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     violations = [
-        k for k in result.missing_required_keys
+        k
+        for k in result.missing_required_keys
         if k.startswith("frozen_design.fixture_spec.FORMANT_GT.generator_hash")
     ]
     assert len(violations) == 1
@@ -670,7 +656,8 @@ def test_fixture_spec_confound_axes_scalar_string_blocks() -> None:
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     violations = [
-        k for k in result.missing_required_keys
+        k
+        for k in result.missing_required_keys
         if k.startswith("frozen_design.fixture_spec.FORMANT_GT.confound_axes")
     ]
     assert len(violations) == 1
@@ -689,13 +676,12 @@ def test_fixture_spec_boundary_probes_empty_list_blocks() -> None:
 
 def test_fixture_spec_negative_controls_mapping_instead_of_list_blocks() -> None:
     manifest = _complete_manifest()
-    manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["negative_controls"] = {
-        "a": 1
-    }
+    manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["negative_controls"] = {"a": 1}
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     violations = [
-        k for k in result.missing_required_keys
+        k
+        for k in result.missing_required_keys
         if k.startswith("frozen_design.fixture_spec.FORMANT_GT.negative_controls")
     ]
     assert len(violations) == 1
@@ -713,7 +699,8 @@ def test_fixture_spec_generator_version_blank_string_blocks() -> None:
     # violation としてではなく通常の missing として列挙されることを確認する
     # （二重報告しないこと自体もここで確認する）。
     violations = [
-        k for k in result.missing_required_keys
+        k
+        for k in result.missing_required_keys
         if k.startswith("frozen_design.fixture_spec.FORMANT_GT.generator_version")
     ]
     assert violations == ["frozen_design.fixture_spec.FORMANT_GT.generator_version"]
@@ -727,7 +714,8 @@ def test_meter_spec_parameter_grid_scalar_int_blocks() -> None:
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     violations = [
-        k for k in result.missing_required_keys
+        k
+        for k in result.missing_required_keys
         if k.startswith("frozen_design.meter_specs.M6_IDENTITY.parameter_grid")
     ]
     assert len(violations) == 1
@@ -748,7 +736,8 @@ def test_provenance_spec_schema_version_non_string_blocks() -> None:
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     violations = [
-        k for k in result.missing_required_keys
+        k
+        for k in result.missing_required_keys
         if k.startswith("frozen_design.provenance_spec.schema_version")
     ]
     assert len(violations) == 1
@@ -778,9 +767,7 @@ def test_stop_rules_valid_list_is_not_blocked_by_shape() -> None:
     """既存の非空 list 値（fixture 既定値）は shape 違反として誤検出しない
     ことを確認する回帰ガード。"""
     result = c0_validate.validate_c0_manifest(_complete_manifest())
-    assert not any(
-        k.startswith("frozen_design.stop_rules") for k in result.missing_required_keys
-    )
+    assert not any(k.startswith("frozen_design.stop_rules") for k in result.missing_required_keys)
 
 
 def test_split_spec_missing_one_nested_key_is_listed() -> None:
@@ -796,9 +783,7 @@ def test_selection_spec_missing_one_nested_key_is_listed() -> None:
     del manifest["frozen_design"]["selection_spec"]["holdout_fail_outcome"]
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
-    assert (
-        "frozen_design.selection_spec.holdout_fail_outcome" in result.missing_required_keys
-    )
+    assert "frozen_design.selection_spec.holdout_fail_outcome" in result.missing_required_keys
 
 
 def test_provenance_spec_missing_one_nested_key_is_listed() -> None:
@@ -841,8 +826,7 @@ def test_structured_section_scalar_value_blocks(dotted_key: str) -> None:
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     violations = [
-        k for k in result.missing_required_keys
-        if k.startswith(dotted_key) and ": type" in k
+        k for k in result.missing_required_keys if k.startswith(dotted_key) and ": type" in k
     ]
     assert len(violations) == 1, (dotted_key, result.missing_required_keys)
 
@@ -875,9 +859,7 @@ def test_independence_ledger_missing_candidate_id_blocks() -> None:
     del manifest["independence_ledger"]["F0-B0-CURRENT"]
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
-    assert any(
-        "missing candidate_id: 'F0-B0-CURRENT'" in k for k in result.missing_required_keys
-    )
+    assert any("missing candidate_id: 'F0-B0-CURRENT'" in k for k in result.missing_required_keys)
 
 
 def test_independence_ledger_unknown_extra_candidate_id_blocks() -> None:
@@ -899,9 +881,7 @@ def test_independence_ledger_tier_mismatch_blocks() -> None:
     manifest["independence_ledger"]["F0-B0-CURRENT"] = "CROSS_IMPLEMENTATION"
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
-    assert any(
-        "tier mismatch" in k and "F0-B0-CURRENT" in k for k in result.missing_required_keys
-    )
+    assert any("tier mismatch" in k and "F0-B0-CURRENT" in k for k in result.missing_required_keys)
 
 
 def test_rng_ledger_closed_set_missing_family_stream_blocks() -> None:
@@ -924,9 +904,7 @@ def test_rng_ledger_closed_set_extra_unknown_stream_blocks() -> None:
     """closed set に無い stream 名が紛れ込んでいても BLOCK する。"""
     manifest = _complete_manifest()
     ledger = _full_rng_ledger()
-    ledger.append(
-        {"stream_name": "NOT_A_REAL_STREAM", "seeded": True, "public_seed_id": "9" * 64}
-    )
+    ledger.append({"stream_name": "NOT_A_REAL_STREAM", "seeded": True, "public_seed_id": "9" * 64})
     manifest["rng_ledger"] = ledger
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
@@ -980,3 +958,42 @@ def test_validate_c0_manifest_is_pure_no_io(tmp_path, monkeypatch) -> None:  # n
     c0_validate.validate_c0_manifest(_complete_manifest())
     after = sorted(tmp_path.iterdir())
     assert before == after == []
+
+
+def test_rng_ledger_rejects_non_digest_public_seed_id() -> None:
+    manifest = _complete_manifest()
+    manifest["rng_ledger"][0]["public_seed_id"] = "x"
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(".public_seed_id" in key for key in result.missing_required_keys)
+
+
+def test_rng_ledger_producer_declarations_round_trip_validator() -> None:
+    ledger = streams.RngLedger()
+    secret = b"unit-test-secret"
+    for family in fixture_axes.FAMILY_ORDER:
+        ledger.record(
+            secret,
+            campaign_id="RUN10-CAL-test",
+            family=family.value,
+            split="selection",
+            row_id=f"{family.value}-row",
+            probe_index=0,
+            purpose="generator",
+        )
+    first_family = fixture_axes.FAMILY_ORDER[0].value
+    for purpose in ("split_hmac", "split_tiebreak"):
+        ledger.record(
+            secret,
+            campaign_id="RUN10-CAL-test",
+            family=first_family,
+            split="selection",
+            row_id="split-row",
+            probe_index=0,
+            purpose=purpose,
+        )
+    manifest = _complete_manifest()
+    manifest["rng_ledger"] = ledger.to_declaration_records()
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE not in result.blocked_codes
+    assert vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG not in result.blocked_codes

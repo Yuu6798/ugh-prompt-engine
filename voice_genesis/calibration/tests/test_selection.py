@@ -61,8 +61,12 @@ def test_selection_rounding_creates_tie_broken_by_next_criterion() -> None:
 def test_selection_candidate_id_lexical_tiebreak_last_resort() -> None:
     # 全ての criterion が完全一致する 2 候補は candidate_id の字句順で決まる。
     common = dict(
-        primary_normalized_mae=0.1, signed_bias=0.0, primary_q95_ae=0.2,
-        nuisance_sensitivity_max=0.0, missing_failure_rate=0.0, complexity_rank=1,
+        primary_normalized_mae=0.1,
+        signed_bias=0.0,
+        primary_q95_ae=0.2,
+        nuisance_sensitivity_max=0.0,
+        missing_failure_rate=0.0,
+        complexity_rank=1,
     )
     z = CandidateCriteria(candidate_id="zzz", **common)
     a = CandidateCriteria(candidate_id="aaa", **common)
@@ -92,12 +96,17 @@ def test_selection_empty_candidates_is_selection_failed_closed() -> None:
 
 def test_selection_records_raw_and_rounded_vectors_for_every_candidate() -> None:
     a = CandidateCriteria(
-        candidate_id="cand-A", primary_normalized_mae=0.123456, signed_bias=0.01,
+        candidate_id="cand-A",
+        primary_normalized_mae=0.123456,
+        signed_bias=0.01,
         primary_q95_ae=0.5,
     )
     b = CandidateCriteria(
-        candidate_id="cand-B", eligible=False, primary_normalized_mae=0.9,
-        signed_bias=0.9, primary_q95_ae=0.9,
+        candidate_id="cand-B",
+        eligible=False,
+        primary_normalized_mae=0.9,
+        signed_bias=0.9,
+        primary_q95_ae=0.9,
     )
     outcome = select([a, b], SelectionFamily.ABSOLUTE)
     # ineligible な候補も raw/rounded vector には記録される (SELECTION_FROZEN
@@ -110,10 +119,14 @@ def test_selection_records_raw_and_rounded_vectors_for_every_candidate() -> None
 
 def test_selection_directional_family_uses_kendall_tau_and_reversal_rate() -> None:
     good = CandidateCriteria(
-        candidate_id="good", kendall_tau=0.95, adjacent_reversal_rate=0.0,
+        candidate_id="good",
+        kendall_tau=0.95,
+        adjacent_reversal_rate=0.0,
     )
     bad = CandidateCriteria(
-        candidate_id="bad", kendall_tau=0.5, adjacent_reversal_rate=0.1,
+        candidate_id="bad",
+        kendall_tau=0.5,
+        adjacent_reversal_rate=0.1,
     )
     outcome = select([good, bad], SelectionFamily.DIRECTIONAL)
     assert outcome.selected_candidate_id == "good"
@@ -143,11 +156,15 @@ def test_selection_mix_of_eligible_and_criteria_absent_ineligible_succeeds() -> 
     eligible な 2 件のみで選抜が成立し、ineligible 候補は理由付きで
     `SelectionOutcome.ineligible_candidates` に記録されること。"""
     a = CandidateCriteria(
-        candidate_id="cand-A", primary_normalized_mae=0.1, signed_bias=0.0,
+        candidate_id="cand-A",
+        primary_normalized_mae=0.1,
+        signed_bias=0.0,
         primary_q95_ae=0.1,
     )
     b = CandidateCriteria(
-        candidate_id="cand-B", primary_normalized_mae=0.5, signed_bias=0.0,
+        candidate_id="cand-B",
+        primary_normalized_mae=0.5,
+        signed_bias=0.0,
         primary_q95_ae=0.5,
     )
     no_criteria = CandidateCriteria(candidate_id="d4c-no-pyworld")
@@ -179,12 +196,17 @@ def test_selection_flagged_ineligible_with_criteria_still_builds_vector() -> Non
     保たれる）一方、ineligible として reason `"flagged_ineligible"` で
     記録される。"""
     a = CandidateCriteria(
-        candidate_id="cand-A", primary_normalized_mae=0.1, signed_bias=0.0,
+        candidate_id="cand-A",
+        primary_normalized_mae=0.1,
+        signed_bias=0.0,
         primary_q95_ae=0.1,
     )
     flagged = CandidateCriteria(
-        candidate_id="cand-B", eligible=False, primary_normalized_mae=0.9,
-        signed_bias=0.9, primary_q95_ae=0.9,
+        candidate_id="cand-B",
+        eligible=False,
+        primary_normalized_mae=0.9,
+        signed_bias=0.9,
+        primary_q95_ae=0.9,
     )
     outcome = select([a, flagged], SelectionFamily.ABSOLUTE)
     assert outcome.outcome == "SELECTED"
@@ -239,9 +261,7 @@ def test_select_across_ceilings_falls_back_to_directional_when_absolute_empty() 
         kendall_tau=0.9,
         adjacent_reversal_rate=0.0,
     )
-    diagnostic_only = CandidateCriteria(
-        candidate_id="diag-1", ceiling=ClaimCeiling.DIAGNOSTIC_ONLY
-    )
+    diagnostic_only = CandidateCriteria(candidate_id="diag-1", ceiling=ClaimCeiling.DIAGNOSTIC_ONLY)
     outcome = select_across_ceilings([directional_1, directional_2, diagnostic_only])
     assert outcome.family == SelectionFamily.DIRECTIONAL
     assert outcome.selected_candidate_id == "dir-2"  # 高い kendall_tau が優先
@@ -261,10 +281,16 @@ def test_select_duplicate_candidate_id_raises() -> None:
     candidate_id をキーにすると重複時に一方が黙って上書きされる。`select()`
     はこれを検出して `ValueError` を送出しなければならない。"""
     a = CandidateCriteria(
-        candidate_id="dup", primary_normalized_mae=0.1, signed_bias=0.0, primary_q95_ae=0.1,
+        candidate_id="dup",
+        primary_normalized_mae=0.1,
+        signed_bias=0.0,
+        primary_q95_ae=0.1,
     )
     b = CandidateCriteria(
-        candidate_id="dup", primary_normalized_mae=0.9, signed_bias=0.9, primary_q95_ae=0.9,
+        candidate_id="dup",
+        primary_normalized_mae=0.9,
+        signed_bias=0.9,
+        primary_q95_ae=0.9,
     )
     with pytest.raises(ValueError, match="dup"):
         select([a, b], SelectionFamily.ABSOLUTE)
@@ -274,12 +300,17 @@ def test_select_across_ceilings_duplicate_candidate_id_raises() -> None:
     """[Codex レビュー 2026-09-01] regression: `select_across_ceilings` も
     pool 分割前に candidate_id の一意性を検証する。"""
     a = CandidateCriteria(
-        candidate_id="dup", ceiling=ClaimCeiling.ABSOLUTE,
-        primary_normalized_mae=0.1, signed_bias=0.0, primary_q95_ae=0.1,
+        candidate_id="dup",
+        ceiling=ClaimCeiling.ABSOLUTE,
+        primary_normalized_mae=0.1,
+        signed_bias=0.0,
+        primary_q95_ae=0.1,
     )
     b = CandidateCriteria(
-        candidate_id="dup", ceiling=ClaimCeiling.DIRECTIONAL,
-        kendall_tau=0.5, adjacent_reversal_rate=0.0,
+        candidate_id="dup",
+        ceiling=ClaimCeiling.DIRECTIONAL,
+        kendall_tau=0.5,
+        adjacent_reversal_rate=0.0,
     )
     with pytest.raises(ValueError, match="dup"):
         select_across_ceilings([a, b])
@@ -336,7 +367,9 @@ def test_select_across_ceilings_absolute_without_criteria_falls_back_to_directio
     assert ("abs-no-criteria", "criteria_payload_absent") in outcome.ineligible_candidates
 
 
-def test_select_across_ceilings_directional_with_absolute_fields_does_not_leak_into_ranking() -> None:
+def test_select_across_ceilings_directional_with_absolute_fields_does_not_leak_into_ranking() -> (
+    None
+):
     """[P1] regression (selection.py:284): 従来は `select_across_ceilings` が
     ABSOLUTE/DIRECTIONAL 両プールの union を `select()` へ渡していたため、
     ceiling=DIRECTIONAL の候補がたまたま ABSOLUTE 族の criteria フィールド
@@ -372,3 +405,40 @@ def test_select_across_ceilings_directional_with_absolute_fields_does_not_leak_i
     assert "dir-imposter" not in outcome.ranked_candidate_ids
     # 監査要件: なぜ ranking 対象外だったかは ineligible_candidates に残る。
     assert ("dir-imposter", "different_ceiling_pool") in outcome.ineligible_candidates
+
+
+def test_selection_non_finite_primary_criterion_is_ineligible() -> None:
+    bad = CandidateCriteria(
+        candidate_id="bad-nan",
+        primary_normalized_mae=float("nan"),
+        signed_bias=0.0,
+        primary_q95_ae=0.1,
+    )
+    good = CandidateCriteria(
+        candidate_id="good",
+        primary_normalized_mae=0.2,
+        signed_bias=0.0,
+        primary_q95_ae=0.2,
+    )
+    outcome = select([bad, good], SelectionFamily.ABSOLUTE)
+    assert outcome.selected_candidate_id == "good"
+    assert outcome.ineligible_candidates == (("bad-nan", "criteria_non_finite"),)
+    assert "bad-nan" not in outcome.raw_vectors
+
+
+def test_selection_non_finite_common_ranking_field_is_ineligible() -> None:
+    bad = CandidateCriteria(
+        candidate_id="bad-inf",
+        kendall_tau=0.99,
+        adjacent_reversal_rate=0.0,
+        nuisance_sensitivity_max=float("inf"),
+    )
+    good = CandidateCriteria(
+        candidate_id="good",
+        kendall_tau=0.9,
+        adjacent_reversal_rate=0.0,
+    )
+    outcome = select([bad, good], SelectionFamily.DIRECTIONAL)
+    assert outcome.selected_candidate_id == "good"
+    assert outcome.ineligible_candidates == (("bad-inf", "criteria_non_finite"),)
+    assert "bad-inf" not in outcome.rounded_vectors

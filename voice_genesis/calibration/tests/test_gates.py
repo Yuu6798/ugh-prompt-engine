@@ -72,7 +72,9 @@ def test_auto_ceiling_for_unjustified() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _instance(instance_id: str, ae: float, e: float, u_gt: float, u_num: float, e_use: float) -> InstanceMargin:
+def _instance(
+    instance_id: str, ae: float, e: float, u_gt: float, u_num: float, e_use: float
+) -> InstanceMargin:
     return InstanceMargin(
         instance_id=instance_id,
         domain=Domain.PRIMARY,
@@ -92,7 +94,9 @@ def _inv_pairs(
     gate4' の重複 pair_id 検出（Codex レビュー 2026-09-01）を通過させるため、
     テストは同一観測を使い回すのではなく必ずこのヘルパーで一意な観測を作る。"""
     return [
-        InvariancePair(pair_id=f"{axis}-p{i}", axis=axis, ds=ds, e_use_i0=e_use_i0, e_use_ia=e_use_ia)
+        InvariancePair(
+            pair_id=f"{axis}-p{i}", axis=axis, ds=ds, e_use_i0=e_use_i0, e_use_ia=e_use_ia
+        )
         for i in range(n)
     ]
 
@@ -170,8 +174,14 @@ def test_absolute_gates_gate3_arithmetic_fails_hand_computed() -> None:
 
 def test_absolute_gates_ineligible_primary_fails_gate1() -> None:
     ineligible = InstanceMargin(
-        instance_id="bad", domain=Domain.PRIMARY, eligible=False,
-        ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0,
+        instance_id="bad",
+        domain=Domain.PRIMARY,
+        eligible=False,
+        ae=0.0,
+        e=0.0,
+        u_gt=0.0,
+        u_num=0.0,
+        e_use=1.0,
     )
     good = _instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)
     result = absolute_gates(
@@ -212,8 +222,14 @@ def test_absolute_gates_duplicate_primary_instance_id_fails() -> None:
     # 同一 instance_id "i1" を複製 (水増し) しても、新実装は duplicate として
     # 検出し gate1 を FAIL させる (旧実装は集計だけを歪め見逃していた)。
     duplicated = InstanceMargin(
-        instance_id="i1", domain=Domain.PRIMARY, eligible=True,
-        ae=1.0, e=1.0, u_gt=0.05, u_num=0.05, e_use=2.0,
+        instance_id="i1",
+        domain=Domain.PRIMARY,
+        eligible=True,
+        ae=1.0,
+        e=1.0,
+        u_gt=0.05,
+        u_num=0.05,
+        e_use=2.0,
     )
     result = absolute_gates(
         [high_e_use, duplicated],
@@ -408,8 +424,14 @@ def test_absolute_gates_nan_ae_fails_gate2() -> None:
     明示的な typed reason で検出する（集計関数へ非有限値を渡さない）。"""
     instances = [
         InstanceMargin(
-            instance_id="i1", domain=Domain.PRIMARY, eligible=True,
-            ae=float("nan"), e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0,
+            instance_id="i1",
+            domain=Domain.PRIMARY,
+            eligible=True,
+            ae=float("nan"),
+            e=0.0,
+            u_gt=0.0,
+            u_num=0.0,
+            e_use=1.0,
         )
     ]
     result = absolute_gates(
@@ -436,8 +458,14 @@ def test_absolute_gates_gate_max_nan_element_not_silently_dropped() -> None:
     instances = [
         _instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0),  # G = -1.0
         InstanceMargin(
-            instance_id="i2", domain=Domain.PRIMARY, eligible=True,
-            ae=float("nan"), e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0,
+            instance_id="i2",
+            domain=Domain.PRIMARY,
+            eligible=True,
+            ae=float("nan"),
+            e=0.0,
+            u_gt=0.0,
+            u_num=0.0,
+            e_use=1.0,
         ),
     ]
     result = absolute_gates(
@@ -463,8 +491,14 @@ def test_absolute_gates_gate3_nan_u_gt_num_not_silently_dropped_by_max() -> None
     instances = [
         _instance("i1", ae=0.0, e=0.0, u_gt=0.05, u_num=0.05, e_use=10.0),
         InstanceMargin(
-            instance_id="i2", domain=Domain.PRIMARY, eligible=True,
-            ae=0.0, e=0.0, u_gt=float("nan"), u_num=0.0, e_use=10.0,
+            instance_id="i2",
+            domain=Domain.PRIMARY,
+            eligible=True,
+            ae=0.0,
+            e=0.0,
+            u_gt=float("nan"),
+            u_num=0.0,
+            e_use=10.0,
         ),
     ]
     result = absolute_gates(
@@ -484,8 +518,14 @@ def test_absolute_gates_gate3_nan_u_gt_num_not_silently_dropped_by_max() -> None
 
 def test_absolute_gates_no_primary_instance_raises() -> None:
     boundary_only = InstanceMargin(
-        instance_id="b1", domain=Domain.BOUNDARY, eligible=True,
-        ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0,
+        instance_id="b1",
+        domain=Domain.BOUNDARY,
+        eligible=True,
+        ae=0.0,
+        e=0.0,
+        u_gt=0.0,
+        u_num=0.0,
+        e_use=1.0,
     )
     with pytest.raises(ValueError):
         absolute_gates(
@@ -505,9 +545,19 @@ def test_absolute_gates_no_primary_instance_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _pair(pair_id: str, delta_truth: float, delta_output: float, *, correct_sign: bool = True,
-          is_adjacent: bool = True, u_gt_i: float = 0.1, u_num_i: float = 0.05,
-          u_gt_j: float = 0.1, u_num_j: float = 0.05, sweep_id: str = "default") -> DirectionalPair:
+def _pair(
+    pair_id: str,
+    delta_truth: float,
+    delta_output: float,
+    *,
+    correct_sign: bool = True,
+    is_adjacent: bool = True,
+    u_gt_i: float = 0.1,
+    u_num_i: float = 0.05,
+    u_gt_j: float = 0.1,
+    u_num_j: float = 0.05,
+    sweep_id: str = "default",
+) -> DirectionalPair:
     return DirectionalPair(
         pair_id=pair_id,
         delta_truth=delta_truth,
@@ -599,7 +649,9 @@ def test_directional_units_commensurate_two_conjuncts_pass_but_combined_fails() 
     assert result.resolvable_count == 0
 
 
-def test_directional_units_incommensurate_same_pair_would_resolve_without_combined_formula() -> None:
+def test_directional_units_incommensurate_same_pair_would_resolve_without_combined_formula() -> (
+    None
+):
     # 同じ (a)+(b) 通過ケースで units_commensurate=False なら合算式 (c) を課さない
     # ため resolvable になる（第 3 巡オラクル 2 との対比）。
     p = _pair("p1", delta_truth=0.33, delta_output=0.5)
@@ -616,10 +668,7 @@ def test_directional_units_incommensurate_same_pair_would_resolve_without_combin
 
 
 def test_directional_exactly_three_pairs_sets_warning_flag() -> None:
-    pairs = [
-        _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False)
-        for i in range(3)
-    ]
+    pairs = [_pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False) for i in range(3)]
     result = directional_gates(
         pairs,
         u_rep=0.02,
@@ -696,18 +745,26 @@ def test_directional_nonadjacent_wrong_sign_does_not_block_pass() -> None:
 
 
 def test_directional_tau_b_recorded_but_never_gates_pass() -> None:
-    pairs = [
-        _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False) for i in range(3)
-    ]
+    pairs = [_pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False) for i in range(3)]
     result_low_tau = directional_gates(
-        pairs, u_rep=0.02, u_proc=0.01, expected_sweep_ids={"default"},
-        negative_control_failures=0, positive_control_failures=0,
-        units_commensurate=False, tau_b=0.01,
+        pairs,
+        u_rep=0.02,
+        u_proc=0.01,
+        expected_sweep_ids={"default"},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+        tau_b=0.01,
     )
     result_high_tau = directional_gates(
-        pairs, u_rep=0.02, u_proc=0.01, expected_sweep_ids={"default"},
-        negative_control_failures=0, positive_control_failures=0,
-        units_commensurate=False, tau_b=0.99,
+        pairs,
+        u_rep=0.02,
+        u_proc=0.01,
+        expected_sweep_ids={"default"},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+        tau_b=0.99,
     )
     assert result_low_tau.passed == result_high_tau.passed
     assert result_low_tau.tau_b == pytest.approx(0.01)
@@ -715,13 +772,15 @@ def test_directional_tau_b_recorded_but_never_gates_pass() -> None:
 
 
 def test_directional_control_failures_block_pass() -> None:
-    pairs = [
-        _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False) for i in range(3)
-    ]
+    pairs = [_pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=False) for i in range(3)]
     result = directional_gates(
-        pairs, u_rep=0.02, u_proc=0.01, expected_sweep_ids={"default"},
+        pairs,
+        u_rep=0.02,
+        u_proc=0.01,
+        expected_sweep_ids={"default"},
         negative_control_failures=1,
-        positive_control_failures=0, units_commensurate=False,
+        positive_control_failures=0,
+        units_commensurate=False,
     )
     assert result.passed is False
 
@@ -845,3 +904,37 @@ def test_directional_expected_sweep_with_no_observed_pairs_fails() -> None:
     assert result.passed is False
     assert "sweep-B" in result.sweeps_below_minimum
     assert result.sweep_resolvable_counts["sweep-B"] == 0
+
+
+def test_directional_duplicate_pair_id_across_sweeps_fails() -> None:
+    pairs = [
+        _pair(
+            f"p{i}",
+            delta_truth=1.0,
+            delta_output=1.0,
+            is_adjacent=False,
+            sweep_id="sweep-A",
+        )
+        for i in range(3)
+    ] + [
+        _pair(
+            f"p{i}",
+            delta_truth=1.0,
+            delta_output=1.0,
+            is_adjacent=False,
+            sweep_id="sweep-B",
+        )
+        for i in range(3)
+    ]
+    result = directional_gates(
+        pairs,
+        u_rep=0.02,
+        u_proc=0.01,
+        expected_sweep_ids={"sweep-A", "sweep-B"},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.sweep_resolvable_counts == {"sweep-A": 3, "sweep-B": 3}
+    assert result.passed is False
+    assert any("duplicate pair_id" in reason for reason in result.failure_reasons)
