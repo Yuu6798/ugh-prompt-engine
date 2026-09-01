@@ -295,6 +295,20 @@ def test_spectral_flux_fires_on_step_and_silent_on_steady() -> None:
             assert mag_step > mag_steady * 5.0
 
 
+def test_spectral_flux_timestamps_frame_pair_midpoint() -> None:
+    frame_len = 512
+    hop = frame_len // 2
+    # Exactly two overlapping frames -> exactly one flux value (k=0). The event
+    # time is the midpoint of frame-center 0 and frame-center 1.
+    signal = np.concatenate([np.zeros(hop), np.ones(frame_len)])
+    join_time_s, magnitude = transition.spectral_flux(
+        signal, SR, frame_len=frame_len, norm="l1"
+    )
+    expected_s = ((0.5 * hop) + frame_len / 2.0) / SR
+    assert magnitude > 0.0
+    assert join_time_s == pytest.approx(expected_s)
+
+
 # ---------------------------------------------------------------------------
 # b0_wrappers: 有限値を返すこと
 # ---------------------------------------------------------------------------

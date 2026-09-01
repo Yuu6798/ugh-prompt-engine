@@ -19,6 +19,21 @@ def _all_finite(values: Sequence[float]) -> bool:
     return all(math.isfinite(v) for v in values)
 
 
+def _nonnegative_finite(value: float) -> bool:
+    """Uncertainty/error budgets are finite and physically nonnegative."""
+    return math.isfinite(value) and value >= 0.0
+
+
+def _positive_finite(value: float) -> bool:
+    """E_use is a finite, strictly positive acceptance budget."""
+    return math.isfinite(value) and value > 0.0
+
+
+def _same_nonzero_sign(a: float, b: float) -> bool:
+    """Derive directional sign agreement from measured deltas, never caller metadata."""
+    return math.isfinite(a) and math.isfinite(b) and a != 0.0 and b != 0.0 and ((a > 0) == (b > 0))
+
+
 def threshold_margin(e_use: float, u_gt: float, u_num: float) -> float:
     """`M[i] = E_use - U_GT - U_num`（加算、RSS ではない）。`<=0` なら ABSOLUTE は
     NOT_EVALUABLE（E_use を緩めない）。"""
@@ -178,6 +193,32 @@ def absolute_gates(
     primary_ids = [i.instance_id for i in primary]
     duplicate_instance_ids = sorted({iid for iid in primary_ids if primary_ids.count(iid) > 1})
 
+    global_uncertainty_finite = math.isfinite(u_rep) and math.isfinite(u_proc)
+    global_uncertainty_valid = _nonnegative_finite(u_rep) and _nonnegative_finite(u_proc)
+    nonfinite_primary_budget_ids = sorted(
+        i.instance_id
+        for i in primary
+        if not _all_finite((i.ae, i.u_gt, i.u_num, i.e_use))
+    )
+    invalid_primary_budget_ids = sorted(
+        i.instance_id
+        for i in primary
+        if not (
+            _nonnegative_finite(i.ae)
+            and _nonnegative_finite(i.u_gt)
+            and _nonnegative_finite(i.u_num)
+            and _positive_finite(i.e_use)
+        )
+    )
+    budget_inputs_valid = global_uncertainty_valid and not invalid_primary_budget_ids
+    if not global_uncertainty_valid:
+        reasons.append("gate budgets: U_rep/U_proc must be finite and nonnegative")
+    if invalid_primary_budget_ids:
+        reasons.append(
+            "gate budgets: PRIMARY AE/U_GT/U_num must be finite/nonnegative and E_use > 0: "
+            + ", ".join(invalid_primary_budget_ids)
+        )
+
     gate1 = all(i.eligible for i in primary) and not duplicate_instance_ids
     if not all(i.eligible for i in primary):
         reasons.append("gate1: some PRIMARY instance not eligible")
@@ -188,19 +229,27 @@ def absolute_gates(
         )
 
     eligible_primary = [i for i in primary if i.eligible]
-    g_values = tuple(i.ae + i.u_gt + i.u_num + u_rep + u_proc - i.e_use for i in eligible_primary)
+    g_values = (
+        tuple(i.ae + i.u_gt + i.u_num + u_rep + u_proc - i.e_use for i in eligible_primary)
+        if budget_inputs_valid
+        else ()
+    )
     g_values_finite = _all_finite(g_values)
 
     gate2 = bool(g_values) and g_values_finite and q95(g_values) <= 0
     if not gate2:
-        if g_values and not g_values_finite:
+        if (not global_uncertainty_finite) or nonfinite_primary_budget_ids or (
+            g_values and not g_values_finite
+        ):
             reasons.append("gate2': G[i] contains non-finite value(s)")
         else:
             reasons.append("gate2': q95_i(G[i]) > 0 (or no eligible instance)")
 
     gate_max = bool(g_values) and g_values_finite and max(g_values) <= 0
     if not gate_max:
-        if g_values and not g_values_finite:
+        if (not global_uncertainty_finite) or nonfinite_primary_budget_ids or (
+            g_values and not g_values_finite
+        ):
             reasons.append("gate_max': G[i] contains non-finite value(s)")
         else:
             reasons.append("gate_max': max_i(G[i]) > 0 (or no eligible instance)")
@@ -210,11 +259,10 @@ def absolute_gates(
         u_gt_num_values = [i.u_gt + i.u_num for i in eligible_primary]
         e_use_values = [i.e_use for i in eligible_primary]
         gate3_inputs_finite = (
-            _all_finite(e_values)
+            budget_inputs_valid
+            and _all_finite(e_values)
             and _all_finite(u_gt_num_values)
             and _all_finite(e_use_values)
-            and math.isfinite(u_rep)
-            and math.isfinite(u_proc)
         )
         if gate3_inputs_finite:
             bias_value = abs(float(np.mean(e_values)))
@@ -267,6 +315,30 @@ def absolute_gates(
             gate4 = False
             reasons.append(f"gate4': axis {axis} has <5 pairs")
             continue
+        nonfinite_budget_pair_ids = sorted(
+            p.pair_id
+            for p in pairs
+            if not _all_finite((p.ds, p.e_use_i0, p.e_use_ia))
+        )
+        invalid_budget_pair_ids = sorted(
+            p.pair_id
+            for p in pairs
+            if not (
+                _nonnegative_finite(p.ds)
+                and _positive_finite(p.e_use_i0)
+                and _positive_finite(p.e_use_ia)
+            )
+        )
+        if not global_uncertainty_valid or invalid_budget_pair_ids:
+            gate4 = False
+            if (not global_uncertainty_finite) or nonfinite_budget_pair_ids:
+                reasons.append(f"gate4': axis {axis} has non-finite margin(s)")
+            elif invalid_budget_pair_ids:
+                reasons.append(
+                    f"gate4': axis {axis} has invalid nonnegative/positive budget pair(s): "
+                    + ", ".join(invalid_budget_pair_ids)
+                )
+            continue
         margins = [p.ds + u_rep + u_proc - min(p.e_use_i0, p.e_use_ia) for p in pairs]
         if not _all_finite(margins):
             gate4 = False
@@ -281,7 +353,7 @@ def absolute_gates(
     if not gate5:
         reasons.append("gate5: FDR0/FNR1 not both zero, or min-count not met")
 
-    passed = gate1 and gate2 and gate_max and gate3 and gate4 and gate5
+    passed = budget_inputs_valid and gate1 and gate2 and gate_max and gate3 and gate4 and gate5
     return AbsoluteGateResult(
         gate1_all_eligible=gate1,
         gate2_q95=gate2,
@@ -408,6 +480,26 @@ def directional_gates(
     """
     reasons: list[str] = []
 
+    global_uncertainty_valid = _nonnegative_finite(u_rep) and _nonnegative_finite(u_proc)
+    invalid_pair_budget_ids = sorted(
+        {
+            p.pair_id
+            for p in pairs
+            if not all(
+                _nonnegative_finite(v)
+                for v in (p.u_gt_i, p.u_num_i, p.u_gt_j, p.u_num_j)
+            )
+        }
+    )
+    budget_inputs_valid = global_uncertainty_valid and not invalid_pair_budget_ids
+    if not global_uncertainty_valid:
+        reasons.append("directional budgets: U_rep/U_proc must be finite and nonnegative")
+    if invalid_pair_budget_ids:
+        reasons.append(
+            "directional budgets: pair uncertainty terms must be finite and nonnegative: "
+            + ", ".join(invalid_pair_budget_ids)
+        )
+
     seen_pair_ids: set[str] = set()
     duplicate_pair_ids_set: set[str] = set()
     for p in pairs:
@@ -421,16 +513,17 @@ def directional_gates(
         )
 
     resolvable: list[DirectionalPair] = []
-    for p in pairs:
-        r_truth = (p.u_gt_i + p.u_num_i) + (p.u_gt_j + p.u_num_j)
-        truth_resolvable = p.delta_truth > r_truth
-        output_significant = abs(p.delta_output) > 2 * (u_rep + u_proc)
-        ok = truth_resolvable and output_significant
-        if units_commensurate:
-            r_combined = r_truth + 2 * (u_rep + u_proc)
-            ok = ok and (p.delta_truth > r_combined)
-        if ok:
-            resolvable.append(p)
+    if budget_inputs_valid:
+        for p in pairs:
+            r_truth = (p.u_gt_i + p.u_num_i) + (p.u_gt_j + p.u_num_j)
+            truth_resolvable = p.delta_truth > r_truth
+            output_significant = abs(p.delta_output) > 2 * (u_rep + u_proc)
+            ok = truth_resolvable and output_significant
+            if units_commensurate:
+                r_combined = r_truth + 2 * (u_rep + u_proc)
+                ok = ok and (p.delta_truth > r_combined)
+            if ok:
+                resolvable.append(p)
 
     resolvable_count = len(resolvable)
 
@@ -451,11 +544,13 @@ def directional_gates(
         reasons.append("resolvable pair count < 3 in sweep(s): " + ", ".join(sweeps_below_minimum))
 
     adjacent_resolvable = [p for p in resolvable if p.is_adjacent]
-    all_correct = all(p.correct_sign for p in adjacent_resolvable)
+    all_correct = all(_same_nonzero_sign(p.delta_truth, p.delta_output) for p in adjacent_resolvable)
     if not all_correct:
-        reasons.append("not all resolvable adjacent pairs have correct sign")
+        reasons.append("not all resolvable adjacent pairs have correct measured delta sign")
 
-    reversals = sum(1 for p in adjacent_resolvable if not p.correct_sign)
+    reversals = sum(
+        1 for p in adjacent_resolvable if not _same_nonzero_sign(p.delta_truth, p.delta_output)
+    )
     adjacent_reversal_rate = (reversals / len(adjacent_resolvable)) if adjacent_resolvable else 0.0
     if adjacent_reversal_rate != 0.0:
         reasons.append("adjacent_reversal_rate != 0")
@@ -468,7 +563,8 @@ def directional_gates(
         reasons.append("effect does not exceed noise floor")
 
     passed = (
-        every_sweep_meets_minimum
+        budget_inputs_valid
+        and every_sweep_meets_minimum
         and not duplicate_pair_ids
         and all_correct
         and adjacent_reversal_rate == 0.0

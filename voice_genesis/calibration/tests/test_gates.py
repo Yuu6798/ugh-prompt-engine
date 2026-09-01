@@ -702,8 +702,9 @@ def test_directional_adjacent_reversal_fails() -> None:
         _pair(f"p{i}", delta_truth=1.0, delta_output=1.0, is_adjacent=True, correct_sign=True)
         for i in range(3)
     ]
-    # 1 件だけ符号反転
-    pairs[0] = _pair("p0", delta_truth=1.0, delta_output=1.0, is_adjacent=True, correct_sign=False)
+    # 1 件だけ measured delta を符号反転。caller metadata は故意に True のままにし、
+    # gate が boolean を信頼せず recorded deltas から符号を導出することを固定する。
+    pairs[0] = _pair("p0", delta_truth=1.0, delta_output=-1.0, is_adjacent=True, correct_sign=True)
     result = directional_gates(
         pairs,
         u_rep=0.02,
@@ -727,7 +728,7 @@ def test_directional_nonadjacent_wrong_sign_does_not_block_pass() -> None:
         for i in range(3)
     ]
     nonadjacent_wrong = _pair(
-        "nonadj-wrong", delta_truth=1.0, delta_output=1.0, is_adjacent=False, correct_sign=False
+        "nonadj-wrong", delta_truth=1.0, delta_output=-1.0, is_adjacent=False, correct_sign=True
     )
     result = directional_gates(
         [*adjacent_ok, nonadjacent_wrong],
@@ -938,3 +939,108 @@ def test_directional_duplicate_pair_id_across_sweeps_fails() -> None:
     assert result.sweep_resolvable_counts == {"sweep-A": 3, "sweep-B": 3}
     assert result.passed is False
     assert any("duplicate pair_id" in reason for reason in result.failure_reasons)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("ae", -1.0), ("u_gt", -1.0), ("u_num", -1.0), ("e_use", 0.0)],
+)
+def test_absolute_gates_reject_invalid_primary_budget_values(field: str, value: float) -> None:
+    values = dict(ae=0.1, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)
+    values[field] = value
+    instance = _instance("invalid-budget", **values)
+    result = absolute_gates(
+        [instance],
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.passed is False
+    assert any("gate budgets" in reason for reason in result.failure_reasons)
+
+
+@pytest.mark.parametrize(("u_rep", "u_proc"), [(-0.1, 0.0), (0.0, -0.1)])
+def test_absolute_gates_reject_negative_global_uncertainty(u_rep: float, u_proc: float) -> None:
+    result = absolute_gates(
+        [_instance("i1", ae=0.1, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)],
+        u_rep=u_rep,
+        u_proc=u_proc,
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.passed is False
+    assert any("U_rep/U_proc" in reason for reason in result.failure_reasons)
+
+
+def test_absolute_gates_negative_uncertainty_cannot_cancel_large_error() -> None:
+    exploit = _instance("exploit", ae=10.0, e=0.0, u_gt=-100.0, u_num=0.0, e_use=1.0)
+    result = absolute_gates(
+        [exploit],
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.passed is False
+    assert result.gate2_q95 is False
+
+
+def test_directional_gates_reject_negative_uncertainty_budget() -> None:
+    pairs = [
+        _pair(
+            f"p{i}",
+            delta_truth=1.0,
+            delta_output=1.0,
+            u_gt_i=-100.0,
+            is_adjacent=True,
+        )
+        for i in range(3)
+    ]
+    result = directional_gates(
+        pairs,
+        u_rep=0.0,
+        u_proc=0.0,
+        expected_sweep_ids={"default"},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.passed is False
+    assert result.resolvable_count == 0
+    assert any("directional budgets" in reason for reason in result.failure_reasons)
+
+
+def test_directional_sign_is_derived_from_measured_deltas_not_flag() -> None:
+    pairs = [
+        _pair(
+            f"p{i}",
+            delta_truth=1.0,
+            delta_output=-1.0,
+            correct_sign=True,
+            is_adjacent=True,
+        )
+        for i in range(3)
+    ]
+    result = directional_gates(
+        pairs,
+        u_rep=0.0,
+        u_proc=0.0,
+        expected_sweep_ids={"default"},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.resolvable_count == 3
+    assert result.all_resolvable_correct_sign is False
+    assert result.adjacent_reversal_rate == 1.0
+    assert result.passed is False

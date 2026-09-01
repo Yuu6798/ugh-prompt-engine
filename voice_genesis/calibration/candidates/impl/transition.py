@@ -92,7 +92,9 @@ def spectral_flux(
     flux_arr = np.array(flux_values)
     peak_idx = int(np.argmax(flux_arr))
     magnitude = float(flux_arr[peak_idx])
-    join_time_s = float((peak_idx + 1) * hop / sr)
+    # flux_values[k] compares frames k and k+1. Timestamp the event at the
+    # midpoint of those two frame centers, not at the second frame start.
+    join_time_s = float(((peak_idx + 0.5) * hop + frame_len / 2.0) / sr)
     return join_time_s, magnitude
 
 
