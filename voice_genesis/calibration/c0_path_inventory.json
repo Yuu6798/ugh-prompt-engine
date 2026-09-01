@@ -54,6 +54,7 @@
   "voice_genesis/calibration/tests/test_provenance_unseal_prerequisites.py",
   "voice_genesis/calibration/tests/test_registry.py",
   "voice_genesis/calibration/tests/test_selection.py",
+  "voice_genesis/calibration/tests/test_selection_none_audit.py",
   "voice_genesis/calibration/tests/test_splitter.py",
   "voice_genesis/calibration/tests/test_status.py",
   "voice_genesis/calibration/tests/test_streams.py",
