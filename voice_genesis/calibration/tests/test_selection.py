@@ -661,3 +661,49 @@ def test_select_across_ceilings_failure_preserves_diagnostic_vectors() -> None:
     assert "diag-abs" in outcome.raw_vectors
     assert "diag-dir" in outcome.raw_vectors
     assert {cid for cid, _reason in outcome.ineligible_candidates} == {"diag-abs", "diag-dir"}
+
+def test_select_across_ceilings_accounts_for_unset_ceiling_in_successful_audit() -> None:
+    selected = CandidateCriteria(
+        candidate_id="abs-selected",
+        ceiling=ClaimCeiling.ABSOLUTE,
+        primary_normalized_mae=0.2,
+        signed_bias=0.0,
+        primary_q95_ae=0.3,
+    )
+    unset = CandidateCriteria(
+        candidate_id="unset-ceiling",
+        primary_normalized_mae=0.4,
+        signed_bias=0.1,
+        primary_q95_ae=0.5,
+    )
+
+    outcome = select_across_ceilings([selected, unset])
+
+    assert outcome.selected_candidate_id == "abs-selected"
+    assert outcome.ranked_candidate_ids == ("abs-selected",)
+    assert "unset-ceiling" in outcome.raw_vectors
+    assert "unset-ceiling" in outcome.rounded_vectors
+    assert ("unset-ceiling", "ceiling_unset") in outcome.ineligible_candidates
+
+
+def test_select_across_ceilings_accounts_for_unknown_ceiling_in_successful_audit() -> None:
+    selected = CandidateCriteria(
+        candidate_id="dir-selected",
+        ceiling=ClaimCeiling.DIRECTIONAL,
+        kendall_tau=0.9,
+        adjacent_reversal_rate=0.0,
+    )
+    unknown = CandidateCriteria(
+        candidate_id="unknown-ceiling",
+        ceiling="NOT_FROZEN",  # type: ignore[arg-type]
+        kendall_tau=0.7,
+        adjacent_reversal_rate=0.1,
+    )
+
+    outcome = select_across_ceilings([selected, unknown])
+
+    assert outcome.selected_candidate_id == "dir-selected"
+    assert outcome.ranked_candidate_ids == ("dir-selected",)
+    assert "unknown-ceiling" in outcome.raw_vectors
+    assert "unknown-ceiling" in outcome.rounded_vectors
+    assert ("unknown-ceiling", "ceiling_unknown") in outcome.ineligible_candidates
