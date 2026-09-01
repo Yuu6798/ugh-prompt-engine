@@ -268,6 +268,32 @@ def _other_pool_audit_reason(criteria: CandidateCriteria, family: SelectionFamil
     return "different_ceiling_pool"
 
 
+def _merge_unranked_pool_audit(
+    outcome: SelectionOutcome,
+    pool: Sequence[CandidateCriteria],
+    family: SelectionFamily,
+) -> SelectionOutcome:
+    """選抜対象外 ceiling を canonical family で監査し、ranking は変えずに
+    criterion vectors と除外理由だけを outcome へ統合する。"""
+    audit = select(pool, family)
+    raw_vectors = dict(outcome.raw_vectors)
+    raw_vectors.update(audit.raw_vectors)
+    rounded_vectors = dict(outcome.rounded_vectors)
+    rounded_vectors.update(audit.rounded_vectors)
+
+    canonical_reasons = dict(audit.ineligible_candidates)
+    unranked_reasons = tuple(
+        (c.candidate_id, canonical_reasons.get(c.candidate_id, "different_ceiling_pool"))
+        for c in pool
+    )
+    return replace(
+        outcome,
+        raw_vectors=raw_vectors,
+        rounded_vectors=rounded_vectors,
+        ineligible_candidates=outcome.ineligible_candidates + unranked_reasons,
+    )
+
+
 def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> SelectionOutcome:
     """ceiling 階級間の裁定規則（§2.6 で凍結。Codex レビュー 2026-09-01 第 4 巡採用）。
 
@@ -329,29 +355,15 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
 
     if _has_selectable(absolute_pool, SelectionFamily.ABSOLUTE):
         outcome = select(absolute_pool, SelectionFamily.ABSOLUTE)
-        other_pool_audit = tuple(
-            (c.candidate_id, _other_pool_audit_reason(c, SelectionFamily.ABSOLUTE))
-            for c in directional_pool
+        return _merge_unranked_pool_audit(
+            outcome, directional_pool, SelectionFamily.DIRECTIONAL
         )
-        if other_pool_audit:
-            outcome = replace(
-                outcome,
-                ineligible_candidates=outcome.ineligible_candidates + other_pool_audit,
-            )
-        return outcome
 
     if _has_selectable(directional_pool, SelectionFamily.DIRECTIONAL):
         outcome = select(directional_pool, SelectionFamily.DIRECTIONAL)
-        other_pool_audit = tuple(
-            (c.candidate_id, _other_pool_audit_reason(c, SelectionFamily.DIRECTIONAL))
-            for c in absolute_pool
+        return _merge_unranked_pool_audit(
+            outcome, absolute_pool, SelectionFamily.ABSOLUTE
         )
-        if other_pool_audit:
-            outcome = replace(
-                outcome,
-                ineligible_candidates=outcome.ineligible_candidates + other_pool_audit,
-            )
-        return outcome
 
     absolute_audit = select(absolute_pool, SelectionFamily.ABSOLUTE)
     directional_audit = select(directional_pool, SelectionFamily.DIRECTIONAL)

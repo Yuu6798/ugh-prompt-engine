@@ -492,3 +492,54 @@ def test_select_across_ceilings_total_failure_accounts_for_criteria_absent_candi
         ("abs-no-criteria", "criteria_payload_absent"),
         ("diag-only", "different_ceiling_pool"),
     }
+
+
+def test_successful_absolute_selection_preserves_directional_audit_vectors() -> None:
+    absolute = CandidateCriteria(
+        candidate_id="abs-selected",
+        ceiling=ClaimCeiling.ABSOLUTE,
+        primary_normalized_mae=0.2,
+        signed_bias=0.0,
+        primary_q95_ae=0.3,
+    )
+    directional = CandidateCriteria(
+        candidate_id="dir-audited",
+        ceiling=ClaimCeiling.DIRECTIONAL,
+        kendall_tau=0.9,
+        adjacent_reversal_rate=0.0,
+    )
+
+    outcome = select_across_ceilings([absolute, directional])
+
+    assert outcome.family == SelectionFamily.ABSOLUTE
+    assert outcome.selected_candidate_id == "abs-selected"
+    assert outcome.ranked_candidate_ids == ("abs-selected",)
+    assert "dir-audited" in outcome.raw_vectors
+    assert "dir-audited" in outcome.rounded_vectors
+    assert ("dir-audited", "different_ceiling_pool") in outcome.ineligible_candidates
+
+
+def test_successful_directional_selection_preserves_absolute_audit_vectors() -> None:
+    absolute_flagged = CandidateCriteria(
+        candidate_id="abs-audited",
+        ceiling=ClaimCeiling.ABSOLUTE,
+        eligible=False,
+        primary_normalized_mae=0.2,
+        signed_bias=0.0,
+        primary_q95_ae=0.3,
+    )
+    directional = CandidateCriteria(
+        candidate_id="dir-selected",
+        ceiling=ClaimCeiling.DIRECTIONAL,
+        kendall_tau=0.9,
+        adjacent_reversal_rate=0.0,
+    )
+
+    outcome = select_across_ceilings([absolute_flagged, directional])
+
+    assert outcome.family == SelectionFamily.DIRECTIONAL
+    assert outcome.selected_candidate_id == "dir-selected"
+    assert outcome.ranked_candidate_ids == ("dir-selected",)
+    assert "abs-audited" in outcome.raw_vectors
+    assert "abs-audited" in outcome.rounded_vectors
+    assert ("abs-audited", "flagged_ineligible") in outcome.ineligible_candidates
