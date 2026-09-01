@@ -1,0 +1,148 @@
+name: PR342 bounded review integrity fix v3
+
+on:
+  push:
+    branches:
+      - claude/design-based-implementation-653xpl
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+
+      - name: Guard review baseline
+        shell: bash
+        run: |
+          git diff --name-only fa79b98d88f5eeb308a250b015708398e85291e3..HEAD | sort > /tmp/changed
+          printf '%s\n' \
+            '.github/workflows/pr342_review_integrity_fix.yml' \
+            '.github/workflows/pr342_review_integrity_fix_v3.yml' | sort > /tmp/expected
+          diff -u /tmp/expected /tmp/changed
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Apply bounded source fixes
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          import yaml
+
+          workflow = yaml.safe_load(
+              Path('.github/workflows/pr342_review_integrity_fix.yml').read_text(encoding='utf-8')
+          )
+          step = next(
+              item for item in workflow['jobs']['fix']['steps']
+              if item.get('name') == 'Apply bounded fixes and regression tests'
+          )
+          subprocess.run(
+              ['bash', '-euo', 'pipefail', '-c', step['run']],
+              check=True,
+          )
+          PY
+
+      - name: Normalize appended regression-test indentation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          paths = [
+              'voice_genesis/calibration/tests/test_selection.py',
+              'voice_genesis/calibration/tests/test_c0_validate.py',
+              'voice_genesis/calibration/tests/test_provenance.py',
+          ]
+          for path in paths:
+              p = Path(path)
+              lines = p.read_text(encoding='utf-8').splitlines()
+              out: list[str] = []
+              shifting = False
+              for line in lines:
+                  if line.startswith('    def test_'):
+                      shifting = True
+                      out.append(line[4:])
+                      continue
+                  if shifting and line.startswith('        '):
+                      out.append(line[4:])
+                      continue
+                  if shifting and line.strip() == '':
+                      out.append(line)
+                      continue
+                  if shifting:
+                      shifting = False
+                  out.append(line)
+              p.write_text('\n'.join(out) + '\n', encoding='utf-8')
+          PY
+
+      - name: Targeted tests
+        run: |
+          python -m pytest -q \
+            voice_genesis/calibration/tests/test_selection.py \
+            voice_genesis/calibration/tests/test_gates.py \
+            voice_genesis/calibration/tests/test_c0_validate.py \
+            voice_genesis/calibration/tests/test_provenance.py
+
+      - name: Format and lint touched code
+        run: |
+          ruff format \
+            voice_genesis/calibration/selection.py \
+            voice_genesis/calibration/gates.py \
+            voice_genesis/calibration/c0_validate.py \
+            voice_genesis/calibration/provenance.py \
+            voice_genesis/calibration/tests/test_selection.py \
+            voice_genesis/calibration/tests/test_gates.py \
+            voice_genesis/calibration/tests/test_c0_validate.py \
+            voice_genesis/calibration/tests/test_provenance.py
+          ruff check \
+            voice_genesis/calibration/selection.py \
+            voice_genesis/calibration/gates.py \
+            voice_genesis/calibration/c0_validate.py \
+            voice_genesis/calibration/provenance.py \
+            voice_genesis/calibration/tests/test_selection.py \
+            voice_genesis/calibration/tests/test_gates.py \
+            voice_genesis/calibration/tests/test_c0_validate.py \
+            voice_genesis/calibration/tests/test_provenance.py
+
+      - name: Re-run targeted tests after formatting
+        run: |
+          python -m pytest -q \
+            voice_genesis/calibration/tests/test_selection.py \
+            voice_genesis/calibration/tests/test_gates.py \
+            voice_genesis/calibration/tests/test_c0_validate.py \
+            voice_genesis/calibration/tests/test_provenance.py
+
+      - name: Commit bounded fix and remove one-shot workflows
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm \
+            .github/workflows/pr342_review_integrity_fix.yml \
+            .github/workflows/pr342_review_integrity_fix_v3.yml
+          git add \
+            voice_genesis/calibration/selection.py \
+            voice_genesis/calibration/gates.py \
+            voice_genesis/calibration/c0_validate.py \
+            voice_genesis/calibration/provenance.py \
+            voice_genesis/calibration/tests/test_selection.py \
+            voice_genesis/calibration/tests/test_gates.py \
+            voice_genesis/calibration/tests/test_c0_validate.py \
+            voice_genesis/calibration/tests/test_provenance.py
+          git commit -m "fix(calibration): close critical review integrity gaps"
+          git push origin HEAD:claude/design-based-implementation-653xpl
