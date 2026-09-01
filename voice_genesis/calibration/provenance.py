@@ -739,19 +739,35 @@ class Ledger:
         holdout_row_ids: Iterable[str],
         unseal_seq: int | None,
         control_row_ids: Collection[str] = (),
+        realized_split_assignment: Mapping[str, object] | None = None,
     ) -> LeakageCheckResult:
         """Fail closed on pre-unseal holdout access.
 
         The authoritative boundary is derived from a cryptographically verified
         `holdout_unseal` ledger event with matching frozen prerequisite references.
         `unseal_seq` is retained only as an optional expected-sequence assertion for
-        compatibility; it can never grant access by itself.
+        compatibility; it can never grant access by itself.  The protected row set is
+        authenticated against `realized_split_assignment`; caller-supplied
+        `holdout_row_ids` is only an equality assertion and cannot shrink the seal.
         """
         verified_unseal_seq = _verified_holdout_unseal_seq(ledger_entries)
         if unseal_seq is not None and unseal_seq != verified_unseal_seq:
             verified_unseal_seq = None
 
-        holdout_set = set(holdout_row_ids)
+        declared_holdout_set = set(holdout_row_ids)
+        if realized_split_assignment is None:
+            return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
+
+        from voice_genesis.calibration.vocab import Split
+
+        authenticated_holdout_set = {
+            row_id
+            for row_id, split in realized_split_assignment.items()
+            if split == Split.HOLDOUT or split == Split.HOLDOUT.value
+        }
+        if declared_holdout_set != authenticated_holdout_set:
+            return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
+        holdout_set = authenticated_holdout_set
         # ``control_row_ids`` is not an authority boundary.  A caller may request
         # exemption only for rows that the committed frozen matrix independently
         # identifies as truth-free negative controls.  Truth-bearing/unknown rows

@@ -87,9 +87,35 @@ def _criteria_values_finite(criteria: CandidateCriteria, family: SelectionFamily
         return False
 
 
+def _criteria_values_in_domain(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
+    """Reject finite-but-impossible ranking inputs before they can affect ordering."""
+    if not _criteria_values_finite(criteria, family):
+        return False
+    if criteria.complexity_rank < 0:
+        return False
+    if criteria.nuisance_sensitivity_max < 0:
+        return False
+    if not 0.0 <= criteria.missing_failure_rate <= 1.0:
+        return False
+    if family is SelectionFamily.ABSOLUTE:
+        assert criteria.primary_normalized_mae is not None
+        assert criteria.primary_q95_ae is not None
+        return criteria.primary_normalized_mae >= 0.0 and criteria.primary_q95_ae >= 0.0
+    assert criteria.kendall_tau is not None
+    assert criteria.adjacent_reversal_rate is not None
+    return (
+        -1.0 <= criteria.kendall_tau <= 1.0
+        and 0.0 <= criteria.adjacent_reversal_rate <= 1.0
+    )
+
+
 def _has_required_criteria(criteria: CandidateCriteria, family: SelectionFamily) -> bool:
-    """Ranking inputs must be both present and finite."""
-    return _criteria_payload_present(criteria, family) and _criteria_values_finite(criteria, family)
+    """Ranking inputs must be present, finite, and inside their mathematical domains."""
+    return (
+        _criteria_payload_present(criteria, family)
+        and _criteria_values_finite(criteria, family)
+        and _criteria_values_in_domain(criteria, family)
+    )
 
 
 def _ineligibility_reason(
@@ -97,8 +123,12 @@ def _ineligibility_reason(
 ) -> str | None:
     if not _criteria_payload_present(criteria, family):
         return "criteria_payload_absent"
-    if not has_criteria:
+    if not _criteria_values_finite(criteria, family):
         return "criteria_non_finite"
+    if not _criteria_values_in_domain(criteria, family):
+        return "criteria_out_of_domain"
+    if not has_criteria:
+        return "criteria_out_of_domain"
     if not criteria.eligible:
         return "flagged_ineligible"
     return None
@@ -114,6 +144,10 @@ def _vector_for(
     if not _criteria_values_finite(criteria, family):
         raise ValueError(
             f"selection: candidate {criteria.candidate_id!r} has non-finite ranking criteria"
+        )
+    if not _criteria_values_in_domain(criteria, family):
+        raise ValueError(
+            f"selection: candidate {criteria.candidate_id!r} has out-of-domain ranking criteria"
         )
     err = round_error if rounded else (lambda v: v)
     rate = round_rate if rounded else (lambda v: v)
@@ -440,10 +474,13 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
     accounted_ids = {candidate_id for candidate_id, _reason in ineligible}
     accounted_ids.update(raw_vectors)
     for candidate in candidates:
-        if candidate.candidate_id not in accounted_ids:
+        if (
+            candidate.candidate_id not in accounted_ids
+            and candidate.ceiling != ClaimCeiling.DIAGNOSTIC_ONLY
+        ):
             ineligible.append((candidate.candidate_id, "different_ceiling_pool"))
 
-    return SelectionOutcome(
+    failed = SelectionOutcome(
         family=SelectionFamily.ABSOLUTE,
         selected_candidate_id=None,
         ranked_candidate_ids=(),
@@ -452,3 +489,4 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
         outcome="SELECTION_FAILED_CLOSED",
         ineligible_candidates=tuple(ineligible),
     )
+    return _merge_diagnostic_pool_audit(failed, diagnostic_pool)

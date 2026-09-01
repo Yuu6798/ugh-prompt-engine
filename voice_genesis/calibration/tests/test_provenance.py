@@ -19,6 +19,22 @@ from voice_genesis.calibration.fixtures.matrix import build_matrix
 from voice_genesis.calibration.vocab import BlockedCode
 
 
+def _check_leakage(*args, **kwargs):
+    from voice_genesis.calibration.vocab import Split
+
+    if "holdout_row_ids" in kwargs:
+        holdout = kwargs["holdout_row_ids"]
+    elif len(args) >= 2:
+        holdout = args[1]
+    else:
+        raise AssertionError("holdout_row_ids required by test wrapper")
+    kwargs.setdefault(
+        "realized_split_assignment",
+        {row_id: Split.HOLDOUT for row_id in holdout},
+    )
+    return Ledger.check_leakage(*args, **kwargs)
+
+
 def test_provenance_record_serializes_nested_dataclasses() -> None:
     record = ProvenanceRecord(
         campaign=CampaignIdentity(
@@ -78,7 +94,7 @@ def test_ledger_append_refreshes_entries_without_reconstruction(tmp_path) -> Non
     assert all(isinstance(e, LedgerEntry) for e in ledger.entries)
     assert ledger.malformed_lines == ()
 
-    result = Ledger.check_leakage(ledger.entries, holdout_row_ids=["holdout-x"], unseal_seq=None)
+    result = _check_leakage(ledger.entries, holdout_row_ids=["holdout-x"], unseal_seq=None)
     assert result.blocked is None
 
 
@@ -305,7 +321,7 @@ def test_check_leakage_pre_unseal_access_is_blocked() -> None:
             payload={"kind": "render", "row_id": "holdout-1"},
         ),
     ]
-    result = Ledger.check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=5)
+    result = _check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=5)
     assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
     assert result.control_excluded_count == 0
 
@@ -319,7 +335,7 @@ def test_check_leakage_unseal_none_blocks_any_holdout_access() -> None:
             payload={"kind": "meter_call", "row_id": "holdout-1"},
         ),
     ]
-    result = Ledger.check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=None)
+    result = _check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=None)
     assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
 
 
@@ -340,7 +356,7 @@ def test_check_leakage_post_unseal_access_is_allowed(tmp_path) -> None:
         }
     )
     ledger.append({"kind": "meter_call", "row_id": "holdout-1"})
-    result = Ledger.check_leakage(
+    result = _check_leakage(
         ledger.entries,
         holdout_row_ids=["holdout-1"],
         unseal_seq=unseal.seq,
@@ -357,7 +373,7 @@ def test_check_leakage_non_holdout_row_never_blocks() -> None:
             payload={"kind": "render", "row_id": "calibration-1"},
         ),
     ]
-    result = Ledger.check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=None)
+    result = _check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=None)
     assert result.blocked is None
 
 
@@ -370,7 +386,7 @@ def test_check_leakage_ignores_non_render_meter_call_entries() -> None:
             payload={"kind": "split_frozen", "row_id": "holdout-1"},
         ),
     ]
-    result = Ledger.check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=None)
+    result = _check_leakage(entries, holdout_row_ids=["holdout-1"], unseal_seq=None)
     assert result.blocked is None
 
 
@@ -403,7 +419,7 @@ def test_check_leakage_control_row_ids_excluded_non_control_holdout_still_detect
             payload={"kind": "meter_call", "row_id": truth_row.row_id},
         ),
     ]
-    result = Ledger.check_leakage(
+    result = _check_leakage(
         entries,
         holdout_row_ids=[control_id, truth_row.row_id],
         unseal_seq=None,
@@ -456,7 +472,7 @@ def test_check_leakage_control_row_pure_control_holdout_never_blocks() -> None:
             payload={"kind": "meter_call", "row_id": control_id},
         ),
     ]
-    result = Ledger.check_leakage(
+    result = _check_leakage(
         entries,
         holdout_row_ids=[control_id],
         unseal_seq=None,
@@ -478,7 +494,7 @@ def test_check_leakage_forged_unseal_integer_cannot_grant_access(tmp_path) -> No
         }
     )
     ledger.append({"kind": "meter_call", "row_id": "holdout-1"})
-    result = Ledger.check_leakage(
+    result = _check_leakage(
         ledger.entries,
         holdout_row_ids=["holdout-1"],
         unseal_seq=0,
@@ -505,7 +521,7 @@ def test_check_leakage_mismatched_unseal_commitments_fail_closed(tmp_path) -> No
         }
     )
     ledger.append({"kind": "render", "row_id": "holdout-1"})
-    result = Ledger.check_leakage(
+    result = _check_leakage(
         ledger.entries,
         holdout_row_ids=["holdout-1"],
         unseal_seq=None,
@@ -524,7 +540,7 @@ def test_check_leakage_caller_cannot_forge_truth_row_as_control() -> None:
         payload={"kind": "render", "row_id": truth_row.row_id},
     )
 
-    result = Ledger.check_leakage(
+    result = _check_leakage(
         [entry],
         holdout_row_ids=[truth_row.row_id],
         unseal_seq=None,
@@ -533,3 +549,35 @@ def test_check_leakage_caller_cannot_forge_truth_row_as_control() -> None:
 
     assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
     assert result.control_excluded_count == 0
+
+
+def test_check_leakage_rejects_incomplete_declared_holdout_set() -> None:
+    from voice_genesis.calibration.vocab import Split
+
+    entries = [
+        LedgerEntry(
+            seq=0,
+            prev_sha="0" * 64,
+            entry_sha="a" * 64,
+            payload={"kind": "render", "row_id": "holdout-omitted"},
+        )
+    ]
+    realized = {
+        "holdout-declared": Split.HOLDOUT,
+        "holdout-omitted": Split.HOLDOUT,
+        "selection-row": Split.SELECTION,
+    }
+    result = Ledger.check_leakage(
+        entries,
+        holdout_row_ids=["holdout-declared"],
+        unseal_seq=None,
+        realized_split_assignment=realized,
+    )
+    assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
+
+
+def test_check_leakage_requires_realized_split_assignment() -> None:
+    result = Ledger.check_leakage(
+        [], holdout_row_ids=[], unseal_seq=None, realized_split_assignment=None
+    )
+    assert result.blocked == BlockedCode.BLOCKED_LEAKAGE

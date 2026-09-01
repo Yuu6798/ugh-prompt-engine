@@ -473,7 +473,7 @@ def test_select_across_ceilings_total_failure_preserves_audit_data() -> None:
     assert set(outcome.ineligible_candidates) == {
         ("abs-flagged", "flagged_ineligible"),
         ("dir-flagged", "flagged_ineligible"),
-        ("diag-only", "different_ceiling_pool"),
+        ("diag-only", "criteria_payload_absent"),
     }
 
 
@@ -490,7 +490,7 @@ def test_select_across_ceilings_total_failure_accounts_for_criteria_absent_candi
     assert outcome.outcome == "SELECTION_FAILED_CLOSED"
     assert set(outcome.ineligible_candidates) == {
         ("abs-no-criteria", "criteria_payload_absent"),
-        ("diag-only", "different_ceiling_pool"),
+        ("diag-only", "criteria_payload_absent"),
     }
 
 
@@ -601,3 +601,63 @@ def test_successful_selection_accounts_for_diagnostic_without_criteria() -> None
         "diag-no-criteria",
         "criteria_payload_absent",
     ) in outcome.ineligible_candidates
+
+
+def test_selection_rejects_out_of_domain_ranking_criteria() -> None:
+    valid = CandidateCriteria(
+        candidate_id="valid",
+        kendall_tau=0.9,
+        adjacent_reversal_rate=0.0,
+    )
+    impossible_tau = CandidateCriteria(
+        candidate_id="impossible-tau",
+        kendall_tau=2.0,
+        adjacent_reversal_rate=0.0,
+    )
+    negative_rate = CandidateCriteria(
+        candidate_id="negative-rate",
+        kendall_tau=0.95,
+        adjacent_reversal_rate=-0.1,
+    )
+    outcome = select([impossible_tau, negative_rate, valid], SelectionFamily.DIRECTIONAL)
+    assert outcome.selected_candidate_id == "valid"
+    assert ("impossible-tau", "criteria_out_of_domain") in outcome.ineligible_candidates
+    assert ("negative-rate", "criteria_out_of_domain") in outcome.ineligible_candidates
+
+    negative_error = CandidateCriteria(
+        candidate_id="negative-error",
+        primary_normalized_mae=-1.0,
+        signed_bias=0.0,
+        primary_q95_ae=0.1,
+    )
+    negative_complexity = CandidateCriteria(
+        candidate_id="negative-complexity",
+        complexity_rank=-1,
+        primary_normalized_mae=0.1,
+        signed_bias=0.0,
+        primary_q95_ae=0.1,
+    )
+    abs_outcome = select([negative_error, negative_complexity], SelectionFamily.ABSOLUTE)
+    assert abs_outcome.outcome == "SELECTION_FAILED_CLOSED"
+    assert all(reason == "criteria_out_of_domain" for _cid, reason in abs_outcome.ineligible_candidates)
+
+
+def test_select_across_ceilings_failure_preserves_diagnostic_vectors() -> None:
+    diag_abs = CandidateCriteria(
+        candidate_id="diag-abs",
+        ceiling=ClaimCeiling.DIAGNOSTIC_ONLY,
+        primary_normalized_mae=0.2,
+        signed_bias=0.1,
+        primary_q95_ae=0.3,
+    )
+    diag_dir = CandidateCriteria(
+        candidate_id="diag-dir",
+        ceiling=ClaimCeiling.DIAGNOSTIC_ONLY,
+        kendall_tau=0.7,
+        adjacent_reversal_rate=0.1,
+    )
+    outcome = select_across_ceilings([diag_abs, diag_dir])
+    assert outcome.outcome == "SELECTION_FAILED_CLOSED"
+    assert "diag-abs" in outcome.raw_vectors
+    assert "diag-dir" in outcome.raw_vectors
+    assert {cid for cid, _reason in outcome.ineligible_candidates} == {"diag-abs", "diag-dir"}
