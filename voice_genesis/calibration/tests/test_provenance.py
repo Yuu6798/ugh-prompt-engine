@@ -894,3 +894,104 @@ def test_check_leakage_rejects_forged_split_row_attributes_even_with_matching_fr
             split_secret=secret,
         )
         assert result.blocked == BlockedCode.BLOCKED_LEAKAGE, overrides
+
+
+def test_check_leakage_authenticates_nonempty_frozen_stratification() -> None:
+    from voice_genesis.calibration.vocab import Split
+
+    matrix = build_matrix()
+    rows = tuple(
+        RowInput(
+            row_id=matrix_row.row_id,
+            family=matrix_row.row.family,
+            stratum={"block": matrix_row.row.block},
+            truth_level=matrix_row.row.block,
+            generator_impl=matrix_row.row.generator_impl,
+            boundary_class=matrix_row.domain.value,
+        )
+        for matrix_row in matrix
+    )
+    secret = hashlib.sha256(b"canonical-stratified-split").digest()
+    realized = realize_split(rows, secret, ("block",))
+    holdout = tuple(
+        row_id
+        for row_id, split in realized.assignment.items()
+        if split == Split.HOLDOUT
+    )
+    split_payload = {
+        "kind": "split_frozen",
+        "realized_split_map_hash": realized.realized_sha,
+        "seal_commitment": hashlib.sha256(secret).hexdigest(),
+    }
+    split_entry = LedgerEntry(
+        seq=0,
+        prev_sha=GENESIS_PREV_SHA,
+        entry_sha=_entry_sha(0, GENESIS_PREV_SHA, split_payload),
+        payload=split_payload,
+    )
+
+    result = Ledger.check_leakage(
+        (split_entry,),
+        holdout_row_ids=holdout,
+        unseal_seq=None,
+        realized_split_map=realized,
+        split_verification_rows=rows,
+        split_secret=secret,
+    )
+
+    assert result.blocked is None
+
+
+def test_check_leakage_rejects_forged_value_for_frozen_stratum_factor() -> None:
+    from voice_genesis.calibration.vocab import Split
+
+    matrix = build_matrix()
+    rows = [
+        RowInput(
+            row_id=matrix_row.row_id,
+            family=matrix_row.row.family,
+            stratum={"block": matrix_row.row.block},
+            truth_level=matrix_row.row.block,
+            generator_impl=matrix_row.row.generator_impl,
+            boundary_class=matrix_row.domain.value,
+        )
+        for matrix_row in matrix
+    ]
+    target = rows[0]
+    rows[0] = RowInput(
+        row_id=target.row_id,
+        family=target.family,
+        stratum={"block": "FORGED_BLOCK"},
+        truth_level=target.truth_level,
+        generator_impl=target.generator_impl,
+        boundary_class=target.boundary_class,
+    )
+    secret = hashlib.sha256(b"forged-stratified-split").digest()
+    forged_realized = realize_split(rows, secret, ("block",))
+    holdout = tuple(
+        row_id
+        for row_id, split in forged_realized.assignment.items()
+        if split == Split.HOLDOUT
+    )
+    split_payload = {
+        "kind": "split_frozen",
+        "realized_split_map_hash": forged_realized.realized_sha,
+        "seal_commitment": hashlib.sha256(secret).hexdigest(),
+    }
+    split_entry = LedgerEntry(
+        seq=0,
+        prev_sha=GENESIS_PREV_SHA,
+        entry_sha=_entry_sha(0, GENESIS_PREV_SHA, split_payload),
+        payload=split_payload,
+    )
+
+    result = Ledger.check_leakage(
+        (split_entry,),
+        holdout_row_ids=holdout,
+        unseal_seq=None,
+        realized_split_map=forged_realized,
+        split_verification_rows=tuple(rows),
+        split_secret=secret,
+    )
+
+    assert result.blocked == BlockedCode.BLOCKED_LEAKAGE

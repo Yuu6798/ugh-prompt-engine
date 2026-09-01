@@ -1144,3 +1144,25 @@ def test_directional_missing_frozen_adjacency_declaration_fails_closed() -> None
     )
     assert result.passed is False
     assert any("frozen adjacent-pair declaration" in reason for reason in result.failure_reasons)
+
+
+def test_absolute_gates_rejects_ae_signed_error_mismatch() -> None:
+    instances = [
+        _instance("ae-mismatch-pos", ae=0.0, e=100.0, u_gt=0.0, u_num=0.0, e_use=1.0),
+        _instance("ae-mismatch-neg", ae=0.0, e=-100.0, u_gt=0.0, u_num=0.0, e_use=1.0),
+    ]
+    result = absolute_gates(
+        instances,
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+
+    assert result.gate1_all_eligible is False
+    assert result.g_values == ()
+    assert result.passed is False
+    assert any("AE must equal abs(e)" in reason for reason in result.failure_reasons)

@@ -849,17 +849,49 @@ class Ledger:
         ):
             return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
 
-        canonical_split_inputs = {
-            matrix_row.row_id: RowInput(
+        stratum_factor_names = tuple(realized_split_map.stratum_factor_names)
+        if (
+            any(
+                not isinstance(name, str) or not name.strip()
+                for name in stratum_factor_names
+            )
+            or len(stratum_factor_names) != len(set(stratum_factor_names))
+        ):
+            return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
+
+        canonical_split_inputs: dict[str, RowInput] = {}
+        for matrix_row in canonical_matrix:
+            fixture_row = matrix_row.row
+            dataclass_fields = type(fixture_row).__dataclass_fields__
+            canonical_stratum: dict[str, Any] = {}
+            for factor_name in stratum_factor_names:
+                if factor_name == "truth_level":
+                    factor_value = fixture_row.block
+                elif factor_name in {"boundary_class", "domain"}:
+                    factor_value = matrix_row.domain.value
+                elif factor_name in dataclass_fields:
+                    factor_value = getattr(fixture_row, factor_name)
+                else:
+                    return LeakageCheckResult(
+                        blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0
+                    )
+                try:
+                    hash(factor_value)
+                except TypeError:
+                    return LeakageCheckResult(
+                        blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0
+                    )
+                canonical_stratum[factor_name] = factor_value
+
+            canonical_split_inputs[matrix_row.row_id] = RowInput(
                 row_id=matrix_row.row_id,
-                family=matrix_row.row.family,
-                stratum={},
-                truth_level=matrix_row.row.block,
-                generator_impl=matrix_row.row.generator_impl,
+                family=fixture_row.family,
+                stratum=canonical_stratum,
+                truth_level=fixture_row.block,
+                generator_impl=fixture_row.generator_impl,
                 boundary_class=matrix_row.domain.value,
             )
-            for matrix_row in canonical_matrix
-        }
+
         for supplied in split_verification_rows:
             expected = canonical_split_inputs[supplied.row_id]
             if (
@@ -872,8 +904,6 @@ class Ledger:
                 return LeakageCheckResult(
                     blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0
                 )
-        if tuple(realized_split_map.stratum_factor_names) != ():
-            return LeakageCheckResult(blocked=BlockedCode.BLOCKED_LEAKAGE, control_excluded_count=0)
 
         try:
             split_verified = verify_split(

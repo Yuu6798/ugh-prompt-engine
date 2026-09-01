@@ -199,28 +199,45 @@ def absolute_gates(
     nonfinite_primary_budget_ids = sorted(
         i.instance_id
         for i in primary
-        if not _all_finite((i.ae, i.u_gt, i.u_num, i.e_use))
+        if not _all_finite((i.ae, i.e, i.u_gt, i.u_num, i.e_use))
     )
     invalid_primary_budget_ids = sorted(
         i.instance_id
         for i in primary
         if not (
             _nonnegative_finite(i.ae)
+            and math.isfinite(i.e)
             and _nonnegative_finite(i.u_gt)
             and _nonnegative_finite(i.u_num)
             and _positive_finite(i.e_use)
         )
     )
-    budget_inputs_valid = global_uncertainty_valid and not invalid_primary_budget_ids
+    ae_mismatch_ids = sorted(
+        i.instance_id
+        for i in primary
+        if math.isfinite(i.ae) and math.isfinite(i.e) and i.ae != abs(i.e)
+    )
+    budget_inputs_valid = (
+        global_uncertainty_valid and not invalid_primary_budget_ids and not ae_mismatch_ids
+    )
     if not global_uncertainty_valid:
         reasons.append("gate budgets: U_rep/U_proc must be finite and nonnegative")
     if invalid_primary_budget_ids:
         reasons.append(
-            "gate budgets: PRIMARY AE/U_GT/U_num must be finite/nonnegative and E_use > 0: "
+            "gate budgets: PRIMARY AE/e/U_GT/U_num must be finite, "
+            "AE/U_GT/U_num nonnegative, and E_use > 0: "
             + ", ".join(invalid_primary_budget_ids)
         )
+    if ae_mismatch_ids:
+        reasons.append(
+            "gate1: PRIMARY AE must equal abs(e): " + ", ".join(ae_mismatch_ids)
+        )
 
-    gate1 = all(i.eligible for i in primary) and not duplicate_instance_ids
+    gate1 = (
+        all(i.eligible for i in primary)
+        and not duplicate_instance_ids
+        and not ae_mismatch_ids
+    )
     if not all(i.eligible for i in primary):
         reasons.append("gate1: some PRIMARY instance not eligible")
     if duplicate_instance_ids:
