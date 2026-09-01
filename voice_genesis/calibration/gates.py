@@ -124,6 +124,7 @@ def absolute_gates(
     u_proc: float,
     invariance_pairs_by_axis: Mapping[str, Sequence[InvariancePair]],
     declared_invariance_axes: Collection[str],
+    expected_primary_instance_ids: Collection[str] | None = None,
     fdr0: float,
     fnr1: float,
     min_count_met: bool,
@@ -163,6 +164,12 @@ def absolute_gates(
     とする（理由を個別に列挙する。duplicate pair_id 検査より前に行う —
     axis 不一致がある時点でその pair は当該軸の証拠として無効）。
 
+    `expected_primary_instance_ids` は C0 / sealed holdout plan から渡される
+    PRIMARY instance の凍結 closed set であり、実測 `per_instance` 内の PRIMARY
+    ID 集合と完全一致しなければ gate1 を FAIL させ、G/BIAS 集計自体を行わない。
+    これにより failing PRIMARY instance の欠落や BOUNDARY 等への再ラベルで
+    gate 母集団を縮小する経路を fail-closed にする。
+
     `per_instance` 中の PRIMARY `InstanceMargin` は `instance_id` で重複がない
     ことも検査する（Codex レビュー 2026-09-01 P1: 従来は identity を見ずに
     `per_instance` をそのまま集計しており、同一 instance を複数回渡すと
@@ -194,6 +201,55 @@ def absolute_gates(
     primary_ids = [i.instance_id for i in primary]
     duplicate_instance_ids = sorted({iid for iid in primary_ids if primary_ids.count(iid) > 1})
 
+    primary_population_valid = True
+    observed_primary_ids = set(primary_ids)
+    if expected_primary_instance_ids is None:
+        primary_population_valid = False
+        reasons.append("gate1: no frozen PRIMARY instance declaration")
+    else:
+        raw_expected_primary_ids = list(expected_primary_instance_ids)
+        valid_expected_primary_ids = [
+            iid for iid in raw_expected_primary_ids if isinstance(iid, str) and iid
+        ]
+        invalid_expected_primary_ids = [
+            repr(iid)
+            for iid in raw_expected_primary_ids
+            if not isinstance(iid, str) or not iid
+        ]
+        duplicate_expected_primary_ids = sorted(
+            {
+                iid
+                for iid in valid_expected_primary_ids
+                if valid_expected_primary_ids.count(iid) > 1
+            }
+        )
+        expected_primary_ids = set(valid_expected_primary_ids)
+        if invalid_expected_primary_ids:
+            primary_population_valid = False
+            reasons.append(
+                "gate1: frozen PRIMARY declaration has invalid instance_id(s): "
+                + ", ".join(invalid_expected_primary_ids)
+            )
+        if duplicate_expected_primary_ids:
+            primary_population_valid = False
+            reasons.append(
+                "gate1: frozen PRIMARY declaration has duplicate instance_id(s): "
+                + ", ".join(duplicate_expected_primary_ids)
+            )
+        if observed_primary_ids != expected_primary_ids:
+            primary_population_valid = False
+            missing_primary_ids = sorted(expected_primary_ids - observed_primary_ids)
+            unexpected_primary_ids = sorted(observed_primary_ids - expected_primary_ids)
+            detail: list[str] = []
+            if missing_primary_ids:
+                detail.append("missing=" + ",".join(missing_primary_ids))
+            if unexpected_primary_ids:
+                detail.append("unexpected=" + ",".join(unexpected_primary_ids))
+            reasons.append(
+                "gate1: observed PRIMARY instance set does not match frozen declaration"
+                + (": " + "; ".join(detail) if detail else "")
+            )
+
     global_uncertainty_finite = math.isfinite(u_rep) and math.isfinite(u_proc)
     global_uncertainty_valid = _nonnegative_finite(u_rep) and _nonnegative_finite(u_proc)
     nonfinite_primary_budget_ids = sorted(
@@ -218,7 +274,10 @@ def absolute_gates(
         if math.isfinite(i.ae) and math.isfinite(i.e) and i.ae != abs(i.e)
     )
     budget_inputs_valid = (
-        global_uncertainty_valid and not invalid_primary_budget_ids and not ae_mismatch_ids
+        global_uncertainty_valid
+        and primary_population_valid
+        and not invalid_primary_budget_ids
+        and not ae_mismatch_ids
     )
     if not global_uncertainty_valid:
         reasons.append("gate budgets: U_rep/U_proc must be finite and nonnegative")
@@ -234,7 +293,8 @@ def absolute_gates(
         )
 
     gate1 = (
-        all(i.eligible for i in primary)
+        primary_population_valid
+        and all(i.eligible for i in primary)
         and not duplicate_instance_ids
         and not ae_mismatch_ids
     )
@@ -571,6 +631,14 @@ def directional_gates(
     resolvable_count = len(resolvable)
 
     sweep_ids = sorted(set(expected_sweep_ids))
+    observed_sweep_ids = {p.sweep_id for p in pairs}
+    undeclared_sweep_ids = sorted(observed_sweep_ids - set(sweep_ids))
+    if undeclared_sweep_ids:
+        reasons.append(
+            "observed directional pair(s) from undeclared sweep(s): "
+            + ", ".join(undeclared_sweep_ids)
+        )
+
     sweep_resolvable_counts: dict[str, int] = {s: 0 for s in sweep_ids}
     for p in resolvable:
         if p.sweep_id in sweep_resolvable_counts:
@@ -685,6 +753,7 @@ def directional_gates(
     passed = (
         budget_inputs_valid
         and every_sweep_meets_minimum
+        and not undeclared_sweep_ids
         and not duplicate_pair_ids
         and adjacency_inputs_valid
         and has_authenticated_adjacent_evidence

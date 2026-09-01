@@ -7,7 +7,7 @@ from voice_genesis.calibration.gates import (
     EUseEvidenceRow,
     InstanceMargin,
     InvariancePair,
-    absolute_gates,
+    absolute_gates as _absolute_gates_impl,
     auto_ceiling_for_unjustified,
     directional_gates,
     threshold_margin,
@@ -99,6 +99,15 @@ def _inv_pairs(
         )
         for i in range(n)
     ]
+
+
+def absolute_gates(per_instance, **kwargs):
+    """Test adapter: ordinary arithmetic tests declare their supplied PRIMARY set as frozen."""
+    kwargs.setdefault(
+        "expected_primary_instance_ids",
+        tuple(i.instance_id for i in per_instance if i.domain == Domain.PRIMARY),
+    )
+    return _absolute_gates_impl(per_instance, **kwargs)
 
 
 def test_absolute_gates_g_zero_passes_boundary() -> None:
@@ -1166,3 +1175,88 @@ def test_absolute_gates_rejects_ae_signed_error_mismatch() -> None:
     assert result.g_values == ()
     assert result.passed is False
     assert any("AE must equal abs(e)" in reason for reason in result.failure_reasons)
+
+
+# ---------------------------------------------------------------------------
+# Review regressions: frozen gate populations
+# ---------------------------------------------------------------------------
+
+
+def test_absolute_gates_fails_when_frozen_primary_instance_is_relabelled_boundary() -> None:
+    good = _instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)
+    relabelled = InstanceMargin(
+        instance_id="i2",
+        domain=Domain.BOUNDARY,
+        eligible=False,
+        ae=100.0,
+        e=100.0,
+        u_gt=0.0,
+        u_num=0.0,
+        e_use=1.0,
+    )
+    result = absolute_gates(
+        [good, relabelled],
+        expected_primary_instance_ids={"i1", "i2"},
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.gate1_all_eligible is False
+    assert result.g_values == ()
+    assert result.passed is False
+    assert any("PRIMARY instance set" in reason and "i2" in reason for reason in result.failure_reasons)
+
+
+def test_absolute_gates_without_frozen_primary_declaration_fails_closed() -> None:
+    result = _absolute_gates_impl(
+        [_instance("i1", ae=0.0, e=0.0, u_gt=0.0, u_num=0.0, e_use=1.0)],
+        u_rep=0.0,
+        u_proc=0.0,
+        invariance_pairs_by_axis={"axis1": _inv_pairs("axis1", 5)},
+        declared_invariance_axes={"axis1"},
+        fdr0=0.0,
+        fnr1=0.0,
+        min_count_met=True,
+    )
+    assert result.gate1_all_eligible is False
+    assert result.g_values == ()
+    assert result.passed is False
+    assert any("no frozen PRIMARY" in reason for reason in result.failure_reasons)
+
+
+def test_directional_gates_rejects_observations_from_undeclared_sweep() -> None:
+    declared = [
+        _pair(
+            f"declared-{i}",
+            delta_truth=1.0,
+            delta_output=1.0,
+            sweep_id="declared",
+            is_adjacent=True,
+        )
+        for i in range(3)
+    ]
+    undeclared = [
+        _pair(
+            f"hidden-{i}",
+            delta_truth=1.0,
+            delta_output=-1.0,
+            sweep_id="hidden",
+            is_adjacent=True,
+        )
+        for i in range(3)
+    ]
+    result = directional_gates(
+        declared + undeclared,
+        u_rep=0.0,
+        u_proc=0.0,
+        expected_sweep_ids={"declared"},
+        negative_control_failures=0,
+        positive_control_failures=0,
+        units_commensurate=False,
+    )
+    assert result.passed is False
+    assert any("undeclared sweep" in reason and "hidden" in reason for reason in result.failure_reasons)
