@@ -8,6 +8,7 @@ from voice_genesis.calibration.provenance import (
     CampaignIdentity,
     CodeIdentity,
     Ledger,
+    LedgerChainInvalidError,
     LedgerEntry,
     LedgerTruncatedTailError,
     ProvenanceRecord,
@@ -171,6 +172,37 @@ def test_ledger_append_refuses_when_existing_tail_truncated(tmp_path) -> None:
     # append 失敗後もファイル内容は一切変更されていない（破損 bytes への
     # 追記が起きていないことを直接検証する）。
     assert path.read_text(encoding="utf-8") == truncated_content
+
+
+def test_ledger_append_refuses_when_middle_entry_tampered(tmp_path) -> None:
+    """[Codex レビュー 2026-09-01 P1 finding #4] `append()` は末尾行の
+    seq/entry_sha だけでなく既存台帳の全 chain を検証する。途中（末尾ではない）
+    のエントリが改竄されていれば `LedgerChainInvalidError` を送出し、ファイルへ
+    は一切書き込まない（改竄行より後ろの行だけを見る旧実装は、末尾が改竄後に
+    再計算された "整合する" prev_sha 連鎖で偽装されていれば検出できなかった）。
+    """
+    path = tmp_path / "ledger.jsonl"
+    ledger = Ledger(path)
+    ledger.append({"kind": "render", "row_id": "r0"})
+    ledger.append({"kind": "render", "row_id": "r1"})
+    ledger.append({"kind": "render", "row_id": "r2"})
+
+    # 先頭（末尾ではない）エントリの payload を改竄する。entry_sha/prev_sha は
+    # 再計算しないため、末尾行だけを見れば依然 "整合する" ように見える。
+    lines = path.read_text(encoding="utf-8").splitlines()
+    tampered = json.loads(lines[0])
+    tampered["payload"]["row_id"] = "TAMPERED"
+    lines[0] = json.dumps(tampered)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    before = path.read_text(encoding="utf-8")
+
+    fresh = Ledger(path)
+    with pytest.raises(LedgerChainInvalidError) as excinfo:
+        fresh.append({"kind": "render", "row_id": "r3"})
+    assert excinfo.value.tamper_at_seq == 0
+
+    # fail-closed: append 失敗後もファイル内容は一切変更されていない。
+    assert path.read_text(encoding="utf-8") == before
 
 
 def test_ledger_verify_chain_ok_with_missing_final_newline_flag(tmp_path) -> None:

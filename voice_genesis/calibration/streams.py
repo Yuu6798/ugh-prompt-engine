@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from voice_genesis.calibration.fixtures.axes import FAMILY_ORDER
+
 _HASH_LEN = hashlib.sha256().digest_size  # 32 bytes
 
 
@@ -156,26 +158,71 @@ def derive_generator(
     return np.random.Generator(np.random.PCG64(seed))
 
 
-def stream_name(
-    *,
-    campaign_id: str,
-    family: str,
-    split: str,
-    row_id: str,
-    probe_index: int,
-    purpose: str,
-) -> str:
-    """`c0_validate._check_rng_ledger_shape` が要求する `stream_name` を、
-    stream を一意に分離する 6 field から機械的に導出する（Codex レビュー
-    2026-09-01 P1: 従来 `RngLedgerEntry`/`to_records()` はこの field 自体を
-    持たず、canonical な producer の出力が常に C0 dry-run 検証で BLOCK されて
-    いた）。区切り文字 `/` は各 field の内容には現れない前提（`campaign_id`/
-    `family`/`split`/`purpose` は閉語彙由来、`row_id` は canonical row_id 由来
-    でいずれもスラッシュを含まない）。衝突耐性が必要な同一性判定そのものは
-    `stream_info()` の長さ接頭辞方式 info バイト列（HKDF 導出の実引数）が担う
-    ため、この文字列表現は人間可読な台帳ラベルの役割に留める。
+#: C0 manifest の `rng_ledger` が declare する split-level stream の固定名
+#: （設計正本 §3.3。family に依らずキャンペーン全体で唯一）。
+SPLIT_HMAC_STREAM_NAME = "split/hmac"
+SPLIT_TIEBREAK_STREAM_NAME = "split/tiebreak"
+
+#: `stream_name()` がこの集合に属さない `purpose` を受け取った場合、当該
+#: family の generator render stream (`"<family>/render"`) へ折り畳む
+#: （下記 `stream_name` docstring 参照）。
+_SPLIT_LEVEL_PURPOSES: dict[str, str] = {
+    "split_hmac": SPLIT_HMAC_STREAM_NAME,
+    "split_tiebreak": SPLIT_TIEBREAK_STREAM_NAME,
+}
+
+
+def stream_name(*, family: str, purpose: str) -> str:
+    """`RngLedgerEntry.stream_name` / C0 manifest `rng_ledger` 記録粒度での
+    stream 識別子（Codex レビュー 2026-09-01 P1 finding #2 DESIGN RULING）。
+
+    C0 の `rng_ledger` は row/probe 単位の実 HKDF 導出を個別列挙しない
+    （`expected_rng_stream_names()` docstring も参照）。実際の乱数分離
+    そのもの（row_id/probe_index を含む一意な分離）は引き続き
+    `stream_info()`/`derive_okm()`/`derive_seed()`/`derive_generator()` が
+    担い、この関数の戻り値には影響しない。
+
+    `[UNDERSPEC-CAL-C16]` 設計正本 §3.3 は C0 記録粒度と実導出粒度の対応
+    までは規定しないため、「split 関連の 2 purpose 以外はすべて当該 family の
+    render stream へ折り畳む」という最も単純な写像を採用する:
+
+    - `purpose="split_hmac"` → `"split/hmac"`（family に依らずキャンペーン
+      全体で唯一。splitter.py の stratum 内 HMAC 順位付けに対応）
+    - `purpose="split_tiebreak"` → `"split/tiebreak"`（同上。§7 の余り偶奇
+      tie-break に対応）
+    - それ以外の purpose（例: `"generator"`）→ `f"{family}/render"`
+      （row/probe に依らず family 単位で 1 つに畳み込む）
     """
-    return f"{campaign_id}/{family}/{split}/{row_id}/{probe_index}/{purpose}"
+    split_level = _SPLIT_LEVEL_PURPOSES.get(purpose)
+    if split_level is not None:
+        return split_level
+    return f"{family}/render"
+
+
+def expected_rng_stream_names() -> frozenset[str]:
+    """C0 manifest `rng_ledger` が過不足なく declare すべき closed stream 名
+    集合（設計正本 §3.3。Codex レビュー 2026-09-01 P1 finding #2 DESIGN
+    RULING、`[UNDERSPEC-CAL-C16]`）:
+
+        {generator render streams: 1 per (family, purpose="render")}
+        ∪ {split: 1 stream "split/hmac"}
+        ∪ {tie-break: 1 stream "split/tiebreak"}
+
+    row/probe 単位の HKDF 導出（`derive_generator()` 等が実際に消費する
+    `stream_info()` の一意な info バイト列）は、この per-family render
+    stream の **sub-derivation** であり、C0 では個別列挙しない（既定の
+    row 数・probe 数はキャンペーン規模に応じて変動しうるが、closed set 自体は
+    family 構成が変わらない限り不変であるべきため）。
+
+    family 名は `fixtures.axes.FAMILY_ORDER`（凍結 fixture family 全集合。
+    matrix.py が re-export する `FixtureFamily` と同一の enum）から機械導出
+    する。呼び出し側供給ではなく code-derived であることが本 finding の
+    修正の核心（Codex レビュー 2026-09-01 P1: 従来 `rng_ledger` の
+    stream_names は任意の well-formed entry が 1 件あれば通過し、closed set
+    でないことを検証していなかった）。
+    """
+    render_streams = {f"{family.value}/render" for family in FAMILY_ORDER}
+    return frozenset(render_streams | {SPLIT_HMAC_STREAM_NAME, SPLIT_TIEBREAK_STREAM_NAME})
 
 
 @dataclass(frozen=True)
@@ -232,14 +279,7 @@ class RngLedger:
             row_id=row_id,
             probe_index=probe_index,
             public_seed_id=public_seed_id,
-            stream_name=stream_name(
-                campaign_id=campaign_id,
-                family=family,
-                split=split,
-                row_id=row_id,
-                probe_index=probe_index,
-                purpose=purpose,
-            ),
+            stream_name=stream_name(family=family, purpose=purpose),
             seeded=True,  # `record()` は常に HKDF から実際に seed を導出済み
         )
         self.entries.append(entry)

@@ -179,6 +179,10 @@ truth construct を変える軸が関与するものは適用外。第 6 巡レ�
   充足し、seal を跨がない）
 - これにより N=6 family（negative 2 cell = 10 instances）でも gate 5 の最小数と
   selection fail filter を同時充足する
+- **`splitter.py` の coverage 制約は `truth_level="TRUTH_CORE"` のみ split 当たり被覆下限を
+  2 に拡張する**（第 9 巡レビュー採用: 従来の下限 1（存在保証のみ）では、ある実 secret で
+  HOLDOUT 側の truth-core 行が 1 件に留まり `N_pos=5 (<10)` となる family が生じたため。
+  family の truth core 行数は最小でも 12 件あり infeasible にはならない）
 
 本節の変更は memo 改訂としてのみ行い、コード内での暗黙変更を禁止する。C0 freeze 承認時の
 ユーザーレビュー対象。

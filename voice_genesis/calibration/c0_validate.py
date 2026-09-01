@@ -45,7 +45,13 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
     と `seeded`（bool）を持ち、`seeded=True` のエントリは非空の
     `public_seed_id`（seed 参照。§3.3「stream 列挙 + seed 参照」に対応。
     `streams.RngLedgerEntry.public_seed_id` と命名を揃えた）も持つことを
-    検査する（`[UNDERSPEC-CAL-C13]`）。
+    検査する（`[UNDERSPEC-CAL-C13]`）。加えて、全エントリの `stream_name`
+    集合は `streams.expected_rng_stream_names()`（§3.3 が定める凍結 closed
+    set: family ごとの generator render stream 1 個 ∪ `"split/hmac"` ∪
+    `"split/tiebreak"`）と厳密一致することを要求する（欠落・unknown/extra・
+    重複をそれぞれ個別列挙。`[UNDERSPEC-CAL-C16]`。Codex レビュー 2026-09-01
+    P1: 従来は 1 件の well-formed entry があれば通過しており、stream 集合が
+    閉じているかを一切検査していなかった）。
 - **RECORDED_OR_ABSENT**（§3.2）: 値または `"ABSENT:<理由>"` 文字列のいずれか
   が必須記録される。[UNDERSPEC-CAL-C07] 「必須記録」という文言を厳格に読み、
   キー自体が manifest に全く存在しない場合は REQUIRED_BLOCKING と同じ扱い
@@ -73,13 +79,14 @@ ineligible とする（`d4c_ineligible=True` で表現。BLOCKED code は発行�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import vocab
+from . import streams, vocab
 from .candidates import registry as candidate_registry
 
 # ---------------------------------------------------------------------------
@@ -356,6 +363,54 @@ def _check_path_inventory_coverage(manifest: Mapping[str, object]) -> list[str]:
     return violations
 
 
+def _check_hash_content_match(manifest: Mapping[str, object]) -> list[str]:
+    """4 つの path+hash 系マップに宣言された sha256 を、実ファイルバイトの実測
+    sha256 と比較する（設計正本 §3.1「候補 meter・generator・schema・test の全
+    path + SHA-256」。Codex レビュー 2026-09-01 P1: 従来は宣言済みハッシュが
+    64 桁小文字 16 進文字列という形状のみを検証しており、ファイル内容と無関係
+    な任意のハッシュ値でも通過してしまっていた）。
+
+    版管理されたクローズド inventory (`calibration_path_inventory()`) を一度だけ
+    走査し（single pass）、各エントリについて実ファイルを 1 回読み sha256 を
+    計算、4 マップの合併集合から得た宣言値と比較する。不一致・読込不能はそれぞれ
+    path を個別に列挙する。inventory coverage 違反（欠落 path・4 マップに無い
+    unknown path）は `_check_path_inventory_coverage` が別途捕捉するため、ここ
+    では「inventory と宣言の双方に存在する path」のみを対象とし二重報告を避ける。
+    """
+    declared: dict[str, str] = {}
+    for key in HASH_MAP_KEYS:
+        found, value = _resolve(manifest, key)
+        if not found or _is_hollow(value) or not isinstance(value, Mapping):
+            return []  # 欠落/非 mapping は _check_required_blocking 側で既に捕捉
+        for path, sha in value.items():
+            if isinstance(path, str) and isinstance(sha, str) and _SHA256_HEX_RE.match(sha):
+                declared[path] = sha
+            # 形状違反 (非文字列 path・非 64桁hex sha) は _check_hash_maps が
+            # 既に捕捉するため、ここでは形状不正なエントリを黙ってスキップする。
+
+    violations: list[str] = []
+    for rel_path in sorted(calibration_path_inventory()):
+        declared_sha = declared.get(rel_path)
+        if declared_sha is None:
+            continue  # 欠落/unknown は _check_path_inventory_coverage 側で捕捉済み
+        file_path = _REPO_ROOT / rel_path
+        try:
+            actual_bytes = file_path.read_bytes()
+        except OSError as exc:
+            violations.append(
+                f"candidates.*_paths_sha256[{rel_path!r}] "
+                f"(cannot read file for hash verification: {exc})"
+            )
+            continue
+        actual_sha = hashlib.sha256(actual_bytes).hexdigest()
+        if actual_sha != declared_sha:
+            violations.append(
+                f"candidates.*_paths_sha256[{rel_path!r}] (declared sha256 {declared_sha!r} "
+                f"does not match actual file content sha256 {actual_sha!r})"
+            )
+    return violations
+
+
 def _required_meter_ids() -> frozenset[str]:
     """`candidates.registry.ALL_CANDIDATES` が定義する全 meter family の値集合。"""
     return frozenset(c.meter.value for c in candidate_registry.ALL_CANDIDATES)
@@ -457,6 +512,51 @@ def _check_rng_ledger_shape(manifest: Mapping[str, object]) -> list[str]:
     return violations
 
 
+def _check_rng_ledger_closed_set(manifest: Mapping[str, object]) -> list[str]:
+    """`rng_ledger` の `stream_name` 集合が §3.3 の凍結 closed set
+    (`streams.expected_rng_stream_names()`) と厳密一致することを検査する
+    （Codex レビュー 2026-09-01 P1 finding #2: 従来は entry 形状のみを検証し、
+    stream 集合が閉じているか（欠落 family・unknown な余分 stream・重複宣言）
+    は一切見ておらず、1 件の well-formed entry だけで通過してしまっていた）。
+
+    C0 記録粒度（`streams.stream_name()`/`expected_rng_stream_names()`
+    docstring も参照、`[UNDERSPEC-CAL-C16]`）: row/probe 単位の実 HKDF 導出は
+    per-family render stream の sub-derivation であり C0 では個別列挙しない。
+    欠落 stream・unknown/extra stream・重複宣言はそれぞれ個別に列挙する。
+    """
+    found, ledger = _resolve(manifest, "rng_ledger")
+    if not found or _is_hollow(ledger) or not isinstance(ledger, Sequence):
+        return []  # 欠落/空/非 list は _check_required_blocking 側で既に捕捉
+    if isinstance(ledger, (str, bytes)):
+        return []  # 形状違反は _check_rng_ledger_shape 側で既に捕捉
+
+    names: list[str] = []
+    for entry in ledger:
+        if not isinstance(entry, Mapping):
+            continue  # 形状違反は _check_rng_ledger_shape 側で既に捕捉
+        name = entry.get("stream_name")
+        if isinstance(name, str) and name.strip() != "":
+            names.append(name)
+        # 非文字列/空文字列は _check_rng_ledger_shape 側で既に捕捉
+
+    expected = streams.expected_rng_stream_names()
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for name in names:
+        if name in seen:
+            duplicates.add(name)
+        seen.add(name)
+
+    missing = sorted(expected - seen)
+    unknown = sorted(seen - expected)
+
+    violations: list[str] = []
+    violations += [f"rng_ledger (missing required stream: {n!r})" for n in missing]
+    violations += [f"rng_ledger (unknown/extra stream: {n!r})" for n in unknown]
+    violations += [f"rng_ledger (duplicate stream: {n!r})" for n in sorted(duplicates)]
+    return violations
+
+
 def _check_recorded_or_absent(
     manifest: Mapping[str, object],
 ) -> tuple[list[str], list[str]]:
@@ -519,9 +619,11 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     missing_required = _check_required_blocking(manifest)
     missing_required += _check_hash_maps(manifest)
     missing_required += _check_path_inventory_coverage(manifest)
+    missing_required += _check_hash_content_match(manifest)
     missing_required += _check_meter_specs_coverage(manifest)
     missing_required += _check_independence_ledger(manifest)
     missing_required += _check_rng_ledger_shape(manifest)
+    missing_required += _check_rng_ledger_closed_set(manifest)
 
     missing_recorded, downgrades = _check_recorded_or_absent(manifest)
     all_missing = tuple(missing_required + missing_recorded)

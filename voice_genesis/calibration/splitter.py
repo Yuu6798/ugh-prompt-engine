@@ -43,6 +43,17 @@ from voice_genesis.calibration.vocab import Split
 
 _COVERAGE_AXES: tuple[str, ...] = ("truth_level", "generator_impl", "boundary_class")
 
+#: `truth_level == "TRUTH_CORE"` は他の coverage 軸と異なり、単なる存在保証
+#: (>=1) では不十分（Codex レビュー 2026-09-01 P1 finding #3）: SELECTION/
+#: HOLDOUT 側の truth-core 行が 1 件しかないと、`fixtures.controls.
+#: positive_detection_instances()` の instance 数が `1 * PROBE_REPEATS(=5)`
+#: にしかならず `N_pos>=10`（§10.1 要求）を割り込む。family 最小の truth
+#: core 行数（12 件、F0_CONTROL）は 50/25/25 split の下で常に SELECTION/
+#: HOLDOUT 側にも複数件を残す余地があるため（`CoverageRepairInfeasible` に
+#: 陥るのは実 matrix では発生しない設計判断）、この 1 pair のみ下限 2 を課す。
+_TRUTH_CORE_BLOCK_VALUE = "TRUTH_CORE"
+_TRUTH_CORE_MIN_COUNT = 2
+
 
 @dataclass(frozen=True)
 class RowInput:
@@ -117,7 +128,23 @@ def _axis_value(row: RowInput, axis: str) -> Any:
     return getattr(row, axis)
 
 
-def _required_pairs(rows: Sequence[RowInput]) -> set[tuple[str, Any]]:
+def _min_count_for_pair(axis: str, value: Any) -> int:
+    """(axis, value) ペアの split 当たり被覆下限（通常は存在保証の 1。
+    `truth_level="TRUTH_CORE"` のみ 2、finding #3 参照）。"""
+    if axis == "truth_level" and value == _TRUTH_CORE_BLOCK_VALUE:
+        return _TRUTH_CORE_MIN_COUNT
+    return 1
+
+
+def _required_pairs(rows: Sequence[RowInput]) -> dict[tuple[str, Any], int]:
+    """coverage 制約対象の (axis, value) ペア → split 当たり被覆下限。
+
+    通常のペアは `count>=3`（3 split 全てへ最低 1 件ずつ配れる可能性がある
+    水準のみを対象とする、従来通り）を条件に下限 1 を要求する。
+    `truth_level="TRUTH_CORE"` は下限 2 を要求するため、閾値も
+    `3 * 下限`（=6）へ引き上げる（残り 2 split 双方に 2 件ずつ配れる余地が
+    ない水準を対象外にする、との整合）。
+    """
     counts: dict[tuple[str, Any], int] = {}
     for r in rows:
         for axis in _COVERAGE_AXES:
@@ -125,23 +152,40 @@ def _required_pairs(rows: Sequence[RowInput]) -> set[tuple[str, Any]]:
             if v is None:
                 continue
             counts[(axis, v)] = counts.get((axis, v), 0) + 1
-    return {k for k, c in counts.items() if c >= 3}
+    required: dict[tuple[str, Any], int] = {}
+    for k, c in counts.items():
+        axis, value = k
+        min_count = _min_count_for_pair(axis, value)
+        if c >= 3 * min_count:
+            required[k] = min_count
+    return required
+
+
+def _pair_count(
+    rows_by_id: Mapping[str, RowInput],
+    assignment: Mapping[str, Split],
+    axis: str,
+    value: Any,
+    split: Split,
+) -> int:
+    return sum(
+        1
+        for rid, s in assignment.items()
+        if s == split and _axis_value(rows_by_id[rid], axis) == value
+    )
 
 
 def _coverage_violations(
     rows_by_id: Mapping[str, RowInput],
     assignment: Mapping[str, Split],
-    required_pairs: set[tuple[str, Any]],
+    required_pairs: Mapping[tuple[str, Any], int],
 ) -> list[tuple[str, Any, Split]]:
     violations: list[tuple[str, Any, Split]] = []
-    for axis, value in sorted(required_pairs, key=lambda kv: (kv[0], str(kv[1]))):
+    for (axis, value), min_count in sorted(
+        required_pairs.items(), key=lambda kv: (kv[0][0], str(kv[0][1]))
+    ):
         for split in (Split.CALIBRATION, Split.SELECTION, Split.HOLDOUT):
-            present = any(
-                _axis_value(rows_by_id[rid], axis) == value
-                for rid, s in assignment.items()
-                if s == split
-            )
-            if not present:
+            if _pair_count(rows_by_id, assignment, axis, value, split) < min_count:
                 violations.append((axis, value, split))
     return violations
 
@@ -173,7 +217,7 @@ def _repair_coverage(
     rows_by_id: Mapping[str, RowInput],
     assignment: dict[str, Split],
     secret: bytes,
-    required_pairs: set[tuple[str, Any]],
+    required_pairs: Mapping[tuple[str, Any], int],
 ) -> list[SwapRecord]:
     swaps: list[SwapRecord] = []
     guard = 0
@@ -190,6 +234,7 @@ def _repair_coverage(
             )
         axis, value, target_split = violations[0]
         current_violations = set(violations)
+        target_count_before = _pair_count(rows_by_id, assignment, axis, value, target_split)
         donors = sorted(
             (
                 rid
@@ -213,13 +258,17 @@ def _repair_coverage(
         # 修正: (donor, victim) の組を HMAC 順で **同時に** 試し、実際に
         # swap した結果を `_coverage_violations` で再計算して確認する
         # （simulate-then-check）。得られる新しい違反集合が「元の違反集合の
-        # 部分集合」かつ「今回対象にした違反 (axis, value, target_split) を
-        # 含まない」場合のみ採用する（＝新しい被覆破壊を作らず、かつ着実に
-        # 前進する）。この条件を満たす組が 1 つも見つからなければ、
-        # assignment を一切変更せずに `CoverageRepairInfeasible` で
-        # fail-closed する。候補数は有限 (donors x victims) であり、
-        # 走査順は HMAC-rank に基づき決定的なので、同一入力からは常に同一の
-        # (donor, victim) が選ばれる。
+        # 部分集合」かつ「対象ペアの split 内件数を実際に増やす（前進する）」
+        # 場合のみ採用する（＝新しい被覆破壊を作らず、かつ着実に前進する）。
+        # 下限が 1 の通常ペアでは「1 件増える」=「違反解消そのもの」なので
+        # 従来の意味論と等価。下限 2 の `truth_level="TRUTH_CORE"`
+        # （finding #3）では 1 回の swap で 0→1 までしか進まないことがあり、
+        # その場合は violations に残ったまま while ループが次周回で同じ
+        # 違反を再度拾い、2 件目の donor を探して 1→2 へ前進させる。この
+        # 条件を満たす組が 1 つも見つからなければ、assignment を一切変更せず
+        # `CoverageRepairInfeasible` で fail-closed する。候補数は有限
+        # (donors x victims) であり、走査順は HMAC-rank に基づき決定的な
+        # ので、同一入力からは常に同一の (donor, victim) が選ばれる。
         chosen: tuple[str, str] | None = None
         for cand_donor in donors:
             donor_split = assignment[cand_donor]
@@ -237,9 +286,10 @@ def _repair_coverage(
                 trial[cand_victim] = donor_split
                 trial_violations = _coverage_violations(rows_by_id, trial, required_pairs)
                 trial_violations_set = set(trial_violations)
-                resolves_target = (axis, value, target_split) not in trial_violations_set
+                target_count_after = _pair_count(rows_by_id, trial, axis, value, target_split)
+                makes_progress = target_count_after > target_count_before
                 introduces_nothing_new = trial_violations_set <= current_violations
-                if resolves_target and introduces_nothing_new:
+                if makes_progress and introduces_nothing_new:
                     chosen = (cand_donor, cand_victim)
                     break
             if chosen is not None:

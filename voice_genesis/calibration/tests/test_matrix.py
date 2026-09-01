@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import random
 from dataclasses import replace
 
 import pytest
 
-from voice_genesis.calibration.fixtures import axes
+from voice_genesis.calibration.fixtures import axes, controls
 from voice_genesis.calibration.fixtures.axes import FixtureFamily
 from voice_genesis.calibration.fixtures.matrix import (
     FixtureRow,
@@ -17,6 +18,14 @@ from voice_genesis.calibration.splitter import RowInput, realize_split
 from voice_genesis.calibration.vocab import Domain, Split
 
 SPLIT_SECRET = b"\x09" * 32
+
+#: Codex レビュー 2026-09-01 P1 finding #3 の実測回帰 secret: 旧 coverage
+#: 制約（truth-core 行の split 当たり被覆下限=1）の下では F0_CONTROL の
+#: HOLDOUT 側 truth-core 行が 1 件しか配置されず、
+#: `controls.positive_detection_instances()` が `N_pos=5` (< 10) に留まった。
+FINDING3_SECRET = bytes.fromhex(
+    "a52252084218c91a0f70951ea70100f8e054e48fb898a7aa6d4220b5a4d85236"
+)
 
 
 def _to_row_inputs(rows):
@@ -305,3 +314,59 @@ def test_splitter_per_family_totals_match_family_target_50_25_25() -> None:
             n for (f, _s), n in by_family_split.items() if f == fam_key
         )
         assert fam_total == total_n
+
+
+# ---------------------------------------------------------------------------
+# truth-core coverage 下限 2/family/split (Codex レビュー 2026-09-01 P1
+# finding #3): N_pos>=10 を SELECTION/HOLDOUT 双方で安定して満たすための
+# splitter.py 側 coverage 制約強化の実データ検証。
+# ---------------------------------------------------------------------------
+
+
+def _truth_core_count(rows, assignment, family: str, split: Split) -> int:
+    return sum(
+        1
+        for mr in rows
+        if mr.row.family == family
+        and mr.row.block == "TRUTH_CORE"
+        and assignment[mr.row_id] == split
+    )
+
+
+def test_truth_core_coverage_min_2_per_family_split_with_finding3_secret() -> None:
+    """finding #3 の実測 secret を使った実 matrix split で、全 family ×
+    {SELECTION, HOLDOUT} が truth-core 行 2 件以上・`N_pos>=10` を満たす
+    （修正前は F0_CONTROL/HOLDOUT が truth-core 行 1 件・N_pos=5 で違反した）。
+    """
+    rows = build_matrix()
+    row_inputs = _to_row_inputs(rows)
+    realized = realize_split(row_inputs, FINDING3_SECRET, ["family"])
+
+    for family in {mr.row.family for mr in rows}:
+        for split in (Split.SELECTION, Split.HOLDOUT):
+            truth_core_count = _truth_core_count(rows, realized.assignment, family, split)
+            assert truth_core_count >= 2, (family, split, truth_core_count)
+
+            instances = controls.positive_detection_instances(
+                rows, realized.assignment, split, family=family
+            )
+            assert len(instances) >= 10, (family, split, len(instances))
+
+
+def test_truth_core_coverage_min_2_property_over_random_secrets() -> None:
+    """5 件のランダム secret でも同様に成立する（単一 secret での偶然の成功と
+    区別する。設計上の要求はどの secret でも壊れないこと）。実 matrix は全
+    family が truth-core 行 >=12 件を持つため `CoverageRepairInfeasible` は
+    発生しない設計判断（finding #3 の DESIGN RULING）。
+    """
+    rows = build_matrix()
+    row_inputs = _to_row_inputs(rows)
+    rng = random.Random(2026_09_01)
+
+    for _ in range(5):
+        secret = rng.randbytes(32)
+        realized = realize_split(row_inputs, secret, ["family"])
+        for family in {mr.row.family for mr in rows}:
+            for split in (Split.SELECTION, Split.HOLDOUT):
+                truth_core_count = _truth_core_count(rows, realized.assignment, family, split)
+                assert truth_core_count >= 2, (family, split, truth_core_count, secret.hex())

@@ -5,8 +5,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from pathlib import Path
 
-from voice_genesis.calibration import c0_validate, vocab
+from voice_genesis.calibration import c0_validate, streams, vocab
 from voice_genesis.calibration.candidates import registry as candidate_registry
 
 _MEASUREMENT_DIRECTORY_STATUS = "ABSENT:legacy_path=voice_genesis/harness/measure_v3.py"
@@ -22,9 +23,23 @@ def _full_independence_ledger() -> dict[str, str]:
 
 
 def _fake_sha256(path: str) -> str:
-    """テスト用の決定的な擬似 sha256（path から機械的に導出。実ハッシュ値では
-    ない）。"""
+    """テスト用の決定的な擬似 sha256（path/名前から機械的に導出。実ファイル
+    内容のハッシュ値ではない）。実在ファイルの path+hash 系マップにはもう
+    使わない（Codex レビュー 2026-09-01 P1 finding #1: 内容非依存の任意ハッシュ
+    でも通過してしまっていたため、`_real_sha256` へ置き換えた）。壊れた
+    checkout を模擬するテスト（`test_path_inventory_immune_to_missing_file_in_incomplete_checkout`）
+    や `public_seed_id` のようなハッシュ内容そのものは検証されないフィールド
+    でのみ引き続き使う。"""
     return hashlib.sha256(path.encode("utf-8")).hexdigest()
+
+
+def _real_sha256(repo_relative_path: str) -> str:
+    """実リポジトリ上のファイルバイトから実測 sha256 を計算する（Codex レビュー
+    2026-09-01 P1 finding #1: manifest 側の declared hash はファイル内容と
+    実際に一致していなければならないため、fixture 側も実ハッシュを使う）。
+    """
+    file_path = Path(c0_validate._REPO_ROOT) / repo_relative_path
+    return hashlib.sha256(file_path.read_bytes()).hexdigest()
 
 
 def _classify_path(path: str) -> str:
@@ -44,7 +59,8 @@ def _classify_path(path: str) -> str:
 def _full_path_inventory_maps() -> dict[str, dict[str, str]]:
     """`c0_validate.calibration_path_inventory()`（本体側と同一の inventory
     helper。Codex レビュー 2026-09-01 P1）から 4 カテゴリの path+hash マップを
-    機械生成する。
+    機械生成する。宣言する sha256 は実ファイルバイトの実測値
+    （`_real_sha256`。finding #1: 内容と無関係な任意ハッシュでは通過させない）。
     """
     out: dict[str, dict[str, str]] = {
         "meter_paths_sha256": {},
@@ -53,8 +69,20 @@ def _full_path_inventory_maps() -> dict[str, dict[str, str]]:
         "test_paths_sha256": {},
     }
     for path in sorted(c0_validate.calibration_path_inventory()):
-        out[_classify_path(path)][path] = _fake_sha256(path)
+        out[_classify_path(path)][path] = _real_sha256(path)
     return out
+
+
+def _full_rng_ledger() -> list[dict[str, object]]:
+    """C0 closed set（`streams.expected_rng_stream_names()`）の全 9 stream を
+    過不足なく含む `rng_ledger`（Codex レビュー 2026-09-01 P1 finding #2 の
+    fixture 健全化。`public_seed_id` はハッシュ内容そのものは検証されない
+    フィールドなので `_fake_sha256` で十分）。
+    """
+    return [
+        {"stream_name": name, "seeded": True, "public_seed_id": _fake_sha256(name)}
+        for name in sorted(streams.expected_rng_stream_names())
+    ]
 
 
 def _complete_manifest() -> dict[str, object]:
@@ -92,14 +120,7 @@ def _complete_manifest() -> dict[str, object]:
             "provenance_spec": {"schema": "vgcal-provenance/1"},
         },
         "independence_ledger": _full_independence_ledger(),
-        "rng_ledger": [
-            {"stream_name": "split_secret", "seeded": True, "public_seed_id": "1" * 64},
-            {
-                "stream_name": "generator/F0_CONTROL/row0",
-                "seeded": True,
-                "public_seed_id": "2" * 64,
-            },
-        ],
+        "rng_ledger": _full_rng_ledger(),
         "env": {
             "container_image_digest": "ABSENT:no_container_used",
             "blas_fft_backend": "openblas-0.3.27",
@@ -190,14 +211,17 @@ def test_recorded_or_absent_key_with_real_value_no_downgrade() -> None:
 
 def test_unseeded_rng_stream_blocks() -> None:
     manifest = _complete_manifest()
-    manifest["rng_ledger"] = [
-        {"stream_name": "split_secret", "seeded": True, "public_seed_id": "1" * 64},
-        {"stream_name": "tie_break", "seeded": False},
-    ]
+    ledger = _full_rng_ledger()
+    for entry in ledger:
+        if entry["stream_name"] == "split/tiebreak":
+            entry["seeded"] = False
+            entry.pop("public_seed_id", None)
+    manifest["rng_ledger"] = ledger
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG in result.blocked_codes
-    assert "tie_break" in result.unseeded_rng_streams
-    # unseeded 宣言以外は shape として妥当なので内容不備 BLOCK は併発しない
+    assert "split/tiebreak" in result.unseeded_rng_streams
+    # unseeded 宣言以外（closed set・shape とも）は妥当なので内容不備 BLOCK は
+    # 併発しない
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE not in result.blocked_codes
 
 
@@ -309,6 +333,25 @@ def test_path_inventory_phantom_extra_path_blocks() -> None:
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     assert any(
         "unknown/extra path" in k and phantom in k for k in result.missing_required_keys
+    )
+
+
+def test_hash_content_mismatch_blocks() -> None:
+    """[Codex レビュー 2026-09-01 P1 finding #1] 宣言済みハッシュが 64 桁
+    小文字 16 進の形状としては妥当でも、実ファイルバイトの sha256 と一致しなければ
+    BLOCK する（従来は形状チェックのみで、任意の well-formed ハッシュが通過して
+    いた）。
+    """
+    manifest = _complete_manifest()
+    target = "voice_genesis/calibration/streams.py"
+    schema = manifest["candidates"]["schema_paths_sha256"]
+    assert target in schema
+    schema[target] = "b" * 64  # 形状は妥当だが実ファイル内容とは無関係な値
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "does not match actual file content" in k and target in k
+        for k in result.missing_required_keys
     )
 
 
@@ -430,6 +473,53 @@ def test_independence_ledger_tier_mismatch_blocks() -> None:
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
     assert any(
         "tier mismatch" in k and "F0-B0-CURRENT" in k for k in result.missing_required_keys
+    )
+
+
+def test_rng_ledger_closed_set_missing_family_stream_blocks() -> None:
+    """[Codex レビュー 2026-09-01 P1 finding #2] closed set のうち 1 family
+    分の render stream 宣言が欠けているだけで BLOCK する（従来は well-formed
+    entry が 1 件でもあれば通過していた）。"""
+    manifest = _complete_manifest()
+    manifest["rng_ledger"] = [
+        e for e in _full_rng_ledger() if e["stream_name"] != "F0_CONTROL/render"
+    ]
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "missing required stream" in k and "F0_CONTROL/render" in k
+        for k in result.missing_required_keys
+    )
+
+
+def test_rng_ledger_closed_set_extra_unknown_stream_blocks() -> None:
+    """closed set に無い stream 名が紛れ込んでいても BLOCK する。"""
+    manifest = _complete_manifest()
+    ledger = _full_rng_ledger()
+    ledger.append(
+        {"stream_name": "NOT_A_REAL_STREAM", "seeded": True, "public_seed_id": "9" * 64}
+    )
+    manifest["rng_ledger"] = ledger
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "unknown/extra stream" in k and "NOT_A_REAL_STREAM" in k
+        for k in result.missing_required_keys
+    )
+
+
+def test_rng_ledger_closed_set_duplicate_stream_blocks() -> None:
+    """同じ stream_name の重複宣言は BLOCK する。"""
+    manifest = _complete_manifest()
+    ledger = _full_rng_ledger()
+    duplicate = dict(ledger[0])
+    ledger.append(duplicate)
+    manifest["rng_ledger"] = ledger
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        "duplicate stream" in k and duplicate["stream_name"] in k
+        for k in result.missing_required_keys
     )
 
 
