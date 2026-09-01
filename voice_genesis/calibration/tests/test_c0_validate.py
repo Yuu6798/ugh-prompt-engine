@@ -153,6 +153,7 @@ def _complete_manifest() -> dict[str, object]:
             "dtype": "float32",
             "channel_policy": "mono",
             "resampling_impl": "scipy.signal.resample_poly",
+            "resampling_parameters": {"window": ["kaiser", 5.0], "padtype": "constant"},
         },
         "frozen_design": {
             "claim_critical_set": ["M3_FORMANTS", "M2_SPECTRAL_TILT", "M2_APERIODICITY"],
@@ -369,7 +370,12 @@ def test_hollow_empty_container_manifest_is_blocked() -> None:
             "librosa_version": "",
             "soundfile_version": "",
         },
-        "sample_format": {"dtype": "", "channel_policy": "", "resampling_impl": ""},
+        "sample_format": {
+            "dtype": "",
+            "channel_policy": "",
+            "resampling_impl": "",
+            "resampling_parameters": {},
+        },
         "frozen_design": {
             "claim_critical_set": [],
             "meter_specs": {},
