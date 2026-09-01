@@ -1,0 +1,177 @@
+"""観測量の定義式（設計正本 §10.1）。"""
+
+from __future__ import annotations
+
+from collections.abc import Hashable, Mapping, Sequence
+from dataclasses import dataclass
+from itertools import combinations
+from typing import TypeVar
+
+import numpy as np
+
+ProcessId = TypeVar("ProcessId", bound=Hashable)
+
+
+def two_stage_median(x: Mapping[ProcessId, Sequence[float]]) -> float:
+    """`m[i] = median_p( median_r( x_hat[i,p,r] ) )`。
+
+    process 間で repeat 数が不均等な場合に、repeat 数の多い process が支配的に
+    ならないよう、まず process ごとに repeat の中央値を取り、それらの中央値を
+    process 間でさらに中央値化する（二段 median）。
+    """
+    per_process_medians = [
+        float(np.median(np.asarray(repeats, dtype=float)))
+        for repeats in x.values()
+        if len(repeats) > 0
+    ]
+    if not per_process_medians:
+        raise ValueError("two_stage_median: no process has any repeats")
+    return float(np.median(np.asarray(per_process_medians, dtype=float)))
+
+
+@dataclass(frozen=True)
+class ErrorTerms:
+    e: float
+    ae: float
+    re: float
+
+
+def error_terms(m: float, truth: float, zero_guard: float) -> ErrorTerms:
+    """`e = m - truth`, `AE = |e|`, `RE = AE / max(|truth|, zero_guard)`。
+
+    signed construct が 0 近傍のとき RE を PASS 判定に使わず診断専用に留めるのは
+    呼び出し側の責務（ここでは式のみを提供する）。
+    """
+    e = m - truth
+    ae = abs(e)
+    re = ae / max(abs(truth), zero_guard)
+    return ErrorTerms(e=e, ae=ae, re=re)
+
+
+def bias(errors: Sequence[float]) -> float:
+    """`BIAS = mean_i(e[i])`。"""
+    return float(np.mean(np.asarray(errors, dtype=float)))
+
+
+def mae(errors: Sequence[float]) -> float:
+    """`MAE = mean_i(|e[i]|)`。"""
+    return float(np.mean(np.abs(np.asarray(errors, dtype=float))))
+
+
+def q95(values: Sequence[float]) -> float:
+    """95th percentile。`numpy.quantile(..., method="linear")` 固定
+    （設計正本 §10.1: q95(method=linear 固定)）。"""
+    return float(np.quantile(np.asarray(values, dtype=float), 0.95, method="linear"))
+
+
+def u_rep(per_instance_per_process_ranges: Mapping[Hashable, Sequence[float]]) -> float | None:
+    """`U_rep = q95_{i,p}( (max_r - min_r)/2 )`。key は (instance_id, process_id)
+    等、値はその (i,p) セルの repeat 系列。
+
+    repeat 数が 2 未満の (instance, process) セル（singleton）は range が
+    **未定義**（0 ではない）ため q95 の母集団から除外する。singleton を range=0
+    として算入すると、6-call 構成（within-process repeat=3 × fresh-process
+    repeat=... 等）で repeat が構造的に欠けたセルが U_rep を不当に希釈し、
+    実際には測れていない安定性を「測って安定していた」ことにしてしまう
+    （設計正本 §6 の 6-call 構成に対する構造ゼロ希釈防止）。除外は U_rep を
+    大きくする方向にしか働かない、fail 側の保守的な読みである。
+
+    全セルが singleton（有効な range が 1 件もない）の場合は計算不能として
+    `None` を返す。呼び出し側はこれを NOT_EVALUABLE 系の missing 理由へ
+    写像すること（`OUTPUT_NOT_EVALUABLE` 等）。
+    """
+    ranges: list[float] = []
+    for repeats in per_instance_per_process_ranges.values():
+        if len(repeats) < 2:
+            continue
+        ranges.append((max(repeats) - min(repeats)) / 2.0)
+    if not ranges:
+        return None
+    return q95(ranges)
+
+
+def u_proc(per_instance_process_medians: Mapping[Hashable, Sequence[float]]) -> float:
+    """`U_proc`: 2 process の場合は `q95_i(|med1 - med2|)/2`。process が 3 以上の
+    場合は「全 pair 差の q95」へ一般化する（§10.1）。
+
+    key = instance_id、value = [median_process_1, median_process_2, ...]。
+    """
+    diffs: list[float] = []
+    for medians in per_instance_process_medians.values():
+        medians = list(medians)
+        if len(medians) < 2:
+            continue
+        for a, b in combinations(medians, 2):
+            diffs.append(abs(a - b))
+    if not diffs:
+        raise ValueError("u_proc: no instance has >=2 process medians")
+    return q95(diffs) / 2.0
+
+
+def nuisance_ds(anchor_error: float, varied_error: float) -> float:
+    """`dS[a,pair] = |(m[ia]-x[ia]) - (m[i0]-x[i0])| = |varied_e - anchor_e|`。"""
+    return abs(varied_error - anchor_error)
+
+
+@dataclass(frozen=True)
+class DetectionResult:
+    fdr0: float
+    fnr1: float
+    n_neg: int
+    n_pos: int
+    min_count_met: bool
+    control_gate: str = "APPLICABLE"
+
+
+def detection_rates(
+    neg_outcomes: Sequence[bool],
+    pos_outcomes: Sequence[bool],
+    *,
+    control_gate: str = "APPLICABLE",
+) -> DetectionResult:
+    """`neg_outcomes[i]` = True は negative control が「発火した」ことを示す
+    (誤検出、または missing/invalid 出力 — §10.1: missing/invalid は分子に算入し、
+    分母からは除外しない）。`pos_outcomes[i]` = True は positive control が
+    正しく発火したこと（False が FNR1 の分子）。
+
+    最小数 (`N_neg>=10` かつ `N_pos>=10`) を満たさない construct は結果を
+    PASS 判定に使うべきではない（`min_count_met` で呼び出し側が判定する）。
+    `control_gate="NOT_APPLICABLE"` の場合は C0 で事前宣言された非該当 construct
+    であることをそのまま通過させる（呼び出し側が gate5 で分岐に使う）。
+    """
+    n_neg = len(neg_outcomes)
+    n_pos = len(pos_outcomes)
+    fdr0 = (sum(1 for v in neg_outcomes if v) / n_neg) if n_neg > 0 else 0.0
+    fnr1 = (sum(1 for v in pos_outcomes if not v) / n_pos) if n_pos > 0 else 0.0
+    min_count_met = n_neg >= 10 and n_pos >= 10
+    return DetectionResult(
+        fdr0=fdr0,
+        fnr1=fnr1,
+        n_neg=n_neg,
+        n_pos=n_pos,
+        min_count_met=min_count_met,
+        control_gate=control_gate,
+    )
+
+
+def failure_boundary(
+    ordered_levels: Sequence[Hashable],
+    pass_flags: Sequence[bool | None],
+) -> tuple[Hashable | None, Hashable | None]:
+    """事前順序軸上の `[last passing level, first failing level]`。補間なし。
+    `None`（missing）は fail 扱い。
+
+    全 level が PASS なら `first_fail=None`、全 level が FAIL なら
+    `last_pass=None`。
+    """
+    if len(ordered_levels) != len(pass_flags):
+        raise ValueError("failure_boundary: ordered_levels and pass_flags length mismatch")
+    last_pass: Hashable | None = None
+    first_fail: Hashable | None = None
+    for level, flag in zip(ordered_levels, pass_flags):
+        passed = bool(flag) if flag is not None else False
+        if passed:
+            last_pass = level
+        elif first_fail is None:
+            first_fail = level
+    return last_pass, first_fail
