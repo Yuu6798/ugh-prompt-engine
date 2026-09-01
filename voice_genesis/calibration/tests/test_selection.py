@@ -442,3 +442,53 @@ def test_selection_non_finite_common_ranking_field_is_ineligible() -> None:
     assert outcome.selected_candidate_id == "good"
     assert outcome.ineligible_candidates == (("bad-inf", "criteria_non_finite"),)
     assert "bad-inf" not in outcome.rounded_vectors
+
+
+def test_select_across_ceilings_total_failure_preserves_audit_data() -> None:
+    absolute = CandidateCriteria(
+        candidate_id="abs-flagged",
+        ceiling=ClaimCeiling.ABSOLUTE,
+        eligible=False,
+        primary_normalized_mae=0.1,
+        signed_bias=0.0,
+        primary_q95_ae=0.2,
+    )
+    directional = CandidateCriteria(
+        candidate_id="dir-flagged",
+        ceiling=ClaimCeiling.DIRECTIONAL,
+        eligible=False,
+        kendall_tau=0.9,
+        adjacent_reversal_rate=0.0,
+    )
+    diagnostic = CandidateCriteria(
+        candidate_id="diag-only",
+        ceiling=ClaimCeiling.DIAGNOSTIC_ONLY,
+    )
+    outcome = select_across_ceilings([absolute, directional, diagnostic])
+    assert outcome.outcome == "SELECTION_FAILED_CLOSED"
+    assert outcome.selected_candidate_id is None
+    assert outcome.ranked_candidate_ids == ()
+    assert set(outcome.raw_vectors) == {"abs-flagged", "dir-flagged"}
+    assert set(outcome.rounded_vectors) == {"abs-flagged", "dir-flagged"}
+    assert set(outcome.ineligible_candidates) == {
+        ("abs-flagged", "flagged_ineligible"),
+        ("dir-flagged", "flagged_ineligible"),
+        ("diag-only", "different_ceiling_pool"),
+    }
+
+
+def test_select_across_ceilings_total_failure_accounts_for_criteria_absent_candidates() -> None:
+    absolute_missing = CandidateCriteria(
+        candidate_id="abs-no-criteria",
+        ceiling=ClaimCeiling.ABSOLUTE,
+    )
+    diagnostic = CandidateCriteria(
+        candidate_id="diag-only",
+        ceiling=ClaimCeiling.DIAGNOSTIC_ONLY,
+    )
+    outcome = select_across_ceilings([absolute_missing, diagnostic])
+    assert outcome.outcome == "SELECTION_FAILED_CLOSED"
+    assert set(outcome.ineligible_candidates) == {
+        ("abs-no-criteria", "criteria_payload_absent"),
+        ("diag-only", "different_ceiling_pool"),
+    }

@@ -530,6 +530,14 @@ def _check_required_blocking(manifest: Mapping[str, object]) -> list[str]:
         if key == "repo.dirty_tree" and value is not False:
             missing.append(f"{key} (must be exactly false, got {value!r})")
             continue
+        if key == "repo.commit_sha" and (
+            not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None
+        ):
+            missing.append(
+                f"{key}: shape (must be a full 40-character lowercase hex commit SHA, "
+                f"got {value!r})"
+            )
+            continue
         container_kind = _CONTAINER_TYPE_KEYS.get(key)
         if container_kind == "mapping" and not isinstance(value, Mapping):
             missing.append(f"{key}: type (must be a mapping, got {type(value).__name__})")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from voice_genesis.calibration.canonical import row_id as compute_row_id
 from voice_genesis.calibration.fixtures.determinism import (
     check_determinism_fresh_process,
     check_determinism_in_process,
@@ -50,7 +51,7 @@ def test_in_process_determinism_is_byte_identical() -> None:
         campaign_id="RUN10-CAL",
         family="F0_CONTROL",
         split="CALIBRATION",
-        row_id="row-det-1",
+        row_id=compute_row_id(row.to_canonical_dict()),
     )
     assert result.identical is True
     assert result.blocked_code is None
@@ -66,7 +67,7 @@ def test_fresh_process_determinism_f0_control() -> None:
         campaign_id="RUN10-CAL",
         family="F0_CONTROL",
         split="CALIBRATION",
-        row_id="row-det-2",
+        row_id=compute_row_id(row.to_canonical_dict()),
     )
     assert result.identical is True
     assert result.blocked_code is None
@@ -86,7 +87,7 @@ def test_fresh_process_determinism_aperiodicity_uses_declared_rng_stream() -> No
         campaign_id="RUN10-CAL",
         family="APERIODICITY_GT",
         split="CALIBRATION",
-        row_id="row-det-3",
+        row_id=compute_row_id(row.to_canonical_dict()),
     )
     assert result.identical is True
     assert result.blocked_code is None
@@ -97,3 +98,29 @@ def test_blocked_code_value_matches_vocab() -> None:
         BlockedCode.BLOCKED_C1_GENERATOR_NONDETERMINISTIC.value
         == "BLOCKED_C1_GENERATOR_NONDETERMINISTIC"
     )
+
+
+def test_determinism_rejects_noncanonical_row_id() -> None:
+    row = _short_f0_row()
+    with pytest.raises(ValueError, match="canonical row_id"):
+        check_determinism_in_process(
+            row,
+            SECRET,
+            campaign_id="RUN10-CAL",
+            family=row.family,
+            split="CALIBRATION",
+            row_id="0" * 64,
+        )
+
+
+def test_determinism_rejects_family_mismatch_before_render() -> None:
+    row = _short_f0_row()
+    with pytest.raises(ValueError, match="does not match row family"):
+        check_determinism_in_process(
+            row,
+            SECRET,
+            campaign_id="RUN10-CAL",
+            family="APERIODICITY_GT",
+            split="CALIBRATION",
+            row_id=compute_row_id(row.to_canonical_dict()),
+        )

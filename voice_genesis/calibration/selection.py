@@ -353,4 +353,28 @@ def select_across_ceilings(candidates: Sequence[CandidateCriteria]) -> Selection
             )
         return outcome
 
-    return select([], SelectionFamily.ABSOLUTE)
+    absolute_audit = select(absolute_pool, SelectionFamily.ABSOLUTE)
+    directional_audit = select(directional_pool, SelectionFamily.DIRECTIONAL)
+
+    raw_vectors = dict(absolute_audit.raw_vectors)
+    raw_vectors.update(directional_audit.raw_vectors)
+    rounded_vectors = dict(absolute_audit.rounded_vectors)
+    rounded_vectors.update(directional_audit.rounded_vectors)
+
+    ineligible = list(absolute_audit.ineligible_candidates)
+    ineligible.extend(directional_audit.ineligible_candidates)
+    accounted_ids = {candidate_id for candidate_id, _reason in ineligible}
+    accounted_ids.update(raw_vectors)
+    for candidate in candidates:
+        if candidate.candidate_id not in accounted_ids:
+            ineligible.append((candidate.candidate_id, "different_ceiling_pool"))
+
+    return SelectionOutcome(
+        family=SelectionFamily.ABSOLUTE,
+        selected_candidate_id=None,
+        ranked_candidate_ids=(),
+        raw_vectors=raw_vectors,
+        rounded_vectors=rounded_vectors,
+        outcome="SELECTION_FAILED_CLOSED",
+        ineligible_candidates=tuple(ineligible),
+    )

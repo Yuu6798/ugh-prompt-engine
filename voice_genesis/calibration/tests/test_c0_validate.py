@@ -1003,3 +1003,15 @@ def test_rng_ledger_producer_declarations_round_trip_validator() -> None:
     result = c0_validate.validate_c0_manifest(manifest)
     assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE not in result.blocked_codes
     assert vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG not in result.blocked_codes
+
+
+def test_repo_commit_sha_requires_full_lowercase_hex() -> None:
+    for bad in ("x", "a" * 39, "A" * 40, "g" * 40):
+        manifest = _complete_manifest()
+        repo = manifest["repo"]
+        assert isinstance(repo, dict)
+        repo["commit_sha"] = bad
+        result = c0_validate.validate_c0_manifest(manifest)
+        assert result.is_blocked
+        assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+        assert any("repo.commit_sha" in item for item in result.missing_required_keys)

@@ -16,6 +16,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
+from voice_genesis.calibration.canonical import row_id as compute_row_id
 from voice_genesis.calibration.fixtures.generators import common, render_row
 from voice_genesis.calibration.fixtures.matrix import FixtureRow
 from voice_genesis.calibration.streams import derive_generator
@@ -44,6 +45,17 @@ def render_row_pcm_hex(
     双方から呼べる純粋関数）。"""
     row_dict = json.loads(row_canonical_json)
     row = _row_from_canonical_dict(row_dict)
+    canonical_row_id = compute_row_id(row.to_canonical_dict())
+    if row_id != canonical_row_id:
+        raise ValueError(
+            f"determinism: supplied row_id {row_id!r} does not match canonical "
+            f"row_id {canonical_row_id!r}"
+        )
+    if family != row.family:
+        raise ValueError(
+            f"determinism: supplied family {family!r} does not match row family "
+            f"{row.family!r}"
+        )
     secret = bytes.fromhex(secret_hex)
     rng = derive_generator(
         secret,
