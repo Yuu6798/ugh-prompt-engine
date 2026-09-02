@@ -95,5 +95,8 @@
   "voice_genesis/calibration/tests/test_tolerance.py",
   "voice_genesis/calibration/tests/test_vocab.py",
   "voice_genesis/calibration/tolerance.py",
-  "voice_genesis/calibration/vocab.py"
+  "voice_genesis/calibration/vocab.py",
+  "voice_genesis/harness/measure.py",
+  "voice_genesis/harness/measure_v2.py",
+  "voice_genesis/harness/measure_v3.py"
 ]

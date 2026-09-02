@@ -325,10 +325,16 @@ def _environment_drift_violations(campaign: FrozenCampaign) -> tuple[str, ...]:
 # canonical path 照合（finding #7, 第 9 巡採用）
 # ---------------------------------------------------------------------------
 
-#: 凍結 manifest `candidates` 節の 4 カテゴリキー（`c0_freeze._path_hash_maps`
+#: 凍結 manifest `candidates` 節の 5 カテゴリキー（`c0_freeze._path_hash_maps`
 #: が生成する形状。値は `{相対 path: sha256 hex}` の mapping）。
+#: `meter_implementation_paths_sha256`（`[UNDERSPEC-CAL-D49]`、Codex round 21
+#: レビュー finding, ADOPT）は `candidates/impl/b0_wrappers.py` が無改変
+#: import で実行する `voice_genesis/harness/` 配下の meter 実装を指す。従来
+#: このカテゴリが本 tuple に無かったため、C0 freeze 後に harness meter 実装を
+#: 改変してもここでの canonical-path 照合を素通りしていた。
 _CANONICAL_PATH_CATEGORIES: tuple[str, ...] = (
     "meter_paths_sha256",
+    "meter_implementation_paths_sha256",
     "generator_paths_sha256",
     "schema_paths_sha256",
     "test_paths_sha256",
@@ -336,11 +342,13 @@ _CANONICAL_PATH_CATEGORIES: tuple[str, ...] = (
 
 
 def _canonical_path_violations(campaign: FrozenCampaign, repo_root: Path) -> tuple[str, ...]:
-    """finding #7: 凍結 manifest の `candidates.<category>`（4 カテゴリ）に
-    列挙された全 path について、`repo_root` 上の **現在のファイル bytes** の
-    sha256 を独立に再計算し、manifest 記載値と照合する。1 件でも不一致・
-    欠落があれば、違反 path 1 件につき 1 行（`"<category>:<path>: <detail>"`
-    形式）の tuple を返す。全て一致すれば空 tuple。
+    """finding #7: 凍結 manifest の `candidates.<category>`（5 カテゴリ、
+    `[UNDERSPEC-CAL-D49]` で harness meter 実装用の
+    `meter_implementation_paths_sha256` を追加）に列挙された全 path について、
+    `repo_root` 上の **現在のファイル bytes** の sha256 を独立に再計算し、
+    manifest 記載値と照合する。1 件でも不一致・欠落があれば、違反 path 1 件
+    につき 1 行（`"<category>:<path>: <detail>"` 形式）の tuple を返す。
+    全て一致すれば空 tuple。
 
     `matrix`/`generator`/`registry`/`impl` の import には一切依存しない
     （`hashlib`/`Path.read_bytes()` のみ）— 確認対象のコードを import して

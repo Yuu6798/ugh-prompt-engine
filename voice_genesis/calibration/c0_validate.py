@@ -22,13 +22,14 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
     「未記録」と同義として missing 扱い）。
   - path+hash 系マップ（`candidates.*_paths_sha256`）は各エントリが
     `path -> sha256` 形状で、path は非空文字列、sha256 は 64 桁の小文字
-    16 進文字列であることを検査する（`[UNDERSPEC-CAL-C10]`）。加えて、4 マップ
+    16 進文字列であることを検査する（`[UNDERSPEC-CAL-C10]`）。加えて、5 マップ
     の**合併集合**が `calibration_path_inventory()`（実リポジトリの
-    `voice_genesis/calibration/**/*.py` 全件）と厳密一致することを要求する
+    `voice_genesis/calibration/**/*.py` 全件 ∪ B0 wrapper が実行する harness
+    meter 実装。`[UNDERSPEC-CAL-D49]`）と厳密一致することを要求する
     （欠落 path・inventory に無い unknown/extra path をそれぞれ個別列挙。
     `[UNDERSPEC-CAL-C14]`。Codex レビュー 2026-09-01 P1: 従来は supplied
     entries の形状のみを検証しており、ファイルを丸ごと省略しても通過して
-    しまっていた）。加えて、同一 path が 4 マップの複数カテゴリに重複して
+    しまっていた）。加えて、同一 path が 5 マップの複数カテゴリに重複して
     宣言されていないことも検査する（digest が一致していても重複は BLOCK
     する。Codex レビュー 2026-09-01 P1: 従来は 4 マップを `declared[path] =
     sha` で単純マージしており、同一 path が矛盾する digest で 2 カテゴリに
@@ -131,6 +132,7 @@ ineligible とする（`d4c_ineligible=True` で表現。BLOCKED code は発行�
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -155,6 +157,7 @@ REQUIRED_BLOCKING_KEYS: tuple[str, ...] = (
     "repo.dirty_tree",
     "measurement_directory_status",
     "candidates.meter_paths_sha256",
+    "candidates.meter_implementation_paths_sha256",
     "candidates.generator_paths_sha256",
     "candidates.schema_paths_sha256",
     "candidates.test_paths_sha256",
@@ -255,8 +258,17 @@ COST_CAPS_REQUIRED_KEYS: tuple[str, ...] = ("compute", "storage", "budget")
 
 #: path+hash 系マップ（設計正本 §3.1: 「候補 meter・generator・schema・test の
 #: 全 path + SHA-256」）。各マップは `path -> sha256_hex` の mapping。
+#: `meter_implementation_paths_sha256` は `meter_paths_sha256`
+#: （`voice_genesis/calibration/candidates/` 配下の候補実装）とは別カテゴリ
+#: として、`candidates/impl/b0_wrappers.py` が無改変 import で実行する
+#: `voice_genesis/harness/` 配下の meter 実装（B0 baseline の実体）を記録する
+#: （Codex round 21 レビュー finding, ADOPT, `[UNDERSPEC-CAL-D49]`: 従来
+#: harness 実装がどの path+hash マップにも含まれておらず、C0 freeze 後に
+#: harness meter を改変しても `campaign/cli.py::_canonical_path_violations`
+#: の canonical-path 照合を素通りしていた）。
 HASH_MAP_KEYS: tuple[str, ...] = (
     "candidates.meter_paths_sha256",
+    "candidates.meter_implementation_paths_sha256",
     "candidates.generator_paths_sha256",
     "candidates.schema_paths_sha256",
     "candidates.test_paths_sha256",
@@ -274,6 +286,7 @@ HASH_MAP_KEYS: tuple[str, ...] = (
 #: 文字列も通ってしまう）。
 _CONTAINER_TYPE_KEYS: dict[str, str] = {
     "candidates.meter_paths_sha256": "mapping",
+    "candidates.meter_implementation_paths_sha256": "mapping",
     "candidates.generator_paths_sha256": "mapping",
     "candidates.schema_paths_sha256": "mapping",
     "candidates.test_paths_sha256": "mapping",
@@ -507,6 +520,70 @@ def scan_calibration_tree_inventory(repo_root: Path | None = None) -> frozenset[
     return frozenset(paths)
 
 
+#: `[UNDERSPEC-CAL-D49]` `candidates/impl/b0_wrappers.py` が無改変 import で
+#: 実行する `voice_genesis/harness/` 配下のファイル名（拡張子抜き）。
+_HARNESS_DIR_RELATIVE = "voice_genesis/harness"
+_B0_WRAPPER_MODULE_RELATIVE = "voice_genesis/calibration/candidates/impl/b0_wrappers.py"
+
+
+def _harness_local_import_names(module_path: Path, harness_dir: Path) -> frozenset[str]:
+    """`module_path`（harness 側の 1 ファイル、または `b0_wrappers.py`）の
+    top-level `import x` / `from x import ...` 文を AST で静的解析し、`x` が
+    `harness_dir/x.py` として実在する（= bare import で解決される harness
+    ローカルモジュールである）名前の集合を返す。third-party/stdlib import は
+    `harness_dir` に同名 `.py` が存在しないため自動的に除外される。相対 import
+    (`from . import x`, `node.level != 0`) は harness モジュールが使わない
+    書式のためスキップする。
+    """
+    tree = ast.parse(module_path.read_text(encoding="utf-8"), filename=str(module_path))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            top_names = [alias.name.split(".")[0] for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            if node.module is None or node.level != 0:
+                continue
+            top_names = [node.module.split(".")[0]]
+        else:
+            continue
+        for name in top_names:
+            if (harness_dir / f"{name}.py").is_file():
+                names.add(name)
+    return frozenset(names)
+
+
+def resolve_b0_wrapper_harness_paths(repo_root: Path | None = None) -> frozenset[str]:
+    """`candidates/impl/b0_wrappers.py` が実行する harness meter 実装ファイルの
+    transitive closure を静的解析（AST、実際の import 実行は行わない）で求め、
+    repo-relative path の frozenset を返す（`[UNDERSPEC-CAL-D49]`）。
+
+    Codex round 21 レビュー finding（ADOPT）: `b0_wrappers.py` は
+    `voice_genesis/harness/measure.py` / `measure_v3.py` を実行し、
+    `measure_v3.py` はさらに `measure_v2.py` を import するが、これらは
+    どの path+hash マップにも記録されていなかったため、C0 freeze 後に
+    harness meter 実装を改変しても `campaign/cli.py::_canonical_path_violations`
+    の canonical-path 照合を素通りしていた。本関数の戻り値は
+    `candidates.meter_implementation_paths_sha256`（`HASH_MAP_KEYS`）が
+    カバーすべき最小集合であり、`tests/test_c0_path_inventory_sync.py` が
+    `c0_path_inventory.json` との包含関係を静的に検査する（B0 wrapper が
+    新たな harness import を増やしても、inventory への追記漏れがあれば
+    このテストが検出する）。
+    """
+    root = repo_root if repo_root is not None else _REPO_ROOT
+    harness_dir = root / _HARNESS_DIR_RELATIVE
+    wrapper_path = root / _B0_WRAPPER_MODULE_RELATIVE
+
+    resolved: set[str] = set()
+    frontier: set[str] = set(_harness_local_import_names(wrapper_path, harness_dir))
+    while frontier:
+        name = frontier.pop()
+        if name in resolved:
+            continue
+        resolved.add(name)
+        frontier |= _harness_local_import_names(harness_dir / f"{name}.py", harness_dir) - resolved
+    return frozenset(f"{_HARNESS_DIR_RELATIVE}/{name}.py" for name in resolved)
+
+
 #: RECORDED_OR_ABSENT（§3.2）。値 または `"ABSENT:<理由>"` のいずれかが必須。
 RECORDED_OR_ABSENT_KEYS: tuple[str, ...] = (
     "env.container_image_digest",
@@ -696,16 +773,16 @@ def _check_hash_maps(manifest: Mapping[str, object]) -> list[str]:
 
 
 def _check_path_inventory_coverage(manifest: Mapping[str, object]) -> list[str]:
-    """4 つの path+hash 系マップ（`HASH_MAP_KEYS`）の**合併集合**が、実リポジトリの
+    """5 つの path+hash 系マップ（`HASH_MAP_KEYS`）の**合併集合**が、実リポジトリの
     `calibration_path_inventory()` と厳密一致することを検査する（設計正本 §3.1
     「候補 meter・generator・schema・test の全 path + SHA-256」。Codex レビュー
     2026-09-01 P1: 従来は supplied entries の形状のみを検証しており、ファイルを
     丸ごと省略しても・関係ない phantom path を紛れ込ませても通過してしまっていた）。
 
-    4 カテゴリの**各々**が inventory を個別にカバーする必要はない（meter/
+    5 カテゴリの**各々**が inventory を個別にカバーする必要はない（meter/
     generator/schema/test の切り分けは記録上の分類であり、正本はカテゴリ単位の
-    完全性までは要求しない）。missing（inventory にあるが 4 マップいずれにも
-    無い）・unknown（4 マップのどこかにあるが inventory に無い）をそれぞれ個別
+    完全性までは要求しない）。missing（inventory にあるが 5 マップいずれにも
+    無い）・unknown（5 マップのどこかにあるが inventory に無い）をそれぞれ個別
     に列挙する。いずれかのマップが欠落/空/非 mapping の場合は
     `_check_required_blocking`/`_check_hash_maps` 側で既に捕捉されるため、ここ
     では二重報告を避けてスキップする。
@@ -729,9 +806,9 @@ def _check_path_inventory_coverage(manifest: Mapping[str, object]) -> list[str]:
 
 
 def _check_hash_map_category_uniqueness(manifest: Mapping[str, object]) -> list[str]:
-    """4 つの path+hash 系マップ（`HASH_MAP_KEYS`）間で同一 path が複数カテゴリに
+    """5 つの path+hash 系マップ（`HASH_MAP_KEYS`）間で同一 path が複数カテゴリに
     重複して宣言されていないことを検査する（Codex レビュー 2026-09-01 P1:
-    `_check_hash_content_match` は 4 マップを `declared[path] = sha` で単純に
+    `_check_hash_content_match` は 4 マップ（拡張前）を `declared[path] = sha` で単純に
     マージしており、同じ path が 2 カテゴリに異なる digest で宣言されていても
     後勝ちで silently 採用され検出できなかった）。
 
@@ -763,7 +840,7 @@ def _check_hash_map_category_uniqueness(manifest: Mapping[str, object]) -> list[
 
 
 def _check_hash_content_match(manifest: Mapping[str, object]) -> list[str]:
-    """4 つの path+hash 系マップに宣言された sha256 を、実ファイルバイトの実測
+    """5 つの path+hash 系マップに宣言された sha256 を、実ファイルバイトの実測
     sha256 と比較する（設計正本 §3.1「候補 meter・generator・schema・test の全
     path + SHA-256」。Codex レビュー 2026-09-01 P1: 従来は宣言済みハッシュが
     64 桁小文字 16 進文字列という形状のみを検証しており、ファイル内容と無関係
@@ -771,8 +848,8 @@ def _check_hash_content_match(manifest: Mapping[str, object]) -> list[str]:
 
     版管理されたクローズド inventory (`calibration_path_inventory()`) を一度だけ
     走査し（single pass）、各エントリについて実ファイルを 1 回読み sha256 を
-    計算、4 マップの合併集合から得た宣言値と比較する。不一致・読込不能はそれぞれ
-    path を個別に列挙する。inventory coverage 違反（欠落 path・4 マップに無い
+    計算、5 マップの合併集合から得た宣言値と比較する。不一致・読込不能はそれぞれ
+    path を個別に列挙する。inventory coverage 違反（欠落 path・5 マップに無い
     unknown path）は `_check_path_inventory_coverage` が別途捕捉するため、ここ
     では「inventory と宣言の双方に存在する path」のみを対象とし二重報告を避ける。
     """

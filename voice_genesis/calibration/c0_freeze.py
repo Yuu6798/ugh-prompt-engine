@@ -116,14 +116,21 @@ _MEASUREMENT_DIRECTORY_STATUS = "ABSENT:legacy_path=voice_genesis/harness/measur
 _FALLBACK_REPO_URL = "https://github.com/Yuu6798/ugh-prompt-engine"
 
 #: [UNDERSPEC-CAL-D03] path+hash 系マップのカテゴリ分類規則。設計正本は
-#: 4 カテゴリ（meter/generator/schema/test）の分類基準までは規定せず、
-#: `c0_validate.py` も「合併集合の網羅性のみを要求し、カテゴリ単位の完全性
-#: までは要求しない」（同モジュール docstring）。`tests/test_c0_validate.py`
-#: の `_classify_path` と同一の最も単純な規則（`candidates/` 配下 → meter、
-#: `fixtures/generators/` 配下 → generator、`tests/` 配下 → test、それ以外 →
-#: schema）を producer 側にも採用し、テスト fixture と実 producer の分類基準
-#: を一致させる。
+#: 5 カテゴリ（meter/meter_implementation/generator/schema/test）の分類基準
+#: までは規定せず、`c0_validate.py` も「合併集合の網羅性のみを要求し、カテゴリ
+#: 単位の完全性までは要求しない」（同モジュール docstring）。
+#: `tests/test_c0_validate.py` の `_classify_path` と同一の最も単純な規則
+#: （`voice_genesis/harness/` 配下 → meter_implementation、`candidates/` 配下
+#: → meter、`fixtures/generators/` 配下 → generator、`tests/` 配下 → test、
+#: それ以外 → schema）を producer 側にも採用し、テスト fixture と実 producer
+#: の分類基準を一致させる。`meter_implementation_paths_sha256` は
+#: `[UNDERSPEC-CAL-D49]`（Codex round 21 レビュー finding, ADOPT）で新設した
+#: カテゴリで、`candidates/impl/b0_wrappers.py` が無改変 import で実行する
+#: harness meter 実装（B0 baseline の実体）を、calibration 側の候補実装
+#: （`meter_paths_sha256`）とは別に記録する。
 def _classify_path(path: str) -> str:
+    if path.startswith("voice_genesis/harness/"):
+        return "meter_implementation_paths_sha256"
     if path.startswith("voice_genesis/calibration/candidates/"):
         return "meter_paths_sha256"
     if path.startswith("voice_genesis/calibration/fixtures/generators/"):
@@ -136,6 +143,7 @@ def _classify_path(path: str) -> str:
 def _path_hash_maps(root: Path) -> dict[str, dict[str, str]]:
     maps: dict[str, dict[str, str]] = {
         "meter_paths_sha256": {},
+        "meter_implementation_paths_sha256": {},
         "generator_paths_sha256": {},
         "schema_paths_sha256": {},
         "test_paths_sha256": {},

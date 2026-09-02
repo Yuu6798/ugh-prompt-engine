@@ -60,15 +60,18 @@ def _all_constructs() -> tuple[str, ...]:
     return tuple(sorted({c.construct for c in ALL_CANDIDATES}))
 
 #: `build_tiny_campaign()` が manifest `candidates` 節（finding #7:
-#: `cli._canonical_path_violations` が照合する 4 カテゴリ）へ埋め込む、
-#: 実在する小さな代表 path 集合（カテゴリごとに 1 件ずつ）。`c0_freeze.
-#: _path_hash_maps()` の全量走査は行わず、`cli._canonical_path_violations`
-#: が 4 カテゴリすべてを実際に検査することだけをこの小集合で確認できれば
-#: 十分なため、実ファイルの sha256 を毎回 `_canonical_candidates_section()`
-#: 呼び出し時点で計算する（固定値をハードコードしない — 対象ファイルが後で
-#: 編集されても自動的に追随し陳腐化しない）。
+#: `cli._canonical_path_violations` が照合する 5 カテゴリ。
+#: `meter_implementation_paths_sha256` は `[UNDERSPEC-CAL-D49]` で追加した
+#: harness meter 実装カテゴリ）へ埋め込む、実在する小さな代表 path 集合
+#: （カテゴリごとに 1 件ずつ）。`c0_freeze._path_hash_maps()` の全量走査は
+#: 行わず、`cli._canonical_path_violations` が 5 カテゴリすべてを実際に
+#: 検査することだけをこの小集合で確認できれば十分なため、実ファイルの
+#: sha256 を毎回 `_canonical_candidates_section()` 呼び出し時点で計算する
+#: （固定値をハードコードしない — 対象ファイルが後で編集されても自動的に
+#: 追随し陳腐化しない）。
 _CANONICAL_PATH_SAMPLES: Mapping[str, str] = {
     "meter_paths_sha256": "voice_genesis/calibration/candidates/registry.py",
+    "meter_implementation_paths_sha256": "voice_genesis/harness/measure.py",
     "generator_paths_sha256": "voice_genesis/calibration/fixtures/generators/f0_control.py",
     "schema_paths_sha256": "voice_genesis/calibration/vocab.py",
     "test_paths_sha256": "voice_genesis/calibration/tests/_campaign_fixture.py",
@@ -76,7 +79,7 @@ _CANONICAL_PATH_SAMPLES: Mapping[str, str] = {
 
 
 def _canonical_candidates_section(repo_root: Path | None = None) -> dict[str, dict[str, str]]:
-    """`c0_freeze._path_hash_maps()` と同じ 4 キー形状
+    """`c0_freeze._path_hash_maps()` と同じ 5 キー形状
     (`{category: {rel_path: sha256}}`) を、`_CANONICAL_PATH_SAMPLES` の
     実ファイルから独立に計算して返す（finding #7 のテスト用最小 fixture。
     `c0_freeze.py` には依存しない — 他 agent 並行編集の対象外にする既存方針
