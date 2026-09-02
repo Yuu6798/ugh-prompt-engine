@@ -63,6 +63,7 @@
   "voice_genesis/calibration/tests/test_c0_freeze.py",
   "voice_genesis/calibration/tests/test_c0_path_inventory_sync.py",
   "voice_genesis/calibration/tests/test_c0_validate.py",
+  "voice_genesis/calibration/tests/test_campaign_caps.py",
   "voice_genesis/calibration/tests/test_campaign_cli.py",
   "voice_genesis/calibration/tests/test_campaign_close.py",
   "voice_genesis/calibration/tests/test_campaign_holdout.py",

@@ -618,8 +618,18 @@ def run_measurement_for_instance(
             "cpu_seconds": compute_seconds,
             **meter_output_to_dict(record.output),
         }
+        # round 15 finding #3 (`[UNDERSPEC-CAL-D31]`): unlike `cpu_seconds`
+        # above, this is the record's *own* individual serialized size (not
+        # a repeated per-work-unit aggregate) — computed from the payload
+        # before this field is added, so it does not self-reference its own
+        # eventual size. `campaign.caps.cap_counters_from_ledger()` sums it
+        # across all 6 records without dedup (genuinely additive per
+        # record), reproducing the same total charged to `storage_used`
+        # below.
+        record_bytes = len(json.dumps(payload).encode("utf-8"))
+        payload["storage_bytes"] = record_bytes
         campaign.ledger.append(payload)
-        storage_bytes += len(json.dumps(payload).encode("utf-8"))
+        storage_bytes += record_bytes
 
     if cap_counters is not None:
         # round 13 finding #3: this measurement (1 instance x 1 candidate =

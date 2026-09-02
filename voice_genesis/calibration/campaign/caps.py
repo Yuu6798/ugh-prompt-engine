@@ -20,13 +20,19 @@ CapCounters/CostCaps」）。
   fail-closed でエラーにする（黙って 0 へリセットしない — cap バイパスを
   防ぐ）。
 
-`[UNDERSPEC-CAL-D21]` 設計正本/IMPLEMENTATION_MAP は cap counters の永続化
-形式（ファイル単体か ledger 由来の再導出か）を規定しない。本モジュールは
-「`counters.json` を都度 atomic 上書きする単一 mutable ファイル」を正本
-として採用した（ledger `meter_call` event からの事後再導出は不採用 — event
-payload は消費した compute 秒数を保持せず、後から正確に再導出できないため。
-`storage` 次元だけ ledger から再計算可能でも `compute` 次元が再導出不能な
-以上、二重の正本を持つより単一ファイルの方が単純で監査しやすい）。
+`[UNDERSPEC-CAL-D21]`（round 15 finding #3 `[UNDERSPEC-CAL-D31]` で改訂）:
+上記は「`counters.json` を都度 atomic 上書きする単一 mutable ファイル」を
+唯一の正本とした旧採用だったが、round 15 finding #3 はこれを覆す —
+`counters.json` は checkout 外にも secret にも属さない**単なる mutable
+キャッシュ**であり、append-only の ledger（entry_sha 連鎖付き）こそが
+正本である。旧採用は「`compute` 次元は event payload から再導出できない」
+ことを理由にしていたが、これは round 14 finding #2 (`[UNDERSPEC-CAL-D29]`)
+が `render`/`meter_call` event へ `cpu_seconds` を追加したことで既に成立
+しなくなっていた前提だった。本改訂は `cap_counters_from_ledger()` で
+ledger から compute/storage/budget を再導出し、`reconcile_cap_counters()`
+が「次元ごとの `max(persisted, ledger 由来)`」を実効値として `counters.json`
+より**ledger を上位**に置く（ロールバックされた/失われた `counters.json`
+に対する fail-closed 方向の束縛）。
 """
 
 from __future__ import annotations
@@ -36,7 +42,7 @@ import json
 import math
 import os
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from voice_genesis.calibration.cost_caps import (
@@ -45,12 +51,25 @@ from voice_genesis.calibration.cost_caps import (
     CostCaps,
     cost_caps_from_mapping,
 )
+from voice_genesis.calibration.provenance import LedgerEntry
 
 COUNTERS_FILENAME = "counters.json"
 
 
 class CapStateError(RuntimeError):
     """`counters.json` の読み込みが壊れている場合の fail-closed error。"""
+
+
+class CountersCorruptError(CapStateError):
+    """round 15 finding #1 (`[UNDERSPEC-CAL-D31]`): 永続化された
+    `counters.json` の値が finite/non-negative でない、または
+    `storage_used` が非 bool int でない（暗黙の型変換で誤魔化さない）場合の
+    distinct fail-closed error。`CapStateError` のサブクラスなので既存の
+    `except CapStateError` 呼び出し元は変更なしで捕捉できる。呼び出し元
+    （`cli.py`）はこの `CODE` をそのまま ledger `stop_event`/CLI 結果の
+    `reason` として使う——dispatch を一切行わない（0 work unit 実行）。"""
+
+    CODE = "COUNTERS_CORRUPT"
 
 
 class CostCapExceededError(RuntimeError):
@@ -122,28 +141,64 @@ def cost_caps_from_manifest(manifest: Mapping[str, object]) -> CostCaps | None:
         return None
 
 
+def _validate_finite_nonneg_field(value: object, *, field: str, path: Path) -> float:
+    """round 15 finding #1: `compute_used`/`budget_used` must be a real
+    (non-bool) number, finite, and >= 0. No silent coercion of strings —
+    `isinstance` only."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CountersCorruptError(
+            f"{path}: {field} must be a non-bool number, got {value!r} "
+            f"({type(value).__name__})"
+        )
+    if not math.isfinite(value) or value < 0:
+        raise CountersCorruptError(
+            f"{path}: {field} must be finite and >= 0, got {value!r}"
+        )
+    return float(value)
+
+
+def _validate_storage_used_field(value: object, *, path: Path) -> int:
+    """round 15 finding #1: `storage_used` must be a non-bool `int` exactly
+    (no `int(x)` coercion of a float/str — that would silently accept
+    e.g. `5.9` truncated to `5`)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise CountersCorruptError(
+            f"{path}: storage_used must be a non-bool int, got {value!r} "
+            f"({type(value).__name__})"
+        )
+    if value < 0:
+        raise CountersCorruptError(f"{path}: storage_used must be >= 0, got {value!r}")
+    return value
+
+
 def load_cap_counters(campaign_dir: Path) -> CapCounters:
     """`<campaign_dir>/counters.json` を読み戻す。未作成なら 0 の
-    `CapCounters()`（新規 campaign の初回起動）。壊れた JSON・型不正は
-    `CapStateError`（fail-closed — 黙って 0 に戻すと cap を実質バイパス
-    できてしまうため、読み込み不能は明示的な拒否とする）。"""
+    `CapCounters()`（新規 campaign の初回起動）。壊れた JSON・型不正・
+    非 finite・負値・`storage_used` への bool 混入は `CountersCorruptError`
+    （`CapStateError` のサブクラス。fail-closed — 黙って 0 に戻す/丸めると
+    cap を実質バイパスできてしまうため、読み込み不能は明示的な拒否とする。
+    round 15 finding #1）。"""
     path = counters_path(campaign_dir)
     if not path.is_file():
         return CapCounters()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise CapStateError(f"cannot read {path}: {exc}") from exc
+        raise CountersCorruptError(f"cannot read {path}: {exc}") from exc
     if not isinstance(data, Mapping):
-        raise CapStateError(f"{path} must contain a JSON object")
-    try:
-        return CapCounters(
-            compute_used=float(data["compute_used"]),
-            storage_used=int(data["storage_used"]),
-            budget_used=float(data["budget_used"]),
-        )
-    except (KeyError, TypeError, ValueError) as exc:
-        raise CapStateError(f"malformed counters at {path}: {exc}") from exc
+        raise CountersCorruptError(f"{path} must contain a JSON object")
+    for required in ("compute_used", "storage_used", "budget_used"):
+        if required not in data:
+            raise CountersCorruptError(f"{path} missing required key {required!r}")
+    return CapCounters(
+        compute_used=_validate_finite_nonneg_field(
+            data["compute_used"], field="compute_used", path=path
+        ),
+        storage_used=_validate_storage_used_field(data["storage_used"], path=path),
+        budget_used=_validate_finite_nonneg_field(
+            data["budget_used"], field="budget_used", path=path
+        ),
+    )
 
 
 def save_cap_counters(campaign_dir: Path, counters: CapCounters) -> None:
@@ -165,9 +220,136 @@ def save_cap_counters(campaign_dir: Path, counters: CapCounters) -> None:
         raise
 
 
+def _finite_nonneg_float(value: object) -> float:
+    """round 15 finding #3: best-effort extraction of a compute/CPU field
+    from a *ledger* event. Unlike `counters.json` (finding #1: a
+    user/operator-writable cache, rejected outright on any corruption), the
+    ledger is the trusted append-only provenance record this whole
+    reconstruction leans on — an unparsable/invalid field on one event
+    contributes 0 rather than aborting reconstruction of every other event."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    if not math.isfinite(value) or value < 0:
+        return 0.0
+    return float(value)
+
+
+def _finite_nonneg_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    if value < 0:
+        return 0
+    return value
+
+
+def cap_counters_from_ledger(
+    ledger_entries: Sequence[LedgerEntry], cost_caps: CostCaps | None
+) -> CapCounters:
+    """round 15 finding #3 (`[UNDERSPEC-CAL-D31]`): recompute
+    `compute_used`/`storage_used`/`budget_used` purely from the append-only
+    ledger — the authoritative record; `counters.json` is a derived cache
+    (see module docstring).
+
+    - `render` events (`render_stage.run_render_stage`): each event is 1
+      completed render work unit. `cpu_seconds` (round 14 finding #2,
+      `[UNDERSPEC-CAL-D29]`) and `pcm_bytes` (round 15 finding #3, newly
+      recorded alongside it) are summed 1:1 per event.
+    - `meter_call` events (`measure_stage.run_measurement_for_instance`):
+      **6 ledger records per (row_id, probe_index, candidate_id) work
+      unit** (within3 + fresh3). `cpu_seconds` is the *same per-work-unit
+      aggregate value* repeated on all 6 records (see that function's
+      docstring) — summing it naively would 6x overcount, so only the
+      first record seen per `(row_id, probe_index, candidate_id)` key
+      counts toward `compute`. `storage_bytes` (round 15 finding #3,
+      newly recorded) is each record's own individual serialized size —
+      genuinely additive per record, so it is summed without dedup.
+    - `stage_summary` events (round 15 finding #5, `[UNDERSPEC-CAL-D31]`):
+      the CLI dispatch path's own parent-side CPU for the whole stage,
+      not captured by either of the above (matrix build, ledger/JSON I/O,
+      hashing, subprocess orchestration overhead) — summed 1:1 per event
+      so that finding #3's reconstruction and finding #5's charging stay
+      consistent (a lost `counters.json` does not silently drop this).
+    - `budget`: reconstructed as `budget_charge_per_work_unit() ×
+      (completed render units + completed meter-call work units)` per the
+      frozen `budget_accounting_mode` (round 13 finding #3). `None`
+      `cost_caps` (Gate 1 not yet frozen with cost caps) reconstructs
+      `budget_used=0.0` — informational only, nothing enforces it either.
+    """
+    compute = 0.0
+    storage = 0
+    render_units = 0
+    meter_units = 0
+    seen_meter_keys: set[tuple[object, object, object]] = set()
+    for entry in ledger_entries:
+        payload = entry.payload
+        if not isinstance(payload, Mapping):
+            continue
+        kind = payload.get("kind")
+        if kind == "render":
+            compute += _finite_nonneg_float(payload.get("cpu_seconds"))
+            storage += _finite_nonneg_int(payload.get("pcm_bytes"))
+            render_units += 1
+        elif kind == "meter_call":
+            storage += _finite_nonneg_int(payload.get("storage_bytes"))
+            key = (payload.get("row_id"), payload.get("probe_index"), payload.get("candidate_id"))
+            if key in seen_meter_keys:
+                continue
+            seen_meter_keys.add(key)
+            compute += _finite_nonneg_float(payload.get("cpu_seconds"))
+            meter_units += 1
+        elif kind == "stage_summary":
+            compute += _finite_nonneg_float(payload.get("parent_cpu_seconds"))
+    budget = 0.0
+    if cost_caps is not None:
+        per_unit = cost_caps.budget_charge_per_work_unit()
+        if per_unit:
+            budget = per_unit * (render_units + meter_units)
+    return CapCounters(compute_used=compute, storage_used=storage, budget_used=budget)
+
+
+def reconcile_cap_counters(
+    campaign_dir: Path,
+    ledger_entries: Sequence[LedgerEntry],
+    cost_caps: CostCaps | None,
+) -> tuple[CapCounters, bool]:
+    """round 15 finding #3 (`[UNDERSPEC-CAL-D31]`): bind the persisted
+    `counters.json` cache against rollback/loss by treating the ledger as
+    authoritative. Returns `(effective, reconstructed)`:
+
+    - `counters.json` missing, ledger shows no derived usage at all (fresh
+      campaign): `(CapCounters(), False)` — nothing to reconstruct.
+    - `counters.json` missing, ledger shows derived usage (deleted/lost
+      cache with real prior work): `(ledger-derived, True)` — the caller
+      must log a `COUNTERS_RECONSTRUCTED` ledger event once and persist
+      this value.
+    - `counters.json` present: `(per-dimension max(persisted,
+      ledger-derived), False)`. A *lower* persisted value never wins over
+      the ledger (a rolled-back/stale cache must not undercount); a
+      *higher* persisted value is kept as-is rather than treated as an
+      error (fail-closed direction — this function never raises for a
+      persisted/derived mismatch, only `load_cap_counters` raises, for
+      structurally corrupt persisted data per finding #1).
+    """
+    derived = cap_counters_from_ledger(ledger_entries, cost_caps)
+    path = counters_path(campaign_dir)
+    if not path.is_file():
+        has_derived_work = (
+            derived.compute_used > 0.0 or derived.storage_used > 0 or derived.budget_used > 0.0
+        )
+        return derived, has_derived_work
+    persisted = load_cap_counters(campaign_dir)
+    effective = CapCounters(
+        compute_used=max(persisted.compute_used, derived.compute_used),
+        storage_used=max(persisted.storage_used, derived.storage_used),
+        budget_used=max(persisted.budget_used, derived.budget_used),
+    )
+    return effective, False
+
+
 __all__ = [
     "COUNTERS_FILENAME",
     "CapStateError",
+    "CountersCorruptError",
     "CostCapExceededError",
     "WorkerCpuSecondsInvalidError",
     "validate_worker_cpu_seconds",
@@ -175,4 +357,6 @@ __all__ = [
     "cost_caps_from_manifest",
     "load_cap_counters",
     "save_cap_counters",
+    "cap_counters_from_ledger",
+    "reconcile_cap_counters",
 ]

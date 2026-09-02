@@ -130,6 +130,9 @@ class RenderOutcome:
     #: `status="skipped_resume"` (no new work was done).
     wall_seconds: float = 0.0
     cpu_seconds: float = 0.0
+    #: round 15 finding #3 (`[UNDERSPEC-CAL-D31]`): PCM byte count charged
+    #: to `storage_used` for this render (0 for `status="skipped_resume"`).
+    pcm_bytes: int = 0
 
 
 def _recorded_render_sha(
@@ -268,6 +271,7 @@ def render_instance(
         sha256=sha,
         wall_seconds=wall_seconds,
         cpu_seconds=cpu_seconds_total,
+        pcm_bytes=len(pcm_bytes),
     )
 
 
@@ -377,6 +381,13 @@ def run_render_stage(
                     # the compute cap; wall_seconds is informational only.
                     "wall_seconds": outcome.wall_seconds,
                     "cpu_seconds": outcome.cpu_seconds,
+                    # round 15 finding #3 (`[UNDERSPEC-CAL-D31]`): the PCM
+                    # byte count charged to `storage_used` for this render,
+                    # so `campaign.caps.cap_counters_from_ledger()` can
+                    # reconstruct storage from the ledger alone (a bare
+                    # `sha256` cannot recover the byte count of the file it
+                    # hashes).
+                    "pcm_bytes": outcome.pcm_bytes,
                 }
             )
 

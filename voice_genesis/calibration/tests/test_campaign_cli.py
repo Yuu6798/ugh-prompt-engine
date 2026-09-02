@@ -4,13 +4,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
+import time
 from pathlib import Path
 
 import pytest
 
 from voice_genesis.calibration.campaign import cli, holdout_stage, measure_stage, render_stage
-from voice_genesis.calibration.campaign.caps import CapCounters, save_cap_counters
+from voice_genesis.calibration.campaign.caps import (
+    CapCounters,
+    CostCapExceededError,
+    CountersCorruptError,
+    counters_path,
+    save_cap_counters,
+)
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
 from voice_genesis.calibration.candidates.adapter import MeterOutput
 from voice_genesis.calibration.candidates.registry import candidates_for_meter
@@ -437,7 +446,12 @@ def test_c2_baseline_armed_wires_cost_caps_and_persisted_counters(
     captured: dict[str, object] = {}
 
     def _fake_run_baseline_stage(campaign, matrix_rows, *, max_workers, cap_counters, cost_caps, **_kw):
-        captured["cap_counters"] = cap_counters
+        # snapshot (not the live mutable reference): round 15 finding #5
+        # (`[UNDERSPEC-CAL-D31]`) mutates this same `CapCounters` instance
+        # again in `cli.main()`'s post-dispatch `finally` block (parent-side
+        # CPU charge) — capturing the reference itself would let that later
+        # mutation leak into these pre-dispatch assertions.
+        captured["cap_counters"] = CapCounters(**cap_counters.as_dict())
         captured["cost_caps"] = cost_caps
         return {"baseline_audit_sha": "0" * 64}
 
@@ -815,3 +829,293 @@ def test_canonical_path_match_is_not_blocked(
     out = capsys.readouterr().out
     assert "BLOCKED_CANONICAL_MUTATION_REQUIRED" not in out
     assert exit_code == 0, out
+
+
+# ---------------------------------------------------------------------------
+# round 15 findings #1/#3/#5 (`[UNDERSPEC-CAL-D31]`): cap-counter path —
+# corrupt-counters refusal, ledger-derived reconstruction/reconciliation,
+# and CLI-dispatch-path parent-side CPU charging.
+# ---------------------------------------------------------------------------
+
+
+def _armed_c2_args(campaign_dir: Path, secret_root: Path, approval_dir: Path) -> list[str]:
+    return [
+        "c2-baseline",
+        "--campaign-dir",
+        str(campaign_dir),
+        "--secret-dir",
+        str(secret_root),
+        "--approval-dir",
+        str(approval_dir),
+        "--armed",
+    ]
+
+
+def _burn_cpu(min_seconds: float = 0.05) -> None:
+    """Genuinely consume CPU (not just wall-clock sleep) for at least
+    `min_seconds` of process CPU time, so a `resource.getrusage` delta
+    around it is reliably > 0 regardless of the platform's CPU-time
+    accounting tick granularity."""
+    start = time.process_time()
+    while time.process_time() - start < min_seconds:
+        hashlib.sha256(b"x" * 4096).digest()
+
+
+@pytest.mark.parametrize(
+    "bad_counters",
+    [
+        {"compute_used": math.nan, "storage_used": 0, "budget_used": 0.0},
+        {"compute_used": 0.0, "storage_used": 0, "budget_used": -math.inf},
+        {"compute_used": -1.0, "storage_used": 0, "budget_used": 0.0},
+        {"compute_used": 0.0, "storage_used": True, "budget_used": 0.0},
+    ],
+    ids=["nan_compute", "neg_inf_budget", "negative_compute", "bool_storage"],
+)
+def test_corrupt_persisted_counters_refuses_dispatch_zero_work(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    bad_counters: dict,
+) -> None:
+    """round 15 finding #1: a structurally corrupt `counters.json`
+    (NaN/-Infinity/negative/bool storage) refuses dispatch with a distinct
+    `COUNTERS_CORRUPT` code — zero render/measure units run."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    counters_path(campaign_dir).parent.mkdir(parents=True, exist_ok=True)
+    counters_path(campaign_dir).write_text(json.dumps(bad_counters), encoding="utf-8")
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    called = {"n": 0}
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        called["n"] += 1
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    exit_code = cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert '"result": "COUNTERS_CORRUPT"' in out
+    assert called["n"] == 0
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    stop_events = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0].get("reason") == "COUNTERS_CORRUPT"
+
+
+_TINY_COST_CAPS = {
+    "compute": 5.0,
+    "storage": 1_000_000_000,
+    "budget": 1000.0,
+    "budget_accounting_mode": "local_zero_cost",
+}
+
+
+def test_deleted_counters_json_with_ledger_work_is_reconstructed_and_precheck_uses_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 15 finding #3: a missing `counters.json` with real prior
+    `render` work already in the ledger reconstructs totals from the ledger
+    (not zero) and persists them, logging a `counters_reconstructed` event
+    once; the round 13 finding #2 pre-dispatch breach check then uses those
+    reconstructed totals, not zero."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, gate1_cost_caps=_TINY_COST_CAPS)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+    # fabricate prior render work whose cpu_seconds alone already exceeds
+    # the tiny 5.0s compute cap above.
+    campaign.ledger.append(
+        {
+            "kind": "render",
+            "row_id": "r1",
+            "family": "F0_CONTROL",
+            "split": "calibration",
+            "probe_index": 0,
+            "sha256": "0" * 64,
+            "stage": "c1",
+            "wall_seconds": 10.0,
+            "cpu_seconds": 10.0,
+            "pcm_bytes": 20_000,
+        }
+    )
+    assert not counters_path(campaign_dir).is_file()
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir, cost_caps=_TINY_COST_CAPS)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    called = {"n": 0}
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        called["n"] += 1
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    exit_code = cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 1, out
+    assert '"result": "COST_CAP_EXCEEDED"' in out
+    assert called["n"] == 0  # pre-dispatch refusal: no stage work performed
+
+    assert counters_path(campaign_dir).is_file()
+    persisted = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))
+    assert persisted["compute_used"] == pytest.approx(10.0)
+    assert persisted["storage_used"] == 20_000
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    reconstructed_events = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "counters_reconstructed"
+    ]
+    assert len(reconstructed_events) == 1
+    assert reconstructed_events[0]["counters"]["compute_used"] == pytest.approx(10.0)
+
+
+def test_stale_lower_persisted_counters_ledger_derived_max_wins(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 15 finding #3: a persisted `counters.json` that undercounts
+    versus the ledger (e.g. an old snapshot restored over newer work) must
+    not win — the reconciled effective value handed to the stage is the
+    per-dimension max, i.e. the ledger-derived (higher) one."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+    campaign.ledger.append(
+        {
+            "kind": "render",
+            "row_id": "r1",
+            "family": "F0_CONTROL",
+            "split": "calibration",
+            "probe_index": 0,
+            "sha256": "0" * 64,
+            "stage": "c1",
+            "wall_seconds": 42.0,
+            "cpu_seconds": 42.0,
+            "pcm_bytes": 7_000,
+        }
+    )
+    # a stale snapshot that undercounts relative to the ledger above.
+    save_cap_counters(campaign_dir, CapCounters(compute_used=1.0, storage_used=1, budget_used=0.0))
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    captured: dict[str, object] = {}
+
+    def _fake_run_baseline_stage(campaign, matrix_rows, *, max_workers, cap_counters, cost_caps, **_kw):
+        captured["cap_counters"] = CapCounters(**cap_counters.as_dict())
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    exit_code = cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+    seen = captured["cap_counters"]
+    assert isinstance(seen, CapCounters)
+    assert seen.compute_used == pytest.approx(42.0)
+    assert seen.storage_used == 7_000
+
+    persisted = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))
+    assert persisted["compute_used"] == pytest.approx(42.0)
+    assert persisted["storage_used"] == 7_000
+
+
+def test_parent_cpu_charged_and_persisted_on_normal_dispatch_exit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 15 finding #5: on a normal (non-breach) stage dispatch, the CLI
+    process's own parent-side CPU is charged to compute_used, persisted to
+    counters.json, and recorded on a `stage_summary` ledger event."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        _burn_cpu()
+        return {"baseline_audit_sha": "0" * 64}
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    exit_code = cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+    out = capsys.readouterr().out
+    assert exit_code == 0, out
+
+    persisted = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))
+    assert persisted["compute_used"] > 0.0
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    stage_summaries = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stage_summary"
+    ]
+    assert len(stage_summaries) == 1
+    assert stage_summaries[0]["stage"] == "c2-baseline"
+    assert stage_summaries[0]["parent_cpu_seconds"] > 0.0
+    assert stage_summaries[0]["parent_cpu_seconds"] == pytest.approx(persisted["compute_used"])
+
+
+def test_parent_cpu_charged_and_persisted_on_breach_exception_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 15 finding #5: a mid-stage cost-cap breach (raised as
+    `CostCapExceededError` from inside the stage, uncaught by `cli.main()` —
+    same fail-closed contract as `render_stage`/`measure_stage`) must still
+    charge and persist the parent-side CPU burned before the breach, via the
+    `finally`-block exit path."""
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    campaign.ledger.append({"kind": "fixture_valid", "instance_count": 0})
+
+    approval_dir = tmp_path / "approvals"
+    write_gate1_approval(approval_dir)
+    monkeypatch.setenv(cli.CAMPAIGN_ARMED_ENV_VAR, "1")
+
+    def _fake_run_baseline_stage(*_args, **_kwargs):
+        _burn_cpu()
+        raise CostCapExceededError("simulated mid-stage breach")
+
+    monkeypatch.setattr(cli.baseline_stage, "run_baseline_stage", _fake_run_baseline_stage)
+
+    with pytest.raises(CostCapExceededError):
+        cli.main(_armed_c2_args(campaign_dir, secret_root, approval_dir))
+
+    persisted = json.loads(counters_path(campaign_dir).read_text(encoding="utf-8"))
+    assert persisted["compute_used"] > 0.0
+
+    reloaded = load_frozen_campaign(campaign_dir, secret_root)
+    stage_summaries = [
+        e.payload
+        for e in reloaded.ledger.entries
+        if isinstance(e.payload, dict) and e.payload.get("kind") == "stage_summary"
+    ]
+    assert len(stage_summaries) == 1
+    assert stage_summaries[0]["parent_cpu_seconds"] > 0.0
+
+
+def test_counters_corrupt_error_is_subclass_of_cap_state_error() -> None:
+    from voice_genesis.calibration.campaign.caps import CapStateError
+
+    assert issubclass(CountersCorruptError, CapStateError)
+    assert CountersCorruptError.CODE == "COUNTERS_CORRUPT"

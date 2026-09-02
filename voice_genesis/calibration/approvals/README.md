@@ -64,6 +64,21 @@
 Gate 固有の追加フィールドと、記入例・厳密なスキーマ + 具体的な JSON 例は
 [`GATE_REVIEW_BRIEF_v1.md`](../GATE_REVIEW_BRIEF_v1.md) §6 を参照。
 
+## freeze 失敗後の staging cleanup（round 15 finding #4 見送り・境界宣言。`[UNDERSPEC-CAL-D33]`）
+
+`c0_freeze.py` の armed freeze は成果物をまず `.staging-<id>-*`（campaign 側は
+`campaigns/.staging-<id>/`、secret 側も同様）へ書き、read-back 検証を通ってから
+`os.replace` で公開する。**marker 作成（公開直前）が失敗すると、この staging dir
+だけが残ることがある**。この staging dir は 0700 の secrets root / campaigns dir
+配下にのみ存在し、一切 publish（公開先パスへの `os.replace`）されないため secret
+相当の情報を外部へ晒すことはないが、自動 cleanup の対象ではない
+（`detect_orphans()` は `.staging-*` を明示的に除外する）。失敗した freeze の
+後始末は運用者が手動で行う:
+
+```bash
+rm -rf "$VG_CAL_SECRET_DIR"/.staging-<id>-* "<campaigns_dir>"/.staging-<id>
+```
+
 ## 完了時の CLI 確認手順
 
 ```bash

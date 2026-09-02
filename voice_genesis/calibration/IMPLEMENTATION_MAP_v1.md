@@ -364,6 +364,13 @@ README のみ。B/C は README の自セクションのみ追記）。
 
 ### 6.4 D2 — campaign runner（`campaign/` サブパッケージ）
 
+**runner 運用契約**（round 15 finding #2 見送り・境界宣言。`[UNDERSPEC-CAL-D32]`、
+README 参照）: 1 campaign に対して armed プロセスは同時に 1 つのみを運用契約とする
+（single-operator の逐次起動。並行複数プロセスはロックで排除するのではなく、
+round 13/14 の duplicate-key 再構成 fail-closed（`StaleMeasurementError` 等）と
+`[UNDERSPEC-CAL-D31]`（round 15 finding #3。counters を ledger 由来に束縛）により
+過小計上を防ぐ形で運用契約違反を検出する）。
+
 - 手続 Gate 単位のサブコマンド: `c1-fixtures`（**calibration + selection split の行と
   negative control 行のみ** render + determinism 検査（同部分集合）+ ledger。**negative
   control 行の render 済み artifact は sha256 で ledger へ pin し、`c4-holdout` 段では

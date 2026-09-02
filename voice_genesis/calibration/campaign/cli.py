@@ -61,6 +61,7 @@ import dataclasses
 import hashlib
 import json
 import os
+import resource
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -77,7 +78,12 @@ from voice_genesis.calibration.campaign import (
     unseal as unseal_stage,
     workunits,
 )
-from voice_genesis.calibration.campaign.caps import cost_caps_from_manifest, load_cap_counters
+from voice_genesis.calibration.campaign.caps import (
+    CountersCorruptError,
+    cost_caps_from_manifest,
+    reconcile_cap_counters,
+    save_cap_counters,
+)
 from voice_genesis.calibration.campaign.state import (
     CampaignPhase,
     CampaignStateError,
@@ -122,6 +128,21 @@ SECRET_DIR_ENV_VAR = "VG_CAL_SECRET_DIR"
 DEFAULT_SECRET_DIR = Path.home() / ".vg_cal" / "secrets"
 
 CAMPAIGN_ARMED_ENV_VAR = "VG_CAL_CAMPAIGN_AUTHORIZED"
+
+
+def _process_cpu_seconds() -> float:
+    """round 15 finding #5 (`[UNDERSPEC-CAL-D31]`): this process's own
+    cumulative user+sys CPU seconds (`resource.getrusage(RUSAGE_SELF)`).
+    Independent copy of `measure_stage._process_cpu_seconds()` (module
+    docstring convention: each module keeps its own copy of small shared
+    helpers rather than depend on another module's private name) — used to
+    snapshot/charge the CLI dispatch path's own *parent-side* CPU for a
+    whole stage invocation, which is not captured by either the
+    fresh-process workers' self-reported `cpu_seconds` or
+    `measure_stage`'s narrower within-process-call window (matrix build,
+    ledger/JSON I/O, hashing, subprocess orchestration overhead)."""
+    ru_self = resource.getrusage(resource.RUSAGE_SELF)
+    return ru_self.ru_utime + ru_self.ru_stime
 
 SUBCOMMANDS: tuple[str, ...] = (
     "plan",
@@ -1026,20 +1047,28 @@ def _refuse_if_caps_already_breached(
 
     Idempotent: `stop_event` recording is append-only and this guard can run
     on every invocation while the campaign sits in a breached state, so it
-    must not append a duplicate `stop_event` when the last ledger entry
-    already records this exact breach (same reason/counters/caps) — it still
-    refuses dispatch either way.
+    must not append a duplicate `stop_event` when the *most recent*
+    `stop_event` in the ledger already records this exact breach (same
+    reason/counters/caps) — it still refuses dispatch either way. Looks at
+    the most recent `stop_event` specifically rather than only the literal
+    last entry: round 15 finding #5 (`[UNDERSPEC-CAL-D31]`) appends a
+    trailing `stage_summary` event after every dispatch (including a
+    mid-stage breach exit), which would otherwise sit *after* the
+    breach's own `stop_event` and defeat this dedup on the very next
+    invocation.
     """
     if cost_caps is None:
         return None
     decision = cost_caps_check(cap_counters, cost_caps)
     if decision is None:
         return None
-    entries = campaign.ledger.entries
-    last_payload = entries[-1].payload if entries else None
+    last_payload = None
+    for entry in reversed(campaign.ledger.entries):
+        if isinstance(entry.payload, Mapping) and entry.payload.get("kind") == "stop_event":
+            last_payload = entry.payload
+            break
     already_recorded = (
         isinstance(last_payload, Mapping)
-        and last_payload.get("kind") == "stop_event"
         and last_payload.get("reason") == decision.event_payload.get("reason")
         and last_payload.get("counters") == decision.event_payload.get("counters")
         and last_payload.get("caps") == decision.event_payload.get("caps")
@@ -1139,9 +1168,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         _print({"result": BudgetAccountingUndeclaredError.CODE, "detail": str(exc)})
         return 1
-    cap_counters = load_cap_counters(campaign.campaign_dir)
+    # round 15 finding #3 (`[UNDERSPEC-CAL-D31]`): `counters.json` is a
+    # derived cache — the ledger is authoritative. Reconcile the persisted
+    # cache against ledger-derived totals (per-dimension max; a structurally
+    # corrupt persisted cache fails closed with a distinct code, round 15
+    # finding #1) *before* the round 13 finding #2 pre-dispatch breach
+    # check, so that check sees the reconciled (never-undercounted) values.
+    try:
+        cap_counters, reconstructed = reconcile_cap_counters(
+            campaign.campaign_dir, campaign.ledger.entries, cost_caps_obj
+        )
+    except CountersCorruptError as exc:
+        campaign.ledger.append(
+            {
+                "kind": "stop_event",
+                "reason": CountersCorruptError.CODE,
+                "detail": str(exc),
+            }
+        )
+        _print({"result": CountersCorruptError.CODE, "detail": str(exc)})
+        return 1
+    if reconstructed:
+        campaign.ledger.append(
+            {"kind": "counters_reconstructed", "counters": cap_counters.as_dict()}
+        )
+    # Persist the reconciled counters before dispatch (finding #3).
+    save_cap_counters(campaign.campaign_dir, cap_counters)
 
-    # round 13 finding #2: refuse dispatch immediately if the reloaded
+    # round 13 finding #2: refuse dispatch immediately if the reconciled
     # counters already breach the frozen caps — do not let a retry silently
     # proceed and charge one more work unit.
     breach = _refuse_if_caps_already_breached(campaign, cost_caps_obj, cap_counters)
@@ -1151,30 +1205,55 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     matrix_rows = build_matrix() if args.subcommand in _STAGE_DISPATCH_NEEDS_MATRIX else None
 
-    if args.subcommand == "c1-fixtures":
-        out = _run_c1(campaign, matrix_rows, cap_counters=cap_counters, cost_caps=cost_caps_obj)
-    elif args.subcommand == "c2-baseline":
-        out = _run_c2(
-            campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
+    # round 15 finding #5 (`[UNDERSPEC-CAL-D31]`): charge this CLI process's
+    # own parent-side CPU for the whole stage dispatch to the compute cap —
+    # on the normal exit path *and* on any stop/breach/exception exit
+    # (`finally`), so a mid-stage `CostCapExceededError`/`RenderNondeterministicError`/
+    # `StaleMeasurementError` (all currently uncaught here — they propagate
+    # out of `main()`) still gets its parent CPU charged and persisted
+    # before propagating. Recorded on a dedicated `stage_summary` ledger
+    # event (independent of whatever `stop_event`/`render`/`meter_call`
+    # events the stage itself appended) so it is always present exactly
+    # once per dispatch, regardless of exit path.
+    parent_cpu_t0 = _process_cpu_seconds()
+    try:
+        if args.subcommand == "c1-fixtures":
+            out = _run_c1(campaign, matrix_rows, cap_counters=cap_counters, cost_caps=cost_caps_obj)
+        elif args.subcommand == "c2-baseline":
+            out = _run_c2(
+                campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
+            )
+        elif args.subcommand == "c3a-f0-selection":
+            out = _run_c3a(
+                campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
+            )
+        elif args.subcommand == "c3b-selection":
+            out = _run_c3b(
+                campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
+            )
+        elif args.subcommand == "unseal":
+            out = _run_unseal(campaign, approval_dir)
+        elif args.subcommand == "c4-holdout":
+            out = _run_c4(
+                campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
+            )
+        elif args.subcommand == "close":
+            out = _run_close(campaign, reveal=args.reveal_split_secret)
+        else:  # pragma: no cover - argparse choices already constrains this
+            out = {"result": "ERROR", "detail": f"unknown subcommand {args.subcommand!r}"}
+    finally:
+        parent_cpu_seconds = _process_cpu_seconds() - parent_cpu_t0
+        if parent_cpu_seconds < 0.0:  # pragma: no cover - defensive only
+            parent_cpu_seconds = 0.0
+        cap_counters.add(compute=parent_cpu_seconds)
+        save_cap_counters(campaign.campaign_dir, cap_counters)
+        campaign.ledger.append(
+            {
+                "kind": "stage_summary",
+                "stage": args.subcommand,
+                "parent_cpu_seconds": parent_cpu_seconds,
+            }
         )
-    elif args.subcommand == "c3a-f0-selection":
-        out = _run_c3a(
-            campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
-        )
-    elif args.subcommand == "c3b-selection":
-        out = _run_c3b(
-            campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
-        )
-    elif args.subcommand == "unseal":
-        out = _run_unseal(campaign, approval_dir)
-    elif args.subcommand == "c4-holdout":
-        out = _run_c4(
-            campaign, matrix_rows, args.workers, cap_counters=cap_counters, cost_caps=cost_caps_obj
-        )
-    elif args.subcommand == "close":
-        out = _run_close(campaign, reveal=args.reveal_split_secret)
-    else:  # pragma: no cover - argparse choices already constrains this
-        out = {"result": "ERROR", "detail": f"unknown subcommand {args.subcommand!r}"}
 
     _print(out)
     return 0 if out.get("result") == "OK" else 1
