@@ -22,11 +22,14 @@ Gate 3（seal 保護水準の受容）は C0 freeze **後**に成立する概念
 
 from __future__ import annotations
 
+import argparse
+import contextlib
 import hashlib
 import json
 import os
 import re
-from collections.abc import Mapping
+import tempfile
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -332,6 +335,75 @@ def load_all_approvals(
 
 
 @dataclass(frozen=True)
+class HashRefreshResult:
+    """`refresh_document_hashes()` の戻り値。承認ファイルに記録されていた
+    旧ハッシュ（欠落/非文字列なら `None`）と、書き戻した新ハッシュを保持する。"""
+
+    old_design_doc_sha256: str | None
+    new_design_doc_sha256: str
+    old_memo_sha256: str | None
+    new_memo_sha256: str
+
+    @property
+    def changed(self) -> bool:
+        return (
+            self.old_design_doc_sha256 != self.new_design_doc_sha256
+            or self.old_memo_sha256 != self.new_memo_sha256
+        )
+
+
+def refresh_document_hashes(
+    approval_path: Path, repo_root: Path | None = None
+) -> HashRefreshResult:
+    """既存の承認ファイルを再読込し、`design_doc_sha256`/`memo_sha256` を
+    現在の `DESIGN_VG_METER_CAL_DEBT_v1.0.md`/`IMPLEMENTATION_MAP_v1.md` の
+    実測ハッシュへ書き換えて atomic に書き戻す（他フィールドは一切変更
+    しない）。
+
+    メモ編集はハッシュ束縛を毎回無効化するため、承認者はメモ編集の都度
+    再承認しなければならない（`load_approval()` の hash mismatch 検査）。
+    本関数はその機械的な再スタンプのみを行う — **承認者本人がこの新しい
+    ハッシュを事前に確認・容認したことにはならない**。呼び出し側は、この
+    関数を実行した後で承認者へ改めて確認を求める運用を別途取ること。
+
+    `approval_path` の JSON 構造が壊れていれば `ValueError`/`OSError` を
+    fail-closed で送出する（`json.JSONDecodeError` は `ValueError` の
+    サブクラス）。
+    """
+    root = repo_root if repo_root is not None else _REPO_ROOT
+    payload = json.loads(approval_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{approval_path}: must contain a JSON object")
+    payload = dict(payload)
+
+    old_design = payload.get("design_doc_sha256")
+    old_memo = payload.get("memo_sha256")
+    new_design = _current_design_doc_sha256(root)
+    new_memo = _current_memo_sha256(root)
+    payload["design_doc_sha256"] = new_design
+    payload["memo_sha256"] = new_memo
+
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=str(approval_path.parent), prefix=f".{approval_path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
+        os.replace(tmp_name, approval_path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
+
+    return HashRefreshResult(
+        old_design_doc_sha256=old_design if isinstance(old_design, str) else None,
+        new_design_doc_sha256=new_design,
+        old_memo_sha256=old_memo if isinstance(old_memo, str) else None,
+        new_memo_sha256=new_memo,
+    )
+
+
+@dataclass(frozen=True)
 class ArmingDecision:
     """`check_armed()` の戻り値。`armed=True` は 3 要素すべてが揃った場合のみ。"""
 
@@ -353,6 +425,7 @@ def check_armed(
     approval_dir: Path,
     *,
     repo_root: Path | None = None,
+    preloaded: Mapping[Gate, ApprovalLoadResult] | None = None,
 ) -> ArmingDecision:
     """三要素武装判定: `--armed` フラグ AND 対応する環境変数 `=1` AND 有効な
     承認ファイル。1 つでも欠ければ `armed=False`（`AUTHORIZATION_REQUIRED`）。
@@ -362,6 +435,11 @@ def check_armed(
     `approval_file:nonce_mismatch` を追加する（PR レビュー第 5 巡: 承認の
     一回性。Gate 1 が未承認の場合はこの cross-check をスキップする — それは
     別の問題として `armed_freeze()` の manifest validation 側で表面化する）。
+
+    `preloaded`（PR レビュー第 6 巡 #5）: 呼び出し側が既に `load_all_approvals()`
+    で全 Gate を読み込んでいる場合、そのスナップショットをここへ渡すと本関数は
+    ディスクから再読込しない（同一承認ファイルの二重読みを避ける）。`None`
+    （既定）なら従来どおり `load_approval()` で自前に読み込む。
     """
     missing: list[str] = []
     if not cli_armed:
@@ -371,15 +449,21 @@ def check_armed(
     if env.get(env_var) != "1":
         missing.append(f"env:{env_var}=1")
 
-    result = load_approval(gate, approval_dir, repo_root=repo_root)
+    result = (
+        preloaded[gate]
+        if preloaded is not None
+        else load_approval(gate, approval_dir, repo_root=repo_root)
+    )
     if not result.approved:
         for reason in result.reasons:
             missing.append(f"approval_file:{reason}")
         if not result.reasons:
             missing.append("approval_file:unknown validation failure")
     elif gate == Gate.GATE2_C0_FREEZE and result.record is not None:
-        gate1_result = load_approval(
-            Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root
+        gate1_result = (
+            preloaded[Gate.GATE1_CAMPAIGN_EXECUTION]
+            if preloaded is not None
+            else load_approval(Gate.GATE1_CAMPAIGN_EXECUTION, approval_dir, repo_root=repo_root)
         )
         if (
             gate1_result.approved
@@ -398,6 +482,62 @@ def check_armed(
     )
 
 
+# ---------------------------------------------------------------------------
+# CLI — `python -m voice_genesis.calibration.approvals refresh --gate gate1 ...`
+# ---------------------------------------------------------------------------
+
+_SHORT_NAME_TO_GATE: Mapping[str, Gate] = {short: gate for gate, short in GATE_SHORT_NAME.items()}
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m voice_genesis.calibration.approvals",
+        description="Approval file (Gate 1-3) utilities.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+    refresh = sub.add_parser(
+        "refresh",
+        help=(
+            "Re-stamp design_doc_sha256/memo_sha256 on an existing approval file to "
+            "the current DESIGN_VG_METER_CAL_DEBT_v1.0.md/IMPLEMENTATION_MAP_v1.md "
+            "file hashes. All other fields untouched. Every memo edit invalidates "
+            "the old hash binding; the approver must still re-issue/re-confirm the "
+            "approval — this only re-stamps the hash fields mechanically."
+        ),
+    )
+    refresh.add_argument(
+        "--gate",
+        required=True,
+        choices=sorted(_SHORT_NAME_TO_GATE),
+        help="short gate name (gate1/gate2/gate3)",
+    )
+    refresh.add_argument("--approval-dir", type=Path, default=None)
+    refresh.add_argument("--repo-root", type=Path, default=None)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _build_arg_parser().parse_args(argv)
+    if args.command == "refresh":
+        approval_dir = (
+            args.approval_dir if args.approval_dir is not None else default_approval_dir()
+        )
+        root = args.repo_root if args.repo_root is not None else _REPO_ROOT
+        gate = _SHORT_NAME_TO_GATE[args.gate]
+        path = approval_dir / APPROVAL_FILENAMES[gate]
+        result = refresh_document_hashes(path, root)
+        print(f"file: {path}")
+        print(f"design_doc_sha256: {result.old_design_doc_sha256} -> {result.new_design_doc_sha256}")
+        print(f"memo_sha256: {result.old_memo_sha256} -> {result.new_memo_sha256}")
+        print(f"changed: {result.changed}")
+        return 0
+    return 1  # pragma: no cover - argparse `required=True` prevents reaching this
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
 __all__ = [
     "AUTHORIZATION_REQUIRED",
     "DESIGN_DOC_RELATIVE_PATH",
@@ -413,6 +553,8 @@ __all__ = [
     "ApprovalLoadResult",
     "load_approval",
     "load_all_approvals",
+    "HashRefreshResult",
+    "refresh_document_hashes",
     "ArmingDecision",
     "check_armed",
 ]

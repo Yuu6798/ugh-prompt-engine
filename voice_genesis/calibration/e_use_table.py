@@ -22,7 +22,9 @@ from voice_genesis.calibration.candidates.registry import Candidate
 from voice_genesis.calibration.gates import EUseEvidenceRow, auto_ceiling_for_unjustified
 from voice_genesis.calibration.vocab import ClaimCeiling, EvidenceClass
 
-#: `gates.EUseEvidenceRow` の 13 列（設計正本 §10.2 が定める列順そのまま）。
+#: `gates.EUseEvidenceRow` の列（設計正本 §10.2 が定める必須 13 列 +
+#: `e_use_mode`（14 列目、`[UNDERSPEC-CAL-D11]`。absolute/relative の判別。
+#: `gates.E_USE_MODE_VALUES` 参照））。
 COLUMNS: tuple[str, ...] = (
     "construct_id",
     "unit",
@@ -37,6 +39,7 @@ COLUMNS: tuple[str, ...] = (
     "source_hash_or_version",
     "applicability_argument",
     "review_status",
+    "e_use_mode",
 )
 
 _TEMPLATE_PLACEHOLDER = "UNFILLED"
@@ -75,6 +78,7 @@ def row_from_dict(d: Mapping[str, Any]) -> EUseEvidenceRow:
         source_hash_or_version=str(d["source_hash_or_version"]),
         applicability_argument=str(d["applicability_argument"]),
         review_status=str(d["review_status"]),
+        e_use_mode=str(d["e_use_mode"]),
     )
 
 

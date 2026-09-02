@@ -35,13 +35,13 @@ import secrets
 import shutil
 import subprocess
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from voice_genesis.calibration import c0_validate, streams, vocab
+from voice_genesis.calibration import c0_validate, e_use_table, streams, vocab
 from voice_genesis.calibration.approvals import (
     GATE_SHORT_NAME,
     ArmingDecision,
@@ -85,6 +85,19 @@ def default_secret_dir(env: Mapping[str, str] | None = None) -> Path:
 def default_campaigns_dir(repo_root: Path | None = None) -> Path:
     root = repo_root if repo_root is not None else _REPO_ROOT
     return root / "voice_genesis" / "calibration" / "campaigns"
+
+
+#: [UNDERSPEC-CAL-D10] E_use evidence table（設計正本 §10.2）は C0-frozen
+#: input（Gate 1 の一部）として、repo 内・checkout 追跡下のこの既定 path から
+#: 読む（承認ファイル自体とは異なり、これはユーザーが事前に記入・コミットする
+#: データであり、dirty-tree 判定の対象内で構わない）。呼び出し側が明示的に
+#: `e_use_table_path` を渡せば上書きできる。
+DEFAULT_E_USE_TABLE_RELATIVE_PATH = "voice_genesis/calibration/config/e_use_table_v1.json"
+
+
+def default_e_use_table_path(repo_root: Path | None = None) -> Path:
+    root = repo_root if repo_root is not None else _REPO_ROOT
+    return root / DEFAULT_E_USE_TABLE_RELATIVE_PATH
 
 
 # ---------------------------------------------------------------------------
@@ -423,13 +436,19 @@ def build_manifest(
 
 
 #: `build_manifest()` の core 出力には決して現れないが、armed freeze が
-#: full/frozen manifest へ後付けする 6 節（PR レビュー第 4/5 巡:
-#: manifest_core_sha の定義精緻化 + 承認の一回性）。`core_payload()` は
-#: これらを取り除いた「事前承認 payload」を返す — Gate 2 承認はこの payload
-#: の sha (`manifest_core_sha`) を束縛する。`authorization_nonce` も
-#: `dry_run()` が呼び出しごとに新規発行する乱数でありコード自身とは無関係
-#: なため、core payload から除く（さもなくば `manifest_core_sha` が dry-run
-#: の呼び出しごとに変わってしまい determinism が壊れる）。
+#: full/frozen manifest へ後付けする節（PR レビュー第 4/5 巡:
+#: manifest_core_sha の定義精緻化 + 承認の一回性。第 6 巡: `frozen_inputs`
+#: 追加）。`core_payload()` は これらを取り除いた「事前承認 payload」を返す
+#: — Gate 2 承認はこの payload の sha (`manifest_core_sha`) を束縛する。
+#: `authorization_nonce` も `dry_run()` が呼び出しごとに新規発行する乱数で
+#: ありコード自身とは無関係なため、core payload から除く（さもなくば
+#: `manifest_core_sha` が dry-run の呼び出しごとに変わってしまい
+#: determinism が壊れる）。`frozen_inputs`（E_use table の sha256 pin。
+#: Part A/D1b）も同様の理由で core から除く: E_use table 自体は Gate 1 の一部
+#: として既に `e_use_bound_accepted`/`max_claim_scope` 経由で承認対象だが、
+#: その sha256 pin は armed freeze 時点で初めて確定する freeze-time bookkeeping
+#: であり、Gate 2 が署名する core manifest の一部にはしない（`campaign_id`/
+#: `authorization_nonce` と同じ扱い）。
 _CORE_ONLY_EXCLUDED_KEYS: frozenset[str] = frozenset(
     {
         "approvals",
@@ -438,6 +457,7 @@ _CORE_ONLY_EXCLUDED_KEYS: frozenset[str] = frozenset(
         "realized_split_sha",
         "campaign_id",
         "authorization_nonce",
+        "frozen_inputs",
     }
 )
 
@@ -479,16 +499,20 @@ def _attach_freeze_extras(
     commitments: Mapping[str, str],
     realized_split: Mapping[str, object],
     realized_split_sha: str,
+    frozen_inputs: Mapping[str, str],
 ) -> dict[str, object]:
     """core manifest から frozen/full manifest を組み立てる。設計正本 §7
     「正本は C0 manifest に列挙した実現済み row→split 表」に従い、
     `realized_split`（row_id→split の実現表そのもの）を manifest 本体へ
     インラインで含める（`realized_split.json` は同内容の便宜コピー）。
-    ここで追加される 6 節は `core_payload()`/`_CORE_ONLY_EXCLUDED_KEYS` と
+    ここで追加される節は `core_payload()`/`_CORE_ONLY_EXCLUDED_KEYS` と
     1 対 1 で対応する。`authorization_nonce` は Gate 2 承認ファイルに記録
     された値（`check_armed()` が既に Gate 1 との一致を検証済み）で、
     `armed_freeze()` の一回性チェックが後続の freeze 試行を拒否するために
-    使う（PR レビュー第 5 巡）。"""
+    使う（PR レビュー第 5 巡）。`frozen_inputs`（Part A/D1b, PR レビュー
+    第 6 巡）は E_use evidence table の sha256 pin
+    (`frozen_inputs.e_use_table_sha256`) を保持する — approvals/commitments
+    と同じく非-core 節。"""
     full = dict(core_manifest)
     full["campaign_id"] = campaign_id
     full["authorization_nonce"] = authorization_nonce
@@ -496,11 +520,61 @@ def _attach_freeze_extras(
     full["commitments"] = dict(commitments)
     full["realized_split"] = dict(realized_split)
     full["realized_split_sha"] = realized_split_sha
+    full["frozen_inputs"] = dict(frozen_inputs)
     return full
 
 
 def _today_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _gate1_e_use_bound_accepted(approvals: Mapping[Gate, ApprovalLoadResult]) -> bool:
+    """Gate 1 が承認済みで `e_use_bound_accepted=true` を宣言しているか。
+    未承認/未宣言はいずれも `False`（fail-closed: 明示受容がなければ
+    `USER_ACCEPTED_USE_BOUND` 行は E_use 検証を通過しない）。"""
+    result = approvals.get(Gate.GATE1_CAMPAIGN_EXECUTION)
+    if result is None or not result.approved or result.record is None:
+        return False
+    return bool(result.record.e_use_bound_accepted)
+
+
+def _check_e_use_table(path: Path, *, gate1_e_use_bound_accepted: bool) -> list[str]:
+    """E_use evidence table（設計正本 §10.2, `[UNDERSPEC-CAL-D10]`）の load +
+    検証を dry-run/armed 双方が共有する。違反は `"e_use_table: <理由>"` 形式で
+    返す（`c0_validate` 側の他の違反文字列と同じ prefix 慣例に揃え、
+    `BLOCKED_C0_MANIFEST_INCOMPLETE` の一部として合流させる — この表自体は
+    C0 manifest の 1 キーではないため `c0_validate.py` は関知しない、
+    producer 側専用の追加ゲート）。読込失敗（ファイル不在・壊れた JSON・行の
+    shape 違反）と、読込は成功したが横断制約違反（`e_use_table.
+    validate_e_use_table`）の両方をここで一本化する。"""
+    try:
+        rows = e_use_table.load_e_use_table(path)
+    except OSError as exc:
+        return [f"e_use_table: cannot read {path}: {exc}"]
+    except (ValueError, KeyError, TypeError) as exc:
+        return [f"e_use_table: {path}: {exc}"]
+    violations = e_use_table.validate_e_use_table(
+        rows, gate1_e_use_bound_accepted=gate1_e_use_bound_accepted
+    )
+    return [f"e_use_table: {v}" for v in violations]
+
+
+def _merge_e_use_table_violations(
+    validation: c0_validate.C0ValidationResult, extra: Sequence[str]
+) -> c0_validate.C0ValidationResult:
+    """`extra`（`_check_e_use_table()` が返した `"e_use_table: ..."` 文字列群）
+    を既存の `C0ValidationResult` へ合流させる。空なら no-op（同一オブジェクトを
+    返さない点のみ異なる — 呼び出し側は常にこの戻り値を使う）。"""
+    if not extra:
+        return validation
+    blocked = validation.blocked_codes
+    if vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE not in blocked:
+        blocked = blocked + (vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE,)
+    return replace(
+        validation,
+        blocked_codes=blocked,
+        missing_required_keys=validation.missing_required_keys + tuple(extra),
+    )
 
 
 @dataclass(frozen=True)
@@ -528,16 +602,32 @@ def dry_run(
     env: Mapping[str, str],
     *,
     cli_armed: bool = False,
+    e_use_table_path: Path | None = None,
 ) -> FreezeReport:
-    """manifest を生成・検証して報告するだけ（書込なし・secret なし）。"""
+    """manifest を生成・検証して報告するだけ（書込なし・secret なし）。
+
+    承認ファイルは本関数内で `load_all_approvals()` を **1 回だけ** 呼び、
+    その結果を `check_armed()` へ `preloaded=` として渡す（PR レビュー第 6 巡
+    #5: 同一承認ファイルを二重に読まない）。
+    """
     root = Path(repo_root)
     all_approvals = load_all_approvals(approval_dir, repo_root=root)
     manifest = build_manifest(root, approvals=all_approvals, campaign_date_utc=_today_utc())
     core_sha = manifest_core_sha(manifest)
     campaign_id = campaign_id_for(manifest)
     validation = c0_validate.validate_c0_manifest(manifest)
+
+    table_path = (
+        e_use_table_path if e_use_table_path is not None else default_e_use_table_path(root)
+    )
+    e_use_violations = _check_e_use_table(
+        table_path, gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals)
+    )
+    validation = _merge_e_use_table_violations(validation, e_use_violations)
+
     gate2_arming = check_armed(
-        Gate.GATE2_C0_FREEZE, cli_armed, env, approval_dir, repo_root=root
+        Gate.GATE2_C0_FREEZE, cli_armed, env, approval_dir, repo_root=root,
+        preloaded=all_approvals,
     )
     return FreezeReport(
         manifest=manifest,
@@ -633,9 +723,19 @@ def _realized_split_from_dict(d: Mapping[str, Any]) -> RealizedSplitMap:
 
 
 def _write_secret_file(path: Path, data: bytes) -> None:
+    """PR レビュー第 6 巡 #6: `os.write()` は POSIX 上、要求バイト数より少なく
+    書いて正常終了しうる（短い書込み。パイプ/一部ファイルシステムで実際に
+    起こりうる）。secret ファイルで静かに切り詰められた内容を残すのは
+    fail-closed の逆なので、書けたバイト数を検査し不足があれば例外にする
+    （呼び出し側の armed_freeze はこれを OSError として捕捉し、staging 全体を
+    ロールバックする）。"""
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.write(fd, data)
+        written = os.write(fd, data)
+        if written != len(data):
+            raise OSError(
+                f"short write to {path}: wrote {written} of {len(data)} bytes"
+            )
     finally:
         os.close(fd)
 
@@ -687,12 +787,23 @@ def _publish_lock(secret_dir: Path, *, blocking: bool = True) -> Iterator[bool]:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 
+#: `render_root_secret.bin`/`split_secret.bin` の期待バイト長（`secrets.token_bytes(32)`）。
+_SECRET_BYTE_LENGTH = 32
+
+
 def _readback_verify(
     campaign_staging: Path,
     secret_staging: Path,
     row_inputs: Sequence[RowInput],
     split_secret_expected: bytes,
+    render_root_secret_expected: bytes,
+    commitments: Mapping[str, str],
 ) -> tuple[bool, str]:
+    """staging へ書いた内容を読み戻して独立に検証する（PR レビュー第 6 巡 #6:
+    従来は `render_root_secret.bin` を一切読み戻さずに公開しており、部分書込み
+    やファイル破損があっても検出できなかった — `split_secret.bin` 同様、
+    長さ・生成値との一致・commitment ハッシュとの一致を検査してから
+    `armed_freeze()` に公開して良いと伝える）。"""
     try:
         manifest_readback = json.loads(
             (campaign_staging / "c0_manifest.json").read_text(encoding="utf-8")
@@ -713,8 +824,29 @@ def _readback_verify(
         secret_bytes = (secret_staging / "split_secret.bin").read_bytes()
     except OSError as exc:
         return False, f"cannot read back split_secret.bin: {exc}"
+    if len(secret_bytes) != _SECRET_BYTE_LENGTH:
+        return False, (
+            f"read-back split_secret.bin has wrong length: "
+            f"{len(secret_bytes)} != {_SECRET_BYTE_LENGTH}"
+        )
     if secret_bytes != split_secret_expected:
         return False, "read-back split_secret.bin does not match generated secret"
+    if hashlib.sha256(secret_bytes).hexdigest() != commitments.get("split_secret_sha256"):
+        return False, "read-back split_secret.bin does not match its sha256 commitment"
+
+    try:
+        render_secret_bytes = (secret_staging / "render_root_secret.bin").read_bytes()
+    except OSError as exc:
+        return False, f"cannot read back render_root_secret.bin: {exc}"
+    if len(render_secret_bytes) != _SECRET_BYTE_LENGTH:
+        return False, (
+            f"read-back render_root_secret.bin has wrong length: "
+            f"{len(render_secret_bytes)} != {_SECRET_BYTE_LENGTH}"
+        )
+    if render_secret_bytes != render_root_secret_expected:
+        return False, "read-back render_root_secret.bin does not match generated secret"
+    if hashlib.sha256(render_secret_bytes).hexdigest() != commitments.get("render_root_secret_sha256"):
+        return False, "read-back render_root_secret.bin does not match its sha256 commitment"
 
     if not verify_split(row_inputs, secret_bytes, realized_readback):
         return False, "verify_split failed on read-back realized_split.json"
@@ -781,6 +913,7 @@ def armed_freeze(
     approval_dir: Path,
     secret_dir: Path,
     campaigns_dir: Path,
+    e_use_table_path: Path | None = None,
 ) -> ArmedFreezeResult:
     """武装 C0 freeze。副作用なしで拒否する経路が 3 つ（AUTHORIZATION_REQUIRED /
     MANIFEST_CORE_SHA_MISMATCH / VALIDATION_BLOCKED）、staging→read-back→
@@ -790,9 +923,18 @@ def armed_freeze(
     **公開順は secret dir → campaign dir に固定**（PR レビュー第 2 巡）。
     campaign dir の rename が失敗した場合、公開済み secret dir を削除して
     「何も公開されていない」状態へロールバックする。
+
+    承認ファイルは本関数内で `load_all_approvals()` を **1 回だけ** 呼び、
+    その結果を `check_armed()`/manifest 構築/freeze event の全てへ使い回す
+    （PR レビュー第 6 巡 #5: 同一承認ファイルの二重読み排除）。
     """
     root = Path(repo_root)
-    gate2_arming = check_armed(Gate.GATE2_C0_FREEZE, cli_armed, env, approval_dir, repo_root=root)
+
+    all_approvals = load_all_approvals(approval_dir, repo_root=root)
+    gate2_arming = check_armed(
+        Gate.GATE2_C0_FREEZE, cli_armed, env, approval_dir, repo_root=root,
+        preloaded=all_approvals,
+    )
     if not gate2_arming.armed:
         return ArmedFreezeResult(
             outcome=FreezeOutcome.AUTHORIZATION_REQUIRED,
@@ -805,7 +947,6 @@ def armed_freeze(
             gate2_arming=gate2_arming,
         )
 
-    all_approvals = load_all_approvals(approval_dir, repo_root=root)
     core_manifest = build_manifest(root, approvals=all_approvals, campaign_date_utc=_today_utc())
     core_sha = manifest_core_sha(core_manifest)
 
@@ -866,6 +1007,27 @@ def armed_freeze(
         and result.content_sha256 is not None
     }
 
+    # E_use evidence table (Part A/D1b, `[UNDERSPEC-CAL-D10]`): read the bytes
+    # exactly once and reuse them both for the sha256 pin and the staged copy
+    # (avoids a read-then-reread TOCTOU). `e_use_table_bytes is None` implies
+    # `e_use_violations` is non-empty, so `validation.is_blocked` below will
+    # already refuse the freeze before staging is ever attempted.
+    table_path = (
+        e_use_table_path if e_use_table_path is not None else default_e_use_table_path(root)
+    )
+    e_use_violations = _check_e_use_table(
+        table_path, gate1_e_use_bound_accepted=_gate1_e_use_bound_accepted(all_approvals)
+    )
+    e_use_table_bytes: bytes | None = None
+    if not e_use_violations:
+        try:
+            e_use_table_bytes = table_path.read_bytes()
+        except OSError as exc:
+            e_use_violations = [f"e_use_table: cannot read {table_path}: {exc}"]
+    e_use_table_sha256 = (
+        hashlib.sha256(e_use_table_bytes).hexdigest() if e_use_table_bytes is not None else None
+    )
+
     split_secret = secrets.token_bytes(32)
     render_root_secret = secrets.token_bytes(32)
     commitments = {
@@ -889,10 +1051,12 @@ def armed_freeze(
         commitments=commitments,
         realized_split=realized_split_dict,
         realized_split_sha=realized.realized_sha,
+        frozen_inputs={"e_use_table_sha256": e_use_table_sha256 or "ABSENT:e_use_table_invalid"},
     )
     full_sha = _full_manifest_sha(full_manifest)
 
     validation = c0_validate.validate_c0_manifest(full_manifest)
+    validation = _merge_e_use_table_violations(validation, e_use_violations)
     if validation.is_blocked:
         return ArmedFreezeResult(
             outcome=FreezeOutcome.VALIDATION_BLOCKED,
@@ -905,6 +1069,13 @@ def armed_freeze(
             gate2_arming=gate2_arming,
             validation=validation,
         )
+    # `validation.is_blocked` above would already have returned if the E_use
+    # table failed to load/validate, so this bytes buffer is guaranteed
+    # populated past this point (defensive assert only — never expected to fire).
+    if e_use_table_bytes is None:
+        raise AssertionError(
+            "unreachable: e_use_table validation must have blocked before this point"
+        )
 
     freeze_event_payload = {
         "kind": "c0_freeze",
@@ -912,6 +1083,7 @@ def armed_freeze(
         "manifest_sha": full_sha,
         "manifest_core_sha": core_sha,
         "realized_split_sha": realized.realized_sha,
+        "e_use_table_sha256": e_use_table_sha256,
         "commitments": dict(commitments),
         "approvals": dict(approval_digests),
         "event_time_utc": datetime.now(timezone.utc).isoformat(),
@@ -936,6 +1108,7 @@ def armed_freeze(
             canonical_json(realized_split_dict), encoding="utf-8"
         )
         Ledger(campaign_staging / "ledger.jsonl").append(freeze_event_payload)
+        (campaign_staging / "e_use_table.json").write_bytes(e_use_table_bytes)
 
         _write_secret_file(secret_staging / "split_secret.bin", split_secret)
         _write_secret_file(secret_staging / "render_root_secret.bin", render_root_secret)
@@ -954,7 +1127,9 @@ def armed_freeze(
             validation=validation,
         )
 
-    ok, detail = _readback_verify(campaign_staging, secret_staging, row_inputs, split_secret)
+    ok, detail = _readback_verify(
+        campaign_staging, secret_staging, row_inputs, split_secret, render_root_secret, commitments
+    )
     if not ok:
         _rmtree_if_exists(campaign_staging)
         _rmtree_if_exists(secret_staging)
@@ -989,6 +1164,35 @@ def armed_freeze(
                 gate2_arming=gate2_arming,
                 validation=validation,
             )
+
+        # PR review round 6 #4: the early nonce-uniqueness check above (before
+        # this lock was acquired) is a best-effort fast rejection only — it
+        # cannot see a sibling process that published the same nonce in the
+        # TOCTOU window between that check and reaching here. This is the
+        # authoritative recheck, performed only once this process is the sole
+        # holder of `secret_dir/.publish.lock` (the same lock `detect_orphans()`
+        # and both `os.replace()` calls below use), so no concurrent publisher
+        # can race it.
+        existing_campaign_id = _find_existing_nonce_usage(campaigns_dir, nonce)
+        if existing_campaign_id is not None:
+            _rmtree_if_exists(campaign_staging)
+            _rmtree_if_exists(secret_staging)
+            return ArmedFreezeResult(
+                outcome=FreezeOutcome.NONCE_ALREADY_USED,
+                campaign_id=None,
+                manifest_core_sha=core_sha,
+                manifest_sha=full_sha,
+                campaign_dir=None,
+                secret_dir=None,
+                detail=(
+                    f"authorization_nonce already used by published campaign "
+                    f"{existing_campaign_id!r}; refusing (one-time-use authorization, "
+                    "detected by locked recheck)"
+                ),
+                gate2_arming=gate2_arming,
+                validation=validation,
+            )
+
         (secret_staging / _PUBLISHING_MARKER_NAME).write_text("", encoding="utf-8")
         try:
             os.replace(str(secret_staging), str(secret_final))
@@ -1130,7 +1334,36 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--approval-dir", type=Path, default=None)
     parser.add_argument("--secret-dir", type=Path, default=None)
     parser.add_argument("--campaigns-dir", type=Path, default=None)
+    parser.add_argument(
+        "--e-use-table-path",
+        type=Path,
+        default=None,
+        help="override the E_use evidence table path (default: "
+        f"{DEFAULT_E_USE_TABLE_RELATIVE_PATH!r} repo-relative)",
+    )
+    parser.add_argument(
+        "--maintenance-orphans",
+        action="store_true",
+        default=False,
+        help=(
+            "Run orphan campaign/secret directory detection + stale-secret cleanup "
+            "only, then exit (no manifest build, no freeze, no authorization needed). "
+            "PR review round 6 #2: this replaces the old default-dry-run behavior of "
+            "always scanning for orphans (which had the side effect of creating "
+            "secret_dir/its lock file on every plain dry-run invocation)."
+        ),
+    )
     return parser
+
+
+def _print_orphan_report(orphans: OrphanReport) -> None:
+    if orphans.orphan_campaign_ids:
+        print(
+            "WARNING orphan campaign dir(s) with no matching secret dir "
+            f"(refuse to run): {list(orphans.orphan_campaign_ids)}"
+        )
+    if orphans.deleted_orphan_secret_ids:
+        print(f"deleted orphan secret dir(s): {list(orphans.deleted_orphan_secret_ids)}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1143,24 +1376,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     campaigns_dir = (
         args.campaigns_dir if args.campaigns_dir is not None else default_campaigns_dir(root)
     )
+    e_use_table_path = args.e_use_table_path
+
+    if args.maintenance_orphans and not args.armed:
+        # PR review round 6 #2: the only other place `detect_orphans()` runs is
+        # inside the armed path below (after a real freeze attempt is actually
+        # authorized) — plain `dry-run` (no flags) never touches secret_dir.
+        _print_orphan_report(detect_orphans(secret_dir, campaigns_dir))
+        return 0
 
     if not args.armed:
-        report = dry_run(root, approval_dir, os.environ, cli_armed=False)
+        # Side-effect-free: builds/validates the manifest only. Does NOT call
+        # `detect_orphans()` (PR review round 6 #2) — that creates
+        # `secret_dir`/its lock file as a side effect, which a plain dry-run
+        # must never do (tests assert this).
+        report = dry_run(root, approval_dir, os.environ, cli_armed=False, e_use_table_path=e_use_table_path)
         print(f"manifest_core_sha: {report.manifest_core_sha}")
         print(f"campaign_id (if frozen today): {report.campaign_id}")
+        print(f"authorization_nonce: {report.authorization_nonce}")
         print(f"blocked_codes: {[c.value for c in report.validation.blocked_codes]}")
         print(f"missing_required_keys: {list(report.validation.missing_required_keys)}")
         print(f"gate2.armed: {report.gate2_arming.armed}")
         if not report.gate2_arming.armed:
             print(f"gate2.missing_factors: {list(report.gate2_arming.missing_factors)}")
-        orphans = detect_orphans(secret_dir, campaigns_dir)
-        if orphans.orphan_campaign_ids:
-            print(
-                "WARNING orphan campaign dir(s) with no matching secret dir "
-                f"(refuse to run): {list(orphans.orphan_campaign_ids)}"
-            )
-        if orphans.deleted_orphan_secret_ids:
-            print(f"deleted orphan secret dir(s): {list(orphans.deleted_orphan_secret_ids)}")
         return 0 if not report.validation.is_blocked else 1
 
     result = armed_freeze(
@@ -1170,7 +1408,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         approval_dir=approval_dir,
         secret_dir=secret_dir,
         campaigns_dir=campaigns_dir,
+        e_use_table_path=e_use_table_path,
     )
+    if result.outcome != FreezeOutcome.AUTHORIZATION_REQUIRED:
+        # Orphan maintenance is part of the armed path only (PR review round 6
+        # #2), and only once real authorization was actually established —
+        # never for a rejected/unauthorized --armed attempt.
+        _print_orphan_report(detect_orphans(secret_dir, campaigns_dir))
     print(f"outcome: {result.outcome.value}")
     print(f"detail: {result.detail}")
     if result.campaign_id:

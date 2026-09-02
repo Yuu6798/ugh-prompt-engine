@@ -159,3 +159,76 @@ def test_auto_ceiling_unjustified_row_branches() -> None:
         e_use_table.auto_ceiling(row, has_apriori_truth_order=False)
         == ClaimCeiling.DIAGNOSTIC_ONLY
     )
+
+
+# ---------------------------------------------------------------------------
+# `e_use_mode` column (`[UNDERSPEC-CAL-D11]`, Part B) — 14 columns now
+# ---------------------------------------------------------------------------
+
+
+def test_columns_include_e_use_mode() -> None:
+    assert e_use_table.COLUMNS[-1] == "e_use_mode"
+    assert len(e_use_table.COLUMNS) == 14
+
+
+def test_generate_template_rows_default_to_absolute_mode(tmp_path: Path) -> None:
+    path = tmp_path / "t.json"
+    rows = e_use_table.generate_template(path, candidate_registry.ALL_CANDIDATES)
+    assert all(r.e_use_mode == "absolute" for r in rows)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert all(entry["e_use_mode"] == "absolute" for entry in raw)
+
+
+def test_row_round_trip_via_dict_preserves_relative_mode() -> None:
+    row = EUseEvidenceRow(
+        construct_id="formant_frequency",
+        unit="hz",
+        domain="d",
+        intended_use="u",
+        maximum_claim="ABSOLUTE",
+        e_use_value=0.05,
+        derivation_rule="relative: 0.05 x declared truth",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url="s",
+        source_checked_at="t",
+        source_hash_or_version="v",
+        applicability_argument="a",
+        review_status="ACCEPTED",
+        e_use_mode="relative",
+    )
+    d = e_use_table.row_to_dict(row)
+    assert d["e_use_mode"] == "relative"
+    rebuilt = e_use_table.row_from_dict(d)
+    assert rebuilt == row
+
+
+def test_row_from_dict_missing_e_use_mode_raises() -> None:
+    d = e_use_table.row_to_dict(_unjustified_row())
+    del d["e_use_mode"]
+    with pytest.raises(KeyError):
+        e_use_table.row_from_dict(d)
+
+
+def test_load_save_round_trip_preserves_e_use_mode(tmp_path: Path) -> None:
+    path = tmp_path / "table.json"
+    relative_row = EUseEvidenceRow(
+        construct_id="fundamental_frequency",
+        unit="hz",
+        domain="d",
+        intended_use="u",
+        maximum_claim="ABSOLUTE",
+        e_use_value=0.01161,
+        derivation_rule="20 cents",
+        evidence_class=EvidenceClass.USER_ACCEPTED_USE_BOUND,
+        source_id_or_url="s",
+        source_checked_at="t",
+        source_hash_or_version="v",
+        applicability_argument="a",
+        review_status="ACCEPTED",
+        e_use_mode="relative",
+    )
+    rows = [_unjustified_row("a"), relative_row]
+    e_use_table.save_e_use_table(path, rows)
+    loaded = e_use_table.load_e_use_table(path)
+    assert loaded == rows
+    assert loaded[1].e_use_mode == "relative"

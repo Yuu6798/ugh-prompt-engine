@@ -40,9 +40,33 @@ def threshold_margin(e_use: float, u_gt: float, u_num: float) -> float:
     return e_use - u_gt - u_num
 
 
+#: `EUseEvidenceRow.e_use_mode` の閉語彙（`[UNDERSPEC-CAL-D11]`）。"absolute" は
+#: `e_use_value` を construct の unit そのままの絶対量として扱う（
+#: `InstanceMargin.e_use`/`threshold_margin()` が直接消費できる形）。"relative"
+#: は `e_use_value` を「宣言済み truth に対する相対比率」として扱う——
+#: per-instance の絶対 E_use は `e_use_value * declared_truth`（instance ごとの
+#: truth 値との積）として campaign 側（selection/gates 消費前の前処理）が展開
+#: する必要がある。設計正本 §10.2 は E_use を「用途許容誤差」とのみ述べ、
+#: 相対/絶対のいずれで宣言するかの列は規定しない。
+E_USE_MODE_VALUES: tuple[str, ...] = ("absolute", "relative")
+
+
 @dataclass(frozen=True)
 class EUseEvidenceRow:
-    """E_use evidence table の 1 行、必須 13 列（設計正本 §10.2）。"""
+    """E_use evidence table の 1 行。設計正本 §10.2 が定める必須 13 列に加え、
+    `e_use_mode`（`[UNDERSPEC-CAL-D11]`。既定 `"absolute"` — 旧 13 列のみの
+    行と後方互換）を追加した 14 列目を持つ。
+
+    `gates.InstanceMargin.e_use`/`threshold_margin()` は per-instance の
+    **絶対量** E_use を直接消費する（`M[i] = E_use - U_GT - U_num`）。しかし
+    Gate 1 の E_use 記入時点では、formant/F0 のように construct の truth
+    値そのものに対する相対誤差（例: 「宣言 pole 周波数の 5%」「20 cents」）
+    としてしか意味を持たない construct が存在する——このテーブルの
+    `e_use_value` は construct 単位の **1 スカラー** であり、instance ごとの
+    truth 値は含まないため、相対規則は `e_use_mode="relative"` として宣言し、
+    実際の per-instance 絶対値展開（`e_use_value * declared_truth`）は
+    campaign 側（selection/gates 消費前の前処理）の責務とする。本行自体は
+    展開を行わない。"""
 
     construct_id: str
     unit: str
@@ -57,12 +81,18 @@ class EUseEvidenceRow:
     source_hash_or_version: str
     applicability_argument: str
     review_status: str
+    e_use_mode: str = "absolute"
 
     def __post_init__(self) -> None:
         if self.evidence_class == EvidenceClass.UNJUSTIFIED and self.e_use_value is not None:
             raise ValueError(
                 "EUseEvidenceRow: evidence_class=UNJUSTIFIED は数値 e_use_value を"
                 " 持てない（設計正本 §10.2: UNJUSTIFIED に数値 placeholder を作らない）"
+            )
+        if self.e_use_mode not in E_USE_MODE_VALUES:
+            raise ValueError(
+                f"EUseEvidenceRow: e_use_mode must be one of {E_USE_MODE_VALUES!r}, "
+                f"got {self.e_use_mode!r}"
             )
 
 

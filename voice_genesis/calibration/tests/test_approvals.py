@@ -347,3 +347,161 @@ def test_load_all_approvals_only_reads_approval_dir_param(tmp_path: Path) -> Non
     all_results = approvals.load_all_approvals(empty_dir)
     assert set(all_results) == set(approvals.Gate)
     assert all(not r.approved for r in all_results.values())
+
+
+# ---------------------------------------------------------------------------
+# check_armed(preloaded=...) — avoids re-reading approval files from disk
+# (PR review round 6 #5)
+# ---------------------------------------------------------------------------
+
+
+def test_check_armed_preloaded_does_not_touch_disk(tmp_path: Path) -> None:
+    _write_gate1(tmp_path, authorization_nonce="same-nonce")
+    _write_gate2(tmp_path, manifest_core_sha="a" * 64, authorization_nonce="same-nonce")
+    preloaded = approvals.load_all_approvals(tmp_path)
+
+    # A bogus approval_dir: if `preloaded` is actually honored, check_armed
+    # never touches this directory at all.
+    bogus_dir = tmp_path / "does-not-exist"
+    decision = approvals.check_armed(
+        approvals.Gate.GATE2_C0_FREEZE,
+        True,
+        {"VG_CAL_C0_FREEZE_AUTHORIZED": "1"},
+        bogus_dir,
+        preloaded=preloaded,
+    )
+    assert decision.armed is True
+
+
+def test_check_armed_preloaded_still_detects_nonce_mismatch(tmp_path: Path) -> None:
+    _write_gate1(tmp_path, authorization_nonce="nonce-A")
+    _write_gate2(tmp_path, manifest_core_sha="a" * 64, authorization_nonce="nonce-B")
+    preloaded = approvals.load_all_approvals(tmp_path)
+
+    decision = approvals.check_armed(
+        approvals.Gate.GATE2_C0_FREEZE,
+        True,
+        {"VG_CAL_C0_FREEZE_AUTHORIZED": "1"},
+        tmp_path / "unused",
+        preloaded=preloaded,
+    )
+    assert decision.armed is False
+    assert any("nonce_mismatch" in m for m in decision.missing_factors)
+
+
+# ---------------------------------------------------------------------------
+# refresh_document_hashes() — re-stamp design_doc_sha256/memo_sha256
+# ---------------------------------------------------------------------------
+
+
+def test_refresh_document_hashes_updates_only_hash_fields(tmp_path: Path) -> None:
+    _write_gate1(tmp_path, design_doc_sha256="f" * 64, memo_sha256="a" * 64)
+    path = tmp_path / approvals.APPROVAL_FILENAMES[approvals.Gate.GATE1_CAMPAIGN_EXECUTION]
+    before = json.loads(path.read_text(encoding="utf-8"))
+
+    result = approvals.refresh_document_hashes(path, _REPO_ROOT)
+
+    assert result.old_design_doc_sha256 == "f" * 64
+    assert result.new_design_doc_sha256 == _design_sha()
+    assert result.old_memo_sha256 == "a" * 64
+    assert result.new_memo_sha256 == _memo_sha()
+    assert result.changed is True
+
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["design_doc_sha256"] == _design_sha()
+    assert after["memo_sha256"] == _memo_sha()
+    # Every other field is untouched.
+    for key in before:
+        if key in ("design_doc_sha256", "memo_sha256"):
+            continue
+        assert after[key] == before[key], key
+
+    # And the file is now actually loadable/approved (hash mismatch resolved).
+    loaded = approvals.load_approval(approvals.Gate.GATE1_CAMPAIGN_EXECUTION, tmp_path)
+    assert loaded.approved is True
+
+
+def test_refresh_document_hashes_is_idempotent_when_already_current(tmp_path: Path) -> None:
+    _write_gate1(tmp_path)  # already uses the current real hashes
+    path = tmp_path / approvals.APPROVAL_FILENAMES[approvals.Gate.GATE1_CAMPAIGN_EXECUTION]
+    result = approvals.refresh_document_hashes(path, _REPO_ROOT)
+    assert result.changed is False
+    assert result.old_design_doc_sha256 == result.new_design_doc_sha256 == _design_sha()
+    assert result.old_memo_sha256 == result.new_memo_sha256 == _memo_sha()
+
+
+def test_refresh_document_hashes_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(OSError):
+        approvals.refresh_document_hashes(tmp_path / "nope.json", _REPO_ROOT)
+
+
+def test_refresh_document_hashes_malformed_json_raises(tmp_path: Path) -> None:
+    path = tmp_path / "bad.json"
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(ValueError):
+        approvals.refresh_document_hashes(path, _REPO_ROOT)
+
+
+def test_refresh_document_hashes_non_object_json_raises(tmp_path: Path) -> None:
+    path = tmp_path / "array.json"
+    path.write_text("[1, 2, 3]", encoding="utf-8")
+    with pytest.raises(ValueError):
+        approvals.refresh_document_hashes(path, _REPO_ROOT)
+
+
+def test_refresh_document_hashes_atomic_no_tmp_file_left_behind(tmp_path: Path) -> None:
+    _write_gate1(tmp_path, design_doc_sha256="f" * 64)
+    path = tmp_path / approvals.APPROVAL_FILENAMES[approvals.Gate.GATE1_CAMPAIGN_EXECUTION]
+    approvals.refresh_document_hashes(path, _REPO_ROOT)
+    leftover = [p for p in tmp_path.iterdir() if p.name != path.name]
+    assert leftover == []
+
+
+# ---------------------------------------------------------------------------
+# CLI — `python -m voice_genesis.calibration.approvals refresh --gate gate1 ...`
+# ---------------------------------------------------------------------------
+
+
+def test_cli_refresh_updates_gate1_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_gate1(tmp_path, design_doc_sha256="f" * 64, memo_sha256="a" * 64)
+    rc = approvals.main(
+        ["refresh", "--gate", "gate1", "--approval-dir", str(tmp_path), "--repo-root", str(_REPO_ROOT)]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "design_doc_sha256:" in out
+    assert "memo_sha256:" in out
+    assert "changed: True" in out
+
+    path = tmp_path / approvals.APPROVAL_FILENAMES[approvals.Gate.GATE1_CAMPAIGN_EXECUTION]
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["design_doc_sha256"] == _design_sha()
+    assert after["memo_sha256"] == _memo_sha()
+
+
+def test_cli_refresh_gate3_maps_short_name_correctly(tmp_path: Path) -> None:
+    _write_gate3(tmp_path, design_doc_sha256="f" * 64)
+    rc = approvals.main(
+        ["refresh", "--gate", "gate3", "--approval-dir", str(tmp_path), "--repo-root", str(_REPO_ROOT)]
+    )
+    assert rc == 0
+    path = tmp_path / approvals.APPROVAL_FILENAMES[approvals.Gate.GATE3_SEAL_ACCEPTANCE]
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["design_doc_sha256"] == _design_sha()
+
+
+def test_cli_refresh_uses_default_approval_dir_when_omitted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_gate1(tmp_path, design_doc_sha256="f" * 64)
+    monkeypatch.setenv(approvals.APPROVAL_DIR_ENV_VAR, str(tmp_path))
+    rc = approvals.main(["refresh", "--gate", "gate1", "--repo-root", str(_REPO_ROOT)])
+    assert rc == 0
+    path = tmp_path / approvals.APPROVAL_FILENAMES[approvals.Gate.GATE1_CAMPAIGN_EXECUTION]
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["design_doc_sha256"] == _design_sha()
+
+
+def test_cli_refresh_missing_gate_arg_errors() -> None:
+    with pytest.raises(SystemExit):
+        approvals.main(["refresh"])

@@ -1,7 +1,18 @@
 # 承認ファイル（Gate 1–3）— 配置先ガイド
 
 このディレクトリは **場所の説明専用**（IMPLEMENTATION_MAP_v1.md §6.1）。
-承認ファイルの実体（JSON）は本リポジトリのどこにも一切格納しない。
+承認ファイルの**正本**（`approvals.load_approval()`/`check_armed()` が実際に
+読む JSON）は本リポジトリのどこにも一切格納しない — 唯一の正本は checkout
+**外** の `VG_CAL_APPROVAL_DIR` に置く（§配置場所）。
+
+`records/` サブディレクトリには、監査・引き継ぎ用途の**参照用コピー**
+（正本と同一内容の JSON）と、決定の経緯・根拠を記す Markdown
+（例: [`records/GATE1_DECISION_RECORD.md`](records/GATE1_DECISION_RECORD.md)）
+を置くことがある。**これらはいずれも loader が読む対象ではない** — 上記の
+「正本はリポジトリに格納しない」という原則を破るものではなく、あくまで
+「正本に何が書かれていたか」を後から追跡できるようにするための、
+バージョン管理された監査証跡である。承認の有効性判定は常に
+`VG_CAL_APPROVAL_DIR` 直下の実ファイルのみに基づく。
 
 ## 配置場所
 
