@@ -1197,9 +1197,9 @@ def _run_c4(
         # `[UNDERSPEC-CAL-D65]`: `render_and_measure_holdout()` never calls
         # it, so its cells are simply absent from `records_by_family`, not
         # present-with-missing_reason). coverage は `selected_id` 自身の
-        # record 集合で判定する（B0 の record 存在は無関係）——
-        # `records_by_family[family.value]` を構築した際の期待 instance 集合
-        # そのもの（`workunits.c4_holdout_instances`）と突き合わせる。
+        # record 集合で判定する（B0 の record 存在は無関係）——期待 instance
+        # 集合と突き合わせる（集合の中身自体は round 2 #344 P2 で PRIMARY 限定
+        # へ改めた。下記コメント参照）。
         #
         # round 30 self-review ADOPT 採用（finding #2/#3/#4）: `[UNDERSPEC-
         # CAL-D66]` の record-presence-only 規約は §11 の 2 帰結を取り違えて
@@ -1230,8 +1230,34 @@ def _run_c4(
         own_selected_records = [
             r for r in records_by_family[family.value] if r.candidate_id == selected_id
         ]
-        expected_holdout_instances = frozenset(
-            workunits.c4_holdout_instances(matrix_rows, assignment, family=family.value)
+        # round 2 #344 ADOPT (`[UNDERSPEC-CAL-D72]`, amends D69): the coverage
+        # set used to belong to `workunits.c4_holdout_instances()`, which is
+        # HOLDOUT-split minus *negative-control* rows only — it still
+        # includes non-control BOUNDARY-domain rows (boundary-axis probes,
+        # `fixtures.matrix.compute_domain()`). A correct, expected miss on
+        # one of those BOUNDARY instances (e.g. a candidate legitimately
+        # returning `OUTPUT_MISSING` at an edge-of-range F0/SR/gain/
+        # duration/noise axis) therefore fell into `missing_expected_
+        # instances` and falsely produced a `DIAGNOSTIC_ONLY`/`OUTPUT_
+        # MISSING` (or, with zero PRIMARY coverage too, `NOT_EVALUABLE`)
+        # gate-1 coverage failure for BOUNDARY rows, which DESIGN_VG_METER_
+        # CAL_DEBT_v1.0.md §10.3 (~L351-361) does not ask this gate to
+        # police: "gate 1: 全 PRIMARY instance が eligible（critical missing/
+        # undefined なし）" — the eligibility precondition ahead of gate 2'.
+        # BOUNDARY rows are handled by their own separate gate/diagnostic
+        # treatment, not folded into this PRIMARY completeness check.
+        # Ruling: build the coverage
+        # set from PRIMARY-domain rows only, reusing `fixtures.controls.
+        # non_boundary_selection_instances()` (already used for the C3
+        # selection-side D68/D71 coverage population, `domain ==
+        # Domain.PRIMARY` = TRUTH_CORE ∪ CONFOUND) against `Split.HOLDOUT`
+        # instead of `Split.SELECTION`. `workunits.c4_holdout_instances()`
+        # itself is unchanged and still used above (`all_instances`) to
+        # decide what actually gets rendered/measured in C4 — BOUNDARY rows
+        # are still measured, just not counted toward this completeness
+        # gate.
+        expected_holdout_instances = non_boundary_selection_instances(
+            matrix_rows, assignment, Split.HOLDOUT, family=family.value
         )
         selected_candidate_obj = candidate_by_candidate_id.get(selected_id)
         claim_scope_detail: dict[str, object] = {}
@@ -1251,8 +1277,25 @@ def _run_c4(
         else:
             usable_holdout_instances = {(r.row_id, r.probe_index) for r in own_selected_records}
         missing_expected_instances = expected_holdout_instances - usable_holdout_instances
-
-        if not usable_holdout_instances:
+        # round 2 #344 ADOPT (`[UNDERSPEC-CAL-D72]`): "zero usable output"
+        # must mean zero usable *PRIMARY* output — `usable_holdout_instances`
+        # itself is not domain-scoped (it is built from every record the
+        # selected candidate produced, PRIMARY and BOUNDARY alike, since
+        # `all_instances`/`render_and_measure_holdout()` above still render
+        # BOUNDARY too). Without this, a candidate with zero usable PRIMARY
+        # records but at least one usable BOUNDARY record would skip this
+        # branch (`usable_holdout_instances` non-empty) and wrongly fall
+        # through to the partial-coverage `DIAGNOSTIC_ONLY`/`OUTPUT_MISSING`
+        # branch below instead of `NOT_EVALUABLE`. The plain `not usable_
+        # holdout_instances` disjunct is kept for its original meaning (zero
+        # usable output on *any* row — e.g. the candidate was never even
+        # called, `[UNDERSPEC-CAL-D61]`/`[UNDERSPEC-CAL-D65]`) so an empty
+        # PRIMARY population (`expected_holdout_instances`) does not itself
+        # force NOT_EVALUABLE when some other (BOUNDARY) output exists.
+        usable_primary_instances = usable_holdout_instances & expected_holdout_instances
+        if not usable_holdout_instances or (
+            expected_holdout_instances and not usable_primary_instances
+        ):
             results.append(
                 holdout_stage.MeterHoldoutResult(
                     meter_id=meter.value,

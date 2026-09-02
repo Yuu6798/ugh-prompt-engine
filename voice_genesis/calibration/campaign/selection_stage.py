@@ -408,17 +408,23 @@ def candidate_fail_filter_report(
     母集団を `fixtures.controls.non_boundary_selection_instances()`
     （`domain == Domain.PRIMARY` = TRUTH_CORE ∪ CONFOUND、BOUNDARY-domain 行
     は D2「domain 外は自動外挿せず NOT_EVALUABLE」により除外）へ拡張し、
-    判定を **値の有無**（`measure_stage.primary_output_value()` が有限値を
-    返す record が 1 件でもあるか）へ切り替える——`required_field`（=
-    `measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY` に candidate の
-    `algorithm_family` が無い）が未定義の candidate のみ、判定材料が無い
-    ため旧来の record-presence 判定へフォールバックする。BOUNDARY-domain
-    行の missing は design-sanctioned であり本 filter の対象外のまま
-    （`missing_failure_rate` にのみ反映される）。negative control 行は
-    `non_boundary_selection_instances()` 自体が domain=BOUNDARY として除外
-    するため無関係（`[UNDERSPEC-CAL-D67]` の「negative control の一貫した
-    非検出は不一致ではない」規約とは独立に、そもそも本 filter の母集団に
-    入らない）。"""
+    判定を値の有無（`measure_stage.primary_output_value()` が有限値を返す
+    record が 1 件でもあるか）へ切り替える。BOUNDARY-domain 行の missing は
+    design-sanctioned であり本 filter の対象外のまま（`missing_failure_rate`
+    にのみ反映される）。negative control 行は `non_boundary_selection_
+    instances()` 自体が domain=BOUNDARY として除外するため無関係
+    （`[UNDERSPEC-CAL-D67]` の「negative control の一貫した非検出は不一致
+    ではない」規約とは独立に、そもそも本 filter の母集団に入らない）。
+
+    round 2 #344 ADOPT（`[UNDERSPEC-CAL-D71]`）: 上記 (b) の値の有無への
+    切り替えは frozen contract（§9 ~L300-305、missing/failure rate は
+    selection の lexicographic ranking criterion であり hard eligibility
+    gate ではない）と矛盾する過剰締め付けだった——1 件でも explained
+    `OUTPUT_MISSING` を返した候補が ineligible になり、family 内の全候補が
+    各 1 件ずつ explained miss を持つだけで `SELECTION_FAILED_CLOSED` に
+    落ちかねなかった。判定は record-presence（1 件でも own record があれば
+    その instance は covered。値の有無は見ない）へ差し戻し、(a) の母集団
+    拡張のみを維持する。詳細は下の実装コメントを参照。"""
     own_records = [r for r in records if r.candidate_id == candidate.candidate_id]
 
     required_field = measure_stage.PRIMARY_OUTPUT_FIELD_BY_ALGORITHM_FAMILY.get(
@@ -466,27 +472,43 @@ def candidate_fail_filter_report(
     # round 30 self-review ADOPT (1) (`[UNDERSPEC-CAL-D68]`, supersedes round
     # 28 ADOPT (2) `[UNDERSPEC-CAL-D64]`): instance-granular coverage check
     # against the expected non-BOUNDARY (TRUTH_CORE + CONFOUND) instance set
-    # — see the docstring paragraph above. Value-aware, not record-presence
-    # -only: an instance counts as covered only if at least one own record
-    # for it carries a finite primary value (`measure_stage.
-    # primary_output_value()`); a record that exists but is `missing_reason`
-    # -explained or non-finite does NOT count (D64's "already counted by
-    # missing_failure_rate" reasoning under-penalized a candidate that is
-    # consistently missing across an entire instance — see docstring). When
-    # `required_field` is undefined for this candidate's `algorithm_family`
-    # (`primary_output_value()` has no field to read), there is no value to
-    # check, so this falls back to D64's original record-presence semantics.
-    if required_field is not None:
-        covered_instances = set()
-        for r in own_records:
-            key = (r.row_id, r.probe_index)
-            if key not in expected_coverage_instances:
-                continue
-            value = measure_stage.primary_output_value(candidate, r.output)
-            if value is not None and math.isfinite(value):
-                covered_instances.add(key)
-    else:
-        covered_instances = {(r.row_id, r.probe_index) for r in own_records}
+    # — see the docstring paragraph above.
+    #
+    # round 2 #344 ADOPT (`[UNDERSPEC-CAL-D71]`, amends D68/D70): the
+    # value-aware check D68 introduced here (only a finite
+    # `primary_output_value()` counted as "covered") over-tightened the
+    # filter past the frozen contract. `records` passed into this function
+    # contains only `meter_call` ledger records (see `measure_stage.
+    # _completed_meter_call_records`/the `meter_call` append site) — a
+    # skipped cell (F0_UNUSABLE/F0_SELECTION_FAILED etc., recorded instead as
+    # a `measurement_missing` event, `[UNDERSPEC-CAL-D64]`/`[UNDERSPEC-CAL-
+    # D65]`) never produces a `MeasurementRecord` at all, so it was already
+    # absent from `own_records` and already correctly detected by a plain
+    # record-presence check. What the value-aware check additionally
+    # penalized was a candidate that *did* call the meter and got back a
+    # legitimately recorded, explained `OUTPUT_MISSING` (a present
+    # `meter_call` record with `missing_reason` set) on even one PRIMARY
+    # instance — DESIGN_VG_METER_CAL_DEBT_v1.0.md §9 (~L300-305) lists
+    # "missing/failure rate" as a lexicographic *ranking* criterion for both
+    # the ABSOLUTE and DIRECTIONAL families (after the error/bias/sensitivity
+    # criteria, before complexity rank), not a hard selection-eligibility
+    # gate; a candidate whose only fault is one explained miss must remain
+    # ranked, not made ineligible — and if every candidate in a family has
+    # exactly one such expected miss, the value-aware form would falsely
+    # drive `select_across_ceilings()` to `SELECTION_FAILED_CLOSED` for the
+    # whole family. Ruling: `coverage_incomplete` reverts to record-presence
+    # — any own record for the instance counts as covered, regardless of its
+    # value — which detects ABSENT calls only (no `meter_call` record at
+    # all, or a `measurement_missing` skip in its place); an explained-miss
+    # `meter_call` record is a measured outcome that instead feeds
+    # `build_candidate_criteria()`'s `missing_failure_rate` (and the
+    # existing `positive_control_non_fire`/`negative_control_false_fire`
+    # filters), exactly as before D68's value-aware change. D68's population
+    # expansion (`expected_coverage_instances` = TRUTH_CORE + CONFOUND via
+    # `non_boundary_selection_instances()`), the D67 within/fresh
+    # missing-status consistency filter, and the BOUNDARY-domain exemption
+    # from this filter are all unaffected and kept as-is.
+    covered_instances = {(r.row_id, r.probe_index) for r in own_records}
     coverage_incomplete = bool(expected_coverage_instances) and not (
         expected_coverage_instances <= covered_instances
     )
