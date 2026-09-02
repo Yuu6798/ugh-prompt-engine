@@ -1213,6 +1213,63 @@ def test_armed_freeze_keyboard_interrupt_before_first_rename_preserves_existing_
 
 
 # ---------------------------------------------------------------------------
+# bug fix 第10巡 #1 — staging construction (mkdir/manifest+split+ledger
+# writes/secret writes) also rolls back on any BaseException, not just
+# OSError. Before this fix, KeyboardInterrupt/SystemExit during staging left
+# a `.staging-<campaign_id>` dir behind (potentially containing already-
+# written secret bytes) that `detect_orphans()` never touches — `.staging-*`
+# is excluded by `_published_ids()` by construction, so it lingered forever.
+# ---------------------------------------------------------------------------
+
+
+def test_armed_freeze_keyboard_interrupt_during_staging_write_removes_both_staging_roots(
+    tmp_path: Path, clean_checkout: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inject `KeyboardInterrupt` immediately *after* `split_secret.bin` has
+    actually been written to disk (the most dangerous timing: real secret
+    bytes already exist under the `.staging-<campaign_id>` secret dir) but
+    before `render_root_secret.bin` is written. Both staging roots must be
+    gone afterward and the interrupt must still propagate — this predates
+    (and is entirely independent of) the publish lock / rename section
+    covered by the P2 #2 tests above."""
+    approval_dir, secret_dir, campaigns_dir, env = _prepare_armed(tmp_path)
+
+    real_write_secret_file = c0_freeze._write_secret_file
+    call_count = {"n": 0}
+
+    def flaky_write_secret_file(path: Path, data: bytes) -> None:
+        call_count["n"] += 1
+        real_write_secret_file(path, data)  # actually write it to disk first
+        if call_count["n"] == 1:
+            raise KeyboardInterrupt("injected interrupt right after split_secret.bin write")
+
+    monkeypatch.setattr(c0_freeze, "_write_secret_file", flaky_write_secret_file)
+
+    with pytest.raises(KeyboardInterrupt):
+        c0_freeze.armed_freeze(
+            _REPO_ROOT,
+            cli_armed=True,
+            env=env,
+            approval_dir=approval_dir,
+            secret_dir=secret_dir,
+            campaigns_dir=campaigns_dir,
+        )
+    # Only one secret file was ever written (the interrupt fired before the
+    # second `_write_secret_file()` call for render_root_secret.bin).
+    assert call_count["n"] == 1
+
+    # Neither staging root survives, and — since this happens well before the
+    # publish-lock section — no `.publish.lock` file exists yet either, so
+    # both dirs must be entirely empty (or not exist at all).
+    remaining_secret = list(secret_dir.iterdir()) if secret_dir.exists() else []
+    remaining_campaign = list(campaigns_dir.iterdir()) if campaigns_dir.exists() else []
+    assert remaining_secret == [], f"secret dir not empty: {remaining_secret}"
+    assert remaining_campaign == [], f"campaigns dir not empty: {remaining_campaign}"
+    assert not any(secret_dir.glob(".staging-*"))
+    assert not any(campaigns_dir.glob(".staging-*"))
+
+
+# ---------------------------------------------------------------------------
 # bug fix P2 #3 — authoritative nonce/publication lock lives under
 # campaigns_dir (shared registry), not the caller-selected secret_dir
 # ---------------------------------------------------------------------------

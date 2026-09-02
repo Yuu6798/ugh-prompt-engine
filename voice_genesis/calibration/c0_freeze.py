@@ -1142,35 +1142,59 @@ def armed_freeze(
     secret_final = secret_dir / campaign_id
 
     try:
-        campaign_staging.mkdir(parents=True, exist_ok=False)
-        secret_staging.mkdir(parents=True, exist_ok=False)
-        os.chmod(secret_staging, 0o700)
+        # bug fix 第10巡 #1: the inner `try`/`except OSError` below is the
+        # normal, expected-failure path for staging construction (mkdir/
+        # write/chmod failures) and keeps returning `PUBLICATION_FAILED` with
+        # a specific detail exactly as before (`return` inside a `try` does
+        # not raise, so it never reaches the outer handler). Anything else —
+        # most importantly `KeyboardInterrupt`/`SystemExit` landing partway
+        # through staging construction (e.g. right after the secret files are
+        # written) — used to bypass cleanup entirely (only `OSError` was
+        # caught), leaving a `.staging-<campaign_id>` dir behind that can
+        # contain generated secret bytes. Orphan maintenance
+        # (`detect_orphans()`) never touches `.staging-*` dirs
+        # (`_published_ids()` excludes them by construction — they are never
+        # "published"), so such a leftover would linger forever. Both staging
+        # roots are always freshly created by *this* call
+        # (`mkdir(..., exist_ok=False)` just below — a pre-existing dir at
+        # either path would already have raised `OSError` and been handled
+        # by the inner branch), so unconditional cleanup here is always safe.
+        try:
+            campaign_staging.mkdir(parents=True, exist_ok=False)
+            secret_staging.mkdir(parents=True, exist_ok=False)
+            os.chmod(secret_staging, 0o700)
 
-        (campaign_staging / "c0_manifest.json").write_text(
-            canonical_json(full_manifest), encoding="utf-8"
-        )
-        (campaign_staging / "realized_split.json").write_text(
-            canonical_json(realized_split_dict), encoding="utf-8"
-        )
-        Ledger(campaign_staging / "ledger.jsonl").append(freeze_event_payload)
-        (campaign_staging / "e_use_table.json").write_bytes(e_use_table_bytes)
+            (campaign_staging / "c0_manifest.json").write_text(
+                canonical_json(full_manifest), encoding="utf-8"
+            )
+            (campaign_staging / "realized_split.json").write_text(
+                canonical_json(realized_split_dict), encoding="utf-8"
+            )
+            Ledger(campaign_staging / "ledger.jsonl").append(freeze_event_payload)
+            (campaign_staging / "e_use_table.json").write_bytes(e_use_table_bytes)
 
-        _write_secret_file(secret_staging / "split_secret.bin", split_secret)
-        _write_secret_file(secret_staging / "render_root_secret.bin", render_root_secret)
-    except OSError as exc:
+            _write_secret_file(secret_staging / "split_secret.bin", split_secret)
+            _write_secret_file(secret_staging / "render_root_secret.bin", render_root_secret)
+        except OSError as exc:
+            _rmtree_if_exists(campaign_staging)
+            _rmtree_if_exists(secret_staging)
+            return ArmedFreezeResult(
+                outcome=FreezeOutcome.PUBLICATION_FAILED,
+                campaign_id=campaign_id,
+                manifest_core_sha=core_sha,
+                manifest_sha=full_sha,
+                campaign_dir=None,
+                secret_dir=None,
+                detail=f"staging write failed: {exc}",
+                gate2_arming=gate2_arming,
+                validation=validation,
+            )
+    except BaseException:
+        # Restore "nothing staged" for every exception type (not just
+        # OSError) and re-raise so interrupts/exits still propagate.
         _rmtree_if_exists(campaign_staging)
         _rmtree_if_exists(secret_staging)
-        return ArmedFreezeResult(
-            outcome=FreezeOutcome.PUBLICATION_FAILED,
-            campaign_id=campaign_id,
-            manifest_core_sha=core_sha,
-            manifest_sha=full_sha,
-            campaign_dir=None,
-            secret_dir=None,
-            detail=f"staging write failed: {exc}",
-            gate2_arming=gate2_arming,
-            validation=validation,
-        )
+        raise
 
     ok, detail = _readback_verify(
         campaign_staging, secret_staging, row_inputs, split_secret, render_root_secret, commitments
