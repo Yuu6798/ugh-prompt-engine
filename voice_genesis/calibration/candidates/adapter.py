@@ -111,15 +111,46 @@ def within_fresh_process_mismatch(
     """同一 instance の within-process repeat 群と fresh-process repeat 群
     (`field_name` のみ比較) が `tol` を超えて食い違うかを検査する。
 
-    True = 不一致（fail filter 発火）。片方が空、または対象フィールドを
-    持たない出力が混ざる場合も不一致として扱う（fail-closed）。
+    True = 不一致（fail filter 発火）。片方の repeat 群が丸ごと空（1 件も
+    call が記録されていない）場合は不一致として扱う（fail-closed。round 30
+    ADOPT (`[UNDERSPEC-CAL-D67]`) 以降もここは変更していない — 「call 自体が
+    無い」は「call はあったが値が missing」とは別の異常系）。
+
+    round 30 ADOPT (`[UNDERSPEC-CAL-D67]`, Codex round 30 PR #343 finding #2
+    「Allow stable negative-control non-detections」採用): `field_name` が
+    call ごとに **有る/無い** かで missing-status の一致を先に判定する——
+    within の全 call・fresh の全 call のいずれでも `field_name` が欠けている
+    （`MeterOutput.missing_reason` が立ち values が空 dict のまま渡ってくる、
+    negative control 上の正しい非検出結果）場合は、両側で一貫した
+    non-detection であり不一致とはみなさない（旧実装は空 dict に対する
+    `v[field_name]` の `KeyError` を単純に「不一致」とみなしており、
+    negative control（例: silence）に対して `OUTPUT_MISSING` を正しく返す
+    候補が構造的に `within_fresh_process_mismatch` で ineligible になり、
+    どの候補も negative control を通過できなかった）。不一致は次の 2 パターン
+    のみで発火する: (1) 一部の call のみ値を報告し他は報告しない（missing-
+    status が call 間で食い違う）、(2) 両側とも値を報告したがその値が
+    `tol` を超えて食い違う。この判定は positive control 行にも同様に適用
+    する——positive 行で全 call が一貫して missing なのは
+    `positive_control_non_fire` 側が拾うべき「陽性対照の不発火」であり、
+    ここでの不一致ではない（既存 filter との役割分担を崩さない）。
     """
     if not within_process_values or not fresh_process_values:
+        return True
+    within_present = [field_name in v for v in within_process_values]
+    fresh_present = [field_name in v for v in fresh_process_values]
+    if not any(within_present) and not any(fresh_present):
+        # consistent missing-status across every within/fresh call: the
+        # correct negative-control non-detection (or, on a positive row, a
+        # positive-control non-fire handled by a different filter) — not a
+        # within/fresh mismatch.
+        return False
+    if not all(within_present) or not all(fresh_present):
+        # some processes report a value, others do not: a real mismatch.
         return True
     try:
         within_vals = [float(v[field_name]) for v in within_process_values]
         fresh_vals = [float(v[field_name]) for v in fresh_process_values]
-    except KeyError:
+    except (KeyError, TypeError, ValueError):
         return True
     if not all(math.isfinite(v) for v in within_vals + fresh_vals):
         return True

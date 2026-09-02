@@ -6,6 +6,7 @@ measurement 不要のため高速）。
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -466,6 +467,124 @@ def test_empty_expected_instance_population_is_not_a_coverage_failure() -> None:
         expected_truth_core_instances=frozenset(),
     )
     assert report["coverage_incomplete"] is False
+
+
+# ---------------------------------------------------------------------------
+# round 30 ADOPT (`[UNDERSPEC-CAL-D67]`, Codex round 30 PR #343 finding #2
+# 「Allow stable negative-control non-detections」採用): candidate_fail_
+# filter_report() を通じて `adapter.within_fresh_process_mismatch()` の
+# missing-status 整合判定が正しく配線されていることを確認する（predicate
+# 自体の網羅ケースは test_adapters.py 側。ここは selection の他 filter
+# （negative_control_false_fire / positive_control_non_fire）との役割分担が
+# 崩れていないことの統合確認）。
+# ---------------------------------------------------------------------------
+
+
+def _within_fresh_records(
+    row_id: str,
+    probe_index: int,
+    *,
+    candidate_id: str = "F0-B0-CURRENT",
+    within_detected: Sequence[bool],
+    fresh_detected: Sequence[bool],
+) -> list[measure_stage.MeasurementRecord]:
+    """1 instance 分の within-process/fresh-process repeat 群を組み立てる
+    （`_record()` の単一 repeat 版を repeat_kind/repeat_index ごとに束ねる）。"""
+    records = [
+        _record(
+            row_id,
+            probe_index,
+            candidate_id=candidate_id,
+            detected=detected,
+            repeat_kind="within",
+            repeat_index=i,
+            process_id="p-within",
+        )
+        for i, detected in enumerate(within_detected)
+    ]
+    records += [
+        _record(
+            row_id,
+            probe_index,
+            candidate_id=candidate_id,
+            detected=detected,
+            repeat_kind="fresh",
+            repeat_index=i,
+            process_id=f"p-fresh-{i}",
+        )
+        for i, detected in enumerate(fresh_detected)
+    ]
+    return records
+
+
+def test_negative_control_consistent_missing_stays_eligible() -> None:
+    """A candidate that correctly returns `OUTPUT_MISSING` on every within
+    call and every fresh call for a negative control instance (e.g. silence)
+    must not be penalized by `within_fresh_process_mismatch` — a consistent
+    non-detection is the CORRECT negative-control outcome, not a mismatch,
+    and must not trip `negative_control_false_fire` either."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = _within_fresh_records(
+        "row-negctl-silence",
+        0,
+        within_detected=[False, False, False],
+        fresh_detected=[False, False, False],
+    )
+    negative_ids = frozenset({"row-negctl-silence"})
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=negative_ids,
+    )
+    assert report["within_fresh_process_mismatch"] is False
+    assert report["negative_control_false_fire"] is False
+    assert selection_stage.eligible_after_fail_filters(report) is True
+
+
+def test_negative_control_one_process_reporting_value_is_a_mismatch() -> None:
+    """If even one within/fresh call reports a finite value while the rest of
+    the calls for the same instance consistently report missing, the
+    missing-status itself is inconsistent across processes — a real
+    within/fresh mismatch, unlike the fully-consistent case above."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = _within_fresh_records(
+        "row-negctl-silence",
+        0,
+        within_detected=[False, False, False],
+        fresh_detected=[False, True, False],  # one fresh call reports a value
+    )
+    negative_ids = frozenset({"row-negctl-silence"})
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        negative_control_row_ids=negative_ids,
+    )
+    assert report["within_fresh_process_mismatch"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
+
+
+def test_positive_row_consistent_missing_is_non_fire_not_mismatch() -> None:
+    """A positive-control (TRUTH_CORE) row where the candidate consistently
+    fails to detect across every within/fresh call must be rejected via
+    `positive_control_non_fire` (the existing, correct filter for this
+    outcome) — the same missing-status consistency semantics apply here too,
+    so this must NOT also (mis)fire `within_fresh_process_mismatch`."""
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    records = _within_fresh_records(
+        "row-positive-anchor",
+        0,
+        within_detected=[False, False, False],
+        fresh_detected=[False, False, False],
+    )
+    positive_ids = frozenset({"row-positive-anchor"})
+    report = selection_stage.candidate_fail_filter_report(
+        candidate,
+        records,
+        positive_control_row_ids=positive_ids,
+    )
+    assert report["within_fresh_process_mismatch"] is False
+    assert report["positive_control_non_fire"] is True
+    assert selection_stage.eligible_after_fail_filters(report) is False
 
 
 # ---------------------------------------------------------------------------

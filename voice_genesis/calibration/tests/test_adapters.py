@@ -382,6 +382,62 @@ def test_within_fresh_process_mismatch() -> None:
     assert adapter.within_fresh_process_mismatch([], fresh_match, field_name="f0_hz") is True
 
 
+# ---------------------------------------------------------------------------
+# round 30 ADOPT (`[UNDERSPEC-CAL-D67]`, Codex round 30 PR #343 finding #2
+# 「Allow stable negative-control non-detections」採用): missing-status を
+# call ごとに一貫させて比較する — 全 within/fresh call が揃って field 欠如なら
+# 不一致ではない（negative control 上の正しい非検出）。不一致は「一部の call
+# のみ値を報告」または「両側とも値を報告したが tol を超えて食い違う」場合の
+# みに限定する。
+# ---------------------------------------------------------------------------
+
+
+def test_within_fresh_process_mismatch_consistent_missing_is_not_a_mismatch() -> None:
+    """`field_name` が within 全 call・fresh 全 call のいずれでも欠けている
+    （values が空 dict、negative control 上で正しく `OUTPUT_MISSING` を返した
+    形）場合、旧実装は `v[field_name]` の `KeyError` を無条件に不一致とみなし
+    ていたが、これは正しい一貫した非検出であり不一致ではない。"""
+    within = [{}, {}, {}]
+    fresh = [{}, {}, {}]
+    assert adapter.within_fresh_process_mismatch(within, fresh, field_name="f0_hz") is False
+
+
+def test_within_fresh_process_mismatch_partial_missing_is_a_mismatch() -> None:
+    """within/fresh 双方の call 数は揃っているが、一部の call のみが値を
+    報告し他は欠如している場合は、missing-status 自体が call 間で食い違って
+    いるため不一致として発火する。"""
+    within_partial = [{"f0_hz": 220.0}, {}, {}]
+    fresh_all_missing = [{}, {}, {}]
+    assert (
+        adapter.within_fresh_process_mismatch(
+            within_partial, fresh_all_missing, field_name="f0_hz"
+        )
+        is True
+    )
+    within_all_missing = [{}, {}, {}]
+    fresh_partial = [{"f0_hz": 220.0}, {}, {}]
+    assert (
+        adapter.within_fresh_process_mismatch(
+            within_all_missing, fresh_partial, field_name="f0_hz"
+        )
+        is True
+    )
+
+
+def test_within_fresh_process_mismatch_one_side_all_present_other_all_missing() -> None:
+    """within は全 call で値を報告し、fresh は全 call で欠如（またはその逆）
+    ——「一部の process のみ値を報告し他は報告しない」の最も極端な形——は
+    不一致として発火する（missing-status が within/fresh 間で完全に食い違う）。"""
+    within_all_present = [{"f0_hz": 220.0}, {"f0_hz": 220.1}]
+    fresh_all_missing = [{}, {}]
+    assert (
+        adapter.within_fresh_process_mismatch(
+            within_all_present, fresh_all_missing, field_name="f0_hz"
+        )
+        is True
+    )
+
+
 def test_negative_positive_control_filters() -> None:
     assert adapter.negative_control_false_fire([False, False, False]) is False
     assert adapter.negative_control_false_fire([False, True, False]) is True

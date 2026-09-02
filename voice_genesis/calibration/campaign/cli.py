@@ -1151,6 +1151,61 @@ def _run_c4(
         if selected_id is None:
             results.append(holdout_stage.selection_failed_closed_meter(meter.value))
             continue
+        # round 30 ADOPT (`[UNDERSPEC-CAL-D66]`, Codex round 30 PR #343
+        # finding #1 「Require records from the selected holdout candidate」
+        # 採用): the `family.value not in records_by_family` check above only
+        # asks whether *any* candidate in the family produced a record — B0
+        # always runs and always supplies at least one, so that check falls
+        # through even when the *selected* F0-dependent candidate itself was
+        # skipped on every C4 holdout instance (`[UNDERSPEC-CAL-D61]`/
+        # `[UNDERSPEC-CAL-D65]`: `render_and_measure_holdout()` never calls
+        # it, so its cells are simply absent from `records_by_family`, not
+        # present-with-missing_reason). The DIAGNOSTIC_ONLY branch below
+        # would then close under `selected_id` despite zero
+        # selected-candidate outputs. design 引用 (`DESIGN_VG_METER_CAL_DEBT_
+        # v1.0.md` §11): 「score 計算可能だが PRIMARY 一部 output missing で
+        # gate 不通過 → DIAGNOSTIC_ONLY/OUTPUT_MISSING」——ここはその手前、
+        # PRIMARY output が selected candidate について**丸ごと**無い（score
+        # 計算材料自体が無い）場合であり、§11 の全欠損側の帰結
+        # `NOT_EVALUABLE`/`OUTPUT_NOT_EVALUABLE` を適用する。coverage は
+        # `selected_id` 自身の record 集合で判定する（B0 の record 存在は
+        # 無関係）。`[UNDERSPEC-CAL-D64]` と同じ「record-presence-only」規約
+        # （値の欠損ではなく instance の欠落のみを検査）を holdout 側に適用
+        # し、`records_by_family[family.value]` を構築した際の期待 instance
+        # 集合そのもの（`workunits.c4_holdout_instances`）と突き合わせる —
+        # 部分被覆（一部 instance のみ record あり）も同じ D64 規則（1 件でも
+        # 欠ければ不合格）で NOT_EVALUABLE にする。完全被覆時は下の
+        # DIAGNOSTIC_ONLY 経路のまま変更しない。
+        own_selected_records = [
+            r for r in records_by_family[family.value] if r.candidate_id == selected_id
+        ]
+        expected_holdout_instances = frozenset(
+            workunits.c4_holdout_instances(matrix_rows, assignment, family=family.value)
+        )
+        seen_holdout_instances = {(r.row_id, r.probe_index) for r in own_selected_records}
+        if not own_selected_records or (
+            expected_holdout_instances and not expected_holdout_instances <= seen_holdout_instances
+        ):
+            results.append(
+                holdout_stage.MeterHoldoutResult(
+                    meter_id=meter.value,
+                    terminal_status=TerminalStatus.NOT_EVALUABLE.value,
+                    reason_code=MissingReason.OUTPUT_NOT_EVALUABLE.value,
+                    ceiling=ClaimCeiling.NONE.value,
+                    selected_candidate_id=selected_id,
+                    gate_detail={
+                        "reason": (
+                            "[UNDERSPEC-CAL-D66] selected holdout candidate has no "
+                            "usable output for one or more expected C4 instances"
+                        ),
+                        "expected_instance_count": len(expected_holdout_instances),
+                        "seen_instance_count": len(
+                            seen_holdout_instances & expected_holdout_instances
+                        ),
+                    },
+                )
+            )
+            continue
         # finding #11: record the claim-scope capping fact for this meter's
         # selected candidate (§b/§c). The placeholder `ceiling` below stays
         # DIAGNOSTIC_ONLY regardless — swapping it for the capped ceiling

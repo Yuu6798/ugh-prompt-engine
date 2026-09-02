@@ -9,6 +9,7 @@ import json
 import math
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -229,6 +230,91 @@ def test_c1_fixtures_armed_end_to_end_via_cli(
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"
     ]
     assert len(render_events) == 5  # 1 row x PROBE_REPEATS(5)
+
+
+# ---------------------------------------------------------------------------
+# round 30 ADOPT (`[UNDERSPEC-CAL-D67]`, Codex round 30 PR #343 finding #2
+# 「Allow stable negative-control non-detections」採用) production E2E:
+# real render + real `librosa.pyin` measurement (no fabricated
+# `MeasurementRecord`/`MeterOutput`) on a genuine F0_CONTROL SILENCE negative
+# control row, run through the real `cli._run_c3a` orchestration
+# (`selection_stage.run_c3a_f0_selection` inside it, not a hand-built
+# `CandidateCriteria`). Before the fix, pyin's real (deterministic, all-6-
+# repeats) `OUTPUT_MISSING` on silence tripped `within_fresh_process_mismatch`
+# and made F0-B0-CURRENT the only candidate ineligible, so
+# `select_across_ceilings` had zero eligible candidates and C3a recorded
+# `SELECTION_FAILED_CLOSED` — i.e. no candidate could ever pass a negative
+# control.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_c3a_f0_selection_passes_with_candidate_that_correctly_non_detects_on_silence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """3 F0_CONTROL TRUTH_CORE rows (n=3 lands exactly 1 in the SELECTION
+    split under the default test split secret) + the family's 1 real SILENCE
+    negative control row (included in C3a's instance set regardless of home
+    split, `[UNDERSPEC-CAL-D37]`/`workunits.c3a_f0_selection_instances`).
+    `librosa.pyin` genuinely finds no voiced frames on true silence and
+    returns `OUTPUT_MISSING` for every within- and fresh-process repeat
+    (`candidates/impl/f0_pyin.py::measure`) — deterministically, so this is
+    not flaky."""
+    from voice_genesis.calibration.fixtures.matrix import build_matrix
+
+    all_rows = build_matrix()
+    truth_rows = [
+        mr
+        for mr in all_rows
+        if mr.row.family == "F0_CONTROL" and mr.row.block == "TRUTH_CORE"
+    ][:3]
+    silence_rows = [
+        mr
+        for mr in all_rows
+        if mr.row.family == "F0_CONTROL" and mr.row.control_class == "SILENCE"
+    ]
+    assert silence_rows, "test setup requires a real F0_CONTROL SILENCE fixture row"
+    subset = truth_rows + silence_rows
+
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+
+    only_b0 = (candidate_by_id("F0-B0-CURRENT"),)
+    orig_candidates_for_meter = cli.candidates_for_meter
+
+    def _trimmed_candidates_for_meter(meter):
+        if meter is MeterId.F0_CONTROL:
+            return only_b0
+        return orig_candidates_for_meter(meter)
+
+    monkeypatch.setattr(cli, "candidates_for_meter", _trimmed_candidates_for_meter)
+
+    result = cli._run_c3a(campaign, subset, 1)
+    assert result["result"] == "OK", result
+    assert result["outcome"] == "SELECTED", result
+    assert result["selected_candidate_id"] == "F0-B0-CURRENT"
+
+    # confirm this really exercised the consistent-missing shape (not an
+    # accidental finite reading on the silent row): every meter_call for the
+    # SILENCE row's instances came back OUTPUT_MISSING.
+    silence_row_ids = {mr.row_id for mr in silence_rows}
+    meter_calls = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"
+    ]
+    silence_calls = [m for m in meter_calls if m["row_id"] in silence_row_ids]
+    assert silence_calls
+    assert all(m.get("missing_reason") == "OUTPUT_MISSING" for m in silence_calls)
+
+    f0_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "f0_selection_frozen"
+    ]
+    assert f0_events
+    fail_filters = f0_events[-1]["fail_filters_by_candidate"]["F0-B0-CURRENT"]
+    assert fail_filters["within_fresh_process_mismatch"] is False
+    assert fail_filters["negative_control_false_fire"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -955,6 +1041,249 @@ def test_c4_never_calls_f0_dependent_candidate_when_selection_failed_closed(
     m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
     assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
     assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+
+
+# ---------------------------------------------------------------------------
+# round 30 ADOPT (`[UNDERSPEC-CAL-D66]`, Codex round 30 PR #343 finding #1
+# 「Require records from the selected holdout candidate」採用): the
+# `family.value not in records_by_family` guard in `_run_c4`'s per-family
+# loop only proves *some* candidate in the family (B0 always runs) produced
+# a record — not that the *selected* candidate itself has any usable C4
+# output. These three tests fabricate `render_and_measure_holdout()`'s
+# return value directly (real render/measure of a genuinely F0-unusable
+# selected candidate is exercised end-to-end by
+# `test_c3b_selection_blocks_f0_dependent_candidate_when_selection_failed_
+# closed` and friends above; this isolates the CLI-side coverage check
+# itself, mirroring how `test_c4_never_calls_f0_dependent_candidate_when_
+# selection_failed_closed` isolates the F0_UNUSABLE-instance guard).
+#
+# Design line (`DESIGN_VG_METER_CAL_DEBT_v1.0.md` §11): 「score 計算可能だが
+# PRIMARY 一部 output missing で gate 不通過 → DIAGNOSTIC_ONLY/OUTPUT_MISSING」
+# — ここで扱うのはその手前、selected candidate の PRIMARY output が丸ごと
+# （または D64 の期待 instance 集合の一部が）無い場合であり、§11 の全欠損側
+# の帰結 `NOT_EVALUABLE`/`OUTPUT_NOT_EVALUABLE` を適用する。
+# ---------------------------------------------------------------------------
+
+
+def _c4_measurement_record(
+    row_id: str, probe_index: int, candidate_id: str, *, field: str = "residual_fraction"
+) -> measure_stage.MeasurementRecord:
+    return measure_stage.MeasurementRecord(
+        row_id=row_id,
+        probe_index=probe_index,
+        candidate_id=candidate_id,
+        repeat_kind="within",
+        repeat_index=0,
+        process_id="p0",
+        output=MeterOutput(values={field: 1.0}),
+    )
+
+
+def _c4_setup_selected_candidate_coverage_test(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Any, Any, Any, frozenset[tuple[str, int]]]:
+    """Shared scaffolding for the 3 coverage tests below: a tiny campaign
+    with `APERIODICITY_GT`'s HARMONIC_RESIDUAL candidate (F0-dependent, but
+    F0 dependency itself is irrelevant here — `render_and_measure_holdout`
+    is monkeypatched directly below) named as the family's selected
+    candidate. Returns `(campaign, subset, harmonic_residual,
+    expected_instances)`."""
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    subset = small_matrix_subset(4, family="APERIODICITY_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": "F0-B0-CURRENT",
+            "outcome": "SELECTED",
+        }
+    )
+
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    trimmed_pool = (harmonic_residual, independent_candidate)
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return trimmed_pool
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    campaign.ledger.append(
+        {
+            "kind": "selection_frozen",
+            "selected_by_family": {"APERIODICITY_GT": harmonic_residual.candidate_id},
+        }
+    )
+
+    # avoid real per-instance F0 measurement (irrelevant to what this test
+    # isolates — the CLI-side coverage check on `records_by_family`).
+    monkeypatch.setattr(cli, "_build_f0_by_instance", lambda *a, **kw: ({}, frozenset()))
+
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    assert expected_instances, "test setup must realize a HOLDOUT-split APERIODICITY_GT instance"
+    return campaign, subset, harmonic_residual, expected_instances
+
+
+def test_c4_selected_candidate_fully_skipped_closes_not_evaluable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The selected (F0-dependent) candidate has zero holdout records for
+    every expected instance — only B0 (always run) supplied any — the exact
+    shape `render_and_measure_holdout()` leaves behind when
+    `f0_unusable_instances` covers every C4 instance
+    (`[UNDERSPEC-CAL-D61]`/`[UNDERSPEC-CAL-D65]`). The family key IS present
+    in `records_by_family` (from B0), so the pre-fix `family.value not in
+    records_by_family` guard alone would fall through and close
+    DIAGNOSTIC_ONLY under `selected_id` — the fix must instead close
+    NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE."""
+    campaign, subset, harmonic_residual, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+
+    b0_only_records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in sorted(expected_instances)
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": b0_only_records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    assert holdout_events
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+    assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
+
+    # the authoritative close report must carry the same terminal status
+    # (close.close_campaign() copies `per_meter` from this event verbatim).
+    close_result = cli.close_stage.close_campaign(campaign, holdout_events[-1])
+    assert close_result.campaign_closed_entry_sha
+    close_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "campaign_closed"
+    ]
+    assert close_events
+    assert close_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]["terminal_status"] == (
+        "NOT_EVALUABLE"
+    )
+
+
+def test_c4_selected_candidate_partially_covered_closes_not_evaluable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The selected candidate has usable records for *some* but not all of
+    the expected C4 instances (D64's `coverage_incomplete` shape, applied
+    here to holdout coverage per the ruling's "or fewer than the expected
+    instance set per D64" clause) — 1 missing instance out of N must still
+    close NOT_EVALUABLE, not DIAGNOSTIC_ONLY."""
+    campaign, subset, harmonic_residual, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    ordered_instances = sorted(expected_instances)
+    partial_instances = ordered_instances[:-1]  # drop exactly one instance
+    assert partial_instances, "test setup needs >=2 expected instances to show a partial gap"
+
+    records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in partial_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+
+
+def test_c4_selected_candidate_fully_covered_is_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Control case: the selected candidate has a usable record for every
+    expected C4 instance — the fix must not disturb this pre-existing
+    DIAGNOSTIC_ONLY behavior ([UNDERSPEC-CAL-D17]: real gate assembly is out
+    of D2 CLI scope, so a fully-covered selected candidate still closes
+    DIAGNOSTIC_ONLY here, not CALIBRATED_ABSOLUTE)."""
+    campaign, subset, harmonic_residual, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
+    )
+    independent_candidate = next(
+        c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
+    )
+    ordered_instances = sorted(expected_instances)
+
+    records = [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in ordered_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
 
 
 # ---------------------------------------------------------------------------
