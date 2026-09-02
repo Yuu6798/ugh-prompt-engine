@@ -231,10 +231,15 @@ README のみ。B/C は README の自セクションのみ追記）。
 
 - CLI フラグ `--armed`
 - 環境変数 `VG_CAL_C0_FREEZE_AUTHORIZED=1`（campaign 実行は `VG_CAL_CAMPAIGN_AUTHORIZED=1`）
-- 承認ファイル `voice_genesis/calibration/approvals/gate2_c0_freeze.json`（Gate 2）/
-  `gate1_campaign_execution.json`（Gate 1: cost caps 3 値 + E_use bound 受容）/
-  `gate3_seal_acceptance.json`（Gate 3）。各 {approver, approved_at_utc, campaign_id,
-  design_doc_sha256, memo_sha256} を持ち、sha は**実ファイルのハッシュと照合**
+- 承認ファイルは**チェックアウト外**の `VG_CAL_APPROVAL_DIR`（既定
+  `~/.vg_cal/approvals/`）配下に置く: `gate1_campaign_execution.json`（Gate 1: cost
+  caps 3 値 + E_use bound 受容）/ `gate2_c0_freeze.json`（Gate 2）/
+  `gate3_seal_acceptance.json`（Gate 3）。理由: checkout 内の未追跡ファイルは
+  dirty-tree 判定で武装経路を自己否定し、コミットすれば HEAD が変わり manifest 派生の
+  campaign identity が動くため（PR #343 第 1 巡採用）。各 {approver, approved_at_utc,
+  campaign_id, design_doc_sha256, memo_sha256} を持ち、sha は**実ファイルのハッシュと
+  照合**。各承認ファイルの content sha256 は manifest（`approvals.<gate>_sha256`）と
+  freeze event の双方に記録する（content-pin）（PR #343 第 1 巡採用）
 - `AUTHORIZATION_REQUIRED` は §3.3 閉語彙（BLOCKED_*）とは別軸の pre-campaign 拒否コード
 
 ### 6.2 secret と出力レイアウト
@@ -243,12 +248,20 @@ README のみ。B/C は README の自セクションのみ追記）。
   `~/.vg_cal/secrets/<campaign_id>/`、mode 0600）に生成。**リポジトリには commitment
   `sha256(secret)` のみ**。`.gitignore` に `voice_genesis/calibration/**/secrets/` と
   `campaigns/*/renders/` を追加
+- 承認ファイル（Gate 1–3）も同様にチェックアウト外に置く: `VG_CAL_APPROVAL_DIR`
+  （既定 `~/.vg_cal/approvals/`）配下の `gate1_campaign_execution.json` /
+  `gate2_c0_freeze.json` / `gate3_seal_acceptance.json`（配置理由・sha256 記録先 =
+  §6.1）（PR #343 第 1 巡採用）
 - `campaign_id = RUN10-CAL-<YYYYMMDD>-<manifest_sha[:8]>`
 - `voice_genesis/calibration/campaigns/<campaign_id>/`: `c0_manifest.json` /
   `realized_split.json` / `ledger.jsonl` / `events/*.json` / `renders/`（gitignore）/
   `measurements/`（gitignore）
 
-### 6.3 D1 — freeze producer + 承認 Gate + ユーザー著述入力（`c0_freeze.py`, `approvals.py`, `e_use_table.py`, `cost_caps.py`）
+### 6.3 D1 — freeze producer + 承認 Gate + ユーザー著述入力（`c0_freeze.py`, `approvals.py`, `approvals/README.md`, `e_use_table.py`, `cost_caps.py`）
+
+- `approvals/README.md` は**外部配置場所の説明のみ**を記す（`VG_CAL_APPROVAL_DIR` /
+  既定 `~/.vg_cal/approvals/` 配下の 3 ファイル名。承認 json 実体はリポジトリに
+  一切格納しない）（PR #343 第 1 巡採用）
 
 - producer は manifest を**コードから生成**: git HEAD full SHA・dirty-tree・path inventory
   実ハッシュ・Python/numpy/scipy/librosa/soundfile exact version・sample format policy・
@@ -257,7 +270,13 @@ README のみ。B/C は README の自セクションのみ追記）。
   `ABSENT:<理由>`）→ `validate_c0_manifest` を通す
 - dry-run: manifest を生成・検証して報告するだけ（書込なし・secret なし）
 - armed: secret 生成 → commitment 記入 → splitter 実行 → 実現 split 表 → freeze event を
-  ledger 先頭に記帳 → campaigns/<id>/ へ書込。**git commit はしない**（ユーザー操作）
+  ledger 先頭に記帳 → **全成果物を staging に書く**（同一 FS 上の
+  `campaigns/.staging-<id>/` と secret_dir 側 staging）→ read-back で
+  `validate_c0_manifest` / `verify_split` / `Ledger.verify_chain` を再実行 → 全て通れば
+  `os.replace` で `campaigns/<id>/` と secret へ**atomic に公開** → 失敗時は staging を
+  削除し何も公開しない（secret も残さない）。テスト要件: 公開直前の例外注入で
+  `campaigns/<id>/` も secret も残らないこと（PR #343 第 1 巡採用）。**git commit は
+  しない**（ユーザー操作）
 - E_use evidence table: §10.2 の 13 列 schema + loader/validator + テンプレート生成
   （全 construct 行を `evidence_class: UNJUSTIFIED` かつ `e_use_value: null` で出力。
   数値 placeholder 禁止）。UNJUSTIFIED 行は自動 ceiling（DIRECTIONAL/DIAGNOSTIC_ONLY）
@@ -265,15 +284,23 @@ README のみ。B/C は README の自セクションのみ追記）。
 
 ### 6.4 D2 — campaign runner（`campaign/` サブパッケージ）
 
-- 手続 Gate 単位のサブコマンド: `c1-fixtures`（全 render + determinism 検査 + ledger）
-  → `c2-baseline`（B0 × calibration split・tolerance 導出）→ `c3-selection`（全候補 ×
-  自 family selection 行・fail filter・lexicographic・SELECTION_FROZEN event）→
-  `unseal`（§7 の 5 sha 相互参照検査）→ `c4-holdout`（選択 1 候補 + B0 × holdout・gate・
-  terminal status cascade）→ `close`（CAMPAIGN_CLOSED・debt_discharged 導出・M6）
+- 手続 Gate 単位のサブコマンド: `c1-fixtures`（**calibration + selection split の行と
+  negative control 行のみ** render + determinism 検査（同部分集合）+ ledger。holdout
+  行の render は行わない — `unseal` 後の `c4-holdout` 段で行う。これは §7 leakage
+  契約（holdout 非 control 行の unseal 前 render は `BLOCKED_LEAKAGE`）と整合させる
+  ための制約（PR #343 第 1 巡採用））→ `c2-baseline`（B0 × calibration split・
+  tolerance 導出）→ `c3-selection`（全候補 × 自 family selection 行・fail filter・
+  lexicographic・SELECTION_FROZEN event）→ `unseal`（§7 の 5 sha 相互参照検査）→
+  `c4-holdout`（選択 1 候補 + B0 × holdout・**holdout 行の render**・gate・terminal
+  status cascade）→ `close`（CAMPAIGN_CLOSED・debt_discharged 導出・M6）
 - 手続 Gate の単調性を ledger event で強制。各段は ledger 駆動で**再開可能**（記帳済み
   work unit をスキップ）
 - meter 反復: within-process 3 call + fresh-process 3（subprocess worker）。並列 worker は
   per-worker JSONL → 直列 append 集約（provenance 契約）
 - cost cap / stop rule 超過 → stop event 記帳 + fail-closed 終了
-- dry-run（既定）: 計画のみ — work unit 件数（instances 2,280 / renders 4,560 / meter
-  calls 13,680 per impl / selection ≈10^5）と cap の照合表を出力
+- dry-run（既定）: 計画のみ — work unit 件数（instances 2,280 / renders = campaign 合計
+  4,560、内訳は `c1-fixtures`: calibration + selection split 行 ×5 + control 行 render
+  数、`c4-holdout`: holdout 行 ×5（realized split は secret 依存のため確定内訳は freeze
+  後に定まり、dry-run 段階は §5.2 の想定 split 比で概算表示。合計 4,560 は不変）（PR
+  #343 第 1 巡採用） / meter calls 13,680 per impl / selection ≈10^5）と cap の照合表を
+  出力
