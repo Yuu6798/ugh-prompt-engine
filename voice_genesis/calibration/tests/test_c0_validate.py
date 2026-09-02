@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 from voice_genesis.calibration import c0_validate, streams, vocab
 from voice_genesis.calibration.candidates import registry as candidate_registry
 from voice_genesis.calibration.fixtures import axes as fixture_axes
+from voice_genesis.calibration.fixtures.matrix import build_matrix, declared_sweeps_by_family
 
 _MEASUREMENT_DIRECTORY_STATUS = "ABSENT:legacy_path=voice_genesis/harness/measure_v3.py"
 
@@ -85,6 +87,16 @@ def _full_path_inventory_maps() -> dict[str, dict[str, str]]:
     return out
 
 
+@functools.lru_cache(maxsize=1)
+def _real_declared_sweeps_by_family() -> dict[str, dict[str, tuple[str, ...]]]:
+    """凍結 matrix (`fixtures.matrix.build_matrix()`) から実際に導出される
+    `family -> {sweep_id: (member row_id, ...)}` を一度だけ計算しキャッシュ
+    する（UNDERSPEC-CAL-D77 ruling (1) の canonical-manifest fixture 用。
+    `_check_declared_sweep_declaration_match()` の完全一致検査を満たす値を
+    生成する必要があり、汎用 placeholder 文字列では通過し得ない）。"""
+    return declared_sweeps_by_family(build_matrix())
+
+
 def _shape_valid_nested_value(key: str, seed: str) -> object:
     """`c0_validate._shape_violation` (BOUNDED shape validation,
     `[UNDERSPEC-CAL-C18]`) が要求する形状を満たす、`key`/`seed` に応じた
@@ -96,6 +108,14 @@ def _shape_valid_nested_value(key: str, seed: str) -> object:
         return [f"{seed}_{key}_0", f"{seed}_{key}_1"]
     if key == "parameter_grid":
         return {f"{seed}_{key}_axis": [0, 1]}
+    if key == "declared_sweeps":
+        # UNDERSPEC-CAL-D77 ruling (1): このフィールドだけは placeholder では
+        # なく、`_check_declared_sweep_declaration_match()` の完全一致検査を
+        # 満たす実際の凍結 matrix 導出値を返す必要がある（`seed` は
+        # `family.value.lower()` — fixture_spec のみが本 key を持つため、
+        # meter_specs 側からこの分岐に到達することはない）。
+        family_sweeps = _real_declared_sweeps_by_family().get(seed.upper(), {})
+        return {sweep_id: list(members) for sweep_id, members in sorted(family_sweeps.items())}
     return f"{seed}_{key}"
 
 
@@ -792,6 +812,119 @@ def test_starved_matrix_blocks_with_sweep_declaration_invalid(
     # cause (unrelated causes, e.g. an actually-dirty checkout, may still
     # coexist and are not this test's concern).
     assert not any("declared_sweeps" in key for key in result.missing_required_keys)
+    # `_complete_manifest()` still declares the pre-starvation (full 5-member)
+    # TILT_GT sweep, which now also fails to exactly match the starved
+    # (monkeypatched) matrix's derived mapping — UNDERSPEC-CAL-D77 ruling (1)'s
+    # mismatch check and D76 ruling (2)'s truth-level check are independent
+    # axes and can co-fire on the same starved-matrix scenario.
+    assert vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_MISMATCH in result.blocked_codes
+    assert any(
+        "TILT_GT.declared_sweeps" in v for v in result.sweep_declaration_mismatch_violations
+    )
+
+
+# ---------------------------------------------------------------------------
+# declared sweep 宣言一致検査（UNDERSPEC-CAL-D77 ruling (1). #344 round 8
+# finding #1 ADOPT, 分類②: manifest の宣言値そのものを凍結 matrix からの
+# 導出値と完全一致させる）
+# ---------------------------------------------------------------------------
+
+
+def test_declared_sweeps_missing_key_is_manifest_incomplete_not_mismatch() -> None:
+    """`declared_sweeps` キー自体が欠落している場合は既存の
+    `BLOCKED_C0_MANIFEST_INCOMPLETE`（`FIXTURE_SPEC_REQUIRED_KEYS` 経由）で
+    捕捉し、`BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` は発火しない
+    （二重報告回避）。"""
+    manifest = _complete_manifest()
+    del manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["declared_sweeps"]
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert "frozen_design.fixture_spec.FORMANT_GT.declared_sweeps" in result.missing_required_keys
+    assert vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_MISMATCH not in result.blocked_codes
+    assert result.sweep_declaration_mismatch_violations == ()
+
+
+def test_declared_sweeps_scalar_value_is_manifest_incomplete_not_mismatch() -> None:
+    """`declared_sweeps="x"` のような非 mapping scalar は `_MAPPING_SHAPE_
+    FIELDS` の shape 検査経由で `BLOCKED_C0_MANIFEST_INCOMPLETE` へ倒れ、
+    mismatch チェック側では扱わない（二重報告回避）。"""
+    manifest = _complete_manifest()
+    manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["declared_sweeps"] = "x"
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE in result.blocked_codes
+    assert any(
+        k.startswith("frozen_design.fixture_spec.FORMANT_GT.declared_sweeps")
+        and "must be a non-empty mapping" in k
+        for k in result.missing_required_keys
+    )
+    assert vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_MISMATCH not in result.blocked_codes
+    assert result.sweep_declaration_mismatch_violations == ()
+
+
+def test_declared_sweeps_dropped_member_blocks_with_mismatch_code() -> None:
+    """corrupted membership: 実在する sweep から member row_id を 1 件
+    落としても非空 mapping のままであり `FIXTURE_SPEC_REQUIRED_KEYS`/shape
+    検査は素通りするが、導出値との完全一致検査で
+    `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` が個別に fail-closed する。"""
+    manifest = _complete_manifest()
+    declared = manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["declared_sweeps"]
+    sweep_id = sorted(declared)[0]
+    assert len(declared[sweep_id]) >= 3, declared[sweep_id]
+    declared[sweep_id] = declared[sweep_id][1:]  # drop the first member row_id
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_MISMATCH in result.blocked_codes
+    assert any(
+        v == (
+            "frozen_design.fixture_spec.FORMANT_GT.declared_sweeps "
+            "(does not exactly match the mapping derived from the frozen matrix)"
+        )
+        for v in result.sweep_declaration_mismatch_violations
+    )
+    # a corrupted declaration is a distinct failure mode from an absent one —
+    # it must not also surface as a manifest-completeness violation.
+    assert not any("declared_sweeps" in key for key in result.missing_required_keys)
+
+
+def test_declared_sweeps_extra_sweep_id_blocks_with_mismatch_code() -> None:
+    """corrupted membership: 実在しない sweep_id を 1 件追加しても
+    `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` が発火する。"""
+    manifest = _complete_manifest()
+    declared = manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["declared_sweeps"]
+    declared["not_a_real_sweep_id"] = ["FORMANT_GT-bogus-row"]
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_MISMATCH in result.blocked_codes
+    assert any(
+        "frozen_design.fixture_spec.FORMANT_GT.declared_sweeps" in v
+        for v in result.sweep_declaration_mismatch_violations
+    )
+
+
+def test_declared_sweeps_reordered_members_blocks_with_mismatch_code() -> None:
+    """corrupted membership: member 集合は同一でも並び順（`ordered list of
+    row ids`）が入れ替わっていれば不一致として BLOCK する。"""
+    manifest = _complete_manifest()
+    declared = manifest["frozen_design"]["fixture_spec"]["FORMANT_GT"]["declared_sweeps"]
+    sweep_id = sorted(declared)[0]
+    assert len(declared[sweep_id]) >= 2, declared[sweep_id]
+    declared[sweep_id] = list(reversed(declared[sweep_id]))
+
+    result = c0_validate.validate_c0_manifest(manifest)
+    assert vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_MISMATCH in result.blocked_codes
+
+
+def test_declared_sweeps_canonical_manifest_passes() -> None:
+    """canonical manifest（凍結 matrix からの実導出値をそのまま宣言する
+    `_full_fixture_spec()`）は `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` を
+    一切発火しない（UNDERSPEC-CAL-D77 ruling (1) の "canonical manifest →
+    passes" 受け入れ条件）。"""
+    result = c0_validate.validate_c0_manifest(_complete_manifest())
+    assert vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_MISMATCH not in result.blocked_codes
+    assert result.sweep_declaration_mismatch_violations == ()
+    assert result.blocked_codes == ()
 
 
 def test_meter_spec_parameter_grid_scalar_int_blocks() -> None:

@@ -49,6 +49,17 @@ class BlockedCode(str, Enum):
     #: 未満の pair しか作れない）なら発行する（`c0_validate.
     #: _check_declared_sweep_truth_levels`）。
     BLOCKED_C0_SWEEP_DECLARATION_INVALID = "BLOCKED_C0_SWEEP_DECLARATION_INVALID"
+    #: UNDERSPEC-CAL-D77 ruling (1)（#344 round 8 finding #1 ADOPT, 分類②）:
+    #: `frozen_design.fixture_spec.<FAMILY>.declared_sweeps` の manifest
+    #: **宣言値**が、凍結 matrix (`fixtures.matrix.build_matrix()`) から
+    #: `fixtures.matrix.declared_sweeps_by_family()` で直接導出される mapping
+    #: と完全一致しない場合（欠落は別途 `BLOCKED_C0_MANIFEST_INCOMPLETE` で
+    #: 捕捉するため対象外。値は存在するが sweep_id 集合/member row_id の並びが
+    #: 導出値と食い違う場合のみ）に発行する（`c0_validate.
+    #: _check_declared_sweep_declaration_match`）。`BLOCKED_C0_SWEEP_
+    #: DECLARATION_INVALID`（構造がそもそも §10.4 の truth-level 下限を
+    #: 満たせるか。manifest 非依存）とは独立の軸——宣言と実体の乖離のみを見る。
+    BLOCKED_C0_SWEEP_DECLARATION_MISMATCH = "BLOCKED_C0_SWEEP_DECLARATION_MISMATCH"
     BLOCKED_C1_GENERATOR_NONDETERMINISTIC = "BLOCKED_C1_GENERATOR_NONDETERMINISTIC"
     BLOCKED_LEAKAGE = "BLOCKED_LEAKAGE"
     BLOCKED_CANONICAL_MUTATION_REQUIRED = "BLOCKED_CANONICAL_MUTATION_REQUIRED"

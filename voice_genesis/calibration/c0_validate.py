@@ -46,10 +46,16 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
     family をカバーし（欠落 family は `frozen_design.fixture_spec.<FAMILY>`
     として個別列挙）、各 family エントリは `FIXTURE_SPEC_REQUIRED_KEYS`
     （generator_version/generator_hash/known_truth_field/confound_axes/
-    boundary_probes/negative_controls）を完全に持つことを要求する
-    （`[UNDERSPEC-CAL-C17]`。Codex レビュー 2026-09-01 P1: 従来
+    boundary_probes/negative_controls/declared_sweeps）を完全に持つことを
+    要求する（`[UNDERSPEC-CAL-C17]`。Codex レビュー 2026-09-01 P1: 従来
     `fixture_spec={"family": "F0_CONTROL"}` のような hollow な
     placeholder manifest が素通りしていた finding の直接該当箇所）。
+    `declared_sweeps` は非空 mapping であることに加え（`_MAPPING_SHAPE_
+    FIELDS`）、宣言値そのものが凍結 matrix (`fixtures.matrix.build_matrix()`)
+    から `declared_sweeps_by_family()` で導出される mapping と完全一致
+    することを要求する（UNDERSPEC-CAL-D77 ruling (1)。不一致は
+    `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` で個別に fail-closed する。
+    `[UNDERSPEC-CAL-D77]`）。
   - campaign-level セクション `frozen_design.split_spec` /
     `selection_spec` / `provenance_spec` / `cost_caps` はそれぞれ
     `SPLIT_SPEC_REQUIRED_KEYS`（ratios/seed_scheme/seal_commitment_rule）・
@@ -223,7 +229,22 @@ METER_SPEC_REQUIRED_KEYS: tuple[str, ...] = (
 #: `frozen_design.fixture_spec.<FAMILY>` の各エントリが持つべき必須ネスト
 #: キー（設計正本 §3.1「fixture family・generator version/hash・
 #: known-truth field・confound 軸・boundary probes・negative controls」。
-#: `[UNDERSPEC-CAL-C17]`）。
+#: `[UNDERSPEC-CAL-C17]`）。`declared_sweeps`
+#: （UNDERSPEC-CAL-D77 ruling (1). #344 round 8 finding #1 ADOPT, 分類②）:
+#: `c0_freeze._fixture_specs()` は既に `declared_sweeps`
+#: （`fixtures.matrix.declared_sweeps_by_family()` の出力、def A）を
+#: `manifest_core_sha` 対象として書き込んでいたが、本語彙には未列挙のため、
+#: manifest がこのフィールドを欠落・矛盾させても REQUIRED_BLOCKING を素通り
+#: していた（validator 側は `_check_declared_sweep_truth_levels()` で
+#: manifest 非依存に凍結 matrix を直接再導出して検証するのみで、manifest の
+#: 宣言値そのものは一度も読んでいなかった——「宣言と実体が食い違っていても
+#: 検出できない」provenance artifact contamination）。追加により (a) 欠落/
+#: hollow は他の必須ネスト鍵と同様に `missing_required_keys` へ、(b) 値が
+#: mapping でない/空は `_shape_violation`（`_MAPPING_SHAPE_FIELDS`）経由で
+#: 同じく `missing_required_keys` へ、(c) mapping ではあるが凍結 matrix
+#: からの導出値と完全一致しない（sweep_id 集合・member row_id の並びの
+#: いずれか）場合は `_check_declared_sweep_declaration_match()` が
+#: `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` で個別に fail-closed する。
 FIXTURE_SPEC_REQUIRED_KEYS: tuple[str, ...] = (
     "generator_version",
     "generator_hash",
@@ -231,6 +252,7 @@ FIXTURE_SPEC_REQUIRED_KEYS: tuple[str, ...] = (
     "confound_axes",
     "boundary_probes",
     "negative_controls",
+    "declared_sweeps",
 )
 
 #: `frozen_design.split_spec` の必須ネストキー（設計正本 §3.1「split・
@@ -332,8 +354,13 @@ _LIST_SHAPE_FIELDS: frozenset[str] = frozenset(
     {"confound_axes", "boundary_probes", "negative_controls", "stop_rules"}
 )
 
-#: 非空 mapping であることを要求するネストフィールド名。
-_MAPPING_SHAPE_FIELDS: frozenset[str] = frozenset({"parameter_grid"})
+#: 非空 mapping であることを要求するネストフィールド名。`declared_sweeps`
+#: （UNDERSPEC-CAL-D77 ruling (1)）はここでは外側 mapping の非空性のみを
+#: 検査し、`sweep_id -> row_id 列` という内側の形状・凍結 matrix との完全
+#: 一致は `_check_declared_sweep_declaration_match()` が別途検査する
+#: （外側が mapping ですらない/空の場合はここで `missing_required_keys` 側
+#: に倒し、mismatch チェック側での二重報告を避ける）。
+_MAPPING_SHAPE_FIELDS: frozenset[str] = frozenset({"parameter_grid", "declared_sweeps"})
 
 #: 非空白 str であることを要求する「version」系ネストフィールド名（`_is_hollow`
 #: の空文字列チェックに加え、意図せず数値・bool 等の非文字列型が入るのを防ぐ）。
@@ -653,6 +680,10 @@ class C0ValidationResult:
     #: truth_levels()` の violation 列（非空なら
     #: `BLOCKED_C0_SWEEP_DECLARATION_INVALID` が `blocked_codes` に入る）。
     sweep_declaration_violations: tuple[str, ...] = field(default_factory=tuple)
+    #: UNDERSPEC-CAL-D77 ruling (1)（#344 round 8 finding #1 ADOPT）:
+    #: `_check_declared_sweep_declaration_match()` の violation 列（非空なら
+    #: `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` が `blocked_codes` に入る）。
+    sweep_declaration_mismatch_violations: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def is_blocked(self) -> bool:
@@ -1298,6 +1329,87 @@ def _check_declared_sweep_truth_levels(manifest: Mapping[str, object]) -> tuple[
     return tuple(violations)
 
 
+def _normalize_declared_sweeps(value: object) -> dict[str, tuple[str, ...]] | None:
+    """`value` を `sweep_id -> (member row_id, ...)` の正規形へ変換する。
+    形状が「mapping[str, list[str]]（各 list は非空）」を満たさない場合は
+    `None` を返す（呼び出し側はこれを「凍結 matrix からの導出値とは一致し
+    得ない」として扱う——`_check_declared_sweep_declaration_match()` の
+    「形状検証と一致検証を同一の不一致判定へ統合する」規約）。"""
+    if not isinstance(value, Mapping):
+        return None
+    normalized: dict[str, tuple[str, ...]] = {}
+    for sweep_id, members in value.items():
+        if not isinstance(sweep_id, str):
+            return None
+        if not isinstance(members, (list, tuple)) or isinstance(members, (str, bytes)):
+            return None
+        if len(members) == 0:
+            return None
+        member_ids: list[str] = []
+        for member in members:
+            if not isinstance(member, str):
+                return None
+            member_ids.append(member)
+        normalized[sweep_id] = tuple(member_ids)
+    return normalized
+
+
+def _check_declared_sweep_declaration_match(manifest: Mapping[str, object]) -> tuple[str, ...]:
+    """UNDERSPEC-CAL-D77 ruling (1)（#344 round 8 finding #1 ADOPT, 分類②）:
+    `frozen_design.fixture_spec.<FAMILY>.declared_sweeps` の**宣言値**が、
+    凍結 matrix (`fixtures.matrix.build_matrix()`) から
+    `fixtures.matrix.declared_sweeps_by_family()` で直接導出される
+    mapping と **完全一致**（sweep_id 集合・各 sweep の member row_id の
+    並び順まで）することを検査する。
+
+    `_check_declared_sweep_truth_levels()`（既存, D76 ruling (2)）は
+    manifest の宣言値を一切読まず凍結 matrix から独立に再導出した値のみを
+    検査する「構造がそもそも §10.4 の前提を満たせるか」チェックであり、
+    manifest が実際に何を宣言しているか（あるいは全く宣言していないか）
+    とは無関係だった——manifest がこのフィールドを省略しても
+    `FIXTURE_SPEC_REQUIRED_KEYS` に列挙されていなかったため
+    `missing_required_keys` は素通りし、`_check_declared_sweep_truth_
+    levels()` は manifest 非依存に「正しい」判定を返すため、**宣言を
+    欠いた/矛盾した manifest でも C0 全体が PASS し得た**（provenance
+    artifact contamination）。本関数はその隙間を埋める: manifest の宣言値
+    そのものを実体（凍結 matrix からの導出値）と直接突合する
+    （`_check_hash_content_match` と同じ「宣言でなく実体との一致を検査
+    する」規約）。
+
+    欠落/hollow（=`declared_sweeps` キー自体が存在しない）は
+    `FIXTURE_SPEC_REQUIRED_KEYS` 経由の `missing_required_keys`
+    （既存の incomplete-manifest block）が既に捕捉するため、ここでは扱わ
+    ない（二重報告回避）。値が mapping ですらない/空の場合も
+    `_MAPPING_SHAPE_FIELDS` 経由で同じく `missing_required_keys` 側へ倒す
+    ため、ここでは扱わない。**値が非空 mapping ではあるが**内側の形状が
+    壊れている（sweep 値が非 list/空 list、member が非 str 等）場合、また
+    は形状は正しいが導出値と内容が食い違う（sweep_id の過不足、member
+    row_id の欠落/追加/並び違い）場合の両方を「宣言不一致」として
+    `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` 対象の違反文字列として返す
+    （前者も後者も「宣言が実体と一致しない」という同一の意味論のため区別
+    しない）。
+    """
+    rows = build_matrix()
+    derived = declared_sweeps_by_family(rows)
+    violations: list[str] = []
+    for family in fixture_axes.FixtureFamily:
+        fam = family.value
+        found, entry = _resolve(manifest, f"frozen_design.fixture_spec.{fam}")
+        if not found or not isinstance(entry, Mapping):
+            continue  # frozen_design.fixture_spec.<FAMILY> 自体の欠落は他の checker が捕捉
+        declared_raw = entry.get("declared_sweeps")
+        if declared_raw is None or _is_hollow(declared_raw) or not isinstance(declared_raw, Mapping):
+            continue  # 欠落/hollow/非 mapping は missing_required_keys 側が既に捕捉
+        actual = _normalize_declared_sweeps(declared_raw)
+        expected = derived.get(fam, {})
+        if actual != expected:
+            violations.append(
+                f"frozen_design.fixture_spec.{fam}.declared_sweeps "
+                "(does not exactly match the mapping derived from the frozen matrix)"
+            )
+    return tuple(violations)
+
+
 def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     """C0 freeze manifest を dry-run 検証する（書込・secret 生成・freeze event なし）。"""
     missing_required = _check_required_blocking(manifest)
@@ -1322,6 +1434,7 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     d4c_ineligible, d4c_reason = _check_pyworld(manifest)
     unseeded_streams = _check_rng_ledger_unseeded(manifest)
     sweep_violations = _check_declared_sweep_truth_levels(manifest)
+    sweep_mismatch_violations = _check_declared_sweep_declaration_match(manifest)
 
     blocked: list[vocab.BlockedCode] = []
     if all_missing:
@@ -1330,6 +1443,8 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
         blocked.append(vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG)
     if sweep_violations:
         blocked.append(vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_INVALID)
+    if sweep_mismatch_violations:
+        blocked.append(vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_MISMATCH)
 
     return C0ValidationResult(
         blocked_codes=tuple(blocked),
@@ -1339,4 +1454,5 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
         d4c_ineligibility_reason=d4c_reason,
         unseeded_rng_streams=unseeded_streams,
         sweep_declaration_violations=sweep_violations,
+        sweep_declaration_mismatch_violations=sweep_mismatch_violations,
     )

@@ -1344,49 +1344,72 @@ def _run_c4(
                 )
             )
             continue
-        if expected_holdout_instances and missing_expected_instances:
-            # round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`, amends `[UNDERSPEC-
-            # CAL-D73]`): D73's frozen minimum-count / resolvable-pair
-            # precondition below is a §10.4 DIRECTIONAL-gate concept
-            # ("resolvable pair は各 sweep で >= 3", design §10.4 ~L375,
-            # directly under §10.3) — D73 wrongly applied it to every meter
-            # regardless of the selected candidate's effective ceiling.
-            # Design quote, §10.3 ABSOLUTE holdout gate (~L351-353): "gate 1:
-            # 全 PRIMARY instance が eligible（critical missing/undefined
-            # なし）" — §10.3 states no minimum sample count beyond that
-            # eligibility precondition; MAE/BIAS/q95 (§10.1) are computable
-            # from any nonzero-usable-instance population. Applying D73's
-            # DIRECTIONAL-only minimum to an ABSOLUTE-ceiling candidate
-            # therefore produced a false `NOT_EVALUABLE` for a candidate
-            # whose score genuinely is computable (Codex #344 round 4,
-            # category ③ false terminal status). Ruling: the structural
-            # minimum-count check applies **only** when this meter's
-            # *effective* claim ceiling — `effective_ceiling` above, the same
-            # `capped_ceiling()`/`max_claim_scope` arbitration
-            # `claim_scope_report()` already performs — is `DIRECTIONAL`; for
-            # every other effective ceiling (ABSOLUTE included), nonzero-but-
-            # partial coverage is unconditionally `DIAGNOSTIC_ONLY`/
-            # `OUTPUT_MISSING` (§11 "score 計算可能だが PRIMARY 一部 output
-            # missing で gate 不通過"), matching D69/D72's original rule.
-            # When the check does apply, `gates.resolvable_pairs_possible()`
-            # is still the sole threshold authority (`gates.
-            # MIN_RESOLVABLE_PAIRS_PER_SWEEP`). round 6-7 #344 ADOPT
-            # (`[UNDERSPEC-CAL-D76]` ruling (2)/(3), SUPERSEDES D75 ruling
-            # (1)): D75 partitioned usable PRIMARY instances by nuisance
-            # axis (`nuisance_axis_family()`) and counted raw usable-
-            # instance rows per axis — but nuisance axis is not sweep (see
-            # `sweep_truth_investigation.md`: a nuisance-axis group holds
-            # truth fixed at the family anchor, so every pair inside it has
-            # `delta_truth == 0` and can never be resolvable under §10.4).
-            # The real declared sweep partition is `fixtures.matrix.
-            # declared_sweeps_by_family()` (def A: truth-core block,
-            # nuisance-constant series — `row_id_to_sweep_id` above), and
-            # the count that matters is the number of DISTINCT TRUTH LEVELS
-            # among usable instances in that sweep (row-level `row_id`,
-            # never `probe_index` repeats) — two usable rows at the SAME
-            # truth level still form an unresolvable `delta_truth == 0`
-            # pair, so counting raw instances (as D75 did) over-counts.
-            n_usable_primary = len(usable_primary_instances)
+        # round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`, amends `[UNDERSPEC-
+        # CAL-D73]`): D73's frozen minimum-count / resolvable-pair
+        # precondition below is a §10.4 DIRECTIONAL-gate concept
+        # ("resolvable pair は各 sweep で >= 3", design §10.4 ~L375,
+        # directly under §10.3) — D73 wrongly applied it to every meter
+        # regardless of the selected candidate's effective ceiling.
+        # Design quote, §10.3 ABSOLUTE holdout gate (~L351-353): "gate 1:
+        # 全 PRIMARY instance が eligible（critical missing/undefined
+        # なし）" — §10.3 states no minimum sample count beyond that
+        # eligibility precondition; MAE/BIAS/q95 (§10.1) are computable
+        # from any nonzero-usable-instance population. Applying D73's
+        # DIRECTIONAL-only minimum to an ABSOLUTE-ceiling candidate
+        # therefore produced a false `NOT_EVALUABLE` for a candidate
+        # whose score genuinely is computable (Codex #344 round 4,
+        # category ③ false terminal status). Ruling: the structural
+        # minimum-count check applies **only** when this meter's
+        # *effective* claim ceiling — `effective_ceiling` above, the same
+        # `capped_ceiling()`/`max_claim_scope` arbitration
+        # `claim_scope_report()` already performs — is `DIRECTIONAL`; for
+        # every other effective ceiling (ABSOLUTE included), nonzero-but-
+        # partial coverage is unconditionally `DIAGNOSTIC_ONLY`/
+        # `OUTPUT_MISSING` (§11 "score 計算可能だが PRIMARY 一部 output
+        # missing で gate 不通過"), matching D69/D72's original rule.
+        # When the check does apply, `gates.resolvable_pairs_possible()`
+        # is still the sole threshold authority (`gates.
+        # MIN_RESOLVABLE_PAIRS_PER_SWEEP`). round 6-7 #344 ADOPT
+        # (`[UNDERSPEC-CAL-D76]` ruling (2)/(3), SUPERSEDES D75 ruling
+        # (1)): D75 partitioned usable PRIMARY instances by nuisance
+        # axis (`nuisance_axis_family()`) and counted raw usable-
+        # instance rows per axis — but nuisance axis is not sweep (see
+        # `sweep_truth_investigation.md`: a nuisance-axis group holds
+        # truth fixed at the family anchor, so every pair inside it has
+        # `delta_truth == 0` and can never be resolvable under §10.4).
+        # The real declared sweep partition is `fixtures.matrix.
+        # declared_sweeps_by_family()` (def A: truth-core block,
+        # nuisance-constant series — `row_id_to_sweep_id` above), and
+        # the count that matters is the number of DISTINCT TRUTH LEVELS
+        # among usable instances in that sweep (row-level `row_id`,
+        # never `probe_index` repeats) — two usable rows at the SAME
+        # truth level still form an unresolvable `delta_truth == 0`
+        # pair, so counting raw instances (as D75 did) over-counts.
+        #
+        # round 8 #344 ADOPT (`[UNDERSPEC-CAL-D77]` ruling (2), 分類③ false
+        # terminal): the block below used to run only inside `if
+        # expected_holdout_instances and missing_expected_instances:` — i.e.
+        # only on *partial* coverage. A DIRECTIONAL-ceiling candidate with
+        # FULL holdout coverage on a partition where some declared sweep
+        # still has < `MIN_RESOLVABLE_PAIRS_PER_SWEEP` distinct truth levels
+        # among usable instances therefore skipped this check entirely and
+        # fell through to the generic `DIAGNOSTIC_ONLY` placeholder further
+        # below — recording a status that implies "score/gate assembly
+        # pending" for a candidate whose score is, in fact, structurally
+        # uncomputable (same §10.4 ~L375 fact as D76 ruling (2)/(3), just
+        # reached via a different — complete, not partial — coverage path).
+        # Ruling: perform this capacity check on the usable PRIMARY holdout
+        # instances **regardless of coverage completeness**, and **before**
+        # the partial-vs-complete coverage branch below (still gated on
+        # `effective_ceiling is ClaimCeiling.DIRECTIONAL`, so ABSOLUTE-
+        # ceiling candidates are unaffected — §10.3 does not depend on sweep
+        # structure). Capacity unmet → `NOT_EVALUABLE` even when coverage is
+        # complete; capacity met (or ceiling is not DIRECTIONAL) → fall
+        # through to the existing partial-coverage `DIAGNOSTIC_ONLY`/
+        # `OUTPUT_MISSING` branch, or, when coverage is also complete, to
+        # the pre-existing generic `DIAGNOSTIC_ONLY` placeholder unchanged.
+        n_usable_primary = len(usable_primary_instances)
+        if expected_holdout_instances and effective_ceiling is ClaimCeiling.DIRECTIONAL:
             usable_row_ids_by_sweep: dict[str, set[str]] = {}
             for row_id, _probe_index in usable_primary_instances:
                 sweep_id = row_id_to_sweep_id.get(family.value, {}).get(row_id)
@@ -1398,11 +1421,8 @@ def _run_c4(
                 for sweep_id, row_ids in usable_row_ids_by_sweep.items()
             }
             expected_sweep_ids = set(declared_sweeps_by_family_map.get(family.value, {}))
-            directional_minimum_not_met = (
-                effective_ceiling is ClaimCeiling.DIRECTIONAL
-                and not resolvable_pairs_possible(
-                    usable_truth_level_counts_by_sweep, expected_sweep_ids
-                )
+            directional_minimum_not_met = not resolvable_pairs_possible(
+                usable_truth_level_counts_by_sweep, expected_sweep_ids
             )
             if directional_minimum_not_met:
                 sweeps_below_minimum = sorted(
@@ -1420,19 +1440,24 @@ def _run_c4(
                         selected_candidate_id=selected_id,
                         gate_detail={
                             "reason": (
-                                "[UNDERSPEC-CAL-D76] DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_"
+                                "[UNDERSPEC-CAL-D77] DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_"
                                 "HOLDOUT: declared sweep(s) "
                                 f"{sweeps_below_minimum} have too few distinct truth "
                                 "levels among usable holdout instances: each needs "
                                 f"C(levels,2) >= gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP="
                                 f"{MIN_RESOLVABLE_PAIRS_PER_SWEEP} (design §10.4 ~L375); "
                                 "score/gate is uncomputable regardless of measured "
-                                "values. This is the expected, honest outcome for "
-                                "DIRECTIONAL-ceiling candidates under the canonical "
-                                "456-cell matrix + (block, domain) holdout split "
-                                "(README ledger D76 — a design fact, not a bug to "
-                                "work around; sweep-aware stratification is a "
-                                "candidate for a future design v1.1 revision)."
+                                "values, even when holdout coverage for this meter is "
+                                "otherwise complete (D77 ruling (2): this capacity "
+                                "check now runs unconditionally for DIRECTIONAL-"
+                                "ceiling candidates, not only when "
+                                "missing_expected_instances is non-empty). This is "
+                                "the expected, honest outcome for DIRECTIONAL-ceiling "
+                                "candidates under the canonical 456-cell matrix + "
+                                "(block, domain) holdout split (README ledger D76/D77 "
+                                "— a design fact, not a bug to work around; sweep-"
+                                "aware stratification is a candidate for a future "
+                                "design v1.1 revision)."
                             ),
                             "gate_detail_reason_code": "DIRECTIONAL_SWEEP_UNRESOLVABLE_ON_HOLDOUT",
                             "expected_instance_count": len(expected_holdout_instances),
@@ -1447,10 +1472,12 @@ def _run_c4(
                                 effective_ceiling.value if effective_ceiling is not None else None
                             ),
                             "claim_scope": claim_scope_detail,
+                            "coverage_complete": not bool(missing_expected_instances),
                         },
                     )
                 )
                 continue
+        if expected_holdout_instances and missing_expected_instances:
             results.append(
                 holdout_stage.MeterHoldoutResult(
                     meter_id=meter.value,

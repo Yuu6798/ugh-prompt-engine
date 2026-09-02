@@ -44,12 +44,17 @@ def test_missing_reason_closed_vocab() -> None:
 def test_blocked_code_closed_vocab() -> None:
     # UNDERSPEC-CAL-D76 ruling (2) renames D75's BLOCKED_C0_SWEEP_CAPACITY_
     # INSUFFICIENT to BLOCKED_C0_SWEEP_DECLARATION_INVALID (count stays 7).
-    assert len(BlockedCode) == 7
+    # UNDERSPEC-CAL-D77 ruling (1) adds BLOCKED_C0_SWEEP_DECLARATION_MISMATCH
+    # (manifest declared_sweeps vs. frozen-matrix-derived mapping exact-match
+    # check, independent of D76's manifest-agnostic structural check; count
+    # becomes 8).
+    assert len(BlockedCode) == 8
     assert {b.value for b in BlockedCode} == {
         "BLOCKED_DOMAIN_MANIFEST_INCOMPLETE",
         "BLOCKED_C0_MANIFEST_INCOMPLETE",
         "BLOCKED_C0_UNSEEDED_RNG",
         "BLOCKED_C0_SWEEP_DECLARATION_INVALID",
+        "BLOCKED_C0_SWEEP_DECLARATION_MISMATCH",
         "BLOCKED_C1_GENERATOR_NONDETERMINISTIC",
         "BLOCKED_LEAKAGE",
         "BLOCKED_CANONICAL_MUTATION_REQUIRED",
