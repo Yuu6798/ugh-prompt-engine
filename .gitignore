@@ -64,3 +64,12 @@ htmlcov/
 
 # VoiceGenesis intake locks (flock 残置ファイル・コミット禁止)
 voice_genesis/foundry/recording_kit/*.lock
+
+# RUN10-CAL Phase D: 承認ファイル / secret / campaign 成果物はチェックアウト外
+# または campaign 単位ディレクトリに置く（IMPLEMENTATION_MAP_v1.md §6.1/§6.2）。
+# 承認ファイル/secret の既定配置先 (~/.vg_cal/) はチェックアウト外だが、テストが
+# ローカルに `.vg_cal/` を作る経路も念のため除外する。
+**/.vg_cal/
+voice_genesis/calibration/campaigns/*/renders/
+voice_genesis/calibration/campaigns/*/measurements/
+voice_genesis/calibration/campaigns/.staging-*/

@@ -159,31 +159,42 @@ baseline と pyin family も domain 宣言が異なるため 2 行に分かれ�
 ものである。値セルは全てユーザー記入。候補となる evidence source の例を「参考」欄
 に示すが、実際の採否・記入はユーザーが行う。
 
-**construct 別 worksheet**（`candidates/registry.py` 由来の 20 件、一意
-(construct_id, unit, domain) 単位。PR #343 第 2 巡採用で registry 全走査から再生成）:
+**列の読み方**（PR #343 第 5 巡採用）: `construct_id` / `unit` / `domain` の 3 列は
+`candidates/registry.py` の `Candidate.construct` / `.unit` / `.domain` フィールドの
+**machine token をそのまま逐語（verbatim）転記**したものであり、`e_use_table.py` の
+loader/validator が突合キーとして使う値そのものである（例: unit は `Hz` ではなく
+`hz`、domain は末尾句点「。」を含む registry の原文そのまま）。この 3 列はユーザーが
+言い換えたり要約したりしてはならない——**転記に 1 文字でも差異があれば
+`e_use_table` の照合が一致せず、当該行は C0 freeze の検証（`validate_c0_manifest`）を
+ブロックする**。読みやすさのための説明は別途「人間可読ラベル」列（algorithm family
+と件数の要約。ユーザー記入・照合には使わない）に分離した。
 
-| construct_id | unit | domain | 参考: 想定される evidence_class の候補源 | E_use_value | evidence_class | review_status |
-|---|---|---|---|---|---|---|
-| fundamental_frequency（F0-B0-CURRENT baseline） | Hz | 宣言済み primary F0 帯 (C3-G4 anchor) + boundary probe | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| fundamental_frequency（F0-PYIN-FRAME*-HOP* family ×4） | Hz | 宣言済み primary F0 帯 (C3-G4 anchor) + boundary probe。fmin=80/fmax=600 固定 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / 音声知覚上のピッチ JND 文献 → `VALIDATED_REFERENCE` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| formant_centroid（M3-B0-CURRENT-CENTROID baseline） | Hz | DIAGNOSTIC_ONLY: centroid は F1/F2/F3 個別 Hz error の代用にならない | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| formant_frequency（M3-CEPSTRAL-POLES family ×18） | Hz | baseline と同族（ケプストラム liftering 系）。band_lo=300Hz 固定 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / 音声知覚上の formant JND 文献 → `VALIDATED_REFERENCE`（source hash 必須） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| formant_frequency（M3-BURG-LPC family, fs'=2×4000Hz resample ×12） | Hz | 唯一の独立 family。fs'=2*4000Hz へ決定的 resample 必須 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / formant JND 文献 → `VALIDATED_REFERENCE`（source hash 必須） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| formant_frequency（M3-BURG-LPC family, fs'=2×5000Hz resample ×12） | Hz | 唯一の独立 family。fs'=2*5000Hz へ決定的 resample 必須 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / formant JND 文献 → `VALIDATED_REFERENCE`（source hash 必須） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| source_spectral_tilt（M2T-B0-CURRENT-HYBRID baseline） | mixed(db_per_oct\|db) | unit 混在のためそのままでは INVALID（設計正本 §8） | NONE（INVALID_CIRCULAR 相当）——ceiling は claim ceiling 表（§2.2）で確定済みのため E_use 記入は本来不要（UNDERSPEC-CAL-C06 参照） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| source_spectral_tilt（M2T-HARMONIC-OLS family ×6） | dB/oct | 20*log10(A_k) vs log2(k) 線形回帰。H1-H2 フォールバックなし | 回帰の数値分解能 → `FIRST_PRINCIPLES_BOUND` / tilt 知覚閾に関する文献 → `VALIDATED_REFERENCE` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| source_spectral_tilt（M2T-HARMONIC-THEILSEN family ×6） | dB/oct | Theil-Sen（中央値ベース）勾配。H1-H2 フォールバックなし | 回帰の数値分解能 → `FIRST_PRINCIPLES_BOUND` / tilt 知覚閾に関する文献 → `VALIDATED_REFERENCE` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| harmonic_to_noise_ratio（M2A-B0-AUTOCORR-PERIODICITY baseline） | dB | harmonic/noise 帯域エネルギー比（FFT ベース） | 用途上許容する dB 幅をユーザーが直接宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| harmonic_to_noise_ratio（M2A-HNR-ACF family ×8） | dB | 正規化自己相関ピーク → HNR。独立実装は directional/monotonicity 上限 | 用途上許容する dB 幅をユーザーが直接宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| injected_noise_fraction（M2A-HARMONIC-RESIDUAL family ×12） | fraction | comb-remove 後の残差/全パワー比。独立 generator 上のみ ABSOLUTE 候補 | 注入量そのものの量子化限界 → `FIRST_PRINCIPLES_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| world_d4c_aperiodicity（M2A-D4C family ×3） | fraction | WORLD 合成 fixture 上は SHARED_MODEL_DIAGNOSTIC。F0 入力は選択済み F0_CONTROL 固定 | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| resonance_centroid（M4-B0-CURRENT-CENTROID baseline） | Hz | 全 M4 候補は RUN10 で DIAGNOSTIC_ONLY 上限に閉じる（設計正本 §16） | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| resonance_center_frequency（M4-LOCAL-PROMINENCE family ×4） | Hz | 全 M4 候補は RUN10 で DIAGNOSTIC_ONLY 上限に閉じる（設計正本 §16。M3 との construct 独立性は未証明） | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| join_discontinuity_magnitude（M5-WAVE-DISCONTINUITY family ×3） | rms_amplitude_delta | 短窓 RMS の frame-to-frame jump | 検出感度の用途要件 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| join_discontinuity_magnitude（M5-SPECTRAL-FLUX family, L1 ノルム ×2） | spectral_flux_l1 | frame-to-frame 振幅スペクトル差分のノルム | 検出感度の用途要件 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| join_discontinuity_magnitude（M5-SPECTRAL-FLUX family, L2 ノルム ×2） | spectral_flux_l2 | frame-to-frame 振幅スペクトル差分のノルム | 検出感度の用途要件 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| identity_component_distance（M6-WEIGHTED-L1） | normalized_l1 | CLAIM_CRITICAL_SET 全 member が CALIBRATED_ABSOLUTE のときのみ計算（DIRECTIONAL 上限 §12） | E_use[j] は各 component 側 E_use の正規化に従属するため、上記 construct 側の記入が前提 | ユーザー記入 | ユーザー記入 | ユーザー記入 |
-| identity_component_distance（M6-WEIGHTED-L2） | normalized_l2 | CLAIM_CRITICAL_SET 全 member が CALIBRATED_ABSOLUTE のときのみ計算（DIRECTIONAL 上限 §12） | E_use[j] は各 component 側 E_use の正規化に従属するため、上記 construct 側の記入が前提 | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+**construct 別 worksheet**（`candidates/registry.py` 由来の 20 件、一意
+(construct_id, unit, domain) 単位。PR #343 第 2 巡採用で registry 全走査から再生成。
+machine token 列と人間可読ラベル列の分離 = PR #343 第 5 巡採用）:
+
+| construct_id（machine token・verbatim） | unit（machine token・verbatim） | domain（machine token・verbatim） | 人間可読ラベル（参考。照合には不使用） | 参考: 想定される evidence_class の候補源 | E_use_value | evidence_class | review_status |
+|---|---|---|---|---|---|---|---|
+| `fundamental_frequency` | `hz` | `宣言済み primary F0 帯 (C3-G4 anchor) + boundary probe` | F0-B0-CURRENT baseline | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `fundamental_frequency` | `hz` | `宣言済み primary F0 帯 (C3-G4 anchor) + boundary probe。fmin=80/fmax=600 固定。` | F0-PYIN-FRAME\*-HOP\* family ×4 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / 音声知覚上のピッチ JND 文献 → `VALIDATED_REFERENCE` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `formant_centroid` | `hz` | `DIAGNOSTIC_ONLY: centroid は F1/F2/F3 個別 Hz error の代用にならない。` | M3-B0-CURRENT-CENTROID baseline | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `formant_frequency` | `hz` | `baseline と同族（ケプストラム liftering 系）。band_lo=300Hz 固定。` | M3-CEPSTRAL-POLES family ×18 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / 音声知覚上の formant JND 文献 → `VALIDATED_REFERENCE`（source hash 必須） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `formant_frequency` | `hz` | `唯一の独立 family。fs'=2*4000Hz へ決定的 resample 必須。` | M3-BURG-LPC family, fs'=2×4000Hz resample ×12 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / formant JND 文献 → `VALIDATED_REFERENCE`（source hash 必須） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `formant_frequency` | `hz` | `唯一の独立 family。fs'=2*5000Hz へ決定的 resample 必須。` | M3-BURG-LPC family, fs'=2×5000Hz resample ×12 | meter 宣言分解能 → `FIRST_PRINCIPLES_BOUND` / formant JND 文献 → `VALIDATED_REFERENCE`（source hash 必須） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `source_spectral_tilt` | `mixed(db_per_oct\|db)` | `unit 混在のためそのままでは INVALID（設計正本 §8）。` | M2T-B0-CURRENT-HYBRID baseline | NONE（INVALID_CIRCULAR 相当）——ceiling は claim ceiling 表（§2.2）で確定済みのため E_use 記入は本来不要（UNDERSPEC-CAL-C06 参照） | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `source_spectral_tilt` | `db_per_oct` | `20*log10(A_k) vs log2(k) 線形回帰。H1-H2 フォールバックなし。` | M2T-HARMONIC-OLS family ×6 | 回帰の数値分解能 → `FIRST_PRINCIPLES_BOUND` / tilt 知覚閾に関する文献 → `VALIDATED_REFERENCE` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `source_spectral_tilt` | `db_per_oct` | `Theil-Sen（中央値ベース）勾配。H1-H2 フォールバックなし。` | M2T-HARMONIC-THEILSEN family ×6 | 回帰の数値分解能 → `FIRST_PRINCIPLES_BOUND` / tilt 知覚閾に関する文献 → `VALIDATED_REFERENCE` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `harmonic_to_noise_ratio` | `db` | `harmonic/noise 帯域エネルギー比（FFT ベース）。` | M2A-B0-AUTOCORR-PERIODICITY baseline | 用途上許容する dB 幅をユーザーが直接宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `harmonic_to_noise_ratio` | `db` | `正規化自己相関ピーク → HNR。独立実装は directional/monotonicity 上限。` | M2A-HNR-ACF family ×8 | 用途上許容する dB 幅をユーザーが直接宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `injected_noise_fraction` | `fraction` | `comb-remove 後の残差/全パワー比。独立 generator 上のみ ABSOLUTE 候補。` | M2A-HARMONIC-RESIDUAL family ×12 | 注入量そのものの量子化限界 → `FIRST_PRINCIPLES_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `world_d4c_aperiodicity` | `fraction` | `WORLD 合成 fixture 上は SHARED_MODEL_DIAGNOSTIC。F0 入力は選択済み F0_CONTROL 固定（params['f0_hz']）。` | M2A-D4C family ×3 | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `resonance_centroid` | `hz` | `全 M4 候補は RUN10 で DIAGNOSTIC_ONLY 上限に閉じる（設計正本 §16）。` | M4-B0-CURRENT-CENTROID baseline | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `resonance_center_frequency` | `hz` | `全 M4 候補は RUN10 で DIAGNOSTIC_ONLY 上限に閉じる（設計正本 §16。M3 との construct 独立性は未証明）。` | M4-LOCAL-PROMINENCE family ×4 | 診断用途としての許容幅をユーザーが宣言 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `join_discontinuity_magnitude` | `rms_amplitude_delta` | `短窓 RMS の frame-to-frame jump。` | M5-WAVE-DISCONTINUITY family ×3 | 検出感度の用途要件 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `join_discontinuity_magnitude` | `spectral_flux_l1` | `frame-to-frame 振幅スペクトル差分のノルム。` | M5-SPECTRAL-FLUX family, L1 ノルム ×2 | 検出感度の用途要件 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `join_discontinuity_magnitude` | `spectral_flux_l2` | `frame-to-frame 振幅スペクトル差分のノルム。` | M5-SPECTRAL-FLUX family, L2 ノルム ×2 | 検出感度の用途要件 → `USER_ACCEPTED_USE_BOUND` | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `identity_component_distance` | `normalized_l1` | `CLAIM_CRITICAL_SET 全 member が CALIBRATED_ABSOLUTE のときのみ計算（m6_identity.py）。` | M6-WEIGHTED-L1 | E_use[j] は各 component 側 E_use の正規化に従属するため、上記 construct 側の記入が前提 | ユーザー記入 | ユーザー記入 | ユーザー記入 |
+| `identity_component_distance` | `normalized_l2` | `CLAIM_CRITICAL_SET 全 member が CALIBRATED_ABSOLUTE のときのみ計算（m6_identity.py）。` | M6-WEIGHTED-L2 | E_use[j] は各 component 側 E_use の正規化に従属するため、上記 construct 側の記入が前提 | ユーザー記入 | ユーザー記入 | ユーザー記入 |
 
 ---
 
@@ -369,9 +380,130 @@ Gate 3 の受容対象は、この宣言された水準（事故検出・改竄�
 
 ---
 
-## 6. 承認ファイル記入例（D1 完了後に追記）
+## 6. 承認ファイル記入例（D1 実装完了。`approvals.py` の実スキーマに一致）
 
-（プレースホルダー。`approvals.py` / `approvals/README.md` / `c0_freeze.py` /
-`e_use_table.py` / `cost_caps.py` の実装完了後、実際の承認ファイルスキーマ
-（`{approver, approved_at_utc, campaign_id, design_doc_sha256, memo_sha256}` の
-具体的な記入例と、E_use table / cost caps の実ファイル配置パス）をここに追記する。）
+配置先: **checkout 外** の `VG_CAL_APPROVAL_DIR`（既定 `~/.vg_cal/approvals/`。
+`approvals.default_approval_dir()`）。ファイル名は `approvals.APPROVAL_FILENAMES`
+が定める 3 種のみ:
+
+- `gate1_campaign_execution.json`
+- `gate2_c0_freeze.json`
+- `gate3_seal_acceptance.json`
+
+**承認 json の実体は、この 3 ファイルとしてチェックアウト外にのみ存在し、
+リポジトリには一切コミットされない**（`approvals/README.md` 参照）。以下は
+ユーザーがこの 3 ファイルへ実際に記入する内容の例であり、本ブリーフや
+リポジトリのどこにもこの JSON 自体は保存しない。
+
+**共通フィールド**（3 Gate 共通。`approvals.ApprovalRecord` の base fields）:
+`design_doc_sha256`/`memo_sha256` は loader が現在の
+`DESIGN_VG_METER_CAL_DEBT_v1.0.md` / `IMPLEMENTATION_MAP_v1.md` の実ファイル
+sha256 と照合する（不一致 → 未承認）。**`campaign_id` は含まない**（PR レビュー
+第 2 巡: campaign_id は manifest 側の派生値であり、承認ファイルより先に存在
+しなければならない循環を持ち込まないための設計）。
+
+**`authorization_nonce`**（Gate 1 / Gate 2 のみ必須。PR レビュー第 5 巡:
+承認の一回性）: `python -m voice_genesis.calibration.c0_freeze`（dry-run）を
+実行するたびに新規発行される乱数値（`secrets.token_hex(16)`、manifest 内容
+とは無関係）。**dry-run 報告からコピー**し、Gate 1・Gate 2 の両方の
+`authorization_nonce` へ同じ値を転記する（片方だけ更新すると不一致になり
+`AUTHORIZATION_REQUIRED`（理由 `nonce_mismatch`）で拒否される）。同じ nonce
+を使った `armed_freeze()` は 1 回しか成功しない — 成功後に同じ承認ファイルで
+再実行すると `NONCE_ALREADY_USED` で拒否される（`campaigns_dir` 配下の
+既公開 manifest を nonce で突合する）。再実行したい場合は dry-run を再実行
+して新しい nonce を発行し、両ファイルへ改めて転記すること。
+
+### Gate 1（`gate1_campaign_execution.json`）— campaign 実行承認 + 費用上限 + E_use 境界
+
+```json
+{
+  "gate": "GATE1_CAMPAIGN_EXECUTION",
+  "approver": "ユーザー記入",
+  "approved_at_utc": "ユーザー記入 (ISO 8601, 例: 2026-09-05T00:00:00Z)",
+  "design_doc_sha256": "ユーザー記入 (現在の DESIGN_VG_METER_CAL_DEBT_v1.0.md の sha256)",
+  "memo_sha256": "ユーザー記入 (現在の IMPLEMENTATION_MAP_v1.md の sha256)",
+  "authorization_nonce": "ユーザー記入 (dry-run 報告からコピー。Gate 2 と同じ値にする)",
+  "cost_caps": {
+    "compute": "ユーザー記入 (CPU-seconds 上限。§2.1 の 13,680 call/impl 等から見積もる)",
+    "storage": "ユーザー記入 (bytes 上限。§2.1 の renders 4,560 本・約 1GB 以下から見積もる)",
+    "budget": "ユーザー記入 (課金 budget 上限。通貨単位はユーザー環境依存の無次元数として扱う)"
+  },
+  "e_use_bound_accepted": "ユーザー記入 (true/false。§2.3 の USER_ACCEPTED_USE_BOUND 行を受容するか)",
+  "max_claim_scope": ["ユーザー記入 (ABSOLUTE を目指してよい construct_id の配列。例: \"formant_frequency\", \"source_spectral_tilt\", \"injected_noise_fraction\")"]
+}
+```
+
+`cost_caps` の 3 キー（`compute`/`storage`/`budget`）は
+`c0_validate.COST_CAPS_REQUIRED_KEYS` と一致させてある（`cost_caps.CostCaps`
+dataclass も同じ 3 フィールド名）。単位: `compute` = 秒（float, CPU-seconds
+換算）、`storage` = bytes（int）、`budget` = 課金 budget 単位（float。具体的な
+通貨/クレジット種別はユーザー環境依存のためコード側では無次元数として扱う）。
+
+### Gate 2（`gate2_c0_freeze.json`）— C0 freeze の実行承認
+
+```json
+{
+  "gate": "GATE2_C0_FREEZE",
+  "approver": "ユーザー記入",
+  "approved_at_utc": "ユーザー記入 (ISO 8601)",
+  "design_doc_sha256": "ユーザー記入 (現在の DESIGN_VG_METER_CAL_DEBT_v1.0.md の sha256)",
+  "memo_sha256": "ユーザー記入 (現在の IMPLEMENTATION_MAP_v1.md の sha256)",
+  "authorization_nonce": "ユーザー記入 (dry-run 報告からコピー。Gate 1 と同じ値にする)",
+  "manifest_core_sha": "ユーザー記入 (python -m voice_genesis.calibration.c0_freeze の dry-run 出力が報告する manifest_core_sha をそのまま転記)"
+}
+```
+
+`manifest_core_sha` は `c0_freeze.build_manifest()` が返す manifest（`approvals`/
+`commitments`/`realized_split`/`realized_split_sha`/`campaign_id`/
+`authorization_nonce` の 6 節を一切含まない "core" manifest）の正規形 sha
+（`c0_freeze.manifest_core_sha()` — 呼び出し側が誤って frozen/full manifest
+を渡しても内部で `core_payload()` がこの 6 節を剥がしてから hash するため、
+常に同じ値になる。PR レビュー第 4/5 巡）。この値は Gate 1 の承認有無で変わる
+（`frozen_design.cost_caps`/`stop_rules` が Gate 1 の値を反映するため）ので、
+**Gate 1 承認 → dry-run 再実行 → 報告された `manifest_core_sha` を Gate 2 へ
+転記、の順で行うこと**。`armed_freeze()` はこの値と freshly built manifest の
+`manifest_core_sha` が一致しない場合、公開を拒否する（"承認は別 manifest 用"
+として fail-closed）。この値は `campaign_id` 自体の元にもなる
+（`RUN10-CAL-<YYYYMMDD>-<manifest_core_sha[:8]>`）ため、`campaign_id` を
+承認ファイル自身が保持する必要はない。frozen manifest 本体には
+`realized_split`（row_id→split の実現表そのもの。設計正本 §7「正本は C0
+manifest に列挙した実現済み row→split 表」）・`realized_split_sha`・
+`commitments`（secret の sha256）・`approvals`（Gate 1/Gate 2 承認ファイルの
+content sha256）・`campaign_id`・`authorization_nonce` が追加され、その
+full sha は freeze event に別欄 `manifest_sha` として記録される
+（`manifest_core_sha` とは別の値）。
+
+### Gate 3（`gate3_seal_acceptance.json`）— seal 保護水準の受容
+
+```json
+{
+  "gate": "GATE3_SEAL_ACCEPTANCE",
+  "approver": "ユーザー記入",
+  "approved_at_utc": "ユーザー記入 (ISO 8601)",
+  "design_doc_sha256": "ユーザー記入 (現在の DESIGN_VG_METER_CAL_DEBT_v1.0.md の sha256)",
+  "memo_sha256": "ユーザー記入 (現在の IMPLEMENTATION_MAP_v1.md の sha256)",
+  "seal_protection_level_accepted": "ユーザー記入 (true/false。§4 の宣言水準 — 事故的 leakage・事後改竄の検出まで、外部鍵管理なしに敵対的実行者は防げない — を受容するか)"
+}
+```
+
+Gate 3 は C0 freeze の**後**に成立する概念（seal は freeze 時に初めて存在する
+ため）であり、D1 の `c0_freeze.py` は Gate 3 承認ファイルを manifest にも
+freeze event にも一切埋め込まない。`approvals.py` は Gate 3 の record 型 +
+loader のみを提供し、D2 runner が別途 `GATE3_ACCEPTED` ledger event でこれを
+束縛する（本ブリーフの対象である D1 の範囲外）。
+
+### dry-run / armed 実行コマンド（承認済みファイルを配置した後）
+
+```bash
+# 1. dry-run: Gate 1/2 承認前でも実行できる。cost_caps/stop_rules の欠落のみが
+#    ブロック理由として表示される（Gate 1 未承認時の正しい挙動）。
+#    manifest_core_sha と campaign_id (今日凍結した場合の想定値) を報告する。
+python -m voice_genesis.calibration.c0_freeze
+
+# 2. Gate 1 承認ファイルを配置 → dry-run を再実行して manifest_core_sha を得る
+#    → その値を Gate 2 承認ファイルの manifest_core_sha へ転記して配置する。
+
+# 3. 武装実行（--armed + 環境変数 + 有効な Gate 2 承認ファイルの 3 要素が揃って
+#    初めて公開する。1 つでも欠ければ AUTHORIZATION_REQUIRED で副作用なく拒否）:
+VG_CAL_C0_FREEZE_AUTHORIZED=1 python -m voice_genesis.calibration.c0_freeze --armed
+```
