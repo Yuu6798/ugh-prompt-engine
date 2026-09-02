@@ -2,8 +2,12 @@
 
 - 各 instance を `render_root_secret` から streams 派生した RNG で 2 回
   fresh-process render し（subprocess worker `_render_worker.py`）、byte 一致
-  を要求する（違反 → `BLOCKED_C1_GENERATOR_NONDETERMINISTIC` stop event を
-  ledger へ記帳し `RenderNondeterministicError` で fail-closed）。
+  を要求する（違反 → 両 worker の実測 `cpu_seconds`/budget 1 work unit 分を
+  `render_nondeterministic` ledger event で先に課金・記帳してから
+  `BLOCKED_C1_GENERATOR_NONDETERMINISTIC` stop event を記帳し
+  `RenderNondeterministicError` で fail-closed。round 23 ADOPT (2)
+  `[UNDERSPEC-CAL-D52]` — 課金前に raise すると、cap を一切消費しないまま
+  同一の非決定的 instance へ何度でも retry できてしまうため）。
 - 一致すれば PCM を `renders/<row_id>/<probe_index>.pcm` へ書き、sha256 を
   `renders/<row_id>/<probe_index>.sha256` として併記、ledger `render` event
   (`row_id`/`probe_index`/`sha256`) を記帳する。
@@ -175,7 +179,15 @@ def render_instance(
     skip しなかった）unit のみ compute/storage（書き込んだ PCM bytes 数）を
     計上する。cap 超過を検出したら `stop_event` ledger event を記帳し
     `CostCapExceededError` で fail-closed する — 呼び出し元
-    `run_render_stage` の次 unit には進まない。
+    `run_render_stage` の次 unit には進まない。**非決定性検出時**（round 23
+    ADOPT (2)、`[UNDERSPEC-CAL-D52]`）も同様に、2 worker が既に消費した
+    compute（両者の `cpu_seconds` 合計）と budget 1 work unit 分を
+    `RenderNondeterministicError` を送出する**前**に課金・persist・cap 再検査
+    まで行う（storage は PCM を書かないため常に 0）——検出済みの
+    nondeterminism を charge せず raise すると、cap を一切消費しない retry
+    ループが可能になってしまうため。cap 超過を検出すればここでも
+    `CostCapExceededError` を優先して送出する（nondeterminism error より cap
+    breach が優先される既存の完了 render 経路と同じ優先順位）。
 
     **compute 課金**（round 14 finding #2）: compute へ課金する値は
     2 回の fresh-process render worker（`_render_worker.py`）が自ら報告した
@@ -239,6 +251,39 @@ def render_instance(
     wall_seconds = time.perf_counter() - wall_t0
     a, b = outputs
     if a != b:
+        # round 23 ADOPT (2) (`[UNDERSPEC-CAL-D52]`): both fresh-process
+        # workers already ran and reported real cpu_seconds by this point —
+        # discarding that before raising let a caller retry the same
+        # nondeterministic instance indefinitely without ever charging the
+        # compute it actually spent (a "free" cap-bypass loop). Charge the
+        # attempted work — compute = both workers' summed cpu_seconds,
+        # storage = 0 (no PCM is ever persisted on a mismatch), budget = 1
+        # work unit per the frozen `budget_accounting_mode` (same rule as a
+        # completed render) — persist, and run the cap check BEFORE raising,
+        # mirroring the completed-render charge path below. A
+        # `render_nondeterministic` ledger event carries the same charges so
+        # `campaign.caps.cap_counters_from_ledger()` can reconstruct them
+        # from the ledger alone even if `counters.json` is lost — it is
+        # appended unconditionally (not only when `cap_counters` is passed),
+        # matching how a `render` event's `cpu_seconds` is always recorded.
+        budget_charge = cost_caps.budget_charge_per_work_unit() if cost_caps is not None else 0.0
+        campaign.ledger.append(
+            {
+                "kind": "render_nondeterministic",
+                "row_id": row_id,
+                "probe_index": probe_index,
+                "cpu_seconds": cpu_seconds_total,
+                "storage_bytes": 0,
+            }
+        )
+        if cap_counters is not None:
+            cap_counters.add(compute=cpu_seconds_total, storage=0, budget=budget_charge)
+            save_cap_counters(campaign.campaign_dir, cap_counters)
+            if cost_caps is not None:
+                decision = cost_caps_check(cap_counters, cost_caps)
+                if decision is not None:
+                    campaign.ledger.append(decision.event_payload)
+                    raise CostCapExceededError(decision.detail)
         raise RenderNondeterministicError(row_id, probe_index)
 
     pcm_bytes = bytes.fromhex(a)

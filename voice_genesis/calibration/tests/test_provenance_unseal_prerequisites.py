@@ -288,6 +288,128 @@ def test_unseal_gate3_accepted_sha_pointing_to_event_after_unseal_fails_closed(t
     assert result.reason == "UNSEAL_GATE3_UNVERIFIED"
 
 
+# ---------------------------------------------------------------------------
+# round 23 ADOPT (3) (`[UNDERSPEC-CAL-D53]`): `_valid_gate3_accepted_payload`
+# must validate the producer's minimum approval envelope exactly as
+# `unseal_campaign()` emits it (`approval_content_sha256`, `approver`,
+# `approved_at_utc`, `seal_protection_level_accepted`) -- not just `kind` +
+# `seal_protection_level_accepted: True`. Before this, a `gate3_accepted`
+# event carrying only those two fields (no approver, no approval-content
+# binding, no timestamp) satisfied `_references_prior_gate3_acceptance()`.
+# ---------------------------------------------------------------------------
+
+
+def test_unseal_gate3_accepted_sha_referencing_minimal_envelope_fails_closed(tmp_path) -> None:
+    """A `gate3_accepted` event carrying only `kind` +
+    `seal_protection_level_accepted: True` -- what round 22's verifier alone
+    accepted -- must not authorize holdout access: `unseal_campaign()` (the
+    sole legitimate emitter) always supplies `approval_content_sha256`/
+    `approver`/`approved_at_utc` too, so a row missing them can only be a
+    crafted/legacy forgery."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    commitments = _append_prerequisites(ledger)
+    minimal_gate3 = ledger.append(
+        {
+            "kind": "gate3_accepted",
+            "seal_protection_level_accepted": True,
+        }
+    )
+    frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    ledger.append(
+        {
+            "kind": "holdout_unseal",
+            **commitments,
+            "selection_freeze_event_sha": frozen.entry_sha,
+            "gate3_accepted_sha": minimal_gate3.entry_sha,
+        }
+    )
+    ledger.append({"kind": "render", "row_id": "holdout-1"})
+
+    result = _check_leakage(
+        ledger.entries,
+        holdout_row_ids=["holdout-1"],
+        unseal_seq=None,
+    )
+    assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
+    assert result.reason == "UNSEAL_GATE3_UNVERIFIED"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"approval_content_sha256": "g" * 63}, id="short_content_sha"),
+        pytest.param({"approval_content_sha256": "G" * 64}, id="uppercase_content_sha"),
+        pytest.param({"approver": ""}, id="blank_approver"),
+        pytest.param({"approver": "   "}, id="whitespace_only_approver"),
+        pytest.param({"approved_at_utc": "2026-09-02 00:00:00"}, id="no_utc_offset"),
+        pytest.param({"approved_at_utc": "2026-09-02T00:00:00+09:00"}, id="non_utc_offset"),
+        pytest.param({"approved_at_utc": "not-a-timestamp"}, id="malformed_timestamp"),
+    ],
+)
+def test_unseal_gate3_accepted_sha_referencing_malformed_envelope_field_fails_closed(
+    tmp_path, overrides: dict[str, str]
+) -> None:
+    """Each individual envelope field the round 23 verifier newly checks must
+    independently gate acceptance -- an otherwise-complete `gate3_accepted`
+    event with just one malformed field must not authorize holdout access."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    commitments = _append_prerequisites(ledger)
+    payload = {
+        "kind": "gate3_accepted",
+        "approval_content_sha256": "f" * 64,
+        "seal_protection_level_accepted": True,
+        "approver": "test-approver",
+        "approved_at_utc": "2026-09-02T00:00:00Z",
+        **overrides,
+    }
+    malformed_gate3 = ledger.append(payload)
+    frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    ledger.append(
+        {
+            "kind": "holdout_unseal",
+            **commitments,
+            "selection_freeze_event_sha": frozen.entry_sha,
+            "gate3_accepted_sha": malformed_gate3.entry_sha,
+        }
+    )
+    ledger.append({"kind": "render", "row_id": "holdout-1"})
+
+    result = _check_leakage(
+        ledger.entries,
+        holdout_row_ids=["holdout-1"],
+        unseal_seq=None,
+    )
+    assert result.blocked == BlockedCode.BLOCKED_LEAKAGE
+    assert result.reason == "UNSEAL_GATE3_UNVERIFIED"
+
+
+def test_unseal_gate3_accepted_sha_referencing_production_envelope_passes(tmp_path) -> None:
+    """The full production envelope `unseal_campaign()` actually emits
+    (`_append_gate3_accepted()` -- `approval_content_sha256`/`approver`/
+    `approved_at_utc`/`seal_protection_level_accepted: True`) must still
+    authorize holdout access after the round 23 tightening."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    commitments = _append_prerequisites(ledger)
+    gate3_sha = _append_gate3_accepted(ledger)
+    frozen = ledger.append({"kind": "selection_frozen", **commitments})
+    unseal = ledger.append(
+        {
+            "kind": "holdout_unseal",
+            **commitments,
+            "selection_freeze_event_sha": frozen.entry_sha,
+            "gate3_accepted_sha": gate3_sha,
+        }
+    )
+    ledger.append({"kind": "render", "row_id": "holdout-1"})
+
+    result = _check_leakage(
+        ledger.entries,
+        holdout_row_ids=["holdout-1"],
+        unseal_seq=unseal.seq,
+    )
+    assert result.blocked is None
+
+
 def test_unseal_gate3_accepted_sha_referencing_declined_gate3_fails_closed(tmp_path) -> None:
     """A `gate3_accepted` event whose own payload declares
     `seal_protection_level_accepted: False` is chain-valid and precedes the

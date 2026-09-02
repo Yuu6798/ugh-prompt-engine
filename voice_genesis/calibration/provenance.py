@@ -26,6 +26,7 @@ import json
 import os
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, is_dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -486,22 +487,56 @@ def _valid_unseal_prerequisite_payload(
     return True
 
 
+def _is_iso8601_utc_timestamp(value: object) -> bool:
+    """round 23 ADOPT (3) (`[UNDERSPEC-CAL-D53]`): minimal ISO 8601 UTC check
+    for `gate3_accepted.approved_at_utc`. `approvals._parse_gate3_payload`
+    only requires a non-blank string (the approval-file shape check does not
+    police format), so this ledger-side verifier is the first point that
+    actually rejects a malformed or non-UTC timestamp before it is trusted as
+    evidence. Requires an explicit UTC offset (`Z` or `+00:00` — the shape
+    `campaign.unseal.unseal_campaign` copies verbatim from the approval
+    record); a bare local timestamp is not "UTC" per the field's own name and
+    this ruling.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() == timedelta(0)
+
+
 def _valid_gate3_accepted_payload(payload: Mapping[str, Any]) -> bool:
     """Validate the minimum frozen event envelope for the Gate 3 acceptance
-    event a `holdout_unseal` must reference (round 22 ADOPT, `UNDERSPEC-CAL-D50`).
+    event a `holdout_unseal` must reference (round 22 ADOPT, `UNDERSPEC-CAL-D50`;
+    extended round 23 ADOPT (3), `[UNDERSPEC-CAL-D53]`).
 
-    Mirrors the schema `approvals._parse_gate3_payload` enforces on the
-    approval file and that `campaign.unseal.unseal_campaign` copies verbatim
-    into the `gate3_accepted` ledger event it emits: when
-    `seal_protection_level_accepted` is present it must be a bool, and
-    `unseal_campaign` never appends a `gate3_accepted` event unless that bool
-    is `True` (it raises `UnsealError` first). A row claiming `kind ==
-    "gate3_accepted"` with the field absent or not `True` therefore cannot be
-    a legitimately emitted acceptance and is rejected.
+    Mirrors the *producer's* minimum approval envelope exactly as
+    `campaign.unseal.unseal_campaign` emits it into the `gate3_accepted`
+    ledger event — `approval_content_sha256` (64-char lowercase hex, the
+    approval file's own content digest), `approver` (non-blank identity
+    string), `approved_at_utc` (ISO 8601 UTC), and
+    `seal_protection_level_accepted is True`. Before round 23 this function
+    checked only `kind`/`seal_protection_level_accepted`, so a crafted
+    `gate3_accepted` row carrying just those two fields — with no approver,
+    no approval-content binding, and no timestamp — satisfied
+    `_references_prior_gate3_acceptance()` and authorized an unseal boundary.
+    `unseal_campaign` has always supplied all four fields (see
+    `campaign/unseal.py`), so this tightening rejects only rows that could
+    never have been legitimately emitted by it.
     """
     if payload.get("kind") != _GATE3_ACCEPTED_KIND:
         return False
-    return payload.get("seal_protection_level_accepted") is True
+    if payload.get("seal_protection_level_accepted") is not True:
+        return False
+    if not _is_sha256_hex(payload.get("approval_content_sha256")):
+        return False
+    approver = payload.get("approver")
+    if not isinstance(approver, str) or not approver.strip():
+        return False
+    return _is_iso8601_utc_timestamp(payload.get("approved_at_utc"))
 
 
 def _references_prior_gate3_acceptance(

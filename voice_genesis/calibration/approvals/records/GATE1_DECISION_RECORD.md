@@ -251,3 +251,16 @@ python -m voice_genesis.calibration.approvals refresh --gate gate1 \
 （本リポジトリ内の参照用コピー）へも同じ内容を再コピーすること
 （`approvals/README.md` が明記するとおり、loader はこの参照用コピーを
 一切読まない——正本は checkout 外の `VG_CAL_APPROVAL_DIR` のみ）。
+
+### 9.1 第 23 巡（PR #343）再刻印記録
+
+`IMPLEMENTATION_MAP_v1.md` の編集により `memo_sha256` 束縛が上記手順どおり
+無効化された（`design_doc_sha256` は不変のため一致を維持）。round 23 finding
+（採用）に従い `refresh_document_hashes()` を checkout 外の正本
+（`~/.vg_cal/approvals/gate1_campaign_execution.json`）と本リポジトリ内の
+参照用コピー（`gate1_campaign_execution.2026-09-02.json`）の両方へ適用し、
+`memo_sha256` のみを現在の `IMPLEMENTATION_MAP_v1.md` sha256 へ再スタンプした
+（両ファイルは再スタンプ後も内容一致。`design_doc_sha256`/`approver`/
+`authorization_nonce`/`cost_caps`/`e_use_bound_accepted`/`max_claim_scope`
+はいずれも無変更）。機械的な再スタンプであり、委任元（User）本人による
+変更内容の再確認は代替しない（本ファイル §9 冒頭の注記どおり）。

@@ -580,3 +580,42 @@ def test_cli_refresh_uses_default_approval_dir_when_omitted(
 def test_cli_refresh_missing_gate_arg_errors() -> None:
     with pytest.raises(SystemExit):
         approvals.main(["refresh"])
+
+
+# ---------------------------------------------------------------------------
+# round 23 ADOPT (1): the checkout-internal reference copy of the Gate 1
+# approval file (`approvals/README.md`'s "reference copy" rule — the loader
+# never reads it, only `~/.vg_cal/approvals/` does) drifts silently whenever
+# `DESIGN_VG_METER_CAL_DEBT_v1.0.md`/`IMPLEMENTATION_MAP_v1.md` are edited
+# without a matching `refresh_document_hashes()` re-stamp of that copy (the
+# live approval file used by `load_approval()` is outside the checkout, so
+# CI cannot see a drift there — only this reference copy is inspectable).
+# `[UNDERSPEC-CAL-D51]`.
+# ---------------------------------------------------------------------------
+
+_GATE1_RECORD_COPY_RELATIVE_PATH = (
+    "voice_genesis/calibration/approvals/records/gate1_campaign_execution.2026-09-02.json"
+)
+
+
+def test_repo_gate1_record_copy_document_hashes_match_tree_at_head() -> None:
+    """`approvals/records/gate1_campaign_execution.2026-09-02.json`（checkout
+    内の参照用コピー。正本は checkout 外の `~/.vg_cal/approvals/` で本テストの
+    対象外）の `design_doc_sha256`/`memo_sha256` が、現在の
+    `DESIGN_VG_METER_CAL_DEBT_v1.0.md`/`IMPLEMENTATION_MAP_v1.md` の実測 sha256
+    と一致することを確認する regression guard（round 23 ADOPT (1):
+    `memo_sha256` が stale だった finding の再発防止）。
+
+    期待値は `_design_sha()`/`_memo_sha()` が現在の working tree から都度
+    実測する値であり、本テスト内にハッシュを一切ハードコードしない —
+    DESIGN/メモを将来編集し、その都度 `refresh_document_hashes()` で参照用
+    コピーを追随させる正当な変更では失敗しない。比較対象は「committed record
+    の値」と「working tree のドキュメント実体」であり、`c0_validate.py` の
+    `repo.dirty_tree` チェック（未コミット差分の有無）とは無関係 — 本テストが
+    dirty tree で意味を変えることはない（GATE1_DECISION_RECORD.md 冒頭の
+    注記どおり、承認ファイルの正本自体は git 管理外）。
+    """
+    record_path = _REPO_ROOT / _GATE1_RECORD_COPY_RELATIVE_PATH
+    payload = json.loads(record_path.read_text(encoding="utf-8"))
+    assert payload["design_doc_sha256"] == _design_sha()
+    assert payload["memo_sha256"] == _memo_sha()

@@ -1,21 +1,21 @@
 {
-  "gate": "GATE1_CAMPAIGN_EXECUTION",
-  "approver": "Yuu6798 (delegated to Claude Fable 5.1 — recommended values, session 011x6MhCwdZWgxsnkXDVBrdx)",
   "approved_at_utc": "2026-09-02T01:46:11Z",
-  "design_doc_sha256": "48e15e485301e5e686dfa96870d190ad08d2bc0a57e39d1971f13c9cf8426508",
-  "memo_sha256": "afc97887f7a1561b52d3decb1d6c0609fd8c23f1965f9cb02c021fd83a9811ff",
+  "approver": "Yuu6798 (delegated to Claude Fable 5.1 — recommended values, session 011x6MhCwdZWgxsnkXDVBrdx)",
   "authorization_nonce": "b88b3ed26feb9a0866ab223f979bf4da",
   "cost_caps": {
-    "compute": 172800,
-    "storage": 4294967296,
     "budget": 20,
-    "budget_accounting_mode": "local_zero_cost"
+    "budget_accounting_mode": "local_zero_cost",
+    "compute": 172800,
+    "storage": 4294967296
   },
+  "design_doc_sha256": "48e15e485301e5e686dfa96870d190ad08d2bc0a57e39d1971f13c9cf8426508",
   "e_use_bound_accepted": true,
+  "gate": "GATE1_CAMPAIGN_EXECUTION",
   "max_claim_scope": [
     "formant_frequency",
     "source_spectral_tilt",
     "injected_noise_fraction",
     "fundamental_frequency"
-  ]
+  ],
+  "memo_sha256": "2f37d30e5f112cc301d055e7bbfd46f94e32218b8adbb090986a67ead6740dfb"
 }

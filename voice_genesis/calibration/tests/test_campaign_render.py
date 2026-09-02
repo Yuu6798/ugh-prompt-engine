@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 
 from voice_genesis.calibration.campaign import render_stage
+from voice_genesis.calibration.campaign.caps import cap_counters_from_ledger
 from voice_genesis.calibration.campaign.state import load_frozen_campaign
+from voice_genesis.calibration.cost_caps import CapCounters, CostCaps
 
 from ._campaign_fixture import build_tiny_campaign, small_matrix_subset
 
@@ -152,3 +154,86 @@ def test_c1_render_invalid_worker_cpu_seconds_fails_closed(
     ]
     assert len(stop_events) == 1
     assert stop_events[0]["reason"] == "INVALID_RENDER_WORKER_CPU_SECONDS"
+
+
+# ---------------------------------------------------------------------------
+# round 23 ADOPT (2) (`[UNDERSPEC-CAL-D52]`): a nondeterministic worker pair
+# must charge the attempted work (both workers' cpu_seconds, budget per the
+# frozen mode, storage 0) BEFORE raising — not discard it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_c1_render_nondeterministic_charges_before_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the two fresh-process workers disagree, both workers' reported
+    `cpu_seconds` and 1 budget work unit (per the frozen
+    `budget_accounting_mode`) must be charged to `cap_counters`, persisted,
+    and recorded as a `render_nondeterministic` ledger event that
+    `cap_counters_from_ledger()` can reconstruct — all BEFORE
+    `RenderNondeterministicError` is raised. Storage stays 0 (no PCM is ever
+    persisted on a mismatch)."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    call_count = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        call_count["n"] += 1
+        # 2 fresh-process workers for the same instance disagree on output.
+        pcm_hex = "00" if call_count["n"] == 1 else "01"
+        cpu_seconds = 1.0 if call_count["n"] == 1 else 2.0
+        return _FakeCompletedProcess(
+            stdout=json.dumps({"pcm_hex": pcm_hex, "cpu_seconds": cpu_seconds})
+        )
+
+    monkeypatch.setattr(render_stage.subprocess, "run", fake_run)
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1000.0,
+        storage=1_000_000,
+        budget=1000.0,
+        budget_accounting_mode="per_unit_fixed",
+        budget_unit_cost=3.0,
+    )
+
+    with pytest.raises(render_stage.RenderNondeterministicError):
+        render_stage.run_render_stage(
+            campaign, subset, stage="c1", cap_counters=counters, cost_caps=caps
+        )
+
+    # both workers' cpu_seconds were charged (1.0 + 2.0); storage stayed 0;
+    # budget charged 1 work unit at the frozen per-unit cost.
+    assert counters.compute_used == pytest.approx(3.0)
+    assert counters.storage_used == 0
+    assert counters.budget_used == pytest.approx(3.0)
+
+    nondet_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "render_nondeterministic"
+    ]
+    assert len(nondet_events) == 1
+    assert nondet_events[0]["cpu_seconds"] == pytest.approx(3.0)
+    assert nondet_events[0]["storage_bytes"] == 0
+    assert nondet_events[0]["row_id"] == subset[0].row_id
+    assert nondet_events[0]["probe_index"] == 0
+
+    stop_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0]["reason"] == "BLOCKED_C1_GENERATOR_NONDETERMINISTIC"
+
+    # no PCM was ever persisted for the disagreeing instance.
+    assert not campaign.renders_dir.exists() or not any(campaign.renders_dir.iterdir())
+
+    # reconstruction from the ledger alone matches the persisted counters —
+    # cap_counters_from_ledger() must extend its reducer to see this kind.
+    derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
+    assert derived.compute_used == pytest.approx(counters.compute_used)
+    assert derived.storage_used == counters.storage_used
+    assert derived.budget_used == pytest.approx(counters.budget_used)

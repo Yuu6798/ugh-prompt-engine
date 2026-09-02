@@ -254,6 +254,13 @@ def cap_counters_from_ledger(
       completed render work unit. `cpu_seconds` (round 14 finding #2,
       `[UNDERSPEC-CAL-D29]`) and `pcm_bytes` (round 15 finding #3, newly
       recorded alongside it) are summed 1:1 per event.
+    - `render_nondeterministic` events (`render_stage.render_instance`,
+      round 23 ADOPT (2), `[UNDERSPEC-CAL-D52]`): each event is 1 *attempted*
+      render work unit whose 2 fresh-process workers disagreed — counted
+      toward `render_units` (so it contributes 1 work unit of `budget`, same
+      as a completed `render`) and its `cpu_seconds` summed the same way;
+      `storage_bytes` is always `0` on these events (no PCM is ever
+      persisted on a mismatch).
     - `meter_call` events (`measure_stage.run_measurement_for_instance`):
       **6 ledger records per (row_id, probe_index, candidate_id) work
       unit** (within3 + fresh3). `cpu_seconds` is the *same per-work-unit
@@ -313,6 +320,16 @@ def cap_counters_from_ledger(
         if kind == "render":
             compute += _finite_nonneg_float(payload.get("cpu_seconds"))
             storage += _finite_nonneg_int(payload.get("pcm_bytes"))
+            render_units += 1
+        elif kind == "render_nondeterministic":
+            # round 23 ADOPT (2) (`[UNDERSPEC-CAL-D52]`): the attempted work
+            # both fresh-process workers already spent before their outputs
+            # were found to disagree — charged the same way a completed
+            # `render` event is (1 work unit toward `budget`), just with
+            # `storage_bytes` always 0 (no PCM is ever persisted on a
+            # mismatch, unlike `render`'s `pcm_bytes`).
+            compute += _finite_nonneg_float(payload.get("cpu_seconds"))
+            storage += _finite_nonneg_int(payload.get("storage_bytes"))
             render_units += 1
         elif kind == "meter_call":
             storage += _finite_nonneg_int(payload.get("storage_bytes"))
