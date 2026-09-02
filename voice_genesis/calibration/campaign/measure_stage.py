@@ -62,7 +62,7 @@ from voice_genesis.calibration.campaign import render_stage
 from voice_genesis.calibration.campaign.caps import (
     CostCapExceededError,
     WorkerCpuSecondsInvalidError,
-    charge_worker_failure,
+    charge_worker_attempts_before_raising,
     reported_cpu_seconds_or_none,
     save_cap_counters,
     validate_worker_cpu_seconds,
@@ -472,10 +472,21 @@ def _run_one_fresh_call(
     `RUSAGE_CHILDREN` delta around this call (`_children_cpu_seconds()`) — a
     timed-out worker never gets a report-recovery attempt (it was killed
     before it could reliably finish writing one; `caps.charge_worker_failure()`
-    docstring). This is distinct from — and does not touch — the existing
-    `WorkerCpuSecondsInvalidError` path below (a worker that exits 0 with
-    parseable JSON but an invalid `cpu_seconds` field): that stays
-    uncharged, per the pre-existing round 14 finding #2 contract."""
+    docstring).
+
+    round 25 (`[UNDERSPEC-CAL-D57]`) finding "Charge parseable but invalid
+    worker results": a worker that exits 0 with parseable JSON but an
+    invalid `cpu_seconds` field, or a result shape `meter_output_from_dict()`
+    cannot construct a `MeterOutput` from, now ALSO raises
+    `_FreshWorkerFailure("malformed_output", ...)` instead of letting
+    `WorkerCpuSecondsInvalidError`/`ValueError`/`TypeError` escape this
+    function's `_FreshWorkerFailure` contract uncharged — the round 14
+    finding #2 "stays uncharged" posture this supersedes meant such a worker
+    could be retried indefinitely for free. The charged compute prefers the
+    worker's own reported `cpu_seconds` when it validated fine (a
+    result-shape failure AFTER a valid `cpu_seconds`) — only falling back to
+    the `RUSAGE_CHILDREN` delta when `cpu_seconds` itself is the unusable
+    field."""
     payload = {
         "candidate_id": candidate_id,
         "pcm_path": str(pcm_path),
@@ -512,11 +523,26 @@ def _run_one_fresh_call(
             _children_cpu_seconds() - children_t0,
             ValueError(f"measure_stage: fresh worker returned non-object JSON: {raw!r}"),
         )
-    cpu_seconds = validate_worker_cpu_seconds(
-        raw.get("cpu_seconds"),
-        context=f"measure_stage: fresh-process worker for candidate_id={candidate_id!r}",
-    )
-    return meter_output_from_dict(raw), cpu_seconds
+    try:
+        cpu_seconds = validate_worker_cpu_seconds(
+            raw.get("cpu_seconds"),
+            context=f"measure_stage: fresh-process worker for candidate_id={candidate_id!r}",
+        )
+    except WorkerCpuSecondsInvalidError as exc:
+        # round 25 (`[UNDERSPEC-CAL-D57]`): cpu_seconds itself is the
+        # unusable field here, so it cannot be the charge -- fall back to
+        # the RUSAGE_CHILDREN delta.
+        raise _FreshWorkerFailure(
+            "malformed_output", _children_cpu_seconds() - children_t0, exc
+        ) from exc
+    try:
+        output = meter_output_from_dict(raw)
+    except (KeyError, TypeError, ValueError) as exc:
+        # round 25 (`[UNDERSPEC-CAL-D57]`): cpu_seconds validated fine above
+        # -- it is itself a usable figure, so charge it rather than the
+        # coarser RUSAGE_CHILDREN delta.
+        raise _FreshWorkerFailure("malformed_output", cpu_seconds, exc) from exc
+    return output, cpu_seconds
 
 
 def run_fresh_process_calls(
@@ -545,34 +571,64 @@ def run_fresh_process_calls(
     `WorkerCpuSecondsInvalidError` を伝播する（測定結果ごと破棄 — fail
     closed）。
 
-    round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): いずれかの worker が
-    post-spawn で失敗（timeout / nonzero exit / malformed JSON —
-    `_run_one_fresh_call` が `_FreshWorkerFailure` として送出）した場合は、
-    `caps.charge_worker_failure()` でその失敗した 1 attempt 分の CPU を
-    `worker_failed` ledger event として記帳・（`cap_counters` があれば）
-    課金・cap 再検査してから、元の例外（`_FreshWorkerFailure.cause`）を
-    そのまま再送出する（cap 超過を検出すれば `CostCapExceededError` を優先
-    ——既存の他 charge-then-check 呼び出し箇所と同じ優先順位）。
-    `ThreadPoolExecutor` 経由でも `future.result()` が呼び出し元スレッド
-    （本関数）で例外を再送出するため、課金は常にこの関数の中で直列に
-    行われる。"""
-    try:
-        if max_workers <= 1:
-            results = [
-                _run_one_fresh_call(candidate.candidate_id, pcm_path, sr, f0_hz, timeout_s)
+    round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`): a worker that fails
+    post-spawn (timeout / nonzero exit / malformed JSON — `_run_one_fresh_call`
+    raising `_FreshWorkerFailure`) must not be free.
+
+    round 25 (`[UNDERSPEC-CAL-D57]`) "Charge every worker attempt before
+    propagating a repeat failure": this function now runs **every** attempt
+    in the batch to completion regardless of `max_workers` — a sequential
+    (`max_workers<=1`) repeat that fails no longer skips the remaining
+    not-yet-started repeats, and a `ThreadPoolExecutor` batch (`max_workers>1`)
+    no longer discards the results of futures the executor had already
+    started (never cancelled either way) just because one future raised.
+    Once every attempt's outcome is collected: if none failed, this is the
+    ordinary success path (`cpu_seconds_total` is simply the sum, as
+    before). If one or more failed, `caps.charge_worker_attempts_before_raising()`
+    charges the WHOLE batch in one shot — every successful attempt's own
+    `cpu_seconds` (its `MeasurementRecord` is discarded, never becomes a
+    `meter_call` event, but the compute it already spent is charged via a
+    `worker_attempts_discarded` ledger event) plus every failed attempt's
+    charge (`worker_failed` ledger event each, same shape
+    `charge_worker_failure()` used alone before this revision) — persists,
+    cap-checks once, then re-raises the FIRST failed attempt's original
+    cause (cap breach still takes priority via `CostCapExceededError`, same
+    priority as every other charge-then-check call site in this package).
+    `ThreadPoolExecutor` futures are read via `future.result()` from this
+    function's own thread in submission order, so both the collection and
+    the eventual charging stay single-threaded/deterministic."""
+    outcomes: list[tuple[MeterOutput, float] | _FreshWorkerFailure] = []
+    if max_workers <= 1:
+        for _ in range(repeats):
+            try:
+                outcomes.append(
+                    _run_one_fresh_call(candidate.candidate_id, pcm_path, sr, f0_hz, timeout_s)
+                )
+            except _FreshWorkerFailure as exc:
+                outcomes.append(exc)
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = [
+                pool.submit(
+                    _run_one_fresh_call, candidate.candidate_id, pcm_path, sr, f0_hz, timeout_s
+                )
                 for _ in range(repeats)
             ]
-        else:
-            with ThreadPoolExecutor(max_workers=max_workers) as pool:
-                futures = [
-                    pool.submit(
-                        _run_one_fresh_call, candidate.candidate_id, pcm_path, sr, f0_hz, timeout_s
-                    )
-                    for _ in range(repeats)
-                ]
-                results = [f.result() for f in futures]
-    except _FreshWorkerFailure as exc:
-        charge_worker_failure(
+            for future in futures:
+                try:
+                    outcomes.append(future.result())
+                except _FreshWorkerFailure as exc:
+                    outcomes.append(exc)
+
+    failures = [outcome for outcome in outcomes if isinstance(outcome, _FreshWorkerFailure)]
+    if failures:
+        successes = [
+            cpu_seconds
+            for outcome in outcomes
+            if not isinstance(outcome, _FreshWorkerFailure)
+            for _output, cpu_seconds in [outcome]
+        ]
+        charge_worker_attempts_before_raising(
             campaign.ledger,
             campaign.campaign_dir,
             cap_counters=cap_counters,
@@ -581,11 +637,13 @@ def run_fresh_process_calls(
             row_id=row_id,
             probe_index=probe_index,
             candidate_id=candidate.candidate_id,
-            failure_kind=exc.failure_kind,
-            compute=exc.compute,
-            cause=exc.cause,
+            successes=successes,
+            failures=[(exc.failure_kind, exc.compute, exc.cause) for exc in failures],
         )
-    cpu_seconds_total = sum(cpu_seconds for _output, cpu_seconds in results)
+
+    # No failures reached this point (the branch above always raises) -- every
+    # outcome is a real `(output, cpu_seconds)` pair.
+    cpu_seconds_total = sum(cpu_seconds for _output, cpu_seconds in outcomes)  # type: ignore[misc]
     records = [
         MeasurementRecord(
             row_id=row_id,
@@ -596,7 +654,7 @@ def run_fresh_process_calls(
             process_id=f"fresh-process-{i}",
             output=output,
         )
-        for i, (output, _cpu_seconds) in enumerate(results)
+        for i, (output, _cpu_seconds) in enumerate(outcomes)  # type: ignore[misc]
     ]
     return records, cpu_seconds_total
 
@@ -652,18 +710,27 @@ def run_measurement_for_instance(
     `wall_seconds` として ledger `meter_call` event へ informational にのみ
     記録する。fresh worker が無効な `cpu_seconds` を報告した場合は
     `WorkerCpuSecondsInvalidError` を stale/invalid work unit として
-    `stop_event` 記帳の上 fail-closed する（測定・記帳のいずれも行わない）。
+    `stop_event` 記帳の上 fail-closed する（`meter_call` 記帳は一切行わない
+    —round 25 (`[UNDERSPEC-CAL-D57]`) 以降はこの attempt 自体は
+    `worker_failed`/`malformed_output` として下記のとおり課金される。§下記参照）。
 
-    **worker 失敗時の課金**（round 24 ADOPT (1)、`[UNDERSPEC-CAL-D55]`）:
-    fresh worker が起動後に timeout / nonzero exit / malformed JSON で
-    失敗した場合（＝上記の「無効な `cpu_seconds`」とは異なり、そもそも
-    well-formed な結果を返さなかった場合）は `run_fresh_process_calls()` が
-    `caps.charge_worker_failure()` を経由して、その 1 attempt が実際に
-    消費した compute（可能なら worker 自身の報告値、無ければ親プロセスの
-    `RUSAGE_CHILDREN` 差分）を `worker_failed` ledger event として記帳・
-    課金してから元の例外を再送出する — 課金前に raise していた旧実装は、
-    クラッシュする candidate への retry が worker CPU を無制限・無課金で
-    消費できてしまっていた。"""
+    **worker 失敗時の課金**（round 24 ADOPT (1) `[UNDERSPEC-CAL-D55]`、
+    round 25 `[UNDERSPEC-CAL-D57]` で統一規則へ改訂）: fresh worker が
+    起動後に timeout / nonzero exit / malformed JSON で失敗した場合
+    （exit 0 かつ parseable JSON だが `cpu_seconds` 無効/結果形状不正——旧実装で
+    無課金だった経路——も round 25 でこの扱いに合流した）は
+    `run_fresh_process_calls()` が、同一 batch の**全** attempt（成功・失敗
+    問わず全 `repeats` 回、`--workers>1` でも既に開始済みの future を
+    途中キャンセルせず全員完走させる）の結果を集めてから、
+    `caps.charge_worker_attempts_before_raising()` を経由して一括課金する:
+    失敗した各 attempt は `worker_failed` event（`failure_kind` 別）、
+    同一 batch 内で成功したが結果を破棄する attempt（他の repeat が失敗した
+    ため）は `worker_attempts_discarded` event（`discarded_success_attempts`
+    に各自の `cpu_seconds`）として記帳・課金・cap 再検査してから、
+    batch 内で最初に失敗した attempt の元の例外を再送出する — 旧実装
+    （round 24 時点）は失敗した 1 attempt のみを課金し、既に完了していた
+    兄弟 attempt（sequential では先行する成功、concurrent では他の future）
+    を無課金で破棄していた。"""
     try:
         resumed = _completed_meter_call_records(
             campaign.ledger.entries, row_id, probe_index, candidate.candidate_id

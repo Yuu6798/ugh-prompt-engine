@@ -187,32 +187,137 @@ def charge_worker_failure(
     breach), re-raises `cause` unchanged so the caller sees exactly the
     original `subprocess.TimeoutExpired`/`CalledProcessError`/
     `JSONDecodeError` — this function never masks it, only charges before it
-    propagates."""
-    payload: dict[str, object] = {
-        "kind": "worker_failed",
-        "stage": stage,
-        "row_id": row_id,
-        "probe_index": probe_index,
-        "failure_kind": failure_kind,
-        "cpu_seconds": compute,
-        "storage_bytes": 0,
-    }
-    if candidate_id is not None:
-        payload["candidate_id"] = candidate_id
-    ledger.append(payload)
+    propagates.
+
+    round 25 (`[UNDERSPEC-CAL-D57]`): kept as a thin single-attempt
+    convenience wrapper — delegates to `charge_worker_attempts_before_raising()`
+    with an empty `successes` and this one `(failure_kind, compute, cause)`
+    as its sole `failures` entry, so the two functions can never drift on
+    the `worker_failed` event shape or the charge-then-persist-then-check
+    sequencing."""
+    charge_worker_attempts_before_raising(
+        ledger,
+        campaign_dir,
+        cap_counters=cap_counters,
+        cost_caps=cost_caps,
+        stage=stage,
+        row_id=row_id,
+        probe_index=probe_index,
+        candidate_id=candidate_id,
+        successes=[],
+        failures=[(failure_kind, compute, cause)],
+    )
+
+
+def charge_worker_attempts_before_raising(
+    ledger: Ledger,
+    campaign_dir: Path,
+    *,
+    cap_counters: CapCounters | None,
+    cost_caps: CostCaps | None,
+    stage: str,
+    row_id: str,
+    probe_index: int,
+    candidate_id: str | None,
+    successes: Sequence[float],
+    failures: Sequence[tuple[str, float, BaseException]],
+) -> NoReturn:
+    """round 25 (`[UNDERSPEC-CAL-D57]`): unified worker-attempt accounting —
+    every spawned attempt in one repeat/worker batch (measure's N
+    fresh-process repeats, render's 2-worker pair) is charged exactly once,
+    whatever its outcome, BEFORE the batch's first failure propagates.
+    Supersedes the round 24 ADOPT (1) (`[UNDERSPEC-CAL-D55]`)
+    `charge_worker_failure()` posture of charging (and raising) only the ONE
+    attempt that happened to fail — that silently discarded every
+    already-completed sibling attempt (a successful repeat that finished
+    before the failing one, or, under `--workers > 1`, every other future
+    the executor had already started) uncharged, a free retry loop by the
+    same reasoning `charge_worker_failure` itself closed for the single-
+    failure case.
+
+    Callers collect the outcome of EVERY attempt in the batch first — never
+    cancel a started one, never stop the batch early on its first failure —
+    then pass:
+
+    - `successes`: the reported `cpu_seconds` of each attempt that
+      completed with a usable result but whose batch nonetheless failed (so
+      that result itself is discarded — never turned into a `meter_call`/
+      `render` event, per the existing resume/single-writer contract).
+      Recorded as one `worker_attempts_discarded` ledger event carrying
+      `discarded_success_attempts` (one `{"cpu_seconds": ...}` entry per
+      discarded success, so `cap_counters_from_ledger()` can recover both
+      the per-attempt compute and the per-attempt budget-unit count from the
+      ledger alone) — appended only when `successes` is non-empty.
+    - `failures`: `(failure_kind, compute, cause)` per failed attempt, in
+      the order attempts were started — each charged via the same
+      `worker_failed` ledger event shape `charge_worker_failure()` uses (one
+      event per failed attempt, no batching; `cap_counters_from_ledger()`
+      already sums these without dedup). Must be non-empty — a batch with no
+      failure at all has nothing to charge-then-raise here; the ordinary
+      all-succeeded path charges through its own normal (non-failure) route.
+
+    Charging (`cap_counters.add()`: compute = the sum of every attempt's own
+    charge across both `successes` and `failures`, storage always 0, budget
+    = 1 work unit per attempt — `len(successes) + len(failures)` — the same
+    per-attempt granularity `worker_failed` already uses alone) happens once
+    for the whole batch, after every ledger event above is appended, then
+    persists and runs the cap check ONCE (a breach raises
+    `CostCapExceededError` in preference to the original failure, same
+    priority as every other charge-then-check call site in this package).
+    Finally re-raises `failures[0][2]` — the first failed attempt in batch
+    (i.e. start) order — unchanged, exactly as `charge_worker_failure` does
+    for a single failure."""
+    if not failures:
+        raise ValueError(
+            "campaign.caps.charge_worker_attempts_before_raising: "
+            "failures must be non-empty"
+        )
+    if successes:
+        discarded_payload: dict[str, object] = {
+            "kind": "worker_attempts_discarded",
+            "stage": stage,
+            "row_id": row_id,
+            "probe_index": probe_index,
+            "discarded_success_attempts": [
+                {"cpu_seconds": cpu_seconds} for cpu_seconds in successes
+            ],
+            "storage_bytes": 0,
+        }
+        if candidate_id is not None:
+            discarded_payload["candidate_id"] = candidate_id
+        ledger.append(discarded_payload)
+    for failure_kind, compute, _cause in failures:
+        failure_payload: dict[str, object] = {
+            "kind": "worker_failed",
+            "stage": stage,
+            "row_id": row_id,
+            "probe_index": probe_index,
+            "failure_kind": failure_kind,
+            "cpu_seconds": compute,
+            "storage_bytes": 0,
+        }
+        if candidate_id is not None:
+            failure_payload["candidate_id"] = candidate_id
+        ledger.append(failure_payload)
+
+    first_cause = failures[0][2]
     if cap_counters is not None:
-        budget_charge = cost_caps.budget_charge_per_work_unit() if cost_caps is not None else 0.0
-        cap_counters.add(compute=compute, storage=0, budget=budget_charge)
-        # Persist before the breach check (finding #1 pattern): a unit's
-        # consumption is never lost even when this same unit trips
+        total_compute = sum(successes) + sum(compute for _fk, compute, _c in failures)
+        budget_per_unit = cost_caps.budget_charge_per_work_unit() if cost_caps is not None else 0.0
+        attempt_count = len(successes) + len(failures)
+        cap_counters.add(
+            compute=total_compute, storage=0, budget=budget_per_unit * attempt_count
+        )
+        # Persist before the breach check (finding #1 pattern): the whole
+        # batch's consumption is never lost even when this same batch trips
         # fail-closed below.
         save_cap_counters(campaign_dir, cap_counters)
         if cost_caps is not None:
             decision = cost_caps_check(cap_counters, cost_caps)
             if decision is not None:
                 ledger.append(decision.event_payload)
-                raise CostCapExceededError(decision.detail) from cause
-    raise cause
+                raise CostCapExceededError(decision.detail) from first_cause
+    raise first_cause
 
 
 def counters_path(campaign_dir: Path) -> Path:
@@ -417,19 +522,34 @@ def cap_counters_from_ledger(
       the fix). `storage_bytes` is always `0` on these events (no output is
       ever persisted on a failed attempt). Counted toward `budget` the same
       way `render`/`render_nondeterministic` are (1 work unit each).
+    - `worker_attempts_discarded` events (round 25, `[UNDERSPEC-CAL-D57]`,
+      `caps.charge_worker_attempts_before_raising()`): recorded alongside a
+      `worker_failed` event whenever a batch of worker attempts (measure's N
+      fresh-process repeats, render's 2-worker pair) had at least one
+      attempt succeed but the batch as a whole still failed (a sibling
+      attempt in the same batch failed) — the sibling successes' results
+      are discarded (never a `meter_call`/`render` event) but the compute
+      they already spent is not free. Each entry of
+      `discarded_success_attempts` is its own charged attempt (own
+      `cpu_seconds`, own budget work unit) — the same per-attempt
+      granularity `worker_failed` uses, just carried as a list on 1 event
+      instead of 1 event each (the discarded attempts have no `failure_kind`
+      to key separate events on). `storage_bytes` is always `0` (a discarded
+      attempt's result is never persisted).
     - `budget`: reconstructed as `budget_charge_per_work_unit() ×
       (completed render units + completed meter-call work units + charged
-      worker-failure attempts)` per the frozen `budget_accounting_mode`
-      (round 13 finding #3; round 24 ADOPT (1) extended the unit count to
-      include `worker_failed`). `None` `cost_caps` (Gate 1 not yet frozen
-      with cost caps) reconstructs `budget_used=0.0` — informational only,
-      nothing enforces it either.
+      worker-failure attempts + charged discarded-success attempts)` per the
+      frozen `budget_accounting_mode` (round 13 finding #3; round 24 ADOPT
+      (1) extended the unit count to include `worker_failed`; round 25
+      extended it again to include `worker_attempts_discarded`). `None`
+      `cost_caps` (Gate 1 not yet frozen with cost caps) reconstructs
+      `budget_used=0.0` — informational only, nothing enforces it either.
     """
     compute = 0.0
     storage = 0
     render_units = 0
     meter_units = 0
-    worker_failure_units = 0
+    worker_attempt_units = 0
     seen_meter_keys: set[tuple[object, object, object]] = set()
     for entry in ledger_entries:
         payload = entry.payload
@@ -472,12 +592,24 @@ def cap_counters_from_ledger(
             # — no dedup, every event is its own charged attempt.
             compute += _finite_nonneg_float(payload.get("cpu_seconds"))
             storage += _finite_nonneg_int(payload.get("storage_bytes"))
-            worker_failure_units += 1
+            worker_attempt_units += 1
+        elif kind == "worker_attempts_discarded":
+            # round 25 (`[UNDERSPEC-CAL-D57]`): see docstring above — each
+            # entry of `discarded_success_attempts` is its own charged
+            # attempt, summed the same way `worker_failed` events are.
+            attempts = payload.get("discarded_success_attempts")
+            if isinstance(attempts, Sequence) and not isinstance(attempts, (str, bytes)):
+                for attempt in attempts:
+                    if not isinstance(attempt, Mapping):
+                        continue
+                    compute += _finite_nonneg_float(attempt.get("cpu_seconds"))
+                    worker_attempt_units += 1
+            storage += _finite_nonneg_int(payload.get("storage_bytes"))
     budget = 0.0
     if cost_caps is not None:
         per_unit = cost_caps.budget_charge_per_work_unit()
         if per_unit:
-            budget = per_unit * (render_units + meter_units + worker_failure_units)
+            budget = per_unit * (render_units + meter_units + worker_attempt_units)
     return CapCounters(compute_used=compute, storage_used=storage, budget_used=budget)
 
 
@@ -533,6 +665,7 @@ __all__ = [
     "validate_worker_cpu_seconds",
     "reported_cpu_seconds_or_none",
     "charge_worker_failure",
+    "charge_worker_attempts_before_raising",
     "counters_path",
     "cost_caps_from_manifest",
     "load_cap_counters",

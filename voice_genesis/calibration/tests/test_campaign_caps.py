@@ -15,10 +15,14 @@ import json
 import math
 from pathlib import Path
 
+import pytest
+
 from voice_genesis.calibration.campaign.caps import (
     CapCounters,
+    CostCapExceededError,
     CountersCorruptError,
     cap_counters_from_ledger,
+    charge_worker_attempts_before_raising,
     counters_path,
     load_cap_counters,
     reconcile_cap_counters,
@@ -328,3 +332,196 @@ def test_reconcile_propagates_counters_corrupt_error_for_malformed_persisted_fil
         raise AssertionError("expected CountersCorruptError")
     except CountersCorruptError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# round 25 (`[UNDERSPEC-CAL-D57]`): unified worker-attempt accounting --
+# `charge_worker_attempts_before_raising()` charges a whole batch (every
+# spawned attempt, success or failure) in one shot before re-raising the
+# first failure, and `cap_counters_from_ledger()` reconstructs both
+# `worker_failed` and the new `worker_attempts_discarded` event kinds.
+# ---------------------------------------------------------------------------
+
+
+def _fake_worker_attempts_discarded_event(
+    stage: str, row_id: str, probe_index: int, *, cpu_seconds_list: list
+) -> dict:
+    return {
+        "kind": "worker_attempts_discarded",
+        "stage": stage,
+        "row_id": row_id,
+        "probe_index": probe_index,
+        "discarded_success_attempts": [{"cpu_seconds": c} for c in cpu_seconds_list],
+        "storage_bytes": 0,
+    }
+
+
+def test_cap_counters_from_ledger_sums_worker_attempts_discarded_per_attempt(
+    tmp_path: Path,
+) -> None:
+    """Each entry of `discarded_success_attempts` is its own charged
+    attempt -- both for `compute` (summed) and `budget` (1 unit / entry),
+    the same per-attempt granularity `worker_failed` uses alone."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        _fake_worker_attempts_discarded_event(
+            "measure", "r1", 0, cpu_seconds_list=[2.0, 3.0]
+        )
+    )
+    caps = CostCaps(
+        compute=1000.0,
+        storage=1000,
+        budget=1000.0,
+        budget_accounting_mode="per_unit_fixed",
+        budget_unit_cost=2.0,
+    )
+    derived = cap_counters_from_ledger(ledger.entries, caps)
+    assert derived.compute_used == 5.0
+    assert derived.storage_used == 0
+    assert derived.budget_used == 4.0  # 2 attempts * 2.0/unit
+
+
+def test_cap_counters_from_ledger_combines_worker_failed_and_discarded(tmp_path: Path) -> None:
+    """A single failed-batch charge (1 `worker_failed` + 1
+    `worker_attempts_discarded` carrying 2 successes) reconstructs to 3
+    attempt-units total."""
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    ledger.append(
+        {
+            "kind": "worker_failed",
+            "stage": "measure",
+            "row_id": "r1",
+            "probe_index": 0,
+            "candidate_id": "F0-B0-CURRENT",
+            "failure_kind": "timeout",
+            "cpu_seconds": 1.5,
+            "storage_bytes": 0,
+        }
+    )
+    ledger.append(
+        _fake_worker_attempts_discarded_event(
+            "measure", "r1", 0, cpu_seconds_list=[2.0, 2.0]
+        )
+    )
+    caps = CostCaps(
+        compute=1000.0,
+        storage=1000,
+        budget=1000.0,
+        budget_accounting_mode="per_unit_fixed",
+        budget_unit_cost=5.0,
+    )
+    derived = cap_counters_from_ledger(ledger.entries, caps)
+    assert derived.compute_used == pytest.approx(1.5 + 2.0 + 2.0)
+    assert derived.budget_used == pytest.approx(3 * 5.0)
+
+
+# ---------------------------------------------------------------------------
+# `charge_worker_attempts_before_raising()`
+# ---------------------------------------------------------------------------
+
+
+def test_charge_worker_attempts_before_raising_charges_batch_and_reraises_first_failure(
+    tmp_path: Path,
+) -> None:
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1000.0,
+        storage=1000,
+        budget=1000.0,
+        budget_accounting_mode="per_unit_fixed",
+        budget_unit_cost=5.0,
+    )
+    first_cause = TimeoutError("attempt 2 timed out")
+    second_cause = TimeoutError("attempt 4 timed out")
+
+    try:
+        charge_worker_attempts_before_raising(
+            ledger,
+            tmp_path,
+            cap_counters=counters,
+            cost_caps=caps,
+            stage="measure",
+            row_id="r1",
+            probe_index=0,
+            candidate_id="F0-B0-CURRENT",
+            successes=[2.0, 2.0],
+            failures=[("timeout", 1.5, first_cause), ("timeout", 1.0, second_cause)],
+        )
+        raise AssertionError("expected the first failure's cause to be re-raised")
+    except TimeoutError as exc:
+        assert exc is first_cause  # the FIRST failure, not the second
+
+    worker_failed = [e.payload for e in ledger.entries if e.payload.get("kind") == "worker_failed"]
+    assert len(worker_failed) == 2
+    assert [w["cpu_seconds"] for w in worker_failed] == [1.5, 1.0]
+
+    discarded = [
+        e.payload for e in ledger.entries if e.payload.get("kind") == "worker_attempts_discarded"
+    ]
+    assert len(discarded) == 1
+    assert discarded[0]["discarded_success_attempts"] == [
+        {"cpu_seconds": 2.0},
+        {"cpu_seconds": 2.0},
+    ]
+
+    # compute: 2 successes (2.0 each) + 2 failures (1.5, 1.0) = 6.5.
+    assert counters.compute_used == pytest.approx(6.5)
+    # budget: 1 unit / attempt, 4 attempts total.
+    assert counters.budget_used == pytest.approx(4 * 5.0)
+    assert counters.storage_used == 0
+
+    # persisted immediately (finding #1 pattern).
+    reloaded = load_cap_counters(tmp_path)
+    assert reloaded.compute_used == pytest.approx(counters.compute_used)
+
+    derived = cap_counters_from_ledger(ledger.entries, caps)
+    assert derived.compute_used == pytest.approx(counters.compute_used)
+    assert derived.budget_used == pytest.approx(counters.budget_used)
+
+
+def test_charge_worker_attempts_before_raising_cap_breach_takes_priority(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    counters = CapCounters()
+    tiny_caps = CostCaps(
+        compute=1e-6, storage=1000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    cause = TimeoutError("boom")
+
+    with pytest.raises(CostCapExceededError):
+        charge_worker_attempts_before_raising(
+            ledger,
+            tmp_path,
+            cap_counters=counters,
+            cost_caps=tiny_caps,
+            stage="render",
+            row_id="r1",
+            probe_index=0,
+            candidate_id=None,
+            successes=[2.0],
+            failures=[("timeout", 1.0, cause)],
+        )
+
+    assert counters.compute_used == pytest.approx(3.0)
+    stop_events = [e.payload for e in ledger.entries if e.payload.get("kind") == "stop_event"]
+    assert len(stop_events) == 1
+    assert stop_events[0]["reason"] == "COST_CAP_EXCEEDED"
+
+
+def test_charge_worker_attempts_before_raising_requires_nonempty_failures(tmp_path: Path) -> None:
+    ledger = Ledger(tmp_path / "ledger.jsonl")
+    with pytest.raises(ValueError, match="failures must be non-empty"):
+        charge_worker_attempts_before_raising(
+            ledger,
+            tmp_path,
+            cap_counters=None,
+            cost_caps=None,
+            stage="measure",
+            row_id="r1",
+            probe_index=0,
+            candidate_id=None,
+            successes=[1.0],
+            failures=[],
+        )
+    # nothing appended -- fail fast on programmer error, no partial charge.
+    assert ledger.entries == ()

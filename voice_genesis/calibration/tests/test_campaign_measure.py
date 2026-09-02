@@ -5,8 +5,11 @@ subprocess を伴うため `@pytest.mark.slow`。
 
 from __future__ import annotations
 
+import itertools
 import json
+import math
 import subprocess
+import threading
 from pathlib import Path
 
 import pytest
@@ -322,6 +325,10 @@ def test_measure_invalid_worker_cpu_seconds_fails_closed(
 def test_measure_fresh_worker_timeout_charges_before_raising(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """round 25 (`[UNDERSPEC-CAL-D57]`) revision: every worker times out, so
+    all `FRESH_PROCESS_REPEATS` attempts run to completion (none is skipped
+    just because an earlier one already failed) and each is independently
+    charged its own `worker_failed` event."""
     subset = small_matrix_subset(1, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -334,7 +341,9 @@ def test_measure_fresh_worker_timeout_charges_before_raising(
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0.0))
 
     monkeypatch.setattr(measure_stage.subprocess, "run", fake_run)
-    children_cpu_ticks = iter([40.0, 42.5])  # before, after -> delta 2.5
+    # 2 ticks (before, after) per attempt, delta 2.5 each, one pair per
+    # FRESH_PROCESS_REPEATS attempt (all 3 time out).
+    children_cpu_ticks = itertools.count(40.0, 2.5)
     monkeypatch.setattr(measure_stage, "_children_cpu_seconds", lambda: next(children_cpu_ticks))
 
     counters = CapCounters()
@@ -352,20 +361,27 @@ def test_measure_fresh_worker_timeout_charges_before_raising(
             cost_caps=caps,
         )
 
-    assert counters.compute_used == pytest.approx(2.5)
+    expected_total = measure_stage.FRESH_PROCESS_REPEATS * 2.5
+    assert counters.compute_used == pytest.approx(expected_total)
     worker_failed = [
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
     ]
-    assert len(worker_failed) == 1
+    assert len(worker_failed) == measure_stage.FRESH_PROCESS_REPEATS
     assert worker_failed[0]["stage"] == "measure"
     assert worker_failed[0]["failure_kind"] == "timeout"
     assert worker_failed[0]["row_id"] == row.row_id
     assert worker_failed[0]["probe_index"] == 0
     assert worker_failed[0]["candidate_id"] == candidate.candidate_id
-    assert worker_failed[0]["cpu_seconds"] == pytest.approx(2.5)
-    assert worker_failed[0]["storage_bytes"] == 0
-    # no meter_call was ever appended for the failed attempt.
+    assert all(w["cpu_seconds"] == pytest.approx(2.5) for w in worker_failed)
+    assert all(w["storage_bytes"] == 0 for w in worker_failed)
+    # no meter_call was ever appended for the failed unit.
     assert [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"] == []
+    # every attempt failed -- no discarded-success event.
+    assert [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "worker_attempts_discarded"
+    ] == []
 
     derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
     render_events = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"]
@@ -379,7 +395,11 @@ def test_measure_fresh_worker_nonzero_exit_charges_reported_cpu_seconds(
 ) -> None:
     """A nonzero-exit worker's captured stdout still carries a well-formed
     report — the charge must use the worker's own reported `cpu_seconds`
-    (not the coarser parent-observed delta) when one is recoverable."""
+    (not the coarser parent-observed delta) when one is recoverable.
+
+    round 25 (`[UNDERSPEC-CAL-D57]`) revision: every one of the
+    `FRESH_PROCESS_REPEATS` attempts fails the same way, so all of them run
+    (none skipped) and each is independently charged."""
     subset = small_matrix_subset(1, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -409,13 +429,14 @@ def test_measure_fresh_worker_nonzero_exit_charges_reported_cpu_seconds(
             cost_caps=caps,
         )
 
-    assert counters.compute_used == pytest.approx(4.0)
+    expected_total = measure_stage.FRESH_PROCESS_REPEATS * 4.0
+    assert counters.compute_used == pytest.approx(expected_total)
     worker_failed = [
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
     ]
-    assert len(worker_failed) == 1
-    assert worker_failed[0]["failure_kind"] == "nonzero_exit"
-    assert worker_failed[0]["cpu_seconds"] == pytest.approx(4.0)
+    assert len(worker_failed) == measure_stage.FRESH_PROCESS_REPEATS
+    assert all(w["failure_kind"] == "nonzero_exit" for w in worker_failed)
+    assert all(w["cpu_seconds"] == pytest.approx(4.0) for w in worker_failed)
 
     derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
     render_events = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"]
@@ -427,6 +448,9 @@ def test_measure_fresh_worker_nonzero_exit_charges_reported_cpu_seconds(
 def test_measure_fresh_worker_malformed_json_charges_before_raising(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """round 25 (`[UNDERSPEC-CAL-D57]`) revision: every one of the
+    `FRESH_PROCESS_REPEATS` attempts returns malformed JSON, so all of them
+    run (none skipped) and each is independently charged."""
     subset = small_matrix_subset(1, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -439,7 +463,8 @@ def test_measure_fresh_worker_malformed_json_charges_before_raising(
         return _FakeCompletedProcess(stdout="{not valid json")
 
     monkeypatch.setattr(measure_stage.subprocess, "run", fake_run)
-    children_cpu_ticks = iter([5.0, 5.75])  # before, after -> delta 0.75
+    # 2 ticks (before, after) per attempt, delta 0.75 each.
+    children_cpu_ticks = itertools.count(5.0, 0.75)
     monkeypatch.setattr(measure_stage, "_children_cpu_seconds", lambda: next(children_cpu_ticks))
 
     counters = CapCounters()
@@ -457,13 +482,14 @@ def test_measure_fresh_worker_malformed_json_charges_before_raising(
             cost_caps=caps,
         )
 
-    assert counters.compute_used == pytest.approx(0.75)
+    expected_total = measure_stage.FRESH_PROCESS_REPEATS * 0.75
+    assert counters.compute_used == pytest.approx(expected_total)
     worker_failed = [
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
     ]
-    assert len(worker_failed) == 1
-    assert worker_failed[0]["failure_kind"] == "malformed_output"
-    assert worker_failed[0]["cpu_seconds"] == pytest.approx(0.75)
+    assert len(worker_failed) == measure_stage.FRESH_PROCESS_REPEATS
+    assert all(w["failure_kind"] == "malformed_output" for w in worker_failed)
+    assert all(w["cpu_seconds"] == pytest.approx(0.75) for w in worker_failed)
 
     derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
     render_events = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"]
@@ -475,10 +501,15 @@ def test_measure_fresh_worker_malformed_json_charges_before_raising(
 def test_measure_fresh_worker_failure_cost_cap_breach_raises_cost_cap_exceeded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When charging a failed worker's attempted compute itself breaches the
-    frozen cap, `CostCapExceededError` takes priority over the original
-    `TimeoutExpired`/etc. — same priority as every other charge-then-check
-    call site in this package (round 23 ADOPT (2) `render_nondeterministic`)."""
+    """When charging the whole failed batch's attempted compute itself
+    breaches the frozen cap, `CostCapExceededError` takes priority over the
+    original `TimeoutExpired`/etc. — same priority as every other
+    charge-then-check call site in this package (round 23 ADOPT (2)
+    `render_nondeterministic`).
+
+    round 25 (`[UNDERSPEC-CAL-D57]`) revision: the cap check now runs ONCE,
+    after every one of the `FRESH_PROCESS_REPEATS` attempts (all of which
+    fail here) has been charged — not per attempt."""
     subset = small_matrix_subset(1, family="F0_CONTROL")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
     campaign = load_frozen_campaign(campaign_dir, secret_root)
@@ -491,7 +522,9 @@ def test_measure_fresh_worker_failure_cost_cap_breach_raises_cost_cap_exceeded(
         raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0.0))
 
     monkeypatch.setattr(measure_stage.subprocess, "run", fake_run)
-    children_cpu_ticks = iter([0.0, 1.0])  # delta 1.0 > tiny compute cap
+    # 2 ticks (before, after) per attempt, delta 1.0 each -> batch total 3.0,
+    # well over the tiny compute cap.
+    children_cpu_ticks = itertools.count(0.0, 1.0)
     monkeypatch.setattr(measure_stage, "_children_cpu_seconds", lambda: next(children_cpu_ticks))
 
     counters = CapCounters()
@@ -509,16 +542,338 @@ def test_measure_fresh_worker_failure_cost_cap_breach_raises_cost_cap_exceeded(
             cost_caps=tiny_caps,
         )
 
-    assert counters.compute_used == pytest.approx(1.0)
+    expected_total = measure_stage.FRESH_PROCESS_REPEATS * 1.0
+    assert counters.compute_used == pytest.approx(expected_total)
     worker_failed = [
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
     ]
-    assert len(worker_failed) == 1
+    assert len(worker_failed) == measure_stage.FRESH_PROCESS_REPEATS
     stop_events = [
         e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "stop_event"
     ]
     assert len(stop_events) == 1
     assert stop_events[0]["reason"] == "COST_CAP_EXCEEDED"
+
+
+# ---------------------------------------------------------------------------
+# round 25 (`[UNDERSPEC-CAL-D57]`): unified worker-attempt accounting — every
+# spawned attempt in a repeat batch is charged exactly once, whatever its
+# outcome, before the batch's first failure propagates. Supersedes the
+# round 24 ADOPT (1) posture of charging only the ONE failing attempt and
+# discarding already-completed successful siblings uncharged.
+# ---------------------------------------------------------------------------
+
+
+def _ok_worker_stdout(cpu_seconds: float) -> str:
+    return json.dumps(
+        {
+            "values": {"f0_hz": 130.0},
+            "missing_reason": None,
+            "ineligible": False,
+            "ineligible_reason": None,
+            "cpu_seconds": cpu_seconds,
+        }
+    )
+
+
+@pytest.mark.slow
+def test_measure_repeat_2_of_3_fails_charges_surviving_successes_workers_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """repeat 2 of 3 fails (sequential, `max_workers=1`): repeats 1 and 3
+    must still run (not skipped just because repeat 2 already failed) and be
+    charged as discarded successes, alongside repeat 2's own `worker_failed`
+    charge -- not silently dropped the way the round 24 posture dropped
+    already-completed successful siblings."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    call_count = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0.0))
+        return _FakeCompletedProcess(stdout=_ok_worker_stdout(2.0))
+
+    monkeypatch.setattr(measure_stage.subprocess, "run", fake_run)
+    children_cpu_ticks = itertools.count(10.0, 1.5)
+    monkeypatch.setattr(measure_stage, "_children_cpu_seconds", lambda: next(children_cpu_ticks))
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1000.0,
+        storage=1_000_000,
+        budget=1000.0,
+        budget_accounting_mode="per_unit_fixed",
+        budget_unit_cost=5.0,
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        measure_stage.run_measurement_for_instance(
+            campaign,
+            candidate,
+            row_id=row.row_id,
+            probe_index=0,
+            sr_hz=row.row.sr_hz,
+            cap_counters=counters,
+            cost_caps=caps,
+            max_workers=1,
+        )
+
+    worker_failed = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
+    ]
+    assert len(worker_failed) == 1
+    assert worker_failed[0]["failure_kind"] == "timeout"
+    assert worker_failed[0]["cpu_seconds"] == pytest.approx(1.5)
+
+    discarded = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "worker_attempts_discarded"
+    ]
+    assert len(discarded) == 1
+    assert discarded[0]["stage"] == "measure"
+    assert discarded[0]["row_id"] == row.row_id
+    assert discarded[0]["probe_index"] == 0
+    assert discarded[0]["candidate_id"] == candidate.candidate_id
+    assert discarded[0]["storage_bytes"] == 0
+    attempts = discarded[0]["discarded_success_attempts"]
+    assert len(attempts) == 2  # repeats 1 and 3
+    assert all(a["cpu_seconds"] == pytest.approx(2.0) for a in attempts)
+
+    # 3 attempts total: 2 discarded successes @2.0 + 1 failure @1.5.
+    expected_compute = 2 * 2.0 + 1.5
+    assert counters.compute_used == pytest.approx(expected_compute)
+    assert counters.budget_used == pytest.approx(3 * 5.0)  # 1 budget unit / attempt
+
+    # no meter_call was ever appended for the failed unit.
+    assert [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"] == []
+
+    derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
+    render_events = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"]
+    persisted_total = sum(e["cpu_seconds"] for e in render_events) + counters.compute_used
+    assert derived.compute_used == pytest.approx(persisted_total)
+    # earlier render_stage.run_render_stage() setup call above was NOT given
+    # cap_counters, so its own render units never landed in `counters` --
+    # ledger reconstruction still sees them (1 budget unit per render event)
+    # alongside this test's own 3 charged attempts, so compare against that
+    # full ledger-derived total rather than `counters.budget_used` directly.
+    expected_derived_budget = caps.budget_unit_cost * (len(render_events) + 3)
+    assert derived.budget_used == pytest.approx(expected_derived_budget)
+
+
+@pytest.mark.slow
+def test_measure_one_of_three_concurrent_attempts_fails_charges_surviving_successes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """1 of 3 concurrent attempts (`max_workers=3`) fails: the `Thread
+    PoolExecutor` batch must not cancel/discard the other 2 already-started
+    futures -- all 3 outcomes are collected and charged together (2
+    discarded successes + 1 failure) before the original failure
+    propagates. Which physical call fails is nondeterministic under real
+    threading, so this only asserts the AGGREGATE charge (not a specific
+    repeat index) -- the workers=1 variant above pins the per-repeat
+    identity."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    lock = threading.Lock()
+    call_count = {"n": 0}
+
+    def fake_run(cmd, **kwargs):
+        with lock:
+            call_count["n"] += 1
+            n = call_count["n"]
+        if n == 2:
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs.get("timeout", 0.0))
+        return _FakeCompletedProcess(stdout=_ok_worker_stdout(2.0))
+
+    monkeypatch.setattr(measure_stage.subprocess, "run", fake_run)
+    children_lock = threading.Lock()
+    children_cpu_ticks = itertools.count(10.0, 1.5)
+
+    def _next_children_cpu_seconds() -> float:
+        with children_lock:
+            return next(children_cpu_ticks)
+
+    monkeypatch.setattr(measure_stage, "_children_cpu_seconds", _next_children_cpu_seconds)
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1000.0,
+        storage=1_000_000,
+        budget=1000.0,
+        budget_accounting_mode="per_unit_fixed",
+        budget_unit_cost=5.0,
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        measure_stage.run_measurement_for_instance(
+            campaign,
+            candidate,
+            row_id=row.row_id,
+            probe_index=0,
+            sr_hz=row.row.sr_hz,
+            cap_counters=counters,
+            cost_caps=caps,
+            max_workers=3,
+        )
+
+    worker_failed = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
+    ]
+    assert len(worker_failed) == 1
+    assert worker_failed[0]["failure_kind"] == "timeout"
+    assert worker_failed[0]["cpu_seconds"] == pytest.approx(1.5)
+
+    discarded = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "worker_attempts_discarded"
+    ]
+    assert len(discarded) == 1
+    attempts = discarded[0]["discarded_success_attempts"]
+    assert len(attempts) == 2
+    assert all(a["cpu_seconds"] == pytest.approx(2.0) for a in attempts)
+
+    expected_compute = 2 * 2.0 + 1.5
+    assert counters.compute_used == pytest.approx(expected_compute)
+    assert counters.budget_used == pytest.approx(3 * 5.0)
+
+    derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
+    render_events = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"]
+    persisted_total = sum(e["cpu_seconds"] for e in render_events) + counters.compute_used
+    assert derived.compute_used == pytest.approx(persisted_total)
+    # earlier render_stage.run_render_stage() setup call above was NOT given
+    # cap_counters, so its own render units never landed in `counters` --
+    # ledger reconstruction still sees them (1 budget unit per render event)
+    # alongside this test's own 3 charged attempts, so compare against that
+    # full ledger-derived total rather than `counters.budget_used` directly.
+    expected_derived_budget = caps.budget_unit_cost * (len(render_events) + 3)
+    assert derived.budget_used == pytest.approx(expected_derived_budget)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("bad_cpu_seconds", ["abc", math.nan, -1.0])
+def test_measure_fresh_worker_invalid_cpu_seconds_now_charged_malformed_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_cpu_seconds: object
+) -> None:
+    """round 25 (`[UNDERSPEC-CAL-D57]`) finding "Charge parseable but
+    invalid worker results": a worker exiting 0 with parseable JSON but an
+    invalid `cpu_seconds` (non-numeric / NaN / negative) is now a charged
+    `malformed_output` `worker_failed` attempt (RUSAGE_CHILDREN fallback,
+    since `cpu_seconds` itself is the unusable field) -- reversing the round
+    14 finding #2 "stays uncharged" posture for this specific path."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+    monkeypatch.setattr(
+        measure_stage.subprocess, "run", _fake_subprocess_run_with_cpu_seconds(bad_cpu_seconds)
+    )
+    children_cpu_ticks = itertools.count(0.0, 0.5)
+    monkeypatch.setattr(measure_stage, "_children_cpu_seconds", lambda: next(children_cpu_ticks))
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1000.0, storage=1_000_000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    with pytest.raises(measure_stage.WorkerCpuSecondsInvalidError):
+        measure_stage.run_measurement_for_instance(
+            campaign,
+            candidate,
+            row_id=row.row_id,
+            probe_index=0,
+            sr_hz=row.row.sr_hz,
+            cap_counters=counters,
+            cost_caps=caps,
+        )
+
+    worker_failed = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
+    ]
+    assert len(worker_failed) == measure_stage.FRESH_PROCESS_REPEATS
+    assert all(w["failure_kind"] == "malformed_output" for w in worker_failed)
+    assert counters.compute_used > 0.0  # RUSAGE_CHILDREN fallback, not 0
+
+    stop_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "stop_event"
+    ]
+    assert len(stop_events) == 1
+    assert stop_events[0]["reason"] == "INVALID_MEASURE_WORKER_CPU_SECONDS"
+
+    derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
+    render_events = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"]
+    persisted_total = sum(e["cpu_seconds"] for e in render_events) + counters.compute_used
+    assert derived.compute_used == pytest.approx(persisted_total)
+
+
+@pytest.mark.slow
+def test_measure_fresh_worker_unusable_result_shape_charged_malformed_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 25 (`[UNDERSPEC-CAL-D57]`) finding "Charge parseable but
+    invalid worker results": a worker exiting 0 with parseable JSON and a
+    VALID `cpu_seconds` but an unusable `MeterOutput` shape (`values` not an
+    object) is charged `malformed_output` using its own valid `cpu_seconds`
+    (not the RUSAGE_CHILDREN fallback, since that field itself validated
+    fine) -- this failure previously escaped `_FreshWorkerFailure`/
+    `charge_worker_failure()` entirely, uncharged."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    row = subset[0]
+    candidate = candidate_by_id("F0-B0-CURRENT")
+
+    def fake_run(cmd, **kwargs):
+        return _FakeCompletedProcess(
+            stdout=json.dumps({"values": "not-a-mapping", "cpu_seconds": 1.25})
+        )
+
+    monkeypatch.setattr(measure_stage.subprocess, "run", fake_run)
+
+    counters = CapCounters()
+    caps = CostCaps(
+        compute=1000.0, storage=1_000_000, budget=1000.0, budget_accounting_mode="local_zero_cost"
+    )
+    with pytest.raises(ValueError, match="values"):
+        measure_stage.run_measurement_for_instance(
+            campaign,
+            candidate,
+            row_id=row.row_id,
+            probe_index=0,
+            sr_hz=row.row.sr_hz,
+            cap_counters=counters,
+            cost_caps=caps,
+        )
+
+    worker_failed = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "worker_failed"
+    ]
+    assert len(worker_failed) == measure_stage.FRESH_PROCESS_REPEATS
+    assert all(w["failure_kind"] == "malformed_output" for w in worker_failed)
+    # the reported cpu_seconds (1.25) itself validated fine -- charged as-is,
+    # not the RUSAGE_CHILDREN fallback.
+    assert all(w["cpu_seconds"] == pytest.approx(1.25) for w in worker_failed)
+    assert counters.compute_used == pytest.approx(measure_stage.FRESH_PROCESS_REPEATS * 1.25)
+
+    derived = cap_counters_from_ledger(campaign.ledger.entries, caps)
+    render_events = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "render"]
+    persisted_total = sum(e["cpu_seconds"] for e in render_events) + counters.compute_used
+    assert derived.compute_used == pytest.approx(persisted_total)
 
 
 # ---------------------------------------------------------------------------
