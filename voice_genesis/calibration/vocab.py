@@ -35,31 +35,26 @@ class MissingReason(str, Enum):
 
 
 class BlockedCode(str, Enum):
-    """fail-closed code の閉語彙（設計正本 §3.3）。C0 で列挙済み、事後追加禁止。"""
+    """fail-closed code の閉語彙（設計正本 §3.3、~L140-143）。C0 で列挙済みの
+    6 値で凍結され、事後の場当たり追加を禁止する。
+
+    UNDERSPEC-CAL-D78 ruling（#344 round 9 ADOPT, 分類②。round 9 finding #1
+    + audit 発見の 2 件を統合）: D76 ruling (2) が追加した
+    `BLOCKED_C0_SWEEP_DECLARATION_INVALID` と D77 ruling (1) が追加した
+    `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` はいずれも本 enum を設計正本の
+    凍結 6 値を超えて事後拡張する contract vocabulary contamination だった
+    （両追加とも設計正本 §3.3 自体の改訂を経由していない）。両方を撤去し、
+    それぞれが検出していた fail-closed 事由は既存の `BLOCKED_C0_MANIFEST_
+    INCOMPLETE` を発行しつつ `c0_validate.SweepManifestViolationDetail`
+    （`violation="sweep_truth_level_insufficient"` / `"sweep_declaration_
+    mismatch"`）という機械可読 detail フィールドで表現するよう
+    `c0_validate.py` を改めた——downstream consumer は凍結 6 値のみを見れば
+    よく、診断に必要な情報は detail 構造から失われない。
+    """
 
     BLOCKED_DOMAIN_MANIFEST_INCOMPLETE = "BLOCKED_DOMAIN_MANIFEST_INCOMPLETE"
     BLOCKED_C0_MANIFEST_INCOMPLETE = "BLOCKED_C0_MANIFEST_INCOMPLETE"
     BLOCKED_C0_UNSEEDED_RNG = "BLOCKED_C0_UNSEEDED_RNG"
-    #: UNDERSPEC-CAL-D76 ruling (2)（D75 の `BLOCKED_C0_SWEEP_CAPACITY_
-    #: INSUFFICIENT` を SUPERSEDE。sweep 定義そのものが誤りだったため名称・
-    #: 意味論を改める）: 凍結 matrix (`fixtures.matrix.build_matrix()`) が
-    #: 宣言する declared sweep（`fixtures.matrix.declared_sweeps_by_family()`、
-    #: def A: truth-core block の nuisance-constant series）のうち 1 件でも
-    #: 相異なる truth level 数が 3 未満（`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`
-    #: 未満の pair しか作れない）なら発行する（`c0_validate.
-    #: _check_declared_sweep_truth_levels`）。
-    BLOCKED_C0_SWEEP_DECLARATION_INVALID = "BLOCKED_C0_SWEEP_DECLARATION_INVALID"
-    #: UNDERSPEC-CAL-D77 ruling (1)（#344 round 8 finding #1 ADOPT, 分類②）:
-    #: `frozen_design.fixture_spec.<FAMILY>.declared_sweeps` の manifest
-    #: **宣言値**が、凍結 matrix (`fixtures.matrix.build_matrix()`) から
-    #: `fixtures.matrix.declared_sweeps_by_family()` で直接導出される mapping
-    #: と完全一致しない場合（欠落は別途 `BLOCKED_C0_MANIFEST_INCOMPLETE` で
-    #: 捕捉するため対象外。値は存在するが sweep_id 集合/member row_id の並びが
-    #: 導出値と食い違う場合のみ）に発行する（`c0_validate.
-    #: _check_declared_sweep_declaration_match`）。`BLOCKED_C0_SWEEP_
-    #: DECLARATION_INVALID`（構造がそもそも §10.4 の truth-level 下限を
-    #: 満たせるか。manifest 非依存）とは独立の軸——宣言と実体の乖離のみを見る。
-    BLOCKED_C0_SWEEP_DECLARATION_MISMATCH = "BLOCKED_C0_SWEEP_DECLARATION_MISMATCH"
     BLOCKED_C1_GENERATOR_NONDETERMINISTIC = "BLOCKED_C1_GENERATOR_NONDETERMINISTIC"
     BLOCKED_LEAKAGE = "BLOCKED_LEAKAGE"
     BLOCKED_CANONICAL_MUTATION_REQUIRED = "BLOCKED_CANONICAL_MUTATION_REQUIRED"

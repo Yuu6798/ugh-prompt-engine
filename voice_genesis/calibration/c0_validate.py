@@ -54,8 +54,11 @@ freeze event 記録のいずれも一切行わない（IMPLEMENTATION_MAP_v1.md 
     FIELDS`）、宣言値そのものが凍結 matrix (`fixtures.matrix.build_matrix()`)
     から `declared_sweeps_by_family()` で導出される mapping と完全一致
     することを要求する（UNDERSPEC-CAL-D77 ruling (1)。不一致は
-    `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` で個別に fail-closed する。
-    `[UNDERSPEC-CAL-D77]`）。
+    `BLOCKED_C0_MANIFEST_INCOMPLETE`（detail:
+    `SweepManifestViolationDetail(violation="sweep_declaration_mismatch")`）
+    で個別に fail-closed する。`[UNDERSPEC-CAL-D77]` / `[UNDERSPEC-CAL-D78]`
+    ——D78 ruling が専用 `BlockedCode` の新設を SUPERSEDE し、既存コードの
+    detail フィールドへ表現を移した）。
   - campaign-level セクション `frozen_design.split_spec` /
     `selection_spec` / `provenance_spec` / `cost_caps` はそれぞれ
     `SPLIT_SPEC_REQUIRED_KEYS`（ratios/seed_scheme/seal_commitment_rule）・
@@ -244,7 +247,10 @@ METER_SPEC_REQUIRED_KEYS: tuple[str, ...] = (
 #: 同じく `missing_required_keys` へ、(c) mapping ではあるが凍結 matrix
 #: からの導出値と完全一致しない（sweep_id 集合・member row_id の並びの
 #: いずれか）場合は `_check_declared_sweep_declaration_match()` が
-#: `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` で個別に fail-closed する。
+#: `BLOCKED_C0_MANIFEST_INCOMPLETE`（detail:
+#: `SweepManifestViolationDetail(violation="sweep_declaration_mismatch")`）
+#: で個別に fail-closed する（UNDERSPEC-CAL-D78 ruling: 専用
+#: `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` を SUPERSEDE）。
 FIXTURE_SPEC_REQUIRED_KEYS: tuple[str, ...] = (
     "generator_version",
     "generator_hash",
@@ -666,6 +672,39 @@ def _is_hollow(value: object) -> bool:
 
 
 @dataclass(frozen=True)
+class SweepManifestViolationDetail:
+    """UNDERSPEC-CAL-D78 ruling（#344 round 9 ADOPT, 分類②。D76 ruling (2) の
+    `BLOCKED_C0_SWEEP_DECLARATION_INVALID` と D77 ruling (1) の
+    `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` はいずれも `vocab.BlockedCode`
+    を凍結 6 値を超えて事後拡張する contract vocabulary contamination
+    だったため撤去した。両者が検出していた fail-closed 事由は、代わりに
+    既存の `vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE` を発行しつつ
+    本 dataclass の tuple として運ぶ——downstream consumer は凍結 6 値の
+    `BlockedCode` のみを見ればよく、診断に必要な情報は失われない。
+
+    `violation` は次の 2 語彙のいずれか（閉語彙。本 dataclass 自体は
+    `BlockedCode` ではなく detail 構造のため、値の追加は `BlockedCode` の
+    事後追加禁止規約の対象外）:
+
+    - ``"sweep_truth_level_insufficient"``: D76 ruling (2)。凍結 matrix
+      (`fixtures.matrix.build_matrix()`) が manifest 非依存に §10.4 の
+      truth-level 下限（`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`）を構造的に
+      満たせない（`_check_declared_sweep_truth_levels()`）。
+    - ``"sweep_declaration_mismatch"``: D77 ruling (1)。manifest の
+      `frozen_design.fixture_spec.<FAMILY>.declared_sweeps` 宣言値が、凍結
+      matrix からの導出値と完全一致しない
+      （`_check_declared_sweep_declaration_match()`）。
+    """
+
+    violation: str
+    family: str
+    sweep_id: str
+    expected_count: int
+    actual_count: int
+    detail: str
+
+
+@dataclass(frozen=True)
 class C0ValidationResult:
     """dry-run 検証結果。書込・secret 生成・freeze event のいずれも伴わない。"""
 
@@ -677,13 +716,23 @@ class C0ValidationResult:
     unseeded_rng_streams: tuple[str, ...] = field(default_factory=tuple)
     #: UNDERSPEC-CAL-D76 ruling (2)（D75 の `sweep_capacity_violations`/
     #: `_check_sweep_capacity()` を SUPERSEDE）: `_check_declared_sweep_
-    #: truth_levels()` の violation 列（非空なら
-    #: `BLOCKED_C0_SWEEP_DECLARATION_INVALID` が `blocked_codes` に入る）。
-    sweep_declaration_violations: tuple[str, ...] = field(default_factory=tuple)
+    #: truth_levels()` の violation 列（`SweepManifestViolationDetail`、
+    #: `violation="sweep_truth_level_insufficient"`）。非空なら
+    #: `vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE` が `blocked_codes`
+    #: に入る（UNDERSPEC-CAL-D78 ruling: 旧 `BLOCKED_C0_SWEEP_DECLARATION_
+    #: INVALID` を SUPERSEDE）。
+    sweep_declaration_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
     #: UNDERSPEC-CAL-D77 ruling (1)（#344 round 8 finding #1 ADOPT）:
-    #: `_check_declared_sweep_declaration_match()` の violation 列（非空なら
-    #: `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` が `blocked_codes` に入る）。
-    sweep_declaration_mismatch_violations: tuple[str, ...] = field(default_factory=tuple)
+    #: `_check_declared_sweep_declaration_match()` の violation 列
+    #: （`SweepManifestViolationDetail`、`violation="sweep_declaration_
+    #: mismatch"`）。非空なら `vocab.BlockedCode.BLOCKED_C0_MANIFEST_
+    #: INCOMPLETE` が `blocked_codes` に入る（UNDERSPEC-CAL-D78 ruling: 旧
+    #: `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` を SUPERSEDE）。
+    sweep_declaration_mismatch_violations: tuple[SweepManifestViolationDetail, ...] = field(
+        default_factory=tuple
+    )
 
     @property
     def is_blocked(self) -> bool:
@@ -1285,7 +1334,9 @@ def _check_rng_ledger_unseeded(manifest: Mapping[str, object]) -> tuple[str, ...
     return tuple(unseeded)
 
 
-def _check_declared_sweep_truth_levels(manifest: Mapping[str, object]) -> tuple[str, ...]:
+def _check_declared_sweep_truth_levels(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
     """UNDERSPEC-CAL-D76 ruling (2)（`_check_sweep_capacity`/D75 を
     SUPERSEDE）, 設計正本 §10.4「resolvable pair は各 sweep で >= 3」: family
     ごとの宣言済み declared sweep（`fixtures.matrix.declared_sweeps_by_
@@ -1305,15 +1356,18 @@ def _check_declared_sweep_truth_levels(manifest: Mapping[str, object]) -> tuple[
     一致する）。
 
     違反があれば `frozen_design.fixture_spec.*` の hollow/shape 違反とは
-    独立した意味論的欠陥として、専用の `vocab.BlockedCode.
-    BLOCKED_C0_SWEEP_DECLARATION_INVALID` で別途 fail-closed する
-    （`BLOCKED_C0_MANIFEST_INCOMPLETE` とは排他ではなく併発しうる）。
+    独立した意味論的欠陥として、`vocab.BlockedCode.
+    BLOCKED_C0_MANIFEST_INCOMPLETE` を発行しつつ
+    `SweepManifestViolationDetail(violation="sweep_truth_level_insufficient")`
+    の tuple として返す（`missing_required_keys` とは排他ではなく併発しうる。
+    UNDERSPEC-CAL-D78 ruling: 旧専用コード `BLOCKED_C0_SWEEP_DECLARATION_
+    INVALID` を SUPERSEDE）。
     """
     del manifest  # 構造検査: 凍結 matrix 生成器自体から直接導出する
     rows = build_matrix()
     row_by_id = {mr.row_id: mr.row for mr in rows}
     declared = declared_sweeps_by_family(rows)
-    violations: list[str] = []
+    violations: list[SweepManifestViolationDetail] = []
     for family in fixture_axes.FixtureFamily:
         fam = family.value
         family_sweeps = declared.get(fam, {})
@@ -1322,9 +1376,18 @@ def _check_declared_sweep_truth_levels(manifest: Mapping[str, object]) -> tuple[
             n_levels = len({truth_identity_for_row(row_by_id[rid]) for rid in member_row_ids})
             if n_levels < MIN_RESOLVABLE_PAIRS_PER_SWEEP:
                 violations.append(
-                    f"frozen_design.fixture_spec.{fam}.declared_sweeps[{sweep_id!r}] "
-                    f"({n_levels} distinct truth level(s) in the frozen matrix, need >= "
-                    f"{MIN_RESOLVABLE_PAIRS_PER_SWEEP})"
+                    SweepManifestViolationDetail(
+                        violation="sweep_truth_level_insufficient",
+                        family=fam,
+                        sweep_id=sweep_id,
+                        expected_count=MIN_RESOLVABLE_PAIRS_PER_SWEEP,
+                        actual_count=n_levels,
+                        detail=(
+                            f"frozen_design.fixture_spec.{fam}.declared_sweeps[{sweep_id!r}] "
+                            f"({n_levels} distinct truth level(s) in the frozen matrix, need >= "
+                            f"{MIN_RESOLVABLE_PAIRS_PER_SWEEP})"
+                        ),
+                    )
                 )
     return tuple(violations)
 
@@ -1354,7 +1417,9 @@ def _normalize_declared_sweeps(value: object) -> dict[str, tuple[str, ...]] | No
     return normalized
 
 
-def _check_declared_sweep_declaration_match(manifest: Mapping[str, object]) -> tuple[str, ...]:
+def _check_declared_sweep_declaration_match(
+    manifest: Mapping[str, object],
+) -> tuple[SweepManifestViolationDetail, ...]:
     """UNDERSPEC-CAL-D77 ruling (1)（#344 round 8 finding #1 ADOPT, 分類②）:
     `frozen_design.fixture_spec.<FAMILY>.declared_sweeps` の**宣言値**が、
     凍結 matrix (`fixtures.matrix.build_matrix()`) から
@@ -1382,16 +1447,20 @@ def _check_declared_sweep_declaration_match(manifest: Mapping[str, object]) -> t
     ない（二重報告回避）。値が mapping ですらない/空の場合も
     `_MAPPING_SHAPE_FIELDS` 経由で同じく `missing_required_keys` 側へ倒す
     ため、ここでは扱わない。**値が非空 mapping ではあるが**内側の形状が
-    壊れている（sweep 値が非 list/空 list、member が非 str 等）場合、また
-    は形状は正しいが導出値と内容が食い違う（sweep_id の過不足、member
-    row_id の欠落/追加/並び違い）場合の両方を「宣言不一致」として
-    `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` 対象の違反文字列として返す
-    （前者も後者も「宣言が実体と一致しない」という同一の意味論のため区別
-    しない）。
+    壊れている（sweep 値が非 list/空 list、member が非 str 等）場合は
+    family 単位の 1 件（`sweep_id=""`）として、形状は正しいが導出値と
+    内容が食い違う（sweep_id の過不足、member row_id の欠落/追加/並び違い）
+    場合は sweep_id 単位で個別に、`vocab.BlockedCode.
+    BLOCKED_C0_MANIFEST_INCOMPLETE` を発行しつつ
+    `SweepManifestViolationDetail(violation="sweep_declaration_mismatch")`
+    の tuple として返す（UNDERSPEC-CAL-D78 ruling: 旧専用コード
+    `BLOCKED_C0_SWEEP_DECLARATION_MISMATCH` を SUPERSEDE。前者・後者とも
+    「宣言が実体と一致しない」という同一の意味論のため `violation` 値は
+    区別しない）。
     """
     rows = build_matrix()
     derived = declared_sweeps_by_family(rows)
-    violations: list[str] = []
+    violations: list[SweepManifestViolationDetail] = []
     for family in fixture_axes.FixtureFamily:
         fam = family.value
         found, entry = _resolve(manifest, f"frozen_design.fixture_spec.{fam}")
@@ -1400,12 +1469,48 @@ def _check_declared_sweep_declaration_match(manifest: Mapping[str, object]) -> t
         declared_raw = entry.get("declared_sweeps")
         if declared_raw is None or _is_hollow(declared_raw) or not isinstance(declared_raw, Mapping):
             continue  # 欠落/hollow/非 mapping は missing_required_keys 側が既に捕捉
-        actual = _normalize_declared_sweeps(declared_raw)
         expected = derived.get(fam, {})
-        if actual != expected:
+        actual = _normalize_declared_sweeps(declared_raw)
+        if actual == expected:
+            continue
+        if actual is None:
+            # 内側の形状そのものが壊れており個々の sweep_id へ帰属できない
+            # （例: sweep 値が非 list/空 list、member が非 str）。
             violations.append(
-                f"frozen_design.fixture_spec.{fam}.declared_sweeps "
-                "(does not exactly match the mapping derived from the frozen matrix)"
+                SweepManifestViolationDetail(
+                    violation="sweep_declaration_mismatch",
+                    family=fam,
+                    sweep_id="",
+                    expected_count=len(expected),
+                    actual_count=len(declared_raw),
+                    detail=(
+                        f"frozen_design.fixture_spec.{fam}.declared_sweeps "
+                        "(inner shape malformed; does not exactly match the mapping "
+                        "derived from the frozen matrix)"
+                    ),
+                )
+            )
+            continue
+        for sweep_id in sorted(set(actual) | set(expected)):
+            actual_members = actual.get(sweep_id)
+            expected_members = expected.get(sweep_id)
+            if actual_members == expected_members:
+                continue
+            expected_count = len(expected_members or ())
+            actual_count = len(actual_members or ())
+            violations.append(
+                SweepManifestViolationDetail(
+                    violation="sweep_declaration_mismatch",
+                    family=fam,
+                    sweep_id=sweep_id,
+                    expected_count=expected_count,
+                    actual_count=actual_count,
+                    detail=(
+                        f"frozen_design.fixture_spec.{fam}.declared_sweeps[{sweep_id!r}] "
+                        f"(expected {expected_count} member row_id(s), got {actual_count}; "
+                        "does not exactly match the mapping derived from the frozen matrix)"
+                    ),
+                )
             )
     return tuple(violations)
 
@@ -1436,15 +1541,18 @@ def validate_c0_manifest(manifest: Mapping[str, object]) -> C0ValidationResult:
     sweep_violations = _check_declared_sweep_truth_levels(manifest)
     sweep_mismatch_violations = _check_declared_sweep_declaration_match(manifest)
 
+    # UNDERSPEC-CAL-D78 ruling（#344 round 9 ADOPT, 分類②）: sweep 関連の
+    # fail-closed 事由（D76 ruling (2) の truth-level 不足 / D77 ruling (1)
+    # の宣言不一致）は、凍結 `BlockedCode` を事後拡張する専用コードではなく
+    # 既存の `BLOCKED_C0_MANIFEST_INCOMPLETE` で表現する（`all_missing` 経由
+    # で既に発行済みなら二重追加しない）。診断詳細は
+    # `sweep_declaration_violations`/`sweep_declaration_mismatch_violations`
+    # の `SweepManifestViolationDetail` に残る。
     blocked: list[vocab.BlockedCode] = []
-    if all_missing:
+    if all_missing or sweep_violations or sweep_mismatch_violations:
         blocked.append(vocab.BlockedCode.BLOCKED_C0_MANIFEST_INCOMPLETE)
     if unseeded_streams:
         blocked.append(vocab.BlockedCode.BLOCKED_C0_UNSEEDED_RNG)
-    if sweep_violations:
-        blocked.append(vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_INVALID)
-    if sweep_mismatch_violations:
-        blocked.append(vocab.BlockedCode.BLOCKED_C0_SWEEP_DECLARATION_MISMATCH)
 
     return C0ValidationResult(
         blocked_codes=tuple(blocked),
