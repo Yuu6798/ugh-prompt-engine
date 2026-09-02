@@ -740,6 +740,224 @@ def test_c3b_selection_feeds_selected_f0_to_f0_dependent_candidate(
 
 
 # ---------------------------------------------------------------------------
+# round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): C3a SELECTION_FAILED_CLOSED (no F0
+# winner) must block every F0-dependent candidate in C3b — with no F0 winner
+# there is no per-instance F0 to measure or inject, so `_latest_f0_selection`
+# returning `(True, None)` must not leave `f0_unusable_instances` empty (the
+# round 27/28 D61/D63/D64 family closed on per-instance rejection only; this
+# is the reopen exception the family terminal declaration names: "a new path
+# where an unusable F0 reaches a candidate").
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_c3b_selection_blocks_f0_dependent_candidate_when_selection_failed_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C3a records `f0_selection_frozen` with `selected_candidate_id=None`
+    (SELECTION_FAILED_CLOSED). C3b must then: (1) never call the
+    F0-dependent candidate's `measure()` at all — zero `meter_call` events
+    for it; (2) still run the non-dependent candidate in the same family
+    normally; (3) record an explicit `measurement_missing` event for every
+    expected dependent cell with `reason: "F0_SELECTION_FAILED"` (the round
+    28 `[UNDERSPEC-CAL-D64]` mechanism, reused with a distinct reason from
+    the per-instance `"F0_UNUSABLE"` case); (4) record one
+    `f0_dependent_selection_blocked` provenance event; (5) make the
+    dependent candidate ineligible via `coverage_incomplete` so it can never
+    win `select_across_ceilings()`."""
+    subset = small_matrix_subset(2, family="APERIODICITY_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+
+    baseline_entry = campaign.ledger.append(
+        {"kind": "baseline_audit", "artifact_sha": "5" * 64, "payload": {}}
+    )
+    campaign.ledger.append(
+        {"kind": "baseline_audited", "baseline_audit_sha": baseline_entry.entry_sha}
+    )
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": None,
+            "outcome": "SELECTION_FAILED_CLOSED",
+        }
+    )
+
+    from voice_genesis.calibration.candidates.registry import candidate_by_id
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    independent_candidate = candidate_by_id("M2A-B0-AUTOCORR-PERIODICITY")
+    assert independent_candidate.algorithm_family not in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    assert harmonic_residual.algorithm_family in measure_stage.F0_DEPENDENT_ALGORITHM_FAMILIES
+    trimmed_pool = (harmonic_residual, independent_candidate)
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return trimmed_pool
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    result = cli._run_c3b(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    meter_calls = [e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "meter_call"]
+    assert not any(m.get("candidate_id") == harmonic_residual.candidate_id for m in meter_calls)
+    assert any(m.get("candidate_id") == independent_candidate.candidate_id for m in meter_calls)
+
+    missing_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "measurement_missing"
+    ]
+    assert missing_events
+    assert all(m["reason"] == "F0_SELECTION_FAILED" for m in missing_events)
+    missing_candidates = {cell[2] for m in missing_events for cell in m["cells"]}
+    assert missing_candidates == {harmonic_residual.candidate_id}
+
+    blocked_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "f0_dependent_selection_blocked"
+    ]
+    assert len(blocked_events) == 1
+    assert blocked_events[0]["stage"] == "c3b"
+    assert blocked_events[0]["reason"] == "F0_SELECTION_FAILED"
+
+    sf_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "selection_frozen"
+    ]
+    assert sf_events
+    fail_filters = sf_events[-1]["fail_filters_by_family"]["APERIODICITY_GT"]
+    assert fail_filters[harmonic_residual.candidate_id]["coverage_incomplete"] is True
+
+    assert result["selected_by_family"]["APERIODICITY_GT"] != harmonic_residual.candidate_id
+
+
+def test_c4_never_calls_f0_dependent_candidate_when_selection_failed_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defense in depth alongside C3b's guard (round 29 ADOPT,
+    `[UNDERSPEC-CAL-D65]`): even if a stale/adversarial `selection_frozen`
+    event already names an F0-dependent candidate as a family's
+    `selected_by_family` winner (e.g. ledger state predating this fix, or a
+    future regression reintroducing the C3b-side bug), C4 must still never
+    let the candidate reach `measure()` — every C4 instance is named
+    F0_UNUSABLE (reason `F0_SELECTION_FAILED`) and passed to
+    `holdout_stage.render_and_measure_holdout()` *before* it is invoked, and
+    the meter still closes through the design's `SELECTION_FAILED_CLOSED`
+    vocabulary. `holdout_stage.render_and_measure_holdout()` itself is
+    monkeypatched here (its real render/measure path requires the campaign
+    to be through unseal with a canonical-sized matrix — exercised for a
+    valid F0 winner by `test_c0_freeze.py`'s production E2E) so this test
+    isolates C4's own instance-level guard, mirroring how C3b's guard is
+    exercised directly above.
+
+    Design line (`DESIGN_VG_METER_CAL_DEBT_v1.0.md` §11): 「selection 全
+    fail → campaign は SELECTION_FAILED_CLOSED、meter は NOT_EVALUABLE。」"""
+    subset = small_matrix_subset(4, family="APERIODICITY_GT")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+
+    campaign.ledger.append(
+        {
+            "kind": "f0_selection_frozen",
+            "selected_candidate_id": None,
+            "outcome": "SELECTION_FAILED_CLOSED",
+        }
+    )
+
+    from voice_genesis.calibration.campaign import workunits
+    from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    orig_candidates_for_family = cli._candidates_for_family
+
+    def _trimmed_candidates_for_family(family):
+        if family is _FixtureFamily.APERIODICITY_GT:
+            return (harmonic_residual,)
+        return orig_candidates_for_family(family)
+
+    monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
+
+    # The stale/adversarial `selection_frozen`: names the F0-dependent
+    # candidate as the family's winner despite the failed F0 prerequisite —
+    # exactly what C3b's own D65 guard prevents in the real flow (see
+    # `test_c3b_selection_blocks_f0_dependent_candidate_when_selection_
+    # failed_closed` above). This test isolates C4's independent guard.
+    campaign.ledger.append(
+        {
+            "kind": "selection_frozen",
+            "selected_by_family": {"APERIODICITY_GT": harmonic_residual.candidate_id},
+        }
+    )
+
+    expected_instances = frozenset(
+        workunits.c4_holdout_instances(
+            subset, campaign.realized_split.assignment, family="APERIODICITY_GT"
+        )
+    )
+    assert expected_instances, "test setup must realize a HOLDOUT-split APERIODICITY_GT instance"
+
+    captured: dict[str, object] = {}
+
+    def _capturing_render_and_measure_holdout(campaign_arg, matrix_rows_arg, **kwargs):
+        captured["candidates_by_family"] = kwargs["candidates_by_family"]
+        captured["f0_unusable_instances"] = kwargs["f0_unusable_instances"]
+        captured["f0_missing_reason"] = kwargs["f0_missing_reason"]
+        return {}
+
+    monkeypatch.setattr(
+        cli.holdout_stage, "render_and_measure_holdout", _capturing_render_and_measure_holdout
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    # the dependent candidate really is in the pool `render_and_measure_
+    # holdout()` receives (proof this is the F0_UNUSABLE skip guard doing
+    # the blocking, not simple absence from the candidate pool)...
+    assert harmonic_residual.candidate_id in {
+        c.candidate_id for c in captured["candidates_by_family"]["APERIODICITY_GT"]
+    }
+    # ...yet every one of its C4 instances is named unusable before the call.
+    assert expected_instances <= captured["f0_unusable_instances"]
+    assert captured["f0_missing_reason"] == "F0_SELECTION_FAILED"
+
+    blocked_events = [
+        e.payload
+        for e in campaign.ledger.entries
+        if e.payload.get("kind") == "f0_dependent_selection_blocked"
+    ]
+    assert len(blocked_events) == 1
+    assert blocked_events[0]["stage"] == "c4"
+    assert blocked_events[0]["reason"] == "F0_SELECTION_FAILED"
+
+    # `records_by_family` came back empty from the (mocked) measure step, so
+    # every family — including APERIODICITY_GT despite its non-None
+    # `selected_by_family` entry — closes through `selection_failed_closed_
+    # meter()`: the design's NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE vocabulary,
+    # visible in the `holdout_executed_valid` event the close report reads.
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    assert holdout_events
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+
+
+# ---------------------------------------------------------------------------
 # round 14 finding #3: F0 repeat-record reuse must reject duplicates/partial
 # coverage as stale, never average them into two_stage_median().
 # ---------------------------------------------------------------------------

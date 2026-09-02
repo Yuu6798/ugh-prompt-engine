@@ -1391,6 +1391,44 @@ def test_run_measure_stage_skips_f0_dependent_candidate_on_unusable_instance(
 
 
 @pytest.mark.slow
+def test_run_measure_stage_missing_reason_defaults_to_f0_unusable_but_is_overridable(
+    tmp_path: Path,
+) -> None:
+    """round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): `missing_reason` names the
+    `measurement_missing` event's `reason` field (default `"F0_UNUSABLE"`,
+    unchanged behavior). `cli._run_c3b`/`cli._run_c4` pass
+    `"F0_SELECTION_FAILED"` when `f0_unusable_instances` covers every
+    instance because C3a itself recorded no F0 winner."""
+    subset = small_matrix_subset(1, family="F0_CONTROL")
+    campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
+    campaign = load_frozen_campaign(campaign_dir, secret_root)
+    render_stage.run_render_stage(campaign, subset, stage="c1")
+    row = subset[0]
+
+    formant_candidate = next(
+        c
+        for c in candidates_for_meter(MeterId.M3_FORMANTS)
+        if c.algorithm_family == "CEPSTRAL_POLES"
+    )
+
+    measure_stage.run_measure_stage(
+        campaign,
+        [(row.row_id, 0)],
+        [formant_candidate],
+        sr_by_row={row.row_id: row.row.sr_hz},
+        f0_unusable_instances=frozenset({(row.row_id, 0)}),
+        missing_reason="F0_SELECTION_FAILED",
+    )
+
+    missing_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "measurement_missing"
+    ]
+    assert len(missing_events) == 1
+    assert missing_events[0]["reason"] == "F0_SELECTION_FAILED"
+    assert missing_events[0]["cells"] == [[row.row_id, 0, formant_candidate.candidate_id]]
+
+
+@pytest.mark.slow
 def test_run_measure_stage_missing_coverage_event_is_idempotent_across_resume(
     tmp_path: Path,
 ) -> None:

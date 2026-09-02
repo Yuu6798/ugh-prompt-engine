@@ -478,6 +478,7 @@ def render_and_measure_holdout(
     max_workers: int = 1,
     f0_by_instance: Mapping[tuple[str, int], float] | None = None,
     f0_unusable_instances: frozenset[tuple[str, int]] = frozenset(),
+    f0_missing_reason: str = "F0_UNUSABLE",
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
 ) -> dict[str, list[measure_stage.MeasurementRecord]]:
@@ -491,7 +492,11 @@ def render_and_measure_holdout(
     （finding #1）は render/measure 双方へ素通しする。round 27 ADOPT (1)
     (`[UNDERSPEC-CAL-D61]`): `f0_unusable_instances` も同様に素通しし、
     F0-dependent candidate を該当 instance 上で一切呼ばせない（詳細は
-    `measure_stage.run_measure_stage()`/`cli._build_f0_by_instance()`）。"""
+    `measure_stage.run_measure_stage()`/`cli._build_f0_by_instance()`）。
+    round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): `f0_missing_reason` is forwarded
+    unchanged to `measure_stage.run_measure_stage()`'s `missing_reason` — the
+    caller passes `"F0_SELECTION_FAILED"` when `f0_unusable_instances` is
+    every C4 instance because C3a itself has no F0 winner."""
     run_render_stage(campaign, matrix_rows, stage="c4", cap_counters=cap_counters, cost_caps=cost_caps)
 
     assignment = campaign.realized_split.assignment
@@ -509,6 +514,7 @@ def render_and_measure_holdout(
             max_workers=max_workers,
             cap_counters=cap_counters,
             cost_caps=cost_caps,
+            missing_reason=f0_missing_reason,
         )
     return results
 

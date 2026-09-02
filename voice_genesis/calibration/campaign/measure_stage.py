@@ -985,9 +985,19 @@ def run_measure_stage(
     cap_counters: CapCounters | None = None,
     cost_caps: CostCaps | None = None,
     max_workers: int = 1,
+    missing_reason: str = "F0_UNUSABLE",
 ) -> list[MeasurementRecord]:
     """`instances × candidates` の全 work unit を決定論的順序（instance →
     candidate_id 昇順）で処理する。
+
+    round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): `missing_reason` names the
+    `measurement_missing` event's `reason` field for every cell this call
+    skips via `f0_unusable_instances` (default `"F0_UNUSABLE"`, the D61/D63/
+    D64 per-instance-rejection reason). Callers pass `"F0_SELECTION_FAILED"`
+    when `f0_unusable_instances` covers every instance because C3a itself
+    recorded no F0 winner (`SELECTION_FAILED_CLOSED`) — a distinct cause from
+    a per-instance non-finite/missing F0 aggregate, kept distinguishable in
+    the ledger.
 
     round 27 ADOPT (1) (`[UNDERSPEC-CAL-D61]`): `f0_unusable_instances`
     names instances whose selected-F0 per-instance aggregate was rejected by
@@ -1063,7 +1073,7 @@ def run_measure_stage(
         campaign.ledger.append(
             {
                 "kind": "measurement_missing",
-                "reason": "F0_UNUSABLE",
+                "reason": missing_reason,
                 "cells": [[r, p, c] for r, p, c in sorted(newly_missing)],
             }
         )

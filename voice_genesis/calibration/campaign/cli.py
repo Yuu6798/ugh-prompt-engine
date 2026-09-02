@@ -887,10 +887,11 @@ def _run_c3b(
             matrix_rows, assignment, family.value
         )
 
+    all_instances = sorted({inst for insts in instances_by_family.values() for inst in insts})
     f0_by_instance: dict[tuple[str, int], float] = {}
     f0_unusable_instances: frozenset[tuple[str, int]] = frozenset()
+    f0_missing_reason = "F0_UNUSABLE"
     if f0_selected_id is not None:
-        all_instances = sorted({inst for insts in instances_by_family.values() for inst in insts})
         f0_by_instance, f0_unusable_instances = _build_f0_by_instance(
             campaign,
             all_instances,
@@ -900,6 +901,26 @@ def _run_c3b(
             cap_counters=cap_counters,
             cost_caps=cost_caps,
             stage="c3b",
+        )
+    else:
+        # round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): C3a itself recorded
+        # SELECTION_FAILED_CLOSED (f0_found is True, f0_selected_id is
+        # None) — there is no F0 winner whose per-instance output could be
+        # measured or injected, so every instance is F0_UNUSABLE for every
+        # F0-dependent candidate (reason F0_SELECTION_FAILED, distinct from
+        # the D61/D63/D64 per-instance rejection reason F0_UNUSABLE). This
+        # is the "new path where an unusable F0 reaches a candidate" the
+        # `[UNDERSPEC-CAL-D61]`/`[UNDERSPEC-CAL-D63]`/`[UNDERSPEC-CAL-D64]`
+        # family terminal declaration names as its reopen exception.
+        f0_unusable_instances = frozenset(all_instances)
+        f0_missing_reason = "F0_SELECTION_FAILED"
+        campaign.ledger.append(
+            {
+                "kind": "f0_dependent_selection_blocked",
+                "stage": "c3b",
+                "reason": "F0_SELECTION_FAILED",
+                "instance_count": len(all_instances),
+            }
         )
 
     criteria_by_family: dict[str, list] = {}
@@ -929,6 +950,7 @@ def _run_c3b(
             max_workers=workers,
             cap_counters=cap_counters,
             cost_caps=cost_caps,
+            missing_reason=f0_missing_reason,
         )
         family_rows = [mr for mr in matrix_rows if mr.row.family == family.value]
         neg_ids = negative_control_row_ids(family_rows)
@@ -1051,16 +1073,17 @@ def _run_c4(
 
     assignment = campaign.realized_split.assignment
     sr_by_row = {mr.row_id: mr.row.sr_hz for mr in matrix_rows}
+    all_instances = sorted(
+        {
+            inst
+            for family in candidates_by_family
+            for inst in workunits.c4_holdout_instances(matrix_rows, assignment, family=family)
+        }
+    )
     f0_by_instance: dict[tuple[str, int], float] = {}
     f0_unusable_instances: frozenset[tuple[str, int]] = frozenset()
+    f0_missing_reason = "F0_UNUSABLE"
     if f0_selected_id is not None:
-        all_instances = sorted(
-            {
-                inst
-                for family in candidates_by_family
-                for inst in workunits.c4_holdout_instances(matrix_rows, assignment, family=family)
-            }
-        )
         f0_by_instance, f0_unusable_instances = _build_f0_by_instance(
             campaign,
             all_instances,
@@ -1071,6 +1094,23 @@ def _run_c4(
             cost_caps=cost_caps,
             stage="c4",
         )
+    else:
+        # round 29 ADOPT (`[UNDERSPEC-CAL-D65]`): mirrors `_run_c3b`'s else
+        # branch — C3a recorded SELECTION_FAILED_CLOSED, so every C4
+        # instance is F0_UNUSABLE (reason F0_SELECTION_FAILED) for every
+        # F0-dependent candidate here too (defense in depth: a stale
+        # `selection_frozen` event from before this fix could otherwise
+        # still name a dependent candidate as `selected`).
+        f0_unusable_instances = frozenset(all_instances)
+        f0_missing_reason = "F0_SELECTION_FAILED"
+        campaign.ledger.append(
+            {
+                "kind": "f0_dependent_selection_blocked",
+                "stage": "c4",
+                "reason": "F0_SELECTION_FAILED",
+                "instance_count": len(all_instances),
+            }
+        )
 
     records_by_family = holdout_stage.render_and_measure_holdout(
         campaign,
@@ -1079,6 +1119,7 @@ def _run_c4(
         max_workers=workers,
         f0_by_instance=f0_by_instance,
         f0_unusable_instances=f0_unusable_instances,
+        f0_missing_reason=f0_missing_reason,
         cap_counters=cap_counters,
         cost_caps=cost_caps,
     )
