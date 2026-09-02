@@ -1265,8 +1265,13 @@ def _run_c4(
         )
         selected_candidate_obj = candidate_by_candidate_id.get(selected_id)
         claim_scope_detail: dict[str, object] = {}
+        # round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`): the *effective* ceiling
+        # (post `capped_ceiling()`/`max_claim_scope` capping) decides below
+        # whether the DIRECTIONAL-only minimum-count precondition applies —
+        # previously discarded as `_capped`, now kept.
+        effective_ceiling: ClaimCeiling | None = None
         if selected_candidate_obj is not None:
-            _capped, claim_scope_detail = selection_stage.claim_scope_report(
+            effective_ceiling, claim_scope_detail = selection_stage.claim_scope_report(
                 selected_candidate_obj, max_claim_scope
             )
             usable_holdout_instances = {
@@ -1321,31 +1326,48 @@ def _run_c4(
             )
             continue
         if expected_holdout_instances and missing_expected_instances:
-            # round 3 #344 ADOPT (`[UNDERSPEC-CAL-D73]`, amends `[UNDERSPEC-
-            # CAL-D69]`/`[UNDERSPEC-CAL-D72]`): nonzero coverage alone does not
-            # make the score/gate computable. Design quote (`DESIGN_VG_METER_
-            # CAL_DEBT_v1.0.md` ~L375, directly under §10.3's ABSOLUTE holdout
-            # gate): "resolvable pair は各 sweep で >= 3" — and §11's missing-
-            # status cascade (~L395-396): "critical output 全欠損 **or 最小数
-            # 割れ**で score/gate 計算不能 → NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE"
-            # versus "score 計算可能だが PRIMARY 一部 output missing で gate
-            # 不通過 → DIAGNOSTIC_ONLY/OUTPUT_MISSING". A selected candidate
-            # with usable output on only a handful of PRIMARY holdout instances
-            # (e.g. an M5-type DIRECTIONAL meter with 2 usable instances) can
-            # never satisfy the frozen minimum-count / resolvable-pair
-            # condition regardless of what the actual measured values are —
-            # from N usable instances at most C(N,2) distinct pairs exist, so
-            # if that structural ceiling is already below the frozen minimum
-            # the score is uncomputable, not merely gate-1-failing. This is
-            # checked here via `gates.resolvable_pairs_possible()` — the same
-            # frozen threshold (`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP`)
-            # `directional_gates()` itself enforces per sweep — rather than a
-            # threshold re-typed in this module. Only when that structural
-            # precondition is met does nonzero-but-partial coverage remain a
-            # `DIAGNOSTIC_ONLY`/`OUTPUT_MISSING` (gate-1-not-passed) outcome;
-            # full coverage (this branch not entered) is unchanged.
+            # round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`, amends `[UNDERSPEC-
+            # CAL-D73]`): D73's frozen minimum-count / resolvable-pair
+            # precondition below is a §10.4 DIRECTIONAL-gate concept
+            # ("resolvable pair は各 sweep で >= 3", design §10.4 ~L375,
+            # directly under §10.3) — D73 wrongly applied it to every meter
+            # regardless of the selected candidate's effective ceiling.
+            # Design quote, §10.3 ABSOLUTE holdout gate (~L351-353): "gate 1:
+            # 全 PRIMARY instance が eligible（critical missing/undefined
+            # なし）" — §10.3 states no minimum sample count beyond that
+            # eligibility precondition; MAE/BIAS/q95 (§10.1) are computable
+            # from any nonzero-usable-instance population. Applying D73's
+            # DIRECTIONAL-only minimum to an ABSOLUTE-ceiling candidate
+            # therefore produced a false `NOT_EVALUABLE` for a candidate
+            # whose score genuinely is computable (Codex #344 round 4,
+            # category ③ false terminal status). Ruling: the structural
+            # minimum-count check applies **only** when this meter's
+            # *effective* claim ceiling — `effective_ceiling` above, the same
+            # `capped_ceiling()`/`max_claim_scope` arbitration
+            # `claim_scope_report()` already performs — is `DIRECTIONAL`; for
+            # every other effective ceiling (ABSOLUTE included), nonzero-but-
+            # partial coverage is unconditionally `DIAGNOSTIC_ONLY`/
+            # `OUTPUT_MISSING` (§11 "score 計算可能だが PRIMARY 一部 output
+            # missing で gate 不通過"), matching D69/D72's original rule.
+            # When the check does apply, `gates.resolvable_pairs_possible()`
+            # is still the sole threshold authority (`gates.
+            # MIN_RESOLVABLE_PAIRS_PER_SWEEP`) — D74 also corrected that
+            # helper itself to require every *declared* sweep to clear the
+            # minimum independently (no cross-sweep pair counting); this CLI
+            # call site has no per-instance sweep partition to plumb through
+            # (real DIRECTIONAL gate assembly remains `[UNDERSPEC-CAL-D17]`
+            # out of D2 CLI scope), so it degenerates to the single-sweep
+            # case — every usable PRIMARY instance treated as one declared
+            # sweep — which is the same total-count semantics D73 already
+            # exercised, now correctly gated to DIRECTIONAL only.
             n_usable_primary = len(usable_primary_instances)
-            if not resolvable_pairs_possible(n_usable_primary):
+            directional_minimum_not_met = (
+                effective_ceiling is ClaimCeiling.DIRECTIONAL
+                and not resolvable_pairs_possible(
+                    {"default": n_usable_primary}, {"default"}
+                )
+            )
+            if directional_minimum_not_met:
                 results.append(
                     holdout_stage.MeterHoldoutResult(
                         meter_id=meter.value,
@@ -1355,8 +1377,8 @@ def _run_c4(
                         selected_candidate_id=selected_id,
                         gate_detail={
                             "reason": (
-                                "[UNDERSPEC-CAL-D73] frozen minimum-count condition "
-                                "not met: with "
+                                "[UNDERSPEC-CAL-D74] DIRECTIONAL effective ceiling: "
+                                "frozen minimum-count condition not met: with "
                                 f"{n_usable_primary} usable PRIMARY instance(s), at "
                                 f"most C({n_usable_primary},2) distinct pairs exist, "
                                 "below gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP="
@@ -1367,6 +1389,9 @@ def _run_c4(
                             "expected_instance_count": len(expected_holdout_instances),
                             "seen_instance_count": n_usable_primary,
                             "min_resolvable_pairs_per_sweep": MIN_RESOLVABLE_PAIRS_PER_SWEEP,
+                            "effective_ceiling": (
+                                effective_ceiling.value if effective_ceiling is not None else None
+                            ),
                             "claim_scope": claim_scope_detail,
                         },
                     )

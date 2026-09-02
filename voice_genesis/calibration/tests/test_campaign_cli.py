@@ -1212,16 +1212,27 @@ def _c4_measurement_record_missing(
 
 
 def _c4_setup_selected_candidate_coverage_test(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    select_directional: bool = False,
 ) -> tuple[Any, Any, Any, frozenset[tuple[str, int]]]:
-    """Shared scaffolding for the 3 coverage tests below: a tiny campaign
-    with `APERIODICITY_GT`'s HARMONIC_RESIDUAL candidate (F0-dependent, but
-    F0 dependency itself is irrelevant here — `render_and_measure_holdout`
-    is monkeypatched directly below) named as the family's selected
-    candidate. Returns `(campaign, subset, harmonic_residual,
-    expected_instances)`."""
+    """Shared scaffolding for the coverage tests below: a tiny campaign with
+    `APERIODICITY_GT`'s HARMONIC_RESIDUAL candidate (F0-dependent, but F0
+    dependency itself is irrelevant here — `render_and_measure_holdout` is
+    monkeypatched directly below) and its `-B0-` sibling both in the pool.
+
+    round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`): `select_directional=False`
+    (default, unchanged) names the ABSOLUTE-ceiling HARMONIC_RESIDUAL
+    candidate as the family's selected candidate — the shape every
+    pre-existing caller of this helper exercises. `select_directional=True`
+    instead names the DIRECTIONAL-ceiling `-B0-` (`B0_CURRENT_HNR_APPROX`)
+    candidate as selected, so the D74 DIRECTIONAL-only minimum-count branch
+    can be exercised at this same CLI call site. Returns `(campaign, subset,
+    selected_candidate, expected_instances)`."""
     from voice_genesis.calibration.campaign import workunits
     from voice_genesis.calibration.fixtures.axes import FixtureFamily as _FixtureFamily
+    from voice_genesis.calibration.vocab import ClaimCeiling
 
     subset = small_matrix_subset(4, family="APERIODICITY_GT")
     campaign_dir, secret_root = build_tiny_campaign(tmp_path, subset=subset)
@@ -1243,6 +1254,8 @@ def _c4_setup_selected_candidate_coverage_test(
     independent_candidate = next(
         c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
     )
+    assert independent_candidate.claim_ceiling == ClaimCeiling.DIRECTIONAL
+    assert harmonic_residual.claim_ceiling == ClaimCeiling.ABSOLUTE
     trimmed_pool = (harmonic_residual, independent_candidate)
     orig_candidates_for_family = cli._candidates_for_family
 
@@ -1253,10 +1266,11 @@ def _c4_setup_selected_candidate_coverage_test(
 
     monkeypatch.setattr(cli, "_candidates_for_family", _trimmed_candidates_for_family)
 
+    selected_candidate = independent_candidate if select_directional else harmonic_residual
     campaign.ledger.append(
         {
             "kind": "selection_frozen",
-            "selected_by_family": {"APERIODICITY_GT": harmonic_residual.candidate_id},
+            "selected_by_family": {"APERIODICITY_GT": selected_candidate.candidate_id},
         }
     )
 
@@ -1270,7 +1284,7 @@ def _c4_setup_selected_candidate_coverage_test(
         )
     )
     assert expected_instances, "test setup must realize a HOLDOUT-split APERIODICITY_GT instance"
-    return campaign, subset, harmonic_residual, expected_instances
+    return campaign, subset, selected_candidate, expected_instances
 
 
 def test_c4_selected_candidate_fully_skipped_closes_not_evaluable(
@@ -1446,23 +1460,28 @@ def test_c4_selected_candidate_partially_covered_closes_diagnostic_only(
     )
 
 
-def test_c4_partial_coverage_below_minimum_count_closes_not_evaluable(
+def test_c4_absolute_partial_coverage_below_minimum_count_still_closes_diagnostic_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#344 round 3 ADOPT (`[UNDERSPEC-CAL-D73]`, amends `[UNDERSPEC-CAL-
-    D69]`/`[UNDERSPEC-CAL-D72]`): nonzero-but-partial coverage is not
-    automatically DIAGNOSTIC_ONLY/OUTPUT_MISSING — the usable PRIMARY
-    observations must first structurally admit the frozen minimum-count /
-    resolvable-pair condition (`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP == 3`,
-    design §10.4 ~L375: "resolvable pair は各 sweep で >= 3"). With only 2
-    usable PRIMARY instances out of the 5 expected (an M5-type/DIRECTIONAL
-    shape), at most C(2,2)=1 distinct pair exists — below the frozen
-    minimum regardless of the actual measured values — so §11's cascade
-    (~L395-396: "critical output 全欠損 or 最小数割れで score/gate 計算不能
-    → NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE") applies, not the "score 計算可能
-    だが...gate 不通過" DIAGNOSTIC_ONLY/OUTPUT_MISSING branch exercised by
-    `test_c4_selected_candidate_partially_covered_closes_diagnostic_only`
-    above (4 of 5 usable, C(4,2)=6 >= 3 — minimum-count condition met)."""
+    """round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`, amends `[UNDERSPEC-CAL-
+    D73]`): D73 (round 3) applied the frozen minimum-count / resolvable-pair
+    condition (`gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP == 3`) to *every*
+    meter's partial coverage, including ABSOLUTE-ceiling candidates — but
+    that condition is a §10.4 DIRECTIONAL-gate concept ("resolvable pair は
+    各 sweep で >= 3", design §10.4 ~L375). Design quote, §10.3 ABSOLUTE
+    holdout gate (~L351-353): "gate 1: 全 PRIMARY instance が eligible
+    （critical missing/undefined なし）" — §10.3 states no minimum sample
+    count beyond that eligibility precondition, so an ABSOLUTE-ceiling
+    candidate's MAE/BIAS/q95 (§10.1) are computable from any nonzero-usable-
+    instance population. `HARMONIC_RESIDUAL` (`M2A-HARMONIC-RESIDUAL-*`) is
+    an ABSOLUTE-ceiling candidate (asserted in the shared fixture below), so
+    with 2 usable PRIMARY instances out of the 5 expected (the other 3
+    explained by e.g. OUTPUT_MISSING misses), §11's "score 計算可能だが
+    PRIMARY 一部 output missing で gate 不通過 → DIAGNOSTIC_ONLY/
+    OUTPUT_MISSING" applies — not `NOT_EVALUABLE` (D73's now-corrected
+    expectation for this exact fixture shape; the DIRECTIONAL-ceiling
+    analogue is `test_c4_directional_partial_coverage_below_minimum_count_
+    closes_not_evaluable` below)."""
     campaign, subset, harmonic_residual, expected_instances = (
         _c4_setup_selected_candidate_coverage_test(tmp_path, monkeypatch)
     )
@@ -1470,7 +1489,7 @@ def test_c4_partial_coverage_below_minimum_count_closes_not_evaluable(
         c for c in candidates_for_meter(MeterId.M2_APERIODICITY) if "-B0-" in c.candidate_id
     )
     ordered_instances = sorted(expected_instances)
-    usable_instances = ordered_instances[:2]  # only 2 usable -> below the minimum
+    usable_instances = ordered_instances[:2]  # only 2 usable -> below the D73 minimum
     assert len(expected_instances) > len(usable_instances) >= 2, (
         "test setup needs >=3 expected instances with exactly 2 usable to "
         "exercise the below-minimum branch"
@@ -1499,13 +1518,90 @@ def test_c4_partial_coverage_below_minimum_count_closes_not_evaluable(
     ]
     per_meter = holdout_events[-1]["per_meter"]
     m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
-    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
-    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["reason_code"] == "OUTPUT_MISSING"
     assert m2a_result["selected_candidate_id"] == harmonic_residual.candidate_id
     gate_detail = m2a_result["gate_detail"]
     assert gate_detail["expected_instance_count"] == len(expected_instances)
     assert gate_detail["seen_instance_count"] == len(usable_instances)
+    # ABSOLUTE effective ceiling never hits the DIRECTIONAL-only minimum-count
+    # branch, so its D73-era key must be absent here.
+    assert "min_resolvable_pairs_per_sweep" not in gate_detail
+    assert "claim_scope" in gate_detail
+
+    # the authoritative close report must carry the same terminal status.
+    close_result = cli.close_stage.close_campaign(campaign, holdout_events[-1])
+    assert close_result.campaign_closed_entry_sha
+    close_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "campaign_closed"
+    ]
+    assert close_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]["terminal_status"] == (
+        "DIAGNOSTIC_ONLY"
+    )
+
+
+def test_c4_directional_partial_coverage_below_minimum_count_closes_not_evaluable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`): the DIRECTIONAL-ceiling
+    counterpart of the ABSOLUTE test above — `M2A-B0-AUTOCORR-PERIODICITY`
+    (`-B0-`, asserted DIRECTIONAL in the shared fixture) is named the
+    family's selected candidate here (`select_directional=True`). With only
+    2 usable PRIMARY instances out of the 5 expected, at most C(2,2)=1
+    distinct pair exists — below `gates.MIN_RESOLVABLE_PAIRS_PER_SWEEP == 3`
+    (design §10.4 ~L375: "resolvable pair は各 sweep で >= 3") regardless of
+    the actual measured values — so §11's cascade (~L395-396: "critical
+    output 全欠損 or 最小数割れで score/gate 計算不能 → NOT_EVALUABLE/
+    OUTPUT_NOT_EVALUABLE") applies, exactly as D73 originally intended, now
+    correctly scoped to a DIRECTIONAL effective ceiling."""
+    campaign, subset, independent_candidate, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(
+            tmp_path, monkeypatch, select_directional=True
+        )
+    )
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    ordered_instances = sorted(expected_instances)
+    usable_instances = ordered_instances[:2]  # only 2 usable -> below the minimum
+    assert len(expected_instances) > len(usable_instances) >= 2, (
+        "test setup needs >=3 expected instances with exactly 2 usable to "
+        "exercise the below-minimum branch"
+    )
+
+    records = [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in usable_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "NOT_EVALUABLE"
+    assert m2a_result["reason_code"] == "OUTPUT_NOT_EVALUABLE"
+    assert m2a_result["selected_candidate_id"] == independent_candidate.candidate_id
+    gate_detail = m2a_result["gate_detail"]
+    assert gate_detail["expected_instance_count"] == len(expected_instances)
+    assert gate_detail["seen_instance_count"] == len(usable_instances)
     assert gate_detail["min_resolvable_pairs_per_sweep"] == 3
+    assert gate_detail["effective_ceiling"] == "DIRECTIONAL"
     assert "claim_scope" in gate_detail
 
     # the authoritative close report must carry the same terminal status.
@@ -1516,6 +1612,82 @@ def test_c4_partial_coverage_below_minimum_count_closes_not_evaluable(
     ]
     assert close_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]["terminal_status"] == (
         "NOT_EVALUABLE"
+    )
+
+
+def test_c4_directional_partial_coverage_at_minimum_count_closes_diagnostic_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """round 4 #344 ADOPT (`[UNDERSPEC-CAL-D74]`): a DIRECTIONAL effective
+    ceiling with usable PRIMARY coverage that *does* structurally admit the
+    frozen minimum (3 of 5 usable, C(3,2)=3 >= `gates.
+    MIN_RESOLVABLE_PAIRS_PER_SWEEP == 3`) is still partial coverage (1
+    instance short of the 5 expected — see `missing_expected_instances`), so
+    §11's "score 計算可能だが PRIMARY 一部 output missing で gate 不通過 →
+    DIAGNOSTIC_ONLY/OUTPUT_MISSING" applies, mirroring the ABSOLUTE-ceiling
+    control case `test_c4_selected_candidate_partially_covered_closes_
+    diagnostic_only` (4 of 5 usable) but for a DIRECTIONAL-ceiling selected
+    candidate."""
+    campaign, subset, independent_candidate, expected_instances = (
+        _c4_setup_selected_candidate_coverage_test(
+            tmp_path, monkeypatch, select_directional=True
+        )
+    )
+    harmonic_residual = next(
+        c
+        for c in candidates_for_meter(MeterId.M2_APERIODICITY)
+        if c.algorithm_family == "HARMONIC_RESIDUAL"
+    )
+    ordered_instances = sorted(expected_instances)
+    usable_instances = ordered_instances[:-2]  # drop exactly 2 -> 3 usable, C(3,2)=3 >= 3
+    assert len(expected_instances) - len(usable_instances) >= 1, (
+        "test setup needs a genuine coverage gap to exercise partial coverage"
+    )
+    import math as _math
+
+    assert _math.comb(len(usable_instances), 2) >= 3, (
+        "test setup needs >=3 usable instances to clear the frozen minimum"
+    )
+
+    records = [
+        _c4_measurement_record(row_id, probe_index, harmonic_residual.candidate_id)
+        for row_id, probe_index in ordered_instances
+    ] + [
+        _c4_measurement_record(
+            row_id, probe_index, independent_candidate.candidate_id, field="hnr_db"
+        )
+        for row_id, probe_index in usable_instances
+    ]
+    monkeypatch.setattr(
+        cli.holdout_stage,
+        "render_and_measure_holdout",
+        lambda *a, **kw: {"APERIODICITY_GT": records},
+    )
+
+    result = cli._run_c4(campaign, subset, 1)
+    assert result["result"] == "OK", result
+
+    holdout_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "holdout_executed_valid"
+    ]
+    per_meter = holdout_events[-1]["per_meter"]
+    m2a_result = per_meter[MeterId.M2_APERIODICITY.value]
+    assert m2a_result["terminal_status"] == "DIAGNOSTIC_ONLY"
+    assert m2a_result["reason_code"] == "OUTPUT_MISSING"
+    assert m2a_result["selected_candidate_id"] == independent_candidate.candidate_id
+    gate_detail = m2a_result["gate_detail"]
+    assert gate_detail["expected_instance_count"] == len(expected_instances)
+    assert gate_detail["seen_instance_count"] == len(usable_instances)
+    assert "claim_scope" in gate_detail
+
+    # the authoritative close report must carry the same terminal status.
+    close_result = cli.close_stage.close_campaign(campaign, holdout_events[-1])
+    assert close_result.campaign_closed_entry_sha
+    close_events = [
+        e.payload for e in campaign.ledger.entries if e.payload.get("kind") == "campaign_closed"
+    ]
+    assert close_events[-1]["per_meter"][MeterId.M2_APERIODICITY.value]["terminal_status"] == (
+        "DIAGNOSTIC_ONLY"
     )
 
 

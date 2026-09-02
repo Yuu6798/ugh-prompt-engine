@@ -49,26 +49,53 @@ def threshold_margin(e_use: float, u_gt: float, u_num: float) -> float:
 MIN_RESOLVABLE_PAIRS_PER_SWEEP: int = 3
 
 
-def resolvable_pairs_possible(n_usable_primary_instances: int) -> bool:
+def resolvable_pairs_possible(
+    usable_primary_instance_counts_by_sweep: Mapping[str, int],
+    expected_sweep_ids: Collection[str],
+) -> bool:
     """C4 partial-coverage 判定（`campaign/cli.py` `_run_c4`）が、実際の
     pairwise resolvability（delta_truth/delta_output/uncertainty からの
     `directional_gates()` 判定）を計算する前に、coverage-count のみから
     「score/gate が構造的に計算不能か」を判定する事前チェック。
 
-    N 件の usable PRIMARY instance から作れる相異なる pair の理論最大数は
-    `C(N, 2)`。これが `MIN_RESOLVABLE_PAIRS_PER_SWEEP` を下回れば、実測値が
-    何であれ（全 pair が resolvable だったとしても）最小数条件を満たすことは
-    不可能——設計正本 §11「critical output 全欠損 **or 最小数割れ**で
-    score/gate 計算不能 → NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE」（§10.3 直下の
-    minimum sample 条件、~L375）に該当する。閾値そのものは
+    #344 round 4 ADOPT (`[UNDERSPEC-CAL-D74]`, amends round 3 の
+    `[UNDERSPEC-CAL-D73]`): 旧実装は宣言済み sweep を無視し、meter 全体の
+    usable PRIMARY instance 数 N から `C(N, 2)` を計算していた——しかし
+    設計正本 §10.4「resolvable pair は各 sweep で >= 3」は sweep 間で集約した
+    合計ではなく **宣言済みの全 sweep がそれぞれ独立に** 最小数を満たすことを
+    要求する（`directional_gates()` の `sweep_resolvable_counts`/
+    `sweeps_below_minimum` が実測 pair に対して適用しているのと同じ分割規約 —
+    Codex レビュー 2026-09-01 採用の per-sweep 規約、`gates.py` 冒頭の
+    `DirectionalPair.sweep_id` docstring を参照）。旧実装は sweep をまたいだ
+    pair（本来 resolvable 対象外）まで数え上げてしまい、複数 sweep に薄く
+    分散した usable instance を誤って「構造的に達成可能」と判定し得た。
+
+    `usable_primary_instance_counts_by_sweep` は宣言済み sweep_id ごとの
+    usable PRIMARY instance 数、`expected_sweep_ids` は C0 で凍結した宣言済み
+    sweep の閉集合（`directional_gates()` の `expected_sweep_ids` 引数と同じ
+    役割 — 観測 0 件の sweep が黙って消えないよう、宣言済み全 sweep を走査
+    する）。宣言済み各 sweep について、その sweep の usable instance 数 n から
+    作れる相異なる pair の理論最大数 `C(n, 2)` が `MIN_RESOLVABLE_PAIRS_PER_
+    SWEEP` を下回れば、実測値が何であれ（全 pair が resolvable だったとして
+    も）その sweep は最小数条件を満たすことが構造的に不可能——設計正本 §11
+    「critical output 全欠損 **or 最小数割れ**で score/gate 計算不能 →
+    NOT_EVALUABLE/OUTPUT_NOT_EVALUABLE」（§10.3 直下の minimum sample 条件、
+    ~L375）に該当し、全体として `False` を返す。宣言済み sweep が 1 つも無い
+    場合も防御的に `False`（`directional_gates()` の "no expected sweep
+    declared" と同じ fail-closed 側）。閾値そのものは
     `MIN_RESOLVABLE_PAIRS_PER_SWEEP`（= `directional_gates()` が使う値）
     のみが定義し、ここでは再定義しない。
 
-    負値は防御的に「構造的に不可能」（`False`）として扱う。
+    負のカウントは防御的に「構造的に不可能」（`False`）として扱う。
     """
-    if n_usable_primary_instances < 0:
+    sweep_ids = sorted(set(expected_sweep_ids))
+    if not sweep_ids:
         return False
-    return math.comb(n_usable_primary_instances, 2) >= MIN_RESOLVABLE_PAIRS_PER_SWEEP
+    for sweep_id in sweep_ids:
+        n = usable_primary_instance_counts_by_sweep.get(sweep_id, 0)
+        if n < 0 or math.comb(n, 2) < MIN_RESOLVABLE_PAIRS_PER_SWEEP:
+            return False
+    return True
 
 
 #: `EUseEvidenceRow.e_use_mode` の閉語彙（`[UNDERSPEC-CAL-D11]`）。"absolute" は
